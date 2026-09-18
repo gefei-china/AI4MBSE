@@ -131,7 +131,8 @@
     <button class="btn-new-chat" onclick="createConversation()" data-page-node-id="WuOqotYO8ZjUERBwxdvg4r">＋ 新建对话</button>
     <div class="conv" id="conv-list" data-page-node-id="qoJPQIyD3XQo02cfjgErK1"><div class="loading" data-page-node-id="PUCNwT2VOP2OCSRsl9HQpt">加载中…</div></div>
     <div class="foot" data-page-node-id="IvpLCFQ6Zkbfgoab4sSkdv">
-      <a onclick="go('ai')" data-page-node-id="BXpjvgans2qwaSg8U8fx4w">💬 去 AI 建模</a>
+      <!-- 2026-09-18 用户确认：移除侧栏「💬 去 AI 建模」——建模入口统一由「＋ 新建任务」承担，
+           回到既有会话走左侧任务列表（点会话即回 AI 建模页并载入该会话） -->
       <!-- 2026-09-18：本体模型已收敛进知识中心；此处保留侧栏快捷入口，进入前显式置 _kbCtxTerms=false
            以确保落在「本体模型」而非上次停留的「术语词典」子态 -->
       <a onclick="window._kbCtxTerms=false;go('kb','kb-c')" data-page-node-id="g6fMOHZm008EzKn9mWjL83">🧬 本体模型</a>
@@ -254,7 +255,8 @@
         </div>
       </div>
 
-      <!-- ===== 知识库（子页已提升至主导航：资料库/数据整理/本体模型/图谱工作区；知识浏览入口已隐藏） ===== -->
+      <!-- ===== 知识库（知识域五个顶层 Tab 均在本页内：#kbhub-tabs —— 知识浏览/资料库/图谱工作区/本体模型/术语词典；
+           数据整理(kb-b) 按用户要求暂不动，无 Tab 入口，仅深链可达） ===== -->
       <div class="page" id="pg-kb" data-page-node-id="4yCCnyZf5gYCUT4CjtfLSr">
         <!-- 模块工具行：左上角模块名 + 右上角工作分支切换（与模块名同一行；本体模型为全局共享不显示） -->
         <div class="kb-toolbar" id="kb-toolbar" style="display:none;" data-page-node-id="S827X9HR7foBR0bsMqFNSv">
@@ -324,7 +326,9 @@
              术语词典是 kb-c 的"术语映射"子态：进入前须置 _kbCtxTerms=true（15-kb.js 据此分流），
              避免"上次停在术语词典 → 这次从其它入口进本体模型仍是术语视图"。 -->
         <div id="kbhub-tabs" style="display:none;gap:8px;align-items:center;margin-bottom:10px;">
-          <span id="kbhub-tab-e" class="kbhub-chip on" onclick="go('kb','kb-e')" title="资料库：文档上传 · 解析分块 · 向量化 · 抽取管道">📁 资料库</span>
+          <!-- 2026-09-18：知识浏览（kb-a）由隐藏入口迁入知识中心，作为**第一个 Tab**（用户确认） -->
+          <span id="kbhub-tab-a" class="kbhub-chip" onclick="go('kb','kb-a')" title="知识浏览：知识库统计与实体检索">🔍 知识浏览</span>
+          <span id="kbhub-tab-e" class="kbhub-chip" onclick="go('kb','kb-e')" title="资料库：文档上传 · 解析分块 · 向量化 · 抽取管道">📁 资料库</span>
           <span id="kbhub-tab-d" class="kbhub-chip" onclick="go('kb','kb-d')" title="图谱工作区：实体 / 关系 / 推理 / 历史 / 合并请求">🕸 图谱工作区</span>
           <span id="kbhub-tab-c" class="kbhub-chip" onclick="window._kbCtxTerms=false;go('kb','kb-c')" title="本体模型：类型 / 关系定义全景 · Schema 层（实例数据在图谱工作区）">🧬 本体模型</span>
           <span id="kbhub-tab-t" class="kbhub-chip" onclick="window._kbCtxTerms=true;go('kb','kb-c')" title="术语词典：词条 ↔ 本体类型归一映射（Schema 命名层 · 主数据）">📖 术语词典</span>
