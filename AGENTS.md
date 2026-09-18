@@ -53,11 +53,15 @@
 6. **静态资源 no-cache**：改前端**不用重启服务**，刷新即生效；改后端需重启。
 7. **数据库只有一个 `mbse.db`**，服务运行时被占用 → 只读查询请用 `file:...?mode=ro`；**不要**在服务运行时做破坏性写库操作。
 8. **不要用 bash 工具**（本机 shim 缺 coreutils）；用 PowerShell。
-   **写文件**：输出 `| Out-File <路径> -Encoding utf8` 落盘再读（`>` 会写成 UTF-16，Read 会当二进制）。
-   **读/数文件**：⚠️ **不要用 `Get-Content | Measure-Object -Line` 数行数**。PowerShell 5.1 的 `Get-Content` 对 **UTF-8 无 BOM** 的文件会误按 ANSI/GBK 解码 → 多字节字符被拆成多个单字节字符 → `Measure-Object -Line` **漏计以 NEL(U+0085)/U+2028/U+2029 分隔的行**。
-   ⚠️ **判据是「无 BOM」，不是换行风格**：实测 `entity_resolver.py` / `ontology_semantics.py` 是**纯 CRLF** 却仍分别丢 103 / 61 行 —— **CRLF 不提供任何保护**，别把 CRLF 文件当"安全样本"。
-   → 数行数/读文件一律用 Python：`len(open(p, 'rb').read().decode('utf-8','replace').splitlines())`。
-   **本文件与 `docs/代码优化方案-20260917.md` 里所有「74 个模块 / 1,529 行 / 1334 行 / 20 个无调用点函数」类数字都是该口径的产物，已系统性偏低，勿再引用。**
+   **写文件**：一律 `| Out-File <路径> -Encoding utf8`，**禁用 `>` 与 `>>`** —— PS 5.1 下两者都按 **UTF-16LE** 写（实测写新文件均以 `FF FE` 开头）。
+   ⚠️ **`>>` 比 `>` 更危险**：它会把已有 UTF-8 文件追加成**混合编码**（实测头部仍是 `EF BB BF`、尾部却是 `79 00` 的 UTF-16LE 字节）——而**只检查头部 BOM 会误判为正常**。
+   另：PS 5.1 的 `Out-File -Encoding utf8` 产出的是 **UTF-8 带 BOM**；需要**无 BOM** 时（如 git 提交信息文件）必须用
+   `[System.IO.File]::WriteAllText($p,$s,(New-Object System.Text.UTF8Encoding($false)))`。
+   **读/数文件**：⚠️ **`Get-Content` 与 `Measure-Object -Line` 各有一个独立陷阱，叠加后行数会严重偏低**（本文件与 `docs/代码优化方案-20260917.md` 里「74 个模块 / 1,529 行 / 1334 行 / 20 个无调用点函数」等数字全是被污染口径的产物，**勿再引用**）：
+   - **陷阱①（主因）`Measure-Object -Line` 会跳过空行** —— 与编码无关。实测一个人造 7 行（含 3 空行）的文件，`Get-Content f | Measure-Object -Line` 计为 **4**。
+   - **陷阱②`Get-Content` 对 UTF-8 无 BOM 文件误判编码** —— 不加 `-Encoding UTF8` 时按 ANSI/GBK 解码，多字节字符被拆开、顺带吞掉换行符。实测 `sysml_importer.py`：`(Get-Content).Count` = **1604**，加 `-Encoding UTF8` 后 = **1710**。CRLF 文件常侥幸不受影响（`\r` 兜底），**但那是侥幸、不是保证**。`-Raw` 同样绕不过。
+   - **正确姿势**：`[IO.File]::ReadAllLines($p,[Text.Encoding]::UTF8).Count`，或 Python `len(open(p,'rb').read().decode('utf-8','replace').splitlines())`。
+   - **交叉验证法（一次锁定两个机制）**：`Get-Content -Encoding UTF8 <f> | Measure-Object -Line` = 真实行数 − 空行数。实测 sysml_importer：1710 − 88 = **1622** ✓。
 9. **工具名必须是 ASCII**：`tools` 表的工具名会作为 `function.name` 发给模型，协议要求 `^[a-zA-Z0-9_-]+$`。曾有一个中文名工具（「知识库查询」）导致 **整批 tools 载荷被 400 拒绝 → 静默回落 Mock**。`_build_tools_def` 已加护栏（剔除非法名 + 告警），但新增工具请直接用英文名。
 10. **LLM 采样参数优先级**：`显式传参 > DB llm_providers 配置 > 内置默认`（`llm/providers/openai_compat.py`）。调用 `llm_client.chat(...)` 时可直接传 `model`/`temperature`/`max_tokens` —— 历史上 broker 曾把它们「具名 + `**kwargs`」重复传递，导致一传就 `TypeError` 并被静默吞成 Mock，已修但改动此处务必回归 `tools/verify/verify_s4_llm_params.py`。
 11. **降级必须留痕**：LLM 调用失败会回落 Mock（用户无感）。`llm/__init__.py` 的降级分支已加 WARNING（含调用点/intent/provider/异常）；排查"AI 回答怪怪的"时**先看服务日志有没有这条 WARNING**，再查 `llm_usage_stats.used_mock`。
