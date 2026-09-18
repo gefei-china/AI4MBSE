@@ -504,15 +504,27 @@ async function viewEntity(id) {
   openPanel(`实体详情 · ${e.name}`, html);
 }
 function loadKBTab(id) {
+  // 2026-09-18：先把 kb-c 的语境落定（术语词典是**显式子态**，由入口置 _kbCtxTerms=true 触发），
+  // 必须在下方 chip 高亮之前完成 —— 否则高亮读到的是上一次导航残留的 _kbCtx。
+  if(id === 'kb-c'){
+    window._kbCtx = (window._kbCtxTerms === true) ? 'terms' : 'model';
+    window._kbCtxTerms = false;   // 一次性消费，随即复位（深链/侧栏/角色快捷默认落「本体模型」）
+  }
   // 2026-09-17 知识中心整合：资料库(kb-e)/图谱工作区(kb-d) 顶层双 Tab 切换器——
-  // 显隐（仅这两 Tab 显示）+ 高亮同步。chip 点击走 go('kb', tabId) 完整路由，此处只做状态回写。
+  // 显隐 + 高亮同步。chip 点击走 go('kb', tabId) 完整路由，此处只做状态回写。
+  // 2026-09-18 知识中心收敛：知识域四个顶层 Tab（资料库 / 图谱工作区 / 本体模型 / 术语词典），
+  // 故 kb-c 也纳入本 Tab 栏；术语词典是 kb-c 的子态，按 _kbCtx 区分高亮哪一个 chip。
   const hubTabs = document.getElementById('kbhub-tabs');
   if(hubTabs){
-    const isHub = (id==='kb-d'||id==='kb-e');
+    const isHub = (id==='kb-d'||id==='kb-e'||id==='kb-c');
     hubTabs.style.display = isHub ? 'flex' : 'none';
+    const _isTerms = (window._kbCtx === 'terms');
     const tE = document.getElementById('kbhub-tab-e'), tD = document.getElementById('kbhub-tab-d');
+    const tC = document.getElementById('kbhub-tab-c'), tT = document.getElementById('kbhub-tab-t');
     if(tE) tE.classList.toggle('on', id==='kb-e');
     if(tD) tD.classList.toggle('on', id==='kb-d');
+    if(tC) tC.classList.toggle('on', id==='kb-c' && !_isTerms);
+    if(tT) tT.classList.toggle('on', id==='kb-c' && _isTerms);
   }
   // 知识库顶部模块标题行显隐规则：
   // - 各子页已不再使用顶部标题行：资料库(kb-e)/标注审核(kb-b)/本体模型(kb-c)/图谱工作区(kb-d) 均移除；
@@ -527,8 +539,8 @@ function loadKBTab(id) {
   if(id==='kb-b') { loadKBFlowBar(); v2gReviewLoad(); loadFusion(); }  // loadReviewQueue 已随标注审核面板收敛移除（容器不存在，调用即抛空引用）
   if(id==='kb-c') {
     // 2026-09-02 P0-2/P0-4：顶部 Tab=实体维度（类/对象属性/数据属性），图谱降为中栏视图；进入默认「类 · 编辑」
-    const _termsEntry = (window._kbCtx==='terms');   // 2026-09-17 R6：术语词典入口标记
-    if(!_termsEntry) window._kbCtx = 'model';        // 兜底：非术语词典路径进入时高亮「本体模型」
+    // 2026-09-18：语境（terms/model）已在 loadKBTab 开头落定并消费掉入口标记，此处只读取结果。
+    const _termsEntry = (window._kbCtx === 'terms');
     ontPaneMode = 'edit';
     const _row = document.getElementById('ont-subtab-row'); if(_row) _row.style.display = '';
     const _ontDef = document.querySelector('#ont-subtab-row [data-tabgrp="ont"][onclick*="\'classes\'"]');

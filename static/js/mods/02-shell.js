@@ -290,12 +290,10 @@ function go(p, tabId) {
   let _navHit = false;
   document.querySelectorAll('#mainnav a').forEach(a=>{
     let on = a.dataset.page===p && (!a.dataset.tab || a.dataset.tab===tabId);
-    // 2026-09-17 知识中心整合：kb-d/kb-e 两 Tab 同指一个导航项（nav-kbhub）
-    if(p==='kb' && a.id==='nav-kbhub') on = (tabId==='kb-d'||tabId==='kb-e');
-    // 2026-08-31 本体模型 | 术语词典 双导航项同指 kb-c：按语境（_kbCtx）高亮，避免同时点亮
-    if(on && a.dataset.tab==='kb-c'){
-      on = (a.id==='nav-glossary2') ? (window._kbCtx==='terms') : (window._kbCtx!=='terms');
-    }
+    // 2026-09-18 知识中心收敛：知识域只剩一个导航项（nav-kbhub），其四个顶层 Tab
+    // （kb-e 资料库 / kb-d 图谱工作区 / kb-c 本体模型 / kb-c+terms 术语词典）全部点亮它。
+    // 原先"kb-c 由两个导航项按 _kbCtx 区分高亮"的分支随两个独立导航项一并移除。
+    if(p==='kb' && a.id==='nav-kbhub') on = ['kb-d','kb-e','kb-c'].indexOf(tabId) >= 0;
     if(on) _navHit = true;
     a.classList.toggle('on', on);
   });
@@ -341,11 +339,8 @@ function go(p, tabId) {
 document.querySelectorAll('#mainnav a').forEach(a=>a.addEventListener('click',()=>{
   // 2026-09-04 「新建任务」等动作型导航项无 data-page，不参与页面路由
   if(!a.dataset.page) return;
-  // 2026-08-31 记录 kb-c 页语境（本体模型 | 术语词典），供 go() 高亮区分双导航项
-  if(a.dataset.page==='kb'){
-    if(a.id==='nav-glossary2') window._kbCtx='terms';
-    else if(a.dataset.tab==='kb-c') window._kbCtx='model';
-  }
+  // 2026-09-18：原先此处按导航项（nav-glossary2 / data-tab=kb-c）写 _kbCtx 以区分「术语词典 | 本体模型」两个导航项；
+  // 两个独立导航项已收敛进知识中心，术语词典改由 Tab 显式置 `_kbCtxTerms`（见 index.html #kbhub-tabs），此处不再需要。
   go(a.dataset.page, a.dataset.tab);
 }));
   // 2026-09-17 R5：原「数据整理双入口（nav-glossary/nav-workbench）+ _kbBEntry 归属」逻辑整体移除——
@@ -382,8 +377,8 @@ function tab(el,grp,id) {
     let _navHit = false;
     document.querySelectorAll('#mainnav a').forEach(a=>{
       let on = !!(a.dataset.page===pg && (!a.dataset.tab || a.dataset.tab===id));
-      // 2026-09-17 知识中心整合：kb-d/kb-e 两 Tab 同指一个导航项（nav-kbhub）
-      if(pg==='kb' && a.id==='nav-kbhub') on = (id==='kb-d'||id==='kb-e');
+      // 2026-09-18 知识中心收敛：知识域单一导航项，四个顶层 Tab（含 kb-c 本体模型 / 术语词典）全部点亮它
+      if(pg==='kb' && a.id==='nav-kbhub') on = ['kb-d','kb-e','kb-c'].indexOf(id) >= 0;
       if(on) _navHit = true;
       a.classList.toggle('on', on);
     });
