@@ -28,24 +28,114 @@ async function api(path, opts={}) {
   if(!r.ok && data && !data.error && data.detail) data.error = data.detail;
   return data;
 }
-function toast(msg, ms) {
-  const t = document.getElementById('toast');
-  // 2026-09-07：旧 #toast 元素已不存在（v6.1 起由 #toast-root 接管），
-  // 此处若直接取属性会抛 TypeError 并中断调用方。元素缺失时告警后返回，
-  // 页面初始化后期由全局 toast 服务（可调用混合体）接管实际渲染。
-  if(!t){ console.warn('[toast]', msg); return; }
-  t.textContent = msg; t.classList.add('show');
-  t.style.maxWidth = ms ? '460px' : '';
-  setTimeout(()=>{ t.classList.remove('show'); t.style.maxWidth=''; }, ms || 2500);
+/* ── 2026-09-18 S6-4：全局 UI 服务（toast / 错误浮层 / 全局错误兜底 / alert 桥接）──
+   背景：本文件原有一个指向已废弃 #toast 元素的旧版 toast（实际早已失效，只 console.warn）；
+        真正生效的是 static/index.html 末尾内联块里的实现（它以 window.toast 覆盖了本函数）。
+        两处实现并存期间出过一次严重事故：内联块一度把「普通对象」赋给 window.toast，
+        覆盖了本文件的 function toast → 全站 700+ 处 toast('...') 抛 TypeError，
+        表现为「点击保存无效、面板不关、无任何提示」。
+   现把生效实现并入本文件（**全站单一实现**），并**懒查 DOM** —— 01-core.js 在 #toast-root 之前加载，
+        不能在加载期取元素。对应内联块已从 index.html 删除。
+   调用契约保持不变：toast(msg) / toast(msg, ms) / toast(msg, opts)，以及 toast.success|warn|error|info|show。
+*/
+const TOAST_ICONS = {info:{n:'info',fb:'ℹ'}, success:{n:'success',fb:'✓'}, warn:{n:'warn',fb:'⚠'}, error:{n:'error',fb:'✕'}};
+function _toastIcon(name, fallback){
+  return '<svg class="toast-ic" width="16" height="16" aria-hidden="true" style="flex:none;color:currentColor;"><use href="#ic-'+name+'"/></svg>'
+       + (fallback ? '<span class="ti-fb" style="display:none;">'+fallback+'</span>' : '');
 }
+function _toastShow(type, msg, opts){
+  if(!msg) return;
+  const root = document.getElementById('toast-root');   // 懒查：与脚本/元素加载顺序解耦
+  if(!root){ try{ console.warn('[toast]', msg); }catch(e){} return; }
+  opts = opts || {};
+  const ic = TOAST_ICONS[type] || TOAST_ICONS.info;
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type || 'info');
+  t.setAttribute('role','status');
+  t.innerHTML = _toastIcon(ic.n, ic.fb) + '<span class="tc"></span>'
+              + '<button class="tx" aria-label="关闭"><svg width="14" height="14" style="display:block;color:currentColor;"><use href="#ic-close"/></svg></button>';
+  t.querySelector('.tc').textContent = msg;
+  root.appendChild(t);
+  const close = ()=>{ t.classList.add('toast-out'); setTimeout(()=>t.remove(),220); };
+  t.querySelector('.tx').onclick = close;
+  const ttl = opts.ttl == null ? (type==='error' ? 5000 : 3000) : opts.ttl;
+  if(ttl > 0) setTimeout(close, ttl);
+  return close;
+}
+const _toastFn = function(msg, ms){
+  if(ms == null) return _toastShow('info', msg);
+  if(typeof ms === 'number') return _toastShow('info', msg, {ttl: ms});
+  return _toastShow('info', msg, ms);
+};
+window.toast = Object.assign(_toastFn, {
+  show:(m,o)=>_toastShow('info',m,o),
+  info:(m,o)=>_toastShow('info',m,o),
+  success:(m,o)=>_toastShow('success',m,o),
+  warn:(m,o)=>_toastShow('warn',m,o),
+  error:(m,o)=>_toastShow('error',m,o),
+});
 // 富内容 toast（支持 HTML，视图节点/边属性浮层用）
-function toastHtml(html) {
-  const t = document.getElementById('toast');
-  if(!t){ try{ window.toast && window.toast(String(html).replace(/<[^>]+>/g,' ')); }catch(e){} return; }
-  t.innerHTML = html; t.classList.add('show');
-  t.style.maxWidth = '420px';
-  setTimeout(()=>{ t.classList.remove('show'); t.innerHTML=''; t.style.maxWidth=''; }, 3500);
+// 2026-09-18：改指向 #toast-root —— 原实现指向已废弃的 #toast，元素不存在时会退化成「纯文本 toast」，
+// 富内容（加粗/多行）能力实际从未生效。
+function toastHtml(html){
+  if(html == null) return;
+  const root = document.getElementById('toast-root');
+  if(!root) return;
+  const t = document.createElement('div');
+  t.className = 'toast info';
+  t.setAttribute('role','status');
+  t.innerHTML = String(html);
+  root.appendChild(t);
+  const close = ()=>{ t.classList.add('toast-out'); setTimeout(()=>t.remove(),220); };
+  t.onclick = close;
+  setTimeout(close, 3500);
+  return close;
 }
+/* 致命错误浮层（比 toast 重；DOM 元素在 index.html，调用期解析 → 与加载顺序无关） */
+function errOverlay(title, body, stack){
+  const ov = document.getElementById('err-overlay');
+  if(!ov) return;
+  if(title) document.getElementById('eo-title').textContent = title;
+  if(body != null) document.getElementById('eo-body').textContent = body;
+  const st = document.getElementById('eo-stack');
+  if(stack){ st.textContent = stack; st.style.display = 'block'; } else { st.style.display = 'none'; }
+  ov.classList.add('on');
+}
+window.errOverlay = errOverlay;
+/* 全局未捕获错误兜底 —— 防止后端 bug 或脚本加载失败让用户面对空白/原始报错 */
+window.addEventListener('error', function(e){
+  if(!e || !e.error) return;
+  const msg = e.message || (e.error && e.error.message) || '未知异常';
+  try { _toastShow('error', '运行异常: ' + msg, { ttl: 6000 }); } catch(_){}
+  if(/load|fetch|script/i.test(msg) && !window.__skippedFatal){
+    window.__skippedFatal = true;
+    setTimeout(()=>errOverlay('脚本资源异常', msg, (e.error && e.error.stack) || ''), 100);
+  }
+});
+window.addEventListener('unhandledrejection', function(e){
+  const r = e.reason; const msg = (r && (r.message || r.toString())) || '操作失败';
+  try { _toastShow('error', '请求失败: ' + msg, { ttl: 6000 }); } catch(_){}
+  if(/scope_ids/.test(msg)) return;   // 已知后端 bug（ChatIn.scope_ids）：静默不打扰
+});
+/* alert 桥接：旧代码直接调 alert 时给柔和提示，而不是弹系统框 */
+window.__origAlert = window.alert;
+window.alert = function(msg, type){
+  if(msg == null) return;
+  _toastShow(type==='err' ? 'error' : (type==='warn' ? 'warn' : 'info'), String(msg));
+};
+/* 2026-09-18 S6-3/S6-4：内联 SVG 图标 sprite 载入（原 index.html 内联 <script>）
+   把 /static/icons.svg 的内容 fetch 进来内联到 #svg-sprite（一次性；比图标字体轻、比 <img> 灵活）。
+   #svg-sprite 在 index.html 后部 → 等 DOM 就绪再跑，与加载顺序解耦。 */
+(function(){
+  const _loadSprite = ()=>{
+    const el = document.getElementById('svg-sprite');
+    if(!el) return;
+    fetch('/static/icons.svg').then(r=>r.text()).then(html=>{ el.innerHTML = html; })
+      .catch(()=>{ /* 静默失败，回落到 emoji */ });
+  };
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _loadSprite);
+  else _loadSprite();
+})();
 function showModal(type) {
   const m = document.getElementById('modal');
   const b = document.getElementById('modal-body');
