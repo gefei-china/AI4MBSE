@@ -33,7 +33,7 @@
 | 本体模型 / 术语词典 | `js/mods/21-ontology.js`、`23-ontform.js`、`18-glossary.js` | `ontology_*.py`、`routers/glossary.py` |
 | 知识图谱（视图/编辑/推理） | `js/mods/25-graphview.js`、`26-grapheditor.js`、`34-graphtabs.js`、`22-ontgraph.js` | `graph_db.py`、`triple_store.py`、`routers/graph_workspace.py` |
 | 分支 / MR / 合并 | `js/mods/27-branch.js`、`24-graph.js` | `repositories/branch_repo.py`、`routers/branches.py` |
-| 能力中心（Agent/技能/工具/插件） | `js/mods/28-studio.js`、`30-agents.js`、`36-capability.js` | `plugin_system/*`、`routers/plugins.py`、`routers/studio_parts/*` |
+| 能力中心（Agent/技能/工具/插件） | `js/mods/28-studio.js`、`30-agents.js`、`36-capability.js` | `plugin_system/*`（插件数据访问层在 **`plugin_system/store/`**，2026-09-18 由 `store.py` 拆包）、`routers/plugins.py`、`routers/studio_parts/*` |
 | 影响分析 / 仿真 / 一致性 | `js/mods/09-impact.js` | `services/impact_engine.py` |
 | 报告 | `js/mods/13-reports.js` | `report_generator.py`、`routers/reports.py` |
 | 用户/角色/权限 | `js/mods/31-admin.js` | `routers/users.py` |
@@ -44,7 +44,7 @@
 | 建表 / 补列 / 数据迁移 | — | `database/migrations/*`（S7-3 起按域分 8 个文件）、`database/schema.py`（**唯一定序编排者**，顺序即语义） |
 | 配置 / 参数 | `js/mods/35-ctxconfig.js` | `core/config.py` |
 
-## 3. 必知的 14 个坑（都是踩过的）
+## 3. 必知的 15 个坑（都是踩过的）
 
 1. **`esc` / `escA` 定义在 `static/js/mods/01-core.js`**（2026-09-18 S6-1 从 `08-sysmlview.js:151/153` 迁入，因它是**最先加载**的模块），却被 35 个文件约 1,700 处调用 → 拆它、或调整模块加载顺序前，必须先确认它仍最先加载并做浏览器回归。
 2. **`toast` 只有一份实现，在 `01-core.js`**（2026-09-18 S6-4 合并）。它是「可直接调用 + 挂方法」的混合体：`toast('x')` / `toast('x', 2000)` / `toast.success('x')` 都行。**不要**再在别处定义 toast，更**不要把普通对象赋给 `window.toast`** —— 历史事故：那样会覆盖函数声明，全站 700+ 处 `toast('...')` 抛 TypeError，表现为「点保存没反应、无任何提示」。同批迁入的还有 `errOverlay`、全局 error / unhandledrejection 兜底、`alert` 桥接。
@@ -69,6 +69,15 @@
 12. **迁移 CSS/HTML 块不要用正则跨行匹配**：`<style>(.*?)</style>` 会命中内联 JS 字符串里的标签，删出未闭合标签（浏览器会把后续内容当 CSS 吞掉）。**按行定位**（开/闭标签独占一行）。
 13. **注释必须闭合，且要验证"规则出现在解析后的样式表里"**：只读文件内容会漏掉"整段规则被未闭合注释吞掉"的静默失效——查 `document.styleSheets` 的 `cssRules` 才算数。
 14. **`.gitignore` 的模式必须锚定根目录**：不带前导 `/` 的模式在**任意深度**匹配。`_*.py` 曾把全部 14 个包的 `__init__.py` 一并忽略（tracked=0），导致**全新克隆无法复现项目**（2026-09-18 修复为 `/_*.py`）。新增忽略规则后，请用 `git check-ignore -v <你不想被忽略的关键文件>` 反查一遍。
+15. **拆前端死代码，禁止"按候选清单直接删"，必须过三步判定**（2026-09-18 S5 复检的结论，血泪）：
+   ① **可达性**（`tools/verify/analyze_frontend_reach.py`：从 index.html 内联调用/顶层代码/其它 js/`window.X=` 四类种子做调用图闭包）；
+   ② **悬空引用硬检查**（把被删名当整词搜**保留**语料）；
+   ③ **有无*可达*的后继实现** —— **无活后继 ⇒ 一律不删**，就地标注「断链/未接线，留待产品决策」。
+   - **旧法（全语料计数==1）不会多删、但会漏报**「只被死函数引用的连锁死代码」→ 两法口径不可混用。
+   - **证明"没删错"的唯一硬标准是 A/B**：`git worktree add --detach <dir> HEAD` 后同一份分析逻辑跑两棵树，**可达数必须完全相等**。
+   - **扫描器必须按 `{}` 深度 + 帧栈词法器**，不能用括号计数、也不能用"定义之间的空隙"近似：本仓有**套娃模板串**（`10-chatinput.js`）会漂移；漏采顶层代码会把 `document.addEventListener('click', …closeToolPop())` 里的活函数判死。
+   - **检查器自身有两个必踩假阳性**：ⓐ 被删函数的名字**出现在注释里**（含工具/skill 自己的注释）会被判成断链（同 `ONT_ATTR_ESC` 事故）→ 搜索前按行屏蔽注释；ⓑ `tmp/` 冒烟脚本里 `typeof foo` 是**"断言已删除"的探针**、`tools/verify/_fe_*.json` 是分析器产物 → 语料必须**分级统计**，否则"删除后断言不存在"的测试永远 FAIL。
+   - **整块失效的功能簇不要只删一半**：删函数时一并清掉它独占的模块级变量与上方注释（例：删 `artApplyWidth/artDragMove/artDragEnd` 时须同清 `let _artDrag`），否则留下误导性残骸。
 
 ## 4. 起服务 / 验证
 
