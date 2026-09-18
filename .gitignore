@@ -38,8 +38,13 @@ docs/_archive/
 *.pres5
 *.bak
 *.bak2
+*.bak-*
+*.orig
+*.rej
 server_*.log
 server_*.pid
+*.log
+logs/
 _*.py
 _*.txt
 _*.log
