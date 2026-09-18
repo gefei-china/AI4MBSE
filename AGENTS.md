@@ -9,9 +9,10 @@
 ## 1. 技术栈与铁律
 
 - 后端：FastAPI + SQLite（`main.py` 只做装配；业务在 `routers/` / `services/` / `repositories/`）
-- 前端：**原生 JS，无框架、无构建、无打包**（`static/index.html` + `static/js/mods/01..36-*.js`）
+- 前端：**原生 JS，无框架、无构建、无打包**（`static/index.html` + `static/js/mods/01..37-*.js`）
 - 铁律 1：前端模块在**全局作用域**，页面用内联 `onclick="fn()"` 调函数 → **改函数名/挪文件会静默失效**，改完必须浏览器验证。
-- 铁律 2：**不要再往 `index.html` 加内联 `<script>`/`<style>`**（残留 343 行正在迁出，见 `docs/代码优化方案-20260917.md` S6）。
+- 铁律 2：**`index.html` 已无任何内联 `<script>` / `<style>`**（2026-09-18 S6 迁完，220,607 → 200,435 字节）。
+  新增逻辑一律新建 `static/js/mods/NN-xxx.js` 并加 `<script src>`（**注意加载位置**：依赖页面 DOM 的模块要放在该 DOM 之后）。
 - 铁律 3：新增/修改后端功能**必须走 `services/` + `repositories/`**，不要在 router 里直接写 SQL（存量 ≈971 处是历史债，只做新老划断）。
 - 铁律 4：**私有化离线部署**，不引入外部 CDN / 构建链 / 新依赖。
 
@@ -20,6 +21,8 @@
 | 我要改… | 前端 | 后端 |
 |---|---|---|
 | 导航/路由/面包屑/标题 | `js/mods/02-shell.js`、`index.html:60-80`（mainnav） | — |
+| 命令面板 KBar / 全局快捷键 / 主题 | `js/mods/37-kbar.js` | — |
+| toast / 错误浮层 / 全局错误兜底 / alert 桥接 | `js/mods/01-core.js`（唯一实现，S6-4 起） | — |
 | 知识域四个顶层 Tab（资料库 / 图谱工作区 / 本体模型 / 术语词典） | `index.html`（`#kbhub-tabs`）、`js/mods/15-kb.js`（`loadKBTab`） | `routers/knowledge_parts/*` |
 | 会话列表 / 新建任务 / 角色快捷 | `js/mods/03-chat.js`、`12-chatsend.js` | `routers/conversations.py` |
 | 消息渲染 / Markdown / 卡片 | `js/mods/05-markdown.js`、`06-cards.js` | `routers/conversations.py` |
@@ -42,7 +45,7 @@
 ## 3. 必知的 8 个坑（都是踩过的）
 
 1. **`esc` / `escA` 只定义在 `static/js/mods/08-sysmlview.js:151/153`**，却被 35 个文件约 1,700 处调用 → 调整脚本加载顺序/拆该文件前先确认它先加载。
-2. **`toast` 有两套实现**：`index.html:1631`（内联）覆盖 `01-core.js:23`；历史上曾因此导致"全站 700+ 处 TypeError"。
+2. **`toast` 只有一份实现，在 `01-core.js`**（2026-09-18 S6-4 合并）。它是「可直接调用 + 挂方法」的混合体：`toast('x')` / `toast('x', 2000)` / `toast.success('x')` 都行。**不要**再在别处定义 toast，更**不要把普通对象赋给 `window.toast`** —— 历史事故：那样会覆盖函数声明，全站 700+ 处 `toast('...')` 抛 TypeError，表现为「点保存没反应、无任何提示」。同批迁入的还有 `errOverlay`、全局 error / unhandledrejection 兜底、`alert` 桥接。
 3. **面板高度多为内联样式**（如 `07-norm.js` 的 `#nr-rows` 340px）→ 用 CSS 改高度必须 `!important`。
 4. **`.msg` 带 `content-visibility`**，会成为 `position:fixed` 的包含块 → 会话内浮层想铺满视口，必须把节点搬到 `<body>` 再按锚点归位。
 5. **导航列是 column flex**：`.gnav nav`（主导航）必须 `flex:0 0 auto`，否则放宽任务列表会把它压出滚动条、剪掉最后几项。
