@@ -41,14 +41,21 @@ docs/_archive/
 *.bak-*
 *.orig
 *.rej
+tools/legacy/
 server_*.log
 server_*.pid
 *.log
 logs/
-_*.py
-_*.txt
-_*.log
-verify_*.js
+
+# ── 根目录一次性产物 ──
+# ⚠️ 必须用前导 `/` 锚定根目录！不带 `/` 的模式会在**任意深度**匹配：
+#    原来的 `_*.py` 把 `database/__init__.py`、`routers/__init__.py` 等
+#    全部 15 个包初始化文件一并忽略（tracked=0），导致仓库无法复现项目
+#    —— 全新克隆会在 import 阶段直接崩。2026-09-18 修正为根目录锚定。
+/_*.py
+/_*.txt
+/_*.log
+/verify_*.js
 
 # ── 大体积二进制与第三方压缩库 ──
 static/vendor/
