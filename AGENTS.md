@@ -97,7 +97,8 @@ Invoke-WebRequest http://127.0.0.1:8000/api/dashboard -UseBasicParsing
 
 ## 4.1 版本控制（2026-09-18 起必须遵守）
 
-- 仓库已有 git 基线：`master`，标签 **`baseline-20260918`**（= S0–S5 优化完成后的快照）与 **`nav-consolidate-20260918`**；当前 **476** 个跟踪文件、工作区干净。
+- 仓库已有 git 基线：`master`，标签 **`baseline-20260918`**（= S0–S5 优化完成后的快照）与 **`nav-consolidate-20260918`**；工作区干净。
+- ⚠️ **跟踪文件数一律现算，不写死**：本条原写「当前 476 个跟踪文件」，因 `e744982` 拆 `plugin_system/store.py` 为包后未同步而失真（476 → 487）。请用 `git ls-files | wc -l` **现算**（2026-09-18 为 **492**）。同类风险同本文件开头对行号引用的告诫。
 - **动高风险代码前先提交**，再开分支：`git switch -c refactor/xxx`；每完成一小步就 commit（提交信息写清"改了什么 + 验证了什么"）。
 - **一次提交只装一件事**：改用 `git add <具体路径>`，**不要用 `git add -A`**——多人在同一仓库并行改动时，`-A` 会把别人的改动卷进你的提交。
 - 回滚单文件：`git checkout -- <file>`；看基线差异：`git diff baseline-20260918 --stat`。
