@@ -64,27 +64,6 @@ function togglePinProd(){
   syncPreviewReopen();
 })();
 
-// ── 关闭预览面板（钉住态下整体关闭） ──
-function closePreview(){
-  const pp = document.getElementById('preview-panel');
-  const panel = document.getElementById('art-list-panel');
-  const pinBtn = panel ? panel.querySelector('.pin-btn') : null;
-  // 钉住态：取消钉住并关闭预览
-  if(panel && panel.classList.contains('pinned')){
-    panel.classList.remove('pinned');
-    if(pinBtn){ pinBtn.classList.remove('pinned'); pinBtn.title='钉住/取消钉住'; }
-    localStorage.setItem('mbse_prod_pinned','0');
-  }
-  if(pp){pp.classList.add('collapsed');}
-  previewClearWidth();
-  localStorage.setItem('mbse_preview_collapsed','1');
-  _artActive = null;
-  _previewTabs = [];
-  _previewActiveKey = null;
-  const bar = document.getElementById('preview-tabs');
-  if(bar){ bar.innerHTML=''; bar.style.display='none'; }
-  syncPreviewReopen();
-}
 // 展开预览面板时恢复用户上次拖拽保存的宽度（默认收起时不应用，避免 inline 宽度覆盖 collapsed）
 function previewApplySavedWidth(){
   const pp = document.getElementById('preview-panel');
@@ -171,39 +150,20 @@ function previewDragEnd(){
 // ── 会话产物分栏（V3：由 art-list-panel + preview-panel 替代原 art-side）──
 let _artConv = null, _artKind = '', _artActive = null;
 let _artFiles = [];  // 2026-09-01：会话导入文件（消息附件合并，分组展示于文件清单）
+// 2026-09-18（S5 复检新增）：_artList 此前全仓从未声明，仅在 loadArtifacts() 的 try 内裸赋值；
+// 一旦产物接口失败（被 catch 静默）或尚未加载，openPreviewTab→renderArtV3List 读取未声明的隐式
+// 全局即抛 ReferenceError（09-impact.js 早已用 (_artList||[]) 绕过该坑）。此处补声明，降级为空列表。
+let _artList = [];
 let _previewTabs = [];        // 预览区已打开的多文件 tab（顶部切换，可关闭）
 let _previewActiveKey = null; // 当前激活 tab key
 let _convTabs = {};           // 会话预览记忆：convId → {tabs, activeKey}，切回会话时恢复
 const _ART_ICONS = {report:'📑', code:'💻', sysml:'🕸', document:'📄', image:'🖼', other:'📎'};
 const _ART_KINDS = [['report','报告'],['code','代码'],['sysml','SysML'],['document','文档'],['image','图片']];
-function artApplyWidth(w){
-  const side = document.getElementById('art-side');
-  if(!side) return;
-  w = parseInt(w, 10);
-  if(w >= 280 && w <= 760){ side.style.width = w + 'px'; side.style.maxWidth = w + 'px'; }
-  else { side.style.width = ''; side.style.maxWidth = ''; }
-}
-// ── 分界线拖拽调整产物分栏宽度（WorkBuddy 结果区可调宽）──
-let _artDrag = null;
-function artDragMove(e){
-  if(!_artDrag) return;
-  const w = Math.min(760, Math.max(280, _artDrag.startW + (e.clientX - _artDrag.startX)));
-  const side = document.getElementById('art-side');
-  if(side){ side.style.width = w + 'px'; side.style.maxWidth = w + 'px'; }
-}
-function artDragEnd(){
-  if(!_artDrag) return;
-  _artDrag = null;
-  document.body.classList.remove('art-dragging');
-  const d = document.getElementById('art-divider'); if(d) d.classList.remove('active');
-  document.removeEventListener('mousemove', artDragMove);
-  document.removeEventListener('mouseup', artDragEnd);
-  const side = document.getElementById('art-side');
-  if(side){
-    localStorage.setItem('mbse_art_width', String(side.getBoundingClientRect().width));
-    side.style.transition = '';   // 恢复宽度过渡（收起/展开动画）
-  }
-}
+// （2026-09-18 S5 收正）原「分界线拖拽调整产物分栏宽度」的 artApplyWidth / artDragMove /
+// artDragEnd 及模块级 _artDrag 已随 V3 重构失效：其目标 #art-side / #art-divider 在 DOM 中
+// 已不存在（仅 app.css 保留 `#art-side{display:none}` 兼容规则），拖拽能力现由
+// previewDragStart / previewDragMove / previewDragEnd 绑定 #preview-divider 承担 —— 属被
+// 活实现严格取代，故移除；此处不再保留同名变量以免误导。
 function resetArtPreview(){
   _artActive = null;
   _previewTabs = [];
@@ -326,6 +286,9 @@ function renderArtV3List(stats){
   const headEl = document.querySelector('#art-list-panel .side-head-text');
   if(headEl) headEl.textContent = `🗂 文件 (${arts.length + files.length})`;
 }
+// [S5 2026-09-18 保留] 可达性分析判定不可达（无任何引用）；但「按 kind 过滤产物列表」这一能力
+// 在 V3 面板里没有对应实现（_artKind 现在只被 loadArtifacts 读、无处可设）—— 属「无活后继」，
+// 按 S5 判定标准不删，留待产品决策（要保留能力就补 V3 的筛选入口，不要就走移除流程）。
 function artSetKind(kind){
   _artKind = kind;
   resetArtPreview();
@@ -608,7 +571,6 @@ function renderSysMLInPreview(sysmlData){
     }
   });
 }
-async function artPreview(id){ artPreviewV3(id); }
 // 从消息 card_data 直接渲染预览（历史消息/流式消息，无需后端产物 id；V3 写入右侧 #preview-panel 并自动展开）
 function artOpenFromMsg(msgId){
   const entry = (window._artByMsg||{})[msgId];
@@ -674,6 +636,9 @@ function artDownload(id){
   window.open('/api/artifacts/'+id+'/download', '_blank');
   toast('产物下载已开始');
 }
+// [S5 2026-09-18 保留] 可达性分析判定不可达；「按产物 id 二次导出 md/docx/pdf」的能力在 V3 预览中
+// 已无入口（13-reports.js 的 downloadReport 按钮挂在报告视图、走的是 window._lastReport，非本路径），
+// 属「无活后继」，不删，留待产品决策。
 // 报告产物二次导出（md/docx/pdf）：落盘临时文件后下载
 async function artDownloadFmt(id, fmt){
   try{
@@ -713,6 +678,8 @@ function _savePreviewBlob(blob, fname){
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
+// [S5 2026-09-18 保留] 可达性分析判定不可达；V3 预览体只提供「⬇ 下载」（previewDownloadProxy），
+// 无「复制文本」入口，本能力属「无活后继」，不删，留待产品决策。
 async function copyArtText(id){
   try{
     const a = await api('/api/artifacts/'+id);
@@ -720,6 +687,9 @@ async function copyArtText(id){
     toast('已复制到剪贴板');
   }catch(e){ toast('复制失败'); }
 }
+// [S5 2026-09-18 保留] 可达性分析判定不可达，且**无任何后继实现**（V3 预览未提供「溯源跳转」，
+// 基线提交起即无调用点）—— 属「断链/未接线」而非「被取代」，按 S5 判定标准（无可达后继 ⇒ 不删）
+// 予以保留，列为待接线缺陷。
 // 定位消息流中的源消息
 function scrollToMessage(msgId){
   const el = document.getElementById('msg-'+msgId) || document.querySelector(`.msg[data-mid="${msgId}"]`);

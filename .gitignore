@@ -62,6 +62,15 @@ logs/
 /_*.log
 /verify_*.js
 
+# ── 前端死代码分析的一次性产物 ──
+# ⚠️ 这三份带**行号**，必须与树同步：树一变行号就全错，而 prune_dead_frontend.py 是**按行号做字节切除**的，
+#    用过期清单会切错位置（比切不掉危险得多）。故不入库，用下列命令重新生成：
+#      .venv\Scripts\python.exe tools\verify\analyze_frontend_dead.py            # -> _fe_dead.tsv
+#      .venv\Scripts\python.exe tools\verify\analyze_frontend_reach.py --json tools\verify\_fe_reach.json
+tools/verify/_fe_dead.tsv
+tools/verify/_fe_dead_reach.tsv
+tools/verify/_fe_reach.json
+
 # ── 大体积二进制与第三方压缩库 ──
 static/vendor/
 static/lib/
