@@ -1,0 +1,280 @@
+/* ==========================================================================
+ * tokens.css — 智源 MBSE 设计 Token（v6.1，2026-09-06）
+ * 加载顺序：在所有其它 CSS 之前引入。所有变量集中维护，便于：
+ *   1. 主题切换（暗色模式 / 品牌色）
+ *   2. 设计一致性（间距/字号/圆角统一）
+ *   3. 易维护（全局变量，全局生效）
+ *
+ * 设计原则：
+ *   - 语义化（color-bg / color-text / color-primary） + 别名（--blue）双轨
+ *   - 旧的 var(--blue) 等保留兼容，新模块优先用语义 token
+ *   - 尺寸用 4 倍数 (4/8/12/16/24/32)
+ *   - 圆角/阴影分级
+ * ========================================================================== */
+
+:root{
+  /* ───── 品牌主色 ───── */
+  --color-primary:        #185FA5;
+  --color-primary-d:      #0C447C;   /* 深色：标题/激活态 */
+  --color-primary-l:      #E6F1FB;   /* 浅色：hover/高亮底 */
+  --color-primary-bd:     #B5D4F4;   /* 边框色 */
+  --color-primary-100:    #eef4ff;   /* 更浅：hover 背景 */
+  --color-purple:         #7C5CFF;   /* 次主色（强调/AI/选中） */
+  --color-purple-d:       #5B3CD4;
+  --color-purple-100:     #efeaff;
+
+  /* ───── 中性色 ───── */
+  --color-ink:            #1a2332;   /* 主文本 */
+  --color-text:           #1a2332;
+  --color-muted:          #5a6678;   /* 次要文本 */
+  --color-text-muted:     #5a6678;
+  --color-text-faint:     #8a96ad;   /* 浅文本 */
+  --color-text-inverse:   #ffffff;
+
+  /* ───── 背景 ───── */
+  --color-bg:             #eef1f6;   /* 整页背景 */
+  --color-bg-canvas:      #f7f9fc;   /* 内容画布 */
+  --color-bg-card:        #ffffff;   /* 卡片 */
+  --color-bg-hover:       #eef4ff;   /* 通用 hover */
+  --color-bg-active:      #e6f1fb;   /* 激活/选中 */
+
+  /* ───── 边框 ───── */
+  --color-line:           #d5dce6;
+  --color-line-soft:      #e9edf3;
+  --color-line-strong:    #b5d4f4;
+
+  /* ───── 语义色 ───── */
+  --color-green:          #3B6D11;
+  --color-green-l:        #EAF3DE;
+  --color-green-bd:       #C0DD97;
+  --color-amber:          #BA7517;
+  --color-amber-l:        #FAEEDA;
+  --color-amber-bd:       #FAC775;
+  --color-red:            #A32D2D;
+  --color-red-l:          #FCEBEB;
+  --color-red-bd:         #F7C1C1;
+  --color-info:           var(--color-primary);
+  --color-info-l:         var(--color-primary-l);
+
+  /* ───── 透明度（按钮/图标叠层用） ───── */
+  --alpha-white-14:       rgba(255,255,255,.14);
+  --alpha-white-30:       rgba(255,255,255,.30);
+  --alpha-ink-06:         rgba(20,35,60,.06);
+  --alpha-ink-10:         rgba(20,35,60,.10);
+  --alpha-ink-14:         rgba(20,35,60,.14);
+  --alpha-ink-20:         rgba(20,35,60,.20);
+  --alpha-blue-35:        rgba(124,92,255,.35);
+
+  /* ───── 间距（4 倍数） ───── */
+  --space-1:              4px;
+  --space-2:              8px;
+  --space-3:              12px;
+  --space-4:              16px;
+  --space-5:              20px;
+  --space-6:              24px;
+  --space-8:              32px;
+  --space-10:             40px;
+
+  /* ───── 圆角 ───── */
+  --radius-sm:            4px;
+  --radius-md:            6px;
+  --radius-lg:            8px;
+  --radius-xl:           10px;
+  --radius-2xl:          14px;
+  --radius-full:        999px;
+
+  /* ───── 阴影 ───── */
+  --shadow-sm:           0 1px 2px var(--alpha-ink-06);
+  --shadow-md:           0 2px 8px var(--alpha-ink-10);
+  --shadow-lg:           0 6px 20px var(--alpha-ink-14);
+  --shadow-xl:           0 10px 34px var(--alpha-ink-20);
+
+  /* ───── 字体 ───── */
+  --font-sans:            "Microsoft YaHei","PingFang SC",system-ui,-apple-system,sans-serif;
+  --font-mono:            ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,monospace;
+  --font-size-xs:        11px;
+  --font-size-sm:        12px;
+  --font-size-md:        13px;
+  --font-size-lg:        14px;
+  --font-size-xl:        16px;
+  --font-size-2xl:       20px;
+  --font-size-3xl:       26px;
+  --font-weight-normal:  400;
+  --font-weight-medium:  500;
+  --font-weight-semibold:600;
+  --font-weight-bold:    700;
+  --line-height-tight:   1.3;
+  --line-height-base:    1.6;
+  --line-height-loose:   1.8;
+
+  /* ───── Z-index 层级 ───── */
+  --z-base:               1;
+  --z-sticky:           100;
+  --z-drawer:           900;
+  --z-modal:           1000;
+  --z-toast:           1100;
+  --z-tooltip:         1200;
+
+  /* ───── 动画 ───── */
+  --ease-fast:           cubic-bezier(.4,0,.2,1);
+  --ease-slow:           cubic-bezier(.4,0,.2,1);
+  --duration-fast:       .12s;
+  --duration-base:       .18s;
+  --duration-slow:       .28s;
+
+  /* ───── 旧别名（向后兼容，原代码 var(--blue) 等继续生效） ───── */
+  --blue:                var(--color-primary);
+  --blue-d:              var(--color-primary-d);
+  --blue-l:              var(--color-primary-l);
+  --blue-bd:             var(--color-primary-bd);
+  --ink:                 var(--color-ink);
+  --mut:                 var(--color-muted);
+  --line:                var(--color-line);
+  --bg:                  var(--color-bg);
+  --card:                var(--color-bg-card);
+  --grn:                 var(--color-green);
+  --grn-l:               var(--color-green-l);
+  --amb:                 var(--color-amber);
+  --amb-l:               var(--color-amber-l);
+  --red:                 var(--color-red);
+  --red-l:               var(--color-red-l);
+}
+
+/* ==========================================================================
+ * 左侧导航 gnav 专用 token（v6.2 暗色全屏化必须项）
+ * 设计上 gnav 与主区域"反色对比"：
+ *   - 主区域浅色：gnav 仍是深蓝底（#0c447c）
+ *   - 主区域暗色：gnav 变近黑底（#08152a）
+ * 始终沉浸式导航条，不跟随主题切换明暗调性，仅影响底色深浅
+ *
+ * CSS 变量覆盖必须按"先浅后暗"顺序：
+ *   :root{}（默认浅色，必须在前）
+ *   [data-theme="dark"]{...}（暗色覆盖，必须在后；否则会被 :root 同名变量反向覆盖）
+ * ========================================================================== */
+:root{
+  /* gnav 浅色主题默认值（深蓝沉浸导航） */
+  --gnav-bg:           #0c447c;
+  --gnav-bg-soft:      #0a3a70;
+  --gnav-fg:           #cdddf2;
+  --gnav-fg-soft:      #7fa3cc;
+  --gnav-fg-strong:    #ffffff;
+  --gnav-border:       rgba(255,255,255,.12);
+  --gnav-hover:        rgba(255,255,255,.08);
+  --gnav-active:       #ffffff;
+  --gnav-active-text:  #0c447c;
+  --gnav-tip-bg:       #0a3a70;
+  --gnav-tip-border:   rgba(255,255,255,.16);
+  --gnav-tip-fg:       #a9c4e8;
+  --gnav-tip-fg-soft:  #cdddf2;
+}
+[data-theme="dark"],
+.theme-dark{
+  /* gnav 暗色覆盖：变近黑沉浸底 */
+  --gnav-bg:           #08152a;
+  --gnav-bg-soft:      #0d1c33;
+  --gnav-fg:           #d3dcef;
+  --gnav-fg-soft:      #7a8eab;
+  --gnav-fg-strong:    #ffffff;
+  --gnav-border:       rgba(255,255,255,.08);
+  --gnav-hover:        rgba(255,255,255,.06);
+  --gnav-active:       #ffffff;            /* 选中态文字反色底 */
+  --gnav-active-text:  #1a2638;            /* 选中态文字色 */
+  --gnav-tip-bg:       #06101f;
+  --gnav-tip-border:   rgba(255,255,255,.10);
+  --gnav-tip-fg:       #a9b8d4;
+  --gnav-tip-fg-soft:  #c0cee3;
+}
+
+/* ==========================================================================
+ * 暗色主题（灰度试点，先在能力中心 subpage 可启用）
+ * 通过 [data-theme="dark"] 或父容器 .theme-dark 触发
+ * ========================================================================== */
+
+[data-theme="dark"],
+.theme-dark{
+  --color-bg:             #0e1626;
+  --color-bg-canvas:      #131e30;
+  --color-bg-card:        #1a2638;
+  --color-bg-hover:       #1f2c42;
+  --color-bg-active:      #243350;
+  --color-ink:            #e5e9f0;
+  --color-text:           #e5e9f0;
+  --color-muted:          #8a96ad;
+  --color-text-muted:     #8a96ad;
+  --color-text-faint:     #5e6c82;
+  --color-line:           #2a3a55;
+  --color-line-soft:      #1f2c42;
+  --color-line-strong:    #3a5070;
+  --color-primary:        #5b9ce6;
+  --color-primary-d:      #aac8f0;
+  --color-primary-l:      #1a3257;
+  --color-primary-bd:     #2c4a72;
+  --color-primary-100:    #182740;
+  --color-purple:         #a48aff;
+  --color-purple-d:       #c0acff;
+  --color-purple-100:     #2e234a;
+
+  --color-green:          #7cc564;
+  --color-green-l:        #1e3a1f;
+  --color-green-bd:       #2c5b30;
+  --color-amber:          #f0b75a;
+  --color-amber-l:        #3a2c12;
+  --color-amber-bd:       #6a4a14;
+  --color-red:            #e57575;
+  --color-red-l:          #3a1d1d;
+  --color-red-bd:         #6a3030;
+
+  --alpha-ink-06:         rgba(255,255,255,.04);
+  --alpha-ink-10:         rgba(255,255,255,.08);
+  --alpha-ink-14:         rgba(255,255,255,.12);
+  --alpha-ink-20:         rgba(255,255,255,.18);
+  --alpha-white-14:       rgba(255,255,255,.06);
+  --alpha-white-30:       rgba(255,255,255,.10);
+
+  --shadow-sm:           0 1px 2px rgba(0,0,0,.4);
+  --shadow-md:           0 2px 8px rgba(0,0,0,.5);
+  --shadow-lg:           0 6px 20px rgba(0,0,0,.6);
+  --shadow-xl:           0 10px 34px rgba(0,0,0,.7);
+}
+
+/* ==========================================================================
+ * 全局基础样式（从前 app.css 顶部抽出，集中管理）
+ * ========================================================================== */
+
+*,*::before,*::after{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:var(--font-sans);
+  background:var(--color-bg);
+  color:var(--color-text);
+  font-size:var(--font-size-md);
+  line-height:var(--line-height-base);
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+}
+/* v6.2 暗色全屏化：app.css body 用了 var(--bg) 别名，某些浏览器/拼接顺序下变量可能延迟解析；这里强制覆写以保证主区背景随主题切 */
+[data-theme="dark"],
+[data-theme="dark"] body,
+.theme-dark,
+.theme-dark body{
+  background:var(--color-bg) !important;
+  color:var(--color-text) !important;
+}
+
+/* 暗色下中央欢迎屏卡片 + 输入框柔化（避免白卡片突兀） */
+[data-theme="dark"] .chat-welcome .cw-pill,
+[data-theme="dark"] .cw-dock-slot .chat-input-dock{
+  background:var(--color-bg-card) !important;
+  color:var(--color-text) !important;
+  border-color:var(--color-line) !important;
+}
+[data-theme="dark"] .chat-welcome .cw-pill .cp-ic{color:inherit;}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit;}
+button{cursor:pointer;border:none;background:transparent;}
+a{color:inherit;text-decoration:none;}
+ul,ol{margin:0;padding:0;list-style:none;}
+img,svg{display:block;max-width:100%;}
+:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px;border-radius:3px;}
+/* 让暗色主题下 placeholder 不刺眼 */
+[data-theme="dark"] ::-webkit-input-placeholder,
+.theme-dark ::-webkit-input-placeholder{color:var(--color-text-faint);}

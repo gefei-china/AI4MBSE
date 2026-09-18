@@ -1,0 +1,1872 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="7wKG1AGnDBIMihKNyGEQwT">
+<head data-page-node-id="2GsHjkuCxmUEJHh4GRhe50">
+<meta charset="UTF-8" data-page-node-id="oMxvJI2CafblS5gSb5Nv5L">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="6yPEIFUSpnvmF2Si4dWwyZ">
+<title>AI 赋能 MBSE 系统设计工具</title>
+<!-- favicon：⚡ 渐变图标，匹配品牌色（v6.1，2026-09-06） -->
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg" data-page-node-id="SujsvIMuvbNFONq7mt5af6">
+<!-- 设计 token + 暗色主题变量（必须在所有 CSS 之前加载） -->
+<link rel="stylesheet" href="/static/css/tokens.css" data-page-node-id="IXX378SSHoVkJVoxjVlkXR">
+<!-- 全局 UI 工具（toast / skeleton） -->
+<link rel="stylesheet" href="/static/css/toast.css" data-page-node-id="q4kFR75iiVVqxtO4cTzUqn">
+<link rel="stylesheet" href="/static/css/skeleton.css" data-page-node-id="HiXnkV6ZM5AgsRdK8EgOSW">
+<!-- 模块化 css 拆分（v6.2：gnav 已完整迁出；chat/studio/kb/pages 占位 v6.3+ 增量迁移） -->
+<link rel="stylesheet" href="/static/css/gnav.css" data-page-node-id="VF0RKshaqIaW4Tbt6cs4M0">
+<link rel="stylesheet" href="/static/css/chat.css" data-page-node-id="giPspUq8XUgq714abIzum9">
+<link rel="stylesheet" href="/static/css/studio.css" data-page-node-id="xIk3sDxTDF9tJSFztgxx5A">
+<link rel="stylesheet" href="/static/css/kb.css" data-page-node-id="OkjJMTit0IWOjXo9uExjEN">
+<link rel="stylesheet" href="/static/css/pages.css" data-page-node-id="CznDxDRhW6JFH39IafSMds">
+<!-- v6.4 cytoscape 挂载骨架（spinner + 网格暗示；由 __cyIdleMount 自动加 .cy-loading 类） -->
+<link rel="stylesheet" href="/static/css/cy-loading.css" data-page-node-id="5KyBysiOjegpaV84j0ZOFn">
+<!-- 主样式（最后加载，作为兜底） -->
+<link rel="stylesheet" href="/static/css/app.css" data-page-node-id="UG9qh3LdKxai2Lf6J4z9a4">
+<!-- P0-视图渲染：Cytoscape.js + dagre（本地 vendor，离线可用）——替代自研 BFS 布局，专业图引擎渲染 SysML v2 视图 -->
+<script src="/static/vendor/cytoscape.min.js"></script>
+<script src="/static/vendor/dagre.min.js"></script>
+<script src="/static/vendor/cytoscape-dagre.js"></script>
+<!-- 视图自动布局引擎（对齐《视图规范》：8 种视图各用专用确定性布局器） -->
+<script src="/static/view_layout_engine.js"></script>
+<!-- v6.2 性能 baseline 采集器（FP/FCP/路由切换/长任务） -->
+<script src="/static/js/perf.js"></script>
+<style>
+/* Agent 输出呈现 P0：工具耗时 / 三段式错误面 / 产物卡片 / 审批卡（沿用现有变量体系） */
+.tool-elapsed{font-size:10px;color:var(--mut);background:#eef1f6;border-radius:4px;padding:1px 6px;flex:none;font-variant-numeric:tabular-nums;}
+.tool-elapsed.done{color:var(--blue-d);background:var(--blue-l);}
+.proc-block.tool.error .tool-elapsed.done{color:var(--red);background:var(--red-l);}
+.errface{margin-top:4px;border:1px solid #F7C1C1;border-radius:7px;background:#fef6f6;padding:4px 8px;font-size:10.5px;line-height:1.5;white-space:normal;}
+.errface .ef-row{display:flex;gap:6px;align-items:center;margin:1px 0;min-width:0;}
+.errface .ef-k{flex:none;font-weight:600;color:var(--red);}
+.errface .ef-v{flex:1;min-width:0;color:var(--txt,#222);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.errface .ef-v:hover{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.03);border-radius:4px;}
+.errface .ef-act{margin-top:2px;}
+.art-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.art-grid.many{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;}
+.art-card{flex:0 0 auto;min-width:168px;max-width:212px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe;padding:8px 10px;cursor:pointer;transition:border-color .15s,background .15s;white-space:normal;}
+.art-card:hover{border-color:var(--blue-bd,#b8d4f5);background:#f2f7ff;}
+.art-card .ac-head{display:flex;align-items:center;gap:7px;}
+.art-card .ac-ico{font-size:17px;flex:none;}
+.art-card .ac-title{font-weight:600;font-size:12px;color:var(--ink,#223);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.art-card .ac-meta{margin-top:3px;font-size:10px;color:var(--mut);display:flex;gap:5px;align-items:center;flex-wrap:wrap;}
+.art-card .ac-ops{margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;}
+.art-card .ac-ops .pr-act{cursor:pointer;color:var(--blue-d);text-decoration:underline;user-select:none;font-size:10.5px;}
+</style>
+</head>
+<body data-page-node-id="ULFo7BuRAc93uxMeS2g0DW">
+<div class="shell" data-page-node-id="fsBFZxVyPNZAUdzRYLhHVU">
+  <div class="gnav" data-page-node-id="8tdPToxPX9zAfk8Airw0sq">
+    <!-- 2026-09-04 左上角名称改为 AI4MBSE；导航项文本包 .lbl（折叠态纯 icon + hover 提示）；底部账号区 -->
+    <div class="brand" data-page-node-id="4qCj6ltS8HRtmfVzPfDBhV"><b data-page-node-id="XAuUomyblAtDpFh67Aj209">AI</b><div class="t" data-page-node-id="X43AV0CHeVTbejvdtE9czl">AI4MBSE<small data-page-node-id="F5TrJPHOWLarK1YFTYyVAI">网络总体 · 全栈系统</small></div></div>
+    <nav id="mainnav" data-page-node-id="36wxFKD1FAuNPVxfDQk6fO">
+      <!-- 2026-09-04 v4：移除 .g 分组名称（模型本体/知识工程/能力中心/更多），导航为扁平列表；
+           「模型配置」已移入能力中心末 tab（st-model），不再作为独立导航项 -->
+      <a id="nav-newtask" onclick="newTask()" title="新建任务：快速创建建模会话并进入" data-page-node-id="3mUXPQE5gKMexRBac2ix35"><span class="ic" data-page-node-id="AIF9erxR9eMF7q2bb6Sux1">＋</span><span class="lbl" data-page-node-id="eBz5MF1E6c0jXzPdZn5oA1">新建任务</span></a>
+      <!-- 2026-09-17 P1-4 修复：补「AI 建模」中性导航项——此前唯一入口「新建任务」会把会话重置为草稿态，
+           导致从知识中心/能力中心无法回到当前建模会话。此项只做页面路由（go('ai')），不触发 newTask() -->
+      <a data-page="ai" id="nav-ai" title="AI 建模：回到当前建模会话（不新建、不改草稿态）" data-page-node-id="nav-ai-entry"><span class="ic" data-page-node-id="nav-ai-ic">💬</span><span class="lbl" data-page-node-id="nav-ai-lbl">AI 建模</span></a>
+      <!-- 知识浏览入口已隐藏（定位不清晰，待重新定位后恢复） -->
+      <a data-page="kb" data-tab="kb-c" id="nav-glossary2" title="术语词典：词条 ↔ 本体类型归一映射（Schema 命名层 · 主数据）" data-page-node-id="y3bumCdFTwF2oqlMlZooX3"><span class="ic" data-page-node-id="FqI6X5mkSnoGrTbDVs7WhC">📖</span><span class="lbl" data-page-node-id="7NT4HtFq8Likzq7cx3voNp">术语词典</span></a>
+      <a data-page="kb" data-tab="kb-c" data-page-node-id="HrjE5W1hhWC5dTBzEZ0n2R"><span class="ic" data-page-node-id="ifrvDYgdCS7GquFUxJY4IN">🧬</span><span class="lbl" data-page-node-id="eHN8JwGWG1BNBh1AJ3fNGV">本体模型</span></a>
+      <!-- 2026-09-17 知识中心整合：图谱工作区(kb-d) + 资料库(kb-e) 合并为单一导航项，页内顶层双 Tab 切换（#kbhub-tabs）；深链 go('kb','kb-d'/'kb-e') 全部兼容。
+           data-tab="kb-e" 仅作点击落点（与 go('kb') 缺省路由一致，落在资料库）；高亮由 02-shell.js 中 nav-kbhub 特判覆盖（kb-d/kb-e 均点亮） -->
+      <a data-page="kb" data-tab="kb-e" id="nav-kbhub" title="知识中心：资料库（文档管道）+ 图谱工作区（实体/关系/推理/历史/合并请求）" data-page-node-id="MLG63KC6vEf3gebaURgeWg"><span class="ic" data-page-node-id="SSnqzfARGKgpMsVEgpRzJE">🕸</span><span class="lbl" data-page-node-id="7S1IgwVnzn2QjEMCKAjNi1">知识中心</span></a>
+      <!-- 2026-09-11 数据整理（kb-b）入口已隐藏：抽取/审核流水线功能保留，工作流深链（待办/抽取完成/图谱空态引导）仍可达；恢复时解除注释即可 -->
+      <!-- <a data-page="kb" data-tab="kb-b" id="nav-workbench" data-page-node-id="5Kh9MQjipqVEO9HPdgteW3"><span class="ic" data-page-node-id="JySMa5V1pFVbpidwp0r0cZ">🧬</span><span class="lbl" data-page-node-id="rgt2fwxbDhNo2x8SIcqEsq">数据整理</span></a> -->
+      <a data-page="studio" data-tab="st-agent" data-page-node-id="wz8utkQVAVPe1DDAlHF4WH"><span class="ic" data-page-node-id="iGFPctyf2zUfxXyEMSvXVg">🤖</span><span class="lbl" data-page-node-id="YOC121PYmThCjHFnF5eYUJ">能力中心</span></a>
+      <!-- 2026-09-14：「用户与权限」入口从账号抽屉迁入「更多」——管理类入口统一收口（审计日志/运行监控/用户与权限） -->
+      <a class="more-link" id="more-link" title="更多入口：审计日志 / 运行监控 / 用户与权限 / 审批管理" data-page-node-id="DkgVkyCEpKLy9SwUwgBs7O"><span class="ic" data-page-node-id="6Q5ntCmMM0DoOE7BQ0AetY">⋯</span><span class="lbl" data-page-node-id="jkwzrXYe5429f0laj4usEj">更多</span>&nbsp;<span class="more-caret" data-page-node-id="muxZ1H9wBxLM7ChNUL4eTr">›</span></a>
+      <div class="more-flyout" id="more-flyout" data-page-node-id="9NG6OiguQroVdRBOF28aUG">
+        <div class="mf-item" onclick="hideMoreFlyout();go('audit')" data-page-node-id="cfrD4EBHcQGKdI4YABYHku">🛡 <span data-page-node-id="5iGWwkJyC6v6z4tQ6gAc2o">审计日志</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;" data-page-node-id="yWReV03xzZiKiPcVanx99j">操作追溯</span></div>
+        <div class="mf-item" onclick="hideMoreFlyout();go('ops')" data-page-node-id="azJY2GCDl73FDbe1eQDEvf">📈 <span data-page-node-id="bcGbW9DCuZ8GzMYYvAHbOy">运行监控</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;" data-page-node-id="ZEOAdzwFxE3x7xo9vjxsUo">LLM/HIL 用量</span></div>
+        <div class="mf-item" onclick="hideMoreFlyout();go('users')" data-page-node-id="mf-users-entry">👥 <span>用户与权限</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">角色/权限配置</span></div>
+        <!-- 2026-09-17 R7：审批管理（pg-approval）此前全库无任何入口（孤立页），按「管理类入口统一收口」原则补进「更多」 -->
+        <div class="mf-item" onclick="hideMoreFlyout();go('approval')" data-page-node-id="mf-approval-entry">✅ <span>审批管理</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">审批流配置</span></div>
+      </div>
+    </nav>
+    <!-- 2026-09-04 v2：任务分组（会话列表内嵌）——数量统计 + 展开收起 + 滚动 -->
+    <div class="gnav-task" id="gnav-task" data-page-node-id="6ESArr8hKKqTVMOm5LxXic">
+      <div class="gnav-task-head" onclick="toggleTaskGroup()" title="会话列表：点击展开/收起" data-page-node-id="Jfa2WRyztK5aG1x4SctSJe">
+        <span class="gth-ic" data-page-node-id="fyEn5EKaBmnQXrAjzFkWwL">💬</span>
+        <span class="gth-name" data-page-node-id="pELHqSsHP5gPQwAdOUcGTC">任务</span>
+        <span class="gth-cnt" id="task-count" data-page-node-id="l23CFXTY0m6fNTwxxqYiiS">0</span>
+        <span class="gth-arr" data-page-node-id="ZeeJg3wo9K0hJk5T3QZqcU">▾</span>
+      </div>
+      <div class="gnav-task-body" id="task-conv-list" data-page-node-id="sj0BGNFQ5EnnhEzHsjTtLz"></div>
+    </div>
+    <!-- 2026-09-04 v2：左下角仅账号入口，不再有消息通知 -->
+    <div class="gnav-foot" data-page-node-id="5cIwxbU1792q8OkOa3zw06">
+      <div class="user-chip" id="user-chip" onclick="toggleUserMenu(event)" title="账号操作" data-page-node-id="Fi5RdtI2K1GagKulWToIzA">
+        <span class="avatar" id="user-avatar" data-page-node-id="k62irNDOQmJtEhzdLZtUDi">登</span>
+        <span class="u-name" id="user-name" data-page-node-id="TnXozD4CxdxGFDemKQBByl">未登录</span>
+        <span class="u-arrow" data-page-node-id="5rENnZBSgbFsVwSUbIAGlB">▾</span>
+        <div class="user-menu" id="user-menu" onclick="event.stopPropagation()" data-page-node-id="cTA1r2uid2heeUuG7JzFpL">
+          <div class="um-head" id="user-menu-head" data-page-node-id="ERZvGhyjuVR3OEGue4Cnwo"><b data-page-node-id="cpzxxirg03JaljzdcnYL55">未登录</b><br data-page-node-id="vxFtnptJWGyk1A80vAcUpz"><small data-page-node-id="KqsTvapCxdwrDJTcyiC3yW">点击下方选择账号登录</small></div>
+          <!-- 2026-09-06 Q1：账号抽屉内的主题切换（浅色/暗色/跟随系统） -->
+          <div class="um-item um-theme" data-page-node-id="VRjUszJigd9nYBIA7ctcEH">
+            <span style="display:inline-flex;align-items:center;gap:6px;flex:1;" data-page-node-id="rrPVL1GNOxnKU7FVwhzAOr">
+              <svg width="14" height="14" aria-hidden="true" style="color:currentColor;" data-page-node-id="oTFXjZpPfF2eppsU28NqnQ"><use href="#ic-zap" data-page-node-id="IRKPB3hwbij0by0emmG7DY"/></svg>主题
+            </span>
+            <span class="um-theme-opts" id="um-theme-opts" data-page-node-id="0lVw43e4D1qA49D65FVrJ3">
+              <button data-theme-val="light" onclick="setTheme('light')" title="浅色" data-page-node-id="mu1zt51TGjXEymmYW4UOCr">☀</button>
+              <button data-theme-val="dark" onclick="setTheme('dark')" title="暗色" data-page-node-id="jvRmER8R4MoXOEELPFH8zi">🌙</button>
+              <button data-theme-val="auto" onclick="setTheme('auto')" title="跟随系统" data-page-node-id="E6xrRvfntifgK67n0MwVBK">⛭</button>
+            </span>
+          </div>
+          <div class="um-item" onclick="closeUserMenu();switchAccount();" data-page-node-id="8kbyOpGtJqF97oAAJQWU2J">🔄 切换账号</div>
+          <div class="um-item" onclick="closeUserMenu();go('settings');" data-page-node-id="eQsE1zBJWtBYLMPTI1MoKw">⚙️ 设置</div>
+          <!-- 2026-09-14：「用户与权限」入口迁至左侧导航「更多」菜单（管理类入口统一收口） -->
+          <div class="um-sep" data-page-node-id="66g9mX2fxBR9pAOmlDAsZH"></div>
+          <div class="um-item red" onclick="closeUserMenu();logoutUser();" data-page-node-id="KnNBq8O8LGqtzbZMeFdgge">🚪 退出登录</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- 2026-09-04 v3：「更多」已改为 hover 右侧滑出卡片（#more-flyout），原右侧抽屉移除 -->
+  <!-- R3：全局会话侧栏（会话一等公民，借鉴 Codex/Claude Code） -->
+  <aside class="side2 conv-global" id="conv-sidebar" data-page-node-id="WsqKE5sCvRmiiS4sGfIbHp">
+    <div class="side-head" data-page-node-id="b4mFRo6kys5p7pAvf9RsF1">
+      <span class="side-head-text" data-page-node-id="NlkhJHiwkxO6KngXPQh6AW">💬 对话</span>
+      <button class="side-toggle" onclick="convToggle()" title="收起/展开会话列表" data-page-node-id="HO4n0dZsVNxQMMvPShLNkl"></button>
+    </div>
+    <button class="btn-new-chat" onclick="createConversation()" data-page-node-id="WuOqotYO8ZjUERBwxdvg4r">＋ 新建对话</button>
+    <div class="conv" id="conv-list" data-page-node-id="qoJPQIyD3XQo02cfjgErK1"><div class="loading" data-page-node-id="PUCNwT2VOP2OCSRsl9HQpt">加载中…</div></div>
+    <div class="foot" data-page-node-id="IvpLCFQ6Zkbfgoab4sSkdv">
+      <a onclick="go('ai')" data-page-node-id="BXpjvgans2qwaSg8U8fx4w">💬 去 AI 建模</a>
+      <a onclick="go('kb','kb-c')" data-page-node-id="g6fMOHZm008EzKn9mWjL83">🧬 本体模型</a>
+    </div>
+  </aside>
+  <div class="workspace" data-page-node-id="Zh7S64wWRUJELdnYpFxmfF">
+    <div class="gbar" data-page-node-id="FFgooHovzgVrSLQHvpWhxp">
+      <button class="icobtn hamburger-btn" style="border:1px solid var(--line);border-radius:6px;background:#fff;width:30px;height:26px;padding:0;" onclick="toggleNav()" title="收起/展开会话列表" data-page-node-id="pHvTFJSJlRJQnHDFGpQrLj"></button>
+      <!-- 顶栏标题：面包屑化（root=产品名 · cur=当前页面/Tab），避免与页内 H3 重复 -->
+      <span class="ptitle" id="ptitle" data-page-node-id="sxCUczcS5KyQo4t0MRVMr4"><span class="br-cur" id="br-cur" data-page-node-id="ZHEsP2D7VKlMQq0luIGlN3">总览</span></span>
+      <span class="sp" data-page-node-id="YsD56FVcRABrzMOFqhANce"></span>
+      <span class="project-tag" id="ai-project-tag" style="flex:none;" data-page-node-id="14Lp3280QKHEcNxgdHAE10"><span class="dot" data-page-node-id="y9Qc0D9SEJwUQMT5w8IQT3"></span> 正在匹配工程…</span>
+      <!-- 2026-09-06 Q1：顶栏主题切换按钮（齿轮+当前主题图标），单击循环 dark→light→auto。抽屉内仍保留三选项 -->
+      <button class="icobtn theme-toggle" id="theme-toggle" title="切换主题：浅色 / 暗色 / 跟随系统（单击循环）" aria-label="切换主题" onclick="cycleTheme()" data-page-node-id="fly8A92zFRfRdRlM1DCBiY"></button>
+      <!-- 2026-09-04 消息通知 + 账号操作 已迁移至左侧导航栏底部 .gnav-foot -->
+    </div>
+    <div class="pages" id="pages" data-page-node-id="TaqznRyoIAcsM0hxAVwfhA">
+      <!-- ===== 工作台 ===== -->
+      <!-- 2026-09-04：默认进入「AI 建模」页（会话/草稿态欢迎屏），不再以「总览」为首页 -->
+      <div class="page" id="pg-home" data-page-node-id="Gu6Q21BWQZDeVGtyDXmXvz">
+        <h3 class="pt" data-page-node-id="qtXlseXDjfg9vW4nT5pwcm">总览</h3>
+        <div class="pd" id="home-greeting" data-page-node-id="UcrFuqdAjnhEtU5lYhfHkB">角色：设计师 ｜ 专属工作空间，数据/模型/配置隔离（FR-UR-3）</div>
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:14px;" id="home-kpis" data-page-node-id="gDd6LlW0EylNoes72e5ium">
+          <div class="kpi" style="cursor:pointer;" title="点击进入「AI 建模」" onclick="go('ai')" data-page-node-id="pjBChGA23bzZF9AGEHsHgB"><div class="n" data-page-node-id="GRxWRRMOdd9BBmtBskCDNg">-</div><div class="l" data-page-node-id="TAI0CMZNJ3NNo2kBhgDMEn">进行中的对话任务</div></div>
+          <div class="kpi" style="cursor:pointer;" title="点击进入「合并请求」处理冲突" onclick="go('branch')" data-page-node-id="hKwHqOJYgCq9fCzzoVsQg0"><div class="n" style="color:var(--red);" data-page-node-id="Nd3VlkStCdleQIZZdHd2Fj">-</div><div class="l" data-page-node-id="jhVo7KQIlu7vts6ZmRQ3zO">待处理冲突告警</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px;" data-page-node-id="4Ht8rGaNMfpzhuGPz6mOWx">
+          <div class="panel" data-page-node-id="S4wQwSoxFdemDuyO5PHnfW"><div class="ph" data-page-node-id="6I8vIEXSTDpJp25wfONTXz">我的待办</div><div class="pb" id="home-todo" data-page-node-id="O9ry6X4BuKUy97bojzCkAY"><div class="loading" data-page-node-id="nSPRyZCtjMaQ1I2EVtAmWJ">加载中…</div></div></div>
+          <div class="panel" data-page-node-id="9eipIANe3zXMNzFZL6Q8uT"><div class="ph" data-page-node-id="uuTfDHw3jE9MX51HdPjN35">最近对话 <a style="float:right;font-size:11px;color:var(--blue-d);cursor:pointer;" onclick="go('ai')" data-page-node-id="2RHl3pk4ogHUBJmzQHbFHx">进入建模 →</a></div><div class="pb" id="recent-convs-home" data-page-node-id="jYbhN4JQ4YaJ3yX8lzqsoV"><div class="loading" data-page-node-id="sthP97H4jvJ8OKFV8kV6hw">加载中…</div></div></div>
+          <div class="panel" data-page-node-id="P4YxRGTKPFNX6sOczVtt2z"><div class="ph" data-page-node-id="Tbo3hUcSXi8DQ1IFRk7BZb">资产概览</div><div class="pb" id="assets-home" data-page-node-id="xdMeCx6NNXpQxM6fOgVtE3"><div class="loading" data-page-node-id="1rhQV4mFV0B5eiewKBzCXS">加载中…</div></div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px;" data-page-node-id="RS4TdZXDEflJH8HwMJxpV4">
+          <div class="panel" data-page-node-id="bYSAOepzbEK02CBRNBg5tD"><div class="ph" data-page-node-id="b9iZCyzbnfvHz35tHlMGwI">快捷入口 <span class="badge" data-page-node-id="jzHhjdLyBKehEbnhFxHoni">角色预置 + 最近使用</span></div><div id="recent-pages-home" style="padding:8px 12px 0;font-size:11.5px;display:flex;gap:6px;flex-wrap:wrap;" data-page-node-id="ilTaJLiceGFtGVfsDWo6VE"></div><div class="pb" id="role-entries-home" data-page-node-id="1DPGxp8xxwauTSqqUDwFLW"><div class="loading" data-page-node-id="Adj1LjNpA2tcwxYBLVsxji">加载中…</div></div></div>
+          <div class="panel" data-page-node-id="8OMnX3UQiKZqLqSku4KOcu"><div class="ph" data-page-node-id="iod5tTxKJxJm82uZaXbVPK">近期报告 <a style="float:right;font-size:11px;color:var(--blue-d);cursor:pointer;" onclick="go('reports')" data-page-node-id="gPFYX6jPXTwxDi0Nk2sprC">查看全部 →</a></div><div class="pb" id="recent-reports-home" data-page-node-id="TBCZ8UYYMrVyt0VmJwg1tU"><div class="loading" data-page-node-id="xNdxU0xsVFQi4hsYRciToH">加载中…</div></div></div>
+          <div class="panel" data-page-node-id="rHZywt7rykvgI23tEAAe94"><div class="ph" data-page-node-id="kvIcPiJI5BNA1zo2r8478J">最近操作轨迹</div><div class="pb" id="recent-acts-home" style="display:flex;gap:6px;flex-wrap:wrap;" data-page-node-id="ZEA9Q4npo0c0J54nTOvMZ7"><div class="loading" data-page-node-id="Td7HN4XG0ajqv5Q4PEoTpc">加载中…</div></div></div>
+        </div>
+      </div>
+
+      <!-- ===== AI 建模（V3 可折叠四栏布局） ===== -->
+      <!-- 2026-09-04：初始化默认 on，进入页面直接显示「AI 建模」中的草稿态/会话欢迎屏 -->
+      <div class="page on" id="pg-ai" data-page-node-id="f4Tpe5xQLL1HSGW3D6kgqr">
+        <!-- P2 顶栏面包屑化：移除原 h3.pt / .pd，腾出纵向空间给主对话区（高度随之同步调整） -->
+        <div class="cols" style="gap:0;height:calc(100vh - 110px);" data-page-node-id="2DI35oGIKh6pWfjTW7dtY7">
+          <!-- 2026-09-04 v2：会话列表已迁入左侧导航栏 .gnav-task，本页不再独占侧栏 -->
+
+
+          <!-- ② 聊天区 -->
+          <div id="chat-col" style="flex:1;display:flex;flex-direction:column;min-width:0;background:#f7f9fc;border:1px solid var(--line);border-radius:10px;overflow:hidden;" data-page-node-id="xRTQFv8wnhOqE0IeaxjCOt">
+            <div style="flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:18px;" id="chat-area" data-page-node-id="ylv6kJhqOMVUohJyXCaCUm">
+              <div class="loading" data-page-node-id="IKZhnwu3AMjcTYbIMaAvpa">选择或新建对话开始建模…</div>
+            </div>
+            <div class="chat-input-dock" id="chat-input-dock" data-page-node-id="V0gZmLQr6HMSw0tiKEsji9">
+              <div class="attach-bar" id="attach-bar" style="display:none;" data-page-node-id="RvzGkdAiMy81L53WJase4p"></div>
+              <div class="attach-bar" id="ref-bar" style="display:none;" data-page-node-id="emMvxqCundW0nmxSIghKtI"></div>
+              <div class="chip-bar" id="agent-chip-bar" style="display:none;" data-page-node-id="eUOCtBuy5C4RR3nqBXhObg"></div>
+              <div class="chip-bar" id="scope-chip-bar" style="display:none;" data-page-node-id="yUNO3e3d1kXe9ZlhPOGZCC"></div>
+              <div class="ibox" style="position:relative;" data-page-node-id="fgXjLgDmGOPpqUCTdsLyQi">
+                <div class="mention-pop" id="mention-pop" style="display:none;" data-page-node-id="l8mtSHK6tsHgrSKiG1LMQh"></div>
+                <textarea id="chat-input" placeholder="输入建模需求或问题（@ 选择会话文件 · # 引用知识库文件 · 行首 / 选择技能）" onkeydown="handleChatKey(event)" oninput="handleChatInput()"></textarea>
+                <div class="ibox-toolbar" data-page-node-id="RgoebN7grQWAct2URm4bKT">
+                  <div class="tb-left" data-page-node-id="0OEY8GHNJGeSI5X11XTLNU">
+                    <button class="tb-icon" title="上传附件" onclick="toggleAttachMenu(this)" style="font-weight:700;font-size:18px;line-height:1;" data-page-node-id="rFApmgRMPfNDjDPsaJbyU2">＋</button>
+                    <select id="quick-team" onchange="renderChips()" title="选择智能体团队（工作流）：主 Agent 负责意图识别/任务拆分/计划制定/任务分派/内容整合输出" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--mut);max-width:180px;" data-page-node-id="mfe91BnXLMQjdEpuX2FQ9W"><option value="" data-page-node-id="fHfWAQevh2wK9ikqq2TUdr">👑 工作流（智能体团队）</option></select>
+                  </div>
+                  <div class="tb-right" data-page-node-id="02FGR2NbOGDH45IYPAbFmm">
+                    <select id="llm-providers" title="对话模型" data-page-node-id="KhoScLf0ptcp5kcw1z0ugz"><option value="" data-page-node-id="rSu5DVIh6UJxCztAStpCml">默认模型</option></select>
+                    <button class="tb-icon" id="mic-btn" title="语音输入" onclick="toggleVoice()" data-page-node-id="UbZ4acRYFhDSLqA190Avk9">🎤</button>
+                    <button class="send-purple" id="send-btn" title="发送" onclick="sendChat()" data-page-node-id="90WuV9ZVVLsLnGwC9Ax0LA">➤</button>
+                    <button class="send-purple" id="stop-btn" title="停止生成（保留已生成内容）" onclick="stopStream()" style="display:none;background:linear-gradient(135deg,#f05a5a,#d93636);box-shadow:0 2px 6px rgba(217,54,54,.3);" data-page-node-id="J4UfrV7t6IhaacLqv8vdFG">■</button>
+                  </div>
+                </div>
+                <div style="display:none;" data-page-node-id="P0p2m1TicBq7gZM6UzR6ev"><!-- 兼容：@提及 / 澄清改选等强制路由依赖的隐藏选择器 -->
+                  <select id="quick-agent" onchange="renderChips()" data-page-node-id="nGRCMaeOqXYHpC2J1tvaG5"><option value="" data-page-node-id="4xe5j4w3s7JQfSFeQAKTxD">自动匹配</option></select>
+                  <select id="quick-skill" onchange="renderChips()" data-page-node-id="F81jCzGlHVHSAi6Mwt43eX"><option value="" data-page-node-id="kH6b8jsDsxsZ5UslwFrM87">自动匹配</option></select>
+                </div>
+                <input type="file" id="file-input" style="display:none;" multiple onchange="uploadFiles(this,'file')" data-page-node-id="YYqNXOr4cnwYFlWoqk0sXQ">
+                <input type="file" id="img-input" style="display:none;" accept="image/*" multiple onchange="uploadFiles(this,'image')" data-page-node-id="RdyWfPjzvnXu00Fbi9d1kK">
+              </div>
+            </div>
+          </div>
+
+          <!-- ④-拖拽手柄：调整 chat-area ↔preview-panel 宽度 -->
+          <!-- 事件绑定在 div 上：img 有 pointer-events:none，绑在 img 上真实鼠标永远触发不了 -->
+          <div id="preview-divider" onmousedown="previewDragStart(event)" title="拖动调整宽度" data-page-node-id="QH43gQVG1MhrZbtmTFpNSc">
+            <img src="/static/icons/drag-handle.png" alt="drag" data-page-node-id="ODji8gESSCS61y4YX8svOP" />
+          </div>
+          <!-- ④-预览面板收起时的展开入口（面板收起后头部内 toggle 不可见，由该竖条按钮重新展开） -->
+          <button id="preview-reopen" onclick="togglePreview()" title="展开预览" data-page-node-id="oUPMZGLL2QQVyohv1TMqZ0"></button>
+
+          <!-- ⑤ 预览面板（右侧独立，V3 新增） -->
+          <div id="preview-panel" class="collapsed" data-page-node-id="cTWjqXar8K58BhGBlsSMGj">
+            <div class="preview-head" data-page-node-id="p5vqM65t7ujARQG82LsFIe">
+              <span data-page-node-id="lO6IWGbZWA0tVzt5xkzddT">👁 预览</span>
+              <span id="preview-title" style="font-size:10.5px;color:var(--mut);font-weight:400;" data-page-node-id="Dpcwi8JiD9sFgLxPESL4hR">点击文件查看</span>
+              <!-- 产物入口下拉触发器 -->
+              <button class="preview-prod-trigger" id="prod-trigger" onclick="toggleProdDropdown()" title="查看产物列表" data-page-node-id="xjxebxYwWKOACEUnTOKoCI">
+                🗂 文件 <span class="prod-arrow" data-page-node-id="cPdCiynOEhe50v3K3EZr5L">▾</span>
+              </button>
+              <!-- 预览展开/收起按钮（位于产物组件右侧，随预览面板一起收起/展开） -->
+              <button id="preview-toggle" class="side-toggle" onclick="togglePreview()" title="展开/收起预览" data-page-node-id="F2EXD2DjND5rQANVDmBAc8"></button>
+            </div>
+            <!-- 预览多文件 tab 栏（打开多个产物时顶部切换，可关闭） -->
+            <div class="preview-tabs" id="preview-tabs" style="display:none;" data-page-node-id="EJZkF07X0GG9HqpXFfELFt"></div>
+            <div class="preview-body" id="preview-content" data-page-node-id="FMsQB9w7ZriHGvTbBF8tmG">
+              <div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:12px;text-align:center;" data-page-node-id="e7F2uDkj5nOGmCjZSgx7GX">
+                点击「🗂 文件」下拉列表<br data-page-node-id="6ARainAJo2FwW130xf8inC">在此处预览内容
+              </div>
+            </div>
+            <!-- 产物浮层（下拉展开或钉住显示） -->
+            <div id="art-list-panel" data-page-node-id="816BZor0gzNYxWsoYB0kEx">
+              <div class="side-head" data-page-node-id="wHm34EjCmAQghjKOnHF1RO">
+                <span class="side-head-text" data-page-node-id="6uxK34Sw7FYn3NFjAicqeZ">🗂 文件列表</span>
+                <button class="pin-btn" onclick="togglePinProd()" title="钉住/取消钉住" data-page-node-id="X9qwb5BKtRsP3RMewhS9Ry">📌</button>
+              </div>
+              <div class="art-list-body" id="art-list-v3" data-page-node-id="F1B6szXdb4h2VTp3YKBXQi">
+                <div style="color:var(--mut);font-size:11px;padding:8px 4px;" data-page-node-id="ZDUBbgnXlek0RjUnQboXRB">选择会话后加载文件…</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 知识库（子页已提升至主导航：资料库/数据整理/本体模型/图谱工作区；知识浏览入口已隐藏） ===== -->
+      <div class="page" id="pg-kb" data-page-node-id="4yCCnyZf5gYCUT4CjtfLSr">
+        <!-- 模块工具行：左上角模块名 + 右上角工作分支切换（与模块名同一行；本体模型为全局共享不显示） -->
+        <div class="kb-toolbar" id="kb-toolbar" style="display:none;" data-page-node-id="S827X9HR7foBR0bsMqFNSv">
+          <span class="kb-toolbar-title" id="kb-module-title" data-page-node-id="8AOMm0TIGPVtuBQSj7kBBs">资料库</span>
+          <span style="flex:1;" data-page-node-id="fEzzbOGQ1l2PV62trcBqFh"></span>
+        </div>
+        <div class="subpage on" id="kb-a" data-tabpanel="kb" data-page-node-id="odKKdwqvkThml9V6sf9G5M">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px;" id="kb-stats" data-page-node-id="EoFXUHxMSGjUPNYSvRpa03"></div>
+          <div class="panel" style="margin-bottom:14px;" data-page-node-id="4ZRV0U97L2f38PKOWBIGbi">
+            <div class="ph" data-page-node-id="DfFHs3T25AJtppaR35XQiI">知识库总览 <span class="badge" data-page-node-id="qv8ISZktepJvKPCu4DOo8n">FR-KG-8/11</span><span class="tag" data-page-node-id="XnvhYvQTEDCkzV9Iec2bIC">KPI · 待评审队列 · 来源分布 · 图谱缩略</span><span style="flex:1" data-page-node-id="isf135NwcwM9KxuH2eepD8"></span>
+              <button class="btn sm ghost" onclick="loadKBOverview()" data-page-node-id="4Lgr1zuIgANeVkJ8zUCp3Z">刷新</button></div>
+            <div class="pb" id="kb-overview" data-page-node-id="VHE8P7eGsyjH1PFQuAteGM"><div style="color:var(--mut);font-size:12px;" data-page-node-id="FWl5Z7hJ06k9wtJZWfsKvm">加载总览…</div></div>
+          </div>
+          <div class="panel" style="margin-bottom:14px;" data-page-node-id="glLzLRHMxaBFAqwAAERmy8">
+            <div class="ph" data-page-node-id="L9hlku7e5WwJ758hAnaqB4">数据生命周期 <span class="badge" data-page-node-id="xV0g5LVdY98YM6jzDEWfxD">P0-4</span><span class="tag" data-page-node-id="4o1kzKAS6970ZzyExXzqJY">原始切片→候选→评审→发布→废弃</span><span style="flex:1" data-page-node-id="RwqKaxEbRoQRFvtPMjMkoE"></span>
+              <button class="btn sm ghost" onclick="loadLifecycle()" data-page-node-id="CBbyyCvRna9ZQkZ4pqchCn">刷新</button></div>
+            <div class="pb" id="kb-lifecycle" data-page-node-id="mahbT2F2QFOQfjroSZjSJ0"><div style="color:var(--mut);font-size:12px;" data-page-node-id="AmajkY1YetC9mjPgGUTLqT">加载生命周期分布…</div></div>
+          </div>
+          <div class="panel" style="margin-bottom:14px;" data-page-node-id="uhgOBx7NfeTPELilhXOSMe">
+            <div class="ph" data-page-node-id="nJxk8saa41YBM3YuGhohg9">知识完整度 <span class="badge" data-page-node-id="EBOiyyiqNHRIdQ2KmFvQHA">FR-KG-13</span><span class="tag" data-page-node-id="SCuG6SGLUMjv6Fj9OdhTiL">类型覆盖率 · chunk 链接率 · fallback 建议抽取</span><span style="flex:1" data-page-node-id="ew8juyH2xT6tYUGjIjOpeH"></span>
+              <button class="btn sm ghost" onclick="loadCoverage()" data-page-node-id="k8MBgdS8IY42tRUEb4AOlu">刷新</button></div>
+            <div class="pb" id="kb-coverage" data-page-node-id="QitcIeIqcQ0iJLV3hI2spF"><div style="color:var(--mut);font-size:12px;" data-page-node-id="9ZF0968DTAFElm0evEINbO">加载完整度…</div></div>
+          </div>
+          <div class="panel" style="margin-bottom:14px;" data-page-node-id="iug26oDGiHEfF0S8TvGmug">
+            <div class="ph" data-page-node-id="aP1R5qX58QH9wWcIvmHgGt">知识引擎双引擎消费 <span class="badge" data-page-node-id="VQCitpQV2DfpQCKAMvIg9m">P1</span><span class="tag" data-page-node-id="6g5FTf5wIJiY7iDB2vmQSg">图 GraphRAG + 向量 VectorEngine</span></div>
+            <div class="pb" id="engine-stats" data-page-node-id="2sIHRsGgAjon7rS1SZUH47"><div class="loading" data-page-node-id="DoiVcF0ithWNJvCsdAQOcU">加载中…</div></div>
+          </div>
+          <div class="panel" style="margin-bottom:14px;" data-page-node-id="63osQCCzGHGGoYgTE0Ago2">
+            <div class="ph" data-page-node-id="r0j9csChP7lYNTzt1BTOGW">图数据库 <span class="badge" data-page-node-id="t3aVowny3EiT65Vy5UH4Xc">ArcR-5/P2</span><span class="tag" data-page-node-id="6qJTR1mTCJOyDPSTyFssZU">pyoxigraph / Jena Fuseki / Neo4j 查询镜像 · SPARQL 只读 · 审核通过自动入图</span><span style="flex:1" data-page-node-id="CTHUIHiuo5N2Ub0w0t0vFn"></span>
+              <button class="btn sm ghost" onclick="loadGraphDbStats()" data-page-node-id="HWmp4O8FrZDCQe1fSeY4xq">刷新</button>
+              <button class="btn sm" onclick="syncGraphDb()" data-page-node-id="fddBLzC6ECqflxtvMTDo8h">同步入图</button>
+              <button class="btn sm ghost" onclick="exportGraphDb()" data-page-node-id="rd9cDcJwD7abt9XbSuHmnE">导出 N-Quads</button>
+            </div>
+            <div class="pb" id="graphdb-stats" data-page-node-id="KPNAARTB89TBuWtu4Im8kv"><div style="color:var(--mut);font-size:12px;" data-page-node-id="r3prZQMPqCRHtS1QIfGyK5">加载图数据库状态…</div></div>
+            <div class="pb" style="border-top:1px solid var(--line);" data-page-node-id="qCFAcYFtfVWsetvYCerZCk">
+              <div style="display:flex;gap:8px;padding:10px 0 6px;" data-page-node-id="Icx4bMzJH9ZHj7rJeMbeUq">
+                <input id="graphdb-q" placeholder="SPARQL SELECT 查询，如：SELECT ?s ?t WHERE { GRAPH ?g { ?s rdf:type ?t } } LIMIT 10" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12px;font-family:monospace;" onkeydown="if(event.key==='Enter')runGraphDbQuery()" data-page-node-id="7MpYay3R9d2xdQ5PHQAB1k">
+                <button class="btn sm" onclick="runGraphDbQuery()" data-page-node-id="oJNkCeyNdA4qtoLAEWBMCz">执行</button>
+              </div>
+              <div id="graphdb-result" style="font-size:12px;color:var(--mut);padding-bottom:8px;" data-page-node-id="oV44MePgqhII4l758IF8aZ">输入 SELECT 查询执行（仅只读；分支命名图 http://www.xingwang.mbse/graph/{branch}，实体 IRI http://www.xingwang.mbse/ent/{id}，按名检索请用 rdfs:label）</div>
+            </div>
+          </div>
+          <div class="panel" style="margin-bottom:14px;" data-page-node-id="XuSdjBW2sLff9hupUja1NR">
+            <div class="ph" data-page-node-id="z9QCYIpm0WLl38fZLOHGJx">命中预览（文档分块检索） <span class="badge" data-page-node-id="1pLJIw9sn7S9QEyzj8DY9A">KB-P1</span><span class="tag" data-page-node-id="l3ZIWWryETNsj0MMVmkL1f">向量 / BM25+向量混合 / 重排</span><span style="flex:1" data-page-node-id="SQxkCrD3LfCqEvCdOTCwNG"></span>
+              <select id="kb-chunk-mode" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="0mm7JB9ychKHbDCJoxxcXK"><option value="hybrid" data-page-node-id="RDRpztXoJcpMy33A1Heg10">混合检索</option><option value="vector" data-page-node-id="uUGnrEnaHBHPUZk75EGG7w">纯向量</option></select>
+              <input id="kb-chunk-q" placeholder="输入查询，如：宽带载荷 V 波段" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:200px;" onkeydown="if(event.key==='Enter')searchChunks()" data-page-node-id="6wDmoFDmG7S7gzxqk624fj">
+              <button class="btn sm" onclick="searchChunks()" data-page-node-id="yYT9aHWLWH6E9CY3XwRA2O">检索</button>
+            </div>
+            <div class="pb" id="chunk-hits" data-page-node-id="JvenL0o6NKTRUG8Af2aMEw"><div style="color:var(--mut);font-size:12px;" data-page-node-id="a575IruEZgm00oqBWwDStH">输入查询后回车，展示分块命中预览（含来源文档与片段）</div></div>
+          </div>
+          <div class="panel" style="margin-bottom:14px;" data-page-node-id="JW5MgT0MfYDwUg4DGsCbQn">
+            <div class="ph" data-page-node-id="xpJklVDcjVNAQ02ZxQEow2">向量→图谱转化（半自动） <span class="badge" data-page-node-id="LwTfWO2GD3UZQMjDg2PjYB">O-1</span><span class="tag" data-page-node-id="ZdDvcATugDZnVBUGpjCGNi">命中片段→抽取候选→人工确认入库（重复候选先消歧）→正式审核</span><span style="flex:1" data-page-node-id="oOKSxfPUBiuKwLziXS7dBI"></span>
+              <button class="btn sm" onclick="v2gExtract()" data-page-node-id="rggQsvnNH4jpMLPoxO2A9G">抽取候选</button>
+              <button class="btn sm grn" onclick="v2gConfirm()" data-page-node-id="zcHHC6KXgb63Gn4uAmXAlS">确认入库</button>
+              <button class="btn sm ghost" onclick="loadV2GCandidates()" data-page-node-id="aWkL7RX7Izh5as9eAMBMeW">刷新</button>
+            </div>
+            <div class="pb" id="v2g-panel" data-page-node-id="l7xehxcrWMEacN5UMHBpvt"><div style="color:var(--mut);font-size:12px;" data-page-node-id="fPMVplFjd9Cx4pjiqtUJFj">输入查询检索 → 抽取候选 → 勾选确认入库（自动建立 chunk↔实体 溯源链接）</div></div>
+          </div>
+          <div class="panel" data-page-node-id="QgL9kXACY7psuT06VjoRa8"><div class="ph" data-page-node-id="vSj4flLkAyyA8d8fEQ2DZT">知识实体浏览 <span style="flex:1" data-page-node-id="hsEOLDQiYDpbnyFYfTxaVi"></span>
+            <input id="kb-search" placeholder="搜索实体…" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:180px;" oninput="loadKBEntities()" data-page-node-id="mhbR2LTcF7dT6jvJGNKZdS">
+            <select id="kb-status-filter" onchange="loadKBEntities()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="6dUpALA7ydWeGibuHHEJbs"><option value="" data-page-node-id="x5ltM2eoDo1TrBEo5uhUIA">全部状态</option><option value="reviewed" data-page-node-id="0VxPDZRZnsqFLAIqI43S9j">已评审</option><option value="candidate" data-page-node-id="Lya0OzUdfDzroMf0vZCJE9">候选</option><option value="deprecated" data-page-node-id="Nb1Pj2NV0FHl5o6dIkYhZ9">已废弃</option></select>
+            <select id="kb-cat-filter" onchange="loadKBEntities()" title="知识类别（设计方法知识/设计资产）" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="Y9r7FwU9lR7V2tt9J8kV7k"><option value="" data-page-node-id="p6U4BPI9nwuV5uBMyDrmEo">全部类别</option></select>
+          </div><div class="pb" style="padding:0;" data-page-node-id="xspqZ6gCzmkSoIkZI5C03v"><table class="t" id="kb-entity-table" data-page-node-id="ODjJor0xoC6sv0IsXOYegW"><tr data-page-node-id="upQSjLfHtjMy6tLgpCpMj8"><td class="loading" data-page-node-id="fb0bOw4UE6wGGo477vAj0j">加载中…</td></tr></table><div id="kb-ent-pager" style="padding:8px 12px;border-top:1px solid var(--line);display:flex;align-items:center;gap:8px;justify-content:flex-end;" data-page-node-id="4DoYo43bhNbLgL9wCpIx7P"></div></div></div>
+        </div>
+        <!-- 2026-09-17 知识中心整合：顶层双 Tab 切换器（资料库/图谱工作区）。位置在 kb-e 之前 —— kb-a/kb-b/kb-c 隐藏时，kb-d 激活时同样渲染在其内容上方。显隐与高亮由 loadKBTab() 驱动 -->
+        <div id="kbhub-tabs" style="display:none;gap:8px;align-items:center;margin-bottom:10px;">
+          <span id="kbhub-tab-e" class="kbhub-chip on" onclick="go('kb','kb-e')" title="资料库：文档上传 · 解析分块 · 向量化 · 抽取管道">📁 资料库</span>
+          <span id="kbhub-tab-d" class="kbhub-chip" onclick="go('kb','kb-d')" title="图谱工作区：实体 / 关系 / 推理 / 历史 / 合并请求">🕸 图谱工作区</span>
+          <span style="flex:1;"></span>
+        </div>
+        <div class="subpage" id="kb-e" data-tabpanel="kb" data-page-node-id="9bWn54q69VH6qlXnHVWpbz">
+          <div class="panel" data-page-node-id="TK2WNWmMWnJxDSQGBEyWQE">
+            <div class="ph" data-page-node-id="PZ4OOJZ4iqVMDvUnuB2Ssx">资料库 <span class="tag" data-page-node-id="j2fBYSHqf2RLdFTWSeiVVx">解析→分块→向量化<span id="doc-flow-extract" style="display:none;" data-page-node-id="8YhmZevFTVDtKFX0nmdVdX">→抽取</span></span><span class="tag" data-page-node-id="orYIMJSTquRNqFsAcrmQWq">支持批量（多选）</span><span id="doc-count" style="color:var(--mut);font-size:11px;" data-page-node-id="5HPGKlDgHVOwsaPJLQFNWM"></span><span style="flex:1" data-page-node-id="Xg43HoXfZHgjQ6LKEJNyoA"></span></div>
+            <div class="pb" style="padding:0;" data-page-node-id="kGyV7Xh4dypCffRtB7WtbM">
+              <!-- 工具栏：搜索 + 多维度筛选（上传人 / 上传时间 / 格式 / 状态）+ 刷新 + 上传文件 -->
+              <div style="padding:8px 10px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);flex-wrap:wrap;" data-page-node-id="OQMLcgZhwgMhg1aiZpficJ">
+                <input id="doc-search" placeholder="搜索文件名/标题/标签…" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:200px;" onkeydown="if(event.key==='Enter')loadDocs()" data-page-node-id="wTRPFhZHcqZIdxZSMPgsZ6">
+                <select id="doc-uploader-filter" onchange="loadDocs()" title="按上传人筛选" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;max-width:110px;" data-page-node-id="9ZMbfjeON8LmjXXV6aoeho"><option value="" data-page-node-id="zBah5DNbYSck1QDnG8cGjW">全部上传人</option></select>
+                <input type="date" id="doc-date-from" onchange="loadDocs()" title="上传起始日期" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;" data-page-node-id="9vUvRIk3hzXPL1bgeA85X4">
+                <span style="color:var(--mut);font-size:12px;" data-page-node-id="8RIZSmod7Sa48I8SDv7MCf">~</span>
+                <input type="date" id="doc-date-to" onchange="loadDocs()" title="上传结束日期" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;" data-page-node-id="6cbywc3DrkSZzQVsQAOpDd">
+                <select id="doc-format-filter" onchange="loadDocs()" title="按文件格式筛选" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="0JjRSI0UQGI5HV0Doktuv2"><option value="" data-page-node-id="HGF4ySLPaUwdCZkT2WqTqK">全部格式</option></select>
+                <select id="doc-origin-filter" onchange="loadDocs()" title="按来源筛选（用户上传 / AI 生成收编）" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+                  <option value="">全部来源</option><option value="upload">👤 用户上传</option><option value="ai_generated">🤖 AI 生成</option>
+                </select>
+                <select id="doc-status-filter" onchange="setDocStateFilter(this.value)" title="统一状态（解析×生命周期）" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+                  <option value="">全部状态</option><option value="committed">🎯 正式入库</option><option value="stored">✅ 待入库</option><option value="processing">⏳ 处理中</option><option value="failed">⚠️ 解析失败</option><option value="deprecated">🚫 已废弃</option><option value="archived">📦 已归档</option>
+                </select>
+                <span style="flex:1" data-page-node-id="lOIRbTxmwhfoe3k0IqzLpq"></span><button class="btn sm ghost" onclick="loadDocs()" data-page-node-id="TcGBukG3uCMAaoMLF72CTv">刷新</button>
+                <button class="btn sm" onclick="document.getElementById('doc-upload-input').click()" data-page-node-id="i9eQAjVykXCNWuM62AslSM">📤 上传文件</button>
+                <input type="file" id="doc-upload-input" style="display:none;" multiple accept=".txt,.md,.csv,.json,.xml,.yaml,.yml,.log,.docx,.doc,.pdf,.xlsx,.xls,.pptx,.ppt,.png,.jpg,.jpeg" onchange="uploadDocWithMeta(this)" data-page-node-id="A6zgv3ZYKKMoy2QHDugyDN">
+              </div>
+              <!-- 上传交互区：选择文件后展开（格式提示 + 文件卡片 + 元数据 + 进度 + 抽取结果） -->
+              <div id="doc-upload-wrap" style="display:none;padding:10px 12px;border-bottom:1px solid var(--line);background:#f8fafc;" data-page-node-id="L5wHbwFxiuaYZfkQ392A59">
+                <div style="font-size:11px;color:var(--mut);display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-bottom:8px;" data-page-node-id="nk6VPaxRlOCuloDOVPULE8">
+                  <span data-page-node-id="Hzlg7Anpue67etlxmNywwd">支持格式：</span>
+                  <span class="tag" data-page-node-id="yMTd5TuUsvWXm5kKPMcC0K">文本 txt/md/log</span><span class="tag" data-page-node-id="cCnxk36gqylKFuuqeI3aE8">表格 csv/xlsx/xls</span><span class="tag" data-page-node-id="PEXe0IA4pS3uTDaqtueDBb">文档 docx/pdf</span><span class="tag" data-page-node-id="r6tFU5tlQ5at1nb2zHsa2m">演示 pptx</span><span class="tag" data-page-node-id="ICjvZiCFwqbr6koG03EzHD">数据 json/xml/yaml</span>
+                  <span class="tag" style="border-color:var(--amb);color:var(--amb);" data-page-node-id="BxfgsMfEo4IRzPe5yQjgFI">图片 png/jpg（需 OCR，暂存副本）</span>
+                </div>
+                <div id="doc-file-card" style="display:none;border:1px solid var(--blue);border-radius:8px;padding:10px;background:var(--blue-l);" data-page-node-id="GYCWkm1FlaEHRShV12ka75">
+                  <div style="display:flex;gap:10px;align-items:center;" data-page-node-id="62MTC3R20Nm11fEt6NCDwQ">
+                    <span style="font-size:22px;" data-page-node-id="5JKAAQWgoEBIZyXATsdjy1">📄</span>
+                    <div style="flex:1;" data-page-node-id="JABWADATmwjJn9YHrbQqWC">
+                      <b id="dfc-name" style="font-size:13px;" data-page-node-id="o2FDGwajGfmYFZURQkMViN"></b>
+                      <div style="font-size:11px;color:var(--mut);" id="dfc-meta" data-page-node-id="bX1Q4DxrvA2WDkJhZnZkRb"></div>
+                    </div>
+                    <button class="btn sm red" onclick="clearDocFile()" data-page-node-id="v6cYkUE0yxUh5wD7JtvDOS">移除</button>
+                  </div>
+                  <div id="doc-batch-list" style="display:none;margin-top:8px;max-height:120px;overflow-y:auto;border:1px dashed var(--blue);border-radius:6px;padding:6px;" data-page-node-id="MDrIervAZ1Uo38lGII3t6O"></div>
+                  <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;" data-page-node-id="x1MbCe29lGiV1iaTzgGVnj">
+                    <input id="dm-title" placeholder="标题（默认=文件名）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:180px;" data-page-node-id="PkHie0DEWdqwF5X67LMiUu">
+                    <input id="dm-author" placeholder="作者（默认=王工）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:110px;" data-page-node-id="c448FV2DEs7pQHaGFyuPOg">
+                    <input id="dm-version" placeholder="版本" value="v1.0" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:80px;" data-page-node-id="tkGhyAP9ZSfwaDNjjrpqfC">
+                    <input id="dm-tags" placeholder="标签（逗号分隔）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:180px;" data-page-node-id="KRyqmA57xyTE0V3pSe5BDp">
+                    <button class="btn grn" onclick="doUploadDoc()" data-page-node-id="TrSkDMrdlD1BTIuyqxtqHS">🚀 开始上传</button>
+                  </div>
+                </div>
+                <div id="doc-upload-progress" style="display:none;margin-top:10px;" data-page-node-id="PviXN2k9ThfZHT2tQIlPmx">
+                  <div style="display:flex;gap:6px;font-size:11px;align-items:center;flex-wrap:wrap;" data-page-node-id="BgJKCFVZTZzj5D3qxa9pXQ">
+                    <span id="up-stage1" class="st w" data-page-node-id="hQYxFq5K1TmJ7jKIjskFEq">解析</span><span style="color:var(--mut);" data-page-node-id="iFKWfnw1LNjSqVA1TsNVjH">→</span>
+                    <span id="up-stage2" class="st w" data-page-node-id="RKwYtOhGHi8NX7OLSbUHbl">分块</span><span style="color:var(--mut);" data-page-node-id="txu59jDKA1ECe13voEOjAb">→</span>
+                    <span id="up-stage3" class="st w" data-page-node-id="h26MWrr3R2meOKJl0SJyGL">向量化</span><span style="color:var(--mut);" data-page-node-id="3XpVkXeCdr5C3McBfsnWpC">→</span>
+                    <span id="up-stage4" class="st w" data-page-node-id="f9mVCViZxrmhM7rTi6dzTo">入库</span>
+                    <span id="up-extract-stage" style="display:none;" data-page-node-id="26QNKVv8ciEsLnedlG1N7D"><span style="color:var(--mut);" data-page-node-id="PeGrN6T8SYVNslRUBBBfax">→</span><span id="up-stage5" class="st w" data-page-node-id="2MICa1Chhh8D6lmqYKO3Aq">抽取候选</span></span>
+                    <span id="up-status" style="color:var(--mut);margin-left:8px;" data-page-node-id="7EONgqmvWp5GNXhUqB4GEQ"></span>
+                  </div>
+                  <div style="height:5px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden;" data-page-node-id="c56zogaii0JEeQjjrVnW99">
+                    <div id="up-bar" style="height:100%;width:0%;background:var(--blue);transition:width .4s;" data-page-node-id="UkgMy4aScrHhIeBDvcHwlo"></div>
+                  </div>
+                </div>
+                <div id="doc-extract-result" style="display:none;margin-top:10px;border:1px solid var(--grn);border-radius:8px;padding:10px;background:var(--green-l, #eef7ee);" data-page-node-id="rCxfLKA4r5W4FJderFG2ny"></div>
+              </div>
+              <div id="doc-batch-bar" class="doc-batch-bar" style="display:none;">
+                <span id="doc-batch-count" style="font-weight:600;">已选 0 个</span>
+                <button class="btn sm ghost" onclick="batchCommitSelected()">批量入库</button>
+                <button class="btn sm ghost" onclick="batchDeprecateSelected()">批量废弃</button>
+                <button class="btn sm ghost" onclick="clearDocSelection()">✕ 清除选择</button>
+              </div>
+              <div id="doc-list" data-page-node-id="BjEQPw0xo0LOQT7f6ni1iF"><div class="loading" data-page-node-id="CllEHjJ5pVJr2Fyfe4iwHk">加载中…</div></div>
+              <div id="doc-pager" style="padding:8px 12px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap;" data-page-node-id="7f5FFEA2hCMY2NOCjs6rtF"></div>
+            </div>
+          </div>
+        </div>
+        <div class="subpage" id="kb-b" data-tabpanel="kb" style="padding:0;" data-page-node-id="hK2jiVpPw3WcEwT9gCsuy3">
+          <div id="kb-flow-bar" style="display:flex;gap:8px;align-items:center;padding:10px 12px 0;flex-wrap:wrap;" data-page-node-id="MuipKVG63jRDCrVGFxEe15">
+            <b style="font-size:12px;color:var(--blue-d);" data-page-node-id="2PRJ2Z3TZ4Uv9am88RcQ9n">🔄 知识治理全链路</b>
+            <span id="fusion-page-stats" class="fstat" style="display:flex;gap:10px;flex-wrap:wrap;" data-page-node-id="2PSNCKFYdLugVY3vThr745"></span>
+            <span style="flex:1" data-page-node-id="nunm6Dz07EscldbsDGUQpm"></span>
+            <span id="kb-flow-steps" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;" data-page-node-id="yFXMk4A9NOib0Lw9RtWEcW"><div class="loading" data-page-node-id="PqsNL5zIodI4GXoFBMdQkx">加载中…</div>
+            </span>
+            <button class="btn sm ghost" onclick="try{go('kb','kb-d')}catch(e){}" title="跳转图谱工作区查看已入图数据" data-page-node-id="N4fxA5BM2o6nhn2cf7AeG9">🕸 查看图谱</button>
+          </div>
+          <!-- IA 收敛（2026-08-28）：抽取批次/数据整理双 subtab 合并——候选批次降为数据整理左栏第 0 站（fus-pane-batch），单入口单流水线 -->
+          <div class="panel" style="margin-bottom:0;padding:10px 12px;" id="fus-nav" data-page-node-id="sBGYfCutTBCWh0ERp62MwF">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;" data-page-node-id="AVH3sy1tYuCuZb4eLJtXYw">
+                    <span style="font-size:13px;font-weight:600;color:var(--blue-d);" data-page-node-id="dhTaHPD0OxOLqqYER3ya7H">治理队列（按顺序收敛，左→右）</span>
+                    <span id="fus-batch-line" style="font-size:10.5px;color:var(--mut);" data-page-node-id="YKvhymOf08WUF7H3D3uBsQ">最近批次加载中…</span>
+                    <span style="flex:1" data-page-node-id="qwPMiU7SS2uGg2WB9qHKMQ"></span>
+                    <span style="font-size:10.5px;color:var(--mut);" title="常规流量自动处理：词典命中归一 + 高置信(≥0.92)挂靠" data-page-node-id="pLk748kVmun94kXw1ylBO7">ℹ️ 常规流量自动处理</span>
+                    <button class="btn sm ghost" style="font-size:10.5px;padding:1px 7px;" onclick="loadFusion()" title="刷新统计" data-page-node-id="r6u6cd4JAI89POHBcKaE2i">↻</button>
+                  </div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:stretch;" data-page-node-id="RmLUeEv66cN9tYRwRIQRXm">
+                  <button class="fchip fus-nav-btn" data-fpane="batch" onclick="fusNav(this,'batch')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;" title="第0站·原料验收：逐条确认或驳回候选" data-page-node-id="5ff9qYXUGfLPBwxj9gLtaB">📥 候选批次 <span class="tag" id="fus-n-batch" style="font-size:10px;" data-page-node-id="TjcZje9JtxLtlh7FPG4kVo">…</span></button>
+                  <span style="align-self:center;color:var(--mut);font-size:11px;" data-page-node-id="hdSTI1nKRwVp7YCegH6jB3">→</span>
+                  <button class="fchip fus-nav-btn" data-fpane="gray" onclick="fusNav(this,'gray')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;" title="身份闸：机器不确定的实体配对人工判定" data-page-node-id="k5OHu0V3hVKsQBsZApLxYX">🔀 灰区裁决 <span class="tag" id="fus-n-gray" style="font-size:10px;" data-page-node-id="qZaX6BJGT1kci7oOt9kS82">…</span></button>
+                  <span style="align-self:center;color:var(--mut);font-size:11px;" data-page-node-id="XclTpMGUFu8pQXJ6gjm5rT">→</span>
+                  <button class="fchip fus-nav-btn" data-fpane="conflict" onclick="fusNav(this,'conflict')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;" title="字段闸：属性值矛盾逐条裁决" data-page-node-id="psd5wHmLbu2tCSbGT8VQ3q">⚔️ 冲突裁决 <span class="tag" id="fus-n-conflict" style="font-size:10px;" data-page-node-id="Lx1r5F4dnVwhKlVHWyVaLq">…</span></button>
+                  <span style="align-self:center;color:var(--mut);font-size:11px;" data-page-node-id="B4g1BsHjHMimHiAjO07X1W">→</span>
+                  <button class="fchip fus-nav-btn" data-fpane="confirm" onclick="fusNav(this,'confirm')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;border-color:var(--grn,#2f855a);" title="终点：清零后 survivorship 物化入图" data-page-node-id="v2dGd714IM1bh4Ig8A25bo">✅ 物化入图 <span class="tag" style="background:var(--grn-l,#eaf6ef);color:var(--grn,#2f855a);font-size:10px;" data-page-node-id="sGgiFnRtJ5FTZmCzl3pH1t">🏁 终点</span></button>
+                  </div>
+                  <div style="font-size:10.5px;color:var(--mut);margin-top:8px;" data-page-node-id="5l7jKU6kH0DvTfpG3XUkZq">📖 术语词典为全局主数据模块（含权限管理），已并入「本体模型」页的「术语映射」子页——灰区证据中的词典命中仍可溯源。</div>
+              </div>
+          <div id="fus-pane-batch" class="kb2-pane" style="padding:12px;display:none;" data-page-node-id="BUHSYqbLwzyK88HjL1KCWo">
+            <div class="panel" style="margin-bottom:0;" data-page-node-id="0WJkiNEPRDWxmc1EBYdFfl">
+              <div class="ph" data-page-node-id="a0GCs3OXUm7YDsqbL7WtkI">候选批次（第 0 站 · 原料验收） <span class="tag" data-page-node-id="l8GGVpHF3SQgZRaEOgGa5H">文档/AI建模产出的候选在此逐条确认或驳回 —— 确认后进入词典→灰区→冲突→物化流水线收敛</span><span style="flex:1" data-page-node-id="xQVvvjbPY7BIHCpvOBWKez"></span>
+                <button class="btn sm ghost" onclick="v2gReviewLoad()" data-page-node-id="VMzB7sbgO35NzHr3XsdaZK">刷新</button>
+              </div>
+              <div class="pb" style="padding:0;" data-page-node-id="5DOY7RhwFXRi4qLMsEW2al">
+                <!-- 候选检索筛选（常用筛选常驻 + 高级搜索折叠：批次筛选 + 类型筛选） -->
+                <div style="padding:8px 12px;border-bottom:1px solid var(--line);" data-page-node-id="JSAVN0rMlpBAlsIHuKT3KC">
+                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="jNdELmKhfIiP1e8jq2d1Dm">
+                    <select id="v2g-group" onchange="v2gApplyFilter()" title="实体 / 关系候选分组查看" style="border:1px solid var(--blue);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--blue-d);font-weight:600;" data-page-node-id="jbEgHSK6KqAWzBR2XSVkdw">
+                      <option value="entity" data-page-node-id="SvSlWjW1dBvWRtwbRMO4LZ">实体候选</option><option value="relation" data-page-node-id="fDj51n4cVyOTryBBl7943L">关系候选</option><option value="all" data-page-node-id="2QiCPJOKdJ9zFg6Eh01wV2">全部</option>
+                    </select>
+                    <input id="v2g-search" placeholder="🔍 搜索候选名…" oninput="v2gApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:140px;" data-page-node-id="4V2HCgGOWAXWj57dSvXUCC">
+                    <select id="v2g-status" onchange="v2gApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="aGMDLqbtvHiXVhv1eE492I">
+                      <option value="pending" data-page-node-id="vuJA064x6OCsRvuntVJRDm">待审</option><option value="confirmed" data-page-node-id="oHR1s3VULRQsi0Vzr7dcLA">已确认</option><option value="rejected" data-page-node-id="BwjR3PZDizJWYol4HRDQU9">已驳回</option><option value="" data-page-node-id="6WQykFDKbhgd7db3HfpzNx">全部状态</option>
+                    </select>
+                    <select id="v2g-matching" onchange="v2gApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="uP3RrtqH2WEjOChCTHTVLj">
+                      <option value="" data-page-node-id="vO7tqYxsByoRo1c7PbIywn">全部消歧</option><option value="none" data-page-node-id="IAbjK5FCSLA8pCkLkKQfm8">无重复</option><option value="dup_suspect" data-page-node-id="HgwGpKVzyyiQ4M9MDNTVqW">疑似重复</option><option value="dup_high" data-page-node-id="fQhQTwRkEMa5gaLxcPxsV8">高度重复</option>
+                    </select>
+                    <label style="font-size:12px;color:var(--mut);display:flex;align-items:center;gap:3px;" data-page-node-id="fEA7XvjdBlfgBGuyrcHoqo">置信度 ≥ <input id="v2g-conf-min" type="number" min="0" max="1" step="0.05" value="" placeholder="0" onchange="v2gApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12px;width:52px;" data-page-node-id="pDHgsvq4tuSNVffWngncS0"></label>
+                    <label style="font-size:12px;color:var(--mut);display:flex;align-items:center;gap:3px;" data-page-node-id="TWbNpIMHOxOHDKnnogdVQp"><input type="checkbox" id="v2g-rel-only" onchange="v2gApplyFilter()" data-page-node-id="APMOw5rHSuQFHEht0gcRtI"> 仅关系</label>
+                    <label style="font-size:12px;color:var(--mut);display:flex;align-items:center;gap:3px;" data-page-node-id="Zls0c9EMS1jXOHfL5PcdA3"><input type="checkbox" id="v2g-rej-only" onchange="v2gApplyFilter()" data-page-node-id="Ato1EbZipDV3GpSzrpumRr"> 只看被拒</label>
+                    <span style="flex:1" data-page-node-id="N9Q1fdodSiI3weADBHRL5T"></span>
+                    <span id="v2g-summary" style="font-size:11px;color:var(--mut);" data-page-node-id="0qenkk0lvHG5imILK9t5Dd"></span>
+                    <button class="btn sm ghost" id="v2g-adv-toggle" onclick="v2gToggleAdv()" title="展开/收起高级搜索（批次筛选 + 类型筛选）" data-page-node-id="bXRix1LBKd7gE56EkNIe9m">▸ 高级搜索</button>
+                  </div>
+                  <!-- 高级搜索（默认收起：上传批次筛选 + 类型多选） -->
+                  <div id="v2g-adv" style="display:none;margin-top:6px;border-top:1px dashed var(--line);padding-top:6px;" data-page-node-id="JWnqKuggXGmWxUoxnHUQgZ">
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="ow8aYTVG22gpYaT98pcgvp">
+                      <b style="font-size:12px;color:var(--blue-d);" data-page-node-id="QAaodfZ15QTYIfGGqs3NEd">📦 上传批次</b>
+                      <span id="v2g-batch-count" style="font-size:11px;color:var(--mut);" data-page-node-id="PkpeaJ9BsQSVQp9QiN9Et2"></span>
+                      <select id="v2g-batch-time" onchange="v2gSetBatchTime()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;" data-page-node-id="kQ15HGPmtn2HVsT77J0y8G">
+                        <option value="" data-page-node-id="b6tMgpHCqIx6neiZrbWbcV">全部时间</option><option value="7" data-page-node-id="EuLk0BBjc0QvNzmPEIDK7b">近 7 天</option><option value="30" data-page-node-id="kDezyomJdrYZsNWATEisqa">近 30 天</option><option value="90" data-page-node-id="eoOUqCG4QvDPjRKZkbJ8oE">近 90 天</option>
+                      </select>
+                      <span style="flex:1" data-page-node-id="n1Ai9SB4XqCqzFaCeqeuUU"></span>
+                      <span id="v2g-batch-status" style="display:flex;gap:4px;" data-page-node-id="JibnwzZ9u2YcjdE4n4X2f6"></span>
+                      <input id="v2g-batch-search" placeholder="🔍 搜索批次（文档名/编号）…" oninput="v2gBatchSearch()" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:170px;" data-page-node-id="dB6BOFsASO5tL0Zrv0Lebz">
+                      <button class="btn sm ghost" id="v2g-batch-toggle" onclick="v2gToggleBatches()" title="展开/收起批次卡片" data-page-node-id="amIMe5wTbQSu9YMP56iyrR">▸ 展开批次</button>
+                    </div>
+                    <div id="v2g-batches" style="display:none;gap:8px;overflow-x:auto;padding:8px 0 4px;" data-page-node-id="ETdTDYZiGBRQxtVFxoFpBo"></div>
+                    <div id="v2g-type-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;" data-page-node-id="c79LVtPG6L60ZP6L7oFUKM"></div>
+                  </div>
+                </div>
+                <div id="v2g-review-panel" style="padding:0;" data-page-node-id="AXbBcx24BrjyhAex6R2UC6"><div style="padding:10px;color:var(--mut);font-size:12px;" data-page-node-id="VsR8EIHE9QtDAkEqA7TftP">上传文档后自动抽取的实体/关系候选（来源文档可追溯）</div></div>
+              </div>
+            </div>
+          </div>
+          <div id="kb2-pane-fusion" class="kb2-pane" style="padding:12px;" data-page-node-id="wjSHo4RgLsGuHyk8g5dyGG">
+            <!-- 横向流水线（2026-08-28）：五站队列横排置顶（左→右=流转方向），操作面板全宽 -->
+            <div style="display:flex;flex-direction:column;gap:10px;" data-page-node-id="24dmq0g1BZRRADWIkA7sIv">
+              
+              <!-- 操作区（随队列切换，全宽） -->
+              <div style="min-width:0;display:flex;flex-direction:column;gap:10px;" data-page-node-id="POR2qxAqyaRjdn10rP41le">
+                <!-- ② 灰区裁决（复用既有合并建议卡片流；默认显示站） -->
+                <div id="fus-pane-gray" style="display:none;" data-page-node-id="U0b9VscCrDYmfXstTTjJ7D">
+                  <div class="panel" style="margin-bottom:0;" data-page-node-id="WAQqmnGYBPlSFfiw188nnu">
+                    <div class="ph" data-page-node-id="Hqeewqj3DaJ3qOu4KBr4Up">灰区裁决 <span class="tag" data-page-node-id="Zd08lRzgSKdqwiHpuCCJKX">解决「这是不是同一个实体？」—— 相似度介于 0.62~0.92 之间、系统不敢自动判的两条记录</span><span style="flex:1" data-page-node-id="oilvpdEiPErt62iO05duvq"></span>
+                      <button class="btn sm ghost" onclick="loadDuplicates()" data-page-node-id="EUsTLoQbN9oa5gfb0E93tK">刷新</button></div>
+                    <div class="pb" style="padding:0;" data-page-node-id="FbsVEkMb7S0tyFJtfclu41"><div class="pb" id="dup-panel" data-page-node-id="H8W1yH3XPBf0sxHP8M1wQi"><div style="color:var(--mut);font-size:12px;" data-page-node-id="XdEEaH7DFuYLIrGFLwRXPq">检测同名/近似实体候选，人工确认合并（属性融合 + 关系重指向）</div></div></div>
+                  </div>
+                </div>
+                <!-- ③ 冲突裁决 -->
+                <div id="fus-pane-conflict" style="display:none;" data-page-node-id="N7L0ThiIsrxHSGEdepuofo">
+                  <div class="panel" style="margin-bottom:0;" data-page-node-id="Z0zBczTIqpFi1kP0OsFF1G">
+                    <div class="ph" data-page-node-id="3QhvPRpQqHBegu6SDftAIY">冲突裁决 <span class="tag" data-page-node-id="RyoiBu2uGCK2WJxa1C4BYa">解决「同一个实体的同一属性有两个矛盾值听谁的？」—— 逐字段二选一，结果统一到两侧</span><span style="flex:1" data-page-node-id="BCPrMPQWzhtn11RRE7rVUg"></span>
+                      <button class="btn sm" onclick="conflictDetect()" data-page-node-id="dUzXCjRiNUyjIOeRPF5JMz">🔍 检测冲突</button>
+                      <button class="btn sm ghost" onclick="loadConflicts()" data-page-node-id="sv7Avfo4LiPbFN7KoWiZyB">刷新</button></div>
+                    <div class="pb" style="padding:0;" data-page-node-id="jakuzg0SwSG4beLAKfeyr1"><div class="pb" id="conflict-panel" data-page-node-id="b1EggmHPShyyhb09rgZJE1"><div style="padding:10px;color:var(--mut);font-size:12px;" data-page-node-id="dyqNCpDpBsoNWcwNrLTLzb">点击「检测冲突」扫描实体/关系矛盾属性。</div></div></div>
+                  </div>
+                </div>
+                <!-- ④ 批次确认 -->
+                <div id="fus-pane-confirm" style="display:none;" data-page-node-id="vE0xUBlIdbv5L56pDrfDrh">
+                  <div class="panel" style="margin-bottom:0;" data-page-node-id="yiPjFRaGJnHtBgSIrd3BD8">
+                    <div class="ph" data-page-node-id="IpiOgbHWKHuN8O6nYR6G3L">批次确认入图 <span class="tag" style="border-color:var(--grn);color:var(--grn);" data-page-node-id="PDSBOwxFdw9mNrWef7vbFc">🏁 阶段终点 · 确认后即物化入图</span> <span class="tag" data-page-node-id="mOHhdZDlSh0qSczBb5fIQk">灰区清零后一键物化 · 挂靠即 survivorship 合并 · lineage 全记录可撤销</span><span style="flex:1" data-page-node-id="BU8NEwIgfCcJccA5hq9Akj"></span>
+                      <select id="fus-confirm-batch" onchange="renderBatchConfirm()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;max-width:230px;" data-page-node-id="yhIAE52GfzoTv0OUowb4mL"></select></div>
+                    <div class="pb" id="fus-confirm-body" style="padding:10px 12px;" data-page-node-id="n8mr4DsL6fuEwqA9Vma5g4"></div>
+                  </div>
+                </div>
+                <!-- ⑤ 术语词典已并入「本体模型」页的「术语映射」子页（2026-08-31 交互优化）：术语映射为本体 Schema 命名层，归位本体模型域 -->
+              </div>
+            </div>
+          </div>
+          <!-- 实体审核/关系审核队列面板已随 IA 收敛移除（2026-08-28）：无导航入口的死面板，其确认/审核职能由「抽取批次」与「数据整理」承担 -->
+        </div>
+          <!-- 三元组审核面板已收敛移除（2026-08-27）：IA 收敛后三元组审核上移为顶部「💾待落图」段，store 段点击触发 tripleCommit() 落图；loadTripleReviewPane/tripleGotoGraph 等函数保留（均带 null 保护，无悬空报错） -->
+        <div class="subpage" id="kb-c" data-tabpanel="kb" style="padding:0;" data-page-node-id="7C4H1yVtnFfubiP3vph1ll">
+          <!-- 顶部 Tab（2026-09-02 P0-2 WebProtege 对齐）：实体维度 类/对象属性/数据属性；图谱降为中栏视图（P0-4）；RDF/OWL 预览已迁入导出下拉 -->
+          <div class="subtab" id="ont-subtab-row" style="padding:6px 10px 0;" data-page-node-id="XHlTCAODCJnUiWzMPFyrgS">
+            <span class="on" data-tabgrp="ont" onclick="switchOntTab(this,'classes')" title="类层次（owl:Class · subClassOf）" data-page-node-id="DCA0icgm5fdMEDSvIYnHqp">🛰 类</span>
+            <span data-tabgrp="ont" onclick="switchOntTab(this,'props')" title="对象属性（owl:ObjectProperty · 域→值域）" data-page-node-id="aqLOSWl8XDf3FdHMc3EfLd">🔗 对象属性</span>
+            <span data-tabgrp="ont" onclick="switchOntTab(this,'dprops')" title="数据属性（owl:DatatypeProperty · XSD 类型）" data-page-node-id="JZanLt4HhR1XP85FAdCUYE">🏷 数据属性</span>
+            <span data-tabgrp="ont" onclick="switchOntTab(this,'individuals')" title="个体（Individuals）：左栏选类型，中栏查看/新增该类型实例" style="display:none;" data-page-node-id="ZJnUbPsXuWQLHEjud2hhcR">🧿 个体</span>
+            <!-- OWL 全局序列化（2026-09-02 五轮调整：与类/属性 Tab 一致的选择组件 data-tabgrp=ont，高亮互斥统一管理） -->
+            <span data-tabgrp="ont" onclick="ontTopGlobalTab(this,'owl')" title="OWL / RDF 全局序列化（全量 Schema）：RDF/XML（OWL）· Turtle · SHACL，支持复制/下载。全局视图，不基于节点" data-page-node-id="1JejBxurqSTDiCe2IQNpr4">🧬 OWL</span>
+            <!-- 变更历史（2026-09-02 五轮调整：data-tabgrp=ontlog→ont，选择组件与类/属性一致；中栏内联展示） -->
+            <span data-tabgrp="ont" onclick="ontTopGlobalTab(this,'changelog')" title="变更历史（全局）：本体类型级变更记录（新增/修改/删除/改名，倒序），对应 WebProtégé Changes Tab。全局视图，不基于节点" data-page-node-id="b1He2s1pt7PmGvUYn5Kfsh">📜 变更历史</span>
+            <span style="flex:1" data-page-node-id="WaIO1L6kphXWvLU4ZsQUcs"></span>
+            <!-- ⬆ 导入下拉（4 项：OWL 两类 + SysML Profile 两类） -->
+            <div class="dd" style="position:relative;display:inline-block;" data-page-node-id="l1PFoRO5jNIddxiLtQbJwv">
+              <button class="btn sm ghost" onclick="toggleMenu('ont-import-dd', event)" title="导入外部本体 / SysML Profile" data-page-node-id="ztdW5hGC3G6aJjwEEIIzGY">⬆ 导入 ▾</button>
+              <div id="ont-import-dd" class="dropdown panel-dd" style="right:0;min-width:260px;display:none;position:absolute;top:100%;z-index:30;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);padding:6px;margin-top:2px;" data-page-node-id="XWT63SE0bjHtblWj5dpJBa">
+                <div class="dd-item" onclick="ontologyImport('owl')" title="OWL/RDF-XML：Protégé / 建模工具默认格式 (.owl/.rdf)" data-page-node-id="4G9oEo6cFOx0bIxCCq09Na">① OWL · RDF/XML</div>
+                <div class="dd-item" onclick="ontologyImport('ttl')" title="OWL/Turtle：紧凑文本语法，便于版本管理 (.ttl)" data-page-node-id="OPcTJNp7F7nigHPPURQZhr">② OWL · Turtle (.ttl)</div>
+                <div style="border-top:1px solid var(--line);margin:4px 0;" data-page-node-id="il112m5EsjX1lJ9eRg5knc"></div>
+                <div class="dd-item" onclick="ontologyImport('profile1x')" title="SysML 1.x XMI：Cameo/MagicDraw/Papyrus 导出 (.profile/.xmi/.uml)；进入本体蓝图草案模式（对话框内也可切「业务文本」从文档冷启动）" data-page-node-id="z3Dzs9xMrRXoHIP8XJBGkv">③ SysML 1.x Profile（XMI）→ 蓝图</div>
+                <div class="dd-item" onclick="ontologyImport('profile2x')" title="SysML 2.x KerML：v2 建模工具文本模型 (.kerml)；进入本体蓝图草案模式（对话框内也可切「业务文本」从文档冷启动）" data-page-node-id="KZiL0KaMl7YSkiR5cVpfD5">④ SysML 2.x Profile（KerML）→ 蓝图</div>
+              </div>
+            </div>
+            <!-- ⬇ 导出下拉（4 项：OWL 两类 + SysML Profile 两类） -->
+            <div class="dd" style="position:relative;display:inline-block;margin-left:4px;" data-page-node-id="MCFuZByBlduDl43gozskwk">
+              <button class="btn sm ghost" onclick="toggleMenu('ont-export-dd', event)" title="导出本体或 SysML Profile" data-page-node-id="ZHm5daCTxWEozsN7j4wL3Q">⬇ 导出 ▾</button>
+              <div id="ont-export-dd" class="dropdown panel-dd" style="right:0;min-width:260px;display:none;position:absolute;top:100%;z-index:30;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);padding:6px;margin-top:2px;" data-page-node-id="EQjFkJ9skuuzQvLkmWHqy9">
+                <div class="dd-item" onclick="doOntExport('owl')" title="OWL/RDF-XML：Protégé / 建模工具首选 (.owl)" data-page-node-id="OndasSlnZBuVJv19ocbO2s">① OWL · RDF/XML (.owl)</div>
+                <div class="dd-item" onclick="doOntExport('ttl')" title="OWL/Turtle：紧凑文本，便于 diff/归档 (.ttl)" data-page-node-id="4IbSCl8w2Idn8fxEyqQ79h">② OWL · Turtle (.ttl)</div>
+                <div style="border-top:1px solid var(--line);margin:4px 0;" data-page-node-id="9hfhwVc9N7RqDQl7WVBCgV"></div>
+                <!-- 2026-09-02 四轮调整：预览入口已从导出下拉拿出 → 顶部「🧬 OWL」（中栏内联展示） -->
+                <div class="dd-item" onclick="profileExport('1x')" title="SysML 1.x：Cameo/MagicDraw/EA/Papyrus 加载 (.profile)" data-page-node-id="7YoREBIp2xod4BAmKyXDK1">③ SysML 1.x Profile（XMI .profile）</div>
+                <div class="dd-item" onclick="profileExport('v2')" title="SysML v2 Pilot 工具：KerML 模型文本 (.kerml)" data-page-node-id="ZzPNv16gWQWdECqyvR0I38">④ SysML 2.x Profile（KerML .kerml）</div>
+              </div>
+            </div>
+            <!-- 本体蓝图（Schema 冷启动）已并入 ⬆ 导入下拉 ③④：Profile → 草案 → 人工确认应用；对话框内可切「业务文本」模式 -->
+            <span style="border-left:1px solid var(--line);height:18px;" data-page-node-id="X6wN7RmQZHMI1K2NZls9CZ"></span>
+            <button class="btn sm ghost" onclick="oeConsistency()" title="校验本体（全局）：循环继承 / 悬空引用 / 孤立类 / 关系缺域值域 / 重名" data-page-node-id="CD9lCCqQM0aeslrcTmYz6j">🩺 一致性检查</button>
+            <span id="oe-consistency" style="font-size:11px;color:var(--mut);" data-page-node-id="Ubi4zwvOcOKLTq2GVCqUOA"></span>
+            <button class="btn sm ghost" onclick="openOntVersionHistory()" title="查看本体版本链（每次 Schema 变更自动递增，可发布稳定基线）" data-page-node-id="5gbQJmwX17QZ7oEgpY452d">🕘 版本历史</button>
+            <button class="btn sm ghost" onclick="openOntSettings()" title="本体设置：命名空间 / IRI 生成策略（P2-6 Project Settings，影响后续新建实体）" data-page-node-id="e7I9M1HRCGdis99AmqfWjW">⚙</button>
+            <span class="tag" id="ont-version-badge" title="本体版本（消费基线 SemVer）。编辑只留变更记录、版本号仅在发布时升级" style="font-weight:600;" data-page-node-id="t4tcMWGHRsLkahyQGYUHVu">🧬 v-</span>
+          </div>
+          <!-- 本体就绪检测条已移除（2026-09-02 二轮调整）：状态类文字不占中栏空间；loadOntologyReadiness 保留 null 安全 -->
+  
+          <!-- 本体管理工作台（Protégé 式 · 2026-08-29 方案A）：Classes/Obj Properties 树 + Description 内联编辑（严格 Protégé 字段） + Annotations/Usage + OntoGraf -->
+          <div id="ont-pane-edit" class="ont-pane" style="display:flex;flex-direction:column;flex:1;min-height:0;" data-page-node-id="xQeLUc5eX2E3cbHmDQLswI">
+            <style>
+              .ont-tnd{display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:12px;cursor:pointer;border-radius:6px;border:0.5px solid transparent;}
+              .ont-tnd:hover{background:#f2f7ff;}
+              .ont-tnd.on{background:var(--blue-l);border-color:var(--blue);font-weight:600;}
+              .ont-tnd.ont-dimmed{opacity:.32;}   /* 2026-09-02 聚焦下钻：非聚焦节点灰显 */
+              .ont-tnd .ont-del{display:none;flex:none;margin-left:auto;width:17px;height:17px;align-items:center;justify-content:center;border-radius:4px;font-size:10px;color:var(--mut);cursor:pointer;}
+              .ont-tnd:hover .ont-del{display:inline-flex;}   /* 三轮调整：悬停显删除（增删改归左栏） */
+              .ont-tnd .ont-del:hover{background:var(--red);color:#fff;}
+              .ont-focus-bar .on{background:var(--blue-l);color:var(--blue-d);border-color:var(--blue);}  /* 含关联开关激活态 */
+              .ont-vtab{font-size:12px;padding:5px 10px;cursor:pointer;color:var(--mut);border-bottom:2px solid transparent;white-space:nowrap;}
+              .ont-vtab.on{color:var(--blue-d);border-bottom-color:var(--blue);font-weight:600;}
+              /* 2026-09-11 组件优化（借鉴术语词典详情卡 _fsec/_frow）：蓝条小节标题 + 白底圆角分组卡片；仅视觉升级，onclick/id/交互零改动 */
+              .ont-sec{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:var(--blue-d);margin:0 0 9px;letter-spacing:.2px;}
+              .ont-sec::before{content:'';width:3px;height:14px;background:var(--blue);border-radius:2px;flex:none;}
+              .ont-sec>span{font-size:11px;color:var(--mut);font-weight:400;}
+              .ont-fcard{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px 13px;margin-bottom:10px;max-width:960px;box-shadow:0 1px 2px rgba(0,0,0,.03);}
+              .ont-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:8px;padding:3px 10px;font-size:12px;background:#FAFBFC;transition:border-color .12s,background .12s,box-shadow .12s;}
+              .ont-chip:hover{border-color:var(--blue);background:#fff;}
+              .ont-chip b{font-weight:500;}
+              .ont-chip .k{font-size:10.5px;color:var(--mut);}
+              .ont-x{cursor:pointer;color:var(--mut);width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;font-size:11px;line-height:1;transition:background .12s,color .12s;}
+              .ont-x:hover{color:#fff;background:var(--red);}
+              /* 2026-09-11 三轮：添加/编辑控件质感升级（保持蓝框常显原则，仅增强反馈） */
+              .ont-add{cursor:pointer;display:inline-flex;align-items:center;gap:4px;border:1px solid var(--blue);border-radius:8px;padding:3px 11px;font-size:12px;color:var(--blue-d);background:#fff;vertical-align:middle;transition:background .12s,box-shadow .12s,transform .06s;}
+              .ont-add:hover{background:var(--blue-l);box-shadow:0 1px 5px rgba(24,95,165,.20);}
+              .ont-add:active{transform:translateY(1px);box-shadow:none;}
+              /* 2026-09-11 三轮：编辑区输入控件统一聚焦态（含基数/允许值/描述等所有 input/textarea/select） */
+              #ont-desc input:focus,#ont-desc textarea:focus,#ont-desc select:focus,
+              #ont-side input:focus,#ont-side textarea:focus,#ont-side select:focus{
+                outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(24,95,165,.10);background:#fff;}
+              .ont-tadd{flex:none;color:var(--mut);cursor:pointer;font-size:13px;line-height:1;padding:0 3px;border-radius:4px;visibility:hidden;}
+              .ont-tnd:hover .ont-tadd{visibility:visible;color:var(--blue);background:var(--blue-l);}
+              .ont-mono{font-family:ui-monospace,Consolas,monospace;}
+              /* 2026-09-11 三轮：名称行内编辑可点击提示（悬停显示蓝色虚线底） */
+              #ont-name-wrap{transition:border-color .12s;}
+              #ont-name-wrap:hover{border-bottom-color:var(--blue);}
+            </style>
+            <!-- 横跨工具行已移除（2026-09-02 二轮调整）：编辑⇄图谱 toggle 移至中栏顶部（#ont-center 头部）、一致性检查与新建按归属移位（顶栏/左栏） -->
+            <div style="flex:1;display:flex;min-height:0;" data-page-node-id="7lBrJXDIRxU26ebS8Pbqkf">
+            <div id="ont-hover-card" data-page-node-id="318JwE8B8pCeULGFFivRVK"></div>
+            <!-- 左栏：唯一选择源（2026-09-02 P0-3）：内容随顶部实体维度 Tab 切换，不再有本地 tab -->
+            <div id="ont-left" style="position:relative;width:236px;border-right:1px solid var(--line);display:flex;flex-direction:column;background:#fafaf7;min-width:52px;transition:width .18s;order:1;" data-page-node-id="SHXpqjdOHmC1qIMvbKzXp9">
+              <button id="ont-left-collapse" class="btn sm ghost" style="position:absolute;top:4px;left:4px;z-index:6;padding:2px 6px;font-size:11px;" onclick="ontToggleLeft()" title="收起/展开 左栏" data-page-node-id="DCdZhOMczAK4qbEqCJAXO9">«</button>
+              <div id="ont-left-hdr" style="border-bottom:1px solid var(--line);padding-left:34px;" data-page-node-id="XJlQXsuMTqYFYxY5fYHrYw">
+                <div style="display:flex;align-items:center;gap:4px;padding:6px 8px 0;" data-page-node-id="aOESROB3rYaCbCwXLVwsWr">
+                  <div id="ont-left-dim" style="flex:1;font-size:11px;color:var(--blue-d);font-weight:600;" data-page-node-id="o77E33wNAGx9u4iGSb3nmV">类层次（subClassOf）</div>
+                  <button id="ont-add-btn" class="btn sm ghost" style="padding:0 7px;font-size:12px;line-height:20px;flex-shrink:0;" onclick="ontAddByView()" title="新建类型（两字段轻创建：名称+种类 → 创建即选中，中栏补全细节）" data-page-node-id="7lhb0nz5V5fAWpKWqtaInH">＋</button>
+                </div>
+                <div id="ont-filter-row" style="padding:6px 8px;" data-page-node-id="2G6o0PXHIc7UvtGPi300Ms"><input id="ont-filter" placeholder="过滤名称…" oninput="ontApplyFilter()" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="0Han6fs109RjtOlAsmteBo"></div>
+              </div>
+              <div id="ont-types-list" style="flex:1;overflow-y:auto;padding:4px 6px;" data-page-node-id="h6qBnDlJObVcoLVQoJn2F5"></div>
+            </div>
+            <!-- 中栏容器（2026-09-02 二轮调整）：顶部固定 视图切换（📝编辑⇄🕸图谱，仅作用于中栏），下方 编辑(Description) / 图谱(1-hop 邻域) 两态 -->
+            <div id="ont-center" style="flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;order:2;" data-page-node-id="FdgOXCOK7qsl35PZlYtj4p">
+              <div id="ont-center-bar" style="display:flex;align-items:center;gap:8px;padding:5px 12px;border-bottom:1px solid var(--line);" data-page-node-id="B4RC1I5DWbNshBRsTYiAlo">
+                <span id="ont-pane-toggle" style="display:inline-flex;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex-shrink:0;" data-page-node-id="rGJerh7f7iI3ZtOFH4nUrR">
+                  <button id="ont-pane-btn-edit" class="ont-vseg" onclick="switchOntPane('edit')" style="border:0;background:var(--blue-l);color:var(--blue-d);padding:4px 12px;font-size:11.5px;cursor:pointer;font-weight:600;" data-page-node-id="H7NVkUhgKaMmcLxrjCTaad">📝 编辑</button>
+                  <button id="ont-pane-btn-graf" class="ont-vseg" onclick="switchOntPane('graf')" style="border:0;border-left:1px solid var(--line);background:#fff;color:var(--mut);padding:4px 12px;font-size:11.5px;cursor:pointer;" data-page-node-id="OyTnCX5OhYEuvacubqfLdH">🕸 图谱</button>
+                  <button id="ont-pane-btn-owl" class="ont-vseg" onclick="switchOntPane('owl')" style="border:0;border-left:1px solid var(--line);background:#fff;color:var(--mut);padding:4px 12px;font-size:11.5px;cursor:pointer;" title="当前所选节点的 OWL/RDF 序列化（RDF/XML · Turtle · SHACL，可复制/下载）" data-page-node-id="YZTsqeIEAu6qqkVVvxqEmw">OWL</button>
+                  <button id="ont-pane-btn-cl" class="ont-vseg" onclick="switchOntPane('cl')" style="border:0;border-left:1px solid var(--line);background:#fff;color:var(--mut);padding:4px 12px;font-size:11.5px;cursor:pointer;" title="当前所选对象的变更历史（五轮调整：OWL 右侧，基于左栏选中节点）" data-page-node-id="yhsOMXAxsLphTeARDLCjyp">📜 变更历史</button>
+                </span>
+                <span id="ont-center-hint" style="font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" data-page-node-id="SpqoNB7SPhVZ4CRqJTGH5u"></span>
+              </div>
+                <!-- 右栏 #ont-side 已移至 #ont-center 之后（2026-09-02 修复：wrapper 曾误包右栏导致其被挤入中栏纵向流） -->
+              <!-- 中栏：Description（严格 Protégé 字段）+ 底部 RDF 折叠条 -->
+              <div id="ont-main" style="flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:#fff;" data-page-node-id="1nwqVHQkm57jWdoulpGndq">
+              <div id="ont-desc" style="flex:1;min-height:0;overflow:auto;padding:16px 20px;" data-page-node-id="v5GtTuAFFFWjN4NG2FPeCX"></div>
+              <!-- 底部 RDF 预览条已移除（2026-09-07）：与中栏「OWL」视图重复（节点级 OWL 支持格式切换/复制/下载，为严格超集） -->
+            </div>
+            <div id="ont-graph" style="flex:1;position:relative;background:#fff;overflow:hidden;display:none;flex-direction:column;min-width:0;order:3;" data-page-node-id="WwZnG1n3XePh7E07F93IW0">
+              <div style="display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid var(--line);font-size:11px;align-items:center;overflow-x:auto;white-space:nowrap;" data-page-node-id="2ptG6BKbbcpA9mm2rGnfSI">
+                <b style="font-size:12px;color:var(--blue-d);white-space:nowrap;" data-page-node-id="B99sk0r1bwECW7Y8w2D8PR">🧬 本体类型约束图谱</b>
+                <span style="color:var(--mut);font-size:10.5px;margin-left:2px;white-space:nowrap;" data-page-node-id="i9e8n9sQjiu5jDTl2MCLnh">Schema 层 · 类型/关系定义全景；实例数据在「图谱工作区」</span>
+                <span style="flex:1" data-page-node-id="TgWvDyLlqZzvveU96elxZ4"></span>
+                <span style="color:var(--mut);font-size:10.5px;white-space:nowrap;" data-page-node-id="j2EKr1WySmUsruxpl8CTjJ">滚轮缩放 · 空白拖动 · 节点拖拽 · Ctrl+拖线新建关系 · 双击空白新建实体类型</span>
+                <!-- 2026-09-02 邻域聚焦工具栏：树选中 → 图谱只显示匹配数据；节点数量/关系范围可调 -->
+                <span class="ont-focus-bar" id="ont-focus-bar" style="display:none;gap:4px;align-items:center;border-left:1px solid var(--line);padding-left:8px;" data-page-node-id="HklQGjVBE6AJsVBQBXQCAU">
+                  <span id="ont-focus-bc" style="font-size:10.5px;color:var(--mut);" data-page-node-id="oFZkEnUzNMkwCfW5yoGXZy"></span>
+                  <select id="ont-focus-limit" onchange="ontFocusLimit=parseInt(this.value)||0; renderOntGraph(); ontFocusBreadcrumb();" style="border:1px solid var(--line);border-radius:6px;padding:1px 4px;font-size:10.5px;" title="匹配节点显示数量" data-page-node-id="lJiFNjILNanPkhwvtV32qy">
+                    <option value="8" data-page-node-id="DvWss1pmP7BQV7GMwkbBW3">节点 8</option><option value="16" data-page-node-id="pKaL58nEqAz3dGAMpg8LGP">节点 16</option><option value="0" data-page-node-id="6422ZLXS2EEjWDIQdkEbr0">节点 全部</option>
+                  </select>
+                  <select id="ont-focus-rel" onchange="ontFocusRelMode=this.value; renderOntGraph(); ontFocusBreadcrumb();" style="border:1px solid var(--line);border-radius:6px;padding:1px 4px;font-size:10.5px;" title="关系展示范围" data-page-node-id="ibvUpZs9ZoVGEcBKHoEFbq">
+                    <option value="all" data-page-node-id="2im731CMn4jIrdozuvNToF">关系 全部匹配</option><option value="direct" data-page-node-id="zVMgd5QI80AnD7Y7d938KH">关系 仅选中直接</option>
+                  </select>
+                  <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="ontFocusExit()" title="退出聚焦，恢复全量图谱" data-page-node-id="av5Nd2oIpGqxi6eXZ3lETX">✕ 退出</button>
+                </span>
+                <select id="ont-layout" onchange="ontSetLayout(this.value)" style="border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:11px;" data-page-node-id="4R7mCef47jCjJjMksVcczN">
+                  <option value="layered" data-page-node-id="icVqKuo2JFI2SPQfHoDT6Q">📐 分层（层级）</option>
+                  <option value="group" data-page-node-id="CGpyw0pvwXBP1J46y8cbSp">📦 分组（语义模块）</option>
+                  <option value="force" data-page-node-id="3mLZMa2imTjxaZyrb4xsXg">🔀 力导向</option>
+                  <option value="ring" data-page-node-id="PPA5ZvlX6Z33eValBBqKfX">⭕ 环形</option>
+                </select>
+                <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="graphZoomOut()" title="缩小" data-page-node-id="wcd3gfhotStMRCFF9uAptI">−</button>
+                <span id="gv-zoom-pct" style="font-size:11px;color:var(--mut);min-width:38px;text-align:center;" data-page-node-id="HwaECbCyMKvIUzDoFkGOa8">100%</span>
+                <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="graphZoomIn()" title="放大" data-page-node-id="Ka4McyEz8TYrCJBiXUEDdq">＋</button>
+                <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="graphZoomReset()" title="重置" data-page-node-id="1T48Xk4A9xCOQyHmEwTxsA">⌂</button>
+                <span style="border-left:1px solid var(--line);height:16px;" data-page-node-id="2rv3slHIGdBe7SaE3RMghy"></span>
+                <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" id="ont-fs-btn" onclick="ontGraphFullscreen()" title="点击查看大图（全屏/退出）" data-page-node-id="8VgNm8GUgUvCA347mtuiF7">⛶ 全屏</button>
+                <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="try{go('kb','kb-d')}catch(e){}" title="跳转图谱工作区页查看全量" data-page-node-id="MXHaMzSBFgfGnM7ZDVj2O3">↗ 图谱工作区</button>
+              </div>
+              <div id="ont-graph-body" style="flex:1;position:relative;overflow:hidden;" data-page-node-id="euNRYoPWlC1IdJAIciClXd"></div>
+              <!-- 图例条（2026-08-31：图例从左侧移至图谱画布下方，横向展示） -->
+              <div id="ont-graph-footer" style="display:none;padding:5px 12px;border-top:1px solid var(--line);background:#fafaf7;font-size:11px;color:var(--mut);align-items:center;gap:16px;flex-wrap:wrap;" data-page-node-id="gNqXpaNtd6F2OK8U0vkuJx"></div>
+            </div>
+            <!-- 节点级 OWL 视图（2026-09-02 四轮调整：toggle 第三态，针对当前所选节点） -->
+            <div id="ont-nodeowl" style="flex:1;min-width:0;display:none;flex-direction:column;background:#fff;overflow:hidden;order:3;" data-page-node-id="Pu8Cd6IPNNlkDGbPW0dsCV"></div>
+            <!-- 节点级变更历史视图（2026-09-02 五轮调整：toggle 第四段「OWL 右侧」，当前所选对象的变更记录） -->
+            <div id="ont-nodecl" style="flex:1;min-width:0;display:none;flex-direction:column;background:#fff;overflow:hidden;order:3;" data-page-node-id="nK5IHaoSxx0f1Mp332qg9F"></div>
+            <!-- 全局内联视图（2026-09-02 四轮调整）：📜 变更历史 / 🧬 OWL 全局，替代原右侧滑窗 -->
+            <div id="ont-globalview" style="flex:1;min-width:0;display:none;flex-direction:column;background:#fff;overflow:hidden;" data-page-node-id="XMiEmECojARaaq1g3Fl8p4"></div>
+            </div><!-- /ont-center -->
+            <!-- 右栏：图谱语境=详情 / 维护语境=注释·引用（固定最右） -->
+            <div id="ont-side" style="width:270px;border-left:1px solid var(--line);background:#fafaf7;display:flex;flex-direction:column;flex-shrink:0;order:4;" data-page-node-id="yp7cmMzbXUWp05kVAdGSRb">
+              <div style="padding:8px 10px;border-bottom:1px solid var(--line);" data-page-node-id="GbMMu0WbkI6AdvCTBI1o4r"><b style="color:var(--blue-d);font-size:12px;" id="ont-side-title" data-page-node-id="kTH7JxN3GgxaODdCYentyu">注释 · 引用</b></div>
+              <div id="ont-side-body" style="flex:1;overflow-y:auto;padding:12px;" data-page-node-id="EVEPFHCN6RM1GDyUCoBMnx"></div>
+            </div>
+            </div>
+          </div>
+          <!-- 术语映射（2026-08-31 交互优化）：术语词典由独立导航并入本体模型页，作为 Schema 命名层子页 -->
+          <div id="ont-pane-terms" class="ont-pane" style="display:none;padding:10px;" data-page-node-id="gVkCWYBemrrkRuURbaI390">
+            <div class="panel" style="margin-bottom:0;" data-page-node-id="4EUfavbHmHhFTglFxmi5Yy">
+              <div class="ph" data-page-node-id="PFpXxp9sMmWBMj0dcdUiRP">术语词典<span style="flex:1" data-page-node-id="PhZpUWX2U9dAaBeHB34EjX"></span>
+                <button class="btn sm ghost" onclick="discoveryPanel()" title="归一未命中词自动收集——AI 预填定义/英文/上位词，人工确认后入词库" style="color:#7c3aed;border-color:#DDD6FE;">💡 AI 建议</button>
+                <button class="btn sm ghost" onclick="glossaryImportModal()" title="导入 CSV/XLSX（含 dry-run 预检）" id="giImpBtn" data-page-node-id="giImpBtn">⇧ 导入</button>
+                <span class="gdd" id="gdd-export">
+                  <button class="btn sm ghost" onclick="gddToggle('gdd-export',event)" title="导出与模板下载">⇩ 导出 <span style="font-size:9px;">▾</span></button>
+                  <div class="gdd-menu">
+                    <div class="gdd-item" onclick="gddRun(()=>glossaryExportCsv())">📄 导出 CSV <small>10+5 列 · Excel 可开</small></div>
+                    <div class="gdd-item" onclick="gddRun(()=>glossaryExportSkos())">🐢 导出 SKOS Turtle <small>与本体 OWL 对齐</small></div>
+                    <div class="gdd-item" onclick="gddRun(()=>{location.href='/api/glossary/export.tbx';})">🔄 导出 TBX <small>ISO 30042 术语交换 · CAT 工具互通</small></div>
+                    <div class="gdd-sep"></div>
+                    <div class="gdd-item" onclick="gddRun(()=>glossaryTemplate())">📋 下载导入模板 <small>CSV · 含示例行</small></div>
+                  </div>
+                </span></div>
+              <!-- 概念层视图（新） -->
+              <div id="terms-concepts-view" data-page-node-id="MUjQbzDwKxdaAg0P3cCd1W">
+                <div class="pb" style="padding:4px 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="cCnCrrDZq89kaxVAgivZ7c">
+                  <input id="cpts-kw" placeholder="搜索概念/定义/同义词/英文…" oninput="conceptsLoad()"
+                         style="width:220px;border:1px solid var(--line);border-radius:6px;padding:5px 9px;font-size:12px;font-family:inherit;" data-page-node-id="yvwakNKDJo9AqxpopYIglj">
+                  <select id="cpts-status" onchange="conceptsLoad()" style="border:1px solid var(--line);border-radius:6px;padding:5px 6px;font-size:12px;" data-page-node-id="MhsL35Gv0V9aPyex4aROed">
+                    <option value="" data-page-node-id="EK83uh2zMR6IhBpdkE4VEF">全部状态</option><option value="candidate" id="opt-candidate" data-page-node-id="3cvQYiqn3ypMRlGfEtgHFB">候选</option><option value="approved" data-page-node-id="OF5ucJWBPfrz2cgMNqLWcJ">已批准</option><option value="deprecated" data-page-node-id="AlzCjteXlORd530zoOu1l7">已弃用</option><option value="retired" data-page-node-id="QgxVZkDq5jZH6jWSlrIkBp">退役</option>
+                  </select>
+                  <span style="flex:1" data-page-node-id="8IaTeOdsftneeGADyY0xry"></span>
+                </div>
+                <div class="pb" style="padding:0;" id="cpts-list" data-page-node-id="DfV12bZqvFZ1gwE3bxaHhY"><div class="loading" data-page-node-id="fa5TYjJNDwv5kmiS4pKmiI">加载中…</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="subpage" id="kb-d" data-tabpanel="kb" data-page-node-id="9PSEFdshYkkOV3mwi4A6Qu">
+          <div class="panel" data-page-node-id="zbxTeBnr6SpVqIWIdpXtmu"><div class="ph" style="position:relative;" data-page-node-id="P2leEXFlTl60rx41gnhoDf">
+            <!-- GitHub 式分支选择器：下拉列出全部分支（搜索过滤/类型徽章/快捷操作/新建分支）；原生 select 隐藏保留为状态载体（initGlobalBranch/syncGlobalBranch 零改动） -->
+            <span class="branch-ctl show" id="ws-branch-ctl" style="display:inline-flex;align-items:center;gap:6px;position:relative;" data-page-node-id="4jhnZVrPjWhZ1st2u2yfY6">
+              <span id="ws-branch-btn" class="st" style="cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:2px 10px;background:#fff;font-size:12px;color:var(--blue-d);font-weight:600;display:inline-flex;align-items:center;gap:5px;" onclick="toggleBrDD(event)" title="切换工作分支：实体/关系/图谱/检索均按该分支加载" data-page-node-id="BLbmpoJKBaf8m0hxhGLeea">🔀 <b id="ws-branch-cur" data-page-node-id="iEocuGWB3NV7hzLpQgsXWc">dev</b> <span style="font-size:9px;color:var(--mut);" data-page-node-id="6ssnWdcrkIYzMYYwhMY9Yu">▼</span></span>
+              <span class="help-ico" id="kb-branch-help" title="工作分支：实体 / 关系 / 图谱 / 建模数据检索均按该分支加载；release（已发布）只读查看；本体为全局共享 Schema，不随分支隔离" data-page-node-id="qtnvy8Ut0EDfGx1iJn3ABa">ⓘ</span>
+              <select id="global-branch" style="display:none;" onchange="onGlobalBranchChange(this.value)" data-page-node-id="0XgOf4OWQkrcxkLzsv0ZP7"></select>
+              <!-- 下拉面板 -->
+              <span id="ws-brDD" style="display:none;position:absolute;top:calc(100% + 6px);left:0;width:320px;background:#fff;border:1px solid var(--blue);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.14);z-index:60;" onclick="event.stopPropagation()" data-page-node-id="gBvb0DAGxda134RNDDdLWH">
+                <span style="display:block;padding:8px 10px;border-bottom:1px solid var(--line);" data-page-node-id="7eUIieJWQ65ytWDW0JzgDO"><input id="ws-br-filter" placeholder="筛选分支…" oninput="wsBrApplyFilter()" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 9px;font-size:12px;outline:none;" data-page-node-id="fuXGprE8VFjKq0HqgNE8CO"></span>
+                <span id="ws-brList" style="display:block;max-height:260px;overflow-y:auto;padding:4px 0;" data-page-node-id="BANGgebUd8KH2QxI97vFFi"></span>
+                <span style="display:block;border-top:1px solid var(--line);padding:7px 12px;font-size:12px;color:var(--blue);cursor:pointer;font-weight:600;" onclick="hideBrDD();showModal('branch');" data-page-node-id="y2OgDyTlp5M0F1MRRfx8IA">＋ 新建分支（自当前分支检出）</span>
+              </span>
+            </span>
+            <!-- ⇵ 同步基线（2026-09-14 从图谱工具栏迁移至此）：仅个人分支显示（syncWsBranchBtn 控制显隐），从基线分支拉取新增实体/关系 -->
+            <button id="hdr-sync-baseline" class="btn sm ghost" style="display:none;margin-left:8px;align-self:center;" onclick="gvSyncFromBaseline()" title="把 dev/release 基线的图谱新增实体与关系同步到当前个人分支（git merge 语义：新增自动采纳，冲突保留本分支）">⇵ 同步基线</button>
+            <!-- 2026-09-10 米爸裁剪：分支旁提示文案删除；右上角「比较分支」移除，改为 MR 全局入口（进行中数量 + 发起） -->
+            <!-- 全局搜索（2026-09-10）：三模式切换（实体/NL/SPARQL），由 34-graphtabs.js 驱动；2026-09-14 去背景色 + 加长 + 水平居中（绝对定位，不随两侧元素宽度偏移） -->
+            <span style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;padding:3px 4px 3px 8px;border:1px solid var(--blue);border-radius:12px;background:transparent;">
+
+              <select id="gv-search-mode" onchange="gwtSearchModeChange()" title="搜索模式：实体=名称/ID/类型自动补全并定位画布；NL=自然语言检索；SPARQL=结构化查询" style="border:1px solid var(--blue);border-radius:7px;padding:5px 7px;font-size:12px;background:#fff;color:var(--blue-d);font-weight:600;outline:none;flex:none;">
+                <option value="entity">实体</option>
+                <option value="nl">NL</option>
+                <option value="sparql">SPARQL</option>
+              </select>
+              <span style="width:1px;height:22px;background:var(--blue);opacity:.25;flex:none;"></span>
+              <input id="gv-search" placeholder="🔍 搜索实体 / 三元组 / SPARQL…" autocomplete="off" oninput="gwtSearchInput()" onkeydown="gwtSearchKey(event)" title="实体模式：按名称 / ID / 类型检索，回车定位画布；NL/SPARQL 模式回车执行语义/结构化查询（快捷键 /）" style="border:none;background:transparent;border-radius:6px;padding:8px 12px;font-size:13.5px;width:clamp(360px,42vw,640px);box-sizing:border-box;outline:none;color:var(--text);flex:none;">
+              <div id="gv-search-dd" style="display:none;position:absolute;top:calc(100% + 6px);right:0;z-index:60;min-width:360px;background:#fff;border:1px solid var(--blue);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:340px;overflow-y:auto;"></div>
+            </span>
+
+            <span style="flex:1;" data-page-node-id="0GzQTSSiKM4hcGpLij1biJ"></span>
+            <span id="ws-mr-entry" style="display:inline-flex;align-items:center;gap:8px;">
+              <button class="btn sm" onclick="openMrPrefill()" title="从当前分支发起合并请求（自动预填源/目标分支）">＋ 发起 MR</button>
+            </span>
+          </div>
+          <!-- 工作区 Tab：图谱 / 推理 / 历史 / 合并请求；2026-09-12 三元组 Tab 移除（图库数据已审核，候选/审核为入图前动作）；2026-09-14 推理由工具栏按钮恢复为独立 Tab（置于历史左侧） -->
+          <div id="ws-tabs" style="display:flex;gap:18px;padding:6px 14px 0;border-bottom:1px solid var(--line);font-size:12.5px;align-items:flex-end;flex-wrap:wrap;row-gap:4px;" data-page-node-id="U8D3NSvjOlzWaU6UWdGA0V">
+            <span class="t on" data-t="content" style="padding:6px 2px 8px;cursor:pointer;color:var(--blue-d);font-weight:700;border-bottom:2px solid var(--blue);" onclick="wsTab('content')" data-page-node-id="GVyDPXC68ya3QRIf9BzVjv">🕸 图谱</span>
+            <span class="t" data-t="reasoning" style="padding:6px 2px 8px;cursor:pointer;color:var(--mut);" onclick="wsTab('reasoning')" title="本体推理：勾选类型→执行→叠加到图谱/清除/物化入库">🧠 推理</span>
+            <span class="t" data-t="history" style="padding:6px 2px 8px;cursor:pointer;color:var(--mut);" onclick="wsTab('history')" data-page-node-id="aA6sdRArDuDYGjmdxSw6pv">🕘 历史</span>
+            <span class="t" data-t="mr" style="padding:6px 2px 8px;cursor:pointer;color:var(--mut);" onclick="wsTab('mr')" data-page-node-id="8SEK687N7woqaJl9VLKyFG">🔀 合并请求 <span id="ws-mr-badge" style="display:none;font-size:10px;font-weight:600;color:var(--amb);" data-page-node-id="EHzynLubtBAZbUyHqnqo2V"></span></span>
+            <span style="flex:1;"></span>
+          </div>
+          <div id="ws-content" data-page-node-id="2AjSsxZoOLCNtJYFTDUCtv">
+            <!-- 2026-09-10 米爸裁剪：分支上下文条（🌿 分支 / ahead-behind / 最近提交 / 实体关系计数）删除——
+                 分支由上方选择器承载，MR 收敛至右上角全局入口（#ws-mr-entry） -->
+            <div id="graph-viz-wrap" style="display:flex;flex-direction:column;height:calc(100vh - 245px);min-height:430px;">
+            <div class="pb" id="graph-viz" style="display:flex;flex:1;min-height:0;padding:0;overflow:hidden;" data-page-node-id="ocBrsY0HGvdCGy5m2JrKBu">
+              <!-- 左栏：实体树（类型继承树 + 实例挂载，仿本体管理 Protégé 三栏范式 · 2026-09-03） -->
+              <div id="gv-left" style="position:relative;width:236px;border-right:1px solid var(--line);display:flex;flex-direction:column;background:#fafaf7;flex-shrink:0;transition:width .18s;" data-page-node-id="orWVjNV0uiL4P9pJHARguL">
+                <button id="gv-left-collapse" class="btn sm ghost" style="position:absolute;top:4px;left:4px;z-index:6;padding:2px 6px;font-size:11px;" onclick="gvToggleLeft()" title="收起/展开 左栏" data-page-node-id="3478xl39lu9yEHSFx1qIBi">«</button>
+                <div id="gv-left-hdr" style="border-bottom:1px solid var(--line);padding-left:34px;" data-page-node-id="S5WxkVH3drU24VlRnDVDEI">
+                  <div style="display:flex;align-items:center;gap:4px;padding:6px 8px 0;" data-page-node-id="c8jvrVypMxkpldcRCuRTiB">
+                    <div style="flex:1;font-size:11px;color:var(--blue-d);font-weight:600;" data-page-node-id="LFXOQZxKDOKNdQ5PEZOH7n">实体树</div>
+                    <button class="btn sm" style="padding:0 7px;font-size:10.5px;" onclick="gvAddInstance()" title="新增实例：按本体类型与约束创建">＋ 新增</button>
+                    <span id="gv-tree-count" style="font-size:10px;color:var(--mut);" data-page-node-id="cAC1nqvEzOlwtHat5KHSwG"></span>
+                  </div>
+                  <!-- 2026-09-10 米爸裁剪：左栏过滤框删除——右上全局搜索（实体模式，回车定位）+ 点选后树内自动滚动高亮已覆盖该能力 -->
+                </div>
+                <div id="gv-ent-tree" style="flex:1;overflow-y:auto;padding:4px 6px;" data-page-node-id="gqtyF6CCbSAfDLirQiv0WP"><div style="color:var(--mut);font-size:11.5px;padding:6px;" data-page-node-id="6EwFQVckGr4foCbkdxINTu">加载中…</div></div>
+              </div>
+              <!-- 中栏：图谱 -->
+              <div id="gv-graph-area" style="flex:1;position:relative;min-width:0;" data-page-node-id="yDIzp8FvSxCUybQS7JD2fJ"></div>
+              <!-- 右栏：实例详情（常驻，点左栏实体或图中节点刷新） -->
+              <div id="gv-detail-panel" style="display:flex;width:270px;border-left:1px solid var(--line);background:#fafaf7;flex-direction:column;flex-shrink:0;" data-page-node-id="Tuu5wEtw5NeVz5UZNYbtTL">
+                <div style="padding:8px 10px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;" data-page-node-id="PHvCCTAM0FV0B21iOpbWBp"><b style="color:var(--blue-d);font-size:12px;" data-page-node-id="eEZsEUl85fOspAdNI5EpBG">📋 实例详情</b><button class="btn sm ghost" style="padding:1px 7px;font-size:11px;" onclick="gvCloseDetail()" title="清除选中" data-page-node-id="6MHNOmJ2Mk5VuSErqkUAQG">✕</button></div>
+                <div id="gv-detail-body" style="flex:1;overflow-y:auto;padding:10px;" data-page-node-id="wZaYnMjkaZ0zJ2wK29wdkF"><div style="color:var(--mut);font-size:11.5px;padding:6px;" data-page-node-id="2W6DTFCU9eCifepXLKBW0L">点左栏实体或图中节点查看详情；图中点节点自动 1-hop 聚焦</div></div>
+              </div>
+            </div>
+            <!-- 2026-09-10 米爸裁剪：画布底部状态栏删除——统计唯一入口为画布左上 gv-stat-chip（第 4 条：三处统计收敛为一处） -->
+            </div><!-- /graph-viz-wrap -->
+          </div><!-- /ws-content -->
+          <!-- 推理 Tab（2026-09-09 v2）：5 项推理勾选执行 + 推断表 + 图谱叠加 + 物化入库（2026-09-12 三元组 Tab 已移除）-->
+          <div id="ws-reasoning" style="display:none;height:calc(100vh - 245px);min-height:430px;overflow:hidden;"></div>
+          <!-- 历史 Tab：当前分支提交时间线（行内展开快照明细，复用 toggleCommitDetail） -->
+          <div id="ws-history" style="display:none;height:calc(100vh - 245px);min-height:430px;overflow-y:auto;" data-page-node-id="YojG58VWtqqB3X6aHuCRAS"></div>
+          <!-- 合并请求 Tab：吸收原合并队列页全部能力（MR 列表容器沿用 #merge-list，loadMerges 零改动复用） -->
+          <div id="ws-mr" style="display:none;height:calc(100vh - 245px);min-height:430px;overflow-y:auto;" data-page-node-id="QgFRWIZGTIFPtKHl4DOeKL">
+            <div id="merge-list" data-page-node-id="ysqSauUxPCupDsWQ7ZWyo8"><div class="loading" data-page-node-id="I3rk69iCA6V8Ixg1ToEIHd">加载中…</div></div>
+          </div><!-- /ws-mr -->
+        </div><!-- /panel kb-d -->
+        </div>
+
+      </div>
+
+      <!-- 2026-09-04 合并队列页(pg-branch)已取消：全部能力整合进 图谱工作区(kb-d) 工作区三 Tab -->
+
+      <!-- ===== 报告（AI 建模报告统一归档 / 检索 / 导出） ===== -->
+      <div class="page" id="pg-reports" data-page-node-id="brMwJ3E3RYrDSPvfGHdNv9">
+        <h3 class="pt" data-page-node-id="4OnIn6zBjh6zYiq7ykCSCW">报告</h3>
+        <div class="pd" data-page-node-id="1tL8jh1MC5tBXhyp3OHMmn">变更影响分析 / 预评审 / 模型分析等 AI 产出报告统一归档，支持检索、详情查看与二次导出 <span class="badge" data-page-node-id="qhKdYrh741JYKb6GnjiIX0">报告存储管理</span></div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;" data-page-node-id="wqsxPKGIDZKJgTh6IFKPH9">
+          <select id="rpt-type" onchange="loadReports()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="C0XAms0X5DrDJPJ5e0tpwd">
+            <option value="" data-page-node-id="ztPGA3n472rOGC4b156ulY">全部类型</option>
+            <option value="impact" data-page-node-id="lPtLYZ3UvwfFJRKTnLIdcO">变更影响分析</option>
+            <option value="review" data-page-node-id="z1ctpF6u0UG8ZMqjPnbELM">预评审</option>
+            <option value="analysis" data-page-node-id="kXGl8nZPZiY1fTevFE7MIk">模型分析</option>
+            <option value="other" data-page-node-id="GYrJTFQMm1MFEDnHTg8xLM">其他</option>
+          </select>
+          <input id="rpt-search" placeholder="搜索标题/摘要…" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:200px;" onkeydown="if(event.key==='Enter')loadReports()" data-page-node-id="aZ61JDBhH4B1UkwbUyXPw6">
+          <button class="btn sm" onclick="loadReports()" data-page-node-id="LYBEpu22uccXsyLYscyoMF">🔍 检索</button>
+          <button class="btn sm ghost" onclick="loadReports()" data-page-node-id="1b9xR7iZFHl8WgxgGoHHXU">🔄 刷新</button>
+          <span style="flex:1" data-page-node-id="b0qABjSbCLIjaNy2zib6Aj"></span>
+          <span style="font-size:11.5px;color:var(--mut);" data-page-node-id="J2Aupl8tag9UrgYS6VlCqP">💡 AI 建模对话产出报告后自动归档至此</span>
+        </div>
+        <div class="panel" data-page-node-id="pLJWM1GjYpRGPqfsSlpG7N"><div class="ph" data-page-node-id="ZAkqHypWtMG21yHcgBSnkM">报告台账 <span style="flex:1" data-page-node-id="0w1dkDWOpPKkjvourcUmcM"></span><span id="rpt-count" style="font-size:11.5px;color:var(--mut);" data-page-node-id="2GYDI1Dej8HYzb71L3yBLr"></span></div><div class="pb" style="padding:0;" data-page-node-id="JMdgITK1559scVuEt9jMVW"><div id="reports-table" data-page-node-id="zB0xkZEsxVSRBCF93Qa0ey"><div class="loading" data-page-node-id="xX7696CwmFbVliUn7PrwMB">加载中…</div></div><div id="reports-pager" style="padding:8px 12px;border-top:1px solid var(--line);display:flex;align-items:center;gap:8px;justify-content:flex-end;" data-page-node-id="iPJyYcyKJh1DGcVGGQTUoD"></div></div></div>
+      </div>
+
+      <!-- ===== AI 设计工坊 ===== -->
+      <div class="page" id="pg-studio" data-page-node-id="v5DTTRKTZFwle2COD0Lx7v">
+        <h3 class="pt" data-page-node-id="YJCISN0V9ycfbinWaHpVzA">能力中心</h3>
+        <div class="pd" data-page-node-id="4MPQyFEBS6wOs1agN6BFzf">Agent / 技能 / 工具与 MCP / 插件市场 统一管理（市场单一事实源：plugins 表）</div>
+        <!-- 主导航一级入口：Skill 模板库/工具与 MCP/Agent 管理/流程编排；提示词模板仅保留在工坊页内（2026-08-11） -->
+        <div class="subpage" id="st-prompt" data-tabpanel="st" data-page-node-id="xFMdDc0uSQRPD2uzzE8Q3F">
+          <div id="cap-zone-st-prompt"></div>
+                    <div class="subtab" style="padding:6px 10px 0;" data-page-node-id="nOITzv2rzOnPIVF2EFrKkG">
+            <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="jo5QM5rHgK0ZFOFAookLUc">🤖 Agent</span>
+            <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="zQjmt5u1irv3TH4MBq5Dih">🧩 技能</span>
+            <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="j9UGw7CKZyZLoI5Rf042yC">🔌 工具与 MCP</span>
+            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="Bnutfl5u9B99ei2rH7gQxT">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="8Dk8Q1IOeKeldhVGHbmYEn">🧠 模型配置</span>
+          </div>
+
+          <div class="panel" data-page-node-id="cduEI0nauqjYg9SX28wERm"><div class="ph" data-page-node-id="I5BZYjEVSIfng2HX3UtVRF">系统提示词列表 <span class="badge" data-page-node-id="ePaZVVZNxjwrnfhFkEwzqe">FR-UI-5</span><span style="flex:1" data-page-node-id="D4wtFbY7HCsbMuafnnyEI6"></span><button class="btn sm" onclick="showModal('prompt')" data-page-node-id="yF0SB28JiE10SOsNp4HIxa">＋ 新建</button></div><div class="pb" style="padding:0;" id="prompt-table" data-page-node-id="rB2MeKb0DmchnVb7KTUtGA"><div class="loading" data-page-node-id="v7SMHsnPqER3itlKv11Myf">加载中…</div></div></div>
+        </div>
+        <div class="subpage" id="st-skill" data-tabpanel="st" data-page-node-id="ekcH6fJ5yg71iUzCiqC6RW">
+          <!-- 能力中心：市场 / 我安装的 双区（36-capability.js 渲染） -->
+          <div id="cap-zone-st-skill"></div>
+                    <div class="subtab" style="padding:6px 10px 0;" data-page-node-id="a8zl3NvgEMYB96xKm3Kh9f">
+            <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="Z6AEGI1BtmB3Gte3OnW451">🤖 Agent</span>
+            <span data-tabgrp="stlib" data-pane="st-skill" class="on" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="o5riIppmN5nhPD1N6G65UC">🧩 技能</span>
+            <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="tZ4YEo1AI0rPe3w5J4P7un">🔌 工具与 MCP</span>
+            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="vf7fCA3vYjBe9XMEzwhwsj">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="w53YAU4Z9Gvoo8f6KdyWZP">🧠 模型配置</span>
+          </div>
+
+          <!-- Skills 管理：Skills 列表（插件市场 / 自定义 / 内置 单一筛选；操作入口在右上角） -->
+          <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="Ihai6n4gGVDM8AqfOVME7C">
+            <b style="font-size:13px;color:var(--ink);white-space:nowrap;" data-page-node-id="fsTGi2M1rwQMXpm3LXpJan">🧩 Skills 列表</b>
+            <span style="font-size:11px;color:var(--mut);" data-page-node-id="X9J88hH6RfzMyK8Yj5CoSz">技能模板库 · 插件市场 / 自定义 / 内置 统一管理</span>
+            <span style="flex:1" data-page-node-id="XxUckBb6syIKsj71ppbzQp"></span>
+            <div style="position:relative;" data-page-node-id="NLuixsZOfwvciF198Rk3wV">
+              <button class="btn sm" id="add-skill-btn" onclick="toggleAddSkillMenu(event)" data-page-node-id="oDZ9F5tnwRsoRxrN8VbtOR">＋ 添加技能 ▾</button>
+              <div class="ddm" id="add-skill-menu" style="display:none;" data-page-node-id="oeCWxdObi7A8P4JD0sdApw">
+                <div class="ddm-i" onclick="openSkillForm(); hideAddSkillMenu()" data-page-node-id="kguPDu1Gk2ISEDEQGib38L">＋ 创建技能（表单编辑）</div>
+                <div class="ddm-i" onclick="document.getElementById('skill-upload-input').click(); hideAddSkillMenu()" data-page-node-id="fCtkbyELAeGi7BtItkg7Sr">📦 上传技能包（.zip）</div>
+              </div>
+            </div>
+            <select id="sk-filter" onchange="loadSkillCombined()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="L3OBWZ4WghCBvHEePUUPy7">
+              <option value="" data-page-node-id="udvrEAxI2GExZnJ1FwuRZt">全部</option><option value="market" data-page-node-id="L2mEEWqcdyk391zNmrzCLy">插件市场</option><option value="custom" data-page-node-id="3KCCgat8GAmJxabds5NnoM">自定义</option><option value="builtin" data-page-node-id="GsawMgH9QDxS0JbMWf9anU">内置</option><option value="draft" data-page-node-id="Dxk96De0vpD6zrYlDuxdkq">📥 草稿箱</option>
+            </select>
+            <span id="sk-market-summary" style="font-size:11.5px;color:var(--mut);" data-page-node-id="NEaIooAwLgnC7WIao3SAWO"></span>
+            <input type="file" id="skill-upload-input" style="display:none;" accept=".zip" onchange="uploadSkill(this)" data-page-node-id="oImUHCYE1czSmHBvlWHSMT">
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;" id="sk-cards" data-page-node-id="Ckq6QZ5zVtl0yU2KVWiJef"><div class="loading" data-page-node-id="beCeSssAN5GlcEEhKE2PFk">加载中…</div></div>
+        </div>
+        <div class="subpage" id="st-mcp" data-tabpanel="st" data-page-node-id="2ZRYMSFgN7JmCHwUbAGQmD">
+          <!-- 能力中心：市场 / 我安装的 双区（36-capability.js 渲染） -->
+          <div id="cap-zone-st-mcp"></div>
+                    <div class="subtab" style="padding:6px 10px 0;" data-page-node-id="l9ngH0tYLOG334ZiFjTRBF">
+            <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="CqGqbSuLBlowUdQxZnFFwc">🤖 Agent</span>
+            <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="EfpgPEu5Wh55K5U03gD26G">🧩 技能</span>
+            <span data-tabgrp="stlib" data-pane="st-mcp" class="on" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="C9zAxNOvlePHlGBKSaIqyl">🔌 工具与 MCP</span>
+            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="OgugFVRwLMCzWpx9dGcaQ2">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="xyhWnQl26VYjwHpbKw0Q8y">🧠 模型配置</span>
+          </div>
+
+          <!-- 工具管理：MCP 工具 / HTTP 工具（内置工具按类型归入对应 tab） -->
+          <div class="subtab" data-page-node-id="sLE8Xb2TQCiI1WA0pKr5TP">
+            <span class="on" data-tab="tm-mcp" onclick="switchToolTab(this,'tm-mcp')" data-page-node-id="Q202L5qm9D3fkCoHdwDMgQ"> MCP 工具 <span class="tag" id="tm-mcp-count" data-page-node-id="8jjioFignWuSb8UpVAQu1I"></span></span>
+            <span data-tab="tm-http" onclick="switchToolTab(this,'tm-http')" data-page-node-id="VLO9o1uD6HY3tjc3NU2bzi">🌐 HTTP 工具 <span class="tag" id="tm-http-count" data-page-node-id="SLmvFKW59iGo0zBt8XvHda"></span></span>
+            <span style="flex:1" data-page-node-id="CkIyioPI3v3F6bWa7gPMot"></span>
+            <button class="btn sm" onclick="showToolForm(null)" style="margin-left:8px;" data-page-node-id="cmArXPJRbTztkkIYXA6Vws">＋ 新增工具</button>
+          </div>
+          <div class="subpage on" id="tm-mcp" data-page-node-id="ly1RprUJWz0MNd4RQwOx30">
+            <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="iPuAULaN3wndKfkF64ikQB">
+              <select id="mcp-filter" onchange="loadMCPCombined()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="moYzM4Kcs2RTx7pLfJz7E2">
+                <option value="" data-page-node-id="BTxOEyuRmQ7iHwsCMhk3hn">全部</option><option value="custom" data-page-node-id="id5BqrO1xvJGSSQMOpsvGE">自定义</option><option value="market" data-page-node-id="5BbV6hvYu9AqKO1sBZ3l6G">插件市场</option><option value="builtin" data-page-node-id="9YvJ7qazzCMYsekZfmhNxl">内置</option>
+              </select>
+              <span style="font-size:11px;color:var(--mut);" data-page-node-id="beWQePtQJLbpsoGXMokhuv">MCP 工具 = 自定义 + 插件市场 + 内置 统一视图</span>
+              <span style="flex:1" data-page-node-id="QAEKLgu3vWJGPBNkKXBX5P"></span>
+              <span id="mcp-market-summary" style="font-size:11.5px;color:var(--mut);" data-page-node-id="48bFMNjwj7LUNG1UwLUaPz"></span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;" id="mcp-cards" data-page-node-id="Z9aDvyFHPgL2AIYBa3N5MA"><div class="loading" data-page-node-id="1RU8HOYx3KrHoScykHGonO">加载中…</div></div>
+          </div>
+          <div class="subpage" id="tm-http" data-page-node-id="xeCkpf3PBY5N00S0seeyAV">
+            <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="bHQNmsrfzqXYl1LHpM0ots">
+              <select id="http-filter" onchange="loadHttpTools()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="kTKNWKKHiuKBPkSpQzj5Tk">
+                <option value="" data-page-node-id="SJLHWF4IhfkkuOVYUBCOaz">全部</option><option value="custom" data-page-node-id="T7FxxGRfxFt5XtB9jwyOA2">自定义</option><option value="builtin" data-page-node-id="bWcGHyhvENyeNqlpNRJiRv">内置</option>
+              </select>
+              <span style="font-size:11px;color:var(--mut);" data-page-node-id="CGTBwfVgAVQB3SksTzrHCH">HTTP 工具 = 自定义 + 内置 统一视图（通过 HTTP 端点暴露的能力）</span>
+              <span style="flex:1" data-page-node-id="53ccyuZpfmgEHndFxiwQpx"></span>
+              <span id="http-tool-summary" style="font-size:11.5px;color:var(--mut);" data-page-node-id="PmmhhWv1tAfNEWrCOSracS"></span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;" id="http-tool-cards" data-page-node-id="AbS82YXqWcQTPHDqXNmGRZ"><div class="loading" data-page-node-id="aPjsBxuAZ9GpmKBvKhWBXZ">加载中…</div></div>
+          </div>
+        </div>
+        <div class="subpage on" id="st-agent" data-tabpanel="st" data-page-node-id="05l4vTHvVfTDBDrATIzAa1">
+          <!-- 能力中心：市场 / 我安装的 双区（36-capability.js 渲染） -->
+          <div id="cap-zone-st-agent"></div>
+                    <div class="subtab" style="padding:6px 10px 0;" data-page-node-id="iFc4IxRObzMqjeHAxGugQJ">
+            <span data-tabgrp="stlib" data-pane="st-agent" class="on" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="aNNOw3Qk4t9lAS9qDEshTi">🤖 Agent</span>
+            <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="Y2S3GPWZFaRgmYMjZFMPDQ">🧩 技能</span>
+            <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="lxRf0Uo2DtfzYu53GCNWJL">🔌 工具与 MCP</span>
+            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="brbDBlWiLfM8tJlyBfBohW">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="d01lwpBmGlS8wtYj5IAnzg">🧠 模型配置</span>
+          </div>
+
+          <!-- 优化：Agent 列表 / 调用日志 拆分为页内 Tab（日志不再与卡片上下堆叠） -->
+          <div class="subtab" data-page-node-id="LFarcDNRbQpxIZVJmVfAGn">
+            <span class="on" data-tab="sta-agents" onclick="switchAgentTab(this,'sta-agents')" data-page-node-id="4IBsyDJF1cmU2JBabCPDGz">🤖 Agent 列表 <span class="tag" id="agent-tab-count" data-page-node-id="iiMYhzIZPox2cBSbMW7dBJ"></span></span>
+            <span data-tab="sta-logs" onclick="switchAgentTab(this,'sta-logs')" data-page-node-id="AlhBYHm9iWwDgGMIPyqibn">🛠 调用日志 <span class="tag" id="log-tab-count" data-page-node-id="oUQS1lBBV7JK5jyr2A2BDg"></span></span>
+          </div>
+          <div class="subpage on" id="sta-agents" data-page-node-id="mmTKpRfGqhznq5tc3RUo0O">
+            <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="e0T94ealwWZ20vb00s3wGg">
+              <button class="btn sm" onclick="openAgentForm()" data-page-node-id="y6RV1KTLUNtzAx1NOHaPmX">＋ 新建 Agent</button>
+              <select id="agent-role-filter" onchange="loadAgents()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="altzw33lDLUCguM6ut2TR4"><option value="" data-page-node-id="dFfKG1BpR8FR7zHzyWyxhD">全部角色</option><option value="main" data-page-node-id="39jleDx27OuuwZagC7bdfH">👑 主 Agent</option><option value="sub" data-page-node-id="XCooSfEQUHFAdolG7ErWjI">🧩 子 Agent</option></select>
+              <select id="agent-type-filter" onchange="loadAgents()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="cw55qGtoqZ5gO3DVDXOv5F"><option value="" data-page-node-id="WB353FDcFGQrm9oYmBu8VQ">全部类型</option><option value="builtin" data-page-node-id="e95ZPTxLxQNLAZUYyMFfnU">内置</option><option value="custom" data-page-node-id="l7FrQp69Z4V4L1T2VtVB9C">自定义</option></select>
+              <select id="agent-status-filter" onchange="loadAgents()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="nAwKxHr8khwWaPqeR0DMdv"><option value="" data-page-node-id="fkC9uMQTX20V6BeIQkLvL3">全部状态</option><option value="enabled" data-page-node-id="BvGYcjwSTqxBTfJYIIVIqM">启用</option><option value="disabled" data-page-node-id="Ku6YS4RPiIzuvElLepLkrq">停用</option></select>
+              <span style="font-size:11px;color:var(--mut);" data-page-node-id="PYKaMTCaSsW6O1sTHU6yMy">主 Agent 在上、子 Agent 在下分区展示；可新建/编辑/启停/删除，支持角色/类型/状态筛选</span>
+              <span style="flex:1" data-page-node-id="kqCEABQbncXOB4643JBc2h"></span>
+              <span id="agent-summary" style="font-size:11.5px;color:var(--mut);" data-page-node-id="vz10uZwPzyESH8yD7uJ73q"></span>
+            </div>
+            <div class="panel" style="margin-bottom:12px;" data-page-node-id="9kr8qVxAjNQsIFJAmrlED1">
+              <div class="ph" data-page-node-id="ln7KxoT8oIW1EvzrsBR7UY">主 Agent <span class="tag" id="agent-main-count" data-page-node-id="BeLSfmPjDBuHAinHTGsyC1"></span> <span style="flex:1" data-page-node-id="K0hyFqmzyWk4fP5eMnaKhQ"></span><span style="font-size:11px;color:var(--mut);" data-page-node-id="PvoBebmrsMgfDfWPSiP7Nq">主 Agent 可组建子 Agent 团队（协作编排）</span></div>
+              <div class="pb" style="padding:12px;" data-page-node-id="7oUpyWFFRVe71MBrjMKQeD"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;" id="agent-main-cards" data-page-node-id="axkYPLvp4jdMhEpc8HZVCj"><div class="loading" data-page-node-id="KZ47esU2tbTEFzIIg9ZXGv">加载中…</div></div></div>
+            </div>
+            <div class="panel" data-page-node-id="HqXS13ZjQZOPbxdmwAnGu2">
+              <div class="ph" data-page-node-id="twiA6wVLeCVTDSZWjsIRvy">子 Agent <span class="tag" id="agent-sub-count" data-page-node-id="xTPdN1mh6DDrzMMwEMMO01"></span> <span style="flex:1" data-page-node-id="GOSqJdSggB6LyCyJLFoPL9"></span><span style="font-size:11px;color:var(--mut);" data-page-node-id="sgXnpAcdrABdwdcYVUWOlW">子 Agent 被主 Agent 编排调用（可独立绑定技能/MCP/工具）</span></div>
+              <div class="pb" style="padding:12px;" data-page-node-id="jBLYH74YnLulFkhY52tT80"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;" id="agent-sub-cards" data-page-node-id="rMeOQMebgc49YVd4LccMpu"><div class="loading" data-page-node-id="wA2zVAGAl4qTcKYgZI1MbR">加载中…</div></div></div>
+            </div>
+          </div>
+          <div class="subpage" id="sta-logs" data-page-node-id="2TBi2LYhwAd2jjLhGIJhX7">
+            <div class="panel" data-page-node-id="321Q0JZa2gdIIzGh1p0PNB">
+              <div class="ph" data-page-node-id="8F0QiYngh7IFLXZBYUGevT">调用日志（可观测） <span class="badge" data-page-node-id="BiiF7hp0evv5wLWJKWosmh">tool / skill / mcp 统一</span><span style="flex:1" data-page-node-id="jny53aKbofT1U69tjvfYQh"></span>
+                <button class="btn sm ghost" onclick="loadToolLogs()" data-page-node-id="MV62y2dh2cC4fxCKQQ4Wxw">刷新</button>
+              </div>
+              <div class="pb" style="padding:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--line);" data-page-node-id="uFkJLhffIu93AhXfAWNlTe">
+                <select id="log-filter-agent" onchange="logApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;max-width:160px;" data-page-node-id="AL9nzCZ2Z4t2IRoL6CpA9r"><option value="" data-page-node-id="CnqaaxM2d13BnAMPzHBrag">全部 Agent</option></select>
+                <select id="log-filter-kind" onchange="logApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="8dzGwl0o2YA87nJi3RN3jl">
+                  <option value="" data-page-node-id="U2yNjraRg4bA6LbeYUDn2X">全部类别</option><option value="tool" data-page-node-id="pI7boZmOZ3l6km1llEozQW">工具</option><option value="skill" data-page-node-id="F83ZOuxVzouiq5ftWNjrK2">技能</option>
+                </select>
+                <select id="log-filter-type" onchange="logApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="TFM9QBKK4ZjwvpcwKQ3eCk">
+                  <option value="" data-page-node-id="AvV6ydAS00AGmt6hSybZmi">全部工具类型</option><option value="builtin" data-page-node-id="67mDuw9gmJnqyZhzwlFj4C">内置</option><option value="mcp" data-page-node-id="vo7gMkdv870mN2nUqZ8E1R">MCP</option><option value="http" data-page-node-id="NgbqFpGmrgc1DMX6CDijJ2">HTTP</option><option value="zhiyuan" data-page-node-id="hTPSzYtQ3DuAB715hpCvWs">智源</option>
+                </select>
+                <select id="log-filter-ok" onchange="logApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="SPV6xpiW0HDmxnLdJOR9rh">
+                  <option value="" data-page-node-id="iQYAYPNQHu1IvoIUaRPKg2">全部结果</option><option value="1" data-page-node-id="3CznnO2M6wTSStMlNU4c9I">成功</option><option value="0" data-page-node-id="gi2UNkQ9QEaCHFuggxplAb">失败</option>
+                </select>
+                <span style="flex:1" data-page-node-id="hY1Z4oJqMXqWdDVBnMjuPT"></span>
+                <span id="log-summary" style="font-size:11px;color:var(--mut);" data-page-node-id="ON4xhhEsJH5eukhD4l3AQv"></span>
+              </div>
+              <div class="pb" style="padding:0;" id="tool-logs" data-page-node-id="tp7NVC9w0pI5MqR95r4r10"><div class="loading" data-page-node-id="BPFuhoUPSe6Ay0CLziQSkS">加载中…</div></div>
+              <div style="padding:8px 12px;border-top:1px solid var(--line);display:flex;align-items:center;gap:8px;justify-content:flex-end;" id="tool-logs-pager" data-page-node-id="TUAAXwDleL97DL37Je9Kfy"></div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="subpage" id="st-market" data-tabpanel="st" data-page-node-id="KdTw49ImB92M3bgtAomHrL">
+                    <div class="subtab" style="padding:6px 10px 0;" data-page-node-id="7bFvum8YsnaekqVcUINR7n">
+            <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="Y9QQ8DrB1gVonRsHlSioyI">🤖 Agent</span>
+            <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="isREVol1ag5YEkcUnYR2XB">🧩 技能</span>
+            <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="aYyGHXKONHkZuyPko6NGio">🔌 工具与 MCP</span>
+            <span data-tabgrp="stlib" data-pane="st-market" class="on" onclick="switchStLibTab(this,'st-market')" data-page-node-id="ERs21O0kWCmPoprKemeNKR">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="ny7AIEzEyU3PXMWD5sFbTa">🧠 模型配置</span>
+          </div>
+
+          <!-- 插件市场（2026-09-17 定稿）：单页直出全量公共插件目录（按类型纵向分区 + 类型/状态筛选 + 管理操作）；
+               消费视图在前三个类型 tab 的能力区（36-capability.js 渲染：我安装的 + 我创建的） -->
+          <div class="subpage on" id="mm-sale" data-page-node-id="coLQdOGHzjwhvAYUhuQQgF">
+            <!-- 2026-09-17：插件市场内部两个水平 tab —— 插件清单（目录+管理） / 上架审核（队列+驳回+策略） -->
+            <div class="subtab" style="padding:0 10px;">
+              <span class="on" data-mtab="catalog" onclick="switchMarketSubTab(this,'catalog')">📋 插件清单 <span class="tag" id="mm-sale-count"></span></span>
+              <span data-mtab="review" onclick="switchMarketSubTab(this,'review')">🛂 上架审核 <span class="tag" id="unified-pending-count"></span></span>
+            </div>
+            <div class="subpage on" id="mm-sale-catalog">
+            <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="kB9FGmvUJuLYBXPIYgjSFA">
+              <div style="position:relative;" data-page-node-id="Z1FQEwId2QeEfMtR9I45St">
+                <button class="btn sm" id="mm-new-btn" onclick="toggleManageNewMenu(event)" data-page-node-id="IMEWABYWTFiMf1z2exdCpE">＋ 新建插件 ▾</button>
+                <div class="ddm" id="mm-new-menu" style="display:none;" data-page-node-id="BaugmJHwGoscRpq7nUFIDU">
+                  <div class="ddm-i" onclick="mmNewForm('skill')" data-page-node-id="Q9XohvwvBLIylWL5HJbd5J">🧩 新建技能（表单创建）</div>
+                  <div class="ddm-i" onclick="mmUploadSkill()" data-page-node-id="AyRaIXIujaHPJoSZNgNsiM">📦 上传技能包（.zip）</div>
+                  <div class="ddm-i" onclick="mmNewForm('tool')" data-page-node-id="AUOGl1O8stmnawHzqHSw2q">🔧 新建工具</div>
+                  <div class="ddm-i" onclick="mmNewForm('mcp')" data-page-node-id="u8FtOtaiXDpFgxBy9Motb0">🔌 新建 MCP</div>
+                </div>
+              </div>
+              <select id="mm-kind" onchange="loadMarketManage()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="mGov0tt05jDS5wX8KE5X93">
+                <option value="all" data-page-node-id="BFUbL3lYpJ6Z8ShdZHaUUH">全部种类</option><option value="skill" data-page-node-id="sEtsbyWTyjJG4Ia4V9c7T1">🧩 技能</option><option value="tool" data-page-node-id="Axv05emByhjvyrLpV3dF6X">🔧 工具</option><option value="mcp" data-page-node-id="fya3Ob2dYBwDddn2qG6CBe">🔌 MCP</option>
+              </select>
+              <select id="mm-status" onchange="loadMarketManage()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;">
+                <option value="">全部状态</option><option value="published">已发布</option><option value="disabled">已停用</option>
+              </select>
+              <select id="mm-origin" onchange="loadMarketManage()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="ZvRwueDkH05l57id8D1Xdd">
+                <option value="" data-page-node-id="6RGvGfQj3b5PacUX0gQpVW">全部来源</option><option value="admin" data-page-node-id="FH85Pz2M0Dg4EqfMZYcqjp">🟦 管理员创建</option><option value="share" data-page-node-id="uwOia6XIlnJjVtr1uHm0BF">🟩 个人分享</option>
+              </select>
+              <input id="mm-search" placeholder="搜索名称/描述…" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;width:180px;" oninput="loadMarketManage()" data-page-node-id="yCWACLhWG8RmLRbz5BLAHH">
+              <span style="font-size:11px;color:var(--mut);" data-page-node-id="fHxQR7RzbHMBnncMQCCJEz">插件市场 = 全量市场插件统一管理；只有「已发布」状态可被个人安装</span>
+              <span style="flex:1" data-page-node-id="XZ0tTiZUm8C9sHC21l5xKi"></span>
+              <button class="btn sm ghost" onclick="loadMarketManage()" data-page-node-id="VbUmOXRCPEi9GFYb6MMd3E">刷新</button>
+              <span id="mm-summary" style="font-size:11.5px;color:var(--mut);" data-page-node-id="ODeyo11HLK9nIdBz9fXmej"></span>
+            </div>
+            <!-- 全量市场插件：JS 按类型纵向分区铺开（skill/mcp/tool/agent/prompt 各一区） -->
+            <div id="market-manage-sections"><div class="loading">加载中…</div></div>
+            </div>
+            <div class="subpage" id="mm-sale-review">
+            <div id="market-admin-zone" style="margin-top:0;display:none;">
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+                <span style="font-size:12.5px;font-weight:600;">🛂 上架审核</span>
+                <span style="font-size:11px;color:var(--mut);">个人分享需审核后上架；驳回返回个人空间可修改后重新提交</span>
+                <span style="flex:1"></span>
+                <button class="btn sm ghost" onclick="openShareLog()">📋 审批记录</button>
+                <span id="unified-pending-summary" style="font-size:11.5px;color:var(--mut);"></span>
+              </div>
+              <div class="panel"><div class="pb" style="padding:0;" id="unified-pending-table"><div class="loading">加载中…</div></div></div>
+              <div class="panel" style="margin-top:12px;">
+                <div class="ph">已驳回 <span class="tag" id="share-rejected-count"></span> <span style="flex:1"></span><span style="font-size:11px;color:var(--mut);">可在个人空间修改后「重新分享」</span></div>
+                <div class="pb" style="padding:0;" id="share-rejected-table"><div class="loading">加载中…</div></div>
+              </div>
+              <div class="panel" style="margin-top:12px;">
+                <div class="ph">插件共享审核策略</div>
+                <div class="pb">
+                  <div class="form-row"><label>审核方式</label>
+                    <select id="unified-review-policy" onchange="saveUnifiedPolicy(this.value)" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;">
+                      <option value="forced">强制审核（默认）</option>
+                      <option value="auto">免审直发</option>
+                    </select>
+                  </div>
+                  <div style="font-size:11px;color:var(--mut);margin-top:8px;">forced = 个人共享需管理员审核后上架；auto = 内部团队免审直接发布到公共市场</div>
+                </div>
+              </div>
+            </div>
+            </div>
+          </div>
+        </div>
+        <div class="subpage" id="st-flow" data-tabpanel="st" data-page-node-id="DOVgrpgUQ8zOVwaBoGBNna">
+          <div style="display:flex;flex-direction:column;height:calc(100vh - 152px);min-height:0;" data-page-node-id="Acn4iCXYysDHCTUYKeLAAf">
+            <!-- 工作区：左栏流程卡片（唯一滚动区）+ 右栏画布（不随页面滚动）；流程信息与运行结果 → 右侧弹窗（▶ 运行 / ⏩ 异步 / 📈 运行历史 触发） -->
+            <div style="flex:1;min-height:0;display:grid;grid-template-columns:300px minmax(0,1fr);gap:12px;" data-page-node-id="IwZHnX119DvXJNaYcV7ci1">
+              <div class="panel" style="min-height:0;" data-page-node-id="OyRGi6jp2BnPYsmz7To9as">
+                <div class="ph" data-page-node-id="upAnH98iu7TW2cdAZA4aNL">编排流程 <span style="flex:1" data-page-node-id="xv1JCMurhrsojOO52gDxYB"></span><button class="btn sm ghost" onclick="flowMonitor()" data-page-node-id="PhXin1UlQOVBFNfKXi7dG7">📊 监控</button><button class="btn sm" onclick="flowNew()" data-page-node-id="VzyqEMfQM1denwbfSlYtzk">＋ 新建</button></div>
+                <div class="pb" style="padding:8px;" id="flow-list" data-page-node-id="WOlAlOFEBOabIUwDTB0dDD"><div class="loading" data-page-node-id="DLW39pbe9R0GIQstmT3Kcb">加载中…</div></div>
+              </div>
+              <div class="panel" style="min-height:0;" data-page-node-id="JsvfjZnQXDkqS8sui3WVbC">
+                <div class="ph" data-page-node-id="qfhve3adkKG6yxx7uppf0J">编排画布 <span class="badge" data-page-node-id="OVJNarzsnHBjM34VnvLtmK">拖拽节点 · 端口连线 · AI 生成</span><span style="flex:1" data-page-node-id="bdoSxqV9YavEMo7kos2sSD"></span>
+                  <button class="btn sm" style="background:var(--blue-d);color:#fff;" onclick="aiFlowDialog()" data-page-node-id="nOWbM2xgccqPYqJTwqotJK">✨ AI 生成</button>
+                  <button class="btn sm ghost" onclick="flowCanvasClear()" data-page-node-id="PHNE0GYGAKr5nCCHP1IaZb">清空</button>
+                  <button class="btn sm ghost" onclick="flowToggleJson()" data-page-node-id="lDOyMtYyfWY6ybjKACMLAi">JSON ⇄</button>
+                  <button class="btn sm ghost" onclick="flowSave()" data-page-node-id="tyKewwJdpnvIy0RcjwTyBW">保存</button>
+                  <button class="btn sm" onclick="flowRun()" data-page-node-id="fcdJSSBkpmagf807ZKnbHd">▶ 运行</button>
+                  <button class="btn sm ghost" onclick="flowRunAsync()" title="异步运行：后台执行，SSE 实时推送进度，适合长流程" data-page-node-id="R5aetqQo1NHuTt3XdO4bEv">⏩ 异步</button>
+                </div>
+                <div class="pb" style="display:flex;padding:0;min-height:0;" data-page-node-id="opAfdWDp6rransLcEkbGkY">
+                  <div id="flow-palette" style="width:170px;border-right:1px solid var(--line);padding:10px;overflow-y:auto;flex:none;background:#fafaf7;" data-page-node-id="7juoFiVdnJizJZvTo2azeb"></div>
+                  <div id="flow-canvas-wrap" style="flex:1;position:relative;background:var(--color-background-tertiary,#f7f8fa);overflow:hidden;" data-page-node-id="rNosmsa6eA2sExYhI52vaq">
+                    <svg id="flow-canvas-svg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" data-page-node-id="wLB99Btr63epGPXOAdsIgN"></svg>
+                    <div id="flow-canvas-nodes" style="position:absolute;inset:0;" data-page-node-id="WyHFsSgE2yC7nxHVFiDEvt"></div>
+                    <div id="flow-canvas-hint" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--mut);font-size:12px;pointer-events:none;" data-page-node-id="17d8lJERZCbYHhsZjTKKXR">从左侧拖入节点，⚡ 端口拖线连接，点击节点配置属性</div>
+                  </div>
+                </div>
+                <!-- P0 优化：运行监控内联展示（📊 监控，含 LLM 用量 / HIL 队列实时刷新） -->
+                <div id="flow-monitor-inline" style="display:none;border-top:1px solid var(--line);padding:10px;font-size:11.5px;line-height:1.55;max-height:320px;overflow-y:auto;background:#fff;" data-page-node-id="G2kk1QsbKf3ZfOdoNSQwNi"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- 生成规则面板：B 方案下线（与上方 tab 同步隐藏，接线后恢复） -->
+        <!-- div class="subpage" id="st-rules" data-tabpanel="st">
+          <div class="panel"><div class="ph">生成规则配置</div><div class="pb" style="padding:0;" id="rules-table"><div class="loading">加载中…</div></div></div>
+        </div -->
+        <!-- 2026-09-04 v4：模型配置迁入能力中心作为最后一个 tab（原独立导航页 pg-modelcfg） -->
+        <div class="subpage" id="st-model" data-tabpanel="st" data-page-node-id="no54bZdkM8R99rAnhSJUZk">
+          <!-- 2026-09-08 修复：本页此前缺少子 Tab 条，切到「模型配置」后无返回入口（看似跳到独立页）。
+               现补齐与其它子页一致的 tab 条（st-model 高亮），确保随时可切回 Agent/技能/工具/插件市场。 -->
+          <div class="subtab" style="padding:6px 10px 0;" data-page-node-id="mdtab20260908">
+            <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="mdt-a1">🤖 Agent</span>
+            <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="mdt-s1">🧩 技能</span>
+            <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="mdt-m1">🔌 工具与 MCP</span>
+            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="mdt-k1">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" class="on" onclick="switchStLibTab(this,'st-model')" data-page-node-id="mdt-c1">🧠 模型配置</span>
+          </div>
+          <div class="pd" data-page-node-id="RzqoTp13YjnImwKXpglIDv">对话/向量模型接入 · 智能路由 · 停用启用 <span class="badge" data-page-node-id="eFAECkdZIgg3P9RDeHdlyT">ExtInfR-LLM-1/2</span><span class="badge" data-page-node-id="bCG9sUSHtNKfXCwYJqG2Rp">D10</span></div>
+          <div class="panel" data-page-node-id="NIHW8MbXDgjVGZSravpe23"><div class="pb" style="padding:8px;display:flex;align-items:center;flex-wrap:wrap;gap:8px;" data-page-node-id="k1SjpqDMPCYbaUNI7jMNw2">
+            <button class="btn sm" onclick="addLLM()" data-page-node-id="vQGcBuCsh199oKF4eJ6vDd">＋ 添加模型</button>
+            <span style="display:inline-flex;gap:4px;" data-page-node-id="8gfS8BZsxoKUaKSc8GmEL5">
+              <button class="btn sm ghost" id="llm-type-all" onclick="setLLMType('all',this)" style="font-size:10.5px;padding:1px 9px;" data-page-node-id="mhCQCIKjTjjCEmmw8EdZnG">全部</button>
+              <button class="btn sm ghost" id="llm-type-chat" onclick="setLLMType('chat',this)" style="font-size:10.5px;padding:1px 9px;" data-page-node-id="71FDoKQhDQdWbI2z6YkQyO">对话</button>
+              <button class="btn sm ghost" id="llm-type-embedding" onclick="setLLMType('embedding',this)" style="font-size:10.5px;padding:1px 9px;" data-page-node-id="mC82ViX0i9nHsOPFch4jIP">向量</button>
+            </span>
+            <span style="font-size:11px;color:var(--mut);margin-left:8px;" data-page-node-id="HWVfPEq2CREuExaj2cxHJj">对话模型用于 AI 对话；向量模型（Embedding，如 BGE-M3）用于知识库向量化。<b style="color:var(--blue-d);" data-page-node-id="HIBu2kbSrHZcHyyA180mpN">默认模型可分别设置：对话与向量各有一个默认（列表「设为默认」开关或详情页开关）。</b></span>
+          </div><div class="pb" style="padding:0;" id="llm-table" data-page-node-id="F4O0o5XTEaPA1t0kIM7yDz"><div class="loading" data-page-node-id="CFK106MpkBVB9coTZERPo1">加载中…</div></div></div>
+        </div>
+      </div>
+
+      <!-- 2026-09-04 v4：模型配置页(pg-modelcfg)已并入能力中心末 tab（st-model），此处移除原独立页 -->
+
+      <!-- ===== 设置（项目记忆 + 确定性工具钩子，原工坊 st-projmem/st-hooks 迁入） ===== -->
+      <div class="page" id="pg-settings" data-page-node-id="X035n8uSRNsx1YTu571LHR">
+        <h3 class="pt" data-page-node-id="GZJPJFGlvOAQQOwdJfzmZH">设置</h3>
+        <div class="pd" data-page-node-id="Oug4GAYFtCTIdFWoGQB69K">项目级持久记忆 · 确定性工具钩子 <span class="badge" data-page-node-id="s2UNurgiXHq6sqvX032Ygr">P0</span></div>
+        <div class="subtab" data-page-node-id="vHz8YUo0SiiXrlzA4OfXl5">
+          <span class="on" data-tabgrp="stg" onclick="tab(this,'stg','st-projmem')" data-page-node-id="t6qRD4IIjBn7acHYmTNQHl">📘 项目记忆</span>
+          <span data-tabgrp="stg" onclick="tab(this,'stg','st-hooks')" data-page-node-id="6GTByleBROiZq7EE5u3DV7">🪝 工具钩子</span>
+          <span data-tabgrp="stg" onclick="tab(this,'stg','st-fextract')" data-page-node-id="87tTHhOFnxBDOt5cgXiGqT">📄 文件抽取</span>
+          <span data-tabgrp="stg" onclick="tab(this,'stg','st-ctx')">🧠 AI 上下文</span>
+        </div>
+        <div class="subpage on" id="st-projmem" data-tabpanel="stg" data-page-node-id="ZBuvf59opmWBgoiBSDaLbp">
+          <!-- 项目级持久记忆（Project Constitution）：规范/基线/决策/经验，AI 会话每次注入防漂移 -->
+          <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="pEF4UwsqCfNUmkhNm5wUbg">
+            <select id="pm-project" onchange="loadProjectMemories()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;max-width:220px;" data-page-node-id="bw0A6npnYW9dFrLQ98vWo7"></select>
+            <select id="pm-category" onchange="loadProjectMemories()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" data-page-node-id="0sEgkeP32CIimvhwOhurOB">
+              <option value="" data-page-node-id="wNrcICPNdAvIvWTlNHzQpU">全部类别</option><option value="规范" data-page-node-id="yLt69LpwqoFi8pkwWBs5Dw">📐 规范</option><option value="基线" data-page-node-id="Pho2iJpm264Ax7ezp36KSM">📌 基线</option><option value="决策" data-page-node-id="EJF37CPA6HeGDBYGWG9FPz">🧭 决策</option><option value="经验" data-page-node-id="9LLdRzblaOkiHBZw8eKidp">💡 经验</option>
+            </select>
+            <button class="btn sm" onclick="openProjectMemoryForm()" data-page-node-id="bTckN5D3zgqkoiRDGDoTFA">＋ 新增记忆</button>
+            <span style="font-size:11px;color:var(--mut);" data-page-node-id="HQ4V6hsFZCJRS7fut4QCsu">项目级持久记忆：AI 会话每次自动注入，约束模型遵守既定规范与设计基线（对齐 CLAUDE.md 防漂移）</span>
+            <span style="flex:1" data-page-node-id="ECKixw4E1KmhZTWWhvS1d4"></span>
+            <span id="pm-summary" style="font-size:11.5px;color:var(--mut);" data-page-node-id="ZZaEAB8YE5zrmZq6S5s3Lu"></span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;" id="pm-cards" data-page-node-id="wf7CRLK0OWUXvqWl2ftrX8"><div class="loading" data-page-node-id="sEKCFYlDtbbrbYQmTh7BHo">加载中…</div></div>
+        </div>
+        <div class="subpage" id="st-hooks" data-tabpanel="stg" data-page-node-id="fVR1YweyYiX295e09GG5OI">
+          <!-- 确定性工具钩子（对齐 Claude Code PreToolUse）：工具调用前强制校验 -->
+          <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="fkIAbQAZoGhLxTNWQBSmDu">
+            <button class="btn sm" onclick="openToolHookForm()" data-page-node-id="ScRDjZyx9xtmEHelpud4k4">＋ 新增钩子</button>
+            <span style="font-size:11px;color:var(--mut);" data-page-node-id="SEAcU6Hb79SZ1S8Y2P2pJY">确定性工具钩子（对齐 Claude Code PreToolUse）：工具调用前强制校验——⛔ block 拦截 / 🙋 require_confirm 人工确认 / ⚠️ warn 放行+提示，不依赖 LLM 概率</span>
+            <span style="flex:1" data-page-node-id="r0o0uaWZcB12xZE6hzsyd5"></span>
+            <span id="hook-summary" style="font-size:11.5px;color:var(--mut);" data-page-node-id="9dBzET3AzOqaUDGxuChosY"></span>
+          </div>
+          <div class="panel" data-page-node-id="lNHTLQgPL2rGjCCnIPa8lx"><div class="pb" style="padding:0;" id="hook-table" data-page-node-id="b65FWLEjnYd7mzkCy3bLaP"><div class="loading" data-page-node-id="uI39KxW7LymI6qy20wqtiM">加载中…</div></div></div>
+        </div>
+        <div class="subpage" id="st-fextract" data-tabpanel="stg" data-page-node-id="afq15lbD5iemoGwYZPSScI">
+          <!-- 资料库·实体与关系抽取设置（默认不开启抽取，开关入 settings 表实时生效） -->
+          <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="JK6Aa9EJEZLLqPI6QNa6WC">
+            <span style="font-size:11px;color:var(--mut);" data-page-node-id="rjw9oVMfTqxUpfJzGQnRDF">资料库·实体与关系抽取：控制上传文档后是否自动抽取实体/关系候选（默认<b style="color:var(--txt);" data-page-node-id="GZ96t1hPrUmZzR1KoCSiOJ">关闭</b>，开启后经「抽取治理中心」人工确认入库）。</span>
+          </div>
+          <div class="panel" data-page-node-id="OvemL8FOCWOAT9UQzkBXJm">
+            <div class="ph" data-page-node-id="u6FRfjwjUJI9u5rRMb7zAF">资料库·实体与关系抽取设置 <span class="badge" data-page-node-id="SjeviEMQudAS7iZrPRMQcY">默认关闭</span></div>
+            <div class="pb" data-page-node-id="efvA6MMoyXC41J8Fl0bniz">
+              <div class="form-row" data-page-node-id="OTgcmucicigvDfN8PFCE8k"><label data-page-node-id="fUpBoFUcCY3GDzBoEtlI1v">上传后自动抽取</label>
+                <select id="fe-enabled" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;" data-page-node-id="ZKwm6GCzjZtKCuo2NWuWTB"><option value="0" data-page-node-id="RodD60p0ZgxqI1ntqa1A5v">关闭（默认）</option><option value="1" data-page-node-id="4TsMFQaAXMifaogMJzoyw0">开启</option></select>
+                <span style="font-size:11px;color:var(--mut);margin-left:6px;" data-page-node-id="0lJ1H0rwOuq4YTDUN4gbbg">开启后上传文档自动抽取实体/关系候选（写入待审批次）；关闭时补抽入口一并隐藏</span></div>
+              <div class="form-row" data-page-node-id="kT0AEdirNWFY2a9OLI1ntu"><label data-page-node-id="JPARgaoTQnVss3uGCDaxmx">实体候选来源</label>
+                <select id="fe-source" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;" data-page-node-id="TVObrWa0pBgE5edsNwiwpX"><option value="sysml" data-page-node-id="iKJrIyqGyQxBclgY1quY0x">SysML 建模数据（默认）</option><option value="llm" data-page-node-id="QOop7So7znCsBmOdjJmyHd">LLM 自由抽取</option></select>
+                <span style="font-size:11px;color:var(--mut);margin-left:6px;" data-page-node-id="1ql1EGnFLdEhx00DkeCfKJ">默认以 AI 建模 SysML 提交入库的模型元素为候选词表做确定性匹配，不降级 LLM</span></div>
+              <div style="font-size:11.5px;color:var(--amb);margin:6px 0;background:var(--amb-l);padding:6px 8px;border-radius:6px;" data-page-node-id="C9DtJwJoquAgTp6OOPo0c2">💡 开启后：上传 → 自动抽取 → 「抽取治理中心」待审 → 人工确认入库（HITL，置信度/消歧打标辅助决策）。SysML 建模数据是进入图库的另一条路径（AI 建模 → 入库 → 待审），与从文件抽取的两个来源互不冲突。</div>
+              <div class="form-actions" data-page-node-id="kokkv8BjGqBS829KCClIPf"><button class="btn" onclick="saveFileExtractSettings()" data-page-node-id="RlTYrjxhqSlMTmUxgv03qa">💾 保存设置</button></div>
+            </div>
+          </div>
+        </div>
+        <!-- AI 会话上下文管理（T6 token 预算 + 历史压缩 + 语义拉回；静态配置即时生效） -->
+        <div class="subpage" id="st-ctx" data-tabpanel="stg">
+          <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span style="font-size:11px;color:var(--mut);">AI 会话上下文管理：历史压缩 / Token 预算 / 语义拉回（每项附解读与调整影响；保存后<b style="color:var(--txt);">即时生效</b>，落盘系统级配置文件）</span>
+            <span style="flex:1"></span>
+            <button class="btn" onclick="saveCtxConfig()">💾 保存配置</button>
+          </div>
+          <div id="ctx-cfg-body"><div class="loading">加载中…</div></div>
+        </div>
+      </div>
+
+      <!-- ===== 用户与权限 ===== -->
+      <div class="page" id="pg-users" data-page-node-id="ualvqhCOY7FOzZ0zADi5NN">
+        <h3 class="pt" data-page-node-id="dk5hlUt0tFE0YpcXMdLBxq">用户与权限管理</h3>
+        <div class="pd" data-page-node-id="uknSiiGjQVoTZVmeEIFp2Q">支持自定义角色 · 操作级权限粒度 · LDAP/OAUTH2 认证 <span class="badge" data-page-node-id="xqpATINFQaRlNU2KQ0fY9k">FR-UR-1/2/3/4</span></div>
+        <div class="subtab" data-page-node-id="JjysA0rkk8O1aFskJlBp9J">
+          <span class="on" data-tabgrp="ur" onclick="tab(this,'ur','ur-a')" data-page-node-id="4ABKPsw39DLjNr4neg7lBI">用户列表</span>
+          <span data-tabgrp="ur" onclick="tab(this,'ur','ur-b')" data-page-node-id="4VyGX34lHllrjptD9As0TG">角色管理</span>
+          <span data-tabgrp="ur" onclick="tab(this,'ur','ur-c')" data-page-node-id="cBZLvkfmn8Gm2XfcoV6mNi">权限配置</span>
+          <span data-tabgrp="ur" onclick="tab(this,'ur','ur-d')" data-page-node-id="kc9I7any97F7MbPDDlPueJ">🏢 部门设置</span>
+        </div>
+        <div class="subpage on" id="ur-a" data-tabpanel="ur" data-page-node-id="8Yl2m5xQd3wtBMCFttLWtN">
+          <div class="panel" data-page-node-id="CRvNPjhwSPAP0MQYZmBNQ8"><div class="ph" data-page-node-id="WvZxYUTD2FzxsV6UYcYTFL">用户列表 <span style="flex:1" data-page-node-id="JOrkHBkRhQYnHIyPbzgW7L"></span>
+            <select id="user-role-filter" onchange="renderUsers()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="yoENpAvcKslRxQBdsnLdkC">
+              <option value="" data-page-node-id="BrVedCH07KAlInVC5alvMv">角色：全部</option><option value="with" data-page-node-id="1hJnobIUJtezouOsmhbvkk">角色：有角色</option><option value="none" data-page-node-id="KO67i5NBTER9gFMWxSw7zX">角色：无角色</option>
+            </select>
+            <input id="user-search" placeholder="搜索用户名/姓名/部门" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:180px;" oninput="renderUsers()" data-page-node-id="zoRTJmCdRDlBNY63Qn022u">
+            <button class="btn sm red ghost" onclick="cleanNoRoleUsers()" title="批量删除未分配角色的用户（跳过当前用户与内置管理员）" data-page-node-id="CF7DTzCxKLHSTex8Rj8OW1">🧹 清理无角色用户</button>
+            <button class="btn sm" onclick="showModal('user')" data-page-node-id="QBmFLCgpxymtrumD8KXTBR">＋ 新增用户</button></div>
+            <div class="pb" style="padding:0;" id="user-table" data-page-node-id="TF2h86YOQNvQlfbbjfxsOb"><div class="loading" data-page-node-id="VUZvCsVekdOVZIxfrl9VDt">加载中…</div></div>
+            <div style="padding:8px 12px;border-top:1px solid var(--line);display:flex;align-items:center;gap:8px;justify-content:flex-end;" id="users-pager" data-page-node-id="l3dByrjkoMElYXfIkwl7tK"></div>
+          </div>
+        </div>
+        <div class="subpage" id="ur-b" data-tabpanel="ur" data-page-node-id="Sip5iQ2sAq3KJo4gLTZneR">
+          <div class="panel" data-page-node-id="AVmbRW4aw8kKFVvXmNrpW3"><div class="ph" data-page-node-id="yhX9sCg0gxvCCOU51tvctY">角色列表 <span class="badge" data-page-node-id="VkRX29sUwW8A5vecAF1WWr">FR-UR-4</span><span style="flex:1" data-page-node-id="p7S42QrTy71inr42v3DNH7"></span>
+            <input id="role-search" placeholder="搜索角色…" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:150px;" oninput="renderRoles()" data-page-node-id="87xHOUQ5XjM45KPtF2AAtl">
+            <button class="btn sm" onclick="showModal('role')" data-page-node-id="92A7dE0SRpMHM3QY7MlXjm">＋ 新建角色</button></div>
+            <div class="pb" style="padding:0;" id="role-table" data-page-node-id="S9KUWFgzGsKHnGH80ufISV"><div class="loading" data-page-node-id="6IzEiZdEqWjxWCWQRAX3Ea">加载中…</div></div>
+            <div style="padding:8px 12px;border-top:1px solid var(--line);display:flex;align-items:center;gap:8px;justify-content:flex-end;" id="roles-pager" data-page-node-id="HcAHdAcuphdmgbB5raemGC"></div>
+          </div>
+        </div>
+        <div class="subpage" id="ur-c" data-tabpanel="ur" data-page-node-id="vYKSOLG1pYMGbRqB4PbNhF">
+          <div class="panel" data-page-node-id="xHF4IMMzSh2ZSzkmqhBRYj"><div class="ph" data-page-node-id="aALV9CiDJXeYEgCLahDsQr">操作级权限配置 <span style="flex:1" data-page-node-id="6fbypi7Le523jAPeCvwBFE"></span>
+            <span id="perm-role-badge" style="display:inline-flex;align-items:center;gap:4px;font-size:11px;" data-page-node-id="aqZFgIx7EPFzmPVTGat0E7"></span>
+            <select id="perm-role" onchange="renderPermMatrix()" title="选择角色配置其操作级权限（预置角色只读，可先复制为新角色再修改）" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;min-width:190px;" data-page-node-id="pHbZjpO5awuN3vBHYinv4e"></select>
+            <button class="btn sm ghost" onclick="openPermDomainMgr()" title="新增/删除自定义权限域与操作项（内置种子域受保护）" data-page-node-id="nVb6AMmob2EoglOQaEGCsY">⚙️ 管理权限域</button>
+            <button class="btn sm ghost" onclick="resetPermMatrix()" data-page-node-id="ZhI5iNmQD8G0iolhHCAKgN">重置</button>
+            <button class="btn sm" onclick="savePerms()" data-page-node-id="UElGsX8aPMy4vGx1elMhf5">保存权限</button></div>
+            <div class="pb" id="perm-matrix" data-page-node-id="ZGMSyFuwHxreKasf41eNLT"><div class="loading" data-page-node-id="xxtcLHE3EtRBHheFLFYyoH">加载角色权限…</div></div>
+          </div>
+        </div>
+        <div class="subpage" id="ur-d" data-tabpanel="ur" data-page-node-id="l9f5EXWPun0owKpRjTovWI">
+          <div class="note" style="margin-bottom:12px;" data-page-node-id="Mg0TzS0L3tyR6jBQKdEhvL">部门为组织受控词表：用户列表/用户表单的「部门」字段从该表下拉选择。部门下有用户时不可删除；改名将同步用户归属。</div>
+          <div class="panel" data-page-node-id="gMs3jxvQirp8JQMR7jHLXX"><div class="ph" data-page-node-id="7vJiweUkp7K1pff60g8RGO">部门列表 <span style="flex:1" data-page-node-id="sc9ijbPeDlSj5nhP4hSggX"></span>
+            <button class="btn sm" onclick="showModal('department')" data-page-node-id="j2HNVuOZYCQ7MnEN0BzWwb">＋ 新增部门</button></div>
+            <div class="pb" style="padding:0;" id="dept-table" data-page-node-id="nkyV8GmWFBru8ta9QRzDUo"><div class="loading" data-page-node-id="lItuA972Mpxqk28KtkxKrb">加载中…</div></div>
+            <div style="padding:8px 12px;border-top:1px solid var(--line);display:flex;align-items:center;gap:8px;justify-content:flex-end;" id="depts-pager" data-page-node-id="DLMk49UJHMD2dFMYhUpTIp"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 审计日志 ===== -->
+      <div class="page" id="pg-audit" data-page-node-id="xjdNzyMB5p6kHRe4dZXSE4">
+        <h3 class="pt" data-page-node-id="BVsvM50Vqa1ooJrQplsnGu">审计日志</h3>
+        <div class="pd" data-page-node-id="XlmDd5lrhYOtTyDW6obdZP">全量交互与数据操作日志 <span class="badge" data-page-node-id="4et8Va9LfjHvLgIBcJbjg8">7.4-e</span></div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px;" id="audit-stats" data-page-node-id="khd954pRZeRJm8d5KN1hFC"></div>
+        <div class="panel" data-page-node-id="HD3NGMtkmKptdduEEISkGh"><div class="ph" data-page-node-id="PEWxaOHtPwtrYrEdDnS9A9">审计日志 <span style="flex:1" data-page-node-id="UtjfCFkVQXj3FxFjaGcJUW"></span>
+          <input id="audit-search" placeholder="搜索…" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:180px;" oninput="loadAudit()" data-page-node-id="SNvfjiFpv90rS6ewCuNrWz">
+        </div><div class="pb" style="padding:0;" id="audit-table" data-page-node-id="DPlPUZiJu464R2S4olbXxI"><div class="loading" data-page-node-id="BMAU0VNLFG7Unot1mqPtZT">加载中…</div></div></div>
+      </div>
+
+      <!-- ===== 统一监控平台（D12：真实聚合仪表盘 + 趋势 + 日志 + 告警） ===== -->
+      <div class="page" id="pg-ops" data-page-node-id="uPOVSEbwUu8nszCReuHiLy">
+        <h3 class="pt" data-page-node-id="tFeFcsZXNRQLth7z9hCJcK">统一监控平台</h3>
+        <div class="pd" data-page-node-id="9QIsdA7ooP7stEPAG7k345">运行 · LLM · 系统 一体化监控 + 日志检索 + 告警中心 <span class="badge" data-page-node-id="fFmQ5pHUPgXnZBu5CbUNWV">7.1/7.2/7.3</span><span class="badge" data-page-node-id="kFEyY0Ig38sbACZaXhycQL">11.3</span><span class="badge" data-page-node-id="ULsIw2gh3EB5937ywjFG5n">D12</span></div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px;" id="ops-kpis" data-page-node-id="j7t9LTQW4sbWXn0HOGCqz5"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;" data-page-node-id="1QPPFGR66kxFhP8arcB5ND">
+          <div class="panel" data-page-node-id="lcsjbJ8PGHVFfc0V4cQaLR"><div class="ph" data-page-node-id="BGqEAVMJnOAdiVeLREfPFO">近 7 天趋势 <span class="badge" data-page-node-id="DzhIqpy7yTpeKSvVUu0159">运行数/平均耗时</span></div><div class="pb" id="ops-trend" data-page-node-id="n5Ebw6CeqFNv9NlW2ug6ri"><div class="loading" data-page-node-id="f8vsELao76eYA5VmNIpfeo">加载中…</div></div></div>
+          <div class="panel" data-page-node-id="AfYGcEKnNkW3hiu0HwCGuj"><div class="ph" data-page-node-id="agtdlaJJ7JXQcilOJVO9q9">⏱ 节点耗时分布 <span class="badge" data-page-node-id="qPPb0g8qpvOzKtCoK7d7oC">按节点类型</span></div><div class="pb" id="ops-node-stats" data-page-node-id="sjMtrC1Gm0ZfAdwGuGDJJx"><div class="loading" data-page-node-id="9eYIYm537dGKwSY2vYHdFx">加载中…</div></div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;" data-page-node-id="MZRMdezLJfBwLdPNdKEZyu">
+          <div class="panel" data-page-node-id="IhCOoPzkZHFM8e3X3Adx2j">
+            <div class="ph" data-page-node-id="ypDeKZ9dgfmnIpNpCeH5iI">运行日志检索 <span class="badge" data-page-node-id="hRFuLLdGImSjmTu90aUYq8">节点级执行日志</span></div>
+            <div class="pb" data-page-node-id="FRsH99n2jyEu5Cm0RmYxR9">
+              <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;" data-page-node-id="vnN1h7NukGU64wqEk3GaAM">
+                <input id="ops-log-runid" placeholder="run_id" style="width:76px;" onkeydown="if(event.key==='Enter')loadOpsLogs()" data-page-node-id="74CiGqpVuk52KgcF3dar5M">
+                <select id="ops-log-type" style="width:116px;" data-page-node-id="QhKUdR4PGa2bFdjFLsDC1c"><option value="" data-page-node-id="6iAud4onE5oR2exVlbnXzt">全部节点类型</option><option value="llm" data-page-node-id="YZ24uteyNKjoLTtUROQuBD">llm</option><option value="tool" data-page-node-id="Fw49UWX2b8BLntKzhW7Ckr">tool</option><option value="code" data-page-node-id="o2JogJ8KCdQZ5QPkoy2k3K">code</option><option value="skill" data-page-node-id="GLG1Hn2ZSvOG8B9HRYKOJR">skill</option><option value="mcp" data-page-node-id="WCTjukFIPdogicY9YJHUqw">mcp</option><option value="agent" data-page-node-id="JPO5UuGhtOOg9vilekJs4Q">agent</option><option value="webhook" data-page-node-id="eEakAukpo97YYBllqrjyIu">webhook</option><option value="if" data-page-node-id="g5ntNgK7XOfjK1cxJPDwSY">if</option><option value="http" data-page-node-id="dtmVCpbDy7x3QfPJAQDwQl">http</option><option value="pubsub" data-page-node-id="NeGJiWplapmIBGbQZAL1sy">pubsub</option></select>
+                <select id="ops-log-status" style="width:104px;" data-page-node-id="9yNikvJ1722mxQxFPAieXM"><option value="" data-page-node-id="HGTQQye5mSqHNnAMaNdrI8">全部状态</option><option value="done" data-page-node-id="5jlyfrJ3Yxy2cFwSAZFeqb">done</option><option value="error" data-page-node-id="doIftazALPyTrN9f6QFGP7">error</option><option value="skipped" data-page-node-id="hmQkSdWmhCePoUDv9e6hEy">skipped</option></select>
+                <input id="ops-log-q" placeholder="关键词（内容/标签）" style="flex:1;min-width:110px;" onkeydown="if(event.key==='Enter')loadOpsLogs()" data-page-node-id="d20w17LxdPvtcqPRdXaW06">
+                <button class="btn sm" onclick="loadOpsLogs()" data-page-node-id="3XTug4YuFb9QI32hUh21d0">🔍 检索</button>
+              </div>
+              <div style="max-height:268px;overflow:auto;" id="ops-log-list" data-page-node-id="62cwJr7TqHRRgkvcUWG4fx"><div class="mut" style="padding:10px;font-size:12px;" data-page-node-id="fHhJibwzl0v52UqEpxrC6w">输入条件后点击检索</div></div>
+            </div>
+          </div>
+          <div class="panel" data-page-node-id="ZjT7yYP01NhYKi6vzdiOkM">
+            <div class="ph" data-page-node-id="W0gkIDjv9T8FPfT8vHnEiE">告警中心 <span class="badge r" id="ops-alert-badge" data-page-node-id="xUHbeiP311uElqHBJhN8Yr">0 开放</span><span class="badge" data-page-node-id="pXKfx5kjY2AZrBzkCXM2Vj">open</span>
+              <button class="btn sm ghost" style="float:right;" onclick="openAlertRules()" data-page-node-id="LnkMrkMwScNiR600hRNEA2">⚙ 规则管理</button></div>
+            <div class="pb" style="padding:0;" id="ops-alerts" data-page-node-id="xR0rMxdE4Z3TM9TehbMmec"><div class="loading" data-page-node-id="pQ2DhHp7T336fIL1c7MwnA">加载中…</div></div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;" data-page-node-id="NiRYyfj47Xu7XZyl8YgCD3">
+          <div class="panel" data-page-node-id="oI5vVDyBQQT96EPiRwkN14"><div class="ph" data-page-node-id="xXM7BbEPcowLtwgExZDUA3">错误码查询 <span class="badge" data-page-node-id="CBAfAX7B9SzEEz2Le8sG6E">11.3-b</span></div><div class="pb" style="padding:0;" id="ops-errors" data-page-node-id="vWVilEN68ab46JLLn5Hguh"><div class="loading" data-page-node-id="vPobwjdsKnCqyqSTgPjxhL">加载中…</div></div></div>
+          <div class="panel" data-page-node-id="9br9En7shFOoLFA4jGeSOG"><div class="ph" data-page-node-id="rGoDStnZkAnealZAYk3Vmd">备份与容灾 <span class="badge" data-page-node-id="npGdthU7YuKAxqgPaOSxxW">11.3-d/e</span></div><div class="pb" id="ops-backup" data-page-node-id="RsUT14mvMmxm3ZXzCla9yG"><div class="loading" data-page-node-id="1sIlXczpmgEn6Wm9q0CG0f">加载中…</div></div></div>
+        </div>
+      </div>
+
+      <!-- ===== 审批管理（前端原型：审批类型 / 流程模板 / 节点 / 审批人） ===== -->
+      <div class="page" id="pg-approval" data-page-node-id="DhkfthnES7mZEKv1bO3j0t">
+        <h3 class="pt" data-page-node-id="eQCGG7ekibUlo3vRZPCMhw">审批管理</h3>
+        <div class="pd" data-page-node-id="DgonmgLHWyKZlAifOEhchO">自定义流程模板 · 节点 · 审批人 · 审批类型（适用场景） <span class="badge" data-page-node-id="OQV2uqsTrEdHt8WBaP1ENP">原型</span></div>
+        <div class="subtab" data-page-node-id="P2eaoYw68NNdpVHeBCLlki">
+          <span class="on" data-tabgrp="ap" onclick="tab(this,'ap','ap-type')" data-page-node-id="n7AzinTGWxqYcy3oPFxOXL">📋 审批类型</span>
+          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-tpl')" data-page-node-id="6ZmA49K6PtCxrHZND9QZOQ">🧾 流程模板</span>
+          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-new')" data-page-node-id="SP9X2NUsNIgQ9uO2Ax747J">🚀 发起审批</span>
+          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-todo')" data-page-node-id="ZBkLjN6XRCO4XXvaXNtW72">⏳ 我的待办</span>
+          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-rec')" data-page-node-id="fqVZ8yPAClDK72xESL8DEa">📚 审批记录</span>
+        </div>
+        <!-- 审批类型（用于哪些场景） -->
+        <div class="subpage on" id="ap-type" data-tabpanel="ap" data-page-node-id="4AW9C1EZvZwrFsDC46oH7M">
+          <div class="note" style="margin-bottom:12px;" data-page-node-id="l10ZyAf8EyiWavTDkIDFJM">审批类型定义「用于哪些场景」。系统预置通用类型（发布 / 变更 / 资产入库 / 分支合并 / 自定义），可直接使用，也可新增自定义类型；停用后发起审批时不可选。</div>
+          <div class="panel" data-page-node-id="l4uKMDNfEtXKvjN2PYzuzy"><div class="ph" data-page-node-id="knokTEpCz16iNnSDBDM39h">审批类型 <span class="badge" data-page-node-id="YBnf2gY3IpKPdBzzy91xFA">通用业务</span><span style="flex:1" data-page-node-id="3LIioEK8CwkHaCkKk3oFbK"></span>
+            <input id="ap-type-search" placeholder="搜索名称/场景" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:160px;" oninput="renderApprovalTypes()" data-page-node-id="pEaT6okOLhXnRhOw5mxuoZ">
+            <button class="btn sm" onclick="editApprovalType()" data-page-node-id="KG2pryW7mfSgo3QCvZWx6H">＋ 新增类型</button></div>
+            <div class="pb" style="padding:0;" id="ap-type-table" data-page-node-id="Z9lXD7TfHxUDQzrZ7x4auf"><div class="loading" data-page-node-id="NVJPNGOwHQsgPdQTB7FEVN">加载中…</div></div>
+          </div>
+        </div>
+        <!-- 流程模板 -->
+        <div class="subpage" id="ap-tpl" data-tabpanel="ap" data-page-node-id="HqjaPAy0RWj9b8Ft0oDvQv">
+          <div class="note" style="margin-bottom:12px;" data-page-node-id="cN5hCND0NeOmZT5g7cnrBf">流程模板定义「审批怎么走」：模板归属于某个审批类型，节点按顺序执行；每个节点可配置审批人（指定人员 / 指定角色 / 发起人自选）与通过规则（全部 / 任一）。</div>
+          <div class="panel" data-page-node-id="MLb4Zjw5juiyCmX627PVql"><div class="ph" data-page-node-id="BkEQF9KdFdp4RRj3wMIrLW">流程模板 <span class="badge" data-page-node-id="GcKF6p2tJJaFpl0MuhKhRW">节点可编排</span><span style="flex:1" data-page-node-id="tQtyyEubkWzUrP6x2AKJz1"></span>
+            <button class="btn sm" onclick="editApprovalTpl()" data-page-node-id="dtdzcgGlAZRS3xCMAiAxIV">＋ 新建模板</button></div>
+            <div class="pb" style="padding:0;" id="ap-tpl-table" data-page-node-id="2KX5ToiiGAtDb4smogaRVy"><div class="loading" data-page-node-id="qiZFMBwzR2PIOaFu2OaVu4">加载中…</div></div>
+          </div>
+        </div>
+        <!-- 发起审批 -->
+        <div class="subpage" id="ap-new" data-tabpanel="ap" data-page-node-id="Hg2bobkkufQIyM8oxjQuk0">
+          <div class="panel" data-page-node-id="AoC2ibpW0jZvc4RgyF9257"><div class="ph" data-page-node-id="7YGZ7XauMDQy9g7U7wOCQV">发起审批 <span class="badge" data-page-node-id="daWhA6kCaUcHmbHCVE7A1M">选择类型与模板</span></div>
+            <div class="pb" id="ap-new-form" data-page-node-id="kocn98na4U0BRtiu9XXXeT"><div class="loading" data-page-node-id="GliMACwh6X7BYdCBnx1vzR">加载中…</div></div>
+          </div>
+        </div>
+        <!-- 我的待办 -->
+        <div class="subpage" id="ap-todo" data-tabpanel="ap" data-page-node-id="HAZF2b85gsLorAtj7kngsG">
+          <div class="panel" data-page-node-id="pZ0ocMbDRbfxbFWAAm4xBF"><div class="ph" data-page-node-id="fayyvw1lkcVvxPjSKtvLx1">⏳ 我的待办 <span class="badge r" id="ap-todo-badge" data-page-node-id="8rw332dvislARxeFb18ThF">0</span><span style="flex:1" data-page-node-id="6KLlSJ6ZVdJ4duKJqgf7GD"></span>
+            <button class="btn sm ghost" onclick="renderApprovalTodo()" data-page-node-id="0x6B5bnbDKp25BT9gAxuo1">🔄 刷新</button></div>
+            <div class="pb" style="padding:0;" id="ap-todo-table" data-page-node-id="FYncLaJ8z6ZIZlg8P4PivJ"><div class="loading" data-page-node-id="xGBosCq3bexv89fBaxnwMV">加载中…</div></div>
+          </div>
+        </div>
+        <!-- 审批记录 -->
+        <div class="subpage" id="ap-rec" data-tabpanel="ap" data-page-node-id="CPpD7LblHARHuXfspeXDIF">
+          <div class="panel" data-page-node-id="2K8jDOZPzSV1dffooPY9fy"><div class="ph" data-page-node-id="MmY0A0GApzrc4NEy8qG1Sn">审批记录 <span style="flex:1" data-page-node-id="P5TYb6vP8H4Le6GpDElZnP"></span>
+            <select id="ap-rec-status" onchange="renderApprovalRecs()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="cF9gUz2lIIPzfDonboeaJU">
+              <option value="" data-page-node-id="9nghMDFJ2VviJm1Z4idkje">全部状态</option><option value="running" data-page-node-id="lvRUyQt0hk1QosdSYCwNJD">审批中</option><option value="approved" data-page-node-id="HeGlHH2V48TTB3s8ZfvfbY">已通过</option><option value="rejected" data-page-node-id="HtpbJuHu7cvLHLy0FRlc5M">已驳回</option><option value="withdrawn" data-page-node-id="NWog3CYtumF0DfQd3LgPU8">已撤销</option>
+            </select>
+            <button class="btn sm ghost" onclick="renderApprovalRecs()" data-page-node-id="QOdXVlz68HmBNoZe5fA6Nt">🔄 刷新</button></div>
+            <div class="pb" style="padding:0;" id="ap-rec-table" data-page-node-id="xWCymt4NfSSUE6y7CXMRqO"><div class="loading" data-page-node-id="m7utEJi2j3ZBPwjGWt18Bk">加载中…</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 滑出面板 -->
+<div class="slide-overlay" id="overlay" onclick="closePanel()" data-page-node-id="l6lhKiG5IR2S56B4J9ZpXC"></div>
+<div class="slide-panel" id="panel-detail" data-page-node-id="Ejui0Fa3Z5lSc388ORKjcr">
+  <div class="sp-resize" onmousedown="spResizeStart(event)" ondblclick="spResizeReset(event)" title="拖拽调整宽度（自动记忆）· 双击复位"></div>
+  <div class="sp-header" data-page-node-id="jLqn7MpibAYeqm5QSCuaJI">
+    <span class="sp-title" id="panel-title" data-page-node-id="wWTlkaAxwxHaVr13clz3de">详情</span>
+    <button class="sp-close" onclick="closePanel()" data-page-node-id="1DvLstLtekbDbAMqIIggfU">✕</button>
+  </div>
+  <div class="sp-body" id="panel-body" data-page-node-id="FwzpMSGeSrGUUMY20ofqGS"></div>
+</div>
+
+<!-- 本体类型/关系 编辑右侧滑窗 -->
+<div class="slide-overlay" id="ont-overlay" onclick="closeOntSlide()" data-page-node-id="nloUqHFBSMwmyEVTFb0N76"></div>
+<div class="slide-panel ont-slide-panel" id="ont-slide" data-page-node-id="QRkZwWTFclvm7DAU6KDsaw">
+  <div class="sp-resize" onmousedown="spResizeStart(event)" ondblclick="spResizeReset(event)" title="拖拽调整宽度（自动记忆）· 双击复位"></div>
+  <div class="sp-header" data-page-node-id="ZZkNTSmLRKHaVPbRNPFYTc">
+    <span class="sp-title" id="ont-slide-title" data-page-node-id="F9FkeUiEsv0bVs435heWrI">本体类型</span>
+    <button class="sp-close" onclick="closeOntSlide()" data-page-node-id="v4mYkYKNDlc4HmN8oSyAzx">✕</button>
+  </div>
+  <div class="sp-body" id="ont-slide-body" data-page-node-id="PyaFmC1LKoSs2Br04WjAet"></div>
+</div>
+
+<!-- RDF/OWL 右侧滑窗已移除（2026-09-02 四轮调整）：预览改为中栏内联展示（顶部「🧬 OWL」全局 / toggle 第三态节点级），变更历史同理 -->
+
+<!-- 流程信息与运行结果（右侧弹窗：✏️ 信息 / 📈 历史 双 Tab，✕ / 遮罩可主动收起） -->
+<div class="slide-overlay" id="flow-run-overlay" onclick="closeFlowRunPanel()" data-page-node-id="UwjrLHZ7gDEEiCAX5IQlCP"></div>
+<div class="slide-panel flow-run-panel" id="flow-run-panel" data-page-node-id="iW6zGAFPI7w4dvm52CdYHB">
+  <div class="sp-resize" onmousedown="spResizeStart(event)" ondblclick="spResizeReset(event)" title="拖拽调整宽度（自动记忆）· 双击复位"></div>
+  <div class="sp-header" data-page-node-id="YhQBUZFI1LEjMMHVfPXCsy">
+    <span class="sp-title" id="flow-run-title" data-page-node-id="ODOSZPHsYmXPFwWuKIERXh">📈 运行历史</span>
+    <button class="sp-close" onclick="closeFlowRunPanel()" title="收起" data-page-node-id="qHBlj7bcqjCAiKhQvaUOug">✕</button>
+  </div>
+  <div class="sp-body" id="flow-run-body" data-page-node-id="taxKhBGvAxbCxCkupEvDZa">
+    <div style="flex:none;display:flex;gap:6px;margin-bottom:10px;" data-page-node-id="TBosqyNhPqAlmYomZ9MTcI">
+      <button class="btn sm ghost" id="flow-tab-info" onclick="flowRunTab('info')" data-page-node-id="PNXuC2FTUZgGsqHM0bLJyy">📋 流程信息</button>
+      <button class="btn sm" id="flow-tab-hist" onclick="flowRunTab('hist')" data-page-node-id="hZIUqQT1LGp3MNpsmOIUS7">📈 运行历史</button>
+    </div>
+    <!-- Tab 1：流程信息（名称/描述/JSON 编辑 + 保存） -->
+    <div id="flow-run-info" style="flex:none;margin-bottom:10px;display:none;" data-page-node-id="rWg94SBWZz6MSYf4N0whzg">
+      <div style="font-size:12.5px;font-weight:600;color:var(--blue-d);margin-bottom:6px;" data-page-node-id="hu4DD8HUJ9Ul7spFsRG5ku">📋 流程信息 <span style="font-weight:400;color:var(--mut);font-size:11px;" data-page-node-id="QpHodNDoAbAlfSF2AEgtGd">修改后点「✔ 保存流程」写回</span></div>
+      <div style="display:flex;gap:8px;margin-bottom:6px;" data-page-node-id="Nk4tBFY73oSeT9r32dDc3M">
+        <input id="flow-name" placeholder="流程名称" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;" data-page-node-id="zgh4wEOor3Du60JjGyoQyZ">
+        <input id="flow-desc" placeholder="描述（可空）" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;" data-page-node-id="9IvhmEaJfnIEfMWynoZf4b">
+      </div>
+      <textarea id="flow-json" style="display:none;min-height:120px;font-family:Consolas,monospace;font-size:11px;border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre;overflow:auto;" placeholder='{"nodes":[...],"edges":[...]}'></textarea>
+      <div style="display:flex;gap:6px;margin-top:6px;" data-page-node-id="SAJQuC52eMrE3f2iOptzgs">
+        <button class="btn sm" onclick="flowSave()" data-page-node-id="VPNsCItgtzEf608X2OezX4">✔ 保存流程</button>
+        <button class="btn sm ghost" onclick="flowToggleJson()" title="JSON ⇄ 画布编辑切换" data-page-node-id="xnMj0AK1TYU0eryt8IXgLW">JSON ⇄</button>
+        <span style="flex:1" data-page-node-id="locwudKJcr9chVBLdBYvlr"></span>
+        <button class="btn sm ghost" onclick="flowRunTab('hist')" data-page-node-id="wQwwCVNJXa3bVGRI79Imec">查看运行历史 →</button>
+      </div>
+    </div>
+    <!-- Tab 2：运行历史（范围 + 列表 + 详情） -->
+    <div id="flow-run-hist" style="flex:1;min-height:0;display:flex;flex-direction:column;" data-page-node-id="sIOCqj3OkiOCQHgg1W7FhB">
+      <div style="flex:none;margin-bottom:8px;" data-page-node-id="VL7DMxfBsn8n56zxaB1tqZ">
+        <div style="font-size:12.5px;font-weight:600;color:var(--blue-d);margin-bottom:6px;" data-page-node-id="9zfHFAG0t1KzqhSqHk4t0f">📈 运行历史 <span style="font-weight:400;color:var(--mut);font-size:11px;" data-page-node-id="U4YV42YGFVvAVaW0QTwGYi">点击记录 → 下方展示详情</span></div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;" data-page-node-id="QgiLAQBOEEzt4638Tl3nHR">
+          <select id="flow-run-scope" onchange="loadFlowRuns()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11px;" title="运行历史范围：全部流程 / 仅当前流程" data-page-node-id="y3nhkJiRGYrBq9gjgteYHi">
+            <option value="" data-page-node-id="AzQYVQO6D9DDkPGmXNtYJB">全部流程</option>
+            <option value="current" data-page-node-id="aqxRAIkUiFxYPAFHTkNEkJ">当前流程</option>
+          </select>
+          <button class="btn sm ghost" onclick="loadFlowRuns()" title="刷新运行历史" data-page-node-id="VZn7FkSHFY7zqjieZn1AfW">🔄 刷新</button>
+          <button class="btn sm ghost" onclick="openEventSubs(0)" title="事件订阅" data-page-node-id="aUCjBDEza6zt33etVvGCfL">🔔 事件订阅</button>
+        </div>
+        <div id="flow-runs" style="max-height:220px;overflow-y:auto;margin-top:6px;" data-page-node-id="DF7hOWAVB5luFofhLKGXob"><div class="loading" style="padding:6px;" data-page-node-id="hIbypWGByE4zzXAKigoLSe">加载中…</div></div>
+      </div>
+      <div id="flow-result" style="flex:1;min-height:0;font-size:11.5px;line-height:1.55;border-top:1px solid var(--line);padding-top:10px;overflow-y:auto;" data-page-node-id="6f8WgKCCYnxlnRjIFmwYW7"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 统一右侧滑动弹窗（工坊表单/确认/编辑共用） -->
+<div class="modal" id="modal" data-page-node-id="rtziYR9XLlzCZcuFhGFtee">
+  <div class="mbox" data-page-node-id="k1M9QWwq8ojTwJKRzZuacz">
+    <div class="sp-resize" onmousedown="spResizeStart(event)" ondblclick="spResizeReset(event)" title="拖拽调整宽度（自动记忆）· 双击复位"></div>
+    <button class="modal-close" onclick="closeModal()" title="关闭" data-page-node-id="05NRwBWyUk1Tk06f0eAukr">✕</button>
+    <div id="modal-body" data-page-node-id="mM8YESAWqvGWDbyd4gyK8i"></div>
+  </div>
+</div>
+<!-- 轻量卡片弹窗（操作确认 / 输入：居中卡片，区别于右侧 mbox 业务表单） -->
+<div class="lbx" id="lbx" data-page-node-id="FiDrBLcfSWBva7GZHlhyBt">
+  <div class="lbx-card" data-page-node-id="aGxLxzG63Awcu8KkS47UBG">
+    <button class="lbx-close" title="关闭" data-page-node-id="NtwTFRhDHga3iBXws1PTDz">✕</button>
+    <div id="lbx-body" data-page-node-id="862iMkAzOxzHhWfLqhgqkL"></div>
+  </div>
+</div>
+
+<!-- 2026-09-08 资料库列表 hover 摘要卡片：轻量 fixed 容器，JS 控制显隐/内容 -->
+<div id="doc-hover-card" class="dhc" style="display:none;" data-page-node-id="dhc20260908"></div>
+
+<!-- 2026-09-04 附件菜单：锚定 ＋ 按钮右上方（Trae 风格） -->
+<div id="attach-menu" style="display:none;position:fixed;z-index:270;min-width:200px;background:var(--panel,#fff);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:6px;" onclick="event.stopPropagation()" data-page-node-id="ndMD2mCAdglbARQJuFMFhu">
+  <div class="am-item" onclick="pickLocalFile()" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--txt);" data-page-node-id="tma8o2DeosVskyBR2Gwfzo">📎<span data-page-node-id="8NpkxGDmXZK0yN5T1NkrlE">上传附件</span></div>
+  <div id="am-project" class="am-item" onclick="toggleAttachProject(event)" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--txt);" data-page-node-id="ZpgIqy1F7qX2WaKKcPEt4U">🗂<span style="flex:1;" data-page-node-id="Yt6tHsBBTGa1fKLH5lqFJC">当前会话的文件</span><span style="color:var(--mut);font-size:11px;" data-page-node-id="hAku2t9Kd0EiZxe8SVuag4">›</span></div>
+  <div id="am-engineering" class="am-item" onclick="toggleAttachEngineering(event)" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--txt);" data-page-node-id="hOoOSfbo3yBtnJqDbfrFfr">🧬<span style="flex:1;" data-page-node-id="55I6VUMq9LdaDbQOlsIQbN">当前工程文件</span><span style="color:var(--mut);font-size:11px;" data-page-node-id="CbN8DeD9qYhnnERP6kAadb">›</span></div>
+</div>
+<!-- 二级面板：当前会话的文件（搜索 + 限高滚动） -->
+<div id="attach-project-pop" style="display:none;position:fixed;z-index:271;width:300px;background:var(--panel,#fff);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:8px;" onclick="event.stopPropagation()" data-page-node-id="Edw8h7VKSFwHtaUUhFer8z">
+  <input id="attach-project-search" placeholder="搜索文件名…" oninput="renderAttachProjectList()" style="width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;margin-bottom:6px;outline:none;background:var(--panel,#fff);color:var(--txt);" data-page-node-id="BLwUYfqw8PwXmMucwreqw9">
+  <div id="attach-project-empty" style="display:none;flex-direction:column;align-items:center;justify-content:center;color:var(--mut);gap:6px;padding:20px 0;" data-page-node-id="0GHmxwzZbSiVVAH4wx9bNC">
+    <span style="font-size:28px;opacity:.35;" data-page-node-id="ZX559CSHssyyoOEJrI0GL9">📄</span>
+    <div style="font-size:12px;" id="attach-project-empty-txt" data-page-node-id="LVjlCcwRlGSXEef02Kh5NC">当前会话还没有文件</div>
+  </div>
+  <div id="attach-project-list" style="display:flex;flex-direction:column;gap:5px;max-height:260px;overflow-y:auto;" data-page-node-id="dDMcbe1efACDHbbMi59qYf"></div>
+</div>
+<!-- 二级面板：当前工程文件（MBSE 工程树：类型 → 实例，搜索 + 限高滚动） -->
+<div id="attach-eng-pop" style="display:none;position:fixed;z-index:271;width:320px;background:var(--panel,#fff);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:8px;" onclick="event.stopPropagation()" data-page-node-id="Ng5Hnm4XnXSvpmudleMbI0">
+  <input id="attach-eng-search" placeholder="搜索实体名 / 类型…" oninput="renderAttachEngTree()" style="width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;margin-bottom:6px;outline:none;background:var(--panel,#fff);color:var(--txt);" data-page-node-id="OECeHj2ZCfJVq4u6jBU2bK">
+  <div id="attach-eng-empty" style="display:none;flex-direction:column;align-items:center;justify-content:center;color:var(--mut);gap:6px;padding:20px 0;" data-page-node-id="utjEFzIBZudOEaINlElgV7">
+    <span style="font-size:28px;opacity:.35;" data-page-node-id="afQbsajUylydfgqEykX46S">🧬</span>
+    <div style="font-size:12px;" id="attach-eng-empty-txt" data-page-node-id="Sygm92ZPs6GINWw1MKLcmv">当前工程暂无实体</div>
+  </div>
+  <div id="attach-eng-tree" style="max-height:280px;overflow-y:auto;" data-page-node-id="kmdWKHiAi2rwDY8Z9fKvFN"></div>
+</div>
+<style>
+  .am-item:hover{ background:var(--bg-soft,#f5f5f2); }
+</style>
+<!-- /attach-menu -->
+
+<!-- SysML v1/v2 视图预览面板 -->
+<div class="svm-mask" id="svm-mask" onclick="closeSysmlViewPreview()" data-page-node-id="GG00LqFqxE3BEGZSuVk8R5"></div>
+<div class="svm-panel" id="svm-panel" data-page-node-id="N5o4rfau2eGPIBswCC0AuH">
+  <div class="svm-head" data-page-node-id="VP2rn3nGB62k6jFM9mcsz5">
+    <h3 data-page-node-id="omECdBrwivzOvJjxrMoXGU">🔍 SysML 视图预览</h3>
+    <span class="svm-meta" id="svm-meta" data-page-node-id="USHh5V2dpOpDhrXlle5se5">加载中…</span>
+    <span style="flex:1" data-page-node-id="w64YFPeNlaeg4DaAXkClVP"></span>
+    <select id="svm-type" onchange="loadSysmlView()" data-page-node-id="hjLYJB2mGsoPmJBhnNcWAH"></select>
+    <select id="svm-branch" onchange="loadSysmlView()" data-page-node-id="2WIzt6BcEJtvIhAZ5MaZpG"></select>
+    <button class="btn sm" onclick="loadSysmlView()" data-page-node-id="fRArraX4HljDpyz4MmPIcj">🔄 刷新</button>
+    <button class="btn sm ghost" onclick="closeSysmlViewPreview()" data-page-node-id="exNsF4DUO3ZiVADRfQsqdI">关闭</button>
+  </div>
+  <div class="svm-body" data-page-node-id="HCU8eclSuLKHGGEc1PMUCl">
+    <div class="svm-warn" id="svm-warn" style="display:none;" data-page-node-id="Q8lb5AL4DtrTYS9ESpWccr"></div>
+    <div class="svm-legend" id="svm-legend" data-page-node-id="QrzflwlSoIKGOPuIf6dbt2"></div>
+    <div class="svm-canvas" id="svm-canvas" data-page-node-id="f0T1AkIBVdHc4bCTBbCYuO"><div style="padding:24px;color:var(--mut);font-size:12px;" data-page-node-id="GTz0MO66XBLLVE3nyAsfuc">选择视图类型后自动投影渲染…</div></div>
+  </div>
+</div>
+<!-- 右侧大抽屉：分支对比（差异统计 + 筛选 + 宽幅明细，只读） -->
+<div class="drawer-mask" id="diff-mask" onclick="closeBranchDiffDrawer()" data-page-node-id="s8sakfiD4tpqfsFe30Ja9m"></div>
+<div class="drawer" id="diff-drawer" data-page-node-id="DtAf0rWXSoEbD5cU5944vr">
+  <div class="d-head" data-page-node-id="KoKhAxaHvxODXAqwfHIBby">
+    <h3 data-page-node-id="y4dkYOHf9GDnh8KuOHdCPk">🔍 分支对比</h3>
+    <label style="font-size:12px;" data-page-node-id="5Mku3LWBZ2rdoT4EgQDHOo">基线 base</label>
+    <select id="bd-base" data-page-node-id="B5WIB0ks2tMjVJz7KTr9az"></select>
+    <label style="font-size:12px;" data-page-node-id="ribzh7TMkLHYq7UF3mA1lH">对比 head</label>
+    <select id="bd-head" data-page-node-id="OWh9PCBk26KrcCkwLGaFKn"></select>
+    <button class="btn sm" onclick="loadBranchDiff()" data-page-node-id="JXqM4TSmLEZoEeki020MW4">对比</button>
+    <span style="flex:1" data-page-node-id="RLs3JU9XQvpA3Xpk5pjb3X"></span>
+    <span style="font-size:11.5px;color:var(--mut);" data-page-node-id="4ShamCun9xGqvgEiRpuh4J">💡 确认无误可在「新建合并请求」发起源→目标合并</span>
+    <button class="btn sm ghost" onclick="closeBranchDiffDrawer()" data-page-node-id="t1hqtZRs6NOP03a2mJtf0T">✕ 关闭</button>
+  </div>
+  <div class="d-body" data-page-node-id="hq3Ugjea1x5IjYz5f5wGzV">
+    <div style="display:flex;gap:8px;padding:0 0 8px;border-bottom:1px solid var(--line);margin-bottom:4px;" data-page-node-id="OBbytI6rDdDwelGGDNtOb0">
+      <span id="bd-tab-list" style="cursor:pointer;font-size:12px;padding:6px 14px;background:var(--blue-l);color:var(--blue-d);font-weight:600;border-radius:6px 6px 0 0;" onclick="bdTab('list')" data-page-node-id="qULmJXyAsAs7GYEYZ13CCu">📋 差异清单</span>
+      <span id="bd-tab-graph" style="cursor:pointer;font-size:12px;padding:6px 14px;border-radius:6px 6px 0 0;" onclick="bdTab('graph')" data-page-node-id="G3IQockEZUMcpFJsfs6BBS">🕸 叠加图谱</span>
+      <span style="font-size:11px;color:var(--mut);align-self:center;" data-page-node-id="LHiIvqFEtPvBnsZFdoqgiv">图谱视图：变更节点着色，点节点看 base/head 详情</span>
+    </div>
+    <div id="bd-graph-pane" style="display:none;" data-page-node-id="QCelUFxcAXRXWT7k93zQBs">
+      <div id="bd-graph-legend" style="display:flex;gap:10px;flex-wrap:wrap;padding:6px 2px;font-size:11.5px;color:var(--mut);align-items:center;" data-page-node-id="Ut1SxdTDNMF9TwgKe3CdED"></div>
+      <div id="bd-graph-svg" style="overflow:auto;max-height:460px;border:1px solid var(--line);border-radius:8px;background:#fff;" data-page-node-id="o51E2qqI5TbUWXk8NMmtKX"></div>
+      <div id="bd-graph-detail" style="padding:8px 2px;" data-page-node-id="dPNB7dKBF9oFYsVvOQk2B9"></div>
+    </div>
+    <div id="bd-summary" data-page-node-id="CSy87edhEJS3FW12X5u2qG"></div>
+    <div id="bd-filter" data-page-node-id="crVKQCXDkbyhEZL9w8BY1K"></div>
+    <div id="bd-body" data-page-node-id="HFAZ8IlAitwv4V599GxEjL"></div>
+  </div>
+</div>
+<!-- 右侧大抽屉：合并对比分析（diff 差异 + 冲突检测结果 + 解决操作，可交互） -->
+<div class="drawer-mask" id="mrg-mask" onclick="closeMergeDiffDrawer()" data-page-node-id="qkOrtzq8St4B7Zb7y7yiDI"></div>
+<div class="drawer" id="mrg-drawer" data-page-node-id="Gl9aOujUPy4BKy5dqUzXHe">
+  <div class="d-head" data-page-node-id="v7FDZnZjJwSBXkWCOeU7IO">
+    <h3 data-page-node-id="T8JxnxlVbQGnqzE4CP437G">🔀 合并对比分析</h3>
+    <span id="mrg-title" style="font-size:12px;color:var(--mut);" data-page-node-id="vQt3RWj8cT1mWURW6JxoIY"></span>
+    <span style="flex:1" data-page-node-id="UWCBcXKJKfOsga3AQuDvqi"></span>
+    <button class="btn sm ghost" onclick="closeMergeDiffDrawer()" data-page-node-id="BffcGf371eHmvIEtqZm2ZF">✕ 关闭</button>
+  </div>
+  <div id="mrg-progress" data-page-node-id="LGFqSGF7FV7nSYbJsW4GNr" style="padding:8px 18px;border-bottom:1px solid var(--line);background:#fafaf7;"></div>
+  <div class="d-body" id="mrg-main" data-page-node-id="BbwD1Ul4vvJJ1CUPhISsgK" style="display:flex;flex-direction:row;padding:0;overflow:hidden;">
+    <div id="mrg-body" data-page-node-id="wBfHq9J2uBWCXKrOK94W1c" style="width:210px;min-width:210px;border-right:1px solid var(--line);overflow-y:auto;"></div>
+    <div id="mrg-field" data-page-node-id="JkVOpDjbA83Vv3ZHqfkkXE" style="flex:1;min-width:0;overflow-y:auto;padding:12px 16px;"><div style="padding:18px;color:var(--mut);text-align:center;">选择左侧差异实体查看字段级详情</div></div>
+  </div>
+  <div style="padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="8iFe1FdOEBFlKHSmyCxCcs">
+    <button class="btn grn" id="mrg-approve" onclick="resolveMergeFromDrawer('approve')" data-page-node-id="2ApldcH4FhEwRW4rM2JEtD">✅ 通过合并</button>
+    <button class="btn red" id="mrg-reject" onclick="resolveMergeFromDrawer('reject')" data-page-node-id="Nta6K4hVP6uzrwgxYfLDqJ">❌ 驳回</button>
+    <button class="btn red" id="mrg-rollback" style="display:none;" onclick="rollbackMergeRequest(mrgMrId)" data-page-node-id="8QeZIfMjbviC6IAZvyezHI">↩ 回滚</button>
+    <span style="flex:1" data-page-node-id="FqzDvBYrudpGrvuMK8cgTF"></span>
+    <span id="mrg-action-note" style="font-size:11.5px;color:var(--mut);" data-page-node-id="u0E703quUkMCpA0jqL09HN"></span>
+  </div>
+</div>
+<!-- 右侧大抽屉：AI 建模入库向导（候选清单/勾选/放弃，风格与 .drawer 一致，替代居中 #lbx 卡片） -->
+<div class="drawer-mask" id="import-mask" onclick="closeSysmlImportDrawer()" data-page-node-id="AzXafFpvBh5bng86z3J0Bn"></div>
+<div class="drawer import-drawer" id="import-drawer" data-page-node-id="zitIe4McluWrTAVbJRjVpl">
+  <div class="d-head" data-page-node-id="5LKLFtPrNTL8k0R5lV2Lhl">
+    <h3 data-page-node-id="Gj57m26X5Ug481ESpPCgeC">💾 AI 建模入库向导</h3>
+    <span id="import-sub" style="font-size:12px;color:var(--mut);" data-page-node-id="bG03uVVSiy5jxNfjfMh8xp"></span>
+    <span style="flex:1" data-page-node-id="BB8WixaK21G8uytnk4Qb9f"></span>
+    <button class="btn sm ghost" onclick="closeSysmlImportDrawer()" data-page-node-id="1G6GhadGtYrUCyOpHWpAe7">✕ 关闭</button>
+  </div>
+  <div class="d-body" id="import-drawer-body" data-page-node-id="rHQrtICSoMKAzCzmCeiMMA"></div>
+  <div style="padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center;justify-content:flex-end;" data-page-node-id="FPtqujoKiOZpaLg0EbxGdf">
+    <button class="btn ghost" id="si-cancel" data-page-node-id="pwhLvjhGGjevFBnFSkVFsh">取消</button>
+    <button class="btn ghost" id="si-discard" title="删除已生成候选，可重新生成" data-page-node-id="vy8C7ROMa2TJFEdZ3gJDyK">放弃候选</button>
+    <button class="btn grn" id="si-ok" data-page-node-id="poc7oQssZEK57Y0PDz182M">✓ 确认入库</button>
+  </div>
+</div>
+<!-- v0 老 toast 占位（#toast）已废弃，统一由 #toast-root 渲染（v6.1） -->
+
+<!-- 模块化入口：按依赖顺序加载（全局作用域，勿改为 type=module） -->
+    <script src="/static/js/mods/01-core.js"></script>
+    <script src="/static/js/mods/02-shell.js"></script>
+    <script src="/static/js/mods/03-chat.js"></script>
+    <script src="/static/js/mods/04-artifacts.js"></script>
+    <script src="/static/js/mods/05-markdown.js"></script>
+    <script src="/static/js/mods/06-cards.js"></script>
+    <script src="/static/js/mods/07-norm.js"></script>
+    <script src="/static/js/mods/08-sysmlview.js"></script>
+    <script src="/static/js/mods/09-impact.js"></script>
+    <script src="/static/js/mods/10-chatinput.js"></script>
+    <script src="/static/js/mods/11-pipeline.js"></script>
+    <script src="/static/js/mods/12-chatsend.js"></script>
+    <script src="/static/js/mods/13-reports.js"></script>
+    <script src="/static/js/mods/14-sysml.js"></script>
+    <script src="/static/js/mods/15-kb.js"></script>
+    <script src="/static/js/mods/16-review.js"></script>
+    <script src="/static/js/mods/17-v2g.js"></script>
+    <script src="/static/js/mods/18-glossary.js"></script>
+    <script src="/static/js/mods/19-governance.js"></script>
+    <script src="/static/js/mods/20-docs.js"></script>
+    <script src="/static/js/mods/21-ontology.js"></script>
+    <script src="/static/js/mods/22-ontgraph.js"></script>
+    <script src="/static/js/mods/23-ontform.js"></script>
+    <script src="/static/js/mods/24-graph.js"></script>
+    <script src="/static/js/mods/25-graphview.js"></script>
+    <script src="/static/js/mods/26-grapheditor.js"></script>
+    <script src="/static/js/mods/27-branch.js"></script>
+    <script src="/static/js/mods/28-studio.js"></script>
+    <script src="/static/js/mods/29-flow.js"></script>
+    <script src="/static/js/mods/30-agents.js"></script>
+    <script src="/static/js/mods/31-admin.js"></script>
+    <script src="/static/js/mods/32-approval.js"></script>
+    <script src="/static/js/mods/33-search.js"></script>
+    <script src="/static/js/mods/34-graphtabs.js"></script>
+    <script src="/static/js/mods/35-ctxconfig.js"></script>
+    <script src="/static/js/mods/36-capability.js"></script>
+<div id="gnav-tip" data-page-node-id="0BjF8bZHUY5ifs1giLFsmS"></div>
+<div id="task-tip" data-page-node-id="dgEiAW2wHrbx1DoUK7cL0O"></div>
+
+<!-- ===== P0/P1: 全局 UI 容器（toast + 致命错误浮层） — 2026-09-06 ===== -->
+<div id="toast-root" aria-live="polite" aria-atomic="true" data-page-node-id="9WnUmfK0syUcNuMQgnAhL0"></div>
+<!-- 内联 SVG 图标 sprite（v6.1：让 <use href="#ic-X"/> 直接可用，零额外请求） -->
+<div id="svg-sprite" style="display:none;" aria-hidden="true" data-page-node-id="KRQryfUeGeUBBthKaO9NPJ"></div>
+<script>
+// 把 /static/icons.svg 的内容 fetch 进来内联（一次性，比图标字体轻、比 <img> 灵活）
+fetch('/static/icons.svg').then(r=>r.text()).then(html=>{
+  document.getElementById('svg-sprite').innerHTML = html;
+}).catch(()=>{ /* 静默失败，回落到 emoji */ });
+</script>
+<div id="err-overlay" data-page-node-id="riNzZEjlD8XynbNOrSgBH4">
+  <div class="box" data-page-node-id="CTrNohGC0CKDY3CtWHuAzr">
+    <h3 data-page-node-id="TqYiADBlubdy0W5JOUo1lR"><span class="ti" data-page-node-id="ebcJ11wbg1rfvViwuJRoDm">⚠</span><span id="eo-title" data-page-node-id="S4jP5nhNsU9iQJ7xCvoqa7">系统异常</span></h3>
+    <div id="eo-body" style="font-size:13px;color:var(--color-text-muted);" data-page-node-id="80flU7ipnIrg8F2ogG1lGa"></div>
+    <pre id="eo-stack" style="display:none;" data-page-node-id="3Kub6zzCiq6oIUBRkUooKn"></pre>
+    <div class="ops" data-page-node-id="YnZsmqztEOoLrGuYExZMkr">
+      <button class="eo-close" onclick="document.getElementById('err-overlay').classList.remove('on')" data-page-node-id="x0EnuGaXVoH9IxE7JyqBAp">关闭</button>
+      <button class="eo-reload" onclick="location.reload()" data-page-node-id="FQ2UX50wQMRAn0CHFbTfPZ">重新加载</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ──────────────────────────────────────────────────────────────────
+// v6.1 全局 UI 服务：toast / 错误浮层 / 全局 error 兜底（2026-09-06）
+// 设计：所有提示走 toast()，捕获的非预期异常走 errOverlay()，
+//      避免后端 bug 或网络异常让用户面对空白/原始报错。
+// ──────────────────────────────────────────────────────────────────
+(function(){
+  // ── toast()：轻量提示，type: info | success | warn | error ──
+  const root = document.getElementById('toast-root');
+  // P1-4：图标用 SVG sprite（fetch 内联进 #svg-sprite 后可用）；emoji 字符作为 fallback
+  function _icon(name, fallback){
+    return '<svg class="toast-ic" width="16" height="16" aria-hidden="true" style="flex:none;color:currentColor;"><use href="#ic-'+name+'"/></svg>' + (fallback? '<span class="ti-fb" style="display:none;">'+fallback+'</span>' : '');
+  }
+  const ICONS = {
+    info:   {n:'info',   fb:'ℹ'},
+    success:{n:'success',fb:'✓'},
+    warn:   {n:'warn',   fb:'⚠'},
+    error:  {n:'error',  fb:'✕'},
+  };
+  function _show(type, msg, opts){
+    opts = opts || {};
+    if(!msg) return;
+    const ic = ICONS[type] || ICONS.info;
+    const t = document.createElement('div');
+    t.className = 'toast ' + (type||'info');
+    t.setAttribute('role','status');
+    t.innerHTML =
+      _icon(ic.n, ic.fb) +
+      '<span class="tc"></span>' +
+      '<button class="tx" aria-label="关闭"><svg width="14" height="14" style="display:block;color:currentColor;"><use href="#ic-close"/></svg></button>';
+    t.querySelector('.tc').textContent = msg;
+    root.appendChild(t);
+    const close = ()=>{ t.classList.add('toast-out'); setTimeout(()=>t.remove(),220); };
+    t.querySelector('.tx').onclick = close;
+    const ttl = opts.ttl == null ? (type==='error'? 5000 : 3000) : opts.ttl;
+    if(ttl>0) setTimeout(close, ttl);
+    return close;
+  }
+  // 2026-09-07 P0 修复：此处原为「普通对象」直接赋值给 window.toast，
+  // 覆盖了主脚本里的 `function toast(msg, ms)`，导致全站 700+ 处 toast('...') 调用
+  // 抛 TypeError: toast is not a function —— 保存类操作走 catch 后再抛，用户侧完全无反馈，
+  // 表现为「点击保存按钮无效」（面板不关、数据不刷新、无提示）。
+  // 现改为「可直接调用的函数 + 挂载方法」混合体，两种调用形式都兼容：
+  //   toast('已保存')              旧式（第二参可为毫秒 ttl 或 opts 对象）
+  //   toast.success('已保存')       新式
+  const _toast = function(msg, ms){
+    if(ms == null) return _show('info', msg);
+    if(typeof ms === 'number') return _show('info', msg, {ttl: ms});
+    return _show('info', msg, ms);
+  };
+  window.toast = Object.assign(_toast, {
+    show:(m,o)=>_show('info',m,o),
+    info:(m,o)=>_show('info',m,o),
+    success:(m,o)=>_show('success',m,o),
+    warn:(m,o)=>_show('warn',m,o),
+    error:(m,o)=>_show('error',m,o),
+  });
+
+  // ── errOverlay()：致命错误浮层（兜底，比 toast 重） ──
+  window.errOverlay = function(title, body, stack){
+    const ov = document.getElementById('err-overlay');
+    if(!ov) return;
+    if(title) document.getElementById('eo-title').textContent = title;
+    if(body != null) document.getElementById('eo-body').textContent = body;
+    const st = document.getElementById('eo-stack');
+    if(stack){ st.textContent = stack; st.style.display='block'; } else { st.style.display='none'; }
+    ov.classList.add('on');
+  };
+
+  // ── 全局未捕获错误兜底 —— 防止后端 bug 让用户面对空白 ──
+  window.addEventListener('error', function(e){
+    if(!e || !e.error) return;
+    const msg = e.message || (e.error && e.error.message) || '未知异常';
+    try { _show('error', '运行异常: ' + msg, { ttl: 6000 }); } catch(_){}
+    // 致命（脚本加载失败）显示重载浮层
+    if(/load|fetch|script/i.test(msg) && !window.__skippedFatal){
+      window.__skippedFatal = true;
+      setTimeout(()=>errOverlay('脚本资源异常', msg, e.error && e.error.stack || ''), 100);
+    }
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    const r = e.reason; const msg = (r && (r.message||r.toString())) || '操作失败';
+    try { _show('error', '请求失败: ' + msg, { ttl: 6000 }); } catch(_){}
+    // 已知后端 bug：ChatIn.scope_ids（之前向用户备注过的）—— 静默不打扰
+    if(/scope_ids/.test(msg)) return;
+  });
+
+  // 给旧代码（如 alert / 直接调用）一个柔和桥接
+  window.__origAlert = window.alert;
+  window.alert = function(msg, type){
+    if(msg == null) return;
+    _show(type==='err'?'error':(type==='warn'?'warn':'info'), String(msg));
+  };
+})();
+</script>
+
+<!-- ===== P1-1: 全局快捷键 + 命令面板（v6.1，2026-09-06） ===== -->
+<div class="kbar" id="kbar" data-page-node-id="ygqDDulDGFVTxcKe2MUe4X">
+  <div class="box" data-page-node-id="NEgE8lM6InC9pn9siAVwc7">
+    <div class="kx" data-page-node-id="fD21mLEQgeFcPiiovoQnjS">
+      <span style="font-size:14px;color:var(--color-text-muted);" data-page-node-id="URhAXet1xuYP8N9jch5I8r">⌘</span>
+      <input id="kbar-input" placeholder="搜索导航 / 快捷指令 · 输入「帮助」查看所有快捷键" autocomplete="off" spellcheck="false" data-page-node-id="U1TDS6IZvXNLTlFyLshail">
+      <span class="kck" data-page-node-id="Hu6cMdXwTUYocFzIsFrRA7">Esc 关闭</span>
+    </div>
+    <div class="kb-list" id="kbar-list" data-page-node-id="CJ9wVUcPBBerbq7Uf5h8Nm">
+      <div class="kb-empty" data-page-node-id="1H0YjfOTKJdAlTZMmnLVjm">输入关键词搜索…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // ── 注册全局快捷键（不冲突：与已有监听器并存，仅在 capture 阶段不拦截） ──
+  // Cmd/Ctrl+K → 打开命令面板
+  // Cmd/Ctrl+Enter → 聊天聚焦时发送
+  // Esc → 关闭命令面板 + 顶层抽屉
+  const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
+  function _k(e, key){
+    const cmd = isMac ? e.metaKey : e.ctrlKey;
+    if(cmd && (e.key === 'k' || e.key === 'K') && !e.altKey && !e.shiftKey){
+      e.preventDefault();
+      openKbar();
+      return true;
+    }
+    if(cmd && e.key === 'Enter'){
+      const inp = document.getElementById('chat-input');
+      if(document.activeElement === inp){
+        e.preventDefault();
+        try { sendChat(); } catch(err){ console.warn('sendChat failed', err); }
+        return true;
+      }
+    }
+    if(e.key === 'Escape'){
+      if(_kbar && _kbar.classList.contains('on')){
+        closeKbar(); return true;
+      }
+    }
+    return false;
+  }
+  document.addEventListener('keydown', _k, true);
+
+  // ── 命令面板（KBar） ──
+  let _kbar, _klist, _kinput;
+  const _commands = [
+    {ic:'💬', label:'新建任务',    hint:'进入 AI 建模页并创建草稿',      act:()=>{ go('ai'); setTimeout(newTask, 200); }},
+    {ic:'💬', label:'AI 建模',     hint:'回到当前建模会话',              act:()=>go('ai')},
+    {ic:'🏭', label:'能力中心',    hint:'Agent / 技能 / 工具与 MCP',      act:()=>go('studio')},
+    {ic:'🧬', label:'本体模型',    hint:'知识中心子页 · Schema 定义',     act:()=>{ go('kb', 'kb-c'); }},
+    {ic:'📖', label:'术语词典',    hint:'词条 ↔ 本体类型归一映射',        act:()=>{ window._kbCtx='terms'; go('kb', 'kb-c'); }},
+    {ic:'🕸', label:'知识中心',    hint:'资料库 + 图谱工作区',            act:()=>{ go('kb', 'kb-e'); }},
+    {ic:'📄', label:'报告',        hint:'生成设计报告',                  act:()=>go('reports')},
+    {ic:'👥', label:'用户与权限',  hint:'管理员专属',                    act:()=>go('users')},
+    {ic:'✅', label:'审批管理',    hint:'管理员专属',                    act:()=>go('approval')},
+    {ic:'🛡', label:'审计日志',    hint:'管理员专属',                    act:()=>go('audit')},
+    {ic:'📈', label:'运行监控',    hint:'管理员专属',                    act:()=>go('ops')},
+    {ic:'🏠', label:'总览工作台',  hint:'回到首页 Dashboard',            act:()=>go('home')},
+    // 操作类（无目标页，但常用）
+    {ic:'🎯', label:'切换主题',    hint:'浅色 / 暗色（点账号菜单可精细控制）', act:()=>{
+      const cur = (()=>{ try{return localStorage.getItem('mbse_theme')||'auto';}catch(_){return 'light';} })();
+      const next = cur === 'dark' ? 'light' : 'dark';
+      window.setTheme(next);
+    }},
+    {ic:'⊞', label:'折叠左侧任务区', hint:'展开或收起任务分组', act:()=>{ if(typeof toggleTaskGroup === 'function') toggleTaskGroup(); }},
+    {ic:'⌘', label:'帮助（所有快捷键）', hint:'展示快捷键一览', act:()=>showShortcutsHelp()},
+    {ic:'⚡', label:'刷新页面',     hint:'重新加载当前页',                 act:()=>location.reload()},
+  ];
+  function _render(q){
+    q = (q||'').trim().toLowerCase();
+    const items = q ? _commands.filter(c =>
+      c.label.toLowerCase().includes(q) || (c.hint||'').toLowerCase().includes(q)
+    ) : _commands;
+    if(!items.length){
+      _klist.innerHTML = '<div class="kb-empty">没找到匹配的命令</div>';
+      return;
+    }
+    _klist.innerHTML = items.map((c,i)=>`
+      <div class="kb-item${i===0?' on':''}" data-i="${i}">
+        <span class="ki">${c.ic}</span>
+        <span class="kt"><b>${c.label}</b><span>${c.hint||''}</span></span>
+        <kbd class="kb-kc">↵</kbd>
+      </div>`).join('');
+    _klist._items = items;
+  }
+  function openKbar(){
+    if(!_kbar){
+      _kbar = document.getElementById('kbar');
+      _kinput = document.getElementById('kbar-input');
+      _klist = document.getElementById('kbar-list');
+      _kinput.addEventListener('input', e=>_render(e.target.value));
+      _kinput.addEventListener('keydown', e=>{
+        if(e.key === 'ArrowDown'){ e.preventDefault(); _move(1); }
+        else if(e.key === 'ArrowUp'){ e.preventDefault(); _move(-1); }
+        else if(e.key === 'Enter'){ e.preventDefault(); const sel = _klist.querySelector('.kb-item.on'); if(sel){ sel.click(); } }
+      });
+      _klist.addEventListener('click', e=>{
+        const it = e.target.closest('.kb-item'); if(!it) return;
+        const i = +it.dataset.i;
+        const cmd = _klist._items && _klist._items[i];
+        if(cmd && cmd.act){ cmd.act(); closeKbar(); }
+      });
+    }
+    _kbar.classList.add('on');
+    _kinput.value = '';
+    _render('');
+    setTimeout(()=>_kinput.focus(), 30);
+  }
+  function closeKbar(){ _kbar.classList.remove('on'); }
+  function _move(d){
+    const items = _klist.querySelectorAll('.kb-item');
+    if(!items.length) return;
+    let cur = [...items].findIndex(x=>x.classList.contains('on'));
+    if(cur < 0) cur = 0; else cur = (cur + d + items.length) % items.length;
+    items.forEach(x=>x.classList.remove('on'));
+    items[cur].classList.add('on');
+    items[cur].scrollIntoView({block:'nearest'});
+  }
+  window.openKbar = openKbar;
+  window.closeKbar = closeKbar;
+
+  // 命令面板外部点击关闭
+  document.getElementById('kbar').addEventListener('click', e=>{
+    if(e.target.id === 'kbar') closeKbar();
+  });
+
+  // 启动时恢复主题偏好（来自 P1-3 暗色主题）
+  try {
+    const th = localStorage.getItem('mbse_theme') || 'auto';
+    if(th === 'auto') applyAutoTheme();
+    else document.documentElement.dataset.theme = th;
+  } catch(_){}
+
+  // 帮助浮层
+  window.showShortcutsHelp = function(){
+    toast.info('快捷键：⌘/Ctrl+K 打开命令面板 · ⌘/Ctrl+Enter 在输入区发送 · Esc 关闭顶层面板', {ttl: 6000});
+  };
+
+// ──────────────────────────────────────────────────────────────
+// Q1：全局主题切换函数 setTheme('light' | 'dark' | 'auto')
+// ──────────────────────────────────────────────────────────────
+function applyAutoTheme(){
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.dataset.theme = prefersDark ? 'dark' : '';
+}
+function _refreshThemeToggle(){
+  // 同步顶栏 #theme-toggle 按钮图标（显示当前生效模式）
+  const cur = (()=>{ try { return localStorage.getItem('mbse_theme') || 'auto'; } catch(_) { return 'auto'; } })();
+  const icon = cur === 'dark' ? '🌙' : cur === 'light' ? '☀️' : '🖥️';
+  const btn = document.getElementById('theme-toggle');
+  if(btn) btn.textContent = icon;
+}
+window.cycleTheme = function(){
+  // 单击循环：auto -> light -> dark -> auto
+  const cur = (()=>{ try { return localStorage.getItem('mbse_theme') || 'auto'; } catch(_) { return 'auto'; } })();
+  const next = cur === 'auto' ? 'light' : cur === 'light' ? 'dark' : 'auto';
+  window.setTheme(next);
+  _refreshThemeToggle();
+};
+  window.setTheme = function(v){
+    try { localStorage.setItem('mbse_theme', v); } catch(_){}
+    if(v === 'dark')   document.documentElement.dataset.theme = 'dark';
+    else if(v === 'light') document.documentElement.dataset.theme = '';
+    else /* auto */    applyAutoTheme();
+    // 高亮当前选中（账号抽屉三按钮 + 顶栏按钮图标）
+    document.querySelectorAll('#um-theme-opts button').forEach(b=>{
+      b.classList.toggle('on', b.dataset.themeVal === v);
+      b.setAttribute('aria-pressed', b.dataset.themeVal === v ? 'true' : 'false');
+    });
+    try { _refreshThemeToggle(); } catch(_){}
+    toast.success(v==='dark' ? '已切换到暗色主题' : v==='light' ? '已切换到浅色主题' : '已切换到跟随系统');
+  };
+  // 启动时高亮并初始化顶栏图标
+  try {
+    const cur = localStorage.getItem('mbse_theme') || 'auto';
+    document.querySelectorAll('#um-theme-opts button').forEach(b=>{
+      b.classList.toggle('on', b.dataset.themeVal === cur);
+    });
+    _refreshThemeToggle();
+  } catch(_){}
+  // 监听系统主题变化（auto 模式自动响应）
+  try {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>{
+      try {
+        const stored = localStorage.getItem('mbse_theme');
+        if(stored === 'auto') applyAutoTheme();
+      } catch(_){}
+    });
+  } catch(_){}
+})();
+</script>
+</body>
+</html>

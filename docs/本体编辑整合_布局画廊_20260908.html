@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="XCzKFD408uJeGqCueRlzbc">
+<head data-page-node-id="mC298uyb167C5fQLHiNTy5">
+<meta charset="UTF-8" data-page-node-id="747nNBVnb6FJ4mjAq3Cx2m">
+<title>本体编辑整合 · 布局画廊</title>
+<style>
+  :root{--line:#d9d9d2;--blue:#185FA5;--blue-d:#0f4478;--blue-l:#e8f1fa;--mut:#8a8a80;--red:#c0392b;--grn:#2f855a;--amb:#b7791f;--bg:#fafaf7;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:#2b2b26;padding:28px 34px;}
+  h1{font-size:20px;margin-bottom:4px;}
+  .sub{font-size:12px;color:var(--mut);margin-bottom:22px;}
+  .gallery{display:flex;flex-direction:column;gap:26px;max-width:1180px;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.05);}
+  .card-h{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;}
+  .card-h b{font-size:13.5px;color:var(--blue-d);}
+  .card-h .tag{font-size:10.5px;padding:1px 8px;border-radius:10px;border:1px solid var(--line);color:var(--mut);}
+  .tag.bad{border-color:#eac6c0;color:var(--red);background:#fdf3f1;}
+  .tag.good{border-color:#bfd8c2;color:var(--grn);background:#f2f9f3;}
+  .card-b{padding:14px 16px;}
+  svg{display:block;width:100%;height:auto;}
+  .note{font-size:11.5px;color:var(--mut);line-height:1.8;margin-top:10px;}
+  .note b{color:var(--red);}
+  table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  th{background:var(--blue-l);color:var(--blue-d);text-align:left;padding:6px 10px;border:1px solid var(--line);font-size:11px;}
+  td{padding:5px 10px;border:1px solid var(--line);vertical-align:top;}
+  .y{color:var(--grn);font-weight:600;} .n{color:var(--red);font-weight:600;} .h{color:var(--amb);font-weight:600;}
+  code{background:#f3f3ee;border:1px solid var(--line);border-radius:4px;padding:0 5px;font-size:10.5px;font-family:Consolas,monospace;}
+</style>
+</head>
+<body data-page-node-id="J1D4E8pxJxZrUU7NJ5Ry4X">
+<h1 data-page-node-id="BdBOSujhGP8QBAZCY6tFEW">本体模型页 · 编辑整合布局画廊</h1>
+<div class="sub" data-page-node-id="OCg7OmmYEbW04ik7ZlnjmK">配套文档：docs/本体编辑整合优化方案_20260908.md · 2026-09-08 · 待拍板</div>
+
+<div class="gallery" data-page-node-id="o8TLJl6804kdpu9fc2DvsX">
+
+<!-- ① 现状布局 -->
+<div class="card" data-page-node-id="2mnLR9b7JaOpAJauz9FKJC">
+  <div class="card-h" data-page-node-id="Sv0N1qVKfHNM8olExJsoS2"><b data-page-node-id="P7zKQuC2oDE3vT7GeVT3rE">① 现状布局</b><span class="tag bad" data-page-node-id="FAQ0h3huCCv11DNoz4Pkej">两套编辑 · 字段分叉 · 滑窗保存丢数据</span></div>
+  <div class="card-b" data-page-node-id="C4HpCYoGzTmgHaXqARFKKY">
+  <svg viewBox="0 0 1100 430" xmlns="http://www.w3.org/2000/svg" data-page-node-id="DJCGu2lyuMcNFj50w1pg2U">
+    <defs data-page-node-id="HLGoTFV7iHuYzvtSfB69CZ"><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" data-page-node-id="k6xYUuSlKu1a3yvFCFdD6d"><path d="M0,0 L7,3 L0,6 z" fill="#c0392b" data-page-node-id="bOg5EpQ9BJv25pcnSqaL54"/></marker></defs>
+    <!-- 左栏 -->
+    <rect x="10" y="10" width="170" height="410" rx="8" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="Pwot5TBtr4mm3HdFCgVQ7j"/>
+    <text x="95" y="32" text-anchor="middle" font-size="12" fill="#0f4478" font-weight="600" data-page-node-id="SovQivvU15ZiKf6Ebms78t">左栏 · 类层次树</text>
+    <rect x="24" y="44" width="60" height="22" rx="11" fill="#fff" stroke="#185FA5" stroke-dasharray="3 2" data-page-node-id="lgY8VS9ya1wlJ0ScEpeuKl"/>
+    <text x="54" y="59" text-anchor="middle" font-size="11" fill="#185FA5" data-page-node-id="RPBYyDr36f0B8M9Y36FtEY">＋ 新增</text>
+    <rect x="24" y="80" width="142" height="24" rx="6" fill="#e8f1fa" stroke="#185FA5" data-page-node-id="RGgXsLvWcRu3JfOxJx0s3e"/>
+    <text x="95" y="96" text-anchor="middle" font-size="11.5" fill="#0f4478" font-weight="600" data-page-node-id="1e6lVVMg3pFNA895i65B7v">巡飞弹</text>
+    <rect x="24" y="112" width="142" height="24" rx="6" fill="#fff" stroke="#e4e4dc" data-page-node-id="cgDcFznyyLb8YqF4ueuoxz"/>
+    <text x="95" y="128" text-anchor="middle" font-size="11.5" fill="#55554e" data-page-node-id="evEp0yCEJ7DjXNNNyS5Pup">载荷</text>
+    <rect x="24" y="144" width="142" height="24" rx="6" fill="#fff" stroke="#e4e4dc" data-page-node-id="erTesKvoPSBxxP4uKVxumT"/>
+    <text x="95" y="160" text-anchor="middle" font-size="11.5" fill="#55554e" data-page-node-id="7F005kc6htR1G98X0xJfMH">数据链路</text>
+    <!-- 中栏 -->
+    <rect x="192" y="10" width="500" height="410" rx="8" fill="#fff" stroke="#d9d9d2" data-page-node-id="b3F9pFJ4TfVeAjSEhrg4Z2"/>
+    <rect x="204" y="22" width="230" height="24" rx="6" fill="#e8f1fa" data-page-node-id="qhG6TJvCPJ4bHHY3p2OsTC"/>
+    <text x="319" y="38" text-anchor="middle" font-size="11" fill="#0f4478" data-page-node-id="boGnOPK2HsPDgNnGrHgQJW">📝 编辑 │ 🕸 图谱 │ OWL │ 📜 历史</text>
+    <text x="216" y="76" font-size="16" fill="#2b2b26" font-weight="600" data-page-node-id="OmX1yBYUwUS0lL6rcMDoM1">巡飞弹</text>
+    <text x="278" y="76" font-size="10.5" fill="#8a8a80" data-page-node-id="GeQd1gAcx21sVlMitEPUqT">owl:Class</text>
+    <rect x="446" y="60" width="86" height="22" rx="6" fill="#fff" stroke="#c0392b" stroke-dasharray="3 2" data-page-node-id="5gXCwqWfWI2UEiyOPdzhxZ"/>
+    <text x="489" y="75" text-anchor="middle" font-size="10.5" fill="#c0392b" data-page-node-id="I1sByDYt9uj0zixELKvQUx">✏️ 编辑 →</text>
+    <text x="216" y="106" font-size="10.5" fill="#8a8a80" data-page-node-id="7BkDri6Rag82e3eIkF7X71">IRI: http://…#巡飞弹</text>
+    <line x1="204" y1="120" x2="680" y2="120" stroke="#ececdf" data-page-node-id="6qtnYmrVQCV9jxzujksIEy"/>
+    <text x="216" y="142" font-size="11" fill="#8a8a80" data-page-node-id="BuHUkEJKzhkfrZEkPqeGLz">等价类 Equivalent To</text>
+    <rect x="216" y="150" width="120" height="20" rx="10" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="liXYxB3CLi2IEW6B9672VW"/><text x="276" y="164" text-anchor="middle" font-size="10.5" fill="#55554e" data-page-node-id="NoaMIei4cEk2N03Fs1Eqae">飞行器 some 自推进</text>
+    <text x="216" y="196" font-size="11" fill="#8a8a80" data-page-node-id="rFro2hjwgPVfkUewbky1NQ">子类于 Subclass Of</text>
+    <rect x="216" y="204" width="70" height="20" rx="10" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="crlNoswvBLHkMJnCKkqyyQ"/><text x="251" y="218" text-anchor="middle" font-size="10.5" fill="#55554e" data-page-node-id="AN9hSJ63vi8OvGA3fNZcCW">飞行器</text>
+    <text x="216" y="250" font-size="11" fill="#8a8a80" data-page-node-id="yAoB6U4XtRtgeD7GXBSE3f">属性表（寄生属性 · 5 项）</text>
+    <rect x="350" y="236" width="86" height="20" rx="6" fill="#fff" stroke="#c0392b" stroke-dasharray="3 2" data-page-node-id="FFMRw5sl1Bnc1egQXg6J6E"/>
+    <text x="393" y="250" text-anchor="middle" font-size="10.5" fill="#c0392b" data-page-node-id="ywEVF24XFY0NcGFruK7ok6">✏️ 属性表 →</text>
+    <text x="216" y="286" font-size="11" fill="#2f855a" data-page-node-id="kuJMifm2iY5U5z4UIVobe3">✓ 即时写回（单字段 PUT）</text>
+    <text x="216" y="306" font-size="10.5" fill="#8a8a80" data-page-node-id="qZNdCgMXugsC5BBJ9derlo">等价类 / 公理 / 父类 / 互斥 —— chips 内联编辑</text>
+    <text x="216" y="330" font-size="10.5" fill="#b7791f" data-page-node-id="H1GtwCg5PrRfA0JgynVkS4">✗ 名称/描述/生命周期/抽象/单位 在此不可编辑</text>
+    <!-- 滑窗 -->
+    <rect x="716" y="10" width="374" height="410" rx="8" fill="#fff" stroke="#c0392b" stroke-dasharray="5 3" stroke-width="1.5" data-page-node-id="LVjQFI3EPHiHMDGA1eUCNU"/>
+    <text x="903" y="34" text-anchor="middle" font-size="12.5" fill="#c0392b" font-weight="600" data-page-node-id="FYGCxi9KsTcKKizMD5sJh3">右侧滑窗表单（另一套字段 · 整单保存）</text>
+    <line x1="730" y1="46" x2="1076" y2="46" stroke="#f0d9d5" data-page-node-id="8Simx8danIO6CWJao078Jf"/>
+    <g font-size="11" fill="#55554e" data-page-node-id="bWLe3u3BFIoRIjF2hAiHoe">
+      <text x="736" y="70" data-page-node-id="vATkZLuUlVhsboSvuFphhG">▸ 名称 ▏IRI ▏类型种类 ▏描述</text>
+      <text x="736" y="96" data-page-node-id="R27yHA6QXHYQqE2cBlQ5QQ">▸ 父类型 ▏抽象☑ ▏互斥(多选) ▏生命周期</text>
+      <text x="736" y="122" data-page-node-id="uHInWiqH2GbtRY2mU6StaR">▸ 属性(绑定已有/新建 + 行内约束)</text>
+      <text x="736" y="148" data-page-node-id="1hSu3nPAyoCKxWOdhtc7Yk">▸ FROM/TO 多选 ▏特征 checkbox</text>
+      <text x="736" y="174" data-page-node-id="jIe8EAPxdAb3GpmEAeEIRN">▸ XSD 类型 ▏允许值 ▏适用类型 ▏单位量纲</text>
+      <text x="736" y="200" data-page-node-id="3ssuSGky2cIfgpB2JpenMB">▸ 外部映射 profile</text>
+    </g>
+    <rect x="736" y="216" width="330" height="64" rx="6" fill="#fdf3f1" stroke="#eac6c0" data-page-node-id="iV8vLqIeNBsFbbK9H6Kjzr"/>
+    <text x="748" y="236" font-size="11" fill="#c0392b" font-weight="600" data-page-node-id="KKbC8v4QxY0VesT91Hj39W">⚠ 保存即清空（已确认缺陷）</text>
+    <text x="748" y="254" font-size="10.5" fill="#c0392b" data-page-node-id="oLoG8ZEq5wOeHKVBmme0bZ">constraints 全新构建，不含 equivalent_to / axioms</text>
+    <text x="748" y="270" font-size="10.5" fill="#c0392b" data-page-node-id="WvxYUKxMSJiTBVw9AAOt7h">后端 PUT 整体替换 → 中栏数据静默丢失</text>
+    <path d="M536 71 C 610 71, 640 90, 710 110" fill="none" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ar)" data-page-node-id="gKhhRnTKmfqiixZ1dEH30Q"/>
+    <path d="M440 246 C 560 260, 630 200, 710 150" fill="none" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ar)" data-page-node-id="sI9qjv8GbO8ctetyGCS1qA"/>
+    <text x="600" y="330" font-size="11" fill="#8a8a80" data-page-node-id="qLin4XmJDYjvlg5P4N04FK">新增入口 4 处分散：「＋」/ 双击图谱 / Ctrl+拖线 / ✏️按钮 → 全部落到滑窗</text>
+  </svg>
+  <div class="note" data-page-node-id="ETJtMhsPmnYAIfSgQ49jqc">问题：同一类型对象存在 <b data-page-node-id="gCBuA2L6qQnHeCwFeWHGsq">两套编辑界面、两套字段集、两种保存机制</b>；高频字段被迫跳滑窗；滑窗整单替换造成 equivalent_to / axioms 静默清空。</div>
+  </div>
+</div>
+
+<!-- ② 目标布局 -->
+<div class="card" data-page-node-id="LWl17BjSWxoGmWBX04Ei3Y">
+  <div class="card-h" data-page-node-id="G92CYSFrEdZhLSQIEBZYZ2"><b data-page-node-id="3menOa77rYC3BvnESb7qod">② 目标布局 · 中栏唯一编辑面（对标 WebProtégé）</b><span class="tag good" data-page-node-id="gl9jqsg6bKpdTk0Lw04A2y">入口统一 · 字段唯一归属 · 全量即时写回</span></div>
+  <div class="card-b" data-page-node-id="QGhcGX7LbE4oKQOAN6jiLJ">
+  <svg viewBox="0 0 1100 430" xmlns="http://www.w3.org/2000/svg" data-page-node-id="6UjPHHlulvzZ4cD1I4lNHU">
+    <defs data-page-node-id="DJ1fyKFH9K2FHgDKjCbvVE"><marker id="ag" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" data-page-node-id="hIMP6OKDUS0PJbcHjeMuiJ"><path d="M0,0 L7,3 L0,6 z" fill="#2f855a" data-page-node-id="NNo334aRxg5Nw7owegjAqs"/></marker></defs>
+    <!-- 左栏 -->
+    <rect x="10" y="10" width="170" height="410" rx="8" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="FJd5jhYBfDUpc2xyKWZx0q"/>
+    <text x="95" y="32" text-anchor="middle" font-size="12" fill="#0f4478" font-weight="600" data-page-node-id="ipXsrBsPIA2z3VYFtMg3lB">左栏 · 类层次树</text>
+    <rect x="24" y="44" width="60" height="22" rx="11" fill="#e8f1fa" stroke="#185FA5" data-page-node-id="p1WUikkjYXgAnJzx4xU0sT"/>
+    <text x="54" y="59" text-anchor="middle" font-size="11" fill="#0f4478" font-weight="600" data-page-node-id="apmE66CgHW0IqCqugfF106">＋ 新增</text>
+    <!-- 迷你创建浮层 -->
+    <rect x="30" y="74" width="180" height="86" rx="8" fill="#fff" stroke="#185FA5" stroke-width="1.5" data-page-node-id="RWHWfnBziWwqYmpok0L3CG"/>
+    <text x="42" y="92" font-size="10.5" fill="#0f4478" font-weight="600" data-page-node-id="BC5b3BeAlYYZednRcGh3Qa">新建类型</text>
+    <rect x="42" y="100" width="156" height="20" rx="5" fill="#fff" stroke="#d9d9d2" data-page-node-id="K2mbpzDFMYOFAJNrXZGywV"/><text x="52" y="114" font-size="10.5" fill="#8a8a80" data-page-node-id="Ocd97aRjH1oF6IkX4fAmCP">名称…</text>
+    <rect x="42" y="126" width="156" height="20" rx="5" fill="#fff" stroke="#d9d9d2" data-page-node-id="Bi652AnxmL30G1VguFAGtv"/><text x="52" y="140" font-size="10.5" fill="#8a8a80" data-page-node-id="wnvGAG3Xslv9SXRxIx0jlS">种类（按维度预选）▾</text>
+    <path d="M62 66 C 60 70, 58 70, 58 74" fill="none" stroke="#2f855a" stroke-width="1.4" marker-end="url(#ag)" data-page-node-id="xkKM4rTqT1rdeuMz6Q42NX"/>
+    <rect x="24" y="176" width="142" height="24" rx="6" fill="#e8f1fa" stroke="#185FA5" data-page-node-id="EfP6GGiquWN2APYyNvTFK4"/>
+    <text x="95" y="192" text-anchor="middle" font-size="11.5" fill="#0f4478" font-weight="600" data-page-node-id="xgVcugjexdahe8F7nADZy1">新类型 ←自动选中</text>
+    <rect x="24" y="208" width="142" height="24" rx="6" fill="#fff" stroke="#e4e4dc" data-page-node-id="9lQ3LF0NizIMnLEiURDxL5"/><text x="95" y="224" text-anchor="middle" font-size="11.5" fill="#55554e" data-page-node-id="HakEyBf2XK2FoMf8rbhvtL">巡飞弹</text>
+    <text x="24" y="256" font-size="10.5" fill="#2f855a" data-page-node-id="mlKRHwQFwPWb8tzxOwPZaa">✓ 创建 = 2 字段 + 回车</text>
+    <text x="24" y="274" font-size="10.5" fill="#2f855a" data-page-node-id="KXHDjKkyu3P3AILaCIFDyI">✓ 焦点直接落中栏</text>
+    <text x="24" y="296" font-size="10" fill="#8a8a80" data-page-node-id="dBAsPAE88tu968iMOZEgKi">图谱：双击空白 / Ctrl+拖线</text>
+    <text x="24" y="312" font-size="10" fill="#8a8a80" data-page-node-id="xydQUCsyspSpA5dhyJlTJs">走同一迷你框（预填种类）</text>
+    <!-- 中栏 -->
+    <rect x="192" y="10" width="560" height="410" rx="8" fill="#fff" stroke="#185FA5" stroke-width="1.5" data-page-node-id="OmcIAte33QAn8u1che7s0J"/>
+    <rect x="204" y="22" width="230" height="24" rx="6" fill="#e8f1fa" data-page-node-id="pgm3vy1AbeJSx2AvBPkEGb"/>
+    <text x="319" y="38" text-anchor="middle" font-size="11" fill="#0f4478" data-page-node-id="CD6Rj5cvPTI5vHZEUipgae">📝 编辑 │ 🕸 图谱 │ OWL │ 📜 历史</text>
+    <text x="216" y="76" font-size="16" fill="#2b2b26" font-weight="600" data-page-node-id="nFhZThxBFHovfF53cxXA1X">巡飞弹</text>
+    <rect x="272" y="62" width="14" height="17" rx="3" fill="#e8f1fa" stroke="#185FA5" data-page-node-id="c0wmR5J0jQrrSCPAZ8lClw"/><text x="279" y="75" text-anchor="middle" font-size="10" fill="#185FA5" data-page-node-id="u2YNoYBNiaOj1zy28UmtIl">✏</text>
+    <rect x="296" y="61" width="66" height="18" rx="9" fill="#f2f9f3" stroke="#bfd8c2" data-page-node-id="JL6zMijZiIrGx3bOlRRx7l"/><text x="329" y="74" text-anchor="middle" font-size="9.5" fill="#2f855a" data-page-node-id="5tdTDFBiS48bKrYczoxYRw">released ⇄</text>
+    <text x="216" y="102" font-size="10.5" fill="#8a8a80" data-page-node-id="sPMa0uM5K9G8CliBAc4d2x">IRI: http://…#巡飞弹 ⧉ 🔗</text>
+    <line x1="204" y1="116" x2="740" y2="116" stroke="#ececdf" data-page-node-id="73cvYCQT1Q6UOVfR1RmDZT"/>
+    <g font-size="11" fill="#8a8a80" data-page-node-id="ngLwcLrumuJhcwoKmFIbFS">
+      <text x="216" y="140" data-page-node-id="4XYIBuQOI6Vf2VMTjHWNMx">② Equivalent To · 等价类 + 公理</text>
+      <text x="216" y="196" data-page-node-id="lNKYaBzC5XZOAx7PAfvuJm">③ Subclass Of</text>
+      <text x="216" y="252" data-page-node-id="afFWBsLx8h08ZBZMLWPhpx">④ 属性引用（必填 / 唯一 / 白名单 行内✏）</text>
+      <text x="216" y="322" data-page-node-id="WFMNBYeY2UXCVRae92omBR">⑤ Disjoint With</text>
+      <text x="216" y="378" data-page-node-id="5iH47b2HC19QTtXUPHa06F">⑥ Domain · Range · 特征（关系态同构）</text>
+    </g>
+    <rect x="216" y="148" width="150" height="20" rx="10" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="FSgxWkw8H5p0LWONVTc5Ih"/><text x="291" y="162" text-anchor="middle" font-size="10.5" fill="#55554e" data-page-node-id="zyU751ZLVMzlwB3igor8ix">飞行器 some 自推进</text>
+    <rect x="374" y="148" width="110" height="20" rx="10" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="7zhtZNfO66IxBD7YsoRnOK"/><text x="429" y="162" text-anchor="middle" font-size="10.5" fill="#55554e" data-page-node-id="Pjjlb7ekD7XGnog6903PM8">毁伤半径 some 8m</text>
+    <text x="492" y="162" font-size="11" fill="#185FA5" data-page-node-id="kbzOnJBVsUMhbouG7h0mZB">＋ 公理</text>
+    <rect x="216" y="204" width="70" height="20" rx="10" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="geJjj2eeGdd3DYwGqYJWVS"/><text x="251" y="218" text-anchor="middle" font-size="10.5" fill="#55554e" data-page-node-id="ST6fkk8Lg8IrJlQeiXCRkl">飞行器</text>
+    <rect x="294" y="204" width="80" height="20" rx="10" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="nC6VX36FyCh1yFFywm2ehy"/><text x="334" y="218" text-anchor="middle" font-size="10.5" fill="#55554e" data-page-node-id="HyGpJisdwrpYOhdKmIgEkg">抽象类型 ◻</text>
+    <rect x="216" y="260" width="356" height="22" rx="5" fill="#fafaf7" stroke="#e4e4dc" data-page-node-id="ZCXmVM1tJRoHIaeElSK9k1"/>
+    <text x="226" y="275" font-size="10.5" fill="#55554e" data-page-node-id="JNWicll7KJlAYYfb7vWFQa">型号 (xsd:string) ☑必填 ☑唯一 │ 频段 (enum) [V,Ka,Ku]✏</text>
+    <text x="216" y="300" font-size="10.5" fill="#2f855a" data-page-node-id="x3iAYW7ZgCFSjAyUulZka5">↑ 行内勾选即写回（原滑窗能力平移）</text>
+    <rect x="216" y="330" width="90" height="20" rx="10" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="s8GvWo0K57Ma1J7G7AgoTt"/><text x="261" y="344" text-anchor="middle" font-size="10.5" fill="#55554e" data-page-node-id="oWZLCnq9aetVY77AeIBSSx">系统元素</text>
+    <text x="314" y="344" font-size="11" fill="#185FA5" data-page-node-id="UQNU9NfQBFSfoHGQflHvhM">＋</text>
+    <text x="216" y="398" font-size="10.5" fill="#2f855a" data-page-node-id="sHBikQh31BcURc85ynWwPU">✓ 全字段唯一归属中栏 · 即时写回 · 无"复杂编辑"按钮</text>
+    <!-- 右栏 -->
+    <rect x="764" y="10" width="326" height="410" rx="8" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="qSp9qQGR4Qn5A3nHMU2cMC"/>
+    <text x="927" y="34" text-anchor="middle" font-size="12" fill="#0f4478" font-weight="600" data-page-node-id="ZdvRKeNvwmM69BmNj0Vgtr">右栏 · Annotations · Usage</text>
+    <line x1="778" y1="46" x2="1076" y2="46" stroke="#e4e4dc" data-page-node-id="FIv6XXHcWHqjRJjoeWplnc"/>
+    <g font-size="11" fill="#55554e" data-page-node-id="rN1O7CZC1Bd6U0bhrI2EpB">
+      <text x="780" y="72" data-page-node-id="natPNLPXKUjcab4cHljOve">注释 Annotations</text>
+      <text x="780" y="92" font-size="10.5" fill="#8a8a80" data-page-node-id="JPBo1DvWNe9lIbU3yGIPO3">描述 ✏（textarea 失焦即存）</text>
+      <text x="780" y="114" font-size="10.5" fill="#8a8a80" data-page-node-id="czE21QzIZMBhRCmgv4ZZLb">外部映射 profile ✏ src/ref</text>
+      <text x="780" y="146" data-page-node-id="OGtnMJQp3NsDY9fxTa5H6Z">引用 Usage · 关系引用</text>
+      <text x="780" y="168" font-size="10.5" fill="#8a8a80" data-page-node-id="DVsD3cC6Pinb0iOsTwpoTq">作为定义域 / 值域 chips</text>
+      <text x="780" y="200" data-page-node-id="3z8QQ5DUgTa00hNwcbk0CA">实例 Instances · 别名 Glossary</text>
+      <text x="780" y="230" font-size="10.5" fill="#2f855a" data-page-node-id="tiEo7tmJ84guhXKM5HRtkV">原则：低频/注释性字段归右栏</text>
+      <text x="780" y="250" font-size="10.5" fill="#2f855a" data-page-node-id="4ApANzfqqJz3OVOrPHpER3">每个字段全局仅一个编辑位置</text>
+    </g>
+    <rect x="778" y="276" width="298" height="58" rx="6" fill="#fdf3f1" stroke="#eac6c0" data-page-node-id="CpgBRGS66jICLUI5kLgNGu"/>
+    <text x="790" y="296" font-size="10.5" fill="#c0392b" font-weight="600" data-page-node-id="bBLivF4ubvRjtssItDJR9p">滑窗退役</text>
+    <text x="790" y="314" font-size="10" fill="#c0392b" data-page-node-id="QtevzWwHluhN0wr6XVDqKf">保留一个版本周期降级开关（?ont-slide=1）</text>
+    <text x="790" y="328" font-size="10" fill="#c0392b" data-page-node-id="U1qoO43kSElTqbKn2eqTVQ">稳定后删除 FORMS.onttype / openOntSlide</text>
+  </svg>
+  <div class="note" data-page-node-id="FPq9PDwfIBnDqZzDvPBSHl">新增 = 「＋」→ 两字段迷你框 → 创建并选中 → 焦点落中栏补全；编辑 = 中栏七分区即时写回；滑窗只保留降级开关。</div>
+  </div>
+</div>
+
+<!-- ③ 字段归属矩阵 -->
+<div class="card" data-page-node-id="V7QiYcaxZ3YdIBkBGRBH6T">
+  <div class="card-h" data-page-node-id="9ZtXtxdCUaSSRrrj4mOt4U"><b data-page-node-id="25gvrg0KzzZyeA4izPuKBE">③ 字段归属矩阵（整合后唯一位置）</b></div>
+  <div class="card-b" data-page-node-id="VtDqG3PFDDamNN639joCHE">
+  <table data-page-node-id="MdIgvTDdhOZOQuNB4EExk0">
+    <tr data-page-node-id="GqkhMEmkLwnFC7dDhokZJX"><th data-page-node-id="9m8h4hPNnjQRDYp9LEiZH0">字段</th><th data-page-node-id="xam4z8f5NugIkWVBbpztwd">现状中栏</th><th data-page-node-id="miJqYsBRHWrXIkyrY2wPlC">现状滑窗</th><th data-page-node-id="DEcRUAvr3q2JBeargaSv7Z">整合后</th><th data-page-node-id="BLVvGHlqgWoHcwEHkZSXvq">说明</th></tr>
+    <tr data-page-node-id="xVor85vfmEtpc6dTzcJ93a"><td data-page-node-id="hHWoPJ3IdXQgRWU8u3tXCs">名称 / IRI</td><td class="n" data-page-node-id="U8BhOhlFzHRRK9FT2vTdDd">只读</td><td class="y" data-page-node-id="KlszCu2eRGQv479NW7nGri">✏</td><td data-page-node-id="EFKTXw9dH0U4EinDqJjA6S"><b data-page-node-id="uZFGeP1wYhZIvSAMCEVZJm">中栏头部</b>（行内✏）</td><td data-page-node-id="TA7z0VnWpwEBgneBQvqQrf">改名触发词典迁移 confirm（复用 R3 逻辑）</td></tr>
+    <tr data-page-node-id="bynQBWm1eKmBHE2posQSpl"><td data-page-node-id="C3W6tCzJNK9iAHTqBugDvO">生命周期 status</td><td class="n" data-page-node-id="otMBFQU75HddafJr95lKCj">—</td><td class="y" data-page-node-id="GMN2LZPS9CKLAQFYF2T0SQ">✏</td><td data-page-node-id="P2OzKfvCEMGYE46bat1VRD"><b data-page-node-id="0smeBUUPEBda709PtvZ6PM">中栏头部 badge</b></td><td data-page-node-id="kGsAtqUUMl0ey2ZW5GZwQ7">点击循环 / 下拉（决策点 2）</td></tr>
+    <tr data-page-node-id="BkgGy8XGn3z4T7JtTj17U4"><td data-page-node-id="ijxAOkKGgHWAQ1paHJ1nAe">等价类 equivalent_to</td><td class="y" data-page-node-id="srHcIhgjA8nr3ZiVoDDREp">✏ chips</td><td class="n" data-page-node-id="FlxTe6qC0rd4jkQGbKuebE">缺失→丢失</td><td data-page-node-id="hojdw6ceY60GI9OVVKAcBa"><b data-page-node-id="EoUo7yWKAXvoIS4MNJmTwn">中栏 ②</b></td><td data-page-node-id="0fP6q1fRNAI1WEw9zt6z4B">滑窗保存清空缺陷随之消灭</td></tr>
+    <tr data-page-node-id="zbBEX9CrC1bR0QR0SXAFgC"><td data-page-node-id="LZBY9K8pN6U3MsAxq9NFty">一般类公理 axioms</td><td class="y" data-page-node-id="Dt8Tn4S5CzP0NwPjB8Dgza">✏ chips</td><td class="n" data-page-node-id="mlDSS1Vd7b36P5BGMtY9dK">缺失→丢失</td><td data-page-node-id="9f7jrHFSOsksWVjDYhXJfr"><b data-page-node-id="bbhNykoJBxEwdCwOftMT0l">中栏 ②</b></td><td data-page-node-id="ha4ikGa8GBsO7RGF0PHJ9V">同上</td></tr>
+    <tr data-page-node-id="fOIwIRx5roj5QIjpfiHx4E"><td data-page-node-id="Afka9gDnMJ9yfZTb1fwTaX">父类型 / 抽象</td><td class="h" data-page-node-id="isX5Cq0Xyt3avcyqHpoPEh">仅父类</td><td class="y" data-page-node-id="CMulpkh0ucRrmmFm2LAHVF">✏</td><td data-page-node-id="MIqWUTNVi0192PbUUHcfXm"><b data-page-node-id="MkDW819mFbC3elqDAHCmzq">中栏 ③</b></td><td data-page-node-id="GwOZtbOeVNk5ExvozwaZKz">抽象为 chip 开关</td></tr>
+    <tr data-page-node-id="DEiCYEIMeGgezACo6OnKZa"><td data-page-node-id="uiMNoDMpnOzLocrmQCZmcd">属性引用+约束 required/unique/allowed</td><td class="n" data-page-node-id="2jimQ4FOnq8lRq4yUb1STk">只读提示</td><td class="y" data-page-node-id="NZUwBEFfHkekwqCD1goxWZ">✏ 行内</td><td data-page-node-id="165mx5nozV7j8rAXBBqDcE"><b data-page-node-id="k6E4rkpwNnLIvUPvmvWaal">中栏 ④</b></td><td data-page-node-id="j49t2fD5Wp5dCvtjDqavBr">滑窗 ot-props-rows 能力平移</td></tr>
+    <tr data-page-node-id="peoHiAHCc34K4lZDaYi2ln"><td data-page-node-id="oeB9UPZKhawWFQzz02zX69">互斥 disjoint_with</td><td class="y" data-page-node-id="PHoVINY0pFSgYIMOYCqJdI">✏ chips</td><td class="h" data-page-node-id="tkFFIQGDMghgCecm3qsdbB">✏（两处可改）</td><td data-page-node-id="3B0nOTGSbIkxfDBid9iFw5"><b data-page-node-id="nfaEPFxbMohZ81zzcVxiHu">中栏 ⑤</b></td><td data-page-node-id="PKCNtbOw8aJBwT2xCy9Mz8">滑窗副本删除</td></tr>
+    <tr data-page-node-id="RMEYwTusxtZwNkxNZQojD2"><td data-page-node-id="CvWL1yu0xvd1EQXfxG9H5M">Domain / Range / characteristics</td><td class="y" data-page-node-id="7DFKk8rf3tQ1yjoHSo0ouQ">✏ chips</td><td class="h" data-page-node-id="l4vMS4RHxHZZ13FwpXSBXZ">✏（两处可改）</td><td data-page-node-id="yj1RANVrPh2UKdWLdULAHK"><b data-page-node-id="vdVtA64ZDhr3KIroW8CzXk">中栏 ⑥</b></td><td data-page-node-id="RUOUepJw7WIVHxPrh0rWIE">同上</td></tr>
+    <tr data-page-node-id="JRrA4c3suh9YM1ERQj0THX"><td data-page-node-id="phCu4eX1HF0pOjVGPg1gUS">XSD / 允许值 / 适用类型 / 单位量纲</td><td class="h" data-page-node-id="318gYShq16sXT4ZwhgzpXP">部分</td><td class="y" data-page-node-id="y9MRh2s3mgwTBKzs6uLIC5">✏</td><td data-page-node-id="m3Q3uE5f5kB2ZVX6H2Izpk"><b data-page-node-id="xu3kuxhFuWEkk607etplHe">中栏 ⑦</b></td><td data-page-node-id="ExiRn1WHnLGbtTtB3znzBG">补齐允许值与单位量纲 chips</td></tr>
+    <tr data-page-node-id="RRl6iR0u6c7O3PbV5w2fXK"><td data-page-node-id="2y7iIOtPIbIdmFcp5AFSW8">描述 description</td><td class="n" data-page-node-id="neAp9eGQmgF1MKlcY65fXB">右栏只读</td><td class="y" data-page-node-id="MLtw9x15ExLxEefkJzURJy">✏</td><td data-page-node-id="LBiVVEzch1okwQ6pARHm5H"><b data-page-node-id="z9HWjUESLars5pVitMiWbc">右栏 Annotations ✏</b></td><td data-page-node-id="lSAE6luJzNG3g9Vf9aChZ5">低频注释性字段</td></tr>
+    <tr data-page-node-id="pRL6AYJLq7lJSCqsP9BcZ4"><td data-page-node-id="9h5upgF6cDPWACqCJpaakq">profile_source / ref</td><td class="n" data-page-node-id="5Da2G6DzOERXYEm79GpS4F">—</td><td class="y" data-page-node-id="L25BV9HKKbDBbGHmI8IzTE">✏</td><td data-page-node-id="YKaKL5tQ3bA45AgYyrvX1P"><b data-page-node-id="VS4sNIV5FFZFX42XxU3ZnM">右栏 外部映射 ✏</b></td><td data-page-node-id="V0ApbbLllmb03fpUCLeUN6">低频注释性字段</td></tr>
+  </table>
+  </div>
+</div>
+
+<!-- ④ 交互流对比 -->
+<div class="card" data-page-node-id="LIBOJbajtyP5Om552hdjVb">
+  <div class="card-h" data-page-node-id="rDoAHpQnuVHeE5awCI2dd3"><b data-page-node-id="zpbM8Fa4ex3ONv31hQcjdo">④ 新增流程对比</b></div>
+  <div class="card-b" data-page-node-id="qhyKdMrDqsH42j9jlZPXA6">
+  <svg viewBox="0 0 1100 210" xmlns="http://www.w3.org/2000/svg" data-page-node-id="zoMl6AjqHtogOyIA5vmybz">
+    <defs data-page-node-id="TMipfIBs8ACN2zAVdHlIsp"><marker id="af" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" data-page-node-id="7hyhfpHx8hIyJgUAbPuxt8"><path d="M0,0 L7,3 L0,6 z" fill="#8a8a80" data-page-node-id="RFBDUARl8AZG5MC1MthDnp"/></marker><marker id="ag2" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" data-page-node-id="DPvgdSFB5XwKXFSEVpOsFM"><path d="M0,0 L7,3 L0,6 z" fill="#2f855a" data-page-node-id="uim2PkQftzkrC8K44Rd0x0"/></marker></defs>
+    <text x="10" y="24" font-size="12" fill="#c0392b" font-weight="600" data-page-node-id="1NdiUdmtRKKIlnGSq8o3Wi">现状（6 步 · 滑窗整单填报）</text>
+    <g font-size="11" fill="#55554e" data-page-node-id="DaemuIv6DqmhVqtDdet3Gg">
+      <rect x="10" y="38" width="150" height="30" rx="6" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="AgxX9WINgy7ofWZPdWRvcy"/><text x="85" y="57" text-anchor="middle" data-page-node-id="mV9FqCTi9FeKJ1khbIQlKT">点「＋」开滑窗</text>
+      <line x1="160" y1="53" x2="196" y2="53" stroke="#8a8a80" marker-end="url(#af)" data-page-node-id="9vDc85vBfhGQbNi7hBHxXB"/>
+      <rect x="200" y="38" width="150" height="30" rx="6" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="qlJKxQoayW3k0518tTT6Uj"/><text x="275" y="57" text-anchor="middle" data-page-node-id="cDzdajSNSnv6nzllkGBaIS">填名称/种类/描述…</text>
+      <line x1="350" y1="53" x2="386" y2="53" stroke="#8a8a80" marker-end="url(#af)" data-page-node-id="RuxCdBtP3goM97jcBr6Hfp"/>
+      <rect x="390" y="38" width="150" height="30" rx="6" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="cDgmw47bvKi0DKDNBhEqNj"/><text x="465" y="57" text-anchor="middle" data-page-node-id="kelhSsngtAwHiZTKeZmMQk">按种类勾选特征</text>
+      <line x1="540" y1="53" x2="576" y2="53" stroke="#8a8a80" marker-end="url(#af)" data-page-node-id="sp1LHFyEXIZ6cBMkkoyd86"/>
+      <rect x="580" y="38" width="150" height="30" rx="6" fill="#fafaf7" stroke="#d9d9d2" data-page-node-id="lIRaxKOJbhULzMqVCyw4t1"/><text x="655" y="57" text-anchor="middle" data-page-node-id="Reru0qu434S7Z5hgQsPi60">保存（整单 PUT）</text>
+      <line x1="730" y1="53" x2="766" y2="53" stroke="#c0392b" marker-end="url(#af)" data-page-node-id="jPYNt6vXSTKBABWsI3tyRc"/>
+      <rect x="770" y="38" width="170" height="30" rx="6" fill="#fdf3f1" stroke="#eac6c0" data-page-node-id="AQv2yTW6iGqlBjtqzU8XBF"/><text x="855" y="57" text-anchor="middle" fill="#c0392b" data-page-node-id="wqtg85Z9Wz1zZgg3HU2Oga">⚠ equivalent_to 清空</text>
+      <text x="10" y="95" font-size="10.5" fill="#8a8a80" data-page-node-id="BjD3pD5P6UW4o4kMsAnHYJ">后续补字段 → 再点「✏️ 编辑」重开滑窗 → 再整单保存（每次都有清空风险）</text>
+      <text x="10" y="140" font-size="12" fill="#2f855a" font-weight="600" data-page-node-id="CJ952BAXbLVjVSkAJTetxD">方案（3 步 · 即时写回）</text>
+      <rect x="10" y="154" width="170" height="30" rx="6" fill="#f2f9f3" stroke="#bfd8c2" data-page-node-id="ioyosDR61zFKCzct3AbXcG"/><text x="95" y="173" text-anchor="middle" data-page-node-id="mC3VZXHLl4xEozVeG97eND">「＋」→ 迷你框填名称</text>
+      <line x1="180" y1="169" x2="216" y2="169" stroke="#2f855a" marker-end="url(#ag2)" data-page-node-id="8n8NZrVQJhJ15UkYFqwTVR"/>
+      <rect x="220" y="154" width="170" height="30" rx="6" fill="#f2f9f3" stroke="#bfd8c2" data-page-node-id="TBhvUZ3K95d516P0d1Fde2"/><text x="305" y="173" text-anchor="middle" data-page-node-id="jNVepXUz9VsJsE7IXVqdyP">回车创建 · 自动选中</text>
+      <line x1="390" y1="169" x2="426" y2="169" stroke="#2f855a" marker-end="url(#ag2)" data-page-node-id="yc8mUfpwz2xC6nXDGMC8aV"/>
+      <rect x="430" y="154" width="240" height="30" rx="6" fill="#f2f9f3" stroke="#bfd8c2" data-page-node-id="BZRdE2VLuyRf6tWzd82wer"/><text x="550" y="173" text-anchor="middle" data-page-node-id="0tJ7NvvpLGBfHWjLAkktsg">中栏逐字段补全（随手即存）</text>
+      <text x="690" y="173" font-size="10.5" fill="#2f855a" data-page-node-id="no38Q9CCbmIvEN4RgX6Ogr">无整单替换 · 无丢数据 · 无二次入口</text>
+    </g>
+  </svg>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

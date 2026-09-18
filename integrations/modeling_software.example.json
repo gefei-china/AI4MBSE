@@ -1,0 +1,52 @@
+{
+  "_comment": "外部系统接口定义示例（文档用途，注册脚本自动跳过 .example.json）。接入新建模软件/外部系统 = 复制本文件去掉 .example 后缀，按需修改后运行 python register_http_tools.py，零代码。占位符：{cfg:分组.键} 读系统配置（连接参数），{args:参数} 读工具调用参数，{args:参数,optional} 缺省时自动移除该字段。",
+  "modeling_open_model": {
+    "name": "modeling_open_model",
+    "source": "modeling",
+    "description": "打开建模软件工程（外部建模服务 /api/modeling/open）。返回模型 id 与状态",
+    "side_effect": "write",
+    "risk_level": "medium",
+    "version": "v1.0",
+    "bind_to": ["design"],
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string", "description": "工程名或路径"},
+        "mode": {"type": "string", "description": "打开模式：view/edit（可选，默认 view）"}
+      },
+      "required": ["project"]
+    },
+    "config": {
+      "method": "POST",
+      "url": "{cfg:modeling.base_url}/api/modeling/open",
+      "headers": {"Authorization": "Bearer {cfg:modeling.token}"},
+      "body": {"project": "{args:project}", "mode": "{args:mode,optional}"},
+      "data_path": "data",
+      "timeout": 30
+    }
+  },
+  "modeling_model_tree": {
+    "name": "modeling_model_tree",
+    "source": "modeling",
+    "description": "获取建模软件工程包结构树（外部建模服务 /api/modeling/tree）。data_path 演示嵌套提取",
+    "side_effect": "read",
+    "risk_level": "low",
+    "version": "v1.0",
+    "bind_to": ["design", "review"],
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string", "description": "工程名"},
+        "depth": {"type": "integer", "description": "展开深度（可选）"}
+      },
+      "required": ["project"]
+    },
+    "config": {
+      "method": "GET",
+      "url": "{cfg:modeling.base_url}/api/modeling/tree",
+      "headers": {"Authorization": "Bearer {cfg:modeling.token}"},
+      "query": {"project": "{args:project}", "depth": "{args:depth,optional}"},
+      "data_path": "data.tree"
+    }
+  }
+}

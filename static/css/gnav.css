@@ -1,0 +1,390 @@
+/* ==========================================================================
+ * gnav.css — 左侧导航 / 顶栏 / 全局浮层（v6.2 暗色全屏化）
+ * 加载顺序：tokens.css → toast.css → skeleton.css → gnav.css → app.css
+ *
+ * 设计要点：
+ *   1. gnav 始终保持深底沉浸式（与主内容区反色对比）
+ *      - 浅色主题：nav 蓝底 #0c447c
+ *      - 暗色主题：nav 近黑底 #08152a
+ *   2. 所有颜色通过 tokens.css 的 --gnav-* / --color-* 集中定义
+ *   3. gbar 顶栏、浮层（#gnav-tip / #task-tip / .more-flyout）一并在此管理
+ * ========================================================================== */
+
+/* ── 0. shell 主布局 + workspace ─────────────────────── */
+/* v6.2 注释 113-217 时漏带：workspace 是 shell 的 flex 子项，
+   缺 flex:1 导致右侧大片留白。补在这里与 gnav 同模块管理。 */
+.shell{display:flex;height:100vh;overflow:hidden;}
+.workspace{flex:1;display:flex;flex-direction:column;min-width:0;}
+
+/* ── 1. gnav 主容器 ──────────────────────────────────── */
+.gnav{
+  width:200px;
+  background:var(--gnav-bg);
+  color:var(--gnav-fg);
+  display:flex;flex-direction:column;flex:none;
+  transition:width .25s ease;
+  overflow:hidden;
+}
+.gnav.collapsed{width:56px;}
+.gnav.collapsed .brand{justify-content:center;padding:16px 0 12px;}
+.gnav.collapsed .brand .t,
+.gnav.collapsed .g,
+.gnav.collapsed a span:not(.ic),
+.gnav.collapsed .ufoot div{display:none;}
+.gnav.collapsed a{justify-content:center;padding:10px 0;}
+.gnav.collapsed .ufoot{justify-content:center;padding:10px 0;}
+
+/* ── 2. 折叠态悬浮 tooltip（fixed 避免被 gnav overflow:hidden 裁剪） ── */
+#gnav-tip{
+  position:fixed;z-index:var(--z-tooltip);
+  background:var(--gnav-tip-bg);color:var(--gnav-fg-strong);
+  padding:5px 10px;border-radius:var(--radius-md);
+  font-size:12px;white-space:nowrap;
+  box-shadow:var(--shadow-md);
+  pointer-events:none;display:none;
+}
+#gnav-tip::before{content:'';position:absolute;left:-5px;top:50%;transform:translateY(-50%);
+  border:5px solid transparent;border-left-color:var(--gnav-tip-bg);}
+
+/* ── 3. gnav 顶部品牌 ───────────────────────────────── */
+.gnav .brand{
+  padding:16px 16px 12px;display:flex;align-items:center;gap:9px;
+  color:var(--gnav-fg-strong);
+  border-bottom:1px solid var(--gnav-border);
+}
+.gnav .brand b{
+  background:var(--gnav-active);color:var(--gnav-active-text);
+  border-radius:var(--radius-md);
+  width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;
+  font-size:14px;font-weight:700;
+}
+.gnav .brand .t{font-weight:600;font-size:14px;line-height:1.3;}
+.gnav .brand small{display:block;font-size:10.5px;opacity:.7;font-weight:400;}
+
+/* ── 4. gnav 滚动区 + 分组标题 ─────────────────────── */
+/* 2026-09-17 v2：主导航 flex:0 0 auto —— 任务列表改为 flex:1 后，若主导航仍可收缩会被压出滚动条
+   （实测 900px 视口下 nav 从 295 被压到 249，"能力中心/更多"被裁剪）。主导航是主路径，绝不允许被压缩。 */
+.gnav nav{flex:0 0 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:10px 8px;}
+.gnav .g{
+  font-size:10.5px;color:var(--gnav-fg-soft);
+  padding:12px 10px 5px;letter-spacing:1px;
+}
+
+/* ── 5. gnav 链接 / 选中 / badge ──────────────────── */
+.gnav a{
+  display:flex;align-items:center;gap:9px;
+  padding:8px 10px;border-radius:var(--radius-md);
+  color:var(--gnav-fg);text-decoration:none;
+  font-size:13px;margin-bottom:2px;
+  cursor:pointer;
+  transition:background .12s ease,color .12s ease;
+}
+.gnav a:hover{background:var(--gnav-hover);}
+.gnav a.on{
+  background:var(--gnav-active);
+  color:var(--gnav-active-text);
+  font-weight:600;
+}
+.gnav a .ic{width:18px;text-align:center;flex:none;}
+.gnav a .bdg{
+  margin-left:auto;
+  background:var(--color-red);color:var(--gnav-fg-strong);
+  border-radius:10px;font-size:10px;
+  padding:0 6px;line-height:16px;
+}
+
+/* ── 6. gnav 底部账号区 ───────────────────────────── */
+.gnav .ufoot{
+  border-top:1px solid var(--gnav-border);
+  padding:10px 12px;display:flex;align-items:center;gap:9px;
+  font-size:12px;color:var(--gnav-fg);
+}
+.gnav-foot{
+  border-top:1px solid var(--gnav-border);
+  padding:10px 12px;
+  display:flex;align-items:center;justify-content:flex-start;gap:9px;
+  flex:none;margin-top:auto;
+}
+.gnav-foot .user-chip{
+  background:var(--alpha-white-14);
+  border-color:var(--gnav-border);  /* 通过 rgba(255,255,255,.08) 表达；如需更显，可改 var(--color-bg-hover) 但要换 token */
+  border:1px solid var(--gnav-border);
+  flex:none;min-width:0;width:100%;
+}
+.gnav-foot .user-chip:hover{background:rgba(255,255,255,.24);}
+.gnav-foot .user-chip .u-name{color:var(--gnav-fg-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.gnav-foot .user-chip .u-arrow{color:var(--gnav-fg);}
+
+/* 折叠态：底部只显示头像 icon（居中）*/
+.gnav.collapsed .gnav-foot{justify-content:center;padding:10px 4px;}
+.gnav.collapsed .gnav-foot .u-name,
+.gnav.collapsed .gnav-foot .u-arrow{display:none;}
+.gnav.collapsed .gnav-foot .user-chip{flex:none;padding:3px;width:auto;}
+.gnav.collapsed .user-menu{position:fixed;left:auto;right:auto;bottom:auto;top:auto;}
+
+/* ── 7. 任务分组（会话列表内嵌） ─────────────────── */
+/* 2026-09-17：任务列表改为「向下拓展」——占满导航列剩余高度（原 max-height:42vh 只露出一小段，
+   大量历史会话需要滚动才能看到）。折叠态回落 flex:none，账号区仍由 .gnav-foot 的 margin-top:auto 压底。 */
+.gnav-task{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;border-top:1px solid var(--gnav-border);}
+.gnav-task.collapsed{flex:0 0 auto;}
+.gnav-task-head{
+  display:flex;align-items:center;gap:8px;
+  padding:10px 14px;cursor:pointer;
+  color:var(--gnav-fg);font-size:12px;font-weight:600;
+  user-select:none;transition:background .12s ease;
+}
+.gnav-task-head:hover{background:var(--gnav-hover);}
+.gnav-task-head .gth-ic{flex:none;font-size:13px;}
+.gnav-task-head .gth-name{flex:1;letter-spacing:.5px;}
+.gnav-task-head .gth-cnt{
+  background:rgba(255,255,255,.16);
+  color:var(--gnav-fg-strong);
+  border-radius:10px;font-size:10px;
+  padding:1px 7px;line-height:14px;
+  font-variant-numeric:tabular-nums;
+}
+.gnav-task-head .gth-cnt.zero{opacity:.45;}
+.gnav-task-head .gth-arr{
+  font-size:10px;color:var(--gnav-fg-soft);
+  transition:transform .2s;
+}
+.gnav-task.collapsed .gth-arr{transform:rotate(-90deg);}
+
+.gnav-task-body{
+  display:flex;flex-direction:column;flex:1 1 auto;min-height:0;
+  max-height:none;
+  overflow-y:auto;overflow-x:hidden;
+  overscroll-behavior:contain;   /* 滚到底不把整页带动 */
+}
+.gnav-task.collapsed .gnav-task-body{display:none;}
+
+.gnav-task-body .task-it{
+  padding:5px 14px;   /* 2026-09-17：7px→5px，配合列表向下拓展，同屏多显示约 2 行会话（行高 34→30） */
+  font-size:12.5px;color:var(--gnav-fg);
+  cursor:pointer;
+  border-left:3px solid transparent;border-radius:0;
+  display:flex;flex-direction:column;gap:1px;
+}
+.gnav-task-body .task-it:hover{background:var(--gnav-hover);}
+.gnav-task-body .task-it.on{
+  background:var(--gnav-active);
+  color:var(--gnav-active-text);font-weight:600;
+  border-left-color:var(--color-primary);
+}
+.gnav-task-body .task-it .ti-row{display:flex;align-items:center;gap:6px;}
+.gnav-task-body .task-it .ti-tt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.gnav-task-body .task-it .ti-ops{display:none;gap:3px;flex:none;}
+.gnav-task-body .task-it:hover .ti-ops{display:inline-flex;}
+.gnav-task-body .task-it .ti-ops button{
+  padding:1px 5px;font-size:10.5px;border-radius:4px;
+  background:rgba(255,255,255,.18);color:inherit;
+  border:none;cursor:pointer;
+}
+.gnav-task-body .task-it .ti-ops button:hover{background:rgba(255,255,255,.32);}
+.gnav-task-body .task-it small{color:var(--color-muted);font-size:10.5px;}
+.gnav-task-body .task-it.on small{color:var(--color-primary-d);opacity:.7;}
+
+.gnav-task-body .task-empty{padding:14px 18px;font-size:11.5px;color:var(--gnav-fg-soft);text-align:center;}
+.gnav-task-body::-webkit-scrollbar{width:5px;}
+.gnav-task-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:3px;}
+
+/* ── 8. #task-tip 信息卡（hover 任务条目显示） ── */
+#task-tip{
+  position:fixed;z-index:9990;
+  width:270px;max-width:calc(100vw - 80px);
+  background:var(--gnav-tip-bg);color:var(--gnav-tip-fg-soft);
+  border:1px solid var(--gnav-tip-border);
+  border-radius:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.4);
+  padding:12px 14px;display:none;pointer-events:none;
+  line-height:1.5;overflow:hidden;
+}
+#task-tip::before{content:'';position:absolute;left:-5px;top:16px;border:5px solid transparent;border-left-color:var(--gnav-tip-bg);}
+#task-tip .tt-title{font-size:13px;font-weight:700;color:var(--gnav-fg-strong);margin-bottom:7px;display:flex;align-items:center;gap:6px;}
+#task-tip .tt-title .tt-dot{width:8px;height:8px;border-radius:50%;background:#4a9df0;flex:none;}
+#task-tip .tt-row{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:11px;color:var(--gnav-tip-fg);}
+#task-tip .tt-row .tt-tag{background:rgba(255,255,255,.14);border-radius:5px;padding:1px 7px;font-size:10.5px;color:var(--gnav-tip-fg-soft);}
+#task-tip .tt-sum{
+  margin-top:8px;padding-top:8px;
+  border-top:1px solid var(--gnav-border);
+  font-size:11.5px;color:var(--gnav-tip-fg-soft);
+  display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;
+}
+
+/* 折叠态：任务分组只保留标题 + 计数 */
+.gnav.collapsed .gnav-task-head .gth-name,
+.gnav.collapsed .gnav-task-body{display:none;}
+.gnav.collapsed .gnav-task-head{padding:10px 0;justify-content:center;}
+.gnav.collapsed .gnav-task-head .gth-cnt{display:none;}
+.gnav.collapsed .gnav-task-head .gth-arr{display:none;}
+
+/* ── 9. "更多"入口 + hover 浮层卡 ─────────────────── */
+.gnav a.more-link{position:relative;}
+.gnav a.more-link .ic{font-size:15px;}
+
+.more-flyout{
+  position:fixed;z-index:9990;min-width:190px;
+  background:var(--gnav-tip-bg);color:var(--gnav-tip-fg-soft);
+  border:1px solid var(--gnav-tip-border);
+  border-radius:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.38);
+  padding:6px;display:none;overflow:hidden;
+  opacity:0;transform:translateX(-8px);
+  transition:opacity .16s ease,transform .16s ease;
+}
+.more-flyout.open{display:block;opacity:1;transform:translateX(0);}
+.more-flyout .mf-item{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 12px;border-radius:7px;
+  cursor:pointer;
+  font-size:13px;color:var(--gnav-tip-fg-soft);
+  text-decoration:none;
+}
+.more-flyout .mf-item:hover{background:rgba(255,255,255,.1);}
+.more-flyout .mf-item .mf-ic{width:18px;text-align:center;flex:none;}
+.more-flyout .mf-sep{height:1px;background:var(--gnav-border);margin:5px 6px;}
+
+/* ── 10. gbar 顶栏（横条区域） ─────────────────────── */
+.gbar{
+  height:52px;
+  background:var(--color-bg-card);
+  border-bottom:1px solid var(--color-line);
+  display:flex;align-items:center;
+  padding:0 20px;gap:14px;flex:none;
+}
+.gbar .ptitle{
+  font-weight:600;font-size:15px;color:var(--color-primary-d);
+  display:inline-flex;align-items:center;gap:6px;
+  flex-wrap:nowrap;overflow:hidden;white-space:nowrap;
+}
+.gbar .ptitle .br-root{color:var(--color-primary-d);font-weight:600;}
+.gbar .ptitle .br-sep{color:var(--color-muted);font-weight:400;margin:0 1px;font-size:13px;}
+.gbar .ptitle .br-cur{color:var(--color-primary-d);font-weight:600;}
+.gbar .sp{flex:1;}
+.gbar .chip{background:var(--color-primary-l);border-color:var(--color-primary-bd);color:var(--color-primary-d);}
+
+/* 项目名称 pill（v6.2 新加：暗色主题下柔和） */
+.gbar .project-tag{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:4px 12px;border-radius:999px;
+  background:var(--color-primary-l);color:var(--color-primary-d);
+  font-size:12px;font-weight:600;
+  border:1px solid var(--color-primary-bd);
+  transition:background .12s ease,color .12s ease,border-color .12s ease;
+}
+.gbar .project-tag .dot{
+  width:8px;height:8px;border-radius:50%;
+  background:var(--color-primary);flex:none;
+  box-shadow:0 0 0 0 var(--alpha-blue-35);
+}
+
+/* ── 11. hamburger-btn / theme-toggle 按钮 ─────── */
+.hamburger-btn{
+  background:var(--color-bg-card) url('/static/icons/hamburger.png') center/20px 14px no-repeat !important;
+  color:transparent;font-size:0;line-height:0;text-indent:-9999px;
+  transition:background-color .15s,border-color .15s;
+}
+.hamburger-btn:hover{background-color:var(--color-primary-l) !important;border-color:var(--color-primary-bd) !important;}
+.theme-toggle{
+  width:34px;height:28px;padding:0;
+  display:inline-flex;align-items:center;justify-content:center;
+  border:1px solid var(--color-line);border-radius:var(--radius-md);
+  background:var(--color-bg-card);
+  font-size:16px;cursor:pointer;color:var(--color-text);line-height:1;
+  transition:background-color .15s,border-color .15s,transform .15s;
+}
+.theme-toggle:hover{background-color:var(--color-primary-l) !important;border-color:var(--color-primary-bd) !important;transform:translateY(-1px);}
+.theme-toggle:active{transform:translateY(0);}
+[data-theme="dark"] .theme-toggle{background:#1c2a44;border-color:#3a4a66;color:var(--color-text);}
+[data-theme="dark"] .theme-toggle:hover{background:#243450 !important;border-color:#4d6a92 !important;}
+
+/* hamburger 在顶栏 */
+.gbar .hamburger-btn{
+  width:30px;height:26px;
+  border:1px solid var(--color-line);border-radius:var(--radius-md);
+}
+
+/* ── 12. user-chip（顶栏右下角用户头像 + 名字） ── */
+.user-chip{
+  display:inline-flex;align-items:center;gap:8px;
+  cursor:pointer;
+  padding:3px 12px 3px 4px;border-radius:20px;
+  background:var(--color-primary-l);
+  border:1px solid var(--color-primary-bd);
+  position:relative;flex:none;
+  transition:background-color .15s,border-color .15s;
+}
+.user-chip:hover{background:var(--color-bg-hover);}
+.user-chip .u-name{font-size:12.5px;color:var(--color-primary-d);font-weight:600;}
+.user-chip .u-arrow{font-size:10px;color:var(--color-muted);}
+[data-theme="dark"] .user-chip{background:var(--color-primary-100);border-color:var(--color-primary-bd);}
+[data-theme="dark"] .user-chip:hover{background:var(--color-bg-hover);}
+
+/* ── 13. user-menu（账号抽屉，向上滑出） ── */
+.user-menu{
+  position:fixed;bottom:auto;right:auto;left:auto;top:auto;
+  background:var(--color-bg-card);
+  border:1px solid var(--color-line);
+  border-radius:10px;
+  box-shadow:var(--shadow-lg);
+  min-width:220px;z-index:120;
+  overflow:hidden;display:none;
+  transform:translateY(8px);opacity:0;
+  transition:transform .22s ease,opacity .22s ease;
+}
+.user-menu.open{display:block;transform:translateY(0);opacity:1;}
+.user-menu .um-head{
+  padding:10px 14px;
+  border-bottom:1px solid var(--color-line);
+  background:var(--color-bg);  /* 与主区画布底色一致，温润的浅色头 */
+  font-size:12px;color:var(--color-muted);
+}
+.user-menu .um-head b{color:var(--color-primary-d);font-size:13px;}
+.user-menu .um-item{
+  padding:9px 14px;
+  font-size:12.5px;color:var(--color-text);
+  cursor:pointer;
+  display:flex;align-items:center;gap:8px;
+  transition:background-color .12s;
+}
+.user-menu .um-item:hover{background:var(--color-primary-l);color:var(--color-primary-d);}
+.user-menu .um-item.red{color:var(--color-red);}
+.user-menu .um-item.red:hover{background:var(--color-red-l);}
+.user-menu .um-sep{height:1px;background:var(--color-line);margin:4px 0;}
+
+/* ── 14. 账号抽屉内"主题切换"3 选项 ── */
+.user-menu .um-theme{cursor:default;}
+.user-menu .um-theme-opts{
+  display:inline-flex;gap:2px;
+  background:var(--color-bg);
+  border-radius:6px;padding:2px;
+}
+.user-menu .um-theme-opts button{
+  border:none;background:transparent;cursor:pointer;
+  width:24px;height:24px;border-radius:4px;
+  font-size:13px;line-height:1;
+  color:var(--color-muted);
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:background .15s,color .15s;
+}
+.user-menu .um-theme-opts button:hover{background:var(--color-bg-hover);color:var(--color-text);}
+.user-menu .um-theme-opts button.on{background:var(--color-primary);color:var(--color-text-inverse);box-shadow:var(--shadow-sm);}
+
+/* ── 15. gnav 任务列表（#task-conv-list）专属：空态引导 + 骨架屏 ── */
+/* v6.3 2026-09-06：从 app.css 迁入。空态配色（#cfe1ff / #7fa3cc）针对 gnav 深底沉浸 */
+.task-empty{
+  display:flex;flex-direction:column;align-items:center;
+  gap:6px;padding:18px 14px;text-align:center;
+}
+.task-empty .te-ic{font-size:28px;opacity:.6;margin-bottom:2px;}
+.task-empty .te-title{font-size:12.5px;color:#cfe1ff;font-weight:600;}
+.task-empty .te-sub{font-size:11px;color:#7fa3cc;line-height:1.6;margin-bottom:8px;}
+.task-empty .te-go{
+  background:rgba(255,255,255,.16);color:#fff;
+  border:1px solid rgba(255,255,255,.3);
+  padding:5px 12px;border-radius:14px;font-size:11.5px;
+  cursor:pointer;transition:background .15s;
+}
+.task-empty .te-go:hover{background:rgba(255,255,255,.28);}
+/* 骨架中的任务项（不响应点击、padding 缩小） */
+.task-it.skel{cursor:default;pointer-events:none;}

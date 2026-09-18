@@ -1,0 +1,58 @@
+# 2026-09-18 S5 补充：仓库此前没有可用的版本控制兜底，先补忽略清单
+# 说明：本仓库 `git log` 为空（master 无任何提交）、`git status` 全部是 ??（未跟踪）。
+# 在打第一个基线提交之前，必须先把「随包运行时 / 运行数据 / 归档 / 一次性产物」排除，
+# 否则会把 1 GB+ 的二进制与归档一起提交进历史（不可逆）。
+
+# ── 随包运行时（离线部署必需，但不该进版本库）──
+java-runtime/
+fuseki/
+
+# ── Python / Node 依赖与缓存 ──
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.pytest_cache/
+.playwright-cli/
+
+# ── 运行数据与数据库（含 WAL 边车）──
+data/
+mbse.db
+mbse.db-shm
+mbse.db-wal
+*.db
+*.db-shm
+*.db-wal
+static/uploads/
+static/skill_packages/
+
+# ── 归档 / 备份 / 一次性产物 ──
+_archive/
+backups/
+tmp/
+outputs/
+screenshots/
+perf-report/
+评审报告/
+docs/_archive/
+*.pres5
+*.bak
+*.bak2
+server_*.log
+server_*.pid
+_*.py
+_*.txt
+_*.log
+verify_*.js
+
+# ── 大体积二进制与第三方压缩库 ──
+static/vendor/
+static/lib/
+docs/**/*.png
+docs/**/*.docx
+docs/mbse-platform-prd/**/*.min.js
+
+# ── 本机环境与 IDE ──
+.trae/
+.idea/
+.vscode/

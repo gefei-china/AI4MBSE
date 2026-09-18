@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 原生架构 · 数据流与页面流程</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", sans-serif; background: #f4f6fa; color: #222; padding: 16px; }
+  .wrap { max-width: 1280px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { font-size: 12px; color: #666; margin-bottom: 16px; }
+  .gallery { display: flex; flex-direction: column; gap: 18px; }
+  .card { background: #fff; border: 2px solid #2b6cb0; border-radius: 10px; overflow: hidden; }
+  .card-h { padding: 10px 16px; background: #f0f6ff; border-bottom: 1px solid #cfe0f5; font-size: 14px; font-weight: 600; color: #2b6cb0; display: flex; align-items: center; gap: 8px; }
+  .card-h .tag { font-size: 10.5px; font-weight: 400; color: #2b6cb0; border: 1px solid #9db8dd; border-radius: 8px; padding: 1px 8px; background: #fff; }
+  .card-b { padding: 14px 16px; }
+  .card-b svg { width: 100%; height: auto; display: block; }
+  .legend { font-size: 11px; color: #666; margin-top: 8px; line-height: 1.8; }
+  .legend b { color: #2b6cb0; }
+  .legend .red { color: #c53030; }
+  .note-box { font-size: 12px; color: #333; background: #f8fbff; border: 1px solid #cfe0f5; border-radius: 6px; padding: 10px 14px; margin-top: 10px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🧬 mbse_system · AI 原生架构重构 —— 数据流与页面流程</h1>
+  <div class="sub">现状 vs 目标 · 白底蓝框规范 · 随方案文档 <code>AI原生架构重构方案_20260831.md</code></div>
+
+  <div class="gallery">
+
+    <!-- 图① 现状数据流 -->
+    <div class="card">
+      <div class="card-h">图① 现状数据流（断点标注）<span class="tag">3 条主线 · 5 个断点</span></div>
+      <div class="card-b">
+        <svg viewBox="0 0 1180 330" font-family="Microsoft YaHei">
+          <!-- 构建流 -->
+          <text x="20" y="28" font-size="13" font-weight="700" fill="#2b6cb0">① 知识构建流</text>
+          <g font-size="11.5">
+            <rect x="20" y="42" width="105" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="72" y="66" text-anchor="middle">文档上传</text>
+            <text x="125" y="68">→</text>
+            <rect x="140" y="42" width="100" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="190" y="59" text-anchor="middle">解析·分块</text>
+            <text x="190" y="73" text-anchor="middle">·向量化</text>
+            <text x="240" y="68">→</text>
+            <rect x="255" y="42" width="115" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="312" y="59" text-anchor="middle">LLM 抽取候选</text>
+            <text x="312" y="73" text-anchor="middle" fill="#c53030">(无本体类型约束)</text>
+            <text x="370" y="68">→</text>
+            <rect x="385" y="42" width="105" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="437" y="66" text-anchor="middle">词典归一</text>
+            <text x="490" y="68">→</text>
+            <rect x="505" y="42" width="130" height="38" rx="6" fill="#ffe1e1" stroke="#c53030" stroke-width="2"/>
+            <text x="570" y="59" text-anchor="middle" fill="#c53030" font-weight="700">灰区裁决(人工)</text>
+            <text x="570" y="73" text-anchor="middle" fill="#c53030" font-weight="700">冲突裁决(人工)</text>
+            <text x="635" y="68">→</text>
+            <rect x="650" y="42" width="100" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="700" y="66" text-anchor="middle">物化入图</text>
+            <text x="750" y="68">→</text>
+            <rect x="765" y="42" width="120" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="825" y="66" text-anchor="middle">图谱/检索</text>
+          </g>
+          <text x="895" y="55" font-size="11" fill="#c53030">⚠️ 断点A：抽取无本体约束</text>
+          <text x="895" y="72" font-size="11" fill="#c53030">⚠️ 断点B：四站全人工</text>
+          <!-- 消费流 -->
+          <text x="20" y="135" font-size="13" font-weight="700" fill="#2b6cb0">② AI 消费流</text>
+          <g font-size="11.5">
+            <rect x="20" y="148" width="105" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="72" y="172" text-anchor="middle">对话提问</text>
+            <text x="125" y="174">→</text>
+            <rect x="140" y="148" width="100" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="190" y="172" text-anchor="middle">意图识别</text>
+            <text x="240" y="174">→</text>
+            <rect x="255" y="148" width="150" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="330" y="165" text-anchor="middle">混合检索</text>
+            <text x="330" y="179" text-anchor="middle">(向量+图谱+词典)</text>
+            <text x="405" y="174">→</text>
+            <rect x="420" y="148" width="150" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="495" y="165" text-anchor="middle">LLM 生成</text>
+            <text x="495" y="179" text-anchor="middle">(视图/需求/报告)</text>
+            <text x="570" y="174">→</text>
+            <rect x="585" y="148" width="150" height="38" rx="6" fill="#ffe1e1" stroke="#c53030" stroke-width="2"/>
+            <text x="660" y="165" text-anchor="middle" fill="#c53030" font-weight="700">产物手工处理</text>
+            <text x="660" y="179" text-anchor="middle" fill="#c53030" font-weight="700">(不自动物化)</text>
+            <text x="735" y="174">→</text>
+            <rect x="750" y="148" width="110" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="805" y="172" text-anchor="middle">手动入图</text>
+          </g>
+          <text x="895" y="163" font-size="11" fill="#c53030">⚠️ 断点C：产物不物化</text>
+          <text x="895" y="180" font-size="11" fill="#c53030">⚠️ 断点D：本体约束弱</text>
+          <!-- 主线流 -->
+          <text x="20" y="243" font-size="13" font-weight="700" fill="#2b6cb0">③ MBSE 主线流</text>
+          <g font-size="11.5">
+            <rect x="20" y="256" width="120" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="80" y="280" text-anchor="middle">五元素追溯链</text>
+            <text x="140" y="280">→</text>
+            <rect x="155" y="256" width="180" height="38" rx="6" fill="#ffe1e1" stroke="#c53030" stroke-width="2"/>
+            <text x="245" y="273" text-anchor="middle" fill="#c53030" font-weight="700">未显式建模</text>
+            <text x="245" y="287" text-anchor="middle" fill="#c53030">(依赖人工维护)</text>
+            <text x="335" y="280">→</text>
+            <rect x="350" y="256" width="140" height="38" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="420" y="280" text-anchor="middle">本体实例(部分承载)</text>
+          </g>
+          <text x="895" y="275" font-size="11" fill="#c53030">⚠️ 断点E：无数字主线</text>
+        </svg>
+        <div class="legend"><b>现状本质</b>：AI 挂在系统旁（聊天工具），本体是孤立类型表，治理全人工。<span class="red">5 个断点 = 5 个优化杠杆。</span></div>
+      </div>
+    </div>
+
+    <!-- 图② 目标数据流 -->
+    <div class="card">
+      <div class="card-h">图② 目标数据流（知识飞轮闭环）<span class="tag">AI 原生 · 语义内核 · 闭环</span></div>
+      <div class="card-b">
+        <svg viewBox="0 0 1180 300" font-family="Microsoft YaHei">
+          <!-- 飞轮环形 -->
+          <g font-size="11.5">
+            <circle cx="210" cy="150" r="118" fill="none" stroke="#2b6cb0" stroke-width="2" stroke-dasharray="6 4"/>
+            <circle cx="210" cy="150" r="86" fill="none" stroke="#9db8dd" stroke-width="1.5"/>
+            <!-- 飞轮节点（环形分布） -->
+            <rect x="140" y="18"  width="140" height="40" rx="20" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/><text x="210" y="43" text-anchor="middle">① 摄取(文档/来源)</text>
+            <rect x="20" y="130" width="140" height="40" rx="20" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/><text x="90" y="155" text-anchor="middle">② 理解(LLM结构化)</text>
+            <rect x="140" y="242" width="140" height="40" rx="20" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/><text x="210" y="267" text-anchor="middle">③ AI预审(80%自动)</text>
+            <rect x="340" y="242" width="150" height="40" rx="20" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/><text x="415" y="267" text-anchor="middle">④ 物化·推理·校验</text>
+            <rect x="470" y="130" width="150" height="40" rx="20" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/><text x="545" y="155" text-anchor="middle">⑤ 消费(对话/图谱)</text>
+            <rect x="340" y="18"  width="150" height="40" rx="20" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/><text x="415" y="43" text-anchor="middle">⑥ 反馈(热度/未命中)</text>
+            <!-- 循环箭头 -->
+            <g stroke="#2b6cb0" stroke-width="1.6" fill="#2b6cb0">
+              <path d="M280 38 q 60 0 60 40" fill="none"/><polygon points="344,82 332,72 340,66"/>
+              <path d="M160 288 q -50 0 -50 -48" fill="none"/><polygon points="106,236 112,250 122,242"/>
+              <path d="M350 262 q 60 8 60 -30" fill="none"/><polygon points="414,228 402,224 410,238"/>
+              <path d="M440 150 q 20 60 -30 80" fill="none"/><polygon points="402,234 404,220 392,222"/>
+              <path d="M280 132 q 20 -55 -30 -75" fill="none"/><polygon points="246,54 258,62 252,50"/>
+            </g>
+          </g>
+          <!-- 语义内核 -->
+          <rect x="640" y="60" width="500" height="180" rx="10" fill="#f0f6ff" stroke="#2b6cb0" stroke-width="2"/>
+          <text x="660" y="88" font-size="13" font-weight="700" fill="#2b6cb0">语义内核（唯一事实源）</text>
+          <rect x="660" y="102" width="220" height="44" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/><text x="770" y="129" text-anchor="middle">本体 Schema（类型/关系/约束）</text>
+          <rect x="895" y="102" width="220" height="44" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/><text x="1005" y="129" text-anchor="middle">术语命名层（词条↔类型）</text>
+          <rect x="660" y="156" width="220" height="44" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/><text x="770" y="183" text-anchor="middle">实例图谱（实体/关系数据）</text>
+          <rect x="895" y="156" width="220" height="44" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/><text x="1005" y="183" text-anchor="middle">MBSE 追溯链（五元素）</text>
+          <!-- 对话即操作 -->
+          <rect x="640" y="252" width="500" height="36" rx="8" fill="#e8f4ec" stroke="#2f855a" stroke-width="1.5"/>
+          <text x="890" y="275" text-anchor="middle" font-size="12" font-weight="600" fill="#2f855a">💬 AI 原生交互层：对话即操作 · 产物自动物化 · 意图路由</text>
+          <!-- 约束箭头 -->
+          <g stroke="#2f855a" stroke-width="1.4" fill="none">
+            <path d="M640 150 L580 150" marker-end="url(#arrG)"/>
+            <path d="M1140 90 Q 1160 60 640 60" opacity="0"/>
+          </g>
+          <defs><marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#2f855a"/></marker></defs>
+          <text x="585" y="140" font-size="10.5" fill="#2f855a" text-anchor="end">本体约束</text>
+        </svg>
+        <div class="legend"><b>目标本质</b>：知识飞轮六环闭环（①→⑥→再①），语义内核统一约束所有环；AI 原生交互层让"能力"变"对话"。</div>
+      </div>
+    </div>
+
+    <!-- 图③ IA 对比 -->
+    <div class="card">
+      <div class="card-h">图③ 信息页面流程（IA）对比<span class="tag">现状平铺 vs 目标角色×任务</span></div>
+      <div class="card-b">
+        <svg viewBox="0 0 1180 290" font-family="Microsoft YaHei">
+          <!-- 现状 -->
+          <text x="40" y="28" font-size="13" font-weight="700" fill="#c53030">现状：功能平铺（任务要跨 3 个模块）</text>
+          <g font-size="11.5">
+            <rect x="40" y="40" width="90" height="34" rx="6" fill="#fff" stroke="#c53030" stroke-width="1.4"/><text x="85" y="62" text-anchor="middle">总览</text>
+            <rect x="138" y="40" width="90" height="34" rx="6" fill="#fff" stroke="#c53030" stroke-width="1.4"/><text x="183" y="62" text-anchor="middle">AI 建模</text>
+            <rect x="236" y="40" width="90" height="34" rx="6" fill="#fff" stroke="#c53030" stroke-width="1.4"/><text x="281" y="62" text-anchor="middle">报告</text>
+            <rect x="334" y="40" width="100" height="34" rx="6" fill="#fff" stroke="#c53030" stroke-width="1.4"/><text x="384" y="62" text-anchor="middle">本体模型</text>
+            <rect x="442" y="40" width="100" height="34" rx="6" fill="#fff" stroke="#c53030" stroke-width="1.4"/><text x="492" y="62" text-anchor="middle">术语词典</text>
+            <rect x="550" y="40" width="100" height="34" rx="6" fill="#fff" stroke="#c53030" stroke-width="1.4"/><text x="600" y="62" text-anchor="middle">实例图谱</text>
+            <rect x="658" y="40" width="100" height="34" rx="6" fill="#fff" stroke="#c53030" stroke-width="1.4"/><text x="708" y="62" text-anchor="middle">文档库</text>
+            <rect x="766" y="40" width="100" height="34" rx="6" fill="#fff" stroke="#c53030" stroke-width="1.4"/><text x="816" y="62" text-anchor="middle">数据整理</text>
+            <rect x="874" y="40" width="100" height="34" rx="6" fill="#fff" stroke="#c53030" stroke-width="1.4"/><text x="924" y="62" text-anchor="middle">版本管理</text>
+            <rect x="982" y="40" width="100" height="34" rx="6" fill="#fff" stroke="#c53030" stroke-width="1.4"/><text x="1032" y="62" text-anchor="middle">插件库</text>
+            <rect x="1090" y="40" width="80" height="34" rx="6" fill="#fff" stroke="#c53030" stroke-width="1.4"/><text x="1130" y="62" text-anchor="middle">系统</text>
+          </g>
+          <text x="40" y="102" font-size="11.5" fill="#c53030">✗ 用户任务「把文档建模成本体并验证」：AI建模提问 → 本体维护建类型 → 数据整理确认 → 实例图谱查看 —— 跨 4 模块</text>
+          <!-- 目标 -->
+          <text x="40" y="140" font-size="13" font-weight="700" fill="#2f855a">目标：角色 × 任务（任务路径 ≤2 步）</text>
+          <g font-size="11.5">
+            <rect x="40" y="154" width="180" height="46" rx="8" fill="#f0f6ff" stroke="#2b6cb0" stroke-width="1.6"/><text x="130" y="175" text-anchor="middle" font-weight="600">工作台</text><text x="130" y="192" text-anchor="middle" font-size="10">角色入口·待办·飞轮状态</text>
+            <rect x="228" y="154" width="180" height="46" rx="8" fill="#f0f6ff" stroke="#2b6cb0" stroke-width="1.6"/><text x="318" y="175" text-anchor="middle" font-weight="600">AI 建模</text><text x="318" y="192" text-anchor="middle" font-size="10">会话式·@模型对象·产物物化</text>
+            <rect x="416" y="154" width="180" height="46" rx="8" fill="#f0f6ff" stroke="#2b6cb0" stroke-width="1.6"/><text x="506" y="175" text-anchor="middle" font-weight="600">模型中心</text><text x="506" y="192" text-anchor="middle" font-size="10">本体模型·实例图谱·追溯链</text>
+            <rect x="604" y="154" width="180" height="46" rx="8" fill="#f0f6ff" stroke="#2b6cb0" stroke-width="1.6"/><text x="694" y="175" text-anchor="middle" font-weight="600">知识中心</text><text x="694" y="192" text-anchor="middle" font-size="10">文档库·AI预审台·术语词典</text>
+            <rect x="792" y="154" width="180" height="46" rx="8" fill="#f0f6ff" stroke="#2b6cb0" stroke-width="1.6"/><text x="882" y="175" text-anchor="middle" font-weight="600">分析中心</text><text x="882" y="192" text-anchor="middle" font-size="10">报告·一致性·影响分析</text>
+            <rect x="980" y="154" width="160" height="46" rx="8" fill="#fff" stroke="#9db8dd" stroke-width="1.4"/><text x="1060" y="175" text-anchor="middle">版本·插件·系统</text><text x="1060" y="192" text-anchor="middle" font-size="10">保留</text>
+          </g>
+          <text x="40" y="230" font-size="11.5" fill="#2f855a">✓ 目标任务「把文档建模成本体并验证」：AI建模提问（自动建类型/入图/挂追溯链）→ 模型中心追溯链查看 —— 2 步，全链路 AI 物化</text>
+          <rect x="40" y="248" width="1100" height="30" rx="6" fill="#fff8e6" stroke="#c98a2e" stroke-width="1.4"/>
+          <text x="590" y="268" text-anchor="middle" font-size="11.5" fill="#8a5a10">新增「追溯链」页（五元素主线）·「数据整理」升级「AI 预审台」· AI建模与模型中心双向联动</text>
+        </svg>
+        <div class="legend"><b>IA 原则</b>：页面按"角色要完成的任务"组织，AI 物化把多步任务收敛为对话单步。</div>
+      </div>
+    </div>
+
+    <!-- 图④ 四层架构 -->
+    <div class="card">
+      <div class="card-h">图④ 目标四层架构<span class="tag">语义内核 · 知识飞轮 · AI原生交互 · 应用</span></div>
+      <div class="card-b">
+        <svg viewBox="0 0 1180 250" font-family="Microsoft YaHei">
+          <g font-size="12">
+            <rect x="60" y="18" width="1060" height="46" rx="8" fill="#f0f6ff" stroke="#2b6cb0" stroke-width="1.6"/>
+            <text x="590" y="36" text-anchor="middle" font-weight="700" fill="#2b6cb0">应用层 · MBSE 工作台</text>
+            <text x="590" y="53" text-anchor="middle" fill="#333">工作台 ｜ AI建模 ｜ 模型中心(本体/图谱/追溯链) ｜ 知识中心(预审台/词典) ｜ 分析中心</text>
+            <rect x="60" y="76" width="1060" height="46" rx="8" fill="#e8f4ec" stroke="#2f855a" stroke-width="1.6"/>
+            <text x="590" y="94" text-anchor="middle" font-weight="700" fill="#2f855a">AI 原生交互层</text>
+            <text x="590" y="111" text-anchor="middle" fill="#333">意图路由 ｜ 对话即操作 ｜ Agent协同(17原子+4跨域) ｜ 产物自动物化</text>
+            <rect x="60" y="134" width="1060" height="46" rx="8" fill="#fff8e6" stroke="#c98a2e" stroke-width="1.6"/>
+            <text x="590" y="152" text-anchor="middle" font-weight="700" fill="#8a5a10">知识飞轮层</text>
+            <text x="590" y="169" text-anchor="middle" fill="#333">摄取 → 理解(LLM) → AI预审(80%自动) → 物化·推理 → 消费 → 反馈 → 再摄取</text>
+            <rect x="60" y="192" width="1060" height="46" rx="8" fill="#f5f0fa" stroke="#6b46c1" stroke-width="1.6"/>
+            <text x="590" y="210" text-anchor="middle" font-weight="700" fill="#6b46c1">语义内核层（唯一事实源）</text>
+            <text x="590" y="227" text-anchor="middle" fill="#333">本体 Schema ｜ 术语命名层 ｜ 实例图谱 ｜ MBSE 五元素追溯链 —— 贯穿抽取·检索·生成·治理</text>
+          </g>
+          <g stroke="#9db8dd" stroke-width="1.2" fill="none">
+            <path d="M590 64 L590 76"/><path d="M590 122 L590 134"/><path d="M590 180 L590 192"/>
+          </g>
+        </svg>
+        <div class="legend"><b>依赖方向</b>：上依赖下 —— 应用层调用 AI 交互层 → 飞轮层 → 语义内核。内核变更（Schema/词典）向上自动传导（抽取/检索/生成口径统一）。</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="note-box">
+    <b>配套文档</b>：<code>docs/AI原生架构重构方案_20260831.md</code> —— 六域盘点表 / 六大问题诊断(P0-P2) / 3 条目标数据流详述 / IA 明细 / 现状-目标比对表 / P0-P1-P2 落地清单(12 项)。
+    <br><b>结论</b>：知识底座已企业级，重构核心 = <b>本体升语义内核 · 治理改AI预审 · AI变对话即操作 · 补MBSE追溯主线</b>。
+  </div>
+</div>
+</body>
+</html>

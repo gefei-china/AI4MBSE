@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>分支 × 图谱数据整合 · GitHub 式设计原型</title>
+<style>
+  :root{--line:#E4E2DA;--blue:#185FA5;--blue-l:#EAF1F8;--mut:#888780;--bg:#FAFAF7;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:#fff;color:#333;font-size:13px;padding:24px 28px;max-width:1180px;}
+  h1{font-size:18px;color:var(--blue);margin-bottom:4px;}
+  .sub{color:var(--mut);font-size:12px;margin-bottom:20px;}
+  h2{font-size:14px;color:var(--blue);margin:26px 0 8px;border-left:3px solid var(--blue);padding-left:8px;}
+  .shot{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg);margin-bottom:8px;}
+  /* 顶栏 */
+  .top{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:#fff;}
+  .breadcrumb{color:var(--blue);font-weight:600;}
+  .breadcrumb span{color:var(--mut);font-weight:400;}
+  /* GitHub 式分支选择器按钮 */
+  .br-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:4px 10px;font-size:12.5px;cursor:pointer;position:relative;}
+  .br-btn:hover{background:var(--bg);}
+  .br-btn svg{flex:none;}
+  .caret{color:var(--mut);font-size:10px;}
+  .br-down{position:absolute;top:calc(100% + 6px);left:0;width:300px;background:#fff;border:1px solid var(--blue);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.14);z-index:20;display:none;}
+  .br-down.open{display:block;}
+  .br-down .search{margin:10px;}
+  .br-down input{width:100%;border:1px solid var(--blue);border-radius:6px;padding:6px 10px;font-size:12.5px;outline:none;}
+  .br-tabs{display:flex;gap:16px;padding:0 14px;border-bottom:1px solid var(--line);font-size:12.5px;}
+  .br-tabs b{padding-bottom:6px;border-bottom:2px solid var(--blue);color:#333;}
+  .br-tabs span{padding-bottom:6px;color:var(--mut);cursor:pointer;}
+  .br-list{max-height:240px;overflow:auto;padding:4px 0;}
+  .br-item{display:flex;align-items:center;gap:8px;padding:6px 14px;cursor:pointer;font-size:12.5px;}
+  .br-item:hover{background:var(--blue-l);}
+  .br-item .chk{width:14px;color:var(--blue);}
+  .br-item .nm{flex:1;}
+  .br-item .nm i{font-style:normal;color:var(--mut);}
+  .badge{font-size:10.5px;border:1px solid var(--line);border-radius:10px;padding:0 8px;color:var(--mut);background:var(--bg);}
+  .badge.def{border-color:#D8E4CF;color:#4C7A2E;background:#F4F8EE;}
+  .br-new{border-top:1px solid var(--line);padding:8px 14px;font-size:12.5px;color:var(--blue);cursor:pointer;font-weight:600;}
+  /* ctx bar */
+  .ctx{display:flex;align-items:center;gap:12px;padding:7px 14px;background:var(--blue-l);border-bottom:1px solid var(--line);font-size:12px;}
+  .ctx b{color:var(--blue);}
+  .ctx .lnk{color:var(--blue);cursor:pointer;text-decoration:underline;}
+  .ctx .sp{flex:1;}
+  .pill{border:1px solid #CBDCF0;border-radius:12px;padding:1px 10px;font-size:11px;color:var(--blue);background:#fff;}
+  /* 内容/历史 Tab */
+  .tabs{display:flex;gap:20px;padding:8px 14px 0;border-bottom:1px solid var(--line);background:#fff;font-size:13px;}
+  .tabs .t{padding:6px 2px 8px;cursor:pointer;color:var(--mut);}
+  .tabs .t.on{color:#333;font-weight:700;border-bottom:2px solid var(--blue);}
+  /* 三栏 */
+  .cols{display:flex;min-height:300px;background:#fff;}
+  .col-l{width:190px;border-right:1px solid var(--line);padding:8px;font-size:12px;color:#555;}
+  .col-l .hd{font-weight:700;color:var(--blue);font-size:11.5px;margin-bottom:6px;}
+  .col-l .tr{padding:3px 6px;border-radius:5px;cursor:default;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .col-l .tr.on{background:var(--blue-l);color:var(--blue);font-weight:600;}
+  .col-l .tr i{font-style:normal;color:var(--mut);float:right;font-size:10.5px;}
+  .col-c{flex:1;position:relative;background:#FDFDFB;}
+  .graph-mock{padding:14px;}
+  .node{display:inline-block;border:1.5px solid var(--blue);border-radius:8px;background:#fff;padding:5px 10px;font-size:11.5px;color:var(--blue);margin:6px 4px;}
+  .node.req{border-color:#185FA5;} .node.comp{border-color:#0F6E56;} .node.fun{border-color:#BA7517;}
+  .edge-note{color:var(--mut);font-size:11px;margin:8px 0;}
+  .col-r{width:210px;border-left:1px solid var(--line);padding:10px;font-size:12px;}
+  .col-r .hd{font-weight:700;color:var(--blue);font-size:11.5px;margin-bottom:6px;}
+  .kv{display:flex;justify-content:space-between;padding:2px 0;color:#555;}
+  .kv b{font-weight:400;color:var(--mut);}
+  /* 历史面板 */
+  .hist{background:#fff;}
+  .commit{display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;}
+  .commit:hover{background:var(--bg);}
+  .commit .msg{flex:1;}
+  .commit .msg b{font-size:12.5px;font-weight:600;}
+  .commit .meta{color:var(--mut);font-size:11px;margin-top:2px;}
+  .commit .sha{font-family:Consolas,monospace;color:var(--blue);font-size:11.5px;}
+  .stat{font-size:11px;color:var(--mut);text-align:right;line-height:1.7;}
+  .stat .add{color:#3B6D11;} .stat .mod{color:#BA7517;} .stat .del{color:#A32D2D;}
+  .detail{background:#FBFBF8;border-bottom:1px solid var(--line);padding:10px 14px 10px 38px;font-size:12px;}
+  .detail .grp{margin-bottom:6px;}
+  .detail .grp b{font-size:11.5px;}
+  .detail .fi{padding:2px 0 2px 14px;color:#555;}
+  .fi code{background:#F1EFE8;border-radius:4px;padding:0 5px;font-size:11px;}
+  .old{color:#A32D2D;text-decoration:line-through;} .new{color:#3B6D11;}
+  /* 说明表 */
+  table{border-collapse:collapse;width:100%;font-size:12px;margin-top:6px;}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top;}
+  th{background:var(--bg);color:var(--blue);}
+  .note{color:var(--mut);font-size:11.5px;margin-top:6px;line-height:1.7;}
+  .tag-blue{display:inline-block;background:var(--blue-l);color:var(--blue);border-radius:4px;padding:0 6px;font-size:11px;}
+  .btn-sm-mock{border:1px solid var(--line);background:#fff;border-radius:6px;padding:3px 12px;font-size:11.5px;cursor:pointer;margin-right:6px;}
+  .btn-sm-mock:hover{background:var(--bg);}
+  .btn-sm-mock.ok{border-color:#B8CFA4;color:#4C7A2E;background:#F4F8EE;font-weight:600;}
+</style>
+</head>
+<body>
+
+<h1>分支 × 图谱数据整合 · GitHub 式设计原型 <span class="tag-blue">v2 · 合并队列整合版</span></h1>
+<div class="sub">目标：图谱数据页成为「仓库工作区」唯一入口——分支选择器 + 内容/历史/合并请求三 Tab；<b>合并队列独立页取消，全部能力吸收进合并请求 Tab</b>。以下片段均可交互点击。</div>
+
+<h2>① 整体结构：图谱数据页头部（对标 GitHub 仓库页）</h2>
+<div class="shot">
+  <div class="top">
+    <span class="breadcrumb">智源知识库 <span>/</span> SatNet-通信载荷</span>
+    <!-- 分支选择器（点击可展开） -->
+    <div class="br-btn" onclick="toggleDD()">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="#5F5E5A"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25m-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0m8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5M4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5"/></svg>
+      <b id="curBr">dev</b> <span class="caret">▼</span>
+      <!-- 下拉面板 -->
+      <div class="br-down" id="brDD" onclick="event.stopPropagation()">
+        <div class="search"><input placeholder="筛选分支…" oninput="filterBr(this.value)"></div>
+        <div class="br-tabs"><b>分支</b><span>标记</span></div>
+        <div class="br-list" id="brList">
+          <div class="br-item" data-nm="main"><span class="chk"></span><span class="nm">main</span><span class="badge def">默认</span></div>
+          <div class="br-item" data-nm="release"><span class="chk"></span><span class="nm">release</span><span class="badge">已发布 · 只读</span></div>
+          <div class="br-item" data-nm="dev" onclick="pickBr('dev')"><span class="chk">✓</span><span class="nm">dev</span><span class="badge">开发</span></div>
+          <div class="br-item" data-nm="personal/米爸"><span class="chk"></span><span class="nm">personal/米爸 <i>← 自 dev</i></span><span class="badge">个人</span></div>
+          <div class="br-item" data-nm="gac/lbp"><span class="chk"></span><span class="nm">gac/lbp <i>← 自 dev</i></span><span class="badge">项目</span></div>
+        </div>
+        <div class="br-new">＋ 新建分支（自当前 dev 检出）</div>
+      </div>
+    </div>
+    <span class="pill" title="工作分支：实体/关系/图谱/检索均按该分支加载">工作分支 ⇄ 图谱 / 检索 / 建模 全局生效</span>
+    <span style="flex:1"></span>
+    <span class="lnk" style="color:var(--blue);cursor:pointer;text-decoration:underline;font-size:12px;">比较 dev…release →</span>
+  </div>
+  <!-- 分支上下文条（已有能力保留） -->
+  <div class="ctx">
+    <span><b>dev</b> 领先 release <b>↑4</b> · 落后 <b>↓0</b></span>
+    <span>最近提交：<b>#125 图谱更新</b> <span style="color:var(--mut)">2 小时前 · 米爸</span></span>
+    <span>进行中 MR：<b>1</b></span>
+    <span class="sp"></span>
+    <span class="pill">＋ 发起 MR（dev → release）</span>
+  </div>
+  <!-- 内容/历史/MR Tab（对标 GitHub 仓库页：Code / Commits / Pull requests） -->
+  <div class="tabs">
+    <span class="t on">🕸 内容</span>
+    <span class="t" onclick="alert('切换到历史记录 Tab：提交列表（原型片段②）')">🕘 历史 <span class="badge">128</span></span>
+    <span class="t" onclick="alert('切换到合并请求 Tab：MR 列表 + 行内处理（原型片段③）')">🔀 合并请求 <span class="badge" style="border-color:#E8D9A8;background:#FBF5E1;color:#8A6D1A;">1 待评审</span></span>
+    <span style="flex:1"></span>
+    <span style="padding:6px 0;color:var(--mut);font-size:11.5px;">39 实体 · 46 关系 · 本分支 4 个未合并提交</span>
+  </div>
+  <!-- 三栏内容区（现有三栏保留） -->
+  <div class="cols">
+    <div class="col-l">
+      <div class="hd">实体树（类型 → 实例）</div>
+      <div class="tr">▸ 需求 <i>10</i></div>
+      <div class="tr on">▾ 通信链路 <i>2</i></div>
+      <div class="tr" style="padding-left:20px;">上行链路-01</div>
+      <div class="tr" style="padding-left:20px;">下行链路-01</div>
+      <div class="tr">▸ 部件 <i>17</i></div>
+      <div class="tr">▸ 功能 <i>6</i></div>
+    </div>
+    <div class="col-c">
+      <div class="graph-mock">
+        <span class="node req">系统需求-01</span><span class="edge-note">──satisfy──→</span><span class="node fun">功能-链路预算</span><br>
+        <span class="node comp">上行链路-01</span><span class="edge-note">──feeds──→</span><span class="node comp">下行链路-01</span>
+        <div class="edge-note" style="margin-top:14px;">中栏 = 现有三栏图谱（左树 · 画布 · 右详情），本次设计只重构「头部」，三栏不动</div>
+      </div>
+    </div>
+    <div class="col-r">
+      <div class="hd">📋 实例详情</div>
+      <div class="kv"><b>类型</b><span>上行链路</span></div>
+      <div class="kv"><b>状态</b><span>✅ 已评审</span></div>
+      <div class="kv"><b>来源文档</b><span>📄 链路预算.xlsx</span></div>
+      <div class="kv"><b>置信度</b><span>91%</span></div>
+      <div class="kv"><b>变更历史</b><span>#125 · #118</span></div>
+    </div>
+  </div>
+</div>
+<div class="note">交互：点「dev ▾」展开分支下拉；点其他分支可切换（切换后内容区/历史/上下文条整体随分支刷新——数据同一份的分支投影）。</div>
+
+<h2>② 历史 Tab：提交列表 + 快照明细（对标 GitHub Commits，直接复用现有提交抽屉数据）</h2>
+<div class="shot hist">
+  <div class="commit" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+    <span style="font-size:16px;">📝</span>
+    <div class="msg"><b>图谱更新：新增变频器与链路关系</b><div class="meta">米爸 提交于 9 月 3 日 21:47 · 分支 dev</div></div>
+    <div class="stat"><span class="sha">c1d5f9e</span><br><span class="add">+3</span> <span class="mod">~1</span> <span class="del">-1</span></div>
+  </div>
+  <div class="detail" style="display:block;">
+    <div class="grp"><b style="color:#3B6D11;">🟢 新增（3）</b>
+      <div class="fi"><code>变频器-02</code> 部件 · candidate</div>
+      <div class="fi"><code>上行链路-01 → 变频器-02 feeds_into</code> 关系</div>
+      <div class="fi"><code>变频器-02 → 下行链路-01 feeds_into</code> 关系</div>
+    </div>
+    <div class="grp"><b style="color:#BA7517;">✎ 修改（1）</b>
+      <div class="fi"><code>上行链路-01</code> <span class="old">gain=12dB</span> → <span class="new">gain=18dB</span>，<span class="old">candidate</span> → <span class="new">reviewed</span></div>
+    </div>
+    <div class="grp"><b style="color:#A32D2D;">🔴 移除（1）</b>
+      <div class="fi"><code>R1 终端储存</code> 需求 · deprecated</div>
+    </div>
+    <div class="note" style="margin:0;">明细 = 提交快照与父提交自动对比（已上线能力），此处由抽屉提升为历史 Tab 行内展开。</div>
+  </div>
+  <div class="commit">
+    <span style="font-size:16px;">🔀</span>
+    <div class="msg"><b>MR #12 合并：personal/米爸 → dev</b><div class="meta">米爸 提交于 9 月 2 日 18:02</div></div>
+    <div class="stat"><span class="sha">8ab02c1</span><br><span class="add">+114</span></div>
+  </div>
+  <div class="commit">
+    <span style="font-size:16px;">📥</span>
+    <div class="msg"><b>导入：POJbaseline 文档抽取入库</b><div class="meta">系统 提交于 9 月 1 日 10:15</div></div>
+    <div class="stat"><span class="sha">f0031aa</span><br><span class="add">+1</span> <span class="del">-1</span></div>
+  </div>
+</div>
+
+<h2>③ 合并请求 Tab：吸收合并队列页全部能力（对标 GitHub Pull requests）</h2>
+<div class="shot">
+  <!-- MR Tab 头：KPI 收敛为 Open/Closed 计数 + 冲突徽章 -->
+  <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);">
+    <span style="font-weight:700;color:#333;">🔀 打开 <b style="color:#333;">2</b></span>
+    <span style="color:var(--mut);cursor:pointer;">✓ 已合并/关闭 11</span>
+    <span style="flex:1"></span>
+    <span class="pill" style="cursor:pointer;" title="原「＋ 新建合并请求」，预填 f-src/f-tgt 规则不变">＋ 发起合并请求</span>
+    <span class="pill" style="cursor:pointer;" title="原「🔍 分支对比」抽屉">🔍 比较分支…</span>
+    <span class="pill" style="cursor:pointer;" title="原「📦 发布日志」">📦 发布日志</span>
+  </div>
+  <!-- MR 行：点击展开处理区 -->
+  <div class="commit" onclick="toggleMr(this)">
+    <span style="font-size:16px;">🔀</span>
+    <div class="msg"><b>personal/米爸 → dev：LBP 场景 12 条实体入库</b>
+      <div class="meta">#14 · 米爸 发起于 9 月 3 日 · <span style="color:#8A6D1A;">⚠ 2 处冲突</span> · <span class="add">+12</span> <span class="mod">~3</span> <span class="del">-1</span></div>
+      <!-- 冲突统计卡收紧为一行内联（原 KPI 概览条 4 卡 → 此处按需展示） -->
+      <div class="meta" style="margin-top:4px;"><span class="pill" style="color:#A32D2D;border-color:#E4B6B6;">⚠ 冲突：变频器-02 属性 · R3 需求状态</span></div>
+    </div>
+    <span class="badge" style="border-color:#E8D9A8;background:#FBF5E1;color:#8A6D1A;">待评审</span>
+  </div>
+  <div class="detail" style="display:none;">
+    <div class="grp"><b>差异预览</b>（复用对比抽屉：统计 + 清单 + 🕸 叠加图谱）</div>
+    <div class="fi"><button class="btn-sm-mock" onclick="alert('打开 openMrDrawer：6 卡统计 + 风险排序清单 + 叠加图谱')">查看完整差异 →</button></div>
+    <div class="grp" style="margin-top:8px;"><b>冲突解决</b>（resolve-conflict 逐条选择 保留源/保留目标）</div>
+    <div class="fi"><code>变频器-02.properties.gain</code>：源 <span class="new">18dB</span> / 目标 <span class="old">12dB</span> <span class="tag-blue">选择保留 →</span></div>
+    <div class="fi"><code>R3.status</code>：源 <span class="new">reviewed</span> / 目标 <span class="old">candidate</span> <span class="tag-blue">选择保留 →</span></div>
+    <div class="grp" style="margin-top:8px;"><b>评审操作</b>（approve / request_changes / rollback，review_note 留痕）</div>
+    <div class="fi">
+      <button class="btn-sm-mock ok" onclick="alert('resolveMerge(id, approve)')">✓ 批准合并</button>
+      <button class="btn-sm-mock" onclick="alert('resolveMerge(id, request_changes)')">✎ 请求修改</button>
+      <button class="btn-sm-mock" onclick="alert('rollback(id)')">↩ 回滚</button>
+    </div>
+  </div>
+  <div class="commit" onclick="toggleMr(this)">
+    <span style="font-size:16px;">🔀</span>
+    <div class="msg"><b>dev → release：v1.3 发布合并</b>
+      <div class="meta">#13 · 米爸 发起于 9 月 2 日 · 无冲突 · <span class="add">+34</span> <span class="del">-2</span></div>
+    </div>
+    <span class="badge" style="border-color:#D8E4CF;color:#4C7A2E;background:#F4F8EE;">待发布审批</span>
+  </div>
+  <div class="note" style="margin:0;padding:8px 14px;">分支列表（原 340px 左栏）职责由顶部<b>分支选择器</b>吸收：切换=设为工作分支、hover 展开「对比 🔍 / 提交 📜 / 删除」快捷操作、底部「＋ 新建分支」。KPI 概览条（分支数/元素/待评审/冲突）收敛为本行计数。</div>
+</div>
+<div class="note">合并队列页取消后：<b>导航「🔀 合并队列」移除</b>；总览待办/首页 KPI/发布待办的跳转全部改指 kb-d 合并请求 Tab。能力零丢失——MR 列表/发起/冲突解决/评审/回滚/发布日志/分支对比/分支管理全部换容器复用现有函数。</div>
+
+<h2>④ 设计要点与现状映射</h2>
+<table>
+  <tr><th style="width:130px;">GitHub 元素</th><th>本系统落位</th><th style="width:150px;">改动量</th></tr>
+  <tr><td>分支下拉选择器（筛选/默认标记/新建分支）</td><td>替换页头原生 <code>&lt;select&gt;</code>：搜索过滤 + 分支类型分组（main/release 默认标记、personal 显示"← 自父分支"）+ 底部新建分支（预填父分支）</td><td>纯前端，全局选择器一处改造全页生效</td></tr>
+  <tr><td>Code / Commits / Pull requests 三 Tab</td><td>图谱数据页加「内容 / 历史 / 合并请求」Tab：内容=现三栏；历史=提交列表行内展开快照明细；合并请求=MR 列表 + 行内处理（差异预览/冲突解决/评审操作）</td><td>纯前端，MR 端点与处理函数全部现成</td></tr>
+  <tr><td>分支上下文（ahead/behind + PR 入口）</td><td>保留现有 kb-branch-ctx 条，置于分支选择器下一行</td><td>已完成</td></tr>
+  <tr><td>Compare 页</td><td>「比较 dev…release」链接 + 上下文条 ↑↓ 徽章 → 现有对比抽屉（统计/清单/叠加图谱）</td><td>已完成，仅加入口</td></tr>
+  <tr><td>PR 队列</td><td><b>合并队列独立页取消</b>：分支列表→选择器、KPI→Tab 头计数、MR 全流程→合并请求 Tab、发布日志→Tab 工具栏；导航项移除，站内跳转改指 kb-d</td><td>纯前端搬运，函数零改动</td></tr>
+</table>
+<div class="note">设计原则：分支是「内容」的唯一上下文——切分支 = 切换图谱/历史/MR 的整份数据投影（git checkout 心智）；<b>分支的浏览、提交、对比、合并全生命周期在一个页面闭环</b>，不再跨页跳转。</div>
+
+<script>
+function toggleDD(){ document.getElementById('brDD').classList.toggle('open'); }
+document.addEventListener('click', e => { if(!e.target.closest('.br-btn')) document.getElementById('brDD').classList.remove('open'); });
+function toggleMr(row){ const d = row.nextElementSibling; if(d && d.classList.contains('detail')) d.style.display = d.style.display==='none'?'block':'none'; }
+function pickBr(nm){
+  document.getElementById('curBr').textContent = nm;
+  document.getElementById('brDD').classList.remove('open');
+  alert('原型演示：切换到分支「'+nm+'」——实际系统中将触发 onGlobalBranchChange：图谱/树/详情/历史/上下文条整体刷新');
+}
+function filterBr(q){
+  q = q.trim().toLowerCase();
+  document.querySelectorAll('#brList .br-item').forEach(el=>{
+    el.style.display = el.dataset.nm.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+</script>
+</body>
+</html>

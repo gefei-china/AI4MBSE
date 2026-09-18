@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 原生补充设计 · 可视化</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", sans-serif; background: #f4f6fa; color: #222; padding: 16px; }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { font-size: 12px; color: #666; margin-bottom: 16px; }
+  .gallery { display: flex; flex-direction: column; gap: 18px; }
+  .card { background: #fff; border: 2px solid #2b6cb0; border-radius: 10px; overflow: hidden; }
+  .card-h { padding: 10px 16px; background: #f0f6ff; border-bottom: 1px solid #cfe0f5; font-size: 14px; font-weight: 600; color: #2b6cb0; }
+  .card-b { padding: 14px 16px; }
+  .card-b svg { width: 100%; height: auto; display: block; }
+  .legend { font-size: 11px; color: #666; margin-top: 8px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🧬 AI 原生架构 · 补充设计（点 2/3/4）</h1>
+  <div class="sub">配合《AI原生架构_澄清与补充设计_20260831.md》· 白底蓝框规范</div>
+
+  <div class="gallery">
+
+    <!-- 点2：写回三通道 -->
+    <div class="card">
+      <div class="card-h">点 2 · SysML V2 生成 → 归一三关卡 → 写回建模软件（三通道）</div>
+      <div class="card-b">
+        <svg viewBox="0 0 1180 250" font-family="Microsoft YaHei">
+          <!-- 生成归一 -->
+          <g font-size="11.5">
+            <rect x="20" y="30" width="150" height="52" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="1.6"/>
+            <text x="95" y="50" text-anchor="middle" font-weight="600" fill="#2b6cb0">LLM 生成 SysML V2</text>
+            <text x="95" y="68" text-anchor="middle" fill="#666">（受本体类型+词典约束）</text>
+            <text x="170" y="62">→</text>
+            <rect x="185" y="30" width="150" height="52" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="1.6"/>
+            <text x="260" y="50" text-anchor="middle" font-weight="600">归一校验</text>
+            <text x="260" y="68" text-anchor="middle" fill="#666">词典归一·语法校验</text>
+            <text x="335" y="62">→</text>
+            <rect x="350" y="30" width="150" height="52" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="1.6"/>
+            <text x="425" y="50" text-anchor="middle" font-weight="600">消歧合并</text>
+            <text x="425" y="68" text-anchor="middle" fill="#666">同名合并·建议新词</text>
+            <text x="500" y="62">→</text>
+            <rect x="515" y="30" width="150" height="52" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="1.6"/>
+            <text x="590" y="50" text-anchor="middle" font-weight="600">一致性检查</text>
+            <text x="590" y="68" text-anchor="middle" fill="#666">重名·悬空·循环阻断</text>
+          </g>
+          <text x="700" y="62" font-size="11.5" fill="#2b6cb0" font-weight="600">规范化 .kerml + 归一报告</text>
+          <!-- model_writer 接口 -->
+          <rect x="20" y="110" width="1140" height="34" rx="8" fill="#f0f6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+          <text x="590" y="133" text-anchor="middle" font-size="12.5" font-weight="600" fill="#2b6cb0">model_writer 接口：write_model(model_text, target) → {ok, target_uri, report}</text>
+          <!-- 三通道 -->
+          <rect x="20" y="160" width="360" height="72" rx="8" fill="#e8f4ec" stroke="#2f855a" stroke-width="1.6"/>
+          <text x="200" y="182" text-anchor="middle" font-weight="600" fill="#2f855a">通道 A · 标准文件导入（MVP）</text>
+          <text x="200" y="200" text-anchor="middle" font-size="11">导出 .kerml/.profile → MagicDraw 文件导入</text>
+          <text x="200" y="218" text-anchor="middle" font-size="10.5" fill="#666">成本零 · 所有客户</text>
+          <rect x="400" y="160" width="360" height="72" rx="8" fill="#e8f4ec" stroke="#2f855a" stroke-width="1.6"/>
+          <text x="580" y="182" text-anchor="middle" font-weight="600" fill="#2f855a">通道 B · SysML v2 API（推荐）</text>
+          <text x="580" y="200" text-anchor="middle" font-size="11">ISO 标准 SysML v2 REST（Jupyter/KerML 服务）</text>
+          <text x="580" y="218" text-anchor="middle" font-size="10.5" fill="#666">面向 SysML v2 工具链客户</text>
+          <rect x="780" y="160" width="380" height="72" rx="8" fill="#fff8e6" stroke="#c98a2e" stroke-width="1.6"/>
+          <text x="970" y="182" text-anchor="middle" font-weight="600" fill="#8a5a10">通道 C · MagicDraw 插件（按需）</text>
+          <text x="970" y="200" text-anchor="middle" font-size="11">Cameo OpenAPI Java 插件远程写回</text>
+          <text x="970" y="218" text-anchor="middle" font-size="10.5" fill="#666">深度集成客户</text>
+        </svg>
+        <div class="legend">要点：归一/消歧前移注入生成侧（三关卡"生成即规范"）；写回抽象为 model_writer 接口，A/B/C 通道可插拔。</div>
+      </div>
+    </div>
+
+    <!-- 点3：工程数据入图 -->
+    <div class="card">
+      <div class="card-h">点 3 · 工程数据 → 三元组 → 图数据库（R2RML 驱动）</div>
+      <div class="card-b">
+        <svg viewBox="0 0 1180 260" font-family="Microsoft YaHei">
+          <!-- 数据源 -->
+          <g font-size="11.5">
+            <rect x="20" y="30" width="170" height="48" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="1.6"/>
+            <text x="105" y="52" text-anchor="middle" font-weight="600">SysML 模型</text>
+            <text x="105" y="68" text-anchor="middle" font-size="10.5" fill="#666">.kerml / .xml</text>
+            <rect x="20" y="88" width="170" height="48" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="1.6"/>
+            <text x="105" y="110" text-anchor="middle" font-weight="600">需求表</text>
+            <text x="105" y="126" text-anchor="middle" font-size="10.5" fill="#666">Excel / CSV（编号·名称·验证）</text>
+            <rect x="20" y="146" width="170" height="48" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="1.6"/>
+            <text x="105" y="168" text-anchor="middle" font-weight="600">仿真结果</text>
+            <text x="105" y="184" text-anchor="middle" font-size="10.5" fill="#666">JSON / CSV（工况·参数）</text>
+          </g>
+          <text x="210" y="120" font-size="14" fill="#2b6cb0">→</text>
+          <!-- 接入器 -->
+          <rect x="235" y="70" width="150" height="92" rx="8" fill="#e8f4ec" stroke="#2f855a" stroke-width="1.6"/>
+          <text x="310" y="100" text-anchor="middle" font-weight="600" fill="#2f855a">① 接入器</text>
+          <text x="310" y="120" text-anchor="middle" font-size="10.5">Adapter（新增）</text>
+          <text x="310" y="138" text-anchor="middle" font-size="10.5" fill="#666">解析为标准逻辑表</text>
+          <text x="310" y="152" text-anchor="middle" font-size="10.5" fill="#666">（列名对齐本体属性）</text>
+          <text x="400" y="120" font-size="14" fill="#2b6cb0">→</text>
+          <!-- R2RML -->
+          <rect x="420" y="70" width="170" height="92" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="1.6"/>
+          <text x="505" y="100" text-anchor="middle" font-weight="600">② R2RML 映射</text>
+          <text x="505" y="120" text-anchor="middle" font-size="10.5" fill="#2f855a">✅ 引擎已就绪</text>
+          <text x="505" y="138" text-anchor="middle" font-size="10.5" fill="#666">subject模板+class</text>
+          <text x="505" y="152" text-anchor="middle" font-size="10.5" fill="#666">谓词-宾语+关联</text>
+          <text x="590" y="120" font-size="14" fill="#2b6cb0">→</text>
+          <!-- Writer -->
+          <rect x="610" y="70" width="200" height="92" rx="8" fill="#e8f4ec" stroke="#2f855a" stroke-width="1.6"/>
+          <text x="710" y="100" text-anchor="middle" font-weight="600" fill="#2f855a">③ 图数据库 Writer</text>
+          <text x="710" y="120" text-anchor="middle" font-size="10.5">JenaTDBWriter（默认·SPARQL）</text>
+          <text x="710" y="138" text-anchor="middle" font-size="10.5">Neo4jWriter（可选·Cypher）</text>
+          <text x="810" y="120" font-size="14" fill="#2b6cb0">→</text>
+          <!-- 图库 -->
+          <rect x="830" y="70" width="150" height="92" rx="8" fill="#f5f0fa" stroke="#6b46c1" stroke-width="1.6"/>
+          <text x="905" y="100" text-anchor="middle" font-weight="600" fill="#6b46c1">图数据库</text>
+          <text x="905" y="120" text-anchor="middle" font-size="10.5">Jena TDB / Neo4j</text>
+          <text x="905" y="138" text-anchor="middle" font-size="10.5" fill="#666">标准三元组·SPARQL</text>
+          <!-- 增量+校验 -->
+          <rect x="20" y="205" width="960" height="40" rx="8" fill="#fff8e6" stroke="#c98a2e" stroke-width="1.5"/>
+          <text x="500" y="230" text-anchor="middle" font-size="11.5" fill="#8a5a10">④ 增量同步（按 branch 快照 diff，复用 commits）→ ⑤ 入图后 SHACL 校验 + 本体一致性（复用）→ 报告</text>
+          <rect x="990" y="205" width="170" height="40" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+          <text x="1075" y="230" text-anchor="middle" font-size="11" fill="#2b6cb0">「数据集成」页（新增 UI）</text>
+        </svg>
+        <div class="legend">要点：R2RML 映射引擎已就绪（复用），新增量集中在 Adapter（数据源接入）+ Writer（图库写入）+ 编排 UI；默认 Jena TDB（标准 SPARQL、与 OWL/SHACL 一致）。</div>
+      </div>
+    </div>
+
+    <!-- 点4：会话四域 -->
+    <div class="card">
+      <div class="card-h">点 4 · 会话入口统管全系统（对话式系统管理）</div>
+      <div class="card-b">
+        <svg viewBox="0 0 1180 300" font-family="Microsoft YaHei">
+          <!-- 会话入口 -->
+          <rect x="430" y="18" width="320" height="52" rx="26" fill="#2b6cb0"/>
+          <text x="590" y="43" text-anchor="middle" font-size="13.5" font-weight="700" fill="#fff">💬 统一会话入口（现有 chat）</text>
+          <text x="590" y="60" text-anchor="middle" font-size="10.5" fill="#dcecff">意图路由扩展（INTENTS 新增 system-mgmt 域）</text>
+          <!-- 四域 -->
+          <g font-size="12">
+            <rect x="60" y="105" width="240" height="70" rx="8" fill="#f0f6ff" stroke="#2b6cb0" stroke-width="1.6"/>
+            <text x="180" y="130" text-anchor="middle" font-weight="600" fill="#2b6cb0">建模域（现状）</text>
+            <text x="180" y="150" text-anchor="middle" font-size="10.5" fill="#666">SysML 生成 · 建模对话 · 产物物化</text>
+            <rect x="320" y="105" width="240" height="70" rx="8" fill="#f0f6ff" stroke="#2b6cb0" stroke-width="1.6"/>
+            <text x="440" y="130" text-anchor="middle" font-weight="600" fill="#2b6cb0">知识域（现状）</text>
+            <text x="440" y="150" text-anchor="middle" font-size="10.5" fill="#666">检索问答 · 图谱查询 · 追溯</text>
+            <rect x="580" y="105" width="240" height="70" rx="8" fill="#f0f6ff" stroke="#2b6cb0" stroke-width="1.6"/>
+            <text x="700" y="130" text-anchor="middle" font-weight="600" fill="#2b6cb0">分析域（增强）</text>
+            <text x="700" y="150" text-anchor="middle" font-size="10.5" fill="#666">统计查询 · 报告 · 一致性</text>
+            <rect x="840" y="105" width="280" height="70" rx="8" fill="#e8f4ec" stroke="#2f855a" stroke-width="2"/>
+            <text x="980" y="130" text-anchor="middle" font-weight="700" fill="#2f855a">系统管理域（新增）</text>
+            <text x="980" y="150" text-anchor="middle" font-size="10.5" fill="#666">用户·权限·审计·监控·配置</text>
+          </g>
+          <!-- 系统管理分层 -->
+          <g font-size="11.5">
+            <rect x="60" y="200" width="500" height="80" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="1.5"/>
+            <text x="310" y="222" text-anchor="middle" font-weight="600" fill="#2b6cb0">只读查询（默认安全 · P0）</text>
+            <text x="310" y="242" text-anchor="middle" font-size="10.5" fill="#666">"有哪些用户？""王工什么权限？""最近审计？""服务状态？"</text>
+            <text x="310" y="260" text-anchor="middle" font-size="10.5" fill="#2f855a">→ 工具调用（users/audit/monitor API）→ 表格化回答</text>
+            <rect x="580" y="200" width="540" height="80" rx="8" fill="#fff8e6" stroke="#c98a2e" stroke-width="1.5"/>
+            <text x="850" y="222" text-anchor="middle" font-weight="600" fill="#8a5a10">授权写操作（双重确认 · P1）</text>
+            <text x="850" y="242" text-anchor="middle" font-size="10.5" fill="#666">"创建用户 xx，角色=知识工程师"</text>
+            <text x="850" y="260" text-anchor="middle" font-size="10.5" fill="#8a5a10">→ 对话回显确认 + RBAC（仅 admin）+ 执行 + 审计留痕</text>
+          </g>
+          <rect x="60" y="292" width="1060" height="0" rx="0"/>
+        </svg>
+        <div class="legend">要点：四域统一入口，"对话即操作"从建模泛化到全系统；系统管理默认只读，写操作三重保障（确认+RBAC+审计）；P2 扩展多步管理任务（Agent 编排）。</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

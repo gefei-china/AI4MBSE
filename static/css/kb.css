@@ -1,0 +1,74 @@
+/* ==========================================================================
+ * kb.css — 知识库模块（v6.3 完整迁入）
+ * 加载顺序：gnav.css → chat.css → studio.css → kb.css → pages.css → app.css
+ *
+ * 模块边界：知识库 / 本体模型（Ontology）相关的所有工具行 + 分支切换 + 知识库挑选 + 本体全屏图
+ * ========================================================================== */
+
+/* ── 1. 本体蓝图（Blueprint）输入框 placeholder 调色 ── */
+#bp-text::placeholder{color:#b3bac6;opacity:1;}
+#bp-text:-ms-input-placeholder{color:#b3bac6;}
+
+/* ── 2. 知识库模块工具行 + 工作分支切换 ── */
+/* v6.3 注释保留以备回溯（原 116-117 行） */
+.kb-toolbar{display:flex;align-items:center;gap:10px;padding:7px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;margin-bottom:12px;}
+.kb-toolbar-title{font-size:13.5px;font-weight:700;color:var(--blue-d);flex:none;}
+/* 分支切换控件（知识库模块右上角） */
+.branch-ctl{display:none;align-items:center;gap:5px;flex:none;font-size:12px;color:var(--mut);}
+.branch-ctl.show{display:inline-flex;}
+.branch-ctl select{border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;background:#fff;color:var(--blue-d);font-weight:600;max-width:150px;cursor:pointer;}
+.branch-ctl .help-ico{cursor:help;font-size:13px;color:var(--mut);opacity:.7;line-height:1;}
+.branch-ctl .help-ico:hover{opacity:1;color:var(--blue-d);}
+
+/* ── 2.1 知识中心顶层双 Tab 切换器（2026-09-17 入口整合：资料库 kb-e / 图谱工作区 kb-d） ──
+   导航项已合并为 nav-kbhub（知识中心）；本切换器由 loadKBTab() 控制显隐与高亮，
+   深链 go('kb','kb-d'/'kb-e') 不变，chip 点击即复用 go() 完整路由。 */
+.kbhub-chip{font-size:12.5px;padding:4px 14px;border:1px solid var(--line);border-radius:16px;cursor:pointer;color:var(--mut);background:#fff;user-select:none;white-space:nowrap;}
+.kbhub-chip:hover{border-color:var(--blue);color:var(--blue-d);}
+.kbhub-chip.on{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600;}
+
+/* ── 3. 知识库引用挑选器（AI 建模页 mention 内弹层用） ── */
+/* v6.3 注释保留以备回溯（原 187-190 行） */
+.kb-pick{display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto;}
+.kb-pick .kb-tag{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:12.5px;}
+.kb-pick .kb-tag:hover{background:var(--blue-l);border-color:var(--blue-bd);}
+.kb-pick .kb-tag b{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* ── 4. 本体 Graph 全屏查看（点击查看大图） ── */
+/* v6.3 注释保留以备回溯（原 139-140 行） */
+#ont-graph.ont-fullscreen{position:fixed;inset:0;z-index:3000;padding:10px;background:#fff;border-radius:0;}
+#ont-graph.ont-fullscreen #ont-graph-body{flex:1;}
+/* ═══ 本体模型页（kb-c）视口适配（2026-09-07）═══
+   问题：#ont-pane-edit 用 height:calc(100vh-180px) 魔法数字，工作台距窗口底悬空 ~54px，
+   左栏类层次列表底部被截断、观感上"没有滚动条"。
+   方案：kb-c 激活时整页转为 flex 列布局——页面不滚动，工作台精确填满剩余高度，
+   左栏 #ont-types-list 内部滚动直达窗口底边。:has 作用域限定，其他子页（kb-a/b/d/e）不受影响。 */
+#pg-kb:has(.subpage#kb-c.on){display:flex;flex-direction:column;height:100%;overflow:hidden;}
+.subpage#kb-c.on{display:flex;flex-direction:column;flex:1;min-height:0;}
+#kb-c.on #ont-subtab-row{flex:none;}
+#kb-c.on #ont-pane-terms{flex:1;min-height:0;}          /* 术语映射态：面板随视口，概念列表内部滚动 */
+#kb-c.on #ont-pane-terms > .panel{height:100%;}
+/* 老浏览器无 :has() 的兜底：go() 在 kb-c 激活时切换 .ont-fill（与上方 :has 规则等效） */
+#pg-kb.ont-fill{display:flex;flex-direction:column;height:100%;overflow:hidden;}
+/* 术语映射态内部链：#terms-concepts-view 拉伸为 flex 列，概念列表 #cpts-list 内部滚动（否则被 panel overflow:hidden 静默裁切） */
+#kb-c.on #ont-pane-terms > .panel > #terms-concepts-view{display:flex;flex-direction:column;flex:1;min-height:0;}
+/* 2026-09-08 修复：app.css 的老规则 .panel .pb{flex:1} 在 view 变 flex 容器后被"激活"，
+   工具行 .pb 被拉伸出 ~300px 空白、列表被推到底部——工具行必须保持内容高，仅列表弹性伸展 */
+#kb-c.on #ont-pane-terms > .panel > #terms-concepts-view > .pb:first-child{flex:none;overflow:visible;}
+#kb-c.on #cpts-list{flex:1;min-height:0;overflow-y:auto;}
+
+/* ═══ 中栏 Description 组件优化（2026-09-07，WebProtégé 风格）═══ */
+#ont-desc .ont-sec{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--mut);margin:16px 0 6px;letter-spacing:.4px;border-bottom:1px dashed var(--line);padding-bottom:3px;}
+#ont-desc .ont-sec .help-ico{cursor:help;flex:none;}
+#ont-desc .ont-chip{transition:border-color .12s,background .12s;}
+#ont-desc .ont-chip:hover{border-color:var(--blue);background:#f6f9ff;}
+#ont-desc .ont-add{transition:color .12s,background .12s,border-color .12s;}
+#ont-desc .ont-add:hover{color:var(--blue-d);background:var(--blue-l);border-color:var(--blue);}
+.ont-inline-inp{font-size:11.5px;padding:2px 8px;border:1px solid var(--blue);border-radius:10px;width:170px;outline:none;background:#fff;box-shadow:0 0 0 2px rgba(24,95,165,.10);}
+.ont-inline-inp:focus{box-shadow:0 0 0 3px rgba(24,95,165,.16);}
+
+/* ═══ 2026-09-08 二轮：新增/编辑按钮蓝框常显（用户反馈不够明显）═══ */
+#kb-c .ont-act-btn{border:1px solid var(--blue) !important;color:var(--blue-d) !important;background:#fff !important;font-weight:600;}
+#kb-c .ont-act-btn:hover{background:var(--blue-l) !important;}
+#kb-c #ont-desc .ont-add{border:1px solid var(--blue);color:var(--blue-d);background:#fff;}
+#kb-c #ont-desc .ont-add:hover{background:var(--blue-l);}

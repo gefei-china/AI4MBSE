@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>资料库「文件结构管理」×「项目（工程）入口」— IA 与交互线框 20260917</title>
+<style>
+  :root{
+    --ink:#1f2a37; --mut:#6b7280; --line:#e2e8f0; --line2:#cfe0fb;
+    --blue:#2f6fed; --blue-d:#1d4ed8; --blue-l:#eff6ff;
+    --grn:#2f855a; --grn-l:#eaf7ec; --amb:#c98a2e; --amb-l:#fffaf0;
+    --pur:#7c3aed; --pur-l:#f5f3ff; --bg:#f7f9fc;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:#fff;color:var(--ink);
+    font:13px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 26px 60px;}
+  h1{font-size:20px;font-weight:600;margin:0 0 4px;}
+  .sub{color:var(--mut);font-size:12px;margin-bottom:22px;}
+  h2{font-size:15px;font-weight:600;margin:34px 0 12px;padding-left:10px;border-left:3px solid var(--blue);}
+  h3{font-size:13px;font-weight:600;margin:20px 0 8px;color:var(--blue-d);}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+  .card{border:1px solid var(--line);border-radius:12px;background:#fff;padding:14px 16px;}
+  .card.tint{background:var(--bg);}
+  .cap{font-size:11.5px;color:var(--mut);margin-top:8px;}
+  .cap b{color:var(--ink);font-weight:600;}
+  svg{display:block;width:100%;height:auto;}
+  .t{font-size:12px;fill:var(--ink);}
+  .ts{font-size:10.5px;fill:var(--mut);}
+  .tb{font-size:12px;fill:var(--ink);font-weight:600;}
+  .box{fill:#fff;stroke:var(--blue);stroke-width:1;}
+  .boxd{fill:var(--bg);stroke:var(--line2);stroke-width:1;}
+  .boxb{fill:var(--blue-l);stroke:var(--blue);stroke-width:1;}
+  .dash{fill:none;stroke:#b9c3d1;stroke-width:1;stroke-dasharray:3 3;}
+  table{border-collapse:collapse;width:100%;font-size:12px;}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top;}
+  th{background:var(--bg);font-weight:600;}
+  .pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10.5px;border:1px solid;}
+  .p-p0{background:#fff5f5;border-color:#F3C1C1;color:#b91c1c;}
+  .p-p1{background:var(--amb-l);border-color:#FAC775;color:#8a5a10;}
+  .p-p2{background:var(--grn-l);border-color:#C0DD97;color:var(--grn);}
+  .note{background:var(--blue-l);border:1px solid var(--line2);border-radius:8px;padding:9px 12px;font-size:12px;margin-top:12px;}
+  ul{margin:6px 0 0 18px;padding:0;} li{margin:3px 0;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>资料库「文件结构管理」×「项目（工程）入口」— 信息架构与交互线框</h1>
+  <div class="sub">2026-09-17 ｜ 配套文档：<code>资料库-文件结构管理设计方案-20260917.md</code> · <code>项目工程入口-调研与设计方案-20260917.md</code> ｜ 纯静态、零外部依赖，可离线打开</div>
+
+  <!-- ══════════ 议题 1 ══════════ -->
+  <h2>议题 1 · 资料库：从「平铺列表」到「目录树 + 元数据 + 智能视图」</h2>
+
+  <div class="grid">
+    <div class="card">
+      <h3 style="margin-top:0;">现状（代码核实）</h3>
+      <svg viewBox="0 0 520 250">
+        <rect x="10" y="10" width="500" height="230" rx="10" class="boxd"/>
+        <text x="26" y="34" class="tb">📁 资料库</text>
+        <rect x="430" y="20" width="64" height="20" rx="5" class="boxb"/>
+        <text x="462" y="34" class="ts" text-anchor="middle">上传文件</text>
+        <line x1="10" y1="52" x2="510" y2="52" stroke="var(--line)"/>
+        <text x="26" y="70" class="ts">文件 ｜ 作者 ｜ 上传时间 ｜ 知识分类 ｜ 版本 ｜ 块数 ｜ 状态 ｜ 操作</text>
+        <g class="boxd">
+          <rect x="20" y="80" width="480" height="26" rx="4"/>
+          <rect x="20" y="110" width="480" height="26" rx="4"/>
+          <rect x="20" y="140" width="480" height="26" rx="4"/>
+          <rect x="20" y="170" width="480" height="26" rx="4"/>
+          <rect x="20" y="200" width="480" height="26" rx="4"/>
+        </g>
+        <text x="30" y="97" class="ts">HTP.docx …  分类：— ｜ 版本：— ｜ 块0 ｜ 待入库</text>
+        <text x="30" y="127" class="ts">sFlow.md …  分类：— ｜ 版本：— ｜ 块0 ｜ 待入库</text>
+        <text x="30" y="157" class="ts">pipe_test.txt …  分类：— ｜ 版本：— ｜ 块0 ｜ 待入库</text>
+        <text x="30" y="187" class="ts">kpip.docx …  分类：— ｜ 版本：— ｜ 块0 ｜ 待入库</text>
+        <text x="30" y="217" class="ts">mydoc.md …  分类：— ｜ 版本：— ｜ 块0 ｜ 待入库</text>
+      </svg>
+      <div class="cap"><b>四个"没有"</b>：没有层级、没有分页、没有搜索过滤、元数据全空（8 条真实文档分类/版本/块数均为空或 0）。文档量一过百，此页即失效。</div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">目标 IA（双轨组织）</h3>
+      <svg viewBox="0 0 520 250">
+        <rect x="180" y="8" width="160" height="30" rx="7" class="boxb"/>
+        <text x="260" y="27" class="tb" text-anchor="middle">📁 资料库（kb-e）</text>
+        <path d="M260 38 L260 56" class="dash"/>
+        <line x1="90" y1="56" x2="430" y2="56" class="dash"/>
+
+        <rect x="10" y="66" width="150" height="120" rx="7" class="box"/>
+        <text x="24" y="86" class="tb">① 目录树（位置）</text>
+        <text x="24" y="106" class="ts">▾ 星网宽带通信系统</text>
+        <text x="34" y="124" class="ts">▾ 需求规范</text>
+        <text x="44" y="142" class="ts">接口定义</text>
+        <text x="34" y="160" class="ts">验证与确认</text>
+        <text x="24" y="178" class="ts">＋ 新建目录</text>
+
+        <rect x="182" y="66" width="156" height="120" rx="7" class="box"/>
+        <text x="196" y="86" class="tb">② 文档列表</text>
+        <text x="196" y="106" class="ts">面包屑 + 搜索</text>
+        <text x="196" y="124" class="ts">☑ 多选批量条</text>
+        <text x="196" y="142" class="ts">列：所属目录 / 分类</text>
+        <text x="196" y="160" class="ts">／版本 / 状态</text>
+        <text x="196" y="178" class="ts">分页器</text>
+
+        <rect x="352" y="66" width="158" height="120" rx="7" class="box"/>
+        <text x="366" y="86" class="tb">③ 详情抽屉</text>
+        <text x="366" y="106" class="ts">概览 / 分块</text>
+        <text x="366" y="124" class="ts">抽取实体 / 溯源</text>
+        <text x="366" y="142" class="ts">版本 / 操作</text>
+        <text x="366" y="160" class="ts">（复用 openPanel）</text>
+
+        <rect x="10" y="198" width="500" height="44" rx="7" class="boxb"/>
+        <text x="24" y="216" class="tb">④ 智能视图（只读聚合，不可拖入）</text>
+        <text x="24" y="234" class="ts">📥 未归类　⏳ 未入库　⚠ 解析失败　🏷 未分类　← 待办收口，保证"不整理也能被发现"</text>
+      </svg>
+      <div class="cap"><b>双轨分工</b>：目录树回答"文件放在哪"（唯一归属），元数据回答"这类文件有哪些"（可多值），智能视图回答"现在有什么要处理"。</div>
+    </div>
+  </div>
+
+  <h3>线框 A · 资料库主界面（目录树 + 列表 + 详情）</h3>
+  <div class="card">
+    <svg viewBox="0 0 1120 460">
+      <rect x="4" y="4" width="1112" height="452" rx="10" class="boxd"/>
+      <text x="20" y="28" class="tb">AI4MBSE</text>
+      <line x1="4" y1="40" x2="1116" y2="40" stroke="var(--line)"/>
+
+      <!-- 左：目录树 -->
+      <rect x="18" y="54" width="238" height="386" rx="8" class="box"/>
+      <text x="32" y="76" class="tb">资料库目录</text>
+      <rect x="186" y="62" width="56" height="20" rx="5" class="boxb"/>
+      <text x="214" y="76" class="ts" text-anchor="middle">＋ 新建</text>
+      <line x1="18" y1="92" x2="256" y2="92" stroke="var(--line)"/>
+      <text x="32" y="112" class="t">▾ 星网宽带通信系统</text>
+      <text x="44" y="134" class="t">▾ 需求规范　<tspan class="ts">(12)</tspan></text>
+      <rect x="30" y="142" width="214" height="22" rx="5" class="boxb"/>
+      <text x="46" y="157" class="t">接口定义　<tspan class="ts">(5)</tspan></text>
+      <text x="56" y="178" class="t">运行场景　<tspan class="ts">(3)</tspan></text>
+      <text x="44" y="200" class="t">▸ 验证与确认　<tspan class="ts">(7)</tspan></text>
+      <text x="44" y="222" class="t">▸ 标准与规范　<tspan class="ts">(9)</tspan></text>
+      <line x1="30" y1="238" x2="244" y2="238" class="dash"/>
+      <text x="32" y="258" class="tb">智能视图</text>
+      <text x="32" y="280" class="t">📥 未归类　<tspan class="ts">(2)</tspan></text>
+      <text x="32" y="302" class="t">⏳ 未入库　<tspan class="ts">(8)</tspan></text>
+      <text x="32" y="324" class="t">⚠ 解析失败　<tspan class="ts">(1)</tspan></text>
+      <text x="32" y="346" class="t">🏷 未分类　<tspan class="ts">(8)</tspan></text>
+      <line x1="30" y1="362" x2="244" y2="362" class="dash"/>
+      <text x="32" y="382" class="t">🗑 回收站</text>
+      <text x="32" y="416" class="ts">拖动列表行到目录 = 移动</text>
+
+      <!-- 右：列表 -->
+      <text x="274" y="74" class="ts">资料库 / 需求规范 / <tspan class="tb">接口定义</tspan></text>
+      <rect x="700" y="60" width="300" height="22" rx="5" class="boxd"/>
+      <text x="712" y="76" class="ts">🔍 搜索文件名 / 标签…　范围：含子目录 ▾</text>
+      <rect x="1012" y="60" width="88" height="22" rx="5" class="box"/>
+      <text x="1056" y="76" class="ts" text-anchor="middle">📤 上传文件</text>
+
+      <!-- 批量条 -->
+      <rect x="274" y="94" width="826" height="26" rx="5" class="boxb"/>
+      <text x="288" y="111" class="ts">☑ 全选本页（5） ｜ 已选 2 项 ｜ [📁 移动到…] [🏷 打标签] [📦 入库] [🗑 删除]</text>
+
+      <!-- 表头 -->
+      <rect x="274" y="128" width="826" height="24" rx="4" class="boxd"/>
+      <text x="284" y="145" class="ts">☑  文件</text>
+      <text x="480" y="145" class="ts">所属目录</text>
+      <text x="620" y="145" class="ts">知识分类</text>
+      <text x="720" y="145" class="ts">版本</text>
+      <text x="790" y="145" class="ts">块数</text>
+      <text x="860" y="145" class="ts">状态</text>
+      <text x="1010" y="145" class="ts">操作</text>
+
+      <g>
+        <rect x="274" y="158" width="826" height="30" rx="4" fill="#fff" stroke="var(--line)"/>
+        <text x="284" y="177" class="ts">☑ HTP.docx</text>
+        <text x="480" y="177" class="ts">需求规范 / 接口定义</text>
+        <text x="620" y="177" class="ts">需求规范</text>
+        <text x="720" y="177" class="ts">v2.0</text>
+        <text x="790" y="177" class="ts">16</text>
+        <text x="860" y="177" class="ts" fill="var(--grn)">✅ 已入库</text>
+        <text x="1010" y="177" class="ts">预览 追溯 更多 ▾</text>
+
+        <rect x="274" y="192" width="826" height="30" rx="4" fill="#fff" stroke="var(--line)"/>
+        <text x="284" y="211" class="ts">☑ sFlow.md</text>
+        <text x="480" y="211" class="ts">需求规范 / 接口定义</text>
+        <text x="620" y="211" class="ts">接口定义</text>
+        <text x="720" y="211" class="ts">v1.0</text>
+        <text x="790" y="211" class="ts">7</text>
+        <text x="860" y="211" class="ts" fill="var(--amb)">⏳ 待入库</text>
+        <text x="1010" y="211" class="ts">预览 追溯 更多 ▾</text>
+
+        <rect x="274" y="226" width="826" height="30" rx="4" fill="#fff" stroke="var(--line)"/>
+        <text x="284" y="245" class="ts">☑ kpip.docx</text>
+        <text x="480" y="245" class="ts">需求规范</text>
+        <text x="620" y="245" class="ts">—</text>
+        <text x="720" y="245" class="ts">—</text>
+        <text x="790" y="245" class="ts">0</text>
+        <text x="860" y="245" class="ts" fill="#b91c1c">⚠ 解析失败</text>
+        <text x="1010" y="245" class="ts">重解析 追溯 更多 ▾</text>
+
+        <rect x="274" y="260" width="826" height="30" rx="4" fill="#fff" stroke="var(--line)"/>
+        <text x="284" y="279" class="ts">☐ pipe_test.txt</text>
+        <text x="480" y="279" class="ts">需求规范 / 接口定义</text>
+        <text x="620" y="279" class="ts">—</text>
+        <text x="720" y="279" class="ts">—</text>
+        <text x="790" y="279" class="ts">1</text>
+        <text x="860" y="279" class="ts" fill="var(--amb)">⏳ 待入库</text>
+        <text x="1010" y="279" class="ts">预览 追溯 更多 ▾</text>
+      </g>
+
+      <text x="274" y="316" class="ts">📄 共 12 条 · 第 1 / 1 页 · 每页 [15 ▾]　　　　◀ 1 2 ▶</text>
+
+      <!-- 详情抽屉（右侧覆盖示意） -->
+      <rect x="756" y="330" width="344" height="110" rx="8" fill="#fff" stroke="var(--blue)" stroke-width="1.5"/>
+      <text x="770" y="350" class="tb">文档详情 · HTP.docx</text>
+      <line x1="756" y1="360" x2="1100" y2="360" stroke="var(--line)"/>
+      <text x="770" y="380" class="ts">概览 ｜ 分块(16) ｜ 抽取实体(11) ｜ 溯源 ｜ 版本(v1.0/v2.0)</text>
+      <text x="770" y="402" class="ts">操作：📦 入库　🔁 重解析　📁 移动到…　🏷 分类　🗑 删除</text>
+      <text x="770" y="424" class="ts">复用 /api/open-panel 现有抽屉，不新造容器</text>
+    </svg>
+    <div class="cap"><b>三处关键新增</b>：① 列表新增「所属目录」列与面包屑（位置可见）② 顶部批量条（勾选后出现，搬 8 条文档比逐条拖拽快得多）③ 智能视图常驻（未归类/未入库/解析失败/未分类 → 待办收口）。</div>
+  </div>
+
+  <h3>线框 B · 目录操作与上传落点</h3>
+  <div class="grid">
+    <div class="card">
+      <svg viewBox="0 0 520 300">
+        <rect x="10" y="10" width="500" height="280" rx="10" class="boxd"/>
+        <text x="26" y="32" class="ts">右键目录节点 →</text>
+        <rect x="24" y="44" width="200" height="150" rx="7" class="box" stroke-width="1.5"/>
+        <text x="38" y="66" class="t">＋ 新建子目录</text>
+        <line x1="28" y1="76" x2="220" y2="76" stroke="var(--line)"/>
+        <text x="38" y="96" class="t">✏ 重命名</text>
+        <line x1="28" y1="106" x2="220" y2="106" stroke="var(--line)"/>
+        <text x="38" y="126" class="t">📁 移动到…</text>
+        <line x1="28" y1="136" x2="220" y2="136" stroke="var(--line)"/>
+        <text x="38" y="156" class="t">📤 上传到此目录</text>
+        <line x1="28" y1="166" x2="220" y2="166" stroke="var(--line)"/>
+        <text x="38" y="186" class="t" fill="#b91c1c">🗑 删除目录（不动文档）</text>
+        <rect x="250" y="44" width="248" height="150" rx="7" class="boxb"/>
+        <text x="264" y="66" class="tb">删除确认</text>
+        <text x="264" y="88" class="ts">将删除目录「接口定义」及其 1 个子目录</text>
+        <text x="264" y="106" class="ts">其中 5 份文档将回到「📥 未归类」</text>
+        <text x="264" y="124" class="ts" fill="var(--grn)">✅ 文档与向量数据不会被删除</text>
+        <rect x="264" y="146" width="66" height="24" rx="5" fill="#fff" stroke="#b91c1c"/>
+        <text x="297" y="162" class="ts" text-anchor="middle" fill="#b91c1c">确认删除</text>
+        <rect x="340" y="146" width="66" height="24" rx="5" class="box"/>
+        <text x="373" y="162" class="ts" text-anchor="middle">取消</text>
+        <text x="26" y="230" class="tb">上传落点</text>
+        <text x="26" y="252" class="ts">上传默认落「当前选中目录」并记忆上次选择；拖文件到树上节点 = 上传到该目录（P1）</text>
+        <text x="26" y="274" class="ts">→ 消除"先传到根、再逐条整理"的二次劳动</text>
+      </svg>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0;color:var(--ink);">设计取舍（三条硬约束）</h3>
+      <table>
+        <tr><th>约束</th><th>做法</th><th>理由</th></tr>
+        <tr><td>物理存储不动</td><td>目录只存数据库，`uploads/` 维持扁平命名</td><td>不触发重解析/重向量化，零丢失风险，目录可随时重构</td></tr>
+        <tr><td>迁移零风险</td><td>8 条存量文档 `folder_id = NULL` → 自动落入「未归类」</td><td>不自动猜目录，避免制造新混乱</td></tr>
+        <tr><td>删除不级联</td><td>删目录只回退位置，不删文档</td><td>文档是重资产，目录只是视图</td></tr>
+      </table>
+      <div class="note"><b>反模式预警</b>：纯文件夹层级会让用户"不知道该放哪"（同一份"退换货流程"放客服还是售后？）。因此目录必须与<b>元数据标签</b>并行 —— 目录便于"人找"，元数据负责"机器过滤"。</div>
+    </div>
+  </div>
+
+  <!-- ══════════ 议题 2 ══════════ -->
+  <h2>议题 2 · 项目（工程）：导航侧入口 = 作用域切换器</h2>
+
+  <div class="grid">
+    <div class="card">
+      <h3 style="margin-top:0;">外部产品怎么做（事实）</h3>
+      <table>
+        <tr><th>产品</th><th>项目 = 什么</th><th>入口形态</th></tr>
+        <tr><td>ChatGPT Projects</td><td>会话容器 + 文件仓库 + 项目级指令 + 项目专属记忆（只从本项目取上下文）</td><td>侧边栏列表 + <code>New project</code>；支持把已有聊天「Move to project」</td></tr>
+        <tr><td>Claude Projects</td><td>自定义指令 + 知识文件（≈200K tokens）+ 会话分组</td><td>左侧 <code>Projects</code> → <code>+ New Project</code></td></tr>
+      </table>
+      <div class="cap"><b>归纳四目的</b>：①上下文复用 ②边界隔离 ③工作组织 ④协作与复用。<b>放进导航侧，是因为它是"作用域切换"而不是一个功能页。</b></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0;">本系统现状 =「假工程」</h3>
+      <table>
+        <tr><th>事实</th><th>证据</th></tr>
+        <tr><td>`conversations.project_id` 列已存在但**写入硬编码 1**</td><td><code>schema.py:257</code> / <code>conversations.py:93,95,116</code></td></tr>
+        <tr><td>会话查询**无 project_id 过滤**</td><td><code>conversations.py:44–52</code></td></tr>
+        <tr><td>前端靠 <code>?limit=1</code> **偷一条会话**反查当前工程 → 多工程会串号</td><td><code>03-chat.js:128</code></td></tr>
+        <tr><td>**不存在 projects 表**，无工程资产/成员/生命周期</td><td>全库无建表语句</td></tr>
+        <tr><td>知识资产（glossary/entities/chunks）**基本无 project 列**</td><td>仅 <code>kb_category.project_id</code> 一处孤例</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h3>线框 C · 导航侧工程入口 + 切换浮层</h3>
+  <div class="card">
+    <svg viewBox="0 0 1120 400">
+      <rect x="4" y="4" width="1112" height="392" rx="10" class="boxd"/>
+      <!-- 左侧导航 -->
+      <rect x="18" y="20" width="222" height="360" rx="8" fill="#f2f5fa" stroke="var(--line)"/>
+      <text x="34" y="44" class="ts">AI4MBSE</text>
+      <text x="34" y="74" class="t">＋ 新建任务</text>
+      <text x="34" y="100" class="t">💬 AI 建模</text>
+      <rect x="26" y="112" width="206" height="26" rx="6" class="boxb"/>
+      <text x="34" y="130" class="t">📁 星网宽带通信系统 ▾</text>
+      <text x="34" y="162" class="t">📖 术语词典</text>
+      <text x="34" y="188" class="t">🧬 本体模型</text>
+      <text x="34" y="214" class="t">🕸 知识中心</text>
+      <text x="34" y="240" class="t">🤖 能力中心</text>
+      <text x="34" y="266" class="t">⋯ 更多</text>
+      <line x1="34" y1="286" x2="224" y2="286" class="dash"/>
+      <text x="34" y="308" class="tb">💬 任务 (35)</text>
+      <text x="34" y="330" class="ts">· 仅显示本工程会话</text>
+      <text x="34" y="352" class="ts">· 切换工程后列表随之刷新</text>
+
+      <!-- 浮层 -->
+      <rect x="252" y="60" width="330" height="290" rx="10" class="box" stroke-width="1.5"/>
+      <text x="268" y="84" class="tb">切换工程</text>
+      <rect x="268" y="94" width="298" height="24" rx="5" class="boxd"/>
+      <text x="278" y="110" class="ts">🔍 搜索工程名 / 代号</text>
+      <text x="268" y="140" class="ts">🕘 最近使用</text>
+      <rect x="268" y="148" width="298" height="34" rx="6" class="boxb"/>
+      <text x="280" y="163" class="t">星网宽带通信系统</text>
+      <text x="280" y="177" class="ts">satnet-broadband ｜ 35 会话 · 8 文档　✅ 当前</text>
+      <rect x="268" y="188" width="298" height="34" rx="6" class="boxd"/>
+      <text x="280" y="203" class="t">巡飞弹验证平台</text>
+      <text x="280" y="217" class="ts">loitering-uav ｜ 12 会话 · 0 文档</text>
+      <rect x="268" y="228" width="298" height="34" rx="6" class="boxd"/>
+      <text x="280" y="243" class="t">GAC 乘员保护</text>
+      <text x="280" y="257" class="ts">gac-lbp ｜ 7 会话 · 3 文档</text>
+      <line x1="268" y1="274" x2="566" y2="274" class="dash"/>
+      <text x="268" y="296" class="t">📋 查看全部工程（工程中心）</text>
+      <text x="268" y="318" class="t">＋ 新建工程</text>
+      <text x="268" y="340" class="ts">切换前提示：会话 / 知识 / 分支将按新工程重新加载</text>
+
+      <!-- 顶栏 -->
+      <rect x="610" y="40" width="486" height="30" rx="7" class="box"/>
+      <text x="626" y="60" class="ts">💬 AI 建模</text>
+      <rect x="880" y="46" width="200" height="20" rx="9" class="boxb"/>
+      <text x="980" y="60" class="ts" text-anchor="middle">● 星网宽带通信系统 ▾（可点击切换）</text>
+      <text x="626" y="100" class="ts">顶栏「当前工程」与导航项<b>共用同一个切换浮层组件</b> —— 作用域在任意页面都可见、可切。</text>
+      <text x="626" y="126" class="ts">入口从「能力中心 → 工具与MCP → 智源连接器 → 检测连接」4 层深，提到 1 层直达。</text>
+    </svg>
+    <div class="cap"><b>形态选择</b>：导航项常驻显示<b>当前工程名</b>（而非泛化的"项目"二字），点击即切换 —— 对齐 ChatGPT/Claude 的"作用域始终可见"原则。</div>
+  </div>
+
+  <h3>线框 D · 工程中心页（管理面）+ 隔离策略</h3>
+  <div class="grid">
+    <div class="card">
+      <svg viewBox="0 0 520 300">
+        <rect x="10" y="10" width="500" height="280" rx="10" class="boxd"/>
+        <text x="26" y="34" class="tb">工程中心</text>
+        <rect x="386" y="20" width="108" height="22" rx="5" class="boxb"/>
+        <text x="440" y="36" class="ts" text-anchor="middle">＋ 新建工程</text>
+        <rect x="24" y="52" width="222" height="106" rx="8" class="box" stroke-width="1.5"/>
+        <text x="36" y="74" class="tb">星网宽带通信系统</text>
+        <text x="36" y="94" class="ts">satnet-broadband</text>
+        <text x="36" y="112" class="ts">智源 2084931… / 分支 main</text>
+        <text x="36" y="130" class="ts">35 会话 · 8 文档 · 活跃</text>
+        <text x="36" y="148" class="ts" fill="var(--grn)">✅ 当前工程　[进入] [重命名] [归档]</text>
+        <rect x="262" y="52" width="222" height="106" rx="8" class="boxd"/>
+        <text x="274" y="74" class="tb">巡飞弹验证平台</text>
+        <text x="274" y="94" class="ts">loitering-uav</text>
+        <text x="274" y="112" class="ts">智源 — / 分支 dev</text>
+        <text x="274" y="130" class="ts">12 会话 · 0 文档 · 活跃</text>
+        <text x="274" y="148" class="ts">[进入] [重命名] [归档]</text>
+        <rect x="24" y="170" width="222" height="106" rx="8" class="boxd"/>
+        <text x="36" y="192" class="tb">GAC 乘员保护</text>
+        <text x="36" y="212" class="ts">gac-lbp</text>
+        <text x="36" y="230" class="ts">7 会话 · 3 文档 · 活跃</text>
+        <text x="36" y="248" class="ts">[进入] [重命名] [归档]</text>
+        <rect x="262" y="170" width="222" height="106" rx="8" fill="var(--bg)" stroke="var(--line2)" stroke-dasharray="3 3"/>
+        <text x="274" y="200" class="ts">空态：新建第一个工程</text>
+        <text x="274" y="222" class="ts">创建时可选「按模板生成资料库目录骨架」</text>
+        <text x="274" y="244" class="ts">→ 与议题 1 的 A1 / B6 决策联动</text>
+      </svg>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0;color:var(--ink);">隔离策略：分层，不一刀切</h3>
+      <table>
+        <tr><th>资产</th><th>策略</th><th>理由</th></tr>
+        <tr><td>会话</td><td><b>强隔离</b> <span class="pill p-p0">P0</span></td><td>串号是缺陷；且列已就绪</td></tr>
+        <tr><td>资料库文档/目录</td><td>目录可挂工程，<b>允许共享目录</b></td><td>型号间引用同一份国标是常态</td></tr>
+        <tr><td>本体 / 术语词典</td><td><b>默认共享，不隔离</b></td><td>本体是组织级标准资产，按工程复制会产生多份"标准"</td></tr>
+        <tr><td>图谱实例 / 模型</td><td><b>按工程隔离</b> <span class="pill p-p1">P1</span></td><td>型号专属产物</td></tr>
+        <tr><td>项目记忆</td><td>接入现有 by-project 存储</td><td>能力已存在</td></tr>
+      </table>
+      <div class="note"><b>命名必须统一</b>：代码与既有文案（当前工程 / 工程入库 / 检测连接）全用「工程」。今日导航口径审计暴露的 P1 问题<b>正是双口径造成的</b>——若选"项目"，必须一次性全量替换，严禁混用。</div>
+    </div>
+  </div>
+
+  <!-- ══════════ 分期 ══════════ -->
+  <h2>分期与待拍板</h2>
+  <table>
+    <tr><th>议题</th><th>P0（先可用/先除缺陷）</th><th>P1</th><th>P2</th></tr>
+    <tr>
+      <td>资料库</td>
+      <td>目录表 + 目录树 + 上传落当前目录 + 列表目录列/面包屑 + 批量移动 + 未归类视图 + 分页</td>
+      <td>搜索（含子目录）+ 解析失败/未入库/未分类视图 + 拖拽上传 + 详情抽屉移动</td>
+      <td>目录模板 + 目录级权限 + 回收站 + 与工程联动</td>
+    </tr>
+    <tr>
+      <td>项目（工程）</td>
+      <td>projects 表 + id=1 迁移回填 + 导航入口&切换浮层 + 顶栏切换器 + 会话按工程过滤 + 删 <code>?limit=1</code> 反模式</td>
+      <td>工程中心页 + 会话移入其他工程 + 资料库目录挂工程 + 项目记忆接入 + 模型按工程隔离</td>
+      <td>成员与角色映射 + 归档策略 + 工程模板 + 智源工程级双向同步</td>
+    </tr>
+  </table>
+
+  <div class="note" style="margin-top:16px;">
+    <b>待拍板</b>：资料库 A1–A5（目录模板 / 标签维度 / 删除去向 / 上传落点 / 是否物理搬迁）；
+    工程 B1–B6（命名 项目 vs 工程 / 入口形态 / 隔离粒度 / 会话归属 / 是否本期接智源 / 是否生成目录骨架）。
+    完整选项与建议见两份配套 Markdown。
+  </div>
+
+</div>
+</body>
+</html>
