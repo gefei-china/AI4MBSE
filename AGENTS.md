@@ -52,7 +52,11 @@
 5. **导航列是 column flex**：`.gnav nav`（主导航）必须 `flex:0 0 auto`，否则放宽任务列表会把它压出滚动条、剪掉最后几项。
 6. **静态资源 no-cache**：改前端**不用重启服务**，刷新即生效；改后端需重启。
 7. **数据库只有一个 `mbse.db`**，服务运行时被占用 → 只读查询请用 `file:...?mode=ro`；**不要**在服务运行时做破坏性写库操作。
-8. **不要用 bash 工具**（本机 shim 缺 coreutils）；用 PowerShell，输出 `| Out-File <路径> -Encoding utf8` 落盘再读（`>` 会写成 UTF-16）。
+8. **不要用 bash 工具**（本机 shim 缺 coreutils）；用 PowerShell。
+   **写文件**：输出 `| Out-File <路径> -Encoding utf8` 落盘再读（`>` 会写成 UTF-16，Read 会当二进制）。
+   **读/数文件**：⚠️ **不要用 `Get-Content | Measure-Object -Line` 数行数**。本项目文件是「UTF-8 无 BOM + LF」的精确组合，PowerShell 5.1 的 `Get-Content` 会按 ANSI 解码 → 多字节字符被解成多个单字节字符，`Measure-Object -Line` **会漏计以 NEL(U+0085)/U+2028/U+2029 分隔的行**。实测同一文件 `_output_quality.py`：PS 报 **453** 行，Python `splitlines()` 报 **464** 行。
+   → 数行数/读文件一律用 Python：`len(open(p, 'rb').read().decode('utf-8','replace').splitlines())`。
+   **本文件与 `docs/代码优化方案-20260917.md` 里所有「74 个模块 / 1,529 行 / 1334 行」类数字都是该口径的产物，已系统性偏低，勿再引用。**
 9. **工具名必须是 ASCII**：`tools` 表的工具名会作为 `function.name` 发给模型，协议要求 `^[a-zA-Z0-9_-]+$`。曾有一个中文名工具（「知识库查询」）导致 **整批 tools 载荷被 400 拒绝 → 静默回落 Mock**。`_build_tools_def` 已加护栏（剔除非法名 + 告警），但新增工具请直接用英文名。
 10. **LLM 采样参数优先级**：`显式传参 > DB llm_providers 配置 > 内置默认`（`llm/providers/openai_compat.py`）。调用 `llm_client.chat(...)` 时可直接传 `model`/`temperature`/`max_tokens` —— 历史上 broker 曾把它们「具名 + `**kwargs`」重复传递，导致一传就 `TypeError` 并被静默吞成 Mock，已修但改动此处务必回归 `tools/verify/verify_s4_llm_params.py`。
 11. **降级必须留痕**：LLM 调用失败会回落 Mock（用户无感）。`llm/__init__.py` 的降级分支已加 WARNING（含调用点/intent/provider/异常）；排查"AI 回答怪怪的"时**先看服务日志有没有这条 WARNING**，再查 `llm_usage_stats.used_mock`。
