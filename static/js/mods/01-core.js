@@ -9,6 +9,14 @@ let currentRoleId = null;
 let _isDraft = false;   // 2026-09-04 v3：新建任务草稿态（未提交前不创建会话、不自动选中）
 
 // ── 工具函数 ──
+/* 2026-09-18 S6-1：esc / escA 迁至本文件（原在 08-sysmlview.js:151/153）。
+   动机：这两个是全站最强隐藏依赖 —— 35 个模块、约 1,700 处调用，却定义在第 8 个模块里；
+   一旦脚本加载顺序调整或 08 出问题，全站模板渲染立即报 esc is not defined。
+   01-core.js 是第一个加载的模块，放在这里即天然消除顺序耦合。函数体逐字节保持原实现。 */
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// 属性安全转义（data-* 用于会话信息卡）
+function escA(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;');}
+
 async function api(path, opts={}) {
   const uid = localStorage.getItem('mbse_user_id');
   const headers = {'Content-Type':'application/json'};

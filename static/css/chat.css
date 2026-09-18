@@ -212,3 +212,28 @@
 .rc{width:100%;min-width:0;}
 /* 聊天区子项防被内容撑开（拖拽分割线变窄时内容自适应，不产生横向溢出） */
 #chat-area > *{min-width:0;max-width:100%;}
+
+
+/* ── 2026-09-18 S6-2：由 index.html 内联 <style> 迁入（原位置见 git 历史） ── */
+
+
+/* Agent 输出呈现 P0：工具耗时 / 三段式错误面 / 产物卡片 / 审批卡（沿用现有变量体系） */
+.tool-elapsed{font-size:10px;color:var(--mut);background:#eef1f6;border-radius:4px;padding:1px 6px;flex:none;font-variant-numeric:tabular-nums;}
+.tool-elapsed.done{color:var(--blue-d);background:var(--blue-l);}
+.proc-block.tool.error .tool-elapsed.done{color:var(--red);background:var(--red-l);}
+.errface{margin-top:4px;border:1px solid #F7C1C1;border-radius:7px;background:#fef6f6;padding:4px 8px;font-size:10.5px;line-height:1.5;white-space:normal;}
+.errface .ef-row{display:flex;gap:6px;align-items:center;margin:1px 0;min-width:0;}
+.errface .ef-k{flex:none;font-weight:600;color:var(--red);}
+.errface .ef-v{flex:1;min-width:0;color:var(--txt,#222);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.errface .ef-v:hover{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.03);border-radius:4px;}
+.errface .ef-act{margin-top:2px;}
+.art-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.art-grid.many{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;}
+.art-card{flex:0 0 auto;min-width:168px;max-width:212px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe;padding:8px 10px;cursor:pointer;transition:border-color .15s,background .15s;white-space:normal;}
+.art-card:hover{border-color:var(--blue-bd,#b8d4f5);background:#f2f7ff;}
+.art-card .ac-head{display:flex;align-items:center;gap:7px;}
+.art-card .ac-ico{font-size:17px;flex:none;}
+.art-card .ac-title{font-weight:600;font-size:12px;color:var(--ink,#223);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.art-card .ac-meta{margin-top:3px;font-size:10px;color:var(--mut);display:flex;gap:5px;align-items:center;flex-wrap:wrap;}
+.art-card .ac-ops{margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;}
+.art-card .ac-ops .pr-act{cursor:pointer;color:var(--blue-d);text-decoration:underline;user-select:none;font-size:10.5px;}

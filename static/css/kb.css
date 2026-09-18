@@ -72,3 +72,43 @@
 #kb-c .ont-act-btn:hover{background:var(--blue-l) !important;}
 #kb-c #ont-desc .ont-add{border:1px solid var(--blue);color:var(--blue-d);background:#fff;}
 #kb-c #ont-desc .ont-add:hover{background:var(--blue-l);}
+
+
+/* ── 2026-09-18 S6-2：由 index.html 内联 <style> 迁入（原位置见 git 历史） ── */
+
+
+.ont-tnd{display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:12px;cursor:pointer;border-radius:6px;border:0.5px solid transparent;}
+.ont-tnd:hover{background:#f2f7ff;}
+.ont-tnd.on{background:var(--blue-l);border-color:var(--blue);font-weight:600;}
+.ont-tnd.ont-dimmed{opacity:.32;}   /* 2026-09-02 聚焦下钻：非聚焦节点灰显 */
+.ont-tnd .ont-del{display:none;flex:none;margin-left:auto;width:17px;height:17px;align-items:center;justify-content:center;border-radius:4px;font-size:10px;color:var(--mut);cursor:pointer;}
+.ont-tnd:hover .ont-del{display:inline-flex;}   /* 三轮调整：悬停显删除（增删改归左栏） */
+.ont-tnd .ont-del:hover{background:var(--red);color:#fff;}
+.ont-focus-bar .on{background:var(--blue-l);color:var(--blue-d);border-color:var(--blue);}  /* 含关联开关激活态 */
+.ont-vtab{font-size:12px;padding:5px 10px;cursor:pointer;color:var(--mut);border-bottom:2px solid transparent;white-space:nowrap;}
+.ont-vtab.on{color:var(--blue-d);border-bottom-color:var(--blue);font-weight:600;}
+/* 2026-09-11 组件优化（借鉴术语词典详情卡 _fsec/_frow）：蓝条小节标题 + 白底圆角分组卡片；仅视觉升级，onclick/id/交互零改动 */
+.ont-sec{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:var(--blue-d);margin:0 0 9px;letter-spacing:.2px;}
+.ont-sec::before{content:'';width:3px;height:14px;background:var(--blue);border-radius:2px;flex:none;}
+.ont-sec>span{font-size:11px;color:var(--mut);font-weight:400;}
+.ont-fcard{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px 13px;margin-bottom:10px;max-width:960px;box-shadow:0 1px 2px rgba(0,0,0,.03);}
+.ont-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:8px;padding:3px 10px;font-size:12px;background:#FAFBFC;transition:border-color .12s,background .12s,box-shadow .12s;}
+.ont-chip:hover{border-color:var(--blue);background:#fff;}
+.ont-chip b{font-weight:500;}
+.ont-chip .k{font-size:10.5px;color:var(--mut);}
+.ont-x{cursor:pointer;color:var(--mut);width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;font-size:11px;line-height:1;transition:background .12s,color .12s;}
+.ont-x:hover{color:#fff;background:var(--red);}
+/* 2026-09-11 三轮：添加/编辑控件质感升级（保持蓝框常显原则，仅增强反馈） */
+.ont-add{cursor:pointer;display:inline-flex;align-items:center;gap:4px;border:1px solid var(--blue);border-radius:8px;padding:3px 11px;font-size:12px;color:var(--blue-d);background:#fff;vertical-align:middle;transition:background .12s,box-shadow .12s,transform .06s;}
+.ont-add:hover{background:var(--blue-l);box-shadow:0 1px 5px rgba(24,95,165,.20);}
+.ont-add:active{transform:translateY(1px);box-shadow:none;}
+/* 2026-09-11 三轮：编辑区输入控件统一聚焦态（含基数/允许值/描述等所有 input/textarea/select） */
+#ont-desc input:focus,#ont-desc textarea:focus,#ont-desc select:focus,
+#ont-side input:focus,#ont-side textarea:focus,#ont-side select:focus{
+outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(24,95,165,.10);background:#fff;}
+.ont-tadd{flex:none;color:var(--mut);cursor:pointer;font-size:13px;line-height:1;padding:0 3px;border-radius:4px;visibility:hidden;}
+.ont-tnd:hover .ont-tadd{visibility:visible;color:var(--blue);background:var(--blue-l);}
+.ont-mono{font-family:ui-monospace,Consolas,monospace;}
+/* 2026-09-11 三轮：名称行内编辑可点击提示（悬停显示蓝色虚线底） */
+#ont-name-wrap{transition:border-color .12s;}
+#ont-name-wrap:hover{border-bottom-color:var(--blue);}

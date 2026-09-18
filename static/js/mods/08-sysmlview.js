@@ -148,9 +148,9 @@ function cardReview(cd) {
 }
 
 /* ── 滑出面板完整报告 ── */
-function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-// 属性安全转义（data-* 用于会话信息卡）
-function escA(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;');}
+// 2026-09-18 S6-1：esc / escA 已迁至 01-core.js（第一个加载的模块）——
+// 它们是全站最强隐藏依赖（35 文件约 1,700 处调用），留在本模块会造成加载顺序耦合。
+// 此处不再定义，调用方无需改动（仍为全局函数）。
 // UTC 时间串（SQLite CURRENT_TIMESTAMP）转本地显示
 function fmtLocalTime(s){
   if(!s) return '';

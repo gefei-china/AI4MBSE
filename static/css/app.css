@@ -880,3 +880,9 @@ sup.cite:hover{background:var(--blue-d);color:#fff;border-color:var(--blue-d);}
     font-size: 12px;
 }
 .lc-danger { background: #fdecec; color: #c0392b; border: 1px solid #f5c6c6; font-weight: 600; }
+
+
+/* ── 2026-09-18 S6-2：由 index.html 内联 <style> 迁入（原位置见 git 历史） ── */
+
+
+.am-item:hover{ background:var(--bg-soft,#f5f5f2); }

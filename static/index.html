@@ -29,28 +29,6 @@
 <script src="/static/view_layout_engine.js"></script>
 <!-- v6.2 性能 baseline 采集器（FP/FCP/路由切换/长任务） -->
 <script src="/static/js/perf.js"></script>
-<style>
-/* Agent 输出呈现 P0：工具耗时 / 三段式错误面 / 产物卡片 / 审批卡（沿用现有变量体系） */
-.tool-elapsed{font-size:10px;color:var(--mut);background:#eef1f6;border-radius:4px;padding:1px 6px;flex:none;font-variant-numeric:tabular-nums;}
-.tool-elapsed.done{color:var(--blue-d);background:var(--blue-l);}
-.proc-block.tool.error .tool-elapsed.done{color:var(--red);background:var(--red-l);}
-.errface{margin-top:4px;border:1px solid #F7C1C1;border-radius:7px;background:#fef6f6;padding:4px 8px;font-size:10.5px;line-height:1.5;white-space:normal;}
-.errface .ef-row{display:flex;gap:6px;align-items:center;margin:1px 0;min-width:0;}
-.errface .ef-k{flex:none;font-weight:600;color:var(--red);}
-.errface .ef-v{flex:1;min-width:0;color:var(--txt,#222);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.errface .ef-v:hover{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.03);border-radius:4px;}
-.errface .ef-act{margin-top:2px;}
-.art-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
-.art-grid.many{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;}
-.art-card{flex:0 0 auto;min-width:168px;max-width:212px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe;padding:8px 10px;cursor:pointer;transition:border-color .15s,background .15s;white-space:normal;}
-.art-card:hover{border-color:var(--blue-bd,#b8d4f5);background:#f2f7ff;}
-.art-card .ac-head{display:flex;align-items:center;gap:7px;}
-.art-card .ac-ico{font-size:17px;flex:none;}
-.art-card .ac-title{font-weight:600;font-size:12px;color:var(--ink,#223);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.art-card .ac-meta{margin-top:3px;font-size:10px;color:var(--mut);display:flex;gap:5px;align-items:center;flex-wrap:wrap;}
-.art-card .ac-ops{margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;}
-.art-card .ac-ops .pr-act{cursor:pointer;color:var(--blue-d);text-decoration:underline;user-select:none;font-size:10.5px;}
-</style>
 </head>
 <body data-page-node-id="ULFo7BuRAc93uxMeS2g0DW">
 <div class="shell" data-page-node-id="fsBFZxVyPNZAUdzRYLhHVU">
@@ -568,43 +546,6 @@
   
           <!-- 本体管理工作台（Protégé 式 · 2026-08-29 方案A）：Classes/Obj Properties 树 + Description 内联编辑（严格 Protégé 字段） + Annotations/Usage + OntoGraf -->
           <div id="ont-pane-edit" class="ont-pane" style="display:flex;flex-direction:column;flex:1;min-height:0;" data-page-node-id="xQeLUc5eX2E3cbHmDQLswI">
-            <style>
-              .ont-tnd{display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:12px;cursor:pointer;border-radius:6px;border:0.5px solid transparent;}
-              .ont-tnd:hover{background:#f2f7ff;}
-              .ont-tnd.on{background:var(--blue-l);border-color:var(--blue);font-weight:600;}
-              .ont-tnd.ont-dimmed{opacity:.32;}   /* 2026-09-02 聚焦下钻：非聚焦节点灰显 */
-              .ont-tnd .ont-del{display:none;flex:none;margin-left:auto;width:17px;height:17px;align-items:center;justify-content:center;border-radius:4px;font-size:10px;color:var(--mut);cursor:pointer;}
-              .ont-tnd:hover .ont-del{display:inline-flex;}   /* 三轮调整：悬停显删除（增删改归左栏） */
-              .ont-tnd .ont-del:hover{background:var(--red);color:#fff;}
-              .ont-focus-bar .on{background:var(--blue-l);color:var(--blue-d);border-color:var(--blue);}  /* 含关联开关激活态 */
-              .ont-vtab{font-size:12px;padding:5px 10px;cursor:pointer;color:var(--mut);border-bottom:2px solid transparent;white-space:nowrap;}
-              .ont-vtab.on{color:var(--blue-d);border-bottom-color:var(--blue);font-weight:600;}
-              /* 2026-09-11 组件优化（借鉴术语词典详情卡 _fsec/_frow）：蓝条小节标题 + 白底圆角分组卡片；仅视觉升级，onclick/id/交互零改动 */
-              .ont-sec{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:var(--blue-d);margin:0 0 9px;letter-spacing:.2px;}
-              .ont-sec::before{content:'';width:3px;height:14px;background:var(--blue);border-radius:2px;flex:none;}
-              .ont-sec>span{font-size:11px;color:var(--mut);font-weight:400;}
-              .ont-fcard{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px 13px;margin-bottom:10px;max-width:960px;box-shadow:0 1px 2px rgba(0,0,0,.03);}
-              .ont-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:8px;padding:3px 10px;font-size:12px;background:#FAFBFC;transition:border-color .12s,background .12s,box-shadow .12s;}
-              .ont-chip:hover{border-color:var(--blue);background:#fff;}
-              .ont-chip b{font-weight:500;}
-              .ont-chip .k{font-size:10.5px;color:var(--mut);}
-              .ont-x{cursor:pointer;color:var(--mut);width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;font-size:11px;line-height:1;transition:background .12s,color .12s;}
-              .ont-x:hover{color:#fff;background:var(--red);}
-              /* 2026-09-11 三轮：添加/编辑控件质感升级（保持蓝框常显原则，仅增强反馈） */
-              .ont-add{cursor:pointer;display:inline-flex;align-items:center;gap:4px;border:1px solid var(--blue);border-radius:8px;padding:3px 11px;font-size:12px;color:var(--blue-d);background:#fff;vertical-align:middle;transition:background .12s,box-shadow .12s,transform .06s;}
-              .ont-add:hover{background:var(--blue-l);box-shadow:0 1px 5px rgba(24,95,165,.20);}
-              .ont-add:active{transform:translateY(1px);box-shadow:none;}
-              /* 2026-09-11 三轮：编辑区输入控件统一聚焦态（含基数/允许值/描述等所有 input/textarea/select） */
-              #ont-desc input:focus,#ont-desc textarea:focus,#ont-desc select:focus,
-              #ont-side input:focus,#ont-side textarea:focus,#ont-side select:focus{
-                outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(24,95,165,.10);background:#fff;}
-              .ont-tadd{flex:none;color:var(--mut);cursor:pointer;font-size:13px;line-height:1;padding:0 3px;border-radius:4px;visibility:hidden;}
-              .ont-tnd:hover .ont-tadd{visibility:visible;color:var(--blue);background:var(--blue-l);}
-              .ont-mono{font-family:ui-monospace,Consolas,monospace;}
-              /* 2026-09-11 三轮：名称行内编辑可点击提示（悬停显示蓝色虚线底） */
-              #ont-name-wrap{transition:border-color .12s;}
-              #ont-name-wrap:hover{border-bottom-color:var(--blue);}
-            </style>
             <!-- 横跨工具行已移除（2026-09-02 二轮调整）：编辑⇄图谱 toggle 移至中栏顶部（#ont-center 头部）、一致性检查与新建按归属移位（顶栏/左栏） -->
             <div style="flex:1;display:flex;min-height:0;" data-page-node-id="7lBrJXDIRxU26ebS8Pbqkf">
             <div id="ont-hover-card" data-page-node-id="318JwE8B8pCeULGFFivRVK"></div>
@@ -1434,9 +1375,6 @@
   </div>
   <div id="attach-eng-tree" style="max-height:280px;overflow-y:auto;" data-page-node-id="kmdWKHiAi2rwDY8Z9fKvFN"></div>
 </div>
-<style>
-  .am-item:hover{ background:var(--bg-soft,#f5f5f2); }
-</style>
 <!-- /attach-menu -->
 
 <!-- SysML v1/v2 视图预览面板 -->
