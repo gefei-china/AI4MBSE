@@ -78,6 +78,16 @@ docs/**/*.png
 docs/**/*.docx
 docs/mbse-platform-prd/**/*.min.js
 
+# ── 本地配置与密钥（防止误提交）──
+# ⚠️ 必须锚定根目录（见文件头维护规则）：`/.env` 只忽略根目录那一份；
+#    不带 `/` 的 `.env` 会在**任意深度**匹配，属上一节引用的那类事故。
+#    本仓约定 key / token 走环境变量或 `~/.workbuddy/mbse_config.json`（见 mbse_config.example.json），
+#    根目录 `.env` 仅作本地临时覆盖用，不入库。
+#    反查：git check-ignore -v .env
+/.env
+/.env.*
+!/.env.example
+
 # ── 本机环境与 IDE ──
 .trae/
 .idea/
