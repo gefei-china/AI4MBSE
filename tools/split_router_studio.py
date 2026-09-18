@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""routers/studio.py 拆分：路由按功能域分片到 studio_parts/，helper 收敛 shared.py。"""
+"""routers/studio.py 拆分：路由按功能域分片到 studio_parts/，helper 收敛 shared.py。
+
+⚠️ 已执行完毕（一次性脚本，**不可重跑**）：输入 routers/studio.py 已退化为 13 行薄入口
+（re-export router），重跑会以薄入口为输入产出空/错误分片，并覆盖 studio_parts/（13 个模块）。
+保留仅为追溯切分边界。
+"""
 import ast
 import os
 

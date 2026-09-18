@@ -3,6 +3,10 @@
 
 类名/方法签名/行为零变更：pipeline.py 保留 __init__/_load_db_agents 并继承各 Mixin。
 切分点为方法声明行（含上探装饰器），方法体逐行原样搬运。
+
+⚠️ 已执行完毕（一次性脚本，**不可重跑**）：输入 agent/pipeline.py 已退化为 105 行的薄 Mixin 入口，
+重跑会以薄入口为输入产出错误分片，并破坏 pipeline_parts/（14 个模块）的继承装配。
+保留仅为追溯切分边界。
 """
 import os
 import re

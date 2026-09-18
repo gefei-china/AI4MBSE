@@ -3,6 +3,10 @@
 
 机制：所有分片共享 shared.router（APIRouter），装饰器在 import 时按分片顺序注册，
 与原文件自上而下注册顺序一致。knowledge.py 变为薄入口（re-export router）。
+
+⚠️ 已执行完毕（一次性脚本，**不可重跑**）：输入 routers/knowledge.py 已退化为 10 行薄入口
+（re-export router），重跑会以薄入口为输入产出空/错误分片，并覆盖 knowledge_parts/（10 个模块）。
+保留仅为追溯切分边界。
 """
 import ast
 import os

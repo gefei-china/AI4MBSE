@@ -18,7 +18,10 @@ P1-3 hybrid_search 优化（knowledge_engine）：
 - P9 指纹 DELETE 敏感：删 chunk → 缓存重建
 - P10 content UPDATE 不失效（设计语义：ingest 下 content 更新走新行，声明验证）
 
-回归基线：末尾自动重跑 verify_staging_fuse / verify_staging_migration / verify_fusion_fixes
+回归基线：末尾自动重跑 tests/manual_verify/verify_p1_blocking_smoke.py
+（2026-09-18 修复：原清单 verify_staging_fuse / verify_staging_migration /
+verify_fusion_fixes 三个脚本**从未入库、磁盘亦不存在**，三项恒 rc=2 FAIL，
+致本脚本长期 EXIT=1。已剔除幽灵条目 + 加「存在性前置校验」，防门禁清单再次漂移）
 
 运行：python tests/manual_verify/verify_p1_perf.py
 """
@@ -264,11 +267,19 @@ e4, _r = _bm25_cache_get(conn, ["dev"], None, ["doc1.md"])
 check("P10a content UPDATE 不改指纹 → 命中缓存（设计语义：ingest 下更新走新行）",
       e4 is e3, "content 更新触发重建（超出设计语义）")
 
-# ═══════════════════════════ REG 三组基线回归 ═══════════════════════════
-print("\n== REG 三组基线回归 ==")
-baselines = ["tools/verify_staging_fuse.py", "tools/verify_staging_migration.py",
-             "tools/verify_fusion_fixes.py"]
+# ═══════════════════════════ REG 基线回归 ═══════════════════════════
+# 清单维护约定（2026-09-18 修复）：只列**仓库内实际存在**的脚本。
+# 历史缺陷：原清单引用 verify_staging_fuse / verify_staging_migration /
+# verify_fusion_fixes，三者**从未入库**（git 全历史无新增记录）且磁盘已不存在
+# → 检查恒为 FAIL（rc=2 can't open file），本脚本自诞生起就一直 EXIT=1，门禁形同失效。
+# 现改为：① 清单换现存等价基线；② 加存在性前置校验，缺失即判 FAIL 并明示"清单漂移"。
+print("\n== REG 基线回归 ==")
+baselines = ["tests/manual_verify/verify_p1_blocking_smoke.py"]
 for b in baselines:
+    if not os.path.exists(os.path.join(_BASE, b)):
+        check(f"REG {os.path.basename(b)} 脚本存在（门禁清单漂移）", False,
+              f"清单引用的脚本不存在：{b}")
+        continue
     t0 = time.perf_counter()
     r = subprocess.run([sys.executable, b], cwd=_BASE, capture_output=True,
                        text=True, encoding="utf-8")

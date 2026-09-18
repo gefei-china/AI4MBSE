@@ -7,6 +7,13 @@ static/js/mods/NN-name.js，index.html 退化为骨架 + 按序 <script src> 引
  1. 切分点吸附到最近的「顶层声明行」（保证不在函数体内部）；
  2. 所有分片为普通 script（非 module），共享全局作用域，内联 onclick 不受影响；
  3. 全量备份 index.html 到 _archive/bak/。
+
+⚠️ 已执行完毕（一次性脚本，**不可重跑**）：
+ - 输入 static/index.html 现已是拆分后的骨架（1,541 行 / 42 个 <script src>，内联 <script> 为 0），
+   重跑会以骨架为输入、产出错误切分；
+ - 依赖的备份目录 _archive/bak/ 已移出仓库，重跑在备份步骤即报错；
+ - 目标 static/js/mods/ 已含 59 个分片，重跑会重复/覆盖。
+ 保留本文仅为追溯拆分边界与模块命名依据；如需再切分请另写新脚本。
 """
 import re, os, io, sys
 
