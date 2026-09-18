@@ -52,6 +52,9 @@
 9. **工具名必须是 ASCII**：`tools` 表的工具名会作为 `function.name` 发给模型，协议要求 `^[a-zA-Z0-9_-]+$`。曾有一个中文名工具（「知识库查询」）导致 **整批 tools 载荷被 400 拒绝 → 静默回落 Mock**。`_build_tools_def` 已加护栏（剔除非法名 + 告警），但新增工具请直接用英文名。
 10. **LLM 采样参数优先级**：`显式传参 > DB llm_providers 配置 > 内置默认`（`llm/providers/openai_compat.py`）。调用 `llm_client.chat(...)` 时可直接传 `model`/`temperature`/`max_tokens` —— 历史上 broker 曾把它们「具名 + `**kwargs`」重复传递，导致一传就 `TypeError` 并被静默吞成 Mock，已修但改动此处务必回归 `tools/verify/verify_s4_llm_params.py`。
 11. **降级必须留痕**：LLM 调用失败会回落 Mock（用户无感）。`llm/__init__.py` 的降级分支已加 WARNING（含调用点/intent/provider/异常）；排查"AI 回答怪怪的"时**先看服务日志有没有这条 WARNING**，再查 `llm_usage_stats.used_mock`。
+12. **迁移 CSS/HTML 块不要用正则跨行匹配**：`<style>(.*?)</style>` 会命中内联 JS 字符串里的标签，删出未闭合标签（浏览器会把后续内容当 CSS 吞掉）。**按行定位**（开/闭标签独占一行）。
+13. **注释必须闭合，且要验证"规则出现在解析后的样式表里"**：只读文件内容会漏掉"整段规则被未闭合注释吞掉"的静默失效——查 `document.styleSheets` 的 `cssRules` 才算数。
+14. **`esc` / `escA` 定义在 `01-core.js`**（2026-09-18 从 `08-sysmlview.js` 迁入，原因就是消除顺序耦合）；全站约 1,700 处调用，改动前先跑浏览器冒烟。
 
 ## 4. 起服务 / 验证
 
