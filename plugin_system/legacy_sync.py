@@ -50,8 +50,9 @@ SLOT = {"skill": "skills", "tool": "tools", "mcp": "mcp",
 #   不可用值为 None 表示**下架时不改该列**（保留原值，避免破坏发布记录）。
 #
 #   ⚠️ 各表「不可用」的取值以既有代码为准，不能臆造：
-#      tools / agents 用 'disabled'（见 migrations.py:1273 把 deprecated/inactive 统一为 disabled；
-#      agents.py 的 disable 路由亦写 'disabled'），此前误写成 'inactive' 已修正。
+#      tools / agents 用 'disabled'（见 database/migrations/plugins.py 的 _migrate_tool_status
+#      把 deprecated/inactive 统一为 disabled；agents.py 的 disable 路由亦写 'disabled'），
+#      此前误写成 'inactive' 已修正。（原注释引用 migrations.py:1273，2026-09-18 S7-3 拆包后行号失效，改为符号引用）
 #   mcp_servers 只动 enabled，不动 status（status 是连接态，由健康巡检维护）；
 #   skills 的可用性是 status='published' 且 enabled=1 双条件 ——
 #     上架时必须一并置 published（能力中心已发布它），下架时只关 enabled。

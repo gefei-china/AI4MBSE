@@ -27,7 +27,7 @@
 | 会话列表 / 新建任务 / 角色快捷 | `js/mods/03-chat.js`、`12-chatsend.js` | `routers/conversations.py` |
 | 消息渲染 / Markdown / 卡片 | `js/mods/05-markdown.js`、`06-cards.js` | `routers/conversations.py` |
 | 归一确认（人在回路） | `js/mods/07-norm.js`、`06-cards.js`（入口按钮） | `norm_apply.py`、`routers/conversations.py` |
-| 文档库（文档上传/列表） | `js/mods/20-docs.js` | `routers/knowledge_parts/documents.py`、`knowledge_pipeline/ingest.py` |
+| 文档库（文档上传/列表/生命周期） | `js/mods/20-docs.js` | `routers/meta.py`（`/api/documents/*` 共 20 个端点）、`knowledge_pipeline/ingest.py` |
 | 知识库页装载 / 分页组件 | `js/mods/15-kb.js` | `routers/knowledge_parts/*` |
 | 本体模型 / 术语词典 | `js/mods/21-ontology.js`、`23-ontform.js`、`18-glossary.js` | `ontology_*.py`、`routers/glossary.py` |
 | 知识图谱（视图/编辑/推理） | `js/mods/25-graphview.js`、`26-grapheditor.js`、`34-graphtabs.js`、`22-ontgraph.js` | `graph_db.py`、`triple_store.py`、`routers/graph_workspace.py` |
