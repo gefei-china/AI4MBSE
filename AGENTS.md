@@ -66,6 +66,15 @@ Invoke-WebRequest http://127.0.0.1:8000/api/dashboard -UseBasicParsing
 - 关键断言：`#mainnav` 导航项与高亮、`.page.on` 页面类名、`#br-cur` 面包屑、`ab("errors")` 为空。
 - 后端改动：`python -m py_compile <files>` + `tools/verify/` 下的脚本；pytest 用 `pytest.ini`（**指向独立测试库，不要连生产 `mbse.db`**）。
 
+## 4.1 版本控制（2026-09-18 起必须遵守）
+
+- 仓库已有 git 基线：`master`，标签 **`baseline-20260918`**（= S0–S5 优化完成后的快照），426 个跟踪文件、工作区干净。
+- **动高风险代码前先提交**，再开分支：`git switch -c refactor/xxx`；每完成一小步就 commit（提交信息写清"改了什么 + 验证了什么"）。
+- 回滚单文件：`git checkout -- <file>`；看基线差异：`git diff baseline-20260918 --stat`。
+- **不要把运行期产物交给 git**：`java-runtime/`、`fuseki/`、`data/`、`tmp/`、`outputs/`、`screenshots/`、`static/uploads/`、`static/skill_packages/`、`*.db`、`*.log`、`*.bak-*`、`*.pres5` 均已在 `.gitignore`（新增此类目录前先补忽略规则）。
+- 本仓库 `core.autocrlf=false`（源码是混合换行，开启自动转换会造成全量 diff）。
+- 完整约定与回滚演练见 `docs/版本控制使用约定-20260918.md`。
+
 ## 5. 文档索引（哪些是权威）
 
 | 想看 | 读这个 |
