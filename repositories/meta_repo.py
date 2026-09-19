@@ -154,6 +154,18 @@ class MetaRepo(BaseRepo):
         )
 
     def delete_document(self, doc_id: int) -> None:
+        """删除文档。
+
+        ⚠️ `domain_review_queue.document_id` 是**无外键**的普通列
+        （建表见 `database/migrations/glossary.py::_migrate_glossary_tables`），
+        不随 `documents` 级联删除 —— 只删 documents 会留下"指向已删文档"的孤儿行，
+        而 `dashboard_repo` 会把它们计入看板「知识评审待办」→ **计数虚高**
+        （2026-09-19 实测：显示 52 / 真实 38）。
+
+        所以这里必须**显式清理**该文档在复核队列里的行（与删除同事务）。
+        兜底见 `database/migrations/glossary.py::_migrate_domain_review_queue_orphans`。
+        """
+        self.execute("DELETE FROM domain_review_queue WHERE document_id=?", (doc_id,))
         self.execute("DELETE FROM documents WHERE id=?", (doc_id,))
 
     # ── P0：文档生命周期管理（FR-KG-8 / ArcR-5）──

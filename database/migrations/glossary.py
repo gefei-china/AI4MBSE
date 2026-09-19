@@ -54,6 +54,28 @@ def _migrate_glossary_tables(conn):
     c.execute("CREATE INDEX IF NOT EXISTS idx_drq_status ON domain_review_queue(status)")
     conn.commit()
 
+def _migrate_domain_review_queue_orphans(conn):
+    """清理 `domain_review_queue` 中指向已删文档的孤儿行。幂等，每次 init_db 扫一遍。
+
+    根因：`domain_review_queue.document_id` 是**无外键**的普通列（见上方建表语句），
+    删 `documents` 时不级联。历史删除路径（2026-09-14/15 删 doc 761–778、
+    2026-09-19 删 792/796/797）曾静默留下孤儿行，而 `dashboard_repo` 会把它们
+    计入看板「知识评审待办」→ 计数长期虚高（2026-09-19 实测 14 条孤儿 / 显示 52 真实 38）。
+
+    预防侧已在 `repositories/meta_repo.py::MetaRepo.delete_document` 显式清理本表；
+    本迁移作为兜底，覆盖其它删除路径（分支删除/回滚外的场景）与历史残留。
+
+    注意 `document_id` 允许 NULL（列定义只有 DEFAULT 0，无 NOT NULL），
+    NULL NOT IN (...) 结果为 NULL 不会命中，故显式带上 `IS NULL`。
+    """
+    n = conn.execute(
+        "DELETE FROM domain_review_queue "
+        "WHERE document_id IS NULL OR document_id NOT IN (SELECT id FROM documents)"
+    ).rowcount
+    if n:
+        print(f"[init_db] 迁移: 清理 domain_review_queue 孤儿行 {n} 条（指向已删文档）")
+    conn.commit()
+
 def _seed_departments(conn):
     """部门设置种子：空表时插入默认部门（老库升级也能获得）。
 

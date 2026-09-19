@@ -106,9 +106,21 @@ class ContextMixin:
             except Exception:
                 sem_scored = []
             sem_by_id = {it["id"]: s for s, it in sem_scored}
-            # 语义补召：词法全零命中时，若语义第一名显著（≥0.5，bigram 高置信）才放行 top1
+            # 语义补召：词法全零命中时，若语义第一名显著才放行 top1。
+            # 2026-09-19：门槛按**本次实际走的路**选（两路余弦量纲不同，实测同批 top1 dense 0.51 / bigram 0.10）——
+            #   bigram → 0.5（原口径）；dense → semantic_fallback_gate_dense（0.79 = 0.5 的分位等价值，分位等价标定）。
+            try:
+                import semantic as _sem
+                _is_dense = _sem.last_backend() == "dense"
+            except Exception:
+                _is_dense = False
+            if _is_dense:
+                from core import config as _cfg
+                _gate = float(_cfg.get("context", "semantic_fallback_gate_dense", 0.79) or 0.79)
+            else:
+                _gate = 0.5
             semantic_fallback = []
-            if not lex_top and sem_scored and sem_scored[0][0] >= 0.5:
+            if not lex_top and sem_scored and sem_scored[0][0] >= _gate:
                 top_s, top_it = sem_scored[0]
                 semantic_fallback = [(top_s, by_id.get(top_it["id"]))]
 

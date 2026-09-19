@@ -72,15 +72,32 @@ DEFAULT_CONFIG = {
     },
     "embedding": {
         "enabled": True,         # 语义出口总开关；False 强制 bigram（Mock/离线确定性）
-        "intent_threshold": 0.15,  # 意图路由语义兜底阈值（真向量/bigram 共用经验值）
+        "intent_threshold": 0.15,  # 意图路由语义兜底阈值（**bigram 路**；dense 路见 intent_threshold_dense）
         "tool_top_k": 6,         # 工具 JIT 预筛 top_k（对齐 Semantic Tool Selection）
-        "tool_threshold": 0.12,  # 工具 JIT 预筛相似度阈值（低于则空回退全量注入）
+        "tool_threshold": 0.12,  # 工具 JIT 预筛相似度阈值（**bigram 路**；dense 路见 tool_threshold_dense）
         "memory_top_k": 5,       # 记忆检索 top_k
         "bigram_dim": 4096,      # bigram 降级向量哈希槽数（P1-1b：原 embedder 硬编码；大规模语料可调高降碰撞）
         # 2026-09-19：服务端单批条数上限（实测阿里云百炼 text-embedding-v3 = 10，>10 报
         # 400 InvalidParameter）。Embedder._embed_api 内部按此切分，兜住「batch_size=0
         # 一次全发」的调用方（semantic.py 的 items+query、intent 语义路由等）。
         "api_batch_max": 10,     # /embeddings 单批条数上限（<=0 表示不切分）
+        # ── 真 embedding（dense）路独立阈值 —— 2026-09-19 标定 ─────────────────
+        # 背景：修掉「单批上限 → 静默降级 bigram」后，**dense 路首次真正生效**；而上面几个阈值
+        #   都是当年按 bigram 量纲标的。两路余弦量纲不同（实测同一批 top1：dense 0.51 vs bigram 0.10）。
+        # 标定法：真实 query 集（query_trace ∪ messages.user，去重后 n=83）× 各场景**真实候选集**，
+        #   取 top1 分做**分位等价映射** —— 使判定通过率与旧 bigram 阈值一致（**行为等价迁移**，
+        #   不是最优 F1 点；要谈最优需人工标注集，本轮没有）。
+        # 取证：calibrate_dense_thresholds.py → _calibrate_dense.txt / .json
+        # 调用方据此选阈值：`semantic.SemanticSearch.last_backend` / `semantic.last_backend()`。
+        "tool_threshold_dense": 0.53,      # 等价旧 0.12（实测正例率 47.0% → dense 同分位 0.5274）
+        "intent_threshold_dense": 0.49,    # 等价旧 0.15（正例率 57.8% → 0.4926）
+        # intent 分档（旧 0.40 / 0.55 / 0.70）：
+        # ⚠️ 后两档在 bigram 下**从未生效**（bigram top1 max = 0.4910 < 0.55）——dense 生效后
+        #   它们会首次触发，这是本轮**明确的行为变更点**，故按 dense 高分位取保守值，
+        #   使其"极少触发而非永不触发"（原设计的分档从此才真正可用）。
+        "intent_sem_low_dense": 0.69,      # 等价旧 0.40（正例率 4.8% → 0.6911）
+        "intent_sem_mid_dense": 0.69,      # 旧 0.55 等价映射无解 → 取 dense p95（0.6907）；与 low 重合见报告
+        "intent_sem_high_dense": 0.76,     # 旧 0.70 等价映射无解 → 取 dense p99（0.7604）
     },
     "context": {
         "history_immediate_turns": 6,   # 即时窗口轮数（原文逐字注入）
@@ -95,14 +112,25 @@ DEFAULT_CONFIG = {
         "topic_retrieve_threshold": 0.15,  # 语义拉回最低相似度（低于不注入；对齐 intent 语义兜底经验值）
         "topic_retrieve_threshold_dense": 0.35,  # 语义拉回阈值（真 embedding 路独立量纲；bigram 路用 topic_retrieve_threshold）
         "topic_group_match_dense": 0.30,  # 当前话题组匹配阈值（真 embedding 路；bigram 路固定 0.12）
+        # 2026-09-19 标定：`_match_flows` 语义补召门（词法零命中时才生效）——
+        #   bigram 路沿用 0.5；dense 路用此值。实测（agent_flows 18 条候选 × 83 query）：
+        #   bigram top1 p90=0.4267 / max=0.6092；0.5 的等价 dense 分位 = 0.7855（正例率 8.4%）。
+        #   标定法同 embedding 组（分位等价映射）；脚本：calibrate_dense_thresholds.py
+        "semantic_fallback_gate_dense": 0.79,
         "model_context_chars": 800,     # 建模上下文注入上限（字符，当前模型状态工作记忆）
         "rerank": True,                 # 知识库检索后 LLM 重排（开关，粗筛→细排；行业对齐 RAG 多阶段）
         "rerank_top_n": 8,              # 重排候选数
         "rerank_keep": 3,               # 重排保留数（其余保底置后）
-        "budget_system_chars": 6000,    # P1a-2 上下文 Token 预算：system 区上限（字符，粗估 1中文字≈1.5 token）
+        # ⚠️ 2026-09-19 移除 budget_system_chars / budget_system_tokens（死配置）：
+        #    实测 system 区**非检索部分**（角色/技能/模板/规则/L0 卡/记忆）= **5,991 token**，
+        #    占 system_prompt 的 92.9%（同期检索段仅 458 token）；而这两个上限为
+        #    4,000 token / 6,000 字符 —— **低于不可裁部分的实际值**，即使把检索段砍到 0
+        #    也满足不了，属"声明了但物理上无法生效"的旋钮。且唯一可裁的检索段已有独立
+        #    预算 budget_retrieval_tokens（实测只用 458 / 上限 2,600），再叠一个 system
+        #    总上限只会重复挤压同一段。留着只会误导调参的人。
+        #    实测依据：docs/SysML-v2-生成端硬约束与向量化链路修复-实测报告-20260919.md §5-④
         "budget_retrieval_chars": 4000, # 检索数据区上限（超限从尾部裁剪，保留最相关头部）
         "budget_history_chars": 3000,   # 历史区上限（摘要已压缩，兜底裁剪）
-        "budget_system_tokens": 4000,   # T6 token 驱动预算：system 区上限（优先于字符版；按 tiktoken 中文≈1.5字/token 折算）
         "budget_retrieval_tokens": 2600, # T6 token 驱动预算：检索区上限（保头，保留最相关）
         "budget_history_tokens": 2000,  # T6 token 驱动预算：历史区上限（当前话题原文50%/语义拉回75%/分话题摘要剩余）
     },
@@ -301,12 +329,17 @@ CONFIG_SCHEMA = {
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},
-        "intent_threshold": {"type": "float", "desc": "意图路由语义兜底阈值"},
+        "intent_threshold": {"type": "float", "desc": "意图路由语义兜底阈值（bigram 路）"},
         "tool_top_k":       {"type": "int", "desc": "工具 JIT 预筛 top_k"},
-        "tool_threshold":   {"type": "float", "desc": "工具 JIT 预筛相似度阈值（低于则空回退全量）"},
+        "tool_threshold":   {"type": "float", "desc": "工具 JIT 预筛相似度阈值（bigram 路；低于则空回退全量）"},
         "memory_top_k":     {"type": "int", "desc": "记忆检索 top_k"},
         "bigram_dim":       {"type": "int", "desc": "bigram 降级向量哈希槽数（默认 4096，ENV: MBSE_EMBED_BIGRAM_DIM）"},
         "api_batch_max":    {"type": "int", "desc": "/embeddings 单批条数上限（默认 10；<=0 不切分）"},
+        "tool_threshold_dense":   {"type": "float", "desc": "工具 JIT 预筛阈值（dense 路；分位等价映射，实测 0.53）"},
+        "intent_threshold_dense": {"type": "float", "desc": "意图路由兜底阈值（dense 路；分位等价映射，实测 0.49）"},
+        "intent_sem_low_dense":   {"type": "float", "desc": "意图弱置信下限（dense 路；等价旧 0.40，实测 0.69）"},
+        "intent_sem_mid_dense":   {"type": "float", "desc": "意图中等置信（dense 路；旧 0.55 在 bigram 下不可达，取 p95=0.69）"},
+        "intent_sem_high_dense":  {"type": "float", "desc": "意图高置信门（dense 路；旧 0.70 在 bigram 下不可达，取 p99=0.76）"},
     },
     "context": {
         "history_immediate_turns": {"type": "int", "desc": "即时窗口轮数（原文逐字）"},
@@ -321,14 +354,14 @@ CONFIG_SCHEMA = {
         "topic_retrieve_threshold": {"type": "float", "desc": "语义拉回最低相似度"},
         "topic_retrieve_threshold_dense": {"type": "float", "desc": "语义拉回阈值（真 embedding 路，量纲与 bigram 不同）"},
         "topic_group_match_dense": {"type": "float", "desc": "当前话题组匹配阈值（真 embedding 路）"},
+        "semantic_fallback_gate_dense": {"type": "float", "desc": "工作流语义补召门（dense 路；bigram 路固定 0.5，实测等价 0.79）"},
         "model_context_chars":     {"type": "int", "desc": "建模上下文注入上限（字符，当前模型状态工作记忆）"},
         "rerank":                  {"type": "bool", "desc": "知识库检索后 LLM 重排开关"},
         "rerank_top_n":            {"type": "int", "desc": "重排候选数"},
         "rerank_keep":             {"type": "int", "desc": "重排保留数（其余保底置后）"},
-        "budget_system_chars":     {"type": "int", "desc": "system 区 token 预算（字符粗估）"},
+        # 注：原 budget_system_chars / budget_system_tokens 已于 2026-09-19 移除（死配置，见上）
         "budget_retrieval_chars":  {"type": "int", "desc": "检索数据区预算（超限尾部裁剪）"},
         "budget_history_chars":    {"type": "int", "desc": "历史区预算（摘要后兜底裁剪）"},
-        "budget_system_tokens":    {"type": "int", "desc": "T6 system 区 token 预算（优先于字符版，0=回退字符版）"},
         "budget_retrieval_tokens": {"type": "int", "desc": "T6 检索区 token 预算（保头保留最相关，0=回退字符版）"},
         "budget_history_tokens":   {"type": "int", "desc": "T6 历史区 token 预算（话题原文/语义拉回/摘要分区复用，0=回退字符版）"},
     },

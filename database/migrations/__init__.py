@@ -52,6 +52,7 @@ from .documents import (
 )
 from .glossary import (
     _migrate_glossary_tables,
+    _migrate_domain_review_queue_orphans,
     _seed_departments,
     _seed_knowledge_categories,
     _migrate_glossary_changelog,
@@ -108,6 +109,7 @@ __all__ = [
     "_migrate_document_lifecycle",
     "_migrate_artifact_ingest",
     "_migrate_glossary_tables",
+    "_migrate_domain_review_queue_orphans",
     "_seed_departments",
     "_seed_knowledge_categories",
     "_migrate_glossary_changelog",

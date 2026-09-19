@@ -28,6 +28,7 @@ from .migrations import (
     _backfill_pipeline_detail,
     _apply_env_keys,
     _migrate_glossary_tables,
+    _migrate_domain_review_queue_orphans,  # 2026-09-19 复核队列孤儿行兜底清理
     _migrate_ontology_change_tables,
     _migrate_ontology_version_tables,
     _dedupe_ontology_types,
@@ -1086,6 +1087,8 @@ def init_db():
     _migrate_plugin_dependencies(conn)
     # ── Glossary 术语表 + 查询 Trace + domain review 队列（P0-1/P2-2/P2-3）──
     _migrate_glossary_tables(conn)
+    # ── 复核队列孤儿行兜底清理（document_id 无外键，删文档不级联；幂等）──
+    _migrate_domain_review_queue_orphans(conn)
     # ── 修复 documents 失效外键（data_sources 重建的 RENAME 副作用 → data_sources_old 引用）──
     _repair_documents_fk(conn)
     # ── FR-KG-4 补 G7：本体类型变更留痕表（add/update/delete 全量快照）──

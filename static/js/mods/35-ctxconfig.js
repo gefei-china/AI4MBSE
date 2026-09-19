@@ -15,9 +15,10 @@ const CTX_CFG_SECTIONS = [
 
 const CTX_CFG_FIELDS = [
   // ── 预算区 ──
-  { sec:'budget', key:'context.budget_system_tokens', type:'int', label:'System 区预算 (token)',
-    desc:'系统提示词区（角色设定、技能说明、输出框架）的 token 上限。',
-    impact:'调大：Agent 角色/技能说明更完整不易被裁，但每次请求基础 token 消耗升高；调小：超限部分被裁剪（保留头部）。' },
+  // 注：原 'context.budget_system_tokens' 项已于 2026-09-19 移除 —— 该配置在 core/config.py
+  //     里**只有声明、没有消费点**（_apply_context_budget 只裁检索区与历史区），且实测
+  //     system 区非检索部分已达 5,991 token > 其 4,000 上限，物理上无法生效，留着只会误导调参。
+  //     依据：docs/SysML-v2-生成端硬约束与向量化链路修复-实测报告-20260919.md §5-④
   { sec:'budget', key:'context.budget_retrieval_tokens', type:'int', label:'检索数据区预算 (token)',
     desc:'知识库检索结果注入 prompt 的 token 上限（超限从尾部裁剪，保留最相关头部）。',
     impact:'调大：检索依据更全、引用更可信；调小：只保留最相关头部（对齐 Lost-in-the-Middle：重要内容放头部召回率更高）。' },

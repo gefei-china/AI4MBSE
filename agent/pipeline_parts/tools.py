@@ -191,11 +191,17 @@ class ToolMixin:
                 from core import config as _cfg
                 idx = [{"name": c[0], "text": f"{c[0]} {c[1]}"} for c in candidates]
                 # P1a-1：对齐 Semantic Tool Selection——top_k + threshold + 空回退
-                # 弱相关（top 分 < 0.12 bigram 经验值）→ 不预筛，维持全量注入（保底可靠）
-                _th = float(_cfg.get("embedding", "tool_threshold", 0.12) or 0.12)
-                scored = SemanticSearch().rank(user_input, idx,
-                                               top_k=int(_cfg.get("embedding", "tool_top_k", jit_top_n)),
-                                               threshold=0, key="text")
+                # 2026-09-19：阈值按**本次实际走的路**选（两路余弦量纲不同，一套阈值必有一路失准）：
+                #   dense（真 embedding）→ tool_threshold_dense（0.53，分位等价标定）
+                #   bigram（降级）      → tool_threshold（0.12，原经验值）
+                # 弱相关 → 不预筛，维持全量注入（保底可靠）
+                _ss = SemanticSearch()
+                _th_b = float(_cfg.get("embedding", "tool_threshold", 0.12) or 0.12)
+                _th_d = float(_cfg.get("embedding", "tool_threshold_dense", 0.53) or 0.53)
+                scored = _ss.rank(user_input, idx,
+                                  top_k=int(_cfg.get("embedding", "tool_top_k", jit_top_n)),
+                                  threshold=0, key="text")
+                _th = _th_d if getattr(_ss, "last_backend", "bigram") == "dense" else _th_b
                 chosen = {s[1]["name"] for s in scored if s[0] >= _th}
                 if not chosen:
                     # 空回退：全弱相关时维持全量（不瘦身，保底可靠）——

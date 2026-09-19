@@ -297,12 +297,18 @@ class IntentRouter:
         - top_score < 0.40：低置信，降级 chat（不硬检索）
         保持既有双条件：第一名 >= threshold 且显著领先第二名（>= 1.5 倍）。
         top_score 写入 self._last_sem_score（供上层 route 分级与澄清判定）。
+
+        2026-09-19 双阈值：以上数值是 **bigram 口径**。走真 embedding（dense）时改用
+        `embedding.intent_*_dense`（分位等价映射标定，默认 0.49/0.69/0.69/0.76），
+        因为两路余弦量纲不同、同一阈值必有一路失准。
         """
         self._last_sem_score = 0.0
         if not self._semantic_index:
             return ""
         from semantic import SemanticSearch
-        scored = SemanticSearch().rank(text, self._semantic_index, top_k=2, threshold=0, key="text")
+        from core import config as _cfg
+        _ss = SemanticSearch()
+        scored = _ss.rank(text, self._semantic_index, top_k=2, threshold=0, key="text")
         if not scored:
             return ""
         top_score, top_item = scored[0]
@@ -310,7 +316,20 @@ class IntentRouter:
         name = top_item.get("name", "")
         if name == "chat":
             return ""
-        if top_score < threshold:
+        # 2026-09-19：分档阈值按**本次实际走的路**选 —— 两路余弦量纲不同
+        # （实测同一批 top1：dense 0.51 / bigram 0.10），一套阈值套两路必有一路失准。
+        # dense 值由 calibrate_dense_thresholds.py 做**分位等价映射**标定
+        # （保持原判定通过率 → 行为等价迁移，不是"更松/更紧"）。
+        # ⚠️ 旧 0.55 / 0.70 两档在 bigram 下**从未生效**（bigram top1 max=0.4910）——
+        #    dense 生效后它们首次可用，属行为变更点，故取 dense 高分位保守值（见 core/config.py）。
+        if getattr(_ss, "last_backend", "bigram") == "dense":
+            th = float(_cfg.get("embedding", "intent_threshold_dense", 0.49) or 0.49)
+            sem_low = float(_cfg.get("embedding", "intent_sem_low_dense", 0.69) or 0.69)
+            sem_mid = float(_cfg.get("embedding", "intent_sem_mid_dense", 0.69) or 0.69)
+            sem_high = float(_cfg.get("embedding", "intent_sem_high_dense", 0.76) or 0.76)
+        else:
+            th, sem_low, sem_mid, sem_high = threshold, 0.40, 0.55, 0.70
+        if top_score < th:
             return ""
         # P1-1 置信度分级：弱置信（0.40-0.70）——
         # 采纳条件（任一）：
@@ -318,16 +337,16 @@ class IntentRouter:
         #   b) 第一名中等置信（>=0.55）且显著领先第二名（>=1.15x）——描述匹配意图明确
         #      （P2-B 修复：「测算成本」→ 成本分析Agent 0.58 vs design 0.47，领先 1.22x
         #      被弱置信拦截导致 Gap1 失败；1.15x 倍率经实测三输入验证无误伤）。
-        if top_score < 0.70 and top_score >= 0.40:
+        if top_score < sem_high and top_score >= sem_low:
             try:
                 if getattr(self, "_last_glossary", None) and self._last_glossary.get("hits"):
                     return name  # 术语归一化命中 → 信任路由
             except Exception:
                 pass
-            if len(scored) >= 2 and top_score >= 0.55 and top_score >= scored[1][0] * 1.15:
+            if len(scored) >= 2 and top_score >= sem_mid and top_score >= scored[1][0] * 1.15:
                 return name  # 中等置信 + 显著领先 → 描述匹配明确，采纳（P2-B）
             return ""
-        if top_score < 0.40:
+        if top_score < sem_low:
             return ""  # 低置信：不硬检索，交给上层 LLM/chat 兜底
         # 显著领先判定（仅当存在第二名时才要求）
         if len(scored) >= 2 and top_score < scored[1][0] * 1.5:

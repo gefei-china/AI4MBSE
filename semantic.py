@@ -21,6 +21,10 @@ class SemanticSearch:
 
     def __init__(self, conn=None):
         self._embedder = None
+        # 最近一次 rank() **实际走的后端**：'dense'（真 embedding）| 'bigram'（降级路）。
+        # 2026-09-19 新增：两路余弦**量纲不同**（同一对文本实测 top1 dense 0.6652 / bigram 0.3091），
+        # 调用方必须据此选阈值，否则一套阈值套两路必有一路失准 → 见 docs 报告 §5-①。
+        self.last_backend = "bigram"
         if conn is not None:
             self._ensure_embedder(conn)
 
@@ -50,8 +54,13 @@ class SemanticSearch:
 
         items 元素可为 dict（取 key 字段文本）或 str（直接作文本）。
         真 embedding 可用时用真向量；否则 bigram 降级（score 量纲不同，threshold 按调用方经验）。
+
+        ⚠️ **两路量纲不同**：调用方若要用「相似度门限」做判定，必须读 `self.last_backend`
+        （或模块级 `semantic.last_backend()`）来选阈值 —— 这是 2026-09-19 修复
+        「embedding 静默降级」后**首次真正生效的 dense 路**带来的一致性要求。
         """
         if not query or not items:
+            self.last_backend = "bigram"
             return []
         pairs = []
         for it in items:
@@ -59,6 +68,7 @@ class SemanticSearch:
             if t and str(t).strip():
                 pairs.append((it, str(t).strip()))
         if not pairs:
+            self.last_backend = "bigram"
             return []
         # 总开关（embedding.enabled=False → 强制 bigram，Mock/离线确定性）
         try:
@@ -69,9 +79,11 @@ class SemanticSearch:
         if enabled:
             scored = self._rank_dense(query, pairs)
             if scored is not None:
+                self.last_backend = "dense"
                 if threshold:
                     scored = [s for s in scored if s[0] > threshold]
                 return scored[:top_k] if top_k else scored
+        self.last_backend = "bigram"
         scored = self._rank_bigram(query, pairs)
         if threshold:
             scored = [s for s in scored if s[0] > threshold]
@@ -130,3 +142,12 @@ def rank_items(query: str, items: list, top_k: int = 5, threshold: float = 0.0,
     if conn is not None:
         return SemanticSearch(conn).rank(query, items, top_k, threshold, key)
     return _default.rank(query, items, top_k, threshold, key)
+
+
+def last_backend() -> str:
+    """最近一次**模块级** `rank_items(...)` 实际走的后端：'dense' | 'bigram'。
+
+    调用方据此选阈值（两路量纲不同）。注意 `rank_items(..., conn=<连接>)` 会新建实例、
+    不更新这里的值 —— 那种调用请自行持有 `SemanticSearch` 实例读其 `.last_backend`。
+    """
+    return _default.last_backend
