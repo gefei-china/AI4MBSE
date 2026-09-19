@@ -40,7 +40,7 @@ LLM 生成 V2 代码 ──► 投影视图 ──► 版本入库 ──► 人
 
 | 闸门 | 位置 | 载体 | 成本 | 收益 |
 |---|---|---|---|---|
-| **① 生成约束** | `agent/pipeline_parts/prompt.py::_build_model_code_req` | 知识文档 **L0 硬约束卡** | 0（只加文本） | **最高**：从源头压掉 84 个语法错 |
+| **① 生成约束** | `agent/pipeline_parts/prompt.py::_build_model_code_req` | 知识文档 **L0 硬约束卡** | 0（只加文本） | **最高**：从源头压掉 84 个语法错 —— ✅ **2026-09-19 已落地**，真机 A/B **两轮独立采样：无卡 6 / 9 ERROR → 有卡 0 / 0**（报告：《SysML-v2-生成端硬约束与向量化链路修复-实测报告-20260919》） |
 | **② 生成后校验** | `agent/pipeline_parts/cards.py::_gen_sysml_views`（5 个调用点的收敛处） | 本地 `checker.jar` | 4–6 s / 次 | 高：错误在**入库前**暴露 |
 | **③ 入库前留痕** | `agent/utils.py::_archive_sysml_version` | 校验结果写进 `element_summary` | 0 | 中：可追溯、可门禁 |
 | （已有）**④ 写智源前** | `norm_apply.py::push_version_to_zhiyuan` | 远程 `sysmlv2_check` | 有网络/鉴权风险 | 保留，但**前置闸门应让它极少触发** |
@@ -160,6 +160,12 @@ _INTENT_SECTIONS = {
 ### 2.2 三个接入点的具体改法
 
 #### 接入点 ①（生成端，收益最高）
+
+> ✅ **已落地（2026-09-19）**：实际实现与本指南的设想略有不同 —— 卡文本放在**独立模块**
+> `agent/pipeline_parts/v2_constraints.py`（自带逐条出处表），`_build_model_code_req` 只做
+> `+ build_l0_card()`；并加了配置开关 `sysml.l0_card_enabled` / `sysml.l0_card_extra`。
+> 真机 A/B：**6 ERROR → 0 ERROR**（消除 `[S01]` 那类错）。
+> 报告：`docs/SysML-v2-生成端硬约束与向量化链路修复-实测报告-20260919.md`
 
 **改**：`agent/pipeline_parts/prompt.py::_build_model_code_req`
 
