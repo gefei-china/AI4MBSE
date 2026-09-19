@@ -21,6 +21,24 @@ except Exception:
     _BIGRAM_DIM = 4096
 
 
+def _api_batch_max() -> int:
+    """服务端 `/embeddings` 单批条数上限（实测阿里云百炼 text-embedding-v3 = **10**）。
+
+    >10 时服务端直接 400：`InvalidParameter: batch size is invalid, it should not be
+    larger than 10.`。每次调用现读配置，改 `embedding.api_batch_max` 即时生效；
+    <=0 表示不切分（自建无限制服务可用）。
+    """
+    try:
+        from core.config import get as _cfg2
+        v = _cfg2("embedding", "api_batch_max", 10)
+        # 注意不能写 int(v or 10)：那会把「0 = 不切分」吃掉（0 是 falsy）。
+        if v is None:
+            return 10
+        return int(v)
+    except Exception:
+        return 10
+
+
 def _bigram_feature_text(text: str) -> list:
     """字符 bigram 特征（与 knowledge_engine.VectorEngine._tokenize 对齐）。"""
     s = re.sub(r"[\s\W_]+", "", str(text).lower())
@@ -134,6 +152,27 @@ class Embedder:
         return self._embed_bigram(texts), "bigram-tf"
 
     def _embed_api(self, texts: list) -> list:
+        """POST {base}/embeddings。**按服务端单批上限内部自动切分**（见 `_api_batch_max`）。
+
+        为什么必须在**这一层**兜底：服务端对单次 `input` 的条数有硬上限（实测
+        `text-embedding-v3` 为 10），而调用方可能传 `batch_size=0`（"一次全发"，
+        见 `embed_with_version`）或直接把整批丢进来。此前 `semantic.py::_rank_dense`
+        正是「items + query」一次全发 —— 本机 20 个 agent 时是 21 条 → 必 400 →
+        `embed()` 的 except 吞掉后**静默降级 bigram**，把"语义匹配/语义兜底路由"
+        悄悄变成"词面匹配"（实测 2026-09-19：一次建模会话里 19 条的整批调用即如此）。
+
+        放在这一层后，任何调用方的超限输入都被切成合规批次，且**顺序保持不变**
+        （逐段 extend + 段内按 index 排序），因此 `vecs[-1]` 仍是 query 的策略不受影响。
+        """
+        n = _api_batch_max()
+        if n <= 0 or len(texts) <= n:
+            return self._embed_api_once(texts)
+        out = []
+        for i in range(0, len(texts), n):
+            out.extend(self._embed_api_once(texts[i:i + n]))
+        return out
+
+    def _embed_api_once(self, texts: list) -> list:
         import httpx
         base, key, model = self._api
         resp = httpx.post(base + "/embeddings",

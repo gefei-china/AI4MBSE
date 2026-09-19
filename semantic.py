@@ -84,6 +84,10 @@ class SemanticSearch:
             if not ed:
                 return None
             texts = [t for _, t in pairs] + [query]
+            # batch_size=0 = 一次全发（省往返）。**必须依赖 Embedder._embed_api 内部按
+            # embedding.api_batch_max 切分**：本方法把「所有 items + query」塞进一次调用，
+            # items 一多就超服务端单批上限（实测 10）→ 400 → 静默降级 bigram，
+            # "语义匹配"会悄悄退化成"词面匹配"（2026-09-19 实测：19 条即触发）。
             vecs, version = ed.embed_with_version(texts, batch_size=0)
             if version == "bigram-tf" or not vecs or len(vecs) != len(texts):
                 return None
