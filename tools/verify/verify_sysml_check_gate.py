@@ -27,6 +27,11 @@
 
 运行：<venv>/python.exe -X utf8 tools/verify/verify_sysml_check_gate.py
       <venv>/python.exe -X utf8 tools/verify/verify_sysml_check_gate.py --base 5466ea6
+
+⚠️ 通过数口径（报数必须带参数）：
+      · **裸跑 → 81/81**：第 [6b] 段的 3 项 AST 级对拍**需要基线 ref，缺 ref 自动跳过**；
+      · **带 `--base <ref>` → 84/84**：3 项补上。
+    两个数都不是回归，只是段数不同。脚本末尾会自己打印当前口径。
 """
 import ast
 import json
@@ -397,8 +402,15 @@ def main():
         conn.close()
 
     # ── 汇总 ──
+    total = len(_oks) + len(_fails)
     print("\n" + "=" * 90)
-    print(f"断言汇总：{len(_oks)}/{len(_oks) + len(_fails)} 通过")
+    print(f"断言汇总：{len(_oks)}/{total} 通过")
+    if not args.base:
+        print(f"口径提示：当前**未带 --base**，[6b] 的 3 项 AST 级「只增不改」对拍已跳过"
+              f"（总数 {total}，全绿时报 81/81 属**正常**，不是回归）。")
+        print("          要拿满 84 项，请：--base <P2 改动前的 git ref>（例如 5466ea6）。")
+    else:
+        print(f"口径提示：带 --base {args.base}，[6b] 3 项已执行（总数 {total}）。")
     if _fails:
         print("失败项：")
         for f in _fails:
