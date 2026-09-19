@@ -70,7 +70,7 @@ function renderExtractResult(docRef, vr, total, docId) {
   }
   if(!total) {
     el.innerHTML = `<div style="font-size:12px;"><b>🔍 抽取完成：0 条候选</b>
-      <div style="font-size:11px;color:var(--mut);margin-top:3px;">文档内容未匹配到本体类型词（载荷/天线/需求/部件…）。可在「知识浏览」检索后手动抽取，或先在本体模型添加实体类型。
+      <div style="font-size:11px;color:var(--mut);margin-top:3px;">文档内容未匹配到本体类型词（载荷/天线/需求/部件…）。可在「数据看板」检索后手动抽取，或先在本体模型添加实体类型。
       <button class="btn sm ghost" style="margin-left:6px;" onclick="goReviewTab()">去标注审核</button></div></div>`;
     window._lastV2GBatch = vr.batch_id;
     return;
@@ -679,17 +679,13 @@ async function retryDoc(id) {
     loadDocs();
   } catch(e) { toast('重试失败：'+e.message); loadDocs(); }
 }
-async function viewDocSource(id) {
-  try {
-    const r = await api(`/api/documents/${id}/source`);
-    if(r.error) { toast('预览失败：'+r.error); return; }
-    openPanel(`📖 源文件预览：${r.filename}（${r.source==='file'?'源文件副本':'分块拼接'}）`, `
-      <div class="kv"><span>文件</span><b>${esc(r.filename)}</b></div>
-      <div class="kv"><span>类型 / 来源</span><b>${r.file_type||'-'} / ${r.source==='file'?'源文件':'分块拼接'}</b></div>
-      <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px;font-size:12px;color:var(--mut);">完整文档内容：</div>
-      <div style="background:var(--blue-l);border-radius:6px;padding:12px;font-size:12.5px;white-space:pre-wrap;word-break:break-word;margin-top:6px;line-height:1.7;max-height:520px;overflow:auto;">${esc(r.content||'(空)')}</div>`);
-  } catch(e) { toast('预览失败：'+e.message); }
-}
+/* 2026-09-18 预览统一：改由 38-filepreview.js 的 openFilePreview 统一实现。
+   原实现只渲染 /source 的「文本抽取」结果，对两类真实文件失效 ——
+   PDF（文本抽取依赖可选依赖 pdfplumber，本机未安装 → 返回空串）、
+   图片（只返回"需 OCR"占位提示串）。现为原件直出（/api/documents/{id}/raw）
+   + 文本视图双通道，原件缺失时自动降级文本视图。
+   保留本函数名，兼容既有调用点（列表「预览」按钮、追溯面板「查看完整文档」）。 */
+async function viewDocSource(id) { return openFilePreview({ doc_id: id }); }
 async function viewDocTrace(id) {
   const d = await api(`/api/documents/${id}`);
   const chunks = (d.chunks||[]).map(c=>`

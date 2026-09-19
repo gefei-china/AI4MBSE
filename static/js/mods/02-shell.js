@@ -186,17 +186,18 @@ function flowRunBackToList(){
 // 2026-09-17 R7：移除死条目 branch('合并队列' 页已删，go('branch') 重定向到 kb-d) 与 modelcfg('模型配置' 已并入 studio/st-model)。
 const TITLES = {home:'总览',ai:'AI 建模',kb:'知识中心',reports:'报告',studio:'能力中心',settings:'设置',users:'用户与权限管理',audit:'审计日志',ops:'运行监控中心',approval:'审批管理'};
 // 二级页提升一级导航：子 Tab 入口的页面标题映射
-const KB_TAB_TITLES = {'kb-a':'知识浏览与搜索','kb-e':'资料库','kb-b':'数据整理','kb-c':'本体模型','kb-d':'图谱工作区',};
+const KB_TAB_TITLES = {'kb-a':'数据看板','kb-e':'资料库','kb-b':'数据整理','kb-c':'本体模型','kb-d':'图谱工作区',};
 // 2026-09-17 R7：补 'st-prompt'（提示词模板，真实 subpage，`09-impact.js:1134` / `36-capability.js:72` 会 go 过来），
 // 缺它会让面包屑退化成「能力中心」、且 loadPage 走不到子 Tab 直达分支
 const ST_TAB_TITLES = {'st-agent':'Agent','st-skill':'技能','st-mcp':'工具与 MCP','st-market':'插件市场','st-model':'模型配置','st-prompt':'提示词模板'};
 const STG_TAB_TITLES = {'st-projmem':'项目记忆','st-hooks':'工具钩子','st-fextract':'文件抽取'};
-// 2026-09-17 D2：面包屑取名唯一入口。知识中心域（kb-d/kb-e）只显示一级名「知识中心」，
-// 不再下钻到 资料库 / 图谱工作区 —— 明确「主导航=域，面包屑=域」的口径（其余页面仍取子 Tab 名）。
+// 2026-09-17 D2：面包屑取名唯一入口。知识中心域（kb-a 数据看板 / kb-d 图谱工作区 / kb-e 资料库）只显示一级名「知识中心」，
+// 不再下钻到子域 —— 明确「主导航=域，面包屑=域」的口径（其余页面仍取子 Tab 名）。
+// 2026-09-18：kb-a 由**隐藏入口**升为知识中心默认落点，故一并纳入「只显示一级名」的范畴。
 function pageCrumb(p, tabId){
   if(p === 'kb'){
-    if(tabId === 'kb-d' || tabId === 'kb-e') return TITLES.kb;
-    return (tabId && KB_TAB_TITLES[tabId]) || KB_TAB_TITLES['kb-e'] || TITLES.kb;
+    if(tabId === 'kb-a' || tabId === 'kb-d' || tabId === 'kb-e') return TITLES.kb;
+    return (tabId && KB_TAB_TITLES[tabId]) || KB_TAB_TITLES['kb-a'] || TITLES.kb;
   }
   if(tabId){
     if(p === 'studio' && ST_TAB_TITLES[tabId]) return ST_TAB_TITLES[tabId];
@@ -205,7 +206,7 @@ function pageCrumb(p, tabId){
   return TITLES[p] || '';
 }
 // 2026-09-17 P2-4：导航高亮兜底 —— 当目标子页没有一一对应的导航项时，点亮其所属「域」的导航项，避免导航失焦。
-//   kb-a / kb-b（入口已隐藏，仅剩深链）→ 知识中心
+//   kb-b（入口已隐藏，仅剩深链）→ 知识中心；kb-a 见下方 nav-kbhub 特判（已升为默认落点）
 //   能力中心的非 Agent 子 Tab（技能/工具与MCP/插件市场/模型配置/提示词模板）→ 能力中心
 function navFallbackOn(p){
   const el = (p === 'kb') ? document.getElementById('nav-kbhub')
@@ -276,8 +277,9 @@ function go(p, tabId) {
   }
   // 2026-09-17 R7：模型配置路由收口到 go() 入口（原在 loadPage 内二次跳转，会先把 'modelcfg' 写进「最近访问」）
   if(p==='modelcfg'){ p = 'studio'; tabId = 'st-model'; }
-  // 未指定子 Tab 时进入默认 Tab（文档管道 / 提示词模板；知识浏览入口已隐藏，不再作为默认页）
-  if(p==='kb' && !tabId) tabId = 'kb-e';
+  // 未指定子 Tab 时进入默认 Tab（知识中心 → 数据看板；提示词模板）
+  // 2026-09-18：知识中心缺省落点由「资料库(kb-e)」改为「数据看板(kb-a)」（用户确认：进入即看板）
+  if(p==='kb' && !tabId) tabId = 'kb-a';
   // 2026-09-16：能力中心默认落在 Agent（用户反馈：此前默认技能，与「Agent 优先」的心智不符）
   if(p==='studio' && !tabId) tabId = 'st-agent';
   // P2 最近访问：记录非工作台页面（去重、限 5，供工作台「最近访问」展示）
@@ -290,10 +292,10 @@ function go(p, tabId) {
   let _navHit = false;
   document.querySelectorAll('#mainnav a').forEach(a=>{
     let on = a.dataset.page===p && (!a.dataset.tab || a.dataset.tab===tabId);
-    // 2026-09-18 知识中心收敛：知识域只剩一个导航项（nav-kbhub），其四个顶层 Tab
-    // （kb-e 资料库 / kb-d 图谱工作区 / kb-c 本体模型 / kb-c+terms 术语词典）全部点亮它。
+    // 2026-09-18 知识中心收敛：知识域只剩一个导航项（nav-kbhub），其五个顶层 Tab
+    // （kb-a 数据看板 / kb-e 资料库 / kb-d 图谱工作区 / kb-c 本体模型 / kb-c+terms 术语词典）全部点亮它。
     // 原先"kb-c 由两个导航项按 _kbCtx 区分高亮"的分支随两个独立导航项一并移除。
-    if(p==='kb' && a.id==='nav-kbhub') on = ['kb-d','kb-e','kb-c'].indexOf(tabId) >= 0;
+    if(p==='kb' && a.id==='nav-kbhub') on = ['kb-a','kb-d','kb-e','kb-c'].indexOf(tabId) >= 0;
     if(on) _navHit = true;
     a.classList.toggle('on', on);
   });
@@ -325,7 +327,7 @@ function go(p, tabId) {
   if(_kbBar) _kbBar.style.display = (p==='kb') ? 'flex' : 'none';
   if(p==='kb'){
     const _mt = document.getElementById('kb-module-title');
-    if(_mt) _mt.textContent = (tabId && KB_TAB_TITLES[tabId]) || KB_TAB_TITLES['kb-e'] || '知识库';
+    if(_mt) _mt.textContent = (tabId && KB_TAB_TITLES[tabId]) || KB_TAB_TITLES['kb-a'] || '知识库';
   }
   // 顶栏面包屑：root 产品名固定 AI4MBSE，cur=当前页面/Tab 名（避免与页内 H3 重复呈现）
   // 2026-09-17 D2：统一走 pageCrumb()，知识中心域（kb-d/kb-e）只显示一级名「知识中心」
@@ -377,8 +379,8 @@ function tab(el,grp,id) {
     let _navHit = false;
     document.querySelectorAll('#mainnav a').forEach(a=>{
       let on = !!(a.dataset.page===pg && (!a.dataset.tab || a.dataset.tab===id));
-      // 2026-09-18 知识中心收敛：知识域单一导航项，四个顶层 Tab（含 kb-c 本体模型 / 术语词典）全部点亮它
-      if(pg==='kb' && a.id==='nav-kbhub') on = ['kb-d','kb-e','kb-c'].indexOf(id) >= 0;
+      // 2026-09-18 知识中心收敛：知识域单一导航项，五个顶层 Tab（含 kb-a 数据看板 / kb-c 本体模型 / 术语词典）全部点亮它
+      if(pg==='kb' && a.id==='nav-kbhub') on = ['kb-a','kb-d','kb-e','kb-c'].indexOf(id) >= 0;
       if(on) _navHit = true;
       a.classList.toggle('on', on);
     });

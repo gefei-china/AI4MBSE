@@ -24,7 +24,7 @@
 | 导航/路由/面包屑/标题 | `js/mods/02-shell.js`、`index.html`（mainnav） | — |
 | 命令面板 KBar / 全局快捷键 / 主题 | `js/mods/37-kbar.js` | — |
 | toast / 错误浮层 / 全局错误兜底 / alert 桥接 | `js/mods/01-core.js`（唯一实现，S6-4 起） | — |
-| 知识域**五个**顶层 Tab（知识浏览 / 文档库 / 知识图谱 / 本体模型 / 术语词典） | `index.html`（`#kbhub-tabs` → chip `kbhub-tab-a/e/d/c/t`）、`js/mods/15-kb.js`（`loadKBTab`） | `routers/knowledge_parts/*` |
+| 知识域**五个**顶层 Tab（数据看板 / 资料库 / 图谱工作区 / 本体模型 / 术语词典），默认落点=数据看板(kb-a) | `index.html`（`#kbhub-tabs` → chip `kbhub-tab-a/e/d/c/t`）、`js/mods/15-kb.js`（`loadKBTab`） | `routers/knowledge_parts/*` |
 | 会话列表 / 新建任务 / 角色快捷 | `js/mods/03-chat.js`、`12-chatsend.js` | `routers/conversations.py` |
 | 消息渲染 / Markdown / 卡片 | `js/mods/05-markdown.js`、`06-cards.js` | `routers/conversations.py` |
 | 归一确认（人在回路） | `js/mods/07-norm.js`、`06-cards.js`（入口按钮） | `norm_apply.py`、`routers/conversations.py` |
@@ -122,7 +122,7 @@ Invoke-WebRequest http://127.0.0.1:8000/api/dashboard -UseBasicParsing
 ## 6. 已废弃能力（不要再实现一遍）
 
 - **独立导航项「术语词典」「本体模型」「AI 建模」已移除**（2026-09-18）：知识域收敛为单一导航项「知识中心」，
-  内容改为页内顶层 Tab（`#kbhub-tabs` 共 **5** 个：知识浏览 / 文档库 / 知识图谱 / 本体模型 / 术语词典）；
+  内容改为页内顶层 Tab（`#kbhub-tabs` 共 **5** 个：数据看板 / 资料库 / 图谱工作区 / 本体模型 / 术语词典，默认落点 kb-a）；
   建模入口统一由「＋ 新建任务」承担。
   术语词典是 `kb-c` 的**显式子态**：进入前须置 `window._kbCtxTerms = true`，`15-kb.js` 据此分流；
   其余入口（深链 / 侧栏 / 角色快捷）一律落「本体模型」。详见 `docs/导航收敛-术语词典与本体模型并入知识中心-20260918.md`。

@@ -42,12 +42,12 @@
       <!-- 2026-09-18 用户确认：移除「AI 建模」导航项 —— 建模入口已由「＋ 新建任务」统一承担；
            回到既有会话走左侧任务列表（点会话即回到 AI 建模页并载入该会话），无需独立导航项。
            （R4 当初补该项是为解决"新建任务会重置为草稿态"，现按用户口径取消） -->
-      <!-- 知识浏览入口已隐藏（定位不清晰，待重新定位后恢复） -->
       <!-- 2026-09-18 用户确认：术语词典 / 本体模型 收敛进「知识中心」——知识域只保留一个导航项，
-           四类内容（资料库 / 图谱工作区 / 本体模型 / 术语词典）改为页内顶层 Tab，见 #kbhub-tabs -->
-      <!-- 2026-09-17 知识中心整合：图谱工作区(kb-d) + 资料库(kb-e) 合并为单一导航项，页内顶层 Tab 切换（#kbhub-tabs）；深链 go('kb','kb-d'/'kb-e'/'kb-c') 全部兼容。
-           data-tab="kb-e" 仅作点击落点（与 go('kb') 缺省路由一致，落在资料库）；高亮由 02-shell.js 中 nav-kbhub 特判覆盖 -->
-      <a data-page="kb" data-tab="kb-e" id="nav-kbhub" title="知识中心：资料库（文档管道）+ 图谱工作区（实体/关系/推理/历史/合并请求）+ 本体模型 + 术语词典" data-page-node-id="MLG63KC6vEf3gebaURgeWg"><span class="ic" data-page-node-id="SSnqzfARGKgpMsVEgpRzJE">🕸</span><span class="lbl" data-page-node-id="7S1IgwVnzn2QjEMCKAjNi1">知识中心</span></a>
+           五类内容（数据看板 / 资料库 / 图谱工作区 / 本体模型 / 术语词典）改为页内顶层 Tab，见 #kbhub-tabs -->
+      <!-- 2026-09-18 二次调整：知识浏览(kb-a) 更名「数据看板」并成为知识中心**默认落点**（data-tab="kb-a"，与 go('kb') 缺省路由一致）；
+           页内 Tab 栏位置由「kb-a 与 kb-e 之间」上移到「kb-a 之前」（原顺序会被 kb-a 长内容顶到页面下方）。
+           深链 go('kb','kb-a'/'kb-d'/'kb-e'/'kb-c') 全部兼容；高亮由 02-shell.js 中 nav-kbhub 特判覆盖 -->
+      <a data-page="kb" data-tab="kb-a" id="nav-kbhub" title="知识中心：数据看板（统计/完整度/双引擎）+ 资料库（文档管道）+ 图谱工作区（实体/关系/推理/历史/合并请求）+ 本体模型 + 术语词典" data-page-node-id="MLG63KC6vEf3gebaURgeWg"><span class="ic" data-page-node-id="SSnqzfARGKgpMsVEgpRzJE">🕸</span><span class="lbl" data-page-node-id="7S1IgwVnzn2QjEMCKAjNi1">知识中心</span></a>
       <!-- 2026-09-11 数据整理（kb-b）入口已隐藏：抽取/审核流水线功能保留，工作流深链（待办/抽取完成/图谱空态引导）仍可达；恢复时解除注释即可 -->
       <!-- <a data-page="kb" data-tab="kb-b" id="nav-workbench" data-page-node-id="5Kh9MQjipqVEO9HPdgteW3"><span class="ic" data-page-node-id="JySMa5V1pFVbpidwp0r0cZ">🧬</span><span class="lbl" data-page-node-id="rgt2fwxbDhNo2x8SIcqEsq">数据整理</span></a> -->
       <a data-page="studio" data-tab="st-agent" data-page-node-id="wz8utkQVAVPe1DDAlHF4WH"><span class="ic" data-page-node-id="iGFPctyf2zUfxXyEMSvXVg">🤖</span><span class="lbl" data-page-node-id="YOC121PYmThCjHFnF5eYUJ">能力中心</span></a>
@@ -233,13 +233,30 @@
         </div>
       </div>
 
-      <!-- ===== 知识库（知识域五个顶层 Tab 均在本页内：#kbhub-tabs —— 知识浏览/资料库/图谱工作区/本体模型/术语词典；
+      <!-- ===== 知识库（知识域五个顶层 Tab 均在本页内：#kbhub-tabs —— 数据看板/资料库/图谱工作区/本体模型/术语词典；
            数据整理(kb-b) 按用户要求暂不动，无 Tab 入口，仅深链可达） ===== -->
       <div class="page" id="pg-kb" data-page-node-id="4yCCnyZf5gYCUT4CjtfLSr">
         <!-- 模块工具行：左上角模块名 + 右上角工作分支切换（与模块名同一行；本体模型为全局共享不显示） -->
         <div class="kb-toolbar" id="kb-toolbar" style="display:none;" data-page-node-id="S827X9HR7foBR0bsMqFNSv">
           <span class="kb-toolbar-title" id="kb-module-title" data-page-node-id="8AOMm0TIGPVtuBQSj7kBBs">资料库</span>
           <span style="flex:1;" data-page-node-id="fEzzbOGQ1l2PV62trcBqFh"></span>
+        </div>
+        <!-- ── 知识中心页内顶层 Tab 栏（2026-09-18 建立，同日二次调整）──
+             ① 位置：置于 #kb-a **之前**（首个 subpage 之上）。此前它排在 kb-a 与 kb-e 之间，
+                kb-a 自身的长内容会把 Tab 栏顶到页面下方 → 切到该 Tab 就"看不见 Tab"（用户报障）。
+             ② 顺序：数据看板(kb-a) / 资料库(kb-e) / 图谱工作区(kb-d) / 本体模型(kb-c) / 术语词典(kb-c+terms)，
+                与导航落点 kb-a 一致。
+             ③ 术语词典是 kb-c 的显式子态：进入前须置 _kbCtxTerms=true（15-kb.js 据此分流），
+                避免"上次停在术语词典 → 这次从其它入口进本体模型仍是术语视图"。
+             显隐与高亮由 15-kb.js 的 loadKBTab() 驱动。 -->
+        <div id="kbhub-tabs" style="display:none;gap:8px;align-items:center;margin-bottom:10px;">
+          <!-- 2026-09-18：知识浏览(kb-a) 迁入知识中心作为**第一个 Tab**；同日更名「数据看板」并成为默认落点 -->
+          <span id="kbhub-tab-a" class="kbhub-chip" onclick="go('kb','kb-a')" title="数据看板：知识库统计 · 生命周期 · 完整度 · 双引擎消费 · 实体检索">📊 数据看板</span>
+          <span id="kbhub-tab-e" class="kbhub-chip" onclick="go('kb','kb-e')" title="资料库：文档上传 · 解析分块 · 向量化 · 抽取管道">📁 资料库</span>
+          <span id="kbhub-tab-d" class="kbhub-chip" onclick="go('kb','kb-d')" title="图谱工作区：实体 / 关系 / 推理 / 历史 / 合并请求">🕸 图谱工作区</span>
+          <span id="kbhub-tab-c" class="kbhub-chip" onclick="window._kbCtxTerms=false;go('kb','kb-c')" title="本体模型：类型 / 关系定义全景 · Schema 层（实例数据在图谱工作区）">🧬 本体模型</span>
+          <span id="kbhub-tab-t" class="kbhub-chip" onclick="window._kbCtxTerms=true;go('kb','kb-c')" title="术语词典：词条 ↔ 本体类型归一映射（Schema 命名层 · 主数据）">📖 术语词典</span>
+          <span style="flex:1;"></span>
         </div>
         <div class="subpage on" id="kb-a" data-tabpanel="kb" data-page-node-id="odKKdwqvkThml9V6sf9G5M">
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px;" id="kb-stats" data-page-node-id="EoFXUHxMSGjUPNYSvRpa03"></div>
@@ -299,19 +316,7 @@
             <select id="kb-cat-filter" onchange="loadKBEntities()" title="知识类别（设计方法知识/设计资产）" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="Y9r7FwU9lR7V2tt9J8kV7k"><option value="" data-page-node-id="p6U4BPI9nwuV5uBMyDrmEo">全部类别</option></select>
           </div><div class="pb" style="padding:0;" data-page-node-id="xspqZ6gCzmkSoIkZI5C03v"><table class="t" id="kb-entity-table" data-page-node-id="ODjJor0xoC6sv0IsXOYegW"><tr data-page-node-id="upQSjLfHtjMy6tLgpCpMj8"><td class="loading" data-page-node-id="fb0bOw4UE6wGGo477vAj0j">加载中…</td></tr></table><div id="kb-ent-pager" style="padding:8px 12px;border-top:1px solid var(--line);display:flex;align-items:center;gap:8px;justify-content:flex-end;" data-page-node-id="4DoYo43bhNbLgL9wCpIx7P"></div></div></div>
         </div>
-        <!-- 2026-09-18 知识中心收敛：知识域顶层 Tab = 资料库 / 图谱工作区 / 本体模型 / 术语词典（四条内容同属一个导航项）。
-             显隐与高亮由 loadKBTab() 驱动；kb-c 也纳入本 Tab 栏（原先只有 kb-d/kb-e 显示）。
-             术语词典是 kb-c 的"术语映射"子态：进入前须置 _kbCtxTerms=true（15-kb.js 据此分流），
-             避免"上次停在术语词典 → 这次从其它入口进本体模型仍是术语视图"。 -->
-        <div id="kbhub-tabs" style="display:none;gap:8px;align-items:center;margin-bottom:10px;">
-          <!-- 2026-09-18：知识浏览（kb-a）由隐藏入口迁入知识中心，作为**第一个 Tab**（用户确认） -->
-          <span id="kbhub-tab-a" class="kbhub-chip" onclick="go('kb','kb-a')" title="知识浏览：知识库统计与实体检索">🔍 知识浏览</span>
-          <span id="kbhub-tab-e" class="kbhub-chip" onclick="go('kb','kb-e')" title="资料库：文档上传 · 解析分块 · 向量化 · 抽取管道">📁 资料库</span>
-          <span id="kbhub-tab-d" class="kbhub-chip" onclick="go('kb','kb-d')" title="图谱工作区：实体 / 关系 / 推理 / 历史 / 合并请求">🕸 图谱工作区</span>
-          <span id="kbhub-tab-c" class="kbhub-chip" onclick="window._kbCtxTerms=false;go('kb','kb-c')" title="本体模型：类型 / 关系定义全景 · Schema 层（实例数据在图谱工作区）">🧬 本体模型</span>
-          <span id="kbhub-tab-t" class="kbhub-chip" onclick="window._kbCtxTerms=true;go('kb','kb-c')" title="术语词典：词条 ↔ 本体类型归一映射（Schema 命名层 · 主数据）">📖 术语词典</span>
-          <span style="flex:1;"></span>
-        </div>
+        <!-- （原 Tab 栏在此处，2026-09-18 已上移至 #kb-a 之前 —— 见下方 #kbhub-tabs） -->
         <div class="subpage" id="kb-e" data-tabpanel="kb" data-page-node-id="9bWn54q69VH6qlXnHVWpbz">
           <div class="panel" data-page-node-id="TK2WNWmMWnJxDSQGBEyWQE">
             <div class="ph" data-page-node-id="PZ4OOJZ4iqVMDvUnuB2Ssx">资料库 <span class="tag" data-page-node-id="j2fBYSHqf2RLdFTWSeiVVx">解析→分块→向量化<span id="doc-flow-extract" style="display:none;" data-page-node-id="8YhmZevFTVDtKFX0nmdVdX">→抽取</span></span><span class="tag" data-page-node-id="orYIMJSTquRNqFsAcrmQWq">支持批量（多选）</span><span id="doc-count" style="color:var(--mut);font-size:11px;" data-page-node-id="5HPGKlDgHVOwsaPJLQFNWM"></span><span style="flex:1" data-page-node-id="Xg43HoXfZHgjQ6LKEJNyoA"></span></div>
@@ -1537,5 +1542,6 @@
 </div>
 
 <script src="/static/js/mods/37-kbar.js"></script>
+<script src="/static/js/mods/38-filepreview.js"></script>
 </body>
 </html>

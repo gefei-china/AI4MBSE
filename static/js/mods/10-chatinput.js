@@ -323,7 +323,7 @@ function renderAttachBar(){
   if(!pendingAttachments.length){ bar.style.display='none'; bar.innerHTML=''; return; }
   bar.style.display='flex';
   bar.innerHTML = pendingAttachments.map((a,i)=>`
-    <span class="attach-chip">${a.is_image?`<img src="${esc(a.url)}" alt="">`:'📄'}<span class="an" title="${esc(a.filename)}">${esc(a.filename)}</span>${a.doc_id?'<span style="font-size:10px;color:var(--grn,#2f855a);flex:none;">已入库</span>':''}<span class="rm" onclick="removeAttach(${i})" title="移除附件">✕</span></span>`).join('');
+    <span class="attach-chip"${pvDataAttrs({doc_id:a.doc_id, filename:a.filename||'', url:a.url||''})} onclick="pvOpenFromEl(this)" title="点击预览源文件：${esc(a.filename||'')}" style="cursor:pointer;">${a.is_image?`<img src="${esc(a.url)}" alt="">`:'📄'}<span class="an" title="${esc(a.filename)}">${esc(a.filename)}</span>${a.doc_id?'<span style="font-size:10px;color:var(--grn,#2f855a);flex:none;">已入库</span>':''}<span class="rm" onclick="event.stopPropagation();removeAttach(${i})" title="移除附件">✕</span></span>`).join('');
 }
 function removeAttach(i){ pendingAttachments.splice(i,1); renderAttachBar(); }
 let activeScopes = [];                 // 当前选择的多个建模范围 [{id,name,mode,doc_names}]

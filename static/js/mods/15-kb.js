@@ -513,11 +513,11 @@ function loadKBTab(id) {
   // 2026-09-17 知识中心整合：资料库(kb-e)/图谱工作区(kb-d) 顶层双 Tab 切换器——
   // 显隐 + 高亮同步。chip 点击走 go('kb', tabId) 完整路由，此处只做状态回写。
   // 2026-09-18 知识中心收敛：知识域顶层 Tab 为 5 个
-  // （知识浏览 kb-a / 资料库 kb-e / 图谱工作区 kb-d / 本体模型 kb-c / 术语词典 kb-c+terms）；
+  // （数据看板 kb-a / 资料库 kb-e / 图谱工作区 kb-d / 本体模型 kb-c / 术语词典 kb-c+terms）；
   // 术语词典是 kb-c 的显式子态，按 _kbCtx 决定高亮哪一个 chip。
   const hubTabs = document.getElementById('kbhub-tabs');
   if(hubTabs){
-    // 2026-09-18：知识浏览(kb-a) 迁入后，知识域共 5 个顶层 Tab；
+    // 2026-09-18：知识浏览(kb-a) 迁入后更名「数据看板」，知识域共 5 个顶层 Tab；
     // kb-a 也从"隐藏入口"变为正式 Tab（kb-b 数据整理按用户要求暂不动，仍不显示 Tab 栏）
     const isHub = (id==='kb-a'||id==='kb-d'||id==='kb-e'||id==='kb-c');
     hubTabs.style.display = isHub ? 'flex' : 'none';
@@ -533,7 +533,7 @@ function loadKBTab(id) {
   }
   // 知识库顶部模块标题行：已全部停用（2026-09-18）
   // - 该行只剩一个模块标题（分支切换早已下沉到图谱数据行），与上方 Tab 栏信息重复；
-  // - 原仅知识浏览(kb-a)保留，但 kb-a 现已成为知识中心第一个 Tab → 一并隐藏，避免标题与 Tab 双份。
+  // - 原仅知识浏览(kb-a)保留，但 kb-a（数据看板）现已成为知识中心第一个 Tab 兼默认落点 → 一并隐藏，避免标题与 Tab 双份。
   const bar = document.getElementById('kb-toolbar');
   if(bar) bar.style.display = 'none';
   const mt = document.getElementById('kb-module-title');

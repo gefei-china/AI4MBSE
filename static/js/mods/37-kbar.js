@@ -40,7 +40,7 @@
     {ic:'🏭', label:'能力中心',    hint:'Agent / 技能 / 工具与 MCP',      act:()=>go('studio')},
     {ic:'🧬', label:'本体模型',    hint:'知识中心 · Schema 定义',          act:()=>{ window._kbCtxTerms=false; go('kb', 'kb-c'); }},
     {ic:'📖', label:'术语词典',    hint:'词条 ↔ 本体类型归一映射',        act:()=>{ window._kbCtxTerms=true; go('kb', 'kb-c'); }},
-    {ic:'🕸', label:'知识中心',    hint:'资料库 + 图谱工作区 + 本体 + 词典', act:()=>{ go('kb', 'kb-e'); }},
+    {ic:'🕸', label:'知识中心',    hint:'数据看板 + 资料库 + 图谱工作区 + 本体 + 词典', act:()=>{ go('kb', 'kb-a'); }},
     {ic:'📄', label:'报告',        hint:'生成设计报告',                  act:()=>go('reports')},
     {ic:'👥', label:'用户与权限',  hint:'管理员专属',                    act:()=>go('users')},
     {ic:'✅', label:'审批管理',    hint:'管理员专属',                    act:()=>go('approval')},

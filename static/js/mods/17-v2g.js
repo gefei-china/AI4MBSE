@@ -304,7 +304,7 @@ function v2gRenderTable() {
   const sum = document.getElementById('v2g-summary');
   if(sum) sum.innerHTML = `筛选后 <b>${total}</b> 条 · <span style="color:var(--amb);">待审 ${cnt.pending}</span> / <span style="color:var(--grn);">已确认 ${cnt.confirmed}</span> / <span style="color:var(--red);">已驳回 ${cnt.rejected}</span>`;
   if(!all.length) {
-    el.innerHTML = '<div style="padding:12px;color:var(--mut);font-size:12px;">暂无匹配候选（上传文档自动抽取，或「知识浏览→向量图谱转化」手动抽取）</div>';
+    el.innerHTML = '<div style="padding:12px;color:var(--mut);font-size:12px;">暂无匹配候选（上传文档自动抽取，或「数据看板→向量图谱转化」手动抽取）</div>';
     return;
   }
   const batchBar = `<div style="padding:6px 8px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);font-size:11.5px;">

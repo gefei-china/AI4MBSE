@@ -241,9 +241,14 @@ function renderMessage(m) {
     let atts = [];
     try { atts = typeof m.attachments==='string' ? JSON.parse(m.attachments) : m.attachments; } catch(e){ atts = []; }
     if(atts.length) {
+      // 2026-09-18：附件统一可点即预览源文件。
+      // 此前：图片只是 target=_blank 打开原图、非图片仅展示文件名（完全无预览入口）。
+      // 现统一走 openFilePreview：有 doc_id 走原件直出 /raw，纯图片/未入库附件走其落盘 url。
       html += '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">' + atts.map(a=>{
-        if(a.is_image) return `<a href="${a.url}" target="_blank"><img src="${a.url}" alt="${a.filename||'image'}" style="max-width:160px;max-height:120px;border-radius:8px;border:1px solid var(--line);"></a>`;
-        return `<span class="attach-chip"><span class="an">📄 ${a.filename||'附件'}</span></span>`;
+        const _at = pvDataAttrs({doc_id:a.doc_id, filename:a.filename||'', url:a.url||''});
+        const _tip = '点击预览源文件：' + esc(a.filename||'附件');
+        if(a.is_image) return `<img src="${esc(a.url)}" alt="${esc(a.filename||'image')}"${_at} onclick="pvOpenFromEl(this)" title="${_tip}" style="max-width:160px;max-height:120px;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;">`;
+        return `<span class="attach-chip"${_at} onclick="pvOpenFromEl(this)" title="${_tip}" style="cursor:pointer;"><span class="an">📄 ${esc(a.filename||'附件')}</span></span>`;
       }).join('') + '</div>';
     }
   }

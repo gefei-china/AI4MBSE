@@ -25,9 +25,9 @@ function getRoleProfile(me){
     designer:  {label:'设计师',   entries:[['💬 新建建模对话','ai'],['🔀 变更影响分析','ai'],['📄 报告','reports'],['🔀 合并请求','branch']]},
     // 2026-09-17 D3：与主导航口径同步——「资料库 / 图谱工作区」合并为「🕸 知识中心」（页内双 Tab 切换）；
     // 「AI 设计工坊」统一称「能力中心」；2026-09-11 数据整理入口已隐藏（深链 go('kb','kb-b') 仍可用）
-    knowledge: {label:'知识工程师', entries:[['🕸 知识中心','kb','kb-e'],['🧬 本体模型','kb','kb-c'],['💬 AI 建模','ai']]},
+    knowledge: {label:'知识工程师', entries:[['🕸 知识中心','kb','kb-a'],['🧬 本体模型','kb','kb-c'],['💬 AI 建模','ai']]},
     admin:     {label:'系统管理员', entries:[['👥 用户与权限','users'],['🛡 审计日志','audit'],['📈 运行监控','ops'],['✅ 审批管理','approval']]},
-    general:   {label:'通用',     entries:[['💬 新建建模对话','ai'],['🕸 知识中心','kb','kb-e'],['🏭 能力中心','studio'],['📄 报告','reports']]},
+    general:   {label:'通用',     entries:[['💬 新建建模对话','ai'],['🕸 知识中心','kb','kb-a'],['🏭 能力中心','studio'],['📄 报告','reports']]},
   };
   return profiles[key] || profiles.general;
 }

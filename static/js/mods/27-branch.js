@@ -51,7 +51,7 @@ function branchCardHtml(b, cur) {
     ops.push(`<button class="btn sm ghost" style="font-size:10.5px;padding:1px 6px;" onclick="editBranch('${esc(b.name)}')" title="编辑">✏️</button>`);
     ops.push(`<button class="btn sm red" style="font-size:10.5px;padding:1px 6px;" onclick="deleteBranch('${esc(b.name)}')" title="删除">🗑</button>`);
   }
-  if(!isCur) ops.push(`<button class="btn sm" style="font-size:10.5px;padding:1px 8px;" onclick="setCurrentBranch('${esc(b.name)}')" title="设为工作分支：知识浏览/图谱/文档/实体/建模检索均按该分支加载">↗ 设为工作分支</button>`);
+  if(!isCur) ops.push(`<button class="btn sm" style="font-size:10.5px;padding:1px 8px;" onclick="setCurrentBranch('${esc(b.name)}')" title="设为工作分支：数据看板/图谱/文档/实体/建模检索均按该分支加载">↗ 设为工作分支</button>`);
   return `
     <div style="border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-bottom:10px;background:#fff;${isCur?'border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-l);':''}${b.status==='archived'?'opacity:.62;':''}">
       <div style="display:flex;align-items:center;gap:8px;">

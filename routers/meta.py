@@ -21,6 +21,73 @@ router = APIRouter(tags=["审计·集成·运维·设置·文档"])
 # 文档上传写权限：设计师（kb_review:modify）与知识工程师（kb_ontology:edit）双角色放行
 DOC_WRITE_PERMS = [("kb_review", "modify"), ("kb_ontology", "edit")]
 
+# ── 2026-09-18 源文件预览：原件直出（预览主通道）──
+# 背景：原预览只走 /source 的「文本抽取」路线，对两类真实文件失效 ——
+#   PDF：extract_text → _extract_pdf 依赖可选依赖 pdfplumber，本机未安装 → 返回空串
+#        （实测 #793《Guide to writing Requirements》抽出 0 字符）
+#   图片：extract_text 对图片只返回占位提示串（需 OCR），实测 #792 PNG 仅 46 字符
+# 对策（遵守 AGENTS.md 铁律 4「零新依赖」）：不引 pdf.js / PyMuPDF，
+#   浏览器原生即可内嵌渲染 PDF / 图片 / 音视频 → 直接直出 data/uploads 里的原件副本。
+#   文本类并存「原件视图 + 文本视图」；Office 二进制浏览器无法内嵌 → 降级文本视图 + 下载。
+PREVIEW_MIME = {
+    ".pdf": "application/pdf",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+    ".mp4": "video/mp4", ".webm": "video/webm", ".mp3": "audio/mpeg", ".wav": "audio/wav",
+    ".txt": "text/plain; charset=utf-8", ".md": "text/plain; charset=utf-8",
+    ".csv": "text/plain; charset=utf-8", ".log": "text/plain; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".xml": "application/xml; charset=utf-8",
+    ".yaml": "text/plain; charset=utf-8", ".yml": "text/plain; charset=utf-8",
+}
+# 浏览器可原生内嵌渲染（走 /raw 原件视图）
+PREVIEW_INLINE_EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+                       ".svg", ".mp4", ".webm", ".mp3", ".wav"}
+# 纯文本可直读（原件视图与文本视图并存）
+PREVIEW_TEXT_EXTS = {".txt", ".md", ".csv", ".log", ".json", ".xml", ".yaml", ".yml"}
+
+
+def _uploads_dir() -> str:
+    """原件副本目录：与 knowledge_pipeline._save_source_copy 落盘位置同一口径。"""
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "data", "uploads")
+
+
+def _safe_doc_name(filename: str) -> str:
+    """文件名净化：与 _save_source_copy / download_document 同规则（否则定位不到副本）。"""
+    return re.sub(r"[^\w.\-\u4e00-\u9fa5]", "_", filename or "doc") or "doc"
+
+
+def source_copy_path(doc_id: int, filename: str) -> str:
+    """定位文档原件副本 data/uploads/{doc_id}_{safe}。"""
+    return os.path.join(_uploads_dir(), f"{doc_id}_{_safe_doc_name(filename)}")
+
+
+def preview_meta(doc_id: int, filename: str, file_type: str = "") -> dict:
+    """预览能力元数据：前端据此选渲染器（原件内嵌 / 文本 / 降级下载）。"""
+    ext = os.path.splitext(filename or "")[1].lower()
+    if not ext and file_type:
+        ext = "." + file_type.strip().lstrip(".").lower()
+    has_file = os.path.exists(source_copy_path(doc_id, filename))
+    if ext in PREVIEW_INLINE_EXTS:
+        kind = "inline"
+    elif ext in PREVIEW_TEXT_EXTS:
+        kind = "text"
+    elif ext:
+        kind = "office"
+    else:
+        kind = "unknown"
+    return {
+        "kind": kind,           # inline | text | office | unknown
+        "ext": ext,
+        "mime": PREVIEW_MIME.get(ext, "application/octet-stream"),
+        "has_file": has_file,   # 原件副本是否在盘
+        "can_inline": bool(has_file and kind in ("inline", "text")),
+        "raw_url": f"/api/documents/{doc_id}/raw",
+    }
+
+
 
 @router.get("/api/meta/backup")
 def backup_db(conn=Depends(db_session)):
@@ -193,12 +260,57 @@ def download_document(doc_id: int, conn=Depends(db_session), user=Depends(curren
 
 @router.get("/api/documents/{doc_id}/source")
 def get_document_source(doc_id: int, conn=Depends(db_session)):
-    """源文件预览：返回文档全文文本（txt/md 直读副本，pdf/docx 抽取，缺失时 chunks 拼接）。"""
+    """源文件预览（文本视图）：txt/md 直读副本，pdf/docx 抽取，缺失时 chunks 拼接。
+
+    2026-09-18 预览统一：响应新增 preview 字段（见 preview_meta），前端据此决定
+    优先用原件内嵌视图（/raw）还是本视图 —— 本视图作为通用降级始终可用。
+    注意：本视图对 PDF 依赖可选依赖 pdfplumber、对图片只有占位串，故不可作为唯一预览通道。
+    """
     from knowledge_pipeline import get_source_text
     result = get_source_text(conn, doc_id)
     if "error" in result:
         return JSONResponse({"error": result["error"]}, 404)
+    pv = preview_meta(doc_id, result.get("filename") or "", result.get("file_type") or "")
+    pv["text_len"] = len(result.get("content") or "")
+    result["preview"] = pv
     return result
+
+
+@router.get("/api/documents/{doc_id}/raw")
+def get_document_raw(doc_id: int, download: str = "", conn=Depends(db_session),
+                     user=Depends(current_user)):
+    """源文件原件直出：预览主通道（inline）／另存为（download=1）。
+
+    - 必须 inline：attachment 会强制触发下载，无法被 <iframe>/<img> 内嵌渲染。
+    - media_type 按扩展名给足，浏览器据此选渲染器（PDF 内嵌查看器 / 图片 / 音视频 / 纯文本）。
+    - 支持 Range 请求（由 FileResponse 处理）—— PDF 内嵌翻页、音视频拖动依赖此。
+    - 原件副本缺失 → 404 + fallback='source'，前端据此自动切文本视图（不报死）。
+    - 预览读取不写审计：PDF 内嵌会产生多次 Range 请求，逐次审计会刷满日志；
+      download=1 时沿用既有下载审计口径。
+    """
+    doc = conn.execute("SELECT id, filename, file_type FROM documents WHERE id=?",
+                       (doc_id,)).fetchone()
+    if not doc:
+        return JSONResponse({"error": "document not found"}, 404)
+    path = source_copy_path(doc_id, doc["filename"])
+    if not os.path.exists(path):
+        return JSONResponse({
+            "error": "源文件原件副本缺失",
+            "fallback": "source",
+            "hint": "该文档入库时未保留原件（或副本已被清理），可改用文本视图（由分块拼接）",
+        }, 404)
+    ext = os.path.splitext(doc["filename"] or "")[1].lower()
+    is_download = (download == "1")
+    if is_download:
+        audit(audit_user(user), "doc_download", f"下载文档原件: {doc['filename']}", conn=conn)
+    from urllib.parse import quote as _q   # HTTP 头仅允许 latin-1：中文文件名须 URL 编码
+    disp = "attachment" if is_download else "inline"
+    return FileResponse(path,
+                        media_type=PREVIEW_MIME.get(ext, "application/octet-stream"),
+                        headers={
+                            "Content-Disposition": f"{disp}; filename*=UTF-8''{_q(_safe_doc_name(doc['filename']))}",
+                            "Cache-Control": "no-cache",
+                        })
 
 
 @router.get("/api/documents/{doc_id}/preview")
