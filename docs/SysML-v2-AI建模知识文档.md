@@ -2,7 +2,8 @@
 
 > **用途**：供 AI 模型生成 SysML v2 文本代码时使用的权威参考。读完本文档，应能写出**可直接通过 SysML v2 校验器**的模型代码。
 >
-> **版本**：v1.3（2026-09-19）
+> **版本**：v1.3.1（2026-09-19 —— 在 v1.3 主体的基础上，补 1 条**真机实测**得来的规则 `[S01]`：
+> `subject = …` 与 `satisfy … by …` 对同一 requirement 只能二选一，见 §4.11 / §5 第 47 条）
 > **编写方式**：以官方规范为权威定义，以真实校验器实测为最终裁判。全文 **467 条**定向用例
 > （第 1–5 轮 150 条、第 6–8 轮 53 条、第 9–16 轮 205 条、**第 17–19 轮 59 条**），
 > 另有 **62 个文档代码块**全量复跑，逐条取证。
@@ -1346,6 +1347,31 @@ not satisfy massGroup by vehicle2;                 // ✅
 | `satisfy r by v;`（`r` 是 requirement **usage**） | ✅ `[U03]` |
 | `satisfy requirement r : R by v;` | ✅ `[W02]` |
 | `satisfy r : R by v { ... }`（无 `requirement` 前缀但带体） | ❌ `Couldn't resolve reference to Feature 'r'` `[T22]` |
+| `requirement r : R { subject = x; }` **之后**再写 `satisfy r by x.y;` | ❌ `Cannot override a binding feature value` `[S01]` |
+
+> ⚠️ **v1.3.1 新增（真机实测发现，2026-09-19）**：**`subject = …` 与 `satisfy … by …` 对同一个 requirement 只能二选一。**
+> requirement usage 体里一旦显式绑定了 `subject`，再写 `satisfy r by <路径>;` 给它挂满足关系，就会报
+> **`Cannot override a binding feature value`**（一条 `satisfy` 报一个 ERROR）。
+> 危险之处在于**它看起来完全正常**：`satisfy coolingCapacityReq by thermalSystem.coldPlate;` 肉眼挑不出任何毛病，
+> 只有真跑校验器才会暴露 —— 真机实测里 AI 一个模型就踩了 **7 条**，而语法错是 0（属语义路）。
+>
+> ```sysml
+> // ❌ 冲突：subject 已绑，又用 satisfy 去绑 —— 实测 7 条 ERROR 全部出自这种写法
+> requirement coolingCapacityReq : CoolingCapacityRequirement { subject = thermalSystem; }
+> satisfy coolingCapacityReq by thermalSystem.coldPlate;
+>
+> // ✅ 推荐：让 satisfy 负责绑定，不写 subject —— 实测 0 ERROR
+> requirement coolingCapacityReq : CoolingCapacityRequirement;
+> satisfy coolingCapacityReq by thermalSystem.coldPlate;
+>
+> // ✅ 或者：只绑 subject，完全不用 satisfy
+> requirement coolingCapacityReq : CoolingCapacityRequirement { subject = thermalSystem; }
+> ```
+>
+> ⚠️ **不要靠「去掉限定名前缀」绕过**：改成 `satisfy r by coldPlate;` 会报
+> `Couldn't resolve reference to Element 'coldPlate'`（`coldPlate` 只在 `part def BatteryThermalSystem { … }` 体内），
+> **ERROR 不但没消，反而从 7 涨到 14**。真因不是限定名，是 subject 双绑。
+> 证据文件（可复跑）：`tmp/v2docs/_ab_A_原样.sysml`（7 ERROR）/ `_ab_B_去限定名.sysml`（14）/ `_ab_D_去subject绑定.sysml`（**0**）。
 
 > ⚠️ **`subject` / `actor` / `stakeholder` 的硬规则**（v1.2 用 `U01`–`U07`、`X01`–`X03` 定死，
 > **这是 v1.1 说错、且官方 Annex A 示例本身就违反的一条**）：
@@ -1776,6 +1802,8 @@ part def CoolingLoop {
 
 **按「发生频率」排序。第 1–6 条是 AI 生成 SysML v2 代码时的主要失分点。**
 第 39–46 条为 v1.3 从第 17–19 轮补测新增。
+**第 47 条为 v1.3.1 真机实测新增** —— 它不是人工构造的用例，而是 AI 在真实建模会话里**自己写出来的代码**踩的坑
+（会话 350，`satisfy` 与 `subject` 双绑，一模型 7 条 ERROR，语法错 0）。详见 §4.11。
 
 | # | ❌ 错误写法 | ✅ 正确写法 | 依据 |
 |---|---|---|---|
@@ -1825,6 +1853,7 @@ part def CoolingLoop {
 | **44** | `part def C :> A unions B;`（照抄 KerML） | **实现不收**（见 §0.1 第 10 项）；改写成 `part def C :> A, B;` 或注释表达语义 | `E11`–`E14`/`E18` ❌ / `E17` ✅ |
 | **45** | `part x featured by A;`（照抄 KerML） | **实现不收**；用 `part x : A;`（定型）或 `:>`（子集化）表达 | `E15`/`E16` ❌ |
 | **46** | `metadata m typed by MD;`（照抄 KerML） | `metadata m : MD;`（一律用 `:`） | `F11`/`F01`/`F03` ❌ / `F12`/`F02` ✅ |
+| **47** | `requirement r : R { subject = x; }` 之后再写 `satisfy r by x.y;` | **二选一**：要么不写 `subject`（让 `satisfy` 绑），要么只写 `subject`（不用 `satisfy`） | `[S01]` `Cannot override a binding feature value`；§4.11 |
 
 ---
 
