@@ -47,8 +47,13 @@ class RefineGate:
 
     @staticmethod
     def _report_in_chars() -> int:
-        """修订时可读：**待修订报告**字符数（原硬编码 6000，且只留头）。"""
-        return int(_cfg.get("refine", "report_in_chars", 12000) or 12000)
+        """修订时可读：**待修订报告**字符数（原硬编码 6000，且只留头）。
+
+        2026-09-20 conv 371：从 12000 提到 **24000** —— 报告实际长到 19011 字符后，
+        12000 的头尾采样会把第五/六/七章整段省略，评审据此报「章节被引用但不可见」。
+        下界口径：必须 >= `max_tokens` 能产出的字符数（实测 ≈2.9 字符/token，8000 → ~23000）。
+        """
+        return int(_cfg.get("refine", "report_in_chars", 24000) or 24000)
 
     @staticmethod
     def _max_tokens() -> int:

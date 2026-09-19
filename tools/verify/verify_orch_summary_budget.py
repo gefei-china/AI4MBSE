@@ -263,7 +263,7 @@ def main():
     _REFINE_WANT = {"item_chars": 400, "items_total_chars": 2000,
                     "report_in_chars": 6000, "max_tokens": 3000}   # 键 → **旧硬编码值**
     _REFINE_EXP = {"item_chars": 1200, "items_total_chars": 6000,
-                   "report_in_chars": 12000, "max_tokens": 8000}   # 键 → 期望默认值
+                   "report_in_chars": 24000, "max_tokens": 8000}   # 键 → 期望默认值
 
     def check_refine_limits(getter):
         """`getter(key) -> 实际生效值`；返回失败清单。"""
@@ -281,6 +281,23 @@ def main():
             elif int(v) < 1:
                 fails.append("%s 非正数 %r" % (k, v))
         return fails
+
+    def check_refine_window(get_report_in, get_max_tokens):
+        """I4c：待修订报告窗口必须 >= 本环节**自身产出**的能力。
+
+        为什么单列：`report_in_chars` < 报告实际长度时，修订/评审拿到的是**头尾采样后**的报告
+        —— 报告里引用「见第五章」而第五章正好落在省略区 → 评审报「被引用但未在可见内容中」。
+        conv 371 实测：19011 字符报告被 12000 裁到 63%，第五/六/七章整段丢失。
+        换算口径：1 output token ≈ 2.9 字符（实测 comp 6518 tokens → 19011 字符），断言取 ×2.5 留余量。
+        """
+        try:
+            rin, mt = int(get_report_in()), int(get_max_tokens())
+        except Exception as e:                                  # noqa: BLE001
+            return ["取值异常：%s" % e]
+        need = int(mt * 2.5)
+        if rin < need:
+            return ["report_in_chars=%d < max_tokens×2.5=%d（报告尾部会被裁掉）" % (rin, need)]
+        return []
 
     _rg = None
     try:
@@ -327,6 +344,21 @@ def main():
             _rec(FAIL, "I4b 修订输入头尾采样（RefineGate._clip）", "; ".join(f_r2))
         else:
             _rec(PASS, "I4b 修订输入头尾采样（RefineGate._clip）", "头/尾均保留")
+
+        # I4c：报告窗口 >= 自身产出能力（conv 371 实测：12000 装不下 19011 字符的报告）
+        f_i4c = check_refine_window(_rg._report_in_chars, _rg._max_tokens)
+        if f_i4c:
+            _rec(FAIL, "I4c 报告窗口 >= 产出能力（真实实现）", "; ".join(f_i4c))
+        else:
+            _rec(PASS, "I4c 报告窗口 >= 产出能力（真实实现）",
+                 "report_in_chars=%d >= max_tokens(%d)×2.5=%d"
+                 % (_rg._report_in_chars(), _rg._max_tokens(), int(_rg._max_tokens() * 2.5)))
+        # 变异 M10：还原 12000（conv 371 之前的值）→ 必须被抓住
+        f_m10 = check_refine_window(lambda: 12000, _rg._max_tokens)
+        if f_m10:
+            _rec(PASS, "I4c 变异自证 M10（还原 12000）", "已被抓住：%s" % f_m10[0])
+        else:
+            _rec(FAIL, "I4c 变异自证 M10（还原 12000）", "**未被抓住 → 断言空转（VACUOUS）**")
 
     # ④c I5：汇总输入必须含**完整交付物**，不得用协议摘要替换（2026-09-19 conv 370 实测）
     #     为什么单列：Task 10 引入「结构化摘要消费」时，`_sum_items` 把 `result` **替换**成摘要
