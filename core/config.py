@@ -120,6 +120,12 @@ DEFAULT_CONFIG = {
         "draft_flow": False,   # AI 建模入库发布门禁：确认后走合并请求待审/自动发布（默认关，保全现状）
         "review_source_types": ["ai_generated"],  # 需强制待审的来源（draft_flow 开启时生效）
     },
+    "extract": {
+        # 2026-09-19：原 knowledge_pipeline/extract.py 的 _extract_pdf 硬编码 pdf.pages[:50]，
+        # 使页数多的规范类文档入库只覆盖约 17%（实测 SysML v2 官方 691 页 / KerML 454 页，
+        # 全量抽取分别只需 23.6s / 17.6s，抽取本身不是瓶颈）。改为可配置并提高默认值。
+        "pdf_max_pages": 1200,   # PDF 抽取页数上限（防超大文件拖垮入库；<=0 表示不限制）
+    },
     "chunking": {
         "default_size": 600,         # 默认分块大小（字符，≈500-650 token 中文）
         "overlap": 90,               # 重叠（字符，15% of default_size；句子级重叠时取其整句）

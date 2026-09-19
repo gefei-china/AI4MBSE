@@ -119,13 +119,31 @@ def _extract_docx(content: bytes) -> str:
     except Exception:
         return ""
 
+def _pdf_max_pages() -> int:
+    """PDF 抽取页数上限（config: extract.pdf_max_pages，默认 1200；<=0 表示不限制）。
+
+    2026-09-19 修复：原实现硬编码 `pdf.pages[:50]`，使页数多的规范类文档只能入库约 17%
+    （实测 SysML v2 官方规范 691 页 → 全量 1,229,264 字符，截 50 页仅 215,265 字符 = 17.5%；
+     KerML 规范 454 页 → 937,324 字符，截 50 页仅 172,773 字符 = 18.4%）。
+    全量抽取耗时分别仅 23.6s / 17.6s，原上限并非性能所需。改为可配置 + 提高默认值，
+    同时保留上限防超大文件拖垮入库。
+    """
+    try:
+        from core import config
+        n = int(config.get("extract", "pdf_max_pages", 1200))
+        return n if n > 0 else 0
+    except Exception:
+        return 1200
+
+
 def _extract_pdf(content: bytes) -> str:
     try:
         import io
         import pdfplumber
+        limit = _pdf_max_pages()
         with pdfplumber.open(io.BytesIO(content)) as pdf:
             pages = []
-            for page in pdf.pages[:50]:  # 上限 50 页防大文件
+            for page in (pdf.pages[:limit] if limit else pdf.pages):
                 t = page.extract_text() or ""
                 if t.strip():
                     pages.append(t)

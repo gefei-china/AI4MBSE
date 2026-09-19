@@ -240,8 +240,14 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
             _hyde_vecs.append(None)
         if embed_version != "bigram-tf" and any(q for q in _hyde_questions):
             try:
+                # 2026-09-19 修复：原传 batch_size=0（不分批、一次全发）—— 对大文档必然失败：
+                # hyde 条数 = chunk 数（数百上千），远超服务端单批上限。
+                # 实测 text-embedding-v3 单批 >10 报 400 InvalidParameter（batch size is invalid,
+                # it should not be larger than 10），失败后静默降级为 4096 维 bigram 向量，
+                # 与主 embedding 的 1024 维不可比 → 污染 hyde_embedding（同表两个维度）。
+                # 这里与主向量路径保持一致，分批 8 条（<10 上限）。
                 hyde_vecs, _ = embedder.embed_with_version(
-                    ["；".join(q) for q in _hyde_questions if q] or [], batch_size=0)
+                    ["；".join(q) for q in _hyde_questions if q] or [], batch_size=8)
                 _it = iter(hyde_vecs)
                 _hyde_vecs = [next(_it) if q else None for q in _hyde_questions]
             except Exception:
