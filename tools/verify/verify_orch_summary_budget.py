@@ -299,6 +299,26 @@ def main():
             return ["report_in_chars=%d < max_tokens×2.5=%d（报告尾部会被裁掉）" % (rin, need)]
         return []
 
+    def check_eval_window(clip_fn, probe_len=22409):
+        """I4d：**评审输入窗口**必须覆盖报告实际长度。
+
+        为什么单列：这一层在 `workflows/nodes.py::_evaluate_content`（`[:2000]`），
+        **不在 refine.py 里** —— 前四条不变式全查不到它。
+        它是「报告越修越长、评审看到的比例越小」的元凶：conv 372 报告 22,409 字符
+        被截到 8.9% → 评审判「t2/t3 无实质内容」，而那两节**确实存在**。
+        """
+        text = "甲" * probe_len
+        try:
+            out = clip_fn(text)
+        except Exception as e:                                     # noqa: BLE001
+            return ["调用异常：%s" % e]
+        if not isinstance(out, str):
+            return ["返回非字符串：%r" % type(out)]
+        if len(out) < probe_len * 0.9:
+            return ["评审窗口只保留 %d/%d 字符（评审看不到后半段 → 会误判『交付物缺失』）"
+                    % (len(out), probe_len)]
+        return []
+
     _rg = None
     try:
         from workflows.refine import RefineGate
@@ -359,6 +379,43 @@ def main():
             _rec(PASS, "I4c 变异自证 M10（还原 12000）", "已被抓住：%s" % f_m10[0])
         else:
             _rec(FAIL, "I4c 变异自证 M10（还原 12000）", "**未被抓住 → 断言空转（VACUOUS）**")
+
+    # ④d I4d：**评审输入窗口**必须覆盖报告实际长度（2026-09-20 conv 372 实测 —— 第 6 层截断）
+    #     为什么必须单列：这一层在 `workflows/nodes.py::_evaluate_content`，**不在 refine.py 里**，
+    #     前四条（I1~I4c）全查不到它。它是"报告越修越长、评审看到的比例越小"的元凶：
+    #     报告 22,409 字符被 `[:2000]` 截到 8.9% → 评审判「t2/t3 无实质内容」，而那两节确实存在。
+    try:
+        from workflows.nodes import FlowNodesMixin as _FN
+        _ev_clip = _FN._clip_for_eval
+    except Exception as e:                                       # noqa: BLE001
+        _rec(FAIL, "导入 workflows.nodes.FlowNodesMixin._clip_for_eval",
+             "%s: %s" % (type(e).__name__, e))
+        _ev_clip = None
+    if _ev_clip is not None:
+        f_i4d = check_eval_window(_ev_clip)
+        if f_i4d:
+            _rec(FAIL, "I4d 评审窗口覆盖报告长度（真实实现）", "; ".join(f_i4d))
+        else:
+            _rec(PASS, "I4d 评审窗口覆盖报告长度（真实实现）",
+                 "22,409 字符报告 → 保留 %d 字符（未裁）" % len(_ev_clip("甲" * 22409)))
+        # 变异 M11：还原 `str(content)[:2000]` —— conv 372 之前的写法
+        f_m11 = check_eval_window(lambda t: str(t)[:2000])
+        if f_m11:
+            _rec(PASS, "I4d 变异自证 M11（还原 [:2000]）", "已被抓住：%s" % f_m11[0])
+        else:
+            _rec(FAIL, "I4d 变异自证 M11（还原 [:2000]）", "**未被抓住 → 断言空转（VACUOUS）**")
+        # 源码级：**只查 `_evaluate_content` 函数体**（不能扫全文件！）
+        #   —— 实测 nodes.py:593（pubsub 节点）也有 `str(content)[:2000]`，那是**展示用途**、
+        #   与评审窗口无关；扫全文件会把它误判成"本层未修"（实测 23/24，误报 1 条）。
+        try:
+            import inspect
+            _ev_src = inspect.getsource(_FN._evaluate_content)
+            if _has_code_literal(_ev_src, r"\[:2000\]"):
+                _rec(FAIL, "I4d 源码级：_evaluate_content 内已无 `[:2000]`", "旧写法仍在")
+            else:
+                _rec(PASS, "I4d 源码级：_evaluate_content 内已无 `[:2000]`（只查该函数体）")
+        except Exception as e:                                   # noqa: BLE001
+            _rec(FAIL, "I4d 源码级：_evaluate_content 检查", "%s: %s" % (type(e).__name__, e))
 
     # ④c I5：汇总输入必须含**完整交付物**，不得用协议摘要替换（2026-09-19 conv 370 实测）
     #     为什么单列：Task 10 引入「结构化摘要消费」时，`_sum_items` 把 `result` **替换**成摘要
@@ -427,17 +484,18 @@ def main():
         want[("refine", "enabled")] = True
         want[("refine", "max_rounds")] = 2
         want[("refine", "pass_score")] = 70
+        want[("refine", "eval_in_chars")] = 24000
         bad = []
         for (sec, key), exp in want.items():
             got = _cfg.get(sec, key, None)
             if got != exp:
                 bad.append("%s.%s=%r（期望 %r）" % (sec, key, got, exp))
         if bad:
-            _rec(FAIL, "配置契约：delegation 5 键 + refine 7 键默认值", "; ".join(bad))
+            _rec(FAIL, "配置契约：delegation 5 键 + refine 8 键默认值", "; ".join(bad))
         else:
-            _rec(PASS, "配置契约：delegation 5 键 + refine 7 键默认值齐备")
+            _rec(PASS, "配置契约：delegation 5 键 + refine 8 键默认值齐备")
     except Exception as e:
-        _rec(FAIL, "配置契约：delegation 5 键 + refine 7 键默认值", "%s: %s" % (type(e).__name__, e))
+        _rec(FAIL, "配置契约：delegation 5 键 + refine 8 键默认值", "%s: %s" % (type(e).__name__, e))
 
     # ⑦ 向后兼容：缺键时 get 必须回落到调用方默认（旧 config 文件不炸）
     try:

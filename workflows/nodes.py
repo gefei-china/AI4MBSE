@@ -1092,6 +1092,28 @@ class FlowNodesMixin:
         }
 
     @staticmethod
+    def _clip_for_eval(text: str) -> str:
+        """评审输入裁剪：**配置化上限 + 头尾采样**（复用 planner 的 `_head_tail_clip`）。
+
+        为什么不再用 `[:2000]`（2026-09-20 conv 372 实测 —— **第 6 层截断，也是最隐蔽的一层**）：
+        `[:2000]` 是**只留头**的硬上限，而汇总报告已长到 22,409 字符 → 评审只看得到
+        「一、需求分析」为止，于是判「t2/t3 无实质内容」，**而那两节确实存在**。
+        更隐蔽的是：报告被修得越长，评审看到的**比例**越小，gap 描述随报告结构漂移
+        （「1.2 节末尾」→「2.2 节之后」→「只到 2.1」），极易误导成"报告被截断"而去调输出上限。
+        """
+        try:
+            from core import config as _cfg
+            cap = int(_cfg.get("refine", "eval_in_chars", 24000) or 24000)
+        except Exception:                                          # noqa: BLE001
+            cap = 24000
+        try:
+            from workflows.planner import FlowPlannerMixin
+            return FlowPlannerMixin._head_tail_clip(text, cap)
+        except Exception:                                          # noqa: BLE001
+            t = str(text or "")
+            return t if (cap <= 0 or len(t) <= cap) else t[:cap]
+
+    @staticmethod
     def _evaluate_content(content: str, criteria: str = "输出是否完整、合理、符合要求") -> dict:
         """T1 公共评审函数：LLM 按标准对输出评分，返回 {score, passed, issues, advice, _meta}。
 
@@ -1101,14 +1123,17 @@ class FlowNodesMixin:
         from llm import llm_client
         if not content:
             return {"score": 0, "passed": False, "issues": ["目标无输出"], "advice": "", "_meta": {}}
-        tgt = str(content)[:2000]
+        tgt = FlowNodesMixin._clip_for_eval(content)
         prompt = (
             f"你是质量评审 Agent。对以下输出按标准评估，只输出 JSON："
             f'{{"score": 0-100 的整数, "passed": true/false, "issues": ["问题1", ...], "advice": "改进建议"}}\n\n'
             f"评估标准：{criteria}\n\n被评审输出：\n{tgt}"
         )
         try:
-            resp = llm_client.chat([{"role": "user", "content": prompt}])
+            # 评审输出是**短 JSON**（score/issues/advice）；显式给一个小上限：
+            # 一是不与放大的评审输入争 context_window（超窗会让整轮评审降级为 score=0），
+            # 二是防止模型"话多"把 JSON 冲散。
+            resp = llm_client.chat([{"role": "user", "content": prompt}], max_tokens=1024)
             msg = (resp.get("choices") or [{}])[0].get("message", {})
             raw = msg.get("content") or ""
             m = re.search(r"\{[\s\S]*\}", raw)

@@ -115,6 +115,13 @@ DEFAULT_CONFIG = {
         "max_tokens": 8000,           # 修订**输出**上限（token，原先硬编码 3000）
                                       # ⚠️ 修订输出会**整体替换**汇总报告 → 它才是报告长度的真正天花板。
                                       # 取值口径同 delegation.summary_max_tokens（当前 provider 天花板 8192）。
+        # 2026-09-20 conv 372 实测：评审函数 `workflows/nodes.py::_evaluate_content` 原先硬编码
+        #   `str(content)[:2000]` —— 报告长到 22,409 字符后，评审只看得到「一、需求分析」为止，
+        #   于是判「t2/t3 无实质内容」，而那两节**确实存在**。
+        #   这是**第 6 层截断**，也最隐蔽：报告被修得越长，评审看到的**比例**越小，
+        #   gap 描述随之漂移（「1.2 节末尾」→「2.2 节之后」→「只到 2.1」），
+        #   极易误判成"报告被截断"而去调**输出**上限（方向完全错）。
+        "eval_in_chars": 24000,       # 评审时可读：被评审报告字符数（原先硬编码 `[:2000]` 且只留头）
     },
     "embedding": {
         "enabled": True,         # 语义出口总开关；False 强制 bigram（Mock/离线确定性）
@@ -437,6 +444,7 @@ CONFIG_SCHEMA = {
         "items_total_chars":  {"type": "int",  "desc": "修订时可引用：交付物合计字符数（默认 6000）"},
         "report_in_chars":    {"type": "int",  "desc": "修订时可读：待修订报告字符数（默认 24000，头尾采样；须 >= max_tokens 可产出的字符数）"},
         "max_tokens":         {"type": "int",  "desc": "修订输出上限（token，默认 8000；修订输出会整体替换报告 → 报告长度真正天花板）"},
+        "eval_in_chars":      {"type": "int",  "desc": "评审时可读报告字符数（默认 24000，头尾采样；原先硬编码 [:2000] 只留头）"},
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},
