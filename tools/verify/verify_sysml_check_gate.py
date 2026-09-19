@@ -448,7 +448,7 @@ def main():
     if not args.base:
         print(f"口径提示：当前**未带 --base**，[6b] 的 3 项 AST 级「只增不改」对拍已跳过"
               f"（总数 {total}，全绿即正常，不是回归）。")
-        print("          要拿满 84 项，请：--base <P2 改动前的 git ref>（例如 5466ea6）。")
+        print(f"          要拿满 {total + 3} 项，请：--base <P2 改动前的 git ref>（例如 5466ea6）。")
     else:
         print(f"口径提示：带 --base {args.base}，[6b] 3 项已执行（总数 {total}）。")
     if _fails:

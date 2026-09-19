@@ -316,3 +316,26 @@ def summarize_status(results):
     if "failed" in statuses and not any(s in ("full", "partial") for s in statuses):
         return "failed"
     return "partial"
+
+
+def apply_quality_gate(agg_status, reflection):
+    """把反思闭环（reflection）的质量信号并入编排汇总三态（full/partial/failed）。
+
+    为什么需要（2026-09-19 取证）：`reflection.passed/score` 原先只写进 `card_data.reflection`，
+    **不参与** `orchestrated_status` 聚合。后果是「失败被记录成成功」：子任务 t1/t3 的输出里
+    明明写着「未产出交付物、请先确认缺口」，协议却因 LLM 正常返回文本而判 `full`；质量评审
+    已给出 `passed=false / score=62`，卡片仍显示「正常完成」—— 用户完全无法观测失败。
+
+    口径：**只降不升**（full → partial；已是 partial/failed 保持不变）。
+    复用既有三态与前端徽章渲染（`06-cards.js` 已按 full/partial/failed 分支渲染），
+    因此并入聚合即可让失败可见，**无需改前端**。
+
+    返回 `(新状态, 缺口说明列表)`；reflection 缺失/通过时原样返回。
+    """
+    gaps = []
+    if not isinstance(reflection, dict) or reflection.get("passed") is not False:
+        return agg_status, gaps
+    _iss = [str(i)[:60] for i in (reflection.get("issues") or [])[:2]]
+    gaps.append(f"质量评审未通过（{reflection.get('score')}/100）"
+                + ("：" + "；".join(_iss) if _iss else ""))
+    return ("partial" if agg_status == "full" else agg_status), gaps

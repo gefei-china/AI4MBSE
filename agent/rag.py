@@ -40,7 +40,8 @@ class GraphRAG:
         conn = get_db()
         t0 = time.time()
         scope = kb_scope or {}
-        scope_docs = [d for d in (scope.get("docs") or []) if d]
+        # KB-S 自愈：白名单与实际存在的文档求交（失效项剔除；全失效则退化，绝不静默 0 命中）
+        scope_docs, scope_warn = self._resolve_scope_docs(conn, scope.get("docs") or [])
 
         # Step 0: 上传文档优先——附件文本关键词命中（首要依据）
         attachment_hits = []
@@ -209,6 +210,7 @@ class GraphRAG:
             "glossary_recall": glossary_recall,  # P1: 词典概念（maps_to）→ 图谱实体召回回显
             "latency_ms": latency_ms,
             "knowledge": knowledge,   # P0-3: {"method":[...规范], "assets":[...资产], "uncategorized":[...]}
+            "kb_scope_warn": scope_warn,   # KB-S：白名单失效告警（None=正常）；供上层事件/卡片回显
         }
 
     @staticmethod
@@ -249,6 +251,61 @@ class GraphRAG:
                     if str(e.get("entity_type") or "").strip() and str(e.get("entity_type")) != str(e.get("name")))
         type_match = typed / len(graph_results) if graph_results else 0.0
         return min(0.50 * hit + 0.30 * rels + 0.20 * type_match, 1.0)
+
+    @staticmethod
+    def _resolve_scope_docs(conn, raw_docs) -> tuple:
+        """KB-S 消费范围自愈：把 `kb_scope.docs` 白名单与**实际存在的文档**求交。
+
+        为什么需要：docs 白名单是**硬锁**——命中即同时按 source_doc（实体）/ doc_names（分块）/
+        filename IN（文档粗匹配）三路过滤。白名单里的文档名一旦不存在（重命名 / 删库 /
+        手配错字 / 迁移漏改），三路会**同时**归零且全程静默：调用方只看到「检索为空」，
+        无法区分「库里确实没有」与「白名单写错了」。实测 2026-09-19：design agent 白名单
+        2 条（还是重复项）全不存在 → 4887 块 SysML 规范恒不可见，模型只能凭空编造。
+
+        口径：
+        - 去重保序（重复项是常见脏数据：不改变语义，但会让日志与判定难读）；
+        - 失效项一律剔除（不让它参与过滤）；
+        - **全部失效** → 返回空列表 = 不做文档过滤（退化为该 Agent 的 branches 口径）。
+          取舍理由：放宽的代价是「范围略大」，归零的代价是「功能整体失效」——后者更不可接受；
+        - 任何异常 → 原样返回（不改变既有行为，不阻断主链路）。
+
+        `kb_scope.docs_missing_fallback=False` 时不放宽（回到改动前行为，仅告警）。
+        返回 `(有效docs, warn|None)`；warn = {requested, missing, effective, unfiltered}。
+        """
+        docs = [str(d).strip() for d in (raw_docs or []) if str(d).strip()]
+        if not docs:
+            return [], None
+        uniq = list(dict.fromkeys(docs))
+        try:
+            from core import config as _cfg
+            fallback_on = _cfg.get("kb_scope", "docs_missing_fallback", True)
+            warn_on = _cfg.get("kb_scope", "docs_missing_warn", True)
+        except Exception:
+            fallback_on, warn_on = True, True
+        try:
+            ph = ",".join("?" * len(uniq))
+            rows = conn.execute(
+                f"SELECT DISTINCT filename FROM documents WHERE filename IN ({ph})", uniq).fetchall()
+            have = {r["filename"] for r in rows}
+        except Exception:
+            return uniq, None                # 查不动就不动（保全现状）
+        missing = [d for d in uniq if d not in have]
+        ok = [d for d in uniq if d in have]
+        if not missing:
+            return ok, None                  # 白名单全有效 → 零成本直通
+        if fallback_on:
+            effective, unfiltered = ok, (not ok)
+        else:
+            effective, unfiltered = uniq, False
+        if warn_on:
+            try:
+                print(f"[kb_scope] 文档白名单 {len(missing)}/{len(uniq)} 篇不存在，已剔除：{missing[:5]}"
+                      f"{'（全部失效 → 放宽为不限文档）' if unfiltered else f'；有效 {len(effective)} 篇'}",
+                      flush=True)
+            except Exception:
+                pass
+        return effective, {"requested": uniq, "missing": missing,
+                           "effective": effective, "unfiltered": unfiltered}
 
     @staticmethod
     def _release_branches(conn) -> list:

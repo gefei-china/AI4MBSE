@@ -67,7 +67,31 @@ class AgentRepo(BaseRepo):
     def get_agent_by_name(self, name: str) -> dict | None:
         return self.one("SELECT * FROM agents WHERE name=?", (name,))
 
+    def _warn_kb_scope_docs(self, kb_scope_json: str, where: str) -> None:
+        """保存侧预防：kb_scope.docs 白名单若含**不存在的文档名** → 写 WARNING（不阻断保存）。
+
+        为什么保存侧也要查：运行时虽有自愈（agent/rag.py::_resolve_scope_docs —— 剔除失效项、
+        全失效则放宽），但白名单写错的**最早可发现点**就在此处；等到「检索恒为空」才发现，
+        排查成本高得多（实测：design agent 白名单 2 条全不存在，4887 块规范长期不可见）。
+        **不阻断保存**：允许「先配范围、后传文档」的正常工作流；文档名大小写/后缀写错由日志提示。
+        """
+        try:
+            sc = json.loads(kb_scope_json or "{}") or {}
+            docs = [str(d).strip() for d in (sc.get("docs") or []) if str(d).strip()]
+            if not docs:
+                return
+            miss = [d for d in dict.fromkeys(docs)
+                    if not (self.one("SELECT 1 FROM documents WHERE filename=?", (d,)))]
+            if miss:
+                print(f"[kb_scope][WARN] {where} 白名单含 {len(miss)} 篇不存在的文档：{miss[:5]}"
+                      f" —— 该 Agent 检索时会被自愈剔除（全失效则放宽为不限文档），请核对文档名",
+                      flush=True)
+        except Exception:
+            pass   # 观测失败不影响保存
+
     def create_agent(self, data: dict) -> int:
+        self._warn_kb_scope_docs(json.dumps(data.get("kb_scope") or {}, ensure_ascii=False),
+                                 f"create_agent(name={data.get('name')})")
         rid = self.execute(
             """INSERT INTO agents (name, display_name, description, system_prompt,
                model_provider_id, model_params, hil_level, kb_required, kb_scope, intent_keywords, icon, status, version,
@@ -95,6 +119,9 @@ class AgentRepo(BaseRepo):
         # kb_scope 缺省/None 时保留既有值（防止未感知该字段的旧调用方清空范围配置）
         if data.get("kb_scope") is not None:
             kb_scope_json = json.dumps(data.get("kb_scope") or {}, ensure_ascii=False)
+            # 保存侧预防：与 create_agent 对齐 —— **改范围的主路径其实在这里**（旧配置多由编辑产生）；
+            # 仅在调用方显式写入 kb_scope 时告警，未感知该字段的字段级更新不产生噪音。
+            self._warn_kb_scope_docs(kb_scope_json, f"update_agent(id={agent_id})")
         else:
             cur = self.one("SELECT kb_scope FROM agents WHERE id=?", (agent_id,))
             kb_scope_json = (cur or {}).get("kb_scope") or "{}"

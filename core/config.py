@@ -118,6 +118,15 @@ DEFAULT_CONFIG = {
         #   标定法同 embedding 组（分位等价映射）；脚本：calibrate_dense_thresholds.py
         "semantic_fallback_gate_dense": 0.79,
         "model_context_chars": 800,     # 建模上下文注入上限（字符，当前模型状态工作记忆）
+        # P0（2026-09-19）：建模上下文的**既有实体**注入形态（实现在 memory.py::_build_model_context）。
+        # 实况：实体原先按 branch 无条件「列名字」注入 → 把上一任务的领域素材带进本轮（会话 351 实测：
+        # 电动汽车 TMS 任务被注入「巡飞弹/动力分系统」，子 Agent 因此拒绝产出代码 → 全链断裂）。
+        #   count（默认）= 只报数量、不列明细（结构性隔离：告知有历史资产，但不给可挪用的素材）
+        #   names        = 列具体名字（改动前行为）
+        #   none         = 该项完全不注入
+        # 注：曾实现「按语义相关性过滤」，标定实测 dense/bigram 两路分布重叠、**无可用阈值** → 已放弃
+        # （标定脚本 tmp/kcx/calib.py；结论与理由见 memory.py 该处上方注释）。
+        "model_context_entities": "count",
         "rerank": True,                 # 知识库检索后 LLM 重排（开关，粗筛→细排；行业对齐 RAG 多阶段）
         "rerank_top_n": 8,              # 重排候选数
         "rerank_keep": 3,               # 重排保留数（其余保底置后）
@@ -191,6 +200,17 @@ DEFAULT_CONFIG = {
         # 否则它的注入会退化成「看语义预筛的心情」——对自校验闭环而言，概率性注入等于没有。
         # 逗号分隔工具名；留空=无追加（回到改动前行为）。
         "core_keep_extra": "sysml_v2_validate",
+    },
+    "kb_scope": {
+        # KB-S 消费范围（Agent 的 kb_scope.docs）**失效自愈**开关。
+        # 实现在 agent/rag.py::_resolve_scope_docs。
+        # 背景（2026-09-19 取证）：docs 白名单是**硬锁**——同时过滤三路：
+        #   实体(source_doc) / 分块(doc_names) / 文档粗匹配(filename IN)。
+        # 白名单里的文档名一旦不存在（重命名 / 删库 / 手配错字 / 迁移漏改），
+        # 三路会**同时**归零且完全静默 —— 表现为「Agent 明明配了知识库依赖，检索却恒为空」。
+        # 实况：design agent 白名单 2 条全不存在（还是重复项）→ 4887 块 SysML 规范恒不可见。
+        "docs_missing_fallback": True,   # 白名单文档不存在时剔除失效项；**全部**失效 → 退化为不限文档
+        "docs_missing_warn": True,       # 发生上述情形时写日志，并在检索结果回显 kb_scope_warn
     },
     "chunking": {
         "default_size": 600,         # 默认分块大小（字符，≈500-650 token 中文）
@@ -382,6 +402,7 @@ CONFIG_SCHEMA = {
         "topic_group_match_dense": {"type": "float", "desc": "当前话题组匹配阈值（真 embedding 路）"},
         "semantic_fallback_gate_dense": {"type": "float", "desc": "工作流语义补召门（dense 路；bigram 路固定 0.5，实测等价 0.79）"},
         "model_context_chars":     {"type": "int", "desc": "建模上下文注入上限（字符，当前模型状态工作记忆）"},
+        "model_context_entities":  {"type": "str", "desc": "建模上下文既有实体注入形态：count(只报数量,默认)/names(列名字)/none"},
         "rerank":                  {"type": "bool", "desc": "知识库检索后 LLM 重排开关"},
         "rerank_top_n":            {"type": "int", "desc": "重排候选数"},
         "rerank_keep":             {"type": "int", "desc": "重排保留数（其余保底置后）"},
@@ -421,6 +442,10 @@ CONFIG_SCHEMA = {
     },
     "tool_jit": {
         "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）"},
+    },
+    "kb_scope": {
+        "docs_missing_fallback": {"type": "bool", "desc": "白名单文档不存在时剔除失效项；全失效则退化为不限文档"},
+        "docs_missing_warn":     {"type": "bool", "desc": "白名单失效时写日志并在检索结果回显 kb_scope_warn"},
     },
     "chunking": {
         "default_size":      {"type": "int",   "desc": "默认分块大小（字符，中文 ≈500-650 token）"},

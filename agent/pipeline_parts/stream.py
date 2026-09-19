@@ -364,9 +364,23 @@ class StreamMixin:
                     break
                 ready = TaskQueue.ready_tasks(conn, run_id)
                 if not ready:
+                    # P0-3 补（2026-09-19，端到端取证）：被阻塞的子任务**必须进入轨迹**。
+                    # 此前只 `block()` 不记账 → 「t2 失败 ⇒ t3/t4 阻塞」在卡片上完全不可见
+                    # （plan 只剩已执行的 2 条，状态仍报 full）。此处与 budget_hit 分支同口径
+                    # 补记 status="partial"（前端 `.rc` 子任务行按 partial 渲染为「部分完成」）。
                     for tk in TaskQueue.tasks(conn, run_id):
                         if tk["status"] in ("planned", "ready"):
                             TaskQueue.block(conn, tk["id"], "依赖任务失败，无法推进")
+                            _rt = int(tk.get("retry_count") or 0)
+                            orch_tasks.append({"key": tk.get("task_key"), "title": tk.get("title"),
+                                               "agent": tk.get("agent_id"), "status": "partial",
+                                               "latency_ms": 0, "retry_count": _rt,
+                                               "summary_status": "partial"})
+                            subtasks.append({"key": tk.get("task_key"), "title": tk.get("title"),
+                                             "agent": tk.get("agent_id") or "", "deps": [],
+                                             "status": "partial", "latency_ms": 0,
+                                             "error": "依赖任务失败，无法推进",
+                                             "retry_count": _rt, "summary_status": "partial"})
                     break
                 # T8：并行执行全部就绪任务（≤_ORCH_MAX_WORKERS）；worker 只执行子管道收集事件，
                 # 主线程统一落库 + SSE 转发。Task 7：worker 内再经 task_pool 独立线程跑子任务以支持超时。
@@ -533,6 +547,33 @@ class StreamMixin:
                         _sum_items.append(_it)  # 兼容旧数据：回退原 result 文本
             except Exception:
                 _agg_status, _missing_keys, _sum_items = "full", [], list(done_items)
+            # ── P0-3 补（2026-09-19，端到端取证）：**未完成子任务必须反映到聚合状态** ──
+            # 上一段只统计 `done_items`（成功交付物）→ 失败/阻塞的子任务被整体忽略。
+            # 实测（会话 360，4 子任务）：t2 超时两次 → failed，t3/t4 依赖失败 → blocked，
+            # 卡片却报 `orchestrated_status="full"`、`quality_gate_gaps=[]` ——
+            # 与「失败被记成成功」完全同类，只是发生在「子任务失败」这一支而非「反思未通过」那一支。
+            # 此处以本轮 `orch_tasks`（done/failed/partial 全量）为准做「只降不升」修正，
+            # 并把未完成子任务并入缺失清单 → 汇总文本与卡片徽章同步可见。
+            _st_all = [str(t.get("status") or "") for t in orch_tasks]
+            if _st_all:
+                if any(s == "failed" for s in _st_all):
+                    _hard = "partial" if any(s == "done" for s in _st_all) else "failed"
+                elif any(s == "partial" for s in _st_all):
+                    _hard = "partial"
+                else:
+                    _hard = "full"
+                _rank = {"full": 2, "partial": 1, "failed": 0}
+                if _rank.get(_hard, 2) < _rank.get(_agg_status, 2):
+                    _agg_status = _hard
+                # ⚠️ 循环变量**必须**避开 `_t`：本函数顶部有 `import time as _t`（L26），
+                # 下方还用 `_t.time()` 算 latency。曾用 `for _t in orch_tasks` 把 `_t` 重绑成
+                # 任务字典 → 函数尾部 `_t.time()` 抛 AttributeError: 'dict' object has no attribute 'time'
+                # → 被外层 except 兜住静默回落单 Agent（编排跑了 543s 却落单 Agent 卡片）。
+                # 实测 2026-09-19（会话 362）；静态守卫 = tools/verify/verify_orchestration_e2e.py 的 G0
+                # （`--static-only`，live/check-only 每次自动先跑）。
+                for _tk in orch_tasks:
+                    if _tk.get("status") != "done" and _tk.get("key") not in _missing_keys:
+                        _missing_keys.append(_tk.get("key"))
             try:
                 from workflows import FlowExecutor as _FE
                 if len(done_items) >= 2:
@@ -575,6 +616,23 @@ class StreamMixin:
                         f"（自动编排）质量评审：{reflection_meta['score']}/100 · "
                         f"{'通过' if reflection_meta['passed'] else '未通过，已自动修订 ' + str(reflection_meta['rounds']) + ' 轮'}")}
                 orch_content = _ref.get("content") or orch_content
+            # P0-3（2026-09-19）：质量门禁回接状态聚合——reflection 未通过必须**降级可见**。
+            # 取证：会话 351 的 reflection 已判 passed=false / score=62，子任务交付物里也明确写着
+            # 「未产出代码、请先确认缺口」，但 orchestrated_status 仍是 full、前端徽章显示
+            # 「正常完成」→ 失败被记录成成功，用户无法观测。并入既有三态后，前端徽章（按
+            # full/partial/failed 分支渲染）**零改动**即可见，卡片警示也自动生效。
+            _gate_gaps = []   # P0-3：质量门禁缺口——先无条件初始化，保证卡片字段「两条路径同键」
+            if reflection_meta:
+                try:
+                    from services import subtask_protocol as _sp2
+                    _agg_status, _gate_gaps = _sp2.apply_quality_gate(_agg_status, reflection_meta)
+                except Exception:
+                    _gate_gaps = []
+                if _gate_gaps:
+                    _missing_keys = list(_missing_keys) + _gate_gaps
+                    orch_content = "（编排质量门禁：" + "；".join(_gate_gaps) + "）\n\n" + orch_content
+                    yield {"type": "reasoning",
+                           "delta": "（自动编排）编排质量门禁：" + "；".join(_gate_gaps)}
             # P0-1：编排成功后沉淀为可复用工作流（draft，前端可另存/画布编辑/发布）
             saved_flow_id = None
             if done_items:
@@ -606,6 +664,7 @@ class StreamMixin:
             "orchestrated": True, "degraded": degraded,
             "team": (agent_def.intent_name or agent_def.name) if team_forced else None,  # 团队模式：主 Agent 团队负责人
             "orchestrated_status": _agg_status,   # Task 10：编排汇总三态（full/partial/failed）
+            "quality_gate_gaps": _gate_gaps,      # P0-3：质量门禁缺口说明（与 orchestration.py 同键）
             "run_budget": {"used_tokens": run_tokens, "budget": run_token_budget,
                            "hit": budget_hit, "executed": executed_count, "max_tasks": _max_tasks},
             "plan": orch_tasks, "sysml_views": sysml_views,
@@ -785,6 +844,14 @@ class StreamMixin:
             except Exception:
                 _detected = self.router.detect(user_input, prev_intent=dst["intent"] or None)
             intent = forced_intent or _detected
+            # P0-4（2026-09-19）：显式定向（团队/指定 Agent）覆盖语义识别结果时**不静默**。
+            # 取舍：显式选择优先（用户选了团队就该按团队走），但差异必须可见——否则
+            # 「识别到 A、实际跑 B」用户永远发现不了（会话 351 卡片的 confidence=0 即此形态：
+            # 既无置信度、也无任何"为何是该意图"的说明）。
+            if forced_intent and _detected and forced_intent != _detected:
+                yield {"type": "reasoning", "delta": (
+                    f"（意图定向）已按显式选择执行：{forced_intent}；语义识别结果为 {_detected}，"
+                    "两者不一致，如非所愿请去掉团队/Agent 指定后重发")}
             # Task 11 多意图增强（可选项）：多阶段指令 → 附加 multi_intent 序列事件（供前端展示/编排衔接）
             _multi_intent = self.router.detect_multi(user_input)
             if _multi_intent:
@@ -874,7 +941,23 @@ class StreamMixin:
                         user_input, conversation_id, branch, intent, agent_def, hil_level,
                         kb_tags, attachments, slots, user, effective_provider)
                     return
-                except Exception:
+                except Exception as _orch_exc:
+                    # P0-3 补（2026-09-19，端到端取证）：**编排中途失败不得静默回退**。
+                    # 此前是裸 `except Exception: _orch = None` —— 子任务已全部执行（用户已看到 subtask
+                    # 事件）却在此处被吞掉，随后**回落到单 Agent 重跑一遍**并落库单 Agent 卡片：
+                    # 用户看到的执行过程与落库轨迹互相矛盾，且日志/事件里没有任何痕迹。
+                    # 实测（会话 361）：3 个子任务全 done、日志 5 次 sysml-check，而落库卡片的键集是
+                    # 单 Agent 的（含 citations/submitted_by）→ 判据：**卡片键集就是落库路径的指纹**。
+                    # 现改为：打完整 traceback（便于定位真因）+ 向前端发可见提示，再走原有单 Agent 兜底。
+                    try:
+                        import traceback as _tb
+                        print(f"[orch] 编排流式失败，回落单 Agent 直行："
+                              f"{type(_orch_exc).__name__}: {_orch_exc}\n{_tb.format_exc()}", flush=True)
+                    except Exception:
+                        pass
+                    yield {"type": "reasoning", "delta": (
+                        "（自动编排）编排执行中断（" + type(_orch_exc).__name__ +
+                        "），已回落为单 Agent 直行重新作答；上方子任务轨迹仅供排查，最终结论以本次答复为准")}
                     _orch = None
 
             # 闭环：上传资料解析 + 工作流匹配
@@ -927,7 +1010,17 @@ class StreamMixin:
                     quality_report = None
             yield {"type": "stage", "name": "知识库检索", "status": "done",
                    "retrieved": should_retrieve, "route": retrieval.get("route", "none"),
-                   "route_reason": retrieval.get("route_reason", "")}
+                   "route_reason": retrieval.get("route_reason", ""),
+                   "kb_scope_warn": retrieval.get("kb_scope_warn")}   # KB-S：白名单失效告警（供前端/抓包）
+            # KB-S（2026-09-19）：Agent 文档白名单失效 → 显式提示。否则表现为「Agent 配了知识库依赖
+            # 却检索恒为空」，调用方无法区分「库里没有」与「白名单写错了」（实测 4887 块规范恒不可见）。
+            _kbw = retrieval.get("kb_scope_warn")
+            if _kbw:
+                yield {"type": "reasoning", "delta": (
+                    "（知识库范围）Agent 配置的文档白名单有 "
+                    f"{len(_kbw.get('missing') or [])} 篇不存在，已自动剔除"
+                    + ("；因全部失效，本次已暂放宽为不限文档" if _kbw.get("unfiltered") else "")
+                    + "。建议到「能力中心 → Agent 管理」核对该 Agent 的知识库范围配置")}
             # 思考过程：检索决策 + 自动触发技能（真实执行信息，普通模型不流 reasoning 时也可见）
             if should_retrieve:
                 route = retrieval.get("route", "none")
@@ -995,9 +1088,13 @@ class StreamMixin:
                 # P0-3：长期记忆注入（跨会话经验，仅供对齐）
                 + f"{self._build_memory_hint(user_input, intent, user)}"
                 # P0：建模上下文注入（当前模型状态工作记忆，MBSE 特有）
-                + f"{self._build_model_context(branch, conversation_id)}"
+                # P0-2（2026-09-19）：传本轮 user_input → 建模上下文改**结构性隔离**
+                # （context.model_context_entities='count'：只报「本分支共 N 个」不列实体名；块首带适用范围声明）
+                # ⚠️ 「按语义相关性过滤条目」方案经标定实测 dense/bigram 分布重叠、无可用阈值 → 已放弃，别再做
+                + f"{self._build_model_context(branch, conversation_id, user_input)}"
                 # P0 能力：项目级持久记忆注入（Project Constitution，规范/基线防漂移）
-                + self._build_project_memory()
+                # P0-2（2026-09-19）：传本轮 user_input → 注入块带项目名 + 「仅当本次任务属于该项目领域时适用」声明
+                + self._build_project_memory(user_input=user_input)
                 + (f"【任务拆解（P1 结构化）】\n目标：{slots.get('goal') or '-'}\n"
                    f"实体：{'、'.join(slots.get('entities') or []) or '-'}\n"
                    f"约束：{'；'.join(slots.get('constraints') or []) or '-'}\n"

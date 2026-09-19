@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """AgentPipeline Mixin：记忆/模型上下文/用户上下文/报告素材构建。
 
-由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分，勿手工编辑方法体。"""
+由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分。
+⚠️ 该脚本**已执行完毕、不可重跑**（其头部有明示：再跑会以薄入口为输入产出错误分片并破坏本目录装配）。
+`agent/pipeline.py` 现为薄 Mixin 入口，**本目录（pipeline_parts/）才是当前真源，可直接编辑**。"""
 from .common import *
 
 
@@ -32,30 +34,56 @@ class MemoryMixin:
         except Exception:
             return ""
 
+    # ── ⚠️ 这里**曾**实现「按语义相关性过滤上下文条目」，**经标定后主动放弃**（2026-09-19）。
+    #   标定脚本 tmp/kcx/calib.py（21 条库内真实素材 × 1 条真实 query，两路同测）：
+    #     dense  路：正例最低 0.4099（KerML 语义约束） vs 负例最高 0.5054（V2G_d45be3e1 纯代号）→ gap = -0.0954
+    #     bigram 路：正例最低 0.0284                    vs 负例最高 0.0962（数据链分系统）       → gap = -0.0678
+    #   两路分布**都重叠** —— 负例「纯代号」在 dense 路得分甚至高于**所有**正例，
+    #   即**不存在能分开二者的阈值**。用分不开的判据做删除决策 = 不可预测的误杀
+    #  （正例 KerML 会被 0.55 的门滤掉，而负例代号反被放行）。故改为**结构性隔离**：
+    #   不给「可被误用的具体素材」（见 `_build_model_context` 的摘要模式），并显式标注适用范围
+    #  （见其与 `_build_project_memory` 的范围声明）。留此注以免后人重蹈。
+    # ──
+
     # ── P0：建模上下文注入（工作记忆：当前模型状态，MBSE 特有）──
-    def _build_model_context(self, branch="", conversation_id=0):
-        """当前建模状态工作记忆（只读参考）：活跃实体/视图/最近变更/会话产物。
+    def _build_model_context(self, branch="", conversation_id=0, user_input=""):
+        """当前建模状态工作记忆（只读参考）：既有实体规模/视图/最近变更/会话产物。
 
         数据全部来自现有表（entities/graph_views/impact_analyses/artifacts），零新增表；
         异常/无数据返回空串不阻断。预算 ≤ model_context_chars（默认 800）。
+
+        P0（2026-09-19）**结构性隔离**：实体原先**列出具体名字**，实测会把上一个任务的领域素材
+        当成本轮素材 —— 会话 351（「生成电动汽车热管理系统的 SysML v2 代码」）的子 Agent 在交付物里
+        写道「工作记忆里的活跃实体是动力分系统、巡飞弹等，与电动汽车热管理无关，不能挪用」，
+        并**因此拒绝产出代码**（下游校验无输入 → 全链条断裂）。这不是模型不听话，是上下文塞了错素材。
+
+        现默认 `context.model_context_entities="count"`：**只报数量、不列明细** —— 既告知
+        「本分支已有历史资产」，又不存在可被挪用的素材；置 "names" 回到旧行为，"none" 完全不注入。
+        另在块首给出「适用范围」声明做第二层防御（阈值类判据已实测不可靠，见上方注释）。
         """
         from core import config as _cfg
         from database import get_db
         max_chars = int(_cfg.get("context", "model_context_chars", 800))
+        ent_mode = str(_cfg.get("context", "model_context_entities", "count") or "count").lower()
         try:
             conn = get_db()
             lines = []
             try:
-                # 活跃实体（当前分支，非 raw/废弃）
-                ents = conn.execute(
-                    "SELECT name FROM entities WHERE branch=? AND status NOT IN ('raw_chunk','deprecated') "
-                    "ORDER BY created_at DESC, id DESC LIMIT 8", (branch,)).fetchall()
+                # 既有实体（当前分支，非 raw/废弃）
                 ent_total = conn.execute(
                     "SELECT COUNT(*) c FROM entities WHERE branch=? AND status NOT IN ('raw_chunk','deprecated')",
                     (branch,)).fetchone()["c"] or 0
-                if ents:
-                    names = "、".join(str(r["name"])[:14] for r in ents)
-                    lines.append(f"活跃实体：{names}{' 等' if ent_total > len(ents) else ''}（共 {ent_total} 个）")
+                if ent_total and ent_mode == "names":
+                    cand = conn.execute(
+                        "SELECT name FROM entities WHERE branch=? AND status NOT IN ('raw_chunk','deprecated') "
+                        "ORDER BY created_at DESC, id DESC LIMIT 8", (branch,)).fetchall()
+                    names = [str(r["name"]) for r in cand if str(r["name"] or "").strip()]
+                    if names:
+                        lines.append(f"活跃实体：{'、'.join(n[:14] for n in names)}"
+                                     f"{' 等' if ent_total > len(names) else ''}（共 {ent_total} 个）")
+                elif ent_total and ent_mode != "none":
+                    lines.append(f"既有建模实体：本分支共 {ent_total} 个（本项只报规模、不列明细；"
+                                 f"本轮可用素材请以「检索到的互联数据」为准）")
                 # 视图
                 views = conn.execute(
                     "SELECT name FROM graph_views WHERE branch=? ORDER BY id DESC LIMIT 5", (branch,)).fetchall()
@@ -84,20 +112,35 @@ class MemoryMixin:
                 conn.close()
             if not lines:
                 return ""
-            block = "【当前建模上下文（工作记忆，只读参考）】\n" + f"分支：{branch or '-'}\n" + "\n".join(lines) + "\n"
-            return block[:max_chars]
+            # 适用范围声明置顶且**不参与预算截断**（原实现 `block[:max_chars]` 连标题都可能被截掉，
+            # 声明被截掉就等于没有第二层防御）。正文按剩余预算截断。
+            _head = ("【当前建模上下文（工作记忆，只读参考）】\n"
+                     "（以下为本分支**既有**建模资产，仅供了解现状；与本次诉求领域不符的内容必须忽略，"
+                     "不得作为本次建模的素材、需求来源或事实依据引用）\n"
+                     f"分支：{branch or '-'}\n")
+            _room = max(0, max_chars - len(_head))
+            return _head + ("\n".join(lines) + "\n")[:_room]
         except Exception:
             return ""
 
-    def _build_project_memory(self, project_id: str = "") -> str:
+    def _build_project_memory(self, project_id: str = "", user_input: str = "") -> str:
         """项目级持久记忆（Project Constitution）：规范/基线/决策/经验注入 system prompt 防漂移。
 
         对齐 Codex durable project memory / Claude Code CLAUDE.md——每会话注入项目宪法，
         约束模型遵守既定规范与设计基线。默认注入当前默认项目（会话未关联项目时）。
         预算 project_memory_chars（默认 600）截尾保头（规范/基线优先）；无数据/异常返回空串不阻断。
+
+        P0（2026-09-19）：**注入时带项目名 + 显式适用范围声明**，把「是否适用」的判断权交给模型。
+        取证：默认项目（卫星通信）的 46 条记忆里含「载荷配置调整 / 通信载荷」等无关条目，
+        被无条件当作「AI 必须遵守」注入到「电动汽车热管理系统」任务。
+        机制选择：**这里刻意不做语义相关性过滤** —— 标定实测 dense/bigram 两路分布重叠、
+        无可用阈值（见本文件 `_build_model_context` 上方注释与 tmp/kcx/calib.py）。
+        模型本就有识别能力（会话 351 的 t1/t3 主动写「素材与标题不匹配、套用就是虚构」并拒绝产出），
+        它缺的只是**被明确授权忽略**这一句。
         """
         try:
             from database import get_db
+            from core import config as _cfg0
             conn = get_db()
             try:
                 # 动态开关/预算（settings 表，管理界面可调；缺省 开启 / 600 字符）
@@ -121,14 +164,20 @@ class MemoryMixin:
                 conn.close()
             if not rows:
                 return ""
-            parts = ["【项目规范基线（Project Constitution，AI 必须遵守，不得违背已定设计基线）】"]
+            items = []
             for r in rows:
                 content = (r["content"] or "").strip()
                 if not content:
                     continue
-                parts.append(f"· [{r['category']}] {r['title']}：{content}")
-            block = "\n".join(parts) + "\n"
-            return block[:max_chars]
+                items.append(f"· [{r['category']}] {r['title']}：{content}")
+            if not items:
+                return ""
+            head = (f"【项目规范基线（Project Constitution · 项目「{pid}」）\n"
+                    "（以下为该项目的既定规范/基线，**仅当本次任务属于该项目领域时适用**；"
+                    "若与本次诉求领域不符，必须整体忽略，不得作为本次任务的约束或素材来源）】")
+            body = "\n".join(items) + "\n"
+            _room = max(0, max_chars - len(head) - 1)   # 范围声明不参与裁剪（截掉了等于没有防御）
+            return head + "\n" + body[:_room]
         except Exception:
             return ""
 

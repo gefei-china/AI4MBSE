@@ -40,9 +40,17 @@ class ExecuteMixin:
         dst = self._load_conversation_dst(conversation_id)
         try:
             with db_conn() as _conn:
-                intent = forced_intent or self.router.detect(user_input, conn=_conn, prev_intent=dst["intent"] or None)
+                _detected = self.router.detect(user_input, conn=_conn, prev_intent=dst["intent"] or None)
         except Exception:
-            intent = forced_intent or self.router.detect(user_input, prev_intent=dst["intent"] or None)
+            _detected = self.router.detect(user_input, prev_intent=dst["intent"] or None)
+        intent = forced_intent or _detected
+        # P0-4（2026-09-19）：显式定向覆盖语义识别结果时不静默（非流式路径无 SSE，故写日志留痕）
+        if forced_intent and _detected and forced_intent != _detected:
+            try:
+                print(f"[intent] 显式定向 {forced_intent} 覆盖语义识别 {_detected}"
+                      f"（conversation={conversation_id}）", flush=True)
+            except Exception:
+                pass
         agent_def = self.registry.get(intent)
         hil_level = agent_def.hil_level
         self._hil_level = hil_level  # M5：HIL 分级——L2 时写工具进入人工确认队列
@@ -218,9 +226,13 @@ class ExecuteMixin:
             # P0-3：长期记忆注入（跨会话经验，仅供对齐）
             + f"{self._build_memory_hint(user_input, intent, user)}"
             # P0：建模上下文注入（当前模型状态工作记忆，MBSE 特有）
-            + f"{self._build_model_context(branch, conversation_id)}"
+            # P0-2（2026-09-19）：传本轮 user_input → 建模上下文改**结构性隔离**
+            # （config.context.model_context_entities='count'：只报「本分支共 N 个」不列实体名；块首带适用范围声明）
+            # ⚠️ 曾计划「按语义相关性过滤条目」，经标定实测 dense/bigram 两路分布重叠、无可用阈值 → 已放弃，别再做
+            + f"{self._build_model_context(branch, conversation_id, user_input)}"
             # P0 能力：项目级持久记忆注入（Project Constitution，规范/基线防漂移）
-            + self._build_project_memory()
+            # P0-2（2026-09-19）：传本轮 user_input → 注入块带项目名 + 「仅当本次任务属于该项目领域时适用」声明
+            + self._build_project_memory(user_input=user_input)
             + (f"【任务拆解（P1 结构化）】\n目标：{slots.get('goal') or '-'}\n"
                f"实体：{'、'.join(slots.get('entities') or []) or '-'}\n"
                f"约束：{'；'.join(slots.get('constraints') or []) or '-'}\n"

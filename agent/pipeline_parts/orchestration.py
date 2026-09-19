@@ -274,10 +274,29 @@ class OrchestrMixin:
                 _conn.close()
         except Exception:
             pass
+        # P0-3（2026-09-19）：非流式编排路径补齐 orchestrated_status —— 与流式路径口径对齐。
+        # 此前该字段只有流式路径（stream.py::_stream_orchestrated）写，非流式路径卡片缺键，
+        # 同一功能两条路径行为不一致（前端徽章无从渲染）。状态由子任务执行状态聚合，
+        # 再并入质量门禁（reflection 未通过 → 降级 partial；只降不升）。
+        _task_status = [str(t.get("status") or "") for t in plan_meta]
+        if _task_status and all(s == "done" for s in _task_status):
+            _agg_status = "full"
+        elif any(s == "failed" for s in _task_status) and not any(s == "done" for s in _task_status):
+            _agg_status = "failed"
+        else:
+            _agg_status = "partial"
+        _orch_reflection = (orch.get("data") or {}).get("reflection")
+        try:
+            from services import subtask_protocol as _sp
+            _agg_status, _gate_gaps = _sp.apply_quality_gate(_agg_status, _orch_reflection)
+        except Exception:
+            _gate_gaps = []
         card_data = json.dumps({
             "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
             "orchestrated": True, "degraded": bool(orch.get("degraded")),
+            "orchestrated_status": _agg_status,   # P0-3：三态与流式路径对齐
+            "quality_gate_gaps": _gate_gaps,      # P0-3：质量门禁缺口说明（前端可选用）
             "team": team or None,   # 团队模式：主 Agent 团队负责人
             "plan": plan_meta,
             "reflection": (orch.get("data") or {}).get("reflection"),   # P0-1（T4）：反思闭环评审轨迹
