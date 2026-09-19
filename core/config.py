@@ -77,6 +77,10 @@ DEFAULT_CONFIG = {
         "tool_threshold": 0.12,  # 工具 JIT 预筛相似度阈值（低于则空回退全量注入）
         "memory_top_k": 5,       # 记忆检索 top_k
         "bigram_dim": 4096,      # bigram 降级向量哈希槽数（P1-1b：原 embedder 硬编码；大规模语料可调高降碰撞）
+        # 2026-09-19：服务端单批条数上限（实测阿里云百炼 text-embedding-v3 = 10，>10 报
+        # 400 InvalidParameter）。Embedder._embed_api 内部按此切分，兜住「batch_size=0
+        # 一次全发」的调用方（semantic.py 的 items+query、intent 语义路由等）。
+        "api_batch_max": 10,     # /embeddings 单批条数上限（<=0 表示不切分）
     },
     "context": {
         "history_immediate_turns": 6,   # 即时窗口轮数（原文逐字注入）
@@ -125,6 +129,14 @@ DEFAULT_CONFIG = {
         # 使页数多的规范类文档入库只覆盖约 17%（实测 SysML v2 官方 691 页 / KerML 454 页，
         # 全量抽取分别只需 23.6s / 17.6s，抽取本身不是瓶颈）。改为可配置并提高默认值。
         "pdf_max_pages": 1200,   # PDF 抽取页数上限（防超大文件拖垮入库；<=0 表示不限制）
+    },
+    "sysml": {
+        # 2026-09-19（P0）：生成端 L0 硬约束卡，实现在 agent/pipeline_parts/v2_constraints.py。
+        # 背景：_build_model_code_req 此前只有约 200 字输出格式要求、一条语法规则都没有，
+        # LLM 每轮重复犯同类错（真机实测一个 156 行 TMS 模型 7 条语义错）。开启后每轮建模
+        # 都把实测语法硬约束拼进 system prompt，从源头压掉高频语法/语义错。
+        "l0_card_enabled": True,   # False=完全回到改动前行为（A/B 对比与故障回退用）
+        "l0_card_extra": "",       # 现场追加约束文本（留空则只用内置卡；不写代码即可补规则）
     },
     "chunking": {
         "default_size": 600,         # 默认分块大小（字符，≈500-650 token 中文）
@@ -294,6 +306,7 @@ CONFIG_SCHEMA = {
         "tool_threshold":   {"type": "float", "desc": "工具 JIT 预筛相似度阈值（低于则空回退全量）"},
         "memory_top_k":     {"type": "int", "desc": "记忆检索 top_k"},
         "bigram_dim":       {"type": "int", "desc": "bigram 降级向量哈希槽数（默认 4096，ENV: MBSE_EMBED_BIGRAM_DIM）"},
+        "api_batch_max":    {"type": "int", "desc": "/embeddings 单批条数上限（默认 10；<=0 不切分）"},
     },
     "context": {
         "history_immediate_turns": {"type": "int", "desc": "即时窗口轮数（原文逐字）"},
@@ -336,6 +349,10 @@ CONFIG_SCHEMA = {
     "ingest": {
         "draft_flow":          {"type": "bool", "desc": "AI 建模入库发布门禁（确认后走合并请求待审/自动发布）"},
         "review_source_types": {"type": "str", "desc": "需强制待审的来源列表（逗号分隔，如 ai_generated）"},
+    },
+    "sysml": {
+        "l0_card_enabled": {"type": "bool", "desc": "生成端 SysML v2 L0 硬约束卡注入开关（关=回到改动前行为）"},
+        "l0_card_extra":   {"type": "str",  "desc": "追加到 L0 卡尾部的现场约束文本（留空用内置卡）"},
     },
     "chunking": {
         "default_size":      {"type": "int",   "desc": "默认分块大小（字符，中文 ≈500-650 token）"},

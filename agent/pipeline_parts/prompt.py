@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
 """AgentPipeline Mixin：任务分解、本体提示与提示词模板。
 
-由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分，勿手工编辑方法体。"""
+由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分，勿手工编辑方法体。
+
+注：切分脚本自身已声明「一次性、不可重跑」（见其文件头），故此处可安全叠加人工增强。
+P0（2026-09-19）：_build_model_code_req 追加 L0 硬约束卡，见 v2_constraints。
+"""
 from .common import *
+from .v2_constraints import build_l0_card
 
 
 class PromptMixin:
@@ -85,7 +90,14 @@ class PromptMixin:
 
     def _build_model_code_req(self, intent: str) -> str:
         """建模类意图：要求 LLM 在正文末尾输出完整 SysML v2 (KerML) 模型代码块，
-        供自动投影 BDD/IBD/REQ 等视图与前端「代码/视图」切换查看（问题3修复）。"""
+        供自动投影 BDD/IBD/REQ 等视图与前端「代码/视图」切换查看（问题3修复）。
+
+        P0（2026-09-19）：追加 **L0 硬约束卡**（v2_constraints.L0_CARD）——
+        此前这里只有输出格式要求、一条语法规则都没有，LLM 每轮重复犯同样的语法/语义错
+        （真机实测一个 156 行 TMS 模型 7 条语义错）。本方法是**流式与非流式两条路径的
+        唯一共用注入点**（stream.py / execute.py 同调），改一处即两条路径同时生效。
+        开关：core/config.py → sysml.l0_card_enabled / sysml.l0_card_extra。
+        """
         if not intent:
             return ""
         if intent in ("design", "requirement_analysis", "impact", "review"):
@@ -98,7 +110,8 @@ class PromptMixin:
                 "可直接导入建模工具的 SysML v2 (KerML) 模型代码，代码块统一使用 ```sysml 语言标签包裹；"
                 "内容覆盖：包(package)、块定义(part def/part usage)、接口(interface def/usage)、"
                 "需求(requirement def)+满足关系(satisfies)、以及必要的结构或行为语义；"
-                "代码用于自动投影 BDD/IBD/REQ 等视图与前端「代码/视图」切换查看，请确保代码语义完整、可解析。\n")
+                "代码用于自动投影 BDD/IBD/REQ 等视图与前端「代码/视图」切换查看，请确保代码语义完整、可解析。\n"
+                + build_l0_card())
     def _build_prompt_template(self, intent: str, user_input: str, user=None) -> str:
         """提示词实验室接入：按意图匹配 published 提示词模板（scenario/name 含意图关键词），
         变量插值（{{ontology_profile}}/{{user_input}}/{{intent}}）后注入 system prompt。
