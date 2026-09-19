@@ -127,11 +127,13 @@ class MemoryMixin:
         """项目级持久记忆（Project Constitution）：规范/基线/决策/经验注入 system prompt 防漂移。
 
         对齐 Codex durable project memory / Claude Code CLAUDE.md——每会话注入项目宪法，
-        约束模型遵守既定规范与设计基线。默认注入当前默认项目（会话未关联项目时）。
+        约束模型遵守既定规范与设计基线。
+        **取项目顺序（2026-09-20 收紧）：显式 project_id → settings.default_project_id → 空则完全不注入。**
+        即「默认项目」纯由 settings 决定，代码里**不再有任何硬编码兜底**；把该键置空 = 停用注入。
         预算 project_memory_chars（默认 600）截尾保头（规范/基线优先）；无数据/异常返回空串不阻断。
 
         P0（2026-09-19）：**注入时带项目名 + 显式适用范围声明**，把「是否适用」的判断权交给模型。
-        取证：默认项目（卫星通信）的 46 条记忆里含「载荷配置调整 / 通信载荷」等无关条目，
+        取证：默认项目（卫星通信，实测 32 条已启用记忆）里含「载荷配置调整 / 通信载荷」等无关条目，
         被无条件当作「AI 必须遵守」注入到「电动汽车热管理系统」任务。
         机制选择：**这里刻意不做语义相关性过滤** —— 标定实测 dense/bigram 两路分布重叠、
         无可用阈值（见本文件 `_build_model_context` 上方注释与 tmp/kcx/calib.py）。
@@ -154,7 +156,10 @@ class MemoryMixin:
                 if not pid:
                     row = conn.execute(
                         "SELECT value FROM settings WHERE key='default_project_id'").fetchone()
-                    pid = row["value"] if row else "project-satnet-broadband"
+                    # 2026-09-20：原为 `row["value"] if row else "project-satnet-broadband"` ——
+                    # 行缺失时回退到硬编码的星网项目，会让「置空默认项目以停用注入」被悄悄推翻
+                    # （领域固化残留）。统一取空 → 交给下方 `if not pid: return ""` 处理。
+                    pid = (row["value"] if row else "") or ""
                 if not pid:
                     return ""
                 rows = conn.execute(

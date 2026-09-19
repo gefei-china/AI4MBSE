@@ -24,10 +24,19 @@ def list_projects(conn=Depends(db_session)):
 
 @router.get("/api/projects/default")
 def get_default_project(conn=Depends(db_session)):
+    """取默认项目（会话未显式关联项目时的兜底指针）。
+
+    2026-09-20：默认项目改为**允许未设置** —— settings.default_project_id 置空即表示
+    「无显式项目关联时不注入项目宪法」（配套 agent/pipeline_parts/memory.py 的
+    `if not pid: return ""` 分支）。「未设置」是合法状态而非错误，用 404 表达会让调用方
+    无法区分「从未配置」与「指向的项目已被删/归档」，故统一 200 + 空态对象。
+    前端沿用既有判定即可：13-reports.js 用 `if(p && p.name)`、30-agents.js 用 `def.id` 兜底。
+    """
     repo = ProjectRepo(conn)
-    proj = repo.get_project(repo.get_default_project_id())
+    pid = (repo.get_default_project_id() or "").strip()
+    proj = repo.get_project(pid) if pid else None
     if not proj:
-        return JSONResponse({"error": "Default project not found"}, 404)
+        return {"id": "", "name": "", "code": "", "unset": True}
     return proj
 
 

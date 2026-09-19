@@ -11,8 +11,9 @@
 
 本脚本**不依赖 git ref、不依赖服务**（直接 import 模块 + 只读库），随时可跑：
     .venv/Scripts/python.exe tools/verify/verify_context_scope_guard.py
-口径提示：通过数随【配置真实值】而定（例如 config 里 model_context_entities 被改成 names 时，
-[2] 的 count 断言会失败 —— 那是配置不符预期，不是脚本回归）。
+口径提示：[2] 的 count 断言依赖 config 真实值为 count；[3][7] 为**夹具驱动**（临时库 + 猴补
+database.get_db），断言对象是「机制」而非本次部署恰好配了什么 —— 故把 settings.default_project_id
+置空 / 改值**不会**影响通过数（此前的旧实现会，属误报，已于 2026-09-20 修正）。
 """
 import ast
 import json
@@ -156,13 +157,109 @@ check("预算极小（40 字符）时范围声明仍完整保留（不被截掉�
 # ─────────────────────────────────────────────────────────────────────────────
 hr("[3] 项目宪法：注入带项目名 + 适用范围声明（memory.MemoryMixin._build_project_memory）")
 
-_out_pm = m._build_project_memory(user_input="帮我生成电动汽车热管理系统的 sysml V2 代码")
-check("注入块含项目标识（pid）", "项目" in _out_pm and "Constitution" in _out_pm, repr(_out_pm[:80]))
+# ⚠️ 本段**不得对真实库断言语义**（2026-09-20 实测教训）：原实现直接对 mbse.db 断言
+#    「注入块存在」，而清理把 settings.default_project_id 置空后三条断言全挂 —— 那是
+#    **配置变更**而非代码回归，属误报（与「通过数随配置变化」是同一类问题）。
+#    现改为**夹具驱动**：临时库 + 猴补 database.get_db，断言对象是「取项目 / 注不注入」的
+#    **机制**，与本次部署恰好配了什么无关。
+import tempfile
+import database as _dbmod
+
+_FIX_PID = "proj-fixture"
+_UNSET = object()
+_SQL_LOG: list = []
+
+
+def _fixture_db(setting=_UNSET, memories=(), budget=None):
+    """建临时库（settings + project_memories）。
+
+    setting=_UNSET 表示**连该 settings 行都不写**（测「未配置」）；setting="" 表示置空。
+    """
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, description TEXT)")
+    c.execute("CREATE TABLE project_memories (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+              "project_id TEXT, category TEXT, title TEXT, content TEXT, enabled INTEGER DEFAULT 1)")
+    if setting is not _UNSET:
+        c.execute("INSERT INTO settings (key,value,description) "
+                  "VALUES ('default_project_id',?,'')", (setting,))
+    if budget is not None:
+        c.execute("INSERT INTO settings (key,value,description) "
+                  "VALUES ('memory.project_memory_chars',?,'')", (str(budget),))
+    for cat, title, content in memories:
+        c.execute("INSERT INTO project_memories (project_id,category,title,content,enabled) "
+                  "VALUES (?,?,?,?,1)", (_FIX_PID, cat, title, content))
+    c.commit()
+    c.close()
+    return path
+
+
+def _with_db(path, fn, log=False):
+    """令函数内的 `from database import get_db` 指向临时库（每次调用返回新连接，可被其 close）。
+
+    log=True 时用**探针连接**记录所有 SQL —— 用于断言「某分支下**连查询都不发生**」。
+    必要性（2026-09-20 变异测试实测）：仅断言返回值会**空转** —— 「settings 行缺失 → 返回 ""」
+    在「旧写法回退到硬编码项目」时同样成立（回退去的项目在夹具库里也无记忆，殊途同归），
+    故必须断言**没去查任何项目的记忆**，该判据才非空转。
+    """
+    _orig = _dbmod.get_db
+    if log:
+        _SQL_LOG.clear()
+
+    class _Spy:
+        def __init__(self, c):
+            self._c = c
+
+        def execute(self, sql, *a):
+            _SQL_LOG.append(sql)
+            return self._c.execute(sql, *a)
+
+        def close(self):
+            self._c.close()
+
+    def _fake():
+        cc = sqlite3.connect(path)
+        cc.row_factory = sqlite3.Row
+        return _Spy(cc) if log else cc
+
+    _dbmod.get_db = _fake
+    try:
+        return fn()
+    finally:
+        _dbmod.get_db = _orig
+
+
+_MEMS = [("规范", "命名规范", "实体命名必须用大驼峰，禁止拼音缩写。"),
+         ("决策", "评审结论", "所有交付物必须附可核引用，否则不予通过。")]
+
+_p_fix = _fixture_db(setting=_FIX_PID, memories=_MEMS)
+_out_pm = _with_db(_p_fix, lambda: m._build_project_memory(
+    user_input="帮我生成电动汽车热管理系统的 sysml V2 代码"))
+check("注入块含项目标识（pid）", _FIX_PID in _out_pm and "Constitution" in _out_pm, repr(_out_pm[:80]))
 check("注入块含「仅当属于该项目领域时适用」的范围声明", "仅当本次任务属于该项目领域时适用" in _out_pm,
       repr(_out_pm[:160]))
 check("范围声明不参与预算裁剪（截掉了等于没有防御）",
-      "仅当本次任务属于该项目领域时适用" in m._build_project_memory(user_input="x" * 100),
-      "长 query 下仍完整")
+      "仅当本次任务属于该项目领域时适用" in _with_db(
+          _fixture_db(setting=_FIX_PID, memories=_MEMS, budget=40),
+          lambda: m._build_project_memory(user_input="x" * 100)),
+      "预算 40 字符 + 超长 query 下仍完整")
+os.unlink(_p_fix)
+
+# ★ 清理（2026-09-20）的核心不变式：默认项目「未配置 / 已置空 / 指向无记忆的项目」→ 一律**不注入**
+_nolog = _with_db(_fixture_db(setting=_UNSET),
+                  lambda: m._build_project_memory(user_input="x"), log=True)
+check("默认项目 settings 行**缺失** → 不注入，且**连记忆查询都不发生**（无硬编码兜底）",
+      _nolog == "" and not any("project_memories" in s for s in _SQL_LOG),
+      f"out={_nolog!r} sql={_SQL_LOG}")
+check("默认项目**置空** → 不注入（置空是「停用」的合法表达，不是错误态）",
+      _with_db(_fixture_db(setting=""), lambda: m._build_project_memory(user_input="x")) == "")
+check("默认项目指向的项目**无启用记忆** → 不注入",
+      _with_db(_fixture_db(setting=_FIX_PID, memories=()),
+               lambda: m._build_project_memory(user_input="x")) == "")
+check("显式 project_id 优先于 settings 兜底（取项目顺序：显式 → settings → 空）",
+      _FIX_PID in _with_db(_fixture_db(setting="someone-else", memories=_MEMS),
+                           lambda: m._build_project_memory(project_id=_FIX_PID, user_input="x")))
 
 # ─────────────────────────────────────────────────────────────────────────────
 hr("[4] 质量门禁回接：services.subtask_protocol.apply_quality_gate")
@@ -212,11 +309,58 @@ check("config 中无残留的 model_context_relevance_* 死配置",
       "model_context_relevance" not in cfg_src)
 
 # ─────────────────────────────────────────────────────────────────────────────
+hr("[7] 默认项目链路：无硬编码兜底 + 「未设置」空态语义一致（2026-09-20 清理）")
+
+
+def _str_consts(node):
+    """函数内字符串字面量，**排除 docstring**（注释/文档里提到旧硬编码不算违规）。"""
+    doc = ast.get_docstring(node, clean=False)
+    return [n.value for n in ast.walk(node)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value != doc]
+
+
+def _find_fn(path, name):
+    for n in ast.walk(ast.parse(open(path, encoding="utf-8").read())):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name:
+            return n
+    return None
+
+
+_repo_fn = _find_fn(os.path.join(ROOT, "repositories/project_repo.py"), "get_default_project_id")
+check("repository 层不再硬编码默认项目（域固化残留已清）",
+      _repo_fn is not None and not any("project-satnet-broadband" in s for s in _str_consts(_repo_fn)))
+_mem_fn = _find_fn(os.path.join(ROOT, "agent/pipeline_parts/memory.py"), "_build_project_memory")
+check("注入层不再硬编码默认项目兜底",
+      _mem_fn is not None and not any("project-satnet-broadband" in s for s in _str_consts(_mem_fn)))
+
+_prj_fn = _find_fn(os.path.join(ROOT, "routers/projects.py"), "get_default_project")
+check("GET /api/projects/default 用空态对象表达「未设置」（不再以 404 混淆「未配置/已删」）",
+      _prj_fn is not None
+      and any("unset" in s for s in _str_consts(_prj_fn))
+      and not any(isinstance(n, ast.Name) and n.id == "JSONResponse" for n in ast.walk(_prj_fn)))
+
+from routers.graph_workspace import _cohort_default_branch
+
+_bc = sqlite3.connect(":memory:")
+_bc.row_factory = sqlite3.Row          # 与 database.get_db() 一致：函数内用 row["col"] 取值
+_bc.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+_bc.execute("CREATE TABLE branches (name TEXT)")
+_bc.executemany("INSERT INTO branches (name) VALUES (?)", [("release",), ("dev",), ("personal",)])
+check("落库分支：settings 行缺失 → 回落 personal", _cohort_default_branch(_bc) == "personal")
+_bc.execute("INSERT OR REPLACE INTO settings (key,value) VALUES ('default_branch','dev/test')")
+check("★ 落库分支指向 branches 表**不存在**的分支 → 回落 personal（实测曾被写成 dev/test）",
+      _cohort_default_branch(_bc) == "personal")
+_bc.execute("UPDATE settings SET value='dev' WHERE key='default_branch'")
+check("落库分支指向真实存在的分支 → 原样采用", _cohort_default_branch(_bc) == "dev")
+_bc.close()
+
+# ─────────────────────────────────────────────────────────────────────────────
 print()
 print("=" * 90)
 print(f"断言汇总：{_n_pass}/{_n_pass + _n_fail} 通过")
 if _n_fail:
     print(f"❌ 失败 {_n_fail} 项")
-print("口径提示：本脚本不依赖 git ref 与服务；[2] 的 count 断言依赖 config 真实值为 count。")
+print("口径提示：本脚本不依赖 git ref 与服务；[2] 的 count 断言依赖 config 真实值为 count；")
+print("          [3][7] 夹具驱动（临时库），不受 settings.default_project_id 当前取值影响。")
 print("=" * 90)
 sys.exit(1 if _n_fail else 0)

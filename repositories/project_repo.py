@@ -51,10 +51,18 @@ class ProjectRepo(BaseRepo):
 
     # ── 默认项目（settings 持久化，前端/后端统一读取）──
     def get_default_project_id(self) -> str:
+        """默认项目 id；**未设置时返回空串** = 「无显式项目关联则不注入项目宪法」。
+
+        2026-09-20：原 default 硬编码 `'project-satnet-broadband'`。两处不妥 ——
+          ① 属领域固化残留（本模块所在的项目域，文档头明示目标是「解除星网领域固化」）；
+          ② 它让「把 default_project_id 置空」在 settings 行缺失时被悄悄推翻，
+             使清理不可持续。故改为空串，与 routers/projects.py::get_default_project
+             的空态返回、agent/pipeline_parts/memory.py 的 `if not pid: return ""` 三者一致。
+        """
         return self.scalar(
             "SELECT value FROM settings WHERE key='default_project_id'",
-            default="project-satnet-broadband",
-        )
+            default="",
+        ) or ""
 
     def set_default_project(self, project_id: str) -> None:
         self.execute(

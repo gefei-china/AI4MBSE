@@ -16,11 +16,22 @@
 读结果时务必分清「回归」与「既知未结项 / 历史数据」
 --------------------------------------------------
   · **F1 禁用词失败 ≠ 编排代码回归**。F1 检的是**上下文污染**（子 Agent 被喂了别领域素材而
-    拒绝产出）。实测 2026-09-19 根因在**配置与库内容**，不在本链路代码：
-      ① `design` agent 的 `kb_scope.branches=["release"]`，而该分支装的是 54 条**演示实体**
-         （巡飞弹体系）→ 与本任务领域无关的素材恒被命中；
-      ② 默认项目宪法（`settings.default_project_id`）无条件注入，其内容是另一领域。
-    这两个是**待产品拍板**的开放项（改范围 or 补库内容），不是能靠改代码"改通"的东西。
+    拒绝产出）。实测 2026-09-19 复核后，根因**全在库内容与项目配置**，不在本链路代码：
+      ① **「AI 建模消费 release 分支」是既定设计，不是缺陷** —— `agent/rag.py` 的
+         `_release_branches()` 注释即需求原文：「AI 建模消费侧默认只查这些分支
+         （需求：默认只消费已发布分支数据）」「避免越权消费 dev 数据」。`kb_scope.branches`
+         只是**显式覆盖**手段。真正的缺陷是 **release 分支里装了谁的数据**：
+         实测 `mbse.db` —— release 的 54 条实体 **100% 属 `project-loitering-demo`**
+         （巡飞弹演示项目，status=active），而 `project-satnet-broadband`（星网宽带通信）
+         在 release 里 **0 条**、且项目本身 status=archived → 建模侧检索 release 只有
+         别领域素材可命中，与本任务无关的实体恒被召回。
+      ② ~~项目宪法恒注入~~ **已于 2026-09-20 清理闭合**：`settings.default_project_id` 置空，
+         链路 4 处硬编码兜底一并去掉（取项目顺序：显式 → settings → **空则完全不注入**）。
+         实证：同一份落库答复（会话 365）用**宪法专属词**复核 → **F1 PASS**
+         （`AMP-001/PWR-001/TS53879/TS53575/TS54010/EIRP/CIA验证` 一个都不出现）；
+         换**release 演示词**复核 → F1 FAIL。**同一内容、两套词、相反结果** → 归因确凿。
+    → **F1 现存唯一根因只剩 ①（release 分支装载的内容）**，属**数据治理**开放项
+      （把正式项目基线发布到 release），不是能靠改编排代码"改通"的东西。
     因此 F1 默认**关闭**（`--forbid` 留空）；显式传入时才检，失败即如实报出并指向上述根因。
   · **C2 在历史会话上失败属正常**：本脚本断言的是**当前契约**。`quality_gate_gaps` 是
     P0-3 新增键，晚于它生成的旧会话卡片必然缺该键 → 用 `--check-only` 复核旧会话会 FAIL。
@@ -399,7 +410,8 @@ def _check_only(base, cid, forbid, cx=None):
         hits = [w for w in forbid if w and w in txt]
         cx.ck("F1 上下文隔离：禁用词未出现", not hits, str(hits))
     if cx.fails and forbid:
-        cx.note("F1 命中≠编排代码回归：根因在 kb_scope.branches / 默认项目宪法（见脚本头部说明）")
+        cx.note("F1 命中≠编排代码回归：唯一根因是 release 分支装载的内容（实测 54/54 属演示项目）；"
+                "项目宪法通道已于 2026-09-20 清理关闭，见脚本头部说明")
     return 0 if not cx.fails else 1
 
 
@@ -468,7 +480,8 @@ def main():
         hits = [w for w in forbid if w in txt]
         cx.ck("F1 上下文隔离：禁用词未出现", not hits, str(hits))
         if hits:
-            cx.note("F1 命中≠编排代码回归：根因在 kb_scope.branches / 默认项目宪法（见脚本头部说明）")
+            cx.note("F1 命中≠编排代码回归：唯一根因是 release 分支装载的内容（实测 54/54 属演示项目）；"
+                "项目宪法通道已于 2026-09-20 清理关闭，见脚本头部说明")
 
     print("\n" + "=" * 90)
     print(f"断言汇总：{len(cx.oks)}/{len(cx.oks) + len(cx.fails)} 通过"

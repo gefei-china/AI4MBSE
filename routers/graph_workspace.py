@@ -362,8 +362,20 @@ def _load_cohort(conn, cohort_id):
 
 
 def _cohort_default_branch(conn):
+    """推理批次并入（approve）时的落库分支：settings.default_branch，**必须校验分支真实存在**。
+
+    2026-09-20：该键实测曾被改成 `dev/test` —— 一个 branches 表里**不存在**的分支
+    （来源：tests/test_api.py 的黑盒 PUT 未还原，updated_at=2026-09-10 09:33:12）。
+    而本函数原先只判空、不判存在 → 并入会把实体写进分支表没有的分支，
+    结果在分支列表 / 图谱 / 各统计里**全部看不到**（只能靠 SQL 捞），且无任何报错。
+    现收紧：值缺失或不在 branches 表中 → 回落 `personal`（写入侧约定的兜底分支，
+    与 agent/pipeline_parts/tools.py 的写入工具默认值一致）。
+    """
     row = conn.execute("SELECT value FROM settings WHERE key='default_branch'").fetchone()
-    return (row["value"] if row and row["value"] else "personal")
+    v = ((row["value"] if row else "") or "").strip()
+    if not v or not conn.execute("SELECT 1 FROM branches WHERE name=?", (v,)).fetchone():
+        return "personal"
+    return v
 
 
 def _existing_ent_type(conn, eid):

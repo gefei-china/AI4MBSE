@@ -1116,8 +1116,25 @@ def main():
          expect_keys=["light_rt", "qps", "online_users", "availability", "error_codes", "topology", "backup"])
 
     # ── 12. Settings ──
+    # ⚠️ 本套测试会起真实服务（run_server）并打在**共享库 mbse.db** 上 —— settings 写入是留痕的。
+    # 2026-09-20：原用例 PUT default_branch='dev/test' 后**从不还原**，库里那枚不存在的分支名
+    # （updated_at=2026-09-10 09:33:12）就是这么留下的；而 graph_workspace._cohort_default_branch
+    # 原先只判空不判存在，据此写入会产生**分支表里没有的孤儿实体**。
+    # 现改为「读原值 → 改 → 还原」：既保留 PUT 覆盖验证，又不污染后续任何一次检索/写入。
+    _orig_default_branch = ""
+    try:
+        _s = httpx.get(BASE + "/api/settings", timeout=10).json()
+        _orig_default_branch = ((_s or {}).get("default_branch") or "") if isinstance(_s, dict) else ""
+    except Exception:
+        _orig_default_branch = ""
     test("Get settings", "GET", "/api/settings")
     test("Update setting", "PUT", "/api/settings/default_branch", body={"value": "dev/test"})
+    if _orig_default_branch:
+        try:
+            httpx.put(BASE + "/api/settings/default_branch",
+                      json={"value": _orig_default_branch}, timeout=10)
+        except Exception:
+            pass
 
     # ── 13. Frontend ──
     r = httpx.get(BASE + "/", timeout=5)
