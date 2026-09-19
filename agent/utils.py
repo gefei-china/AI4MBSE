@@ -100,6 +100,15 @@ def _archive_sysml_version(conn, conversation_id: int, message_id: int,
             "entities": len(nodes), "relations": len(edges),
             "nodes": nodes[:200], "edges": edges[:200], "intent": sysml_views.get("intent", ""),
             "views": len((sysml_views.get("views") or {}))}
+        # P3（集成指南 §2.2 接入点③）：把「生成后本地校验（checker.jar）」摘要随版本链留痕。
+        # 摘要由 cards.py::_check_generated_sysml 产出、挂在 views 的兄弟键 `check`
+        # （与既有 quality_check 同级）。价值：`/api/sysml-versions/{id}` 本来就会
+        # json.loads(element_summary) 返回 → **前端零改动**即可显示「这个版本当时合不合法」。
+        # 字段：rc/verdict(pass|report|block|unavailable)/blocked/n_error/n_syntax/n_semantic/
+        #       n_warn/scope/top(前 5 条诊断)/at。判据只认语法路（n_syntax>0 → blocked）。
+        _chk = sysml_views.get("check")
+        if isinstance(_chk, dict) and _chk:
+            summary["check"] = _chk
         # 相对上版差异（简化：新增节点名；上版不存在则全部为新增）
         diff = {"added_nodes": nodes[:200]}
         if last_id:

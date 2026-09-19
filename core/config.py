@@ -165,6 +165,14 @@ DEFAULT_CONFIG = {
         # 都把实测语法硬约束拼进 system prompt，从源头压掉高频语法/语义错。
         "l0_card_enabled": True,   # False=完全回到改动前行为（A/B 对比与故障回退用）
         "l0_card_extra": "",       # 现场追加约束文本（留空则只用内置卡；不写代码即可补规则）
+        # 2026-09-19（P2）：生成后**本地校验**（checker.jar），实现在 sysml_v2_check.py。
+        # 背景：L0 卡管「预防」（从源头少犯错），本开关管「暴露」——生成完立刻校验，
+        # 把「语法错 / 语义错」两路计数挂到 views["check"]，并随版本链留痕
+        # （element_summary.check），让错误在**入库前**可见（集成指南 §2.2 接入点②/③）。
+        # 判据只认**语法路**：n_syntax>0 → block（待人工）；n_syntax==0 → report（不阻断）。
+        # 铁律：必须分语法/语义两路计数——语法错会遮蔽语义错，ERROR 总数会反向上升。
+        "check_enabled": True,     # False=完全不调校验器（回到改动前行为；也是故障回退开关）
+        "check_timeout": 90,       # 单次校验上限（秒）。实测 4~6 s；同内容命中 hash 短路则零成本
     },
     "chunking": {
         "default_size": 600,         # 默认分块大小（字符，≈500-650 token 中文）

@@ -239,6 +239,39 @@ class CardMixin:
                         hits.append(v)
         return hits if hits else None
 
+    @staticmethod
+    def _check_generated_sysml(code: str) -> dict | None:
+        """P2（集成指南 §2.2 接入点②）：生成后立刻用本地 `checker.jar` 校验 → 留痕摘要。
+
+        为什么在这里：`_gen_sysml_views` 是 **5 个调用点的唯一收敛处**
+        （`stream.py:598/686/1170`、`execute.py:363`、`orchestration.py:239`）——改一处全覆盖，
+        避免「两函数同名并存被静默覆盖」那类事故重演。
+
+        口径：**单产物**（只校验刚生成的这段代码，快且轻）→ 定位是**生成质量反馈**，
+        不是工程门禁（工程门禁用项目级合并口径，见 `sysml_v2_check.check_project`）。
+        单产物口径的跨文件伪错几乎全落在**语义路**，而门禁只认语法路 → 伪错不影响判定。
+
+        判据（只认语法路，理由见 `sysml_v2_check` 模块 docstring 纪律 ①③）：
+          `pass` 放行 / `report` 语义错（**不阻断**，属建模决策）/ `block` 语法错（标记待人工）。
+
+        ⚠️ 本方法**只判错不修复**（集成指南 §5 边界：不自动改写代码）。
+        ⚠️ 任何异常/校验器缺失/超时都降级为 `None` —— **绝不阻断建模主链路**。
+        """
+        try:
+            from core import config as _cfg
+            if not _cfg.get("sysml", "check_enabled", True):
+                return None
+            import sysml_v2_check as _svc
+            r = _svc.check_code(
+                code, timeout=int(_cfg.get("sysml", "check_timeout", 90) or 90))
+            try:
+                print(_svc.line_text(r), flush=True)   # 生成端留一行日志，便于线上排查
+            except Exception:
+                pass
+            return _svc.summarize(r)
+        except Exception:
+            return None
+
     def _gen_sysml_views(self, llm_content, intent=None, user_input: str = ""):
         """LLM 输出含 SysML v2 代码 → 解析并投影与用户诉求匹配的视图 ViewModel；无代码/解析失败返回 None。
 
@@ -249,6 +282,8 @@ class CardMixin:
           3) 其他意图（impact/review/report/requirement_analysis 等）→ 按意图映射输出
              对应视图；意图不在映射内/映射为空（chat/knowledge_qa）→ 不生成。
         P1b-1：生成后自动附加「模型质量三件套」校验（约束/追溯/一致性，对齐 VP 活模型）。
+        P2：生成后追加**本地 checker.jar 校验**（语法/语义双路计数 → views["check"] → 版本留痕），
+            让错误「在入库前暴露」；只挂诊断、不阻断、不自动修复。
         """
         if not llm_content:
             return None
@@ -259,6 +294,8 @@ class CardMixin:
         code = self._extract_sysml_code(llm_content)
         if not code:
             return None
+        # ★ P2：生成后校验（挂诊断；失败/不可用一律降级，不影响下面的视图投影）
+        _chk = self._check_generated_sysml(code)
         try:
             from view_generator import generate_views_from_sysml, INTENT_VIEWS
             # 1) 用户显式指定视图类型 → 优先于一切
@@ -287,9 +324,13 @@ class CardMixin:
                 views = attach_quality_to_views(views, code)
             except Exception:
                 pass
+            # P2：校验摘要挂到 views 的兄弟键（与既有 quality_check 同级；前端只迭代 views.views，零影响）
+            if _chk and isinstance(views, dict):
+                views["check"] = _chk
             return views
         except Exception:
             return None
+
 
     @staticmethod
     def _extract_stream_deltas(chunk):
