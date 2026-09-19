@@ -30,6 +30,46 @@ class RefineGate:
     def _enabled() -> bool:
         return _cfg.as_bool("refine", "enabled", True)
 
+    # ── 2026-09-20：修订环节的四个上限改为**配置驱动**（此前是散在代码里的硬编码）──────
+    # 为什么必须改：`orch_content = _ref.get("content") or orch_content` —— **用户最终看到的
+    # 报告正文就是修订输出**，所以这四处上限才是"报告有多长"的真正决定者。
+    # 会话 369 门禁报「t2/t3 各节内容未展开」即由此而来（修订模型只拿到每个交付物 400 字符、
+    # 待修订报告前 6000 字符，手上没有料可展开）。
+    @staticmethod
+    def _item_chars() -> int:
+        """修订时可引用：**单个**交付物字符数（原硬编码 400）。"""
+        return int(_cfg.get("refine", "item_chars", 1200) or 1200)
+
+    @staticmethod
+    def _items_total_chars() -> int:
+        """修订时可引用：交付物**合计**字符数（原硬编码 2000）。"""
+        return int(_cfg.get("refine", "items_total_chars", 6000) or 6000)
+
+    @staticmethod
+    def _report_in_chars() -> int:
+        """修订时可读：**待修订报告**字符数（原硬编码 6000，且只留头）。"""
+        return int(_cfg.get("refine", "report_in_chars", 12000) or 12000)
+
+    @staticmethod
+    def _max_tokens() -> int:
+        """修订**输出**上限（token，原硬编码 3000）。"""
+        return int(_cfg.get("refine", "max_tokens", 8000) or 8000)
+
+    @staticmethod
+    def _clip(text: str, cap: int) -> str:
+        """与汇总环节共用同一套**头尾采样**（`FlowPlannerMixin._head_tail_clip`）。
+
+        ⚠️ 原实现是 `str(content)[:6000]`（**只留头**）—— 而报告的「总体结论与后续建议」
+        按汇总提示词的要求落在**末尾**，于是修订模型根本看不到结论，自然也保不住它。
+        降级：planner 不可导入时退化为只留头（保持"不抛异常"）。
+        """
+        try:
+            from workflows.planner import FlowPlannerMixin
+            return FlowPlannerMixin._head_tail_clip(text, cap)
+        except Exception:                                  # noqa: BLE001
+            t = str(text or "")
+            return t if (cap <= 0 or len(t) <= cap) else t[:cap]
+
     @staticmethod
     def _partial_note(done_items, agg_status):
         """agg_status=partial 时生成人工复核建议（不自动重派，避免循环；缺口标注缺失交付物）。"""
@@ -73,8 +113,10 @@ class RefineGate:
                     "issues": cls._with_pt([], done_items, agg_status),
                     "advice": "", "llm": None, "degraded": False}
         from workflows.nodes import FlowNodesMixin
+        _ic = cls._item_chars()
         items_txt = "\n".join(
-            f"[{it.get('task_key')}] {it.get('title')}（{it.get('agent_id') or '-'}）\n{(it.get('result') or '')[:400]}"
+            f"[{it.get('task_key')}] {it.get('title')}（{it.get('agent_id') or '-'}）\n"
+            + cls._clip(it.get('result') or '', _ic)
             for it in (done_items or [])[:20])
         content = report
         ev = {"score": 0, "passed": False, "issues": [], "advice": "", "_meta": {}}
@@ -118,16 +160,19 @@ class RefineGate:
             f"原始目标：{str(goal)[:200]}\n\n"
             f"评审意见（issues）：\n{issues}\n\n"
             f"改进建议（advice）：{advice}\n\n"
-            f"可引用交付物：\n{items_txt[:2000]}\n\n"
-            f"待修订报告：\n{str(content)[:6000]}"
+            f"可引用交付物：\n{RefineGate._clip(items_txt, RefineGate._items_total_chars())}\n\n"
+            f"待修订报告：\n{RefineGate._clip(str(content), RefineGate._report_in_chars())}"
         )
         try:
             # 2026-09-17 S4：修订环节加输出上限 —— 实测 plan_refine 平均 completion 7,736，
             # 是全流程最贵的输出。上限取 3000（而非 1500）：本环节产出的是**用户可见的报告正文**，
             # 而采纳判定很宽（下方 `len(text.strip()) > 40` 即采纳），截断文本会被当成正常结果。
             # 3000 相比均值仍省 60%+，需要更省时再下调。
+            # 2026-09-20：改为 `refine.max_tokens`（默认 **8000**，对齐当前默认 provider 天花板 8192）。
+            # 判据（会话 369）：门禁报「报告在末尾被截断」= 输出被切 → 上调本项；
+            # 报「交付物/某节未展开」= **输入**没料 → 上调 item_chars / items_total_chars / report_in_chars。
             resp = llm_client.chat([{"role": "user", "content": prompt}], provider_id=provider_id,
-                                   max_tokens=3000, _intent="plan_refine")
+                                   max_tokens=RefineGate._max_tokens(), _intent="plan_refine")
             text = ((resp.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "") or ""
             if text and len(text.strip()) > 40:
                 return text.strip()

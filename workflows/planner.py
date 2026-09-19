@@ -44,14 +44,58 @@ def build_subtask_context(tk: dict, goal: str, done_items: list = None) -> str:
 class FlowPlannerMixin:
     """FlowExecutor 编排规划器拆分（解耦拆分：原 workflows.py 单体类方法）。"""
 
+    @staticmethod
+    def _summarize_item_budget(n_items: int) -> int:
+        """汇总输入：**单项**字符预算（本轮总预算按子任务数均分，夹在 floor 与 item 上限之间）。
+
+        2026-09-20 新增。此前 `_summarize_plan` 把每个子任务交付物硬编码截到 **500 字符**，
+        而实测交付物 1,260 / 4,000 / 4,000 字符 → 丢弃率 60.3% / 87.5% / 87.5%，
+        质量评审据此如实报「交付物不完整」（会话 368）。改为预算化后：
+          ① 与配置解耦（`delegation.summary_*`）；② 子任务变多时不会"每个都看不清"；
+          ③ `summary_item_max_chars <= 0` = 不限长（整份交付物进汇总，供大上下文模型）。
+        """
+        from core import config as _cfg
+        try:
+            item_max = int(_cfg.get("delegation", "summary_item_max_chars", 1600) or 1600)
+            total = int(_cfg.get("delegation", "summary_total_chars", 12000) or 12000)
+            floor = int(_cfg.get("delegation", "summary_floor_chars", 600) or 600)
+        except Exception:
+            item_max, total, floor = 1600, 12000, 600
+        if item_max <= 0:
+            return 0                      # 不限长
+        if total <= 0:
+            return item_max
+        n = max(int(n_items or 1), 1)
+        return max(floor, min(item_max, total // n))
+
+    @staticmethod
+    def _head_tail_clip(text: str, cap: int) -> str:
+        """头尾采样：cap<=0 原样返回；超限保留**头 60% + 尾 40%**（中间标注已省略）。
+
+        为什么不是"只留头"（`_truncate_budget(keep_head=True)` 的语义）：交付物的
+        「结论 / 方案对比 / 风险与待确认」在**尾部**，只留头会把结论整段丢掉 —— 会话 368
+        的门禁缺口正是这一形态（t2 可见文本止于「给出三个方案」，三个方案的内容与选择结论全丢）。
+        """
+        t = str(text or "")
+        if cap <= 0 or len(t) <= cap:
+            return t
+        mark = "\n…（中间省略，已按头尾采样保留结论）…\n"
+        head = int(cap * 0.6)
+        tail = cap - head
+        if tail <= 0:
+            return t[:cap] + "\n…（超预算已裁剪）"
+        return t[:head] + mark + t[-tail:]
+
     def _summarize_plan(self, done_items: list, plan: list, provider_id=None) -> str:
         """P1-1 计划总结节点：多个子任务交付物 → LLM 结构化整合；LLM 不可用/失败 → 拼接降级。"""
         if len(done_items) < 2:
             return ""
+        _cap = self._summarize_item_budget(len(done_items))
         try:
             from llm import llm_client
             items_txt = "\n".join(
-                f"[{it.get('task_key')}] {it.get('title')}（{it.get('agent_id') or '-'}）\n{(it.get('result') or '')[:500]}"
+                f"[{it.get('task_key')}] {it.get('title')}（{it.get('agent_id') or '-'}）\n"
+                + self._head_tail_clip(it.get('result') or '', _cap)
                 for it in done_items)
             prompt = (
                 "你是 MBSE 团队任务汇总专家。将以下多个已完成子任务的交付物整合成一份结构化最终报告："
@@ -64,8 +108,16 @@ class FlowPlannerMixin:
             # **用户可见的最终报告**，而采纳判定很宽（下方 `len(content) > 80` 即采纳），
             # 截断后的短文本会被当成正常结果 —— 宁可少省一点也不要把报告砍半。
             # 3000 相比均值 7,470 仍省 60%+，需要更省时按 `refine/planner` 场景再下调。
+            # 2026-09-20：改为可配置（`delegation.summary_max_tokens`，**默认仍 3000 = 不改行为**）。
+            # 判据：若质量评审报「报告在结论前中断」，先升它；若报「交付物不完整」则是**输入**被切
+            # （见 `_summarize_item_budget` / `_head_tail_clip`）——两者症状相似、修法不同，别混改。
+            try:
+                from core import config as _cfg2
+                _mt = int(_cfg2.get("delegation", "summary_max_tokens", 3000) or 3000)
+            except Exception:
+                _mt = 3000
             resp = llm_client.chat([{"role": "user", "content": prompt}],
-                                   provider_id=provider_id, max_tokens=3000, _intent="plan_summary")
+                                   provider_id=provider_id, max_tokens=_mt, _intent="plan_summary")
             content = ((resp.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "")
             if content and len(content) > 80:
                 return content.strip()
@@ -276,6 +328,13 @@ class FlowPlannerMixin:
                 "degraded": bool(_ref.get("degraded", False)),
             }
             content = _ref.get("content") or content
+        # 2026-09-20：与**流式**编排对齐——汇总/反思都可能丢掉子任务交付的 V2 代码，而
+        # `_finish_orchestrated` 只投影视图、不做补回（此前非流式路径因此可能整体交不出模型）。
+        # 放在反思之后：反思若改写了正文，这里再把代码补回。
+        try:
+            content = AgentPipeline._ensure_sysml_blocks(content, done_items)
+        except Exception:
+            pass
         prefix = (f"Planner 计划 {summ['total']} 个子任务，完成 {len(done_items)}，失败/阻塞 {len(fail_items)}。\n"
                   + (("警告：" + "；".join(warnings) + "\n") if warnings else ""))
         return {

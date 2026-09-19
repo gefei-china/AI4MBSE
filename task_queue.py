@@ -83,12 +83,29 @@ class TaskQueue:
             (task_id,))
 
     @staticmethod
+    def _result_keep_chars() -> int:
+        """子任务结果落库保留上限（字符）。2026-09-20 由硬编码 4000 改为可配置。
+
+        原硬编码 4000 会把超过 4,000 字符的交付物**静默截尾**（会话 368 实测 t2/t3 恰好卡在
+        4000 = 被截断），而汇总环节还会再切一刀 → 两层截断叠加，交付物在报告里"整体缺结论"。
+        保留上限本身仍有必要（防单行结果撑爆库），故只做「配置化 + 抬高默认」，不去掉。
+        """
+        from core import config as _cfg
+        try:
+            v = int(_cfg.get("delegation", "subtask_result_keep_chars", 20000) or 20000)
+        except Exception:
+            v = 20000
+        return v if v > 0 else 0        # <=0 = 不限长
+
+    @staticmethod
     def complete(conn, task_id: int, result: str = "", metadata: dict | None = None,
                  latency_ms: int = 0) -> None:
         """完成任务 + 结构化 handoff metadata（summary/artifacts/score）。"""
+        _keep = TaskQueue._result_keep_chars()
+        _res = result if _keep <= 0 else result[:_keep]
         conn.execute(
             "UPDATE agent_tasks SET status='done', result=?, metadata=?, latency_ms=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (result[:4000], json.dumps(metadata or {}, ensure_ascii=False), latency_ms, task_id))
+            (_res, json.dumps(metadata or {}, ensure_ascii=False), latency_ms, task_id))
         conn.commit()
 
     @staticmethod

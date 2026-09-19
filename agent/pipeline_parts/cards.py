@@ -162,15 +162,30 @@ class CardMixin:
             return orch_content or ""
         if cls._extract_sysml_code(orch_content or ""):
             return orch_content or ""
-        blocks = []
+        cands = []
         for it in source_items:
             res = (it.get("result") or "").strip()
             code = cls._extract_sysml_code(res) if res else None
             if code:
-                blocks.append(f"```sysml\n{code}\n```")
-        if blocks:
-            return (orch_content or "") + "\n\n（附：设计模型 SysML v2 代码）\n\n" + "\n\n".join(blocks)
-        return orch_content or ""
+                cands.append((it.get("task_key") or "", it.get("agent_id") or "", code))
+        if not cands:
+            return orch_content or ""
+        # 2026-09-20（实测 run 367）：多子任务各自产码时，把**所有**片段拼成一份交付物会得到一个
+        # 「拼装体」——t2 的 335 行模型 + t3/t4 各自的片段拼在一起，单产物校验报 59 条错
+        # （14 条硬错来自 t2，其余来自拼接错位），视图树也成了三份模型的混合（82 节点）。
+        # 交付物必须对应**一份可校验的模型** → 默认只取代码最长的一份（通常即主设计交付物），
+        # 并把来源子任务写进附录标题；`sysml.deliver_pick='all'` 可退回旧的全拼接行为。
+        _pick = "longest"
+        try:
+            from core import config as _cfg
+            _pick = str(_cfg.get("sysml", "deliver_pick", "longest") or "longest").strip().lower()
+        except Exception:
+            _pick = "longest"
+        picked = cands if _pick == "all" else [max(cands, key=lambda x: len(x[2]))]
+        _src = "、".join(f"{k}（{a}）" for k, a, _ in picked if k)
+        _title = "（附：设计模型 SysML v2 代码" + (f"｜来源子任务 {_src}" if _src else "") + "）"
+        return ((orch_content or "") + "\n\n" + _title + "\n\n"
+                + "\n\n".join(f"```sysml\n{c}\n```" for _, _, c in picked))
 
     def _extract_view_types(self, user_input: str) -> list | None:
         """从用户输入抽取视图类型（BDD/IBD/PKG/PAR/REQ/UC/ACT/SEQ/STM/TRACE/视图）。
@@ -240,6 +255,22 @@ class CardMixin:
         return hits if hits else None
 
     @staticmethod
+    def _code_has_structure(code: str) -> bool:
+        """代码事实判据：这段 SysML v2 里是否真的定义了结构元素。
+
+        为什么按「代码事实」而不按关键词：`_infer_view_types` 是纯关键词匹配，实测
+        「先分析电动汽车热管理系统需求，再生成 SysML V2 模型代码并进行校验」只命中
+        「需求」→ 只投影 REQ/TRACE，而交付代码里 20 个 `part def` / 27 个 `connect`
+        一个结构视图都没出（2026-09-19 conv 369 实测）。
+        关键词漏判不该让结构视图一起消失 —— 投影应服从模型里实际存在的东西。
+        """
+        if not code:
+            return False
+        return bool(re.search(
+            r"\b(?:part|interface|port|item|occurrence|attribute)\s+def\b"
+            r"|\bconnect\b|\ballocate\b|\bbind\b", str(code), re.I))
+
+    @staticmethod
     def _check_generated_sysml(code: str) -> dict | None:
         """P2（集成指南 §2.2 接入点②）：生成后立刻用本地 `checker.jar` 校验 → 留痕摘要。
 
@@ -272,6 +303,28 @@ class CardMixin:
         except Exception:
             return None
 
+    def _ensure_sysml_from_tools(self, content):
+        """单 Agent 路径兜底：正文无 V2 代码、但本轮调过 sysml_v2_validate 时，把那段代码补回正文。
+
+        2026-09-20：`sysml_v2_validate` 让 LLM 学会「先校验再交付」，代码因此从**回答正文**
+        迁移到**工具参数**，而交付通道只认正文 → 模型越规范越交付不出来（复盘缺陷④）。
+        补救：工具层已缓存最近一次校验过的代码（`tools.py` 的 sysml_v2_ 分派），此处补成代码块。
+        幂等：正文已含可提取代码时原样返回。
+        """
+        try:
+            if not content:
+                return content
+            if self._extract_sysml_code(content):
+                return content
+            code = (getattr(self, "_sysml_last_pass_code", None)
+                    or getattr(self, "_sysml_last_checked_code", None))
+            if not code or not str(code).strip():
+                return content
+            return (content + "\n\n（附：本轮已校验的 SysML v2 模型代码）\n\n```sysml\n"
+                    + str(code).strip() + "\n```")
+        except Exception:
+            return content
+
     def _gen_sysml_views(self, llm_content, intent=None, user_input: str = ""):
         """LLM 输出含 SysML v2 代码 → 解析并投影与用户诉求匹配的视图 ViewModel；无代码/解析失败返回 None。
 
@@ -293,6 +346,11 @@ class CardMixin:
             return None
         code = self._extract_sysml_code(llm_content)
         if not code:
+            # 2026-09-20：正文里没有 V2 代码时，取工具层缓存（LLM 把代码只放进
+            # sysml_v2_validate 的 code 参数的情形，见 tools.py 的缓存注释）。
+            code = (getattr(self, "_sysml_last_pass_code", None)
+                    or getattr(self, "_sysml_last_checked_code", None))
+        if not code:
             return None
         # ★ P2：生成后校验（挂诊断；失败/不可用一律降级，不影响下面的视图投影）
         _chk = self._check_generated_sysml(code)
@@ -309,6 +367,12 @@ class CardMixin:
                 # 对 None 兜底回退到 intent 固定映射，产生无诉求的视图噪音）
                 if not view_types:
                     view_types = ["BDD", "IBD"]  # 问题3:识别不到视角时兜底默认结构视图,保证「代码/视图」切换可生成
+                # 2026-09-19 conv 369：**部分命中**同样要看代码 —— 只命中「需求」时不该让结构视图消失。
+                # 判据取「模型里确有结构元素」（代码事实），而非再加关键词：关键词必然有漏判，
+                # 而 `part def`/`connect` 是模型事实。仅在**缺结构类视图且有结构元素**时补，不做无条件兜底。
+                elif (not ({"BDD", "PKG", "IBD"} & set(view_types))
+                      and self._code_has_structure(code)):
+                    view_types = list(view_types) + ["BDD", "IBD"]
             # 3) 其他意图：按意图映射（chat/knowledge_qa 等映射为空 → 不生成视图）
             elif intent is not None:
                 mapped = INTENT_VIEWS.get(intent)

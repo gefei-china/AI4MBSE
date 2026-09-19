@@ -88,7 +88,42 @@ class PromptMixin:
         except Exception:
             return ""
 
-    def _build_model_code_req(self, intent: str) -> str:
+    @staticmethod
+    def _is_v2_code_agent(agent_def) -> bool:
+        """该 Agent 是否「产出/处理 SysML v2 代码」。
+
+        2026-09-20 新增。**单一事实来源 = `agent_tools` 是否绑定 `sysml_v2_validate`**：
+        该绑定由 register_sysml_check_tools.py 的「显式名单 + 规则发现」在**服务启动时**幂等写入，
+        规则是「active 且 system_prompt 含 SysML 且含『代码』」⇒ 谁产码，谁就同时拿到
+        「本地校验工具」与「L0 硬约束卡」，两者不会漂移。
+        为什么不用 prompt 直判：chat / knowledge_qa 的 prompt 里也出现「SysML」「代码」
+        （它们是**路由/问答**措辞：「SysML v2建模与代码生成 → MBSE模型设计专家」），
+        直判会把 1473 token 的 L0 卡撒给通用闲聊（实测副作用，已回退）。
+        新建的建模 Agent 在下次服务启动时自动被规则发现并绑定，故无需改任何代码。
+        查不到（未绑定 / DB 不可用）→ False，回到改动前行为。
+        """
+        name = ""
+        if isinstance(agent_def, dict):
+            name = str(agent_def.get("name") or "")
+        else:
+            name = str(getattr(agent_def, "name", "") or "")
+        if not name:
+            return False
+        try:
+            from database import get_db
+            conn = get_db()
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM agent_tools at JOIN agents a ON a.id=at.agent_id "
+                    "WHERE a.name=? AND at.tool_name='sysml_v2_validate' AND at.enabled=1",
+                    (name,)).fetchone()
+                return bool(row)
+            finally:
+                conn.close()
+        except Exception:
+            return False
+
+    def _build_model_code_req(self, intent: str, agent_def=None) -> str:
         """建模类意图：要求 LLM 在正文末尾输出完整 SysML v2 (KerML) 模型代码块，
         供自动投影 BDD/IBD/REQ 等视图与前端「代码/视图」切换查看（问题3修复）。
 
@@ -98,11 +133,19 @@ class PromptMixin:
         唯一共用注入点**（stream.py / execute.py 同调），改一处即两条路径同时生效。
         开关：core/config.py → sysml.l0_card_enabled / sysml.l0_card_extra。
         """
-        if not intent:
+        if not intent and not self._is_v2_code_agent(agent_def):
             return ""
         if intent in ("design", "requirement_analysis", "impact", "review"):
             pass
         elif "建模" in str(intent) or "sysml" in str(intent).lower():
+            pass
+        elif self._is_v2_code_agent(agent_def):
+            # 2026-09-20：编排会把「生成 V2 模型代码」派给**视图生成类 Agent**（实测 run 367
+            # 派给「结构视图生成」），而这些名字里没有 design/sysml/建模 字样 → 此前整段 L0 卡
+            # 漏注入，模型直接带着 14 条语法错交付。改为按 Agent **能力**判定 —— 判据是
+            # `_is_v2_code_agent`（**查 `agent_tools` 是否绑定 `sysml_v2_validate`**），
+            # 与 register_sysml_check_tools 的绑定规则同源；**不是**用 prompt 文本直判
+            # （prompt 直判会把 L0 卡撒给 chat/knowledge_qa，实测副作用已回退）。
             pass
         else:
             return ""

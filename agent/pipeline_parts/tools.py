@@ -528,6 +528,16 @@ class ToolMixin:
             if name.startswith("sysml_v2_"):
                 from sysml_check_tools import exec_tool as _exec_sysml_check
                 result = _exec_sysml_check(name, arguments or {})
+                # 2026-09-20：缓存「最近一次校验过的代码」。LLM 学会「先校验再交付」后，代码会
+                # 出现在**工具参数**里而回答正文只剩结论（复盘缺陷④）——交付通道（视图投影 /
+                # 版本留痕 / 编排补回）只认正文，于是模型越规范越交付不出来。
+                # 这里挂到管线实例上，由 cards._ensure_sysml_from_tools / _gen_sysml_views 兜底取回。
+                # 优先取 verdict=pass 的那份（= 修好之后的最终模型）。
+                _code = (arguments or {}).get("code")
+                if isinstance(_code, str) and _code.strip():
+                    self._sysml_last_checked_code = _code
+                    if result.get("verdict") == "pass":
+                        self._sysml_last_pass_code = _code
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
             # 内置工具 handler

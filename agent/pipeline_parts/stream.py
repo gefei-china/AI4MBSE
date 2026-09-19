@@ -541,7 +541,14 @@ class StreamMixin:
                         if _rks:
                             _sec += "\n风险/待确认：" + "；".join(
                                 f"[{r.get('level')}]{r.get('title')}" for r in _rks[:5])
-                        _mit = dict(_it); _mit["result"] = _sec
+                        # 2026-09-19 conv 370 实测：原实现**用摘要替换**完整交付物 → 汇总只看到
+                        # ~250 字符/子任务（`plan_summary` 实测输入仅 1,072 tokens，而 t1/t2/t3
+                        # 交付物原文合计 12,998 字符）→ 报告只能如实写「交付物在约束条件处截断」。
+                        # 摘要是**结构化索引**（状态/风险/证据/交付物清单），不该取代交付物正文 ——
+                        # 改为「摘要 + 完整交付物」，超长由 `_head_tail_clip` 按预算统一头尾采样。
+                        _body = str(_it.get("result") or "").strip()
+                        _mit = dict(_it)
+                        _mit["result"] = (_sec + ("\n\n【完整交付物】\n" + _body if _body else ""))
                         _sum_items.append(_mit)
                     else:
                         _sum_items.append(_it)  # 兼容旧数据：回退原 result 文本
@@ -583,7 +590,27 @@ class StreamMixin:
                         f"## {it.get('title')}\n{(it.get('result') or '').strip()}" for it in done_items) \
                         or "（计划已执行，但无成功交付物）"
             except Exception:
-                orch_content = "\n\n".join(f"## {it.get('title')}\n{(it.get('result') or '')[:400]}" for it in done_items)
+                # 汇总不可用（异常）→ 拼接降级。2026-09-20：原硬编码 `[:400]` 会把每个交付物
+                # 砍到 **400 字符**（比正常路径的 500 还狠），与"交付物必须带结论"直接冲突。
+                # 改为复用正常路径同一套预算（`_summarize_item_budget` + 头尾采样），
+                # 保证「LLM 汇总失败」这条降级路的交付质量不塌方。
+                try:
+                    from workflows.planner import FlowPlannerMixin as _FPM
+                    _fb_cap = _FPM._summarize_item_budget(len(done_items))
+                    _fb_clip = _FPM._head_tail_clip
+                except Exception:
+                    _fb_cap, _fb_clip = 1600, None
+                if _fb_clip:
+                    orch_content = "\n\n".join(
+                        f"## {it.get('title')}\n{_fb_clip(it.get('result') or '', _fb_cap)}"
+                        for it in done_items)
+                else:
+                    # 仅当 `workflows.planner` 整体不可导入（近乎不可达）时走到这里。
+                    # 仍复用同一预算值，**不留任何独立的硬编码小上限**（原先此处是 `[:400]`，
+                    # 比正常路径 500 还狠 —— 留着就会成为下一轮"交付物缺结论"的隐患源）。
+                    _fbc = _fb_cap if _fb_cap > 0 else 10 ** 9
+                    orch_content = "\n\n".join(
+                        f"## {it.get('title')}\n{(it.get('result') or '')[:_fbc]}" for it in done_items)
             # Task 7：预算受限 → 汇总内容标注 partial（前端可识别「部分子任务未执行」）
             if budget_hit:
                 orch_content += "\n\n（因预算限制部分子任务未执行）"
@@ -1082,7 +1109,7 @@ class StreamMixin:
                 + f"{self._team_roster_block(agent_def)}"
                 + f"{self._build_prompt_template(intent, user_input, user)}"
             # 问题3：建模类意图强制输出 SysML v2 代码块，供投影视图与控制流/数据流视图「代码/视图」切换
-            + f"{self._build_model_code_req(intent)}"
+            + f"{self._build_model_code_req(intent, agent_def)}"
                 + f"{self._build_ontology_hint()}"
                 + f"{self._build_boundary_hint()}"
                 # P0-3：长期记忆注入（跨会话经验，仅供对齐）
@@ -1263,6 +1290,13 @@ class StreamMixin:
                 "tokens": {"prompt": st.get("last_prompt_tokens", 0),
                            "completion": st.get("last_completion_tokens", 0)},
             }
+            # 2026-09-20：正文无代码时用工具层缓存补回，并**增量补吐**（补回内容是事后拼接的，
+            # 不补吐则前端只看到结论、代码要等 done 重渲染才出现）。
+            _pre_sysml_len = len(llm_content)
+            llm_content = self._ensure_sysml_from_tools(llm_content)
+            if len(llm_content) > _pre_sysml_len:
+                for _chunk in iter_stream_chunks(llm_content[_pre_sysml_len:]):
+                    yield {"type": "token", "delta": _chunk}
             # SysML v2 视图联动：LLM 输出含 SysML 代码 → 解析并投影各视图 ViewModel（会话内即时预览，不落库）
             sysml_views = self._gen_sysml_views(llm_content, intent, user_input)
             yield {"type": "stage", "name": "生成与校验", "status": "done"}

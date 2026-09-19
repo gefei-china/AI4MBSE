@@ -23,7 +23,9 @@
     [6] 行为等价（只增不改）：关掉校验 or 令 `_check_generated_sysml` 返回 None →
         产物剔除 `check` 键后与开启时**逐字节一致**。
         可选 `--base <git-ref>`：拿该 ref 的 cards.py 做 **AST 级**比对，
-        证明新函数 = 旧函数 + **2 条语句**（多写者环境下这是最强的「只增不改」证据）。
+        证明新函数 = 旧函数 + **两笔纯增量**（P2 校验注入 2 条 + 缺陷④「生成物落地」补丁 2 条）。
+        两笔**分开计数**（`_count_injected` / `_count_v2cache`）——多写者环境下这是最强的
+        「只增不改」证据，且第三笔改动一旦出现，对拍失败的同时计数会直接指向它。
     [7] 入库留痕：`_archive_sysml_version` 把 check 写进 element_summary
         （全程未提交事务，验完 ROLLBACK，库里零残留）。
 
@@ -31,10 +33,11 @@
       <venv>/python.exe -X utf8 tools/verify/verify_sysml_check_gate.py --base 5466ea6
 
 ⚠️ 通过数口径（报数必须带参数）：
-      · **裸跑 → 100/100**：第 [6b] 段的 3 项 AST 级对拍**需要基线 ref，缺 ref 自动跳过**；
-      · **带 `--base <ref>` → 103/103**：3 项补上。
+      · **裸跑 → 100/100**：第 [6b] 段的 5 项 AST 级对拍**需要基线 ref，缺 ref 自动跳过**；
+      · **带 `--base <ref>` → 105/105**：5 项补上（2026-09-20 由 3 项增至 5 项）。
     两个数都不是回归，只是段数不同。脚本末尾会自己打印当前口径。
-    （历史：三路化前为 81 / 84；[2b] 段与三路断言使总数升至 100 / 103。）
+    （历史：三路化前为 81 / 84；[2b] 段与三路断言使其升至 100 / 103；
+      2026-09-20 [6b] 增至 5 项 → 100 / **105**。）
 """
 import ast
 import json
@@ -134,8 +137,41 @@ def _is_injected_stmt(s):
     return False
 
 
-def _func_norm(src, name, drop_injected=False):
-    """取函数 AST（去 docstring）；`drop_injected=True` 时深度剔除 P2 注入的语句。
+def _is_v2cache_stmt(s):
+    """「生成物落地」补丁的两条语句之一？（2026-09-19 复盘缺陷④）
+
+    形态：`if not code: code = getattr(self, '_sysml_last_pass_code', None) or
+           getattr(self, '_sysml_last_checked_code', None)`
+
+    背景：`sysml_v2_validate` 让 LLM 学会"先校验再交付"后，代码从**回答正文**迁移到**工具参数**，
+    而落库通道只认正文 → `_gen_sysml_views` 抽不到代码（缺陷④）。修法是把工具层缓存的
+    "最近一次 verdict=pass 的 code" 作为兜底来源。
+
+    ⚠️ **为什么要单独一个识别器**：`[6b]` 的对拍基线 `5466ea6` 早于**两笔**纯增量改动
+    （P2 校验注入 + 本补丁）→ 只剔除 P2 那 2 条时，AST 必然不相等（实测报 1 条 FAIL）。
+    两笔都是**纯增量**，故一并在对拍中剔除；但**必须分别计数**，否则「只增不改」这句话
+    就失去了可审计性（哪天有人再塞第三处改动，对拍会失败，而计数会让你立刻看出是谁）。
+    """
+    return "_sysml_last_pass_code" in ast.dump(s)
+
+
+def _count_v2cache(src, name):
+    fn = _func_norm(src, name)
+    if fn is None:
+        return -1
+    n = 0
+    for parent in ast.walk(fn):
+        for _f, val in ast.iter_fields(parent):
+            if isinstance(val, list):
+                n += sum(1 for x in val if isinstance(x, ast.stmt) and _is_v2cache_stmt(x))
+    return n
+
+
+def _func_norm(src, name, drop_injected=False, drop_v2cache=False):
+    """取函数 AST（去 docstring）；可选择性**深度**剔除纯增量补丁语句。
+
+    `drop_injected=True` → 剔除 P2 校验注入的 2 条语句；
+    `drop_v2cache=True`  → 再剔除缺陷④「生成物落地」补丁的 2 条语句（见 `_is_v2cache_stmt`）。
 
     `ast.dump` 默认不带行号，所以这是**结构级**等价判定（行号漂移不影响结论）。
     """
@@ -146,12 +182,18 @@ def _func_norm(src, name, drop_injected=False):
             if b and isinstance(b[0], ast.Expr) and isinstance(getattr(b[0], "value", None), ast.Constant) \
                     and isinstance(b[0].value.value, str):
                 fn.body = b[1:]                              # 去 docstring（两版文案不同）
-            if drop_injected:
+            if drop_injected or drop_v2cache:
+                def _keep(x):
+                    if drop_injected and _is_injected_stmt(x):
+                        return False
+                    if drop_v2cache and _is_v2cache_stmt(x):
+                        return False
+                    return True
                 # 先快照父节点再做删改，避免边遍历边改列表导致漏项
                 for parent in list(ast.walk(fn)):
                     for _f, val in list(ast.iter_fields(parent)):
                         if isinstance(val, list) and val and all(isinstance(x, ast.stmt) for x in val):
-                            val[:] = [x for x in val if not _is_injected_stmt(x)]
+                            val[:] = [x for x in val if _keep(x)]
             return fn
     return None
 
@@ -171,7 +213,7 @@ def _count_injected(src, name):
 def main():
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default="", help="P2 改动前的 git ref（做 AST 级「只增不改」比对）")
+    ap.add_argument("--base", default="", help="改动前的 git ref（做 AST 级「只增不改」比对；需早于 P2 校验注入与缺陷④落地补丁）")
     args = ap.parse_args()
 
     import sysml_v2_check as svc
@@ -382,7 +424,7 @@ def main():
     check("源码级注入面 = 正好 2 条语句（1 条赋值 + 1 条 if，深度匹配）", n_inj == 2, f"n_injected={n_inj}")
 
     if args.base:
-        hr(f"[6b] AST 级比对：{args.base} 的 cards.py vs 当前（证明『新 = 旧 + 2 条语句』）")
+        hr(f"[6b] AST 级比对：{args.base} 的 cards.py vs 当前（证明『新 = 旧 + 两笔纯增量』）")
         try:
             old_src = subprocess.run(["git", "-C", ROOT, "show", f"{args.base}:agent/pipeline_parts/cards.py"],
                                      capture_output=True, timeout=60).stdout.decode("utf-8", "replace")
@@ -390,8 +432,17 @@ def main():
             check("取到基线的 _gen_sysml_views", old_fn is not None, args.base)
             if old_fn is not None:
                 check("基线版注入面 = 0（确认该 ref 是 P2 改动前）", _count_injected(old_src, "_gen_sysml_views") == 0)
-                new_kept = _func_norm(cur_src, "_gen_sysml_views", drop_injected=True)
-                check("★ 剔除这 2 条语句后，新函数 AST == 旧函数 AST（只增不改，硬证据）",
+                # 2026-09-20：该 ref 早于**两笔**纯增量改动 ——
+                #   ① P2 校验注入（2 条语句）② 缺陷④「生成物落地」补丁（工具缓存兜底）。
+                # 只剔 ① 时 AST 必不相等（实测 1 条 FAIL）→ 两笔一起剔，但**分开计数**：
+                # 这样「只增不改」仍可审计 —— 哪天出现第三笔改动，对拍失败而计数立刻指向它。
+                n_cur_inj = _count_injected(cur_src, "_gen_sysml_views")
+                n_cur_cache = _count_v2cache(cur_src, "_gen_sysml_views")
+                check("当前版 P2 校验注入面 = 2 条语句", n_cur_inj == 2, f"n={n_cur_inj}")
+                check("当前版生成物落地补丁面 = 2（if + 其内赋值，深度计数；与 P2 分开）",
+                      n_cur_cache == 2, f"n={n_cur_cache}")
+                new_kept = _func_norm(cur_src, "_gen_sysml_views", drop_injected=True, drop_v2cache=True)
+                check("★ 剔除这两笔纯增量（P2 2 条 + 落地补丁 2 条）后，新函数 AST == 旧函数 AST（只增不改，硬证据）",
                       ast.dump(new_kept) == ast.dump(old_fn))
         except Exception as exc:                                  # noqa: BLE001
             check("AST 比对可执行", False, f"{type(exc).__name__}: {exc}")
@@ -443,14 +494,18 @@ def main():
 
     # ── 汇总 ──
     total = len(_oks) + len(_fails)
+    # 2026-09-20：[6b] 由 3 项增至 **5 项**（新增「P2 注入面 = 2」「落地补丁面 = 2」两条**分开计数**的
+    # 可审计断言）。这两个数字随段内断言增减而变，故**动态取**、不写死 —— 写死必然再次漂移。
+    _N_6B = 5
     print("\n" + "=" * 90)
     print(f"断言汇总：{len(_oks)}/{total} 通过")
     if not args.base:
-        print(f"口径提示：当前**未带 --base**，[6b] 的 3 项 AST 级「只增不改」对拍已跳过"
+        print(f"口径提示：当前**未带 --base**，[6b] 的 {_N_6B} 项 AST 级「只增不改」对拍已跳过"
               f"（总数 {total}，全绿即正常，不是回归）。")
-        print(f"          要拿满 {total + 3} 项，请：--base <P2 改动前的 git ref>（例如 5466ea6）。")
+        print(f"          要拿满 {total + _N_6B} 项，请：--base <改动前的 git ref>（例如 5466ea6；"
+              f"该 ref 需早于 P2 校验注入与缺陷④落地补丁两笔改动）。")
     else:
-        print(f"口径提示：带 --base {args.base}，[6b] 3 项已执行（总数 {total}）。")
+        print(f"口径提示：带 --base {args.base}，[6b] {_N_6B} 项已执行（总数 {total}）。")
     if _fails:
         print("失败项：")
         for f in _fails:

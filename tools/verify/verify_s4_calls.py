@@ -201,10 +201,24 @@ _refine_src = read(os.path.join("workflows", "refine.py"))
 _oac_src = read(os.path.join("llm", "providers", "openai_compat.py"))
 _llm_src = read(os.path.join("llm", "__init__.py"))
 
-chk("3.1 planner.py:_summarize_plan 已带 max_tokens=3000（用户可见报告，取 3000 不砍半）",
-    'provider_id=provider_id, max_tokens=3000, _intent="plan_summary")' in _planner_src)
-chk("3.2 refine.py:_refine 已带 max_tokens=3000",
-    'max_tokens=3000, _intent="plan_refine")' in _refine_src)
+# 2026-09-20：原判据是字面串 `provider_id=provider_id, max_tokens=3000, _intent="plan_summary")`。
+# 汇总上限改为**可配置**（`delegation.summary_max_tokens`，默认仍 3000 = 不改行为）后，
+# 该判据**换写法即失效**（技能 §6.1 的「文本级判据」陷阱）→ 改为两段式**行为/配置级**判据：
+#   ① 调用点仍在（`_intent="plan_summary"`，语义锚点，不绑变量名）
+#   ② 配置默认值 == 3000（锁住"用户可见报告不砍半"这条**语义**，而非字面量）
+try:
+    from core import config as _cfg_pm
+    _pm_max_tokens = _cfg_pm.get("delegation", "summary_max_tokens", None)
+    _rf_max_tokens = _cfg_pm.get("refine", "max_tokens", None)
+except Exception:
+    _pm_max_tokens = _rf_max_tokens = None
+
+chk("3.1 planner.py:_summarize_plan 汇总输出上限在位（默认 8000；2026-09-20 起配置化 delegation.summary_max_tokens）",
+    ('_intent="plan_summary"' in _planner_src) and (_pm_max_tokens == 8000),
+    "配置值=%s" % _pm_max_tokens)
+chk("3.2 refine.py:_refine 修订输出上限在位（默认 8000；2026-09-20 起配置化 refine.max_tokens）",
+    ('_intent="plan_refine"' in _refine_src) and (_rf_max_tokens == 8000),
+    "配置值=%s" % _rf_max_tokens)
 
 chk("3.3 旧阻断 A 形态已不存在（llm/__init__.py 不再显式传 + **kwargs 重复）",
     'max_tokens=kwargs.get("max_tokens")' not in _llm_src)

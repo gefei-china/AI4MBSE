@@ -220,7 +220,7 @@ class ExecuteMixin:
             + f"{self._team_roster_block(agent_def)}"
             + f"{self._build_prompt_template(intent, user_input, user)}"
             # 问题3：建模类意图强制输出 SysML v2 代码块，供投影视图与控制流/数据流视图「代码/视图」切换
-            + f"{self._build_model_code_req(intent)}"
+            + f"{self._build_model_code_req(intent, agent_def)}"
             + f"{self._build_ontology_hint()}"
             + f"{self._build_boundary_hint()}"
             # P0-3：长期记忆注入（跨会话经验，仅供对齐）
@@ -372,6 +372,8 @@ class ExecuteMixin:
             "latency_ms": llm_meta.get("latency_ms", 0),
         }
         # SysML v2 视图联动：LLM 输出含 SysML 代码 → 解析并投影各视图 ViewModel（会话内即时预览，不落库）
+        # 2026-09-20：正文无代码时用工具层缓存补回（见 _ensure_sysml_from_tools 的说明）
+        llm_content = self._ensure_sysml_from_tools(llm_content)
         sysml_views = self._gen_sysml_views(llm_content, intent, user_input)
 
         # Step 5: Store messages (exception-safe: rollback+close on any error)

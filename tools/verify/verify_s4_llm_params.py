@@ -111,8 +111,56 @@ print("\n[C] 调用点：汇总环节已带输出上限；既有两处参数重�
 SRC = {p: (ROOT / p).read_text(encoding="utf-8") for p in (
     "workflows/planner.py", "workflows/refine.py", "norm_apply.py", "workflows/engine.py",
     "llm/__init__.py", "llm/providers/openai_compat.py")}
-check("planner.py 汇总调用带 max_tokens=3000", "max_tokens=3000" in SRC["workflows/planner.py"])
-check("refine.py 修订调用带 max_tokens=3000", "max_tokens=3000" in SRC["workflows/refine.py"])
+# 2026-09-20：汇总 / 修订两个环节的输出上限都由硬编码 3000 改为**配置驱动**
+# （`delegation.summary_max_tokens` / `refine.max_tokens`，默认均 8000）。
+# 原判据是字面串 `max_tokens=3000` → **换写法即失效**（技能 §6.1「文本级判据」陷阱）。
+# 改为两段式**行为级**判据：① 配置默认值正确（锁住"用户可见报告不砍半"这条**语义**）；
+# ② AST 断言调用点的 `max_tokens` 实参**不是字面常量**（配置驱动）—— 既不绑死变量名，
+#    也不因重排/改名误报，且能抓住"有人把它写回硬编码"。
+
+
+def _cfg_get(sec, key, default=None):
+    """独立读取配置（**不要复用别处的局部 `_cfg`** —— 本脚本实测踩过：把新断言插在
+    导入语句之前，变量未定义 → 被 `except` 吞成 None，断言报假失败）。"""
+    try:
+        from core import config as _c
+        return _c.get(sec, key, default)
+    except Exception:                                   # noqa: BLE001
+        return default
+
+
+def _mt_arg_is_dynamic(src, func_name):
+    """AST：`func_name` 内 `.chat(...)` 的 `max_tokens` 实参是否**非字面常量**。
+
+    返回 True=动态（`_mt` 名字 / `RefineGate._max_tokens()` 调用等）、False=写死常量、
+    None=没找到该调用或其 max_tokens 实参。
+    ⚠️ 判「非 `ast.Constant`」而不是「是 `ast.Name`」：修订侧的写法是
+    `max_tokens=RefineGate._max_tokens()`（`ast.Call`），只认 `Name` 会误报（实测踩过）。
+    """
+    import ast as _ast
+    for n in _ast.walk(_ast.parse(src)):
+        if isinstance(n, _ast.FunctionDef) and n.name == func_name:
+            for c in _ast.walk(n):
+                if (isinstance(c, _ast.Call) and isinstance(c.func, _ast.Attribute)
+                        and c.func.attr == "chat"):
+                    for kw in c.keywords:
+                        if kw.arg == "max_tokens":
+                            return not isinstance(kw.value, _ast.Constant)
+    return None
+
+
+_sum_mt = _cfg_get("delegation", "summary_max_tokens", None)
+check("汇总输出上限默认 8000（配置 delegation.summary_max_tokens = 不砍半）",
+      _sum_mt == 8000, "实际=%s" % _sum_mt)
+_dyn = _mt_arg_is_dynamic(SRC["workflows/planner.py"], "_summarize_plan")
+check("planner.py 汇总调用的 max_tokens 是配置驱动（AST：实参非字面常量）",
+      _dyn is True, "AST 判据=%s（None=没找到该调用）" % _dyn)
+
+_rf_mt = _cfg_get("refine", "max_tokens", None)
+check("修订输出上限默认 8000（配置 refine.max_tokens）", _rf_mt == 8000, "实际=%s" % _rf_mt)
+_dyn_rf = _mt_arg_is_dynamic(SRC["workflows/refine.py"], "_refine")
+check("refine.py 修订调用的 max_tokens 是配置驱动（AST：实参非字面常量）",
+      _dyn_rf is True, "AST 判据=%s（None=没找到该调用）" % _dyn_rf)
 check("汇总上限未再回落到过激的 1500（用户可见报告不宜砍半）",
       "max_tokens=1500" not in SRC["workflows/planner.py"] and "max_tokens=1500" not in SRC["workflows/refine.py"])
 check("broker 不再「具名 + **kwargs」重复传参",

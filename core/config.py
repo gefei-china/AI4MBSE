@@ -69,6 +69,46 @@ DEFAULT_CONFIG = {
         "worker_timeout_s": 120, # 单个 Worker/子任务执行超时（秒，超时标记 failed）
         "total_time_budget_s": 600,  # 单次编排全局时间预算（秒，超限终止剩余任务降级汇总）
         "max_depth": 3,          # 委派递归深度上限
+        # ── 汇总环节输入预算（2026-09-20 新增；此前是 planner.py:54 硬编码 `[:500]`）──────
+        # 背景（会话 368 实测）：汇总 LLM 每个子任务只看得到**前 500 字符**，而交付物实际
+        # 1,260 / 4,000 / 4,000 字符 → 丢弃率 60.3% / 87.5% / 87.5%。质量评审据此如实判
+        # 「t2 架构方案权衡在『给出三个方案』处中断」——**评审没错，是管线在丢内容**。
+        # 修法三件：① 可配置（不再硬编码）；② 总预算按子任务数**公平分配**（防"子任务多则每个都看不清"）；
+        # ③ 头尾采样（head 60% + tail 40%）——交付物的「清单/前言」在头、「结论/风险/方案对比」在尾，
+        # 只留头会把结论整段丢掉（这正是本次门禁缺口的形态）。
+        "summary_item_max_chars": 1600,  # 汇总输入：单个子任务交付物上限（字符）
+        "summary_total_chars": 12000,    # 汇总输入：本轮所有子任务合计预算（字符，按数量均分并受 item 上限约束）
+        "summary_floor_chars": 600,      # 汇总输入：均分后每项的保底（防止子任务多时被切到不可读）
+        "summary_max_tokens": 8000,      # 汇总**输出**上限（token）。
+                                         # 2026-09-20：由 3000 提到 8000 —— 会话 369 实测门禁报
+                                         # 「1.3 节内容在末尾被截断」，即**输出被切**（输入侧已修好）。
+                                         # 8000 是按**当前默认 provider 的天花板**取的：id=1 DeepSeek-V3
+                                         # 的 max_tokens / context_window 均为 **8192**，且所有编排 Agent
+                                         # 的 model_provider_id 都是 None → 全走它；再高也不会生效（会被上游钳制）。
+                                         # ⚠️ 成本口径：2026-09-17 原取 3000 是为省成本（实测 plan_summary
+                                         # 平均 completion 7,470，3000 省 60%+）。本次抬高**等于放弃这笔节省**，
+                                         # 因为"用户可见报告被砍半"的代价更大（脚本原本也自述"宁可少省一点"）。
+                                         # 要换回来只需改这里（或走配置面板），无需动代码。
+                                         # ⚠️ 想再提升：把默认 provider 换成 id=71/72（16384 / ctx 65536）后
+                                         # 本项可同步上调到 12000+。
+        "subtask_result_keep_chars": 20000,  # 子任务结果落库保留上限（字符；原先 task_queue 硬编码 4000）
+    },
+    # ── 反思闭环 RefineGate（汇总 → 评审 → 修订 → 复评）────────────────────────────
+    # ⚠️ 2026-09-20 新建该组：**此前 config 里根本没有 `refine` 组** ——
+    #   `workflows/refine.py` 的 `_cfg.get("refine", ...)` 一直只是返回**调用点默认值**，
+    #   即 max_rounds/pass_score/enabled 与下面四个上限全是"看着可配、其实写死"。
+    #   之所以必须补齐，是因为它是**用户最终看到的报告正文**（`orch_content = _ref.get("content")`）
+    #   —— 会话 369 门禁报「t2/t3 各节内容未展开」，根因就在这里的四个硬上限。
+    "refine": {
+        "enabled": True,              # 反思闭环总开关
+        "max_rounds": 2,              # 最多修订轮数（首评 + 最多 N 次修订）
+        "pass_score": 70,             # 通过分（>= 即不再修订）
+        "item_chars": 1200,           # 修订时**每个**子任务交付物可引用字符数（原先硬编码 400）
+        "items_total_chars": 6000,    # 修订时交付物合计可引用字符数（原先硬编码 2000）
+        "report_in_chars": 12000,     # 修订时**待修订报告**可读字符数（原先硬编码 6000，且是**只留头**）
+        "max_tokens": 8000,           # 修订**输出**上限（token，原先硬编码 3000）
+                                      # ⚠️ 修订输出会**整体替换**汇总报告 → 它才是报告长度的真正天花板。
+                                      # 取值口径同 delegation.summary_max_tokens（当前 provider 天花板 8192）。
     },
     "embedding": {
         "enabled": True,         # 语义出口总开关；False 强制 bigram（Mock/离线确定性）
@@ -192,6 +232,11 @@ DEFAULT_CONFIG = {
         "syntax_signs": "",              # 覆盖内置语法特征（留空=用内置）
         "lexical_signs_extra": "",       # 追加词法特征片段
         "syntax_signs_extra": "",        # 追加语法特征片段
+        # 2026-09-20：编排交付物取哪份子任务代码。多子任务各自产码时**不能全拼**——拼装体
+        # 无法作为「一份模型」校验/投影（实测 run 367：3 份片段拼出 59 条错、82 节点混合树）。
+        #   longest（默认）= 只取代码最长的一份（通常即主设计交付物），来源写进附录标题；
+        #   all            = 保留旧行为（全部拼接，仅用于对比排查）。
+        "deliver_pick": "longest",
     },
     "tool_jit": {
         # JIT 工具预筛（`agent/pipeline_parts/tools.py::_build_tools_def`）的**保底集合追加项**。
@@ -372,6 +417,20 @@ CONFIG_SCHEMA = {
         "worker_timeout_s":    {"type": "int", "desc": "单 Worker/子任务执行超时（秒）"},
         "total_time_budget_s": {"type": "int", "desc": "单次编排全局时间预算（秒）"},
         "max_depth":           {"type": "int", "desc": "委派递归深度上限"},
+        "summary_item_max_chars":     {"type": "int", "desc": "汇总输入：单个子任务交付物上限（字符，默认 1600）"},
+        "summary_total_chars":        {"type": "int", "desc": "汇总输入：本轮合计预算（字符，按子任务数均分，默认 12000）"},
+        "summary_floor_chars":        {"type": "int", "desc": "汇总输入：均分后每项保底（字符，默认 600）"},
+        "summary_max_tokens":         {"type": "int", "desc": "汇总输出上限（token，默认 8000 = 当前 provider 天花板 8192 内；门禁报「结论前中断」时再调）"},
+        "subtask_result_keep_chars":  {"type": "int", "desc": "子任务结果落库保留上限（字符，默认 20000）"},
+    },
+    "refine": {
+        "enabled":            {"type": "bool", "desc": "反思闭环（汇总→评审→修订→复评）总开关"},
+        "max_rounds":         {"type": "int",  "desc": "最多修订轮数（默认 2）"},
+        "pass_score":         {"type": "int",  "desc": "评审通过分（默认 70）"},
+        "item_chars":         {"type": "int",  "desc": "修订时可引用：单个交付物字符数（默认 1200）"},
+        "items_total_chars":  {"type": "int",  "desc": "修订时可引用：交付物合计字符数（默认 6000）"},
+        "report_in_chars":    {"type": "int",  "desc": "修订时可读：待修订报告字符数（默认 12000，头尾采样）"},
+        "max_tokens":         {"type": "int",  "desc": "修订输出上限（token，默认 8000；修订输出会整体替换报告 → 报告长度真正天花板）"},
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},
@@ -439,6 +498,7 @@ CONFIG_SCHEMA = {
         "syntax_signs":        {"type": "str", "desc": "覆盖内置语法特征正则（留空=用内置）"},
         "lexical_signs_extra": {"type": "str", "desc": "追加词法特征正则片段（现场补规则，不改代码）"},
         "syntax_signs_extra":  {"type": "str", "desc": "追加语法特征正则片段"},
+        "deliver_pick":        {"type": "str", "desc": "编排交付物取码策略：longest=只取最长的一份（默认，保证可校验单模型）/ all=全部拼接（旧行为）"},
     },
     "tool_jit": {
         "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）"},

@@ -63,12 +63,51 @@ TOOL_DEFS = [
 ]
 
 # ─────────────────────────── ② Agent 绑定 ───────────────────────────
-# 只绑「会产出/处理 V2 代码」的 Agent。绑定 = 该 Agent 的工具候选里出现校验工具
+# 绑定 = 该 Agent 的工具候选里出现校验工具
 # （`tools.py:_build_tools_def` 的 TR-P3 分支从 agent_tools 联表注入，无需改 Python）。
+#
+# ⚠️ 2026-09-20 修（实测缺口，别再改回硬编码两个名字）：
+#   此前只写 design / zhiyuan_mgmt，**而编排是按任务语义动态选 Agent 的**。实测 run 367：
+#     · 「生成电动汽车热管理系统 SysML V2 体系结构模型代码」→ 派给「结构视图生成」(id=166)
+#     · 「对生成的模型代码执行校验并修复」            → 派给 review (id=4)
+#   两者都没绑本地校验工具 → 前者生成完无法自校验（交付的 335 行模型带 14 条语法错），
+#   后者只能去调**远程** zhiyuan_sysmlv2_check（实测 ok=0 失败）→ 全程无人校验。
+#   即「能力配了，但派不到需要它的人手里」。
+#
+# 故绑定 = 「显式名单」∪「规则发现」−「排除」：
+#   ① 显式：职责已知但 prompt 里未必有判别词（review 的 prompt 只写「语法校验」，没有「代码」二字）。
+#   ② 规则：active 且 system_prompt 同时含「SysML」与「代码」= 会产出/处理 V2 代码的 Agent
+#      （8 个视图生成 Agent + 多方案生成 + design）。**新建同类 Agent 自动获得能力，不必改本文件。**
+#   ③ 排除：路由/问答类（chat / knowledge_qa）不产出代码，注入只会稀释工具面。
 BINDINGS = {
     "design": ["sysml_v2_validate"],        # 方案设计（主建模意图，_build_model_code_req 在此生效）
+    "review": ["sysml_v2_validate"],        # 模型预评审（prompt 承诺「词法/语法/语义三层校验」，必须有本地校验器）
     "zhiyuan_mgmt": ["sysml_v2_validate"],  # 智源链路（已有远程 check；本地校验作补充，更快且离线可用）
 }
+BINDING_RULE_SQL = (
+    "SELECT id, name FROM agents WHERE status='active' "
+    "AND (system_prompt LIKE '%SysML%' OR system_prompt LIKE '%sysml%') "
+    "AND system_prompt LIKE '%代码%'"
+)
+BINDING_EXCLUDE = {"chat", "knowledge_qa"}
+
+
+def resolve_bindings(conn) -> dict:
+    """显式名单 ∪ 规则发现（排除路由/问答类）→ {agent_name: [tool_name, ...]}。
+
+    规则发现让「新加的建模 Agent」自动获得校验能力；显式名单覆盖 prompt 无判别词的职责
+    （如 review）。两者都幂等，重复执行不产生副作用。
+    """
+    out = {k: list(v) for k, v in BINDINGS.items()}
+    try:
+        for r in conn.execute(BINDING_RULE_SQL):
+            name = r["name"]
+            if name in BINDING_EXCLUDE:
+                continue
+            out.setdefault(name, ["sysml_v2_validate"])
+    except Exception:
+        pass
+    return out
 
 # ─────────────────────────── ③ 技能（编排规则）───────────────────────────
 SKILL_NAME = "SysML v2 校验与修复"
@@ -172,7 +211,9 @@ def main() -> None:
 
         # ── ② Agent 绑定（幂等）──
         bound, skipped = 0, []
-        for agent_name, tool_names in BINDINGS.items():
+        _resolved = resolve_bindings(conn)
+        print(f"[register] 待绑定 Agent {len(_resolved)} 个：{sorted(_resolved)}")
+        for agent_name, tool_names in _resolved.items():
             row = conn.execute("SELECT id FROM agents WHERE name=?", (agent_name,)).fetchone()
             if not row:
                 skipped.append(agent_name)
