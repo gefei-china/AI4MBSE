@@ -13,6 +13,8 @@
     [2] 三档判据 + 双路分流失流（单产物口径 BCDEF 六个用例）：
         证明 `pass / report / block` 真的由**语法路**决定；纯语义错**不阻断**；
         跨文件引用伪错只落语义路 → 不影响门禁（「接入点②用单产物口径」能成立的原因）。
+    [2b] 词法路（2026-09-19 三路化新增）：中文标识符归 lexical 且与语法错**同门槛** block；
+        乱码被回填成真实字符（`at character '温'`）；同行同类错合并；hint 只给方向。
     [3] hash 短路：同内容第二次调用零成本且结论一致。
     [4] 降级路径：校验器缺失 / 超时 / 空内容 / 文件不存在 → `unavailable`，**一律不抛异常**
         （保证「校验失败不阻断建模主链路」这句承诺是真的）。
@@ -29,9 +31,10 @@
       <venv>/python.exe -X utf8 tools/verify/verify_sysml_check_gate.py --base 5466ea6
 
 ⚠️ 通过数口径（报数必须带参数）：
-      · **裸跑 → 81/81**：第 [6b] 段的 3 项 AST 级对拍**需要基线 ref，缺 ref 自动跳过**；
-      · **带 `--base <ref>` → 84/84**：3 项补上。
+      · **裸跑 → 100/100**：第 [6b] 段的 3 项 AST 级对拍**需要基线 ref，缺 ref 自动跳过**；
+      · **带 `--base <ref>` → 103/103**：3 项补上。
     两个数都不是回归，只是段数不同。脚本末尾会自己打印当前口径。
+    （历史：三路化前为 81 / 84；[2b] 段与三路断言使总数升至 100 / 103。）
 """
 import ast
 import json
@@ -105,10 +108,17 @@ CASE_CROSSFILE_FAKE = ("package P2 {\n"
                        "    requirement r : ReqCooling;\n"
                        "}\n")
 
+# ★ 纯词法错（三路化的新增档）：中文标识符 —— 实测校验器逐字符报
+#   `no viable alternative at character 'X'`（`package P { part def 温控单元; }` 报 4 条起）。
+#   同时用于验证：词法**不**混进语法路、乱码被回填成真实字符、同行同类错被合并。
+CASE_LEXICAL_ONLY = ("package P {\n"
+                     "    part def 温控单元;\n"
+                     "}\n")
+
 GEN_CONTENT = ("已按需求生成冷却回路模型。\n\n```sysml\n" + CASE_OK + "```\n")
 
-CHECK_KEYS = {"rc", "verdict", "blocked", "n_error", "n_syntax", "n_semantic",
-              "n_warn", "scope", "top", "error", "at"}
+CHECK_KEYS = {"rc", "verdict", "blocked", "n_error", "n_lexical", "n_syntax", "n_semantic",
+              "n_hard", "n_warn", "scope", "top", "error", "at"}
 
 
 def _is_injected_stmt(s):
@@ -183,15 +193,24 @@ def main():
     check("文件数 = 6", len(files) == 6, len(files))
     check("rc == 1（存在 ERROR）", base["rc"] == 1, base["rc"])
     check("ERROR == 47", base["n_error"] == 47, base["n_error"])
-    check("n_syntax == 33", base["n_syntax"] == 33, base["n_syntax"])
+    # 三路化（2026-09-19）：词法/语法/语义分列。已入库模型实测 **词法 0** ——
+    # 那 32 条 `no viable alternative at input 'X'` 的引号内全是标识符/关键字
+    # （refines/traces/satisfy/by/ReqX…），按「引号内是否为单个非字母数字字符」判据归**语法路**，
+    # 故 n_syntax 与三路化前**逐项一致（33）**。
+    check("n_lexical == 0（已入库模型无词法错，实测）", base["n_lexical"] == 0, base["n_lexical"])
+    check("n_syntax == 33（与三路化前一致）", base["n_syntax"] == 33, base["n_syntax"])
     check("n_semantic == 14", base["n_semantic"] == 14, base["n_semantic"])
+    check("n_hard == 词法 + 语法", base["n_hard"] == base["n_lexical"] + base["n_syntax"], base["n_hard"])
     check("WARN == 48", base["n_warn"] == 48, base["n_warn"])
-    check("双路计数自洽：syntax + semantic == error", base["n_syntax"] + base["n_semantic"] == base["n_error"])
-    check("判据 == block（n_syntax > 0）", base["verdict"] == "block", base["verdict"])
+    check("三路计数自洽：lexical + syntax + semantic == error",
+          base["n_lexical"] + base["n_syntax"] + base["n_semantic"] == base["n_error"])
+    check("判据 == block（n_hard > 0）", base["verdict"] == "block", base["verdict"])
     check("诊断行号能反查回源文件（工具硬编码 stdin 的补丁生效）",
           all(d["file"].endswith(".sysml") for d in base["errors"]), base["errors"][0]["file"] if base["errors"] else "")
     check("v1 风格 refines 归类到语法路",
-          any(d["is_syntax"] and "refines" in d["msg"] for d in base["errors"]))
+          any(d["path"] == "syntax" and "refines" in d["msg"] for d in base["errors"]))
+    check("每条 ERROR 都带三路归属",
+          all(d["path"] in ("lexical", "syntax", "semantic") for d in base["errors"]))
 
     # ── [2] 三档判据 + 双路分流失流 ──
     hr("[2] 三档判据 / 双路分流失流（单产物口径，6 用例）")
@@ -207,13 +226,15 @@ def main():
     for name, code, exp_v, exp_syn, exp_sem, exp_rc in cases:
         r = svc.check_code(code)
         got[name] = r
-        print(f"       {name:18s} rc={r['rc']} ERROR={r['n_error']:2d} 语法={r['n_syntax']:2d} "
-              f"语义={r['n_semantic']:2d} → {r['verdict']}")
+        print(f"       {name:18s} rc={r['rc']} ERROR={r['n_error']:2d} 词法={r['n_lexical']:2d} "
+              f"语法={r['n_syntax']:2d} 语义={r['n_semantic']:2d} → {r['verdict']}")
         check(f"{name} 判据 == {exp_v}", r["verdict"] == exp_v, r["verdict"])
         if exp_v != "unavailable":
+            check(f"{name} n_lexical == 0（本组用例均无词法错）", r["n_lexical"] == 0, r["n_lexical"])
             check(f"{name} n_syntax == {exp_syn}", r["n_syntax"] == exp_syn, r["n_syntax"])
             check(f"{name} n_semantic == {exp_sem}", r["n_semantic"] == exp_sem, r["n_semantic"])
-            check(f"{name} 双路计数自洽", r["n_syntax"] + r["n_semantic"] == r["n_error"])
+            check(f"{name} 三路计数自洽",
+                  r["n_lexical"] + r["n_syntax"] + r["n_semantic"] == r["n_error"])
         if exp_rc is not None:
             check(f"{name} rc == {exp_rc}", r["rc"] == exp_rc, r["rc"])
 
@@ -225,6 +246,25 @@ def main():
           got["F_跨文件引用伪错"]["n_syntax"] == 0 and got["F_跨文件引用伪错"]["verdict"] == "report")
     check("★ v1 风格 refines 被拦在语法路（L0 卡点名的错法，门禁能抓到）",
           got["E_v1风格refines"]["verdict"] == "block")
+
+    # ── [2b] 词法路（三路化新增档）+ 回喂质量 ──
+    hr("[2b] 词法路 / 回喂质量（三路化新增）")
+    lex = svc.check_code(CASE_LEXICAL_ONLY)
+    print("       " + svc.line_text(lex))
+    check("中文标识符 → 报出词法错（>= 4 条）", lex["n_lexical"] >= 4, lex["n_lexical"])
+    check("词法错 → 判据 block（与语法错同门槛）", lex["verdict"] == "block", lex["verdict"])
+    check("词法错**不**混进语法路", lex["n_syntax"] == 0, lex["n_syntax"])
+    check("n_hard 覆盖词法错", lex["n_hard"] == lex["n_lexical"], lex["n_hard"])
+    _d = svc.diagnostics(lex)
+    check("回喂清单非空", bool(_d), len(_d))
+    check("回喂清单附源码原文", bool(_d) and "温控单元" in (_d[0].get("source") or ""),
+          (_d[0].get("source") if _d else "")[:40])
+    check("★ 乱码已回填为真实字符（at character '温'）",
+          any("温" in m for x in _d for m in x["messages"]))
+    check("★ 同行同类词法错已合并（条目数 < 原始诊断数）",
+          len(_d) < lex["n_error"], f"{len(_d)} < {lex['n_error']}")
+    check("合并条目记录了同类的多个列", any(len(x.get("cols") or []) > 1 for x in _d))
+    check("hint 按路别给出（只给方向、不给修复方案）", all(x.get("hint") for x in _d))
 
     # ── [3] hash 短路 ──
     hr("[3] hash 短路（防反复重跑：同内容第二次必须零成本）")
@@ -238,8 +278,8 @@ def main():
     check("首次是真跑（>= 2 s，非缓存）", dt1 >= 2.0, f"{dt1:.2f}s")
     check("第二次命中缓存 cached=True", second["cached"] is True, second["cached"])
     check("缓存结论与首次一致",
-          (second["rc"], second["n_error"], second["n_syntax"], second["n_semantic"]) ==
-          (first["rc"], first["n_error"], first["n_syntax"], first["n_semantic"]))
+          (second["rc"], second["n_error"], second["n_lexical"], second["n_syntax"], second["n_semantic"]) ==
+          (first["rc"], first["n_error"], first["n_lexical"], first["n_syntax"], first["n_semantic"]))
     check("短路真的省时（第二次 < 0.05 s）", dt2 < 0.05, f"{dt2*1000:.1f}ms")
     other = svc.check_code(CASE_V1_REFINES, use_cache=True)
     check("内容不同不误命缓存（新内容 cached=False 且结论不同）",
@@ -407,7 +447,7 @@ def main():
     print(f"断言汇总：{len(_oks)}/{total} 通过")
     if not args.base:
         print(f"口径提示：当前**未带 --base**，[6b] 的 3 项 AST 级「只增不改」对拍已跳过"
-              f"（总数 {total}，全绿时报 81/81 属**正常**，不是回归）。")
+              f"（总数 {total}，全绿即正常，不是回归）。")
         print("          要拿满 84 项，请：--base <P2 改动前的 git ref>（例如 5466ea6）。")
     else:
         print(f"口径提示：带 --base {args.base}，[6b] 3 项已执行（总数 {total}）。")

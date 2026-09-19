@@ -179,7 +179,17 @@ class ToolMixin:
         # 保底：读类核心工具（graph_retrieve/validate/impact_analyze）不因预筛丢失；全弱相关时空回退维持全量
         jit_threshold = 2
         jit_top_n = 6
-        core_keep = {"graph_retrieve", "validate", "impact_analyze"}  # 读类核心工具保底
+        # 读类核心工具保底 = 内置 3 个 + config `tool_jit.core_keep_extra` 追加项。
+        # 为什么配置化：新增一个「必须常驻」的工具（如建模自校验 sysml_v2_validate）时，
+        # 只登记配置即可，不必改这里；否则它的注入会退化成「看语义预筛的心情」。
+        _extra_keep = ""
+        try:
+            from core import config as _kcfg
+            _extra_keep = str(_kcfg.get("tool_jit", "core_keep_extra", "") or "")
+        except Exception:
+            pass
+        core_keep = {"graph_retrieve", "validate", "impact_analyze"} | {
+            s.strip() for s in _extra_keep.split(",") if s.strip()}
         if getattr(self, "_tool_whitelist", None):
             core_keep = set()  # 白名单模式下不做保底注入
         # 技能白名单声明的工具是显式契约，JIT 语义预筛不得裁剪（与 core_keep 同等保底）
@@ -509,6 +519,15 @@ class ToolMixin:
             if name.startswith("graph_db_"):
                 from graph_db_tools import exec_tool as _exec_graph_db
                 result = _exec_graph_db(name, arguments or {})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            # SysML v2 校验工具（2026-09-19：AI 建模闭环的「暴露 + 回喂」段）。
+            # 生成端把校验当**工具**调用 → 拿到三路诊断（词法/语法/语义）→ 自行修复 → 再校验，
+            # 轮次上限复用本模块已有的 ReAct `max_tool_rounds`（= 3），故**零新循环**。
+            # 进程内直通 checker.jar，不走 HTTP（避免自环死锁，同 mbse_pull_ingest 的理由）。
+            if name.startswith("sysml_v2_"):
+                from sysml_check_tools import exec_tool as _exec_sysml_check
+                result = _exec_sysml_check(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
             # 内置工具 handler

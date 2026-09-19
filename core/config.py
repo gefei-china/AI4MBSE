@@ -169,10 +169,28 @@ DEFAULT_CONFIG = {
         # 背景：L0 卡管「预防」（从源头少犯错），本开关管「暴露」——生成完立刻校验，
         # 把「语法错 / 语义错」两路计数挂到 views["check"]，并随版本链留痕
         # （element_summary.check），让错误在**入库前**可见（集成指南 §2.2 接入点②/③）。
-        # 判据只认**语法路**：n_syntax>0 → block（待人工）；n_syntax==0 → report（不阻断）。
-        # 铁律：必须分语法/语义两路计数——语法错会遮蔽语义错，ERROR 总数会反向上升。
+        # 判据只认**硬错**（词法 + 语法 = n_hard）：n_hard>0 → block（待人工）；n_hard==0 → report（不阻断）。
+        # 铁律：必须分三路计数——硬错会遮蔽语义错，ERROR 总数会反向上升（见 sysml_v2_check 纪律 ①）。
         "check_enabled": True,     # False=完全不调校验器（回到改动前行为；也是故障回退开关）
         "check_timeout": 90,       # 单次校验上限（秒）。实测 4~6 s；同内容命中 hash 短路则零成本
+        # 2026-09-19（三路化）：诊断分「词法 / 语法 / 语义」三路计数（实现在 sysml_v2_check.classify）。
+        # 分类表属**可演进的领域知识**：新增一类诊断文案不该要求改 Python。故此处可覆盖/追加：
+        #   · lexical_signs / syntax_signs      —— 整体**覆盖**内置默认正则（留空=用内置）
+        #   · lexical_signs_extra / syntax_signs_extra —— **追加**片段（现场补规则，不改代码）
+        # 正则片段与内置默认做 `|` 合并；判序为「词法优先」（实测 ②③ 文案前缀相同，只能靠引号内容区分，
+        # 详见 sysml_v2_check 模块头的三条实测依据）。
+        "lexical_signs": "",             # 覆盖内置词法特征（留空=用内置）
+        "syntax_signs": "",              # 覆盖内置语法特征（留空=用内置）
+        "lexical_signs_extra": "",       # 追加词法特征片段
+        "syntax_signs_extra": "",        # 追加语法特征片段
+    },
+    "tool_jit": {
+        # JIT 工具预筛（`agent/pipeline_parts/tools.py::_build_tools_def`）的**保底集合追加项**。
+        # 背景：候选工具（≥2 个）会按用户输入语义预筛裁剪，而内置保底只有 3 个读类核心工具
+        # （graph_retrieve / validate / impact_analyze）。任何「必须常驻」的新工具都得在这里登记，
+        # 否则它的注入会退化成「看语义预筛的心情」——对自校验闭环而言，概率性注入等于没有。
+        # 逗号分隔工具名；留空=无追加（回到改动前行为）。
+        "core_keep_extra": "sysml_v2_validate",
     },
     "chunking": {
         "default_size": 600,         # 默认分块大小（字符，≈500-650 token 中文）
@@ -394,6 +412,15 @@ CONFIG_SCHEMA = {
     "sysml": {
         "l0_card_enabled": {"type": "bool", "desc": "生成端 SysML v2 L0 硬约束卡注入开关（关=回到改动前行为）"},
         "l0_card_extra":   {"type": "str",  "desc": "追加到 L0 卡尾部的现场约束文本（留空用内置卡）"},
+        "check_enabled":   {"type": "bool", "desc": "生成后本地校验（checker.jar）总开关（关=回到改动前行为）"},
+        "check_timeout":   {"type": "int",  "desc": "单次校验上限（秒，默认 90；实测 4~6 s）"},
+        "lexical_signs":       {"type": "str", "desc": "覆盖内置词法特征正则（留空=用内置）"},
+        "syntax_signs":        {"type": "str", "desc": "覆盖内置语法特征正则（留空=用内置）"},
+        "lexical_signs_extra": {"type": "str", "desc": "追加词法特征正则片段（现场补规则，不改代码）"},
+        "syntax_signs_extra":  {"type": "str", "desc": "追加语法特征正则片段"},
+    },
+    "tool_jit": {
+        "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）"},
     },
     "chunking": {
         "default_size":      {"type": "int",   "desc": "默认分块大小（字符，中文 ≈500-650 token）"},

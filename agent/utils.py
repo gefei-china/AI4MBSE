@@ -105,7 +105,9 @@ def _archive_sysml_version(conn, conversation_id: int, message_id: int,
         # （与既有 quality_check 同级）。价值：`/api/sysml-versions/{id}` 本来就会
         # json.loads(element_summary) 返回 → **前端零改动**即可显示「这个版本当时合不合法」。
         # 字段：rc/verdict(pass|report|block|unavailable)/blocked/n_error/n_syntax/n_semantic/
-        #       n_warn/scope/top(前 5 条诊断)/at。判据只认语法路（n_syntax>0 → blocked）。
+        #       n_lexical/n_hard/n_warn/scope/top(前 5 条诊断)/at。
+        #       判据只认**硬错** = 词法 + 语法（n_hard>0 → blocked）；语义错只报告不阻断
+        #       （2026-09-19 三路化：词法/语法/语义分列，词法与语法同门槛）。
         _chk = sysml_views.get("check")
         if isinstance(_chk, dict) and _chk:
             summary["check"] = _chk

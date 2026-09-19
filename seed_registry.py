@@ -92,9 +92,28 @@ def seed_graph_db_tools(conn: sqlite3.Connection) -> dict:
         return {"graph_db_tools": f"skip({e})"}
 
 
+def seed_sysml_check_tools(conn: sqlite3.Connection) -> dict:
+    """SysML v2 校验工具 + 修复编排 Skill（2026-09-19：AI 建模自校验闭环）。
+
+    注册 `sysml_v2_validate` 工具、绑定建模 Agent、写入「SysML v2 校验与修复」技能。
+    幂等；`register_sysml_check_tools.main()` 自建连接（与传入 conn 解耦，同 seed_http_tools）。
+    """
+    try:
+        from register_sysml_check_tools import main as _main_sc
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            _main_sc()
+        return {"sysml_check_tools": "ok"}
+    except Exception as e:
+        return {"sysml_check_tools": f"skip({e})"}
+
+
 def seed_all(conn: sqlite3.Connection) -> dict:
-    """统一种子编排：内置工具 → 系统管理 → HTTP 集成 → 技能包 → 智源旧注册 → 图数据库工具。
-    
+    """统一种子编排：内置工具 → 系统管理 → HTTP 集成 → 技能包 → 智源旧注册 → 图数据库工具
+    → SysML 校验工具+技能。
+
     main.py lifespan 只调用本函数（替代原先分散的 sysadmin_tools.seed 调用）。
     单项失败不阻断其余（容错），返回各源结果字典供日志审计。
     """
@@ -105,6 +124,7 @@ def seed_all(conn: sqlite3.Connection) -> dict:
     results.update(seed_skills(conn))
     results.update(seed_zhiyuan_legacy(conn))
     results.update(seed_graph_db_tools(conn))
+    results.update(seed_sysml_check_tools(conn))
     try:
         conn.commit()
     except Exception:
