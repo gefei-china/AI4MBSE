@@ -52,6 +52,36 @@ Invoke-WebRequest http://127.0.0.1:8000/api/dashboard -UseBasicParsing
 - 前端是**静态资源且带 no-cache** → 改前端**不用重启服务**，刷新即生效；改后端需重启。
 - 数据库只有一个 `mbse.db`，服务运行时被占用 → 只读查询请用 `file:...?mode=ro`。
 
+### 离线校验器资产（`checker.jar` / `sysml.library/` / `java-runtime/`）：不入库，需单独放置
+
+SysML v2 的**离线语法校验**（`java -jar checker.jar -i <模型.sysml> sysml.library`）缺这三样跑不起来。
+它们是**随包二进制与第三方规范库**，已在 `.gitignore` 中**显式忽略（根目录锚定）**，
+所以**全新克隆后必须单独放到工程根目录**，否则相关能力会静默不可用。
+
+| 资产 | 放置位置 | 体积（2026-09-19 实测） | 说明 |
+|---|---|---:|---|
+| `checker.jar` | 工程根目录 | 132,948,123 B（126.79 MB） | `Main-Class: SysMLValidator`，内嵌 OMG 官方实现 `org/omg/sysml/xtext/**`。**向项目维护者索取，勿自行换版本** |
+| `sysml.library/` | 工程根目录 | 121 个文件 / 7.69 MB | 即 [Systems-Modeling/SysML-v2-Release](https://github.com/Systems-Modeling/SysML-v2-Release) 的 `sysml.library/`（KerML + SysML 规范性库文本表示）。本机目录内可见该仓库自带的 Eclipse 工程文件（`.project` / `.settings` / `.workspace.json`），可据此比对是否同源 |
+| `java-runtime/` | 工程根目录 | JDK 25.0.1+8-LTS（Microsoft Build） | 校验器的 JRE/JDK；同样不入库（见 `.gitignore`「随包运行时」段） |
+
+**拿到后先核验指纹再用** —— 规范（`formal/25-09-03`）与实现存在 **10 处已知不一致**，
+换一个版本的 jar 会让既有结论整体漂移，所以版本必须对得上：
+
+```powershell
+Get-FileHash .\checker.jar -Algorithm SHA256
+# 期望值（2026-09-19 实测）：
+# BC8FEAD03C54674C8F89FE7192C7E6760E2199EF270799FAF18D5B0C8BE40C9A
+```
+
+反查忽略规则是否按预期生效（应分别命中 `/checker.jar` 与 `/sysml.library/`）：
+
+```powershell
+git check-ignore -v checker.jar "sysml.library/.project"
+```
+
+> 换 jar 版本后**必须重跑用例集**（467 条定向用例 + 62 个文档块），
+> 判读纪律与脚本见 `docs/SysML-v2-AI建模知识文档.md` §8 与 `docs/V2代码自动校验与修复闭环-方案评估-20260918.md`。
+
 ## 测试
 
 ```powershell
