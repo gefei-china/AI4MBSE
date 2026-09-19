@@ -15,9 +15,9 @@ def _migrate_columns(conn):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN `{column}` {ddl}")
             print(f"[init_db] 迁移: {table} 增加列 {column}")
 
-    _add("conversations", "project_id", "TEXT DEFAULT 'project-satnet-broadband'")
-    _add("entities", "project_id", "TEXT DEFAULT 'project-satnet-broadband'")
-    _add("relations", "project_id", "TEXT DEFAULT 'project-satnet-broadband'")
+    _add("conversations", "project_id", "TEXT DEFAULT ''")
+    _add("entities", "project_id", "TEXT DEFAULT ''")
+    _add("relations", "project_id", "TEXT DEFAULT ''")
     # ── 内容级澄清挂起（AI 建模信息不清晰 → 选择题确认，回答后续答）──
     _add("conversations", "pending_clarify", "TEXT DEFAULT ''")
     # ── P1-3：SysML Profile 导入溯源（类型 → 来源 Profile/Stereotype）──

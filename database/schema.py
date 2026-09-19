@@ -139,7 +139,7 @@ def init_db():
         intent TEXT DEFAULT '',
         status TEXT DEFAULT 'active',  -- active | completed | archived
         user_id INTEGER REFERENCES users(id),
-        project_id TEXT DEFAULT 'project-satnet-broadband',  -- P0-1: 会话归属项目
+        project_id TEXT DEFAULT '',  -- P0-1: 会话归属项目（2026-09-20：去硬编码默认）
         phase TEXT DEFAULT 'requirement',  -- requirement|design|change|review|merge
         pending_clarify TEXT DEFAULT '',  -- 内容级澄清挂起：{questions, context} JSON（未答清空前为空）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -166,7 +166,7 @@ def init_db():
         properties TEXT DEFAULT '{}',  -- JSON
         status TEXT DEFAULT 'candidate',  -- raw_chunk|candidate|reviewed|deprecated
         branch TEXT DEFAULT 'dev',
-        project_id TEXT DEFAULT 'project-satnet-broadband',  -- P0-1: 项目上下文隔离
+        project_id TEXT DEFAULT '',  -- P0-1: 项目上下文隔离（2026-09-20：去硬编码默认）
         source_doc TEXT DEFAULT '',
         source_type TEXT DEFAULT '',  -- graph | vector | manual | ai_generated
         confidence REAL DEFAULT 1.0,
@@ -188,7 +188,7 @@ def init_db():
         properties TEXT DEFAULT '{}',
         status TEXT DEFAULT 'candidate',
         branch TEXT DEFAULT 'dev',
-        project_id TEXT DEFAULT 'project-satnet-broadband',  -- P0-1: 项目上下文隔离
+        project_id TEXT DEFAULT '',  -- P0-1: 项目上下文隔离（2026-09-20：去硬编码默认）
         confidence REAL DEFAULT 1.0,
         created_by TEXT DEFAULT '',
         reviewed_by TEXT DEFAULT '',
@@ -866,7 +866,7 @@ def init_db():
     # ── 项目级持久记忆（Project Constitution）：建模规范/设计基线/决策记录，AI 会话每次注入防漂移 ──
     c.execute("""CREATE TABLE IF NOT EXISTS project_memories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id TEXT NOT NULL DEFAULT 'project-satnet-broadband',
+        project_id TEXT NOT NULL DEFAULT '',
         category TEXT DEFAULT '规范',          -- 规范 | 基线 | 决策 | 经验
         title TEXT NOT NULL,
         content TEXT DEFAULT '',
@@ -902,7 +902,7 @@ def init_db():
         source TEXT DEFAULT 'conversation',    -- conversation | flow | skill | upload | manual
         conversation_id INTEGER DEFAULT 0,
         branch TEXT DEFAULT '',
-        project_id TEXT DEFAULT 'project-satnet-broadband',
+        project_id TEXT DEFAULT '',
         created_by TEXT DEFAULT '',
         status TEXT DEFAULT 'draft',           -- draft | final
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,

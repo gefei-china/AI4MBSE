@@ -241,14 +241,14 @@ def _release_branches(conn) -> list:
 
 
 def _project_id_of(conn) -> str:
-    """取当前项目 id：projects 表首条，无则回退默认。"""
-    try:
-        row = conn.execute("SELECT id FROM projects LIMIT 1").fetchone()
-        if row:
-            return row["id"]
-    except Exception:
-        pass
-    return "project-satnet-broadband"
+    """取当前项目 id：**用户配置的默认项目**，未配置返回空串。
+
+    2026-09-20：原实现是「`SELECT id FROM projects LIMIT 1`（**任意取一条**），失败则回退
+    硬编码 `'project-satnet-broadband'`」—— 两者都与「当前项目」无关，且会让视图生成指向一个
+    已归档项目。改为与写入链同源（repositories.project_repo.resolve_project_id）。
+    """
+    from repositories.project_repo import resolve_project_id
+    return resolve_project_id(conn)
 
 
 def _load_graph(conn, branch: str | None, project_id: str):

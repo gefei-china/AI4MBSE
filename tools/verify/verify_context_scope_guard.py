@@ -11,9 +11,11 @@
 
 本脚本**不依赖 git ref、不依赖服务**（直接 import 模块 + 只读库），随时可跑：
     .venv/Scripts/python.exe tools/verify/verify_context_scope_guard.py
-口径提示：[2] 的 count 断言依赖 config 真实值为 count；[3][7] 为**夹具驱动**（临时库 + 猴补
+口径提示：[2] 的 count 断言依赖 config 真实值为 count；[3][7][8] 为**夹具驱动**（临时库 + 猴补
 database.get_db），断言对象是「机制」而非本次部署恰好配了什么 —— 故把 settings.default_project_id
 置空 / 改值**不会**影响通过数（此前的旧实现会，属误报，已于 2026-09-20 修正）。
+[8] 的夹具 DDL **故意带一个「毒默认」** `DEFAULT 'poison-project'`（等价于现存库里的
+`DEFAULT 'project-satnet-broadband'`）：凡是漏给 project_id 的写入路径，落库值就会是它。
 """
 import ast
 import json
@@ -355,12 +357,206 @@ check("落库分支指向真实存在的分支 → 原样采用", _cohort_defaul
 _bc.close()
 
 # ─────────────────────────────────────────────────────────────────────────────
+hr("[8] 「不强制 / 不默认提供」：归属项目显式给值，不依赖列默认值（2026-09-20）")
+
+# 夹具要点：表 DDL 里**故意写一个「毒默认」** `DEFAULT 'poison-project'` —— 它等价于现存库里
+# 那句 `DEFAULT 'project-satnet-broadband'`。若某条写入路径**省略了** project_id 列，落库值就会
+# 是 `poison-project`，断言立刻抓住；只有**显式传值**才可能落成 '' 或配置值。
+# 为什么不扫源码看「INSERT 列清单里有没有 project_id」：那是文本级判据（换个写法就失效）；
+# 这里断言的是**落库结果**，属行为级，不会空转（§6.2）。
+_POISON = "poison-project"
+
+_WRITE_DDL = [
+    "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, description TEXT)",
+    "CREATE TABLE conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, intent TEXT, "
+    "user_id INTEGER, project_id TEXT DEFAULT 'poison-project')",
+    "CREATE TABLE entities (id TEXT, name TEXT, entity_type TEXT, properties TEXT, status TEXT, "
+    "branch TEXT, source_type TEXT, source_doc TEXT, created_by TEXT, reviewed_by TEXT, "
+    "reviewed_at TEXT, knowledge_category TEXT, project_id TEXT DEFAULT 'poison-project', "
+    "PRIMARY KEY (id, branch))",
+    "CREATE TABLE relations (id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT, target_id TEXT, "
+    "relation_type TEXT, properties TEXT, status TEXT, branch TEXT, source_doc TEXT, created_by TEXT, "
+    "project_id TEXT DEFAULT 'poison-project')",
+]
+
+
+def _write_fixture(default_project=_UNSET):
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    c = sqlite3.connect(path)
+    for ddl in _WRITE_DDL:
+        c.execute(ddl)
+    if default_project is not _UNSET:
+        c.execute("INSERT INTO settings (key,value,description) "
+                  "VALUES ('default_project_id',?,'')", (default_project,))
+    c.commit()
+    c.close()
+    return path
+
+
+def _drive_writes(path) -> dict:
+    """在夹具库上跑**真实**写入路径（仓储/路由函数，不是复刻 SQL），返回各处落库归属。"""
+    from repositories.conversation_repo import ConversationRepo
+    from repositories.knowledge_repo import KnowledgeRepo
+    from routers.graph_workspace import _merge_cohort_items
+
+    c = sqlite3.connect(path)
+    c.row_factory = sqlite3.Row
+    out = {}
+    try:
+        cid = ConversationRepo(c).create_conversation("t", "chat", 1)
+        out["会话"] = c.execute(
+            "SELECT project_id FROM conversations WHERE id=?", (cid,)).fetchone()["project_id"]
+
+        KnowledgeRepo(c).create_entity("E-API", "N1", "部件", "{}", "dev", status="reviewed")
+        out["实体(知识库API)"] = c.execute(
+            "SELECT project_id FROM entities WHERE id='E-API' AND branch='dev'").fetchone()["project_id"]
+
+        KnowledgeRepo(c).create_relation("E-API", "E-API", "CONTAINS", "{}", "dev")
+        out["关系(知识库API)"] = c.execute(
+            "SELECT project_id FROM relations WHERE source_id='E-API'").fetchone()["project_id"]
+
+        _merge_cohort_items(c, "dev", "tester", [
+            {"id": 1, "s": "GW-A", "p": "包含", "o": "GW-B",
+             "item_kind": "relation", "inferred_json": "{}"}])
+        out["实体(图谱工作台)"] = [r["project_id"] for r in c.execute(
+            "SELECT project_id FROM entities WHERE id IN ('GW-A','GW-B') AND branch='dev'")]
+        out["关系(图谱工作台)"] = c.execute(
+            "SELECT project_id FROM relations WHERE source_id='GW-A'").fetchone()["project_id"]
+    finally:
+        c.close()
+    return out
+
+
+def _flat(d) -> list:
+    """把各写入点的落库归属摊平成一维（图谱工作台那次写入会产生多行）。"""
+    vals = []
+    for v in d.values():
+        vals.extend(v if isinstance(v, list) else [v])
+    return vals
+
+
+_p_none = _write_fixture(_UNSET)
+_w_none = _drive_writes(_p_none)
+check("★ 未配置默认项目 → 各写入路径落库归属全部为「未归属」（空串），不落列默认值",
+      all(v == "" for v in _flat(_w_none)), f"got={_w_none}")
+check(f"无一条路径落成毒默认（漏给 project_id 会立刻出现 {_POISON}）",
+      _POISON not in str(_w_none), f"got={_w_none}")
+os.unlink(_p_none)
+
+_p_cfg = _write_fixture("proj-x")
+_w_cfg = _drive_writes(_p_cfg)
+check("★ 配置了默认项目 → 同一批写入路径全部归到该项目（证明是配置在驱动归属）",
+      all(v == "proj-x" for v in _flat(_w_cfg)), f"got={_w_cfg}")
+os.unlink(_p_cfg)
+
+_rp = sqlite3.connect(":memory:")
+_rp.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+from repositories.project_repo import resolve_project_id as _rpi
+
+check("resolve_project_id：settings 行缺失 → 空串（不猜、不兜底）", _rpi(_rp) == "")
+_rp.execute("INSERT INTO settings (key,value) VALUES ('default_project_id','')")
+check("resolve_project_id：置空 → 空串", _rpi(_rp) == "")
+_rp.execute("UPDATE settings SET value='proj-y' WHERE key='default_project_id'")
+check("resolve_project_id：配置值原样返回", _rpi(_rp) == "proj-y")
+_rp.close()
+
+_hard = []
+for _rel in ("database/schema.py", "database/migrations/columns.py",
+             "database/migrations/rebuild.py", "database/migrations/plugins.py"):
+    if "DEFAULT 'project-satnet-broadband'" in open(
+            os.path.join(ROOT, _rel), encoding="utf-8").read():
+        _hard.append(_rel)
+check("★ DDL 层不再残留 project_id 的硬编码默认值（4 个文件）", not _hard, f"残留={_hard}")
+check("seeds 不再把 default_project_id 预设成某个具体项目",
+      "('default_project_id', 'project-satnet-broadband'" not in open(
+          os.path.join(ROOT, "database/seeds.py"), encoding="utf-8").read())
+
+# ─────────────────────────────────────────────────────────────────────────────
+hr("[9] 「图谱只是来源之一」：来源为空 / 无匹配时不硬塞内容（2026-09-20）")
+
+# 用户口径（2026-09-20）：「图谱分支只是 AI 建模的一个数据来源，未匹配到对应的数据，无需强制/默认
+# 提供不合理的内容，是一个不断构建完善的过程」。本段把这句话落成**不变式**：
+# 来源为空 ⇒ 不注入、不编造、消费侧优雅降级；而不是拿「默认内容」把空位填满。
+_EMPTY_DDL = [
+    "CREATE TABLE entities (id TEXT, name TEXT, entity_type TEXT, status TEXT, branch TEXT, created_at TEXT)",
+    "CREATE TABLE graph_views (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, branch TEXT)",
+    "CREATE TABLE impact_analyses (id INTEGER PRIMARY KEY AUTOINCREMENT, change_source TEXT, "
+    "title TEXT, created_at TEXT)",
+    "CREATE TABLE ontology_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, version_label TEXT, "
+    "active INTEGER DEFAULT 0)",
+    "CREATE TABLE ontology_version_snapshots (version_id INTEGER, type_id INTEGER, name TEXT, "
+    "type_kind TEXT, parent_id INTEGER, properties TEXT, constraints TEXT, description TEXT, "
+    "icon TEXT, color TEXT, iri TEXT)",
+    "CREATE TABLE ontology_types (id INTEGER PRIMARY KEY, name TEXT, type_kind TEXT, parent_id INTEGER, "
+    "properties TEXT, constraints TEXT, description TEXT, icon TEXT, color TEXT)",
+]
+
+
+def _empty_db(with_types=False, active_version=False):
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    c = sqlite3.connect(path)
+    c.row_factory = sqlite3.Row
+    for d in _EMPTY_DDL:
+        c.execute(d)
+    if with_types:
+        c.execute("INSERT INTO ontology_types (id,name,type_kind,parent_id,properties,constraints,"
+                  "description,icon,color) VALUES (1,'部件','entity',NULL,'[]','[]','','','')")
+    if active_version:
+        c.execute("INSERT INTO ontology_versions (id,version_label,active) VALUES (9,'v-test',1)")
+    c.commit()
+    c.close()
+    return path
+
+
+_p_e = _empty_db()
+_out_e = _with_db(_p_e, lambda: m._build_model_context("release", 0, "生成电动汽车热管理系统代码"))
+check("★ 分支无图谱资产 → 建模上下文不注入（返回空串，不硬塞占位内容）",
+      _out_e == "", repr(_out_e[:110]))
+os.unlink(_p_e)
+
+_p_ont = _empty_db(with_types=True)
+_c_ont = sqlite3.connect(_p_ont)
+_c_ont.row_factory = sqlite3.Row
+from routers.knowledge_parts.shared import _active_ont_rows
+
+check("无 active 本体版本 → 消费侧回退当前类型表（不返回空、不报错）",
+      len(_active_ont_rows(_c_ont)) == 1)
+_c_ont.close()
+os.unlink(_p_ont)
+
+_p_ont2 = _empty_db(with_types=True, active_version=True)
+_c_ont2 = sqlite3.connect(_p_ont2)
+_c_ont2.row_factory = sqlite3.Row
+check("active 版本**无快照**（存量 released / 测试发布）→ 同样回退，不消费空数据",
+      len(_active_ont_rows(_c_ont2)) == 1)
+_c_ont2.close()
+os.unlink(_p_ont2)
+
+_p_rag = _empty_db()
+_c_rag = sqlite3.connect(_p_rag)
+_c_rag.row_factory = sqlite3.Row
+_Og = _cfg2.get
+_cfg2.get = lambda sec, key, default=None, _o=_Og: (
+    False if (sec, key) == ("graph_db", "enabled") else _o(sec, key, default))
+try:
+    _hits = GraphRAG._entity_link(_c_rag, "巡飞弹 动力分系统", ["release"])
+finally:
+    _cfg2.get = _Og
+check("★ 分支图谱无数据 → 实体链接 0 命中（不编造、不用默认内容兜底）", _hits == [], f"hits={_hits}")
+_c_rag.close()
+os.unlink(_p_rag)
+
+# ─────────────────────────────────────────────────────────────────────────────
 print()
 print("=" * 90)
 print(f"断言汇总：{_n_pass}/{_n_pass + _n_fail} 通过")
 if _n_fail:
     print(f"❌ 失败 {_n_fail} 项")
 print("口径提示：本脚本不依赖 git ref 与服务；[2] 的 count 断言依赖 config 真实值为 count；")
-print("          [3][7] 夹具驱动（临时库），不受 settings.default_project_id 当前取值影响。")
+print("          [3][7][8] 夹具驱动（临时库），不受 settings.default_project_id 当前取值影响；")
+print("          [8] 夹具带毒默认 DEFAULT 'poison-project'，专抓「漏给 project_id」的写入路径；")
+print("          [9] 夹具为空库，锁定「来源为空 → 不注入/不编造/优雅降级」不变式。")
 print("=" * 90)
 sys.exit(1 if _n_fail else 0)

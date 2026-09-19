@@ -178,7 +178,7 @@ def _migrate_p0_capabilities(conn):
     _ensure_table("project_memories", """
         CREATE TABLE project_memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id TEXT NOT NULL DEFAULT 'project-satnet-broadband',
+            project_id TEXT NOT NULL DEFAULT '',
             category TEXT DEFAULT '规范',
             title TEXT NOT NULL,
             content TEXT DEFAULT '',

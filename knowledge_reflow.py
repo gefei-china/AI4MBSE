@@ -59,7 +59,7 @@ def _classify(sentence: str) -> str:
 
 
 def reflow_from_text(conn, text: str, source: str = "conversation", batch_id: str = "",
-                    project_id: str = "project-satnet-broadband", agent_id: str = "reflow") -> dict:
+                    project_id: str = "", agent_id: str = "reflow") -> dict:
     """从一段文本提炼经验知识 → 项目记忆(project_memories) + Agent 长期记忆(agent_memory) 双写。
 
     R1=B（2026-09-01）：评审/变更结论是智能体平台的记忆/经验知识，不再走 v2g 候选确认流——
@@ -149,7 +149,7 @@ def reflow_from_conversation(conn, conversation_id: int, limit_messages: int = 2
             return {"candidates": 0, "error": "无消息"}
         proj = conn.execute("SELECT project_id FROM conversations WHERE id=?",
                             (conversation_id,)).fetchone()
-        pid = (proj["project_id"] if proj and proj["project_id"] else "project-satnet-broadband")
+        pid = (proj["project_id"] if proj and proj["project_id"] else "")
         texts = []
         for r in reversed(rows):
             c = (r["content"] or "").strip()
@@ -170,7 +170,7 @@ def _fmt_node(n) -> str:
 
 def reflow_from_impact(conn, sim_id: int, changes: list | None = None,
                        comparison: dict | None = None, title: str = "",
-                       project_id: str = "project-satnet-broadband") -> dict:
+                       project_id: str = "") -> dict:
     """变更影响分析结论回流（FR-KG-12 补 G13）：模拟结果 → v2g 候选。
 
     拼接标题 + 变更操作清单 + comparison 关键结论（新增/解除/影响度变化/风险），
@@ -212,7 +212,7 @@ def reflow_from_review(conn, msg_id: int, context: str, fb_type: str = "") -> di
         row = conn.execute(
             "SELECT role, content, conversation_id FROM messages WHERE id=?", (msg_id,)).fetchone()
         original = (row["content"] if row else "") or ""
-        pid = "project-satnet-broadband"
+        pid = ""
         if row and row["conversation_id"]:
             proj = conn.execute("SELECT project_id FROM conversations WHERE id=?",
                                 (row["conversation_id"],)).fetchone()

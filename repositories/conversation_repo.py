@@ -16,10 +16,20 @@ class ConversationRepo(BaseRepo):
             FROM conversations c LEFT JOIN users u ON c.user_id=u.id
             ORDER BY c.updated_at DESC""")
 
-    def create_conversation(self, title: str, intent: str, user_id: int = 1) -> int:
+    def create_conversation(self, title: str, intent: str, user_id: int = 1,
+                            project_id: str | None = None) -> int:
+        """新建会话。
+
+        2026-09-20：project_id **不再依赖列的默认值**（原为硬编码 `'project-satnet-broadband'`，
+        使全部会话被静默归入一个已归档项目）。未显式指定时取用户配置的默认项目；
+        未配置则为空串 = 不归属任何项目（见 repositories.project_repo.resolve_project_id）。
+        """
+        if project_id is None:
+            from repositories.project_repo import resolve_project_id
+            project_id = resolve_project_id(self.conn)
         return self.execute(
-            "INSERT INTO conversations (title, intent, user_id) VALUES (?,?,?)",
-            (title, intent, user_id),
+            "INSERT INTO conversations (title, intent, user_id, project_id) VALUES (?,?,?,?)",
+            (title, intent, user_id, project_id),
         )
 
     def get_conversation(self, conv_id: int) -> dict | None:

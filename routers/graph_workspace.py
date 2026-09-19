@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.deps import db_session, current_user
 from core.audit import audit
 from core import ns
+from repositories.project_repo import resolve_project_id
 
 logger = logging.getLogger(__name__)
 
@@ -515,6 +516,8 @@ def _merge_cohort_items(conn, branch: str, who: str, items) -> tuple:
     返回 (created_entities, created_relations, merged_item_ids)。
     幂等：按 (source_id,target_id,relation_type,branch) 与 (id,branch) 去重。
     """
+    # 0) 归属项目：用户配置的默认项目（未配置 = 空串，不强制归属）—— 2026-09-20
+    _pid = resolve_project_id(conn)
     # 1) 收拢待补实体（主体 + 关系型宾语；分类推断主体类型 = 宾语父类型）
     pending_ents = {}   # id -> {"name","etype"}
     rels = []           # {"source_id","source_name","p","target_id","target_name"}
@@ -545,8 +548,9 @@ def _merge_cohort_items(conn, branch: str, who: str, items) -> tuple:
         name = (meta["name"] or "") or eid
         conn.execute(
             "INSERT INTO entities (id, name, entity_type, properties, status, branch, source_type, "
-            "created_by, reviewed_by, reviewed_at) VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-            (eid, name, etype, "{}", "reviewed", branch, "reasoning", who, who))
+            "created_by, reviewed_by, reviewed_at, project_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)",
+            (eid, name, etype, "{}", "reviewed", branch, "reasoning", who, who, _pid))
         created_entities.append({"id": eid, "name": name, "entity_type": etype})
 
     # 3) 幂等写关系
@@ -557,9 +561,9 @@ def _merge_cohort_items(conn, branch: str, who: str, items) -> tuple:
                 (r["source_id"], r["target_id"], r["p"], branch)).fetchone():
             continue
         conn.execute(
-            "INSERT INTO relations (source_id, target_id, relation_type, status, branch, created_by) "
-            "VALUES (?,?,?,?,?,?)",
-            (r["source_id"], r["target_id"], r["p"], "reviewed", branch, who))
+            "INSERT INTO relations (source_id, target_id, relation_type, status, branch, created_by, project_id) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (r["source_id"], r["target_id"], r["p"], "reviewed", branch, who, _pid))
         created_relations.append({"source_id": r["source_id"], "source": r["source_name"],
                                   "name": r["p"], "predicate": r["p"],
                                   "target_id": r["target_id"], "target": r["target_name"]})

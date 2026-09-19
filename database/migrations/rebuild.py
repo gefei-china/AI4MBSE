@@ -20,7 +20,7 @@ def _rebuild_entities_pk(conn):
         properties TEXT DEFAULT '{}',
         status TEXT DEFAULT 'candidate',
         branch TEXT DEFAULT 'dev',
-        project_id TEXT DEFAULT 'project-satnet-broadband',
+        project_id TEXT DEFAULT '',
         source_doc TEXT DEFAULT '',
         source_type TEXT DEFAULT '',
         confidence REAL DEFAULT 1.0,
@@ -72,7 +72,7 @@ def _repair_relations_fk(conn):
         properties TEXT DEFAULT '{}',
         status TEXT DEFAULT 'candidate',
         branch TEXT DEFAULT 'dev',
-        project_id TEXT DEFAULT 'project-satnet-broadband',
+        project_id TEXT DEFAULT '',
         confidence REAL DEFAULT 1.0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         props TEXT DEFAULT '{}'

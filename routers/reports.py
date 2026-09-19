@@ -16,6 +16,7 @@ from models import ReportExportIn, ReportSaveIn
 from core.deps import db_session, current_user
 from core.audit import audit, audit_user
 from repositories.report_repo import ReportRepo
+from repositories.project_repo import resolve_project_id
 
 router = APIRouter(tags=["报告"])
 
@@ -83,7 +84,7 @@ def save_report(body: ReportSaveIn, conn=Depends(db_session), u=Depends(current_
     rid = repo.create_report(
         title, rtype, body.summary or "", sections,
         body.source or "conversation", int(body.conversation_id or 0),
-        body.branch or "", body.project_id or "project-satnet-broadband",
+        body.branch or "", body.project_id or resolve_project_id(conn),
         body.status if body.status in ("draft", "final") else "draft",
         created_by,
     )

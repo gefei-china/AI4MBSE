@@ -113,9 +113,9 @@ class KnowledgeRepo(BaseRepo):
             (now, now, entity_id, branch))
         # 2) 插入新版本
         new_id_row = self.execute(
-            "INSERT INTO entities (id, name, entity_type, properties, status, branch, "
+            "INSERT INTO entities (id, name, entity_type, properties, status, branch, project_id, "
             "valid_from, valid_to, is_current, tx_from, tx_to) "
-            "SELECT id, ?, ?, ?, status, branch, ?, NULL, 1, ?, NULL "
+            "SELECT id, ?, ?, ?, status, branch, project_id, ?, NULL, 1, ?, NULL "
             "FROM entities WHERE id=? AND branch=? AND is_current=0 "
             "ORDER BY valid_from DESC LIMIT 1",
             (new_data.get("name", ""), new_data.get("entity_type", ""),
@@ -172,17 +172,21 @@ class KnowledgeRepo(BaseRepo):
     def create_entity(self, entity_id: str, name: str, entity_type: str, properties: str, branch: str,
                       knowledge_category: str = "", source_doc: str = "",
                       source_type: str = "manual", created_by: str = "system",
-                      status: str = "candidate") -> None:
+                      status: str = "candidate", project_id: str | None = None) -> None:
         """F6：默认创建人由硬编码人名「王工」改为中性「system」，真实身份由路由层透传 current_user。
 
         2026-09-10 状态机收口：status 默认 candidate（抽取/AI 写入走审核队列）；
         图库内手动创建（GraphStore.create_node）显式传 status='reviewed' —— 创建即确认，入图即已审核。
         """
+        if project_id is None:
+            from repositories.project_repo import resolve_project_id
+            project_id = resolve_project_id(self.conn)
         self.execute(
-            "INSERT INTO entities (id, name, entity_type, properties, status, branch, source_type, source_doc, created_by, reviewed_by, reviewed_at, knowledge_category) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)",
+            "INSERT INTO entities (id, name, entity_type, properties, status, branch, source_type, source_doc, created_by, reviewed_by, reviewed_at, knowledge_category, project_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?)",
             (entity_id, name, entity_type, properties, status, branch, source_type, source_doc,
-             created_by, created_by if status == "reviewed" else "", knowledge_category or ""),
+             created_by, created_by if status == "reviewed" else "", knowledge_category or "",
+             project_id),
         )
 
     def update_entity(self, entity_id: str, name: str, entity_type: str, properties: str,
@@ -424,7 +428,7 @@ class KnowledgeRepo(BaseRepo):
 
     def create_relation(self, source_id: str, target_id: str, relation_type: str,
                         props: str, branch: str = "dev", source_doc: str = "",
-                        created_by: str = "") -> int:
+                        created_by: str = "", project_id: str | None = None) -> int:
         # P1-2 归一闸门（2026-09-06）：关系名 canonical 化（core/relmap.py 单点事实来源）。
         # 中文可映射名（包含/满足/…）静默归一为英文标准名落库；废弃名（属于/执行/…）
         # 拒绝创建（与下方引用完整性闸门同风格）。
@@ -442,10 +446,13 @@ class KnowledgeRepo(BaseRepo):
                 raise ValueError(
                     f"关系创建被拒绝：{side}实体 {eid} 在分支 {branch} 不存在"
                     "（禁止创建跨分支/悬空关系）")
+        if project_id is None:
+            from repositories.project_repo import resolve_project_id
+            project_id = resolve_project_id(self.conn)
         return self.execute(
-            "INSERT INTO relations (source_id, target_id, relation_type, properties, status, branch, source_doc, created_by) "
-            "VALUES (?,?,?,?, 'reviewed', ?,?,?)",
-            (source_id, target_id, relation_type, props, branch, source_doc, created_by),
+            "INSERT INTO relations (source_id, target_id, relation_type, properties, status, branch, source_doc, created_by, project_id) "
+            "VALUES (?,?,?,?, 'reviewed', ?,?,?,?)",
+            (source_id, target_id, relation_type, props, branch, source_doc, created_by, project_id),
         )
 
     def count_documents(self, branch: str = "") -> int:

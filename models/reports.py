@@ -27,6 +27,6 @@ class ReportSaveIn(BaseModel):
     source: str = "conversation"           # conversation | flow | skill | upload | manual
     conversation_id: int = 0
     branch: str = ""
-    project_id: str = "project-satnet-broadband"
+    project_id: str = ""                   # 未指定 → 由路由层按用户配置的默认项目解析
     status: str = "draft"                  # draft | final
     created_by: Optional[str] = ""

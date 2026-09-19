@@ -260,7 +260,7 @@ def _seed_projects(conn):
 
     # 默认项目持久化（前端 / 后端统一读取）
     c.execute("""INSERT OR REPLACE INTO settings (key, value, description)
-                 VALUES ('default_project_id', 'project-satnet-broadband', '默认项目（P0-1 项目上下文隔离）')""")
+                 VALUES ('default_project_id', '', '默认项目（P0-1 项目上下文隔离；2026-09-20 起默认不预设）')""")
 
     conn.commit()
 

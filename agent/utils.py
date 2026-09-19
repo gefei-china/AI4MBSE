@@ -27,6 +27,26 @@ def _citations_payload(hits) -> list:
     return out
 
 
+def _conversation_project_id(conn, conversation_id) -> str:
+    """会话归属项目（无则空串）。
+
+    2026-09-20：报告归档此前**硬编码** `'project-satnet-broadband'`（域固化残留；该列 DDL
+    默认值也是它），使报告的项目归属与会话实际归属无关。改取会话自身归属 ——
+    会话的项目由「用户配置的默认项目」决定（见 repositories.project_repo.resolve_project_id）。
+    """
+    try:
+        row = conn.execute("SELECT project_id FROM conversations WHERE id=?",
+                           (conversation_id,)).fetchone()
+        if not row:
+            return ""
+        try:
+            return str(row["project_id"] or "")
+        except (TypeError, IndexError):
+            return str(row[0] or "")
+    except Exception:
+        return ""
+
+
 # ── 会话产物归档（AI 生成内容 → artifacts 表 + 报告自动写 reports 表）──
 def _extract_code_blocks(content: str, limit: int = 5) -> list:
     """从 markdown 文本提取 ``` 围栏代码块，返回 [{lang, code}]（最多 limit 条）。"""
@@ -215,7 +235,8 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
                     if not dup:
                         ReportRepo(conn).create_report(
                             title, rtype, summary, structured, "conversation",
-                            conversation_id, "", "project-satnet-broadband", "draft", created_by)
+                            conversation_id, "",
+                            _conversation_project_id(conn, conversation_id), "draft", created_by)
             except Exception:
                 pass
 

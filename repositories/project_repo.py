@@ -6,6 +6,28 @@
 from repositories.base import BaseRepo
 
 
+def resolve_project_id(conn) -> str:
+    """当前写入应归属的项目 id —— **唯一来源**：用户配置的 `settings.default_project_id`。
+
+    2026-09-20（「未匹配到就空着，不强制/不默认提供」）：此前 conversations / entities /
+    relations / project_memories 等表的 DDL 都写着 `DEFAULT 'project-satnet-broadband'`，
+    凡是没显式给 project_id 的写入都会被**静默归入这个已归档项目**（实测：51 个会话、
+    图谱工作台手工写入的实体与关系全部落在它名下）。现改为由配置决定；
+    **未配置返回空串 = 「不归属任何项目」** —— 不猜、不兜底。
+    """
+    try:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key='default_project_id'").fetchone()
+        if row is None:
+            return ""
+        try:
+            return str(row["value"] or "")
+        except (TypeError, IndexError):
+            return str(row[0] or "")
+    except Exception:
+        return ""
+
+
 class ProjectRepo(BaseRepo):
     """项目 / 场景模板 / 本体 Profile 数据访问 + 项目隔离查询。"""
 
