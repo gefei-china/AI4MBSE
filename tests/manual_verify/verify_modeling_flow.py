@@ -49,8 +49,8 @@ def extract_sysml_code(text: str) -> str | None:
 
 def build_render_data(views: dict, code: str) -> dict:
     """把 sysml_views 组装成 v3 引擎数据（含 portDefs，从代码重解析）。"""
-    from sysml_importer import parse_text
-    parsed = parse_text(code or "")
+    from sysml_ast import parse_strict
+    parsed = parse_strict(code or "")   # 2026-09-20：改用 OMG 官方解析器（旧手写扫描器已删）
     port_defs = {}
     for n in parsed.get("nodes", []):
         props = n.get("properties") or {}

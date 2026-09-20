@@ -532,7 +532,7 @@ class KnowledgeService(BaseService):
         """从智源拉取建模数据 → 解析 → 直接转三元组 → 存个人分支图库（2026-09-11 拉取流程）。
 
         全程后端编排、对话流内回执：project_list(默认工程) → sysmlv2_gen 导出文本
-        → parse_text 解析 → content_ingest_commit（候选化→融合闸→自动批准→落图）。
+        → sysml_ast.parse_strict 解析（OMG 官方解析器）→ content_ingest_commit（候选化→融合闸→自动批准→落图）。
         不产生数据治理审核面板待办——拉取动作即对话流内的拍板。
         """
         import json as _json
@@ -568,10 +568,12 @@ class KnowledgeService(BaseService):
             return {"error": "智源未返回 SysML v2 文本（响应: "
                              + _json.dumps(gen, ensure_ascii=False)[:200] + "）"}
         # 3) 解析 → 内容形态
-        from sysml_importer import parse_text
-        parsed = parse_text(text)
-        if parsed.get("error"):
-            return {"error": f"解析失败: {parsed['error']}"}
+        # 2026-09-20：`sysml_importer.parse_text`（手写扫描器）已删除，唯一实现 = OMG 官方解析器。
+        from sysml_ast import parse_strict
+        try:
+            parsed = parse_strict(text)
+        except RuntimeError as e:
+            return {"error": f"解析失败: {e}"}
         content = parsed if parsed.get("views") else {"views": {"BDD": parsed}}
         # 4) 直通入库
         model_name = f"智源拉取·vc={vc}" + (f"·包{package_data_id}" if package_data_id else "·全工程")

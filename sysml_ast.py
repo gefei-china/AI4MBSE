@@ -16,9 +16,11 @@
 ----
 - `available()`            Java/jar/源码是否齐备
 - `parse_ast(code_text)`   原始语法树 {"nodes":[{"id","type","name","qualifiedName"}],"edges":[...]}
-- `parse_text_ast(code)`   与 `sysml_importer.parse_text` **同构**的 {nodes, edges}，可直接替换
+- `parse_text_ast(code)`   与旧 `parse_text` **同构**的 {nodes, edges}（None 语义，适合渐进迁移）
+- `parse_strict(code)`     同上但失败**抛 RuntimeError**（唯一实现，无自造兜底）
 
-用法：把 `from sysml_importer import parse_text` 换成 `from sysml_ast import parse_text_ast`。
+用法：`from sysml_ast import parse_strict`（导入/知识链路）；`parse_text_ast` 保留给需要
+"拿不到就跳过"的调用方。旧 `sysml_importer.parse_text` 已于 2026-09-20 删除。
 失败一律返回 None（调用方回落到旧解析器），绝不抛异常打断主流程。
 """
 import json
@@ -149,6 +151,22 @@ def _resolve_leaf(ast, nid, out, skip_kinds=()):
         return None
     # 路径末端 = 限定名最长者（`a.b.c` 取 `c`），比栈序确定
     return max(found, key=lambda i: len(nmap[i].get("qualifiedName") or ""))
+
+
+def parse_strict(code_text: str, timeout: int = 180) -> dict:
+    """解析失败**直接抛 RuntimeError** —— 供把 OMG 解析器当唯一权威的调用方使用。
+
+    为什么要有它：`parse_text_ast` 返回 None 的"静默回落"语义适合渐进迁移，
+    但一旦旧解析器（`sysml_importer.parse_text`）退役，"解析失败"必须**可见**，
+    不能再退回一个会静默丢节点/丢关系的实现（那正是本次要消灭的问题形态）。
+    失败只可能来自：Java/checker.jar/标准库缺失、超时、或模型本身语法错。
+    """
+    r = parse_text_ast(code_text, timeout=timeout)
+    if r is None:
+        raise RuntimeError(
+            "OMG SysML v2 解析器不可用（缺少 java-runtime / checker.jar / sysml.library，或解析超时）。"
+            "本工程已改用 OMG 官方参考实现做代码→图谱抽取，不再提供自造解析器兜底。")
+    return r
 
 
 def parse_text_ast(code_text: str, timeout: int = 180):

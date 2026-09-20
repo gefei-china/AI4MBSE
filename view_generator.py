@@ -391,31 +391,21 @@ def generate_views_from_sysml(code_text: str, view_types: list | None = None, in
     """AI 建模联动：将 LLM 生成的 SysML v2 代码解析为内存图谱并投影各视图 ViewModel。
 
     不落库、不依赖已有图谱——直接预览「本次生成代码」对应的视图。
-    内部复用 sysml_importer.parse_text（文本符号 → nodes/edges）与 _project（视图投影）。
+    内部复用 sysml_ast.parse_strict（**OMG 官方解析器**出语法树 → nodes/edges）与 _project（视图投影）。
 
     :param code_text: SysML v2 代码文本（可含多个代码块，自动拼接）
     :param view_types: 视图类型子集；None → 按意图映射或全部 10 种
     :param intent: 意图识别结果；命中 INTENT_VIEWS 时只投影该意图匹配的视图类型
     :return: {"parsed": {"nodes": n, "edges": m}, "views": {type: ViewModel, ...}, "intent": intent}
     """
-    # ── 解析器：优先 OMG 官方解析器（Pilot Implementation），不可用时回落旧的自造扫描器 ──
+    # ── 解析器：OMG 官方解析器（Pilot Implementation），**唯一实现，无自造兜底** ──────
     # 2026-09-20：旧的 `sysml_importer.parse_text` 是手写关键字扫描，**不是语法解析器**，
     # 实测会漏建「包级 part usage」节点（conv375 的 `evThermalSystem`）→ 引用它的
     # 126/220 条关系整条丢弃（含 14 条 satisfy + 18 条 connect）→ BDD 投影 0 条边。
-    # `sysml_ast.parse_text_ast` 复用工程里已有的 OMG 参考实现出语法树，
-    # 两者输出**同构**，故下面的映射与投影逻辑无需改动。见 sysml_ast.py 顶部说明。
-    parsed = None
-    try:
-        from sysml_ast import parse_text_ast as _parse_ast
-        parsed = _parse_ast(code_text)
-    except Exception:
-        parsed = None
-    if parsed is None:
-        try:
-            from sysml_importer import parse_text
-            parsed = parse_text(code_text)
-        except Exception:
-            parsed = {"nodes": [], "edges": []}
+    # 现已删除（见 sysml_importer._parse_v2 的说明）。解析失败会抛 RuntimeError，
+    # 调用方 `cards.py` 的 try 会接住（失败可见，不再静默产出空视图）。
+    from sysml_ast import parse_strict
+    parsed = parse_strict(code_text)
     nodes_in = parsed.get("nodes") or []
     edges_in = parsed.get("edges") or []
 
