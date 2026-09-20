@@ -7,6 +7,13 @@
 """
 import os
 
+import pytest
+
+# `static/vendor/`（cytoscape/dagre 等第三方压缩库）属**随包运行时**，被 .gitignore 排除不入库
+# （见 .gitignore「大体积二进制与第三方压缩库」条）。全新克隆 / CI 上没有它。
+_VENDOR_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "vendor")
+_HAS_VENDOR = os.path.isdir(_VENDOR_DIR) and bool(os.listdir(_VENDOR_DIR))
+
 
 def test_prod_db_not_touched_by_tests(test_db_path):
     """测试库必须是独立文件，且不等于生产库。"""
@@ -48,8 +55,13 @@ def test_static_assets_served(client):
         assert len(r.content) > 0, p
 
 
+@pytest.mark.skipif(not _HAS_VENDOR,
+                    reason="static/vendor/ 为随包运行时（不入库），全新克隆/CI 上无第三方 JS，脚本可达性无从谈起")
 def test_frontend_api_surface_present(client):
-    """前端 40 个阻塞脚本全部可达（改前端后最容易踩的坑：路径写错/文件被误移）。"""
+    """前端 40 个阻塞脚本全部可达（改前端后最容易踩的坑：路径写错/文件被误移）。
+
+    ⚠️ 前提：`static/vendor/` 已就位（开发机随包提供）。CI/全新克隆上本测试被 skip。
+    """
     import re
 
     html = client.get("/").text

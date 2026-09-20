@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from fastapi.testclient import TestClient
 from main import app
+from core.config import DB_PATH  # ← 统一经 conftest 隔离（MBSE_DB_PATH→测试库），禁止直连生产库
 
 c = TestClient(app)
 results: list[tuple] = []
@@ -126,7 +127,7 @@ def test_doc_lifecycle_include_deprecated():
 def test_entity_provenance():
     """节点一键追溯：5 段视图完整。"""
     import sqlite3
-    db = sqlite3.connect(os.path.join(os.path.dirname(__file__), "..", "mbse.db"))
+    db = sqlite3.connect(DB_PATH)   # 隔离铁律：跟随 conftest 指向的测试库
     row = db.execute("SELECT id FROM entities LIMIT 1").fetchone()
     db.close()
     if not row:
@@ -158,7 +159,7 @@ def test_entity_provenance_404():
 def test_relation_provenance():
     """边一键追溯：含 source/target 节点引用。"""
     import sqlite3
-    db = sqlite3.connect(os.path.join(os.path.dirname(__file__), "..", "mbse.db"))
+    db = sqlite3.connect(DB_PATH)   # 隔离铁律：跟随 conftest 指向的测试库
     row = db.execute("SELECT id FROM relations LIMIT 1").fetchone()
     db.close()
     if not row:
@@ -181,7 +182,7 @@ def test_relation_provenance():
 def test_summary_basic_shape():
     """摘要生成：5 字段齐全。"""
     import sqlite3
-    db = sqlite3.connect(os.path.join(os.path.dirname(__file__), "..", "mbse.db"))
+    db = sqlite3.connect(DB_PATH)   # 隔离铁律：跟随 conftest 指向的测试库
     row = db.execute("SELECT id FROM messages WHERE role='assistant' AND card_data IS NOT NULL "
                      "AND card_data != '' ORDER BY id DESC LIMIT 1").fetchone()
     db.close()
@@ -203,14 +204,28 @@ def test_summary_basic_shape():
 def test_summary_persists_to_card_data():
     """摘要应写入 messages.card_data.summary 字段。"""
     import sqlite3
-    db = sqlite3.connect(os.path.join(os.path.dirname(__file__), "..", "mbse.db"))
+    # ⚠️ 2026-09-20 修隔离违规：原写法硬编码 `../mbse.db` **直连生产库** ——
+    #    既违反 conftest.py「测试绝不碰生产库」的铁律，也让本测试在生产库有数据时
+    #    假绿、在全新库（CI）上因 `row=None` 而 TypeError。
+    #    改为跟随 `core.config.DB_PATH`（conftest 已把它指向独立测试库）。
+    from core.config import DB_PATH
+    db = sqlite3.connect(DB_PATH)
     row = db.execute("SELECT id FROM messages WHERE role='assistant' AND card_data IS NOT NULL "
                      "AND card_data != '' ORDER BY id DESC LIMIT 1").fetchone()
     db.close()
+    if row is None:
+        # 该测试依赖「已存在一条带 card_data 的 assistant 消息」这一**数据夹具**；
+        # 全新库 / CI 上没有 → 如实跳过（pytest 下记 skipped，手工 run_all 下打印并继续）。
+        msg = "库中无 card_data 非空的 assistant 消息（全新库/CI 无此夹具），无从验证持久化"
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            import pytest
+            pytest.skip(msg)
+        print("SKIP:", msg)
+        return
     mid = row[0]
     c.post(f"/api/messages/{mid}/summary")  # 调用一次
     # 校验落库
-    db = sqlite3.connect(os.path.join(os.path.dirname(__file__), "..", "mbse.db"))
+    db = sqlite3.connect(DB_PATH)
     cd_raw = db.execute("SELECT card_data FROM messages WHERE id=?", (mid,)).fetchone()[0]
     db.close()
     cd = json.loads(cd_raw) if cd_raw else {}
