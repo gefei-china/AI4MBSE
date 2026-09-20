@@ -15,12 +15,13 @@ TOOLS = [
         "name": "coverage_matrix",
         "description": ("需求架构覆盖矩阵分析（SRS-GN-CO-XQJG，确定性只读）：需求实体×架构元素的追溯矩阵，"
                         "输出覆盖率、未覆盖需求、无需求依据的架构元素、异常追溯关系（断链/自环）。"
-                        "数字可复现可审计（规则版本 cov-v1.0，随结果返回）。参数 branch/project_id 可选。"),
+                        "数字可复现可审计（规则版本 cov-v1.0，随结果返回）。"
+                        "分析对象=当前建模工程：project_id/branch 省略时自动取默认工程与默认分支，无默认工程则拒绝分析。"),
         "input_schema": {
             "type": "object",
             "properties": {
-                "branch": {"type": "string", "description": "分析分支（如 release/dev），省略=全部分支"},
-                "project_id": {"type": "string", "description": "项目维度过滤，省略=全部项目"},
+                "branch": {"type": "string", "description": "分析分支（如 release/dev），省略=settings 默认分支"},
+                "project_id": {"type": "string", "description": "工程 id，省略=当前默认工程（settings.default_project_id）；未设置默认工程且不传则拒绝分析"},
             },
         },
     },
@@ -32,7 +33,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "branch": {"type": "string"}, "project_id": {"type": "string"},
+                "branch": {"type": "string", "description": "分析分支，省略=settings 默认分支"}, "project_id": {"type": "string", "description": "工程 id，省略=当前默认工程"},
                 "req_name": {"type": "string", "description": "需求名称/ID 关键字，过滤单条需求"},
             },
         },
@@ -43,7 +44,7 @@ TOOLS = [
                         "关联链检查，识别孤立场景、缺活动/状态链、缺参与对象的场景。"),
         "input_schema": {
             "type": "object",
-            "properties": {"branch": {"type": "string"}, "project_id": {"type": "string"}},
+            "properties": {"branch": {"type": "string", "description": "分析分支，省略=settings 默认分支"}, "project_id": {"type": "string", "description": "工程 id，省略=当前默认工程"}},
         },
     },
     {
@@ -53,7 +54,7 @@ TOOLS = [
                         "low=无需求依据架构元素），输出分类统计+定位信息。解读与补全建议由你（Agent）基于结果生成。"),
         "input_schema": {
             "type": "object",
-            "properties": {"branch": {"type": "string"}, "project_id": {"type": "string"}},
+            "properties": {"branch": {"type": "string", "description": "分析分支，省略=settings 默认分支"}, "project_id": {"type": "string", "description": "工程 id，省略=当前默认工程"}},
         },
     },
 ]
@@ -89,8 +90,10 @@ allowed_tools: coverage_matrix,trace_chain_check,scene_coverage,gap_summary
 | `gap_summary` | 全部缺项的分级清单（汇总前三者） | 问缺项/风险/改进清单；**正式分析报告必调** |
 
 调用序：**矩阵 → 追溯链 → 场景 → 缺项汇总**（汇总消费前三者，单独跑会遗漏）。
-分支/项目维度：用户没说就**先不传参跑全量**，发现多分支/多项目数据混杂时，
-再分维度重跑对比（同库曾实测 release/dev 覆盖率差异巨大，一维混算会误导）。
+分析对象（2026-09-20 用户拍板）：**当前建模工程的数据**，不是图谱全库。
+project_id/branch 省略时工具自动取 settings 默认工程/分支；用户点名别的工程/分支
+才显式传参；**未设置默认工程时工具会拒绝分析——此时引导用户先切换工程，
+绝不改用全库混算口径**（同库实测 dev 分支混布两个工程，混算数字直接作废）。
 
 ## 结果解读模板
 

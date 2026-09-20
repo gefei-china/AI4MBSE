@@ -399,6 +399,38 @@ _HANDLERS = {
 }
 
 
+def _resolve_scope(conn, arguments: dict) -> tuple[str | None, str | None]:
+    """解析分析范围：显式参数 > settings 默认工程/分支。
+
+    2026-09-20（用户拍板口径）：覆盖性分析的对象是**当前建模工程的数据**，
+    不是图谱全库。多工程混布分支上一维切会算出混算数字（实测 dev 分支混了
+    巡飞演示 56 + 星网宽带 54），故未显式指定且无默认工程时**拒绝分析**——
+    宁可不给数字，不给混算数字。
+    返回 (project_id, branch)；project_id 无法解析时抛 ValueError。
+    """
+    project_id = (arguments.get("project_id") or "").strip() or None
+    branch = (arguments.get("branch") or "").strip() or None
+    try:
+        row = conn.execute(
+            "SELECT key, value FROM settings WHERE key IN ('default_project_id','default_branch')"
+        ).fetchall()
+        s = {r["key"]: (r["value"] or "").strip() for r in row}
+    except Exception:
+        s = {}
+    if not project_id:
+        project_id = s.get("default_project_id") or None
+    if not branch:
+        branch = s.get("default_branch") or None
+    if not project_id:
+        raise ValueError(
+            "未设置当前工程（settings.default_project_id 为空），覆盖性分析拒绝全库混算。"
+            "请先在界面切换/设置默认工程，或在调用参数中显式指定 project_id。"
+        )
+    if "project_id" not in [r["name"] for r in conn.execute("PRAGMA table_info(entities)")]:
+        raise ValueError("库结构缺 project_id 列，无法按工程隔离分析（旧库请先迁移）。")
+    return project_id, branch
+
+
 def exec_tool(name: str, arguments: dict) -> dict:
     """标准入口（pipeline 前缀路由调用）。只读短连接；结果 JSON 字符串化。"""
     handler = _HANDLERS.get(name)
@@ -408,10 +440,14 @@ def exec_tool(name: str, arguments: dict) -> dict:
         from database import get_db
         conn = get_db()
         try:
-            out = handler(conn, arguments or {})
+            arguments = dict(arguments or {})
+            arguments["project_id"], arguments["branch"] = _resolve_scope(conn, arguments)
+            out = handler(conn, arguments)
         finally:
             conn.close()
         return {"ok": True, "result": json.dumps(out, ensure_ascii=False)}
+    except ValueError as e:
+        return {"ok": False, "result": str(e)}
     except Exception as e:
         import traceback
         return {"ok": False, "result": f"覆盖性分析异常: {e} | {traceback.format_exc()[-300:]}"}
