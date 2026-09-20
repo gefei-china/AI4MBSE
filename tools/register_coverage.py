@@ -57,6 +57,21 @@ TOOLS = [
             "properties": {"branch": {"type": "string", "description": "分析分支，省略=settings 默认分支"}, "project_id": {"type": "string", "description": "工程 id，省略=当前默认工程"}},
         },
     },
+    {
+        "name": "modeling_coverage",
+        "description": ("建模过程覆盖检查（确定性只读）：分析对象=当前建模工程**本次生成的数据**"
+                        "（v2g_candidates 未入图候选，默认最近 pending 批次）∪ 该工程已入图基线，"
+                        "报告并入后覆盖率变化、批次实体类型/重复匹配分布、缺追溯关系等建模缺口——"
+                        "建模时反馈用。与分支无关：候选无 branch 字段，branch 只作用于基线。"),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "batch_id": {"type": "string", "description": "生成批次 id，省略=最近一个 pending 批次"},
+                "branch": {"type": "string", "description": "基线分支，省略=settings 默认分支"},
+                "project_id": {"type": "string", "description": "工程 id，省略=当前默认工程"},
+            },
+        },
+    },
 ]
 
 BIND_AGENTS = ["knowledge_qa", "design", "requirement_analysis"]
@@ -66,7 +81,7 @@ name: 覆盖性分析
 description: 需求-架构-验证覆盖性分析（SRS-GN-CO）：调用确定性工具取数 → 按方法论解读 → 给缺项补全建议；数字必须来自工具，不心算
 category: 覆盖性分析
 version: v1.0
-allowed_tools: coverage_matrix,trace_chain_check,scene_coverage,gap_summary
+allowed_tools: coverage_matrix,trace_chain_check,scene_coverage,gap_summary,modeling_coverage
 ---
 
 # 覆盖性分析（SRS-GN-CO）
@@ -88,8 +103,11 @@ allowed_tools: coverage_matrix,trace_chain_check,scene_coverage,gap_summary
 | `trace_chain_check` | 单条或全部需求的追溯链深度、是否到达验证 | 问某需求"落实了吗/验证了吗" |
 | `scene_coverage` | 场景/用例是否缺活动链/参与对象 | 问场景、用例、模式、工况 |
 | `gap_summary` | 全部缺项的分级清单（汇总前三者） | 问缺项/风险/改进清单；**正式分析报告必调** |
+| `modeling_coverage` | **本次生成批次**（未入图候选）并入基线后的覆盖变化、批次缺口 | **建模时**：AI 刚生成工程数据、尚未评审入图，用户问"这批生成得怎么样/还缺什么" |
 
-调用序：**矩阵 → 追溯链 → 场景 → 缺项汇总**（汇总消费前三者，单独跑会遗漏）。
+调用序：已入图数据分析走 **矩阵 → 追溯链 → 场景 → 缺项汇总**（汇总消费前三者，单独跑会遗漏）；
+**建模中**（数据还没入图、在未评审区）走 `modeling_coverage` 单工具——这是建模时的实时反馈，
+分析对象=本次生成批次∪当前工程已入图基线，与分支无关（候选没有 branch 字段）。
 分析对象（2026-09-20 用户拍板）：**当前建模工程的数据**，不是图谱全库。
 project_id/branch 省略时工具自动取 settings 默认工程/分支；用户点名别的工程/分支
 才显式传参；**未设置默认工程时工具会拒绝分析——此时引导用户先切换工程，
@@ -163,7 +181,7 @@ def main() -> int:
             "skill_type='package', allowed_tools=?, updated_at=datetime('now','localtime') WHERE id=?",
             (SKILL_FRONTMATTER.split('---\n')[2].rsplit('---', 1)[0].strip('\n'),
              SKILL_CONTENT,
-             "coverage_matrix,trace_chain_check,scene_coverage,gap_summary", ex["id"]))
+             "coverage_matrix,trace_chain_check,scene_coverage,gap_summary,modeling_coverage", ex["id"]))
         skill_action = "updated"
     else:
         cur.execute(
@@ -173,7 +191,7 @@ def main() -> int:
             "'published', 1, ?, ?, '覆盖性分析', ?, datetime('now','localtime'), datetime('now','localtime'))",
             (SKILL_FRONTMATTER.split('---\n')[2].rsplit('---', 1)[0].strip('\n'),
              SKILL_CONTENT,
-             "coverage_matrix,trace_chain_check,scene_coverage,gap_summary"))
+             "coverage_matrix,trace_chain_check,scene_coverage,gap_summary,modeling_coverage"))
         skill_action = "inserted"
 
     conn.commit()

@@ -521,10 +521,10 @@ class ToolMixin:
                 result = _exec_graph_db(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
-            # 覆盖性分析工具（2026-09-20 SRS-GN-CO：4 个只读确定性工具——矩阵/追溯链/场景/缺项，
+            # 覆盖性分析工具（2026-09-20 SRS-GN-CO：5 个只读确定性工具——矩阵/追溯链/场景/缺项/建模过程覆盖，
             # 数字可复现可审计，解读与补全建议由 Agent 层完成。注意按名集合路由：
-            # 四个工具名只有 coverage_matrix 带 coverage_ 前缀，前缀匹配会漏掉其余三个）
-            if name in ("coverage_matrix", "trace_chain_check", "scene_coverage", "gap_summary"):
+            # 五个工具名只有 coverage_matrix 带 coverage_ 前缀，前缀匹配会漏掉其余四个）
+            if name in ("coverage_matrix", "trace_chain_check", "scene_coverage", "gap_summary", "modeling_coverage"):
                 from coverage_tools import exec_tool as _exec_coverage
                 result = _exec_coverage(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)

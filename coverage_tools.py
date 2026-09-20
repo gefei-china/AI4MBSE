@@ -21,6 +21,8 @@
 - trace_chain_check  需求→架构→验证 端到端追溯链连通性（SRS-GN-CO-JKJH）
 - scene_coverage     场景/用例实体链路覆盖检查（SRS-GN-CO-CJGK）
 - gap_summary        缺项分类 + 统计 + 风险分级（SRS-GN-CO-QXFG）
+- modeling_coverage  建模过程覆盖检查：本次生成批次（未入图候选）∪ 当前工程已入图基线，
+  报告并入后覆盖变化——建模时反馈用，与分支无关（候选无 branch 字段，branch 只作用于基线）
 """
 import json
 import sqlite3
@@ -35,6 +37,7 @@ COVERAGE_TOOL_NAMES = (
     "trace_chain_check",
     "scene_coverage",
     "gap_summary",
+    "modeling_coverage",
 )
 
 
@@ -391,11 +394,164 @@ def _gap_summary(conn, arguments: dict) -> dict:
 
 # ────────────────────────── 入口分发 ──────────────────────────
 
+def _coverage_summary(graph: dict) -> dict:
+    """轻量覆盖统计（基线/合并两图共用）：需求总数、覆盖数、覆盖率。"""
+    reqs, _arch = _split(graph)
+    cells = _coverage_cells(graph, reqs, _arch)
+    total = len(reqs)
+    covered = len({k[0] for k in cells})
+    return {
+        "requirement_total": total,
+        "covered_requirements": covered,
+        "coverage_rate": round(covered / total, 4) if total else None,
+        "entity_total": len(graph["entities"]),
+        "trace_relation_total": len(graph["relations"]),
+    }
+
+
+# ────────────── 工具 5：建模过程覆盖检查（2026-09-20 用户口径） ──────────────
+
+def _modeling_coverage(conn, arguments: dict) -> dict:
+    """分析对象=当前建模工程**本次生成的数据**（v2g_candidates 未入图候选）
+    ∪ 该工程已入图基线，报告并入后覆盖变化，指导继续建模。
+
+    与分支的关系：候选表无 branch 字段——branch 只作用于已入图基线
+    （省略=settings 默认分支）。批次默认取最近一个 pending 批次。
+    """
+    project_id = arguments["project_id"]  # exec_tool._resolve_scope 已保证
+    branch = arguments.get("branch")
+    baseline = _load_graph(conn, branch, project_id)
+
+    # 批次：显式 batch_id > 最近 pending 批次
+    batch_id = (arguments.get("batch_id") or "").strip()
+    if not batch_id:
+        row = conn.execute(
+            "SELECT batch_id FROM v2g_candidates WHERE status='pending'"
+            " ORDER BY created_at DESC, id DESC LIMIT 1").fetchone()
+        batch_id = row["batch_id"] if row else ""
+    cands: list = []
+    if batch_id:
+        cands = [dict(r) for r in conn.execute(
+            "SELECT id, candidate_kind, entity_name, entity_type, rel_type, rel_source, rel_target,"
+            " matching_status, match_entity_id, confidence, source_doc, created_at"
+            " FROM v2g_candidates WHERE batch_id=? AND status='pending'", (batch_id,)).fetchall()]
+
+    ent_cands_all = [c for c in cands if c["candidate_kind"] == "entity"]
+    rel_cands = [c for c in cands if c["candidate_kind"] == "relation"]
+    # 数据质量护栏：关系以实体形态混入（entity_type 含'关系'）——不计入实体池，单独提示
+    rel_like_cands = [c for c in ent_cands_all if "关系" in (c["entity_type"] or "")]
+    ent_cands = [c for c in ent_cands_all if "关系" not in (c["entity_type"] or "")]
+
+    # 合并图构造：dup 命中（match_entity_id 在基线内）→ 并入既有实体；否则新增候选虚拟节点
+    merged_ents = list(baseline["entities"])
+    name2id = {e["name"]: e["id"] for e in baseline["entities"]}
+    base_ids = {e["id"] for e in baseline["entities"]}
+    merged_new, dup_merged = [], 0
+    for c in ent_cands:
+        mid = (c["match_entity_id"] or "").strip()
+        if mid and mid in base_ids:
+            dup_merged += 1
+            continue
+        vid = f"cand:{c['id']}"
+        if c["entity_name"] not in name2id:
+            name2id[c["entity_name"]] = vid
+        merged_ents.append({"id": vid, "name": c["entity_name"], "entity_type": c["entity_type"],
+                            "status": "candidate", "branch": branch or ""})
+        merged_new.append(c)
+
+    def _resolve_node(node: str):
+        """关系候选端点解析：直接 id > 基线/候选实体名 > 候选 id 映射。解析失败返回 None。"""
+        node = (node or "").strip()
+        if not node:
+            return None
+        if node in base_ids or node.startswith("cand:"):
+            return node
+        if node in name2id:
+            return name2id[node]
+        row = conn.execute("SELECT id FROM v2g_candidates WHERE id=? AND status='pending'",
+                           (node,)).fetchone()
+        return f"cand:{row['id']}" if row else None
+
+    merged_rels = list(baseline["relations"])
+    rel_unresolved = []
+    for c in rel_cands:
+        s, t = _resolve_node(c["rel_source"]), _resolve_node(c["rel_target"])
+        if s and t:
+            merged_rels.append({"id": f"candrel:{c['id']}", "source_id": s, "target_id": t,
+                                "relation_type": (c["rel_type"] or "").strip(), "branch": branch or ""})
+        else:
+            rel_unresolved.append({"cand_id": c["id"], "rel_type": c["rel_type"],
+                                   "detail": f"{c['rel_source']} -> {c['rel_target']}（端点无法解析）"})
+    merged = {"entities": merged_ents, "relations": merged_rels}
+
+    base_sum = _coverage_summary(baseline)
+    merged_sum = _coverage_summary(merged)
+    # 合并图上的未覆盖需求 = 旧缺项 + 本批新增需求候选（无追溯 → 直接进未覆盖）
+    new_req_cands = [c for c in merged_new if "需求" in (c["entity_type"] or "")]
+
+    match_dist: dict = {}
+    for c in ent_cands:
+        k = c["matching_status"] or "(空)"
+        match_dist[k] = match_dist.get(k, 0) + 1
+
+    modeling_gap = []
+    if cands and not rel_cands:
+        modeling_gap.append(
+            f"本批次 0 条追溯关系候选——并入后覆盖数不会增加；若批次含需求候选，合并覆盖率会因分母变大而下降。"
+            "建模下一步应生成需求→架构/验证的追溯关系（SATISFIES/ALLOCATED_TO/VERIFIED_BY）")
+    if rel_like_cands:
+        modeling_gap.append(
+            f"本批次有 {len(rel_like_cands)} 个候选以实体形态承载关系（entity_type 含'关系'）——"
+            "未计入实体池与覆盖计算；建议检查生成侧的候选分类（candidate_kind 应为 relation）")
+    if new_req_cands:
+        modeling_gap.append(
+            f"本批次含 {len(new_req_cands)} 个需求候选且均无追溯关系——合并覆盖率下降主要来自它们；"
+            "补齐这些需求的 SATISFIES 关系后覆盖率才会回升")
+    dup_by_type = {}
+    for c in merged_new:
+        dup_by_type[c["entity_type"]] = dup_by_type.get(c["entity_type"], 0) + 1
+
+    return {
+        "ok": True,
+        "tool": "modeling_coverage",
+        "rule_version": RULE_VERSION,
+        "scope": {
+            "project_id": project_id,
+            "baseline_branch": baseline["meta"]["branch"],
+            "batch_id": batch_id or "(无 pending 批次)",
+            "note": "分析对象=本次生成批次∪当前工程已入图基线；branch 仅作用于基线",
+        },
+        "batch": {
+            "candidate_total": len(cands),
+            "entity_candidates": len(ent_cands),
+            "relation_candidates": len(rel_cands),
+            "relation_like_entity_candidates": len(rel_like_cands),
+            "entity_type_distribution": sorted(
+                [{"entity_type": k, "count": v} for k, v in dup_by_type.items()], key=lambda x: -x["count"]),
+            "matching_distribution": match_dist,
+            "dup_merged_into_baseline": dup_merged,
+        },
+        "coverage": {
+            "baseline": base_sum,
+            "merged": merged_sum,
+            "coverage_rate_delta": (
+                round((merged_sum["coverage_rate"] or 0) - (base_sum["coverage_rate"] or 0), 4)
+                if base_sum["coverage_rate"] is not None and merged_sum["coverage_rate"] is not None else None),
+        },
+        "new_requirement_candidates_uncovered": [
+            {"cand_id": c["id"], "name": c["entity_name"], "entity_type": c["entity_type"]}
+            for c in new_req_cands],
+        "relation_candidates_unresolved": rel_unresolved[:20],
+        "modeling_gaps": modeling_gap,
+    }
+
+
 _HANDLERS = {
     "coverage_matrix": _coverage_matrix,
     "trace_chain_check": _trace_chain_check,
     "scene_coverage": _scene_coverage,
     "gap_summary": _gap_summary,
+    "modeling_coverage": _modeling_coverage,
 }
 
 
