@@ -52,6 +52,8 @@
       <!-- 2026-09-11 数据整理（kb-b）入口已隐藏：抽取/审核流水线功能保留，工作流深链（待办/抽取完成/图谱空态引导）仍可达；恢复时解除注释即可 -->
       <!-- <a data-page="kb" data-tab="kb-b" id="nav-workbench" data-page-node-id="5Kh9MQjipqVEO9HPdgteW3"><span class="ic" data-page-node-id="JySMa5V1pFVbpidwp0r0cZ">🧬</span><span class="lbl" data-page-node-id="rgt2fwxbDhNo2x8SIcqEsq">数据整理</span></a> -->
       <a data-page="studio" data-tab="st-agent" data-page-node-id="wz8utkQVAVPe1DDAlHF4WH"><span class="ic" data-page-node-id="iGFPctyf2zUfxXyEMSvXVg">🤖</span><span class="lbl" data-page-node-id="YOC121PYmThCjHFnF5eYUJ">能力中心</span></a>
+      <!-- SRS-GN-CO（2026-09-20）：覆盖性分析独立导航——矩阵/追溯链/场景/缺项/建模批次五视图，数据源与对话 Agent 同一工具层 -->
+      <a data-page="coverage" id="nav-coverage" title="覆盖性分析：需求架构覆盖矩阵 / 端到端追溯链 / 场景链路 / 缺项汇总 / 建模批次覆盖（SRS-GN-CO）"><span class="ic">📊</span><span class="lbl">覆盖性分析</span></a>
       <!-- 2026-09-14：「用户与权限」入口从账号抽屉迁入「更多」——管理类入口统一收口（审计日志/运行监控/用户与权限） -->
       <a class="more-link" id="more-link" title="更多入口：审计日志 / 运行监控 / 用户与权限 / 审批管理" data-page-node-id="DkgVkyCEpKLy9SwUwgBs7O"><span class="ic" data-page-node-id="6Q5ntCmMM0DoOE7BQ0AetY">⋯</span><span class="lbl" data-page-node-id="jkwzrXYe5429f0laj4usEj">更多</span>&nbsp;<span class="more-caret" data-page-node-id="muxZ1H9wBxLM7ChNUL4eTr">›</span></a>
       <div class="more-flyout" id="more-flyout" data-page-node-id="9NG6OiguQroVdRBOF28aUG">
@@ -753,6 +755,23 @@
       <!-- 2026-09-04 合并队列页(pg-branch)已取消：全部能力整合进 图谱工作区(kb-d) 工作区三 Tab -->
 
       <!-- ===== 报告（AI 建模报告统一归档 / 检索 / 导出） ===== -->
+      <!-- SRS-GN-CO（2026-09-20）：覆盖性分析页——五视图 Tab，数据与对话 Agent 同源（coverage_tools 工具层） -->
+      <div class="page" id="pg-coverage">
+        <h3 class="pt">覆盖性分析</h3>
+        <div class="pd">需求—架构—验证覆盖性（SRS-GN-CO）：确定性工具计算，数字可复现可审计；解读与补全建议在 AI 对话中生成</div>
+        <div style="display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap;">
+          <span style="font-size:12px;color:var(--mut);">工程</span>
+          <select id="cov-project" onchange="covState.project=this.value;runCoverage();" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;max-width:220px;"></select>
+          <span style="font-size:12px;color:var(--mut);">分支（仅作用于已入图基线）</span>
+          <select id="cov-branch" onchange="covState.branch=this.value;runCoverage();" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+            <option value="">（默认分支）</option><option value="dev">dev</option><option value="release">release</option><option value="personal">personal</option>
+          </select>
+          <span style="flex:1"></span>
+          <div id="cov-tabs" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+        </div>
+        <div id="cov-body"><div class="loading">加载中…</div></div>
+      </div>
+
       <div class="page" id="pg-reports" data-page-node-id="brMwJ3E3RYrDSPvfGHdNv9">
         <h3 class="pt" data-page-node-id="4OnIn6zBjh6zYiq7ykCSCW">报告</h3>
         <div class="pd" data-page-node-id="1tL8jh1MC5tBXhyp3OHMmn">变更影响分析 / 预评审 / 模型分析等 AI 产出报告统一归档，支持检索、详情查看与二次导出 <span class="badge" data-page-node-id="qhKdYrh741JYKb6GnjiIX0">报告存储管理</span></div>
@@ -1545,5 +1564,6 @@
 
 <script src="/static/js/mods/37-kbar.js"></script>
 <script src="/static/js/mods/38-filepreview.js"></script>
+<script src="/static/js/mods/39-coverage.js"></script>
 </body>
 </html>

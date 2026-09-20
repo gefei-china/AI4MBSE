@@ -184,7 +184,7 @@ function flowRunBackToList(){
 // 2026-09-17 D1：kb 的一级名统一为「知识中心」（与主导航项 nav-kbhub 对齐；原先写作「模型本体」，
 // 与导航标签口径不一致，会让「最近访问」标签显示成 模型本体）。
 // 2026-09-17 R7：移除死条目 branch('合并队列' 页已删，go('branch') 重定向到 kb-d) 与 modelcfg('模型配置' 已并入 studio/st-model)。
-const TITLES = {home:'总览',ai:'AI 建模',kb:'知识中心',reports:'报告',studio:'能力中心',settings:'设置',users:'用户与权限管理',audit:'审计日志',ops:'运行监控中心',approval:'审批管理'};
+const TITLES = {home:'总览',ai:'AI 建模',kb:'知识中心',reports:'报告',studio:'能力中心',coverage:'覆盖性分析',settings:'设置',users:'用户与权限管理',audit:'审计日志',ops:'运行监控中心',approval:'审批管理'};
 // 二级页提升一级导航：子 Tab 入口的页面标题映射
 const KB_TAB_TITLES = {'kb-a':'数据看板','kb-e':'资料库','kb-b':'数据整理','kb-c':'本体模型','kb-d':'图谱工作区',};
 // 2026-09-17 R7：补 'st-prompt'（提示词模板，真实 subpage，`09-impact.js:1134` / `36-capability.js:72` 会 go 过来），
@@ -422,6 +422,7 @@ function loadPage(p, tabId) {
   if(p==='users') loadURTab('ur-a');
   if(p==='audit') loadAudit();
   if(p==='ops') loadOps();
+  if(p==='coverage') initCoverage();  // SRS-GN-CO（2026-09-20）覆盖性分析页
   if(p==='approval') loadApprovalTab('ap-type');
 }
 
