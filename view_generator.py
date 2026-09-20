@@ -213,16 +213,24 @@ REL_KIND_MAP = {
 
 # 各视图需要的元素 kind（最小输入集校验）
 VIEW_REQUIRED_KINDS = {
-    "BDD": ["part", "block"],
-    "IBD": ["part", "block", "port"],
-    "REQ": ["requirement"],
-    "UC": ["actor", "usecase"],
-    "ACT": ["action"],
-    "SEQ": ["part", "actor", "block"],
-    "STM": ["state"],
-    "PAR": ["constraint"],
-    "PKG": ["package", "block", "part"],
-    "TRACE": ["requirement"],
+    # 语义：**每个元组是一组同义词，命中任一即满足**；元组与元组之间是 AND。
+    # ⚠️ 2026-09-20 修正：原写法是「平铺列表 = 全部 kind 都必须存在」，于是
+    #   `"BDD": ["part", "block"]` 要求同时具备 part **和** block。
+    #   但 **SysML v2 已无 `block` 关键字** —— v1 的 block 在 v2 就是 `part def`
+    #   （本文件 VIEW_TYPES["BDD"].desc 自己写的也是「part def/part」）。
+    #   结果：任何合规的 v2 模型都**不可能**产出 kind=block，BDD/IBD/SEQ/PKG
+    #   **恒报**「视图最小输入集缺失：block」，而模型本身完全合规。
+    #   实测 conv 375：checker.jar 校验 0 错 0 警，BDD 却报缺失 block，且投影出 0 条边。
+    "BDD": [("part", "block")],
+    "IBD": [("part", "block"), ("port",)],
+    "REQ": [("requirement",)],
+    "UC": [("actor",), ("usecase",)],
+    "ACT": [("action",)],
+    "SEQ": [("part", "block"), ("actor",)],
+    "STM": [("state",)],
+    "PAR": [("constraint",)],
+    "PKG": [("package",), ("part", "block")],
+    "TRACE": [("requirement",)],
 }
 
 
@@ -456,10 +464,15 @@ def _finalize(view_type: str, nodes: list, edges: list, warnings: list) -> dict:
     nids = {n["id"] for n in nodes}
     edges = [e for e in edges if e["source"] in nids and e["target"] in nids]
 
-    # 最小输入集校验
+    # 最小输入集校验：每组（同义词元组）命中任一即算满足，未命中的组才计入 missing
     required = VIEW_REQUIRED_KINDS.get(view_type, [])
     have = {n["kind"] for n in nodes}
-    missing = [k for k in required if k not in have]
+    # 派生 kind：端口在 BDD/IBD 里**不是独立节点**（规范 7.12：端口是部件边界特征，
+    # 由渲染层按节点 attrs.ports 在部件边界画方块）→ 若只按 kind 取，IBD 要求的 `port`
+    # **永远不可能满足**，会恒报「最小输入集缺失：port」。这里按 attrs 补一个派生 kind。
+    if any((n.get("attrs") or {}).get("ports") for n in nodes):
+        have.add("port")
+    missing = ["/".join(g) for g in required if not (have & set(g))]
     if missing:
         warnings.append("视图最小输入集缺失：" + "、".join(missing) + "（请先补充对应模型元素）")
 
