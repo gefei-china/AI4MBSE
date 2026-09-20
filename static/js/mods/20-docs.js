@@ -767,15 +767,40 @@ function dsConfigHint() {
     : 'path 为服务器本地文件绝对路径，整篇作为文档入库。';
 }
 
-function toggleDsPanel() {
-  const p = document.getElementById('ds-panel');
-  const show = p.style.display === 'none';
-  p.style.display = show ? '' : 'none';
-  if (show) { loadDataSources(); if (!document.getElementById('ds-config').value) dsConfigHint(); }
+/* 外部数据源右侧滑窗（P0-4 2026-09-20 迁移）：原内嵌折叠面板改为 openPanel 滑窗承载，
+   减少对文档列表页的 DOM 侵入（列表页只留入口按钮）；全部函数 id 不变，CRUD/预览逻辑零改动 */
+function openDsDrawer() {
+  const html = `
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+    <span style="font-size:11px;color:var(--mut);">抽取产物：记录型文档进向量管线 + 候选实体/关系进未评审区（需人工确认后正式入图）</span>
+    <span style="flex:1"></span>
+    <button class="btn sm ghost" onclick="dsToggleForm()" id="ds-form-toggle">➕ 注册数据源</button>
+    <button class="btn sm ghost" onclick="loadDataSources()">刷新</button>
+  </div>
+  <div id="ds-form" style="display:none;border:1px solid var(--blue);border-radius:8px;padding:10px;margin-bottom:10px;background:var(--blue-l);">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <input id="ds-name" placeholder="数据源名称" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:160px;">
+      <select id="ds-type" onchange="dsConfigHint()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+        <option value="db">数据库（db）</option>
+        <option value="api">接口（api）</option>
+        <option value="file">文件（file）</option>
+      </select>
+      <span style="flex:1"></span>
+      <button class="btn sm" onclick="dsCreate()">注册</button>
+    </div>
+    <textarea id="ds-config" placeholder='连接配置 JSON（凭据只填环境变量名，不明文落库）' style="width:100%;margin-top:8px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;min-height:64px;"></textarea>
+    <div id="ds-config-hint" style="font-size:11px;color:var(--mut);margin-top:4px;"></div>
+  </div>
+  <div id="ds-list" style="display:flex;flex-direction:column;gap:6px;"><span style="font-size:12px;color:var(--mut);">加载中…</span></div>
+  <div id="ds-preview" style="display:none;margin-top:10px;border:1px dashed var(--line);border-radius:8px;padding:8px;max-height:260px;overflow:auto;"></div>`;
+  openPanel('🔌 外部数据源', html);
+  loadDataSources();
+  dsToggleForm();   // 滑窗打开即展开注册表单（滑窗内空间纵向充裕，少一次点击）
 }
 
 function dsToggleForm() {
   const f = document.getElementById('ds-form');
+  if (!f) return;   // 滑窗未打开时静默
   const show = f.style.display === 'none';
   f.style.display = show ? '' : 'none';
   document.getElementById('ds-form-toggle').textContent = show ? '✖ 收起表单' : '➕ 注册数据源';
