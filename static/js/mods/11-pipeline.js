@@ -220,9 +220,15 @@ function procAddTool(ev){
     // P0-2：结果默认截断展示（max-height），超出部分可展开全文 / 复制（truncated 标记由后端透传）
     // V2.7：失败且已有错误面时跳过结果区（错误信息已在 errface 展示，避免重复占位）
     if(!(ev.ok === false && ev.error)){
-      detail += `<div class="proc-tool-result ${trunc?'trunc':''}">
+      // SRS-GN-CO（2026-09-21）：覆盖性工具结果 → 行业风格富组件（与历史回放 06-cards 同一套 covTryCard）
+      const covHtml = (typeof covTryCard === 'function') ? covTryCard(ev.name, ev.result, ev.arguments) : null;
+      if(covHtml){
+        detail += `<div class="proc-tool-result" style="border:none;padding:0;">${covHtml}</div>`;
+      } else {
+        detail += `<div class="proc-tool-result ${trunc?'trunc':''}">
         <div class="pr-head"><span>结果</span>${trunc?`<span class="pr-act" onclick="toolExpand(this)">展开全文</span>`:''}<span class="pr-act" onclick="copyToolResult(this)">📋 复制</span></div>
         <div class="pr-body">${esc(String(res))}</div></div>`;
+      }
     }
   }
   patch.detail = detail;

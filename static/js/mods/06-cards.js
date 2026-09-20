@@ -51,9 +51,16 @@ function procBlocksHtml(ex, mid){
     // P0-2 历史工具结果：截断展示可展开/复制（truncated 标记随 card_data.exec 持久化）
     // V2.7：失败且已有错误面时跳过结果区（错误信息已在 errface 展示，避免重复占位）
     if(!(t.ok===false && t.error)){
-      body += `<div class="proc-tool-result ${t.truncated?'trunc':''}">
+      // SRS-GN-CO（2026-09-21）：覆盖性工具结果渲染为行业风格富组件（DOORS 矩阵/Cameo 链/Polarion 风险分级），
+      // 内嵌「预览大图」入口；JSON 截断或非覆盖工具时回退原文本展示
+      const covHtml = (typeof covTryCard === 'function') ? covTryCard(t.name, t.result, t.arguments) : null;
+      if(covHtml){
+        body += `<div class="proc-tool-result" style="border:none;padding:0;">${covHtml}</div>`;
+      } else {
+        body += `<div class="proc-tool-result ${t.truncated?'trunc':''}">
         <div class="pr-head"><span>结果</span>${t.truncated?`<span class="pr-act" onclick="toolExpand(this)">展开全文</span>`:''}<span class="pr-act" onclick="copyToolResult(this)">📋 复制</span></div>
         <div class="pr-body">${esc(String(res))}</div></div>`;
+      }
     }
     // P0-1 历史工具耗时（exec 持久化 elapsed_ms 时显示）
     const elapsedSub = t.elapsed_ms ? ` · ⏱ ${(t.elapsed_ms/1000).toFixed(1)}s` : '';
