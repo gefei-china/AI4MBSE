@@ -59,30 +59,53 @@ hr("[1] KB-S 文档白名单自愈：rag.GraphRAG._resolve_scope_docs")
 
 from agent.rag import GraphRAG
 
+
+def _fx_conn_docs(n=2):
+    """夹具：自建临时库 + documents 表 + n 行夹具文档。
+
+    为什么自建（2026-09-20 CI 首跑教训）：本节断言的是「白名单自愈**机制**」，
+    与开发库恰好有哪些文档无关。旧写法从 mbse.db 捞最近 2 篇当夹具 ——
+    CI/全新库的 documents 表是**空的** → 「部分失效」用例退化成「全部失效」
+    → unfiltered=True → 假失败。断言对象必须是机制，而非当前库恰好配了什么。
+    """
+    import tempfile
+    d = os.path.join(tempfile.gettempdir(), f"_kb_scope_fixture_{os.getpid()}.db")
+    if os.path.exists(d):
+        os.remove(d)
+    c = sqlite3.connect(d)
+    c.row_factory = sqlite3.Row
+    c.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL)")
+    for i in range(n):
+        c.execute("INSERT INTO documents (filename) VALUES (?)", (f"__fixture_doc_{i}.md",))
+    c.commit()
+    return c, d
+
+
 conn = ro_conn()
+_fx, _fx_path = _fx_conn_docs(2)
 try:
-    have = [r["filename"] for r in conn.execute(
-        "SELECT filename FROM documents ORDER BY id DESC LIMIT 2")]
+    have = [r["filename"] for r in _fx.execute(
+        "SELECT filename FROM documents ORDER BY id LIMIT 2")]
     missing = "__definitely_not_exist__.md"
 
-    ok1, w1 = GraphRAG._resolve_scope_docs(conn, have)
+    ok1, w1 = GraphRAG._resolve_scope_docs(_fx, have)
     check("全有效白名单 → 原样返回、无告警", ok1 == have and w1 is None, f"got={ok1}, warn={w1}")
 
-    ok2, w2 = GraphRAG._resolve_scope_docs(conn, have + [missing])
+    ok2, w2 = GraphRAG._resolve_scope_docs(_fx, have + [missing])
     check("部分失效 → 剔除失效项并给出告警", ok2 == have and w2 and missing in w2["missing"],
           f"effective={ok2}, missing={w2 and w2['missing']}")
     check("部分失效 → unfiltered=False（未放宽）", w2 and w2["unfiltered"] is False,
           f"unfiltered={w2 and w2['unfiltered']}")
 
-    ok3, w3 = GraphRAG._resolve_scope_docs(conn, [missing])
+    ok3, w3 = GraphRAG._resolve_scope_docs(_fx, [missing])
     check("★ 全失效 → 放宽为不限文档（绝不静默 0 命中）", ok3 == [] and w3 and w3["unfiltered"] is True,
           f"effective={ok3}, unfiltered={w3 and w3['unfiltered']}")
 
-    ok4, w4 = GraphRAG._resolve_scope_docs(conn, [missing, missing])
+    ok4, w4 = GraphRAG._resolve_scope_docs(_fx, [missing, missing])
     check("重复项去重（脏数据不再重复计入）", w4 and w4["requested"] == [missing],
           f"requested={w4 and w4['requested']}")
 
-    ok5, w5 = GraphRAG._resolve_scope_docs(conn, [])
+    ok5, w5 = GraphRAG._resolve_scope_docs(_fx, [])
     check("空白名单 → 不做过滤（空列表, None）", ok5 == [] and w5 is None, f"got={ok5}, warn={w5}")
 
     # 关掉 fallback：失效项不该被剔除（回到改动前行为，仅告警）
