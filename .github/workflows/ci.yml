@@ -1,0 +1,66 @@
+# CI（2026-09-20 建立）
+#
+# 范围说明（为什么只跑这些）：
+#   GitHub Actions 是 Linux，而本工程部分验证依赖**随包运行时**（不入库，见 .gitignore）：
+#     - `checker.jar`（126 MB，OMG SysML v2 官方解析器）+ `sysml.library` + `java-runtime/`
+#   因此依赖它们的门禁在 CI 上**无法执行**，不在本文件里假装能跑：
+#     - tools/verify/verify_sysml_check_gate.py   （需要 checker.jar + java）
+#     - tools/verify/verify_view_projection.py    （经 view_generator → sysml_ast → java）
+#   同理排除：
+#     - tools/verify/verify_s4_llm_params.py      （需要真实 LLM provider 的 api_key，CI 无 secret）
+#     - verify_orchestration_e2e.py 的 live 模式  （真调 LLM，产生费用；CI 只跑其 G0 静态哨兵）
+#   以上在开发机（Windows，随包运行时齐备）上全绿，见 docs/ 各自检脚本登记。
+#
+# 已实测确认：本 workflow 的每一步都在开发机上以「干净数据库」（MBSE_DB_PATH 指向空库
+#   + database.init_db() 建表种子）预演过，结果与开发机全量运行一致。
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests-and-guards:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 三个自检脚本断言 llm_providers / agents 等表存在（开发机是现库）。
+      # CI 上先建 schema + 种子（107 表 / 7 agents / 2 providers），与开发机口径一致。
+      - name: Init database (schema + seeds)
+        run: python -c "from database import init_db; init_db()"
+
+      - name: pytest（35 项单元/功能测试）
+        run: pytest -q -p no:warnings
+
+      # ── 以下门禁均为「零 LLM、零外部网络」，退出码即判定 ──────────────────────────
+      - name: Guard G0 静态哨兵（模块别名遮蔽，毫秒级）
+        run: python tools/verify/verify_orchestration_e2e.py --static-only
+
+      - name: Guard 编排输入/输出预算不变式（I1~I5 + M1~M12）
+        run: python tools/verify/verify_orch_summary_budget.py
+
+      - name: Guard S4 调用契约（采样参数优先级，48 项）
+        run: python tools/verify/verify_s4_calls.py
+
+      - name: Guard context_window 守卫 + 路由接线状态（29 项）
+        run: python tools/verify/verify_llm_context_guard.py
+
+      - name: Guard 上下文防腐 / 范围自愈（51 项）
+        run: python tools/verify/verify_context_scope_guard.py
