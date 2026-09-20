@@ -324,7 +324,19 @@ class LLMClient:
 
 
 class LLMRouter:
-    """D10 LLM 智能路由：能力标签 + 优先级 + Token 预算 → 选模型（8.2 多模型切换 / Token 成本控制）。"""
+    """D10 LLM 智能路由：能力标签 + 优先级 + Token 预算 → 选模型（8.2 多模型切换 / Token 成本控制）。
+
+    ⚠️ **2026-09-20 实测：本类当前「无生产调用点」。**
+    `LLMClient.chat()` 只有调用方显式传 `route_tags` 时才会走 `route()`，而全仓生产代码里
+    `route_tags` 的传参处**只有一个**：`tests/manual_verify/verify_llm_route_d10.py`
+    （复现：`grep -rn "route_tags" --include=*.py`，排除 `.venv/tmp/skill_packages`）。
+    因此 `llm_providers` 的 `priority` / `tags` / `budget_tokens` 三列与 `usage_of()` 的
+    「预算耗尽自动降级」**在生产中完全不生效**：
+      - 不传 `route_tags` → 走 `get_default_provider()`（WHERE is_default=1，现已按 priority 排序）；
+      - 传了 `route_tags` → 才走本路由。
+    → **不要因为「priority 没生效」就去改 DB 配置**：先确认它到底有没有被调用。
+    要启用本能力：给编排链路传 `route_tags`（属产品决策，会让选模型变成动态行为）。
+    """
 
     @staticmethod
     def parse_tags(p: dict) -> list:

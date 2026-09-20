@@ -284,6 +284,38 @@ try:
         _cfg.DEFAULT_CONFIG.get("llm", {}).get("context_window_guard"))
     chk("6.2 CONFIG_SCHEMA 有该键（否则配置面板无法暴露）",
         "context_window_guard" in _cfg.CONFIG_SCHEMA.get("llm", {}), "")
+
+    print("\n[7] D10 智能路由的接线状态（把「当前事实」钉成断言，防后人重复排查）")
+    import llm as _llm
+    from llm import LLMRouter as _Router
+
+    _cnt = {"n": 0}
+    _orig_route = _llm.llm_router.route
+    _orig_rec = _llm.llm_client._record_usage
+
+    def _count_route(*a, **k):
+        _cnt["n"] += 1
+        return _orig_route(*a, **k)
+
+    _llm.llm_router.route = _count_route
+    _llm.llm_client._record_usage = lambda *a, **k: None   # 防写库（本脚本不产生副作用）
+    try:
+        _cnt["n"] = 0
+        _llm.llm_client.chat(MSG)
+        _n_no = _cnt["n"]
+        _cnt["n"] = 0
+        _llm.llm_client.chat(MSG, route_tags=["chinese"])
+        _n_yes = _cnt["n"]
+    finally:
+        _llm.llm_router.route = _orig_route
+        _llm.llm_client._record_usage = _orig_rec
+
+    chk("7.1 不传 route_tags → 不经过 LLMRouter（走默认 provider，priority 不参与）",
+        _n_no == 0, "route 调用次数=%d" % _n_no)
+    chk("7.2 传 route_tags → 才经过 LLMRouter（priority/tags/budget 此时才生效）",
+        _n_yes == 1, "route 调用次数=%d" % _n_yes)
+    chk("7.3 LLMRouter 类 docstring 已标注「当前无生产调用点」（防警示被删）",
+        "无生产调用点" in (_Router.__doc__ or ""), "")
 finally:
     httpx.post = _orig_post
     _lg.removeHandler(_cap)
