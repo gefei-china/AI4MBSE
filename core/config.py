@@ -287,6 +287,26 @@ DEFAULT_CONFIG = {
         "docs_missing_fallback": True,   # 白名单文档不存在时剔除失效项；**全部**失效 → 退化为不限文档
         "docs_missing_warn": True,       # 发生上述情形时写日志，并在检索结果回显 kb_scope_warn
     },
+    "rag": {
+        # P1-4（2026-09-21）：检索路由与混合检索参数配置化（此前散落硬编码，仅 rerank_enabled 已有配置）。
+        # 消费点：agent/rag.py（GraphRAG 路由阈值/检索条数/图谱置信权重）、
+        #         knowledge_engine.hybrid_search（RRF 常数/HyDE/置信等级/重排候选数）、
+        #         services/rag_rerank.py（LLM 重排开关）。
+        # 检索链路：图谱优先 → 置信不足走向量混合检索（BM25+向量 RRF 融合 + HyDE 补召）→ LLM 重排。
+        "route_threshold": 0.75,     # 检索路由阈值：图谱置信度 ≥ 阈值 → 纯图路由（跳过向量检索）
+        "top_k": 4,                  # 混合检索返回条数（与消费侧 chunk_hits[:3] 对齐）
+        "fallback_top_k": 5,         # 混合检索异常时 search_chunks 兜底条数
+        "rrf_k": 60,                 # RRF 融合常数（Σ1/(k+rank)；越大排名差异对得分影响越平缓，行业常用 60）
+        "hyde_enabled": True,        # Reverse HyDE 兜底开关（chunk 假设问题匹配；用户措辞≠文档措辞时补召回）
+        "hyde_weight": 0.05,         # HyDE 补充分权重（叠加进融合分，0=等效关闭）
+        "w_coverage": 0.50,          # 图谱置信权重：命中实体覆盖度因子（min(命中数/5,1)）
+        "w_relations": 0.30,         # 图谱置信权重：关系连接性因子（min(关系数/3,1)）
+        "w_typing": 0.20,            # 图谱置信权重：类型标注完整度因子
+        "confidence_high": 0.70,     # 命中置信等级「高」分界（真向量相似度口径）
+        "confidence_mid": 0.45,      # 命中置信等级「中」分界
+        "rerank_enabled": True,      # LLM Rerank 重排开关（LLM 不可用/超时静默回退原排序）
+        "rerank_max_candidates": 8,  # 送 LLM 重排的候选上限（其余保底置后）
+    },
     "chunking": {
         "default_size": 600,         # 默认分块大小（字符，≈500-650 token 中文）
         "overlap": 90,               # 重叠（字符，15% of default_size；句子级重叠时取其整句）
@@ -538,6 +558,21 @@ CONFIG_SCHEMA = {
     "kb_scope": {
         "docs_missing_fallback": {"type": "bool", "desc": "白名单文档不存在时剔除失效项；全失效则退化为不限文档"},
         "docs_missing_warn":     {"type": "bool", "desc": "白名单失效时写日志并在检索结果回显 kb_scope_warn"},
+    },
+    "rag": {
+        "route_threshold":       {"type": "float", "desc": "检索路由阈值：图谱置信度≥阈值走纯图路由（跳过向量检索）"},
+        "top_k":                 {"type": "int",   "desc": "混合检索返回条数（与消费侧 chunk_hits[:3] 对齐）"},
+        "fallback_top_k":        {"type": "int",   "desc": "混合检索异常时 search_chunks 兜底条数"},
+        "rrf_k":                 {"type": "int",   "desc": "RRF 融合常数（Σ1/(k+rank)，越大排名差异越平缓；行业常用 60）"},
+        "hyde_enabled":          {"type": "bool",  "desc": "Reverse HyDE 兜底开关（chunk 假设问题匹配补召回）"},
+        "hyde_weight":           {"type": "float", "desc": "HyDE 补充分权重（叠加进融合分，0=等效关闭）"},
+        "w_coverage":            {"type": "float", "desc": "图谱置信权重：命中实体覆盖度因子"},
+        "w_relations":           {"type": "float", "desc": "图谱置信权重：关系连接性因子"},
+        "w_typing":              {"type": "float", "desc": "图谱置信权重：类型标注完整度因子"},
+        "confidence_high":       {"type": "float", "desc": "命中置信等级「高」分界（真向量相似度口径）"},
+        "confidence_mid":        {"type": "float", "desc": "命中置信等级「中」分界"},
+        "rerank_enabled":        {"type": "bool",  "desc": "LLM Rerank 重排开关（失败静默回退原排序）"},
+        "rerank_max_candidates": {"type": "int",   "desc": "送 LLM 重排的候选上限（其余保底置后）"},
     },
     "chunking": {
         "default_size":      {"type": "int",   "desc": "默认分块大小（字符，中文 ≈500-650 token）"},

@@ -22,7 +22,12 @@ class GraphRAG:
     """
 
     def __init__(self):
-        self.confidence_threshold = 0.75
+        # P1-4：路由阈值配置化（rag.route_threshold，默认 0.75 与改动前一致）
+        try:
+            from core import config as _cfg
+            self.confidence_threshold = float(_cfg.get("rag", "route_threshold", 0.75))
+        except Exception:
+            self.confidence_threshold = 0.75
         self.vector = VectorEngine()
         self.router = QueryRouter(threshold=self.confidence_threshold)
 
@@ -113,6 +118,13 @@ class GraphRAG:
         # → 整个 POST /api/conversations/{id}/chat 返回 500，AI 能力消费链路完全不可用。
         # 现统一在分支外先求值，口径与兜底分支保持一致（消费隔离：默认排除 AI 收编文档）。
         _exclude_ai = not (scope.get("include_ai_generated") or False)
+        # P1-4：检索条数配置化（rag.top_k / rag.fallback_top_k，默认 4/5 与改动前一致）
+        try:
+            from core import config as _cfg
+            _rag_top_k = int(_cfg.get("rag", "top_k", 4))
+            _rag_fb_top_k = int(_cfg.get("rag", "fallback_top_k", 5))
+        except Exception:
+            _rag_top_k, _rag_fb_top_k = 4, 5
         if graph_confidence < self.confidence_threshold:
             try:
                 # 文档全局化：向量检索不分分支（文件管理全局资产，向量化数据全局消费）；
@@ -121,9 +133,9 @@ class GraphRAG:
                 force_domain = (_glossary_res.get("force_domain") or "").strip() or None
                 boost = _glossary_res.get("boost") or 1.0
                 from knowledge_engine import hybrid_search as _hybrid
-                # 2026-09-17 S4：top_k 8 → 4，与消费侧 context_text 的 chunk_hits[:3] 对齐
+                # S4：top_k 配置化（P1-4，默认 4），与消费侧 context_text 的 chunk_hits[:3] 对齐
                 # （此前实取 8 条、仅消费 3 条，多算的 5 条白白走向量检索与 RRF 融合）
-                _hy = _hybrid(conn, query, top_k=4, branches=None,
+                _hy = _hybrid(conn, query, top_k=_rag_top_k, branches=None,
                               domain=force_domain if force_domain and force_domain != "unknown" else None,
                               glossary_boost=boost, doc_names=scope_docs or None)
                 chunk_hits = _hy["hits"]
@@ -152,7 +164,7 @@ class GraphRAG:
                     # 2026-09-15 消费隔离：AI 建模 RAG 默认排除 AI 收编文档（origin='ai_generated'，
                     # model collapse 对策）；kb_scope.include_ai_generated=true 显式开启才纳入
                     _exclude_ai = not (scope.get("include_ai_generated") or False)
-                    chunk_hits = search_chunks(conn, query, top_k=5, branches=None,
+                    chunk_hits = search_chunks(conn, query, top_k=_rag_fb_top_k, branches=None,
                                                doc_names=scope_docs or None, exclude_ai=_exclude_ai)
                 except Exception:
                     chunk_hits = []
@@ -238,19 +250,27 @@ class GraphRAG:
 
     @staticmethod
     def _graph_confidence(graph_results: list, graph_relations: list) -> float:
-        """多因子图谱置信度（2026-09-01 路由增强）。
+        """多因子图谱置信度（2026-09-01 路由增强；P1-4 权重配置化）。
 
-        0.50 * 命中实体覆盖度(min(n/5,1)) + 0.30 * 关系连接性(min(rels/3,1)) + 0.20 * 类型匹配度
-        —— 相比原 min(n/5,1) 单因子，带关系的强命中不会被弱命中稀释；有类型标注的实体更可信。
+        w_coverage * 命中实体覆盖度(min(n/5,1)) + w_relations * 关系连接性(min(rels/3,1))
+        + w_typing * 类型匹配度 —— 默认 0.50/0.30/0.20（改动前硬编码值）。
+        相比原 min(n/5,1) 单因子，带关系的强命中不会被弱命中稀释；有类型标注的实体更可信。
         """
         if not graph_results:
             return 0.0
+        try:
+            from core import config as _cfg
+            w_cov = float(_cfg.get("rag", "w_coverage", 0.50))
+            w_rel = float(_cfg.get("rag", "w_relations", 0.30))
+            w_typ = float(_cfg.get("rag", "w_typing", 0.20))
+        except Exception:
+            w_cov, w_rel, w_typ = 0.50, 0.30, 0.20
         hit = min(len(graph_results) / 5.0, 1.0)
         rels = min(len(graph_relations or []) / 3.0, 1.0)
         typed = sum(1 for e in graph_results
                     if str(e.get("entity_type") or "").strip() and str(e.get("entity_type")) != str(e.get("name")))
         type_match = typed / len(graph_results) if graph_results else 0.0
-        return min(0.50 * hit + 0.30 * rels + 0.20 * type_match, 1.0)
+        return min(w_cov * hit + w_rel * rels + w_typ * type_match, 1.0)
 
     @staticmethod
     def _resolve_scope_docs(conn, raw_docs) -> tuple:

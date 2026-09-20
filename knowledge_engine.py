@@ -252,6 +252,18 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     from knowledge_engine import VectorEngine, BM25Engine
     from knowledge_pipeline import _branch_clause, _doc_clause
 
+    # P1-4（2026-09-21）：混合检索参数配置化（rag.* 组；默认值与改动前硬编码一致）
+    try:
+        from core import config as _cfg
+        _rrf_k = int(_cfg.get("rag", "rrf_k", 60))
+        _hyde_on = bool(_cfg.get("rag", "hyde_enabled", True))
+        _hyde_w = float(_cfg.get("rag", "hyde_weight", 0.05))
+        _conf_high = float(_cfg.get("rag", "confidence_high", 0.70))
+        _conf_mid = float(_cfg.get("rag", "confidence_mid", 0.45))
+        _rerank_cand = int(_cfg.get("rag", "rerank_max_candidates", 8))
+    except Exception:
+        _rrf_k, _hyde_on, _hyde_w, _conf_high, _conf_mid, _rerank_cand = 60, True, 0.05, 0.70, 0.45, 8
+
     def _domain_clause(d: str | None):
         if not d or d == "unknown" or d == "all":
             return "", []
@@ -326,7 +338,7 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     # P1-3：HyDE 限定候选集（bm25 ∪ vec 的 id），不再全量扫描 hyde 行
     hyde_scores = {}
     hyde_cand = set(vec_scores) | set(bm25_scores)
-    if hyde_cand:
+    if _hyde_on and hyde_cand:  # P1-4：HyDE 兜底开关（rag.hyde_enabled）
         try:
             qlow = query.lower()
             marks = ",".join("?" * len(hyde_cand))
@@ -374,7 +386,7 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
             logger.warning("hybrid_search HyDE 侧失败，跳过: %s", e)
 
     # ── RRF 融合（P1-2：按排名合并，替代固定权重）──
-    # RRF score = Σ 1/(k + rank)，k=60（行业常用）；仅对双方都召回的合并，单侧命中也纳入
+    # RRF score = Σ 1/(k + rank)，k 配置化（rag.rrf_k，默认 60 行业常用）；仅对双方都召回的合并，单侧命中也纳入
     def _rrf(ranks_a: dict, ranks_b: dict, k: int = 60) -> dict:
         fused = {}
         for cid, rank in ranks_a.items():
@@ -388,6 +400,7 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     rrf = _rrf(
         {cid: i + 1 for i, (cid, _) in enumerate(vec_ranked[:top_k * 2])},
         {cid: i + 1 for i, (cid, _) in enumerate(bm25_ranked[:top_k * 2])},
+        k=_rrf_k,
     )
     if not rrf:
         return {"hits": [], "bm25_count": len(bm25_scores), "vec_count": len(vec_scores),
@@ -405,7 +418,7 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
         if glossary_boost and glossary_boost > 1.0:
             boost = glossary_boost
             final *= boost
-        final += (hyde_scores.get(cid, 0.0) * 0.05)  # HyDE 弱辅助（5% 权重）
+        final += (hyde_scores.get(cid, 0.0) * _hyde_w)  # HyDE 弱辅助（权重 rag.hyde_weight，默认 5%）
         scored.append((final, r, vec_scores.get(cid, 0.0), bm25_scores.get(cid, 0.0),
                        boost, hyde_scores.get(cid, 0.0)))
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -416,8 +429,9 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     hits = []
     for final, r, vs, bs, boost, hs in scored[:top_k]:
         # P2-F 可解释性：置信度等级（基于真向量相似度 vs，0-1 区间区分度高；无向量用 bm25 归一）
+        # P1-4：等级分界配置化（rag.confidence_high / rag.confidence_mid）
         _ref = vs if vs > 0 else (min(bs / 50.0, 1.0) if bs > 0 else 0.0)
-        conf_level = "高" if _ref >= 0.70 else ("中" if _ref >= 0.45 else "低")
+        conf_level = "高" if _ref >= _conf_high else ("中" if _ref >= _conf_mid else "低")
         hit = {
             "score": round(final, 3),
             "confidence_level": conf_level,
@@ -442,7 +456,7 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     # 开关 rag.rerank_enabled（默认开）；LLM 不可用/超时/解析失败静默回退原排序，不阻断检索主链路。
     try:
         from services.rag_rerank import llm_rerank
-        hits = llm_rerank(query, hits, top_k=top_k)
+        hits = llm_rerank(query, hits, top_k=top_k, max_candidates=_rerank_cand)  # P1-4：候选数配置化
     except Exception:
         pass
     return {"hits": hits, "bm25_count": len(bm25_scores), "vec_count": len(vec_scores),
