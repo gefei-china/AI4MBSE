@@ -403,12 +403,13 @@ function computeViewLayout(viewType, nodes, edges) {
  *       实测 BDD 真实数据 30 节点 96 处交叉；ELK 的 LAYER_SWEEP
  *       交叉最小化 + 网络单纯形层分配 + 正交布线是行业标准方案
  *       （Eclipse 系建模工具同源内核，EPL-2.0，vendored 离线可用）。
- * 语义惯例类视图（REQ/UC/SEQ/ACT/IBD/PAR/STM）保留自研确定性布局：
+ * 语义惯例类视图（REQ/UC/SEQ/ACT/PAR/STM）保留自研确定性布局：
  *       actor 居框外两侧、生命线时序等约定俗成的空间语义 ELK 不理解。
+ *       IBD 走 ELK 端口约束布局（实测优于自研「端口右错开」，见 _elkIbdGraph）。
  * 调用：computeViewLayoutAsync() 返回 null = 不适用/失败，调用方沿用
  *       computeViewLayout() 的同步初排，绝不阻断渲染。
  */
-const VIEW_ELK_TYPES = new Set(['BDD', 'PKG', 'TRACE']);
+const VIEW_ELK_TYPES = new Set(['BDD', 'PKG', 'TRACE', 'IBD', 'REQ']);
 let _elkInstance = null;
 
 function _elkEdgePriority(kind) {
@@ -417,32 +418,77 @@ function _elkEdgePriority(kind) {
   return 1;
 }
 
+function _elkLayoutOptions() {
+  return {
+    'elk.algorithm': 'layered',
+    'elk.direction': 'DOWN',
+    'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+    'elk.spacing.nodeNode': '46',
+    'elk.layered.spacing.nodeNodeBetweenLayers': '70',
+    'elk.edgeRouting': 'ORTHOGONAL',
+  };
+}
+
+/* IBD 专用：端口节点不作为独立子节点参与分层，而是挂到所属部件的
+ * ELK port 上——ELK 会把端口布在部件边界并把连线直达端口，
+ * 这是自研「端口挂右侧错开」无法企及的核心能力。返回 ELK 图。 */
+function _elkIbdGraph(nodes, edges) {
+  const portOwner = {};
+  nodes.forEach(n => ((n.attrs && n.attrs.ports) || []).forEach(p => { portOwner[String(p)] = String(n.id); }));
+  const childIds = new Set(nodes.filter(n => n.kind !== 'port').map(n => String(n.id)));
+  const children = nodes.filter(n => n.kind !== 'port').map(n => ({
+    id: String(n.id),
+    width: 150,
+    height: 60,
+    ports: ((n.attrs && n.attrs.ports) || [])
+      .filter(p => portOwner[String(p)] === String(n.id))
+      .map(p => ({ id: String(p), width: 10, height: 10 })),
+  }));
+  const edgs = [];
+  (edges || []).forEach((e, i) => {
+    const s = String(e.source), t = String(e.target);
+    const sOwner = childIds.has(s) ? s : (portOwner[s] && childIds.has(portOwner[s]) ? portOwner[s] : null);
+    const tOwner = childIds.has(t) ? t : (portOwner[t] && childIds.has(portOwner[t]) ? portOwner[t] : null);
+    if (!sOwner || !tOwner) return; // 孤儿端口边丢弃（同步初排会兜底摆放）
+    const ed = { id: 'e' + i, sources: [sOwner], targets: [tOwner] };
+    if (!childIds.has(s)) ed.sourcePort = s;
+    if (!childIds.has(t)) ed.targetPort = t;
+    ed.layoutOptions = { 'elk.layered.priority': String(_elkEdgePriority(e.kind)) };
+    edgs.push(ed);
+  });
+  return { id: 'root', layoutOptions: _elkLayoutOptions(), children, edges: edgs };
+}
+
+/* 平铺图（BDD/PKG/TRACE）：全部节点作为子节点分层 */
+function _elkFlatGraph(nodes, edges) {
+  return {
+    id: 'root',
+    layoutOptions: _elkLayoutOptions(),
+    children: (nodes || []).map(n => ({ id: String(n.id), width: 150, height: 60 })),
+    edges: (edges || []).map((e, i) => ({
+      id: 'e' + i,
+      sources: [String(e.source)],
+      targets: [String(e.target)],
+      layoutOptions: { 'elk.layered.priority': String(_elkEdgePriority(e.kind)) },
+    })),
+  };
+}
+
 async function computeViewLayoutAsync(viewType, nodes, edges) {
   if (!window.ELK || !VIEW_ELK_TYPES.has(viewType)) return null;
   try {
     if (!_elkInstance) _elkInstance = new ELK();
-    const graph = {
-      id: 'root',
-      layoutOptions: {
-        'elk.algorithm': 'layered',
-        'elk.direction': 'DOWN',
-        'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
-        'elk.spacing.nodeNode': '46',
-        'elk.layered.spacing.nodeNodeBetweenLayers': '70',
-        'elk.edgeRouting': 'ORTHOGONAL',
-      },
-      children: (nodes || []).map(n => ({ id: String(n.id), width: 150, height: 60 })),
-      edges: (edges || []).map((e, i) => ({
-        id: 'e' + i,
-        sources: [String(e.source)],
-        targets: [String(e.target)],
-        layoutOptions: { 'elk.layered.priority': String(_elkEdgePriority(e.kind)) },
-      })),
-    };
+    const graph = viewType === 'IBD'
+      ? _elkIbdGraph(nodes || [], edges || [])
+      : _elkFlatGraph(nodes || [], edges || []);
     const out = await _elkInstance.layout(graph);
     const pos = {};
     (out.children || []).forEach(c => {
       if (c.x != null) pos[c.id] = { x: Math.round(c.x), y: Math.round(c.y) };
+      // IBD：端口位置 = 部件位置 + 端口相对坐标（ELK 已布到部件边界）
+      (c.ports || []).forEach(p => {
+        if (p.x != null) pos[p.id] = { x: Math.round(c.x + p.x), y: Math.round(c.y + p.y) };
+      });
     });
     return Object.keys(pos).length ? pos : null;
   } catch (e) {
