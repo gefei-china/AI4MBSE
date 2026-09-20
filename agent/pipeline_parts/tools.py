@@ -521,6 +521,14 @@ class ToolMixin:
                 result = _exec_graph_db(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
+            # 覆盖性分析工具（2026-09-20 SRS-GN-CO：4 个只读确定性工具——矩阵/追溯链/场景/缺项，
+            # 数字可复现可审计，解读与补全建议由 Agent 层完成。注意按名集合路由：
+            # 四个工具名只有 coverage_matrix 带 coverage_ 前缀，前缀匹配会漏掉其余三个）
+            if name in ("coverage_matrix", "trace_chain_check", "scene_coverage", "gap_summary"):
+                from coverage_tools import exec_tool as _exec_coverage
+                result = _exec_coverage(name, arguments or {})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
             # SysML v2 校验工具（2026-09-19：AI 建模闭环的「暴露 + 回喂」段）。
             # 生成端把校验当**工具**调用 → 拿到三路诊断（词法/语法/语义）→ 自行修复 → 再校验，
             # 轮次上限复用本模块已有的 ReAct `max_tool_rounds`（= 3），故**零新循环**。
