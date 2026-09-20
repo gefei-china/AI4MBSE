@@ -1,0 +1,45 @@
+{
+  "_comment": "mbse_system 系统级配置文件模板。复制为 ~/.workbuddy/mbse_config.json 后按需填写（可用环境变量 MBSE_CONFIG_PATH 指定其他位置）。优先级：环境变量 > 本文件 > 内置默认值；未填写的项使用默认值。token 等敏感项也可改用环境变量注入，避免明文落盘。",
+  "app": {
+    "host": "127.0.0.1",
+    "port": 8000
+  },
+  "database": {
+    "path": "",
+    "connect_timeout": 30
+  },
+  "llm": {
+    "force_mock": false,
+    "deepseek_api_key": "",
+    "qwen_api_key": ""
+  },
+  "mcp": {
+    "timeout": 15,
+    "max_response": 4000
+  },
+  "zhiyuan": {
+    "base_url": "http://mbse-platform:8080",
+    "token": "",
+    "headers": {},
+    "timeout": 15,
+    "max_response": 8000
+  },
+  "chunking": {
+    "default_size": 600,
+    "overlap": 90,
+    "min_chunk": 50,
+    "sentence_overlap": true,
+    "title_enriched": true,
+    "table_max_rows": 15,
+    "code_block_chunk": true,
+    "size_by_type": {
+      ".md": 800,
+      ".txt": 600,
+      ".pdf": 600,
+      ".docx": 600,
+      ".xlsx": 1000,
+      ".csv": 1000,
+      ".pptx": 400
+    }
+  }
+}

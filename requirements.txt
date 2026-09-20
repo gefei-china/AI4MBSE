@@ -1,0 +1,63 @@
+# mbse_system 依赖清单（2026-09-18 新增）
+#
+# 来源：开发机 .venv 的 `pip freeze` 全量快照（含传递依赖），非人工整理 —— 保证可复现，
+#       但不区分直接 / 间接依赖。当前 44 条（2026-09-19 补入 pdfplumber 及其传递依赖
+#       cffi / cryptography / pdfminer.six / pycparser / pypdfium2，共 6 条）。
+# 环境：Python 3.13.14（见 .venv/pyvenv.cfg）。
+#
+# ⚠️ 本仓库约定「私有化离线部署，不引入外部 CDN / 构建链 / 新依赖」（AGENTS.md 铁律 4）：
+#    新增依赖前请先确认无替代方案。
+
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+click==8.4.2
+colorama==0.4.6
+cryptography==50.0.1
+et_xmlfile==2.0.0
+fastapi==0.141.1
+h11==0.16.0
+html5rdf==1.2.1
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.18
+iniconfig==2.3.0
+lxml==6.1.1
+openpyxl==3.1.5
+owlrl==7.6.2
+packaging==26.3
+pdfminer.six==20260107
+pdfplumber==0.11.10
+pillow==12.3.0
+pluggy==1.6.0
+prettytable==3.18.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+Pygments==2.21.0
+pyoxigraph==0.5.10
+pycparser==3.0
+pyparsing==3.3.2
+pypdfium2==5.13.0
+pyshacl==0.40.1
+pytest==9.1.1
+python-docx==1.2.0
+python-multipart==0.0.32
+rdflib==7.6.0
+reportlab==5.0.0
+starlette==1.6.0
+typing-inspection==0.4.3
+typing_extensions==4.16.0
+uvicorn==0.52.1
+wcwidth==0.8.3
+
+# ── 可选依赖（代码内 try/except 守卫，缺失时对应能力降级而不崩）──
+# 以下一项在源码中被 import，但本机 .venv 未安装，属「显式可选」：
+#   owlready2  → services/swrl_engine.py（SWRL 推理；缺装时返回 install_hint）
+# owlready2
+#
+# pdfplumber 曾属同一批「已 import 但未安装」的可选依赖；2026-09-19 已安装并升为显式依赖
+# （它在 knowledge_pipeline/extract.py 的 try/except 内，缺失时 _extract_pdf 静默返回空串
+#  → 所有 PDF 入库都被判 parse_status='failed'，实测 5 份 PDF 全部如此）。

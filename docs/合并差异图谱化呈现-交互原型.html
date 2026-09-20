@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>MR 对比分析·图谱化差异呈现 交互原型</title>
+<style>
+  :root{ --line:#e2e0da; --mut:#8a8578; --bg:#faf9f6; --blue:#185FA5; --blue-l:#e8f0fa;
+         --grn:#3B6D11; --grn-l:#eaf3df; --amb:#BA7517; --amb-l:#faf1e0; --red:#A32D2D; --red-l:#f9e8e8;
+         --pur:#6B4FA1; --pur-l:#efe9f8; --ink:#2b2a26; }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);padding:28px;}
+  h1{font-size:20px;margin-bottom:4px;} .sub{color:var(--mut);font-size:12.5px;margin-bottom:22px;}
+  h2{font-size:15px;margin:30px 0 12px;padding-left:9px;border-left:4px solid var(--blue);}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04);}
+  /* ── 原型一：图谱叠加 ── */
+  .proto{display:flex;gap:14px;}
+  .gwrap{flex:1.9;position:relative;border:1px solid var(--line);border-radius:10px;background:#fff;min-height:430px;}
+  .toolbar{display:flex;gap:6px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);font-size:11.5px;flex-wrap:wrap;}
+  .chip{padding:2px 10px;border-radius:9px;border:1px solid var(--line);cursor:pointer;background:#fff;}
+  .chip.on{background:var(--blue-l);color:var(--blue);border-color:var(--blue);font-weight:600;}
+  .legend{position:absolute;left:12px;bottom:10px;display:flex;gap:12px;font-size:11px;background:rgba(255,255,255,.92);
+          border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer;}
+  .legend span{display:flex;align-items:center;gap:4px;opacity:.45;}
+  .legend span.on{opacity:1;font-weight:600;}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block;}
+  .dpanel{flex:1;border:1px solid var(--line);border-radius:10px;background:#fff;padding:14px;font-size:12px;min-width:280px;}
+  .dpanel h3{font-size:13.5px;margin-bottom:2px;} .dpanel .id{color:var(--mut);font-size:11px;margin-bottom:10px;}
+  .diffrow{display:grid;grid-template-columns:88px 1fr 1fr;gap:6px;align-items:stretch;margin:5px 0;font-size:11.5px;}
+  .diffrow .f{color:var(--mut);padding-top:5px;}
+  .cell{border-radius:6px;padding:5px 8px;border:1px solid var(--line);word-break:break-all;}
+  .cell.base{background:#f6f5f2;} .cell.head{background:var(--amb-l);border-color:var(--amb);color:var(--amb);font-weight:600;}
+  .tagline{display:flex;gap:6px;margin:10px 0 4px;flex-wrap:wrap;}
+  .tag{font-size:10.5px;padding:2px 8px;border-radius:8px;}
+  .btns{display:flex;gap:8px;margin-top:14px;}
+  .btn{flex:1;padding:7px 0;border-radius:7px;border:1px solid var(--line);background:#fff;font-size:12px;cursor:pointer;text-align:center;}
+  .btn.ok.on{background:var(--grn-l);border-color:var(--grn);color:var(--grn);font-weight:700;}
+  .btn.watch.on{background:var(--amb-l);border-color:var(--amb);color:var(--amb);font-weight:700;}
+  .rel{font-size:11.5px;background:#f6f5f2;border-radius:6px;padding:6px 9px;margin:5px 0;}
+  .rel.g{background:var(--grn-l);} .rel.r{background:var(--red-l);text-decoration:line-through;color:var(--red);}
+  @keyframes pulse{0%,100%{stroke-width:3.5;}50%{stroke-width:6;}}
+  .conflict-pulse{animation:pulse 1.6s infinite;}
+  .node{cursor:pointer;}
+  /* ── 三层体系 ── */
+  .layers{display:flex;flex-direction:column;gap:0;font-size:12.5px;}
+  .layer{border:1px solid var(--line);border-radius:10px;padding:12px 16px;background:#fff;}
+  .layer b{font-size:13px;} .layer .q{color:var(--mut);font-size:11.5px;margin-top:3px;}
+  .arrowdown{text-align:center;color:var(--blue);font-size:16px;padding:3px 0;}
+  .linknote{font-size:11px;color:var(--blue);text-align:center;padding:1px 0 2px;}
+  /* ── 路线图 ── */
+  .phases{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:12px;}
+  .phase{border-radius:10px;padding:12px 14px;border:1px solid var(--line);background:#fff;}
+  .phase h4{font-size:13px;margin-bottom:8px;}
+  .phase ul{margin-left:16px;line-height:1.85;}
+  .p0{border-top:4px solid var(--grn);} .p1{border-top:4px solid var(--amb);} .p2{border-top:4px solid var(--pur);}
+  .badge{font-size:10px;padding:1px 7px;border-radius:8px;color:#fff;margin-left:6px;}
+</style>
+</head>
+<body>
+<h1>MR 对比分析 · 图谱化差异呈现 —— 交互原型画廊</h1>
+<div class="sub">配套文档：《合并差异图谱化呈现设计方案.md》 ｜ 原型仅示意交互与视觉规范，非最终像素稿 ｜ 2026-09-03</div>
+
+<h2>原型一：L1 差异叠加图谱 + L3 字段详情（双向联动）</h2>
+<div class="card proto">
+  <div class="gwrap">
+    <div class="toolbar">
+      <b style="font-size:12px;">personal/gh-test → dev</b>
+      <span class="chip on" onclick="rangeSel(this)">变更+1hop</span>
+      <span class="chip" onclick="rangeSel(this)">仅变更</span>
+      <span class="chip" onclick="rangeSel(this)">全图</span>
+      <span style="flex:1"></span>
+      <span class="chip" onclick="alert('原型示意：切换 merge-base / full 模式')">三点式 ⚡</span>
+    </div>
+    <svg viewBox="0 0 640 400" width="100%" style="background:#fff;display:block;">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#b9b5aa"/></marker>
+        <marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--grn)"/></marker>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--red)"/></marker>
+      </defs>
+      <!-- 不变关系（灰） -->
+      <line x1="118" y1="80" x2="212" y2="150" stroke="#d5d2c9" stroke-width="1.3" marker-end="url(#ar)"/>
+      <line x1="118" y1="112" x2="212" y2="165" stroke="#d5d2c9" stroke-width="1.3" marker-end="url(#ar)"/>
+      <line x1="318" y1="185" x2="412" y2="255" stroke="#d5d2c9" stroke-width="1.3" marker-end="url(#ar)"/>
+      <line x1="318" y1="345" x2="412" y2="285" stroke="#d5d2c9" stroke-width="1.3" marker-end="url(#ar)"/>
+      <!-- 移除关系（红虚线） -->
+      <line x1="212" y1="185" x2="308" y2="330" stroke="var(--red)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+      <!-- 新增关系（绿） -->
+      <line x1="318" y1="160" x2="412" y2="175" stroke="var(--grn)" stroke-width="1.8" marker-end="url(#arg)"/>
+      <line x1="212" y1="150" x2="308" y2="140" stroke="var(--grn)" stroke-width="1.8" marker-end="url(#arg)"/>
+      <!-- 层标签 -->
+      <text x="60" y="30" font-size="10.5" fill="#8a8578">需求层</text>
+      <text x="255" y="30" font-size="10.5" fill="#8a8578">功能层</text>
+      <text x="450" y="30" font-size="10.5" fill="#8a8578">组件层</text>
+      <line x1="200" y1="40" x2="200" y2="380" stroke="#eee" stroke-dasharray="3 4"/>
+      <line x1="438" y1="40" x2="438" y2="380" stroke="#eee" stroke-dasharray="3 4"/>
+      <!-- 未变更上下文（灰显 1hop） -->
+      <g class="node" onclick="pick('ctx1')">
+        <rect x="45" y="62" width="74" height="30" rx="15" fill="#f6f5f2" stroke="#cfccc2" opacity=".55"/>
+        <text x="82" y="81" font-size="10.5" fill="#8a8578" text-anchor="middle">REQ-101</text>
+      </g>
+      <g class="node" onclick="pick('ctx2')">
+        <rect x="45" y="108" width="74" height="30" rx="15" fill="#f6f5f2" stroke="#cfccc2" opacity=".55"/>
+        <text x="82" y="127" font-size="10.5" fill="#8a8578" text-anchor="middle">REQ-102</text>
+      </g>
+      <g class="node" onclick="pick('ctx3')">
+        <rect x="215" y="150" width="104" height="34" rx="9" fill="#f6f5f2" stroke="#cfccc2" opacity=".55"/>
+        <text x="267" y="171" font-size="10.5" fill="#8a8578" text-anchor="middle">制动控制功能</text>
+      </g>
+      <g class="node" onclick="pick('ctx4')">
+        <rect x="215" y="330" width="104" height="32" rx="9" fill="#f6f5f2" stroke="#cfccc2" opacity=".55"/>
+        <text x="267" y="350" font-size="10.5" fill="#8a8578" text-anchor="middle">液压阀 V-02</text>
+      </g>
+      <g class="node" onclick="pick('ctx5')">
+        <rect x="448" y="248" width="70" height="30" rx="15" fill="#f6f5f2" stroke="#cfccc2" opacity=".55"/>
+        <text x="483" y="267" font-size="10.5" fill="#8a8578" text-anchor="middle">泵 P-1</text>
+      </g>
+      <!-- 修改实体（橙 ✎2，选中态） -->
+      <g class="node" id="n-mod" onclick="pick('mod')">
+        <rect x="448" y="140" width="118" height="44" rx="9" fill="#faf1e0" stroke="var(--amb)" stroke-width="2.5"/>
+        <text x="497" y="159" font-size="11.5" fill="var(--ink)" text-anchor="middle" font-weight="700">制动控制器</text>
+        <text x="497" y="175" font-size="9.5" fill="var(--amb)" text-anchor="middle">✎ 2 字段 · 部件</text>
+        <circle cx="560" cy="144" r="9" fill="var(--amb)"/><text x="560" y="147.5" font-size="9.5" fill="#fff" text-anchor="middle" font-weight="700">2</text>
+      </g>
+      <!-- 新增实体（绿 ＋） -->
+      <g class="node" id="n-add" onclick="pick('add')">
+        <rect x="448" y="70" width="118" height="42" rx="9" fill="var(--grn-l)" stroke="var(--grn)" stroke-width="2"/>
+        <text x="500" y="89" font-size="11.5" fill="var(--ink)" text-anchor="middle" font-weight="700">压力传感器 v2</text>
+        <text x="500" y="104" font-size="9.5" fill="var(--grn)" text-anchor="middle">新增 · 传感器</text>
+        <circle cx="560" cy="74" r="9" fill="var(--grn)"/><text x="560" y="77.5" font-size="10" fill="#fff" text-anchor="middle" font-weight="700">＋</text>
+      </g>
+      <!-- 移除实体（红虚线半透明） -->
+      <g class="node" onclick="pick('rem')" opacity=".62">
+        <rect x="215" y="222" width="104" height="40" rx="9" fill="#fff" stroke="var(--red)" stroke-width="1.8" stroke-dasharray="5 4"/>
+        <text x="267" y="240" font-size="11" fill="var(--ink)" text-anchor="middle">旧温度传感器</text>
+        <text x="267" y="255" font-size="9.5" fill="var(--red)" text-anchor="middle">移除 · 传感器</text>
+      </g>
+      <!-- 冲突实体（紫描边呼吸） -->
+      <g class="node" onclick="pick('conf')">
+        <rect x="448" y="300" width="118" height="44" rx="9" fill="var(--pur-l)" stroke="var(--pur)" stroke-width="3.5" class="conflict-pulse"/>
+        <text x="500" y="319" font-size="11.5" fill="var(--ink)" text-anchor="middle" font-weight="700">控制算法</text>
+        <text x="500" y="335" font-size="9.5" fill="var(--pur)" text-anchor="middle">⚠ 冲突 2 处未解决</text>
+      </g>
+    </svg>
+    <div class="legend" id="legend">
+      <span class="on" onclick="flt(this,'add')"><i class="dot" style="background:var(--grn);"></i>新增 <b>1</b></span>
+      <span class="on" onclick="flt(this,'mod')"><i class="dot" style="background:var(--amb);"></i>修改 <b>1</b></span>
+      <span class="on" onclick="flt(this,'rem')"><i class="dot" style="background:var(--red);"></i>移除 <b>1</b></span>
+      <span class="on" onclick="flt(this,'conf')"><i class="dot" style="background:var(--pur);"></i>冲突 <b>1</b></span>
+      <span class="on"><i class="dot" style="background:#cfccc2;"></i>上下文</span>
+    </div>
+  </div>
+
+  <div class="dpanel" id="dpanel">
+    <h3 id="d-title">制动控制器</h3>
+    <div class="id" id="d-id">CMP-BRAKE-CTRL · 部件 · 点击图谱节点切换详情</div>
+    <div style="font-size:10.5px;color:var(--mut);margin:8px 0 3px;">属性变更（dev 基线 → personal 源）</div>
+    <div class="diffrow"><span class="f">spec 参数</span><span class="cell base">"A0"</span><span class="cell head">"B1"</span></div>
+    <div class="diffrow"><span class="f">status ⚠</span><span class="cell base">candidate</span><span class="cell head">reviewed（🔴 高风险）</span></div>
+    <div style="font-size:10.5px;color:var(--mut);margin:10px 0 3px;">关系变化（挂载到本实体）</div>
+    <div class="rel g">＋ 制动控制器 —[satisfies]→ REQ-101（新增关系）</div>
+    <div class="rel r">－ 制动控制器 —[monitors]→ 旧温度传感器（随实体移除失效）</div>
+    <div class="btns">
+      <span class="btn ok" id="b-ok" onclick="confirmSel('ok')">✓ 确认无异议</span>
+      <span class="btn watch" id="b-watch" onclick="confirmSel('watch')">⚑ 标记关注</span>
+    </div>
+    <div style="font-size:10.5px;color:var(--mut);margin-top:8px;">确认状态存本地（按 MR 记忆），通过/驳回才进后端评审记录</div>
+  </div>
+</div>
+
+<h2>原型二：三层呈现体系与联动</h2>
+<div class="card layers">
+  <div class="layer" style="border-left:4px solid var(--grn);">
+    <b>L1 图谱总览</b>（新增 Tab：图谱 / 差异清单 / 冲突解决）
+    <div class="q">回答："动了系统的哪些结构？影响范围多大？" —— 变更+1hop 灰显上下文，dagre 确定性布局</div>
+  </div>
+  <div class="linknote">▲ 点节点出详情 ｜ L2 点「📍定位」图谱居中高亮 ▼</div>
+  <div class="layer" style="border-left:4px solid var(--amb);">
+    <b>L2 分组清单</b>（增强现有列表：按实体聚合 + 🔴🟠🟡 风险分级排序 + 确认三态）
+    <div class="q">回答："哪些变更需要我确认？" —— status/deprecated/冲突实体置顶，低风险默认折叠</div>
+  </div>
+  <div class="linknote">▲ 点实体展开 ▼</div>
+  <div class="layer" style="border-left:4px solid var(--blue);">
+    <b>L3 字段详情</b>（base/head 双栏对齐 + 关系变化挂载 + 冲突解决入口）
+    <div class="q">回答："这个实体到底改了什么值？" —— 右侧滑出面板，见原型一</div>
+  </div>
+</div>
+
+<h2>原型三：分期路线</h2>
+<div class="card phases">
+  <div class="phase p0"><h4>P0 图谱呈现 <span class="badge" style="background:var(--grn);">建议先做</span></h4>
+    <ul><li>图谱 Tab：差异叠加图 + 1hop + dagre + 图例三档筛选</li><li>L2 风险分级排序 + 实体聚合</li><li>双向定位联动 + 冲突呼吸高亮</li><li>默认 merge-base 增量</li></ul>
+    <div style="color:var(--mut);font-size:11px;margin-top:6px;">前端为主，后端零改动</div></div>
+  <div class="phase p1"><h4>P1 确认效率</h4>
+    <ul><li>逐项确认三态工作流（localStorage）</li><li>键盘导航 j/k/Enter/c/f</li><li>筛选后批量确认</li><li>全覆盖黄色提醒（不硬拦）</li></ul>
+    <div style="color:var(--mut);font-size:11px;margin-top:6px;">纯前端小改动</div></div>
+  <div class="phase p2"><h4>P2 差异化亮点</h4>
+    <ul><li>合并结果预览图（dry-run API，"合并后 dev 长什么样"——GitHub 文本 diff 做不到）</li><li>并排双图对比</li><li>提交链时间轴联动</li></ul>
+    <div style="color:var(--mut);font-size:11px;margin-top:6px;">后端 1 个只读接口，单独立项</div></div>
+</div>
+
+<script>
+const DET = {
+  mod:{t:'制动控制器',i:'CMP-BRAKE-CTRL · 部件 · ✎ 2 字段变更 · 风险 🔴',
+    rows:[['spec 参数','"A0"','"B1"'],['status ⚠','candidate','reviewed（🔴 高风险）']],
+    rels:[['g','＋ 制动控制器 —[satisfies]→ REQ-101（新增关系）'],['r','－ 制动控制器 —[monitors]→ 旧温度传感器（随实体移除失效）']]},
+  add:{t:'压力传感器 v2',i:'SEN-PRESS-V2 · 传感器 · 新增实体 · 风险 🟠',
+    rows:[['spec 参数','（不存在）','"0-16 MPa"'],['来源','—','AI 建模批次 #47']],
+    rels:[['g','＋ 压力传感器 v2 —[feeds]→ 制动控制器（新增关系）']]},
+  rem:{t:'旧温度传感器',i:'SEN-TEMP-OLD · 传感器 · 移除实体 · 风险 🔴（连带 2 条关系失效）',
+    rows:[['状态','active','（仅目标分支有，将被移除）']],
+    rels:[['r','－ 旧温度传感器 —[monitors]→ 制动控制器'],['r','－ 旧温度传感器 —[located_in]→ 液压阀 V-02']]},
+  conf:{t:'控制算法',i:'ALGO-CTRL · 功能 · ⚠ 2 处冲突未解决 · 风险 🔴',
+    rows:[['threshold','"0.85"','"0.90"（冲突：两侧均修改）'],['mode','"auto"','"manual"（冲突）']],
+    rels:[['','关系无变化（冲突聚焦：点击切到冲突解决 Tab）']]},
+  ctx1:{t:'REQ-101',i:'上下文节点（未变更）',rows:[['—','仅提供结构语境','']],rels:[['','指向本节点的变更：制动控制器 satisfies ✓ 新增']]},
+  ctx2:{t:'REQ-102',i:'上下文节点（未变更）',rows:[['—','仅提供结构语境','']],rels:[[]]},
+  ctx3:{t:'制动控制功能',i:'上下文节点（未变更）',rows:[['—','1-hop 邻居','']],rels:[['g','＋ 下游新增：压力传感器 v2 feeds → 本实体']]},
+  ctx4:{t:'液压阀 V-02',i:'上下文节点（未变更）',rows:[['—','1-hop 邻居','']],rels:[['r','－ 上游移除：旧温度传感器 located_in → 本实体']]},
+  ctx5:{t:'泵 P-1',i:'上下文节点（未变更）',rows:[['—','1-hop 邻居','']],rels:[[]]},
+};
+function pick(k){
+  const d = DET[k]||DET.ctx1;
+  document.getElementById('d-title').textContent=d.t;
+  document.getElementById('d-id').textContent=d.i;
+  const body = document.getElementById('dpanel');
+  body.querySelectorAll('.diffrow,.rel').forEach(e=>e.remove());
+  const h3=body.querySelector('h3'), idEl=body.querySelector('.id');
+  let anchor=idEl;
+  if(d.rows.length){const lb=document.createElement('div');lb.style.cssText='font-size:10.5px;color:var(--mut);margin:8px 0 3px;';lb.textContent='属性变更（dev 基线 → personal 源）';idEl.after(lb);
+    d.rows.forEach(r=>{const el=document.createElement('div');el.className='diffrow';
+      el.innerHTML=`<span class="f">${r[0]}</span><span class="cell base">${r[1]}</span><span class="cell ${r[1]==='（不存在）'||r[0]==='—'?'base':'head'}">${r[2]}</span>`;lb.after(el);anchor=el;});}
+  if(d.rels.length){const lb=document.createElement('div');lb.style.cssText='font-size:10.5px;color:var(--mut);margin:10px 0 3px;';lb.textContent='关系变化（挂载到本实体）';anchor.after(lb);anchor=lb;
+    d.rels.forEach(r=>{const el=document.createElement('div');el.className='rel '+(r[0]||'');el.textContent=r[1];lb.after(el);anchor=el;});}
+  document.querySelectorAll('.gwrap .node rect').forEach(r=>{r.style.filter='';});
+  const g = document.querySelector(`#n-${k==='ctx1'||k==='ctx2'?'mod':k}`)||document.getElementById('n-mod');
+  if(g && (k==='mod'||k==='add')) g.querySelector('rect').style.filter='drop-shadow(0 0 5px rgba(24,95,165,.55))';
+}
+function confirmSel(w){
+  document.getElementById('b-ok').classList.toggle('on', w==='ok');
+  document.getElementById('b-watch').classList.toggle('on', w==='watch');
+}
+function rangeSel(el){el.parentElement.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));el.classList.add('on');}
+function flt(el,type){
+  el.classList.toggle('on');
+  const map={add:'n-add',mod:'n-mod',rem:null,conf:null};
+  alert('原型示意：点击图例按变更类型过滤图谱（'+type+'）');
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+/* ==========================================================================
+ * pages.css — 顶级页面专属样式（v6.3 首批迁入）
+ * 加载顺序：gnav.css → chat.css → studio.css → kb.css → pages.css → app.css
+ *
+ * 模块边界：仅放**特定顶级页面**专属样式（reports / audit / branch / users 等），
+ * 通用组件库（.panel / .kpi / table.t / .badge / .btn / .st 等）继续留在 app.css。
+ *
+ * v6.3 首批迁入：报告页 .report-* 系列（其他顶级页面多用内联 style 或通用组件，无专属可迁）
+ * ========================================================================== */
+
+/* ── 1. 报告页：元信息条 + 编号分节卡片 ── */
+.report-meta{display:flex;flex-wrap:wrap;gap:4px 22px;background:linear-gradient(90deg,#f2f6fb,#fafbfd);border:1px solid var(--line);border-radius:8px;padding:9px 14px;margin-bottom:12px;font-size:11.5px;color:var(--mut);}
+.report-meta .rm-item{white-space:nowrap;}
+.report-meta .rm-item b{display:inline-block;min-width:44px;color:var(--blue-d);font-weight:600;margin-right:3px;}
+.report-sec{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#fff;}
+.report-sec-h{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding-bottom:6px;border-bottom:1px dashed var(--line);}
+.report-sec-n{flex:none;width:24px;height:24px;border-radius:6px;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;}
+.report-sec-t{font-size:13.5px;font-weight:700;color:var(--blue-d);}
+.report-sec-b{font-size:12.5px;line-height:1.7;color:var(--fg);}
+.report-sec-b .md-table-wrap{margin-top:6px;}

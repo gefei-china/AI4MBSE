@@ -1,0 +1,61 @@
+/* ==========================================================================
+ * skeleton.css — 骨架屏（v6.1，2026-09-06）
+ * 内容加载前的占位 UX，避免空白等待焦虑
+ * 通过 .skeleton（容器）+ .sk-line / .sk-circle / .sk-rect（子元素）
+ * ========================================================================== */
+
+.sk-line,.sk-circle,.sk-rect{
+  position:relative;overflow:hidden;
+  background:linear-gradient(90deg,
+    var(--color-bg) 0%,var(--color-line-soft) 50%,
+    var(--color-bg) 100%);
+  background-size:200% 100%;
+  animation:sk-shimmer 1.4s linear infinite;
+  border-radius:var(--radius-md);
+}
+.sk-circle{border-radius:50%;}
+.sk-rect{border-radius:var(--radius-md);}
+
+/* 文本行骨架预设高度 */
+.sk-line{height:14px;}
+.sk-line.lg{height:18px;}
+.sk-line.sm{height:10px;}
+
+/* 行内分隔 */
+.sk-row{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) 0;}
+.sk-stack{display:flex;flex-direction:column;gap:var(--space-2);}
+.sk-stack.gap-sm{gap:6px;}
+.sk-stack.gap-lg{gap:var(--space-4);}
+
+/* 通用面板骨架 */
+.sk-panel{
+  padding:var(--space-4);
+  border:1px solid var(--color-line);border-radius:var(--radius-lg);
+  background:var(--color-bg-card);
+  display:flex;flex-direction:column;gap:var(--space-3);
+}
+.sk-panel-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3);}
+.sk-card-row{
+  display:flex;align-items:center;gap:var(--space-3);
+  padding:var(--space-3);
+  border:1px solid var(--color-line-soft);border-radius:var(--radius-md);
+  background:var(--color-bg-card);
+}
+
+@keyframes sk-shimmer{
+  0%   {background-position:200% 0;}
+  100% {background-position:-200% 0;}
+}
+
+/* 暗色模式：背景更柔和 */
+[data-theme="dark"] .sk-line,
+[data-theme="dark"] .sk-circle,
+[data-theme="dark"] .sk-rect,
+.theme-dark .sk-line,
+.theme-dark .sk-circle,
+.theme-dark .sk-rect{
+  background:linear-gradient(90deg,
+    var(--color-bg-card) 0%,var(--color-bg-hover) 50%,
+    var(--color-bg-card) 100%);
+  background-size:200% 100%;
+}

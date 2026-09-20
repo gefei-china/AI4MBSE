@@ -1,0 +1,49 @@
+# 2026-09-17 S0：AI 编码助手禁读清单
+# 目的：把归档物 / 运行数据 / 第三方压缩库 / 临时产物排除在检索与上下文之外，
+# 避免任何一次改动都要先吞下 1.55 GB 归档与一堆一次性脚本（详见 docs/代码优化方案-20260917.md）。
+
+# ── 归档与备份（占仓库体积 96%，含 13 份 68MB 旧库与 ~30 份切分前 index.html 副本）──
+_archive/
+backups/
+
+# ── 一次性产物 ──
+tmp/
+outputs/
+screenshots/
+perf-report/
+评审报告/
+_*.txt
+_*.py
+server_*
+verify_*.js
+*.log
+*.pid
+*.bak
+*.bak2
+
+# ── 运行数据（数据不是代码，改代码时无需读）──
+data/
+static/uploads/
+static/skill_packages/
+*.db
+*.db-wal
+*.db-shm
+
+# ── 第三方压缩库 / 运行时（不要改、也不用读）──
+static/vendor/
+static/lib/
+java-runtime/
+fuseki/
+.venv/
+node_modules/
+__pycache__/
+.pytest_cache/
+.playwright-cli/
+.trae/
+
+# ── 大体积二进制 ──
+docs/**/*.png
+docs/**/*.docx
+
+# ── 已归档文档（2026-09-17 S1 归档，勿当现状依据）──
+docs/_archive/

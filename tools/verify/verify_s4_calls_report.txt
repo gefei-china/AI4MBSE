@@ -1,0 +1,49 @@
+S4 离线验证结果：48/48 PASS
+PASS 1.0 session.py 可整体 exec（相对导入替换为 pass）
+PASS 1.1 模块常量 _CLARIFY_ACTION_VERBS 含建模/动作动词
+PASS 1.2 模块常量 _CLARIFY_SKIP_MIN_CHARS == 80  | 80
+PASS 1.3 长文本样本长度 >= 80  | len=92
+PASS 1.4 长文本样本不含动作动词/域关键词
+PASS 1.5 A 明确建模动词（短句） -> LLM 调用 0 次  | 期望 0 次；_last_clarify_skip='action_kw:生成'
+PASS 1.6 A 明确建模动词（短句） -> 跳过原因匹配  | _last_clarify_skip='action_kw:生成' 期望前缀='action_kw:'
+PASS 1.5 B 长文本（>=80 字） -> LLM 调用 0 次  | 期望 0 次；_last_clarify_skip='long_input'
+PASS 1.6 B 长文本（>=80 字） -> 跳过原因匹配  | _last_clarify_skip='long_input' 期望前缀='long_input'
+PASS 1.5 C forced_intent 快捷指定 -> LLM 调用 0 次  | 期望 0 次；_last_clarify_skip='quick_pick'
+PASS 1.6 C forced_intent 快捷指定 -> 跳过原因匹配  | _last_clarify_skip='quick_pick' 期望前缀='quick_pick'
+PASS 1.5 C2 skill_name 快捷指定 -> LLM 调用 0 次  | 期望 0 次；_last_clarify_skip='quick_pick'
+PASS 1.6 C2 skill_name 快捷指定 -> 跳过原因匹配  | _last_clarify_skip='quick_pick' 期望前缀='quick_pick'
+PASS 1.5 D 含糊短句（应仍走原 LLM 路径） -> LLM 调用 1 次  | 期望 1 次；_last_clarify_skip=''
+PASS 1.6 D 含糊短句（应仍走原 LLM 路径） -> 跳过原因匹配  | _last_clarify_skip='' 期望前缀=''
+PASS 1.5 E 非建模意图（gate 直接返回） -> LLM 调用 0 次  | 期望 0 次；_last_clarify_skip=''
+PASS 1.6 E 非建模意图（gate 直接返回） -> 跳过原因匹配  | _last_clarify_skip='' 期望前缀=''
+PASS 1.7 续答消息（CLARIFY_RESUME_MARK）不发起 LLM 调用  | calls=0
+PASS 1.8 含糊短句仍返回规则兜底澄清题（行为未变）  | [{'id': 'q_scope', 'question': '您的请求缺少关键信息，请确认本次建模/分析的对象与范围（避免我按猜测执行）', 'options': ['按我的描述直接执行（上下文已足够）', '先做需求分析', '聚焦某一
+PASS 1.9 execute.py 调用点已补传 forced_intent/skill_name
+PASS 1.10 stream.py 调用点已补传 forced_intent/skill_name
+PASS 1.11 _clarify_detect 签名含 forced_intent/skill_name 形参
+PASS 2.1 knowledge_engine.hybrid_search 默认 top_k == 4
+PASS 2.2 hybrid_search 旧默认 top_k=5 已不存在
+PASS 2.2b 同文件其它检索函数（向量 _vector.search / BM25Engine.search）未被改动
+PASS 2.3 agent/rag.py 消费侧实取 top_k=4（原 8）
+PASS 2.4 消费侧仍只消费 chunk_hits[:3]（对齐依据）
+PASS 2.5 全部调用点均显式传 top_k（默认值变更对现有调用零影响）  | 缺省调用点数=0
+PASS 2.6 消费链路改动点仅 agent/rag.py（别名 _hybrid，8 -> 4）  | [('agent/rag.py', 126, 'conn, query, top_k=4, branches=None,\n                              domain=force_domain if force_domain and force_domain != "unknown" else None,\n                              glossary_boost=boost, doc_names=scope_docs or None')]
+PASS 3.1 planner.py:_summarize_plan 汇总输出上限在位（默认 8000；2026-09-20 起配置化 delegation.summary_max_tokens）  | 配置值=8000
+PASS 3.2 refine.py:_refine 修订输出上限在位（默认 8000；2026-09-20 起配置化 refine.max_tokens）  | 配置值=8000
+PASS 3.3 旧阻断 A 形态已不存在（llm/__init__.py 不再显式传 + **kwargs 重复）
+PASS 3.3b 修法在位：三键先 pop 再走具名参数
+PASS 3.3c 降级留痕已补（except 内 WARNING，不改降级行为）
+PASS 3.4 旧阻断 B 形态已不存在（openai_compat 不再 kwargs.get 优先）
+PASS 3.4b 新优先级在位：调用方显式 > DB > 内置默认
+PASS 3.4c 三参数默认值改为 None（否则无法区分未传与显式传默认值）
+PASS 3.5 cfg 上限仍被 context_window 二次截断（原行为保留）
+PASS 3.6 基线：不传采样参数 -> 真实 provider，三键均 None（回落 DB 配置，行为不变）  | seen={'model': None, 'temperature': None, 'max_tokens': None, 'kwargs_keys': ['_intent']}
+PASS 3.7 回归：传 max_tokens=1500 -> 真实 provider（不再静默 Mock）且 provider 实收 1500  | used_mock=False seen={'model': None, 'temperature': None, 'max_tokens': 1500, 'kwargs_keys': ['_intent']}
+PASS 3.8 回归：传 model/temperature -> 真实 provider 且 provider 实收传值  | used_mock=False seen={'model': 'x', 'temperature': 0.1, 'max_tokens': None, 'kwargs_keys': ['_intent']}
+PASS 3.8b 其余 kwargs（_intent 等）仍原样透传，未被 pop 误伤  | kwargs_keys=['_intent']
+PASS 3.9 既有调用点仍传采样参数：norm_apply.py（temperature/max_tokens）——现已真正生效
+PASS 3.10 既有调用点仍传采样参数：workflows/engine.py（model=）——现已真正生效
+PASS 3.11 证据：refine.py 按轮次循环调用（首评 + 最多 max_rounds 次修订）
+PASS 3.12 证据：_max_rounds 默认 2 / _pass_score 默认 70（core.config 可覆盖）
+PASS 3.13 证据：planner.py:_summarize_plan 有 <2 子任务短路（非循环调用）
+PASS 3.14 降级日志的 tools 计数已修正（具名参数 tools 而非 kwargs）

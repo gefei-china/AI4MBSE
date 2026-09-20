@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多工程数据体现 — UI 方案画廊</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f5f7fa; color: #222; padding: 24px; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { font-size: 12.5px; color: #666; margin-bottom: 18px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tab { padding: 7px 16px; border-radius: 8px; border: 1.5px solid #2b6cb0; background: #fff; font-size: 13px; cursor: pointer; color: #2b6cb0; }
+  .tab.on { background: #2b6cb0; color: #fff; }
+  .card { display: none; background: #fff; border: 1.5px solid #2b6cb0; border-radius: 12px; padding: 18px; margin-bottom: 20px; }
+  .card.on { display: block; }
+  .card h3 { font-size: 14.5px; color: #185fa5; margin-bottom: 12px; border-left: 4px solid #2b6cb0; padding-left: 8px; }
+  .row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .note { font-size: 11.5px; color: #666; line-height: 1.7; }
+  .note b { color: #c0392b; }
+  .legend { display: flex; gap: 14px; font-size: 11.5px; color: #555; margin: 10px 0; flex-wrap: wrap; }
+  .legend span { display: flex; align-items: center; gap: 4px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  /* 线框浏览器 */
+  .browser { border: 1.5px solid #2b6cb0; border-radius: 8px; overflow: hidden; background: #fff; width: 560px; flex: none; }
+  .browser .bar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: #eef3fb; border-bottom: 1px solid #c9d8ee; font-size: 11px; color: #444; }
+  .browser .bar .ptitle { font-weight: 600; }
+  .browser .body { padding: 12px; min-height: 300px; }
+  /* 工程切换器 */
+  .proj-tag { display: inline-flex; align-items: center; gap: 6px; border: 1.5px solid #2b6cb0; background: #eef3fb; border-radius: 20px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  .proj-tag .dot { width: 8px; height: 8px; background: #27ae60; }
+  .proj-pop { display: none; position: absolute; top: 34px; right: 0; width: 320px; background: #fff; border: 1.5px solid #2b6cb0; border-radius: 10px; box-shadow: 0 6px 24px rgba(24,95,165,.15); z-index: 50; overflow: hidden; }
+  .proj-pop.open { display: block; }
+  .proj-pop .search { width: 100%; border: none; border-bottom: 1px solid #c9d8ee; padding: 9px 12px; font-size: 12px; outline: none; }
+  .proj-pop .grp { font-size: 10.5px; color: #888; padding: 7px 12px 3px; }
+  .proj-pop .it { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; font-size: 12px; }
+  .proj-pop .it:hover { background: #f0f6ff; }
+  .proj-pop .it.cur { background: #e8f0fe; }
+  .proj-pop .it .n { font-weight: 600; flex: 1; }
+  .proj-pop .it .c { color: #888; font-size: 10.5px; }
+  .proj-pop .foot { border-top: 1px solid #c9d8ee; padding: 7px 12px; font-size: 11.5px; color: #2b6cb0; cursor: pointer; }
+  .wrap-rel { position: relative; display: inline-block; }
+  /* 会话列表 */
+  .conv-side { width: 250px; border: 1.5px solid #2b6cb0; border-radius: 8px; background: #fff; overflow: hidden; flex: none; }
+  .conv-side .head { padding: 8px 10px; background: #eef3fb; border-bottom: 1px solid #c9d8ee; font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; }
+  .conv-side .grp { font-size: 11px; padding: 8px 10px 3px; color: #555; font-weight: 600; display: flex; align-items: center; gap: 5px; }
+  .conv-side .it { padding: 6px 10px 6px 26px; font-size: 11.5px; cursor: pointer; border-left: 3px solid transparent; }
+  .conv-side .it:hover { background: #f0f6ff; }
+  .conv-side .it.cur { border-left-color: #2b6cb0; background: #e8f0fe; }
+  .conv-side .it small { color: #999; display: block; }
+  .conv-side .collapsed .it { display: none; }
+  .conv-side .collapsed .it.first { display: block; color: #888; }
+  .conv-side .foot { padding: 8px 10px; border-top: 1px solid #c9d8ee; font-size: 11px; color: #2b6cb0; cursor: pointer; }
+  /* 产物卡 */
+  .prod-card { border: 1.5px solid #2b6cb0; border-radius: 8px; width: 480px; background: #fff; overflow: hidden; }
+  .prod-card .head { padding: 7px 10px; background: #eef3fb; display: flex; gap: 8px; align-items: center; font-size: 11.5px; border-bottom: 1px solid #c9d8ee; }
+  .prod-card .badge { background: #2b6cb0; color: #fff; border-radius: 4px; padding: 1px 7px; font-size: 10px; }
+  .prod-card .body { padding: 12px; font-size: 11.5px; color: #444; line-height: 1.8; }
+  .prod-card .btn { display: inline-block; border: 1px solid #2b6cb0; color: #2b6cb0; border-radius: 6px; padding: 3px 10px; font-size: 11px; cursor: pointer; background: #fff; }
+  /* 数据流 */
+  .flow { display: flex; flex-direction: column; gap: 6px; }
+  .flow .node { border: 1.5px solid #2b6cb0; border-radius: 8px; padding: 8px 14px; font-size: 12px; background: #f7faff; display: flex; align-items: center; gap: 8px; }
+  .flow .node.hot { background: #fff4e5; border-color: #e67e22; }
+  .flow .node .k { font-weight: 600; }
+  .flow .arrow { text-align: center; color: #2b6cb0; font-size: 13px; }
+  .flow .branch { margin-left: 30px; display: flex; flex-direction: column; gap: 6px; }
+  /* ER */
+  .er-table { border: 1.5px solid #2b6cb0; border-radius: 8px; background: #f7faff; font-size: 11.5px; width: 300px; }
+  .er-table .er-head { background: #2b6cb0; color: #fff; padding: 6px 10px; border-radius: 6px 6px 0 0; font-weight: 600; }
+  .er-table .er-row { padding: 4px 10px; display: flex; justify-content: space-between; border-top: 1px solid #dbe7f6; }
+  .er-table .er-row .k { color: #333; }
+  .er-table .er-row .v { color: #888; font-size: 10.5px; }
+  .er-wrap { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+  .er-link { align-self: center; color: #2b6cb0; font-size: 18px; font-weight: 700; }
+  table.cmp { border-collapse: collapse; font-size: 12px; width: 100%; }
+  table.cmp th { background: #eef3fb; color: #185fa5; padding: 7px 10px; border: 1px solid #c9d8ee; text-align: left; }
+  table.cmp td { padding: 7px 10px; border: 1px solid #c9d8ee; vertical-align: top; }
+  .bad { color: #c0392b; font-weight: 600; }
+  .good { color: #27ae60; font-weight: 600; }
+  .pill { display: inline-block; background: #e8f0fe; color: #185fa5; border-radius: 10px; padding: 1px 9px; font-size: 10.5px; margin-right: 4px; }
+  .warn { background: #fdf3e7; border: 1px solid #e67e22; color: #a05a10; border-radius: 8px; padding: 8px 12px; font-size: 12px; margin: 8px 0; }
+</style>
+</head>
+<body>
+<h1>📦 多工程数据体现 — 建模入口 UI 方案</h1>
+<div class="sub">AI4MBSE 平台 · 工程 = 顶层上下文 · 切工程 = 切工作区 · 白底蓝框规范</div>
+
+<div class="tabs">
+  <div class="tab on" onclick="switchView('cur')">① 现状问题（工程隐身）</div>
+  <div class="tab" onclick="switchView('new')">② 优化方案（建模入口）</div>
+  <div class="tab" onclick="switchView('flow')">③ 工程切换级联</div>
+  <div class="tab" onclick="switchView('er')">④ 工程数据模型</div>
+</div>
+
+<!-- ══════════ ① 现状 ══════════ -->
+<div class="card on" id="cv-cur">
+  <h3>① 现状：AI 建模入口的工程维度"隐身"</h3>
+  <div class="warn">⚠️ 核心问题：数据层有 79 个工程，但建模入口只有顶栏一个<b>只读标签</b>——点不了、切不了；14 个会话平铺混排，看不到任何工程归属。</div>
+  <div class="row">
+    <div class="browser">
+      <div class="bar"><span>AI4MBSE</span> <span class="ptitle">› AI 建模</span><span style="flex:1"></span>
+        <span class="proj-tag" onclick="alert('❌ 只读标签：不可点击、不可切换（现状）')">● 当前工程：星网宽带通信系统</span>
+      </div>
+      <div class="body" style="display:flex;gap:12px;">
+        <div class="conv-side" style="width:190px;">
+          <div class="head">💬 会话 <span>＋新建</span></div>
+          <div class="grp">（平铺 · 无工程分组）</div>
+          <div class="it cur">宽带通信需求分析<small>意图：建模 · 34条</small></div>
+          <div class="it">D12意图增强验证<small>意图：验证 · 18条</small></div>
+          <div class="it">图谱消费验证<small>意图：知识 · 12条</small></div>
+          <div class="it">多话题闭环验证<small>意图：建模 · 8条</small></div>
+          <div class="it">TMS热管理(旧)<small>意图：建模 · 5条</small></div>
+          <div class="it">导航增强(旧)<small>意图：建模 · 3条</small></div>
+          <div class="foot">＋ 新建对话（不带工程归属）</div>
+        </div>
+        <div class="note" style="flex:1;">
+          <b>问题清单：</b><br>
+          ① 顶栏标签只读——无法切换工程<br>
+          ② 会话平铺——星网/TMS/导航混在一起<br>
+          ③ 新建对话 body 只有 title，不带 project_id<br>
+          ④ 产物卡无工程徽标——不知属于哪个工程<br>
+          ⑤ 写回建模工具不带工程参数<br>
+          ⑥ 实例图谱/数据集成无工程维度<br>
+          <br><b>用户心智：</b>"我在建模，但系统不知道我在给哪个工程建模。"
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="legend" style="margin-top:12px;">
+    <span><span class="dot" style="background:#27ae60"></span> 当前工程</span>
+    <span><span class="dot" style="background:#f39c12"></span> 混入的其他工程会话（现状无标识）</span>
+  </div>
+</div>
+
+<!-- ══════════ ② 优化方案 ══════════ -->
+<div class="card" id="cv-new">
+  <h3>② 优化方案：建模入口的工程上下文</h3>
+  <div class="row">
+    <div class="browser">
+      <div class="bar">
+        <span>AI4MBSE</span> <span class="ptitle">› AI 建模</span><span style="flex:1"></span>
+        <div class="wrap-rel">
+          <span class="proj-tag" onclick="togglePop(event)">● 星网宽带通信系统 ▾</span>
+          <div class="proj-pop" id="proj-pop">
+            <input class="search" placeholder="🔍 搜索工程（名称 / code / 领域）…" oninput="filterProj(this.value)">
+            <div class="grp">最近使用</div>
+            <div class="it cur" onclick="pickProj(this)"><span class="dot" style="background:#27ae60"></span><span class="n">星网宽带通信系统</span><span class="c">satnet · 14 会话</span></div>
+            <div class="it" onclick="pickProj(this)"><span class="dot" style="background:#ccc"></span><span class="n">汽车热管理系统</span><span class="c">tms · 6 会话</span></div>
+            <div class="grp">卫星通信</div>
+            <div class="it" onclick="pickProj(this)"><span class="dot" style="background:#ccc"></span><span class="n">星网窄带通信系统</span><span class="c">satnet · 2 会话</span></div>
+            <div class="it" onclick="pickProj(this)"><span class="dot" style="background:#ccc"></span><span class="n">星网导航增强系统</span><span class="c">satnav · 1 会话</span></div>
+            <div class="grp">汽车热管理</div>
+            <div class="it" onclick="pickProj(this)"><span class="dot" style="background:#ccc"></span><span class="n">TMS-1785914453</span><span class="c">tms · 0 会话</span></div>
+            <div class="foot" onclick="alert('→ 新建工程 / 工程管理页（P1）')">＋ 新建工程 · ⚙ 工程管理</div>
+          </div>
+        </div>
+      </div>
+      <div class="body" style="display:flex;gap:12px;">
+        <div class="conv-side" style="width:200px;">
+          <div class="head">💬 会话 · 星网宽带 <span>＋新建</span></div>
+          <div class="grp">▾ 📡 星网宽带通信系统 <span style="color:#2b6cb0;">14</span></div>
+          <div class="it cur">宽带通信需求分析<small>建模 · 34条</small></div>
+          <div class="it">D12意图增强验证<small>验证 · 18条</small></div>
+          <div class="it">图谱消费验证<small>知识 · 12条</small></div>
+          <div class="it">多话题闭环验证<small>建模 · 8条</small></div>
+          <div class="grp">▸ 📦 其他工程 <span style="color:#888;">3</span></div>
+          <div class="collapsed">
+            <div class="it first">TMS 热管理 · 6</div>
+            <div class="it">导航增强 · 1</div>
+          </div>
+          <div class="foot">＋ 新建对话（自动归属当前工程）</div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:10px;">
+          <div class="prod-card">
+            <div class="head"><span class="badge">📡 星网宽带</span> SysML 模型：宽带载荷架构 <span style="flex:1"></span>
+              <span class="btn" onclick="alert('→ 写回 API 携带 project_id，写入该工程绑定的 MagicDraw 模型')">🔗 写回</span>
+            </div>
+            <div class="body">
+              BDD：宽带载荷系统 — 载荷A / 天线 / TWTA<br>
+              <span class="pill">元素 12</span><span class="pill">关系 8</span><span class="pill">校验通过</span>
+              <span style="color:#888;">· 归属工程：星网宽带通信系统</span>
+            </div>
+          </div>
+          <div class="note">
+            <b>方案要点：</b><br>
+            ① 顶栏标签 → <b>工程切换器</b>（搜索/分组/最近/新建）<br>
+            ② 会话侧栏 → <b>按工程分组</b>（当前展开 · 其他折叠）<br>
+            ③ 新建对话 → 自动带 <b>project_id</b><br>
+            ④ 产物卡 → <b>工程徽标</b> + 可跳工程<br>
+            ⑤ 写回 → <b>model_tools</b> 绑定 + 带工程参数<br>
+            ⑥ 当前工程资产条：实体/三元组/文档/工具状态
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ ③ 级联 ══════════ -->
+<div class="card" id="cv-flow">
+  <h3>③ 工程切换的全局级联（软切换：不销毁已打开内容）</h3>
+  <div class="row">
+    <div class="flow" style="width:420px;">
+      <div class="node hot"><span class="k">用户切换工程</span> → 星网窄带通信系统</div>
+      <div class="arrow">▼</div>
+      <div class="node"><span class="k">POST /api/projects/default</span> 顶栏徽标刷新</div>
+      <div class="arrow">▼</div>
+      <div class="node"><span class="k">上下文级联（6 条链路）</span></div>
+      <div class="branch">
+        <div class="node">💬 会话侧栏重载（?project_id=）</div>
+        <div class="node">📁 文档库重载（branch/工程过滤）</div>
+        <div class="node">🕸 实例图谱重载（GET /projects/{id}/graph）</div>
+        <div class="node">📊 数据集成入图目标切换</div>
+        <div class="node">🔗 写回默认工具刷新（model_tools）</div>
+        <div class="node">🧠 工程记忆上下文刷新</div>
+      </div>
+    </div>
+    <div class="note" style="flex:1;">
+      <b>设计决策（D1 建议）：</b><br><br>
+      <b>软切换</b> = 保留当前页面数据，仅重载上下文。<br>
+      · 避免切工程导致已打开产物/对话内容丢失<br>
+      · 符合现有 SPA 单页架构，改动可控<br>
+      · 切换时 toast 提示"已切换到：星网窄带通信系统"<br><br>
+      <b>会话隔离策略（D2 建议）：</b><br>
+      · 当前工程会话 <b>置顶展开</b><br>
+      · 其他工程会话 <b>折叠保留</b>（不删除，可回看）<br>
+      · 会话条目加工程色点（按领域配色）
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ ④ 数据模型 ══════════ -->
+<div class="card" id="cv-er">
+  <h3>④ 工程数据模型（含新增 model_tools 表）</h3>
+  <div class="er-wrap">
+    <div class="er-table">
+      <div class="er-head">Project 工程（已有 · 79 行）</div>
+      <div class="er-row"><span class="k">id</span><span class="v">PK</span></div>
+      <div class="er-row"><span class="k">name / code</span><span class="v">工程名 / 编码</span></div>
+      <div class="er-row"><span class="k">domain</span><span class="v">领域（卫星通信…）</span></div>
+      <div class="er-row"><span class="k">ontology_profile_id</span><span class="v">本体 Profile</span></div>
+      <div class="er-row"><span class="k">scenario_template_id</span><span class="v">场景模板</span></div>
+      <div class="er-row"><span class="k">status</span><span class="v">active / archived</span></div>
+    </div>
+    <div class="er-link">1 ── N</div>
+    <div class="er-table">
+      <div class="er-head">工程内数据（已有）</div>
+      <div class="er-row"><span class="k">Conversation 会话</span><span class="v">project_id 已加</span></div>
+      <div class="er-row"><span class="k">Document 文档</span><span class="v">branch: global/dev</span></div>
+      <div class="er-row"><span class="k">Triple 三元组</span><span class="v">工程图谱 API 已备</span></div>
+      <div class="er-row"><span class="k">ProjectMemory 记忆</span><span class="v">API 已备</span></div>
+      <div class="er-row"><span class="k">Branch 分支</span><span class="v">release/dev/personal</span></div>
+    </div>
+    <div class="er-link">1 ── N</div>
+    <div class="er-table">
+      <div class="er-head">model_tools 工程工具绑定（新增）</div>
+      <div class="er-row"><span class="k">project_id</span><span class="v">FK → Project</span></div>
+      <div class="er-row"><span class="k">tool_type</span><span class="v">magicdraw / sysmlv2_api…</span></div>
+      <div class="er-row"><span class="k">name</span><span class="v">工具实例名</span></div>
+      <div class="er-row"><span class="k">endpoint / auth</span><span class="v">连接地址 / 凭据</span></div>
+      <div class="er-row"><span class="k">default_target</span><span class="v">默认写回目标</span></div>
+      <div class="er-row"><span class="k">status</span><span class="v">active / offline</span></div>
+    </div>
+  </div>
+  <div class="note" style="margin-top:12px;">
+    <b>全局共享（不挂工程）：</b>本体模型 / 术语词典 / 场景模板 / 技能 / 工作流 —— 符合既有 D-3 决策（知识库分支 = 单一事实源）；P2 再支持工程级 override。
+  </div>
+</div>
+
+<script>
+function switchView(v){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on', t.textContent.includes(['cur','new','flow','er'][['cur','new','flow','er'].indexOf(v)])));
+  ['cur','new','flow','er'].forEach(x=>document.getElementById('cv-'+x).classList.toggle('on', x===v));
+}
+function togglePop(e){
+  e.stopPropagation();
+  document.getElementById('proj-pop').classList.toggle('open');
+}
+document.addEventListener('click', ()=>document.getElementById('proj-pop').classList.remove('open'));
+function filterProj(q){
+  document.querySelectorAll('#proj-pop .it').forEach(it=>{
+    it.style.display = it.textContent.includes(q) ? 'flex' : 'none';
+  });
+}
+function pickProj(el){
+  document.getElementById('proj-pop').classList.remove('open');
+  const n = el.querySelector('.n').textContent;
+  document.querySelector('.wrap-rel .proj-tag').innerHTML = '● ' + n + ' ▾';
+  alert('✅ 已切换工程：' + n + '\n→ 会话/文档/图谱/写回目标 全部级联刷新（软切换）');
+}
+</script>
+</body>
+</html>

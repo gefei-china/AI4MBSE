@@ -1,0 +1,53 @@
+/* ==========================================================================
+ * cy-loading.css — cytoscape 容器挂载等待骨架（v6.4 P0）
+ * 位置：在 index.html 引入 perf.js 之后立即 link
+ * 作用：cytoscape init 整体推到 idle（212ms+，1500 节点模型实测），
+ *       用户看到"画布立刻可见 + 节点渐进出现"。`.cy-loading` 类由 __cyIdleMount 自动加/移。
+ * ========================================================================== */
+
+/* cytoscape 容器在挂载期间显示 spinner + 浅色背景（避免白闪 + 让用户知道正在加载） */
+.cy-loading{
+  position:relative;
+  background:linear-gradient(135deg,#fbfcfe 0%,#f0f4f9 100%) !important;
+  /* 占位显示节点网格暗示图，避免完全空白 */
+  background-image:
+    linear-gradient(0deg,transparent 49%,rgba(24,95,165,.08) 49%,rgba(24,95,165,.08) 51%,transparent 51%),
+    linear-gradient(90deg,transparent 49%,rgba(24,95,165,.08) 49%,rgba(24,95,165,.08) 51%,transparent 51%) !important;
+  background-size:80px 60px;
+  background-position:0 0;
+}
+
+/* 居中 spinner */
+.cy-loading::after{
+  content:'';
+  position:absolute;
+  top:50%;left:50%;
+  width:32px;height:32px;
+  margin:-16px 0 0 -16px;
+  border:3px solid rgba(24,95,165,.18);
+  border-top-color:#185FA5;
+  border-radius:50%;
+  animation:cy-spin .8s linear infinite;
+  pointer-events:none;
+}
+@keyframes cy-spin{to{transform:rotate(360deg);}}
+
+/* 暗色主题适配 */
+[data-theme="dark"] .cy-loading{
+  background:linear-gradient(135deg,#0d1c2e 0%,#142235 100%) !important;
+  background-image:
+    linear-gradient(0deg,transparent 49%,rgba(125,178,255,.10) 49%,rgba(125,178,255,.10) 51%,transparent 51%),
+    linear-gradient(90deg,transparent 49%,rgba(125,178,255,.10) 49%,rgba(125,178,255,.10) 51%,transparent 51%) !important;
+  background-size:80px 60px;
+}
+[data-theme="dark"] .cy-loading::after{
+  border-color:rgba(125,178,255,.2);
+  border-top-color:#7DB2FF;
+}
+
+/* 缩略图容器专用（更紧凑的 spinner，避免在 60×60 容器里 spinner 比容器大） */
+.cy-loading.cy-loading-thumb::after{
+  width:18px;height:18px;
+  margin:-9px 0 0 -9px;
+  border-width:2px;
+}

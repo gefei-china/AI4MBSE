@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>SPARQL Playground · MBSE</title>
+<style>
+:root {
+  --bg: #f7f8fa;
+  --panel: #fff;
+  --border: #e5e7eb;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --primary: #2563eb;
+  --code-bg: #1f2937;
+  --code-text: #f9fafb;
+  --success: #16a34a;
+  --warn: #f59e0b;
+  --danger: #dc2626;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+header {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 16px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+header h1 { margin: 0; font-size: 18px; }
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-left: 8px;
+}
+.badge.ok { background: #dcfce7; color: var(--success); }
+.badge.warn { background: #fef3c7; color: #92400e; }
+.badge.err { background: #fee2e2; color: var(--danger); }
+.container { display: flex; height: calc(100vh - 57px); }
+.sidebar { width: 320px; background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; }
+.main { flex: 1; display: flex; flex-direction: column; padding: 16px; }
+.toolbar { padding: 12px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+.btn {
+  padding: 6px 12px; border: 1px solid var(--border);
+  background: var(--panel); border-radius: 4px; cursor: pointer;
+  font-size: 13px;
+}
+.btn:hover { background: #f9fafb; }
+.btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.tpl-item {
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  cursor: pointer; font-size: 13px;
+}
+.tpl-item:hover { background: #f9fafb; }
+.tpl-item h3 { margin: 0 0 4px 0; font-size: 13px; font-weight: 500; }
+.tpl-item p { margin: 0; color: var(--muted); font-size: 11px; }
+.section { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-bottom: 12px; }
+.section h2 { margin: 0 0 12px 0; font-size: 14px; }
+textarea { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 13px; min-height: 140px; resize: vertical; }
+.results { background: var(--code-bg); color: var(--code-text); padding: 12px; border-radius: 4px; font-family: monospace; font-size: 12px; max-height: 360px; overflow-y: auto; white-space: pre-wrap; }
+table.results { width: 100%; }
+table.results th, table.results td { padding: 4px 8px; text-align: left; }
+.status-bar { font-size: 12px; color: var(--muted); margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SPARQL Playground <span id="depBadge" class="badge"></span></h1>
+  <div>
+    <button class="btn" onclick="syncData()">🔄 同步数据到 Fuseki</button>
+    <button class="btn primary" onclick="runQuery()">▶ 执行查询</button>
+  </div>
+</header>
+<div class="container">
+  <aside class="sidebar">
+    <div class="toolbar">
+      <button class="btn primary" onclick="clearQuery()">清空</button>
+    </div>
+    <div style="padding: 8px 12px; font-size: 12px; color: var(--muted);">SPARQL 模板</div>
+    <div id="tplList"></div>
+  </aside>
+  <main class="main">
+    <div class="section">
+      <h2>查询</h2>
+      <textarea id="sparql" placeholder="输入 SPARQL 查询..."></textarea>
+    </div>
+    <div class="section">
+      <h2>结果</h2>
+      <div id="results" class="results">尚未执行查询</div>
+      <div id="statusBar" class="status-bar"></div>
+    </div>
+  </main>
+</div>
+<script>
+const API = "/api/sparql";
+
+// 模板
+const TEMPLATES = [
+  {
+    name: "查询所有类",
+    desc: "列出 ontology_types 的所有 owl:Class",
+    query: `PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?class ?label WHERE {
+  ?class a owl:Class .
+  OPTIONAL { ?class rdfs:label ?label }
+}
+ORDER BY ?label
+LIMIT 50`,
+  },
+  {
+    name: "查询所有实体",
+    desc: "列出所有 rdfs:label 非空的实体",
+    query: `PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?s ?label WHERE {
+  ?s rdfs:label ?label .
+}
+LIMIT 50`,
+  },
+  {
+    name: "统计每类实体数",
+    desc: "按 rdf:type 分组统计",
+    query: `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT ?type (COUNT(?s) AS ?count) WHERE {
+  ?s a ?type .
+  FILTER (?type != <http://www.w3.org/2002/07/owl#Class>)
+}
+GROUP BY ?type
+ORDER BY DESC(?count)
+LIMIT 20`,
+  },
+  {
+    name: "查询某类的所有实例",
+    desc: "查所有 Component 类型实体",
+    query: `PREFIX mbse: <http://mbse/ontology/>
+SELECT ?s ?label WHERE {
+  ?s a mbse:Component .
+  OPTIONAL { ?s rdfs:label ?label }
+}
+LIMIT 50`,
+  },
+  {
+    name: "查询时态有效实体",
+    desc: "查所有 validFrom 已设置的有效实体",
+    query: `PREFIX mbse: <http://mbse/ontology/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?s ?label ?from WHERE {
+  ?s mbse:validFrom ?from .
+  OPTIONAL { ?s rdfs:label ?label }
+}
+ORDER BY ?from
+LIMIT 20`,
+  },
+  {
+    name: "一跳邻居",
+    desc: "查某实体的所有关系目标",
+    query: `PREFIX mbse: <http://mbse/ontology/>
+SELECT ?p ?o WHERE {
+  <http://mbse/ontology/ENT_TEST_1789032149207> ?p ?o .
+}
+LIMIT 50`,
+  },
+];
+
+function toast(msg, ok=true) {
+  const el = document.getElementById('statusBar');
+  el.textContent = msg;
+  el.style.color = ok ? 'var(--success)' : 'var(--danger)';
+  setTimeout(() => { el.style.color = 'var(--muted)'; }, 4000);
+}
+
+async function loadDep() {
+  const r = await fetch(API + '/dependency').then(r => r.json());
+  const b = document.getElementById('depBadge');
+  if (r.ping && r.dataset_exists) {
+    b.className = 'badge ok';
+    b.textContent = 'Fuseki 就绪';
+  } else if (r.ping) {
+    b.className = 'badge warn';
+    b.textContent = 'Dataset 缺失';
+  } else {
+    b.className = 'badge err';
+    b.textContent = 'Fuseki 未启动';
+  }
+  return r;
+}
+
+function renderTpls() {
+  const list = document.getElementById('tplList');
+  list.innerHTML = TEMPLATES.map((t, i) => `
+    <div class="tpl-item" onclick="useTpl(${i})">
+      <h3>${t.name}</h3>
+      <p>${t.desc}</p>
+    </div>
+  `).join('');
+}
+
+function useTpl(i) {
+  document.getElementById('sparql').value = TEMPLATES[i].query;
+  runQuery();
+}
+
+function clearQuery() {
+  document.getElementById('sparql').value = '';
+  document.getElementById('results').textContent = '尚未执行查询';
+}
+
+async function runQuery() {
+  const q = document.getElementById('sparql').value.trim();
+  if (!q) { toast('查询不能为空', false); return; }
+  const t0 = Date.now();
+  try {
+    const r = await fetch(API + '/query', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: q}),
+    });
+    const elapsed = Date.now() - t0;
+    const data = await r.json();
+    if (!r.ok) {
+      document.getElementById('results').textContent = JSON.stringify(data, null, 2);
+      toast('查询失败：' + (data.detail || data.error), false);
+      return;
+    }
+    showResults(data, elapsed);
+  } catch (e) {
+    document.getElementById('results').textContent = '请求失败: ' + e.message;
+    toast('请求失败', false);
+  }
+}
+
+function showResults(data, elapsed) {
+  const el = document.getElementById('results');
+  if (data.results && data.results.bindings) {
+    const vars = data.head.variables;
+    const rows = data.results.bindings;
+    if (rows.length === 0) {
+      el.textContent = '(空结果集)';
+      toast('查询完成，0 条结果');
+      return;
+    }
+    let html = '<table class="results"><thead><tr>';
+    vars.forEach(v => html += '<th>' + v + '</th>');
+    html += '</tr></thead><tbody>';
+    rows.slice(0, 200).forEach(r => {
+      html += '<tr>';
+      vars.forEach(v => {
+        const cell = r[v] || {};
+        const val = cell.value || '';
+        html += '<td>' + escapeHtml(val) + '</td>';
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+    toast('查询完成，' + rows.length + ' 条结果（' + elapsed + 'ms）');
+  } else {
+    el.textContent = JSON.stringify(data, null, 2);
+    toast('查询完成（' + elapsed + 'ms）');
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+
+async function syncData() {
+  if (!confirm('将主库 ontology + entities + relations 同步到 Fuseki，确认？')) return;
+  const t0 = Date.now();
+  const r = await fetch(API + '/sync', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({}),
+  }).then(r => r.json());
+  const elapsed = Date.now() - t0;
+  if (r.ok) {
+    toast('同步成功：~' + r.triples + ' 个三元组（' + r.duration_ms + 'ms）');
+    loadDep();
+  } else {
+    toast('同步失败：' + r.error, false);
+  }
+}
+
+loadDep();
+renderTpls();
+</script>
+</body>
+</html>

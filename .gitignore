@@ -1,0 +1,107 @@
+# 2026-09-18 S5 补充：仓库此前没有可用的版本控制兜底，先补忽略清单。
+# ⚠️ 时效说明：以下"本仓库无提交"的描述是**建立基线时**的状况，现已过时——
+#    仓库有 `master` 与标签 baseline-20260918 / nav-consolidate-20260918，工作区干净。
+# 建立首个基线提交前，必须先把「随包运行时 / 运行数据 / 归档 / 一次性产物」排除，
+# 否则会把 1 GB+ 的二进制与归档一起提交进历史（不可逆）。
+#
+# ⚠️ 维护规则：**任何新增的忽略模式都必须锚定根目录（前导 `/`）**，
+#    否则会在任意深度匹配（见下方「根目录一次性产物」段的事故记录）。
+#    加完请反查：git check-ignore -v <你不想被忽略的关键文件>
+
+# ── 随包运行时（离线部署必需，但不该进版本库）──
+java-runtime/
+fuseki/
+
+# ── Python / Node 依赖与缓存 ──
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.pytest_cache/
+.playwright-cli/
+
+# ── 运行数据与数据库（含 WAL 边车）──
+data/
+mbse.db
+mbse.db-shm
+mbse.db-wal
+*.db
+*.db-shm
+*.db-wal
+static/uploads/
+static/skill_packages/
+
+# ── 归档 / 备份 / 一次性产物 ──
+_archive/
+backups/
+tmp/
+outputs/
+screenshots/
+perf-report/
+评审报告/
+docs/_archive/
+*.pres5
+*.bak
+*.bak2
+*.bak-*
+*.orig
+*.rej
+tools/legacy/
+server_*.log
+server_*.pid
+*.log
+logs/
+
+# ── 根目录一次性产物 ──
+# ⚠️ 必须用前导 `/` 锚定根目录！不带 `/` 的模式会在**任意深度**匹配：
+#    原来的 `_*.py` 把 `database/__init__.py`、`routers/__init__.py` 等
+#    全部 14 个项目自有包初始化文件一并忽略（tracked=0），导致仓库无法复现项目
+#    —— 全新克隆会在 import 阶段直接崩。2026-09-18 修正为根目录锚定。
+/_*.py
+/_*.txt
+/_*.log
+/verify_*.js
+
+# ── 前端死代码分析的一次性产物 ──
+# ⚠️ 这三份带**行号**，必须与树同步：树一变行号就全错，而 prune_dead_frontend.py 是**按行号做字节切除**的，
+#    用过期清单会切错位置（比切不掉危险得多）。故不入库，用下列命令重新生成：
+#      .venv\Scripts\python.exe tools\verify\analyze_frontend_dead.py            # -> _fe_dead.tsv
+#      .venv\Scripts\python.exe tools\verify\analyze_frontend_reach.py --json tools\verify\_fe_reach.json
+tools/verify/_fe_dead.tsv
+tools/verify/_fe_dead_reach.tsv
+tools/verify/_fe_reach.json
+
+# ── 大体积二进制与第三方压缩库 ──
+static/vendor/
+static/lib/
+docs/**/*.png
+docs/**/*.docx
+docs/mbse-platform-prd/**/*.min.js
+
+# ── 离线 SysML v2 校验器随包资产（不入库）──
+# ⚠️ 必须锚定根目录（见文件头维护规则）：这些是**随包二进制 / 第三方规范库**，不是本仓源码。
+#    体积实测（2026-09-19）：
+#      checker.jar      132,948,123 B（126.79 MB；Main-Class: SysMLValidator，内嵌 OMG 官方实现）
+#      sysml.library/   121 个文件 / 7.69 MB（取自 Systems-Modeling/SysML-v2-Release 的 sysml.library）
+#      java-runtime/    JDK 25.0.1+8-LTS（Microsoft Build）→ 见上方「随包运行时」段
+#    获取方式与指纹核验：见根 README「离线校验器资产」一节。
+#    反查忽略是否生效：git check-ignore -v checker.jar "sysml.library/.project"
+#    ⚠️ 不加这层忽略时，二者会一直挂在 `git status` 的未跟踪列表里，
+#       极易被一次 `git add -A` 卷进历史（127 MB 二进制进历史的代价不可逆）。
+/checker.jar
+/sysml.library/
+
+# ── 本地配置与密钥（防止误提交）──
+# ⚠️ 必须锚定根目录（见文件头维护规则）：`/.env` 只忽略根目录那一份；
+#    不带 `/` 的 `.env` 会在**任意深度**匹配，属上一节引用的那类事故。
+#    本仓约定 key / token 走环境变量或 `~/.workbuddy/mbse_config.json`（见 mbse_config.example.json），
+#    根目录 `.env` 仅作本地临时覆盖用，不入库。
+#    反查：git check-ignore -v .env
+/.env
+/.env.*
+!/.env.example
+
+# ── 本机环境与 IDE ──
+.trae/
+.idea/
+.vscode/

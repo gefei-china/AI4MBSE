@@ -1,0 +1,23 @@
+# P2-①（2026-09-11）Apache Jena Fuseki 侧车
+# 启动：docker-compose -f docker-compose.fuseki.yml up -d
+# 关闭：docker-compose -f docker-compose.fuseki.yml down
+# 数据：./fuseki-data 持久化 TDB2 dataset
+# 端口：3030（Web UI: http://localhost:3030/webui）
+version: "3.8"
+services:
+  fuseki:
+    image: ghcr.io/ebraminio/fuseki:5.0.0-jdk17
+    container_name: mbse_fuseki
+    ports:
+      - "3030:3030"
+    environment:
+      - FUSEKI_DATASET_1=mbse
+      - ADMIN_PASSWORD=mbse-admin
+    volumes:
+      - ./fuseki-data:/fuseki/databases
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3030/$$/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped

@@ -1,0 +1,50 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix mbse: <http://mbse/ontology/> .
+
+# ontology_types → owl:Class
+<#OntologyTypeMap>
+    a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "ontology_types" ] ;
+    rr:subjectMap [
+        rr:template "http://mbse/ontology/{name}"
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate rdfs:label ;
+        rr:objectMap [ rr:column "name" ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate owl:Class ;
+        rr:object rr:Class
+    ] .
+
+# entities → rdf:type
+<#EntityMap>
+    a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "entities" ] ;
+    rr:subjectMap [
+        rr:template "http://mbse/ontology/{id}"
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate rdf:type ;
+        rr:objectMap [
+            rr:template "http://mbse/ontology/{entity_type}"
+        ]
+    ] .
+
+# relations → 直接的对象属性关系
+<#RelationMap>
+    a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "relations" ] ;
+    rr:subjectMap [
+        rr:template "http://mbse/ontology/{source_id}"
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicateMap [
+            rr:template "http://mbse/ontology/{relation_type}"
+        ] ;
+        rr:objectMap [
+            rr:template "http://mbse/ontology/{target_id}"
+        ]
+    ] .

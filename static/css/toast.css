@@ -1,0 +1,85 @@
+/* ==========================================================================
+ * toast.css — 全局轻量提示组件（v6.1，2026-09-06）
+ * 用法：toast.success('已保存') / toast.error('请求失败') / toast.info('...')
+ * 自动消失（默认 3s），叠层 z-index 高于所有抽屉/弹窗
+ * ========================================================================== */
+
+#toast-root{
+  position:fixed;bottom:24px;right:24px;z-index:var(--z-toast);
+  display:flex;flex-direction:column;gap:var(--space-2);align-items:flex-end;
+  pointer-events:none;
+}
+.toast{
+  display:flex;align-items:flex-start;gap:var(--space-2);
+  min-width:240px;max-width:380px;padding:10px 14px;
+  background:var(--color-bg-card);color:var(--color-text);
+  border:1px solid var(--color-line);border-left:3px solid var(--color-primary);
+  border-radius:var(--radius-lg);box-shadow:var(--shadow-md);
+  font-size:var(--font-size-md);
+  pointer-events:auto;
+  animation:toast-in .24s var(--ease-fast);
+  transition:opacity .2s,transform .2s;
+}
+.toast .toast-ic, .toast .ti{flex:none;width:16px;height:16px;line-height:1;margin-top:3px;display:inline-block;}
+.toast .tc{flex:1;line-height:1.5;word-break:break-all;}
+.toast .tx{
+  flex:none;background:transparent;color:var(--color-muted);
+  font-size:14px;line-height:1;padding:4px 6px;border-radius:4px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.toast .tx:hover{background:var(--color-bg-hover);color:var(--color-text);}
+
+/* 类型变体 */
+.toast.success{border-left-color:var(--color-green);}
+.toast.success .toast-ic,.toast.success .ti{color:var(--color-green);}
+.toast.error{border-left-color:var(--color-red);}
+.toast.error .toast-ic,.toast.error .ti{color:var(--color-red);}
+.toast.warn{border-left-color:var(--color-amber);}
+.toast.warn .toast-ic,.toast.warn .ti{color:var(--color-amber);}
+.toast.info{border-left-color:var(--color-primary);}
+.toast.info .toast-ic,.toast.info .ti{color:var(--color-primary);}
+
+/* 退出动画 */
+.toast.toast-out{opacity:0;transform:translateX(20px);}
+@keyframes toast-in{
+  from{opacity:0;transform:translateY(20px) translateX(0);}
+  to{opacity:1;transform:translateY(0) translateX(0);}
+}
+
+/* 暗色适配 */
+[data-theme="dark"] .toast,
+.theme-dark .toast{
+  background:var(--color-bg-card);
+  color:var(--color-text);
+  border-color:var(--color-line);
+}
+
+/* ==========================================================================
+ * 全局错误浮层（error-overlay）— 致命错误兜底，比 toast 更重
+ * ========================================================================== */
+#err-overlay{
+  position:fixed;inset:0;z-index:var(--z-toast);
+  background:rgba(15,22,38,.85);display:none;
+  align-items:center;justify-content:center;
+  backdrop-filter:blur(4px);
+}
+#err-overlay.on{display:flex;animation:err-fade .2s var(--ease-fast);}
+#err-overlay .box{
+  max-width:480px;background:var(--color-bg-card);
+  border:1px solid var(--color-red-bd);border-radius:var(--radius-xl);
+  box-shadow:var(--shadow-xl);
+  padding:20px 22px;color:var(--color-text);
+}
+#err-overlay h3{margin:0 0 8px 0;font-size:16px;color:var(--color-red);display:flex;align-items:center;gap:8px;}
+#err-overlay pre{
+  margin:10px 0 0;padding:10px 12px;background:var(--color-bg);
+  color:var(--color-text-muted);border-radius:var(--radius-md);
+  font-family:var(--font-mono);font-size:11.5px;line-height:1.5;
+  max-height:140px;overflow:auto;border:1px solid var(--color-line);
+  white-space:pre-wrap;word-break:break-all;
+}
+#err-overlay .ops{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;}
+#err-overlay button{padding:6px 12px;border-radius:var(--radius-md);font-size:13px;}
+#err-overlay .eo-reload{background:var(--color-red);color:#fff;}
+#err-overlay .eo-close{background:transparent;color:var(--color-muted);border:1px solid var(--color-line);}
+@keyframes err-fade{from{opacity:0;}to{opacity:1;}}

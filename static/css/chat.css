@@ -1,0 +1,239 @@
+/* ==========================================================================
+ * chat.css — AI 建模页模块（v6.3 完整迁入）
+ * 加载顺序：gnav.css → chat.css → studio.css → kb.css → pages.css → app.css
+ *
+ * 模块边界：AI 建模页相关的所有输入区 / 欢迎屏 / 会话消息 / @智能体 / 工具 pop
+ * ========================================================================== */
+
+/* ── 1. AI 输入框 ibox（含工具栏 + 语音按钮 + 紫色发送键） ── */
+.ibox{border:1px solid var(--line);border-radius:12px;padding:10px 14px;display:flex;flex-direction:column;gap:0;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.03);}
+.ibox textarea{flex:1;border:none;outline:none;resize:none;font-family:inherit;font-size:13px;background:transparent;min-height:48px;max-height:180px;height:auto;line-height:1.55;width:100%;padding:2px 0;color:var(--fg);}
+.ibox-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line);}
+.tb-left,.tb-right{display:flex;align-items:center;gap:6px;}
+.tb-icon{width:30px;height:30px;border-radius:7px;border:none;background:transparent;color:var(--mut);cursor:pointer;font-size:15px;display:inline-flex;align-items:center;justify-content:center;transition:all .15s;}
+.tb-icon:hover{background:var(--blue-l);color:var(--blue-d);}
+.tb-icon.on{background:var(--blue-l);color:var(--blue-d);}
+.tb-icon.rec{background:#fee;color:#d33;animation:rec-pulse 1.2s infinite;}
+@keyframes rec-pulse{0%,100%{opacity:1;}50%{opacity:.45;}}
+#llm-providers{border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;background:#fff;color:var(--fg);cursor:pointer;max-width:170px;}
+#llm-providers:focus{outline:none;border-color:var(--blue);}
+.tb-sel{border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;background:#fff;color:var(--fg);cursor:pointer;max-width:160px;}
+.tb-sel:focus{outline:none;border-color:var(--blue);}
+.tool-item.run{border-color:var(--blue) !important;}
+.tool-item.run .dot-pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--blue);animation:rec-pulse 1s ease-in-out infinite;vertical-align:middle;margin-right:4px;}
+.send-purple{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,#7c5cff,#5b3df0);color:#fff;border:none;cursor:pointer;font-size:15px;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(124,92,255,.3);transition:transform .12s;}
+.send-purple:hover{transform:scale(1.05);}
+.send-purple:disabled{opacity:.5;cursor:default;transform:none;}
+
+/* ── 2. AI 欢迎屏（WorkBuddy 风格）+ 输入 dock（中部态 ⇄ 底部态） ── */
+/* ── 2026-09-04 v4：会话初始欢迎屏 ── */
+.chat-welcome{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:24px 20px;text-align:center;overflow-y:auto;}
+.chat-welcome .cw-hero{display:flex;flex-direction:column;align-items:center;gap:10px;}
+.chat-welcome .cw-logo{width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,#7c5cff,#5b3df0);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:26px;box-shadow:0 8px 22px rgba(124,92,255,.35);}
+.chat-welcome h2{font-size:26px;font-weight:700;color:var(--ink,#1b2a43);margin:0;letter-spacing:-.5px;}
+.chat-welcome .cw-sub{font-size:13px;color:var(--mut);margin:0;}
+.chat-welcome .cw-draft{margin-top:6px;display:inline-flex;align-items:center;gap:6px;padding:3px 12px;border-radius:14px;background:var(--amb-l,#fdf3e3);color:var(--amb,#8a5a10);font-size:11.5px;font-weight:600;}
+.chat-welcome .cw-sec{width:100%;max-width:880px;}
+.chat-welcome .cw-label{font-size:11.5px;color:var(--mut);text-align:left;margin-bottom:8px;letter-spacing:.5px;}
+.cw-pills{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;}
+.cw-pill{display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:20px;border:1px solid var(--line);background:#fff;color:var(--ink,#223);font-size:13px;cursor:pointer;transition:all .15s;user-select:none;}
+.cw-pill .cp-ic{font-size:15px;}
+.cw-pill:hover{border-color:var(--blue-bd,#a8c4e8);background:var(--blue-l,#eef4ff);}
+.cw-pill.on{background:var(--blue-d,#1c4fc4);color:#fff;border-color:var(--blue-d,#1c4fc4);box-shadow:0 4px 12px rgba(28,79,196,.25);}
+.cw-pill.on:hover{background:var(--blue-d,#1c4fc4);}
+.chat-welcome .cw-hint{margin-top:6px;font-size:12px;color:var(--mut);display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center;}
+.chat-welcome .cw-hint kbd{background:#eef1f6;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-size:11px;font-family:inherit;color:var(--mut);}
+/* 2026-09-04 v5：输入区基类（底部默认态 & 欢迎屏居中态） */
+.chat-input-dock{border-top:1px solid var(--line);background:#fff;padding:12px 16px;border-radius:0 0 10px 10px;}
+.chat-input-dock.in-hero{border:none;background:#fff;border-radius:16px;padding:16px 18px;
+  box-shadow:0 10px 34px rgba(20,40,80,.10),0 2px 8px rgba(20,40,80,.05);}
+/* 欢迎屏内输入区槽位：整体居中、限制最大宽度 */
+.cw-dock-slot{width:100%;max-width:880px;align-self:center;display:flex;justify-content:center;margin-top:2px;}
+.cw-dock-slot .chat-input-dock{width:100%;}
+/* 2026-09-07：欢迎屏（新建任务初始页）输入卡片放大——宽 880 / 输入区高 100~140，比例约 7:1。
+   仅在 in-hero（居中态）生效，底部聊天态尺寸保持不变。 */
+.chat-input-dock.in-hero{padding:18px 20px;border-radius:18px;}
+.chat-input-dock.in-hero .ibox{padding:12px 16px;border-radius:14px;}
+.chat-input-dock.in-hero .ibox textarea{
+  min-height:clamp(112px,12vh,132px);
+  max-height:320px;
+  font-size:14px;
+  line-height:1.7;
+  padding:4px 2px;
+}
+.chat-input-dock.in-hero .ibox-toolbar{margin-top:10px;padding-top:10px;}
+
+/* ── 3. 附件 / @智能体 / 工具 popover / 知识库引用 ── */
+.attach-bar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;}
+/* ── V3 @智能体选择器 / #知识库引用（Trae 式 mention 交互）── */
+.chip-bar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;}
+.agent-chip{display:inline-flex;align-items:center;gap:5px;background:var(--blue-l);border:1px solid var(--blue-bd);color:var(--blue-d);border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;}
+.agent-chip .x{cursor:pointer;color:var(--mut);font-weight:400;margin-left:2px;}
+.agent-chip .x:hover{color:var(--red);}
+.mention-pop{position:absolute;bottom:calc(100% + 6px);left:0;right:0;max-width:520px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.16);z-index:60;overflow:hidden;}
+.mention-pop .mp-head{padding:8px 12px 4px;font-size:11px;color:var(--mut);border-bottom:1px dashed var(--line);}
+.mention-pop .mp-list{max-height:260px;overflow-y:auto;padding:4px;}
+.mention-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;cursor:pointer;font-size:12.5px;}
+.mention-item.sel,.mention-item:hover{background:var(--blue-l);}
+.mention-item .mi-ic{flex:none;width:22px;text-align:center;}
+.mention-item .mi-name{font-weight:600;color:var(--ink);}
+.mention-item .mi-desc{flex:1;color:var(--mut);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mention-item .mi-tag{flex:none;font-size:10px;color:var(--mut);}
+.mention-empty{padding:14px;text-align:center;color:var(--mut);font-size:12px;}
+.attach-chip{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:3px 9px;font-size:12px;color:var(--mut);max-width:240px;}
+.attach-chip img{width:22px;height:22px;border-radius:4px;object-fit:cover;flex:none;}
+.attach-chip .an{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.attach-chip .rm{cursor:pointer;color:var(--red);font-weight:700;padding:0 2px;flex:none;}
+.attach-chip .rm:hover{opacity:.7;}
+.ibox .icobtn.on{background:var(--blue-l);border-color:var(--blue);color:var(--blue-d);}
+/* V2.3.1 工具 popover：把 4 个图标收进 ➕ 弹层，释放输入区全宽 */
+.tool-pop{position:absolute;bottom:calc(100% + 6px);left:0;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.08);padding:6px;display:none;flex-direction:column;min-width:160px;z-index:50;}
+.tool-pop.show{display:flex;}
+.tool-pop button{display:flex;align-items:center;gap:10px;padding:8px 12px;border:none;background:transparent;font-size:13px;color:var(--fg);text-align:left;border-radius:6px;cursor:pointer;white-space:nowrap;}
+.tool-pop button:hover{background:var(--blue-l);}
+.tool-pop button.on{background:var(--blue-l);color:var(--blue-d);}
+#tool-btn.on{background:var(--blue-l);border-color:var(--blue);color:var(--blue-d);}
+
+/* ── 4. AI 消息气泡（用户 / AI / 复制按钮 / 流式输出） ── */
+.msg{display:flex;gap:10px;max-width:94%;min-width:0;
+  /* P0 性能修复：屏外消息跳过布局/绘制（长会话 1500+ 条曾致整页 reflow 每帧上百 ms，展开预览面板时鼠标冻结）。
+     contain-intrinsic-size 提供占位高度估算，避免滚动条大幅跳动 */
+  content-visibility:auto;contain-intrinsic-size:auto 132px;}
+.msg-inner{display:flex;flex-direction:column;gap:8px;min-width:0;flex:1;align-items:stretch;}
+.msg .who{width:30px;height:30px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;}
+.msg.u .who{background:var(--blue);color:#fff;}
+.msg.ai .who{background:var(--blue-l);color:var(--blue-d);border:1px solid var(--blue-bd);}
+.msg .body{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:13px;white-space:pre-wrap;min-width:0;max-width:100%;overflow-wrap:break-word;word-break:break-word;}
+/* 消息底部：时间+复制（外部，hover 时显示） */
+.msg-footer{display:flex;align-items:center;justify-content:flex-start;gap:10px;margin-top:6px;padding:0 2px;opacity:0;pointer-events:none;transition:opacity .15s;}
+.msg:hover .msg-footer{opacity:1;pointer-events:auto;}
+.msg-time{font-size:10.5px;color:var(--mut);display:inline-flex;align-items:center;gap:4px;}
+.msg-copy-btn{font-size:10.5px;color:var(--mut);background:transparent;border:1px solid var(--line);border-radius:4px;padding:2px 7px;cursor:pointer;font-family:inherit;transition:all .15s;display:inline-flex;align-items:center;gap:3px;}
+.msg-copy-btn:hover{color:var(--blue-d);border-color:var(--blue-bd);background:var(--blue-l);}
+.msg-copy-btn.copied{color:var(--grn);border-color:#C0DD97;background:var(--grn-l);}
+/* 2026-09-04 复制按钮：默认仅 icon，hover icon 时展开「复制」文字 */
+.msg-copy-btn .cp-txt{display:none;}
+.msg-copy-btn:hover .cp-txt{display:inline;}
+/* 用户消息右对齐 */
+.msg.u{align-self:flex-end;flex-direction:row-reverse;}
+.msg.u .body{background:var(--blue-l);border-color:var(--blue-bd);}
+/* AI 流式输出闪烁光标 */
+.typing{display:inline-block;width:7px;height:14px;background:var(--blue-d);margin-left:2px;animation:blink 1s steps(2,start) infinite;vertical-align:-2px;border-radius:1px;}
+@keyframes blink{to{visibility:hidden;}}
+.msg.ai .body.streaming{position:relative;}
+
+/* ── 5. 会话内执行过程（Trae 式 + 视觉升级 V3；V2.7 紧凑化：单行聚焦/间距收紧） ── */
+.proc{display:flex;flex-direction:column;gap:4px;width:100%;max-width:1040px;font-size:11px;}
+/* 加载更早消息入口（消息区顶部；长会话分页渲染配套） */
+.load-earlier{margin:6px auto 14px;padding:6px 18px;border:1px dashed var(--blue-bd);border-radius:16px;
+  background:var(--blue-l);color:var(--blue-d);font-size:11.5px;font-weight:600;cursor:pointer;
+  text-align:center;width:fit-content;transition:background .15s;}
+.load-earlier:hover{background:var(--blue);color:#fff;}
+/* 编排追踪块：思考 / Agent / 工具 / 成功 / 失败 */
+.proc-block{border:1px solid var(--line);border-radius:8px;background:#fbfcfe;overflow:hidden;transition:max-height .3s ease,opacity .2s ease;}
+.proc-block.thinking{background:linear-gradient(135deg,#fffdf5 0%,#fffbf0 100%);border-color:#f0e6c8;}
+.proc-block.agent{background:#f4f8ff;border-color:#d6e4ff;}
+.proc-block.tool{background:#f8fafc;}
+.proc-block.tool.success{background:linear-gradient(135deg,#f0fdf4 0%,#ecfdf5 100%);border-color:#86efac;}
+.proc-block.tool.error{background:linear-gradient(135deg,#fef2f2 0%,#fef1f0 100%);border-color:#fca5a5;}
+/* 思考图标脉冲动画 */
+@keyframes think-pulse{0%,100%{opacity:1;}50%{opacity:.45;}}
+.proc-block.thinking .think-icon{animation:think-pulse 1.3s ease-in-out infinite;}
+/* 工具状态指示器 */
+.tool-status{font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;}
+.tool-status.ok{background:#dcfce7;color:#166534;}
+.tool-status.err{background:#fef2f2;color:#991b1b;}
+.tool-status.run{background:#e0f2fe;color:#0369a1;}
+/* 时间戳 */
+.proc-time{font-size:9.5px;color:var(--mut);margin-left:auto;opacity:.7;}
+.proc-head{display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;user-select:none;font-size:11px;color:var(--blue-d);font-weight:600;transition:background .15s;}
+.proc-head:hover{background:rgba(0,0,0,.02);}
+.proc-head .chev{font-size:10px;color:var(--mut);transition:transform .2s ease;display:inline-block;}
+.proc-block.collapsed .chev{transform:rotate(-90deg);}
+.proc-body{display:block;padding:3px 8px 8px;white-space:pre-wrap;word-break:break-word;line-height:1.5;font-size:11px;color:var(--fg);max-height:340px;overflow-y:auto;transition:max-height .3s ease;}
+.proc-block.collapsed .proc-body{max-height:0;padding-top:0;padding-bottom:0;overflow:hidden;}
+/* V2.6 环节内容滚动条细化 + 展开全文入口配套 */
+.proc-body::-webkit-scrollbar,.proc-tool-result .pr-body::-webkit-scrollbar{width:6px;}
+.proc-body::-webkit-scrollbar-thumb,.proc-tool-result .pr-body::-webkit-scrollbar-thumb{background:var(--line,#dde3ec);border-radius:3px;}
+/* V2.6 执行中动态效果：状态徽章 spinner + 运行中条目呼吸 */
+@keyframes proc-spin{to{transform:rotate(360deg);}}
+.proc-spin{display:inline-block;width:10px;height:10px;border:2px solid var(--blue-bd,#bcd4f7);border-top-color:var(--blue-d,#3478f6);border-radius:50%;animation:proc-spin .8s linear infinite;vertical-align:-1px;margin-right:4px;flex:none;}
+@keyframes proc-breathe{0%,100%{opacity:1;}50%{opacity:.55;}}
+.proc-block.running{animation:proc-breathe 1.6s ease-in-out infinite;border-color:var(--blue-bd,#bcd4f7);}
+.proc-block.running .proc-head{color:var(--blue-d,#3478f6);}
+/* V2.6 统一收口条：执行过程汇总（点击展开/收起时间线） */
+.proc-summary{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--blue-l,#eef4ff);cursor:pointer;user-select:none;font-size:11.5px;font-weight:600;color:var(--blue-d,#3478f6);transition:background .15s;}
+.proc-summary:hover{background:#e2ecff;}
+.proc-summary .chev{margin-left:auto;font-size:10px;color:var(--mut);transition:transform .2s ease;display:inline-block;}
+.proc-summary.collapsed .chev{transform:rotate(-90deg);}
+.proc-summary .proc-time{margin-left:0;}
+/* 历史消息执行过程：收口条 + 默认收起的时间线容器 */
+.hist-proc .proc-timeline{display:none;}
+.hist-proc.open .proc-timeline{display:flex;flex-direction:column;gap:6px;margin-top:6px;}
+/* 步骤头部副标题（折叠后仍可见的阶段详情，Trae 式时间线） */
+.proc-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.proc-sub{color:var(--mut);font-weight:400;font-size:10.5px;margin-left:4px;}
+.proc-line{display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:11.5px;color:var(--blue-d);font-weight:600;}
+.proc-tool-param{font-size:10.5px;color:var(--mut);white-space:nowrap;text-overflow:ellipsis;overflow:hidden;max-width:100%;margin-bottom:3px;}
+/* V2.7 参数单行聚焦：悬浮显示全文 */
+.proc-tool-param:hover{white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.02);border-radius:4px;}
+/* P0-2 工具结果：头部（结果/展开/复制）+ 正文（截断可展开） */
+.proc-tool-result{font-size:10.5px;color:var(--mut);margin-top:2px;}
+.proc-tool-result .pr-head{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--mut);margin-bottom:2px;}
+.proc-tool-result .pr-act{cursor:pointer;color:var(--blue-d);text-decoration:underline;user-select:none;}
+.proc-tool-result .pr-body{white-space:pre-wrap;word-break:break-all;max-height:90px;overflow:auto;}
+.proc-tool-result.open .pr-body{max-height:none;overflow:visible;}
+/* V2.6 代码块折叠卡：默认收起，头部=语言+行数+复制 */
+.code-fold{border:1px solid var(--line,#e5e8ee);border-radius:8px;background:#f8fafc;margin:6px 0;overflow:hidden;}
+.code-fold .cf-head{display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;user-select:none;font-size:10.5px;color:var(--mut);background:rgba(0,0,0,.02);}
+.code-fold .cf-head:hover{background:rgba(0,0,0,.04);}
+.code-fold .cf-lang{font-weight:700;color:var(--blue-d,#3478f6);text-transform:uppercase;letter-spacing:.5px;}
+.code-fold .cf-meta{color:var(--mut);}
+.code-fold .cf-act{cursor:pointer;color:var(--blue-d,#3478f6);text-decoration:underline;margin-left:auto;}
+.code-fold .chev{color:var(--mut);font-size:10px;transition:transform .2s ease;}
+.code-fold.open .chev{transform:rotate(90deg);}
+.code-fold .md-code{display:none;margin:0;border-radius:0;max-height:340px;overflow:auto;}
+.code-fold.open .md-code{display:block;}
+/* P1-3 思考轮次分隔 */
+.proc-round{font-size:10px;color:var(--blue-d,#3478f6);font-weight:600;margin:6px 0 2px;border-left:2px solid #cfe0ff;padding-left:6px;}
+/* P1-1 停止生成标记 */
+.stop-note{margin-top:8px;padding:4px 8px;font-size:10.5px;color:var(--mut);border:1px dashed var(--line,#e5e8ee);border-radius:6px;background:#f8fafc;}
+/* P0-1 编排 DAG 容器（收起时隐藏，展开重建） */
+.dag-viz{width:100%;}
+
+/* ── 6. AI 返回结果卡片（影响分析 + 富卡片） ── */
+.result-card{border:1px solid var(--blue-bd);border-radius:10px;background:#fff;overflow:hidden;margin-top:10px;}
+.result-card .rc-header{background:var(--blue-l);border-bottom:1px solid var(--blue-bd);padding:10px 14px;display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;color:var(--blue-d);}
+.result-card .rc-body{padding:12px 14px;font-size:12.5px;}
+.result-card .rc-actions{display:flex;gap:8px;padding:10px 14px;border-top:1px solid #e9edf3;background:#fbfcfe;}
+.impact-item{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;}
+.impact-item .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+/* ── 富卡片（AI 建模对话内） ── */
+.rc{width:100%;min-width:0;}
+/* 聊天区子项防被内容撑开（拖拽分割线变窄时内容自适应，不产生横向溢出） */
+#chat-area > *{min-width:0;max-width:100%;}
+
+
+/* ── 2026-09-18 S6-2：由 index.html 内联 <style> 迁入（原位置见 git 历史） ── */
+
+
+/* Agent 输出呈现 P0：工具耗时 / 三段式错误面 / 产物卡片 / 审批卡（沿用现有变量体系） */
+.tool-elapsed{font-size:10px;color:var(--mut);background:#eef1f6;border-radius:4px;padding:1px 6px;flex:none;font-variant-numeric:tabular-nums;}
+.tool-elapsed.done{color:var(--blue-d);background:var(--blue-l);}
+.proc-block.tool.error .tool-elapsed.done{color:var(--red);background:var(--red-l);}
+.errface{margin-top:4px;border:1px solid #F7C1C1;border-radius:7px;background:#fef6f6;padding:4px 8px;font-size:10.5px;line-height:1.5;white-space:normal;}
+.errface .ef-row{display:flex;gap:6px;align-items:center;margin:1px 0;min-width:0;}
+.errface .ef-k{flex:none;font-weight:600;color:var(--red);}
+.errface .ef-v{flex:1;min-width:0;color:var(--txt,#222);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.errface .ef-v:hover{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.03);border-radius:4px;}
+.errface .ef-act{margin-top:2px;}
+.art-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.art-grid.many{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;}
+.art-card{flex:0 0 auto;min-width:168px;max-width:212px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe;padding:8px 10px;cursor:pointer;transition:border-color .15s,background .15s;white-space:normal;}
+.art-card:hover{border-color:var(--blue-bd,#b8d4f5);background:#f2f7ff;}
+.art-card .ac-head{display:flex;align-items:center;gap:7px;}
+.art-card .ac-ico{font-size:17px;flex:none;}
+.art-card .ac-title{font-weight:600;font-size:12px;color:var(--ink,#223);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.art-card .ac-meta{margin-top:3px;font-size:10px;color:var(--mut);display:flex;gap:5px;align-items:center;flex-wrap:wrap;}
+.art-card .ac-ops{margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;}
+.art-card .ac-ops .pr-act{cursor:pointer;color:var(--blue-d);text-decoration:underline;user-select:none;font-size:10.5px;}
