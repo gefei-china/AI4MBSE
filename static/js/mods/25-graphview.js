@@ -259,7 +259,7 @@ function svmToElements(vm) {
     const a = nd.attrs || {};
     // 节点标签：第一行名称（粗体），后续行类型/值/端口（说明属性）
     const extras = [];
-    if (nd.type && nd.type !== nd.kind) extras.push(nd.type);
+    if (nd.type && nd.type !== nd.kind && nd.type !== nd.name) extras.push(nd.type);
     const val = a.value ? String(a.value).slice(0, 18) : '';
     if (val) extras.push(val);
     if (a.ports && a.ports.length) extras.push('端口:' + a.ports.slice(0, 3).join(','));
@@ -385,6 +385,8 @@ function svmRenderCytoscape(container, vm) {
         'background-color':'#EAF3DE','border-color':'#3B6D11','border-width':1.5,
         'color':'#1F2D3D','font-size':12,'text-valign':'center','text-halign':'center',
         'text-wrap':'wrap','text-max-width':130,
+        // canvas 文字必须显式给 CJK 字体栈：缺省字体在部分环境缺中文字形会渲染成 tofu（菱形问号）
+        'font-family':'"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",sans-serif',
         'width':150,'height':60,'shape':'round-rectangle','text-margin-y':-2
       }},
       // 复合节点（父节点：包住子节点，SysML BDD/PKG 标准层级视觉）
