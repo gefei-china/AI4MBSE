@@ -396,3 +396,57 @@ function computeViewLayout(viewType, nodes, edges) {
     return VIEW_LAYOUT_ENGINE._default(nodes || [], edges || []) || {};
   }
 }
+
+/* ═════════════ ELK 行业标准布局内核（异步精排层）═════════════
+ * 依据：SRS-GN-MG-BJYH 只要求「布局合理」，不约束算法实现。
+ * 适用：图结构类视图（BDD/PKG/TRACE）——自研分层器不做交叉最小化，
+ *       实测 BDD 真实数据 30 节点 96 处交叉；ELK 的 LAYER_SWEEP
+ *       交叉最小化 + 网络单纯形层分配 + 正交布线是行业标准方案
+ *       （Eclipse 系建模工具同源内核，EPL-2.0，vendored 离线可用）。
+ * 语义惯例类视图（REQ/UC/SEQ/ACT/IBD/PAR/STM）保留自研确定性布局：
+ *       actor 居框外两侧、生命线时序等约定俗成的空间语义 ELK 不理解。
+ * 调用：computeViewLayoutAsync() 返回 null = 不适用/失败，调用方沿用
+ *       computeViewLayout() 的同步初排，绝不阻断渲染。
+ */
+const VIEW_ELK_TYPES = new Set(['BDD', 'PKG', 'TRACE']);
+let _elkInstance = null;
+
+function _elkEdgePriority(kind) {
+  if (kind === 'composition') return 10;
+  if (kind === 'generalization' || kind === 'specialization') return 5;
+  return 1;
+}
+
+async function computeViewLayoutAsync(viewType, nodes, edges) {
+  if (!window.ELK || !VIEW_ELK_TYPES.has(viewType)) return null;
+  try {
+    if (!_elkInstance) _elkInstance = new ELK();
+    const graph = {
+      id: 'root',
+      layoutOptions: {
+        'elk.algorithm': 'layered',
+        'elk.direction': 'DOWN',
+        'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+        'elk.spacing.nodeNode': '46',
+        'elk.layered.spacing.nodeNodeBetweenLayers': '70',
+        'elk.edgeRouting': 'ORTHOGONAL',
+      },
+      children: (nodes || []).map(n => ({ id: String(n.id), width: 150, height: 60 })),
+      edges: (edges || []).map((e, i) => ({
+        id: 'e' + i,
+        sources: [String(e.source)],
+        targets: [String(e.target)],
+        layoutOptions: { 'elk.layered.priority': String(_elkEdgePriority(e.kind)) },
+      })),
+    };
+    const out = await _elkInstance.layout(graph);
+    const pos = {};
+    (out.children || []).forEach(c => {
+      if (c.x != null) pos[c.id] = { x: Math.round(c.x), y: Math.round(c.y) };
+    });
+    return Object.keys(pos).length ? pos : null;
+  } catch (e) {
+    console.warn('[ELK]', viewType, '精排失败，沿用自研初排:', e.message);
+    return null;
+  }
+}

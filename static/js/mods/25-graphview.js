@@ -336,6 +336,8 @@ async function svmArchiveLayoutCheck(vm) {
     if (r && r.ok) {
       const meta = document.getElementById('svm-meta');
       if (meta) {
+        // 重复回传时只保留最新一条布局质量标记（初排 → ELK 精排覆盖）
+        meta.innerHTML = meta.innerHTML.replace(/\s*·\s*布局质量[\s\S]*$/, '');
         const cov = r.check && r.check.coverage_pass;
         meta.insertAdjacentHTML('beforeend',
           ` · 布局质量 <b>score ${metrics.score}</b>（交叉 ${metrics.crossings}）`
@@ -343,6 +345,23 @@ async function svmArchiveLayoutCheck(vm) {
       }
     }
   } catch(e) { /* 指标存档失败不阻断渲染（后端留痕 layout_save_error） */ }
+}
+// P0-2 v2：ELK 行业标准布局内核异步精排（仅图结构类视图 BDD/PKG/TRACE）
+// 流程：同步引擎初排先上屏（保底）→ ELK 交叉最小化精排覆盖坐标 → 更新指标并重新回传落库
+async function svmElkRelayout(cy, vm) {
+  const vmRef = vm;
+  try {
+    const vt = (vm.view && vm.view.type) || '';
+    const viewNodes = (vm.nodes||[]).map(nd => ({id: nd.id, name: nd.name||'', kind: nd.kind||'block', type: nd.type||'', attrs: nd.attrs||{}}));
+    const viewEdges = (vm.edges||[]).map(e => ({source: e.source, target: e.target, kind: e.kind||'dependency'}));
+    const pos = await computeViewLayoutAsync(vt, viewNodes, viewEdges);
+    if (!pos || _lastViewLayout.vm !== vmRef || !cy || cy.destroyed()) return;  // 视图已切换则放弃
+    cy.nodes().forEach(n => { const p = pos[n.id()]; if (p) { n.position(p); n.unlock(); } });
+    // ELK 精排后图幅可能超出可视区（初排 fit 坐标已失效），重新适配
+    try { cy.resize(); cy.fit(undefined, 40); } catch(e) {}
+    _lastViewLayout.posMap = pos;
+    svmArchiveLayoutCheck(vmRef);  // 用精排后坐标重新回传（meta 只保留最新一条）
+  } catch(e) { console.warn('[ELK-relayout]', e.message); }
 }
 // 容器内渲染 Cytoscape 视图（返回实例；容器需已挂载）
 function svmRenderCytoscape(container, vm) {
@@ -436,6 +455,7 @@ function svmRenderCytoscape(container, vm) {
   });
   _cyInstances[key] = cy;
   if (container.id) window['cy_' + container.id] = cy;  // 调试/自动化引用
+  svmElkRelayout(cy, vm);  // ELK 精排（异步、不阻断；不适用类型内部直接返回）
   return cy;
 }
 // 视图预览弹窗内渲染（替换原 buildSvmSvg 调用点）
