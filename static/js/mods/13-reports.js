@@ -332,6 +332,7 @@ async function openCitation(sup){
   const cites = (window._msgCites && mid && window._msgCites[mid]) || [];
   const c = cites[i];
   if(!c){ toast('引用来源不可用'); return; }
+  window._citeLast = c;   // P1-5：缓存当前引用，供「在源文件中定位」按钮使用
   const num = i + 1;
   const confCls = c.confidence_level==='高' ? 'ok' : (c.confidence_level==='中' ? 'a' : 'w');
   let html = `
@@ -342,6 +343,9 @@ async function openCitation(sup){
       <span class="tag">chunk#${c.chunk_index!==undefined?c.chunk_index:'-'}</span>
       ${c.confidence_level?`<span class="st ${confCls}">置信 ${esc(c.confidence_level)}</span>`:''}
       ${c.score!==undefined?`<span class="tag">score ${c.score}</span>`:''}
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+      <button class="btn sm" onclick="citeOpenInPreview()" title="打开源文件预览，自动高亮并滚动到引用片段">📖 在源文件中定位</button>
     </div>
     <h4 style="margin:8px 0 6px;font-size:13px;">📄 命中段落</h4>
     <div style="border:1px solid var(--line);border-radius:8px;padding:10px;background:#fffdf5;font-size:12.5px;line-height:1.7;max-height:200px;overflow:auto;white-space:pre-wrap;">${esc(c.content||'')}</div>`;
@@ -364,7 +368,7 @@ async function openCitation(sup){
         }).join('');
         extra += `<h4 style="margin:14px 0 6px;font-size:13px;">📍 文档原文定位（§${c.chunk_index}）</h4><div style="max-height:300px;overflow:auto;">${ctx}</div>`;
       }
-      // 模型元素：chunk 溯源链接的实体（viewEntity 展示图谱详情）
+      // 模型元素：chunk 溯源链接的实体（查看=viewEntity 详情；定位=图谱工作台高亮定位，P1-5）
       const ents = d.linked_entities||[];
       if(ents.length){
         extra += `<h4 style="margin:14px 0 6px;font-size:13px;">🧬 关联模型元素（${ents.length}）</h4>
@@ -372,7 +376,10 @@ async function openCitation(sup){
           `<div style="display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
             <span class="st ${e.status==='reviewed'?'ok':e.status==='candidate'?'w':'g'}">${esc(e.status||'')}</span>
             <b>${esc(e.name)}</b><span class="tag">${esc(e.entity_type||'')}</span>
-            <span style="margin-left:auto;"><button class="btn sm ghost" style="font-size:10.5px;padding:0 8px;" onclick="viewEntity('${e.id}')">查看</button></span>
+            <span style="margin-left:auto;display:flex;gap:4px;">
+              <button class="btn sm ghost" style="font-size:10.5px;padding:0 8px;" onclick="locateEntityInGraph('${e.id}')" title="跳转图谱工作区，高亮并居中该实体">🎯 定位</button>
+              <button class="btn sm ghost" style="font-size:10.5px;padding:0 8px;" onclick="viewEntity('${e.id}')">查看</button>
+            </span>
           </div>`).join('') + '</div>';
       }
       const body = document.getElementById('panel-body');
@@ -384,6 +391,42 @@ async function openCitation(sup){
       if(body) body.innerHTML = html + `<div style="color:var(--mut);font-size:11px;margin-top:10px;">来源详情加载失败：${esc(e.message||'')}</div>`;
     }
   }
+}
+
+// ── P1-5（2026-09-21）：引用端到端定位 ─────────────────────────────────
+// ① 引用 → 源文件预览锚点：打开 38-filepreview 的文本视图，自动高亮并滚动到引用片段
+function citeOpenInPreview(){
+  const c = window._citeLast;
+  if(!c || !c.document_id){ toast('该引用没有对应的入库文档，无法定位源文件'); return; }
+  openFilePreview({doc_id: c.document_id, filename: c.source_doc || '文档',
+                   find: String(c.content||'').slice(0, 200), tab: 'text'});
+}
+// ② 模型元素 → 图谱工作台定位高亮：非图谱页先跳转（go('kb','kb-d')），等图谱数据加载后
+//    复用 34-graphtabs.js 的 gwtLocateEntity（选中四件套：画布高亮+居中+右栏详情+左栏树定位）。
+//    任何一步组件缺失都降级到 viewEntity 详情弹窗，不静默失败。
+async function locateEntityInGraph(id){
+  id = String(id||'').trim();
+  if(!id){ toast('缺少实体标识'); return; }
+  if(typeof gwtLocateEntity !== 'function'){
+    if(typeof viewEntity === 'function') viewEntity(id);
+    else toast('图谱定位组件未加载');
+    return;
+  }
+  const pg = document.querySelector('.page.on');
+  if(!pg || pg.id !== 'pg-kb'){
+    go('kb','kb-d');
+    // 等图谱数据到位（loadGraph 异步；上限 5s，超时也继续——gwtLocateEntity 内部还有兜底）
+    const t0 = Date.now();
+    while(Date.now() - t0 < 5000){
+      let loaded = false;
+      try{ loaded = !!((graphState.all && graphState.all.nodes) || []).length; }catch(e){}
+      if(loaded) break;
+      await new Promise(r=>setTimeout(r, 150));
+    }
+  }else if(typeof wsTab === 'function'){
+    wsTab('content');
+  }
+  gwtLocateEntity(id);
 }
 
 // ── V3.0 AI 建模 SysML 版本链 / 入库（统一 v2g 候选治理入口）──

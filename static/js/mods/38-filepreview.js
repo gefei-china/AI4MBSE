@@ -77,6 +77,7 @@ async function openFilePreview(o){
     docId: o.doc_id ? Number(o.doc_id) : 0,
     filename: o.filename || '未命名文件',
     url: o.url || '',
+    findText: o.find || '',   // P1-5：引用锚点——文本视图打开时高亮并滚动到该片段
     meta: null, text: '', textLoaded: false, kind: '', tab: o.tab || '', loadErr: '',
   };
   _pvState = st;
@@ -193,13 +194,37 @@ function pvBodyHtml(st){
           ? '<div style="margin-top:6px;"><button class="btn sm" onclick="pvSwitch(\'raw\')">切到原件视图</button></div>'
           : '');
   }
+  // P1-5：引用锚点定位——把 st.findText（引用 chunk 内容前缀）在全文中标出 <mark id="pv-anchor">。
+  // chunk.content 是全文抽取文本的切片，优先精确匹配；失败按空白折叠后再匹配（PDF/DOCX 抽取的
+  // 空白差异常见），映射回原文窗口高亮。两路都不中 → 原样渲染（由 renderPvPanel 提示）。
+  function pvAnchorHtml(st){
+    const t = st.text || '';
+    const needle = String(st.findText||'').trim().slice(0, 200);
+    if(!needle) return esc(t);
+    const mk = s => '<mark id="pv-anchor" style="background:#ffe58a;outline:1px solid #e6c34a;border-radius:2px;">' + s + '</mark>';
+    const idx = t.indexOf(needle);
+    if(idx >= 0) return esc(t.slice(0, idx)) + mk(esc(needle)) + esc(t.slice(idx + needle.length));
+    const norm = s => String(s).replace(/\s+/g, '');
+    const tn = norm(t), qn = norm(needle);
+    const ni = tn.indexOf(qn);
+    if(ni >= 0 && qn.length){
+      let i = 0, cnt = 0, start = -1, end = -1;
+      while(i < t.length && cnt < ni){ if(!/\s/.test(t[i])) cnt++; i++; }
+      start = i; cnt = 0;
+      while(i < t.length && cnt < qn.length){ if(!/\s/.test(t[i])) cnt++; i++; }
+      end = i;
+      if(end > start) return esc(t.slice(0, start)) + mk(esc(t.slice(start, end))) + esc(t.slice(end));
+    }
+    return esc(t);
+  }
   return '<div style="font-size:12px;color:var(--mut,#888);margin-bottom:6px;">'
     + '抽取全文 ' + st.text.length.toLocaleString() + ' 字符'
     + (st.meta && st.meta.has_file === false ? '（由分块拼接）' : '')
+    + (st.findText ? ' · <span style="color:var(--blue-d,#3478f6);">🎯 引用锚点定位模式</span>' : '')
     + '</div>'
     + '<div style="background:var(--blue-l,#f4f8ff);border-radius:8px;padding:12px;font-size:12.5px;'
     + 'white-space:pre-wrap;word-break:break-word;line-height:1.75;max-height:min(70vh,680px);overflow:auto;">'
-    + esc(st.text) + '</div>';
+    + pvAnchorHtml(st) + '</div>';
 }
 
 function renderPvPanel(){
@@ -210,6 +235,14 @@ function renderPvPanel(){
     + '<div class="kv"><span>预览方式</span><b>' + esc(pvKindLabel(st)) + '</b></div>';
   document.getElementById('panel-title').textContent = '📖 源文件预览：' + st.filename;
   body.innerHTML = head + pvTabsHtml(st) + pvBodyHtml(st);
+  // P1-5：锚点滚动（文本视图 + 带 findText 时）——命中滚到并提示；未命中如实告知，不让用户找
+  if(st.tab === 'text' && st.findText){
+    setTimeout(function(){
+      const a = document.getElementById('pv-anchor');
+      if(a){ a.scrollIntoView({block:'center'}); toast('🎯 已定位到引用片段'); }
+      else if(st.text){ toast('未能在全文中定位引用片段（抽取差异），可在预览中手动查看'); }
+    }, 80);
+  }
 }
 
 function pvSwitch(tab){
