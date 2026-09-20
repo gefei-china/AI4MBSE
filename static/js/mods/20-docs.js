@@ -790,6 +790,10 @@ function openDsDrawer() {
     </div>
     <textarea id="ds-config" placeholder='连接配置 JSON（凭据只填环境变量名，不明文落库）' style="width:100%;margin-top:8px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;min-height:64px;"></textarea>
     <div id="ds-config-hint" style="font-size:11px;color:var(--mut);margin-top:4px;"></div>
+    <div style="margin-top:8px;border-top:1px dashed var(--line);padding-top:8px;">
+      <div style="font-size:11px;color:var(--mut);margin-bottom:4px;">字段映射（预留口子：后端当前仅存储不消费；对接企业库持续同步时启用 —— primary_key 供增量 upsert，field_map 声明 源列→本体类型.属性）：</div>
+      <textarea id="ds-mapping" placeholder='{"primary_key": "part_no", "field_map": {"名称": "实体名", "材料": "Part.material"}}' style="width:100%;border:1px dashed var(--line);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;min-height:48px;"></textarea>
+    </div>
   </div>
   <div id="ds-list" style="display:flex;flex-direction:column;gap:6px;"><span style="font-size:12px;color:var(--mut);">加载中…</span></div>
   <div id="ds-preview" style="display:none;margin-top:10px;border:1px dashed var(--line);border-radius:8px;padding:8px;max-height:260px;overflow:auto;"></div>`;
@@ -815,10 +819,14 @@ async function loadDataSources() {
     if (!items.length) { el.innerHTML = '<span style="font-size:12px;color:var(--mut);">暂无数据源，点「注册数据源」接入数据库 / 接口 / 文件。</span>'; return; }
     el.innerHTML = items.map(d => {
       const status = esc(d.last_status || '未测试');
+      let cfg = d.config || {};
+      if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch (e) { cfg = {}; } }
+      const hasMap = cfg.mapping && typeof cfg.mapping === 'object';
       return `
       <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;gap:8px;align-items:center;background:#fff;flex-wrap:wrap;">
         <span class="tag">${DS_TYPE_LABEL[d.type] || d.type}</span>
         <b style="font-size:12px;">${esc(d.name)}</b>
+        ${hasMap ? '<span class="tag" title="已配置字段映射（预留口子，暂不消费）">映射</span>' : ''}
         <span style="font-size:11px;color:${d.enabled ? 'var(--ok,green)' : 'var(--mut)'};">${d.enabled ? '● 已启用' : '○ 已停用'}</span>
         <span style="font-size:11px;color:var(--mut);flex:1;min-width:160px;" title="${status}">${status}</span>
         <button class="btn sm ghost" onclick="dsAction('test',${d.id})">测试</button>
@@ -836,6 +844,12 @@ async function dsCreate() {
   let config = {};
   try { config = JSON.parse(document.getElementById('ds-config').value || '{}'); }
   catch (e) { toast('❌ 配置不是合法 JSON：' + e.message); return; }
+  // 字段映射（预留口子）：非空则校验 JSON 后并入 config.mapping（后端暂只存储不消费）
+  const mapRaw = ((document.getElementById('ds-mapping') || {}).value || '').trim();
+  if (mapRaw) {
+    try { config.mapping = JSON.parse(mapRaw); }
+    catch (e) { toast('❌ 字段映射不是合法 JSON：' + e.message); return; }
+  }
   try {
     await api('/api/knowledge/data-sources', { method: 'POST', body: JSON.stringify({ name, type, config, enabled: 1 }) });
     toast('✅ 数据源已注册：' + name);
