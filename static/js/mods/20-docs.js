@@ -749,3 +749,113 @@ async function deleteDoc(id) {
 let ontSelected = null;
 let ontData = {types:[], binding:[]};
 // 本体 Graph 全屏查看：fixed 覆盖 + 画布重排（交互保留）
+
+/* ═════════ 外部数据源（P0-4 2026-09-20）：注册 db/api/file 三类源 → 测试 → 预览 → 抽取 ═════════ */
+const DS_CONFIG_TEMPLATES = {
+  db: '{\n  "connection": "sqlite:///D:/path/企业数据库.db",\n  "table": "parts",\n  "limit": 200\n}',
+  api: '{\n  "url": "https://host/api/items",\n  "token_env": "MY_API_TOKEN",\n  "data_key": "items",\n  "limit": 200\n}',
+  file: '{\n  "path": "data/uploads/企业文档.md"\n}'
+};
+const DS_TYPE_LABEL = { db: '数据库', api: '接口', file: '文件' };
+
+function dsConfigHint() {
+  const t = document.getElementById('ds-type').value;
+  document.getElementById('ds-config').value = DS_CONFIG_TEMPLATES[t] || '{}';
+  document.getElementById('ds-config-hint').textContent = t === 'db'
+    ? 'connection 当前支持 sqlite:/// 绝对路径（强制只读）；table 或 sql 二选一。pg/mysql 驱动属 P1 批次。'
+    : t === 'api' ? 'url 需 http(s)://；token_env 填环境变量名（Bearer 方式注入）；data_key 为响应中数组字段名（可省略）。'
+    : 'path 为服务器本地文件绝对路径，整篇作为文档入库。';
+}
+
+function toggleDsPanel() {
+  const p = document.getElementById('ds-panel');
+  const show = p.style.display === 'none';
+  p.style.display = show ? '' : 'none';
+  if (show) { loadDataSources(); if (!document.getElementById('ds-config').value) dsConfigHint(); }
+}
+
+function dsToggleForm() {
+  const f = document.getElementById('ds-form');
+  const show = f.style.display === 'none';
+  f.style.display = show ? '' : 'none';
+  document.getElementById('ds-form-toggle').textContent = show ? '✖ 收起表单' : '➕ 注册数据源';
+  if (show && !document.getElementById('ds-config').value) dsConfigHint();
+}
+
+async function loadDataSources() {
+  const el = document.getElementById('ds-list');
+  try {
+    const r = await api('/api/knowledge/data-sources');
+    const items = r.items || [];
+    if (!items.length) { el.innerHTML = '<span style="font-size:12px;color:var(--mut);">暂无数据源，点「注册数据源」接入数据库 / 接口 / 文件。</span>'; return; }
+    el.innerHTML = items.map(d => {
+      const status = esc(d.last_status || '未测试');
+      return `
+      <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;gap:8px;align-items:center;background:#fff;flex-wrap:wrap;">
+        <span class="tag">${DS_TYPE_LABEL[d.type] || d.type}</span>
+        <b style="font-size:12px;">${esc(d.name)}</b>
+        <span style="font-size:11px;color:${d.enabled ? 'var(--ok,green)' : 'var(--mut)'};">${d.enabled ? '● 已启用' : '○ 已停用'}</span>
+        <span style="font-size:11px;color:var(--mut);flex:1;min-width:160px;" title="${status}">${status}</span>
+        <button class="btn sm ghost" onclick="dsAction('test',${d.id})">测试</button>
+        <button class="btn sm ghost" onclick="dsAction('preview',${d.id})">预览</button>
+        <button class="btn sm" onclick="dsAction('ingest',${d.id})" ${d.enabled ? '' : 'disabled'}>抽取入库</button>
+        <button class="btn sm red" onclick="dsDelete(${d.id},'${esc(d.name)}')">删除</button>
+      </div>`;
+    }).join('');
+  } catch (e) { el.innerHTML = `<span style="font-size:12px;color:var(--red,red);">加载失败：${esc(e.message)}</span>`; }
+}
+
+async function dsCreate() {
+  const name = document.getElementById('ds-name').value.trim();
+  const type = document.getElementById('ds-type').value;
+  let config = {};
+  try { config = JSON.parse(document.getElementById('ds-config').value || '{}'); }
+  catch (e) { toast('❌ 配置不是合法 JSON：' + e.message); return; }
+  try {
+    await api('/api/knowledge/data-sources', { method: 'POST', body: JSON.stringify({ name, type, config, enabled: 1 }) });
+    toast('✅ 数据源已注册：' + name);
+    document.getElementById('ds-name').value = '';
+    loadDataSources();
+  } catch (e) { toast('❌ 注册失败：' + e.message); }
+}
+
+async function dsAction(action, id) {
+  try {
+    const r = await api(`/api/knowledge/data-sources/${id}/${action}`, { method: 'POST' });
+    if (action === 'test') {
+      toast((r.ok ? '✅ 连通成功：' : '❌ 连通失败：') + r.message);
+      loadDataSources();
+    } else if (action === 'preview') {
+      if (!r.ok) { toast('❌ 预览失败：' + (r.error || '未知错误')); return; }
+      renderDsPreview(r);
+    } else if (action === 'ingest') {
+      toast(`✅ 抽取完成：文档 #${r.doc_id}（${r.chunk_count} 块）→ 候选 ${r.node_count + r.edge_count} 条（batch ${r.batch_id}），请到图谱工作区·审核确认入图`);
+      loadDataSources();
+      if (typeof loadDocs === 'function') loadDocs();
+    }
+  } catch (e) { toast(`❌ ${action} 失败：${e.message}`); }
+}
+
+function renderDsPreview(r) {
+  const el = document.getElementById('ds-preview');
+  el.style.display = '';
+  if (r.kind === 'text') {
+    el.innerHTML = `<b style="font-size:12px;">文件内容头部预览</b><pre style="font-size:11px;white-space:pre-wrap;margin:6px 0 0;">${esc(r.sample)}</pre>`;
+    return;
+  }
+  const cols = r.columns || [];
+  const head = `<tr>${cols.map(c => `<th style="text-align:left;padding:3px 8px;border-bottom:1px solid var(--line);font-size:11px;">${esc(c)}</th>`).join('')}</tr>`;
+  const rows = (r.rows || []).map(row => `<tr>${cols.map(c => `<td style="padding:3px 8px;border-bottom:1px dashed var(--line);font-size:11px;">${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`).join('');
+  el.innerHTML = `<b style="font-size:12px;">记录预览（${r.count} 条）</b>
+    <div style="font-size:11px;color:var(--mut);margin:4px 0;">${esc(r.note || '')} —— 确认无误后点「抽取入库」。</div>
+    <table style="border-collapse:collapse;width:100%;">${head}${rows}</table>`;
+}
+
+async function dsDelete(id, name) {
+  if (!confirm(`删除数据源「${name}」？已入库的文档与候选不受影响。`)) return;
+  try {
+    await api(`/api/knowledge/data-sources/${id}`, { method: 'DELETE' });
+    toast('🗑 已删除：' + name);
+    loadDataSources();
+  } catch (e) { toast('❌ 删除失败：' + e.message); }
+}

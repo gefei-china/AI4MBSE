@@ -40,6 +40,7 @@ from .migrations import (
     _migrate_reasoning_cohorts,
     _migrate_mr_comments,
     _migrate_view_layout_checks,  # P0-2 视图布局质量存档（SRS-GN-MG-BJYH）
+    _migrate_data_sources,  # P0-4 数据源注册表重建（db/api/file 三类源）
     _migrate_swrl_tables,  # P1-① SWRL 规则管理（2026-09-11）
     _migrate_ontology_instance_migrations,  # 2026-09-14 本体变更→实例迁移计划表
     _migrate_artifact_ingest,  # 2026-09-15 AI 产物收编资料库（origin 溯源/块级过滤/时效取代）
@@ -1132,6 +1133,8 @@ def init_db():
     _migrate_mr_comments(conn)
     # ── P0-2 视图布局优化：布局质量检查存档表（SRS-GN-MG-BJYH 证据链，幂等）──
     _migrate_view_layout_checks(conn)
+    # ── P0-4 数据源注册表（db/api/file 三类源，幂等）──
+    _migrate_data_sources(conn)
     # ── Glossary 种子（空表时插入预置术语）──
     _seed_glossary(conn)
     conn.close()

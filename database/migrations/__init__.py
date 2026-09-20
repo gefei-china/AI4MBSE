@@ -78,6 +78,7 @@ from .misc import (
     _backfill_commit_baseline,
     _migrate_mr_comments,
     _migrate_view_layout_checks,
+    _migrate_data_sources,
 )
 
 __all__ = [
@@ -132,4 +133,5 @@ __all__ = [
     "_backfill_commit_baseline",
     "_migrate_mr_comments",
     "_migrate_view_layout_checks",
+    "_migrate_data_sources",
 ]

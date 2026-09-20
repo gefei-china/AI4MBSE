@@ -226,3 +226,31 @@ def _migrate_view_layout_checks(conn):
     c.execute("CREATE INDEX IF NOT EXISTS idx_vlc_type ON view_layout_checks(view_type, branch)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_vlc_time ON view_layout_checks(created_at)")
     conn.commit()
+
+
+def _migrate_data_sources(conn):
+    """数据源注册表（P0-4 2026-09-20 重建；R1=B 曾于 2026-09-01 随数据集成移除删除）。
+
+    type: file | db | api
+    config: JSON 连接配置（凭据不落库，db/api 引 env 变量名，运行时解析）
+      file → {"path": "data/uploads/xxx.md"}
+      db   → {"connection": "sqlite:///D:/path/x.db", "table": "t", "sql": "SELECT ...", "limit": 200}
+      api  → {"url": "https://...", "method": "GET", "headers": {...}, "token_env": "XXX_TOKEN",
+              "data_key": "items", "limit": 200}
+    last_status: 最近一次连通性测试结果（通过/失败: 原因）
+    documents.source_id 列自 R1=B 起保留，本表重建后恢复外键语义（应用层维护）。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS data_sources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,                    -- file | db | api
+        config TEXT NOT NULL DEFAULT '{}',     -- JSON 连接配置
+        enabled INTEGER DEFAULT 1,
+        last_status TEXT DEFAULT '',           -- 最近连通性/抽取状态
+        last_test_at TEXT DEFAULT '',
+        created_by TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ds_type ON data_sources(type)")
+    conn.commit()

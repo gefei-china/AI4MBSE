@@ -97,3 +97,17 @@ class RetrieveIn(BaseModel):
     branch: Optional[str] = "dev"
     hybrid: Optional[bool] = False   # KB-P1: 混合检索（BM25+向量）
     top_k: Optional[int] = 5
+
+
+class DataSourceIn(BaseModel):
+    """数据源请求体（P0-4 重建，对齐 OntologyTypeIn 风格）。
+
+    config 为连接配置 dict：file → {"path": "data/uploads/xxx.md"}；
+    db → {"connection": "sqlite:///...", "table"|"sql": ..., "limit": 200}；
+    api → {"url": "https://...", "token_env": "ENV_NAME", "data_key": "items"}。
+    凭据只存 env 变量名，运行时解析（不明文落库）。
+    """
+    name: str
+    type: str                            # file | db | api
+    config: Optional[dict] = {}
+    enabled: Optional[int] = 1

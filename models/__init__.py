@@ -23,6 +23,7 @@ from .knowledge import (
     SysMLIn,
     MergeIn,
     RetrieveIn,
+    DataSourceIn,
 )
 from .studio import (
     PromptIn,
@@ -47,6 +48,7 @@ __all__ = [
     "GlossaryIn", "DomainReviewIn",
     "EntityIn", "BatchReviewIn", "GraphNodeIn", "GraphEdgeIn", "OntologyTypeIn",
     "V2GExtractIn", "V2GConfirmIn", "V2GRejectIn", "V2GUpdateIn", "SysMLIn", "MergeIn", "RetrieveIn",
+    "DataSourceIn",
     "PromptIn", "SkillIn", "MCPIn", "ToolIn", "AgentIn", "AgentToolIn", "A2AIn", "EventSubIn",
     "RoleIn", "UserIn", "UserStatusIn", "DepartmentIn",
     "ProjectIn",

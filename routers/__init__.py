@@ -30,6 +30,7 @@ from .graph_workspace import router as graph_workspace_router
 from .governance import router as governance_router
 from .swrl import router as swrl_router  # P1-①/②（2026-09-11）SWRL 规则管理
 from .sparql import router as sparql_router  # P2-①/②（2026-09-11）SPARQL 1.1 Endpoint
+from .data_sources import router as data_sources_router  # P0-4（2026-09-20）数据源注册管理
 
 __all__ = [
     "dashboard_router",
@@ -56,4 +57,5 @@ __all__ = [
     "governance_router",
     "swrl_router",  # P1-①/②（2026-09-11）SWRL 规则管理
     "sparql_router",  # P2-①/②（2026-09-11）SPARQL 1.1 Endpoint
+    "data_sources_router",  # P0-4（2026-09-20）数据源注册管理
 ]

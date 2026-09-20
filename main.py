@@ -38,6 +38,7 @@ from routers import (
     governance_router,
     swrl_router,  # P1-①/②（2026-09-11）SWRL 规则管理
     sparql_router,  # P2-①/②（2026-09-11）SPARQL 1.1 Endpoint
+    data_sources_router,  # P0-4（2026-09-20）数据源注册管理（db/api/file 三类源接入）
 )
 
 @asynccontextmanager
@@ -96,6 +97,7 @@ for _router in (
     glossary_io_router,
     swrl_router,  # P1-①/②（2026-09-11）SWRL 规则管理
     sparql_router,  # P2-①/②（2026-09-11）SPARQL 1.1 Endpoint
+    data_sources_router,  # P0-4（2026-09-20）数据源注册管理（db/api/file 三类源接入）
 ):
     app.include_router(_router)
 

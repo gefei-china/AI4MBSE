@@ -338,7 +338,34 @@
                 </select>
                 <span style="flex:1" data-page-node-id="lOIRbTxmwhfoe3k0IqzLpq"></span><button class="btn sm ghost" onclick="loadDocs()" data-page-node-id="TcGBukG3uCMAaoMLF72CTv">刷新</button>
                 <button class="btn sm" onclick="document.getElementById('doc-upload-input').click()" data-page-node-id="i9eQAjVykXCNWuM62AslSM">📤 上传文件</button>
+                <button class="btn sm ghost" onclick="toggleDsPanel()" title="外部数据源：数据库 / API / 文件三类源注册 → 连通测试 → 预览确认 → 抽取入库（P0-4）">🔌 外部数据源</button>
                 <input type="file" id="doc-upload-input" style="display:none;" multiple accept=".txt,.md,.csv,.json,.xml,.yaml,.yml,.log,.docx,.doc,.pdf,.xlsx,.xls,.pptx,.ppt,.png,.jpg,.jpeg" onchange="uploadDocWithMeta(this)" data-page-node-id="A6zgv3ZYKKMoy2QHDugyDN">
+              </div>
+              <!-- 外部数据源面板（P0-4）：注册 file/db/api 三类源 → 测试 → 预览 → 抽取（腿①向量管线 + 腿②v2g 候选进未评审区） -->
+              <div id="ds-panel" style="display:none;padding:10px 12px;border-bottom:1px solid var(--line);background:#f8fafc;">
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+                  <b style="font-size:12px;">🔌 外部数据源</b>
+                  <span style="font-size:11px;color:var(--mut);">抽取产物：记录型文档进向量管线 + 候选实体/关系进未评审区（需人工确认后正式入图）</span>
+                  <span style="flex:1"></span>
+                  <button class="btn sm ghost" onclick="dsToggleForm()" id="ds-form-toggle">➕ 注册数据源</button>
+                  <button class="btn sm ghost" onclick="loadDataSources()">刷新</button>
+                </div>
+                <div id="ds-form" style="display:none;border:1px solid var(--blue);border-radius:8px;padding:10px;margin-bottom:10px;background:var(--blue-l);">
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                    <input id="ds-name" placeholder="数据源名称" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:160px;">
+                    <select id="ds-type" onchange="dsConfigHint()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+                      <option value="db">数据库（db）</option>
+                      <option value="api">接口（api）</option>
+                      <option value="file">文件（file）</option>
+                    </select>
+                    <span style="flex:1"></span>
+                    <button class="btn sm" onclick="dsCreate()">注册</button>
+                  </div>
+                  <textarea id="ds-config" placeholder='连接配置 JSON（凭据只填环境变量名，不明文落库）' style="width:100%;margin-top:8px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;min-height:64px;"></textarea>
+                  <div id="ds-config-hint" style="font-size:11px;color:var(--mut);margin-top:4px;"></div>
+                </div>
+                <div id="ds-list" style="display:flex;flex-direction:column;gap:6px;"><span style="font-size:12px;color:var(--mut);">加载中…</span></div>
+                <div id="ds-preview" style="display:none;margin-top:10px;border:1px dashed var(--line);border-radius:8px;padding:8px;max-height:260px;overflow:auto;"></div>
               </div>
               <!-- 上传交互区：选择文件后展开（格式提示 + 文件卡片 + 元数据 + 进度 + 抽取结果） -->
               <div id="doc-upload-wrap" style="display:none;padding:10px 12px;border-bottom:1px solid var(--line);background:#f8fafc;" data-page-node-id="L5wHbwFxiuaYZfkQ392A59">
