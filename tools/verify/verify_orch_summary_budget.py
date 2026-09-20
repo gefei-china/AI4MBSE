@@ -299,14 +299,37 @@ def main():
             return ["report_in_chars=%d < max_tokens×2.5=%d（报告尾部会被裁掉）" % (rin, need)]
         return []
 
-    def check_eval_window(clip_fn, probe_len=22409):
+    # 换算系数：1 output token ≈ 2.9 字符（实测 comp 6518 tokens → 19011 字符 ≈ 2.92）
+    EVAL_CHARS_PER_TOKEN = 2.9
+
+    def _eval_probe_len() -> int:
+        """I4d 探针长度：由 `refine.max_tokens × 2.9` 推导（**不得写死**，理由见下）。"""
+        try:
+            from core import config as _cfg
+            return int(int(_cfg.get("refine", "max_tokens", 8000)) * EVAL_CHARS_PER_TOKEN)
+        except Exception:
+            return 22409
+
+    def check_eval_window(clip_fn, probe_len=None):
         """I4d：**评审输入窗口**必须覆盖报告实际长度。
 
         为什么单列：这一层在 `workflows/nodes.py::_evaluate_content`（`[:2000]`），
         **不在 refine.py 里** —— 前四条不变式全查不到它。
         它是「报告越修越长、评审看到的比例越小」的元凶：conv 372 报告 22,409 字符
         被截到 8.9% → 评审判「t2/t3 无实质内容」，而那两节**确实存在**。
+
+        probe_len（2026-09-20 修正，**原为写死的 22409**）：
+          None → 由 `refine.max_tokens × 2.9` 推导。
+          为什么必须改成推导：写死 22409 时，把 `refine.max_tokens` 抬到 12000
+          （报告理论最长 ≈ 34,800 字符）却**漏抬 `eval_in_chars`** 的情形下 I4d **仍 PASS**
+          （因为它只测 22,409）→ **门禁盲区：红不了，但评审会再次看不到报告尾部**，
+          等于重演 conv 372。实测复现见 `tmp/llm_ctx/probe_raise.py`（场景 A）。
+          ⚠️ 与 I4c 的 ×2.5 不同是有意的：I4c 判「窗口 ≥ 产出能力」取保守下界，
+          本判据要覆盖**报告实际长度**，故取实测系数 2.9
+          （I4c 的 2.5 比实测低约 17%，属偏松，已记为待办、本次不擅改）。
         """
+        if probe_len is None:
+            probe_len = _eval_probe_len()
         text = "甲" * probe_len
         try:
             out = clip_fn(text)
@@ -392,18 +415,45 @@ def main():
              "%s: %s" % (type(e).__name__, e))
         _ev_clip = None
     if _ev_clip is not None:
+        _probe = _eval_probe_len()
         f_i4d = check_eval_window(_ev_clip)
         if f_i4d:
             _rec(FAIL, "I4d 评审窗口覆盖报告长度（真实实现）", "; ".join(f_i4d))
         else:
             _rec(PASS, "I4d 评审窗口覆盖报告长度（真实实现）",
-                 "22,409 字符报告 → 保留 %d 字符（未裁）" % len(_ev_clip("甲" * 22409)))
+                 "探针 %d 字符（= refine.max_tokens(%d)×%.1f）→ 保留 %d 字符（未裁）"
+                 % (_probe, int(_probe / EVAL_CHARS_PER_TOKEN), EVAL_CHARS_PER_TOKEN,
+                    len(_ev_clip("甲" * _probe))))
         # 变异 M11：还原 `str(content)[:2000]` —— conv 372 之前的写法
         f_m11 = check_eval_window(lambda t: str(t)[:2000])
         if f_m11:
             _rec(PASS, "I4d 变异自证 M11（还原 [:2000]）", "已被抓住：%s" % f_m11[0])
         else:
             _rec(FAIL, "I4d 变异自证 M11（还原 [:2000]）", "**未被抓住 → 断言空转（VACUOUS）**")
+        # ── 变异 M12（2026-09-20 新增）：补「探针写死」这个**门禁盲区**的自证 ──────────
+        # 旧实现 `probe_len=22409` 的后果：抬 `refine.max_tokens` 却漏抬 `eval_in_chars` 时
+        # I4d 恒 PASS（只测 22,409）→ 红不了，但评审实际看不到尾部（重演 conv 372）。
+        # M12a（结构级）：探针默认值必须是 None（= 运行时推导），写死即失败。
+        try:
+            import inspect as _ins
+            _d = _ins.signature(check_eval_window).parameters["probe_len"].default
+            if _d is None:
+                _rec(PASS, "I4d 变异自证 M12a：探针未写死（默认 None = 运行时推导）",
+                     "当前探针=%d" % _probe)
+            else:
+                _rec(FAIL, "I4d 变异自证 M12a：探针未写死（默认 None = 运行时推导）",
+                     "**默认值被写死为 %r → 抬高 max_tokens 后本判据会失效**" % (_d,))
+        except Exception as _e:                                   # noqa: BLE001
+            _rec(FAIL, "I4d 变异自证 M12a", "%s: %s" % (type(_e).__name__, _e))
+        # M12b（行为级反例）：窗口只留 24,000 字符，去接 max_tokens=12000 时的探针 34,800
+        #   → 必须判「不足」。这一条直接钉住「漏抬 eval_in_chars」这个 bug 形态。
+        _m12b = check_eval_window(lambda t: str(t)[:24000],
+                                  probe_len=int(12000 * EVAL_CHARS_PER_TOKEN))
+        if _m12b:
+            _rec(PASS, "I4d 变异自证 M12b：窗口 24000 < 探针 34800 → 已抓住", _m12b[0])
+        else:
+            _rec(FAIL, "I4d 变异自证 M12b：窗口 24000 < 探针 34800 → 已抓住",
+                 "**未被抓住 → 断言空转（VACUOUS）**")
         # 源码级：**只查 `_evaluate_content` 函数体**（不能扫全文件！）
         #   —— 实测 nodes.py:593（pubsub 节点）也有 `str(content)[:2000]`，那是**展示用途**、
         #   与评审窗口无关；扫全文件会把它误判成"本层未修"（实测 23/24，误报 1 条）。
