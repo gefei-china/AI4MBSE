@@ -4,10 +4,60 @@
 约定：接收 provider 配置 dict（DB llm_providers 行），提供 chat/stream/test_connection。
 """
 import json
+import logging
 import time
 from typing import Optional
 
 from ..base import BaseLLM
+
+_log = logging.getLogger("mbse.llm")
+
+# 上下文额度告警去重：同一 (provider_id, context_window, guard) 组合**只报一次**。
+# 本模块是全平台 LLM 调用的唯一出口，若每轮都刷会把日志淹掉 → 必须去重。
+_ctx_warned: set = set()
+
+
+def _ctx_guard() -> str:
+    """读 `llm.context_window_guard`；读取失败或非法值一律回落 `clamp`（= 改动前行为）。"""
+    try:
+        from core import config as _cfg
+        v = str(_cfg.get("llm", "context_window_guard", "clamp") or "clamp").strip().lower()
+    except Exception:
+        return "clamp"
+    return v if v in ("clamp", "warn", "off") else "clamp"
+
+
+def _est_input_tokens(messages) -> int:
+    """估算输入 token 数（仅供超窗留痕）。异常 → 0（绝不阻断主链路）。"""
+    try:
+        from core.token_counter import count_messages_tokens
+        return int(count_messages_tokens(messages))
+    except Exception:
+        return 0
+
+
+def _warn_context_once(cfg, cw, mt, est_in, guard, why) -> None:
+    """上下文额度留痕（同 provider + cw + guard 只报一次；自身异常静默，不影响调用）。
+
+    这是「假天花板」的**唯一可见出口**：DB `llm_providers.context_window` 可能只是保守
+    配置而非模型真实上限（实测 id=1 配 cw=8192，上游在 in=6575 + out=5841 = 12416 时仍 200）。
+    没有这条日志时，「输出被悄悄截短」与「模型本来就写不长」在现象上无法区分。
+    """
+    try:
+        key = (cfg.get("id"), cw, guard)
+        if key in _ctx_warned:
+            return
+        _ctx_warned.add(key)
+        from core.token_counter import input_budget
+        _log.warning(
+            "[context_window] %s｜provider=%s(id=%s) model=%s｜context_window=%s "
+            "max_tokens生效=%s 估算输入=%s 输入余量=%s guard=%s"
+            "｜若该 context_window 是保守配置，置 llm.context_window_guard=warn/off 即可放开（warn 只告警不截断）",
+            why, cfg.get("name"), cfg.get("id"), cfg.get("model_name"),
+            cw, mt, est_in, input_budget(cw, mt, 512), guard,
+        )
+    except Exception:
+        pass
 
 
 class OpenAICompatProvider(BaseLLM):
@@ -40,8 +90,26 @@ class OpenAICompatProvider(BaseLLM):
         cw = cfg.get("context_window") or 8192
         # 优先级：调用方显式 max_tokens > DB max_tokens > 4096
         mt = max_tokens if max_tokens is not None else cfg.get("max_tokens", 4096)
+        # ── context_window 守卫（2026-09-20：由「静默截断」改为「可配置 + 留痕」）────────
+        # 原实现只有一句**静默截断**（`mt` 一旦超过 `cw` 就把它赋值成 `cw`）：把 DB 的
+        # context_window 当硬上限，但该值可能是**保守配置而非模型真实上限**
+        # （实测 id=1 配 cw=8192，上游在 in=6575 + out=5841 = 12416 时照常 200 返回）
+        # → 后果是**静默压低输出上限，且现象上与「模型本来就写不长」无法区分**。
+        # 三档（`llm.context_window_guard`；默认 clamp **与改动前逐字节等价**）：
+        #   clamp = 超窗截到 cw（原行为）+ 首次触发 WARNING 留痕
+        #   warn  = 不截断，只 WARNING（把「假天花板」暴露出来，交上游判定是否接受）
+        #   off   = 完全不介入（静默，等价于删掉这一段）
+        # 顺带**接线**：`core/token_counter.input_budget`（ctx - mt - safety）此前全仓无生产
+        # 调用点（死代码），这里用它的余量判据识别「本次请求必然超窗」这一原先完全不可见的情形。
+        _guard = _ctx_guard()
+        _est_in = _est_input_tokens(messages)
         if mt > cw:
-            mt = cw
+            if _guard == "clamp":
+                mt = cw
+            if _guard != "off":      # off = 完全不介入（含不告警），否则「静默」语义不成立
+                _warn_context_once(cfg, cw, mt, _est_in, _guard, "max_tokens 超过 context_window")
+        elif _guard != "off" and _est_in > 0 and _est_in + mt > cw:
+            _warn_context_once(cfg, cw, mt, _est_in, _guard, "估算输入 + max_tokens 超过 context_window")
         payload = {
             "model": model_name,
             "messages": messages,
@@ -93,6 +161,10 @@ class OpenAICompatProvider(BaseLLM):
         data["_meta"] = {
             "provider": provider_name, "model": model_name,
             "used_mock": False, "latency_ms": int((time.time() - t0) * 1000),
+            # 上下文额度留痕（2026-09-20）：让「天花板到底是多少、本次有没有被截」可从响应侧审计，
+            # 不必再去猜 DB 配置。纯新增键，不改任何既有键的语义。
+            "context_window": cw, "max_tokens_effective": mt,
+            "est_input_tokens": _est_in, "context_guard": _guard,
         }
         return data
 

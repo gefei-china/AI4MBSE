@@ -47,6 +47,18 @@ DEFAULT_CONFIG = {
         "force_mock": False,     # 强制 Mock 模式（测试/无 key 环境）
         "deepseek_api_key": "",  # 预置 provider 注入用（无 key 时启动自动写入）
         "qwen_api_key": "",      # 同上
+        # ── context_window 守卫（2026-09-20 新增；只读一次/实例，改后重启生效）───────────
+        # 背景：`llm/providers/openai_compat.py` 原有一句**静默** `if mt > cw: mt = cw`，
+        # 把 DB `llm_providers.context_window` 当硬上限。但实测该值可能只是**保守配置而非
+        # 模型真实上限**（id=1 配 cw=8192，上游在 in=6575 + out=5841 = 12416 时仍 200 返回）
+        # → 于是它**静默压低输出上限**，且现象上与「模型本来就写不长」无法区分。
+        # 三档：
+        #   clamp（默认）= 超窗截到 cw（= 改动前逐字节行为）+ 首次触发时 WARNING 留痕
+        #   warn         = 不截断，只 WARNING（把"假天花板"暴露出来，由上游判定是否接受）
+        #   off          = 完全不介入（静默）
+        # 现场用法：想在不换模型的前提下放开输出上限 → 置 warn（或 off），并把
+        # `refine.max_tokens` / `delegation.summary_max_tokens` 一并上调（否则那两个才是瓶颈）。
+        "context_window_guard": "clamp",
     },
     "mcp": {
         "timeout": 15,           # MCP JSON-RPC 调用超时（秒）
@@ -82,15 +94,18 @@ DEFAULT_CONFIG = {
         "summary_max_tokens": 8000,      # 汇总**输出**上限（token）。
                                          # 2026-09-20：由 3000 提到 8000 —— 会话 369 实测门禁报
                                          # 「1.3 节内容在末尾被截断」，即**输出被切**（输入侧已修好）。
-                                         # 8000 是按**当前默认 provider 的天花板**取的：id=1 DeepSeek-V3
-                                         # 的 max_tokens / context_window 均为 **8192**，且所有编排 Agent
-                                         # 的 model_provider_id 都是 None → 全走它；再高也不会生效（会被上游钳制）。
+                                         # 8000 是按**改动当时默认 provider 的天花板**取的：id=1 DeepSeek-V3
+                                         # 的 max_tokens / context_window 当时均为 **8192**，且所有编排 Agent
+                                         # 的 model_provider_id 都是 None → 全走它。
+                                         # ⚠️ 2026-09-20 同日更新：id=1 的 context_window 已由 8192 **解锁为
+                                         # 65536**（真实值）→「再高会被 context_window 钳制」这条**已不成立**；
+                                         # 但 id=1 的 DB `max_tokens` 仍为 8192、本项仍为 8000，
+                                         # 故**当前实际输出上限 = 8000（未变，本次未上调）**。
+                                         # 要真正把报告写长：本项与 id=1 的 DB max_tokens 需一起抬（见配置面板）。
                                          # ⚠️ 成本口径：2026-09-17 原取 3000 是为省成本（实测 plan_summary
                                          # 平均 completion 7,470，3000 省 60%+）。本次抬高**等于放弃这笔节省**，
                                          # 因为"用户可见报告被砍半"的代价更大（脚本原本也自述"宁可少省一点"）。
                                          # 要换回来只需改这里（或走配置面板），无需动代码。
-                                         # ⚠️ 想再提升：把默认 provider 换成 id=71/72（16384 / ctx 65536）后
-                                         # 本项可同步上调到 12000+。
         "subtask_result_keep_chars": 20000,  # 子任务结果落库保留上限（字符；原先 task_queue 硬编码 4000）
     },
     # ── 反思闭环 RefineGate（汇总 → 评审 → 修订 → 复评）────────────────────────────
@@ -114,7 +129,9 @@ DEFAULT_CONFIG = {
         "report_in_chars": 24000,     # 修订时**待修订报告**可读字符数（原先硬编码 6000，且是**只留头**）
         "max_tokens": 8000,           # 修订**输出**上限（token，原先硬编码 3000）
                                       # ⚠️ 修订输出会**整体替换**汇总报告 → 它才是报告长度的真正天花板。
-                                      # 取值口径同 delegation.summary_max_tokens（当前 provider 天花板 8192）。
+                                      # 取值口径同 delegation.summary_max_tokens（改动当时 provider 天花板 8192）。
+                                      # ⚠️ 2026-09-20 同日：id=1 的 context_window 已解锁为 65536，
+                                      # 但本项与 DB max_tokens 仍为 8000/8192 → **实际输出上限仍是 8000**。
         # 2026-09-20 conv 372 实测：评审函数 `workflows/nodes.py::_evaluate_content` 原先硬编码
         #   `str(content)[:2000]` —— 报告长到 22,409 字符后，评审只看得到「一、需求分析」为止，
         #   于是判「t2/t3 无实质内容」，而那两节**确实存在**。
@@ -408,6 +425,7 @@ CONFIG_SCHEMA = {
         "force_mock":      {"type": "bool",   "desc": "强制 Mock 模式（不依赖外部网络）"},
         "deepseek_api_key": {"type": "secret", "desc": "DeepSeek API key（无 key 时注入预置 provider）"},
         "qwen_api_key":     {"type": "secret", "desc": "Qwen API key"},
+        "context_window_guard": {"type": "str", "desc": "context_window 守卫：clamp(默认，超窗截断+留痕)/warn(只告警不截断，用于放开「假天花板」)/off(不介入)"},
     },
     "mcp": {
         "timeout":      {"type": "int", "desc": "MCP JSON-RPC 调用超时（秒）"},
@@ -433,7 +451,7 @@ CONFIG_SCHEMA = {
         "summary_item_max_chars":     {"type": "int", "desc": "汇总输入：单个子任务交付物上限（字符，默认 1600）"},
         "summary_total_chars":        {"type": "int", "desc": "汇总输入：本轮合计预算（字符，按子任务数均分，默认 12000）"},
         "summary_floor_chars":        {"type": "int", "desc": "汇总输入：均分后每项保底（字符，默认 600）"},
-        "summary_max_tokens":         {"type": "int", "desc": "汇总输出上限（token，默认 8000 = 当前 provider 天花板 8192 内；门禁报「结论前中断」时再调）"},
+        "summary_max_tokens":         {"type": "int", "desc": "汇总输出上限（token，默认 8000；门禁报「结论前中断」时再调。注：id=1 的 context_window 已解锁为 65536，但 DB max_tokens 仍 8192）"},
         "subtask_result_keep_chars":  {"type": "int", "desc": "子任务结果落库保留上限（字符，默认 20000）"},
     },
     "refine": {

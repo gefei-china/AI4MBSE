@@ -33,7 +33,11 @@ def _load_provider_cfg(conn, provider_id):
             row = conn.execute("SELECT * FROM llm_providers WHERE id=? AND status='active'",
                                (provider_id,)).fetchone()
         else:
-            row = conn.execute("SELECT * FROM llm_providers WHERE model_type='chat' AND is_default=1 AND status='active'").fetchone()
+            # ORDER BY / LIMIT 是 2026-09-20 的**确定性**修复：原写法在多行 is_default=1 时
+            # 由 SQLite 按 rowid 序任意返回一行（无 ORDER BY 即无保证）。语义定为「默认模型中
+            # priority 最高者」——priority 正是该列既有的唯一用途（智能路由里也这么用）。
+            # 当前库只有 1 行 is_default=1 → 取值与改动前完全一致，属零回归。
+            row = conn.execute("SELECT * FROM llm_providers WHERE model_type='chat' AND is_default=1 AND status='active' ORDER BY priority DESC, id ASC LIMIT 1").fetchone()
         return dict(row) if row else {}
     except Exception:
         return {}
@@ -129,7 +133,8 @@ class LLMClient:
         from database import get_db
         conn = get_db()
         # 对话默认模型（model_type='chat'）；向量默认由 embedder 单独选择
-        row = conn.execute("SELECT * FROM llm_providers WHERE model_type='chat' AND is_default=1 AND status='active'").fetchone()
+        # ORDER BY / LIMIT：同上（多行 default 时取 priority 最高者，消除不确定性）
+        row = conn.execute("SELECT * FROM llm_providers WHERE model_type='chat' AND is_default=1 AND status='active' ORDER BY priority DESC, id ASC LIMIT 1").fetchone()
         conn.close()
         return dict(row) if row else None
 
