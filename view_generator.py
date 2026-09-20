@@ -398,11 +398,24 @@ def generate_views_from_sysml(code_text: str, view_types: list | None = None, in
     :param intent: 意图识别结果；命中 INTENT_VIEWS 时只投影该意图匹配的视图类型
     :return: {"parsed": {"nodes": n, "edges": m}, "views": {type: ViewModel, ...}, "intent": intent}
     """
+    # ── 解析器：优先 OMG 官方解析器（Pilot Implementation），不可用时回落旧的自造扫描器 ──
+    # 2026-09-20：旧的 `sysml_importer.parse_text` 是手写关键字扫描，**不是语法解析器**，
+    # 实测会漏建「包级 part usage」节点（conv375 的 `evThermalSystem`）→ 引用它的
+    # 126/220 条关系整条丢弃（含 14 条 satisfy + 18 条 connect）→ BDD 投影 0 条边。
+    # `sysml_ast.parse_text_ast` 复用工程里已有的 OMG 参考实现出语法树，
+    # 两者输出**同构**，故下面的映射与投影逻辑无需改动。见 sysml_ast.py 顶部说明。
+    parsed = None
     try:
-        from sysml_importer import parse_text
-        parsed = parse_text(code_text)
+        from sysml_ast import parse_text_ast as _parse_ast
+        parsed = _parse_ast(code_text)
     except Exception:
-        parsed = {"nodes": [], "edges": []}
+        parsed = None
+    if parsed is None:
+        try:
+            from sysml_importer import parse_text
+            parsed = parse_text(code_text)
+        except Exception:
+            parsed = {"nodes": [], "edges": []}
     nodes_in = parsed.get("nodes") or []
     edges_in = parsed.get("edges") or []
 
