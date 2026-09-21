@@ -56,6 +56,9 @@ ap.add_argument("--no-pool", action="store_true", help="跳过 P 层召回池测
 ap.add_argument("--control", action="store_true",
                 help="附带负对照：把 doc 域 gold 标签在各例之间轮转后重算指标。"
                      "若轮转后的分数与真实分数相近 → 指标没在测对齐关系，结果是假绿。")
+ap.add_argument("--cfg", action="append", default=[], metavar="GROUP.KEY=VALUE",
+                help="临时覆写生效配置（可重复，如 --cfg rag.hyde_enabled=false）。"
+                     "只改本进程内存，不落盘、不动生产配置 → 用于 A/B 单参数对照。")
 ARGS = ap.parse_args()
 
 # ── 纪律 3：解释器自检（缺失 httpx 会静默降级，必须拒跑）────────────────────
@@ -69,6 +72,28 @@ except Exception as e:
 from agent.rag import GraphRAG
 from database import get_db
 from knowledge_engine import QueryRouter, hybrid_search
+
+# ── --cfg 单参数覆写（A/B 用）：只改本进程内存，不落盘 ──────────────────────
+_CFG_APPLIED = []
+if ARGS.cfg:
+    from core import config as _cfgmod
+    _cfgmod.reload()                      # 确保 _CONFIG 已按三层合并初始化
+    for item in ARGS.cfg:
+        assert "=" in item and "." in item.split("=")[0], f"--cfg 格式应为 GROUP.KEY=VALUE：{item}"
+        path, raw = item.split("=", 1)
+        sec, key = path.strip().split(".", 1)
+        cur = _cfgmod.get(sec, key, None)
+        if isinstance(cur, bool):
+            new = raw.strip().lower() in ("1", "true", "yes", "on")
+        elif isinstance(cur, int):
+            new = int(raw)
+        elif isinstance(cur, float):
+            new = float(raw)
+        else:
+            new = raw
+        _cfgmod._CONFIG.setdefault(sec, {})[key] = new
+        _CFG_APPLIED.append((path.strip(), cur, new))
+    print("⚙ 本次覆写（仅本进程）：" + "；".join(f"{p}: {o} → {n}" for p, o, n in _CFG_APPLIED))
 
 # ── 纪律 2：评测不写线上路由日志 ────────────────────────────────────────────
 _orig_record = QueryRouter.record
@@ -417,6 +442,7 @@ report = {
     "fingerprint_now": now_finger,
     "fingerprint_drift": drift,
     "config": cfg_rag,
+    "cfg_overrides": [{"path": p, "from": o, "to": n} for p, o, n in _CFG_APPLIED],
     "pool_width": POOL,
     "summary": summary,
     "negative_control": control,
