@@ -342,10 +342,34 @@ class GraphRAG:
 
     @staticmethod
     def _tokens(text):
-        """中文 2-4 字滑动窗口 + 英文单词（用于图谱实体链接与附件命中）。"""
-        toks = set()
+        """中文 2-4 字滑动窗口 + 英文词 + 分隔后的「整词」（用于图谱实体链接与附件命中）。
+
+        2026-09-21 修复（P1-6 评测集暴露，见 docs §8）：
+          原实现返回 `set`，而 Python 字符串哈希受 PYTHONHASHSEED 随机化 →
+          消费点 `toks[:8]` 每个进程取到**不同的** 8 个 token，叠加 SQL `LIMIT 10`
+          截断，同一 query 的实体链接结果**跨进程不一致**。实测同一 query
+          「电源分系统 由哪些 蓄电池组 组成」在两个进程里，一个命中「蓄电池组」、
+          另一个漏掉 → 路由决策随之改变（同一分钟内 graph/0.88 → vector/0.0），
+          使"改动前后对比"与"评测分数"都不可复现。
+          现改为 **有序去重列表**（生成顺序确定），并把「按分隔符切出的整词」优先入列：
+          整词比滑窗碎片更贴近实体名，同时修掉「长句里第二个实体名被挤出前 8 个」。
+
+        返回：list[str]（有序去重）。**不再是 set** —— 三个调用点均只做遍历/切片，
+        无集合运算（`_match_attachment` 另有 sorted，本就与顺序无关）。
+        """
+        ordered, seen = [], set()
+
+        def _add(w):
+            if w and w not in seen:
+                seen.add(w)
+                ordered.append(w)
+
         for w in re.findall(r"[a-zA-Z][a-zA-Z0-9_]{1,}", (text or "").lower()):
-            toks.add(w)
+            _add(w)
+        # 整词优先：按「非字母数字/非汉字」切分，段本身即候选
+        for seg in re.split(r"[^0-9a-zA-Z\u4e00-\u9fff]+", text or ""):
+            if len(seg) >= 2:
+                _add(seg)
         cjk = re.sub(r"[^\u4e00-\u9fff]", "", text or "")
         stop = set("的了是在和与及或把被让对从向为以于就都也很而但并且如果因为所以这些那些我们您请帮我")
         n = len(cjk)
@@ -353,8 +377,8 @@ class GraphRAG:
             for L in (2, 3, 4):
                 w = cjk[i:i + L]
                 if len(w) == L and not all(ch in stop for ch in w):
-                    toks.add(w)
-        return toks
+                    _add(w)
+        return ordered
 
     @staticmethod
     def _entity_link(conn, query, branches, source_docs=None):
