@@ -13,36 +13,36 @@
 const CTX_CFG_CLUSTERS = [
   {
     id: 'funnel', title: '🎯 检索漏斗分层（四层逐级收窄）', viz: 'funnel', checks: ['ladder'],
-    hint: '🔗 这四项是**同一条漏斗**的四个截面，改任何一个都会改变其余层的实际容量，必须一起看：'
+    hint: '🔗 这四项是<b>同一条漏斗</b>的四个截面，改任何一个都会改变其余层的实际容量，必须一起看：'
       + '每路召回 → RRF 融合池 → 送 LLM 重排 → 注入 prompt。行业标准是「广召回 20–50 → 重排 20–50 → 窄注入 3–8」。',
   },
   {
     id: 'route', title: '🧭 图谱路由判定（三因子加权 + 阈值）', viz: 'weights', checks: ['weights'],
     hint: '🔗 三个权重先合成「图谱置信度」，再与路由阈值比较决定走向：≥阈值走纯图路由（跳过向量检索），'
-      + '否则向量混合检索补召。**权重合计必须 ≈1.0**，否则置信度量纲失衡、阈值失去意义。',
+      + '否则向量混合检索补召。<b>权重合计必须 ≈1.0</b>，否则置信度量纲失衡、阈值失去意义。',
   },
   {
     id: 'conf', title: '🏷️ 命中置信分级（展示用序关系）', viz: 'order', checks: ['order'],
-    hint: '🔗 两项定义「高/中/低」两处分界，**必须满足 高 > 中**。仅影响引用与 recall_reason 的展示，不改检索排序。',
+    hint: '🔗 两项定义「高/中/低」两处分界，<b>必须满足 高 > 中</b>。仅影响引用与 recall_reason 的展示，不改检索排序。',
   },
   {
     id: 'fuse', title: '🔀 融合公式与补召', viz: 'none', checks: ['hyde'],
-    hint: '🔗 RRF 是融合主公式，HyDE 是叠加其上的补充分。**补充分权重设 0 与关闭补召开关语义重叠**，'
+    hint: '🔗 RRF 是融合主公式，HyDE 是叠加其上的补充分。<b>补充分权重设 0 与关闭补召开关语义重叠</b>，'
       + '两者只留一个表达即可（建议用开关）。',
   },
   {
     id: 'budget', title: '📦 上下文 Token 预算（两套口径）', viz: 'budget', checks: ['budget'],
-    hint: '🔗 检索区与历史区**共享同一个上下文窗口**，此消彼长。此处提供两套口径：'
-      + '绝对值（token 数）与占比制（窗口百分比）。**占比 > 0 时覆盖绝对值**（换模型自适应），占比 = 0 时用绝对值。',
+    hint: '🔗 检索区与历史区<b>共享同一个上下文窗口</b>，此消彼长。此处提供两套口径：'
+      + '绝对值（token 数）与占比制（窗口百分比）。<b>占比 > 0 时覆盖绝对值</b>（换模型自适应），占比 = 0 时用绝对值。',
   },
   {
     id: 'split', title: '📜 历史注入内分配（瓜分历史区预算）', viz: 'split', checks: [],
-    hint: '🔗 这六项**共同瓜分历史区预算**，注入顺序与占比是固定结构：当前话题原文（约 50%）→ 语义拉回片段（用至 75%）'
+    hint: '🔗 这六项<b>共同瓜分历史区预算</b>，注入顺序与占比是固定结构：当前话题原文（约 50%）→ 语义拉回片段（用至 75%）'
       + '→ 其他话题摘要（剩余）。单条消息截断与建模工作记忆是前置硬上限。',
   },
   {
     id: 'dual', title: '🔍 语义判定双路阈值（同量纲对照）', viz: 'dual', checks: ['dual'],
-    hint: '🔗 embedding 与 bigram 两路**量纲完全不同**（BGE 类中文模型相关文本 0.5+、无关 0.2 以下；bigram 量纲小得多），'
+    hint: '🔗 embedding 与 bigram 两路<b>量纲完全不同</b>（BGE 类中文模型相关文本 0.5+、无关 0.2 以下；bigram 量纲小得多），'
       + '所以同一判定要两套阈值。下表把「同一判定的两条路」并排，便于对照调。',
   },
 ];
@@ -51,10 +51,10 @@ const CTX_CFG_CLUSTERS = [
 const CTX_CFG_FIELDS = [
   // ── 簇 1：检索漏斗分层 ──
   { cluster:'funnel', sec:'rag', key:'rag.recall_k', type:'int', label:'① 每路召回宽度 (recall_k)',
-    desc:'BM25 与向量**各自**召回的条数，两者都进 RRF 融合。0 = 回落旧行为 top_k×2。',
+    desc:'BM25 与向量<b>各自</b>召回的条数，两者都进 RRF 融合。0 = 回落旧行为 top_k×2。',
     impact:'调大：融合池候选更全、RRF 排序更稳（只增检索计算，不增 LLM 调用）；调小：更快，但融合可能缺好候选。行业下界 20。' },
   { cluster:'funnel', sec:'rag', key:'rag.top_k', type:'int', label:'② RRF 融合池 (top_k)',
-    desc:'RRF 融合后保留的候选数，即**送进 LLM 重排的池子**。',
+    desc:'RRF 融合后保留的候选数，即<b>送进 LLM 重排的池子</b>。',
     impact:'必须 ≥ 重排窗口，否则重排无选择空间（这正是 09-21 修掉的倒挂）。调大：重排有得挑、注入更准；调小：重排退化为摆设。' },
   { cluster:'funnel', sec:'rag', key:'rag.rerank_enabled', type:'bool', label:'③ 启用 LLM 重排',
     desc:'融合池 → LLM 相关性打分（0-10）重排。LLM 不可用/超时/解析失败自动静默回退原排序。',
@@ -94,14 +94,14 @@ const CTX_CFG_FIELDS = [
   // ── 簇 4：融合公式与补召 ──
   { cluster:'fuse', sec:'rag', key:'rag.rrf_k', type:'int', label:'RRF 融合常数 (k)',
     desc:'Reciprocal Rank Fusion 公式 Σ1/(k+rank) 中的 k，调和 BM25 排名与向量排名的贡献。',
-    impact:'调小：头部排名（rank#1、#2）优势放大；调大：排名差异被抹平、两路更"平权"。**行业通用 60，一般不动**。' },
+    impact:'调小：头部排名（rank#1、#2）优势放大；调大：排名差异被抹平、两路更"平权"。<b>行业通用 60，一般不动</b>。' },
   { cluster:'fuse', sec:'rag', key:'rag.hyde_enabled', type:'bool', label:'HyDE 补召开关',
     desc:'用 chunk 的假设问题（hyde_questions/hyde_embedding）与查询匹配，用户措辞≠文档措辞时补召回。',
-    impact:'⚠️ 文献提示：EACL 2024 实测「查询扩展收益与检索器强度**负相关**」，强检索器上可能加噪；'
-      + '本工程索引期 HyDE 使向量化请求数翻倍。**建议做 A/B 后再定，或改条件触发**。' },
+    impact:'⚠️ 文献提示：EACL 2024 实测「查询扩展收益与检索器强度<b>负相关</b>」，强检索器上可能加噪；'
+      + '本工程索引期 HyDE 使向量化请求数翻倍。<b>建议做 A/B 后再定，或改条件触发</b>。' },
   { cluster:'fuse', sec:'rag', key:'rag.hyde_weight', type:'float', label:'HyDE 补充分权重',
     desc:'HyDE 相似分叠加进融合分的权重（0~0.2）。默认 0.05 = 弱辅助，只起打破平局作用。',
-    impact:'调大：HyDE 命中对排序影响更强；**设 0 等效关闭补充分**（此时建议直接用上方开关表达，避免两处语义重叠）。' },
+    impact:'调大：HyDE 命中对排序影响更强；<b>设 0 等效关闭补充分</b>（此时建议直接用上方开关表达，避免两处语义重叠）。' },
 
   // ── 簇 5：上下文 Token 预算 ──
   { cluster:'budget', sec:'context', key:'context.budget_window_tokens', type:'int', label:'窗口基准 (token)',
@@ -111,13 +111,13 @@ const CTX_CFG_FIELDS = [
     desc:'知识库检索结果注入 prompt 的 token 上限（超限从尾部裁剪，保留最相关头部）。占比为 0 时生效。',
     impact:'调大：检索依据更全；调小：只保留最相关头部。实测检索段实际用量约 458 token，当前值留有余量。' },
   { cluster:'budget', sec:'context', key:'context.budget_retrieval_ratio', type:'float', label:'检索区占比',
-    desc:'检索区预算 = 窗口基准 × 本比例。**>0 时覆盖左侧绝对值**；0 = 关闭占比制。',
+    desc:'检索区预算 = 窗口基准 × 本比例。<b>>0 时覆盖左侧绝对值</b>；0 = 关闭占比制。',
     impact:'换成大窗口模型时不用手改绝对值（行业做法：Codex 按窗口 50% 设压缩阈值）。建议 0.05~0.10。' },
   { cluster:'budget', sec:'context', key:'context.budget_history_tokens', type:'int', label:'历史区预算 (绝对值)',
     desc:'会话历史注入总预算：当前话题原文占 50%，语义拉回片段用至 75%，剩余给其他话题摘要。占比为 0 时生效。',
     impact:'调大：长对话更连贯、旧话题细节更多；调小：更省 token，旧话题靠摘要兜底。' },
   { cluster:'budget', sec:'context', key:'context.budget_history_ratio', type:'float', label:'历史区占比',
-    desc:'历史区预算 = 窗口基准 × 本比例。**>0 时覆盖左侧绝对值**；0 = 关闭占比制。',
+    desc:'历史区预算 = 窗口基准 × 本比例。<b>>0 时覆盖左侧绝对值</b>；0 = 关闭占比制。',
     impact:'同上，适配换模型场景。建议 0.03~0.08。' },
 
   // ── 簇 6：历史注入内分配 ──
@@ -147,23 +147,23 @@ const CTX_CFG_FIELDS = [
       + '关闭：零外部依赖、离线确定性回归可用，但只能词面匹配 —— 此时下方 dense 列全部失效。' },
   { cluster:'dual', sec:'context', key:'context.topic_sim_threshold', type:'float', label:'话题切分·bigram 路',
     desc:'判「相邻用户消息是否仍属同一话题」的相似度阈值，低于则开新话题段（决定话题分段粒度）。'
-      + '⚠️ 这是 **bigram 路独有项**——话题组匹配与语义拉回才有双路，本项没有 dense 版本。',
+      + '⚠️ 这是 <b>bigram 路独有项</b>——话题组匹配与语义拉回才有双路，本项没有 dense 版本。',
     impact:'调高：更容易开新话题（话题段更碎、语义拉回范围更小）；调低：更容易并入当前话题（历史更连贯但可能混入旧题内容）。' },
   { cluster:'dual', sec:'context', key:'context.topic_group_match_dense', type:'float', label:'话题组匹配·dense 路',
     desc:'embedding 路判定「当前输入属于哪个话题组」的最低余弦（决定切回旧话题时能否命中旧组），低于则视为新话题。',
-    impact:'✅ 2026-09-21 已标定修订：原 0.30 实测**判定通过率 100%**（等于不设限）；'
-      + '分位等价映射值 0.6023 → 按行业经验表「有一定关联」档取**下沿 0.50**。' },
+    impact:'✅ 2026-09-21 已标定修订：原 0.30 实测<b>判定通过率 100%</b>（等于不设限）；'
+      + '分位等价映射值 0.6023 → 按行业经验表「有一定关联」档取<b>下沿 0.50</b>。' },
   { cluster:'dual', sec:'context', key:'context.topic_retrieve_threshold', type:'float', label:'语义拉回·bigram 路',
     desc:'bigram 降级路的语义拉回最低相似度（含话题域加权后），低于不注入。',
     impact:'调高：拉回更少更准；调低：召回更多但可能混入弱相关内容。仅 bigram 路生效。' },
   { cluster:'dual', sec:'context', key:'context.topic_retrieve_threshold_dense', type:'float', label:'语义拉回·dense 路',
     desc:'embedding 路的语义拉回最低余弦。中文 embedding 相关文本通常 0.5+、无关 0.2 以下。',
-    impact:'✅ 2026-09-21 已标定修订：原 0.35 实测**通过率 99.3%**（≈形同虚设，几乎每次都拉满 top-k）；'
+    impact:'✅ 2026-09-21 已标定修订：原 0.35 实测<b>通过率 99.3%</b>（≈形同虚设，几乎每次都拉满 top-k）；'
       + '等价映射值 0.6022（下界，bigram 路话题域加权未复现）→ 取下沿 0.50。' },
   { cluster:'dual', sec:'context', key:'context.semantic_fallback_gate_dense', type:'float', label:'流程补召门·dense 路',
-    desc:'流程匹配语义补召的触发门（dense 路）。✅ **已用分位等价映射标定**：'
+    desc:'流程匹配语义补召的触发门（dense 路）。✅ <b>已用分位等价映射标定</b>：'
       + '实测 bigram 0.5 的等价 dense 分位 = 0.7855，取 0.79。',
-    impact:'这是本组**唯一有标定依据**的 dense 阈值，可作其余两项的标定参照锚。一般不动。' },
+    impact:'这是本组<b>唯一有标定依据</b>的 dense 阈值，可作其余两项的标定参照锚。一般不动。' },
 ];
 
 // ══ 耦合约束校验器 ═══════════════════════════════════════════════════════════
@@ -364,7 +364,7 @@ function ctxViz(c, v) {
       + `${on ? '' : '<tr><td colspan="3" style="padding:5px 8px;color:#8a6d1f;font-size:10.5px;">总开关已关闭 → embedding 列全部不生效，仅按 bigram 判定</td></tr>'}`
       + `</table>`
       + `<div style="font-size:10.5px;color:var(--mut);margin-top:6px;line-height:1.6;">`
-      + `✅ 三项 dense 阈值现已**全部按分位等价映射标定**（脚本 <code>tools/_topic_threshold_calibrate.py</code>）：`
+      + `✅ 三项 dense 阈值现已<b>全部按分位等价映射标定</b>（脚本 <code>tools/_topic_threshold_calibrate.py</code>）：`
       + `流程补召门 0.79（等价点 0.7855）｜话题组匹配 0.50（等价点 0.6023，原值 0.30 通过率 100%）｜`
       + `语义拉回 0.50（等价点 0.6022 下界，原值 0.35 通过率 99.3%）。</div></div>`;
   }
