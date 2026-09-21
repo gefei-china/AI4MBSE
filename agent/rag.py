@@ -45,8 +45,14 @@ class GraphRAG:
         conn = get_db()
         t0 = time.time()
         scope = kb_scope or {}
+        # 2026-09-21 G1：生命周期过滤的统一开关（默认排除「已下线」文档）。
+        # 与 include_ai_generated 同款语义：默认 must-not-include，显式开启才纳入。
+        # 之所以要在 retrieve() 入口就先算出来：下面 _resolve_scope_docs（白名单自愈）也要用同一个口径，
+        # 否则「已废弃文档」会被自愈判成「白名单有效」而继续参与过滤 → 自愈形同虚设（G2）。
+        _inc_dep = bool(scope.get("include_deprecated") or False)
         # KB-S 自愈：白名单与实际存在的文档求交（失效项剔除；全失效则退化，绝不静默 0 命中）
-        scope_docs, scope_warn = self._resolve_scope_docs(conn, scope.get("docs") or [])
+        scope_docs, scope_warn = self._resolve_scope_docs(conn, scope.get("docs") or [],
+                                                         include_deprecated=_inc_dep)
 
         # Step 0: 上传文档优先——附件文本关键词命中（首要依据）
         attachment_hits = []
@@ -137,7 +143,8 @@ class GraphRAG:
                 # （此前实取 8 条、仅消费 3 条，多算的 5 条白白走向量检索与 RRF 融合）
                 _hy = _hybrid(conn, query, top_k=_rag_top_k, branches=None,
                               domain=force_domain if force_domain and force_domain != "unknown" else None,
-                              glossary_boost=boost, doc_names=scope_docs or None)
+                              glossary_boost=boost, doc_names=scope_docs or None,
+                              include_deprecated=_inc_dep)
                 chunk_hits = _hy["hits"]
                 # P2-2：查询 Trace（含归一化/域/命中文档/召回原因）
                 if conn is not None:
@@ -165,7 +172,8 @@ class GraphRAG:
                     # model collapse 对策）；kb_scope.include_ai_generated=true 显式开启才纳入
                     _exclude_ai = not (scope.get("include_ai_generated") or False)
                     chunk_hits = search_chunks(conn, query, top_k=_rag_fb_top_k, branches=None,
-                                               doc_names=scope_docs or None, exclude_ai=_exclude_ai)
+                                               doc_names=scope_docs or None, exclude_ai=_exclude_ai,
+                                               include_deprecated=_inc_dep)
                 except Exception:
                     chunk_hits = []
             if chunk_hits:
@@ -177,6 +185,8 @@ class GraphRAG:
                     doc_params = list(scope_docs)
                 if _exclude_ai:  # 消费隔离：文档粗匹配兜底同步排除 AI 收编文档
                     doc_sql += " AND (origin IS NULL OR origin != 'ai_generated')"
+                if not _inc_dep:  # G1：文档粗匹配兜底同步排除已下线文档
+                    doc_sql += " AND (lifecycle_status IS NULL OR lifecycle_status NOT IN ('deprecated'))"
                 docs = conn.execute(
                     "SELECT * FROM documents WHERE parse_status='completed'" + doc_sql,
                     doc_params
@@ -273,7 +283,7 @@ class GraphRAG:
         return min(w_cov * hit + w_rel * rels + w_typ * type_match, 1.0)
 
     @staticmethod
-    def _resolve_scope_docs(conn, raw_docs) -> tuple:
+    def _resolve_scope_docs(conn, raw_docs, include_deprecated: bool = False) -> tuple:
         """KB-S 消费范围自愈：把 `kb_scope.docs` 白名单与**实际存在的文档**求交。
 
         为什么需要：docs 白名单是**硬锁**——命中即同时按 source_doc（实体）/ doc_names（分块）/
@@ -290,6 +300,10 @@ class GraphRAG:
         - 任何异常 → 原样返回（不改变既有行为，不阻断主链路）。
 
         `kb_scope.docs_missing_fallback=False` 时不放宽（回到改动前行为，仅告警）。
+        ⚠️ 2026-09-21（G2）：求交时必须**排除已下线（deprecated）文档**。自愈的语义是
+        「剔除失效项」，而 `lifecycle_status='deprecated'` 的文档在检索侧已被 G1 挡掉
+        —— 若这里仍把它算作「有效」，白名单就会被判成全有效而零成本直通，
+        最终三路过滤**同时归零且全程静默**，正是本方法当初要消灭的那个失败形态。
         返回 `(有效docs, warn|None)`；warn = {requested, missing, effective, unfiltered}。
         """
         docs = [str(d).strip() for d in (raw_docs or []) if str(d).strip()]
@@ -305,7 +319,10 @@ class GraphRAG:
         try:
             ph = ",".join("?" * len(uniq))
             rows = conn.execute(
-                f"SELECT DISTINCT filename FROM documents WHERE filename IN ({ph})", uniq).fetchall()
+                f"SELECT DISTINCT filename FROM documents WHERE filename IN ({ph})"
+                + ("" if include_deprecated else
+                   " AND (lifecycle_status IS NULL OR lifecycle_status NOT IN ('deprecated'))"),
+                uniq).fetchall()
             have = {r["filename"] for r in rows}
         except Exception:
             return uniq, None                # 查不动就不动（保全现状）

@@ -184,9 +184,14 @@ class BM25Engine:
 
 
 # P1-3：BM25 索引缓存（按检索范围签名 + 全局写水位指纹失效）。
-# - key：检索范围（branches/domain/doc_names）→ 相同范围复用同一索引
-# - 指纹：document_chunks 的 (COUNT, MAX(id))——INSERT/DELETE 均敏感；
+# - key：检索范围（branches/domain/doc_names/include_deprecated）→ 相同范围复用同一索引
+# - 指纹：document_chunks 的 (COUNT, MAX(id), 已下线条数)——INSERT/DELETE 均敏感；
 #   content 级 UPDATE 不改指纹（ingest 语义下 content 更新走新行，可接受）
+#   ⚠️ 2026-09-21 G1 补：**已下线条数必须进指纹**。废弃走的是
+#   `UPDATE document_chunks SET lifecycle_status='deprecated'`（MetaRepo.transition_lifecycle），
+#   既不增行也不改 id → 只用 (COUNT, MAX(id)) 时**缓存不会失效**，
+#   于是刚废弃的文档在缓存存活期内**仍会被 BM25 召回**（缓存上限 8、进程级常驻）。
+#   ——这正是「加了过滤子句却依然漏召回」的隐蔽形态，必须与子句同批修。
 # - 容量上限 8，超限淘汰最旧（dict 插入序）
 _BM25_CACHE = {}
 _BM25_CACHE_MAX = 8
@@ -194,32 +199,37 @@ _CHUNK_COLS = "id, document_id, source_doc, section, chunk_index, content, domai
 _BM25_PAGE = 2000  # 分页流式构建页大小（内存 O(page)）
 
 
-def _bm25_cache_get(conn, branches, domain, doc_names):
+def _bm25_cache_get(conn, branches, domain, doc_names, include_deprecated=False):
     """取 BM25 缓存 (engine, rows)。未命中/指纹过期返回 None（调用方负责重建）。
 
-    domain 不参与缓存 key：BM25 索引按 (branches, doc_names) 建全量，
+    domain 不参与缓存 key：BM25 索引按 (branches, doc_names, include_deprecated) 建全量，
     domain 过滤由调用方在 Python 侧裁剪（domain 子句不改变 BM25 统计）。
+    include_deprecated 必须进 key —— 管理侧（回收站预览）与检索侧是两套不同范围，混用会互相污染。
     """
     fp = conn.execute(
-        "SELECT COUNT(*), COALESCE(MAX(id),0) FROM document_chunks").fetchone()
+        "SELECT COUNT(*), COALESCE(MAX(id),0), "
+        "COALESCE(SUM(CASE WHEN lifecycle_status IS NULL "
+        "OR lifecycle_status NOT IN ('deprecated') THEN 0 ELSE 1 END),0) "
+        "FROM document_chunks").fetchone()
     key = (tuple(branches or ()),
-           tuple(sorted(doc_names or ())), (fp[0], fp[1]))
+           tuple(sorted(doc_names or ())), bool(include_deprecated), (fp[0], fp[1], fp[2]))
     hit = _BM25_CACHE.get(key)
     if hit is not None:
         return hit
     # 重建：按范围分页流式加载（列裁剪，不取 embedding 大字段）
-    from knowledge_pipeline import _branch_clause, _doc_clause
+    from knowledge_pipeline import _branch_clause, _doc_clause, _lifecycle_clause
     sql, params = _branch_clause(branches)
     dsql, dparams = _doc_clause(doc_names)
+    lsql, lparams = _lifecycle_clause(include_deprecated)
     base = "SELECT {cols} FROM document_chunks WHERE content != ''".format(cols=_CHUNK_COLS)
     total = conn.execute(
-        "SELECT COUNT(*) FROM document_chunks WHERE content != ''" + sql + dsql,
-        params + dparams).fetchone()[0]
+        "SELECT COUNT(*) FROM document_chunks WHERE content != ''" + sql + dsql + lsql,
+        params + dparams + lparams).fetchone()[0]
     engine = BM25Engine()
     rows = []
     for off in range(0, total, _BM25_PAGE):
-        page = conn.execute(base + sql + dsql + " LIMIT ? OFFSET ?",
-                            params + dparams + [_BM25_PAGE, off]).fetchall()
+        page = conn.execute(base + sql + dsql + lsql + " LIMIT ? OFFSET ?",
+                            params + dparams + lparams + [_BM25_PAGE, off]).fetchall()
         if not page:
             break
         page_rows = [dict(r) for r in page]
@@ -236,7 +246,8 @@ def _bm25_cache_get(conn, branches, domain, doc_names):
 # 2026-09-17 S4：默认 top_k 5 → 4（与 RAG 消费侧 chunk_hits[:3] 对齐；显式传参的调用点不受影响）
 def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
                   branches: list | None = None, domain: str | None = None,
-                  glossary_boost: float = 1.0, doc_names: list | None = None) -> dict:
+                  glossary_boost: float = 1.0, doc_names: list | None = None,
+                  include_deprecated: bool = False) -> dict:
     """KB-P1：混合检索（BM25 稀疏 + 向量稠密权重融合）+ 轻量重排。
 
     P0-2/P0-4/P1-2 行业对齐升级：
@@ -245,12 +256,14 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     - 融合改为 RRF（Reciprocal Rank Fusion）：按排名合并，免调参（替代固定 0.7/0.3）
     - 每条 hit 增加 recall_reason（可解释路由）
     - doc_names：kb_scope.docs 来源文档过滤（#标签 场景，None=不过滤）
+    - include_deprecated（2026-09-21 G1）：默认 False = 已下线文档不进召回；
+      三路（BM25 索引 / 向量 / HyDE）**同口径**过滤，任一路漏掉都会让「已废弃不可见」变成假的。
 
     返回 {hits: [{score, source_doc, section, content, chunk_index, embed_version,
                   vec_score, bm25_score, domain, recall_reason}], bm25_count, vec_count}
     """
     from knowledge_engine import VectorEngine, BM25Engine
-    from knowledge_pipeline import _branch_clause, _doc_clause
+    from knowledge_pipeline import _branch_clause, _doc_clause, _lifecycle_clause
 
     # P1-4（2026-09-21）：混合检索参数配置化（rag.* 组；默认值与改动前硬编码一致）
     # P1-4b（2026-09-21）：新增 rag.recall_k —— 每路召回宽度从 top_k*2 解耦（此前 top_k 兼任两职）
@@ -274,9 +287,10 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
 
     # P1-3：chunks 分页流式加载（列裁剪，不取 embedding 大字段）+ BM25 索引缓存
     sql, params = _branch_clause(branches)
+    lsql, lparams = _lifecycle_clause(include_deprecated)
     dsql, dparams = _domain_clause(domain)
     docs_sql, docs_params = _doc_clause(doc_names)
-    bm25, rows = _bm25_cache_get(conn, branches, domain, doc_names)
+    bm25, rows = _bm25_cache_get(conn, branches, domain, doc_names, include_deprecated)
     if not rows:
         return {"hits": [], "bm25_count": 0, "vec_count": 0, "mode": "hybrid"}
     # rows 来自缓存，但 domain 过滤可能裁剪部分行 → 展示/兜底一律用 filtered_rows
@@ -300,12 +314,14 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
         if qv and version != "bigram-tf":
             q = qv[0]
             vsql, vparams = _branch_clause(branches)
+            vlsql, vlparams = _lifecycle_clause(include_deprecated)
             vdsql, vdparams = _domain_clause(domain)
             vdocs_sql, vdocs_params = _doc_clause(doc_names)
             vrows = conn.execute(
                 "SELECT id, embedding FROM document_chunks "
                 "WHERE content != '' AND embedding != '[]' AND embed_version=?"
-                + vsql + vdsql + vdocs_sql, [version] + vparams + vdparams + vdocs_params).fetchall()
+                + vsql + vlsql + vdsql + vdocs_sql,
+                [version] + vparams + vlparams + vdparams + vdocs_params).fetchall()
             if vrows:
                 allowed_ids = {vr["id"] for vr in vrows}
                 from vector_index import ChunkVectorIndex
@@ -347,8 +363,9 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
             marks = ",".join("?" * len(hyde_cand))
             hyde_rows = [dict(r) for r in conn.execute(
                 f"SELECT id, hyde_questions, hyde_embedding, embed_version FROM document_chunks "
-                f"WHERE id IN ({marks}) AND hyde_questions != '[]' AND hyde_questions != ''" + sql,
-                list(hyde_cand) + params).fetchall()]
+                f"WHERE id IN ({marks}) AND hyde_questions != '[]' AND hyde_questions != ''"
+                + sql + lsql,
+                list(hyde_cand) + params + lparams).fetchall()]
             if hyde_rows:
                 ve2 = VectorEngine()
                 qv2 = ve2._vector(query)

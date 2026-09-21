@@ -321,7 +321,22 @@
         <div class="subpage" id="kb-e" data-tabpanel="kb" data-page-node-id="9bWn54q69VH6qlXnHVWpbz">
           <div class="panel" data-page-node-id="TK2WNWmMWnJxDSQGBEyWQE">
             <div class="ph" data-page-node-id="PZ4OOJZ4iqVMDvUnuB2Ssx">资料库 <span class="tag" data-page-node-id="j2fBYSHqf2RLdFTWSeiVVx">解析→分块→向量化<span id="doc-flow-extract" style="display:none;" data-page-node-id="8YhmZevFTVDtKFX0nmdVdX">→抽取</span></span><span class="tag" data-page-node-id="orYIMJSTquRNqFsAcrmQWq">支持批量（多选）</span><span id="doc-count" style="color:var(--mut);font-size:11px;" data-page-node-id="5HPGKlDgHVOwsaPJLQFNWM"></span><span style="flex:1" data-page-node-id="Xg43HoXfZHgjQ6LKEJNyoA"></span></div>
-            <div class="pb" style="padding:0;" data-page-node-id="kGyV7Xh4dypCffRtB7WtbM">
+            <div class="pb" style="padding:0;display:flex;min-height:0;" data-page-node-id="kGyV7Xh4dypCffRtB7WtbM">
+              <!-- ── 左栏：文档目录树（2026-09-21「基于文件的管理」）──
+                   分两组、视觉分离（方案 §4.3 的硬要求）：
+                     「结构目录」= 人工创建，文档可移入（可拖放/可右键改名删）；
+                     「智能视图」= 系统按状态聚合，**只读**，往里拖文件没有意义。
+                   两组混在一栏会让用户把「未归类」当目录去拖——那是个视图，不是目录。 -->
+              <div id="doc-left" style="width:220px;min-width:40px;max-width:220px;border-right:1px solid var(--line);display:flex;flex-direction:column;background:#fafaf7;transition:width .18s;" data-page-node-id="docleft20260921">
+                <div style="position:relative;border-bottom:1px solid var(--line);padding:6px 6px 6px 30px;display:flex;align-items:center;gap:4px;" data-page-node-id="docleft-hdr">
+                  <button id="doc-left-collapse" class="btn sm ghost" style="position:absolute;top:4px;left:4px;padding:2px 6px;font-size:11px;" onclick="docToggleLeft()" title="收起/展开 左栏" data-page-node-id="docleft-collapse">«</button>
+                  <span style="flex:1;font-size:11.5px;font-weight:600;color:var(--blue-d);" data-page-node-id="docleft-title">📁 文档目录</span>
+                  <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="docFolderCreate(0)" title="在根下新建目录" data-page-node-id="docleft-new">＋</button>
+                </div>
+                <div id="doc-folders" tabindex="0" style="flex:1;overflow-y:auto;padding:4px 0;outline:none;" title="单击选中目录；双击/F2 重命名；Delete 删除目录；Esc 清除筛选" data-page-node-id="docleft-tree"><div class="loading" style="padding:8px;font-size:11px;" data-page-node-id="docleft-loading">加载中…</div></div>
+              </div>
+              <!-- ── 中栏：文件列表（工具栏 / 上传区 / 批量条 / 面包屑 / 列表 / 分页）── -->
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;overflow-y:auto;" data-page-node-id="docmid20260921">
               <!-- 工具栏：搜索 + 多维度筛选（上传人 / 上传时间 / 格式 / 状态）+ 刷新 + 上传文件 -->
               <div style="padding:8px 10px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);flex-wrap:wrap;" data-page-node-id="OQMLcgZhwgMhg1aiZpficJ">
                 <input id="doc-search" placeholder="搜索文件名/标题/标签…" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:200px;" onkeydown="if(event.key==='Enter')loadDocs()" data-page-node-id="wTRPFhZHcqZIdxZSMPgsZ6">
@@ -385,10 +400,14 @@
                 <span id="doc-batch-count" style="font-weight:600;">已选 0 个</span>
                 <button class="btn sm ghost" onclick="batchCommitSelected()">批量入库</button>
                 <button class="btn sm ghost" onclick="batchDeprecateSelected()">批量废弃</button>
+                <button class="btn sm ghost" onclick="batchMoveSelected()" title="把选中文档移动到指定目录（0=未归类）">移动到…</button>
                 <button class="btn sm ghost" onclick="clearDocSelection()">✕ 清除选择</button>
               </div>
+              <!-- 面包屑 + 当前筛选态（2026-09-21）：指明"现在看的是哪一层"，并给出「含子目录」开关 -->
+              <div id="doc-crumb" style="display:none;padding:6px 10px;border-bottom:1px solid var(--line);font-size:11.5px;align-items:center;gap:6px;flex-wrap:wrap;background:#fbfcfe;"></div>
               <div id="doc-list" data-page-node-id="BjEQPw0xo0LOQT7f6ni1iF"><div class="loading" data-page-node-id="CllEHjJ5pVJr2Fyfe4iwHk">加载中…</div></div>
               <div id="doc-pager" style="padding:8px 12px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap;" data-page-node-id="7f5FFEA2hCMY2NOCjs6rtF"></div>
+              </div><!-- /中栏 -->
             </div>
           </div>
         </div>
@@ -1548,5 +1567,6 @@
 <script src="/static/js/mods/37-kbar.js"></script>
 <script src="/static/js/mods/38-filepreview.js"></script>
 <script src="/static/js/mods/39-coverage.js"></script>
+<script src="/static/js/mods/40-docfolders.js"></script>
 </body>
 </html>

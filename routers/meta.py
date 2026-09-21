@@ -49,19 +49,27 @@ PREVIEW_TEXT_EXTS = {".txt", ".md", ".csv", ".log", ".json", ".xml", ".yaml", ".
 
 
 def _uploads_dir() -> str:
-    """原件副本目录：与 knowledge_pipeline._save_source_copy 落盘位置同一口径。"""
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "data", "uploads")
+    """原件副本目录（转调权威实现，见 `source_copy_path` 的说明）。"""
+    from knowledge_pipeline.ingest import source_copy_dir
+    return source_copy_dir()
 
 
 def _safe_doc_name(filename: str) -> str:
-    """文件名净化：与 _save_source_copy / download_document 同规则（否则定位不到副本）。"""
-    return re.sub(r"[^\w.\-\u4e00-\u9fa5]", "_", filename or "doc") or "doc"
+    """文件名净化（转调权威实现）。
+
+    ⚠️ 2026-09-21：本文件原有的正则副本已删除 —— 同一规则此前在
+    `ingest._save_source_copy` / 本函数 / `search.retry_document` **三处各写一遍**，
+    任何一处改了正则，另外两处就会"落盘能成、定位不到"，且失败静默（预览空、
+    重试报"源文件副本不存在"）。权威实现：`knowledge_pipeline.ingest.safe_doc_name`。
+    """
+    from knowledge_pipeline.ingest import safe_doc_name
+    return safe_doc_name(filename)
 
 
 def source_copy_path(doc_id: int, filename: str) -> str:
-    """定位文档原件副本 data/uploads/{doc_id}_{safe}。"""
-    return os.path.join(_uploads_dir(), f"{doc_id}_{_safe_doc_name(filename)}")
+    """定位文档原件副本 data/uploads/{doc_id}_{safe}（转调权威实现）。"""
+    from knowledge_pipeline.ingest import source_copy_path as _scp
+    return _scp(doc_id, filename)
 
 
 def preview_meta(doc_id: int, filename: str, file_type: str = "") -> dict:
@@ -174,11 +182,12 @@ def update_setting(key: str, body: dict, conn=Depends(db_session)):
 @router.post("/api/documents/upload")
 def upload_document(file: UploadFile = File(...), title: str = Form(""), author: str = Form(""),
                     version: str = Form("v1.0"), tags: str = Form(""),
-                    branch: str = Form(""), conn=Depends(db_session),
+                    branch: str = Form(""), folder_id: str = Form("0"), conn=Depends(db_session),
                     user=Depends(require_any_permission(DOC_WRITE_PERMS))):
     """文档上传 + 知识库真管道（KB-P0）：解析 → 结构感知分块 → Embedding → 落库 + 元数据。
 
-    multipart/form-data 字段：file + title / author / version / tags（逗号分隔）。
+    multipart/form-data 字段：file + title / author / version / tags（逗号分隔）
+    + folder_id（2026-09-21：上传落点 = 当前目录，0 = 未归类；与前端左栏选中项一致）。
     文档为全局资产：不随分支变化（branch 统一 'global'），向量化数据全局消费；
     实体/关系等建模数据仍按分支隔离。
     parse_status 状态机：parsing → completed / failed；chunk_count 实时返回。
@@ -196,6 +205,16 @@ def upload_document(file: UploadFile = File(...), title: str = Form(""), author:
     result = ingest_upload_document(conn, file.filename, file_type, content, metadata=metadata,
                                     branch="global")
     doc_id = result.get("doc_id")
+    # 落点：当前目录（校验失败不阻断上传 —— 解析已成功，目录只是组织维度，
+    # 为了一个不存在的目录把整份上传回滚掉是更差的选择；退化为未归类并回报原因）
+    from repositories.doc_folder_repo import DocFolderRepo, normalize_folder
+    _want = normalize_folder(folder_id)
+    if doc_id and _want:
+        _mv = DocFolderRepo(conn).move_document(doc_id, _want)
+        if not _mv.get("ok"):
+            result["folder_warning"] = _mv.get("error", "")
+        else:
+            result["folder_id"] = _want
     audit(audit_user(user), "upload", f"上传文件: {file.filename} ({len(content)} bytes) → {result.get('parse_status')} {result.get('chunk_count',0)} chunks", conn=conn)
     if result.get("parse_status") == "failed":
         return JSONResponse({"id": doc_id, "filename": file.filename, "size": len(content),
@@ -240,9 +259,8 @@ def download_document(doc_id: int, conn=Depends(db_session), user=Depends(curren
     doc = conn.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
     if not doc:
         return JSONResponse({"error": "document not found"}, 404)
-    base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "uploads")
-    safe = re.sub(r"[^\w.\-\u4e00-\u9fa5]", "_", doc["filename"] or "doc") or "doc"
-    path = os.path.join(base, f"{doc_id}_{safe}")
+    # 第 4 处重复实现，2026-09-21 一并收敛（见 _safe_doc_name 的说明）
+    path = source_copy_path(doc_id, doc["filename"])
     if os.path.exists(path):
         audit(audit_user(user), "doc_download", f"下载文档原件: {doc['filename']}", conn=conn)
         return FileResponse(path, filename=doc["filename"])
@@ -369,16 +387,29 @@ def list_documents(search: str = "", status: str = "", branch: str = "",
                    date_from: str = "", date_to: str = "",
                    lifecycle_status: str = "", include_deprecated: str = "1",
                    state: str = "", origin: str = "",
+                   folder_id: str = "", folder_scope: str = "self",
                    conn=Depends(db_session)):
     """P0：列表支持按 lifecycle_status 过滤；include_deprecated=1（默认）显示废弃，0 隐藏。
     2026-09-10：新增 state 统一状态过滤（解析×生命周期合一），取值
     committed/stored/processing/failed/deprecated/archived，与前端「状态」列完全一致。
-    2026-09-15：新增 origin 来源筛选（upload | ai_generated，空=全部）。"""
+    2026-09-15：新增 origin 来源筛选（upload | ai_generated，空=全部）。
+    2026-09-21：新增目录维过滤 —— `folder_id`（'0'=未归类；空=不过滤）
+    + `folder_scope`（self=仅当前目录 / subtree=含子目录）。展开在服务端做，
+    前端只传语义，避免把"子树 id 列表"这种实现细节塞进 URL。
+    """
+    folder_ids = None
+    if folder_id != "":
+        from repositories.doc_folder_repo import DocFolderRepo, normalize_folder
+        fid = normalize_folder(folder_id)
+        if folder_scope == "subtree" and fid:
+            folder_ids = DocFolderRepo(conn)._descendant_ids(fid) or [fid]
+        else:
+            folder_ids = [fid]
     return MetaRepo(conn).list_documents_with_meta(
         search, status, branch, uploaded_by, file_type, date_from, date_to,
         lifecycle_status=lifecycle_status,
         include_deprecated=(include_deprecated != "0"),
-        state=state, origin=origin,
+        state=state, origin=origin, folder_ids=folder_ids,
     )
 
 

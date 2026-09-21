@@ -5,7 +5,7 @@ import os
 import re
 import time
 import uuid
-from .extract import extract_text
+from .extract import extract_text, extract_text_ex
 from .chunking import chunk_text_structured, _is_complete_sentence
 from .embedder import Embedder
 
@@ -33,20 +33,84 @@ def extract_doc_title(filename: str, text: str) -> str:
     return ""
 
 
+def source_copy_dir() -> str:
+    """原件副本目录（`data/uploads/`，扁平存放）。"""
+    return os.path.join(_PROJECT_ROOT, "data", "uploads")
+
+
+def safe_doc_name(filename: str) -> str:
+    """文件名净化规则（**全仓唯一权威**）。
+
+    ⚠️ 这条规则此前在 3 处各写一遍（`ingest._save_source_copy`、`routers/meta._safe_doc_name`、
+    `search.retry_document`）—— 任何一处改了正则，另外两处就会**定位不到已落盘的副本**，
+    且失败形态是静默的（预览空、重试报"副本不存在"）。此处收敛为单点。
+    """
+    return re.sub(r"[^\w.\-\u4e00-\u9fa5]", "_", filename or "doc") or "doc"
+
+
+def source_copy_path(doc_id: int, filename: str) -> str:
+    """定位副本 `data/uploads/{doc_id}_{safe}`。"""
+    return os.path.join(source_copy_dir(), f"{doc_id}_{safe_doc_name(filename)}")
+
+
+def remove_source_copy(doc_id: int, filename: str) -> bool:
+    """删除文档时同步清理其原件副本（2026-09-21，D8）。
+
+    为什么必须做：`data/uploads/` 是**只增不减**的。实测（2026-09-21）34 份副本里
+    **27 份是孤儿**（`{id}_` 前缀对应的 documents 行早已不存在）——
+    删除路径只清 `domain_review_queue` 与 `documents`，从不碰副本。
+    在"回收站/物理清理"落地后这个数字只会更大（下线→清理的每一轮都留垃圾）。
+
+    失败**不阻断主流程**（删文档是用户的意图，不能被一个残留文件挡住），返回是否删除成功。
+    """
+    try:
+        p = source_copy_path(doc_id, filename)
+        if os.path.exists(p):
+            os.remove(p)
+            return True
+    except Exception as e:
+        print(f"[ingest] 清理源副本失败（不阻断删除）doc_id={doc_id}: {e}", flush=True)
+    return False
+
+
 def _save_source_copy(doc_id: int, filename: str, content) -> None:
     """保存源文件副本（供预览）到 data/uploads/（失败不阻断主流程）。"""
     try:
         import os
         if isinstance(content, str):
             content = content.encode("utf-8", errors="replace")
-        base = os.path.join(_PROJECT_ROOT, "data", "uploads")
+        base = source_copy_dir()
         os.makedirs(base, exist_ok=True)
-        safe = re.sub(r"[^\w.\-\u4e00-\u9fa5]", "_", filename) or "doc"
-        path = os.path.join(base, f"{doc_id}_{safe}")
+        path = source_copy_path(doc_id, filename)
         with open(path, "wb") as f:
             f.write(content)
     except Exception as e:
         logger.warning("源文件副本保存失败（不阻断主流程）: %s", e)
+
+
+def _record_parse_meta(conn, doc_id: int, meta: dict) -> None:
+    """把解析诊断写进 documents.pipeline_detail.parse_meta 留痕。
+
+    2026-09-21 新增：解析链路引入 OCR 后，"这一份到底是怎么解析出来的"必须可事后查证 ——
+    kind（text/pdf/image/office）、ok、reason（失败原因）、
+    ocr（可用性/页数/补充字数/耗时/未用原因）。
+    排查"这份扫描件为什么没内容"、以及核对 OCR 是否按逐页判据生效，都靠它。
+    """
+    if not meta:
+        return
+    try:
+        cur_d = json.loads(conn.execute(
+            "SELECT pipeline_detail FROM documents WHERE id=?", (doc_id,)).fetchone()[0] or "{}")
+    except Exception:
+        cur_d = {}
+    cur_d["parse_meta"] = {
+        "kind": meta.get("kind", ""),
+        "ok": bool(meta.get("ok")),
+        "reason": meta.get("reason", ""),
+        "ocr": meta.get("ocr") or {},
+    }
+    conn.execute("UPDATE documents SET pipeline_detail=? WHERE id=?",
+                 (json.dumps(cur_d, ensure_ascii=False), doc_id))
 
 
 def _generate_hyde_questions(content: str, section: str = "") -> list:
@@ -123,7 +187,12 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
     doc_id：重试复用——传入时 UPDATE 原文档（不新建），清空旧 chunks 由调用方负责
     branch：全局资产——文档从分支体系抽离（默认 'global'，不随分支变化；实体/关系仍按分支）
     管道阶段明细：documents.pipeline_detail = {parse,chunk,embed,insert} 各阶段 done/failed
-    返回 {doc_id, parse_status, chunk_count, error?, pipeline}
+                 + parse_meta（2026-09-21：kind/ok/reason/ocr —— 解析诊断留痕，含 OCR 参与情况）
+    返回 {doc_id, parse_status, chunk_count, error?, pipeline, parse_meta?}
+
+    失败原因可操作性（2026-09-21）：error_msg 不再是固定的"无法从该格式提取文本"，
+    而是 extract_text_ex 给出的具体原因（扫描件无文本层 / 图片需 OCR / 文件损坏加密 / 依赖未装），
+    由前端 20-docs.js 直接展示（该字段经 /api/documents 列表下发）。
     """
     try:
         # 1) 登记文档（parsing 状态）——新建或复用
@@ -155,7 +224,9 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
 
         # 1.5) 元数据落库（KB-P0）——标题自动提取（用户未填时用文档自身标题）
         md = metadata or {}
-        text0 = extract_text(filename, content)
+        # 2026-09-21：改用 extract_text_ex —— 除文本外还要拿到诊断信息
+        #（失败原因 / OCR 是否参与 / 扫描件判别），用于落库状态与可操作提示。
+        text0, parse_meta = extract_text_ex(filename, content)
         detected_title = md.get("title", "").strip()
         if not detected_title:
             detected_title = extract_doc_title(filename, text0)
@@ -173,11 +244,19 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
         # 2) 解析文本（阶段：parse）
         text = text0
         if not text.strip():
-            _stage("parse", "failed", "无法从该格式提取文本（支持 txt/md/pdf/docx/csv/json）")
+            # 2026-09-21 修复：原提示固定为"无法从该格式提取文本（支持 txt/md/pdf/docx/csv/json）"，
+            # 对"扫描版 PDF / 图片"毫无指导意义（用户既不知道为什么，也不知道该怎么办）。
+            # 现直接用 extract_text_ex 的 reason，说清是什么挡住了：
+            # 扫描件无文本层？图片需 OCR？文件损坏/加密？依赖未安装？
+            reason = (parse_meta.get("reason") or "").strip() or \
+                "无法从该格式提取文本（支持文本类 / Word / PDF / Excel / PPT / 图片）"
+            _record_parse_meta(conn, doc_id, parse_meta)
+            _stage("parse", "failed", reason)
             conn.execute("UPDATE documents SET parse_status='failed', chunk_count=0 WHERE id=?", (doc_id,))
             conn.commit()
             return {"doc_id": doc_id, "parse_status": "failed", "chunk_count": 0,
-                    "error": "无法从该格式提取文本（支持 txt/md/pdf/docx/csv/json）", "pipeline": "parse"}
+                    "error": reason, "pipeline": "parse", "parse_meta": parse_meta}
+        _record_parse_meta(conn, doc_id, parse_meta)
         _stage("parse", "done")
 
         # 3) 结构感知分块（v2：config 参数 + 表格/代码块分派 + title-enriched，阶段：chunk）
@@ -283,6 +362,7 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
         conn.commit()
         return {"doc_id": doc_id, "parse_status": "completed", "chunk_count": len(chunks),
                 "embed_version": embed_version, "detected_title": detected_title,
+                "parse_meta": parse_meta,
                 "pipeline": {"parse": "done", "chunk": "done", "embed": "done", "insert": "done"}}
     except Exception as e:
         try:
@@ -317,7 +397,9 @@ def ingest_upload_document(conn, filename: str, file_type: str, content: bytes,
     if result.get("parse_status") == "failed":
         return {"doc_id": doc_id, "filename": filename, "size": len(content),
                 "parse_status": "failed", "chunk_count": 0, "embed_version": "",
-                "detected_title": "", "auto_extract": auto_meta, "error": result.get("error", "")}
+                "detected_title": "", "auto_extract": auto_meta,
+                "error": result.get("error", ""),
+                "parse_meta": result.get("parse_meta", {})}
     try:
         _sw = {r["key"]: r["value"] for r in conn.execute(
             "SELECT key, value FROM settings").fetchall()}
@@ -362,5 +444,6 @@ def ingest_upload_document(conn, filename: str, file_type: str, content: bytes,
             "parse_status": result.get("parse_status"), "chunk_count": result.get("chunk_count", 0),
             "embed_version": result.get("embed_version", ""),
             "detected_title": result.get("detected_title", ""),
+            "parse_meta": result.get("parse_meta", {}),
             "auto_extract": auto_meta}
 

@@ -57,6 +57,7 @@ from .migrations import (
     _migrate_p0_capabilities,
     _migrate_file_extract_settings,
     _migrate_docs_global,
+    _migrate_doc_folders,  # 2026-09-21 文档目录树 doc_folders + documents.folder_id（基于文件的管理）
     _migrate_plugin_tables,
     _migrate_plugin_dependencies,  # 2026-09-16 能力依赖索引表（P0-2）
 )
@@ -746,7 +747,7 @@ def init_db():
         quality_score REAL DEFAULT 0,
         source_id INTEGER DEFAULT NULL,   -- R1=B：原 REFERENCES data_sources 已随表删除，SQLite FK 默认关闭无约束
         uploaded_by TEXT DEFAULT '',
-        branch TEXT DEFAULT 'dev',  -- KB分支：文档归属分支（共享+发布快照）
+        branch TEXT DEFAULT 'global',  -- KB分支：⚠️ 文档为全局资产，恒 'global'（列保留仅为历史兼容）
         knowledge_category TEXT DEFAULT '',  -- P0-3: 知识类别（设计方法知识/设计资产子类，空=未分类）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
@@ -1052,6 +1053,8 @@ def init_db():
     _migrate_glossary_discoveries(conn)
     # ── P0：文件生命周期管理 + 节点/边元数据（资料库与AI建模优化 2026-09-10）──
     _migrate_document_lifecycle(conn)
+    # ── 文档目录树 doc_folders + documents.folder_id（基于文件的管理 2026-09-21 §4.1）──
+    _migrate_doc_folders(conn)
     # ── P1-3：SysML Profile 导入元信息表 ──
     _migrate_profile_tables(conn)
     # ── O-3：老库补齐本体类型 ──

@@ -771,6 +771,11 @@ class BranchRepo(BaseRepo):
         if is_release:
             # FR-KG-16 合并回滚：合并执行前抓取 release 当前快照（实体/关系/文档/分块/元数据），
             # 写入 merge_requests.prev_release_snapshot，供 rollback_merge 还原合并前状态
+            # ⚠️ 2026-09-21（G4）**documents/doc_metadata/chunks 三项恒为空数组**（死代码）：
+            # 文档全局化后 `WHERE branch=?`（tgt='release'）再也选不出任何文档 ——
+            # 「文档不参与分支发布」是设计，不是 bug（见 database/migrations/documents.py 与 §1.1）。
+            # 保留这三行只为兼容**全局化之前**写入的历史快照；rollback_merge 已加护栏不再按此删文档。
+            # 后人勿据此认为「回滚能恢复文档」，也不要把它当成"快照功能正常"的证据。
             self.execute(
                 "UPDATE merge_requests SET prev_release_snapshot=? WHERE id=?",
                 (json.dumps({
@@ -1141,8 +1146,13 @@ class BranchRepo(BaseRepo):
 
         还原语义：
         - 校验：mr 存在、status=approved、目标为 release 类型、prev_release_snapshot 非空；
-        - 删除 release 当前全部 entities/relations/文档（release 为可重建快照层，物理删除）；
-        - 按快照恢复 entities/relations/文档/分块（保持同 id 与原 published_at）；
+        - 删除 release 当前全部 entities/relations（release 为可重建快照层，物理删除）；
+        - ⚠️ 2026-09-21（G3）：**文档只在快照确实带了 documents 时才做"先删后还原"**。
+          文档是全局资产（`branch='global'`），不随分支发布，`_merge_commit` 抓的文档快照恒为 `[]`
+          （见 :779-781）—— 这时若仍按 `branch=?` 删文档，就是「删掉了、快照里没有、所以不还原」
+          = **静默丢文档**。实测：只加 `if tgt != "global"` 护栏挡不住 `branch='release'` 的遗留行；
+          现改为按快照内容决定，使"删而不还"不可达（`tools/verify/verify_doc_folders.py` B7 夹具覆盖）；
+        - 按快照恢复 entities/relations（保持同 id 与原 published_at）；
         - 发布日志保留原记录，并新增 rollback 撤销记录（发布日志标记撤销）；
         - 快照一次性消费：成功后清空，防止二次回滚。
         """
@@ -1161,14 +1171,30 @@ class BranchRepo(BaseRepo):
         if not isinstance(snapshot, dict) or "entities" not in snapshot:
             return {"ok": False, "error": "该合并请求无合并前快照，无法回滚（快照可能已消费）"}
         tgt = mr["target_branch"]
-        # ① 删除 release 当前全部数据（先 relations 后 entities 满足外键；文档级联分块/元数据）
+        # ① 删除 release 当前全部数据（先 relations 后 entities 满足外键）
         self.execute("DELETE FROM relations WHERE branch=?", (tgt,))
         self.execute("DELETE FROM entities WHERE branch=?", (tgt,))
-        self.execute("DELETE FROM documents WHERE branch=?", (tgt,))
-        self.execute("DELETE FROM document_chunks WHERE branch=?", (tgt,))
-        self.execute(
-            "DELETE FROM doc_metadata WHERE document_id IN (SELECT id FROM documents WHERE branch=?)", (tgt,))
+        # ⚠️ 2026-09-21（G3）**数据丢失护栏**：文档是全局资产（`branch='global'`），不随分支发布。
+        #
+        # 先记下一个被否决的方案：只加 `if tgt != "global":` 护栏（与 delete_branch 同款）。
+        # **它不够** —— `rollback_merge` 的 tgt 是 release 分支名，永远不等于 'global'，
+        # 于是那三条 DELETE 照样执行；而 `_merge_commit` 抓文档快照也是 `WHERE branch=?`（见 :779-781），
+        # 在全局化后的库里**恒为空数组** → 「删掉了、但快照里没有、所以不还原」= **静默丢文档**。
+        # 实测（tools/verify/verify_doc_folders.py 的 B7 夹具）：库里放一行 `branch='release'`
+        # 的历史遗留文档，跑 rollback 后该行**消失且不还原** —— 加了那个护栏也照样丢。
+        #
+        # 所以正确的修法是**按"能否还原"决定是否删除**：只有快照里确实带了 documents 才做
+        # 「先删后还原」（那是全局化之前写入的历史快照，语义上是"整层替换"）；
+        # 快照不含文档时**一条都不删**。这样"删而不还"这个组合从根上不可达。
+        if snapshot.get("documents"):
+            self.execute("DELETE FROM document_chunks WHERE branch=?", (tgt,))
+            self.execute("DELETE FROM documents WHERE branch=?", (tgt,))
+            self.execute(
+                "DELETE FROM doc_metadata WHERE document_id IN (SELECT id FROM documents WHERE branch=?)",
+                (tgt,))
         # ② 按快照恢复（先实体后关系满足外键；先文档后分块/元数据）
+        # 注：documents/doc_metadata/chunks 三项在本快照里**恒为空数组**（见 ① 的说明），
+        # 调用顺序保留只为兼容历史快照（全局化之前写入的那些），不要据此认为"回滚能恢复文档"。
         restored_e = self._restore_rows("entities", snapshot.get("entities", []))
         restored_r = self._restore_rows("relations", snapshot.get("relations", []))
         self._restore_rows("documents", snapshot.get("documents", []))

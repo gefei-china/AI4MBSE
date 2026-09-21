@@ -7,7 +7,8 @@
 4. ingest_document：上传 → 解析 → 分块 → 向量化 → 落 document_chunks 表（parse_status 状态机）
 
 解耦拆分（2026-08）：原单体 993 行 → 包结构，按管道阶段拆分，对外导入契约不变：
-- extract.py    文本抽取（extract_text/_extract_*）
+- extract.py    文本抽取（extract_text/extract_text_ex/_extract_*）
+- ocr.py        OCR 兜底：图片与扫描版 PDF（离线 ONNX，模型内置包内、零网络下载）
 - chunking.py   分块（chunk_text/chunk_text_structured/_is_complete_sentence...）
 - embedder.py   Embedding（Embedder）
 - ingest.py     入库管道（ingest_document/extract_doc_title/chunking_params...）
@@ -16,12 +17,15 @@
 # 文本抽取
 from .extract import (
     extract_text,
+    extract_text_ex,      # 2026-09-21：带诊断 meta（失败原因 / OCR 参与明细）
     _extract_csv_table,
     _extract_xlsx,
     _extract_pptx,
     _extract_docx,
     _extract_pdf,
 )
+# OCR 兜底（2026-09-21：扫描版 PDF / 图片；模型内置、零网络下载）
+from . import ocr
 # 分块
 from .chunking import (
     _is_complete_sentence,
@@ -36,6 +40,10 @@ from .embedder import Embedder
 from .ingest import (
     extract_doc_title,
     _save_source_copy,
+    source_copy_dir,
+    source_copy_path,
+    safe_doc_name,
+    remove_source_copy,
     _generate_hyde_questions,
     chunking_params,
     ingest_document,
@@ -45,6 +53,8 @@ from .ingest import (
 from .search import (
     _branch_clause,
     _doc_clause,
+    _ai_clause,
+    _lifecycle_clause,
     _search_chunks_bigram,
     vector_search_embed,
     search_chunks,

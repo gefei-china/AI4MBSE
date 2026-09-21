@@ -779,14 +779,18 @@ def chunk_search(body: RetrieveIn, conn=Depends(db_session)):
     文档全局化：检索不按分支过滤（向量化数据全局消费；branch 参数保留接收兼容旧前端）。
     """
     branches = None
+    # G1（2026-09-21）：默认排除已下线文档；管理侧显式传 include_deprecated=true 才纳入
+    _inc_dep = bool(getattr(body, "include_deprecated", False))
     if body.hybrid:
         from knowledge_engine import hybrid_search
-        res = hybrid_search(conn, body.query, top_k=body.top_k, branches=branches)
+        res = hybrid_search(conn, body.query, top_k=body.top_k, branches=branches,
+                            include_deprecated=_inc_dep)
         hits = res["hits"]
         return {"query": body.query, "hits": hits, "hit_count": len(hits),
                 "bm25_count": res["bm25_count"], "vec_count": res["vec_count"], "mode": "hybrid"}
     from knowledge_pipeline import search_chunks
-    hits = search_chunks(conn, body.query, top_k=body.top_k, branches=branches)
+    hits = search_chunks(conn, body.query, top_k=body.top_k, branches=branches,
+                         include_deprecated=_inc_dep)
     return {"query": body.query, "hits": hits, "hit_count": len(hits), "mode": "vector"}
 
 

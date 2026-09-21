@@ -32,6 +32,7 @@ from .swrl import router as swrl_router  # P1-①/②（2026-09-11）SWRL 规则
 from .sparql import router as sparql_router  # P2-①/②（2026-09-11）SPARQL 1.1 Endpoint
 from .data_sources import router as data_sources_router  # P0-4（2026-09-20）数据源注册管理
 from .coverage import router as coverage_router  # SRS-GN-CO（2026-09-20）覆盖性分析呈现端点
+from .doc_folders import router as doc_folders_router  # 2026-09-21 文档目录树（基于文件的管理 P0-b）
 
 __all__ = [
     "dashboard_router",
@@ -60,4 +61,5 @@ __all__ = [
     "sparql_router",  # P2-①/②（2026-09-11）SPARQL 1.1 Endpoint
     "data_sources_router",  # P0-4（2026-09-20）数据源注册管理
     "coverage_router",  # SRS-GN-CO（2026-09-20）覆盖性分析呈现端点
+    "doc_folders_router",  # 2026-09-21 文档目录树
 ]

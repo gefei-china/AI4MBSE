@@ -40,6 +40,7 @@ from routers import (
     sparql_router,  # P2-①/②（2026-09-11）SPARQL 1.1 Endpoint
     data_sources_router,  # P0-4（2026-09-20）数据源注册管理（db/api/file 三类源接入）
     coverage_router,  # SRS-GN-CO（2026-09-20）覆盖性分析呈现端点
+    doc_folders_router,  # 2026-09-21 文档目录树（基于文件的管理 P0-b）
 )
 
 @asynccontextmanager
@@ -100,6 +101,7 @@ for _router in (
     sparql_router,  # P2-①/②（2026-09-11）SPARQL 1.1 Endpoint
     data_sources_router,  # P0-4（2026-09-20）数据源注册管理（db/api/file 三类源接入）
     coverage_router,  # SRS-GN-CO（2026-09-20）覆盖性分析呈现端点
+    doc_folders_router,  # 2026-09-21 文档目录树（基于文件的管理 P0-b）
 ):
     app.include_router(_router)
 

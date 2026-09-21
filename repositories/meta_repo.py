@@ -66,11 +66,23 @@ class MetaRepo(BaseRepo):
                                  uploaded_by: str = "", file_type: str = "",
                                  date_from: str = "", date_to: str = "",
                                  lifecycle_status: str = "", include_deprecated: bool = True,
-                                 state: str = "", origin: str = "") -> list:
+                                 state: str = "", origin: str = "",
+                                 folder_ids: list | None = None) -> list:
+        """文档列表（含元数据）。
+
+        `folder_ids`（2026-09-21 目录树）：None = 不过滤；否则限定 `documents.folder_id IN (...)`。
+        调用方负责把「含子目录」展开成 id 列表（见 `DocFolderRepo._descendant_ids`），
+        本方法只做等值集合过滤 —— 这样仓储层不依赖目录域，也不会在 SQL 里写递归。
+        `folder_ids=[0]` 即「未归类」智能视图。
+        """
         q = """SELECT d.*, m.title, m.author, m.version, m.tags, m.source AS meta_source, m.extra
             FROM documents d LEFT JOIN doc_metadata m ON m.document_id=d.id WHERE 1=1"""
         params = []
         # 注意：branch 参数保留接收但不再过滤——文档全局化后不分分支（避免历史前端传 branch）
+        if folder_ids is not None:
+            ids = [int(i) for i in folder_ids] or [0]
+            q += " AND d.folder_id IN ({})".format(",".join("?" * len(ids)))
+            params.extend(ids)
         if search:
             q += " AND (d.filename LIKE ? OR m.title LIKE ? OR m.author LIKE ? OR m.tags LIKE ?)"
             like = f"%{search}%"
@@ -154,7 +166,7 @@ class MetaRepo(BaseRepo):
         )
 
     def delete_document(self, doc_id: int) -> None:
-        """删除文档。
+        """删除文档（含原件副本）。
 
         ⚠️ `domain_review_queue.document_id` 是**无外键**的普通列
         （建表见 `database/migrations/glossary.py::_migrate_glossary_tables`），
@@ -164,9 +176,22 @@ class MetaRepo(BaseRepo):
 
         所以这里必须**显式清理**该文档在复核队列里的行（与删除同事务）。
         兜底见 `database/migrations/glossary.py::_migrate_domain_review_queue_orphans`。
+
+        ⚠️ 2026-09-21（D8）**同时清理 `data/uploads/` 里的原件副本**：
+        该目录此前只增不减，实测 34 份副本中 27 份是孤儿（文档已删、副本还在）。
+        清理失败**不阻断删除**（用户意图是删文档，不能被残留文件挡住），
+        但要留痕 —— 否则下一轮又会有人去追"不存在的偶发"。
         """
         self.execute("DELETE FROM domain_review_queue WHERE document_id=?", (doc_id,))
+        row = self.one("SELECT filename FROM documents WHERE id=?", (doc_id,))
         self.execute("DELETE FROM documents WHERE id=?", (doc_id,))
+        # 副本清理放最后：即使抛错，DB 侧的删除已经完成，不会出现"文件没了、行还在"
+        if row:
+            try:
+                from knowledge_pipeline.ingest import remove_source_copy
+                remove_source_copy(doc_id, row.get("filename") or "")
+            except Exception as e:
+                print(f"[meta_repo] 删除文档 #{doc_id} 后清理源副本失败（不阻断）: {e}", flush=True)
 
     # ── P0：文档生命周期管理（FR-KG-8 / ArcR-5）──
     def get_document_for_lifecycle(self, doc_id: int) -> dict | None:
@@ -262,9 +287,15 @@ class MetaRepo(BaseRepo):
                 results["failed"].append({"doc_id": did,
                                           "reason": f"来源状态不符：{cur['lifecycle_status']}（仅允许 {','.join(allow_from)}）"})
                 continue
+            # chunk_sync 的判据是「跨过 deprecated 这条边界」，**不是**「目标是 deprecated」。
+            # 下线（→deprecated）要把 chunks 置 deprecated；出站（deprecated→committed）
+            # 必须把 chunks 恢复为 stored —— 否则文档在管理界面显示正常，检索侧却**永久不可见**
+            # （G1 过滤 `lifecycle_status NOT IN ('deprecated')` 会一直把它挡在外面）。
+            # 2026-09-21 端到端验证实测暴露：`/api/documents/batch` 的 restore 走本函数，
+            # 原判据漏掉出站分支 → 单文档 /restore（显式 chunk_sync=True）正确、批量恢复错误。
             r = self.transition_lifecycle(did, cur["lifecycle_status"], to_status,
                                           operator, reason, extra={"batch": True},
-                                          chunk_sync=(to_status == "deprecated"))
+                                          chunk_sync=(to_status == "deprecated" or cur["lifecycle_status"] == "deprecated"))
             if r["ok"]:
                 results["ok"] += 1
             else:

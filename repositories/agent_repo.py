@@ -74,6 +74,9 @@ class AgentRepo(BaseRepo):
         全失效则放宽），但白名单写错的**最早可发现点**就在此处；等到「检索恒为空」才发现，
         排查成本高得多（实测：design agent 白名单 2 条全不存在，4887 块规范长期不可见）。
         **不阻断保存**：允许「先配范围、后传文档」的正常工作流；文档名大小写/后缀写错由日志提示。
+        ⚠️ 2026-09-21（G2）：预检口径必须与 `GraphRAG._resolve_scope_docs` 一致 ——
+        已下线（`lifecycle_status='deprecated'`）文档在检索侧根本不可见，这里若算「存在」，
+        用户会看到「保存通过、检索为空」且**没有任何告警**（自愈会把它判成有效项）。
         """
         try:
             sc = json.loads(kb_scope_json or "{}") or {}
@@ -81,7 +84,9 @@ class AgentRepo(BaseRepo):
             if not docs:
                 return
             miss = [d for d in dict.fromkeys(docs)
-                    if not (self.one("SELECT 1 FROM documents WHERE filename=?", (d,)))]
+                    if not (self.one("SELECT 1 FROM documents WHERE filename=? "
+                                     "AND (lifecycle_status IS NULL "
+                                     "OR lifecycle_status NOT IN ('deprecated'))", (d,)))]
             if miss:
                 print(f"[kb_scope][WARN] {where} 白名单含 {len(miss)} 篇不存在的文档：{miss[:5]}"
                       f" —— 该 Agent 检索时会被自愈剔除（全失效则放宽为不限文档），请核对文档名",

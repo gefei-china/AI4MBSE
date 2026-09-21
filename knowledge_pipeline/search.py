@@ -50,16 +50,46 @@ def _ai_clause(exclude_ai) -> tuple:
     return " AND (origin IS NULL OR origin != 'ai_generated')", []
 
 
+def _lifecycle_clause(include_deprecated: bool = False) -> tuple:
+    """生命周期过滤子句（2026-09-21 G1）：默认把「已下线」文档的 chunks 挡在检索之外。
+
+    ⚠️ 这修的是一个**只写不读**的既有缺口，不是新功能：
+    `document_chunks.lifecycle_status` 早在 `database/migrations/documents.py:209` 就建了列，
+    建列注释写明的目的就是「**避免废弃文档仍命中检索**」，
+    `MetaRepo.transition_lifecycle(chunk_sync=True)` 也确实会在废弃时把它置为 `'deprecated'`
+    —— 但检索侧（本文件 5 处 chunks 查询 + `knowledge_engine` 的 BM25/向量/HyDE 三路）
+    **从来没有读过它**。实测（2026-09-21）：`grep -rn lifecycle_status` 在
+    `search.py`/`knowledge_engine.py`/`agent/rag.py`/`repositories/knowledge_repo.py` **0 命中**；
+    对照实体/关系侧 `status != 'deprecated'` 过滤齐全（`agent/rag.py` 内 9 处）。
+    后果：**已废弃文档仍会被 AI 建模 RAG 召回** —— 版本链/回收站的「不可见」语义全建立在沙子上。
+
+    ⚠️ 作用范围**只限 `document_chunks`**（与 `_branch_clause` 同一道边界纪律）：
+    实体/关系有自己的 `status` 状态轴，不要把这个子句扩散过去。
+
+    `include_deprecated=True` 是给**管理侧**留的显式开关（回收站列表、版本列表、
+    目录计数、管理统计必须能看到已下线文档）；检索默认 must-not 包含。
+
+    写法说明：必须用 `IS NULL OR NOT IN (...)`。若写成 `lifecycle_status != 'deprecated'`，
+    SQLite 下 `NULL != 'deprecated'` 求值为 NULL（非 TRUE）→ **老库中该列为 NULL 的行会被整批吃掉**，
+    表现为「升级后检索突然空了一半」。返回 (sql_suffix, params)。
+    """
+    if include_deprecated:
+        return "", []
+    return " AND (lifecycle_status IS NULL OR lifecycle_status NOT IN ('deprecated'))", []
+
+
 def _search_chunks_bigram(conn, query: str, top_k: int = 5, branches: list | None = None,
-                          doc_names: list | None = None, exclude_ai: bool = False) -> list:
+                          doc_names: list | None = None, exclude_ai: bool = False,
+                          include_deprecated: bool = False) -> list:
     """bigram 实时相似度兜底：查询侧与内容侧同构（字符 bigram TF），不依赖存储向量维度。"""
     from knowledge_engine import VectorEngine
     sql, params = _branch_clause(branches)
     dsql, dparams = _doc_clause(doc_names)
     asql, aparams = _ai_clause(exclude_ai)
+    lsql, lparams = _lifecycle_clause(include_deprecated)
     chunks = conn.execute(
-        "SELECT * FROM document_chunks WHERE content != ''" + sql + dsql + asql,
-        params + dparams + aparams).fetchall()
+        "SELECT * FROM document_chunks WHERE content != ''" + sql + dsql + asql + lsql,
+        params + dparams + aparams + lparams).fetchall()
     if not chunks:
         return []
     ve = VectorEngine()
@@ -86,13 +116,15 @@ def _search_chunks_bigram(conn, query: str, top_k: int = 5, branches: list | Non
 
 
 def vector_search_embed(conn, query: str, top_k: int = 5, branches: list | None = None,
-                        doc_names: list | None = None, exclude_ai: bool = False) -> list:
+                        doc_names: list | None = None, exclude_ai: bool = False,
+                        include_deprecated: bool = False) -> list:
     """真向量检索：query 用 Embedder（BGE-M3 等）向量化后，与 document_chunks.embedding 余弦比较。
 
     只与相同 embed_version 的 chunk 比较（防 bigram 与真向量维度混合）；
     Embedder 不可用 / 无同版本存储向量 / 维度不一致 → 降级实时 bigram（_search_chunks_bigram）。
     doc_names：kb_scope.docs 来源文档过滤（None=不过滤）。
     exclude_ai：排除 AI 收编文档（origin='ai_generated'）——AI 建模 RAG 消费隔离。
+    include_deprecated：默认 False = 已下线（deprecated）文档的 chunk 不参与检索（G1）。
     返回结构与 search_chunks 一致（供命中预览 / GraphRAG 检索消费）。
     """
     import math as _m
@@ -100,16 +132,19 @@ def vector_search_embed(conn, query: str, top_k: int = 5, branches: list | None 
         embedder = Embedder(conn)
         qv, version = embedder.embed_with_version([query])
         if not qv or version == "bigram-tf":
-            return _search_chunks_bigram(conn, query, top_k, branches, doc_names, exclude_ai)
+            return _search_chunks_bigram(conn, query, top_k, branches, doc_names, exclude_ai,
+                                         include_deprecated)
         q = qv[0]
         sql, params = _branch_clause(branches)
         dsql, dparams = _doc_clause(doc_names)
         asql, aparams = _ai_clause(exclude_ai)
+        lsql, lparams = _lifecycle_clause(include_deprecated)
         rows = conn.execute(
             "SELECT * FROM document_chunks WHERE content != '' AND embedding != '[]' AND embed_version=?"
-            + sql + dsql + asql, [version] + params + dparams + aparams).fetchall()
+            + sql + dsql + asql + lsql, [version] + params + dparams + aparams + lparams).fetchall()
         if not rows:
-            return _search_chunks_bigram(conn, query, top_k, branches, doc_names, exclude_ai)
+            return _search_chunks_bigram(conn, query, top_k, branches, doc_names, exclude_ai,
+                                         include_deprecated)
 
         # P2-1 矩阵化加速：numpy 批量余弦（无 numpy 自动降级逐行）
         from vector_index import ChunkVectorIndex
@@ -160,11 +195,13 @@ def vector_search_embed(conn, query: str, top_k: int = 5, branches: list | None 
             })
         return out
     except Exception:
-        return _search_chunks_bigram(conn, query, top_k, branches, doc_names, exclude_ai)
+        return _search_chunks_bigram(conn, query, top_k, branches, doc_names, exclude_ai,
+                                     include_deprecated)
 
 
 def search_chunks(conn, query: str, top_k: int = 5, branches: list | None = None,
-                  doc_names: list | None = None, exclude_ai: bool = False) -> list:
+                  doc_names: list | None = None, exclude_ai: bool = False,
+                  include_deprecated: bool = False) -> list:
     """向量检索 document_chunks（真分块命中）。
 
     优先消费存储向量（BGE-M3 等真 Embedding，见 vector_search_embed）；
@@ -172,8 +209,10 @@ def search_chunks(conn, query: str, top_k: int = 5, branches: list | None = None
     branches：KB分支过滤（None=不过滤；['dev','release']=限定检索范围）。
     doc_names：kb_scope.docs 来源文档过滤（None=不过滤）。
     exclude_ai：排除 AI 收编文档（origin='ai_generated'）——AI 建模 RAG 默认排除（消费隔离）。
+    include_deprecated：默认 False = 已下线文档不进检索结果（G1 生命周期过滤）。
     """
-    return vector_search_embed(conn, query, top_k, branches, doc_names, exclude_ai)
+    return vector_search_embed(conn, query, top_k, branches, doc_names, exclude_ai,
+                               include_deprecated)
 
 
 def retry_document(conn, doc_id: int, metadata: dict | None = None) -> dict:
@@ -186,9 +225,9 @@ def retry_document(conn, doc_id: int, metadata: dict | None = None) -> dict:
     doc = conn.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
     if not doc:
         return {"doc_id": doc_id, "parse_status": "failed", "chunk_count": 0, "error": "document not found"}
-    base = os.path.join(_PROJECT_ROOT, "data", "uploads")
-    safe = re.sub(r"[^\w.\-\u4e00-\u9fa5]", "_", doc["filename"]) or "doc"
-    path = os.path.join(base, f"{doc_id}_{safe}")
+    # 副本定位走唯一权威实现（同日 2026-09-21 收敛，见 ingest.safe_doc_name）
+    from .ingest import source_copy_path
+    path = source_copy_path(doc_id, doc["filename"])
     if not os.path.exists(path):
         return {"doc_id": doc_id, "parse_status": "failed", "chunk_count": 0,
                 "error": "源文件副本不存在，无法重试（请重新上传）"}
@@ -237,9 +276,9 @@ def get_source_text(conn, doc_id: int) -> dict:
     doc = conn.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
     if not doc:
         return {"error": "document not found"}
-    base = os.path.join(_PROJECT_ROOT, "data", "uploads")
-    safe = re.sub(r"[^\w.\-\u4e00-\u9fa5]", "_", doc["filename"]) or "doc"
-    path = os.path.join(base, f"{doc_id}_{safe}")
+    # 副本定位走唯一权威实现（同日 2026-09-21 收敛，见 ingest.safe_doc_name）
+    from .ingest import source_copy_path
+    path = source_copy_path(doc_id, doc["filename"])
     if os.path.exists(path):
         with open(path, "rb") as f:
             raw = f.read()

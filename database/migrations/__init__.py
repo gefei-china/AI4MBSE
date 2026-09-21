@@ -6,7 +6,7 @@
 - columns.py  通用列补齐迁移（_migrate_columns）
 - ontology.py  本体/语义层迁移（类型、变更表、版本表、去重、IRI、时态、SWRL、推理队列、实例迁移）
 - graph.py  图谱与向量层迁移（pipeline 明细回填、graph/v2g 表、来源信息回填、三元组优化）
-- documents.py  文档/产物链路迁移（staging、SysML、profile、入库日志、抽取设置、全局文档、生命周期、产物收编）
+- documents.py  文档/产物链路迁移（staging、SysML、profile、入库日志、抽取设置、全局文档、生命周期、目录树、产物收编）
 - glossary.py  词表与种子数据（术语表、变更日志、发现项、部门、知识分类）
 - plugins.py  插件/工具/Agent 能力域迁移（内置标记、工具状态、团队、作用域、共享评审、来源、P0 能力、插件表与依赖、legacy 引用）
 - misc.py  杂项迁移（MR 状态/评论、环境变量 key、评测表、知识库 v2 增强、提交基线回填）
@@ -46,6 +46,7 @@ from .documents import (
     _migrate_profile_tables,
     _migrate_file_extract_settings,
     _migrate_docs_global,
+    _migrate_doc_folders,
     _migrate_project_ingest_logs,
     _migrate_document_lifecycle,
     _migrate_artifact_ingest,
@@ -107,6 +108,7 @@ __all__ = [
     "_migrate_profile_tables",
     "_migrate_file_extract_settings",
     "_migrate_docs_global",
+    "_migrate_doc_folders",
     "_migrate_project_ingest_logs",
     "_migrate_document_lifecycle",
     "_migrate_artifact_ingest",

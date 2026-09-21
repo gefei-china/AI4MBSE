@@ -97,6 +97,9 @@ class RetrieveIn(BaseModel):
     branch: Optional[str] = "dev"
     hybrid: Optional[bool] = False   # KB-P1: 混合检索（BM25+向量）
     top_k: Optional[int] = 5
+    # 2026-09-21 G1：默认 False = 已下线（deprecated）文档不进检索结果。
+    # 管理侧（回收站预览 / 版本对比 / 治理排查）显式传 True 才能看到。
+    include_deprecated: Optional[bool] = False
 
 
 class DataSourceIn(BaseModel):

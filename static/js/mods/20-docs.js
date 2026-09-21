@@ -160,6 +160,10 @@ async function doUploadDoc() {
     fd.append('version', version);
     fd.append('tags', tags);
     // 文档全局化：上传不再携带分支（后端统一写 global，不随分支变化）
+    // 落点（2026-09-21 目录树）：上传落到左栏当前选中的**结构目录**；
+    // 正停在智能视图/全部文档/未归类时不指定目录（= 未归类），语义与用户看到的一致。
+    const _landing = (!_docSmartView && _docFolderId !== '' && Number(_docFolderId) > 0) ? Number(_docFolderId) : 0;
+    fd.append('folder_id', String(_landing));
     try {
       const r = await fetch('/api/documents/upload', {method:'POST', body:fd}).then(x=>x.json());
       if(r.error) {
@@ -202,9 +206,10 @@ async function doUploadDoc() {
   document.getElementById('doc-batch-list').innerHTML = '';
   if(totalN > 1) {
     toast(`📦 批量上传完成：成功 ${okCount} / 失败 ${failCount}`);
-  } else if(failCount === 0) {
+  }   else if(failCount === 0) {
     const r = null; // 单文件成功 toast 已在上传中提示
   }
+  if(okCount) _docTreeStale = true;   // 新增文档 → 目录计数与总数要重拉（见 _docTreeStale 说明）
   loadDocs();
   v2gReviewLoad();
   setTimeout(()=>{ prog.style.display = 'none'; bar.style.width = '0%'; bar.style.background = 'var(--blue)'; }, 1500);
@@ -363,6 +368,16 @@ function docStateBadge(d){
 let _docs = [], _docPage = 1, _docSize = 15, _docExtMap = {};
 let _docStateFilter = '';      // P0：统一状态过滤（解析×生命周期合一，2026-09-10）
 let _docSelected = new Set();  // P0：批量废弃多选
+// 2026-09-21 目录树（「基于文件的管理」；状态声明放在本文件 = 与 _doc* 同域，避免 40-docfolders.js
+// 未加载时被 loadDocs() 引用造成 TDZ 报错）：
+//   _docFolders       目录树缓存（含 doc_count/doc_count_all）
+//   _docFolderId      选中目录（'' = 全部；0 = 未归类；>0 = 具体目录）；服务端筛选
+//   _docFolderScope   'self'（仅当前目录）| 'subtree'（含子目录）
+//   _docSmartView     智能视图 key（'' = 无）；客户端派生筛选，与 _docFolderId 互斥
+//   _docTreeStale     目录树是否需要重新拉取 —— 只在「文档归属目录 / 目录本身」变化时置真。
+//                     纯勾选/取消勾选不置真（否则每点一次复选框就多发一次目录请求）。
+let _docFolders = [], _docUncategorized = 0, _docTotalAll = 0;
+let _docFolderId = '', _docFolderScope = 'self', _docSmartView = '', _docTreeStale = true;
 async function loadDocs() {
   await loadFileExtractSettings();   // 渲染前同步开关状态（补抽入口/抽取列据此显隐）
   const _feT = document.getElementById('doc-flow-extract'); if(_feT) _feT.style.display = _fileExtractEnabled ? '' : 'none';
@@ -387,8 +402,19 @@ async function loadDocs() {
     if(_docStateFilter) {
       params.push('state=' + encodeURIComponent(_docStateFilter));
     }
+    // 2026-09-21 目录维筛选（服务端做「含子目录」展开；智能视图不走这里，见下方客户端过滤）
+    if(!_docSmartView && _docFolderId !== '') {
+      params.push('folder_id=' + encodeURIComponent(_docFolderId));
+      if(_docFolderScope === 'subtree') params.push('folder_scope=subtree');
+    }
     if(params.length) url += '?' + params.join('&');
-    const docs = await api(url);
+    let docs = await api(url);
+    // 智能视图：客户端派生谓词（服务端没有"未分类"这类参数；且列表本就是全量客户端分页，
+    // 口径一致不会出现"左侧计数 3、列表 0 条"这种自相矛盾）
+    if(_docSmartView) {
+      const v = (typeof DOC_SMART_VIEWS !== 'undefined') ? DOC_SMART_VIEWS.find(x=>x.key===_docSmartView) : null;
+      if(v) docs = (docs||[]).filter(v.test);
+    }
     _docs = docs;
     _docPage = 1;
     fillDocFilterOptions(docs);
@@ -411,6 +437,13 @@ async function loadDocs() {
       });
     } catch(e) {}
     _docExtMap = docExtMap;
+    // 目录树：仅当「文档归属 / 目录本身」变化过才重新拉取（_docTreeStale），
+    // 否则只重渲染 —— 智能视图的计数取自刚更新的 _docs，天然最新，零额外请求。
+    if(typeof loadDocFolders === 'function') {
+      if(_docTreeStale) { _docTreeStale = false; await loadDocFolders(); }
+      else renderDocFolders();
+    }
+    if(typeof renderDocCrumb === 'function') renderDocCrumb();
     renderDocs();
   } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${esc(e.message)}</div>`; }
 }
@@ -424,13 +457,20 @@ function renderDocs() {
   const pages = Math.max(1, Math.ceil(total / _docSize));
   if(_docPage > pages) _docPage = pages;
   if(!total) {
-    el.innerHTML = '<div style="padding:14px;color:var(--mut);font-size:12px;">暂无匹配文档，可调整上方筛选条件或点击右上角「📤 上传文件」上传（自动解析分块向量化）</div>';
+    // 空态要区分「真的没有」与「筛没了」——后者必须给出一步清除筛选的出口，
+    // 否则用户只看到「暂无匹配文档」，会以为是数据丢了（本仓历史上踩过同类困惑）。
+    const _scoped = _docSmartView || _docFolderId !== '';
+    el.innerHTML = _scoped
+      ? `<div style="padding:14px;color:var(--mut);font-size:12px;">
+           当前视图（${esc(_docSmartView ? ((DOC_SMART_VIEWS.find(x=>x.key===_docSmartView)||{}).label||_docSmartView) : ('目录：' + (docFolderName(_docFolderId) || _docFolderId)))}）下没有文档。
+           <button class="btn sm ghost" style="margin-left:8px;" onclick="docSelectFolder('');docSelectSmartView('')">清除筛选</button></div>`
+      : '<div style="padding:14px;color:var(--mut);font-size:12px;">暂无匹配文档，可调整上方筛选条件或点击右上角「📤 上传文件」上传（自动解析分块向量化）</div>';
     if(pagerEl) pagerEl.innerHTML = '';
     return;
   }
   const items = docs.slice((_docPage-1)*_docSize, _docPage*_docSize);
   el.innerHTML = `<div style="overflow-x:auto;"><table class="t">
-    <tr><th><input type="checkbox" ${_docSelected.size > 0 && _docSelected.size === items.length ? 'checked' : ''} onchange="toggleSelectAll(this, ${JSON.stringify(items.map(i=>i.id))})" title="全选当前页"></th><th>文件</th><th>作者</th><th>上传人</th><th>上传时间</th><th>知识类别</th><th>版本</th><th>块数</th>${_fileExtractEnabled?'<th>抽取</th>':''}<th>状态</th><th>操作</th></tr>` +
+    <tr><th><input type="checkbox" ${_docSelected.size > 0 && _docSelected.size === items.length ? 'checked' : ''} onchange="toggleSelectAll(this, ${JSON.stringify(items.map(i=>i.id))})" title="全选当前页"></th><th>文件</th><th>作者</th><th>上传人</th><th>上传时间</th><th>知识类别</th><th>所属目录</th><th>版本</th><th>块数</th>${_fileExtractEnabled?'<th>抽取</th>':''}<th>状态</th><th>操作</th></tr>` +
     items.map(d=>{
       const ex = docExtMap[d.filename];
       // 抽取列：展示既有候选统计（真实数据）；无候选时按开关状态提示「未抽取/—」
@@ -457,6 +497,13 @@ function renderDocs() {
       <td style="font-size:11px;color:var(--mut);white-space:nowrap;">${esc((d.created_at||'').slice(0,16))}</td>
       <td style="cursor:pointer;" onclick="kbSetDocCategory(${d.id}, '${esc(d.knowledge_category||'')}')" title="点击设置知识类别（设计方法知识/设计资产）">${kbCatLabel(d.knowledge_category)}</td>
 
+      <td style="font-size:11.5px;">${(()=>{
+        // 所属目录（2026-09-21）：未归类显示为可点的兜底入口——「不整理也能被发现」是既有承诺
+        const fid = d.folder_id || 0;
+        return fid > 0
+          ? `<span style="cursor:pointer;color:var(--blue-d);" onclick="docSelectFolder(${fid})" title="点击查看该目录（右键可用「移动到…」改变归属）">📁 ${esc(docFolderName(fid) || ('#'+fid))}</span>`
+          : `<span style="color:var(--mut);cursor:pointer;" onclick="docSelectFolder(0)" title="点击查看全部未归类文档">📥 未归类</span>`;
+      })()}</td>
       <td>${d.version||'-'}</td>
       <td><b>${d.chunk_count||0}</b></td>
 
@@ -476,6 +523,7 @@ function renderDocs() {
         <div class="row-menu">
           <div class="rm-item" onclick="closeRowMenus();docAddToChat(${d.id})">加入会话</div>
           <div class="rm-item" onclick="closeRowMenus();downloadDoc(${d.id})">下载</div>
+          <div class="rm-item" onclick="closeRowMenus();docMovePrompt(${d.id})" title="移动到某个结构目录（不改文件名、不重算向量）">移动到…</div>
           <div style="border-top:1px solid var(--line);margin:2px 0;"></div>
           ${lc === 'stored' ? `<div class="rm-item" onclick="closeRowMenus();commitDoc(${d.id})" style="color:var(--blue-d);font-weight:600;" title="人工确认：内容已进入图库，正式入库">正式入库</div>` : ''}
           ${d.parse_status==='completed' && _fileExtractEnabled?`<div class="rm-item" onclick="closeRowMenus();extractDoc(${d.id})">抽取</div>`:''}
@@ -744,8 +792,9 @@ function saveDocMeta() {
   });
 }
 async function deleteDoc(id) {
-  if(!(await confirmDialog('确认删除该文档？分块将级联清理。'))) return;
+  if(!(await confirmDialog('确认删除该文档？分块将级联清理。\n（原件副本也会一并清理——2026-09-21 起删除路径不再留孤儿副本）'))) return;
   await api(`/api/documents/${id}`, {method:'DELETE'});
+  _docTreeStale = true;   // 总数与目录计数都变了
   toast('已删除'); loadDocs();
 }
 // 选中的本体类型（驱动中/右栏联动）

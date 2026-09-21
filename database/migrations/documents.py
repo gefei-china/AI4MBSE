@@ -122,6 +122,24 @@ def _migrate_docs_global(conn):
     存量 dev/release 同名发布快照（publish_release 快照复制产物）合并去重，
     保留 id 最小一份（dev 主档）；发布机制不再复制文档快照（实体/关系仍按分支）。
     幂等：已存在 branch='global' 的行则跳过（迁移一次后文档/chunks 全部为 global）。
+
+    ⚠️ 2026-09-21（G5）**去重范围必须收窄到「跨分支的同名发布快照」**：
+    本迁移把「同名」定义为**重复、应当删除**；而版本链（方案 D3）把「同目录同名」定义为
+    **新版本、应当保留**。两者语义相反。原实现 `GROUP BY filename HAVING COUNT(*)>1`
+    只要同名就删，一旦在已有版本链的库上执行（`n_global == 0` 的全新部署 / 恢复后重跑），
+    会**物理删除版本历史**（连带 chunks 与 doc_metadata）。
+
+    ⚠️ **为什么不能只加 `branch != 'global'`**（这点必须先说清，否则后人会以为加了就安全）：
+    本函数上面有早退 `if n_global: return` —— 能走到去重时，库里**必然 0 行 global**。
+    所以 `WHERE branch != 'global'` 会匹配全部行，**恒等于没有条件（死代码）**。
+    真正收窄语义的是分组条件：只有**同一文件名横跨多个分支**才是"发布快照对"
+    （dev 主档 + publish_release 复制出来的 release 快照）——这正是 docstring 声明的本意。
+    同分支内的同名行**不是发布快照**，是版本链或真实重复，**一律不动**。
+
+    ⚠️ 与版本链的相容性声明（版本链落地时的 P2 前置检查项）：本迁移**与版本链不相容**。
+    版本链若采纳 D3（历史版 = documents 行 + `version_no`/`root_document_id`），
+    任何"按 filename 去重"的清理都必须显式排除"同属一条链"的行（按 `root_document_id` 判定），
+    不可再用 filename 作去重键 —— 本函数已按此收窄，但**仍不是版本链安全的**（见下）。
     """
     # 已迁移判断：存在 global 文档即视为已执行（去重只针对存量非 global 行）
     n_global = conn.execute(
@@ -129,16 +147,21 @@ def _migrate_docs_global(conn):
     if n_global:
         conn.commit()
         return
-    # 1) 同名快照去重：按 filename 分组保留 id 最小（dev 主档先上传），其余删除（连带 chunks/元数据）
+    # 1) 同名快照去重：**仅限「同名且跨分支」**（= 真发布快照对），按 filename 分组保留 id 最小
+    #    （dev 主档先上传），其余删除（连带 chunks/元数据）。
+    #    COUNT(DISTINCT branch)>1 是判断"是否发布快照对"的充要条件：
+    #    单分支内的多条同名行不是快照复制产物，删了就是删用户数据（G5）。
     dups = conn.execute(
-        "SELECT filename FROM documents GROUP BY filename HAVING COUNT(*)>1").fetchall()
+        "SELECT filename FROM documents WHERE branch != 'global' "
+        "GROUP BY filename HAVING COUNT(*)>1 AND COUNT(DISTINCT branch)>1").fetchall()
     removed = 0
     for r in dups:
         keep = conn.execute(
-            "SELECT id FROM documents WHERE filename=? ORDER BY id ASC LIMIT 1",
+            "SELECT id FROM documents WHERE filename=? AND branch != 'global' ORDER BY id ASC LIMIT 1",
             (r["filename"],)).fetchone()[0]
         for d in conn.execute(
-                "SELECT id FROM documents WHERE filename=? AND id!=?", (r["filename"], keep)).fetchall():
+                "SELECT id FROM documents WHERE filename=? AND branch != 'global' AND id!=?",
+                (r["filename"], keep)).fetchall():
             conn.execute("DELETE FROM document_chunks WHERE document_id=?", (d["id"],))
             conn.execute("DELETE FROM doc_metadata WHERE document_id=?", (d["id"],))
             conn.execute("DELETE FROM documents WHERE id=?", (d["id"],))
@@ -148,6 +171,63 @@ def _migrate_docs_global(conn):
     conn.execute("UPDATE document_chunks SET branch='global'")
     print(f"[init_db] 迁移: 文件管理全局化——去重 {removed} 份同名快照, 文档/chunks 分支统一 'global'")
     conn.commit()
+
+
+def _migrate_doc_folders(conn):
+    """文档目录树 + 文档挂目录（2026-09-21，方案 §4.1 唯一 DDL）。
+
+    需求：文档库「基于文件的管理」——目录树左栏（人工结构）+ 文档归属目录；
+    文档仍是**全局资产**，不按分支切分（故本表**不带 branch 列**，唯一约束也不含 branch）。
+
+    设计要点（每条都对应一个已实测的坑）：
+    1) **`parent_id` 用 0 表示根，不用 NULL**（D1）。SQLite 的 UNIQUE 把 NULL 视为互不相等，
+       于是 `UNIQUE(parent_id, name)` 在 `parent_id IS NULL` 时**完全失效** ——
+       隔离库实测：根级连插两个 ('规范') 两次都成功，同名根目录可以有无限个。
+       哨兵 0 写法则被正确拦截（同一实测：第二次抛 IntegrityError）。
+    2) 仍保留 `ux_doc_folders_name_parent` 表达式唯一索引作**第二道闸**：
+       万一有人把 parent_id 写成 NULL（历史数据 / 手写 SQL），表达式索引仍能拦住同名
+       —— 因为 `IFNULL(NULL,0)` 把两个 NULL 归一成同一个 0。
+    3) `path` 是物化路径（'/规范/热管理/'），供「含子目录」前缀查询与面包屑；
+       重命名/移动时由仓储层级联刷新（不由 DB 触发器维护）。
+    4) `sort` 为同级手排；`domain` 是**目录级默认域**，上传时预填，不参与检索过滤（决策点 B4=A）。
+    5) `documents.folder_id` 同款哨兵：**0 = 未归类**（不是 NULL）——与 parent_id 一致，
+       避免再引入一处"NULL 语义"造成的过滤遗漏（`folder_id=0` 的等值查询是可靠的）。
+    6) 向后兼容：老库 documents 全部落 0 = 未归类，既有的列表/检索/统计行为完全不变。
+
+    幂等：CREATE TABLE IF NOT EXISTS + 表达式索引 IF NOT EXISTS + _add 只补缺失列。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS doc_folders (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT NOT NULL,
+        parent_id   INTEGER NOT NULL DEFAULT 0,     -- 0 = 根（D1：不用 NULL，否则 UNIQUE 失效）
+        path        TEXT NOT NULL DEFAULT '/',      -- 物化路径，供「含子目录」前缀查询与面包屑
+        sort        INTEGER DEFAULT 0,
+        domain      TEXT DEFAULT '',                -- 目录级默认域（上传预填；不参与检索过滤）
+        created_by  TEXT DEFAULT '',
+        created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(parent_id, name)                     -- ⚠️ 仅因 parent_id NOT NULL 才有效（见 1）
+    )""")
+    # 防御性第二道闸：即便 parent_id 被写成 NULL，同名仍不允许（见 2）
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_doc_folders_name_parent "
+              "ON doc_folders(name, IFNULL(parent_id, 0))")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_doc_folders_parent ON doc_folders(parent_id, sort)")
+
+    def _add(table: str, column: str, ddl: str) -> None:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        if not exists:
+            return
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN `{column}` {ddl}")
+            print(f"[init_db] 迁移: {table} 增加列 {column}")
+
+    # 文档挂目录（0 = 未归类）——列级增量，向后兼容
+    _add("documents", "folder_id", "INTEGER NOT NULL DEFAULT 0")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(folder_id)")
+    conn.commit()
+    print("[init_db] 迁移: 文档目录树 doc_folders + documents.folder_id（0=未归类）已建立")
 
 def _migrate_project_ingest_logs(conn):
     """工程维度入库批次记录表（工程归档 → 三元组 → 个人分支图库）。
