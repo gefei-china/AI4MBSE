@@ -253,6 +253,7 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     from knowledge_pipeline import _branch_clause, _doc_clause
 
     # P1-4（2026-09-21）：混合检索参数配置化（rag.* 组；默认值与改动前硬编码一致）
+    # P1-4b（2026-09-21）：新增 rag.recall_k —— 每路召回宽度从 top_k*2 解耦（此前 top_k 兼任两职）
     try:
         from core import config as _cfg
         _rrf_k = int(_cfg.get("rag", "rrf_k", 60))
@@ -260,9 +261,11 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
         _hyde_w = float(_cfg.get("rag", "hyde_weight", 0.05))
         _conf_high = float(_cfg.get("rag", "confidence_high", 0.70))
         _conf_mid = float(_cfg.get("rag", "confidence_mid", 0.45))
-        _rerank_cand = int(_cfg.get("rag", "rerank_max_candidates", 8))
+        _rerank_cand = int(_cfg.get("rag", "rerank_max_candidates", 10))
+        _recall_k = int(_cfg.get("rag", "recall_k", 0)) or top_k * 2   # 0/缺省 → 回落旧行为
     except Exception:
-        _rrf_k, _hyde_on, _hyde_w, _conf_high, _conf_mid, _rerank_cand = 60, True, 0.05, 0.70, 0.45, 8
+        _rrf_k, _hyde_on, _hyde_w, _conf_high, _conf_mid = 60, True, 0.05, 0.70, 0.45
+        _rerank_cand, _recall_k = 10, top_k * 2
 
     def _domain_clause(d: str | None):
         if not d or d == "unknown" or d == "all":
@@ -306,7 +309,7 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
             if vrows:
                 allowed_ids = {vr["id"] for vr in vrows}
                 from vector_index import ChunkVectorIndex
-                mat = ChunkVectorIndex.search(conn, q, version, top_k=top_k * 2, only_ids=allowed_ids)
+                mat = ChunkVectorIndex.search(conn, q, version, top_k=_recall_k, only_ids=allowed_ids)
                 if mat is not None:
                     vec_scores = {cid: s for s, cid in mat}
                 else:  # 逐行降级（原逻辑）
@@ -330,7 +333,7 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
                 vec_scores[r["id"]] = s
 
     # BM25 侧（P1-3：索引已按范围缓存，命中零重建；未命中分页流式构建）
-    bm25_hits = bm25.search(query, top_k=top_k * 2)
+    bm25_hits = bm25.search(query, top_k=_recall_k)
     bm25_scores = {h["chunk_id"]: h["score"] for h in bm25_hits}
 
     # P2-1 Reverse HyDE 兜底：当向量/BM25 命中过少时，用 chunk 假设问题匹配（用户说法≠文档措辞）
@@ -398,8 +401,8 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     vec_ranked = sorted(vec_scores.items(), key=lambda x: x[1], reverse=True)
     bm25_ranked = sorted(bm25_scores.items(), key=lambda x: x[1], reverse=True)
     rrf = _rrf(
-        {cid: i + 1 for i, (cid, _) in enumerate(vec_ranked[:top_k * 2])},
-        {cid: i + 1 for i, (cid, _) in enumerate(bm25_ranked[:top_k * 2])},
+        {cid: i + 1 for i, (cid, _) in enumerate(vec_ranked[:_recall_k])},
+        {cid: i + 1 for i, (cid, _) in enumerate(bm25_ranked[:_recall_k])},
         k=_rrf_k,
     )
     if not rrf:

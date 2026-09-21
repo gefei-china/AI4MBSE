@@ -185,12 +185,18 @@ class ContextMixin:
                          + "、".join(e["name"] for e in knowledge["assets"][:5]))
         # 缺口A：分块命中优先（真实文档片段），旧文档粗匹配兜底
         # 引用可解释性：编号【来源n】与前端 citations 数组 1 基对齐，LLM 按 [n] 标注引用
+        # P1-4b（2026-09-21）：注入条数配置化（rag.inject_k，默认 3 = 改动前硬编码值）
         chunk_hits = retrieval.get("chunk_hits") or []
+        try:
+            from core import config as _cfg
+            _inject_k = int(_cfg.get("rag", "inject_k", 3)) or 3
+        except Exception:
+            _inject_k = 3
         if chunk_hits:
-            for i, c in enumerate(chunk_hits[:3], 1):
+            for i, c in enumerate(chunk_hits[:_inject_k], 1):
                 parts.append(f"【来源{i}】{c.get('source_doc','')} §{c.get('chunk_index',0)}: {c.get('content','')}")
         else:
-            for d in retrieval["vector_docs"][:3]:
+            for d in retrieval["vector_docs"][:_inject_k]:
                 parts.append(f"[向量] {d.get('filename','')} ({d.get('parse_status','')})")
         # 建模独立性：检索命中有限时追加指引——代码元素完整性不依赖检索数量
         n_entities = len(retrieval.get("entities") or [])

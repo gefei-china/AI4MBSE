@@ -5,6 +5,26 @@
 from .common import *
 
 
+def ctx_budget_tokens(kind: str, fallback_char_key: str, fallback: int) -> int:
+    """P1-4b（2026-09-21）上下文预算取值：**占比制优先 → 绝对值 → 字符版兜底**。
+
+    kind ∈ {'retrieval','history'}。占比键 `context.budget_{kind}_ratio` > 0 时，
+    以「budget_window_tokens × 占比」为准（换模型自适应，依据调研 §4.3）；
+    否则回落 T6 绝对值键 `budget_{kind}_tokens`（0 则再回落字符版键）。
+    与既有「token 项填 0 回退字符版」的兼容模式同构。任何异常返回 fallback。
+    """
+    try:
+        from core import config as _cfg
+        ratio = float(_cfg.get("context", f"budget_{kind}_ratio", 0) or 0)
+        if ratio > 0:
+            win = int(_cfg.get("context", "budget_window_tokens", 65536) or 65536)
+            return max(16, int(win * ratio))
+        return (int(_cfg.get("context", f"budget_{kind}_tokens", 0))
+                or int(_cfg.get("context", fallback_char_key, fallback)))
+    except Exception:
+        return fallback
+
+
 class HistoryMixin:
     """附件加载、历史检索、话题标注与上下文预算。"""
 
@@ -139,8 +159,9 @@ class HistoryMixin:
         sum_blocks = []
         used = 0
         # T6：预算改 token 驱动（budget_history_tokens 优先，旧字符配置兜底）
+        # P1-4b：改为占比制优先（context.budget_history_ratio > 0 时按窗口比例算）
         from core.token_counter import count_tokens as _ct
-        budget_tok = int(_cfg.get("context", "budget_history_tokens", 0)) or int(_cfg.get("context", "budget_history_chars", 3000))
+        budget_tok = ctx_budget_tokens("history", "budget_history_chars", 3000)
         raw_cap = int(budget_tok * 0.5)
         pull_cap = int(budget_tok * 0.75)
 
@@ -464,13 +485,14 @@ class HistoryMixin:
 
         T6 升级：以 token 预算为准（budget_retrieval_tokens / budget_history_tokens），
         旧字符配置（budget_retrieval_chars 等）保留为估算回退路径兜底。
+        P1-4b：占比制优先（context.budget_{retrieval,history}_ratio > 0 时按窗口比例算）。
         返回裁剪后的 system_prompt。检索区保留头部（最相关），历史区保留尾部（最近）。
         """
         try:
             from core import config as _cfg
             from core.token_counter import count_tokens
-            retr_tok = int(_cfg.get("context", "budget_retrieval_tokens", 0)) or int(_cfg.get("context", "budget_retrieval_chars", 4000))
-            hist_tok = int(_cfg.get("context", "budget_history_tokens", 0)) or int(_cfg.get("context", "budget_history_chars", 3000))
+            retr_tok = ctx_budget_tokens("retrieval", "budget_retrieval_chars", 4000)
+            hist_tok = ctx_budget_tokens("history", "budget_history_chars", 3000)
             if retrieval_text:
                 system_prompt = system_prompt.replace(
                     retrieval_text,

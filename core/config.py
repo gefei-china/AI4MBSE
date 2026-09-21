@@ -180,8 +180,13 @@ DEFAULT_CONFIG = {
         "topic_boundary_keep": 2,       # 话题切换边界保留上一话题原文条数（保证切换语义连续）
         "topic_retrieve_topk": 6,       # 会话内语义拉回的历史片段条数
         "topic_retrieve_threshold": 0.15,  # 语义拉回最低相似度（低于不注入；对齐 intent 语义兜底经验值）
-        "topic_retrieve_threshold_dense": 0.35,  # 语义拉回阈值（真 embedding 路独立量纲；bigram 路用 topic_retrieve_threshold）
-        "topic_group_match_dense": 0.30,  # 当前话题组匹配阈值（真 embedding 路；bigram 路固定 0.12）
+        # P1-4b（2026-09-21）标定修订：原 0.35 为经验值。标定脚本 tools/_topic_threshold_calibrate.py
+        # （分位等价映射，真 embedding dim=1024，153 条真实 query）实测：**0.35 的判定通过率高达 99.3%**
+        # （≈形同虚设），等价 dense 阈值为 0.6022（下界，bigram 路话题域加权未复现）。
+        # 与行业经验表「有一定关联」档 0.5–0.7 一致 → 按「宁宽松勿严格」取下沿 0.50。
+        # ⚠️ 标定语料候选集偏小（会话历史），方向可信、数值待真实多话题语料重标。
+        "topic_retrieve_threshold_dense": 0.50,
+        "topic_group_match_dense": 0.50,  # 同上标定：原 0.30 通过率 **100%**（完全失效），等价 dense 0.6023
         # 2026-09-19 标定：`_match_flows` 语义补召门（词法零命中时才生效）——
         #   bigram 路沿用 0.5；dense 路用此值。实测（agent_flows 18 条候选 × 83 query）：
         #   bigram top1 p90=0.4267 / max=0.6092；0.5 的等价 dense 分位 = 0.7855（正例率 8.4%）。
@@ -212,6 +217,15 @@ DEFAULT_CONFIG = {
         "budget_history_chars": 3000,   # 历史区上限（摘要已压缩，兜底裁剪）
         "budget_retrieval_tokens": 2600, # T6 token 驱动预算：检索区上限（保头，保留最相关）
         "budget_history_tokens": 2000,  # T6 token 驱动预算：历史区上限（当前话题原文50%/语义拉回75%/分话题摘要剩余）
+        # ── 占比制预算（2026-09-21 P1-4b 新增；依据调研 §4.3）─────────────────────
+        # 上述两个 token 预算是**绝对数**，换模型（ctx 65536 → 更大窗口）时不会自适应。
+        # 行业做法是按上下文窗口占比表达（Codex `model_auto_compact_token_limit` ≈ 窗口 50%；
+        # Claude Code 自动压缩 ≈ 92%、社区推荐 80%）。此处新增占比键：
+        #   占比 > 0 → 用「window × ratio」，绝对值键被忽略；ratio = 0（默认）→ 回落绝对值键。
+        # 与既有「token 项填 0 回退字符版」的兼容模式同构，**默认 0 即零行为漂移**。
+        "budget_window_tokens": 65536,  # 占比制分母：上下文窗口基准（当前 provider id=1 实测 65536）
+        "budget_retrieval_ratio": 0.0,  # 检索区占窗口比例（0=关闭，用 budget_retrieval_tokens）
+        "budget_history_ratio": 0.0,    # 历史区占窗口比例（0=关闭，用 budget_history_tokens）
     },
     "reasoning": {
         "direct_merge": True,        # 推理结果直接并入图库（跳过审核队列）；false=恢复「提交审核→审核队列」门禁
@@ -290,11 +304,20 @@ DEFAULT_CONFIG = {
     "rag": {
         # P1-4（2026-09-21）：检索路由与混合检索参数配置化（此前散落硬编码，仅 rerank_enabled 已有配置）。
         # 消费点：agent/rag.py（GraphRAG 路由阈值/检索条数/图谱置信权重）、
-        #         knowledge_engine.hybrid_search（RRF 常数/HyDE/置信等级/重排候选数）、
-        #         services/rag_rerank.py（LLM 重排开关）。
-        # 检索链路：图谱优先 → 置信不足走向量混合检索（BM25+向量 RRF 融合 + HyDE 补召）→ LLM 重排。
+        #         knowledge_engine.hybrid_search（RRF 常数/HyDE/置信等级/重排候选数/召回宽度）、
+        #         services/rag_rerank.py（LLM 重排开关）、agent/pipeline_parts/context.py（注入条数）。
+        # 检索链路：图谱优先 → 置信不足走向量混合检索（BM25+向量 RRF 融合 + HyDE 补召）→ LLM 重排 → 注入。
+        # P1-4b（2026-09-21）：按 docs/AI上下文配置项-依据与行业对标-20260921.md §4.1 拆分层旋钮、修倒挂。
         "route_threshold": 0.75,     # 检索路由阈值：图谱置信度 ≥ 阈值 → 纯图路由（跳过向量检索）
-        "top_k": 4,                  # 混合检索返回条数（与消费侧 chunk_hits[:3] 对齐）
+        # ── 检索漏斗分层（2026-09-21 P1-4b 新增）───────────────────────────────
+        # 背景：此前只有 top_k 一个旋钮，它同时兼任「每路召回宽度」「RRF 融合池大小」
+        #       两职（内部按 top_k*2 召回），而 rag.rerank_max_candidates=8 又大于 top_k=4
+        #       → 送进 LLM 重排的候选被 top_k 卡死在 4 条，重排无选择空间（结构倒挂）。
+        #       行业标准是「广召回 20-50（每路）→ 融合 20-50 → 重排 20-50 → 窄注入 3-8」，
+        #       故拆成四层独立旋钮，约束：recall_k ≥ top_k ≥ rerank_max_candidates ≥ inject_k。
+        "recall_k": 20,              # 每路（BM25 / 向量）召回宽度；0 = 回落旧行为 top_k*2
+        "top_k": 20,                 # RRF 融合后保留的候选池（= 送 LLM 重排的池子）
+        "inject_k": 3,               # 最终注入 prompt 的片段条数（消费侧 chunk_hits[:inject_k]）
         "fallback_top_k": 5,         # 混合检索异常时 search_chunks 兜底条数
         "rrf_k": 60,                 # RRF 融合常数（Σ1/(k+rank)；越大排名差异对得分影响越平缓，行业常用 60）
         "hyde_enabled": True,        # Reverse HyDE 兜底开关（chunk 假设问题匹配；用户措辞≠文档措辞时补召回）
@@ -305,7 +328,7 @@ DEFAULT_CONFIG = {
         "confidence_high": 0.70,     # 命中置信等级「高」分界（真向量相似度口径）
         "confidence_mid": 0.45,      # 命中置信等级「中」分界
         "rerank_enabled": True,      # LLM Rerank 重排开关（LLM 不可用/超时静默回退原排序）
-        "rerank_max_candidates": 8,  # 送 LLM 重排的候选上限（其余保底置后）
+        "rerank_max_candidates": 10, # 送 LLM 重排的候选上限（应 ≤ top_k，否则上限形同虚设）；0 = 全部候选
     },
     "chunking": {
         "default_size": 600,         # 默认分块大小（字符，≈500-650 token 中文）
@@ -509,8 +532,8 @@ CONFIG_SCHEMA = {
         "topic_boundary_keep":     {"type": "int", "desc": "话题切换边界保留上一话题原文条数"},
         "topic_retrieve_topk":     {"type": "int", "desc": "会话内语义拉回片段条数"},
         "topic_retrieve_threshold": {"type": "float", "desc": "语义拉回最低相似度"},
-        "topic_retrieve_threshold_dense": {"type": "float", "desc": "语义拉回阈值（真 embedding 路，量纲与 bigram 不同）"},
-        "topic_group_match_dense": {"type": "float", "desc": "当前话题组匹配阈值（真 embedding 路）"},
+        "topic_retrieve_threshold_dense": {"type": "float", "desc": "语义拉回阈值（真 embedding 路；已按分位等价映射标定修订为 0.5）"},
+        "topic_group_match_dense": {"type": "float", "desc": "当前话题组匹配阈值（真 embedding 路；已标定修订为 0.5）"},
         "semantic_fallback_gate_dense": {"type": "float", "desc": "工作流语义补召门（dense 路；bigram 路固定 0.5，实测等价 0.79）"},
         "model_context_chars":     {"type": "int", "desc": "建模上下文注入上限（字符，当前模型状态工作记忆）"},
         "model_context_entities":  {"type": "str", "desc": "建模上下文既有实体注入形态：count(只报数量,默认)/names(列名字)/none"},
@@ -522,6 +545,9 @@ CONFIG_SCHEMA = {
         "budget_history_chars":    {"type": "int", "desc": "历史区预算（摘要后兜底裁剪）"},
         "budget_retrieval_tokens": {"type": "int", "desc": "T6 检索区 token 预算（保头保留最相关，0=回退字符版）"},
         "budget_history_tokens":   {"type": "int", "desc": "T6 历史区 token 预算（话题原文/语义拉回/摘要分区复用，0=回退字符版）"},
+        "budget_window_tokens":    {"type": "int", "desc": "占比制分母：上下文窗口基准 token（换模型时同步）"},
+        "budget_retrieval_ratio":  {"type": "float", "desc": "检索区占窗口比例（>0 覆盖绝对值键；0=关闭占比制）"},
+        "budget_history_ratio":    {"type": "float", "desc": "历史区占窗口比例（>0 覆盖绝对值键；0=关闭占比制）"},
     },
     "reasoning": {
         "direct_merge":            {"type": "bool", "desc": "推理结果直接并入图库（跳过审核队列）；false=恢复提交审核门禁"},
@@ -561,7 +587,9 @@ CONFIG_SCHEMA = {
     },
     "rag": {
         "route_threshold":       {"type": "float", "desc": "检索路由阈值：图谱置信度≥阈值走纯图路由（跳过向量检索）"},
-        "top_k":                 {"type": "int",   "desc": "混合检索返回条数（与消费侧 chunk_hits[:3] 对齐）"},
+        "recall_k":              {"type": "int",   "desc": "每路（BM25/向量）召回宽度（0=回落 top_k*2）"},
+        "top_k":                 {"type": "int",   "desc": "RRF 融合后保留的候选池（送 LLM 重排）"},
+        "inject_k":              {"type": "int",   "desc": "最终注入 prompt 的片段条数"},
         "fallback_top_k":        {"type": "int",   "desc": "混合检索异常时 search_chunks 兜底条数"},
         "rrf_k":                 {"type": "int",   "desc": "RRF 融合常数（Σ1/(k+rank)，越大排名差异越平缓；行业常用 60）"},
         "hyde_enabled":          {"type": "bool",  "desc": "Reverse HyDE 兜底开关（chunk 假设问题匹配补召回）"},
@@ -572,7 +600,7 @@ CONFIG_SCHEMA = {
         "confidence_high":       {"type": "float", "desc": "命中置信等级「高」分界（真向量相似度口径）"},
         "confidence_mid":        {"type": "float", "desc": "命中置信等级「中」分界"},
         "rerank_enabled":        {"type": "bool",  "desc": "LLM Rerank 重排开关（失败静默回退原排序）"},
-        "rerank_max_candidates": {"type": "int",   "desc": "送 LLM 重排的候选上限（其余保底置后）"},
+        "rerank_max_candidates": {"type": "int",   "desc": "送 LLM 重排的候选上限（应 ≤ top_k，0=全部候选）"},
     },
     "chunking": {
         "default_size":      {"type": "int",   "desc": "默认分块大小（字符，中文 ≈500-650 token）"},
