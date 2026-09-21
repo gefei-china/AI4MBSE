@@ -1,12 +1,32 @@
 # mbse_system 依赖清单（2026-09-18 新增）
 #
 # 来源：开发机 .venv 的 `pip freeze` 全量快照（含传递依赖），非人工整理 —— 保证可复现，
-#       但不区分直接 / 间接依赖。当前 44 条（2026-09-19 补入 pdfplumber 及其传递依赖
-#       cffi / cryptography / pdfminer.six / pycparser / pypdfium2，共 6 条）。
+#       但不区分直接 / 间接依赖。当前 54 条（2026-09-21 补入 OCR 链路 10 条，见下）。
 # 环境：Python 3.13.14（见 .venv/pyvenv.cfg）。
 #
 # ⚠️ 本仓库约定「私有化离线部署，不引入外部 CDN / 构建链 / 新依赖」（AGENTS.md 铁律 4）：
 #    新增依赖前请先确认无替代方案。
+#
+# ── 2026-09-21：OCR 兜底（扫描版 PDF / 图片），破铁律 4 的第 1 次例外 ──
+# 背景：knowledge_pipeline/extract.py 对图片返回 46 字符占位串，该串非空 → 通过 ingest 的
+#      空值守卫 → 照常分块入库**污染向量库**（且 parse_status='completed'，数据上查不出）；
+#       扫描版 PDF 抽 0 字直接判 failed 且不给原因。前端 index.html 上传区已承诺「需 OCR」，
+#       docs/需求符合性核查-20260921.md 将其定为 ★ 级需求缺口（FR-UI-1 图像输入未实现）。
+# 选型：rapidocr-onnxruntime（PP-OCRv3 模型的 ONNX 版）——
+#       · **模型内置包内**（det 2.4M + rec 11M + cls 0.57M），**零网络下载**，加载 0.28s
+#       · 纯 ONNX Runtime CPU 推理，**无 torch / 无 paddle**（PaddleOCR 需 paddlepaddle，
+#         对 Python 3.13 支持差、wheel 巨大，故不选）
+#       · 授权 Apache-2.0（onnxruntime MIT / opencv Apache-2.0）→ 可商用私有化
+#       · PDF→位图渲染复用**既有依赖** pypdfium2 + pillow，这部分零新增
+# 实测（2026-09-21，本机）：中英数符号混排识别置信度 0.79~0.92；
+#       OCR 1.4~4.7 s/页 vs 文本层 0.01~0.06 s/页 → **慢 50~200 倍**
+#       → 故 extract.py 只对**文本层稀疏的页**补 OCR（extract.ocr_min_chars_per_page，默认 100），
+#         **绝不可无差别全量 OCR**（691 页规范全跑要 30~50 分钟）。
+# 体积：约 10 条 / 140 MB（已用 opencv-python-headless 替代 opencv-python，省约 70MB）。
+# ⚠️ pip 会提示 "rapidocr-onnxruntime requires opencv-python>=4.5.1.48, which is not installed"
+#    —— 这是**预期**的：我们用 headless 版替代，cv2 模块功能完整（仅缺 GUI 函数），
+#    故 rapidocr 以 --no-deps 安装、其依赖手工显式列出。请勿为消警而改装完整版 opencv-python。
+# 回退开关：config 的 extract.ocr_enabled=false → 完全回到改动前行为（A/B 对比用）。
 
 annotated-doc==0.0.5
 annotated-types==0.8.0
@@ -19,6 +39,7 @@ colorama==0.4.6
 cryptography==50.0.1
 et_xmlfile==2.0.0
 fastapi==0.141.1
+flatbuffers==25.12.19
 h11==0.16.0
 html5rdf==1.2.1
 httpcore==1.0.9
@@ -26,6 +47,9 @@ httpx==0.28.1
 idna==3.18
 iniconfig==2.3.0
 lxml==6.1.1
+numpy==2.5.3
+onnxruntime==1.30.0
+opencv-python-headless==5.0.0.93
 openpyxl==3.1.5
 owlrl==7.6.2
 packaging==26.3
@@ -34,19 +58,25 @@ pdfplumber==0.11.10
 pillow==12.3.0
 pluggy==1.6.0
 prettytable==3.18.0
+protobuf==7.36.2
+pyclipper==1.4.0
+pycparser==3.0
 pydantic==2.13.4
 pydantic_core==2.46.4
 Pygments==2.21.0
 pyoxigraph==0.5.10
-pycparser==3.0
 pyparsing==3.3.2
 pypdfium2==5.13.0
 pyshacl==0.40.1
 pytest==9.1.1
 python-docx==1.2.0
 python-multipart==0.0.32
+PyYAML==6.0.3
+rapidocr-onnxruntime==1.2.3
 rdflib==7.6.0
 reportlab==5.0.0
+shapely==2.1.2
+six==1.17.0
 starlette==1.6.0
 typing-inspection==0.4.3
 typing_extensions==4.16.0
@@ -61,3 +91,7 @@ wcwidth==0.8.3
 # pdfplumber 曾属同一批「已 import 但未安装」的可选依赖；2026-09-19 已安装并升为显式依赖
 # （它在 knowledge_pipeline/extract.py 的 try/except 内，缺失时 _extract_pdf 静默返回空串
 #  → 所有 PDF 入库都被判 parse_status='failed'，实测 5 份 PDF 全部如此）。
+#
+# 2026-09-21：rapidocr-onnxruntime 同理属「缺装即静默降级」——但已升为显式依赖。
+# 缺失时 knowledge_pipeline/ocr.py 的 available() 返回 (False, 原因)，extract_text_ex
+# 把原因写进 documents.error_msg（前端 20-docs.js 直接展示），不再静默。

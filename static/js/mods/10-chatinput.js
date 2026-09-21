@@ -273,14 +273,30 @@ const ARCHIVE_EXTS = ['zip','rar','7z','tar','gz'];
 const PARSE_DOC_EXTS = ['txt','md','csv','json','xml','yaml','yml','log','docx','doc','pdf','xlsx','xls','pptx','ppt'];
 function currentChatProvider(){
   const id = Number(document.getElementById('llm-providers')?.value) || 0;
-  return _chatProvidersCache.find(p=>p.id===id) || null;
+  if(id) return _chatProvidersCache.find(p=>p.id===id) || null;
+  // 未显式选择 → 会话实际用的就是「全局默认对话模型」（后端 llm._load_provider_cfg 的选取规则：
+  // model_type='chat' AND is_default=1）。原先直接 return null，会让下面 modelSupportsVision 的
+  // `if(!p) return true` 静默放行 → **提示说的和实际会不会发图对不上**。回落以对齐二者。
+  return _chatProvidersCache.find(p=>p.model_type==='chat' && p.is_default===1)
+      || _chatProvidersCache.find(p=>p.model_type==='chat') || null;
 }
-function providerProviderTags(p){ try{ return JSON.parse((p&&p.tags)||'[]')||[]; }catch(e){ return []; } }
+// ⚠️ 2026-09-21 修：API 返回的 tags 是**数组**（如 ['chinese','fast']），原实现对数组做 JSON.parse ——
+//    JSON.parse(String(['vision'])) === JSON.parse('vision') → 抛 SyntaxError → 恒返回 []。
+//    结果是下面 modelSupportsVision 的 tags 分支**从未生效**，一直静默只靠模型名启发式。
+function providerProviderTags(p){
+  try{
+    let t = (p && p.tags);
+    if(typeof t === 'string') t = JSON.parse(t || '[]');   // 兼容字符串形态
+    if(!Array.isArray(t)) t = t ? [t] : [];
+    return t;
+  }catch(e){ return []; }
+}
 function modelSupportsVision(p){
-  if(!p) return true;  // 未选模型（默认模型）：无法判定，不拦截
+  if(!p) return true;  // 无 provider 配置（Mock 兜底）：无法判定，不拦截
   const tags = providerProviderTags(p);
+  // 字符集与后端 llm/__init__.py 的 VISION_TAG_RE 同套（用户标 'vision' 或 '多模态' 两侧都认）
   if(tags.some(t=>/vision|image|multimodal|多模态|图片/i.test(String(t)))) return true;
-  // 模型名启发式：常见多模态 chat 模型
+  // 模型名启发式：常见多模态 chat 模型（仅用于「善意提示」，私有部署命名可能漏判，故以 tags 为准）
   return /gpt-4o|gpt-4\.1|gpt-5|o[34]|vision|qwen[22?.]*vl|glm-4v|glm-5v|claude|gemini|doubao.*vision|grok-[24]|kimi/i.test(String(p.model_name||''));
 }
 function attachFormatFeedback(f, r){

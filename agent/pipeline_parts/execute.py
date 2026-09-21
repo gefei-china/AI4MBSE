@@ -103,9 +103,21 @@ class ExecuteMixin:
 
         # 闭环：上传资料解析 → 文本（优先依据注入 + 检索扩散）
         att_blocks, att_parsed, att_skipped = self._load_attachment_text(attachments)
+        # P2 视觉通道（2026-09-21）：图片附件 → 多模态块。
+        # 双判据（vision.enabled 开关 + provider 声明视觉能力），任一不满足则**留痕降级**
+        # （原因写进 att_vision，随 attachments_info 下发），绝不静默丢弃。
+        att_images, att_vision = self._prepare_attachment_vision(attachments, effective_provider)
+        if att_vision.get("skipped"):
+            att_skipped = list(att_skipped) + list(att_vision["skipped"])
+        if att_images:
+            # 让模型知道「本条消息带了图」——否则它可能只顺着文本作答（图在 content 数组里但不自知）
+            att_blocks = [f"【图片附件】{'、'.join(att_vision.get('loaded') or [])}"
+                          "（图像内容已随本条消息一并提供，请直接查看）"] + att_blocks
         att_text = "\n\n".join(att_blocks[:4]) if att_blocks else ""   # 注入 prompt（限量，避免超长）
         retrieval_att = "\n\n".join(att_blocks) if att_blocks else "" # 完整全文（供附件语义/词法召回）
         att_parsed_info = {"parsed": att_parsed, "skipped": att_skipped[:5]}
+        if att_vision.get("images"):
+            att_parsed_info["vision"] = att_vision   # 留痕：这次图片到底进没进模型、为什么
 
         # 闭环：基于用户内容匹配已保存工作流（名称/描述/节点标签）
         matched_flows = self._match_flows(user_input + (" " + att_text[:500] if att_text else ""))
@@ -244,9 +256,14 @@ class ExecuteMixin:
             + f"检索到的互联数据：\n{context_text}"
             + (f"\n\n{report_prompt}" if report_prompt else "")
         )
+        # P2 视觉通道：图片以多模态 content 块随 user 消息下发
+        # （openai_compat 对 messages 原样透传，故 provider 层无需改动）
+        _user_content = user_input
+        if att_images:
+            _user_content = [{"type": "text", "text": user_input}] + att_images
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_input},
+            {"role": "user", "content": _user_content},
         ]
         # P1a-2 上下文预算分区：检索/历史区超限裁剪（防超窗，对齐 Context Spec）
         try:
@@ -282,7 +299,9 @@ class ExecuteMixin:
         tools_def = self._build_tools_def(intent, user_input, user)
         # P2：语义缓存——纯问答命中直返（构造等价 LLM 响应，复用后续落库/审计流程）
         _cache_hit = None
-        if intent in ("chat", "knowledge_qa") and not att_blocks and not tools_def:
+        # P2：att_images 非空时强制不命中缓存 —— 语义缓存的键只有 user_input，它看不见图片，
+        # 若命中会把「带图的提问」当成纯文本问题直接返回旧答案（图等于白传）。
+        if intent in ("chat", "knowledge_qa") and not att_blocks and not att_images and not tools_def:
             try:
                 from core import config as _cfg
                 if _cfg.as_bool("semantic_cache", "enabled", False):

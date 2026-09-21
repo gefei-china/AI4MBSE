@@ -4,6 +4,9 @@
 由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分，勿手工编辑方法体。"""
 from .common import *
 
+# P2 视觉通道（2026-09-21）：图片附件扩展名（与 routers/conversations.py 的 IMAGE_EXTS 保持同一集合）
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
 
 def ctx_budget_tokens(kind: str, fallback_char_key: str, fallback: int) -> int:
     """P1-4b（2026-09-21）上下文预算取值：**占比制优先 → 绝对值 → 字符版兜底**。
@@ -85,6 +88,140 @@ class HistoryMixin:
                 blocks.append(f"{head}\n{seg}")
             parsed += 1
         return blocks, parsed, skipped
+
+    # ── P2 视觉通道（2026-09-21）：图片附件 → 多模态 content 块 ───────────────
+    #   背景（实测）：`_load_attachment_text` 的后缀白名单**不含任何图片格式**，
+    #   图片 → text="" → 落进 skipped → att_blocks=[] → prompt 里连文件名都没有
+    #   → **模型从未见过图**（会话里传架构图，AI 收到的是一片空白）。
+    #   本节把图片按 OpenAI 多模态 image_url 块注入 user 消息，让图真正进入模型。
+    def _load_attachment_images(self, attachments, max_images=2, max_side=1280,
+                                max_bytes=4194304, jpeg_quality=85):
+        """把图片附件读为 OpenAI 多模态 image_url 块（base64 data URL）。
+
+        返回 (blocks, loaded, skipped)：
+          blocks  —— [{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}]
+          loaded  —— 成功载入的文件名（用于在 prompt 里告知模型「有图可看」）
+          skipped —— ["文件名（原因）"]，**必须留痕**（不得静默丢弃，这是本通道的纪律）
+
+        为什么要重编码而不是直接 base64 原图：
+          · 视觉 token 与**像素数**成正比、与压缩率无关 → 直接传原图（如 4000px 截图）
+            会白烧几千 token，且大图对架构图这类线框内容的识别收益接近于零；
+          · 统一压到长边 max_side 后再编码，token 可控、体积可控（20MB 上限的附件
+            直接内联进请求体会把请求体撑爆）。
+        逐图防护：路径必须落在 STATIC_DIR 下且存在 → PIL 能打开 → 重编码后 ≤ max_bytes。
+        任一不满足**只跳过该图**并给出原因，不影响其他图与主链路。
+        """
+        blocks, loaded, skipped = [], [], []
+        try:
+            import io as _io
+            import base64 as _b64
+            from PIL import Image
+        except Exception as e:
+            return blocks, loaded, ["（图片能力不可用：缺少 Pillow）"] if attachments else []
+        cap = max(0, int(max_images or 0))
+        for a in attachments or []:
+            if len(blocks) >= cap:
+                break
+            url = (a.get("url") or "") if isinstance(a, dict) else ""
+            fname = (a.get("filename") or url.split("/")[-1] or "附件") if isinstance(a, dict) else "附件"
+            if os.path.splitext(fname)[1].lower() not in _IMAGE_EXTS:
+                continue  # 非图片附件归文本通道处理，不算「被跳过」
+            if not url.startswith("/static/"):
+                skipped.append(f"{fname}（附件地址非 /static/ 前缀，无法定位落盘副本）")
+                continue
+            path = os.path.join(STATIC_DIR, url.replace("/static/", ""))
+            if not os.path.exists(path):
+                skipped.append(f"{fname}（落盘副本不存在）")
+                continue
+            try:
+                with Image.open(path) as im:
+                    im.load()
+                    w0, h0 = im.size
+                    has_alpha = im.mode in ("RGBA", "LA") or (
+                        im.mode == "P" and "transparency" in im.info)
+                    if max(w0, h0) > max_side:  # 等比缩小（视觉 token ∝ 像素数）
+                        r = float(max_side) / float(max(w0, h0))
+                        im = im.resize((max(1, int(w0 * r)), max(1, int(h0 * r))))
+                    buf = _io.BytesIO()
+                    if has_alpha:  # 有透明通道一律 PNG，避免 JPEG 把透明压成黑底
+                        im.convert("RGBA").save(buf, format="PNG", optimize=True)
+                        mime = "image/png"
+                    else:
+                        im.convert("RGB").save(buf, format="JPEG",
+                                               quality=int(jpeg_quality or 85), optimize=True)
+                        mime = "image/jpeg"
+                    raw = buf.getvalue()
+            except Exception as e:
+                skipped.append(f"{fname}（图片解码/编码失败：{type(e).__name__}）")
+                continue
+            if len(raw) > max_bytes:
+                skipped.append(f"{fname}（重编码后 {len(raw) // 1024}KB 超过 {max_bytes // 1024}KB 上限）")
+                continue
+            blocks.append({"type": "image_url",
+                           "image_url": {"url": f"data:{mime};base64," + _b64.b64encode(raw).decode("ascii")}})
+            loaded.append(fname)
+        return blocks, loaded, skipped
+
+    def _prepare_attachment_vision(self, attachments, provider_id=None, conn=None):
+        """视觉通道统一入口：决定「这次要不要把图片喂给模型」，并给出**可审计留痕**。
+
+        返回 (blocks, info)：
+          blocks —— 可直接并入 user 消息的多模态块（不需要时为空列表）
+          info   —— 留痕字典（并入 attachments_info.vision，随响应可见）：
+                    enabled / provider_vision / reason / loaded / skipped / images
+
+        三重条件**全满足**才注入（任一不满足 → 不注入，但逐条写明原因）：
+          ① `vision.enabled` = true（总开关，默认 false）
+          ② 所选 provider 标了视觉能力（`llm.provider_supports_vision`）
+          ③ 附件里确实有图片文件
+
+        纪律：条件不满足时**绝不静默**。老实现是把图片塞进 skipped 就完事（连"为什么"都没有），
+        本通道必须把原因写进 info 落进响应——否则「图没生效」与「模型看图了但没看懂」
+        在现象上无法区分（同族教训：静默兜底会把真故障藏起来）。
+        """
+        info = {"enabled": False, "provider_vision": False, "reason": "",
+                "loaded": [], "skipped": [], "images": 0}
+        try:
+            imgs = [a for a in (attachments or [])
+                    if isinstance(a, dict)
+                    and os.path.splitext(a.get("filename") or a.get("url") or "")[1].lower() in _IMAGE_EXTS]
+            if not imgs:
+                return [], info
+            info["images"] = len(imgs)
+            from core import config as _cfg
+            enabled = bool(_cfg.as_bool("vision", "enabled", False))
+            info["enabled"] = enabled
+            from llm import resolve_provider_cfg, provider_supports_vision
+            cfg = resolve_provider_cfg(provider_id, conn=conn)
+            vision_ok = provider_supports_vision(cfg)
+            info["provider_vision"] = vision_ok
+            if not enabled:
+                info["reason"] = "视觉通道未启用（配置 vision.enabled=false）"
+                info["skipped"] = [f"{a.get('filename') or '图片'}（{info['reason']}）" for a in imgs]
+                return [], info
+            if not vision_ok:
+                _who = cfg.get("name") or (f"provider#{cfg.get('id')}" if cfg.get("id") else "默认模型")
+                info["reason"] = (f"当前模型未声明图像输入能力（{_who}；"
+                                  "需 model_type=vision 或 tags 含 vision）")
+                info["skipped"] = [f"{a.get('filename') or '图片'}（{info['reason']}）" for a in imgs]
+                return [], info
+            blocks, loaded, skipped = self._load_attachment_images(
+                imgs,
+                max_images=int(_cfg.get("vision", "max_images", 2) or 2),
+                max_side=int(_cfg.get("vision", "max_side", 1280) or 1280),
+                max_bytes=int(_cfg.get("vision", "max_bytes", 4194304) or 4194304),
+                jpeg_quality=int(_cfg.get("vision", "jpeg_quality", 85) or 85))
+            info["loaded"] = loaded
+            info["skipped"] = skipped
+            info["reason"] = f"已注入 {len(blocks)} 张" if blocks else "图片均未能载入（见 skipped）"
+            return blocks, info
+        except Exception as e:
+            info["reason"] = f"视觉通道异常（已降级为不注入）：{type(e).__name__}: {e}"
+            try:
+                logger.warning("[vision] %s", info["reason"])
+            except Exception:
+                pass
+            return [], info
 
     # ── 会话历史注入 v2：话题感知组装（P0+P1，替代纯时间窗口）──
     #   ① 当前话题原文段（最近 N 条）+ 上一话题切换边界（2 条）→ 原文逐字

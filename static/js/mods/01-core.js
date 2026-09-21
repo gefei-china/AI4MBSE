@@ -342,7 +342,7 @@ const MODAL_FORMS = {
       <input type="hidden" id="f-tags" value="">
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🤖</span><span class="fs-title">基础信息</span></div>
-        <div class="form-row"><label>模型类型 <span class="info-tip" title="对话模型=LLM（生成文本）；向量模型=Embedding（生成向量用于 RAG/检索）">ⓘ</span></label><select id="f-model-type" onchange="onLLMTypeChange()">
+        <div class="form-row"><label>模型类型 <span class="info-tip" title="对话模型=LLM（生成文本）；向量模型=Embedding（生成向量用于 RAG/检索）。⚠️ 多模态/视觉模型（如 qwen-vl-max、gpt-4o）请选「对话模型」，再勾选下方「支持图片理解」——不要在这里找 vision 类型：会话模型选择器只收对话模型，标成独立 vision 类型会导致该模型在会话里选不到。">ⓘ</span></label><select id="f-model-type" onchange="onLLMTypeChange()">
           <option value="chat">对话模型（LLM）</option>
           <option value="embedding">向量模型（Embedding）</option>
         </select></div>
@@ -351,6 +351,7 @@ const MODAL_FORMS = {
         <div class="form-row"><label>Base URL <b class="req">*</b> <span class="info-tip" title="OpenAI 兼容接口地址（结尾 /v1），如 https://api.deepseek.com/v1">ⓘ</span></label><input id="f-url" placeholder="https://api.deepseek.com/v1"></div>
         <div class="form-row"><label>API Key <b class="req">*</b> <span class="info-tip" title="服务端 API Key；保存后只显示脱敏（••••），不可再次查看明文">ⓘ</span></label><input id="f-key" type="password" placeholder="sk-..." autocomplete="off"> <span id="f-key-hint" style="display:none;font-size:11px;color:var(--mut);">已配置（••••），保存后不可修改</span></div>
         <div class="form-row"><label>模型名 <b class="req">*</b> <span class="info-tip" title="服务端真实模型标识，如 deepseek-chat / gpt-4o / text-embedding-v3">ⓘ</span></label><input id="f-model" placeholder="deepseek-chat / text-embedding-v3"></div>
+        <div class="form-row"><label>图片理解 <span class="info-tip" title="勾选后，该模型可在「AI 建模」会话里接收上传的图片（架构图/连线图/截图），图片会作为多模态内容随消息一起送给模型。⚠️ 仅当模型确实支持图像输入时才勾选：勾错会把图片发给纯文本模型，上游直接报错。勾选写入能力标签 tags=vision（与工程 2026-09-04 起的前端能力判据同源）。">ⓘ</span></label><label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="f-vision" style="width:auto;"> 支持图片理解（多模态 / VL），如 qwen-vl-max、gpt-4o</label></div>
         <div class="form-row"><label>设为默认 <span class="info-tip" title="该类型的默认模型（对话/向量各自独立一个默认）">ⓘ</span></label><label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="f-is-default" style="width:auto;"> 该类型的默认模型（对话/向量各自独立一个默认）</label></div>
       </div>
       <div class="adv-box collapsed" id="f-adv">

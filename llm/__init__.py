@@ -9,6 +9,7 @@
 + DB llm_providers 表新增一行（provider_type 填注册名）。零代码改动。
 """
 import json
+import re
 import time
 
 from .base import BaseLLM
@@ -19,7 +20,8 @@ from .providers import (  # noqa: F401  （注册副作用）
 )
 
 __all__ = ["BaseLLM", "ProviderRegistry", "MockLLM", "OpenAICompatProvider",
-           "llm_client", "llm_router", "get_llm"]
+           "llm_client", "llm_router", "get_llm",
+           "resolve_provider_cfg", "provider_supports_vision"]
 
 
 def _load_provider_cfg(conn, provider_id):
@@ -41,6 +43,65 @@ def _load_provider_cfg(conn, provider_id):
         return dict(row) if row else {}
     except Exception:
         return {}
+
+
+# ── P2 视觉通道（2026-09-21）：provider 图像输入能力判据 ──────────────
+def resolve_provider_cfg(provider_id=None, conn=None) -> dict:
+    """按 provider_id（None=对话默认模型）取 provider 配置行；任何异常 → {}。
+
+    与 `get_llm` 共用 `_load_provider_cfg`，保证「判能力」与「实际调用」看的是**同一行**，
+    不会出现「按 A 判能力、实际调 B」的错配（provider_id=None 时两者都取对话默认模型）。
+    """
+    try:
+        if conn is None:
+            from database import get_db as _get_db
+            c = _get_db()
+            try:
+                return _load_provider_cfg(c, provider_id)
+            finally:
+                c.close()
+        return _load_provider_cfg(conn, provider_id)
+    except Exception:
+        return {}
+
+
+# 视觉能力标签的匹配式 —— **必须与前端 static/js/mods/10-chatinput.js 的 modelSupportsVision 同套**。
+# 前端是宽松匹配（用户手写中文「多模态」也算），后端若用精确 == 'vision'，
+# 就会出现「前端提示支持、后端不发图」的静默矛盾。故两侧统一到本式（前端那处有对应注释）。
+VISION_TAG_RE = re.compile(r"vision|image|multimodal|多模态|图片", re.I)
+
+
+def provider_supports_vision(cfg) -> bool:
+    """provider 是否具备**图像输入**能力（判据集中在此，agent 侧与前端共用同一份语义）。
+
+    判据（二选一，要求显式声明）：
+      1) `tags` 命中 `VISION_TAG_RE` —— 复用既有「能力标签」字段（`models/llm.py` 注释即此用途），
+         **零 schema 改动**。这是**主路径**：模型配置弹窗的「支持图片理解」复选框写的即此标签
+         （2026-09-04 起前端 `10-chatinput.js` 就按 tags 判能力，本函数对齐它）。
+      2) `model_type == 'vision'` —— 兼容保留。**注意不要用它**：会话模型选择器按
+         `model_type==='chat'` 过滤（`static/js/mods/13-reports.js`），标成 vision 的模型
+         **不会出现在会话下拉里、用户选不到**，通道等于白做。
+
+    为什么不按模型名关键词猜（'vl' / 'gpt-4o' / 'omni'）：猜错的两侧代价**不对称** ——
+    误判为「有视觉能力」会把图片发给纯文本模型 → 上游 400 直接失败（用户看到报错）；
+    误判为「没有」则静默不注入图片（退回改动前的老问题，至少不崩）。
+    故**宁可要求显式声明**，把不确定性交还给配置方。
+    """
+    if not isinstance(cfg, dict) or not cfg:
+        return False
+    if str(cfg.get("model_type") or "").strip().lower() == "vision":
+        return True
+    raw = cfg.get("tags") or "[]"
+    try:
+        tags = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        tags = []
+    if isinstance(tags, str):
+        tags = [tags]
+    try:
+        return any(VISION_TAG_RE.search(str(t)) for t in (tags or []))
+    except Exception:
+        return False
 
 
 # ── P1-3：延迟实例化 + 缓存（实例按 provider_id/默认 隔离缓存）──

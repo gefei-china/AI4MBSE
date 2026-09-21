@@ -989,10 +989,20 @@ class StreamMixin:
 
             # 闭环：上传资料解析 + 工作流匹配
             att_blocks, att_parsed, att_skipped = self._load_attachment_text(attachments)
+            # P2 视觉通道（2026-09-21）：与 execute.py 同构 —— 开关 + provider 能力双判据，
+            # 不具备则留痕降级（原因进 att_vision → attachments_info.vision），不静默丢弃。
+            att_images, att_vision = self._prepare_attachment_vision(attachments, effective_provider)
+            if att_vision.get("skipped"):
+                att_skipped = list(att_skipped) + list(att_vision["skipped"])
+            if att_images:
+                att_blocks = [f"【图片附件】{'、'.join(att_vision.get('loaded') or [])}"
+                              "（图像内容已随本条消息一并提供，请直接查看）"] + att_blocks
             # 2026-09-17 S3：注入上限收到 _ATT_INJECT_CAP（att_text 排在检索段之前，不受 _apply_context_budget 裁剪）
             att_text = ("\n\n".join(att_blocks[:4]))[:_ATT_INJECT_CAP] if att_blocks else ""   # 注入 prompt（限量）
             retrieval_att = "\n\n".join(att_blocks) if att_blocks else "" # 完整全文（供附件召回）
             att_parsed_info = {"parsed": att_parsed, "skipped": att_skipped[:5]}
+            if att_vision.get("images"):
+                att_parsed_info["vision"] = att_vision   # 留痕：图片到底进没进模型、为什么
             matched_flows = self._match_flows(user_input + (" " + att_text[:500] if att_text else ""))
 
             # ── 阶段 2：知识检索（#标签 + 附件前 600 字符并入）──
@@ -1133,9 +1143,13 @@ class StreamMixin:
                 + f"检索到的互联数据：\n{context_text}"
                 + (f"\n\n{report_prompt}" if report_prompt else "")
             )
+            # P2 视觉通道：图片以多模态 content 块随 user 消息下发（provider 层原样透传）
+            _user_content = user_input
+            if att_images:
+                _user_content = [{"type": "text", "text": user_input}] + att_images
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input},
+                {"role": "user", "content": _user_content},
             ]
             # 闭环：会话历史注入（v2 话题感知：当前话题原文 + 语义拉回 + 分话题摘要）
             if conversation_id:

@@ -1049,6 +1049,29 @@ function renderToolCards() {
   }).join('');
 }
 let llmTypeFilter = 'all';
+// ── 视觉（图片理解）能力标签：与后端 llm.provider_supports_vision 同套语义 ──
+// 唯一事实源是 llm_providers.tags —— 工程 2026-09-04 起前端就按 tags 判能力
+// （static/js/mods/10-chatinput.js 的 modelSupportsVision），此处对齐它，不另立字段。
+const _VISION_TAG_RE = /vision|image|multimodal|多模态|图片/i;
+function hasVisionTag(p){
+  try{
+    let t = (p && p.tags);
+    if(typeof t === 'string') t = JSON.parse(t || '[]');   // 兼容字符串形态
+    if(!Array.isArray(t)) t = t ? [t] : [];
+    return t.some(x=>_VISION_TAG_RE.test(String(x)));
+  }catch(e){ return false; }
+}
+// 表单 → 提交用 tags：保留已有其他标签，只增删视觉标签（不让复选框冲掉用户手写的标签）
+function composeTagsFromForm(){
+  const raw = (document.getElementById('f-tags')?.value || '');
+  const rest = raw.split(',').map(s=>s.trim()).filter(Boolean).filter(t=>!_VISION_TAG_RE.test(t));
+  const cb = document.getElementById('f-vision');
+  return rest.concat(cb && cb.checked ? ['vision'] : []);
+}
+function setVisionCheckbox(on){
+  const cb = document.getElementById('f-vision');
+  if(cb) cb.checked = !!on;
+}
 function setLLMType(t, btn) {
   llmTypeFilter = t;
   document.querySelectorAll('#st-model [id^="llm-type-"]').forEach(b=>b.style.background='');
@@ -1064,7 +1087,7 @@ async function loadLLMProviders() {
       const disabled = p.status==='disabled';
       return `<tr>
       <td><b>${esc(p.name)}</b></td>
-      <td>${p.model_type==='embedding'?'<span class="st b">向量</span>':'<span class="st g">对话</span>'}</td>
+      <td>${p.model_type==='embedding'?'<span class="st b">向量</span>':'<span class="st g">对话</span>'}${p.model_type!=='embedding'&&hasVisionTag(p)?' <span class="st" style="background:#eef2ff;color:#3f51b5;" title="支持图片理解：AI 建模会话中上传的图片会作为多模态内容送给该模型">🖼 视觉</span>':''}</td>
       <td style="font-size:11px;">${esc(p.model_name)}</td>
       <td><label class="sw" title="设为该类型（对话/向量）的默认模型"><input type="checkbox" ${p.is_default===1?'checked':''} onchange="toggleLLMDefault(${p.id},this.checked)"><span class="sl"></span></label></td>
       <td>${disabled?'<span class="st g">停用</span>':'<span class="st ok">启用</span>'}</td>
@@ -1086,6 +1109,7 @@ function addLLM() {
   document.getElementById('f-edit-llm').value = '';
   document.getElementById('llm-modal-title').innerText = '添加模型';
   ['f-name','f-url','f-key','f-model','f-tags'].forEach(i=>{const el=document.getElementById(i); if(el) el.value='';});
+  setVisionCheckbox(false);
   document.getElementById('f-model-type').value = 'chat';
   const dcb = document.getElementById('f-is-default');
   if(dcb) dcb.checked = false;
@@ -1120,6 +1144,7 @@ async function editLLM(id) {
   document.getElementById('f-maxt').value = p.max_tokens || 8192;
   document.getElementById('f-temp').value = p.temperature ?? 0.3;
   document.getElementById('f-tags').value = (p.tags||[]).join(', ');
+  setVisionCheckbox(hasVisionTag(p));
   document.getElementById('f-priority').value = p.priority || 0;
   document.getElementById('f-budget').value = p.budget_tokens || 0;
   // 高级设置回填（上下文输入/输出、温度、TopP、TopK、思考模式）
@@ -1166,7 +1191,7 @@ async function saveLLM() {
     name, base_url, api_key, model_name, model_type, context_window, is_default,
     provider_type: document.getElementById('f-ptype').value || 'openai',
     max_tokens, temperature,
-    tags: document.getElementById('f-tags').value.split(',').map(s=>s.trim()).filter(Boolean),
+    tags: composeTagsFromForm(),
     priority: parseInt(document.getElementById('f-priority').value)||0,
     budget_tokens: parseInt(document.getElementById('f-budget').value)||0,
   };

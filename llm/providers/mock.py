@@ -16,7 +16,15 @@ class MockLLM(BaseLLM):
     name = "mock"
 
     def chat(self, messages, model=None, temperature=0.3, max_tokens=4096, stream=False, tools=None, thinking=False, **kwargs):
-        user_msg = messages[-1]["content"] if messages else ""
+        # P2 视觉通道（2026-09-21）兼容：多模态 user 消息的 content 是 list（[text, image_url]…），
+        # 直接拿它 .lower() 会 AttributeError。Mock 是 llm.force_mock 与回归测试的**必经降级路径**，
+        # 降级路径绝不能崩 → 这里统一归一成文本（图片对 Mock 无语义，只取 text 块）。
+        _raw = messages[-1].get("content") if messages else ""
+        if isinstance(_raw, list):
+            user_msg = " ".join(b.get("text", "") for b in _raw
+                                if isinstance(b, dict) and b.get("type") == "text")
+        else:
+            user_msg = _raw or ""
         intent = self._detect_intent(user_msg)
         if intent == "requirement_analysis":
             content = self._mock_requirement(user_msg)
