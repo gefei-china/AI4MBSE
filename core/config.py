@@ -250,6 +250,42 @@ DEFAULT_CONFIG = {
         # 使页数多的规范类文档入库只覆盖约 17%（实测 SysML v2 官方 691 页 / KerML 454 页，
         # 全量抽取分别只需 23.6s / 17.6s，抽取本身不是瓶颈）。改为可配置并提高默认值。
         "pdf_max_pages": 1200,   # PDF 抽取页数上限（防超大文件拖垮入库；<=0 表示不限制）
+        # ── 2026-09-21：OCR 兜底（扫描版 PDF / 图片）──
+        # 背景：原实现对图片返回 46 字符占位串（非空 → 进向量库污染检索），
+        # 扫描版 PDF 抽 0 字直接判 failed 且不给原因。接入 rapidocr-onnxruntime
+        # （离线 ONNX，模型内置包内、零网络下载）后按下面的判据逐页补 OCR。
+        # 实测：OCR 1.4~4.7 s/页 vs 文本层 0.01~0.06 s/页 —— 慢 50~200 倍，
+        # 故**只对文本层稀疏的页**付这个成本，不可无差别全量 OCR（691 页规范全跑要 30~50 分钟）。
+        "ocr_enabled": True,              # False=完全回到改动前行为（A/B 对比与故障回退用）
+        "ocr_min_chars_per_page": 100,    # 页文本层字数低于此值视为"稀疏页"，该页补 OCR
+        "ocr_max_pages": 50,              # 单次入库允许 OCR 的页数上限（>0；防超大扫描件拖垮入库）
+        "ocr_render_scale": 2.0,          # PDF 渲染倍率（2.0 ≈ 1224x1584 px，实测识别率与耗时的平衡点）
+        # ── 结果质量门禁（2026-09-21 补）────────────────────────────────────────
+        # 背景：OCR 对低质截图照样能"吐出"几百字，只是**全是错字**。原实现只看
+        # "有没有字"，于是乱码以 completed 入库 → 进向量库 → 被检索召回污染 RAG。
+        # 阈值基线（tmp/ocr_probe/bench_score_baseline.py 实测）：
+        #   正例（清晰中文图/扫描PDF/混合PDF页）均分 0.870~0.936、低置信行 **0%**
+        #   反例（低质截图 doc 811）          均分 0.595~0.675、低置信行 51.9%~95.7%
+        # → 取 0.70 / 50%：正例留 0.17 余量，反例两维同时被挡（冗余安全）。
+        "ocr_min_avg_score": 0.70,        # 识别行平均置信度下限，低于此值判"不可用"
+        "ocr_max_low_score_ratio": 50.0,  # 低置信行（<0.7）占比上限（%），超过判"不可用"
+        "ocr_grayscale": True,            # 识别前转灰度：实测均分 +0.08 且更快（放大反而更差，别做）
+    },
+    "vision": {
+        # 2026-09-21：会话图片附件的**视觉通道**（AI 建模传架构图/连线图的主路径）。
+        # 背景：实测 `agent/pipeline_parts/history.py:44-77` 的附件后缀白名单**不含任何图片格式**，
+        # 图片 → `text=""` → 落进 `att_skipped` → `att_blocks=[]` → prompt 里连文件名都没有
+        # （`routers/conversations.py:107` 注释自认"图片…保持会话内联展示"）→ **模型从未见过图**。
+        # 本段把图片按 OpenAI 多模态 content 块（image_url + base64 data URL）注入 user 消息。
+        # 安全默认（铁律）：`enabled=False` 时**与改动前行为逐字节等价**；
+        # 且即便 enabled=True，仍要求所选 provider 标了视觉能力
+        # （`llm.provider_supports_vision`：model_type=='vision' 或 tags 含 'vision'），
+        # 不具备则**明确留痕降级**（写入 attachments_info.vision），绝不静默丢弃。
+        "enabled": False,          # False=不注入图片（与改动前行为等价；也是故障回退开关）
+        "max_images": 2,           # 单次请求最多注入图片数（视觉 token 贵，多图会挤占上下文）
+        "max_side": 1280,          # 长边像素上限（超出等比缩小后再编码；该值直接决定视觉 token 量）
+        "max_bytes": 4194304,      # 单图重编码后字节上限（4MB；超过则该图跳过并留痕）
+        "jpeg_quality": 85,        # 无 alpha 通道时的重编码质量（有 alpha 一律 PNG，保透明）
     },
     "sysml": {
         # 2026-09-19（P0）：生成端 L0 硬约束卡，实现在 agent/pipeline_parts/v2_constraints.py。
@@ -573,6 +609,26 @@ CONFIG_SCHEMA = {
     "ingest": {
         "draft_flow":          {"type": "bool", "desc": "AI 建模入库发布门禁（确认后走合并请求待审/自动发布）"},
         "review_source_types": {"type": "str", "desc": "需强制待审的来源列表（逗号分隔，如 ai_generated）"},
+    },
+    # 2026-09-21 补注册：DEFAULT_CONFIG 里早有 extract/vision 段，但此前未进 CONFIG_SCHEMA，
+    # 而 `save_override` 对未注册键直接 raise「未知配置项」→ **这两组开关在界面上根本改不了**，
+    # 只能在代码/配置文件里改。补注册后 OCR 与视觉通道的开关才真正可运维（含故障回退）。
+    "extract": {
+        "pdf_max_pages":          {"type": "int",   "desc": "PDF 抽取页数上限（<=0 不限制，默认 1200）"},
+        "ocr_enabled":            {"type": "bool",  "desc": "扫描件/图片 OCR 兜底总开关（关=回到改动前行为）"},
+        "ocr_min_chars_per_page": {"type": "int",   "desc": "页文本层字数低于此值视为稀疏页并补 OCR（默认 100）"},
+        "ocr_max_pages":          {"type": "int",   "desc": "单次入库允许 OCR 的页数上限（默认 50）"},
+        "ocr_render_scale":       {"type": "float", "desc": "PDF 渲染倍率（默认 2.0 ≈ 1224x1584 px）"},
+        "ocr_min_avg_score":      {"type": "float", "desc": "OCR 结果平均置信度下限（默认 0.70；低于此值判质量不合格，不入库）"},
+        "ocr_max_low_score_ratio": {"type": "float", "desc": "OCR 低置信行（<0.7）占比上限 %（默认 50；超过判质量不合格，不入库）"},
+        "ocr_grayscale":          {"type": "bool",  "desc": "OCR 前转灰度（默认开；实测均分 +0.08 且更快）"},
+    },
+    "vision": {
+        "enabled":      {"type": "bool", "desc": "会话图片附件视觉通道总开关（需所选模型标 vision 能力；默认关=回到改动前行为）"},
+        "max_images":   {"type": "int",  "desc": "单次请求最多注入图片数（默认 2）"},
+        "max_side":     {"type": "int",  "desc": "图片长边像素上限，超出等比缩小（默认 1280，直接决定视觉 token 量）"},
+        "max_bytes":    {"type": "int",  "desc": "单图重编码后字节上限（默认 4MB，超过则该图跳过并留痕）"},
+        "jpeg_quality": {"type": "int",  "desc": "无 alpha 时重编码 JPEG 质量（默认 85）"},
     },
     "sysml": {
         "l0_card_enabled": {"type": "bool", "desc": "生成端 SysML v2 L0 硬约束卡注入开关（关=回到改动前行为）"},
