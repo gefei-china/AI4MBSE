@@ -1,5 +1,13 @@
 """dev → release 发布：修正 dev/main 文档元数据 + 快照复制到 release。
 
+⚠️ **历史脚本，现已失效（保留仅作溯源）**：
+1. 它操作的 `branch='dev/main'` 已被 `database/migrations/rebuild.py` 改名为 `dev`，
+   故 `WHERE branch='dev/main'` 选不中任何行；
+2. 文档已全局化——`ingest_document` 默认写 `branch='global'`，迁移把存量统一为 'global'，
+   且明确声明「**发布机制不再复制文档快照**（实体/关系仍按分支）」。
+   → 第 2 步 `snapshot_documents` 恒为 0（见 `branch_repo.snapshot_documents` 的废弃说明）。
+即：**文档无需也没法按分支发布**；发布的对象是实体/关系（走 MR + 分支合并）。
+
 用法（在 mbse_system 目录下）：
     python tools/publish_release.py --dry-run   # 预览（默认）
     python tools/publish_release.py             # 修正元数据并发布

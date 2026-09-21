@@ -18,11 +18,20 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _branch_clause(branches) -> tuple:
     """KB分支过滤子句：branches=None 不过滤；否则生成 branch IN (...) 子句。
 
+    ⚠️ 文档全局化（本函数**只作用于 document_chunks**，已逐处核对：bigram 兜底 / 向量检索 /
+    BM25 索引构建与查询，共 5 处，无一处用于 entities/relations）：
+    `branch='global'` 的文档是**全局资产**，不属于任何分支。若子句写成纯 `branch IN (...)`，
+    则任何「传了 branches」的调用方会**静默拿到 0 条**——因为全库文档均为 global。
+    实测证据：`/api/knowledge/stats?branch=release` 曾因此把「文档总数」报成 0。
+    故此处恒带 `OR branch='global'`，把「全局文档永不被分支过滤掉」变成**结构性不变量**，
+    而不是依赖每个调用方都记得传 None。
+
     返回 (sql_suffix, params)。
     """
     if not branches:
         return "", []
-    return " AND branch IN ({})".format(",".join("?" * len(branches))), list(branches)
+    return (" AND (branch IN ({}) OR branch = 'global')".format(",".join("?" * len(branches))),
+            list(branches))
 
 
 def _doc_clause(doc_names) -> tuple:

@@ -150,8 +150,13 @@ class BranchRepo(BaseRepo):
             return {"ok": False, "error": f"有 {pending} 个未处理合并请求引用该分支，无法删除"}
         self.execute("DELETE FROM merge_requests WHERE source_branch=? OR target_branch=?",
                      (name, name))
-        self.execute("DELETE FROM documents WHERE branch=?", (name,))
-        self.execute("DELETE FROM document_chunks WHERE branch=?", (name,))
+        # 文档全局化：documents/document_chunks 是**全局资产**，不随分支（ingest 默认 branch='global'，
+        # 迁移 database/migrations/documents.py 已把存量统一为 'global'）。分支删除**不得触碰全局文档**——
+        # 旧实现的 `DELETE ... WHERE branch=?` 在全局化后恒为空操作，但一旦分支名恰为 'global'
+        # 就会删光整个文档库。此处显式排除全局分支，同时保留对历史非全局遗留行的清理能力。
+        if name != "global":
+            self.execute("DELETE FROM documents WHERE branch=?", (name,))
+            self.execute("DELETE FROM document_chunks WHERE branch=?", (name,))
         self.execute("DELETE FROM branches WHERE name=?", (name,))
         return {"ok": True, "deleted": name}
 
@@ -1054,8 +1059,12 @@ class BranchRepo(BaseRepo):
     def snapshot_documents(self, src: str, tgt: str, actor: str = "王工") -> int:
         """共享+发布快照：把 src 分支的文档复制为 tgt 分支快照（覆盖 tgt 同文件名旧快照）。
 
-        返回复制文档数。文档内容已抽取在 document_chunks（含 embedding），
-        发布后 tgt 分支检索独立命中快照，dev 分支继续用最新文档。
+        ⚠️ **已废弃（文档全局化后恒为空操作）**：documents 统一为 branch='global' 后，
+        `WHERE branch=?` 再也选不出源文档，本方法永远复制 0 个；且迁移
+        `database/migrations/documents.py` 明确声明「**发布机制不再复制文档快照**（实体/关系仍按分支）」
+        —— 文档是全局资产，发布时无需为分支造快照，检索天然全局可见。
+        保留仅为兼容 `tools/publish_release.py`（该工具本身也已是历史一次性迁移脚本）。
+        返回复制文档数。
         """
         docs = self.rows("SELECT * FROM documents WHERE branch=?", (src,))
         moved = 0

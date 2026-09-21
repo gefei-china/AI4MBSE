@@ -456,8 +456,19 @@ class KnowledgeRepo(BaseRepo):
         )
 
     def count_documents(self, branch: str = "") -> int:
-        if branch:  # KB分支隔离：统计当前工作分支
-            return self.count("documents", "branch=?", (branch,))
+        """文档总数——**全局资产，不按分支切分**（branch 参数保留接收、不参与过滤）。
+
+        设计依据（同一条声明，四处一致）：
+          · `ingest_document(branch='global')` —— 上传即写全局分支（docstring: 文档从分支体系抽离）
+          · `database/migrations/documents.py` —— 存量 documents/document_chunks 统一为 'global'
+          · `MetaRepo.list_documents_with_meta` —— "branch 参数保留接收但不再过滤——文档全局化"
+          · `/api/knowledge/chunks/search` —— "检索不按分支过滤"
+        注意与本类 `count_by_status`/`count_relations` 的区别：**实体/关系仍按分支**（图谱按分支），
+        只有文档是全局的 —— 故本函数是整个 stats 端点里唯一不该带分支口径的一项。
+
+        历史缺陷：本函数曾按 branch 过滤，而前端 `15-kb.js` 恰会带当前分支调用
+        → `/api/knowledge/stats?branch=release` 的 total_docs 恒为 0（不传分支才是真值）。
+        """
         return self.count("documents")
 
     # ── ontology ──

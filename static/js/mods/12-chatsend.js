@@ -65,7 +65,11 @@ async function handleChatInput(){
       (_docsAll || []).forEach(_d => {
         const _fn = _d.filename || _d.title || ('doc#' + _d.id);
         if(f && !_fn.toLowerCase().includes(f)) return;
-        items.push({key:'doc:'+_d.id, icon:'📄', name:_fn, desc: (_d.status||'') + ' · ' + (_d.branch||''), tag:'文档', doc_id:_d.id});
+        // 文档全局化：不再展示 branch（documents 恒为 'global'，显示出来只会是内部哨兵值）；
+        // 改展示文件类型，对选择更有用
+        items.push({key:'doc:'+_d.id, icon:'📄', name:_fn,
+                    desc: (_d.status||'') + (_d.file_type ? ' · ' + _d.file_type : ''),
+                    tag:'文档', doc_id:_d.id});
       });
     }catch(_e){}
     items = items.slice(0, 12);

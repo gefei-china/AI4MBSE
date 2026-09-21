@@ -131,7 +131,10 @@ function gotoV2GBatch(batchId) {
   goReviewTab();
 }
 async function doUploadDoc() {
-  if(!branchWritable()) return;
+  // 文档全局化：**不**受分支只读门禁约束——documents 是全局资产（服务端 /api/documents/upload
+  // 硬编码 branch='global'，只校验 DOC_WRITE_PERMS，无任何分支校验）。
+  // 旧实现在此处调用 branchWritable() 会在 release 分支上拦下上传并提示"切到 dev 分支编辑"，
+  // 属分支隔离模型的残留（分支只读针对实体/关系，与文档无关）。
   const files = pendingDocFiles.length ? pendingDocFiles : (pendingDocFile ? [pendingDocFile] : []);
   if(!files.length) { toast('请先选择文件'); return; }
   const prog = document.getElementById('doc-upload-progress');
