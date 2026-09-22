@@ -1,0 +1,4304 @@
+{
+ "schema": "p1-6/eval-report@1",
+ "tag": "r1-20260922",
+ "when": "2026-09-22 23:04:40",
+ "evalset": "evalset.json",
+ "evalset_built_at": "2026-09-21 11:51:01",
+ "fingerprint_evalset": {
+  "db_bytes": 283234304,
+  "documents": 5,
+  "chunks": 5758,
+  "entities_total": 124,
+  "entities_release": 60,
+  "relations_release": 83,
+  "ontology_active": "v25.0.0",
+  "chunk_branches": [
+   {
+    "branch": "global",
+    "n": 5758
+   }
+  ],
+  "entity_branches": [
+   {
+    "branch": "dev",
+    "n": 64
+   },
+   {
+    "branch": "release",
+    "n": 60
+   }
+  ],
+  "release_entity_names_sha1": "bef95d0324ec97d7"
+ },
+ "fingerprint_now": {
+  "chunks": 5758,
+  "entities_release": 61,
+  "release_entity_names_sha1": "04c1ac33e06813fe"
+ },
+ "fingerprint_drift": [
+  "release 实体名集合 bef95d0324ec97d7 → 04c1ac33e06813fe（图谱已被改写）",
+  "release 实体数 60 → 61"
+ ],
+ "config": {
+  "recall_k": 20,
+  "top_k": 20,
+  "inject_k": 3,
+  "rerank_enabled": true,
+  "rerank_max_candidates": 10,
+  "hyde_enabled": true,
+  "route_threshold": 0.7,
+  "retrieval_weight": null,
+  "bm25_weight": null
+ },
+ "cfg_overrides": [],
+ "pool_width": 20,
+ "summary": {
+  "doc": {
+   "n": 20,
+   "recall@1": 0.85,
+   "recall@3": 0.9,
+   "recall@5": 0.9,
+   "recall@10": 0.9,
+   "mrr@10": 0.867,
+   "ndcg@10": 0.732,
+   "latency_p50_ms": 1638,
+   "latency_pool_p50_ms": 481,
+   "pool_recall@20": 0.9,
+   "rerank_drop_rate": 0.0,
+   "recall_miss_rate": 0.1
+  },
+  "doc_control": {
+   "n": 20,
+   "recall@1": 0.0,
+   "recall@3": 0.0,
+   "recall@5": 0.0,
+   "recall@10": 0.0,
+   "mrr@10": 0.0
+  },
+  "graph": {
+   "n": 18,
+   "route_acc": 1.0,
+   "entity_recall": 0.972,
+   "relation_hit": 1.0,
+   "latency_p50_ms": 13
+  },
+  "neg": {
+   "n": 8,
+   "route_ok": 0.875,
+   "empty_hit_rate": 0.25,
+   "false_graph_confident": 1,
+   "latency_p50_ms": 1655
+  }
+ },
+ "negative_control": {
+  "recall": {
+   "recall@1": 0.0,
+   "recall@3": 0.0,
+   "recall@5": 0.0,
+   "recall@10": 0.0
+  },
+  "mrr@10": 0.0,
+  "note": "gold 轮转一例后的分数；应与真实分数差出量级"
+ },
+ "rows": {
+  "doc": [
+   {
+    "id": "doc-01",
+    "kind": "doc",
+    "query": "2.4 C3 - Unambiguous",
+    "n_gold": 13,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.8669479898642709,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 34,
+    "route": "vector",
+    "latency_final_ms": 8989,
+    "latency_pool_ms": 476,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      268
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      267
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      263
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      265
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      266
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      262
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      273
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      212
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      272
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      446
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      271
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      185
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      269
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      210
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      208
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      250
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      245
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      248
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      249
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      394
+     ]
+    ],
+    "pool_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      268
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      446
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      212
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      267
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      263
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      272
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      265
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      266
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      262
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      273
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      271
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      185
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      269
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      210
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      208
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      250
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      245
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      248
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      249
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      394
+     ]
+    ]
+   },
+   {
+    "id": "doc-02",
+    "kind": "doc",
+    "query": "1.11 Conditional Clauses and Ubiquitous Requirements",
+    "n_gold": 10,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.8006937664098819,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 33,
+    "route": "vector",
+    "latency_final_ms": 1662,
+    "latency_pool_ms": 526,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      188
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      185
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      181
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      186
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      180
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      182
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      187
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      777
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      633
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      639
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      183
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      184
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      179
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      513
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      514
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      631
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      847
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      630
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      836
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      824
+     ]
+    ],
+    "pool_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      188
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      180
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      185
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      181
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      633
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      639
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      777
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      186
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      182
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      187
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      183
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      184
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      179
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      513
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      514
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      631
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      847
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      630
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      836
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      824
+     ]
+    ]
+   },
+   {
+    "id": "doc-03",
+    "kind": "doc",
+    "query": "14.2.9 X X",
+    "n_gold": 7,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.7041249493150388,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 36,
+    "route": "vector",
+    "latency_final_ms": 1560,
+    "latency_pool_ms": 455,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      848
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      849
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      850
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      847
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      835
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      839
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      842
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      843
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      337
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1182
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      846
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      725
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1926
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      538
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1593
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      723
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1763
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1794
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      122
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2433
+     ]
+    ],
+    "pool_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      848
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      849
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      850
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      847
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      839
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      835
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      842
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      843
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      337
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1182
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      846
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      725
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1926
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      538
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1593
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      723
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1763
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1794
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      122
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2433
+     ]
+    ]
+   },
+   {
+    "id": "doc-04",
+    "kind": "doc",
+    "query": "1.5.1.2 POWER OF EXPRESSION",
+    "n_gold": 5,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.8687949224876582,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 39,
+    "route": "vector",
+    "latency_final_ms": 1617,
+    "latency_pool_ms": 525,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      54
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      53
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      57
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      55
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      541
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      351
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      570
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      588
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2322
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2253
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      581
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      573
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2252
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      724
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      432
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2330
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2457
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2479
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1433
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1273
+     ]
+    ],
+    "pool_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      55
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      57
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      54
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      53
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2322
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      351
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      570
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      588
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      541
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2253
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      581
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      573
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2252
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      724
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      432
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2330
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2457
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2479
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1433
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1273
+     ]
+    ]
+   },
+   {
+    "id": "doc-05",
+    "kind": "doc",
+    "query": "1.12.1 THE PROBLEMS OF COMPLEXITY",
+    "n_gold": 4,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 1.0,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 39,
+    "route": "vector",
+    "latency_final_ms": 1717,
+    "latency_pool_ms": 485,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      189
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      190
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      191
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      192
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      197
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      367
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      368
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      210
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      211
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1750
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      351
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      366
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      884
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      304
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      372
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      381
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1305
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1433
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      690
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      89
+     ]
+    ],
+    "pool_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      192
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      190
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      189
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      191
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      210
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      197
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1750
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      211
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      367
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      368
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      351
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      366
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      884
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      304
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      372
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      381
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1305
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1433
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      690
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      89
+     ]
+    ]
+   },
+   {
+    "id": "doc-06",
+    "kind": "doc",
+    "query": "8.2.3.5.2Local and Global Namespaces",
+    "n_gold": 6,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 1.0,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 38,
+    "route": "vector",
+    "latency_final_ms": 1502,
+    "latency_pool_ms": 486,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      522
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      524
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      525
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      523
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      526
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      527
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      136
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      127
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1012
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      132
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      502
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      711
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      126
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      528
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      895
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      127
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      529
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1554
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      512
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      114
+     ]
+    ],
+    "pool_keys": [
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      522
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      136
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      524
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      525
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      523
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      526
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      527
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1012
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      127
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      132
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      502
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      711
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      126
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      528
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      895
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      127
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      529
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1554
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      512
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      114
+     ]
+    ]
+   },
+   {
+    "id": "doc-07",
+    "kind": "doc",
+    "query": "168 Kernel Modeling Language v1.0",
+    "n_gold": 8,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.4125317798925535,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 39,
+    "route": "vector",
+    "latency_final_ms": 1799,
+    "latency_pool_ms": 473,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      914
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      917
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      621
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      823
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1258
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      767
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      814
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      65
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      32
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      255
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      753
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1805
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1862
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1766
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1784
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1082
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      2007
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1294
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1708
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      30
+     ]
+    ],
+    "pool_keys": [
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      914
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      917
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      823
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      65
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1258
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      621
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      767
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      814
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      32
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      255
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      753
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1805
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1862
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1766
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1784
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1082
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      2007
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1294
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1708
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      30
+     ]
+    ]
+   },
+   {
+    "id": "doc-08",
+    "kind": "doc",
+    "query": "3. Sets are identified in the usual set-builder notation, wh",
+    "n_gold": 3,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 1.0,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 40,
+    "route": "vector",
+    "latency_final_ms": 1543,
+    "latency_pool_ms": 473,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1199
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1201
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1200
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1773
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      16
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      736
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      21
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      99
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      98
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      80
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      394
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      483
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      395
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      576
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      456
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      207
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      250
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      782
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      132
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      755
+     ]
+    ],
+    "pool_keys": [
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1201
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1199
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1200
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      16
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      736
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      21
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      99
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      98
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1773
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      80
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      394
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      483
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      395
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      576
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      456
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      207
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      250
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      782
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      132
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      755
+     ]
+    ]
+   },
+   {
+    "id": "doc-09",
+    "kind": "doc",
+    "query": "3. A property from the MOF model is mapped into aFeature.",
+    "n_gold": 3,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 1.0,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 31,
+    "route": "vector",
+    "latency_final_ms": 2158,
+    "latency_pool_ms": 493,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1745
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1743
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1744
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2159
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2158
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2157
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1742
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2156
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      864
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1746
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      863
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1138
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2160
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      888
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      862
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      178
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      424
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      177
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      373
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1319
+     ]
+    ],
+    "pool_keys": [
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1745
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1743
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1744
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2159
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2158
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2157
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1742
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1746
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2156
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      864
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      863
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1138
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2160
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      888
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      862
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      178
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      424
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      177
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      373
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1319
+     ]
+    ]
+   },
+   {
+    "id": "doc-10",
+    "kind": "doc",
+    "query": "186 Kernel Modeling Language v1.0",
+    "n_gold": 8,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.2529427027676571,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 38,
+    "route": "mixed",
+    "latency_final_ms": 1660,
+    "latency_pool_ms": 478,
+    "gold_in_pool_rank": 2,
+    "final_keys": [
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      982
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      621
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      767
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      814
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      618
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      914
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      30
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      32
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1772
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      65
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1594
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1258
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      753
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1766
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      255
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1784
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1294
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1082
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1257
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1406
+     ]
+    ],
+    "pool_keys": [
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      30
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      982
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      767
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      621
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      814
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      618
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      65
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      32
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1772
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      914
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1594
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1258
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      753
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1766
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      255
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1784
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1294
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1082
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1257
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1406
+     ]
+    ]
+   },
+   {
+    "id": "doc-11",
+    "kind": "doc",
+    "query": "9.2.14]) that is sent when the current time (relative to the",
+    "n_gold": 5,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.9318171001351272,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 40,
+    "route": "vector",
+    "latency_final_ms": 1607,
+    "latency_pool_ms": 656,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      505
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      506
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      507
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2447
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1699
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2437
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1696
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      509
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      508
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2454
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1693
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1718
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1805
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1717
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2250
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1842
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      371
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1754
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1182
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1813
+     ]
+    ],
+    "pool_keys": [
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      505
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      506
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      509
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      507
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      508
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2447
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1696
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1699
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2437
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2454
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1693
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1718
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1805
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1717
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2250
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1842
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      371
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1754
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1182
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1813
+     ]
+    ]
+   },
+   {
+    "id": "doc-12",
+    "kind": "doc",
+    "query": "650 Systems Modeling Language v2.0, Part 1",
+    "n_gold": 10,
+    "recall": {
+     "recall@1": 0.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 0.3333333333333333,
+    "ndcg@10": 0.11004588314904008,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 36,
+    "route": "vector",
+    "latency_final_ms": 1846,
+    "latency_pool_ms": 896,
+    "gold_in_pool_rank": 2,
+    "final_keys": [
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      0
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      61
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2584
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      60
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      38
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      34
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      939
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      190
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      32
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2393
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2102
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2545
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      191
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2317
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2418
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      52
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      765
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      37
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2356
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2514
+     ]
+    ],
+    "pool_keys": [
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      939
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2584
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      32
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      34
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2580
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2393
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2545
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      38
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2102
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2446
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2418
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2556
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      537
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      191
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2317
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2264
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2356
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2127
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      0
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      60
+     ]
+    ]
+   },
+   {
+    "id": "doc-13",
+    "kind": "doc",
+    "query": "648 Systems Modeling Language v2.0, Part 1",
+    "n_gold": 8,
+    "recall": {
+     "recall@1": 0.0,
+     "recall@3": 0.0,
+     "recall@5": 0.0,
+     "recall@10": 0.0
+    },
+    "mrr@10": 0.0,
+    "ndcg@10": 0.0,
+    "pool_recall": 0.0,
+    "n_final": 20,
+    "n_pool": 37,
+    "route": "vector",
+    "latency_final_ms": 1534,
+    "latency_pool_ms": 827,
+    "gold_in_pool_rank": 0,
+    "final_keys": [
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      0
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      61
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      60
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      34
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      64
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      32
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2393
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      190
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2418
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2102
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2545
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2584
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      939
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2317
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2356
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      69
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      52
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1696
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2514
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      37
+     ]
+    ],
+    "pool_keys": [
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      939
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      32
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      34
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2418
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2545
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2393
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2584
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2356
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2102
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1852
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      193
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      400
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1779
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      339
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2317
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1963
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      73
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2137
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      27
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      38
+     ]
+    ]
+   },
+   {
+    "id": "doc-14",
+    "kind": "doc",
+    "query": "234 Systems Modeling Language v2.0, Part 1",
+    "n_gold": 4,
+    "recall": {
+     "recall@1": 0.0,
+     "recall@3": 0.0,
+     "recall@5": 0.0,
+     "recall@10": 0.0
+    },
+    "mrr@10": 0.0,
+    "ndcg@10": 0.0,
+    "pool_recall": 0.0,
+    "n_final": 20,
+    "n_pool": 36,
+    "route": "vector",
+    "latency_final_ms": 1710,
+    "latency_pool_ms": 1019,
+    "gold_in_pool_rank": 0,
+    "final_keys": [
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      939
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      61
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      38
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      60
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      190
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      191
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      34
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1963
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      32
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2102
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      52
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      0
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2393
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1696
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1779
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2317
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      69
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2356
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      953
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2022
+     ]
+    ],
+    "pool_keys": [
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      939
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      32
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      34
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      38
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1779
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      191
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      953
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2195
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2356
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      339
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      190
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2102
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2022
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      95
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      195
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      196
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2393
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      193
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2418
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      197
+     ]
+    ]
+   },
+   {
+    "id": "doc-15",
+    "kind": "doc",
+    "query": "7.12.1 Ports Overview",
+    "n_gold": 6,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 1.0,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 38,
+    "route": "vector",
+    "latency_final_ms": 1752,
+    "latency_pool_ms": 503,
+    "gold_in_pool_rank": 2,
+    "final_keys": [
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      314
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      316
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      313
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      318
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      317
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      315
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      320
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2011
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      393
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      84
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2010
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2012
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      319
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1676
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1678
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1166
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      306
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      699
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      392
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1973
+     ]
+    ],
+    "pool_keys": [
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      84
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      314
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      316
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      313
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      318
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      317
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      315
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      393
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      320
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2011
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2010
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2012
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      319
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1676
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1678
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1166
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      306
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      699
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      392
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1973
+     ]
+    ]
+   },
+   {
+    "id": "doc-16",
+    "kind": "doc",
+    "query": "2.6 值： = / default / :=",
+    "n_gold": 3,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.9060254355346823,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 36,
+    "route": "vector",
+    "latency_final_ms": 1570,
+    "latency_pool_ms": 459,
+    "gold_in_pool_rank": 3,
+    "final_keys": [
+     [
+      "SysML-v2-AI建模知识文档.md",
+      68
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      377
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      70
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      69
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1729
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1707
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      212
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1095
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2136
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1361
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1475
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      337
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1025
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1118
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1790
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1104
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1791
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2137
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1360
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      726
+     ]
+    ],
+    "pool_keys": [
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1729
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1707
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      68
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      70
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      69
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      377
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      212
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1095
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2136
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1361
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1475
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      337
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1025
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1118
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1790
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1104
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1791
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2137
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      1360
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      726
+     ]
+    ]
+   },
+   {
+    "id": "doc-17",
+    "kind": "doc",
+    "query": "附录 B：EBNF 产生式索引（官方 §8.2.2）",
+    "n_gold": 14,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 1.0,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 36,
+    "route": "vector",
+    "latency_final_ms": 1557,
+    "latency_pool_ms": 439,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "SysML-v2-AI建模知识文档.md",
+      249
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      251
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      259
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      254
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      250
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      258
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      257
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      253
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      255
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      256
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      260
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      261
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      262
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      252
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      756
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      757
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      758
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      55
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      238
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      16
+     ]
+    ],
+    "pool_keys": [
+     [
+      "SysML-v2-AI建模知识文档.md",
+      251
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      259
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      249
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      254
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      250
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      258
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      257
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      253
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      255
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      256
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      260
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      261
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      262
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      252
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      756
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      757
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      758
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      55
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      238
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      16
+     ]
+    ]
+   },
+   {
+    "id": "doc-18",
+    "kind": "doc",
+    "query": "4.12 用例 / 分析 / 验证",
+    "n_gold": 4,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.8318724637288826,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 31,
+    "route": "vector",
+    "latency_final_ms": 1456,
+    "latency_pool_ms": 452,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "SysML-v2-AI建模知识文档.md",
+      145
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      144
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      146
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      204
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      205
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1959
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1958
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1514
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1498
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2113
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      675
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1497
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1506
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      231
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      122
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      237
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      236
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      232
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      112
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1940
+     ]
+    ],
+    "pool_keys": [
+     [
+      "SysML-v2-AI建模知识文档.md",
+      145
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      144
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      204
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      205
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      146
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1959
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1958
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1514
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1498
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2113
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      675
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1497
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1506
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      231
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      122
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      237
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      236
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      232
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      112
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1940
+     ]
+    ]
+   },
+   {
+    "id": "doc-19",
+    "kind": "doc",
+    "query": "4.9 状态与状态机",
+    "n_gold": 5,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.9818483242455301,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 33,
+    "route": "vector",
+    "latency_final_ms": 1429,
+    "latency_pool_ms": 449,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "SysML-v2-AI建模知识文档.md",
+      129
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      131
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      130
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      128
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      202
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      203
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      132
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1331
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      69
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      240
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2567
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1852
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      97
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2566
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      543
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      248
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2571
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      548
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2565
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      23
+     ]
+    ],
+    "pool_keys": [
+     [
+      "SysML-v2-AI建模知识文档.md",
+      129
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      131
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      130
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      202
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      203
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      128
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      132
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      69
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1331
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      240
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2567
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1852
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      97
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2566
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      543
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      248
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2571
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      548
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2565
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      23
+     ]
+    ]
+   },
+   {
+    "id": "doc-20",
+    "kind": "doc",
+    "query": "1.8 保留字",
+    "n_gold": 5,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.9747429528567877,
+    "pool_recall": 1.0,
+    "n_final": 20,
+    "n_pool": 39,
+    "route": "vector",
+    "latency_final_ms": 1690,
+    "latency_pool_ms": 449,
+    "gold_in_pool_rank": 1,
+    "final_keys": [
+     [
+      "SysML-v2-AI建模知识文档.md",
+      39
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      38
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      40
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      488
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      42
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      41
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      487
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      121
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      327
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      124
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      122
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      23
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      37
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      24
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      123
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1966
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      250
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      32
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      726
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      538
+     ]
+    ],
+    "pool_keys": [
+     [
+      "SysML-v2-AI建模知识文档.md",
+      42
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      38
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      41
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      40
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      39
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      488
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      487
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      121
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      327
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      124
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      122
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      23
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      37
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      24
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      123
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1966
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      250
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      32
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      726
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      538
+     ]
+    ]
+   }
+  ],
+  "graph": [
+   {
+    "id": "graph-01",
+    "kind": "graph",
+    "query": "支持星间链路组网 被分配到哪个 链路建立功能",
+    "relation_type": "ALLOCATED_TO",
+    "gold_pair": [
+     "支持星间链路组网",
+     "链路建立功能"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.7,
+    "graph_count": 2,
+    "latency_ms": 13
+   },
+   {
+    "id": "graph-02",
+    "kind": "graph",
+    "query": "转发器 由哪些 接收机 组成",
+    "relation_type": "COMPOSED_OF",
+    "gold_pair": [
+     "转发器",
+     "接收机"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.967,
+    "graph_count": 6,
+    "latency_ms": 12
+   },
+   {
+    "id": "graph-03",
+    "kind": "graph",
+    "query": "宽带通信星座 包含哪些 宽带载荷",
+    "relation_type": "CONTAINS",
+    "gold_pair": [
+     "宽带通信星座",
+     "宽带载荷"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 1.0,
+    "graph_count": 5,
+    "latency_ms": 10
+   },
+   {
+    "id": "graph-04",
+    "kind": "graph",
+    "query": "由 提供全球宽带互联网接入服务 派生出的 系统支持 Ka 频段双向通信 有哪些",
+    "relation_type": "DERIVES",
+    "gold_pair": [
+     "提供全球宽带互联网接入服务",
+     "系统支持 Ka 频段双向通信"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.7,
+    "graph_count": 2,
+    "latency_ms": 10
+   },
+   {
+    "id": "graph-05",
+    "kind": "graph",
+    "query": "Ka 频段星地链路 满足哪些 链路余量不低于 3 dB",
+    "relation_type": "SATISFIES",
+    "gold_pair": [
+     "Ka 频段星地链路",
+     "链路余量不低于 3 dB"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.8,
+    "graph_count": 3,
+    "latency_ms": 12
+   },
+   {
+    "id": "graph-06",
+    "kind": "graph",
+    "query": "转发器 EIRP 测试用例 与 数据转发功能 的追溯关系",
+    "relation_type": "TRACE",
+    "gold_pair": [
+     "转发器 EIRP 测试用例",
+     "数据转发功能"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.98,
+    "graph_count": 10,
+    "latency_ms": 14
+   },
+   {
+    "id": "graph-07",
+    "kind": "graph",
+    "query": "测控链路可用度不低于 99.5% 由哪些 测控链路测试用例 验证",
+    "relation_type": "VERIFIED_BY",
+    "gold_pair": [
+     "测控链路可用度不低于 99.5%",
+     "测控链路测试用例"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.8,
+    "graph_count": 3,
+    "latency_ms": 13
+   },
+   {
+    "id": "graph-08",
+    "kind": "graph",
+    "query": "支持跳波束灵活覆盖 被分配到哪个 波束调度功能",
+    "relation_type": "ALLOCATED_TO",
+    "gold_pair": [
+     "支持跳波束灵活覆盖",
+     "波束调度功能"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.7,
+    "graph_count": 2,
+    "latency_ms": 12
+   },
+   {
+    "id": "graph-09",
+    "kind": "graph",
+    "query": "电源分系统 由哪些 蓄电池组 组成",
+    "relation_type": "COMPOSED_OF",
+    "gold_pair": [
+     "电源分系统",
+     "蓄电池组"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.9,
+    "graph_count": 6,
+    "latency_ms": 14
+   },
+   {
+    "id": "graph-10",
+    "kind": "graph",
+    "query": "GEO 宽带通信卫星系统 包含哪些 Ka 频段星地链路",
+    "relation_type": "CONTAINS",
+    "gold_pair": [
+     "GEO 宽带通信卫星系统",
+     "Ka 频段星地链路"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 1.0,
+    "graph_count": 5,
+    "latency_ms": 14
+   },
+   {
+    "id": "graph-11",
+    "kind": "graph",
+    "query": "由 转发器 EIRP 不低于 55 dBW 派生出的 转发器噪声系数不高于 2.5 dB 有哪些",
+    "relation_type": "DERIVES",
+    "gold_pair": [
+     "转发器 EIRP 不低于 55 dBW",
+     "转发器噪声系数不高于 2.5 dB"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 1,
+    "entity_recall": 0.5,
+    "relation_hit": true,
+    "confidence": 0.98,
+    "graph_count": 10,
+    "latency_ms": 15
+   },
+   {
+    "id": "graph-12",
+    "kind": "graph",
+    "query": "行波管 满足哪些 行波管效率不低于 60%",
+    "relation_type": "SATISFIES",
+    "gold_pair": [
+     "行波管",
+     "行波管效率不低于 60%"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.8,
+    "graph_count": 3,
+    "latency_ms": 12
+   },
+   {
+    "id": "graph-13",
+    "kind": "graph",
+    "query": "波束覆盖测试用例 与 波束调度功能 的追溯关系",
+    "relation_type": "TRACE",
+    "gold_pair": [
+     "波束覆盖测试用例",
+     "波束调度功能"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.7,
+    "graph_count": 2,
+    "latency_ms": 12
+   },
+   {
+    "id": "graph-14",
+    "kind": "graph",
+    "query": "功放输出功率不低于 120 W 由哪些 功放输出功率测试用例 验证",
+    "relation_type": "VERIFIED_BY",
+    "gold_pair": [
+     "功放输出功率不低于 120 W",
+     "功放输出功率测试用例"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.7,
+    "graph_count": 2,
+    "latency_ms": 11
+   },
+   {
+    "id": "graph-15",
+    "kind": "graph",
+    "query": "提供全球宽带互联网接入服务 被分配到哪个 地面互联网骨干网",
+    "relation_type": "ALLOCATED_TO",
+    "gold_pair": [
+     "提供全球宽带互联网接入服务",
+     "地面互联网骨干网"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.7,
+    "graph_count": 2,
+    "latency_ms": 15
+   },
+   {
+    "id": "graph-16",
+    "kind": "graph",
+    "query": "转发器 由哪些 行波管 组成",
+    "relation_type": "COMPOSED_OF",
+    "gold_pair": [
+     "转发器",
+     "行波管"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.975,
+    "graph_count": 8,
+    "latency_ms": 14
+   },
+   {
+    "id": "graph-17",
+    "kind": "graph",
+    "query": "GEO 宽带通信卫星系统 包含哪些 宽带通信地面段",
+    "relation_type": "CONTAINS",
+    "gold_pair": [
+     "GEO 宽带通信卫星系统",
+     "宽带通信地面段"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.9,
+    "graph_count": 4,
+    "latency_ms": 19
+   },
+   {
+    "id": "graph-18",
+    "kind": "graph",
+    "query": "由 星地链路可用度不低于 99.9% 派生出的 平台供电功率不低于 12 kW 有哪些",
+    "relation_type": "DERIVES",
+    "gold_pair": [
+     "星地链路可用度不低于 99.9%",
+     "平台供电功率不低于 12 kW"
+    ],
+    "route": "graph",
+    "expect_route_in": [
+     "graph",
+     "mixed"
+    ],
+    "route_ok": true,
+    "entity_hit": 2,
+    "entity_recall": 1.0,
+    "relation_hit": true,
+    "confidence": 0.8,
+    "graph_count": 3,
+    "latency_ms": 15
+   }
+  ],
+  "neg": [
+   {
+    "id": "neg-01",
+    "kind": "neg",
+    "query": "帮我写一首关于春天的诗",
+    "tag": "域外闲聊",
+    "route": "vector",
+    "route_ok": true,
+    "n_hits": 20,
+    "confidence": 0.0,
+    "false_graph_confident": false,
+    "latency_ms": 1600
+   },
+   {
+    "id": "neg-02",
+    "kind": "neg",
+    "query": "今天北京的天气怎么样",
+    "tag": "域外常识",
+    "route": "vector",
+    "route_ok": true,
+    "n_hits": 20,
+    "confidence": 0.0,
+    "false_graph_confident": false,
+    "latency_ms": 1963
+   },
+   {
+    "id": "neg-03",
+    "kind": "neg",
+    "query": "空间站机械臂的抓取力是多少",
+    "tag": "域内但不存在",
+    "route": "vector",
+    "route_ok": true,
+    "n_hits": 20,
+    "confidence": 0.0,
+    "false_graph_confident": false,
+    "latency_ms": 1759
+   },
+   {
+    "id": "neg-04",
+    "kind": "neg",
+    "query": "巡飞待机弹的推进剂加注量是多少",
+    "tag": "域内但不存在",
+    "route": "vector",
+    "route_ok": true,
+    "n_hits": 0,
+    "confidence": 0.0,
+    "false_graph_confident": false,
+    "latency_ms": 27
+   },
+   {
+    "id": "neg-05",
+    "kind": "neg",
+    "query": "热管理系统冷却回路的流量是多少",
+    "tag": "域内但不存在",
+    "route": "vector",
+    "route_ok": true,
+    "n_hits": 20,
+    "confidence": 0.0,
+    "false_graph_confident": false,
+    "latency_ms": 1696
+   },
+   {
+    "id": "neg-06",
+    "kind": "neg",
+    "query": "如何用 Python 做网页爬虫",
+    "tag": "术语邻域但不相关",
+    "route": "vector",
+    "route_ok": true,
+    "n_hits": 20,
+    "confidence": 0.0,
+    "false_graph_confident": false,
+    "latency_ms": 1689
+   },
+   {
+    "id": "neg-07",
+    "kind": "neg",
+    "query": "宽带通信卫星的太阳能板清洗周期",
+    "tag": "域内但不存在",
+    "route": "graph",
+    "route_ok": false,
+    "n_hits": 0,
+    "confidence": 0.9,
+    "false_graph_confident": true,
+    "latency_ms": 15
+   },
+   {
+    "id": "neg-08",
+    "kind": "neg",
+    "query": "推荐几部好看的科幻电影",
+    "tag": "域外闲聊",
+    "route": "vector",
+    "route_ok": true,
+    "n_hits": 20,
+    "confidence": 0.0,
+    "false_graph_confident": false,
+    "latency_ms": 1622
+   }
+  ]
+ },
+ "elapsed_s": 62.0
+}

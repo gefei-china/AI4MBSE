@@ -141,30 +141,50 @@ def list_audit(limit: int = 100, event_type: Optional[str] = None, search: Optio
 
 @router.get("/api/ops/metrics")
 def ops_metrics(conn=Depends(db_session)):
+    """运维指标（2026-09-22 真实化改造）。
+
+    原版返回编造数据（light_rt/qps/availability 硬编码、Neo4j/Milvus/Qwen备/APP-2 等
+    本工程不存在的组件、假备份日期）——面向甲方的假运维状态比没有更危险。
+    现只返回可证真实的数据：
+    - 计数：真实表统计
+    - topology：真实组件探活（SQLite / pyoxigraph 内嵌图库 / LLM provider 配置 / Fuseki 外挂图库）
+    - light_rt / qps / availability 等性能指标待真实压测（需求 7.1）后回填，不预置假值
+    - error_codes 待统一错误码表（需求 11.3）建立后接入
+    """
     repo = MetaRepo(conn)
-    total_entities = repo.count("entities")
-    total_convs = repo.count("conversations")
-    total_msgs = repo.count("messages")
-    total_audit = repo.count("audit_logs")
+
+    # ── 真实组件探活 ──
+    topology = [{"name": "SQLite 主库", "status": "online"}]
+    try:
+        import pyoxigraph  # noqa: F401
+        topology.append({"name": "pyoxigraph 内嵌图库", "status": "online"})
+    except Exception:
+        topology.append({"name": "pyoxigraph 内嵌图库", "status": "offline"})
+    try:
+        import socket
+        with socket.create_connection(("127.0.0.1", 3030), timeout=1):
+            topology.append({"name": "Fuseki 外挂图库", "status": "online"})
+    except Exception:
+        topology.append({"name": "Fuseki 外挂图库（可选，未启用）", "status": "offline"})
+    try:
+        provs = conn.execute("SELECT name, status FROM llm_providers").fetchall()
+        for r in provs:
+            topology.append({"name": f"LLM · {r['name']}", "status": r["status"] or "unknown"})
+    except Exception:
+        pass
+
+    # ── 真实备份记录：备份为手动导出式（GET /api/meta/backup），无定时目录可扫 ──
+    backup = {"last_backup": None,
+              "strategy": "手动导出（GET /api/meta/backup，WAL checkpoint 后下载快照）；定时备份策略见需求 11.3（待建）"}
+
     return {
-        "light_rt": 1.8, "qps": 132, "heavy_concurrent": 12,
-        "online_users": 23, "availability": 99.96,
-        "total_entities": total_entities, "total_conversations": total_convs,
-        "total_messages": total_msgs, "total_audit_logs": total_audit,
-        "error_codes": [
-            {"code": "E-PARSE-042", "desc": "文档解析失败（图片OCR）", "solution": "重试 / 转人工录入"},
-            {"code": "E-LLM-017", "desc": "LLM 响应超时（>30s）", "solution": "降级备用模型 Qwen"},
-            {"code": "E-GRAPH-008", "desc": "图库连接抖动", "solution": "自动重连 · 降级向量检索"},
-        ],
-        "topology": [
-            {"name": "LLM-1 DeepSeek", "status": "online"},
-            {"name": "LLM-2 Qwen(备)", "status": "online"},
-            {"name": "APP-1 FastAPI", "status": "online"},
-            {"name": "APP-2 FastAPI", "status": "online"},
-            {"name": "Neo4j 主库", "status": "online"},
-            {"name": "Milvus 向量库", "status": "syncing"},
-        ],
-        "backup": {"last_backup": "2026-08-04 02:30", "strategy": "每日全量+每小时增量", "next_maintenance": "2026-09-01 02:00"},
+        "total_entities": repo.count("entities"), "total_conversations": repo.count("conversations"),
+        "total_messages": repo.count("messages"), "total_audit_logs": repo.count("audit_logs"),
+        "topology": topology,
+        "backup": backup,
+        # light_rt / qps / heavy_concurrent / online_users / availability 已删除：
+        # 原为硬编码假值，待 7.1 真实压测后以实测数据回填
+        # error_codes 已删除：原三条为编造示例，待 11.3 统一错误码表建立后接入真实枚举
     }
 
 

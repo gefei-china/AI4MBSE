@@ -1,0 +1,282 @@
+{
+ "schema": "p1-6/eval-report@1",
+ "tag": "smoke",
+ "when": "2026-09-22 23:03:15",
+ "evalset": "evalset.json",
+ "evalset_built_at": "2026-09-21 11:51:01",
+ "fingerprint_evalset": {
+  "db_bytes": 283234304,
+  "documents": 5,
+  "chunks": 5758,
+  "entities_total": 124,
+  "entities_release": 60,
+  "relations_release": 83,
+  "ontology_active": "v25.0.0",
+  "chunk_branches": [
+   {
+    "branch": "global",
+    "n": 5758
+   }
+  ],
+  "entity_branches": [
+   {
+    "branch": "dev",
+    "n": 64
+   },
+   {
+    "branch": "release",
+    "n": 60
+   }
+  ],
+  "release_entity_names_sha1": "bef95d0324ec97d7"
+ },
+ "fingerprint_now": {
+  "chunks": 5758,
+  "entities_release": 61,
+  "release_entity_names_sha1": "04c1ac33e06813fe"
+ },
+ "fingerprint_drift": [
+  "release 实体名集合 bef95d0324ec97d7 → 04c1ac33e06813fe（图谱已被改写）",
+  "release 实体数 60 → 61"
+ ],
+ "config": {
+  "recall_k": 20,
+  "top_k": 20,
+  "inject_k": 3,
+  "rerank_enabled": true,
+  "rerank_max_candidates": 10,
+  "hyde_enabled": true,
+  "route_threshold": 0.7,
+  "retrieval_weight": null,
+  "bm25_weight": null
+ },
+ "cfg_overrides": [],
+ "pool_width": 20,
+ "summary": {
+  "doc": {
+   "n": 2,
+   "recall@1": 1.0,
+   "recall@3": 1.0,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "mrr@10": 1.0,
+   "ndcg@10": 0.835,
+   "latency_p50_ms": 4356,
+   "latency_pool_p50_ms": 0
+  }
+ },
+ "negative_control": null,
+ "rows": {
+  "doc": [
+   {
+    "id": "doc-01",
+    "kind": "doc",
+    "query": "2.4 C3 - Unambiguous",
+    "n_gold": 13,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.8701249883466592,
+    "pool_recall": null,
+    "n_final": 20,
+    "n_pool": 0,
+    "route": "vector",
+    "latency_final_ms": 6816,
+    "latency_pool_ms": 0,
+    "gold_in_pool_rank": 0,
+    "final_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      268
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      267
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      263
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      262
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      265
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      266
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      273
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      272
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      212
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      446
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      271
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      185
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      269
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      210
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      208
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      250
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      245
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      248
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      249
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      394
+     ]
+    ],
+    "pool_keys": []
+   },
+   {
+    "id": "doc-02",
+    "kind": "doc",
+    "query": "1.11 Conditional Clauses and Ubiquitous Requirements",
+    "n_gold": 10,
+    "recall": {
+     "recall@1": 1.0,
+     "recall@3": 1.0,
+     "recall@5": 1.0,
+     "recall@10": 1.0
+    },
+    "mrr@10": 1.0,
+    "ndcg@10": 0.8006937664098819,
+    "pool_recall": null,
+    "n_final": 20,
+    "n_pool": 0,
+    "route": "vector",
+    "latency_final_ms": 1896,
+    "latency_pool_ms": 0,
+    "gold_in_pool_rank": 0,
+    "final_keys": [
+     [
+      "Guide to writing Requirements.pdf",
+      188
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      185
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      181
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      180
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      186
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      182
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      187
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      777
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      633
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      639
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      183
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      184
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      179
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      513
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      514
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      631
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      847
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      630
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      836
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      824
+     ]
+    ],
+    "pool_keys": []
+   }
+  ]
+ },
+ "elapsed_s": 8.7
+}
