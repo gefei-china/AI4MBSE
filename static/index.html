@@ -48,7 +48,7 @@
       <!-- 2026-09-18 二次调整：知识浏览(kb-a) 更名「数据看板」并成为知识中心**默认落点**（data-tab="kb-a"，与 go('kb') 缺省路由一致）；
            页内 Tab 栏位置由「kb-a 与 kb-e 之间」上移到「kb-a 之前」（原顺序会被 kb-a 长内容顶到页面下方）。
            深链 go('kb','kb-a'/'kb-d'/'kb-e'/'kb-c') 全部兼容；高亮由 02-shell.js 中 nav-kbhub 特判覆盖 -->
-      <a data-page="kb" data-tab="kb-a" id="nav-kbhub" title="知识中心：数据看板（统计/完整度/双引擎）+ 资料库（文档管道）+ 图谱工作区（实体/关系/推理/历史/合并请求）+ 本体模型 + 术语词典" data-page-node-id="MLG63KC6vEf3gebaURgeWg"><span class="ic" data-page-node-id="SSnqzfARGKgpMsVEgpRzJE">🕸</span><span class="lbl" data-page-node-id="7S1IgwVnzn2QjEMCKAjNi1">知识中心</span></a>
+      <a data-page="kb" data-tab="kb-a" id="nav-kbhub" title="知识中心：数据看板（统计/完整度/双引擎）+ 文档库（文档管道）+ 知识图谱（实体/关系/推理/历史/合并请求）+ 本体模型 + 术语词典" data-page-node-id="MLG63KC6vEf3gebaURgeWg"><span class="ic" data-page-node-id="SSnqzfARGKgpMsVEgpRzJE">🕸</span><span class="lbl" data-page-node-id="7S1IgwVnzn2QjEMCKAjNi1">知识中心</span></a>
       <!-- 2026-09-11 数据整理（kb-b）入口已隐藏：抽取/审核流水线功能保留，工作流深链（待办/抽取完成/图谱空态引导）仍可达；恢复时解除注释即可 -->
       <!-- <a data-page="kb" data-tab="kb-b" id="nav-workbench" data-page-node-id="5Kh9MQjipqVEO9HPdgteW3"><span class="ic" data-page-node-id="JySMa5V1pFVbpidwp0r0cZ">🧬</span><span class="lbl" data-page-node-id="rgt2fwxbDhNo2x8SIcqEsq">数据整理</span></a> -->
       <a data-page="studio" data-tab="st-agent" data-page-node-id="wz8utkQVAVPe1DDAlHF4WH"><span class="ic" data-page-node-id="iGFPctyf2zUfxXyEMSvXVg">🤖</span><span class="lbl" data-page-node-id="YOC121PYmThCjHFnF5eYUJ">能力中心</span></a>
@@ -133,7 +133,7 @@
       <!-- 2026-09-04：默认进入「AI 建模」页（会话/草稿态欢迎屏），不再以「总览」为首页 -->
       <div class="page" id="pg-home" data-page-node-id="Gu6Q21BWQZDeVGtyDXmXvz">
         <h3 class="pt" data-page-node-id="qtXlseXDjfg9vW4nT5pwcm">总览</h3>
-        <div class="pd" id="home-greeting" data-page-node-id="UcrFuqdAjnhEtU5lYhfHkB">角色：设计师 ｜ 专属工作空间，数据/模型/配置隔离（FR-UR-3）</div>
+        <div class="pd" id="home-greeting" data-page-node-id="UcrFuqdAjnhEtU5lYhfHkB">角色：设计师 ｜ 个人分支隔离建模，合并需评审（FR-UR-3 · 统一认证待接入）</div>
         <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:14px;" id="home-kpis" data-page-node-id="gDd6LlW0EylNoes72e5ium">
           <div class="kpi" style="cursor:pointer;" title="点击进入「AI 建模」" onclick="go('ai')" data-page-node-id="pjBChGA23bzZF9AGEHsHgB"><div class="n" data-page-node-id="GRxWRRMOdd9BBmtBskCDNg">-</div><div class="l" data-page-node-id="TAI0CMZNJ3NNo2kBhgDMEn">进行中的对话任务</div></div>
           <div class="kpi" style="cursor:pointer;" title="点击进入「合并请求」处理冲突" onclick="go('branch')" data-page-node-id="hKwHqOJYgCq9fCzzoVsQg0"><div class="n" style="color:var(--red);" data-page-node-id="Nd3VlkStCdleQIZZdHd2Fj">-</div><div class="l" data-page-node-id="jhVo7KQIlu7vts6ZmRQ3zO">待处理冲突告警</div></div>
@@ -239,7 +239,7 @@
       <div class="page" id="pg-kb" data-page-node-id="4yCCnyZf5gYCUT4CjtfLSr">
         <!-- 模块工具行：左上角模块名 + 右上角工作分支切换（与模块名同一行；本体模型为全局共享不显示） -->
         <div class="kb-toolbar" id="kb-toolbar" style="display:none;" data-page-node-id="S827X9HR7foBR0bsMqFNSv">
-          <span class="kb-toolbar-title" id="kb-module-title" data-page-node-id="8AOMm0TIGPVtuBQSj7kBBs">资料库</span>
+          <span class="kb-toolbar-title" id="kb-module-title" data-page-node-id="8AOMm0TIGPVtuBQSj7kBBs">文档库</span>
           <span style="flex:1;" data-page-node-id="fEzzbOGQ1l2PV62trcBqFh"></span>
         </div>
         <!-- ── 知识中心页内顶层 Tab 栏（2026-09-18 建立，同日二次调整）──
@@ -253,9 +253,10 @@
         <div id="kbhub-tabs" style="display:none;gap:8px;align-items:center;margin-bottom:10px;">
           <!-- 2026-09-18：知识浏览(kb-a) 迁入知识中心作为**第一个 Tab**；同日更名「数据看板」并成为默认落点 -->
           <span id="kbhub-tab-a" class="kbhub-chip" onclick="go('kb','kb-a')" title="数据看板：知识库统计 · 生命周期 · 完整度 · 双引擎消费 · 实体检索">📊 数据看板</span>
-          <span id="kbhub-tab-e" class="kbhub-chip" onclick="go('kb','kb-e')" title="资料库：文档上传 · 解析分块 · 向量化 · 抽取管道">📁 资料库</span>
-          <span id="kbhub-tab-d" class="kbhub-chip" onclick="go('kb','kb-d')" title="图谱工作区：实体 / 关系 / 推理 / 历史 / 合并请求">🕸 图谱工作区</span>
-          <span id="kbhub-tab-c" class="kbhub-chip" onclick="window._kbCtxTerms=false;go('kb','kb-c')" title="本体模型：类型 / 关系定义全景 · Schema 层（实例数据在图谱工作区）">🧬 本体模型</span>
+          <span id="kbhub-tab-e" class="kbhub-chip" onclick="go('kb','kb-e')" title="文档库：文档上传 · 解析分块 · 向量化 · 抽取管道">📄 文档库</span>
+          <span id="kbhub-tab-b" class="kbhub-chip" onclick="go('kb','kb-b')" title="治理中心：抽取审核 → 重复消歧 → 属性融合 → 三元组审核 → 发布 —— 文档抽取/AI 建模产出的知识候选在此验收、消歧、融合并发布">🛡 治理中心</span>
+          <span id="kbhub-tab-d" class="kbhub-chip" onclick="go('kb','kb-d')" title="知识图谱：实体 / 关系 / 推理 / 历史 / 合并请求">🕸 知识图谱</span>
+          <span id="kbhub-tab-c" class="kbhub-chip" onclick="window._kbCtxTerms=false;go('kb','kb-c')" title="本体模型：类型 / 关系定义全景 · Schema 层（实例数据在知识图谱）">🧬 本体模型</span>
           <span id="kbhub-tab-t" class="kbhub-chip" onclick="window._kbCtxTerms=true;go('kb','kb-c')" title="术语词典：词条 ↔ 本体类型归一映射（Schema 命名层 · 主数据）">📖 术语词典</span>
           <span style="flex:1;"></span>
         </div>
@@ -320,7 +321,7 @@
         <!-- （原 Tab 栏在此处，2026-09-18 已上移至 #kb-a 之前 —— 见下方 #kbhub-tabs） -->
         <div class="subpage" id="kb-e" data-tabpanel="kb" data-page-node-id="9bWn54q69VH6qlXnHVWpbz">
           <div class="panel" data-page-node-id="TK2WNWmMWnJxDSQGBEyWQE">
-            <div class="ph" data-page-node-id="PZ4OOJZ4iqVMDvUnuB2Ssx">资料库 <span class="tag" data-page-node-id="j2fBYSHqf2RLdFTWSeiVVx">解析→分块→向量化<span id="doc-flow-extract" style="display:none;" data-page-node-id="8YhmZevFTVDtKFX0nmdVdX">→抽取</span></span><span class="tag" data-page-node-id="orYIMJSTquRNqFsAcrmQWq">支持批量（多选）</span><span id="doc-count" style="color:var(--mut);font-size:11px;" data-page-node-id="5HPGKlDgHVOwsaPJLQFNWM"></span><span style="flex:1" data-page-node-id="Xg43HoXfZHgjQ6LKEJNyoA"></span></div>
+            <div class="ph" data-page-node-id="PZ4OOJZ4iqVMDvUnuB2Ssx">文档库 <span class="tag" data-page-node-id="j2fBYSHqf2RLdFTWSeiVVx">解析→分块→向量化<span id="doc-flow-extract" style="display:none;" data-page-node-id="8YhmZevFTVDtKFX0nmdVdX">→抽取</span></span><span class="tag" data-page-node-id="orYIMJSTquRNqFsAcrmQWq">支持批量（多选）</span><span id="doc-count" style="color:var(--mut);font-size:11px;" data-page-node-id="5HPGKlDgHVOwsaPJLQFNWM"></span><span style="flex:1" data-page-node-id="Xg43HoXfZHgjQ6LKEJNyoA"></span></div>
             <div class="pb" style="padding:0;display:flex;min-height:0;" data-page-node-id="kGyV7Xh4dypCffRtB7WtbM">
               <!-- ── 左栏：文档目录树（2026-09-21「基于文件的管理」）──
                    分两组、视觉分离（方案 §4.3 的硬要求）：
@@ -412,7 +413,7 @@
           </div>
         </div>
         <div class="subpage" id="kb-b" data-tabpanel="kb" style="padding:0;" data-page-node-id="hK2jiVpPw3WcEwT9gCsuy3">
-          <div id="kb-flow-bar" style="display:flex;gap:8px;align-items:center;padding:10px 12px 0;flex-wrap:wrap;" data-page-node-id="MuipKVG63jRDCrVGFxEe15">
+          <div id="kb-flow-bar" style="display:none;gap:8px;align-items:center;padding:10px 12px 0;flex-wrap:wrap;" data-page-node-id="MuipKVG63jRDCrVGFxEe15">
             <b style="font-size:12px;color:var(--blue-d);" data-page-node-id="2PRJ2Z3TZ4Uv9am88RcQ9n">🔄 知识治理全链路</b>
             <span id="fusion-page-stats" class="fstat" style="display:flex;gap:10px;flex-wrap:wrap;" data-page-node-id="2PSNCKFYdLugVY3vThr745"></span>
             <span style="flex:1" data-page-node-id="nunm6Dz07EscldbsDGUQpm"></span>
@@ -420,7 +421,7 @@
             </span>
             <button class="btn sm ghost" onclick="try{go('kb','kb-d')}catch(e){}" title="跳转图谱工作区查看已入图数据" data-page-node-id="N4fxA5BM2o6nhn2cf7AeG9">🕸 查看图谱</button>
           </div>
-          <!-- IA 收敛（2026-08-28）：抽取批次/数据整理双 subtab 合并——候选批次降为数据整理左栏第 0 站（fus-pane-batch），单入口单流水线 -->
+          <!-- IA 收敛（2026-08-28）：抽取批次/数据整理双 subtab 合并——候选队列降为治理管线第一站（fus-pane-batch），单入口单流水线 -->
           <div class="panel" style="margin-bottom:0;padding:10px 12px;" id="fus-nav" data-page-node-id="sBGYfCutTBCWh0ERp62MwF">
                   <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;" data-page-node-id="AVH3sy1tYuCuZb4eLJtXYw">
                     <span style="font-size:13px;font-weight:600;color:var(--blue-d);" data-page-node-id="dhTaHPD0OxOLqqYER3ya7H">治理队列（按顺序收敛，左→右）</span>
@@ -430,23 +431,28 @@
                     <button class="btn sm ghost" style="font-size:10.5px;padding:1px 7px;" onclick="loadFusion()" title="刷新统计" data-page-node-id="r6u6cd4JAI89POHBcKaE2i">↻</button>
                   </div>
                   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:stretch;" data-page-node-id="RmLUeEv66cN9tYRwRIQRXm">
-                  <button class="fchip fus-nav-btn" data-fpane="batch" onclick="fusNav(this,'batch')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;" title="第0站·原料验收：逐条确认或驳回候选" data-page-node-id="5ff9qYXUGfLPBwxj9gLtaB">📥 候选批次 <span class="tag" id="fus-n-batch" style="font-size:10px;" data-page-node-id="TjcZje9JtxLtlh7FPG4kVo">…</span></button>
+                  <button class="fchip fus-nav-btn" data-fpane="batch" onclick="fusNav(this,'batch')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;" title="抽取审核：AI 抽取的知识候选逐条验收 —— 确认、修改或驳回" data-page-node-id="5ff9qYXUGfLPBwxj9gLtaB">📥 抽取审核 <span class="tag" id="fus-n-batch" style="font-size:10px;" data-page-node-id="TjcZje9JtxLtlh7FPG4kVo">…</span></button>
                   <span style="align-self:center;color:var(--mut);font-size:11px;" data-page-node-id="hdSTI1nKRwVp7YCegH6jB3">→</span>
-                  <button class="fchip fus-nav-btn" data-fpane="gray" onclick="fusNav(this,'gray')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;" title="身份闸：机器不确定的实体配对人工判定" data-page-node-id="k5OHu0V3hVKsQBsZApLxYX">🔀 灰区裁决 <span class="tag" id="fus-n-gray" style="font-size:10px;" data-page-node-id="qZaX6BJGT1kci7oOt9kS82">…</span></button>
+                  <button class="fchip fus-nav-btn" data-fpane="gray" onclick="fusNav(this,'gray')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;" title="重复消歧：判定两条记录是否指向同一个实体；合并时属性自动择优" data-page-node-id="k5OHu0V3hVKsQBsZApLxYX">🔀 重复消歧 <span class="tag" id="fus-n-gray" style="font-size:10px;" data-page-node-id="qZaX6BJGT1kci7oOt9kS82">…</span></button>
                   <span style="align-self:center;color:var(--mut);font-size:11px;" data-page-node-id="XclTpMGUFu8pQXJ6gjm5rT">→</span>
-                  <button class="fchip fus-nav-btn" data-fpane="conflict" onclick="fusNav(this,'conflict')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;" title="字段闸：属性值矛盾逐条裁决" data-page-node-id="psd5wHmLbu2tCSbGT8VQ3q">⚔️ 冲突裁决 <span class="tag" id="fus-n-conflict" style="font-size:10px;" data-page-node-id="Lx1r5F4dnVwhKlVHWyVaLq">…</span></button>
+                  <button class="fchip fus-nav-btn" data-fpane="conflict" onclick="fusNav(this,'conflict')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;" title="属性融合：同一实体的同一属性出现矛盾值时，逐字段裁定取值" data-page-node-id="psd5wHmLbu2tCSbGT8VQ3q">⚔️ 属性融合 <span class="tag" id="fus-n-conflict" style="font-size:10px;" data-page-node-id="Lx1r5F4dnVwhKlVHWyVaLq">…</span></button>
                   <span style="align-self:center;color:var(--mut);font-size:11px;" data-page-node-id="B4g1BsHjHMimHiAjO07X1W">→</span>
-                  <button class="fchip fus-nav-btn" data-fpane="confirm" onclick="fusNav(this,'confirm')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;border-color:var(--grn,#2f855a);" title="终点：清零后 survivorship 物化入图" data-page-node-id="v2dGd714IM1bh4Ig8A25bo">✅ 物化入图 <span class="tag" style="background:var(--grn-l,#eaf6ef);color:var(--grn,#2f855a);font-size:10px;" data-page-node-id="sGgiFnRtJ5FTZmCzl3pH1t">🏁 终点</span></button>
+                  <button class="fchip fus-nav-btn" data-fpane="store" onclick="fusNav(this,'store')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;" title="三元组审核：确认产生的 (S-P-O) 原子单元在此统一审核 —— 通过后自动落图反写图谱实体">🧾 三元组审核 <span class="tag" id="fus-n-store" style="font-size:10px;">…</span></button>
+                  <span style="align-self:center;color:var(--mut);font-size:11px;">→</span>
+                  <button class="fchip fus-nav-btn" data-fpane="pub" onclick="fusNav(this,'pub')" style="flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:6px;border-color:var(--grn,#2f855a);" title="发布：图库水位 + 合并请求（personal→dev→release）评审 —— 合并后知识进入 AI 建模/问答消费视野（RAG 只消费 release）">📦 发布 <span class="tag" id="fus-n-pub" style="background:var(--grn-l,#eaf6ef);color:var(--grn,#2f855a);font-size:10px;">…</span></button>
                   </div>
-                  <div style="font-size:10.5px;color:var(--mut);margin-top:8px;" data-page-node-id="5l7jKU6kH0DvTfpG3XUkZq">📖 术语词典为全局主数据模块（含权限管理），已并入「本体模型」页的「术语映射」子页——灰区证据中的词典命中仍可溯源。</div>
               </div>
           <div id="fus-pane-batch" class="kb2-pane" style="padding:12px;display:none;" data-page-node-id="BUHSYqbLwzyK88HjL1KCWo">
             <div class="panel" style="margin-bottom:0;" data-page-node-id="0WJkiNEPRDWxmc1EBYdFfl">
-              <div class="ph" data-page-node-id="a0GCs3OXUm7YDsqbL7WtkI">候选批次（第 0 站 · 原料验收） <span class="tag" data-page-node-id="l8GGVpHF3SQgZRaEOgGa5H">文档/AI建模产出的候选在此逐条确认或驳回 —— 确认后进入词典→灰区→冲突→物化流水线收敛</span><span style="flex:1" data-page-node-id="xQVvvjbPY7BIHCpvOBWKez"></span>
+              <div class="ph" data-page-node-id="a0GCs3OXUm7YDsqbL7WtkI">抽取审核<span style="flex:1" data-page-node-id="xQVvvjbPY7BIHCpvOBWKez"></span>
+                <button class="btn sm ghost" onclick="fusNav(null,'confirm')" title="批次收口（重新处置）：对门禁拦截或需重新处置的候选，按批次以指定消歧策略重放确认">批次收口</button>
                 <button class="btn sm ghost" onclick="v2gReviewLoad()" data-page-node-id="VMzB7sbgO35NzHr3XsdaZK">刷新</button>
               </div>
               <div class="pb" style="padding:0;" data-page-node-id="5DOY7RhwFXRi4qLMsEW2al">
-                <!-- 候选检索筛选（常用筛选常驻 + 高级搜索折叠：批次筛选 + 类型筛选） -->
+                <!-- 数据形态说明条（2026-09-22：讲清三层模型，消除"最后一站才入图"的误解） -->
+                <div style="padding:6px 12px;background:var(--bg,#f8fafc);border-bottom:1px solid var(--line);font-size:11px;color:var(--mut);">
+                </div>
+                <!-- 候选检索筛选（常用筛选常驻 + 批次工具行常驻 + 类型多选折叠） -->
                 <div style="padding:8px 12px;border-bottom:1px solid var(--line);" data-page-node-id="JSAVN0rMlpBAlsIHuKT3KC">
                   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="jNdELmKhfIiP1e8jq2d1Dm">
                     <select id="v2g-group" onchange="v2gApplyFilter()" title="实体 / 关系候选分组查看" style="border:1px solid var(--blue);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--blue-d);font-weight:600;" data-page-node-id="jbEgHSK6KqAWzBR2XSVkdw">
@@ -466,26 +472,28 @@
                     <span id="v2g-summary" style="font-size:11px;color:var(--mut);" data-page-node-id="0qenkk0lvHG5imILK9t5Dd"></span>
                     <button class="btn sm ghost" id="v2g-adv-toggle" onclick="v2gToggleAdv()" title="展开/收起高级搜索（批次筛选 + 类型筛选）" data-page-node-id="bXRix1LBKd7gE56EkNIe9m">▸ 高级搜索</button>
                   </div>
-                  <!-- 高级搜索（默认收起：上传批次筛选 + 类型多选） -->
-                  <div id="v2g-adv" style="display:none;margin-top:6px;border-top:1px dashed var(--line);padding-top:6px;" data-page-node-id="JWnqKuggXGmWxUoxnHUQgZ">
-                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="ow8aYTVG22gpYaT98pcgvp">
-                      <b style="font-size:12px;color:var(--blue-d);" data-page-node-id="QAaodfZ15QTYIfGGqs3NEd">📦 上传批次</b>
-                      <span id="v2g-batch-count" style="font-size:11px;color:var(--mut);" data-page-node-id="PkpeaJ9BsQSVQp9QiN9Et2"></span>
-                      <select id="v2g-batch-time" onchange="v2gSetBatchTime()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;" data-page-node-id="kQ15HGPmtn2HVsT77J0y8G">
-                        <option value="" data-page-node-id="b6tMgpHCqIx6neiZrbWbcV">全部时间</option><option value="7" data-page-node-id="EuLk0BBjc0QvNzmPEIDK7b">近 7 天</option><option value="30" data-page-node-id="kDezyomJdrYZsNWATEisqa">近 30 天</option><option value="90" data-page-node-id="eoOUqCG4QvDPjRKZkbJ8oE">近 90 天</option>
-                      </select>
-                      <span style="flex:1" data-page-node-id="n1Ai9SB4XqCqzFaCeqeuUU"></span>
-                      <span id="v2g-batch-status" style="display:flex;gap:4px;" data-page-node-id="JibnwzZ9u2YcjdE4n4X2f6"></span>
-                      <input id="v2g-batch-search" placeholder="🔍 搜索批次（文档名/编号）…" oninput="v2gBatchSearch()" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:170px;" data-page-node-id="dB6BOFsASO5tL0Zrv0Lebz">
-                      <button class="btn sm ghost" id="v2g-batch-toggle" onclick="v2gToggleBatches()" title="展开/收起批次卡片" data-page-node-id="amIMe5wTbQSu9YMP56iyrR">▸ 展开批次</button>
-                    </div>
-                    <div id="v2g-batches" style="display:none;gap:8px;overflow-x:auto;padding:8px 0 4px;" data-page-node-id="ETdTDYZiGBRQxtVFxoFpBo"></div>
-                    <div id="v2g-type-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;" data-page-node-id="c79LVtPG6L60ZP6L7oFUKM"></div>
+                  <!-- 批次工具行（2026-09-22 上提常驻：批次是贯穿治理管线的主线维度，不再折叠进高级搜索） -->
+                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding:6px 12px;">
+                    <b style="font-size:12px;color:var(--blue-d);">📦 批次</b>
+                    <span id="v2g-batch-count" style="font-size:11px;color:var(--mut);"></span>
+                    <select id="v2g-batch-time" onchange="v2gSetBatchTime()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;">
+                      <option value="">全部时间</option><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="90">近 90 天</option>
+                    </select>
+                    <span style="flex:1"></span>
+                    <span id="v2g-batch-status" style="display:flex;gap:4px;"></span>
+                    <input id="v2g-batch-search" placeholder="🔍 搜索批次（文档名/编号）…" oninput="v2gBatchSearch()" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:170px;">
+                    <button class="btn sm ghost" id="v2g-batch-toggle" onclick="v2gToggleBatches()" title="展开/收起批次卡片">▸ 展开批次</button>
+                  </div>
+                  <div id="v2g-batches" style="display:none;gap:8px;overflow-x:auto;padding:8px 12px 4px;"></div>
+                  <!-- 高级搜索（默认收起：类型多选） -->
+                  <div id="v2g-adv" style="display:none;margin-top:2px;border-top:1px dashed var(--line);padding:6px 12px;">
+                    <div id="v2g-type-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
                   </div>
                 </div>
                 <div id="v2g-review-panel" style="padding:0;" data-page-node-id="AXbBcx24BrjyhAex6R2UC6"><div style="padding:10px;color:var(--mut);font-size:12px;" data-page-node-id="VsR8EIHE9QtDAkEqA7TftP">上传文档后自动抽取的实体/关系候选（来源文档可追溯）</div></div>
               </div>
             </div>
+
           </div>
           <div id="kb2-pane-fusion" class="kb2-pane" style="padding:12px;" data-page-node-id="wjSHo4RgLsGuHyk8g5dyGG">
             <!-- 横向流水线（2026-08-28）：五站队列横排置顶（左→右=流转方向），操作面板全宽 -->
@@ -493,18 +501,32 @@
               
               <!-- 操作区（随队列切换，全宽） -->
               <div style="min-width:0;display:flex;flex-direction:column;gap:10px;" data-page-node-id="POR2qxAqyaRjdn10rP41le">
-                <!-- ② 灰区裁决（复用既有合并建议卡片流；默认显示站） -->
+                <!-- ④ 三元组审核（2026-09-22 五站化：从抽取审核页移出为独立站，随导航第 4 站显示） -->
+                <div id="fus-pane-store" style="display:none;">
+                <!-- 三元组审核（2026-09-22 断链修复：容器曾随 2026-08-27 IA 收敛移除，导致 triple_only 新链的待审三元组无 UI 可批准。
+                     三元组唯一图写入源：确认产生的 S-P-O 原子单元在此统一审核，通过后自动落图反写图谱实体） -->
+                <div class="panel" style="margin-top:0;">
+                  <div class="ph">三元组审核（发布闸口） <span class="tag">抽取审核确认产生的 (S-P-O) 原子单元在此统一审核 —— 通过后自动落图反写图谱实体；驳回则留痕废弃</span><span style="flex:1"></span>
+                    <button class="btn sm ghost" onclick="loadTripleReviewPane()">刷新</button>
+                    <span class="tag" id="triple-count-tab" style="font-size:10px;">0</span>
+                  </div>
+                  <div class="pb" style="padding:0;">
+                    <div id="triple-review-pane"><div style="padding:10px;color:var(--mut);font-size:12px;">进入本页时自动加载待审队列。</div></div>
+                  </div>
+                </div>
+                </div>
+                <!-- ② 重复消歧（复用既有合并建议卡片流） -->
                 <div id="fus-pane-gray" style="display:none;" data-page-node-id="U0b9VscCrDYmfXstTTjJ7D">
                   <div class="panel" style="margin-bottom:0;" data-page-node-id="WAQqmnGYBPlSFfiw188nnu">
-                    <div class="ph" data-page-node-id="Hqeewqj3DaJ3qOu4KBr4Up">灰区裁决 <span class="tag" data-page-node-id="Zd08lRzgSKdqwiHpuCCJKX">解决「这是不是同一个实体？」—— 相似度介于 0.62~0.92 之间、系统不敢自动判的两条记录</span><span style="flex:1" data-page-node-id="oilvpdEiPErt62iO05duvq"></span>
+                    <div class="ph" data-page-node-id="Hqeewqj3DaJ3qOu4KBr4Up">重复消歧 <span class="tag" data-page-node-id="Zd08lRzgSKdqwiHpuCCJKX">解决「这是不是同一个实体？」—— 相似度介于 0.62~0.92 之间、系统不敢自动判的两条记录</span><span style="flex:1" data-page-node-id="oilvpdEiPErt62iO05duvq"></span>
                       <button class="btn sm ghost" onclick="loadDuplicates()" data-page-node-id="EUsTLoQbN9oa5gfb0E93tK">刷新</button></div>
                     <div class="pb" style="padding:0;" data-page-node-id="FbsVEkMb7S0tyFJtfclu41"><div class="pb" id="dup-panel" data-page-node-id="H8W1yH3XPBf0sxHP8M1wQi"><div style="color:var(--mut);font-size:12px;" data-page-node-id="XdEEaH7DFuYLIrGFLwRXPq">检测同名/近似实体候选，人工确认合并（属性融合 + 关系重指向）</div></div></div>
                   </div>
                 </div>
-                <!-- ③ 冲突裁决 -->
+                <!-- ③ 属性融合 -->
                 <div id="fus-pane-conflict" style="display:none;" data-page-node-id="N7L0ThiIsrxHSGEdepuofo">
                   <div class="panel" style="margin-bottom:0;" data-page-node-id="Z0zBczTIqpFi1kP0OsFF1G">
-                    <div class="ph" data-page-node-id="3QhvPRpQqHBegu6SDftAIY">冲突裁决 <span class="tag" data-page-node-id="RyoiBu2uGCK2WJxa1C4BYa">解决「同一个实体的同一属性有两个矛盾值听谁的？」—— 逐字段二选一，结果统一到两侧</span><span style="flex:1" data-page-node-id="BCPrMPQWzhtn11RRE7rVUg"></span>
+                    <div class="ph" data-page-node-id="3QhvPRpQqHBegu6SDftAIY">属性融合 <span class="tag" data-page-node-id="RyoiBu2uGCK2WJxa1C4BYa">解决「同一个实体的同一属性有两个矛盾值听谁的？」—— 逐字段二选一，结果统一到两侧</span><span style="flex:1" data-page-node-id="BCPrMPQWzhtn11RRE7rVUg"></span>
                       <button class="btn sm" onclick="conflictDetect()" data-page-node-id="dUzXCjRiNUyjIOeRPF5JMz">🔍 检测冲突</button>
                       <button class="btn sm ghost" onclick="loadConflicts()" data-page-node-id="sv7Avfo4LiPbFN7KoWiZyB">刷新</button></div>
                     <div class="pb" style="padding:0;" data-page-node-id="jakuzg0SwSG4beLAKfeyr1"><div class="pb" id="conflict-panel" data-page-node-id="b1EggmHPShyyhb09rgZJE1"><div style="padding:10px;color:var(--mut);font-size:12px;" data-page-node-id="dyqNCpDpBsoNWcwNrLTLzb">点击「检测冲突」扫描实体/关系矛盾属性。</div></div></div>
@@ -513,9 +535,17 @@
                 <!-- ④ 批次确认 -->
                 <div id="fus-pane-confirm" style="display:none;" data-page-node-id="vE0xUBlIdbv5L56pDrfDrh">
                   <div class="panel" style="margin-bottom:0;" data-page-node-id="yiPjFRaGJnHtBgSIrd3BD8">
-                    <div class="ph" data-page-node-id="IpiOgbHWKHuN8O6nYR6G3L">批次确认入图 <span class="tag" style="border-color:var(--grn);color:var(--grn);" data-page-node-id="PDSBOwxFdw9mNrWef7vbFc">🏁 阶段终点 · 确认后即物化入图</span> <span class="tag" data-page-node-id="mOHhdZDlSh0qSczBb5fIQk">灰区清零后一键物化 · 挂靠即 survivorship 合并 · lineage 全记录可撤销</span><span style="flex:1" data-page-node-id="BU8NEwIgfCcJccA5hq9Akj"></span>
+                    <div class="ph" data-page-node-id="IpiOgbHWKHuN8O6nYR6G3L">确认发布 <span class="tag" style="border-color:var(--grn);color:var(--grn);" data-page-node-id="PDSBOwxFdw9mNrWef7vbFc">🏁 管线收口 · 批次生效发布</span> <span class="tag" data-page-node-id="mOHhdZDlSh0qSczBb5fIQk">重复消歧清零后一键发布 · 属性按择优规则合并 · lineage 全记录可撤销</span><span style="flex:1" data-page-node-id="BU8NEwIgfCcJccA5hq9Akj"></span>
                       <select id="fus-confirm-batch" onchange="renderBatchConfirm()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;max-width:230px;" data-page-node-id="yhIAE52GfzoTv0OUowb4mL"></select></div>
                     <div class="pb" id="fus-confirm-body" style="padding:10px 12px;" data-page-node-id="n8mr4DsL6fuEwqA9Vma5g4"></div>
+                  </div>
+                </div>
+                <!-- ⑤ 发布（2026-09-22 五站化：撤销「确认发布」站 —— 发布 = 三元组 commit 落图 + 合并请求评审，与本面板对齐） -->
+                <div id="fus-pane-pub" style="display:none;">
+                  <div class="panel" style="margin-bottom:0;">
+                    <div class="ph">发布 <span class="tag">图库水位 + 待审批合并请求（personal→dev→release）—— 合并评审通过后知识进入 AI 建模 / 问答消费视野（RAG 只消费 release）</span><span style="flex:1"></span>
+                      <button class="btn sm ghost" onclick="renderPubPane()">刷新</button></div>
+                    <div class="pb" id="fus-pub-body" style="padding:0;"><div style="padding:10px;color:var(--mut);font-size:12px;">加载中…</div></div>
                   </div>
                 </div>
                 <!-- ⑤ 术语词典已并入「本体模型」页的「术语映射」子页（2026-08-31 交互优化）：术语映射为本体 Schema 命名层，归位本体模型域 -->
@@ -1141,7 +1171,7 @@
       <!-- ===== 用户与权限 ===== -->
       <div class="page" id="pg-users" data-page-node-id="ualvqhCOY7FOzZ0zADi5NN">
         <h3 class="pt" data-page-node-id="dk5hlUt0tFE0YpcXMdLBxq">用户与权限管理</h3>
-        <div class="pd" data-page-node-id="uknSiiGjQVoTZVmeEIFp2Q">支持自定义角色 · 操作级权限粒度 · LDAP/OAUTH2 认证 <span class="badge" data-page-node-id="xqpATINFQaRlNU2KQ0fY9k">FR-UR-1/2/3/4</span></div>
+        <div class="pd" data-page-node-id="uknSiiGjQVoTZVmeEIFp2Q">支持自定义角色 · 操作级权限粒度 · LDAP/OAUTH2 为预留接入（未启用） <span class="badge" data-page-node-id="xqpATINFQaRlNU2KQ0fY9k">FR-UR-4 · FR-UR-1/2 预留</span></div>
         <div class="subtab" data-page-node-id="JjysA0rkk8O1aFskJlBp9J">
           <span class="on" data-tabgrp="ur" onclick="tab(this,'ur','ur-a')" data-page-node-id="4ABKPsw39DLjNr4neg7lBI">用户列表</span>
           <span data-tabgrp="ur" onclick="tab(this,'ur','ur-b')" data-page-node-id="4VyGX34lHllrjptD9As0TG">角色管理</span>

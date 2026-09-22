@@ -151,7 +151,7 @@ async function govOpenFix(subject){
     const schema = await api('/api/knowledge/graph/data-properties?type=' + encodeURIComponent(type));
     let cur = {}; try{ cur = JSON.parse(e.properties||'{}')||{}; }catch(x){}
     const rows = schema.length ? schema.map(p=>govFixPropRow(p, cur[p.name])).join('')
-      : '<div style="color:var(--mut);font-size:11px;padding:6px 0;">该实体类型未定义本体数据属性，可直接保存或到图谱工作区操作。</div>';
+      : '<div style="color:var(--mut);font-size:11px;padding:6px 0;">该实体类型未定义本体数据属性，可直接保存或到知识图谱操作。</div>';
     wrap.innerHTML = `
       <div style="padding:10px 12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);background:var(--blue-l);">
         <b style="font-size:13px;color:var(--blue-d);">📌 修复违规实体 · ${esc(e.name||id)}</b>
@@ -250,9 +250,9 @@ async function loadDuplicates(status, channel) {
       const chRow = `<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
         <span style="font-size:11.5px;color:var(--mut);">来源：</span>
         ${[['','全部'],['doc','📄 文档'],['sysml','⌨ SysML'],['cross','🔗 跨源']].map(([v,l])=>
-          `<button class="fchip ${dupChannel===v?'on':''}" onclick="loadDuplicates('pending','${v}')" title="${v==='cross'?'两侧来源通道不同（如 文档⇄SysML）：跨源对齐卡片':v==='sysml'?'SysML 建模通道候选（锚点直通，正常不进灰区）':'文档抽取通道候选'}">${l} <b>${v===''?pendingAll.length:chCount[v]||0}</b></button>`).join('')}
+          `<button class="fchip ${dupChannel===v?'on':''}" onclick="loadDuplicates('pending','${v}')" title="${v==='cross'?'两侧来源通道不同（如 文档⇄SysML）：跨源对齐卡片':v==='sysml'?'SysML 建模通道候选（锚点直通，正常不进重复消歧队列）':'文档抽取通道候选'}">${l} <b>${v===''?pendingAll.length:chCount[v]||0}</b></button>`).join('')}
       </div>`;
-      if(!pending.length) { el.innerHTML = filterRow + chRow + '<div class="fempty">✅ <b style="color:var(--grn,#2f855a);font-weight:500;">灰区已清零</b>——身份判定完成，下一步处理冲突字段或直接物化。<br><button class="btn sm" onclick="fusNav(Array.from(document.querySelectorAll(\'.fus-nav-btn\')).find(b=>b.dataset.fpane===\'conflict\'),\'conflict\')">去冲突裁决 →</button> <button class="btn sm ghost" onclick="fusNav(Array.from(document.querySelectorAll(\'.fus-nav-btn\')).find(b=>b.dataset.fpane===\'confirm\'),\'confirm\')">去批次确认 →</button></div>'; return; }
+      if(!pending.length) { el.innerHTML = filterRow + chRow + '<div class="fempty">✅ <b style="color:var(--grn,#2f855a);font-weight:500;">重复消歧已清零</b>——身份判定完成，下一步处理属性矛盾；无待落图则走「发布」站。<br><button class="btn sm" onclick="fusNav(Array.from(document.querySelectorAll(\'.fus-nav-btn\')).find(b=>b.dataset.fpane===\'conflict\'),\'conflict\')">去属性融合 →</button> <button class="btn sm ghost" onclick="fusNav(Array.from(document.querySelectorAll(\'.fus-nav-btn\')).find(b=>b.dataset.fpane===\'pub\'),\'pub\')">去发布 →</button></div>'; return; }
       // 批量操作栏（行业：高相似度批量合并降低人工瓶颈；合并属破坏性操作需确认）
       const pPages = Math.max(1, Math.ceil(pending.length / _dup.size));
       if(_dup.page > pPages) _dup.page = pPages;

@@ -100,7 +100,7 @@ function v2gGuardTag(id){
   const it=gr.items.get(id);
   if(!it || it.status==='ok') return '';
   if(it.status==='corrected')
-    return `<span class="tag" style="border-color:var(--blue);color:var(--blue-d);font-size:10px;margin-left:4px;" title="LLM 候选类型「${esc(it.from)}」不在本体，已就近校正为「${esc(it.to)}」。入库前请确认或编辑修正">🛡 已校正</span>`;
+    return `<span class="tag" style="border-color:var(--blue);color:var(--blue-d);font-size:10px;margin-left:4px;" title="LLM 候选类型「${esc(it.from)}」不在本体，已就近校正为「${esc(it.to)}」。确认前请复核或编辑修正">🛡 已校正</span>`;
   return `<span class="tag" style="border-color:var(--red);color:var(--red);font-size:10px;margin-left:4px;" title="LLM 候选类型「${esc(it.from)}」不在本体且无近似映射，已拦截。请改用本体已有类型或驳回，避免污染图谱">🛡 已拦截</span>`;
 }
 // 护栏汇总横幅（对齐既有候选汇总样式）
@@ -197,7 +197,7 @@ function v2gReflowTag(b) {
   const labelMap = [['conv-','对话'],['impact-','影响分析'],['review-','模型评审']];
   const labels = labelMap.filter(([pre])=>srcs.some(d=>d.startsWith(pre))).map(x=>x[1]);
   const srcHtml = labels.length ? `<span style="font-size:9.5px;color:var(--mut);margin-left:2px;">${labels.join('/')}</span>` : '';
-  return `<span class="st w" style="font-size:10px;cursor:default;white-space:nowrap;" title="AI 自动回流的知识候选批次">🔄 回流</span>${srcHtml}`;
+  return `<span class="st w" style="font-size:10px;cursor:default;white-space:nowrap;" title="AI 建模/对话自动回流的知识候选">🔄 回流</span>${srcHtml}`;
 }
 // P3 批次清理：仅无待审批次的清理（删除候选记录，已入库实体/溯源不受影响，审计留痕）
 async function v2gClearBatch(bid) {
@@ -284,7 +284,7 @@ function v2gMatchingTag(c) {
   return `<span class="tag" style="border-color:var(--red);color:var(--red);font-size:10px;" title="与 ${esc(c.match_entity_id||'')} 高度重复，建议驳回或合并">⚠ 高度重复</span>`;
 }
 function v2gStatusTag(c) {
-  const m = {pending:['w','待审'], confirmed:['ok','已入库'], rejected:['r','已驳回']};
+  const m = {pending:['w','待审'], confirmed:['ok','已确认'], rejected:['r','已驳回']};
   const t = m[c.status]||['w',c.status];
   const reason = (c.status==='rejected' && c.reject_reason)
     ? `<div style="font-size:10px;color:var(--mut);" title="驳回原因：${esc(c.reject_reason)}">${esc(c.reject_reason.slice(0,20))}</div>` : '';
@@ -309,7 +309,7 @@ function v2gRenderTable() {
   }
   const batchBar = `<div style="padding:6px 8px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);font-size:11.5px;">
       <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="v2g-check-all" onchange="v2gToggleAll(this)"> 全选</label>
-      <button class="btn sm" onclick="v2gReviewConfirm()">✅ 确认入库（选中）</button>
+      <button class="btn sm" onclick="v2gReviewConfirm()">✅ 确认（选中）</button>
       <button class="btn sm ghost" onclick="v2gReviewReject()">🚫 批量驳回（选中）</button>
       <span style="flex:1"></span>
     </div>`;
@@ -348,7 +348,7 @@ function v2gRenderTable() {
     </tr>`;
   }).join('');
   const foot = `<div style="padding:8px 10px;display:flex;gap:8px;align-items:center;font-size:11px;color:var(--mut);flex-wrap:wrap;">
-      <span>✅ 节点候选→建实体（与已有实体重复时先选处理方式：对齐合并/强制新建/跳过）；关系候选→两端节点已入库后自动建边。确认入库后进入「实体审核队列」/「关系审核队列」正式审核。</span>
+      <span>✅ 确认后生成待审三元组（与已有实体重复时先选处理方式：对齐合并/强制新建/跳过）；经「三元组审核」通过并 commit 落图后写入图谱实体，分支发布见「发布」站。</span>
       <span style="flex:1"></span>
       <div id="v2g-pager" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"></div>
     </div>`;
@@ -377,7 +377,19 @@ async function v2gReviewReject() {
 // P0-C/P0-A：消歧确认弹窗——重复候选清单（实体/关系）+ 处理动作选择（轻量居中卡片 #lbx）
 // dups: [{name, match_id, level, match_kind}]；match_kind='relation' 表示与已有关系重复
 // 返回 Promise<'skip'|'align'|'create'|null（取消）>
+// 2026-09-22：消歧弹窗等处 id→名称 映射（一次拉取缓存；用户视角只见名称不见编码）
+window._v2gEntNames = null;
+async function v2gEntNameMap(){
+  if(window._v2gEntNames) return window._v2gEntNames;
+  try{
+    const arr = await api('/api/knowledge/entities?limit=3000').catch(()=>[]) || [];
+    const m = {}; (Array.isArray(arr)?arr:[]).forEach(e=>{ if(e && e.id) m[e.id] = e.name || e.id; });
+    window._v2gEntNames = m; return m;
+  }catch(e){ return {}; }
+}
 function v2gDupDialog(dups) {
+  return (async () => {
+  const _names = await v2gEntNameMap();
   const lbx = document.getElementById('lbx');
   const b = document.getElementById('lbx-body');
   const rows = (dups||[]).map((d,i)=>{
@@ -386,7 +398,7 @@ function v2gDupDialog(dups) {
     const lc = d.level==='dup_high' ? 'var(--red);border-color:var(--red);' : 'var(--amb);border-color:var(--amb);';
     const targetTxt = isRel
       ? `已有关系 <span style="color:var(--blue-d);">#${esc(d.match_id)}</span>`
-      : `已有实体 <span style="color:var(--blue-d);">${esc(d.match_id)}</span>`;
+      : `已有实体 <span style="color:var(--blue-d);">${esc(_names[d.match_id] || d.match_id)}</span>`;
     return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;background:#fff;">
       <span style="font-size:12px;color:var(--mut);">${i+1}.</span>
       <b style="font-size:12.5px;flex:1;">${esc(d.name)}</b>
@@ -395,12 +407,12 @@ function v2gDupDialog(dups) {
     </div>`;
   }).join('');
   b.innerHTML = `<h3>⚠ 候选与已有实体/关系重复（${(dups||[]).length}）</h3>
-    <div style="font-size:12px;color:var(--mut);margin:4px 0 8px;">以下候选与图谱中已有实体或关系重复，请选择处理方式后再入库：</div>
+    <div style="font-size:12px;color:var(--mut);margin:4px 0 8px;">以下候选与已有知识重复，请选择处理方式后再确认：</div>
     <div style="max-height:170px;overflow:auto;">${rows}</div>
     <div style="margin:10px 0 4px;font-size:12px;font-weight:600;">处理方式</div>
     <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;"><input type="radio" name="dup-action" value="align" checked><div><div style="font-size:12.5px;">🔗 对齐合并到已有实体/关系</div><div style="font-size:11px;color:var(--mut);">不新建节点/边，文档溯源指向已存在对象（推荐）</div></div></label>
     <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;"><input type="radio" name="dup-action" value="create"><div><div style="font-size:12.5px;">➕ 强制新建独立实体/关系</div><div style="font-size:11px;color:var(--mut);">可能造成重复，后续需消歧治理</div></div></label>
-    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;"><input type="radio" name="dup-action" value="skip"><div><div style="font-size:12.5px;">⏭ 跳过该候选</div><div style="font-size:11px;color:var(--mut);">不入库，标记驳回（消歧跳过）留痕</div></div></label>
+    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;"><input type="radio" name="dup-action" value="skip"><div><div style="font-size:12.5px;">⏭ 跳过该候选</div><div style="font-size:11px;color:var(--mut);">不进入管线，标记驳回（消歧跳过）留痕</div></div></label>
     <div class="lbx-actions"><button class="btn ghost" id="vd-cancel">取消</button><button class="btn" id="vd-ok">确定</button></div>`;
   lbx.classList.add('show');
   return new Promise(resolve => {
@@ -418,11 +430,12 @@ function v2gDupDialog(dups) {
     const cb = document.querySelector('#lbx .lbx-close');
     if(cb) cb.onclick = () => done(null);
   });
+})();
 }
 async function v2gReviewConfirm() {
   if(!branchWritable()) return;
   const ids = Array.from(document.querySelectorAll('.v2g-review-check:checked')).map(x=>parseInt(x.value));
-  if(!ids.length) { toast('请勾选要确认入库的候选'); return; }
+  if(!ids.length) { toast('请先勾选要确认的候选'); return; }
   // P0-C/P0-A：筛选与已有实体/关系重复的候选 → 需先选处理动作（消歧前移）
   const dups = _v2g.cands.filter(c=>ids.includes(c.id) && (
     (c.entity_type!=='关系候选' && (c.matching_status||'none')!=='none' && c.match_entity_id) ||
@@ -435,11 +448,11 @@ async function v2gReviewConfirm() {
     const a = await v2gDupDialog(dups);
     if(a===null) return; // 取消
     dupAction = a;
-  } else if(!(await confirmDialog(`确认将选中的 ${ids.length} 条候选入库？（节点建实体，关系建边；入库后进入实体/关系审核队列正式审核）`))) return;
+  } else if(!(await confirmDialog(`确认这 ${ids.length} 条候选？（生成待审三元组 —— 经「三元组审核」通过并发布后写入图谱实体）`))) return;
   // S7修复：直接按勾选的候选 id 确认（支持跨批次），不再依赖 batch_id 整批
   const r = await api('/api/knowledge/v2g/confirm', {method:'POST', body:JSON.stringify({selected_ids:ids, dup_action:dupAction})});
   const rej = r.rejected || []; const al = r.aligned || []; const sk = r.skipped || [];
-  const parts = [`✅ 已入库 ${r.confirmed} 条`];
+  const parts = [`✅ 已确认 ${r.confirmed} 条（生成待审三元组）`];
   if(al.length) parts.push(`🔗 对齐 ${al.length} 条`);
   if(sk.length) parts.push(`⏭ 跳过 ${sk.length} 条`);
   if(rej.length) parts.push(`❌ 拒绝 ${rej.length} 条`);
@@ -463,7 +476,7 @@ async function v2gConfirmOne(id) {
     const a = await v2gDupDialog(d);
     if(a===null) return;
     dupAction = a;
-  } else if(!(await confirmDialog('确认将该候选入库？（节点建实体 / 关系建边，入库后进入实体/关系审核队列正式审核）'))) return;
+  } else if(!(await confirmDialog('确认该候选？（生成待审三元组 —— 经「三元组审核」通过并发布后写入图谱实体）'))) return;
   const r = await api('/api/knowledge/v2g/confirm', {method:'POST', body:JSON.stringify({selected_ids:[id], dup_action:dupAction})});
   const al = r.aligned || []; const sk = r.skipped || [];
   let msg;
@@ -471,7 +484,7 @@ async function v2gConfirmOne(id) {
     ? `🔗 已对齐合并到已有实体 ${al[0].entity_id}`
     : `🔗 已对齐复用已有关系 #${al[0].relation_id}`;
   else if(sk.length) msg = '⏭ 已跳过该候选（消歧跳过）';
-  else msg = r.rejected && r.rejected.length ? `❌ 入库拒绝：${(r.rejected[0].errors||'').slice(0,80)}` : '✅ 已入库（进入实体/关系审核队列）';
+  else msg = r.rejected && r.rejected.length ? `❌ 确认拒绝：${(r.rejected[0].errors||'').slice(0,80)}` : '✅ 已确认（生成待审三元组，经「三元组审核」发布后入图）';
   toast(msg);
   v2gReviewLoad();
   loadReviewQueue();
@@ -498,7 +511,7 @@ async function v2gViewSource(id) {
   if(c.chunk_id) {
     try {
       const linked = await api(`/api/knowledge/chunks/${c.chunk_id}/linked`);
-      if(linked && linked.length) linkedHtml = '<div style="font-size:11px;color:var(--grn);margin:6px 0;">🔗 已入库关联实体：' + linked.map(e=>`<span class="tag" style="font-size:10px;">${esc(e.name)}</span>`).join(' ') + '</div>';
+      if(linked && linked.length) linkedHtml = '<div style="font-size:11px;color:var(--grn);margin:6px 0;">🔗 已确认关联实体：' + linked.map(e=>`<span class="tag" style="font-size:10px;">${esc(e.name)}</span>`).join(' ') + '</div>';
     } catch(e) {}
     chunkHtml = c.chunk_content
       ? `<div style="margin-top:8px;"><b style="font-size:11.5px;color:var(--blue-d);">📄 来源片段（chunk #${c.chunk_id}）</b><div style="font-size:12px;line-height:1.7;background:#f8fafc;border:1px solid var(--line);border-radius:6px;padding:8px;margin-top:4px;max-height:220px;overflow:auto;white-space:pre-wrap;">${esc(c.chunk_content)}</div></div>`

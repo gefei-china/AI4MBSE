@@ -76,12 +76,18 @@ async function loadTripleReviewPane(){
   try{
     const r = await api('/api/knowledge/triples/review-queue?status=pending&limit=200');
     const items = r.items || []; const st = r.stats || {};
-    window._tripleReviewIds = items.map(t=>t.triple_id);
-    window._tripleReviewList = items.map(t=>({triple_id:t.triple_id, subject_name:t.subject_name||'', object_type:t.object_type||''}));
+    // 2026-09-22：来源文档筛选（triples 无 batch_id，以 source_doc 为批次近似维度；"全部通过"只作用于当前可见项）
+    const curF = window._tripleSrcFilter || '';
+    const shown = items.filter(x=>!curF || x.source_doc===curF);
+    const srcs = Array.from(new Set(items.map(x=>x.source_doc).filter(Boolean)));
+    const srcOpts = ['<option value="">全部来源</option>'].concat(
+      srcs.map(d=>`<option value="${esc(d)}" ${d===curF?'selected':''}>来源：${esc(d)}</option>`)).join('');
+    window._tripleReviewIds = shown.map(t=>t.triple_id);
+    window._tripleReviewList = shown.map(t=>({triple_id:t.triple_id, subject_name:t.subject_name||'', object_type:t.object_type||''}));
     const badge = document.getElementById('triple-count-tab');
-    if(badge) badge.textContent = items.length;
-    if(!items.length){
-      el.innerHTML = `<div style="padding:14px;color:var(--mut);font-size:12px;">暂无待审三元组。三元组统计：已通过 ${st.approved||0} / 待审 ${st.pending||0} / 驳回 ${st.rejected||0}。<br>AI 建模入库候选确认后会自动产生侯审三元组，以(S-P-O)原子单元在此统一审核。</div>`;
+    if(badge) badge.textContent = shown.length;
+    if(!shown.length){
+      el.innerHTML = `<div style="padding:14px;color:var(--mut);font-size:12px;">${items.length ? '当前筛选条件下无待审三元组（切换上方来源可查看其余）。' : '暂无待审三元组。'}三元组统计：已通过 ${st.approved||0} / 待审 ${st.pending||0} / 驳回 ${st.rejected||0}。<br>抽取审核确认后产生待审三元组，以 (S-P-O) 原子单元在此统一审核；实体/关系为通过后 commit 反写产物。</div>`;
       return;
     }
     const dupBadge = t => {
@@ -102,13 +108,15 @@ async function loadTripleReviewPane(){
         <button class="btn sm ghost" style="font-size:10px;padding:1px 8px;background:rgba(229,62,62,.1);color:var(--red);" onclick="tripleAct('${t.triple_id}','rejected')">驳回</button>
       </span></div>`;
     el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);background:#f7f9fc;font-size:12px;">
-      <b>共 ${items.length} 条待审</b>
+      <select id="triple-src-filter" onchange="tripleSetSrc(this.value)" style="border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:11px;max-width:180px;">${srcOpts}</select>
+      <b>共 ${shown.length} 条待审</b>
       <span style="font-size:11px;color:var(--mut);">立即全部通过（慢速核对或批量放行）</span>
       <span style="flex:1"></span>
       <button class="btn sm grn" onclick="tripleApproveAll()">✅ 全部通过</button></div>` +
-      items.map(row).join('');
+      shown.map(row).join('');
   }catch(e){ el.innerHTML = `<div style="color:var(--red);font-size:12px;">三元组队列加载失败：${e.message}</div>`; }
 }
+window.tripleSetSrc = function(v){ window._tripleSrcFilter = v; loadTripleReviewPane(); };
 window.tripleAct = async function(triple_id, decision){
   const el = document.getElementById('triple-review-pane'); if(!el) return;
   try{
@@ -159,8 +167,8 @@ async function loadKBOverview() {
         <div style="font-size:11px;color:var(--mut);margin-bottom:4px;">${title} <span class="st w">${total} 条</span></div>
         ${items.length ? items.map(itemFn).join('') : '<div style="font-size:11px;color:var(--mut);padding:5px 0;">暂无待评审</div>'}
       </div>`;
-    const v2gItem = c=>`<div class="todo-item" onclick="go('kb','kb-b')" title="点击前往数据整理处理"><b>${esc(c.name)}</b><span class="tag">${esc(c.entity_type||'候选')}</span></div>`;
-    const entItem = c=>`<div class="todo-item" onclick="go('kb','kb-b')" title="点击前往数据整理处理"><b>${esc(c.name)}</b><span class="tag">${esc(c.entity_type)}</span></div>`;
+    const v2gItem = c=>`<div class="todo-item" onclick="go('kb','kb-b')" title="点击前往治理中心处理"><b>${esc(c.name)}</b><span class="tag">${esc(c.entity_type||'候选')}</span></div>`;
+    const entItem = c=>`<div class="todo-item" onclick="go('kb','kb-b')" title="点击前往治理中心处理"><b>${esc(c.name)}</b><span class="tag">${esc(c.entity_type)}</span></div>`;
     const relItem = c=>`<div class="todo-item" onclick="go('kb','kb-b')" title="点击前往数据整理处理"><b>${esc(c.source_name)} → ${esc(c.relation_type)} → ${esc(c.target_name)}</b><span class="tag">关系</span></div>`;
     // 来源分布（横向条，纯 CSS）
     const src = r.source_dist||[];
@@ -515,21 +523,25 @@ function loadKBTab(id) {
   // 2026-09-18 知识中心收敛：知识域顶层 Tab 为 5 个
   // （数据看板 kb-a / 资料库 kb-e / 图谱工作区 kb-d / 本体模型 kb-c / 术语词典 kb-c+terms）；
   // 术语词典是 kb-c 的显式子态，按 _kbCtx 决定高亮哪一个 chip。
+  // 2026-09-22 恢复 kb-b「标注审核」为正式 Tab（此前按用户要求暂不动；现按米爸要求恢复
+  // 文档实体抽取与治理入口 —— 页面 HTML 与 fus-nav 四站流水线一直都在，缺的只是入口与高亮回写）。
   const hubTabs = document.getElementById('kbhub-tabs');
   if(hubTabs){
     // 2026-09-18：知识浏览(kb-a) 迁入后更名「数据看板」，知识域共 5 个顶层 Tab；
-    // kb-a 也从"隐藏入口"变为正式 Tab（kb-b 数据整理按用户要求暂不动，仍不显示 Tab 栏）
-    const isHub = (id==='kb-a'||id==='kb-d'||id==='kb-e'||id==='kb-c');
+    // kb-a 也从"隐藏入口"变为正式 Tab。2026-09-22：kb-b（标注审核/治理中心）恢复为第 6 个 Tab。
+    const isHub = (id==='kb-a'||id==='kb-d'||id==='kb-e'||id==='kb-c'||id==='kb-b');
     hubTabs.style.display = isHub ? 'flex' : 'none';
     const _isTerms = (window._kbCtx === 'terms');
     const tA = document.getElementById('kbhub-tab-a');
     const tE = document.getElementById('kbhub-tab-e'), tD = document.getElementById('kbhub-tab-d');
     const tC = document.getElementById('kbhub-tab-c'), tT = document.getElementById('kbhub-tab-t');
+    const tB = document.getElementById('kbhub-tab-b');
     if(tA) tA.classList.toggle('on', id==='kb-a');
     if(tE) tE.classList.toggle('on', id==='kb-e');
     if(tD) tD.classList.toggle('on', id==='kb-d');
     if(tC) tC.classList.toggle('on', id==='kb-c' && !_isTerms);
     if(tT) tT.classList.toggle('on', id==='kb-c' && _isTerms);
+    if(tB) tB.classList.toggle('on', id==='kb-b');
   }
   // 知识库顶部模块标题行：已全部停用（2026-09-18）
   // - 该行只剩一个模块标题（分支切换早已下沉到图谱数据行），与上方 Tab 栏信息重复；
@@ -540,7 +552,7 @@ function loadKBTab(id) {
   if(mt) mt.textContent = KB_TAB_TITLES[id] || '知识库';
   if(id==='kb-a') { loadKBStats(); loadKBEntities(); }
   if(id==='kb-e') loadDocs();
-  if(id==='kb-b') { loadKBFlowBar(); v2gReviewLoad(); loadFusion(); }  // loadReviewQueue 已随标注审核面板收敛移除（容器不存在，调用即抛空引用）
+  if(id==='kb-b') { loadKBFlowBar(); v2gReviewLoad(); loadFusion(); loadTripleReviewPane(); }  // 2026-09-22 入口恢复：v2g-review-panel/fus-nav/三元组审核面板(triple-review-pane) 均在（index.html #kb-b）
   if(id==='kb-c') {
     // 2026-09-02 P0-2/P0-4：顶部 Tab=实体维度（类/对象属性/数据属性），图谱降为中栏视图；进入默认「类 · 编辑」
     // 2026-09-18：语境（terms/model）已在 loadKBTab 开头落定并消费掉入口标记，此处只读取结果。

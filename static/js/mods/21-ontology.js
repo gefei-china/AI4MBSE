@@ -125,7 +125,7 @@ async function loadConflicts(){
   try{
     const list = await api('/api/knowledge/conflicts?status=pending&limit=100');
     const arr = list||[];
-    if(!arr.length){ box.innerHTML = '<div class="fempty">✅ <b style="color:var(--grn,#2f855a);font-weight:500;">冲突已清零</b>——字段裁决完成，可执行批次物化。<br><button class="btn sm" onclick="fusNav(Array.from(document.querySelectorAll(\'.fus-nav-btn\')).find(b=>b.dataset.fpane===\'confirm\'),\'confirm\')">去批次确认 →</button> <button class="btn sm ghost" onclick="conflictDetect()">🔍 再检测一轮</button></div>'; return; }
+    if(!arr.length){ box.innerHTML = '<div class="fempty">✅ <b style="color:var(--grn,#2f855a);font-weight:500;">属性矛盾已清零</b>——字段裁决完成。后续：待落图三元组在「三元组审核」通过后落图；分支发布走「发布」站。<br><button class="btn sm" onclick="fusNav(Array.from(document.querySelectorAll(\'.fus-nav-btn\')).find(b=>b.dataset.fpane===\'store\'),\'store\')">去三元组审核 →</button> <button class="btn sm" onclick="fusNav(Array.from(document.querySelectorAll(\'.fus-nav-btn\')).find(b=>b.dataset.fpane===\'pub\'),\'pub\')">去发布 →</button> <button class="btn sm ghost" onclick="conflictDetect()">🔍 再检测一轮</button></div>'; return; }
     box.innerHTML = arr.map(x=>{
       const ev = x.evidence||{};
       const aSrc = (ev.a&&(ev.a.source_doc||ev.a.source_type))||'';
@@ -179,7 +179,7 @@ async function conflictDetect(){
 async function conflictAdjudicate(id, decision){
   if(!branchWritable()) return;
   const label = decision==='left'?'采纳 A 侧':decision==='right'?'采纳 B 侧':'忽略';
-  if(!(await confirmDialog(`确认「${label}」？采纳侧值将统一到两侧实体/关系属性，并记录裁决审计留痕。`, {title:'冲突裁决'}))) return;
+  if(!(await confirmDialog(`确认「${label}」？采纳侧值将统一到两侧实体/关系属性，并记录裁决审计留痕。`, {title:'属性融合'}))) return;
   try{
     const r = await api(`/api/knowledge/conflicts/${id}/adjudicate`, {method:'POST', body: JSON.stringify({decision})});
     if(r.error){ toast(r.error); return; }
@@ -292,38 +292,43 @@ async function blueprintApply(){
 async function loadKBFlowBar() {
   const steps = document.getElementById('kb-flow-steps');
   if(!steps) return;
-  let v2g=0, fusion=0, store=0, pub=0;
+  let v2g=0, fusion=0, store=0, pub=0, trips={};
   try {
-    const [batches, fus, trips, mrs] = await Promise.all([
+    const [batches, fus, _trips, mrs] = await Promise.all([
       api('/api/knowledge/v2g/batches').catch(()=>[]),
       api('/api/knowledge/fusion/status').catch(()=>({})),
       api('/api/knowledge/triples/stats').catch(()=>({})),
       api('/api/branches/merge-requests').catch(()=>[]).then(x=>Array.isArray(x)?x:[]),
     ]);
+    trips = _trips || {};   // 2026-09-22 修复：trips 原为 try 块内 const 解构，块外 segTip 引用即 ReferenceError（切回本页报「trips is not defined」）
     v2g = (batches||[]).reduce((s,b)=>s+(b.pending_n||0),0);
     fusion = (fus.pending_pairs||0) + (fus.conflict_n||0);
     store = trips.to_store||0;
     // P0-3 发布显式化：待发布 = 待评审（open）的合并请求数（AI 批次 personal→dev 门禁 / dev→release 发布）
     pub = Array.isArray(mrs) ? mrs.filter(m=>(m.status||'open')==='open').length : 0;
   } catch(e) {}
+  // 2026-09-22 五站化：水位条段名与五站导航对齐（store=三元组审核的待落图积压，pub=发布站待审 MR）
   const segs = [
-    ['v2g','① 抽取候选', v2g],
-    ['fusion','② 融合待办', fusion],
-    ['store','💾 待落图', store],
+    ['v2g','① 抽取审核', v2g],
+    ['fusion','② 消歧与融合', fusion],
+    ['store','🧾 待落图', store],
     ['pub','📦 发布待办', pub],
   ];
-  // 库所水位计：四段 = 流水线四个缓冲区，数字为积压量；归一在①→②间静默完成，合并是③物化时的执行动作
+  // 管线水位计：四段 = 流水线四个缓冲区，数字为积压量；归一在①→②间静默完成，发布是收口动作
   const segTip = {
-    v2g: '库所① 抽取候选：文档/SysML 解析出的原始候选，尚未打分路由。归一（词典折叠）在 ①→② 之间静默完成',
-    fusion: '库所② 融合待办：需要人工裁决的候选（灰区 + 跨源 + 冲突）——左栏四队列即 ② 内部的工位顺序',
-    store: '库所③ 待落图：身份/字段裁决完毕的 staging，等待批次确认物化——合并（survivorship）在此执行',
-    pub: '库所④ 发布待办：已物化进草稿图，等待版本化发布的最终闸门（含 AI 批次发布门禁）'
+    v2g: '① 抽取审核：文档/SysML 解析出的知识候选，等待人工验收。词典归一（命名归一）在 ①→② 之间静默完成',
+    fusion: '② 消歧与融合待办：需要人工判定的重复对与属性矛盾 —— 重复消歧 / 属性融合两站即其内部工位',
+    store: store>0 ? `🧾 待落图：三元组审核已通过、等待 commit 落图（已落图 ${trips.stored||0} 条 / 待落图 ${store} 条）` : `🧾 待落图：当前无积压（已落图 ${trips.stored||0} 条）`,
+    pub: '📦 发布待办：待评审的合并请求数（personal→dev→release）——合并评审通过即进入 RAG 消费视野'
   };
   steps.innerHTML = segs.map(([pane,label,n],i)=>{
     const hot = n>0;
     return (i?`<span style="color:var(--mut);font-size:10px;">→</span>`:'') +
       `<span class="st ${hot?'w':'g'} b" style="cursor:pointer;font-size:11px;" onclick="kbFlowGo('${pane}')" title="${segTip[pane]||'点击直达该环节'}">${label} <b>${n}</b></span>`;
   }).join('');
+  // 2026-09-22 五站化：导航角标同步（store=待落图积压，pub=待审 MR 数）
+  const _tS = document.getElementById('fus-n-store'); if(_tS) _tS.textContent = store||0;
+  const _tP = document.getElementById('fus-n-pub'); if(_tP) _tP.textContent = pub||0;
 }
 async function kbFlowGo(pane) {
   // 发布显式化（P0-3）：有待审批合并请求时，先展示发布待办面板，可直达版本管理审批合并
@@ -336,14 +341,26 @@ async function kbFlowGo(pane) {
         <b style="font-size:12px;">#${m.id}</b> <span class="st b">${esc(m.source_branch)} → ${esc(m.target_branch)}</span>
         <span style="font-size:11px;color:var(--mut);flex:1;">${esc((m.created_at||'').slice(0,16).replace('T',' '))}</span>
         <span class="st ${(m.unresolved_conflicts||0)>0?'r':'a'}">${(m.unresolved_conflicts||0)>0?`冲突 ${m.unresolved_conflicts}`:'就绪'}</span></div>`).join('');
-      openPanel('📦 发布待办（待审批合并请求）', `<div style="font-size:12px;color:var(--mut);margin:2px 0 10px;">以下合并请求尚未审批。AI 建模批次确认入库后会生成 personal→dev 待审请求，dev→release 为正式发布门禁。请审批合并后完成发布。</div><div style="max-height:260px;overflow:auto;">${rows}</div><div style="margin-top:12px;text-align:right;"><button class="btn ghost" onclick="closePanel()">关闭</button><button class="btn" onclick="closePanel();go('branch')">去合并请求审批 →</button></div>`);
+      openPanel('📦 发布待办（待审批合并请求）', `<div style="font-size:12px;color:var(--mut);margin:2px 0 10px;">以下合并请求尚未审批。personal→dev 为工作分支合并评审，dev→release 为正式发布门禁（发布后知识进入 AI 建模 / 问答消费视野；RAG 只消费 release）。</div><div style="max-height:260px;overflow:auto;">${rows}</div><div style="margin-top:12px;text-align:right;"><button class="btn ghost" onclick="closePanel()">关闭</button><button class="btn" onclick="closePanel();go('branch')">去合并请求审批 →</button></div>`);
       return;
     }
     toast('无待处理合并请求，发布基线完整');
     go('branch'); return;
   }
   if(pane==='store'){
-    tripleCommit(); return;   // 落图动作（三元组审核入口已收敛移除，直接执行落图）
+    // 2026-09-22 断链修复：先审后落。pending 三元组存在 → 展示审核面板（通过后自动落图）；
+    // 无 pending 才直接 tripleCommit（兼容历史 approved 未落图数据）。此前此点击会跳过审核直接落图，
+    // 而审核面板容器已移除 → 文档抽取链的 pending 三元组永远无法批准。
+    let _stats = {};
+    try{ _stats = await api('/api/knowledge/triples/stats').catch(()=>({})) || {}; }catch(e){}
+    if((_stats.pending||0) > 0){
+      const el = document.getElementById('triple-review-pane');
+      if(el) el.scrollIntoView({behavior:'smooth', block:'center'});
+      loadTripleReviewPane();
+      toast(`有 ${_stats.pending} 条待审三元组 —— 请在「三元组审核」面板中通过后自动落图`);
+      return;
+    }
+    tripleCommit(); return;
   }
   if(pane==='v2g'){
     // IA 收敛：抽取候选直达 → 数据整理左栏第 0 站（候选批次队列）
@@ -368,8 +385,8 @@ function fusNav(btn, pane){
   const _navPanel = document.getElementById('fus-nav');
   if(_navPanel) _navPanel.style.display = isGl ? 'none' : '';
   const _fb = document.getElementById('kb-flow-bar');
-  if(_fb) _fb.style.display = isGl ? 'none' : 'flex';
-  ['batch','gray','conflict','confirm','terms'].forEach(p=>{
+  if(_fb) _fb.style.display = 'none';   // 2026-09-22 简化：水位条与五站导航重复，隐藏（角标同步逻辑保留）
+  ['batch','gray','conflict','store','confirm','terms','pub'].forEach(p=>{
     const el = document.getElementById('fus-pane-'+p);
     if(el) el.style.display = p===pane ? '' : 'none';
   });
@@ -378,6 +395,33 @@ function fusNav(btn, pane){
   if(pane==='conflict') loadConflicts();
   if(pane==='confirm') renderBatchConfirm();
   if(pane==='terms') conceptsLoad();
+  // 2026-09-22 五站化：store/pub 为真实动作站 —— 三元组审核（独立 fus-pane-store，随导航切换）与发布（图库水位 + MR 评审）
+  if(pane==='store') loadTripleReviewPane();
+  if(pane==='pub') renderPubPane();
+}
+// 2026-09-22 五站化 P0：发布站面板 —— 图库水位 + 待审批合并请求（personal→dev→release）
+async function renderPubPane(){
+  const el = document.getElementById('fus-pub-body');
+  if(!el) return;
+  let trips = {}, mrs = [];
+  try{ trips = await api('/api/knowledge/triples/stats').catch(()=>({})) || {}; }catch(e){}
+  try{ mrs = await api('/api/branches/merge-requests').catch(()=>[]) || []; }catch(e){}
+  const pend = Array.isArray(mrs) ? mrs.filter(m=>(m.status||'open')==='open') : [];
+  const mrRows = pend.length ? pend.map(m=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;">
+      <b style="font-size:12px;">#${m.id}</b> <span class="st b">${esc(m.source_branch)} → ${esc(m.target_branch)}</span>
+      <span style="font-size:11px;color:var(--mut);flex:1;">${esc((m.created_at||'').slice(0,16).replace('T',' '))}</span>
+      <span class="st ${(m.unresolved_conflicts||0)>0?'r':'a'}">${(m.unresolved_conflicts||0)>0?`冲突 ${m.unresolved_conflicts}`:'就绪'}</span></div>`).join('')
+    : '<div style="padding:8px 0;color:var(--mut);font-size:12px;">✅ 无待审批合并请求 —— 发布基线完整（历史发布在「图谱工作区 → 合并请求」可查）</div>';
+  el.innerHTML = `
+    <div style="display:flex;gap:18px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px dashed var(--line);font-size:12px;">
+      <span>图库水位：已落图 <b>${trips.stored||0}</b> 条 / 待落图 <b style="color:${(trips.to_store||0)>0?'var(--amb,#c77700)':'inherit'}">${trips.to_store||0}</b> 条</span>
+      <span style="color:var(--mut);">落图由「三元组审核」commit 驱动；分支发布由合并请求评审驱动</span>
+    </div>
+    <div style="padding:10px 12px;">
+      <div style="font-size:12.5px;font-weight:500;margin-bottom:6px;">待审批合并请求（${pend.length}）</div>
+      ${mrRows}
+      <div style="margin-top:10px;text-align:right;"><button class="btn" onclick="go('branch')">去合并请求审批 →</button></div>
+    </div>`;
 }
   // loadDictQueue / fusGotoTerms 已随 D2 新词建议队列收敛移除（2026-08-27）：功能上移至术语词典页「⏳ 待采纳建议」折叠区（前端过滤 suggested_by==='llm'）
 async function renderBatchConfirm(){
@@ -389,10 +433,10 @@ async function renderBatchConfirm(){
   batches = (batches || []).filter(b=>(b.pending_n||0) > 0);
   if(sel.options.length === 0){
     sel.innerHTML = '<option value="">— 选择待确认批次 —</option>' +
-      batches.map(b=>`<option value="${esc(b.batch_id)}">${esc(b.batch_id)}（待审 ${b.pending_n}）</option>`).join('');
+      batches.map(b=>`<option value="${esc(b.batch_id)}">${esc(String(b.batch_id).slice(0,12))}…（待审 ${b.pending_n}${b.source_docs&&b.source_docs[0]?' · 来源 '+esc(String(b.source_docs[0]).slice(0,16)):''}）</option>`).join('');
   }
   const bid = sel.value;
-  if(!bid){ bodyEl.innerHTML = '<div style="font-size:12px;color:var(--mut);">选择左侧批次后查看分档统计并确认入图。</div>'; return; }
+  if(!bid){ bodyEl.innerHTML = '<div style="font-size:12px;color:var(--mut);">选择批次后查看分档统计，按消歧策略重新确认（生成待审三元组）。</div>'; return; }
   const cands = await api(`/api/knowledge/v2g/candidates?limit=3000`);
   const items = (cands || []).filter(c=>c.batch_id===bid && c.status==='pending' && c.entity_type!=='关系候选');
   const rels  = (cands || []).filter(c=>c.batch_id===bid && c.status==='pending' && c.entity_type==='关系候选');
@@ -407,14 +451,14 @@ async function renderBatchConfirm(){
       ${cell('实体候选', items.length, 'var(--blue-d)')}
       ${cell('无匹配·新建', auto, 'var(--grn)')}
       ${cell('高重复 dup_high', high, high?'var(--red)':'var(--mut)')}
-      ${cell('灰区 dup_suspect', gray, gray?'var(--amb)':'var(--mut)')}
+      ${cell('疑似重复', gray, gray?'var(--amb)':'var(--mut)')}
       ${cell('关系候选', rels.length, 'var(--blue-d)')}
     </div>
-    <div style="font-size:11px;color:var(--mut);margin-top:8px;">确认语义：<b>align</b>=挂靠合并（别名并入+属性补齐+来源挂接，图库不新增重复）；create=强制新建。入图为唯一写入口，lineage 全记录可撤销。</div>
+    <div style="font-size:11px;color:var(--mut);margin-top:8px;">确认语义：<b>align</b>=挂靠合并（别名并入+属性补齐+来源挂接，不新增重复实体）；create=强制新建。确认后生成待审三元组，经「三元组审核」通过并 commit 落图，全程 lineage 可撤销。</div>
     <div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
       ${canConfirm
-        ? `<button class="btn sm grn" onclick="fusConfirmBatch('${esc(bid)}','align')">✅ 一键确认入图（${items.length} 条·默认对齐）</button>`
-        : `<span class="tag a">存在 ${high+gray} 条灰区/重复候选未裁决——请先处理「灰区裁决」队列再确认入图</span>`}
+        ? `<button class="btn sm grn" onclick="fusConfirmBatch('${esc(bid)}','align')">✅ 一键重新确认（${items.length} 条·默认对齐）</button>`
+        : `<span class="tag a">存在 ${high+gray} 条重复候选未消歧——请先处理「重复消歧」队列再重新确认</span>`}
       ${high+gray > 0 ? `<button class="btn sm ghost" onclick="fusNav(Array.from(document.querySelectorAll('.fus-nav-btn')).find(b=>b.dataset.fpane==='gray'),'gray')">去处理 →</button>` : ''}
       <button class="btn sm ghost" onclick="loadCommitHistory()">📜 查看 lineage / 撤销</button>
     </div>`;
@@ -423,7 +467,7 @@ async function fusConfirmBatch(batchId, action){
   const r = await api('/api/knowledge/v2g/confirm', {method:'POST', body:JSON.stringify({batch_id:batchId, selected_ids:[], dup_action:action})});
   if(r.error){ toast('确认失败：'+r.error); return; }
   if(r.pending_review){ toast(`⚠ ${r.pending_review} 条 V2 候选已进入待审闸门（须先提交审核）`); }
-    else toast(`✅ 入库 ${r.confirmed||0} / 对齐 ${(r.aligned||[]).length} / 跳过 ${(r.skipped||[]).length}`);
+    else toast(`✅ 已确认 ${r.confirmed||0}（生成待审三元组）/ 对齐 ${(r.aligned||[]).length} / 跳过 ${(r.skipped||[]).length}`);
     document.getElementById('fus-confirm-batch').innerHTML = '';
     loadFusion(); renderBatchConfirm();
   }
@@ -431,7 +475,7 @@ async function loadCommitHistory(){
   let r = []; try{ r = await api('/api/knowledge/commits?size=20') || []; }catch(e){ r = []; }
   const list = (r && r.items) ? r.items : (Array.isArray(r)?r:[]);
   if(!list.length){
-    openPanel('📜 入图 lineage', '<div style="color:var(--mut);font-size:12px;padding:10px;">暂无 lineage 记录（尚未确认入图或合并）。</div><div style="margin-top:10px;text-align:right;"><button class="btn ghost" onclick="closePanel()">关闭</button></div>');
+    openPanel('📜 入图 lineage', '<div style="color:var(--mut);font-size:12px;padding:10px;">暂无 lineage 记录（尚无确认 / 合并操作）。</div><div style="margin-top:10px;text-align:right;"><button class="btn ghost" onclick="closePanel()">关闭</button></div>');
     return;
   }
   const rows = list.map(c=>`<div style="display:flex;gap:8px;align-items:center;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;">
@@ -478,7 +522,7 @@ async function loadFusion() {
       pageStats.innerHTML = `
         <span>图谱实体 <b>${st.entity_n||0}</b></span>
         <span>自动对齐 <b style="color:var(--grn,#2f855a);">${st.auto_merged||0}</b></span>
-        <span>灰区 <b style="color:${(st.pending_pairs||0)>0?'var(--amb,#c77700)':'inherit'};">${st.pending_pairs||0}</b></span>
+        <span>待消歧 <b style="color:${(st.pending_pairs||0)>0?'var(--amb,#c77700)':'inherit'};">${st.pending_pairs||0}</b></span>
         <span>冲突 <b style="color:${(st.conflict_n||0)>0?'var(--red)':'inherit'};">${st.conflict_n||0}</b></span>
         <span>LLM已判 <b>${st.llm_judged||0}</b></span>`;
     }
