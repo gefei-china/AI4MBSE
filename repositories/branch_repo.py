@@ -719,11 +719,12 @@ class BranchRepo(BaseRepo):
                       review_note: str = "") -> dict:
         """审批合并请求：更新状态；approve（merged）时真正执行数据合并（闭环）。
 
-        合并语义（git 风格分支模型）：
+        合并语义（标准 git 模型，2026-09-22 改造：两段统一为 copy，源分支永不清空）：
         - 目标为 release 类型（发布）→ 复制快照语义：dev 实体/关系/文档复制到 release，
           同 id 覆盖 target 行，源分支（dev）保留继续开发（同步）
-        - 目标为 dev（个人分支合并回主开发）→ 迁移语义：无冲突实体迁入目标分支，
-          冲突实体按 resolutions 决策写入目标分支后删除源行，个人分支清空可删除
+        - 目标为 dev（个人分支合并回主开发）→ 复制合并语义（对标 git merge）：无冲突实体复制到
+          目标分支（目标已有同 id 版本则跳过），冲突实体按 resolutions 决策写入目标分支后
+          源分支保留自己的版本 —— 个人分支可持续迭代、反复合并
         - 有冲突未解决 → 保留在源分支（路由层门禁已阻止 approve，此处兜底）
         - 目标分支为 release 类型 → 同步把源分支文档复制为发布快照（共享+发布快照）
 
@@ -896,8 +897,6 @@ class BranchRepo(BaseRepo):
             src_rels = [dict(r) for r in self.rows("SELECT * FROM relations WHERE branch=?", (src,))
                         if r["source_id"] in src_ids and r["target_id"] in src_ids]
             merge_rel_ids = [r["id"] for r in src_rels]
-            for r in src_rels:
-                self.execute("DELETE FROM relations WHERE id=?", (r["id"],))
             for eid, ent in src_ents.items():
                 ent_res = resolutions.get(eid, {}) if isinstance(resolutions, dict) else {}
                 if ent_res:
@@ -913,8 +912,7 @@ class BranchRepo(BaseRepo):
                                 (ent["name"], ent["entity_type"], ent["properties"], ent["status"],
                                  eid, tgt))
                         else:
-                            self.execute("UPDATE entities SET branch=? WHERE id=? AND branch=?",
-                                         (tgt, eid, src))
+                            self._copy_entity_to_branch(eid, src, tgt)
                             moved += 1
                             continue
                         self.execute("DELETE FROM entities WHERE id=? AND branch=?", (eid, src))
@@ -947,32 +945,30 @@ class BranchRepo(BaseRepo):
                         self.execute(
                             "UPDATE entities SET name=?, properties=? WHERE id=? AND branch=?",
                             (new_name, json.dumps(new_props, ensure_ascii=False), eid, tgt))
-                        # 合并完成：删除源分支版本行（个人副本），目标分支即为最终版本
-                        self.execute("DELETE FROM entities WHERE id=? AND branch=?", (eid, src))
+                        # git 语义：冲突决策只写入目标分支，源分支保留自己的版本（可持续迭代再合并）
                         updated += 1
                     else:
                         self.execute("UPDATE entities SET branch=? WHERE id=? AND branch=?",
                                      (tgt, eid, src))
                         moved += 1
                     continue
-                # 无冲突实体：迁移到目标分支；若目标分支已有同 id 版本（属性一致未判冲突）→ 删除源行
+                # 无冲突实体：复制到目标分支（源分支保留，git 语义）；目标已有同 id 版本（内容一致未判冲突）→ 跳过
                 tgt_exists = self.one("SELECT 1 FROM entities WHERE id=? AND branch=?", (eid, tgt))
-                if tgt_exists:
-                    self.execute("DELETE FROM entities WHERE id=? AND branch=?", (eid, src))
-                else:
-                    self.execute("UPDATE entities SET branch=? WHERE id=? AND branch=?",
-                                 (tgt, eid, src))
+                if not tgt_exists:
+                    self._copy_entity_to_branch(eid, src, tgt)
                 moved += 1
-            # 关系边重建：目标已有同三元组 → 先删，由源行取代避免重复（保留原 id，branch 覆盖为目标分支）
+            # 关系边重建（copy，2026-09-22）：目标已有同三元组 → 跳过去重；id 自增分配新值（源分支关系保留）
             for r in src_rels:
-                self.execute(
-                    "DELETE FROM relations WHERE branch=? AND source_id=? AND target_id=? AND relation_type=?",
+                _dup_t = self.one(
+                    "SELECT 1 FROM relations WHERE branch=? AND source_id=? AND target_id=? AND relation_type=?",
                     (tgt, r["source_id"], r["target_id"], r["relation_type"]))
+                if _dup_t:
+                    continue
                 cols = [c for c in r.keys() if c not in ("id", "branch")]
                 self.execute(
-                    "INSERT INTO relations (id, branch, " + ",".join(f"`{c}`" for c in cols) + ") "
-                    "VALUES (? , ?, " + ",".join("?" for _ in cols) + ")",
-                    [r["id"], tgt] + [r.get(c) for c in cols])
+                    "INSERT INTO relations (branch, " + ",".join(f"`{c}`" for c in cols) + ") "
+                    "VALUES (?, " + ",".join("?" for _ in cols) + ")",
+                    [tgt] + [r.get(c) for c in cols])
         # P0-2 删除 vs 修改冲突应用：keep_delete=目标分支置 deprecated（软删留痕）；
         # keep_modify=保留修改，已在迁移合并循环中复活目标行为源分支版本（此处兜底幂等置删）
         try:
@@ -1024,6 +1020,15 @@ class BranchRepo(BaseRepo):
         self.execute("UPDATE merge_requests SET status=?, reviewed_by=?, review_note='', resolved_at='' WHERE id=?",
                      (MR_OPEN, actor, mr_id))
         return {"ok": True, "action": MR_OPEN}
+
+    def _copy_entity_to_branch(self, eid: str, src: str, tgt: str) -> None:
+        """按行复制实体到目标分支（2026-09-22 标准 git 语义：源行保留；主键 (id, branch) 允许两分支并存）。"""
+        cols = [r["name"] for r in self.rows("PRAGMA table_info(entities)") if r["name"] != "branch"]
+        collist = ",".join(f"`{c}`" for c in cols)
+        ph = ",".join("?" for _ in cols)
+        self.execute(
+            f"INSERT INTO entities (branch, {collist}) SELECT ?, {collist} FROM entities WHERE id=? AND branch=?",
+            (tgt, eid, src))
 
     def _merge_commit(self, src: str, tgt: str, is_release: bool,
                       merge_ent_ids: list, merge_rel_ids: list) -> int | None:
