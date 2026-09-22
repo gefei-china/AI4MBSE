@@ -87,7 +87,10 @@ async function loadTripleReviewPane(){
     const badge = document.getElementById('triple-count-tab');
     if(badge) badge.textContent = shown.length;
     if(!shown.length){
-      el.innerHTML = `<div style="padding:14px;color:var(--mut);font-size:12px;">${items.length ? '当前筛选条件下无待审三元组（切换上方来源可查看其余）。' : '暂无待审三元组。'}三元组统计：已通过 ${st.approved||0} / 待审 ${st.pending||0} / 驳回 ${st.rejected||0}。<br>抽取审核确认后产生待审三元组，以 (S-P-O) 原子单元在此统一审核；实体/关系为通过后 commit 反写产物。</div>`;
+      let _ts = {}; try{ _ts = await api('/api/knowledge/triples/stats').catch(()=>({})) || {}; }catch(e){}
+      const _pending = _ts.to_store||0;
+      el.innerHTML = `<div style="padding:14px;color:var(--mut);font-size:12px;">${items.length ? '当前筛选条件下无待审三元组（切换上方来源可查看其余）。' : '暂无待审三元组。'}三元组统计：已通过 ${st.approved||0} / 待审 ${st.pending||0} / 驳回 ${st.rejected||0}。<br>抽取审核确认后产生待审三元组，以 (S-P-O) 原子单元在此统一审核；实体/关系为通过后 commit 反写产物。</div>`
+        + (_pending>0 ? `<div style="padding:0 14px 14px;"><div class="fempty">📦 有 <b>${_pending}</b> 条已审核三元组待落图（角标显示的即此数量入「发布」站水位）——落图后写入图谱实体。<br><button class="btn sm grn" onclick="tripleCommit()">⚡ 立即落图（${_pending} 条）</button></div></div>` : '');
       return;
     }
     const dupBadge = t => {

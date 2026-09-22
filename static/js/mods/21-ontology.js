@@ -327,7 +327,7 @@ async function loadKBFlowBar() {
       `<span class="st ${hot?'w':'g'} b" style="cursor:pointer;font-size:11px;" onclick="kbFlowGo('${pane}')" title="${segTip[pane]||'点击直达该环节'}">${label} <b>${n}</b></span>`;
   }).join('');
   // 2026-09-22 五站化：导航角标同步（store=待落图积压，pub=待审 MR 数）
-  const _tS = document.getElementById('fus-n-store'); if(_tS) _tS.textContent = store||0;
+  const _tS = document.getElementById('fus-n-store'); if(_tS) _tS.textContent = trips.pending||0;   // 2026-09-22 语义修正：角标=待审数（面板展示 pending 队列），待落图数在面板与发布站呈现
   const _tP = document.getElementById('fus-n-pub'); if(_tP) _tP.textContent = pub||0;
 }
 async function kbFlowGo(pane) {
@@ -414,8 +414,8 @@ async function renderPubPane(){
     : '<div style="padding:8px 0;color:var(--mut);font-size:12px;">✅ 无待审批合并请求 —— 发布基线完整（历史发布在「图谱工作区 → 合并请求」可查）</div>';
   el.innerHTML = `
     <div style="display:flex;gap:18px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px dashed var(--line);font-size:12px;">
-      <span>图库水位：已落图 <b>${trips.stored||0}</b> 条 / 待落图 <b style="color:${(trips.to_store||0)>0?'var(--amb,#c77700)':'inherit'}">${trips.to_store||0}</b> 条</span>
-      <span style="color:var(--mut);">落图由「三元组审核」commit 驱动；分支发布由合并请求评审驱动</span>
+      <span>图库水位：已落图 <b>${trips.stored||0}</b> 条 / 待落图 <b style="color:${(trips.to_store||0)>0?'var(--amb,#c77700)':'inherit'}">${trips.to_store||0}</b> 条 ${(trips.to_store||0)>0?`<button class="btn sm ghost" style="font-size:10px;padding:1px 8px;" onclick="fusNav(Array.from(document.querySelectorAll('.fus-nav-btn')).find(b=>b.dataset.fpane==='store'),'store')">去落图 →</button>`:''}</span>
+      <span style="color:var(--mut);">落图 = 把已审核三元组 commit 反写为图谱实体（在「三元组审核」站执行）；分支发布由合并请求评审驱动（合并后进入 RAG 消费视野）</span>
     </div>
     <div style="padding:10px 12px;">
       <div style="font-size:12.5px;font-weight:500;margin-bottom:6px;">待审批合并请求（${pend.length}）</div>
