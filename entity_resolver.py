@@ -156,7 +156,7 @@ def list_dup_candidates(conn, status: str | None = None, limit: int = 50) -> lis
 
 # ═══════════ 4. 确认/驳回候选 ═══════════
 
-def review_candidate(conn, cid: int, action: str, operator: str = "知识工程师") -> dict:
+def review_candidate(conn, cid: int, action: str, operator: "", branch: str = "personal",str = "知识工程师") -> dict:
     """确认=合并 / 驳回=标记 rejected。
 
     修复：合并失败必须透传 error（此前静默 ok=True 导致前端误报成功、候选卡在 pending）；
@@ -169,9 +169,9 @@ def review_candidate(conn, cid: int, action: str, operator: str = "知识工程�
         return {"ok": False, "error": f"该候选已处理（{row['status']}）"}
     if action == "confirm":
         keep = conn.execute(
-            "SELECT id FROM entities WHERE id=? AND status!='deprecated'", (row["keep_id"],)).fetchone()
+            "SELECT id FROM entities WHERE id=? AND branch=? AND status!='deprecated'", (row["keep_id"], branch)).fetchone()
         dup = conn.execute(
-            "SELECT id FROM entities WHERE id=? AND status!='deprecated'", (row["dup_id"],)).fetchone()
+            "SELECT id FROM entities WHERE id=? AND branch=? AND status!='deprecated'", (row["dup_id"], branch)).fetchone()
         if not keep or not dup:
             # 源实体已删除/废弃：无法合并，自动驳回清理（留痕），防止待审队列卡死
             conn.execute(
@@ -199,14 +199,15 @@ def review_candidate(conn, cid: int, action: str, operator: str = "知识工程�
 # ═══════════ 5. 合并（属性融合 + 关系重指 + aliases + 审计） ═══════════
 
 def merge_entities(conn, keep_id: str, dup_id: str, operator: str = "知识工程师",
-                   score: float = 0.0, method: str = "", save_audit: bool = True) -> dict:
+                   score: float = 0.0, method: str = "", save_audit: bool = True,
+                   branch: str = "personal") -> dict:
     """合并：dup → keep（E-6+E-7：aliases 记录 + entity_merges 审计 + 可撤销）。
 
     F3 修复：整函数包写事务（BEGIN IMMEDIATE + 异常整体回滚），
     避免多步 UPDATE 中途失败留下「半合并」脏数据（B4）。
     """
-    keep = conn.execute("SELECT * FROM entities WHERE id=?", (keep_id,)).fetchone()
-    dup = conn.execute("SELECT * FROM entities WHERE id=?", (dup_id,)).fetchone()
+    keep = conn.execute("SELECT * FROM entities WHERE id=? AND branch=?", (keep_id, branch)).fetchone()
+    dup = conn.execute("SELECT * FROM entities WHERE id=? AND branch=?", (dup_id, branch)).fetchone()
     if not keep or not dup:
         return {"ok": False, "error": "实体不存在"}
     if keep_id == dup_id:
@@ -231,8 +232,8 @@ def merge_entities(conn, keep_id: str, dup_id: str, operator: str = "知识工�
             aliases.append(dup["name"])
         merged["aliases"] = aliases
 
-        conn.execute("UPDATE entities SET properties=? WHERE id=?",
-                     (json.dumps(merged, ensure_ascii=False), keep_id))
+        conn.execute("UPDATE entities SET properties=? WHERE id=? AND branch=?",
+                     (json.dumps(merged, ensure_ascii=False), keep_id, branch))
 
         # 关系重指向
         rc1 = conn.execute("UPDATE relations SET source_id=? WHERE source_id=? AND status!='deprecated'",
@@ -242,7 +243,7 @@ def merge_entities(conn, keep_id: str, dup_id: str, operator: str = "知识工�
         total_rel = rc1 + rc2
 
         # dup 软删除
-        conn.execute("UPDATE entities SET status='deprecated' WHERE id=?", (dup_id,))
+        conn.execute("UPDATE entities SET status='deprecated' WHERE id=? AND branch=?", (dup_id, branch))
 
         # P2（2026-09-07）entity_aliases 写入侧：dup 本名 → keep 别名；
         # 已指向 dup 的历史别名一并重定向到 keep（合并后 mention 仍可召回 canonical）。
