@@ -408,6 +408,8 @@ class BranchRepo(BaseRepo):
                 "resolved": bool(r),
                 "pick": (r or {}).get("pick", ""),
                 "value": (r or {}).get("value", ""),
+                "resolved_by": (r or {}).get("resolved_by", ""),
+                "resolved_at": (r or {}).get("resolved_at", ""),
             })
         return out
 
@@ -438,8 +440,12 @@ class BranchRepo(BaseRepo):
         return {"changed": changed, "conflicts": fresh, "added": added, "removed": removed}
 
     def resolve_conflict(self, mr_id: int, entity_id: str, field: str,
-                         pick: str, value: str = "") -> dict:
-        """记录某个冲突字段的解决决策（幂等，重复提交覆盖）。"""
+                         pick: str, value: str = "", actor: str = "王工") -> dict:
+        """记录某个冲突字段的解决决策（幂等，重复提交覆盖）。
+
+        2026-09-22 对标 GitLab system note：每次裁决写 mr_comments（action='resolve'）
+        进评审时间线，resolutions 记录裁决人/时间 —— 裁决是最关键的治理动作，必须可追溯。
+        """
         mr = self.get_merge_request(mr_id)
         if not mr:
             return {"ok": False, "error": f"合并请求 #{mr_id} 不存在"}
@@ -449,9 +455,26 @@ class BranchRepo(BaseRepo):
             resolutions = json.loads(mr.get("resolutions") or "{}")
         except Exception:
             resolutions = {}
-        resolutions.setdefault(entity_id, {})[field] = {"pick": pick, "value": value}
+        resolutions.setdefault(entity_id, {})[field] = {
+            "pick": pick, "value": value,
+            "resolved_by": actor, "resolved_at": self._now() if hasattr(self, "_now") else __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         self.execute("UPDATE merge_requests SET resolutions=? WHERE id=?",
                      (json.dumps(resolutions, ensure_ascii=False), mr_id))
+        # 裁决留痕进评审时间线（对标 GitLab system note）
+        _cname = entity_id
+        try:
+            for _c in json.loads(mr.get("conflicts") or "[]"):
+                if _c.get("entity_id") == entity_id:
+                    _cname = _c.get("entity_name", entity_id)
+                    break
+        except Exception:
+            pass
+        _pick_desc = {"source": "以源为准", "target": "以目标为准", "manual": f"手动值「{value}」",
+                      "keep_delete": "保留删除", "keep_modify": "保留修改"}.get(pick, pick)
+        self.execute(
+            "INSERT INTO mr_comments (mr_id, author, action, comment) VALUES (?,?,?,?)",
+            (mr_id, actor, "resolve",
+             f"解决冲突：实体「{_cname}」的字段 {field} → {_pick_desc}"))
         return {"ok": True}
 
     # ── merge_requests ──

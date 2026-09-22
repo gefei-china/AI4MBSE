@@ -210,7 +210,8 @@ def resolve_conflict(mr_id: int, body: dict, conn=Depends(db_session), user=Depe
         v = body.get("value")
         if v is None or (isinstance(v, str) and not v.strip()):
             return JSONResponse({"error": "手动合并需填写字段值"}, 400)
-    result = repo.resolve_conflict(mr_id, entity_id, field, pick, str(body.get("value", "")))
+    result = repo.resolve_conflict(mr_id, entity_id, field, pick, str(body.get("value", "")),
+                                   actor=(user or {}).get("display_name") or (user or {}).get("username") or "王工")
     if not result.get("ok"):
         return JSONResponse({"error": result["error"]}, 400)
     audit(_actor(user), "merge_conflict_resolve",

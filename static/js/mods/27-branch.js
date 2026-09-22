@@ -769,7 +769,7 @@ function renderConflictItem(mrId, c) {
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
       <b>${esc(c.entity_name||c.entity_id)}</b> ${typeBadge}
       <span style="flex:1"></span>
-      ${c.resolved?`<span class="st ok">✓ 已解决${c.pick==='keep_delete'?'（保留删除）':'（保留修改）'}</span>`:'<span class="st r">⚠ 未解决</span>'}
+      ${c.resolved?`<span class="st ok" title="${c.resolved_by?'裁决人 '+c.resolved_by+' · ':''}${c.resolved_at||''}">✓ 已解决${c.pick==='keep_delete'?'（保留删除）':'（保留修改）'}${c.resolved_by?' · '+esc(c.resolved_by):''}</span>`:'<span class="st r">⚠ 未解决</span>'}
     </div>
     <div style="font-size:11.5px;color:var(--mut);margin-bottom:6px;">⚠ ${esc(srcDesc)}，${esc(otherDesc)} —— 需明确取舍后才能通过合并</div>
     <div style="display:flex;align-items:center;gap:12px;font-size:12px;flex-wrap:wrap;">
@@ -788,7 +788,7 @@ function renderConflictItem(mrId, c) {
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
       <b>${esc(c.entity_name||c.entity_id)}</b> 的字段 <code>${esc(c.field)}</code> ${typeBadge}
       <span style="flex:1"></span>
-      ${c.resolved?`<span class="st ok">✓ 已解决${c.pick==='manual'?'（手动:'+esc(String(c.value||''))+'）':c.pick==='source'?'（以源为准）':'（以目标为准）'}</span>`:'<span class="st r">⚠ 未解决</span>'}
+      ${c.resolved?`<span class="st ok" title="${c.resolved_by?'裁决人 '+c.resolved_by+' · ':''}${c.resolved_at||''}">✓ 已解决${c.pick==='manual'?'（手动:'+esc(String(c.value||''))+'）':c.pick==='source'?'（以源为准）':'（以目标为准）'}${c.resolved_by?' · '+esc(c.resolved_by):''}</span>`:'<span class="st r">⚠ 未解决</span>'}
     </div>
     <div style="font-size:11.5px;color:var(--mut);margin-bottom:6px;">
       源分支 <code>${esc(String(c.source_value))}</code> &nbsp;≠&nbsp; 目标分支 <code>${esc(String(c.target_value))}</code>
@@ -820,7 +820,7 @@ async function resolveConflict(mrId, entityId, field, radioName) {
 // ── MR 评审意见时间线（行内展开，对标 GitHub PR conversation）──
 function _mrActionIcon(a) {
   return ({approve:'✅ 通过', reject:'❌ 驳回', comment:'💬 评论', rollback:'↩ 回滚',
-           reopen:'↪ 重新打开', open:'📨 转评审'})[a] || '💬 ' + (a||'comment');
+           reopen:'↪ 重新打开', open:'📨 转评审', resolve:'🔀 冲突裁决'})[a] || '💬 ' + (a||'comment');
 }
 async function toggleMrComments(mrId, btn) {
   const row = btn.closest('tr');
