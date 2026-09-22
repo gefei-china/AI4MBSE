@@ -443,6 +443,16 @@ def triples_batch_review(body: dict, conn=Depends(db_session),
 
 
 @router.get("/api/knowledge/triples/stats")
+def triples_stats_route(conn=Depends(db_session), user=Depends(current_user)):
+    """三元组生命周期统计。
+
+    ⚠️ 2026-09-22 修复：此前重构搬走函数体后遗留**悬空装饰器**——本 GET 路由错误地
+    注册到了下方 triples_commit（写操作）上，导致 GET /stats 每次被调用都会触发
+    三元组落图 commit（副作用 GET，治理页每次打开都会误触发一次）。恢复委托 shared.triples_stats。
+    """
+    from routers.knowledge_parts.shared import triples_stats as _stats_impl
+    return _stats_impl(conn, user)
+
 
 @router.post("/api/knowledge/triples/commit")
 def triples_commit(conn=Depends(db_session),

@@ -793,6 +793,16 @@ def confirm_candidates(conn, batch_id: str | None = None, selected_ids: list | N
             from triple_commit import stage_candidates_as_triples
             _staged = stage_candidates_as_triples(conn, cands, batch_id, operator,
                                                    linked_chunks=linked_chunks)
+            # 2026-09-22 修复：stage 后同步候选状态（含 _add_triple 幂等跳过——数据已等效在库）。
+            # 原缺陷：triple_only 分支不更新 v2g_candidates.status → 批次 pending_n 永不减、
+            # 重复确认重复计数、audit 误报"入库 N"。与旧直写分支的 UPDATE status='confirmed' 对齐。
+            # 注意：cands 是 sqlite3.Row 列表，无 .get 方法（曾因 c.get("id") 抛 AttributeError
+            # 导致 stage 整体异常退回旧直写链），改用 Row.keys() 判存在。
+            _id_keys = cands[0].keys() if cands else []
+            _ids = [c["id"] for c in cands if "id" in _id_keys and c["id"] is not None]
+            if _ids:
+                conn.executemany("UPDATE v2g_candidates SET status='confirmed' WHERE id=?",
+                                 [(i,) for i in _ids])
             conn.commit()
             return {"ok": True, "triple_only": True, "staged": _staged,
                     "confirmed": _staged.get("triples", 0), "created_nodes": [],
@@ -1008,7 +1018,7 @@ def confirm_candidates(conn, batch_id: str | None = None, selected_ids: list | N
             except Exception:
                 prop = {}
             _w_ent(conn, n["id"], n["name"], prop,
-                   source_doc=next((c["source_doc"] for c in cands if c.get("entity_name") == n["name"]), ""),
+                   source_doc=next((c["source_doc"] for c in cands if c["entity_name"] == n["name"]), ""),
                    source_type="ai_generated", sysml_version_id=_ent["sysml_version_id"] or 0,
                    status="pending", created_by=operator, entity_type=_ent["entity_type"] or "")
         for e in created_edges:

@@ -241,6 +241,9 @@ def stats(conn) -> dict:
         "SELECT COUNT(*) FROM triples WHERE status='approved' AND graph_stored=0").fetchone()[0]
     d = {r["status"]: r["n"] for r in rows}
     d["to_store"] = to_store
+    # 2026-09-22 补：已落图数（发布水位，graph_stored=1 即已写入图库镜像）
+    d["stored"] = conn.execute(
+        "SELECT COUNT(*) FROM triples WHERE status='approved' AND graph_stored=1").fetchone()[0]
     return d
 
 
