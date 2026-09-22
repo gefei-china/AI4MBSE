@@ -377,7 +377,7 @@ async function openCitation(sup){
             <span class="st ${e.status==='reviewed'?'ok':e.status==='candidate'?'w':'g'}">${esc(e.status||'')}</span>
             <b>${esc(e.name)}</b><span class="tag">${esc(e.entity_type||'')}</span>
             <span style="margin-left:auto;display:flex;gap:4px;">
-              <button class="btn sm ghost" style="font-size:10.5px;padding:0 8px;" onclick="locateEntityInGraph('${e.id}')" title="跳转图谱工作区，高亮并居中该实体">🎯 定位</button>
+              <button class="btn sm ghost" style="font-size:10.5px;padding:0 8px;" onclick="locateEntityInGraph('${e.id}')" title="跳转知识图谱，高亮并居中该实体">🎯 定位</button>
               <button class="btn sm ghost" style="font-size:10.5px;padding:0 8px;" onclick="viewEntity('${e.id}')">查看</button>
             </span>
           </div>`).join('') + '</div>';

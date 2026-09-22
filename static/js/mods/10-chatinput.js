@@ -327,7 +327,7 @@ async function uploadFiles(input, kind){
       if(r.error){ toast('上传失败：'+r.error); continue; }
       pendingAttachments.push({url:r.url, filename:r.filename, size:r.size, is_image:r.is_image, doc_id:r.doc_id, parse_status:r.parse_status});
       renderAttachBar();
-      if(r.doc_id) toast('📎 '+r.filename+' 已入资料库（解析 '+(r.chunk_count||0)+' 块）');
+      if(r.doc_id) toast('📎 '+r.filename+' 已入文档库（解析 '+(r.chunk_count||0)+' 块）');
       else toast('📎 '+r.filename+' 已就绪（会话内联附件）');
       attachFormatFeedback(f, r);   // 2026-09-04：按当前模型能力对格式给出提示
     }catch(e){ toast('上传失败：'+(e.message||e)); }

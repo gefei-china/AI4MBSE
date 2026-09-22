@@ -64,14 +64,14 @@ function renderExtractResult(docRef, vr, total, docId) {
   el.scrollIntoView({behavior:'smooth', block:'nearest'});
   // 开关关闭：明确提示未开启（区别于「抽取完成 0 条」）
   if(vr && vr.enabled === false) {
-    el.innerHTML = `<div style="font-size:12px;"><b>⚙ 资料库实体抽取未开启</b>
+    el.innerHTML = `<div style="font-size:12px;"><b>⚙ 文档库实体抽取未开启</b>
       <div style="font-size:11px;color:var(--mut);margin-top:3px;">上传文档仅完成 解析→分块→向量化，不自动抽取实体/关系候选（系统默认）。</div></div>`;
     return;
   }
   if(!total) {
     el.innerHTML = `<div style="font-size:12px;"><b>🔍 抽取完成：0 条候选</b>
       <div style="font-size:11px;color:var(--mut);margin-top:3px;">文档内容未匹配到本体类型词（载荷/天线/需求/部件…）。可在「数据看板」检索后手动抽取，或先在本体模型添加实体类型。
-      <button class="btn sm ghost" style="margin-left:6px;" onclick="goReviewTab()">去标注审核</button></div></div>`;
+      <button class="btn sm ghost" style="margin-left:6px;" onclick="goReviewTab()">去治理中心</button></div></div>`;
     window._lastV2GBatch = vr.batch_id;
     return;
   }
@@ -108,7 +108,7 @@ function renderExtractResult(docRef, vr, total, docId) {
       <span class="st b">关系 ${nEdge}</span>
       <span class="st w">候选合计 ${total}</span>
       <span style="flex:1"></span>
-      <button class="btn sm" onclick="goReviewTab()">✅ 去标注审核确认入库</button>
+      <button class="btn sm" onclick="goReviewTab()">✅ 去治理中心确认</button>
     </div>
     ${groupHtml}
     ${relHtml}

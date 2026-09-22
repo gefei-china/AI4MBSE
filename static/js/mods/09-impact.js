@@ -975,7 +975,7 @@ function panelImpact(cd, gid) {
     <h4 style="margin:16px 0 6px;">🧾 证据补充（向量库检索）<span class="badge">混合溯源</span></h4>
     <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;">
       ${evidenceHtml || '<div style="color:var(--mut);font-size:12px;">暂无向量库补充证据（图谱依赖网络为主要证据源；知识库覆盖不足时自动检索相关文档佐证）</div>'}
-      <div style="margin-top:6px;font-size:11px;color:var(--mut);">* 图谱依赖网络为主证据；以下为向量库（资料库分块）对高影响元素的文档佐证，用于知识库覆盖不足时的混合溯源。</div>
+      <div style="margin-top:6px;font-size:11px;color:var(--mut);">* 图谱依赖网络为主证据；以下为向量库（文档库分块）对高影响元素的文档佐证，用于知识库覆盖不足时的混合溯源。</div>
     </div>
 
     <h4 style="margin:16px 0 6px;">🔗 影响关系明细（${edges.length}）<span class="badge">FR-CIA-1~4</span></h4>
@@ -998,7 +998,7 @@ function panelImpactRename(cd) {
   <h3 style="color:var(--blue-d);margin-bottom:10px;">✏️ 改名影响分析 · 引用更新清单</h3>
   <div class="note" style="margin-bottom:8px;">变更类型：<b>改名</b> ｜ 变更源：${esc(src.name||'')}（${esc(src.entity_type||'')}）</div>
   <div class="note" style="margin-bottom:10px;">✓ <b>结构影响：0</b> —— 改名不改变元素标识与依赖关系，组合/满足/验证等结构传播为零；需要处理的只有「文本引用」：以下 ${cnt} 处硬编码了旧名，需同步更新。</div>
-  ${sec('📄 资料库文档引用', refs.docs||[], d=>`<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:12px;">📄 <b>${esc(d.source_doc)}</b><div style="font-size:11.5px;color:var(--mut);margin-left:18px;">${esc(d.snippet||'')}…</div></div>`)}
+  ${sec('📄 文档库文档引用', refs.docs||[], d=>`<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:12px;">📄 <b>${esc(d.source_doc)}</b><div style="font-size:11.5px;color:var(--mut);margin-left:18px;">${esc(d.snippet||'')}…</div></div>`)}
   ${sec('📌 需求 / 元素文本引用', refs.requirements||[], r=>`<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:12px;"><b>${esc(r.name)}</b> <span class="tag">${esc(r.entity_type)}</span><div style="font-size:11.5px;color:var(--mut);margin-left:18px;">${esc(r.snippet||'')}…</div></div>`)}
   ${sec('📖 词典词条', refs.glossary||[], g=>`<div style="padding:4px 0;font-size:12px;">📖 ${esc(g.term||'')}</div>`)}
   ${sec('💻 代码产物引用', refs.code||[], x=>`<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:12px;">💻 <b>${esc(x.title)}</b><div style="font-size:11.5px;color:var(--mut);margin-left:18px;">${esc(x.snippet||'')}…</div></div>`)}
@@ -1249,7 +1249,7 @@ function artContextMenu(ev, id){
   m.innerHTML = item('📖 打开', `artPreviewV3(${id})`)
     + item('📎 加入会话', `artAddToChat(${id})`)
     + item('💾 另存为', `artSaveAs(${id})`)
-    + item('📥 收编入资料库', `artIngestToDocs(${id})`);
+    + item('📥 收编入文档库', `artIngestToDocs(${id})`);
   document.body.appendChild(m);
   m.style.left = Math.min(ev.clientX, window.innerWidth - m.offsetWidth - 8) + 'px';
   m.style.top = Math.min(ev.clientY, window.innerHeight - m.offsetHeight - 8) + 'px';
@@ -1265,8 +1265,8 @@ async function artIngestToDocs(id){
   }catch(e){}
   const suggest = (a.kind==='code'||a.kind==='sysml') ? (names.includes('可复用构件')?['可复用构件']:[]) : [];
   const picked = await multiSelectDialog({
-    title: '📥 收编入资料库 · 选择知识类别',
-    message: `产物「${a.title||id}」收编入资料库（向量化 + 知识分类）。\n收编后 🤖 标记，AI 建模检索默认不消费（可在建模范围显式开启）。`,
+    title: '📥 收编入文档库 · 选择知识类别',
+    message: `产物「${a.title||id}」收编入文档库（向量化 + 知识分类）。\n收编后 🤖 标记，AI 建模检索默认不消费（可在建模范围显式开启）。`,
     options: names, selected: suggest, okText: '确认收编'
   });
   if(picked === null) return;
@@ -1278,7 +1278,7 @@ async function _artIngestCall(id, category, override){
       body:JSON.stringify({artifact_id:id, knowledge_category:category, override:!!override})});
     if(r.needs_confirm){
       const ok = await confirmDialog(
-        `资料库已存在相似文档「${r.similar_filename}」（相似度 ${r.similarity}）。\n\n继续收编将作为新版本并存，旧版本会被标记为已取代。确认？`,
+        `文档库已存在相似文档「${r.similar_filename}」（相似度 ${r.similarity}）。\n\n继续收编将作为新版本并存，旧版本会被标记为已取代。确认？`,
         {title:'查重确认'});
       if(ok) await _artIngestCall(id, category, true);
       return;

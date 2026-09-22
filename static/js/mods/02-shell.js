@@ -186,7 +186,7 @@ function flowRunBackToList(){
 // 2026-09-17 R7：移除死条目 branch('合并队列' 页已删，go('branch') 重定向到 kb-d) 与 modelcfg('模型配置' 已并入 studio/st-model)。
 const TITLES = {home:'总览',ai:'AI 建模',kb:'知识中心',reports:'报告',studio:'能力中心',settings:'设置',users:'用户与权限管理',audit:'审计日志',ops:'运行监控中心',approval:'审批管理'};
 // 二级页提升一级导航：子 Tab 入口的页面标题映射
-const KB_TAB_TITLES = {'kb-a':'数据看板','kb-e':'资料库','kb-b':'数据整理','kb-c':'本体模型','kb-d':'图谱工作区',};
+const KB_TAB_TITLES = {'kb-a':'数据看板','kb-e':'文档库','kb-b':'治理中心','kb-c':'本体模型','kb-d':'知识图谱',};
 // 2026-09-17 R7：补 'st-prompt'（提示词模板，真实 subpage，`09-impact.js:1134` / `36-capability.js:72` 会 go 过来），
 // 缺它会让面包屑退化成「能力中心」、且 loadPage 走不到子 Tab 直达分支
 const ST_TAB_TITLES = {'st-agent':'Agent','st-skill':'技能','st-mcp':'工具与 MCP','st-market':'插件市场','st-model':'模型配置','st-prompt':'提示词模板'};
@@ -440,7 +440,7 @@ async function loadHome() {
   if(todoEl) todoEl.innerHTML = `
     <div class="todo-item" title="点击进入「合并请求」评审合并" onclick="go('branch')"><span>🔀 合并请求待评审</span><b class="st ${td.pending_merge_review>0?'w':''}">${td.pending_merge_review}</b></div>
     <div class="todo-item" title="点击进入「合并请求」处理冲突" onclick="go('branch')"><span>⚠️ 冲突告警</span><b class="st ${td.conflicts>0?'r':''}">${td.conflicts}</b></div>
-    <div class="todo-item" title="点击进入「数据整理」" onclick="go('kb','kb-b')"><span>🧬 知识评审待办</span><b class="st ${td.knowledge_review>0?'w':''}">${td.knowledge_review}</b></div>`;
+    <div class="todo-item" title="点击进入「治理中心」" onclick="go('kb','kb-b')"><span>🧬 知识评审待办</span><b class="st ${td.knowledge_review>0?'w':''}">${td.knowledge_review}</b></div>`;
   // 💬 最近对话：一键进入
   const convs = d.recent_conversations||[];
   const convEl = document.getElementById('recent-convs-home');
