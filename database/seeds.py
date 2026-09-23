@@ -20,7 +20,7 @@ def _seed(conn):
         "kb_browse": ["view", "edit_request"],
         "kb_ontology": ["view"],
         "kb_review": ["view", "confirm", "modify", "merge"],
-        "branch_dev": ["create", "switch", "merge_request"],
+        "branch_dev": ["create", "switch", "merge_request", "delete"],
         "branch_release": ["view"],
         "report": ["view", "export"],
         "admin": []
@@ -31,7 +31,7 @@ def _seed(conn):
         "kb_browse": ["view", "edit_request"],
         "kb_ontology": ["view", "edit", "profile_io"],
         "kb_review": ["view", "confirm", "modify", "merge"],
-        "branch_dev": ["create", "switch", "merge_request"],
+        "branch_dev": ["create", "switch", "merge_request", "delete"],
         "branch_release": ["view", "review_merge", "rollback"],
         "report": ["view", "export"],
         "admin": []

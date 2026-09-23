@@ -74,6 +74,8 @@ def create_branch(body: dict, conn=Depends(db_session), user=Depends(current_use
     """创建分支：dev/release 为系统预置唯一分支，不可手动创建；
     个人分支须从 dev 或 release 拉取基线（创建时 fork 基线实体/关系）；
     本地分支（local）用于离线/实验性操作，不 fork 基线、不可作为合并源。"""
+    # P0-4：建分支权限门（branch_dev:create，设计师/知识工程师矩阵已含 → 零行为回归）
+    require_permission("branch_dev", "create")(user=user)
     repo = BranchRepo(conn)
     name = (body.get("name") or "").strip()
     err = _validate_branch_name(name)
@@ -189,6 +191,8 @@ def merge_conflicts(mr_id: int, conn=Depends(db_session)):
 def resolve_conflict(mr_id: int, body: dict, conn=Depends(db_session), user=Depends(current_user)):
     """解决某个冲突字段：pick=source 以源分支为准 | target 以目标分支为准 | manual 手动值；
     delete_modify 冲突用 keep_delete（保留删除）/ keep_modify（保留修改）。"""
+    # P0-4：解决冲突权限门（branch_dev:merge_request，矩阵已含 → 零行为回归）
+    require_permission("branch_dev", "merge_request")(user=user)
     repo = BranchRepo(conn)
     entity_id = (body.get("entity_id") or "").strip()
     field = (body.get("field") or "").strip()
@@ -222,6 +226,8 @@ def resolve_conflict(mr_id: int, body: dict, conn=Depends(db_session), user=Depe
 
 @router.post("/api/branches/merge-requests")
 def create_merge_request(body: dict, conn=Depends(db_session), user=Depends(current_user)):
+    # P0-4：发起合并请求权限门（branch_dev:merge_request，矩阵已含 → 零行为回归）
+    require_permission("branch_dev", "merge_request")(user=user)
     repo = BranchRepo(conn)
     src, tgt = (body.get("source_branch") or "").strip(), (body.get("target_branch") or "").strip()
     if not src or not tgt:
@@ -453,6 +459,9 @@ def update_branch(name: str, body: dict, conn=Depends(db_session), user=Depends(
 
 @router.delete("/api/branches/{name:path}")
 def delete_branch(name: str, conn=Depends(db_session), user=Depends(current_user)):
+    # P0-4：删分支权限门（branch_dev:delete）。delete 为新增 op，已同步为设计师/知识工程师
+    # 的角色矩阵补键（保持"原本无门"时的可达性不回归）；release/dev/personal 仍由下方 PROTECTED 兜底拒绝。
+    require_permission("branch_dev", "delete")(user=user)
     repo = BranchRepo(conn)
     if name in PROTECTED:
         return JSONResponse({"error": f"{name} 是受保护分支，不可删除"}, 400)
