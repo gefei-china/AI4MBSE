@@ -5,6 +5,7 @@
   由调用方业务事务统一提交；打点失败仅打印、不阻断业务。
 - get_commits / get_commit / get_branch_history：提交查询（读路径）。
 """
+import hashlib
 import json
 
 from repositories.base import BaseRepo
@@ -12,6 +13,31 @@ from repositories.base import BaseRepo
 
 class CommitRepo(BaseRepo):
     """知识提交（分支版本管理）数据访问。"""
+
+    # ── 内容哈希（P0-3，对标 GitHub commit SHA：防改库篡改）──
+    @staticmethod
+    def content_hash_of(branch, parent_id, kind, changes, snapshot) -> str:
+        """提交内容哈希：sha256(branch|parent_id|kind|规范化changes|规范化snapshot)。
+
+        - changes/snapshot 可传 dict（写入路径）或 JSON 字符串（回填/自检路径）；
+          内部统一 parse → **规范化 JSON**（sort_keys=True + 紧凑分隔符）后再拼接，
+          键序变化不误报，且写入与自检**复用同一函数**（防两套算法漂移）。
+        - ensure_ascii=False：中文实体名不转义，便于人工核对（两侧同函数，不影响一致性）。
+        - parent_id 为 None（分支首个提交）→ 归一为空串，与库内 NULL 对拍一致。
+        """
+        def _norm(v):
+            if isinstance(v, (str, bytes)):
+                try:
+                    v = json.loads(v or "{}")
+                except Exception:
+                    v = {}
+            if not isinstance(v, dict):
+                v = {}
+            return json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        raw = "|".join([str(branch or ""),
+                        "" if parent_id is None else str(parent_id),
+                        str(kind or ""), _norm(changes), _norm(snapshot)])
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     # ── 写路径：提交打点 ──
     def create_commit(self, branch: str, kind: str, message: str,
@@ -23,19 +49,50 @@ class CommitRepo(BaseRepo):
         - source_branch/source_head_commit：merge 提交双父指针（P1-2，供 ahead/behind 与三点式 diff）
         - 不 conn.commit()：由调用方业务事务统一提交（跟随调用方事务原子性）
         - changes 结构：{entities:[id], relations:[id], documents:[id], chunks:[id]}（无则省略键）
+        - content_hash（P0-3）：随行写入内容哈希，供 GET /api/branches/commits/verify 校验篡改
         """
         head = self.scalar("SELECT head_commit FROM branches WHERE name=?", (branch,), default=None)
+        chash = self.content_hash_of(branch, head, kind, changes, snapshot)
         cid = self.execute(
             "INSERT INTO knowledge_commits (branch, parent_id, kind, message, changes, snapshot, "
-            "created_by, source_branch, source_head_commit) VALUES (?,?,?,?,?,?,?,?,?)",
+            "created_by, source_branch, source_head_commit, content_hash) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (branch, head, kind, message,
              json.dumps(changes or {}, ensure_ascii=False),
              json.dumps(snapshot or {}, ensure_ascii=False), actor,
-             source_branch, source_head_commit))
+             source_branch, source_head_commit, chash))
         self.execute("UPDATE branches SET head_commit=? WHERE name=?", (cid, branch))
         return cid
 
     # ── 读路径：提交查询 ──
+    def verify_commits(self, limit: int = 0) -> dict:
+        """全量重算 content_hash 与库值比对（审计：提交记录是否被改库篡改）。
+
+        - limit>0 只校验最近 limit 条（按 id DESC）
+        - 返回 {total, checked, missing, mismatched:[...], ok}
+          missing = content_hash 为空的行（迁移前未回填的历史数据）
+        - 只读，不写库
+        """
+        sql = ("SELECT id, branch, parent_id, kind, changes, snapshot, content_hash "
+               "FROM knowledge_commits ORDER BY id DESC")
+        if limit and limit > 0:
+            sql += " LIMIT %d" % int(limit)
+        rows = [dict(r) for r in self.conn.execute(sql).fetchall()]
+        mismatched, missing = [], []
+        for r in rows:
+            stored = (r.get("content_hash") or "").strip()
+            if not stored:
+                missing.append({"id": r["id"], "branch": r.get("branch") or ""})
+                continue
+            expected = self.content_hash_of(r.get("branch"), r.get("parent_id"), r.get("kind"),
+                                            r.get("changes"), r.get("snapshot"))
+            if expected != stored:
+                mismatched.append({"id": r["id"], "branch": r.get("branch") or "",
+                                   "kind": r.get("kind") or "",
+                                   "stored": stored[:16] + "...", "expected": expected[:16] + "..."})
+        return {"total": len(rows), "checked": len(rows) - len(missing),
+                "missing": len(missing), "mismatched": mismatched,
+                "ok": not mismatched and not missing}
+
     @staticmethod
     def _changes_count(row: dict) -> int:
         """变更对象总数（entities/relations/documents/chunks 各清单长度之和）。"""

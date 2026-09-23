@@ -248,7 +248,8 @@ def init_db():
         changes TEXT DEFAULT '{}',            -- JSON：{entities:[id], relations:[id], documents:[id], chunks:[id]} 变更对象清单
         snapshot TEXT DEFAULT '{}',           -- JSON：提交后各对象关键字段摘要（回滚用）
         created_by TEXT DEFAULT '',
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        content_hash TEXT DEFAULT ''          -- P0-3 内容哈希 sha256(branch|parent_id|kind|规范化changes|规范化snapshot)，防改库篡改
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_kc_branch ON knowledge_commits(branch, id)")
 

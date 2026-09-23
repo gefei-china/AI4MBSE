@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from core.deps import db_session, current_user, require_permission
 from repositories.branch_repo import BranchRepo
+from repositories.commit_repo import CommitRepo
 from core.audit import audit
 
 router = APIRouter(tags=["分支管理"])
@@ -174,6 +175,16 @@ def branch_diff(base: str = "", head: str = "", mode: str = "full", conn=Depends
 def integrity_report(conn=Depends(db_session)):
     """数据体检（只读巡检）：关系引用完整性——悬空/跨分支死行扫描 + 废弃实体引用计数。"""
     return BranchRepo(conn).integrity_report()
+
+
+@router.get("/api/branches/commits/verify")
+def verify_commits(limit: int = 0, conn=Depends(db_session)):
+    """提交内容哈希自检（P0-3，对标 G9 commit SHA）：全量重算 content_hash 与库值比对。
+
+    只读。`limit>0` 只校验最近 N 条。`missing` = 未回填的历史行；`mismatched` = 疑似被改库篡改。
+    与 `/api/branches/{name}/history` 不冲突（第 3 段字面量分别为 verify / history）。
+    """
+    return CommitRepo(conn).verify_commits(limit=limit)
 
 
 @router.get("/api/branches/merge-requests/{mr_id}/conflicts")

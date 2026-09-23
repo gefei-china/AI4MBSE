@@ -206,4 +206,6 @@ def _migrate_columns(conn):
     # ── 分支版本管理：merge 提交双父指针（P1-2，供 ahead/behind 与三点式 diff）──
     _add("knowledge_commits", "source_branch", "TEXT DEFAULT ''")      # 合并源分支名
     _add("knowledge_commits", "source_head_commit", "INTEGER DEFAULT NULL")  # 合并时源分支 head 提交 id
+    # ── P0-3：提交内容哈希（对标 G9 commit SHA；防改库篡改，审计红线场景）──
+    _add("knowledge_commits", "content_hash", "TEXT DEFAULT ''")       # sha256(branch|parent_id|kind|规范化changes|规范化snapshot)
     conn.commit()
