@@ -119,12 +119,12 @@ def ontology_version_publish(body: dict = None, conn=Depends(db_session),
     ③ 生成新版本行（change_type=publish）+ 全量快照 + compatible 判定 + active=1
     """
     from datetime import datetime
-    # ① 一致性检查
-    chk = _ontology_check(conn)
+    # ① 一致性检查（**待发布数据**口径：编辑态即将成为新快照，不能拿旧快照体检 —— 决策 D2 配套）
+    chk = _ontology_check(conn, rows=_ont_edit_rows(conn))
     if chk["high"] > 0:
         tops = [i["message"] for i in chk["issues"] if i["severity"] == "high"][:5]
         return JSONResponse({"error": f"一致性检查存在 {chk['high']} 个高危问题，禁止发布：{'；'.join(tops)}"
-                                      f"（可先在「🩺 一致性检查」修复）"}, 400)
+                                      f"（请在本体页「🩺 一致性检查」按 fix 提示修复后重试）"}, 400)
 
     cur = conn.execute("SELECT id, name, type_kind, parent_id, properties, constraints, "
                        "description, icon, color, iri FROM ontology_types").fetchall()
@@ -286,12 +286,12 @@ def ontology_version_release(body: dict = None, conn=Depends(db_session),
     if row["status"] == "released":
         return {"ok": True, "version": dict(row), "already_released": True}
 
-    # ① 一致性检查：high 拦截（D1 采纳）
-    chk = _ontology_check(conn)
+    # ① 一致性检查：high 拦截（D1 采纳）——**待发布数据**口径（决策 D2 配套，同 publish）
+    chk = _ontology_check(conn, rows=_ont_edit_rows(conn))
     if chk["high"] > 0:
         tops = [i["message"] for i in chk["issues"] if i["severity"] == "high"][:5]
         return JSONResponse({"error": f"一致性检查存在 {chk['high']} 个高危问题，禁止发布：{'；'.join(tops)}"
-                                      f"（可先在「🩺 一致性检查」修复，或确认风险后豁免）"}, 400)
+                                      f"（请在本体页「🩺 一致性检查」按 fix 提示修复后重试）"}, 400)
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     actor = _actor(user)

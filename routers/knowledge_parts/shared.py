@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from core.deps import db_session, current_user, require_permission, require_any_permission
 from core import typevocab
+from core import ontology_rules
 from knowledge_engine import QueryRouter  # P1: 双引擎路由统计
 from repositories.knowledge_repo import KnowledgeRepo
 from repositories.commit_repo import CommitRepo
@@ -300,34 +301,86 @@ def _normalize_relation_domain_range(conn, body) -> list:
     return []
 
 
-def _ontology_check(conn) -> dict:
+def _ont_scope(conn):
+    """返回 (rows, source, version_id)：source ∈ {'snapshot','current'}。
+
+    2026-09-23 决策 D2（消费读最新快照）：_ontology_check 缺省即用消费口径，并把
+    「这份报告到底读的是快照还是编辑态」显式回报 —— 避免"体检与真实消费不一致"再次静默。
+    """
+    from ontology_semantics import active_rows
+    rows = active_rows(conn)
+    try:
+        v = conn.execute(
+            "SELECT id FROM ontology_versions WHERE active=1 ORDER BY id DESC LIMIT 1").fetchone()
+        if v:
+            n = conn.execute("SELECT COUNT(*) FROM ontology_version_snapshots WHERE version_id=?",
+                             (v["id"],)).fetchone()[0]
+            if n:
+                return rows, "snapshot", v["id"]
+    except Exception:
+        pass
+    return rows, "current", 0
+
+
+def _ont_edit_rows(conn):
+    """**编辑态**类型行（发布门禁专用）。
+
+    2026-09-23 决策 D2 配套：`_ontology_check` 缺省走消费口径（快照），但**发布门禁必须校验
+    「待发布的那份数据」**（= 编辑态，它即将成为新快照）—— 否则"改了本体却拿旧快照去体检"，
+    等于把带病数据放行。故 publish/release 显式传本函数的结果。
+    """
+    return conn.execute(
+        "SELECT id, name, type_kind, parent_id, constraints FROM ontology_types").fetchall()
+
+
+def _ontology_check(conn, rows=None) -> dict:
     """本体一致性校验（内部复用）：循环继承 / 悬空 parent / 孤立类 / 关系缺 dom-range / 重名。
 
     2026-09-02 抽取：validate 端点与发布流程（release 前置拦截）共用。
+
+    2026-09-23 三项收敛（决策 D2 + O0-1 + O0-3）：
+      · **口径**：rows 缺省 → 消费口径（最新 active 快照；无快照回退编辑态）→ 保证
+        「体检的问题集 == AI 建模/导出真正吃到的那份 schema」；而**发布门禁必须校验
+        待发布的那份数据**，故 publish/release 显式传 rows=编辑态（见 ontology_version.py）。
+      · **标签**：每条 issue 带 code + label（中文，取自 core.ontology_rules 单一真源）
+        —— 修掉「后端产 6 种、前端只映射 5 种 → 高危在界面显示英文」的清单漂移。
+      · **可复现**：返回 ts / source / ontology_version_id / rule_version，同输入 → 同结论。
     """
-    rows = conn.execute("SELECT id, name, type_kind, parent_id, constraints FROM ontology_types").fetchall()
+    if rows is None:
+        rows, source, ovid = _ont_scope(conn)
+    else:
+        source, ovid = "current", 0
     ents = conn.execute("SELECT entity_type, COUNT(*) c FROM entities WHERE status!='deprecated' GROUP BY entity_type").fetchall()
     inst_cnt = {r["entity_type"]: r["c"] for r in ents}
     by_id = {str(r["id"]): r for r in rows}
     issues = []
+
+    def _issue(code, name, message, **extra):
+        """构造 issue：code/label/severity/dimension/why/fix 全部取自规则目录（单一真源）。"""
+        r = ontology_rules.rule(code)
+        d = {"type": code, "code": code, "label": r["label"], "severity": r["severity"],
+             "dimension": r["dimension"], "why": r["why"], "fix": r["fix"],
+             "name": name, "message": message}
+        d.update(extra)
+        return d
     for t in rows:
         if t["type_kind"] in ("entity", "attribute"):
             seen = {str(t["id"])}; cur = t["parent_id"]; hop = 0
             while cur and hop < 50:
                 if str(cur) in seen:
-                    issues.append({"type": "cycle", "severity": "high", "name": t["name"], "message": "循环继承（→ … → 自身）"}); break
+                    issues.append(_issue("cycle", t["name"], "循环继承（→ … → 自身）")); break
                 seen.add(str(cur)); pp = by_id.get(str(cur)); cur = pp["parent_id"] if pp else None; hop += 1
     for t in rows:
         if t["parent_id"] and str(t["parent_id"]) not in by_id:
-            issues.append({"type": "dangling_parent", "severity": "high", "name": t["name"],
-                           "message": f"悬空父类：parent_id={t['parent_id']} 不存在"})
+            issues.append(_issue("dangling_parent", t["name"],
+                                 f"悬空父类：parent_id={t['parent_id']} 不存在"))
     for t in rows:
         if t["type_kind"] != "entity":
             continue
         has_inst = inst_cnt.get(t["name"], 0) > 0
         has_child = any(str(x["parent_id"] or "") == str(t["id"]) for x in rows)
         if not has_inst and not has_child:
-            issues.append({"type": "isolated", "severity": "low", "name": t["name"], "message": "孤立类：无实例且无子类"})
+            issues.append(_issue("isolated", t["name"], "孤立类：无实例且无子类"))
     ent_names = {x["name"] for x in rows if x["type_kind"] == "entity"}
     for t in rows:
         if t["type_kind"] != "relation":
@@ -347,21 +400,29 @@ def _ontology_check(conn) -> dict:
 
         dom_l, rng_l = _norm(dom), _norm(rng)
         if not dom_l and not rng_l:
-            issues.append({"type": "missing_dom_range", "severity": "low", "name": t["name"], "message": "对象属性未定义定义域/值域"})
+            issues.append(_issue("missing_dom_range", t["name"], "对象属性未定义定义域/值域"))
         else:
             bad = sorted({x for x in dom_l + rng_l if x not in ent_names})
             if bad:
-                issues.append({"type": "bad_dom_range", "severity": "high", "name": t["name"],
-                               "message": f"定义域/值域指向不存在的实体类型: {'、'.join(bad)}"})
+                issues.append(_issue("bad_dom_range", t["name"],
+                                     f"定义域/值域指向不存在的实体类型: {'、'.join(bad)}",
+                                     dangling=bad))
     seen_names = {}
     for t in rows:
         key = (t["type_kind"], t["name"])
         if key in seen_names:
-            issues.append({"type": "duplicate", "severity": "high", "name": t["name"], "message": f"重名类型：{t['name']}（{t['type_kind']}）出现多次"})
+            issues.append(_issue("duplicate", t["name"], f"重名类型：{t['name']}（{t['type_kind']}）出现多次"))
         seen_names[key] = t["id"]
+    from datetime import datetime
     return {"ok": True, "total": len(rows), "issues": issues,
             "high": sum(1 for x in issues if x["severity"] == "high"),
-            "low": sum(1 for x in issues if x["severity"] == "low")}
+            "warn": sum(1 for x in issues if x["severity"] == "warn"),
+            "low": sum(1 for x in issues if x["severity"] == "low"),
+            # O0-3 报告可复现 + D2 口径透明（这份报告读的是快照还是编辑态）
+            "source": source,
+            "ontology_version_id": ovid,
+            "rule_version": ontology_rules.RULE_VERSION,
+            "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 
 def _snapshot_diff(conn, version_id: int) -> dict:
@@ -462,22 +523,16 @@ def _snapshot_dom_range_diff(conn, prev_rows, cur_rows) -> bool:
 
 
 def _active_ont_rows(conn):
-    """2026-09-02 快照消费：返回消费侧应使用的类型行（最新已发布 active 快照；无发布或无快照回退当前表）。
+    """2026-09-02 快照消费 → 2026-09-23 **收敛到单一真源** `ontology_semantics.active_rows`。
 
-    消费类端点（语义注入/图谱 Schema/导出）用此读取；编辑/校验类（types 树/validate）仍读当前表。
+    为什么收敛（考古用）：本函数原是"消费读快照"的**唯一**实现，`/schema`、`/graph`、`/shacl`、
+    `/export` 都走它；但 `OntologyValidator(conn)` 默认读**编辑态**，于是 AI 建模语义注入、
+    抽取、写校验吃编辑态、导出吃快照 —— 同一份 schema 两条口径（且 active 版本当时无快照，
+    回退路径长期生效，把分裂掩盖住了）。现有两处只保留一份实现：
+    `_ont_scope` / `_ontology_check` / `OntologyValidator(rows=None)` 与消费端点全部经此。
     """
-    v = conn.execute(
-        "SELECT id FROM ontology_versions WHERE active=1 ORDER BY id DESC LIMIT 1").fetchone()
-    if v:
-        rows = conn.execute(
-            "SELECT type_id AS id, name, type_kind, parent_id, properties, constraints, "
-            "description, icon, color, iri FROM ontology_version_snapshots WHERE version_id=?",
-            (v["id"],)).fetchall()
-        if rows:  # active 版本有快照 → 消费快照
-            return rows
-        # active 版本无快照（快照治理上线前的存量 released）→ 回退当前表，避免消费空数据
-    return conn.execute(
-        "SELECT * FROM ontology_types").fetchall()
+    from ontology_semantics import active_rows
+    return active_rows(conn)
 
 
 def _filter_ont_rows_for_type(rows, type_id: int):
@@ -542,4 +597,4 @@ def v2g_fuse_config(body: dict, conn=Depends(db_session),
         review_threshold=body.get("review_threshold"), quality_gate=body.get("quality_gate"),
         weights=body.get("weights"), actor=_actor(user))
 
-__all__ = ['router', 'json', 'Optional', 'Depends', 'HTTPException', 'JSONResponse', 'db_session', 'current_user', 'require_permission', 'require_any_permission', 'typevocab', 'QueryRouter', 'KnowledgeRepo', 'CommitRepo', 'audit', 'EntityIn', 'BatchReviewIn', 'GraphNodeIn', 'GraphEdgeIn', 'OntologyTypeIn', 'V2GExtractIn', 'V2GConfirmIn', 'V2GRejectIn', 'V2GUpdateIn', 'SysMLIn', 'MergeIn', 'RetrieveIn', 'RELEASE_BRANCH', 'WRITE_PERMS', '_FALLBACK_STOP_WORDS', '_actor', '_is_release_branch', '_release_guard', '_entity_dup_warning', '_dprop_proj', '_log_graph_edit', '_fallback_topics', '_validate_ont_parent', '_log_ont_change', '_ont_props_keys', '_ont_version_bump', '_normalize_relation_domain_range', '_ontology_check', '_snapshot_diff', '_count_dom_range_changed', '_snapshot_dom_range_diff', '_active_ont_rows', '_filter_ont_rows_for_type', 'triples_stats', 'v2g_fuse_config']
+__all__ = ['router', 'json', 'Optional', 'Depends', 'HTTPException', 'JSONResponse', 'db_session', 'current_user', 'require_permission', 'require_any_permission', 'typevocab', 'QueryRouter', 'KnowledgeRepo', 'CommitRepo', 'audit', 'EntityIn', 'BatchReviewIn', 'GraphNodeIn', 'GraphEdgeIn', 'OntologyTypeIn', 'V2GExtractIn', 'V2GConfirmIn', 'V2GRejectIn', 'V2GUpdateIn', 'SysMLIn', 'MergeIn', 'RetrieveIn', 'RELEASE_BRANCH', 'WRITE_PERMS', '_FALLBACK_STOP_WORDS', '_actor', '_is_release_branch', '_release_guard', '_entity_dup_warning', '_dprop_proj', '_log_graph_edit', '_fallback_topics', '_validate_ont_parent', '_log_ont_change', '_ont_props_keys', '_ont_version_bump', '_normalize_relation_domain_range', '_ont_scope', '_ont_edit_rows', '_ontology_check', '_snapshot_diff', '_count_dom_range_changed', '_snapshot_dom_range_diff', '_active_ont_rows', '_filter_ont_rows_for_type', 'triples_stats', 'v2g_fuse_config']

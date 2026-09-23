@@ -1133,15 +1133,21 @@ async function oeConsistency(){
       openPanel('🩺 一致性校验结果', `<div style="display:flex;align-items:center;gap:10px;padding:24px 16px;">
         <span style="font-size:30px;">✅</span>
         <div><b style="font-size:14px;color:var(--grn,#2f855a);">校验通过</b>
-        <div style="font-size:11.5px;color:var(--mut);margin-top:4px;">无循环继承 / 悬空父类 / 孤立类 / 关系缺域值域 / 重名</div></div></div>
+        <div style="font-size:11.5px;color:var(--mut);margin-top:4px;">未发现本体结构/一致性高危问题</div></div></div>
         <div style="text-align:right;padding:0 16px 16px;"><button class="btn ghost" onclick="closePanel()">关闭</button></div>`);
       return;
     }
-    const TYPE_LABEL = {cycle:'循环继承', dangling_parent:'悬空父类', isolated:'孤立类', missing_dom_range:'关系缺定义域/值域', duplicate:'重名'};
+    // 规则中文标签一律用**后端**给的 x.label（core/ontology_rules 单一真源）。
+    // 2026-09-23 移除本地 TYPE_LABEL：此前前后端各持一份清单、必然漂移 —— 前端漏映射
+    // bad_dom_range，导致真库 9 条高危全部静默显示英文原文。
     const sorted = [...issues].sort((a,b)=>((a.severity==='high'?0:1)-(b.severity==='high'?0:1)));
+    const scopeTxt = (r.source==='snapshot')
+      ? `已发布快照 #${r.ontology_version_id||'-'}`
+      : '编辑态（尚无已发布快照，回退）';
     let h = `<div style="font-size:12px;color:var(--mut);margin-bottom:10px;line-height:1.7;">
-      共 <b>${issues.length}</b> 项问题 · <span style="color:var(--red);font-weight:600;">高 ${r.high}</span> · <span style="color:#c77700;font-weight:600;">低 ${r.low}</span><br>
-      <span style="font-size:11px;">点击实体名可定位到该类型（自动切到对应视图）</span></div>`;
+      共 <b>${issues.length}</b> 项问题 · <span style="color:var(--red);font-weight:600;">高 ${r.high}</span>${r.warn?` · <span style="color:#c77700;font-weight:600;">提示 ${r.warn}</span>`:''} · <span style="color:#c77700;font-weight:600;">低 ${r.low}</span><br>
+      <span style="font-size:11px;">口径：${esc(scopeTxt)} · 类型总计 ${r.total||0} · 规则版本 ${esc(r.rule_version||'-')} · 体检于 ${esc(r.ts||'-')}<br>
+      点击实体名可定位到该类型（自动切到对应视图）</span></div>`;
     h += sorted.map(x=>{
       const sev = x.severity==='high';
       const t = (ontData && ontData.types||[]).find(tt=>tt.name===x.name);
@@ -1151,9 +1157,10 @@ async function oeConsistency(){
         <div style="flex:1;min-width:0;">
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             <b style="font-size:12.5px;cursor:pointer;color:var(--blue-d);" onclick="_locateOntType('${ontJs(x.name)}')" title="点击定位到该类型">${esc(kindIcon)} ${esc(x.name)}</b>
-            <span class="tag" style="font-size:10px;">${esc(TYPE_LABEL[x.type]||x.type||'问题')}</span>
+            <span class="tag" style="font-size:10px;">${esc(x.label||x.code||x.type||'问题')}</span>
           </div>
           <div style="font-size:11.5px;color:var(--txt,#222);margin-top:3px;">${esc(x.message)}</div>
+          ${x.fix?`<div style="font-size:11px;color:var(--mut);margin-top:3px;">🛠 ${esc(x.fix)}</div>`:''}
         </div>
       </div>`;
     }).join('');

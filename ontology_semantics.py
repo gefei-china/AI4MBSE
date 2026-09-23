@@ -16,6 +16,38 @@ from core import typevocab
 DEFAULT_NAMESPACE = _ns.NS_ONTOLOGY
 
 
+def active_rows(conn):
+    """**消费口径单一真源**：返回消费侧应使用的本体类型行（active 版本的最新快照）。
+
+    2026-09-23 口径统一（决策 D2 = 消费读最新快照）。改造之前的状态是"口径分裂"：
+      · `_active_ont_rows`（routers/knowledge_parts/shared.py）已按"已发布快照"读取，
+        `/schema`、`/graph`、`/shacl`、`/export` 也走它；
+      · 但 `OntologyValidator(conn)` **默认读编辑态** `ontology_types` → AI 建模语义注入
+        (`agent/pipeline_parts/prompt.py`)、抽取侧 (`vector2graph`)、写校验 (`GraphStore`)
+        吃的是**编辑态**；更糟的是 `_ontology_check`（一致性体检）也读编辑态
+        → 「体检的问题集」未必等于「AI 建模真正吃到的那份 schema」。实测 active 版本
+        v25.0.0 的 `snapshot_count=0`（快照从未写入）使回退路径**长期生效**，掩盖了分裂。
+    现收敛到本函数一处：`OntologyValidator` 默认（rows=None）与 `shared._active_ont_rows` 都走它。
+
+    回退策略（显式，避免"消费空数据"）：
+      · 无 active 版本 / active 版本无快照（快照治理上线前的存量 released）→ 回退编辑态；
+      · `ontology_versions` 表不存在（夹具库 / 极早期库）→ 回退编辑态。
+    """
+    try:
+        v = conn.execute(
+            "SELECT id FROM ontology_versions WHERE active=1 ORDER BY id DESC LIMIT 1").fetchone()
+        if v:
+            rows = conn.execute(
+                "SELECT type_id AS id, name, type_kind, parent_id, properties, constraints, "
+                "description, icon, color, iri FROM ontology_version_snapshots WHERE version_id=?",
+                (v["id"],)).fetchall()
+            if rows:                      # active 版本有快照 → 消费快照
+                return rows
+    except Exception:                     # 表不存在等 → 回退（下游不得因体裁表缺失而空转）
+        pass
+    return conn.execute("SELECT * FROM ontology_types").fetchall()
+
+
 def slugify(name: str) -> str:
     """实体名 → IRI 局部名（P0-1：与 graph_db.class_uri 同源，规则见 core.ns）。
 
@@ -58,7 +90,11 @@ def make_iri(conn, name: str, strategy: str = None, taken: set = None) -> str:
 class OntologyValidator:
     """本体语义层校验器：ontology_types 表（type_kind=entity|relation|attribute）+ constraints JSON 驱动。
 
-    2026-09-02 快照消费：rows 传入已发布快照行时以该版本为准（None=当前表）。
+    2026-09-02 快照消费：rows 传入已发布快照行时以该版本为准。
+    2026-09-23 口径统一（决策 D2 = 消费读最新快照）：**rows=None（默认）不再读编辑态**，
+    改走 `active_rows(conn)`（active 版本的最新快照；无快照/无表回退编辑态）——
+    使语义注入、抽取、写校验、导出、体检吃的是**同一份** schema（此前注入/写校验读编辑态、
+    导出读快照，属"口径分裂"）。要显式读编辑态，请显式传 rows=编辑态行。
     """
 
     def __init__(self, conn, rows=None):
@@ -72,7 +108,7 @@ class OntologyValidator:
             if self._pre_rows is not None:
                 rows = self._pre_rows
             else:
-                rows = self.conn.execute("SELECT * FROM ontology_types").fetchall()
+                rows = active_rows(self.conn)
             for r in rows:
                 d = dict(r)
                 try:
