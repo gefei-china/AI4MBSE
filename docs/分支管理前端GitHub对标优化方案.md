@@ -3,7 +3,13 @@
 > 版本：v1.0 | 日期：2026-09-03 | 分析对象：`static/index.html` 分支管理域（L640-670 页面骨架、L13467-13650 分支/KPI/提交时间线、L13822-13949 MR 列表/冲突解决、L13950+ 合并对比抽屉）
 > 姊妹篇：[分支管理GitHub对标优化方案.md](./分支管理GitHub对标优化方案.md)（后端数据模型与合并语义，含决策点 D1-D5）
 > 前置：2026-08-19《分支管理页面优化方案.md》（布局交互层）**已基本落地**，本方案在其上做 GitHub 语义增强，不推翻既有骨架。
-> 状态：**待确认**（与后端决策点 D1-D5 联动，确认后实施）
+> 状态：**F1–F4 已落地**（2026-09-23 逐项复核，附证据行号；F5 未落地）
+> - F1 MR 状态机交互 ✅ `static/js/mods/27-branch.js:748 _mergeStatusOrd` / `:750 _mrStatusInfo`（draft📝/open🕐/merged🟪/closed❌）+ `:800+` reopen 操作
+> - F2 冲突面板语义增强 ✅ `:816-835`（`conflict_type` 徽章 + `delete_modify` 双选 `keep_delete`/`keep_modify`）/ `:906-910`（`conflict_changed` 引导对话框列出新增/消失冲突）
+> - F3 ahead/behind 徽章 + 三点式 diff ✅ `:40-43`（分支卡 `↑N ↓M` 徽章）/ `:484/:532/:552`（diff 模式切换 `full`|`merge-base`）
+> - F4 人员真实化与意见展示 ✅ `:743`（搜索含 `created_by`/`reviewed_by`/`review_note`）/ `:796`（列表驳回意见）/ `:1339/:1367`（详情审批人与意见）
+> - F5 P2 项 ❌ **未落地**（MR 时间线 Tab / 保护规则可视 / 合并后删分支 / cherry-pick 入口）
+> ⚠️ **行号口径**：本文原文按 `static/index.html` 内联脚本标注（L13467+）；2026-09-23「合并请求页主从布局」重构后，该域已拆分至 `static/js/mods/27-branch.js`，**上列为拆分后行号**，引用时以文件为准。
 
 ---
 

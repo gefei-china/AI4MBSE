@@ -3,7 +3,16 @@
 > 版本：v1.0 | 日期：2026-09-02 | 分析对象：`routers/branches.py`、`repositories/branch_repo.py`、`repositories/commit_repo.py`、`database/schema.py`（branches / merge_requests / knowledge_commits）
 > 关联文档：[分支版本管理方案.md](./分支版本管理方案.md)（Git 式提交链设计）、[分支管理页面优化方案.md](./分支管理页面优化方案.md)（前端布局交互）
 > 定位：**后端数据模型与合并语义层**的 GitHub 对标优化；不改前端骨架，与上述两份既有方案互补而非替代。
-> 状态：**待确认**（确认优先级与决策点后实施）
+> 状态：**已落地大半**（2026-09-23 逐项复核，附证据行号；未落地项已转入《版本管理优化实施方案与实施计划-20260923.md》）
+> - P0-1 冲突检测时效性 ✅ `repositories/branch_repo.py:420 _recompute_conflicts` / `:769 conflict_changed` / `database/migrations/columns.py:203 conflict_updated_at`
+> - P0-2 冲突检测完整性 ✅ `branch_repo.py:354` 属性并集（`set(src_props) | set(tgt_props)`）/ `:327/:372/:382`（`delete_modify`）/ `:473/:929/:995`（`keep_delete`/`keep_modify`）
+> - P0-3 操作人真实化 ✅ 各方法已增 `actor` 参数（`branch_repo.py:443/:505/:741/:1025/:1036/:1092`），**硬编码 `'李工'` 已消失**
+> - P1-1 MR 状态机 ✅ `branch_repo.py:11-16`（`draft`/`open`/`merged`/`closed` + `LEGACY_MR_STATUS` 存量映射）/ `routers/branches.py:382`（`/reopen`）
+> - P1-2 双父指针 + ahead/behind + 三点式 diff ✅ `branch_repo.py:49 ahead_behind`（读 `source_head_commit`）/ `routers/branches.py:149-166`（`mode=full|merge-base`）
+> - P1-3 分支保护规则配置化 ❌ **未落地**（`protection_rules` 全仓 0 命中）→ 计划 P0-2
+> - P1-4 commit 内容哈希 ❌ **未落地**（`content_hash` 全仓 0 命中）→ 计划 P0-3
+> - P1-5 个人分支懒 fork ❌ **未落地**（架构级改造，单独立项）→ 计划 P2-3
+> - P2-1/2/3/4 ❌ **未落地**（按需）
 
 ---
 

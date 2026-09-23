@@ -11,15 +11,16 @@ from core.audit import audit
 
 router = APIRouter(tags=["分支管理"])
 
-# 分支类型：dev（主开发，唯一预置 dev）/ release（发布，唯一预置 release）/ personal（个人分支）
-# local 为历史遗留类型，仅兼容存量数据，不允许新建
+# 分支类型全集：dev（主开发，系统预置唯一）/ release（发布，系统预置唯一）/ personal（个人分支）/ local（本地分支）
+# 可手动创建的类型仅 personal 与 local（见 create_branch 的校验）：personal 须从 dev/release 拉基线；
+# local 用于离线/实验性操作，不 fork 基线、不可作为合并源。dev/release 为系统预置分支，不可手动创建。
 VALID_TYPES = {"dev", "release", "personal", "local"}
 DEV_BRANCH = "dev"
 RELEASE_BRANCH = "release"
 PERSONAL_BRANCH = "personal"
 
-# 受保护分支：不可删除/不可改名/不可编辑（系统内置分支 = 发布 dev 开发 / release 个人 三类）
-# release 仅通过 dev 合并更新；默认个人分支 personal 同样不可删，防止误删工作分支；其余 personal/* 自定义分支可删
+# 受保护分支（不可删除 / 不可改名）：系统内置的 release / dev / personal 三类
+# release 额外只读（仅通过 dev 合并更新）；dev / personal 可写但不可删，防止误删主干与工作分支；其余自定义分支可删
 PROTECTED = {DEV_BRANCH, RELEASE_BRANCH, PERSONAL_BRANCH}
 
 

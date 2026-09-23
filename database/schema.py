@@ -216,7 +216,7 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS branches (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE NOT NULL,
-        branch_type TEXT NOT NULL,  -- release | dev | local
+        branch_type TEXT NOT NULL,  -- release | dev | personal | local
         parent_branch TEXT DEFAULT '',
         description TEXT DEFAULT '',
         status TEXT DEFAULT 'active',  -- active | merged | archived
