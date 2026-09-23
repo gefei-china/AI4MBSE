@@ -185,6 +185,8 @@ def me(request: Request, conn=Depends(db_session)):
 def logout(request: Request, conn=Depends(db_session)):
     """登出：删本地会话；IAM 模式下 best-effort 调后端登出接口（通知 SSO 全局登出）。"""
     token = request.headers.get("X-Session-Token") or (body := {}).get("token", "")
+    # 顺带清理全表过期会话（避免 auth_sessions 无限累积；无独立定时任务，搭车最省）
+    conn.execute("DELETE FROM auth_sessions WHERE expires_at < datetime('now','localtime')")
     if not token:
         return {"ok": True}
     row = conn.execute("SELECT * FROM auth_sessions WHERE token=?", (token,)).fetchone()

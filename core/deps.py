@@ -38,12 +38,23 @@ def _user_payload(row) -> dict:
 
 
 def current_user(request: Request, conn=Depends(db_session)):
-    """从请求头 X-User-Id 识别当前登录用户（轻量会话：前端登录态透传）。
+    """会话双读（X-Session-Token 优先 / X-User-Id 兼容）识别当前登录用户。
 
-    P0 完整鉴权落地前，用于审计归属与后续权限点接入。
+    enforce_login=True（settings auth.enforce_login）：无任何身份头直接 401 —— 正式上线开关；
+    False（现阶段）：未认证返回 None，端点自行按匿名/降级处理（兼容体验期与无头脚本）。
     返回 {id, username, display_name, role_id, role_name, role_type, permissions} | None。
     FastAPI 依赖缓存（use_cache）保证与路由 conn 共用同一请求级连接。
     """
+    try:
+        from core.config import get as _cfg_get
+        if bool(_cfg_get("auth.enforce_login")):
+            _tok = request.headers.get("X-Session-Token") or ""
+            _uid = request.headers.get("X-User-Id") or ""
+            if not _tok and not _uid:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=401, detail="未登录（enforce_login 已开启）")
+    except ImportError:
+        pass
     # 2026-09-23 FR-UR-1：会话 token 双读 —— X-Session-Token（auth_sessions 表，
     # routers/auth.py 签发）优先；X-User-Id 兼容期保留（前端/脚本平滑迁移）。
     sess_token = request.headers.get("X-Session-Token")

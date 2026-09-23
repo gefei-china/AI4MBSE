@@ -24,6 +24,13 @@ async function api(path, opts={}) {
   if(uid) headers['X-User-Id'] = uid;   // P2：登录态透传 → 后端审计归属当前用户
   if(sess) headers['X-Session-Token'] = sess;
   const r = await fetch(API + path, {...opts, headers:{...(opts.headers||{}), ...headers}});
+  // 2026-09-23 会话过期感知：enforce_login 开启后未认证返回 401 → 清本地会话并回登录页
+  if(r.status === 401 && !path.startsWith('/api/auth/')){
+    localStorage.removeItem('mbse_session');
+    localStorage.removeItem('mbse_user_id');
+    location.href = '/static/login.html?expired=1';
+    return {error:'会话已过期，请重新登录'};
+  }
   const data = await r.json().catch(()=>({}));
   // 统一错误契约：后端 HTTPException 返回 {detail:...}（如 403 无权限），
   // 前端各处只识别 r.error → 非 2xx 时把 detail 归一为 error，避免"操作已成功"的误提示
@@ -744,14 +751,25 @@ window.loginEntryClick = async function() {
 (async function refreshLoginEntry() {
   const st = localStorage.getItem('mbse_session');
   const el = document.getElementById('login-entry');
+  const greet = document.getElementById('home-greeting');
   if (!el) return;
-  if (!st) { el.textContent = '登录'; return; }
+  if (!st) {
+    el.textContent = '登录';
+    return;
+  }
   try {
     const me = await (await fetch(API + '/api/auth/me', { headers: { 'X-Session-Token': st } })).json();
     if (me.authenticated && me.user) {
-      el.textContent = '登出（' + (me.user.display_name || '') + '）';
+      const u = me.user;
+      el.textContent = '登出（' + (u.display_name || '') + '）';
+      // 问候行随真实登录用户动态化（原为静态「角色：设计师」）
+      if (greet) greet.innerHTML = '当前用户：<b>' + escA(u.display_name || '') + '</b>（' + escA(u.role_name || '') + '） ｜ 个人分支隔离建模，合并需评审（FR-UR-3）';
     } else {
       localStorage.removeItem('mbse_session'); el.textContent = '登录';
     }
   } catch (e) { el.textContent = '登录'; }
 })();
+/* 多标签页登出同步：任一标签登出（mbse_session 被移除）→ 其余标签同步清态并回登录页 */
+window.addEventListener('storage', function (e) {
+  if (e.key === 'mbse_session' && !e.newValue) location.href = '/static/login.html';
+});
