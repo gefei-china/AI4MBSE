@@ -61,20 +61,49 @@ from agent.rag import GraphRAG
 
 
 def _fx_conn_docs(n=2):
-    """夹具：自建临时库 + documents 表 + n 行夹具文档。
+    """夹具：自建临时库 + documents 表（**真迁移生成**）+ n 行夹具文档。
 
     为什么自建（2026-09-20 CI 首跑教训）：本节断言的是「白名单自愈**机制**」，
     与开发库恰好有哪些文档无关。旧写法从 mbse.db 捞最近 2 篇当夹具 ——
     CI/全新库的 documents 表是**空的** → 「部分失效」用例退化成「全部失效」
     → unfiltered=True → 假失败。断言对象必须是机制，而非当前库恰好配了什么。
+
+    为什么不手抄 DDL（2026-09-23 第二次「夹具 DDL 漂移」教训）：
+      旧夹具只建 `(id, filename)` 两列，而 `_resolve_scope_docs` 自 2026-09-21（G2）起
+      会按 `lifecycle_status` 过滤（排除已下线文档）。夹具缺列 → SQL 抛
+      `no such column: lifecycle_status` → 被方法内 `except Exception` 静默兜成
+      「原样返回」→ 4 条断言以「函数根本没生效」的假象失败，
+      而唯一使用**真库连接**的那条用例反而通过（这就是定位线索）。
+      现改为「最小基表 + 跑**真迁移** `_migrate_document_lifecycle`」：
+      生命周期列由生产代码生成，夹具不再手抄；末尾再断言关键列确已就位 ——
+      迁移若被移除/改名，夹具当场报错，而不是退化成静默假绿。
+      （同类前车之鉴：`entity_versions` 手抄 DDL 漏表 → `no such table`。）
     """
     import tempfile
+    from database.migrations import _migrate_document_lifecycle
     d = os.path.join(tempfile.gettempdir(), f"_kb_scope_fixture_{os.getpid()}.db")
     if os.path.exists(d):
         os.remove(d)
     c = sqlite3.connect(d)
     c.row_factory = sqlite3.Row
-    c.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL)")
+    # 最小基表（真库 schema.py 的子集：只留迁移与断言真正依赖的列）
+    c.executescript("""
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            parse_status TEXT DEFAULT 'pending',
+            branch TEXT DEFAULT 'global'
+        );
+        CREATE TABLE document_chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL,
+            branch TEXT DEFAULT 'global'
+        );
+    """)
+    _migrate_document_lifecycle(c)          # ← 生命周期列（lifecycle_status 等）由生产迁移补齐
+    _cols = {r[1] for r in c.execute("PRAGMA table_info(documents)")}
+    assert "lifecycle_status" in _cols, (
+        f"夹具契约失守：documents 缺 lifecycle_status（迁移未生效或被改名？）实际列={sorted(_cols)}")
     for i in range(n):
         c.execute("INSERT INTO documents (filename) VALUES (?)", (f"__fixture_doc_{i}.md",))
     c.commit()
@@ -389,6 +418,10 @@ hr("[8] 「不强制 / 不默认提供」：归属项目显式给值，不依赖
 # 这里断言的是**落库结果**，属行为级，不会空转（§6.2）。
 _POISON = "poison-project"
 
+# P0-1 影子历史表：**从迁移模块导入同一份 DDL**，不抄写 —— 2026-09-23 实测本夹具因手抄 DDL
+# 漏了该表，导致 `create_entity` 抛 `no such table: entity_versions`（夹具第二次因抄写漂移）。
+from database.migrations.ontology import ENTITY_VERSIONS_DDL as _EV_DDL
+
 _WRITE_DDL = [
     "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, description TEXT)",
     "CREATE TABLE conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, intent TEXT, "
@@ -400,7 +433,12 @@ _WRITE_DDL = [
     "CREATE TABLE relations (id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT, target_id TEXT, "
     "relation_type TEXT, properties TEXT, status TEXT, branch TEXT, source_doc TEXT, created_by TEXT, "
     "project_id TEXT DEFAULT 'poison-project')",
+    _EV_DDL,
 ]
+
+# 夹具**契约**：被测写入路径依赖的表必须齐（齐不了就显式报错，而不是等到某条 SQL 抛
+# OperationalError 让人误以为"产品坏了"）。新增依赖表时同步登记这里（§6.1 夹具纪律）。
+_EXPECT_TABLES = {"settings", "conversations", "entities", "relations", "entity_versions"}
 
 
 def _write_fixture(default_project=_UNSET):
@@ -409,6 +447,10 @@ def _write_fixture(default_project=_UNSET):
     c = sqlite3.connect(path)
     for ddl in _WRITE_DDL:
         c.execute(ddl)
+    _have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert _EXPECT_TABLES <= _have, (
+        "夹具缺表 %s —— 写入路径会 OperationalError（夹具必须补齐被测代码依赖的约定）"
+        % sorted(_EXPECT_TABLES - _have))
     if default_project is not _UNSET:
         c.execute("INSERT INTO settings (key,value,description) "
                   "VALUES ('default_project_id',?,'')", (default_project,))

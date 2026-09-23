@@ -324,7 +324,16 @@ class GraphRAG:
                    " AND (lifecycle_status IS NULL OR lifecycle_status NOT IN ('deprecated'))"),
                 uniq).fetchall()
             have = {r["filename"] for r in rows}
-        except Exception:
+        except Exception as _e:
+            # 查不动就不动（保全现状）—— 不阻断主链路的降级路径。
+            # ⚠️ 必须留痕（2026-09-23）：这处静默兜底曾把「夹具 documents 表缺
+            # lifecycle_status 列」伪装成「白名单自愈逻辑没生效」，排查时极易误判。
+            # 降级路径一律打日志，是本仓库的既有纪律。
+            try:
+                print(f"[kb_scope] 白名单求交失败，本次跳过自愈（白名单原样返回）："
+                      f"{type(_e).__name__}: {_e}", flush=True)
+            except Exception:
+                pass
             return uniq, None                # 查不动就不动（保全现状）
         missing = [d for d in uniq if d not in have]
         ok = [d for d in uniq if d in have]

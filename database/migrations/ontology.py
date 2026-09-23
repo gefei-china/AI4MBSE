@@ -1,6 +1,49 @@
 """本体/语义层迁移（类型、变更表、版本表、去重、IRI、时态、SWRL、推理队列、实例迁移）。"""
 import sqlite3
 
+# P0-1（2026-09-23）影子历史表 entity_versions 的 **唯一 DDL 真源**。
+# 为什么提成模块级常量（此前内联在 _migrate_entity_temporal 里）：本 DDL 有多个消费点 ——
+#   ① 本迁移；② 夹具库（tools/verify/*.py 里手写最小 DDL 的脚本）；③ 未来的一次性修复脚本。
+# 只内联在函数里时，夹具只能"抄一份"，抄写必然漂移 —— 实测 2026-09-23：
+# `verify_context_scope_guard.py` 的夹具漏了本表，P0-1 上线后 `create_entity`
+# 直接 `sqlite3.OperationalError: no such table: entity_versions`（该夹具第二次因抄写而漂移）。
+ENTITY_VERSIONS_DDL = """
+        CREATE TABLE IF NOT EXISTS entity_versions (
+            id TEXT NOT NULL,
+            branch TEXT NOT NULL,
+            version_no INTEGER NOT NULL,        -- 该 (id,branch) 内递增序号（1,2,3…）
+            valid_from TEXT NOT NULL,           -- 本版本生效时刻（业务时间）
+            valid_to TEXT DEFAULT NULL,         -- 本版本失效时刻（NULL = 当前版本）
+            is_current INTEGER DEFAULT 0,       -- 1=当前行镜像，0=历史
+            tx_from TEXT DEFAULT '',            -- 事务时间：入版本表时刻
+            tx_to TEXT DEFAULT NULL,
+            change_kind TEXT DEFAULT 'update',  -- init|create|update|fork|review|category|merge
+            changed_by TEXT DEFAULT '',
+            name TEXT DEFAULT '',
+            entity_type TEXT DEFAULT '',
+            properties TEXT DEFAULT '{}',
+            status TEXT DEFAULT 'candidate',
+            project_id TEXT DEFAULT '',
+            source_doc TEXT DEFAULT '',
+            source_type TEXT DEFAULT '',
+            confidence REAL DEFAULT 1.0,
+            created_by TEXT DEFAULT '',
+            reviewed_by TEXT DEFAULT '',
+            created_at TEXT DEFAULT '',
+            reviewed_at TEXT DEFAULT '',
+            graph_source TEXT DEFAULT '',
+            graph_x REAL DEFAULT 0,
+            graph_y REAL DEFAULT 0,
+            sysml_import_id TEXT DEFAULT '',
+            knowledge_category TEXT DEFAULT '',
+            published_at TEXT DEFAULT '',
+            sysml_version_id INTEGER DEFAULT 0,
+            canonical_id TEXT DEFAULT '',
+            PRIMARY KEY (id, branch, version_no),
+            UNIQUE (id, branch, valid_from)
+        )
+    """
+
 def _ensure_ontology_types(conn):
     """O-3：老库幂等补齐本体类型（_seed 仅在空库执行，老库需增量补 O-3 新增类型）。"""
     c = conn.cursor()
@@ -275,42 +318,7 @@ def _migrate_entity_temporal(conn):
     #    /history 恒 1 行、/at 对任意历史时刻命中当前行、时态 SPARQL 同步空转。
     #    本表把「历史行」独立存储，entities 语义不变（= 仅当前行）→ 320 处引用零改动。
     #    回滚：DROP TABLE entity_versions + revert 写入路径改动（主表未变，行为退回原地 UPDATE）。
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS entity_versions (
-            id TEXT NOT NULL,
-            branch TEXT NOT NULL,
-            version_no INTEGER NOT NULL,        -- 该 (id,branch) 内递增序号（1,2,3…）
-            valid_from TEXT NOT NULL,           -- 本版本生效时刻（业务时间）
-            valid_to TEXT DEFAULT NULL,         -- 本版本失效时刻（NULL = 当前版本）
-            is_current INTEGER DEFAULT 0,       -- 1=当前行镜像，0=历史
-            tx_from TEXT DEFAULT '',            -- 事务时间：入版本表时刻
-            tx_to TEXT DEFAULT NULL,
-            change_kind TEXT DEFAULT 'update',  -- init|create|update|fork|review|category|merge
-            changed_by TEXT DEFAULT '',
-            name TEXT DEFAULT '',
-            entity_type TEXT DEFAULT '',
-            properties TEXT DEFAULT '{}',
-            status TEXT DEFAULT 'candidate',
-            project_id TEXT DEFAULT '',
-            source_doc TEXT DEFAULT '',
-            source_type TEXT DEFAULT '',
-            confidence REAL DEFAULT 1.0,
-            created_by TEXT DEFAULT '',
-            reviewed_by TEXT DEFAULT '',
-            created_at TEXT DEFAULT '',
-            reviewed_at TEXT DEFAULT '',
-            graph_source TEXT DEFAULT '',
-            graph_x REAL DEFAULT 0,
-            graph_y REAL DEFAULT 0,
-            sysml_import_id TEXT DEFAULT '',
-            knowledge_category TEXT DEFAULT '',
-            published_at TEXT DEFAULT '',
-            sysml_version_id INTEGER DEFAULT 0,
-            canonical_id TEXT DEFAULT '',
-            PRIMARY KEY (id, branch, version_no),
-            UNIQUE (id, branch, valid_from)
-        )
-    """)
+    conn.execute(ENTITY_VERSIONS_DDL)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_ev_current ON entity_versions(id, branch, is_current)")
     conn.execute(
