@@ -27,6 +27,16 @@ def db_session():
         conn.close()
 
 
+def _user_payload(row) -> dict:
+    """users+roles 行 → 统一用户载荷（permissions 由 role_permissions JSON 解析）。"""
+    u = dict(row)
+    try:
+        u["permissions"] = json.loads(u.get("role_permissions") or "{}")
+    except Exception:
+        u["permissions"] = {}
+    return u
+
+
 def current_user(request: Request, conn=Depends(db_session)):
     """从请求头 X-User-Id 识别当前登录用户（轻量会话：前端登录态透传）。
 
@@ -34,6 +44,20 @@ def current_user(request: Request, conn=Depends(db_session)):
     返回 {id, username, display_name, role_id, role_name, role_type, permissions} | None。
     FastAPI 依赖缓存（use_cache）保证与路由 conn 共用同一请求级连接。
     """
+    # 2026-09-23 FR-UR-1：会话 token 双读 —— X-Session-Token（auth_sessions 表，
+    # routers/auth.py 签发）优先；X-User-Id 兼容期保留（前端/脚本平滑迁移）。
+    sess_token = request.headers.get("X-Session-Token")
+    if sess_token:
+        sess = conn.execute(
+            "SELECT user_id, expires_at FROM auth_sessions WHERE token=?", (sess_token,)).fetchone()
+        if sess and sess["expires_at"] >= __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"):
+            row = conn.execute(
+                """SELECT u.*, r.name AS role_name, r.type AS role_type, r.permissions AS role_permissions
+                   FROM users u LEFT JOIN roles r ON u.role_id=r.id WHERE u.id=?""",
+                (sess["user_id"],),
+            ).fetchone()
+            if row:
+                return _user_payload(row)
     uid = request.headers.get("X-User-Id")
     if not uid:
         return None

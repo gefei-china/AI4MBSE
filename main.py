@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse
 from database import init_db, get_db
 from core import config
 from routers import (
+    auth_router,
     dashboard_router,
     users_router,
     conversations_router,
@@ -75,6 +76,7 @@ app = FastAPI(title=config.APP_TITLE, version=config.APP_VERSION, lifespan=lifes
 
 # ── 注册功能域路由（URL 契约与重构前完全一致）──
 for _router in (
+    auth_router,
     dashboard_router,
     users_router,
     conversations_router,

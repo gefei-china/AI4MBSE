@@ -19,8 +19,10 @@ function escA(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,
 
 async function api(path, opts={}) {
   const uid = localStorage.getItem('mbse_user_id');
+  const sess = localStorage.getItem('mbse_session');   // 2026-09-23 FR-UR-1：会话 token（/api/auth 签发）
   const headers = {'Content-Type':'application/json'};
   if(uid) headers['X-User-Id'] = uid;   // P2：登录态透传 → 后端审计归属当前用户
+  if(sess) headers['X-Session-Token'] = sess;
   const r = await fetch(API + path, {...opts, headers:{...(opts.headers||{}), ...headers}});
   const data = await r.json().catch(()=>({}));
   // 统一错误契约：后端 HTTPException 返回 {detail:...}（如 403 无权限），
@@ -727,3 +729,29 @@ function promptDialog({title='输入', message='', value='', placeholder='', okT
   });
 }
 // ── 本体类型/关系：右侧滑动窗（取代居中的 onttype modal）──
+
+/* ── 2026-09-23 FR-UR-1：登录态管理（登录页 /static/login.html 配套）──
+   顶栏「登录/登出」按钮逻辑：未登录→跳登录页；已登录→调登出 API 并清会话。 */
+window.loginEntryClick = async function() {
+  const st = localStorage.getItem('mbse_session');
+  if (!st) { location.href = '/static/login.html'; return; }
+  try { await fetch(API + '/api/auth/logout', { method: 'POST', headers: { 'X-Session-Token': st } }); } catch (e) {}
+  localStorage.removeItem('mbse_session');
+  localStorage.removeItem('mbse_user_id');
+  location.href = '/static/login.html';
+};
+// 启动时刷新按钮文案（登录/登出）与问候行
+(async function refreshLoginEntry() {
+  const st = localStorage.getItem('mbse_session');
+  const el = document.getElementById('login-entry');
+  if (!el) return;
+  if (!st) { el.textContent = '登录'; return; }
+  try {
+    const me = await (await fetch(API + '/api/auth/me', { headers: { 'X-Session-Token': st } })).json();
+    if (me.authenticated && me.user) {
+      el.textContent = '登出（' + (me.user.display_name || '') + '）';
+    } else {
+      localStorage.removeItem('mbse_session'); el.textContent = '登录';
+    }
+  } catch (e) { el.textContent = '登录'; }
+})();

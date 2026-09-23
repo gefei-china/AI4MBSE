@@ -6,6 +6,7 @@
 
 依赖方向：routers → core / database / agent / llm（单向，禁止反向）。
 """
+from .auth import router as auth_router
 from .dashboard import router as dashboard_router
 from .users import router as users_router
 from .conversations import router as conversations_router

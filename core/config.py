@@ -71,6 +71,17 @@ DEFAULT_CONFIG = {
         "timeout": 15,           # 接口调用超时（秒）
         "max_response": 8000,    # 响应截断上限（字符，防止打爆 LLM context）
     },
+    "auth": {
+        # FR-UR-1：IAM 统一身份认证（OAuth2.0 授权码，客户《接口对接.pdf》）
+        "mode": "local",         # local=体验模式（免校验，无真实数据） | sso=IAM 统一身份认证
+        "sso_base": "https://sso-test.chinasatnet.com.cn",
+        "client_id": "",         # IDAAS 平台应用注册后生成（为空时 sso 不可用，回退 local）
+        "client_secret": "",
+        "redirect_uri": "http://127.0.0.1:8000/static/login.html",  # 部署时改为实际地址
+        "default_role_id": 80,   # IAM 新用户默认角色（设计师；IAM 用户信息无角色字段→本地映射）
+        "session_ttl_hours": 12,
+        "enforce_login": False,  # 现阶段 False：不强制登录（API 兼容 X-User-Id）；上线置 True
+    },
     "integration": {
         "timeout": 15,           # 通用 HTTP 工具默认调用超时（秒，工具 config 可覆盖）
         "max_response": 8000,    # 通用 HTTP 工具默认响应截断上限（字符，工具 config 可覆盖）

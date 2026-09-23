@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 · MBSE 知识平台</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: system-ui, "Microsoft YaHei", sans-serif; min-height: 100vh;
+         display: flex; align-items: center; justify-content: center;
+         background: #10151c; color: #e8edf3; }
+  .card { width: 380px; background: #1a222c; border: 1px solid #2c3742; border-radius: 14px; padding: 30px 28px; }
+  h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+  .sub { font-size: 12px; color: #8b98a5; margin-bottom: 22px; }
+  .btn { display: block; width: 100%; padding: 11px 14px; border-radius: 8px; border: 1px solid #33414f;
+         background: #223040; color: #e8edf3; font-size: 14px; cursor: pointer; margin-bottom: 12px; text-align: center; }
+  .btn.primary { background: #185fa5; border-color: #185fa5; }
+  .btn:hover { filter: brightness(1.15); }
+  .divider { text-align: center; font-size: 11px; color: #5b6874; margin: 14px 0; }
+  input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #33414f;
+          background: #131a22; color: #e8edf3; font-size: 14px; margin-bottom: 12px; }
+  .msg { font-size: 12px; min-height: 18px; color: #e2984b; margin-bottom: 8px; }
+  .ok { color: #6fbf73; }
+  .hint { font-size: 11px; color: #5b6874; margin-top: 14px; line-height: 1.6; }
+  .loading { text-align: center; color: #8b98a5; padding: 30px 0; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🧬 MBSE 知识平台</h1>
+  <div class="sub">需求 · 功能 · 逻辑 · 物理 全链路知识工程</div>
+  <div id="box" class="loading">正在加载认证配置…</div>
+  <div id="msg" class="msg"></div>
+</div>
+<script>
+const API = '';
+const msg = document.getElementById('msg');
+const box = document.getElementById('box');
+function setMsg(t, ok) { msg.textContent = t || ''; msg.className = 'msg' + (ok ? ' ok' : ''); }
+function enterWith(token, user) {
+  localStorage.setItem('mbse_session', token);
+  if (user && user.id) localStorage.setItem('mbse_user_id', user.id);   // 兼容现有 X-User-Id 审计链
+  setMsg('登录成功，正在进入…', true);
+  setTimeout(() => { location.href = '/static/index.html'; }, 500);
+}
+async function localLogin() {
+  const name = document.getElementById('name').value.trim();
+  if (!name) { setMsg('请输入显示名'); return; }
+  try {
+    const r = await fetch(API + '/api/auth/local-login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ display_name: name }) });
+    const d = await r.json();
+    if (d.ok) enterWith(d.token, d.user); else setMsg(d.error || d.detail || '登录失败');
+  } catch (e) { setMsg('网络错误：' + e.message); }
+}
+async function init() {
+  // SSO 回调：IAM 授权码 → 后端换会话
+  const qs = new URLSearchParams(location.search);
+  const code = qs.get('code');
+  if (code) {
+    box.innerHTML = '<div class="loading">统一身份认证回调中…</div>';
+    try {
+      const r = await fetch(API + `/api/auth/sso/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(qs.get('state') || '')}`);
+      const d = await r.json();
+      if (d.ok) return enterWith(d.token, d.user);
+      setMsg(d.error || d.detail || 'SSO 回调失败');
+    } catch (e) { setMsg('SSO 回调错误：' + e.message); }
+    box.innerHTML = '<button class="btn" onclick="location.href=\'/static/login.html\'">返回重试</button>';
+    return;
+  }
+  let cfg;
+  try { cfg = await (await fetch(API + '/api/auth/config')).json(); }
+  catch (e) { box.innerHTML = '<div class="loading">认证服务不可达（' + e.message + '）</div>'; return; }
+  let html = '';
+  if (cfg.mode === 'sso' && cfg.sso_authorize_url) {
+    html += '<button class="btn primary" onclick="location.href=\'' + cfg.sso_authorize_url + '\'">🔐 统一身份认证登录（IAM SSO）</button>';
+    html += '<div class="divider">—— 或 体验模式（免校验） ——</div>';
+  } else {
+    html += '<div class="msg">当前为体验模式（IAM 未配置，免校验进入）</div>';
+  }
+  html += '<input id="name" placeholder="输入显示名（如：李工）" onkeydown="if(event.key===\'Enter\')localLogin()">';
+  html += '<button class="btn primary" onclick="localLogin()">➡ 体验模式进入</button>';
+  html += '<div class="hint">体验模式：现阶段无真实数据，登录不做凭据校验，新用户默认授予「设计师」角色。<br>正式接入后由统一身份认证（IAM OAuth2.0）完成凭据校验与单点登录。</div>';
+  box.innerHTML = html;
+  // 已有会话则直接进入
+  const st = localStorage.getItem('mbse_session');
+  if (st) {
+    try {
+      const me = await (await fetch(API + '/api/auth/me', { headers: { 'X-Session-Token': st } })).json();
+      if (me.authenticated) return enterWith(st, me.user);
+      localStorage.removeItem('mbse_session');
+    } catch (e) {}
+  }
+}
+init();
+</script>
+</body>
+</html>
