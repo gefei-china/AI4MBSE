@@ -105,10 +105,23 @@ def run(src_text, roles, expect_has_delete=True):
         got = (g[0], g[1]) if g else None
         chk("[2] %s → %s:%s" % (fn, dom, op), got == (dom, op), "→ 实测 %s" % (got,))
 
-    print("\n--- [3] 覆盖与边界：全文挂门点计数 ---")
-    n_gate = sum(1 for n in ast.walk(ast.parse(src_text))
-                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "require_permission")
-    chk("[3] require_permission 调用点 = 6（2 原有 + 4 新增）", n_gate == 6, "→ 实测 %d" % n_gate)
+    print("\n--- [3] 覆盖与边界：挂门端点集合（按函数名，不用裸计数） ---")
+    # 裸计数断言（曾写 "调用点 == 6"）在 P0-2 新增一处门后误报 —— 改为按函数名比对：
+    # 漏挂（少了谁）与越界（多了谁）都会显式列出，且新增门必须同步登记到期望集合。
+    gated_fns = set()
+    for n in ast.walk(ast.parse(src_text)):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if any(isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+                   and c.func.id == "require_permission" for c in ast.walk(n)):
+                gated_fns.add(n.name)
+    expect_gated = set(EXPECT) | {
+        "resolve_merge", "rollback_merge",        # 原有 2 处（审批 / 回滚）
+        "update_branch_protection",              # P0-2 新增（admin:ops_manage）
+    }
+    chk("[3] 挂门端点集合 == 预期 %d 个（无漏挂、无越界新增）" % len(expect_gated),
+        gated_fns == expect_gated,
+        "→ 实测 %s | 缺少 %s | 多出 %s"
+        % (sorted(gated_fns), sorted(expect_gated - gated_fns), sorted(gated_fns - expect_gated)))
     # 范围纪律的真断言（非恒真）：rename/archive 端点的首条语句**不是**挂门调用
     st_ren = _first_stmt(src_text, "update_branch")
     ren_gated = (isinstance(st_ren, ast.Expr) and isinstance(st_ren.value, ast.Call)

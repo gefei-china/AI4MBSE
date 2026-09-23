@@ -1,4 +1,5 @@
 """通用列补齐迁移（_migrate_columns）。"""
+import json
 def _migrate_columns(conn):
     """幂等列迁移：CREATE TABLE IF NOT EXISTS 不会给已有表加列，
     P0-1 引入 project_id 后需对老库补列并回填默认项目（兼容既有数据）。
@@ -208,4 +209,36 @@ def _migrate_columns(conn):
     _add("knowledge_commits", "source_head_commit", "INTEGER DEFAULT NULL")  # 合并时源分支 head 提交 id
     # ── P0-3：提交内容哈希（对标 G9 commit SHA；防改库篡改，审计红线场景）──
     _add("knowledge_commits", "content_hash", "TEXT DEFAULT ''")       # sha256(branch|parent_id|kind|规范化changes|规范化snapshot)
+    # ── P0-2：分支保护规则（按类型默认 + 分支级覆盖；解析见 core/branch_rules.py）──
+    _add("branches", "protection_rules", "TEXT DEFAULT '{}'")          # JSON: {writable,deletable,renamable,required_reviews,allow_direct_push}
+    conn.commit()
+
+
+def _migrate_branch_protection(conn):
+    """P0-2：内置分支（release / dev / personal）保护规则默认值回填。
+
+    幂等 + 非破坏：仅当 protection_rules 为空串或空对象时写入显式默认值，
+    管理端已改过的配置一律不覆盖；branches 表或列缺失时直接跳过。
+    """
+    from core.branch_rules import BUILTIN_DEFAULTS
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='branches'").fetchone()
+    if not exists:
+        return
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(branches)").fetchall()]
+    if "protection_rules" not in cols:
+        return
+    filled = 0
+    for name, rules in BUILTIN_DEFAULTS.items():
+        row = conn.execute("SELECT protection_rules FROM branches WHERE name=?",
+                           (name,)).fetchone()
+        if not row:
+            continue
+        raw = row["protection_rules"] if hasattr(row, "keys") else row[0]
+        if str(raw or "").strip() in ("", "{}"):
+            conn.execute("UPDATE branches SET protection_rules=? WHERE name=?",
+                         (json.dumps(rules, ensure_ascii=False), name))
+            filled += 1
+    if filled:
+        print(f"[init_db] 迁移: branches 回填保护规则 {filled} 条")
     conn.commit()

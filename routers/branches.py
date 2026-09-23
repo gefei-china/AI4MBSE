@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from core.deps import db_session, current_user, require_permission
+from core import branch_rules
 from repositories.branch_repo import BranchRepo
 from repositories.commit_repo import CommitRepo
 from core.audit import audit
@@ -18,11 +19,10 @@ router = APIRouter(tags=["分支管理"])
 VALID_TYPES = {"dev", "release", "personal", "local"}
 DEV_BRANCH = "dev"
 RELEASE_BRANCH = "release"
-PERSONAL_BRANCH = "personal"
 
-# 受保护分支（不可删除 / 不可改名）：系统内置的 release / dev / personal 三类
-# release 额外只读（仅通过 dev 合并更新）；dev / personal 可写但不可删，防止误删主干与工作分支；其余自定义分支可删
-PROTECTED = {DEV_BRANCH, RELEASE_BRANCH, PERSONAL_BRANCH}
+# 分支保护规则（P0-2）：单一真源在 core/branch_rules.py（类型默认 → 内置名称兜底 →
+# 分支级 protection_rules 覆盖）。此处不再维护硬编码集合 —— 内置 release/dev/personal 的
+# 「不可删 / 不可改名」语义由 branch_rules.PROTECTED_NAMES 兜底表达，且支持分支级规则显式解锁。
 
 
 def _actor(user) -> str:
@@ -30,11 +30,17 @@ def _actor(user) -> str:
     return (user or {}).get("display_name") or "王工"
 
 
-def _check_writable_branch(branch: str) -> str | None:
-    """release 分支只读：禁止直接写实体/文档，只能通过 dev 分支合并更新。"""
-    if branch == RELEASE_BRANCH:
+def _check_writable_branch(branch) -> str | None:
+    """分支直写校验（P0-2 改读保护规则 writable，规则见 core/branch_rules.py）。
+
+    branch 可传分支行 dict（能读到分支级规则，推荐）或分支名 str（按其类型默认判定）。
+    """
+    if branch_rules.effective_rules(branch).get("writable", True):
+        return None
+    nm = branch if isinstance(branch, str) else (branch.get("name") or "")
+    if branch_rules.is_release_family(nm):
         return "release 分支为只读发布分支，不可直接编辑；请切换到 dev 编辑后通过合并更新"
-    return None
+    return f"{nm} 分支受保护（只读），不可直接编辑；请切换到可写分支编辑后通过合并更新"
 
 
 def _validate_branch_name(name: str) -> str | None:
@@ -125,7 +131,7 @@ def sync_branch(target: str, body: dict, conn=Depends(db_session), user=Depends(
         return JSONResponse({"error": "仅可从 dev/release 基线分支同步"}, 400)
     if target == source:
         return JSONResponse({"error": "源分支与目标分支相同，无需同步"}, 400)
-    err = _check_writable_branch(target)
+    err = _check_writable_branch(tgt_b)   # P0-2：按分支保护规则（writable）判定
     if err:
         return JSONResponse({"error": err}, 400)
     adopt = body.get("adopt_modified") or []
@@ -438,6 +444,54 @@ def branch_history(name: str, conn=Depends(db_session)):
     from repositories.commit_repo import CommitRepo
     return CommitRepo(conn).get_branch_history(name)
 
+# ═══════════ 分支保护规则（P0-2；必须早于下方 {name:path} 通配路由注册，否则被其吞掉）═══════════
+
+@router.put("/api/branches/{name:path}/protection")
+def update_branch_protection(name: str, body: dict, conn=Depends(db_session),
+                             user=Depends(current_user)):
+    """设置分支保护规则（P0-2）。
+
+    body: {"rules": {"writable"?: bool, "deletable"?: bool, "renamable"?: bool,
+                     "required_reviews"?: int, "allow_direct_push"?: bool}}
+    - 仅接受规则 schema 白名单内的键与类型；未传的键保持原值（与既有分支级规则合并）。
+    - 权限：admin:ops_manage（保护规则属安全配置，与建/删分支的日常权限分离）。
+    - 审计：写 branch_protection_update 事件（含变更前后）。
+    - 返回合并后的**生效规则**（含类型默认与内置兜底）。
+    """
+    require_permission("admin", "ops_manage")(user=user)
+    repo = BranchRepo(conn)
+    b = repo.get_branch(name)
+    if not b:
+        return JSONResponse({"error": f"分支 {name} 不存在"}, 404)
+    raw = body.get("rules")
+    if not isinstance(raw, dict):
+        return JSONResponse({"error": "缺少 rules 对象"}, 400)
+    patch = {}
+    for k in branch_rules.RULE_KEYS:
+        if k not in raw:
+            continue
+        v = raw[k]
+        if k == "required_reviews":
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                return JSONResponse({"error": "required_reviews 必须为非负整数"}, 400)
+        elif not isinstance(v, bool):
+            return JSONResponse({"error": f"{k} 必须为布尔值"}, 400)
+        patch[k] = v
+    if not patch:
+        return JSONResponse(
+            {"error": "rules 中无可识别规则键（允许：%s）" % "、".join(branch_rules.RULE_KEYS)}, 400)
+    before = branch_rules.rules_for(conn, name)
+    cur = branch_rules.parse_rules(b.get("protection_rules"))
+    cur.update(patch)
+    repo.set_protection_rules(name, json.dumps(cur, ensure_ascii=False))
+    audit(_actor(user), "branch_protection_update",
+          f"更新分支保护规则: {name} ← {json.dumps(patch, ensure_ascii=False)}",
+          conn=conn, branch=name)
+    after = branch_rules.rules_for(conn, name)
+    return {"ok": True, "name": name, "rules": after, "raw": cur,
+            "changed": {k: [before.get(k), after.get(k)] for k in patch}}
+
+
 # ═══════════ 分支 编辑/删除（{name:path} 支持含 / 的分支名，必须最后注册）═══════════
 
 @router.put("/api/branches/{name:path}")
@@ -446,8 +500,10 @@ def update_branch(name: str, body: dict, conn=Depends(db_session), user=Depends(
     b = repo.get_branch(name)
     if not b:
         return JSONResponse({"error": f"分支 {name} 不存在"}, 404)
-    if name in PROTECTED:
-        return JSONResponse({"error": f"{name} 是系统预置分支，不可编辑（release 仅通过 dev 合并更新）"}, 400)
+    # P0-2：改名受保护规则 renamable 约束（内置分支兜底为 False，既有行为不变）
+    err_ren = branch_rules.check_renamable(conn, name)
+    if err_ren:
+        return JSONResponse({"error": err_ren}, 400)
     new_name = (body.get("name") or name).strip()
     err = _validate_branch_name(new_name)
     if err:
@@ -474,8 +530,10 @@ def delete_branch(name: str, conn=Depends(db_session), user=Depends(current_user
     # 的角色矩阵补键（保持"原本无门"时的可达性不回归）；release/dev/personal 仍由下方 PROTECTED 兜底拒绝。
     require_permission("branch_dev", "delete")(user=user)
     repo = BranchRepo(conn)
-    if name in PROTECTED:
-        return JSONResponse({"error": f"{name} 是受保护分支，不可删除"}, 400)
+    # P0-2：删除受保护规则 deletable 约束（内置分支兜底为 False，既有行为不变）
+    err_del = branch_rules.check_deletable(conn, name)
+    if err_del:
+        return JSONResponse({"error": err_del}, 400)
     result = repo.delete_branch(name)
     if not result.get("ok"):
         return JSONResponse({"error": result["error"]}, 400)

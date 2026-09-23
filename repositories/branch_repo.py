@@ -125,6 +125,11 @@ class BranchRepo(BaseRepo):
             self.execute("UPDATE documents SET branch=? WHERE branch=?", (name, old_name))
             self.execute("UPDATE document_chunks SET branch=? WHERE branch=?", (name, old_name))
 
+    def set_protection_rules(self, name: str, rules_json: str) -> None:
+        """写分支保护规则 JSON（P0-2）。空串视为清除分支级覆盖（回落到类型默认+内置兜底）。"""
+        self.execute("UPDATE branches SET protection_rules=? WHERE name=?",
+                     (rules_json or "", name))
+
     def delete_branch(self, name: str) -> dict:
         """删除分支。引用校验：
         - 分支不存在 → error

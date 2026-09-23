@@ -11,6 +11,7 @@ from knowledge_engine import QueryRouter  # P1: 双引擎路由统计
 from repositories.knowledge_repo import KnowledgeRepo
 from repositories.commit_repo import CommitRepo
 from core.audit import audit
+from core.branch_rules import check_writable, is_release_family
 from models import (
     EntityIn,
     BatchReviewIn,
@@ -62,18 +63,24 @@ def _is_release_branch(conn, branch: str | None) -> bool:
         return False
     if branch == RELEASE_BRANCH or branch.startswith(RELEASE_BRANCH + "/"):
         return True
+    btype = ""
     try:
         row = conn.execute("SELECT branch_type FROM branches WHERE name=?", (branch,)).fetchone()
-        return bool(row and row["branch_type"] == "release")
+        if row is not None:
+            btype = row["branch_type"] or ""
     except Exception:
-        return False
+        btype = ""
+    # P0-2：与 core.branch_rules 共用同一判据，避免两套语义漂移
+    return is_release_family(branch, btype)
 
 
 def _release_guard(conn, branch: str | None) -> str | None:
-    """已发布(release)分支只读：禁止直接写实体/关系/文档，只能通过 dev 合并更新（发布）。"""
-    if _is_release_branch(conn, branch):
-        return "已发布(release)分支为只读发布分支，不可直接编辑/写入；请切换到 dev 编辑后通过合并更新"
-    return None
+    """直写门：实体/关系/文档写入前的分支保护校验（10 处调用共用）。
+
+    P0-2（2026-09-23）：由「release 硬编码只读」改为读分支保护规则 writable
+    （core.branch_rules.check_writable）；默认行为不变 —— release 仍只读、其余分支可写。
+    """
+    return check_writable(conn, branch)
 
 
 def _entity_dup_warning(conn, name: str, threshold: float = 0.62) -> list:

@@ -9,6 +9,7 @@ from core.config import DB_PATH
 from .connection import get_db
 from .migrations import (
     _migrate_columns,
+    _migrate_branch_protection,
     _migrate_mr_status,
     _rebuild_entities_pk,
     _repair_relations_fk,
@@ -221,7 +222,8 @@ def init_db():
         description TEXT DEFAULT '',
         status TEXT DEFAULT 'active',  -- active | merged | archived
         created_by TEXT DEFAULT '',
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        protection_rules TEXT DEFAULT '{}'  -- P0-2 分支保护规则 JSON（解析见 core/branch_rules.py）
     )""")
 
     c.execute("""CREATE TABLE IF NOT EXISTS merge_requests (
@@ -1025,6 +1027,8 @@ def init_db():
 
     # ── 幂等列迁移（老库补 P0-1 新增的 project_id 列，回填默认项目）──
     _migrate_columns(conn)
+    # ── P0-2 分支保护规则：branches.protection_rules 内置分支默认值回填（幂等，仅填空）──
+    _migrate_branch_protection(conn)
     # ── 分支管理 GitHub 对标：merge_requests.status 旧枚举 → 新状态机（幂等）──
     _migrate_mr_status(conn)
     # ── 工坊四模块内置标识（skills/agents/mcp_servers/tools.builtin，内置禁删可编辑）──
