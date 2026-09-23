@@ -790,9 +790,66 @@
           <div id="ws-reasoning" style="display:none;height:calc(100vh - 245px);min-height:430px;overflow:hidden;"></div>
           <!-- 历史 Tab：当前分支提交时间线（行内展开快照明细，复用 toggleCommitDetail） -->
           <div id="ws-history" style="display:none;height:calc(100vh - 245px);min-height:430px;overflow-y:auto;" data-page-node-id="YojG58VWtqqB3X6aHuCRAS"></div>
-          <!-- 合并请求 Tab：吸收原合并队列页全部能力（MR 列表容器沿用 #merge-list，loadMerges 零改动复用） -->
-          <div id="ws-mr" style="display:none;height:calc(100vh - 245px);min-height:430px;overflow-y:auto;" data-page-node-id="QgFRWIZGTIFPtKHl4DOeKL">
-            <div id="merge-list" data-page-node-id="ysqSauUxPCupDsWQ7ZWyo8"><div class="loading" data-page-node-id="I3rk69iCA6V8Ixg1ToEIHd">加载中…</div></div>
+          <!-- 合并请求 Tab（2026-09-23 重构：列表 ↔ 详情 同为页面内视图，取消右侧滑动抽屉）
+               标杆依据：GitHub PR 新「Files changed」（左文件树 + 右侧常驻 docked panels）、
+               GitLab MR「Changes」（页内文件树 + 冲突直接标在 diff）、
+               Palantir Foundry Ontology/Global Branching 提案（2026-09-17 新增 Changes tab，
+               把"必须逐个打开资源应用才能看变更"改为提案页内集中呈现）。
+               结论：对比分析与冲突处理属"评审主流程"，应占整页宽度、与列表同页切换，而非抽屉。 -->
+          <div id="ws-mr" style="display:none;height:calc(100vh - 245px);min-height:430px;overflow:hidden;" data-page-node-id="QgFRWIZGTIFPtKHl4DOeKL">
+            <!-- 视图 A：合并请求列表（容器 #merge-list 沿用，loadMerges 零改动复用） -->
+            <div id="mr-list-view" style="height:100%;overflow-y:auto;" data-page-node-id="ysqSauUxPCupDsWQ7ZWyo8">
+              <div id="merge-list"><div class="loading" data-page-node-id="I3rk69iCA6V8Ixg1ToEIHd">加载中…</div></div>
+            </div>
+            <!-- 视图 B：合并请求详情（页面内呈现，含对比分析 / 冲突处理 / 叠加图谱 / 评审意见 / 变更记录） -->
+            <div id="mr-detail-view" style="display:none;height:100%;flex-direction:column;" data-page-node-id="mrdViewRoot">
+              <!-- ① 头部：返回 + 标题 + 状态 + 按状态收敛的操作 -->
+              <div id="mrd-head" style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:#fff;flex-wrap:wrap;">
+                <button class="btn sm ghost" onclick="closeMrDetail()" title="返回合并请求列表（Esc）">← 返回列表</button>
+                <span id="mrd-head-title" style="font-size:13px;"></span>
+                <span id="mrd-head-status"></span>
+                <span style="flex:1;"></span>
+                <span id="mrd-head-ops" style="display:flex;gap:6px;flex-wrap:wrap;"></span>
+              </div>
+              <!-- ② 概要条：源→目标 / 差异计数 / 作者 / 评审人 -->
+              <div id="mrd-summary" style="display:flex;gap:14px;align-items:center;padding:7px 14px;border-bottom:1px solid var(--line);background:#fafaf7;flex-wrap:wrap;font-size:11.5px;"></div>
+              <!-- ③ Tab 条：概览与检查 / 变更对比 / 冲突处理 / 叠加图谱 / 评审意见 / 变更记录 -->
+              <div id="mrd-tabs" style="display:flex;gap:16px;padding:6px 14px 0;border-bottom:1px solid var(--line);font-size:12.5px;align-items:flex-end;flex-wrap:wrap;row-gap:4px;">
+                <span class="mrd-t on" data-m="overview" style="padding:6px 2px 8px;cursor:pointer;color:var(--blue-d);font-weight:700;border-bottom:2px solid var(--blue);" onclick="mrDetailTab('overview')" title="合并就绪度检查清单 + 变更摘要 + 合并结果预览（对标 GitHub merge status / Palantir proposal checks）">📋 概览与检查</span>
+                <span class="mrd-t" data-m="diff" style="padding:6px 2px 8px;cursor:pointer;color:var(--mut);" onclick="mrDetailTab('diff')" title="左差异清单 + 右字段级详情（整页宽度）">🔍 变更对比</span>
+                <span class="mrd-t" data-m="conflicts" style="padding:6px 2px 8px;cursor:pointer;color:var(--mut);" onclick="mrDetailTab('conflicts')" title="逐条冲突裁决 + 解决进度（页面内，不再弹窗）">⚠ 冲突处理<span id="mrd-tab-conflict-n" style="font-size:10px;font-weight:600;color:var(--amb);margin-left:3px;"></span></span>
+                <span class="mrd-t" data-m="graph" style="padding:6px 2px 8px;cursor:pointer;color:var(--mut);" onclick="mrDetailTab('graph')" title="差异叠加图谱：变更节点着色 + 1-hop 上下文，清单/图谱双向联动">🕸 叠加图谱</span>
+                <span class="mrd-t" data-m="comments" style="padding:6px 2px 8px;cursor:pointer;color:var(--mut);" onclick="mrDetailTab('comments')" title="评审意见时间线 + 追加意见">💬 评审意见</span>
+                <span class="mrd-t" data-m="log" style="padding:6px 2px 8px;cursor:pointer;color:var(--mut);" onclick="mrDetailTab('log')" title="源分支提交历史（只读追溯）">🕘 变更记录</span>
+                <span style="flex:1;"></span>
+                <span id="mrd-tabs-hint" style="font-size:10.5px;color:var(--mut);padding-bottom:8px;"></span>
+              </div>
+              <!-- ④ 主体：六个分区（切换显示，各自滚动） -->
+              <div id="mrd-body" style="flex:1;min-height:0;display:flex;overflow:hidden;">
+                <div id="mrd-pane-overview" class="mrd-pane" style="flex:1;overflow-y:auto;padding:14px 16px;"></div>
+                <div id="mrd-pane-diff" class="mrd-pane" style="display:none;flex:1;min-width:0;">
+                  <div id="mrd-diff-side" style="width:300px;min-width:300px;border-right:1px solid var(--line);display:flex;flex-direction:column;background:#fafaf7;height:100%;"></div>
+                  <div id="mrd-diff-main" style="flex:1;min-width:0;overflow-y:auto;padding:12px 16px;"></div>
+                </div>
+                <div id="mrd-pane-conflicts" class="mrd-pane" style="display:none;flex:1;overflow-y:auto;"></div>
+                <div id="mrd-pane-graph" class="mrd-pane" style="display:none;flex:1;flex-direction:column;padding:10px 14px;overflow:hidden;">
+                  <div id="mrd-graph-legend" style="display:flex;gap:10px;flex-wrap:wrap;padding:4px 2px 8px;font-size:11.5px;color:var(--mut);align-items:center;"></div>
+                  <div id="mrd-graph-svg" style="flex:1;min-height:200px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:#fff;"></div>
+                  <div id="mrd-graph-detail" style="padding:8px 2px 0;"></div>
+                </div>
+                <div id="mrd-pane-comments" class="mrd-pane" style="display:none;flex:1;overflow-y:auto;padding:14px 16px;"></div>
+                <div id="mrd-pane-log" class="mrd-pane" style="display:none;flex:1;overflow-y:auto;"></div>
+              </div>
+              <!-- ⑤ 底部操作条（单一入口，与头部操作同源） -->
+              <div id="mrd-foot" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--line);background:#fff;flex-wrap:wrap;">
+                <span id="mrd-foot-note" style="font-size:11.5px;color:var(--mut);"></span>
+                <span style="flex:1;"></span>
+                <button class="btn sm" id="mrd-preview" onclick="previewMergeInline(mrgMrId)" title="合并结果预览（dry-run，不落库），在「概览与检查」中就地展开">🔮 合并结果预览</button>
+                <button class="btn sm red" id="mrd-rollback" style="display:none;" onclick="rollbackMergeRequest(mrgMrId)" title="release 分支还原到该合并前快照">↩ 回滚</button>
+                <button class="btn sm red" id="mrd-reject" onclick="resolveMergeFromDetail('reject')">❌ 驳回</button>
+                <button class="btn grn" id="mrd-approve" onclick="resolveMergeFromDetail('approve')">✅ 通过合并</button>
+              </div>
+            </div><!-- /mr-detail-view -->
           </div><!-- /ws-mr -->
         </div><!-- /panel kb-d -->
         </div>
@@ -1483,28 +1540,10 @@
     <div id="bd-body" data-page-node-id="HFAZ8IlAitwv4V599GxEjL"></div>
   </div>
 </div>
-<!-- 右侧大抽屉：合并对比分析（diff 差异 + 冲突检测结果 + 解决操作，可交互） -->
-<div class="drawer-mask" id="mrg-mask" onclick="closeMergeDiffDrawer()" data-page-node-id="qkOrtzq8St4B7Zb7y7yiDI"></div>
-<div class="drawer" id="mrg-drawer" data-page-node-id="Gl9aOujUPy4BKy5dqUzXHe">
-  <div class="d-head" data-page-node-id="v7FDZnZjJwSBXkWCOeU7IO">
-    <h3 data-page-node-id="T8JxnxlVbQGnqzE4CP437G">🔀 合并对比分析</h3>
-    <span id="mrg-title" style="font-size:12px;color:var(--mut);" data-page-node-id="vQt3RWj8cT1mWURW6JxoIY"></span>
-    <span style="flex:1" data-page-node-id="UWCBcXKJKfOsga3AQuDvqi"></span>
-    <button class="btn sm ghost" onclick="closeMergeDiffDrawer()" data-page-node-id="BffcGf371eHmvIEtqZm2ZF">✕ 关闭</button>
-  </div>
-  <div id="mrg-progress" data-page-node-id="LGFqSGF7FV7nSYbJsW4GNr" style="padding:8px 18px;border-bottom:1px solid var(--line);background:#fafaf7;"></div>
-  <div class="d-body" id="mrg-main" data-page-node-id="BbwD1Ul4vvJJ1CUPhISsgK" style="display:flex;flex-direction:row;padding:0;overflow:hidden;">
-    <div id="mrg-body" data-page-node-id="wBfHq9J2uBWCXKrOK94W1c" style="width:210px;min-width:210px;border-right:1px solid var(--line);overflow-y:auto;"></div>
-    <div id="mrg-field" data-page-node-id="JkVOpDjbA83Vv3ZHqfkkXE" style="flex:1;min-width:0;overflow-y:auto;padding:12px 16px;"><div style="padding:18px;color:var(--mut);text-align:center;">选择左侧差异实体查看字段级详情</div></div>
-  </div>
-  <div style="padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap;" data-page-node-id="8iFe1FdOEBFlKHSmyCxCcs">
-    <button class="btn grn" id="mrg-approve" onclick="resolveMergeFromDrawer('approve')" data-page-node-id="2ApldcH4FhEwRW4rM2JEtD">✅ 通过合并</button>
-    <button class="btn red" id="mrg-reject" onclick="resolveMergeFromDrawer('reject')" data-page-node-id="Nta6K4hVP6uzrwgxYfLDqJ">❌ 驳回</button>
-    <button class="btn red" id="mrg-rollback" style="display:none;" onclick="rollbackMergeRequest(mrgMrId)" data-page-node-id="8QeZIfMjbviC6IAZvyezHI">↩ 回滚</button>
-    <span style="flex:1" data-page-node-id="FqzDvBYrudpGrvuMK8cgTF"></span>
-    <span id="mrg-action-note" style="font-size:11.5px;color:var(--mut);" data-page-node-id="u0E703quUkMCpA0jqL09HN"></span>
-  </div>
-</div>
+<!-- 2026-09-23 已移除「合并对比分析」右侧滑动抽屉（#mrg-mask / #mrg-drawer）——
+     对比分析与冲突处理改为「知识图谱 → 合并请求」页内视图 #mr-detail-view，与列表同页切换。
+     原因：抽屉内要塞 顶栏 + 冲突进度 + 左清单(210px) + 右字段详情 + 底操作条 = 完整页面布局，
+     在受限宽度里挤压字段级 diff；且与列表页的"通过/驳回"形成两套重复入口。 -->
 <!-- 右侧大抽屉：AI 建模入库向导（候选清单/勾选/放弃，风格与 .drawer 一致，替代居中 #lbx 卡片） -->
 <div class="drawer-mask" id="import-mask" onclick="closeSysmlImportDrawer()" data-page-node-id="AzXafFpvBh5bng86z3J0Bn"></div>
 <div class="drawer import-drawer" id="import-drawer" data-page-node-id="zitIe4McluWrTAVbJRjVpl">
