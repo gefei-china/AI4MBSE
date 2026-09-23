@@ -661,34 +661,49 @@ function renderBdList() {
   const hasAny = total.added+total.modified+total.removed+total.rel > 0;
   bodyEl.innerHTML = html || `<div style="padding:16px;color:var(--mut);text-align:center;">${hasAny ? '无匹配筛选条件的差异项' : '两个分支无差异'}</div>`;
 }
-// ── 合并请求（页面列表）：状态筛选 chips + 中文状态徽章 + 时间列 + 操作按状态收敛（待评审置顶）
+// ── 合并请求（左栏列表）：状态筛选 chips + 卡片行 + 选中高亮
+// 2026-09-23 布局二次收敛（米爸口径）：列表常驻左栏（344px），右侧就地展示选中记录详情 ——
+//   取消「列表页 ↔ 详情页」整页互斥切换，评审主流程不再有页面层级跳转。
+//   标杆：GitHub PR 列表页（纯列表、无行内操作，点进 PR 页才操作）、
+//         Palantir Foundry 提案页（左提案列表 + 右提案详情常驻主从）。
+//   ⚠ 卡片**不放任何操作按钮**：动作已全部由详情页承载 —— 头部「转评审 / 重新打开 / 删除」、
+//     底部条「预览 / 回滚 / 驳回 / 通过」、Tab「评审意见」。避免"两套入口"与窄栏按钮拥挤。
+//     由此删除的三个表格行内实现（toggleMrComments / submitMrComment / previewMerge）见下方死代码清理说明。
 // 注：命名加 Branch 前缀，避免与「合并对比分析」抽屉的 renderMergeFilter/renderMergeList（md* 系列）同名冲突
 async function loadMerges() {
   // 2026-09-14 分支视角：只显示与当前分支相关（作为源或目标）的合并请求
   const br = (typeof getCurrentBranch==='function') ? getCurrentBranch() : '';
   _mrs = await api('/api/branches/merge-requests' + (br ? ('?branch=' + encodeURIComponent(br)) : ''));
+  // 主从布局一致性守卫（2026-09-23）：左栏是右栏的"导航真相" —— 选中项不在新列表里
+  // （切了工作分支 / 被他人删除 / 已不在当前分支视角）时就收起右栏，避免展示"列表里已没有"的陈旧详情。
+  // 仅在拿到合法数组时判定（接口失败返回非数组时不动，避免误收起）。
+  if(mrgMrId && Array.isArray(_mrs) && !_mrs.some(m=>m.id === mrgMrId)) closeMrDetail();
   renderBranchMergeList();
 }
 function renderBranchMergeList() {
   const el = document.getElementById('merge-list');
   if(!el) return;
-  // 2026-09-23：列表页由「只有一张表」升级为带工具条的工作台；骨架只建一次，
+  // 左栏骨架只建一次：工具条 + 筛选条(#mr-filter-slot) + 列表(#mr-list-slot)
   // 搜索只重刷 #mr-list-slot（不重建输入框，避免每敲一个字就丢焦点）
-  if(!document.getElementById('mr-list-slot')) el.innerHTML = renderBranchMergeToolbar() + '<div id="mr-list-slot"></div>';
+  if(!document.getElementById('mr-list-slot')) el.innerHTML = renderBranchMergeToolbar()
+    + '<div id="mr-filter-slot"></div>'
+    + '<div id="mr-list-slot" style="flex:1;min-height:0;overflow-y:auto;"></div>';
   renderBranchMergeFilterAndTable();
   renderBranchKpis();
 }
-// 列表工具条：标题 + 实时计数 + 搜索 + 刷新 + 发起 MR
+// 左栏工具条（窄栏三段：标题 + 刷新 / 计数 / 搜索框整行）
+// ⚠ 不含「＋ 发起 MR」：该入口由图谱工作区右上角全局按钮 #ws-mr-entry 唯一承载（2026-09-23 去重，原为两处重复）
 function renderBranchMergeToolbar() {
-  return `<div style="display:flex;gap:8px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);background:#fff;flex-wrap:wrap;">
-    <b style="font-size:12.5px;color:var(--blue-d);">🔀 合并请求</b>
-    <span id="mr-list-count" style="font-size:11px;color:var(--mut);"></span>
-    <span style="flex:1;"></span>
+  return `<div style="padding:9px 12px;border-bottom:1px solid var(--line);background:#fff;">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <b style="font-size:12.5px;color:var(--blue-d);">🔀 合并请求</b>
+      <span style="flex:1;"></span>
+      <button class="btn sm ghost" onclick="loadMerges()" title="重新拉取合并请求">🔄 刷新</button>
+    </div>
+    <div id="mr-list-count" style="font-size:11px;color:var(--mut);margin-top:4px;"></div>
     <input id="mr-list-kw" placeholder="搜索 源/目标分支 · 标题 · 提交人…" value="${esc(_mrListKw)}"
       oninput="setMrListKw(this.value.trim())"
-      style="width:230px;border:1px solid var(--line);border-radius:6px;padding:4px 9px;font-size:12px;">
-    <button class="btn sm ghost" onclick="loadMerges()" title="重新拉取合并请求">🔄 刷新</button>
-    <button class="btn sm" onclick="openMrPrefill()" title="从当前工作分支发起合并请求">＋ 发起 MR</button>
+      style="width:100%;box-sizing:border-box;margin-top:6px;border:1px solid var(--line);border-radius:6px;padding:5px 9px;font-size:12px;">
   </div>`;
 }
 function setMrListKw(v) { _mrListKw = v; renderBranchMergeFilterAndTable(); }
@@ -700,34 +715,46 @@ function _updateMrListCount() {
   const cf = arr.reduce((s,m)=>s+(m.unresolved_conflicts||0),0);
   el.innerHTML = `共 <b>${arr.length}</b> 条 · 待评审 <b>${open}</b> · 未解决冲突 <b style="color:${cf>0?'var(--red)':''}">${cf}</b>`;
 }
-// 过滤条 + 表格（搜索/筛选只重刷这一块）
+// 筛选条与卡片列表分开重刷：chips 固定在工具条下方（不随列表滚走），列表独立滚动
 function renderBranchMergeFilterAndTable() {
-  const el = document.getElementById('mr-list-slot');
-  if(!el) return;
   _updateMrListCount();
-  if(!_mrs || !_mrs.length) {
-    el.innerHTML = `<div style="padding:18px;color:var(--mut);font-size:12px;text-align:center;">
-      当前工作分支「${esc(getCurrentBranch()||'-')}」暂无合并请求 —— 可点右上「＋ 发起 MR」，或切换工作分支查看其它分支的 MR</div>`;
+  const fEl = document.getElementById('mr-filter-slot');
+  const lEl = document.getElementById('mr-list-slot');
+  if(!lEl) return;
+  const has = !!(_mrs && _mrs.length);
+  if(fEl) fEl.innerHTML = has ? renderBranchMergeFilter() : '';
+  if(!has) {
+    lEl.innerHTML = `<div style="padding:20px 14px;color:var(--mut);font-size:12px;text-align:center;line-height:1.8;">
+      当前工作分支「${esc(getCurrentBranch()||'-')}」暂无合并请求<br>
+      <span style="font-size:11.5px;">可点右上角「＋ 发起 MR」，或切换工作分支查看其它分支的 MR</span></div>`;
     return;
   }
   const kw = (_mrListKw||'').toLowerCase();
-  if(kw) {
-    const hit = _mrs.filter(m=>[m.source_branch,m.target_branch,m.title,m.created_by,m.reviewed_by,m.review_note]
-      .some(v=>String(v||'').toLowerCase().includes(kw))).length;
-    if(!hit) {
-      el.innerHTML = `<div style="padding:8px 12px;border-bottom:1px solid var(--line);background:#fafaf7;font-size:11.5px;color:var(--mut);">
-        搜索「${esc(_mrListKw)}」无匹配合并请求 <span style="cursor:pointer;color:var(--blue-d);text-decoration:underline;" onclick="setMrListKw('')">清除搜索</span></div>` + renderBranchMergeTable();
-      return;
-    }
+  if(kw && !_mrs.some(m=>_mrMatchKw(m, kw))) {
+    lEl.innerHTML = `<div style="padding:12px 14px;font-size:11.5px;color:var(--mut);">
+      搜索「${esc(_mrListKw)}」无匹配 <span style="cursor:pointer;color:var(--blue-d);text-decoration:underline;" onclick="setMrListKw('')">清除</span></div>`;
+    return;
   }
-  el.innerHTML = renderBranchMergeFilter() + renderBranchMergeTable();
+  lEl.innerHTML = renderMrListCards();
 }
-function setMergeFilter(f) { mergeFilter = f; renderBranchMergeList(); }
+function setMergeFilter(f) { mergeFilter = f; renderBranchMergeFilterAndTable(); }
+// 关键词命中判据（列表过滤与"无匹配"提示共用同一处，避免两处口径漂移）
+function _mrMatchKw(m, kw) {
+  return [m.source_branch, m.target_branch, m.title, m.created_by, m.reviewed_by, m.review_note]
+    .some(v => String(v||'').toLowerCase().includes(kw));
+}
 // P1-1 状态机（对标 GitHub PR）：draft → open → merged / closed（closed 可 reopen）
 // 排序：待评审(open)置顶 → 草稿 → 已合并 → 已关闭；旧状态值（pending/approved/rejected）已由后端迁移，缺省兜底 open
 function _mergeStatusOrd(s){ return ({open:0, draft:1, merged:2, closed:3})[s||'open'] ?? 4; }
 // 中文徽章映射（merged 用紫色，对标 GitHub PR merged 徽章）
 function _mrStatusInfo(s){ return ({draft:['📝 草稿','w'], open:['🕐 待评审','b'], merged:['🟪 已合并','ok'], closed:['❌ 已关闭','r']})[s||'open'] || [s||'-','g']; }
+// 当前筛选 + 搜索 + 排序后的行（左栏列表唯一数据源）
+function _mrSortedFiltered() {
+  const kw = (_mrListKw || '').toLowerCase();
+  return (_mrs || []).filter(m=>mergeFilter==='all'||m.status===mergeFilter)
+    .filter(m => !kw || _mrMatchKw(m, kw))
+    .slice().sort((a,b)=> (_mergeStatusOrd(a.status)-_mergeStatusOrd(b.status)) || String(b.created_at||'').localeCompare(String(a.created_at||'')));
+}
 function renderBranchMergeFilter() {
   const counts = {
     all:_mrs.length,
@@ -743,61 +770,47 @@ function renderBranchMergeFilter() {
     {k:'merged', l:`🟪 已合并 ${counts.merged}`},
     {k:'closed', l:`❌ 已关闭 ${counts.closed}`},
   ];
-  return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--line);background:#fafaf7;">
-    ${chips.map(x=>`<span class="st ${mergeFilter===x.k?'on':''}" style="cursor:pointer;padding:2px 10px;border-radius:10px;${mergeFilter===x.k?'background:var(--blue-l);color:var(--blue-d);font-weight:600;':''}" onclick="setMergeFilter('${x.k}')">${x.l}</span>`).join('')}
-    <span style="flex:1"></span>
-    <span style="font-size:11px;color:var(--mut);">待评审需冲突解决 + 人工评审后方可发布</span>
+  return `<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;padding:7px 12px;border-bottom:1px solid var(--line);background:#fafaf7;"
+    title="待评审需冲突解决 + 人工评审后方可发布">
+    ${chips.map(x=>`<span class="st ${mergeFilter===x.k?'b':'g'}" style="cursor:pointer;font-size:10px;padding:1px 8px;${mergeFilter===x.k?'font-weight:700;':''}" onclick="setMergeFilter('${x.k}')">${x.l}</span>`).join('')}
   </div>`;
 }
-function renderBranchMergeTable() {
-  const kw = (_mrListKw || '').toLowerCase();
-  const rows = _mrs.filter(m=>mergeFilter==='all'||m.status===mergeFilter)
-    .filter(m => !kw || [m.source_branch, m.target_branch, m.title, m.created_by, m.reviewed_by, m.review_note]
-      .some(v => String(v||'').toLowerCase().includes(kw)))
-    .slice().sort((a,b)=> (_mergeStatusOrd(a.status)-_mergeStatusOrd(b.status)) || String(b.created_at||'').localeCompare(String(a.created_at||'')));
-  return `<table class="t">
-    <tr><th>源 → 目标</th><th>状态</th><th>冲突</th><th>创建时间</th><th>合并结果</th><th>操作</th></tr>` +
-    rows.map(m=>{
-      let detail = '';
-      try { const d = JSON.parse(m.merge_detail||'{}');
-        const verb = m.target_branch==='release' ? '复制' : '迁入';   // 发布=复制快照；个人合并回 dev=迁入
-        if(d.moved||d.updated||d.doc_snapshot) detail = `${verb} ${d.moved||0} / 更新 ${d.updated||0}${d.doc_snapshot?' / 文档快照 '+d.doc_snapshot:''}`;
-      } catch(e){}
-      let conflicts = [];
-      try { conflicts = JSON.parse(m.conflicts||'[]'); } catch(e){}
-      const unresolved = m.unresolved_conflicts || 0;
-      const conflictBadge = conflicts.length
-        ? `<span class="${unresolved>0?'st r':'st ok'}" style="cursor:pointer;" title="点击进入详情并直达「冲突处理」" onclick="event.stopPropagation();openMrDetail(${m.id},'conflicts')">${conflicts.length-unresolved}/${conflicts.length} 已解决</span>`
-        : '<span class="st ok">无</span>';
-      const st = _mrStatusInfo(m.status);
-      const isMerged = m.status==='merged';
-      const isOpen = (m.status||'open')==='open';
-      const isDraft = m.status==='draft';
-      const isClosed = m.status==='closed';
-      const approveDisabled = isOpen && unresolved>0 ? 'disabled title="还有冲突未解决"' : '';
-      const approveNote = isOpen && unresolved>0 ? `<div style="font-size:10.5px;color:var(--red);margin-top:3px;">⚠ ${unresolved} 处冲突未解决，先解决再通过</div>` : '';
-      // P1-1 驳回意见（closed 时展示，只读追溯）
-      const noteHtml = (m.status==='closed' && m.review_note)
-        ? `<div style="font-size:10.5px;color:var(--mut);margin-top:3px;max-width:180px;" title="${esc(m.review_note)}">💬 ${esc(String(m.review_note).slice(0,26))}${String(m.review_note).length>26?'…':''}</div>` : '';
-      // 草稿标记（draft 且有标题时展示标题）
-      const titleHtml = m.title ? `<div style="font-size:10.5px;color:var(--mut);margin-top:2px;">${esc(m.title)}</div>` : '';
-      return `<tr onclick="openMrDetail(${m.id})" style="cursor:pointer;" title="点击进入详情：变更对比 / 冲突处理 / 叠加图谱 / 评审意见 / 变更记录">
-      <td><b>${m.source_branch}</b> → ${m.target_branch}${titleHtml}</td>
-      <td><span class="st ${st[1]}">${st[0]}</span>${noteHtml}</td>
-      <td>${conflictBadge}${approveNote}</td>
-      <td style="font-size:11px;color:var(--mut);white-space:nowrap;">${esc((m.created_at||'').slice(0,16))}${m.created_by?`<br>${esc(m.created_by)}`:''}</td>
-      <td style="font-size:11px;color:var(--mut);">${detail||'-'}</td>
-      <td style="white-space:nowrap;" onclick="event.stopPropagation()">
-      <button class="btn sm" onclick="openMrDetail(${m.id})" title="打开详情（页面内呈现，不再弹出滑动层）">🔎 详情</button>
-      <button class="btn sm ghost" onclick="toggleMrComments(${m.id}, this)" title="评审意见时间线">💬</button>
-      ${!isMerged?`<button class="btn sm ghost" onclick="previewMerge(${m.id})" title="合并结果预览（不落库）">🔮</button>`:''}
-      ${isOpen?`<button class="btn sm grn" ${approveDisabled} onclick="resolveMerge(${m.id},'approve')">通过</button> <button class="btn sm red" onclick="resolveMerge(${m.id},'reject')">驳回</button>`:''}
-      ${isDraft?`<button class="btn sm" onclick="openMrForReview(${m.id})" title="草稿转正式评审（draft → open）">📨 转评审</button> <button class="btn sm red" onclick="resolveMerge(${m.id},'reject')">关闭</button>`:''}
-      ${isClosed?`<button class="btn sm" onclick="reopenMr(${m.id})" title="重新打开（closed → open）">↩ 重新打开</button>`:''}
-      ${isMerged && m.target_branch==='release'?` <button class="btn sm red" onclick="rollbackMergeRequest(${m.id})" title="release 还原到该合并前快照">↩ 回滚</button>`:''}
-      ${!isMerged?` <button class="btn sm ghost" onclick="deleteMergeRequest(${m.id})">🗑</button>`:''}</td>
-    </tr>`;
-    }).join('') + '</table>';
+// 左栏卡片列表（2026-09-23）：窄栏不塞表格、不塞按钮 —— 状态徽章 + 冲突徽章 + 源→目标 + 标题 + 时间
+// 选中态由 mrgMrId 推导（loadMerges 重刷后仍能保持高亮，不依赖 DOM 记忆）
+function renderMrListCards() {
+  const rows = _mrSortedFiltered();
+  if(!rows.length) return `<div style="padding:18px 14px;color:var(--mut);font-size:12px;text-align:center;">该筛选条件下无合并请求</div>`;
+  return rows.map(m=>{
+    const st = _mrStatusInfo(m.status);
+    const unresolved = m.unresolved_conflicts || 0;
+    let conflicts = [];
+    try { conflicts = JSON.parse(m.conflicts||'[]'); } catch(e){}
+    const on = (mrgMrId === m.id);
+    // 冲突徽章：点击直达「⚠ 冲突处理」（stopPropagation 避免与整卡选中冲突）
+    const conflictChip = conflicts.length
+      ? `<span class="st ${unresolved>0?'r':'ok'}" style="font-size:9.5px;cursor:pointer;" title="点击直达「⚠ 冲突处理」"
+          onclick="event.stopPropagation();openMrDetail(${m.id},'conflicts')">⚠ ${conflicts.length-unresolved}/${conflicts.length}</span>`
+      : '';
+    const titleHtml = m.title
+      ? `<div style="font-size:11.5px;color:var(--mut);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.title)}</div>` : '';
+    const noteHtml = (m.status==='closed' && m.review_note)
+      ? `<div style="font-size:10.5px;color:var(--mut);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(m.review_note)}">💬 ${esc(m.review_note)}</div>` : '';
+    return `<div class="mr-card${on?' on':''}" data-mr-card="${m.id}" onclick="openMrDetail(${m.id})"
+      title="查看详情：变更对比 / 冲突处理 / 叠加图谱 / 评审意见 / 变更记录"
+      style="border-left:3px solid ${on?'var(--blue)':'transparent'};padding:9px 12px 10px;">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span class="st ${st[1]}" style="font-size:10px;">${st[0]}</span>
+        ${conflictChip}
+        <span style="flex:1;"></span>
+        <span style="font-size:10px;color:var(--mut);white-space:nowrap;">#${m.id}</span>
+      </div>
+      <div style="font-size:12.5px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+        <b>${esc(m.source_branch)}</b> <span style="color:var(--mut);">→</span> <b>${esc(m.target_branch)}</b>
+      </div>
+      ${titleHtml}${noteHtml}
+      <div style="font-size:10.5px;color:var(--mut);margin-top:4px;">${esc(String(m.created_at||'').slice(0,16))}${m.created_by?' · '+esc(m.created_by):''}</div>
+    </div>`;
+  }).join('');
 }
 function renderConflictItem(mrId, c) {
   // P0-2：每条冲突含 conflict_type（property 属性冲突 | delete_modify 删除vs修改冲突），缺省兜底 property（后端未升级时降级兼容）
@@ -863,83 +876,21 @@ async function resolveConflict(mrId, entityId, field, radioName) {
   if(mrgMrId === mrId) loadMergeConflicts();   // 详情页内保存：同步刷新冲突进度 / 就绪度检查 / 清单着色
   loadMerges();
 }
-// ── MR 评审意见时间线（行内展开，对标 GitHub PR conversation）──
+// ── 评审意见动作图标（详情页「💬 评审意见」Tab 与时间线共用）──
 function _mrActionIcon(a) {
   return ({approve:'✅ 通过', reject:'❌ 驳回', comment:'💬 评论', rollback:'↩ 回滚',
            reopen:'↪ 重新打开', open:'📨 转评审', resolve:'🔀 冲突裁决'})[a] || '💬 ' + (a||'comment');
 }
-async function toggleMrComments(mrId, btn) {
-  const row = btn.closest('tr');
-  // 已展开则收起（展开行带 data-mr-id 标记，紧跟在该行之后）
-  const next = row.nextElementSibling;
-  if(next && next.dataset && next.dataset.mrExpand === String(mrId)) { next.remove(); return; }
-  const comments = await api(`/api/branches/merge-requests/${mrId}/comments`);
-  if(comments && comments.error) { toast('加载失败：' + comments.error); return; }
-  const items = Array.isArray(comments) ? comments : [];
-  const tl = items.length ? items.map(c=>{
-    const ic = _mrActionIcon(c.action);
-    const color = c.action==='approve' ? 'var(--grn)' : c.action==='reject' ? 'var(--red)' :
-                  c.action==='rollback' ? 'var(--red)' : 'var(--mut)';
-    return `<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px dashed var(--line);">
-      <span style="font-size:11px;font-weight:600;color:${color};white-space:nowrap;">${ic}</span>
-      <div style="flex:1;font-size:12px;">${esc(c.comment||'')}
-        <div style="font-size:10.5px;color:var(--mut);margin-top:2px;">${esc(c.author||'-')} · ${esc(String(c.created_at||'').slice(0,16))}</div>
-      </div></div>`;
-  }).join('') : '<div style="padding:8px 0;font-size:12px;color:var(--mut);">暂无评审记录</div>';
-  const exp = document.createElement('tr');
-  exp.dataset.mrExpand = String(mrId);
-  exp.innerHTML = `<td colspan="6" style="background:#fafaf7;padding:10px 14px;border-bottom:1px solid var(--line);">
-    <div style="font-size:11.5px;font-weight:600;margin-bottom:4px;">💬 评审时间线（${items.length}）</div>
-    ${tl}
-    <div style="display:flex;gap:6px;margin-top:8px;">
-      <input id="mr-cmt-${mrId}" placeholder="追加评审意见…" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"
-        onkeydown="if(event.key==='Enter'){submitMrComment(${mrId});}">
-      <button class="btn sm" onclick="submitMrComment(${mrId})">发送</button>
-    </div></td>`;
-  row.after(exp);
-}
-async function submitMrComment(mrId) {
-  const input = document.getElementById('mr-cmt-' + mrId);
-  const text = (input && input.value || '').trim();
-  if(!text) { toast('请先填写意见'); return; }
-  const r = await api(`/api/branches/merge-requests/${mrId}/comments`,
-    {method:'POST', body:JSON.stringify({comment:text})});
-  if(r && r.error) { toast('提交失败：' + r.error); return; }
-  toast('意见已记录 ✓');
-  // 重展开刷新时间线
-  const exp = document.querySelector(`tr[data-mr-expand="${mrId}"]`);
-  if(exp) { const btn = exp.previousElementSibling && exp.previousElementSibling.querySelector('button[onclick*="toggleMrComments"]'); if(btn) { exp.remove(); toggleMrComments(mrId, btn); } }
-}
-// ── 合并结果预览（dry-run，不落库）：列表页用居中卡片 #lbx（保留）；详情页用页面内嵌 previewMergeInline ──
-async function previewMerge(mrId) {
-  const r = await api(`/api/branches/merge-requests/${mrId}/preview-merge`);
-  if(r && r.error) { toast('预览失败：' + r.error); return; }
-  const s = r.summary || {};
-  const row = (l, n, unit, color) => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px dashed var(--line);font-size:12.5px;">
-    <span style="color:var(--mut);">${l}</span><b style="color:${color};">${n} ${unit}</b></div>`;
-  const lbx = document.getElementById('lbx');
-  document.getElementById('lbx-body').innerHTML = `
-    <h3>🔮 合并结果预览（不落库）</h3>
-    <div style="font-size:12.5px;color:var(--mut);margin:4px 0 8px;">
-      <b>${esc(r.source)}</b> → ${esc(r.target)}（${esc(r.verb)}语义）· 基于当前分支差异实时计算
-    </div>
-    ${row('🟢 新增实体', s.entities_add, '条', 'var(--grn)')}
-    ${row('🟠 更新实体', s.entities_update, '条', 'var(--amb)')}
-    ${row('🔴 移除实体', s.entities_remove, '条', 'var(--red)')}
-    ${row('🔗 新增关系', s.relations_add, '条', 'var(--grn)')}
-    ${row('🔗 更新关系', s.relations_update, '条', 'var(--amb)')}
-    ${row('🔗 移除关系', s.relations_remove, '条', 'var(--red)')}
-    ${row('⚠ 冲突（未解决）', r.conflicts_unresolved, '处', r.conflicts_unresolved>0?'var(--red)':'var(--grn)')}
-    ${r.conflicts_unresolved>0
-      ? '<div style="font-size:11.5px;color:var(--red);margin-top:8px;">⚠ 存在未解决冲突，通过前须先逐条解决</div>'
-      : '<div style="font-size:11.5px;color:var(--grn);margin-top:8px;">✓ 无未解决冲突，可发起通过</div>'}
-    <div class="lbx-actions"><button class="btn ghost" onclick="document.getElementById('lbx').classList.remove('show')">关闭</button></div>`;
-  lbx.classList.add('show');
-}
+// 2026-09-23 死代码清理（随表格一并删除；均满足工程「有可达后继才删」纪律）：
+//   · toggleMrComments / submitMrComment —— 原表格行内展开的评审时间线，且强依赖 tr 结构
+//     （btn.closest('tr')，在卡片上会抛错），后继为详情页「💬 评审意见」Tab：loadMrComments / submitMrCommentInline
+//   · previewMerge —— 原列表页居中卡片 #lbx 版预览，后继为详情页底部条「🔮 合并结果预览」：previewMergeInline
 async function deleteMergeRequest(id) {  if(!(await confirmDialog(`确认删除合并请求 #${id}？`))) return;
   const r = await api(`/api/branches/merge-requests/${id}`, {method:'DELETE'});
   if(r && r.error) { toast('删除失败：' + r.error); return; }
-  toast('合并请求已删除'); loadMerges();
+  toast('合并请求已删除');
+  if(mrgMrId === id) closeMrDetail();   // 删掉的正是当前选中那条 → 右栏回空态
+  loadMerges();
 }
 async function resolveMerge(id, action) {
   // P1-1 驳回必填意见（≥5 字，追溯用）；后端同样校验，前端先拦一遍。返回 true=操作成功
@@ -960,7 +911,7 @@ async function resolveMerge(id, action) {
       if(removed.length) lines.push('', `已消解 ${removed.length} 处冲突（原解决决策作废）`);
       await confirmDialog(lines.join('\n'), {title:'⚠ 冲突清单已更新', okText:'我知道了，去处理'});
       loadMerges();
-      if(mrDetailVisible()) loadMergeDetail(); else openMrDetail(id, 'conflicts');   // 直达新冲突
+      if(mrgMrId === id) loadMergeDetail(); else openMrDetail(id, 'conflicts');   // 直达新冲突
       return false;
     }
     toast('操作失败：' + r.error); return false;
@@ -975,13 +926,17 @@ async function resolveMerge(id, action) {
 async function openMrForReview(id) {
   const r = await api(`/api/branches/merge-requests/${id}/open`, {method:'POST'});
   if(r && r.error) { toast('操作失败：' + r.error); return; }
-  toast('已转正式评审，进入待评审队列'); loadMerges();
+  toast('已转正式评审，进入待评审队列');
+  if(mrgMrId === id) loadMergeDetail();   // 状态变了 → 右栏头部/底部条同步
+  loadMerges();
 }
 // P1-1：重新打开已关闭的合并请求（closed → open）
 async function reopenMr(id) {
   const r = await api(`/api/branches/merge-requests/${id}/reopen`, {method:'POST'});
   if(r && r.error) { toast('操作失败：' + r.error); return; }
-  toast('合并请求已重新打开'); loadMerges();
+  toast('合并请求已重新打开');
+  if(mrgMrId === id) loadMergeDetail();   // 状态变了 → 右栏同步
+  loadMerges();
 }
 // FR-KG-16：回滚已合并的发布合并请求（release 还原到合并前快照）
 async function rollbackMergeRequest(id) {
@@ -989,11 +944,12 @@ async function rollbackMergeRequest(id) {
   const r = await api(`/api/branches/merge-requests/${id}/rollback`, {method:'POST'});
   if(r && r.error) { toast('回滚失败：' + r.error); return; }
   toast(`回滚成功：还原 ${r.restored_entities||0} 实体 / ${r.restored_relations||0} 关系`);
+  if(mrgMrId === id) loadMergeDetail();   // 回滚后该条状态变化 → 右栏同步
   loadMerges();
   loadBranches();  // release 元素数变化
   loadGraph();     // 当前分支图谱刷新
 }
-// ════════════════════ 合并请求详情（页面内视图，2026-09-23 取代右侧滑动抽屉）════════════════════
+// ════════════════════ 合并请求详情（页面内主从视图，2026-09-23 取代右侧滑动抽屉）════════════════════
 // 设计依据（标杆调研，详见 docs/知识图谱合并请求页-布局与交互优化方案-20260923.md）：
 //   · GitHub PR 新版「Files changed」：左差异清单（可调宽、带标记）+ 右主区 + 右侧常驻 docked
 //     panels（Overview / Comments / Merge status / Alerts）——官方口径是「不切页、不丢上下文」；
@@ -1001,8 +957,9 @@ async function rollbackMergeRequest(id) {
 //   · Palantir Foundry Ontology / Global Branching 提案：2026-09-17 新增 Changes tab，把
 //     「reviewers ... needed to open each resource's application to review changes separately」
 //     改为提案页内集中呈现 —— 与本项目「评审动作藏在抽屉里、看不到全局」是同一种病。
-// 本页结构：列表(#mr-list-view) ↔ 详情(#mr-detail-view) 同页切换；
-//   变更对比 / 冲突处理 / 叠加图谱 / 评审意见 / 变更记录 全部落在详情页 Tab 内，无遮罩、无滑出层。
+// 本页结构（2026-09-23 二次收敛）：左栏 #mr-list-view 列表常驻（344px）+ 右栏 #mr-detail-view 主从；
+//   未选中时右栏显示 #mrd-empty 空态，选中后就地渲染 #mrd-main —— 无页面层级跳转、无遮罩、无滑出层；
+//   变更对比 / 冲突处理 / 叠加图谱 / 评审意见 / 变更记录 全部落在 #mrd-main 的 Tab 内。
 let mrgMrId = null;                              // 当前合并请求 id
 let mrgMr = null;                                // 当前 MR 记录（status / conflicts / review_note …）
 let mdData = null;                               // diff 结果（清单 / 图谱 / 就绪度检查共用）
@@ -1022,16 +979,26 @@ const _MRD_HINTS = {
   comments:'评审意见时间线（通过 / 驳回 / 裁决 / 评论）与追加意见',
   log:'源分支提交历史（只读追溯；字段级快照展开见「🕘 历史」Tab）',
 };
-function mrDetailVisible() { const el = document.getElementById('mr-detail-view'); return !!el && el.style.display !== 'none'; }
-// 进入详情：切视图（不弹层），保留 tab 参数直达指定分区
+// 是否处于「已选中某条合并请求」状态（主从布局下 = 右栏有详情主体）
+function mrDetailVisible() { return !!mrgMrId; }
+// 选中态同步到左栏卡片：只改 class 与左边框色，不重建列表（保住左栏滚动位置与输入框焦点）
+function _syncMrCardSelection() {
+  document.querySelectorAll('#mr-list-slot [data-mr-card]').forEach(el=>{
+    const on = String(mrgMrId) === el.getAttribute('data-mr-card');
+    el.classList.toggle('on', on);
+    el.style.borderLeftColor = on ? 'var(--blue)' : 'transparent';
+    if(on && el.scrollIntoView) el.scrollIntoView({block:'nearest'});
+  });
+}
+// 进入详情：右栏就地渲染（左栏列表常驻，不隐藏、不切页面层级），保留 tab 参数直达指定分区
 function openMrDetail(mrId, tab) {
   mrgMrId = mrId;
   mrDetailCurTab = _MRD_TABS.includes(tab) ? tab : 'overview';
   mdData = null; mdFilter.cat = 'all'; mdFilter.type = ''; mdFilter.kw = '';
   mrgUnresolved = 0; mrgConflicts = []; mrgComments = []; _mrgConflictIds = []; mrgMr = null;
-  const lv = document.getElementById('mr-list-view'), dv = document.getElementById('mr-detail-view');
-  if(lv) lv.style.display = 'none';
-  if(dv) dv.style.display = 'flex';
+  const main = document.getElementById('mrd-main'), empty = document.getElementById('mrd-empty');
+  if(main) main.style.display = 'flex';
+  if(empty) empty.style.display = 'none';
   // ⚠ 只清「叶子 pane」：mrd-pane-diff / mrd-pane-graph 自身是容器（内部有 mrd-diff-side /
   //   mrd-diff-main / mrd-graph-svg 等子节点），清空它们的 innerHTML 等于把子容器一起删掉，
   //   后续 getElementById 全返回 null → 差异清单与叠加图谱永久空白。
@@ -1046,25 +1013,27 @@ function openMrDetail(mrId, tab) {
   // 差异清单骨架先建出来，避免首屏空白
   const side = document.getElementById('mrd-diff-side');
   if(side) side.innerHTML = '<div style="padding:16px;color:var(--mut);text-align:center;font-size:12px;">对比差异中…</div>';
-  const main = document.getElementById('mrd-diff-main');
-  if(main) main.innerHTML = '<div style="padding:18px;color:var(--mut);text-align:center;">选择左侧差异实体查看字段级详情</div>';
+  const dmain = document.getElementById('mrd-diff-main');
+  if(dmain) dmain.innerHTML = '<div style="padding:18px;color:var(--mut);text-align:center;">选择左侧差异实体查看字段级详情</div>';
   const tn = document.getElementById('mrd-tab-conflict-n'); if(tn) tn.textContent = '';
+  _syncMrCardSelection();
   mrDetailTab(mrDetailCurTab);
   bindMrDetailEsc();
   loadMergeDetail();
 }
-// 返回列表（同时刷新列表，详情期间状态可能已变化）
+// 取消选中：右栏回到空态（左栏列表常驻不变，故不再有"返回列表"这一层级动作；Esc 亦可触发）
+// 注：此处**不刷新列表** —— 状态变更由各动作函数自行刷新，避免把左栏滚动位置重置。
 function closeMrDetail() {
-  const lv = document.getElementById('mr-list-view'), dv = document.getElementById('mr-detail-view');
-  if(dv) dv.style.display = 'none';
-  if(lv) lv.style.display = '';
+  const main = document.getElementById('mrd-main'), empty = document.getElementById('mrd-empty');
+  if(main) main.style.display = 'none';
+  if(empty) empty.style.display = 'flex';
   mrgMrId = null; mrgMr = null; mrgConflicts = []; mdData = null; _mrgConflictIds = [];
-  loadMerges();
+  _syncMrCardSelection();
 }
 // 兼容别名：旧函数名（历史调用点 / 浏览器书签 / 外部脚本）仍可用
 function openMergeDiffDrawer(mrId) { openMrDetail(mrId, 'diff'); }
 function closeMergeDiffDrawer() { closeMrDetail(); }
-// Esc 返回列表（仅详情可见且焦点不在输入控件上时生效，不抢输入框的 Esc）
+// Esc 取消选中（仅已选中且焦点不在输入控件上时生效，不抢输入框的 Esc）
 function bindMrDetailEsc() {
   if(window.__mrdEscBound) return;
   window.__mrdEscBound = 1;
@@ -1668,8 +1637,10 @@ async function loadMergeConflicts() {
 }
 async function resolveMergeFromDetail(action) {
   if(!mrgMrId) return;
-  const ok = await resolveMerge(mrgMrId, action);
-  if(ok) closeMrDetail();
+  const id = mrgMrId;
+  const ok = await resolveMerge(id, action);
+  // resolveMerge 内部已 loadMerges()；通过/驳回后该条进终态 → 右栏收起回空态
+  if(ok && mrgMrId === id) closeMrDetail();
 }
 // ── 评审意见 Tab（页面内时间线 + 追加意见，复用 /comments 接口）──
 async function loadMrComments() {
