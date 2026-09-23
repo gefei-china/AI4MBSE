@@ -770,8 +770,8 @@ if FAILED_NAMES:
     for n in FAILED_NAMES:
         print(f"  - {n}")
 print("=" * 90)
-print("口径提示：O18~O24、O42~O46 为**真库/真实 app 金标**（依赖 mbse.db 现值：249 条边、active v170）；")
-print("          O8~O17、O25、O30~O36 为夹具驱动（临时库/内存库），不受本机数据现状影响；")
+print("口径提示：O18~O24、O44~O48 为**真库/真实 app 金标**（依赖 mbse.db 现值：249 条边、active v170）；")
+print("          O8~O17、O25、O30~O37 为夹具驱动（临时库/内存库），不受本机数据现状影响；")
 print("          O38~O41 依赖 tools/_ontology_dom_range_repair.py 的 TARGETS 与真库一致；")
 print("          O42/O43 为变异自证（会临时改写 4 个源文件并逐字节还原，跑完 git status 应无额外改动）。")
 sys.exit(1 if FAIL else 0)
