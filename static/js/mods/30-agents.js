@@ -1345,20 +1345,8 @@ function closeUserMenu(){
 }
 function closeUserMenuOnce(){ closeUserMenu(); }
 async function switchAccount(){
+  /* 2026-09-23：统一身份认证后「切换账号」= 回登录页重新认证（体验模式输入显示名即换号；
+     SSO 模式换 IAM 账号）。原实现为模拟登录弹窗（点本地用户即切号，绕过会话体系），已废弃。 */
   closeUserMenuOnce();
-  try{
-    const users = await api('/api/users');
-    const cur = currentUserId();
-    const options = users.map(u=>`<div onclick="setCurrentUser(${u.id})" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line);font-size:12.5px;${u.id===cur?'background:var(--blue-l);font-weight:600;':''}display:flex;align-items:center;gap:8px;">
-      <span class="avatar" style="width:24px;height:24px;font-size:10px;flex:none;">${esc((u.display_name||'?').slice(0,1))}</span>
-      <div style="min-width:0;"><b>${esc(u.display_name)}</b> <small style="color:var(--mut);">${esc(u.username)}</small><br>
-      <small style="color:var(--mut);">${esc(u.role_name||'-')}${u.department?' · '+esc(u.department):''}</small></div>
-      ${u.id===cur?'<b style="margin-left:auto;color:var(--blue-d);">✓ 当前</b>':''}
-    </div>`).join('') || '<div style="padding:10px;color:var(--mut);font-size:12px;">暂无用户</div>';
-    const title = document.getElementById('panel-title');
-    if(title) title.textContent = '👤 选择账号';
-    document.getElementById('panel-body').innerHTML = options;
-    document.getElementById('panel-detail').classList.add('open');
-    document.getElementById('overlay').style.display = 'block';
-  }catch(e){ toast('获取用户列表失败'); }
+  location.href = '/static/login.html';
 }

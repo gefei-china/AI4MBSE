@@ -9,11 +9,10 @@ function setCurrentUser(id){
   toast('已切换账号');
 }
 function logoutUser(){
-  localStorage.removeItem('mbse_user_id');
-  closeUserMenuOnce();
-  showLoggedOutUI();
-  toast('已退出登录，点击右上角头像重新登录');
-  switchAccount();
+  /* 2026-09-23：接入真实会话登出 —— 原仅删 mbse_user_id 后弹「选择账号」模拟弹窗，
+     未调 /api/auth/logout（服务端会话仍在）、不清 mbse_session。loginEntryClick（01-core.js）
+     已实现完整登出链：服务端删会话 + IAM 全局登出 + 清态 + 跳登录页。 */
+  loginEntryClick();
 }
 function loadURTab(id) {
   if(id==='ur-a') loadUsers();
