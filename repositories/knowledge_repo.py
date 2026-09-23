@@ -70,10 +70,19 @@ class KnowledgeRepo(BaseRepo):
         return rows
 
     def list_entity_history(self, entity_id: str, branch: str = "dev") -> list:
-        """实体历史版本：返回 (id, branch) 的全部时态版本（含已退役）。
+        """实体历史版本（P0-1 起读影子历史表 entity_versions）。
 
-        按 valid_from DESC 排序——最新在前。
+        按 version_no DESC 排序——最新在前（比 valid_from 排序更稳：同秒变更不歧义）。
+
+        无版本行时**回退主表**（保持旧行为）：merge/sync/图谱等旁路写入产生的实体行
+        尚未落版本行，回退可保证 /history 既不空也不变形。
         """
+        rows = self.rows(
+            "SELECT * FROM entity_versions WHERE id=? AND branch=? "
+            "ORDER BY version_no DESC",
+            (entity_id, branch or "dev"))
+        if rows:
+            return rows
         return self.rows(
             "SELECT * FROM entities WHERE id=? AND branch=? "
             "ORDER BY valid_from DESC",
@@ -81,47 +90,138 @@ class KnowledgeRepo(BaseRepo):
 
     def get_entity_as_of(self, entity_id: str, as_of: str,
                          branch: str | None = None) -> dict | None:
-        """时点查询：as_of 时刻该实体是什么状态。
+        """时点查询：as_of 时刻该实体是什么状态（P0-1 起读影子历史表）。
 
         - branch=None → 跨分支查（按 release 优先）
         - branch 指定 → 限定该分支
+        优先命中 entity_versions 的版本区间；无命中则**回退主表旧逻辑**（兼容无版本行场景）。
         """
-        sql = ("SELECT * FROM entities WHERE id=? "
+        sql = ("SELECT * FROM entity_versions WHERE id=? "
                "AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?) ")
-        params = [entity_id, as_of, as_of]
+        params: list = [entity_id, as_of, as_of]
         if branch:
             sql += "AND branch=? "
             params.append(branch)
-        sql += ("ORDER BY (branch='release') DESC, valid_from DESC LIMIT 1")
-        return self.one(sql, tuple(params))
+        sql += "ORDER BY (branch='release') DESC, version_no DESC LIMIT 1"
+        row = self.one(sql, tuple(params))
+        if row:
+            return row
+        sql2 = ("SELECT * FROM entities WHERE id=? "
+                "AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?) ")
+        params2: list = [entity_id, as_of, as_of]
+        if branch:
+            sql2 += "AND branch=? "
+            params2.append(branch)
+        sql2 += "ORDER BY (branch='release') DESC, valid_from DESC LIMIT 1"
+        return self.one(sql2, tuple(params2))
 
-    def update_with_history(self, entity_id: str, branch: str, new_data: dict) -> int:
-        """带历史版本的更新（时间穿越模式）：
+    # ── P0-1 版本写入侧（影子历史表 entity_versions）──
+    # 版本元数据列（不属于从 entities 快照过来的业务字段）
+    _EV_META = ("version_no", "valid_from", "valid_to", "is_current",
+                "tx_from", "tx_to", "change_kind", "changed_by")
 
-        1. 把当前版本"退役"：设置 valid_to=now, is_current=0
-        2. 插入新版本（valid_from=now, is_current=1）
-        3. 返回新版本的 rowid
+    @staticmethod
+    def _vnow() -> str:
+        """版本时间戳：**微秒精度**。
 
-        用于"设备名称从 A 改为 B"等业务变更保留历史。
+        秒精度会让同一秒内的两次变更撞上 UNIQUE(id, branch, valid_from)（可复现风险），
+        且会毁掉「退役时刻 == 新版本生效时刻」这一半开区间语义。
         """
         from datetime import datetime as _dt
-        now = _dt.now().isoformat(sep=' ', timespec='seconds')
-        # 1) 退役当前版本
+        return _dt.now().isoformat(sep=' ', timespec='microseconds')
+
+    def _ev_ctx(self):
+        """返回 (payload_cols, insert_sql)：快照列按「entity_versions ∩ entities」动态取交集。
+
+        动态而非硬编码：防迁移顺序差异或未来给 entities 加列导致插入报 no such column。
+        实例内缓存，避免每次写入都查 PRAGMA。
+        """
+        if not hasattr(self, "_ev_cache"):
+            ev = [r[1] for r in self.conn.execute(
+                "PRAGMA table_info(entity_versions)").fetchall()]
+            en = {r[1] for r in self.conn.execute(
+                "PRAGMA table_info(entities)").fetchall()}
+            payload = [c for c in ev if c in en and c not in self._EV_META]
+            cols = ["version_no", "valid_from", "valid_to", "is_current",
+                    "tx_from", "tx_to", "change_kind", "changed_by"] + payload
+            sql = ("INSERT INTO entity_versions (%s) VALUES (%s)"
+                   % (", ".join(cols), ", ".join("?" for _ in cols)))
+            self._ev_cache = (payload, sql)
+        return self._ev_cache
+
+    def _insert_version(self, entity_id: str, branch: str, version_no: int, valid_from: str,
+                        valid_to, is_current: int, change_kind: str, changed_by: str) -> None:
+        """把 entities 当前行快照写入 entity_versions（主表须已是该版本的状态）。"""
+        payload, sql = self._ev_ctx()
+        row = self.one("SELECT * FROM entities WHERE id=? AND branch=?", (entity_id, branch))
+        if not row:
+            return
+        vals = [version_no, valid_from, valid_to, is_current,
+                valid_from, None, change_kind, changed_by or ""]
+        vals += [row.get(c) for c in payload]
+        self.execute(sql, tuple(vals))
+
+    def _ensure_initial_version(self, entity_id: str, branch: str) -> bool:
+        """保证 (id,branch) 至少有一条版本行；无则把主表当前行灌为 v1（幂等）。
+
+        ⚠️ 必须在主表被修改**之前**调用 —— 否则「初始版本」会捕获新值而非原值。
+        """
+        if self.scalar("SELECT COUNT(*) FROM entity_versions WHERE id=? AND branch=?",
+                       (entity_id, branch)):
+            return False
+        row = self.one("SELECT * FROM entities WHERE id=? AND branch=?", (entity_id, branch))
+        if not row:
+            return False
+        vf = row.get("valid_from") or row.get("created_at") or self._vnow()
+        self._insert_version(entity_id, branch, 1, vf, None, 1, "init", "")
+        return True
+
+    def _append_version_snapshot(self, entity_id: str, branch: str, change_kind: str,
+                                 changed_by: str = "") -> int:
+        """主表已就地变更后，补落一条版本行（退役旧版本 + 追加新版本）。
+
+        供 update_with_history 与不经过它的状态流转路径（review/category）复用。
+        返回新版本 version_no；实体在该分支不存在时返回 0。
+        """
+        if not self.one("SELECT 1 FROM entities WHERE id=? AND branch=?", (entity_id, branch)):
+            return 0
+        self._ensure_initial_version(entity_id, branch)
+        now = self._vnow()
         self.execute(
-            "UPDATE entities SET valid_to=?, is_current=0, tx_to=? "
+            "UPDATE entity_versions SET valid_to=?, is_current=0, tx_to=? "
             "WHERE id=? AND branch=? AND is_current=1",
             (now, now, entity_id, branch))
-        # 2) 插入新版本
-        new_id_row = self.execute(
-            "INSERT INTO entities (id, name, entity_type, properties, status, branch, project_id, "
-            "valid_from, valid_to, is_current, tx_from, tx_to) "
-            "SELECT id, ?, ?, ?, status, branch, project_id, ?, NULL, 1, ?, NULL "
-            "FROM entities WHERE id=? AND branch=? AND is_current=0 "
-            "ORDER BY valid_from DESC LIMIT 1",
-            (new_data.get("name", ""), new_data.get("entity_type", ""),
-             new_data.get("properties", "{}"), now, now,
+        vno = self.scalar(
+            "SELECT COALESCE(MAX(version_no),0)+1 FROM entity_versions "
+            "WHERE id=? AND branch=?", (entity_id, branch))
+        self._insert_version(entity_id, branch, vno, now, None, 1, change_kind, changed_by)
+        return vno
+
+    def update_with_history(self, entity_id: str, branch: str, new_data: dict,
+                            changed_by: str = "", change_kind: str = "update") -> int:
+        """带历史版本的更新（P0-1 落地：影子历史表 entity_versions）。
+
+        ① 确保初始版本行存在（必须在主表被改前）
+        → ② **主表原地更新**（entities 语义不变 = 仅当前行，320 处引用不受影响）
+        → ③ 退役旧版本 + 追加新版本行（valid_from=now, is_current=1）
+        返回新版本 version_no；实体在该分支不存在时返回 0。
+
+        依赖：entity_versions 由 init_db 的 _migrate_entity_temporal 建表（未建则抛错，
+        不静默降级 —— 避免重演「历史记录空转」）。
+        """
+        row = self.one("SELECT * FROM entities WHERE id=? AND branch=?", (entity_id, branch))
+        if not row:
+            return 0
+        self._ensure_initial_version(entity_id, branch)
+        self.execute(
+            "UPDATE entities SET name=?, entity_type=?, properties=?, knowledge_category=? "
+            "WHERE id=? AND branch=?",
+            (new_data.get("name", row["name"]),
+             new_data.get("entity_type", row["entity_type"]),
+             new_data.get("properties", row["properties"]),
+             new_data.get("knowledge_category", row["knowledge_category"] or ""),
              entity_id, branch))
-        return new_id_row
+        return self._append_version_snapshot(entity_id, branch, change_kind, changed_by)
 
     def _annotate_dup_clusters(self, rows: list) -> list:
         """P0-B 实体审核队列重复簇聚合：同名同类型实体标记同簇成员（含非 deprecated 全状态）。
@@ -188,21 +288,27 @@ class KnowledgeRepo(BaseRepo):
              created_by, created_by if status == "reviewed" else "", knowledge_category or "",
              project_id),
         )
+        # P0-1：创建即写首版本 v1（幂等）；不吞异常 —— 宁可报错也不静默无历史
+        self._ensure_initial_version(entity_id, branch)
 
     def update_entity(self, entity_id: str, name: str, entity_type: str, properties: str,
-                      branch: str = "dev", knowledge_category: str = "") -> dict:
+                      branch: str = "dev", knowledge_category: str = "",
+                      changed_by: str = "") -> dict:
         """更新实体（版本化 fork 语义）：优先更新指定分支版本行。
 
-        - (id, branch) 行存在 → 原地更新
+        - (id, branch) 行存在 → **委托 update_with_history**（P0-1：主表原地更新 + 落版本行，
+          两处写路径合一，避免「一条写路径有历史、另一条没有」）
         - 仅其他分支有该 id → fork：复制现有版本行到目标分支再应用新值
           （支撑「dev 修改已发布实体」：release 保留旧值，dev 产生新版本）
         - id 完全不存在 → 返回错误（由路由层转 404/400）
         """
         row = self.one("SELECT * FROM entities WHERE id=? AND branch=?", (entity_id, branch))
         if row:
-            self.execute(
-                "UPDATE entities SET name=?, entity_type=?, properties=?, knowledge_category=? WHERE id=? AND branch=?",
-                (name, entity_type, properties, knowledge_category or row["knowledge_category"] or "", entity_id, branch))
+            self.update_with_history(
+                entity_id, branch,
+                {"name": name, "entity_type": entity_type, "properties": properties,
+                 "knowledge_category": knowledge_category or row["knowledge_category"] or ""},
+                changed_by=changed_by, change_kind="update")
             return {"ok": True, "forked": False}
         src = self.one(
             "SELECT * FROM entities WHERE id=? "
@@ -218,6 +324,8 @@ class KnowledgeRepo(BaseRepo):
              src["reviewed_by"], src["created_at"], src["reviewed_at"], src["graph_source"],
              src["graph_x"], src["graph_y"], src["sysml_import_id"],
              knowledge_category or src["knowledge_category"] or ""))
+        # P0-1：fork 出的分支版本同样落 v1，保证该分支的 /history 也可追溯
+        self._ensure_initial_version(entity_id, branch)
         return {"ok": True, "forked": True}
 
     def set_entity_category(self, entity_id: str, category: str, branch: str = "dev") -> int:
@@ -250,6 +358,8 @@ class KnowledgeRepo(BaseRepo):
                          (entity_id, branch))
         else:
             return
+        # P0-1：状态流转同样落版本行（change_kind='review'），使「谁在何时把谁改为 reviewed/deprecated」可回溯
+        self._append_version_snapshot(entity_id, branch, "review", actor)
         self._commit_review(entity_id, action, is_entity=True, operator=actor)
 
     def review_relation(self, relation_id: int, action: str, branch: str = "personal",

@@ -269,6 +269,88 @@ def _migrate_entity_temporal(conn):
     except sqlite3.OperationalError as e:
         print(f"[migrate_entity_temporal] seed 回填失败（可重入）: {e}")
 
+    # 6) P0-1（2026-09-23）影子历史表 entity_versions
+    #    此前「双时态八环」断在最后一环：主键 PRIMARY KEY (id, branch) 只允许每个键一行，
+    #    使 update_with_history 的 INSERT 必然 UNIQUE 冲突 → 该函数成为死代码（0 调用），
+    #    /history 恒 1 行、/at 对任意历史时刻命中当前行、时态 SPARQL 同步空转。
+    #    本表把「历史行」独立存储，entities 语义不变（= 仅当前行）→ 320 处引用零改动。
+    #    回滚：DROP TABLE entity_versions + revert 写入路径改动（主表未变，行为退回原地 UPDATE）。
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS entity_versions (
+            id TEXT NOT NULL,
+            branch TEXT NOT NULL,
+            version_no INTEGER NOT NULL,        -- 该 (id,branch) 内递增序号（1,2,3…）
+            valid_from TEXT NOT NULL,           -- 本版本生效时刻（业务时间）
+            valid_to TEXT DEFAULT NULL,         -- 本版本失效时刻（NULL = 当前版本）
+            is_current INTEGER DEFAULT 0,       -- 1=当前行镜像，0=历史
+            tx_from TEXT DEFAULT '',            -- 事务时间：入版本表时刻
+            tx_to TEXT DEFAULT NULL,
+            change_kind TEXT DEFAULT 'update',  -- init|create|update|fork|review|category|merge
+            changed_by TEXT DEFAULT '',
+            name TEXT DEFAULT '',
+            entity_type TEXT DEFAULT '',
+            properties TEXT DEFAULT '{}',
+            status TEXT DEFAULT 'candidate',
+            project_id TEXT DEFAULT '',
+            source_doc TEXT DEFAULT '',
+            source_type TEXT DEFAULT '',
+            confidence REAL DEFAULT 1.0,
+            created_by TEXT DEFAULT '',
+            reviewed_by TEXT DEFAULT '',
+            created_at TEXT DEFAULT '',
+            reviewed_at TEXT DEFAULT '',
+            graph_source TEXT DEFAULT '',
+            graph_x REAL DEFAULT 0,
+            graph_y REAL DEFAULT 0,
+            sysml_import_id TEXT DEFAULT '',
+            knowledge_category TEXT DEFAULT '',
+            published_at TEXT DEFAULT '',
+            sysml_version_id INTEGER DEFAULT 0,
+            canonical_id TEXT DEFAULT '',
+            PRIMARY KEY (id, branch, version_no),
+            UNIQUE (id, branch, valid_from)
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ev_current ON entity_versions(id, branch, is_current)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ev_range ON entity_versions(id, branch, valid_from, valid_to)")
+
+    # 初始化灌数（不可省）：现有实体各灌一条初始版本 v1，否则 /at 对「当前时刻」会走
+    # fallback、语义不一致。幂等：仅当该 (id,branch) 在版本表中无任何行时插入。
+    # 快照列按「entity_versions ∩ entities」动态取交集 —— 防迁移顺序差异或未来加列导致
+    # no such column（本仓迁移顺序与列演进历史上多次踩到）。
+    try:
+        from datetime import datetime as _dt_ev
+        ev_now = _dt_ev.now().isoformat(sep=' ', timespec='seconds')
+        ev_cols = [r[1] for r in conn.execute("PRAGMA table_info(entity_versions)").fetchall()]
+        e_cols = [r[1] for r in conn.execute("PRAGMA table_info(entities)").fetchall()]
+        ev_meta = ("version_no", "valid_from", "valid_to", "is_current",
+                   "tx_from", "tx_to", "change_kind", "changed_by")
+        ev_payload = [c for c in ev_cols if c in set(e_cols) and c not in ev_meta]
+        ev_ins_cols = ["version_no", "valid_from", "valid_to", "is_current",
+                       "tx_from", "tx_to", "change_kind", "changed_by"] + ev_payload
+        ev_ins_sql = ("INSERT INTO entity_versions (%s) VALUES (%s)"
+                      % (", ".join(ev_ins_cols), ", ".join("?" for _ in ev_ins_cols)))
+        pending = conn.execute(
+            "SELECT * FROM entities e WHERE NOT EXISTS ("
+            "SELECT 1 FROM entity_versions v WHERE v.id = e.id AND v.branch = e.branch)"
+        ).fetchall()
+        ev_n = 0
+        for r in pending:
+            d = dict(zip(e_cols, tuple(r)))
+            ev_vals = [1,
+                       (d.get("valid_from") or d.get("created_at") or ev_now), None, 1,
+                       (d.get("tx_from") or d.get("created_at") or ev_now), None,
+                       "init", d.get("created_by") or ""]
+            ev_vals += [d.get(c) for c in ev_payload]
+            conn.execute(ev_ins_sql, tuple(ev_vals))
+            ev_n += 1
+        if ev_n:
+            print(f"[init_db] 迁移: entity_versions 初始化灌入 {ev_n} 条初始版本")
+    except sqlite3.OperationalError as e:
+        print(f"[migrate_entity_temporal] entity_versions 初始化失败（可重入）: {e}")
+
     conn.commit()
 
 def _migrate_swrl_tables(conn):

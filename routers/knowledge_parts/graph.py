@@ -158,7 +158,8 @@ def graph_update_node(nid: str, body: GraphNodeIn, conn=Depends(db_session),
     if errs:
         return JSONResponse({"error": "; ".join(errs)}, 400)
     res = repo.update_entity(nid, body.name, body.entity_type,
-                             json.dumps(body.properties, ensure_ascii=False), branch)
+                             json.dumps(body.properties, ensure_ascii=False), branch,
+                             changed_by=_actor(user))   # P0-1：版本行记录操作人
     if not res.get("ok"):
         return JSONResponse({"error": res["error"]}, 404)
     conn.execute("UPDATE entities SET graph_x=?, graph_y=? WHERE id=? AND branch=?",

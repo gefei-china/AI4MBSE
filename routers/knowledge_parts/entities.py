@@ -253,7 +253,8 @@ def update_entity(entity_id: str, ent: EntityIn, conn=Depends(db_session),
     KnowledgeRepo(conn).update_entity(
         entity_id, ent.name, ent.entity_type,
         json.dumps(ent.properties, ensure_ascii=False), b,
-        knowledge_category=ent.knowledge_category or "")
+        knowledge_category=ent.knowledge_category or "",
+        changed_by=_actor(user))   # P0-1：版本行记录操作人
     audit(_actor(user), "entity_update",
           f"更新实体: {ent.name} ({entity_id})" + ("；" + "；".join(_diffs[:20]) if _diffs else ""),
           conn=conn, branch=b)
