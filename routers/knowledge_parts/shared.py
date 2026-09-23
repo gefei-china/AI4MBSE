@@ -75,7 +75,7 @@ def _is_release_branch(conn, branch: str | None) -> bool:
 
 
 def _release_guard(conn, branch: str | None) -> str | None:
-    """直写门：实体/关系/文档写入前的分支保护校验（10 处调用共用）。
+    """直写门：实体/关系/文档写入前的分支保护校验（**9 处**调用共用：entities 2 / graph 5 / graph_query 2）。
 
     P0-2（2026-09-23）：由「release 硬编码只读」改为读分支保护规则 writable
     （core.branch_rules.check_writable）；默认行为不变 —— release 仍只读、其余分支可写。
