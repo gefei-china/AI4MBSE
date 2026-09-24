@@ -53,7 +53,7 @@
 | L2 运行时 | Agent Loop（LLM→工具→回注→下一轮） | **高** | 自研，已稳定 | 🟡 可保留 |
 | L2 运行时 | 会话持久化 / 上下文压缩 / checkpoint | **中高** | 有落库与 `messages` 双轨；**压缩是弱点** | ✅ 值得吸收（Deep Agents 的 summarization + 文件卸载思路） |
 | L2 运行时 | 子 Agent 隔离上下文 / 长任务拆解 | **中高** | 自研编排（分层并行，实测 345s/6 子任务） | 🟡 可借鉴 |
-| L2 运行时 | 沙箱 / 权限 / 审批 / 审计 | **中** | 有 HIL 四档 + 写操作暂存 | 🟡 粒度可借鉴 Claude Code allowlist |
+| L2 运行时 | 沙箱 / 权限 / 审批 / 审计 | **中** | HIL **三级**（L0/L1/L2，`agent/definition.py`；实测 agents 表只有 L0×14 / L1×6，**无 L2**）+ 写操作暂存 + 工具钩子（block/require_confirm/warn = deny/ask/allow，但**规则 0 条**） | 🟡 粒度机制本就有，缺的是**规则数据**（见 P1-3） |
 | L3 领域 | **意图路由（三层 + DST + 澄清 + 缓存）** | **极低**（无人替你写） | 自研 `intent.py` 474 行 | ❌ **必须自研** |
 | L3 领域 | **GraphRAG + 本体 + 知识状态机 + 一致性校验** | **极低** | 自研 `rag.py` 641 行 + 本体域 | ❌ **必须自研** |
 | L3 领域 | **SysML v2 生成/校验硬约束（checker.jar 链路）** | **极低** | 自研 `v2_constraints.py` 120 行 + 校验器 | ❌ **必须自研** |
@@ -179,7 +179,7 @@
 |---|---|---|---|
 | **P1-1** | **LLM 适配层评估 LiteLLM**（或对齐 OpenAI 兼容） | 这是**唯一真正商品化**的一层，自研 561 行不划算。**保持 `llm_client` 对外接口不变，只换内部实现** | 现有 4 个 provider 全部走通；`llm_usage_stats.used_mock` 统计不回退；`provider_id` 语义不变 |
 | **P1-2** | **吸收上下文压缩**（借鉴 Deep Agents：摘要 + 工具输出卸载到磁盘） | 对应你们长任务痛点（实测单次编排 345s、`run_budget` 200k token 量级） | 构造一个超长输入（>上下文窗口）→ 会话不崩、关键信息可追溯、token 曲线可观测 |
-| **P1-3** | **HITL 粒度对齐 Claude Code allowlist** | 你们已有 HIL 四档 + 写操作暂存，缺"**逐工具/逐命令** allow/ask/deny" | 三档各一条用例；`enforce` 下未确认的写请求不落库 |
+| **P1-3** | **HITL 粒度对齐 Claude Code allowlist** | ✅ **已于 2026-09-24 完成**（详见《P0实施与链路验证-20260924.md》§7）。<br>原判据基于"缺逐工具 allow/ask/deny"，**实测后发现粒度机制本就完备**（`ToolHookService`：pattern 精确/前缀/后缀 + `condition_args` 参数级条件 + block/require_confirm/warn），真缺口是 `tool_hooks` **0 条规则**（第三个"空转实例"）与 `mbse_pull_ingest` 绕过钩子 | 已达成：三档各一条用例 + 端到端（拉取入库入队、路径穿越被拒）**8/8 PASS** |
 | **P1-4** | **观测：自研 `usage_stats` → 引入可自托管 tracing**（Langfuse 等） | 现有 1725 条 usage 只有 token/延迟，缺**链路级**追踪（哪一步慢、哪次检索空转） | 能按一次编排回放出完整 span 树（planner → 6 子任务 → 汇总），定位到最慢子任务 |
 | **P1-5** | **Deep Agents 试点（不替换）** | 用 `create_deep_agent` 跑一个**真实长任务**（如"文档库批量解析 → 建模 → 校验"），只看子 Agent 隔离上下文与压缩的实际收益 | 同一任务在"现管线 vs Deep Agents"下的 **token / 耗时 / 人工返工**三项对比数据 |
 
