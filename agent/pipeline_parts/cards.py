@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AgentPipeline Mixin：SysML 视图抽取与富卡片（变更影响/评审）生成。
 
-由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分，勿手工编辑方法体。"""
+由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
 
 

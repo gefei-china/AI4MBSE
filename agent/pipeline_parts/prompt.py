@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AgentPipeline Mixin：任务分解、本体提示与提示词模板。
 
-由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分，勿手工编辑方法体。
+由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。
 
 注：切分脚本自身已声明「一次性、不可重跑」（见其文件头），故此处可安全叠加人工增强。
 P0（2026-09-19）：_build_model_code_req 追加 L0 硬约束卡，见 v2_constraints。

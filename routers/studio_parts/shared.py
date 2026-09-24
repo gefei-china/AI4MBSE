@@ -1,4 +1,7 @@
-"""AI 设计工坊（定制化中心）域：/api/studio/*"""
+# -*- coding: utf-8 -*-
+"""AI 设计工坊（定制化中心）域：/api/studio/*
+
+由 tools/split_router_studio.py 从 routers/studio.py 机械切分而成（本文件是各分片共享的 router 与 helper 装配点）；⚠️ 切分脚本**已一次性执行完毕、不可重跑**（重跑会以薄入口为输入、覆盖本目录）—— 此后本文件按普通源码维护。"""
 import json
 import os
 import re

@@ -102,7 +102,7 @@ for name, mixin, doc, s, e in bounds:
     body = '\n'.join(lines[s - 1:e]).rstrip() + '\n'
     content = (
         '# -*- coding: utf-8 -*-\n'
-        f'"""AgentPipeline Mixin：{doc}\n\n由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分，勿手工编辑方法体。"""\n'
+        f'"""AgentPipeline Mixin：{doc}\n\n由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""\n'
         'from .common import *\n\n\n'
         f'class {mixin}:\n'
         f'    """{doc}"""\n\n'

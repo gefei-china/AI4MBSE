@@ -84,7 +84,7 @@ for i, (nm, desc, s, e) in enumerate(DOMAINS):
     rs = [(s0, e0, n0) for s0, e0, n0 in routes if chunk_of(s0) == i]
     body = '\n\n\n'.join('\n'.join(lines[s0 - 1:e0]).rstrip() for s0, e0, _ in rs)
     content = (f'# -*- coding: utf-8 -*-\n'
-               f'"""AI 设计工坊路由分片：{desc}。\n\n由 tools/split_router_studio.py 从 routers/studio.py 机械切分，勿手工编辑。"""\n'
+               f'"""AI 设计工坊路由分片：{desc}。\n\n由 tools/split_router_studio.py 从 routers/studio.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**（重跑会以薄入口为输入、覆盖本目录）—— 此后本文件按普通源码维护。"""\n'
                f'from routers.studio_parts.shared import *\n\n\n' + body + '\n')
     open(os.path.join(OUT, f'{nm}.py'), 'w', encoding='utf-8').write(content)
     part_files.append((nm, len(rs)))

@@ -44,7 +44,7 @@
 | 建表 / 补列 / 数据迁移 | — | `database/migrations/*`（S7-3 起按域分 8 个文件）、`database/schema.py`（**唯一定序编排者**，顺序即语义） |
 | 配置 / 参数 | `js/mods/35-ctxconfig.js` | `core/config.py` |
 
-## 3. 必知的 15 个坑（都是踩过的）
+## 3. 必知的 16 个坑（都是踩过的）
 
 1. **`esc` / `escA` 定义在 `static/js/mods/01-core.js`**（2026-09-18 S6-1 从 `08-sysmlview.js:151/153` 迁入，因它是**最先加载**的模块），却被 35 个文件约 1,700 处调用 → 拆它、或调整模块加载顺序前，必须先确认它仍最先加载并做浏览器回归。
 2. **`toast` 只有一份实现，在 `01-core.js`**（2026-09-18 S6-4 合并）。它是「可直接调用 + 挂方法」的混合体：`toast('x')` / `toast('x', 2000)` / `toast.success('x')` 都行。**不要**再在别处定义 toast，更**不要把普通对象赋给 `window.toast`** —— 历史事故：那样会覆盖函数声明，全站 700+ 处 `toast('...')` 抛 TypeError，表现为「点保存没反应、无任何提示」。同批迁入的还有 `errOverlay`、全局 error / unhandledrejection 兜底、`alert` 桥接。
@@ -78,6 +78,12 @@
    - **扫描器必须按 `{}` 深度 + 帧栈词法器**，不能用括号计数、也不能用"定义之间的空隙"近似：本仓有**套娃模板串**（`10-chatinput.js`）会漂移；漏采顶层代码会把 `document.addEventListener('click', …closeToolPop())` 里的活函数判死。
    - **检查器自身有两个必踩假阳性**：ⓐ 被删函数的名字**出现在注释里**（含工具/skill 自己的注释）会被判成断链（同 `ONT_ATTR_ESC` 事故）→ 搜索前按行屏蔽注释；ⓑ `tmp/` 冒烟脚本里 `typeof foo` 是**"断言已删除"的探针**、`tools/verify/_fe_*.json` 是分析器产物 → 语料必须**分级统计**，否则"删除后断言不存在"的测试永远 FAIL。
    - **整块失效的功能簇不要只删一半**：删函数时一并清掉它独占的模块级变量与上方注释（例：删 `artApplyWidth/artDragMove/artDragEnd` 时须同清 `let _artDrag`），否则留下误导性残骸。
+16. **`tools/split_*.py` 是「一次性生成器」，重跑会静默覆盖整个源码目录**（2026-09-23 标注，隐患实测）：
+    `split_pipeline.py` → `agent/pipeline_parts/*.py`；`split_router_knowledge.py` → `routers/knowledge_parts/*.py`；
+    `split_router_studio.py` → `routers/studio_parts/*.py`（更早的 `split_index_html.py` 依赖已移走的 `_archive/bak/`，**再跑即报错**）。
+    - ⚠️ **每个分片头部的原话「由 … 机械切分，勿手工编辑」已作废、且是反向误导**：分片如今就是**普通源码**，几个月来一直在被直接手工修改（修 bug、加断言、改口径都在分片里）。照那句话理解 → 会以为"改了也没用/要从生成器改"，**方向完全反了**。
+    - **真正的风险是重跑**：生成器的输入（`agent/pipeline.py` 等）早已退化成 10~105 行的**薄入口**，重跑会以薄入口为输入产出**空/错误分片**并覆盖 `*_parts/`，**静默丢掉此后全部手工改动**。三个生成器的 docstring 顶部已补「⚠️ 已执行完毕、不可重跑」，`*_parts/` 下 **35 个 `.py`**（13+10+12，含 `__init__.py`/`common.py`/`shared.py` 等伴随文件）的头部口径也已同步改写。
+    - **正确姿势**：① 要改分片就**直接改分片**；② 需要新的拆分时**新写一个只跑一次的脚本**，并在 docstring 顶部写明「⚠️ 已执行完毕、不可重跑」；③ 拆分前备份留在 `_archive/bak/*.pre-split`，别指望"用脚本重生成"当回滚手段。
 
 ## 4. 起服务 / 验证
 
@@ -93,7 +99,11 @@ Invoke-WebRequest http://127.0.0.1:8000/api/dashboard -UseBasicParsing
 - 关键断言：`#mainnav` 导航项与高亮、`.page.on` 页面类名、`#br-cur` 面包屑、`ab("errors")` 为空。
 - 后端改动：`python -m py_compile <files>` + `tools/verify/` 下的脚本；pytest 用 `pytest.ini`（**指向独立测试库，不要连生产 `mbse.db`**）。
 - **结构治理（拆分/搬运）必须自证"纯搬运"**：改动前用 `ast.unparse` 把每个顶层函数的源码序列化成指纹，改动后重新生成并**逐字符比对**；`database/migrations.py` → `database/migrations/`（S7-3）即用此法证明 49 个函数零差异。
-- ⚠️ **`tools/verify/` 下有若干脚本按"源码文本"断言**（`verify_token_budget.py` / `verify_s4_prompt.py` / `verify_s4_toolname.py` / `verify_s4_calls.py` / `verify_p1_blocking_smoke.py` / `verify_p1_perf.py`）。它们对 `agent/pipeline_parts/*.py` 断言**精确子串**（含局部变量名与切片写法）。**拆这些文件时被断言的方法必须留在原文件且文本逐字不变**（禁止改名、禁止重排、禁止重命名局部变量）。
+- ⚠️ **若干验证脚本按"源码文本"断言**，它们对 `agent/pipeline_parts/*.py` 断言**精确子串**（含局部变量名与切片写法）。**拆这些文件时被断言的方法必须留在原文件且文本逐字不变**（禁止改名、禁止重排、禁止重命名局部变量）。
+  - 在 `tools/verify/`：`verify_token_budget.py`、`verify_s4_prompt.py`、`verify_s4_toolname.py`、`verify_s4_calls.py`。
+  - 在 `tests/manual_verify/`（**注意不是 `tools/verify/`，此前本文件写错过**）：`verify_p1_blocking_smoke.py`、`verify_p1_perf.py`。后者会**以子进程**跑前者并校验其退出码，故前者的失败会连带后者报 `REG` 失败。
+  - ✅ 实测（2026-09-23）：**只改模块级 docstring / 顶部注释**（不动任何函数体文本）**不会破坏这些断言**——改完 `*_parts/` 全部头注后，上列 4 个 `tools/verify` 脚本仍全绿（31/33/17/45 项）。风险只在改**函数体**。
+  - 两处**存量失败（与本批次无关，2026-09-23 复核于 HEAD）**：`verify_s4_calls.py` 有 3 项关于 `agent/rag.py` top_k 的断言失败（45/48）；`verify_p1_blocking_smoke.py` 的 `C2/C3 e2/e9 已被合并为 deprecated` 失败（24/26，该脚本用**临时库** `%TEMP%/mbse_p1_blocking_smoke.db`，不碰生产库；`C1 auto_merged≥2` 通过 → 是"合并后未置 deprecated"的行为差异，非数据缺失）。**未修**，留待对应线处理。
 
 ## 4.1 版本控制（2026-09-18 起必须遵守）
 
@@ -105,7 +115,11 @@ Invoke-WebRequest http://127.0.0.1:8000/api/dashboard -UseBasicParsing
 - **不要把运行期产物交给 git**：`java-runtime/`、`fuseki/`、`data/`、`tmp/`、`outputs/`、`screenshots/`、`static/uploads/`、`static/skill_packages/`、`tools/legacy/`、`*.db`、`*.log`、`*.bak-*`、`*.pres5` 均已在 `.gitignore`（新增此类目录前先补忽略规则，并**记得锚定根目录**，见坑 14）。
 - **`__init__.py` 必须入库**：包初始化文件承载着 re-export 与 router 装配，缺了它克隆即崩。反查：`git ls-files '*__init__.py'` 的数量应与磁盘一致。
 - **文档/注释引用代码时优先写 `模块.符号`，不要只写行号**：行号随每次结构变更失真（本文件此前就因 `esc/escA` 迁移而留过一条错事实）。必须给行号时，请同时给出符号名。
-- 本仓库 `core.autocrlf=false`（源码是混合换行，开启自动转换会造成全量 diff）。
+- **换行符口径（2026-09-24 更正；此前本文件写「`core.autocrlf=false`」是错的，且这条更正**仓库文档一直没跟上**）**：实测生效值是 **`true`**，且**本仓与用户全局都没有设**——来源是**系统级** gitconfig（`git config --show-origin --get core.autocrlf` 可验）。**路径取决于用哪个 git**：本工具链 bash 里的 `git` 报 `…/PortableGit/versions/1.2.0/etc/gitconfig`，另一处实测报 `C:/Program Files/Git/etc/gitconfig` —— **两个都是系统级、值都是 `true`**，别以为其中一个是错的。
+  - 机制：`git add` 做 CRLF→LF 归一（**入库 blob 全是 LF**；`git ls-files --eol` 实测 `i/crlf = 0`），`git checkout` 按 CRLF 写回工作区（工作区 114 个 CRLF + 17 个 mixed）。跨 Git 配置的协作方一对比就是**全量 diff**（即 `docs/代码优化遗留事项核查-20260918.md` D-2 那条「混合换行」，此处给出机制解释）。
+  - ✅ **在本环境 `git add` 本身是安全的**（归一后入库），本批 41 个文件实测仅 **75 增 46 删**、单文件 1~3 行，**内容未被换行污染**。
+  - ⚠️ **不要"照旧文档改回 false"**：那会让所有 CRLF 工作区文件**立刻显示为已修改**（blob 是 LF、工作区是 CRLF，取消归一后逐字节不等）。根治只能加 `.gitattributes`（`* text=auto eol=lf`；因 blob 已全 LF，**不动任何 blob**）；`git add --renormalize .` 属破坏性操作，**必须先问用户**。以上均**未擅自改**，已在 D-2 标为**待拍板**。
+  - 判断"某文件 git 认为有没有变"，别信编辑器显示的换行符，用 `git diff --stat` 看规模。
 - 完整约定与回滚演练见 `docs/版本控制使用约定-20260918.md`。
 
 ## 5. 文档索引（哪些是权威）

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """知识库路由分片：图谱节点与边 CRUD。
 
-由 tools/split_router_knowledge.py 从 routers/knowledge.py 机械切分，勿手工编辑。"""
+由 tools/split_router_knowledge.py 从 routers/knowledge.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**（重跑会以薄入口为输入、覆盖本目录）—— 此后本文件按普通源码维护。"""
 from routers.knowledge_parts.shared import *
 
 # ── 安全迁移改类（2026-09-12）：可迁移目标 = 当前类型祖先 ∪ 各祖先的子树（同父类型族） ──

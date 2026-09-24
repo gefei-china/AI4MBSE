@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AgentPipeline Mixin：流式执行：编排流 SSE / 直接流式 execute_stream。
 
-由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分，勿手工编辑方法体。"""
+由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
 
 
@@ -37,7 +37,10 @@ class StreamMixin:
         budget_hit = False
         executed_count = 0
         # 1) 规划提示
-        yield {"type": "stage", "name": "知识库检索", "status": "done", "retrieved": False}
+        # 2026-09-23：此处原有写死的「知识库检索 done/retrieved=False」阶段事件。它无条件出现、
+        # 与真实检索无关（编排模式下子任务的 stage 事件不外传，见子任务事件转发只收
+        # token/reasoning/tool/done），会让用户看到一个从未真正执行过的「知识库检索·未引用」环节。
+        # 现不再预发该阶段：检索真实性由各子任务按其 Agent 的 kb_required 决定。
         yield {"type": "stage", "name": "生成与校验", "status": "run"}
         yield {"type": "reasoning", "delta": "（自动编排）检测到多 Agent 协作需求，正在规划子任务…"}
         conn = get_db()
@@ -751,7 +754,10 @@ class StreamMixin:
 
         与主路径落库段保持一致（card 含 orchestrated/plan），前端按 stage/agent/token 现有渲染直接可视化。
         """
-        yield {"type": "stage", "name": "知识库检索", "status": "done", "retrieved": False}
+        # 2026-09-23：此处原有写死的「知识库检索 done/retrieved=False」阶段事件。它无条件出现、
+        # 与真实检索无关（编排模式下子任务的 stage 事件不外传，见子任务事件转发只收
+        # token/reasoning/tool/done），会让用户看到一个从未真正执行过的「知识库检索·未引用」环节。
+        # 现不再预发该阶段：检索真实性由各子任务按其 Agent 的 kb_required 决定。
         yield {"type": "stage", "name": "生成与校验", "status": "run"}
         orch_tasks = ((orch.get("data") or {}).get("tasks")) or []
         for tk in orch_tasks:

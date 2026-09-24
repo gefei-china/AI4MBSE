@@ -102,7 +102,7 @@ git check-ignore -v checker.jar "sysml.library/.project"
 
 | 想看 | 读这个 |
 |---|---|
-| AI 助手唯一入口（功能→文件映射 + 15 个坑 + 起服务验证） | [`AGENTS.md`](AGENTS.md) |
+| AI 助手唯一入口（功能→文件映射 + 16 个坑 + 起服务验证） | [`AGENTS.md`](AGENTS.md) |
 | **文档索引**（全部 `docs/*.md`，按主题机械分组） | [`docs/README.md`](docs/README.md) |
 | 代码优化计划与执行记录（**活文档**，代码体积 / 结构治理 / 移除清单） | [`docs/代码优化方案-20260917.md`](docs/代码优化方案-20260917.md) |
 | 遗留事项核查（**时点审计**，对某个 HEAD 做「文档声明 vs 实测」对拍，事后不回改） | [`docs/代码优化遗留事项核查-20260918.md`](docs/代码优化遗留事项核查-20260918.md) |
@@ -116,5 +116,5 @@ git check-ignore -v checker.jar "sysml.library/.project"
 - **一次提交只装一件事**；改用 `git add <具体路径>`，**不要用 `git add -A`**（并行改动会把别人的改动卷进你的提交）。
 - **`.gitignore` 模式必须用前导 `/` 锚定根目录**：不带 `/` 的模式在**任意深度**匹配 —— 曾因此把全部 14 个包的 `__init__.py` 一并忽略，导致**全新克隆无法 import**。新增规则后请用 `git check-ignore -v <关键文件>` 反查。
 - **`__init__.py` 必须入库**（承载 re-export 与 router 装配，缺了克隆即崩）。
-- 本仓库 `core.autocrlf=false`（源码是混合换行，开启自动转换会造成全量 diff）。
+- **换行符口径**：本仓**没有** `core.autocrlf` 设置，生效值 `true` 来自工具链的系统级 gitconfig（Git for Windows 默认）。**别照旧文档"改回 false"**——那会让所有 CRLF 文件立刻显示为已修改。详见 `AGENTS.md` §4.1。
 - 引用代码优先写 `模块.符号`，不要只写行号（行号随结构变更持续失效）。

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AgentPipeline Mixin：附件加载、历史检索、话题标注与上下文预算。
 
-由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分，勿手工编辑方法体。"""
+由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
 
 # P2 视觉通道（2026-09-21）：图片附件扩展名（与 routers/conversations.py 的 IMAGE_EXTS 保持同一集合）

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """SysML v2 L0 硬约束卡（P0：把语法硬约束前置到生成端）。
 
+本文件为**手工新增模块**（非 tools/split_pipeline.py 产物），按普通源码维护。
+
 ## 为什么有这个模块
 
 生成端此前的 `_build_model_code_req`（`prompt.py`）只有约 200 字，**一条语法规则都没有**，

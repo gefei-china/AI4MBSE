@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """pipeline_parts 公共依赖：所有 Mixin 共享的模块级导入与常量。
 
-由 tools/split_pipeline.py 生成（源：agent/pipeline.py 头部）。方法体引用的
+由 tools/split_pipeline.py 从 agent/pipeline.py 头部机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**（重跑会以薄入口为输入、覆盖本目录）—— 此后本文件按普通源码维护。方法体引用的
 模块级名字全部集中在此，Mixin 通过 `from .common import *` 引入。
 """
 import os

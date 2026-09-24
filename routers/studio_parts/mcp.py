@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AI 设计工坊路由分片：MCP 服务器管理与探测。
 
-由 tools/split_router_studio.py 从 routers/studio.py 机械切分，勿手工编辑。"""
+由 tools/split_router_studio.py 从 routers/studio.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**（重跑会以薄入口为输入、覆盖本目录）—— 此后本文件按普通源码维护。"""
 from routers.studio_parts.shared import *
 
 
