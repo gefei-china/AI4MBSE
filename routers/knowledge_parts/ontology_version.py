@@ -1,16 +1,25 @@
 # -*- coding: utf-8 -*-
 """知识库路由分片：本体版本链/快照/发布/校验/绑定/导入导出。
 
-由 tools/split_router_knowledge.py 从 routers/knowledge.py 机械切分，勿手工编辑。"""
+由 tools/split_router_knowledge.py 从 routers/knowledge.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**（重跑会以薄入口为输入、覆盖本目录）—— 此后本文件按普通源码维护。"""
 from routers.knowledge_parts.shared import *
 
 
 @router.get("/api/knowledge/ontology/validate")
-def ontology_validate(conn=Depends(db_session)):
+def ontology_validate(instances: int = 0, scope: Optional[str] = None, conn=Depends(db_session)):
     """方案 D（2026-08-29）：本体一致性校验接口化。
 
-    返回结构化问题清单：循环继承 / 悬空 parent / 孤立类 / 关系缺 dom-range / 重名。
+    返回结构化问题清单（2026-09-23 晚起 12 条规则）：循环继承 / 悬空 parent / 孤立类 /
+    关系缺 dom-range / dom-range 悬空 / 重名 / 属性缺适用类型 / 属性适用类型悬空 /
+    一侧多声明（info）/ **声明 vs 存量边** / 实例类型未注册 / 存量实例不满足约束。
+
+    · `instances=1`：附带**逐实例**校验（xsd/白名单/端点/基数）——较慢，故不默认；
+      逐实例明细来自 `services.ontology_migration` 的既有校验器，不重写。
+    · `scope=<类型名>`：只校验该类型（配合 instances 用，缩小扫描面）。
+    · 报告带 `degraded`：任何扫描被跳过的原因都会列出来（安静地少查 = 假绿）。
     """
+    if instances:
+        return _ontology_check(conn, instances=True, scope=scope)
     return _ontology_check(conn)
 
 
@@ -227,7 +236,7 @@ def ontology_version_publish(body: dict = None, conn=Depends(db_session),
     return {"ok": True,
             "version": dict(conn.execute("SELECT * FROM ontology_versions WHERE id=?", (vid,)).fetchone()),
             "snapshot": {"types": len(cur), "compatible": compatible,
-                         "check": {"high": chk["high"], "low": chk["low"]}},
+                         "check": _check_brief(chk)},
             "diff": {"added": added if prev_v else list(cur_names), "removed": removed if prev_v else [],
                      "dom_changed": dom_changed if prev_v else 0},
             "migration_plan_id": migration_plan_id, "migration_plan": migration_plan}
@@ -333,7 +342,7 @@ def ontology_version_release(body: dict = None, conn=Depends(db_session),
     return {"ok": True,
             "version": dict(conn.execute("SELECT * FROM ontology_versions WHERE id=?", (row["id"],)).fetchone()),
             "snapshot": {"types": len(src), "compatible": compatible,
-                         "check": {"high": chk["high"], "low": chk["low"]}},
+                         "check": _check_brief(chk)},
             "already_released": False}
 
 

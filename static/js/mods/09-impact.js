@@ -1119,15 +1119,27 @@ async function loadPluginLib(){
 }
 
 // 一致性校验（2026-08-31 交互优化）：工具行只留摘要，完整问题清单走右侧滑窗（级别徽标 + 实体名可点击定位）
-async function oeConsistency(){
+async function oeConsistency(withInstances){
   const box = document.getElementById('oe-consistency'); if(!box) return;
   box.innerHTML = '校验中…';
   try{
-    const r = await api('/api/knowledge/ontology/validate');
+    const r = await api('/api/knowledge/ontology/validate' + (withInstances ? '?instances=1' : ''));
     if(r.error){ box.innerHTML = '<span style="color:var(--red);">'+esc(r.error)+'</span>'; return; }
     const issues = r.issues || [];
+    // 档位名与次序一律取**后端**的 r.severity_labels / r.severity_order（core/ontology_rules 单一真源）。
+    // 2026-09-23：O1-2 新增 info 档（设计说明）—— 前端若自持档位清单必然再漂移一次
+    // （同 TYPE_LABEL 的教训）。故本函数内**不出现任何档位中文名**，缺字段时回退为原始 key。
+    const SL = r.severity_labels || {}, SO = r.severity_order || {};
+    const sevLabel = k => SL[k] || k;
+    const sevRank  = k => (SO[k] === undefined ? 9 : SO[k]);
+    const sevTone  = k => ({high:  {fg:'var(--red)', bd:'#F0C4C4', bg:'#FFF6F6'},
+                            warn:  {fg:'#c77700',    bd:'#EEE0BF', bg:'#FFFBF1'},
+                            low:   {fg:'#c77700',    bd:'#EEE0BF', bg:'#FFFBF1'}})[k]
+                           || {fg:'#5a6675',        bd:'#DFE5EC', bg:'#F7F9FB'};
+    const sevKeys = () => Object.keys(SL).sort((a,b)=>sevRank(a)-sevRank(b));
+    const statTxt = sevKeys().filter(k=>(r[k]||0)>0).map(k=>`${SL[k]} ${r[k]}`).join(' · ');
     box.innerHTML = issues.length
-      ? `<span style="color:var(--amb);cursor:pointer;" onclick="oeConsistency()" title="点击重新校验">⚠️ ${issues.length} 项问题（高 ${r.high} · 低 ${r.low}）</span>`
+      ? `<span style="color:var(--amb);cursor:pointer;" onclick="oeConsistency(${r.instances_checked?1:0})" title="点击重新校验（保持当前口径）">⚠️ ${issues.length} 项问题（${statTxt}）</span>`
       : '<span style="color:var(--grn,#2f855a);">✅ 校验通过</span>';
     if(!issues.length){
       openPanel('🩺 一致性校验结果', `<div style="display:flex;align-items:center;gap:10px;padding:24px 16px;">
@@ -1140,26 +1152,33 @@ async function oeConsistency(){
     // 规则中文标签一律用**后端**给的 x.label（core/ontology_rules 单一真源）。
     // 2026-09-23 移除本地 TYPE_LABEL：此前前后端各持一份清单、必然漂移 —— 前端漏映射
     // bad_dom_range，导致真库 9 条高危全部静默显示英文原文。
-    const sorted = [...issues].sort((a,b)=>((a.severity==='high'?0:1)-(b.severity==='high'?0:1)));
+    const sorted = [...issues].sort((a,b)=>sevRank(a.severity)-sevRank(b.severity)
+                                     || String(a.code||'').localeCompare(String(b.code||'')));
     const scopeTxt = (r.source==='snapshot')
       ? `已发布快照 #${r.ontology_version_id||'-'}`
       : '编辑态（尚无已发布快照，回退）';
+    const degradedTxt = (r.degraded && r.degraded.length)
+      ? `<div style="font-size:11px;color:#c77700;margin-top:5px;line-height:1.6;">⚠️ 本次有 ${r.degraded.length} 项扫描被降级跳过，结论不完整：${esc(r.degraded.join('；'))}</div>`
+      : '';
     let h = `<div style="font-size:12px;color:var(--mut);margin-bottom:10px;line-height:1.7;">
-      共 <b>${issues.length}</b> 项问题 · <span style="color:var(--red);font-weight:600;">高 ${r.high}</span>${r.warn?` · <span style="color:#c77700;font-weight:600;">提示 ${r.warn}</span>`:''} · <span style="color:#c77700;font-weight:600;">低 ${r.low}</span><br>
-      <span style="font-size:11px;">口径：${esc(scopeTxt)} · 类型总计 ${r.total||0} · 规则版本 ${esc(r.rule_version||'-')} · 体检于 ${esc(r.ts||'-')}<br>
-      点击实体名可定位到该类型（自动切到对应视图）</span></div>`;
+      共 <b>${issues.length}</b> 项问题 · ${sevKeys().filter(k=>(r[k]||0)>0).map(k=>`<span style="color:${sevTone(k).fg};font-weight:600;">${esc(SL[k])} ${r[k]}</span>`).join(' · ')}<br>
+      <span style="font-size:11px;">口径：${esc(scopeTxt)} · 类型总计 ${r.total||0} · 规则 ${r.rule_count||'?'} 条 · 规则版本 ${esc(r.rule_version||'-')} · 体检于 ${esc(r.ts||'-')}${r.instances_checked?' · 含逐实例':''}<br>
+      点击实体名可定位到该类型（自动切到对应视图）</span>
+      <div style="margin-top:6px;"><button class="btn ghost" style="font-size:11px;padding:2px 8px;" onclick="oeConsistency(${r.instances_checked?0:1})">${r.instances_checked?'仅结构校验':'含存量实例（较慢）'}</button></div>
+      ${degradedTxt}</div>`;
     h += sorted.map(x=>{
-      const sev = x.severity==='high';
+      const tn = sevTone(x.severity);
       const t = (ontData && ontData.types||[]).find(tt=>tt.name===x.name);
       const kindIcon = t ? (t.type_kind==='relation'?'🔗':t.type_kind==='attribute'?'◆':'🟦') : '📄';
-      return `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid ${sev?'#F0C4C4':'#EEE0BF'};border-radius:8px;margin-bottom:6px;background:${sev?'#FFF6F6':'#FFFBF1'};">
-        <span style="flex:none;font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;background:${sev?'var(--red)':'#c77700'};color:#fff;margin-top:1px;">${sev?'高':'低'}</span>
+      return `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid ${tn.bd};border-radius:8px;margin-bottom:6px;background:${tn.bg};">
+        <span style="flex:none;font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;background:${tn.fg};color:#fff;margin-top:1px;">${esc(sevLabel(x.severity))}</span>
         <div style="flex:1;min-width:0;">
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             <b style="font-size:12.5px;cursor:pointer;color:var(--blue-d);" onclick="_locateOntType('${ontJs(x.name)}')" title="点击定位到该类型">${esc(kindIcon)} ${esc(x.name)}</b>
             <span class="tag" style="font-size:10px;">${esc(x.label||x.code||x.type||'问题')}</span>
           </div>
           <div style="font-size:11.5px;color:var(--txt,#222);margin-top:3px;">${esc(x.message)}</div>
+          ${x.why?`<div style="font-size:11px;color:var(--mut);margin-top:3px;">❓ ${esc(x.why)}</div>`:''}
           ${x.fix?`<div style="font-size:11px;color:var(--mut);margin-top:3px;">🛠 ${esc(x.fix)}</div>`:''}
         </div>
       </div>`;

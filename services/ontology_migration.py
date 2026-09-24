@@ -207,6 +207,61 @@ def scan_dangling_instances(conn, limit: int = 200) -> list:
     return out
 
 
+def check_instances(conn, scope: str = None, limit_per_kind: int = 50) -> list:
+    """全量存量实例体检（O1-2(b)，2026-09-23）：把既有存量校验器聚合成**同一份报告结构**。
+
+    **此前的能力缺口**：`validate_relation_instances` / `validate_attribute_instances` /
+    `scan_dangling_instances` 三件套都已具备，但只在「改那个类型时」被调用
+    （影响预览 `impact_preview`、迁移计划 `build_plan`）→
+    「**存量实例整体是否满足当前约束**」这个问题在全局**无法回答**，除非逐个类型去点。
+    本函数把它接到一致性体检上（`GET /api/knowledge/ontology/validate?instances=1`）。
+
+    与 `scan_dangling_instances` 的分工（避免重复上报）：
+      · 悬空实例（entity_type 未注册）= **廉价聚合**，由 `_ontology_check` **常开**上报（code=`dangling_instance`）；
+      · 逐实例约束（xsd / 白名单 / 端点 / 基数）= 需逐行读 properties，**较慢**，故走本函数按需打开
+        （code=`instance_constraint_violation`）。
+
+    聚合而非逐行（同 `_scan_edge_conflicts` 的理由）：违例多的类型逐行出问题项会淹没报告，
+    故按 (类型, 违例种类) 聚合成一条，带 `count` 与最多 3 条样例明细。
+
+    **已知局限（显式登记，不静默）**：底层两个校验器都**不按 branch/project_id 过滤**
+    （它们面向"改一个类型"的单类型场景，按名扫全库）→ 本入口目前是**全分支合并**口径。
+    分支维度的实例体检需先改造底层校验器，列为下一步（见方案 O1-3/O2-4 之后）。
+
+    返回: [{code, name, message, extra}]，code 恒为 `instance_constraint_violation`。
+    """
+    out = []
+    sql = "SELECT name, type_kind, properties, constraints FROM ontology_types"
+    params = []
+    if scope:
+        sql += " WHERE name=?"
+        params = [scope]
+    for t in conn.execute(sql, params).fetchall():
+        cons = _loads(t["constraints"], {}) or {}
+        if t["type_kind"] == "relation":
+            viol = validate_relation_instances(conn, t["name"], cons, limit_per_kind)
+        elif t["type_kind"] == "attribute":
+            viol = validate_attribute_instances(
+                conn, t["name"], _loads(t["properties"], {}) or {}, cons, limit_per_kind)
+        else:
+            continue
+        if not viol:
+            continue
+        by_kind = {}
+        for x in viol:
+            by_kind.setdefault(x.get("kind") or "?", []).append(x)
+        for kind in sorted(by_kind):
+            items = by_kind[kind]
+            out.append({
+                "code": "instance_constraint_violation",
+                "name": t["name"],
+                "message": f"存量实例不满足约束（{kind}）：{len(items)} 条 —— 例：{items[0]['detail']}",
+                "extra": {"kind": kind, "count": len(items),
+                          "samples": [i["detail"] for i in items[:3]]},
+            })
+    return out
+
+
 def _usage_for_name(conn, name: str, tid=None) -> dict:
     """类型反向引用聚合（与 GET /types/{tid}/usage 同口径，供预览复用）。"""
     children = [{"id": r["id"], "name": r["name"], "type_kind": r["type_kind"]}

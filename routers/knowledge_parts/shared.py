@@ -1,4 +1,7 @@
-"""知识库域：/api/knowledge/*"""
+# -*- coding: utf-8 -*-
+"""知识库域：/api/knowledge/*
+
+由 tools/split_router_knowledge.py 从 routers/knowledge.py 机械切分而成（本文件是各分片共享的 router 与 helper 装配点）；⚠️ 切分脚本**已一次性执行完毕、不可重跑**（重跑会以薄入口为输入、覆盖本目录）—— 此后本文件按普通源码维护。"""
 import json
 from typing import Optional
 
@@ -333,7 +336,82 @@ def _ont_edit_rows(conn):
         "SELECT id, name, type_kind, parent_id, constraints FROM ontology_types").fetchall()
 
 
-def _ontology_check(conn, rows=None) -> dict:
+def _scan_edge_conflicts(conn, decl, limit=50):
+    """声明的定义域/值域 vs **存量边端点** —— 按 `branch × project_id` 二维切、聚合计数。
+
+    2026-09-23 晚（O1-2 ⭐）：把 §1.3 那次「存量数据与规则互相矛盾（141 条边）」的
+    **一次性核查**升级为**常驻规则**（code=`rule_data_conflict`，severity=warn）。
+    当时那条洞见只写进了报告，下一次"换域不完整"照样会静默发生。
+
+    两个刻意的设计选择：
+      · **聚合而非逐边**：249 条边 × 3 分支逐边出问题项会让报告淹没、且同一根因重复几十遍；
+        聚合后每个 (关系类型, 分支, 项目) 只出一条，并带 `count` 与最多 3 条样例。
+      · **二维切**：`relations`/`entities` 同时有 `branch` 与 `project_id`。只按 branch 切会掩盖
+        「同一分支名里混着多个项目」这一决定性维度（本仓库 2026-09-19/21 两次踩过此坑）。
+        故产出项**带归属**（哪个分支的哪段数据），可直接定位到具体子图。
+
+    decl: {关系类型名: (定义域列表, 值域列表)}，仅含至少声明了一侧的relation类型。
+    返回: [{relation_type, branch, project_id, count, samples, why, detail}]
+
+    已知边界（显式登记，不静默）：只判**端点能解析到实体**的边；端点悬空（join 不上 entities）
+    属另一形态，真库当前 0 条，若日后出现应另立规则而非并进本条。
+    """
+    if not decl:
+        return []
+    rows = conn.execute(
+        "SELECT r.branch AS branch, r.project_id AS project_id, r.relation_type AS rt,"
+        "       e1.entity_type AS st, e2.entity_type AS tt, COUNT(*) AS n"
+        "  FROM relations r"
+        "  LEFT JOIN entities e1 ON e1.id=r.source_id AND e1.branch=r.branch"
+        "                       AND e1.project_id IS r.project_id"
+        "  LEFT JOIN entities e2 ON e2.id=r.target_id AND e2.branch=r.branch"
+        "                       AND e2.project_id IS r.project_id"
+        " WHERE r.status!='deprecated'"
+        " GROUP BY r.branch, r.project_id, r.relation_type, st, tt").fetchall()
+    agg = {}
+    for r in rows:
+        ds, dt = decl.get(r["rt"], (None, None))
+        if ds is None and dt is None:
+            continue
+        why = []
+        if r["st"] and ds and r["st"] not in ds:
+            why.append(f"源端类型「{r['st']}」不在定义域 {ds} 内")
+        if r["tt"] and dt and r["tt"] not in dt:
+            why.append(f"目标端类型「{r['tt']}」不在值域 {dt} 内")
+        if not why:
+            continue
+        g = agg.setdefault((r["rt"], r["branch"], r["project_id"]),
+                           {"relation_type": r["rt"], "branch": r["branch"],
+                            "project_id": r["project_id"], "count": 0, "samples": [], "_why": set()})
+        g["count"] += r["n"]
+        if len(g["samples"]) < 3:
+            g["samples"].append(f"{r['st']} → {r['tt']}（{r['n']} 条）")
+        g["_why"].update(why)
+    out = []
+    for g in agg.values():
+        g["why"] = sorted(g.pop("_why"))
+        g["detail"] = "；".join(g["why"])
+        out.append(g)
+    return out[:limit]
+
+
+def _check_brief(chk) -> dict:
+    """发布留痕用的体检摘要（档位分布 + 口径 + 规则版本 + 降级项）。
+
+    2026-09-23 晚（O1-2 配套）：此前发布回包只记 `high/low` 两个数，于是事后无法回答
+    「这次发布是在什么档位、**哪一版规则**下放行的」「当时有没有扫描被降级跳过」——
+    而这正是发布日志作为唯一追责/趋势落点的价值（对齐 EDG 的发布留痕）。
+    档位键**遍历目录**而非写死，避免新增档位后留痕缺项。
+    """
+    d = {k: int(chk.get(k, 0) or 0) for k in ontology_rules.VALID_SEVERITIES}
+    d["source"] = chk.get("source")
+    d["ontology_version_id"] = chk.get("ontology_version_id")
+    d["rule_version"] = chk.get("rule_version")
+    d["degraded"] = list(chk.get("degraded") or [])
+    return d
+
+
+def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
     """本体一致性校验（内部复用）：循环继承 / 悬空 parent / 孤立类 / 关系缺 dom-range / 重名。
 
     2026-09-02 抽取：validate 端点与发布流程（release 前置拦截）共用。
@@ -345,6 +423,23 @@ def _ontology_check(conn, rows=None) -> dict:
       · **标签**：每条 issue 带 code + label（中文，取自 core.ontology_rules 单一真源）
         —— 修掉「后端产 6 种、前端只映射 5 种 → 高危在界面显示英文」的清单漂移。
       · **可复现**：返回 ts / source / ontology_version_id / rule_version，同输入 → 同结论。
+
+    2026-09-23 晚（O1-2 判据补齐，规则 6 → 12 条）：
+      · **补盲区①**：属性侧此前**完全无检查** —— 新增 `bad_attr_domain`(high) /
+        `attr_domain_missing`(low)。`domain_classes` 是关系 dom/range 的姊妹概念，
+        真库此刻 0 违例，但规则缺失意味着今后新增属性会静默漏过。
+      · **补盲区②**：`multi_domain_range`(info) —— 一侧多声明在本工程是设计用法
+        （列表=允许的类型集合），**登记意图而非报缺陷**；18/24 类型命中，故必须单独一档。
+      · **补盲区③ ⭐**：`rule_data_conflict`(warn) —— 声明 vs **存量边端点**，
+        由 `_scan_edge_conflicts` 按 branch × project_id 聚合。这正是 §1.3「141 条边」的
+        常驻守门人：修复后真库 0 命中，既是"修复完整"的机器证明，也拦得住下一次换域不完整。
+      · **接上既有存量体检**：`dangling_instance`(warn) 常开（廉价聚合）；
+        逐实例的 xsd/白名单/基数校验（`services.ontology_migration` 的现成函数）**按需**
+        由 `instances=True` 打开（较慢，故不做默认）→ 见 `check_instances`。
+      · **档位新增 info**：档位名与排序随报告下发（`severity_labels`/`severity_order`），
+        前端不再自持一份档位清单（同 TYPE_LABEL 那条纪律）。
+      · **降级必须留痕**：任何新扫描失败都进 `degraded` 列表并打日志 —— 静默兜底会让
+        "查不动"伪装成"没问题"（本仓库已有一次这种误判的代价，见 agent/rag.py 注释）。
     """
     if rows is None:
         rows, source, ovid = _ont_scope(conn)
@@ -354,6 +449,7 @@ def _ontology_check(conn, rows=None) -> dict:
     inst_cnt = {r["entity_type"]: r["c"] for r in ents}
     by_id = {str(r["id"]): r for r in rows}
     issues = []
+    degraded = []          # O1-2：降级/跳过的扫描一律登记（安静地少查 = 假绿）
 
     def _issue(code, name, message, **extra):
         """构造 issue：code/label/severity/dimension/why/fix 全部取自规则目录（单一真源）。"""
@@ -363,6 +459,11 @@ def _ontology_check(conn, rows=None) -> dict:
              "name": name, "message": message}
         d.update(extra)
         return d
+
+    def _norm(v):
+        """定义域/值域归一化：容忍单值/列表与 '?' 占位（关系与属性两侧共用）。"""
+        vals = v if isinstance(v, list) else ([v] if v else [])
+        return [str(x).strip() for x in vals if str(x).strip() and str(x) != "?"]
     for t in rows:
         if t["type_kind"] in ("entity", "attribute"):
             seen = {str(t["id"])}; cur = t["parent_id"]; hop = 0
@@ -382,6 +483,7 @@ def _ontology_check(conn, rows=None) -> dict:
         if not has_inst and not has_child:
             issues.append(_issue("isolated", t["name"], "孤立类：无实例且无子类"))
     ent_names = {x["name"] for x in rows if x["type_kind"] == "entity"}
+    decl = {}          # 关系类型名 → (定义域, 值域)，供 rule_data_conflict 复算存量边
     for t in rows:
         if t["type_kind"] != "relation":
             continue
@@ -393,11 +495,6 @@ def _ontology_check(conn, rows=None) -> dict:
         av = c.get("allowed_values") or {}
         dom = c.get("domain") if c.get("domain") is not None else av.get("src")
         rng = c.get("range") if c.get("range") is not None else av.get("tgt")
-
-        def _norm(v):
-            vals = v if isinstance(v, list) else ([v] if v else [])
-            return [str(x).strip() for x in vals if str(x).strip() and str(x) != "?"]
-
         dom_l, rng_l = _norm(dom), _norm(rng)
         if not dom_l and not rng_l:
             issues.append(_issue("missing_dom_range", t["name"], "对象属性未定义定义域/值域"))
@@ -407,6 +504,83 @@ def _ontology_check(conn, rows=None) -> dict:
                 issues.append(_issue("bad_dom_range", t["name"],
                                      f"定义域/值域指向不存在的实体类型: {'、'.join(bad)}",
                                      dangling=bad))
+            decl[t["name"]] = (dom_l, rng_l)
+    # ── O1-2(a) 属性侧盲区（此前 attribute 完全无检查）────────────────────────
+    for t in rows:
+        if t["type_kind"] != "attribute":
+            continue
+        try:
+            c = json.loads(t["constraints"] or "{}")
+        except Exception:
+            c = {}
+        dom_l = _norm(c.get("domain_classes") if c.get("domain_classes") is not None
+                      else c.get("domain"))
+        if not dom_l:
+            issues.append(_issue("attr_domain_missing", t["name"],
+                                 "数据属性未声明适用类型（domain_classes 为空）→ 对全部实体类型生效"))
+        else:
+            bad = sorted({x for x in dom_l if x not in ent_names})
+            if bad:
+                issues.append(_issue("bad_attr_domain", t["name"],
+                                     f"适用类型指向不存在的实体类型: {'、'.join(bad)}", dangling=bad))
+    # ── O1-2(a) 一侧多声明：登记设计意图（info），不照搬 OOPS! 的 Critical ────────
+    for t in rows:
+        if t["type_kind"] not in ("relation", "attribute"):
+            continue
+        try:
+            c = json.loads(t["constraints"] or "{}")
+        except Exception:
+            c = {}
+        if t["type_kind"] == "relation":
+            av = c.get("allowed_values") or {}
+            dl = _norm(c.get("domain") if c.get("domain") is not None else av.get("src"))
+            rl = _norm(c.get("range") if c.get("range") is not None else av.get("tgt"))
+        else:
+            dl = _norm(c.get("domain_classes") if c.get("domain_classes") is not None
+                       else c.get("domain"))
+            rl = _norm(c.get("range_classes"))
+        if len(dl) > 1 or len(rl) > 1:
+            issues.append(_issue("multi_domain_range", t["name"],
+                                 f"一侧声明多个类型（定义域(src) {len(dl)} 个 / 值域(tgt) {len(rl)} 个）"
+                                 "：按本工程设计用法视为「允许的类型集合」",
+                                 multi={"src": dl, "tgt": rl}))
+    # ── O1-2(a) ⭐ 声明 vs 存量边端点（§1.3「141 条边」的常驻守门人）───────────
+    try:
+        for g in _scan_edge_conflicts(conn, decl):
+            issues.append(_issue("rule_data_conflict", g["relation_type"],
+                                 f"[{g['branch']} / {g['project_id']}] 存量 {g['count']} 条边的端点"
+                                 f"超出声明：{g['detail']}",
+                                 branch=g["branch"], project_id=g["project_id"],
+                                 edge_count=g["count"], samples=g["samples"]))
+    except Exception as _e:
+        # 降级必须留痕：否则「没查到」会被读成「没问题」。
+        degraded.append(f"rule_data_conflict 跳过（存量边扫描失败）：{type(_e).__name__}: {_e}")
+        print(f"[ontology_check] 存量边扫描失败，本次跳过 rule_data_conflict："
+              f"{type(_e).__name__}: {_e}", flush=True)
+    # ── O1-2(b) 存量实例：类型未注册（廉价聚合，常开）────────────────────────
+    try:
+        from services.ontology_migration import scan_dangling_instances
+        for d in scan_dangling_instances(conn):
+            sample = "、".join(str(x.get("name") or x.get("id")) for x in (d.get("sample") or [])[:3])
+            issues.append(_issue("dangling_instance", d["entity_type"],
+                                 f"存量 {d['count']} 个实体的 entity_type 未在本体注册"
+                                 + (f"（例：{sample}）" if sample else ""),
+                                 count=d["count"], sample=d.get("sample")))
+    except Exception as _e:
+        degraded.append(f"dangling_instance 跳过（实例扫描失败）：{type(_e).__name__}: {_e}")
+        print(f"[ontology_check] 实例扫描失败，本次跳过 dangling_instance："
+              f"{type(_e).__name__}: {_e}", flush=True)
+    # ── O1-2(b) 存量实例：约束违例（较慢，按需打开）────────────────────────────
+    if instances:
+        try:
+            from services.ontology_migration import check_instances
+            for x in check_instances(conn, scope=scope):
+                issues.append(_issue(x["code"], x["name"], x["message"], **x.get("extra", {})))
+        except Exception as _e:
+            degraded.append(f"instance_constraint_violation 跳过（逐实例校验失败）："
+                            f"{type(_e).__name__}: {_e}")
+            print(f"[ontology_check] 逐实例校验失败，本次跳过 instance_constraint_violation："
+                  f"{type(_e).__name__}: {_e}", flush=True)
     seen_names = {}
     for t in rows:
         key = (t["type_kind"], t["name"])
@@ -414,14 +588,26 @@ def _ontology_check(conn, rows=None) -> dict:
             issues.append(_issue("duplicate", t["name"], f"重名类型：{t['name']}（{t['type_kind']}）出现多次"))
         seen_names[key] = t["id"]
     from datetime import datetime
+    # 档位计数：**遍历目录声明的档位**而非写死 high/warn/low —— 新增一档（如 info）时
+    # 报告自动跟上，不会出现"issue 有值但计数缺键"的静默缺口。
+    counts = {k: 0 for k in ontology_rules.VALID_SEVERITIES}
+    for x in issues:
+        if x["severity"] in counts:
+            counts[x["severity"]] += 1
     return {"ok": True, "total": len(rows), "issues": issues,
-            "high": sum(1 for x in issues if x["severity"] == "high"),
-            "warn": sum(1 for x in issues if x["severity"] == "warn"),
-            "low": sum(1 for x in issues if x["severity"] == "low"),
+            "high": counts["high"], "warn": counts["warn"],
+            "low": counts["low"], "info": counts["info"],
             # O0-3 报告可复现 + D2 口径透明（这份报告读的是快照还是编辑态）
             "source": source,
             "ontology_version_id": ovid,
             "rule_version": ontology_rules.RULE_VERSION,
+            # O1-2：档位名/排序随报告下发（前端不再自持一份档位清单）
+            "severity_labels": dict(ontology_rules.SEVERITY_LABELS),
+            "severity_order": dict(ontology_rules.SEVERITY_ORDER),
+            "rule_count": len(ontology_rules.RULES),
+            "instances_checked": bool(instances),
+            # 降级留痕：为空才说明这次体检"该查的都查了"
+            "degraded": degraded,
             "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 
@@ -597,4 +783,4 @@ def v2g_fuse_config(body: dict, conn=Depends(db_session),
         review_threshold=body.get("review_threshold"), quality_gate=body.get("quality_gate"),
         weights=body.get("weights"), actor=_actor(user))
 
-__all__ = ['router', 'json', 'Optional', 'Depends', 'HTTPException', 'JSONResponse', 'db_session', 'current_user', 'require_permission', 'require_any_permission', 'typevocab', 'QueryRouter', 'KnowledgeRepo', 'CommitRepo', 'audit', 'EntityIn', 'BatchReviewIn', 'GraphNodeIn', 'GraphEdgeIn', 'OntologyTypeIn', 'V2GExtractIn', 'V2GConfirmIn', 'V2GRejectIn', 'V2GUpdateIn', 'SysMLIn', 'MergeIn', 'RetrieveIn', 'RELEASE_BRANCH', 'WRITE_PERMS', '_FALLBACK_STOP_WORDS', '_actor', '_is_release_branch', '_release_guard', '_entity_dup_warning', '_dprop_proj', '_log_graph_edit', '_fallback_topics', '_validate_ont_parent', '_log_ont_change', '_ont_props_keys', '_ont_version_bump', '_normalize_relation_domain_range', '_ont_scope', '_ont_edit_rows', '_ontology_check', '_snapshot_diff', '_count_dom_range_changed', '_snapshot_dom_range_diff', '_active_ont_rows', '_filter_ont_rows_for_type', 'triples_stats', 'v2g_fuse_config']
+__all__ = ['router', 'json', 'Optional', 'Depends', 'HTTPException', 'JSONResponse', 'db_session', 'current_user', 'require_permission', 'require_any_permission', 'typevocab', 'QueryRouter', 'KnowledgeRepo', 'CommitRepo', 'audit', 'EntityIn', 'BatchReviewIn', 'GraphNodeIn', 'GraphEdgeIn', 'OntologyTypeIn', 'V2GExtractIn', 'V2GConfirmIn', 'V2GRejectIn', 'V2GUpdateIn', 'SysMLIn', 'MergeIn', 'RetrieveIn', 'RELEASE_BRANCH', 'WRITE_PERMS', '_FALLBACK_STOP_WORDS', '_actor', '_is_release_branch', '_release_guard', '_entity_dup_warning', '_dprop_proj', '_log_graph_edit', '_fallback_topics', '_validate_ont_parent', '_log_ont_change', '_ont_props_keys', '_ont_version_bump', '_normalize_relation_domain_range', '_ont_scope', '_ont_edit_rows', '_scan_edge_conflicts', '_check_brief', '_ontology_check', '_snapshot_diff', '_count_dom_range_changed', '_snapshot_dom_range_diff', '_active_ont_rows', '_filter_ont_rows_for_type', 'triples_stats', 'v2g_fuse_config']
