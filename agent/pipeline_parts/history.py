@@ -617,7 +617,8 @@ class HistoryMixin:
         cut = text[:target_chars] if keep_head else text[-target_chars:]
         return (cut + marker) if keep_head else (marker + cut)
 
-    def _apply_context_budget(self, system_prompt: str, retrieval_text: str, history_len: int) -> str:
+    def _apply_context_budget(self, system_prompt: str, retrieval_text: str, history_len: int,
+                             scale: float = 1.0) -> str:
         """P1a-2/T6 上下文预算分区：检索区与历史区分别裁剪，防超窗（对齐 Levelop Context Spec）。
 
         T6 升级：以 token 预算为准（budget_retrieval_tokens / budget_history_tokens），
@@ -628,8 +629,10 @@ class HistoryMixin:
         try:
             from core import config as _cfg
             from core.token_counter import count_tokens
-            retr_tok = ctx_budget_tokens("retrieval", "budget_retrieval_chars", 4000)
-            hist_tok = ctx_budget_tokens("history", "budget_history_chars", 3000)
+            # P1-2：scale 是**总闸降档系数**（1.0=默认行为；<1 时检索/历史同步收紧）。
+            # 只由 _apply_total_budget 传入；两个既有调用点不传 ⇒ 行为不变。
+            retr_tok = int(ctx_budget_tokens("retrieval", "budget_retrieval_chars", 4000) * scale)
+            hist_tok = int(ctx_budget_tokens("history", "budget_history_chars", 3000) * scale)
             if retrieval_text:
                 system_prompt = system_prompt.replace(
                     retrieval_text,
@@ -650,5 +653,51 @@ class HistoryMixin:
             return system_prompt
         except Exception:
             return system_prompt
+
+    def _apply_total_budget(self, messages, context_text: str):
+        """P1-2（2026-09-24）上下文**总闸**：分段预算之和可超窗，发送前算总账、超了降档重裁。
+
+        背景：检索 4k + 历史 3k + system 本体 4~5k + 附件 2.7k + v2 约束 1.3k ≈ 12~16k，
+        叠加超窗时由输出侧 _ctx_guard 把 max_tokens 夹小 ⇒ 输出被悄悄截短
+        （即 S4 登记过的「报告在结论前中断」——输入被切与输出被夹，现象难分）。
+
+        · 常态（预算内）**零开销**：只算一次 token 就返回
+        · 降档 = 用**同一套** _apply_context_budget 换更紧的 scale 重跑（不引入第二套裁剪逻辑）
+        · system 本体（建模规则）不在降档范围——压它会直接改变产出质量
+        · 可关：context.total_budget_guard=false；上限 context.total_budget_tokens（默认 10000）
+        · 每次降档打日志留痕（before/after/档位）——总闸若静默，等于没做
+        """
+        try:
+            from core import config as _cfg
+            from core.token_counter import count_messages_tokens
+            if not messages:
+                return messages
+            if not _cfg.as_bool("context", "total_budget_guard", True):
+                return messages
+            total_cap = int(_cfg.get("context", "total_budget_tokens", 10000) or 10000)
+            before = count_messages_tokens(messages)
+            if before <= total_cap:
+                return messages
+            sys0 = messages[0].get("content") or ""
+            after = before
+            for step, scale in enumerate((0.6, 0.35), start=1):
+                sys0 = self._apply_context_budget(sys0, context_text or "", len(messages), scale=scale)
+                messages[0]["content"] = sys0
+                after = count_messages_tokens(messages)
+                if after <= total_cap:
+                    break
+            try:
+                import logging as _lg
+                _lg.getLogger("mbse.llm").warning(
+                    "[context_total] 总闸触发：估算输入 %d > 预算 %d，降档后 %d "
+                    "（裁掉 %d tok，到达档位 %d，messages=%d 条）",
+                    before, total_cap, after, before - after, step, len(messages))
+            except Exception:
+                pass
+            return messages
+        except Exception:  # noqa: BLE001 —— 总闸自身故障绝不阻断主链路，但必须留痕
+            import traceback as _tb
+            _tb.print_exc()
+            return messages
 
     # ── 工作流匹配：词法 + 语义双通道 + RRF 融合（行业对齐：Voiceflow 混合检索 / juejin RRF / 百度漏斗式）──

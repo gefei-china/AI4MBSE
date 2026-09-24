@@ -1183,6 +1183,11 @@ class StreamMixin:
                 messages[0]["content"] = self._apply_context_budget(messages[0]["content"], context_text, len(messages))
             except Exception:
                 pass
+            # P1-2（2026-09-24）：总闸——分段预算之和可超窗，发送前算总账（预算内零开销）
+            try:
+                messages = self._apply_total_budget(messages, context_text)
+            except Exception:
+                pass
             # 缺口B：工具判定——非流式探测 LLM 是否需要工具（Mock 无 tool_calls 时跳过，保持原流式）
             # 优化1：注入观测上下文
             self._tool_intent_ctx = {"intent": intent}
