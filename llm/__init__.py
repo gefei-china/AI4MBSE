@@ -279,10 +279,9 @@ class LLMClient:
             # `workflows/engine.py:569`（model）—— 等于这两处的真实调用从未生效。
             # 修法：先把这三个键从透传字典里摘出，再分别走具名参数（行为保真、不再重复）。
             _impl_kw = dict(kwargs)
-            resp = impl.chat(messages, model=_impl_kw.pop("model", None),
-                             temperature=_impl_kw.pop("temperature", None),
-                             max_tokens=_impl_kw.pop("max_tokens", None),
-                             stream=stream, tools=tools, thinking=thinking, **_impl_kw)
+            # P1-1（2026-09-24）：失败重试（指数退避）。此前一次失败即静默回落 Mock。
+            resp, _retry_n = self._chat_with_retry(
+                impl, messages, _impl_kw, stream, tools, thinking, provider_name, model_name)
             if stream:
                 # 流式：包装生成器，复用 usage 落库（M7）
                 return self._stream_wrapped(resp, provider, provider_name, model_name, t0, route_reason,
@@ -295,6 +294,7 @@ class LLMClient:
                 "provider": provider_name, "model": model_name,
                 "used_mock": False, "latency_ms": int((time.time() - t0) * 1000),
                 "route_reason": route_reason,
+                "retry_count": _retry_n,   # P1-1：重试次数（0=首次成功），供可观测
                 "usage": dict(resp.get("usage") or {}),   # T5：真实 token 透传（TokenCounter 复用）
             }
             self._record_usage(provider, resp, False, kwargs.get("_intent", ""), resp["_meta"]["latency_ms"])
@@ -333,6 +333,54 @@ class LLMClient:
             }
             self._record_usage(provider, resp, True, kwargs.get("_intent", ""), resp["_meta"]["latency_ms"])
             return resp
+
+    # P1-1（2026-09-24）：参数类错误**不重试** —— 重试也不会成功，只会放大延迟。
+    _NO_RETRY_MARKERS = ("400", "401", "403", "404", "422")
+
+    def _retryable(self, e) -> bool:
+        """是否值得重试：参数类 4xx 不重试；其余（超时/连接/5xx/429）重试。"""
+        s = "%s: %s" % (type(e).__name__, e)
+        return not any(m in s for m in self._NO_RETRY_MARKERS)
+
+    def _chat_with_retry(self, impl, messages, impl_kw, stream, tools, thinking,
+                         provider_name, model_name):
+        """真实调用的重试包装（指数退避）。返回 (resp, retry_count)。
+
+        实测依据：llm_usage_stats 1792 条里 196 条（10.9%）曾"一次失败即静默回落 Mock"，
+        且失败样本 latency_ms 多为 0 —— 是瞬时连接失败，重试大概率能成功。
+        · **流式不重试**：生成器一旦开始迭代就无法安全重放，保持原行为。
+        · 每次重试打 warning 留痕（本仓纪律：静默兜底会让人去追不存在的"偶发"）。
+        """
+        from core import config as _cfg
+        import time as _tt
+        times = max(0, int(_cfg.get("llm", "retry_times", 2) or 0))
+        backoff_ms = max(0, int(_cfg.get("llm", "retry_backoff_ms", 500) or 0))
+        if stream:
+            times = 0
+        last = None
+        for attempt in range(times + 1):
+            try:
+                return impl.chat(messages, model=impl_kw.get("model"),
+                                 temperature=impl_kw.get("temperature"),
+                                 max_tokens=impl_kw.get("max_tokens"),
+                                 stream=stream, tools=tools, thinking=thinking,
+                                 **{k: v for k, v in impl_kw.items()
+                                    if k not in ("model", "temperature", "max_tokens")}), attempt
+            except Exception as e:  # noqa: BLE001
+                last = e
+                if attempt < times and self._retryable(e):
+                    try:
+                        import logging as _lg
+                        _lg.getLogger("mbse.llm").warning(
+                            "LLM 调用失败，第 %d/%d 次重试：provider=%s model=%s 异常=%s: %s",
+                            attempt + 1, times, provider_name, model_name,
+                            type(e).__name__, str(e)[:120])
+                    except Exception:
+                        pass
+                    _tt.sleep(backoff_ms * (2 ** attempt) / 1000.0)
+                    continue
+                break
+        raise last
 
     def _stream_wrapped(self, gen, provider, provider_name, model_name, t0, route_reason, intent):
         """流式生成器包装：透传 SSE 行 + 结束时落 usage 统计（M7 可观测）。"""
