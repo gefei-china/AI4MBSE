@@ -302,6 +302,41 @@ class ToolMixin:
             # V2.6：进程内工具（避免 HTTP 自环死锁）——mbse_pull_ingest 直通入库
             # （拉取动作即用户对话内的显式拍板，不进 HIL 确认队列；结果含完整入库统计）
             if name == "mbse_pull_ingest":
+                # P1-3（2026-09-24）：本分支**先于**下面的自动化钩子执行，导致任何针对
+                # 该工具的 hook（block / require_confirm）都永不生效 —— 钩子对它形同虚设。
+                # 而它是 side_effect='write' 的**外部平台拉取入库**工具，恰恰最该被约束。
+                # 现改为：先求值一次钩子，block 即拒、require_confirm 即入队；
+                # 未命中 / warn 才继续走进程内直通（仍不走 HTTP，保留避免自环死锁的原意）。
+                try:
+                    from services.tool_hook_service import ToolHookService as _THS2
+                    _hk2 = _THS2().run(name, arguments or {})
+                except Exception:
+                    import traceback as _tb2
+                    _tb2.print_exc()          # 留痕：钩子求值失败不得静默放行
+                    _hk2 = {"hit": False}
+                if _hk2.get("hit") and _hk2.get("action") in ("block", "require_confirm"):
+                    if _hk2.get("action") == "block":
+                        result = {"ok": False,
+                                  "result": f"被自动化钩子拦截：{_hk2.get('message') or name}"
+                                            f"（钩子：{_hk2.get('name') or '-'}）"}
+                    else:
+                        from hil_service import HILService as _HIL2
+                        from database import db_conn as _dbc2
+                        _conf2 = None
+                        with _dbc2() as _c2:
+                            _conf2 = _HIL2.queue_confirmation(
+                                _c2, (agent_ctx or {}).get("agent", ""), name, arguments or {},
+                                preview=f"自动化钩子要求人工确认：{_hk2.get('message') or name}，"
+                                        f"参数：{str(arguments or {})[:200]}",
+                                conversation_id=conv_ctx or 0)
+                        result = ({"ok": True,
+                                   "result": f"「{name}」已进入人工确认队列（钩子要求，确认单 "
+                                             f"#{_conf2['id']}），确认后生效"}
+                                  if _conf2 else
+                                  {"ok": False, "result": f"「{name}」需人工确认（钩子要求）"})
+                    self._log_tool_call(name, tool_type, arguments, result,
+                                        intent_ctx, agent_ctx, conv_ctx, t0)
+                    return result
                 try:
                     from database import get_db as _gdb
                     from services.knowledge_service import KnowledgeService as _KS
