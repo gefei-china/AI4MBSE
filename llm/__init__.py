@@ -279,9 +279,12 @@ class LLMClient:
             # `workflows/engine.py:569`（model）—— 等于这两处的真实调用从未生效。
             # 修法：先把这三个键从透传字典里摘出，再分别走具名参数（行为保真、不再重复）。
             _impl_kw = dict(kwargs)
-            # P1-1（2026-09-24）：失败重试（指数退避）。此前一次失败即静默回落 Mock。
-            resp, _retry_n = self._chat_with_retry(
-                impl, messages, _impl_kw, stream, tools, thinking, provider_name, model_name)
+            # P1-1（2026-09-24）：失败重试（指数退避）+ provider 回退。此前一次失败即静默回落 Mock。
+            resp, _retry_n, provider = self._chat_resilient(
+                provider, messages, _impl_kw, stream, tools, thinking)
+            # 回退成功时 provider 已被换成实际使用的那个 → 同步名字，保证 _meta / usage 归属正确
+            provider_name = provider.get("name", provider_name)
+            model_name = provider.get("model_name", model_name)
             if stream:
                 # 流式：包装生成器，复用 usage 落库（M7）
                 return self._stream_wrapped(resp, provider, provider_name, model_name, t0, route_reason,
@@ -381,6 +384,49 @@ class LLMClient:
                     continue
                 break
         raise last
+
+    def _chat_resilient(self, provider, messages, impl_kw, stream, tools, thinking):
+        """P1-1b（2026-09-24）：重试 + provider 回退。返回 (resp, retry_count, 实际使用的 provider)。
+
+        · 主 provider 先走 `_chat_with_retry`（指数退避；流式不重试）
+        · 仍失败且配置了 `llm.fallback_provider_id`（≠ 当前）→ 用备选 provider 再走一遍
+        · **回退成功必须把 provider 换成实际用的那个**：否则 `_meta` 与 `usage` 统计
+          会把成功记到主 provider 头上，回退形同"隐形"，下次看数据还是错的
+        · 全部失败 → 抛出最后一次异常（交由外层回落 Mock，行为不变）
+        """
+        from core import config as _cfg
+        ptype = provider.get("provider_type") or "openai_compat"
+        if not ProviderRegistry.has(ptype):
+            ptype = "openai_compat"
+        impl = ProviderRegistry.create(ptype, provider)
+        try:
+            resp, n = self._chat_with_retry(
+                impl, messages, impl_kw, stream, tools, thinking,
+                provider.get("name", "-"), provider.get("model_name", "-"))
+            return resp, n, provider
+        except Exception as e:  # noqa: BLE001
+            last = e
+        fb_id = int(_cfg.get("llm", "fallback_provider_id", 0) or 0)
+        if not fb_id or fb_id == provider.get("id"):
+            raise last
+        fb = self.get_provider(fb_id)
+        if not fb:
+            raise last
+        try:
+            import logging as _lg
+            _lg.getLogger("mbse.llm").warning(
+                "LLM 主 provider(%s) 重试后仍失败，回退备选 provider(%s)：%s: %s",
+                provider.get("name"), fb.get("name"), type(last).__name__, str(last)[:120])
+        except Exception:
+            pass
+        ftype = fb.get("provider_type") or "openai_compat"
+        if not ProviderRegistry.has(ftype):
+            ftype = "openai_compat"
+        fimpl = ProviderRegistry.create(ftype, fb)
+        resp, n = self._chat_with_retry(
+            fimpl, messages, impl_kw, stream, tools, thinking,
+            fb.get("name", "-"), fb.get("model_name", "-"))
+        return resp, n, fb
 
     def _stream_wrapped(self, gen, provider, provider_name, model_name, t0, route_reason, intent):
         """流式生成器包装：透传 SSE 行 + 结束时落 usage 统计（M7 可观测）。"""
