@@ -42,6 +42,7 @@ from routers import (
     data_sources_router,  # P0-4（2026-09-20）数据源注册管理（db/api/file 三类源接入）
     coverage_router,  # SRS-GN-CO（2026-09-20）覆盖性分析呈现端点
     doc_folders_router,  # 2026-09-21 文档目录树（基于文件的管理 P0-b）
+    mcp_gateway_router,  # P0-1（2026-09-24）领域能力 MCP 服务端
 )
 
 @asynccontextmanager
@@ -104,6 +105,7 @@ for _router in (
     data_sources_router,  # P0-4（2026-09-20）数据源注册管理（db/api/file 三类源接入）
     coverage_router,  # SRS-GN-CO（2026-09-20）覆盖性分析呈现端点
     doc_folders_router,  # 2026-09-21 文档目录树（基于文件的管理 P0-b）
+    mcp_gateway_router,  # P0-1（2026-09-24）领域能力 MCP 服务端：对外供给领域能力，供外部 harness 消费
 ):
     app.include_router(_router)
 

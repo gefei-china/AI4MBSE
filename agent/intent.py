@@ -19,6 +19,12 @@ class IntentRouter:
     requirement_analysis / design / impact / review / report_generation / knowledge_qa
     """
 
+    # P0-3（2026-09-24）：规则表变更的**类级版本号**。
+    # 背景：`AgentPipeline.__init__` 里是 `self.router = IntentRouter()`（每实例新建），
+    # 而规则失效若写成「置某个模块级 router 的 _rules = None」，作用的是另一个实例 ——
+    # 对请求路径完全无效（实测：加规则后指纹仍是旧的）。改用类变量后与实例数无关。
+    _RULES_EPOCH = 0
+
     INTENTS = {
         "requirement_analysis": ["需求", "解析", "条目", "需求分析", "requirement"],
         "requirement_quality": ["需求质量", "质量评审", "质量分析", "模糊词", "不可验证"],
@@ -36,6 +42,7 @@ class IntentRouter:
         self._semantic_index: list = []  # 缺口-1：Agent 语义索引 [{name, text}]，供语义兜底路由
         # P2 逻辑规则配置化：intent_rules 规则缓存 [(trigger, intent, weight)]（None=未加载，首次 detect 自动加载）
         self._rules = None
+        self._rules_epoch = -1  # P0-3：-1 ≠ 任何 epoch → 首次 detect 必加载
         # P0-1 置信度三级决策：最近一次 detect 的路由元数据（route/confidence/是否需澄清）
         self._last_meta = {"intent": "", "route": "", "confidence": 0.0, "needs_clarification": False}
         self._last_sem_score = 0.0  # 最近一次语义匹配 top_score（供弱置信澄清判定）
@@ -44,6 +51,15 @@ class IntentRouter:
         """注册 DB Agent 的意图关键词（新建 Agent 即可路由，无需改代码）。"""
         if keywords:
             self._db_intents[intent] = [k.lower() for k in keywords if k]
+
+    @classmethod
+    def invalidate_rules(cls) -> None:
+        """规则表变更后让**所有** IntentRouter 实例下次 detect 重载（类级版本号，与实例数无关）。
+
+        替换原先「置某个模块级 router 实例的 _rules = None」的写法：那个实例与
+        `AgentPipeline.self.router` 不是同一个对象，失效形同虚设（2026-09-24 实测）。
+        """
+        cls._RULES_EPOCH += 1
 
     def load_rules(self, conn=None) -> list:
         """P2 逻辑规则配置化：从 intent_rules 表加载启用规则 → self._rules = [(trigger, intent, weight)]。
@@ -67,6 +83,7 @@ class IntentRouter:
             self._rules = [(str(r["trigger"]), str(r["intent"]), float(r["weight"] or 1.0)) for r in rows]
         except Exception:
             self._rules = []
+        self._rules_epoch = IntentRouter._RULES_EPOCH
         return self._rules
 
     def set_semantic_index(self, index: list) -> None:
@@ -149,6 +166,11 @@ class IntentRouter:
         每次调用填充 self._last_meta = {intent, route, confidence, needs_clarification}。
         """
         t = text.lower()
+        # P0-3（2026-09-24）：规则刷新必须在**指纹计算之前** —— 指纹含 _rules 内容，
+        # 若拿过期的 _rules 算 fp，就会命中「规则变更前」写入的缓存条目，缓存把新规则挡在门外
+        # （实测：加规则后 sysmlv2 仍返回 route='cache' 的旧 knowledge_qa）。
+        if self._rules is None or self._rules_epoch != IntentRouter._RULES_EPOCH:
+            self.load_rules(conn=conn)
         fp = self._index_fingerprint()
         # P0-3：意图级缓存（L1 命中直接返回，省重复规则/语义/LLM 全链路）
         cached = self._cache_get(t, fp) if fp else None
@@ -204,7 +226,9 @@ class IntentRouter:
         if any(k in t for k in ("需求质量", "质量评审", "需求质量评审", "质量分析", "模糊词", "不可验证")):
             return self._done("requirement_quality", "rule", 0.95, text, fp)
         # P2 逻辑规则配置化：intent_rules 规则层优先（trigger 为输入子串（忽略大小写），按 weight 降序取首个命中）
-        if self._rules is None:
+        # P0-3：epoch 不符即重载 —— 规则表改了**不用重启**（原判据只看 `is None`，
+        # 而失效机制又作用不到本实例，导致规则改动必须重启才生效）。
+        if self._rules is None or self._rules_epoch != IntentRouter._RULES_EPOCH:
             self.load_rules(conn=conn)
         for trigger, intent, weight in self._rules:
             if trigger and trigger.lower() in t:

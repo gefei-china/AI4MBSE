@@ -10,7 +10,7 @@ class StreamMixin:
 
     def _stream_orchestrated_flow(self, user_input, conversation_id, branch, intent, agent_def,
                                   hil_level, kb_tags, attachments, slots, user, provider_id,
-                                  team_forced: bool = False) -> iter:
+                                  team_forced: bool = False, stage_hint=None) -> iter:
         """P0-1 真流式编排：计划生成 → 子任务逐个串行流式执行（实时推送思考/工具/文本增量）
         → LLM 汇总 → 落库 → done。
 
@@ -18,6 +18,9 @@ class StreamMixin:
         前端可看到完整工程执行过程（需求分析 Agent → 方案设计 Agent → …逐个进行）。
         team_forced: 团队模式——主 Agent（团队负责人）负责意图识别/任务拆分/计划制定/任务分派/内容整合输出，
         planner prompt 注入团队负责人职责视角。
+        stage_hint: P0-4（2026-09-24）——多阶段意图序列（`IntentRouter.detect_multi`）。非空时作为
+        **高优先阶段序约束**注入 planner prompt，使 plan 顺序贴合用户表述；此前该信号仅发 SSE 供展示
+        （识别出 ['requirement_analysis','design'] 却不驱动任何决策）。
         """
         from llm import llm_client
         from task_queue import TaskQueue
@@ -96,6 +99,17 @@ class StreamMixin:
                 "task_type 可选 agent / react / llm。\n"
                 f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；不要输出其他文字。\n"
                 f"目标：{goal}"
+            )
+        # P0-4（2026-09-24）：multi_intent 从「仅展示」升级为「驱动计划」——
+        # 用户的多阶段表述（如「先做需求分析，再输出 SysML 视图」）此前只发 SSE 事件供前端展示，
+        # 对 plan 生成零影响（实测：识别出 ['requirement_analysis','design'] 却仍由 planner 自由发挥）。
+        # 现把阶段序列作为**高优先阶段序约束**注入 → plan 的任务顺序与 deps 与之对齐（同阶段可并行）。
+        # 注意：在构造完 plan_prompt 之后追加，不进 f-string 内部（避免与 JSON 示例花括号冲突）。
+        if stage_hint:
+            plan_prompt += (
+                "\n★ 用户明确要求按以下**阶段顺序**执行，请让 plan 的任务顺序与 deps 与该序列对齐"
+                "（同一阶段的任务可并行；某阶段在本目标下确实无意义可跳过，但不得乱序）："
+                + " → ".join(str(x) for x in stage_hint)
             )
         plan = []
         try:
@@ -952,7 +966,8 @@ class StreamMixin:
                 self._save_conversation_dst(conversation_id, intent, slots)
                 yield from self._stream_orchestrated_flow(
                     user_input, conversation_id, branch, intent, agent_def, hil_level,
-                    kb_tags, attachments, slots, user, effective_provider, team_forced=True)
+                    kb_tags, attachments, slots, user, effective_provider, team_forced=True,
+                    stage_hint=(_multi_intent or {}).get("sequence"))
                 return
             if not forced_intent and self._needs_orchestration(user_input, intent, has_attachments=bool(attachments)):
                 # P0-1 复用：已发布 planner_auto 沉淀流程语义命中 → 直接执行（省重新规划）
@@ -972,7 +987,8 @@ class StreamMixin:
                         self._save_conversation_dst(conversation_id, intent, slots)
                     yield from self._stream_orchestrated_flow(
                         user_input, conversation_id, branch, intent, agent_def, hil_level,
-                        kb_tags, attachments, slots, user, effective_provider)
+                        kb_tags, attachments, slots, user, effective_provider,
+                        stage_hint=(_multi_intent or {}).get("sequence"))
                     return
                 except Exception as _orch_exc:
                     # P0-3 补（2026-09-19，端到端取证）：**编排中途失败不得静默回退**。

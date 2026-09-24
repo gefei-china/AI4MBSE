@@ -82,12 +82,20 @@ def _intent_rule_err(trigger: str, intent: str, weight) -> str | None:
 
 
 def _invalidate_intent_rules() -> None:
-    """规则表变更后失效全局 IntentRouter 规则缓存（下次 detect 自动重载，即时生效）。"""
+    """规则表变更后让**所有** IntentRouter 实例下次 detect 重载规则（即时生效、无需重启）。
+
+    P0-3（2026-09-24 修复）：原实现是 `_agent.router._rules = None`，而
+    `AgentPipeline.__init__` 里 `self.router = IntentRouter()`（**每实例新建**），
+    两者不是同一个对象 —— 失效作用在请求路径根本用不到的实例上，异常还被
+    `except: pass` 吞掉，表现为「规则改了要重启」。现改用类级版本号，与实例数无关。
+    异常一律留痕（本仓纪律：静默兜底会让人去追不存在的"偶发"）。
+    """
     try:
-        from agent import agent as _agent
-        _agent.router._rules = None
+        from agent.intent import IntentRouter
+        IntentRouter.invalidate_rules()
     except Exception:
-        pass
+        import traceback as _tb
+        _tb.print_exc()
 
 
 def _sanitize_agent_meta(data: dict) -> bool:
