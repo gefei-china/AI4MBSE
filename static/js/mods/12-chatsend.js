@@ -177,13 +177,8 @@ function renderChips(){
     const s = (_skillsCache || []).find(x => x.name === sV);
     h += `<span class="agent-chip" style="background:#F0FFF4;border-color:#9AE6B4;color:#276749;">🧩 ${esc(s ? (s.display_name||s.name) : sV)}<span class="x" title="取消指定技能" onclick="clearSkillChip()">✕</span></span>`;
   }
-  const tV = document.getElementById('quick-team')?.value || '';
-  if(tV){
-    const t = (_teamsCache || []).find(x => x.name === tV || x.display_name === tV);
-    const tname = t ? (t.display_name || t.name) : tV;
-    const tsize = t && t.team_count ? ` · ${t.team_count} 人团队` : '';
-    h += `<span class="agent-chip" style="background:#FFF8E1;border-color:#FFE082;color:#B26A00;">👑 ${esc(tname)}${tsize}<span class="x" title="取消智能体团队（恢复自动）" onclick="clearTeamChip()">✕</span></span>`;
-  }
+  // 2026-09-23（用户要求）：不再在输入框上方渲染团队名称 chip。
+  // 团队选中状态唯一载体 = 「👑 工作流（智能体团队）」下拉；clearTeamChip() 保留供程序化清空。
   bar.innerHTML = h;
   bar.style.display = h ? 'flex' : 'none';
 }

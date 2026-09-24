@@ -134,7 +134,15 @@ function renderRichCard(type, cd, content) {
   if(cd.ok === false && cd.code) return cardImpactGuide(cd);
   // SysML v2 视图预览：AI 建模生成代码时随消息即时投影（优先展示；代码+视图 tab 整合，聚焦同步查看）
   if(cd.sysml_views) return cardSysmlTabs(cd, content);
-  if(type==='card_candidates' || (type==='requirement_analysis' && (cd.candidates||cd.conflicts))) return cardCandidates(cd);
+  // 2026-09-23：需求分析卡「空态抑制」——candidates 与 conflicts 均为空时不渲染。
+  // 原条件里的 `cd.candidates||cd.conflicts` 在空数组下也为真（JS 里 [] 是 truthy），
+  // 于是每次都挂一张「0 条候选条目 / ✓无冲突 / 暂无候选条目」的空转卡。
+  // 数据源见 agent/pipeline_parts/cards.py::_card_candidates（entities 需求候选 + CONFLICTS 关系），
+  // 实测全库恒 0 行；将来候选需求生产链路跑通，卡片会自动恢复渲染，无需再改这里。
+  if(type==='card_candidates' || type==='requirement_analysis'){
+    if(!(cd.candidates||[]).length && !(cd.conflicts||[]).length) return '';
+    return cardCandidates(cd);
+  }
   if(type==='card_review' || (type==='review' && cd.score!==undefined)) return cardReview(cd);
   return '';
 }

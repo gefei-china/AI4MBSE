@@ -30,11 +30,16 @@ async function loadQuickBar(){
     const aSel = document.getElementById('quick-agent');
     if(aSel && agents && agents.length){
       aSel.innerHTML = '<option value="">自动匹配</option>' + agents.map(a=>`<option value="${esc(a.name)}">${esc(a.display_name||a.name)}</option>`).join('');
-      // V2.7 默认选中：上次选择的智能体（localStorage 记录），无记录/已失效 → 排序第一
+      // 2026-09-23 修复（默认定向）：默认「自动匹配」，不再默认选中列表第一个 Agent。
+      // 原写法无记录时取 names[0]（/api/studio/agents 按 id 升序 → 需求分析Agent），
+      // 而 sendChat 会把下拉值作为 forced_intent 发送 → 后端 `intent = forced_intent or _detected`
+      // 恒定覆盖意图识别；且 `_needs_orchestration` 在 forced_intent 非空时直接 return False
+      // → 现象：问什么都以「需求分析Agent」作答、末尾恒定挂一张空的候选需求卡、从不自动编排。
+      // 现在仅当用户显式选过（localStorage 有有效记录）才恢复，否则保持「自动匹配」。
       let last = '';
       try{ last = localStorage.getItem('mbse_last_agent') || ''; }catch(e){}
       const names = agents.map(a=>a.name);
-      aSel.value = (last && names.includes(last)) ? last : names[0];
+      aSel.value = (last && names.includes(last)) ? last : '';
       // 记录上次选择（change 防重复绑定；@提及等程序赋值点需手动 dispatchEvent('change')）
       if(!aSel.dataset.lastBind){
         aSel.dataset.lastBind = '1';
