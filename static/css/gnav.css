@@ -48,44 +48,60 @@
 
 /* ── 3. gnav 顶部品牌 ───────────────────────────────── */
 .gnav .brand{
-  padding:16px 16px 12px;display:flex;align-items:center;gap:9px;
+  /* 2026-09-26 层次感：顶栏走分区色带 + 强分隔线，与内容区拉开一档 */
+  background:var(--gnav-bg-soft);
+  padding:18px 16px 14px;display:flex;align-items:center;gap:10px;
   color:var(--gnav-fg-strong);
-  border-bottom:1px solid var(--gnav-border);
+  border-bottom:1px solid var(--gnav-divider);
 }
 .gnav .brand b{
   background:var(--gnav-active);color:var(--gnav-active-text);
   border-radius:var(--radius-md);
-  width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;
-  font-size:14px;font-weight:700;
+  width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;
+  font-size:15px;font-weight:700;letter-spacing:.5px;
 }
-.gnav .brand .t{font-weight:600;font-size:14px;line-height:1.3;}
-.gnav .brand small{display:block;font-size:10.5px;opacity:.7;font-weight:400;}
+.gnav .brand .t{font-weight:700;font-size:14.5px;line-height:1.25;letter-spacing:.2px;}
+/* 副标用 token 取色替代 opacity —— 更可控（opacity 会连同背景一起变淡） */
+.gnav .brand small{display:block;font-size:10.5px;color:var(--gnav-fg-soft);font-weight:400;letter-spacing:.2px;}
 
 /* ── 4. gnav 滚动区 + 分组标题 ─────────────────────── */
 /* 2026-09-17 v2：主导航 flex:0 0 auto —— 任务列表改为 flex:1 后，若主导航仍可收缩会被压出滚动条
    （实测 900px 视口下 nav 从 295 被压到 249，"能力中心/更多"被裁剪）。主导航是主路径，绝不允许被压缩。 */
-.gnav nav{flex:0 0 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:10px 8px;}
+.gnav nav{flex:0 0 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:12px 8px 14px;}
 .gnav .g{
-  font-size:10.5px;color:var(--gnav-fg-soft);
-  padding:12px 10px 5px;letter-spacing:1px;
+  /* 2026-09-26 层次感：分组小标题升为「标签」级（11/600/字距收紧），与导航项拉开主次 */
+  font-size:11px;font-weight:600;color:var(--gnav-fg-soft);
+  padding:16px 10px 6px;letter-spacing:.8px;
 }
 
 /* ── 5. gnav 链接 / 选中 / badge ──────────────────── */
 .gnav a{
-  display:flex;align-items:center;gap:9px;
-  padding:8px 10px;border-radius:var(--radius-md);
+  /* 2026-09-26：行高与字重做「阶梯」——主导航默认 500（比内容行更实）、选中 700。
+     水平 padding 仍为 10px：维持与下方内容基准（17px）的对齐，勿改。 */
+  display:flex;align-items:center;gap:10px;
+  padding:9px 10px;min-height:34px;border-radius:var(--radius-md);
   color:var(--gnav-fg);text-decoration:none;
-  font-size:13px;margin-bottom:2px;
+  font-size:13px;font-weight:500;margin-bottom:2px;
   cursor:pointer;
   transition:background .12s ease,color .12s ease;
 }
-.gnav a:hover{background:var(--gnav-hover);}
+.gnav a:hover{background:var(--gnav-hover);color:var(--gnav-fg-strong);}
 .gnav a.on{
   background:var(--gnav-active);
   color:var(--gnav-active-text);
-  font-weight:600;
+  font-weight:700;
 }
-.gnav a .ic{width:18px;text-align:center;flex:none;}
+/* 2026-09-26：选中态必须压过 hover —— 否则鼠标划过「当前所在页」时它会掉成一层浅雾，
+   看起来反而像没选中（实测复现）。提高一级特异性即可稳定。 */
+.gnav a.on:hover{
+  background:var(--gnav-active);
+  color:var(--gnav-active-text);
+}
+.gnav a .ic{
+  width:18px;text-align:center;flex:none;
+  font-size:14px;line-height:1;color:var(--gnav-icon);   /* 图标槽统一宽度与色调 → emoji 与文本符号视觉重量一致 */
+}
+.gnav a:hover .ic,.gnav a.on .ic{color:inherit;}
 .gnav a .bdg{
   margin-left:auto;
   background:var(--color-red);color:var(--gnav-fg-strong);
@@ -95,23 +111,26 @@
 
 /* ── 6. gnav 底部账号区 ───────────────────────────── */
 .gnav .ufoot{
-  border-top:1px solid var(--gnav-border);
+  background:var(--gnav-bg-soft);
+  border-top:1px solid var(--gnav-divider);
   padding:10px 12px;display:flex;align-items:center;gap:9px;
   font-size:12px;color:var(--gnav-fg);
 }
 .gnav-foot{
-  border-top:1px solid var(--gnav-border);
-  padding:10px 12px;
+  /* 2026-09-26 层次感：底栏用更深一档色带（暗色主题取「略亮」）压住视线、收口整列 */
+  background:var(--gnav-band-2);
+  border-top:1px solid var(--gnav-divider);
+  padding:12px 12px;
   display:flex;align-items:center;justify-content:flex-start;gap:9px;
   flex:none;margin-top:auto;
 }
 .gnav-foot .user-chip{
-  background:var(--alpha-white-14);
+  background:rgba(255,255,255,.18);   /* 原 var(--alpha-white-14) 在更深底带上对比不足 */
   border-color:var(--gnav-border);  /* 通过 rgba(255,255,255,.08) 表达；如需更显，可改 var(--color-bg-hover) 但要换 token */
   border:1px solid var(--gnav-border);
   flex:none;min-width:0;width:100%;
 }
-.gnav-foot .user-chip:hover{background:rgba(255,255,255,.24);}
+.gnav-foot .user-chip:hover{background:rgba(255,255,255,.30);}
 .gnav-foot .user-chip .u-name{color:var(--gnav-fg-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .gnav-foot .user-chip .u-arrow{color:var(--gnav-fg);}
 
@@ -125,16 +144,21 @@
 /* ── 7. 任务分组（会话列表内嵌） ─────────────────── */
 /* 2026-09-17：任务列表改为「向下拓展」——占满导航列剩余高度（原 max-height:42vh 只露出一小段，
    大量历史会话需要滚动才能看到）。折叠态回落 flex:none，账号区仍由 .gnav-foot 的 margin-top:auto 压底。 */
-.gnav-task{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;border-top:1px solid var(--gnav-border);}
+.gnav-task{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;border-top:1px solid var(--gnav-divider);}
 .gnav-task.collapsed{flex:0 0 auto;}
 .gnav-task-head{
+  /* 2026-09-26 层次感三件套：① 分区色带 ② 左侧 2px 导轨（inset box-shadow，**不占布局**，
+     故 17px 内容基准与 --gnav-tail 对齐全部不变）③ 字号字重提到 12.5/700
+     —— 原 12/600 与内容行 12.5 几乎同级，主次分不出来。 */
+  background:var(--gnav-bg-soft);
+  box-shadow:inset 2px 0 0 var(--gnav-rail);
   display:flex;align-items:center;gap:8px;
-  padding:10px 14px;cursor:pointer;
-  color:var(--gnav-fg);font-size:12px;font-weight:600;
+  padding:11px 14px;cursor:pointer;
+  color:var(--gnav-fg-strong);font-size:12.5px;font-weight:700;
   user-select:none;transition:background .12s ease;
 }
 .gnav-task-head:hover{background:var(--gnav-hover);}
-.gnav-task-head .gth-ic{flex:none;font-size:13px;}
+.gnav-task-head .gth-ic{flex:none;font-size:14px;line-height:1;color:var(--gnav-icon);}
 .gnav-task-head .gth-name{flex:1;letter-spacing:.5px;}
 .gnav-task-head .gth-cnt{
   background:rgba(255,255,255,.16);
@@ -144,6 +168,14 @@
   font-variant-numeric:tabular-nums;
 }
 .gnav-task-head .gth-cnt.zero{opacity:.45;}
+/* 2026-09-24 v2：两个分组（项目 / 任务）右侧尾控件统一为定宽槽 ——
+   此前「项目」尾控件是 20px 的 ＋，「任务」是 ~10px 的 ▾，导致两条计数徽章左右错位
+   （用户反馈「任务与项目没对齐」）。槽宽抽成变量 --gnav-tail，行内徽章复用同一变量
+   保证「分组头徽章」与「组内行徽章」右缘也同列（见 .gp-it .gp-cnt）。 */
+.gnav{--gnav-tail:20px;}
+.gnav-task-head .gth-tail{
+  flex:none;width:var(--gnav-tail,20px);display:flex;align-items:center;justify-content:center;
+}
 .gnav-task-head .gth-arr{
   font-size:10px;color:var(--gnav-fg-soft);
   transition:transform .2s;
@@ -165,11 +197,15 @@
   border-left:3px solid transparent;border-radius:0;
   display:flex;flex-direction:column;gap:1px;
 }
-.gnav-task-body .task-it:hover{background:var(--gnav-hover);}
+.gnav-task-body .task-it:hover{background:var(--gnav-hover);color:var(--gnav-fg-strong);}
 .gnav-task-body .task-it.on{
   background:var(--gnav-active);
   color:var(--gnav-active-text);font-weight:600;
   border-left-color:var(--color-primary);
+}
+.gnav-task-body .task-it.on:hover{   /* 同上：选中态压过 hover */
+  background:var(--gnav-active);
+  color:var(--gnav-active-text);
 }
 .gnav-task-body .task-it .ti-row{display:flex;align-items:center;gap:6px;}
 .gnav-task-body .task-it .ti-tt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -186,12 +222,12 @@
 
 .gnav-task-body .task-empty{padding:14px 18px;font-size:11.5px;color:var(--gnav-fg-soft);text-align:center;}
 .gnav-task-body::-webkit-scrollbar{width:5px;}
-.gnav-task-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:3px;}
+.gnav-task-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.28);border-radius:3px;}
 
 /* ── 8. #task-tip 信息卡（hover 任务条目显示） ── */
 #task-tip{
   position:fixed;z-index:9990;
-  width:270px;max-width:calc(100vw - 80px);
+  width:300px;max-width:calc(100vw - 80px);
   background:var(--gnav-tip-bg);color:var(--gnav-tip-fg-soft);
   border:1px solid var(--gnav-tip-border);
   border-radius:10px;
@@ -204,11 +240,23 @@
 #task-tip .tt-title .tt-dot{width:8px;height:8px;border-radius:50%;background:#4a9df0;flex:none;}
 #task-tip .tt-row{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:11px;color:var(--gnav-tip-fg);}
 #task-tip .tt-row .tt-tag{background:rgba(255,255,255,.14);border-radius:5px;padding:1px 7px;font-size:10.5px;color:var(--gnav-tip-fg-soft);}
+/* 2026-09-28：元信息行改为「类型 · 标签 · 消息数」同排，消息数右对齐 —— 原先消息数独占一行，
+   卡片三行全是元信息、留给摘要的空间被挤掉（hover 卡的价值主要是摘要）。
+   同时保证**未分组任务与项目分组的卡片完全同构**（两处走同一段 HTML）。 */
+#task-tip .tt-row-meta .tt-kind{flex:none;}
+#task-tip .tt-row-meta .tt-tag{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#task-tip .tt-row-meta .tt-cnt{margin-left:auto;flex:none;font-variant-numeric:tabular-nums;opacity:.85;}
 #task-tip .tt-sum{
   margin-top:8px;padding-top:8px;
   border-top:1px solid var(--gnav-border);
   font-size:11.5px;color:var(--gnav-tip-fg-soft);
-  display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;
+  display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;
+}
+/* 摘要来源徽标：区分「模型概括」与「结构化概述（未接模型）」，让降级可见 */
+#task-tip .tt-src{
+  display:inline-block;margin-left:6px;vertical-align:1px;
+  background:rgba(255,255,255,.12);border-radius:4px;padding:0 5px;
+  font-size:9.5px;color:var(--gnav-tip-fg);opacity:.8;white-space:nowrap;
 }
 
 /* 折叠态：任务分组只保留标题 + 计数 */
@@ -217,6 +265,7 @@
 .gnav.collapsed .gnav-task-head{padding:10px 0;justify-content:center;}
 .gnav.collapsed .gnav-task-head .gth-cnt{display:none;}
 .gnav.collapsed .gnav-task-head .gth-arr{display:none;}
+.gnav.collapsed .gnav-task-head .gth-tail{display:none;}   /* 折叠态尾槽随内容一并隐藏，不留 20px 空隙 */
 
 /* ── 9. "更多"入口 + hover 浮层卡 ─────────────────── */
 .gnav a.more-link{position:relative;}
@@ -388,3 +437,123 @@
 .task-empty .te-go:hover{background:rgba(255,255,255,.28);}
 /* 骨架中的任务项（不响应点击、padding 缩小） */
 .task-it.skel{cursor:default;pointer-events:none;}
+
+/* ── 16. 项目组（2026-09-24 v2）：项目 = 任务的容器；数据来源 = 本地工作空间 / 远端 SSH ──
+   对齐/重叠修复（用户反馈「任务与项目没对齐，且有部分重叠」）——实测定位到两个真因：
+
+   ① 重叠 = **两个分组互相抢 flex 空间**。原为 `#gnav-project{flex:0 1 auto}` +
+      `#gnav-task{flex:1 1 auto}`：两个都是「可收缩」项，而任务组内容 80 条 → flex-basis
+      极大，收缩按 (shrink × basis) 分摊 → 项目组被一起压扁到只剩一行高、
+      自身 overflow 又切成半行，视觉上就与下方任务项叠在一起（截图实测：项目组仅露出
+      1 行，任务行紧贴其下）。改 `flex:0 0 auto`：项目组**按内容定高**（上限 38%，超出
+      由自身 body 滚动），任务组独占剩余高度并内部滚动 —— 两者不再竞争，重叠消失。
+
+   ② 没对齐 = 两组**行文字左缘不同列**。实测项目行文字比任务行右移 34px（＝ 展开箭头
+      10px + 间距 6 + 图标 12px + 间距 6）。现把展开箭头改为**绝对定位于左侧 17px 边槽**
+      （与 .task-it 的 border-left 3px + padding 14px 同一基准，即树形控件的标准位置），
+      并去掉行内重复的 🗂（分组头已有）→ 项目名与任务标题**严格同列**。
+   ③ 分组头尾控件定宽（见 .gth-tail），计数徽章左右对齐。 */
+#gnav-project{flex:0 0 auto;min-height:0;max-height:38%;overflow:hidden;}
+#gnav-project .gnav-task-body{flex:0 0 auto;max-height:calc(38vh - 40px);}
+#gnav-project .gth-add{
+  flex:none;width:20px;height:20px;line-height:18px;text-align:center;
+  border:1px solid var(--gnav-border);border-radius:6px;
+  color:var(--gnav-fg);font-size:12px;cursor:pointer;background:transparent;padding:0;
+  transition:background .12s ease;
+}
+#gnav-project .gth-add:hover{background:rgba(255,255,255,.22);}
+.gp-blk{display:flex;flex-direction:column;}
+.gp-it{
+  position:relative;
+  display:flex;align-items:center;gap:6px;
+  padding:7px 14px;border-left:3px solid transparent;   /* 与 .task-it 同基准（内容左缘 = 17px） */
+  cursor:pointer;color:var(--gnav-fg-soft);font-size:12.5px;font-weight:500;transition:background .12s ease;
+}
+.gp-it:hover{background:var(--gnav-hover);color:var(--gnav-fg);}
+.gp-blk.cur .gp-it{color:var(--gnav-fg-strong);border-left-color:var(--color-primary);}
+/* 展开箭头：绝对定位于左侧边槽（占位 0，不推挤行文字 → 与任务标题同列）。
+   坐标基准是 .gp-it 的 padding box（已含 border-left 3px），故 left 取 0 而非 3 ——
+   取 3 会让箭头盒右缘落到 20px、压住 17px 起点的项目名（实测 arrInsideRow=false）。 */
+.gp-it .gp-arr{
+  position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:14px;text-align:center;font-size:9px;color:var(--gnav-icon);cursor:pointer;
+}
+.gp-it .gp-arr:hover{color:var(--gnav-fg-strong);}
+.gp-it .gp-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.gp-it .gp-cnt{
+  flex:none;background:rgba(255,255,255,.16);color:var(--gnav-fg-strong);
+  border-radius:10px;font-size:10px;padding:1px 7px;line-height:14px;font-variant-numeric:tabular-nums;
+  /* 让位给分组头同宽的尾槽（槽宽 + 头部 gap 8px）→ 行徽章与分组头徽章右缘同列 */
+  margin-right:calc(var(--gnav-tail,20px) + 8px);
+}
+.gp-it .gp-cnt.zero{opacity:.45;}
+.gp-it .gp-ops{display:none;gap:3px;flex:none;}
+.gp-it:hover .gp-ops{display:inline-flex;}
+.gp-it:hover .gp-cnt{display:none;}   /* hover 时让位给操作按钮，避免徽章与按钮挤在一行 */
+.gp-it .gp-ops button{
+  padding:1px 5px;font-size:10.5px;border-radius:4px;
+  background:rgba(255,255,255,.18);color:inherit;border:none;cursor:pointer;
+}
+.gp-it .gp-ops button:hover{background:rgba(255,255,255,.32);}
+/* 项目内任务列表：复用 .gnav-task-body → .task-it 全套样式（与原任务列表一致），本段只加两样：
+   ① **层次感**：任务缩进 + 树形引导线（竖向干线 + 横向分支线，末端半高收口 = 标准树形肘弯），
+      让「任务从属于上方项目」一眼可读；② 不再撑高（自身 max-height 内滚动）。
+   缩进基准：项目名在 17px（border 3 + padding 14），任务文字落到 31px（17 + 14 一级缩进），
+   引导线画在 17px 处 —— 与项目名的文字左缘对齐，视觉上从项目行"长出来"。 */
+.gp-tasks{flex:none;max-height:260px;padding-left:0;}
+.gp-tasks .task-it{position:relative;padding-left:28px;}          /* 文字 31px */
+.gp-tasks .task-it::before{                                        /* 竖向干线 */
+  content:'';position:absolute;left:17px;top:0;bottom:0;width:1px;
+  background:rgba(255,255,255,.16);
+}
+.gp-tasks .task-it:last-child::before{bottom:50%;}                 /* 末端收口 */
+.gp-tasks .task-it::after{                                         /* 横向分支 */
+  content:'';position:absolute;left:17px;top:50%;width:9px;height:1px;
+  background:rgba(255,255,255,.16);
+}
+.gp-tasks .task-it.on{border-left-color:transparent;}              /* 缩进后主色左边线会跑到容器外缘，选中态改由底色表达 */
+.gp-empty,.gp-empty2{padding:8px 14px;font-size:11px;color:var(--gnav-fg-soft);opacity:.7;}
+.gp-empty2{padding:6px 14px 6px 17px;}
+.gnav.collapsed .gp-it,.gnav.collapsed .gp-empty{display:none;}
+.gnav.collapsed #gnav-project .gth-name,
+.gnav.collapsed #gnav-project .gth-cnt,
+.gnav.collapsed #gnav-project .gth-add{display:none;}
+.gnav.collapsed #gnav-project .gnav-task-head{padding:10px 0;justify-content:center;}
+/* 创建/编辑项目弹窗：数据来源二选一卡片（本地 / 远端） */
+.cp-src-card{
+  flex:1;border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+  cursor:pointer;transition:border-color .15s,background .15s;font-size:12px;
+}
+.cp-src-card:hover{border-color:var(--color-primary,#3b82f6);}
+.cp-src-card.on{border-color:var(--color-primary,#3b82f6);background:rgba(59,130,246,.08);}
+.cp-src-card .cp-src-title{font-weight:600;display:flex;align-items:center;gap:6px;margin-bottom:4px;}
+.cp-src-card small{color:var(--mut);font-size:10.5px;line-height:1.5;display:block;}
+/* ── 16.1 SSH 连接表单（远端数据来源；字段与「添加 SSH 连接」弹窗一致）── */
+.ssh-field{margin:0 0 8px;}
+.ssh-lb{display:block;font-size:11.5px;color:var(--txt);margin-bottom:4px;font-weight:600;}
+.ssh-lb .ssh-opt{font-weight:400;color:var(--mut);font-size:10.5px;}
+.ssh-in{
+  display:flex;align-items:center;
+  border:1px solid var(--line);border-radius:8px;background:var(--card);overflow:hidden;
+}
+.ssh-in:focus-within{border-color:var(--color-primary,#3b82f6);}
+.ssh-in .ssh-ic{
+  flex:none;width:34px;align-self:stretch;display:flex;align-items:center;justify-content:center;
+  font-size:13px;background:rgba(59,130,246,.08);border-right:1px solid var(--line);
+}
+.ssh-in input{
+  flex:1;min-width:0;border:none;outline:none;background:transparent;
+  padding:7px 9px;font-size:12px;color:var(--ink);font-family:inherit;
+}
+/* 认证方式分段控件（无身份验证 | 身份文件） */
+.ssh-seg{display:flex;gap:6px;margin:2px 0 8px;}
+.ssh-seg-it{
+  flex:1;text-align:center;padding:6px 8px;font-size:11.5px;cursor:pointer;
+  border:1px solid var(--line);border-radius:8px;color:var(--mut);
+  transition:border-color .15s,background .15s,color .15s;
+}
+.ssh-seg-it:hover{border-color:var(--color-primary,#3b82f6);}
+.ssh-seg-it.on{
+  border-color:var(--color-primary,#3b82f6);background:rgba(59,130,246,.08);
+  color:var(--ink);font-weight:600;
+}

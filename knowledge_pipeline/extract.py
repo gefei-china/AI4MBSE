@@ -143,9 +143,17 @@ def _ocr_quality_gate(quality: dict) -> tuple:
       ② low_ratio <= extract.ocr_max_low_score_ratio（默认 50%，即低置信行占比）
     正例（清晰中文图 / 扫描 PDF / 混合 PDF 图页）实测 0.870~0.936、低分行 0% —— 余量 0.17；
     反例（低质截图）0.595~0.675、低分行 51.9%~95.7% —— **两维同时被挡，冗余安全**。
+
+    第三分支（2026-09-29 用户拍板）：**密集文本低质放行**——
+    行数 >= extract.ocr_dense_min_lines（默认 30）且 avg >= extract.ocr_dense_min_avg（默认 0.65）
+    → 放行并打"低质放行"标（note + ocr.degraded，质量分如实落 documents.quality_score）。
+    动机：doc 819 密集界面截图 84 行、均分 0.696（差 0.004 被拒）——行数多本身就是
+    "真实内容结构"的证据，纯图形/照片不会吐出几十行；真乱码（doc 811：0.595/95.7%）仍被挡。
     """
     min_avg = _safe_float(_cfg("ocr_min_avg_score", 0.70), 0.70)
     max_low = _safe_float(_cfg("ocr_max_low_score_ratio", 50.0), 50.0)
+    dense_lines = _safe_float(_cfg("ocr_dense_min_lines", 30.0), 30.0)
+    dense_avg = _safe_float(_cfg("ocr_dense_min_avg", 0.65), 0.65)
     q = quality or {}
     # ⚠️ 坑：这里**绝不能**写 `q.get("low_ratio") or 100.0` —— `0.0` 是**合法且最好**的值
     # （低置信行 0%），而 `or` 会把 0.0 当 falsy 顶成 100% → 把最清晰的样本误杀成"全部低置信"。
@@ -158,9 +166,25 @@ def _ocr_quality_gate(quality: dict) -> tuple:
     lines = int(q.get("lines") or 0)
     if lines and avg >= min_avg and low <= max_low:
         return True, ""
-    return False, (f"OCR 识别质量过低（{lines} 行、均分 {avg:.2f} < {min_avg:.2f}"
-                   f"、低置信行 {low:.0f}% > {max_low:.0f}%）—— "
-                   f"疑似纯图形/照片或分辨率过低；未入库以免污染检索")
+    # 2026-09-29 密集文本低质放行（用户拍板）：见 docstring 第三分支
+    if lines >= dense_lines and avg >= dense_avg:
+        return True, (f"低质放行（密集文本）：{lines} 行、均分 {avg:.3f}、低置信行 {low:.1f}% "
+                      f"未达常规门槛（均分 {min_avg:.2f} / 低置信 ≤{max_low:.0f}%），"
+                      f"但行数 ≥{dense_lines:.0f} 判为真实内容结构，放行入库")
+    # 2026-09-29 修复：原模板把两个条件**都**硬印出来（"均分 x < 门槛、低置信行 y% > 上限"），
+    # 实测 doc 819 低置信 48.8% 本已达标（≤50%）却被印成 "49% > 50%"，误导排障。
+    # 现只列**真正未达标**的条件，且均分给 3 位小数（0.696 vs 0.70 的 0.004 级差距靠 .2f 看不见）。
+    _why = []
+    if not lines:
+        _why.append("未识别出文本行")
+    else:
+        if avg < min_avg:
+            _why.append(f"均分 {avg:.3f} < 门槛 {min_avg:.2f}")
+        if low > max_low:
+            _why.append(f"低置信行 {low:.1f}% > 上限 {max_low:.0f}%")
+    return False, (f"OCR 识别质量过低（{lines} 行、{'、'.join(_why)}）—— "
+                   f"疑似纯图形/照片或分辨率过低；未入库以免污染检索"
+                   f"（如需放行可在 config 调 extract.ocr_min_avg_score / ocr_max_low_score_ratio 后重试）")
 
 
 def _extract_image_ex(content: bytes, ext: str):
@@ -191,6 +215,10 @@ def _extract_image_ex(content: bytes, ext: str):
     if not usable:
         info["note"] = reason
         return "", {"ok": False, "kind": "image", "reason": reason, "ocr": info}
+    if reason:
+        # 密集文本低质放行：note 说明放行原因（详情面板可见），degraded 标记供下游统计
+        info["note"] = reason
+        info["degraded"] = True
     return text, {"ok": True, "kind": "image", "reason": "", "ocr": info}
 
 

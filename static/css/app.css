@@ -388,8 +388,68 @@ body.nr-full-lock{overflow:hidden;}
 .impact-item .dot{width:8px;height:8px;border-radius:50%;flex:none;}
 /* ── 富卡片（AI 建模对话内） ── */
 .rc{width:100%;min-width:0;}
-/* 聊天区子项防被内容撑开（拖拽分割线变窄时内容自适应，不产生横向溢出） */
-#chat-area > *{min-width:0;max-width:100%;}
+/* 2026-09-28：会话内容**居中收窄**（此前 .msg 最大 94% → 宽屏下几乎铺满整页，阅读行长过长）；
+   同时它是「打开预览时会话流向左推动」的机制来源：预览面板展开 → #chat-col 变窄 →
+   居中的内容列整体左移（面板 width 有 .25s 过渡，故位移是平滑的）。
+   ⚠️ 宽度用**显式像素**，不用 var(--chat-max-w)：自定义属性在「变量未在子元素上解析」时
+   会让整条 max-width 声明失效（静默退化成通栏），本仓已因此踩过一次（状态栏/输入区不对齐）。 */
+#chat-area > *{min-width:0;width:100%;max-width:min(100%, 920px);margin-left:auto;margin-right:auto;}
+/* 用户消息右对齐（2026-09-28 用户反馈：「用户输入内容应该靠右侧，现在跑到左侧了，和 AI 输出区分度不够」）：
+   ⚠️ 根因正是上面这条 B-0 规则 —— width:100% 把 .msg.u 也撑满整条 920px 轨道。
+   flex 列里 `.msg.u{align-self:flex-end;flex-direction:row-reverse}`（chat.css）只负责
+   「靠右 + 头像在右」；一旦 width:100%，气泡永远全宽，靠右名存实亡 → 与 AI 消息无区分。
+   ✅ 恢复 fit-content 收缩（width:auto）：气泡随内容收缩、贴右侧；长文本仍受同一条 920px 轨道约束。
+   ⚠️ 第二层坑（2026-09-28 实测）：上面 `#chat-area > *` 的两侧 auto margin 在 flex 列**交叉轴上
+      优先级高于 align-self:flex-end**（Flexbox 规范：auto margin 先吸收自由空间，对齐属性随即失效）。
+   ⚠️ 第三层坑（同轮实测）：auto margin 的参照系是**包含块**（#chat-area content box，宽态 1230px），
+      而消息列的"视觉轨道"= AI 消息被 max-width:920 截断后两侧各让 155px 的居中盒（417..1337）。
+      margin-right:0 让气泡贴到容器右缘 1492 —— 比 920 轨道右缘多凸出 155px，仍不对齐。
+      ✅ margin-right 显式补回「轨道右留白」：宽态 = (1230-920)/2 = 155px → 贴齐 920 轨道右缘
+         （= AI 消息右缘）；窄态 content 906 < 920 → (906-920)/2 为负 → max(0,·)=0 自然贴边。
+         与 B-0 底部 dock 的「max-width 放大 + padding 内衬」同一思路：手动对齐居中参照系。 */
+#chat-area > .msg.u{
+  width:auto;max-width:min(100%, 920px);
+  margin-left:auto;
+  margin-right:max(0px, calc((100% - 920px) / 2));
+}
+/* ↑ 同时解决「下方元素与消息列差 7px」：
+   ⚠️ #chat-area 是 overflow-y:auto 的滚动容器，滚动条（实测 15px，Windows）只吃**右侧**空间
+   → 消息列在「padding-box − 右侧滚动条」里居中，而状态栏/输入区在 #chat-col 里居中（无滚动条）
+   → 两者**中心线差 ~6.5px**（实测 left 410 vs 417）。宽度一样却看着不齐，即此因。
+   ✅ scrollbar-gutter:stable both-edges 让滚动条占位**左右对称**，中心线回到容器中心，
+      与下方元素同轴。（stable 还避免"无滚动条↔有滚动条"时内容跳动。） */
+#chat-area{scrollbar-gutter:stable both-edges;}
+/* 底部输入区 / 状态栏与消息列对齐
+   2026-09-28（第一版，已废弃）：曾用 968px（=920+24*2），理由是"#chat-area 左右各 24px padding"。
+   实测证伪：.msg 的**边框盒**就是 920px、left=410；而 968px 的状态栏/输入区 left=393，
+   两者左右各差 17~24px，**边框盒根本没对齐**；再看内容盒更乱（948 / 936，差 28 / 16px）。
+   即：那一版让状态栏和输入区**彼此**对齐了，却都没跟消息列对齐 —— 用户反馈的"宽度不合适"依旧成立。
+
+   ✅ 正确做法：底部两者与 .msg 用**同一条轨道**。关键是要让它们的**居中参照系**与 .msg 一致：
+      .msg 的居中盒 = #chat-area 的 padding-box（左右各 24px）减 对称 gutter，
+      而 #chat-col 的子元素默认在整个 #chat-col 宽度里居中 → 参照系不同，宽了 22px（=48-30+2border）。
+      故给底部两者补上与 #chat-area 等值的左右 padding（24px）+ 同宽对称 gutter，
+      使「可用宽度」与「居中中心」都回到与 .msg 一致；
+      再用 box-sizing:border-box（全局已是）让 padding 落在 920px 轨道内部，边框盒自然对齐。
+
+   ⚠️ #chat-area 本身是 inline-style 的**通栏** flex 容器（~1308px），**不是**参照物；
+      参照物是它内部被 max-width:920px 收窄的 .msg。
+   ⚠️ 宽度/内边距一律显式像素：--chat-max-w 这类自定义属性在子元素上解析不到时
+      会让整条 max-width **静默失效**（本仓已因此踩过一次），故不采用变量方案。 */
+#chat-col > .chat-input-dock,
+#chat-col > .chat-status-bar{
+  box-sizing:border-box;                      /* 全局已是；显式写以杜绝歧义 */
+  width:100%;
+  /* 998 = 920(内容轨) + 39*2(内衬)。内衬 = #chat-area 的 24px padding + 15px(对称 gutter 半宽)，
+     使「内容轨」与「居中心线」都与 .msg 完全一致。 */
+  max-width:min(100%, 998px);
+  padding-left:39px;padding-right:39px;
+  margin-left:auto;margin-right:auto;
+}
+/* 底部两者不滚动 → 无需真实 gutter；用等宽 padding 模拟 #chat-area 的对称 gutter，
+   使其居中心线与 .msg 完全同轴（否则窄态下仍差 ~7px）。 */
+#chat-col > .chat-input-dock .ibox,
+#chat-col > .chat-status-bar > *{min-width:0;}
 .rc-mini{display:flex;align-items:center;gap:8px;margin-top:4px;min-width:0;flex-wrap:wrap;}
 .rc-chip{display:inline-flex;align-items:center;gap:5px;border-radius:6px;font-size:11px;padding:2px 8px;line-height:18px;white-space:nowrap;}
 .rc-chip .n{font-weight:700;font-size:13px;}
@@ -489,6 +549,12 @@ body.sp-resizing .slide-panel,body.sp-resizing .modal .mbox{transition:none;}
 .lbx-close:hover{color:var(--red);}
 .lbx .form-actions{margin-bottom:0;}
 .lbx .lbx-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;}
+/* 内容较密的弹窗（知识类别选择器 / 自动归集试算表）：放宽卡片，避免"竖排字"。
+   全局 .lbx-card 仍为 420px —— 只对显式申请 .wide 的弹窗生效。 */
+.lbx .lbx-card.wide{width:min(680px,94vw);}
+.kac-tbl td,.kac-tbl th{white-space:nowrap;}
+.kac-tbl .kac-doc{max-width:240px;overflow:hidden;text-overflow:ellipsis;}
+
 .form-row{margin-bottom:10px;}
 .form-row .req{color:var(--red);font-style:normal;}
 .form-row label{display:block;font-size:12.5px;color:var(--txt);font-weight:500;margin-bottom:4px;}
@@ -519,8 +585,12 @@ body.sp-resizing .slide-panel,body.sp-resizing .modal .mbox{transition:none;}
 /* ⓘ 紧邻其他控件（checkbox 旁、按钮旁） */
 .opt-tip{margin-left:4px;}
 
-/* ── 2026-09-07 弹窗标题层级强化：h3 主标题与 .form-section-head 章节标题视觉区分 ── */
-.modal .mbox h3,.slide-panel .sp-header .sp-title{font-size:15px;color:var(--blue-d);font-weight:600;}
+/* ── 2026-09-07 弹窗标题层级强化：h3 主标题与 .form-section-head 章节标题视觉区分 ──
+   ⚠️ 2026-09-28（用户反馈：右侧弹窗顶部的名称看不到）：此规则最初把
+   `.slide-panel .sp-header .sp-title` 也并进来染成 var(--blue-d) —— 而 .sp-header 本身
+   就是 var(--blue-d) 深蓝底（app.css 前部 `.slide-panel .sp-header{background:var(--blue-d);color:#fff}`），
+   深蓝字落在深蓝底上 = 标题隐形。本条只服务白底的 .modal .mbox h3，sp-title 恢复继承头部白字。 */
+.modal .mbox h3{font-size:15px;color:var(--blue-d);font-weight:600;}
 /* .form-section-head 已用 .fs-title 替代旧的内联蓝色小字 */
 
 /* ── 2026-09-07 P1 ⑤ 多选常驻操作提示 ──
@@ -614,6 +684,9 @@ body.sp-resizing .slide-panel,body.sp-resizing .modal .mbox{transition:none;}
 .project-tag .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--grn);margin-right:5px;vertical-align:middle;}
 .project-tag.nomatch{color:var(--amb);background:#fff7e8;border-color:#f0c674;}
 .project-tag.nomatch .dot{background:#f0c674;}
+/* 2026-09-28 多工程 P0-2：顶栏工程标签内的「本任务未关联工程 · 归入」收敛入口 */
+.project-tag .pt-assign{color:var(--color-primary);text-decoration:none;border-bottom:1px dashed currentColor;font-weight:600;}
+.project-tag .pt-assign:hover{opacity:.8;}
 /* v6.2 2026-09-06：user-chip / user-menu / .um-theme-opts 已迁 gnav.css。注释保留以备回溯（行 628-653）
 .user-chip{display:inline-flex;align-items:center;gap:8px;cursor:pointer;padding:3px 12px 3px 4px;border-radius:20px;background:var(--blue-l);border:1px solid var(--blue-bd);position:relative;flex:none;}
 .user-chip:hover{background:#dbe8f7;border-color:#a8c4e8;}
@@ -881,6 +954,46 @@ sup.cite:hover{background:var(--blue-d);color:#fff;border-color:var(--blue-d);}
 }
 .lc-danger { background: #fdecec; color: #c0392b; border: 1px solid #f5c6c6; font-weight: 600; }
 
+/* ── 状态列明细：单行省略 + hover 看全文（2026-09-28）──
+   旧写法 `word-break:break-all;max-width:180px` 会把失败原因折成 4~5 行，把整行表格撑高
+   （实测一条失败记录占满半屏）。这里统一收成一行，全文放 title，悬停即见。 */
+/* 状态列：徽章与明细**同一行**（2026-09-28 用户反馈：徽章一行 + 明细一行 = 占两行高度）。
+   徽章 flex:none 不被压缩；明细是同一 flex 行里的可压缩项，超长省略 + hover 看全文。 */
+.lc-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+.lc-cell .lc-badge { flex: none; }
+.lc-note {
+    display: block;
+    margin-top: 0;
+    max-width: 190px;
+    min-width: 0;
+    font-size: 10.5px;
+    line-height: 1.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: help;                      /* 提示"悬停可看全文" */
+}
+.lc-note.err { color: var(--red); font-weight: 600; }
+.lc-note.mut { color: var(--mut); }
+
+/* ── 知识类别选择器（#lbx 卡内，2026-09-28）──
+   与既有 lbx 卡片同风格（白底 / 1px --line / 8px 圆角），不引入新视觉语言。 */
+.kcp-list { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+.kcp-grp + .kcp-grp { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.kcp-gh { font-size: 11.5px; color: var(--mut); font-weight: 600; margin: 2px 0 4px; }
+.kcp-opt { display: flex; align-items: baseline; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
+.kcp-opt:hover { background: var(--blue-l); }
+.kcp-opt.on { background: var(--blue-l); }
+.kcp-opt input { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+.kcp-name { font-size: 12.5px; color: var(--ink); font-weight: 600; white-space: nowrap; }
+.kcp-opt.on .kcp-name { color: var(--blue-d); }
+.kcp-desc { font-size: 11px; color: var(--mut); }
+
 
 /* ── 2026-09-18 S6-2：由 index.html 内联 <style> 迁入（原位置见 git 历史） ── */
 
@@ -890,3 +1003,43 @@ sup.cite:hover{background:var(--blue-d);color:#fff;border-color:var(--blue-d);}
 /* ── 2026-09-23 知识图谱·合并请求页：左栏列表卡片（主从布局）hover / 选中态 ── */
 .mr-card:hover{ background:#f7faff; }
 .mr-card.on,.mr-card.on:hover{ background:var(--blue-l); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   2026-09-28 澄清卡：一次一题（stepper）
+   背景：原实现把 N 道题 + 每题一个常显输入框一次铺开 → 卡片纵向很长（提交按钮要滚动才见）。
+   改为：题目分步（上一步 / 下一步 + 进度条 + 可点圆点跳转），末步「补充说明（选填）」多行输入；
+   「其他 / 自定义」选中才展开该题输入框（默认不展示）。
+   配色沿用澄清卡既有的浅蓝卡片体系（#f0f6ff 底 + 深色字），故显式写死颜色，
+   不跟随 dark 主题的 --ink 反色（否则浅底 + 浅字不可读）。
+   ══════════════════════════════════════════════════════════════════════════ */
+.clarify-ask-card .clarify-card-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
+.clarify-ask-card .cq-title{color:var(--blue-d,#3478f6);font-size:12.5px;}
+.clarify-ask-card .clarify-prog{margin-left:auto;flex:none;font-size:10.5px;color:#7b8798;}
+.clarify-prog-bar{height:3px;border-radius:2px;background:#dbe6f8;margin-top:7px;overflow:hidden;}
+.clarify-prog-bar > i{display:block;height:100%;border-radius:2px;background:var(--blue,#3478f6);transition:width .22s ease;}
+.clarify-dots{display:flex;gap:5px;margin:7px 0 9px;}
+.clarify-dot{width:18px;height:4px;border-radius:2px;background:#dbe6f8;cursor:pointer;flex:none;transition:background .15s;}
+.clarify-dot:hover{background:#b9cdf0;}
+.clarify-dot.done{background:#9dbdf0;}
+.clarify-dot.on{background:var(--blue,#3478f6);}
+.clarify-steps{min-height:56px;}
+.clarify-step{animation:cqFade .18s ease;}
+@keyframes cqFade{from{opacity:0;transform:translateY(3px);}to{opacity:1;transform:none;}}
+.clarify-step .cq-h{display:flex;align-items:center;gap:6px;margin-bottom:4px;}
+.clarify-step .cq-n{font-size:10px;color:var(--blue-d,#3478f6);background:#e3edfd;border-radius:9px;padding:1px 7px;font-weight:600;}
+.clarify-step .cq-tag{font-size:10px;color:#8b95a6;}
+.clarify-step .cq-q{font-size:12.5px;font-weight:600;color:#1f2b45;line-height:1.55;margin-bottom:7px;}
+.clarify-opts{display:flex;flex-direction:column;gap:1px;}
+.cq-opt{display:flex;align-items:flex-start;gap:7px;cursor:pointer;font-size:11.5px;color:#333f55;
+  padding:4px 6px;border-radius:6px;line-height:1.45;}
+.cq-opt:hover{background:rgba(52,120,246,.08);}
+.cq-opt input[type=radio]{width:auto;flex:none;margin:2px 0 0;}
+.cq-opt .cq-hint2{color:#8b95a6;font-size:10px;margin-left:4px;}
+.cq-opt-custom{border-top:1px dashed #d3e3fb;margin-top:3px;padding-top:5px;}
+.cq-custom-box{margin-top:6px;}
+.cq-custom,.cq-note{width:100%;box-sizing:border-box;border:1px solid var(--line,#dde3ec);border-radius:6px;
+  padding:6px 8px;font-size:11.5px;background:#fff;color:#1f2b45;font-family:inherit;line-height:1.6;}
+.cq-note{margin-top:7px;resize:vertical;min-height:58px;}
+.cq-custom:focus,.cq-note:focus{outline:none;border-color:var(--blue-bd,#bcd4f7);box-shadow:0 0 0 2px rgba(52,120,246,.14);}
+.clarify-foot{margin-top:11px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.clarify-foot .cq-tail{color:#8b95a6;font-size:10.5px;}

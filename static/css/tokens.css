@@ -154,7 +154,13 @@
 :root{
   /* gnav 浅色主题默认值（深蓝沉浸导航） */
   --gnav-bg:           #0c447c;
-  --gnav-bg-soft:      #0a3a70;
+  /* 2026-09-26 左侧导航层次感：--gnav-bg-soft 原值(#0a3a70)与主底仅差 ~12/255，肉眼几乎看不出，
+     一直「定义了却没用」——本次调深一档并正式启用为**分区色带**（顶栏/分区头/底部）。 */
+  --gnav-bg-soft:      #093566;
+  --gnav-band-2:       #072c56;                 /* 底部账号区：再深一档，收口整列、压住视线 */
+  --gnav-rail:         rgba(255,255,255,.46);   /* 分区头左侧 2px 导轨（inset 不占布局） */
+  --gnav-icon:         #9dbcdf;                 /* 图标默认色（比正文暗一档，避免 emoji 抢视线） */
+  --gnav-divider:      rgba(255,255,255,.20);   /* 分区之间强分隔线 */
   --gnav-fg:           #cdddf2;
   --gnav-fg-soft:      #7fa3cc;
   --gnav-fg-strong:    #ffffff;
@@ -171,7 +177,11 @@
 .theme-dark{
   /* gnav 暗色覆盖：变近黑沉浸底 */
   --gnav-bg:           #08152a;
-  --gnav-bg-soft:      #0d1c33;
+  --gnav-bg-soft:      #0b1a2f;                 /* 分区色带（层次感：顶栏/分区头/底部） */
+  --gnav-band-2:       #0d2038;                 /* 暗底上「略亮」才显得靠前 */
+  --gnav-rail:         rgba(255,255,255,.38);
+  --gnav-icon:         #90a5c2;
+  --gnav-divider:      rgba(255,255,255,.14);
   --gnav-fg:           #d3dcef;
   --gnav-fg-soft:      #7a8eab;
   --gnav-fg-strong:    #ffffff;

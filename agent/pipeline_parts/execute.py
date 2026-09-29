@@ -21,6 +21,9 @@ class ExecuteMixin:
         意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
         """
         attachments = attachments or []
+        # 记忆作用域上下文（对齐 mem0）：本会话的 conversation_id + 当前用户，供记忆读写取作用域
+        self._mem_ctx = {"conversation_id": conversation_id, "user": user}
+        self._mem_project_id_cache = None   # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
         self._tool_whitelist = tools_whitelist or None
         self._load_db_agents(user)  # P0 平台化：DB 驱动 Agent 注册表（P1-8：按用户隔离）
         self._last_skill_hits = []
@@ -143,13 +146,18 @@ class ExecuteMixin:
                 retrieve_query += " " + " ".join(slot_ents)
             if retrieval_att:
                 retrieve_query += " " + retrieval_att[:600]
+            # P0（2026-09-29）记忆召回：把「已沉淀的经验/决策」作为一路召回源并入检索结果。
+            # 项目/意图由 pipeline 侧算好传入（检索侧不重复解析，避免两处取值链漂移）。
+            effective_kb_scope = dict(effective_kb_scope or {})
+            effective_kb_scope.update(self._memory_recall_scope(intent, user))
             retrieval = self.rag.retrieve(retrieve_query, branch, attachment_text=(retrieval_att + ('\n\n' + scope_att if scope_att else '')) or None,
                                           kb_scope=effective_kb_scope)
         else:
             retrieval = {"source": "none", "route": "none", "route_reason": "kb_optional",
                          "confidence": 0, "entities": [], "relations": [], "vector_docs": [],
                          "chunk_hits": [], "attachment_hits": [], "attachment_used": False,
-                         "graph_count": 0, "vector_count": 0}
+                         "graph_count": 0, "vector_count": 0,
+                         "memory_hits": [], "memory_count": 0}
         if should_retrieve:
             context_text = self._build_context(retrieval, retrieve_query)
         elif att_text:
@@ -244,7 +252,7 @@ class ExecuteMixin:
             + f"{self._build_model_context(branch, conversation_id, user_input)}"
             # P0 能力：项目级持久记忆注入（Project Constitution，规范/基线防漂移）
             # P0-2（2026-09-19）：传本轮 user_input → 注入块带项目名 + 「仅当本次任务属于该项目领域时适用」声明
-            + self._build_project_memory(user_input=user_input)
+            + self._build_project_memory(user_input=user_input, conversation_id=conversation_id)
             + (f"【任务拆解（P1 结构化）】\n目标：{slots.get('goal') or '-'}\n"
                f"实体：{'、'.join(slots.get('entities') or []) or '-'}\n"
                f"约束：{'；'.join(slots.get('constraints') or []) or '-'}\n"

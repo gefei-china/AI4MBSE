@@ -429,9 +429,9 @@ function renderPreviewBody(a){
       if(lg) lg.innerHTML = svmLegendHtml();
       setTimeout(()=>renderSysMLInPreview(a.meta.sysml_views), 50);
     }
-    // 版本历史 + 入库/采纳（来源会话）
+    // 工程级入库入口条（2026-09-24：版本历史行已移除，仅保留 工程入库/智源拉取/入库历史）（来源会话）
     const svConv = _artConv || currentConvId || 0;
-    setTimeout(()=>loadSysmlVersionsBar(svConv), 80);
+    setTimeout(()=>loadSysmlIngestBar(svConv), 80);
   } else if(kind === 'code'){
     const code = a.preview_content || a.content || '';
     // P0 性能修复：超大代码文件截断展示（全量 esc+innerHTML 曾致点击预览即卡死）；完整内容走下载
@@ -447,9 +447,9 @@ function renderPreviewBody(a){
       ${truncNote}
       <div style="margin-top:8px;display:flex;gap:6px;"><button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="previewDownloadProxy()">⬇ 下载</button></div>
       <div id="preview-sysml-versions" style="text-align:left;"></div>`;
-    // P0-6：产物入口版本跟随代码文件——代码文件预览也挂版本链（含采纳/入库入口）
+    // P0-6：产物入口版本跟随代码文件——代码文件预览也挂工程级入库入口条（2026-09-24 起不再含版本行）
     const svConvC = _artConv || currentConvId || 0;
-    setTimeout(()=>loadSysmlVersionsBar(svConvC), 80);
+    setTimeout(()=>loadSysmlIngestBar(svConvC), 80);
   } else if(kind === 'image'){
     const url = a.file_url || a.preview_content || '';
     bodyEl.innerHTML = url ? `<img class="preview-image" style="max-width:100%;height:auto;" src="${esc(url)}" alt="${esc(a.title)}"><div style="margin-top:8px;"><button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="previewDownloadProxy()">⬇ 下载</button></div>` : '<div style="color:var(--mut);padding:20px;text-align:center;">无图片数据</div>';
@@ -653,8 +653,29 @@ async function artDownloadFmt(id, fmt){
 function previewDownloadProxy(){
   const tb = _previewTabs.find(t=>t.key===_previewActiveKey);
   if(!tb){ toast('无预览数据'); return; }
-  if(tb.id){ artDownload(tb.id); return; }          // 有产物 id → 走后端落盘下载
   try{
+    if(tb.kind==='sysml'){
+      // 2026-09-24 修复：SysML 视图预览是一张"图"（Cytoscape 画布），preview_content 恒空，
+      // 旧逻辑（消息级必弹「无内容可下载」；产物级把 views JSON 当 .sysml 下载）都不是用户要的图。
+      // 现优先把已挂载的视图画布导出 PNG（多视图逐张导出）；一张都没挂载上再走旧路径兜底。
+      const cvs = document.querySelectorAll('#preview-sysml-canvas .svm-canvas');
+      let exported = 0;
+      cvs.forEach(cv=>{
+        const cy = _pvCyFor.get(cv);
+        if(!cy) return;                             // 懒挂载未完成 → 跳过
+        try{
+          const png = cy.png({full:true, bg:'#ffffff'});
+          const a = document.createElement('a');
+          a.href = png; a.download = (tb.title||'SysML视图') + (cvs.length>1 ? '·'+(cv.id||(++exported)) : '') + '.png';
+          document.body.appendChild(a); a.click(); a.remove();
+          exported++;
+        }catch(e){}
+      });
+      if(exported){ toast('🖼 已导出 ' + exported + ' 张视图 PNG'); return; }
+      if(tb.id){ artDownload(tb.id); return; }      // 画布未挂载 → 回退产物下载
+      toast('视图画布尚未渲染完成，请稍候再试'); return;
+    }
+    if(tb.id){ artDownload(tb.id); return; }          // 有产物 id → 走后端落盘下载
     if(tb.kind==='image'){                          // 消息级图片 → 前端拉取下载
       const url = tb.file_url||tb.preview_content||'';
       if(!url){ toast('无图片可下载'); return; }
@@ -698,4 +719,5 @@ function scrollToMessage(msgId){
   el.style.outline = '2px solid var(--blue)';
   setTimeout(()=>{ el.style.outline = ''; }, 2000);
 }
-// ── 轻量 Markdown 渲染（离线自实现）：标题/粗斜体/行内代码/代码块/表格/列表/引用/链接 + 数字表格→SVG 柱状图 ──
+// ── 轻量 Markdown 渲染（离线自实现）：标题/粗斜体/行内代码/代码块/表格/列表/引用/链接
+//    （2026-09-29：数字表格→SVG 柱状图入口已按用户要求移除）──

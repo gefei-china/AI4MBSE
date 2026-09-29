@@ -69,7 +69,12 @@ class AgentPipeline(SessionMixin, SkillMixin, OrchestrMixin, MemoryMixin, Prompt
             try:
                 self.registry.load_from_db(conn, user)
                 rows = conn.execute(
-                    "SELECT name, display_name, description, intent_keywords FROM agents WHERE status='active'"
+                    # ⚠️ 必须 ORDER BY：语义索引文本 = 这些行的 display_name/description/keywords 按序拼接，
+                    #   而候选向量缓存与路由指纹都取 `md5(join(texts))` —— **行序一变 key 就变**，
+                    #   导致①预热永远命中不上（实测：预热 fp=57c4e8b1、请求 fp=58cbb216，都是 52 条）
+                    #   ②意图缓存指纹抖动。SQLite 无 ORDER BY 时行序不保证稳定（实测踩到）。
+                    "SELECT name, display_name, description, intent_keywords FROM agents "
+                    "WHERE status='active' ORDER BY name"
                 ).fetchall()
                 sem_idx = []
                 seen = set()
@@ -88,7 +93,8 @@ class AgentPipeline(SessionMixin, SkillMixin, OrchestrMixin, MemoryMixin, Prompt
                     })
                     seen.add(r["name"])
                 # 插件侧 Agent（无旧表承载）：按 manifest 关键词注册
-                for _n, _m in self.registry.plugin_agents().items():
+                #  同样**按 name 排序**：索引顺序必须确定（理由同上面的 ORDER BY）
+                for _n, _m in sorted(self.registry.plugin_agents().items()):
                     if _n in seen:
                         continue
                     _kws = _m.get("intent_keywords") or []

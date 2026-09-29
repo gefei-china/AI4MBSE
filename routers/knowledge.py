@@ -4,6 +4,7 @@ from routers.knowledge_parts.graph import *  # noqa: F401,F403  路由注册（�
 from routers.knowledge_parts.glossary import *  # noqa: F401,F403  路由注册（副作用 import）
 from routers.knowledge_parts.graph_query import *  # noqa: F401,F403  路由注册（副作用 import）
 from routers.knowledge_parts.stats import *  # noqa: F401,F403  路由注册（副作用 import）
+from routers.knowledge_parts.dashboard import *  # noqa: F401,F403  知识看板聚合（P0 口径统一）
 from routers.knowledge_parts.ontology import *  # noqa: F401,F403  路由注册（副作用 import）
 from routers.knowledge_parts.ontology_version import *  # noqa: F401,F403  路由注册（副作用 import）
 from routers.knowledge_parts.pipeline import *  # noqa: F401,F403  路由注册（副作用 import）

@@ -61,6 +61,8 @@ from .migrations import (
     _migrate_doc_folders,  # 2026-09-21 文档目录树 doc_folders + documents.folder_id（基于文件的管理）
     _migrate_plugin_tables,
     _migrate_plugin_dependencies,  # 2026-09-16 能力依赖索引表（P0-2）
+    _migrate_intent_samples,
+    _migrate_dashboard_snapshots,      # 2026-09-26 意图样本池（新增迁移须在此处**显式导入**，否则 NameError）
 )
 from .seeds import (
     _seed,
@@ -516,9 +518,14 @@ def init_db():
         content TEXT DEFAULT '',
         embedding TEXT DEFAULT '[]',
         mem_topic TEXT DEFAULT '',           -- 主题标签（Auto Memory 索引，检索先按主题过滤）
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        scope_type TEXT DEFAULT '',          -- 作用域：'' | global | project | user | agent（'' = 存量行，按 agent 槽召回）
+        scope_id TEXT DEFAULT ''             -- 作用域标识：project=projects.id / user=username / agent=intent / global 为空串
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ux_am_agent ON agent_memory(agent_id, mem_type)")
+    # ⚠️ ix_am_scope 不在此处建：老库「表已存在」时 CREATE TABLE IF NOT EXISTS 不会加列，
+    #    此处建索引会 `no such column: scope_type` 直接打断 init_db。统一放到补列迁移之后
+    #    （database/migrations/columns.py 的 _migrate_columns 内）。
 
     c.execute("""CREATE TABLE IF NOT EXISTS generate_rules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -752,6 +759,7 @@ def init_db():
         uploaded_by TEXT DEFAULT '',
         branch TEXT DEFAULT 'global',  -- KB分支：⚠️ 文档为全局资产，恒 'global'（列保留仅为历史兼容）
         knowledge_category TEXT DEFAULT '',  -- P0-3: 知识类别（设计方法知识/设计资产子类，空=未分类）
+        summary TEXT DEFAULT '',  -- 2026-09-29: LLM 真摘要（空=未生成，preview 回退「前2块截断」旧行为）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
@@ -922,6 +930,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER REFERENCES conversations(id),
         message_id INTEGER DEFAULT 0,
+        project_id TEXT DEFAULT '',           -- P1-1（2026-09-28）：**写入时定格**所属工程（空=无工程会话，合法）
         kind TEXT NOT NULL,          -- report | code | sysml | document | other（仅 AI 生成）
         title TEXT DEFAULT '',
         filename TEXT DEFAULT '',
@@ -945,6 +954,7 @@ def init_db():
         artifact_id INTEGER DEFAULT 0,        -- 关联 artifacts(kind=sysml)
         conversation_id INTEGER DEFAULT 0,    -- 来源会话
         message_id INTEGER DEFAULT 0,         -- 来源消息
+        project_id TEXT DEFAULT '',           -- P1-1（2026-09-28）：**写入时定格**所属工程（空=无工程会话，合法）
         version_label TEXT NOT NULL,          -- v0.1 / v0.2 / v1.0
         content TEXT DEFAULT '',              -- SysML v2 源码/视图 JSON 快照
         diff TEXT DEFAULT '{}',               -- JSON：相对上一版变更摘要（文本级）
@@ -1113,6 +1123,10 @@ def init_db():
     _migrate_eval_tables(conn)
     # ── KB v2 增强：归一化/冲突消解/Golden Set/本体蓝图表（对标知识图谱平台 v2.0）──
     _migrate_kb_v2_enhance(conn)
+    # ── 2026-09-26 意图识别样本池（把硬编码评测集搬进库，设置页可维护；评测只消费 confirmed）──
+    _migrate_intent_samples(conn)
+    # ── 2026-09-26 知识看板指标快照（P2：值+状态的历史点，供 sparkline 趋势）──
+    _migrate_dashboard_snapshots(conn)
     # ── P0-④（2026-09-11）时态管理：双时态列 + 索引 + 视图 + W3C Time 对齐表 ──
     _migrate_entity_temporal(conn)
     # ── P1-①（2026-09-11）SWRL 规则管理表：swrl_rules + inferred_facts（推理产出暂存）──

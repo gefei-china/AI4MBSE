@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI4MBSE 知识看板 · UX 效果预览（导航减层 + 筛选态下钻）</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- 预览控制条：不属于被设计对象，仅用于切换①/②视图与主题；
+     每张视图内部的"改进前/改进后"对照开关放在各自视图里，避免同一开关出现两处 -->
+<div class="ctrl">
+  <span class="lb">预览</span>
+  <span class="chip on" data-view="nav">① 导航减层</span>
+  <span class="chip" data-view="drill">② 筛选态下钻</span>
+  <span class="sep"></span>
+  <span class="chip" id="themeBtn" title="切换浅色 / 暗色">浅色 / 暗色</span>
+  <span class="note">数据取自 mbse_system 真实库（2026-09-27 取样）· 本页为原型，不改动工程代码</span>
+</div>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main" id="main"></main>
+</div>
+
+<script src="mock.js"></script>
+<script src="api.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

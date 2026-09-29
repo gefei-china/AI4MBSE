@@ -40,20 +40,104 @@ class MemoryService:
             pass
         return None, ""
 
+    # ── 多维作用域助手（对齐 mem0 四维 scope + 复合过滤；缺列/无作用域 → 逐字沿用旧行为）──
+    @staticmethod
+    def _has_scope_cols(conn) -> bool:
+        """探测 agent_memory 是否已有 scope_type/scope_id（老库/夹具库缺列 → False，走旧 SQL）。"""
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()]
+            return "scope_type" in cols and "scope_id" in cols
+        except Exception:
+            return False
+
+    @staticmethod
+    def _scope_filter(conn, agent_id: str, scopes):
+        """构造作用域复合过滤 → (clause, params, idx_of)。
+
+        scopes 为**有序**槽位 [(type, id), ...]（优先级高→低），如
+        [('project', pid), ('user', uname), ('agent', intent), ('global', '')]。
+        存量行（scope_type=''）按 agent 槽召回 —— 保证老记忆不静默消失。
+        返回 clause 形如 " AND ( (...=?) OR ... OR (scope_type='' AND agent_id=?) )"；
+        无作用域/缺列 → ("", [], {})（调用方沿用旧 SQL）。
+        """
+        try:
+            scopes = [(str(t), str(i or "")) for t, i in (scopes or []) if t]
+        except Exception:
+            return "", [], {}
+        if not scopes or not MemoryService._has_scope_cols(conn):
+            return "", [], {}
+        parts, params = [], []
+        for st, sid in scopes:
+            if st == "global":
+                parts.append("(scope_type='global' AND scope_id='')")
+            else:
+                parts.append("(scope_type=? AND scope_id=?)")
+                params.extend([st, sid])
+        parts.append("(scope_type='' AND agent_id=?)")   # 存量行
+        params.append(agent_id)
+        return " AND (" + " OR ".join(parts) + ")", params, {t: i for i, (t, _i) in enumerate(scopes)}
+
+    @staticmethod
+    def _scope_boosts(n: int) -> list:
+        """作用域优先级加成序列（配置 memory.scope_boost，逗号分隔；不足则用末位补齐）。"""
+        vals = []
+        try:
+            from core import config as _cfg
+            raw = str(_cfg.get("memory", "scope_boost", "1.35,1.18,1.06,1.0") or "")
+            vals = [float(x) for x in raw.split(",") if str(x).strip()]
+        except Exception:
+            vals = []
+        if not vals:
+            vals = [1.35, 1.18, 1.06, 1.0]
+        while len(vals) < n:
+            vals.append(vals[-1])
+        return vals
+
+    @staticmethod
+    def _scope_boost_of(row: dict, idx_of: dict, agent_id: str) -> float:
+        """软重排加成：按槽位序号取；存量行按 agent 槽；不在槽位内 → 最低档 1.0（仅打破近邻，不做硬分桶）。"""
+        try:
+            if not idx_of:
+                return 1.0
+            st = str(row.get("scope_type") or "")
+            idx = idx_of.get("agent", len(idx_of)) if not st else idx_of.get(st, len(idx_of))
+            boosts = MemoryService._scope_boosts(len(idx_of) + 1)
+            return boosts[idx] if 0 <= idx < len(boosts) else 1.0
+        except Exception:
+            return 1.0
+
     # ── 读：语义检索 ──
     @staticmethod
     def search(conn, agent_id: str, query: str = "", top_k: int = 5,
-               mem_type: str = "", max_age_days: int = 90, mem_topic: str = "") -> list:
+               mem_type: str = "", max_age_days: int = 90, mem_topic: str = "",
+               scopes: list | None = None, any_scope: bool = False) -> list:
         """按语义相关度检索记忆（真向量优先 + 时间衰减；bigram 兜底）。
 
         mem_topic 非空 → 先按主题标签精确过滤（Auto Memory 索引，避免平铺误拉），再语义排序。
         query 为空 → 退化为最近 top_k 条（兼容旧行为）。
-        返回 [{content, mem_type, score, created_at}]。
+        scopes（对齐 mem0 复合过滤）：有序作用域槽位 [(type, id), ...]（优先级高→低）。
+          非空 → 作用域复合过滤 + 优先级软重排（不做硬分桶）；为空/None → **逐字沿用旧行为**（仅 agent_id）。
+        any_scope（2026-09-29 新增）→ **不加任何 归属/作用域 过滤，全库语义检索**。
+          用途：`agent/memory_recall.py` 的"跨域兜底" —— 当 intent 落在稀疏域（chat=1 条）
+          而通用方法论在别的域时，同域召回必然为 0。此时需要一路"放弃归属过滤"的召回。
+          ⚠️ 与 scopes 的语义区别：scopes 是**扩大 OR 集合**（project∪user∪agent∪global 槽），
+             而库里大量行 `scope_type='project'` 只匹配特定槽 —— 实测 `scopes=[('global','')]`
+             或 `[('agent','')]` 都召回 0 条。any_scope=True 才是真正"全库"。
+          默认 False = **零行为漂移**（既有调用方逐字不变）。
+        返回 [{content, mem_type, score, created_at, scope_type?, scope_id?}]。
         """
         try:
+            _clause, _cparams, _idx_of = MemoryService._scope_filter(conn, agent_id, scopes)
+            if any_scope:
+                _clause, _cparams, _idx_of = "", [], {}
             if not query:
-                sql = "SELECT * FROM agent_memory WHERE agent_id=? AND forgotten=0"
-                params: list = [agent_id]
+                # 作用域生效时不再用 agent_id 作唯一约束（user/global 槽需跨 Agent 复用）
+                if any_scope:
+                    _base = "forgotten=0"
+                else:
+                    _base = ("forgotten=0" + _clause) if _clause else "agent_id=? AND forgotten=0"
+                sql = "SELECT * FROM agent_memory WHERE " + _base
+                params: list = [] if any_scope else (list(_cparams) if _clause else [agent_id])
                 if mem_topic:
                     sql += " AND mem_topic=?"
                     params.append(mem_topic)
@@ -61,8 +145,12 @@ class MemoryService:
                 params.append(top_k)
                 rows = conn.execute(sql, params).fetchall()
                 return [dict(r) for r in rows]
-            sql = "SELECT * FROM agent_memory WHERE agent_id=? AND mem_type!='session' AND forgotten=0"
-            params = [agent_id]
+            if any_scope:
+                _base = "mem_type!='session' AND forgotten=0"
+            else:
+                _base = ("mem_type!='session' AND forgotten=0" + _clause) if _clause else "agent_id=? AND mem_type!='session' AND forgotten=0"
+            sql = "SELECT * FROM agent_memory WHERE " + _base
+            params = [] if any_scope else (list(_cparams) if _clause else [agent_id])
             if mem_type:
                 sql += " AND mem_type=?"
                 params.append(mem_type)
@@ -101,9 +189,11 @@ class MemoryService:
                     ts = now
                 age_days = max(0, (now - ts) / 86400)
                 decay = max(0.4, 1.0 - age_days / max_age_days)  # 时间衰减：越新权重越高
-                scored.append((s * decay, r))
+                # 作用域优先级软重排（mem0 式）：仅调整排序，不改写返回的 score（注入文案口径不变）
+                _boost = MemoryService._scope_boost_of(r, _idx_of, agent_id)
+                scored.append((s * decay * _boost, s, r))
             scored.sort(key=lambda x: x[0], reverse=True)
-            out = [{**dict(r), "score": round(s, 3)} for s, r in scored[:top_k]]
+            out = [{**dict(r), "score": round(_raw, 3)} for _fin, _raw, r in scored[:top_k]]
             # P2：命中记访问（激活度随使用上调，供遗忘引擎评估）
             for it in out[:3]:
                 MemoryService.record_access(conn, it.get("id"))
@@ -114,9 +204,11 @@ class MemoryService:
     # ── 写：主动沉淀 ──
     @staticmethod
     def deposit(conn, agent_id: str, content: str, mem_type: str = "fact",
-                source: str = "agent", **extra) -> int | None:
+                source: str = "agent", scope_type: str = "", scope_id: str = "", **extra) -> int | None:
         """写入长期记忆（content 截断防膨胀），同步写真 embedding。返回新记录 id。
 
+        scope_type/scope_id：多维作用域（global/project/user/agent）。**ADD-only 不覆盖**——只追加，
+        从不 UPDATE 旧记忆（对齐 mem0），去重/时效交给合并与软重排。
         P2：每 maintain_every 次沉淀触发一次维护（遗忘+合并）。
         """
         try:
@@ -139,14 +231,19 @@ class MemoryService:
             mem_type = mem_type if mem_type in MemoryService.MEM_TYPES else "fact"
             c = content.strip()[:800]
             mem_topic = (str(extra.get("mem_topic") or "")).strip()[:40]  # Auto Memory 主题索引
+            st = (str(scope_type or "")).strip()[:20]
+            sid = (str(scope_id or "")).strip()[:120]
             vec, ver = MemoryService._embed(conn, c)
+            _sc = MemoryService._has_scope_cols(conn)   # 老库/夹具库缺列 → 走旧列集（fail-safe）
             cur = conn.execute(
-                "INSERT INTO agent_memory (agent_id, mem_type, content, embedding, embed_version, source, relevance, activation, mem_topic) "
-                "VALUES (?,?,?,?,?,?,?,1.0,?)",
+                "INSERT INTO agent_memory (agent_id, mem_type, content, embedding, embed_version, source, relevance, activation, mem_topic"
+                + (", scope_type, scope_id" if _sc else "") + ") "
+                "VALUES (?,?,?,?,?,?,?,1.0,?" + (",?,?" if _sc else "") + ")",
                 (agent_id, mem_type, c,
                  json.dumps(vec, ensure_ascii=False) if vec else "[]",
                  ver if vec else "",
-                 source, extra.get("relevance", 1.0), mem_topic))
+                 source, extra.get("relevance", 1.0), mem_topic)
+                + ((st, sid) if _sc else ()))
             conn.commit()
             # P2：周期维护（每 maintain_every 次沉淀）
             try:
@@ -176,8 +273,36 @@ class MemoryService:
 
     # ── P2：遗忘引擎——激活度低于阈值 → 软遗忘（forgotten=1，检索跳过，可恢复）──
     @staticmethod
-    def forget(conn, agent_id: str = "", threshold: float = 0.2, max_age_days: int = 90) -> int:
-        """按激活度+时效衰减标记遗忘记忆，返回遗忘条数（软删，不物理删除）。"""
+    def forget(conn, agent_id: str = "", threshold: float = 0.2, max_age_days: int = 90,
+               max_unused_days: int = 0, min_access: int = 0) -> int:
+        """按「时效 + 使用证据」标记遗忘记忆，返回遗忘条数（软删，不物理删除，可恢复）。
+
+        ⚠️ 2026-09-29 根因修复：原实现 `decayed = activation * max(0.4, 1 - age/max_age)`
+        **在本工程下结构性永不触发**。实测与证明：
+          - `deposit()` 里 activation 硬编码初值 **1.0**，且 `record_access` 只做 `+0.1`（上限 2.0）
+            —— **activation 从不下降**；
+          - 衰减因子的下界是 **0.4**（`max(0.4, ...)`）；
+          - 故 `decayed ≥ 1.0 * 0.4 = 0.4`，而阈值 0.2 → `0.4 < 0.2` 恒假；
+          - 实测：对生产库 118 条未遗忘记忆跑 `forget(threshold=0.2, max_age_days=90)`
+            → **遗忘 0 条（0%）**。"遗忘引擎"此前是**死代码**。
+        非空转证据（数学穷举）：唯有 activation < 0.5 时才可能触发，而没有任何代码路径能把它降到 0.5 以下。
+
+        **修法**：判据不再依赖"只增不减的 activation"，改为**引入真实时间维度 + 使用证据**：
+          1) **时效遗忘**：距「最后访问（无则创建）」超过 `max_unused_days` → 遗忘。
+             这是主判据，直接对齐行业（LRU / TTL 式记忆淘汰），不像 activation 那样会自我抵消。
+          2) **低价值遗忘**：`access_count <= min_access`（默认 0 = 从未被访问）
+             且已超过 `max_age_days` → 遗忘。即「放了很久又从没用过」= 没价值。
+          3) 原 activation 公式**保留**为附加通道（配置 `memory.forget_by_activation`
+             默认**关**）：因为它对 activation < 0.5 的行仍有效，且关掉可避免
+             "旧口径突然生效导致批量误删"。默认关 = 行为可预测、不惊群。
+
+        参数：
+          max_unused_days —— 主判据：多少天未被访问即遗忘；**0/None = 该判据不启用**（防误配全删）
+          min_access      —— 低价值判据的访问次数上限（默认 0 = 从未访问过）
+          max_age_days    —— 低价值判据的年龄门槛（沿用原参数名，语义扩展为"陈旧门槛"）
+
+        返回遗忘条数。异常返回 0（不阻断）。
+        """
         import time as _t
         try:
             where = "WHERE forgotten=0"
@@ -189,18 +314,35 @@ class MemoryService:
                 "SELECT id, activation, access_count, created_at, last_accessed_at FROM agent_memory " + where,
                 params).fetchall()
             now = _t.time()
+            _by_act = False
+            try:
+                from core import config as _cfg
+                _by_act = _cfg.as_bool("memory", "forget_by_activation", False)
+            except Exception:
+                _by_act = False
             n = 0
             for r in rows:
-                act = r["activation"]
-                # 时效衰减：越久未访问激活度越低
                 la = r["last_accessed_at"] or r["created_at"] or ""
                 try:
                     ts = _t.mktime(_t.strptime(la, "%Y-%m-%d %H:%M:%S"))
                 except Exception:
-                    ts = now
+                    ts = now           # 时间解析失败 → 视为"刚访问"，不因脏数据误删
                 age_days = max(0, (now - ts) / 86400)
-                decayed = act * max(0.4, 1.0 - age_days / max_age_days)
-                if decayed < threshold:
+                _access = int(r["access_count"] or 0)
+                reason = ""
+                # 判据 1（主）：久未访问
+                if max_unused_days and max_unused_days > 0 and age_days >= max_unused_days:
+                    reason = f"unused_{int(age_days)}d"
+                # 判据 2：陈旧且从未被用过
+                elif (max_age_days and max_age_days > 0 and age_days >= max_age_days
+                      and _access <= int(min_access or 0)):
+                    reason = f"stale_{int(age_days)}d_access{_access}"
+                # 判据 3（可选，默认关）：原 activation 通道
+                elif _by_act:
+                    decayed = float(r["activation"] or 0) * max(0.4, 1.0 - age_days / max(max_age_days, 1))
+                    if decayed < threshold:
+                        reason = f"activation_{round(decayed, 3)}"
+                if reason:
                     conn.execute("UPDATE agent_memory SET forgotten=1 WHERE id=?", (r["id"],))
                     n += 1
             conn.commit()
@@ -222,9 +364,12 @@ class MemoryService:
             if agent_id:
                 where += " AND agent_id=?"
                 params.append(agent_id)
+            _sc = MemoryService._has_scope_cols(conn)
+            _cols = "id, agent_id, mem_type, content, embedding, embed_version, created_at, forgotten"
+            if _sc:
+                _cols += ", scope_type, scope_id"
             rows = conn.execute(
-                ("SELECT id, agent_id, mem_type, content, embedding, embed_version, created_at, forgotten "
-                 "FROM agent_memory " + where + " ORDER BY id"), params).fetchall()
+                ("SELECT " + _cols + " FROM agent_memory " + where + " ORDER BY id"), params).fetchall()
             if len(rows) < 2:
                 return 0
             # 是否可走真向量：存在同版本 embedding 对
@@ -252,6 +397,10 @@ class MemoryService:
                     if b["forgotten"]:
                         continue
                     if b["agent_id"] != a["agent_id"] or b["mem_type"] != a["mem_type"]:
+                        continue
+                    # 作用域隔离：只在同一 (scope_type, scope_id) 内合并（防跨工程/跨用户误合并）
+                    if _sc and ((a.get("scope_type") or ""), (a.get("scope_id") or "")) != \
+                            ((b.get("scope_type") or ""), (b.get("scope_id") or "")):
                         continue
                     s = 0.0
                     used_dense = False
@@ -283,24 +432,142 @@ class MemoryService:
     # ── P2：周期维护入口（遗忘 + 合并，幂等）──
     @staticmethod
     def maintain(conn, agent_id: str = "") -> dict:
+        """记忆维护：遗忘 + 合并。返回 {"forgotten": n, "merged": m}。
+
+        ⚠️ 2026-09-29：遗忘判据已修（见 `forget` 的 docstring —— 原公式结构性永不触发）。
+        新增两个配置：`memory.max_unused_days`（主判据，默认 0=不启用时效遗忘）、
+        `memory.forget_min_access`（低价值判据的访问次数上限，默认 0）。
+        ⚠️ 默认值刻意**保守**（时效遗忘默认关）：修完根因不等于要立刻批量清库 ——
+        先把"能遗忘"的能力接上，阈值由配置逐步放开，避免旧库一次性被清空。
+        """
         from core import config as _cfg
         forget_n = 0
         merge_n = 0
         if _cfg.as_bool("memory", "forget_enabled", True):
-            forget_n = MemoryService.forget(conn, agent_id,
-                                            threshold=float(_cfg.get("memory", "forget_threshold", 0.2)))
+            forget_n = MemoryService.forget(
+                conn, agent_id,
+                threshold=float(_cfg.get("memory", "forget_threshold", 0.2)),
+                max_age_days=int(_cfg.get("memory", "max_age_days", 90)),
+                max_unused_days=int(_cfg.get("memory", "max_unused_days", 0)),
+                min_access=int(_cfg.get("memory", "forget_min_access", 0)))
         merge_n = MemoryService.consolidate(conn, agent_id,
                                             threshold=float(_cfg.get("memory", "consolidate_threshold", 0.85)))
         return {"forgotten": forget_n, "merged": merge_n}
 
+    @staticmethod
+    def run_maintenance(conn=None) -> dict:
+        """**独立**维护入口（2026-09-29）—— 不再依赖 `deposit()` 触发。
+
+        修复的第二个问题：`maintain()` 此前**只在 `deposit()` 内部**被调用（每 maintain_every 次写入触发一次）。
+        后果：**只要系统不再写新记忆，过期经验就永远不被清理**（"只有倒垃圾时才扫地"）。
+        实测：生产库 125 条记忆，7 条已遗忘，而遗忘引擎因公式缺陷一条也删不掉。
+
+        本函数供外部调度调用（管理端点 / 定时任务 / 运维脚本），与写入解耦：
+            from memory_service import MemoryService
+            MemoryService.run_maintenance()
+        返回 {"forgotten": n, "merged": m}；异常返回 {"forgotten": 0, "merged": 0, "error": ...}。
+        """
+        own = False
+        try:
+            if conn is None:
+                from database import get_db
+                conn = get_db()
+                own = True
+            res = MemoryService.maintain(conn)
+            return res
+        except Exception as e:
+            return {"forgotten": 0, "merged": 0, "error": str(e)[:200]}
+        finally:
+            if own and conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     # ── 评估沉淀：LLM 提炼 or 规则阈值 ──
+    #  2026-09-29 重写：原规则兜底 `len>120 and not startswith(抱歉/我理解/作为)` → 沉淀 content[:400]
+    #  实测后果（生产库 118 条未遗忘记忆）：
+    #    - 47%(56/118) 从未被检索命中过 → "沉淀即死"；
+    #    - rule_agent 7 条里混入整篇报告正文（"# MBSE 任务汇总最终报告…"）、寒暄回复（"你好，我是…"）；
+    #    - reflow 54 条的绝大多数是**图谱实体本身**（"IP67防护等级要求：系统必须满足…（来源 test-reg）"）
+    #      —— 那是知识图谱的数据，不是"经验"，属于把知识库复制进记忆库。
+    #  病根：**"长"被当成"值得记"**。长度只是"有实质内容"的弱代理，与"可复用"无关。
+    #  修法见下方 _extract_worthy()：三重门（长度带 → 噪音门 → 经验信号门），宁可少沉淀。
+    @staticmethod
+    def _extract_worthy(content: str, min_len: int) -> tuple[bool, str]:
+        """判断文本是否值得沉淀为长期经验。返回 (是否值得, 拒绝原因)。
+
+        三重门（2026-09-29 新增）：
+          门1 长度带：太短（<min_len）无信息；**过长（>600）是报告/文档正文，不是经验**
+                     —— 经验应是一句可复用的判断/方法，而不是一段交付物。
+          门2 噪音门：寒暄、自我介绍、兜底道歉、纯测试输入、图谱实体样式的"X：Y（来源 Z）"。
+          门3 经验信号门：必须含有"可复用的判断/方法论"措辞（须/应/先…再/不要/避免/推荐/
+                     否则/注意/原则/规范/流程/已确认/口径 等），否则只是陈述性事实 → 归 fact/不沉淀。
+        """
+        c = (content or "").strip()
+        if len(c) < min_len:
+            return False, "too_short"
+        if len(c) > 600:
+            return False, "too_long_looks_like_document"
+        # 门2 噪音
+        for pat in MemoryService._NOISE_RE:
+            if re.search(pat, c, re.I):
+                return False, "noise:" + pat
+        # 整篇报告/文档特征（Markdown 标题开头 / 多行分段 / 引用块）
+        if re.match(r"^#{1,3}\s", c) or c.count("\n") >= 3 or re.search(r"(?m)^\s*>", c):
+            return False, "document_body"
+        # 门3 经验信号：词表命中 或 结构模式命中（先…再… / 若…则…）
+        _has_sig = any(k in c for k in MemoryService._VALUE_KEYS) or \
+            any(re.search(p, c) for p in MemoryService._VALUE_RE)
+        if not _has_sig:
+            return False, "no_actionable_value"
+        return True, ""
+
+    # 噪音正则（寒暄/自介/测试残留/图谱实体样式）
+    _NOISE_RE = (
+        r"^(你好|您好|hi|hello|嗨)",
+        r"我是.{0,16}(助手|智能体|AI 助手|通用助手)",
+        r"^\s*(抱歉|我理解|作为)",
+        r"我这边没有识别到",
+        r"方便补充一下",
+        r"^[^\n]{0,30}[：:]\s*[^\n]{0,40}（来源\s*[A-Za-z0-9_\-]+）\s*$",  # 图谱实体「X：Y（来源 test-reg）」
+        r"^\s*\d{1,6}\s*$",                                          # 纯数字输入
+    )
+    # 经验"可复用性"信号词：出现任意一个才认为含有方法论/判断（否则只是事实陈述）
+    # ⚠️ 2026-09-29 两轮教训（均有实测样本支撑）：
+    #   轮1：**裸单字假阳性** —— 「允」用于"对**应**关系"、「先/再」用于"**先**进"，
+    #       使「…之间关系与对应关系…」这类纯陈述被误判为"有经验价值"。
+    #   轮2：**一刀切删单字又误杀真经验** —— 生产库里两条高价值记忆（vc 格式口径 / 包树查询方法）
+    #       都靠「须按包取源码」「先…再…」承载，删掉后它们被判"无价值"。
+    #   正解：**单字必须带邻接约束**（情态动词 + 动作动词才算方法论），
+    #        另外补上"先…再…"这种**跨小句结构模式**（用正则，不是子串）。
+    _VALUE_KEYS = (
+        # 情态/义务（多字，安全）
+        "必须", "不得", "禁止", "务必", "应该", "应当", "否则", "不建议", "不要",
+        "避免", "注意", "推荐", "才能", "原则", "规范", "口径", "流程", "步骤",
+        "方法论", "建议", "关键点", "要点", "前提", "约束条件",
+        # 踩坑/实证
+        "易在", "易被", "易于", "容易", "坑", "教训", "踩过", "实测", "已验证",
+        "已确认", "结论是", "仅支持", "只能", "不支持", "区别在于", "相比之下", "优先",
+        # 单字情态 + 动作（邻接约束，避免"对应/先进"式假阳性）
+        "须按", "须先", "须在", "须携", "须经", "须用", "须以", "须通过",
+        "需先", "需按", "需在", "需二", "需通", "需经", "需携带", "需要先",
+    )
+    # 结构型信号（正则）：先…再…、先…然后…、如果…就/则…、一旦…就…
+    _VALUE_RE = (
+        r"先[^。；;]{0,40}?[，,]\s*再",
+        r"先[^。；;]{0,40}?然后",
+        r"(如果|若|一旦)[^。；;]{0,60}?(就|则|便)",
+    )
+
     @staticmethod
     def maybe_deposit(conn, agent_id: str, task_content: str,
-                      task_query: str = "", min_len: int = 40) -> int | None:
+                      task_query: str = "", min_len: int = 40,
+                      scope_type: str = "", scope_id: str = "", user_scope=None) -> int | None:
         """执行/任务完成后评估是否值得沉淀。
 
         真实 LLM 可用 → 要求 LLM 输出 JSON {worth, mem_type, memory, mem_topic}，按提炼结果沉淀；
-        Mock/无 key/解析失败 → 规则降级：内容足够长且有实质信息则沉淀为 fact（确定性）。
+        Mock/无 key/解析失败 → 规则降级 `_extract_worthy()`（三重门，宁缺毋滥）。
         """
         try:
             content = (task_content or "").strip()
@@ -310,7 +577,14 @@ class MemoryService:
             resp = llm_client.chat(
                 [{"role": "system", "content": (
                     "你是 MBSE 领域记忆管理员。判断下面的任务产出是否值得沉淀为 Agent 长期经验"
-                    "（fact 事实 / preference 偏好 / experience 经验 / skill 可复用方法）。"
+                    "（fact 事实 / preference 偏好 / experience 经验 / skill 可复用方法）。\n"
+                    "**只有满足以下之一才 worth=true**："
+                    "① 可复用的方法/步骤/口径；② 一条踩过的坑或反直觉事实；"
+                    "③ 用户的稳定偏好；④ 已确认的关键约定（接口格式、命名规则、边界条件）。\n"
+                    "**以下一律 worth=false**：寒暄/自我介绍/兜底道歉；整篇报告或文档正文；"
+                    "知识图谱里已有的实体（如「某需求：系统必须满足…」）；"
+                    "一次性任务的产出物内容；没有普适性的具体数值。\n"
+                    "宁可漏记，不可错记——错误经验会在后续检索中被当参考传播。"
                     '只输出 JSON：{"worth": true/false, "mem_type": "fact", "memory": "一句话提炼", '
                     '"mem_topic": "主题标签（4~10 字，如 建模规范/链路预算方法论）"}，'
                     "记忆内容 30~100 字，不要其他文字。")},
@@ -327,15 +601,40 @@ class MemoryService:
                 mem_type = mt.group(1) if mt else "experience"
                 memory = mem.group(1) if mem else content[:200]
                 mem_topic = mtopic.group(1).strip() if mtopic else ""
+                # LLM 提炼结果仍需过噪音门（防 LLM 复读原文/记住寒暄）
+                ok, why = MemoryService._extract_worthy(memory, min_len=12)
+                if not ok:
+                    return None
+                # 偏好类记忆 → 用户作用域（跨 Agent 复用）；其余落默认作用域
+                _st, _sid = scope_type, scope_id
+                if mem_type == "preference" and user_scope:
+                    _st, _sid = user_scope[0], user_scope[1]
                 return MemoryService.deposit(conn, agent_id, memory, mem_type, source="llm_agent",
-                                             mem_topic=mem_topic)
+                                             mem_topic=mem_topic, scope_type=_st, scope_id=_sid)
         except Exception:
             pass
-        # 规则降级：有实质内容 → 沉淀为经验，主题取内容首词（确定性）
-        if len(content) > 120 and not content.startswith(("抱歉", "我理解", "作为")):
-            return MemoryService.deposit(conn, agent_id, content[:400], "experience", source="rule_agent",
-                                         mem_topic=MemoryService._rule_topic(content))
+        # 规则降级：三重门通过才沉淀（确定性）；提炼为一句，不整段抄
+        ok, why = MemoryService._extract_worthy(content, min_len=min_len)
+        if ok:
+            return MemoryService.deposit(conn, agent_id, MemoryService._condense(content), "experience",
+                                         source="rule_agent",
+                                         mem_topic=MemoryService._rule_topic(content),
+                                         scope_type=scope_type, scope_id=scope_id)
         return None
+
+    @staticmethod
+    def _condense(content: str, limit: int = 200) -> str:
+        """规则降级时的"一句话提炼"：取首个完整句/前 limit 字，避免整段抄入库。
+
+        2026-09-29：原实现直接 `content[:400]` —— 把报告正文整段（含 Markdown 标题、
+        "> 说明：…"引用块）塞进记忆，导致记忆库被交付物污染。改为**按句界截取首句**。
+        """
+        c = re.sub(r"\s+", " ", (content or "").strip())
+        m = re.search(r"^(.{20,}?[。；;!?！？])", c)
+        if m and len(m.group(1)) <= limit:
+            return m.group(1).strip()
+        return c[:limit].strip()
+
 
     @staticmethod
     def _rule_topic(content: str) -> str:
@@ -348,7 +647,8 @@ class MemoryService:
 
     # ── 会话级推动（Hermes 式定期评估）──
     @staticmethod
-    def push(conn, agent_id: str, user_input: str, output: str) -> int | None:
+    def push(conn, agent_id: str, user_input: str, output: str,
+             scope_type: str = "", scope_id: str = "") -> int | None:
         """会话结束推动：从用户输入+产出中提炼值得长期保留的偏好/经验。
 
         仅真实 LLM 可用时生效（Mock 返回普通文本无法解析 JSON → 跳过，确定性保持）。
@@ -375,8 +675,13 @@ class MemoryService:
                 memory = mem.group(1) if mem else ""
                 mem_topic = mtopic.group(1).strip() if mtopic else ""
                 if memory:
+                    # 2026-09-29：与 maybe_deposit 同口径 —— 提炼结果仍须过噪音门
+                    ok, _why = MemoryService._extract_worthy(memory, min_len=8)
+                    if not ok:
+                        return None
                     return MemoryService.deposit(conn, agent_id, memory, mem_type, source="push",
-                                                 mem_topic=mem_topic)
+                                                 mem_topic=mem_topic,
+                                                 scope_type=scope_type, scope_id=scope_id)
         except Exception:
             pass
         return None

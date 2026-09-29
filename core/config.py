@@ -171,14 +171,41 @@ DEFAULT_CONFIG = {
         # 取证：calibrate_dense_thresholds.py → _calibrate_dense.txt / .json
         # 调用方据此选阈值：`semantic.SemanticSearch.last_backend` / `semantic.last_backend()`。
         "tool_threshold_dense": 0.53,      # 等价旧 0.12（实测正例率 47.0% → dense 同分位 0.5274）
-        "intent_threshold_dense": 0.49,    # 等价旧 0.15（正例率 57.8% → 0.4926）
-        # intent 分档（旧 0.40 / 0.55 / 0.70）：
-        # ⚠️ 后两档在 bigram 下**从未生效**（bigram top1 max = 0.4910 < 0.55）——dense 生效后
-        #   它们会首次触发，这是本轮**明确的行为变更点**，故按 dense 高分位取保守值，
-        #   使其"极少触发而非永不触发"（原设计的分档从此才真正可用）。
-        "intent_sem_low_dense": 0.69,      # 等价旧 0.40（正例率 4.8% → 0.6911）
-        "intent_sem_mid_dense": 0.69,      # 旧 0.55 等价映射无解 → 取 dense p95（0.6907）；与 low 重合见报告
-        "intent_sem_high_dense": 0.76,     # 旧 0.70 等价映射无解 → 取 dense p99（0.7604）
+        # 2026-09-25：语义层"接住弱信号句"标定结果（脚本 tests/manual_verify/calibrate_intent_semantic.py，
+        #   真实链路剖面 29 例 + 1008 组网格）。修前 4 句需 LLM 兜底；修后 2 句（且剩下的是
+        #   真该走 chat 的「你好/谢谢」），准确率 27/29 → 29/29。
+        # ⚠️ 关键认知：修前是「**低绝对门槛 0.49 + 严比值守卫 1.5x**」——而 dense 余弦量纲压缩
+        #   （实测正确句的 top1/top2 常在 0.87/0.80 ≈ 1.08），1.5x 在 dense 下**几乎不可达**，
+        #   于是弱信号句既不达 0.69 的 sem_low 墙、又过不了比值守卫 → 全部掉 LLM。
+        #   标定结论是**反过来分配**：抬绝对门槛（0.49 → 0.64）、放比值守卫（1.5/1.15 → 1.05/1.05）。
+        #   另有同等重要的一半：给语义索引补粗粒度示例 utterance（见 agent/intent.py
+        #   `_SEMANTIC_UTTERANCES`）—— 否则 top1 会是「结构视图生成」这类子 Agent 名，
+        #   答词表与意图名不一致，**阈值怎么调都错**。
+        "intent_threshold_dense": 0.64,    # 0.49 → 0.64（标定：抬门槛，且仍能接住全部 5 句目标弱信号）
+        "intent_sem_low_dense": 0.64,      # 0.69 → 0.64（原"低置信一律不硬检索"墙，真正卡住弱信号的就是它）
+        "intent_sem_mid_dense": 0.64,      # 0.69 → 0.64（与 low 对齐：弱档判定改由 lead_w 守卫承担）
+        "intent_sem_high_dense": 0.76,     # 不变（lead_w==lead_s 后该分界已不影响判定，保留以供再标定）
+        # 2026-09-25：语义"领先倍率"提为配置项（原硬编码在 intent.detect_semantic 里）。
+        # 原因：dense 余弦**量纲压缩**（实测同批 top1/top2 常是 0.66/0.63 这种"黏在一起"的分布），
+        #   1.5x/1.15x 这类比值门槛在 dense 下远比在 bigram 下严苛 —— 不把它一起标定，
+        #   光调阈值仍会把句子挡在门外（标定见 tests/manual_verify/calibrate_intent_semantic.py）。
+        "intent_lead_weak": 1.05,          # 1.15 → 1.05（弱档；再紧就接不住「知识库…」1.14倍那句）
+        "intent_lead_strong": 1.05,        # 1.50 → 1.05（强档；1.5x 在 dense 下不可达，是修前的第二道墙）
+    },
+    # ── 意图路由开关（2026-09-26 补齐）──
+    # ⚠️ 此前**根本没有这个组**：`IntentRouter._cfg_get("keyword_generic", True)` 读的是
+    #    `_cfg.get("intent", key, default)` → 组不存在 → 永远回落 default，
+    #    于是 `eval_intent_routing.py --scored 0 / --generic 0` 这两个 A/B 开关**形同虚设**
+    #    （脚本 patch 了 DEFAULT_CONFIG 也读不到，两次运行必然同结论 —— 与"没清缓存"同类的假绿）。
+    #    补上组后：无文件/环境覆盖时 `_CONFIG["intent"]` 与 DEFAULT_CONFIG 同引用，patch 即生效。
+    "intent": {
+        "keyword_scored": True,    # 关键词层"竞争打分"（False = 回到"首个命中即 return"旧行为，A/B 用）
+        "keyword_generic": True,   # 泛词是否参与打分（False = 泛词既不加分也不触发共现，A/B 用）
+        "sample_collect": True,    # 真实请求是否把用户输入采集进意图样本池（设置页「意图样本」的数据来源）
+        # 意图"确定不了"时是否**停下来问用户**（选择题卡，不执行）。False = 回到旧行为（自己挑一个继续）。
+        # 触发面刻意收窄到"系统自己没把握"：llm_weak / fused_conflict / semantic_weak / llm<0.85 /
+        # 完全无信号但像在求助；有把握的（规则命中/两路互证/高置信语义/会话继承）一律不打断。
+        "confirm_when_unsure": True,
     },
     "context": {
         "history_immediate_turns": 6,   # 即时窗口轮数（原文逐字注入）
@@ -242,10 +269,26 @@ DEFAULT_CONFIG = {
         "direct_merge": True,        # 推理结果直接并入图库（跳过审核队列）；false=恢复「提交审核→审核队列」门禁
     },
     "memory": {
-        "forget_enabled": True,      # 遗忘引擎开关（激活度低于阈值软遗忘）
-        "forget_threshold": 0.2,     # 遗忘激活度阈值
+        "forget_enabled": True,      # 遗忘引擎开关
+        "forget_threshold": 0.2,     # 遗忘激活度阈值（仅 forget_by_activation=true 时生效，见下）
         "consolidate_threshold": 0.85,  # 合并引擎：记忆内容相似度阈值（bigram 余弦）
         "maintain_every": 50,        # 每 N 次沉淀触发一次维护（遗忘+合并）
+        # 多维作用域软重排（对齐 mem0）：「仅打破近邻，不做硬分桶」——按检索槽位序号取加成
+        "scope_boost": "1.35,1.18,1.06,1.0",  # 槽位0..3 作用域优先级加成（project/user/agent/global）
+        "backend": "sqlite",         # 记忆后端（sqlite=内置；预留外部实现挂载点，见 memory_backend.py）
+
+        # ── 2026-09-29 遗忘判据重写（原激活度公式结构性永不触发，见 memory_service.forget docstring）──
+        # 判据1（主）：距「最后一次被访问」超过 max_unused_days 天 → 遗忘。
+        #   这是"过期经验"的真正语义：**没人再用它**。置 0 关闭该判据。
+        "max_unused_days": 0,
+        # 判据2：从未被访问过（access_count <= forget_min_access）且创建已超过 max_age_days 天 → 遗忘。
+        #   专治"沉淀即死"的噪音：沉淀时一次性写入、此后无人检索命中的条目。
+        "max_age_days": 90,
+        "forget_min_access": 0,
+        # 判据3（遗留通道）：按 activation 衰减阈值遗忘。默认 **关闭** ——
+        #   deposit 固定写 activation=1.0、record_access 只增不减、衰减下限 0.4 > 阈值 0.2，
+        #   该通道在本工程实测恒定不触发（对 118 条跑出 0 遗忘）。保留为可运维开关，勿轻易打开。
+        "forget_by_activation": False,
     },
     "semantic_cache": {
         "enabled": False,            # 语义缓存开关（高频相似查询 embedding 命中直返）
@@ -279,6 +322,8 @@ DEFAULT_CONFIG = {
         #   反例（低质截图 doc 811）          均分 0.595~0.675、低置信行 51.9%~95.7%
         # → 取 0.70 / 50%：正例留 0.17 余量，反例两维同时被挡（冗余安全）。
         "ocr_min_avg_score": 0.70,        # 识别行平均置信度下限，低于此值判"不可用"
+        "ocr_dense_min_lines": 30.0,      # 密集文本低质放行：行数下限（≥此行数且均分达 ocr_dense_min_avg 即放行）
+        "ocr_dense_min_avg": 0.65,        # 密集文本低质放行：均分下限（低于常规 0.70；真乱码 0.595 类仍挡）
         "ocr_max_low_score_ratio": 50.0,  # 低置信行（<0.7）占比上限（%），超过判"不可用"
         "ocr_grayscale": True,            # 识别前转灰度：实测均分 +0.08 且更快（放大反而更差，别做）
     },
@@ -383,6 +428,26 @@ DEFAULT_CONFIG = {
         "confidence_mid": 0.45,      # 命中置信等级「中」分界
         "rerank_enabled": True,      # LLM Rerank 重排开关（LLM 不可用/超时静默回退原排序）
         "rerank_max_candidates": 10, # 送 LLM 重排的候选上限（应 ≤ top_k，否则上限形同虚设）；0 = 全部候选
+        # ── P0 记忆召回（2026-09-29）───────────────────────────────────────────
+        # 背景：累积层（agent_memory/project_memories）早就建好，但检索侧零消费 ——
+        #       knowledge_reflow.py 沉淀的结论从未被下次检索读回，闭环缺一半。
+        #       本条即补齐：把「已沉淀的经验/决策」作为**一路独立召回源**并入检索结果。
+        # 定位：RAG 层管精确定位原文证据；记忆层管跨会话综合结论（对齐 Karpathy LLM Wiki 编译层）。
+        # 纪律：记忆是 LLM 提炼产物，可能含幻觉 → 命中一律带「仅供对齐、不得作为事实依据引用」标注；
+        #       project_memories 必须按 project_id 过滤（实测该表 project_id 大量为空且混有
+        #       source='test-reg' 测试数据，全库召回会让测试数据冒充项目知识）。
+        "memory_enabled": True,      # 记忆召回总开关（关 = 逐字回到「无此路」的旧行为）
+        "memory_weight": 0.25,       # 记忆一路的融合权重（乘进该路得分；<1 = 让位给原文检索）
+        "memory_top_k": 4,           # 记忆召回条数上限（agent_memory / project_memories 各自）
+        "memory_max_chars": 200,     # 单条记忆入 prompt 的截断长度（实测存在整篇报告形态的 experience，须截断）
+        # 2026-09-29：跨域兜底降权（同域有效记忆不足 top_k/2 时，全库召回补位并打此折扣）。
+        # 起因：记忆按 agent_id 精确过滤，库内 chat=1/design=24/requirement_analysis=13… 分布极不均，
+        # 落在稀疏域时召回恒为 0 —— 而通用方法论就躺在别的域里（"未命中"被错当"没有"）。
+        # 降权（<1）保证「跨域只补位、不压主」；设 1.0 = 关闭降权但不关闭兜底，设 0 = 同关。
+        "memory_cross_domain_penalty": 0.7,
+        # 跨域兜底**触发门槛**：同域最高分 < 此值才跨域兜底（防"同域已够用还灌跨域噪音"）。
+        # 实测标定：同域强命中≈0.42、跨域弱命中≈0.03–0.07（bigram 口径）→ 取 0.25 分档。
+        "memory_cross_min_score": 0.25,
     },
     "chunking": {
         "default_size": 600,         # 默认分块大小（字符，≈500-650 token 中文）
@@ -574,6 +639,8 @@ CONFIG_SCHEMA = {
         "intent_sem_low_dense":   {"type": "float", "desc": "意图弱置信下限（dense 路；等价旧 0.40，实测 0.69）"},
         "intent_sem_mid_dense":   {"type": "float", "desc": "意图中等置信（dense 路；旧 0.55 在 bigram 下不可达，取 p95=0.69）"},
         "intent_sem_high_dense":  {"type": "float", "desc": "意图高置信门（dense 路；旧 0.70 在 bigram 下不可达，取 p99=0.76）"},
+        "intent_lead_weak":       {"type": "float", "desc": "语义弱档采纳的 top1/top2 领先倍率（默认 1.15；dense 余弦量纲压缩，需与阈值联合标定）"},
+        "intent_lead_strong":     {"type": "float", "desc": "语义强档采纳的 top1/top2 领先倍率（默认 1.50；同上）"},
     },
     "context": {
         "history_immediate_turns": {"type": "int", "desc": "即时窗口轮数（原文逐字）"},
@@ -607,10 +674,16 @@ CONFIG_SCHEMA = {
         "direct_merge":            {"type": "bool", "desc": "推理结果直接并入图库（跳过审核队列）；false=恢复提交审核门禁"},
     },
     "memory": {
-        "forget_enabled":       {"type": "bool", "desc": "遗忘引擎开关（激活度低于阈值软遗忘）"},
-        "forget_threshold":     {"type": "float", "desc": "遗忘激活度阈值"},
+        "forget_enabled":       {"type": "bool", "desc": "遗忘引擎开关"},
+        "forget_threshold":     {"type": "float", "desc": "遗忘激活度阈值（仅 forget_by_activation=true 时生效）"},
         "consolidate_threshold": {"type": "float", "desc": "合并引擎相似度阈值（bigram 余弦）"},
         "maintain_every":       {"type": "int", "desc": "每 N 次沉淀触发一次维护"},
+        "scope_boost":          {"type": "str", "desc": "作用域优先级加成（逗号分隔，槽位0..3：project/user/agent/global）"},
+        "backend":              {"type": "str", "desc": "记忆后端（sqlite=内置；预留外部实现）"},
+        "max_unused_days":      {"type": "int", "desc": "距今未访问超过 N 天则遗忘（0=关闭；主判据，治“没人再用”）"},
+        "max_age_days":         {"type": "int", "desc": "零访问条目的存活天数上限（配合 forget_min_access 治“沉淀即死”噪音）"},
+        "forget_min_access":    {"type": "int", "desc": "低于此访问次数视为“从未被用”（默认 0=只清零访问）"},
+        "forget_by_activation": {"type": "bool", "desc": "启用按 activation 衰减阈值遗忘（遗留通道，本工程实测恒定不触发，默认关）"},
     },
     "semantic_cache": {
         "enabled":      {"type": "bool", "desc": "语义缓存开关（相似查询命中直返）"},
@@ -631,6 +704,8 @@ CONFIG_SCHEMA = {
         "ocr_max_pages":          {"type": "int",   "desc": "单次入库允许 OCR 的页数上限（默认 50）"},
         "ocr_render_scale":       {"type": "float", "desc": "PDF 渲染倍率（默认 2.0 ≈ 1224x1584 px）"},
         "ocr_min_avg_score":      {"type": "float", "desc": "OCR 结果平均置信度下限（默认 0.70；低于此值判质量不合格，不入库）"},
+        "ocr_dense_min_lines":    {"type": "float", "desc": "OCR 密集文本放行：行数下限（默认 30；行数多=真实内容结构，达线即低质放行并打标）"},
+        "ocr_dense_min_avg":      {"type": "float", "desc": "OCR 密集文本放行：均分下限（默认 0.65，低于常规 0.70；放行打 degraded 标，质量分落 quality_score）"},
         "ocr_max_low_score_ratio": {"type": "float", "desc": "OCR 低置信行（<0.7）占比上限 %（默认 50；超过判质量不合格，不入库）"},
         "ocr_grayscale":          {"type": "bool",  "desc": "OCR 前转灰度（默认开；实测均分 +0.08 且更快）"},
     },
@@ -675,6 +750,12 @@ CONFIG_SCHEMA = {
         "confidence_mid":        {"type": "float", "desc": "命中置信等级「中」分界"},
         "rerank_enabled":        {"type": "bool",  "desc": "LLM Rerank 重排开关（失败静默回退原排序）"},
         "rerank_max_candidates": {"type": "int",   "desc": "送 LLM 重排的候选上限（应 ≤ top_k，0=全部候选）"},
+        "memory_enabled":        {"type": "bool",  "desc": "P0 记忆召回开关：把已沉淀的 agent_memory/project_memories 作为一路召回源"},
+        "memory_weight":         {"type": "float", "desc": "记忆一路的融合权重（乘进该路得分；<1=让位给原文检索）"},
+        "memory_top_k":          {"type": "int",   "desc": "记忆召回条数上限（两路各自）"},
+        "memory_max_chars":      {"type": "int",   "desc": "单条记忆入 prompt 的截断长度"},
+        "memory_cross_domain_penalty": {"type": "float", "desc": "跨域兜底记忆的降权系数（同域不足时补位；1.0=不降权，0=关兜底）"},
+        "memory_cross_min_score": {"type": "float", "desc": "跨域兜底触发门槛：同域最高分低于此值才跨域（防稀释榜单）"},
     },
     "chunking": {
         "default_size":      {"type": "int",   "desc": "默认分块大小（字符，中文 ≈500-650 token）"},

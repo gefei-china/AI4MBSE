@@ -304,12 +304,15 @@ function go(p, tabId) {
   document.querySelectorAll('.page').forEach(d=>d.classList.toggle('on',d.id==='pg-'+p));
   // 2026-09-16：离开 AI 建模页 → 清除左侧会话列表选中态；回到 AI 页 → 恢复当前会话高亮
   // （会话仍保持打开状态——currentConvId 不动，仅视觉选中随页面走）
-  const _tcl = document.getElementById('task-conv-list') || document.getElementById('conv-list');
-  if(_tcl){
-    _tcl.querySelectorAll('.task-it.on').forEach(it=>{
+  // 2026-09-24：会话列表已分两处渲染 —— 未分组任务在 #task-conv-list，项目内任务在
+  // #gnav-project-list（项目分组内），两处都要同步选中态，否则项目内任务的选中会残留。
+  ['task-conv-list', 'conv-list', 'gnav-project-list'].forEach(id=>{
+    const box = document.getElementById(id);
+    if(!box) return;
+    box.querySelectorAll('.task-it.on').forEach(it=>{
       it.classList.toggle('on', p==='ai' && String(currentConvId||'')===String(it.dataset.id||''));
     });
-  }
+  });
   // 2026-09-07 kb-c 视口适配兜底：老浏览器不支持 CSS :has() 时由 .ont-fill 驱动同一 flex 布局（见 kb.css）
   const _pgkb=document.getElementById('pg-kb');
   if(_pgkb) _pgkb.classList.toggle('ont-fill', p==='kb' && tabId==='kb-c');

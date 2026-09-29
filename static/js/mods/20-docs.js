@@ -161,7 +161,7 @@ async function doUploadDoc() {
     fd.append('tags', tags);
     // 文档全局化：上传不再携带分支（后端统一写 global，不随分支变化）
     // 落点（2026-09-21 目录树）：上传落到左栏当前选中的**结构目录**；
-    // 正停在智能视图/全部文档/未归类时不指定目录（= 未归类），语义与用户看到的一致。
+    // 正停在回收站/全部文档/未归类时不指定目录（= 未归类），语义与用户看到的一致。
     const _landing = (!_docSmartView && _docFolderId !== '' && Number(_docFolderId) > 0) ? Number(_docFolderId) : 0;
     fd.append('folder_id', String(_landing));
     try {
@@ -214,22 +214,90 @@ async function doUploadDoc() {
   v2gReviewLoad();
   setTimeout(()=>{ prog.style.display = 'none'; bar.style.width = '0%'; bar.style.background = 'var(--blue)'; }, 1500);
 }
-// 用最近一次文档结果增量填充「上传人 / 格式」筛选下拉选项（保留当前选中值）
+// 资料库上传/解析**能力白名单**（2026-09-28 新增，与后端 knowledge_pipeline/extract.py 逐条对齐）。
+// ⚠️ 唯一权威在后端 `extract_text_ex()` 的分支表；本常量是它的**前端镜像**，改后端必须同步改这里。
+// 用途：格式筛选下拉的**常驻全集** —— 让用户在看不到任何 docx 时也能选「DOCX」并得到空列表，
+// 而不是以为"系统不支持 docx"（旧实现只在遇到过的格式里累积，未出现过的格式永远不出现）。
+const DOC_FORMAT_CAPABILITY = [
+  { ext:'txt',  label:'TXT',  group:'文本',  note:'纯文本' },
+  { ext:'md',   label:'MD',   group:'文本',  note:'Markdown' },
+  { ext:'log',  label:'LOG',  group:'文本',  note:'日志' },
+  { ext:'csv',  label:'CSV',  group:'表格',  note:'逗号分隔' },
+  { ext:'xlsx', label:'XLSX', group:'表格',  note:'Excel 新格式' },
+  { ext:'xls',  label:'XLS',  group:'表格',  note:'Excel 旧格式' },
+  { ext:'docx', label:'DOCX', group:'文档',  note:'Word 新格式' },
+  { ext:'doc',  label:'DOC',  group:'文档',  note:'Word 旧格式（解析成功率低）' },
+  { ext:'pdf',  label:'PDF',  group:'文档',  note:'PDF（需 pdfplumber）' },
+  { ext:'pptx', label:'PPTX', group:'演示',  note:'PowerPoint 新格式' },
+  { ext:'ppt',  label:'PPT',  group:'演示',  note:'PowerPoint 旧格式' },
+  { ext:'json', label:'JSON', group:'数据',  note:'JSON' },
+  { ext:'xml',  label:'XML',  group:'数据',  note:'XML' },
+  { ext:'yaml', label:'YAML', group:'数据',  note:'YAML' },
+  { ext:'yml',  label:'YML',  group:'数据',  note:'YAML' },
+  { ext:'png',  label:'PNG',  group:'图片',  note:'需 OCR' },
+  { ext:'jpg',  label:'JPG',  group:'图片',  note:'需 OCR' },
+  { ext:'jpeg', label:'JPEG', group:'图片',  note:'需 OCR' },
+  { ext:'gif',  label:'GIF',  group:'图片',  note:'需 OCR' },
+  { ext:'bmp',  label:'BMP',  group:'图片',  note:'需 OCR' },
+  { ext:'webp', label:'WEBP', group:'图片',  note:'需 OCR' },
+  { ext:'tiff', label:'TIFF', group:'图片',  note:'需 OCR' },
+  { ext:'tif',  label:'TIF',  group:'图片',  note:'需 OCR' },
+];
+
+// 用最近一次文档结果增量填充「上传人 / 格式」筛选下拉选项（保留当前选中值）。
+// 2026-09-28 修正两个缺陷：
+//   ① 旧实现只做 union 从不做差集 —— 一旦某种格式被筛选排除过，它会**永久留在下拉里**
+//      （实测：筛过 png 后把 png 文档删掉，下拉仍有 PNG 选项，选它得到空列表）。
+//      现在格式选项 = 能力全集 ∪ 实际出现过的格式（差集不再必要，全集本就常驻）。
+//   ② 上传人仍按"实际出现过的值"累积（上传人无法枚举，只能从数据里发现），
+//      但**改为按当前全量文档重算而非 union** —— 否则某人文档全删光后仍留在下拉里。
 function fillDocFilterOptions(docs) {
   const upSel = document.getElementById('doc-uploader-filter');
   const fmSel = document.getElementById('doc-format-filter');
   if(!upSel || !fmSel) return;
-  const ups = new Set([...(upSel.options)].map(o=>o.value).filter(Boolean));
-  const fmts = new Set([...(fmSel.options)].map(o=>o.value).filter(Boolean));
-  docs.forEach(d=>{
-    if(d.uploaded_by) ups.add(d.uploaded_by);
-    if(d.file_type) fmts.add(d.file_type.toLowerCase());
-  });
+  // 上传人：按本次结果重算（不 union，避免幽灵选项）
+  const ups = new Set();
+  docs.forEach(d=>{ if(d.uploaded_by) ups.add(d.uploaded_by); });
+  // 格式：能力全集 + 数据里实际出现过的（含历史遗留的非常规扩展名，不丢）
+  const seen = new Set();
+  docs.forEach(d=>{ if(d.file_type) seen.add(String(d.file_type).toLowerCase().replace(/^\./,'')); });
+  const capExts = new Set(DOC_FORMAT_CAPABILITY.map(c=>c.ext));
+  const extra = [...seen].filter(e=>e && !capExts.has(e)).sort();
   const upCur = upSel.value, fmCur = fmSel.value;
-  upSel.innerHTML = '<option value="">全部上传人</option>' + [...ups].sort().map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join('');
+  // 保持既有 option 中已选但本次未出现的上传人（否则筛选态会被静默重置）
+  if(upCur) ups.add(upCur);
+  upSel.innerHTML = '<option value="">全部上传人</option>'
+    + [...ups].sort().map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join('');
   upSel.value = upCur;
-  fmSel.innerHTML = '<option value="">全部格式</option>' + [...fmts].sort().map(f=>`<option value="${esc(f)}">${esc(f).toUpperCase()}</option>`).join('');
+  // 格式下拉按「分组」组织，共 23 种内置能力 + 数据中发现的额外扩展名
+  const groups = [];
+  DOC_FORMAT_CAPABILITY.forEach(c=>{
+    let g = groups.find(x=>x.name===c.group);
+    if(!g) { g = { name:c.group, items:[] }; groups.push(g); }
+    g.items.push(c);
+  });
+  let fmHtml = '<option value="">全部格式</option>';
+  groups.forEach(g=>{
+    // ⚠️ 分组名字段是 g.name（构建时 {name:c.group, items:[]}）—— 写成 g.group 会得到
+    //    esc(undefined)='' → label 静默变空串（实测踩过：下拉分组标题全部消失但不报错）。
+    fmHtml += `<optgroup label="${esc(g.name)}">`
+      + g.items.map(c=>`<option value="${esc(c.ext)}" title="${esc(c.note)}">${esc(c.label)}</option>`).join('')
+      + '</optgroup>';
+  });
+  if(extra.length) {
+    fmHtml += '<optgroup label="其他（数据中出现）">'
+      + extra.map(e=>`<option value="${esc(e)}">${esc(e.toUpperCase())}</option>`).join('')
+      + '</optgroup>';
+  }
+  fmSel.innerHTML = fmHtml;
+  // ⚠️ 恢复选中值：若当前选中值已不在新选项里（例如选了个已被清空的非常规格式），
+  //    value 赋值会静默失败并回落成第一个 option（=""）→ 表现为"筛选自己跳回全部"。
+  //    这里显式检测并提示，让状态变化可见。
   fmSel.value = fmCur;
+  if(fmCur && fmSel.value !== fmCur) {
+    fmSel.value = '';
+    if(typeof toast === 'function') toast('所选格式已不在可选范围内，已重置为「全部格式」');
+  }
 }
 // ── 资料库·实体与关系抽取设置（设置页「📄 文件抽取」Tab；开关默认关 + 候选来源默认 sysml）──
 let _fileExtractEnabled = false;    // 上传自动抽取开关（settings.file_auto_extract_enabled）
@@ -377,7 +445,23 @@ let _docSelected = new Set();  // P0：批量废弃多选
 //   _docTreeStale     目录树是否需要重新拉取 —— 只在「文档归属目录 / 目录本身」变化时置真。
 //                     纯勾选/取消勾选不置真（否则每点一次复选框就多发一次目录请求）。
 let _docFolders = [], _docUncategorized = 0, _docTotalAll = 0;
-let _docFolderId = '', _docFolderScope = 'self', _docSmartView = '', _docTreeStale = true;
+let _docFolderId = '', _docFolderScope = 'subtree', _docSmartView = '', _docTreeStale = true;
+// 空态「清除全部筛选条件」：把工具栏所有筛选控件 + 目录/视图选中态一次归零。
+// 存在的理由：空态往往由 5~6 个条件叠加造成，让用户逐个找哪个开着手工清是低效且易漏的。
+function clearAllDocFilters() {
+  ['doc-search','doc-date-from','doc-date-to'].forEach(id=>{
+    const el = document.getElementById(id); if(el) el.value = '';
+  });
+  ['doc-uploader-filter','doc-format-filter','doc-origin-filter','doc-status-filter'].forEach(id=>{
+    const el = document.getElementById(id); if(el) el.value = '';
+  });
+  _docStateFilter = '';
+  _docSelected.clear();
+  _docFolderId = '';
+  _docSmartView = '';
+  _docFolderScope = 'subtree';
+  loadDocs();
+}
 async function loadDocs() {
   await loadFileExtractSettings();   // 渲染前同步开关状态（补抽入口/抽取列据此显隐）
   const _feT = document.getElementById('doc-flow-extract'); if(_feT) _feT.style.display = _fileExtractEnabled ? '' : 'none';
@@ -459,18 +543,39 @@ function renderDocs() {
   if(!total) {
     // 空态要区分「真的没有」与「筛没了」——后者必须给出一步清除筛选的出口，
     // 否则用户只看到「暂无匹配文档」，会以为是数据丢了（本仓历史上踩过同类困惑）。
+    // 2026-09-28 补强：把**生效中的筛选条件**逐条列出。此前只说"当前视图下没有文档"，
+    // 而实际最常见的空态是「目录 + 格式 + 状态」叠加过窄 —— 不点名条件用户只能盲目试。
     const _scoped = _docSmartView || _docFolderId !== '';
-    el.innerHTML = _scoped
-      ? `<div style="padding:14px;color:var(--mut);font-size:12px;">
-           当前视图（${esc(_docSmartView ? ((DOC_SMART_VIEWS.find(x=>x.key===_docSmartView)||{}).label||_docSmartView) : ('目录：' + (docFolderName(_docFolderId) || _docFolderId)))}）下没有文档。
-           <button class="btn sm ghost" style="margin-left:8px;" onclick="docSelectFolder('');docSelectSmartView('')">清除筛选</button></div>`
-      : '<div style="padding:14px;color:var(--mut);font-size:12px;">暂无匹配文档，可调整上方筛选条件或点击右上角「📤 上传文件」上传（自动解析分块向量化）</div>';
+    const _conds = [];
+    if(_docSmartView === 'trash') _conds.push('视图：🗑 回收站');
+    else if(Number(_docFolderId) === 0) _conds.push('视图：📥 未归类');
+    else if(_docFolderId !== '') _conds.push('目录：' + (docFolderName(_docFolderId) || _docFolderId)
+      + (_docFolderScope === 'subtree' ? '（含子目录）' : '（仅本目录）'));
+    const _q = (document.getElementById('doc-search')?.value || '').trim();
+    if(_q) _conds.push('搜索：' + _q);
+    const _fmt = (document.getElementById('doc-format-filter')?.value || '');
+    if(_fmt) _conds.push('格式：' + _fmt.toUpperCase());
+    const _ub = (document.getElementById('doc-uploader-filter')?.value || '');
+    if(_ub) _conds.push('上传人：' + _ub);
+    if(_docStateFilter) _conds.push('状态：' + _docStateFilter);
+    const _og = (document.getElementById('doc-origin-filter')?.value || '');
+    if(_og) _conds.push('来源：' + _og);
+    const _df = (document.getElementById('doc-date-from')?.value || '');
+    const _dt = (document.getElementById('doc-date-to')?.value || '');
+    if(_df || _dt) _conds.push('时间：' + (_df || '…') + ' ~ ' + (_dt || '…'));
+    const _btnAll = '<button class="btn sm ghost" style="margin-top:8px;" onclick="clearAllDocFilters()">清除全部筛选条件</button>';
+    el.innerHTML = `<div style="padding:14px;color:var(--mut);font-size:12px;">
+        ${_conds.length
+          ? '<b style="color:var(--ink);">当前条件下没有文档</b><br>生效条件：' + _conds.map(esc).join(' · ') + '<br>' + _btnAll
+          : (_scoped
+              ? '当前视图下没有文档。<br>' + _btnAll
+              : '暂无匹配文档，可点击右上角「📤 上传文件」上传（自动解析分块向量化）')}</div>`;
     if(pagerEl) pagerEl.innerHTML = '';
     return;
   }
   const items = docs.slice((_docPage-1)*_docSize, _docPage*_docSize);
   el.innerHTML = `<div style="overflow-x:auto;"><table class="t">
-    <tr><th><input type="checkbox" ${_docSelected.size > 0 && _docSelected.size === items.length ? 'checked' : ''} onchange="toggleSelectAll(this, ${JSON.stringify(items.map(i=>i.id))})" title="全选当前页"></th><th>文件</th><th>作者</th><th>上传人</th><th>上传时间</th><th>知识类别</th><th>所属目录</th><th>版本</th><th>块数</th>${_fileExtractEnabled?'<th>抽取</th>':''}<th>状态</th><th>操作</th></tr>` +
+    <tr><th><input type="checkbox" ${_docSelected.size > 0 && _docSelected.size === items.length ? 'checked' : ''} onchange="toggleSelectAll(this, ${JSON.stringify(items.map(i=>i.id))})" title="全选当前页"></th><th>文件</th><th>上传人</th><th>上传时间</th><th>知识类别</th><th>所属目录</th><th>版本</th><th>块数</th>${_fileExtractEnabled?'<th>抽取</th>':''}<th>状态</th><th>操作</th></tr>` +
     items.map(d=>{
       const ex = docExtMap[d.filename];
       // 抽取列：展示既有候选统计（真实数据）；无候选时按开关状态提示「未抽取/—」
@@ -489,10 +594,9 @@ function renderDocs() {
       const lc = d.lifecycle_status || 'uploaded';
       const isDep = lc === 'deprecated';
       const isArc = lc === 'archived';
-      return `<tr oncontextmenu="docContextMenu(event,${d.id})" style="cursor:context-menu;${isDep?'opacity:.55;':''}${isArc?'background:var(--color-bg-muted,#fafbfc);':''}" title="右键：加入会话 / 下载 / 追溯 / 元数据">
+      return `<tr draggable="true" data-drag-doc="${d.id}" oncontextmenu="docContextMenu(event,${d.id})" style="cursor:context-menu;${isDep?'opacity:.55;':''}${isArc?'background:var(--color-bg-muted,#fafbfc);':''}" title="右键：加入会话 / 下载 / 追溯 / 元数据；拖到左栏目录可直接归类">
       <td><input type="checkbox" ${_docSelected.has(d.id)?'checked':''} onchange="toggleDocSelect(${d.id}, this.checked)" title="选中以批量操作"></td>
       <td><div class="dhc-trigger" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onmouseenter="docHoverEnter(event,${d.id})" onmousemove="docHoverMove(event)" onmouseleave="docHoverLeave()" title="${esc(d.title && d.title !== d.filename ? d.title + '\n' : '')}${esc(d.filename)}"><b>${esc(d.filename)}</b>${d.origin==='ai_generated'?'<span title="AI 建模产物收编（AI 建模检索默认不消费，可在建模范围中显式开启）" style="cursor:help;">🤖</span>':''}${docExtSuffix(d)}<small style="color:var(--mut);margin-left:5px;">${((d.file_size||0)/1024).toFixed(1)}KB</small></div></td>
-      <td style="font-size:12px;">${esc(d.author||'-')}</td>
       <td style="font-size:12px;">${esc(d.uploaded_by||'-')}</td>
       <td style="font-size:11px;color:var(--mut);white-space:nowrap;">${esc((d.created_at||'').slice(0,16))}</td>
       <td style="cursor:pointer;" onclick="kbSetDocCategory(${d.id}, '${esc(d.knowledge_category||'')}')" title="点击设置知识类别（设计方法知识/设计资产）">${kbCatLabel(d.knowledge_category)}</td>
@@ -509,11 +613,17 @@ function renderDocs() {
 
       ${_fileExtractEnabled?'<td>'+extCell+'</td>':''}
       <td style="vertical-align:top;">
-        ${docStateBadge(d)}
+        <div class="lc-cell">${docStateBadge(d)}
         ${d.parse_status==='failed'
-          ? `<div style="font-size:11px;color:var(--red);margin-top:3px;font-weight:600;">✗ 失败于 ${esc(failStage(d.pipeline_detail))}</div>
-             <div style="font-size:10.5px;color:var(--red);margin-top:2px;word-break:break-all;max-width:180px;">${esc(d.error_msg||'处理失败')}</div>`
-          : (docDerivedState(d)!=='committed' ? '' : `<div style="font-size:10px;color:var(--mut);margin-top:2px;">${esc(stageText(d.pipeline_detail))}</div>`)}
+          // 明细收成一行：失败阶段 + 原因；全文进 title，悬停可见（用 escA，esc 不转引号会截断属性）
+          ? (() => {
+              const _why = `失败于${failStage(d.pipeline_detail)}：${d.error_msg||'处理失败'}`;
+              return `<div class="lc-note err" title="${escA(_why)}">✗ ${esc(_why)}</div>`;
+            })()
+          : (docDerivedState(d)!=='committed' ? '' : (() => {
+              const _st = stageText(d.pipeline_detail);
+              return _st ? `<div class="lc-note mut" title="${escA(_st)}">${esc(_st)}</div>` : '';
+            })())}</div>
       </td>
       <td style="white-space:nowrap;">${lc === 'stored' ? `<button class="btn sm" onclick="commitDoc(${d.id})" title="人工确认：内容已进入图库，正式入库">入库</button> ` : ''}<button class="btn sm ghost" onclick="viewDocSource(${d.id})">预览</button>
       <button class="btn sm ghost" onclick="viewDocTrace(${d.id})">追溯</button>

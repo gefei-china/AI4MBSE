@@ -27,7 +27,10 @@ import urllib.request
 from pathlib import Path
 
 REPO_DEFAULT = Path(__file__).resolve().parents[2]
-GROUPS = ["rag", "context", "embedding"]
+# 2026-09-26：补齐全部分组。本清单**曾长期漂移**：2026-09-21 配置页新增「视觉通道(vision)」与
+#   「文档解析 OCR(extract)」两簇后未同步此清单，夹具守卫因此一直在报「缺失字段」而无法出图；
+#   本次新增「长期记忆(memory)」时一并修正，并加了下面的自维护守卫（见 _secs 检查）。
+GROUPS = ["rag", "context", "embedding", "vision", "extract", "memory"]
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--repo", default=str(REPO_DEFAULT))
@@ -43,6 +46,13 @@ TOKENS = repo / "static/css/tokens.css"
 APPCSS = repo / "static/css/app.css"
 
 src = MODULE.read_text(encoding="utf-8")
+
+# ── GROUPS 自维护守卫：模块字段表用到的分组必须都在 GROUPS 里 ──
+# 目的：以后再加参数簇时，本工具直接告诉你「把哪个分组补进 GROUPS」，而不是抛一堆缺字段让人误判分支。
+_secs = sorted(set(re.findall(r"key:'([a-z_]+)\.[a-z_]+'", src)))
+_miss_grp = [s for s in _secs if s not in GROUPS]
+if _miss_grp:
+    sys.exit("❌ GROUPS 未覆盖模块引用的分组 %s —— 请把其补进 GROUPS（否则夹具守卫必然报缺字段）" % _miss_grp)
 tokens = TOKENS.read_text(encoding="utf-8")
 # 只取必须的 panel 三条规则，避免整份 app.css 体积与耦合
 appcss = APPCSS.read_text(encoding="utf-8")
@@ -92,7 +102,7 @@ body{background:var(--color-bg-canvas);padding:18px 20px 60px;}
   <p>本页由 <code>static/js/mods/35-ctxconfig.js</code> <b>生产源码原样内联</b>渲染，数据取自
      <code>GET /api/system/config/schema</code> 的实时返回（即真机上看到的当前值）。</p>
   <p>改动输入框可实时看到「耦合视图」与「约束校验」联动刷新；出现 <b>⛔</b> 级冲突时保存会被拦截。</p>
-  <p>夹具覆盖 <code>__GROUPS__</code> 三组共 <code>__N__</code> 个键（含各组的全部键），
+  <p>夹具覆盖 <code>__GROUPS__</code> __NG__ 组共 <code>__N__</code> 个键（含各组的全部键），
      并已逐个核对页面引用的 <code>__KEYS__</code> 个字段都在其中。</p>
 </div>
 <div id="ctx-cfg-body"><div class="loading">正在渲染…</div></div>
@@ -119,13 +129,14 @@ out = (HTML
        .replace("__MODULE__", src)
        .replace("__FIXTURE__", json.dumps(fixture, ensure_ascii=False))
        .replace("__GROUPS__", "/".join(GROUPS))
+       .replace("__NG__", str(len(GROUPS)))
        .replace("__N__", str(sum(len(fixture[g]) for g in GROUPS)))
        .replace("__KEYS__", str(len(keys))))
 
 out_path.parent.mkdir(parents=True, exist_ok=True)
 out_path.write_text(out, encoding="utf-8")
 
-# ── 产物自证：7 个簇标题与全部字段键都要能找回 ──
+# ── 产物自证：全部簇标题与全部字段键都要能找回（簇数动态取，勿写死）──
 text = out
 bad = [t for t in re.findall(r"title: '([^']+)'", src) if t not in text] \
     + [k for k in keys if k not in text]

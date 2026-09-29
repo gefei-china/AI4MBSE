@@ -19,6 +19,8 @@ import json
 import re
 import uuid
 
+from repositories.project_repo import conversation_project_id as _conv_project_id
+
 # 标识符边界：改名时避免误替换子串（中英文/数字/下划线均视为词内字符）
 _WORD = r"A-Za-z0-9_\u4e00-\u9fa5"
 
@@ -408,11 +410,13 @@ def apply_normalization(conn, conv_id: int, msg_id: int, decisions: dict,
         new_version_id = src["version_id"]
         inplace_done = True
     else:
+        # P1-1（2026-09-28）：project_id **写入时定格**会话所属工程（空=无工程会话，合法）。
+        # 定格后会话改归属不会让历史版本漂移（写回智源按版本产生时的工程判定）。
         cur = conn.execute(
-            "INSERT INTO sysml_versions (artifact_id, conversation_id, message_id, version_label, "
-            "content, diff, element_summary, parent_id, status, created_by, code_text) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (0, conv_id, msg_id, label, _content_json,
+            "INSERT INTO sysml_versions (artifact_id, conversation_id, message_id, project_id, "
+            "version_label, content, diff, element_summary, parent_id, status, created_by, code_text) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (0, conv_id, msg_id, _conv_project_id(conn, conv_id), label, _content_json,
              json.dumps(diff, ensure_ascii=False),
              json.dumps(summary, ensure_ascii=False),
              src["version_id"] or 0, "current", actor, new_code or ""))
@@ -530,8 +534,15 @@ def push_version_to_zhiyuan(conn, version_id: int, vc: str = "",
     es["push"] = {"ok": ok, "vc": vc, "version_id": version_id,
                   "package_id": target_package_data_id or 0,
                   "detail": (imp.get("result") or "")[:500], "by": actor}
-    conn.execute("UPDATE sysml_versions SET element_summary=? WHERE id=?",
-                 (json.dumps(es, ensure_ascii=False), version_id))
+    # 2026-09-24 方案A：写回成功落 zhiyuan_imported_id（vc#package 标识）——
+    # 入口条状态展示 + 防重复写回闸（routers/sysml_versions.py push_zhiyuan 前置检查）；
+    # 智源 import 不返回独立模型 id，用「vc#包id」定位写入位置（同 vc 覆盖导入）。
+    if ok:
+        conn.execute("UPDATE sysml_versions SET element_summary=?, zhiyuan_imported_id=? WHERE id=?",
+                     (json.dumps(es, ensure_ascii=False), f"{vc}#{target_package_data_id or 0}", version_id))
+    else:
+        conn.execute("UPDATE sysml_versions SET element_summary=? WHERE id=?",
+                     (json.dumps(es, ensure_ascii=False), version_id))
     conn.commit()
     if not ok:
         result["error"] = "智源写入失败（详见 detail）"

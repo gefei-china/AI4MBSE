@@ -9,11 +9,27 @@
 
 设计：
 - rank(query, items, top_k, threshold, key)：返回 [(score, item)] 降序，仅 score > threshold
-- 真向量：Embedder.embed_with_version 对 items+query 同一批向量化（维度一致）→ 余弦
+- 真向量：Embedder 对候选集与 query 分别向量化（同一 provider/model → 维度一致）→ 余弦
+  （候选集向量按文本指纹缓存，见 `_embed_candidates`；2026-09-25 前是"候选+query 一次全发"）
 - bigram 降级：VectorEngine Counter 余弦（稀疏交集，任意两文本可比；不消费 list-vector 存储）
 - 空回退：无命中返回 []，调用方自行降级/LLM 兜底（不抛异常）
 """
+import hashlib
 import math
+import threading
+
+# ── 2026-09-25 候选集向量缓存 ────────────────────────────────────────────────
+# 背景：`_rank_dense` 原本把「候选集 + query」**整批**重新向量化，于是**每次**调用都要重算
+#   全部候选 —— 意图语义兜底的候选集（语义索引）补了示例 utterance 后从 20 → 52 条，
+#   单次弱信号路由平白多付 ~5 次 embedding 往返（实测 21 条时单次 rank ≈1.9s，线性放大）。
+#   候选文本在进程生命周期内基本不变（索引只在 `_load_db_agents` 时重建），故按
+#   「候选集文本指纹」缓存其向量；query 侧继续吃 Embedder 自带的单文本 TTL 缓存。
+# 失效：指纹只由候选文本决定，文本一变（换模型/改索引）自动换 key；容量上限防无界增长。
+_CAND_CACHE: dict = {}
+_CAND_CACHE_MAX = 8
+# 2026-09-26 预热状态：已预热/正在预热的**文本指纹**（同一索引不重复起线程）
+_WARM_LOCK = threading.Lock()
+_WARM_KEY = ""
 
 
 class SemanticSearch:
@@ -89,24 +105,100 @@ class SemanticSearch:
             scored = [s for s in scored if s[0] > threshold]
         return scored[:top_k] if top_k else scored
 
-    # ── 真向量路：items + query 同批向量化（维度一致）──
+    # ── 真向量路：候选集（缓存）+ query（Embedder TTL 缓存）分别向量化 ──
+    @staticmethod
+    def _embed_candidates(ed, texts: list) -> tuple:
+        """候选集向量：(vecs, version)。按文本指纹缓存，避免每次调用整批重算（见模块头注释）。
+
+        只缓存**成功且条数一致**的真向量结果：bigram 降级结果不缓存（那是失败路径，
+        下次仍应重试真向量）。
+        """
+        # 2026-09-26：**先规范化再算 key**。实测两侧文本只差一个尾随换行（`'账号角色管理\n'` vs
+        #   `'账号角色管理'`）→ md5 不同 → 预热永远命中不上（"预热说填了、请求仍冷启动"）。
+        #   尾随/前导空白不影响语义，故统一 strip 后再算 key **并用同一份规范文本向量化**；
+        #   顺序仍然重要（向量与 items 一一对应），所以只做去空白、不做排序。
+        texts = [str(t or "").strip() for t in texts]
+        key = hashlib.md5("\n".join(texts).encode("utf-8", "ignore")).hexdigest()
+        hit = _CAND_CACHE.get(key)
+        if hit:
+            return hit
+        # 2026-09-26 诊断：**未命中时打出指纹**，用于与 `prewarm` 的指纹比对 ——
+        #   "预热说它填了、请求却仍冷启动"只可能是两边 key 不同（实测在查这条）。
+        print("[semantic] 候选缓存未命中 fp=%s texts=%d（已缓存 %d 个 key：%s）首=%r 尾=%r"
+              % (key[:8], len(texts), len(_CAND_CACHE), [k[:8] for k in _CAND_CACHE],
+                 str(texts[0])[:38], str(texts[-1])[:38]), flush=True)
+        vecs, version = ed.embed_with_version(texts, batch_size=0)
+        vecs = list(vecs or [])
+        if version != "bigram-tf" and len(vecs) == len(texts):
+            _CAND_CACHE[key] = (vecs, version)
+            if len(_CAND_CACHE) > _CAND_CACHE_MAX:
+                _CAND_CACHE.clear()
+        return vecs, version
+
+    def prewarm(self, items: list, key: str = "text") -> bool:
+        """**后台预热**候选集向量（2026-09-26）：把"首次整批向量化"从第一个请求挪到进程启动后。
+
+        为什么需要（有实测数字）：候选集向量是惰性算的，这笔开销此前全落在**第一个真实请求**上 ——
+        重启服务后首次 `run-eval`（44 条意图判定、多条走语义）实测 **13.00s**，缓存热了之后 **4.43s**，
+        即用户要为"第一次有人用语义层"白等约 **8.6s**。预热让这段时间发生在用户开口之前。
+
+        实现要点（每条都是为了不引入新问题）：
+          - **守护线程**：预热失败/挂起都不能影响启动与请求（失败就退化成原来的冷启动，行为不劣化）；
+          - **按文本指纹去重**：`_load_db_agents` 每个请求都会重建索引并调到这里，无指纹守卫会反复起线程；
+          - **复用 `_embed_candidates` 的同一个 key**（`md5("\\n".join(texts))`）→ 预热必须传**同序同文本**，
+            故这里用与 `_rank_dense` 完全相同的取值表达式（items 的 `key` 字段按序），而不是另建一份；
+          - **自我验证**：预热完检查缓存是否真的填上了，没填就记一行日志（否则"预热形同虚设"会静默存在）。
+        """
+        texts = [str(it.get(key) or "").strip() for it in (items or [])]   # 与 _embed_candidates 同款规范化
+        if not texts:
+            return False
+        fp = hashlib.md5("\n".join(texts).encode("utf-8", "ignore")).hexdigest()
+        if fp in _CAND_CACHE:            # 已被某次真实请求（或上次预热）填过 → 无需再热
+            return True
+        global _WARM_KEY
+        with _WARM_LOCK:
+            if _WARM_KEY == fp:          # 同一索引已有线程在跑或跑过了
+                return False
+            _WARM_KEY = fp
+
+        def _run():
+            try:
+                ed = self._ensure_embedder()
+                if not ed:
+                    # 不许静默空转：首版就是这里直接 return，服务端日志里什么都看不到，
+                    # 于是"预热没生效"只能靠人肉推断（实测踩到）。
+                    print("[semantic-prewarm] 无可用 Embedder，跳过预热（请求侧仍会冷启动）", flush=True)
+                    return
+                vecs, version = type(self)._embed_candidates(ed, texts)
+                if fp in _CAND_CACHE:
+                    print("[semantic-prewarm] 完成：%d 条候选已缓存（backend=%s, fp=%s）首=%r 尾=%r"
+                      % (len(texts), version, fp[:8], str(texts[0])[:38], str(texts[-1])[:38]), flush=True)
+                else:
+                    print("[semantic-prewarm] 预热未生效（缓存未命中，可能降级 bigram）", flush=True)
+            except Exception as e:       # 预热是"锦上添花"，任何异常都不得外溢
+                print("[semantic-prewarm] 异常跳过：%s" % str(e)[:160], flush=True)
+
+        threading.Thread(target=_run, name="semantic-prewarm", daemon=True).start()
+        return True
+
     def _rank_dense(self, query: str, pairs: list):
         try:
             ed = self._ensure_embedder()
             if not ed:
                 return None
-            texts = [t for _, t in pairs] + [query]
-            # batch_size=0 = 一次全发（省往返）。**必须依赖 Embedder._embed_api 内部按
-            # embedding.api_batch_max 切分**：本方法把「所有 items + query」塞进一次调用，
-            # items 一多就超服务端单批上限（实测 10）→ 400 → 静默降级 bigram，
-            # "语义匹配"会悄悄退化成"词面匹配"（2026-09-19 实测：19 条即触发）。
-            vecs, version = ed.embed_with_version(texts, batch_size=0)
-            if version == "bigram-tf" or not vecs or len(vecs) != len(texts):
+            # 2026-09-25：候选与 query **分开**向量化（原实现一次全发）。两者仍由同一个
+            # Embedder（同一 provider/model）产出，维度一致的前提不变；拆开后才可能对
+            # 候选侧做缓存 —— 原实现把 query 混在批次里，导致候选每次都随 query 一起重算。
+            vecs, version = self._embed_candidates(ed, [t for _, t in pairs])
+            qvecs, qver = ed.embed_with_version([query], batch_size=0)
+            if version == "bigram-tf" or qver == "bigram-tf":
                 return None
-            qv = vecs[-1]
+            if not vecs or len(vecs) != len(pairs) or not qvecs:
+                return None
+            qv = qvecs[0]
             qn = math.sqrt(sum(x * x for x in qv)) or 1.0
             out = []
-            for (it, _), v in zip(pairs, vecs[:-1]):
+            for (it, _), v in zip(pairs, vecs):
                 if not v or len(v) != len(qv):
                     continue
                 vn = math.sqrt(sum(x * x for x in v)) or 1.0

@@ -942,11 +942,16 @@ def sysml_pull_ingest(body: dict = None, conn=Depends(db_session), user=Depends(
     """从智源拉取建模数据 → 直接转三元组 → 存个人分支图库（2026-09-11 拉取流程）。
 
     后端编排全程直通（候选化→融合闸→自动批准→落图），不产生数据治理审核面板待办；
-    回执由 AI 建模对话流渲染。body: {vc?, package_data_id?, target_branch?}（均可空=默认工程全量）。
+    回执由 AI 建模对话流渲染。body: {conversation_id?, vc?, package_data_id?, target_branch?}。
+    2026-09-24：拉取按工程维度路由——conversation_id 反查工程，vc 优先工程绑定值
+    （projects.tool_binding），未绑定则明确报错引导绑定，不再默默拉默认。
+    2026-09-24 建模工具适配层：绑定泛化 {tool,ref,name}（zhiyuan/magicdraw），
+    tool=magicdraw → TOOL_NOT_READY（MagicDraw 连接器接入前明确报错，不静默走智源）。
     """
     from services.knowledge_service import KnowledgeService
     body = body or {}
     return KnowledgeService(conn).zhiyuan_pull_ingest(
         actor=_actor(user), vc=(body.get("vc") or "").strip(),
         package_data_id=body.get("package_data_id"),
-        target_branch=(body.get("target_branch") or "personal"))
+        target_branch=(body.get("target_branch") or "personal"),
+        conversation_id=int(body.get("conversation_id") or 0))

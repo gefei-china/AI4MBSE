@@ -20,6 +20,8 @@ function loadSettingsTab(id) {
   if(id==='st-hooks') loadToolHooks();
   if(id==='st-fextract') renderFileExtractSettings();
   if(id==='st-ctx') loadCtxConfig();
+  // 2026-09-26：意图样本池（采样→标注→评测闭环），照 st-ctx 的懒加载约定
+  if(id==='st-intent-samples') loadIntentSamples();
 }
 
 // ── 插件管理（Skill/MCP/工具 公共市场 + 我的插件 + 市场管理；安装=复制私有副本，版本固定）──

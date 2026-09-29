@@ -343,11 +343,17 @@ class ToolMixin:
                     _args = arguments or {}
                     _c = _gdb()
                     try:
+                        # P1-2（2026-09-28 补闸门洞）：**必须把会话上下文传下去**。
+                        # 此前不传 → zhiyuan_pull_ingest 的 conversation_id=0 → 走「无工程上下文」
+                        # 兜底分支，用平台 default_vc 静默拉**默认工程**的数据 —— 明明当前会话
+                        # 就在 conv_ctx 里。同一会话在 A 标签页归属工程 A、B 标签页把平台默认
+                        # 切成 B 时，A 里的 AI 拉取会拉到 B 的工程数据（P0-2 同类问题的另一处）。
                         _r = _KS(_c).zhiyuan_pull_ingest(
                             actor=str((agent_ctx or {}).get("agent") or "ai"),
                             vc=str(_args.get("vc") or ""),
                             package_data_id=_args.get("package_data_id"),
-                            target_branch=str(_args.get("target_branch") or "personal"))
+                            target_branch=str(_args.get("target_branch") or "personal"),
+                            conversation_id=int(conv_ctx or 0))
                     finally:
                         _c.close()
                     if _r.get("error"):

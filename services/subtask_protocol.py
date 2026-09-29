@@ -8,10 +8,12 @@
 
 - validate(raw)：校验并归一化结构化摘要（超长截断、非法结构归一，不抛异常）
 - normalize_text(raw_text)：旧文本格式兼容解析 → 协议结构
+- ui_summary(raw_text)：把子 Agent 原始输出压成**给用户看的一句话**（剔除内部交接语）
 - summarize_status(results)：一组子任务结果 status 三态聚合
 
-纯函数模块：不 import DB / 网络 / LLM，可被 pipeline 与验证脚本复用。
+纯函数模块：不 import DB / 网络 / LLM（仅标准库 re），可被 pipeline 与验证脚本复用。
 """
+import re
 
 SCHEMA_VERSION = 1
 
@@ -294,6 +296,60 @@ def normalize_text(raw_text):
         "confidence": DEFAULT_CONFIDENCE,
         "meta": {},
     }
+
+
+# ── 面向用户的交付摘要（2026-09-26）─────────────────────────────────────────
+#  背景（用户报障）：每张子任务卡下面那行摘要，显示的是"一、对上游意图识别结果的承接"
+#  "本任务承接 t2 的执行计划，职责是…"这类**子 Agent 之间的内部交接语**，还被前端硬截 60 字
+#  断在词中间（""职责是**产"）——用户问"这段是必须的吗、价值是什么"。
+#  结论：**"有一行交付摘要"这件事要保留**（编排模式下过程可审计：每步交出了什么），
+#  但要把它从"内部协议原文"改造成"面向用户的一句话"。
+#  实现约束（重要）：本函数只用于**展示**，`normalize_text` 产出的 `summary` 原样保留 ——
+#  后者会作为"上游快照"喂给下游子任务（Task 9/10 链路），清洗它会破坏子 Agent 的承接能力。
+_UI_NOISE = (
+    "承接", "上游", "下游", "前序", "本任务", "本子任务", "子任务", "职责是", "交接",
+    "交付边界", "执行计划", "依赖 t", "任务标题", "作为", "综上所述",
+)
+# 标题行（`#`/`##`）是**小标题**不是交付内容 → 整行跳过；列表/编号标记里往往就是内容 → 只去标记保留文字
+_UI_HEADING = re.compile(r"^\s*#{1,6}\s")
+_UI_BULLET = re.compile(r"^\s*(?:[-*•>]\s+|[一二三四五六七八九十]+[、.．)）]\s*|\d+[、.．)）]\s*|"
+                        r"（[一二三四五六七八九十\d]+）\s*)")
+
+
+def ui_summary(raw_text, limit=60):
+    """把子 Agent 的原始输出，压成**给用户看的一句话交付摘要**（找不到就返回空串）。
+
+    规则（按序）：
+      1) 去行内 markdown（`**粗体**`、反引号）；
+      2) 逐行处理：**`#` 标题行整行跳过**（那是小标题，不是内容）；列表/编号标记只去标记、保留文字；
+         含"承接/上游/职责是/执行计划"等**内部协作词**的行跳过；太短的行跳过；
+      3) 取剩下的第一行，按**第一句**收口（。！？；），超长再按标点收口并补 `…`；
+      4) 全被剔掉 → 返回 ""（**宁可没有这行**，也不把内部黑话端给用户）。
+    为什么按句切：原实现是 `slice(0,60)`，必然断在词中间（实测"职责是**产"即被切断处）。
+    """
+    text = "" if raw_text is None else str(raw_text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)        # 粗体
+    text = re.sub(r"`([^`]*)`", r"\1", text)            # 行内代码
+    lines = []
+    for ln in text.split("\n"):
+        if not ln.strip() or _UI_HEADING.match(ln):     # ⚠️ 标题必须在去标记**之前**判掉：
+            continue                                    #    否则 `## 交付说明` 会被当成正文返回（实测踩过）
+        s = _UI_BULLET.sub("", ln).strip()
+        if len(s) < 4:
+            continue
+        if any(w in s for w in _UI_NOISE):
+            continue
+        lines.append(s)
+    if not lines:
+        return ""
+    para = lines[0]
+    m = re.search(r"[。！？；!?;]", para)
+    if m:                       # 先按**第一句**收口（摘要本质是"一句话"）
+        para = para[:m.end()]
+    if len(para) > limit:       # 超长再按最近的标点收口，避免断在词中间
+        cut = max(para.rfind(c, 0, limit) for c in "，,、；;。！？!? ")
+        para = (para[:cut].rstrip("，,、；; ") + "…") if cut > limit * 0.5 else (para[:limit] + "…")
+    return para.strip()
 
 
 def summarize_status(results):

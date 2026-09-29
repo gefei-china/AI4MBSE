@@ -2,21 +2,64 @@
  * 由 static/index.html 巨型 inline script 机械切分而来
  * 原行号 6091-6433  ·  全局作用域（非 module），内联 onclick 依赖全局函数名
  */
+/* 顶栏「当前工程」标签（多工程 P0-2，2026-09-28）
+ *
+ * 展示口径：**本页**的当前工程（window._curProjectId，页面级），而不是平台默认值。
+ * 多标签页并发时两者会不一致 —— 此时若按平台默认显示，用户会以为自己切了工程却没生效
+ * （本页新建任务仍归本页工程）。平台默认值只在**本页尚未初始化**时用作初值。
+ */
+function renderProjectTag(){
+  const tag = document.getElementById('ai-project-tag');
+  if(!tag) return;
+  const nm = window._curProjectName || '';
+  const code = window._curProjectCode || '';
+  let html;
+  if(nm){
+    tag.classList.remove('nomatch');
+    // 2026-09-28：code 与 name 相同时不再重复显示（老数据 code 默认取 name，会显示成「测试项目（测试项目）」）
+    const cc = (code && code !== nm) ? `（${esc(code)}）` : '';
+    html = `<span class="dot"></span> 当前工程：${esc(nm)}${cc}`;
+  }else{
+    tag.classList.add('nomatch');
+    html = `<span class="dot"></span> 暂未匹配工程`;
+  }
+  // 收敛入口：当前任务**未关联工程**（知识检索/问答类会话的合法状态），
+  // 但一旦要写回建模工具等工程操作就需要归属 —— 给一个「归入」入口，而不是静默报错。
+  if(currentConvId && window._curConvProjectId === ''){
+    html += ` · <a class="pt-assign" href="javascript:void(0)" onclick="convAssignCurrent()"`
+         +  ` title="本任务未关联工程。知识检索/问答无需工程；写回建模工具等工程操作需先归入工程">`
+         +  `本任务未关联工程 · 归入</a>`;
+  }
+  tag.innerHTML = html;
+}
+
+// 把当前任务归入本页当前工程（收敛入口的点击动作）
+async function convAssignCurrent(){
+  if(!currentConvId){ toast('请先选中一个任务'); return; }
+  const pid = (typeof curProjectId === 'function') ? curProjectId() : '';
+  if(!pid){ toast('请先在左侧「项目」中点击一个项目作为当前工程'); return; }
+  if(typeof assignConvToProject !== 'function'){ toast('归入功能未加载'); return; }
+  await assignConvToProject(currentConvId, pid);
+}
+
 async function loadCurrentProject(){
   const tag = document.getElementById('ai-project-tag');
   if(!tag) return;
   try{
     const p = await api('/api/projects/default');
-    if(p && p.name){
-      tag.classList.remove('nomatch');
-      tag.innerHTML = `<span class="dot"></span> 当前工程：${esc(p.name)}${p.code?`（${esc(p.code)}）`:''}`;
-    } else {
-      tag.classList.add('nomatch');
-      tag.innerHTML = `<span class="dot"></span> 暂未匹配工程`;
+    // 本页首次初始化：以平台默认值为初值（此后只由本页切换 / URL 反查改变 —— 见 41-projects.js）
+    if(window._curProjectId === undefined) window._curProjectId = (p && p.id) || '';
+    const cid = window._curProjectId || '';
+    let cur = (p && String(p.id||'') === cid) ? p : null;
+    if(!cur && cid){
+      try{ cur = await api('/api/projects/' + encodeURIComponent(cid)); }catch(e){ cur = null; }
     }
+    window._curProjectName = (cur && cur.name) || '';
+    window._curProjectCode = (cur && cur.code) || '';
+    renderProjectTag();
   }catch(e){
-    tag.classList.add('nomatch');
-    tag.innerHTML = `<span class="dot"></span> 暂未匹配工程`;
+    window._curProjectName = '';
+    renderProjectTag();
   }
 }
 async function loadQuickBar(){
@@ -227,7 +270,7 @@ function finishStream(r, aiBox) {
   if(r && r.msg_type === 'clarify'){
     const _pb0 = document.getElementById('proc-box');
     if(_pb0) _pb0.querySelectorAll('.proc-block').forEach(b=>b.classList.add('collapsed'));
-    const procHtml = _pb0?.innerHTML || '';
+    const procHtml = _procBoxBlocksHtml(_pb0);
     const aiMsg = {role:'assistant', content:r.content||'', msg_type:'text',
                    card_data:'{}', id:r.message_id, process_html: procHtml};
     aiBox.outerHTML = renderMessage(aiMsg);
@@ -242,7 +285,9 @@ function finishStream(r, aiBox) {
   // 流式结束：全部步骤已完成 → 统一收口（V2.6：默认收起时间线，只留「✓ 已完成」汇总条，可展开按层级回看）
   const _pb = document.getElementById('proc-box');
   if(_pb) _pb.querySelectorAll('.proc-block').forEach(b=>b.classList.add('collapsed'));
-  const procHtml = _pb?.innerHTML || '';  // V2.4 保留会话内执行过程（完整时间线，历史展开时还原）
+  // V2.4 保留会话内执行过程（完整时间线，历史展开时还原）；2026-09-26：**剔除 live 收口条**，
+  // 否则会把「⟳ 执行中」那条快照进历史，与历史区自己的「✓ 已完成」收口条重复（残影 bug）
+  const procHtml = _procBoxBlocksHtml(_pb);
   // V2.6：标记完成 → 收口条切「✓ 已完成 · N 环节 · 耗时 · token」
   let _sumTxt = '';
   try{
@@ -260,7 +305,7 @@ function finishStream(r, aiBox) {
   }catch(e){}
   // 历史消息执行过程：收口条 + 默认收起的时间线容器（点击展开按层级回看）
   const histProcHtml = procHtml
-    ? `<div class="hist-proc"><div class="proc-summary collapsed" onclick="histProcToggle(this)">${_sumTxt||'✓ 已完成'}<span class="chev">▾</span></div><div class="proc-timeline">${procHtml}</div></div>`
+    ? `<div class="hist-proc"><div class="proc-summary collapsed" onclick="histProcToggle(this)">${_sumTxt||'✓ 已完成'}${_procDetailBtn()}<span class="chev">▾</span></div><div class="proc-timeline">${procHtml}</div></div>`
     : '';
   const aiMsg = {role:'assistant', content:r.content, msg_type:cardTypeMap[r.intent]||'text', card_data:JSON.stringify(r.card||r.retrieval||{}), id:r.message_id, process_html: histProcHtml};
   aiBox.outerHTML = renderMessage(aiMsg);

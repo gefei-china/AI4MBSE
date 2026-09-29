@@ -12,6 +12,24 @@ from file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # �
 from report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # 基础通用报告导出工具
 
 
+def _cfg_get(group, key, default=None):
+    """读配置；异常/缺组回默认（检索链路不因配置层问题中断）。"""
+    try:
+        from core import config as _cfg
+        return _cfg.get(group, key, default)
+    except Exception:
+        return default
+
+
+def _cfg_bool(value, default=False) -> bool:
+    """配置布尔归一：配置可能以 str/int 形式落库（"1"/"true"/True 均可）。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 class GraphRAG:
     """ArcR-5: Graph-first retrieval with vector fallback.
 
@@ -213,6 +231,24 @@ class GraphRAG:
         except Exception:
             pass  # 统计落库失败不影响主流程
 
+        # Step 5: P0 记忆召回（2026-09-29）——把「已沉淀的经验/决策」作为一路独立召回源。
+        # 详见 agent/memory_recall.py 的模块 docstring。此处只做编排：
+        #   ① 开关 rag.memory_enabled（关 = 逐字回到「无此路」旧行为）
+        #   ② project_id 取项目真源（与记忆注入同一口径，见 pipeline_parts.memory._resolve_mem_project_id），
+        #      为空则 project_memories 路自动跳过（防测试数据冒充项目知识）
+        #   ③ 异常静默 → memory_hits=[]，**绝不阻断检索主链路**
+        memory_hits = []
+        if _cfg_bool(_cfg_get("rag", "memory_enabled", True), True):
+            try:
+                from agent.memory_recall import recall_memories
+                # 作用域槽位：优先让调用方经 kb_scope 显式给定（便于定向单测与精确控制）；
+                # 未给定 → None，由 MemoryService 沿用「仅 agent_id」的旧行为，行为可预测、不引入隐式串扰
+                memory_hits = recall_memories(
+                    conn, query, agent_id=scope.get("intent") or "chat",
+                    scopes=scope.get("memory_scopes"), project_id=scope.get("project_id") or "")
+            except Exception:
+                memory_hits = []
+
         # P0-3 知识分类分组：设计方法知识（规范约束源）/ 设计资产（增量设计源）
         knowledge = self._group_by_category(conn, graph_results)
         conn.close()
@@ -229,6 +265,8 @@ class GraphRAG:
             "attachment_used": bool(attachment_hits),
             "graph_count": len(graph_results),
             "vector_count": len(vector_results),
+            "memory_hits": memory_hits,   # P0（2026-09-29）：已沉淀记忆命中（跨会话结论，仅供对齐）
+            "memory_count": len(memory_hits),
             "glossary_recall": glossary_recall,  # P1: 词典概念（maps_to）→ 图谱实体召回回显
             "latency_ms": latency_ms,
             "knowledge": knowledge,   # P0-3: {"method":[...规范], "assets":[...资产], "uncategorized":[...]}

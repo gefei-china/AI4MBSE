@@ -33,9 +33,117 @@ class IntentRouter:
         "review": ["校验", "评审", "检查", "预评审", "review", "validate"],
         "report_generation": ["报告", "文档", "汇报", "导出", "生成报告", "report"],
         "system_mgmt": ["用户", "角色", "权限", "审计", "监控", "账号", "会话统计", "系统数据", "运行统计", "有几个用户", "哪些用户", "谁的权限", "谁的角色"],
-        "knowledge_qa": ["知识库", "资料", "文档里", "查一下", "knowledge", "检索"],
+        "knowledge_qa": ["知识库", "资料", "文档里", "查一下", "knowledge", "检索",
+                         # 2026-09-25：补说明类信号（此前完全无覆盖 → 一律被 design 的泛词"建模"劫持）
+                         "介绍", "说明", "什么是", "是什么", "区别", "原理", "概述", "方法论"],
         "chat": [],
     }
+
+    # ── 2026-09-25 说明类意图判定（修「MBSE建模方法论介绍」被误判为 design）──
+    #  实测根因：① design 内置词含泛词「建模」，而匹配是"首个命中即 return 0.95"
+    #            （`any(k in t for k in keywords)`，无特异性加权、无竞争比较）；
+    #            ② knowledge_qa 完全没有"介绍/说明/是什么/区别/包含哪些"这类信号；
+    #            ③ INTENTS 字典顺序上 design 远早于 knowledge_qa → 泛词先劫持。
+    #  修法（最小且不改词表语义）：在**最前置**（缓存之前）加一段"说明类优先"——
+    #    同时满足「含说明信号」且「不含动作信号」→ 判 knowledge_qa。
+    #  为什么必须在缓存之前：这条输入早已被误判写入意图缓存，放在规则后会被旧缓存挡住，
+    #    新逻辑永不生效（本仓"缓存毒化"是有前例的坑，见下方 requirement_quality / impact 两道防线）。
+    #  已知边界（保守取向）：形如"介绍一下代码生成"这类**说明+动作词混用**句仍走 design——
+    #    宁可让少见的混用句走原路径，也不放宽条件去抢正例（正例误伤=白跑一次建模，代价更大）。
+    _EXPLAIN_SIGNALS = (
+        "介绍", "说明", "是什么", "什么是", "啥是", "区别", "差异", "原理", "概述",
+        "包含哪些", "有哪些", "如何理解", "怎么理解", "怎么用", "如何使用", "用途",
+        "作用", "方法论", "规范", "流程", "最佳实践", "入门", "科普", "讲讲",
+        "解释", "含义", "定义", "概念", "怎么做", "如何做",
+    )
+    _ACTION_SIGNALS = (
+        "生成", "给出", "输出", "编写", "创建", "设计", "绘制", "画", "做一份", "帮我做",
+        "请对", "导出", "落库", "导入", "校验", "检查", "评审", "分析一下", "出图",
+        "建模方案", "重构", "补全", "提取", "抽取", "改造",
+        # 2026-09-25（评测集查出）：这两个是"质量问题"的**专指词**，出现即"要做质量分析"而非问概念。
+        # 不加它们时「这份需求的模糊词有哪些」会被 explain（"有哪些"）抢到 knowledge_qa，
+        # 而正确意图是 requirement_quality（评测集错例 #1，见 eval_intent_routing.py）。
+        "模糊词", "不可验证",
+    )
+
+    def _is_explain_ask(self, t: str) -> bool:
+        """说明/介绍类提问判定：含说明信号且**不含**动作信号（对齐"先答疑、别乱动手"）。"""
+        return (any(k in t for k in self._EXPLAIN_SIGNALS)
+                and not any(k in t for k in self._ACTION_SIGNALS))
+
+    # ── 2026-09-25 关键词层竞争打分（替代"首个命中即 return 0.95"）──
+    #  对标依据（调研）：vLLM Semantic Router 的 **Signal–Decision** 架构把 Keyword 定位为
+    #  "只产信号、不单独定路由"，最终由 Decision 聚合；NLPCraft 明确"the most specific intent
+    #  match wins"（特异性优先）；Kore.ai 要求显式定义多命中的竞争与打分规则（first-match 或
+    #  evaluate-all-and-score）。本仓原实现是"首个命中即 return"且无特异性概念 —— 泛词
+    #  「建模/需求/报告」因此可劫持整条路由（2026-09-25 用户报障的直接根因）。
+    #  规则：score(intent) = Σ 命中词权重；权重按**特异性**定（长词高、泛词极低）；
+    #        **只命中泛词的意图得分=0（视为无信号）** —— 泛词不得单独决定路由（下沉到语义/LLM 层）。
+    _GENERIC_KW = frozenset({
+        "建模", "模型", "需求", "报告", "设计", "方案", "架构", "文档", "校验", "评审",
+        "检查", "分析", "生成", "知识库", "资料", "数据", "系统", "代码", "视图", "change", "design",
+        # 2026-09-25（calibrate_intent_semantic.py 查出）：「总体」是 DB 里 **team_leader** 的关键词，
+        # 而它在本域是典型的**泛词**（总体设计/总体方案/总体架构都用它）——
+        # 于是「对这个系统做总体设计」被 team_leader 以 0.5 分抢走（design 只命中泛词"设计"=0 分），
+        # 语义层随后给出正确答案 design(0.8673) 也只能变成 fused_conflict、路由仍是 team_leader。
+        # 归入泛词后 → 该句在关键词层"无信号"→ 下沉语义层 → 正确判为 design（实测 28/29 → 29/29）。
+        "总体",
+    })
+
+    def _kw_score(self, text_low: str, keywords) -> tuple:
+        """单个意图的关键词得分 → (score, 命中词)。
+
+        权重设计（对标"泛词降权**或要求共现**"，见 _GENERIC_KW 注释）：
+          · 特异词：按长度计权（≥4 字满分 1.0），如"方案设计"/"变更影响"/"追溯矩阵"；
+          · 泛词：每个 0.25（降权），且**单个泛词不构成信号**（score=0）——防止"建模"这类
+            本体泛词单独劫持路由；
+          · **泛词共现（≥2 个）算信号**（0.5/词）：如"请设计…架构方案"命中 方案/设计/架构 三词，
+            若坚持只认特异词，这类常见正例会被判无信号 → 白跑一次 LLM（实测：route=llm，多付一次调用）。
+        """
+        hits = [k for k in keywords if k and k in text_low]
+        if not hits:
+            return 0.0, []
+        spec = [k for k in hits if k not in self._GENERIC_KW]
+        gene = [k for k in hits if k in self._GENERIC_KW]
+        # 2026-09-25：泛词参与与否做成开关（intent.keyword_generic，默认 True）——
+        # 目的是能用**评测集直接回答**"泛词词条是否可移除"（`eval_intent_routing.py --generic 0`），
+        # 而不是靠感觉删词表。关掉后泛词既不加分也不触发共现规则。
+        if not gene:
+            return sum(min(1.0, len(k) / 4.0) for k in spec), hits
+        if not (self._cfg_get("keyword_generic", True)):
+            return (sum(min(1.0, len(k) / 4.0) for k in spec) if spec else 0.0), hits
+        if not spec:
+            return (0.5 * len(gene) if len(gene) >= 2 else 0.0), hits
+        score = sum(min(1.0, len(k) / 4.0) for k in spec) + 0.25 * len(gene)
+        return score, hits
+
+    @staticmethod
+    def _cfg_get(key: str, default):
+        """读 intent 组配置；异常/缺失回落 default（配置层不可用时不影响路由）。"""
+        try:
+            from core import config as _c
+            return _c.get("intent", key, default)
+        except Exception:
+            return default
+
+    def _scored_keyword_pick(self, t: str, layers: list) -> tuple:
+        """多意图竞争打分：返回 (intent, score, hits, layer_name) 或 (None, 0, [], '')。
+
+        layers 顺序即优先级（DB 自定义 Agent 关键词 → 内置词表），但**同层内按分数竞争**，
+        并且**跨层只在"同分"时才让前层胜出**（保留"可配置 Agent 优先"的既有语义）。
+        """
+        best = (None, 0.0, [], "")
+        for layer_name, mapping in layers:
+            for intent, kws in mapping.items():
+                if intent == "chat":
+                    continue
+                sc, hits = self._kw_score(t, kws)
+                if sc <= 0:
+                    continue
+                # 严格大于才替换 → 同分时保持先出现的层/意图（确定性，不吃字典顺序随机性）
+                if sc > best[1]:
+                    best = (intent, sc, hits, layer_name)
+        return best
 
     def __init__(self):
         self._db_intents: dict = {}  # P0 平台化：DB 自定义 Agent 关键词（优先匹配）
@@ -86,9 +194,50 @@ class IntentRouter:
         self._rules_epoch = IntentRouter._RULES_EPOCH
         return self._rules
 
+    # ── 2026-09-25 语义层「接住弱信号句」的底座：给每个**粗粒度意图**补示例 utterance ──
+    #  实测根因（tests/manual_verify/calibrate_intent_semantic.py 采样）：
+    #   语义索引里装的全是 **Agent 名 + 描述**（20 条），其中大半是「结构视图生成」
+    #   「参数视图生成」这类**细粒度子 Agent**；于是语义层的 top1 经常是**子 Agent 名**，
+    #   而不是路由器要的意图名 —— 例如「帮我生成这个系统的SysML v2模型代码」top1=
+    #   「结构视图生成」0.7255、「输出一份 BDD 视图」top1=「交互视图（IBD）生成」0.6235，
+    #   而这两句期望都是 design。**答词表不一致**比阈值更致命：阈值再松也只是把 design
+    #   的句子路由到某个子 Agent 上（错得更隐蔽）。
+    #  修法：为每个意图补 4 条**粗粒度**示例 utterance，**逐条**入索引（name=意图名）——
+    #   逐条而非拼成一段，是为了让"句对句"相似度接近 1.0（拼一段会被平均掉）。
+    #  ⚠️ 刻意**不含子 Agent 专名**（如"生成结构视图"）：那类细分说法应继续由子 Agent 命中，
+    #   粗粒度条目只负责接住"总体设计/生成模型代码"这种泛化说法，避免把细分路由抢走。
+    #  ⚠️ 与关键词层同一纪律：**不得靠单个泛词取胜** —— utterance 是**完整说法**（"帮我做总体设计"），
+    #   故它只对措辞相近的句子加分，不会像"设计"这类泛词那样到处劫持。
+    _SEMANTIC_UTTERANCES = {
+        "requirement_analysis": ("帮我解析这份需求文档", "把需求条目提取出来", "从任务书里提取需求", "解析需求文档"),
+        "design": ("帮我做总体设计", "设计系统架构方案", "生成模型代码", "出一份视图"),
+        "impact": ("分析变更影响", "这次改动会波及哪些模块", "影响范围分析", "变更影响评估"),
+        "review": ("校验模型代码", "评审一下这份文档", "检查追溯矩阵", "预评审这份设计"),
+        "requirement_quality": ("需求质量分析", "检查需求有没有模糊词", "需求可验证性检查", "需求质量评审"),
+        "report_generation": ("生成一份报告", "导出报告", "写一份评审报告", "输出分析报告"),
+        "knowledge_qa": ("介绍一下这个方法", "什么是这个概念", "知识库里有没有相关资料", "原理是什么"),
+        "system_mgmt": ("系统里有几个用户", "查看审计日志", "用户权限怎么管理", "账号角色管理"),
+    }
+
     def set_semantic_index(self, index: list) -> None:
-        """P0 语义兜底：注入 Agent 语义索引 [{name, text}]（text=display_name+description+keywords）。"""
-        self._semantic_index = index or []
+        """P0 语义兜底：注入 Agent 语义索引 [{name, text}]（text=display_name+description+keywords）。
+
+        2026-09-25：额外追加 `_SEMANTIC_UTTERANCES` 的示例 utterance（逐条一个条目，name=意图名）。
+        必要性见 `_SEMANTIC_UTTERANCES` 注释：索引里只有 Agent 名/描述时，语义层的**答词表**
+        覆盖不到路由器要的粗粒度意图名，弱信号句"接不住"（不是阈值问题）。
+        """
+        self._semantic_index = list(index or [])
+        for _intent, _utts in self._SEMANTIC_UTTERANCES.items():
+            for _u in _utts:
+                self._semantic_index.append({"name": _intent, "text": _u, "kind": "intent_utterance"})
+        # 2026-09-26：**后台预热**候选集向量（详见 semantic.prewarm 注释）。
+        #  索引已经定稿（含示例 utterance）才预热，且必须传**同序文本**（cache key = md5(join(texts))）。
+        #  放在这里是因为它是索引变更的**唯一入口**（每个请求都会走），带指纹守卫不会重复起线程。
+        try:
+            from semantic import SemanticSearch as _SS
+            _SS().prewarm(self._semantic_index)
+        except Exception:
+            pass
 
     def get_last_meta(self) -> dict:
         """返回最近一次 detect 的路由元数据 {intent, route, confidence, needs_clarification}。"""
@@ -104,7 +253,12 @@ class IntentRouter:
             for k in sorted(self._db_intents):
                 parts.append(k + ":" + ",".join(sorted(self._db_intents[k])))
             if self._semantic_index:
-                parts.append("idx:" + "|".join(str(i.get("name", "")) for i in self._semantic_index))
+                # 2026-09-25：指纹由「只放 name」改为「name+text 的摘要」——
+                # 语义索引**文本**变了（补示例 utterance / Agent 描述被编辑），缓存必须失效，
+                # 否则又是"旧缓存挡住新逻辑"（本仓已两次踩到：explain 前置、规则 epoch）。
+                parts.append("idx:" + hashlib.md5(
+                    "|".join(f"{i.get('name', '')}~{i.get('text', '')}" for i in self._semantic_index
+                             ).encode("utf-8", "ignore")).hexdigest())
             if self._rules:
                 parts.append("rules:" + "|".join(f"{t}->{i}:{w}" for t, i, w in self._rules))
             return hashlib.md5("&".join(parts).encode("utf-8", "ignore")).hexdigest()
@@ -172,6 +326,11 @@ class IntentRouter:
         if self._rules is None or self._rules_epoch != IntentRouter._RULES_EPOCH:
             self.load_rules(conn=conn)
         fp = self._index_fingerprint()
+        # 2026-09-25 说明类优先（**必须在缓存之前**）：修「MBSE建模方法论介绍」→ design 这类误路由。
+        # 位置理由：该输入早已被误判写入意图缓存，若放在规则层之后会被旧缓存挡住、新逻辑永不生效。
+        # 强度：conf 0.8 且 route='explain' → _done 里不触发澄清（needs_clarify 仅针对 weak/inherit/llm<0.85）。
+        if self._is_explain_ask(t):
+            return self._done("knowledge_qa", "explain", 0.80, text, fp)
         # P0-3：意图级缓存（L1 命中直接返回，省重复规则/语义/LLM 全链路）
         cached = self._cache_get(t, fp) if fp else None
         if cached:
@@ -192,6 +351,17 @@ class IntentRouter:
                                "needs_clarification": False, "source_route": route}
             return intent
         self._last_glossary = None  # 每次调用重置，防跨调用残留
+        # 2026-09-25（评测集查出，错例 #2）：**review 强信号前置到 P0-2 建模强信号之前**。
+        # 根因：P0-2 的第二条正则 `(sysml|…).{0,24}(生成|代码|建模)` 没有"动作词"约束，
+        # 于是「帮我校验一下这段sysml代码」里的 "sysml…代码" 就被判成 design（期望 review）。
+        # "校验/预评审"是动作明确的高特异意图，且本条要求**无 design 生成类动作词**，
+        # 故不抢"生成sysml代码并校验"这类真建模正例。
+        # ⚠️ 必须同时排除"质量类"信号：否则「做一次需求质量评审」会被本条抢到 review
+        # （我第一版就踩了这个坑——评测集当场抓出，期望 requirement_quality）。
+        if any(k in t for k in ("校验", "预评审", "评审")) and not any(
+                k in t for k in ("生成", "给出", "输出", "编写", "创建", "设计", "绘制",
+                                 "需求质量", "质量评审", "质量分析", "模糊词", "不可验证")):
+            return self._done("review", "rule", 0.95, text, fp)
         # P0-2 建模强信号优先：生成/输出 + SysML/建模/视图/代码 → design（先于 Glossary 强制路由，
         # 避免「SysML v2 建模」被术语归一化强制到 knowledge_qa）
         if re.search(r"(生成|给出|输出|编写|创建).{0,24}(sysml|kerml|建模|模型|bdd|ibd|视图|代码)", t) or \
@@ -233,16 +403,48 @@ class IntentRouter:
         for trigger, intent, weight in self._rules:
             if trigger and trigger.lower() in t:
                 return self._done(intent, "rule", 0.95, text, fp)
-        # DB 自定义 Agent 关键词优先（P0 平台化：先匹配可配置 Agent）
-        for intent, keywords in self._db_intents.items():
-            if any(k in t for k in keywords):
-                return self._done(intent, "rule", 0.95, text, fp)
-        # 内置关键词兜底
-        for intent, keywords in self.INTENTS.items():
-            if intent == "chat":
-                continue
-            if any(k in t for k in keywords):
-                return self._done(intent, "rule", 0.95, text, fp)
+        # 2026-09-25 关键词层：DB 自定义 Agent 关键词 + 内置词表，**竞争打分**（不再"首个命中即 return"）。
+        # 开关：intent.keyword_scored（默认 True）——置 False 可回到旧行为，用于 A/B 与回滚
+        # （评测脚本 tests/manual_verify/eval_intent_routing.py --scored 0 即用此开关出基线）。
+        _scored = True
+        try:
+            from core import config as _c2
+            _scored = bool(_c2.get("intent", "keyword_scored", True))
+        except Exception:
+            pass
+        if _scored:
+            pick, sc, hits, layer = self._scored_keyword_pick(
+                t, [("db", self._db_intents), ("builtin", self.INTENTS)])
+            if pick:
+                # 强特异词（≥2.0，如"方案设计/变更影响/追溯矩阵"）→ 直接采信，**不调语义**（省一次 embedding）。
+                if sc >= 2.0:
+                    return self._done(pick, "rule_scored", 0.95, text, fp)
+                # 2026-09-25 语义融合（对标 HybridRouter 的 dense+sparse 融合 / vLLM 多信号组合决策）：
+                # 弱关键词信号（1.0~2.0）时再取一路语义信号：
+                #   · 与关键词**一致** → 两路互证，置信升到 0.92（route='fused'）
+                #   · **冲突**（语义给出别的意图）→ 按标杆"低置信不硬选"：仍返回关键词结果执行，
+                #     但标记 needs_clarification（前端出"可改选"澄清条），不做沉默的硬路由
+                #   · 语义无结论 → 维持单路结果（0.90）
+                # 只在弱信号时才调语义 → 保持"成本递增"（强规则零额外成本）。
+                sem_pick = self.detect_semantic(text)          # 副作用：设置 _last_sem_score
+                sem_score = getattr(self, "_last_sem_score", 0.0) or 0.0
+                if sem_pick and sem_pick == pick:
+                    return self._done(pick, "fused", 0.92, text, fp)
+                if sem_pick and sem_pick != pick:
+                    return self._done(pick, "fused_conflict", 0.60, text, fp)
+                return self._done(pick, "rule_scored", 0.90, text, fp)
+            # 关键词层**无信号**（未命中，或只命中泛词）→ 下沉：语义 → LLM → 继承 → chat
+            # （对标：低于阈值不硬路由，交给更强的下一层；泛词不得单独决定路由）
+        else:
+            # ── 旧行为（A/B 基线）：DB 关键词优先、首个命中即 0.95 ──
+            for intent, keywords in self._db_intents.items():
+                if any(k in t for k in keywords):
+                    return self._done(intent, "rule", 0.95, text, fp)
+            for intent, keywords in self.INTENTS.items():
+                if intent == "chat":
+                    continue
+                if any(k in t for k in keywords):
+                    return self._done(intent, "rule", 0.95, text, fp)
         # 缺口-1：关键词未命中 → 语义匹配兜底（VectorEngine bigram 余弦，零外部依赖）
         sem = self.detect_semantic(text)
         if sem:
@@ -260,8 +462,19 @@ class IntentRouter:
                     k in t for k in ("需求质量", "质量评审", "需求质量评审", "质量分析", "模糊词", "不可验证", "验收标准")):
                 llm_intent, llm_conf = "chat", min(llm_conf, 0.5)
             # P0-2：弱 LLM 猜测（<0.85）≠ 强信号——有会话意图时优先会话继承（追问/续写不被 LLM 弱猜测截胡）
-            if llm_conf < 0.85 and prev_intent and prev_intent in self.INTENTS:
-                return self._done(prev_intent, "inherit", 0.55, text, fp)
+            if llm_conf < 0.85:
+                if prev_intent and prev_intent in self.INTENTS:
+                    return self._done(prev_intent, "inherit", 0.55, text, fp)
+                # 2026-09-26（**扩集后评测抓出并修**）：无会话上下文可继承时，低置信猜测也**不得硬选**。
+                #  实测两条生产真实说法：「帮我看看这个项目的预算」「帮我测算一下这个项目的成本」
+                #  被 LLM 以 **0.60** 猜成 report_generation（大概由"预算/成本"联想到"报告"）→
+                #  问预算的用户收到一张**报告澄清卡**，且真的会去跑报告 Agent。
+                #  这与仓库既有哲学冲突（fused_conflict 走澄清、requirement_quality 的 LLM 猜测直接降级），
+                #  故统一为「弱猜测 = 承认无法归类」：回落 chat（兜底桶），置信取 <0.7
+                #  （`_cache_set` 只缓存 ≥0.7 → 弱结论不入意图缓存，不会被后续请求复用）。
+                #  代价（明说）：确实属于某意图、但 LLM 只给到 0.6~0.8 的句子，会落到 chat 而非澄清；
+                #  若日后出现这类真实损失，就把 route='llm_weak' 也接进澄清条（本处只管"不硬选"）。
+                return self._done("chat", "llm_weak", min(llm_conf, 0.5), text, fp)
             return self._done(llm_intent, "llm", llm_conf, text, fp)
         # P0-2：会话级意图保持——无任何信号命中时继承上轮意图（追问/续写不被误判 chat）
         if prev_intent and prev_intent in self.INTENTS:
@@ -270,7 +483,7 @@ class IntentRouter:
 
     def _done(self, intent, route, confidence, text, fp):
         """统一出口：填充 _last_meta + 高置信写意图缓存。澄清判定：中置信（弱语义/继承/LLM<0.85）→ 提示。"""
-        needs_clarify = route in ("semantic_weak", "inherit") or (route == "llm" and confidence < 0.85)
+        needs_clarify = route in ("semantic_weak", "inherit", "fused_conflict") or (route == "llm" and confidence < 0.85)
         self._last_meta = {"intent": intent, "route": route, "confidence": confidence,
                            "needs_clarification": needs_clarify}
         self._cache_set(text, fp, intent, route, confidence)
@@ -325,6 +538,14 @@ class IntentRouter:
         2026-09-19 双阈值：以上数值是 **bigram 口径**。走真 embedding（dense）时改用
         `embedding.intent_*_dense`（分位等价映射标定，默认 0.49/0.69/0.69/0.76），
         因为两路余弦量纲不同、同一阈值必有一路失准。
+
+        2026-09-25 弱信号标定（脚本 calibrate_intent_semantic.py）：dense 路调整为
+        `th=low=mid=0.64 / high=0.76`，领先倍率 `lead_w=lead_s=1.05`（原 1.5/1.15 硬编码）。
+        认知：dense 余弦**量纲压缩**，"低门槛 + 严比值"的组合在 dense 下等于**双重否决**
+        （top1 既不达 sem_low、又过不了 1.5x）→ 弱信号句只能掉 LLM；标定后改成
+        "高门槛 + 松比值"。更强的守卫来自索引侧：粗粒度意图示例 utterance（见
+        `_SEMANTIC_UTTERANCES`）让 top1 与意图名对齐，噪声句（如「你好」）的 top1/top2
+        差值极小自然过不了 lead_w。
         """
         self._last_sem_score = 0.0
         if not self._semantic_index:
@@ -351,8 +572,14 @@ class IntentRouter:
             sem_low = float(_cfg.get("embedding", "intent_sem_low_dense", 0.69) or 0.69)
             sem_mid = float(_cfg.get("embedding", "intent_sem_mid_dense", 0.69) or 0.69)
             sem_high = float(_cfg.get("embedding", "intent_sem_high_dense", 0.76) or 0.76)
+            # 2026-09-25：领先倍率也按 dense 路单独取配置（原硬编码 1.15/1.5）——
+            # dense 余弦量纲压缩，比值门槛在 dense 下远比 bigram 严苛，必须与阈值联合标定，
+            # 否则"阈值调松了但仍被倍率挡回"。标定见 calibrate_intent_semantic.py。
+            lead_w = float(_cfg.get("embedding", "intent_lead_weak", 1.15) or 1.15)
+            lead_s = float(_cfg.get("embedding", "intent_lead_strong", 1.50) or 1.50)
         else:
             th, sem_low, sem_mid, sem_high = threshold, 0.40, 0.55, 0.70
+            lead_w, lead_s = 1.15, 1.50   # bigram 路沿用历史值（未随 dense 标定改动）
         if top_score < th:
             return ""
         # P1-1 置信度分级：弱置信（0.40-0.70）——
@@ -367,13 +594,13 @@ class IntentRouter:
                     return name  # 术语归一化命中 → 信任路由
             except Exception:
                 pass
-            if len(scored) >= 2 and top_score >= sem_mid and top_score >= scored[1][0] * 1.15:
-                return name  # 中等置信 + 显著领先 → 描述匹配明确，采纳（P2-B）
+            if len(scored) >= 2 and top_score >= sem_mid and top_score >= scored[1][0] * lead_w:
+                return name  # 中等置信 + 显著领先 → 描述匹配明确，采纳（P2-B；倍率见 lead_w）
             return ""
         if top_score < sem_low:
             return ""  # 低置信：不硬检索，交给上层 LLM/chat 兜底
         # 显著领先判定（仅当存在第二名时才要求）
-        if len(scored) >= 2 and top_score < scored[1][0] * 1.5:
+        if len(scored) >= 2 and top_score < scored[1][0] * lead_s:
             return ""
         return name
 
@@ -393,7 +620,11 @@ class IntentRouter:
         ("impact", ("影响分析", "变更影响", "影响", "impact")),
         ("review", ("评审", "校验", "预评审", "review", "validate", "检查")),
         ("report_generation", ("报告", "汇报", "文档", "导出", "report")),
-        ("design", ("方案设计", "方案", "架构", "设计", "建模", "模型", "sysml", "代码生成", "design")),
+        ("design", ("方案设计", "方案", "架构", "设计", "建模", "模型", "sysml", "代码生成",
+                   # 2026-09-25 补（verify_multi_intent_split.py T1 实测）：「输出 BDD 视图」
+                   # 此前在子句映射里**完全映射不上** → sequence 里塞的是中文原句而非意图名，
+                   # planner 的阶段序约束因此半失效（['requirement_analysis','输出 BDD 视图',…]）。
+                   "视图", "bdd", "ibd", "代码", "design")),
         ("knowledge_qa", ("知识库", "检索", "查询", "资料", "knowledge")),
     )
     # 阶段拆解正则：模式 A（先…再/然后/接着…最后…）｜模式 B（X并Y，最后/然后/接着Z——无"先"的并列+收尾）
@@ -406,6 +637,32 @@ class IntentRouter:
         r"(.{1,20}?)(并|和|且|以及|与)(.{1,20}?)"
         r"(，|,|、|;|；)?(最后|然后|接着)(做|进行|完成|出|写)?(.{1,20}?)$")
 
+    # ── 2026-09-25 多意图"两级切分"（第 2 级：并列清单）────────────────────────────
+    #  缺口（实测）：「提供一段需求，进行需求分析、方案设计、代码校验」这类**顿号并列清单**
+    #  是用户最自然的写法，但 `_split_stage_clauses` 只认**阶段连词**（先…再…/最后）→
+    #  `detect_multi` 返回 None → 只落单意图（3 个阶段的活只跑 1 个），多意图能力形同虚设。
+    #  为什么做成"两级"而不是把并列塞进同一正则：阶段连词表达**顺序**（先/再/最后），
+    #  并列分隔符表达**清单**（、以及同时），语义不同；混在一起既拆不准顺序，
+    #  也会误伤"先A、B，再C"这类混合句。**L1 一行不改**（零行为变更），L2 只做兜底。
+    _PARA_SEP = re.compile(r"[、,，;；]")
+    _PARA_CONN = re.compile(r"(?:以及|同时|然后|接着|并)")
+    # L2 专用的**严格**关键词集：与 L1 的 `_CLAUSE_INTENTS` 不同，这里**剔除泛词**
+    # （需求/影响/设计/方案/模型/检查…）。理由与关键词层同一条纪律：泛词不得单独判定，
+    # 否则「提供一段需求」这种**背景句**会被判成 requirement_analysis 阶段（实测踩到）。
+    _CLAUSE_SPECIFIC = (
+        # 2026-09-26（多意图评测集驱动）：① 补 requirement_quality（此前**缺失** → 「做需求质量评审」
+        #   被"评审"抢成 review/requirement_analysis）；② report_generation **提到 review 之前**，
+        #   对齐主判定的"报告优先"（含报告生成词 → report_generation），否则「再出一份评审报告」
+        #   会因为"评审"先命中而判成 review —— 同一句话在单意图/多意图两条路径结论不同，最难排查。
+        ("requirement_quality", ("需求质量", "质量评审", "模糊词", "不可验证")),
+        ("requirement_analysis", ("需求分析", "需求条目", "需求提取", "解析需求", "requirement")),
+        ("impact", ("影响分析", "变更影响", "impact")),
+        ("report_generation", ("报告", "汇报", "导出", "report")),
+        ("review", ("评审", "校验", "预评审", "review", "validate")),
+        ("design", ("方案设计", "架构", "建模", "sysml", "代码生成", "视图", "bdd", "ibd", "代码", "design")),
+        ("knowledge_qa", ("知识库", "检索", "knowledge")),
+    )
+
     def _clause_to_intent(self, clause: str) -> str:
         """子句 → 意图名；无法映射返回原文本（供上层展示/拼接）。"""
         c = clause.strip()
@@ -415,8 +672,17 @@ class IntentRouter:
                 return intent
         return c
 
+    def _clause_to_intent_strict(self, clause: str) -> str:
+        """L2 用严格映射：只认特异词（泛词不算），无法映射返回原文本。"""
+        c = clause.strip()
+        low = c.lower()
+        for intent, keywords in self._CLAUSE_SPECIFIC:
+            if any(k in low for k in keywords):
+                return intent
+        return c
+
     def _split_stage_clauses(self, text: str) -> list:
-        """多阶段指令 → 原始子句列表（未映射）；无阶段连词返回空列表（单意图由 detect 处理）。"""
+        """L1：多阶段指令（阶段连词）→ 原始子句列表（未映射）；无阶段连词返回空列表。"""
         if not text or not isinstance(text, str):
             return []
         t = text.strip()
@@ -439,19 +705,72 @@ class IntentRouter:
             return clauses
         return []
 
-    def split_multi_intent(self, text: str) -> list:
-        """Task 11-① 多意图分解：一条输入含多个阶段任务 → 子意图名列表（供动态编排衔接）。
+    def _split_parallel_clauses(self, text: str) -> list:
+        """L2：并列清单 → `[{intent, text}]`；能映射出的**不同意图 < 2** 时返回空列表。
 
-        按阶段连词（先…再…/先…然后…/接着/最后 做…）把多阶段指令拆为子指令：
-        - 命中拆解 → 每段子句映射意图名（需求分析→requirement_analysis、方案/设计/架构/建模→design、
-          影响→impact、评审→review、报告→report_generation）；无法映射的子句返回原文本
-        - 无阶段连词 → 返回空列表（单意图场景由既有 detect 处理）
-        纯规则实现（正则），不调 LLM；不改 detect 主流程。
+        切分：先按 `、，,；;` 断句；每段再**试着**按并列连词（以及/同时/然后/接着/并）细切，
+        **只有当细切出的片段能映射出 ≥2 个不同意图时才采用细切结果**，否则保留整段 ——
+        这样既不会把「合并需求」这类词内"并"拆坏（细切后只有 1 个意图 → 回退整段），
+        也不会漏掉「变更影响分析以及生成报告」这种"整段可映射、但内含两个阶段"的说法
+        （整段会映射成 impact，把"生成报告"整段吞掉 —— 实测踩到）。
+        过滤：映射不上意图的片段（如"提供一段需求"这类背景句）直接丢弃；同一意图只保留首个。
+        """
+        if not text or not isinstance(text, str):
+            return []
+        frags = []
+        for seg in self._PARA_SEP.split(text.strip()):
+            seg = seg.strip()
+            if not seg:
+                continue
+            subs = [s.strip() for s in self._PARA_CONN.split(seg) if s.strip()]
+            # "映射成功"的判据 = 返回值不再是原文本本身（`_clause_to_intent_strict` 未命中时原样返回）
+            mapped = {self._clause_to_intent_strict(s) for s in subs}
+            mapped = {m for m in mapped if m in self.INTENTS}
+            if len(subs) > 1 and len(mapped) >= 2:
+                frags.extend(subs)
+            else:
+                frags.append(seg)
+        tasks = [{"intent": self._clause_to_intent_strict(f), "text": f} for f in frags]
+        return self._finalize_tasks(tasks)   # 2026-09-26：收口逻辑收敛到 _finalize_tasks（L1/L2 共用）
+
+    def _finalize_tasks(self, tasks: list) -> list:
+        """多意图收口（L1/L2 **共用**）：过滤"没映射上意图"的片段、同一意图只留首段、不足 2 个不同意图不算多意图。
+
+        2026-09-26（多意图评测集驱动）：此前只有 L2 做了这套收口，L1 直接用宽松映射 + 不去重 + 不判数量，
+        实测三类错（都进了 `eval_multi_intent.py` 的错例清单）：
+          ① 「先生成结构视图，再生成参数视图」→ `['design','design']`（同一意图被当成两个阶段）
+          ② 「先看看再想想」→ `['看看','想想']`（映射失败的原句片段被当成意图名）
+          ③ 宽松映射按元组顺序首个命中，「做需求质量评审」落到 requirement_analysis（应为 requirement_quality）
+        判据同 L2：映射函数的**未命中约定是"原样返回文本"**，故 `it == text` 即未映射。
+        """
+        out, seen = [], set()
+        for t in tasks or []:
+            it, txt = t.get("intent"), t.get("text")
+            if not it or it == txt or it not in self.INTENTS or it in seen:
+                continue
+            seen.add(it)
+            out.append(t)
+        return out if len(out) >= 2 else []
+
+    def split_multi_tasks(self, text: str) -> list:
+        """多意图两级切分入口 → `[{intent, text}]`（text = 该阶段的原始子句，供 stage_hint 用）。
+
+        L1 阶段连词（先…再…/最后）优先；L1 无命中才走 L2 并列清单兜底。
+        返回空列表 = 单意图（由 detect() 处理）。
+
+        2026-09-26：L1 与 L2 **统一收口**（`_finalize_tasks`）并统一用**严格映射**
+        （`_clause_to_intent_strict`：泛词不算），避免"两级语义不一致"——
+        同一句话因为走了 L1 还是 L2 而得出不同的意图，是最难排查的一类不一致。
         """
         clauses = self._split_stage_clauses(text)
-        if not clauses:
-            return []
-        return [self._clause_to_intent(c) for c in clauses]
+        if clauses:
+            return self._finalize_tasks(
+                [{"intent": self._clause_to_intent_strict(c), "text": c} for c in clauses])
+        return self._split_parallel_clauses(text)
+
+    def split_multi_intent(self, text: str) -> list:
+        """Task 11-① 多意图分解：子意图名列表（保留旧签名；内部走两级切分）。"""
+        return [t["intent"] for t in self.split_multi_tasks(text)]
 
     def suggest_slots(self, intent: str, text: str) -> list:
         """Task 11-② suggested_slots：按意图返回缺失槽位补全提示 [{key, label, hint}]。
@@ -484,15 +803,22 @@ class IntentRouter:
         return []
 
     def detect_multi(self, text) -> dict:
-        """Task 11-③ 组合入口：多阶段输入 → {"intent":"multi","sequence":[子意图名],"raw_subtasks":[原始子句]}。
+        """Task 11-③ 组合入口：多阶段输入 →
+        {"intent":"multi","sequence":[子意图名],"raw_subtasks":[原始子句],"tasks":[{intent,text}]}。
 
-        split_multi_intent 非空时返回 multi 结构（供 pipeline 编排路径显式调用，前端展示阶段序列）；
-        否则返回 None（上层走既有 detect 单意图路径）。纯规则，不改 detect() 主流程。
+        两级切分（`split_multi_tasks`）：阶段连词优先、并列清单兜底；无命中返回 None
+        （上层走既有 detect 单意图路径）。纯规则，不改 detect() 主流程。
+
+        2026-09-25：新增 `tasks`（阶段+原句）。`raw_subtasks` 仍保持**字符串列表**
+        （SSE 契约与前端 `11-pipeline.js` 的展示都按字符串消费，改结构会直接渲染成
+        [object Object]）；但编排需要的"每阶段在说什么"必须带上，故新增字段而非改旧字段
+        —— stream.py 用它拼 `stage_hint`（planner 阶段序约束）。
         """
-        clauses = self._split_stage_clauses(text)
-        if not clauses:
+        tasks = self.split_multi_tasks(text)
+        if not tasks:
             return None
         return {"intent": "multi",
-                "sequence": [self._clause_to_intent(c) for c in clauses],
-                "raw_subtasks": clauses}
+                "sequence": [t["intent"] for t in tasks],
+                "raw_subtasks": [t["text"] for t in tasks],
+                "tasks": tasks}
 

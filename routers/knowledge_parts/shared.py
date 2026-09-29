@@ -153,28 +153,14 @@ def _log_graph_edit(conn, op: str, node_id: str, payload: dict, operator: str) -
 
 
 def _fallback_topics(conn, days: int = 30, top: int = 20) -> list:
-    """近 N 天检索 fallback（route=vector/mixed 或 reason 含 no_hit）query 的中/英词频 TOP N。
+    """近 N 天检索 fallback（route=vector/mixed 或 reason 含 no_hit）query 的业务主题词频。
 
-    简单按正则拆词：中文取连续 ≥2 字片段，英文/数字取 ≥2 字符 token，
-    过滤常见停用词后计数（英文统一小写归一）。
+    ⚠️ 2026-09-26 口径统一：**实现已迁至 `metrics_core.fallback_topics`**，本函数只做委派，
+    避免出现第二份实现（C5 修复点：滤除系统提示词与通用词噪声）。
+    保留函数名是因为它曾是各分片共用 helper，删除会波及未知引用。
     """
-    import re
-    from collections import Counter
-    rows = conn.execute(
-        "SELECT query FROM query_routing_stats "
-        "WHERE created_at >= datetime('now', ?) AND (route IN ('vector','mixed') OR reason LIKE '%no_hit%')",
-        (f"-{days} days",)).fetchall()
-    counter = Counter()
-    for r in rows:
-        q = (r["query"] or "").strip()
-        if not q:
-            continue
-        for w in re.findall(r"[\u4e00-\u9fa5]{2,}|[A-Za-z0-9]{2,}", q):
-            wl = w.lower()
-            if wl in _FALLBACK_STOP_WORDS:
-                continue
-            counter[wl] += 1
-    return [{"word": w, "count": c} for w, c in counter.most_common(top)]
+    import metrics_core
+    return metrics_core.fallback_topics(conn, days=days, top=top)
 
 
 def _validate_ont_parent(conn, parent_id, type_kind, exclude_id=None):

@@ -10,20 +10,24 @@ from .common import *
 class MemoryMixin:
     """记忆/模型上下文/用户上下文/报告素材构建。"""
 
-    def _build_memory_hint(self, user_input: str, intent: str, user=None) -> str:
-        """检索长期记忆（agent_memory，语义相关+时间衰减）→ 组装注入块。
+    def _build_memory_hint(self, user_input: str, intent: str, user=None, scopes=None) -> str:
+        """检索长期记忆（agent_memory，作用域复合过滤 + 语义相关 + 时间衰减）→ 组装注入块。
 
+        作用域（对齐 mem0）：scopes=None 且存在会话上下文（self._mem_ctx）→ 按
+        project/user/agent/global 四槽检索；无会话上下文（如定向单测）→ scopes=[] 回落旧行为（仅 agent_id）。
         仅返回命中内容；异常/无命中返回空串（不阻断主流程）。记忆只作参考对齐，
         Prompt 硬约束「不得虚构扩展」，防止把记忆当事实检索结果引用。
         """
         try:
-            from memory_service import MemoryService
+            from memory_backend import get_memory_backend
             from database import get_db
             conn = get_db()
             try:
                 agent_id = intent or "chat"
                 query = f"{user_input} {intent}"
-                rows = MemoryService.search(conn, agent_id, query, top_k=4)
+                if scopes is None:
+                    scopes = self._memory_scopes(intent, user) if getattr(self, "_mem_ctx", None) else []
+                rows = get_memory_backend().search(conn, agent_id, query, top_k=4, scopes=scopes)
                 if not rows:
                     return ""
                 lines = [f"- [{r.get('mem_type', 'fact')} | 相关度 {r.get('score', 0):.2f}] {str(r.get('content') or '')[:160]}"
@@ -33,6 +37,29 @@ class MemoryMixin:
                 conn.close()
         except Exception:
             return ""
+
+    def _memory_recall_scope(self, intent: str, user=None) -> dict:
+        """P0（2026-09-29）记忆召回的 kb_scope 补充字段（供 `GraphRAG.retrieve` 消费）。
+
+        检索侧**不自己解析项目/意图**（那样会在 rag.py 里重复一遍 `_resolve_mem_project_id`
+        的取值链，两处必然漂移）；改由**持有会话上下文的 pipeline 侧**算好、经 kb_scope 传入。
+
+        返回 {"intent":..., "project_id":..., "memory_scopes":[...]}：
+        - `memory_scopes` 仅在**存在会话上下文**（self._mem_ctx）时给出 —— 与 `_build_memory_hint`
+          的既有判据一致（`scopes = self._memory_scopes(...) if getattr(self, "_mem_ctx", None) else []`）。
+          无会话（定向单测/夹具）→ 不含该键，检索侧回落「仅 agent_id」的旧行为，**不引入隐式串扰**。
+        - `project_id` 可为空串（未配置默认项目）→ 检索侧据此跳过 project_memories 路（防测试数据混入）。
+        异常返回 {}（检索侧按缺省处理，不阻断）。
+        """
+        try:
+            out = {"intent": intent or "chat"}
+            ctx = getattr(self, "_mem_ctx", None)
+            if ctx:
+                out["project_id"] = self._resolve_mem_project_id(int(ctx.get("conversation_id") or 0))
+                out["memory_scopes"] = self._memory_scopes(intent, user or ctx.get("user"))
+            return out
+        except Exception:
+            return {}
 
     # ── ⚠️ 这里**曾**实现「按语义相关性过滤上下文条目」，**经标定后主动放弃**（2026-09-19）。
     #   标定脚本 tmp/kcx/calib.py（21 条库内真实素材 × 1 条真实 query，两路同测）：
@@ -123,13 +150,88 @@ class MemoryMixin:
         except Exception:
             return ""
 
-    def _build_project_memory(self, project_id: str = "", user_input: str = "") -> str:
+    # ── 多维作用域辅助（记忆读写的取值真源，单点化避免各处重复 SQL）──
+    def _resolve_mem_project_id(self, conversation_id=0, project_id: str = "") -> str:
+        """记忆注入取项目真源：**显式 project_id → 会话的 project_id → settings.default_project_id → 空**。
+
+        实例缓存按 conversation_id 校验（同一会话复用，跨会话不串）；异常/表缺失 → 空串（不阻断）。
+        """
+        try:
+            if project_id:
+                return str(project_id)
+            cid = int(conversation_id or 0)
+            # 仅在「有会话上下文」时缓存：cid=0（无会话，含夹具/定向单测）**不缓存** ——
+            # 否则同一实例上跨上下文复用会把上次的 project_id 泄漏进本次（2026-09-26 实测：
+            # 夹具库缺 settings 行时仍误查 project_memories，被 verify[3] 抓到）。
+            _cache = getattr(self, "_mem_project_id_cache", None)
+            if cid > 0 and _cache is not None and _cache[0] == cid:
+                return _cache[1]
+            pid = ""
+            from database import get_db
+            if cid > 0:
+                try:   # 会话查询独立兜底：夹具/老库无 conversations 表时不得抛出
+                    conn = get_db()
+                    try:
+                        row = conn.execute("SELECT project_id FROM conversations WHERE id=?", (cid,)).fetchone()
+                        if row:
+                            pid = str(row["project_id"] or "")
+                    finally:
+                        conn.close()
+                except Exception:
+                    pid = ""
+            if not pid:
+                conn = get_db()
+                try:
+                    row = conn.execute(
+                        "SELECT value FROM settings WHERE key='default_project_id'").fetchone()
+                    pid = (row["value"] if row else "") or ""
+                finally:
+                    conn.close()
+            if cid > 0:
+                self._mem_project_id_cache = (cid, pid)
+            return pid
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _memory_user_key(user) -> str:
+        """用户作用域标识：username 优先，回落 display_name（无身份 → 空）。"""
+        try:
+            if not user:
+                return ""
+            return str(user.get("username") or user.get("display_name") or "").strip()[:80]
+        except Exception:
+            return ""
+
+    def _memory_scopes(self, intent: str, user=None) -> list:
+        """有序记忆作用域槽位（优先级高→低）：project → user → agent → global。
+
+        空项剔除（无项目 → 无 project 槽；无身份 → 无 user 槽）；global 恒在末位。
+        """
+        try:
+            ctx = getattr(self, "_mem_ctx", None) or {}
+            scopes = []
+            pid = self._resolve_mem_project_id(int(ctx.get("conversation_id") or 0))
+            if pid:
+                scopes.append(("project", pid))
+            uname = self._memory_user_key(user or ctx.get("user"))
+            if uname:
+                scopes.append(("user", uname))
+            if intent:
+                scopes.append(("agent", intent))
+            scopes.append(("global", ""))
+            return scopes
+        except Exception:
+            return []
+
+    def _build_project_memory(self, project_id: str = "", user_input: str = "", conversation_id: int = 0) -> str:
         """项目级持久记忆（Project Constitution）：规范/基线/决策/经验注入 system prompt 防漂移。
 
         对齐 Codex durable project memory / Claude Code CLAUDE.md——每会话注入项目宪法，
         约束模型遵守既定规范与设计基线。
-        **取项目顺序（2026-09-20 收紧）：显式 project_id → settings.default_project_id → 空则完全不注入。**
-        即「默认项目」纯由 settings 决定，代码里**不再有任何硬编码兜底**；把该键置空 = 停用注入。
+        **取项目顺序（2026-09-26 作用域化）：显式 project_id → 会话所属 project_id → settings.default_project_id
+        → 空则完全不注入。** 会话取值让「项目宪法」真正按**会话所属工程**注入（此前一律回退默认项目，属接线缺口）；
+        代码里**不再有任何硬编码兜底**；把默认项目键置空 = 停用注入。
         预算 project_memory_chars（默认 600）截尾保头（规范/基线优先）；无数据/异常返回空串不阻断。
 
         P0（2026-09-19）：**注入时带项目名 + 显式适用范围声明**，把「是否适用」的判断权交给模型。
@@ -152,14 +254,10 @@ class MemoryMixin:
                 if str(_cfg_rows.get("memory.project_memory_enabled", "1")).lower() not in ("1", "true", "yes", "on"):
                     return ""
                 max_chars = int(_cfg_rows.get("memory.project_memory_chars", "600") or 600)
-                pid = project_id or ""
-                if not pid:
-                    row = conn.execute(
-                        "SELECT value FROM settings WHERE key='default_project_id'").fetchone()
-                    # 2026-09-20：原为 `row["value"] if row else "project-satnet-broadband"` ——
-                    # 行缺失时回退到硬编码的星网项目，会让「置空默认项目以停用注入」被悄悄推翻
-                    # （领域固化残留）。统一取空 → 交给下方 `if not pid: return ""` 处理。
-                    pid = (row["value"] if row else "") or ""
+                # 取项目真源：显式 → 会话 → settings（单点于 _resolve_mem_project_id，带实例缓存）
+                # 2026-09-20 教训保留：行缺失/置空一律取空 → 交给下方 `if not pid: return ""`，
+                # 绝不再回退硬编码默认项目（否则「置空以停用注入」会被悄悄推翻）。
+                pid = self._resolve_mem_project_id(conversation_id, project_id)
                 if not pid:
                     return ""
                 rows = conn.execute(
@@ -190,17 +288,30 @@ class MemoryMixin:
         """会话产出记忆沉淀：LLM 提炼 or 规则降级；每会话限 2 次防噪音。
 
         仅主会话（非 dry_run）调用；dry_run 子任务路径由 nodes._exec_agent 自行沉淀。
+        作用域：默认落 **project**（会话所属工程），无工程上下文回落 **agent**；
+        偏好类记忆（mem_type=preference）由 maybe_deposit 改落 **user** 槽（跨 Agent 复用）。
+        签名保持 3 参（既有调用点与自检脚本零改动）。
         """
         try:
             if not content or not content.strip():
                 return
             if getattr(self, "_mem_deposit_count", 0) >= 2:
                 return
-            from memory_service import MemoryService
+            from memory_backend import get_memory_backend
             from database import get_db
+            ctx = getattr(self, "_mem_ctx", None) or {}
+            pid = self._resolve_mem_project_id(int(ctx.get("conversation_id") or 0)) if ctx else ""
+            if pid:
+                scope_type, scope_id = "project", pid
+            else:
+                scope_type, scope_id = "agent", (intent or "chat")
+            uname = self._memory_user_key(ctx.get("user"))
+            user_scope = ("user", uname) if uname else None
             conn = get_db()
             try:
-                mem_id = MemoryService.maybe_deposit(conn, intent or "chat", content, user_input)
+                mem_id = get_memory_backend().maybe_deposit(
+                    conn, intent or "chat", content, user_input,
+                    scope_type=scope_type, scope_id=scope_id, user_scope=user_scope)
                 if mem_id:
                     self._mem_deposit_count = getattr(self, "_mem_deposit_count", 0) + 1
             finally:

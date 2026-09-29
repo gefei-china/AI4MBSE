@@ -110,6 +110,14 @@ def _migrate_columns(conn):
     _add("agent_memory", "access_count", "INTEGER DEFAULT 0")            # 被检索命中的次数
     _add("agent_memory", "last_accessed_at", "TEXT DEFAULT ''")          # 最近访问时间
     _add("agent_memory", "forgotten", "INTEGER DEFAULT 0")               # 0=活跃 1=遗忘（软删，检索跳过，可恢复）
+    # ── 多维作用域（对齐 mem0 四维 scope：global/project/user/agent + 复合过滤）──
+    _add("agent_memory", "scope_type", "TEXT DEFAULT ''")               # '' | global | project | user | agent（'' = 存量行）
+    _add("agent_memory", "scope_id", "TEXT DEFAULT ''")                 # project=projects.id / user=username / agent=intent / global 为空串
+    # 作用域复合过滤索引：**必须在补列之后**建（先补列再建索引，老库才不会因缺列而崩）
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_memory'").fetchone():
+        _cols_am = [r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()]
+        if "scope_type" in _cols_am and "scope_id" in _cols_am:
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_am_scope ON agent_memory(scope_type, scope_id, forgotten)")
     _add("mcp_servers", "args", "TEXT DEFAULT '[]'")
     _add("mcp_servers", "env", "TEXT DEFAULT '{}'")
     _add("mcp_servers", "last_check", "TEXT DEFAULT ''")
@@ -159,6 +167,8 @@ def _migrate_columns(conn):
     _add("knowledge_publish_logs", "commit_id", "INTEGER DEFAULT NULL")   # 关联本次发布的 merge 提交 id
     # ── 分支版本管理：分支=提交链指针（Git 式 head commit），指向该分支最新提交 id ──
     _add("branches", "head_commit", "INTEGER DEFAULT NULL")
+    # ── 2026-09-29 痛点2：LLM 真摘要（空=未生成；preview 端点优先读，回退「前2块截断」旧行为）──
+    _add("documents", "summary", "TEXT DEFAULT ''")
     # ── P0-2 行业对齐：chunk 域隔离（AWS Metadata Filtering / 企业分类法）──
     _add("document_chunks", "domain", "TEXT DEFAULT 'unknown'")          # sysml_norm | satellite_comms | thermal_mgmt | generic | unknown
     _add("documents", "domain", "TEXT DEFAULT 'unknown'")                # 文档级域（chunk 继承）
@@ -211,6 +221,48 @@ def _migrate_columns(conn):
     _add("knowledge_commits", "content_hash", "TEXT DEFAULT ''")       # sha256(branch|parent_id|kind|规范化changes|规范化snapshot)
     # ── P0-2：分支保护规则（按类型默认 + 分支级覆盖；解析见 core/branch_rules.py）──
     _add("branches", "protection_rules", "TEXT DEFAULT '{}'")          # JSON: {writable,deletable,renamable,required_reviews,allow_direct_push}
+    # ── 方案A（2026-09-24）：AI 建模主链统一「归一 → 写回智源 → 智源拉取」，工程入库直入捷径下线 ──
+    _add("sysml_versions", "zhiyuan_imported_id", "TEXT DEFAULT ''")   # 非空=该版本已写回智源（vc#package 标识）；防重复写回 + 入口条状态展示
+    # ── 方案A收尾（2026-09-24）：工程↔智源vc绑定 + 入库台账来源标记 ──
+    _add("projects", "zhiyuan_vc", "TEXT DEFAULT ''")                  # 本工程在智源的版本上下文（写回/拉取按此路由；绑定即落库）
+    _add("projects", "zhiyuan_project_name", "TEXT DEFAULT ''")        # 绑定的智源工程名（冗余存：选择器/回执展示 + 名称核对，防"同名不同工程"）
+    _add("project_ingest_logs", "source", "TEXT DEFAULT ''")           # project_ingest=工程入库(旧捷径) | zhiyuan_pull=智源拉取（台账区分来源）
+    # ⚠️ 2026-09-25：这条 UPDATE 必须**自己判表存在**。`_add()` 内部有判表守卫（表不存在就跳过加列），
+    # 但紧随其后的这条裸 UPDATE 没有 → 在**没有该表**的库上（如测试用临时库）init_db 直接抛
+    # `no such table: project_ingest_logs`，把整个初始化打断（实测：tests/manual_verify/verify_intent_enhance_d12.py
+    # 一跑就崩，且崩在 init_db 而非被测逻辑）。判据：新库初始化不报错。
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_ingest_logs'").fetchone():
+        conn.execute("UPDATE project_ingest_logs SET source='project_ingest' WHERE source='' OR source IS NULL")
+    # ── 建模工具适配层（2026-09-24 用户拍板：对接不限于智源，也支持 MagicDraw）──
+    # tool_binding JSON = {"tool":"zhiyuan"|"magicdraw"|..., "ref":"vc/工程标识", "name":"工具侧工程名"}
+    # 空 = 本地建模。对齐 08-31《多工程数据体现设计方案》tool_type: magicdraw/sysmlv2_api/cameo 设计。
+    _add("projects", "tool_binding", "TEXT DEFAULT ''")
+    # 旧 zhiyuan_vc 绑定回填为 tool_binding（zhiyuan_vc/zhiyuan_project_name 转遗留列，停止读写）
+    # ⚠️ 2026-09-28：本条 UPDATE 必须与上面 project_ingest_logs 那条一样**自己判表存在** ——
+    #  `_add()` 有判表守卫，裸 UPDATE 没有。实测（P1 自检夹具：只有 sysml_versions/artifacts 两张表的
+    #  临时库）跑 `_migrate_columns` 直接抛 `no such table: projects`，把整个 init_db 打断，
+    #  且崩在初始化而非被测逻辑。生产库有 projects 表所以从未暴露 —— 典型"只在最小库上才现形"。
+    #  判据：无 projects 表的库上 init_db 不报错。
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='projects'").fetchone():
+        conn.execute(
+            "UPDATE projects SET tool_binding = json_object('tool','zhiyuan','ref',trim(zhiyuan_vc),'name',trim(zhiyuan_project_name)) "
+            "WHERE trim(zhiyuan_vc)<>'' AND trim(coalesce(tool_binding,''))=''")
+    # ── 项目数据来源（2026-09-24 用户拍板）：本地工作空间 / 远端 SSH 连接 ──
+    # source='local'  → workspace = 本地工作空间绝对路径（项目根目录，前端「选本地文件夹」写入）；
+    # source='remote' → remote    = SSH 连接 JSON {display_name,host,port,auth_mode,identity_file}，
+    #                   auth_mode: none（无身份验证，对应弹窗左档）| key（身份文件，须填 identity_file）。
+    # 老库既有项目 source 留空 → 读取侧按 'local' 兜底（无 workspace 即「未指定」），不做数据改写。
+    _add("projects", "source", "TEXT DEFAULT 'local'")
+    _add("projects", "workspace", "TEXT DEFAULT ''")
+    _add("projects", "remote", "TEXT DEFAULT ''")
+    # ── P1-1（2026-09-28 多工程）：AI 建模写入物**定格**所属工程 ──
+    # sysml_versions / artifacts 此前没有 project_id，归属只能靠
+    # `v.conversation_id → c.project_id` 现算 —— 会话事后改归属，历史版本/产物会**跟着漂移**
+    # （写回智源的目标工程也随之改变）。新行写入时定格，旧行留空由 JOIN 兜底。
+    # ⚠️ **存量不回填**（用户拍板 2026-09-28）：历史行的归属已不可考，宁可留空走兜底，
+    #    也不按当前会话归属"倒推"历史的工程。
+    _add("sysml_versions", "project_id", "TEXT DEFAULT ''")
+    _add("artifacts", "project_id", "TEXT DEFAULT ''")
     conn.commit()
 
 

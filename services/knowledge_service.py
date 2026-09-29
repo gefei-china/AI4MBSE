@@ -482,58 +482,103 @@ class KnowledgeService(BaseService):
                 "stats": stats, "versions": ver_details, "errors": errors}
 
     def content_ingest_commit(self, model_name: str, content: dict, actor: str = "system",
-                              target_branch: str = "personal", version_id: int = 0) -> dict:
+                              target_branch: str = "personal", version_id: int = 0,
+                              project_id: str = "", project_name: str = "",
+                              source_tag: str = "zhiyuan_pull") -> dict:
         """单份模型内容直通入库（2026-09-11 拉取流程）：候选化 → 融合闸 → 确认生成待审三元组
         → 自动批准 → 落个人分支图库。对话流内回执，不产生数据治理审核面板待办
-        （用户在 AI 建模对话流发起拉取 = 拍板动作本身）。"""
+        （用户在 AI 建模对话流发起拉取 = 拍板动作本身）。
+
+        2026-09-24：批次同步落 project_ingest_logs（source=source_tag）——对话流回执易逝
+        （切会话即不可见），台账是持久的入库审计记录。source_tag：zhiyuan_pull=智源拉取
+        （batch 前缀 ZPULL-）；工程入库旧捷径为 project_ingest（已下线）。
+        """
         import time as _time
+        import uuid as _uuid
         from datetime import datetime as _dt, timedelta as _timedelta
         from sysml_importer import sysml_to_candidates
         from vector2graph import confirm_candidates
         from core.audit import audit
         t0 = _time.time()
-        t0_str = (_dt.utcnow() - _timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")  # SQLite CURRENT_TIMESTAMP=UTC
+        ledger_batch = f"ZPULL-{_uuid.uuid4().hex[:8]}" if source_tag == "zhiyuan_pull" \
+            else f"PINGEST-{_uuid.uuid4().hex[:8]}"
+        if not project_name and project_id:
+            _p = self.conn.execute("SELECT name FROM projects WHERE id=?", (project_id,)).fetchone()
+            project_name = (_p["name"] if _p else "") or ""
+        self.conn.execute(
+            "INSERT INTO project_ingest_logs (batch_id, project_id, project_name, target_branch, "
+            "version_ids, stats_json, status, operator, source) VALUES (?,?,?,?,?,'{}','running',?,?)",
+            (ledger_batch, project_id or "", project_name or "", target_branch, "[]", actor, source_tag))
+        self.conn.commit()
         stats = {"candidates": 0, "rejected": 0, "triples_staged": 0, "auto_merged": 0,
                  "review_queue": 0, "triples_approved": 0, "entities_written": 0,
                  "relations_written": 0}
-        st = sysml_to_candidates(self.conn, content, version_id=version_id,
-                                 model_name=model_name, source="json")
-        if st.get("error"):
-            return {"error": st["error"]}
-        stats["candidates"] = (st.get("node_count") or 0) + (st.get("edge_count") or 0)
-        stats["rejected"] = len(st.get("rejected") or [])
-        sr = self.v2g_submit_review(st["batch_id"], [], actor=actor)
-        stats["auto_merged"] = sr.get("auto_merged") or 0
-        stats["review_queue"] = sr.get("review_queue") or 0
-        cf = confirm_candidates(self.conn, st["batch_id"], None,
-                                operator=actor, dup_action="align")
-        stats["triples_staged"] = cf.get("confirmed") or 0
-        # 对话流发起 = 拍板 → 本批待审三元组自动批准（时间窗选择，不触碰存量 pending）
-        cur = self.conn.execute(
-            "UPDATE triples SET status='approved', review_decision='approve', "
-            "reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP "
-            "WHERE status='pending' AND created_at >= ?", [actor, t0_str])
-        stats["triples_approved"] = cur.rowcount
-        self.conn.commit()
-        from triple_commit import commit_approved_triples
-        wr = commit_approved_triples(self.conn, operator=actor)
-        stats["entities_written"] = wr.get("entities") or 0
-        stats["relations_written"] = wr.get("relations") or 0
+        ledger_err = ""
+        try:
+            st = sysml_to_candidates(self.conn, content, version_id=version_id,
+                                     model_name=model_name, source="json")
+            if st.get("error"):
+                raise RuntimeError(st["error"])
+            stats["candidates"] = (st.get("node_count") or 0) + (st.get("edge_count") or 0)
+            stats["rejected"] = len(st.get("rejected") or [])
+            sr = self.v2g_submit_review(st["batch_id"], [], actor=actor)
+            stats["auto_merged"] = sr.get("auto_merged") or 0
+            stats["review_queue"] = sr.get("review_queue") or 0
+            cf = confirm_candidates(self.conn, st["batch_id"], None,
+                                    operator=actor, dup_action="align")
+            stats["triples_staged"] = cf.get("confirmed") or 0
+            # 对话流发起 = 拍板 → 本批待审三元组自动批准（时间窗选择，不触碰存量 pending）
+            cur = self.conn.execute(
+                "UPDATE triples SET status='approved', review_decision='approve', "
+                "reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP "
+                "WHERE status='pending' AND created_at >= ?", [actor, t0_str])
+            stats["triples_approved"] = cur.rowcount
+            self.conn.commit()
+            from triple_commit import commit_approved_triples
+            wr = commit_approved_triples(self.conn, operator=actor)
+            stats["entities_written"] = wr.get("entities") or 0
+            stats["relations_written"] = wr.get("relations") or 0
+        except Exception as e:  # noqa: BLE001 —— 失败也要落台账（status=failed），不留 running 悬案
+            ledger_err = str(e)[:500]
+            self.conn.execute(
+                "UPDATE project_ingest_logs SET stats_json=?, status='failed', error_msg=?, "
+                "finished_at=CURRENT_TIMESTAMP WHERE batch_id=?",
+                (_json.dumps(stats, ensure_ascii=False), ledger_err, ledger_batch))
+            self.conn.commit()
+            return {"error": ledger_err, "ledger_batch_id": ledger_batch}
         stats["elapsed_ms"] = int((_time.time() - t0) * 1000)
+        self.conn.execute(
+            "UPDATE project_ingest_logs SET stats_json=?, status='success', finished_at=CURRENT_TIMESTAMP "
+            "WHERE batch_id=?",
+            (_json.dumps(stats, ensure_ascii=False), ledger_batch))
+        self.conn.commit()
         audit(actor, "content_ingest",
               f"直通入库 {model_name}: 候选{stats['candidates']} 三元组+{stats['triples_approved']} "
               f"落图 实体{stats['entities_written']}/关系{stats['relations_written']} → {target_branch}",
               conn=self.conn)
-        return {"ok": True, "batch_id": st["batch_id"], "status": "success",
-                "model_name": model_name, "target_branch": target_branch, "stats": stats}
+        return {"ok": True, "batch_id": st["batch_id"], "ledger_batch_id": ledger_batch,
+                "status": "success", "model_name": model_name, "target_branch": target_branch,
+                "project_id": project_id or "", "project_name": project_name or "",
+                "stats": stats}
 
     def zhiyuan_pull_ingest(self, actor: str = "system", vc: str = "",
-                            package_data_id=None, target_branch: str = "personal") -> dict:
+                            package_data_id=None, target_branch: str = "personal",
+                            conversation_id: int = 0) -> dict:
         """从智源拉取建模数据 → 解析 → 直接转三元组 → 存个人分支图库（2026-09-11 拉取流程）。
 
         全程后端编排、对话流内回执：project_list(默认工程) → sysmlv2_gen 导出文本
         → sysml_ast.parse_strict 解析（OMG 官方解析器）→ content_ingest_commit（候选化→融合闸→自动批准→落图）。
         不产生数据治理审核面板待办——拉取动作即对话流内的拍板。
+
+        2026-09-24（方案A收尾）vc 路由（工程维度，不再默默拉默认）：
+        ① 显式 vc（前端弹窗输入）→ 使用并绑定到本工程（projects.tool_binding，一次输入长期生效）；
+        ② 工程绑定 vc（projects.tool_binding，tool=zhiyuan）→ 直接使用；
+        ③ 无工程上下文（agent 工具调用等）→ 回退 default_vc / project_list 首个（vc_source=default，回执标注）；
+        ④ 有工程但未绑定且未显式指定 → 明确报错（VC_UNBOUND），引导绑定——防止拉错工程数据。
+
+        2026-09-24 建模工具适配层：绑定泛化为 tool_binding{tool,ref,name}（不限于智源，也支持 MagicDraw）。
+        tool=magicdraw → TOOL_NOT_READY 明确报错（MagicDraw 通道：文件导入/SysML v2 API/Cameo 插件，接入后自动启用），
+        不静默走智源——绑定了什么工具就走什么工具的连接器。
         """
         import json as _json
         from core.audit import audit
@@ -546,18 +591,67 @@ class KnowledgeService(BaseService):
             return {"error": "智源连接未配置（ZHIYUAN_BASE_URL 缺失）"}
         client = ZhiyuanClient(base_url=cfg.get("base_url", ""), token=cfg.get("token", ""),
                                headers=cfg.get("headers"), timeout=int(cfg.get("timeout") or 15))
-        # 1) vc 解析：显式 > default_vc > project_list 首个
-        if not vc:
+        # 0) 工程解析：会话 → 工程（拉取是工程维度动作，不随会话片段走）
+        proj_id, proj_name = "", ""
+        if conversation_id:
+            _c = self.conn.execute(
+                "SELECT p.id, p.name FROM conversations c "
+                "JOIN projects p ON p.id=c.project_id WHERE c.id=?",
+                (conversation_id,)).fetchone()
+            if _c:
+                proj_id, proj_name = _c["id"], _c["name"] or ""
+            else:
+                return {"error": "当前会话未关联工程，无法确定拉取目标（拉取按工程维度进行）。"
+                                 "请先将本会话归属到具体工程后再拉取。",
+                        "code": "NO_PROJECT"}
+        proj_vc, proj_tool = "", ""
+        if proj_id:
+            _p = self.conn.execute("SELECT tool_binding, zhiyuan_vc FROM projects WHERE id=?", (proj_id,)).fetchone()
+            if _p:
+                try:
+                    _b = _json.loads(_p["tool_binding"] or "{}")
+                except Exception:
+                    _b = {}
+                proj_tool = (_b.get("tool") or "").strip()
+                proj_vc = ((_b.get("ref") if proj_tool == "zhiyuan" else "") or "").strip() \
+                          or ((_p["zhiyuan_vc"] if _p else "") or "").strip()
+                if not proj_tool and proj_vc:
+                    proj_tool = "zhiyuan"   # 旧 zhiyuan_vc 回填兼容（迁移只兜一次，此处双保险）
+        # 0b) 工具分发：绑定了什么工具就走什么工具的连接器（MagicDraw 通道预留，接入前明确报错）
+        if proj_id and proj_tool and proj_tool != "zhiyuan":
+            tool_label = {"magicdraw": "MagicDraw"}.get(proj_tool, proj_tool)
+            return {"error": f"工程「{proj_name or proj_id}」绑定的建模工具为 {tool_label}，"
+                             f"其拉取连接器尚未接入（MagicDraw 通道：文件导入 / SysML v2 API / Cameo 插件，"
+                             f"接入后自动启用）。绑定已登记（ref={proj_vc or '见工程设置'}），无需重新绑定。",
+                    "code": "TOOL_NOT_READY", "tool": proj_tool}
+        # 1) vc 路由（tool=zhiyuan 或未绑定）
+        vc_source = ""
+        if vc:
+            vc_source = "explicit"
+            if proj_id and vc != proj_vc:   # 绑定即落库：显式指定的 vc 长期生效
+                self.conn.execute("UPDATE projects SET tool_binding=? WHERE id=?",
+                                  (_json.dumps({"tool": "zhiyuan", "ref": vc, "name": ""}, ensure_ascii=False),
+                                   proj_id))
+                self.conn.commit()
+        elif proj_id:
+            if proj_vc:
+                vc, vc_source = proj_vc, "project"
+            else:
+                return {"error": f"工程「{proj_name or proj_id}」尚未绑定智源 vc，无法确定要拉取哪个工程。"
+                                 "请在拉取弹窗中填入该工程在智源的 vc（branchId），填一次即长期绑定。",
+                        "code": "VC_UNBOUND"}
+        else:
             vc = (cfg.get("default_vc") or "").strip()
-        if not vc:
-            try:
-                pl = client.project_list("")
-            except Exception as e:
-                return {"error": f"智源工程列表查询失败: {e}"}
-            vc = _zhiyuan_first_vc(pl)
             if not vc:
-                return {"error": "智源工程列表为空或无法解析 vc（响应: "
-                                 + _json.dumps(pl, ensure_ascii=False)[:200] + "）"}
+                try:
+                    pl = client.project_list("")
+                except Exception as e:
+                    return {"error": f"智源工程列表查询失败: {e}"}
+                vc = _zhiyuan_first_vc(pl)
+                if not vc:
+                    return {"error": "智源工程列表为空或无法解析 vc（响应: "
+                                     + _json.dumps(pl, ensure_ascii=False)[:200] + "）"}
+            vc_source = "default"
         # 2) 导出建模数据文本
         try:
             gen = client.sysmlv2_gen(vc, package_data_id)
@@ -575,15 +669,20 @@ class KnowledgeService(BaseService):
         except RuntimeError as e:
             return {"error": f"解析失败: {e}"}
         content = parsed if parsed.get("views") else {"views": {"BDD": parsed}}
-        # 4) 直通入库
-        model_name = f"智源拉取·vc={vc}" + (f"·包{package_data_id}" if package_data_id else "·全工程")
-        r = self.content_ingest_commit(model_name, content, actor=actor, target_branch=target_branch)
+        # 4) 直通入库（模型名携带「智源拉取·工程·vc」前缀 → 候选/实体的 source_doc
+        #    均含「AI建模·智源拉取·…」可识别标记，将来可按 LIKE '%智源拉取·%' 识别/清理）
+        model_name = f"智源拉取·{proj_name or '默认工程'}·vc={vc}" + (f"·包{package_data_id}" if package_data_id else "·全工程")
+        r = self.content_ingest_commit(model_name, content, actor=actor, target_branch=target_branch,
+                                       project_id=proj_id, project_name=proj_name,
+                                       source_tag="zhiyuan_pull")
         if r.get("error"):
             return r
-        r.update({"vc": vc, "package_data_id": package_data_id,
+        r.update({"vc": vc, "vc_source": vc_source, "package_data_id": package_data_id,
+                  "project_id": proj_id, "project_name": proj_name,
+                  "batch_id": r.get("ledger_batch_id") or r.get("batch_id"),  # 回执批次=台账批次
                   "text_chars": len(text), "text_preview": text[:400]})
         audit(actor, "zhiyuan_pull_ingest",
-              f"智源拉取入库 vc={vc}: 候选{r['stats'].get('candidates')} "
+              f"智源拉取入库 工程={proj_name or '默认'} vc={vc}({vc_source}): 候选{r['stats'].get('candidates')} "
               f"三元组+{r['stats'].get('triples_approved')} 落图 "
               f"实体{r['stats'].get('entities_written')} → {target_branch}", conn=self.conn)
         return r

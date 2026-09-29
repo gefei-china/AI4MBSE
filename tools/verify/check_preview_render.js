@@ -2,9 +2,13 @@
 // 而是把页面里的脚本抽出来、在 DOM 桩上跑一遍，断言渲染结果。
 //
 // 用法: node tools/verify/check_preview_render.js <产物.html>
-// 断言：脚本段数 / 簇数与字段数 / 每字段都归属已定义簇 / 取值无 NaN /
-//       逐簇可视化与校验文案无 undefined / 真调一次 loadCtxConfig 得到 7 个面板 /
+// 断言：脚本段数 / 每字段归属已定义簇 / 每簇至少 1 字段 / 每簇 checks 键都存在于 CTX_CHECKS /
+//       取值无 NaN / 逐簇可视化与校验文案无 undefined / 真调一次 loadCtxConfig 的面板数 = 簇数 /
 //       渲染产物里没有未转换的 markdown 粗体 **（本工程无 markdown 解析器）
+//
+// 2026-09-26：原断言把「簇数=7 / 字段数=32 / 面板数=7」**写死**，簇一增加就整条误报
+//   （实测已漂移到 9 簇 / 43 字段而无人发现，校验等于失效）。改为**内部一致性**断言：
+//   计数一律从模块自身取，校验真正的结构不变式。
 const fs = require('fs');
 const html = fs.readFileSync(process.argv[2], 'utf8');
 
@@ -30,18 +34,25 @@ const M = fn();
 const fails = [];
 const ck = (cond, msg) => { if (!cond) fails.push(msg); };
 
-ck(M.CTX_CFG_CLUSTERS.length === 7, '簇数应为 7，实际 ' + M.CTX_CFG_CLUSTERS.length);
-ck(M.CTX_CFG_FIELDS.length === 32, '字段数应为 32，实际 ' + M.CTX_CFG_FIELDS.length);
-
 const ids = new Set(M.CTX_CFG_CLUSTERS.map(c => c.id));
+ck(M.CTX_CFG_CLUSTERS.length > 0 && M.CTX_CFG_FIELDS.length > 0, '簇/字段清单为空');
+// 字段必须归属一个已定义的簇（拼错 cluster 会渲染成孤儿字段）
 for (const f of M.CTX_CFG_FIELDS) ck(ids.has(f.cluster), '字段 ' + f.key + ' 的簇不存在: ' + f.cluster);
+// 每个簇至少 1 个字段（空簇会渲染成一个空面板）
+for (const c of M.CTX_CFG_CLUSTERS) {
+  ck(M.CTX_CFG_FIELDS.some(f => f.cluster === c.id), '簇 ' + c.id + ' 没有任何字段（会渲染空面板）');
+  // 簇引用的校验器必须存在（键拼错会让校验静默失效，正是本工具最该拦的一类）
+  for (const k of (c.checks || [])) ck(!!M.CTX_CHECKS[k], '簇 ' + c.id + ' 引用了不存在的校验器: ' + k);
+  if (c.viz && c.viz !== 'none') ck(typeof M.ctxViz === 'function', 'ctxViz 不存在');
+}
 
 (async () => {
   // 先跑真实入口：它会把 schema 存进模块内的 _ctxSchema，取值才不是空
   await M.loadCtxConfig();
   const body = stores['ctx-cfg-body'];
   const panels = (body.innerHTML.match(/class="panel"/g) || []).length;
-  ck(panels === 7, '渲染面板数应为 7，实际 ' + panels);
+  ck(panels === M.CTX_CFG_CLUSTERS.length,
+     '渲染面板数应等于簇数 ' + M.CTX_CFG_CLUSTERS.length + '，实际 ' + panels);
   ck(!/undefined|NaN|加载失败/.test(body.innerHTML), '面板 HTML 含 undefined/NaN/加载失败');
   ck(!/\*\*/.test(body.innerHTML), '面板 HTML 含未转换的 markdown 粗体 **');
 
@@ -73,5 +84,6 @@ for (const f of M.CTX_CFG_FIELDS) ck(ids.has(f.cluster), '字段 ' + f.key + ' �
     console.error('❌ ' + fails.length + ' 项失败：\n  ' + fails.join('\n  '));
     process.exit(1);
   }
-  console.log('✅ 预览渲染校验通过：7 簇 / ' + M.CTX_CFG_FIELDS.length + ' 字段 / ' + panels + ' 面板 / 无 undefined');
+  console.log('✅ 预览渲染校验通过：' + M.CTX_CFG_CLUSTERS.length + ' 簇 / '
+    + M.CTX_CFG_FIELDS.length + ' 字段 / ' + panels + ' 面板 / 无 undefined');
 })();

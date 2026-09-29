@@ -81,15 +81,30 @@ def save_report(body: ReportSaveIn, conn=Depends(db_session), u=Depends(current_
         return JSONResponse({"error": "报告内容为空，无法归档"}, 400)
     created_by = body.created_by or (audit_user(u) if u else "匿名")
     rtype = body.report_type if body.report_type in _REPORT_TYPE_LABEL else "analysis"
+    # P1-2（2026-09-28 补闸门洞）：归属顺序 **显式 project_id → 会话归属 → 平台默认兜底**。
+    # 原写法是 `body.project_id or resolve_project_id(conn)`：会话明明已归属工程 A，
+    # 只要请求没带 project_id，报告就落到平台默认工程下 —— 别的标签页一切默认工程，
+    # 本会话归档的报告就被算到别人工程下（P0-2 同类问题的第三处）。
+    # 兜底层保留（报告归档允许无工程），但**留痕来源**，便于事后分辨"谁决定的归属"。
+    _pid = (body.project_id or "").strip()
+    _psrc = "explicit" if _pid else ""
+    if not _pid and int(body.conversation_id or 0):
+        from repositories.project_repo import conversation_project_id
+        _pid = conversation_project_id(conn, int(body.conversation_id or 0))
+        _psrc = "conversation" if _pid else ""
+    if not _pid:
+        _pid = resolve_project_id(conn)
+        _psrc = "default"
     rid = repo.create_report(
         title, rtype, body.summary or "", sections,
         body.source or "conversation", int(body.conversation_id or 0),
-        body.branch or "", body.project_id or resolve_project_id(conn),
+        body.branch or "", _pid,
         body.status if body.status in ("draft", "final") else "draft",
         created_by,
     )
     audit(audit_user(u) if u else "匿名", "report_save",
-          f"归档报告: {title}（{rtype}）", conn=conn)
+          f"归档报告: {title}（{rtype}）"
+          + (f"｜归属={_pid or '（无）'}（来源：{_psrc}）" if _psrc else ""), conn=conn)
     return {"ok": True, "id": rid}
 
 

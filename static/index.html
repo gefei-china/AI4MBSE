@@ -62,13 +62,27 @@
         <div class="mf-item" onclick="hideMoreFlyout();go('approval')" data-page-node-id="mf-approval-entry">✅ <span>审批管理</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">审批流配置</span></div>
       </div>
     </nav>
+    <!-- 2026-09-24 v2：项目组（项目 = 任务的容器）——每个项目声明数据来源（本地工作空间 / 远端 SSH）；
+         点击项目行切换当前工程，▸ 展开该项目任务列表，＋ 打开「创建项目」弹窗。
+         两个分组的右侧尾控件统一包进 .gth-tail（定宽）→ 计数徽章左右对齐（修「项目与任务没对齐」） -->
+    <div class="gnav-task" id="gnav-project" data-page-node-id="gnav-project-v1">
+      <div class="gnav-task-head" onclick="toggleProjGroup()" title="项目：点击展开/收起" data-page-node-id="gnav-project-head-v1">
+        <span class="gth-ic" data-page-node-id="gnav-project-ic-v1">🗂</span>
+        <span class="gth-name" data-page-node-id="gnav-project-name-v1">项目</span>
+        <span class="gth-cnt" id="proj-count" data-page-node-id="gnav-project-cnt-v1">0</span>
+        <span class="gth-tail">
+          <button class="gth-add" onclick="event.stopPropagation();openCreateProjectModal();" title="创建项目" data-page-node-id="gnav-project-add-v1">＋</button>
+        </span>
+      </div>
+      <div class="gnav-task-body" id="gnav-project-list" data-page-node-id="gnav-project-list-v1"></div>
+    </div>
     <!-- 2026-09-04 v2：任务分组（会话列表内嵌）——数量统计 + 展开收起 + 滚动 -->
     <div class="gnav-task" id="gnav-task" data-page-node-id="6ESArr8hKKqTVMOm5LxXic">
       <div class="gnav-task-head" onclick="toggleTaskGroup()" title="会话列表：点击展开/收起" data-page-node-id="Jfa2WRyztK5aG1x4SctSJe">
         <span class="gth-ic" data-page-node-id="fyEn5EKaBmnQXrAjzFkWwL">💬</span>
         <span class="gth-name" data-page-node-id="pELHqSsHP5gPQwAdOUcGTC">任务</span>
         <span class="gth-cnt" id="task-count" data-page-node-id="l23CFXTY0m6fNTwxxqYiiS">0</span>
-        <span class="gth-arr" data-page-node-id="ZeeJg3wo9K0hJk5T3QZqcU">▾</span>
+        <span class="gth-tail"><span class="gth-arr" data-page-node-id="ZeeJg3wo9K0hJk5T3QZqcU">▾</span></span>
       </div>
       <div class="gnav-task-body" id="task-conv-list" data-page-node-id="sj0BGNFQ5EnnhEzHsjTtLz"></div>
     </div>
@@ -163,6 +177,15 @@
             <div style="flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:18px;" id="chat-area" data-page-node-id="ylv6kJhqOMVUohJyXCaCUm">
               <div class="loading" data-page-node-id="IKZhnwu3AMjcTYbIMaAvpa">选择或新建对话开始建模…</div>
             </div>
+            <!-- 2026-09-25：AI 活动状态栏。此前 #chat-status / #chat-conv-status 这两个 id
+                 在 index.html **根本不存在**，而 03/11/12/13 等模块共十余处往它们写状态
+                 （"正在识别意图并调度 Agent…"/"已停止生成"/"调用失败"…）→ 全部是空操作，
+                 用户看不到"AI 正在做什么"。此栏让既有写入统一生效（显隐由 JS 观察文本自动控制）。 -->
+            <div class="chat-status-bar" id="chat-status-bar" style="display:none;" data-page-node-id="chat-status-bar-v1">
+              <span class="cs-spin" id="cs-spin" aria-hidden="true"></span>
+              <span id="chat-status"></span>
+              <span id="chat-conv-status" class="cs-right"></span>
+            </div>
             <div class="chat-input-dock" id="chat-input-dock" data-page-node-id="V0gZmLQr6HMSw0tiKEsji9">
               <div class="attach-bar" id="attach-bar" style="display:none;" data-page-node-id="RvzGkdAiMy81L53WJase4p"></div>
               <div class="attach-bar" id="ref-bar" style="display:none;" data-page-node-id="emMvxqCundW0nmxSIghKtI"></div>
@@ -170,7 +193,7 @@
               <div class="chip-bar" id="scope-chip-bar" style="display:none;" data-page-node-id="yUNO3e3d1kXe9ZlhPOGZCC"></div>
               <div class="ibox" style="position:relative;" data-page-node-id="fgXjLgDmGOPpqUCTdsLyQi">
                 <div class="mention-pop" id="mention-pop" style="display:none;" data-page-node-id="l8mtSHK6tsHgrSKiG1LMQh"></div>
-                <textarea id="chat-input" placeholder="输入建模需求或问题（@ 选择会话文件 · # 引用知识库文件 · 行首 / 选择技能）" onkeydown="handleChatKey(event)" oninput="handleChatInput()"></textarea>
+                <textarea id="chat-input" placeholder="输入建模需求或问题（＋ 号可引用附件 / 知识库 / 工程文件 · 行首 / 选择技能）" onkeydown="handleChatKey(event)" oninput="handleChatInput()"></textarea>
                 <div class="ibox-toolbar" data-page-node-id="RgoebN7grQWAct2URm4bKT">
                   <div class="tb-left" data-page-node-id="0OEY8GHNJGeSI5X11XTLNU">
                     <button class="tb-icon" title="上传附件" onclick="toggleAttachMenu(this)" style="font-weight:700;font-size:18px;line-height:1;" data-page-node-id="rFApmgRMPfNDjDPsaJbyU2">＋</button>
@@ -261,16 +284,55 @@
           <span style="flex:1;"></span>
         </div>
         <div class="subpage on" id="kb-a" data-tabpanel="kb" data-page-node-id="odKKdwqvkThml9V6sf9G5M">
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px;" id="kb-stats" data-page-node-id="EoFXUHxMSGjUPNYSvRpa03"></div>
+          <!-- P0 口径统一（2026-09-26）：首屏内容由 15-kb.js `loadKBDashboard()` 渲染；
+               容器不再自带 grid —— 内部按**作用域**分行（权威基线 release / 工作分支 / 全局资产），
+               行内再分列，避免"两个作用域的数字被并排当成同一口径比较"（原来的 61 vs 183 困惑来源）。 -->
+          <div id="kb-stats" style="margin-bottom:14px;" data-page-node-id="EoFXUHxMSGjUPNYSvRpa03"></div>
+          <!-- ══ P1 信息架构（2026-09-26）：顶栏 + 首屏北极星 + 四簇 Tab ══
+               ⚠️ 既有面板**不在此处重排**（对 1500 行 index.html 做大手术风险高），
+               改由 15-kb.js `kbClusterize()` 在运行时按 id / data-page-node-id 把面板移动进四簇容器
+               —— 幂等（已在容器内则不动）、可逆（删掉本段不会影响其它逻辑）。 -->
+          <div id="kb-dash-topbar" data-page-node-id="kbTopbar20260926"></div>
+          <div id="kb-cluster-tabs" style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;" data-page-node-id="kbClusterTabs20260926"></div>
+          <div id="kb-northstar" data-page-node-id="kbNorthstar20260926"></div>
+          <div class="kb-cluster" data-cluster="gov" data-page-node-id="kbClusterGov20260926"></div>
+          <div class="kb-cluster" data-cluster="quality" style="display:none;" data-page-node-id="kbClusterQuality20260926">
+            <div class="panel" style="margin-bottom:14px;" id="kb-quality-panel" data-page-node-id="kbQualityPanel20260926">
+              <div class="ph" data-page-node-id="kbQualityHd">🧪 数据质量 <span class="badge" data-page-node-id="kbQualityBd">FR-KG-13</span><span class="tag" data-page-node-id="kbQualityTg">类型覆盖（两级分母）· 别名 · 消歧 · 属性 · 陈旧 · 本体漂移</span><span style="flex:1" data-page-node-id="kbQualitySp"></span>
+                <button class="btn sm ghost" onclick="loadKBDashboard()" data-page-node-id="kbQualityRf">刷新</button></div>
+              <div class="pb" id="kb-gov-quality" data-page-node-id="kbQualityPb"><div style="color:var(--mut);font-size:12px;" data-page-node-id="kbQualityLd">加载质量指标…</div></div>
+            </div>
+          </div>
+          <div class="kb-cluster" data-cluster="perf" style="display:none;" data-page-node-id="kbClusterPerf20260926">
+            <div class="panel" style="margin-bottom:14px;" id="kb-perf-panel" data-page-node-id="kbPerfPanel20260926">
+              <div class="ph" data-page-node-id="kbPerfHd">⚡ 消费与性能 <span class="badge" data-page-node-id="kbPerfBd">甲方 7.1</span><span class="tag" data-page-node-id="kbPerfTg">双引擎路由 · 知识获取 P/R/F1 · RT 分位 · 慢查询 · 服务健康</span><span style="flex:1" data-page-node-id="kbPerfSp"></span>
+                <button class="btn sm ghost" onclick="loadKBDashboard()" data-page-node-id="kbPerfRf">刷新</button></div>
+              <div class="pb" id="kb-gov-perf" data-page-node-id="kbPerfPb"><div style="color:var(--mut);font-size:12px;" data-page-node-id="kbPerfLd">加载消费/性能指标…</div></div>
+            </div>
+          </div>
+          <div class="kb-cluster" data-cluster="accept" style="display:none;" data-page-node-id="kbClusterAccept20260926">
+            <div class="panel" style="margin-bottom:14px;" id="kb-accept-panel" data-page-node-id="kbAcceptPanel20260926">
+              <div class="ph" data-page-node-id="kbAcceptHd">🧾 验收对照 <span class="badge" data-page-node-id="kbAcceptBd">甲方 7.1 × PRD §2.2</span><span class="tag" data-page-node-id="kbAcceptTg">条款 · 目标 · 实测 · 判定 · 证据（与指标同源）</span><span style="flex:1" data-page-node-id="kbAcceptSp"></span>
+                <button class="btn sm ghost" onclick="loadKBDashboard()" data-page-node-id="kbAcceptRf">刷新</button></div>
+              <div class="pb" id="kb-accept" data-page-node-id="kbAcceptPb"><div style="color:var(--mut);font-size:12px;" data-page-node-id="kbAcceptLd">加载验收对照…</div></div>
+            </div>
+          </div>
+          <!-- 治理红线：scope=release 固定口径，不受任何切换影响（FR-KG-15「未评审禁入发布」+ 分块追溯 + 发布闸门） -->
+          <div class="panel" style="margin-bottom:14px;" id="kb-redline-panel" data-page-node-id="kbRedline20260926">
+            <div class="ph" data-page-node-id="kbRedlineHd">⛔ 治理红线 <span class="badge" data-page-node-id="kbRedlineBd">FR-KG-15</span><span class="tag" data-page-node-id="kbRedlineTg">未评审禁入发布 · 分块追溯 · 发布闸门</span><span style="flex:1" data-page-node-id="kbRedlineSp"></span>
+              <button class="btn sm ghost" onclick="loadKBDashboard()" data-page-node-id="kbRedlineRf">刷新</button></div>
+            <div class="pb" id="kb-redline" data-page-node-id="kbRedlinePb"><div style="color:var(--mut);font-size:12px;" data-page-node-id="kbRedlineLd">加载红线…</div></div>
+          </div>
+          <!-- 治理健康度簇：治理 / 数据质量 / 知识消费 三簇，指标六要素（值·单位·目标·状态·detail·下钻） -->
+          <div class="panel" style="margin-bottom:14px;" id="kb-gov-panel" data-page-node-id="kbGov20260926">
+            <div class="ph" data-page-node-id="kbGovHd">🩺 知识治理健康度 <span class="badge" data-page-node-id="kbGovBd">P1-7</span><span class="tag" data-page-node-id="kbGovTg">值 · 目标 · 阈值三色 · 逐项可下钻</span><span style="flex:1" data-page-node-id="kbGovSp"></span>
+              <button class="btn sm ghost" onclick="loadKBDashboard(true)" data-page-node-id="kbGovRf">刷新（含 SHACL 现场校验）</button></div>
+            <div class="pb" id="kb-gov" data-page-node-id="kbGovPb"><div style="color:var(--mut);font-size:12px;" data-page-node-id="kbGovLd">加载治理指标…</div></div>
+          </div>
           <div class="panel" style="margin-bottom:14px;" data-page-node-id="4ZRV0U97L2f38PKOWBIGbi">
-            <div class="ph" data-page-node-id="DfFHs3T25AJtppaR35XQiI">知识库总览 <span class="badge" data-page-node-id="qv8ISZktepJvKPCu4DOo8n">FR-KG-8/11</span><span class="tag" data-page-node-id="XnvhYvQTEDCkzV9Iec2bIC">KPI · 待评审队列 · 来源分布 · 图谱缩略</span><span style="flex:1" data-page-node-id="isf135NwcwM9KxuH2eepD8"></span>
+            <div class="ph" data-page-node-id="DfFHs3T25AJtppaR35XQiI">知识资产总览 <span class="badge" data-page-node-id="qv8ISZktepJvKPCu4DOo8n">FR-KG-8/11</span><span class="tag" data-page-node-id="XnvhYvQTEDCkzV9Iec2bIC">资产 KPI（跨分支去重）· 生命周期分布 · 来源/类别分布 · 待评审队列 · 图谱缩略</span><span style="flex:1" data-page-node-id="isf135NwcwM9KxuH2eepD8"></span>
               <button class="btn sm ghost" onclick="loadKBOverview()" data-page-node-id="4Lgr1zuIgANeVkJ8zUCp3Z">刷新</button></div>
             <div class="pb" id="kb-overview" data-page-node-id="VHE8P7eGsyjH1PFQuAteGM"><div style="color:var(--mut);font-size:12px;" data-page-node-id="FWl5Z7hJ06k9wtJZWfsKvm">加载总览…</div></div>
-          </div>
-          <div class="panel" style="margin-bottom:14px;" data-page-node-id="glLzLRHMxaBFAqwAAERmy8">
-            <div class="ph" data-page-node-id="L9hlku7e5WwJ758hAnaqB4">数据生命周期 <span class="badge" data-page-node-id="xV0g5LVdY98YM6jzDEWfxD">P0-4</span><span class="tag" data-page-node-id="4o1kzKAS6970ZzyExXzqJY">原始切片→候选→评审→发布→废弃</span><span style="flex:1" data-page-node-id="RwqKaxEbRoQRFvtPMjMkoE"></span>
-              <button class="btn sm ghost" onclick="loadLifecycle()" data-page-node-id="CBbyyCvRna9ZQkZ4pqchCn">刷新</button></div>
-            <div class="pb" id="kb-lifecycle" data-page-node-id="mahbT2F2QFOQfjroSZjSJ0"><div style="color:var(--mut);font-size:12px;" data-page-node-id="AmajkY1YetC9mjPgGUTLqT">加载生命周期分布…</div></div>
           </div>
           <div class="panel" style="margin-bottom:14px;" data-page-node-id="uhgOBx7NfeTPELilhXOSMe">
             <div class="ph" data-page-node-id="nJxk8saa41YBM3YuGhohg9">知识完整度 <span class="badge" data-page-node-id="EBOiyyiqNHRIdQ2KmFvQHA">FR-KG-13</span><span class="tag" data-page-node-id="SCuG6SGLUMjv6Fj9OdhTiL">类型覆盖率 · chunk 链接率 · fallback 建议抽取</span><span style="flex:1" data-page-node-id="ew8juyH2xT6tYUGjIjOpeH"></span>
@@ -281,14 +343,14 @@
             <div class="ph" data-page-node-id="aP1R5qX58QH9wWcIvmHgGt">知识引擎双引擎消费 <span class="badge" data-page-node-id="VQCitpQV2DfpQCKAMvIg9m">P1</span><span class="tag" data-page-node-id="6g5FTf5wIJiY7iDB2vmQSg">图 GraphRAG + 向量 VectorEngine</span></div>
             <div class="pb" id="engine-stats" data-page-node-id="2sIHRsGgAjon7rS1SZUH47"><div class="loading" data-page-node-id="DoiVcF0ithWNJvCsdAQOcU">加载中…</div></div>
           </div>
-          <div class="panel" style="margin-bottom:14px;" data-page-node-id="63osQCCzGHGGoYgTE0Ago2">
+          <div class="panel" style="margin-bottom:14px;" id="graphdb-panel" data-page-node-id="63osQCCzGHGGoYgTE0Ago2">
             <div class="ph" data-page-node-id="r0j9csChP7lYNTzt1BTOGW">图数据库 <span class="badge" data-page-node-id="t3aVowny3EiT65Vy5UH4Xc">ArcR-5/P2</span><span class="tag" data-page-node-id="6qJTR1mTCJOyDPSTyFssZU">pyoxigraph / Jena Fuseki / Neo4j 查询镜像 · SPARQL 只读 · 审核通过自动入图</span><span style="flex:1" data-page-node-id="CTHUIHiuo5N2Ub0w0t0vFn"></span>
               <button class="btn sm ghost" onclick="loadGraphDbStats()" data-page-node-id="HWmp4O8FrZDCQe1fSeY4xq">刷新</button>
               <button class="btn sm" onclick="syncGraphDb()" data-page-node-id="fddBLzC6ECqflxtvMTDo8h">同步入图</button>
               <button class="btn sm ghost" onclick="exportGraphDb()" data-page-node-id="rd9cDcJwD7abt9XbSuHmnE">导出 N-Quads</button>
             </div>
             <div class="pb" id="graphdb-stats" data-page-node-id="KPNAARTB89TBuWtu4Im8kv"><div style="color:var(--mut);font-size:12px;" data-page-node-id="r3prZQMPqCRHtS1QIfGyK5">加载图数据库状态…</div></div>
-            <div class="pb" style="border-top:1px solid var(--line);" data-page-node-id="qCFAcYFtfVWsetvYCerZCk">
+            <div class="pb" id="graphdb-query-box" style="border-top:1px solid var(--line);" data-page-node-id="qCFAcYFtfVWsetvYCerZCk">
               <div style="display:flex;gap:8px;padding:10px 0 6px;" data-page-node-id="Icx4bMzJH9ZHj7rJeMbeUq">
                 <input id="graphdb-q" placeholder="SPARQL SELECT 查询，如：SELECT ?s ?t WHERE { GRAPH ?g { ?s rdf:type ?t } } LIMIT 10" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12px;font-family:monospace;" onkeydown="if(event.key==='Enter')runGraphDbQuery()" data-page-node-id="7MpYay3R9d2xdQ5PHQAB1k">
                 <button class="btn sm" onclick="runGraphDbQuery()" data-page-node-id="oJNkCeyNdA4qtoLAEWBMCz">执行</button>
@@ -323,18 +385,19 @@
           <div class="panel" data-page-node-id="TK2WNWmMWnJxDSQGBEyWQE">
             <div class="ph" data-page-node-id="PZ4OOJZ4iqVMDvUnuB2Ssx">文档库 <span class="tag" data-page-node-id="j2fBYSHqf2RLdFTWSeiVVx">解析→分块→向量化<span id="doc-flow-extract" style="display:none;" data-page-node-id="8YhmZevFTVDtKFX0nmdVdX">→抽取</span></span><span class="tag" data-page-node-id="orYIMJSTquRNqFsAcrmQWq">支持批量（多选）</span><span id="doc-count" style="color:var(--mut);font-size:11px;" data-page-node-id="5HPGKlDgHVOwsaPJLQFNWM"></span><span style="flex:1" data-page-node-id="Xg43HoXfZHgjQ6LKEJNyoA"></span></div>
             <div class="pb" style="padding:0;display:flex;min-height:0;" data-page-node-id="kGyV7Xh4dypCffRtB7WtbM">
-              <!-- ── 左栏：文档目录树（2026-09-21「基于文件的管理」）──
-                   分两组、视觉分离（方案 §4.3 的硬要求）：
-                     「结构目录」= 人工创建，文档可移入（可拖放/可右键改名删）；
-                     「智能视图」= 系统按状态聚合，**只读**，往里拖文件没有意义。
-                   两组混在一栏会让用户把「未归类」当目录去拖——那是个视图，不是目录。 -->
+              <!-- ── 左栏：文档目录树（2026-09-21「基于文件的管理」；2026-09-28 精简）──
+                   位置区（常驻）：📚 全部文档 / 📥 未归类；
+                   结构目录（人工创建，可拖入）；
+                   底部吸顶：🗑 回收站（唯一保留的智能视图，见 40-docfolders.js 头注）。
+                   「未入库/解析失败/未分类」三个派生视图已移除 —— 对应筛选在中栏工具栏。 -->
               <div id="doc-left" style="width:220px;min-width:40px;max-width:220px;border-right:1px solid var(--line);display:flex;flex-direction:column;background:#fafaf7;transition:width .18s;" data-page-node-id="docleft20260921">
                 <div style="position:relative;border-bottom:1px solid var(--line);padding:6px 6px 6px 30px;display:flex;align-items:center;gap:4px;" data-page-node-id="docleft-hdr">
                   <button id="doc-left-collapse" class="btn sm ghost" style="position:absolute;top:4px;left:4px;padding:2px 6px;font-size:11px;" onclick="docToggleLeft()" title="收起/展开 左栏" data-page-node-id="docleft-collapse">«</button>
                   <span style="flex:1;font-size:11.5px;font-weight:600;color:var(--blue-d);" data-page-node-id="docleft-title">📁 文档目录</span>
-                  <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="docFolderCreate(0)" title="在根下新建目录" data-page-node-id="docleft-new">＋</button>
+                  <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="docFolderCreateInline(0)" title="新建根目录（就地输入名字，Enter 创建）" data-page-node-id="docleft-new">＋</button>
+                  <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="loadDocFolders();loadDocs()" title="刷新目录树与各目录文档计数" data-page-node-id="docleft-refresh">⟳</button>
                 </div>
-                <div id="doc-folders" tabindex="0" style="flex:1;overflow-y:auto;padding:4px 0;outline:none;" title="单击选中目录；双击/F2 重命名；Delete 删除目录；Esc 清除筛选" data-page-node-id="docleft-tree"><div class="loading" style="padding:8px;font-size:11px;" data-page-node-id="docleft-loading">加载中…</div></div>
+                <div id="doc-folders" tabindex="0" style="flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;padding:4px 0 0;outline:none;" title="单击选中 · ↑↓ 移动 · ←→ 折叠/展开 · Enter 选中 · F2 改名 · Delete 删除 · Shift+F10 菜单 · 拖动可移动/排序 · 行尾 ⋮ 更多操作" data-page-node-id="docleft-tree"><div class="loading" style="padding:8px;font-size:11px;" data-page-node-id="docleft-loading">加载中…</div></div>
               </div>
               <!-- ── 中栏：文件列表（工具栏 / 上传区 / 批量条 / 面包屑 / 列表 / 分页）── -->
               <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;overflow-y:auto;" data-page-node-id="docmid20260921">
@@ -353,16 +416,18 @@
                   <option value="">全部状态</option><option value="committed">🎯 正式入库</option><option value="stored">✅ 待入库</option><option value="processing">⏳ 处理中</option><option value="failed">⚠️ 解析失败</option><option value="deprecated">🚫 已废弃</option><option value="archived">📦 已归档</option>
                 </select>
                 <span style="flex:1" data-page-node-id="lOIRbTxmwhfoe3k0IqzLpq"></span><button class="btn sm ghost" onclick="loadDocs()" data-page-node-id="TcGBukG3uCMAaoMLF72CTv">刷新</button>
+                <button class="btn sm ghost" onclick="kbAutoCollectPreview()" title="按文件名/标题/标签/领域的关键词规则试算知识类别 → 确认后逐条归集（仅建议，不自动覆盖已有类别）">🤖 自动归集</button>
                 <button class="btn sm" onclick="document.getElementById('doc-upload-input').click()" data-page-node-id="i9eQAjVykXCNWuM62AslSM">📤 上传文件</button>
                 <button class="btn sm ghost" onclick="openDsDrawer()" title="外部数据源：数据库 / API / 文件三类源注册 → 连通测试 → 预览确认 → 抽取入库（P0-4，右侧滑窗）">🔌 外部数据源</button>
-                <input type="file" id="doc-upload-input" style="display:none;" multiple accept=".txt,.md,.csv,.json,.xml,.yaml,.yml,.log,.docx,.doc,.pdf,.xlsx,.xls,.pptx,.ppt,.png,.jpg,.jpeg" onchange="uploadDocWithMeta(this)" data-page-node-id="A6zgv3ZYKKMoy2QHDugyDN">
+                <input type="file" id="doc-upload-input" style="display:none;" multiple accept=".txt,.md,.csv,.json,.xml,.yaml,.yml,.log,.docx,.doc,.pdf,.xlsx,.xls,.pptx,.ppt,.png,.jpg,.jpeg,.gif,.bmp,.webp,.tiff,.tif" onchange="uploadDocWithMeta(this)" data-page-node-id="A6zgv3ZYKKMoy2QHDugyDN">
               </div>
               <!-- 上传交互区：选择文件后展开（格式提示 + 文件卡片 + 元数据 + 进度 + 抽取结果） -->
               <div id="doc-upload-wrap" style="display:none;padding:10px 12px;border-bottom:1px solid var(--line);background:#f8fafc;" data-page-node-id="L5wHbwFxiuaYZfkQ392A59">
                 <div style="font-size:11px;color:var(--mut);display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-bottom:8px;" data-page-node-id="nk6VPaxRlOCuloDOVPULE8">
                   <span data-page-node-id="Hzlg7Anpue67etlxmNywwd">支持格式：</span>
-                  <span class="tag" data-page-node-id="yMTd5TuUsvWXm5kKPMcC0K">文本 txt/md/log</span><span class="tag" data-page-node-id="cCnxk36gqylKFuuqeI3aE8">表格 csv/xlsx/xls</span><span class="tag" data-page-node-id="PEXe0IA4pS3uTDaqtueDBb">文档 docx/pdf</span><span class="tag" data-page-node-id="r6tFU5tlQ5at1nb2zHsa2m">演示 pptx</span><span class="tag" data-page-node-id="ICjvZiCFwqbr6koG03EzHD">数据 json/xml/yaml</span>
-                  <span class="tag" style="border-color:var(--amb);color:var(--amb);" data-page-node-id="BxfgsMfEo4IRzPe5yQjgFI">图片 png/jpg（需 OCR，暂存副本）</span>
+                  <span class="tag" data-page-node-id="yMTd5TuUsvWXm5kKPMcC0K">文本 txt/md/log</span><span class="tag" data-page-node-id="cCnxk36gqylKFuuqeI3aE8">表格 csv/xlsx/xls</span><span class="tag" data-page-node-id="PEXe0IA4pS3uTDaqtueDBb">文档 docx/doc/pdf</span><span class="tag" data-page-node-id="r6tFU5tlQ5at1nb2zHsa2m">演示 pptx/ppt</span><span class="tag" data-page-node-id="ICjvZiCFwqbr6koG03EzHD">数据 json/xml/yaml/yml</span>
+                  <span class="tag" style="border-color:var(--amb);color:var(--amb);" data-page-node-id="BxfgsMfEo4IRzPe5yQjgFI">图片 png/jpg/gif/bmp/webp/tiff（需 OCR）</span>
+                  <span style="color:var(--mut);" data-page-node-id="doc-fmt-note">（共 23 种扩展名，权威=后端 extract_text_ex；v1.0 不做 .doc/.ppt/.xls 旧格式专项适配）</span>
                 </div>
                 <div id="doc-file-card" style="display:none;border:1px solid var(--blue);border-radius:8px;padding:10px;background:var(--blue-l);" data-page-node-id="GYCWkm1FlaEHRShV12ka75">
                   <div style="display:flex;gap:10px;align-items:center;" data-page-node-id="62MTC3R20Nm11fEt6NCDwQ">
@@ -1181,6 +1246,7 @@
           <span data-tabgrp="stg" onclick="tab(this,'stg','st-hooks')" data-page-node-id="6GTByleBROiZq7EE5u3DV7">🪝 工具钩子</span>
           <span data-tabgrp="stg" onclick="tab(this,'stg','st-fextract')" data-page-node-id="87tTHhOFnxBDOt5cgXiGqT">📄 文件抽取</span>
           <span data-tabgrp="stg" onclick="tab(this,'stg','st-ctx')">🧠 AI 上下文</span>
+          <span data-tabgrp="stg" onclick="tab(this,'stg','st-intent-samples')">🎯 意图样本</span>
         </div>
         <div class="subpage on" id="st-projmem" data-tabpanel="stg" data-page-node-id="ZBuvf59opmWBgoiBSDaLbp">
           <!-- 项目级持久记忆（Project Constitution）：规范/基线/决策/经验，AI 会话每次注入防漂移 -->
@@ -1233,6 +1299,38 @@
             <button class="btn" onclick="saveCtxConfig()">💾 保存配置</button>
           </div>
           <div id="ctx-cfg-body"><div class="loading">加载中…</div></div>
+        </div>
+        <!-- 意图样本：意图识别**评测样本池**（采样 → 人工标注 → 评测闭环）。
+             ⚠️ 只有 status=confirmed 才进评测；suggested 是系统自己的判定，拿它当标签是自我循环。 -->
+        <div class="subpage" id="st-intent-samples" data-tabpanel="stg">
+          <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button class="btn sm" id="is-btn-builtin" onclick="isImport('builtin')" title="内置 29 例评测集（人工整理过的标注），以「已确认」入库，导入后可直接跑评测">📥 从内置 29 例导入</button>
+            <select id="is-import-src" title="回填来源：历史消息=真实用户输入；检索查询=检索层查询文本（已过滤内部查询）" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;">
+              <option value="messages">历史消息</option>
+              <option value="query_trace">检索查询</option>
+            </select>
+            <input id="is-import-limit" type="number" min="1" value="200" title="回填条数上限" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;width:70px;">
+            <button class="btn sm" id="is-btn-import" onclick="isImport()" title="按不同说法去重入池；带历史判定的一律先落「待确认」，等人标">📥 从历史回填</button>
+            <span style="width:1px;height:18px;background:var(--line);"></span>
+            <input id="is-suggest-limit" type="number" min="1" value="40" title="本次补建议的条数（每条都要跑一次真实识别，刻意分批）" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;width:60px;">
+            <button class="btn sm" id="is-btn-suggest" onclick="isSuggest()" title="对「新采集」样本跑真实识别并写入建议标签（结果仍为待确认，需人工确认）">🏷️ 补建议标注</button>
+            <button class="btn sm" id="is-btn-eval" onclick="isRunEval()" title="只用「已确认」样本评测：准确率 / macro-F1 / 混淆矩阵 / 错例">🧪 运行评测</button>
+            <button class="btn sm ghost" id="is-btn-export" onclick="isExport()" title="导出已确认评测集 JSON（可进版本库当回归基线）">⬇ 导出评测集</button>
+          </div>
+          <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <select id="is-f-status" onchange="isFilterChanged()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;">
+              <option value="">状态：全部</option>
+              <option value="new">状态：新采集</option>
+              <option value="suggested">状态：待确认</option>
+              <option value="confirmed">状态：已确认</option>
+              <option value="rejected">状态：已驳回</option>
+            </select>
+            <select id="is-f-intent" onchange="isFilterChanged()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;"><option value="">意图：全部</option></select>
+            <input id="is-f-q" placeholder="关键词（匹配说法文本）" oninput="isFilterQ()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;width:180px;">
+            <button class="btn sm ghost" id="is-btn-refresh" onclick="loadIntentSamples()">🔄 刷新</button>
+            <span style="font-size:11px;color:var(--mut);">本页只维护评测样本池，<b style="color:var(--txt);">不改路由规则</b>（要改识别行为请走既有「意图规则」配置）</span>
+          </div>
+          <div id="intent-sample-body"><div class="loading">加载中…</div></div>
         </div>
       </div>
 
@@ -1480,6 +1578,8 @@
 <!-- 2026-09-04 附件菜单：锚定 ＋ 按钮右上方（Trae 风格） -->
 <div id="attach-menu" style="display:none;position:fixed;z-index:270;min-width:200px;background:var(--panel,#fff);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:6px;" onclick="event.stopPropagation()" data-page-node-id="ndMD2mCAdglbARQJuFMFhu">
   <div class="am-item" onclick="pickLocalFile()" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--txt);" data-page-node-id="tma8o2DeosVskyBR2Gwfzo">📎<span data-page-node-id="8NpkxGDmXZK0yN5T1NkrlE">上传附件</span></div>
+  <!-- 2026-09-28（用户反馈）：# 引用知识库文件入口从「打字触发」移入 ＋ 菜单（打字 # 触发仍保留作快捷方式） -->
+  <div id="am-kb" class="am-item" onclick="toggleAttachKb(event)" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--txt);">📚<span style="flex:1;">引用知识库文件</span><span style="color:var(--mut);font-size:11px;">›</span></div>
   <div id="am-project" class="am-item" onclick="toggleAttachProject(event)" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--txt);" data-page-node-id="ZpgIqy1F7qX2WaKKcPEt4U">🗂<span style="flex:1;" data-page-node-id="Yt6tHsBBTGa1fKLH5lqFJC">当前会话的文件</span><span style="color:var(--mut);font-size:11px;" data-page-node-id="hAku2t9Kd0EiZxe8SVuag4">›</span></div>
   <div id="am-engineering" class="am-item" onclick="toggleAttachEngineering(event)" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--txt);" data-page-node-id="hOoOSfbo3yBtnJqDbfrFfr">🧬<span style="flex:1;" data-page-node-id="55I6VUMq9LdaDbQOlsIQbN">当前工程文件</span><span style="color:var(--mut);font-size:11px;" data-page-node-id="CbN8DeD9qYhnnERP6kAadb">›</span></div>
 </div>
@@ -1500,6 +1600,11 @@
     <div style="font-size:12px;" id="attach-eng-empty-txt" data-page-node-id="Sygm92ZPs6GINWw1MKLcmv">当前工程暂无实体</div>
   </div>
   <div id="attach-eng-tree" style="max-height:280px;overflow-y:auto;" data-page-node-id="kmdWKHiAi2rwDY8Z9fKvFN"></div>
+</div>
+<!-- 二级面板：引用知识库文件（快捷控制标签 + 知识文件标签；与打字 # 触发的弹层同数据源） -->
+<div id="attach-kb-pop" style="display:none;position:fixed;z-index:271;width:300px;background:var(--panel,#fff);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:8px;" onclick="event.stopPropagation()">
+  <input id="attach-kb-search" placeholder="搜索知识文件 / 标签…" oninput="renderAttachKbList()" style="width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;margin-bottom:6px;outline:none;background:var(--panel,#fff);color:var(--txt);">
+  <div id="attach-kb-list" style="display:flex;flex-direction:column;gap:5px;max-height:260px;overflow-y:auto;"></div>
 </div>
 <!-- /attach-menu -->
 
@@ -1648,5 +1753,8 @@
 <script src="/static/js/mods/38-filepreview.js"></script>
 <script src="/static/js/mods/39-coverage.js"></script>
 <script src="/static/js/mods/40-docfolders.js"></script>
+<script src="/static/js/mods/41-projects.js"></script>
+<script src="/static/js/mods/42-intent-samples.js"></script>
+<script src="/static/js/mods/43-doccat.js"></script>
 </body>
 </html>

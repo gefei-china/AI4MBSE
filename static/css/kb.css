@@ -108,6 +108,50 @@
 outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(24,95,165,.10);background:#fff;}
 .ont-tadd{flex:none;color:var(--mut);cursor:pointer;font-size:13px;line-height:1;padding:0 3px;border-radius:4px;visibility:hidden;}
 .ont-tnd:hover .ont-tadd{visibility:visible;color:var(--blue);background:var(--blue-l);}
+
+/* ── 文档库目录树（2026-09-27 左栏交互优化）：折叠箭头槽 / 行内编辑 / 拖拽三区 / 分组标题 ──
+   纪律：只用 tokens.css 的变量；行内装饰（箭头）**不占文档流宽度**（绝对定位进左侧边槽）——
+   占宽度会把行文字整列推右，导致不同层级文字左缘不在同一基准（AGENTS.md 坑 18 实测）。 */
+.dft-row{position:relative;}
+.dft-arrow{position:absolute;left:2px;top:50%;transform:translateY(-50%);width:14px;height:14px;
+  display:flex;align-items:center;justify-content:center;font-size:9px;line-height:1;color:var(--mut);
+  border-radius:3px;cursor:pointer;user-select:none;}
+.dft-arrow:hover{background:var(--blue-l);color:var(--blue-d);}
+.dft-arrow.empty{visibility:hidden;}                 /* 叶子保留占位：各层文字左缘对齐 */
+.dft-ico{flex:none;font-size:11px;}
+.dft-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dft-cnt{flex:none;color:var(--mut);font-size:10px;}
+.dft-inp{flex:1;min-width:0;border:1px solid var(--blue);border-radius:4px;padding:1px 5px;
+  font-size:11.5px;font-family:inherit;outline:none;background:#fff;color:var(--ink);}
+.dft-into{background:var(--blue-l) !important;border-color:var(--blue) !important;}   /* 移入目标 */
+.dft-before{box-shadow:inset 0 2px 0 var(--blue);}                                   /* 排到前面 */
+.dft-after{box-shadow:inset 0 -2px 0 var(--blue);}                                   /* 排到后面 */
+/* ── 行尾「⋮」更多按钮（2026-09-28：取代右键 + 行内 ＋/✕ 两个图标）──
+   纪律与 .dft-arrow 同款：**不占文档流宽度**（靠 margin-left:auto 挤到最右，且绝对不推挤名字），
+   用 visibility 而非 display 隐藏 —— 保住行宽不随 hover 抖动（display 切换会触发重排，
+   长目录名下会让省略号位置跳一下，本仓 AGENTS.md 坑 18 记录过同类"行内装饰占宽度"问题）。 */
+.dft-more{flex:none;cursor:pointer;font-size:13px;line-height:1;padding:0 4px;border-radius:4px;
+  color:var(--mut);visibility:hidden;user-select:none;}
+.dft-row:hover .dft-more{visibility:visible;}
+.dft-more:hover{color:var(--blue);background:var(--blue-l);}
+.dft-foot:hover .dft-more{visibility:visible;}
+/* 键盘流：焦点行也要能看到 ⋮（纯 hover 显形对键盘用户等于不存在） */
+.dft-row:focus .dft-more,.dft-row:focus-within .dft-more{visibility:visible;}
+.dft-group{display:flex;align-items:center;gap:4px;padding:4px 8px;font-size:10.5px;font-weight:600;
+  color:var(--mut);position:sticky;top:0;z-index:2;background:#fafaf7;border-bottom:1px solid var(--line);}
+.dft-hint{padding:4px 8px 6px 24px;font-size:10.5px;color:var(--mut);}
+/* ── 2026-09-28：底部「回收站」吸顶 + 结构目录滚动区 ──
+   需求：智能视图区移除，只保留「回收站」放在最下方并吸顶。
+   实现：外层 #doc-folders 保持 flex:1 但不滚（让底部项钉在可视区底部），
+   「全部文档/未归类」在滚动区**外**（这两项同样常驻），中间的目录列表放 .dft-scroll 里滚动。
+   ⚠️ 若把 .dft-foot 也塞进滚动容器，sticky 在"内容超长"时会被滚上去（sticky 只在直接滚动父级里可靠），
+   因此 .dft-foot 必须是 #doc-folders 的**直接子元素**且排在滚动区之后。 */
+.dft-scroll{flex:1;min-height:0;overflow-y:auto;padding:2px 0;}
+.dft-foot{display:flex;align-items:center;gap:4px;padding:7px 8px 7px 22px;font-size:11.5px;
+  cursor:pointer;border-top:1px solid var(--line);background:#fafaf7;flex:none;color:var(--ink);}
+.dft-foot:hover{background:var(--blue-l);}
+.dft-foot.on{background:var(--blue-l);color:var(--blue-d);font-weight:600;}
+.dft-foot .dft-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ont-mono{font-family:ui-monospace,Consolas,monospace;}
 /* 2026-09-11 三轮：名称行内编辑可点击提示（悬停显示蓝色虚线底） */
 #ont-name-wrap{transition:border-color .12s;}

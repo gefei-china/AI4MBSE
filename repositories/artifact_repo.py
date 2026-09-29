@@ -68,13 +68,21 @@ class ArtifactRepo(BaseRepo):
                         preview_type: str, preview_content: str, meta: dict,
                         filename: str = "", file_path: str = "", file_url: str = "",
                         mime: str = "", size: int = 0, source: str = "conversation",
-                        created_by: str = "") -> int:
-        """登记产物。幂等由调用方控制（同 (conversation_id, message_id, kind, title) 先查后插）。"""
+                        created_by: str = "", project_id: str | None = None) -> int:
+        """登记产物。幂等由调用方控制（同 (conversation_id, message_id, kind, title) 先查后插）。
+
+        P1-1（2026-09-28）：`project_id` 缺省时按**会话归属定格**（conversation_project_id），
+        显式传入则以传入值为准。空串是合法状态（无工程会话），**不回落到平台默认工程** ——
+        回落会让别的标签页切了默认工程后，本会话的产物被算到别人工程下（P0-2 已修的同类问题）。
+        """
+        if project_id is None:
+            from repositories.project_repo import conversation_project_id
+            project_id = conversation_project_id(self.conn, conversation_id)
         return self.execute(
-            """INSERT INTO artifacts (conversation_id, message_id, kind, title, filename,
+            """INSERT INTO artifacts (conversation_id, message_id, project_id, kind, title, filename,
                file_path, file_url, mime, size, preview_type, preview_content, meta, source, created_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (conversation_id, message_id, kind, title, filename,
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (conversation_id, message_id, project_id or "", kind, title, filename,
              file_path, file_url, mime, size, preview_type, preview_content,
              json.dumps(meta, ensure_ascii=False), source, created_by),
         )

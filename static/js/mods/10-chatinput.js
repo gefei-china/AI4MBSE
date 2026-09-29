@@ -9,6 +9,19 @@ function toggleAttachMenu(btn){
   // 先显示以获取尺寸，再定位到按钮右上方（空间不足时落到按钮下方）
   menu.style.display = 'block';
   closeAttachProject();
+  closeAttachKb();
+  // 2026-09-28（用户反馈）：**未关联工程的会话不提供「当前工程文件」入口** ——
+  // 工程实体引用的前提是"这个会话有工程归属"，未关联时展示入口只会引用到来历不明的工程数据。
+  // 判据（与顶栏「本任务未关联工程 · 归入」同源）：已选会话看 _curConvProjectId（''=未关联）；
+  // 草稿态（尚未建会话）看 _pendingProjectId（从项目「＋新建任务」发起时带走归属）。
+  // 每次**打开菜单时**求值（不缓存），会话切换/归入操作后天然刷新。
+  const eng = document.getElementById('am-engineering');
+  if(eng){
+    const pid = (typeof currentConvId !== 'undefined' && currentConvId)
+      ? String(window._curConvProjectId || '')
+      : String(window._pendingProjectId || '');
+    eng.style.display = pid ? 'flex' : 'none';
+  }
   const r = btn.getBoundingClientRect();
   const mw = menu.offsetWidth, mh = menu.offsetHeight;
   let left = r.left, top = r.top - mh - 8;
@@ -26,6 +39,7 @@ function closeAttachMenu(){
   if(menu) menu.style.display = 'none';
   closeAttachProject();
   closeAttachEngineering();
+  closeAttachKb();
 }
 // 二级面板：当前项目文件清单
 function toggleAttachProject(ev){
@@ -65,6 +79,77 @@ function toggleAttachEngineering(ev){
 function closeAttachEngineering(){
   const pop = document.getElementById('attach-eng-pop');
   if(pop) pop.style.display = 'none';
+}
+// ── 二级面板：引用知识库文件（2026-09-28 用户反馈：# 引用入口从「打字」移入「＋」菜单；
+//    打字 # 触发的弹层保留作快捷方式，两者共用 ensureKbTagsCache 同一数据源）──
+let _attachKbAll = [];      // 全量候选（快捷控制标签在前）
+let _attachKbShown = [];    // 当前过滤后展示的候选（点击按展示序号取项，避免过滤后索引错位）
+async function toggleAttachKb(ev){
+  ev.stopPropagation();
+  const menu = document.getElementById('attach-menu');
+  const pop = document.getElementById('attach-kb-pop');
+  if(!menu || !pop) return;
+  if(pop.style.display === 'block'){ closeAttachKb(); return; }
+  closeAttachProject();
+  closeAttachEngineering();
+  pop.style.display = 'block';
+  positionSubPop(menu, pop);
+  await loadAttachKbList();
+  setTimeout(()=>{
+    document.addEventListener('click', closeAttachAll, {once:true});
+  }, 0);
+}
+function closeAttachKb(){
+  const pop = document.getElementById('attach-kb-pop');
+  if(pop) pop.style.display = 'none';
+}
+async function loadAttachKbList(){
+  const listEl = document.getElementById('attach-kb-list');
+  const searchEl = document.getElementById('attach-kb-search');
+  if(!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--mut);font-size:12px;padding:8px;">加载中…</div>';
+  if(searchEl) searchEl.value = '';
+  let tags = [];
+  try{ tags = (typeof ensureKbTagsCache === 'function') ? (await ensureKbTagsCache() || []) : []; }
+  catch(e){ tags = []; }
+  // 与打字 # 弹层同构：快捷控制标签（工程数据/知识库）在前，其后为知识文件标签
+  _attachKbAll = [
+    { key:'工程数据', icon:'📊', name:'工程数据', desc:'引用全部工程数据（控制标签）', tag:'快捷' },
+    { key:'知识库', icon:'🧬', name:'知识库', desc:'引用全部已发布知识库（控制标签）', tag:'快捷' },
+  ].concat((tags || []).map(t=>({
+    key:t.name, icon:'📄', name:t.name,
+    desc:(t.branch||'') + (t.status ? ' · ' + t.status : ''), tag:'文档',
+  })));
+  renderAttachKbList();
+}
+function renderAttachKbList(){
+  const listEl = document.getElementById('attach-kb-list');
+  if(!listEl) return;
+  const kw = (document.getElementById('attach-kb-search')?.value || '').trim().toLowerCase();
+  _attachKbShown = _attachKbAll.filter(t => !kw || t.name.toLowerCase().includes(kw));
+  listEl.innerHTML = _attachKbShown.length ? _attachKbShown.map((it, i) => `
+    <div onclick="attachKbPick(${i})" style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;cursor:pointer;" onmouseover="this.style.background='var(--bg-soft,#f5f5f2)'" onmouseout="this.style.background=''">
+      <span style="flex:none;">${it.icon}</span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--txt);">${esc(it.name)}</span>
+      <span style="font-size:10.5px;color:var(--mut);flex:none;">${esc(it.tag)}</span>
+    </div>`).join('')
+    : '<div style="color:var(--mut);font-size:12px;padding:8px;">无匹配项</div>';
+}
+function attachKbPick(i){
+  const it = _attachKbShown[i];
+  if(!it) return;
+  const ta = document.getElementById('chat-input');
+  if(ta){
+    // 与打字 # 选中同效：在光标处插入 #标签 文本（发送时由后端知识检索消费）
+    const pos = ta.selectionStart || 0;
+    const end = ta.selectionEnd || pos;
+    const tag = '#' + it.key + ' ';
+    ta.value = ta.value.slice(0, pos) + tag + ta.value.slice(end);
+    const p = pos + tag.length;
+    ta.focus(); ta.setSelectionRange(p, p);
+  }
+  closeAttachMenu();
+  toast('已插入引用：' + it.name + '（补充问题后发送）');
 }
 // 二级面板统一定位：一级菜单右侧弹出，放不下翻左侧，垂直不超视口
 function positionSubPop(menu, pop){

@@ -35,6 +35,7 @@ from .data_sources import router as data_sources_router  # P0-4（2026-09-20）�
 from .coverage import router as coverage_router  # SRS-GN-CO（2026-09-20）覆盖性分析呈现端点
 from .doc_folders import router as doc_folders_router  # 2026-09-21 文档目录树（基于文件的管理 P0-b）
 from .mcp_gateway import router as mcp_gateway_router  # P0-1（2026-09-24）领域能力 MCP 服务端
+from .intent_samples import router as intent_samples_router  # 2026-09-26 意图样本池（设置页可维护评测集）
 
 __all__ = [
     "dashboard_router",
@@ -65,4 +66,5 @@ __all__ = [
     "coverage_router",  # SRS-GN-CO（2026-09-20）覆盖性分析呈现端点
     "doc_folders_router",  # 2026-09-21 文档目录树
     "mcp_gateway_router",  # P0-1（2026-09-24）领域能力 MCP 服务端
+    "intent_samples_router",  # 2026-09-26 意图样本池
 ]

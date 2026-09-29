@@ -1,76 +1,9 @@
-// ── 工程维度入库（2026-09-09 新流程）：工程全部版本 → 三元组 → 个人分支图库 ──
-// 旧单版本「入库」入口已移除：AI 建模代码不再直接入库，归档动作收敛为工程级一次性操作。
-let _piPreview = null;   // 缓存预览结果供向导确认使用
-async function projectIngestWizard(){
-  if(!currentConvId){ toast('缺少会话上下文'); return; }
-  toast('正在统计工程版本…');
-  let r;
-  try{
-    r = await api('/api/knowledge/project-ingest/preview', {method:'POST', body:JSON.stringify({conversation_id:currentConvId})});
-  }catch(e){ toast('预览失败：' + (e.message||'')); return; }
-  if(!r || r.error){ toast((r&&r.error)||'预览失败'); return; }
-  _piPreview = r;
-  const s = r.stats || {};
-  const stat = (k,v,c)=>`<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border:1px solid ${c}33;background:${c}0d;border-radius:14px;font-size:11px;color:${c};"><b style="font-size:13px;">${v}</b>${k}</span>`;
-  const verRows = (r.versions||[]).map(v=>`<div style="display:flex;gap:8px;align-items:center;padding:3px 0;font-size:11px;border-bottom:1px dashed var(--line);">
-      <b style="min-width:96px;">${esc(v.label||('v'+v.id))}</b>
-      <span class="st ${v.status==='committed'?'b':(v.status==='current'?'w':'')}" style="padding:0 6px;font-size:9.5px;">${v.status==='committed'?'已入库':(v.status==='current'?'当前':'已替代')}</span>
-      <span style="color:var(--mut);">${v.error?('<span style="color:var(--red);">✕ '+esc(v.error)+'</span>'):(`${v.entities} 实体 · ${v.relations} 关系 · ${v.attributes||0} 属性`)}</span>
-    </div>`).join('');
-  openPanel('📦 工程入库 — ' + (r.project_name||''),
-    `<div style="font-size:12px;line-height:1.8;">
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px;">
-        ${stat('个版本', s.versions||0, '#1d4ed8')}
-        ${stat('去重实体', s.unique_entities||0, '#2f855a')}
-        ${stat('关系', s.relations||0, '#7c3aed')}
-        ${stat('属性', s.attributes||0, '#c98a2e')}
-      </div>
-      <div style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:11.5px;color:var(--mut);line-height:1.9;">
-        与个人分支图库已有实体重合：<b style="color:var(--ink);">${s.overlap_with_branch||0}</b> 个（入库时自动对齐合并） · 预计新增 <b style="color:var(--grn,#2f855a);">${s.estimated_new||0}</b> 个<br>
-        目标分支：<b>personal</b>（个人分支图库） · 写入前自动过融合闸+质量闸 · 可回滚（版本快照）
-      </div>
-      <div style="margin:10px 0 4px;font-weight:600;font-size:11.5px;">版本清单（${(r.versions||[]).length}）</div>
-      <div style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px 10px;">${verRows||'<span style="color:var(--mut);">无可入库版本</span>'}</div>
-      <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
-        <button class="btn ghost" onclick="closePanel()">取消</button>
-        <button class="btn primary" id="pi-commit-btn" onclick="projectIngestCommit()">📦 确认入库</button>
-      </div>
-      <div style="margin-top:6px;font-size:10.5px;color:var(--mut);">提交后按版本依次：候选化 → 融合闸 → 物化入图库 → 生成三元组 → 写批次记录。</div>
-    </div>`);
-}
-async function projectIngestCommit(){
-  const btn = document.getElementById('pi-commit-btn');
-  if(btn){ btn.disabled = true; btn.textContent = '⏳ 入库中…'; }
-  let r;
-  try{
-    r = await api('/api/knowledge/project-ingest/commit', {method:'POST', body:JSON.stringify({conversation_id:currentConvId})});
-  }catch(e){ toast('入库失败：' + (e.message||'')); if(btn){ btn.disabled=false; btn.textContent='📦 确认入库'; } return; }
-  if(!r || r.error){ toast((r&&r.error)||'入库失败'); if(btn){ btn.disabled=false; btn.textContent='📦 确认入库'; } return; }
-  const s = r.stats || {};
-  const stCls = r.status==='success'?'ok':(r.status==='partial'?'w':'r');
-  const stTxt = r.status==='success'?'✅ 入库完成':(r.status==='partial'?'⚠️ 部分成功':'✕ 入库失败');
-  const row = (k,v,c)=>`<div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:4px 0;"><span style="color:var(--mut);">${k}</span><b style="color:${c||'var(--ink)'};">${v}</b></div>`;
-  openPanel('📦 工程入库回执 — ' + (r.project_name||''),
-    `<div style="font-size:12px;line-height:1.8;">
-      <div style="margin:8px 0;"><span class="st ${stCls}" style="font-size:12px;padding:3px 12px;">${stTxt}</span>
-        <span style="font-size:10.5px;color:var(--mut);margin-left:8px;">批次 ${esc(r.batch_id)} · 分支 ${esc(r.target_branch)} · 耗时 ${(s.elapsed_ms/1000||0).toFixed(1)}s</span></div>
-      <div style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);">
-        ${row('版本（成功/总数）', `${s.versions_total-(s.versions_failed||0)} / ${s.versions_total}`, s.versions_failed?'var(--amb)':'var(--grn,#2f855a)')}
-        ${row('候选（实体+关系）', s.candidates||0)}
-        ${row('生成三元组', '+' + (s.triples_staged||0), '#7c3aed')}
-        ${row('拍板批准三元组', s.triples_approved||0, 'var(--grn,#2f855a)')}
-        ${row('落图：实体 / 关系', `${s.entities_written||0} / ${s.relations_written||0}`, '#1d4ed8')}
-        ${row('融合闸：自动合并 / 人工队列', `${s.auto_merged||0} / ${s.review_queue||0}`)}
-        ${row('本体校验拒绝', s.rejected||0, (s.rejected?'var(--amb)':''))}
-      </div>
-      ${(r.errors&&r.errors.length)?`<div style="margin-top:8px;padding:8px 10px;border:1px solid #F3C1C1;background:#fff5f5;border-radius:8px;font-size:11px;color:#b91c1c;">${r.errors.map(e=>'· '+esc(e)).join('<br>')}</div>`:''}
-      <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
-        <button class="btn" onclick="projectIngestLogsPanel()">📜 查看入库历史</button>
-        <button class="btn primary" onclick="closePanel()">完成</button>
-      </div>
-    </div>`);
-  if(_artConv) loadSysmlVersionsBar(_artConv);
-}
+// ── 2026-09-24 方案A（用户拍板）：「📦 工程入库」向导已移除 ──
+// 理由：工程入库是"片段直入图库"的捷径（sysml_versions 视图 JSON 不经过建模工具直接融合落 personal 分支），
+// 与设计主链「归一确认 → 写回智源 → 智源拉取 → 个人分支」不一致，且造成双数据源（图库混入未经智源的数据）。
+// 数据链路统一后，AI 建模数据进图库的唯一路径 = 写回智源（push-zhiyuan）→ 智源拉取（zhiyuan_pull_ingest）。
+// projectIngestWizard / projectIngestCommit / _piPreview 已随入口一并删除；
+// 后端 /api/knowledge/project-ingest/* 端点暂保留供历史批次治理（回滚/审计），前端无入口。
 async function projectIngestLogsPanel(projectId){
   if(!projectId && currentConvId){
     try{
@@ -85,18 +18,26 @@ async function projectIngestLogsPanel(projectId){
   }catch(e){ toast('加载入库历史失败：' + (e.message||'')); return; }
   const logs = (r && r.logs) || [];
   const stMap = {success:['ok','✅ 成功'], partial:['w','⚠️ 部分'], failed:['r','✕ 失败'], running:['w','⏳ 进行中']};
+  const srcMap = {
+    zhiyuan_pull: ['⇩ 智源拉取', '#7c3aed'],
+    project_ingest: ['📦 工程入库（旧）', 'var(--mut)']
+  };
   const rows = logs.map(l=>{
     const st = stMap[l.status] || ['','⏳'];
     const s = l.stats || {};
+    const src = srcMap[l.source || 'project_ingest'] || ['📥 入库', 'var(--mut)'];
+    const isZpull = (l.source === 'zhiyuan_pull');
     return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:8px;background:var(--card);">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <b style="font-size:11.5px;">${esc(l.project_name||l.project_id)}</b>
+        <span class="st" style="padding:0 6px;font-size:9.5px;color:${src[1]};border-color:${src[1]}44;background:${src[1]}11;">${src[0]}</span>
+        <b style="font-size:11.5px;">${esc(l.project_name||l.project_id||'—')}</b>
         <span class="st ${st[0]}" style="padding:0 6px;font-size:9.5px;">${st[1]}</span>
         <span style="font-size:10px;color:var(--mut);">${esc((l.created_at||'').slice(0,16))} · ${esc(l.operator||'')} · ${esc(l.target_branch)}</span>
         <span style="margin-left:auto;font-size:10px;color:var(--mut);">${esc(l.batch_id)}</span>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:10.5px;color:var(--mut);">
-        <span>版本 <b style="color:var(--ink);">${(s.versions_total||0)-(s.versions_failed||0)}/${s.versions_total||0}</b></span>
+        ${isZpull ? `<span>候选 <b style="color:var(--ink);">${s.candidates||0}</b></span>`
+                  : `<span>版本 <b style="color:var(--ink);">${(s.versions_total||0)-(s.versions_failed||0)}/${s.versions_total||0}</b></span>`}
         <span>三元组 <b style="color:#7c3aed;">+${s.triples_approved||s.triples_staged||0}</b></span>
         <span>落图实体 <b style="color:var(--grn,#2f855a);">${s.entities_written||0}</b></span>
         <span>落图关系 <b style="color:#1d4ed8;">${s.relations_written||0}</b></span>
@@ -106,61 +47,93 @@ async function projectIngestLogsPanel(projectId){
       ${l.error_msg?`<div style="margin-top:5px;font-size:10.5px;color:var(--red);">${esc(l.error_msg)}</div>`:''}
     </div>`;
   }).join('');
-  openPanel('📜 工程入库历史' + (projectId?'':'（全部工程）'),
-    `<div style="font-size:11.5px;color:var(--mut);margin-bottom:8px;">每次工程入库的批次记录与数据统计；入库内容可在「知识库 · 图谱」按 personal 分支查看，快照可回滚。</div>
-     ${rows || '<div style="padding:24px;text-align:center;color:var(--mut);">暂无入库记录——在版本历史面板点击「📦 工程入库」发起第一次归档</div>'}`);
+  openPanel('📜 入库台账' + (projectId?'':'（全部工程）'),
+    `<div style="font-size:11.5px;color:var(--mut);margin-bottom:8px;">本工程历次入库批次的持久记录（对话流回执易逝，以台账为准）。入库内容可在「知识库 · 图谱」按 personal 分支查看。工程入库直入捷径已下线（2026-09-24 方案A：数据链路统一走「写回智源 → 智源拉取」），其历史批次标记为「旧」保留可查。</div>
+     ${rows || '<div style="padding:24px;text-align:center;color:var(--mut);">暂无入库记录——点击「⇩ 智源拉取」发起第一次入库</div>'}`);
 }
-// 标记为采纳版本（同会话后标记覆盖）
-async function sysmlAdoptVersion(vid){
-  try{
-    const r = await api('/api/sysml-versions/' + vid + '/adopt', {method:'POST', body:'{}'});
-    if(r && r.error){ toast(r.error); return; }
-    toast('已标记为采纳版本');
-    if(_artConv) loadSysmlVersionsBar(_artConv);
-  }catch(e){ toast('标记失败：' + (e.message||'')); }
-}
-// P0-6：查看指定版本的 SysML v2 代码（版本跟随代码文件——代码文本存 sysml_versions.code_text）
-async function openSvmVersionCode(vid){
-  try{
-    const r = await api('/api/sysml-versions/' + vid);
-    const code = (r && r.code_text) || '';
-    openPreviewTab({id:null, kind:'code', kind_label:'代码',
-      title: ((r && r.version_label) || ('v'+vid)) + ' · SysML v2 代码',
-      preview_type:'code', preview_content: code || '(该版本未留存代码文本)', message_id:null, meta:{}});
-  }catch(e){ toast('加载版本代码失败：' + (e.message||'')); }
-}
-// 版本历史渲染（SysML 文件预览底部）
-async function loadSysmlVersionsBar(convId){
+// 2026-09-24 方案A（用户拍板）：AI 建模数据链路统一「归一确认 → 写回智源 → 智源拉取 → 个人分支」——
+//   「📦 工程入库」直入捷径入口移除（见文件头注释）；新增「🔗 写回智源」（对当前版本，带状态标识与防重复）；
+//   保留 ⇩ 智源拉取（工程维度 vc 路由 + 绑定）/ 📜 入库台账（智源拉取批次落 project_ingest_logs）。
+// 写回状态：zhiyuan_imported_id 非空 = 已写回 → 按钮置灰「✅ 已写回智源」（暂定规则：不可重复写回）；
+//   归一修改会产生新版本（新 id），新版本自然恢复可写。
+async function loadSysmlIngestBar(convId){
   const el = document.getElementById('preview-sysml-versions');
   if(!el || !convId){ if(el) el.innerHTML=''; return; }
+  let pushBtn = '';
   try{
     const r = await api('/api/sysml-versions?conversation_id=' + convId);
-    const vs = r.versions || [];
-    if(!vs.length){ el.innerHTML=''; return; }
-    el.innerHTML = `<div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);text-align:left;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-        <span style="font-size:11px;color:var(--mut);">📜 SysML 代码版本历史（每次生成 = 一个代码文件版本，可查看各版本代码）</span>
-        <span style="margin-left:auto;display:flex;gap:4px;flex:none;">
-          <button class="btn sm ghost" style="font-size:10px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="projectIngestWizard()" title="工程维度入库：本会话所属工程的全部版本 → 三元组 → 个人分支图库">📦 工程入库</button>
-          <button class="btn sm ghost" style="font-size:10px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="zhiyuanPullIngest()" title="从智源拉取当前工程建模数据，后端直接转三元组入个人图库（对话流回执）">⇩ 智源拉取</button>
-          <button class="btn sm ghost" style="font-size:10px;padding:0 8px;" onclick="projectIngestLogsPanel()" title="历次工程入库批次与统计信息">📜 入库历史</button>
-        </span>
+    const vs = (r && r.versions) || [];
+    // 写回对象 = 当前版本（current 且留有源码）；已替代/空码版本不提供写回
+    const cur = vs.find(v=>v.status==='current' && (v.code_len||0) > 0) || null;
+    if(cur){
+      const pushed = String(cur.zhiyuan_imported_id || '').trim();
+      const lbl = String(cur.version_label || '').replace(/['"\\]/g, '');
+      pushBtn = pushed
+        ? `<button class="btn sm ghost" disabled style="font-size:10px;padding:0 8px;color:var(--mut);cursor:not-allowed;" title="当前版本已写回智源（${esc(pushed)}）。暂定规则：已写回的版本不可重复写回；归一修改会产生新版本，新版本可再次写回。">✅ 已写回智源</button>`
+        : `<button class="btn sm ghost" style="font-size:10px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="sysmlPushModal(${cur.id},'${lbl}')" title="把当前版本 SysML v2 源码写入智源建模软件：先语法检测（只读），通过后覆盖导入；成功后「智源拉取」即可拉到本版本">🔗 写回智源</button>`;
+    }
+  }catch(e){ pushBtn = ''; }
+  el.innerHTML = `<div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);text-align:left;display:flex;gap:4px;justify-content:flex-end;">
+      ${pushBtn}
+      <button class="btn sm ghost" style="font-size:10px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="zhiyuanPullIngest()" title="从智源拉取当前工程建模数据，后端直接转三元组入个人图库（对话流回执）">⇩ 智源拉取</button>
+      <button class="btn sm ghost" style="font-size:10px;padding:0 8px;" onclick="projectIngestLogsPanel()" title="本工程历次入库批次台账（智源拉取 / 旧工程入库）">📜 入库台账</button>
+  </div>`;
+}
+// ── 写回智源（modal 确认 → push-zhiyuan；异常分类提示）──
+// 复用 07-norm 归一页写回的确认范式（先检测后写入，二次点击才执行）；此处为入口条常驻入口。
+function sysmlPushModal(vid, label){
+  const ov = document.createElement('div');
+  ov.id = 'svm-push-modal';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  ov.innerHTML = `<div style="width:520px;background:#fff;border-radius:10px;box-shadow:0 10px 34px rgba(20,35,60,.2);overflow:hidden;font-size:12.5px;">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;">🔗 写回智源建模软件（${esc(label||('v'+vid))}）</div>
+      <div style="padding:14px 16px;line-height:1.95;">
+        <div>版本控制串 vc（留空则用系统默认配置）：</div>
+        <input id="svm-push-vc" style="width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:5px;font-size:12px;" placeholder="projectId,branchId">
+        <div style="margin-top:6px;color:var(--mut);font-size:11px;">流程：语法检测（只读）→ 通过后覆盖导入智源。检测不通过 / 智源不可达均不会写入；写回成功后该版本标记「已写回」，不可重复写回。</div>
+        <div id="svm-push-msg" style="margin-top:8px;"></div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:5px;">` + vs.map(v=>{
-      const es = v.element_summary || {};
-      const st = v.adopted ? ['ok','✅ 采纳']
-        : (v.status==='committed' ? ['b','📦 已入库'] : (v.status==='current' ? ['w','🕒 当前'] : ['','◻️ 已替代']));
-      return `<div style="display:flex;align-items:center;gap:8px;font-size:11.5px;">
-        <b>代码文件 ${esc(v.version_label)}</b>
-        <span class="st ${st[0]}" style="padding:1px 6px;">${st[1]}</span>
-        <span style="color:var(--mut);font-size:10.5px;">${es.views||0} 视图 · ${es.entities||0} 实体 / ${es.relations||0} 关系</span>
-        <span style="margin-left:auto;display:flex;gap:4px;">
-          <button class="btn sm ghost" style="font-size:10px;padding:0 8px;" onclick="openSvmVersionCode(${v.id})" title="查看该版本 SysML v2 代码">👁 代码</button>
-          ${v.adopted?'':`<button class="btn sm ghost" style="font-size:10px;padding:0 8px;" onclick="sysmlAdoptVersion(${v.id})" title="标记为最终采纳版本">📌 采纳</button>`}
-        </span>
-      </div>`;
-    }).join('') + `</div></div>`;
-  }catch(e){}
+      <div style="padding:10px 16px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px;">
+        <button class="btn ghost" onclick="document.getElementById('svm-push-modal').remove()">取消</button>
+        <button class="btn primary" id="svm-push-btn" onclick="sysmlPushGo(${vid})">确认写入</button>
+      </div></div>`;
+  document.body.appendChild(ov);
+}
+async function sysmlPushGo(vid){
+  const vc = (document.getElementById('svm-push-vc')||{}).value || '';
+  const box = document.getElementById('svm-push-msg');
+  const btn = document.getElementById('svm-push-btn');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ 检测并写入中…'; }
+  if(box) box.innerHTML = `<span style="color:var(--mut);">⏳ 正在语法检测并写入智源…</span>`;
+  let r;
+  try{
+    r = await api('/api/sysml-versions/' + vid + '/push-zhiyuan', {method:'POST', body: JSON.stringify({vc: vc})});
+  }catch(e){
+    if(box) box.innerHTML = `<div style="padding:8px 10px;border-radius:6px;border:1px solid #F3C1C1;background:#fff5f5;color:#b91c1c;">✕ 请求失败：${esc(e.message||String(e))}</div>`;
+    if(btn){ btn.disabled=false; btn.textContent='确认写入'; }
+    return;
+  }
+  if(btn){ btn.disabled=false; btn.textContent='确认写入'; }
+  if(!box) return;
+  const errHtml = (msg, hint)=>`<div style="padding:8px 10px;border-radius:6px;border:1px solid #F3C1C1;background:#fff5f5;color:#b91c1c;">✕ ${esc(msg||'写入失败')}${hint?`<div style="margin-top:4px;color:#6b7280;">${hint}</div>`:''}</div>`;
+  if(r && r.ok){
+    box.innerHTML = `<div style="padding:8px 10px;border-radius:6px;border:1px solid #C0DD97;background:#f7fbee;color:#2f855a;">✅ 已写入智源建模软件（${esc(r.vc||'')}）</div>`;
+    toast('✅ 已写回智源');
+    setTimeout(()=>{ const m=document.getElementById('svm-push-modal'); if(m) m.remove(); }, 1200);
+    if(_artConv) loadSysmlIngestBar(_artConv);   // 刷新入口条 → 「✅ 已写回智源」置灰
+    return;
+  }
+  const code = (r && r.code) || '';
+  if(code==='ALREADY_PUSHED'){
+    box.innerHTML = errHtml(r && r.error, '该版本此前已写回过；归一修改产生新版本后，可对新版本写回。');
+  }else if(code==='CHECK_FAILED'){
+    const det = String((r && r.detail) || '').slice(0, 160);
+    box.innerHTML = errHtml('语法检测未通过，未执行写入', det ? esc(det) : '请修正代码后重试');
+  }else if(code==='CALL_FAILED' || code==='CONFIG_MISSING' || code==='VC_REQUIRED'){
+    box.innerHTML = errHtml(r && r.error, '智源服务不可达或配置缺失——请确认智源服务状态与连接配置后再试');
+  }else{
+    box.innerHTML = errHtml((r && (r.error || r.detail)) || '写入失败');
+  }
 }
 // ── P0-3 会话产物卡片网格（规范06）：每产物一卡（图标+标题+类型+操作），≥3 横滑轨道 ──
 function artGridHtml(m, cd){
@@ -292,7 +265,7 @@ function openSysmlImportDialog(batchId, candidates, versionId, dup){
       if(r && r.error){ toast(r.error); return; }
       close();
       toast(`已放弃候选（删除 ${r.deleted||0} 条），可重新生成`);
-      if(_artConv) loadSysmlVersionsBar(_artConv);
+      if(_artConv) loadSysmlIngestBar(_artConv);
     }catch(e){ toast('放弃失败：' + (e.message||'')); }
   };
   document.getElementById('si-ok').onclick = async () => {
@@ -317,7 +290,7 @@ function openSysmlImportDialog(batchId, candidates, versionId, dup){
       if(r && r.pending_review){
         // 优化一：V2 生成候选默认进入候选待审（未直接入库）
         toast(`🕒 V2 生成候选（${r.pending_review} 条）已进入待审核队列；请在数据整理/三元组统一审核中完成确认后再正式入库`);
-        if(_artConv) loadSysmlVersionsBar(_artConv);
+        if(_artConv) loadSysmlIngestBar(_artConv);
         return;
       }
       toast(`✅ 候选已确认（入库 ${r.confirmed||0} 条${(r.skipped&&r.skipped.length)?` / 跳过 ${r.skipped.length}`:''}），进入实体/关系审核队列正式审核${_gateMsg}`);
@@ -326,7 +299,7 @@ function openSysmlImportDialog(batchId, candidates, versionId, dup){
         const vr = await api('/api/sysml-versions/' + versionId);
         if(vr && vr.message_id) api(`/api/messages/${vr.message_id}/feedback`, {method:'POST', body:JSON.stringify({type:'approve'})}).catch(()=>{});
       }catch(e){} }
-      if(_artConv) loadSysmlVersionsBar(_artConv);
+      if(_artConv) loadSysmlIngestBar(_artConv);
     }catch(e){ toast('入库失败：' + (e.message||'')); okBtn.disabled = false; okBtn.textContent = '✓ 确认入库'; }
   };
   updateDupHint();
@@ -343,16 +316,86 @@ function closeSysmlImportDrawer(){
 
 
 // ══ 2026-09-11：智源拉取直通入库（AI 建模对话流回执，不进数据治理面板） ══
+// 2026-09-24（方案A收尾）：拉取升级为工程维度路由——弹窗确认工程与 vc 绑定，
+// 不再默认弹 confirm 硬拉：vc 显式输入一次即绑定本工程（projects.tool_binding），下次免输。
+// 2026-09-24 建模工具适配层：绑定泛化 {tool,ref,name}（zhiyuan/magicdraw）——
+// 非智源工具 → 显示"通道预留"面板（连接器接入前不可拉取，绑定已登记）。
+function _zpParseBinding(proj){
+  let b = null;
+  try{ b = proj && proj.tool_binding ? JSON.parse(proj.tool_binding) : null; }catch(e){ b = null; }
+  if(b && b.tool) return b;
+  if(proj && (proj.zhiyuan_vc||'').trim()) return {tool:'zhiyuan', ref:proj.zhiyuan_vc, name:proj.zhiyuan_project_name||''};
+  return null;
+}
+const ZP_PULL_TOOL_LABEL = {zhiyuan:'智源', magicdraw:'MagicDraw'};   // ⚠ 不得与 41-projects.js 的全局同名（经典 script 全局词法作用域共享，重名 = 后加载的整个文件失效）
 async function zhiyuanPullIngest(){
-  if(!(await confirmDialog('从智源拉取当前工程建模数据？\n后端将直接：解析 → 候选化 → 融合闸 → 转三元组 → 入库个人分支图库。\n（不产生数据治理审核面板待办，回执在本对话流显示）'))) return;
+  if(!currentConvId){ toast('缺少会话上下文'); return; }
+  // 会话 → 工程反查（拉取是工程维度动作）
+  let conv = null, proj = null;
+  try{ conv = await api('/api/conversations/' + currentConvId); }catch(e){}
+  const pid = (conv && conv.project_id) || '';
+  if(pid){
+    try{ proj = await api('/api/projects/' + encodeURIComponent(pid)); }catch(e){}
+  }
+  const b = _zpParseBinding(proj);
+  const projName = (proj && proj.name) || '';
+  // 非智源工具 → 通道预留面板（连接器未接入，明确告知而非误导性报错）
+  if(b && b.tool && b.tool !== 'zhiyuan'){
+    const tl = ZP_PULL_TOOL_LABEL[b.tool] || b.tool;
+    openPanel('⇩ 模型拉取 — ' + (projName || '（会话未关联工程）'),
+      `<div style="font-size:12px;line-height:1.9;">
+        <div style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:11.5px;color:var(--mut);">
+          目标工程：<b style="color:var(--ink);">${esc(projName||'-')}</b> · 绑定建模工具：<b style="color:var(--ink);">${tl}</b>${b.name?`（${esc(b.name)}）`:''}
+        </div>
+        <div style="margin-top:10px;padding:10px 12px;border:1px solid #F3D9A4;background:#fffbf0;border-radius:8px;font-size:11.5px;color:#8a5a10;line-height:1.8;">
+          ℹ️ <b>${tl}</b> 的拉取连接器尚未接入——绑定已登记（ref=${esc(b.ref)}），无需重新绑定。<br>
+          MagicDraw 通道按 08-31 设计分三层：<b>文件导入</b>（.kerml/.profile，MVP）→ <b>SysML v2 API</b>（ISO 标准）→ <b>Cameo OpenAPI 插件</b>（深度集成）。<br>
+          任一通道接入后，本工程的写回 / 拉取将自动按绑定路由。
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn ghost" onclick="closePanel()">知道了</button>
+        </div>
+      </div>`);
+    return;
+  }
+  const boundVc = (b && b.tool === 'zhiyuan' && b.ref) || '';
+  openPanel('⇩ 智源拉取 — ' + (projName || '（会话未关联工程）'),
+    `<div style="font-size:12px;line-height:1.8;">
+      <div style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:11.5px;color:var(--mut);">
+        后端将把该工程在<b style="color:var(--ink);">智源</b>中的建模数据：解析 → 候选化 → 融合闸 → 转三元组 → 入库<b style="color:var(--ink);">个人分支图库</b>。<br>
+        （不产生数据治理审核面板待办，回执在本对话流显示，批次记录进「入库台账」）
+      </div>
+      <div style="margin:10px 0 4px;">目标工程</div>
+      <div style="padding:6px 10px;border:1px solid var(--line);border-radius:8px;font-size:12px;">
+        ${projName ? esc(projName) : '<span style="color:var(--red);">✕ 当前会话未关联工程——请先在工程页归属会话</span>'}
+      </div>
+      <div style="margin:10px 0 4px;">智源 vc（branchId）</div>
+      <input id="zp-vc-input" type="text" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:12px;" placeholder="${boundVc ? '' : '未绑定——填写该工程在智源的 vc，填一次即长期绑定本工程'}"
+             value="${esc(boundVc)}" ${boundVc ? '' : ''}>
+      <div style="margin-top:4px;font-size:10.5px;color:var(--mut);">
+        ${boundVc ? '✅ 本工程已绑定 vc，可直接拉取；修改输入框可改绑' : '⚠ 本工程尚未绑定智源 vc，不绑定无法确定拉取目标（防止拉错工程数据）'}
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn ghost" onclick="closePanel()">取消</button>
+        <button class="btn primary" id="zp-go-btn" onclick="zhiyuanPullGo(${JSON.stringify(pid).replace(/"/g,'&quot;')})">⇩ 开始拉取</button>
+      </div>
+    </div>`);
+}
+async function zhiyuanPullGo(projectId){
+  const vcEl = document.getElementById('zp-vc-input');
+  const vc = (vcEl && vcEl.value || '').trim();
+  if(!projectId){ toast('会话未关联工程，无法拉取'); return; }
+  const btn = document.getElementById('zp-go-btn');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ 拉取中…'; }
+  closePanel();
   toast('⇩ 正在从智源拉取建模数据并直通入库…');
   let r;
   try{
-    r = await api('/api/knowledge/sysml/pull-ingest', {method:'POST', body:JSON.stringify({})});
+    r = await api('/api/knowledge/sysml/pull-ingest', {method:'POST', body:JSON.stringify({conversation_id: currentConvId, vc: vc})});
   }catch(e){ toast('拉取失败：'+(e.message||'')); return; }
   if(!r || r.error){ toast('拉取失败：'+((r&&r.error)||'')); _zhiyuanReceipt(r); return; }
   _zhiyuanReceipt(r);
-  if(_artConv) loadSysmlVersionsBar(_artConv);
+  if(_artConv) loadSysmlIngestBar(_artConv);
 }
 // 回执卡：插入当前对话流底部（AI 建模流程内可见）
 function _zhiyuanReceipt(r){
@@ -363,9 +406,13 @@ function _zhiyuanReceipt(r){
   if(r.error){
     body = '<div style="font-size:12px;color:#b91c1c;">✕ 拉取入库失败：'+esc(r.error)+'</div>';
   } else {
+    const vcSrc = r.vc_source || '';
+    const vcNote = vcSrc==='project' ? '（工程绑定 vc）'
+      : vcSrc==='explicit' ? '（本次指定并已绑定工程）'
+      : vcSrc==='default' ? '<span style="color:var(--amb,#b45309);">（⚠ 默认 vc，非工程绑定——建议在拉取弹窗绑定本工程 vc）</span>' : '';
     body = '<div style="font-size:12px;line-height:1.8;">'
       + '<div style="margin-bottom:6px;"><span class="st ok" style="font-size:12px;padding:3px 12px;">✅ 智源拉取直通入库完成</span>'
-      + '<span style="font-size:10.5px;color:var(--mut);margin-left:8px;">批次 '+esc(r.batch_id||'')+' · 分支 '+esc(r.target_branch||'personal')+' · 耗时 '+((s.elapsed_ms/1000)||0).toFixed(1)+'s</span></div>'
+      + '<span style="font-size:10.5px;color:var(--mut);margin-left:8px;">批次 '+esc(r.batch_id||'')+' · 工程 '+esc(r.project_name||'默认工程')+' · vc '+esc(r.vc||'')+' '+vcNote+' · 分支 '+esc(r.target_branch||'personal')+' · 耗时 '+((s.elapsed_ms/1000)||0).toFixed(1)+'s</span></div>'
       + '<div style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);">'
       + row('模型来源', esc(r.model_name||'智源'))
       + row('候选（实体+关系）', s.candidates||0)

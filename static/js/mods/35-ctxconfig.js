@@ -1,7 +1,9 @@
 // ── 设置·AI 上下文管理（st-ctx tab）──
 // 2026-09-14：T6 token 预算 + 历史压缩 + 语义拉回（embedding/bigram 双路）配置入口。
-// 2026-09-21 P1-4b：**按耦合度重组为 7 个参数簇**（原 4 个松散分区），簇内项强相关、
+// 2026-09-21 P1-4b：**按耦合度重组为参数簇**（原 4 个松散分区），簇内项强相关、
 //   必须同屏调（改一个必须看另一个），并为每簇提供"耦合关系可视化 + 约束校验"。
+// 2026-09-26：新增「🧠 长期记忆」簇（第 10 簇），暴露 memory.* 六项（含新增 scope_boost/backend）；
+//   渲染器补 type:'str' 文本输入（作用域加成/后端名是字符串而非数字）。
 //   依据：docs/AI上下文配置项-依据与行业对标-20260921.md（含各项行业对标值与理想区间）。
 // 数据源：GET /api/system/config/schema（core/config.py CONFIG_SCHEMA，含当前值/默认值）；
 // 保存：PUT /api/system/config/static → core.config.save_override（写 ~/.workbuddy/mbse_config.json 并即时 reload）。
@@ -59,6 +61,13 @@ const CTX_CFG_CLUSTERS = [
       + '核心策略是「<b>文本层优先 + 稀疏页补 OCR</b>」，<b>绝不可无差别全量 OCR</b>（慢 50~200 倍，且版面顺序反而更差）。'
       + '⑤⑥ 两项是<b>结果质量门禁</b>，双条件同时满足才入库 —— 防止低质截图被 OCR 成几百字错字后混进向量库、'
       + '再被检索召回去误导回答（2026-09-21 实测事故）。',
+  },
+  {
+    id: 'mem', title: '🧠 长期记忆（作用域优先级 + 维护引擎）', viz: 'none', checks: ['mem'],
+    hint: '🔗 这一簇管 <b>agent_memory 长期记忆</b>：写入时按<b>作用域</b>隔离（工程 / 用户 / Agent / 全局），'
+      + '由<b>维护引擎</b>周期做「软遗忘 + 同作用域合并」，检索时按<b>作用域优先级加成</b>软重排（不是硬分桶）。'
+      + '工程槽来自<b>会话所属工程</b>，用户槽来自当前登录用户身份；存量老记忆（作用域为空）按 Agent 槽召回，不会丢。'
+      + '记忆只作「参考对齐」，System Prompt 硬约束「不得虚构扩展」，不会被当作事实检索结果引用。',
   },
 ];
 
@@ -221,9 +230,46 @@ const CTX_CFG_FIELDS = [
     desc:'OCR 结果中<b>置信度 <0.7 的行</b>占比超过此值 → 判"质量不合格"，不入库。与上一项是<b>双条件</b>，需同时满足。',
     impact:'★ 兜住"平均看着还行、实际一半行是错的"这种情况（实测某截图灰度后均分 0.675 已接近阈值，'
       + '但其低置信行占 51.9%，正是靠这一项挡下）。默认 50%。' },
+  { cluster:'ocr', sec:'extract', key:'extract.ocr_dense_min_lines', type:'float', label:'⑥b 密集文本放行：行数下限',
+    desc:'OCR 识别<b>行数</b>达到此值、且均分达下一项下限时，即使未过⑤/⑥常规门禁也<b>放行入库</b>，并打"低质放行"标（质量分如实写入 quality_score）。',
+    impact:'★ 救密集界面截图：实测某截图 84 行、均分 0.696（差 0.004 被常规门禁拒），行数多本身就是真实内容的证据——纯图形/照片吐不出几十行。默认 30。' },
+  { cluster:'ocr', sec:'extract', key:'extract.ocr_dense_min_avg', type:'float', label:'⑥c 密集文本放行：均分下限',
+    desc:'密集文本放行的<b>平均置信度</b>下限（低于常规⑤的 0.70）。',
+    impact:'★ 默认 0.65：真乱码图（实测 0.595、低置信 95.7%）仍被挡。风险提示：均分 0.65~0.675 的低质图也会被放进，如遇污染可调高到 0.68（历史乱码上界 0.675 之上）。' },
   { cluster:'ocr', sec:'extract', key:'extract.ocr_grayscale', type:'bool', label:'⑦ 识别前转灰度',
     desc:'OCR 前把图像转为灰度。',
     impact:'实测<b>又快又好</b>：均分 0.595 → 0.675，耗时还降约 0.14 s/页。默认开，无需关闭。' },
+
+  // ── 簇 10：长期记忆（作用域优先级 + 维护引擎）──────────────────────────────
+  // ⚠️ 纪律（复述）：后端注册 CONFIG_SCHEMA 不等于界面可见——字段清单是前端硬编码的，
+  //    新增 memory.* 后必须同步补在这里，否则界面上改不了（见 OCR 组的历史教训）。
+  { cluster:'mem', sec:'memory', key:'memory.forget_enabled', type:'bool', label:'① 遗忘引擎开关',
+    desc:'开启后，<b>激活度</b>（使用频率 × 最近访问 × 时效衰减）衰减到阈值以下的记忆被<b>软遗忘</b>：'
+      + '置 forgotten=1，检索跳过、<b>可恢复</b>，不物理删除。',
+    impact:'关：记忆只增不减（库缓慢膨胀，但一条都不丢）；开：长期不用的自动沉底。'
+      + '行业实践（Mem0）更倾向「不硬删、只软重排」，本开关即软删档，可按需关闭。' },
+  { cluster:'mem', sec:'memory', key:'memory.forget_threshold', type:'float', label:'② 遗忘激活度阈值',
+    desc:'衰减后激活度 <b>低于</b> 该值时软遗忘。默认 0.2（建议 0.1–0.3）。',
+    impact:'调大：更激进（0.5 会把刚沉淀不久的记忆也沉底）；调小：更保守。仅在①开启时生效。' },
+  { cluster:'mem', sec:'memory', key:'memory.consolidate_threshold', type:'float', label:'③ 合并相似度阈值',
+    desc:'<b>同一作用域内</b>两条记忆相似度 ≥ 该值 → 保留较新、旧条目标记遗忘（防重复膨胀）。'
+      + '真向量路按此阈值；bigram 降级路自动放宽到 0.5（量纲不同）。',
+    impact:'调大：更难合并（同一事实的多条改写会并存）；调小：更易合并，过低会把不同事实误合并。建议 0.8–0.9。'
+      + '跨作用域永不合（工程 A 与工程 B 的相似记忆互不影响）。' },
+  { cluster:'mem', sec:'memory', key:'memory.maintain_every', type:'int', label:'④ 周期维护间隔（每 N 次沉淀）',
+    desc:'每 N 次记忆沉淀触发一次维护（遗忘 + 合并）。0 = 关闭周期维护。默认 50。',
+    impact:'调小：维护更及时但更频繁；调大：更省，但噪声积累更久才被清理。' },
+  { cluster:'mem', sec:'memory', key:'memory.scope_boost', type:'str', label:'⑤ 作用域优先级加成（4 段，逗号分隔）',
+    desc:'检索槽位顺序<b>固定</b>为 project → user → agent → global；此处按槽位依次给加成，'
+      + '参与排序键 <code>语义分 × 时间衰减 × 加成</code>。默认 <code>1.35,1.18,1.06,1.0</code>。',
+    impact:'加成<b>只改排序</b>、不改写返回的相关度分数（注入文案口径不变），也不做硬分桶——'
+      + '即「工程内记忆优先，但语义明显更相关的全局记忆仍可能胜出」。'
+      + '调大首段＝更强的工程局部性；四段全设 1.0 ＝退回纯语义排序。' },
+  { cluster:'mem', sec:'memory', key:'memory.backend', type:'str', label:'⑥ 记忆后端（预留挂载点）',
+    desc:'<code>sqlite</code> = 内置实现（MemoryService，默认）。填其它值时会尝试加载 '
+      + '<code>memory_backend_&lt;名字&gt;</code> 模块的 <code>BACKEND</code> 对象，失败自动回落 sqlite（不抛）。',
+    impact:'为将来接 mem0 / Graphiti 这类外部记忆引擎预留的接口缝（届时只需新增一个适配模块，'
+      + '领域层不改）。当前<b>没有</b>其它可用实现 —— 除非已部署对应模块，否则保持 sqlite。' },
 ];
 
 // ══ 耦合约束校验器 ═══════════════════════════════════════════════════════════
@@ -281,6 +327,25 @@ const CTX_CHECKS = {
     if (!r.length) r.push({ level:'ok', text:'双路阈值均在合理档位' });
     return r;
   },
+  mem(v) {
+    const fe = v['memory.forget_enabled'], ft = +v['memory.forget_threshold'],
+          ct = +v['memory.consolidate_threshold'], me = +v['memory.maintain_every'],
+          sb = String(v['memory.scope_boost'] == null ? '' : v['memory.scope_boost']).trim(),
+          be = String(v['memory.backend'] == null ? '' : v['memory.backend']).trim(), r = [];
+    if (isFinite(ct) && (ct <= 0 || ct > 1)) r.push({ level:'err', text:`合并相似度阈值(${ct}) 必须在 (0,1]：>1 永不触发合并、≤0 会把无关记忆误合并` });
+    else if (isFinite(ct) && ct < 0.7) r.push({ level:'warn', text:`合并阈值(${ct}) 偏低：bigram 降级路会自动放宽到 0.5，更易把不同事实误合并（真向量路建议 0.8–0.9）` });
+    if (isFinite(ft) && ft > 0.5) r.push({ level:'warn', text:`遗忘激活度阈值(${ft}) 偏激进：近期沉淀的记忆也会被软遗忘（建议 0.1–0.3）` });
+    if (!fe) r.push({ level:'info', text:`遗忘引擎已关闭 → 阈值 ${isFinite(ft) ? ft : '-'} 不生效（记忆只增不减、不物理删除）` });
+    if (isFinite(me) && me === 0) r.push({ level:'info', text:'周期维护已关闭（=0）：遗忘与合并需手动触发' });
+    const parts = sb.split(',').map(x => Number(String(x).trim())).filter(x => isFinite(x));
+    if (!parts.length) r.push({ level:'err', text:'作用域加成格式非法：应为逗号分隔的数字，如 1.35,1.18,1.06,1.0' });
+    else if (parts.some(x => x <= 0)) r.push({ level:'err', text:`作用域加成必须为正数（当前 ${sb}）：非正数会把命中的记忆压到选不中` });
+    else if (parts.length < 4) r.push({ level:'warn', text:`只给了 ${parts.length} 段（槽位 project→user→agent→global 共 4 段）：不足的槽位沿用最后一段` });
+    else if (parts[parts.length - 1] !== 1.0) r.push({ level:'info', text:`末段（global 槽）当前 ${parts[parts.length - 1]}：设 1.0 表示「全局记忆不额外加权」，作为其余槽位的基准更直观` });
+    if (be && be.toLowerCase() !== 'sqlite') r.push({ level:'warn', text:`后端已指向 ${be}：需存在 memory_backend_${be}.py 的 BACKEND 对象，否则运行时静默回落 sqlite` });
+    if (!r.length) r.push({ level:'ok', text:'记忆作用域与维护参数自洽' });
+    return r;
+  },
 };
 
 const CTX_LV_STYLE = {
@@ -301,13 +366,22 @@ function ctxSchemaVal(key) {
 /** 读某字段「将生效」的值：输入框有内容取输入值，留空则取当前生效值（供校验用）。 */
 function ctxFieldVal(f) {
   const el = document.getElementById('ctx-' + f.key);
+  if (f.type === 'bool') {
+    if (el) return el.value === '1';
+    const cur = ctxSchemaVal(f.key);
+    return cur === true || cur === 'true' || cur === 1;
+  }
+  // 2026-09-26：字符串型（如 memory.scope_boost / memory.backend）原样返回，不做 Number 转换
+  if (f.type === 'str') {
+    if (el) { const raw = String(el.value).trim(); if (raw !== '') return raw; }
+    const cur = ctxSchemaVal(f.key);
+    return cur == null ? '' : String(cur);
+  }
   if (el) {
-    if (f.type === 'bool') return f.type === 'bool' ? el.value === '1' : null;
     const raw = String(el.value).trim();
     if (raw !== '') return Number(raw);
   }
   const cur = ctxSchemaVal(f.key);
-  if (f.type === 'bool') return cur === true || cur === 'true' || cur === 1;
   return typeof cur === 'number' ? cur : Number(cur);
 }
 function ctxReadVals() {
@@ -475,6 +549,10 @@ async function loadCtxConfig() {
             const on = (cur === true || cur === 'true' || cur === 1);
             input = `<select id="ctx-${f.key}" onchange="ctxRecheck()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:100px;">
               <option value="1"${on ? ' selected' : ''}>开启</option><option value="0"${on ? '' : ' selected'}>关闭</option></select>`;
+          } else if (f.type === 'str') {
+            input = `<input id="ctx-${f.key}" type="text" value="${cur ?? ''}"
+              oninput="ctxRecheck()" placeholder="留空=不改"
+              style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:100px;">`;
           } else {
             input = `<input id="ctx-${f.key}" type="number" step="${f.type === 'float' ? '0.01' : '1'}" value="${cur ?? ''}"
               oninput="ctxRecheck()" placeholder="留空=不改"

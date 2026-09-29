@@ -101,6 +101,20 @@ def reflow_from_text(conn, text: str, source: str = "conversation", batch_id: st
 
     # 3) 双写记忆层（R1=B）：project_memories（项目经验/决策，pipeline 自动注入）+ agent_memory（Agent 长期经验）
     n = 0
+    # 多维作用域（2026-09-26）：有工程 → project 槽（按工程隔离，防跨工程串味）；
+    # 无工程（如变更影响模拟未带 project_id）→ 保持存量槽，不臆造归属。
+    # ⚠️ 2026-09-29 修复：下面 project_memories 那一支此前**没有做同样的判断** ——
+    #    `_pid` 为空时仍照插 `project_id=''`，产生「无归属孤儿记忆」。
+    #    实测生产库 24 条 project_memories **全部** `project_id=''`，且内容是
+    #    「IP67防护等级要求」「CAN总线通信接口」**交替重复 12 遍**（来自测试固定输入的残留）。
+    #    危害：这些孤儿条目既进不了按项目过滤的正常消费（P0 记忆召回要求 project_id 非空），
+    #    又污染管理界面；一旦哪天有人"顺手"给空 project_id 补默认项目，**测试数据就会变成项目知识**。
+    #    故与 agent_memory 路**取同一口径**：无归属 → 不写 project_memories。
+    _pid = (project_id or "").strip()
+    _scope_type, _scope_id = ("project", _pid[:120]) if _pid else ("", "")
+    # 同批次内去重（同一标题只写一次）—— 实测同一批 candidates 里
+    # 「IP67防护等级要求」「CAN总线通信接口」会被反复提炼出来，逐条插入即造成 12 遍重复。
+    _seen_title = set()
     try:
         from memory_service import MemoryService
         _has_ms = True
@@ -116,19 +130,47 @@ def reflow_from_text(conn, text: str, source: str = "conversation", batch_id: st
         # 3.1 项目记忆（category 映射：决策→决策；约束→规范；其余→经验）
         cat_map = {"决策": "决策", "约束": "规范", "规范": "规范"}
         category = cat_map.get(et, "经验")
-        try:
-            conn.execute(
-                "INSERT INTO project_memories (project_id, category, title, content, enabled, created_by) "
-                "VALUES (?,?,?,?,1,'reflow')",
-                (project_id[:80], category, title[:120], content[:500]))
-            n += 1
-        except Exception as e:
-            logger.warning("项目记忆写入失败，跳过（batch=%s）: %s", batch_id, e)
+        # ⚠️ 两条硬前置：有项目归属 + 同项目内标题不重复。任一不满足 → 不写（不产生孤儿/重复）。
+        _tkey = title.strip()
+        if _pid and _tkey and _tkey not in _seen_title:
+            try:
+                # 跨批次去重：同项目 + 同标题已存在（且启用）→ 跳过，避免每次回流都堆一遍
+                _dup = conn.execute(
+                    "SELECT 1 FROM project_memories WHERE project_id=? AND title=? AND enabled=1 LIMIT 1",
+                    (_pid[:80], title[:120])).fetchone()
+                if _dup:
+                    logger.info("项目记忆同项目同标题已存在，跳过（batch=%s）: %s", batch_id, _tkey)
+                else:
+                    conn.execute(
+                        "INSERT INTO project_memories (project_id, category, title, content, enabled, created_by) "
+                        "VALUES (?,?,?,?,1,'reflow')",
+                        (_pid[:80], category, title[:120], content[:500]))
+                    _seen_title.add(_tkey)
+                    n += 1
+            except Exception as e:
+                logger.warning("项目记忆写入失败，跳过（batch=%s）: %s", batch_id, e)
+        else:
+            if not _pid:
+                logger.info("无项目归属，跳过 project_memories 写入（batch=%s，防孤儿记忆）: %s",
+                            batch_id, _tkey)
         # 3.2 Agent 长期记忆（experience 类型，MemoryService 写真 embedding）
-        if _has_ms:
+        # ⚠️ 2026-09-29 修复"把图谱实体当经验"：此前**不区分 entity_type，一律写 experience**，
+        #   且 content 是 `f"{title}：{note}（来源 {source}）"` —— 对规则降级路，note 恒为"规则提炼"，
+        #   于是生产库塞进了大量形如
+        #     「IP67防护等级要求：系统必须满足IP67防护等级，作为系统级防护性能指标。（来源 test-reg）」
+        #   的条目。这类内容的本质是**知识图谱里的实体**（需求/部件/接口），
+        #   **不是经验**，写进记忆库等于把知识库复制一份，还挤占了记忆召回的槽位。
+        #   实测：reflow 来源 54 条占未遗忘记忆的 46%，其中绝大多数零访问（"沉淀即死"）。
+        #   修法：① 只沉淀**真经验类**（经验/决策/风险）——需求/部件/功能/接口/约束归图谱，不进记忆；
+        #        ② note 为占位串（如"规则提炼"）或过短 → 无信息量，不沉淀。
+        _EXP_TYPES = ("经验", "决策", "风险")
+        _note_clean = note.strip()
+        _placeholder = _note_clean in ("规则提炼", "评审/变更结论沉淀", "") or len(_note_clean) < 8
+        if _has_ms and et in _EXP_TYPES and not _placeholder:
             try:
                 MemoryService.deposit(conn, agent_id, content, mem_type="experience",
-                                      source="reflow", mem_topic=category)
+                                      source="reflow", mem_topic=category,
+                                      scope_type=_scope_type, scope_id=_scope_id)
             except Exception as e:
                 logger.warning("Agent 记忆写入失败，跳过（batch=%s）: %s", batch_id, e)
     conn.commit()

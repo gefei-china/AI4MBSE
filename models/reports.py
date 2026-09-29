@@ -27,6 +27,8 @@ class ReportSaveIn(BaseModel):
     source: str = "conversation"           # conversation | flow | skill | upload | manual
     conversation_id: int = 0
     branch: str = ""
-    project_id: str = ""                   # 未指定 → 由路由层按用户配置的默认项目解析
+    # P1-2（2026-09-28）：未指定 → 由路由层按「会话归属 → 平台默认项目」解析
+    # （此前只有平台默认一档，会话已归属工程时仍会落到平台默认下）
+    project_id: str = ""
     status: str = "draft"                  # draft | final
     created_by: Optional[str] = ""

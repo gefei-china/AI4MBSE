@@ -114,6 +114,8 @@ def run_simulation(body: dict, conn=Depends(db_session), user: dict = Depends(cu
     graph = (body or {}).get("baseline_graph")
     source = (body or {}).get("source")
     title = (body or {}).get("title", "")
+    # 2026-09-26：经验回流按工程隔离——可选 project_id 透传给 reflow（缺省为空=不臆造归属）
+    project_id = (body or {}).get("project_id", "")
     if scene_id:
         sc = get_scene(scene_id)
         if not sc:
@@ -144,7 +146,8 @@ def run_simulation(body: dict, conn=Depends(db_session), user: dict = Depends(cu
     if sim_id > 0:
         try:
             from knowledge_reflow import reflow_from_impact
-            rf = reflow_from_impact(conn, sim_id, changes, result["comparison"], title=title)
+            rf = reflow_from_impact(conn, sim_id, changes, result["comparison"], title=title,
+                                    project_id=project_id)
             if rf.get("candidates", 0) > 0:
                 audit(actor, "reflow_impact",
                       f"变更影响分析回流 v2g 候选 {rf['candidates']} 条（batch {rf.get('batch_id', '')}）",

@@ -75,8 +75,8 @@ class FlowNodesMixin:
         mem_hits = 0
         if conn is not None:
             try:
-                from memory_service import MemoryService
-                rows = MemoryService.search(conn, intent or label, query, top_k=5)
+                from memory_backend import get_memory_backend
+                rows = get_memory_backend().search(conn, intent or label, query, top_k=5)
                 mem_hits = len(rows)
                 if rows:
                     mem_hint = "（你的历史经验）\n" + "\n".join(
@@ -92,9 +92,9 @@ class FlowNodesMixin:
         mem_deposited = 0
         if conn is not None and not cfg.get("memorize") == False:
             try:
-                from memory_service import MemoryService
+                from memory_backend import get_memory_backend
                 content = (out.get("content") or "").strip()
-                mem_id = MemoryService.maybe_deposit(conn, intent or label, content, query)
+                mem_id = get_memory_backend().maybe_deposit(conn, intent or label, content, query)
                 mem_deposited = 1 if mem_id else 0
             except Exception:
                 pass

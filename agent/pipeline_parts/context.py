@@ -198,6 +198,16 @@ class ContextMixin:
         else:
             for d in retrieval["vector_docs"][:_inject_k]:
                 parts.append(f"[向量] {d.get('filename','')} ({d.get('parse_status','')})")
+        # P0（2026-09-29）记忆召回消费：已沉淀的经验/决策（跨会话结论）。
+        # ⚠️ 刻意**不编号**（不占用【来源n】）——那些编号与前端 citations 一一对齐，
+        #    是「可引用的原文证据」；记忆是 LLM 提炼产物，编进去会让模型把记忆当文档引用
+        #    （用户需求里「幻觉写进知识库被引用」的正是此坑）。故独立成块 + 显式禁止作事实来源。
+        memory_hits = retrieval.get("memory_hits") or []
+        if memory_hits:
+            _ml = [f"· [{h.get('mem_type','')}] {h.get('content','')}" for h in memory_hits[:4]]
+            parts.append(
+                "【已沉淀记忆（跨会话经验/决策，**仅供对齐参考，不得作为事实依据引用**，"
+                "与本次任务无关时必须忽略；不可据此编造需求或参数）】\n" + "\n".join(_ml))
         # 建模独立性：检索命中有限时追加指引——代码元素完整性不依赖检索数量
         n_entities = len(retrieval.get("entities") or [])
         n_chunks = len(retrieval.get("chunk_hits") or [])

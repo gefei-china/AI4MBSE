@@ -511,8 +511,15 @@ os.unlink(_p_none)
 
 _p_cfg = _write_fixture("proj-x")
 _w_cfg = _drive_writes(_p_cfg)
-check("★ 配置了默认项目 → 同一批写入路径全部归到该项目（证明是配置在驱动归属）",
-      all(v == "proj-x" for v in _flat(_w_cfg)), f"got={_w_cfg}")
+# ⚠️ 2026-09-28（多工程 P0-2）**会话已从本断言中摘出**：会话归属改由发起方**显式**决定，
+# 不再回落 settings.default_project_id —— 它是全局单行、不分标签页，多标签并发时后切换者
+# 覆盖前者，会让先开的标签页新建会话**静默错归属**。无工程会话（知识检索/问答）是合法状态。
+# 会话的新不变式单列在下一条；其余写入路径（实体/关系/图谱工作台）仍由配置驱动，判据不变。
+_w_cfg_noconv = {k: v for k, v in _w_cfg.items() if k != "会话"}
+check("★ 配置了默认项目 → 图谱类写入路径全部归到该项目（证明是配置在驱动归属）",
+      all(v == "proj-x" for v in _flat(_w_cfg_noconv)), f"got={_w_cfg_noconv}")
+check("★ 会话归属**不**跟随默认项目（P0-2：显式优先；未显式给 = 无工程会话）",
+      _w_cfg["会话"] == "", f"got={_w_cfg['会话']!r}（默认=proj-x；若跟随即为串归属）")
 os.unlink(_p_cfg)
 
 _rp = sqlite3.connect(":memory:")

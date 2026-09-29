@@ -42,52 +42,15 @@ function renderMdLine(line, cites){
   return `<p class="md-p">${inlineMd(t, cites)}</p>`;
 }
 function _mdCells(line){ return line.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>c.trim()); }
-function _findNumericColumn(data){
-  if(!data.length) return -1;
-  const n = data[0].length;
-  for(let c=0;c<n;c++){
-    const nums = data.map(r=>Number(String(r[c]===undefined?'':r[c]).replace(/[^\d.\-]/g,''))||0);
-    if(data.every(r=>r[c]!==undefined && r[c]!=='' && !isNaN(Number(String(r[c]).replace(/[^\d.\-]/g,'')))) && nums.some(v=>v!==0)) return c;
-  }
-  return -1;
-}
-function svgBarChart(key, rows){
-  const W=380,H=170,padL=46,padB=26,padT=12;
-  const vals = rows.map(r=>Number(r.value)||0);
-  const max = Math.max(...vals,1);
-  const bw = Math.min(36,(W-padL-10)/rows.length-6);
-  let bars='';
-  rows.forEach((r,i)=>{
-    const h=Math.max(2,(vals[i]/max)*(H-padT-padB));
-    const x=padL+i*(bw+6), y=H-padB-h;
-    bars += `<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="2" fill="#7c5cff"></rect>`;
-    bars += `<text x="${x+bw/2}" y="${H-padB+12}" font-size="9" fill="#888" text-anchor="middle">${escMd(String(r.label).slice(0,6))}</text>`;
-    bars += `<text x="${x+bw/2}" y="${y-3}" font-size="9" fill="#555" text-anchor="middle">${vals[i]}</text>`;
-  });
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;background:#fff;border:1px solid var(--line);border-radius:8px;"><text x="${padL-42}" y="12" font-size="10" fill="#888">${escMd(key)}</text>${bars}</svg>`;
-}
-function toggleMdChart(btn, key, rowsJson){
-  const wrap = btn.parentElement;
-  const box = wrap ? wrap.querySelector('.md-chart') : null;
-  if(!box) return;
-  if(box.style.display !== 'none'){ box.style.display='none'; btn.textContent='📊 柱状图'; return; }
-  btn.textContent='📊 收起图表';
-  box.style.display='block';
-  box.innerHTML = svgBarChart(key, JSON.parse(rowsJson));
-}
+// 2026-09-29（用户反馈）：移除表格下方「📊 柱状图」切换按钮——数字表格自动配图表入口
+// 属于过度设计（多数工程表格的"数字列"是编号/严重程度，画柱状图毫无意义），预览页共用同一
+// 渲染函数一并生效。svgBarChart / toggleMdChart / _findNumericColumn 已随之删除（无其他调用者）。
 function renderTable(rows){
   const head = rows[0]||[];
   const data = rows.slice(2).filter(r=>r.some(c=>c!==''));
   let t = '<div class="md-table-wrap"><table class="md-table"><thead><tr>'+head.map(c=>`<th>${escMd(c)}</th>`).join('')+'</tr></thead><tbody>';
   t += data.map(r=>'<tr>'+r.map(c=>`<td>${escMd(c)}</td>`).join('')+'</tr>').join('');
   t += '</tbody></table></div>';
-  const ci = _findNumericColumn(data);
-  if(ci !== -1 && data.length >= 2){
-    const li = ci === 0 ? 1 : 0;
-    const key = head[ci] || '值';
-    const rowsJson = JSON.stringify(data.map(r=>({label:r[li]!==undefined?r[li]:'', value:Number(String(r[ci]).replace(/[%,，\s]/g,''))||0})));
-    t += `<div style="margin-top:6px;"><button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="toggleMdChart(this,${JSON.stringify(key)},${rowsJson})">📊 柱状图</button><div class="md-chart" style="display:none;"></div></div>`;
-  }
   return t;
 }
 function renderMarkdown(text, cites){
@@ -233,6 +196,10 @@ function renderMessage(m) {
   const contentHtml = m.role==='assistant' ? renderMarkdown(bodySrc, cites) : bodySrc;
   let html = `<div class="msg ${cls}"${m.id?` id="msg-${m.id}" data-mid="${m.id}"`:''}><span class="who">${who}</span><div class="msg-inner">`;
   // V2.4 会话内执行过程：思考 → 子智能体 → 工具调用（流式当时传入 process_html；历史消息从 card_data.exec 还原）
+  // 2026-09-25：同时把 card_data 按消息 id 缓存 —— 「🔍 执行详情」面板据此读**落库的原始执行数据**
+  //  （intent/agent/skill_hits/source/confidence/provider/used_mock/tools/reasoning），
+  //   而不是只从 DOM 过程块里刮（DOM 只有 exec 的子集，会漏掉技能/意图/模型等字段）。
+  if(m.id && cd) { (window._msgCardCache = window._msgCardCache || {})[m.id] = cd; }
   if(m.process_html) html += `<div class="proc">${m.process_html}</div>`;
   else if(cd && cd.exec) html += procBlocksHtml(cd.exec, m.id);
   html += `<div class="body" style="min-width:0;">${contentHtml}`;
@@ -287,13 +254,21 @@ function renderMessage(m) {
   if(m.role==='assistant' && cd) {
     html += artGridHtml(m, cd);
   }
-  // 内容级澄清消息（msg_type='clarify'）：历史还原为「待确认」摘要卡
+  // 内容级澄清消息（msg_type='clarify'）：历史还原
+  //  2026-09-25：**仍待澄清时还原为可作答的卡**（复用 clarifyCardInnerHtml），此前一律渲染成
+  //  只读文字（"已作答后继续"）→ 刷新/重开会话后用户找不到任何作答入口（实测反馈）。
+  //  已作答/已跳过（window._pendingClarify 为空）则保持只读摘要，避免重复提交。
   if(m.role==='assistant' && m.msg_type==='clarify'){
     const cqs = (cd && cd.questions) || [];
-    html += `<div style="margin-top:8px;border:1px solid #d3e3fb;background:#f0f6ff;border-radius:8px;padding:8px 10px;font-size:11.5px;">
+    if(window._pendingClarify && cqs.length && typeof clarifyCardInnerHtml === 'function'){
+      html += `<div class="clarify-ask-card hist" style="margin-top:8px;border:1px solid #d3e3fb;
+        background:#f0f6ff;border-radius:8px;padding:10px 12px;font-size:12px;">${clarifyCardInnerHtml(cqs)}</div>`;
+    } else {
+      html += `<div style="margin-top:8px;border:1px solid #d3e3fb;background:#f0f6ff;border-radius:8px;padding:8px 10px;font-size:11.5px;">
       <b style="color:var(--blue-d);">❓ 需要确认建模信息</b>
       ${cqs.map((q,i)=>`<div style="margin-top:4px;">${i+1}. ${esc(q.question||'')} <span style="color:var(--mut);font-size:10px;">（已作答后继续）</span></div>`).join('') || ''}
     </div>`;
+    }
   }
   if(m.feedback) {
     const fbMap = {approve:'已采纳', reject:'已拒绝', modify:'已修订'};

@@ -1,7 +1,12 @@
-// ── V3 Trae 式 mention：@ 选择会话文件 / # 引用知识库文件 / / 选择技能（行首触发）──
+// ── V3 Trae 式 mention：# 引用知识库文件 / / 选择技能（行首触发）
+// 2026-09-28（用户反馈）：**@ 选择会话文件已移除** —— 会话文件引用与「＋ 菜单 → 当前会话的文件」
+// 功能重叠，且 @ 易与普通文本混触发；知识库引用同步移入「＋ 菜单 → 引用知识库文件」（打字 # 保留作快捷方式）。
 let _mention = { open:false, type:'', start:0, filter:'', items:[], sel:0 };
-let _agentsCache = null, _kbTagsCache = null, _skillsCache = null, _teamsCache = null, _agentMentioned = false, _skillMentioned = false;
+let _kbTagsCache = null, _skillsCache = null, _teamsCache = null, _skillMentioned = false;
 let _toolsCache = [];
+// 2026-09-28：_agentsCache 声明保留（原供 @ 智能体 mention，现仅服务 11-pipeline/13-reports/
+// 29-flow/30-agents 的智能体面板共享缓存）——跨文件词法共享变量，声明删掉会 ReferenceError。
+let _agentsCache = null;
 
 async function ensureKbTagsCache(){
   if(_kbTagsCache) return _kbTagsCache;
@@ -13,13 +18,13 @@ async function ensureSkillsCache(){
   try { _skillsCache = await api('/api/studio/skills'); } catch(e){ _skillsCache = []; }
   return _skillsCache;
 }
-// 检测光标前的 mention token（@xxx / #xxx / 行首 /xxx，未闭合空格）
+// 检测光标前的 mention token（#xxx / 行首 /xxx，未闭合空格；@ 已于 2026-09-28 移除）
 function _detectMention(){
   const ta = document.getElementById('chat-input');
   if(!ta) return null;
   const pos = ta.selectionStart || 0;
   const before = ta.value.slice(0, pos);
-  const m = before.match(/([@#\/])([^\s@#\/]*)$/);
+  const m = before.match(/([#\/])([^\s@#\/]*)$/);
   if(!m) return null;
   const idx = before.length - m[0].length;
   if(m[1] === '/'){
@@ -38,42 +43,7 @@ async function handleChatInput(){
   if(!hit){ closeMentionPop(); return; }
   _mention.type = hit.type; _mention.start = hit.start; _mention.filter = hit.filter; _mention.sel = 0;
   let items = [];
-  if(hit.type === '@'){
-    // 会话文件（2026-08-31 交互优化）：当前会话已上传/引用附件 + 资料库已接入文件，选中注入引用
-    const f = hit.filter.toLowerCase();
-    items = [];
-    // ① 当前会话内文件（从最近消息的 attachments 提取，doc_id 存在则选中后读全文入引用）
-    if(typeof currentConvId !== 'undefined' && currentConvId){
-      try{
-        const _mr = await api(`/api/conversations/${currentConvId}/messages?limit=50`);
-        const _seen = {};
-        ((_mr && _mr.messages) || []).forEach(_mm => {
-          let _atts = [];
-          try{ _atts = _mm.attachments ? (typeof _mm.attachments==='string' ? JSON.parse(_mm.attachments) : _mm.attachments) : []; }catch(_e){ _atts = []; }
-          (_atts || []).forEach(_a => {
-            const _key = _a.filename || _a.url || '';
-            if(!_key || _seen[_key]) return; _seen[_key] = 1;
-            if(f && !_key.toLowerCase().includes(f)) return;
-            items.push({key:'conv:'+_key, icon:_a.is_image?'🖼':'📄', name:_key, desc:'会话文件', tag:'会话', conv_file:_a});
-          });
-        });
-      }catch(_e){}
-    }
-    // ② 资料库已接入文件（与 # 引用同一数据源；选中后读全文注入 Cursor 式引用 chip）
-    try{
-      const _docsAll = await api('/api/documents');
-      (_docsAll || []).forEach(_d => {
-        const _fn = _d.filename || _d.title || ('doc#' + _d.id);
-        if(f && !_fn.toLowerCase().includes(f)) return;
-        // 文档全局化：不再展示 branch（documents 恒为 'global'，显示出来只会是内部哨兵值）；
-        // 改展示文件类型，对选择更有用
-        items.push({key:'doc:'+_d.id, icon:'📄', name:_fn,
-                    desc: (_d.status||'') + (_d.file_type ? ' · ' + _d.file_type : ''),
-                    tag:'文档', doc_id:_d.id});
-      });
-    }catch(_e){}
-    items = items.slice(0, 12);
-  } else if(hit.type === '/'){
+  if(hit.type === '/'){
     const skills = await ensureSkillsCache();
     const f = hit.filter.toLowerCase();
     items = skills.filter(s => !f || (s.name||'').toLowerCase().includes(f) || (s.description||'').toLowerCase().includes(f))
@@ -94,8 +64,7 @@ function renderMentionPop(){
   const pop = document.getElementById('mention-pop');
   if(!pop) return;
   if(!_mention.open){ pop.style.display = 'none'; return; }
-  const head = _mention.type === '@' ? '选择会话文件（↑↓ 移动 · Enter 确认 · Esc 关闭）'
-             : _mention.type === '/' ? '选择技能（↑↓ 移动 · Enter 确认 · Esc 关闭）'
+  const head = _mention.type === '/' ? '选择技能（↑↓ 移动 · Enter 确认 · Esc 关闭）'
              : '引用知识库文件（↑↓ 移动 · Enter 确认 · Esc 关闭）';
   pop.innerHTML = `<div class="mp-head">${head}</div><div class="mp-list">` +
     (_mention.items.length ? _mention.items.map((it, i) => `
@@ -111,34 +80,9 @@ async function pickMention(i){
   if(!it) return;
   const ta = document.getElementById('chat-input');
   const pos = ta.selectionStart || 0;
-  // 移除已输入的 @/#filter 片段
+  // 移除已输入的 #/filter 片段
   ta.value = ta.value.slice(0, _mention.start) + ta.value.slice(pos);
-  if(_mention.type === '@'){
-    // 会话文件（2026-08-31 交互优化）：文档 → 读全文注入 Cursor 式引用 chip；图片 → 插入【附图】标记
-    if(it.conv_file && it.conv_file.is_image){
-      const tag = '【附图：' + it.name + '】';
-      ta.value = ta.value.slice(0, _mention.start) + tag + ta.value.slice(_mention.start);
-      const p = _mention.start + tag.length;
-      ta.focus(); ta.setSelectionRange(p, p);
-    } else {
-      const _did = it.key.startsWith('doc:') ? it.doc_id : (it.conv_file && it.conv_file.doc_id);
-      const _loadClip = async () => { try{ const _r = await api('/api/documents/'+_did+'/source'); return String((_r&&_r.content)||'').trim().slice(0,4000); }catch(_e){ return ''; } };
-      const _fallbackTag = () => {
-        const tag = '#' + it.name.replace(/\.\w+$/,'') + ' ';
-        ta.value = ta.value.slice(0, _mention.start) + tag + ta.value.slice(_mention.start);
-        const p = _mention.start + tag.length;
-        ta.focus(); ta.setSelectionRange(p, p);
-        toast('未读到文档文本，已改为 # 标签引用');
-      };
-      if(_did){
-        const clip = await _loadClip();
-        if(clip){ chatRefs.push({label:'📄 '+it.name, text:clip}); renderRefBar(); toast('📎 已引用：'+it.name); }
-        else _fallbackTag();
-      } else {
-        _fallbackTag();
-      }
-    }
-  } else if(_mention.type === '/'){
+  if(_mention.type === '/'){
     // 技能：不进文本，联动 quick-skill + chip（下拉懒加载时先补 option）
     const sel = document.getElementById('quick-skill');
     if(sel){
@@ -209,18 +153,47 @@ async function sendChat() {
   const msg = input.value.trim();
   if(!msg) return;
   // 2026-09-04 v3：草稿态首次提交时创建会话（未提交前左侧列表不出现空会话）
+  // 2026-09-24：若由「项目 → ＋ 新建任务」发起，带走该项目归属（window._pendingProjectId），
+  //   创建成功后立刻刷新项目组（任务数 +1），并清除暂存避免下一次误归属。
   if(!currentConvId){
     try{
-      const r = await api('/api/conversations', {method:'POST', body:JSON.stringify({title:draftTitle(msg)})});
+      const _body = {title:draftTitle(msg)};
+      const _pid = window._pendingProjectId || '';
+      if(_pid) _body.project_id = _pid;
+      const r = await api('/api/conversations', {method:'POST', body:JSON.stringify(_body)});
       currentConvId = r.id;
       _isDraft = false;
       loadConversations();
+      if(_pid){
+        window._pendingProjectId = '';
+        if(typeof renderGnavProjects === 'function') renderGnavProjects();
+      }
       const st = document.getElementById('chat-status');
       if(st) st.textContent = '';
       try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
     }catch(e){ toast('创建会话失败：'+(e && (e.message||e)) ); return; }
   }
+  // 2026-09-25：待澄清状态下，主输入框内容即"澄清补充"——走 clarify-answer（会清空挂起），
+  // 不再当成普通新消息。此前两条路都不通：挂起永不清除（AI 反复追问）、用户也看不到"在哪作答"。
+  if(window._pendingClarify && currentConvId){
+    try{
+      const r = await api(`/api/conversations/${currentConvId}/clarify-answer`,
+                          {method:'POST', body: JSON.stringify({free_text: msg})});
+      if(r && r.resume_text){
+        input.value = '';
+        try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
+        toast('已作为澄清补充提交，正在继续…');
+        setPendingClarify(null);
+        sendResume(r.resume_text);
+        return;
+      }
+      toast((r && r.error) || '澄清提交失败');
+      return;
+    }catch(e){ toast('澄清提交失败：' + (e.message || '')); return; }
+  }
   // P0-1 澄清改选重发：中止上一轮未读完的流（防旧 token 追加到新消息容器）
+  // 2026-09-25：中止前先把上一轮**已生成内容固化落库**——否则"提交新消息"= 上一轮输出白丢
+  if(_streaming) await commitPartialStream(document.getElementById('stream-ai'));
   if(_streamAbort) _streamAbort.abort();
   const myAbort = new AbortController();
   _streamAbort = myAbort;
@@ -233,8 +206,8 @@ async function sendChat() {
   input.value = '';
   closeMentionPop();
   pendingAttachments = []; renderAttachBar();  // 发送后清空附件条
-  // V3：@/// 选择的智能体/技能按消息生效（Trae 式），发送后复位；手动下拉选择保持
-  if(_agentMentioned){ _agentMentioned = false; const qa = document.getElementById('quick-agent'); if(qa) qa.value=''; }
+  // V3：/ 选择的技能按消息生效（Trae 式），发送后复位；手动下拉选择保持
+  // 2026-09-28：@ 智能体 mention 已移除，_agentMentioned 复位逻辑随之删除
   if(_skillMentioned){ _skillMentioned = false; const qs = document.getElementById('quick-skill'); if(qs) qs.value=''; }
   renderChips();
   const area = document.getElementById('chat-area');
@@ -323,6 +296,28 @@ function stopStream(){
 function finalizeStopped(aiBox){
   if(!aiBox) aiBox = document.getElementById('stream-ai');
   if(!aiBox) return;
+  // 2026-09-25：先**落库固化**再渲染（原来只写 DOM，刷新即丢）。已固化过则复用其 id，避免重复写。
+  return commitPartialStream(aiBox).then(()=>_finalizeStoppedRender(aiBox));
+}
+// 固化「已生成但未完成」的内容 → POST /messages/partial，返回 message_id 记在元素上（幂等）
+async function commitPartialStream(box){
+  try{
+    const el = box || document.getElementById('stream-ai');
+    if(!el || !currentConvId) return null;
+    if(el.dataset.committedId) return el.dataset.committedId;   // 已固化过 → 幂等复用
+    const bodyEl = el.querySelector('.body');
+    const content = bodyEl ? (bodyEl.textContent || '').trim() : '';
+    // 极短内容（只有 typing 占位/一两个字）没有固化价值，避免制造噪声消息
+    if(content.length < 4) return null;
+    const r = await api(`/api/conversations/${currentConvId}/messages/partial`,
+                        {method:'POST', body: JSON.stringify({content, stopped:true})});
+    if(r && r.id){ el.dataset.committedId = String(r.id); return r.id; }
+  }catch(e){ /* 固化失败不阻断 UI 收口：DOM 里仍有已生成内容 */ }
+  return null;
+}
+function _finalizeStoppedRender(aiBox){
+  if(!aiBox) aiBox = document.getElementById('stream-ai');
+  if(!aiBox) return;
   const bodyEl = aiBox.querySelector('.body');
   let content = '';
   if(bodyEl){
@@ -333,7 +328,7 @@ function finalizeStopped(aiBox){
   // 执行过程块统一收起，随消息保留
   const pb = document.getElementById('proc-box');
   if(pb) pb.querySelectorAll('.proc-block').forEach(b=>b.classList.add('collapsed'));
-  const procHtml = pb ? pb.innerHTML : '';
+  const procHtml = _procBoxBlocksHtml(pb);   // 2026-09-26：只取环节块，剔除 live 收口条（防「执行中」残影）
   // V2.6：停止也走统一收口（汇总条 + 默认收起时间线）
   let histProcHtml = procHtml;
   try{
@@ -342,17 +337,22 @@ function finalizeStopped(aiBox){
     const _failN = _procS.timeline.filter(x=>x.status==='failed').length;
     const _sumTxt = `⏹ 已停止 · ${_procS.timeline.length} 环节 · 耗时 ${_procElapsedText()}${_failN?` · ${_failN} 失败`:''}`;
     histProcHtml = procHtml
-      ? `<div class="hist-proc"><div class="proc-summary collapsed" onclick="histProcToggle(this)">${_sumTxt}<span class="chev">▾</span></div><div class="proc-timeline">${procHtml}</div></div>`
+      ? `<div class="hist-proc"><div class="proc-summary collapsed" onclick="histProcToggle(this)">${_sumTxt}${_procDetailBtn()}<span class="chev">▾</span></div><div class="proc-timeline">${procHtml}</div></div>`
       : '';
   }catch(e){}
   try{
+    // 2026-09-25：用**已固化的真实 message id**渲染（原来恒为 0 → 刷新后与库不一致，
+    //   且「执行详情」按钮拿不到对应消息）。已附带「⏹ 已停止」后缀，就不再重复补本地提示。
+    const _mid = Number(aiBox.dataset.committedId) || 0;
     aiBox.outerHTML = renderMessage({role:'assistant', content, msg_type:'text',
-                                     card_data:'{}', id:0, process_html: histProcHtml});
-    // P1-1：outerHTML 重建后旧 body 中的标记被丢弃 → 在重建后的消息体尾部补插停止说明
-    const allMsgs = document.querySelectorAll('#chat-area .msg.ai');
-    const newBox = allMsgs.length ? allMsgs[allMsgs.length - 1] : null;
-    const nbody = newBox ? newBox.querySelector('.body') : null;
-    if(nbody) nbody.insertAdjacentHTML('beforeend', `<div class="stop-note">⏹ 已停止生成（以上为已生成内容）</div>`);
+                                     card_data:'{}', id:_mid, process_html: histProcHtml});
+    if(!_mid){
+      // 未固化（内容过短或落库失败）时才补本地标记，避免刷新前后不一致
+      const allMsgs = document.querySelectorAll('#chat-area .msg.ai');
+      const newBox = allMsgs.length ? allMsgs[allMsgs.length - 1] : null;
+      const nbody = newBox ? newBox.querySelector('.body') : null;
+      if(nbody) nbody.insertAdjacentHTML('beforeend', `<div class="stop-note">⏹ 已停止生成（以上为已生成内容）</div>`);
+    }
   }catch(e){}
   const _cs = document.getElementById('chat-status'); if(_cs) _cs.textContent = '已停止生成';
   const area = document.getElementById('chat-area'); if(area) area.scrollTop = area.scrollHeight;

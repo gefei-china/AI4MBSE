@@ -3,6 +3,7 @@
 
 由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
+import queue as _queue  # 编排子任务事件的**实时**转发通道（见 _stream_orchestrated_flow 的 _evq）
 
 
 class StreamMixin:
@@ -21,6 +22,8 @@ class StreamMixin:
         stage_hint: P0-4（2026-09-24）——多阶段意图序列（`IntentRouter.detect_multi`）。非空时作为
         **高优先阶段序约束**注入 planner prompt，使 plan 顺序贴合用户表述；此前该信号仅发 SSE 供展示
         （识别出 ['requirement_analysis','design'] 却不驱动任何决策）。
+        2026-09-25：元素形式为 `"{意图}（{该阶段原句}）"` —— 带上原句后 planner 才知道每阶段
+        具体做什么（只给意图名会丢失对象/范围）。
         """
         from llm import llm_client
         from task_queue import TaskQueue
@@ -256,12 +259,15 @@ class StreamMixin:
                                 sub_has_token = True
                                 sub_res += ev.get("delta") or ""
                                 evs.append(ev)
+                                _evq.put(ev)          # 实时转发（就地输出）
                             elif _et == "reasoning":
                                 ev = dict(ev); ev["key"] = tkey   # V2.6：子任务思考归属标记（前端归组展示）
                                 evs.append(ev)
+                                _evq.put(ev)
                             elif _et == "tool":
                                 e2 = dict(ev); e2["name"] = f"{tkey}:{e2.get('name','')}"
                                 evs.append(e2)
+                                _evq.put(e2)
                             elif _et == "done":
                                 ddata = ev.get("data") or {}
                                 if not sub_res:
@@ -418,66 +424,140 @@ class StreamMixin:
                            "intent": intent, "hil_level": hil_level}
                 _exec_pool = _TPE(max_workers=min(len(ready), _max_workers))
                 _task_pool = _TPE(max_workers=min(len(ready), _max_workers))
+                # 2026-09-26（用户要求）：子任务内容**就地实时输出**，不再"最后统一输出"。
+                #  旧实现：worker 把 token/reasoning/tool 攒进 `evs`，主循环在 future **完成后**才
+                #  `for ev in evs: yield ev` —— 子任务执行期间界面一片空白，完成瞬间一次性涌出，
+                #  用户看到的就是"所有子任务的总结堆在最后"。现在 worker 边产边入队，主循环边收边吐，
+                #  事件自身的 `key`/`name` 前缀（`tkey:`）保证前端把它们归到**对应子任务的卡片**下。
+                _evq = _queue.Queue()
+
+                def _drain():
+                    """取出队列里**已到达**的子任务事件；把**连续的 token 合并成一条**再吐。
+
+                    2026-09-26（用户同意"按建议优化"）：实时转发让事件量随 token 数线性上涨
+                    （实测一段两阶段编排有 89 条 token 事件）。前端已有 rAF 合帧，但**传输量**还在。
+                    这里在服务端先合一次帧：同一 `(key, round)` 的连续 token 合并 `delta`，
+                    协议与前端**都不用改**（前端本来就是"累加 delta 到正文"），延迟上限 = 主循环的
+                    50ms 空转窗口（见下方 sleep），肉眼不可辨。
+                    ⚠️ 只合并**签名相同**的连续 token：带 key/round 的事件混在一起时若跨签名合并，
+                    会把某个子任务的内容算到另一个头上。
+                    """
+                    _now = []
+                    try:
+                        while True:
+                            _now.append(_evq.get_nowait())
+                    except _queue.Empty:
+                        pass
+                    _buf = None
+                    for _e in _now:
+                        if _e.get("type") == "token":
+                            _sig = (_e.get("key"), _e.get("round"))
+                            if _buf is None:
+                                _buf = dict(_e); _buf["_sig"] = _sig
+                            elif _buf["_sig"] == _sig:
+                                _buf["delta"] = (_buf.get("delta") or "") + (_e.get("delta") or "")
+                            else:
+                                _buf.pop("_sig", None); yield _buf
+                                _buf = dict(_e); _buf["_sig"] = _sig
+                        else:
+                            if _buf is not None:
+                                _buf.pop("_sig", None); yield _buf; _buf = None
+                            yield _e
+                    if _buf is not None:
+                        _buf.pop("_sig", None); yield _buf
+
                 try:
                     _futs = {_exec_pool.submit(_worker, tk, _task_pool): tk for tk in ready}
-                    for _fut in _ac(_futs):
-                        tk = _futs[_fut]
-                        tkey, ttitle, tk_ok, sub_res, evs, _t_err, _t_lat, _tok, _summary = _fut.result()
-                        # 子任务内部事件转发（完成时统一转发，事件量可控：子任务通常 3~10 轮）
-                        for ev in evs:
-                            yield ev
-                        if tk_ok:
-                            TaskQueue.complete(conn, tk["id"], sub_res or "（子任务已产出流式内容）",
-                                               {"summary": sub_res[:300], "score": len(sub_res)},
-                                               latency_ms=_t_lat)
-                            # Task 9：上游快照携带协议摘要（partial 以 summary.status 标记；Task 10 汇总消费）
-                            done_items.append({"task_key": tkey, "title": ttitle,
-                                               "agent_id": tk.get("agent_id"), "result": sub_res,
-                                               "status": "done",
-                                               "summary": _summary,
-                                               "proto_status": (_summary or {}).get("status")})
-                        else:
-                            TaskQueue.fail(conn, tk["id"], _t_err or "子任务未产生输出")
-                        # Task 7：子任务 token 记账写回 agent_tasks.token_count + run 累计
-                        if _tok:
+                    _pending = set(_futs)
+                    while _pending:
+                        # ① 先把已入队的子任务事件实时吐出去（合帧后吐；这是"就地输出"的关键）
+                        for _e in _drain():
+                            yield _e
+                        # ② 再收已完成的 future；本轮没有完成项就短睡让出 CPU
+                        _done_now = [f for f in _pending if f.done()]
+                        if not _done_now:
+                            _t.sleep(0.05)
+                            continue
+                        for _fut in _done_now:
+                            _pending.discard(_fut)
+                            tk = _futs[_fut]
+                            tkey, ttitle, tk_ok, sub_res, evs, _t_err, _t_lat, _tok, _summary = _fut.result()
+                            # ⚠️ 这里**不再** `for ev in evs: yield ev`（那些事件已由 ① 实时吐出；
+                            #    再吐一遍会重复渲染）。`evs` 仍随返回值带出，仅供调试/兼容。
+                            if tk_ok:
+                                TaskQueue.complete(conn, tk["id"], sub_res or "（子任务已产出流式内容）",
+                                                   {"summary": sub_res[:300], "score": len(sub_res)},
+                                                   latency_ms=_t_lat)
+                                # Task 9：上游快照携带协议摘要（partial 以 summary.status 标记；Task 10 汇总消费）
+                                done_items.append({"task_key": tkey, "title": ttitle,
+                                                   "agent_id": tk.get("agent_id"), "result": sub_res,
+                                                   "status": "done",
+                                                   "summary": _summary,
+                                                   "proto_status": (_summary or {}).get("status")})
+                            else:
+                                TaskQueue.fail(conn, tk["id"], _t_err or "子任务未产生输出")
+                            # Task 7：子任务 token 记账写回 agent_tasks.token_count + run 累计
+                            if _tok:
+                                try:
+                                    conn.execute("UPDATE agent_tasks SET token_count=? WHERE id=?",
+                                                 (_tok, tk["id"]))
+                                    conn.commit()
+                                except Exception:
+                                    pass
+                                run_tokens += _tok
+                            executed_count += 1
+                            TaskQueue.release_deps(conn, run_id, tkey)
+                            # Task 14：子任务元数据（重试次数 + 协议摘要 status）供前端徽章展示
+                            _rc = int(tk.get("retry_count") or 0)
+                            _sm_status = (_summary or {}).get("status") if isinstance(_summary, dict) else None
+                            # 2026-09-26：**给用户看的一句话摘要**（与上面喂给下游的 `summary` 分开）。
+                            #  原先前端直接把 `summary.summary`（= 子 Agent 输出原文前 N 字）显示在卡片上，
+                            #  而那段开头是"一、对上游意图识别结果的承接"这类**内部交接语**，还被硬截 60 字。
+                            #  这里只换"展示那份"，`done_items` 里的协议摘要原样不动（下游承接靠它）。
                             try:
-                                conn.execute("UPDATE agent_tasks SET token_count=? WHERE id=?",
-                                             (_tok, tk["id"]))
-                                conn.commit()
+                                from services.subtask_protocol import ui_summary as _ui_sum
+                                _ui_summary = _ui_sum(sub_res)
                             except Exception:
-                                pass
-                            run_tokens += _tok
-                        executed_count += 1
-                        TaskQueue.release_deps(conn, run_id, tkey)
-                        # Task 14：子任务元数据（重试次数 + 协议摘要 status）供前端徽章展示
-                        _rc = int(tk.get("retry_count") or 0)
-                        _sm_status = (_summary or {}).get("status") if isinstance(_summary, dict) else None
-                        orch_tasks.append({"key": tkey, "title": ttitle,
-                                           "agent": tk.get("agent_id"),
-                                           "status": "done" if tk_ok else "failed",
-                                           "latency_ms": _t_lat,
-                                           "token_count": _tok,
-                                           "retry_count": _rc,
-                                           "summary": _summary if isinstance(_summary, dict) else None,
-                                           "summary_status": _sm_status})
-                        # P0-2：子任务轨迹实时事件（done/failed）+ 轨迹持久化
-                        subtasks.append({"key": tkey, "title": ttitle, "agent": tk.get("agent_id") or "",
-                                         "deps": _deps_map.get(tkey, []),
-                                         "status": "done" if tk_ok else "failed",
-                                         "latency_ms": _t_lat, "error": _t_err or None,
-                                         "token_count": _tok,
-                                         "retry_count": _rc,
-                                         "summary": _summary if isinstance(_summary, dict) else None,
-                                         "summary_status": _sm_status})
-                        yield {"type": "subtask", "key": tkey, "status": "done" if tk_ok else "failed",
-                               "title": ttitle, "agent": tk.get("agent_id") or "",
-                               "latency_ms": _t_lat, "error": _t_err or None,
-                               "token_count": _tok,
-                               "retry_count": _rc,
-                               "summary": _summary if isinstance(_summary, dict) else None,
-                               "summary_status": _sm_status}
-                        yield {"type": "agent", "status": "done", "name": tkey, "display_name": ttitle,
-                               "intent": intent, "hil_level": hil_level}
+                                _ui_summary = ""
+                            orch_tasks.append({"key": tkey, "title": ttitle,
+                                               "agent": tk.get("agent_id"),
+                                               "status": "done" if tk_ok else "failed",
+                                               "latency_ms": _t_lat,
+                                               "token_count": _tok,
+                                               "retry_count": _rc,
+                                               "summary": _summary if isinstance(_summary, dict) else None,
+                                               "ui_summary": _ui_summary,
+                                               "summary_status": _sm_status})
+                            # P0-2：子任务轨迹实时事件（done/failed）+ 轨迹持久化
+                            subtasks.append({"key": tkey, "title": ttitle, "agent": tk.get("agent_id") or "",
+                                             "deps": _deps_map.get(tkey, []),
+                                             "status": "done" if tk_ok else "failed",
+                                             # 落库这份也带用户向摘要：否则**刷新历史会话**时前端只能回退到
+                                             # 内部交接语（老数据显示"承接上游…"会让人以为没改）
+                                             "ui_summary": _ui_summary,
+                                             "latency_ms": _t_lat, "error": _t_err or None,
+                                             "token_count": _tok,
+                                             "retry_count": _rc,
+                                             "summary": _summary if isinstance(_summary, dict) else None,
+                                             "summary_status": _sm_status})
+                            yield {"type": "subtask", "key": tkey, "status": "done" if tk_ok else "failed",
+                                   "title": ttitle, "agent": tk.get("agent_id") or "",
+                                   "latency_ms": _t_lat, "error": _t_err or None,
+                                   "token_count": _tok,
+                                   "retry_count": _rc,
+                                   "summary": _summary if isinstance(_summary, dict) else None,
+                                   # ⚠️ 时间线卡片读的是**这个事件**（不是 orch_tasks）——2026-09-26 首版把
+                                   #    ui_summary 只加在 orch_tasks 上，真机验收时事件里根本没这个键（实测踩到）。
+                                   #    展示用"面向用户的一句"，协议 summary 同时保留给下游承接。
+                                   "ui_summary": _ui_summary,
+                                   "summary_status": _sm_status}
+                            yield {"type": "agent", "status": "done", "name": tkey, "display_name": ttitle,
+                                   "intent": intent, "hil_level": hil_level}
+                    # 收尾 drain：最后一个子任务可能在"检测到完成"之后仍有事件入队（极小竞态），
+                    # 不吐干净会丢尾部输出 —— 用户抱怨的"放在最后统一输出"不能变成"干脆不输出"。
+                    # （同样走 _drain() 合帧，避免收尾又冒出一串单 token 事件）
+                    for _e in _drain():
+                        yield _e
                 finally:
                     # Task 7：task_pool 不等待超时后台线程（wait=False）；exec_pool 线程均已返回
                     try:
@@ -861,6 +941,9 @@ class StreamMixin:
         意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
         """
         attachments = attachments or []
+        # 记忆作用域上下文（对齐 mem0）：本会话的 conversation_id + 当前用户，供记忆读写取作用域
+        self._mem_ctx = {"conversation_id": conversation_id, "user": user}
+        self._mem_project_id_cache = None   # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
         try:
             # V2.4 会话内执行过程持久化：累计思考/工具调用 → 写入 card_data.exec（前端历史消息还原）
             exec_reasoning = []
@@ -901,6 +984,14 @@ class StreamMixin:
                     "两者不一致，如非所愿请去掉团队/Agent 指定后重发")}
             # Task 11 多意图增强（可选项）：多阶段指令 → 附加 multi_intent 序列事件（供前端展示/编排衔接）
             _multi_intent = self.router.detect_multi(user_input)
+            # 2026-09-25：阶段序约束**带上每个阶段在说什么**（`{意图}（原句）`）。
+            # 修前只传意图名序列（如 "requirement_analysis → design"），planner 只能知道"要哪些阶段"，
+            # 不知道各阶段具体干什么（用户原句里的对象/范围全丢了）→ 生成的子任务描述容易泛化。
+            # tasks 为空时回落到 sequence（保持旧行为，不因新字段缺失而退化）。
+            _stage_hint = None
+            if _multi_intent:
+                _stage_hint = [f"{t['intent']}（{t['text']}）" for t in (_multi_intent.get("tasks") or [])] \
+                              or _multi_intent["sequence"]
             if _multi_intent:
                 yield {"type": "multi_intent", "sequence": _multi_intent["sequence"],
                        "raw_subtasks": _multi_intent["raw_subtasks"]}
@@ -925,6 +1016,21 @@ class StreamMixin:
                 except Exception:
                     report_type = None
             _intent_meta = self.router.get_last_meta()
+            # 2026-09-26 意图样本池**采集入口**：把这条真实用户输入记进候选池（弱标注=系统当时的判定）。
+            # 为什么落在这一行：意图/路由已定、且**尚未开始慢操作**（编排/生成），采集只占一次 INSERT；
+            #   也不必等整轮跑完 —— 中途失败或被用户中断的输入，同样是有价值的真实样本。
+            # 只记 suggested、绝不自动 confirmed：评测只吃人工确认（见 intent_sample_repo 注释）。
+            # ⚠️ 2026-09-26 补：**编排子任务不采集** —— worker 跑子任务时也走本入口（query 是内部构造的
+            #   `[任务上下文快照]…`），实测被采进池 8 条内部文本，污染了"真实用户说法"样本。
+            #   `_orch_subtask` 正是 worker 打的标记（见本文件 _worker 内 `sub._orch_subtask = True`）。
+            try:
+                if not getattr(self, "_orch_subtask", False):
+                    from repositories.intent_sample_repo import collect as _collect_sample
+                    _collect_sample(user_input, intent=_detected or intent,
+                                    route=_intent_meta.get("route", ""),
+                                    conf=float(_intent_meta.get("confidence") or 0))
+            except Exception:
+                pass
             if _multi_intent:
                 _intent_meta["multi_intent"] = _multi_intent["sequence"]
             yield {"type": "stage", "name": "意图识别", "status": "done", "intent": intent,
@@ -937,6 +1043,27 @@ class StreamMixin:
                        "route": _intent_meta["route"], "message": str(user_input),
                        "detected": _detected if forced_intent and _detected != intent else None,
                        "candidates": self._clarify_candidates(intent)}
+            # ── 阶段 1.4（2026-09-26）：**意图确定不了 → 停下来问**，不要自己硬选一个（用户要求）──
+            #  与上面那条 `clarify`（细条，"先按猜的跑、你可改选重发"）的本质区别：这里**不执行**。
+            #  复用内容级澄清的选择题卡（选项 + 其他/自定义 + 答完续跑），因为"不硬选"的完整机制
+            #  （落挂起 → /clarify-answer → 带【澄清补充】续跑）后端已有，不另造一套状态。
+            #  放在 `_clarify_detect` **之前**：意图都没定，谈"建模信息够不够"没有意义。
+            try:
+                _need_iq = self._should_confirm_intent(user_input, _intent_meta)
+            except Exception:
+                _need_iq = False
+            if _need_iq:
+                _iqs = self._intent_confirm_questions(user_input, intent)
+                _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
+                                             forced_intent, skill_name, team, _iqs)
+                yield {"type": "clarify_ask", "questions": _iqs, "intent": intent,
+                       "title": "❓ 我不确定你想做哪件事，请确认",
+                       "message": str(user_input)[:200]}
+                yield {"type": "done", "data": {
+                    "ok": True, "clarify_asked": True, "intent": intent,
+                    "content": "意图不确定，需要您确认后再执行（详见澄清卡片）", "msg_type": "clarify",
+                    "usage": {}, "questions": _iqs, "message_id": _mid or 0}}
+                return
             # ── 阶段 1.5：内容级澄清（信息不清晰 → 选择题确认，回答后续答；打断本次执行）──
             try:
                 _clarify_qs = self._clarify_detect(
@@ -967,9 +1094,11 @@ class StreamMixin:
                 yield from self._stream_orchestrated_flow(
                     user_input, conversation_id, branch, intent, agent_def, hil_level,
                     kb_tags, attachments, slots, user, effective_provider, team_forced=True,
-                    stage_hint=(_multi_intent or {}).get("sequence"))
+                    stage_hint=_stage_hint)
                 return
-            if not forced_intent and self._needs_orchestration(user_input, intent, has_attachments=bool(attachments)):
+            if not forced_intent and self._needs_orchestration(user_input, intent,
+                                                              has_attachments=bool(attachments),
+                                                              multi=_multi_intent):
                 # P0-1 复用：已发布 planner_auto 沉淀流程语义命中 → 直接执行（省重新规划）
                 reused = self._try_reuse_planner_flow(user_input, intent)
                 if reused and not dry_run:
@@ -988,7 +1117,7 @@ class StreamMixin:
                     yield from self._stream_orchestrated_flow(
                         user_input, conversation_id, branch, intent, agent_def, hil_level,
                         kb_tags, attachments, slots, user, effective_provider,
-                        stage_hint=(_multi_intent or {}).get("sequence"))
+                        stage_hint=_stage_hint)
                     return
                 except Exception as _orch_exc:
                     # P0-3 补（2026-09-19，端到端取证）：**编排中途失败不得静默回退**。
@@ -1040,13 +1169,18 @@ class StreamMixin:
                     retrieve_query += " " + " ".join(slot_ents)
                 if retrieval_att:
                     retrieve_query += " " + retrieval_att[:600]
+                # P0（2026-09-29）记忆召回：把「已沉淀的经验/决策」作为一路召回源并入检索结果。
+                # 项目/意图由 pipeline 侧算好传入（检索侧不重复解析，避免两处取值链漂移）。
+                effective_kb_scope = dict(effective_kb_scope or {})
+                effective_kb_scope.update(self._memory_recall_scope(intent, user))
                 retrieval = self.rag.retrieve(retrieve_query, branch, attachment_text=(retrieval_att + ('\n\n' + scope_att if scope_att else '')) or None,
                                               kb_scope=effective_kb_scope)
             else:
                 retrieval = {"source": "none", "route": "none", "route_reason": "kb_optional",
                              "confidence": 0, "entities": [], "relations": [], "vector_docs": [],
                              "chunk_hits": [], "attachment_hits": [], "attachment_used": False,
-                             "graph_count": 0, "vector_count": 0}
+                             "graph_count": 0, "vector_count": 0,
+                             "memory_hits": [], "memory_count": 0}
             if should_retrieve:
                 context_text = self._build_context(retrieval, retrieve_query)
                 if req_scope and req_scope.get('ok'):
@@ -1153,7 +1287,7 @@ class StreamMixin:
                 + f"{self._build_model_context(branch, conversation_id, user_input)}"
                 # P0 能力：项目级持久记忆注入（Project Constitution，规范/基线防漂移）
                 # P0-2（2026-09-19）：传本轮 user_input → 注入块带项目名 + 「仅当本次任务属于该项目领域时适用」声明
-                + self._build_project_memory(user_input=user_input)
+                + self._build_project_memory(user_input=user_input, conversation_id=conversation_id)
                 + (f"【任务拆解（P1 结构化）】\n目标：{slots.get('goal') or '-'}\n"
                    f"实体：{'、'.join(slots.get('entities') or []) or '-'}\n"
                    f"约束：{'；'.join(slots.get('constraints') or []) or '-'}\n"

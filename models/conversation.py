@@ -7,6 +7,16 @@ from pydantic import BaseModel
 class ConvIn(BaseModel):
     title: str
     intent: Optional[str] = ""
+    # 2026-09-24：任务归属项目（左侧「项目 → 新建任务」发起时显式带上）。
+    # ⚠️ 2026-09-28（多工程 P0-2）语义变更：**留空 = 无工程会话**（合法：知识检索/问答不读写工程），
+    # 后端**不再**回落 `settings.default_project_id`（全局单行、不分标签页，多工程并发会串归属）。
+    # 「当前工程」由前端按页面级状态显式带上。
+    project_id: Optional[str] = None
+
+
+class ConvProjectIn(BaseModel):
+    """会话归属变更（收敛入口）：无工程会话 → 归入项目；空串 = 解除归属。"""
+    project_id: Optional[str] = ""
 
 
 class ChatIn(BaseModel):

@@ -150,6 +150,35 @@ check("A19 路由层同理（目录 API 不带 branch）",
       "branch" not in re.sub(r"(?m)#.*$", "", _strip_module_docstring(read("routers/doc_folders.py"))),
       "目录 API 带入 branch → 前端要凭空多一个恒 'global' 的参数")
 
+dfr_src = read("repositories/doc_folder_repo.py")
+router_df_src = read("routers/doc_folders.py")
+check("A20 仓储新增 move_folder + 同级排序实现（目录移动/排序的唯一落点）",
+      "def move_folder(" in dfr_src and "def _place_in_siblings(" in dfr_src
+      and "def _sibling_ids(" in dfr_src,
+      "缺 move_folder → 前端只能绕过分层自己拼 SQL，或干脆没有该功能")
+check("A21 ★物化路径只有一个维护入口：_rewrite_path_prefix 被 rename 与 move_folder 共用",
+      "def _rewrite_path_prefix(" in dfr_src and "def _join_path(" in dfr_src
+      and dfr_src.count("self._rewrite_path_prefix(") == 2,
+      "两处各写一遍前缀重写 → 必然漂移，而「移动没刷 path」是静默故障（前缀查询与面包屑指到已不存在的路径）")
+check("A22 移动/排序走 router → repositories（router 内不写 SQL）",
+      '"/api/doc-folders/{folder_id}/move"' in router_df_src
+      and "repo.move_folder(" in router_df_src
+      and "execute(" not in re.sub(r"(?m)#.*$", "", _strip_module_docstring(router_df_src)),
+      "router 里直接写 SQL → 违反本仓「新增后端功能走 services/ + repositories/」的铁律")
+# ⚠️ 必须同时剥掉 /* */ 与 // 两种注释：本模块文件头用块注释解释了"此前用原生 prompt()"，
+#    只剥 // 会把注释里的 prompt( 当成真实调用，断言恒 FAIL（同 A18 的 docstring 坑）。
+_dft_src = re.sub(r"(?m)//.*$", "", re.sub(r"/\*.*?\*/", "", read("static/js/mods/40-docfolders.js"), flags=re.S))
+check("A23 前端行内改名 / 就地新建（替代原生 prompt）",
+      "data-dft-inp" in _dft_src and "docFolderRenameInline" in _dft_src
+      and "docFolderCreateInline" in _dft_src and "prompt(" not in _dft_src,
+      "仍用原生 prompt → 同步阻塞、样式脱节、自动化环境卡死（本仓 confirmDialog 注释已列同一约束）")
+check("A24 ★编辑期间禁止重建目录树（否则输入框与已敲进去的字符被静默冲掉）",
+      "if(_dftEdit) return;" in _dft_src,
+      "缺这道闸 → loadDocs（勾选一个复选框就会触发）会全量 innerHTML 重建，把行内编辑冲掉")
+check("A25 「未归类」双口径已收敛（智能视图不再保留 uncategorized 派生谓词）",
+      "'uncategorized'" not in _dft_src and 'data-fid="0"' in _dft_src,
+      "两种等价口径各写一遍 → 计数与筛选会互相打架（表现为「左侧计数 3、列表 0 条」）")
+
 # ══ B 行为断言（夹具驱动）═══════════════════════════════════════════════════
 print("\n── B 行为断言（夹具驱动：临时库，不碰真实库）──")
 from repositories.doc_folder_repo import DocFolderRepo, normalize_folder   # noqa: E402
@@ -377,6 +406,84 @@ check("B9 删除目录后文档回到「未归类」且文档行数不变（绝�
       dr.get("ok") is True and after_docs == before_docs == 1 and fid_after == 0,
       f"删除={dr} 文档数 {before_docs}->{after_docs} folder_id={fid_after}")
 
+# ── 目录移动 / 同级排序（2026-09-27 左栏交互优化）──
+fxm = make_fixture(docs=[(1, "移动用例.md", "global", "completed")],
+                   chunks=[(1, 1, "移动不改向量", "移动用例.md", "stored", "global", "thermal")])
+fxm.execute("UPDATE document_chunks SET embedding='[0.7,0.8]', embed_version='mv' WHERE id=1")
+fxm.commit()
+RM = DocFolderRepo(fxm)
+mA = RM.create("MA", 0)["id"]
+mB = RM.create("MB", 0)["id"]
+mC = RM.create("MC", mA)["id"]
+mD = RM.create("MD", mC)["id"]
+RM.move_document(1, mD)
+# 深链移动：把 MA 整棵挂到 MB 之下（自身 path 变，两个深层后代的 path 也必须跟着变）
+mv = RM.move_folder(mA, mB)
+mp = {r["id"]: r["path"] for r in RM.list_all()}
+check("B18 ★move_folder 级联刷新自身与**全部后代**的 path（漏刷是静默故障）",
+      mv.get("ok") is True and mp[mA] == "/MB/MA/" and mp[mC] == "/MB/MA/MC/"
+      and mp[mD] == "/MB/MA/MC/MD/" and mv.get("rewritten") == 3,
+      f"mv={mv} paths={{mA:{mp[mA]}, mC:{mp[mC]}, mD:{mp[mD]}}}")
+check("B18b 移动目录不动 documents.folder_id（动的只有树，文档归属跟随父目录）",
+      fxm.execute("SELECT folder_id FROM documents WHERE id=1").fetchone()[0] == mD,
+      fxm.execute("SELECT folder_id FROM documents WHERE id=1").fetchone()[0])
+bad_self = RM.move_folder(mA, mA)
+bad_desc = RM.move_folder(mA, mD)
+bad_none = RM.move_folder(mA, 999999)
+check("B19 ★移入自身 / 自身后代 / 不存在的父 → 全部结构化错误（不抛异常、不 500）",
+      bad_self.get("ok") is False and bad_desc.get("ok") is False and bad_none.get("ok") is False
+      and "子目录" in (bad_desc.get("error") or ""),
+      f"self={bad_self} desc={bad_desc} none={bad_none}")
+# 同级排序：整级重写 0..n-1（只改两行会留下并列 0 → 顺序又退回按 name，"上移"看起来没生效）
+# ⚠️ 上文 B18 把 mA 整棵挂到了 mB 之下 → 此刻根级只剩 mB，"同级排序"没有第二个同级可比。
+#    必须先把它移回根级构成 [mA, mB]，再交换位置（第一版就栽在这：order 只有 1 项）。
+RM.move_folder(mA, 0, before_id=mB)
+root0 = [r["id"] for r in RM.list_all() if r["parent_id"] == 0]
+RM.move_folder(mB, 0, before_id=mA)
+root_rows = [r for r in RM.list_all() if r["parent_id"] == 0]
+check("B20 ★同级排序确定性：顺序真的翻转且整级 sort 被重写为 0..n-1（无并列值）",
+      root0 == [mA, mB] and [r["id"] for r in root_rows] == [mB, mA]
+      and [r["sort"] for r in root_rows] == [0, 1],
+      f"before={root0} order={[r['id'] for r in root_rows]} sorts={[r['sort'] for r in root_rows]}")
+same = RM.move_folder(mB, 0)
+check("B20b 同父且无位置要求 → unchanged（不做无谓写入，也不谎报移动）",
+      same.get("ok") is True and same.get("unchanged") is True, f"same={same}")
+mE = RM.create("MB", mC)["id"]        # 与根级 MB 同名
+dup = RM.move_folder(mE, 0)
+check("B20c ★目标同级同名 → 结构化错误（靠预检给友好文案，不是让数据库抛异常）",
+      dup.get("ok") is False and "同名" in (dup.get("error") or ""), f"dup={dup}")
+writes2 = []
+
+
+class _TraceConn2:
+    """包装 execute：记录对 document_chunks 的写语句（移动/排序不得产生任何一条）。"""
+    def __init__(self, c):
+        self._c = c
+
+    def execute(self, sql, *a):
+        s = " ".join(str(sql).split())
+        if re.match(r"^(UPDATE|DELETE|INSERT)\s+document_chunks", s, re.I):
+            writes2.append(s[:90])
+        return self._c.execute(sql, *a)
+
+    def __getattr__(self, k):
+        return getattr(self._c, k)
+
+
+RM2 = DocFolderRepo(_TraceConn2(fxm))
+RM2.move_folder(mB, mA)                 # 换父
+RM2.move_folder(mB, 0, after_id=mA)     # 同级排序
+emb2 = fxm.execute("SELECT embedding FROM document_chunks WHERE id=1").fetchone()[0]
+check("B21 ★移动/排序全程 0 条 document_chunks 写语句、向量逐字节不变（V6/V8 同款判据）",
+      not writes2 and emb2 == "[0.7,0.8]", f"writes={writes2} emb={emb2}")
+sort_before = max([r["sort"] for r in RM2.list_all() if r["parent_id"] == 0] or [-1])
+mF = RM2.create("MZ", 0)["id"]
+mF_row = [r for r in RM2.list_all() if r["id"] == mF][0]
+check("B22 ★新建目录 sort 追加到同级末尾（否则新目录按首字母插到中间，与用户预期相反）",
+      mF_row["sort"] == sort_before + 1
+      and mF_row["sort"] == max(r["sort"] for r in RM2.list_all() if r["parent_id"] == 0),
+      f"new_sort={mF_row['sort']} before_max={sort_before}")
+
 # ── V7：删除文档同步清理源副本 ──
 import tempfile                                                     # noqa: E402
 import knowledge_pipeline.ingest as _ing                            # noqa: E402
@@ -553,6 +660,15 @@ MUT = [
                 + "",  # 变异：不过滤已下线""",
      ["A11 白名单自愈（_resolve_scope_docs）已排除已下线文档",
       "B14 G2 白名单里全是已下线文档 → 自愈判为失效（effective 空 + 计入 missing）"]),
+    ("move_folder 去掉 path 级联刷新（还原为「只改 parent_id」）", "repositories/doc_folder_repo.py",
+     "            refreshed = self._rewrite_path_prefix(old_path, new_path)",
+     "            refreshed = 0   # 变异：移动不刷 path",
+     ["A21 ★物化路径只有一个维护入口：_rewrite_path_prefix 被 rename 与 move_folder 共用",
+      "B18 ★move_folder 级联刷新自身与**全部后代**的 path（漏刷是静默故障）"]),
+    ("create 的 sort 退回恒 0", "repositories/doc_folder_repo.py",
+     "self._join_path(base, name), next_sort, domain or \"\", created_by or \"\"))",
+     "self._join_path(base, name), 0, domain or \"\", created_by or \"\"))",
+     ["B22 ★新建目录 sort 追加到同级末尾（否则新目录按首字母插到中间，与用户预期相反）"]),
     ("还原 batch_transition 的 chunk_sync 判据为「只看下线」", "repositories/meta_repo.py",
      '            chunk_sync=(to_status == "deprecated" or cur["lifecycle_status"] == "deprecated")',
      '            chunk_sync=(to_status == "deprecated")',

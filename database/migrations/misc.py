@@ -254,3 +254,80 @@ def _migrate_data_sources(conn):
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_ds_type ON data_sources(type)")
     conn.commit()
+
+
+def _migrate_intent_samples(conn):
+    """意图识别**样本池**表（2026-09-26）：把"意图评测集"从硬编码脚本搬进库，可在设置页维护。
+
+    ## 为什么要它
+    意图路由的阈值标定全靠 `tests/manual_verify/eval_intent_routing.py` 里**硬编码 29 例**：
+    F1 分辨率只有 1/29，且线上真实说法（如"帮我看看这个系统大概是怎么设计的"）根本进不来。
+    标定结论（th=0.64）的可用窗口就是被其中两句夹出来的 —— 样本一换即漂。
+    样本池 + 人工确认把评测集变成**可增长、可审计**的事实源。
+
+    ## 为什么必须有 status（本仓既有哲学）
+    `tools/eval/build_evalset.py` 写明：弱标注（系统推导出的标签）**必须人工复核后才能用于关键调参**。
+    意图样本同理 —— 拿系统自己的判定当标签去评测自己，是自我循环（永远 100%）。
+    故：自动采集只写 'suggested'（含系统当时的判定 hit_intent/hit_route），
+    **评测只消费 status='confirmed'**，两者物理隔离。
+
+    ## 字段
+    - text        ：用户原话（UNIQUE：同一句话只留一行，seen_count 记频次 → 高频优先标注）
+    - intent      ：人工确认的标签（''=未标注；status='suggested' 时存放"建议标签"= 系统判定，仅供参考）
+    - status      ：new（仅采集未建议）| suggested（系统已给建议，待确认）| confirmed（人工确认，进评测）| rejected（确认不是有效样本，不进评测）
+    - source      ：seed（内置 29 例导入）| prod（线上实时采集）| prod_import（历史回填）| manual（页面手工新增）
+    - hit_intent/hit_route/hit_conf：采集当时的系统判定（用于"标注后对比系统行为"、回归复盘）
+    幂等：建表 IF NOT EXISTS + 索引；不塞种子数据（种子走 API 导入，便于在页面里看到并改）。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS intent_samples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text TEXT NOT NULL UNIQUE,
+        intent TEXT DEFAULT '',
+        status TEXT DEFAULT 'new',
+        source TEXT DEFAULT 'manual',
+        hit_intent TEXT DEFAULT '',
+        hit_route TEXT DEFAULT '',
+        hit_conf REAL DEFAULT 0,
+        seen_count INTEGER DEFAULT 1,
+        note TEXT DEFAULT '',
+        created_by TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_intent_samples_status ON intent_samples(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_intent_samples_intent ON intent_samples(intent)")
+    conn.commit()
+    print("[init_db] 迁移: 意图样本池表 intent_samples 已建立（向后兼容）")
+
+
+def _migrate_dashboard_snapshots(conn):
+    """知识看板指标快照表（P2，2026-09-26）。幂等建表。
+
+    ## 为什么需要它
+    看板上的"值 + 目标 + 状态"是**当下**快照，无法回答"在变好还是变坏"。
+    sparkline 趋势必须落在真实历史点上，因此按天存一份指标快照。
+
+    ## 去重语义
+    `UNIQUE(metric_key, snapshot_date, branch)` + `ON CONFLICT DO UPDATE`：
+    同一天多次刷新只覆盖当天那一行，不会把 sparkline 画出锯齿。
+
+    ⚠️ 只写"有值"的指标（`value IS NOT NULL`）—— 未落地指标不落快照，
+    避免把 None 当 0 画出假趋势（写入逻辑见 `metrics_core.save_snapshot`）。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS dashboard_metric_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        metric_key TEXT NOT NULL,
+        snapshot_date TEXT NOT NULL,
+        branch TEXT DEFAULT '',
+        value REAL,
+        unit TEXT DEFAULT '',
+        status TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(metric_key, snapshot_date, branch)
+    )""")
+    # 索引创建须在建表之后（老库补列/补表的既有教训）
+    c.execute("CREATE INDEX IF NOT EXISTS idx_dash_snap_key_date "
+              "ON dashboard_metric_snapshots(metric_key, snapshot_date)")
+    conn.commit()

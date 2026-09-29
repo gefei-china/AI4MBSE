@@ -154,24 +154,10 @@ def ops_metrics(conn=Depends(db_session)):
     repo = MetaRepo(conn)
 
     # ── 真实组件探活 ──
-    topology = [{"name": "SQLite 主库", "status": "online"}]
-    try:
-        import pyoxigraph  # noqa: F401
-        topology.append({"name": "pyoxigraph 内嵌图库", "status": "online"})
-    except Exception:
-        topology.append({"name": "pyoxigraph 内嵌图库", "status": "offline"})
-    try:
-        import socket
-        with socket.create_connection(("127.0.0.1", 3030), timeout=1):
-            topology.append({"name": "Fuseki 外挂图库", "status": "online"})
-    except Exception:
-        topology.append({"name": "Fuseki 外挂图库（可选，未启用）", "status": "offline"})
-    try:
-        provs = conn.execute("SELECT name, status FROM llm_providers").fetchall()
-        for r in provs:
-            topology.append({"name": f"LLM · {r['name']}", "status": r["status"] or "unknown"})
-    except Exception:
-        pass
+    # 2026-09-26 口径统一：探活逻辑迁到 metrics_core.service_health（知识看板「性能与运维」簇
+    # 也要用同一结果），本端点只做委派，避免两份探活实现漂移。返回字段保持不变。
+    from metrics_core import service_health
+    topology = service_health(conn)["components"]
 
     # ── 真实备份记录：备份为手动导出式（GET /api/meta/backup），无定时目录可扫 ──
     backup = {"last_backup": None,
@@ -355,20 +341,29 @@ def get_document_raw(doc_id: int, download: str = "", conn=Depends(db_session),
 def get_document_preview(doc_id: int, conn=Depends(db_session)):
     """资料库列表 hover 摘要卡片：轻量返回（元数据 + 正文摘要 + 统计）。
 
-    与 /api/documents/{doc_id}（详情，含最多 200 个 chunk）区分：本端点只取前 2 块做摘要，
-    用于列表 hover 即时预览，避免每次悬停都拉全量分块。
+    摘要来源（2026-09-29 痛点2）：优先 LLM 真摘要（documents.summary，入库/重解析时生成，
+    summary_source='llm'）；列为空（旧文档/生成失败/mock）→ 回退「前 2 块去噪截断」旧行为
+    （summary_source='truncation'）。
+    与 /api/documents/{doc_id}（详情，含最多 200 个 chunk）区分：本端点轻量，用于列表 hover 即时预览，
+    避免每次悬停都拉全量分块。
     """
     row = conn.execute(
         "SELECT d.id, d.filename, d.file_type, d.file_size, d.parse_status, d.chunk_count, "
         "d.entity_count, d.quality_score, d.uploaded_by, d.branch, d.knowledge_category, "
         "d.created_at, d.pipeline_detail, d.error_msg, d.domain, d.domain_confidence, "
+        "d.summary, "
         "m.title, m.author, m.version, m.tags "
         "FROM documents d LEFT JOIN doc_metadata m ON m.document_id=d.id WHERE d.id=?",
         (doc_id,)).fetchone()
     if not row:
         return JSONResponse({"error": "document not found"}, 404)
     out = dict(row)
-    # ① 正文摘要：取前 2 块，去 Markdown 噪声后截断
+    # ① 正文摘要（2026-09-29 痛点2）：优先 LLM 真摘要（documents.summary）；
+    #    列为空（旧文档/生成失败/mock）→ 回退「前 2 块去噪截断」旧行为。summary_source 标记来源。
+    _real = (row["summary"] or "").strip()
+    if _real:
+        out["summary"] = _real
+        out["summary_source"] = "llm"
     try:
         chunks = conn.execute(
             "SELECT content, section FROM document_chunks WHERE document_id=? "
@@ -382,7 +377,9 @@ def get_document_preview(doc_id: int, conn=Depends(db_session)):
     txt = re.sub(r"^\s{0,3}#{1,6}\s*", "", txt, flags=re.M)    # 标题符
     txt = re.sub(r"[|>`*_\-]{2,}", " ", txt)                   # 表格/引用/强调符
     txt = re.sub(r"\s+", " ", txt).strip()
-    out["summary"] = (txt[:260] + ("…" if len(txt) > 260 else "")) if txt else ""
+    if not _real:
+        out["summary"] = (txt[:260] + ("…" if len(txt) > 260 else "")) if txt else ""
+        out["summary_source"] = "truncation"
     out["section"] = (chunks[0]["section"] or "") if chunks else ""
     # ② 抽取候选统计（按 source_doc 聚合，与列表「抽取」列口径一致）
     try:

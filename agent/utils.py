@@ -33,18 +33,13 @@ def _conversation_project_id(conn, conversation_id) -> str:
     2026-09-20：报告归档此前**硬编码** `'project-satnet-broadband'`（域固化残留；该列 DDL
     默认值也是它），使报告的项目归属与会话实际归属无关。改取会话自身归属 ——
     会话的项目由「用户配置的默认项目」决定（见 repositories.project_repo.resolve_project_id）。
+
+    2026-09-28 P1-1：实现**委托**给 `repositories.project_repo.conversation_project_id`
+    （唯一实现，取数失败会打 warning + traceback —— 本文件的旧拷贝是静默 `return ""`，
+    "取不到"与"本就没有归属"症状相同，排查成本极高）。保留本函数只为不动既有调用点。
     """
-    try:
-        row = conn.execute("SELECT project_id FROM conversations WHERE id=?",
-                           (conversation_id,)).fetchone()
-        if not row:
-            return ""
-        try:
-            return str(row["project_id"] or "")
-        except (TypeError, IndexError):
-            return str(row[0] or "")
-    except Exception:
-        return ""
+    from repositories.project_repo import conversation_project_id
+    return conversation_project_id(conn, conversation_id)
 
 
 # ── 会话产物归档（AI 生成内容 → artifacts 表 + 报告自动写 reports 表）──
@@ -146,16 +141,24 @@ def _archive_sysml_version(conn, conversation_id: int, message_id: int,
                            "ORDER BY id DESC LIMIT 1", (conversation_id,)).fetchone()
         if cur:
             conn.execute("UPDATE sysml_versions SET status='superseded' WHERE id=?", (cur["id"],))
+        # P1-1（2026-09-28）：project_id **写入时定格**会话所属工程（空=无工程会话，合法）。
+        # 此后会话改归属，历史版本仍留在它产生时所属的工程下（写回智源的目标工程不漂移）。
         cur2 = conn.execute(
-            "INSERT INTO sysml_versions (artifact_id, conversation_id, message_id, version_label, content, diff, element_summary, parent_id, status, created_by, code_text) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (0, conversation_id, message_id, label,
+            "INSERT INTO sysml_versions (artifact_id, conversation_id, message_id, project_id, version_label, content, diff, element_summary, parent_id, status, created_by, code_text) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (0, conversation_id, message_id,
+             _conversation_project_id(conn, conversation_id), label,
              json.dumps(sysml_views, ensure_ascii=False), json.dumps(diff, ensure_ascii=False),
              json.dumps(summary, ensure_ascii=False), last_id, "current", created_by,
              code_text or ""))
         # 不在此 commit：由调用方（db_conn 上下文）统一提交，保证与消息落库同事务
         return cur2.lastrowid
     except Exception:
+        # 不留痕的话，"版本没建出来"与"会话本就无版本"症状完全相同，排查成本极高
+        import logging, traceback
+        logging.getLogger(__name__).warning(
+            "[save_sysml_version] 版本落库失败（conv=%s msg=%s）：\n%s",
+            conversation_id, message_id, traceback.format_exc())
         return None
 
 

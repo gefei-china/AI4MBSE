@@ -92,6 +92,80 @@ class SessionMixin:
                 known.append(name)
         return [k for k in known if k != current][:5]
 
+    # ── 2026-09-26 意图确认（「确定不了就别硬选」，用户明确要求）─────────────────────
+    #  背景：低置信/无信号时系统会**自己挑一个**意图去执行 —— 「帮我看看这个项目的预算」落到 chat，
+    #  更糟的是被 LLM 以 0.60 猜成 report_generation 真去跑报告 Agent。用户要的是"停下来问"。
+    #  做法：复用**既有内容级澄清的那张选择题卡**（选项 + 其他/自定义 + 答完续跑），因为
+    #  「不硬选」的完整机制后端已经有了（落挂起 → /clarify-answer → 带【澄清补充】续跑），无需另造。
+    _INTENT_LABEL = {
+        "requirement_analysis": "需求分析", "requirement_quality": "需求质量评审",
+        "design": "设计/建模", "impact": "变更影响分析", "review": "评审/校验",
+        "report_generation": "报告生成", "system_mgmt": "系统管理",
+        "knowledge_qa": "知识问答", "chat": "闲聊/其他",
+    }
+    # 「像在求助」的语气词：完全无信号时用它区分"用户在提请求"与"纯寒暄"——后者弹卡是打扰。
+    _REQUEST_HINTS = ("帮我", "请", "我想", "我要", "能不能", "能否", "如何", "怎么", "怎样",
+                      "看一下", "看下", "查一下", "查下", "给我", "做个", "写个", "有没有")
+
+    def _should_confirm_intent(self, user_input, meta) -> bool:
+        """判据：**只有"系统自己没把握"才问**。有把握的一律不打断（否则每次对话都被拦一次）。
+
+        问：`llm_weak`（LLM 给了具体意图但 <0.85）/ `fused_conflict`（关键词与语义打架）/
+            `semantic_weak`（弱语义命中）/ `llm` 且 conf<0.85 / 完全无信号但**像在求助**
+        不问：`inherit`（追问/续写，问反而打扰）/ 规则命中 / `fused`（两路互证）/ 高置信语义 /
+            纯寒暄 / 续答消息（含 `CLARIFY_RESUME_MARK`，防"问→答→又问"的循环）
+        开关：`intent.confirm_when_unsure`（默认 True）——一键回到"不打断"的旧行为。
+        """
+        try:
+            from core import config as _cfg
+            if not bool(_cfg.get("intent", "confirm_when_unsure", True)):
+                return False
+        except Exception:
+            pass
+        if self.CLARIFY_RESUME_MARK in (user_input or ""):
+            return False
+        route = (meta or {}).get("route") or ""
+        conf = float((meta or {}).get("confidence") or 0)
+        if route in ("llm_weak", "fused_conflict", "semantic_weak"):
+            return True
+        if route == "llm" and conf < 0.85:
+            return True
+        if route == "chat" and conf <= 0:      # 完全无信号：只有"像在求助"时才问
+            t = (user_input or "").strip()
+            return len(t) >= 6 and any(k in t for k in self._REQUEST_HINTS)
+        return False
+
+    def _intent_confirm_questions(self, user_input, current_intent) -> list:
+        """构造"意图确认"题：**选项 = 候选意图（中文名 + 一句职责说明）**，当前猜测置顶并如实标注。
+
+        为什么选项文本要带"说明"：选项被选中后会原样进入续答文本（【澄清补充】…回答「…」），
+        而续答要重新过一次意图识别 —— 说明里含该意图的**特异词**（如"方案设计/建模"），
+        关键词层才能稳定命中；只写"设计"这种泛词反而会再次落空（泛词不单独构成信号）。
+        """
+        names = [k for k in self.router.INTENTS.keys() if k != "chat"]
+        for n in (getattr(self.router, "_db_intents", {}) or {}).keys():
+            if n not in names:
+                names.append(n)
+        ordered = ([current_intent] if current_intent in names else []) + \
+                  [n for n in names if n != current_intent]
+        opts = []
+        for n in ordered[:4]:
+            try:
+                desc = (self.registry.get(n).description or "").strip()[:22]
+            except Exception:
+                desc = ""
+            label = self._INTENT_LABEL.get(n, n)
+            txt = f"{label}：{desc}" if desc else label
+            if n == current_intent:
+                txt += "（我的猜测）"
+            opts.append(txt)
+        return [{
+            "id": "q_intent",
+            "question": "我不确定你想让我做哪件事 —— 请选一项，或直接在下方补充你的说法（选完我再执行）",
+            "options": opts,
+            "allow_custom": True,
+        }]
+
     # ── 内容级澄清：信息不清晰 → 选择题确认（优先选择题，支持补充输入），回答后续答 ──
     # 混合触发：LLM 声明式 quick 判定为主 + 规则兜底（输入过短/未提及领域实体）
     CLARIFY_INTENTS = ("design", "requirement_analysis", "impact", "requirement_quality", "analysis")

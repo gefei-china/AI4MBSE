@@ -1,0 +1,153 @@
+/* styles.css —— 设计 token 与组件，严格对齐 mbse_system 既有视觉。
+   铁律：面板（.panel）恒为白底，故面板内文字用不翻转的 #5a6678 / #0C447C；
+        只有落在页面底色上的文字才允许随主题翻转。 */
+
+:root {
+  --primary: #185FA5;
+  --primary-deep: #0C447C;
+  --primary-soft: #E6F1FB;
+  --text: #1a2332;
+  --text-sub: #5a6678;
+  --text-on-bg: #5a6678;
+  --border: #d5dce6;
+  --line: #e5e9ef;
+  --bg: #eef1f6;
+  --surface: #ffffff;
+  --ok: #2F7D4F;        --ok-bg: #E7F5EC;
+  --warn: #BA7517;      --warn-bg: #FAEEDA;
+  --alert: #C0392B;     --alert-bg: #FDECEA;
+  --shadow: 0 1px 3px rgba(16, 32, 64, .06);
+}
+[data-theme="dark"] {
+  --bg: #0e1626;
+  --text: #e5e9f0;
+  --text-on-bg: #8a96ad;
+  /* --surface / --text-sub / --primary-deep 保持不变：面板在暗色下仍是白底 */
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 12px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  transition: background .18s ease;
+}
+
+/* ── 预览控制条（不属于被设计对象，仅用于切换对照） ── */
+.ctrl {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 14px; background: var(--surface); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 30;
+}
+.ctrl .lb { font-size: 11px; color: var(--text-sub); }
+.ctrl .sep { width: 1px; height: 16px; background: var(--line); margin: 0 4px; }
+.ctrl .note { font-size: 11px; color: var(--text-sub); margin-left: auto; }
+
+/* ── chip（与既有 .kbhub-chip 同规格） ── */
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-sub);
+  border-radius: 999px; padding: 3px 10px; font-size: 11px; cursor: pointer;
+  transition: border-color .12s, color .12s, background .12s; user-select: none;
+}
+.chip:hover { border-color: var(--primary); color: var(--primary-deep); }
+.chip.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+/* 描边式选中：页内视图用（与实心区分） */
+.chip.outline.on { background: var(--surface); border-color: var(--primary); color: var(--primary-deep); font-weight: 600; }
+.chip .n { font-size: 10px; opacity: .75; }
+
+/* ── 布局：左导航 + 主区 ── */
+.app { display: flex; min-height: calc(100vh - 42px); }
+.sidebar {
+  width: 200px; flex: none; background: var(--surface); border-right: 1px solid var(--border);
+  padding: 10px 8px;
+}
+.brand { display: flex; align-items: center; gap: 6px; padding: 4px 8px 12px; font-size: 12px; font-weight: 700; color: var(--primary-deep); }
+.navgroup { padding: 6px 8px; border-radius: 6px; font-size: 12px; color: var(--text-sub); cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.navgroup:hover { background: var(--primary-soft); }
+.navgroup.is-parent { font-weight: 600; color: var(--text); }
+.navgroup.is-active { background: var(--primary-soft); color: var(--primary-deep); font-weight: 600; box-shadow: inset 2px 0 0 var(--primary); }
+.navsub { padding: 5px 8px 5px 26px; border-radius: 6px; font-size: 12px; color: var(--text-sub); cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.navsub:hover { background: var(--primary-soft); }
+.navsub.is-active { background: var(--primary-soft); color: var(--primary-deep); font-weight: 600; box-shadow: inset 2px 0 0 var(--primary); }
+.navsub .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--border); flex: none; }
+.navsub.is-active .dot { background: var(--primary); }
+.ic { width: 14px; height: 14px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+
+.main { flex: 1; min-width: 0; padding: 12px 16px 28px; }
+
+/* ── 面包屑 / 页内视图行 ── */
+.crumb { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-on-bg); margin-bottom: 8px; flex-wrap: wrap; }
+.crumb b { color: var(--primary-deep); font-weight: 600; }
+.crumb .from { display: inline-flex; align-items: center; gap: 4px; color: var(--primary); }
+.viewrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.viewrow .lb { font-size: 11px; color: var(--text-on-bg); }
+.hubrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.hubrow .lb { font-size: 11px; color: var(--text-on-bg); }
+
+/* ── 面板 ── */
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 12px; }
+.panel .ph { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 600; color: var(--primary-deep); }
+.panel .ph .tag { font-weight: 400; font-size: 11px; color: var(--text-sub); }
+.panel .pb { padding: 10px 12px; color: var(--text-sub); }
+.spacer { flex: 1; }
+
+/* ── 表格（作用域对照 / 分块列表） ── */
+table.t { width: 100%; border-collapse: collapse; font-size: 12px; color: var(--text-sub); }
+table.t th { text-align: left; font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.t td { padding: 4px 8px; border-bottom: 1px solid var(--line); }
+table.t td.num { color: var(--primary-deep); font-weight: 600; }
+table.t tr:last-child td { border-bottom: none; }
+table.t tr.hoverable:hover td { background: var(--primary-soft); }
+
+/* ── 状态徽章 ── */
+.st { display: inline-block; border-radius: 4px; padding: 0 6px; font-size: 10px; line-height: 16px; }
+.st.ok { background: var(--ok-bg); color: var(--ok); }
+.st.warn { background: var(--warn-bg); color: var(--warn); }
+.st.alert { background: var(--alert-bg); color: var(--alert); }
+.st.info { background: var(--primary-soft); color: var(--primary-deep); }
+
+/* ── 筛选 chip（本次新增交互） ── */
+.filterbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; background: var(--primary-soft); border-bottom: 1px solid var(--border); }
+.filterbar .lb { font-size: 11px; color: var(--primary-deep); display: inline-flex; align-items: center; gap: 4px; }
+.fchip { display: inline-flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--primary); color: var(--primary-deep); border-radius: 999px; padding: 2px 6px 2px 10px; font-size: 11px; }
+.fchip .x { display: inline-flex; width: 14px; height: 14px; align-items: center; justify-content: center; border-radius: 50%; cursor: pointer; }
+.fchip .x:hover { background: var(--alert-bg); color: var(--alert); }
+.hits { font-size: 11px; color: var(--text-sub); }
+.linkbtn { font-size: 11px; color: var(--primary); cursor: pointer; text-decoration: underline; }
+.linkbtn:hover { color: var(--primary-deep); }
+
+/* ── 列表行 ── */
+.row { display: flex; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--line); align-items: baseline; }
+.row:last-child { border-bottom: none; }
+.row:hover { background: var(--primary-soft); }
+.row .ex { flex: 1; min-width: 0; color: var(--text-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .meta { flex: none; font-size: 11px; color: var(--text-sub); display: flex; gap: 8px; align-items: center; }
+.row .mono { font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; }
+
+/* ── 空态 / 加载 ── */
+.empty { text-align: center; padding: 26px 12px; color: var(--text-sub); }
+.empty .ic { width: 22px; height: 22px; color: var(--ok); margin-bottom: 6px; }
+.empty.plain .ic { color: var(--border); }
+.empty .t1 { font-size: 12px; }
+.empty .t2 { font-size: 11px; color: var(--text-sub); margin-top: 3px; }
+.sk { height: 12px; border-radius: 6px; background: var(--line); margin: 9px 12px; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: .55 } 50% { opacity: .95 } }
+
+/* ── 北极星卡（看板内容预览） ── */
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.asset { background: var(--primary-soft); border-radius: 8px; padding: 8px 10px; text-align: left; }
+.asset .l { font-size: 11px; color: var(--text-sub); display: flex; align-items: center; gap: 4px; }
+.asset .n { font-size: 18px; font-weight: 700; color: var(--primary-deep); line-height: 1.35; }
+.asset .n small { font-size: 11px; font-weight: 400; color: var(--text-sub); }
+
+/* ── 视图容器与进入动画 ── */
+.view { display: none; }
+.view.on { display: block; animation: rise .18s ease-out; }
+@keyframes rise { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
+
+@media (max-width: 900px) {
+  .app { flex-direction: column; }
+  .sidebar { width: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  .grid4 { grid-template-columns: repeat(2, 1fr); }
+}

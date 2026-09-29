@@ -60,6 +60,38 @@ def update_doc_folder(folder_id: int, body: dict, conn=Depends(db_session),
     return r
 
 
+@router.post("/api/doc-folders/{folder_id}/move")
+def move_doc_folder(folder_id: int, body: dict, conn=Depends(db_session),
+                    user=Depends(require_any_permission(DOC_WRITE_PERMS))):
+    """移动目录到新父级 / 在同级中排序（2026-09-27 左栏交互优化）。
+
+    body: `{parent_id?: int（0=根）, before_id?: int, after_id?: int}` —— 可单用或组合：
+      · 只给 parent_id            → 换父，追加到目标同级末尾
+      · 只给 before_id/after_id   → 同级排序（父不变）
+      · 都给                      → 换父并落到指定位置
+
+    ⚠️ **不拆成 /move 与 /reorder 两个端点**：数据层是同一个动作（改 parent_id + 重写同级 sort），
+    拆开只会迫使前端先判断走哪条、且两条都要各写一遍 sort 语义。审计动作名按"父是否变化"二选一。
+    ⚠️ 目录移动**不动物理文件**（doc_folders 是逻辑树，源副本仍平铺在 data/uploads/），
+    也不触碰 chunks/向量 —— 与 delete/rename 同一约定（见 tools/verify/verify_doc_folders.py 的 B8）。
+    """
+    repo = DocFolderRepo(conn)
+    before = repo.get(folder_id)
+    r = repo.move_folder(folder_id, body.get("parent_id", ROOT_FOLDER_ID),
+                         before_id=body.get("before_id"), after_id=body.get("after_id"))
+    if r.get("ok") and not r.get("unchanged"):
+        name = (before or {}).get("name") or f"#{folder_id}"
+        same_parent = bool(before and before["parent_id"] == r.get("parent_id"))
+        if same_parent:
+            audit(audit_user(user), "doc_folder_reorder",
+                  f"目录「{name}」同级排序 → sort={r.get('sort')}", conn=conn)
+        else:
+            audit(audit_user(user), "doc_folder_move",
+                  f"移动目录「{name}」→ 父 #{r.get('parent_id')}"
+                  f"（重写 {r.get('rewritten', 0)} 个节点路径）", conn=conn)
+    return r
+
+
 @router.delete("/api/doc-folders/{folder_id}")
 def delete_doc_folder(folder_id: int, conn=Depends(db_session),
                       user=Depends(require_any_permission(DOC_WRITE_PERMS))):

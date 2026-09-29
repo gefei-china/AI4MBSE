@@ -81,6 +81,8 @@ from .misc import (
     _migrate_mr_comments,
     _migrate_view_layout_checks,
     _migrate_data_sources,
+    _migrate_intent_samples,
+    _migrate_dashboard_snapshots,
 )
 
 __all__ = [
@@ -137,4 +139,5 @@ __all__ = [
     "_migrate_mr_comments",
     "_migrate_view_layout_checks",
     "_migrate_data_sources",
+    "_migrate_dashboard_snapshots",
 ]

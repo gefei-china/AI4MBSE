@@ -13,7 +13,7 @@ from repositories.conversation_repo import ConversationRepo
 from repositories.studio_repo import StudioRepo
 from agent import agent
 from core.audit import audit, audit_user
-from models import ConvIn, ChatIn, RenameIn, FlowRunIn
+from models import ConvIn, ChatIn, ConvProjectIn, RenameIn, FlowRunIn
 
 router = APIRouter(tags=["对话"])
 
@@ -47,9 +47,47 @@ def list_conversations(conn=Depends(db_session)):
 
 @router.post("/api/conversations")
 def create_conversation(conv: ConvIn, conn=Depends(db_session)):
-    cid = ConversationRepo(conn).create_conversation(conv.title, conv.intent, 1)
-    audit("王工", "conversation_create", f"新建对话: {conv.title}", conn=conn)
-    return {"id": cid, "title": conv.title}
+    """新建会话。归属语义（2026-09-28 多工程 P0-2）：
+
+    · 请求显式给 `project_id` → 归入该项目（左侧「项目 → ＋ 新建任务」/ 顶部新建任务带当前工程）；
+    · **不给 → 空串 = 无工程会话**，这是**合法状态**：知识检索 / 问答这类会话本就不读写工程，
+      不该被静默塞进某个工程（用户 2026-09-28 口径）；
+    · ⚠️ **不再回落** `settings.default_project_id` —— 它是全局单行、不分标签页，
+      多标签并发时会被后切换的一方覆盖，导致先开的那个标签页新建会话**错归属**（断点②）。
+      「当前工程」现在是前端**页面级**状态，随请求显式带上。
+    """
+    repo = ConversationRepo(conn)
+    cid = repo.create_conversation(conv.title, conv.intent, 1,
+                                   project_id=conv.project_id)
+    row = repo.get_conversation(cid) or {}
+    _pid = str(row.get("project_id") or "")
+    audit("王工", "conversation_create",
+          f"新建对话: {conv.title}" + (f"（项目 {_pid}）" if _pid else "（未关联工程）"), conn=conn)
+    return {"id": cid, "title": conv.title, "project_id": _pid}
+
+
+@router.post("/api/conversations/{conv_id}/project")
+def set_conversation_project(conv_id: int, body: ConvProjectIn, conn=Depends(db_session)):
+    """把会话归入项目（**收敛入口**）：无工程会话 → 归属某项目；传空串 = 解除归属。
+
+    为什么单开一个端点而不是塞进 PATCH（重命名）：归属变更是**独立动作**，需要独立审计留痕，
+    且它要校验项目是否存在（不能把会话挂到一个不存在的 id 上，那会变成孤儿归属）。
+    """
+    repo = ConversationRepo(conn)
+    cur = repo.get_conversation(conv_id)
+    if not cur:
+        return JSONResponse({"error": "Conversation not found"}, 404)
+    pid = (body.project_id or "").strip()
+    if pid:
+        from repositories.project_repo import ProjectRepo
+        if not ProjectRepo(conn).get_project(pid):
+            return JSONResponse({"error": "项目不存在"}, 400)
+    if not repo.set_conversation_project(conv_id, pid):
+        return JSONResponse({"error": "Conversation not found"}, 404)
+    _old = str(cur.get("project_id") or "")
+    audit("王工", "conversation_project_set",
+          f"会话#{conv_id} 归属变更: {_old or '未关联工程'} → {pid or '未关联工程'}", conn=conn)
+    return {"ok": True, "id": conv_id, "project_id": pid}
 
 
 @router.patch("/api/conversations/{conv_id}")
@@ -138,7 +176,18 @@ def get_messages(conv_id: int, limit: int | None = None, before_id: int | None =
     repo = ConversationRepo(conn)
     msgs = repo.list_messages(conv_id, limit=limit, before_id=before_id)
     total = repo.count_messages(conv_id)
-    return {"messages": msgs, "total": total}
+    # 2026-09-25：带上「是否仍有待澄清」——前端据此决定历史澄清卡是**可作答**还是只读摘要。
+    # 此前只读：刷新/重开会话后澄清卡变成一行文字、没有任何作答入口（用户反馈"没有输入入口"），
+    # 而服务端 pending_clarify 还挂着 → 用户只能靠打新消息继续，且挂起状态永不清除。
+    pending = None
+    row = conn.execute("SELECT pending_clarify FROM conversations WHERE id=?", (conv_id,)).fetchone()
+    if row and (row["pending_clarify"] or ""):
+        try:
+            import json as _pj
+            pending = _pj.loads(row["pending_clarify"])
+        except Exception:
+            pending = None
+    return {"messages": msgs, "total": total, "pending_clarify": pending}
 
 
 @router.post("/api/conversations/{conv_id}/chat")
@@ -194,14 +243,55 @@ def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depen
     )
 
 
+@router.get("/api/conversations/{conv_id}/summary")
+def conversation_summary(conv_id: int, conn=Depends(db_session)):
+    """会话摘要（左侧任务列表 hover 信息卡用）。
+
+    body: {summary, source, msg_count, updated_at, intent}
+      source = "llm"（模型概括）/ "structured"（结构化概述降级）/ "empty"（无内容）
+
+    2026-09-28 新增：此前前端 hover 卡是「取最后 1 条消息 → 去符号 → slice(0,140)」的
+    **原文截断**，用户反馈"感觉像是直接截取了一段会话内容"。改为服务端真正概括，
+    并带进程内缓存（按 msg_count 失效）。
+
+    同时回传 msg_count / updated_at / intent：hover 卡的这几行此前依赖 DOM 上的
+    `data-*` 属性，而**不同入口（未分组任务 / 项目分组）挂的属性并不一致**（用户反馈
+    "项目下的会话 hover 展示与非项目下不一致"）。接口作为唯一真源后，前端可在属性缺失时回填，
+    从机制上消除不一致。
+    """
+    row = conn.execute(
+        "SELECT updated_at, intent FROM conversations WHERE id=?", (conv_id,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "会话不存在"}, 404)
+    repo = ConversationRepo(conn)
+    # 取全量消息送摘要：模块内部只消费首尾若干条（首=需求背景，尾=结论），
+    # 故这里不必传 limit —— 传了反而可能拿不到"首条用户请求"。
+    msgs = repo.list_messages(conv_id)
+    from services.conv_summary import summarize
+    out = summarize(conn, conv_id, msgs)
+    out["updated_at"] = row["updated_at"] or ""
+    out["intent"] = row["intent"] or ""
+    return out
+
+
 @router.post("/api/conversations/{conv_id}/clarify-answer")
 def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
                    user=Depends(current_user)):
     """内容级澄清回答：根据用户对澄清卡片（选择题/补充输入）的回答，构造续答输入并清空挂起。
 
-    body: {answers: [{question_id, value}]}（value=选择题选项文本或自定义补充）
+    body: {answers: [{question_id, value}], note: "..."}（value=选择题选项文本或自定义补充；
+          note=卡片末步「补充说明（选填）」的多行文本，**与 answers 同时生效**）
+          或 {free_text: "..."}（**自由文本作答**：用户直接在主输入框打的那段话）
     返回 {ok, resume_text}——前端把 resume_text 作为新消息发送，走正常流式续答
     （含【澄清补充】标记，agent 侧跳过再次澄清，防循环）。
+
+    2026-09-28 新增 note 字段：澄清卡改为「一次一题」向导后，末步是「补充说明（选填）」多行输入。
+    此前只有 answers 一条路，note 若塞进 free_text 会把 answers **整体丢弃**（free_text 分支
+    不吃 answers），故单独成字段追加在选项回答之后。
+
+    2026-09-25 新增 free_text 分支：此前只有「选择题 answers」一条路，用户在**主输入框**
+    打字提交并不构成澄清回答（既不构造 resume_text、也不清空挂起）→ 表现为"没有输入入口"
+    且挂起状态永不清除（AI 会反复追问）。现支持把主输入框内容直接当作澄清补充。
     """
     import json as _j
     body = body or {}
@@ -216,26 +306,67 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
         return JSONResponse({"error": "澄清状态异常，请刷新后重试"}, 400)
     questions = pending.get("questions") or []
     context = pending.get("context") or {}
-    qmap = {str(q.get("id")): q for q in questions}
-    lines = []
-    for a in (body.get("answers") or []):
-        qid = str(a.get("question_id") or "")
-        val = str(a.get("value") or "").strip()
-        if not val:
-            continue
-        q = qmap.get(qid, {})
-        lines.append(f"问题「{q.get('question') or qid}」→ 回答：{val}")
-    if not lines:
-        return JSONResponse({"error": "请至少回答一个问题"}, 400)
-    resume_text = (
-        "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n"
-        + "\n".join(lines)
-        + f"\n\n原请求：{(context.get('input') or '')[:2000]}")
+    free_text = str(body.get("free_text") or "").strip()
+    if free_text:
+        resume_text = (
+            "【澄清补充】用户在待澄清状态下直接补充了以下信息（请据此继续，无需再确认）：\n"
+            + free_text[:4000]
+            + f"\n\n原请求：{(context.get('input') or '')[:2000]}"
+        )
+    else:
+        qmap = {str(q.get("id")): q for q in questions}
+        lines = []
+        for a in (body.get("answers") or []):
+            qid = str(a.get("question_id") or "")
+            val = str(a.get("value") or "").strip()
+            if not val:
+                continue
+            q = qmap.get(qid, {})
+            lines.append(f"问题「{q.get('question') or qid}」→ 回答：{val}")
+        # 2026-09-28：末步「补充说明（选填）」—— 只有 note、没选任何选项也算有效作答
+        note = str(body.get("note") or "").strip()
+        if note:
+            lines.append("补充说明：" + note[:2000])
+        if not lines:
+            return JSONResponse({"error": "请至少回答一个问题或填写补充说明"}, 400)
+        resume_text = (
+            "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n"
+            + "\n".join(lines)
+            + f"\n\n原请求：{(context.get('input') or '')[:2000]}"
+        )
     conn.execute("UPDATE conversations SET pending_clarify='', updated_at=CURRENT_TIMESTAMP WHERE id=?",
                  (conv_id,))
     conn.commit()
-    audit("王工", "clarify_answer", f"会话#{conv_id} 澄清回答 {len(lines)} 条", conn=conn)
-    return {"ok": True, "resume_text": resume_text, "answered": len(lines)}
+    _n = len((body.get("answers") or []))
+    _tail = '自由文本' if free_text else (f"{_n} 条选项" + (f" + 补充说明" if (body.get("note") or "").strip() else ""))
+    audit("王工", "clarify_answer", f"会话#{conv_id} 澄清回答（{_tail}）", conn=conn)
+    return {"ok": True, "resume_text": resume_text, "free_text": bool(free_text)}
+
+
+@router.post("/api/conversations/{conv_id}/messages/partial")
+def commit_partial_message(conv_id: int, body: dict = None, conn=Depends(db_session),
+                           user=Depends(current_user)):
+    """固化「已生成但未完成」的 AI 输出（2026-09-25）。
+
+    触发场景：用户点「停止生成」，或流式输出中直接提交了新消息（后者会 abort 上一轮）。
+    此前两条路径都**只在浏览器 DOM 里渲染**（`renderMessage({id:0})`，无落库），
+    后端在客户端断开时 `raise GeneratorExit` 直接放行 → 刷新即丢。
+    现由前端在收口时调用本端点，把已生成内容写成一条 assistant 消息并返回 message_id，
+    前端用真实 id 重渲染，保证「刷新后仍在」。
+
+    body: {content: "已生成正文", stopped: true}——content 为空直接 400（不写空消息）。
+    """
+    body = body or {}
+    content = str(body.get("content") or "").strip()
+    if not content:
+        return JSONResponse({"error": "无可固化内容（content 为空）"}, 400)
+    repo = ConversationRepo(conn)
+    if not repo.get_conversation(conv_id):
+        return JSONResponse({"error": "Conversation not found"}, 404)
+    suffix = "\n\n> ⏹ 已停止生成（以上为已生成内容）" if body.get("stopped", True) else ""
+    mid = repo.add_assistant_message(conv_id, content + suffix, msg_type="text")
+    audit("王工", "conversation_partial_commit", f"会话#{conv_id} 固化已生成内容（{len(content)} 字）", conn=conn)
+    return {"ok": True, "id": mid}
 
 
 @router.post("/api/messages/{msg_id}/feedback")

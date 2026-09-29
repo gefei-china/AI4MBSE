@@ -151,19 +151,29 @@ class OrchestrMixin:
             self._orch_error = str(e)[:150]
             return None
 
-    def _needs_orchestration(self, user_input: str, intent: str, forced_intent=None, has_attachments: bool = False) -> bool:
+    def _needs_orchestration(self, user_input: str, intent: str, forced_intent=None,
+                             has_attachments: bool = False, multi=None) -> bool:
         """P0-1 复杂任务判定：多步/多交付物任务 → 自动编排；简单任务维持单 Agent。
 
         规则信号（先…再…/然后…/分别…并…/需求+设计+报告组合）直接命中；
         否则 LLM 复杂度判定（Mock/无 key 返回 False，确定性保持）。
         带附件时优先单 Agent 直行（附件为本轮核心依据，编排子任务易丢附件）——
         仅规则信号可触发编排，LLM 判定跳过。
+
+        2026-09-25：新增 `multi`（`IntentRouter.detect_multi` 的结果）作为**最高优先规则信号**。
+        缺口：上面那串连词规则只认「和/以及/与/且/并」，而用户最常写的是**顿号清单** ——
+        「提供一段需求，进行需求分析、方案设计、代码校验」在此处被判为"不需要编排"，
+        于是刚识别出的 3 阶段序列**无处可用**（识别出来了却不驱动任何决策）。
+        多意图识别本身就是强得多的证据，直接采信，不再重复堆连词正则。
         """
         if forced_intent:
             return False
         if intent not in ("requirement_analysis", "design", "impact", "review", "report_generation", "knowledge_qa"):
             return False
         t = (user_input or "").strip()
+        # 多意图识别（阶段连词或并列清单，≥2 个不同阶段）→ 直接编排
+        if multi and len(multi.get("sequence") or []) >= 2:
+            return True
         # 多 Agent 协作表达：「需求分析 + 工程建模」「建模与设计」「需求并方案」——
         # 规则信号（多步表达）→ 一律编排（无论意图/附件）
         if re.search(r"先.{0,8}(再|然后|接着)", t) \
@@ -216,7 +226,8 @@ class OrchestrMixin:
         """P0-1 会话入口自动编排：复杂任务 → Planner-Executor（复用 FlowExecutor.run_planner_plan）。
         简单任务 / 带附件且非规则信号 / 编排异常 → 返回 None（回落单 Agent 直行）。
         附件随编排透传（子任务执行时注入，避免丢附件）。"""
-        if not self._needs_orchestration(user_input, intent, has_attachments=bool(attachments)):
+        if not self._needs_orchestration(user_input, intent, has_attachments=bool(attachments),
+                                        multi=self.router.detect_multi(user_input)):
             return None
         try:
             from workflows import FlowExecutor

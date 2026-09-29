@@ -43,6 +43,7 @@ from routers import (
     coverage_router,  # SRS-GN-CO（2026-09-20）覆盖性分析呈现端点
     doc_folders_router,  # 2026-09-21 文档目录树（基于文件的管理 P0-b）
     mcp_gateway_router,  # P0-1（2026-09-24）领域能力 MCP 服务端
+    intent_samples_router,  # 2026-09-26 意图样本池（设置页维护评测集）
 )
 
 @asynccontextmanager
@@ -69,6 +70,16 @@ async def lifespan(app: FastAPI):
         start_health_loop(lambda: get_db(), interval_sec=float(config.get("mcp", "health_interval", 300)))
     except Exception:
         pass
+    # 2026-09-26：语义层**后台预热** —— 候选集向量是惰性算的，此前这笔开销（实测约 8.6s）全落在
+    #   第一个真实请求上；这里在启动时构造一次路由（触发 set_semantic_index → 守护线程预热），
+    #   让向量化发生在用户开口之前。整体 try/except：预热失败不得影响启动。
+    try:
+        from agent.pipeline import AgentPipeline as _AgentPipeline
+        _wp = _AgentPipeline()
+        _wp._load_db_agents()     # user=None：与"内置能力"路由池一致；真实私有 Agent 由各请求自建索引
+        print("[startup] 语义层后台预热已启动", flush=True)
+    except Exception as _e:
+        print("[startup] 语义层预热跳过：%s" % str(_e)[:120], flush=True)
     yield
 
 
@@ -106,6 +117,7 @@ for _router in (
     coverage_router,  # SRS-GN-CO（2026-09-20）覆盖性分析呈现端点
     doc_folders_router,  # 2026-09-21 文档目录树（基于文件的管理 P0-b）
     mcp_gateway_router,  # P0-1（2026-09-24）领域能力 MCP 服务端：对外供给领域能力，供外部 harness 消费
+    intent_samples_router,  # 2026-09-26 意图样本池：设置页维护评测集 + 一键跑分
 ):
     app.include_router(_router)
 

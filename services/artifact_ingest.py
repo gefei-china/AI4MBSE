@@ -8,7 +8,8 @@ knowledge_pipeline.ingest_upload_document 完整管道（落盘→解析→分�
 
 门禁模型（报告管理模块已移除、无"定稿"环节的前提下）：
 - 显式收编 = 人审（用户在产物面板点「收编入资料库」）；
-- 自动收编仅挂在 sysml_versions.adopted=1（版本采纳）钩子上；
+- 自动收编：原挂在 sysml_versions.adopted=1（版本采纳）钩子上，因 sysml_versions.artifact_id
+  恒为 0 从未实际触发，2026-09-24 随 /adopt 端点删除（前端「📌 采纳」入口一并下线）；
 - 收编前查重（bigram 相似度 ≥0.92 需确认，override 可覆盖），防近重复污染检索池；
 - AI 建模 RAG 默认排除 ai_generated（消费隔离，见 knowledge_pipeline/search.py）。
 """

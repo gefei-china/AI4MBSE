@@ -178,6 +178,55 @@ def chunking_params(filename: str = "") -> dict:
     }
 
 
+def _gen_llm_summary(text: str, filename: str, max_chars: int = 4000) -> str:
+    """LLM 真摘要（2026-09-29 痛点2）：原 preview「摘要」= 前 2 块截断 260 字，只是开头原文。
+
+    策略：短文（清洗后 ≤ max_chars）单遍生成；长文 map-reduce（均匀采样 ≤4 段 → 各段摘要 → 合并）。
+    force_mock / 文本过短 / 无 provider / 任何异常 → 返回 ''（documents.summary 保持空，
+    preview 端点自动回退「前2块截断」旧行为）——摘要失败绝不阻断入库主流程。
+    """
+    try:
+        from core import config as _cfg
+        from llm import llm_client
+        if _cfg.as_bool("llm", "force_mock", False):
+            return ""
+        clean = re.sub(r"```.*?```", " ", text or "", flags=re.S)
+        clean = re.sub(r"\s+", " ", clean).strip()
+        if len(clean) < 40:
+            return ""
+        _SYS = ("你是文档摘要助手：只输出一段不超过150字的中文摘要，概括文档的核心内容、"
+                "方法或结论；不要照抄开头原文，不要输出任何前后缀说明。")
+
+        def _ask(user_content: str) -> str:
+            resp = llm_client.chat(
+                [{"role": "system", "content": _SYS},
+                 {"role": "user", "content": user_content}],
+                _intent="doc_summary")
+            return (resp["choices"][0]["message"]["content"] or "").strip()
+
+        if len(clean) <= max_chars:
+            return _ask(f"文件名：{filename}\n正文：\n{clean}")[:600]
+        # 长文 map-reduce：均匀采样 ≤4 段（各 ≤900 字，头中尾覆盖）→ 各段摘要 → 合并终摘要
+        n_parts = 4
+        step = max(1, len(clean) // n_parts)
+        parts = [clean[i:i + 900] for i in range(0, len(clean), step)][:n_parts]
+        mini = []
+        for idx, p in enumerate(parts, 1):
+            try:
+                s = _ask(f"以下是文档《{filename}》第 {idx}/{len(parts)} 段，用一句话概括该段要点：\n{p}")
+                if s:
+                    mini.append(s)
+            except Exception:
+                continue
+        if not mini:
+            return ""
+        return _ask("以下是对同一份文档各段的摘要，请合并为一段不超过150字的整篇摘要：\n"
+                    + "\n".join(f"{i}. {s}" for i, s in enumerate(mini, 1)))[:600]
+    except Exception as e:
+        logger.warning("LLM 摘要生成失败（summary 留空，preview 回退旧行为）: %s", e)
+        return ""
+
+
 def ingest_document(conn, filename: str, file_type: str, content: bytes,
                     uploaded_by: str = "王工", metadata: dict | None = None,
                     doc_id: int | None = None, branch: str = "global") -> dict:
@@ -259,20 +308,38 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
         _record_parse_meta(conn, doc_id, parse_meta)
         _stage("parse", "done")
 
+        # 2026-09-29：documents.quality_score 的首个写入方——OCR 识别均分（含"低质放行"文档，
+        # 前端/详情面板据此可见真实质量；此前该列全库无写入方）
+        _q = ((parse_meta.get("ocr") or {}).get("quality") or {})
+        if _q.get("avg_score") is not None:
+            try:
+                conn.execute("UPDATE documents SET quality_score=? WHERE id=?",
+                             (float(_q["avg_score"]), doc_id))
+            except Exception:
+                pass
+
         # 3) 结构感知分块（v2：config 参数 + 表格/代码块分派 + title-enriched，阶段：chunk）
+        # 2026-09-29 痛点1：图片 OCR 文本短且无句末标点，min_chunk 必须在分块源头放宽——
+        # chunk_text 内部也做碎片过滤（<min_chunk 丢），只放宽下游去重不够（实测 35 字仍被丢光）。
+        _is_image_doc = (parse_meta.get("kind") == "image")
         ck = chunking_params(filename)
+        if _is_image_doc:
+            ck = dict(ck, min_chunk=8)
         structured = chunk_text_structured(
             text, size=ck["size"], overlap=ck["overlap"], min_chunk=ck["min_chunk"],
             sentence_overlap=ck["sentence_overlap"], table_max_rows=ck["table_max_rows"],
             code_block_chunk=ck["code_block_chunk"], doc_title=detected_title or filename)
         # P0-3 数据卫生：按 content hash 去重 + 长度阈值（防重复拼接文档污染向量库，如 113/116）
         # 长度阈值与 chunk_text 一致：<min_chunk 且非完整句才丢弃（完整句豁免，防误杀短文本文档）
+        # 2026-09-29 痛点1：图片文档 _is_image_doc 已在分块源头把 ck.min_chunk 放宽为 8；
+        # 此处豁免"完整句"判断（OCR 无标点是常态），任何 ≥8 字片段都保留。
+        _min_keep = 8 if _is_image_doc else ck["min_chunk"]
         _seen_hashes = set()
         _deduped = []
         for sc in structured:
             c = sc["content"]
             c_len = len(c.strip())
-            if c_len < ck["min_chunk"] and not (c_len >= 10 and _is_complete_sentence(c)):
+            if c_len < _min_keep and not (_is_image_doc or (c_len >= 10 and _is_complete_sentence(c))):
                 continue
             import hashlib
             h = hashlib.md5(c.encode("utf-8")).hexdigest()
@@ -281,6 +348,15 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
             _seen_hashes.add(h)
             _deduped.append(sc)
         structured = _deduped
+        # 兜底（2026-09-29 痛点1）：OCR 有文本但全部片段被规则丢弃（如极短识别结果 <8 字）
+        # → 整图包装成单块：前缀标注来源，可检索可溯源，绝不让"OCR 识别成功"伪装成"文本为空"。
+        if not structured and _is_image_doc and text.strip():
+            structured = [{
+                "content": f"【图片OCR】{filename}\n{text.strip()}",
+                "section": "图片OCR",
+                "embed_text": f"{detected_title or filename} 图片OCR {text.strip()}",
+                "bm25_text": f"{filename} 图片OCR {text.strip()}",
+            }]
         chunks = [c["content"] for c in structured]
         if not chunks:
             _stage("chunk", "failed", "文本为空")
@@ -359,10 +435,15 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
             "lifecycle_status=CASE WHEN lifecycle_status IN ('uploaded','processing') "
             "THEN 'stored' ELSE lifecycle_status END WHERE id=?",
             (len(chunks), doc_id))
+        # 7) LLM 真摘要（2026-09-29 痛点2）：写 documents.summary（旧文档列为空 → preview 回退旧行为）。
+        #    生成失败/mock 留空且**不覆盖旧值**（重解析失败时保住已有摘要）；绝不因摘要丢掉入库成果。
+        _summary = _gen_llm_summary(text, filename)
+        if _summary:
+            conn.execute("UPDATE documents SET summary=? WHERE id=?", (_summary, doc_id))
         conn.commit()
         return {"doc_id": doc_id, "parse_status": "completed", "chunk_count": len(chunks),
                 "embed_version": embed_version, "detected_title": detected_title,
-                "parse_meta": parse_meta,
+                "parse_meta": parse_meta, "summary_generated": bool(_summary),
                 "pipeline": {"parse": "done", "chunk": "done", "embed": "done", "insert": "done"}}
     except Exception as e:
         try:

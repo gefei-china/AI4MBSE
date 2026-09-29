@@ -237,3 +237,65 @@
 .art-card .ac-meta{margin-top:3px;font-size:10px;color:var(--mut);display:flex;gap:5px;align-items:center;flex-wrap:wrap;}
 .art-card .ac-ops{margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;}
 .art-card .ac-ops .pr-act{cursor:pointer;color:var(--blue-d);text-decoration:underline;user-select:none;font-size:10.5px;}
+
+/* ── 2026-09-25 新增：① 待澄清提示条（给用户明确的输入入口）② 执行详情面板 ── */
+/* 0) AI 活动状态栏：让"AI 正在做什么"可见（此前 #chat-status 是死元素，写入全无效） */
+.chat-status-bar{
+  display:flex;align-items:center;gap:7px;
+  margin:0 12px 6px;padding:5px 10px;border-radius:7px;
+  background:var(--blue-l,#eef4ff);color:var(--blue-d,#3478f6);
+  font-size:11.5px;line-height:1.5;
+}
+.chat-status-bar .cs-right{margin-left:auto;color:var(--mut);font-size:10.5px;flex:none;}
+.chat-status-bar .cs-spin{
+  flex:none;width:9px;height:9px;border-radius:50%;
+  border:1.5px solid rgba(52,120,246,.28);border-top-color:var(--blue-d,#3478f6);
+  display:none;
+}
+.chat-status-bar.busy .cs-spin{display:inline-block;animation:csSpin .8s linear infinite;}
+@keyframes csSpin{to{transform:rotate(360deg);}}
+/* ① 输入区上方的「AI 正在等待你的确认」条：让"可以在这里直接作答"变得可见 */
+.clarify-hint{
+  display:flex;align-items:flex-start;gap:8px;
+  margin-bottom:8px;padding:7px 10px;
+  border:1px solid #d3e3fb;background:#f0f6ff;border-radius:8px;
+  font-size:11.5px;color:var(--blue-d,#3478f6);line-height:1.55;
+}
+.clarify-hint .ch-ic{flex:none;font-size:13px;line-height:1.2;}
+.clarify-hint .ch-sub{display:block;color:var(--mut);font-size:10.5px;margin-top:2px;}
+/* 收口条右侧的「🔍 详情」入口（stopPropagation 防止触发展开/收起） */
+.proc-summary .proc-x{
+  margin-left:8px;flex:none;padding:1px 7px;border-radius:10px;
+  background:rgba(52,120,246,.12);color:var(--blue-d,#3478f6);
+  font-size:10.5px;font-weight:600;cursor:pointer;
+}
+.proc-summary .proc-x:hover{background:rgba(52,120,246,.22);}
+.proc-summary .chev{margin-left:8px;}
+/* ② 执行详情面板（右侧 openPanel 内） */
+.xd-ov{margin-bottom:12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe;}
+.xd-ov-row{display:flex;gap:8px;align-items:baseline;font-size:11.5px;color:var(--mut);}
+.xd-ov-row b{color:var(--ink);font-size:13px;}
+.xd-kv{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-size:11.5px;color:var(--mut);}
+.xd-kv b{color:var(--ink);}
+.xd-kv .xd-bad{color:var(--red,#e5484d);font-style:normal;}
+.xd-tip{margin-top:8px;font-size:10.5px;color:var(--mut);line-height:1.6;}
+/* 「调用与模型」栏：以落库 card_data 为准的字段（技能/意图/来源/模型…），exec 里没有 */
+.xd-meta{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);
+  display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;}
+.xd-mr{display:flex;gap:6px;align-items:baseline;font-size:11.5px;}
+.xd-mr span{flex:none;color:var(--mut);min-width:56px;}
+.xd-mr b{color:var(--ink);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.xd-sec{margin-bottom:12px;}
+.xd-sec .xd-h{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink);
+  padding-bottom:5px;margin-bottom:6px;border-bottom:1px dashed var(--line);}
+.xd-sec .xd-h .xd-n{margin-left:auto;font-size:10px;color:var(--mut);
+  background:var(--bg-soft,#f2f4f8);border-radius:9px;padding:1px 7px;font-weight:400;}
+.xd-item{border:1px solid var(--line);border-radius:7px;padding:6px 9px;margin-bottom:5px;background:#fff;}
+.xd-item.error{border-color:#F3C1C1;background:#fff7f7;}
+.xd-t{display:flex;align-items:center;gap:8px;font-size:11.5px;}
+.xd-t b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.xd-t .xd-e{flex:none;font-size:10.5px;color:var(--mut);font-variant-numeric:tabular-nums;}
+.xd-t .xd-s{flex:none;font-size:10px;color:var(--mut);}
+.xd-b{margin-top:5px;font-size:11px;color:var(--txt);line-height:1.65;word-break:break-word;
+  max-height:260px;overflow:auto;}
+.xd-b .proc-tool-param{font-size:10.5px;color:var(--mut);margin-bottom:3px;}

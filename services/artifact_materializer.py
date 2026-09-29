@@ -187,10 +187,13 @@ def materialize_to_conversation(conn, run_id, task_key, ref, conversation_id, me
     meta["subtask_ref"] = ref
     meta["subtask_run_id"] = d.get("run_id")
     meta["subtask_task_key"] = d.get("task_key")
+    # P1-1（2026-09-28）：产物归属在**写入时定格**（会话归属，空=无工程会话，合法）
+    from repositories.project_repo import conversation_project_id
     conn.execute(
-        "INSERT INTO artifacts (conversation_id, message_id, kind, title, preview_type, preview_content, meta, source, created_by) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO artifacts (conversation_id, message_id, project_id, kind, title, preview_type, preview_content, meta, source, created_by) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (conversation_id or 0, message_id or 0,
+         conversation_project_id(conn, conversation_id or 0),
          _MATERIALIZE_KIND_MAP.get(kind, "other"), title,
          "markdown" if kind in ("report", "requirement", "doc", "document") else "text",
          preview_content,

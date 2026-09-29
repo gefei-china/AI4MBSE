@@ -10,12 +10,16 @@
 
 公开方法：
   list_tree()                    目录树（含直接/含子目录两级计数）+ 未归类计数
-  create(name, parent_id, ...)   新建（同名/父不存在 → 结构化错误）
-  rename(folder_id, new_name)    重命名（级联刷新自身与全部后代的 path）
+  create(name, parent_id, ...)   新建（同名/父不存在 → 结构化错误；sort 追加到同级末尾）
+  rename(folder_id, new_name)    重命名（级联刷新自身与全部后代的 path；并固化同级顺序）
   delete(folder_id)              **删除整棵子树，其中的文档回到"未归类"**（绝不级联删文档）
+  move_folder(folder_id, ...)    **移动目录到新父级 / 同级排序**（改父子层级 + 级联刷新 path）
   move_document(doc_id, folder_id) 单文档移动
   move_documents(ids, folder_id)   批量移动（逐条校验，任一失败不影响其他，与 batch_transition 同风格）
   assign_path / breadcrumb       供上传落点与面包屑
+
+⚠️ 物化路径的**唯一**维护入口是 `_rewrite_path_prefix`：`rename()` 与 `move_folder()` 共用它。
+两处各写一遍必然漂移，而"移动没刷 path"是**静默**故障（前缀查询与面包屑指向已不存在的路径）。
 """
 from repositories.base import BaseRepo
 
@@ -131,6 +135,65 @@ class DocFolderRepo(BaseRepo):
         rows = self.rows("SELECT id, path FROM doc_folders WHERE path LIKE ?", (p + "%",))
         return [r["id"] for r in rows]
 
+    # ── 私有：物化路径维护 / 同级排序 ──
+    @staticmethod
+    def _join_path(parent_path: str, name: str) -> str:
+        """拼物化路径：父 '/' 或 '/A/' + 名字 → '/name/' 或 '/A/name/'。
+
+        收敛成一处的原因：`rename` / `create` / `move_folder` 三处都要拼，
+        任何一处漏处理"父路径不以 / 结尾"都会产出 '/A' + 'B/' 这种坏路径。
+        """
+        p = (parent_path or "/").strip()
+        if p in ("", "/"):
+            return "/" + name + "/"
+        return p.rstrip("/") + "/" + name + "/"
+
+    def _rewrite_path_prefix(self, old_path: str, new_path: str) -> int:
+        """把「自身 + 全部后代」的 path 从旧前缀重写为新前缀，返回重写节点数。
+
+        ⚠️ 必须**先取全量再写**：当 old_path 是新路径的前缀时（'/A/' → '/A/B/'），
+        边查边写会让刚写过的行再次命中 `LIKE '旧前缀%'`，路径被反复叠加。
+        `rename()` 与 `move_folder()` 共用本方法 —— 移动比改名更容易漏刷新。
+        """
+        if old_path == new_path:
+            return 0
+        rows = self.rows("SELECT id, path FROM doc_folders WHERE path LIKE ?", (old_path + "%",))
+        for r in rows:
+            self.execute("UPDATE doc_folders SET path=? WHERE id=?",
+                         (new_path + r["path"][len(old_path):], r["id"]))
+        return len(rows)
+
+    def _sibling_ids(self, parent_id: int) -> list:
+        """同一父级下的目录 id，按**渲染顺序**（sort, name）—— 排序的权威顺序。"""
+        return [r["id"] for r in self.rows(
+            "SELECT id FROM doc_folders WHERE parent_id=? ORDER BY sort ASC, name ASC",
+            (normalize_parent(parent_id),))]
+
+    def _place_in_siblings(self, folder_id: int, parent_id: int,
+                           before_id=None, after_id=None):
+        """把 folder_id 放进同级序列的指定位置，并把整级 sort 重写为 0..n-1。
+
+        返回 folder_id 的新 sort；**未发生排序**（同父且无位置要求）时返回 None。
+        ⚠️ 为什么整级重写而不是只改两行：历史数据 sort 全为 0（同值时 ORDER BY 退化为按 name），
+        只改两行会留下并列值 → 顺序又退回按 name，用户看到的"上移"不生效（无报错）。
+        """
+        ids = [i for i in self._sibling_ids(parent_id) if i != folder_id]
+        bid = normalize_parent(before_id) if before_id else 0
+        aid = normalize_parent(after_id) if after_id else 0
+        if bid and bid != folder_id:
+            idx = ids.index(bid) if bid in ids else len(ids)
+        elif aid and aid != folder_id:
+            idx = (ids.index(aid) + 1) if aid in ids else len(ids)
+        else:
+            cur = self.get(folder_id)
+            if cur and cur["parent_id"] == parent_id:
+                return None          # 同父且无位置要求 = 没有排序动作，不动 sort
+            idx = len(ids)           # 换父且未指定位置 = 追加到目标同级末尾
+        ids.insert(idx, folder_id)
+        for i, sid in enumerate(ids):
+            self.execute("UPDATE doc_folders SET sort=? WHERE id=?", (i, sid))
+        return idx
+
     # ── 写 ──
     def create(self, name: str, parent_id=ROOT_FOLDER_ID, domain: str = "",
                created_by: str = "") -> dict:
@@ -155,12 +218,16 @@ class DocFolderRepo(BaseRepo):
             base = parent["path"]
         else:
             base = "/"
+        # sort 追加到同级末尾：存量数据 sort 恒 0（同值时 ORDER BY 退化为按 name），
+        # 新建若也写 0，新目录会按首字母插到中间，而用户预期是"新建的排在最后"。
+        next_sort = int(self.scalar(
+            "SELECT COALESCE(MAX(sort),-1)+1 FROM doc_folders WHERE parent_id=?",
+            (pid,), default=0) or 0)
         try:
             new_id = self.execute(
                 "INSERT INTO doc_folders (name, parent_id, path, sort, domain, created_by) "
                 "VALUES (?,?,?,?,?,?)",
-                (name, pid, (base if base.endswith("/") else base + "/") + name + "/",
-                 0, domain or "", created_by or ""))
+                (name, pid, self._join_path(base, name), next_sort, domain or "", created_by or ""))
         except Exception as e:
             # UNIQUE(parent_id, name) 或 ux_doc_folders_name_parent（表达式索引）拦截
             if "UNIQUE" in str(e).upper() or "unique" in str(e):
@@ -185,23 +252,73 @@ class DocFolderRepo(BaseRepo):
         if not cur:
             return {"ok": False, "error": f"目录不存在（id={folder_id}）"}
         old_path = cur["path"]
-        parent_path = self.path_of(cur["parent_id"])
-        new_path = (parent_path if parent_path.endswith("/") else parent_path + "/") + new_name + "/"
+        new_path = self._join_path(self.path_of(cur["parent_id"]), new_name)
         if new_path == old_path and cur["name"] == new_name:
             return {"ok": True, "id": folder_id, "path": new_path, "unchanged": True}
+        # 改名不应改变位置：先把同级现有渲染顺序固化成 sort，再改名。
+        # 存量数据 sort 恒 0 → `ORDER BY sort, name` 实际按 name 排，改个名节点就跳到别处
+        # （用户看到的结果是"改完名字，目录跑到别的层级去了"）。
+        order_before = self._sibling_ids(cur["parent_id"])
         try:
             self.execute("UPDATE doc_folders SET name=? WHERE id=?", (new_name, folder_id))
         except Exception as e:
             if "UNIQUE" in str(e).upper():
                 return {"ok": False, "error": f"同级下已存在同名目录「{new_name}」"}
             return {"ok": False, "error": f"重命名失败：{e}"}
-        # 级联刷 path：自身 + 后代（用旧前缀重写为新前缀）
-        refreshed = 0
-        for r in self.rows("SELECT id, path FROM doc_folders WHERE path LIKE ?", (old_path + "%",)):
-            self.execute("UPDATE doc_folders SET path=? WHERE id=?",
-                         (new_path + r["path"][len(old_path):], r["id"]))
-            refreshed += 1
+        for i, sid in enumerate(order_before):
+            self.execute("UPDATE doc_folders SET sort=? WHERE id=?", (i, sid))
+        # 级联刷 path：自身 + 后代（唯一入口，见 _rewrite_path_prefix）
+        refreshed = self._rewrite_path_prefix(old_path, new_path)
         return {"ok": True, "id": folder_id, "path": new_path, "refreshed": refreshed}
+
+    def move_folder(self, folder_id: int, new_parent_id=ROOT_FOLDER_ID,
+                    before_id=None, after_id=None) -> dict:
+        """移动目录到新父级，并可选地在同级中排到 before_id 之前 / after_id 之后。
+
+        三种用法（同一个数据动作，所以同端点同方法，不由前端决定走哪条）：
+          · 只给 new_parent_id                 → 换父，追加到目标同级末尾
+          · 只给 before_id / after_id（父不变） → 同级排序
+          · 都给                               → 换父并落到指定位置
+
+        校验全部以**结构化错误**返回（不抛异常）：目录/目标父不存在、移入自身或其后代、
+        目标同级同名。`path` 由 `_rewrite_path_prefix` 级联刷新（与 rename 共用同一实现）。
+
+        ⚠️ 后代判定用**物化路径前缀法**（`parent.path.startswith(cur.path)`）：
+        既含"移到直接子目录"，也含"移到更深的后代"；用逐层向上比对 parent_id 会漏掉深链。
+        """
+        cur = self.get(folder_id)
+        if not cur:
+            return {"ok": False, "error": f"目录不存在（id={folder_id}）"}
+        pid = normalize_parent(new_parent_id)
+        if pid == folder_id:
+            return {"ok": False, "error": f"不能把「{cur['name']}」移动到它自己下面"}
+        if pid != ROOT_FOLDER_ID:
+            parent = self.get(pid)
+            if not parent:
+                return {"ok": False, "error": f"目标目录不存在（id={pid}）"}
+            if parent["path"].startswith(cur["path"]):
+                return {"ok": False,
+                        "error": f"不能把「{cur['name']}」移动到它自己的子目录下"}
+        dup = self.one("SELECT id FROM doc_folders WHERE parent_id=? AND name=? AND id<>?",
+                       (pid, cur["name"], folder_id))
+        if dup:
+            return {"ok": False, "error": f"目标位置已存在同名目录「{cur['name']}」"}
+        old_path = cur["path"]
+        new_path = self._join_path(self.path_of(pid), cur["name"])
+        same_parent = (cur["parent_id"] == pid)
+        try:
+            if not same_parent:
+                self.execute("UPDATE doc_folders SET parent_id=? WHERE id=?", (pid, folder_id))
+            refreshed = self._rewrite_path_prefix(old_path, new_path)
+        except Exception as e:
+            # UNIQUE(parent_id,name) / 表达式唯一索引兜底（预检与写入之间有竞态时仍不 500）
+            if "UNIQUE" in str(e).upper():
+                return {"ok": False, "error": f"目标位置已存在同名目录「{cur['name']}」"}
+            return {"ok": False, "error": f"移动失败：{e}"}
+        moved_sort = self._place_in_siblings(folder_id, pid, before_id, after_id)
+        return {"ok": True, "id": folder_id, "parent_id": pid, "path": new_path,
+                "sort": moved_sort, "rewritten": refreshed,
+                "unchanged": bool(same_parent and not refreshed and moved_sort is None)}
 
     def delete(self, folder_id: int) -> dict:
         """删除目录**及其整棵子树**；其中的文档**回到「未归类」**。
