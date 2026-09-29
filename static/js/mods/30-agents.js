@@ -655,17 +655,21 @@ function _teamSumRefresh(){
 function renderTeamChecks(){
   _teamSumRefresh();
   const box = document.getElementById('f-team-list'); if(!box) return;
+  // ⚠️ 选项 label 位于 .form-row 内 → 全局 `.form-row input{width:100%}` 会把 checkbox 撑满整行、
+  //    把文字推到最右（2026-09-29 用户实测截图）。内联 width:auto;flex:none 压制，文字 flex:1 靠左。
+  const _cb = 'width:auto;flex:none;margin:0;accent-color:var(--blue-d,#3478f6);cursor:pointer;';
+  const _tx = 'flex:1;text-align:left;min-width:0;';
   if(!_agentTeamCands.length){
     box.innerHTML = _agentTeamSet.size
-      ? [..._agentTeamSet].map(id=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;"><input type="checkbox" checked onchange="bindTeamToggle(${id},this.checked)"><span>成员#${id} <span style="color:var(--mut);font-size:10.5px;">（候选加载中…）</span></span></label>`).join('')
+      ? [..._agentTeamSet].map(id=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;"><input type="checkbox" style="${_cb}" checked onchange="bindTeamToggle(${id},this.checked)"><span style="${_tx}">成员#${id} <span style="color:var(--mut);font-size:10.5px;">（候选加载中…）</span></span></label>`).join('')
       : '<div style="padding:8px 10px;color:var(--mut);font-size:11px;">加载候选…</div>';
     return;
   }
   box.innerHTML = _agentTeamCands.map(c=>{
     const on = _agentTeamSet.has(c.id);
     return `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;" onmouseover="this.style.background='#f4f6fa'" onmouseout="this.style.background=''">`
-      + `<input type="checkbox" ${on?'checked':''} onchange="bindTeamToggle(${c.id},this.checked)">`
-      + `<span>${c.icon||'🤖'} <b>${esc(c.display_name||c.name)}</b> <span style="color:var(--mut);font-size:10.5px;">（${esc(c.name)}）</span></span></label>`;
+      + `<input type="checkbox" style="${_cb}" ${on?'checked':''} onchange="bindTeamToggle(${c.id},this.checked)">`
+      + `<span style="${_tx}">${c.icon||'🤖'} <b>${esc(c.display_name||c.name)}</b> <span style="color:var(--mut);font-size:10.5px;">（${esc(c.name)}）</span></span></label>`;
   }).join('') || '<div style="padding:8px 10px;color:var(--mut);font-size:11px;">暂无可用子 Agent</div>';
 }
 // 勾选只更新集合与头部摘要，不重渲面板（保留滚动位置与连点手感）
