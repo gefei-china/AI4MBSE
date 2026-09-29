@@ -806,10 +806,7 @@ class StreamMixin:
         # P0-5：技能使用反馈采集（流式编排路径）
         self._record_skill_feedback(run_id=int(conversation_id or 0), intent=intent, output_content=orch_content)
         with db_conn() as conn2:
-            conn2.execute(
-                "INSERT INTO messages (conversation_id, role, content, msg_type, card_data, attachments) VALUES (?,?,?,?,NULL,?)",
-                (conversation_id, "user", user_input, "text", json.dumps(attachments, ensure_ascii=False))
-            )
+            # 2026-09-29：user 消息已在 execute_stream 入口落库，此处只插 assistant（防重复）
             cur = conn2.execute(
                 "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
                 (conversation_id, "assistant", orch_content, "text", card_data)
@@ -887,10 +884,7 @@ class StreamMixin:
                      "agent": agent_def.name, "tools": []},
         }, ensure_ascii=False)
         with db_conn() as conn:
-            conn.execute(
-                "INSERT INTO messages (conversation_id, role, content, msg_type, card_data, attachments) VALUES (?,?,?,?,NULL,?)",
-                (conversation_id, "user", user_input, "text", json.dumps(attachments, ensure_ascii=False))
-            )
+            # 2026-09-29：user 消息已在 execute_stream 入口落库，此处只插 assistant（防重复）
             cursor = conn.execute(
                 "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
                 (conversation_id, "assistant", orch_content, "text", card_data)
@@ -941,6 +935,21 @@ class StreamMixin:
         意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
         """
         attachments = attachments or []
+        # 2026-09-29：user 消息在流开始即落库（原在流收尾与 assistant 一并 INSERT）。
+        # 修「流式进行中库中 0 条消息 → 切页再切回，selectConv 渲染空态覆盖 #stream-ai 现场」；
+        # 也顺带修复澄清路径（clarify_ask 提前 return）user 消息从未落库的缺口。
+        # 收尾块只插 assistant（三处已同步去除 user INSERT）；dry_run=True（编排子任务流式）不落库。
+        if not dry_run:
+            try:
+                with db_conn() as _conn0:
+                    _conn0.execute(
+                        "INSERT INTO messages (conversation_id, role, content, msg_type, card_data, attachments) VALUES (?,?,?,?,NULL,?)",
+                        (conversation_id, "user", user_input, "text", json.dumps(attachments, ensure_ascii=False))
+                    )
+                    _conn0.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                                   (conversation_id,))
+            except Exception:
+                pass   # 入口落库失败不阻断流：收尾 done 事件仍会到达，避免整轮白跑
         # 记忆作用域上下文（对齐 mem0）：本会话的 conversation_id + 当前用户，供记忆读写取作用域
         self._mem_ctx = {"conversation_id": conversation_id, "user": user}
         self._mem_project_id_cache = None   # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
@@ -1513,10 +1522,7 @@ class StreamMixin:
                     **self._build_rich_card(intent, retrieval, branch, user_input, provider_id),
                 }, ensure_ascii=False)
                 with db_conn() as conn:
-                    conn.execute(
-                        "INSERT INTO messages (conversation_id, role, content, msg_type, card_data, attachments) VALUES (?,?,?,?,NULL,?)",
-                        (conversation_id, "user", user_input, "text", json.dumps(attachments, ensure_ascii=False))
-                    )
+                    # 2026-09-29：user 消息已在 execute_stream 入口落库，此处只插 assistant（防重复）
                     cursor = conn.execute(
                         "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
                         (conversation_id, "assistant", llm_content, self._get_card_type(intent), card_data)

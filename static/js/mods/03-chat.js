@@ -395,6 +395,34 @@ async function loadEarlierMessages(){
     if(btn3) btn3.textContent = '⬆ 加载更早消息（重试）';
   }
 }
+// ── 2026-09-29 活跃流保护 ──────────────────────────────────────────
+// #stream-ai 是流式现场唯一载体：handleSSE 按 id 取元素追加 token/done 渲染。
+// 任何重渲染（切页回点/侧栏切换）清掉它 = 输出中断 + 现场丢失。三层防护：
+//   ① 同会话重选且流式活跃 → 不重渲染（库中 assistant 未落库，重渲染只会更少）
+//   ② 切到其他会话 → 元素寄存到隐藏容器（仍在 DOM，getElementById 命中，token 继续追加）
+//   ③ 切回流式会话 → 寄存元素挂回消息区尾部（在分片渲染 done 回调里做，防乱序）
+function _streamPark(){
+  let p = document.getElementById('stream-parking');
+  if(!p){
+    p = document.createElement('div');
+    p.id = 'stream-parking';
+    p.style.display = 'none';
+    document.body.appendChild(p);
+  }
+  return p;
+}
+function _liveStreamBox(){ return document.getElementById('stream-ai'); }
+// 把寄存的流式现场挂回当前会话消息区（仅当它属于该会话）；挂在渲染完成后调用
+function _reattachLiveStream(area, convId){
+  const box = _liveStreamBox();
+  if(!box || String(box.dataset.convId||'') !== String(convId)) return false;
+  if(box.parentElement && box.parentElement.id === 'stream-parking'){
+    area.appendChild(box);
+    const area2 = document.getElementById('chat-area');
+    if(area2) area2.scrollTop = area2.scrollHeight;   // 挂回后钉底看现场
+  }
+  return true;
+}
 async function selectConv(id) {
   // 2026-09-17：切换会话前先退出「归一确认全屏」——全屏宿主挂在 <body>，会话重渲染后原锚点失效，
   // 不退出会留下一个悬空的覆盖层（07-norm.js 的 _nrToggleFullscreen 内部有锚点失效兜底，这里再显式收口一次）
@@ -404,6 +432,21 @@ async function selectConv(id) {
     go('ai');
     setTimeout(()=>{ if(document.getElementById('pg-ai').classList.contains('on')) selectConv(id); }, 400);
     return;
+  }
+  // 2026-09-29 活跃流保护①：流式进行中重新选中同一会话（典型：切页后切回、点侧栏任务项）
+  // → 现场本来就在消息区，直接返回。此时 assistant 消息尚未落库，重渲染只会把现场换成一屏旧历史。
+  if(_streaming && id === currentConvId && _liveStreamBox()){
+    loadConversations();                                  // 侧栏高亮/摘要仍要刷新
+    if(typeof renderGnavProjects === 'function') renderGnavProjects();
+    return;
+  }
+  // 活跃流保护②：流式进行中切到其他会话 → 把流式现场寄存到隐藏容器（仍在 DOM，
+  // handleSSE 的 getElementById 照常命中，token/done 继续处理，输出不丢）。
+  // 注意在 currentConvId 被改写之前判断归属。
+  const _liveBox = _liveStreamBox();
+  if(_streaming && _liveBox){
+    _streamPark().innerHTML = '';      // 清掉上次 done 在寄存区留下的渲染残渣（真数据在库里）
+    _streamPark().appendChild(_liveBox);
   }
   // 切换前：记忆当前会话已打开的预览 tab（切回时恢复）
   if(currentConvId){
@@ -427,7 +470,11 @@ async function selectConv(id) {
   _convMsgTotal = (r && r.total) || msgs.length;
   _oldestMsgId = msgs.length ? msgs[0].id : null;
   const area = document.getElementById('chat-area');
-  if(!msgs.length) { area.innerHTML = '<div style="text-align:center;color:var(--mut);padding:40px;">开始输入以启动 AI 建模…</div>'; }
+  if(!msgs.length) {
+    area.innerHTML = '<div style="text-align:center;color:var(--mut);padding:40px;">开始输入以启动 AI 建模…</div>';
+    // 活跃流保护③兜底：流式现场属于本会话却拿到空消息（后端入口落库失效时）→ 现场挂回，别显示空态
+    _reattachLiveStream(area, id);
+  }
   else {
     area.innerHTML = msgs.length < _convMsgTotal
       ? `<div id="load-earlier-btn" class="load-earlier" onclick="loadEarlierMessages()">⬆ 加载更早消息（剩余 ${_convMsgTotal - msgs.length} 条）</div>`
@@ -435,7 +482,9 @@ async function selectConv(id) {
     // 分片渲染：首屏不再一次性插入全部消息（长会话曾致主线程阻塞数秒）
     // 2026-09-16：固定时间补偿追不上懒加载长高（mermaid 首载/图片/缩略图），改为持续钉底 8s，
     // 用户滚轮/触摸上滑立即让位（renderMessagesChunked 上方 pinChatBottom 定义）
-    renderMessagesChunked(area, msgs, ()=>{ pinChatBottom(area, 8000); });
+    // 2026-09-29：done 回调里先挂回流式现场再钉底 —— 分片是 rAF 异步追加，
+    // 若在调用点直接挂回，后续分片会排到现场之后造成消息乱序。
+    renderMessagesChunked(area, msgs, ()=>{ _reattachLiveStream(area, id); pinChatBottom(area, 8000); });
   }
   // 2026-09-29（用户反馈）：状态栏不再写「已加载」——零信息量却让蓝色状态条常驻不消失
   // （initChatStatusBar 有文本即显示）。状态栏只承载实质状态（意图调度/失败/停止等）。

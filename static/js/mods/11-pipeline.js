@@ -825,6 +825,7 @@ async function sendResume(text){
   const aiBox = document.createElement('div');
   aiBox.className = 'msg ai';
   aiBox.id = 'stream-ai';
+  aiBox.dataset.convId = String(currentConvId);   // 2026-09-29：流式现场归属会话（与 sendChat 同步，切会话寄存/挂回依赖此标记）
   aiBox.innerHTML = `<span class="who">AI</span><div class="msg-inner"><div class="proc" id="proc-box"></div><div class="body streaming"><span class="typing"></span></div></div>`;
   area.appendChild(aiBox);
   area.scrollTop = area.scrollHeight;

@@ -221,6 +221,7 @@ async function sendChat() {
   const aiBox = document.createElement('div');
   aiBox.className = 'msg ai';
   aiBox.id = 'stream-ai';
+  aiBox.dataset.convId = String(currentConvId);   // 2026-09-29：流式现场归属会话（切会话寄存/挂回、固化落库都以它为准）
   aiBox.innerHTML = `<span class="who">AI</span><div class="msg-inner"><div class="proc" id="proc-box"></div><div class="body streaming"><span class="typing"></span></div></div>`;
   area.appendChild(aiBox);
   area.scrollTop = area.scrollHeight;
@@ -303,13 +304,17 @@ function finalizeStopped(aiBox){
 async function commitPartialStream(box){
   try{
     const el = box || document.getElementById('stream-ai');
-    if(!el || !currentConvId) return null;
+    if(!el) return null;
+    // 2026-09-29：固化目标 = 流式现场归属的会话（el.dataset.convId），而非当前选中会话——
+    // 流式中切到其他会话再发新消息时，currentConvId 已变，按 currentConvId 固化会把 A 会话内容写进 B。
+    const _cid = el.dataset.convId || currentConvId;
+    if(!_cid) return null;
     if(el.dataset.committedId) return el.dataset.committedId;   // 已固化过 → 幂等复用
     const bodyEl = el.querySelector('.body');
     const content = bodyEl ? (bodyEl.textContent || '').trim() : '';
     // 极短内容（只有 typing 占位/一两个字）没有固化价值，避免制造噪声消息
     if(content.length < 4) return null;
-    const r = await api(`/api/conversations/${currentConvId}/messages/partial`,
+    const r = await api(`/api/conversations/${_cid}/messages/partial`,
                         {method:'POST', body: JSON.stringify({content, stopped:true})});
     if(r && r.id){ el.dataset.committedId = String(r.id); return r.id; }
   }catch(e){ /* 固化失败不阻断 UI 收口：DOM 里仍有已生成内容 */ }
