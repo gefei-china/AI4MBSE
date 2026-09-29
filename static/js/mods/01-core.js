@@ -461,8 +461,11 @@ const MODAL_FORMS = {
           <option value="sub">子 Agent（团队成员）</option>
           <option value="main">主 Agent（团队负责人）</option>
         </select></div>
-        <div class="form-row" id="f-team-row" style="display:none;"><label>👥 团队成员（子 Agent） <span class="info-tip" title="勾选即选入团队（可多选）；主 Agent 不可作为子 Agent 添加；选择状态随编辑回填">ⓘ</span></label>
-          <div id="f-team-list" style="display:flex;flex-direction:column;gap:2px;max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;"></div>
+        <div class="form-row" id="f-team-row" style="display:none;"><label>👥 团队成员（子 Agent） <span class="info-tip" title="点开下拉勾选（可多选）；主 Agent 不可作为子 Agent 添加；选择状态随编辑回填">ⓘ</span></label>
+          <div id="f-team-dd">
+            <div id="f-team-dd-head" onclick="teamDdToggle(event)" style="display:flex;align-items:center;justify-content:space-between;gap:6px;border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;user-select:none;background:#fff;"><span id="f-team-dd-sum" style="color:var(--mut);">加载候选…</span><span style="font-size:9px;color:var(--mut);">▾</span></div>
+            <div id="f-team-list" style="display:none;border:1px solid var(--line);border-top:none;border-radius:0 0 6px 6px;max-height:240px;overflow:auto;background:#fff;font-size:12px;"></div>
+          </div>
         </div>
         <div class="form-row"><label>描述</label><textarea id="f-desc" rows="2" style="min-height:64px;resize:vertical;" placeholder="Agent 职责描述"></textarea></div>
         <div class="form-row"><label>指定模型 <span class="info-tip" title="可空=使用全局默认模型；指定后强制使用">ⓘ</span></label><select id="f-provider"><option value="">（全局默认）</option></select></div>

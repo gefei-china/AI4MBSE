@@ -616,48 +616,77 @@ function editAgent(id) {
   });
 }
 // ── 主/子 Agent 团队：角色切换 → 团队成员候选加载（子 Agent 无成员区）──
-// 2026-09-29（用户反馈）：改为**复选框面板**直接勾选（此前是"下拉 + ＋添加 + 成员#N chip"，
-//   且回填时序有 bug：chips 在候选下拉加载完成前渲染，option 不存在 → 永远显示"成员#1 ×"这种
-//   无意义标签，看不出是什么子智能体）。复选面板天然带名称/能力描述，勾选状态由 _agentTeamSet
-//   持有，编辑打开时回填勾选；候选异步加载完成后重渲染一次，已选项即使暂无候选也先以 id 兜底显示。
+// 2026-09-29 二版（用户反馈"组件变形了，支持下拉多选即可，不用默认都扑出来"）：
+//   一版的常铺复选面板有 Two 个问题：① 18 个候选全铺开把抽屉表单撑变形；
+//   ② 根因级 bug —— title="${esc(description)}" 里 esc() **不转义引号**（属性上下文必须用 escA），
+//      描述含 " 即撑破 HTML 结构。本版改为下拉多选：默认收起一行（头部显示已选摘要），
+//      点开才出选项面板（240px 内滚动），描述不再进任何 HTML 属性。
 let _agentTeamSet = new Set();
-let _agentTeamCands = [];   // 缓存候选列表（异步加载；加载前回填的已选 id 先兜底渲染）
+let _agentTeamCands = [];   // 缓存候选列表（异步加载；加载前回填的已选 id 先兜底显示）
 async function onAgentRoleChange(selectedMemberIds){
   const role = document.getElementById('f-role').value;
   const row = document.getElementById('f-team-row');
-  if(role !== 'main'){ if(row) row.style.display = 'none'; _agentTeamSet.clear(); renderTeamChecks(); return; }
+  if(role !== 'main'){ if(row) row.style.display = 'none'; _agentTeamSet.clear(); teamDdClose(); renderTeamChecks(); return; }
   if(!row) return;
   row.style.display = '';
   _agentTeamSet = new Set(selectedMemberIds||[]);
-  renderTeamChecks();   // 先渲染：已选项以缓存候选（或 id 兜底）立即显示勾选状态
+  teamDdClose();
+  renderTeamChecks();   // 先渲染：头部摘要立即反映已选状态（候选未到时用 id 兜底）
   try{
     const exclude = agentEditId || 0;
     const cands = await api('/api/studio/agents/sub-candidates?exclude=' + exclude);
     _agentTeamCands = cands||[];
-    if(!_agentTeamCands.length){ const el = document.getElementById('f-team-list'); if(el) el.innerHTML = '<span style="font-size:11px;color:var(--mut);">暂无可用子 Agent（请先创建子 Agent 角色）</span>'; return; }
-    renderTeamChecks();   // 候选到位后重渲染（修复"成员#N"时序 bug 的关键）
-  }catch(e){ const el = document.getElementById('f-team-list'); if(el) el.innerHTML = '<span style="font-size:11px;color:var(--red);">候选加载失败</span>'; }
+    if(!_agentTeamCands.length){ const box = document.getElementById('f-team-list'); if(box) box.innerHTML = '<div style="padding:8px 10px;color:var(--mut);font-size:11px;">暂无可用子 Agent（请先创建子 Agent 角色）</div>'; renderTeamChecks(); return; }
+    renderTeamChecks();   // 候选到位后重渲染（摘要换真名 + 面板补全选项）
+  }catch(e){ const box = document.getElementById('f-team-list'); if(box) box.innerHTML = '<div style="padding:8px 10px;color:var(--red);font-size:11px;">候选加载失败</div>'; }
+}
+// 头部摘要：未选=占位灰字；已选=前 2 个名称 + 剩余计数（候选到位前用 成员#id 兜底）
+function _teamSumRefresh(){
+  const sum = document.getElementById('f-team-dd-sum');
+  if(!sum) return;
+  if(!_agentTeamSet.size){ sum.textContent = '选择子 Agent…'; sum.style.color = 'var(--mut)'; return; }
+  const names = [..._agentTeamSet].map(id=>{
+    const c = _agentTeamCands.find(x=>x.id===id);
+    return c ? (c.display_name||c.name) : ('成员#'+id);
+  });
+  sum.textContent = names.length<=2 ? names.join('、') : `${names.slice(0,2).join('、')} 等 ${names.length} 个`;
+  sum.style.color = 'var(--ink)';
 }
 function renderTeamChecks(){
+  _teamSumRefresh();
   const box = document.getElementById('f-team-list'); if(!box) return;
   if(!_agentTeamCands.length){
-    // 候选未加载完成：已选项以 id 兜底显示（保持勾选状态可见，避免"选了什么"信息丢失）
-    box.innerHTML = [..._agentTeamSet].length
-      ? [..._agentTeamSet].map(id=>`<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;"><input type="checkbox" checked onchange="bindTeamToggle(${id},this.checked)"><b>成员#${id}</b><span style="color:var(--mut);font-size:10.5px;">（候选加载中…）</span></label>`).join('')
-      : '<span style="font-size:11px;color:var(--mut);">加载候选…</span>';
+    box.innerHTML = _agentTeamSet.size
+      ? [..._agentTeamSet].map(id=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;"><input type="checkbox" checked onchange="bindTeamToggle(${id},this.checked)"><span>成员#${id} <span style="color:var(--mut);font-size:10.5px;">（候选加载中…）</span></span></label>`).join('')
+      : '<div style="padding:8px 10px;color:var(--mut);font-size:11px;">加载候选…</div>';
     return;
   }
   box.innerHTML = _agentTeamCands.map(c=>{
     const on = _agentTeamSet.has(c.id);
-    const cap = (c.capabilities||[]).length ? ` · ${esc(c.capabilities.slice(0,3).join('/'))}` : '';
-    return `<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;" title="${esc(c.description||'')}">`
+    return `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;" onmouseover="this.style.background='#f4f6fa'" onmouseout="this.style.background=''">`
       + `<input type="checkbox" ${on?'checked':''} onchange="bindTeamToggle(${c.id},this.checked)">`
-      + `<span>${c.icon||'🤖'} <b>${esc(c.display_name||c.name)}</b> <span style="color:var(--mut);font-size:10.5px;">（${esc(c.name)}）${cap}</span></span></label>`;
-  }).join('') || '<span style="font-size:11px;color:var(--mut);">暂无可用子 Agent</span>';
+      + `<span>${c.icon||'🤖'} <b>${esc(c.display_name||c.name)}</b> <span style="color:var(--mut);font-size:10.5px;">（${esc(c.name)}）</span></span></label>`;
+  }).join('') || '<div style="padding:8px 10px;color:var(--mut);font-size:11px;">暂无可用子 Agent</div>';
 }
+// 勾选只更新集合与头部摘要，不重渲面板（保留滚动位置与连点手感）
 function bindTeamToggle(id, checked){
   if(checked) _agentTeamSet.add(id); else _agentTeamSet.delete(id);
+  _teamSumRefresh();
 }
+function teamDdToggle(ev){
+  if(ev) ev.stopPropagation();
+  const box = document.getElementById('f-team-list'); if(!box) return;
+  box.style.display = box.style.display==='none' ? '' : 'none';
+}
+function teamDdClose(){
+  const box = document.getElementById('f-team-list');
+  if(box) box.style.display = 'none';
+}
+// 点外部收起（本模块为全局 script，顶层只挂一次）
+document.addEventListener('click', (ev)=>{
+  const dd = document.getElementById('f-team-dd');
+  if(dd && !dd.contains(ev.target)) teamDdClose();
+});
 function collectAgentTeam(){
   const role = document.getElementById('f-role').value;
   if(role !== 'main') return [];
@@ -753,7 +782,7 @@ function openAgentForm(){
   document.getElementById('f-role').value = 'sub';      // 新建默认子 Agent
   const row = document.getElementById('f-team-row');
   if(row) row.style.display = 'none';
-  _agentTeamSet.clear(); _agentTeamCands = []; renderTeamChecks();
+  _agentTeamSet.clear(); _agentTeamCands = []; teamDdClose(); renderTeamChecks();
   loadProviderOptions();
   loadAgentBindOptions([]);
 }
