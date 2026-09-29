@@ -615,44 +615,48 @@ function editAgent(id) {
     loadAgentBindOptions((a.tools||[]).map(t=>`${t.tool_type}:${t.tool_name}`));
   });
 }
-// ── 主/子 Agent 团队：角色切换 → 团队成员候选加载（子 Agent 无成员区；下拉选择 + 逐个添加）──
+// ── 主/子 Agent 团队：角色切换 → 团队成员候选加载（子 Agent 无成员区）──
+// 2026-09-29（用户反馈）：改为**复选框面板**直接勾选（此前是"下拉 + ＋添加 + 成员#N chip"，
+//   且回填时序有 bug：chips 在候选下拉加载完成前渲染，option 不存在 → 永远显示"成员#1 ×"这种
+//   无意义标签，看不出是什么子智能体）。复选面板天然带名称/能力描述，勾选状态由 _agentTeamSet
+//   持有，编辑打开时回填勾选；候选异步加载完成后重渲染一次，已选项即使暂无候选也先以 id 兜底显示。
 let _agentTeamSet = new Set();
+let _agentTeamCands = [];   // 缓存候选列表（异步加载；加载前回填的已选 id 先兜底渲染）
 async function onAgentRoleChange(selectedMemberIds){
   const role = document.getElementById('f-role').value;
   const row = document.getElementById('f-team-row');
-  const sel = document.getElementById('f-team');
-  if(role !== 'main'){ if(row) row.style.display = 'none'; _agentTeamSet.clear(); renderTeamChips(); return; }
-  if(!row || !sel) return;
+  if(role !== 'main'){ if(row) row.style.display = 'none'; _agentTeamSet.clear(); renderTeamChecks(); return; }
+  if(!row) return;
   row.style.display = '';
-  sel.innerHTML = '<option value="">加载候选…</option>';
   _agentTeamSet = new Set(selectedMemberIds||[]);
-  renderTeamChips();
+  renderTeamChecks();   // 先渲染：已选项以缓存候选（或 id 兜底）立即显示勾选状态
   try{
     const exclude = agentEditId || 0;
     const cands = await api('/api/studio/agents/sub-candidates?exclude=' + exclude);
-    if(!(cands||[]).length){ sel.innerHTML = '<option value="">暂无可用子 Agent（请先创建子 Agent 角色）</option>'; return; }
-    sel.innerHTML = '<option value="">选择子 Agent…</option>' + cands.map(c=>`<option value="${c.id}">${c.icon||'🤖'} ${esc(c.display_name||c.name)}（${esc(c.name)}）${(c.capabilities||[]).length?` · ${esc(c.capabilities.slice(0,3).join('/'))}`:''}</option>`).join('');
-  }catch(e){ sel.innerHTML = '<option value="">加载失败</option>'; }
+    _agentTeamCands = cands||[];
+    if(!_agentTeamCands.length){ const el = document.getElementById('f-team-list'); if(el) el.innerHTML = '<span style="font-size:11px;color:var(--mut);">暂无可用子 Agent（请先创建子 Agent 角色）</span>'; return; }
+    renderTeamChecks();   // 候选到位后重渲染（修复"成员#N"时序 bug 的关键）
+  }catch(e){ const el = document.getElementById('f-team-list'); if(el) el.innerHTML = '<span style="font-size:11px;color:var(--red);">候选加载失败</span>'; }
 }
-function renderTeamChips(){
-  const box = document.getElementById('f-team-chips'); if(!box) return;
-  box.innerHTML = [..._agentTeamSet].map(id=>{
-    const opt = [...document.querySelectorAll('#f-team option')].find(o=>parseInt(o.value,10)===id);
-    const label = opt ? opt.textContent.trim() : ('成员#'+id);
-    return `<span class="hil l0" style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;">${esc(label)}<b style="cursor:pointer;color:var(--red);" title="移除" onclick="bindTeamRemove(${id})">×</b></span>`;
-  }).join('') || '<span style="font-size:11px;color:var(--mut);">尚未添加成员</span>';
+function renderTeamChecks(){
+  const box = document.getElementById('f-team-list'); if(!box) return;
+  if(!_agentTeamCands.length){
+    // 候选未加载完成：已选项以 id 兜底显示（保持勾选状态可见，避免"选了什么"信息丢失）
+    box.innerHTML = [..._agentTeamSet].length
+      ? [..._agentTeamSet].map(id=>`<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;"><input type="checkbox" checked onchange="bindTeamToggle(${id},this.checked)"><b>成员#${id}</b><span style="color:var(--mut);font-size:10.5px;">（候选加载中…）</span></label>`).join('')
+      : '<span style="font-size:11px;color:var(--mut);">加载候选…</span>';
+    return;
+  }
+  box.innerHTML = _agentTeamCands.map(c=>{
+    const on = _agentTeamSet.has(c.id);
+    const cap = (c.capabilities||[]).length ? ` · ${esc(c.capabilities.slice(0,3).join('/'))}` : '';
+    return `<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;" title="${esc(c.description||'')}">`
+      + `<input type="checkbox" ${on?'checked':''} onchange="bindTeamToggle(${c.id},this.checked)">`
+      + `<span>${c.icon||'🤖'} <b>${esc(c.display_name||c.name)}</b> <span style="color:var(--mut);font-size:10.5px;">（${esc(c.name)}）${cap}</span></span></label>`;
+  }).join('') || '<span style="font-size:11px;color:var(--mut);">暂无可用子 Agent</span>';
 }
-function bindTeamAdd(){
-  const sel = document.getElementById('f-team');
-  const v = sel ? parseInt(sel.value,10) : NaN;
-  if(!v){ toast('请先选择要添加的子 Agent'); return; }
-  _agentTeamSet.add(v);
-  if(sel) sel.value = '';
-  renderTeamChips();
-}
-function bindTeamRemove(id){
-  _agentTeamSet.delete(id);
-  renderTeamChips();
+function bindTeamToggle(id, checked){
+  if(checked) _agentTeamSet.add(id); else _agentTeamSet.delete(id);
 }
 function collectAgentTeam(){
   const role = document.getElementById('f-role').value;
@@ -749,7 +753,7 @@ function openAgentForm(){
   document.getElementById('f-role').value = 'sub';      // 新建默认子 Agent
   const row = document.getElementById('f-team-row');
   if(row) row.style.display = 'none';
-  _agentTeamSet.clear(); renderTeamChips();
+  _agentTeamSet.clear(); _agentTeamCands = []; renderTeamChecks();
   loadProviderOptions();
   loadAgentBindOptions([]);
 }

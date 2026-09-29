@@ -37,6 +37,12 @@ function procBlocksHtml(ex, mid){
     const statusText = t.ok===true ? '✓ 成功' : (t.ok===false ? '✗ 失败' : '⏱ 执行中');
     const cls = 'tool' + (t.ok===true ? ' success' : (t.ok===false ? ' error' : ''));
     const res = t.error || t.result || '-';
+    // 2026-09-25（对齐 Claude Code / Codex，且遵守"两条渲染路径成对维护"）：头部一行结果摘要。
+    // ⚠️ ① 不加 ✓/✗ 前缀 —— 头部已有 statusText（"✓ 成功/✗ 失败"）与状态徽章，加了会三处重复；
+    //    ② 这里 s.sub 在下面模板中是**未转义**插值（原有 sub 均为字面量），故必须先 esc()。
+    const subTxt = (res && String(res) !== '-')
+      ? ' · ' + esc(typeof _toolSumm === 'function' ? _toolSumm(res, 60) : String(res).slice(0, 60))
+      : '';
     let body = (t.arguments?`<div class="proc-tool-param">参数：${esc(typeof t.arguments==='string'?t.arguments:JSON.stringify(t.arguments))}</div>`:'');
     // P0-2 历史工具失败：三段式错误面（why/next 由后端持久化或前端推断）
     if(t.ok===false && t.error){
@@ -64,14 +70,16 @@ function procBlocksHtml(ex, mid){
     }
     // P0-1 历史工具耗时（exec 持久化 elapsed_ms 时显示）
     const elapsedSub = t.elapsed_ms ? ` · ⏱ ${(t.elapsed_ms/1000).toFixed(1)}s` : '';
-    steps.push({icon:'🛠', title:`调用 ${esc(t.name)}`, status:t.ok===true?'done':(t.ok===false?'error':'run'), sub:statusText+elapsedSub, body, cls, badge: statusText, badgeCls: statusCls});
+    steps.push({icon:'🛠', title:`调用 ${esc(t.name)}`, status:t.ok===true?'done':(t.ok===false?'error':'run'), sub:statusText+elapsedSub+subTxt, body, cls, badge: statusText, badgeCls: statusCls});
   });
   // V2.6 历史消息执行过程：统一收口条（默认收起）+ 时间线容器（点击展开按层级回看）
   const timeline = steps.map((s,i)=>`<div class="proc-block collapsed ${s.cls||''}"><div class="proc-head" onclick="toggleProc(this)"><span>${s.icon}</span><span class="proc-title">${s.title}</span>${s.sub?`<span class="proc-sub">${s.sub}</span>`:''}${s.badge?`<span class="tool-status ${s.badgeCls}">${s.badge}</span>`:''}<span class="chev">▾</span><span class="proc-time">${now}</span></div>${s.noBody?'':`<div class="proc-body">${s.body||''}</div>`}</div>`).join('');
   if(!steps.length) return '';
   const failN = (ex.tools||[]).filter(t=>t.ok===false).length;
   const sumTxt = `✓ 已完成 · ${steps.length} 环节${failN?` · ${failN} 失败`:''}`;
-  return `<div class="hist-proc"><div class="proc-summary collapsed" onclick="histProcToggle(this)">${sumTxt}<span class="chev">▾</span></div><div class="proc-timeline">${timeline}</div></div>`;
+  // 2026-09-25：历史还原路径也要带「🔍 详情」入口 —— 此前只有流式当时的收口条注入了按钮，
+// 刷新后（走本函数从 card_data.exec 还原）按钮消失，同一份数据两套呈现（前后端一致性缺口，实测）。
+  return `<div class="hist-proc"><div class="proc-summary collapsed" onclick="histProcToggle(this)">${sumTxt}${(typeof _procDetailBtn === 'function') ? _procDetailBtn() : ''}<span class="chev">▾</span></div><div class="proc-timeline">${timeline}</div></div>`;
 }
 
 // ── P0-1/P0-2：编排结果卡（子任务轨迹摘要 + 另存为/打开流程） ──
@@ -111,13 +119,25 @@ function renderOrchCard(cd){
     const rOk = ref.passed;
     refHtml = `<div class="proc-line" style="padding:2px 0;font-size:11px;color:var(--mut);">🔍 质量评审：<b style="color:${rOk?'var(--grn)':'var(--amb)'};">${ref.score}/100</b> ${rOk?'<span class="st ok">✓ 通过</span>':'<span class="st w">未通过</span>'}${ref.rounds>1?` · 修订 ${ref.rounds-1} 轮`:''}${(ref.issues||[]).length?` · ${ref.issues.length} 项问题`:''}${ref.degraded?' · <span class="st w">降级</span>':''}${ref.issues&&ref.issues.length?`<div style="color:var(--mut);font-size:10.5px;margin-top:2px;">${esc(ref.issues.slice(0,3).join('；'))}</div>`:''}</div>`;
   }
+  // 2026-09-29（用户反馈）：AI 输出完成后，最下方平铺的子任务卡片"那一坨"默认收起 ——
+  //   只留一行汇总 chip（🕸 自动编排 · N 个子任务 · 完成 M + 状态徽章），点击展开明细。
+  //   此前 rows 默认展开，与已收起的执行过程收口条（V2.6）设计不一致，完成后霸屏。
   return `<div class="rc">
-    <div class="rc-chip b">🕸 自动编排 · ${plan.length} 个子任务 · ${doneN} 完成${failN?` / ${failN} 失败`:''}${degraded}${oscBadge}</div>
+    <div class="rc-chip b" style="cursor:pointer;user-select:none;" title="点击展开/收起子任务明细" onclick="orchDetailToggle(this)">🕸 自动编排 · ${plan.length} 个子任务 · ${doneN} 完成${failN?` / ${failN} 失败`:''}${degraded}${oscBadge}<span class="chev" style="margin-left:6px;font-size:9px;">▾</span></div>
     ${partialHint}
     ${budgetHtml}
     ${refHtml}
-    <div class="proc-body">${rows}</div>
+    <div class="proc-body orch-detail" style="display:none;">${rows}</div>
   </div>`;
+}
+// 编排卡子任务明细：展开/收起（chip 行点击）
+function orchDetailToggle(chipEl){
+  const body = chipEl.parentElement && chipEl.parentElement.querySelector('.orch-detail');
+  if(!body) return;
+  const open = body.style.display === 'none';
+  body.style.display = open ? '' : 'none';
+  const ch = chipEl.querySelector('.chev');
+  if(ch) ch.style.transform = open ? 'rotate(90deg)' : '';
 }
 /* ── 富卡片渲染（FR-HIL-1/2 中间结果逐条确认 · FR-CIA · FR-VR/VC 可视化） ── */
 function renderRichCard(type, cd, content) {
@@ -268,11 +288,38 @@ function cardSysmlTabs(cd, content) {
       <span class="svm-tab active" data-tab="code" onclick="svmTabSwitch(this)" title="SysML v2 代码">代码<i class="sv-cnt">${codeCnt>0?codeCnt:''}</i></span>
       <span class="svm-tab" data-tab="view" onclick="svmTabSwitch(this)" title="按「${esc(sv.intent||'模型')}」意图即时投影">视图<i class="sv-cnt">${entries.length}</i></span>
       <span style="flex:1;display:flex;align-items:center;justify-content:flex-end;font-size:10.5px;color:var(--mut);padding-right:6px;">按「${esc(sv.intent||'模型')}」意图投影 · ${parsed.nodes} 元素 / ${parsed.edges} 关系</span>
+      <button class="btn sm ghost" style="padding:1px 8px;font-size:10.5px;flex:none;" onclick="svmCopyCode(this)" title="复制本消息全部 SysML v2 代码">📋 复制</button>
       <button class="btn sm ghost" style="padding:1px 8px;font-size:10.5px;flex:none;color:var(--grn,#2f855a);border-color:#C0DD97;" onclick="openNormReport(this)" title="查看本次生成的归一校验报告（术语词典对齐 / 同名消歧 / 未命中建议）">🧹 归一校验</button>
     </div>
     <div class="svm-pane" data-pane="code">${codePane}</div>
     <div class="svm-pane" data-pane="view" style="display:none;">${svmThumbsHtml(sv)}</div>
   </div>`;
+}
+/* 2026-09-29（用户反馈）：AI 建模输出代码支持一键复制 —— 正文里的 sysml 代码块会被
+   stripFencedCode 剥离进本卡（extractSysmlCode 提取），代码 tab 是唯一展示入口，故复制按钮挂这里。
+   剪贴板 API 不可用（http 部署/旧内核）时回退 execCommand，不静默失败。 */
+function svmCopyCode(btn){
+  const card = btn.closest('.sv-card');
+  const codeEl = card && card.querySelector('.svm-pane[data-pane="code"] code');
+  const text = codeEl ? (codeEl.textContent||'') : '';
+  if(!text.trim()){ toast('未检测到可复制的 SysML 代码'); return; }
+  const done = ()=>{ const t = btn.textContent; btn.textContent = '✓ 已复制';
+    setTimeout(()=>{ btn.textContent = t; }, 1500); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(()=>_svmCopyFallback(text, done));
+  } else {
+    _svmCopyFallback(text, done);
+  }
+}
+function _svmCopyFallback(text, done){
+  try{
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.cssText = 'position:fixed;opacity:0;';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    if(ok) done(); else toast('复制失败，请手动选择代码复制');
+  }catch(e){ toast('复制失败，请手动选择代码复制'); }
 }
 /* tab 切换：仅切换卡片内 .svm-tab / .svm-pane（不影响其他消息） */
 function svmTabSwitch(tabEl) {

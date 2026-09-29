@@ -461,9 +461,8 @@ const MODAL_FORMS = {
           <option value="sub">子 Agent（团队成员）</option>
           <option value="main">主 Agent（团队负责人）</option>
         </select></div>
-        <div class="form-row" id="f-team-row" style="display:none;"><label>👥 团队成员（子 Agent） <span class="info-tip" title="从子 Agent 中逐个添加（可添加多个）；主 Agent 不可作为子 Agent 添加">ⓘ</span></label>
-          <div style="display:flex;gap:6px;"><select id="f-team" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:12px;"></select><button type="button" class="btn sm" onclick="bindTeamAdd()">＋ 添加</button></div>
-          <div id="f-team-chips" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;"></div>
+        <div class="form-row" id="f-team-row" style="display:none;"><label>👥 团队成员（子 Agent） <span class="info-tip" title="勾选即选入团队（可多选）；主 Agent 不可作为子 Agent 添加；选择状态随编辑回填">ⓘ</span></label>
+          <div id="f-team-list" style="display:flex;flex-direction:column;gap:2px;max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;"></div>
         </div>
         <div class="form-row"><label>描述</label><textarea id="f-desc" rows="2" style="min-height:64px;resize:vertical;" placeholder="Agent 职责描述"></textarea></div>
         <div class="form-row"><label>指定模型 <span class="info-tip" title="可空=使用全局默认模型；指定后强制使用">ⓘ</span></label><select id="f-provider"><option value="">（全局默认）</option></select></div>
