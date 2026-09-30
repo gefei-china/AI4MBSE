@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """P0-7 常驻验收：① 子任务超时判据（停滞为主 + 硬上限）② 汇总话术不再说谎
-③ 摘要 count/去重口径 ④ run_id 唯一化（计划历史不再被覆盖）。
+③ 摘要 count/去重口径 ④ run_id 唯一化（计划历史不再被覆盖）
+⑤ 质量评审被 max_tokens 截断时不得误报「解析失败」（[J] 组 + M4 变异自证）。
 
 跑法：<repo>\\.venv\\Scripts\\python.exe -X utf8 tools/verify/verify_orch_reliability.py
 
@@ -301,6 +302,76 @@ _c.close()
 
 # ══════════════════════════════════════════════════════════════════════════
 print()
+print("[J] 质量评审：输出被 max_tokens 截断时不得误报「解析失败」")
+# ══════════════════════════════════════════════════════════════════════════
+# 背景（会话 514 实跑）：评审 `max_tokens=1024` 被思考模型的 reasoning 吃光 →
+# 正文 JSON 被 `finish_reason="length"` 从中间截断、闭合 `}` 丢失 →
+# 原实现走硬编码兜底判 0 分「解析失败」→ 把"模型其实给了分"报成解析失败，
+# 并把 orchestrated_status 误降级为 partial。本组即该缺陷的常驻回归。
+from workflows.nodes import FlowNodesMixin                            # noqa: E402
+
+_PARSE = FlowNodesMixin._parse_eval_json
+_FULL_JSON = '{"score": 62, "passed": false, "issues": ["内容重复"], "advice": "补细节"}'
+_TRUNC_JSON = '{"score": 10, "passed": false, "issues": ["六个章节内容完全重复，未分别提供'
+
+_J1 = _PARSE(_FULL_JSON)
+check("J1 完整 JSON → 正常解析出 score/passed",
+      _J1.get("score") == 62 and _J1.get("passed") is False, "J1=%s" % _J1.get("score"))
+
+_J2 = _PARSE(_TRUNC_JSON)
+check("J2 **截断 JSON**（有 { 无 }）→ 宽松抽取拿到真实分数（不再判 0 分解析失败）",
+      _J2.get("score") == 10, "J2=%s" % _J2.get("score"))
+check("J2b 截断这件事**不静默**（issues 里如实标注）",
+      any("截断" in str(_i) for _i in (_J2.get("issues") or [])), "issues=%s" % _J2.get("issues"))
+_J3 = _PARSE('{"score": 88, "passed": true, "issues": [')
+check("J3 截断也能取到 passed=true", _J3.get("score") == 88 and _J3.get("passed") is True)
+check("J4 抽不到关键字段 → 返回 {}（不臆造分数）",
+      _PARSE('{"foo": 1') == {} and _PARSE("") == {} and _PARSE("没有大括号") == {})
+
+
+def _eval_with(resp_body, content="一段待评审的编排汇总正文，用于驱动公共评审函数。"):
+    """用桩 chat 驱动**真** `_evaluate_content`（解析/兜底/文案全走真代码）。"""
+    orig = LLM.llm_client.chat
+    LLM.llm_client.chat = lambda messages, **k: resp_body
+    try:
+        return FlowNodesMixin._evaluate_content(content)
+    finally:
+        LLM.llm_client.chat = orig
+
+
+_E_TRUNC = _eval_with({"choices": [{"message": {"content": _TRUNC_JSON}, "finish_reason": "length"}],
+                       "_meta": {"provider": "stub"}})
+
+
+def _j5_ok(res):
+    """J5 的目标判据 —— **独立成函数**，好让 M4 变异直接复用同一条（别另写一条近似判据）。"""
+    return (res.get("score") == 10
+            and not any("解析失败" in str(_i) for _i in (res.get("issues") or [])))
+
+
+check("J5 端到端（桩 llm + 真评审函数）：截断回包 → score=真实分、不再报「解析失败」",
+      _j5_ok(_E_TRUNC),
+      "score=%s issues=%s" % (_E_TRUNC.get("score"), _E_TRUNC.get("issues")))
+check("J5b _meta 带上 finish_reason（现场可判'被截断'还是'模型没吐 JSON'）",
+      (_E_TRUNC.get("_meta") or {}).get("finish_reason") == "length")
+_E_EMPTY = _eval_with({"choices": [{"message": {"content": ""}, "finish_reason": "length"}], "_meta": {}})
+check("J6 端到端：content 全空 → 成因如实标注（不与其他成因混成一个'解析失败'）",
+      _E_EMPTY.get("score") == 0 and any("reasoning" in str(_i) for _i in _E_EMPTY.get("issues") or []),
+      "issues=%s" % _E_EMPTY.get("issues"))
+_E_FULL = _eval_with({"choices": [{"message": {"content": _FULL_JSON}, "finish_reason": "stop"}], "_meta": {}})
+check("J7 端到端：完整回包行为不变（score/passed/issues/advice 全出）",
+      _E_FULL.get("score") == 62 and _E_FULL.get("advice") == "补细节")
+check("J8 评审调用已不再硬编码 1024（改走 config）",
+      "max_tokens=1024" not in src_of(FlowNodesMixin._evaluate_content)
+      and "_eval_max_tokens()" in src_of(FlowNodesMixin._evaluate_content))
+_cfg_src = open("core/config.py", encoding="utf-8").read()
+check("J9 eval_max_tokens 已进 config 两处（DEFAULT_CONFIG + CONFIG_SCHEMA）",
+      _cfg_src.count('"eval_max_tokens"') == 2)
+_em = CFG.get("refine", "eval_max_tokens")
+check("J10 config 真读到且显著大于旧硬编码 1024", bool(_em) and int(_em) > 1024, "eval_max_tokens=%s" % _em)
+
+# ══════════════════════════════════════════════════════════════════════════
+print()
 print("[M] 变异自证：每个变异必须制造**新增失败**")
 # ══════════════════════════════════════════════════════════════════════════
 _M_BASE = set(FAIL)
@@ -377,6 +448,30 @@ try:
     _c.close()
     check("M3 退回旧写法 → I1 目标断言失败（4 项只列 3 个名字）",
           "4 条中不重名 3 种" not in _d3 and "需求图" in _d3)
+
+    # M4 评审解析退回"只认完整 JSON"（= 本次修的那个缺陷）→ J2/J5 必须翻。
+    #   注意：`_PARSE` 是 J 组绑定的函数对象，patch 类属性不会影响它；
+    #   `_evaluate_content` 内部是**动态类属性查找**，故两者分别取，才能都验到。
+    _pn_src = src_of(FlowNodesMixin._parse_eval_json)
+    _m4_src, _h4 = _replace_line(_pn_src, "if ms:", "if False:")
+    check("M4 变异锚点命中（宽松抽取分支）", _h4 == 1, "hits=%d" % _h4)
+    _ns4 = dict(FlowNodesMixin._parse_eval_json.__globals__)   # 用真模块全局，别手写小 dict（会被自身 except 静默兜空）
+    exec(compile(_m4_src, "<eval_twin>", "exec"), _ns4)
+    _old_fn = _ns4["_parse_eval_json"]
+    if isinstance(_old_fn, staticmethod):
+        _old_fn = _old_fn.__func__
+    _orig_pn = FlowNodesMixin._parse_eval_json
+    FlowNodesMixin._parse_eval_json = staticmethod(_old_fn)
+    try:
+        _j2m = FlowNodesMixin._parse_eval_json(_TRUNC_JSON)
+        _e5m = _eval_with({"choices": [{"message": {"content": _TRUNC_JSON},
+                                       "finish_reason": "length"}], "_meta": {}})
+    finally:
+        FlowNodesMixin._parse_eval_json = _orig_pn
+    check("M4 退回「只认完整 JSON」→ J2 目标断言失败（截断回包拿不到分）",
+          _j2m.get("score") != 10, "变异后 score=%s" % _j2m.get("score"))
+    check("M4b 同上 → J5 目标断言**同一条判据**由真变假（端到端真实分被丢弃）",
+          not _j5_ok(_e5m), "变异后 score=%s issues=%s" % (_e5m.get("score"), _e5m.get("issues")))
 except Exception as _e:      # noqa: BLE001 —— 锚点漂移/路径异常一律记 FAIL，别裸崩丢结果
     check("M 组执行未抛异常（锚点与路径稳定）", False, "%s: %s" % (type(_e).__name__, str(_e)[:160]))
 

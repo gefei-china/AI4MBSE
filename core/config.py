@@ -159,6 +159,14 @@ DEFAULT_CONFIG = {
         #   gap 描述随之漂移（「1.2 节末尾」→「2.2 节之后」→「只到 2.1」），
         #   极易误判成"报告被截断"而去调**输出**上限（方向完全错）。
         "eval_in_chars": 24000,       # 评审时可读：被评审报告字符数（原先硬编码 `[:2000]` 且只留头）
+        # 2026-09-30 会话 514 实测（第 8 层截断，方向与前几层**相反** —— 这次截断的是**输出**）：
+        #   评审调用原先硬编码 `max_tokens=1024`，而当前 provider 是**思考模型**
+        #   （`deepseek-v4-flash`，回包含 `reasoning_content`）→ 推理与正文**共享**这个上限。
+        #   大输入下实测 `reasoning_tokens` 吃到 789/1024 → 正文 JSON 被 `finish_reason="length"`
+        #   从中间截断 → 正则 `\{[\s\S]*\}` 找不到**闭合** `}` → 走硬编码兜底判 0 分「解析失败」，
+        #   **把"模型其实给了分"报成"解析失败"**，并把 orchestrated_status 误降级为 partial。
+        #   实测标定：reasoning 峰值 941 + 正文 JSON ≈ 350 ≈ 1300 → 取 3072 留 >2x 余量。
+        "eval_max_tokens": 3072,      # 评审**输出**上限（token；原先硬编码 1024，被 reasoning 吃掉）
     },
     "embedding": {
         "enabled": True,         # 语义出口总开关；False 强制 bigram（Mock/离线确定性）
@@ -673,6 +681,7 @@ CONFIG_SCHEMA = {
         "report_in_chars":    {"type": "int",  "desc": "修订时可读：待修订报告字符数（默认 24000，头尾采样；须 >= max_tokens 可产出的字符数）"},
         "max_tokens":         {"type": "int",  "desc": "修订输出上限（token，默认 8000；修订输出会整体替换报告 → 报告长度真正天花板）"},
         "eval_in_chars":      {"type": "int",  "desc": "评审时可读报告字符数（默认 24000，头尾采样；原先硬编码 [:2000] 只留头）"},
+        "eval_max_tokens":    {"type": "int",  "desc": "评审输出上限（token，默认 3072；原先硬编码 1024，思考模型的 reasoning 会把额度吃光导致 JSON 被截断）"},
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},

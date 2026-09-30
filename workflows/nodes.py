@@ -1114,6 +1114,53 @@ class FlowNodesMixin:
             return t if (cap <= 0 or len(t) <= cap) else t[:cap]
 
     @staticmethod
+    def _eval_max_tokens() -> int:
+        """评审**输出**上限（P0-7，2026-09-30 会话 514 实测）。
+
+        原先硬编码 `max_tokens=1024` 的假设是"评审输出是短 JSON" —— 但当前 provider 是
+        **思考模型**（回包含 `reasoning_content`），**推理与正文共享同一个上限**。
+        实测大输入（`eval_in_chars=24000`）下 `reasoning_tokens` 吃到 789/1024，
+        留给 JSON 的额度不足 → 正文被 `finish_reason="length"` 从中间截断、闭合 `}` 丢失。
+        故改为 config 可调（默认 3072；标定见 `core/config.py` 的 `refine.eval_max_tokens`）。
+        """
+        try:
+            from core import config as _cfg
+            return int(_cfg.get("refine", "eval_max_tokens", 3072) or 3072)
+        except Exception:                                          # noqa: BLE001
+            return 3072
+
+    @staticmethod
+    def _parse_eval_json(raw: str) -> dict:
+        """从评审回包里取 JSON —— **完整优先、截断兜底**（P0-7，2026-09-30）。
+
+        为什么必须有"截断兜底"：`max_tokens` 不够时正文是**半截 JSON**（有 `{` 无 `}`）→
+        原正则 `\\{[\\s\\S]*\\}` 必然匹配不到 → 被硬编码判 0 分「解析失败」，
+        **把"模型其实给了分"报成"解析失败"**（方向与 §7.3 的"报告被截断"那类相反）。
+        兜底只抽**关键字段**（`score` / `passed`）且**不臆造**：抽不到就返回 `{}`，
+        由调用方按"无输出/解析失败"如实标注。截断这件事**不静默** —— 挂一条 issue 提示。
+        """
+        m = re.search(r"\{[\s\S]*\}", raw or "")
+        if m:
+            try:
+                d = json.loads(m.group(0))
+                if isinstance(d, dict):
+                    return d
+            except Exception:                                      # noqa: BLE001
+                pass
+        loose = {}
+        ms = re.search(r'"score"\s*:\s*(-?\d+)', raw or "")
+        if ms:
+            loose["score"] = int(ms.group(1))
+        mp = re.search(r'"passed"\s*:\s*(true|false)', raw or "", re.I)
+        if mp:
+            loose["passed"] = mp.group(1).lower() == "true"
+        if not loose:
+            return {}
+        loose["issues"] = ["评审输出被 max_tokens 截断（分数按宽松抽取，未取到 issues/advice）"
+                           "，建议上调 refine.eval_max_tokens"]
+        return loose
+
+    @staticmethod
     def _evaluate_content(content: str, criteria: str = "输出是否完整、合理、符合要求") -> dict:
         """T1 公共评审函数：LLM 按标准对输出评分，返回 {score, passed, issues, advice, _meta}。
 
@@ -1130,18 +1177,33 @@ class FlowNodesMixin:
             f"评估标准：{criteria}\n\n被评审输出：\n{tgt}"
         )
         try:
-            # 评审输出是**短 JSON**（score/issues/advice）；显式给一个小上限：
-            # 一是不与放大的评审输入争 context_window（超窗会让整轮评审降级为 score=0），
-            # 二是防止模型"话多"把 JSON 冲散。
-            resp = llm_client.chat([{"role": "user", "content": prompt}], max_tokens=1024)
-            msg = (resp.get("choices") or [{}])[0].get("message", {})
+            # 评审输出是**短 JSON**（score/issues/advice）；显式给上限（防"话多"把 JSON 冲散）。
+            # ⚠️ 上限**不能太小**：思考模型的 reasoning 与正文共享额度，不够就会把 JSON 截断
+            #   （见 `_eval_max_tokens` 与 `_parse_eval_json` 的取证）。
+            resp = llm_client.chat([{"role": "user", "content": prompt}],
+                                   max_tokens=FlowNodesMixin._eval_max_tokens())
+            _ch = (resp.get("choices") or [{}])[0]
+            msg = _ch.get("message", {}) or {}
             raw = msg.get("content") or ""
-            m = re.search(r"\{[\s\S]*\}", raw)
-            data = json.loads(m.group(0)) if m else {"score": 0, "passed": False, "issues": ["解析失败"]}
+            _fr = _ch.get("finish_reason") or ""
+            data = FlowNodesMixin._parse_eval_json(raw)
+            if not data:
+                # 区分三种"没取到分"的情形，别把成因混成一个"解析失败"（现场判读要靠它）。
+                # 顺序要紧：**空内容优先**于"被截断" —— 空内容时 `finish_reason` 也是 `length`，
+                # 先判 length 会把更具体的成因（reasoning 吃满额度）盖掉。
+                if not (raw or "").strip():
+                    _why = "评审无输出（max_tokens 可能被 reasoning 占满）"
+                elif _fr == "length":
+                    _why = "解析失败（输出被 max_tokens 截断，未见 score 字段）"
+                else:
+                    _why = "解析失败"
+                data = {"score": 0, "passed": False, "issues": [_why]}
             score = int(data.get("score", 0))
             issues = data.get("issues") or []
             passed = bool(data.get("passed", score >= 60))
             meta = resp.get("_meta", {})
+            meta = dict(meta) if isinstance(meta, dict) else {}
+            meta.setdefault("finish_reason", _fr)   # 便于现场判读"是被截断还是模型没吐 JSON"
             return {"score": score, "passed": passed, "issues": issues,
                     "advice": data.get("advice", ""), "_meta": meta}
         except Exception:

@@ -535,6 +535,9 @@ def main():
         want[("refine", "max_rounds")] = 2
         want[("refine", "pass_score")] = 70
         want[("refine", "eval_in_chars")] = 24000
+        # P0-7（2026-09-30）：评审**输出**上限 —— 原先硬编码 max_tokens=1024，
+        #   被思考模型的 reasoning 吃光 → JSON 被 length 截断 → 误报「解析失败」0/100。
+        want[("refine", "eval_max_tokens")] = 3072
         bad = []
         for (sec, key), exp in want.items():
             got = _cfg.get(sec, key, None)
