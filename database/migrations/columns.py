@@ -179,6 +179,10 @@ def _migrate_columns(conn):
     # ── P1b-2 委派协议结构化：子任务 context/expected_output（老库补列）──
     _add("agent_tasks", "context", "TEXT DEFAULT ''")
     _add("agent_tasks", "expected_output", "TEXT DEFAULT ''")
+    # ── P0-7（2026-09-30）：批次归属会话。此前流式路径直接把 conversation_id 当 run_id
+    #    （stream.py:34），`clear_run` 于是每轮删掉上一轮计划（实测会话 514：run=514 的 5 行被
+    #    新一轮 6 行覆盖）→ 计划无历史、不可审计。现 run_id 唯一化，归属会话落本列。
+    _add("agent_tasks", "conversation_id", "INTEGER DEFAULT 0")
     # ── P0 优化：自动编排结果沉淀为可复用工作流（来源标记 manual | planner_auto）──
     _add("agent_flows", "source", "TEXT DEFAULT 'manual'")
     # ── 实体抽取治理中心（抽取候选增强）：置信度 / 消歧匹配状态 / 关联实体 / 驳回原因 ──

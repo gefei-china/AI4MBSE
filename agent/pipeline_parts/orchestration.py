@@ -266,9 +266,12 @@ class OrchestrMixin:
             from database import get_db as _gd
             _conn = _gd()
             try:
+                # P0-7：按**本轮批次号**读回计划。此前写的是 run_id（流式=会话 id / 非流式=0），
+                # 这里却按 conversation_id 读 → 非流式路径恒读空，"沉淀可复用工作流"静默失效。
+                _run_id = int(orch.get("run_id") or conversation_id or 0)
                 _plan_rows = _conn.execute(
                     "SELECT task_key, title, agent_id, config, deps, status FROM agent_tasks "
-                    "WHERE run_id=? ORDER BY seq", (int(conversation_id),)).fetchall()
+                    "WHERE run_id=? ORDER BY seq", (_run_id,)).fetchall()
                 _done = [dict(r) for r in _plan_rows if r["status"] == "done"]
                 if _done:
                     _goal = user_input

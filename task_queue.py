@@ -7,6 +7,9 @@
 - handoff：结构化移交（summary + metadata），对齐 Hermes Kanban 语义的最小实现
 """
 import json
+import threading
+
+_ALLOC_LOCK = threading.Lock()   # P0-7：批次号分配互斥（本仓单进程 uvicorn，进程内锁即足够）
 
 
 class TaskQueue:
@@ -16,11 +19,13 @@ class TaskQueue:
 
     # ── 计划落库 ──
     @staticmethod
-    def create_plan(conn, run_id: int, plan: list, assigned_by: str = "planner") -> int:
+    def create_plan(conn, run_id: int, plan: list, assigned_by: str = "planner",
+                    conversation_id: int = 0) -> int:
         """plan: [{key, title, agent, task_type, config, deps, seq, context, expected_output}] → 批量写入。
 
         依赖校验：deps 仅保留本计划内存在的 key（防脏数据导致永久阻塞）。
         P1b-2：context/expected_output 一并落库（委派协议结构化，子 Agent 执行时注入）。
+        P0-7：conversation_id 记录批次归属会话（run_id 已唯一化，不再复用会话 id）。
         """
         plan_keys = {t.get("key") for t in plan}
         n = 0
@@ -28,15 +33,68 @@ class TaskQueue:
             deps = [d for d in (t.get("deps") or []) if d in plan_keys]
             conn.execute(
                 "INSERT INTO agent_tasks (run_id, task_key, title, agent_id, task_type, config, deps, "
-                "status, assigned_by, seq, context, expected_output) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "status, assigned_by, seq, context, expected_output, conversation_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (run_id, t.get("key", ""), t.get("title", ""), t.get("agent", ""),
                  t.get("task_type", "agent"), json.dumps(t.get("config") or {}, ensure_ascii=False),
                  json.dumps(deps, ensure_ascii=False),
                  "ready" if not deps else "planned", assigned_by, t.get("seq", 0),
-                 (t.get("context") or "")[:1000], (t.get("expected_output") or "")[:500]))
+                 (t.get("context") or "")[:1000], (t.get("expected_output") or "")[:500],
+                 int(conversation_id or 0)))
             n += 1
         conn.commit()
+        if conversation_id:
+            TaskQueue.prune_runs(conn, int(conversation_id))
         return n
+
+    # ── P0-7：批次号分配与保留策略 ──
+    @staticmethod
+    def new_run_id(conn) -> int:
+        """分配新的编排批次号（全局唯一、单调递增，进程内互斥）。
+
+        P0-7：此前流式路径把 conversation_id 当 run_id、非流式路径恒传 0 —— 两者都让
+        `clear_run` 在下一轮把上一轮计划整批删掉（实测会话 514：run=514 的 5 行被新一轮
+        6 行覆盖）。改为独立批次号后，计划历史可回溯。
+        """
+        with _ALLOC_LOCK:
+            row = conn.execute("SELECT COALESCE(MAX(run_id), 0) + 1 FROM agent_tasks").fetchone()
+            return int((row[0] if row else 1) or 1)
+
+    @staticmethod
+    def prune_runs(conn, conversation_id: int, keep: int = 0) -> int:
+        """保留某会话最近 N 次编排，清理更早的**终态**批次（防 agent_tasks 无界增长）。
+
+        保守策略：含 running/ready/planned 的批次一律不动；失败静默（清理不是关键路径）。
+        keep<=0 时读 config `delegation.keep_runs_per_conversation`（缺省 50）。
+        """
+        if not conversation_id:
+            return 0
+        if keep <= 0:
+            try:
+                from core import config as _cfg
+                keep = int(_cfg.get("delegation", "keep_runs_per_conversation", 50) or 50)
+            except Exception:
+                keep = 50
+        if keep <= 0:
+            return 0
+        try:
+            # 用列下标取值：调用方连接可能未设 row_factory
+            rows = conn.execute(
+                "SELECT run_id, MAX(id) mx, "
+                "SUM(CASE WHEN status IN ('running','ready','planned') THEN 1 ELSE 0 END) live "
+                "FROM agent_tasks WHERE conversation_id=? GROUP BY run_id ORDER BY mx DESC",
+                (int(conversation_id),)).fetchall()
+            stale = [r[0] for r in rows[keep:] if not r[2]]
+            if not stale:
+                return 0
+            q = ("DELETE FROM agent_tasks WHERE conversation_id=? AND run_id IN (%s)"
+                 % ",".join("?" * len(stale)))
+            conn.execute(q, tuple([int(conversation_id)] + stale))
+            conn.commit()
+            return len(stale)
+        except Exception as _e:
+            print("[task_queue] prune_runs 跳过：%s" % str(_e)[:120], flush=True)
+            return 0
 
     @staticmethod
     def clear_run(conn, run_id: int) -> None:

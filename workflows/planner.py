@@ -288,12 +288,19 @@ class FlowPlannerMixin:
                     warnings.append(f"技能 {sk} 未发布（任务 {t.get('key')}）")
 
         # 4) DAG 执行（agent_tasks 队列）
-        run_id = int(run_id or 0)
+        # P0-7（2026-09-30）：会话入口此前恒传 run_id=0 → 所有批次共用 0、各自 clear_run 互相覆盖；
+        # 且 `_finish_orchestrated` 按 conversation_id 读回 → 非流式路径**读不到自己的计划**
+        # （"沉淀可复用工作流"静默失效）。现：未显式给批次号时分配独立号，显式给（Flow 节点重跑）
+        # 才沿用 clear_run 语义，行为向后兼容。
+        _given_run_id = int(run_id or 0)
+        run_id = _given_run_id or TaskQueue.new_run_id(conn)
         executed = []
         _done_items = []   # T7：已完成子任务结果（供依赖任务注入上下文快照）
         try:
-            TaskQueue.clear_run(conn, run_id)
-            TaskQueue.create_plan(conn, run_id, plan, assigned_by="session")
+            if _given_run_id:
+                TaskQueue.clear_run(conn, run_id)
+            TaskQueue.create_plan(conn, run_id, plan, assigned_by="session",
+                                  conversation_id=int(conversation_id or 0))
             guard = 0
             while TaskQueue.pending_count(conn, run_id) > 0 and guard < 200:
                 guard += 1
@@ -371,6 +378,7 @@ class FlowPlannerMixin:
                   + (("警告：" + "；".join(warnings) + "\n") if warnings else ""))
         return {
             "content": content, "plan": plan, "task_summary": summ, "degraded": False,
+            "run_id": run_id,   # P0-7：把批次号交回调用方（`_finish_orchestrated` 据此读回自己的计划）
             "data": {"plan": plan[:max_tasks], "task_total": summ["total"], "task_done": len(done_items),
                      "task_failed": len(fail_items), "warnings": warnings,
                      "reflection": reflection_meta,

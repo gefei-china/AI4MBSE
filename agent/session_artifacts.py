@@ -178,9 +178,15 @@ def render_digest(facts: dict, max_chars: int = 900) -> str:
         lines.append(head + ("：" + "；".join(detail) if detail else ""))
     for kind, titles in (facts.get("kinds") or {}).items():
         label = _KIND_LABEL.get(kind, kind)
-        cnt = (facts.get("counts") or {}).get(label, len(titles))
+        cnt = int((facts.get("counts") or {}).get(label, len(titles)) or 0)
         uniq = _uniq_titles(titles)
-        lines.append(f"- {label} {cnt} 项" + (f"（{'、'.join(uniq)}）" if uniq else ""))
+        # P0-7：`cnt` 是 SQL 行数、`uniq` 是**去重后名称**，两者口径不同。实测输出
+        # 「SysML 视图 4 项（需求图、活动图、追溯视图）」= 4 行 / 3 个名字，读者会以为少列了一项。
+        if uniq and len(uniq) != cnt:
+            tail = f"（{cnt} 条中不重名 {len(uniq)} 种：{'、'.join(uniq)}）"
+        else:
+            tail = (f"（{'、'.join(uniq)}）" if uniq else "")
+        lines.append(f"- {label} {cnt} 项" + tail)
     if facts.get("reports"):
         lines.append("- 已归档报告：" + "、".join(_uniq_titles(facts["reports"])))
     if not lines:

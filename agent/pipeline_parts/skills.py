@@ -192,7 +192,12 @@ class SkillMixin:
     _ORCH_MAX_TASKS = 6
     # Task 7：执行层并发与可靠性配置（类属性默认，均允许实例覆盖）
     _ORCH_MAX_WORKERS = 3            # 每批 ready 并行执行 worker 上限（全局并发）
-    _ORCH_SUBTASK_TIMEOUT = 120      # 子任务 wall-clock 超时（秒）
+    # P0-7（2026-09-30）：下面两项**只是兜底**，现场优先读 config
+    #   `delegation.subtask_idle_timeout_s`（无产出判超时，默认 150s）
+    #   `delegation.subtask_timeout_s`（wall-clock 硬上限，默认 300s）
+    # 起因：固定 120s×2 次重试会把「还在正常出 token」的子任务判 failed、产出丢弃（会话 514 实测
+    # t1 到 182s 仍在吐 token，241s 被判 timeout）。改判据后此处仅作异常兜底，改阈值请改 config。
+    _ORCH_SUBTASK_TIMEOUT = 120      # 子任务 wall-clock 硬上限兜底（秒；被 config 覆盖）
     _ORCH_MAX_RETRIES = 1            # 子任务失败/超时自动重试次数上限
     _ORCH_RETRY_BACKOFF = 1          # 重试退避基数（秒，首次 1s，逐次累乘）
     _ORCH_TOKEN_BUDGET = 200000      # run 级 token 预算默认值（实例可覆盖 _orch_token_budget）

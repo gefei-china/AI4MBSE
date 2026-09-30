@@ -125,7 +125,7 @@ def list_write_requests(conn, run_id) -> list[dict]:
     return out
 
 
-def batch_queue_confirmations(conn, run_id, agent_id="") -> int:
+def batch_queue_confirmations(conn, run_id, agent_id="", conversation_id=0) -> int:
     """汇总后批量挂确认队列：遍历该 run 全部 write_request，
     调用 hil_service.HILService.queue_confirmation(...)，返回入队数。
 
@@ -143,7 +143,10 @@ def batch_queue_confirmations(conn, run_id, agent_id="") -> int:
                    .format(tool=tool_name, args=json.dumps(arguments, ensure_ascii=False)[:300]))
         conf = HILService.queue_confirmation(
             conn, agent_id or "", tool_name, arguments,
-            preview=preview, conversation_id=int(run_id or 0), run_id=int(run_id or 0),
+            # P0-7：run_id 唯一化后不再等于会话 id → conversation_id 必须显式传入
+            # （缺省回退 run_id，兼容未改的旧调用方）
+            preview=preview, conversation_id=int(conversation_id or run_id or 0),
+            run_id=int(run_id or 0),
             task_key=r.get("task_key") or "")
         if conf:
             queued += 1

@@ -90,6 +90,15 @@ DEFAULT_CONFIG = {
     "delegation": {
         "max_tasks": 12,         # 单次编排最大子任务数
         "worker_timeout_s": 120, # 单个 Worker/子任务执行超时（秒，超时标记 failed）
+        # ── P0-7（2026-09-30）流式编排子任务超时：由「固定 wall-clock」改为「停滞 + 硬上限」──
+        # 实测（会话 514 实跑）：t1 到 182s 仍在正常吐 token，却在 241s 被固定 120s×2 次重试判
+        # failed，**已生成的内容被丢弃** → 用户看到「（计划已执行，但无成功交付物）」。判据错在
+        # "按经过时间"而非"按是否还在产出"。注意：旧的 `worker_timeout_s` 只作用于**非流式
+        # planner 的并行分支**（planner.py）；流式路径此前是 skills.py 里的硬编码类属性，现场调不动。
+        "subtask_idle_timeout_s": 150,   # 子任务「无任何产出」判超时（秒；活跃生成不杀）
+        "subtask_timeout_s": 300,        # 子任务 wall-clock 硬上限（秒；防持续滴 token 永不结束）
+        # P0-7：agent_tasks 每会话保留的编排批次数（run_id 唯一化后防无界增长；只清终态旧批次）
+        "keep_runs_per_conversation": 50,
         "total_time_budget_s": 600,  # 单次编排全局时间预算（秒，超限终止剩余任务降级汇总）
         "max_depth": 3,          # 委派递归深度上限
         # ── 汇总环节输入预算（2026-09-20 新增；此前是 planner.py:54 硬编码 `[:500]`）──────
@@ -644,6 +653,9 @@ CONFIG_SCHEMA = {
     "delegation": {
         "max_tasks":           {"type": "int", "desc": "单次编排最大子任务数"},
         "worker_timeout_s":    {"type": "int", "desc": "单 Worker/子任务执行超时（秒）"},
+        "subtask_idle_timeout_s": {"type": "int", "desc": "流式编排：子任务无产出判超时（秒，默认 150）"},
+        "subtask_timeout_s":      {"type": "int", "desc": "流式编排：子任务 wall-clock 硬上限（秒，默认 300）"},
+        "keep_runs_per_conversation": {"type": "int", "desc": "agent_tasks 每会话保留批次数（默认 50）"},
         "total_time_budget_s": {"type": "int", "desc": "单次编排全局时间预算（秒）"},
         "max_depth":           {"type": "int", "desc": "委派递归深度上限"},
         "summary_item_max_chars":     {"type": "int", "desc": "汇总输入：单个子任务交付物上限（字符，默认 1600）"},

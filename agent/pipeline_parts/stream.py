@@ -31,7 +31,10 @@ class StreamMixin:
         from database import db_conn, get_db
         import time as _t
         t0 = _t.time()
-        run_id = int(conversation_id or 0)
+        # P0-7（2026-09-30）：run_id 此前直接用 conversation_id，`clear_run` 于是每轮把**上一轮计划
+        # 整批删掉**（实测会话 514：run=514 的 5 行被新一轮 6 行覆盖）→ 计划无历史、不可审计。
+        # 现改为独立的编排批次号（下面落计划时就地分配），归属会话记在 agent_tasks.conversation_id。
+        run_id = 0
         reflection_meta = None   # P0-1（T3）：反思闭环评审轨迹（降级分支默认 None）
         goal = user_input or "执行该团队任务并汇总结果"
         # Task 10：汇总消费结构化摘要——编排三态（full/partial/failed），降级/单 Agent 直行恒 full
@@ -183,8 +186,10 @@ class StreamMixin:
             # 3) 落计划 + 串行执行（子任务逐个流式）
             degraded = False
             try:
-                TaskQueue.clear_run(conn, run_id)
-                TaskQueue.create_plan(conn, run_id, plan, assigned_by="session")
+                # P0-7：分配独立批次号（新号无残留，故不再 clear_run —— 那正是覆盖历史的原因）
+                run_id = TaskQueue.new_run_id(conn)
+                TaskQueue.create_plan(conn, run_id, plan, assigned_by="session",
+                                      conversation_id=int(conversation_id or 0))
             except Exception:
                 pass
             done_items, orch_tasks = [], []
@@ -194,7 +199,14 @@ class StreamMixin:
             import threading as _th
             from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac, wait as _wait
             _max_workers = getattr(self, "_ORCH_MAX_WORKERS", 3)        # 全局并发 worker 上限（每批）
-            _timeout = getattr(self, "_ORCH_SUBTASK_TIMEOUT", 120)      # 子任务 wall-clock 超时（秒）
+            _timeout = getattr(self, "_ORCH_SUBTASK_TIMEOUT", 120)      # 子任务 wall-clock 超时（秒，旧口径）
+            # P0-7：超时判据改为「停滞为主 + 硬上限兜底」，两者均接 config（现场可调，不必改代码）
+            try:
+                from core import config as _ocfg
+                _idle_timeout = int(_ocfg.get("delegation", "subtask_idle_timeout_s", 150) or 150)
+                _hard_timeout = int(_ocfg.get("delegation", "subtask_timeout_s", _timeout) or _timeout)
+            except Exception:
+                _idle_timeout, _hard_timeout = 150, int(_timeout or 120)
             _max_retries = getattr(self, "_ORCH_MAX_RETRIES", 1)        # 自动重试次数上限
             _backoff = getattr(self, "_ORCH_RETRY_BACKOFF", 1)          # 重试退避基数（秒）
             # per-agent 信号量：按 registry.discover 的 max_concurrency 建（缺省 2；无 discover 数据 → 不限流）
@@ -225,6 +237,7 @@ class StreamMixin:
                 """
                 tkey = tk.get("task_key") or "t"
                 ttitle = tk.get("title") or tkey
+                _hb[tkey] = _t.time()   # P0-7：活性心跳（置位即表示"已启动"，worker 的停滞超时据此判定）
                 cfg = tk.get("config") or {}
                 if isinstance(cfg, str):
                     try:
@@ -282,6 +295,7 @@ class StreamMixin:
                         for ev in sub.execute_stream(query, 0, branch, provider_id, _sub_att,
                                                      forced_intent=tk.get("agent_id") or None,
                                                      skill_name=skill_name2, user=user, dry_run=True):
+                            _hb[tkey] = _t.time()   # P0-7：任何产出（token/reasoning/tool）都算"活着"
                             _et = ev.get("type")
                             if _et == "token":
                                 sub_has_token = True
@@ -369,14 +383,31 @@ class StreamMixin:
                     last_res = None
                     while True:
                         fut = task_pool.submit(_run_subtask, tk)
-                        _done, _ = _wait([fut], timeout=_timeout)
-                        if _done:
+                        # P0-7（2026-09-30）：判据由「固定 wall-clock」改为「停滞为主 + 硬上限兜底」。
+                        # 实测（会话 514）：t1 到 182s 仍在正常吐 token，却在 241s 被判 failed、产出
+                        # 丢弃 → 最终答复退化成「（计划已执行，但无成功交付物）」。按"是否还在产出"
+                        # 判才对得上语义：真卡死（无事件）快速失败，活跃生成不误杀。
+                        _stall = ""
+                        while True:
+                            _done, _ = _wait([fut], timeout=2.0)
+                            if _done:
+                                break
+                            _now = _t.time()
+                            _last = _hb.get(tkey) or 0
+                            if _last and (_now - _last) > _idle_timeout:
+                                _stall = "timeout（%ds 无产出）" % _idle_timeout
+                                break
+                            if (_now - _t0) > _hard_timeout:
+                                _stall = ("timeout（线程池排队超 %ds）" % _hard_timeout if not _last
+                                          else "timeout（超过 %ds 硬上限）" % _hard_timeout)
+                                break
+                        if not _stall:
                             last_res = fut.result()
                             if last_res[2]:
                                 return last_res
                         else:
-                            # 超时：不等待线程（后台继续运行），标记 error="timeout"
-                            last_res = (tkey, ttitle, False, "", [], "timeout",
+                            # 超时：不等待线程（后台继续运行），标记 error 含 "timeout"
+                            last_res = (tkey, ttitle, False, "", [], _stall,
                                         int((_t.time() - _t0) * 1000), 0, None)
                         if retry_left <= 0:
                             return last_res
@@ -458,6 +489,7 @@ class StreamMixin:
                 #  用户看到的就是"所有子任务的总结堆在最后"。现在 worker 边产边入队，主循环边收边吐，
                 #  事件自身的 `key`/`name` 前缀（`tkey:`）保证前端把它们归到**对应子任务的卡片**下。
                 _evq = _queue.Queue()
+                _hb = {}   # P0-7：子任务活性心跳表 {task_key: 最近产出时刻}（_worker 停滞超时用）
 
                 def _drain():
                     """取出队列里**已到达**的子任务事件；把**连续的 token 合并成一条**再吐。
@@ -620,7 +652,8 @@ class StreamMixin:
                 from services.artifact_materializer import batch_queue_confirmations
                 _qconn = get_db()
                 try:
-                    _queued_write = batch_queue_confirmations(_qconn, run_id)
+                    _queued_write = batch_queue_confirmations(
+                        _qconn, run_id, conversation_id=int(conversation_id or 0))
                 finally:
                     _qconn.close()
             except Exception:
@@ -793,7 +826,12 @@ class StreamMixin:
         # 5) 汇总内容流式推送
         #    P0-3（2026-09-17）：原 `range(0, len, 24)` 无节流切片 → 几十毫秒内把整段灌给前端，
         #    前端表现为「突然一大段」。改用 iter_stream_chunks 按 45 字符/秒 的类人节奏产出。
-        yield {"type": "reasoning", "delta": f"（自动编排）{len(orch_tasks) if not degraded else '单 Agent'} 个子任务执行完成，汇总最终结论…"}
+        # P0-7：原话术**无条件**说"N 个执行完成" —— 有 failed/blocked/partial 也照说"完成"，
+        # 用户/审计会误以为全部成功（实测会话 514：t1 failed、t2~t6 blocked，仍显示"6 个完成"）。
+        _n_bad = sum(1 for _ot in orch_tasks if str(_ot.get("status") or "done") != "done")
+        _done_wording = f"{len(orch_tasks)} 个子任务执行完成" + (
+            f"（其中 {_n_bad} 个未成功）" if _n_bad else "")
+        yield {"type": "reasoning", "delta": f"（自动编排）{_done_wording if not degraded else '单 Agent 直行完成'}，汇总最终结论…"}
         for _chunk in iter_stream_chunks(orch_content):
             yield {"type": "token", "delta": _chunk}
         yield {"type": "stage", "name": "生成与校验", "status": "done"}
@@ -887,7 +925,9 @@ class StreamMixin:
             yield {"type": "agent", "status": "done", "name": tkey, "display_name": ttitle,
                    "intent": intent, "hil_level": hil_level}
         orch_content = orch.get("content") or ""
-        _d = f"（自动编排）复杂任务已分解为 {len(orch_tasks)} 个子任务执行完成，汇总最终结论…"
+        _n_bad = sum(1 for _ot in orch_tasks if str(_ot.get("status") or "done") != "done")
+        _d = ("（自动编排）复杂任务已分解为 %d 个子任务执行完成%s，汇总最终结论…"
+              % (len(orch_tasks), ("（其中 %d 个未成功）" % _n_bad) if _n_bad else ""))
         yield {"type": "reasoning", "delta": _d}
         # P0-3（2026-09-17）：无节流切片 → 类人节奏产出（本路径不做事后补块，保持原行为）
         for _chunk in iter_stream_chunks(orch_content):
