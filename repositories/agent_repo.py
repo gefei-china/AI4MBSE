@@ -186,6 +186,66 @@ class AgentRepo(BaseRepo):
     def remove_tool(self, agent_id: int, tool_id: int) -> None:
         self.execute("DELETE FROM agent_tools WHERE id=? AND agent_id=?", (tool_id, agent_id))
 
+    # ── 名称口径同步（2026-09-30 用户反馈 2：卡片名与编辑页不一致）──
+    #
+    # `agents.name`（意图标识）与 `agents.display_name`（展示名）是两个字段，
+    # 但**历史表把这两个字符串当软外键存了下来**。改任一 field 不同步 = 历史行变孤儿。
+    # 真库实测（2026-09-30）：
+    #   · agent_tasks.agent_id      → 存 **name**（13 个不同值，12 个能命中 agents.name）
+    #   · agent_memory.agent_id     → 存 **name**（9 值，8 命中；reflow 已是历史孤儿）
+    #   · tool_call_logs.agent_name → **混存**：7 个值实为 display_name（356 条）+ 6 个值实为 name（33 条）
+    # 所以 tool_call_logs 这一列必须**两个口径各过一遍**。
+    _NAME_REF_COLS = (
+        ("agent_tasks", "agent_id"),
+        ("agent_memory", "agent_id"),
+        ("tool_call_logs", "agent_name"),
+    )
+
+    def count_name_refs(self, name: str) -> dict:
+        """某名字在软外键表里被引用多少行（改名影响面预览 / 改后复核）。"""
+        out = {}
+        if not name:
+            return out
+        for tbl, col in self._NAME_REF_COLS:
+            try:
+                out[f"{tbl}.{col}"] = self.scalar(f"SELECT COUNT(*) FROM {tbl} WHERE {col}=?", (name,))
+            except Exception:      # 表不存在（新库）不该炸掉整个保存
+                out[f"{tbl}.{col}"] = 0
+        return out
+
+    def sync_agent_name_refs(self, old_row: dict, new_name: str, new_display_name: str) -> dict:
+        """把旧 name / display_name 的软外键引用改写为新值，返回 {表.列: 改写行数}。
+
+        ⚠️ **不要用 `self.execute` 取行数**：`BaseRepo.execute` 返回 `lastrowid or rowcount`，
+        UPDATE 语句的 lastrowid 会**残留上次 INSERT 的值**（非 0）→ 拿到的行数不可信。
+        这里直接走 `conn.execute` 读 `cur.rowcount`。
+
+        ⚠️ **双重口径保护**：若该 Agent 的 name 与 display_name 原本**相同**（真库 10/20 例），
+        两个候选改写的旧值也相同；此时只让**第一个（name，规范标识）**生效，
+        避免同一批行被先后改写两次甚至被第二个口径抢走。
+        """
+        old_row = old_row or {}
+        plan, seen = [], set()
+        for ov, nv in ((old_row.get("name"), new_name),
+                       (old_row.get("display_name"), new_display_name)):
+            ov = (ov or "").strip()
+            nv = (nv or "").strip()
+            if not ov or not nv or ov == nv or ov in seen:
+                continue
+            seen.add(ov)
+            plan.append((ov, nv))
+        stat: dict = {}
+        for ov, nv in plan:
+            for tbl, col in self._NAME_REF_COLS:
+                try:
+                    cur = self.conn.execute(f"UPDATE {tbl} SET {col}=? WHERE {col}=?", (nv, ov))
+                except Exception:
+                    continue                      # 表/列不存在 → 静默跳过（新库）
+                if cur.rowcount:
+                    key = f"{tbl}.{col}"
+                    stat[key] = stat.get(key, 0) + cur.rowcount
+        return stat
+
     # ── 主/子 Agent 团队（agent_team_members 多对多）──
     def list_team_members(self, main_agent_id: int) -> list:
         """主 Agent 的团队成员摘要（含显示名/图标/角色/启用态）。"""

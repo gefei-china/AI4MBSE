@@ -76,19 +76,68 @@ def get_agent(aid: int, conn=Depends(db_session)):
     return a
 
 
+def _rename_warnings(old_row: dict, new_name: str, new_disp: str) -> list:
+    """改名影像提示：哪些东西**不会**被本次级联覆盖（代码级硬编码/内置身份）。
+
+    数据库侧的软外键（agent_tasks / agent_memory / tool_call_logs）由
+    `AgentRepo.sync_agent_name_refs` 同步掉了，这里只提示它**同步不到**的部分 ——
+    不提示的话，用户以为改完就万事大吉，实际意图路由已经悄悄失配。
+    """
+    old_name = (old_row or {}).get("name") or ""
+    if old_name == new_name:
+        return []
+    warns = []
+    try:
+        from agent.code_level_names import code_level_agent_names
+        if old_name in code_level_agent_names():
+            warns.append(
+                f"「{old_name}」被 Python 代码硬引用（意图路由表 / 内置编排回退池），"
+                f"这部分**无法自动同步** —— 改名后相关意图可能回落默认编排，请一并更新 agent/intent.py、agent/registry.py")
+    except Exception:      # noqa: BLE001  提示失败不阻断改名
+        pass
+    if (old_row or {}).get("builtin"):
+        warns.append("内置 Agent 改名风险较高：除上述代码清单外，一次性注册脚本（tools/register_*.py 的 BINDINGS）也可能按名字绑定工具")
+    return warns
+
+
 @router.put("/api/studio/agents/{aid}")
 def update_agent(aid: int, body: AgentIn, conn=Depends(db_session), user=Depends(current_user)):
     repo = AgentRepo(conn)
-    if not repo.get_agent(aid):
+    old = repo.get_agent(aid)
+    if not old:
         return JSONResponse({"error": "Agent not found"}, 404)
     data = body.model_dump()
     sanitized = _sanitize_agent_meta(data)
+
+    # ── 名称口径统一（2026-09-30 用户反馈 2）：name 可编辑 → 改名须联动历史软外键 ──
+    new_name = (data.get("name") or "").strip()
+    if not new_name:
+        return JSONResponse({"error": "标识名（name）不能为空"}, 400)
+    old_name = (old.get("name") or "").strip()
+    if new_name != old_name:
+        clash = repo.one("SELECT id, display_name FROM agents WHERE name=? AND id<>?", (new_name, aid))
+        if clash:
+            return JSONResponse(
+                {"error": f"标识名「{new_name}」已被 Agent#{clash['id']}（{clash.get('display_name') or ''}）占用"}, 409)
+    new_disp = (data.get("display_name") or "").strip() or new_name
+    data["name"], data["display_name"] = new_name, new_disp
+
     repo.update_agent(aid, data)
+    # 级联：把历史表里当软外键存的旧名字改写为新名字（改名不同步 = 历史行全变孤儿）
+    synced = repo.sync_agent_name_refs(old, new_name, new_disp)
+    renamed = bool(new_name != old_name or new_disp != (old.get("display_name") or "").strip())
+    if renamed:
+        audit(audit_user(user), "agent_rename",
+              f"Agent#{aid} 改名 {old_name or old.get('display_name')}→{new_name}"
+              f"（已同步历史引用 {sum(synced.values())} 行：{synced}）", conn=conn)
     audit(audit_user(user), "agent_update", f"更新Agent#{aid}: {body.display_name}", conn=conn)
     # Task 12：能力字段/描述实际发生清洗时写元数据审计
     if sanitized:
-        audit(audit_user(user), "agent_meta_sanitize", f"Agent {body.name} 能力/描述已清洗", conn=conn)
-    return {"ok": True}
+        audit(audit_user(user), "agent_meta_sanitize", f"Agent {new_name} 能力/描述已清洗", conn=conn)
+    return {"ok": True, "renamed": renamed, "synced": synced,
+            "synced_total": sum(synced.values()),
+            "impact": repo.count_name_refs(new_name),
+            "warnings": _rename_warnings(old, new_name, new_disp)}
 
 
 @router.delete("/api/studio/agents/{aid}")
