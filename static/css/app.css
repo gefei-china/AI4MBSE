@@ -348,8 +348,8 @@ body.nr-full-lock{overflow:hidden;}
 /* V2.6 执行中动态效果 + 统一收口条（与会话页 chat.css 同步） */
 @keyframes proc-spin{to{transform:rotate(360deg);}}
 .proc-spin{display:inline-block;width:10px;height:10px;border:2px solid var(--blue-bd,#bcd4f7);border-top-color:var(--blue-d,#3478f6);border-radius:50%;animation:proc-spin .8s linear infinite;vertical-align:-1px;margin-right:4px;flex:none;}
-@keyframes proc-breathe{0%,100%{opacity:1;}50%{opacity:.55;}}
-.proc-block.running{animation:proc-breathe 1.6s ease-in-out infinite;border-color:var(--blue-bd,#bcd4f7);}
+/* 2026-09-29（用户五轮反馈3）：与 chat.css 同步移除 opacity 呼吸动画（忽明忽暗影响阅读） */
+.proc-block.running{border-color:var(--blue-bd,#bcd4f7);box-shadow:0 0 0 1px rgba(52,120,246,.10);}
 .proc-summary{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--blue-l,#eef4ff);cursor:pointer;user-select:none;font-size:11.5px;font-weight:600;color:var(--blue-d,#3478f6);}
 .proc-summary .chev{margin-left:auto;font-size:10px;color:var(--mut);}
 /* V2.6 代码块折叠卡（默认收起） */

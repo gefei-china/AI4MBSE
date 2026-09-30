@@ -255,20 +255,17 @@ function renderMessage(m) {
     html += artGridHtml(m, cd);
   }
   // 内容级澄清消息（msg_type='clarify'）：历史还原
-  //  2026-09-25：**仍待澄清时还原为可作答的卡**（复用 clarifyCardInnerHtml），此前一律渲染成
-  //  只读文字（"已作答后继续"）→ 刷新/重开会话后用户找不到任何作答入口（实测反馈）。
-  //  已作答/已跳过（window._pendingClarify 为空）则保持只读摘要，避免重复提交。
+  //  2026-09-29（用户五轮反馈2）：确认卡**不再常驻消息流** —— 可作答的紧凑卡由
+  //  setPendingClarify（loadMessages 回传 pending_clarify 时）挂在输入框上方（dock），
+  //  这里只渲染紧凑只读指引（此前流内整卡 + dock 提示条两处重复、且占高）。
   if(m.role==='assistant' && m.msg_type==='clarify'){
     const cqs = (cd && cd.questions) || [];
-    if(window._pendingClarify && cqs.length && typeof clarifyCardInnerHtml === 'function'){
-      html += `<div class="clarify-ask-card hist" style="margin-top:8px;border:1px solid #d3e3fb;
-        background:#f0f6ff;border-radius:8px;padding:10px 12px;font-size:12px;">${clarifyCardInnerHtml(cqs)}</div>`;
-    } else {
-      html += `<div style="margin-top:8px;border:1px solid #d3e3fb;background:#f0f6ff;border-radius:8px;padding:8px 10px;font-size:11.5px;">
-      <b style="color:var(--blue-d);">❓ 需要确认建模信息</b>
-      ${cqs.map((q,i)=>`<div style="margin-top:4px;">${i+1}. ${esc(q.question||'')} <span style="color:var(--mut);font-size:10px;">（已作答后继续）</span></div>`).join('') || ''}
+    // 不在文案里断言"待答/已答"：renderMessage 先于 setPendingClarify 执行，此处读到的
+    // _pendingClarify 是旧值（竞态）。作答入口是否在，以输入框上方的确认卡为准。
+    html += `<div class="clarify-inline-note hist" style="margin-top:8px;">
+      ❓ AI 发起了 <b>${cqs.length}</b> 项确认
+      ${cqs.map((q,i)=>`<span style="color:var(--mut);">· ${esc(String(q.question||'').slice(0,40))}${String(q.question||'').length>40?'…':''}</span>`).join(' ')}
     </div>`;
-    }
   }
   if(m.feedback) {
     const fbMap = {approve:'已采纳', reject:'已拒绝', modify:'已修订'};

@@ -329,7 +329,57 @@ const MSG_RENDER_CHUNK = 20;          // 单帧分片插入条数（避免长任
 let _convMsgTotal = 0;                // 当前会话消息总数（判断是否还有更早消息）
 let _oldestMsgId = null;              // 当前已渲染最早消息 id（向上翻页游标）
 let _renderToken = 0;                 // 渲染代际令牌：切会话/重渲染时作废旧分片任务
-// 分片渲染：把消息数组按 chunk 逐帧插入（rAF），期间不阻塞交互
+// ── 2026-09-29 「贴底才跟随」滚动策略（AI 输出期间允许用户上滑查看历史）──
+// 需求：AI 输出过程中用户要能滑动页面看上面的内容，此前每帧/每 token 无条件
+//   `scrollTop = scrollHeight` 把视口强行拽回底部，拖动滚动条无效。
+// 语义（与主流 IM/LLM 客户端一致）：
+//   · 视口在底部附近（≤ STICK_EPS px）→ 视为"跟读中"，新内容到达时继续钉底；
+//   · 用户主动上滑（滚轮/触摸/拖动滚动条）→ 立即脱离跟读，此后不再自动滚动；
+//   · 用户回到底部附近 → 自动恢复跟读（无需额外操作）。
+// 实现要点：只读几何量判断，不改写用户滚动位置；用 rAF 合批，避免每 token 强制重排。
+const _STICK_EPS = 48;                 // 距底 ≤48px 视为"在底部"
+let _stickFollow = true;               // 当前是否处于跟读态（切会话时复位）
+let _stickRaf = 0;                     // rAF 句柄（合批用）
+
+function _chatAreaEl(){
+  return document.getElementById('chat-area');
+}
+function _isNearBottom(area){
+  if(!area) return true;
+  return (area.scrollHeight - area.scrollTop - area.clientHeight) <= _STICK_EPS;
+}
+// 用户交互 → 脱离跟读。一次绑定，常驻监听（只读判断，成本可忽略）。
+function _bindStickDetach(){
+  const area = _chatAreaEl();
+  if(!area || area.dataset.stickBind) return;
+  area.dataset.stickBind = '1';
+  const detach = ()=>{ _stickFollow = _isNearBottom(area); };
+  area.addEventListener('wheel', detach, {passive:true});
+  area.addEventListener('touchmove', detach, {passive:true});
+  // 拖动滚动条 / 键盘翻页 / 程序性滚动后同步跟读态
+  area.addEventListener('scroll', ()=>{ _stickFollow = _isNearBottom(area); }, {passive:true});
+}
+// 请求一次"若在跟读态则钉底"（合批到下一帧，最多一次）
+function stickBottom(force){
+  const area = _chatAreaEl();
+  if(!area) return;
+  if(force) _stickFollow = true;
+  if(!_stickFollow) return;             // 用户已上滑：绝不打扰
+  if(_stickRaf) return;
+  _stickRaf = requestAnimationFrame(()=>{
+    _stickRaf = 0;
+    const a = _chatAreaEl();
+    if(!a || !_stickFollow) return;
+    a.scrollTop = a.scrollHeight;
+  });
+}
+// 强制滚动（用户显式动作：发送消息、切换会话、点"回到最新"）——绕过跟读态判断
+function scrollChatToBottom(){
+  const area = _chatAreaEl();
+  if(!area) return;
+  _stickFollow = true;
+  area.scrollTop = area.scrollHeight;
+}
 // 2026-09-16：打开会话后持续钉底——懒加载内容（mermaid 库首载/图片/缩略图挂载）会在
 // 数秒内持续长高，固定时间补偿追不上。策略：150ms 步进钉底至超时；用户滚轮/触摸上滑立即让位。
 function pinChatBottom(area, ms){
@@ -418,8 +468,9 @@ function _reattachLiveStream(area, convId){
   if(!box || String(box.dataset.convId||'') !== String(convId)) return false;
   if(box.parentElement && box.parentElement.id === 'stream-parking'){
     area.appendChild(box);
-    const area2 = document.getElementById('chat-area');
-    if(area2) area2.scrollTop = area2.scrollHeight;   // 挂回后钉底看现场
+    // 2026-09-29：切回流式会话属用户显式跳转 → 强制钉底看现场，并复位贴底跟读态
+    scrollChatToBottom();
+    _bindStickDetach();   // 重新绑定（消息区可能已被重渲染，监听器随旧节点丢失）
   }
   return true;
 }
@@ -484,7 +535,13 @@ async function selectConv(id) {
     // 用户滚轮/触摸上滑立即让位（renderMessagesChunked 上方 pinChatBottom 定义）
     // 2026-09-29：done 回调里先挂回流式现场再钉底 —— 分片是 rAF 异步追加，
     // 若在调用点直接挂回，后续分片会排到现场之后造成消息乱序。
-    renderMessagesChunked(area, msgs, ()=>{ _reattachLiveStream(area, id); pinChatBottom(area, 8000); });
+    // 同时复位「贴底跟读」态（新会话/重开会话从底部开始跟随）并绑定脱离监听。
+    renderMessagesChunked(area, msgs, ()=>{
+      _stickFollow = true;
+      _bindStickDetach();
+      _reattachLiveStream(area, id);
+      pinChatBottom(area, 8000);
+    });
   }
   // 2026-09-29（用户反馈）：状态栏不再写「已加载」——零信息量却让蓝色状态条常驻不消失
   // （initChatStatusBar 有文本即显示）。状态栏只承载实质状态（意图调度/失败/停止等）。

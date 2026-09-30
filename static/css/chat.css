@@ -7,7 +7,11 @@
 
 /* ── 1. AI 输入框 ibox（含工具栏 + 语音按钮 + 紫色发送键） ── */
 .ibox{border:1px solid var(--line);border-radius:12px;padding:10px 14px;display:flex;flex-direction:column;gap:0;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.03);}
-.ibox textarea{flex:1;border:none;outline:none;resize:none;font-family:inherit;font-size:13px;background:transparent;min-height:48px;max-height:180px;height:auto;line-height:1.55;width:100%;padding:2px 0;color:var(--fg);}
+/* 2026-09-29（自适应高度）：textarea 随内容自动长高，上限 200px 后内部滚动。
+   JS 侧 handleChatInput 的 autoGrow 负责 height 重算；CSS 只定边界
+   （min 48px / max 200px）。原 max-height:180px 保留语义但上调，
+   因为去掉 dock 白底后输入框成为唯一视觉主体，可稍高一些。 */
+.ibox textarea{flex:1;border:none;outline:none;resize:none;font-family:inherit;font-size:13px;background:transparent;min-height:48px;max-height:200px;height:auto;line-height:1.55;width:100%;padding:2px 0;color:var(--fg);overflow-y:auto;field-sizing:content;}
 .ibox-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line);}
 .tb-left,.tb-right{display:flex;align-items:center;gap:6px;}
 .tb-icon{width:30px;height:30px;border-radius:7px;border:none;background:transparent;color:var(--mut);cursor:pointer;font-size:15px;display:inline-flex;align-items:center;justify-content:center;transition:all .15s;}
@@ -44,7 +48,14 @@
 .chat-welcome .cw-hint{margin-top:6px;font-size:12px;color:var(--mut);display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center;}
 .chat-welcome .cw-hint kbd{background:#eef1f6;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-size:11px;font-family:inherit;color:var(--mut);}
 /* 2026-09-04 v5：输入区基类（底部默认态 & 欢迎屏居中态） */
-.chat-input-dock{border-top:1px solid var(--line);background:#fff;padding:12px 16px;border-radius:0 0 10px 10px;}
+/* 2026-09-29（移除白底板）：底部输入区不再自绘白色背板 —— 用户反馈"输入框下面
+   还有一个矩形的白色背景板"即此层（dock 白底 + 内衬 padding + ibox 白卡叠加，
+   视觉上多出一圈白底矩形）。现在 dock 透明，仅 ibox 保留卡片样式。
+   注意：欢迎屏 in-hero 态不受本条影响（白卡是设计）；暗色主题下 tokens.css
+   仍以 !important 把 hero 态 dock 柔化成暗色卡 —— 那是欢迎屏的暗色适配，
+   对底部聊天态（dock 在 #chat-col 下、无 .cw-dock-slot 祖先）不生效，
+   2026-09-29 浏览器实测：底部态 dockBg=rgba(0,0,0,0) 透明 ✓。 */
+.chat-input-dock{border-top:none;background:transparent;padding:0 16px 10px;}
 .chat-input-dock.in-hero{border:none;background:#fff;border-radius:16px;padding:16px 18px;
   box-shadow:0 10px 34px rgba(20,40,80,.10),0 2px 8px rgba(20,40,80,.05);}
 /* 欢迎屏内输入区槽位：整体居中、限制最大宽度 */
@@ -158,8 +169,10 @@
 /* V2.6 执行中动态效果：状态徽章 spinner + 运行中条目呼吸 */
 @keyframes proc-spin{to{transform:rotate(360deg);}}
 .proc-spin{display:inline-block;width:10px;height:10px;border:2px solid var(--blue-bd,#bcd4f7);border-top-color:var(--blue-d,#3478f6);border-radius:50%;animation:proc-spin .8s linear infinite;vertical-align:-1px;margin-right:4px;flex:none;}
-@keyframes proc-breathe{0%,100%{opacity:1;}50%{opacity:.55;}}
-.proc-block.running{animation:proc-breathe 1.6s ease-in-out infinite;border-color:var(--blue-bd,#bcd4f7);}
+/* 2026-09-29（用户五轮反馈3）：执行中**不再做整块透明度呼吸**（opacity 1↔0.55 的
+   proc-breathe 动画在多环节同跑时整屏忽明忽暗，用户反馈"影响查看"）。
+   运行态只保留静态蓝色边框 + 徽章 spinner，内容全程清晰可读。 */
+.proc-block.running{border-color:var(--blue-bd,#bcd4f7);box-shadow:0 0 0 1px rgba(52,120,246,.10);}
 .proc-block.running .proc-head{color:var(--blue-d,#3478f6);}
 /* V2.6 统一收口条：执行过程汇总（点击展开/收起时间线） */
 .proc-summary{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--blue-l,#eef4ff);cursor:pointer;user-select:none;font-size:11.5px;font-weight:600;color:var(--blue-d,#3478f6);transition:background .15s;}
@@ -263,6 +276,28 @@
 }
 .clarify-hint .ch-ic{flex:none;font-size:13px;line-height:1.2;}
 .clarify-hint .ch-sub{display:block;color:var(--mut);font-size:10.5px;margin-top:2px;}
+/* 2026-09-29（用户五轮反馈2）：确认卡挂输入框上方（dock）紧凑版 ——
+   与输入框衔接、整体留白收紧；卡内步骤超过一屏时内部滚动（不无限撑高输入区） */
+.clarify-ask-card.dock{
+  margin:0 0 8px; padding:8px 10px;
+  border:1px solid #d3e3fb; background:#f0f6ff; border-radius:10px;
+  font-size:11.5px; box-shadow:0 2px 10px rgba(31,64,126,.07);
+  max-height:46vh; overflow-y:auto;
+}
+.clarify-ask-card.dock .clarify-prog-bar{margin-top:5px;}
+.clarify-ask-card.dock .clarify-dots{margin:5px 0 6px;}
+.clarify-ask-card.dock .clarify-steps{min-height:0;}
+.clarify-ask-card.dock .clarify-step .cq-q{font-size:12px;margin-bottom:5px;}
+.clarify-ask-card.dock .cq-opt{padding:3px 6px;}
+.clarify-ask-card.dock .clarify-foot{margin-top:7px;}
+.clarify-ask-card.dock .cq-note{min-height:44px;}
+/* 流内一行指引（确认卡已移到输入框上方，流内只留位置标记） */
+.clarify-inline-note{
+  border:1px dashed #c7d9f5;background:#f4f8ff;border-radius:6px;
+  padding:5px 9px;font-size:11px;color:var(--blue-d,#3478f6);line-height:1.6;margin-top:6px;
+}
+.clarify-inline-note b{color:var(--blue-d,#3478f6);}
+.clarify-inline-note.hist{opacity:.85;}
 /* 收口条右侧的「🔍 详情」入口（stopPropagation 防止触发展开/收起） */
 .proc-summary .proc-x{
   margin-left:8px;flex:none;padding:1px 7px;border-radius:10px;

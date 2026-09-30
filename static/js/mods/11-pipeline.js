@@ -109,7 +109,8 @@ function procRender(){
   if(!hideBody){
     _procS.timeline.forEach(s=>{
       const run = s.status==='run';
-      const statusCls = run ? 'w' : (s.status==='failed' ? 'r' : 'ok');
+      // 五轮反馈5：stopped（已终止）用黄色警示但不转圈；只有 run 才有 spinner/呼吸
+      const statusCls = run ? 'w' : (s.status==='failed' ? 'r' : (s.status==='stopped' ? 'w' : 'ok'));
       const sub = s.sub ? `<span class="proc-sub">${esc(s.sub)}</span>` : '';
       // subHtml：**白名单构造的可信 HTML**（当前仅「知识库检索」来源徽章）——不经过 esc，
       // 注意：普通文本一律走 sub（会被转义），切勿把后端字符串直接塞进这里。
@@ -119,7 +120,7 @@ function procRender(){
       // V2.6 动态效果：运行中条目 running 类（呼吸边框）+ 状态徽章前 spinner
       const spin = run ? '<span class="proc-spin"></span>' : '';
       h += `<div class="proc-block ${s.type}${run?' running':''}${s.collapsed?' collapsed':''}">
-        <div class="proc-head" onclick="toggleProc(this)"><span>${s.icon}</span><span class="proc-title">${esc(s.title)}${sub}${subHtml}</span>${elapsed}<span class="st ${statusCls}" style="margin-left:auto;">${spin}${esc(s.statusText)}</span><span class="chev">▾</span></div>
+        <div class="proc-head" onclick="toggleProc(this)" title="点击${s.collapsed?'展开':'收起'}详情"><span>${s.icon}</span><span class="proc-title">${esc(s.title)}${sub}${subHtml}</span>${elapsed}<span class="st ${statusCls}" style="margin-left:auto;">${spin}${esc(s.statusText)}</span><span class="chev">▾</span></div>
         ${s.detail?`<div class="proc-body">${s.detail}</div>`:''}
       </div>`;
     });
@@ -132,8 +133,9 @@ function procRender(){
       || (dagEl && dagEl.clientHeight > 0 && dagEl.querySelectorAll('canvas').length === 0);
     if(needRebuild){ _procS.dagDirty = false; dagBuild('proc-dag-live', _procS.dag); }
   }
-  const area = document.getElementById('chat-area');
-  if(area) area.scrollTop = area.scrollHeight;
+  // 2026-09-29：改为「贴底才跟随」——执行过程时间线每帧长高时，只有视口本来就在
+  //   底部附近才钉底；用户上滑查看上文后不再被强行拽回（原为无条件 scrollTop=scrollHeight）。
+  stickBottom();
 }
 function procAddStage(name, status, detail, detailHtml){
   const iconMap = {'意图识别':'🔍','知识库检索':'📚','生成与校验':'✍️','写入会话':'💾'};
@@ -143,7 +145,15 @@ function procAddStage(name, status, detail, detailHtml){
   // 生成与校验完成 → 自动收起思考过程（思考没有单独的事件"完成"）
   if(name === '生成与校验' && status === 'done' && _procS.thinking) {
     const s = _procS.timeline.find(x=>x.id==='thinking');
-    if(s && s.status === 'run') { s.status = 'done'; s.statusText = '✓ 完成'; s.collapsed = true; procRender(); }
+    if(s && s.status === 'run') {
+      // 2026-09-29（WorkBuddy 式环节总结）：完成时头部切为**首句总结**（浅色），
+      //   状态文案带轮数；点击仍可展开完整思考流（轮次分隔保留）。
+      const _head = _procSumText(String(_procS.thinking || '').replace(/\s+/g, ' ').trim());
+      s.status = 'done';
+      s.statusText = '✓ 已深度思考' + (_procS.thinkingOrder.length > 1 ? ` ${_procS.thinkingOrder.length} 轮` : '');
+      s.sub = _head;
+      s.collapsed = true; procRender();
+    }
   }
 }
 function procAddThinking(delta, round, key){
@@ -162,7 +172,13 @@ function procAddThinking(delta, round, key){
     const head = r>0 ? `<div class="proc-round">第 ${r} 轮</div>` : '';
     return head + esc(_procS.thinkingRounds[r]);
   }).join('');
-  procUpsert('thinking', {type:'thinking', icon:'💭', title:'思考过程', status:'run', statusText:'思考中…', detail});
+  // 2026-09-29（WorkBuddy 式环节总结）：头部一行**浅色实时摘要** —— 显示思考流的末句，
+  //   用户不展开也能看到"AI 此刻在想什么"。原实现头部只有静态标题"思考过程"，
+  //   内容全部埋在展开体里，运行期间等于黑盒（用户反馈"AI 思考内容无法查看"）。
+  const _tail = String(_procS.thinking || '').replace(/\s+/g, ' ').trim();
+  const _liveSum = _tail ? _toolSumm(_tail.slice(-90), 56) : '';
+  procUpsert('thinking', {type:'thinking', icon:'💭', title:'思考过程', status:'run',
+    statusText:'思考中…', sub: _liveSum ? ('…' + _liveSum) : '', detail});
 }
 function procAddAgent(ev){
   const name = ev.display_name||ev.name||'-';
@@ -294,13 +310,19 @@ function _subChildrenHtml(key){
     const spin = run ? '<span class="proc-spin"></span>' : '';
     const res = it.error || it.result || '-';
     const trunc = !!it.truncated;
+    // 2026-09-29（细粒度补齐）：子任务内部工具结果此前只有截断展示，**没有展开/复制入口**
+    //   （顶层工具卡有，这里漏了）—— 长结果（如 V2 代码校验返回）被截断后无法查看全文。
+    //   现对齐顶层：>200 字或 truncated 时给「展开全文」，一律给「复制」。
+    const _long = trunc || String(res).length > 200;
     h += '<div style="margin-bottom:6px;">'
       + '<div style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--blue-d,#3478f6);flex-wrap:wrap;">🛠 '+esc(it.displayName||it.name)
       + ' <span class="st '+stCls+'">'+spin+stTxt+'</span>'
       + (it.latencyMs?'<span style="color:var(--mut);font-size:10px;">⏱ '+(it.latencyMs/1000).toFixed(1)+'s</span>':'')
       + '</div>'
       + (it.arguments?'<div class="proc-tool-param">参数：'+esc(typeof it.arguments==='string'?it.arguments:JSON.stringify(it.arguments))+'</div>':'')
-      + '<div class="proc-tool-result '+((trunc||String(res).length>200)?'trunc':'')+'"><div class="pr-head"><span>结果</span></div><div class="pr-body">'+esc(String(res))+'</div></div>'
+      + '<div class="proc-tool-result '+(_long?'trunc':'')+'"><div class="pr-head"><span>结果</span>'
+      + (_long?'<span class="pr-act" onclick="toolExpand(this)">展开全文</span>':'')
+      + '<span class="pr-act" onclick="copyToolResult(this)">📋 复制</span></div><div class="pr-body">'+esc(String(res))+'</div></div>'
       + '</div>';
   });
   return h + '</div>';
@@ -387,11 +409,13 @@ function _procSumText(t){
 // Task 14：子任务卡片（状态徽章 done/failed/partial + 专长标签 + 重试标记 + 协议摘要徽章 + 耗时 + 错误）
 function subtaskCardHtml(s){
   const run = s.status==='run';
-  const ok = s.status==='done';
-  const part = s.status==='partial';
+  const stopped = s.status==='stopped';   // 五轮反馈5：用户终止 → 不再算"执行中"，也不误标失败
+  const ok = s.status==='done' && !s.error;   // 2026-09-29：done 但带 error → 不算干净完成，避免"✓完成 + 红字失败"自相矛盾
+  const part = s.status==='partial' || (s.status==='done' && !!s.error);
   const badge = ok ? '<span class="st ok">done</span>'
     : part ? '<span class="st w">partial</span>'
     : run ? '<span class="st w">run</span>'
+    : stopped ? '<span class="st w">stopped</span>'
     : '<span class="st r">failed</span>';
   const caps = capTagsFor(s.agent);
   // Task 14：自动重试标记（retry_count>0 标黄显示重试次数）
@@ -403,15 +427,79 @@ function subtaskCardHtml(s){
     : ss==='failed' ? '<span class="st r" style="font-size:9.5px;">交付 failed</span>' : '';
   // 摘要文本：优先后端**面向用户**的 ui_summary（2026-09-26；剔除内部交接语），回退旧 summary 字段
   const sumRaw = s.ui_summary || ((s.summary && typeof s.summary === 'object') ? (s.summary.summary||'') : (s.summary||''));
-  const sumText = _procSumText(sumRaw);
-  // 布局：**单行省略**（原为自由换行，长摘要会顶成 2~3 行，用户反馈"占用太多区域"）；
-  //      悬停 title 看全文，需要完整内容时展开卡片详情。
-  const sum = sumText ? `<div class="proc-sum" title="${esc(String(sumRaw))}" style="color:var(--mut);font-size:10.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(sumText)}</div>` : '';
+  // 2026-09-29（用户三轮反馈）：不再单行省略 + hover 看全文 —— 摘要**直接展示在框内**，
+  // 左对齐、限高 96px、框内滚动看完整内容（title 弹层交互废弃）。
+  const sum = sumRaw ? `<div style="color:var(--mut);font-size:10.5px;margin-top:3px;text-align:left;max-height:96px;overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-word;">${esc(String(sumRaw))}</div>` : '';
+  // 2026-09-29（用户三轮反馈"失败后系统在做什么"）：失败态补一行**系统行为说明**，
+  // 语义与后端编排器一致（stream.py Task 7：自动重试 1 次 → 仍失败跳过 → 依赖任务受阻 → 已完成部分继续汇总）。
+  const failNote = (s.status==='failed' && s.error) ? `<div style="color:var(--mut);font-size:10px;margin-top:2px;line-height:1.5;">系统已自动重试 1 次仍失败 → 本步跳过，依赖它的后续步骤受阻；编排会用已完成的部分继续汇总输出，不会卡住。</div>` : '';
   // P1-2：子任务 token 消耗（后端 subtask 事件 token_count 透传）
   const tk = (s.token_count||0) > 0 ? ` <span style="color:var(--mut);font-size:10.5px;" title="本子任务 token 消耗">🪙 ${Number(s.token_count).toLocaleString()}</span>` : '';
+  // 2026-09-29（用户三轮反馈）：外层阶段卡头部已展示标题，展开详情内**不再重复渲染名称**
+  // （此前第一行 <b>title</b> 与外层 head 完全一样，用户指出冗余）。本行只保留状态符号与徽章。
   return `<div class="proc-line" style="border:1px solid var(--line);border-radius:8px;padding:5px 8px;margin:3px 0;background:#fff;">
-    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${ok?'✓':part?'◐':run?'⟳':'✗'} <b>${esc(s.title||s.key||'')}</b>${badge}${s.agent?` <span class="tag" style="font-size:10px;">${esc(s.agent)}</span>`:''}${caps}${retry}${sumBadge}${s.latency_ms?` <span style="color:var(--mut);font-size:10.5px;">⏱ ${(s.latency_ms/1000).toFixed(1)}s</span>`:''}${tk}${run?' <span class="st w">执行中…</span>':''}</div>
-    ${sum}${s.error?`<div style="color:var(--red);font-size:10.5px;margin-top:2px;">${esc(s.error)}</div>`:''}</div>`;
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${ok?'✓':part?'◐':run?'⟳':stopped?'⏹':'✗'}${badge}${s.agent?` <span class="tag" style="font-size:10px;">${esc(s.agent)}</span>`:''}${caps}${retry}${sumBadge}${s.latency_ms?` <span style="color:var(--mut);font-size:10.5px;">⏱ ${(s.latency_ms/1000).toFixed(1)}s</span>`:''}${tk}${run?' <span class="st w">执行中…</span>':''}${stopped?' <span class="st w">已终止</span>':''}</div>
+    ${sum}${s.error?`<div style="color:var(--red);font-size:10.5px;margin-top:2px;">${esc(s.error)}</div>`:''}${failNote}</div>`;
+}
+// ── 五轮反馈5：终止/中断后，所有 run 态环节统一翻转为「⏹ 已终止」──
+//  此前 finalizeStopped 只把块折叠，"执行中…/思考中…/执行中 1/1" 徽章原样进历史，
+//  用户终止后界面仍显示一堆在跑的任务（截图实证）。现在：
+//    ① timeline 各 run 块 → stopped（thinking 特判"思考已中断"），冻结实时计时；
+//    ② 子任务卡重建内层 detail（原 detail HTML 里的"执行中…"徽章不会自己变）；
+//    ③ 计划清单块整体重算（执行中 N/M → 已终止，未完成数可见）。
+function procMarkStopped(){
+  try{
+    let flipped = 0;
+    (_procS.timeline||[]).forEach(x=>{
+      if(x.status !== 'run') return;
+      x.status = 'stopped';
+      x.statusText = (x.id === 'thinking') ? '⏹ 思考已中断' : '⏹ 已终止';
+      x.elapsedStart = null;
+      x.collapsed = true;
+      if(x.type === 'subtask' && x.key !== undefined){
+        x.detail = subtaskCardHtml({key:x.key, title:x.title, agent:x.agent||'', status:'stopped',
+                                    latency_ms:x.elapsedMs, error:''}) + _subChildrenHtml(x.key);
+      }
+      flipped++;
+    });
+    // 计划清单/子任务 DAG 节点同步翻转
+    if(_procS.dag && _procS.dag.order && _procS.dag.order.length){
+      let runN = 0;
+      _procS.dag.order.forEach(k=>{
+        const n = _procS.dag.nodes[k];
+        if(n && n.status === 'run'){ n.status = 'stopped'; runN++; }
+      });
+      if(_procS.dag.order.length){
+        const all = _procS.dag.order.map(k=>_procS.dag.nodes[k]);
+        const doneN = all.filter(n=>n && n.status==='done').length;
+        const stopN = all.filter(n=>n && n.status==='stopped').length;
+        const failN = all.filter(n=>n && n.status==='failed').length;
+        const planList = '<div style="display:flex;flex-direction:column;gap:5px;padding:2px 0;">' +
+          _procS.dag.order.map((k,i)=>{
+            const n = _procS.dag.nodes[k]||{};
+            const isStop = n.status==='stopped';
+            const stTxt = isStop ? '已终止' : (n.status==='failed' ? '失败' : (n.status==='partial' ? '部分完成' : '完成'));
+            const stCls = isStop ? 'w' : (n.status==='failed' ? 'r' : 'ok');
+            const dep = (n.deps&&n.deps.length) ? '<span style="color:var(--mut);font-size:10px;">依赖: '+esc(n.deps.join('、'))+'</span>' : '';
+            const lat = n.latency_ms ? '<span style="color:var(--mut);font-size:10px;">⏱ '+(n.latency_ms/1000).toFixed(1)+'s</span>' : '';
+            return '<div style="display:flex;align-items:center;gap:6px;font-size:11px;flex-wrap:wrap;">'
+              + '<span style="color:var(--mut);font-size:10px;min-width:16px;">'+(i+1)+'.</span>'
+              + '<span class="st '+stCls+'" style="min-width:56px;text-align:center;">'+stTxt+'</span>'
+              + '<b style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(n.title||k)+'</b>'
+              + (n.agent?'<span style="color:var(--mut);font-size:10px;">'+esc(n.agent)+'</span>':'')
+              + lat + dep + '</div>';
+          }).join('') + '</div>';
+        procUpsert('plan', {type:'plan', icon:'📋', title:`计划清单（${all.length} 任务）`, status:'stopped',
+          statusText:`⏹ 已终止${stopN?` · ${stopN} 项未完成`:''}${doneN?` · ${doneN} 完成`:''}${failN?` · ${failN} 失败`:''}`,
+          detail: planList, collapsed: true});
+      }
+      flipped++;
+    }
+    _procS.done = true;
+    _procS.endTime = _procS.endTime || Date.now();
+    stopElapsedTimer();
+    if(flipped) procRender();
+  }catch(e){ /* 收口翻转失败不阻断主收口流程 */ }
 }
 // P0-1：编排 DAG 轨迹图（Cytoscape + dagre，节点=子任务，边=deps 依赖，按状态着色）
 function dagBuild(containerId, data){
@@ -487,7 +575,11 @@ function procAddSubtask(ev){
   procUpsert('plan', {type:'plan', icon:'📋', title:`计划清单（${all.length} 任务）`, status: runN?'run':'done',
     statusText: runN?`执行中 ${runN}/${all.length}`:`${doneN} 完成${failN?` / ${failN} 失败`:''}`, detail: planList});
   const run = s.status==='run';
-  const statusText = run ? '执行中…' : (s.status==='failed' ? '✗ 失败' : (s.status==='partial' ? '◐ 部分完成' : '✓ 完成'));
+  // 2026-09-29：done 但带 error → "◐ 完成（有异常）"，不再标"✓ 完成"（与卡内红字失败自相矛盾）
+  const statusText = run ? '执行中…'
+    : (s.status==='failed' ? '✗ 失败'
+    : (s.status==='partial' ? '◐ 部分完成'
+    : (s.status==='done' && s.error ? '◐ 完成（有异常）' : '✓ 完成')));
   // V2.6：子任务卡 = 汇总信息 + 内部执行明细（工具参数/结果，嵌套层级查看）
   // 2026-09-26（用户反馈"占用太多区域"）：**默认折叠成一行**，点开才看明细。
   //  摘要句同时上提到 head 的 `sub` 位（`.proc-title` 已具备单行省略）→ 折叠态仍能看到
@@ -519,8 +611,8 @@ function _flushTokens(){
   if(!txt) return;
   if(_tokEl && _tokEl.isConnected){
     _tokEl.textContent += txt;
-    const ca = document.getElementById('chat-area');
-    if(ca) ca.scrollTop = ca.scrollHeight;
+    // 2026-09-29：贴底才跟随（原为无条件钉底 → AI 输出期间用户上滑被强行拽回）。
+    stickBottom();
   }
 }
 // 强制同步 flush：流结束 / 出错 / 澄清卡插入 / 用户中断前必须调用，
@@ -578,12 +670,27 @@ function handleSSE(raw) {
     _forceFlushTokens();
     showStopBtn(false); _streaming = false;
     // V2.6：中断也收口（汇总条切「已中断」，不停留"执行中"）
-    try{
-      _procS.done = true; _procS.endTime = Date.now();
-      _procS.timeline.forEach(x=>{ if(x.status==='run'){ x.status='failed'; x.statusText='✗ 中断'; } });
-      stopElapsedTimer(); procRender();
-    }catch(e){}
-    bodyEl.innerHTML = `<span style="color:var(--red);">调用失败：${esc(ev.message||'未知错误')}</span>`;
+    if(typeof procMarkStopped === 'function') procMarkStopped();
+    else {
+      try{
+        _procS.done = true; _procS.endTime = Date.now();
+        _procS.timeline.forEach(x=>{ if(x.status==='run'){ x.status='failed'; x.statusText='✗ 中断'; } });
+        stopElapsedTimer(); procRender();
+      }catch(e){}
+    }
+    const bodyEl = aiBox ? aiBox.querySelector('.body') : document.querySelector('#stream-ai .body');
+    // 2026-09-29（用户五轮反馈4）：不再整体覆盖 body —— 后端已在 error 路径固化已生成内容，
+    //  前端保留流出的文字、把失败说明**追加**在下方（覆盖 = 刷新前内容先从 DOM 消失，观感即"输出全丢"）。
+    const _typ = bodyEl ? bodyEl.querySelector('.typing') : null; if(_typ) _typ.remove();
+    if(bodyEl) bodyEl.classList.remove('streaming');
+    const errNote = document.createElement('div');
+    errNote.style.cssText = 'margin-top:8px;';
+    // 2026-09-29（用户三轮反馈"失败后系统在做什么"）：失败横条补齐三问 —— 发生了什么 / 系统现状 / 下一步
+    errNote.innerHTML = `<div style="color:var(--red);font-size:11.5px;">调用失败：${esc(ev.message||'未知错误')}</div>`
+      + `<div style="color:var(--mut);font-size:10.5px;margin-top:4px;line-height:1.6;">`
+      + `本次执行已终止，不再有后台任务在跑。上方已生成内容与执行轨迹<b>已保留</b>（刷新不丢）；`
+      + `确认原因（如网络波动）后，<b>直接重新发送消息</b>即可从头执行。</div>`;
+    if(bodyEl) bodyEl.appendChild(errNote);
     const _cs = document.getElementById('chat-status'); if(_cs) _cs.textContent = '调用失败';
   }
 }
@@ -720,8 +827,9 @@ function clarifyGo(card, idx){
   if(prev) prev.style.visibility = (i === 0) ? 'hidden' : 'visible';
   if(next) next.style.display = (i >= total - 1) ? 'none' : '';
   if(send) send.style.display = (i >= total - 1) ? '' : 'none';
-  const area = document.getElementById('chat-area');
-  if(area) area.scrollTop = area.scrollHeight;
+  // 2026-09-29：澄清步骤切换属内容高度变化（切换题目时卡片高度可能变），
+  //   改为贴底才跟随 —— 用户在读上文时不被拽回；读题时（在底部）仍自动跟随。
+  stickBottom();
 }
 // 选中「其他 / 自定义」才展开该题输入框（默认不展示）
 function clarifyToggleCustom(radio){
@@ -743,20 +851,20 @@ function clarifyToggleCustom(radio){
   if(card) clarifyGo(card, parseInt(card.dataset.step || '0', 10));
 }
 function renderClarifyAsk(ev, host){
+  // 2026-09-29（用户五轮反馈2）：确认卡不再整卡塞进会话流（此前"文字上下空旷区域太多"
+  //  且常驻流中把输出顶得很长）。流内只留**一行指引**，可作答的紧凑卡挂在输入框上方
+  //  （updateClarifyHint 已随 setPendingClarify 渲染，此处不重复渲染）。
   const aiBox = document.getElementById('stream-ai');
   const bodyEl = host || (aiBox ? aiBox.querySelector('.body') : null);
-  if(!bodyEl || document.getElementById('clarify-ask')) return;
+  if(!bodyEl) return;
   const qs = ev.questions || [];
   if(!qs.length) return;
-  const card = document.createElement('div');
-  card.id = 'clarify-ask';
-  card.className = 'clarify-ask-card';
-  card.style.cssText = 'border:1px solid #d3e3fb;background:#f0f6ff;border-radius:8px;padding:10px 12px;font-size:12px;margin-top:10px;';
-  card.innerHTML = clarifyCardInnerHtml(qs, ev.title);
-  bodyEl.appendChild(card);
-  clarifyGo(card, 0);   // 2026-09-28：初始化到第 1 步（同步进度条/圆点/按钮显隐）
-  const area = document.getElementById('chat-area');
-  if(area) area.scrollTop = area.scrollHeight;
+  if(bodyEl.querySelector('.clarify-inline-note')) return;
+  const note = document.createElement('div');
+  note.className = 'clarify-inline-note';
+  note.innerHTML = `❓ AI 发起了 <b>${qs.length}</b> 项确认（${esc(String(ev.title || '需要确认建模信息')).replace(/❓\s*/,'')}）—— 请在<b>输入框上方</b>的确认卡中作答，或在输入框直接补充。`;
+  bodyEl.appendChild(note);
+  stickBottom();
 }
 // 提交澄清答案 → 构造续答文本 → 作为新消息发送（走正常流式续答）
 async function clarifyAnswerSend(){
@@ -789,14 +897,9 @@ async function clarifyAnswerSend(){
   try{
     const r = await api('/api/conversations/' + currentConvId + '/clarify-answer', {method:'POST', body:JSON.stringify({answers, note})});
     if(r && r.error){ toast(r.error); if(btn){ btn.disabled=false; btn.textContent='✉ 发送补充信息'; } return; }
-    card.style.opacity = 0.55;
-    // 2026-09-28：变量名避开 `note`（上面已有的补充说明变量）—— 同名 const 重复声明会让
-    //   整个函数体落进 TDZ，任何路径调用都抛 "Cannot access 'note' before initialization"。
-    const ok0 = document.createElement('div');
-    ok0.style.cssText = 'font-size:10.5px;color:var(--grn);margin-top:6px;';
-    ok0.textContent = '✓ 已提交，正在继续…';
-    card.appendChild(ok0);
-    setPendingClarify(null);   // 2026-09-25：挂起已由后端清空 → 前端同步（撤掉输入框上方提示条）
+    // 2026-09-29（五轮反馈2）：卡已挂 dock，setPendingClarify(null) 会直接撤卡 → 反馈走 toast
+    toast('✓ 已提交，正在继续…');
+    setPendingClarify(null);   // 2026-09-25：挂起已由后端清空 → 前端同步（撤掉输入框上方确认卡）
     sendResume(r.resume_text);
   }catch(e){ toast('提交失败：' + (e.message||'')); if(btn){ btn.disabled=false; btn.textContent='✉ 发送补充信息'; } }
 }
@@ -804,11 +907,8 @@ async function clarifyAnswerSend(){
 function clarifySkipSend(){
   const card = document.getElementById('clarify-ask') || document.querySelector('.clarify-ask-card');
   if(!card) return;
-  card.style.opacity = 0.55;
-  const note = document.createElement('div');
-  note.style.cssText = 'font-size:10.5px;color:var(--mut);margin-top:6px;';
-  note.textContent = '已跳过澄清，按现有信息继续…';
-  card.appendChild(note);
+  // 2026-09-29（五轮反馈2）：卡已挂 dock，setPendingClarify(null) 会直接撤卡 → 反馈走 toast
+  toast('已跳过澄清，按现有信息继续…');
   setPendingClarify(null);
   sendResume('【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。');
 }
@@ -828,7 +928,8 @@ async function sendResume(text){
   aiBox.dataset.convId = String(currentConvId);   // 2026-09-29：流式现场归属会话（与 sendChat 同步，切会话寄存/挂回依赖此标记）
   aiBox.innerHTML = `<span class="who">AI</span><div class="msg-inner"><div class="proc" id="proc-box"></div><div class="body streaming"><span class="typing"></span></div></div>`;
   area.appendChild(aiBox);
-  area.scrollTop = area.scrollHeight;
+  scrollChatToBottom();
+  _bindStickDetach();   // 2026-09-29：绑定"上滑即脱离跟读"（幂等，见 03-chat.js）
   const _cs = document.getElementById('chat-status'); if(_cs) _cs.textContent = '正在继续执行…';
   resetPipeline();
   try{
@@ -851,7 +952,7 @@ async function sendResume(text){
       }
     }
     _forceFlushTokens();   // P0-3：流结束前清空合帧缓冲（含中断路径），防末帧丢失
-    area.scrollTop = area.scrollHeight;
+    stickBottom();         // 2026-09-29：贴底才跟随（用户上滑阅读时不拽回）
     showStopBtn(false);
     _streaming = false;
     if(_streamAbort === myAbort) _streamAbort = null;
@@ -862,7 +963,19 @@ async function sendResume(text){
     if(_streamAbort === myAbort) _streamAbort = null;
     if(e && e.name === 'AbortError'){ finalizeStopped(aiBox); return; }
     const bodyEl = aiBox.querySelector('.body');
-    bodyEl.innerHTML = `<span style="color:var(--red);">调用失败：${esc(e.message)}</span>`;
+    // 2026-09-29（用户五轮反馈4）：网络错误不再整体覆盖 body，保留已生成内容 + 追加错误条 + 固化落库
+    const _typ = bodyEl ? bodyEl.querySelector('.typing') : null; if(_typ) _typ.remove();
+    if(bodyEl) bodyEl.classList.remove('streaming');
+    if(typeof commitPartialStream === 'function') commitPartialStream(aiBox);
+    if(typeof procMarkStopped === 'function') procMarkStopped();
+    const errNote = document.createElement('div');
+    errNote.style.cssText = 'margin-top:8px;';
+    // 2026-09-29（用户三轮反馈）：失败横条补"系统现状 + 下一步"
+    errNote.innerHTML = `<div style="color:var(--red);font-size:11.5px;">调用失败：${esc(e.message)}</div>`
+      + `<div style="color:var(--mut);font-size:10.5px;margin-top:4px;line-height:1.6;">`
+      + `本次执行已终止，不再有后台任务在跑。上方已生成内容与执行轨迹<b>已保留</b>；`
+      + `确认原因（如网络波动）后，<b>直接重新发送消息</b>即可从头执行。</div>`;
+    if(bodyEl) bodyEl.appendChild(errNote);
     const _cs2 = document.getElementById('chat-status'); if(_cs2) _cs2.textContent = '调用失败';
   }
 }
@@ -902,10 +1015,12 @@ function initChatStatusBar(){
 if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initChatStatusBar);
 else initChatStatusBar();
 
-// ── ① 待澄清状态：登记/撤销 + 输入区上方提示条 ──
+// ── ① 待澄清状态：登记/撤销 + 输入框上方的「确认卡」──
 //  为什么需要：澄清卡在被流式重建后会出现、刷新后又只读；而用户在**主输入框**打字时
 //  既不知道"AI 正在等我确认"，也不清楚打进去算不算答复。这里把状态显式化：
 //  pending 非空 → 提示条出现，且 sendChat 会把输入内容当作澄清补充走 clarify-answer。
+//  2026-09-29（用户五轮反馈2）：确认卡**不再常驻会话输出流** —— 改挂输入框上方与输入框
+//  衔接（dock 卡），并整体紧凑化。流内只留一行指引（renderClarifyAsk），交互集中在 dock 卡。
 function setPendingClarify(p){
   window._pendingClarify = (p && (p.questions || []).length) ? p : null;
   updateClarifyHint();
@@ -913,23 +1028,28 @@ function setPendingClarify(p){
 function updateClarifyHint(){
   const dock = document.getElementById('chat-input-dock');
   if(!dock) return;
-  let bar = document.getElementById('clarify-hint');
+  let card = document.getElementById('clarify-ask');
+  const oldBar = document.getElementById('clarify-hint');
+  if(oldBar) oldBar.remove();   // 旧提示条被 dock 卡取代（一次性清理）
   const p = window._pendingClarify;
   if(!p){
-    if(bar) bar.remove();
+    if(card) card.remove();
     return;
   }
-  const n = (p.questions || []).length;
-  const first = ((p.questions || [])[0] || {}).question || '';
-  if(!bar){
-    bar = document.createElement('div');
-    bar.id = 'clarify-hint';
-    bar.className = 'clarify-hint';
-    dock.insertBefore(bar, dock.firstChild);
+  const qs = p.questions || [];
+  const n = qs.length;
+  // 已有同规模的卡 → 不重建（防重复事件把用户已选的选项抹掉）
+  if(card && card.dataset.qcount === String(n)) { clarifyGo(card, parseInt(card.dataset.step||'0',10)); return; }
+  if(!card){
+    card = document.createElement('div');
+    card.id = 'clarify-ask';
+    card.className = 'clarify-ask-card dock';
+    card.dataset.qcount = String(n);
+    dock.insertBefore(card, dock.firstChild);
   }
-  bar.innerHTML = `<span class="ch-ic">❓</span>
-    <span class="ch-tx">AI 正在等待你的确认（${n} 个问题）：<b>${esc(String(first).slice(0, 60))}</b>${n>1?' …':''}
-      <span class="ch-sub">直接在下方输入框写下你的答复并发送即可继续</span></span>`;
+  card.dataset.qcount = String(n);
+  card.innerHTML = clarifyCardInnerHtml(qs, p.title);
+  clarifyGo(card, 0);
 }
 // ── ② 执行详情面板：从该条 AI 消息已持久化的执行过程块还原结构化视图 ──
 //  数据来源：消息内的 .proc 块（在线=实时时间线，历史=card_data.exec 还原），

@@ -103,6 +103,30 @@ async function loadQuickBar(){
         // 团队按主 Agent 划分：每个主 Agent 即一个智能体团队（工作流）
         tSel.innerHTML = '<option value="">自动（不指定团队）</option>' + teams.map(t=>`<option value="${esc(t.name)}">👑 ${esc(t.display_name||t.name)}${t.team_count?`（${t.team_count}人）`:''}</option>`).join('');
         tSel.title = '选择智能体团队（工作流）：主 Agent 负责意图识别/任务拆分/计划制定/任务分派/内容整合输出';
+        // 2026-09-29（默认选中第一团队）：/api/studio/agent-teams 按 agents.id 升序返回，
+        //   teams[0] 即「排序第一的团队」，未记录过用户选择时默认选中它，免去每次手动选择。
+        //   与 Agent 下拉（2026-09-23 改回"自动匹配"）**并不矛盾**：两者语义不同 ——
+        //     · Agent 下拉值 → forced_intent，走 `intent = forced_intent or _detected`
+        //       **恒定覆盖**意图识别，故必须默认"自动匹配"；
+        //     · 团队下拉值 → team，走 `team_forced=True` 的**强制编排**分支
+        //       （_try_orchestrate_team：主 Agent 负责识别/拆解/分派/汇总），
+        //       这是团队模式的既定语义，默认选中即"默认走团队编排"，符合预期。
+        //   用户显式改过（含主动选"自动"）则以记录为准 —— 空串也是有效记录。
+        let lastTeam = null;
+        try{ lastTeam = localStorage.getItem('mbse_last_team'); }catch(e){}
+        const teamNames = teams.map(t=>t.name);
+        if(lastTeam !== null && (lastTeam === '' || teamNames.includes(lastTeam))){
+          tSel.value = lastTeam;
+        } else {
+          tSel.value = teamNames[0] || '';
+        }
+        if(!tSel.dataset.lastBind){
+          tSel.dataset.lastBind = '1';
+          tSel.addEventListener('change', ()=>{
+            try{ localStorage.setItem('mbse_last_team', tSel.value || ''); }catch(e){}
+            if(typeof renderChips === 'function') renderChips();
+          });
+        }
       } else {
         tSel.innerHTML = '<option value="">无智能体团队</option>';
         tSel.title = '暂无主 Agent 团队，请到「Agent 管理」创建主 Agent 并配置成员';
@@ -359,8 +383,8 @@ function finishStream(r, aiBox) {
   }
   // 会话产物分栏增量刷新（后端已归档本消息产物）
   if(currentConvId) loadArtifacts(currentConvId);
-  const area = document.getElementById('chat-area');
-  area.scrollTop = area.scrollHeight;
+  // 2026-09-29：流结束改贴底才跟随（用户上滑阅读上文时不被打断）
+  stickBottom();
 }
 // V2.6 需求质量参考：折叠明细切换
 function qrToggle(sumEl){

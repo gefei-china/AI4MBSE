@@ -33,7 +33,19 @@ function _detectMention(){
   } else if(idx > 0 && !/\s/.test(before[idx-1])) return null;  // 邮箱等场景不弹
   return { type: m[1], filter: m[2], start: idx };
 }
+function _chatInputAutoGrow(){
+  // 2026-09-29（自适应高度）：随内容变高，上限由 CSS max-height:200px 控制
+  // （到顶后 overflow-y:auto 内部滚动）。支持 field-sizing:content 的浏览器
+  // （Chrome 123+）由 CSS 接管，这里 scrollHeight 与实际一致时是幂等的，无冲突。
+  const ta = document.getElementById('chat-input');
+  if(!ta) return;
+  ta.style.height = 'auto';                 // 先回缩，让 scrollHeight 反映真实内容高度
+  const h = Math.min(ta.scrollHeight, 200);
+  ta.style.height = h + 'px';
+  ta.style.overflowY = ta.scrollHeight > 200 ? 'auto' : 'hidden';
+}
 async function handleChatInput(){
+  _chatInputAutoGrow();   // 2026-09-29：自适应高度随输入即时生效
   // 2026-09-04 v3：草稿态输入实时暂存，下次「新建任务」恢复
   if(!currentConvId){
     const _inp = document.getElementById('chat-input');
@@ -181,6 +193,7 @@ async function sendChat() {
                           {method:'POST', body: JSON.stringify({free_text: msg})});
       if(r && r.resume_text){
         input.value = '';
+        _chatInputAutoGrow();   // 2026-09-29：清空后高度回缩
         try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
         toast('已作为澄清补充提交，正在继续…');
         setPendingClarify(null);
@@ -204,6 +217,7 @@ async function sendChat() {
   renderRefBar();
   if(_refs.length){ msg = _refs.map(r=>'【引用 · '+r.label+'】\n'+r.text+'\n【引用结束】').join('\n\n') + '\n\n' + msg; }
   input.value = '';
+  _chatInputAutoGrow();   // 2026-09-29：清空后高度回缩到 min-height
   closeMentionPop();
   pendingAttachments = []; renderAttachBar();  // 发送后清空附件条
   // V3：/ 选择的技能按消息生效（Trae 式），发送后复位；手动下拉选择保持
@@ -224,7 +238,10 @@ async function sendChat() {
   aiBox.dataset.convId = String(currentConvId);   // 2026-09-29：流式现场归属会话（切会话寄存/挂回、固化落库都以它为准）
   aiBox.innerHTML = `<span class="who">AI</span><div class="msg-inner"><div class="proc" id="proc-box"></div><div class="body streaming"><span class="typing"></span></div></div>`;
   area.appendChild(aiBox);
-  area.scrollTop = area.scrollHeight;
+  // 2026-09-29：用户主动发送 → 强制滚到底（绕过贴底判断），但**复位跟读态**，
+  //   使随后的流式输出按"贴底才跟随"策略工作。
+  scrollChatToBottom();
+  _bindStickDetach();   // 首次发送时绑定"用户上滑即脱离跟读"的监听（幂等）
   const _cs = document.getElementById('chat-status'); if(_cs) _cs.textContent = '正在识别意图并调度 Agent…';
   resetPipeline();  // 意图识别前：清空旧流水线，展示执行中占位
   try {
@@ -259,7 +276,9 @@ async function sendChat() {
       }
     }
     _forceFlushTokens();   // P0-3：流结束前清空合帧缓冲，防末帧丢失
-    area.scrollTop = area.scrollHeight;
+    // 2026-09-29：流结束时改为贴底才跟随 —— 用户上滑在阅读上文时不被打断；
+    //   仍在底部者自动对齐到最终内容。
+    stickBottom();
     showStopBtn(false);
     _streaming = false;
     if(_streamAbort === myAbort) _streamAbort = null;
@@ -273,7 +292,20 @@ async function sendChat() {
       return;
     }
     const bodyEl = aiBox.querySelector('.body');
-    bodyEl.innerHTML = `<span style="color:var(--red);">调用失败：${esc(e.message)}</span>`;
+    // 2026-09-29（用户五轮反馈4）：网络错误不再整体覆盖 body —— 覆盖即"已生成内容全丢"。
+    //  现保留已流出的文字，错误说明追加在下方，并把已生成部分固化落库（刷新后仍在）。
+    const _typ = bodyEl ? bodyEl.querySelector('.typing') : null; if(_typ) _typ.remove();
+    if(bodyEl) bodyEl.classList.remove('streaming');
+    if(typeof commitPartialStream === 'function') commitPartialStream(aiBox);   // 同步段先抓正文再追加错误条
+    if(typeof procMarkStopped === 'function') procMarkStopped();   // 五轮反馈5：环节卡全部翻转为已终止
+    const errNote = document.createElement('div');
+    // 2026-09-29（用户三轮反馈）：失败横条补"系统现状 + 下一步"
+    errNote.style.cssText = 'margin-top:8px;';
+    errNote.innerHTML = `<div style="color:var(--red);font-size:11.5px;">调用失败：${esc(e.message)}</div>`
+      + `<div style="color:var(--mut);font-size:10.5px;margin-top:4px;line-height:1.6;">`
+      + `本次执行已终止，不再有后台任务在跑。上方已生成内容与执行轨迹<b>已保留</b>；`
+      + `确认原因（如网络波动）后，<b>直接重新发送消息</b>即可从头执行。</div>`;
+    if(bodyEl) bodyEl.appendChild(errNote);
     const _cs = document.getElementById('chat-status'); if(_cs) _cs.textContent = '调用失败';
   }
 }
@@ -323,6 +355,9 @@ async function commitPartialStream(box){
 function _finalizeStoppedRender(aiBox){
   if(!aiBox) aiBox = document.getElementById('stream-ai');
   if(!aiBox) return;
+  // 2026-09-29（用户五轮反馈5）：终止后所有 run 态环节（含"执行中…/思考中…/执行中 1/1"）
+  //  先翻转为「⏹ 已终止」并重渲染，再快照进历史 —— 此前只折叠不翻转，残影永远停在执行中。
+  if(typeof procMarkStopped === 'function') procMarkStopped();
   const bodyEl = aiBox.querySelector('.body');
   let content = '';
   if(bodyEl){
