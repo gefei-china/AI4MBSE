@@ -154,7 +154,7 @@ def copy_agent(aid: int, conn=Depends(db_session), user=Depends(current_user)):
     aid2 = repo.create_agent(data)
     # 关系：复制工具绑定
     for tl in (src.get('tools') or []):
-        repo.add_tool(aid2, tl.get('tool_type') or 'tool', tl.get('tool_name') or '', tl.get('params'))
+        repo.add_tool(aid2, tl.get('tool_type') or 'tool', tl.get('tool_name') or '')
     # 关系：主 Agent 复制其团队成员（指向相同的子 Agent）
     if src.get('agent_role') == 'main':
         repo.set_team(aid2, [m['id'] for m in (src.get('team_members') or [])])

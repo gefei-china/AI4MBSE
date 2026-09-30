@@ -575,7 +575,7 @@ async function loadAgents() {
 function agentCard(a){
   return `<div class="panel"><div class="ph">${a.icon||'🤖'} ${a.display_name||a.name} ${a.agent_role==='main'?'<span class="st" style="background:#fff3e0;color:#e65100;">👑 主</span>':'<span class="st b">🧩 子</span>'} ${a.builtin?'<span class="st b">内置</span>':''} <span class="st ${a.status==='active'?'ok':'r'}">${a.status}</span></div>
     <div class="pb">
-      <div style="font-size:11px;color:var(--mut);margin-bottom:6px;"><span class="st b">${a.name}</span> ${a.provider_name?`<span class="st b">⚙ ${a.provider_name}</span>`:''}</div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:6px;"><span class="st b" title="内部标识名（路由/日志关联键），编辑页「基础信息」可改">🔑 ${a.name}</span> ${a.provider_name?`<span class="st b">⚙ ${a.provider_name}</span>`:''}</div>
       <div style="font-size:12px;color:var(--mut);min-height:32px;">${a.description||'-'}</div>
       <div class="kv"><span>绑定工具</span><b>${a.tool_count||0} 个</b></div>
       ${a.agent_role==='main'?`<div class="kv"><span>团队规模</span><b>${a.team_count||0} 人</b></div>`:''}
@@ -605,6 +605,7 @@ function editAgent(id) {
     if(!a) return;
     document.getElementById('f-name').value = a.name;
     document.getElementById('f-disp').value = a.display_name||'';
+    _agentNameTouched = true;   // 编辑既有 Agent：标识名是路由键，绝不随展示名自动改写（要改由用户显式改）
     document.getElementById('f-desc').value = a.description||'';
     document.getElementById('f-provider').value = a.model_provider_id || '';
     document.getElementById('f-sp').value = a.system_prompt||'';
@@ -690,6 +691,11 @@ function teamDdClose(){
 document.addEventListener('click', (ev)=>{
   const dd = document.getElementById('f-team-dd');
   if(dd && !dd.contains(ev.target)) teamDdClose();
+  // 能力绑定四个面板同样支持点外部收起（不选这个 if 分支会漏掉：它们各自独立容器）
+  _BIND_KINDS.forEach(k=>{
+    const b = document.getElementById('f-bind-'+k+'-dd');
+    if(b && !b.contains(ev.target)) bindDdClose(k);
+  });
 });
 function collectAgentTeam(){
   const role = document.getElementById('f-role').value;
@@ -704,60 +710,141 @@ async function syncAgentTeam(aid){
     if(r && r.error) toast('⚠ 团队同步失败：' + r.error);
   }catch(e){ if(e && e.message) toast('⚠ 团队同步失败：' + e.message); }
 }
-// ── Agent 能力绑定（skill / MCP / tool / plugin：下拉选择 + 逐个添加成标签，保存时同步）──
-let _agentBindSets = {skill:new Set(), mcp:new Set(), tool:new Set(), plugin:new Set()};
-const _BIND_EL = {skill:'skills', mcp:'mcps', tool:'tools', plugin:'plugins'};   // kind → 元素 id 复数后缀（f-bind-skills/mcps/tools/plugins）
+// ── Agent 能力绑定（skill / MCP / tool）──
+// 2026-09-30 用户反馈 3：**交互对齐「主 Agent 关联子 Agent」** —— 同款下拉多选面板。
+//   原形态是「下拉单选 + ＋添加按钮 + chips 标签」：① 与团队区两种交互来回切；
+//   ② 改一次要点两下（选 + 点添加）；③ 已选项只能挤成 chips 平铺，多选时越铺越长。
+//   本版：头部一行显示已选摘要，点开面板勾选即生效，**不再有添加按钮与 chips**。
+// ⚠️ 两个已知坑（照抄团队区踩过的处理）：
+//   ① 选项 label 在 .form-row 内 → 全局 `.form-row input{width:100%}` 会把 checkbox 撑满整行
+//      并把文字推到最右，必须内联 width:auto;flex:none 压制（见 _CB 常量）。
+//   ② 候选 value（技能名/MCP 名/插件 id）可能含引号 → **不能直接写进 onclick 的属性里**，
+//      走 data-v + escA()，回调里用 this.dataset.v 取（不要用 esc()，它不转义引号）。
+// 2026-09-30（用户第 10 轮）：移除 'plugin' —— Agent 绑定能力收敛为 技能/MCP/工具 三类。
+// 原「绑定插件 Plugins」面板已整体删除（前端字段 + 后端 plugin→skill/mcp 展开逻辑）。
+// 原因：plugin 概念三重含义（插件本身/skill/mcp）导致面板候选混入 48 条无效项（详见 git 历史），
+// 且 skill 型插件本来就走 `_global_skill_pool` 全局池、绑定纯属冗余。MCP 统一走「绑定 MCP 服务器」。
+const _BIND_KINDS = ['skill','mcp','tool'];
+const _BIND_LABEL = {skill:'技能', mcp:'MCP', tool:'工具'};
+let _agentBindSets = {skill:new Set(), mcp:new Set(), tool:new Set()};
+let _agentBindCands = {skill:[], mcp:[], tool:[]};   // 缓存候选（异步加载；未到时用已选值兜底）
+const _CB = 'width:auto;flex:none;margin:0;accent-color:var(--blue-d,#3478f6);cursor:pointer;';
+const _TX = 'flex:1;text-align:left;min-width:0;';
+
 async function loadAgentBindOptions(selected){
-  const selectedSet = new Set(selected||[]);
-  _agentBindSets = {skill:new Set(), mcp:new Set(), tool:new Set(), plugin:new Set()};
-  [...selectedSet].forEach(k=>{
+  const sel = new Set(selected||[]);
+  _agentBindSets = {skill:new Set(), mcp:new Set(), tool:new Set()};
+  [...sel].forEach(k=>{
     const [t, n] = k.split(/:(.*)/s);
     if(n && t in _agentBindSets) _agentBindSets[t].add(n);
   });
+  _BIND_KINDS.forEach(bindDdClose);
+  _BIND_KINDS.forEach(renderBindChecks);   // 先渲染：摘要立即反映已选（候选未到时按原值显示）
   try {
-    const [skills, mcps, tools, plugins] = await Promise.all([
+    // 2026-09-30：不再拉取 /api/plugins（「绑定插件」面板已移除）
+    const [skills, mcps, tools] = await Promise.all([
       api('/api/studio/skills'), api('/api/studio/mcp-servers'), api('/api/studio/agent-tools'),
-      api('/api/plugins'),
     ]);
-    const fill = (elId, opts) => {
-      const el = document.getElementById(elId);
-      if(!el) return;
-      el.innerHTML = (opts||[]).length
-        ? '<option value="">选择…</option>' + opts.map(o=>`<option value="${esc(o.value)}">${esc(o.value)}${o.note?`（${esc(o.note)}）`:''}</option>`).join('')
-        : '<option value="">暂无可用</option>';
-    };
-    fill('f-bind-skills', (skills||[]).filter(s=>s.enabled!==0).map(s=>({value:s.name})));
-    fill('f-bind-mcps', (mcps||[]).filter(m=>m.status==='online' && m.enabled!==0).map(m=>({value:m.name})));
-    fill('f-bind-tools', (tools||[]).filter(t=>t.source==='builtin').map(t=>({value:t.name})));
-    fill('f-bind-plugins', (plugins&&plugins.items||[]).filter(p=>p.scope==='public'&&p.status==='published').map(p=>({value:p.plugin_id, note:p.name})));
-    renderBindChips('skill'); renderBindChips('mcp'); renderBindChips('tool'); renderBindChips('plugin');
+    _agentBindCands.skill = (skills||[]).filter(s=>s.enabled!==0).map(s=>({value:s.name, note:'', on:1}));
+    _agentBindCands.mcp = (mcps||[]).filter(m=>m.status==='online' && m.enabled!==0).map(m=>({value:m.name, note:'', on:m.status}));
+    // ⚠️「工具」候选口径（2026-09-30 更正 —— 上一版在这里过度收紧了，必须写清为什么）：
+    //   上一版按运行时那条 SQL（tools.py:76，WHERE ... t.status='active' AND t.source!='builtin'）
+    //   把 source==='builtin' 全排掉，判词是「内置绑定到不了运行时」。这个结论**是错的**，实测推翻：
+    //     · design Agent 确实拿到了 source='builtin' 的 entity_create；
+    //     · system_mgmt 只绑了 6 个 sys_query_*，运行时却能消费 15 个工具 —— 说明绑定不是唯一来源。
+    //   运行时实际有两条独立注入路径：
+    //     ① 内置工具经 registry 的 agent_def.tools 注入（pipeline_parts/tools.py:66-69）→ **绑内置有效**；
+    //     ② 非内置工具经 tools.py:76 那条 SQL 注入（要求 status='active'）。
+    //   而本接口的源 ToolRegistry._load_from_db 首行就是 SELECT * FROM tools WHERE status='active'，
+    //   即**返回给前端的每一条都已经满足 status='active'**，前端不必也不能再按 source 二次过滤 ——
+    //   过滤的唯一结果是：用户误删了某条内置绑定（如 system_mgmt 的 sys_query_*）就再也补不回来。
+    _agentBindCands.tool = (tools||[]).filter(t=>t.type==='tool')
+                                      .map(t=>({value:t.name, note:(t.source==='builtin'?'内置':''), on:1}));
+    // 2026-09-30（用户第 10 轮）：此处原有 `_agentBindCands.plugin` 候选构建（第 9 轮曾收窄为
+    //   type∈{skill,mcp} && (installed||平台内置)，命中 5 条）。现随「绑定插件」面板整体移除而删除。
+    //   `/api/plugins` 的拉取也已从上面的 Promise.all 去掉 —— 该面板不再有任何数据源依赖。
+    _BIND_KINDS.forEach(renderBindChecks);
   } catch(e) {
-    ['f-bind-skills','f-bind-mcps','f-bind-tools','f-bind-plugins'].forEach(id=>{ const el=document.getElementById(id); if(el) el.innerHTML='<option value="">加载失败</option>'; });
+    _BIND_KINDS.forEach(k=>{
+      const box = document.getElementById('f-bind-'+k+'-list');
+      if(box) box.innerHTML = '<div style="padding:8px 10px;color:var(--red);font-size:11px;">候选加载失败</div>';
+    });
   }
 }
-function renderBindChips(kind){
-  const box = document.getElementById('f-bind-' + _BIND_EL[kind] + '-chips'); if(!box) return;
-  box.innerHTML = [..._agentBindSets[kind]].map(n=>`<span class="hil l0" style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;">${esc(n)}<b style="cursor:pointer;color:var(--red);" title="移除" onclick="bindRemove('${kind}','${esc(n.replace(/'/g,"\\'"))}')">×</b></span>`).join('')
-    || '<span style="font-size:11px;color:var(--mut);">尚未绑定</span>';
+// 头部摘要：未选=占位灰字；已选=前 2 个 + 剩余计数（与团队面板口径完全一致）
+function _bindSumRefresh(kind){
+  const sum = document.getElementById('f-bind-'+kind+'-dd-sum');
+  if(!sum) return;
+  const set = _agentBindSets[kind] || new Set();
+  if(!set.size){ sum.textContent = '选择' + (_BIND_LABEL[kind]||'') + '…'; sum.style.color = 'var(--mut)'; return; }
+  const names = [...set].map(v=>{
+    const c = (_agentBindCands[kind]||[]).find(x=>x.value===v);
+    // 摘要优先用 title（插件的**中文显示名**，如"文件操作"），比 note（类型标签"技能"/"MCP"）可读；
+    // 无 title 时退回原 id —— 避免摘要只显示一长串 com.zhiyuan.legacy.* 让用户认不出。
+    if(c && c.title) return c.title;
+    return (c && c.note) ? `${v}（${c.note}）` : v;
+  });
+  sum.textContent = names.length<=2 ? names.join('、') : `${names.slice(0,2).join('、')} 等 ${names.length} 个`;
+  sum.style.color = 'var(--ink)';
 }
-function bindAdd(kind){
-  const el = document.getElementById('f-bind-' + _BIND_EL[kind]);
-  const v = el ? el.value : '';
-  if(!v){ toast('请先选择要添加的' + ({skill:'技能', mcp:'MCP', tool:'工具', plugin:'插件'}[kind])); return; }
-  _agentBindSets[kind].add(v);
-  if(el) el.value = '';
-  renderBindChips(kind);
+function renderBindChecks(kind){
+  _bindSumRefresh(kind);
+  const box = document.getElementById('f-bind-'+kind+'-list');
+  if(!box) return;
+  const set = _agentBindSets[kind] || new Set();
+  const cands = _agentBindCands[kind] || [];
+  if(!cands.length){
+    // 候选还没到：把已选项先列出来（防止编辑回填的内容"看起来丢了"）
+    box.innerHTML = set.size
+      ? [...set].map(v=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;"><input type="checkbox" style="${_CB}" checked data-v="${escA(v)}" onchange="bindToggle('${kind}',this.dataset.v,this.checked)"><span style="${_TX}">${esc(v)} <span style="color:var(--mut);font-size:10.5px;">（候选加载中…）</span></span></label>`).join('')
+      : '<div style="padding:8px 10px;color:var(--mut);font-size:11px;">加载候选…</div>';
+    return;
+  }
+  // 已选但不在候选里的（停用 / 口径不符/被删）：必须照样列出来，
+  // 否则用户既看不见也取消不掉，save 时还会被 syncAgentBindings 原样保留成死绑定。
+  const _shown = new Set(cands.map(c=>c.value));
+  const _orphans = [...set].filter(v=>!_shown.has(v));
+  const _rowsHtml = cands.map(c=>{
+    const on = set.has(c.value);
+    // 候选 id 可能很长（插件 id 尤甚）：id 段允许省略号截断，note/中文名放到 title 里 hover 可见，
+    // 否则长 id + 长 note 会把整行挤成两行（实测 zhiyuan-platform-mgmt 那行折行）。
+    const _ttl = [c.value, c.title, c.note].filter(Boolean).join(' · ');
+    return `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;" title="${escA(_ttl)}" onmouseover="this.style.background='#f4f6fa'" onmouseout="this.style.background=''">`
+      + `<input type="checkbox" style="${_CB}" ${on?'checked':''} data-v="${escA(c.value)}" onchange="bindToggle('${kind}',this.dataset.v,this.checked)">`
+      + `<span style="${_TX}"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(c.value)}</b>${c.note?`<span style="color:var(--mut);font-size:10.5px;">${esc(c.note)}</span>`:''}</span></label>`;
+  }).join('');
+  const _orphanHtml = _orphans.map(v=>
+      `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;opacity:.72;" onmouseover="this.style.background='#f4f6fa'" onmouseout="this.style.background=''">`
+    + `<input type="checkbox" style="${_CB}" checked data-v="${escA(v)}" onchange="bindToggle('${kind}',this.dataset.v,this.checked)">`
+    + `<span style="${_TX}">${esc(v)} <span style="color:#c9821a;font-size:10.5px;" title="已绑定但不在当前候选内（工具被停用，或内置工具只能由 registry 声明），运行时不会被消费">（失效绑定 · 点击取消）</span></span></label>`
+  ).join('');
+  box.innerHTML = (_rowsHtml + _orphanHtml)
+    || `<div style="padding:8px 10px;color:var(--mut);font-size:11px;">暂无可用${_BIND_LABEL[kind]||''}</div>`;
 }
-function bindRemove(kind, name){
-  _agentBindSets[kind].delete(name);
-  renderBindChips(kind);
+// 勾选只更新集合与摘要，不重渲面板（保留滚动位置与连点手感）—— 与 bindTeamToggle 同策略
+function bindToggle(kind, value, checked){
+  if(!(kind in _agentBindSets) || value==null) return;
+  if(checked) _agentBindSets[kind].add(value); else _agentBindSets[kind].delete(value);
+  _bindSumRefresh(kind);
 }
+function bindDdToggle(kind, ev){
+  if(ev) ev.stopPropagation();
+  const box = document.getElementById('f-bind-'+kind+'-list');
+  if(!box) return;
+  const opening = box.style.display === 'none';
+  _BIND_KINDS.forEach(k=>{ if(k!==kind) bindDdClose(k); });   // 手风琴：一次只开一个
+  box.style.display = opening ? '' : 'none';
+}
+function bindDdClose(kind){
+  const box = document.getElementById('f-bind-'+kind+'-list');
+  if(box) box.style.display = 'none';
+}
+function bindDdCloseAll(){ _BIND_KINDS.forEach(bindDdClose); }
 function collectAgentBindings(){
   return {
     skills: [..._agentBindSets.skill],
     mcps: [..._agentBindSets.mcp],
     tools: [..._agentBindSets.tool],
-    plugins: [..._agentBindSets.plugin],
   };
 }
 async function syncAgentBindings(aid){
@@ -1170,10 +1257,26 @@ async function saveTool() {
 async function toggleToolStatus(id, enabled) {
   const t = _toolsCache.find(x=>x.id===id);
   if(enabled) {
-    await api(`/api/studio/tools/${id}/enable`, {method:'POST'});
+    const r = await api(`/api/studio/tools/${id}/enable`, {method:'POST'});
+    if(r && r.error){ toast('启用失败：' + r.error); return; }
     toast(`已启用「${t?t.name:''}」`);
   } else {
+    // P0-5（2026-09-30）：停用前先算清影响面再让用户拍板。
+    //   内置能力停用**不会报错** —— 依赖它的 Agent 只是悄悄拿不到这个工具；
+    //   历史教训正是「页面看着空 → 以为没用 → 一把清掉 18 个内置工具」。
+    let info = {count:0, refs:[], builtin:false, name:(t?t.name:'')};
+    const _rr = await api(`/api/studio/tools/${id}/refs`);
+    if(_rr && !_rr.error) info = _rr;
+    const _names = (info.refs||[]).map(x=>x.display_name||x.name).filter(Boolean).slice(0,3).join('、');
+    const _head = info.builtin
+      ? `⚠️「${info.name}」是平台内置能力，停用后所有 Agent 都拿不到它（且不会报错）。`
+      : `确认停用「${info.name}」？`;
+    const _tail = info.count
+      ? ` 当前有 ${info.count} 个在用 Agent 绑定它（${_names}${(info.count>3?' 等 '+info.count+' 个':'')}），停用后这些 Agent 将失去该能力。`
+      : ' 当前没有 Agent 绑定它。';
+    if(!(await confirmDialog(_head + _tail))) return;
     const r = await api(`/api/studio/tools/${id}/disable`, {method:'POST'});
+    if(r && r.error){ toast('停用失败：' + r.error); return; }
     toast(`已停用「${t?t.name:''}」${r.note||''}`);
   }
   loadTools();

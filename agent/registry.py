@@ -253,23 +253,17 @@ class AgentRegistry:
                 continue
             name = a["name"]
             bound = repo.bound_tools_for(a["id"])
-            # P0-5：Agent 绑定插件（agent_tools.tool_type='plugin'）展开为 skill/mcp 能力
-            # （市场统一后，插件市场的技能/MCP 可被绑定 Agent 自动触发，pipeline 零感知插件概念）
-            try:
-                from plugin_system import store as _pstore
-                plugin_binds = [b for b in bound if b.get("tool_type") == "plugin"]
-                for pb in plugin_binds:
-                    pid = pb.get("tool_name") or ""
-                    if not pid:
-                        continue
-                    se = _pstore.skill_entry_from_plugin(conn, pid)
-                    if se:
-                        bound.append({**se, "tool_type": "plugin", "plugin_id": pid})
-                    me = _pstore.mcp_entry_from_plugin(conn, pid)
-                    if me:
-                        bound.append({**me, "tool_type": "plugin", "plugin_id": pid})
-            except Exception:
-                pass
+            # 2026-09-30（用户第 10 轮指令）：**移除 Agent 绑定插件机制**。
+            # 此处原有 P0-5 的 plugin→skill/mcp 展开逻辑（把 agent_tools.tool_type='plugin'
+            # 按 plugin_id 展开为可触发的技能/MCP），已整体删除。原因（实测证据，勿凭印象恢复）：
+            #   · skill 型插件：本来就有 `_global_skill_pool`（agent/pipeline_parts/skills.py:11-50）
+            #     把所有**已安装**的 skill/bundle 型插件无条件纳入候选池 → 绑定完全是冗余的。
+            #     实证：剔除 plugin 展开件后重跑，技能「文件操作」仍被正常触发（走全局池）。
+            #   · mcp 型插件：绑定曾是它进入 Agent 的通道，但用户判定该概念三重含义
+            #     （插件/skill/mcp）混淆，要求彻底移除，MCP 统一走 `绑定 MCP 服务器` 面板。
+            # 概念收敛后：Agent 可绑能力 = 技能 / MCP / 工具 三类，与面板一一对应。
+            # ⚠️ 注意：本文件 :337/:349 的 `source: "plugin"` 是**插件来源的 Agent** 标记
+            #    （P1-6「安装即可消费」），与本处被移除的「Agent 绑定插件」是两回事，勿一并删除。
             _sc = a.get("kb_scope") or {}
             # SP-O：DB system_prompt 自定义优先；为空时继承内置同名 Agent 的角色化提示词
             _builtin = AgentRegistry.DEFINITIONS.get(name)

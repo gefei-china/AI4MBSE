@@ -182,9 +182,28 @@ def add_agent_tool(aid: int, body: AgentToolIn, conn=Depends(db_session), user=D
     repo = AgentRepo(conn)
     if not repo.get_agent(aid):
         return JSONResponse({"error": "Agent not found"}, 404)
-    if body.tool_type not in ("skill", "mcp", "tool", "plugin"):
-        return JSONResponse({"error": "tool_type 必须是 skill|mcp|tool|plugin"}, 400)
-    tid = repo.add_tool(aid, body.tool_type, body.tool_name, body.params)
+    # 2026-09-30（用户第 10 轮）：移除 "plugin" —— Agent 绑定能力收敛为 技能/MCP/工具 三类。
+    if body.tool_type not in ("skill", "mcp", "tool"):
+        return JSONResponse({"error": "tool_type 必须是 skill|mcp|tool"}, 400)
+    # ── P0-2（2026-09-30）：绑定前校验「绑的东西真的存在且可用」 ──
+    #   此前这里什么都不查：绑不存在的名字、绑已停用的工具、绑非法名（中文名）全都 200 成功，
+    #   前台照单全收、后台静默丢弃 —— 真库里攒下的死绑定就是这么来的。
+    #   校验口径取**运行时两条消费路径的交集**：
+    #     ① builtin 工具经 registry 的 agent_def.tools 注入（pipeline_parts/tools.py:66-69）
+    #     ② 非 builtin 经 tools.py:76 的 SQL 注入（要求 status='active'）
+    #   两条都要求「名字在 tools 表里」，且②硬要求 active；builtin 同样按「停用即停用」处理，不再例外。
+    _nm = (body.tool_name or "").strip()
+    _nerr = check_tool_name(_nm)
+    if _nerr:
+        # 非法名（如中文名）绑上去等于白绑：运行时会被剔除且不报错，UI 却显示已绑定
+        return JSONResponse({"error": _nerr}, 400)
+    if body.tool_type == "tool":
+        _row = conn.execute("SELECT name, status FROM tools WHERE name=?", (_nm,)).fetchone()
+        if not _row:
+            return JSONResponse({"error": f"工具「{_nm}」不在工具注册表里，请先在「能力中心 · 工具与MCP」注册"}, 400)
+        if (_row["status"] or "") != "active":
+            return JSONResponse({"error": f"工具「{_nm}」当前为「{_row['status']}」状态，启用后才能绑定"}, 409)
+    tid = repo.add_tool(aid, body.tool_type, body.tool_name)
     audit(audit_user(user), "agent_tool_bind", f"Agent#{aid} 绑定 {body.tool_type}:{body.tool_name}", conn=conn)
     return {"ok": True, "id": tid}
 

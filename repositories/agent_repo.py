@@ -177,10 +177,11 @@ class AgentRepo(BaseRepo):
             (agent_id,),
         )
 
-    def add_tool(self, agent_id: int, tool_type: str, tool_name: str, params: dict | None = None) -> int:
+    def add_tool(self, agent_id: int, tool_type: str, tool_name: str) -> int:
+        # 2026-09-30：params 列已随迁移移除（原为"默认入参"，全仓零读取点）
         return self.execute(
-            "INSERT OR IGNORE INTO agent_tools (agent_id, tool_type, tool_name, params) VALUES (?,?,?,?)",
-            (agent_id, tool_type, tool_name, json.dumps(params or {}, ensure_ascii=False)),
+            "INSERT OR IGNORE INTO agent_tools (agent_id, tool_type, tool_name) VALUES (?,?,?)",
+            (agent_id, tool_type, tool_name),
         )
 
     def remove_tool(self, agent_id: int, tool_id: int) -> None:

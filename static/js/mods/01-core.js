@@ -17,6 +17,21 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 // 属性安全转义（data-* 用于会话信息卡）
 function escA(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;');}
 
+// ── 能力绑定下拉多选面板（2026-09-30 用户反馈 3）──
+// 绑定区原先是「下拉单选 + ＋添加按钮 + chips 标签」，与「主 Agent 关联子 Agent」的下拉多选
+// 长得不一样，用户要在两种交互之间来回切。这里生成与 f-team-dd **同构**的骨架：
+// 头部一行显示已选摘要，点开才出选项面板（240px 内滚动），勾选即生效。
+// ⚠️ 只产出**骨架**：容器 id 固定为 f-bind-<kind>-dd / -head / -sum / -list，
+//    选项内容由 30-agents.js 的 renderBindChecks() 填充（与团队面板分工一致）。
+function bindDropdown(kind, label, tip){
+  const head = 'display:flex;align-items:center;justify-content:space-between;gap:6px;border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;user-select:none;background:#fff;';
+  return `<div class="form-row"><label>${label} <span class="info-tip" title="${escA(tip)}">ⓘ</span></label>
+          <div id="f-bind-${kind}-dd">
+            <div id="f-bind-${kind}-dd-head" onclick="bindDdToggle('${kind}',event)" style="${head}"><span id="f-bind-${kind}-dd-sum" style="color:var(--mut);">选择…</span><span style="font-size:9px;color:var(--mut);">▾</span></div>
+            <div id="f-bind-${kind}-list" style="display:none;border:1px solid var(--line);border-top:none;border-radius:0 0 6px 6px;max-height:240px;overflow:auto;background:#fff;font-size:12px;"></div>
+          </div></div>`;
+}
+
 async function api(path, opts={}) {
   const uid = localStorage.getItem('mbse_user_id');
   const sess = localStorage.getItem('mbse_session');   // 2026-09-23 FR-UR-1：会话 token（/api/auth 签发）
@@ -380,9 +395,19 @@ const MODAL_FORMS = {
   tool: `<h3 id="tool-modal-title">新增工具</h3>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🔧</span><span class="fs-title">基础信息</span></div>
-        <div class="form-row"><label>类型 <b class="req">*</b> <span class="info-tip" title="MCP 工具=Model Context Protocol 标准协议；HTTP 工具=自定义 REST 接口">ⓘ</span></label><select id="f-tool-type" onchange="toggleToolType()"><option value="mcp">MCP工具</option><option value="http">HTTP工具</option></select></div>
-        <div class="form-row"><label>名称 <b class="req">*</b> <span class="info-tip" title="将作为运行时工具标识名">ⓘ</span></label><input id="f-tool-name" placeholder="my-mcp-server"></div>
+        <div class="form-row" id="tool-type-row"><label>类型 <b class="req">*</b> <span class="info-tip" title="MCP 工具=Model Context Protocol 标准协议；HTTP 工具=自定义 REST 接口">ⓘ</span></label><select id="f-tool-type" onchange="toggleToolType()"><option value="mcp">MCP工具</option><option value="http">HTTP工具</option></select></div>
+        <div class="form-row"><label>名称 <b class="req">*</b> <span class="info-tip" id="f-tool-name-hint" title="将作为运行时工具标识名">ⓘ</span></label><input id="f-tool-name" placeholder="my-mcp-server"></div>
         <div class="form-row"><label>描述</label><textarea id="f-tool-desc" rows="2" placeholder="工具功能描述…" style="min-height:44px;resize:vertical;"></textarea></div>
+        <div id="tool-meta-box" style="display:none;border-top:1px dashed var(--line);margin-top:8px;padding-top:6px;"></div>
+      </div>
+      <div class="form-section" id="tool-channel-box">
+        <div class="form-section-head"><span class="fs-icon">⚡</span><span class="fs-title">执行通道</span><span class="fs-hint">谁在真正执行它</span></div>
+        <input type="hidden" id="f-tool-channel" value="">
+        <div id="tool-channel-body"></div>
+      </div>
+      <div class="form-section" id="tool-params-box" style="display:none;">
+        <div class="form-section-head"><span class="fs-icon">🧩</span><span class="fs-title">输入参数</span><span class="fs-hint">模型据此填参</span></div>
+        <div id="tool-params-body"></div>
       </div>
       <div class="form-section" id="tool-mcp-fields">
         <div class="form-section-head"><span class="fs-icon">📡</span><span class="fs-title">MCP Server 配置</span></div>
@@ -397,12 +422,12 @@ const MODAL_FORMS = {
         <div class="form-row"><label>param_in（可选 JSON） <span class="info-tip" title="如 {city:path,units:query}。留空则：URL 占位符→path，GET/DELETE 其余→query，其它→body">ⓘ</span></label><textarea id="f-tool-param-in" rows="2" style="min-height:36px;font-family:monospace;font-size:11px;resize:vertical;" placeholder='{"city":"path","units":"query"}'></textarea></div>
         <div class="form-row"><label>超时（秒）<b class="req">*</b></label><input id="f-tool-timeout" type="number" value="15" min="1" max="300"></div>
       </div>
-      <div class="form-section">
+      <div class="form-section" id="tool-resilience-box">
         <div class="form-section-head"><span class="fs-icon">🛡</span><span class="fs-title">容错策略 <span class="fs-hint">（仅 MCP/HTTP 集成工具生效）</span></span></div>
         <div class="form-row"><label>最大重试次数 <span class="info-tip" title="0=不重试；推荐 1-3 次，避免雪崩">ⓘ</span></label><input id="f-tool-retries" type="number" min="0" max="5" value="0"></div>
         <div class="form-row"><label>退避基数 ms / 倍数 <span class="info-tip" title="指数退避：基数 500ms × 倍数 2 → 500/1000/2000ms">ⓘ</span></label><div style="display:flex;gap:8px;"><input id="f-tool-backoff" type="number" min="100" value="500" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"> <input id="f-tool-backoff-mult" type="number" min="1" max="5" value="2" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"></div></div>
       </div>
-      <div class="form-section">
+      <div class="form-section" id="tool-headers-box">
         <div class="form-section-head"><span class="fs-icon">📨</span><span class="fs-title">Headers <span class="fs-hint">（可选）</span></span><span style="flex:1;"></span><button class="btn sm ghost" onclick="addToolHeader()" style="padding:1px 8px;font-size:11px;">＋ 添加</button></div>
         <div id="tool-headers-list" style="display:flex;flex-direction:column;gap:4px;"><div style="display:flex;gap:6px;align-items:center;"><input class="tool-hdr-key" placeholder="Key" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"><input class="tool-hdr-val" placeholder="Value" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"><button class="btn sm ghost" onclick="this.parentElement.remove()" style="padding:2px 8px;font-size:11px;">✕</button></div></div>
       </div>
@@ -453,10 +478,10 @@ const MODAL_FORMS = {
       </div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveSkill()">保存</button></div>`,
   agent: `<h3>新建 Agent</h3>
-      <input type="hidden" id="f-name" value="">
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🤖</span><span class="fs-title">基础信息</span></div>
-        <div class="form-row"><label>名称 <b class="req">*</b></label><input id="f-disp" placeholder="如：需求分析Agent"></div>
+        <div class="form-row"><label>展示名称 <b class="req">*</b> <span class="info-tip" title="界面上看到的名字（卡片标题、下拉选项）。改动会同步历史调用日志里已记录的旧展示名">ⓘ</span></label><input id="f-disp" placeholder="如：需求分析Agent" oninput="onAgentDispInput()"></div>
+        <div class="form-row"><label>标识名（内部路由） <b class="req">*</b> <span class="info-tip" title="唯一标识：编排指派、意图路由、任务/记忆/调用日志的关联键都用这个名字。改名会自动同步历史软外键引用；但若该名字被 Python 代码硬引用（意图表/内置编排池），会给出提示（那部分无法自动同步）">ⓘ</span></label><input id="f-name" placeholder="如：requirement_analysis" oninput="onAgentNameInput()"></div>
         <div class="form-row"><label>Agent 角色 <span class="info-tip" title="主 Agent 可从已设置好的子 Agent 中选择成员，组成多 Agent 团队；子 Agent 不支持再添加子 Agent">ⓘ</span></label><select id="f-role" onchange="onAgentRoleChange()">
           <option value="sub">子 Agent（团队成员）</option>
           <option value="main">主 Agent（团队负责人）</option>
@@ -476,22 +501,12 @@ const MODAL_FORMS = {
       </div>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🔗</span><span class="fs-title">能力绑定</span></div>
-        <div class="form-row"><label>绑定技能 Skills <span class="info-tip" title="选择技能后点「＋ 添加」（可多个）；Skill=配方（指令注入），会话按绑定列表消费">ⓘ</span></label>
-          <div style="display:flex;gap:6px;"><select id="f-bind-skills" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:12px;"></select><button type="button" class="btn sm" onclick="bindAdd('skill')">＋ 添加</button></div>
-          <div id="f-bind-skills-chips" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;"></div>
-        </div>
-        <div class="form-row"><label>绑定 MCP 服务器 <span class="info-tip" title="MCP=工具目录（catalog 调用），需先测试在线">ⓘ</span></label>
-          <div style="display:flex;gap:6px;"><select id="f-bind-mcps" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:12px;"></select><button type="button" class="btn sm" onclick="bindAdd('mcp')">＋ 添加</button></div>
-          <div id="f-bind-mcps-chips" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;"></div>
-        </div>
-        <div class="form-row"><label>绑定工具 Tools <span class="info-tip" title="tool=内置处理器">ⓘ</span></label>
-          <div style="display:flex;gap:6px;"><select id="f-bind-tools" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:12px;"></select><button type="button" class="btn sm" onclick="bindAdd('tool')">＋ 添加</button></div>
-          <div id="f-bind-tools-chips" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;"></div>
-        </div>
-        <div class="form-row"><label>绑定插件 Plugins <span class="info-tip" title="插件市场能力（Skill/MCP 统一），绑定后运行时自动展开为可触发技能/MCP">ⓘ</span></label>
-          <div style="display:flex;gap:6px;"><select id="f-bind-plugins" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:12px;"></select><button type="button" class="btn sm" onclick="bindAdd('plugin')">＋ 添加</button></div>
-          <div id="f-bind-plugins-chips" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;"></div>
-        </div>
+        ${bindDropdown('skill','绑定技能 Skills','选择技能…（可多选）；Skill=配方（指令注入），会话按绑定列表消费')}
+        ${bindDropdown('mcp','绑定 MCP 服务器','MCP=工具目录（catalog 调用），需先测试在线；可多选')}
+        ${bindDropdown('tool','绑定工具 Tools','tool=内置处理器；可多选')}
+        <!-- 2026-09-30 移除「绑定插件 Plugins」字段（用户第 10 轮）：
+             plugin 概念三重含义（插件本身/skill/mcp）导致候选混入 48 条无效项；且 skill 型插件
+             本就走 _global_skill_pool 全局池、绑定冗余，MCP 统一走上面的「绑定 MCP 服务器」。 -->
       </div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveAgent()">保存</button></div>`,
   projmem: `<h3 id="pm-form-title">新增项目记忆</h3>
