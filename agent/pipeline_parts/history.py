@@ -386,7 +386,10 @@ class HistoryMixin:
         ve = VectorEngine()
         # 延续词：承接式追问继承当前话题；回指词（刚才/前面/之前）不在此列，
         # 其与段代表向量相似度低时自然开新话题 → 语义拉回负责把回指的历史原文拉回
-        carry = ("继续", "接着", "还有", "另外", "再说", "那", "再")
+        # 2026-09-29（用户五轮反馈1）：补"重试/重跑/重新/再来"——任务终止/失败后用户打"重试"，
+        # 若按新话题切走，当前话题原文就只剩"重试"两个字，AI 表现为"不知道之前做了什么"。
+        carry = ("继续", "接着", "还有", "另外", "再说", "那", "再",
+                 "重试", "重跑", "重新", "再来", "retry", "continue")
         cur_topic = ""
         topic_vec = None  # 段代表向量（段内消息 bigram 累加，随对话增长）
         last_user_id = None
@@ -701,3 +704,37 @@ class HistoryMixin:
             return messages
 
     # ── 工作流匹配：词法 + 语义双通道 + RRF 融合（行业对齐：Voiceflow 混合检索 / juejin RRF / 百度漏斗式）──
+
+    # ── 续作短语判别（2026-09-29 用户五轮反馈1）──
+    #  场景：任务终止/失败后用户只打"重试"/"继续"——这不是新任务，是要求 AI 衔接上文。
+    #  此前两个断点叠加导致"AI 不知道之前的内容"：
+    #    ① carry 承接词表没有"重试"→ 话题被打成新段，当前话题原文只剩"重试"两字；
+    #    ② 被终止的那轮产出根本没落库（见 stream.py 尾部 except 固化逻辑）→ 历史里无货可接。
+    #  本判别供 stream.py 在组装 prompt 时追加显式"续作指令"。
+    _CONTINUATION_RE = None
+
+    @classmethod
+    def _is_continuation_input(cls, text):
+        """是否为纯续作短语（重试/继续/接着来/retry…）。判据：短（≤12字）且命中模式。
+
+        2026-09-29 修订：初版漏了「重试一下 / 重跑一遍 / 继续一次」这类**量词后缀**
+        （自检 L1 正例 '重试一下' 未命中 → 会被判成新任务）。现把「一下吧/一遍/一回/一次」
+        收进统一后缀组，并对每个动词后统一允许。
+        """
+        import re as _re
+        if cls._CONTINUATION_RE is None:
+            # 量词后缀（可省）：一下/一遍/一回/一次/一个/下/遍
+            _suf = r"(?:一下|一遍|一回|一次|一个|下|遍)?"
+            cls._CONTINUATION_RE = _re.compile(
+                r"^(?:"
+                r"重试" + _suf + r"|"
+                r"重跑" + _suf + r"|"
+                r"重新" + _suf + r"(?:来|跑|执行|生成)" + _suf + r"|"
+                r"再来" + _suf + r"|"
+                r"继续" + _suf + r"(?:吧|执行|做)?" + _suf + r"|"
+                r"接着" + _suf + r"(?:来|做|干)?" + _suf + r"|"
+                r"go\s*on|retry|continue"
+                r")[吧，,。！!？?～~\s]*$",
+                _re.IGNORECASE)
+        t = (text or "").strip()
+        return bool(t) and len(t) <= 12 and bool(cls._CONTINUATION_RE.match(t))

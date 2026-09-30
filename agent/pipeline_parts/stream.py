@@ -918,6 +918,37 @@ class StreamMixin:
                           "graph_count": 0, "vector_count": 0, "attachment_used": False},
         }}
 
+    def _persist_partial_stream(self, conversation_id, content, reason="error", dry_run=False):
+        """2026-09-29（用户五轮反馈4）：流式异常/客户端断开时，把已生成内容固化落库。
+
+        此前 except 分支只 yield error 事件：浏览器里看得到的内容在库中 0 条，
+        刷新即蒸发（"打开页面之前输出的内容不见了"）。现按 reason 补中断说明后缀，
+        并与前端停止路径（/messages/partial）去重 —— 最后一条消息已是固化消息则跳过。
+        """
+        if dry_run or not conversation_id:
+            return
+        text = (content or "").strip()
+        if len(text) < 4:
+            return
+        suffix = {
+            "stop": "\n\n> ⏹ 已停止生成（以上为已生成内容）",
+            "error": "\n\n> ⚠️ 输出因网络错误中断（以上为已生成内容，可直接输入\"重试\"继续）",
+        }.get(reason, "\n\n> ⚠️ 输出中断（以上为已生成内容）")
+        try:
+            with db_conn() as conn:
+                last = conn.execute(
+                    "SELECT role, content FROM messages WHERE conversation_id=? ORDER BY id DESC LIMIT 1",
+                    (conversation_id,)).fetchone()
+                if last and last["role"] == "assistant" and "以上为已生成内容" in (last["content"] or ""):
+                    return   # 前端停止路径已固化 → 不双写
+                conn.execute(
+                    "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
+                    (conversation_id, "assistant", text + suffix, "text", "{}"))
+                conn.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                             (conversation_id,))
+        except Exception:
+            pass   # 固化失败不掩盖原始异常
+
     def execute_stream(self, user_input, conversation_id, branch="dev", provider_id=None,
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
                        team=None, scope_id=None, scope_ids=None, scope=None):
@@ -958,6 +989,17 @@ class StreamMixin:
             exec_reasoning = []
             exec_tools = []
             card_data = "{}"  # dry_run=True（编排子任务流式）不落库，done 事件仍引用 → 兜底空卡
+            # 2026-09-29（用户五轮反馈4）：流式部分内容固化 —— llm_content 提前初始化（异常路径引用），
+            # _orch_acc 收集编排路径的 token（直行路径已由 llm_content 承担）。
+            llm_content = ""
+            _orch_acc = []
+
+            def _yield_collect(src, acc):
+                """包装编排子生成器：顺手收集 token 增量，供异常/断开时固化已生成内容。"""
+                for _ev in src:
+                    if isinstance(_ev, dict) and _ev.get("type") == "token":
+                        acc.append(_ev.get("delta") or "")
+                    yield _ev
             self._load_db_agents(user)  # P0 平台化：DB 驱动 Agent 注册表（P1-8：按用户隔离）
             self._last_skill_hits = []
             # 团队模式：校验主 Agent（团队负责人）→ 定向到主 Agent 并强制编排
@@ -1100,10 +1142,10 @@ class StreamMixin:
             if team_forced and not dry_run:
                 # 团队模式：主 Agent（团队负责人）强制编排——意图识别/拆解/计划/分派/汇总
                 self._save_conversation_dst(conversation_id, intent, slots)
-                yield from self._stream_orchestrated_flow(
+                yield from _yield_collect(self._stream_orchestrated_flow(
                     user_input, conversation_id, branch, intent, agent_def, hil_level,
                     kb_tags, attachments, slots, user, effective_provider, team_forced=True,
-                    stage_hint=_stage_hint)
+                    stage_hint=_stage_hint), _orch_acc)
                 return
             if not forced_intent and self._needs_orchestration(user_input, intent,
                                                               has_attachments=bool(attachments),
@@ -1115,18 +1157,18 @@ class StreamMixin:
                     yield {"type": "reasoning",
                            "delta": f"（自动编排）命中已发布沉淀流程「{reused.get('flow_name') or ''}」，按流程模板执行子任务…"}
                     reused["data"] = {"tasks": reused.get("plan") or []}
-                    yield from self._stream_orchestrated(
+                    yield from _yield_collect(self._stream_orchestrated(
                         reused, user_input, conversation_id, intent, agent_def, hil_level,
-                        kb_tags, attachments, slots, user)
+                        kb_tags, attachments, slots, user), _orch_acc)
                     return
                 try:
                     # P0-2 DST：编排流式前落会话意图状态（子管道不写主会话状态）
                     if not dry_run:
                         self._save_conversation_dst(conversation_id, intent, slots)
-                    yield from self._stream_orchestrated_flow(
+                    yield from _yield_collect(self._stream_orchestrated_flow(
                         user_input, conversation_id, branch, intent, agent_def, hil_level,
                         kb_tags, attachments, slots, user, effective_provider,
-                        stage_hint=_stage_hint)
+                        stage_hint=_stage_hint), _orch_acc)
                     return
                 except Exception as _orch_exc:
                     # P0-3 补（2026-09-19，端到端取证）：**编排中途失败不得静默回退**。
@@ -1321,6 +1363,16 @@ class StreamMixin:
                 hist = self._load_history(conversation_id, cur_input=user_input)
                 if hist:
                     messages = [messages[0]] + hist + messages[1:]
+            # 2026-09-29（用户五轮反馈1）：续作短语（重试/继续）→ 显式续作指令。
+            #  此前 AI 表现为"不知道之前的内容"：carry 词表没有"重试"→ 话题切新段，
+            #  当前话题原文只剩两字；且被终止那轮的产出未落库（尾部 except 现已固化）。
+            #  双保险：话题承接（history.py carry）+ 这里把"衔接上文"写成硬指令。
+            if self._is_continuation_input(user_input):
+                messages[0]["content"] += (
+                    "\n\n【续作指令】用户本条输入是续作短语（如\"重试/继续\"），不是新任务。"
+                    "请把上方会话历史当作进行中的任务现场：先根据历史判断此前进行到哪一步、已有产出是什么，"
+                    "然后接着往下推进（或按语义重做失败的部分）；禁止当作全新请求从零开始，"
+                    "也不要大段复述已完成内容，直接给出衔接后的增量产出。")
             # 2026-09-17 S3：SSE 路径此前完全无上下文预算（_apply_context_budget 仅 execute 路径调用）
             try:
                 messages[0]["content"] = self._apply_context_budget(messages[0]["content"], context_text, len(messages))
@@ -1587,5 +1639,17 @@ class StreamMixin:
                 "matched_flows": matched_flows,
                 "quality_report": quality_report,
             }}
+        except GeneratorExit:
+            # 2026-09-29（用户五轮反馈4）：客户端断开（停止按钮/关页/网络断）→ 已流出内容固化落库。
+            #  此前直接 raise，浏览器里看得到的已生成内容一刷新就没了（库中 0 条）。
+            #  去重：用户点停止时前端会先走 /messages/partial 固化 → 这里查最后一条消息，
+            #  已是"部分固化"消息则跳过，避免双写。
+            self._persist_partial_stream(conversation_id, llm_content or "".join(_orch_acc),
+                                         "stop", dry_run=dry_run)
+            raise
         except Exception as e:
+            # 2026-09-29（用户五轮反馈4）：网络错误等异常 → 已生成内容同样固化（带中断说明后缀），
+            #  刷新后"之前输出的内容"仍在，不再整体蒸发。
+            self._persist_partial_stream(conversation_id, llm_content or "".join(_orch_acc),
+                                         "error", dry_run=dry_run)
             yield {"type": "error", "message": str(e)}
