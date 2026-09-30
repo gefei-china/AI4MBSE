@@ -392,3 +392,123 @@ def _migrate_legacy_refs(conn):
         if "plugin_id" not in cols:
             conn.execute(f"ALTER TABLE {t} ADD COLUMN plugin_id TEXT DEFAULT ''")
             print(f"[migrate] 迁移: {t} 增加列 plugin_id（legacy 插件引用）")
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 内置工具 input_schema 与执行器对齐（2026-09-30）
+# ════════════════════════════════════════════════════════════════════════
+#
+# 背景（本次发现的真实缺陷）：
+#   input_schema 是给 LLM 看的「填参契约」——LLM 严格按它声明的字段名传参；
+#   而执行器（workflows/tools.py ToolExecutor.exec）按自己那套键名去 arguments 里取值。
+#   两者一旦不一致，LLM 填的是 A、执行器读的是 B → B 取到 "" → 工具静默跑空、
+#   返回一个看起来正常却没有内容的结论，**没有任何报错**。
+#
+#   实测错配（DB schema 声明 ↔ 执行器实际读取）：
+#     graph_retrieve  {}                        ↔ query          （schema 缺失）
+#     conflict_check  {name, attributes}        ↔ query
+#     impact_analyze  {source}                  ↔ query
+#     validate        {target}                  ↔ query
+#     entity_create   {name, etype, attrs}      ↔ {id,name,entity_type,properties}
+#     sys_query_*     {}                        ↔ role/status/keyword/limit/actor（schema 缺失）
+#
+#   后果举例：validate 的 schema 让 LLM 传 {"target": "转发器"}，
+#   而执行器读 arguments.get("query") → "" → rag.retrieve("") → 返回空图谱。
+#   这 4 个「读类核心工具」此前一直是这种半失效状态。
+#
+#   对照：file_* / report_export 经逐一核对与 file_tools.report_tools 的 DEF **完全一致**，
+#   故本迁移不碰它们；graph_db_stats / sys_query_roles / sys_query_monitor
+#   经查源码确属「无入参」，空 schema 是正确的，也不动。
+#
+# 幂等：逐行比对「已声明 properties 集合」与目标集合，相同则跳过；
+#       只更新下面这张表里点名的 9 个工具，不触碰任何非目标行（避免覆盖人工定制）。
+
+_TOOL_SCHEMA_FIX: dict = {
+    # 工具名: (properties, required)
+    "graph_retrieve": (
+        {"query": {"type": "string", "description": "检索查询词（实体名/关系/属性值），如「转发器」"}},
+        ["query"]),
+    "conflict_check": (
+        {"query": {"type": "string", "description": "待查重的新元素名称或表达式，如「转发器」"}},
+        ["query"]),
+    "impact_analyze": (
+        {"query": {"type": "string", "description": "变更源实体名称，如「转发器」"}},
+        ["query"]),
+    "validate": (
+        {"query": {"type": "string", "description": "待校验对象名称或范围，如「转发器」"}},
+        ["query"]),
+    "entity_create": (
+        {"name": {"type": "string", "description": "实体名称"},
+         "entity_type": {"type": "string", "description": "实体类型，默认「部件」"},
+         "properties": {"type": "object", "description": "属性键值对，如 {\"材料\": \"铝合金\"}"},
+         "id": {"type": "string", "description": "可选：指定实体 id，留空则自动生成"}},
+        ["name"]),
+    "sys_query_users": (
+        {"role": {"type": "string", "description": "按角色名过滤"},
+         "status": {"type": "string", "description": "按状态过滤，如 active"},
+         "keyword": {"type": "string", "description": "按关键词模糊匹配用户名/姓名"}},
+        []),
+    "sys_query_perms": (
+        {"role": {"type": "string", "description": "查单个角色的权限；留空则列出全部角色的授权概览"}},
+        []),
+    "sys_query_audit": (
+        {"limit": {"type": "integer", "description": "返回条数，默认 20，上限 50"},
+         "actor": {"type": "string", "description": "按操作人过滤"}},
+        []),
+    "sys_query_convs": (
+        {"limit": {"type": "integer", "description": "返回最近会话条数，默认 15，上限 50"}},
+        []),
+}
+
+
+def _migrate_builtin_tool_schemas(conn):
+    """把内置工具的 input_schema 订正为「执行器真正会读的那套键名」。
+
+    顺带把 source='builtin' 行的 owner 标为 'system'——内置能力归属平台是事实陈述，
+    不需要判断。⚠️ 非内置工具的 owner 保持为空：那属于业务归属，无从推断，
+    宁缺勿臆造（此前 34 行 owner 全空，本迁移只补能确定归属的那一批）。
+    幂等：已与目标一致的行不再 UPDATE，重复执行不产生任何写。
+    """
+    import json as _json
+
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tools'").fetchone()
+    if not exists:
+        return
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(tools)").fetchall()]
+    if "input_schema" not in cols:
+        return
+
+    changed = 0
+    for tname, (props, required) in _TOOL_SCHEMA_FIX.items():
+        row = conn.execute(
+            "SELECT id, source FROM tools WHERE name=?", (tname,)).fetchone()
+        if not row:
+            continue
+        cur = conn.execute(
+            "SELECT input_schema FROM tools WHERE id=?", (row["id"],)).fetchone()
+        try:
+            old = _json.loads(cur["input_schema"] or "{}")
+        except Exception:
+            old = {}
+        old_props = old.get("properties") or {}
+        # 幂等判据：properties 集合与 required 都与目标一致 → 跳过
+        if set(old_props) == set(props) and list(old.get("required") or []) == list(required):
+            continue
+        new_schema = {"type": "object", "properties": props, "required": required}
+        conn.execute("UPDATE tools SET input_schema=? WHERE id=?",
+                     (_json.dumps(new_schema, ensure_ascii=False), row["id"]))
+        changed += 1
+
+    if changed:
+        conn.commit()
+        print(f"[init_db] 迁移: 内置工具 input_schema 与执行器对齐 {changed} 行")
+
+    # owner：只给内置工具标 system，其余保持为空（不臆造业务归属）
+    if "owner" in cols:
+        cur = conn.execute(
+            "UPDATE tools SET owner='system' WHERE source='builtin' "
+            "AND (owner IS NULL OR owner='')")
+        if cur.rowcount:
+            conn.commit()
+            print(f"[init_db] 迁移: 内置工具 owner 标为 system {cur.rowcount} 行")

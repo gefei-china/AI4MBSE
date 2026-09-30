@@ -331,3 +331,43 @@ def _migrate_dashboard_snapshots(conn):
     c.execute("CREATE INDEX IF NOT EXISTS idx_dash_snap_key_date "
               "ON dashboard_metric_snapshots(metric_key, snapshot_date)")
     conn.commit()
+
+
+def _migrate_drop_agent_tools_params(conn):
+    """移除 agent_tools.params 废列（2026-09-30，用户四轮反馈 1）。
+
+    ## 为什么删
+    `params` 本意是"该 Agent 调用此工具时的默认入参"，但：
+    - 全仓**只有一处写入**（`repositories/agent_repo.py:add_tool` 恒写 `{}`），**零处读取**；
+    - UI 从不传该字段（`30-agents.js` 绑定请求体无 params）；
+    - 真库实测 **61/61 行全部为 `{}`**（100% 空）。
+    属挂名死列：留着只会让人误以为存在"工具默认参数"能力。
+
+    ⚠️ **边界：删的是 `params` 列，不是绑定关系本身** —— `agent_tools` 的行
+    （agent_id × tool_type × tool_name）是真正在用的：`prompt.py` 用它判定 V2 代码 Agent，
+    `agent/pipeline_parts/tools.py` 用它把 DB 自定义工具注入 LLM 可见列表。本迁移不删行。
+
+    ## SQLite 版本前提
+    `ALTER TABLE ... DROP COLUMN` 需要 SQLite ≥ 3.35.0（本机 3.53.1 ✓）。
+    旧版本降级为"保留列"（不再写入即等同废弃），不报错、不阻断 init_db。
+    """
+    c = conn.cursor()
+    cols = [r["name"] for r in c.execute("PRAGMA table_info(agent_tools)").fetchall()]
+    if not cols:            # 表还不存在（新库由 schema.py 创建，已无该列）
+        return
+    if "params" not in cols:
+        return              # 已删除 → 幂等
+    try:
+        ver = tuple(int(x) for x in (conn.execute("SELECT sqlite_version()").fetchone()[0] or "").split(".")[:3])
+    except Exception:
+        ver = (0, 0, 0)
+    if ver < (3, 35, 0):
+        print(f"[init_db] 迁移: agent_tools.params 保留（SQLite {'.'.join(map(str, ver))} < 3.35 不支持 DROP COLUMN）")
+        return
+    try:
+        c.execute("ALTER TABLE agent_tools DROP COLUMN params")
+        conn.commit()
+        print("[init_db] 迁移: agent_tools.params 废列已移除（全仓零消费点，绑定关系保持不变）")
+    except Exception as e:
+        conn.rollback()
+        print(f"[init_db] 迁移: agent_tools.params 移除失败（沿用旧结构）: {e}")

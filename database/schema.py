@@ -51,6 +51,7 @@ from .migrations import (
     _backfill_commit_baseline,
     _migrate_builtin_flags,
     _migrate_tool_status,
+    _migrate_builtin_tool_schemas,
     _migrate_agent_team,
     _migrate_plugin_scope,
     _migrate_share_review,
@@ -63,6 +64,7 @@ from .migrations import (
     _migrate_plugin_dependencies,  # 2026-09-16 能力依赖索引表（P0-2）
     _migrate_intent_samples,
     _migrate_dashboard_snapshots,      # 2026-09-26 意图样本池（新增迁移须在此处**显式导入**，否则 NameError）
+    _migrate_drop_agent_tools_params,  # 2026-09-30 移除 agent_tools.params 废列（全仓零消费点）
 )
 from .seeds import (
     _seed,
@@ -579,7 +581,6 @@ def init_db():
         tool_type TEXT NOT NULL,              -- skill | mcp | tool
         tool_name TEXT NOT NULL,              -- skill 名 / MCP 工具名 / 内置工具名
         enabled INTEGER DEFAULT 1,
-        params TEXT DEFAULT '{}',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(agent_id, tool_type, tool_name)
     )""")
@@ -1086,6 +1087,9 @@ def init_db():
     _seed_builtin_tools(conn)
     # ── 工具启停状态归一：deprecated/inactive → disabled（启用/停用两态，替代弃用语义）──
     _migrate_tool_status(conn)
+    # ── 内置工具 input_schema ↔ 执行器对齐：必须晚于 _seed_builtin_tools（行已存在才能订正）──
+    #    修的是「LLM 按 schema 填 A、执行器读 B」的静默错配，见 plugins.py 顶部说明
+    _migrate_builtin_tool_schemas(conn)
     # ── AI 设计工坊：Skill/MCP/工具 插件模式（scope/source_ref/pinned/install_count）──
     # 必须晚于种子：_seed_builtin_tools 已建内置工具，回填 builtin → scope='public'
     _migrate_plugin_scope(conn)
@@ -1127,6 +1131,8 @@ def init_db():
     _migrate_intent_samples(conn)
     # ── 2026-09-26 知识看板指标快照（P2：值+状态的历史点，供 sparkline 趋势）──
     _migrate_dashboard_snapshots(conn)
+    # ── 2026-09-30 移除 agent_tools.params 废列（只有写入无读取，UI 从不传；绑定关系保留）──
+    _migrate_drop_agent_tools_params(conn)
     # ── P0-④（2026-09-11）时态管理：双时态列 + 索引 + 视图 + W3C Time 对齐表 ──
     _migrate_entity_temporal(conn)
     # ── P1-①（2026-09-11）SWRL 规则管理表：swrl_rules + inferred_facts（推理产出暂存）──

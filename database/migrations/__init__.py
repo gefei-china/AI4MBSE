@@ -71,6 +71,7 @@ from .plugins import (
     _migrate_plugin_tables,
     _migrate_plugin_dependencies,
     _migrate_legacy_refs,
+    _migrate_builtin_tool_schemas,
 )
 from .misc import (
     _migrate_mr_status,
@@ -83,6 +84,7 @@ from .misc import (
     _migrate_data_sources,
     _migrate_intent_samples,
     _migrate_dashboard_snapshots,
+    _migrate_drop_agent_tools_params,   # 2026-09-30 移除 agent_tools.params 废列（需 SQLite≥3.35）
 )
 
 __all__ = [
@@ -131,6 +133,7 @@ __all__ = [
     "_migrate_plugin_tables",
     "_migrate_plugin_dependencies",
     "_migrate_legacy_refs",
+    "_migrate_builtin_tool_schemas",
     "_migrate_mr_status",
     "_apply_env_keys",
     "_migrate_eval_tables",
@@ -140,4 +143,5 @@ __all__ = [
     "_migrate_view_layout_checks",
     "_migrate_data_sources",
     "_migrate_dashboard_snapshots",
+    "_migrate_drop_agent_tools_params",
 ]

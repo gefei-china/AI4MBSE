@@ -85,9 +85,9 @@ class AgentIn(BaseModel):
 
 
 class AgentToolIn(BaseModel):
-    tool_type: str  # skill | mcp | tool
+    tool_type: str  # skill | mcp | tool | plugin
     tool_name: str
-    params: Optional[dict] = {}
+    # 2026-09-30 移除 params：原"工具默认入参"字段全仓只有写入、零处读取，且 agent_tools.params 列已删。
 
 
 class A2AIn(BaseModel):
