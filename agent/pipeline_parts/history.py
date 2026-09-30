@@ -238,21 +238,33 @@ class HistoryMixin:
         pull_topk = int(_cfg.get("context", "topic_retrieve_topk", 6))
         pull_th = float(_cfg.get("context", "topic_retrieve_threshold", 0.18))
         budget = int(_cfg.get("context", "budget_history_chars", 3000))
+        # P0-6（2026-09-30）：会话产物摘要块。多轮上下文此前只有「消息」一种载体 ——
+        # sysml_versions / artifacts 里的产物**没有任何注入通道**（全仓读它们的生产代码
+        # 只有 agent/utils.py，且全在归档写入路径）。实测会话 514 第 2 轮因此把第 1 轮
+        # 建好的需求模型当成不存在。无产物 → _digest 为空列表 → 返回值与改动前逐字一致。
+        _digest = []
         try:
             conn = get_db()
             rows = conn.execute(
                 "SELECT id, role, content FROM messages WHERE conversation_id=? AND role IN ('user','assistant') "
                 "ORDER BY id", (conversation_id,)).fetchall()
             topics = self._tag_topics(conn, conversation_id)
+            try:
+                from agent.session_artifacts import build_digest
+                _dgt = build_digest(conn, conversation_id)
+                if _dgt:
+                    _digest = [{"role": "system", "content": _dgt}]
+            except Exception:
+                _digest = []
             conn.close()
         except Exception:
             return []
         if not rows:
-            return []
+            return _digest
         msgs = [{"id": r["id"], "role": r["role"], "content": (r["content"] or "")[:msg_max],
                  "topic": topics.get(r["id"], "")} for r in rows]
         if not any(m["topic"] for m in msgs):  # 打标失败 → 回退旧三层窗口
-            return self._load_history_legacy(conversation_id, limit)
+            return _digest + self._load_history_legacy(conversation_id, limit)
         # 按话题顺序分组（保持原顺序）
         groups = []
         for m in msgs:
@@ -360,8 +372,9 @@ class HistoryMixin:
                 break
             sum_blocks.append({"role": "system", "content": f"【话题：{g['topic']} 摘要】\n{c}"})
             used += _ct(c)
-        # 输出按时间序：摘要（最老）→ 拉回（中间）→ 当前话题原文（最近，紧邻当前输入）
-        return sum_blocks + pull_blocks + raw_list
+        # 输出按时间序：会话产物摘要（最稳定的事实）→ 话题摘要（最老）→ 拉回（中间）
+        # → 当前话题原文（最近，紧邻当前输入）
+        return _digest + sum_blocks + pull_blocks + raw_list
 
     def _tag_topics(self, conn, conversation_id):
         """会话消息话题打标（惰性全量重算+回写 messages.topic，规则确定性）。

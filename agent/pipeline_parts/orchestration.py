@@ -125,7 +125,7 @@ class OrchestrMixin:
             return None
 
     def _try_orchestrate_team(self, user_input: str, team_intent: str, provider_id=None,
-                              attachments=None) -> dict | None:
+                              attachments=None, conversation_id: int = 0) -> dict | None:
         """团队模式强制编排：主 Agent（团队负责人）分解任务 → 分派团队成员 → 汇总。
 
         委派候选收敛到「团队成员 + 主 Agent 自身」最小权限池（非全量 Agent 池）；
@@ -146,7 +146,8 @@ class OrchestrMixin:
             pool = list(dict.fromkeys(members + [team_intent])) or [team_intent]
             return FlowExecutor().run_planner_plan(
                 goal=user_input, agents=self._ORCH_AGENTS, max_tasks=self._ORCH_MAX_TASKS,
-                parallel=True, provider_id=provider_id, attachments=attachments, pool=pool)
+                parallel=True, provider_id=provider_id, attachments=attachments, pool=pool,
+                conversation_id=conversation_id)
         except Exception as e:
             self._orch_error = str(e)[:150]
             return None
@@ -222,7 +223,8 @@ class OrchestrMixin:
         except Exception:
             return False
 
-    def _try_orchestrate(self, user_input: str, intent: str, provider_id=None, attachments=None) -> dict | None:
+    def _try_orchestrate(self, user_input: str, intent: str, provider_id=None, attachments=None,
+                         conversation_id: int = 0) -> dict | None:
         """P0-1 会话入口自动编排：复杂任务 → Planner-Executor（复用 FlowExecutor.run_planner_plan）。
         简单任务 / 带附件且非规则信号 / 编排异常 → 返回 None（回落单 Agent 直行）。
         附件随编排透传（子任务执行时注入，避免丢附件）。"""
@@ -236,7 +238,8 @@ class OrchestrMixin:
             _pool = self._orch_pool(get_db())
             return FlowExecutor().run_planner_plan(
                 goal=user_input, agents=self._ORCH_AGENTS, max_tasks=self._ORCH_MAX_TASKS,
-                parallel=True, provider_id=provider_id, attachments=attachments, pool=_pool)
+                parallel=True, provider_id=provider_id, attachments=attachments, pool=_pool,
+                conversation_id=conversation_id)
         except Exception as e:
             self._orch_error = str(e)[:150]
             return None

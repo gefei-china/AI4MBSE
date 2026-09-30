@@ -289,6 +289,17 @@ DEFAULT_CONFIG = {
         "budget_window_tokens": 65536,  # 占比制分母：上下文窗口基准（当前 provider id=1 实测 65536）
         "budget_retrieval_ratio": 0.0,  # 检索区占窗口比例（0=关闭，用 budget_retrieval_tokens）
         "budget_history_ratio": 0.0,    # 历史区占窗口比例（0=关闭，用 budget_history_tokens）
+        # ── 会话产物摘要（P0-6，2026-09-30）────────────────────────────────────────
+        # 修的是**多轮断链**：第 1 轮建好的模型（sysml_versions 版本链 / artifacts 产物）
+        # 此前在后续轮次**没有任何注入通道** —— 实测会话 514 第 2 轮把"已经建好的需求模型"
+        # 当成还不存在的东西从零设计（正文写着"原始需求数据仅有编号与正文是不够的"）。
+        # 摘要由 agent/session_artifacts.py 只读产出，注入 4 处：流式 planner / 非流式 planner /
+        # 子任务上下文快照 / 会话历史块。
+        # ⚠️ **无产物会话 → 空串 → 各处完全不加段落**（提示词逐字节不变）—— 这是零回归的保证，
+        #    也是验收断言 D1 的对象。三键都可回退（enabled=false 即回到改动前行为）。
+        "artifact_digest_enabled": True,   # 会话产物摘要开关（false = 回退到改动前行为）
+        "artifact_digest_max_chars": 900,  # 摘要字符上限（<=0 不限）
+        "artifact_digest_versions": 3,     # 摘要中列出最近 N 个 SysML 模型版本
     },
     "reasoning": {
         "direct_merge": True,        # 推理结果直接并入图库（跳过审核队列）；false=恢复「提交审核→审核队列」门禁
@@ -694,6 +705,9 @@ CONFIG_SCHEMA = {
         "budget_window_tokens":    {"type": "int", "desc": "占比制分母：上下文窗口基准 token（换模型时同步）"},
         "budget_retrieval_ratio":  {"type": "float", "desc": "检索区占窗口比例（>0 覆盖绝对值键；0=关闭占比制）"},
         "budget_history_ratio":    {"type": "float", "desc": "历史区占窗口比例（>0 覆盖绝对值键；0=关闭占比制）"},
+        "artifact_digest_enabled": {"type": "bool", "desc": "会话产物摘要注入开关（多轮：让后续轮次知道本会话已产出什么）"},
+        "artifact_digest_max_chars": {"type": "int", "desc": "会话产物摘要字符上限（<=0 不限）"},
+        "artifact_digest_versions": {"type": "int", "desc": "摘要中列出的最近 SysML 模型版本数"},
     },
     "reasoning": {
         "direct_merge":            {"type": "bool", "desc": "推理结果直接并入图库（跳过审核队列）；false=恢复提交审核门禁"},

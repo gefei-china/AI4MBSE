@@ -8,11 +8,18 @@ from typing import Any, Optional
 from .tools import ToolExecutor
 
 
-def build_subtask_context(tk: dict, goal: str, done_items: list = None) -> str:
-    """T7 子任务上下文快照：任务定义 + 前置结果摘要 + 交付规范（隔离窗口最小充分上下文）。
+def build_subtask_context(tk: dict, goal: str, done_items: list = None,
+                          artifact_digest: str = "") -> str:
+    """T7 子任务上下文快照：任务定义 + 前置结果摘要 + 会话既有产物 + 交付规范（最小充分上下文）。
 
     供 _run_task 与 _stream_orchestrated_flow 复用，保证会话编排/画布路径行为一致。
     仅注入与任务相关的上游已完成交付物摘要（各 ≤400 字），控制上下文增长。
+
+    artifact_digest（P0-6，2026-09-30）：会话既有产物摘要（agent/session_artifacts.build_digest）。
+    为什么必须在这里下发：子任务走的是 `execute_stream(query, 0, ...)` —— **conversation_id=0**，
+    `_load_history` 对子任务等于空。所以多轮产物只能由此显式注入，否则子任务只看得见"本轮目标"、
+    看不见"会话已经有什么"（实测会话 514：第 2 轮子任务把上一轮建好的需求模型当成不存在）。
+    空串 = 不加段落（与改动前逐字节一致）。
     """
     cfg = tk.get("config") or {}
     if isinstance(cfg, str):
@@ -38,6 +45,8 @@ def build_subtask_context(tk: dict, goal: str, done_items: list = None) -> str:
         for it in pre:
             parts.append(f"  · {it.get('task_key')}（{it.get('title') or '-'}）：{str(it.get('result'))[:400]}")
     parts.append("- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注")
+    if artifact_digest:
+        parts.append(str(artifact_digest))
     return "\n".join(parts)
 
 
@@ -126,7 +135,8 @@ class FlowPlannerMixin:
         return "\n\n".join(f"## {it.get('title')}\n{(it.get('result') or '').strip()}" for it in done_items)
 
     def run_planner_plan(self, goal: str = "", agents=None, max_tasks: int = 6, parallel: bool = True,
-                         provider_id=None, run_id: int = 0, conn=None, attachments=None, pool=None) -> dict:
+                         provider_id=None, run_id: int = 0, conn=None, attachments=None, pool=None,
+                         conversation_id: int = 0) -> dict:
         """P0-1/P1-1/P1-2 Planner-Executor 服务（会话入口自动编排 / Flow planner 节点共用）。
 
         - LLM 计划生成：目标 → 子任务 DAG（key/title/agent/deps/task_type），
@@ -143,7 +153,8 @@ class FlowPlannerMixin:
         own = conn is None
         conn = conn or get_db()
         try:
-            return self._planner_core(goal, agents, max_tasks, parallel, provider_id, run_id, conn, attachments, pool)
+            return self._planner_core(goal, agents, max_tasks, parallel, provider_id, run_id, conn,
+                                      attachments, pool, conversation_id)
         finally:
             if own:
                 try:
@@ -152,7 +163,8 @@ class FlowPlannerMixin:
                     pass
 
     def _planner_core(self, goal: str, agents, max_tasks: int, parallel: bool,
-                      provider_id, run_id: int, conn, attachments=None, pool=None) -> dict:
+                      provider_id, run_id: int, conn, attachments=None, pool=None,
+                      conversation_id: int = 0) -> dict:
         """Planner-Executor 核心（run_planner_plan 的连接由外层管理）。
 
         pool（Task 5）：外部传入的编排候选池意图名列表（pipeline._orch_pool 结果），
@@ -194,6 +206,16 @@ class FlowPlannerMixin:
         except Exception:
             pass
 
+        # P0-6（2026-09-30）：会话既有产物摘要（只读；会话由调用方显式给 conversation_id）。
+        # 注意不要用 run_id 顶替 —— run_id 只是"本轮编排批次号"，会话入口传 0（见 _try_orchestrate）。
+        artifact_digest = ""
+        if conversation_id:
+            try:
+                from agent.session_artifacts import build_digest
+                artifact_digest = build_digest(conn, conversation_id)
+            except Exception:
+                artifact_digest = ""
+
         # 1) LLM 计划生成
         plan = []
         # 注意：JSON 示例花括号须转义（{{ }}），否则被下方 .format(n=...) 当作占位符 → KeyError
@@ -212,6 +234,14 @@ class FlowPlannerMixin:
             "context 只写该任务必需的事实与输入引用（上下文隔离，避免膨胀）；不要输出其他文字。\n"
             f"目标：{goal}"
         ).format(n=max_tasks)
+        # P0-6：摘要追加在 `.format()` **之后** —— 摘要里可能含 { }（元素名/JSON 片段），
+        # 放进被 format 的模板会 KeyError。无产物 → 不加段落。
+        if artifact_digest:
+            prompt += (
+                "\n" + artifact_digest + "\n"
+                "若「本会话既有产物」非空且与本目标相关：任务必须**在既有产物上做增量** —— "
+                "title 写明增量的对象（如「在既有需求模型 v0.1 上补充参与者」），"
+                "context 写清引用哪个既有版本/元素；禁止规划「从零分析/重新建立」类任务。\n")
         try:
             resp = llm_client.chat([{"role": "user", "content": prompt}], provider_id=provider_id, _intent="planner")
             raw = ((resp.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "")
@@ -279,7 +309,8 @@ class FlowPlannerMixin:
                     _wt = int(_cfg.get("delegation", "worker_timeout_s", 120))
                     with ThreadPoolExecutor(max_workers=min(len(ready), 3)) as pool:
                         # T7：注入已完成的依赖结果摘要（跨线程只读共享 _done_items 快照）
-                        _futs = [pool.submit(self._run_task, tk, goal, conn, attachments, list(_done_items))
+                        _futs = [pool.submit(self._run_task, tk, goal, conn, attachments,
+                                             list(_done_items), artifact_digest)
                                  for tk in ready]
                         results_list = []
                         for _f in _futs:
@@ -290,7 +321,8 @@ class FlowPlannerMixin:
                             except Exception as _e:
                                 results_list.append(("", {}, False, f"{type(_e).__name__}: {str(_e)[:120]}"))
                 else:
-                    results_list = [self._run_task(tk, goal, conn, attachments, list(_done_items)) for tk in ready]
+                    results_list = [self._run_task(tk, goal, conn, attachments, list(_done_items),
+                                                   artifact_digest) for tk in ready]
                 for tk, rr in zip(ready, results_list):
                     tk_res, meta, ok, err = rr
                     if ok:
@@ -347,7 +379,8 @@ class FlowPlannerMixin:
             "llm": {}, "latency_ms": int((_t.time() - t0) * 1000),
         }
 
-    def _run_task(self, tk: dict, goal: str, conn, attachments=None, done_items: list = None) -> tuple:
+    def _run_task(self, tk: dict, goal: str, conn, attachments=None, done_items: list = None,
+                  artifact_digest: str = "") -> tuple:
         """执行单个计划任务（agent | react | llm | tool），返回 (result, metadata, ok, error)。
 
         P0 委派协议：config 支持 context/expected_output/tools/skills——
@@ -378,7 +411,7 @@ class FlowPlannerMixin:
                 tools_wl = [x.strip() for x in tools_wl.split(",") if x.strip()]
             query = cfg.get("query") or f"{title}\n团队目标：{goal}"
             # T7：任务上下文快照（任务定义 + 前置依赖结果摘要 + 交付规范），注入隔离窗口
-            _ctx_block = build_subtask_context(tk, goal, done_items)
+            _ctx_block = build_subtask_context(tk, goal, done_items, artifact_digest=artifact_digest)
             if _ctx_block:
                 query = f"[任务上下文快照]\n{_ctx_block}\n\n[任务]\n{query}"
             if context:

@@ -77,7 +77,8 @@ class StreamMixin:
         plan_prompt = (
             "你是任务规划器。把目标分解为可并行/串行执行的子任务清单，只输出 JSON：\n"
             '{"tasks": [{"key": "t1", "title": "子任务描述", "agent": "Agent 名",'
-            ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent"}]}\n'
+            ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent",'
+            ' "context": "该任务必需的上下文/输入引用(精简事实，可空)"}]}\n'
             f"可用 Agent 池：\n" + "\n".join(pool_lines) + "\n"
             "task_type 可选 agent（走 Agent 完整管线）或 react（多步思考-工具求解）或 llm（纯生成）。\n"
             f"{skill_pool_txt}"
@@ -97,7 +98,8 @@ class StreamMixin:
                 + (f"你的团队定位：{_lead_sp}\n" if _lead_sp else "") +
                 "现在开始：只输出 JSON 计划，格式如下：\n"
                 '{"tasks": [{"key": "t1", "title": "子任务描述", "agent": "Agent 名",'
-                ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent"}]}\n'
+                ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent",'
+                ' "context": "该任务必需的上下文/输入引用(精简事实，可空)"}]}\n'
                 f"可用 Agent 池：\n" + "\n".join(pool_lines) + "\n"
                 "task_type 可选 agent / react / llm。\n"
                 f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；不要输出其他文字。\n"
@@ -108,6 +110,25 @@ class StreamMixin:
         # 对 plan 生成零影响（实测：识别出 ['requirement_analysis','design'] 却仍由 planner 自由发挥）。
         # 现把阶段序列作为**高优先阶段序约束**注入 → plan 的任务顺序与 deps 与之对齐（同阶段可并行）。
         # 注意：在构造完 plan_prompt 之后追加，不进 f-string 内部（避免与 JSON 示例花括号冲突）。
+        # P0-6（2026-09-30）：会话既有产物摘要 —— 让 planner 知道"这个会话已经有什么"。
+        # 实测（会话 514 第 2 轮，tmp/mt_ctx/probe_planner_digest_ab.py）：
+        #   无摘要 → 「梳理现有需求数据模型…差距分析」（从零盘点，事实词命中 1 = 只有"参与者"）；
+        #   补摘要 → 「在既有 SysML 需求模型 v0.1 上补充参与者信息需求定义」
+        #            （context 引用 IRRequirement/ir1~ir4/需求图，事实词命中 9）。
+        # 无产物会话 digest 为 "" → 此处完全不加段落（提示词逐字节不变）。追加而非插进
+        # plan_prompt 的 f-string 内部：摘要可能含 { }，与 JSON 示例花括号无冲突但可读性更差。
+        _digest = ""
+        try:
+            from agent.session_artifacts import build_digest
+            _digest = build_digest(conn, conversation_id)
+        except Exception:
+            _digest = ""
+        if _digest:
+            plan_prompt += (
+                "\n" + _digest + "\n"
+                "若「本会话既有产物」非空且与本目标相关：任务必须**在既有产物上做增量** —— "
+                "title 写明增量的对象（如「在既有需求模型 v0.1 上补充参与者」），"
+                "context 写清引用哪个既有版本/元素；禁止规划「从零分析/重新建立」类任务。\n")
         if stage_hint:
             plan_prompt += (
                 "\n★ 用户明确要求按以下**阶段顺序**执行，请让 plan 的任务顺序与 deps 与该序列对齐"
@@ -229,11 +250,18 @@ class StreamMixin:
                 # T7：任务上下文快照（任务定义 + 前置依赖结果摘要 + 交付规范）
                 try:
                     from workflows.planner import build_subtask_context
-                    _tctx = build_subtask_context(tk, goal, list(done_items))
+                    _tctx = build_subtask_context(tk, goal, list(done_items), artifact_digest=_digest)
                     if _tctx:
                         query = f"[任务上下文快照]\n{_tctx}\n\n[任务]\n{query}"
                 except Exception:
                     pass
+                # P0-6（2026-09-30）：planner 写的 context 此前在流式路径**只落库不消费**
+                # （`agent_tasks.context` 有值、子任务 query 里没有；非流式 `_run_task`
+                # 早就注入了，见 workflows/planner.py）。不同步补上，"在既有产物上做增量"
+                # 这条指令就到不了执行者手上 —— 与"摘要只进 planner"是两件事。
+                _plan_ctx = str(tk.get("context") or cfg.get("context") or "").strip()
+                if _plan_ctx:
+                    query += f"\n\n任务上下文（只读，勿编造上下文外事实）：\n{_plan_ctx[:2000]}"
                 skill_name2 = cfg.get("skill") or None
                 evs, sub_res, sub_has_token = [], "", False
                 tok_used = 0
