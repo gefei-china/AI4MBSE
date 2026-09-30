@@ -766,7 +766,7 @@ async function syncAgentBindings(aid){
     const old = (a.tools||[]).map(t=>`${t.tool_type}:${t.tool_name}`);
     const oldSet = new Set(old);
     const b = collectAgentBindings();
-    const want = [...b.skills.map(n=>'skill:'+n), ...b.mcps.map(n=>'mcp:'+n), ...b.tools.map(n=>'tool:'+n), ...b.plugins.map(n=>'plugin:'+n)];
+    const want = [...b.skills.map(n=>'skill:'+n), ...b.mcps.map(n=>'mcp:'+n), ...b.tools.map(n=>'tool:'+n)];
     const wantSet = new Set(want);
     // 新增：不在旧绑定中 → POST
     for(const key of want) if(!oldSet.has(key)) {
@@ -782,18 +782,44 @@ async function syncAgentBindings(aid){
 }
 function openAgentForm(){
   showModal('agent');
+  _agentNameTouched = false;            // 新建时标识名尚未被手动改过 → 跟随展示名自动建议
   document.getElementById('f-name').value = '';
+  document.getElementById('f-disp').value = '';
+  document.getElementById('f-desc').value = '';
+  document.getElementById('f-sp').value = '';
   document.getElementById('f-role').value = 'sub';      // 新建默认子 Agent
   const row = document.getElementById('f-team-row');
   if(row) row.style.display = 'none';
   _agentTeamSet.clear(); _agentTeamCands = []; teamDdClose(); renderTeamChecks();
+  _agentBindCands = {skill:[], mcp:[], tool:[]};   // 候选清空，避免串到上一次打开的结果
+  bindDdCloseAll();
   loadProviderOptions();
   loadAgentBindOptions([]);
 }
+// ── 名称口径统一（2026-09-30 用户反馈 2）：标识名可编辑 ──
+// 此前 `#f-name` 是 hidden input，`saveAgent` 里写死 `name = f-name || disp` →
+// 编辑保存时 name **永不更新**（只能等于建时那一次的展示名），卡片却把这个 name 当 badge 展示，
+// 于是"卡片看到的"和"编辑页设置的"永远对不上。现在两步：① 开放编辑 ② 改名级联同步历史引用。
+let _agentNameTouched = false;   // 用户手动改过标识名后，就不再随展示名自动建议（避免覆盖用户输入）
+function suggestAgentName(disp){
+  // 纯 ASCII → 转小写蛇形（与库内 requirement_analysis / report_generation 一致）；
+  // 含中文 → 原样保留（库内既有中文标识名，如「需求视图生成」，强行 slugging 反而失配）。
+  const d = (disp||'').trim();
+  if(!d) return '';
+  if(/^[\x20-\x7e]+$/.test(d)) return d.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
+  return d;
+}
+function onAgentDispInput(){
+  const ne = document.getElementById('f-name');
+  if(ne && !_agentNameTouched) ne.value = suggestAgentName(document.getElementById('f-disp').value);
+}
+function onAgentNameInput(){ _agentNameTouched = true; }
 async function saveAgent() {
   const disp = document.getElementById('f-disp').value.trim();
-  if(!disp) { toast('名称必填'); return; }
-  const name = document.getElementById('f-name').value.trim() || disp;   // 新建时 name=展示名（路由标识）
+  if(!disp) { toast('展示名称必填'); return; }
+  const nameEl = document.getElementById('f-name');
+  const name = (nameEl.value||'').trim() || suggestAgentName(disp);   // 未填则按展示名自动派生
+  if(!name) { toast('标识名不能为空'); return; }
   const provVal = document.getElementById('f-provider').value;
   const role = document.getElementById('f-role').value === 'main' ? 'main' : 'sub';
   const body = {
@@ -807,9 +833,20 @@ async function saveAgent() {
     kb_scope: {},
     agent_role: role,
   };
-  let aid = null;
-  if(agentEditId) { await api(`/api/studio/agents/${agentEditId}`, {method:'PUT', body:JSON.stringify(body)}); aid = agentEditId; toast('已更新'); }
-  else { const r = await api('/api/studio/agents', {method:'POST', body:JSON.stringify(body)}); aid = r.id; toast('已创建'); }
+  let aid = null, res = null;
+  if(agentEditId) { res = await api(`/api/studio/agents/${agentEditId}`, {method:'PUT', body:JSON.stringify(body)}); aid = agentEditId; }
+  else { res = await api('/api/studio/agents', {method:'POST', body:JSON.stringify(body)}); aid = res && res.id; }
+  // ⚠️ `api()` 不抛异常：错误走返回体（业务错误={error}，HTTPException={detail}→已在 api() 归一为 error）。
+  //    这里必须判 res.error，不能 try/catch —— 否则重名改名会被当成"保存成功"。
+  if(!res || res.error){ toast('⚠ ' + ((res && res.error) || '保存失败')); return; }
+  if(!aid){ toast('⚠ 保存未返回 Agent id'); return; }
+  // 改名结果反馈：级联同步了多少历史引用 + 哪些地方同步不到（代码硬引用）
+  const syncedN = (res && res.synced_total) || 0;
+  toast((agentEditId ? '已更新' : '已创建') + (syncedN ? ` · 已同步历史引用 ${syncedN} 行` : ''));
+  if(res && res.warnings && res.warnings.length){
+    // 提示要够显眼：改名最大的坑恰恰是"看起来改成功了，其实代码里的硬引用还指旧名"
+    setTimeout(()=>alert('⚠ 改名影像提示（以下部分无法自动同步，请人工复核）：\n\n· ' + res.warnings.join('\n\n· ')), 260);
+  }
   await syncAgentBindings(aid);
   await syncAgentTeam(aid);   // 主 Agent 保存团队成员（子 Agent 跳过）
   closeModal(); agentEditId = null; loadAgents();
@@ -881,13 +918,32 @@ async function deleteIntentRule(id) {
   try { await api('/api/studio/intent-rules/' + id, {method:'DELETE'}); toast('已删除'); loadIntentRules(); }
   catch(e){ toast('删除失败：' + (e.message||'')); }
 }
+// ── 工具表单：三种执行通道（内置代码 / HTTP / MCP）决定表单该露出哪些配置项 ──
+// ⚠️ mode 以「后端判定的执行通道」为准，而不是只看下拉框：
+//    内置工具（channel=builtin-code）压根没有 URL / 鉴权可填 —— 原先表单只留 MCP/HTTP 两类配置区，
+//    内置工具点开就是一片空白，看起来像「没配好 / 不能用」，这正是 18 个内置工具被误删的起因。
+//    改为按通道显示：内置工具显式告知「由代码执行、无需配置」，而不是留白让人猜。
+function toolFormMode() {
+  const chEl = document.getElementById('f-tool-channel');
+  const ch = chEl ? (chEl.value || '') : '';
+  if (ch) return ch;                                        // 编辑模式：后端已判定，直接采信
+  const sel = document.getElementById('f-tool-type');
+  return (sel && sel.value === 'mcp') ? 'mcp' : 'http';     // 新增模式：按下拉框选的类型
+}
 function toggleToolType() {
-  const t = document.getElementById('f-tool-type').value;
-  const mcpF = document.getElementById('tool-mcp-fields');
-  const httpF = document.getElementById('tool-http-fields');
+  const mode = toolFormMode();
+  const builtin = (mode === 'builtin-code');
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+  show('tool-type-row', !builtin);            // 内置工具不存在「选类型」
+  show('tool-mcp-fields', mode === 'mcp');
+  show('tool-http-fields', mode === 'http');
+  // 容错 / 请求头只对真正走网络的集成工具有意义；给内置工具保留只会让人以为「有哪些项漏配了」
+  show('tool-resilience-box', !builtin);
+  show('tool-headers-box', !builtin);
+  // ⚠️ 这里曾因模板缺 #f-tool-name-hint 而拿到 null，紧接着 hint.title=... 抛出 TypeError，
+  //    导致 showToolForm 后续回填一行都没跑 → 整个编辑表单空白。加空防御，别再让一个缺 id 炸掉全页。
   const hint = document.getElementById('f-tool-name-hint');
-  if (t === 'mcp') { mcpF.style.display=''; httpF.style.display='none'; hint.title='将作为运行时工具标识名'; }
-  else { mcpF.style.display='none'; httpF.style.display=''; hint.title='将作为运行时工具名，如 get_weather'; }
+  if (hint) hint.title = (mode === 'mcp') ? '将作为运行时工具标识名' : '将作为运行时工具名，如 get_weather';
 }
 function addToolHeader() {
   const list = document.getElementById('tool-headers-list');
@@ -897,30 +953,113 @@ function addToolHeader() {
   list.appendChild(row);
 }
 
-function toggleToolType() {
-  const t = document.getElementById('f-tool-type').value;
-  const mcpF = document.getElementById('tool-mcp-fields');
-  const httpF = document.getElementById('tool-http-fields');
-  const hint = document.getElementById('f-tool-name-hint');
-  if (t === 'mcp') { mcpF.style.display=''; httpF.style.display='none'; hint.title='将作为运行时工具标识名'; }
-  else { mcpF.style.display='none'; httpF.style.display=''; hint.title='将作为运行时工具名，如 get_weather'; }
+const _PARAM_TYPE_ZH = {string:'字符串', integer:'整数', number:'数字', boolean:'布尔', array:'数组', object:'对象'};
+// 「这个工具怎么用」的直白说明：不同通道需要用户做的事完全不同
+function _toolUsageText(t) {
+  if (t.channel === 'builtin-code')
+    return '✅ <b>无需任何服务端配置</b> —— 执行逻辑就在平台代码里，下面的参数表是它唯一会接收的东西。<br>怎么用：① 到「Agent」把它绑定到某个 Agent，会话中模型会按这张参数表自动调用；② 或在「工作流」里作为工具节点编排。<b>只要它是「启用」状态就可用。</b>';
+  if (t.channel === 'http')
+    return '需要配置：填写下方「HTTP 接口配置」的 URL / Method / 参数映射，保存后即可被 Agent 或工作流调用。';
+  if (t.channel === 'mcp')
+    return '需要配置：真正调用的端点由其所属 <b>MCP Server</b> 维护（见「MCP 服务器」列表），Server 在线才可用。';
+  return '⚠️ 查不到执行体：运行时会直接报「未知工具」。请补充 HTTP 配置，或删除该条目。';
 }
-function addToolHeader() {
-  const list = document.getElementById('tool-headers-list');
-  const row = document.createElement('div');
-  row.className = 'form-row'; row.style.cssText = 'display:flex;gap:6px;align-items:center;';
-  row.innerHTML = '<input class="tool-hdr-key" placeholder="Key" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"><input class="tool-hdr-val" placeholder="Value" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"><button class="btn sm ghost" onclick="this.parentElement.remove()" style="padding:2px 8px;font-size:11px;">✕</button>';
-  list.appendChild(row);
+function renderToolChannel(t) {
+  const body = document.getElementById('tool-channel-body');
+  const hid = document.getElementById('f-tool-channel');
+  if (!body) return;
+  if (hid) hid.value = (t && t.channel) || '';
+  if (!t) {
+    body.innerHTML = '<div style="font-size:11.5px;color:var(--mut);line-height:1.75;">新增工具：选定上方「类型」后，这里说明它由谁执行、需要配什么。</div>';
+    return;
+  }
+  const cls = t.channel === 'builtin-code' ? 'g' : (t.channel === 'unbound' ? 'r' : 'a');
+  const usageTxt = t.never_used
+    ? '<span class="badge r">从未使用</span>'
+    : `${t.usage_count || 0} 次 · 成功 ${t.usage_ok || 0}`;
+  body.innerHTML =
+    `<div class="kv"><span>执行通道</span><b><span class="badge ${cls}">${esc(t.channel_label || t.channel || '-')}</span></b></div>` +
+    `<div class="kv"><span>执行入口</span><b style="font-family:monospace;font-size:11.5px;">${t.handler ? esc(t.handler) : '<span class="badge r">未找到执行入口</span>'}</b></div>` +
+    `<div class="kv"><span>调用情况</span><b>${usageTxt}</b></div>` +
+    `<div style="margin-top:8px;padding:7px 9px;border-radius:6px;background:var(--blue-l);color:var(--blue-d);font-size:11.5px;line-height:1.75;">${esc(t.handler_note || '')}</div>` +
+    `<div style="margin-top:6px;padding:7px 9px;border-radius:6px;background:var(--bg-soft,#f7f8fa);border:1px solid var(--line);font-size:11.5px;line-height:1.75;">${_toolUsageText(t)}</div>`;
+}
+function renderToolParams(schema) {
+  const boxEl = document.getElementById('tool-params-box');
+  const body = document.getElementById('tool-params-body');
+  if (!boxEl || !body) return;
+  const props = (schema && schema.properties) || {};
+  const req = (schema && schema.required) || [];
+  const names = Object.keys(props);
+  if (!names.length) { boxEl.style.display = 'none'; body.innerHTML = ''; return; }  // 确属无入参的工具不占版面
+  boxEl.style.display = '';
+  body.innerHTML =
+    '<table class="t" style="width:100%;font-size:11.5px;"><thead><tr>' +
+    '<th>参数名</th><th style="width:64px;">类型</th><th style="width:48px;">必填</th><th>说明</th>' +
+    '</tr></thead><tbody>' +
+    names.map(n => {
+      const p = props[n] || {};
+      const need = (req || []).indexOf(n) >= 0;
+      const extra = Array.isArray(p.enum) ? `可选值：${p.enum.join(' / ')}` : '';
+      const txt = [p.description || '', extra].filter(Boolean).join('　');
+      return `<tr><td><code style="font-family:monospace;">${esc(n)}</code></td>` +
+             `<td>${esc(_PARAM_TYPE_ZH[p.type] || p.type || '-')}</td>` +
+             `<td>${need ? '<span class="badge r">必填</span>' : '<span style="color:var(--mut);">可选</span>'}</td>` +
+             `<td style="color:var(--mut);">${txt ? esc(txt) : '—'}</td></tr>`;
+    }).join('') + '</tbody></table>';
+}
+function renderToolMeta(t) {
+  const el = document.getElementById('tool-meta-box');
+  if (!el) return;
+  if (!t) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  const seZh = {read:'只读', write:'写入', destructive:'高风险写'};
+  const rkZh = {low:'低', medium:'中', high:'高'};
+  const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`;
+  el.innerHTML =
+    kv('注册来源', esc(t.source || '-')) +
+    kv('副作用', seZh[t.side_effect] || t.side_effect || '-') +
+    kv('风险等级', rkZh[t.risk_level] || t.risk_level || '-') +
+    kv('版本', esc(t.version || '-')) +
+    kv('归属', esc(t.owner || '—')) +
+    '<div style="font-size:10.5px;color:var(--mut);margin-top:4px;line-height:1.65;">副作用 / 风险 / 版本 / 归属由注册来源管理，此处只读。</div>';
 }
 
 let toolEditId = null;
-function showToolForm(id) {
+async function showToolForm(id) {
   toolEditId = id || null;
   showModal('tool');
-  const t = (id && _toolsCache) ? _toolsCache.find(x=>x.id===id) : null;
+  let t = (id && _toolsCache) ? _toolsCache.find(x=>x.id===id) : null;
+  // 2026-09-30（用户报告「编辑页参数全空」的根因修复）：
+  //   自 2026-09-16「工具移出插件市场」改造后，st-mcp 页的工具列表改由**能力中心**渲染
+  //   （HTML 里只剩 #cap-zone-st-mcp，旧的 #tool-cards 容器已被删除），而能力中心入口
+  //   capLoad() 只拉 /api/plugins/mine，**从不调用 loadTools()** —— 于是全局 _toolsCache
+  //   永远停留在 []（loadTools 的 5 个调用点全在保存/删除后的刷新里，没有「进页面」时机）。
+  //   后果：能力中心的「编辑」按钮 → capEdit(pid) → 正确解出 legacy_id=4047 →
+  //   showToolForm(4047) → 这里 find() 落空 → t=null → 标题退化成「新增工具」，
+  //   描述/input_schema/入参/执行通道全部按「新增」空渲染。数据本身完好，是**加载断链**。
+  //   修法：缓存未命中时**主动回源**一次，兼容任何入口（能力中心 / 直连 / 深链）。
+  if (id && !t) {
+    try {
+      const items = await api('/api/studio/tools');
+      if (Array.isArray(items)) {
+        _toolsCache = items;
+        t = items.find(x => x.id === id) || null;
+      }
+    } catch (e) { /* 回源失败则维持空表单，下面按「新增」渲染 */ }
+  }
   document.getElementById('tool-modal-title').textContent = t ? `编辑工具 #${id}` : '新增工具';
-  // 判断类型：MCP 工具 source='mcp' 或有 mcp_server_id，HTTP 工具 source='http' 或 config 有 method/url
-  const isMcp = t && (t.source === 'mcp' || t.mcp_server_id);
+  // ⚠️ 顺序有讲究：三个渲染块必须跑在 toggleToolType 之前 —— renderToolChannel 会把后端判定的
+  //    真实通道写进 #f-tool-channel，toggleToolType 据此决定露出哪些配置区；反过来会让内置工具
+  //    依旧按 HTTP 形态显示（一片要填又填不上的空输入框）。
+  renderToolChannel(t);
+  renderToolMeta(t);
+  let _sch = t ? t.input_schema : null;
+  if (typeof _sch === 'string') { try { _sch = JSON.parse(_sch || '{}'); } catch(e) { _sch = {}; } }
+  renderToolParams(_sch);
+  // 判断类型：编辑模式下以上面渲染出的真实通道为准
+  // （source/mcp_server_id 判断保留，用于兼容尚无 channel 字段的旧缓存/直连数据源）
+  const isMcp = t ? (t.channel === 'mcp' || t.source === 'mcp' || !!t.mcp_server_id) : false;
   const cfg = (t && t.config) ? (typeof t.config==='string' ? (()=>{try{return JSON.parse(t.config);}catch(e){return{};}})() : t.config) : {};
   document.getElementById('f-tool-type').value = isMcp ? 'mcp' : 'http';
   toggleToolType();
@@ -957,10 +1096,34 @@ function showToolForm(id) {
   const _fbEl = document.getElementById('f-tool-fallback'); if(_fbEl) _fbEl.value = t ? (t.fallback_to||'') : '';
 }
 async function saveTool() {
-  const type = document.getElementById('f-tool-type').value;
   const name = document.getElementById('f-tool-name').value.trim();
   if(!name) { toast('名称必填'); return; }
   const desc = document.getElementById('f-tool-desc').value;
+  // ── 内置工具：由平台代码执行，没有 URL / 鉴权可填 ──
+  //    原先它掉进 HTTP 分支，被 `if(!url) toast('URL 必填'); return;` 挡回去 → 改什么都没法保存，
+  //    用户只能看着一堆空框发呆。这里单独走一条只提交「可改字段」的路径。
+  // ⚠️ PUT /api/studio/tools/{id} 是**全量覆盖**语义：不传的字段会被写成空值（input_schema→{}、
+  //    retry_policy→{}、fallback_to→''），而这不报错。所以必须把当前值原样带上，
+  //    否则点一次「保存」就把 Task #25 刚订正好的参数契约无声抹平了。
+  if (toolFormMode() === 'builtin-code') {
+    // ⚠️ 别写成 window._toolsCache —— 顶层用 let/const 声明的变量**不会**成为 window 的属性，
+    //    那样取到的是空数组 → _cur 变 {} → 下面 PUT 就把 input_schema 提交成 {} 了。实测踩过：
+    //    点一次「保存」，graph_retrieve 的参数契约就被无声抹平成 {}（E2E 用例 T3 抓到的）。
+    const _cache = (typeof _toolsCache !== 'undefined' && Array.isArray(_toolsCache)) ? _toolsCache : [];
+    const _cur = _cache.find(x=>x.id===toolEditId) || {};
+    if (!_cur.input_schema) { toast('工具数据尚未加载，请重试'); return; }
+    let _curSch = _cur.input_schema || {};
+    if (typeof _curSch === 'string') { try { _curSch = JSON.parse(_curSch || '{}'); } catch(e) { _curSch = {}; } }
+    const _rp = (typeof _cur.retry_policy === 'string')
+      ? (()=>{ try { return JSON.parse(_cur.retry_policy || '{}'); } catch(e) { return {}; } })()
+      : (_cur.retry_policy || {});
+    const _r = await api(`/api/studio/tools/${toolEditId}`, {method:'PUT', body:JSON.stringify({
+      name, description: desc, input_schema: _curSch, retry_policy: _rp, fallback_to: _cur.fallback_to || '',
+    })});
+    if (_r && _r.error) { toast('保存失败：' + _r.error); return; }
+    toast('已更新'); closeModal(); toolEditId = null; loadTools(); loadMinePlugins(); return;
+  }
+  const type = document.getElementById('f-tool-type').value;
   // 收集 Headers
   const hdrKeys = document.querySelectorAll('#tool-headers-list .tool-hdr-key');
   const hdrVals = document.querySelectorAll('#tool-headers-list .tool-hdr-val');

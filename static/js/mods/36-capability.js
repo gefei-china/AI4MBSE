@@ -160,9 +160,19 @@ function capJumpManage() {
  * 消费区不再展示全市场目录 —— 市场目录与治理统一在「插件市场」页） */
 async function capLoad(page) {
   const s = _capS(page);
+  // 2026-09-30：工具页顺带预热 _toolsCache —— 工具卡片的「编辑」经 capEdit(pid) 路由到
+  //   showToolForm(legacy_id)，而该函数靠 _toolsCache 取上下文。此前全站没有任何「进页面」
+  //   时机调用 loadTools()（其 5 个调用点都在保存/删除后的刷新里），导致 _toolsCache 恒为 []
+  //   → 编辑页退化成空白「新增工具」。此处预热，showToolForm 内另有回源兜底，双保险。
+  const _pre = (page === 'st-mcp')
+    ? Promise.resolve(api('/api/studio/tools')).then(function (r) {
+        if (Array.isArray(r)) _toolsCache = r;
+      }).catch(function () {})
+    : Promise.resolve();
   const mn = await api('/api/plugins/mine?kind=' + encodeURIComponent(s.type) + '&q=' + encodeURIComponent(s.q))
     .catch(function () { return { items: [] }; });
   s.mine = (mn && mn.items) || [];
+  await _pre;
   capRender(page);
 }
 
