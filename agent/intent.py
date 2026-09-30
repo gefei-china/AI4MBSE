@@ -274,7 +274,7 @@ class IntentRouter:
             from database import get_db
             conn = get_db()
             try:
-                h = hashlib.md5(text.encode("utf-8", "ignore")).hexdigest()
+                h = hashlib.md5(text.lower().encode("utf-8", "ignore")).hexdigest()
                 row = conn.execute(
                     "SELECT intent, route, confidence FROM intent_cache WHERE query_hash=? AND index_fp=?",
                     (h, fp)).fetchone()
@@ -290,7 +290,16 @@ class IntentRouter:
             return None
 
     def _cache_set(self, text: str, fp: str, intent: str, route: str, confidence: float) -> None:
-        """意图级缓存写入（仅缓存高置信结果，弱置信/继承结果不缓存以免放大路由错误）。"""
+        """意图级缓存写入（仅缓存高置信结果，弱置信/继承结果不缓存以免放大路由错误）。
+
+        P0-3 修复（2026-09-30）—— key 口径必须与 `_cache_get` 一致：
+        `detect()` 用 `text.lower()` 查缓存，而本函数此前对**原文**求 hash
+        → 写 key = md5(原文) / 读 key = md5(lower)，**含任意 ASCII 大写的输入永不命中**
+        （本域输入高频含 SysML/MBSE/BDD/IBD）。实测真库 `intent_cache`：6 行写入 /
+        `hit_count` 总和 0，其中 2 行（`SysML v2模型代码`、`BDD 视图`）是结构性死行。
+        修法：两侧**各自**在函数内部 lower —— 口径自足，不依赖调用方约定；
+        `query` 列仍存**原文**，保留可观测性（它是展示字段，不参与匹配）。
+        """
         if not text or not fp or confidence < 0.7:
             return
         try:
@@ -298,7 +307,7 @@ class IntentRouter:
             from database import get_db
             conn = get_db()
             try:
-                h = hashlib.md5(text.encode("utf-8", "ignore")).hexdigest()
+                h = hashlib.md5(text.lower().encode("utf-8", "ignore")).hexdigest()
                 conn.execute(
                     "INSERT INTO intent_cache (query, query_hash, intent, route, confidence, index_fp) "
                     "VALUES (?,?,?,?,?,?) ON CONFLICT(query_hash) DO UPDATE SET "
