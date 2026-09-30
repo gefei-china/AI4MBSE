@@ -7,6 +7,7 @@ from plugin_system.store.base import (
     SCOPE_LABELS,
     STATUS_LABELS,
     is_admin,
+    is_builtin_row,
     is_market_admin,
 )
 
@@ -72,7 +73,12 @@ def plugin_dto(row, user=None):
     # 归属与权限标记（2026-09-16 新增）
     #   前端据此按权限渲染动作，避免"按钮看得见、点了才 403/409"的体验断层。
     #   口径与 routers.plugins._author_or_admin / store.soft_delete 保持一致。
-    d["is_builtin"] = (d.get("author_id") or 0) == 0
+    # 2026-09-29 修复：内置口径由 `author_id == 0` 收敛为 is_builtin_row()
+    #   （作者名='平台内置' 或 plugin_id 前缀 com.zhiyuan.legacy.）。
+    #   旧判据在真库命中 74/77 条 —— 把「历史迁移 18 / 本地创建 1」这类
+    #   个人能力一起标成内置，前端据此不渲染删除按钮，导致用户点不了删除。
+    #   权威判据与旧表 builtin 标记一一对应，详见 base.is_builtin_row 的说明。
+    d["is_builtin"] = is_builtin_row(d)
     d["is_mine"] = bool(user and user.get("id") and d.get("author_id") == user.get("id"))
     _adm = is_admin(user)
     _mkt = is_market_admin(user)
@@ -81,12 +87,17 @@ def plugin_dto(row, user=None):
     # 编辑/删除（2026-09-17 P1 对齐）：已上架（public）能力的内容修改与删除
     # 已收归市场管理员（update_plugin / soft_delete 守卫同口径），
     # 作者只对非 public 的自有能力看到编辑/删除入口。
+    # 2026-09-29：两分支都叠加 `not is_builtin` —— 内置能力不可删是不可绕过的
+    #   业务约束（soft_delete 守卫同口径），此前 DTO 漏判：超管对所有内置条目
+    #   都能拿到 can_delete=True，仅靠前端 `&& !isBuiltin` 兜底。语义自洽起见
+    #   由后端直接给出 False（前端条件保留，双保险）。
+    _deletable = not d["is_builtin"]
     if d.get("scope") == "public":
-        d["can_edit"] = bool(_mkt)
-        d["can_delete"] = bool(_mkt)
+        d["can_edit"] = bool(_mkt and _deletable)
+        d["can_delete"] = bool(_mkt and _deletable)
     else:
-        d["can_edit"] = bool(d["is_mine"] or _adm)
-        d["can_delete"] = bool(d["is_mine"] or _adm)
+        d["can_edit"] = bool((d["is_mine"] or _adm) and _deletable)
+        d["can_delete"] = bool((d["is_mine"] or _adm) and _deletable)
     d["editable_status"] = d.get("status") in EDITABLE_STATUSES
 
     # ── 可见范围维度（P1-7 解耦，2026-09-16）──

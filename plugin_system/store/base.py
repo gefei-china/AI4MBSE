@@ -68,6 +68,56 @@ EDITABLE_STATUSES = ("draft", "rejected", "published", "disabled")
 _SELF_PUBLISHABLE_FROM = ("draft", "rejected", "disabled")
 
 
+BUILTIN_AUTHOR_NAMES = ("平台内置",)
+BUILTIN_ID_PREFIXES = ("com.zhiyuan.legacy.",)
+
+# 2026-09-29（用户第二轮指示）：「目前的插件先不标记内置，因此允许进行操作（删除/卸载）」。
+# 本阶段插件市场全部条目（含 legacy 迁移的 55 条）一律**不**视为内置：
+#   · is_builtin_row() 短路返回 False —— 前端 is_builtin 徽章、卸载守卫、删除守卫全部放行；
+#   · 动作语义改为「来源决定按钮」：市场安装的 → 只卸载；自己创建的 → 只删除（见 36-capability.js）。
+# 未来要恢复"内置不可删卸"时：把 BUILTIN_MARKING_ENABLED 改回 True 即可（判据本体保留，勿删）。
+BUILTIN_MARKING_ENABLED = False
+
+
+def is_builtin_row(row):
+    """平台内置能力的**唯一判据**（2026-09-29 收敛，供 store/router/前端 DTO 共用）。
+
+    ⚠️ 2026-09-29 二轮：按用户指示，**当前阶段整体停用内置标记**
+    （BUILTIN_MARKING_ENABLED=False，is_builtin_row 恒 False）——
+    此前一轮把 55 条 legacy 迁移条目标为内置，导致插件市场里"无法删除（内置的除外）"
+    反向命中这批条目、删除/卸载全禁，与用户预期相反。恢复开关即可回到内置口径。
+
+    背景：此前两处口径不一致，导致「能力中心里 19 条个人能力点不了删除」：
+      - plugin_system/store/queries.py:75 用 `author_id == 0` → 实测命中 74/77 条；
+      - routers/studio_parts/shared.py:154 用 `author_name == '平台内置'` → 命中 55 条。
+    真库实测（只读）：
+      author_name 分布 = 平台内置 55 / 历史迁移 18 / 王工 3 / 本地创建 1；
+      plugin_id 前缀分布 = com.zhiyuan.legacy 55 / com.mbse.personal 18 / 其余 4；
+      「平台内置」与「com.zhiyuan.legacy. 前缀」两判据**完全等价**（都是同样 55 条），
+      且与旧表 builtin 标记严格对应（tools 28 / agents 9 / skills 4 / mcp 1
+      + 由它们投影出的 prompt 8 条 ≈ 55）。
+
+    因此内置口径收敛为「作者名为平台内置 **或** plugin_id 落在平台 legacy 命名空间」，
+    两条取或以防单字段被改写。`author_id == 0` 不再作为内置判据 ——
+    历史迁移与本地创建的个人能力同样落在 author_id=0，属实是"有主但无 id"，
+    用户明确要求"目前的插件先不标记内置"。
+
+    幂等/纯函数：不触碰数据库，可安全用于 DTO 计算与测试断言。
+    """
+    if not BUILTIN_MARKING_ENABLED:
+        return False
+    if not row:
+        return False
+    try:
+        author_name = row.get("author_name") if hasattr(row, "get") else row["author_name"]
+        plugin_id = row.get("plugin_id") if hasattr(row, "get") else row["plugin_id"]
+    except Exception:
+        return False
+    if (author_name or "") in BUILTIN_AUTHOR_NAMES:
+        return True
+    return any((plugin_id or "").startswith(p) for p in BUILTIN_ID_PREFIXES)
+
+
 def is_admin(user):
     """管理员判定（统一口径，供 store 与 router 共用）。
 

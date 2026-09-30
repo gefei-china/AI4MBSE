@@ -458,13 +458,18 @@ function capCard(x, tab, page) {
   }
   actions += `<button class="btn sm ghost" onclick="capSetInstalled('${esc(pid)}',${enabled ? 'false' : 'true'},'${page}')">${enabled ? '停用' : '启用'}</button>`;
   // 2026-09-17：从市场安装的副本直接给卸载入口（内置除外——后端拒绝卸载内置，引导用停用）；
-  // 卸载后插件市场对应条目的「安装」入口自动恢复，可随时重装
+  // 卸载后插件市场对应条目的「安装」入口自动恢复，可随时重装。
+  // 2026-09-29（动作语义二轮定稿）：来源决定按钮 —— 市场安装的（非自己创建）→ 卸载；
+  // 自己创建的 → 删除（不走卸载，避免"作者卸载自己的作品"这种别扭路径）。
   if (x.installed && !x.is_builtin && !x.is_mine) {
     actions += `<button class="btn sm ghost" onclick="capUninstall('${esc(pid)}','${page}')">卸载</button>`;
   }
   if (canEdit) actions += `<button class="btn sm ghost" onclick="capEdit('${esc(pid)}')">编辑</button>`;
-  // 自己创建的能力：主区给删除入口（此前只能从「更多」里找到）
-  if (x.can_delete && !isBuiltin) {
+  // 自己创建的能力：主区给删除入口（此前只能从「更多」里找到）。
+  // 2026-09-29：市场安装的（installed 且非本人创建）**不提供删除** —— 本体属作者/市场，
+  // 想移除用「卸载」；删除留给作者本人与管理员治理（can_delete 本身已含这层权限）。
+  const fromMarket = x.installed && !x.is_mine;
+  if (x.can_delete && !isBuiltin && !fromMarket) {
     actions += `<button class="btn sm ghost" style="color:var(--red,#A32D2D);" title="移除该能力本体（软删除，审计保留）" onclick="capDelete('${esc(pid)}','${esc(String(label).replace(/'/g, ''))}','${page}')">删除</button>`;
   }
   actions += capMoreBtn(x, page);

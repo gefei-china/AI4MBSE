@@ -35,9 +35,17 @@ def _as_admin(user):
 
 
 def _author_or_admin(plugin, user):
+    """作者本人或系统/内容级管理员。
+
+    2026-09-29：作者比对加上「author_id 非零」前置 —— author_id=0 表示
+    「无主」（内置系统能力，或历史迁移/本地创建尚未认领的个人能力），
+    任何真实用户的 id 都不应与之相等。此前若 user.id 为 0（匿名/异常上下文）
+    会与 author_id=0 相等而误判为作者，绕过权限。
+    """
     if not user:
         return False
-    if user.get("id") == plugin.get("author_id"):
+    _aid = plugin.get("author_id") or 0
+    if _aid and user.get("id") and int(_aid) == int(user["id"]):
         return True
     return _as_admin(user)
 
@@ -159,9 +167,10 @@ def update_plugin(pid: str,
         raise HTTPException(404, "插件不存在")
     # 首道守卫（2026-09-17 P1）：作者 / 系统管理员 / （public 时）市场管理员；
     # public 的最终裁决在 store.update_plugin（作者与设计师被拒，市场管理员放行）。
-    if not (user and (user.get("id") == p.get("author_id")
-                      or store.is_admin(user)
-                      or (p["scope"] == "public" and store.is_market_admin(user)))):
+    # 2026-09-29：作者比对统一走 _author_or_admin（含 author_id 非零前置），
+    #   避免 user.id 为 0 时与 author_id=0 相等而误判为作者。
+    if not (_author_or_admin(p, user)
+            or (p["scope"] == "public" and store.is_market_admin(user))):
         raise HTTPException(403, "仅作者或管理员可编辑该插件")
     manifest = (body or {}).get("manifest") or {}
     ok, errors, normalized = validate_manifest(manifest)

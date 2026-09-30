@@ -39,14 +39,14 @@ def consumable_plugin_ids(conn, user=None, any_user=False) -> set:
     if any_user:
         # 全局装配模式：作者对自己自建能力的显式停用应全局生效
         # （私有能力的唯一控制者就是作者，他关掉就该从全局池消失）
-        sql = ("SELECT p.plugin_id, p.author_id, "
+        sql = ("SELECT p.plugin_id, p.author_id, p.author_name, "
                "(SELECT MAX(i.enabled) FROM plugin_installs i WHERE i.plugin_id=p.plugin_id) AS inst_on, "
                "(SELECT COUNT(*) FROM plugin_installs i2 WHERE i2.plugin_id=p.plugin_id "
                "  AND i2.enabled=0 AND p.author_id!=0 AND i2.user_id=p.author_id) AS explicit_off "
                "FROM plugins p WHERE p.status='published'")
         params = ()
     elif uid:
-        sql = ("SELECT p.plugin_id, p.author_id, "
+        sql = ("SELECT p.plugin_id, p.author_id, p.author_name, "
                "(SELECT MAX(i.enabled) FROM plugin_installs i "
                "  WHERE i.plugin_id=p.plugin_id AND i.user_id IN (0,?)) AS inst_on, "
                "(SELECT COUNT(*) FROM plugin_installs i2 "
@@ -54,7 +54,7 @@ def consumable_plugin_ids(conn, user=None, any_user=False) -> set:
                "FROM plugins p WHERE p.status='published'")
         params = (uid, uid)
     else:
-        sql = ("SELECT p.plugin_id, p.author_id, "
+        sql = ("SELECT p.plugin_id, p.author_id, p.author_name, "
                "(SELECT MAX(i.enabled) FROM plugin_installs i "
                "  WHERE i.plugin_id=p.plugin_id AND i.user_id=0) AS inst_on, "
                "0 AS explicit_off "
@@ -63,7 +63,7 @@ def consumable_plugin_ids(conn, user=None, any_user=False) -> set:
     out = set()
     try:
         for r in conn.execute(sql, params).fetchall():
-            pid, author_id, inst_on, explicit_off = r[0], r[1], r[2], r[3]
+            pid, author_id, author_name, inst_on, explicit_off = r[0], r[1], r[2], r[3], r[4]
             if explicit_off:
                 continue                        # 本人显式停用 → 否决（优先于一切）
             if inst_on == 1:
@@ -79,8 +79,16 @@ def consumable_plugin_ids(conn, user=None, any_user=False) -> set:
                 #    ⚠️ 关键区分（否则会把"停用/下架"一起废掉）：
                 #      inst_on is None → **完全没有安装记录** = 归属不明 → fail-open 放行
                 #      inst_on == 0    → 有记录但被关掉 = 明确停用 → 尊重，排除
+                #
+                #    ⚠️ 2026-09-29（数据流转审计 · 断层2）fail-open 收窄：
+                #      管理员全局卸载平台种子条目（author_name='平台内置'，删 user_id=0 行）
+                #      后，inst_on 变 None —— 若继续 fail-open，卸载的能力会被**放回消费集合**
+                #      （卸载假成功，AI 照旧调用）。平台种子的"无安装行"只有一种成因：
+                #      被全局卸载了 → 必须排除。历史迁移能力（author_name='历史迁移'等）
+                #      本来就没有安装行，维持 fail-open 放行（9 条绑定不误伤）。
                 if inst_on is None:
-                    out.add(pid)
+                    if (author_name or "") != "平台内置":
+                        out.add(pid)
                 continue
             if any_user:
                 out.add(pid)                    # 全局装配（无用户上下文）：有作者的自建能力视为可用

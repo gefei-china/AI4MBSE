@@ -23,6 +23,7 @@ from agent.registry import sanitize_description, sanitize_capabilities
 from workflows import ToolRegistry, FlowExecutor
 from skills.parser import parse_skill_zip, extract_skill_package, SkillParseError
 from plugin_system import store as plugin_store
+from plugin_system.store.base import is_builtin_row
 from plugin_system.manifest import MARKET_TYPES, PLUGIN_TYPES, CAP_SLOTS
 from models import (
     PromptIn,
@@ -151,7 +152,11 @@ def _plugin_to_market_dto(it: dict, user: dict | None = None) -> dict:
     m = it.get("manifest") or {}
     label = m.get("label") or {}
     src_ref = str(it.get("source_ref") or "")
-    builtin = 1 if (src_ref.startswith("com.zhiyuan.legacy") or it.get("author_name") in ("平台内置",)) else 0
+    # 2026-09-29：内置判定收敛到 plugin_system.store.base.is_builtin_row ——
+    #   此前此处用 source_ref 前缀 + author_name，而 store/queries.py 用 author_id==0，
+    #   两处口径差 19 条，是「能力中心里个人能力点不了删除」的根因。
+    #   现统一为「author_name='平台内置' 或 plugin_id 前缀 com.zhiyuan.legacy.」。
+    builtin = 1 if is_builtin_row(it) else 0
     _uid = (user or {}).get("id")
     is_mine = bool(_uid and it.get("author_id") and int(it["author_id"]) == int(_uid))
     return {
@@ -230,4 +235,29 @@ def _find_plugin_by_id(conn, pid: str) -> dict | None:
         d["manifest"] = {}
     return d
 
-__all__ = ['router', 'json', 'os', 're', 'threading', 'time', 'uuid', 'List', 'Optional', 'APIRouter', 'Depends', 'UploadFile', 'File', 'JSONResponse', 'StreamingResponse', 'db_session', 'require_permission', 'current_user', 'STATIC_DIR', 'StudioRepo', 'AgentRepo', 'audit', 'audit_user', 'AgentRegistry', 'sanitize_description', 'sanitize_capabilities', 'ToolRegistry', 'FlowExecutor', 'parse_skill_zip', 'extract_skill_package', 'SkillParseError', 'plugin_store', 'PromptIn', 'SkillIn', 'MCPIn', 'ToolIn', 'AgentIn', 'AgentToolIn', 'A2AIn', 'EventSubIn', '_VALID_HOOK_ACTIONS', '_VALID_MARKET_KIND', '_version_ge', '_intent_rule_err', '_invalidate_intent_rules', '_sanitize_agent_meta', '_hook_err', '_uniq_cast_name', '_plugin_to_market_dto', '_find_plugin_by_display', '_find_plugin_by_id']
+# ══════════════════════════════════════════════════════════════════════════
+# 工具名契约（2026-09-30 P0-2 / P0-3）
+# ══════════════════════════════════════════════════════════════════════════
+# 工具名最终会作为 OpenAI **function.name** 发给 provider，协议硬性要求 ^[a-zA-Z0-9_-]+$。
+# 事故记载见 agent/pipeline_parts/tools.py:227 —— 表里曾存在中文名工具（id=1594「知识库查询」），
+# 导致整批 tools 载荷被 provider 400 拒；异常被 llm 层吞掉后回落 Mock：
+# **用户拿到 Mock 文本且毫不知情**，还连带同批次其它合法工具一起失效。
+# 与其在运行时抛出并静默剔除，不如在创建 / 绑定这两个入口就拦住。
+# ⚠️ 两边正则必须一致：运行时那份在 agent/pipeline_parts/tools.py:232 的 `_TOOL_NAME_RE`。
+#    改任一边都要同步另一边 —— tools/verify/verify_tool_name_contract.py 会把不一致判为失败。
+TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+TOOL_NAME_HINT = ("工具名须匹配 ^[a-zA-Z0-9_-]{1,64}$（英文/数字/下划线/短横，≤64 字符）—— "
+                  "这是 LLM 协议对 function.name 的硬要求，中文名工具会被静默剔除、不报错")
+
+
+def check_tool_name(name) -> str:
+    """校验工具名合法性：合法返回 ''，非法返回可直接展示给用户看的错误文案。"""
+    n = (name or "").strip()
+    if not n:
+        return "工具名必填"
+    if not TOOL_NAME_RE.match(n):
+        return f"工具名「{n}」不合法：{TOOL_NAME_HINT}"
+    return ""
+
+
+__all__ = ['router', 'json', 'os', 're', 'threading', 'time', 'uuid', 'List', 'Optional', 'APIRouter', 'Depends', 'UploadFile', 'File', 'JSONResponse', 'StreamingResponse', 'db_session', 'require_permission', 'current_user', 'STATIC_DIR', 'StudioRepo', 'AgentRepo', 'audit', 'audit_user', 'AgentRegistry', 'sanitize_description', 'sanitize_capabilities', 'ToolRegistry', 'FlowExecutor', 'parse_skill_zip', 'extract_skill_package', 'SkillParseError', 'plugin_store', 'PromptIn', 'SkillIn', 'MCPIn', 'ToolIn', 'AgentIn', 'AgentToolIn', 'A2AIn', 'EventSubIn', '_VALID_HOOK_ACTIONS', '_VALID_MARKET_KIND', '_version_ge', '_intent_rule_err', '_invalidate_intent_rules', '_sanitize_agent_meta', '_hook_err', '_uniq_cast_name', '_plugin_to_market_dto', '_find_plugin_by_display', '_find_plugin_by_id', 'TOOL_NAME_RE', 'TOOL_NAME_HINT', 'check_tool_name']
