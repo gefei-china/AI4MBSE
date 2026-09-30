@@ -206,6 +206,9 @@ DEFAULT_CONFIG = {
         # 触发面刻意收窄到"系统自己没把握"：llm_weak / fused_conflict / semantic_weak / llm<0.85 /
         # 完全无信号但像在求助；有把握的（规则命中/两路互证/高置信语义/会话继承）一律不打断。
         "confirm_when_unsure": True,
+        # P0-1（2026-09-30）语义 ↔ LLM 互证：语义意图级 top1 与 LLM 结论互斥、且语义分数达到
+        #   此阈值（默认取 dense `th`）→ 转澄清（route='llm_conflict'），不硬选。
+        "llm_sem_conflict_min": 0.49,
     },
     "context": {
         "history_immediate_turns": 6,   # 即时窗口轮数（原文逐字注入）

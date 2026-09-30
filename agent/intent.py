@@ -154,6 +154,9 @@ class IntentRouter:
         # P0-1 置信度三级决策：最近一次 detect 的路由元数据（route/confidence/是否需澄清）
         self._last_meta = {"intent": "", "route": "", "confidence": 0.0, "needs_clarification": False}
         self._last_sem_score = 0.0  # 最近一次语义匹配 top_score（供弱置信澄清判定）
+        # P0-1（2026-09-30）：语义层的"弃权意见"——**意图级** top1（达阈但未过采纳门槛）。
+        # 供 LLM 兜底段做互证（融合矩阵缺的那一格），详见 detect_semantic / detect 内注释。
+        self._last_sem_alt = None
 
     def register_keywords(self, intent: str, keywords: list) -> None:
         """注册 DB Agent 的意图关键词（新建 Agent 即可路由，无需改代码）。"""
@@ -325,7 +328,8 @@ class IntentRouter:
         意图级缓存（P0-3），会话级意图继承（P0-2）。
 
         流程：意图缓存命中（L1 直返）→ 建模强信号 → Glossary 强制 → 规则关键词 → 语义（置信度分级）
-        → LLM 兜底（含 confidence）→ 会话继承（无强信号时沿用上轮意图）→ chat。
+        → LLM 兜底（含 confidence，**并与语义弃权意见互证**：见 LLM 段 P0-1 注释）
+        → 会话继承（无强信号时沿用上轮意图）→ chat。
         每次调用填充 self._last_meta = {intent, route, confidence, needs_clarification}。
         """
         t = text.lower()
@@ -484,6 +488,22 @@ class IntentRouter:
                 #  代价（明说）：确实属于某意图、但 LLM 只给到 0.6~0.8 的句子，会落到 chat 而非澄清；
                 #  若日后出现这类真实损失，就把 route='llm_weak' 也接进澄清条（本处只管"不硬选"）。
                 return self._done("chat", "llm_weak", min(llm_conf, 0.5), text, fp)
+            # P0-1（2026-09-30）：**语义 ↔ LLM 互证** —— 补上融合矩阵缺的那一格（断链 1）。
+            #   机制根因（实测）：走到本段的语义结果**必然已被丢弃** —— 上方
+            #   `sem = self.detect_semantic(text); if sem: return ...` 已把"语义有结论"的分支
+            #   全部拦走，故 LLM 段从来看不到语义层的意见；语义"弃权"（达阈但未过采纳门槛）
+            #   更从未被传递 → 相反证据被静默丢弃、且不触发澄清。
+            #   实测唯一错例「帮我看看这个系统的接口设计是否合理」：语义 design(≈0.55) >
+            #   review(0.48)，LLM 判 review(0.85) → 采纳 review 且 needs_clarification=False。
+            #   判据（保守）：语义**意图级** top1 与 LLM 结论互斥、且语义分数达最低识别阈
+            #   （`llm_sem_conflict_min`，默认 0.49）→ 不硬选，转澄清（route='llm_conflict'）。
+            #   ⚠️ **刻意不做"采信语义"的翻盘**：本例语义 0.55 推翻 LLM 0.85 属弱证据推翻强结论，
+            #      且意图级 lead 仅在 1.145~1.158 间随 embedding 抖动、恰好跨过任何"贴边门槛"——
+            #      靠调门槛让它变绿等于用测试集调参。是否允许翻盘待 P1-3 标定 α/δ 后再定。
+            _alt = getattr(self, "_last_sem_alt", None)
+            if (_alt and _alt["intent"] and _alt["intent"] != llm_intent
+                    and _alt["score"] >= float(self._cfg_get("llm_sem_conflict_min", 0.49))):
+                return self._done(llm_intent, "llm_conflict", min(llm_conf, 0.6), text, fp)
             return self._done(llm_intent, "llm", llm_conf, text, fp)
         # P0-2：会话级意图保持——无任何信号命中时继承上轮意图（追问/续写不被误判 chat）
         if prev_intent and prev_intent in self.INTENTS:
@@ -491,8 +511,13 @@ class IntentRouter:
         return self._done("chat", "chat", 0.0, text, fp)
 
     def _done(self, intent, route, confidence, text, fp):
-        """统一出口：填充 _last_meta + 高置信写意图缓存。澄清判定：中置信（弱语义/继承/LLM<0.85）→ 提示。"""
-        needs_clarify = route in ("semantic_weak", "inherit", "fused_conflict") or (route == "llm" and confidence < 0.85)
+        """统一出口：填充 _last_meta + 高置信写意图缓存。
+
+        澄清判定：中置信（弱语义/继承/fused_conflict/**llm_conflict**）或 LLM 给分<0.85 → 提示。
+        """
+        # P0-1：`llm_conflict`（语义与 LLM 互斥）同样转澄清 —— 不硬选、不静默。
+        needs_clarify = route in ("semantic_weak", "inherit", "fused_conflict", "llm_conflict") or (
+            route == "llm" and confidence < 0.85)
         self._last_meta = {"intent": intent, "route": route, "confidence": confidence,
                            "needs_clarification": needs_clarify}
         self._cache_set(text, fp, intent, route, confidence)
@@ -557,12 +582,15 @@ class IntentRouter:
         差值极小自然过不了 lead_w。
         """
         self._last_sem_score = 0.0
+        self._last_sem_alt = None
         if not self._semantic_index:
             return ""
         from semantic import SemanticSearch
         from core import config as _cfg
         _ss = SemanticSearch()
-        scored = _ss.rank(text, self._semantic_index, top_k=2, threshold=0, key="text")
+        # P0-1（2026-09-30）：top_k 2→8 —— **只为多取几条做意图级聚合**（见下）；
+        #   本函数既有的 `scored[0]` / `scored[1]` 用法一个不改（rank 排序后切片，前 2 条恒等）。
+        scored = _ss.rank(text, self._semantic_index, top_k=8, threshold=0, key="text")
         if not scored:
             return ""
         top_score, top_item = scored[0]
@@ -570,6 +598,26 @@ class IntentRouter:
         name = top_item.get("name", "")
         if name == "chat":
             return ""
+        # P0-1：**意图级聚合** —— 索引里同一意图有多条 utterance（`_SEMANTIC_UTTERANCES`），
+        #   原始 top2 常是**同一意图的另一条**，令"领先第二名"判据失真（实测错例
+        #   「帮我看看这个系统的接口设计是否合理」：design 0.5541 / design 0.4993，比值 0.90
+        #   → 被判"未领先"）。故按意图名取 max 后再算意图级 top1/top2 与领先倍率，
+        #   存入 `_last_sem_alt` 供 LLM 段互证。
+        #   ⚠️ 只记"意图名"（`in self.INTENTS`）—— 细粒度子 Agent 名不参与互证（留 P0-2）。
+        #   ⚠️ **不参与本函数任何 return 判定**（零行为变更），纯旁路观测。
+        _agg = {}
+        for _sc, _it in scored:
+            _nm = _it.get("name", "")
+            if _nm in self.INTENTS and _nm != "chat" and _sc > _agg.get(_nm, 0.0):
+                _agg[_nm] = _sc
+        if _agg:
+            _ranked = sorted(_agg.items(), key=lambda x: -x[1])
+            _a1 = _ranked[0]
+            _a2 = _ranked[1] if len(_ranked) > 1 else ("", 0.0)
+            self._last_sem_alt = {
+                "intent": _a1[0], "score": _a1[1], "runner": _a2[0], "runner_score": _a2[1],
+                "lead": (_a1[1] / _a2[1]) if _a2[1] > 0 else 99.0,
+            }
         # 2026-09-19：分档阈值按**本次实际走的路**选 —— 两路余弦量纲不同
         # （实测同一批 top1：dense 0.51 / bigram 0.10），一套阈值套两路必有一路失准。
         # dense 值由 calibrate_dense_thresholds.py 做**分位等价映射**标定

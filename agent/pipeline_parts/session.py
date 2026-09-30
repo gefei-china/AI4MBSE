@@ -111,7 +111,8 @@ class SessionMixin:
         """判据：**只有"系统自己没把握"才问**。有把握的一律不打断（否则每次对话都被拦一次）。
 
         问：`llm_weak`（LLM 给了具体意图但 <0.85）/ `fused_conflict`（关键词与语义打架）/
-            `semantic_weak`（弱语义命中）/ `llm` 且 conf<0.85 / 完全无信号但**像在求助**
+            `llm_conflict`（语义与 LLM 互斥，P0-1）/ `semantic_weak`（弱语义命中）/
+            `llm` 且 conf<0.85 / 完全无信号但**像在求助**
         不问：`inherit`（追问/续写，问反而打扰）/ 规则命中 / `fused`（两路互证）/ 高置信语义 /
             纯寒暄 / 续答消息（含 `CLARIFY_RESUME_MARK`，防"问→答→又问"的循环）
         开关：`intent.confirm_when_unsure`（默认 True）——一键回到"不打断"的旧行为。
@@ -126,7 +127,8 @@ class SessionMixin:
             return False
         route = (meta or {}).get("route") or ""
         conf = float((meta or {}).get("confidence") or 0)
-        if route in ("llm_weak", "fused_conflict", "semantic_weak"):
+        # P0-1：`llm_conflict`（语义与 LLM 互斥）同样要问 —— 不硬选。
+        if route in ("llm_weak", "fused_conflict", "semantic_weak", "llm_conflict"):
             return True
         if route == "llm" and conf < 0.85:
             return True
