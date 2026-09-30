@@ -1019,11 +1019,18 @@ class StreamMixin:
             # P0-1：Glossary 归一化（带 conn 的 detect 优先术语归一化）
             # P0-2：轻量 DST——读取会话级当前意图，无信号时继承
             dst = self._load_conversation_dst(conversation_id)
+            # P0-5（2026-09-30）：历史联合召回 —— 取最近几条**用户原话**，只供识别的低置信段
+            #   使用（**不喂规则层**：实测历史里的强特异词会以 0.95 劫持路由，详见
+            #   IntentRouter._sanitize_history）。开关 intent.history_recall。
+            _hist = self._load_history_for_intent(conversation_id)
             try:
                 with db_conn() as _conn:
-                    _detected = self.router.detect(user_input, conn=_conn, prev_intent=dst["intent"] or None)
+                    _detected = self.router.detect(user_input, conn=_conn,
+                                                   prev_intent=dst["intent"] or None,
+                                                   history=_hist)
             except Exception:
-                _detected = self.router.detect(user_input, prev_intent=dst["intent"] or None)
+                _detected = self.router.detect(user_input, prev_intent=dst["intent"] or None,
+                                               history=_hist)
             intent = forced_intent or _detected
             # P0-4（2026-09-19）：显式定向（团队/指定 Agent）覆盖语义识别结果时**不静默**。
             # 取舍：显式选择优先（用户选了团队就该按团队走），但差异必须可见——否则
@@ -1104,7 +1111,9 @@ class StreamMixin:
             except Exception:
                 _need_iq = False
             if _need_iq:
-                _iqs = self._intent_confirm_questions(user_input, intent)
+                # P0-5：把本次语义意见带进候选排序（只影响顺序，不构成路由决定）
+                _iqs = self._intent_confirm_questions(user_input, intent,
+                                                      _intent_meta.get("sem_alt"))
                 _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
                                              forced_intent, skill_name, team, _iqs)
                 yield {"type": "clarify_ask", "questions": _iqs, "intent": intent,

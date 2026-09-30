@@ -60,6 +60,49 @@ class SessionMixin:
         except Exception:
             pass
 
+    # ── P0-5（2026-09-30）：意图识别用的"最近几轮用户原话" ─────────────────────────
+    #  与 `context.history_*`（给**生成模型**注入的对话上下文，默认 6 轮）刻意分开：
+    #  意图识别只需要"最近 1~2 条用户话"，且**只取 user 且 msg_type=text** ——
+    #  取值面越窄噪声越少（净化规则与实测见 IntentRouter._sanitize_history）。
+    def _load_recent_user_msgs(self, conversation_id, n: int = 2) -> list:
+        """取最近 n 条用户文本消息（**时间正序**返回）；conversation_id<=0 / n<=0 返回 []。
+
+        注意这是**原始池**，不做净化：`role` 与 `msg_type` 只是最外层的粗筛（排除卡片/工具消息），
+        「澄清续答」「编排子任务文本」等脏样本仍会取到 —— 它们在 IntentRouter._sanitize_history
+        里统一剔除。所以调用方应取**多于实际需要**的条数（见 _load_history_for_intent）。
+        """
+        try:
+            if not conversation_id or int(conversation_id) <= 0 or int(n) <= 0:
+                return []
+            from database import get_db
+            conn = get_db()
+            try:
+                rows = conn.execute(
+                    "SELECT content FROM messages WHERE conversation_id=? AND role=? "
+                    "AND msg_type=? ORDER BY id DESC LIMIT ?",
+                    (int(conversation_id), "user", "text", int(n))).fetchall()
+            finally:
+                conn.close()
+            out = [(r["content"] or "").strip() for r in rows]
+            return [x for x in reversed(out) if x]
+        except Exception:
+            return []
+
+    def _load_history_for_intent(self, conversation_id) -> list:
+        """P0-5：意图识别用的历史（读配置 → 取最近 N 条用户话）。开关关闭/取不到时返回 []。"""
+        try:
+            from core import config as _cfg
+            if not bool(_cfg.get("intent", "history_recall", True)):
+                return []
+            n = int(_cfg.get("intent", "history_recall_turns", 2) or 0)
+        except Exception:
+            n = 2
+        # 原始池留足余量（4 倍，下限 8）：真实会话里 user 消息夹着大量"澄清续答"
+        #   （【澄清补充】卡片文本，量过会话 325：20 条里超过一半，且**最新的几条恰恰都是它**）
+        #   —— 只按 n 取原文，常常一条有效历史都不剩，P0-5 反而在最需要它的长会话里失效。
+        #   净化与"最终取几条"仍由 intent 侧的 _sanitize_history 负责，这里不重复判脏。
+        return self._load_recent_user_msgs(conversation_id, max(int(n) * 4, 8))
+
     def _merge_slots(self, prev_slots: dict, new_slots: dict) -> dict:
         """P0-2 槽位跨轮合并：prev 为底，新槽位覆盖；goal/scope 新值优先，entities/constraints 并集。"""
         if not isinstance(prev_slots, dict):
@@ -137,19 +180,29 @@ class SessionMixin:
             return len(t) >= 6 and any(k in t for k in self._REQUEST_HINTS)
         return False
 
-    def _intent_confirm_questions(self, user_input, current_intent) -> list:
+    def _intent_confirm_questions(self, user_input, current_intent, sem_alt=None) -> list:
         """构造"意图确认"题：**选项 = 候选意图（中文名 + 一句职责说明）**，当前猜测置顶并如实标注。
 
         为什么选项文本要带"说明"：选项被选中后会原样进入续答文本（【澄清补充】…回答「…」），
         而续答要重新过一次意图识别 —— 说明里含该意图的**特异词**（如"方案设计/建模"），
         关键词层才能稳定命中；只写"设计"这种泛词反而会再次落空（泛词不单独构成信号）。
+
+        P0-5（2026-09-30）`sem_alt`：本次**语义层的意图级 top1**（{intent, score}）。
+        它此前只被用来判"互斥/澄清"，**在候选排序上完全没被消费** —— 于是「导出最近审计日志」
+        这类句子的卡片永远只显示 `INTENTS` 字典的**前 4 个**（requirement_analysis /
+        requirement_quality / design / impact），真正的 system_mgmt 连选项都进不去，
+        用户只能靠"其他/自定义"手打。现在把它插到「当前猜测」之后、其余之前。
+        ⚠️ **只影响顺序，不改变"谁被选中"** —— 语义意见本身不构成路由决定（与 P0-1 的
+        "不硬选"一致），所以这里可以安全地消费它。
         """
         names = [k for k in self.router.INTENTS.keys() if k != "chat"]
         for n in (getattr(self.router, "_db_intents", {}) or {}).keys():
             if n not in names:
                 names.append(n)
-        ordered = ([current_intent] if current_intent in names else []) + \
-                  [n for n in names if n != current_intent]
+        _alt_name = sem_alt.get("intent", "") if isinstance(sem_alt, dict) else ""
+        ordered = (([current_intent] if current_intent in names else [])
+                   + ([_alt_name] if _alt_name in names and _alt_name != current_intent else [])
+                   + [n for n in names if n != current_intent and n != _alt_name])
         opts = []
         for n in ordered[:4]:
             try:

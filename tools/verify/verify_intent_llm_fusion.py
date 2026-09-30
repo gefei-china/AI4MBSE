@@ -33,6 +33,7 @@
 用法：.venv/Scripts/python.exe -X utf8 tools/verify/verify_intent_llm_fusion.py
 """
 import os
+import re
 import sys
 
 ROOT = "C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system"
@@ -130,12 +131,20 @@ def make_router(src):
 
 
 BASE = load_src()
-SEC_DELETE = (
-    '            _alt = getattr(self, "_last_sem_alt", None)\n'
-    '            if (_alt and _alt["intent"] and _alt["intent"] != llm_intent\n'
-    '                    and _alt["score"] >= float(self._cfg_get("llm_sem_conflict_min", 0.49))):\n'
-    '                return self._done(llm_intent, "llm_conflict", min(llm_conf, 0.6), text, fp)\n'
-)
+
+# ⚠️ 锚点一律**正则化**，别硬编码续行空格 —— 这段代码在 P0-5（2026-09-30）里被重写过
+#    （互证段的 return 多了 `cacheable=_cache_ok, used_history=bool(_hist_ctx)` 两个参数），
+#    硬编码续行的写法当场失配：`assert src != BASE` 报"变异未生效（替换没命中）"。
+#    注意这次是**夹具漂移**而非产品回归 —— 同一次运行里 A1/A2/A5/A6/A7 全部仍 PASS。
+#    教训：变异锚点锚在**语义稳定**的行（条件表达式），参数列表/续行用 `[ \t]+[^\n]*\n` 兜住。
+M1_PAT = re.compile(
+    r'            if \(_alt and _alt\["intent"\] and _alt\["intent"\] != llm_intent\n'
+    r'                    and _alt\["score"\] >= float\(self\._cfg_get\("llm_sem_conflict_min", 0\.49\)\)\):\n'
+    r'                return self\._done\(llm_intent, "llm_conflict", min\(llm_conf, 0\.6\), text, fp,\n'
+    r'(?:[ \t]+[^\n]*\n)?')
+_M1_HIT = M1_PAT.findall(BASE)
+assert len(_M1_HIT) == 1, "M1 锚点应唯一，实得 %d 个" % len(_M1_HIT)
+SEC_DELETE = _M1_HIT[0]
 MUTANTS = [
     ("M1 删互证段（注回旧写法）", BASE.replace(SEC_DELETE,
         '            return self._done(llm_intent, "llm", llm_conf, text, fp)\n', 1)),

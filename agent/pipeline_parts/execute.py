@@ -41,11 +41,16 @@ class ExecuteMixin:
         # P0-1：Glossary 归一化——带 conn 的 detect 会优先做术语归一化（v2→SysML_V2）
         # P0-2：轻量 DST——读取会话级当前意图，无信号时继承（追问/续写不误判 chat）
         dst = self._load_conversation_dst(conversation_id)
+        # P0-5（2026-09-30）：历史联合召回（与 stream.py 同一口径，详见 _sanitize_history）
+        _hist = self._load_history_for_intent(conversation_id)
         try:
             with db_conn() as _conn:
-                _detected = self.router.detect(user_input, conn=_conn, prev_intent=dst["intent"] or None)
+                _detected = self.router.detect(user_input, conn=_conn,
+                                               prev_intent=dst["intent"] or None,
+                                               history=_hist)
         except Exception:
-            _detected = self.router.detect(user_input, prev_intent=dst["intent"] or None)
+            _detected = self.router.detect(user_input, prev_intent=dst["intent"] or None,
+                                           history=_hist)
         intent = forced_intent or _detected
         # P0-4（2026-09-19）：显式定向覆盖语义识别结果时不静默（非流式路径无 SSE，故写日志留痕）
         if forced_intent and _detected and forced_intent != _detected:

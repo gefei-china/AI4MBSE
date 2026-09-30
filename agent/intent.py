@@ -152,7 +152,9 @@ class IntentRouter:
         self._rules = None
         self._rules_epoch = -1  # P0-3：-1 ≠ 任何 epoch → 首次 detect 必加载
         # P0-1 置信度三级决策：最近一次 detect 的路由元数据（route/confidence/是否需澄清）
-        self._last_meta = {"intent": "", "route": "", "confidence": 0.0, "needs_clarification": False}
+        self._last_meta = {"intent": "", "route": "", "confidence": 0.0,
+                           "needs_clarification": False, "sem_alt": None, "used_history": False,
+                           "confirmed": False}
         self._last_sem_score = 0.0  # 最近一次语义匹配 top_score（供弱置信澄清判定）
         # P0-1（2026-09-30）：语义层的"弃权意见"——**意图级** top1（达阈但未过采纳门槛）。
         # 供 LLM 兜底段做互证（融合矩阵缺的那一格），详见 detect_semantic / detect 内注释。
@@ -323,14 +325,69 @@ class IntentRouter:
         except Exception:
             pass
 
-    def detect(self, text, conn=None, prev_intent=None):
+    # ── P0-5（2026-09-30）历史联合召回：净化规则与依据 ──────────────────────────
+    # 三条**实测**得出的边界（不是设计推断，探针见 tmp/p_intent/probe_history*.py）：
+    #   1. **绝不能进规则层**：把历史拼进 detect 的 `text` 后，6/6 条追问句被规则层的 SP-R
+    #      报告路由以 **0.95 高置信**抓走（历史里含"输出影响报告"）→ 这正是"只喂低置信段"
+    #      这条限制的**真正理由**：不是省成本，是历史里任何一个强特异词都能劫持整条路由。
+    #   2. **也不必进语义层**：拼接文本送 detect_semantic **5/5 返回空**（意图级顶分仅 0.44，
+    #      远低于 dense 采纳阈 0.69）→ 语义一路保持原文即可，带历史收益为零、只增干扰。
+    #      （原方案写的是"拼进语义与 LLM 两路"，此处按实测收窄为只喂 LLM。）
+    #   3. **必须净化**：噪声上文（多话题混杂）能把 LLM 拉到 report_generation@0.85
+    #      —— 那是会被**直接采纳**的分数 → 除净化外，采纳侧另设"LLM 自报置信门槛"把关（见 LLM 段；
+    #      原方案写的"语义背书门"已在定稿时被实测推翻并替换，勿再按旧注释理解）。
+    _HISTORY_BLOCK_MARKS = ("【澄清补充】", "[任务上下文快照]", "[澄清", "[编排")
+    _HISTORY_ITEM_MAX = 200    # 单条上限（字符）：超长多为粘贴正文，作"上文"只会淹没当前句
+    _HISTORY_TOTAL_MAX = 300   # 合计上限（字符）：提示词成本与噪声的联合上限
+    _HISTORY_MAX_ITEMS = 3     # 条数上限（调用方一般只给 1~2 条，这里做防御）
+
+    def _sanitize_history(self, history, current_text=None) -> str:
+        """P0-5：把历史消息净化成可喂给 LLM 的"上文"（返回拼接串；空串 = 不可用）。
+
+        净化规则（每条都对应一类真实脏样本）：
+        - 剔空 / 非字符串；
+        - 剔含 `_HISTORY_BLOCK_MARKS` 的：`【澄清补充】`是澄清卡续答文本（实测 117~246 字，
+          句首写着"...建模信息（请据此继续）"，会让识别以为用户又提了一次建模）；
+          `[任务上下文快照]`是编排子任务内部构造文本（同族污染本仓踩过一次，见 stream.py）；
+        - 剔超长（> `_HISTORY_ITEM_MAX`）：多为粘贴的正文，作"上文"只会淹没当前句；
+        - 剔与当前句重复的（当前句可能已落库）；
+        - 去重（实测真实会话里同一句话连发 3 次）；
+        - 只取**最近** `_HISTORY_MAX_ITEMS` 条（列表按时间正序给出 → 取尾部）。
+        """
+        if not history:
+            return ""
+        _cur = (current_text or "").strip()
+        _out = []
+        _seen = set()
+        for item in history:
+            _s = item.strip() if isinstance(item, str) else ""
+            if not _s or len(_s) > self._HISTORY_ITEM_MAX:
+                continue
+            if any(mk in _s for mk in self._HISTORY_BLOCK_MARKS):
+                continue
+            if _cur and _s == _cur:
+                continue
+            if _s in _seen:
+                continue
+            _seen.add(_s)
+            _out.append(_s)
+        if not _out:
+            return ""
+        return " ".join(_out[-self._HISTORY_MAX_ITEMS:])[:self._HISTORY_TOTAL_MAX]
+
+    def detect(self, text, conn=None, prev_intent=None, history=None):
         """BR-2 增强：Glossary 术语归一化优先（P0-1），置信度分级（P1-1），
-        意图级缓存（P0-3），会话级意图继承（P0-2）。
+        意图级缓存（P0-3），会话级意图继承（P0-2），历史联合召回（P0-5）。
 
         流程：意图缓存命中（L1 直返）→ 建模强信号 → Glossary 强制 → 规则关键词 → 语义（置信度分级）
-        → LLM 兜底（含 confidence，**并与语义弃权意见互证**：见 LLM 段 P0-1 注释）
+        → LLM 兜底（含 confidence，**并与语义弃权意见互证**：见 LLM 段 P0-1 注释；
+          走到这段时还会带上**历史用户话**：见 LLM 段 P0-5 注释）
         → 会话继承（无强信号时沿用上轮意图）→ chat。
-        每次调用填充 self._last_meta = {intent, route, confidence, needs_clarification}。
+        每次调用填充 self._last_meta = {intent, route, confidence, needs_clarification,
+        sem_alt, used_history}。
+
+        P0-5（2026-09-30）：`history` 为**最近 N 条历史用户话**（纯文本列表，时间正序）。
+        ⚠️ **只喂 LLM 一路** —— 规则层与语义层一律用原文，理由与实测见 `_sanitize_history`。
         """
         t = text.lower()
         # P0-3（2026-09-24）：规则刷新必须在**指纹计算之前** —— 指纹含 _rules 内容，
@@ -364,6 +421,13 @@ class IntentRouter:
                                "needs_clarification": False, "source_route": route}
             return intent
         self._last_glossary = None  # 每次调用重置，防跨调用残留
+        # P0-5（2026-09-30）：语义旁路同样必须**每次调用重置**。它是"本次语义意见"的观测值，
+        #   而**走规则层直接 return 的路径压根不会进 detect_semantic**（原来的重置只写在那个
+        #   函数里）→ 不在此处重置，规则命中的调用就会读到**上一轮**的残留值。P0-1 引入
+        #   `_last_sem_alt` 时漏了这一处；P0-5 要把它喂给互证门与澄清卡，残留值会被当成
+        #   "本次意见"误用（可行性探针里已踩到：规则命中的那些行，alt 显示的全是上一轮的）。
+        self._last_sem_score = 0.0
+        self._last_sem_alt = None
         # 2026-09-25（评测集查出，错例 #2）：**review 强信号前置到 P0-2 建模强信号之前**。
         # 根因：P0-2 的第二条正则 `(sysml|…).{0,24}(生成|代码|建模)` 没有"动作词"约束，
         # 于是「帮我校验一下这段sysml代码」里的 "sysml…代码" 就被判成 design（期望 review）。
@@ -458,6 +522,18 @@ class IntentRouter:
                     continue
                 if any(k in t for k in keywords):
                     return self._done(intent, "rule", 0.95, text, fp)
+        # ── P0-5（2026-09-30，v2）：历史联合召回 —— 走到这里就是"低置信分支"（关键词层无信号）──
+        #   **仍成立**的部分：追问句「那它的风险呢」「再详细一点」「展开说说」单发时 LLM 只给
+        #   chat@0.20~0.35（等于判不出）；带上同话题上文后能判出 impact（实测 9/9，分 0.62~0.95）。
+        #   且收益**主要来自 prompt 的约束表述**（"上文只用来补全省略与指代"），不是"多喂了文字"：
+        #   不加约束时噪声上文能把它拉到 report_generation@0.85（会被直接采纳 → 该写法必须弃用）。
+        #   ⚠️ **已被实测收缩**的部分（见下方"v2 重定稿"注释）：追问句**本来就能被 `inherit` 答对**
+        #      （prev=impact 时意图 6/6 都是 impact）→ 带历史**不改路由方向**，只用于"确认"。
+        #   `_hist_ctx` 只传给 detect_llm；**语义一路坚持用原文**（实测拼接对语义零收益，见上）。
+        #   ⚠️ v2 收敛：**没有 prev_intent 就不带上下文** —— prev_intent 缺失时无从"确认"，
+        #      而带着上下文让 LLM 自由判定正是被实测否决的那条路（噪声上文能推到 0.90 的非 chat
+        #      结论）。这同时保证"无 prev_intent 时提示词与旧版**逐字节一致**"（零回归）。
+        _hist_ctx = self._sanitize_history(history, text) if prev_intent else ""
         # 缺口-1：关键词未命中 → 语义匹配兜底（VectorEngine bigram 余弦，零外部依赖）
         sem = self.detect_semantic(text)
         if sem:
@@ -467,7 +543,7 @@ class IntentRouter:
                 return self._done(prev_intent, "inherit", 0.55, text, fp)
             return self._done(sem, route, self._last_sem_score, text, fp)
         # M2：规则/语义均未命中 → LLM 意图识别兜底（配置真实 LLM 时生效，Mock/无 key 自动跳过）
-        llm_intent, llm_conf = self.detect_llm(text)
+        llm_intent, llm_conf = self.detect_llm(text, context=_hist_ctx)
         if llm_intent:
             # V2.6：requirement_quality 仅词法明确触发——LLM 猜测一律降级为 chat
             # （泛词如"质量怎么样"曾被 LLM 归到需求质量意图，误触发质量评审卡）
@@ -476,6 +552,40 @@ class IntentRouter:
                 llm_intent, llm_conf = "chat", min(llm_conf, 0.5)
             # P0-2：弱 LLM 猜测（<0.85）≠ 强信号——有会话意图时优先会话继承（追问/续写不被 LLM 弱猜测截胡）
             if llm_conf < 0.85:
+                # ── P0-5 v2（2026-09-30 **二次标定后重定稿**）：带历史 → **只做"确认继承"** ──
+                #  判据 = ①有上文 ②非 chat ③**结论与 prev_intent 一致** ④conf ≥ 地板值 0.55。
+                #
+                #  ⚠️ v1 判据（只要求 conf ≥ 门槛）已被实测**否决**，三轮证据：
+                #  (1) v1 的标定是**截断分布**：`probe_gate_calib` 只在 route=='llm_history' 时记分，
+                #      而"采纳"本身就是"分 ≥ 门槛"的后果 → 它报出的"最低分 0.80"其实就是门槛值，
+                #      **最小值==门槛就是截断的签名**。噪声侧同病：未采纳时显示值被
+                #      `min(conf,0.5)` 钳位，真实的 0.55~0.90 全被压成 0.50、看不见。
+                #  (2) 换成**直连 detect_llm 取未截断分**（probe_gate_calib2）后：
+                #      同话题侧 9/9 判出 impact，分 [0.62 … 0.95]（下限 0.62）；
+                #      噪声侧  9 次里 **7 次给出非 chat 结论**，分 [0.55 … 0.90]（上限 0.90）。
+                #      → 分离带**倒挂**（0.90 > 0.62），**不存在安全阈值**：任何阈值都会误采
+                #        5~7/9 的噪声结论。原注释"分离是靠 prompt 约束挣来的、不是阈值切出来的"
+                #        这句判断随之作废。
+                #  (3) 更要紧的是**收益本来就是 0**（probe_gate_v3，带 prev_intent 的实测）：
+                #      同话题追问 + prev=impact 时意图 6/6 都是 impact —— 其中 2/6 走 inherit、
+                #      4/6 走本门。"用上文改写方向"的能力在**正确场景下贡献为零**（inherit 已答对），
+                #      却要在**错误场景下**（历史与当前问题无关）承担改错方向的风险 → 收益 0、风险 >0。
+                #
+                #  故 v2 = 只保留**不可能改变方向**的那部分：采纳的意图恒等于 prev_intent，
+                #  即"若不采纳，`inherit` 分支给出的也是同一个意图" → 本门**不可能改写路由方向**，
+                #  只能"确认/加固"既有继承。收益落在 ①置信度 0.55 → 实测 0.62~0.95
+                #  ②可观测（meta.used_history）③两路一致时免去那条"可改选"细条
+                #  （③由 `history_confirm_silent` 控制，默认开；置 False 即回到"零差异"）。
+                #  ⚠️ **"话题转向"能力明确不做**：它正是 v1 的核心卖点、也是唯一可能改方向的部分；
+                #    要复活它必须先找到**独立于 LLM 自报分的佐证**（如显式的相关性判别，或 P0-2 的
+                #    域边界描述），不能靠调阈值。
+                #  地板值 0.55 的取法：不低于 `inherit` 自身的置信度 —— 否则"确认"反而会把置信度
+                #  从 0.55 拉低（实测同话题侧下限 0.62，余量 0.07）。它**不是**分离阈。
+                if (_hist_ctx and llm_intent != "chat"
+                        and llm_intent == prev_intent
+                        and llm_conf >= float(self._cfg_get("history_llm_min", 0.55))):
+                    return self._done(llm_intent, "llm_history", llm_conf, text, fp,
+                                      cacheable=False, used_history=True, confirmed=True)
                 if prev_intent and prev_intent in self.INTENTS:
                     return self._done(prev_intent, "inherit", 0.55, text, fp)
                 # 2026-09-26（**扩集后评测抓出并修**）：无会话上下文可继承时，低置信猜测也**不得硬选**。
@@ -501,46 +611,109 @@ class IntentRouter:
             #      且意图级 lead 仅在 1.145~1.158 间随 embedding 抖动、恰好跨过任何"贴边门槛"——
             #      靠调门槛让它变绿等于用测试集调参。是否允许翻盘待 P1-3 标定 α/δ 后再定。
             _alt = getattr(self, "_last_sem_alt", None)
+            # ── P0-5 v2：高置信分支**不做**历史采纳（撤回 v1 在这里加的那道门）──
+            #   两条理由（都来自实测/可证）：
+            #   ① 改不了方向：llm_conf ≥ 0.85 时 `route='llm'` 本来就会采纳同一个意图，
+            #      而 v2 的门又以"与 prev_intent 一致"为前提 → 在这里是**恒等变换**；
+            #   ② 平白多一条细条：`llm_history` 会带 needs_clarify（除非 confirmed），
+            #      而原本的 `llm`（conf≥0.85）是 needs_clarify=False —— 在这里加门是**纯倒退**。
+            #   但**缓存防线必须留下**：本段的 llm_intent 是用上文算出来的，按原文写缓存会让
+            #   下一轮"没有上文的同一句话"直接命中它（本仓"缓存毒化"有前例）→ 用了上文则不落缓存。
+            #   ⚠️ 记一段走不通的路以免重蹈：v1 曾用"语义意图级 top1 必须与带历史结论一致"当背书，
+            #      被实测推翻 —— 追问句原文的语义 top1 恒为 `knowledge_qa@0.37` 这类**噪声**
+            #      （三句追问全中），必然与 LLM 的正确结论不一致 → 门在**最需要它的场景下必然失效**。
+            #      根因：追问句本身没有语义信号，拿它的语义意见当背书 = 拿噪声当判据。
+            _cache_ok = not _hist_ctx
             if (_alt and _alt["intent"] and _alt["intent"] != llm_intent
                     and _alt["score"] >= float(self._cfg_get("llm_sem_conflict_min", 0.49))):
-                return self._done(llm_intent, "llm_conflict", min(llm_conf, 0.6), text, fp)
+                return self._done(llm_intent, "llm_conflict", min(llm_conf, 0.6), text, fp,
+                                  cacheable=_cache_ok, used_history=bool(_hist_ctx))
+            if _hist_ctx:
+                # 有上文：结论**可能被上下文带偏**，且无法与"真·话题转向"区分
+                #   （实测噪声上文能给出非 chat 结论、自报分高达 0.90/0.95，见 P0-5 v2 注释）。
+                #   处理：**保留 LLM 的结论**（真转向不能丢），但把"这是不是猜的"暴露出来 ——
+                #     与 prev_intent 一致 → `confirmed`，不打扰用户（与旧行为可见差异为零）；
+                #     不一致 → 不 confirmed → 出"可改选"细条，用户可一眼否掉。
+                #   ⚠️ 撤回 v1 在这里直接 `route='llm'` 的写法：conf≥0.85 的 `llm` 是
+                #     `needs_clarify=False` 的**静默**路径 → 带偏时静默走错，比 v1 更糟。
+                #   不落缓存：结论来自上文，按原文存会让下轮无上文的同一句话命中它。
+                return self._done(llm_intent, "llm_history", llm_conf, text, fp,
+                                  cacheable=False, used_history=True,
+                                  confirmed=(llm_intent == prev_intent))
             return self._done(llm_intent, "llm", llm_conf, text, fp)
         # P0-2：会话级意图保持——无任何信号命中时继承上轮意图（追问/续写不被误判 chat）
         if prev_intent and prev_intent in self.INTENTS:
             return self._done(prev_intent, "inherit", 0.55, text, fp)
         return self._done("chat", "chat", 0.0, text, fp)
 
-    def _done(self, intent, route, confidence, text, fp):
+    def _done(self, intent, route, confidence, text, fp, cacheable=True, used_history=False,
+              confirmed=False):
         """统一出口：填充 _last_meta + 高置信写意图缓存。
 
-        澄清判定：中置信（弱语义/继承/fused_conflict/**llm_conflict**）或 LLM 给分<0.85 → 提示。
+        澄清判定：中置信（弱语义/继承/fused_conflict/llm_conflict/**llm_history**）或
+        LLM 给分<0.85 → 出"可改选"细条。
+
+        P0-5（2026-09-30）新增两个参数：
+        - `cacheable`：**带历史得出的结论不得按原文写缓存** —— 意图缓存 key 只用原文，
+          若把"带上文才成立"的结论按原文存进去，下一轮**没有**上文的同一句话会直接命中它
+          （本仓"缓存毒化"是有前例的坑）。
+        - `used_history`：本次结论是否用到了历史上文（写进 meta，供前端/日志观测）。
+        - `confirmed`（P0-5 v2）：本次是"上文 LLM 结论与 prev_intent 一致"的**确认**，不是猜测
+          → 默认不再弹"可改选"细条（`intent.history_confirm_silent` = False 可关掉该行为）。
+          它**不会**改变路由方向（意图恒等于 prev_intent = inherit 会给的那个）。
+        另：`sem_alt`（本次语义意图级 top1）一并写进 meta —— 澄清卡用它把候选排得更准
+        （P0-5 合批项：此前语义意见只在"互斥判定"用得上，候选排序完全没消费它）。
         """
         # P0-1：`llm_conflict`（语义与 LLM 互斥）同样转澄清 —— 不硬选、不静默。
-        needs_clarify = route in ("semantic_weak", "inherit", "fused_conflict", "llm_conflict") or (
-            route == "llm" and confidence < 0.85)
+        # P0-5：`llm_history`（用上文采纳的结论）同样出"可改选"细条 —— 结论依赖上文，
+        #   用户应能一眼否掉；但它**不进** `_should_confirm_intent`（那是"拦下来问"的面，
+        #   而这里已经执行了；两路互证 + LLM>=0.85 的结论比 inherit(0.55) 强得多，不该被打断）。
+        # P0-5 v2：`confirmed`（两路一致的确认）不再需要"可改选"细条 —— 免去追问轮的无谓确认。
+        _silent_ok = bool(confirmed) and bool(self._cfg_get("history_confirm_silent", True))
+        needs_clarify = (not _silent_ok) and (
+            route in ("semantic_weak", "inherit", "fused_conflict", "llm_conflict",
+                      "llm_history") or (route == "llm" and confidence < 0.85))
+        _alt = getattr(self, "_last_sem_alt", None)
         self._last_meta = {"intent": intent, "route": route, "confidence": confidence,
-                           "needs_clarification": needs_clarify}
-        self._cache_set(text, fp, intent, route, confidence)
+                           "needs_clarification": needs_clarify,
+                           "sem_alt": ({"intent": _alt["intent"], "score": _alt["score"]}
+                                       if _alt else None),
+                           "used_history": bool(used_history),
+                           "confirmed": bool(confirmed)}
+        if cacheable:
+            self._cache_set(text, fp, intent, route, confidence)
         return intent
 
-    def detect_llm(self, text: str) -> tuple:
+    def detect_llm(self, text: str, context: str = "") -> tuple:
         """M2：LLM 意图识别兜底——规则未命中时交给 LLM 结构化判断。
 
         - 返回 (intent, confidence)；仅返回已知意图（内置 DEFINITIONS 或 DB 已注册 Agent），
           未知/解析失败返回 ("", 0.0)（兜底 chat）。
         - Mock / 无 key 环境：LLM 返回普通文本无法解析 JSON → 自动返回 ("", 0.0)，保持确定性可回归。
         - P0-1 置信度决策：要求 LLM 输出 confidence（0-1），<0.85 视为低置信 → 上层触发澄清提示。
+        - P0-5（2026-09-30）：`context` = 最近几轮**用户原话**（已净化）。非空时才把上文写进提示词，
+          并显式声明"**请判断当前问题的意图（上文只用来补全省略与指代）**"。这句话是收益的
+          主要来源（实测 4 种表述对照见 tmp/p_intent/probe_prompt_variants.py）：不写约束时
+          LLM 会照搬上文意图 —— 噪声上文直接给 report_generation@0.85（会被采纳）；
+          写成过强的"勿把上文本身当作当前请求"又会整体变保守（同话题从 0.95 掉到 0.65~0.85）。
+          `context=""` 时提示词与旧版**逐字节一致**（零回归）。
         """
         try:
             from llm import llm_client
             known = set(self._db_intents.keys()) | set(self.INTENTS.keys()) - {"chat"}
             known_list = "、".join(sorted(known))
+            _user = str(text)[:500]
+            if context:
+                _user = ("用户当前问题：" + str(text)[:300] + chr(10)
+                         + "用户在本会话中的上文（用于理解指代与省略成分）："
+                         + str(context)[:300] + chr(10)
+                         + "请判断**当前问题**的意图（上文只用来补全省略与指代）。")
             resp = llm_client.chat(
                 [{"role": "system", "content": (
                     f"你是 MBSE 助手意图分类器。根据用户输入判断其意图，只输出一个 JSON 对象，"
                     f'格式：{{"intent": "意图名", "confidence": 0到1之间的小数}}，不要任何其他文字。'
                     f"可选意图：{known_list}。无法判断或置信度低于 0.5 时 intent 用 chat、confidence 给低值。")},
-                 {"role": "user", "content": str(text)[:500]}],
+                 {"role": "user", "content": _user}],
                 _intent="intent_detect",
             )
             msg = (resp.get("choices") or [{}])[0].get("message", {})
