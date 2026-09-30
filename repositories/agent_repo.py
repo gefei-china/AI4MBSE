@@ -303,7 +303,6 @@ class AgentRepo(BaseRepo):
                         "desc": row["description"], "skill_type": row["skill_type"],
                         "version": row["version"], "triggers": _lj(row.get("triggers")),
                         "content": row.get("content", ""),
-                        "params": json.loads(b.get("params") or "{}"),
                         # D4：工具白名单 + 渐进披露资源
                         "allowed_tools": _lj(row.get("allowed_tools")),
                         "references": _lj(row.get("references")),
@@ -318,19 +317,11 @@ class AgentRepo(BaseRepo):
                         "desc": f"MCP 工具（{row['name']}）", "endpoint": row["endpoint"],
                         "transport": row.get("transport", "sse"),
                         "tools": json.loads(row.get("tools") or "[]"),
-                        "params": json.loads(b.get("params") or "{}"),
                     })
-            elif b["tool_type"] == "plugin":
-                # P0-5：插件市场绑定透传（plugin_id），由 AgentRegistry.load_from_db 展开为 skill/mcp 能力
-                out.append({
-                    "type": "plugin", "name": b["tool_name"], "tool_name": b["tool_name"],
-                    "source": "plugin", "tool_type": "plugin", "desc": "插件市场能力（运行时展开）",
-                    "params": json.loads(b.get("params") or "{}"),
-                })
             elif b["tool_type"] == "tool":
                 out.append({
                     "type": "tool", "name": b["tool_name"], "source": "builtin",
-                    "desc": "内置工具", "params": json.loads(b.get("params") or "{}"),
+                    "desc": "内置工具",
                 })
         return out
 
