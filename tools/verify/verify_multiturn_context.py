@@ -13,6 +13,7 @@
   · **零回归用 exec 孪生体对拍**：把当前 `_load_history` 源码里的 digest 三处外科手术删掉 →
     exec 成"改动前"的孪生函数 → 同实例同输入两版对比。磁盘文件一字不动。
   · **变异自证只认新增失败**（`f not in base`），且每个变异配自己的目标断言。
+  · **P1-7（2026-10-01）新增**：`_LEAD` 126→54 字符 + 系统性兜底名产物行过滤（A14~A19 / M8·M8b·M13~M16）。
 """
 import inspect
 import json
@@ -125,6 +126,15 @@ def seed(c):
                   "VALUES (13,201,'document','AI 生成文档')")
     c.execute("INSERT INTO artifacts (conversation_id, message_id, kind, title) "
               "VALUES (13,201,'report','AI 生成报告')")
+    # ⑤ conv=14：**只有**占位名产物、无 SysML 版本、无报告 → P1-7 后整段抑制（返回 ""）
+    for _ in range(2):
+        c.execute("INSERT INTO artifacts (conversation_id, message_id, kind, title) "
+                  "VALUES (14,301,'document','AI 生成文档')")
+    # ⑥ conv=15：混合（占位名 + 真实标题 + 重复真实标题）→ 只列真标题；重复真标题仍需去重
+    for _t, _k in (('AI 生成文档', 'document'), ('整车需求规格说明', 'document'),
+                   ('代码块 1（sysml）', 'code'), ('代码块 1（sysml）', 'code')):
+        c.execute("INSERT INTO artifacts (conversation_id, message_id, kind, title) "
+                  "VALUES (15,401,?,?)", (_k, _t))
     c.commit()
 
 
@@ -160,8 +170,9 @@ print("=" * 78)
 print("[A] 摘要纯函数（夹具库 = 真实 DDL）")
 # ══════════════════════════════════════════════════════════════════════════
 d11 = build_digest(FIX, 11)
-# 判据必须锚到**版本行**（"- SysML 模型版本 vX"）：_LEAD 引导语里自带示例「在 v0.1 的需求模型上…」，
+# 判据必须锚到**版本行**（"- SysML 模型版本 vX"）：P1-7 之前 _LEAD 里自带示例「在 v0.1 的需求模型上…」，
 # 裸 "v0.1" in text 会被引导语满足 → 断言恒真（本仓"判据被无关文本污染"家族）。
+# （P1-7 已把该示例从 _LEAD 压掉，但判据仍锚版本行 —— 不因文案变动而回退到弱判据。）
 check("A1 有产物会话 → 含标记/版本行/元素名/校验结论/产物标题",
       DIGEST_MARK in d11 and "- SysML 模型版本 v0.1" in d11 and "ir3" in d11
       and "pass" in d11 and "需求图" in d11,
@@ -193,8 +204,18 @@ check("A9 facts 契约：versions 最新在前 + kinds 计数正确",
 
 # A10~A13：针对「真库实测出来的摘要质量问题」（占位标题 / 英文状态 / 超长节点名 / 孤儿会话）
 d13 = build_digest(FIX, 13)
-check("A10 占位标题去重：'AI 生成文档' 只出现 1 次，计数仍报 6 项",
-      d13.count("AI 生成文档") == 1 and "文档 6 项" in d13, repr(d13[-150:]))
+# P1-7：conv 13 的两条产物行**全是**系统性兜底名（6×「AI 生成文档」+1×「AI 生成报告」）。
+# 旧行为 = "去重后列 1 次"（占位名仍占版面）；新行为 = **整行不列**。
+# ⚠️ 这条改造同时废掉了旧的 M8（去重变异）—— 占位行被整行丢弃后，"去不去重"都不出现，
+# 旧 M8 会退化成**空转变异**（照样"被抓住"但抓的不是去重）。已改为在 conv 15 上用
+# **重复的真实标题**单独守去重（见 A17c / M8b）。
+_c13_lines = [x for x in d13.split("\n") if x.startswith("- ")]
+check("A10 系统性兜底名不再出现在摘要里（P1-7：零信息量行不列）",
+      "AI 生成文档" not in d13 and "AI 生成报告" not in d13, repr(d13[-150:]))
+check("A10b 只剩兜底名的 kind 行整行不输出（连计数一起）",
+      "文档 6 项" not in d13 and "报告 1 项" not in d13
+      and not any(("文档" in x or "报告" in x) for x in _c13_lines),
+      "lines=%s" % _c13_lines)
 check("A11 版本状态本地化：不出现英文 'superseded'，含「历史版本」",
       "superseded" not in d13 and "历史版本" in d13)
 check("A12 元素名超限截断：只列前 12 个 + 带「共 20 个」",
@@ -202,6 +223,47 @@ check("A12 元素名超限截断：只列前 12 个 + 带「共 20 个」",
 check("A13 conversations 表无对应行也能出摘要（真库有此类孤儿 conv_id）",
       FIX.execute("SELECT COUNT(*) FROM conversations WHERE id=13").fetchone()[0] == 0
       and DIGEST_MARK in d13)
+
+# ── P1-7（2026-10-01）：引导语压缩 + 零信息量事实过滤 ──────────────────────
+from core.artifact_titles import (PLACEHOLDER_TITLES, is_placeholder_title,  # noqa: E402
+                                  materialize_fallback_title)
+
+check("A14 契约：占位名闭集覆盖 subtask KIND_VALUES 的 {kind}产物（防副本漂移）",
+      all(materialize_fallback_title(k) in PLACEHOLDER_TITLES for k in ("sysml", "requirement", "report", "doc")),
+      "PLACEHOLDER_TITLES=%s" % sorted(PLACEHOLDER_TITLES))
+check("A14b 写入侧两个字面量在集合内（与 agent/utils.py 同源）",
+      "AI 生成文档" in PLACEHOLDER_TITLES and "AI 生成报告" in PLACEHOLDER_TITLES)
+check("A14c 判据不误伤真实标题（闭集精确匹配，非「以产物结尾」正则）",
+      not is_placeholder_title("设计产物") and not is_placeholder_title("需求产物")
+      and not is_placeholder_title("代码块 1（sysml）") and not is_placeholder_title("整车需求规格说明"))
+
+check("A15 _LEAD 已压缩（<=60 字符）", len(SA._LEAD) <= 60, "len=%d" % len(SA._LEAD))
+check("A15b 压缩后仍保留核心动词短语与「无关则忽略」条件句（不是电报式极简）",
+      "在既有产物上做增量" in SA._LEAD.replace("**", "") and "无关" in SA._LEAD,
+      repr(SA._LEAD))
+
+d14 = build_digest(FIX, 14)
+check("A16 只有占位名产物 → 整段抑制（返回 \"\"，与「无产物」同语义）", d14 == "", repr(d14))
+
+d15 = build_digest(FIX, 15)
+check("A17 混合：只列真实标题，占位名不出现",
+      "整车需求规格说明" in d15 and "AI 生成文档" not in d15 and "代码块 1（sysml）" in d15,
+      repr(d15[-170:]))
+check("A17b 混合时计数仍报真实条数（2 条文档中 1 个真名）", "文档 2 项" in d15, repr(d15[-170:]))
+check("A17c 真实标题仍去重（2 条同名的「代码块 1（sysml）」只列 1 次 + 计数报 2 项）",
+      d15.count("代码块 1（sysml）") == 1 and "代码文件 2 项" in d15, repr(d15[-170:]))
+
+check("A18 开关关闭（skip_placeholder_only=False）→ 回到改动前形态（占位名重新出现）",
+      "AI 生成文档" in build_digest(FIX, 15, skip_placeholder_only=False))
+check("A18b 开关关闭时纯占位会话重新注入（A/B 回滚互证）",
+      "AI 生成文档" in build_digest(FIX, 14, skip_placeholder_only=False))
+check("A18c 无产物会话在两种开关下都是空串（零回归不因开关而变）",
+      build_digest(FIX, 12) == "" and build_digest(FIX, 12, skip_placeholder_only=False) == "")
+
+check("A19 DEFAULT_CONFIG.context 含新键且默认 True",
+      CFG.DEFAULT_CONFIG["context"].get("artifact_digest_skip_placeholder_only") is True)
+check("A19b CONFIG_SCHEMA.context 含新键（前端契约）",
+      "artifact_digest_skip_placeholder_only" in CFG.CONFIG_SCHEMA["context"])
 
 # ══════════════════════════════════════════════════════════════════════════
 print()
@@ -525,15 +587,69 @@ try:
     _c7 = _ns7["render_digest"](collect_facts(FIX, 11), max_chars=120)
     check("M7 截断失效 → A5 目标断言失败（被抓住）", (len(_c7) <= 120) is False, "len=%d" % len(_c7))
 
-    # M8 去掉标题去重 → A10 必须翻
+    # M8 撤回 P1-7 的占位名过滤（continue → pass） → A10 必须翻
+    # 锚点必须缩进无关（§6.10 ④）：dedent 后类外函数是 8 格，写死会静默不命中。
     _rd_src2 = textwrap.dedent(inspect.getsource(render_digest))
-    _mut_rd2 = _rd_src2.replace("        uniq = _uniq_titles(titles)", "        uniq = list(titles)")
-    check("M8 变异锚点命中（render_digest 标题去重）", _mut_rd2 != _rd_src2)
+    _m8_old = ("        if skip_placeholder_only and uniq and not real:\n"
+               "            continue")
+    _mut_rd2 = _rd_src2.replace(_m8_old, _m8_old.replace("            continue", "            pass"))
+    check("M8 变异锚点命中（render_digest 占位名过滤）", _mut_rd2 != _rd_src2)
     _ns8 = dict(vars(SA))
     exec(compile(_mut_rd2, "<rd_mut8>", "exec"), _ns8)
     _c8 = _ns8["render_digest"](collect_facts(FIX, 13), max_chars=3000)
-    check("M8 去掉标题去重 → A10 目标断言失败（被抓住）",
-          (_c8.count("AI 生成文档") == 1) is False, "'AI 生成文档' 出现 %d 次" % _c8.count("AI 生成文档"))
+    check("M8 过滤失效 → A10 目标断言失败（被抓住）",
+          ("AI 生成文档" not in _c8) is False, "'AI 生成文档' 出现 %d 次" % _c8.count("AI 生成文档"))
+
+    # M8b 去掉标题去重 → A17c 必须翻（**改用重复的真实标题**，不再用占位名 —— 占了会被整行丢弃）
+    _mut_rd2b = _rd_src2.replace("        uniq = _uniq_titles(titles)", "        uniq = list(titles)")
+    check("M8b 变异锚点命中（render_digest 标题去重）", _mut_rd2b != _rd_src2)
+    _ns8b = dict(vars(SA))
+    exec(compile(_mut_rd2b, "<rd_mut8b>", "exec"), _ns8b)
+    _c8b = _ns8b["render_digest"](collect_facts(FIX, 15), max_chars=3000)
+    check("M8b 去掉去重 → A17c 目标断言失败（被抓住）",
+          (_c8b.count("代码块 1（sysml）") == 1) is False,
+          "'代码块 1（sysml）' 出现 %d 次" % _c8b.count("代码块 1（sysml）"))
+
+    # M13 过滤过度：把所有标题都判成占位名 → A17 必须翻
+    _ns13 = dict(vars(SA))
+    _ns13["is_placeholder_title"] = lambda _t: True
+    exec(compile(_rd_src2, "<rd_mut13>", "exec"), _ns13)
+    _c13m = _ns13["render_digest"](collect_facts(FIX, 15), max_chars=3000)
+    check("M13 过滤过度（真标题也被丢） → A17 目标断言失败（被抓住）",
+          ("整车需求规格说明" in _c13m) is False, repr(_c13m[-120:]))
+
+    # M14 _LEAD 回到 126 字符 → A15 必须翻（同时证明 _LEAD 真的进了输出，不是死常量）
+    _OLD_LEAD = ("本会话此前已产出下列内容。本轮是多轮会话的后续请求：若本请求与它们相关，"
+                 "请在**既有产物上做增量修改**（明确引用其名称/版本，例如「在 v0.1 的需求模型上新增参与者」），"
+                 "不要从零重建、也不要把它们当作不存在；若本请求确实与它们无关，忽略本段即可。")
+    _ns14 = dict(vars(SA))
+    _ns14["_LEAD"] = _OLD_LEAD
+    exec(compile(_rd_src2, "<rd_mut14>", "exec"), _ns14)
+    _c14m = _ns14["render_digest"](collect_facts(FIX, 11), max_chars=3000)
+    check("M14 _LEAD 回到压缩前 → A15 目标断言失败且 LEAD 确在输出中（被抓住）",
+          (len(_ns14["_LEAD"]) <= 60) is False and _OLD_LEAD in _c14m,
+          "len=%d 在输出中=%s" % (len(_ns14["_LEAD"]), _OLD_LEAD in _c14m))
+
+    # M15 判据放宽成「以产物结尾」正则 → A14c 必须翻（误伤真实标题）
+    _ipt_src = textwrap.dedent(inspect.getsource(is_placeholder_title))
+    _m15_old = '    return (title or "").strip() in PLACEHOLDER_TITLES'
+    _mut_ipt = _ipt_src.replace(
+        _m15_old, '    return bool((title or "").strip().endswith("产物"))')
+    check("M15 变异锚点命中（is_placeholder_title 判据）", _mut_ipt != _ipt_src)
+    _ns15 = dict(vars(__import__("core.artifact_titles", fromlist=["x"])))
+    exec(compile(_mut_ipt, "<ipt_mut>", "exec"), _ns15)
+    check("M15 判据放宽 → A14c 目标断言失败（「设计产物」被误判，被抓住）",
+          _ns15["is_placeholder_title"]("设计产物") is True)
+
+    # M16 过滤后为空仍输出（空壳摘要） → A16 必须翻
+    _mut_rd16 = _rd_src2.replace("    if not lines:\n        return \"\"",
+                                 "    if False:\n        return \"\"")
+    check("M16 变异锚点命中（render_digest 空事实早退）", _mut_rd16 != _rd_src2)
+    _ns16 = dict(vars(SA))
+    exec(compile(_mut_rd16, "<rd_mut16>", "exec"), _ns16)
+    _c16 = _ns16["render_digest"](collect_facts(FIX, 14), max_chars=3000)
+    check("M16 空壳摘要仍输出 → A16 目标断言失败（被抓住）",
+          (_c16 == "") is False, "len=%d" % len(_c16))
 
     # ══════════════════════════════════════════════════════════════════════
     print()

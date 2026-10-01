@@ -333,6 +333,10 @@ DEFAULT_CONFIG = {
         "artifact_digest_enabled": True,   # 会话产物摘要开关（false = 回退到改动前行为）
         "artifact_digest_max_chars": 900,  # 摘要字符上限（<=0 不限）
         "artifact_digest_versions": 3,     # 摘要中列出最近 N 个 SysML 模型版本
+        # P1-7（2026-10-01）：标题恰为系统性兜底名（AI 生成文档/报告、{kind}产物）的产物行整行不列。
+        # 判据单一真源 = core/artifact_titles.py；实测占位名占真库 artifacts 的 35.7%，
+        # 且会把小摘要会话的引导语占比推到 81.8%。false = 回到改动前（占位名照列）。
+        "artifact_digest_skip_placeholder_only": True,
     },
     "reasoning": {
         "direct_merge": True,        # 推理结果直接并入图库（跳过审核队列）；false=恢复「提交审核→审核队列」门禁
@@ -755,6 +759,7 @@ CONFIG_SCHEMA = {
         "artifact_digest_enabled": {"type": "bool", "desc": "会话产物摘要注入开关（多轮：让后续轮次知道本会话已产出什么）"},
         "artifact_digest_max_chars": {"type": "int", "desc": "会话产物摘要字符上限（<=0 不限）"},
         "artifact_digest_versions": {"type": "int", "desc": "摘要中列出的最近 SysML 模型版本数"},
+        "artifact_digest_skip_placeholder_only": {"type": "bool", "desc": "摘要过滤掉标题为系统兜底名的产物行（P1-7）"},
     },
     "reasoning": {
         "direct_merge":            {"type": "bool", "desc": "推理结果直接并入图库（跳过审核队列）；false=恢复提交审核门禁"},

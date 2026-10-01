@@ -6,6 +6,9 @@
 import json
 import re
 
+from core.artifact_titles import (FALLBACK_DOCUMENT_TITLE,
+                                     FALLBACK_REPORT_TITLE)
+
 
 # ── 问答可解释性：检索分块（chunk_hits）→ 前端 [n] 引用链接数据 ──
 def _citations_payload(hits) -> list:
@@ -222,7 +225,7 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
             try:
                 from report_generator import report_generator as _rg
                 rtype = cd.get("report_type") or _rg.detect_report_type(str(content)[:80])
-                title = str(cd.get("report_title") or cd.get("title") or "AI 生成报告")[:120]
+                title = str(cd.get("report_title") or cd.get("title") or FALLBACK_REPORT_TITLE)[:120]
                 report_meta = cd.get("meta") or _rg.build_meta(title, rtype)
                 structured = cd.get("sections") or _rg.structure("", content, report_type=rtype)["sections"]
                 summary = str(cd.get("summary") or structured[-1].get("body", "") if structured else "")[:500]
@@ -274,7 +277,7 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
         
         # 4) 长 markdown 文档产物（无结构化 card 且无明显代码块）
         if not cd.get("sysml_views") and not is_report and content and len(content) >= 200:
-            title = (cd.get("title") or "AI 生成文档")[:120]
+            title = (cd.get("title") or FALLBACK_DOCUMENT_TITLE)[:120]
             if not repo.exists(conversation_id, message_id, "document", title):
                 repo.create_artifact(
                     conversation_id, message_id, "document", title, "markdown", content,

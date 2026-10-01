@@ -28,16 +28,25 @@
     摘要只负责"把事实端上桌"。
   · **失败静默但留痕** —— 异常一律返回 ""，同时打 warning。本仓多次因"静默兜底"付出排查成本
     （取不到 与 本就没有 症状相同，只能靠留痕区分）。
+  · **零信息量事实不注入（P1-7，2026-10-01）** —— 标题恰为系统性兜底名
+    （`core/artifact_titles.py`）的产物行**整行不列**（连计数一起）；过滤后无内容则整段
+    返回 ""。实测这类行会把摘要的「引导语占比」推到 81.8%（conv 351：事实仅 17 字符）。
 """
 import json
+
+from core.artifact_titles import is_placeholder_title
 
 # 段落标记：调用方（自检/探针）据此识别"摘要段在不在"，改这里要同步 tools/verify/verify_multiturn_context.py
 DIGEST_MARK = "【本会话既有产物】"
 
+# P1-7（2026-10-01）：126 → 54 字符。原句把同一件事说了三遍（"在既有产物上增量"／
+# "不要从零重建"／"不要把它们当作不存在"），且示例「在 v0.1 的需求模型上…」是纯教学。
+# 实测该引导语在小摘要会话里占到 81.8%。planner 落点另有 stream.py/planner.py 的追加段
+# 兜底（措辞更具体：title/context 怎么写、禁止"从零分析"类任务），故压缩不影响 planner；
+# 子任务上下文/历史块两个落点只吃本段，故**保留条件句与核心动词短语**，不做电报式极简。
 _LEAD = (
-    "本会话此前已产出下列内容。本轮是多轮会话的后续请求：若本请求与它们相关，"
-    "请在**既有产物上做增量修改**（明确引用其名称/版本，例如「在 v0.1 的需求模型上新增参与者」），"
-    "不要从零重建、也不要把它们当作不存在；若本请求确实与它们无关，忽略本段即可。")
+    "下列为本会话既有产物：若本请求与之相关，请在**既有产物上做增量修改**"
+    "（引用名称/版本），无关则忽略本段。")
 
 _KIND_LABEL = {"sysml": "SysML 视图", "code": "代码文件", "report": "报告", "document": "文档"}
 
@@ -144,8 +153,16 @@ def collect_facts(conn, conversation_id, versions=3, titles=_MAX_TITLES) -> dict
     return facts
 
 
-def render_digest(facts: dict, max_chars: int = 900) -> str:
-    """事实 → 可注入文本。空事实返回 ""（调用方据此不加段落）。"""
+def render_digest(facts: dict, max_chars: int = 900, *,
+                 skip_placeholder_only: bool = True) -> str:
+    """事实 → 可注入文本。空事实返回 ""（调用方据此不加段落）。
+
+    skip_placeholder_only（P1-7，2026-10-01）：标题**全是**系统性兜底名
+    （`core/artifact_titles.is_placeholder_title`）的 kind 行**整行不列**。
+    理由：这类行只有"存在性"、没有可引用的名字，实测把引导语占比推到 81.8%。
+    过滤后 lines 为空 → 返回 ""（与「无产物」同语义，调用方按既有逻辑不加段落）。
+    keywords-only：避免既有 `render_digest(facts, 120)` 位置调用被静默改变行为。
+    """
     if not facts:
         return ""
     lines = []
@@ -180,12 +197,20 @@ def render_digest(facts: dict, max_chars: int = 900) -> str:
         label = _KIND_LABEL.get(kind, kind)
         cnt = int((facts.get("counts") or {}).get(label, len(titles)) or 0)
         uniq = _uniq_titles(titles)
+        # P1-7：标题全是系统性兜底名的 kind 行**整行丢弃**（连计数一起）——
+        # "文档 6 项（AI 生成文档）"这种行不携带任何可引用信息，留着只稀释预算。
+        real = [t for t in uniq if not is_placeholder_title(t)]
+        if skip_placeholder_only and uniq and not real:
+            continue
+        # ⚠️ 开关关闭时必须**逐字节回到改动前**（列全部去重名），不能只列 real ——
+        # 否则回滚开关形同虚设（验收 A18 就是这么抓住第一版的）。
+        _shown = (real or uniq) if skip_placeholder_only else uniq
         # P0-7：`cnt` 是 SQL 行数、`uniq` 是**去重后名称**，两者口径不同。实测输出
         # 「SysML 视图 4 项（需求图、活动图、追溯视图）」= 4 行 / 3 个名字，读者会以为少列了一项。
-        if uniq and len(uniq) != cnt:
-            tail = f"（{cnt} 条中不重名 {len(uniq)} 种：{'、'.join(uniq)}）"
+        if _shown and len(_shown) != cnt:
+            tail = f"（{cnt} 条中不重名 {len(_shown)} 种：{'、'.join(_shown)}）"
         else:
-            tail = (f"（{'、'.join(uniq)}）" if uniq else "")
+            tail = (f"（{'、'.join(_shown)}）" if _shown else "")
         lines.append(f"- {label} {cnt} 项" + tail)
     if facts.get("reports"):
         lines.append("- 已归档报告：" + "、".join(_uniq_titles(facts["reports"])))
@@ -198,13 +223,15 @@ def render_digest(facts: dict, max_chars: int = 900) -> str:
     return text
 
 
-def build_digest(conn, conversation_id, max_chars=None, versions=None) -> str:
+def build_digest(conn, conversation_id, max_chars=None, versions=None,
+                skip_placeholder_only=None) -> str:
     """对外主入口：受配置开关/上限控制，异常一律返回 "" 并留痕。
 
     配置（`core/config.py` → context）：
       artifact_digest_enabled（bool，默认 True）
       artifact_digest_max_chars（int，默认 900，<=0 不限）
       artifact_digest_versions（int，默认 3，最近 N 个 SysML 版本）
+      artifact_digest_skip_placeholder_only（bool，默认 True；P1-7 新增，false=回到改动前）
     """
     try:
         from core import config as _cfg
@@ -214,13 +241,19 @@ def build_digest(conn, conversation_id, max_chars=None, versions=None) -> str:
             max_chars = int(_cfg.get("context", "artifact_digest_max_chars", 900) or 0)
         if versions is None:
             versions = int(_cfg.get("context", "artifact_digest_versions", 3) or 3)
+        if skip_placeholder_only is None:
+            skip_placeholder_only = _cfg.as_bool(
+                "context", "artifact_digest_skip_placeholder_only", True)
     except Exception:
         if max_chars is None:
             max_chars = 900
         if versions is None:
             versions = 3
+        if skip_placeholder_only is None:
+            skip_placeholder_only = True
     try:
-        return render_digest(collect_facts(conn, conversation_id, versions=versions), max_chars)
+        return render_digest(collect_facts(conn, conversation_id, versions=versions), max_chars,
+                             skip_placeholder_only=bool(skip_placeholder_only))
     except Exception:
         import logging
         import traceback

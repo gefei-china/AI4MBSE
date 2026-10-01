@@ -14,6 +14,8 @@
 """
 import json
 
+from core.artifact_titles import materialize_fallback_title
+
 REF_PREFIX = "subtask://"
 
 # kind → 二次物化登记 artifacts 表的 kind（对齐 artifacts 表 kind 取值：report|code|sysml|document|other）
@@ -180,7 +182,7 @@ def materialize_to_conversation(conn, run_id, task_key, ref, conversation_id, me
         content = json.loads(d.get("content_json") or "{}")
     except Exception:
         content = {}
-    title = d.get("title") or f"{kind}产物"
+    title = d.get("title") or materialize_fallback_title(kind)
     if isinstance(content, dict):
         preview_content = json.dumps(content, ensure_ascii=False)
         meta = dict(content)
