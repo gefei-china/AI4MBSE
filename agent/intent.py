@@ -90,6 +90,11 @@ class IntentRouter:
         "总体",
     })
 
+    # P1-13：db 自定义 Agent 强特异关键词优先于 builtin 强信号的**最低分门槛**。
+    # ≥1.0 = 至少一个 ≥4 字非泛词命中（"需求视图"这类）；单泛词（如"视图"）不构成信号不误抢。
+    # 抽成类常量供负对照/评测 monkeypatch（改成 0.0 即"去掉守卫"，弱信号也会抢）。
+    _DB_KW_PRIORITY_MIN_SCORE = 1.0
+
     def _kw_score(self, text_low: str, keywords) -> tuple:
         """单个意图的关键词得分 → (score, 命中词)。
 
@@ -144,6 +149,24 @@ class IntentRouter:
                 if sc > best[1]:
                     best = (intent, sc, hits, layer_name)
         return best
+
+    def _db_kw_priority(self, t: str):
+        """P1-13：DB 自定义 Agent 的**强特异关键词**优先命中 → 意图名，否则 None。
+
+        只认 ≥ `_DB_KW_PRIORITY_MIN_SCORE`（默认 1.0 = 至少一个 ≥4 字非泛词）——
+        单泛词（如"视图"）不构成信号，不误抢。纯函数（依赖 _db_intents 与 _scored_keyword_pick），
+        供 detect 前置调用 + 负对照直接测（不经意图缓存）。
+        """
+        _pick = self._scored_keyword_pick(t, [("db", self._db_intents)])
+        if _pick[0] and _pick[1] >= self._DB_KW_PRIORITY_MIN_SCORE:
+            return _pick[0]
+        return None
+
+    @staticmethod
+    def _is_report_command(t: str) -> bool:
+        """SP-R 报告生成命令（「生成/撰写/输出…报告」）判定 —— 单一真源，db 守卫与 SP-R 路由共用。"""
+        return ("报告" in t or "report" in t) and any(
+            v in t for v in ("生成", "撰写", "输出", "编写", "起草", "写份", "写一"))
 
     def __init__(self):
         self._db_intents: dict = {}  # P0 平台化：DB 自定义 Agent 关键词（优先匹配）
@@ -428,6 +451,18 @@ class IntentRouter:
         #   "本次意见"误用（可行性探针里已踩到：规则命中的那些行，alt 显示的全是上一轮的）。
         self._last_sem_score = 0.0
         self._last_sem_alt = None
+        # P1-13（2026-10-02）：DB 自定义 Agent 的**强特异关键词**优先于 builtin 建模强信号。
+        # 实测：「生成需求视图/结构视图/参数视图」全被下方 444 行泛词正则「生成+视图」劫持到
+        # design —— 用户自建 Agent（需求视图生成等）即使配了关键词也永远轮不到（db 关键词匹配
+        # 在强信号正则**之后**）。这里把「db 层强特异命中」提到最前：用户显式配的关键词赢过
+        # 内置泛词规则，语义与「DB 自定义 Agent 优先」一致。判定抽成纯函数 `_db_kw_priority`
+        # 便于负对照（阈值守卫不是空转）。
+        # ⚠️ 唯一例外：SP-R 报告生成命令（「输出…报告」）更高优先 —— 否则「输出影响报告」
+        # 会被 db 层 impact 的「变更影响」抢走（实测引入错例：report_generation 期望 → impact）。
+        if not self._is_report_command(t):
+            _db_pri = self._db_kw_priority(t)
+            if _db_pri:
+                return self._done(_db_pri, "rule_scored", 0.95, text, fp)
         # 2026-09-25（评测集查出，错例 #2）：**review 强信号前置到 P0-2 建模强信号之前**。
         # 根因：P0-2 的第二条正则 `(sysml|…).{0,24}(生成|代码|建模)` 没有"动作词"约束，
         # 于是「帮我校验一下这段sysml代码」里的 "sysml…代码" 就被判成 design（期望 review）。
@@ -462,7 +497,7 @@ class IntentRouter:
                 pass
         # SP-R：报告生成命令优先路由——「生成/撰写/输出…报告」一律走 report_generation
         # （内部再由 ReportGenerator 按关键词识别 分析/变更影响/预评审 类型模板）
-        if ("报告" in t or "report" in t) and any(v in t for v in ("生成", "撰写", "输出", "编写", "起草", "写份", "写一")):
+        if self._is_report_command(t):
             return self._done("report_generation", "rule", 0.95, text, fp)
         # CIA：变更影响分析强信号优先——「变更影响/影响分析/影响范围」明确触发 impact
         # （放报告路由之后：含报告生成词的走 report_generation，其余含影响信号的一律 impact，
