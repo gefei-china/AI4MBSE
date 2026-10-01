@@ -276,6 +276,15 @@ DEFAULT_CONFIG = {
         "topic_boundary_keep": 2,       # 话题切换边界保留上一话题原文条数（保证切换语义连续）
         "topic_retrieve_topk": 6,       # 会话内语义拉回的历史片段条数
         "topic_retrieve_threshold": 0.15,  # 语义拉回最低相似度（低于不注入；对齐 intent 语义兜底经验值）
+        # P1-8（2026-10-01）历史（输入/输出）相关性召回收口：
+        #   ① 原文段由「吃满为止」改**均分份额** —— 旧实现被最新一条长回复独占预算，
+        #      实测真库 conv=514 里最新用户输入被裁到 16 tok（残句）、更早 3 条输入整条消失；
+        #   ② 拉回分角色配额 —— 短文本余弦系统性偏高，混合 top-k 会被 user 侧通吃，
+        #      助手此前产出的结论/版本一条都进不来（实测 conv=1 的 top-6 全是 user）；
+        #   ③ 丢弃与当前输入逐字重复的拉回块（高相似度 ≠ 有信息量）。
+        "history_raw_min_share_tokens": 96,   # 原文段每条的最小 token 份额（均分的下限）
+        "topic_retrieve_per_role_cap": 3,     # 拉回分角色配额（user/assistant 各 ≤N，0=不限制）
+        "topic_retrieve_drop_echo": True,     # 拉回块与当前输入逐字重复时丢弃
         # P1-4b（2026-09-21）标定修订：原 0.35 为经验值。标定脚本 tools/_topic_threshold_calibrate.py
         # （分位等价映射，真 embedding dim=1024，153 条真实 query）实测：**0.35 的判定通过率高达 99.3%**
         # （≈形同虚设），等价 dense 阈值为 0.6022（下界，bigram 路话题域加权未复现）。
@@ -740,6 +749,9 @@ CONFIG_SCHEMA = {
         "topic_boundary_keep":     {"type": "int", "desc": "话题切换边界保留上一话题原文条数"},
         "topic_retrieve_topk":     {"type": "int", "desc": "会话内语义拉回片段条数"},
         "topic_retrieve_threshold": {"type": "float", "desc": "语义拉回最低相似度"},
+        "history_raw_min_share_tokens": {"type": "int", "desc": "当前话题原文段每条最小 token 份额（均分下限，防被单条长输出吃满）"},
+        "topic_retrieve_per_role_cap": {"type": "int", "desc": "语义拉回分角色配额（user/assistant 各 ≤N；0=不限制）"},
+        "topic_retrieve_drop_echo": {"type": "bool", "desc": "拉回块与当前输入逐字重复时丢弃（零信息量）"},
         "topic_retrieve_threshold_dense": {"type": "float", "desc": "语义拉回阈值（真 embedding 路；已按分位等价映射标定修订为 0.5）"},
         "topic_group_match_dense": {"type": "float", "desc": "当前话题组匹配阈值（真 embedding 路；已标定修订为 0.5）"},
         "semantic_fallback_gate_dense": {"type": "float", "desc": "工作流语义补召门（dense 路；bigram 路固定 0.5，实测等价 0.79）"},

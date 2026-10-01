@@ -14,6 +14,10 @@
     exec 成"改动前"的孪生函数 → 同实例同输入两版对比。磁盘文件一字不动。
   · **变异自证只认新增失败**（`f not in base`），且每个变异配自己的目标断言。
   · **P1-7（2026-10-01）新增**：`_LEAD` 126→54 字符 + 系统性兜底名产物行过滤（A14~A19 / M8·M8b·M13~M16）。
+  · **P1-8（2026-10-01）新增**：历史（输入/输出）相关性召回收口 —— 近因窗口**均分份额**、
+    `used_ids` 只记真正注入的、拉回**分角色配额** + 可追溯块头 + 丢弃与当前输入逐字重复的块
+    （E1~E9b / M17~M22）。判据全部锚在**可观察产物**（raw 的 id 序列、块头条数、拉回正文）上，
+    不用"是否调用了某函数"这类内部事实。
 """
 import inspect
 import json
@@ -90,6 +94,14 @@ ES = {"entities": 5, "relations": 4, "views": 2,
       "edges": ["ir1--类型--IRRequirement"], "intent": "team_leader",
       "check": {"rc": 0, "verdict": "pass", "blocked": False}}
 
+# P1-8：本轮"当前输入"（**不落库**，与生产一致：execute/stream 是先回复后落库）
+P18_CUR = "在既有需求模型基础上，补充涉众与参与者信息的追溯关系定义"
+_LONG18 = "助手历轮的长篇产出段落，用于把历史预算吃满。" * 190      # ≈ 4180 字符
+_MID18 = "助手历轮的中篇产出段落。" * 215                          # ≈ 2580 字符
+# 720 字符 = **828 tok**（实测 `count_tokens`）：> raw_cap//2=500（会被均分切断）
+# 且 < raw_cap=1000（**本来装得下**）⇒ 恰好落进「均分纯损失」区间
+_SHORT18 = "助手对上一轮的完整回复。" * 60
+
 
 def seed(c):
     c.execute("INSERT INTO conversations (id, title, intent, current_intent, last_slots) VALUES (11,'有产物','design','design','{}')")
@@ -135,6 +147,54 @@ def seed(c):
                    ('代码块 1（sysml）', 'code'), ('代码块 1（sysml）', 'code')):
         c.execute("INSERT INTO artifacts (conversation_id, message_id, kind, title) "
                   "VALUES (15,401,?,?)", (_k, _t))
+    # ⑦ conv=16/17：P1-8 夹具。两会话的 messages.topic **全部预置** ⇒ `_tag_topics` 走
+    #    "全已打标"早退（不写库、不调 VectorEngine，离线确定性）。
+    #    conv=16：近因窗口 tail(8) = 后 8 条（3 条短 user + 5 条 asst，末条 4.1k 字符）；
+    #             窗口**外**前 10 条里 user/assistant 各有 ≥4 条高相关 ⇒ 守分角色配额；
+    #             其第 9 条与 P18_CUR **逐字相同** ⇒ 守 drop_echo。
+    #    conv=17：低预算场景（E7 临时把 budget_history_tokens 压到 400）——
+    #             高相关的那条 user 消息会**被预算挡下**，若 `used_ids` 超额标记它就会彻底消失。
+    _m16 = [
+        ("user", "请补充涉众与参与者的追溯关系定义"),
+        ("assistant", "涉众与参与者的追溯关系定义已补充：涉众 4 类、参与者 6 个，已建 satisfy 关系。"),
+        ("user", "涉众与参与者信息的追溯关系定义还需要补充哪些内容？"),
+        ("assistant", "需要补充涉众关注点与参与者之间的分配关系，以及需求追溯关系定义。"),
+        ("user", "在需求模型上补充涉众与参与者的追溯关系定义要注意什么？"),
+        ("assistant", "注意需求模型里 stakeholder 与 participant 的追溯关系定义方向，避免反向追溯。"),
+        ("user", "涉众与参与者的追溯关系定义在需求模型基础上怎么补充？"),
+        ("assistant", "在既有需求模型基础上补充涉众与参与者的追溯关系定义，落到 trace 关系上。"),
+        ("user", P18_CUR),
+        ("assistant", "助手对同一追溯关系定义的补充说明：参与者与涉众的追溯关系定义需成对出现。"),
+        ("user", "继续优化需求数据"),
+        ("assistant", "已记录。"),
+        ("assistant", _MID18),
+        ("user", "继续优化需求数据"),
+        ("assistant", "已记录。"),
+        ("assistant", _MID18),
+        ("user", "继续优化需求数据，补充参与者与涉众信息"),
+        ("assistant", _LONG18),
+    ]
+    for _role, _txt in _m16:
+        c.execute("INSERT INTO messages (conversation_id, role, content, msg_type, topic) "
+                  "VALUES (16,?,?,'text','需求追溯')", (_role, _txt))
+    _m17 = [
+        ("user", "继续优化需求数据"),
+        ("assistant", "已记录。"),
+        ("user", "请补充涉众与参与者的追溯关系定义"),
+        ("assistant", "已记录。"),
+        ("assistant", _MID18),
+        ("assistant", "已记录。"),
+        ("user", "继续优化需求数据"),
+        ("assistant", _LONG18),
+    ]
+    for _role, _txt in _m17:
+        c.execute("INSERT INTO messages (conversation_id, role, content, msg_type, topic) "
+                  "VALUES (17,?,?,'text','需求追溯')", (_role, _txt))
+    # ⑧ conv=18：P1-8 **短路零回归**夹具 —— 只有 2 条消息、预算绰绰有余，
+    #    唯一那条长回复（828 tok < raw_cap 1000）本可整条装下 ⇒ 不得被均分白切一半。
+    for _role, _txt in (("user", "优化需求数据，需要支持参与者信息"), ("assistant", _SHORT18)):
+        c.execute("INSERT INTO messages (conversation_id, role, content, msg_type, topic) "
+                  "VALUES (18,?,?,'text','整车需求建模')", (_role, _txt))
     c.commit()
 
 
@@ -698,6 +758,252 @@ except Exception as _e:      # noqa: BLE001 —— 锚点漂移/路径异常一�
     traceback.print_exc()
 finally:
     H.get_db = _orig_h_get_db
+
+# ══════════════════════════════════════════════════════════════════════════
+print()
+print("[E] P1-8 历史（输入/输出）相关性召回收口（真实 _load_history；离线 bigram 打分）")
+# ══════════════════════════════════════════════════════════════════════════
+_CUR_T = "需求追溯"
+from core.token_counter import count_tokens as count_tokens_fn            # noqa: E402
+_epipe = AgentPipeline()
+_epipe._history_summary = lambda *a, **k: ""                       # 分话题摘要非本批范围
+# 离线确定性：`_semantic_scores` 返回 bigram 后端 ⇒ 走 VectorEngine（无网络、无 embedding 依赖）。
+# dense 路与之只差**打分来源与阈值**，本批新增的三处收口（均分/used_ids/配额/块头）两路共用。
+_epipe._semantic_scores = lambda texts, query: (None, "bigram")
+_orig_get_e = CFG.get
+H.get_db = new_conn
+
+
+def _h_run(cid, cur_input=P18_CUR, cfg_over=None):
+    """跑真实 `_load_history`（可临时覆盖 context 配置项；只覆盖指定键）。"""
+    def _fake_get(group, key, default=None, *a, **k):
+        if group == "context" and cfg_over and key in cfg_over:
+            return cfg_over[key]
+        return _orig_get_e(group, key, default, *a, **k)
+    CFG.get = _fake_get
+    try:
+        return _epipe._load_history(cid, cur_input=cur_input)
+    finally:
+        CFG.get = _orig_get_e
+
+
+def _raws(hist):
+    """① 近因窗口原文（带 id，时间序）。"""
+    return [m for m in hist if m.get("role") in ("user", "assistant")]
+
+
+def _pulls(hist):
+    """② 相关性拉回块（system 块，带块头）。"""
+    return [m["content"] for m in hist
+            if m.get("role") == "system"
+            and (m.get("content") or "").startswith("【相关历史片段")]
+
+
+_HDR_RE = __import__("re").compile(
+    r"^【相关历史片段（第 \d+ 轮 · (用户|助手)，相关度 [\d.]+）】$")
+
+# ⚠️ `FIX` 是裸连接（无 row_factory）→ 按**位置**取值，别写 r["id"]（会 TypeError）。
+_r16 = FIX.execute("SELECT id, role, content FROM messages WHERE conversation_id=16 ORDER BY id").fetchall()
+_ids16 = [r[0] for r in _r16]
+_tail16 = _ids16[-8:]
+_echo_id = _r16[8][0]              # 第 9 条 = 与 P18_CUR 逐字相同
+_r17 = FIX.execute("SELECT id, role, content FROM messages WHERE conversation_id=17 ORDER BY id").fetchall()
+_hi_rel17_id = _r17[2][0]          # 第 3 条 = 高相关 user 消息（低预算下会被挡在窗口外）
+
+_h16 = _h_run(16)
+_raw16, _pull16 = _raws(_h16), _pulls(_h16)
+check("E1 近因窗口 8 条**全部**注入（旧实现「吃满为止」：最新长回复独占预算 ⇒ 只装 1 条）",
+      [m.get("id") for m in _raw16] == _tail16, "raw_ids=%s" % [m.get("id") for m in _raw16])
+_u16 = [m["content"] for m in _raw16 if m["role"] == "user"]
+check("E2 窗口内 3 条用户输入**全文**在位（旧实现：最新一条被裁成 16tok 残句、另两条整条消失）",
+      _u16 == ["继续优化需求数据", "继续优化需求数据", "继续优化需求数据，补充参与者与涉众信息"],
+      repr(_u16))
+
+# E3 前置（反空洞断言）：逐字重复的那条**本该**是最高分命中 —— 证明 E3b 不是"它恰好没命中"
+_rest10 = [{"id": r[0], "role": r[1], "content": (r[2] or "")[:1500],
+            "topic": _CUR_T} for r in _r16[:10]]
+_hits_raw = _epipe._search_history(_rest10, P18_CUR + " " + _CUR_T, 50, 0.15,
+                                   cur_topic=_CUR_T, per_role_cap=0)
+_echo_hit = [h for h in _hits_raw if h["id"] == _echo_id]
+check("E3a 前置：逐字重复的消息本是最高分命中（≥0.9），不是「恰好没命中」",
+      bool(_echo_hit) and _echo_hit[0]["score"] >= 0.9,
+      "top3=%s" % [(h["id"], h["score"]) for h in _hits_raw[:3]])
+check("E3b 但拉回块里没有它（候选层已过滤：零信息量不参与相关性评估）",
+      not any(P18_CUR in b for b in _pull16))
+_nu16 = sum(1 for b in _pull16 if "· 用户" in b)
+_na16 = sum(1 for b in _pull16 if "· 助手" in b)
+check("E3c 且没白占配额：默认 cap=3 时 user 侧仍拿满 3 条",
+      _nu16 == 3, "user=%d asst=%d" % (_nu16, _na16))
+
+check("E4 拉回块头可追溯（「第 N 轮 · 角色」，不是无出处的「相关历史片段」）",
+      bool(_pull16) and all(_HDR_RE.match(b.split("\n")[0]) for b in _pull16),
+      repr(_pull16[0].split("\n")[0]) if _pull16 else "无拉回块")
+check("E5 分角色配额：user 与 assistant **都有**代表（混合 top-k 会被高分短文本通吃）",
+      _nu16 >= 1 and _na16 >= 1, "user=%d asst=%d" % (_nu16, _na16))
+check("E5b 每角色不超过配额且总数 ≤ topk",
+      _nu16 <= 3 and _na16 <= 3 and len(_pull16) <= 6,
+      "user=%d asst=%d total=%d" % (_nu16, _na16, len(_pull16)))
+
+# E6 配额**不减产**：单角色命中时按分数补齐到 topk（去掉第二轮补齐就会退化成「只取 3 条」）
+_only_u = [m for m in _rest10 if m["role"] == "user"]
+_h6_all = _epipe._search_history(_only_u, P18_CUR + " " + _CUR_T, 6, 0.15,
+                                 cur_topic=_CUR_T, per_role_cap=0)
+_h6_cap = _epipe._search_history(_only_u, P18_CUR + " " + _CUR_T, 6, 0.15,
+                                 cur_topic=_CUR_T, per_role_cap=3)
+check("E6 配额不减产：单角色命中 > 配额时，补齐后条数与不限额完全一致",
+      len(_h6_all) > 3 and len(_h6_cap) == len(_h6_all),
+      "不限=%d cap3=%d" % (len(_h6_all), len(_h6_cap)))
+
+# E7 低预算场景（budget_history_tokens=400）：**被预算挡下**的消息仍须参与相关性拉回
+_h17 = _h_run(17, cfg_over={"budget_history_tokens": 400})
+_raw17, _pull17 = _raws(_h17), _pulls(_h17)
+check("E7a 前置：低预算下近因窗口确实装不下全部（预算真的吃紧）",
+      len(_raw17) < 8, "raw=%d" % len(_raw17))
+check("E7b 前置：高相关那条 user 消息被预算挡在近因窗口外",
+      _hi_rel17_id not in [m.get("id") for m in _raw17], "raw_ids=%s" % [m.get("id") for m in _raw17])
+check("E7c 但它仍进入相关性拉回（旧 `used_ids` 把它标成「已用」⇒ 彻底消失）",
+      any("请补充涉众与参与者的追溯关系定义" in b and "第 2 轮 · 用户" in b for b in _pull17),
+      "拉回 %d 条：%s" % (len(_pull17), [b.split("\n")[0] for b in _pull17]))
+
+check("E8 DEFAULT_CONFIG.context 含 P1-8 三键且默认值正确",
+      CFG.DEFAULT_CONFIG["context"].get("history_raw_min_share_tokens") == 96
+      and CFG.DEFAULT_CONFIG["context"].get("topic_retrieve_per_role_cap") == 3
+      and CFG.DEFAULT_CONFIG["context"].get("topic_retrieve_drop_echo") is True)
+check("E8b CONFIG_SCHEMA.context 含三键（前端契约）",
+      all(k in CFG.CONFIG_SCHEMA["context"] for k in
+          ("history_raw_min_share_tokens", "topic_retrieve_per_role_cap", "topic_retrieve_drop_echo")))
+
+_pull_nocap = _pulls(_h_run(16, cfg_over={"topic_retrieve_per_role_cap": 0}))
+_nu0 = sum(1 for b in _pull_nocap if "· 用户" in b)
+check("E9 per_role_cap=0（回滚）→ 回到混合 top-k：user 侧条数超过配额上限",
+      _nu0 > 3, "cap0 user=%d vs cap3 user=%d" % (_nu0, _nu16))
+_pull_echo = _pulls(_h_run(16, cfg_over={"topic_retrieve_drop_echo": False}))
+check("E9b drop_echo=False（回滚）→ 逐字重复的片段重新被拉回（A/B 互证）",
+      any(P18_CUR in b for b in _pull_echo),
+      "块头=%s" % [b.split("\n")[0] for b in _pull_echo])
+
+# E10 短路零回归：均分**只在总需求超预算时**才启用 —— 装得下就不得切
+_h18 = _h_run(18)
+_ass18 = [m for m in _raws(_h18) if m["role"] == "assistant"]
+check("E10 短会话（2 条）零回归：唯一那条长回复（828 tok < raw_cap 1000）**完整**在位",
+      len(_ass18) == 1 and _ass18[0]["content"] == _SHORT18,
+      "len=%s / 原文 %d" % (len(_ass18[0]["content"]) if _ass18 else None, len(_SHORT18)))
+# E11 超预算会话：均分后的**余量要回填**（否则 ① 的 50% 额度被白扔）
+_raw_cap18 = int(H.ctx_budget_tokens("history", "budget_history_chars", 3000) * 0.5)
+_share16 = max(96, _raw_cap18 // len(_tail16))
+_newest16 = [m for m in _raw16 if m.get("id") == _tail16[-1]]
+_ntok16 = count_tokens_fn(_newest16[0]["content"]) if _newest16 else 0
+check("E11 超预算会话：余量回填生效（最新一条原文 > 均分份额 %d tok）" % _share16,
+      bool(_newest16) and _ntok16 > _share16,
+      "最新一条 %d tok（均分上限 %d）；raw_cap=%d" % (_ntok16, _share16, _raw_cap18))
+
+
+def _hist_variant_e(mutate=None):
+    """`_load_history` 的 exec 孪生体（文本手术用；ns 取真实模块全局，见 D 组说明）。"""
+    src = textwrap.dedent(inspect.getsource(H.HistoryMixin._load_history))
+    if mutate:
+        src = mutate(src)
+    ns = dict(vars(H))
+    exec(compile(src, "<hist_twin_e>", "exec"), ns)
+    return ns["_load_history"]
+
+
+# ── P1-8 变异自证（只认新增失败）──
+# ⚠️ 锚点缩进必须取 `textwrap.dedent` 之后的**真实值**：`_load_history`/`_search_history`
+#    是类方法，dedent 会按 `def` 的 4 格整体左移 ⇒ 方法体一级语句是 **4 格**、循环体内是 8 格。
+#    写死 8 格会静默不命中（本仓"锚点漂移"家族）；核对脚本：tmp/mt_ctx/dump_anchors_p1_8.py。
+_M17_ANCHOR = '    used_ids = {m["id"] for m in raw_list if m.get("id")}'
+_M17_OLDCODE = '\n    used_ids.update(m["id"] for m in cur_group["msgs"][-cur_max:])'
+_src_h = textwrap.dedent(inspect.getsource(H.HistoryMixin._load_history))
+_mut17 = _src_h.replace(_M17_ANCHOR, _M17_ANCHOR + _M17_OLDCODE)
+check("M17 变异锚点命中（used_ids 语义）", _mut17 != _src_h)
+_f17 = _hist_variant_e(lambda s: s.replace(_M17_ANCHOR, _M17_ANCHOR + _M17_OLDCODE))
+CFG.get = lambda group, key, default=None, *a, **k: (
+    400 if (group == "context" and key == "budget_history_tokens")
+    else _orig_get_e(group, key, default, *a, **k))
+try:
+    _p17m = _pulls(_f17(_epipe, 17, cur_input=P18_CUR))
+finally:
+    CFG.get = _orig_get_e
+check("M17 恢复旧 used_ids（超额标记） → E7c 目标断言失败（被抓住）",
+      (any("请补充涉众与参与者的追溯关系定义" in b for b in _p17m)) is False,
+      "拉回 %d 条" % len(_p17m))
+
+_M18_ANCHOR = "    _share = max(raw_min_share, raw_cap // max(len(_rcands), 1))"
+_M18_NEW = "    _share = raw_cap * 1000  # M18: 回到「吃满为止」"
+_mut18 = _src_h.replace(_M18_ANCHOR, _M18_NEW)
+check("M18 变异锚点命中（均分份额）", _mut18 != _src_h and _src_h.count(_M18_ANCHOR) == 1)
+f18 = _hist_variant_e(lambda s: s.replace(_M18_ANCHOR, _M18_NEW))
+_r18m = _raws(f18(_epipe, 16, cur_input=P18_CUR))
+check("M18 回到「吃满为止」 → E1 目标断言失败（近因窗口装不满，被抓住）",
+      ([m.get("id") for m in _r18m] == _tail16) is False,
+      "raw=%d 条（真实实现 8 条）" % len(_r18m))
+
+# 单行锚点（跨行续行带 34 格对齐缩进，写死易漂）——`per_role_cap=pull_per_role` 在本方法内唯一
+_M19_ANCHOR = "per_role_cap=pull_per_role"
+_mut19 = _src_h.replace(_M19_ANCHOR, "per_role_cap=0")
+check("M19 变异锚点命中（分角色配额传参）", _mut19 != _src_h and _src_h.count(_M19_ANCHOR) == 1)
+f19 = _hist_variant_e(lambda s: s.replace(_M19_ANCHOR, "per_role_cap=0"))
+_p19m = _pulls(f19(_epipe, 16, cur_input=P18_CUR))
+check("M19 撤回分角色配额 → E5b 目标断言失败（user 侧超配额，被抓住）",
+      (sum(1 for b in _p19m if "· 用户" in b) <= 3) is False,
+      "user=%d" % sum(1 for b in _p19m if "· 用户" in b))
+
+_M20_ANCHOR = ('    if drop_echo and _echo:\n'
+               '        rest = [m for m in rest '
+               'if re.sub(r"\\s+", "", m.get("content") or "") != _echo]')
+_M20_NEW = "    if False and _echo:\n        pass  # M20"
+_mut20 = _src_h.replace(_M20_ANCHOR, _M20_NEW)
+check("M20 变异锚点命中（drop_echo 候选层过滤）", _mut20 != _src_h)
+f20 = _hist_variant_e(lambda s: s.replace(_M20_ANCHOR, _M20_NEW))
+_p20m = _pulls(f20(_epipe, 16, cur_input=P18_CUR))
+check("M20 撤回 drop_echo → E3b 目标断言失败（重复块重新出现，被抓住）",
+      (not any(P18_CUR in b for b in _p20m)) is False,
+      "出现 %d 次" % sum(1 for b in _p20m if P18_CUR in b))
+
+# 只替换**格式串**那一段（保持 3 个占位符 → 续行实参个数不变，不会 TypeError）：
+# 变异后块头长成「相关度 1 用户 0.988」，不再是「第 N 轮 · 角色」形态 ⇒ E4 的形态判据必须翻。
+_M21_ANCHOR = '        head = "【相关历史片段（第 %d 轮 · %s，相关度 %s）】" % ('
+_M21_NEW = '        head = "【相关历史片段（相关度 %s %s %s）】" % ('
+_mut21 = _src_h.replace(_M21_ANCHOR, _M21_NEW)
+check("M21 变异锚点命中（拉回块头）", _mut21 != _src_h)
+f21 = _hist_variant_e(lambda s: s.replace(_M21_ANCHOR, _M21_NEW))
+_p21m = _pulls(f21(_epipe, 16, cur_input=P18_CUR))
+check("M21 块头退回无出处形态 → E4 目标断言失败（被抓住）",
+      (bool(_p21m) and all(_HDR_RE.match(b.split("\n")[0]) for b in _p21m)) is False,
+      repr(_p21m[0].split("\n")[0]) if _p21m else "无拉回块")
+
+# M22 配额「取满即停」（去掉第二轮补齐） → E6 目标断言失败
+_sh_src = textwrap.dedent(inspect.getsource(H.HistoryMixin._search_history))
+# 缩进 8 格 = dedent 后**方法体二级**（`if per_role_cap` 内）；12 格是改动前的错值 → 静默不命中
+_M22_ANCHOR = "        if len(picked) < topk:                  # 第二轮：名额没满 → 按分数补齐（防单角色减产）"
+_mut22 = _sh_src.replace(_M22_ANCHOR, "        if False:                              # M22: 不补齐")
+check("M22 变异锚点命中（配额第二轮补齐）", _mut22 != _sh_src and _sh_src.count(_M22_ANCHOR) == 1)
+_ns22 = dict(vars(H))
+exec(compile(_mut22, "<sh_mut22>", "exec"), _ns22)
+_h22m = _ns22["_search_history"](_epipe, _only_u, P18_CUR + " " + _CUR_T, 6, 0.15,
+                                 cur_topic=_CUR_T, per_role_cap=3)
+check("M22 配额不补齐 → E6 目标断言失败（单角色被减产，被抓住）",
+      (len(_h22m) == len(_h6_all)) is False, "cap3不补齐=%d vs 不限=%d" % (len(_h22m), len(_h6_all)))
+
+# M23 去掉**第二轮余额回填** → E10（短会话长回复被白切）与 E11（① 额度被白扔）双双失败。
+#   ⚠️ 一处变异守两条断言是**有意**的：两条断言是「同一机制」的两种真实形态（2 条消息的短会话 /
+#   8 条消息的超预算会话）。曾有过第二个机制（「总需求 ≤ 预算才不均分」）能独立挡住 E10，
+#   但它与回填**功能重叠** ⇒ M23 会退化成空转变异（回填照样把内容补回来）⇒ 已按纪律删掉那个机制。
+_M23_ANCHOR = "    if used < raw_cap and raw_list:"
+_mut23 = _src_h.replace(_M23_ANCHOR, "    if False:  # M23: 去掉回填")
+check("M23 变异锚点命中（第二轮余额回填）", _mut23 != _src_h and _src_h.count(_M23_ANCHOR) == 1)
+f23 = _hist_variant_e(lambda s: s.replace(_M23_ANCHOR, "    if False:"))
+_a23 = [m for m in _raws(f23(_epipe, 18, cur_input=P18_CUR)) if m["role"] == "assistant"]
+_n23 = [m for m in _raws(f23(_epipe, 16, cur_input=P18_CUR)) if m.get("id") == _tail16[-1]]
+_n23tok = count_tokens_fn(_n23[0]["content"]) if _n23 else 0
+check("M23 去掉回填 → E10 目标断言失败（短会话长回复被白切，被抓住）",
+      (bool(_a23) and _a23[0]["content"] == _SHORT18) is False,
+      "len=%s / 原文 %d" % (len(_a23[0]["content"]) if _a23 else None, len(_SHORT18)))
+check("M23 去掉回填 → E11 目标断言失败（最新一条卡在均分份额，被抓住）",
+      (_n23tok > _share16) is False, "最新一条 %d tok（均分上限 %d）" % (_n23tok, _share16))
+
+H.get_db = _orig_h_get_db
 
 # ══════════════════════════════════════════════════════════════════════════
 print()

@@ -229,6 +229,10 @@ class HistoryMixin:
     #   ③ 其他话题：分话题独立摘要（scope=topic:{label}，消除混合摘要稀释，缓存复用）
     #   预算驱动：①占 50% → ②到 75% → ③剩余（不足则低优先级停，不送全量）
     #   话题打标失败/无话题 → 回退 _load_history_legacy（三层窗口）
+    #   P1-8（2026-10-01）「输入/输出都按相关性评估」三处收口：
+    #     · ① 由「吃满为止」改**均分份额**（防单条长输出独占，用户输入不再被挤成残句）；
+    #     · `used_ids` 只记**真正注入**的（旧写法的「被考虑过」会让消息彻底消失）；
+    #     · ② 分角色配额（user/assistant 各有名额）+ 块头带轮次/角色 + 丢弃与当前输入逐字重复的块。
     def _load_history(self, conversation_id, limit=None, cur_input=None):
         from core import config as _cfg
         msg_max = int(_cfg.get("context", "history_msg_max_chars", 1500))
@@ -238,6 +242,10 @@ class HistoryMixin:
         pull_topk = int(_cfg.get("context", "topic_retrieve_topk", 6))
         pull_th = float(_cfg.get("context", "topic_retrieve_threshold", 0.18))
         budget = int(_cfg.get("context", "budget_history_chars", 3000))
+        # P1-8（2026-10-01）历史（输入/输出）相关性召回收口 —— 三个新旋钮
+        pull_per_role = int(_cfg.get("context", "topic_retrieve_per_role_cap", 3))
+        raw_min_share = int(_cfg.get("context", "history_raw_min_share_tokens", 96))
+        drop_echo = _cfg.as_bool("context", "topic_retrieve_drop_echo", True)
         # P0-6（2026-09-30）：会话产物摘要块。多轮上下文此前只有「消息」一种载体 ——
         # sysml_versions / artifacts 里的产物**没有任何注入通道**（全仓读它们的生产代码
         # 只有 agent/utils.py，且全在归档写入路径）。实测会话 514 第 2 轮因此把第 1 轮
@@ -326,35 +334,101 @@ class HistoryMixin:
                 cut = cut[:int(len(cut) * cap_tokens / max(_ct(cut), 1))]
             return cut
 
-        def push_raw(m):
+        def push_raw(m, share):
             nonlocal used
-            if used >= raw_cap or not m["content"]:
+            if not m["content"]:
                 return
-            c = _clip(m["content"], max(raw_cap - used, 16))
+            room = raw_cap - used
+            if room <= 0:
+                return
+            # 每条**最多** share：这才是「装几条」与「装多长」的分离点（见下方均分说明）
+            c = _clip(m["content"], min(share, room))
+            if not c:
+                return
             raw_list.append({"role": m["role"], "content": c, "id": m["id"]})
             used += _ct(c)
 
-        # ① 当前话题原文（最近 cur_max 条，倒序填充至 50% 预算）
-        for m in reversed(cur_group["msgs"][-cur_max:]):
-            push_raw(m)
+        # ① 当前话题原文（最近 cur_max 条）：**均分份额**填充，防被单条长输出吃满。
+        #   P1-8 实测（真库 conv=514，raw_cap=1000 tok）：旧实现「newest-first 吃满为止」⇒
+        #   最新一条 4843 字符的助手回复独占 994 tok，紧接着的**最新用户输入**只拿到
+        #   `max(1000-994,16)=16` tok（残句「按上述方案落地：在既有」），更早 3 条用户输入
+        #   整条消失 —— 而用户输入才是「意图与约束」的载体（它们是短文本，本来就几乎不占预算）。
+        #   均分后 8 条各得 raw_cap//n（≥ min_share）⇒ 近 N 轮连续可见；
+        #   用不完的余量自然流向 ② 相关性通道（按相关度挑出来的内容更该吃预算）。
+        _tail = list(cur_group["msgs"][-cur_max:])
+        _bnd = []
         # 切换边界：当前组很短（正在切换话题）时补其前一组最后 boundary 条原文，保证语义连续
         if len(cur_group["msgs"]) <= 2 and cur_group is not groups[0]:
             gi = groups.index(cur_group)
-            for m in reversed(groups[gi - 1]["msgs"][-boundary:]):
-                push_raw(m)
+            _bnd = list(groups[gi - 1]["msgs"][-boundary:])
+        _rcands = _bnd + _tail                      # 时间序（边界更旧、当前话题更近）
+        # 两级分配：① 先按「人均份额」保**条数**（谁也不许独占）；② 余量再回填给被截断的
+        #   （见下方第二轮）。只做 ① 会把短会话里唯一那条长回复白切一半；只做「吃满为止」
+        #   就是本批要修的病灶。两者组合才同时满足「条数覆盖」与「不浪费」。
+        _share = max(raw_min_share, raw_cap // max(len(_rcands), 1))
+        for m in reversed(_rcands):                 # newest-first：预算真不够时优先保最新
+            push_raw(m, _share)
         raw_list.reverse()  # 还原时间顺序（最近的在最后）
+        # 第二轮：把**没用完**的额度回填给被截断的条目（newest-first，上不封顶至原文全长）。
+        # 理由：① 的额度就是 50%（`raw_cap`），不用满等于把预算白扔；② 的额度是**另外**的 25%
+        #   （`pull_cap = 75%`），① 用满后 ② 仍有 500 tok（约 3 条 300 字符片段），不是被 ① 抢走。
+        # 实测两种取法的差别（真库 8 会话）：带回填 ① 用满 1000 tok、user 覆盖 36.2%；
+        #   不回填 ① 只用 752 tok、user 覆盖 40.4%（② 多出 1 块）—— 差 1 块换「最新一条原文
+        #   从 125 tok 涨到 ~370 tok」，取带回填（额度语义与设计一致，且不浪费）。
+        if used < raw_cap and raw_list:
+            _rmap = {m["id"]: m for m in _rcands}
+            for _i in range(len(raw_list) - 1, -1, -1):   # raw_list 已时间序 ⇒ 倒序=newest-first
+                _room = raw_cap - used
+                if _room < raw_min_share:
+                    break
+                _src = _rmap.get(raw_list[_i].get("id"))
+                if _src is None:
+                    continue
+                _cur_tok = _ct(raw_list[_i]["content"])
+                _full = _src["content"] or ""
+                if _ct(_full) <= _cur_tok:
+                    continue                              # 本来就没被截断
+                _c2 = _clip(_full, min(_ct(_full), _cur_tok + _room))
+                _new_tok = _ct(_c2)
+                if _new_tok > _cur_tok:
+                    raw_list[_i]["content"] = _c2
+                    used += _new_tok - _cur_tok
         used_ids = {m["id"] for m in raw_list if m.get("id")}
-        used_ids.update(m["id"] for m in cur_group["msgs"][-cur_max:])
+        # ⚠️ 此处**不得**再写 `used_ids.update(cur_group["msgs"][-cur_max:])`。
+        #   那是「被考虑过」而非「已注入」。旧写法把因预算不足没进去的消息也标成已用
+        #   ⇒ 它们既不在①原文、也不在②相关性拉回 ⇒ **彻底消失**。铁证（真库）：
+        #   conv=1 里相似度 **0.988** 的用户输入、conv=325 里 **0.927** 的那条，都是这么丢的
+        #   —— 被吞掉的恰恰是最该被拉回的内容。
         # ② 语义拉回（query=当前输入+当前话题，排除已注入原文；同话题域加权）
         query = f"{cur_input or ''} {cur_group['topic']}"
         rest = [m for m in msgs if m["id"] not in used_ids]
-        pulled = self._search_history(rest, query, pull_topk, pull_th, cur_topic=cur_group["topic"])
+        # 逐字重复当前输入的历史消息 → **不参与相关性评估**（零信息量：模型当前输入里已有）。
+        # 实测（真库 conv=1）：两条 13 字符的追问以 **0.988** 的高分占据拉回槽位，
+        # 内容与当前输入一字不差 —— 高相似度 ≠ 有信息量。
+        # ⚠️ 必须在**候选层**过滤，不能只丢块：它分数最高，先占掉一个配额槽再被丢弃，
+        #    等于白瞎一个名额（把过滤放在这里，配额才算给了真有内容的片段）。
+        _echo = re.sub(r"\s+", "", cur_input or "")
+        if drop_echo and _echo:
+            rest = [m for m in rest if re.sub(r"\s+", "", m.get("content") or "") != _echo]
+        pulled = self._search_history(rest, query, pull_topk, pull_th,
+                                      cur_topic=cur_group["topic"], per_role_cap=pull_per_role)
+        # 轮次表（user 消息序号 = 轮次）：拉回块必须能被回指到「第几轮的谁说的」，
+        # 而不是一句无出处的「相关历史片段」（延续 §7「可追溯」纪律）。
+        _turn_of, _t = {}, 0
+        for m in msgs:
+            if m["role"] == "user":
+                _t += 1
+            _turn_of[m["id"]] = _t
         for p in pulled:
             if used >= pull_cap or not p["content"]:
                 break
             c = _clip(p["content"], max(pull_cap - used, 16))
-            pull_blocks.append({"role": "system", "content": f"【相关历史片段（相关度 {p['score']}）】\n{c}"})
-            used += _ct(c) + 24
+            if not c:
+                continue
+            head = "【相关历史片段（第 %d 轮 · %s，相关度 %s）】" % (
+                _turn_of.get(p["id"], 0), "用户" if p.get("role") == "user" else "助手", p["score"])
+            pull_blocks.append({"role": "system", "content": head + "\n" + c})
+            used += _ct(c) + _ct(head)
         # ③ 其他话题分话题摘要（剩余预算，低优先级不足则停；排除当前话题组避免重复）
         for g in groups:
             if g is cur_group:
@@ -566,13 +640,21 @@ class HistoryMixin:
         except Exception:
             return None, "bigram"
 
-    def _search_history(self, msgs, query, topk=6, threshold=0.15, cur_topic=""):
+    def _search_history(self, msgs, query, topk=6, threshold=0.15, cur_topic="", per_role_cap=0):
         """会话内语义拉回：真 embedding 优先（同批向量化余弦），bigram 降级。
 
-        dense 路：embedding 余弦独立量纲，阈值用 topic_retrieve_threshold_dense（默认 0.35）；
+        dense 路：embedding 余弦独立量纲，阈值用 topic_retrieve_threshold_dense；
         话题域加权不再需要（稠密向量对措辞差异鲁棒，query 已拼当前话题文本）。
         bigram 路：余弦打分 + 话题域加权（候选 topic 与当前话题 ts≥0.2 加 0.25*ts，
         补偿细节词在长 query 中被稀释）；候选截最近 120 条控 embedding 成本。
+
+        `per_role_cap`（P1-8，默认 0=不限制，回调方传 3）：**输入/输出分角色配额**。
+        为什么必须分：短文本在余弦打分上系统性偏高（模长归一化后语义方向更"纯"）——
+        实测（真库）13 字符的追问得 **0.988**、4 字符的「继续优化」得 0.66，而助手历轮的
+        数千字结论只有 0.5~0.6。修好 `used_ids` 后 conv=1 的混合 top-6 **全是 user**，
+        助手此前产出的结论/版本一条都进不来 —— 那既不是「相关性评估」也不符合
+        「输入、输出都应被评估」的要求。配额后：先各取 ≤cap，**名额未满再按分数补齐**
+        （单角色场景不因配额减产）。返回项带 `role`，调用方据此拼可追溯块头。
         """
         from core import config as _cfg
         from core import config as _cfg_s
@@ -602,8 +684,29 @@ class HistoryMixin:
                 if s >= threshold:
                     scored.append((s, m))
         scored.sort(key=lambda x: x[0], reverse=True)
+        picked = []
+        if per_role_cap and per_role_cap > 0:
+            cnt = {}
+            for s, m in scored:                     # 第一轮：分角色配额
+                if len(picked) >= topk:
+                    break
+                r = m.get("role") or ""
+                if cnt.get(r, 0) >= per_role_cap:
+                    continue
+                cnt[r] = cnt.get(r, 0) + 1
+                picked.append((s, m))
+            if len(picked) < topk:                  # 第二轮：名额没满 → 按分数补齐（防单角色减产）
+                chosen = {m["id"] for _s, m in picked}
+                for s, m in scored:
+                    if len(picked) >= topk:
+                        break
+                    if m["id"] in chosen:
+                        continue
+                    picked.append((s, m))
+        else:
+            picked = scored[:topk]
         return [{"id": m["id"], "role": m["role"], "content": m["content"][:300], "score": round(s, 3)}
-                for s, m in scored[:topk]]
+                for s, m in picked]
 
     # ── 会话历史注入 v1（旧三层窗口，话题打标失败时兜底）──
     def _load_history_legacy(self, conversation_id, limit=None):
