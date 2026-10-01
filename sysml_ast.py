@@ -28,6 +28,8 @@ import os
 import subprocess
 import tempfile
 
+from core.fs_guard import bounded_unlink
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 JAVA = os.path.join(ROOT, "java-runtime", "bin", "java.exe")
 JAVAC = os.path.join(ROOT, "java-runtime", "bin", "javac.exe")
@@ -93,10 +95,10 @@ def parse_ast(code_text: str, timeout: int = 180):
     except Exception:
         return None
     finally:
-        try:
-            os.remove(path)
-        except Exception:
-            pass
+        # ⚠️ 不能 `os.remove(path)`：WorkBuddy 沙箱 tsbx.dll 挂钩 DeleteFileW → 回收站
+        # 语义，实测在 COM 临界区死锁 40+ 分钟，把编排流整条卡死（见 core/fs_guard.py）。
+        # 用看门狗删除：超时即泄漏一个临时文件，绝不阻塞解析/管线。
+        bounded_unlink(path)
     out = (p.stdout or b"").decode("utf-8", "replace")
     # ⚠️ 官方实现会在 stdout 前面打 100+ 行 `Reading <库文件>...`，必须先过滤再取 JSON
     for line in out.splitlines():

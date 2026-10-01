@@ -8,6 +8,7 @@ import uuid
 from .extract import extract_text, extract_text_ex
 from .chunking import chunk_text_structured, _is_complete_sentence
 from .embedder import Embedder
+from core.fs_guard import bounded_unlink
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ def remove_source_copy(doc_id: int, filename: str) -> bool:
     try:
         p = source_copy_path(doc_id, filename)
         if os.path.exists(p):
-            os.remove(p)
+            bounded_unlink(p)   # 看门狗删除：防 tsbx 沙箱钩子死锁（见 core/fs_guard.py）
             return True
     except Exception as e:
         print(f"[ingest] 清理源副本失败（不阻断删除）doc_id={doc_id}: {e}", flush=True)

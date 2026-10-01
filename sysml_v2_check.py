@@ -80,6 +80,8 @@ import tempfile
 import threading
 import time
 
+from core.fs_guard import bounded_unlink
+
 REPO = os.path.dirname(os.path.abspath(__file__))
 JAVA = os.path.join(REPO, "java-runtime", "bin", "java.exe")
 JAR = os.path.join(REPO, "checker.jar")
@@ -223,7 +225,7 @@ def _run(merged, timeout):
                 time.time() - t0)
     finally:
         try:
-            os.unlink(tmp)
+            bounded_unlink(tmp)   # 看门狗删除：防 tsbx 沙箱钩子死锁阻塞（见 core/fs_guard.py）
         except OSError:
             pass
 
