@@ -401,8 +401,7 @@ class HistoryMixin:
         # 其与段代表向量相似度低时自然开新话题 → 语义拉回负责把回指的历史原文拉回
         # 2026-09-29（用户五轮反馈1）：补"重试/重跑/重新/再来"——任务终止/失败后用户打"重试"，
         # 若按新话题切走，当前话题原文就只剩"重试"两个字，AI 表现为"不知道之前做了什么"。
-        carry = ("继续", "接着", "还有", "另外", "再说", "那", "再",
-                 "重试", "重跑", "重新", "再来", "retry", "continue")
+        carry = TOPIC_CARRY_WORDS   # P1-4：单一来源，见 common.py（与 _is_topic_switch 共用）
         cur_topic = ""
         topic_vec = None  # 段代表向量（段内消息 bigram 累加，随对话增长）
         last_user_id = None
@@ -419,7 +418,7 @@ class HistoryMixin:
                     # 相似度天然低但语义承接（如"链路余量校核"承接"链路预算"），默认偏不切，
                     # 宁多合并（靠语义拉回兜底）也不误切
                     shared = bool(set(vec.keys()) & set(topic_vec.keys()))
-                    if sim < threshold and not shared and not content.startswith(carry):
+                    if is_topic_switch(sim, shared, content.startswith(carry), threshold):
                         cur_topic = content[:label_chars] or cur_topic
                         topic_vec = Counter(vec)  # 新话题段
                     else:
@@ -433,6 +432,101 @@ class HistoryMixin:
             conn.execute("UPDATE messages SET topic=? WHERE id=?", (cur_topic, r["id"]))
         conn.commit()
         return mapping
+
+    def _is_topic_switch(self, conversation_id, user_input, _max_msgs: int = 40) -> bool:
+        """P1-4 L2：本轮输入是否**换了话题**（决定 `_merge_slots` 是否丢弃历史槽位）。
+
+        取段：本轮消息尚未落库（execute/stream 是**先回复后落库**），无法走 `_tag_topics`
+        的全量循环 → 取**最后一个已打标话题段**作为当前话题。
+
+        ⚠️ 判据**不直接复用** `_tag_topics` 的两个条件，实测理由（都是踩过才写的）：
+          ① `_tag_topics` 的「段代表向量」是**全段 user+assistant 累加**且随对话无限增长
+             —— 实测 conv=514 达 7879 个 bigram，于是「无共同 bigram」条件对**任何**输入
+             恒为假（异话题句也命中 '分析'/'报告'/'项目' 等泛词）→ 判据永不触发。
+             佐证：该会话全程只被分成 **1 个**话题段（不同话题的消息混在同段）。
+          ② 复用 `context.topic_sim_threshold=0.15` 也不行：该阈值是在**大词袋**下标定的，
+             同话题句被稀释到 0.09~0.19 → 实测**误切 4/7**（把追问轮的对象清掉）。
+        故改为：**只累加段内 user 消息**（词袋 ~310，不随 assistant 长文膨胀）+
+        独立键 `slots.topic_switch_threshold`。标定见 `tmp/mt_ctx/calib2_variants.py`
+        （conv=514 真实段 + 8 同话题 / 8 异话题样本，四种构造对比）:
+
+            构造         同话题区间           异话题区间           间隙比  词袋
+            A 全段累加   [0.0922, 0.1889]   [0.0000, 0.0475]   1.94x  7879
+            C user 累加  [0.1342, 0.4813]   [0.0000, 0.0350]   3.83x   310   ← 采用
+
+        取 0.08（落在 C 的分离带 (0.0350, 0.1342) 内）：8/8 同话题不切、8/8 异话题切。
+
+        任何异常 / 无历史 / 未打标 → False（**保守：不重置**）。
+        宁可多留（有上限兜底），也不因判据抖动把追问轮的对象清掉。
+        """
+        try:
+            if not conversation_id or int(conversation_id) <= 0:
+                return False
+            txt = (user_input or "").strip()
+            if not txt:
+                return False
+            from core import config as _cfg
+            if not bool(_cfg.get("slots", "reset_on_topic_switch", True)):
+                return False
+            # 独立于 `context.topic_sim_threshold`（0.15）—— 那个阈值对应「全段累加」的
+            # 大词袋；本判据用「段内 user 消息累加」，标定见方法 docstring。
+            threshold = float(_cfg.get("slots", "topic_switch_threshold", 0.08))
+            _ref_n = int(_cfg.get("slots", "topic_ref_msgs", 10) or 10)
+            conn = get_db()
+            try:
+                rows = conn.execute(
+                    "SELECT id, role, content, topic FROM messages "
+                    "WHERE conversation_id=? AND role IN ('user','assistant') "
+                    "ORDER BY id DESC LIMIT ?",
+                    (int(conversation_id), int(_max_msgs))).fetchall()
+            finally:
+                conn.close()
+            rows = list(reversed(rows))
+            if not rows:
+                return False
+            # ⚠️ 尾部的消息**可能尚未打标** —— `_tag_topics` 是**惰性全量重算**（全部已打标
+            #   才直接复用），而落库与打标之间存在窗口：实测 conv=514 最后 4 条
+            #   （3010~3013，正是最近一轮）topic 为空。若直接取 `rows[-1]["topic"]`，
+            #   判据在这些会话上**恒为 False**（换了话题也不重置），整个 L2 形同未接。
+            #   故取**最后一条已打标**消息的 topic 作为当前话题，其后的未打标消息
+            #   并入该段（它们是当前话题的延续，内容同样计入代表向量）。
+            k = None
+            for i in range(len(rows) - 1, -1, -1):
+                if (rows[i]["topic"] or ""):
+                    k = i
+                    break
+            if k is None:
+                return False   # 整段都没打过标 → 保守不重置
+            last_topic = rows[k]["topic"]
+            # 只取 **user** 消息：话题由用户说的话定义；assistant 的长篇产出混进来会把
+            # 词袋从 ~300 撑到 ~8000，既稀释相似度又让「无共同 bigram」恒真（见 docstring）。
+            seg = [rows[i]["content"] or "" for i in range(k + 1, len(rows))
+                   if rows[i]["role"] == "user"]
+            for i in range(k, -1, -1):
+                if (rows[i]["topic"] or "") != last_topic:
+                    break
+                if rows[i]["role"] == "user":
+                    seg.append(rows[i]["content"] or "")
+            seg.reverse()
+            seg = seg[-_ref_n:]   # 段内最近 N 条 user 消息（词袋规模稳定）
+            from collections import Counter
+            ve = VectorEngine()
+            topic_vec = Counter()
+            for c in seg:
+                topic_vec.update(ve._vector(c))
+            if not topic_vec:
+                return False
+            vec = ve._vector(txt)
+            if not vec:
+                return False
+            sim = ve._cosine(vec, topic_vec)
+            # use_shared=False：标定集上「仅相似度」已 8/8 + 8/8 完全分离；再加 shared 条件
+            # 只会带来漏切风险（`_tag_topics` 加它是因为它的词袋大到 shared 恒真、需要额外约束，
+            # 此处词袋小、无此问题）。
+            return bool(is_topic_switch(sim, True, txt.startswith(TOPIC_CARRY_WORDS),
+                                        threshold, use_shared=False))
+        except Exception:
+            return False
 
     def _semantic_scores(self, texts, query):
         """统一语义出口：真 embedding（texts+query 同批向量化保维度一致）→ bigram 降级。

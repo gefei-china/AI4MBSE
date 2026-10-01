@@ -1126,7 +1126,9 @@ class StreamMixin:
             effective_provider = provider_id or self.registry.get_provider_id(intent)  # 优化2
             # P1 意图结构化拆解 + P2 用户上下文
             # P0-2：槽位跨轮合并——上轮槽位为底，本轮新值覆盖（entities/constraints 并集）
-            slots = self._merge_slots(dst["slots"], self.task_decompose(user_input, intent))
+            # P1-4（2026-10-01）：带上 conversation_id/user_input —— 换话题时丢弃历史槽位
+            slots = self._merge_slots(dst["slots"], self.task_decompose(user_input, intent),
+                                      conversation_id=conversation_id, user_input=user_input)
             user_ctx = self._build_user_context(user)
             kb_tags = IntentRouter.extract_kb_tags(user_input)
             # 控制标签（#工程数据/#知识库）只作触发信号，不并入检索词

@@ -21,6 +21,18 @@ class PromptMixin:
         """
         if intent not in ("requirement_analysis", "design", "impact", "review", "report_generation"):
             return {}
+        # P1-4 L3（2026-10-01）：澄清续答文本是**整段**进来的，直接拆会把
+        #   「问题「…」→ 回答：设计/建模：理解用户意图，SysML v2建模与视图代码」这类
+        #   **元对话壳**也拆成"约束"。实测 conv=514：同一段 132 字符文本出现 3 次
+        #   （id 3002/3010/3012），产出的 constraints 里有 7~8 条是这类噪声
+        #   （`先理解用户意图`/`需先理解用户意图`/`使用SysMLv2建模与视图代码` 等）。
+        #   这里先抽取 `原请求：` 之后的用户本意再拆。
+        try:
+            from core import config as _cfg
+            if bool(_cfg.get("slots", "sanitize_clarify_input", True)):
+                user_input = extract_original_request(user_input)
+        except Exception:
+            user_input = extract_original_request(user_input)
         try:
             from llm import llm_client
             resp = llm_client.chat([

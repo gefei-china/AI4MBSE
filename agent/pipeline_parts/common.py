@@ -98,6 +98,138 @@ def iter_stream_chunks(text, chunk_size=None, chars_per_sec=None,
         yield text[i:i + ck]
 
 
+# ── P1-4（2026-10-01）：会话槽位（DST slots）三层治理的纯函数 ─────────────
+#  实测背景（全部取自生产库，非构造场景）：
+#   ① `_merge_slots` 原为「纯并集 + 精确字符串去重」→ 同义不同串（空格/全角半角）绕过去重，
+#      且跨轮单调增长、永不衰减：conv=514 累积到 7 实体 / 11 约束 / 351 字符，其中含
+#      `先理解用户意图` 与 `需先理解用户意图`、`SysML v2 模型` 与 `SysML v2模型` 等同义副本；
+#      对照单轮会话 conv=491 仅 187 字符且干净。
+#   ② 污染主源在**上游**（L3）：澄清续答文本是**整段**进 `task_decompose` 的，
+#      「问题「…」→ 回答：设计/建模：理解用户意图，SysML v2建模与视图代码」这类**元对话壳**
+#      被当成任务描述拆成了"约束" —— 同一段 132 字符文本实测出现 3 次（id 3002/3010/3012）。
+#  故三处各配一个纯函数，便于单测与变异自证。
+#  ⚠️ 不引入任何**新标定阈值**：话题判据复用 `context.topic_sim_threshold`
+#     （本仓曾因新标定阈值踩坑，见 `_build_model_context` 的注释）。
+SLOT_CLARIFY_MARK = "【澄清补充】"
+SLOT_ORIGINAL_MARK = "原请求："
+
+# 话题承接词（**单一来源**）：`history._tag_topics` 与 `history._is_topic_switch` 共用。
+# 承接式追问即使相似度低也不判为换话题（任务失败后用户打"重试"尤甚）。
+TOPIC_CARRY_WORDS = ("继续", "接着", "还有", "另外", "再说", "那", "再",
+                     "重试", "重跑", "重新", "再来", "retry", "continue")
+
+
+def extract_original_request(text):
+    """P1-4 L3：从澄清续答文本中抽取**用户本意**，其余是元对话壳。
+
+    `routers/conversations.py` 构造的续答文本形如::
+
+        【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：
+        问题「…」→ 回答：设计/建模：理解用户意图，SysML v2建模与视图代码
+
+        原请求：优化需求数据，需要支持参与者信息
+
+    只有 `原请求：` 之后是用户本意。**取最后一次出现**（防嵌套引用），
+    抽取为空则回退原文 —— 绝不把输入清空（清空会让 task_decompose 静默降级成 {}）。
+    """
+    if not isinstance(text, str) or not text or SLOT_ORIGINAL_MARK not in text:
+        return text
+    tail = text.rsplit(SLOT_ORIGINAL_MARK, 1)[-1].strip()
+    return tail or text
+
+
+def norm_slot_item(item):
+    """P1-4 L1：槽位条目的**归一化判重键**（只用于比较，不改落库原文）。
+
+    全角→半角（含全角空格 U+3000）→ 只保留字母数字汉字（剔除空白与标点）→ 小写。
+    实测可合并：`SysML v2 模型` 与 `SysML v2模型` 归一后同为 `sysmlv2模型`。
+    **不做**语义等价 —— `先理解用户意图` 与 `需先理解用户意图` 靠子串规则（见 merge_slot_items）。
+    """
+    s = item if isinstance(item, str) else str(item)
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if o == 0x3000:
+            out.append(" ")
+        elif 0xFF01 <= o <= 0xFF5E:
+            out.append(chr(o - 0xFEE0))
+        else:
+            out.append(ch)
+    return "".join(ch for ch in "".join(out) if ch.isalnum()).lower()
+
+
+def merge_slot_items(prev, new, *, max_items=0, normalize=True, substring=True):
+    """P1-4 L1+L2：槽位列表合并 —— 归一化去重 + 可选子串合并 + 上限收敛（**本轮优先**）。
+
+    规则：
+      · 判重键 = `norm_slot_item`（normalize=False 时用原串）；
+      · 键相同 → 丢弃后到者（保留**先到者的原文**，输出稳定）；
+      · 子串包含（substring=True）→ 保留信息更全的那个：新项是旧项子串则丢新项，
+        旧项是新项子串则**用新项替换旧项**（实测可合并 `先理解用户意图` ⊂ `需先理解用户意图`）；
+      · 上限 `max_items > 0` 时：**本轮条目一律保留**，超出的只从**历史**条目里
+        由旧到新丢弃（没有历史可丢则保留全部，不牺牲本轮信息）。
+
+    返回 `(list, stats)`；`stats = {"dedup": n, "dropped_cap": n}` 供断言与观测。
+    """
+    stats = {"dedup": 0, "dropped_cap": 0}
+    ns = [x for x in (new or []) if isinstance(x, str) and x.strip()]
+    hs = [x for x in (prev or []) if isinstance(x, str) and x.strip()]
+
+    def _key(x):
+        return norm_slot_item(x) if normalize else x
+
+    out = []   # [(item, key, is_new)]
+
+    def _push(x, is_new):
+        k = _key(x)
+        if not k:
+            return
+        for i, (_, ek, _) in enumerate(out):
+            if k == ek or (substring and k in ek):
+                stats["dedup"] += 1
+                return
+            if substring and ek in k:
+                out[i] = (x, k, is_new)   # 信息更全者胜（原地替换，保持位置）
+                stats["dedup"] += 1
+                return
+        out.append((x, k, is_new))
+
+    for x in hs:
+        _push(x, False)
+    for x in ns:
+        _push(x, True)
+
+    max_n = int(max_items or 0)
+    if max_n > 0 and len(out) > max_n:
+        excess = len(out) - max_n
+        drop = [i for i, (_, _, is_new) in enumerate(out) if not is_new][:excess]
+        if drop:
+            ds = set(drop)
+            out = [it for i, it in enumerate(out) if i not in ds]
+            stats["dropped_cap"] = len(ds)
+    return [it[0] for it in out], stats
+
+
+def is_topic_switch(sim, shared, is_carry, threshold, use_shared=True):
+    """P1-4 L2：话题切换判据（**单一来源**，两条调用路径共用阈值与承接词）。
+
+    条件：相似度低于阈值 + 非承接式开头；`use_shared=True` 时再加「无共同 bigram」。
+    抽成纯函数是为了让「打标」与「槽位重置」共用同一份判据 —— 两份实现必然漂移。
+
+    `use_shared` 的两条路径为何不同（实测，见 `history._is_topic_switch` docstring）：
+      · `_tag_topics` 打标（True，**保持原行为零回归**）：它的段代表向量随对话无限增长
+        （实测 7879 个 bigram）→ 该条件恒假 → 它靠「默认偏不切」达成设计意图；
+      · `_is_topic_switch` 槽位重置（False）：词袋仅 ~310，仅相似度即 8/8 + 8/8 完全分离，
+        加 shared 只会引入漏切（异话题句恰好命中一个泛词即漏）。
+    """
+    try:
+        if float(sim) >= float(threshold) or is_carry:
+            return False
+        return (not shared) if use_shared else True
+    except Exception:
+        return False
+
+
 __all__ = [
     'os', 're', 'json', 'time', 'uuid', 'logging', 'logger',
     'get_db', 'db_conn', 'VectorEngine', 'QueryRouter', 'llm_client', 'STATIC_DIR',
@@ -108,4 +240,7 @@ __all__ = [
     '_TOOL_MODEL_CAP', '_ATT_INJECT_CAP', '_AGENT_ROLE_CAP',
     '_STREAM_CHARS_PER_SEC', '_STREAM_MAX_CPS', '_STREAM_CHUNK', '_STREAM_MAX_DRAIN_SEC',
     'iter_stream_chunks',
+    # P1-4：会话槽位治理（纯函数，便于单测与变异自证）
+    'SLOT_CLARIFY_MARK', 'SLOT_ORIGINAL_MARK', 'TOPIC_CARRY_WORDS',
+    'extract_original_request', 'norm_slot_item', 'merge_slot_items', 'is_topic_switch',
 ]

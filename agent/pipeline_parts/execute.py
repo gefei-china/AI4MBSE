@@ -66,7 +66,9 @@ class ExecuteMixin:
         effective_provider = provider_id or self.registry.get_provider_id(intent)
         # P1 意图结构化拆解（建模类意图；Mock 环境自动降级 {}）
         # P0-2：槽位跨轮合并——上轮槽位为底，本轮新值覆盖（entities/constraints 并集）
-        slots = self._merge_slots(dst["slots"], self.task_decompose(user_input, intent))
+        # P1-4（2026-10-01）：带上 conversation_id/user_input —— 换话题时丢弃历史槽位
+        slots = self._merge_slots(dst["slots"], self.task_decompose(user_input, intent),
+                                  conversation_id=conversation_id, user_input=user_input)
         user_ctx = self._build_user_context(user)
 
         # P0-3: #知识库 标签解析（会话主入口知识库消费范围；@ 已改为智能体选择，不进文本）

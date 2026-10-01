@@ -103,20 +103,58 @@ class SessionMixin:
         #   净化与"最终取几条"仍由 intent 侧的 _sanitize_history 负责，这里不重复判脏。
         return self._load_recent_user_msgs(conversation_id, max(int(n) * 4, 8))
 
-    def _merge_slots(self, prev_slots: dict, new_slots: dict) -> dict:
-        """P0-2 槽位跨轮合并：prev 为底，新槽位覆盖；goal/scope 新值优先，entities/constraints 并集。"""
+    def _merge_slots(self, prev_slots: dict, new_slots: dict,
+                     conversation_id=None, user_input=None) -> dict:
+        """P0-2 槽位跨轮合并 + P1-4 治理（2026-10-01）。
+
+        prev 为底，新槽位覆盖；goal/scope 新值优先；entities/constraints 走
+        `merge_slot_items`（归一化去重 + 子串合并 + 上限收敛，**本轮优先**）。
+        P1-4 L2：本轮若换了话题（判据见 `_is_topic_switch`，与 `_tag_topics` 同源）
+        → 丢弃**历史** entities/constraints（goal/scope 仍按新值覆盖）；
+        否则跨话题的旧对象会一直挂在 prompt 的「【任务拆解】」段里，单调增长且永不衰减。
+
+        消费面（已全枚举）：slots 只进①单 Agent 直答/生成路径的 system prompt
+        （stream.py / execute.py 的「【任务拆解（P1 结构化）】」段）、②前端卡片、
+        ③落库 `conversations.last_slots`；**编排/planner 不消费 slots**（`_try_orchestrate`
+        不收该参数）。`conversation_id`/`user_input` 缺省时退化为旧的纯合并语义。
+        """
         if not isinstance(prev_slots, dict):
             prev_slots = {}
         if not isinstance(new_slots, dict):
             new_slots = {}
+        try:
+            from core import config as _cfg
+            _norm = bool(_cfg.get("slots", "merge_normalize_dedup", True))
+            _sub = bool(_cfg.get("slots", "merge_substring_dedup", True))
+            _max_e = int(_cfg.get("slots", "max_entities", 10) or 0)
+            _max_c = int(_cfg.get("slots", "max_constraints", 8) or 0)
+            _reset = bool(_cfg.get("slots", "reset_on_topic_switch", True))
+        except Exception:
+            _norm, _sub, _max_e, _max_c, _reset = True, True, 10, 8, True
+        _caps = {"entities": _max_e, "constraints": _max_c}
+        # P1-4 L2：换话题 → 只丢**历史** entities/constraints（本轮值仍在 new_slots 里）
+        if _reset and conversation_id and user_input:
+            try:
+                if self._is_topic_switch(conversation_id, user_input):
+                    prev_slots = {k: v for k, v in prev_slots.items()
+                                  if k not in ("entities", "constraints")}
+            except Exception:
+                pass
+        self._slot_merge_stats = {}
         out = {k: v for k, v in prev_slots.items()}
         for k, v in new_slots.items():
             if k in ("entities", "constraints") and isinstance(v, list):
-                seen = list(out.get(k) or [])
-                for item in v:
-                    if item not in seen:
-                        seen.append(item)
-                out[k] = seen
+                if _norm or _sub:
+                    merged, _st = merge_slot_items(out.get(k), v, max_items=_caps.get(k, 0),
+                                                   normalize=_norm, substring=_sub)
+                    out[k] = merged
+                    self._slot_merge_stats[k] = _st
+                else:
+                    seen = list(out.get(k) or [])   # 旧行为（A/B 回滚用）
+                    for item in v:
+                        if item not in seen:
+                            seen.append(item)
+                    out[k] = seen
             elif k in ("scope",) and isinstance(v, dict):
                 sc = dict(out.get(k) or {})
                 sc.update(v)

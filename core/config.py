@@ -249,6 +249,22 @@ DEFAULT_CONFIG = {
         #   只免去一次无谓的追问确认。置 False 即回到"与旧行为零差异"（仅多置信度与 meta 标记）。
         "history_confirm_silent": True,
     },
+    # P1-4（2026-10-01）会话槽位（DST slots）治理：合并口径 + 入参净化。
+    #   三层根因与实测见 agent/pipeline_parts/common.py 顶部注释。
+    "slots": {
+        "sanitize_clarify_input": True,  # L3：task_decompose 前抽取「原请求：」，剔澄清卡元对话壳
+        "merge_normalize_dedup": True,   # L1：判重前归一化（全角→半角、去空白标点）——A/B 用
+        "merge_substring_dedup": True,   # L1：子串包含合并（信息更全者留）——A/B 用
+        "max_entities": 10,              # L2：entities 上限（本轮优先，超限丢最旧历史）
+        "max_constraints": 8,            # L2：constraints 上限（同上）
+        "reset_on_topic_switch": True,   # L2：换话题时丢弃历史 entities/constraints（复用 topic 判据）
+        # L2 话题判据（**已标定**，见 history._is_topic_switch docstring 与
+        #   tmp/mt_ctx/calib2_variants.py）：当前话题向量取「段内最近 N 条 **user** 消息」
+        #   累加（词袋 ~310 稳定），阈值 0.08 落在实测分离带 (0.0350, 0.1342) 内（8/8 + 8/8）。
+        #   ⚠️ 与 context.topic_sim_threshold(0.15) **不通用** —— 那个对应「全段累加」的大词袋。
+        "topic_switch_threshold": 0.08,  # L2：换话题判定阈值（仅相似度 + 承接词两条件）
+        "topic_ref_msgs": 10,            # L2：当前话题向量的 user 消息条数上限（稳定词袋规模）
+    },
     "context": {
         "history_immediate_turns": 6,   # 即时窗口轮数（原文逐字注入）
         "history_mid_turns": 20,        # 中期窗口轮数（LLM 摘要压缩）
@@ -698,6 +714,16 @@ CONFIG_SCHEMA = {
         "intent_sem_high_dense":  {"type": "float", "desc": "意图高置信门（dense 路；旧 0.70 在 bigram 下不可达，取 p99=0.76）"},
         "intent_lead_weak":       {"type": "float", "desc": "语义弱档采纳的 top1/top2 领先倍率（默认 1.15；dense 余弦量纲压缩，需与阈值联合标定）"},
         "intent_lead_strong":     {"type": "float", "desc": "语义强档采纳的 top1/top2 领先倍率（默认 1.50；同上）"},
+    },
+    "slots": {
+        "sanitize_clarify_input": {"type": "bool", "desc": "task_decompose 前抽取「原请求：」剔除澄清卡元对话壳（P1-4 L3）"},
+        "merge_normalize_dedup":  {"type": "bool", "desc": "槽位判重前归一化（全角→半角、去空白标点；P1-4 L1）"},
+        "merge_substring_dedup":  {"type": "bool", "desc": "槽位子串包含合并，保留信息更全者（P1-4 L1）"},
+        "max_entities":           {"type": "int",  "desc": "槽位 entities 上限（本轮优先，超限丢最旧历史；P1-4 L2）"},
+        "max_constraints":        {"type": "int",  "desc": "槽位 constraints 上限（同上；P1-4 L2）"},
+        "reset_on_topic_switch":  {"type": "bool", "desc": "换话题时丢弃历史 entities/constraints（复用 topic 判据；P1-4 L2）"},
+        "topic_switch_threshold": {"type": "float", "desc": "换话题判定阈值（仅相似度+承接词；已标定 0.08，与 context.topic_sim_threshold 不通用）"},
+        "topic_ref_msgs":         {"type": "int", "desc": "当前话题向量的 user 消息条数上限（默认 10；稳定词袋规模）"},
     },
     "context": {
         "history_immediate_turns": {"type": "int", "desc": "即时窗口轮数（原文逐字）"},
