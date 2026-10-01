@@ -14,6 +14,8 @@
 import json
 import os
 
+from core.fs_guard import bounded_rmtree, bounded_unlink
+
 # ── 工具元数据（注册表唯一事实源，与 database._seed_builtin_tools 共用）──
 FILE_TOOL_DEFS = [
     {
@@ -248,11 +250,12 @@ def _do_delete(args: dict) -> dict:
         return {"ok": False, "result": f"拒绝删除：{path} 为平台运行时关键文件（数据库/配置/入口脚本）"}
     recursive = bool(args.get("recursive"))
     if os.path.isfile(path):
-        try:
-            os.remove(path)
-        except (PermissionError, OSError) as e:
-            return {"ok": False, "result": f"删除失败: {e}"}
-        return {"ok": True, "result": f"已删除文件: {path}"}
+        # 看门狗删除：防 WorkBuddy 沙箱 tsbx.dll 挂钩 DeleteFileW → 回收站语义死锁
+        # （见 core/fs_guard.py）。用户删除与临时文件不同——超时/失败要**如实返回**，
+        # 不能让用户以为删成功其实没删。bounded_unlink 返回 False 即视为删除未完成。
+        if bounded_unlink(path):
+            return {"ok": True, "result": f"已删除文件: {path}"}
+        return {"ok": False, "result": f"删除超时或失败（可能被系统保护，请重试）: {path}"}
     if os.path.isdir(path):
         if not recursive:
             if os.listdir(path):
@@ -265,12 +268,10 @@ def _do_delete(args: dict) -> dict:
             return {"ok": True, "result": f"已删除空目录: {path}"}
         if _dir_contains_critical(path):
             return {"ok": False, "result": f"拒绝递归删除：{path} 内含平台运行时关键文件（数据库/配置）"}
-        import shutil
-        try:
-            shutil.rmtree(path)
-        except (PermissionError, OSError) as e:
-            return {"ok": False, "result": f"删除失败: {e}"}
-        return {"ok": True, "result": f"已递归删除目录: {path}"}
+        # 递归删除同样看门狗化：shutil.rmtree 内部逐个 os.remove，同样暴露 tsbx 死锁
+        if bounded_rmtree(path):
+            return {"ok": True, "result": f"已递归删除目录: {path}"}
+        return {"ok": False, "result": f"递归删除超时或失败（可能被系统保护，请重试）: {path}"}
     return {"ok": False, "result": f"路径不存在: {path}"}
 
 

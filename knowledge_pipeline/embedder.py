@@ -74,6 +74,26 @@ class Embedder:
     _PROBE_STAMP = 0.0
     _PROBE_TTL = 60.0
 
+    # P1-10 配额熔断：insufficient_quota（免费额度耗尽）属「非临时」错误，反复重试只会
+    # 每次打一次 403 + 刷一条日志、白等一次网络往返。识别到后熔断 10 分钟：期间直接降级
+    # bigram，不再调 API。用户充值后下一个 probe 周期自然恢复。
+    _QUOTA_BLOCK_UNTIL = 0.0
+    _QUOTA_BLOCK_SEC = 600.0
+
+    @classmethod
+    def _note_quota_error(cls, exc) -> None:
+        """识别 403/429 且 body 含 quota/insufficient → 熔断（设类级封锁时间戳）。"""
+        try:
+            import httpx
+            if isinstance(exc, httpx.HTTPStatusError):
+                r = exc.response
+                if r.status_code in (403, 429):
+                    body = (r.text or "").lower()
+                    if "quota" in body or "insufficient" in body:
+                        cls._QUOTA_BLOCK_UNTIL = time.time() + cls._QUOTA_BLOCK_SEC
+        except Exception:
+            pass
+
     # P2-1 query 向量缓存（单文本查询侧）：TTL 60s，上限 512 条
     _QUERY_CACHE = {}
     _QUERY_TTL = 60.0
@@ -108,10 +128,11 @@ class Embedder:
         """批量向量化，返回 list[list[float]]。真 API 失败自动降级 bigram TF。"""
         if not texts:
             return []
-        if self._api:
+        if self._api and time.time() >= Embedder._QUOTA_BLOCK_UNTIL:
             try:
                 return self._embed_api(texts)
             except Exception as e:
+                Embedder._note_quota_error(e)
                 logger.warning("embedding API 调用失败，降级 bigram: %s", e)
         return self._embed_bigram(texts)
 
@@ -128,12 +149,12 @@ class Embedder:
         if not texts:
             return [], "bigram-tf"
         # P2-1 query 缓存：单文本调用（查询侧）命中直返，省一次 embedding API 往返
-        if self._api and len(texts) == 1:
+        if self._api and time.time() >= Embedder._QUOTA_BLOCK_UNTIL and len(texts) == 1:
             key = ("q", texts[0])
             hit = Embedder._QUERY_CACHE.get(key)
             if hit and time.time() - hit[1] < Embedder._QUERY_TTL:
                 return [hit[0]], "openai-compat"
-        if self._api:
+        if self._api and time.time() >= Embedder._QUOTA_BLOCK_UNTIL:
             try:
                 out = []
                 if batch_size <= 0:
@@ -148,6 +169,7 @@ class Embedder:
                         Embedder._QUERY_CACHE.clear()
                 return vecs, "openai-compat"
             except Exception as e:
+                Embedder._note_quota_error(e)
                 logger.warning("embedding API 调用失败，降级 bigram: %s", e)
         return self._embed_bigram(texts), "bigram-tf"
 

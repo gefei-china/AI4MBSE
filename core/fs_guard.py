@@ -63,3 +63,41 @@ def bounded_unlink(path, timeout=DEFAULT_WATCHDOG_TIMEOUT, deleter=None):
         print(f"[fs_guard] 临时文件删除失败（降级，不阻断）: {path} -> {state['err']!r}", flush=True)
         return False
     return True
+
+
+def bounded_rmtree(path, timeout=DEFAULT_WATCHDOG_TIMEOUT, deleter=None):
+    """在 daemon 线程里递归删目录，最多等 `timeout` 秒。
+
+    与 `bounded_unlink` 同模式（⚠️ 两处看门狗逻辑保持同步，勿单独漂移）。`shutil.rmtree`
+    内部对每个文件逐个 `os.remove`/`os.unlink` —— 同样暴露于 tsbx 沙箱钩子死锁，故同样
+    必须包一层看门狗，超时泄漏目录（交由 OS/清理任务兜底），绝不阻塞调用方。
+
+    参数：
+      deleter  仅测试注入用（默认 shutil.rmtree），便于构造「永远挂起」的假删除函数做变异自证
+
+    返回 True=已删除/不存在；False=超时泄漏或删除抛异常。**不抛**。
+    """
+    import shutil
+    deleter = deleter or shutil.rmtree
+    if not os.path.exists(path):
+        return True
+    state = {}
+
+    def _run():
+        try:
+            deleter(path)
+            state["done"] = True
+        except Exception as exc:  # noqa: BLE001
+            state["err"] = exc
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        print(f"[fs_guard] 目录递归删除超时（>{timeout}s），已放弃并泄漏: {path}", flush=True)
+        return False
+    if "err" in state:
+        print(f"[fs_guard] 目录递归删除失败（降级，不阻断）: {path} -> {state['err']!r}", flush=True)
+        return False
+    return True
+

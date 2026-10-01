@@ -23,7 +23,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-from core.fs_guard import bounded_unlink, DEFAULT_WATCHDOG_TIMEOUT
+from core.fs_guard import bounded_unlink, bounded_rmtree, DEFAULT_WATCHDOG_TIMEOUT
 
 PASS, FAIL = [], []
 
@@ -78,6 +78,34 @@ try:
     os.remove(_p4)
 except Exception:
     pass
+
+# ── [F] bounded_rmtree 看门狗 ───────────────────────────────────
+print("[F] bounded_rmtree 看门狗语义")
+
+import shutil as _shutil
+
+_dir = os.path.join(tempfile.gettempdir(), "fsg_dir_%d" % os.getpid())
+os.makedirs(os.path.join(_dir, "sub"), exist_ok=True)
+open(os.path.join(_dir, "sub", "f.txt"), "w").write("x")
+check("F5 正常递归删目录返回 True 且目录消失",
+      bounded_rmtree(_dir) is True and not os.path.exists(_dir))
+check("F6 目录不存在返回 True（幂等）", bounded_rmtree(_dir) is True)
+
+
+def _slow_tree(p):           # 假删除：真实 sleep 模拟「tsbx 死锁」
+    time.sleep(0.4)
+    _shutil.rmtree(p)
+
+
+_dir2 = os.path.join(tempfile.gettempdir(), "fsg_dir2_%d" % os.getpid())
+os.makedirs(_dir2, exist_ok=True)
+open(os.path.join(_dir2, "f.txt"), "w").write("x")
+_t0 = time.time()
+_r7 = bounded_rmtree(_dir2, timeout=0.1, deleter=_slow_tree)
+_dt7 = time.time() - _t0
+check("F7 慢递归删除 → 看门狗超时返回 False，且不阻塞（不等满 0.4s）",
+      _r7 is False and _dt7 < 0.35, "返回=%s 耗时=%.2fs" % (_r7, _dt7))
+time.sleep(0.6)
 
 
 # ── [M] 变异自证 ───────────────────────────────────────────────
