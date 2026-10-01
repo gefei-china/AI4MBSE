@@ -8,6 +8,46 @@ from .common import *
 class OrchestrMixin:
     """团队编排池、多 Agent 编排触发与 Planner 流程复用。"""
 
+    # ── 编排触发的「可编排意图」边界 ──────────────────────────────
+    # 2026-10-02（P1-12）：原 `_needs_orchestration` 用**硬编码 6 意图白名单**限定编排触发，
+    # 用户新建的专家 Agent 无法参与自动编排。改为「读 agents 表里 enabled 且 role=sub 的
+    # Agent 意图名」，只有两类**明确不编排**的意图才硬排除（黑名单），其余交给后续规则信号 /
+    # 多意图 / LLM 复杂度判定。这样编排触发跟着 Agent 配置走，而不是跟着代码常量走。
+    # 为什么这两类是黑名单：chat = 通用入口（本身就该直答）；system_mgmt = 系统数据查询
+    #（单任务）；requirement_quality = 单交付物质量分析（execute 里有专门双通道，不编排）。
+    _ORCH_EXCLUDE_INTENTS = ("chat", "system_mgmt", "requirement_quality")
+    # 旧白名单 → 兜底常量：agents 表查询失败 / 结果为空时回退，保证行为不塌方。
+    _ORCH_WHITELIST_FALLBACK = (
+        "requirement_analysis", "design", "impact", "review", "report_generation", "knowledge_qa")
+
+    def _orchestrable_from_rows(self, rows) -> set:
+        """纯函数：从 agent 行列表推导可编排意图集合（空则回退旧白名单）。
+
+        与 DB 读取解耦，便于单测/变异自证。语义：rows 里 role=sub 的 name 集合，排除黑名单；
+        结果为空（查询失败 / 表空）→ 回退旧固定白名单，保证编排触发行为不塌方。
+        """
+        _intents = {r["name"] for r in rows} - set(self._ORCH_EXCLUDE_INTENTS)
+        return _intents or set(self._ORCH_WHITELIST_FALLBACK)
+
+    def _orchestrable_intents(self) -> set:
+        """可编排意图 = enabled 且 role=sub 的 Agent 意图名，排除入口/系统/单交付物类。
+
+        查 agents 表（role=sub 的才是可被委派的专家 Agent；role=main 是团队负责人，不作为
+        编排触发意图）。查询失败或结果为空 → 回退旧固定白名单（与历史行为一致，不塌方）。
+        """
+        from database import get_db
+        try:
+            _conn = get_db()
+            try:
+                _rows = _conn.execute(
+                    "SELECT name FROM agents WHERE status='active' AND agent_role='sub'"
+                ).fetchall()
+            finally:
+                _conn.close()
+        except Exception:
+            _rows = []
+        return self._orchestrable_from_rows(_rows)
+
     def _orch_pool(self, conn, domain: str = "") -> list:
         """Task 5：编排候选池意图名列表（动态化：discover → fallback 旧池 → 内置常量兜底）。
 
@@ -169,7 +209,10 @@ class OrchestrMixin:
         """
         if forced_intent:
             return False
-        if intent not in ("requirement_analysis", "design", "impact", "review", "report_generation", "knowledge_qa"):
+        # P1-12：可编排意图从「硬编码 6 白名单」改为「agents 表 enabled+role=sub 动态推导」。
+        # 语义等价于旧白名单（6 个内置专家 Agent 都是 sub），但消除了写死——新增的 sub 角色
+        # Agent 自动进入可编排集合，编排触发跟着 Agent 配置走而非代码常量走。
+        if intent not in self._orchestrable_intents():
             return False
         t = (user_input or "").strip()
         # 多意图识别（阶段连词或并列清单，≥2 个不同阶段）→ 直接编排
