@@ -12,7 +12,7 @@
 import json
 from datetime import datetime
 
-# 池内合法意图（与 IntentRouter.INTENTS 对齐；chat 也算有效样本，它是"该走闲聊"的正例）
+# 池内合法意图（与内置 Agent（builtin=1）对齐；chat 也算有效样本，它是"该走闲聊"的正例）
 VALID_INTENTS = ("requirement_analysis", "requirement_quality", "design", "impact",
                  "review", "report_generation", "system_mgmt", "knowledge_qa", "chat")
 VALID_STATUS = ("new", "suggested", "confirmed", "rejected")

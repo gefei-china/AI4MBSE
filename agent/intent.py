@@ -25,26 +25,9 @@ class IntentRouter:
     # 对请求路径完全无效（实测：加规则后指纹仍是旧的）。改用类变量后与实例数无关。
     _RULES_EPOCH = 0
 
-    INTENTS = {
-        "requirement_analysis": ["需求", "解析", "条目", "需求分析", "requirement"],
-        "requirement_quality": ["需求质量", "质量评审", "质量分析", "模糊词", "不可验证"],
-        "design": ["方案", "设计", "架构", "方案设计", "design", "建模", "sysmlv2代码", "代码生成", "模型生成"],
-        "impact": ["变更影响", "影响分析", "影响范围", "波及", "改动", "impact", "change", "变更影响"],
-        "review": ["校验", "评审", "检查", "预评审", "review", "validate"],
-        "report_generation": ["报告", "文档", "汇报", "导出", "生成报告", "report"],
-        "system_mgmt": ["用户", "角色", "权限", "审计", "监控", "账号", "会话统计", "系统数据", "运行统计", "有几个用户", "哪些用户", "谁的权限", "谁的角色"],
-        "knowledge_qa": ["知识库", "资料", "文档里", "查一下", "knowledge", "检索",
-                         # 2026-09-25：补说明类信号（此前完全无覆盖 → 一律被 design 的泛词"建模"劫持）
-                         "介绍", "说明", "什么是", "是什么", "区别", "原理", "概述", "方法论"],
-        "chat": [],
-    }
-
     # ── 2026-09-25 说明类意图判定（修「MBSE建模方法论介绍」被误判为 design）──
-    #  实测根因：① design 内置词含泛词「建模」，而匹配是"首个命中即 return 0.95"
-    #            （`any(k in t for k in keywords)`，无特异性加权、无竞争比较）；
-    #            ② knowledge_qa 完全没有"介绍/说明/是什么/区别/包含哪些"这类信号；
-    #            ③ INTENTS 字典顺序上 design 远早于 knowledge_qa → 泛词先劫持。
-    #  修法（最小且不改词表语义）：在**最前置**（缓存之前）加一段"说明类优先"——
+    #  实测根因：① design 内置词含泛词「建模」；② knowledge_qa 缺乏"介绍/说明"类信号。
+    #  修法（最小）：在**最前置**（缓存之前）加一段"说明类优先"——
     #    同时满足「含说明信号」且「不含动作信号」→ 判 knowledge_qa。
     #  为什么必须在缓存之前：这条输入早已被误判写入意图缓存，放在规则后会被旧缓存挡住，
     #    新逻辑永不生效（本仓"缓存毒化"是有前例的坑，见下方 requirement_quality / impact 两道防线）。
@@ -163,16 +146,15 @@ class IntentRouter:
         return None
 
     def _kw_layers(self) -> list:
-        """关键词匹配层：DB 层（agents 表 intent_keywords）优先；DB 空时才回退 builtin INTENTS 兜底。
+        """关键词匹配层：只用 DB 层（agents 表 intent_keywords），不再有硬编码词表兜底。
 
-        P1-15（2026-10-02）移除写死意图：db 层已完整覆盖内置意图（P1-14 合并 INTENTS 关键词
-        + 本批补 requirement_quality Agent），故 db 非空时硬编码 INTENTS 不再参与关键词竞争，
-        路由完全跟着 Agent 配置走；db 空（无连接/表空/未 register_keywords）才回退 builtin 兜底，
-        行为不塌方。
+        P1-16（2026-10-02）彻底移除 INTENTS 常量：db 层（agents.intent_keywords）是关键词路由
+        的**唯一**来源，路由完全跟着 Agent 配置走；db 空（无连接/表空/未 register_keywords）时
+        返回空层 —— 关键词层无信号，自然下沉语义/LLM 兜底，行为不塌方（异常态本就该承认「无意图」）。
         """
         if self._db_intents:
             return [("db", self._db_intents)]
-        return [("builtin", self.INTENTS)]
+        return []
 
     @staticmethod
     def _is_report_command(t: str) -> bool:
@@ -294,12 +276,10 @@ class IntentRouter:
         return dict(self._last_meta)
 
     def _index_fingerprint(self) -> str:
-        """路由索引指纹：INTENTS 关键词 + DB Agent 关键词 + 语义索引名——任一变化缓存自动失效。"""
+        """路由索引指纹：DB Agent 关键词 + 语义索引名——任一变化缓存自动失效。"""
         try:
             import hashlib
             parts = []
-            for k in sorted(self.INTENTS):
-                parts.append(k + ":" + ",".join(sorted(self.INTENTS[k])))
             for k in sorted(self._db_intents):
                 parts.append(k + ":" + ",".join(sorted(self._db_intents[k])))
             if self._semantic_index:
@@ -596,7 +576,7 @@ class IntentRouter:
         if sem:
             route = "semantic" if self._last_sem_score >= 0.70 else "semantic_weak"
             # P0-2：弱语义（<0.70）≠ 强信号——有会话意图时优先会话继承（追问/续写如"再详细一点"不误判）
-            if route == "semantic_weak" and prev_intent and prev_intent in self.INTENTS:
+            if route == "semantic_weak" and prev_intent and prev_intent in self._db_intents:
                 return self._done(prev_intent, "inherit", 0.55, text, fp)
             return self._done(sem, route, self._last_sem_score, text, fp)
         # M2：规则/语义均未命中 → LLM 意图识别兜底（配置真实 LLM 时生效，Mock/无 key 自动跳过）
@@ -643,7 +623,7 @@ class IntentRouter:
                         and llm_conf >= float(self._cfg_get("history_llm_min", 0.55))):
                     return self._done(llm_intent, "llm_history", llm_conf, text, fp,
                                       cacheable=False, used_history=True, confirmed=True)
-                if prev_intent and prev_intent in self.INTENTS:
+                if prev_intent and prev_intent in self._db_intents:
                     return self._done(prev_intent, "inherit", 0.55, text, fp)
                 # 2026-09-26（**扩集后评测抓出并修**）：无会话上下文可继承时，低置信猜测也**不得硬选**。
                 #  实测两条生产真实说法：「帮我看看这个项目的预算」「帮我测算一下这个项目的成本」
@@ -699,7 +679,7 @@ class IntentRouter:
                                   confirmed=(llm_intent == prev_intent))
             return self._done(llm_intent, "llm", llm_conf, text, fp)
         # P0-2：会话级意图保持——无任何信号命中时继承上轮意图（追问/续写不被误判 chat）
-        if prev_intent and prev_intent in self.INTENTS:
+        if prev_intent and prev_intent in self._db_intents:
             return self._done(prev_intent, "inherit", 0.55, text, fp)
         return self._done("chat", "chat", 0.0, text, fp)
 
@@ -757,7 +737,7 @@ class IntentRouter:
         """
         try:
             from llm import llm_client
-            known = set(self._db_intents.keys()) | set(self.INTENTS.keys()) - {"chat"}
+            known = set(self._db_intents.keys()) - {"chat"}
             known_list = "、".join(sorted(known))
             _user = str(text)[:500]
             if context:
@@ -833,12 +813,12 @@ class IntentRouter:
         #   「帮我看看这个系统的接口设计是否合理」：design 0.5541 / design 0.4993，比值 0.90
         #   → 被判"未领先"）。故按意图名取 max 后再算意图级 top1/top2 与领先倍率，
         #   存入 `_last_sem_alt` 供 LLM 段互证。
-        #   ⚠️ 只记"意图名"（`in self.INTENTS`）—— 细粒度子 Agent 名不参与互证（留 P0-2）。
+        #   ⚠️ 记所有已注册 Agent 名（`in self._db_intents`，P1-16 删 INTENTS 后含内置+自建）—— 仍不参与互证（留 P0-2）。
         #   ⚠️ **不参与本函数任何 return 判定**（零行为变更），纯旁路观测。
         _agg = {}
         for _sc, _it in scored:
             _nm = _it.get("name", "")
-            if _nm in self.INTENTS and _nm != "chat" and _sc > _agg.get(_nm, 0.0):
+            if _nm in self._db_intents and _nm != "chat" and _sc > _agg.get(_nm, 0.0):
                 _agg[_nm] = _sc
         if _agg:
             _ranked = sorted(_agg.items(), key=lambda x: -x[1])
@@ -1012,7 +992,7 @@ class IntentRouter:
             subs = [s.strip() for s in self._PARA_CONN.split(seg) if s.strip()]
             # "映射成功"的判据 = 返回值不再是原文本本身（`_clause_to_intent_strict` 未命中时原样返回）
             mapped = {self._clause_to_intent_strict(s) for s in subs}
-            mapped = {m for m in mapped if m in self.INTENTS}
+            mapped = {m for m in mapped if m in self._db_intents}
             if len(subs) > 1 and len(mapped) >= 2:
                 frags.extend(subs)
             else:
@@ -1033,7 +1013,7 @@ class IntentRouter:
         out, seen = [], set()
         for t in tasks or []:
             it, txt = t.get("intent"), t.get("text")
-            if not it or it == txt or it not in self.INTENTS or it in seen:
+            if not it or it == txt or it not in self._db_intents or it in seen:
                 continue
             seen.add(it)
             out.append(t)
@@ -1068,7 +1048,7 @@ class IntentRouter:
         - requirement_analysis：无来源/输入线索 → 建议 source（需求来源）
         - 其余意图返回 []
         """
-        if not intent or intent not in self.INTENTS:
+        if not intent or intent not in self._db_intents:
             return []
         t = (text or "").strip()
         if intent == "impact":

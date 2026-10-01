@@ -103,7 +103,7 @@ print("── T7 detect() 主流程不受影响 ──")
 for text in ["提供一段需求，进行需求分析、方案设计、代码校验", "帮我解析需求，然后做方案设计、代码校验"]:
     got = rt.detect(text)
     meta = rt.get_last_meta()
-    chk(f"「{text}」仍能识别单意图", bool(got) and got in IntentRouter.INTENTS,
+    chk(f"「{text}」仍能识别单意图", bool(got) and got in rt._db_intents,
         f"intent={got} route={meta['route']}")
 
 print("── T8 多意图驱动编排门槛（_needs_orchestration）──")

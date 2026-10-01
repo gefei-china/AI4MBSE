@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
-"""意图识别「builtin INTENTS 层降级为兜底」的自检（P1-15，移除写死意图）。
+"""意图识别「关键词路由只用 DB 层（INTENTS 常量已彻底移除）」的自检（P1-16）。
 
-背景：P1-14 把 INTENTS 硬编码关键词合并进 DB 内置 Agent，本批补上唯一缺失的
-requirement_quality Agent 后，DB 层已完整覆盖 builtin 层。于是把关键词路由的
-builtin 层从「并列参与竞争」降级为「DB 空时才兜底」——路由完全跟着 Agent 配置走，
-硬编码 INTENTS 不再是路由主依据。
+背景：P1-15 把关键词路由的 builtin 层降级为兜底；P1-16 彻底删除 INTENTS 常量，
+关键词路由的**唯一**来源是 agents 表 intent_keywords（db 层），路由完全跟着 Agent 配置走。
 
 本脚本证明：
-  1) `_kw_layers` 降级语义正确（db 非空→只用 db；db 空→builtin 兜底）；
+  1) `_kw_layers` 语义正确（db 非空→只用 db；db 空→返回空层，下沉语义/LLM）；
   2) requirement_quality 新 Agent 经 db 层识别生效；
-  3) 数据契约：DB 层关键词 ⊇ INTENTS 词表（降级安全的前提，可失效）；
-  4) 变异自证：撤销 db 优先（→builtin）或撤销兜底（→空）都被抓住。
+  3) 内置意图完整性：9 个系统级意图名都在 db 层（防误删内置 agent 静默丢路由）；
+  4) 变异自证：撤销 db 优先（→空）或恢复写死 builtin 兜底 都被抓住。
 """
 import inspect
 import json
@@ -63,11 +61,11 @@ def make_router():
 # ── [F] 降级语义 ───────────────────────────────────────────────
 print("[F] builtin 层降级为兜底")
 
-# F1: db 空（未 register）→ builtin 兜底，行为不塌方
+# F1: db 空（未 register）→ 返回空层（无关键词信号，下沉语义/LLM），不再有 builtin 兜底
 _rt0 = IntentRouter()
-check("F1 db 空 → _kw_layers 回退 builtin 兜底",
-      [_l[0] for _l in _rt0._kw_layers()] == ["builtin"],
-      "layers=%s" % [_l[0] for _l in _rt0._kw_layers()])
+check("F1 db 空 → _kw_layers 返回空层（无关键词信号，下沉语义/LLM）",
+      _rt0._kw_layers() == [],
+      "layers=%s" % _rt0._kw_layers())
 
 # F2: db 非空 → 只用 db 层，builtin 不再参与
 _rt1 = make_router()
@@ -84,20 +82,13 @@ for _t in ("帮我做一次需求质量分析", "这份需求的质量评审怎�
     check("F3 requirement_quality 经 db 层识别（纯函数）: %s" % _t,
           _r == "requirement_quality", "db_pick=%s" % _r)
 
-# F4: 数据契约 —— DB 层关键词 ⊇ INTENTS 词表（除 chat）。这是降级安全的**前提**：
-#     若未来有人在 INTENTS 加新词却不同步 agent，本断言会红（防「静默丢路由」）。
-_db_kw = {}
-for r in _ROWS:
-    _db_kw[r["name"]] = set(k.lower() for k in (json.loads(r["intent_keywords"] or "[]")))
-_missing = {}
-for _intent, _kw in IntentRouter.INTENTS.items():
-    if _intent == "chat":
-        continue
-    _diff = set(_kw) - _db_kw.get(_intent, set())
-    if _diff:
-        _missing[_intent] = sorted(_diff)
-check("F4 数据契约：DB 层关键词 ⊇ INTENTS（除 chat），无缺失",
-      not _missing, "缺失=%s" % _missing)
+# F4: 内置意图完整性契约 —— 9 个系统级内置意图名必须都在 db 层注册（agents 表 builtin=1）。
+#     若未来有人误删内置 agent 或改名，本断言会红（防「静默丢路由」）。
+_BUILTIN_NAMES = {"requirement_analysis", "requirement_quality", "design", "impact",
+                  "review", "report_generation", "system_mgmt", "knowledge_qa", "chat"}
+_db_names = {r["name"] for r in _ROWS}
+_missing = _BUILTIN_NAMES - _db_names
+check("F4 内置意图完整性：9 个系统级意图名都在 db 层", not _missing, "缺失=%s" % _missing)
 
 
 # ── [M] 变异自证（exec 孪生体）─────────────────────────────────
@@ -115,27 +106,26 @@ def _twin(mutate, label):
 
 
 class _Fake:
-    INTENTS = {"design": ["建模"], "chat": []}
+    pass
 
 
-# M1: 撤销 db 优先（`if self._db_intents:` → `if False:`）→ db 非空也走 builtin，
+# M1: 撤销 db 优先（`if self._db_intents:` → `if False:`）→ db 非空也走 return []，
 #     丢失自建 Agent 关键词（「需求视图生成」只在 db 层）→ 被抓住。
 _fn1 = _twin(lambda s: s.replace("if self._db_intents:", "if False:"), "1")
 _f1 = _Fake()
 _f1._db_intents = {"需求视图生成": ["需求视图"]}
 _layers1 = _fn1(_f1)
-check("M1 撤销 db 优先 → builtin 层丢自建 Agent 关键词（被抓住）",
-      [_l[0] for _l in _layers1] == ["builtin"],
-      "layers=%s" % [_l[0] for _l in _layers1])
+check("M1 撤销 db 优先 → db 层丢自建 Agent 关键词（被抓住）",
+      _layers1 == [], "layers=%s" % _layers1)
 
-# M2: 撤销兜底（`return [("builtin", self.INTENTS)]` → `return []`）→ db 空时返回空，
-#     关键词层无信号下沉（而非用 builtin 兜底），兜底失效被抓住。
-_fn2 = _twin(lambda s: s.replace('return [("builtin", self.INTENTS)]', "return []"), "2")
+# M2: 恢复写死 builtin 兜底（`return []` → `return [("builtin", ...)]`）→ db 空时返回写死层，
+#     证明「返回空层」是有效设计而非空转（若被偷偷改回硬编码兜底，本断言会红）。
+_fn2 = _twin(lambda s: s.replace("return []", 'return [("builtin", {"design": ["建模"]})]'), "2")
 _f2 = _Fake()
 _f2._db_intents = {}
 _layers2 = _fn2(_f2)
-check("M2 撤销兜底 → db 空时返回空（兜底失效被抓住）",
-      _layers2 == [], "layers=%s" % _layers2)
+check("M2 恢复写死 builtin 兜底 → db 空时返回写死层（被抓住）",
+      [_l[0] for _l in _layers2] == ["builtin"], "layers=%s" % _layers2)
 
 
 # ── 汇总 ───────────────────────────────────────────────────────

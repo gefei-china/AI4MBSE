@@ -422,7 +422,7 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS ix_sc_query ON semantic_cache(query)")
 
     # ── 意图识别增强（P0-3）：意图级缓存——L1 命中直接返回（省重复规则/语义/LLM 全链路）──
-    # index_fp：路由索引指纹（INTENTS + DB Agent 关键词 + 语义索引），指纹变化自动失效
+    # index_fp：路由索引指纹（DB Agent 关键词 + 语义索引），指纹变化自动失效
     c.execute("""CREATE TABLE IF NOT EXISTS intent_cache (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         query TEXT NOT NULL,

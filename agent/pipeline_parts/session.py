@@ -6,7 +6,7 @@ from .common import *
 
 # 2026-09-17 S4：澄清探测（_clarify_detect）的确定性前置规则——命中即跳过，省一次 LLM 调用。
 # 该探测此前每次请求都会调用一次 LLM（usage: intent='clarify_detect'，prompt 139~152）。
-# 规则 2 的领域关键词直接复用 router.INTENTS / router._db_intents，此处只补通用动作/建模动词。
+# 规则 2 的领域关键词直接复用 router._db_intents，此处只补通用动作/建模动词。
 _CLARIFY_ACTION_VERBS = (
     "生成", "建模", "创建", "新增", "添加", "修改", "更新", "删除", "移除", "导入", "导出",
     "分析", "绘制", "写出", "输出", "设计", "编写", "评审", "校验", "检查", "统计", "列出",
@@ -167,10 +167,7 @@ class SessionMixin:
 
     def _clarify_candidates(self, current: str) -> list:
         """澄清候选：除当前意图外的已知意图列表（供前端「改选重发」按钮）。"""
-        known = [k for k in self.router.INTENTS.keys() if k != "chat"]
-        for name in self.router._db_intents.keys():
-            if name not in known:
-                known.append(name)
+        known = [k for k in self.router._db_intents.keys() if k != "chat"]
         return [k for k in known if k != current][:5]
 
     # ── 2026-09-26 意图确认（「确定不了就别硬选」，用户明确要求）─────────────────────
@@ -227,16 +224,13 @@ class SessionMixin:
 
         P0-5（2026-09-30）`sem_alt`：本次**语义层的意图级 top1**（{intent, score}）。
         它此前只被用来判"互斥/澄清"，**在候选排序上完全没被消费** —— 于是「导出最近审计日志」
-        这类句子的卡片永远只显示 `INTENTS` 字典的**前 4 个**（requirement_analysis /
+        这类句子的卡片永远只显示 `_db_intents` 字典的**前 4 个**（requirement_analysis /
         requirement_quality / design / impact），真正的 system_mgmt 连选项都进不去，
         用户只能靠"其他/自定义"手打。现在把它插到「当前猜测」之后、其余之前。
         ⚠️ **只影响顺序，不改变"谁被选中"** —— 语义意见本身不构成路由决定（与 P0-1 的
         "不硬选"一致），所以这里可以安全地消费它。
         """
-        names = [k for k in self.router.INTENTS.keys() if k != "chat"]
-        for n in (getattr(self.router, "_db_intents", {}) or {}).keys():
-            if n not in names:
-                names.append(n)
+        names = [k for k in (getattr(self.router, "_db_intents", {}) or {}).keys() if k != "chat"]
         _alt_name = sem_alt.get("intent", "") if isinstance(sem_alt, dict) else ""
         ordered = (([current_intent] if current_intent in names else [])
                    + ([_alt_name] if _alt_name in names and _alt_name != current_intent else [])
@@ -327,7 +321,7 @@ class SessionMixin:
 
         规则（任一命中即跳过，视为信息已足够）：
           1) quick_pick：快捷指定 Agent / 技能（forced_intent / skill_name）——用户已表达意图
-          2) action_kw:<词>：输入含明确建模/动作动词（复用 router.INTENTS 与 router._db_intents
+          2) action_kw:<词>：输入含明确建模/动作动词（复用 router._db_intents
              的领域关键词，再叠加 _CLARIFY_ACTION_VERBS 通用动作动词）
           3) long_input：输入长度 >= _CLARIFY_SKIP_MIN_CHARS（长输入信息量足够，不必反问）
         命不中 → 返回 ""，调用方继续走原有 LLM 澄清探测（行为不变）。
@@ -340,8 +334,6 @@ class SessionMixin:
         low = text.lower()
         try:
             kws = []
-            for _vs in (self.router.INTENTS or {}).values():
-                kws.extend(_vs or [])
             for _vs in (getattr(self.router, "_db_intents", {}) or {}).values():
                 kws.extend(_vs or [])
         except Exception:

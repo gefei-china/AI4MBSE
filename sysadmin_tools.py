@@ -159,7 +159,7 @@ def exec_tool(name: str, arguments: dict) -> dict:
 
 
 def seed(conn: sqlite3.Connection):
-    """幂等注册：tools 表 + agents 表 + agent_tools 绑定 + INTENTS 由 intent.py 静态注册。"""
+    """幂等注册：tools 表 + agents 表 + agent_tools 绑定；意图关键词由 agents.intent_keywords 承载（intent.py 动态读 db）。"""
     descs = {k: v["desc"] for k, v in TOOLS.items()}
     for name, desc in descs.items():
         conn.execute(

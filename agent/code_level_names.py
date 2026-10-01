@@ -12,7 +12,6 @@
 
 | 来源 | 影响面 |
 |---|---|
-| `agent.intent.IntentRouter.INTENTS` | 意图路由表，key 就是 Agent 名；改名后该意图再也匹配不到这个 Agent |
 | `agent.registry._FALLBACK_ORCH_AGENTS` | 内置编排回退池；编排降级时会按名字找不到 Agent |
 | `agent.registry` 内置 `AGENTS` 字典 | 内置 Agent 定义表的 key |
 | `_ORCH_AGENTS`（pipeline 类属性） | 与上面两个保持一致，由 registry 常量代表，不重复导入以免循环 |
@@ -26,13 +25,6 @@ from typing import Set
 def code_level_agent_names() -> Set[str]:
     """返回被 Python 代码硬引用的一组 Agent 名字（可能为空集 —— 任何一处读取失败都跳过而非报错）。"""
     names: Set[str] = set()
-
-    # ① 意图路由表（最没有的一份：路由失效 = 用户问了也没人答）
-    try:
-        from agent.intent import IntentRouter
-        names |= {k for k in (getattr(IntentRouter, "INTENTS", {}) or {}) if isinstance(k, str)}
-    except Exception:      # noqa: BLE001  清单只用于提示，读不到就少提示，绝不阻断改名
-        pass
 
     # ② 内置编排回退池（字符串常量）
     try:

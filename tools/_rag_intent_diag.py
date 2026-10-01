@@ -28,6 +28,6 @@ for k in ("需求质量", "质量评审", "需求质量评审", "质量分析", 
         print("强信号命中:", k)
 print("intent_rules:", router._rules)
 print("db_intents:", {k: v for k, v in (router._db_intents or {}).items() if "质量" in str(v)})
-hits = [(intent, [kw for kw in kws if kw in t]) for intent, kws in getattr(router, "INTENTS", {}).items() if any(kw in t for kw in kws)]
-print("INTENTS 兜底命中:", hits)
+hits = [(intent, [kw for kw in kws if kw in t]) for intent, kws in (router._db_intents or {}).items() if any(kw in t for kw in kws)]
+print("db_intents 命中:", hits)
 conn.close()

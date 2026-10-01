@@ -201,7 +201,9 @@ class PromptMixin:
             return ""
         if not rows:
             return ""
-        intent_kws = IntentRouter.INTENTS.get(intent, []) or [intent]
+        # P1-16 删 INTENTS：原用硬编码关键词匹配模板 name/scenario，改为意图名本身匹配
+        #（prompts 表当前为空，无实际影响；未来模板应按意图名标注 scenario）
+        intent_kws = [intent]
         best = None
         for r in rows:
             hay = f"{r['name'] or ''} {r['scenario'] or ''}"
