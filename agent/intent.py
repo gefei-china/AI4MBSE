@@ -162,6 +162,18 @@ class IntentRouter:
             return _pick[0]
         return None
 
+    def _kw_layers(self) -> list:
+        """关键词匹配层：DB 层（agents 表 intent_keywords）优先；DB 空时才回退 builtin INTENTS 兜底。
+
+        P1-15（2026-10-02）移除写死意图：db 层已完整覆盖内置意图（P1-14 合并 INTENTS 关键词
+        + 本批补 requirement_quality Agent），故 db 非空时硬编码 INTENTS 不再参与关键词竞争，
+        路由完全跟着 Agent 配置走；db 空（无连接/表空/未 register_keywords）才回退 builtin 兜底，
+        行为不塌方。
+        """
+        if self._db_intents:
+            return [("db", self._db_intents)]
+        return [("builtin", self.INTENTS)]
+
     @staticmethod
     def _is_report_command(t: str) -> bool:
         """SP-R 报告生成命令（「生成/撰写/输出…报告」）判定 —— 单一真源，db 守卫与 SP-R 路由共用。"""
@@ -537,8 +549,7 @@ class IntentRouter:
         except Exception:
             pass
         if _scored:
-            pick, sc, hits, layer = self._scored_keyword_pick(
-                t, [("db", self._db_intents), ("builtin", self.INTENTS)])
+            pick, sc, hits, layer = self._scored_keyword_pick(t, self._kw_layers())
             if pick:
                 # 强特异词（≥2.0，如"方案设计/变更影响/追溯矩阵"）→ 直接采信，**不调语义**（省一次 embedding）。
                 if sc >= 2.0:
@@ -560,15 +571,14 @@ class IntentRouter:
             # 关键词层**无信号**（未命中，或只命中泛词）→ 下沉：语义 → LLM → 继承 → chat
             # （对标：低于阈值不硬路由，交给更强的下一层；泛词不得单独决定路由）
         else:
-            # ── 旧行为（A/B 基线）：DB 关键词优先、首个命中即 0.95 ──
-            for intent, keywords in self._db_intents.items():
-                if any(k in t for k in keywords):
-                    return self._done(intent, "rule", 0.95, text, fp)
-            for intent, keywords in self.INTENTS.items():
-                if intent == "chat":
-                    continue
-                if any(k in t for k in keywords):
-                    return self._done(intent, "rule", 0.95, text, fp)
+            # ── 旧行为（A/B 基线）：关键词层首个命中即 0.95（P1-15 起同样走 _kw_layers，
+            #    即 db 优先、builtin 兜底，与 _scored 分支的降级语义一致）──
+            for _layer, _mapping in self._kw_layers():
+                for intent, keywords in _mapping.items():
+                    if intent == "chat":
+                        continue
+                    if any(k in t for k in keywords):
+                        return self._done(intent, "rule", 0.95, text, fp)
         # ── P0-5（2026-09-30，v2）：历史联合召回 —— 走到这里就是"低置信分支"（关键词层无信号）──
         #   **仍成立**的部分：追问句「那它的风险呢」「再详细一点」「展开说说」单发时 LLM 只给
         #   chat@0.20~0.35（等于判不出）；带上同话题上文后能判出 impact（实测 9/9，分 0.62~0.95）。
