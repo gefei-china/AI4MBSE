@@ -881,19 +881,6 @@ class IntentRouter:
         return re.findall(r"#([一-龥A-Za-z0-9_.\-]+)", text)
 
     # ── Task 11 多意图分解 + suggested_slots（纯规则实现，不调 LLM，不影响 detect 主流程）──
-    # 子句 → 意图名映射表（有序：高特异优先，避免"需求分析"被 design 的"方案"等先命中）
-    _CLAUSE_INTENTS = (
-        ("requirement_analysis", ("需求分析", "需求条目", "需求", "requirement")),
-        ("impact", ("影响分析", "变更影响", "影响", "impact")),
-        ("review", ("评审", "校验", "预评审", "review", "validate", "检查")),
-        ("report_generation", ("报告", "汇报", "文档", "导出", "report")),
-        ("design", ("方案设计", "方案", "架构", "设计", "建模", "模型", "sysml", "代码生成",
-                   # 2026-09-25 补（verify_multi_intent_split.py T1 实测）：「输出 BDD 视图」
-                   # 此前在子句映射里**完全映射不上** → sequence 里塞的是中文原句而非意图名，
-                   # planner 的阶段序约束因此半失效（['requirement_analysis','输出 BDD 视图',…]）。
-                   "视图", "bdd", "ibd", "代码", "design")),
-        ("knowledge_qa", ("知识库", "检索", "查询", "资料", "knowledge")),
-    )
     # 阶段拆解正则：模式 A（先…再/然后/接着…最后…）｜模式 B（X并Y，最后/然后/接着Z——无"先"的并列+收尾）
     # $ 锚定结尾：约束非贪婪子句吃满剩余文本，避免"方案设计"被拆成单字"方/出"
     _STAGE_RE_A = re.compile(
@@ -913,9 +900,12 @@ class IntentRouter:
     #  也会误伤"先A、B，再C"这类混合句。**L1 一行不改**（零行为变更），L2 只做兜底。
     _PARA_SEP = re.compile(r"[、,，;；]")
     _PARA_CONN = re.compile(r"(?:以及|同时|然后|接着|并)")
-    # L2 专用的**严格**关键词集：与 L1 的 `_CLAUSE_INTENTS` 不同，这里**剔除泛词**
-    # （需求/影响/设计/方案/模型/检查…）。理由与关键词层同一条纪律：泛词不得单独判定，
-    # 否则「提供一段需求」这种**背景句**会被判成 requirement_analysis 阶段（实测踩到）。
+    # L2 专用的**严格**关键词集（多意图子句映射专用，与关键词层 db 词表**刻意分开维护**）：
+    # 这里剔除泛词（需求/影响/设计/方案/模型/检查…），且含 db 层没有的多意图特异词
+    # （如「解析需求」「需求条目」「需求提取」），是「有序首个命中 + 手工特异词」的调校结果。
+    # 泛词不得单独判定，否则「提供一段需求」这种背景句会被判成 requirement_analysis 阶段（实测踩到）。
+    # P1-17 曾尝试改用 db 层 + _scored_keyword_pick 泛词过滤替代，eval_multi_intent 从 1.000
+    # 跌到 0.667（缺「解析需求」等特异词 + 打分竞争破坏有序语义）→ 回滚，保留本表。
     _CLAUSE_SPECIFIC = (
         # 2026-09-26（多意图评测集驱动）：① 补 requirement_quality（此前**缺失** → 「做需求质量评审」
         #   被"评审"抢成 review/requirement_analysis）；② report_generation **提到 review 之前**，
@@ -929,15 +919,6 @@ class IntentRouter:
         ("design", ("方案设计", "架构", "建模", "sysml", "代码生成", "视图", "bdd", "ibd", "代码", "design")),
         ("knowledge_qa", ("知识库", "检索", "knowledge")),
     )
-
-    def _clause_to_intent(self, clause: str) -> str:
-        """子句 → 意图名；无法映射返回原文本（供上层展示/拼接）。"""
-        c = clause.strip()
-        low = c.lower()
-        for intent, keywords in self._CLAUSE_INTENTS:
-            if any(k in low for k in keywords):
-                return intent
-        return c
 
     def _clause_to_intent_strict(self, clause: str) -> str:
         """L2 用严格映射：只认特异词（泛词不算），无法映射返回原文本。"""

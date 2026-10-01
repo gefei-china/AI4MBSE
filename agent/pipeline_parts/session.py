@@ -255,7 +255,7 @@ class SessionMixin:
 
     # ── 内容级澄清：信息不清晰 → 选择题确认（优先选择题，支持补充输入），回答后续答 ──
     # 混合触发：LLM 声明式 quick 判定为主 + 规则兜底（输入过短/未提及领域实体）
-    CLARIFY_INTENTS = ("design", "requirement_analysis", "impact", "requirement_quality", "analysis")
+    CLARIFY_INTENTS = ("design", "requirement_analysis", "impact", "requirement_quality")
     CLARIFY_RESUME_MARK = "【澄清补充】"
 
     def _clarify_detect(self, user_input, intent, provider_id=None, forced_intent=None, skill_name=None) -> list | None:
