@@ -18,6 +18,12 @@
     `used_ids` 只记真正注入的、拉回**分角色配额** + 可追溯块头 + 丢弃与当前输入逐字重复的块
     （E1~E9b / M17~M22）。判据全部锚在**可观察产物**（raw 的 id 序列、块头条数、拉回正文）上，
     不用"是否调用了某函数"这类内部事实。
+  · **P1-9（2026-10-01）新增**：写入侧不再产生系统性兜底名 —— 从内容取名
+    （`core/artifact_titles.derive_title_from_content`）并接到三个写入点
+    （`agent/utils.py` 报告/文档两处 + `services/artifact_materializer` 二次物化）。
+    断言含**两处真实踩过的坑**：F3（左右剥除字符集**必须不对称**，否则标题括号被削成不成对）、
+    F4（派生结果若仍是兜底名必须返回空，否则把 bug 从写入侧搬到读取侧）。
+    变异 M24~M27。
 """
 import inspect
 import json
@@ -285,7 +291,8 @@ check("A13 conversations 表无对应行也能出摘要（真库有此类孤儿 
       and DIGEST_MARK in d13)
 
 # ── P1-7（2026-10-01）：引导语压缩 + 零信息量事实过滤 ──────────────────────
-from core.artifact_titles import (PLACEHOLDER_TITLES, is_placeholder_title,  # noqa: E402
+from core.artifact_titles import (PLACEHOLDER_TITLES, derive_title_from_content,  # noqa: E402
+                                  extract_text_from_content, is_placeholder_title,
                                   materialize_fallback_title)
 
 check("A14 契约：占位名闭集覆盖 subtask KIND_VALUES 的 {kind}产物（防副本漂移）",
@@ -1004,6 +1011,183 @@ check("M23 去掉回填 → E11 目标断言失败（最新一条卡在均分份
       (_n23tok > _share16) is False, "最新一条 %d tok（均分上限 %d）" % (_n23tok, _share16))
 
 H.get_db = _orig_h_get_db
+
+# ══════════════════════════════════════════════════════════════════════════
+print()
+print("[F] P1-9 写入侧取名：不再产生系统性兜底名（纯函数 + 真实落库路径 + 变异）")
+# ══════════════════════════════════════════════════════════════════════════
+# 背景：P1-7 只治**读取侧**（把占位名行整行过滤掉）。代价是「连计数一起丢」—— 实测真库
+# conv=1/351/385 的产物摘要**整段为空（len=0）**，即这些会话的产物对 LLM 完全不可见。
+# P1-9 治**写入侧**：从内容取名（真库 26 条占位名 **26/26 都能取到**）。
+# 下游实测（副本）：摘要 0 → 196 / 101 / 95，真实标题回到提示词里。
+import agent.utils as U                                                    # noqa: E402
+import core.artifact_titles as AT                                          # noqa: E402
+from services.artifact_materializer import materialize_to_conversation     # noqa: E402
+
+_archive_artifacts = U._archive_artifacts          # agent/pipeline.py 的 re-export 同源
+
+# ── F1~F8 纯函数（无 IO、无 LLM）──────────────────────────────────────────
+# ⚠️ F1 的输入必须是「标题行**不在第一行**」—— 否则「取首行」与「取标题行」结果相同，
+#    断言分不出两种实现（空转）。这里用「导语 + 空行 + ## 标题」的真实形态。
+check("F1 优先取 markdown 标题行（**不是**首行）",
+      derive_title_from_content("导语第一行\n\n## 真正的标题\n正文") == "真正的标题",
+      repr(derive_title_from_content("导语第一行\n\n## 真正的标题\n正文")))
+check("F2 无标题行 → 取首个非空行", derive_title_from_content("\n\n  正文第一句\n第二句") == "正文第一句")
+# F3 守的是本轮**真实踩到的**一个 bug：首版让左右两端共用一份 strip 字符集，集合里有 `）`，
+# 于是 `…（推进剂加注量 · 3 层深度）` 的右括号被无条件削掉 ⇒ 标题括号**不成对**。
+check("F3 两端剥除**故意不对称**：右括号必须保留",
+      derive_title_from_content("# 巡飞弹参数变更影响分析报告（推进剂加注量 + 巡飞速度 · 3 层深度）")
+      == "巡飞弹参数变更影响分析报告（推进剂加注量 + 巡飞速度 · 3 层深度）")
+check("F3b 左端 markdown 记号剥除（`>` 引用 / `**` 粗体 / `-` 列表）",
+      derive_title_from_content("> 引用块标题") == "引用块标题"
+      and derive_title_from_content("**粗体标题**") == "粗体标题"
+      and derive_title_from_content("- 列表标题") == "列表标题")
+check("F3c 行内**闭合**记号也剥掉（`**` 落在串中间，两端规则管不到）",
+      derive_title_from_content("**编制说明**：本报告仅整合 t1") == "编制说明：本报告仅整合 t1")
+# F4 是关键防线：不能"改了名字但依然零信息量"——那只是把 bug 从写入侧搬到读取侧
+# （读取侧 is_placeholder_title 会认不出它，过滤失效）。
+check("F4 内容首行本身就是兜底名 → 返回空（**不把 bug 从写入侧搬到读取侧**）",
+      derive_title_from_content("AI 生成文档\n后面还有正文") == ""
+      and derive_title_from_content("AI 生成报告") == ""
+      and derive_title_from_content("doc产物") == "")
+check("F5 空 / None / 全空白 → 空（由调用方退兜底名，不在这里硬造）",
+      derive_title_from_content("") == "" and derive_title_from_content(None) == ""
+      and derive_title_from_content("   \n\n  \t ") == "")
+_long = derive_title_from_content("# " + "长标题" * 40)
+check("F6 超长截断到 max_len 且带 `…`、截断后尾部标点不残留",
+      len(_long) <= AT.DEFAULT_TITLE_MAX_LEN + 1 and _long.endswith("…")
+      and _long.rstrip("…")[-1] not in "。，、；：", "len=%d %r" % (len(_long), _long[-14:]))
+_F7 = ["# 巡飞弹参数变更影响分析报告（3 层深度）\n> 说明…",
+       "本项目命名规范的核心要求是：名称分为「基本名」与「非受限名」两类——基本名须以字母或下划线开头…",
+       "（Mock 回答）已收到你的消息：请生成一份关于宽带通信系统的分析报告",
+       "结论先行。", "- 列表项标题", "**编制说明**：本报告仅整合 t1–t5"]
+check("F7 派生结果**恒不是**占位名（6 条：真实内容 + 构造边界）",
+      all(r and not is_placeholder_title(r) for r in (derive_title_from_content(c) for c in _F7)),
+      str([derive_title_from_content(c) for c in _F7]))
+check("F8 extract_text_from_content：dict 抽正文 / str 原样 / 取不到空",
+      extract_text_from_content({"markdown": "# T"}) == "# T"
+      and extract_text_from_content("# T") == "# T"
+      and extract_text_from_content({}) == "" and extract_text_from_content(None) == "")
+
+# ── F9~F12 真实落库路径（夹具库 = 真实 DDL）──────────────────────────────
+_F9_CID = 19
+FIX.execute("DELETE FROM artifacts WHERE conversation_id=?", (_F9_CID,))
+FIX.commit()
+_F9_BODY = "# 巡飞弹参数变更影响分析报告\n\n正文…" + "x" * 400      # >=200 才走 document 分支
+_archive_artifacts(FIX, _F9_CID, 9001, {}, _F9_BODY, "chat", "王工")
+_row = FIX.execute("SELECT title FROM artifacts WHERE conversation_id=? AND message_id=? "
+                   "AND kind='document'", (_F9_CID, 9001)).fetchone()
+check("F9 落库路径：cd 无 title → document 产物标题 = 内容首标题（**不是**「AI 生成文档」）",
+      _row is not None and _row[0] == "巡飞弹参数变更影响分析报告",
+      "title=%r（None=产物根本没建出来，说明落库路径没走通）" % (_row[0] if _row else None))
+# F9b 幂等：幂等键是 (conv,msg,kind,title)，派生标题由内容决定 ⇒ 同输入必然同名 ⇒ 仍去重
+_n_before = FIX.execute("SELECT COUNT(*) FROM artifacts WHERE conversation_id=?", (_F9_CID,)).fetchone()[0]
+_archive_artifacts(FIX, _F9_CID, 9001, {}, _F9_BODY, "chat", "王工")
+_n_after = FIX.execute("SELECT COUNT(*) FROM artifacts WHERE conversation_id=?", (_F9_CID,)).fetchone()[0]
+check("F9b 派生标题**不破坏幂等**：同消息同内容重跑不新增产物行",
+      _n_before == _n_after, "before=%d after=%d" % (_n_before, _n_after))
+
+_archive_artifacts(FIX, _F9_CID, 9002, {"title": "模型自己给的标题"}, "# 别的标题\n" + "y" * 400, "chat", "王工")
+_row2 = FIX.execute("SELECT title FROM artifacts WHERE conversation_id=? AND message_id=? "
+                    "AND kind='document'", (_F9_CID, 9002)).fetchone()
+check("F10 上游**给了** title 时必须优先用它（派生不得抢掉模型自己的命名）",
+      _row2 is not None and _row2[0] == "模型自己给的标题",
+      "title=%r" % (_row2[0] if _row2 else None))
+
+# F11/F12 二次物化路径（content 是 json.loads(content_json) 的结果，**可能是 dict**）
+# ⚠️ 这条路径是**冷路径**：全仓 grep 显示 `materialize_to_conversation` **当前无生产调用方**
+#    （只有本模块自身 + `backups/` 旧副本 + 本脚本），真库 `subtask_artifacts` 也是 0 行。
+#    所以本组是**防回归/防将来接线时踩坑**，不是"修了一个正在发生的线上行为" —— 如实标注。
+# ⚠️ `FIX` 是裸连接（无 row_factory），而该函数内部 `d = dict(row)` 要求 Row 对象
+#    （生产侧由 `database/connection.py:16` 统一设 `row_factory = sqlite3.Row`，故生产无此问题）
+#    ⇒ 夹具另开一个带 row_factory 的连接。
+FIX.commit()
+_FIXR = sqlite3.connect(FIXTURE_PATH)
+_FIXR.row_factory = sqlite3.Row
+FIX.execute("DELETE FROM subtask_artifacts WHERE run_id=?", (77,))
+FIX.execute("INSERT INTO subtask_artifacts (run_id, task_key, artifact_idx, kind, title, "
+            "content_json, materialized) VALUES (?,?,?,?,?,?,0)",
+            (77, "t1", 1, "doc", "", json.dumps({"markdown": "# 二次物化文档标题\n正文…"},
+                                                ensure_ascii=False)))
+FIX.commit()
+_n = materialize_to_conversation(_FIXR, 77, "t1", "subtask://77/t1/a1", _F9_CID, 9003)
+_row3 = FIX.execute("SELECT title, preview_type FROM artifacts WHERE conversation_id=? AND message_id=? "
+                    "AND kind='document'", (_F9_CID, 9003)).fetchone()
+check("F11 二次物化：d.title 为空 → 从 content 正文取名（真库该表当前为空，此处用合成行）",
+      _n == 1 and _row3 is not None and _row3[0] == "二次物化文档标题",
+      "n=%d title=%r" % (_n, _row3[0] if _row3 else None))
+check("F12 dict 形态 content **不得**被 str() 成 JSON 残片当标题",
+      _row3 is not None and not _row3[0].startswith("{"), "title=%r" % (_row3[0] if _row3 else None))
+
+# ── M24~M27 变异自证 ──────────────────────────────────────────────────────
+def _at_twin(mutate, func, label):
+    """把 `core/artifact_titles` 的**真实源码**取出、注入变异、exec 成孪生体。
+
+    ⚠️ 两个必须同时做对（本仓都踩过）：
+      ① 命名空间用 `dict(vars(AT))` —— 函数体引用的 `_HEADING_RE`/`is_placeholder_title` 在里面；
+         手写小 dict 会 NameError，而被调用方的 `except` 静默兜掉。
+      ② **必须把整条调用链一起 exec 进同一个命名空间**（这里按依赖顺序先 `_clean_title`
+         再 `derive_title_from_content`）。首版只 exec 被变异的那一个函数，
+         于是 `derive_title_from_content` 仍是**原模块的函数对象**、`__globals__` 指向真模块
+         ⇒ 它调的还是**未变异**的 `_clean_title` ⇒ 变异体行为不变 ⇒ M24 假绿。
+         （判据：**变异必须真正改变被观察行为**；改了源码但结果一样 = 变异没生效。）
+    """
+    ns = dict(vars(AT))
+    for f in ("_clean_title", "derive_title_from_content"):     # 依赖顺序
+        src = textwrap.dedent(inspect.getsource(getattr(AT, f))).replace("\r\n", "\n")
+        if f == func:
+            mut = mutate(src)
+            check("M%s 变异锚点命中" % label, mut != src, "func=%s" % func)
+            src = mut
+        exec(compile(src, "<at_twin>", "exec"), ns)
+    return ns
+
+
+# M24：**重演**"右端把右括号也剥掉"这一缺陷（首版左右共用含 `）` 的字符集造成）→ F3 必须翻。
+# ⚠️ 两处踩过：
+#   ① 锚点必须是 `.rstrip(_TAIL_TRIM)` —— 源码里它前面是 `)`（`s.lstrip(_LEAD_TRIM).rstrip(...)`），
+#      写成 `s.rstrip(...)` 会**静默不命中**（锚点 find 不到 → 变异体没变 → 变异测试假绿）。
+#   ② 变异不能是"换成 `_LEAD_TRIM`" —— 修好后左端集合里**本来就没有** `）`，
+#      换过去结果不变 ⇒ 变异等于没做（本次实测撞到：M24 变异体仍返回带括号的正确标题）。
+#      故直接给右端集合**补上** `）`，精确复现缺陷语义。
+_ns24 = _at_twin(lambda s: s.replace(".rstrip(_TAIL_TRIM)", '.rstrip(_TAIL_TRIM + "）")'),
+                 "_clean_title", "24")
+_r24 = _ns24["derive_title_from_content"]("# 巡飞弹参数变更影响分析报告（推进剂加注量 + 3 层深度）")
+check("M24 右端集合含右括号（重演首版缺陷）→ F3 目标断言失败（括号被削，被抓住）",
+      (_r24 == "巡飞弹参数变更影响分析报告（推进剂加注量 + 3 层深度）") is False, repr(_r24))
+
+# M25：拿掉「派生结果仍是兜底名就返回空」的守卫 → F4 必须翻
+_ns25 = _at_twin(lambda s: s.replace("if not t or is_placeholder_title(t):", "if not t:"),
+                 "derive_title_from_content", "25")
+_r25 = _ns25["derive_title_from_content"]("AI 生成文档\n后面还有正文")
+check("M25 去掉兜底名守卫 → F4 目标断言失败（bug 被搬到读取侧，被抓住）",
+      (_r25 == "") is False, repr(_r25))
+
+# M26：取消「标题行优先」，一律取首行 → F1 必须翻
+_ns26 = _at_twin(lambda s: s.replace('cand = m.group(1) if m else ""', 'cand = ""'),
+                 "derive_title_from_content", "26")
+_r26 = _ns26["derive_title_from_content"]("导语第一行\n\n## 真正的标题\n正文")
+check("M26 取消标题行优先 → F1 目标断言失败（取到导语，被抓住）",
+      (_r26 == "真正的标题") is False, repr(_r26))
+
+# M27：把写入侧接线撤回纯兜底名（`_archive_artifacts` 的 exec 孪生体）→ F9 必须翻
+_u_src = textwrap.dedent(inspect.getsource(U._archive_artifacts)).replace("\r\n", "\n")
+_u_mut = _u_src.replace("or derive_title_from_content(content)", 'or ""')
+check("M27 变异锚点命中（_archive_artifacts 派生调用）",
+      _u_mut != _u_src and _u_src.count("or derive_title_from_content(content)") == 2)
+_ns27 = dict(vars(U))
+exec(compile(_u_mut, "<arch_twin>", "exec"), _ns27)
+FIX.execute("DELETE FROM artifacts WHERE conversation_id=?", (_F9_CID,))
+FIX.commit()
+_ns27["_archive_artifacts"](FIX, _F9_CID, 9001, {}, _F9_BODY, "chat", "王工")
+_r27 = FIX.execute("SELECT title FROM artifacts WHERE conversation_id=? AND message_id=? "
+                   "AND kind='document'", (_F9_CID, 9001)).fetchone()
+check("M27 撤回派生（回到纯兜底名）→ F9 目标断言失败（被抓住）",
+      (_r27 is not None and _r27[0] == "巡飞弹参数变更影响分析报告") is False,
+      "变异后 title=%r" % (_r27[0] if _r27 else None))
+FIX.execute("DELETE FROM artifacts WHERE conversation_id=?", (_F9_CID,))
+FIX.execute("DELETE FROM subtask_artifacts WHERE run_id=?", (77,))
+FIX.commit()
 
 # ══════════════════════════════════════════════════════════════════════════
 print()

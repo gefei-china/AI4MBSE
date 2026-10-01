@@ -7,7 +7,8 @@ import json
 import re
 
 from core.artifact_titles import (FALLBACK_DOCUMENT_TITLE,
-                                     FALLBACK_REPORT_TITLE)
+                                     FALLBACK_REPORT_TITLE,
+                                     derive_title_from_content)
 
 
 # ── 问答可解释性：检索分块（chunk_hits）→ 前端 [n] 引用链接数据 ──
@@ -225,7 +226,11 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
             try:
                 from report_generator import report_generator as _rg
                 rtype = cd.get("report_type") or _rg.detect_report_type(str(content)[:80])
-                title = str(cd.get("report_title") or cd.get("title") or FALLBACK_REPORT_TITLE)[:120]
+                # P1-9（2026-10-01）：写作侧不给 title 时**从内容取名**，而不是落固定兜底名。
+                # 兜底名的根因不是"忘了写"，而是报告路径的 cd 里本来就没有 title 字段
+                # （实测真库 report 占位名 3/6，另 3 条是模型结构化输出给了标题）。
+                _t = str(cd.get("report_title") or cd.get("title") or "").strip()
+                title = (_t or derive_title_from_content(content) or FALLBACK_REPORT_TITLE)[:120]
                 report_meta = cd.get("meta") or _rg.build_meta(title, rtype)
                 structured = cd.get("sections") or _rg.structure("", content, report_type=rtype)["sections"]
                 summary = str(cd.get("summary") or structured[-1].get("body", "") if structured else "")[:500]
@@ -277,7 +282,12 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
         
         # 4) 长 markdown 文档产物（无结构化 card 且无明显代码块）
         if not cd.get("sysml_views") and not is_report and content and len(content) >= 200:
-            title = (cd.get("title") or FALLBACK_DOCUMENT_TITLE)[:120]
+            # P1-9（2026-10-01）：document 是**重灾区** —— 实测真库 23/23 全是占位名，
+            # 因为这条「长 markdown 文档」路径的 cd 里**从来不产出 title**。内容自带
+            # `# 巡飞弹参数变更影响分析报告…` 这类首标题，信息量远高于「AI 生成文档」。
+            title = (str(cd.get("title") or "").strip()
+                     or derive_title_from_content(content)
+                     or FALLBACK_DOCUMENT_TITLE)[:120]
             if not repo.exists(conversation_id, message_id, "document", title):
                 repo.create_artifact(
                     conversation_id, message_id, "document", title, "markdown", content,

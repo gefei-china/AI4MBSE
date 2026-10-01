@@ -14,7 +14,8 @@
 """
 import json
 
-from core.artifact_titles import materialize_fallback_title
+from core.artifact_titles import (derive_title_from_content, extract_text_from_content,
+                                  materialize_fallback_title)
 
 REF_PREFIX = "subtask://"
 
@@ -182,7 +183,13 @@ def materialize_to_conversation(conn, run_id, task_key, ref, conversation_id, me
         content = json.loads(d.get("content_json") or "{}")
     except Exception:
         content = {}
-    title = d.get("title") or materialize_fallback_title(kind)
+    # P1-9（2026-10-01）：写作侧不给 title 时**从内容取名**（规则与真源同 `agent/utils.py`）。
+    # `content` 是 `json.loads(content_json)` 的结果、**可能是 dict** ⇒ 必须先抽正文，
+    # 否则 `derive_title_from_content` 会对字典做 str()，把 `{'markdown': '…'}` 当标题
+    # —— 那比兜底名更糟（既没信息量、还泄漏内部结构）。
+    title = (str(d.get("title") or "").strip()
+             or derive_title_from_content(extract_text_from_content(content))
+             or materialize_fallback_title(kind))
     if isinstance(content, dict):
         preview_content = json.dumps(content, ensure_ascii=False)
         meta = dict(content)
