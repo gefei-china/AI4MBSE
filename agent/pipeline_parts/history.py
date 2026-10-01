@@ -361,7 +361,20 @@ class HistoryMixin:
         if len(cur_group["msgs"]) <= 2 and cur_group is not groups[0]:
             gi = groups.index(cur_group)
             _bnd = list(groups[gi - 1]["msgs"][-boundary:])
-        _rcands = _bnd + _tail                      # 时间序（边界更旧、当前话题更近）
+        # P1-18：keep-last-N 轮（跨话题）verbatim —— 话题快速切换时，最近 N 轮不因话题边界被压成摘要。
+        #   默认 0 = 关闭（零行为漂移）；>0 时全局最近 N 轮（从倒数第 N 个 user 消息起）无条件进原文候选。
+        _keep_n = int(_cfg.get("context", "keep_last_n_turns", 0))
+        _keep_msgs = []
+        if _keep_n > 0:
+            _uidx = [i for i, m in enumerate(msgs) if m["role"] == "user"]
+            if _uidx:
+                _start = _uidx[-_keep_n] if len(_uidx) >= _keep_n else _uidx[0]
+                _keep_msgs = [m for m in msgs[_start:]]
+        # 合并候选按 id 升序去重（时间序）；keep_n=0 时 _keep_msgs 空、_bnd/_tail 无重叠 → 严格等于旧 _bnd+_tail
+        _cand = {}
+        for m in (_keep_msgs + _bnd + _tail):
+            _cand[m["id"]] = m
+        _rcands = [_cand[k] for k in sorted(_cand)]
         # 两级分配：① 先按「人均份额」保**条数**（谁也不许独占）；② 余量再回填给被截断的
         #   （见下方第二轮）。只做 ① 会把短会话里唯一那条长回复白切一半；只做「吃满为止」
         #   就是本批要修的病灶。两者组合才同时满足「条数覆盖」与「不浪费」。

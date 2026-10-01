@@ -31,6 +31,8 @@ def _migrate_columns(conn):
     _add("agent_memory", "relevance", "REAL DEFAULT 1.0")               # 相关度权重（时间衰减/语义分）
     # ── 记忆索引化（Auto Memory 对齐）：主题标签，检索先按主题过滤再语义排序 ──
     _add("agent_memory", "mem_topic", "TEXT DEFAULT ''")                # 主题标签（如"建模规范"/"链路预算方法论"）
+    # ── P1-18 记忆分层（core 常驻 / recall 按需 / archival 归档，对齐 Letta 三层）──
+    _add("agent_memory", "tier", "TEXT DEFAULT 'recall'")               # core | recall | archival
     # ── KB-S：Agent 级知识库消费范围（{"mode":"all_release"|"custom","branches":[],"docs":[]}）──
     _add("agents", "kb_scope", "TEXT DEFAULT '{}'")
     _add("llm_providers", "model_type", "TEXT DEFAULT 'chat'")          # chat 对话模型 | embedding 向量模型

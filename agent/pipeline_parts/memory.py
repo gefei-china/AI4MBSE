@@ -15,6 +15,8 @@ class MemoryMixin:
 
         作用域（对齐 mem0）：scopes=None 且存在会话上下文（self._mem_ctx）→ 按
         project/user/agent/global 四槽检索；无会话上下文（如定向单测）→ scopes=[] 回落旧行为（仅 agent_id）。
+        P1-18 分层：core 层（用户偏好等）**无条件常驻注入**（不依赖 query 相关性），
+        recall 层按 query 语义召回（排除 core 已注入 + archival 归档层）。
         仅返回命中内容；异常/无命中返回空串（不阻断主流程）。记忆只作参考对齐，
         Prompt 硬约束「不得虚构扩展」，防止把记忆当事实检索结果引用。
         """
@@ -27,12 +29,24 @@ class MemoryMixin:
                 query = f"{user_input} {intent}"
                 if scopes is None:
                     scopes = self._memory_scopes(intent, user) if getattr(self, "_mem_ctx", None) else []
-                rows = get_memory_backend().search(conn, agent_id, query, top_k=4, scopes=scopes)
-                if not rows:
+                _be = get_memory_backend()
+                # P1-18：core 常驻（无条件）+ recall 按需（query 相关，排除 core 已注入）
+                core_rows = _be.search_core(conn, agent_id, top_k=2, scopes=scopes)
+                recall_rows = _be.search(conn, agent_id, query, top_k=4, scopes=scopes)
+                _core_ids = {r.get("id") for r in core_rows if r.get("id")}
+                recall_rows = [r for r in recall_rows if r.get("id") not in _core_ids]
+                if not core_rows and not recall_rows:
                     return ""
-                lines = [f"- [{r.get('mem_type', 'fact')} | 相关度 {r.get('score', 0):.2f}] {str(r.get('content') or '')[:160]}"
-                         for r in rows]
-                return "【长期记忆（跨会话经验，仅供对齐，不得虚构扩展或作为事实来源引用）】\n" + "\n".join(lines) + "\n"
+                lines = []
+                if core_rows:
+                    lines.append("【核心偏好（跨会话稳定，请遵守）】")
+                    for r in core_rows:
+                        lines.append(f"- [{r.get('mem_type', 'fact')}] {str(r.get('content') or '')[:160]}")
+                if recall_rows:
+                    lines.append("【长期记忆（跨会话经验，仅供对齐，不得虚构扩展或作为事实来源引用）】")
+                    for r in recall_rows:
+                        lines.append(f"- [{r.get('mem_type', 'fact')} | 相关度 {r.get('score', 0):.2f}] {str(r.get('content') or '')[:160]}")
+                return "\n".join(lines) + "\n"
             finally:
                 conn.close()
         except Exception:

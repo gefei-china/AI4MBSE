@@ -51,6 +51,15 @@ class MemoryService:
             return False
 
     @staticmethod
+    def _has_tier_col(conn) -> bool:
+        """探测 agent_memory 是否已有 tier 列（P1-18 分层；老库/夹具库缺列 → False，走不分层路径）。"""
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()]
+            return "tier" in cols
+        except Exception:
+            return False
+
+    @staticmethod
     def _scope_filter(conn, agent_id: str, scopes):
         """构造作用域复合过滤 → (clause, params, idx_of)。
 
@@ -130,12 +139,15 @@ class MemoryService:
             _clause, _cparams, _idx_of = MemoryService._scope_filter(conn, agent_id, scopes)
             if any_scope:
                 _clause, _cparams, _idx_of = "", [], {}
+            # P1-18 分层：常规召回排除 archival（归档层不参与 query 相关性召回；存量 NULL tier 视为 recall）
+            _tc = MemoryService._has_tier_col(conn)
+            _no_arch = " AND (tier IS NULL OR tier != 'archival')" if _tc else ""
             if not query:
                 # 作用域生效时不再用 agent_id 作唯一约束（user/global 槽需跨 Agent 复用）
                 if any_scope:
-                    _base = "forgotten=0"
+                    _base = "forgotten=0" + _no_arch
                 else:
-                    _base = ("forgotten=0" + _clause) if _clause else "agent_id=? AND forgotten=0"
+                    _base = ("forgotten=0" + _clause + _no_arch) if _clause else "agent_id=? AND forgotten=0" + _no_arch
                 sql = "SELECT * FROM agent_memory WHERE " + _base
                 params: list = [] if any_scope else (list(_cparams) if _clause else [agent_id])
                 if mem_topic:
@@ -146,9 +158,9 @@ class MemoryService:
                 rows = conn.execute(sql, params).fetchall()
                 return [dict(r) for r in rows]
             if any_scope:
-                _base = "mem_type!='session' AND forgotten=0"
+                _base = "mem_type!='session' AND forgotten=0" + _no_arch
             else:
-                _base = ("mem_type!='session' AND forgotten=0" + _clause) if _clause else "agent_id=? AND mem_type!='session' AND forgotten=0"
+                _base = ("mem_type!='session' AND forgotten=0" + _clause + _no_arch) if _clause else "agent_id=? AND mem_type!='session' AND forgotten=0" + _no_arch
             sql = "SELECT * FROM agent_memory WHERE " + _base
             params = [] if any_scope else (list(_cparams) if _clause else [agent_id])
             if mem_type:
@@ -201,6 +213,29 @@ class MemoryService:
         except Exception:
             return []
 
+    # ── P1-18 分层读：core 层常驻记忆（不依赖 query 相关性，注入时无条件附带）──
+    @staticmethod
+    def search_core(conn, agent_id: str, top_k: int = 2, scopes: list | None = None) -> list:
+        """取 core 层记忆（常驻注入，不按 query 相关性过滤）。
+
+        core = 用户偏好（preference）等关键、稳定、跨会话复用的记忆。这些记忆即使与当前
+        query 无关也应保留在上下文里（对齐 Letta 的 core memory / Claude 的持久偏好）。
+        按 activation 降序取 top_k；返回 [{content, mem_type, tier, scope_type?, scope_id?}]。
+        tier 列不存在（老库/夹具）→ 返回空（不分层，零行为漂移）。
+        """
+        try:
+            if not MemoryService._has_tier_col(conn):
+                return []
+            _clause, _cparams, _idx_of = MemoryService._scope_filter(conn, agent_id, scopes)
+            _base = ("tier='core' AND forgotten=0" + _clause) if _clause else "agent_id=? AND tier='core' AND forgotten=0"
+            sql = "SELECT * FROM agent_memory WHERE " + _base + " ORDER BY activation DESC, id DESC LIMIT ?"
+            params = list(_cparams) if _clause else [agent_id]
+            params.append(top_k)
+            rows = conn.execute(sql, params).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
     # ── 写：主动沉淀 ──
     @staticmethod
     def deposit(conn, agent_id: str, content: str, mem_type: str = "fact",
@@ -235,14 +270,20 @@ class MemoryService:
             sid = (str(scope_id or "")).strip()[:120]
             vec, ver = MemoryService._embed(conn, c)
             _sc = MemoryService._has_scope_cols(conn)   # 老库/夹具库缺列 → 走旧列集（fail-safe）
+            _tc = MemoryService._has_tier_col(conn)     # P1-18 分层：preference 恒 core，其余 recall
+            _tier = "core" if mem_type == "preference" else "recall"
             cur = conn.execute(
                 "INSERT INTO agent_memory (agent_id, mem_type, content, embedding, embed_version, source, relevance, activation, mem_topic"
+                + (", tier" if _tc else "")
                 + (", scope_type, scope_id" if _sc else "") + ") "
-                "VALUES (?,?,?,?,?,?,?,1.0,?" + (",?,?" if _sc else "") + ")",
+                "VALUES (?,?,?,?,?,?,?,1.0,?"
+                + (",?" if _tc else "")
+                + (",?,?" if _sc else "") + ")",
                 (agent_id, mem_type, c,
                  json.dumps(vec, ensure_ascii=False) if vec else "[]",
                  ver if vec else "",
                  source, extra.get("relevance", 1.0), mem_topic)
+                + ((_tier,) if _tc else ())
                 + ((st, sid) if _sc else ()))
             conn.commit()
             # P2：周期维护（每 maintain_every 次沉淀）
@@ -344,6 +385,9 @@ class MemoryService:
                         reason = f"activation_{round(decayed, 3)}"
                 if reason:
                     conn.execute("UPDATE agent_memory SET forgotten=1 WHERE id=?", (r["id"],))
+                    # P1-18 分层：遗忘同步标记 archival（软删与归档一致）
+                    if MemoryService._has_tier_col(conn):
+                        conn.execute("UPDATE agent_memory SET tier='archival' WHERE id=?", (r["id"],))
                     n += 1
             conn.commit()
             return n
