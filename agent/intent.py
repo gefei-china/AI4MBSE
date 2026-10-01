@@ -168,6 +168,16 @@ class IntentRouter:
         return ("报告" in t or "report" in t) and any(
             v in t for v in ("生成", "撰写", "输出", "编写", "起草", "写份", "写一"))
 
+    # P1-14：复合任务信号 —— 输入同时含「建模/代码/校验」等非视图动作词或并列连词时，
+    # 说明是多交付物任务（应走 design 编排），细粒度视图 Agent 的关键词不得抢。
+    # 实测错例：「建模…生成结构视图…代码…校验」被「结构视图生成」抢走（期望 design）。
+    _COMPOSITE_SIGNALS = ("建模", "代码", "校验", "预评审", "并", "同时", "然后", "并且", "再", "以及", "还有")
+
+    @classmethod
+    def _is_composite_task(cls, t: str) -> bool:
+        """复合任务判定：含建模/代码/校验动作词或并列连词 → True（db 优先块不抢）。"""
+        return any(k in t for k in cls._COMPOSITE_SIGNALS)
+
     def __init__(self):
         self._db_intents: dict = {}  # P0 平台化：DB 自定义 Agent 关键词（优先匹配）
         self._semantic_index: list = []  # 缺口-1：Agent 语义索引 [{name, text}]，供语义兜底路由
@@ -457,9 +467,11 @@ class IntentRouter:
         # 在强信号正则**之后**）。这里把「db 层强特异命中」提到最前：用户显式配的关键词赢过
         # 内置泛词规则，语义与「DB 自定义 Agent 优先」一致。判定抽成纯函数 `_db_kw_priority`
         # 便于负对照（阈值守卫不是空转）。
-        # ⚠️ 唯一例外：SP-R 报告生成命令（「输出…报告」）更高优先 —— 否则「输出影响报告」
-        # 会被 db 层 impact 的「变更影响」抢走（实测引入错例：report_generation 期望 → impact）。
-        if not self._is_report_command(t):
+        # 两个例外（缺一即引入回归）：
+        #  · SP-R 报告命令（「输出…报告」）更高优先 —— 否则 db 层 impact 的「变更影响」抢走；
+        #  · 复合任务（建模/代码/校验/并列连词）走 design 编排 —— 否则「建模+结构视图+代码+校验」
+        #    被细粒度「结构视图生成」抢走（P1-14 实测）。
+        if not self._is_report_command(t) and not self._is_composite_task(t):
             _db_pri = self._db_kw_priority(t)
             if _db_pri:
                 return self._done(_db_pri, "rule_scored", 0.95, text, fp)

@@ -67,10 +67,12 @@ def detect(rt, text):
 # ── [F] 功能语义 ───────────────────────────────────────────────
 print("[F] DB 强特异关键词优先")
 
-_rt_a = make_router()                      # 现状：自建 Agent 关键词全空
-check("F1 不配关键词 → 行为不变（仍 design，向后兼容）",
-      detect(_rt_a, "生成需求视图") == "design",
-      "intent=%s" % detect(_rt_a, "生成需求视图"))
+_rt_a = make_router()                      # 现状：自建 Agent 均已配关键词（P1-14 回填）
+# 纯泛词「视图」（非「需求视图/结构视图」等特异词）无 db 强特异命中 → 仍走 design 建模强信号，
+# 不误抢到某个具体视图 Agent（db 优先块阈值 ≥1.0 的守卫）。
+check("F1 纯泛词「视图」无 db 强特异命中 → 仍 design（不误抢）",
+      detect(_rt_a, "生成视图") == "design",
+      "intent=%s" % detect(_rt_a, "生成视图"))
 
 _rt_b = make_router(extra_kw={"需求视图生成": ["需求视图", "生成需求视图"],
                               "结构视图生成": ["结构视图", "生成结构视图"]})
@@ -93,6 +95,12 @@ _rt_d = make_router()   # impact 的「变更影响」已在 db 层（builtin �
 check("F5 报告命令（输出…报告）优先于 db 关键词（SP-R 守卫）",
       detect(_rt_d, "输出变更影响报告") == "report_generation",
       "intent=%s" % detect(_rt_d, "输出变更影响报告"))
+# 复合任务守卫：建模/代码/校验 + 并列连词 → 走 design 编排，细粒度视图 Agent 不抢
+# （P1-14 实测：合并 INTENTS 关键词后「建模+结构视图+代码+校验」被「结构视图生成」抢走）
+_rt_e = make_router()
+check("F6 复合任务（建模+视图+代码+校验）→ design，不被细粒度视图 Agent 抢",
+      detect(_rt_e, "帮我进行工程建模，生成结构视图，并生成代码进行校验") == "design",
+      "intent=%s" % detect(_rt_e, "帮我进行工程建模，生成结构视图，并生成代码进行校验"))
 
 
 # ── [M] 阈值守卫负对照 ─────────────────────────────────────────
