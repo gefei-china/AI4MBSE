@@ -98,6 +98,89 @@ def iter_stream_chunks(text, chunk_size=None, chars_per_sec=None,
         yield text[i:i + ck]
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# P1-26（2026-10-02）：system_prompt 分层拼装 —— **顺序的单一真源**
+#
+# 背景：`execute.py`（非流式）与 `stream.py`（流式）**各自内联了一份拼接顺序**（约 95% 相同）。
+#   实测已发生口径漂移：P1-24/P1-25 的顺序优化只改了 execute.py，**流式主路径完全未生效**。
+#   此处把「顺序」收敛为唯一真源，两条路径只负责收集各自块内容 ⇒ 结构上不可能再漂移。
+#
+# 分层依据（两条独立证据）：
+#   ① Anthropic Claude Code 的 system prompt 用**显式分界线** `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`
+#      切开：线上是全局可缓存的静态层（身份/规则/工具），线下是动态层（会话指导/Memory/环境）。
+#      并配 `DANGEROUS_uncachedSystemPromptSection(name, compute, reason必填)` 命名约定，
+#      让「破坏缓存」在 code review 里可见。
+#   ② DeepSeek Context Caching 按**前缀完整匹配**计费（命中 token 约 1/10 价）：
+#      动态块一旦排在静态块之前，缓存前缀就在该处断掉，**其后所有内容**（包括跨 agent
+#      完全一致的规则块）全部无法命中。
+#
+# 四层与实测频率（真库 4 个多轮会话逐条回放 IntentRouter.detect）：
+#   L2 身份层   依赖 agent_def。**agent 由 intent 选出 ⇒ 变化率 ≈ 意图变化率 56.4%**。
+#   L1 全局静态 无参方法（本体/边界/输出/引用规则），跨 agent、跨会话**完全一致**。
+#   L3 会话级   依赖 intent（同会话内稳定；意图不变即命中）。
+#   L4 每轮级   依赖 user_input / 检索 / 建模态（**几乎每轮都变**，不参与缓存）。
+#
+# ⚠️ 质量优先取舍：`role`（Agent 身份）保持**最前**。身份是 LLM 的首要上下文，
+#   标杆（Claude Code 与主流 agent 框架）一致把身份放静态层最前 —— 不为了缓存把它后置。
+#   代价：agent 变化时前缀立即断；这是「身份首位」的既定成本，不靠挪身份来省。
+# ════════════════════════════════════════════════════════════════════════════
+
+#: 分界线**以上**的块 key（可缓存区）。元组顺序 = 实际拼装顺序。
+PROMPT_CACHEABLE_KEYS = (
+    "role",            # L2 Agent 身份（最前，质量优先）
+    "tools",           # L2 可用工具
+    "tool_rules",      # L2 工具使用约束（仅流式路径注入）
+    "roster",          # L2 团队名册（仅主 Agent 非空）
+    "ontology",        # L1 本体 schema（无参，读 KB 本体）
+    "boundary",        # L1 本体边界说明（无参静态）
+    "output_rules",    # L1 输出规范（无参字面量）
+    "citation_rules",  # L1 引用规范（无参字面量）
+)
+
+#: 分界线**以下**的块 key（动态区）。元组顺序 = 实际拼装顺序（层内按「依赖的易变度」升序，
+#: 让相对稳定的块尽量靠前）。
+PROMPT_DYNAMIC_KEYS = (
+    "intent_line",     # L3 当前意图（依赖 intent）
+    "model_code_req",  # L3 建模输出要求 + L0 硬约束卡（依赖 intent；建模/非建模差异巨大）
+    "skill_prompt",    # L4 技能渐进式披露（依赖 user_input ⇒ 每轮可能变）
+    "skill_block",     # L4 显式指定技能正文（依赖本轮 skill_name）
+    "template",        # L4 提示词实验室模板（依赖 intent + user_input）
+    "memory",          # L4 长期记忆（依赖 user_input）
+    "model_context",   # L4 建模上下文（依赖 branch + conversation + user_input）
+    "project_memory",  # L4 项目级记忆（依赖 user_input + conversation）
+    "slots",           # L4 任务拆解（本轮 LLM 产出）
+    "user_ctx",        # L4 用户上下文
+    "attachment",      # L4 用户上传资料（本轮附件）
+    "retrieval",       # L4 检索到的互联数据（本轮检索）
+    "report",          # L4 报告模板（本轮）
+)
+
+#: 拼装顺序（**唯一真源**）：可缓存静态区 → 动态区。
+PROMPT_BLOCK_ORDER = PROMPT_CACHEABLE_KEYS + PROMPT_DYNAMIC_KEYS
+
+#: 分界线标记（等价 Claude Code 的 `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`）。
+#: ⚠️ 仅作**代码层标记**（供 tools/verify/verify_prompt_layering.py 判定层归属），
+#: **不拼进 prompt 文本**（省 token，也避免给模型引入无意义噪声）。
+PROMPT_LAYER_BOUNDARY = "── SYSTEM_PROMPT_DYNAMIC_BOUNDARY ──"
+
+
+def assemble_system_prompt(blocks: dict) -> str:
+    """按 `PROMPT_BLOCK_ORDER` 拼装 system_prompt —— **顺序的唯一真源**。
+
+    两条路径（非流式 `execute.py` / 流式 `stream.py`）都调用本函数，只负责收集各自的块
+    内容（传 dict），不再各自维护拼接顺序（此前各写一份 → 改一处漏一处、口径漂移）。
+
+    空块（`None` / `""`）跳过，不留多余空行。未登记在 `PROMPT_BLOCK_ORDER` 的 key 会被
+    **忽略** —— 该情形（新增块忘了分层归类）由 tools/verify/verify_prompt_layering.py 抓。
+    """
+    out = []
+    for key in PROMPT_BLOCK_ORDER:
+        val = blocks.get(key) or ""
+        if val:
+            out.append(val)
+    return "".join(out)
+
+
 # ── P1-4（2026-10-01）：会话槽位（DST slots）三层治理的纯函数 ─────────────
 #  实测背景（全部取自生产库，非构造场景）：
 #   ① `_merge_slots` 原为「纯并集 + 精确字符串去重」→ 同义不同串（空格/全角半角）绕过去重，
@@ -240,6 +323,9 @@ __all__ = [
     '_TOOL_MODEL_CAP', '_ATT_INJECT_CAP', '_AGENT_ROLE_CAP',
     '_STREAM_CHARS_PER_SEC', '_STREAM_MAX_CPS', '_STREAM_CHUNK', '_STREAM_MAX_DRAIN_SEC',
     'iter_stream_chunks',
+    # P1-26：system_prompt 分层拼装（顺序单一真源，两条路径共用）
+    'PROMPT_CACHEABLE_KEYS', 'PROMPT_DYNAMIC_KEYS', 'PROMPT_BLOCK_ORDER',
+    'PROMPT_LAYER_BOUNDARY', 'assemble_system_prompt',
     # P1-4：会话槽位治理（纯函数，便于单测与变异自证）
     'SLOT_CLARIFY_MARK', 'SLOT_ORIGINAL_MARK', 'TOPIC_CARRY_WORDS',
     'extract_original_request', 'norm_slot_item', 'merge_slot_items', 'is_topic_switch',

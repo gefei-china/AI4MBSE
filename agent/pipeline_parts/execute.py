@@ -239,56 +239,48 @@ class ExecuteMixin:
         # 2026-09-17 S4：角色块与「输出/引用/附件」三段改用 prompt.py 的共用实现（cap=0 = 不截断，
         # 与本路径原行为一致：该路径本就是"某个命中 Agent 在执行"，其完整 prompt 应当生效）
         role_block = self._build_role_block(agent_def)
-        system_prompt = (
-            f"{role_block}\n"
-            # P1-25：「当前意图」行由**前缀第 2 位**下沉到动态区最前。
-            # 依据：实测多轮会话**相邻两轮意图变化率 56.4%**（约每 1.8 轮变一次），
-            # 而该行原本紧跟 role_block ⇒ 一半以上的请求缓存前缀在第 2 个块就断，
-            # 其后 9 个静态块（工具/skill/名册/模板/建模要求/本体/边界/输出/引用规则）
-            # 内容不变却全部无法命中。下沉后前缀 = role_block + 静态块，长度大幅增加。
-            # ⚠️ 风险（须 A/B 验证）：意图是核心上下文，从 system 开头移到中后部可能因
-            #   首位效应弱化其引导作用 → 判据为 eval_intent_routing accuracy 不低于基线。
-            f"可用工具：{', '.join(agent_def.tools) or '无（纯问答直出）'}。\n"
-            f"{self._build_skill_prompt(intent, user_input, user)}"
-            + (skill_block if skill_block else "")
-            + f"{self._team_roster_block(agent_def)}"
-            + f"{self._build_prompt_template(intent, user_input, user)}"
-            # 问题3：建模类意图强制输出 SysML v2 代码块，供投影视图与控制流/数据流视图「代码/视图」切换
-            + f"{self._build_model_code_req(intent, agent_def)}"
-            + f"{self._build_ontology_hint()}"
-            + f"{self._build_boundary_hint()}"
-            # P1-24 prompt caching：**静态约束块前移**，动态块统一挪到尾部。
-            # 依据（Anthropic Claude Code 官方纪律 "static content first, dynamic content last"）：
-            # DeepSeek 缓存按**前缀**完整匹配，动态块一旦排在静态块之前，前缀就在那里断掉，
-            # 其后所有静态内容都无法命中。改动前 `_build_output_rules` / `_build_citation_rules`
-            # 排在记忆/建模上下文/slots 等**每轮都变**的块之后 ⇒ 明明是静态规则却进不了前缀。
-            # 现把两块静态规则提到动态区之前，让稳定前缀尽可能长；动态块（记忆/建模上下文/
-            # 项目记忆/slots/user_ctx/附件/检索结果）全部下沉到尾部。
-            # ⚠️ 只调顺序、不改任何块的内容 → 语义上「约束更靠前」通常权重更高，风险可控。
-            + self._build_output_rules()
-            + self._build_citation_rules()
-            # ── 以下为动态区（每轮变化，放尾部，不污染可缓存前缀）──
-            # P1-25 下沉至此：意图信息仍在「记忆/检索」之前，避免沉得太深。
-            + f"当前意图：{intent}（Agent: {agent_def.name}，HIL 人机协作级别：{hil_level}）。\n"
+        # P1-26（2026-10-02）：拼接顺序**收敛到 common.assemble_system_prompt**（唯一真源）。
+        # 此前本处与 stream.py 各写一份顺序 ⇒ 已发生口径漂移（P1-24/P1-25 只改了本文件，
+        # 流式主路径未生效）。分层：L2 身份 → L1 全局静态 →〔分界线〕→ L3 会话级 → L4 每轮级。
+        # ⚠️ 只调顺序、不改任何块的内容与文案。
+        system_prompt = assemble_system_prompt({
+            # ── L2 身份层（只依赖 agent_def）──
+            "role": f"{role_block}\n",
+            "tools": f"可用工具：{', '.join(agent_def.tools) or '无（纯问答直出）'}。\n",
+            "roster": self._team_roster_block(agent_def),
+            # ── L1 全局静态（无参方法，跨 agent/会话完全一致 ⇒ 尽早进入可缓存前缀）──
+            "ontology": self._build_ontology_hint(),
+            "boundary": self._build_boundary_hint(),
+            "output_rules": self._build_output_rules(),
+            "citation_rules": self._build_citation_rules(),
+            # ════════ SYSTEM_PROMPT_DYNAMIC_BOUNDARY（以下为动态区）════════
+            # ── L3 会话级（依赖 intent）──
+            "intent_line": f"当前意图：{intent}（Agent: {agent_def.name}，HIL 人机协作级别：{hil_level}）。\n",
+            # 问题3：建模类意图强制输出 SysML v2 代码块（含 L0 硬约束卡），供投影视图与「代码/视图」切换
+            "model_code_req": self._build_model_code_req(intent, agent_def),
+            # ── L4 每轮级（依赖 user_input / 检索 / 建模态）──
+            "skill_prompt": self._build_skill_prompt(intent, user_input, user),
+            "skill_block": (skill_block if skill_block else ""),
+            "template": self._build_prompt_template(intent, user_input, user),
             # P0-3：长期记忆注入（跨会话经验，仅供对齐）
-            + f"{self._build_memory_hint(user_input, intent, user)}"
+            "memory": self._build_memory_hint(user_input, intent, user),
             # P0：建模上下文注入（当前模型状态工作记忆，MBSE 特有）
             # P0-2（2026-09-19）：传本轮 user_input → 建模上下文改**结构性隔离**
             # （config.context.model_context_entities='count'：只报「本分支共 N 个」不列实体名；块首带适用范围声明）
             # ⚠️ 曾计划「按语义相关性过滤条目」，经标定实测 dense/bigram 两路分布重叠、无可用阈值 → 已放弃，别再做
-            + f"{self._build_model_context(branch, conversation_id, user_input)}"
+            "model_context": self._build_model_context(branch, conversation_id, user_input),
             # P0 能力：项目级持久记忆注入（Project Constitution，规范/基线防漂移）
             # P0-2（2026-09-19）：传本轮 user_input → 注入块带项目名 + 「仅当本次任务属于该项目领域时适用」声明
-            + self._build_project_memory(user_input=user_input, conversation_id=conversation_id)
-            + (f"【任务拆解（P1 结构化）】\n目标：{slots.get('goal') or '-'}\n"
-               f"实体：{'、'.join(slots.get('entities') or []) or '-'}\n"
-               f"约束：{'；'.join(slots.get('constraints') or []) or '-'}\n"
-               f"范围：{json.dumps(slots.get('scope') or {}, ensure_ascii=False) if slots.get('scope') else '-'}\n" if slots else "")
-            + (user_ctx if user_ctx else "")
-            + self._build_attachment_block(att_text)
-            + f"检索到的互联数据：\n{context_text}"
-            + (f"\n\n{report_prompt}" if report_prompt else "")
-        )
+            "project_memory": self._build_project_memory(user_input=user_input, conversation_id=conversation_id),
+            "slots": (f"【任务拆解（P1 结构化）】\n目标：{slots.get('goal') or '-'}\n"
+                      f"实体：{'、'.join(slots.get('entities') or []) or '-'}\n"
+                      f"约束：{'；'.join(slots.get('constraints') or []) or '-'}\n"
+                      f"范围：{json.dumps(slots.get('scope') or {}, ensure_ascii=False) if slots.get('scope') else '-'}\n" if slots else ""),
+            "user_ctx": (user_ctx if user_ctx else ""),
+            "attachment": self._build_attachment_block(att_text),
+            "retrieval": f"检索到的互联数据：\n{context_text}",
+            "report": (f"\n\n{report_prompt}" if report_prompt else ""),
+        })
         # P2 视觉通道：图片以多模态 content 块随 user 消息下发
         # （openai_compat 对 messages 原样透传，故 provider 层无需改动）
         _user_content = user_input

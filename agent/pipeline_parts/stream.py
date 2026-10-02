@@ -1390,45 +1390,49 @@ class StreamMixin:
                                "note": "指定技能指令已注入生成阶段（完整指令强制遵循）"}
                 except Exception:
                     pass
-            system_prompt = (
-                # 2026-09-17 S4（C3=按意图只注入命中 Agent）：角色块改用「命中的 agent_def」
-                # ——此前硬编码一句通用角色，使库里 20 个 Agent 的定制（合计 44,762 字）在流式路径
-                # 完全不生效（配了 Agent 却看不到效果）。按 _AGENT_ROLE_CAP 截断注入：
-                # 核心 Agent（392~1,011 字）完整生效，9 个视图生成 Agent（2,500~7,981 字）取前 1200 字。
-                f"{self._build_role_block(agent_def, cap=_AGENT_ROLE_CAP)}当前意图：{intent}（Agent: {agent_def.name}，"
-                f"HIL 人机协作级别：{hil_level}）。\n"
-                f"可用工具：{', '.join(agent_def.tools) or '无（纯问答直出）'}。\n"
-                f"工具使用约束：仅调用完成当前任务所必需的工具，一次最多调用 2 个；"
-                  f"工具返回与任务无关、结果为空或已足够作答时，直接基于已有信息回答，禁止反复/连环调用工具。\n"
-                f"{self._build_skill_prompt(intent, user_input, user)}"
-                + (skill_block if skill_block else "")
-                + f"{self._team_roster_block(agent_def)}"
-                + f"{self._build_prompt_template(intent, user_input, user)}"
-            # 问题3：建模类意图强制输出 SysML v2 代码块，供投影视图与控制流/数据流视图「代码/视图」切换
-            + f"{self._build_model_code_req(intent, agent_def)}"
-                + f"{self._build_ontology_hint()}"
-                + f"{self._build_boundary_hint()}"
+            # P1-26（2026-10-02）：拼接顺序**收敛到 common.assemble_system_prompt**（唯一真源）。
+            # 此前本处与 execute.py 各写一份顺序 ⇒ 已发生口径漂移（P1-24/P1-25 只改了 execute.py，
+            # 本条**流式主路径未生效**）。分层：L2 身份 → L1 全局静态 →〔分界线〕→ L3 会话级 → L4 每轮级。
+            # 2026-09-17 S4（C3=按意图只注入命中 Agent）：角色块用「命中的 agent_def」+ _AGENT_ROLE_CAP 截断。
+            system_prompt = assemble_system_prompt({
+                # ── L2 身份层（只依赖 agent_def）──
+                "role": f"{self._build_role_block(agent_def, cap=_AGENT_ROLE_CAP)}\n",
+                "tools": f"可用工具：{', '.join(agent_def.tools) or '无（纯问答直出）'}。\n",
+                "tool_rules": ("工具使用约束：仅调用完成当前任务所必需的工具，一次最多调用 2 个；"
+                               "工具返回与任务无关、结果为空或已足够作答时，直接基于已有信息回答，禁止反复/连环调用工具。\n"),
+                "roster": self._team_roster_block(agent_def),
+                # ── L1 全局静态（无参方法，跨 agent/会话完全一致 ⇒ 尽早进入可缓存前缀）──
+                "ontology": self._build_ontology_hint(),
+                "boundary": self._build_boundary_hint(),
+                "output_rules": self._build_output_rules(),
+                "citation_rules": self._build_citation_rules(),
+                # ════════ SYSTEM_PROMPT_DYNAMIC_BOUNDARY（以下为动态区）════════
+                # ── L3 会话级（依赖 intent）──
+                "intent_line": f"当前意图：{intent}（Agent: {agent_def.name}，HIL 人机协作级别：{hil_level}）。\n",
+                # 问题3：建模类意图强制输出 SysML v2 代码块（含 L0 硬约束卡），供投影视图与「代码/视图」切换
+                "model_code_req": self._build_model_code_req(intent, agent_def),
+                # ── L4 每轮级（依赖 user_input / 检索 / 建模态）──
+                "skill_prompt": self._build_skill_prompt(intent, user_input, user),
+                "skill_block": (skill_block if skill_block else ""),
+                "template": self._build_prompt_template(intent, user_input, user),
                 # P0-3：长期记忆注入（跨会话经验，仅供对齐）
-                + f"{self._build_memory_hint(user_input, intent, user)}"
+                "memory": self._build_memory_hint(user_input, intent, user),
                 # P0：建模上下文注入（当前模型状态工作记忆，MBSE 特有）
                 # P0-2（2026-09-19）：传本轮 user_input → 建模上下文改**结构性隔离**
                 # （context.model_context_entities='count'：只报「本分支共 N 个」不列实体名；块首带适用范围声明）
                 # ⚠️ 「按语义相关性过滤条目」方案经标定实测 dense/bigram 分布重叠、无可用阈值 → 已放弃，别再做
-                + f"{self._build_model_context(branch, conversation_id, user_input)}"
+                "model_context": self._build_model_context(branch, conversation_id, user_input),
                 # P0 能力：项目级持久记忆注入（Project Constitution，规范/基线防漂移）
-                # P0-2（2026-09-19）：传本轮 user_input → 注入块带项目名 + 「仅当本次任务属于该项目领域时适用」声明
-                + self._build_project_memory(user_input=user_input, conversation_id=conversation_id)
-                + (f"【任务拆解（P1 结构化）】\n目标：{slots.get('goal') or '-'}\n"
-                   f"实体：{'、'.join(slots.get('entities') or []) or '-'}\n"
-                   f"约束：{'；'.join(slots.get('constraints') or []) or '-'}\n"
-                   f"范围：{json.dumps(slots.get('scope') or {}, ensure_ascii=False) if slots.get('scope') else '-'}\n" if slots else "")
-                + (user_ctx if user_ctx else "")
-                + self._build_output_rules()
-                + self._build_citation_rules()
-                + self._build_attachment_block(att_text)
-                + f"检索到的互联数据：\n{context_text}"
-                + (f"\n\n{report_prompt}" if report_prompt else "")
-            )
+                "project_memory": self._build_project_memory(user_input=user_input, conversation_id=conversation_id),
+                "slots": (f"【任务拆解（P1 结构化）】\n目标：{slots.get('goal') or '-'}\n"
+                          f"实体：{'、'.join(slots.get('entities') or []) or '-'}\n"
+                          f"约束：{'；'.join(slots.get('constraints') or []) or '-'}\n"
+                          f"范围：{json.dumps(slots.get('scope') or {}, ensure_ascii=False) if slots.get('scope') else '-'}\n" if slots else ""),
+                "user_ctx": (user_ctx if user_ctx else ""),
+                "attachment": self._build_attachment_block(att_text),
+                "retrieval": f"检索到的互联数据：\n{context_text}",
+                "report": (f"\n\n{report_prompt}" if report_prompt else ""),
+            })
             # P2 视觉通道：图片以多模态 content 块随 user 消息下发（provider 层原样透传）
             _user_content = user_input
             if att_images:
