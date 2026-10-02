@@ -1,7 +1,17 @@
 # -*- coding: utf-8 -*-
 """AgentPipeline Mixin：流式执行：编排流 SSE / 直接流式 execute_stream。
 
-由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
+由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。
+
+⚠️ 路径活跃度（2026-10-02 P1-26 审计）——**本文件是「主路径」，生产唯一入口**：
+  · `routers/conversations.py:208` 的 `POST /api/conversations/{id}/chat/stream` → `execute_stream`；
+  · 前端 `static/js` 全仓**只有这一处** chat 请求（`11-pipeline.js` / `12-chatsend.js`）；
+  · 编排子任务也走本文件（`stream.py:156` / `:295` 调 `execute_stream(query, 0, ...)`）。
+  ⇒ **面向用户行为/质量的改动（prompt / 检索 / 落库 / 记忆 / 编排）请以本路径为准做验证**；
+    对等文件 `execute.py`（非流式）是冷路径，前端不调用（见其文件头）。
+  ⇒ system_prompt 的**顺序**已由 `common.assemble_system_prompt` 收敛为单一真源，
+    两条路径只收集块内容 —— 改 prompt 结构时**不要再在本文件内联拼接**（有守护脚本拦截）。
+"""
 from .common import *
 import queue as _queue  # 编排子任务事件的**实时**转发通道（见 _stream_orchestrated_flow 的 _evq）
 

@@ -1,7 +1,22 @@
 # -*- coding: utf-8 -*-
 """AgentPipeline Mixin：主执行入口 execute（非流式全流程）。
 
-由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
+由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。
+
+⚠️⚠️ 路径活跃度（2026-10-02 P1-26 审计）——**本文件是非流式「冷路径」**：
+  · 唯一入口 `routers/conversations.py:193` 的 `POST /api/conversations/{id}/chat`；
+  · **前端不调用它**：`static/js` 全仓只有一处 chat 请求，指向 `/chat/stream`；
+  · 生产真实请求走 `stream.py::execute_stream`（`stream.py:1020`，主路径）。
+  ⇒ **面向用户行为/质量的改动（prompt / 检索 / 落库 / 记忆等）必须在 `stream.py` 验证**；
+    只改本文件对真实用户行为**无影响**。P1-24/P1-25 的 system_prompt 顺序优化正是踩了这个坑
+    （改的就是本文件，流式主路径完全未生效 —— 已由 P1-26 收敛为单一真源根治，见 docs §24/§25）。
+  ⇒ 已知与主路径的功能差异（**若将来启用非流式 API，需先补齐**，逐项核实于 P1-26 审计）：
+    `_deposit_session_memory`（会话记忆沉淀）、`_ensure_sysml_blocks`（SysML 代码块补全）、
+    `_record_skill_feedback`（技能反馈）、`_save_planner_flow`（编排留痕）、
+    `_is_continuation_input`（续作输入判定）、`_archive_impact_analysis`（影响分析产物落库）；
+    编排入口亦为两套实现（本文件 `_try_orchestrate`/`_finish_orchestrated`
+    vs 主路径 `_stream_orchestrated_flow`）。
+"""
 from .common import *
 
 
