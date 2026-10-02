@@ -340,6 +340,33 @@ let _renderToken = 0;                 // 渲染代际令牌：切会话/重渲�
 const _STICK_EPS = 48;                 // 距底 ≤48px 视为"在底部"
 let _stickFollow = true;               // 当前是否处于跟读态（切会话时复位）
 let _stickRaf = 0;                     // rAF 句柄（合批用）
+// UX规范§8.4（2026-10-02）：脱离跟读期间新内容到达 → 未读增量计数 + 「回到最新」浮钮。
+// 内容每到达一批 +1（封顶 999）；回到底部 / 点击浮钮 / 发送消息即清零。
+let _stickUnread = 0;
+
+// 浮钮：挂在 #chat-col（聊天列）右下、输入区上方。只增不重建，按 unread 显隐。
+function _stickBtnShow(){
+  const col = document.getElementById('chat-col');
+  if(!col) return;
+  let btn = document.getElementById('jump-latest-btn');
+  if(!btn){
+    if(col.style.position !== 'relative') col.style.position = 'relative';
+    btn = document.createElement('button');
+    btn.id = 'jump-latest-btn';
+    btn.type = 'button';
+    btn.style.cssText = 'display:none;position:absolute;right:20px;bottom:160px;z-index:30;'
+      + 'border:1px solid var(--line);background:#fff;color:var(--pri,#3478f6);border-radius:16px;'
+      + 'padding:4px 14px;font-size:12px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.10);';
+    btn.onclick = function(){ _stickUnread = 0; scrollChatToBottom(); };
+    col.appendChild(btn);
+  }
+  if(_stickUnread > 0){
+    btn.textContent = '⬇ 回到最新' + (_stickUnread > 1 ? ('（+' + _stickUnread + '）') : '');
+    btn.style.display = 'block';
+  } else {
+    btn.style.display = 'none';
+  }
+}
 
 function _chatAreaEl(){
   return document.getElementById('chat-area');
@@ -356,15 +383,23 @@ function _bindStickDetach(){
   const detach = ()=>{ _stickFollow = _isNearBottom(area); };
   area.addEventListener('wheel', detach, {passive:true});
   area.addEventListener('touchmove', detach, {passive:true});
-  // 拖动滚动条 / 键盘翻页 / 程序性滚动后同步跟读态
-  area.addEventListener('scroll', ()=>{ _stickFollow = _isNearBottom(area); }, {passive:true});
+  // 拖动滚动条 / 键盘翻页 / 程序性滚动后同步跟读态；回到底部 → 未读清零并隐藏浮钮
+  area.addEventListener('scroll', ()=>{
+    _stickFollow = _isNearBottom(area);
+    if(_stickFollow){ _stickUnread = 0; _stickBtnShow(); }
+  }, {passive:true});
 }
 // 请求一次"若在跟读态则钉底"（合批到下一帧，最多一次）
 function stickBottom(force){
   const area = _chatAreaEl();
   if(!area) return;
   if(force) _stickFollow = true;
-  if(!_stickFollow) return;             // 用户已上滑：绝不打扰
+  if(!_stickFollow){
+    // UX规范§8.4（2026-10-02）：脱离跟读期间新内容到达 → 未读增量 + 浮钮；绝不打扰用户当前视口。
+    _stickUnread = Math.min(_stickUnread + 1, 999);
+    _stickBtnShow();
+    return;
+  }
   if(_stickRaf) return;
   _stickRaf = requestAnimationFrame(()=>{
     _stickRaf = 0;
@@ -378,6 +413,8 @@ function scrollChatToBottom(){
   const area = _chatAreaEl();
   if(!area) return;
   _stickFollow = true;
+  _stickUnread = 0;      // UX规范§8.4：显式回底 = 已读到最新，清零并隐藏浮钮
+  _stickBtnShow();
   area.scrollTop = area.scrollHeight;
 }
 // 2026-09-16：打开会话后持续钉底——懒加载内容（mermaid 库首载/图片/缩略图挂载）会在
@@ -538,6 +575,7 @@ async function selectConv(id) {
     // 同时复位「贴底跟读」态（新会话/重开会话从底部开始跟随）并绑定脱离监听。
     renderMessagesChunked(area, msgs, ()=>{
       _stickFollow = true;
+      _stickUnread = 0; _stickBtnShow();   // UX规范§8.4：切会话 = 未读清零、隐藏浮钮
       _bindStickDetach();
       _reattachLiveStream(area, id);
       pinChatBottom(area, 8000);

@@ -219,15 +219,23 @@ function procAddTool(ev){
     }
   }
   const run = ev.status==='run';
-  // V2.5：同名工具多轮调用——上一轮已完成则另起新条目（保留每轮结果，不再覆盖）
-  let upsertId = 'tool_'+ev.name;
-  if(run){
-    const cur = _procS.timeline.find(x=>x.id===upsertId);
-    if(cur && cur.status!=='run') upsertId = upsertId+'_'+Date.now();
+  // UX规范·硬规则1（2026-10-02）：一动作一节点 —— 后端每笔调用带稳定 call_id（协议 tool_call id），
+  // 同一 call_id 的 run/done 原地迁移同一节点；同名并发两笔调用是两个节点，不再互相覆盖结果。
+  // 无 call_id 的旧事件/历史路径回退原逻辑（同名键 + 完成后再来另起新条）。
+  let upsertId;
+  if(ev.call_id){ upsertId = 'tool_'+ev.call_id; }
+  else {
+    upsertId = 'tool_'+ev.name;
+    if(run){
+      const cur = _procS.timeline.find(x=>x.id===upsertId);
+      if(cur && cur.status!=='run') upsertId = upsertId+'_'+Date.now();
+    }
   }
   let detail = '';
   if(ev.arguments) detail += `<div class="proc-tool-param">参数：${esc(typeof ev.arguments==='string'?ev.arguments:JSON.stringify(ev.arguments))}</div>`;
-  const patch = {type:'tool', icon:'🛠', title:'调用 '+ev.name};
+  // UX规范·硬规则2（2026-10-02）：标题=「动词+宾语」完整活动短语（命中映射表不带「调用」前缀）；
+  // 结果摘要只出现在 sub 槽位（下方 '· xxx'），与标题互斥、永不拼接成一句。
+  const patch = {type:'tool', icon:'🛠', title: _toolActivity(ev.name)};
   // 2026-09-25（对齐 Claude Code / Codex）：头部加**一行结果摘要**，折叠状态下也能一眼看出
   // "这个工具干了什么、成没成"；完整参数/结果仍在展开体里（信息密度与细节两者兼顾）。
   if(!run){
@@ -235,16 +243,21 @@ function procAddTool(ev){
     if(_res) patch.sub = ' · ' + _toolSumm(_res, 60);   // 不加 ✓/✗：头部已有状态徽章，避免重复标记
   }
   if(run){
-    // P0-1 工具耗时：run 记起始（同名工具重试沿用首次起点），头部徽章实时计时
+    // P0-1 工具耗时：run 记起始，头部徽章实时计时。UX规范·硬规则1：键用 call_id（并发同名
+    // 调用各记各的起点）；无 call_id 回退工具名（旧行为：同名重试沿用首次起点）。
     if(!_procS.toolStart) _procS.toolStart = {};
-    if(!_procS.toolStart[ev.name]) _procS.toolStart[ev.name] = Date.now();
-    patch.elapsedStart = _procS.toolStart[ev.name];
+    const _tsk = ev.call_id || ev.name;
+    if(!_procS.toolStart[_tsk]) _procS.toolStart[_tsk] = Date.now();
+    patch.elapsedStart = _procS.toolStart[_tsk];
     ensureElapsedTimer();
   } else {
-    if(_procS.toolStart && _procS.toolStart[ev.name]){
-      patch.elapsedMs = Date.now() - _procS.toolStart[ev.name];
-      delete _procS.toolStart[ev.name];
-    } else if(ev.latency_ms){ patch.elapsedMs = ev.latency_ms; }
+    const _tsk = ev.call_id || ev.name;
+    // 耗时取值：优先后端回报的精确 latency_ms；缺省才用前端 run→done 测量值兜底
+    if(ev.latency_ms){ patch.elapsedMs = ev.latency_ms; }
+    else if(_procS.toolStart && _procS.toolStart[_tsk]){
+      patch.elapsedMs = Date.now() - _procS.toolStart[_tsk];
+    }
+    if(_procS.toolStart) delete _procS.toolStart[_tsk];
     patch.elapsedStart = null;   // P0-1：完成定格——清实时标记，徽章切 ⏱ 定格态
     const res = ev.error || ev.result || '-';
     const trunc = !!ev.truncated;
@@ -282,13 +295,16 @@ function _procAddSubTool(pk, ev, displayName){
   if(!_procS.subChildren) _procS.subChildren = {};
   const arr = (_procS.subChildren[pk] = _procS.subChildren[pk] || []);
   const run = ev.status==='run';
-  let item = arr.find(x=>x.name===ev.name && x.status==='run');
+  // UX规范·硬规则1（2026-10-02）：子任务内工具同样按 call_id 复用条目（并发同名调用各自成项）；
+  // 无 call_id 回退「同名+运行中」匹配。
+  let item = ev.call_id ? arr.find(x=>x.call_id===ev.call_id)
+                        : arr.find(x=>x.name===ev.name && x.status==='run');
   if(item && !run){
     item.status='done'; item.ok=!!ev.ok;
     item.result=ev.result||''; item.error=ev.error||''; item.truncated=!!ev.truncated;
     item.latencyMs=ev.latency_ms||0; item.elapsedStart=null;
   } else if(!item){
-    arr.push({name:ev.name, displayName, arguments:ev.arguments, status: run?'run':'done',
+    arr.push({name:ev.name, displayName, call_id:ev.call_id||'', arguments:ev.arguments, status: run?'run':'done',
               ok: !!ev.ok, result: ev.result||'', error: ev.error||'',
               truncated: !!ev.truncated, latencyMs: ev.latency_ms||0, elapsedStart: run?Date.now():null});
   }
@@ -391,6 +407,24 @@ function capTagsFor(agentId){
   const caps = (a && a.capabilities) || [];
   if(!caps.length) return '';
   return caps.slice(0,3).map(c=>`<span class="hil l0" style="font-size:9.5px;margin-left:4px;">${esc(c)}</span>`).join('');
+}
+// UX规范·硬规则2（2026-10-02）：工具卡标题=「动词+宾语」完整活动短语。
+// 命中映射表 → 直接用短语；前缀族（file_* / zhiyuan_*）→ 按族生成；都未命中 → 回退「调用 工具名」。
+// 与头部结果摘要（sub 槽）互斥：标题描述动作，摘要描述结果，二者永不拼接成一句。
+function _toolActivity(name){
+  const n = String(name||'');
+  const MAP = {
+    graph_retrieve:'检索知识图谱', conflict_check:'检测模型冲突', impact_analyze:'分析变更影响',
+    validate:'校验模型规范性', entity_create:'创建知识实体', sysml_v2_validate:'校验 SysML V2 代码',
+    mbse_pull_ingest:'拉取并入库工程数据', report_export:'导出报告文档',
+    fetch_tool_result:'取回工具结果全文',
+    file_list:'列出目录内容', file_read:'读取文件', file_write:'写入文件',
+    file_append:'追加写入文件', file_mkdir:'创建目录', file_delete:'删除文件'
+  };
+  if(MAP[n]) return MAP[n];
+  if(n.indexOf('file_')===0) return '文件操作 '+n.slice(5);
+  if(n.indexOf('zhiyuan_')===0) return '同步智源平台 '+n.slice(8);
+  return '调用 '+n;
 }
 // 2026-09-26：卡片摘要行**按句子收口**（原实现 `slice(0,60)` 硬切，实测断在词中间："职责是**产"）。
 // 展示优先用后端 `ui_summary`（已剔除"承接上游/职责是"这类内部交接语）；老历史数据无此字段 →
@@ -659,6 +693,10 @@ function handleSSE(raw) {
   } else if(evType === 'clarify') {
     _forceFlushTokens();
     renderClarify(ev);   // P0-1 置信度三级决策：中置信 → 澄清条（可改选重发）
+    // UX规范§8.4（2026-10-02）：需要用户行动的单元出现 = 唯一允许抢夺滚动的情况 ——
+    // 澄清条插在消息体顶部，用户若停留在长输出中段会完全看不到它 → 这里强制滚到可见。
+    const _cb = document.getElementById('clarify-bar');
+    if(_cb && _cb.scrollIntoView){ try{ _cb.scrollIntoView({block:'center'}); }catch(e){ _cb.scrollIntoView(); } }
   } else if(evType === 'clarify_ask') {
     _forceFlushTokens();
     setPendingClarify(ev);   // 2026-09-25：登记挂起 → 输入框上方出现「AI 正在等待确认」提示（可在此直接作答）

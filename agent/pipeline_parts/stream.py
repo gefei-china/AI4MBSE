@@ -1496,15 +1496,20 @@ class StreamMixin:
                 exec_reasoning.append(_p_delta)
                 yield {"type": "reasoning", "delta": _p_delta, "round": _rnd + 1, "phase": "plan"}
                 weak_count = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
-                for tc in ptool_calls[:3]:
+                for _ti, tc in enumerate(ptool_calls[:3]):
                     fn = tc.get("function") or {}
                     tname = fn.get("name", "")
+                    # UX规范·硬规则1（2026-10-02）：一动作一节点 —— 每笔调用携带稳定 call_id
+                    # （协议 tool_call id；缺失时用 名称#轮次-序号 兜底），前端以它为键复用节点，
+                    # 同名并发两笔调用各自成卡、不再互相覆盖。
+                    _call_id = str(tc.get("id") or f"{tname}#{_rnd + 1}-{_ti}")
                     try:
                         targs = json.loads(fn.get("arguments") or "{}")
                     except Exception:
                         targs = {}
                     # 工具调用结果：执行前 → 执行后（流式透传；结果全量返回，前端可展开/复制）
-                    yield {"type": "tool", "status": "run", "name": tname, "arguments": targs}
+                    yield {"type": "tool", "status": "run", "name": tname, "arguments": targs,
+                           "call_id": _call_id}
                     _t0 = time.time()   # P0-1 工具耗时：run→done 计时
                     result = self._exec_tool_call(tname, targs)
                     _t_ok = bool(result.get("ok"))
@@ -1520,7 +1525,8 @@ class StreamMixin:
                                        "elapsed_ms": _t_ms})
                     yield {"type": "tool", "status": "done", "name": tname,
                            "ok": _t_ok, "result": _t_result, "error": _t_error,
-                           "truncated": _t_trunc, "latency_ms": _t_ms}
+                           "truncated": _t_trunc, "latency_ms": _t_ms,
+                           "call_id": _call_id}
                     _weak = bool(result.get("weak")) or ("未检索到" in _t_result) or ("无新冲突" in _t_result)
                     if _weak:
                         weak_count += 1
