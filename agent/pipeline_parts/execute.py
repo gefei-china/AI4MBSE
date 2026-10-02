@@ -251,6 +251,17 @@ class ExecuteMixin:
             + f"{self._build_model_code_req(intent, agent_def)}"
             + f"{self._build_ontology_hint()}"
             + f"{self._build_boundary_hint()}"
+            # P1-24 prompt caching：**静态约束块前移**，动态块统一挪到尾部。
+            # 依据（Anthropic Claude Code 官方纪律 "static content first, dynamic content last"）：
+            # DeepSeek 缓存按**前缀**完整匹配，动态块一旦排在静态块之前，前缀就在那里断掉，
+            # 其后所有静态内容都无法命中。改动前 `_build_output_rules` / `_build_citation_rules`
+            # 排在记忆/建模上下文/slots 等**每轮都变**的块之后 ⇒ 明明是静态规则却进不了前缀。
+            # 现把两块静态规则提到动态区之前，让稳定前缀尽可能长；动态块（记忆/建模上下文/
+            # 项目记忆/slots/user_ctx/附件/检索结果）全部下沉到尾部。
+            # ⚠️ 只调顺序、不改任何块的内容 → 语义上「约束更靠前」通常权重更高，风险可控。
+            + self._build_output_rules()
+            + self._build_citation_rules()
+            # ── 以下为动态区（每轮变化，放尾部，不污染可缓存前缀）──
             # P0-3：长期记忆注入（跨会话经验，仅供对齐）
             + f"{self._build_memory_hint(user_input, intent, user)}"
             # P0：建模上下文注入（当前模型状态工作记忆，MBSE 特有）
@@ -266,8 +277,6 @@ class ExecuteMixin:
                f"约束：{'；'.join(slots.get('constraints') or []) or '-'}\n"
                f"范围：{json.dumps(slots.get('scope') or {}, ensure_ascii=False) if slots.get('scope') else '-'}\n" if slots else "")
             + (user_ctx if user_ctx else "")
-            + self._build_output_rules()
-            + self._build_citation_rules()
             + self._build_attachment_block(att_text)
             + f"检索到的互联数据：\n{context_text}"
             + (f"\n\n{report_prompt}" if report_prompt else "")
