@@ -1388,24 +1388,26 @@ class StreamMixin:
                                                      sections=_sections, report_type=report_type)
                 except Exception:
                     report_prompt = ""
+            # P1-29（2026-10-02）：状态起点统一 —— 此前本路径**不设** `_skill_forced`，
+            # 导致「显式指定技能」的白名单授权在对话主路径上不生效（`skills.py:153/163`
+            # 会按"未强制"重置并只并集*自动命中*技能的白名单）；且 `_skill_allowed_tools`
+            # 无每轮清零，全局单例下会跨轮残留。
+            reset_skill_state(self, skill_name)
             if skill_name:
-                try:
-                    conn = get_db()
-                    row = conn.execute("SELECT name, content, description FROM skills WHERE name=?", (skill_name,)).fetchone()
-                    conn.close()
-                    if row and row["content"]:
-                        # P1-28（2026-10-02）：块文本收敛到 `common.build_skill_block`（唯一真源）。
-                        # ⚠️ 两处差异**显式保留**（已登记 §29.9，属独立缺陷，不在本批静默统一）：
-                        #   ① content_cap=_SKILL_CONTENT_CAP：本路径截断正文控 token（execute 不截断）；
-                        #   ② include_resources=False：本处 SQL **未查** references/examples/scripts/
-                        #      allowed_tools ⇒ 渐进披露无数据可用（execute 路径会披露）。
-                        skill_block, _ = build_skill_block(
-                            {"name": row["name"], "content": row["content"]},
-                            content_cap=_SKILL_CONTENT_CAP, include_resources=False)
-                        # V2.5：手动指定技能也发独立事件（前端「🧩 技能执行」卡可见）
-                        yield {"type": "skill", "status": "done", "names": [row["name"]],
-                               "note": "指定技能指令已注入生成阶段（完整指令强制遵循）"}
-                except Exception:
+                # P1-29：读取入口统一为 `load_forced_skill`（StudioRepo `SELECT *` 含
+                # references/examples/scripts/allowed_tools）。此前本处用只查 3 列的裸 SQL
+                # ⇒ 渐进披露**无数据可用**。`content_cap` 仍是流式侧的有意差异（控 token）；
+                # `require_content=True` 保留"正文为空不注入"的原行为。
+                skill_block, _at = load_forced_skill(skill_name,
+                                                     content_cap=_SKILL_CONTENT_CAP,
+                                                     include_resources=True,
+                                                     require_content=True)
+                if _at:
+                    self._skill_allowed_tools = _at
+                if skill_block:
+                    # V2.5：手动指定技能也发独立事件（前端「🧩 技能执行」卡可见）
+                    yield {"type": "skill", "status": "done", "names": [skill_name],
+                           "note": "指定技能指令已注入生成阶段（完整指令强制遵循）"}
                     pass
             # P1-28（2026-10-02）：**块内容**收敛到 `common.build_prompt_blocks`（唯一真源）。
             # 本路径（流式对话 = 前端唯一入口）与 execute 路径的差异一律**显式参数化**：

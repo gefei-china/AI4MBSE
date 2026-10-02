@@ -339,6 +339,73 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
     return blocks
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# P1-29（2026-10-02）：**显式指定技能**（`skill_name`）的注入 —— 两条路径统一入口
+#
+# 背景（三条实测差异，`tools/verify/verify_skill_injection.py` 稳定复现）：
+#   ① `_skill_forced` 此前**只在 `execute.py` 赋值** ⇒ 对话主路径（`stream.py`）上该机制
+#      **未接线**，`skills.py:153/163` 会按"未强制"重置并**只并集自动命中**技能的白名单
+#      ⇒ 用户**显式指定**的技能，其 `allowed_tools` 授权可能不生效。
+#      （`_skill_allowed_tools` 的语义是**授权补充**：`tools.py:145` 把它声明的工具**补入**
+#      候选；它不做拦截 —— 拦截是 `_tool_whitelist`（委派最小权限）的职责。）
+#   ② `stream.py` 的技能 SQL 只查 3 列（`name/content/description`）⇒ references/examples/
+#      scripts/allowed_tools **拿不到**，渐进披露在对话路径上无数据可用。
+#   ③ `_skill_allowed_tools` 没有"每轮起点清零" ⇒ `routers/conversations.py:14` 用的是
+#      **全局单例** `from agent import agent`，实例属性会**跨轮/跨路径残留**
+#      （上一轮显式技能的授权被带到下一轮，或 execute 路径的状态漏进流式对话）。
+#
+# ⚠️ 本组函数**会改变运行时行为**（显式技能的白名单授权真正生效 + 资源披露可用），
+#    这是**修复**（对齐 `execute.py` 既有设计意图「指定技能白名单为权威限制，禁止被自动路由
+#    重置/并集」），不是纯搬运 ⇒ 与 P1-28 分属两批，证据见 `tools/verify/verify_skill_injection.py`。
+# ════════════════════════════════════════════════════════════════════════════
+
+def reset_skill_state(pipe, skill_name) -> None:
+    """显式技能注入的**状态起点**（两路径统一调用，且必须在任何分支之前）。
+
+    每轮无条件重置两项：`_skill_forced = bool(skill_name)`、`_skill_allowed_tools = None`。
+
+    ⚠️ 为什么必须**无条件清零**而不是"有技能时才设"：`_skill_allowed_tools` 是**实例属性**，
+    而对话走的是**全局单例**。只在"有白名单时赋值"会让上一轮的值**残留到本轮**
+    （表现为"这轮明明没指定技能，却拿到了上一个技能的授权"），且极难复现。
+    """
+    pipe._skill_forced = bool(skill_name)
+    pipe._skill_allowed_tools = None
+
+
+def load_forced_skill(skill_name, *, content_cap: int = 0, include_resources: bool = True,
+                      require_content: bool = False):
+    """读取**显式指定**的技能并造块。返回 `(block, allowed_tools)`。
+
+    与 `stream.py` 旧实现相比，读取入口统一为 `StudioRepo.get_skill_by_name`
+    （`SELECT *` + JSON 列解析）—— 旧 SQL 只查 3 列，`references/scripts/allowed_tools`
+    根本拿不到，披露**无数据可用**。
+
+    ⚠️ `require_content` 是一条**如实保留**的既有差异（不是遗漏）：
+      · `execute.py` 传 `False` —— 原行为是 `if sk:`，正文为空**也注入**（其资源披露仍有价值）；
+      · `stream.py` 传 `True`  —— 原行为是 `if row and row["content"]:`，正文为空**不注入**。
+    两类行为都合理，统一属独立决策 ⇒ 显式参数化，避免"顺手"改掉任一侧。
+
+    任何异常 / 技能不存在 → `("", set())`：**技能取不到不该让整轮对话失败**。
+    """
+    if not skill_name:
+        return "", set()
+    try:
+        from database import get_db as _gdb
+        from repositories.studio_repo import StudioRepo as _SR
+        conn = _gdb()
+        try:
+            sk = _SR(conn).get_skill_by_name(skill_name)
+        finally:
+            conn.close()
+    except Exception:
+        return "", set()
+    if not sk:
+        return "", set()
+    if require_content and not sk.get("content"):
+        return "", set()
+    return build_skill_block(sk, content_cap=content_cap, include_resources=include_resources)
+
+
 # ── P1-4（2026-10-01）：会话槽位（DST slots）三层治理的纯函数 ─────────────
 #  实测背景（全部取自生产库，非构造场景）：
 #   ① `_merge_slots` 原为「纯并集 + 精确字符串去重」→ 同义不同串（空格/全角半角）绕过去重，
@@ -487,6 +554,8 @@ __all__ = [
     # P1-28：system_prompt 块内容单一真源（两条路径共用；差异显式参数化）
     'TOOL_RULES_TEXT', '_SKILL_CONTENT_CAP', 'PromptBlocksCtx',
     'build_slots_block', 'build_skill_block', 'build_prompt_blocks',
+    # P1-29：显式指定技能的注入（两路径统一入口 + 每轮状态起点）
+    'reset_skill_state', 'load_forced_skill',
     # P1-4：会话槽位治理（纯函数，便于单测与变异自证）
     'SLOT_CLARIFY_MARK', 'SLOT_ORIGINAL_MARK', 'TOPIC_CARRY_WORDS',
     'extract_original_request', 'norm_slot_item', 'merge_slot_items', 'is_topic_switch',

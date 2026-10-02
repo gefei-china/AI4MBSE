@@ -217,31 +217,21 @@ class ExecuteMixin:
             except Exception:
                 report_prompt = ""
         skill_block = ""
-        self._skill_forced = bool(skill_name)  # D4：指定技能白名单为权威限制，禁止被自动路由重置/并集
+        # P1-29（2026-10-02）：状态起点统一 —— 每轮**无条件清零**。
+        # 对话走全局单例（`routers/conversations.py:14`），只"有技能时才赋值"会让上一轮的
+        # 白名单残留到本轮。
+        reset_skill_state(self, skill_name)
         if skill_name:
-            try:
-                from repositories.studio_repo import StudioRepo as _SR
-                # 用别名导入：execute 内局部 `from database import get_db` 会把函数级
-                # get_db 标记为局部变量（Python 编译期作用域），直接调用会 UnboundLocalError
-                from database import get_db as _get_db
-                conn = _get_db()
-                try:
-                    sk = _SR(conn).get_skill_by_name(skill_name)
-                finally:
-                    conn.close()
-                if sk:
-                    # P1-28（2026-10-02）：块文本收敛到 `common.build_skill_block`（唯一真源）。
-                    # 本路径参数 = 原行为**逐字节保留**：正文不截断 + 披露 references/examples/
-                    # scripts/工具白名单（流式路径是 content_cap=4000 且不披露 —— 差异显式登记）。
-                    skill_block, _at = build_skill_block(sk, content_cap=0, include_resources=True)
-                    if _at:
-                        # D4：指定技能的白名单为**权威限制**（配合 `_skill_forced=True`，
-                        # 自动路由不得重置或并集）。「设不设白名单」是**调用方职责**，故留在本路径：
-                        # 流式路径当前不设（`_skill_forced` 全仓只在 execute.py:220 赋值），
-                        # 该差异如实保留、不在本批静默统一（§29.9）。
-                        self._skill_allowed_tools = _at
-            except Exception:
-                pass
+            # P1-29：读取入口统一为 `load_forced_skill`（StudioRepo 含全部列 ⇒ 资源披露有数据）。
+            # 本路径参数 = 原行为**逐字节保留**：正文不截断、披露资源、**正文为空也注入**
+            # （`require_content=False`，与流式路径的 `True` 是有意差异，见 common 的说明）。
+            skill_block, _at = load_forced_skill(skill_name, content_cap=0,
+                                                 include_resources=True,
+                                                 require_content=False)
+            if _at:
+                # D4：指定技能的白名单为**权威限制**（配合 `_skill_forced=True`，
+                # 自动路由不得重置或并集）。「设不设白名单」是**调用方职责**，故留在调用点。
+                self._skill_allowed_tools = _at
         # P1-28（2026-10-02）：**块内容**收敛到 `common.build_prompt_blocks`（唯一真源）。
         # 本路径（execute：Studio Agent 试跑 / 工作流 LLM 节点 / 非流式 API）与流式对话的
         # 差异一律**显式参数化**，不抹平：
