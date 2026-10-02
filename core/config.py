@@ -307,7 +307,10 @@ DEFAULT_CONFIG = {
         # 注：曾实现「按语义相关性过滤」，标定实测 dense/bigram 两路分布重叠、**无可用阈值** → 已放弃
         # （标定脚本 tmp/kcx/calib.py；结论与理由见 memory.py 该处上方注释）。
         "model_context_entities": "count",
-        "rerank": True,                 # 知识库检索后 LLM 重排（开关，粗筛→细排；行业对齐 RAG 多阶段）
+        # P1-22（2026-10-02）默认**关闭**：实测证明本路（2 级上下文重排）无收益，且与 1 级
+        # `rag.rerank_enabled` 串联会对同一批 hits 重排两次。依据见 rag.rerank_enabled 处注释。
+        # 需要时置 true 即可开启（旋钮保留）。
+        "rerank": False,                # 知识库检索后 LLM 重排（开关，粗筛→细排；行业对齐 RAG 多阶段）
         "rerank_top_n": 8,              # 重排候选数
         "rerank_keep": 3,               # 重排保留数（其余保底置后）
         # ⚠️ 2026-09-19 移除 budget_system_chars / budget_system_tokens（死配置）：
@@ -508,7 +511,12 @@ DEFAULT_CONFIG = {
         "w_typing": 0.20,            # 图谱置信权重：类型标注完整度因子
         "confidence_high": 0.70,     # 命中置信等级「高」分界（真向量相似度口径）
         "confidence_mid": 0.45,      # 命中置信等级「中」分界
-        "rerank_enabled": True,      # LLM Rerank 重排开关（LLM 不可用/超时静默回退原排序）
+        # P1-22（2026-10-02）默认**关闭**——官方检索评测 `tools/eval/run_eval.py` 全量 doc 域
+        # （20 条）A/B 实测：开重排 recall@3/@5 = 0.4、关重排同样 0.4（**召回零提升**）；
+        # ndcg@10 仅 0.227 → 0.225（**+0.002，可忽略**）；但评测耗时 196.2s → 28.1s（**慢 7 倍**），
+        # 且线上每轮多 2 次 LLM 往返（rag_rerank ~1775 + rerank ~810 tokens，**缓存命中恒 0**）。
+        # 结论：当前语料/配置下 LLM 重排是纯成本。旋钮保留，换语料或换 provider 后可置 true 重评。
+        "rerank_enabled": False,     # LLM Rerank 重排开关（LLM 不可用/超时静默回退原排序）
         "rerank_max_candidates": 10, # 送 LLM 重排的候选上限（应 ≤ top_k，否则上限形同虚设）；0 = 全部候选
         # ── P0 记忆召回（2026-09-29）───────────────────────────────────────────
         # 背景：累积层（agent_memory/project_memories）早就建好，但检索侧零消费 ——

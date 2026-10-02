@@ -38,7 +38,10 @@ RAG_DEFAULTS = {
     "hyde_enabled": True, "hyde_weight": 0.05,
     "w_coverage": 0.50, "w_relations": 0.30, "w_typing": 0.20,
     "confidence_high": 0.70, "confidence_mid": 0.45,
-    "rerank_enabled": True, "rerank_max_candidates": 8,
+    # P1-22（2026-10-02）：rerank_enabled 默认由 True 改为 **False** —— 官方评测 A/B 实测
+    # 证明两级 LLM 重排「召回零提升（recall@3/@5 开与关完全相同）、ndcg 仅 +0.002，
+    # 却慢 7 倍、每轮多 ~2585 tokens 且缓存命中恒 0」。旋钮保留，置 true 可重开。
+    "rerank_enabled": False, "rerank_max_candidates": 8,
 }
 missing = [k for k, v in RAG_DEFAULTS.items() if cfg.DEFAULT_CONFIG.get("rag", {}).get(k) != v]
 check("A1 DEFAULT_CONFIG.rag 13 键默认值", not missing, f"缺失/不符: {missing}")
