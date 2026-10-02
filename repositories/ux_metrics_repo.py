@@ -98,6 +98,9 @@ class UxMetricsRepo:
             except Exception:
                 steal += 1   # detail 解析不了按可疑计
 
+        # 会话内时序指标：失败自恢复 / 等待放弃 —— 必须按会话分组、按写入顺序分析
+        seq = self._sequence_stats(days)
+
         def _rate(a, b):
             return round(a / b, 4) if b else None
 
@@ -111,4 +114,62 @@ class UxMetricsRepo:
             "confirm_gate": {"shown": cnt.get("confirm_shown", 0),
                              "decided": cnt.get("confirm_decided", 0)},
             "scroll_steal": {"count": steal, "legal": 0 if steal == 0 else "检查 scroll_force 的 reason"},
+            # v2 扩展（2026-10-03）：会话级时序指标
+            "failure_recovery": seq["recovery"],
+            "wait_abandon": seq["abandon"],
+        }
+
+    def _sequence_stats(self, days: int) -> dict:
+        """会话内事件时序分析（同窗、conversation_id>0、按 id 升序）。
+
+        - 失败自恢复率：出现 task_error 的会话中，其后同会话再出现 task_done 的比例
+          （口径：失败后无需换会话/人工重建即完成后续任务）。目标 ≥70%。
+        - 等待放弃率：clarify_shown / confirm_shown 之后直到会话最后都无对应处置
+          （answered/skipped、decided）的等待占比。目标 <5%。
+        逆序扫描配对：一问一答严格 1:1（两次 shown 一次处置 = 一次放弃一次命中）。
+        """
+        rows = self.conn.execute(
+            "SELECT conversation_id, event FROM ux_metrics "
+            "WHERE conversation_id > 0 AND created_at >= datetime('now', ?) ORDER BY id",
+            (f'-{days} days',)).fetchall()
+        seqs = {}
+        for cid, ev in rows:
+            seqs.setdefault(cid, []).append(ev)
+
+        err_convs = recovered = 0
+        wait_total = wait_abandoned = 0
+        for evs in seqs.values():
+            try:
+                i = evs.index("task_error")
+            except ValueError:
+                i = -1
+            if i >= 0:
+                err_convs += 1
+                if "task_done" in evs[i + 1:]:
+                    recovered += 1
+            res_clarify = res_confirm = False
+            for ev in reversed(evs):
+                if ev in ("clarify_answered", "clarify_skipped"):
+                    res_clarify = True
+                elif ev == "confirm_decided":
+                    res_confirm = True
+                elif ev == "clarify_shown":
+                    wait_total += 1
+                    if not res_clarify:
+                        wait_abandoned += 1
+                    res_clarify = False   # 一问一答 1:1 消耗
+                elif ev == "confirm_shown":
+                    wait_total += 1
+                    if not res_confirm:
+                        wait_abandoned += 1
+                    res_confirm = False
+
+        def _rate(a, b):
+            return round(a / b, 4) if b else None
+
+        return {
+            "recovery": {"err_convs": err_convs, "recovered": recovered,
+                         "rate": _rate(recovered, err_convs)},
+            "abandon": {"waits": wait_total, "abandoned": wait_abandoned,
+                        "rate": _rate(wait_abandoned, wait_total)},
         }

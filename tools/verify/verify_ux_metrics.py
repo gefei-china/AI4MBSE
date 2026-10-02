@@ -51,7 +51,31 @@ check("S3 澄清命中率 = 2/3 ≈ 0.6667", abs(s["clarify"]["hit_rate"] - 0.66
 check("S4 确认闸门 曝光1/处置1", s["confirm_gate"] == {"shown": 1, "decided": 1}, s["confirm_gate"])
 check("S5 滚动抢夺守护：非法 reason 计 1（§8.4 红线告警）", s["scroll_steal"]["count"] == 1, s["scroll_steal"])
 
-# ── 3. 边界 ──
+# ── 3. 会话内时序指标（失败自恢复 / 等待放弃）──
+print("[Q] 时序口径（conversation_id>0，按 id 顺序）")
+repo.insert_batch([
+    # conv 1：error 后恢复 done → 自恢复
+    {"event": "task_error", "conversation_id": 1},
+    {"event": "task_done",  "conversation_id": 1},
+    # conv 2：error 后无 done → 未恢复
+    {"event": "task_error", "conversation_id": 2},
+    # conv 3：两次 clarify_shown 一次 answered → 一弃一命中（1:1 配对）
+    {"event": "clarify_shown",   "conversation_id": 3},
+    {"event": "clarify_shown",   "conversation_id": 3},
+    {"event": "clarify_answered","conversation_id": 3},
+    # conv 4：confirm_shown 无处置 → 放弃
+    {"event": "confirm_shown",   "conversation_id": 4},
+    # conv 5：done 在 error 之前 → 不算恢复（时序判定，非共现判定）
+    {"event": "task_done",  "conversation_id": 5},
+    {"event": "task_error", "conversation_id": 5},
+])
+s2 = repo.summary(days=7)
+check("Q1 失败自恢复 = 1/3（conv5 的 done 在 error 前不算）",
+      s2["failure_recovery"] == {"err_convs": 3, "recovered": 1, "rate": 0.3333}, s2["failure_recovery"])
+check("Q2 等待放弃 = 2/3（conv3 两次shown一次answered→一弃一配对，conv4 全弃）",
+      s2["wait_abandon"] == {"waits": 3, "abandoned": 2, "rate": 0.6667}, s2["wait_abandon"])
+
+# ── 4. 边界 ──
 print("[E] 边界")
 s0 = UxMetricsRepo(sqlite3.connect(":memory:")).summary(days=7)
 check("E1 空库比率全 None（不除零）", s0["tasks"]["completion_rate"] is None and s0["scroll_steal"]["count"] == 0)

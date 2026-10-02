@@ -613,9 +613,11 @@ async function flowMonitor() {
 // ── M7：LLM 用量与成本 + M5：HIL 确认队列（监控面板增强区）──
 async function monitorExtra() {
   try {
-    const [u, h] = await Promise.all([
+    const [u, h, ux] = await Promise.all([
       api('/api/studio/monitor/usage?days=7'),
-      api('/api/studio/hil-confirmations?status=pending&limit=20')
+      api('/api/studio/hil-confirmations?status=pending&limit=20'),
+      // UX规范§11（2026-10-03）：六指标面板数据源；失败只降级不拖垮用量/HIL
+      api('/api/ux-metrics/summary?days=7').catch(()=>null)
     ]);
     const el = document.getElementById('monitor-extra');
     if(!el) return;
@@ -630,9 +632,41 @@ async function monitorExtra() {
       </div>` +
       ((u.by_provider||[]).length?`<div style="font-size:11px;margin-bottom:8px;">` + (u.by_provider||[]).map(p=>`<span style="display:inline-block;background:var(--line);border-radius:8px;padding:2px 8px;margin:0 4px 4px 0;font-size:10.5px;">${esc(p.name)} · ${p.calls}次 · ${p.tokens}tok${p.mock?` · <b style="color:var(--amb);">${p.mock}mock</b>`:''}</span>`).join('') + `</div>`:'') +
       `<div style="font-size:12px;font-weight:500;margin:12px 0 6px;">HIL 人工确认队列（待处理 ${(h||[]).length} 项）<span style="color:var(--mut);font-size:10.5px;font-weight:400;"> · 按编排 Run 分组，勾选 = 批准</span></div>` +
-      hilQueueHtml(h||[]);
+      hilQueueHtml(h||[]) +
+      (ux ? uxMetricsHtml(ux) : '<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:8px;color:var(--mut);font-size:11px;">UX 指标暂不可用</div>');
     el.innerHTML = html;
   } catch(e){ const el = document.getElementById('monitor-extra'); if(el) el.innerHTML = '<span style="color:var(--mut);font-size:11px;">用量/HIL 加载失败：' + esc(e.message) + '</span>'; }
+}
+// UX规范§11（2026-10-03）：六指标面板。判色口径与规范目标一致；rate=null → 样本不足。
+function uxMetricsHtml(ux){
+  const pct = r => (r === null || r === undefined) ? null : (r * 100).toFixed(1) + '%';
+  // 判色必须用原始数值 —— pct() 返回 '85.0%'，'85.0%' >= 85 是 NaN 比较，恒 false（实测踩坑）
+  const cell = (label, val, color, sub) =>
+    `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;text-align:center;">
+       <div style="font-size:16px;font-weight:500;${color ? 'color:' + color : ''};">${val}</div>
+       <div style="font-size:10px;color:var(--mut);">${esc(label)}</div>
+       ${sub ? `<div style="font-size:9.5px;color:var(--mut);margin-top:2px;">${esc(sub)}</div>` : ''}
+     </div>`;
+  const t = ux.tasks || {}, cl = ux.clarify || {}, fr = ux.failure_recovery || {}, wa = ux.wait_abandon || {};
+  const cr = pct(t.completion_rate), irl = pct((ux.interrupt || {}).rate),
+        chr = pct(cl.hit_rate), war = pct(wa.rate), frr = pct(fr.rate);
+  const steal = (ux.scroll_steal || {}).count || 0;
+  const _g = 'var(--grn)', _a = 'var(--amb)', _r = 'var(--red)';
+  const p100 = r => (r === null || r === undefined) ? null : r * 100;
+  const crN = p100(t.completion_rate), irN = p100((ux.interrupt || {}).rate),
+        chN = p100(cl.hit_rate), waN = p100(wa.rate), frN = p100(fr.rate);
+  return `<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px;">
+    <div style="font-size:12px;font-weight:500;margin-bottom:6px;">UX 交互指标（近 ${ux.days || 7} 天）<span style="color:var(--mut);font-size:10.5px;font-weight:400;"> · 规范 §11 评估体系</span></div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;">
+      ${cell('任务完成率', cr === null ? '样本不足' : cr, cr === null ? '' : (crN >= 85 ? _g : _a), (t.done||0) + '/' + (t.total||0))}
+      ${cell('主动中断率', irl === null ? '样本不足' : irl, irl === null ? '' : (irN >= 15 && irN <= 25 ? _g : _a), (ux.interrupt||{}).count + '次')}
+      ${cell('澄清命中率', chr === null ? '样本不足' : chr, chr === null ? '' : (chN >= 90 ? _g : _a), (cl.answered||0) + '/' + (cl.shown||0))}
+      ${cell('等待放弃率', war === null ? '样本不足' : war, war === null ? '' : (waN < 5 ? _g : _a), (wa.abandoned||0) + '/' + (wa.waits||0))}
+      ${cell('失败自恢复率', frr === null ? '样本不足' : frr, frr === null ? '' : (frN >= 70 ? _g : _a), (fr.recovered||0) + '/' + (fr.err_convs||0))}
+      ${cell('滚动抢夺', String(steal), steal === 0 ? _g : _r, steal === 0 ? '守护通过' : '违反§8.4')}
+    </div>
+    <div style="font-size:9.5px;color:var(--mut);margin-top:5px;">目标：完成率≥85% · 中断率15–25% · 澄清命中≥90% · 等待放弃&lt;5% · 自恢复≥70% · 滚动抢夺=0</div>
+  </div>`;
 }
 // Task 14：HIL 确认队列按 run_id 分组渲染（组头「编排 Run #N」+ 每行 checkbox 勾选=批准）
 function hilQueueHtml(items){
