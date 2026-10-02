@@ -44,6 +44,7 @@ from routers import (
     doc_folders_router,  # 2026-09-21 文档目录树（基于文件的管理 P0-b）
     mcp_gateway_router,  # P0-1（2026-09-24）领域能力 MCP 服务端
     intent_samples_router,  # 2026-09-26 意图样本池（设置页维护评测集）
+    memory_admin_router,  # 2026-10-02 AI 记忆管理（设置页可见 + 可删）
 )
 
 @asynccontextmanager
@@ -118,6 +119,7 @@ for _router in (
     doc_folders_router,  # 2026-09-21 文档目录树（基于文件的管理 P0-b）
     mcp_gateway_router,  # P0-1（2026-09-24）领域能力 MCP 服务端：对外供给领域能力，供外部 harness 消费
     intent_samples_router,  # 2026-09-26 意图样本池：设置页维护评测集 + 一键跑分
+    memory_admin_router,  # 2026-10-02 AI 记忆管理：设置页可见 + 可删（评估报告 §4 P0）
 ):
     app.include_router(_router)
 

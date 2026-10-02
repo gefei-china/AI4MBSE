@@ -36,6 +36,7 @@ from .coverage import router as coverage_router  # SRS-GN-CO（2026-09-20）覆�
 from .doc_folders import router as doc_folders_router  # 2026-09-21 文档目录树（基于文件的管理 P0-b）
 from .mcp_gateway import router as mcp_gateway_router  # P0-1（2026-09-24）领域能力 MCP 服务端
 from .intent_samples import router as intent_samples_router  # 2026-09-26 意图样本池（设置页可维护评测集）
+from .memory_admin import router as memory_admin_router  # 2026-10-02 AI 记忆管理（设置页可见+可删）
 
 __all__ = [
     "dashboard_router",
@@ -67,4 +68,5 @@ __all__ = [
     "doc_folders_router",  # 2026-09-21 文档目录树
     "mcp_gateway_router",  # P0-1（2026-09-24）领域能力 MCP 服务端
     "intent_samples_router",  # 2026-09-26 意图样本池
+    "memory_admin_router",  # 2026-10-02 AI 记忆管理
 ]

@@ -22,6 +22,8 @@ function loadSettingsTab(id) {
   if(id==='st-ctx') loadCtxConfig();
   // 2026-09-26：意图样本池（采样→标注→评测闭环），照 st-ctx 的懒加载约定
   if(id==='st-intent-samples') loadIntentSamples();
+  // 2026-10-02：AI 记忆（跨会话长期记忆可见 + 可删），照 st-ctx 的懒加载约定
+  if(id==='st-mem') loadMemories();
 }
 
 // ── 插件管理（Skill/MCP/工具 公共市场 + 我的插件 + 市场管理；安装=复制私有副本，版本固定）──

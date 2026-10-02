@@ -1247,6 +1247,7 @@
           <span data-tabgrp="stg" onclick="tab(this,'stg','st-fextract')" data-page-node-id="87tTHhOFnxBDOt5cgXiGqT">📄 文件抽取</span>
           <span data-tabgrp="stg" onclick="tab(this,'stg','st-ctx')">🧠 AI 上下文</span>
           <span data-tabgrp="stg" onclick="tab(this,'stg','st-intent-samples')">🎯 意图样本</span>
+          <span data-tabgrp="stg" onclick="tab(this,'stg','st-mem')">🧩 AI 记忆</span>
         </div>
         <div class="subpage on" id="st-projmem" data-tabpanel="stg" data-page-node-id="ZBuvf59opmWBgoiBSDaLbp">
           <!-- 项目级持久记忆（Project Constitution）：规范/基线/决策/经验，AI 会话每次注入防漂移 -->
@@ -1331,6 +1332,31 @@
             <span style="font-size:11px;color:var(--mut);">本页只维护评测样本池，<b style="color:var(--txt);">不改路由规则</b>（要改识别行为请走既有「意图规则」配置）</span>
           </div>
           <div id="intent-sample-body"><div class="loading">加载中…</div></div>
+        </div>
+        <!-- AI 记忆：跨会话长期记忆（agent_memory）的**可见 + 可删**入口（合规与信任落点）。
+             对标 ChatGPT 设置→个性化→记忆 / Claude 可编辑记忆摘要 —— 本工程此前只有写入没有落点。
+             ⚠️ 记忆目前按 agent 归属、**无用户维度**（全局可见）；多用户部署前须补 user 列。 -->
+        <div class="subpage" id="st-mem" data-tabpanel="stg">
+          <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <select id="mem-f-agent" onchange="loadMemories()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;max-width:220px;"><option value="">Agent：全部</option></select>
+            <select id="mem-f-tier" onchange="loadMemories()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;">
+              <option value="">层级：全部</option>
+              <option value="core">常驻（偏好）</option>
+              <option value="recall">按需召回</option>
+              <option value="archival">已归档</option>
+            </select>
+            <select id="mem-f-type" onchange="loadMemories()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;"><option value="">类型：全部</option></select>
+            <input id="mem-f-q" placeholder="关键词（匹配记忆内容）" oninput="memFilterQ()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;width:180px;">
+            <label style="font-size:11.5px;display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="mem-f-forgotten" onchange="loadMemories()">含已归档</label>
+            <button class="btn sm ghost" onclick="loadMemories()">🔄 刷新</button>
+            <button class="btn sm ghost" onclick="memExport()" title="导出全部记忆 JSON（数据可携带）">⬇ 导出</button>
+            <span style="flex:1"></span>
+            <span id="mem-summary" style="font-size:11.5px;color:var(--mut);"></span>
+          </div>
+          <div style="font-size:11px;color:var(--mut);margin-bottom:8px;background:var(--amb-l);padding:6px 8px;border-radius:6px;">
+            💡 AI 跨会话长期记忆（偏好 / 事实 / 经验）。<b style="color:var(--txt);">删除 = 真删不可恢复</b>（行使被遗忘权）；<b style="color:var(--txt);">归档 = 软删</b>（检索不再注入，可恢复）。
+          </div>
+          <div class="panel"><div class="pb" style="padding:0;" id="mem-table"><div class="loading">加载中…</div></div></div>
         </div>
       </div>
 
@@ -1756,5 +1782,6 @@
 <script src="/static/js/mods/41-projects.js"></script>
 <script src="/static/js/mods/42-intent-samples.js"></script>
 <script src="/static/js/mods/43-doccat.js"></script>
+<script src="/static/js/mods/44-memory.js"></script>
 </body>
 </html>
