@@ -1394,55 +1394,31 @@ class StreamMixin:
                     row = conn.execute("SELECT name, content, description FROM skills WHERE name=?", (skill_name,)).fetchone()
                     conn.close()
                     if row and row["content"]:
-                        skill_block = f"【指定技能：{row['name']}（必须遵循其完整指令）】\n{row['content'][:4000]}\n"
+                        # P1-28（2026-10-02）：块文本收敛到 `common.build_skill_block`（唯一真源）。
+                        # ⚠️ 两处差异**显式保留**（已登记 §29.9，属独立缺陷，不在本批静默统一）：
+                        #   ① content_cap=_SKILL_CONTENT_CAP：本路径截断正文控 token（execute 不截断）；
+                        #   ② include_resources=False：本处 SQL **未查** references/examples/scripts/
+                        #      allowed_tools ⇒ 渐进披露无数据可用（execute 路径会披露）。
+                        skill_block, _ = build_skill_block(
+                            {"name": row["name"], "content": row["content"]},
+                            content_cap=_SKILL_CONTENT_CAP, include_resources=False)
                         # V2.5：手动指定技能也发独立事件（前端「🧩 技能执行」卡可见）
                         yield {"type": "skill", "status": "done", "names": [row["name"]],
                                "note": "指定技能指令已注入生成阶段（完整指令强制遵循）"}
                 except Exception:
                     pass
-            # P1-26（2026-10-02）：拼接顺序**收敛到 common.assemble_system_prompt**（唯一真源）。
-            # 此前本处与 execute.py 各写一份顺序 ⇒ 已发生口径漂移（P1-24/P1-25 只改了 execute.py，
-            # 本条**流式主路径未生效**）。分层：L2 身份 → L1 全局静态 →〔分界线〕→ L3 会话级 → L4 每轮级。
-            # 2026-09-17 S4（C3=按意图只注入命中 Agent）：角色块用「命中的 agent_def」+ _AGENT_ROLE_CAP 截断。
-            system_prompt = assemble_system_prompt({
-                # ── L2 身份层（只依赖 agent_def）──
-                "role": f"{self._build_role_block(agent_def, cap=_AGENT_ROLE_CAP)}\n",
-                "tools": f"可用工具：{', '.join(agent_def.tools) or '无（纯问答直出）'}。\n",
-                "tool_rules": ("工具使用约束：仅调用完成当前任务所必需的工具，一次最多调用 2 个；"
-                               "工具返回与任务无关、结果为空或已足够作答时，直接基于已有信息回答，禁止反复/连环调用工具。\n"),
-                "roster": self._team_roster_block(agent_def),
-                # ── L1 全局静态（无参方法，跨 agent/会话完全一致 ⇒ 尽早进入可缓存前缀）──
-                "ontology": self._build_ontology_hint(),
-                "boundary": self._build_boundary_hint(),
-                "output_rules": self._build_output_rules(),
-                "citation_rules": self._build_citation_rules(),
-                # ════════ SYSTEM_PROMPT_DYNAMIC_BOUNDARY（以下为动态区）════════
-                # ── L3 会话级（依赖 intent）──
-                "intent_line": f"当前意图：{intent}（Agent: {agent_def.name}，HIL 人机协作级别：{hil_level}）。\n",
-                # 问题3：建模类意图强制输出 SysML v2 代码块（含 L0 硬约束卡），供投影视图与「代码/视图」切换
-                "model_code_req": self._build_model_code_req(intent, agent_def),
-                # ── L4 每轮级（依赖 user_input / 检索 / 建模态）──
-                "skill_prompt": self._build_skill_prompt(intent, user_input, user),
-                "skill_block": (skill_block if skill_block else ""),
-                "template": self._build_prompt_template(intent, user_input, user),
-                # P0-3：长期记忆注入（跨会话经验，仅供对齐）
-                "memory": self._build_memory_hint(user_input, intent, user),
-                # P0：建模上下文注入（当前模型状态工作记忆，MBSE 特有）
-                # P0-2（2026-09-19）：传本轮 user_input → 建模上下文改**结构性隔离**
-                # （context.model_context_entities='count'：只报「本分支共 N 个」不列实体名；块首带适用范围声明）
-                # ⚠️ 「按语义相关性过滤条目」方案经标定实测 dense/bigram 分布重叠、无可用阈值 → 已放弃，别再做
-                "model_context": self._build_model_context(branch, conversation_id, user_input),
-                # P0 能力：项目级持久记忆注入（Project Constitution，规范/基线防漂移）
-                "project_memory": self._build_project_memory(user_input=user_input, conversation_id=conversation_id),
-                "slots": (f"【任务拆解（P1 结构化）】\n目标：{slots.get('goal') or '-'}\n"
-                          f"实体：{'、'.join(slots.get('entities') or []) or '-'}\n"
-                          f"约束：{'；'.join(slots.get('constraints') or []) or '-'}\n"
-                          f"范围：{json.dumps(slots.get('scope') or {}, ensure_ascii=False) if slots.get('scope') else '-'}\n" if slots else ""),
-                "user_ctx": (user_ctx if user_ctx else ""),
-                "attachment": self._build_attachment_block(att_text),
-                "retrieval": f"检索到的互联数据：\n{context_text}",
-                "report": (f"\n\n{report_prompt}" if report_prompt else ""),
-            })
+            # P1-28（2026-10-02）：**块内容**收敛到 `common.build_prompt_blocks`（唯一真源）。
+            # 本路径（流式对话 = 前端唯一入口）与 execute 路径的差异一律**显式参数化**：
+            #   · role_cap=_AGENT_ROLE_CAP  按 S4 截断 Agent 角色块（控 token；execute 不截断）
+            #   · include_tool_rules=True   本路径注入工具使用约束（execute 原本没有该块）
+            # ⚠️ 不要"顺手"把这两项改成与 execute 一致 —— 会改变主路径产出（§29.9）。
+            system_prompt = assemble_system_prompt(build_prompt_blocks(self, PromptBlocksCtx(
+                agent_def=agent_def, intent=intent, hil_level=hil_level,
+                user_input=user_input, user=user, branch=branch,
+                conversation_id=conversation_id, slots=slots, user_ctx=user_ctx,
+                att_text=att_text, context_text=context_text, report_prompt=report_prompt,
+                skill_block=skill_block, role_cap=_AGENT_ROLE_CAP, include_tool_rules=True,
+            )))
             # P2 视觉通道：图片以多模态 content 块随 user 消息下发（provider 层原样透传）
             _user_content = user_input
             if att_images:

@@ -230,72 +230,32 @@ class ExecuteMixin:
                 finally:
                     conn.close()
                 if sk:
-                    skill_block = f"【指定技能：{sk.get('name')}（必须遵循其完整指令）】\n{sk.get('content') or ''}"
-                    # D4：分层资源渐进披露（references/examples/scripts 清单）
-                    _rr = [str(r) if isinstance(r, str) else str(r.get("title") or r.get("path") or r)
-                           for r in (sk.get("references") or [])]
-                    _ee = [str(e) if isinstance(e, str) else str(e.get("title") or e.get("path") or e)
-                           for e in (sk.get("examples") or [])]
-                    _ss = [str(x) for x in (sk.get("scripts") or [])]
-                    if _rr:
-                        skill_block += f"\n📄 参考文档（需要时按需读取）：{'；'.join(_rr[:8])}"
-                    if _ee:
-                        skill_block += f"\n📝 示例（需要时按需读取）：{'；'.join(_ee[:8])}"
-                    if _ss:
-                        skill_block += f"\n⚙ 脚本（需要时执行）：{'；'.join(_ss[:8])}"
-                    _at = [str(t) for t in (sk.get("allowed_tools") or []) if str(t)]
+                    # P1-28（2026-10-02）：块文本收敛到 `common.build_skill_block`（唯一真源）。
+                    # 本路径参数 = 原行为**逐字节保留**：正文不截断 + 披露 references/examples/
+                    # scripts/工具白名单（流式路径是 content_cap=4000 且不披露 —— 差异显式登记）。
+                    skill_block, _at = build_skill_block(sk, content_cap=0, include_resources=True)
                     if _at:
-                        skill_block += f"\n🔒 工具白名单（仅可调用）：{', '.join(_at)}"
-                        self._skill_allowed_tools = set(_at)
-                    skill_block += "\n"
+                        # D4：指定技能的白名单为**权威限制**（配合 `_skill_forced=True`，
+                        # 自动路由不得重置或并集）。「设不设白名单」是**调用方职责**，故留在本路径：
+                        # 流式路径当前不设（`_skill_forced` 全仓只在 execute.py:220 赋值），
+                        # 该差异如实保留、不在本批静默统一（§29.9）。
+                        self._skill_allowed_tools = _at
             except Exception:
                 pass
-        # SP-O：角色化系统提示词（Agent 专属角色块 + 公共上下文块）
-        # 2026-09-17 S4：角色块与「输出/引用/附件」三段改用 prompt.py 的共用实现（cap=0 = 不截断，
-        # 与本路径原行为一致：该路径本就是"某个命中 Agent 在执行"，其完整 prompt 应当生效）
-        role_block = self._build_role_block(agent_def)
-        # P1-26（2026-10-02）：拼接顺序**收敛到 common.assemble_system_prompt**（唯一真源）。
-        # 此前本处与 stream.py 各写一份顺序 ⇒ 已发生口径漂移（P1-24/P1-25 只改了本文件，
-        # 流式主路径未生效）。分层：L2 身份 → L1 全局静态 →〔分界线〕→ L3 会话级 → L4 每轮级。
-        # ⚠️ 只调顺序、不改任何块的内容与文案。
-        system_prompt = assemble_system_prompt({
-            # ── L2 身份层（只依赖 agent_def）──
-            "role": f"{role_block}\n",
-            "tools": f"可用工具：{', '.join(agent_def.tools) or '无（纯问答直出）'}。\n",
-            "roster": self._team_roster_block(agent_def),
-            # ── L1 全局静态（无参方法，跨 agent/会话完全一致 ⇒ 尽早进入可缓存前缀）──
-            "ontology": self._build_ontology_hint(),
-            "boundary": self._build_boundary_hint(),
-            "output_rules": self._build_output_rules(),
-            "citation_rules": self._build_citation_rules(),
-            # ════════ SYSTEM_PROMPT_DYNAMIC_BOUNDARY（以下为动态区）════════
-            # ── L3 会话级（依赖 intent）──
-            "intent_line": f"当前意图：{intent}（Agent: {agent_def.name}，HIL 人机协作级别：{hil_level}）。\n",
-            # 问题3：建模类意图强制输出 SysML v2 代码块（含 L0 硬约束卡），供投影视图与「代码/视图」切换
-            "model_code_req": self._build_model_code_req(intent, agent_def),
-            # ── L4 每轮级（依赖 user_input / 检索 / 建模态）──
-            "skill_prompt": self._build_skill_prompt(intent, user_input, user),
-            "skill_block": (skill_block if skill_block else ""),
-            "template": self._build_prompt_template(intent, user_input, user),
-            # P0-3：长期记忆注入（跨会话经验，仅供对齐）
-            "memory": self._build_memory_hint(user_input, intent, user),
-            # P0：建模上下文注入（当前模型状态工作记忆，MBSE 特有）
-            # P0-2（2026-09-19）：传本轮 user_input → 建模上下文改**结构性隔离**
-            # （config.context.model_context_entities='count'：只报「本分支共 N 个」不列实体名；块首带适用范围声明）
-            # ⚠️ 曾计划「按语义相关性过滤条目」，经标定实测 dense/bigram 两路分布重叠、无可用阈值 → 已放弃，别再做
-            "model_context": self._build_model_context(branch, conversation_id, user_input),
-            # P0 能力：项目级持久记忆注入（Project Constitution，规范/基线防漂移）
-            # P0-2（2026-09-19）：传本轮 user_input → 注入块带项目名 + 「仅当本次任务属于该项目领域时适用」声明
-            "project_memory": self._build_project_memory(user_input=user_input, conversation_id=conversation_id),
-            "slots": (f"【任务拆解（P1 结构化）】\n目标：{slots.get('goal') or '-'}\n"
-                      f"实体：{'、'.join(slots.get('entities') or []) or '-'}\n"
-                      f"约束：{'；'.join(slots.get('constraints') or []) or '-'}\n"
-                      f"范围：{json.dumps(slots.get('scope') or {}, ensure_ascii=False) if slots.get('scope') else '-'}\n" if slots else ""),
-            "user_ctx": (user_ctx if user_ctx else ""),
-            "attachment": self._build_attachment_block(att_text),
-            "retrieval": f"检索到的互联数据：\n{context_text}",
-            "report": (f"\n\n{report_prompt}" if report_prompt else ""),
-        })
+        # P1-28（2026-10-02）：**块内容**收敛到 `common.build_prompt_blocks`（唯一真源）。
+        # 本路径（execute：Studio Agent 试跑 / 工作流 LLM 节点 / 非流式 API）与流式对话的
+        # 差异一律**显式参数化**，不抹平：
+        #   · role_cap=0                不截断（本路径原行为；流式用 `_AGENT_ROLE_CAP`）
+        #   · include_tool_rules=False  本路径原本**没有** tool_rules 块（流式有）
+        # ⚠️ 不要"顺手"把这两项改成与流式一致 —— 那会改变本路径产出，是需质量 A/B 的独立决策
+        #   （差异清单与后果见 docs §29.9）。
+        system_prompt = assemble_system_prompt(build_prompt_blocks(self, PromptBlocksCtx(
+            agent_def=agent_def, intent=intent, hil_level=hil_level,
+            user_input=user_input, user=user, branch=branch,
+            conversation_id=conversation_id, slots=slots, user_ctx=user_ctx,
+            att_text=att_text, context_text=context_text, report_prompt=report_prompt,
+            skill_block=skill_block, role_cap=0, include_tool_rules=False,
+        )))
         # P2 视觉通道：图片以多模态 content 块随 user 消息下发
         # （openai_compat 对 messages 原样透传，故 provider 层无需改动）
         _user_content = user_input

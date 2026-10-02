@@ -53,10 +53,14 @@ check("替换后无残留占位符", not re.findall(r"\{\{[A-Za-z0-9_]+\}\}", ou
 check("未知占位符被清扫为空", "{{whatever}}" not in out)
 
 print("\n[2] 共用装配片段：两条路径必须引用同一实现（消除 2,100 字 ×2 处的漂移）")
+# P1-28（2026-10-02）：块内容已进一步收敛到 `common.build_prompt_blocks` ⇒ 这些 `_build_*` 的
+# **调用点**从「两个路径文件各一份」上移到 common.py。判据随之改为"单一真源里有它"，
+# 并**补一条**"两条路径确实经该唯一真源间接使用"（否则把调用挪走却不接线也算通过）。
 for fn in ("_build_role_block", "_build_output_rules", "_build_citation_rules", "_build_attachment_block"):
     check("prompt.py 定义 %s" % fn, ("def %s(" % fn) in PS)
-    check("stream.py 使用 %s" % fn, fn in ST)
-    check("execute.py 使用 %s" % fn, fn in EX)
+    check("common.build_prompt_blocks 使用 %s（单一真源）" % fn, fn in CM)
+check("两条路径均经 build_prompt_blocks 间接使用共用装配（P1-28 单点化）",
+      "build_prompt_blocks(" in ST and "build_prompt_blocks(" in EX)
 
 check("stream.py 不再内联输出规范原文", "输出规范：正文一律用自然语言描述" not in ST)
 check("execute.py 不再内联输出规范原文", "输出规范：正文一律用自然语言描述" not in EX)
@@ -68,7 +72,13 @@ check("execute.py 不再直取 agent_def.system_prompt（改走共用实现）",
 print("\n[3] C3：流式路径按意图注入命中 Agent 的角色块（带上限）")
 check("common.py 定义 _AGENT_ROLE_CAP = 1200", "_AGENT_ROLE_CAP = 1200" in CM)
 check("_AGENT_ROLE_CAP 已在 __all__ 导出", "'_AGENT_ROLE_CAP'" in CM)
-check("stream.py 用带 cap 的角色块", "_build_role_block(agent_def, cap=_AGENT_ROLE_CAP)" in ST)
+# P1-28：`cap` 的下发点变为调用点的 `role_cap` 参数（common 内统一透传给 _build_role_block）。
+# 判据绑"参数确实被传下去了"这一结构事实，而不是某个字符串形态。
+check("common 的 role 块把 cap 参数化下发（>0 才传，形态与旧调用逐字一致）",
+      'if ctx.role_cap else {}' in CM and '_role_kw' in CM)
+check("stream.py 传 role_cap=_AGENT_ROLE_CAP（流式仍按 1200 截断）",
+      "role_cap=_AGENT_ROLE_CAP" in ST)
+check("execute.py 传 role_cap=0（非流式路径仍不截断）", "role_cap=0" in EX)
 check("stream.py 不再硬编码通用角色句", '"你是网络总体MBSE设计助手。当前意图' not in ST)
 
 

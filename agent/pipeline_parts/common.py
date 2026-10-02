@@ -10,6 +10,7 @@ import json
 import time
 import uuid
 import logging
+from dataclasses import dataclass
 
 # 2026-09-17 S4：pipeline_parts 统一日志器（此前这些模块只 print/静默，运行时异常容易查无痕迹）
 logger = logging.getLogger("mbse.agent.pipeline")
@@ -181,6 +182,163 @@ def assemble_system_prompt(blocks: dict) -> str:
     return "".join(out)
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# P1-28（2026-10-02）：system_prompt **块内容**的单一真源
+#
+# P1-26 收敛了「拼装顺序」；本节收敛「块内容」。实测两条路径**已漂移两处**：
+#   · `role`        execute 不截断（`cap=0`） / stream 截断（`cap=_AGENT_ROLE_CAP`）
+#   · `tool_rules`  **仅 stream 有**（execute 整块缺失）
+#   · `skill_block` execute 带 references/examples/scripts/白名单披露 / stream 只有正文
+#
+# ⚠️ 这不是"未来的漂移风险"，而是**当下的功能不一致**：`ExecuteMixin.execute` 还被
+#   Studio「Agent 试跑」（`routers/studio_parts/agents.py:311`）与
+#   工作流 LLM 节点（`workflows/nodes.py:88` / `:676`）消费，且 `dry_run=True` **不跳过**
+#   本段拼装 ⇒「试跑看到的 Agent」≠「对话里的 Agent」（取证见 docs §25.2 补注 / §29.9）。
+#
+# 本批纪律 —— **零行为变动**：
+#   ① 差异一律**显式参数化**（`role_cap` / `include_tool_rules` / `content_cap` /
+#      `include_resources`），**不抹平**；"要不要统一"是另一个决策（需质量 A/B）。
+#   ② 等价性由 `tools/verify/verify_prompt_blocks.py` 证明：它从**旧源码 AST** 抽出原来的
+#      dict 表达式就地执行作为基线，与新函数输出逐字节比对（不是手抄一份判据）。
+# ════════════════════════════════════════════════════════════════════════════
+
+#: 工具使用约束文案（**唯一真源**；此前只内联在 `stream.py` 的 blocks dict 里）
+TOOL_RULES_TEXT = ("工具使用约束：仅调用完成当前任务所必需的工具，一次最多调用 2 个；"
+                   "工具返回与任务无关、结果为空或已足够作答时，直接基于已有信息回答，"
+                   "禁止反复/连环调用工具。\n")
+
+#: 流式技能正文截断上限（`skill_block` 的 `content_cap`）。**流式路径专用**：
+#: 技能正文可能很长，而流式请求每轮都带 ⇒ 按 4000 字控 token（execute 路径不截断）。
+_SKILL_CONTENT_CAP = 4000
+
+
+@dataclass
+class PromptBlocksCtx:
+    """两条路径共有的块构造入参（**唯一真源**的输入契约）。
+
+    凡"由调用方按各自上下文算好、只用来填块"的值一律走这里（如 `att_text` / `context_text`
+    —— 它们的**算法本身**两条路径仍有差异，属既定范围，本批不动，见 §29.9）。
+    凡"块构造内部才有的差异"一律用末尾三个参数**显式**表达。
+    """
+    agent_def: object
+    intent: str
+    hil_level: str
+    user_input: str
+    user: object
+    branch: str
+    conversation_id: object
+    slots: object
+    user_ctx: str
+    att_text: str
+    context_text: str
+    report_prompt: str
+    skill_block: str = ""
+    #: `_build_role_block` 的字符上限：0 = 不截断（execute 原行为）/ `_AGENT_ROLE_CAP`（stream）。
+    role_cap: int = 0
+    #: 是否注入 `tool_rules`：execute 原本**没有**这一块，stream 有 ⇒ 显式保留差异。
+    include_tool_rules: bool = False
+
+
+def build_slots_block(slots) -> str:
+    """「【任务拆解（P1 结构化）】」块（**唯一真源**；两条路径此前逐字重复同一段 f-string）。
+
+    `slots` 为空 → 返回 `""`（由 `assemble_system_prompt` 跳过，不留多余空行）。
+    """
+    if not slots:
+        return ""
+    return ("【任务拆解（P1 结构化）】\n目标：%s\n实体：%s\n约束：%s\n范围：%s\n"
+            % (slots.get("goal") or "-",
+               "、".join(slots.get("entities") or []) or "-",
+               "；".join(slots.get("constraints") or []) or "-",
+               json.dumps(slots.get("scope") or {}, ensure_ascii=False) if slots.get("scope") else "-"))
+
+
+def build_skill_block(skill, *, content_cap: int = 0, include_resources: bool = True):
+    """构造「【指定技能：…】」块（**唯一真源**）。返回 `(block, allowed_tools)`。
+
+    差异**显式参数化**（见模块头 P1-28）：
+      · `content_cap` 0 = 不截断（execute 原行为）/ `_SKILL_CONTENT_CAP`（stream 原行为）
+      · `include_resources` True = 追加 references/examples/scripts/工具白名单披露（execute）
+        / False = 只给正文（stream 原行为）
+
+    ⚠️ `allowed_tools` 由**调用方**决定是否设为权威白名单：
+      `execute.py` 会设 `_skill_forced` + `_skill_allowed_tools`；**`stream.py` 当前不设**
+      （`_skill_forced` 全仓只在 `execute.py:220` 赋值）—— 该差异**如实保留、不在本批静默统一**。
+      另注：stream 的 SQL 只 `SELECT name, content, description`，**根本没查** references/
+      examples/scripts/allowed_tools ⇒ 即便给它 `include_resources=True` 也拿不到数据。
+      两条均登记于 §29.9，属**独立缺陷**，需单独验证与 A/B。
+    """
+    if not skill:
+        return "", set()
+    content = skill.get("content") or ""
+    if content_cap and len(content) > content_cap:
+        content = content[:content_cap]
+    block = "【指定技能：%s（必须遵循其完整指令）】\n%s" % (skill.get("name"), content)
+    _at = []
+    if include_resources:
+        _rr = [str(r) if isinstance(r, str) else str(r.get("title") or r.get("path") or r)
+               for r in (skill.get("references") or [])]
+        _ee = [str(e) if isinstance(e, str) else str(e.get("title") or e.get("path") or e)
+               for e in (skill.get("examples") or [])]
+        _ss = [str(x) for x in (skill.get("scripts") or [])]
+        if _rr:
+            block += "\n📄 参考文档（需要时按需读取）：%s" % "；".join(_rr[:8])
+        if _ee:
+            block += "\n📝 示例（需要时按需读取）：%s" % "；".join(_ee[:8])
+        if _ss:
+            block += "\n⚙ 脚本（需要时执行）：%s" % "；".join(_ss[:8])
+        _at = [str(t) for t in (skill.get("allowed_tools") or []) if str(t)]
+        if _at:
+            block += "\n🔒 工具白名单（仅可调用）：%s" % ", ".join(_at)
+    return block + "\n", set(_at)
+
+
+def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
+    """构造两条路径共有的块集合 —— **内容的唯一真源**（P1-28）。
+
+    `pipe` 是 pipeline 实例（提供 `_build_*` / `_team_roster_block` 等方法；这些方法的实现
+    本就共用，本函数只负责"用哪些、按什么参数调"）。
+    返回 dict 交由 `assemble_system_prompt` 按 `PROMPT_BLOCK_ORDER` 拼装 —— 顺序不在这里定。
+    """
+    # ⚠️ `cap` **只在 >0 时传**：让本处与旧代码的**调用形态逐字一致**
+    #    （execute 原为 `_build_role_block(agent_def)`、stream 原为 `(agent_def, cap=_AGENT_ROLE_CAP)`）。
+    #    这样"零行为变动"不依赖"我知道默认值是 0"这个隐含前提 —— 等价性可被逐字节证明。
+    _role_kw = {"cap": ctx.role_cap} if ctx.role_cap else {}
+    blocks = {
+        # ── L2 身份层 ──
+        "role": "%s\n" % pipe._build_role_block(ctx.agent_def, **_role_kw),
+        "tools": "可用工具：%s。\n" % (", ".join(ctx.agent_def.tools) or "无（纯问答直出）"),
+        "roster": pipe._team_roster_block(ctx.agent_def),
+        # ── L1 全局静态 ──
+        "ontology": pipe._build_ontology_hint(),
+        "boundary": pipe._build_boundary_hint(),
+        "output_rules": pipe._build_output_rules(),
+        "citation_rules": pipe._build_citation_rules(),
+        # ── 分界线（PROMPT_LAYER_BOUNDARY）以下为动态区 ──
+        # ── L3 会话级 ──
+        "intent_line": "当前意图：%s（Agent: %s，HIL 人机协作级别：%s）。\n"
+                       % (ctx.intent, ctx.agent_def.name, ctx.hil_level),
+        "model_code_req": pipe._build_model_code_req(ctx.intent, ctx.agent_def),
+        # ── L4 每轮级 ──
+        "skill_prompt": pipe._build_skill_prompt(ctx.intent, ctx.user_input, ctx.user),
+        "skill_block": ctx.skill_block or "",
+        "template": pipe._build_prompt_template(ctx.intent, ctx.user_input, ctx.user),
+        "memory": pipe._build_memory_hint(ctx.user_input, ctx.intent, ctx.user),
+        "model_context": pipe._build_model_context(ctx.branch, ctx.conversation_id,
+                                                   ctx.user_input),
+        "project_memory": pipe._build_project_memory(user_input=ctx.user_input,
+                                                     conversation_id=ctx.conversation_id),
+        "slots": build_slots_block(ctx.slots),
+        "user_ctx": ctx.user_ctx or "",
+        "attachment": pipe._build_attachment_block(ctx.att_text),
+        "retrieval": "检索到的互联数据：\n%s" % ctx.context_text,
+        "report": ("\n\n%s" % ctx.report_prompt) if ctx.report_prompt else "",
+    }
+    if ctx.include_tool_rules:
+        blocks["tool_rules"] = TOOL_RULES_TEXT
+    return blocks
+
+
 # ── P1-4（2026-10-01）：会话槽位（DST slots）三层治理的纯函数 ─────────────
 #  实测背景（全部取自生产库，非构造场景）：
 #   ① `_merge_slots` 原为「纯并集 + 精确字符串去重」→ 同义不同串（空格/全角半角）绕过去重，
@@ -326,6 +484,9 @@ __all__ = [
     # P1-26：system_prompt 分层拼装（顺序单一真源，两条路径共用）
     'PROMPT_CACHEABLE_KEYS', 'PROMPT_DYNAMIC_KEYS', 'PROMPT_BLOCK_ORDER',
     'PROMPT_LAYER_BOUNDARY', 'assemble_system_prompt',
+    # P1-28：system_prompt 块内容单一真源（两条路径共用；差异显式参数化）
+    'TOOL_RULES_TEXT', '_SKILL_CONTENT_CAP', 'PromptBlocksCtx',
+    'build_slots_block', 'build_skill_block', 'build_prompt_blocks',
     # P1-4：会话槽位治理（纯函数，便于单测与变异自证）
     'SLOT_CLARIFY_MARK', 'SLOT_ORIGINAL_MARK', 'TOPIC_CARRY_WORDS',
     'extract_original_request', 'norm_slot_item', 'merge_slot_items', 'is_topic_switch',
