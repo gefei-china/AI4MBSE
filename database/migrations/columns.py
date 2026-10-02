@@ -46,6 +46,9 @@ def _migrate_columns(conn):
     # ── P1-20 prompt caching 观测：DeepSeek 上下文磁盘缓存命中/未命中（自动缓存，命中≈1/10 价）──
     _add("llm_usage_stats", "prompt_cache_hit_tokens", "INTEGER DEFAULT 0")
     _add("llm_usage_stats", "prompt_cache_miss_tokens", "INTEGER DEFAULT 0")
+    # P1-27 截断诊断（思考模型 reasoning 与正文共享 max_tokens 配额）
+    _add("llm_usage_stats", "finish_reason", "TEXT DEFAULT ''")
+    _add("llm_usage_stats", "reasoning_tokens", "INTEGER DEFAULT 0")
     # ── D11 A2A 协议互通：agent_messages 携带发送方身份卡（agent_card 字段）──
     _add("agent_messages", "sender_name", "TEXT DEFAULT ''")            # A2A 发送方 Agent 名称（agent_card.name）
     _add("agent_messages", "sender_type", "TEXT DEFAULT ''")            # A2A 发送方类型（llm | tool | flow | external）

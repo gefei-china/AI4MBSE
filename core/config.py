@@ -95,8 +95,8 @@ DEFAULT_CONFIG = {
         # failed，**已生成的内容被丢弃** → 用户看到「（计划已执行，但无成功交付物）」。判据错在
         # "按经过时间"而非"按是否还在产出"。注意：旧的 `worker_timeout_s` 只作用于**非流式
         # planner 的并行分支**（planner.py）；流式路径此前是 skills.py 里的硬编码类属性，现场调不动。
-        "subtask_idle_timeout_s": 150,   # 子任务「无任何产出」判超时（秒；活跃生成不杀）
-        "subtask_timeout_s": 300,        # 子任务 wall-clock 硬上限（秒；防持续滴 token 永不结束）
+        "subtask_idle_timeout_s": 240,   # P1-27：150→240（功能优先，防长推理期被误判停滞）
+        "subtask_timeout_s": 600,        # P1-27：300→600（建模子任务实测 2~3 分钟，300s 余量太薄）
         # P0-7：agent_tasks 每会话保留的编排批次数（run_id 唯一化后防无界增长；只清终态旧批次）
         "keep_runs_per_conversation": 50,
         "total_time_budget_s": 600,  # 单次编排全局时间预算（秒，超限终止剩余任务降级汇总）
@@ -111,7 +111,7 @@ DEFAULT_CONFIG = {
         "summary_item_max_chars": 1600,  # 汇总输入：单个子任务交付物上限（字符）
         "summary_total_chars": 12000,    # 汇总输入：本轮所有子任务合计预算（字符，按数量均分并受 item 上限约束）
         "summary_floor_chars": 600,      # 汇总输入：均分后每项的保底（防止子任务多时被切到不可读）
-        "summary_max_tokens": 8000,      # 汇总**输出**上限（token）。
+        "summary_max_tokens": 16384,     # P1-27：8000→16384（实测 max_ct=8192 已触顶被截断）。
                                          # 2026-09-20：由 3000 提到 8000 —— 会话 369 实测门禁报
                                          # 「1.3 节内容在末尾被截断」，即**输出被切**（输入侧已修好）。
                                          # 8000 是按**改动当时默认 provider 的天花板**取的：id=1 DeepSeek-V3
@@ -147,7 +147,7 @@ DEFAULT_CONFIG = {
         #   max_tokens=8000 实测可产出 ~23,000 字符（comp 6518 tokens → 19011 字符 ≈ 2.9 字符/token）
         #   → 取 24000 覆盖之。不变式见 verify_orch_summary_budget 的 I4c。
         "report_in_chars": 24000,     # 修订时**待修订报告**可读字符数（原先硬编码 6000，且是**只留头**）
-        "max_tokens": 8000,           # 修订**输出**上限（token，原先硬编码 3000）
+        "max_tokens": 16384,           # P1-27：8000→16384（实测 plan_refine max_ct=8195 已触顶）。
                                       # ⚠️ 修订输出会**整体替换**汇总报告 → 它才是报告长度的真正天花板。
                                       # 取值口径同 delegation.summary_max_tokens（改动当时 provider 天花板 8192）。
                                       # ⚠️ 2026-09-20 同日：id=1 的 context_window 已解锁为 65536，
@@ -166,7 +166,13 @@ DEFAULT_CONFIG = {
         #   从中间截断 → 正则 `\{[\s\S]*\}` 找不到**闭合** `}` → 走硬编码兜底判 0 分「解析失败」，
         #   **把"模型其实给了分"报成"解析失败"**，并把 orchestrated_status 误降级为 partial。
         #   实测标定：reasoning 峰值 941 + 正文 JSON ≈ 350 ≈ 1300 → 取 3072 留 >2x 余量。
-        "eval_max_tokens": 3072,      # 评审**输出**上限（token；原先硬编码 1024，被 reasoning 吃掉）
+        "eval_max_tokens": 8192,      # P1-27：3072→8192（reasoning 峰值随输入增大；大输入下 3072 被吃光→JSON 截断）
+    },
+    # P1-27（2026-10-02）：会话摘要（hover 卡）。原 max_tokens **硬编码在 conv_summary.py 里为 300**，
+    #   而思考模型 reasoning 与正文共享上限 ⇒ 实测 266 次调用 max_ct=301（**恒触顶**），
+    #   摘要几乎必然被截断。此处配置化并放宽。
+    "conv_summary": {
+        "max_tokens": 4096,       # 摘要**输出**上限（token）
     },
     "embedding": {
         "enabled": True,         # 语义出口总开关；False 强制 bigram（Mock/离线确定性）

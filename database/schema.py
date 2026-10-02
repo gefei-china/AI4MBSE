@@ -653,6 +653,10 @@ def init_db():
         -- （usage.prompt_cache_hit_tokens / prompt_cache_miss_tokens，命中按 1/10 价计费）
         prompt_cache_hit_tokens INTEGER DEFAULT 0,
         prompt_cache_miss_tokens INTEGER DEFAULT 0,
+        -- P1-27 截断诊断：思考模型的 reasoning 与正文**共享 max_tokens 配额**，
+        -- 这两列是「输出被截断 / 为空」的直接证据（stop=正常 / length=被上限截断）。
+        finish_reason TEXT DEFAULT '',
+        reasoning_tokens INTEGER DEFAULT 0,
         estimated_cost REAL DEFAULT 0,        -- 估算成本（美元，仅真实调用）
         latency_ms INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP

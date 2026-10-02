@@ -166,6 +166,12 @@ class LLMClient:
             # 仅真实调用有；Mock/无 usage 时自然为 0（不估算，缓存命中无法估算）。
             pch = int(usage.get("prompt_cache_hit_tokens") or 0)
             pcm = int(usage.get("prompt_cache_miss_tokens") or 0)
+            # P1-27：**截断诊断** —— finish_reason（stop=正常结束 / length=被上限截断）与
+            # reasoning tokens。思考模型的 reasoning 与正文**共享 max_tokens 配额**，
+            # 这两项是「输出被截断 / 为空」的直接证据（此前只能拿 completion_tokens 是否
+            # 触及上限去猜）。Mock/无 usage 时分别为 '' / 0。
+            _fr = str(((resp.get("choices") or [{}])[0].get("finish_reason")) or "")
+            rt = int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
             if not pt and not ct:
                 # Mock 或响应无 usage → 按输出文本长度估算（len(输出文本)//2）
                 try:
@@ -201,12 +207,14 @@ class LLMClient:
                 conn.execute(
                     "INSERT INTO llm_usage_stats (provider_id, provider_name, model_name, intent, used_mock, "
                     "prompt_tokens, completion_tokens, total_tokens, "
-                    "prompt_cache_hit_tokens, prompt_cache_miss_tokens, estimated_cost, latency_ms) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "prompt_cache_hit_tokens, prompt_cache_miss_tokens, "
+                    "finish_reason, reasoning_tokens, estimated_cost, latency_ms) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (provider.get("id", 0) if provider else 0,
                      (provider or {}).get("name", "未配置"),
                      (provider or {}).get("model_name", "-"),
-                     intent, 1 if used_mock else 0, pt, ct, pt + ct, pch, pcm, round(est, 6), latency_ms),
+                     intent, 1 if used_mock else 0, pt, ct, pt + ct, pch, pcm,
+                     _fr, rt, round(est, 6), latency_ms),
                 )
         except Exception:
             pass

@@ -225,10 +225,17 @@ def summarize(conn, conv_id: int, msgs: list) -> dict:
         # force_mock（回归测试态）下 Mock 只会回显提示词 → 直接走结构化降级，避免把
         # 提示词当摘要展示（实测：Mock 的 content 就是入参回显）。
         if not _cfg.as_bool("llm", "force_mock", False):
+            # P1-27（2026-10-02）：原**硬编码 300** —— 思考模型的 reasoning 与正文共享同一上限，
+            #   实测 266 次调用 max_ct=301（**恒触顶**）⇒ 摘要几乎必然被截断（功能基本失效）。
+            #   改为配置化（`conv_summary.max_tokens`，默认 4096）并放宽。
+            try:
+                _mt = int(_cfg.get("conv_summary", "max_tokens", 4096) or 4096)
+            except Exception:                                       # noqa: BLE001
+                _mt = 4096
             resp = llm_client.chat(
                 [{"role": "system", "content": _SYS_PROMPT},
                  {"role": "user", "content": _build_prompt(msgs)}],
-                temperature=0.2, max_tokens=300, _intent="conv_summary")
+                temperature=0.2, max_tokens=_mt, _intent="conv_summary")
             meta = (resp or {}).get("_meta") or {}
             content = (((resp or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
             text = _clean(content)
