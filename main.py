@@ -45,6 +45,7 @@ from routers import (
     mcp_gateway_router,  # P0-1（2026-09-24）领域能力 MCP 服务端
     intent_samples_router,  # 2026-09-26 意图样本池（设置页维护评测集）
     memory_admin_router,  # 2026-10-02 AI 记忆管理（设置页可见 + 可删）
+    ux_metrics_router,  # 2026-10-03 UX 埋点：§11 六指标采集与聚合
 )
 
 @asynccontextmanager
