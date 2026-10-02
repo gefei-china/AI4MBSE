@@ -22,14 +22,14 @@
 <!-- 主样式（最后加载，作为兜底） -->
 <link rel="stylesheet" href="/static/css/app.css" data-page-node-id="UG9qh3LdKxai2Lf6J4z9a4">
 <!-- P0-视图渲染：Cytoscape.js + dagre（本地 vendor，离线可用）——替代自研 BFS 布局，专业图引擎渲染 SysML v2 视图 -->
-<script src="/static/vendor/cytoscape.min.js"></script>
-<script src="/static/vendor/dagre.min.js"></script>
-<script src="/static/vendor/cytoscape-dagre.js"></script>
-<script src="/static/vendor/elk.bundled.js"></script>
+<script src="/static/vendor/cytoscape.min.js" defer></script>
+<script src="/static/vendor/dagre.min.js" defer></script>
+<script src="/static/vendor/cytoscape-dagre.js" defer></script>
+<script src="/static/vendor/elk.bundled.js" defer></script>
 <!-- 视图自动布局引擎（对齐《视图规范》：8 种视图各用专用确定性布局器） -->
-<script src="/static/view_layout_engine.js"></script>
+<script src="/static/view_layout_engine.js" defer></script>
 <!-- v6.2 性能 baseline 采集器（FP/FCP/路由切换/长任务） -->
-<script src="/static/js/perf.js"></script>
+<script src="/static/js/perf.js" defer></script>
 </head>
 <body data-page-node-id="ULFo7BuRAc93uxMeS2g0DW">
 <div class="shell" data-page-node-id="fsBFZxVyPNZAUdzRYLhHVU">
@@ -1705,42 +1705,42 @@
 <!-- v0 老 toast 占位（#toast）已废弃，统一由 #toast-root 渲染（v6.1） -->
 
 <!-- 模块化入口：按依赖顺序加载（全局作用域，勿改为 type=module） -->
-    <script src="/static/js/mods/01-core.js"></script>
-    <script src="/static/js/mods/02-shell.js"></script>
-    <script src="/static/js/mods/03-chat.js"></script>
-    <script src="/static/js/mods/04-artifacts.js"></script>
-    <script src="/static/js/mods/05-markdown.js"></script>
-    <script src="/static/js/mods/06-cards.js"></script>
-    <script src="/static/js/mods/07-norm.js"></script>
-    <script src="/static/js/mods/08-sysmlview.js"></script>
-    <script src="/static/js/mods/09-impact.js"></script>
-    <script src="/static/js/mods/10-chatinput.js"></script>
-    <script src="/static/js/mods/11-pipeline.js"></script>
-    <script src="/static/js/mods/12-chatsend.js"></script>
-    <script src="/static/js/mods/13-reports.js"></script>
-    <script src="/static/js/mods/14-sysml.js"></script>
-    <script src="/static/js/mods/15-kb.js"></script>
-    <script src="/static/js/mods/16-review.js"></script>
-    <script src="/static/js/mods/17-v2g.js"></script>
-    <script src="/static/js/mods/18-glossary.js"></script>
-    <script src="/static/js/mods/19-governance.js"></script>
-    <script src="/static/js/mods/20-docs.js"></script>
-    <script src="/static/js/mods/21-ontology.js"></script>
-    <script src="/static/js/mods/22-ontgraph.js"></script>
-    <script src="/static/js/mods/23-ontform.js"></script>
-    <script src="/static/js/mods/24-graph.js"></script>
-    <script src="/static/js/mods/25-graphview.js"></script>
-    <script src="/static/js/mods/26-grapheditor.js"></script>
-    <script src="/static/js/mods/27-branch.js"></script>
-    <script src="/static/js/mods/28-studio.js"></script>
-    <script src="/static/js/mods/29-flow.js"></script>
-    <script src="/static/js/mods/30-agents.js"></script>
-    <script src="/static/js/mods/31-admin.js"></script>
-    <script src="/static/js/mods/32-approval.js"></script>
-    <script src="/static/js/mods/33-search.js"></script>
-    <script src="/static/js/mods/34-graphtabs.js"></script>
-    <script src="/static/js/mods/35-ctxconfig.js"></script>
-    <script src="/static/js/mods/36-capability.js"></script>
+    <script src="/static/js/mods/01-core.js" defer></script>
+    <script src="/static/js/mods/02-shell.js" defer></script>
+    <script src="/static/js/mods/03-chat.js" defer></script>
+    <script src="/static/js/mods/04-artifacts.js" defer></script>
+    <script src="/static/js/mods/05-markdown.js" defer></script>
+    <script src="/static/js/mods/06-cards.js" defer></script>
+    <script src="/static/js/mods/07-norm.js" defer></script>
+    <script src="/static/js/mods/08-sysmlview.js" defer></script>
+    <script src="/static/js/mods/09-impact.js" defer></script>
+    <script src="/static/js/mods/10-chatinput.js" defer></script>
+    <script src="/static/js/mods/11-pipeline.js" defer></script>
+    <script src="/static/js/mods/12-chatsend.js" defer></script>
+    <script src="/static/js/mods/13-reports.js" defer></script>
+    <script src="/static/js/mods/14-sysml.js" defer></script>
+    <script src="/static/js/mods/15-kb.js" defer></script>
+    <script src="/static/js/mods/16-review.js" defer></script>
+    <script src="/static/js/mods/17-v2g.js" defer></script>
+    <script src="/static/js/mods/18-glossary.js" defer></script>
+    <script src="/static/js/mods/19-governance.js" defer></script>
+    <script src="/static/js/mods/20-docs.js" defer></script>
+    <script src="/static/js/mods/21-ontology.js" defer></script>
+    <script src="/static/js/mods/22-ontgraph.js" defer></script>
+    <script src="/static/js/mods/23-ontform.js" defer></script>
+    <script src="/static/js/mods/24-graph.js" defer></script>
+    <script src="/static/js/mods/25-graphview.js" defer></script>
+    <script src="/static/js/mods/26-grapheditor.js" defer></script>
+    <script src="/static/js/mods/27-branch.js" defer></script>
+    <script src="/static/js/mods/28-studio.js" defer></script>
+    <script src="/static/js/mods/29-flow.js" defer></script>
+    <script src="/static/js/mods/30-agents.js" defer></script>
+    <script src="/static/js/mods/31-admin.js" defer></script>
+    <script src="/static/js/mods/32-approval.js" defer></script>
+    <script src="/static/js/mods/33-search.js" defer></script>
+    <script src="/static/js/mods/34-graphtabs.js" defer></script>
+    <script src="/static/js/mods/35-ctxconfig.js" defer></script>
+    <script src="/static/js/mods/36-capability.js" defer></script>
 <div id="gnav-tip" data-page-node-id="0BjF8bZHUY5ifs1giLFsmS"></div>
 <div id="task-tip" data-page-node-id="dgEiAW2wHrbx1DoUK7cL0O"></div>
 
@@ -1775,13 +1775,13 @@
   </div>
 </div>
 
-<script src="/static/js/mods/37-kbar.js"></script>
-<script src="/static/js/mods/38-filepreview.js"></script>
-<script src="/static/js/mods/39-coverage.js"></script>
-<script src="/static/js/mods/40-docfolders.js"></script>
-<script src="/static/js/mods/41-projects.js"></script>
-<script src="/static/js/mods/42-intent-samples.js"></script>
-<script src="/static/js/mods/43-doccat.js"></script>
-<script src="/static/js/mods/44-memory.js"></script>
+<script src="/static/js/mods/37-kbar.js" defer></script>
+<script src="/static/js/mods/38-filepreview.js" defer></script>
+<script src="/static/js/mods/39-coverage.js" defer></script>
+<script src="/static/js/mods/40-docfolders.js" defer></script>
+<script src="/static/js/mods/41-projects.js" defer></script>
+<script src="/static/js/mods/42-intent-samples.js" defer></script>
+<script src="/static/js/mods/43-doccat.js" defer></script>
+<script src="/static/js/mods/44-memory.js" defer></script>
 </body>
 </html>
