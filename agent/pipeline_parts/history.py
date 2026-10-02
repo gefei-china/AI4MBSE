@@ -362,15 +362,22 @@ class HistoryMixin:
             gi = groups.index(cur_group)
             _bnd = list(groups[gi - 1]["msgs"][-boundary:])
         # P1-18：keep-last-N 轮（跨话题）verbatim —— 话题快速切换时，最近 N 轮不因话题边界被压成摘要。
-        #   默认 0 = 关闭（零行为漂移）；>0 时全局最近 N 轮（从倒数第 N 个 user 消息起）无条件进原文候选。
-        _keep_n = int(_cfg.get("context", "keep_last_n_turns", 0))
+        #   默认 4 = 最近 4 轮跨话题 verbatim（标定见 tmp/mt_ctx/probe_keep_n_calib.py：真库 4 会话回放，
+        #   keep_n ≤ 6 保留率 100%、>6 因 raw_cap=50% 预算吃紧开始下降，故取 4 兼顾保留与预算）；
+        #   置 0 = 关闭（回到「只 keep 当前话题」旧行为）。
+        #   ⚠️ 只补**跨话题**的消息：当前话题内的最近消息已由 _tail 负责，若无条件把最近 N 轮全拉进来，
+        #      单一话题会话的 raw_list 会被塞进「当前话题更早的消息」，破坏 _tail 的近因窗口语义（实测
+        #      verify_multiturn_context E1/E2 因此失效）。
+        _keep_n = int(_cfg.get("context", "keep_last_n_turns", 4))
         _keep_msgs = []
         if _keep_n > 0:
             _uidx = [i for i, m in enumerate(msgs) if m["role"] == "user"]
             if _uidx:
                 _start = _uidx[-_keep_n] if len(_uidx) >= _keep_n else _uidx[0]
-                _keep_msgs = [m for m in msgs[_start:]]
-        # 合并候选按 id 升序去重（时间序）；keep_n=0 时 _keep_msgs 空、_bnd/_tail 无重叠 → 严格等于旧 _bnd+_tail
+                _tail_ids = {m["id"] for m in _tail}
+                _keep_msgs = [m for m in msgs[_start:]
+                              if m["topic"] != cur_group["topic"] and m["id"] not in _tail_ids]
+        # 合并候选按 id 升序去重（时间序）；单一话题下 _keep_msgs 空 → 严格等于旧 _bnd+_tail（零漂移）
         _cand = {}
         for m in (_keep_msgs + _bnd + _tail):
             _cand[m["id"]] = m
