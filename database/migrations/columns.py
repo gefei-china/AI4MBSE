@@ -49,6 +49,10 @@ def _migrate_columns(conn):
     # P1-27 截断诊断（思考模型 reasoning 与正文共享 max_tokens 配额）
     _add("llm_usage_stats", "finish_reason", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "reasoning_tokens", "INTEGER DEFAULT 0")
+    # ── P1-1b 观测落库：LLM 重试/回退（值由各调用路径写入响应 _meta，llm/__init__.py 统一取值落库）──
+    _add("llm_usage_stats", "retry_count", "INTEGER DEFAULT 0")           # 重试次数（0=首次成功；流式不重试恒 0）
+    _add("llm_usage_stats", "fallback_used", "INTEGER DEFAULT 0")         # 1=本次调用发生过 provider 回退
+    _add("llm_usage_stats", "fallback_provider_id", "INTEGER DEFAULT 0")  # 回退后实际使用的 provider id（未回退=0）
     # ── D11 A2A 协议互通：agent_messages 携带发送方身份卡（agent_card 字段）──
     _add("agent_messages", "sender_name", "TEXT DEFAULT ''")            # A2A 发送方 Agent 名称（agent_card.name）
     _add("agent_messages", "sender_type", "TEXT DEFAULT ''")            # A2A 发送方类型（llm | tool | flow | external）

@@ -657,6 +657,10 @@ def init_db():
         -- 这两列是「输出被截断 / 为空」的直接证据（stop=正常 / length=被上限截断）。
         finish_reason TEXT DEFAULT '',
         reasoning_tokens INTEGER DEFAULT 0,
+        -- P1-1b 观测落库：LLM 重试/回退（此前只在响应 _meta，DB 无记录 → 回退率/重试成功率无法统计）
+        retry_count INTEGER DEFAULT 0,          -- 重试次数（0=首次成功；流式不重试恒 0）
+        fallback_used INTEGER DEFAULT 0,        -- 1=本次调用发生过 provider 回退
+        fallback_provider_id INTEGER DEFAULT 0, -- 回退后实际使用的 provider id（未回退=0）
         estimated_cost REAL DEFAULT 0,        -- 估算成本（美元，仅真实调用）
         latency_ms INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP

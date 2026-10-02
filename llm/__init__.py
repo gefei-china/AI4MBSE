@@ -245,6 +245,13 @@ class LLMClient:
             _meta = resp.get("_meta")
             if isinstance(_meta, dict):
                 _meta["token_count"] = pt + ct
+            # P1-1c：重试/回退观测（值由各调用路径写入 _meta；Mock/旧路径缺失 → 全 0，零行为漂移）
+            try:
+                _rc = int((_meta or {}).get("retry_count") or 0)
+                _fu = 1 if (_meta or {}).get("fallback_used") else 0
+                _fp = int((_meta or {}).get("fallback_provider_id") or 0)
+            except Exception:
+                _rc, _fu, _fp = 0, 0, 0
             # V2.6：最近一次调用 token 记账（stats 供 done 事件透传前端展示）
             try:
                 self.stats["last_prompt_tokens"] = pt
@@ -257,13 +264,14 @@ class LLMClient:
                     "INSERT INTO llm_usage_stats (provider_id, provider_name, model_name, intent, used_mock, "
                     "prompt_tokens, completion_tokens, total_tokens, "
                     "prompt_cache_hit_tokens, prompt_cache_miss_tokens, "
-                    "finish_reason, reasoning_tokens, estimated_cost, latency_ms) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "finish_reason, reasoning_tokens, retry_count, fallback_used, fallback_provider_id, "
+                    "estimated_cost, latency_ms) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (provider.get("id", 0) if provider else 0,
                      (provider or {}).get("name", "未配置"),
                      (provider or {}).get("model_name", "-"),
                      intent, 1 if used_mock else 0, pt, ct, pt + ct, pch, pcm,
-                     _fr, rt, round(est, 6), latency_ms),
+                     _fr, rt, _rc, _fu, _fp, round(est, 6), latency_ms),
                 )
         except Exception:
             pass
@@ -358,15 +366,21 @@ class LLMClient:
             # 修法：先把这三个键从透传字典里摘出，再分别走具名参数（行为保真、不再重复）。
             _impl_kw = dict(kwargs)
             # P1-1（2026-09-24）：失败重试（指数退避）+ provider 回退。此前一次失败即静默回落 Mock。
+            # P1-1c：回退检测 —— _chat_resilient 重试耗尽换备选后，返回的 provider 已是备选实例；
+            # 先记主 provider id，回来比对才知道"本次调用是否发生过回退"（落 llm_usage_stats 观测）。
+            _prim_pid = (provider or {}).get("id", 0)
             resp, _retry_n, provider = self._chat_resilient(
                 provider, messages, _impl_kw, stream, tools, thinking)
+            _fallback_used = 1 if (provider or {}).get("id", 0) != _prim_pid else 0
+            _fb_pid = (provider or {}).get("id", 0) if _fallback_used else 0
             # 回退成功时 provider 已被换成实际使用的那个 → 同步名字，保证 _meta / usage 归属正确
             provider_name = provider.get("name", provider_name)
             model_name = provider.get("model_name", model_name)
             if stream:
-                # 流式：包装生成器，复用 usage 落库（M7）
+                # 流式：包装生成器，复用 usage 落库（M7）；重试/回退观测一并透传（P1-1c）
                 return self._stream_wrapped(resp, provider, provider_name, model_name, t0, route_reason,
-                                            kwargs.get("_intent", ""))
+                                            kwargs.get("_intent", ""), retry_count=_retry_n,
+                                            fallback_used=bool(_fallback_used), fallback_provider_id=_fb_pid)
             self.stats["real"] += 1
             self.stats["last_provider"] = provider_name
             self.stats["last_used_mock"] = False
@@ -376,6 +390,8 @@ class LLMClient:
                 "used_mock": False, "latency_ms": int((time.time() - t0) * 1000),
                 "route_reason": route_reason,
                 "retry_count": _retry_n,   # P1-1：重试次数（0=首次成功），供可观测
+                "fallback_used": bool(_fallback_used),   # P1-1c：本次调用是否发生过 provider 回退
+                "fallback_provider_id": _fb_pid,         # P1-1c：回退后实际使用的 provider id（未回退=0）
                 "usage": dict(resp.get("usage") or {}),   # T5：真实 token 透传（TokenCounter 复用）
             }
             self._record_usage(provider, resp, False, kwargs.get("_intent", ""), resp["_meta"]["latency_ms"])
@@ -554,7 +570,8 @@ class LLMClient:
         except Exception:
             pass
 
-    def _stream_wrapped(self, gen, provider, provider_name, model_name, t0, route_reason, intent):
+    def _stream_wrapped(self, gen, provider, provider_name, model_name, t0, route_reason, intent,
+                        retry_count: int = 0, fallback_used: bool = False, fallback_provider_id: int = 0):
         """流式生成器包装：透传 SSE 行 + 结束时落 usage 统计（M7 可观测）。
 
         P0-a（2026-10-02）：**逐帧解析**（`parse_stream_frame`）累积 usage 与 finish_reason，
@@ -562,6 +579,7 @@ class LLMClient:
         · 解析在 `yield` **之前**（先记账再透传）：保证"已收到的帧"与"已记账的帧"恒等，
           否则最后一帧会在客户端中断时丢失（实测 usage 帧恰为倒数第二帧，直接丢 pt/ct）。
         · 中断（客户端断开）也记账 —— `GeneratorExit` 是 `BaseException`，须单独接。
+        · P1-1c：retry/fallback 观测由 chat() 透传进来，落库时挂到 _meta（见 _record_usage）。
         """
         _usage: dict = {}
         _finish = ""
@@ -586,7 +604,11 @@ class LLMClient:
             self.stats["last_provider"] = provider_name
             self.stats["last_used_mock"] = False
             self.stats["last_latency_ms"] = int((time.time() - t0) * 1000)
-            self._record_usage(provider, self._stream_resp(_usage, _finish, _chars), False, intent,
+            _sr = self._stream_resp(_usage, _finish, _chars)
+            # P1-1c：把重试/回退观测挂到 _meta（_record_usage 统一从 _meta 取值落库）
+            _sr["_meta"] = {"retry_count": retry_count, "fallback_used": fallback_used,
+                            "fallback_provider_id": fallback_provider_id}
+            self._record_usage(provider, _sr, False, intent,
                                int((time.time() - t0) * 1000))
             self._warn_if_truncated(_finish, _usage, provider_name, model_name, intent, _chars)
         except GeneratorExit:
@@ -597,7 +619,10 @@ class LLMClient:
             # ⚠️ 此处**不能再 yield**（生成器正在关闭，yield 会抛 RuntimeError）。
             # 用 used_mock=False：它确实是真实调用（只是没跑完），要计入成本。
             try:
-                self._record_usage(provider, self._stream_resp(_usage, _finish, _chars), False,
+                _sr = self._stream_resp(_usage, _finish, _chars)
+                _sr["_meta"] = {"retry_count": retry_count, "fallback_used": fallback_used,
+                                "fallback_provider_id": fallback_provider_id}
+                self._record_usage(provider, _sr, False,
                                    intent, int((time.time() - t0) * 1000))
                 import logging as _lg
                 _lg.getLogger("mbse.llm").warning(
