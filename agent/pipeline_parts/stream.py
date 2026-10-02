@@ -1455,6 +1455,16 @@ class StreamMixin:
                 messages = self._apply_total_budget(messages, context_text)
             except Exception:
                 pass
+            # UX规范 D1（2026-10-03）压缩三件套：总闸触发过 → 透传 compact 事件，
+            # 前端时间线渲染「上下文已压缩」系统标记（可展开详情 + 用量指示器 + 追问恢复入口）。
+            # 压缩只发生在 prompt 组装层，历史原文全在库——故"回退"语义 = 引导追问恢复，不伪造撤销。
+            _cmp_info = getattr(self, "_last_compaction", None)
+            if _cmp_info:
+                try:
+                    yield {"type": "compact", **_cmp_info}
+                except Exception:
+                    pass
+                self._last_compaction = None
             # 缺口B：工具判定——非流式探测 LLM 是否需要工具（Mock 无 tool_calls 时跳过，保持原流式）
             # 优化1：注入观测上下文
             self._tool_intent_ctx = {"intent": intent}

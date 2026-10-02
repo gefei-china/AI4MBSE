@@ -913,6 +913,9 @@ class HistoryMixin:
             from core import config as _cfg
             from core.token_counter import count_messages_tokens
             from agent.pipeline_parts import compression as _cp
+            # UX规范 D1（2026-10-03）：压缩信息透传载体——每次调用先复位，
+            # 防止上一轮触发过压缩的残留值在本轮误发 compact 事件（pipeline 对象跨轮存活）。
+            self._last_compaction = None
             if not messages:
                 return messages
             if not _cfg.as_bool("context", "total_budget_guard", True):
@@ -943,6 +946,11 @@ class HistoryMixin:
                     before, total_cap, step, tier, after, before - after, len(messages))
             except Exception:
                 pass
+            # UX规范 D1（2026-10-03）：实际执行的档位是 step（逐档循环可能提前收敛），
+            # 不是计划档位 tier——前端展示「压缩到哪一档」必须用真实值，否则详情与事实不符。
+            self._last_compaction = {"tier": step, "tiers_planned": tier,
+                                     "before": before, "after": after,
+                                     "cap": total_cap, "trimmed": before - after}
             return messages
         except Exception:  # noqa: BLE001 —— 总闸自身故障绝不阻断主链路，但必须留痕
             import traceback as _tb

@@ -289,6 +289,101 @@ function procAddTool(ev){
   patch.status = run?'run':(ev.ok?'done':'failed');
   patch.statusText = run?'调用中…':(ev.ok?'✓ 成功':'✗ 失败');
   procUpsert(upsertId, patch);
+  // UX规范 B3（2026-10-03）确认闸门内联化：工具结果含「确认单 #N」→ 时间线内联渲染确认卡
+  // （批准/拒绝），复用工作流监控面板同一 decide API——不再强迫用户切面板找入口。
+  // 放在工具卡 procUpsert 之后，保证时间线顺序 = 实际时序（工具入队 → 确认卡）。
+  if(!run && ev.ok){
+    const _cm = String(ev.result||'').match(/确认单\s*#(\d+)/);
+    if(_cm) procAddConfirmGate(parseInt(_cm[1], 10), ev);
+  }
+}
+
+// ── UX规范 D1（2026-10-03）上下文压缩三件套 ──
+// 系统流单元（与模型产出区隔）：可展开详情（各档做了什么）+ 用量指示器（压缩前后 vs 预算）
+// + 回退入口。回退语义：压缩只发生在 prompt 组装层，历史原文全部在库（档3 占位文案本身
+// 就写"追问即可恢复"）→ 「追问恢复」把恢复性提问填入输入框，不伪造"撤销压缩"。
+const _TIER_DESC = {1:'检索/历史降密度重裁（scale 0.6）',
+                    2:'追加：附件块截断至 1200 tok',
+                    3:'追加：更早对话摘要置一行占位（追问可恢复）',
+                    4:'全量压缩：仅保 system 本体与当前输入'};
+function procAddCompact(ev){
+  const tier = ev.tier || 0, before = ev.before || 0, after = ev.after || before, cap = ev.cap || 0;
+  const pct = cap ? Math.min(999, Math.round(before / cap * 100)) : 0;
+  const afterPct = cap ? Math.min(100, Math.round(after / cap * 100)) : 0;
+  const bar = `<div style="margin:6px 0 2px;">
+    <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--mut);margin-bottom:3px;">
+      <span style="min-width:44px;">压缩前</span>
+      <span style="flex:1;height:6px;border-radius:3px;background:var(--line);overflow:hidden;display:inline-block;">
+        <i style="display:block;height:100%;width:${Math.min(100, pct)}%;${pct > 100 ? 'background:var(--red);' : 'background:var(--blue-d);'}"></i></span>
+      <span style="min-width:110px;text-align:right;${pct > 100 ? 'color:var(--red);font-weight:600;' : ''}">${before} tok · ${pct}% 预算</span></div>
+    <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--mut);">
+      <span style="min-width:44px;">压缩后</span>
+      <span style="flex:1;height:6px;border-radius:3px;background:var(--line);overflow:hidden;display:inline-block;">
+        <i style="display:block;height:100%;width:${afterPct}%;background:var(--green,#2F6F4F);"></i></span>
+      <span style="min-width:110px;text-align:right;">${after} tok · ${afterPct}% 预算</span></div></div>`;
+  let tiers = '';
+  for(let i = 1; i <= tier; i++){
+    tiers += `<div style="font-size:11px;color:var(--mut);line-height:1.8;"><b style="color:var(--fg);">档${i}</b>　${_TIER_DESC[i] || ''}${i === tier ? '　<span style="color:var(--green,#2F6F4F);">← 实际收敛档</span>' : ''}</div>`;
+  }
+  if(ev.tiers_planned && ev.tiers_planned > tier){
+    tiers += `<div style="font-size:10.5px;color:var(--mut);">（计划档${ev.tiers_planned}，档${tier} 裁完已入预算，提前收敛）</div>`;
+  }
+  const detail = `<div style="font-size:11.5px;line-height:1.7;">`
+    + `<div style="color:var(--mut);margin-bottom:2px;">输入估算 ${before} tok 超出总预算 ${cap} tok，自动分层压缩（system 本体/建模规则任何档不裁）：</div>`
+    + bar + tiers
+    + `<div style="margin-top:8px;"><span class="pr-act" style="color:var(--blue-d);" onclick="compactRecoveryAsk()">↩ 追问恢复被压缩的内容</span>`
+    + `<span style="font-size:10px;color:var(--mut);margin-left:8px;">历史原文全部在库，压缩只影响本次 prompt 组装</span></div></div>`;
+  procUpsert('compact', {type:'compact', icon:'🗜', title:'上下文已压缩 · 档' + tier,
+    sub: `省 ${ev.trimmed || Math.max(0, before - after)} tok · 压后 ${afterPct}% 预算`,
+    status:'done', statusText:'✓ 已压缩', detail});
+}
+// 回退入口：填入恢复性提问（用户可改写后发送），聚焦输入框——真正恢复靠下一轮
+// _load_history 从库里拉全量原文，压缩占位文本本身也写着"追问即可恢复"
+function compactRecoveryAsk(){
+  const inp = document.getElementById('chat-input');
+  const ask = '请把被压缩的更早对话摘要与关键上下文展开恢复，再继续当前任务。';
+  if(inp){
+    inp.value = inp.value ? inp.value + ' ' + ask : ask;
+    try{ inp.focus(); }catch(e){}
+  }
+  if(window.toast && toast.info) toast.info('已填入恢复性提问，发送后 AI 将从会话库拉回完整上下文');
+}
+
+// ── UX规范 B3（2026-10-03）内联确认闸门 ──
+// 同一确认单在时间线上只允许一个节点（硬规则1）；确认卡 = 需要用户行动的单元，
+// 保持 run 态常驻展开，直至批准/拒绝落终态。
+function procAddConfirmGate(cid, ev){
+  const id = 'hil_' + cid;
+  if(_procS.timeline.some(x=>x.id === id)) return;   // 同一确认单不重复建卡
+  const name = ev.name || '';
+  const args = ev.arguments ? (typeof ev.arguments === 'string' ? ev.arguments : JSON.stringify(ev.arguments)) : '';
+  const detail = `<div style="font-size:11.5px;line-height:1.7;">`
+    + `<div><b>工具：</b>${esc(name)}</div>`
+    + (args ? `<div style="max-height:88px;overflow:auto;white-space:pre-wrap;background:var(--bg,#f6f7f9);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:4px;font-size:10.5px;">${esc(args)}</div>` : '')
+    + `<div style="color:var(--mut);margin-top:6px;">这是<strong style="color:var(--orange,#B96A00);">写操作 / 高风险动作</strong>：批准后自动执行并回写结果；拒绝则该动作不生效。</div>`
+    + `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">`
+    + `<button class="btn sm grn" id="hil-ok-${cid}" onclick="hilDecide(${cid}, true)">✓ 批准并执行</button>`
+    + `<button class="btn sm ghost" id="hil-no-${cid}" onclick="hilDecide(${cid}, false)">✕ 拒绝</button>`
+    + `<span style="font-size:10px;color:var(--mut);">确认单 #${cid} · 也可在 工作流 → 执行监控 处理</span></div></div>`;
+  procUpsert(id, {type:'confirm', icon:'🔐', title:'等待确认：' + _toolActivity(name),
+                  status:'run', statusText:'⏸ 待人工确认', detail});
+}
+// 批准/拒绝：与工作流监控面板（29-flow.js）同一 decide API；失败恢复按钮可重试
+async function hilDecide(cid, approve){
+  const okBtn = document.getElementById('hil-ok-' + cid), noBtn = document.getElementById('hil-no-' + cid);
+  if(okBtn) okBtn.disabled = true;
+  if(noBtn) noBtn.disabled = true;
+  try{
+    await api('/api/studio/hil-confirmations/' + cid + '/decide',
+              {method:'POST', body:JSON.stringify({approve:!!approve, decided_by:'王工'})});
+    procUpsert('hil_' + cid, approve ? {status:'done', statusText:'✓ 已批准 · 自动执行中'}
+                                     : {status:'failed', statusText:'✗ 已拒绝 · 动作不生效'});
+    if(window.toast && toast.success) toast.success(approve ? '已批准，确认单 #' + cid + ' 将自动执行' : '已拒绝确认单 #' + cid);
+  }catch(e){
+    if(okBtn) okBtn.disabled = false;
+    if(noBtn) noBtn.disabled = false;
+    if(window.toast && toast.error) toast.error('确认操作失败：' + (e && e.message || e));
+  }
 }
 // V2.6：子任务内部工具事件归组（挂到 subtask 卡 children，随子任务卡展开查看）
 function _procAddSubTool(pk, ev, displayName){
@@ -676,6 +771,8 @@ function handleSSE(raw) {
     procAddThinking(ev.delta || '', ev.round, ev.key);   // V2.4 思考流（V2.6：带子任务归属标记）
   } else if(evType === 'tool') {
     procAddTool(ev);       // V2.4 会话内执行过程：工具调用结果
+  } else if(evType === 'compact') {
+    procAddCompact(ev);    // UX规范 D1：上下文压缩系统标记（详情/用量/追问恢复）
   } else if(evType === 'subtask') {
     procAddSubtask(ev);    // P0-2：编排子任务轨迹（实时 DAG 状态）
   } else if(evType === 'skill') {
