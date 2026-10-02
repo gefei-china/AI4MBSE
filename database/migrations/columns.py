@@ -43,6 +43,9 @@ def _migrate_columns(conn):
     _add("llm_providers", "tags", "TEXT DEFAULT '[]'")                  # 能力标签 JSON 数组，如 ["code","chinese","fast"]
     _add("llm_providers", "priority", "INTEGER DEFAULT 0")              # 路由优先级（越大越优先，同权重按 is_default）
     _add("llm_providers", "budget_tokens", "INTEGER DEFAULT 0")         # Token 预算（0=不限；聚合 llm_usage_stats 判定耗尽）
+    # ── P1-20 prompt caching 观测：DeepSeek 上下文磁盘缓存命中/未命中（自动缓存，命中≈1/10 价）──
+    _add("llm_usage_stats", "prompt_cache_hit_tokens", "INTEGER DEFAULT 0")
+    _add("llm_usage_stats", "prompt_cache_miss_tokens", "INTEGER DEFAULT 0")
     # ── D11 A2A 协议互通：agent_messages 携带发送方身份卡（agent_card 字段）──
     _add("agent_messages", "sender_name", "TEXT DEFAULT ''")            # A2A 发送方 Agent 名称（agent_card.name）
     _add("agent_messages", "sender_type", "TEXT DEFAULT ''")            # A2A 发送方类型（llm | tool | flow | external）

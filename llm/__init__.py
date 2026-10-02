@@ -157,6 +157,10 @@ class LLMClient:
             usage = resp.get("usage") or {}
             pt = int(usage.get("prompt_tokens") or 0)
             ct = int(usage.get("completion_tokens") or 0)
+            # P1-20：DeepSeek 上下文磁盘缓存命中/未命中 token（自动缓存，命中≈1/10 价）。
+            # 仅真实调用有；Mock/无 usage 时自然为 0（不估算，缓存命中无法估算）。
+            pch = int(usage.get("prompt_cache_hit_tokens") or 0)
+            pcm = int(usage.get("prompt_cache_miss_tokens") or 0)
             if not pt and not ct:
                 # Mock 或响应无 usage → 按输出文本长度估算（len(输出文本)//2）
                 try:
@@ -180,12 +184,13 @@ class LLMClient:
             with db_conn() as conn:
                 conn.execute(
                     "INSERT INTO llm_usage_stats (provider_id, provider_name, model_name, intent, used_mock, "
-                    "prompt_tokens, completion_tokens, total_tokens, estimated_cost, latency_ms) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    "prompt_tokens, completion_tokens, total_tokens, "
+                    "prompt_cache_hit_tokens, prompt_cache_miss_tokens, estimated_cost, latency_ms) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (provider.get("id", 0) if provider else 0,
                      (provider or {}).get("name", "未配置"),
                      (provider or {}).get("model_name", "-"),
-                     intent, 1 if used_mock else 0, pt, ct, pt + ct, round(est, 6), latency_ms),
+                     intent, 1 if used_mock else 0, pt, ct, pt + ct, pch, pcm, round(est, 6), latency_ms),
                 )
         except Exception:
             pass
