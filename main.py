@@ -51,6 +51,14 @@ from routers import (
 async def lifespan(app: FastAPI):
     """应用生命周期（替代已弃用的 @app.on_event("startup")，语义等价）。"""
     init_db()
+    # P1-4（2026-10-02）：工具结果 offload 过期清理（TTL 默认 30 天，context.offload_ttl_days）
+    try:
+        from agent.pipeline_parts import tool_offload as _toff
+        _n = _toff.cleanup_expired(days=int(config.get("context", "offload_ttl_days", 30)))
+        if _n:
+            print(f"[startup] offload 过期清理：删除 {_n} 行", flush=True)
+    except Exception:
+        pass  # 清理失败不得影响启动（TTL 下次启动再清）
     # P1-4（2026-08-31）：统一种子注册入口（内置工具/系统管理/HTTP 集成/技能包/智源旧注册 幂等编排）
     try:
         from seed_registry import seed_all as _seed_all

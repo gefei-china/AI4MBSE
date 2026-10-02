@@ -109,3 +109,28 @@ def ensure_fetch_tool(tools_def: list, whitelist=None) -> None:
     if tools_def and not any(
             (t.get("function") or {}).get("name") == "tool_result_fetch" for t in tools_def):
         tools_def.append(json.loads(json.dumps(TOOL_FETCH_DEF)))  # 深拷贝防调用方复用污染
+
+
+def cleanup_expired(days: int = 30) -> int:
+    """TTL 清理：删 created_at 早于 now-days 的 offload 行（main.py lifespan 启动钩子搭车调用）。
+
+    ⚠️ SQLite 时间修饰符**不能带空格**：`'-30 days'` ✓ / `'- 30 days'` ✗（返回 NULL，
+    2026-09-30 在 MEMORY 登记过同族坑——counts 恒 0 被误读成"没调用"）。
+    """
+    from database import db_conn
+    with db_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM tool_result_offloads WHERE created_at < datetime('now', ?)",
+            (f"-{int(days)} days",))
+        conn.commit()
+        return cur.rowcount
+
+
+def cleanup_conversation(conversation_id: int) -> int:
+    """会话删除级联：清该会话的全部 offload（routers/conversations.py delete 端点调用）。"""
+    from database import db_conn
+    with db_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM tool_result_offloads WHERE conversation_id=?", (int(conversation_id),))
+        conn.commit()
+        return cur.rowcount

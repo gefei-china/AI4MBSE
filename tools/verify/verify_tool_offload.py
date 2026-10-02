@@ -134,8 +134,32 @@ check("接入：ensure_fetch_tool 在两路径都被调用",
       "ensure_fetch_tool" in inspect.getsource(_stream_mod)
       and "ensure_fetch_tool" in inspect.getsource(_execute_mod))
 
+# ── 7. 清理机制（P1-4 生命周期补全：TTL + 会话级联）────────────────────
+from database import db_conn
+oid_new = to.save_offload("t", "新数据" * 100, 555)
+oid_old = to.save_offload("t", "旧数据" * 100, 556)
+with db_conn() as c:
+    c.execute("UPDATE tool_result_offloads SET created_at = datetime('now', '-40 days') WHERE id=?",
+              (oid_old,))
+    c.commit()
+n_exp = to.cleanup_expired(days=30)
+check("cleanup_expired：只删过期行（新行保留）",
+      n_exp >= 1 and to.fetch_offload(oid_old) == "" and to.fetch_offload(oid_new) != "")
+n_conv = to.cleanup_conversation(555)
+check("cleanup_conversation：会话级联清空", n_conv == 1 and to.fetch_offload(oid_new) == "")
+oid_a = to.save_offload("t", "A", 700)
+oid_b = to.save_offload("t", "B", 701)
+to.cleanup_conversation(700)
+check("隔离：清 conv 700 不影响 701", to.fetch_offload(oid_a) == "" and to.fetch_offload(oid_b) == "B")
+to.cleanup_conversation(701)  # 清测试残留
+check("接入：conversations.py 删除端点已级联",
+      "cleanup_conversation" in inspect.getsource(
+          __import__("routers.conversations", fromlist=["x"])))
+check("接入：main.py lifespan 已挂启动 TTL 清理",
+      "cleanup_expired" in inspect.getsource(__import__("main")))
+
 print()
 if FAILURES:
     print(f"❌ {len(FAILURES)} 项失败：{FAILURES}")
     sys.exit(1)
-print("✅ ALL PASS —— offload 契约/往返/双路径/幂等/变异自证全部通过")
+print("✅ ALL PASS —— offload 契约/往返/双路径/幂等/清理/变异自证全部通过")

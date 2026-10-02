@@ -108,6 +108,12 @@ def delete_conversation(conv_id: int, conn=Depends(db_session)):
     if not repo.get_conversation(conv_id):
         return JSONResponse({"error": "Conversation not found"}, 404)
     repo.delete_conversation(conv_id)
+    # P1-4（2026-10-02）：级联清理该会话的工具结果 offload（会话没了，全文引用失去意义）
+    try:
+        from agent.pipeline_parts import tool_offload as _to
+        _to.cleanup_conversation(conv_id)
+    except Exception:
+        pass  # 级联清理失败不阻断删除主流程（offload 由 TTL 兜底）
     audit("王工", "conversation_delete", f"删除对话#{conv_id}", conn=conn)
     return {"ok": True}
 
