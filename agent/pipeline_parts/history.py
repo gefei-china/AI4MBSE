@@ -791,11 +791,19 @@ class HistoryMixin:
             return ""
 
     def _llm_summarize(self, text, scope):
-        """LLM 摘要（保留决策/实体/待办，丢弃客套）；Mock/失败 → 规则降级（首句拼接）。"""
+        """LLM 摘要（P1-3 四段式契约：目标/状态/约束/下一步，防目标漂移）；Mock/失败 → 规则降级（首句拼接）。
+
+        四段式依据：《上下文-记忆-意图识别-能力评估-20261002》§2.1（标杆：摘要缺目标/下一步 ⇒ 任务漂移）。
+        旧格式摘要仍会被复用（anchor 未变时读缓存）→ 渐进切换，无需迁移。
+        """
         try:
             from llm import llm_client
-            prompt = ("将以下对话历史压缩为简洁摘要：保留关键决策、实体、约束与待办；"
-                      "丢弃客套与重复内容。输出 200 字以内。\n\n对话历史：\n" + text[:4000])
+            prompt = ("将以下对话历史压缩为**四段式摘要**，每段一行、总长 250 字以内：\n"
+                      "目标：<用户要做什么，一句话>\n"
+                      "状态：<已完成什么/进行到哪，关键产出与结论>\n"
+                      "约束：<已确认的约束、偏好、技术选型>\n"
+                      "下一步：<待办，或建议的下一步>\n"
+                      "丢弃客套与重复内容；某段无内容可写「无」。\n\n对话历史：\n" + text[:4000])
             resp = llm_client.chat([{"role": "user", "content": prompt}], _intent="history_summary")
             s = ((resp.get("choices") or [{}])[0].get("message", {}) or {}).get("content") or ""
             s = s.strip()
@@ -890,19 +898,21 @@ class HistoryMixin:
     def _apply_total_budget(self, messages, context_text: str):
         """P1-2（2026-09-24）上下文**总闸**：分段预算之和可超窗，发送前算总账、超了降档重裁。
 
-        背景：检索 4k + 历史 3k + system 本体 4~5k + 附件 2.7k + v2 约束 1.3k ≈ 12~16k，
-        叠加超窗时由输出侧 _ctx_guard 把 max_tokens 夹小 ⇒ 输出被悄悄截短
-        （即 S4 登记过的「报告在结论前中断」——输入被切与输出被夹，现象难分）。
+        P1-3（2026-10-02，米爸拍板）升级为**五档分层压缩**（compression.py，评估报告 §2.1 P1）：
+        旧两档只裁检索/历史两块，实测 24~27k 尖峰压不动（本体+模板+规则占大头，两档用尽仍超）。
+        新档位逐层解锁更多可裁块：档2 纳入附件块、档3 更早摘要置占位、档4 全量压缩；
+        档1/2 的 scale 与旧两档数值一致 ⇒ 旧触发面行为零漂移。
+        system 本体（建模规则）任何档都不裁——压它直接改变产出质量。
 
         · 常态（预算内）**零开销**：只算一次 token 就返回
-        · 降档 = 用**同一套** _apply_context_budget 换更紧的 scale 重跑（不引入第二套裁剪逻辑）
-        · system 本体（建模规则）不在降档范围——压它会直接改变产出质量
+        · 降档 = compression.apply_tier（同一套 _apply_context_budget + _truncate_tokens 原语）
         · 可关：context.total_budget_guard=false；上限 context.total_budget_tokens（默认 10000）
         · 每次降档打日志留痕（before/after/档位）——总闸若静默，等于没做
         """
         try:
             from core import config as _cfg
             from core.token_counter import count_messages_tokens
+            from agent.pipeline_parts import compression as _cp
             if not messages:
                 return messages
             if not _cfg.as_bool("context", "total_budget_guard", True):
@@ -911,10 +921,16 @@ class HistoryMixin:
             before = count_messages_tokens(messages)
             if before <= total_cap:
                 return messages
+            tier = _cp.pressure_tier(before, total_cap)
+            if tier < 1:  # 双保险：理论不可达（before>total_cap 时 tier≥1）
+                return messages
             sys0 = messages[0].get("content") or ""
             after = before
-            for step, scale in enumerate((0.6, 0.35), start=1):
-                sys0 = self._apply_context_budget(sys0, context_text or "", len(messages), scale=scale)
+            step = 0
+            for step in range(1, tier + 1):
+                sys0 = _cp.apply_tier(sys0, context_text, step,
+                                      budget_fn=self._apply_context_budget,
+                                      truncate_fn=self._truncate_tokens)
                 messages[0]["content"] = sys0
                 after = count_messages_tokens(messages)
                 if after <= total_cap:
@@ -922,9 +938,9 @@ class HistoryMixin:
             try:
                 import logging as _lg
                 _lg.getLogger("mbse.llm").warning(
-                    "[context_total] 总闸触发：估算输入 %d > 预算 %d，降档后 %d "
-                    "（裁掉 %d tok，到达档位 %d，messages=%d 条）",
-                    before, total_cap, after, before - after, step, len(messages))
+                    "[context_total] 总闸触发：估算输入 %d > 预算 %d，五档压缩档位 %d/%d，"
+                    "降档后 %d（裁掉 %d tok，messages=%d 条）",
+                    before, total_cap, step, tier, after, before - after, len(messages))
             except Exception:
                 pass
             return messages
