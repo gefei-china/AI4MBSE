@@ -52,6 +52,14 @@ from agent.pipeline_parts.common import (  # noqa: E402
 _P = "agent/pipeline_parts"
 _PASS, _FAIL = [], []
 
+#: **重构前的基线提交**（P1-28 落地前的 HEAD）。
+#: ⚠️ 必须写死，不能用 `HEAD` —— 实测踩到：重构一经提交，`HEAD` 就**变成了新代码**，
+#: "旧基线"与"新实现"成了同一份 ⇒ 等价证明**自我失效**（脚本报的是"HEAD 里没有内联 dict"，
+#: 看起来像断言失效，实为基线选错）。
+#: 同样纪律见 `pure-move-refactor-verify` 技能：**基线要写死，不能读"当前状态"**。
+#: 可用环境变量覆盖（例如把基线进一步前移时不必改代码）。
+_BASELINE_REF = os.environ.get("P1_28_BASELINE_REF", "06eaab7")
+
 
 def check(name, cond, detail=""):
     (_PASS if cond else _FAIL).append(name)
@@ -60,11 +68,12 @@ def check(name, cond, detail=""):
 
 
 def _old_src(rel):
-    """取 HEAD 版（= 本次重构前）的源码文本。"""
-    out = subprocess.run(["git", "show", "HEAD:%s" % rel], cwd=_ROOT,
+    """取**基线提交**（不是 HEAD）的源码文本。"""
+    out = subprocess.run(["git", "show", "%s:%s" % (_BASELINE_REF, rel)], cwd=_ROOT,
                          capture_output=True)
     if out.returncode != 0:
-        raise RuntimeError("git show 失败：%s" % out.stderr.decode("utf-8", "ignore")[:200])
+        raise RuntimeError("git show 失败（基线 ref=%s）：%s"
+                           % (_BASELINE_REF, out.stderr.decode("utf-8", "ignore")[:200]))
     return out.stdout.decode("utf-8", "ignore")
 
 
@@ -165,16 +174,20 @@ def _norm(blocks):
 print("== 0 前置：能否取到重构前的源码 ==")
 OLD_EXEC = _old_src(_P + "/execute.py")
 OLD_STREAM = _old_src(_P + "/stream.py")
-check("0.1 HEAD 版 execute.py 含内联 dict（确认取到的是重构前版本）",
+print("   基线 ref = %s" % _BASELINE_REF)
+check("0.1 基线版 execute.py 含内联 dict（确认基线选对了）",
       "assemble_system_prompt({" in OLD_EXEC)
-check("0.2 HEAD 版 stream.py 含内联 dict", "assemble_system_prompt({" in OLD_STREAM)
+check("0.2 基线版 stream.py 含内联 dict", "assemble_system_prompt({" in OLD_STREAM)
+check("0.2b 基线版**不含** build_prompt_blocks（确认它真的是重构前）",
+      "build_prompt_blocks(" not in OLD_EXEC and "build_prompt_blocks(" not in OLD_STREAM)
 check("0.3 当前工作区已无内联 dict（重构已生效）",
       "assemble_system_prompt({" not in io.open(_P + "/execute.py", encoding="utf-8").read()
       and "assemble_system_prompt({" not in io.open(_P + "/stream.py", encoding="utf-8").read())
+check("0.4 旧 dict 字面量抽取成功", bool(_extract_prompt_dict(OLD_EXEC))
+      and bool(_extract_prompt_dict(OLD_STREAM)))
 
 OLD_EXEC_DICT = _extract_prompt_dict(OLD_EXEC)
 OLD_STREAM_DICT = _extract_prompt_dict(OLD_STREAM)
-check("0.4 旧 dict 字面量抽取成功", bool(OLD_EXEC_DICT) and bool(OLD_STREAM_DICT))
 
 # ══════════════════════════════════════════════════════════════════════════════
 print()
