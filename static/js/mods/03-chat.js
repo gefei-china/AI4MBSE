@@ -412,6 +412,7 @@ function stickBottom(force){
 function scrollChatToBottom(){
   const area = _chatAreaEl();
   if(!area) return;
+  uxTrack('scroll_force', {reason: 'user'});   // §11 埋点：用户显式回底（守护指标白名单 reason）
   _stickFollow = true;
   _stickUnread = 0;      // UX规范§8.4：显式回底 = 已读到最新，清零并隐藏浮钮
   _stickBtnShow();

@@ -362,14 +362,17 @@ function procAddConfirmGate(cid, ev){
     + (args ? `<div style="max-height:88px;overflow:auto;white-space:pre-wrap;background:var(--bg,#f6f7f9);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:4px;font-size:10.5px;">${esc(args)}</div>` : '')
     + `<div style="color:var(--mut);margin-top:6px;">这是<strong style="color:var(--orange,#B96A00);">写操作 / 高风险动作</strong>：批准后自动执行并回写结果；拒绝则该动作不生效。</div>`
     + `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">`
-    + `<button class="btn sm grn" id="hil-ok-${cid}" onclick="hilDecide(${cid}, true)">✓ 批准并执行</button>`
-    + `<button class="btn sm ghost" id="hil-no-${cid}" onclick="hilDecide(${cid}, false)">✕ 拒绝</button>`
+      + `<button class="btn sm grn" id="hil-ok-${cid}" onclick="hilInlineDecide(${cid}, true)">✓ 批准并执行</button>`
+      + `<button class="btn sm ghost" id="hil-no-${cid}" onclick="hilInlineDecide(${cid}, false)">✕ 拒绝</button>`
     + `<span style="font-size:10px;color:var(--mut);">确认单 #${cid} · 也可在 工作流 → 执行监控 处理</span></div></div>`;
   procUpsert(id, {type:'confirm', icon:'🔐', title:'等待确认：' + _toolActivity(name),
                   status:'run', statusText:'⏸ 待人工确认', detail});
+  uxTrack('confirm_shown', {cid});   // §11 埋点：确认闸门曝光（转化率分母）
 }
-// 批准/拒绝：与工作流监控面板（29-flow.js）同一 decide API；失败恢复按钮可重试
-async function hilDecide(cid, approve){
+// 批准/拒绝：与工作流监控面板（29-flow.js）同一 decide API；失败恢复按钮可重试。
+// ⚠️ 必须叫 hilInlineDecide：29-flow.js 已有全局 hilDecide（其 onclick 引用它），
+// 两个 mod 都是全局作用域 —— 同名会互相覆盖（后加载者赢），本批盘点时实测发现。
+async function hilInlineDecide(cid, approve){
   const okBtn = document.getElementById('hil-ok-' + cid), noBtn = document.getElementById('hil-no-' + cid);
   if(okBtn) okBtn.disabled = true;
   if(noBtn) noBtn.disabled = true;
@@ -378,7 +381,10 @@ async function hilDecide(cid, approve){
               {method:'POST', body:JSON.stringify({approve:!!approve, decided_by:'王工'})});
     procUpsert('hil_' + cid, approve ? {status:'done', statusText:'✓ 已批准 · 自动执行中'}
                                      : {status:'failed', statusText:'✗ 已拒绝 · 动作不生效'});
+    uxTrack('confirm_decided', {cid, approve: !!approve});   // §11 埋点：闸门处置（分子）
     if(window.toast && toast.success) toast.success(approve ? '已批准，确认单 #' + cid + ' 将自动执行' : '已拒绝确认单 #' + cid);
+    // 状态同步：执行监控面板开着的话，同步刷新其 HIL 队列（monitorExtra 自带 el 缺失保护）
+    if(typeof monitorExtra === 'function'){ try{ monitorExtra(); }catch(e){} }
   }catch(e){
     if(okBtn) okBtn.disabled = false;
     if(noBtn) noBtn.disabled = false;
@@ -792,6 +798,7 @@ function handleSSE(raw) {
     renderClarify(ev);   // P0-1 置信度三级决策：中置信 → 澄清条（可改选重发）
     // UX规范§8.4（2026-10-02）：需要用户行动的单元出现 = 唯一允许抢夺滚动的情况 ——
     // 澄清条插在消息体顶部，用户若停留在长输出中段会完全看不到它 → 这里强制滚到可见。
+    uxTrack('scroll_force', {reason: 'clarify'});   // §11 埋点：合法抢滚动（守护指标白名单 reason）
     const _cb = document.getElementById('clarify-bar');
     if(_cb && _cb.scrollIntoView){ try{ _cb.scrollIntoView({block:'center'}); }catch(e){ _cb.scrollIntoView(); } }
   } else if(evType === 'clarify_ask') {
@@ -800,10 +807,12 @@ function handleSSE(raw) {
     renderClarifyAsk(ev);   // 内容级澄清：信息不清晰 → 选择题确认（回答后续答）
   } else if(evType === 'done') {
     _forceFlushTokens();
+    uxTrack('task_done');   // §11 埋点：任务完成率分子
     finishStream(ev.data, aiBox);
   } else if(evType === 'error') {
     _forceFlushTokens();
     showStopBtn(false); _streaming = false;
+    uxTrack('task_error', {message: String(ev.message||'').slice(0,120)});   // §11 埋点：失败分母 + 失败类别
     // V2.6：中断也收口（汇总条切「已中断」，不停留"执行中"）
     if(typeof procMarkStopped === 'function') procMarkStopped();
     else {
@@ -995,6 +1004,7 @@ function renderClarifyAsk(ev, host){
   const qs = ev.questions || [];
   if(!qs.length) return;
   if(bodyEl.querySelector('.clarify-inline-note')) return;
+  uxTrack('clarify_shown');   // §11 埋点：澄清命中率分母（去重后才计，同卡不重复计数）
   const note = document.createElement('div');
   note.className = 'clarify-inline-note';
   note.innerHTML = `❓ AI 发起了 <b>${qs.length}</b> 项确认（${esc(String(ev.title || '需要确认建模信息')).replace(/❓\s*/,'')}）—— 请在<b>输入框上方</b>的确认卡中作答，或在输入框直接补充。`;
@@ -1033,6 +1043,7 @@ async function clarifyAnswerSend(){
     const r = await api('/api/conversations/' + currentConvId + '/clarify-answer', {method:'POST', body:JSON.stringify({answers, note})});
     if(r && r.error){ toast(r.error); if(btn){ btn.disabled=false; btn.textContent='✉ 发送补充信息'; } return; }
     // 2026-09-29（五轮反馈2）：卡已挂 dock，setPendingClarify(null) 会直接撤卡 → 反馈走 toast
+    uxTrack('clarify_answered');   // §11 埋点：澄清命中率分子
     toast('✓ 已提交，正在继续…');
     setPendingClarify(null);   // 2026-09-25：挂起已由后端清空 → 前端同步（撤掉输入框上方确认卡）
     sendResume(r.resume_text);
@@ -1043,6 +1054,7 @@ function clarifySkipSend(){
   const card = document.getElementById('clarify-ask') || document.querySelector('.clarify-ask-card');
   if(!card) return;
   // 2026-09-29（五轮反馈2）：卡已挂 dock，setPendingClarify(null) 会直接撤卡 → 反馈走 toast
+  uxTrack('clarify_skipped');   // §11 埋点：跳过不算命中（区别于 answered）
   toast('已跳过澄清，按现有信息继续…');
   setPendingClarify(null);
   sendResume('【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。');

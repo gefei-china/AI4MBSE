@@ -323,6 +323,7 @@ function showStopBtn(on){
 function stopStream(){
   if(!_streaming) return;
   _stoppedManually = true;
+  uxTrack('interrupt');   // §11 埋点：主动中断率分子（15–25% 健康区间）
   if(_streamAbort) _streamAbort.abort();
   toast('已请求停止生成');
 }
