@@ -33,18 +33,24 @@ def read(p):
 sys.path.insert(0, str(REPO))
 from core import config as cfg  # noqa: E402
 
+# 与 DEFAULT_CONFIG.rag **当前**值对齐（P1-4 起 rag 段扩为「四层漏斗」：
+#   recall_k → top_k → rerank_max_candidates → inject_k，与前端 funnel 簇一致）。
+# ⚠️ 改 DEFAULT_CONFIG 默认值时**必须同步这里**，否则 A1 会红（这是有意的耦合）。
+# 注：rag.py 内的**硬编码兜底**（route_threshold 0.75 / top_k 4）仍早于本表，
+#     属既有不一致（仅影响「配置文件缺失」场景），已登记遗留，未在本批改。
 RAG_DEFAULTS = {
-    "route_threshold": 0.75, "top_k": 4, "fallback_top_k": 5, "rrf_k": 60,
+    "route_threshold": 0.7, "recall_k": 20, "top_k": 20, "inject_k": 3,
+    "fallback_top_k": 5, "rrf_k": 60,
     "hyde_enabled": True, "hyde_weight": 0.05,
     "w_coverage": 0.50, "w_relations": 0.30, "w_typing": 0.20,
     "confidence_high": 0.70, "confidence_mid": 0.45,
     # P1-22（2026-10-02）：rerank_enabled 默认由 True 改为 **False** —— 官方评测 A/B 实测
     # 证明两级 LLM 重排「召回零提升（recall@3/@5 开与关完全相同）、ndcg 仅 +0.002，
     # 却慢 7 倍、每轮多 ~2585 tokens 且缓存命中恒 0」。旋钮保留，置 true 可重开。
-    "rerank_enabled": False, "rerank_max_candidates": 8,
+    "rerank_enabled": False, "rerank_max_candidates": 10,
 }
 missing = [k for k, v in RAG_DEFAULTS.items() if cfg.DEFAULT_CONFIG.get("rag", {}).get(k) != v]
-check("A1 DEFAULT_CONFIG.rag 13 键默认值", not missing, f"缺失/不符: {missing}")
+check("A1 DEFAULT_CONFIG.rag 15 键默认值（四层漏斗口径）", not missing, f"缺失/不符: {missing}")
 
 schema_rag = cfg.CONFIG_SCHEMA.get("rag", {})
 type_bad = [k for k, t in RAG_DEFAULTS.items()
@@ -69,15 +75,21 @@ B = [
     ("B8 ke.py 配置读取块存在", all(s in ke_py for s in (
         '_cfg.get("rag", "rrf_k", 60)', '_cfg.get("rag", "hyde_enabled", True)',
         '_cfg.get("rag", "hyde_weight", 0.05)', '_cfg.get("rag", "confidence_high", 0.70)',
-        '_cfg.get("rag", "confidence_mid", 0.45)', '_cfg.get("rag", "rerank_max_candidates", 8)'))),
+        '_cfg.get("rag", "confidence_mid", 0.45)', '_cfg.get("rag", "rerank_max_candidates", 10)'))),
     ("B9 ke.py HyDE 受开关门控", "if _hyde_on and hyde_cand:" in ke_py),
     ("B10 ke.py RRF 常数传配置", "k=_rrf_k" in ke_py),
     ("B11 ke.py HyDE 权重用配置", "hyde_scores.get(cid, 0.0) * _hyde_w" in ke_py),
     ("B12 ke.py 置信等级用配置分界", '_ref >= _conf_high' in ke_py and '_ref >= _conf_mid' in ke_py),
     ("B13 ke.py 重排候选数传配置", "max_candidates=_rerank_cand" in ke_py),
     ("B14 rerank 开关仍读 rag.rerank_enabled", rr_py.count('_cfg.get("rag", "rerank_enabled", True)') == 1),
-    ("B15 前端 rag 分组存在", "id: 'rag'" in js and "检索与 RAG" in js),
-    ("B16 前端 13 个 rag 字段", js.count("sec:'rag'") == 13),
+    # 前端已改版为「参数簇（CTX_CFG_CLUSTERS）」：rag 四层漏斗由 **funnel 簇**承载，
+    # 不再有 id:'rag' 的簇（rag 字段改用 sec:'rag' 标记所属配置段）。故改为断言
+    # 「漏斗簇存在 + rag 段字段有承载」，保留原意图（前端能配置 rag 参数）。
+    ("B15 前端 rag 配置有承载（funnel 漏斗簇 + sec:'rag'）",
+     "检索漏斗分层" in js and "sec:'rag'" in js),
+    # P1-4 起前端暴露 15 个 rag 字段（原 13 + recall_k / inject_k 两个四层漏斗参数）。
+    # 新增 rag 字段需同步此数——故意用精确值，让「前端加了字段但配置/校验没跟上」暴露出来。
+    ("B16 前端 15 个 rag 字段", js.count("sec:'rag'") == 15),
     ("B17 前端字段键与 CONFIG_SCHEMA 对齐",
      all(f"key:'rag.{k}'" in js for k in RAG_DEFAULTS)),
 ]
