@@ -125,8 +125,15 @@ for lb in labels:
 print(f"  macro-F1 = {sum(f1s)/len(f1s):.3f}")
 
 _n_trap = sum(1 for *_, tg in rows if tg == "泛词陷阱")
-mac = (sum(1 for t, w, g, r, cf, tg in rows if tg == "泛词陷阱" and w == g) / _n_trap) if _n_trap else 0.0
-if _n_trap:      # 样本池来源的用例没有 tag（标签在库里），此时该子集指标无意义，不打印
-    print(f"  泛词陷阱子集准确率 = {mac:.3f}（这是本次报障的专项类别）")
-print("\n[RESULT]" + f'{{"accuracy": {acc:.4f}, "macro_f1": {sum(f1s)/len(f1s):.4f}, "generic_trap_acc": {mac:.4f}, "n": {len(rows)}}}')
+# ⚠️ 2026-10-02（评估时发现）：无样本时必须报 **null**，不能报 0.0 —— 否则 RESULT 里
+# `generic_trap_acc: 0.0000` 会被读成"泛词陷阱子集全部判错"（实际是"本次没有该类样本"）。
+# 本仓 P0-a 的纪律：**数据不足报 unknown/None，不许报 0**（假绿/假红同样有害）。
+_trap_acc = (sum(1 for t, w, g, r, cf, tg in rows if tg == "泛词陷阱" and w == g) / _n_trap) if _n_trap else None
+if _n_trap:
+    print(f"  泛词陷阱子集准确率 = {_trap_acc:.3f}（这是本次报障的专项类别）")
+else:
+    print("  泛词陷阱子集：本次 n=0（样本池来源的用例标签在库里，该子集无样本）→ 指标记 null，不参与解读")
+_trap_json = "null" if _trap_acc is None else "%.4f" % _trap_acc
+print("\n[RESULT]" + f'{{"accuracy": {acc:.4f}, "macro_f1": {sum(f1s)/len(f1s):.4f}, '
+                    f'"generic_trap_acc": {_trap_json}, "generic_trap_n": {_n_trap}, "n": {len(rows)}}}')
 sys.exit(0)
