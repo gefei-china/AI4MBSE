@@ -59,6 +59,23 @@ DEFAULT_CONFIG = {
         # 现场用法：想在不换模型的前提下放开输出上限 → 置 warn（或 off），并把
         # `refine.max_tokens` / `delegation.summary_max_tokens` 一并上调（否则那两个才是瓶颈）。
         "context_window_guard": "clamp",
+        # ── P0-a（2026-10-02）：流式 usage 采集 ────────────────────────────────────────
+        # 流式（前端主路径 `/chat/stream`）此前**完全不落 token 统计**（恒 pt=0/ct=0），
+        # 导致成本、截断观测、TokenCounter 三项在主路径上全失真。现在 `_stream_wrapped`
+        # 会**逐帧解析**（`llm.parse_stream_frame`）拿 usage 与 finish_reason。
+        # 本开关只管"要不要主动请求 usage 帧"：
+        #   false（默认）= 不主动加 `stream_options.include_usage`。**实测 DeepSeek 流式
+        #                  默认就发 usage 帧**，故默认即可拿到真实值，且对上游零侵入；
+        #   true          = 显式请求该字段（部分 OpenAI 兼容端点如百炼不带此帧时开启，
+        #                  代价是上游若不认该字段会返回 400 → 该次流式失败）。
+        "stream_include_usage": False,
+        # ── P0-a 顺带接线：重试与回退（`LLMClient._chat_with_retry` / `_chat_resilient`）──
+        # ⚠️ 这三项此前**只在代码里读、config 里没有定义** ⇒ `_cfg.get(..., default)`
+        # 恒回落调用点默认值，属"看着可配、其实写死"（与 2026-09-20 补 `refine` 组同族）。
+        # 补注册后才能在配置面板 / 系统配置文件里真正调（当前默认值 = 原调用点默认值，零行为漂移）。
+        "retry_times": 2,            # 真实调用失败后的重试次数（指数退避；流式恒不重试）
+        "retry_backoff_ms": 500,     # 首次重试退避毫秒（第 n 次 = backoff * 2^n）
+        "fallback_provider_id": 0,   # 主 provider 重试后仍失败时的备选 provider id（0=不启用）
     },
     "mcp": {
         "timeout": 15,           # MCP JSON-RPC 调用超时（秒）
@@ -99,7 +116,19 @@ DEFAULT_CONFIG = {
         "subtask_timeout_s": 600,        # P1-27：300→600（建模子任务实测 2~3 分钟，300s 余量太薄）
         # P0-7：agent_tasks 每会话保留的编排批次数（run_id 唯一化后防无界增长；只清终态旧批次）
         "keep_runs_per_conversation": 50,
-        "total_time_budget_s": 600,  # 单次编排全局时间预算（秒，超限终止剩余任务降级汇总）
+        # ── ⚠️ 2026-10-02（P0 配置审计）实测：本项是**死配置**，全仓零消费点 ──────────
+        # `grep -rn total_time_budget_s --include=*.py .` 只命中「本文件定义 + CONFIG_SCHEMA」
+        # 两处，**没有任何编排代码读它** ⇒ 原注释「超限终止剩余任务降级汇总」是**未兑现的承诺**
+        # （配置谎言：用户以为有全局兜底，实际没有）。
+        # 处置（刻意**不接线、不删除**）：
+        #   · 不接线 —— 实测真实编排耗时可达 849s（> 此处 600s），一旦接线会**中断正常长任务**，
+        #     属于"为了让配置看起来生效而破坏功能"，与"先保证功能跑通"相悖；
+        #   · 不删除 —— 键与 schema 保留，现场若确有需求可接线；删除反而会让已有配置文件里的
+        #     该键变成"静默失效的未知项"。
+        # 现状的等价兜底是逐子任务的 `subtask_timeout_s`（600s/个）+ `subtask_idle_timeout_s`
+        # （240s 无产出），它们**都在真实生效**（P0-7 实测）。
+        # 要真正启用全局预算：在编排子任务调度处加 deadline 检查，并同时把默认值改到 > 3600。
+        "total_time_budget_s": 600,  # ⚠️ 当前**未接线**（死配置），见上方说明；改它不会影响行为
         "max_depth": 3,          # 委派递归深度上限
         # ── 汇总环节输入预算（2026-09-20 新增；此前是 planner.py:54 硬编码 `[:500]`）──────
         # 背景（会话 368 实测）：汇总 LLM 每个子任务只看得到**前 500 字符**，而交付物实际
@@ -684,6 +713,10 @@ CONFIG_SCHEMA = {
         "deepseek_api_key": {"type": "secret", "desc": "DeepSeek API key（无 key 时注入预置 provider）"},
         "qwen_api_key":     {"type": "secret", "desc": "Qwen API key"},
         "context_window_guard": {"type": "str", "desc": "context_window 守卫：clamp(默认，超窗截断+留痕)/warn(只告警不截断，用于放开「假天花板」)/off(不介入)"},
+        "stream_include_usage": {"type": "bool", "desc": "流式请求显式带 stream_options.include_usage（默认关；DeepSeek 流式默认就发 usage 帧，仅部分兼容端点需要打开）"},
+        "retry_times":          {"type": "int", "desc": "真实调用失败重试次数（指数退避；流式恒不重试）"},
+        "retry_backoff_ms":     {"type": "int", "desc": "首次重试退避毫秒（第 n 次 = 该值 × 2^n）"},
+        "fallback_provider_id": {"type": "int", "desc": "主 provider 重试后仍失败时的备选 provider id（0=不启用）"},
     },
     "mcp": {
         "timeout":      {"type": "int", "desc": "MCP JSON-RPC 调用超时（秒）"},
@@ -707,7 +740,7 @@ CONFIG_SCHEMA = {
         "subtask_idle_timeout_s": {"type": "int", "desc": "流式编排：子任务无产出判超时（秒，默认 150）"},
         "subtask_timeout_s":      {"type": "int", "desc": "流式编排：子任务 wall-clock 硬上限（秒，默认 300）"},
         "keep_runs_per_conversation": {"type": "int", "desc": "agent_tasks 每会话保留批次数（默认 50）"},
-        "total_time_budget_s": {"type": "int", "desc": "单次编排全局时间预算（秒）"},
+        "total_time_budget_s": {"type": "int", "desc": "⚠️ 未接线（死配置，2026-10-02 实测全仓零消费点）：当前改此值不影响任何行为；真实兜底是 subtask_timeout_s / subtask_idle_timeout_s"},
         "max_depth":           {"type": "int", "desc": "委派递归深度上限"},
         "summary_item_max_chars":     {"type": "int", "desc": "汇总输入：单个子任务交付物上限（字符，默认 1600）"},
         "summary_total_chars":        {"type": "int", "desc": "汇总输入：本轮合计预算（字符，按子任务数均分，默认 12000）"},

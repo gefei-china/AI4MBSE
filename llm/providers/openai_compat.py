@@ -169,9 +169,35 @@ class OpenAICompatProvider(BaseLLM):
         return data
 
     def _stream_api(self, url, payload, headers, provider_name="", model_name="", t0=None):
+        """SSE 流式调用：逐行透传 `data: ...` 帧。
+
+        P0-a（2026-10-02）两处改动，都是"把静默失败暴露出来"：
+        ① **非 200 立刻抛错**。此前不分状态码直接 `iter_lines()` —— 上游返回 400
+           （余额不足 / 参数错 / 鉴权失败）时错误正文不带 `data:` 前缀 ⇒ **零帧输出且不抛异常**
+           ⇒ 生成器"正常结束" ⇒ 上层落一条**成功**记录、用户看到**空回复**。
+           这正是「表面成功、实际为空」的静默形态（P1-26 的 402 就走过这条路）。
+        ② `stream_options.include_usage` 改为**可配置**（`llm.stream_include_usage`，默认关）。
+           实测 DeepSeek 流式**默认就发 usage 帧**，故默认无需该字段；部分 OpenAI 兼容端点
+           （如百炼）不带则只能拿字符估算值 —— 需要精确 token 时打开此开关即可。
+        """
         import httpx
         try:
+            from core import config as _cfg
+            _include_usage = bool(_cfg.as_bool("llm", "stream_include_usage", False))
+        except Exception:
+            _include_usage = False
+        if _include_usage:
+            payload = dict(payload)
+            payload["stream_options"] = {"include_usage": True}
+        try:
             with httpx.stream("POST", url, json=payload, headers=headers, timeout=120) as resp:
+                if resp.status_code != 200:
+                    _body = ""
+                    try:
+                        _body = resp.read().decode("utf-8", "ignore")[:300]
+                    except Exception:
+                        pass
+                    raise ValueError(f"LLM 流式 API {resp.status_code}: {_body}")
                 for line in resp.iter_lines():
                     if line.startswith("data: "):
                         yield line + "\n\n"

@@ -21,7 +21,7 @@ from .providers import (  # noqa: F401  （注册副作用）
 
 __all__ = ["BaseLLM", "ProviderRegistry", "MockLLM", "OpenAICompatProvider",
            "llm_client", "llm_router", "get_llm",
-           "resolve_provider_cfg", "provider_supports_vision"]
+           "resolve_provider_cfg", "provider_supports_vision", "parse_stream_frame"]
 
 
 def _load_provider_cfg(conn, provider_id):
@@ -102,6 +102,55 @@ def provider_supports_vision(cfg) -> bool:
         return any(VISION_TAG_RE.search(str(t)) for t in (tags or []))
     except Exception:
         return False
+
+
+# ── P0-a（2026-10-02）：流式帧解析 —— usage / finish_reason 采集的唯一真源 ──────────
+# 背景：`_stream_api` 此前只做 SSE **透传**，`_stream_wrapped` 结束时以 `{"usage": {}}` 落库
+# ⇒ **流式（= 前端主路径 `/chat/stream`）在 llm_usage_stats 里恒为 pt=0 / ct=0 / finish=''**。
+# 三重后果（都不是"少个字段"这么轻）：
+#   ① 成本统计：主路径全部记 0，`estimated_cost` 只反映少数非流式调用；
+#   ② 截断观测：P1-27 新补的 `finish_reason` 列在主路径上**永远取不到值**
+#      ⇒「回复被截断 / 正文为空」这个本批最大的收益点，在主路径上等于没接；
+#   ③ token 记账：`total_tokens=0` 流入 TokenCounter 与子任务 meta。
+# 实测（`tmp/probe_health/probe_stream_usage.py`，DeepSeek 官方端点 api.deepseek.com）：
+#   · 流式**默认**就发 usage 帧（不带 `stream_options.include_usage` 也有；带上同样 200）；
+#   · 该帧含 `completion_tokens_details.reasoning_tokens` 与
+#     `prompt_cache_hit_tokens / prompt_cache_miss_tokens` —— 与 P1-20/P1-27 落库的列一一对应；
+#   · `choices[0].finish_reason` 在结束帧可取（'stop' / 'length'）。
+# ⇒ 本解析**零额外请求**即可拿到真实值，不必为"能观测"付任何成本。
+def parse_stream_frame(raw) -> dict:
+    """解析一帧 SSE 文本 → `{"usage": {...}, "finish_reason": str, "text_chars": int}`。
+
+    输入形如 `_stream_api` yield 的 `data: {...}\\n\\n`。非 data 帧 / `[DONE]` / 任何异常 → `{}`
+    （**绝不抛**：解析失败不该影响正在进行的流式回复）。
+    `text_chars` = 本帧 delta 的 `(reasoning_content + content)` 字符数，供无 usage 帧时兜底估算。
+    """
+    out: dict = {}
+    try:
+        s = str(raw or "").strip()
+        if not s.startswith("data:"):
+            return out
+        body = s[5:].strip()
+        if not body or body == "[DONE]":
+            return out
+        j = json.loads(body)
+        if isinstance(j.get("usage"), dict) and j["usage"]:
+            out["usage"] = j["usage"]
+        n = 0
+        for ch in (j.get("choices") or []):
+            if not isinstance(ch, dict):
+                continue
+            fr = ch.get("finish_reason")
+            if fr:
+                out["finish_reason"] = str(fr)
+            d = ch.get("delta") or ch.get("message") or {}
+            if isinstance(d, dict):
+                n += len(str(d.get("reasoning_content") or "")) + len(str(d.get("content") or ""))
+        if n:
+            out["text_chars"] = n
+    except Exception:
+        return {}
+    return out
 
 
 # ── P1-3：延迟实例化 + 缓存（实例按 provider_id/默认 隔离缓存）──
@@ -457,17 +506,108 @@ class LLMClient:
             fb.get("name", "-"), fb.get("model_name", "-"))
         return resp, n, fb
 
+    @staticmethod
+    def _stream_resp(usage, finish, chars) -> dict:
+        """把流式累积结果包装成 `_record_usage` 认识的响应形态（P0-a）。
+
+        · 有 usage 帧 → 原样透传（真实 prompt/completion/reasoning/缓存命中全部落库）；
+        · 无 usage 帧 → 按 `(reasoning_content + content) 字符数 // 2` 兜底估算
+          `completion_tokens`，口径与 `_record_usage` 内的既有估算一致。
+          ⚠️ **必须含 reasoning**：实测 reasoning 占 completion 的 79~92%（P1-26 / P1-27），
+          只按正文估会把 completion 严重低估（实测真实 ct=25，而正文仅 1 字符）。
+        """
+        u = dict(usage or {})
+        if not u.get("completion_tokens"):
+            u["completion_tokens"] = max(int(chars) // 2, 0)
+        return {"usage": u,
+                "choices": [{"message": {"content": ""}, "finish_reason": finish or ""}]}
+
+    @staticmethod
+    def _warn_if_truncated(finish, usage, provider_name, model_name, intent, chars) -> None:
+        """流式输出被截断时**当场留痕**（P0-a）。
+
+        此前这类问题只能靠"用户反馈回复不完整"再回头翻数据反推；现在发生时即入日志。
+        两档（都只在 `finish_reason == 'length'` 时触发）：
+          · reasoning 占 completion ≥90% ⇒ **正文被推理吃光**（用户拿到的基本是空回复）
+            —— 这正是 P1-26 实测 8 次空输出的形态（reasoning=8192 / content=0 / length）；
+          · 其余 ⇒ 一般性截断（回复不完整）。
+        """
+        if str(finish or "") != "length":
+            return
+        try:
+            _u = usage or {}
+            ct = int(_u.get("completion_tokens") or 0)
+            rt = int((_u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
+            share = (rt / ct) if ct else 0.0
+            import logging as _lg
+            if share >= 0.9:
+                _lg.getLogger("mbse.llm").warning(
+                    "[stream] ⚠️ 正文被推理吃光：intent=%s provider=%s model=%s "
+                    "completion=%s reasoning=%s(%.0f%%) finish=length 累计字符=%s "
+                    "→ 用户可能拿到空回复；请提高该环节 max_tokens 或改用非推理模型",
+                    intent, provider_name, model_name, ct, rt, share * 100, chars)
+            else:
+                _lg.getLogger("mbse.llm").warning(
+                    "[stream] 输出被 max_tokens 截断：intent=%s provider=%s model=%s "
+                    "completion=%s reasoning=%s(%.0f%%) finish=length",
+                    intent, provider_name, model_name, ct, rt, share * 100)
+        except Exception:
+            pass
+
     def _stream_wrapped(self, gen, provider, provider_name, model_name, t0, route_reason, intent):
-        """流式生成器包装：透传 SSE 行 + 结束时落 usage 统计（M7 可观测）。"""
+        """流式生成器包装：透传 SSE 行 + 结束时落 usage 统计（M7 可观测）。
+
+        P0-a（2026-10-02）：**逐帧解析**（`parse_stream_frame`）累积 usage 与 finish_reason，
+        结束时落**真实值**；截断当场留痕。此前只透传、以空 dict 落库 ⇒ 流式记录恒为 0。
+        · 解析在 `yield` **之前**（先记账再透传）：保证"已收到的帧"与"已记账的帧"恒等，
+          否则最后一帧会在客户端中断时丢失（实测 usage 帧恰为倒数第二帧，直接丢 pt/ct）。
+        · 中断（客户端断开）也记账 —— `GeneratorExit` 是 `BaseException`，须单独接。
+        """
+        _usage: dict = {}
+        _finish = ""
+        _chars = 0
         try:
             for ev in gen:
+                # ⚠️ 解析必须在 `yield` **之前**（实测踩过）：若放在 yield 之后，最后一帧
+                #    "已发给客户端、但还没解析"就遇到客户端 close⇒ 该帧的 usage 永久丢失
+                #    （实测：usage 帧正好是倒数第二帧 ⇒ 中断时 pt/ct 全丢，只剩正文估算值）。
+                #    顺序改为"先记账再透传"后，"已收到的帧"与"已记账的帧"恒等。
+                try:
+                    _f = parse_stream_frame(ev)
+                except Exception:
+                    _f = {}
+                if _f.get("usage"):
+                    _usage = _f["usage"]                 # 末次非空覆盖（不依赖帧序）
+                if _f.get("finish_reason"):
+                    _finish = _f["finish_reason"]
+                _chars += int(_f.get("text_chars") or 0)
                 yield ev
             self.stats["real"] += 1
             self.stats["last_provider"] = provider_name
             self.stats["last_used_mock"] = False
             self.stats["last_latency_ms"] = int((time.time() - t0) * 1000)
-            self._record_usage(provider, {"usage": {}}, False, intent,
+            self._record_usage(provider, self._stream_resp(_usage, _finish, _chars), False, intent,
                                int((time.time() - t0) * 1000))
+            self._warn_if_truncated(_finish, _usage, provider_name, model_name, intent, _chars)
+        except GeneratorExit:
+            # 客户端提前断开（用户点「停止」/ 关掉页面）——**高频且此前完全不记账**。
+            # `GeneratorExit` 继承 `BaseException` 而非 `Exception` ⇒ 下方 `except Exception`
+            # **抓不到它** ⇒ 这次调用既不落 success 也不落 fail，而已产生的 token 已经真实
+            # 计费 ⇒ 成本被系统性低估（长回复被中断的场景尤其明显）。
+            # ⚠️ 此处**不能再 yield**（生成器正在关闭，yield 会抛 RuntimeError）。
+            # 用 used_mock=False：它确实是真实调用（只是没跑完），要计入成本。
+            try:
+                self._record_usage(provider, self._stream_resp(_usage, _finish, _chars), False,
+                                   intent, int((time.time() - t0) * 1000))
+                import logging as _lg
+                _lg.getLogger("mbse.llm").warning(
+                    "[stream] 客户端提前断开（已中断，usage 按已收到的部分记账）："
+                    "provider=%s model=%s intent=%s 累计字符=%s prompt=%s completion=%s",
+                    provider_name, model_name, intent, _chars,
+                    (_usage or {}).get("prompt_tokens"), (_usage or {}).get("completion_tokens"))
+            except Exception:
+                pass
+            raise
         except Exception as e:
             # 2026-09-17 S4：流式路径是**第三个静默降级点** —— 原先只累加 stats["mock"]，
             # 既不落 llm_usage_stats 也不打日志，"流式调用失败"在系统里完全不可见。
@@ -485,7 +625,9 @@ class LLMClient:
             except Exception:
                 pass
             try:
-                self._record_usage(provider, {"usage": {}}, True, intent,
+                # P0-a：异常时已累积到的 usage/finish **照样落库**（比落空值准；
+                # 典型场景是客户端提前断开 —— 前面的 token 已经真实产生并计费了）。
+                self._record_usage(provider, self._stream_resp(_usage, _finish, _chars), True, intent,
                                    int((time.time() - t0) * 1000))
             except Exception:
                 pass

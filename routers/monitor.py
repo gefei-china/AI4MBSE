@@ -58,12 +58,21 @@ def monitor_dashboard(days: int = 7, conn=Depends(db_session)):
     # ── 最近告警（未确认优先）──
     recent_alerts = _rows(conn, """SELECT * FROM alert_events
         ORDER BY (status='open') DESC, id DESC LIMIT 8""")
+    # ── P0-a（2026-10-02）：LLM 调用健康度 —— 各 intent 截断率 / 推理占比 / 配置契约 ──
+    # 口径唯一真源在 `core/llm_health.py`；此处**只透传，不重算**（禁止第二份 SQL）。
+    try:
+        from core.llm_health import health_report
+        llm_health = health_report(conn, days=days)
+    except Exception as e:                      # 看板不能因巡检失败而整体 500
+        llm_health = {"status": "unknown", "error": str(e)[:200], "intents": [],
+                      "summary": {}, "contract": {"ok": True, "violations": [], "checked": 0}}
     return {
         "days": days,
         "runs": {"total": total, "success": ok, "failed": err, "success_rate": round(ok * 100 / total, 1) if total else 0,
                  "avg_latency_ms": avg_ms},
         "llm": {"calls": len(usage), "mock_rate": round(mock_n * 100 / len(usage), 1) if usage else 0,
                 "total_tokens": total_tok, "estimated_cost": cost},
+        "llm_health": llm_health,
         "system": proc,
         "subs_active": active_subs, "open_alerts": open_alerts,
         "trend": trend,

@@ -1181,7 +1181,11 @@ class FlowNodesMixin:
             # ⚠️ 上限**不能太小**：思考模型的 reasoning 与正文共享额度，不够就会把 JSON 截断
             #   （见 `_eval_max_tokens` 与 `_parse_eval_json` 的取证）。
             resp = llm_client.chat([{"role": "user", "content": prompt}],
-                                   max_tokens=FlowNodesMixin._eval_max_tokens())
+                                   max_tokens=FlowNodesMixin._eval_max_tokens(),
+                                   # P0-a（2026-10-02）：补 intent 标注。此前**没传** ⇒ 评审调用与
+                                   # 主对话共用 intent='' 桶 ⇒ 按 intent 聚合时两者混在一起，
+                                   # "到底是主对话被截断、还是评审被截断"无法归因（P1-27 吃过这个亏）。
+                                   _intent="plan_eval")
             _ch = (resp.get("choices") or [{}])[0]
             msg = _ch.get("message", {}) or {}
             raw = msg.get("content") or ""
