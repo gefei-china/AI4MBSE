@@ -386,7 +386,10 @@ if "neg" in results:
             "n": len(ok),
             "route_ok": round(sum(1 for r in ok if r["route_ok"]) / len(ok), 3),
             "empty_hit_rate": round(sum(1 for r in ok if r["n_hits"] == 0) / len(ok), 3),
-            "false_graph_confident": sum(1 for r in ok if r["false_graph_confident"]),
+            # 2026-10-02：口径统一为比率（此前是计数，与相邻的 route_ok/empty_hit_rate
+            # 比率口径混排，实测被误读成"全部负例都高置信走图谱"——实际 8 例中 1 例）
+            "false_graph_confident": round(
+                sum(1 for r in ok if r["false_graph_confident"]) / len(ok), 3),
             "latency_p50_ms": int(statistics.median(r["latency_ms"] for r in ok)),
         }
 
