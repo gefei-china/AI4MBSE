@@ -18,6 +18,7 @@
     vs 主路径 `_stream_orchestrated_flow`）。
 """
 from .common import *
+from . import tool_offload as _tool_offload  # P1-4：大工具结果 offload（补模型侧封顶缺口）
 
 
 class ExecuteMixin:
@@ -335,7 +336,12 @@ class ExecuteMixin:
                         _t_content = {"ok": result.get("ok"), "result": result.get("result", ""),
                                       "hint": "该工具结果与当前任务弱相关（或未命中实质内容），请直接基于已有信息回答，不要再调用其他工具。"}
                     else:
-                        _t_content = {"ok": result.get("ok"), "result": result.get("result", "")}
+                        # P1-4（2026-10-02）：补上模型侧封顶——此前此处**全量回填**（无 _TOOL_MODEL_CAP），
+                        # 长结果被后续每轮重发；现与 stream 同一 helper：>cap 自动 offload + 引用块
+                        _t_content, _offloaded = _tool_offload.model_side_content(
+                            tname, result, getattr(self, "_tool_conv_ctx", 0), cap=_TOOL_MODEL_CAP)
+                        if _offloaded:
+                            _tool_offload.ensure_fetch_tool(tools_def, getattr(self, "_tool_whitelist", None))
                     tool_results.append({
                         "tool_call_id": tc.get("id", ""),
                         "role": "tool",

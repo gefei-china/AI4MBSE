@@ -13,6 +13,7 @@
     两条路径只收集块内容 —— 改 prompt 结构时**不要再在本文件内联拼接**（有守护脚本拦截）。
 """
 from .common import *
+from . import tool_offload as _tool_offload  # P1-4：大工具结果 offload（引用块+按需重读）
 import queue as _queue  # 编排子任务事件的**实时**转发通道（见 _stream_orchestrated_flow 的 _evq）
 
 
@@ -1524,11 +1525,12 @@ class StreamMixin:
                     if _weak:
                         weak_count += 1
                     # 2026-09-17 S3：回填给模型的结果单独封顶（此前用未截断的原始结果，长结果被后续每轮重发）
+                    # P1-4（2026-10-02）：封顶升级为 offload——全文落库，模型侧换引用块（可寻址召回）
                     _t_model = str(result.get("result") or "")
-                    _t_content = {"ok": result.get("ok"), "result": _t_model[:_TOOL_MODEL_CAP]}
-                    if len(_t_model) > _TOOL_MODEL_CAP:
-                        _t_content["truncated"] = True
-                        _t_content["note"] = "工具结果过长已截断，请基于以上内容作答"
+                    _t_content, _offloaded = _tool_offload.model_side_content(
+                        tname, result, getattr(self, "_tool_conv_ctx", 0), cap=_TOOL_MODEL_CAP)
+                    if _offloaded:
+                        _tool_offload.ensure_fetch_tool(tools_def, getattr(self, "_tool_whitelist", None))
                     if _weak:
                         # 弱相关引导：明确告知 LLM 结果不可用，禁止继续调用工具连环试探
                         _t_content["hint"] = "该工具结果与当前任务弱相关（或未命中实质内容），请直接基于已有信息回答，不要再调用其他工具。"

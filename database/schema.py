@@ -65,6 +65,7 @@ from .migrations import (
     _migrate_intent_samples,
     _migrate_dashboard_snapshots,      # 2026-09-26 意图样本池（新增迁移须在此处**显式导入**，否则 NameError）
     _migrate_drop_agent_tools_params,  # 2026-09-30 移除 agent_tools.params 废列（全仓零消费点）
+    _migrate_tool_result_offloads,  # 2026-10-02 工具结果 offload 表（P1-4 Tier1 可寻址召回）
 )
 from .seeds import (
     _seed,
@@ -1145,6 +1146,8 @@ def init_db():
     _migrate_dashboard_snapshots(conn)
     # ── 2026-09-30 移除 agent_tools.params 废列（只有写入无读取，UI 从不传；绑定关系保留）──
     _migrate_drop_agent_tools_params(conn)
+    # ── P1-4（2026-10-02）工具结果 offload 表（Tier1 大响应可寻址召回）──
+    _migrate_tool_result_offloads(conn)
     # ── P0-④（2026-09-11）时态管理：双时态列 + 索引 + 视图 + W3C Time 对齐表 ──
     _migrate_entity_temporal(conn)
     # ── P1-①（2026-09-11）SWRL 规则管理表：swrl_rules + inferred_facts（推理产出暂存）──

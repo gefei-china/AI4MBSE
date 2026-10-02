@@ -371,3 +371,20 @@ def _migrate_drop_agent_tools_params(conn):
     except Exception as e:
         conn.rollback()
         print(f"[init_db] 迁移: agent_tools.params 移除失败（沿用旧结构）: {e}")
+
+def _migrate_tool_result_offloads(conn):
+    """P1-4（2026-10-02）工具结果 offload 表：大工具响应全文落库，prompt 内只放引用块。
+
+    Tier1 offload（评估报告 §2.1 P1）：>3000 字符的模型侧工具结果不再"截断即丢失"——
+    全文入本表，模型侧注入引用块（头部摘要 + offload id），可调 tool_result_fetch 按 id
+    重读全文（可寻址召回，非破坏性）。幂等：CREATE TABLE IF NOT EXISTS。
+    """
+    conn.execute("""CREATE TABLE IF NOT EXISTS tool_result_offloads (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER DEFAULT 0,
+        tool_name TEXT DEFAULT '',
+        content TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_tro_conv ON tool_result_offloads(conversation_id)")
+    print("[init_db] 迁移: 工具结果 offload 表 tool_result_offloads 已就绪（幂等）")

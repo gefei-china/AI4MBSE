@@ -296,6 +296,18 @@ class ToolMixin:
                           "result": f"工具「{name}」不在本次子任务授予的工具白名单内（最小权限，Worker ⊆ Supervisor），已拒绝执行"}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
+            # P1-4（2026-10-02）：工具结果 offload 重读——读类、无副作用、进程内直通。
+            # 放行保障：offload 发生时 ensure_fetch_tool 已把本工具追加进 _tool_whitelist
+            # 与本轮 tools_def；白名单未启用时自然放行。
+            if name == "tool_result_fetch":
+                _oid = int((arguments or {}).get("id") or 0)
+                from agent.pipeline_parts import tool_offload as _to
+                _off = _to.fetch_offload(_oid)
+                result = ({"ok": True, "result": _off[:20000]}
+                          if _off else
+                          {"ok": False, "result": f"offload #{_oid} 不存在（可能 id 无效——以工具结果提示中的编号为准）"})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
             # 确定性 Hooks：PreToolUse 强制校验（对齐 Claude Code，不依赖 LLM 概率；故障静默放行）
             # 优先级：白名单拒绝（最小权限）→ 本钩子（block/require_confirm/warn）→ HIL L2 → destructive → 执行
             self._hook_warn = ""
