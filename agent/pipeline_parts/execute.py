@@ -241,7 +241,13 @@ class ExecuteMixin:
         role_block = self._build_role_block(agent_def)
         system_prompt = (
             f"{role_block}\n"
-            f"当前意图：{intent}（Agent: {agent_def.name}，HIL 人机协作级别：{hil_level}）。\n"
+            # P1-25：「当前意图」行由**前缀第 2 位**下沉到动态区最前。
+            # 依据：实测多轮会话**相邻两轮意图变化率 56.4%**（约每 1.8 轮变一次），
+            # 而该行原本紧跟 role_block ⇒ 一半以上的请求缓存前缀在第 2 个块就断，
+            # 其后 9 个静态块（工具/skill/名册/模板/建模要求/本体/边界/输出/引用规则）
+            # 内容不变却全部无法命中。下沉后前缀 = role_block + 静态块，长度大幅增加。
+            # ⚠️ 风险（须 A/B 验证）：意图是核心上下文，从 system 开头移到中后部可能因
+            #   首位效应弱化其引导作用 → 判据为 eval_intent_routing accuracy 不低于基线。
             f"可用工具：{', '.join(agent_def.tools) or '无（纯问答直出）'}。\n"
             f"{self._build_skill_prompt(intent, user_input, user)}"
             + (skill_block if skill_block else "")
@@ -262,6 +268,8 @@ class ExecuteMixin:
             + self._build_output_rules()
             + self._build_citation_rules()
             # ── 以下为动态区（每轮变化，放尾部，不污染可缓存前缀）──
+            # P1-25 下沉至此：意图信息仍在「记忆/检索」之前，避免沉得太深。
+            + f"当前意图：{intent}（Agent: {agent_def.name}，HIL 人机协作级别：{hil_level}）。\n"
             # P0-3：长期记忆注入（跨会话经验，仅供对齐）
             + f"{self._build_memory_hint(user_input, intent, user)}"
             # P0：建模上下文注入（当前模型状态工作记忆，MBSE 特有）
