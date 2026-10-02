@@ -296,7 +296,13 @@ class IntentRouter:
             return ""
 
     def _cache_get(self, text: str, fp: str):
-        """意图级缓存查询（P0-3）：指纹匹配 + query_hash 命中 → (intent, route, confidence)；未命中 None。"""
+        """意图级缓存查询（P0-3）：指纹匹配 + query_hash 命中 → (intent, route, confidence)；未命中 None。
+
+        P1-31（2026-10-02）：开关在此**集中把关**（`intent.cache_enabled`，默认 False）——
+        关时直接返回、**不查库**（省一次 DB 往返）；任何调用方都自动受约束，不必各自判断。
+        """
+        if not self._cfg_get("cache_enabled", False):
+            return None
         if not text or not fp:
             return None
         try:
@@ -330,6 +336,10 @@ class IntentRouter:
         修法：两侧**各自**在函数内部 lower —— 口径自足，不依赖调用方约定；
         `query` 列仍存**原文**，保留可观测性（它是展示字段，不参与匹配）。
         """
+        # P1-31（2026-10-02）：开关集中把关（同 `_cache_get`）；关时**不落库**，
+        #   避免"写了但永不读"的纯开销（那正是当初 intent_cache 6 行写入 / hit_count 恒 0 的形态）。
+        if not self._cfg_get("cache_enabled", False):
+            return
         if not text or not fp or confidence < 0.7:
             return
         try:
@@ -427,6 +437,10 @@ class IntentRouter:
         if self._is_explain_ask(t):
             return self._done("knowledge_qa", "explain", 0.80, text, fp)
         # P0-3：意图级缓存（L1 命中直接返回，省重复规则/语义/LLM 全链路）
+        # P1-31（2026-10-02）：**默认停用**，开关在 `_cache_get`/`_cache_set` 内部集中把关
+        #   （`intent.cache_enabled=False`）。依据：真库 messages 近 7 天仅 18 条用户消息、
+        #   重复率 22% ⇒ 潜在命中约 17 次/月；而 intent_detect 的 1605 次/7 天 >95% 是
+        #   **评测脚本**刷的（09-30 07–08 点突发 900 次），不是生产流量。详见 config.py 该键。
         cached = self._cache_get(t, fp) if fp else None
         if cached:
             intent, route, conf = cached
@@ -717,6 +731,7 @@ class IntentRouter:
                                        if _alt else None),
                            "used_history": bool(used_history),
                            "confirmed": bool(confirmed)}
+        # P1-31（2026-10-02）：写入侧同受开关约束（开关在 `_cache_set` 内部把关）。
         if cacheable:
             self._cache_set(text, fp, intent, route, confidence)
         return intent

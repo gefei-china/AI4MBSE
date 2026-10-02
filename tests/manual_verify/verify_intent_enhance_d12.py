@@ -58,6 +58,13 @@ chk("T1 route=rule", m1["route"] == "rule", f"route={m1['route']}")
 chk("T1 confidence=0.95", m1["confidence"] == 0.95, f"conf={m1['confidence']}")
 chk("T1 无需澄清", m1["needs_clarification"] is False, f"clarify={m1['needs_clarification']}")
 
+# P1-31（2026-10-02）：本组用例（T2/T3）测的**正是缓存机制**，而缓存已**默认停用**
+#   （实测收益 ≈ 0：真库近 7 天仅 18 条用户消息；intent_detect 的 1605 次/7 天 >95% 是评测刷的）。
+#   故此处**显式开启**作为前提 —— 这符合"断言不得耦合本次部署恰好配了什么"的纪律。
+#   ⚠️ 别把 T2/T3 一删了事：机制仍在（`intent.cache_enabled=True` 可开），只是默认关。
+from core import config as _cfg  # noqa: E402
+_cfg._CONFIG.setdefault("intent", {})["cache_enabled"] = True
+
 print("== T2: 意图级缓存 ==")
 r2a = pipe.router.detect("帮我生成设计模型的 sysml 代码")
 r2b = pipe.router.detect("帮我生成设计模型的 sysml 代码")

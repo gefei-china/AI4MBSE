@@ -25,6 +25,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from agent.intent import IntentRouter  # noqa: E402
 
+# P1-31（2026-10-02）：本脚本测的就是 `_cache_set`/`_cache_get` 的 key 口径，而缓存已
+#   **默认停用**（实测收益 ≈ 0：真库近 7 天仅 18 条用户消息；intent_detect 1605 次/7 天
+#   >95% 是评测刷的）⇒ 必须在此**显式开启**作为前提，否则 C1/C3/C4/C7/C8 会全失败，
+#   并被误读成"key 口径又坏了"。⚠️ 别把这几条断言删掉了事 —— 机制仍在（可开）。
+from core import config as _cfg  # noqa: E402
+_cfg._CONFIG.setdefault("intent", {})["cache_enabled"] = True
+
 PASS, FAIL = [], []
 
 # case_id → 人类可读描述（顺序即断言输出顺序）

@@ -254,6 +254,16 @@ DEFAULT_CONFIG = {
         "keyword_scored": True,    # 关键词层"竞争打分"（False = 回到"首个命中即 return"旧行为，A/B 用）
         "keyword_generic": True,   # 泛词是否参与打分（False = 泛词既不加分也不触发共现，A/B 用）
         "sample_collect": True,    # 真实请求是否把用户输入采集进意图样本池（设置页「意图样本」的数据来源）
+        # P1-31（2026-10-02）意图级缓存开关。**默认关**，依据是实测而非偏好：
+        #   缓存收益 = 重复率 × 真实调用量，两项都极小 —— 真库 `messages` 近 7 天仅 **18 条**
+        #   用户消息（全量 53 条），文本重复率 22% ⇒ 潜在命中约 17 次/月，折合金额 <$0.01/月；
+        #   而 `llm_usage_stats` 里 `intent_detect` 的 1605 次/7 天**>95% 是评测脚本刷的**
+        #   （09-30 07–08 点突发 900 次 ≈ 全周 56%），不是生产流量。
+        #   留着它只增复杂度：多一张表 + 多一条失效路径（`index_fp` 随 agent 配置变化即全失效）。
+        #   True = 恢复旧行为（精确文本匹配：`md5(lower(text))` + `index_fp` 双匹配）。
+        #   ⚠️ 真要在多用户/高频场景启用，应先改成**语义缓存**（embedding 相似度）——
+        #      精确匹配对自然语言天然近乎零命中，这正是当初"有表但 hit_count 恒 0"的设计原因。
+        "cache_enabled": False,
         # 意图"确定不了"时是否**停下来问用户**（选择题卡，不执行）。False = 回到旧行为（自己挑一个继续）。
         # 触发面刻意收窄到"系统自己没把握"：llm_weak / fused_conflict / semantic_weak / llm<0.85 /
         # 完全无信号但像在求助；有把握的（规则命中/两路互证/高置信语义/会话继承）一律不打断。
@@ -620,6 +630,7 @@ ENV_MAP = {
     "ZHIYUAN_BASE_URL": ("zhiyuan", "base_url"),
     "ZHIYUAN_API_TOKEN": ("zhiyuan", "token"),
     "MBSE_EMBED_BIGRAM_DIM": ("embedding", "bigram_dim"),
+    "MBSE_INTENT_CACHE_ENABLED": ("intent", "cache_enabled"),  # P1-31：默认 False（实测收益≈0）
 }
 
 # 布尔型配置项（ENV 值为 "1"/"true"/"yes" 视为 True）
