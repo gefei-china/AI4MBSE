@@ -139,6 +139,11 @@ class LLMClient:
     PRICE_PER_1M = {
         "input": 0.15,
         "output": 0.60,
+        # P1-21 缓存命中单价 ≈ input 的 10%。依据（标杆口径一致）：
+        #   DeepSeek 上下文磁盘缓存 hit $0.014/M vs miss $0.14/M（约 1/10）；
+        #   Anthropic cache read = 0.10× input；OpenAI cached 0.50×（部分新模型 0.90× 折扣）。
+        #   取 10% 作通用保守口径——provider 未返回缓存字段时不启用，不污染既有估算。
+        "cache_hit": 0.015,
     }
 
     def __init__(self):
@@ -170,7 +175,18 @@ class LLMClient:
                     ct = 0
             est = 0.0
             if not used_mock:
-                est = (pt * LLMClient.PRICE_PER_1M["input"] + ct * LLMClient.PRICE_PER_1M["output"]) / 1_000_000
+                _pi = LLMClient.PRICE_PER_1M["input"]
+                _po = LLMClient.PRICE_PER_1M["output"]
+                _pc = LLMClient.PRICE_PER_1M["cache_hit"]
+                if pch or pcm:
+                    # P1-21：区分「缓存命中 / 未命中」两种单价。此前把 prompt_tokens 全按
+                    # input 混合价算 → 缓存折扣被抹平，成本数字虚高（命中越多偏差越大）。
+                    # 余量 = pt - hit - miss（正常为 0；异常时按 input 价兜底，绝不丢 token）。
+                    _rest = max(pt - pch - pcm, 0)
+                    est = ((pcm + _rest) * _pi + pch * _pc + ct * _po) / 1_000_000
+                else:
+                    # 无缓存字段（provider 未返回 / Mock / 老数据）→ 原式，零行为漂移
+                    est = (pt * _pi + ct * _po) / 1_000_000
             _meta = resp.get("_meta")
             if isinstance(_meta, dict):
                 _meta["token_count"] = pt + ct
