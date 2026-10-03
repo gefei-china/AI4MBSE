@@ -45,6 +45,11 @@ def _migrate_columns(conn):
     _add("llm_providers", "budget_tokens", "INTEGER DEFAULT 0")         # Token 预算（0=不限；聚合 llm_usage_stats 判定耗尽）
     # ── P1-20 prompt caching 观测：DeepSeek 上下文磁盘缓存命中/未命中（自动缓存，命中≈1/10 价）──
     _add("llm_usage_stats", "prompt_cache_hit_tokens", "INTEGER DEFAULT 0")
+    # ── P0-c（2026-10-03）LLM 调用 trace 关联三列（评估：无 conversation_id/run_id 无法下钻）──
+    _add("llm_usage_stats", "conversation_id", "INTEGER DEFAULT 0")
+    _add("llm_usage_stats", "run_id", "INTEGER DEFAULT 0")
+    _add("llm_usage_stats", "trace_id", "TEXT DEFAULT ''")
+    _add("llm_usage_stats", "sub_task_key", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "prompt_cache_miss_tokens", "INTEGER DEFAULT 0")
     # P1-27 截断诊断（思考模型 reasoning 与正文共享 max_tokens 配额）
     _add("llm_usage_stats", "finish_reason", "TEXT DEFAULT ''")

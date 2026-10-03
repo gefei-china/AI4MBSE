@@ -74,6 +74,15 @@ async def lifespan(app: FastAPI):
         ensure_fts(get_db())
     except Exception:
         pass
+    # P0-d（2026-10-03 评估）：周期告警评估器 —— 现状只有 run 结束时的一次性评估，
+    #   非编排流量（会话直答/意图识别等绝大多数真实请求）的 LLM 异常、成本突增、延迟劣化、
+    #   以及登录失败突增、审计链破损，此前都处于无守护状态。
+    try:
+        from core.alert_evaluator import start_alert_loop
+        start_alert_loop(interval_sec=float(config.get("monitor", "alert_interval", 300)),
+                         cooldown_min=int(config.get("monitor", "alert_cooldown_min", 30)))
+    except Exception as _e:
+        print("[startup] 周期告警评估器跳过: %s" % str(_e)[:120], flush=True)
     # MCP-D1：后台健康巡检线程（每 5 分钟对 sse/http 服务器做 initialize 握手探测）
     try:
         from mcp_health import start_health_loop
@@ -94,6 +103,48 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=config.APP_TITLE, version=config.APP_VERSION, lifespan=lifespan)
+
+
+# ── P0-a（2026-10-03）请求溯源上下文中间件：《运行监控与审计日志差距评估》P0-a ──
+# 把 IP / User-Agent / request_id 绑定到 ContextVar，core.audit.audit() 自动写入
+# audit_logs（此前 ip_address 列存在但从不落盘 —— 审计六要素缺 Source）。
+#
+# 刻意不用 starlette 的 BaseHTTPMiddleware：它会在响应侧建 anyio 任务组并包装 body，
+# 对本工程的 SSE 流式输出（/api/chat/stream、工具事件流）存在已知干扰。
+# 纯 ASGI 中间件只是包装 send，对流式响应完全透明。
+class AuditRequestContextMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":          # websocket / lifespan 直接透传
+            await self.app(scope, receive, send)
+            return
+        try:
+            from starlette.requests import Request as _Req
+            from starlette.datastructures import MutableHeaders as _MH
+            from core.audit import bind_request
+            ctx = bind_request(_Req(scope))
+            rid = ctx.get("request_id") or ""
+
+            async def _send(message):
+                if rid and message.get("type") == "http.response.start":
+                    _MH(scope=message)["X-Request-Id"] = rid
+                await send(message)
+        except Exception:
+            _send = send   # 上下文绑定失败不应影响请求本身（审计降级，业务照常）
+        try:
+            await self.app(scope, receive, _send)
+        finally:
+            try:
+                from core.audit import bind_request as _bind, clear_trace as _clear_trace
+                _bind(None)          # 清理，避免跨请求串号
+                _clear_trace()       # P0-c：链路上下文同请求生命周期
+            except Exception:
+                pass
+
+
+app.add_middleware(AuditRequestContextMiddleware)
 
 
 # ── 注册功能域路由（URL 契约与重构前完全一致）──

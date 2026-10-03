@@ -18,6 +18,7 @@
     vs 主路径 `_stream_orchestrated_flow`）。
 """
 from .common import *
+from core.audit import audit, audit_user
 from . import tool_offload as _tool_offload  # P1-4：大工具结果 offload（补模型侧封顶缺口）
 
 
@@ -39,6 +40,13 @@ class ExecuteMixin:
         attachments = attachments or []
         # 记忆作用域上下文（对齐 mem0）：本会话的 conversation_id + 当前用户，供记忆读写取作用域
         self._mem_ctx = {"conversation_id": conversation_id, "user": user}
+        # P0-c（2026-10-03 评估）：开启链路上下文（与流式主路径同一口径）
+        try:
+            from core.audit import begin_trace
+            _trace = begin_trace(conversation_id=int(conversation_id or 0))
+        except Exception:
+            _trace = {}
+
         self._mem_project_id_cache = None   # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
         self._tool_whitelist = tools_whitelist or None
         self._load_db_agents(user)  # P0 平台化：DB 驱动 Agent 注册表（P1-8：按用户隔离）
@@ -118,7 +126,7 @@ class ExecuteMixin:
                 self._save_conversation_dst(conversation_id, intent, slots)
                 return self._finish_orchestrated(_orch, user_input, conversation_id, intent,
                                                  agent_def, hil_level, kb_tags, attachments, branch, slots,
-                                                 team=team_intent)
+                                                 team=team_intent, user=user)
         elif not forced_intent and not dry_run:
             _orch = self._try_orchestrate(user_input, intent, effective_provider, attachments=attachments,
                                           conversation_id=conversation_id)
@@ -126,7 +134,8 @@ class ExecuteMixin:
                 # P0-2 DST：编排前落会话意图状态（编排执行走独立子管道，主会话状态在此保存）
                 self._save_conversation_dst(conversation_id, intent, slots)
                 return self._finish_orchestrated(_orch, user_input, conversation_id, intent,
-                                                 agent_def, hil_level, kb_tags, attachments, branch, slots)
+                                                 agent_def, hil_level, kb_tags, attachments, branch, slots,
+                                                 user=user)
 
         # 闭环：上传资料解析 → 文本（优先依据注入 + 检索扩散）
         att_blocks, att_parsed, att_skipped = self._load_attachment_text(attachments)
@@ -451,10 +460,12 @@ class ExecuteMixin:
                 )
 
                 # Audit log
-                conn.execute(
-                    "INSERT INTO audit_logs (user_name, event_type, detail, result) VALUES (?,?,?,?)",
-                    ("王工", "llm_chat", f"会话#{conversation_id} · 意图:{intent} · Agent:{agent_def.name} · 来源:{retrieval['source']}", "success")
-                )
+# P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——
+#   此前此处直插 audit_logs 只有 5 列，绕过溯源上下文（IP/UA/request_id）与哈希链，
+#   且归属写死「王工」（不可信）。改由统一入口写入，与其余 200+ 条审计同一口径。
+                audit(audit_user(user), "llm_chat",
+                      f"会话#{conversation_id} · 意图:{intent} · Agent:{agent_def.name} · 来源:{retrieval['source']}",
+                      conn=conn)
                 # 话题打标：落库后立即打标（含刚插入的当前轮消息，供展示与下一轮组装复用）
                 try:
                     self._tag_topics(conn, conversation_id)

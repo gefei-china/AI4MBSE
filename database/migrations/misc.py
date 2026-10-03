@@ -388,3 +388,64 @@ def _migrate_tool_result_offloads(conn):
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_tro_conv ON tool_result_offloads(conversation_id)")
     print("[init_db] 迁移: 工具结果 offload 表 tool_result_offloads 已就绪（幂等）")
+
+
+def _migrate_audit_chain(conn):
+    """P0-a/P0-b（2026-10-03）审计溯源列 + 哈希链：《运行监控与审计日志差距评估》P0。
+
+    P0-a：补 user_agent / request_id 列（ip_address 列已存在但 audit() 从不写入 —— 本批随
+      middleware 绑定 ContextVar 后自动落盘）。
+    P0-b：补 prev_hash / hash 列，并把历史行接成链（首行 prev_hash = 64 个 0）。
+
+    幂等与安全边界：
+    - 列用 PRAGMA table_info 判定后 ALTER（表不存在则跳过，由 schema 建表带全列）
+    - **仅当全表尚无任何入链行时才回填历史**（正常就是首次启动的场景）；若已存在入链行
+      则该表已在正常服役，回填需级联重算后续每一行的摘要，风险大于收益 —— 不回填，
+      打印提示，未入链行由 GET /api/audit/verify 持续暴露为 unchained。
+    """
+    def _add(column: str, ddl: str) -> None:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_logs'").fetchone()
+        if not exists:
+            return
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(audit_logs)").fetchall()]
+        if column not in cols:
+            conn.execute(f"ALTER TABLE audit_logs ADD COLUMN `{column}` {ddl}")
+            print(f"[init_db] 迁移: audit_logs 增加列 {column}")
+
+    for col, ddl in (("user_agent", "TEXT DEFAULT ''"),
+                     ("request_id", "TEXT DEFAULT ''"),
+                     ("prev_hash", "TEXT DEFAULT ''"),
+                     ("hash", "TEXT DEFAULT ''")):
+        _add(col, ddl)
+
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) n, SUM(CASE WHEN COALESCE(hash,'')<>'' THEN 1 ELSE 0 END) chained "
+            "FROM audit_logs").fetchone()
+    except Exception as e:
+        print(f"[init_db] 迁移: audit 链检查跳过（表不可用）: {e}")
+        return
+    total, chained = int(row["n"] or 0), int(row["chained"] or 0)
+    if chained:
+        if total > chained:
+            print(f"[init_db] 迁移: audit 链已服役（{chained}/{total} 已入链），"
+                  f"剩余 {total - chained} 行不回填（级联风险），由 /api/audit/verify 暴露")
+        return
+    if not total:
+        return
+
+    # 延迟导入：本函数由 database.schema.init_db 调用，模块层 import core.audit 会与
+    # database 包形成循环导入（core.audit → database.db_conn）。
+    from core.audit import _row_hash, _GENESIS
+    rows = conn.execute(
+        "SELECT id, user_name, event_type, detail, result, branch, ip_address, "
+        "user_agent, request_id FROM audit_logs ORDER BY id").fetchall()
+    prev = _GENESIS
+    for r in rows:
+        h = _row_hash(prev, r["user_name"], r["event_type"], r["detail"], r["result"],
+                      r["branch"] or "", r["ip_address"] or "", r["user_agent"] or "",
+                      r["request_id"] or "")
+        conn.execute("UPDATE audit_logs SET prev_hash=?, hash=? WHERE id=?", (prev, h, r["id"]))
+        prev = h
+    print(f"[init_db] 迁移: audit_logs 哈希链已回填 {len(rows)} 行（P0-b 防篡改基线）")

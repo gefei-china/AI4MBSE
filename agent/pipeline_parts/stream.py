@@ -13,6 +13,7 @@
     两条路径只收集块内容 —— 改 prompt 结构时**不要再在本文件内联拼接**（有守护脚本拦截）。
 """
 from .common import *
+from core.audit import audit, audit_user
 from . import tool_offload as _tool_offload  # P1-4：大工具结果 offload（引用块+按需重读）
 import queue as _queue  # 编排子任务事件的**实时**转发通道（见 _stream_orchestrated_flow 的 _evq）
 
@@ -201,6 +202,12 @@ class StreamMixin:
                 run_id = TaskQueue.new_run_id(conn)
                 TaskQueue.create_plan(conn, run_id, plan, assigned_by="session",
                                       conversation_id=int(conversation_id or 0))
+                # P0-c：编排 run 号纳入链路上下文 —— 本 run 内所有子任务的 LLM 调用可聚合
+                try:
+                    from core.audit import bind_trace
+                    bind_trace(run_id=int(run_id or 0))
+                except Exception:
+                    pass
             except Exception:
                 pass
             done_items, orch_tasks = [], []
@@ -209,6 +216,12 @@ class StreamMixin:
             # ── Task 7：执行层并发与可靠性（per-agent 信号量 / 子任务超时 / 自动重试 / run 预算护栏）──
             import threading as _th
             from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac, wait as _wait
+            def _submit_with_ctx(pool, fn, *args):
+                """P0-c：ThreadPoolExecutor.submit 不会继承 ContextVar —— 显式 copy_context，
+                否则子任务线程里发生的 LLM 调用会丢掉 conversation_id/run_id/trace_id 归属。"""
+                import contextvars as _cvx
+                _ctx = _cvx.copy_context()
+                return pool.submit(lambda *a: _ctx.run(fn, *a), *args)
             _max_workers = getattr(self, "_ORCH_MAX_WORKERS", 3)        # 全局并发 worker 上限（每批）
             _timeout = getattr(self, "_ORCH_SUBTASK_TIMEOUT", 120)      # 子任务 wall-clock 超时（秒，旧口径）
             # P0-7：超时判据改为「停滞为主 + 硬上限兜底」，两者均接 config（现场可调，不必改代码）
@@ -248,6 +261,12 @@ class StreamMixin:
                 """
                 tkey = tk.get("task_key") or "t"
                 ttitle = tk.get("title") or tkey
+                # P0-c：子任务标识进链路上下文（本线程独立 context，不污染兄弟子任务）
+                try:
+                    from core.audit import bind_trace
+                    bind_trace(sub_task_key=tkey)
+                except Exception:
+                    pass
                 _hb[tkey] = _t.time()   # P0-7：活性心跳（置位即表示"已启动"，worker 的停滞超时据此判定）
                 cfg = tk.get("config") or {}
                 if isinstance(cfg, str):
@@ -393,7 +412,7 @@ class StreamMixin:
                     retry_left = _max_retries
                     last_res = None
                     while True:
-                        fut = task_pool.submit(_run_subtask, tk)
+                        fut = _submit_with_ctx(task_pool, _run_subtask, tk)
                         # P0-7（2026-09-30）：判据由「固定 wall-clock」改为「停滞为主 + 硬上限兜底」。
                         # 实测（会话 514）：t1 到 182s 仍在正常吐 token，却在 241s 被判 failed、产出
                         # 丢弃 → 最终答复退化成「（计划已执行，但无成功交付物）」。按"是否还在产出"
@@ -538,7 +557,7 @@ class StreamMixin:
                         _buf.pop("_sig", None); yield _buf
 
                 try:
-                    _futs = {_exec_pool.submit(_worker, tk, _task_pool): tk for tk in ready}
+                    _futs = {_submit_with_ctx(_exec_pool, _worker, tk, _task_pool): tk for tk in ready}
                     _pending = set(_futs)
                     while _pending:
                         # ① 先把已入队的子任务事件实时吐出去（合帧后吐；这是"就地输出"的关键）
@@ -892,9 +911,12 @@ class StreamMixin:
             _archive_artifacts(conn2, conversation_id, msg_id, card_data, orch_content, intent)
             conn2.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
                           (intent, conversation_id))
-            conn2.execute(
-                "INSERT INTO audit_logs (user_name, event_type, detail, result) VALUES (?,?,?,?)",
-                ("王工", "llm_chat", f"会话#{conversation_id} · 自动编排（{len(orch_tasks)}子任务）· 意图:{intent}", "success"))
+            # Audit log
+# P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——
+#   此前此处直插 audit_logs 只有 5 列，绕过溯源上下文（IP/UA/request_id）与哈希链，
+#   且归属写死「王工」（不可信）。改由统一入口写入，与其余 200+ 条审计同一口径。
+            audit(audit_user(user), "llm_chat",
+                  f"会话#{conversation_id} · 自动编排（{len(orch_tasks)}子任务）· 意图:{intent}", conn=conn2)
         try:
             conn.close()
         except Exception:
@@ -974,10 +996,12 @@ class StreamMixin:
                 "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
                 (intent, conversation_id)
             )
-            conn.execute(
-                "INSERT INTO audit_logs (user_name, event_type, detail, result) VALUES (?,?,?,?)",
-                ("王工", "llm_chat", f"会话#{conversation_id} · 自动编排（{len(orch_tasks)}子任务）· 意图:{intent}", "success")
-            )
+            # Audit log
+# P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——
+#   此前此处直插 audit_logs 只有 5 列，绕过溯源上下文（IP/UA/request_id）与哈希链，
+#   且归属写死「王工」（不可信）。改由统一入口写入，与其余 200+ 条审计同一口径。
+            audit(audit_user(user), "llm_chat",
+                  f"会话#{conversation_id} · 自动编排（{len(orch_tasks)}子任务）· 意图:{intent}", conn=conn)
             # 话题打标：落库后立即打标（含刚插入的当前轮消息）
             try:
                 self._tag_topics(conn, conversation_id)
@@ -1062,6 +1086,18 @@ class StreamMixin:
                 pass   # 入口落库失败不阻断流：收尾 done 事件仍会到达，避免整轮白跑
         # 记忆作用域上下文（对齐 mem0）：本会话的 conversation_id + 当前用户，供记忆读写取作用域
         self._mem_ctx = {"conversation_id": conversation_id, "user": user}
+        # P0-c（2026-10-03 评估）：开启链路上下文 —— 本次请求内所有 LLM 调用自动带上
+        # conversation_id / trace_id（llm/_record_usage 消费），使用量可从会话下钻到单次调用。
+        # 编排子任务会以 conversation_id=0 嵌套调用本方法 —— 此时**不重开** trace，沿用外层
+        # （否则每颗子任务都会生成新 trace_id，整轮成本无法聚合）。
+        try:
+            from core.audit import begin_trace, trace_context as _tctx_ex
+            _exist = _tctx_ex()
+            _trace = begin_trace(conversation_id=int(conversation_id or 0)) \
+                if (conversation_id or not _exist.get("trace_id")) else _exist
+        except Exception:
+            _trace = {}
+
         self._mem_project_id_cache = None   # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
         try:
             # V2.4 会话内执行过程持久化：累计思考/工具调用 → 写入 card_data.exec（前端历史消息还原）
@@ -1676,10 +1712,13 @@ class StreamMixin:
                         "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
                         (intent, conversation_id)
                     )
-                    conn.execute(
-                        "INSERT INTO audit_logs (user_name, event_type, detail, result) VALUES (?,?,?,?)",
-                        ("王工", "llm_chat", f"会话#{conversation_id} · 意图:{intent} · Agent:{agent_def.name} · 来源:{retrieval['source']}", "success")
-                    )
+                    # Audit log
+# P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——
+#   此前此处直插 audit_logs 只有 5 列，绕过溯源上下文（IP/UA/request_id）与哈希链，
+#   且归属写死「王工」（不可信）。改由统一入口写入，与其余 200+ 条审计同一口径。
+                    audit(audit_user(user), "llm_chat",
+                          f"会话#{conversation_id} · 意图:{intent} · Agent:{agent_def.name} · 来源:{retrieval['source']}",
+                          conn=conn)
                     # 话题打标：落库后立即打标（含刚插入的当前轮消息）
                     try:
                         self._tag_topics(conn, conversation_id)

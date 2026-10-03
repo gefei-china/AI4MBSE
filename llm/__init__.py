@@ -259,20 +259,44 @@ class LLMClient:
             except Exception:
                 pass
             from database import db_conn
-            with db_conn() as conn:
-                conn.execute(
-                    "INSERT INTO llm_usage_stats (provider_id, provider_name, model_name, intent, used_mock, "
-                    "prompt_tokens, completion_tokens, total_tokens, "
-                    "prompt_cache_hit_tokens, prompt_cache_miss_tokens, "
-                    "finish_reason, reasoning_tokens, retry_count, fallback_used, fallback_provider_id, "
-                    "estimated_cost, latency_ms) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (provider.get("id", 0) if provider else 0,
+            # P0-c（2026-10-03 评估）：trace→span 归属 —— 本条 LLM 调用属于哪次会话 / 哪个编排 run。
+            # 此前本表是孤立流水，只能按 created_at 猜相邻，无法从会话或 run 下钻（标杆必备能力）。
+            try:
+                from core.audit import trace_context as _tctx
+                _t = _tctx()
+            except Exception:
+                _t = {}
+            _cid = int(_t.get("conversation_id") or 0)
+            _rid = int(_t.get("run_id") or 0)
+            _tid = str(_t.get("trace_id") or "")
+            _skey = str(_t.get("sub_task_key") or "")
+            _vals = (provider.get("id", 0) if provider else 0,
                      (provider or {}).get("name", "未配置"),
                      (provider or {}).get("model_name", "-"),
                      intent, 1 if used_mock else 0, pt, ct, pt + ct, pch, pcm,
-                     _fr, rt, _rc, _fu, _fp, round(est, 6), latency_ms),
-                )
+                     _fr, rt, _rc, _fu, _fp, round(est, 6), latency_ms)
+            with db_conn() as conn:
+                try:
+                    conn.execute(
+                        "INSERT INTO llm_usage_stats (provider_id, provider_name, model_name, intent, used_mock, "
+                        "prompt_tokens, completion_tokens, total_tokens, "
+                        "prompt_cache_hit_tokens, prompt_cache_miss_tokens, "
+                        "finish_reason, reasoning_tokens, retry_count, fallback_used, fallback_provider_id, "
+                        "estimated_cost, latency_ms, conversation_id, run_id, trace_id, sub_task_key) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        _vals + (_cid, _rid, _tid, _skey),
+                    )
+                except Exception as _e2:
+                    # 关联列迁移未跑到 → 降级写入原有 17 列（不丢用量数据，绝不因记账失败阻断调用）
+                    if "no such column" in str(_e2).lower() or "has no column" in str(_e2).lower():
+                        conn.execute(
+                            "INSERT INTO llm_usage_stats (provider_id, provider_name, model_name, intent, used_mock, "
+                            "prompt_tokens, completion_tokens, total_tokens, "
+                            "prompt_cache_hit_tokens, prompt_cache_miss_tokens, "
+                            "finish_reason, reasoning_tokens, retry_count, fallback_used, fallback_provider_id, "
+                            "estimated_cost, latency_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", _vals)
+                    else:
+                        raise
         except Exception:
             pass
 

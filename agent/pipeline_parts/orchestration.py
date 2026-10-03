@@ -3,6 +3,7 @@
 
 由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
+from core.audit import audit, audit_user
 
 
 class OrchestrMixin:
@@ -289,7 +290,8 @@ class OrchestrMixin:
 
     def _finish_orchestrated(self, orch: dict, user_input: str, conversation_id, intent: str,
                              agent_def, hil_level: str, kb_tags: list, attachments: list,
-                             branch: str, slots: dict, team: str | None = None) -> dict:
+                             branch: str, slots: dict, team: str | None = None,
+                             user=None) -> dict:
         """编排路径落库收尾（与 execute 主路径落库段保持一致，dry_run 语义省略：编排仅会话触发）。"""
         llm_content = orch.get("content") or ""
         # SP-R/视图联动：编排汇总内容含 SysML → 投影视图（需求图/BDD 等会话内预览）
@@ -389,10 +391,12 @@ class OrchestrMixin:
                 "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
                 (intent, conversation_id)
             )
-            conn.execute(
-                "INSERT INTO audit_logs (user_name, event_type, detail, result) VALUES (?,?,?,?)",
-                ("王工", "llm_chat", f"会话#{conversation_id} · 自动编排（{len(tasks)}子任务）· 意图:{intent}", "success")
-            )
+            # Audit log
+# P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——
+#   此前此处直插 audit_logs 只有 5 列，绕过溯源上下文（IP/UA/request_id）与哈希链，
+#   且归属写死「王工」（不可信）。改由统一入口写入，与其余 200+ 条审计同一口径。
+            audit(audit_user(user), "llm_chat",
+                  f"会话#{conversation_id} · 自动编排（{len(tasks)}子任务）· 意图:{intent}", conn=conn)
             # 话题打标：落库后立即打标（含刚插入的当前轮消息）
             try:
                 self._tag_topics(conn, conversation_id)

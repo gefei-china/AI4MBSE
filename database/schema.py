@@ -66,6 +66,7 @@ from .migrations import (
     _migrate_dashboard_snapshots,      # 2026-09-26 意图样本池（新增迁移须在此处**显式导入**，否则 NameError）
     _migrate_drop_agent_tools_params,  # 2026-09-30 移除 agent_tools.params 废列（全仓零消费点）
     _migrate_tool_result_offloads,  # 2026-10-02 工具结果 offload 表（P1-4 Tier1 可寻址召回）
+    _migrate_audit_chain,  # 2026-10-03 审计溯源列 + 哈希链（P0-a/P0-b）
 )
 from .seeds import (
     _seed,
@@ -484,7 +485,9 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         rule_type TEXT DEFAULT 'threshold',      -- threshold（阈值比较）
-        metric TEXT NOT NULL,                    -- success_rate | avg_latency | error_count | mock_rate
+        metric TEXT NOT NULL,                    -- run 级: success_rate | avg_latency | error_count | mock_rate
+                                            -- 全局级(P0-d 周期评估): llm_* | cost_* | auth_* | audit_*
+                                            --   见 core/alert_evaluator.GLOBAL_METRICS
         operator TEXT DEFAULT '>',               -- > | >= | < | <=
         threshold REAL DEFAULT 0,
         level TEXT DEFAULT 'warning',            -- info | warning | critical
@@ -664,6 +667,13 @@ def init_db():
         fallback_provider_id INTEGER DEFAULT 0, -- 回退后实际使用的 provider id（未回退=0）
         estimated_cost REAL DEFAULT 0,        -- 估算成本（美元，仅真实调用）
         latency_ms INTEGER DEFAULT 0,
+        -- P0-c（2026-10-03 评估）：trace→span 关联三列。此前本表是**孤立流水** —— LLM 调用
+        -- 不知道自己属于哪次会话 / 哪个编排 run，只能按 created_at 猜相邻，无法下钻。
+        -- 标杆（Langfuse/LangSmith/Phoenix/Datadog LLM Observability）都以 trace 为第一等模型。
+        conversation_id INTEGER DEFAULT 0,    -- 所属会话（0=会话外调用，如意图识别/后台任务）
+        run_id INTEGER DEFAULT 0,             -- 所属编排 run（task_runs 表 id；0=非编排调用）
+        trace_id TEXT DEFAULT '',             -- 一次请求轮次的链路号（同一请求的多次 LLM 调用同号）
+        sub_task_key TEXT DEFAULT '',         -- 编排子任务 key（区分一次 run 内哪个子任务花的钱）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ux_lus_time ON llm_usage_stats(created_at)")
@@ -710,6 +720,10 @@ def init_db():
         result TEXT DEFAULT 'success',  -- success | blocked | failed
         ip_address TEXT DEFAULT '',
         branch TEXT DEFAULT '',         -- 分支归属（图谱/推理等域事件记录操作分支；全局事件为空）
+        user_agent TEXT DEFAULT '',     -- P0-a（2026-10-03）审计六要素 Source：UA / request_id
+        request_id TEXT DEFAULT '',     --   ↑ 同一请求产生的多条审计可聚合（利于排查一次操作的影响面）
+        prev_hash TEXT DEFAULT '',      -- P0-b（2026-10-03）哈希链：上一行摘要（链首为 64 个 0）
+        hash TEXT DEFAULT '',           --   ↑ 本行摘要 sha256(prev_hash|各审计字段)，由 core.audit.audit() 写入
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
@@ -1051,6 +1065,11 @@ def init_db():
 
     # ── 幂等列迁移（老库补 P0-1 新增的 project_id 列，回填默认项目）──
     _migrate_columns(conn)
+    # P0-c 追踪索引：**必须在 _migrate_columns 之后** —— 老库走 CREATE TABLE IF NOT EXISTS
+    # 不会加列，索引若建在迁移前会 "no such column: conversation_id"（本次启动失败实拍）。
+    conn.execute("CREATE INDEX IF NOT EXISTS ux_lus_conv ON llm_usage_stats(conversation_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ux_lus_run ON llm_usage_stats(run_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ux_lus_trace ON llm_usage_stats(trace_id)")
     # ── P0-2 分支保护规则：branches.protection_rules 内置分支默认值回填（幂等，仅填空）──
     _migrate_branch_protection(conn)
     # ── 分支管理 GitHub 对标：merge_requests.status 旧枚举 → 新状态机（幂等）──
@@ -1148,6 +1167,8 @@ def init_db():
     _migrate_drop_agent_tools_params(conn)
     # ── P1-4（2026-10-02）工具结果 offload 表（Tier1 大响应可寻址召回）──
     _migrate_tool_result_offloads(conn)
+    # ── P0-a/P0-b（2026-10-03）审计溯源 + 哈希链（评估 P0）──
+    _migrate_audit_chain(conn)
     # ── P0-④（2026-09-11）时态管理：双时态列 + 索引 + 视图 + W3C Time 对齐表 ──
     _migrate_entity_temporal(conn)
     # ── P1-①（2026-09-11）SWRL 规则管理表：swrl_rules + inferred_facts（推理产出暂存）──

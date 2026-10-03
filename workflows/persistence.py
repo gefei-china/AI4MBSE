@@ -134,37 +134,22 @@ class FlowPersistenceMixin:
     # ── D12 告警 webhook 通知：POST 标准化 A2A 事件（event.type='alert_triggered'，HMAC-SHA256 签名）──
     def _notify_alert(self, conn, run_id: int, rule: dict, metric: str, actual: float,
                       threshold: float, op: str) -> None:
-        import hashlib
-        import hmac as hmac_mod
-        import uuid as uuid_mod
-        import httpx
+        """run 级告警 webhook —— 委托 core.alert_evaluator.notify_alert_webhook。
+
+        原先本方法内联实现了 A2A alert 事件构造 + HMAC 签名；P0-d 起周期评估器也需要同一套
+        通知结构。**共用一份实现**而不是复制第二份 —— 否则将来改签名/重试必漏一处。
+        scope 由 run_id 自动区分（run_id>0 → 'run'，否则 'global'）。
+        """
         try:
-            body = {
-                "protocol": "a2a", "version": "0.1", "kind": "event",
-                "event": {"id": "alr-" + uuid_mod.uuid4().hex[:12], "type": "alert_triggered",
-                          "run_id": run_id, "node_id": "", "node_label": rule.get("name", ""),
-                          "node_type": "alert", "payload": {"rule_id": rule.get("id"),
-                                                             "metric": metric, "actual": actual,
-                                                             "threshold": threshold, "operator": op,
-                                                             "level": rule.get("level", "warning")},
-                          "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
-                "sender": {"name": "mbse-monitor", "type": "flow", "role": "alerting"},
-            }
-            data_str = json.dumps(body, ensure_ascii=False)
-            headers = {"Content-Type": "application/json"}
-            secret = str(rule.get("secret") or "").strip()
-            if secret:
-                headers["X-A2A-Signature"] = hmac_mod.new(secret.encode(), data_str.encode(),
-                                                          hashlib.sha256).hexdigest()
-            httpx.post(rule["notify_url"], content=data_str, headers=headers, timeout=8)
-            try:
-                conn.execute("UPDATE alert_events SET status='acked' WHERE rule_id=? AND run_id=? AND status='open'",
-                             (rule.get("id"), run_id))
+            from core.alert_evaluator import notify_alert_webhook
+            ok = notify_alert_webhook(rule, metric, actual, threshold, op, run_id=run_id)
+            if ok:
+                conn.execute(
+                    "UPDATE alert_events SET status='acked' WHERE rule_id=? AND run_id=? AND status='open'",
+                    (rule.get("id"), run_id))
                 conn.commit()
-            except Exception:
-                pass
         except Exception:
-            pass  # 告警通知失败不阻断主流程（仅落库事件）
+            pass  # 告警通知失败不阻断主流程（事件已落库）
 
 
     # ── P1 记忆系统：共享黑板（L1 工作记忆）/ 编排级会话（L2）──

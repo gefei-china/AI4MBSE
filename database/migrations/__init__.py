@@ -86,6 +86,7 @@ from .misc import (
     _migrate_dashboard_snapshots,
     _migrate_drop_agent_tools_params,   # 2026-09-30 移除 agent_tools.params 废列（需 SQLite≥3.35）
     _migrate_tool_result_offloads,      # 2026-10-02 工具结果 offload 表（P1-4 Tier1 可寻址召回）
+    _migrate_audit_chain,             # 2026-10-03 审计溯源列 + 哈希链（P0-a/P0-b）
 )
 
 __all__ = [
@@ -146,4 +147,5 @@ __all__ = [
     "_migrate_dashboard_snapshots",
     "_migrate_drop_agent_tools_params",
     "_migrate_tool_result_offloads",
+    "_migrate_audit_chain",  # 2026-10-03 审计溯源列 + 哈希链（P0-a/P0-b）
 ]

@@ -173,6 +173,31 @@ def ack_alert(aid: int, conn=Depends(db_session)):
     return {"ok": True, "id": aid}
 
 
+# ── P0-d（2026-10-03 评估）：周期告警评估器（全局时间窗指标）──
+@router.get("/api/monitor/alert-metrics")
+def alert_metrics(conn=Depends(db_session)):
+    """可用告警指标清单。**标注每个指标由谁评估** —— 此前只有 run 级四个，
+    而它们只有在编排 run 结束时才会被评估；非编排流量（会话直答等绝大多数真实请求）
+    长期处于无告警守护状态，这是评估报告的 P0-d。
+    """
+    from core.alert_evaluator import GLOBAL_METRICS
+    return {
+        "run_scope": [{"key": "success_rate", "desc": "run 级成功率（%）", "evaluated_at": "run 结束"},
+                      {"key": "avg_latency", "desc": "run 总耗时（ms）", "evaluated_at": "run 结束"},
+                      {"key": "error_count", "desc": "run 级错误数", "evaluated_at": "run 结束"},
+                      {"key": "mock_rate", "desc": "近 24h Mock 降级率（%）", "evaluated_at": "run 结束"}],
+        "global_scope": [{"key": k, "evaluated_at": "周期评估（每 5 分钟）"} for k in GLOBAL_METRICS],
+    }
+
+
+@router.post("/api/monitor/alerts/evaluate")
+def evaluate_alerts_now(cooldown_min: int = 30, conn=Depends(db_session)):
+    """立即执行一次全局规则评估（不等下一个周期；验证规则配得对不对就用它）。"""
+    from core.alert_evaluator import evaluate_once
+    res = evaluate_once(conn=conn, cooldown_min=max(0, int(cooldown_min or 0)))
+    return {"ok": True, **res}
+
+
 # ── 告警规则 CRUD + 启停 ──
 @router.get("/api/monitor/alert-rules")
 def list_alert_rules(conn=Depends(db_session)):
@@ -181,8 +206,11 @@ def list_alert_rules(conn=Depends(db_session)):
 
 @router.post("/api/monitor/alert-rules")
 def create_alert_rule(r: AlertRuleIn, conn=Depends(db_session)):
-    if r.metric not in ("success_rate", "avg_latency", "error_count", "mock_rate"):
-        return JSONResponse({"error": f"不支持的指标: {r.metric}"}, 400)
+    # P0-d：白名单加入周期评估器的全局指标（run 级四个 + GLOBAL_METRICS）
+    from core.alert_evaluator import GLOBAL_METRICS
+    allowed = ("success_rate", "avg_latency", "error_count", "mock_rate") + GLOBAL_METRICS
+    if r.metric not in allowed:
+        return JSONResponse({"error": f"不支持的指标: {r.metric}（可选: {', '.join(allowed)}）"}, 400)
     if r.operator not in (">", ">=", "<", "<="):
         return JSONResponse({"error": f"不支持的运算符: {r.operator}"}, 400)
     cur = conn.execute(
@@ -198,6 +226,9 @@ def update_alert_rule(rid: int, r: AlertRuleIn, conn=Depends(db_session)):
     row = conn.execute("SELECT id FROM alert_rules WHERE id=?", (rid,)).fetchone()
     if not row:
         return JSONResponse({"error": "告警规则不存在"}, 404)
+    from core.alert_evaluator import GLOBAL_METRICS
+    if r.metric not in ("success_rate", "avg_latency", "error_count", "mock_rate") + GLOBAL_METRICS:
+        return JSONResponse({"error": f"不支持的指标: {r.metric}"}, 400)
     conn.execute(
         "UPDATE alert_rules SET name=?, metric=?, operator=?, threshold=?, level=?, "
         "notify_url=?, secret=?, status=?, updated_at=datetime('now') WHERE id=?",

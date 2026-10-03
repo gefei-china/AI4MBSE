@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form
 from fastapi.responses import Response, JSONResponse, FileResponse
 
 from core.config import DB_PATH
-from core.deps import db_session, current_user, require_any_permission
+from core.deps import db_session, current_user, require_any_permission, require_permission
 from repositories.meta_repo import MetaRepo
 from core.audit import audit, audit_user
 from models import DocMetaIn
@@ -124,8 +124,14 @@ def backup_db(conn=Depends(db_session)):
 
 @router.get("/api/audit")
 def list_audit(limit: int = 100, event_type: Optional[str] = None, search: Optional[str] = None,
-               branch: Optional[str] = None, conn=Depends(db_session)):
-    """审计日志。branch 非空 → 分支视角（只返回该分支的域事件，2026-09-14）。"""
+               branch: Optional[str] = None, conn=Depends(db_session),
+               user=Depends(require_permission("admin", "audit_view"))):
+    """审计日志。branch 非空 → 分支视角（只返回该分支的域事件，2026-09-14）。
+
+    P0-a（2026-10-03 评估）：补权限门 admin:audit_view。此前该端点无任何鉴权 ——
+    enforce_login 关闭时匿名请求可读全量操作记录（含谁在什么时间改了什么），
+    这是审计本身最不该有的洞。匿名请求仍按现有口径放行（兼容体验期与无头脚本）。
+    """
     repo = MetaRepo(conn)
     logs = repo.list_audit(limit, event_type, search, branch=branch or None)
     stats = {
@@ -134,6 +140,25 @@ def list_audit(limit: int = 100, event_type: Optional[str] = None, search: Optio
         "blocked": repo.count_audit_blocked(),
     }
     return {"logs": logs, "stats": stats}
+
+
+@router.get("/api/audit/verify")
+def verify_audit(limit: int = 0, conn=Depends(db_session),
+                 user=Depends(require_permission("admin", "audit_view"))):
+    """P0-b（2026-10-03 评估）：审计链完整性校验（NIST AU-9 / SOC2 CC7.2 防篡改底线）。
+
+    - ok=true：逐行摘要重算一致且 prev_hash 首尾相接
+    - chained < total：存在未入链的行（未经 core.audit.audit() 写入，或历史迁移未覆盖）
+    - broken[]：给出第一个受损行的 id 与原因（篡改 / 行被插入或删除）
+    limit>0 时只校验最近 limit 行（大表快速体检用）。
+    """
+    from core.audit import verify_chain
+    try:
+        return verify_chain(limit=limit, conn=conn)
+    except Exception as e:
+        # 列尚未迁移到位时给出可读结论，而不是 500
+        return {"ok": False, "error": str(e)[:300], "hint": "审计链列（prev_hash/hash）尚未迁移",
+                "total": 0, "chained": 0, "unchained": 0, "broken": [], "broken_count": 0}
 
 
 # ── /api/integration/sources 已随 R1=B 数据集成移除（2026-09-01，data_sources 表已删）──

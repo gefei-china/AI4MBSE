@@ -93,6 +93,21 @@ def _public_user(u: dict) -> dict:
                                   "role_id", "role_name", "role_type", "workspace", "source")}
 
 
+def _audit_auth(event: str, detail: str, result: str = "success", conn=None, user="未登录") -> None:
+    """P0-a（2026-10-03 审计差距评估）：认证事件必审 —— 登录成功/失败、登出都要留痕。
+
+    认证 Forces：
+    - **失败路径必须走独立连接**（conn=None）：失败通常以 HTTPException 结束，
+      db_session 会 ROLLBACK，若审计在同一事务里会被一并回滚 → 恰恰最该留的证据没了。
+    - 审计写失败绝不阻断认证主流程（try 兜底）——可用性优先，但不静默丢失：失败打日志。
+    """
+    try:
+        from core.audit import audit
+        audit(user, event, detail, result, conn=conn)
+    except Exception as e:  # pragma: no cover
+        print("[auth] 审计写入失败（不阻断认证流程）: %s" % (str(e)[:160],), flush=True)
+
+
 @router.get("/config")
 def auth_config():
     """前端启动时取认证配置：mode 与（已配置时）SSO 授权跳转地址。"""
@@ -116,9 +131,12 @@ def local_login(body: dict = Body(...), conn=Depends(db_session)):
     """体验模式登录（免校验）：任意显示名进入，绑默认角色 —— 现阶段无真实数据（米爸）。"""
     name = (body.get("display_name") or "").strip()
     if not name:
+        _audit_auth("auth_login", "体验模式登录失败：display_name 为空", "failed")
         raise HTTPException(400, "display_name 必填")
     u = _upsert_user(conn, f"local-{name}", name, source="local")
     sess = _issue_session(conn, u["id"])
+    _audit_auth("auth_login", f"体验模式登录成功：{name}（user_id={u['id']}，角色={u.get('role_name')}）",
+                "success", conn=conn, user=name)
     return {"ok": True, "token": sess["token"], "expires_at": sess["expires_at"],
             "user": _public_user(u)}
 
@@ -128,8 +146,11 @@ def sso_callback(code: str, state: str = "", conn=Depends(db_session)):
     """IAM OAuth2.0 回调：code 换 token → user-info → 本地建档 → 签发会话。"""
     cfg = _auth_cfg()
     if not cfg.get("client_id"):
+        # 配置缺失属服务端故障 —— 同样要留痕（否则排障无从下手）
+        _audit_auth("auth_login", "SSO 登录失败：auth.client_id 未配置", "failed")
         raise HTTPException(400, "auth.client_id 未配置（IDAAS 平台应用注册后获取）")
     if not code:
+        _audit_auth("auth_login", "SSO 登录失败：回调缺少授权码 code", "failed")
         raise HTTPException(400, "缺少授权码 code")
     # ① code 换 token（文档 §3.3.1 第二步）
     token_ep = f"{cfg.get('sso_base')}/authn-api/v5/oauth/token"
@@ -142,9 +163,11 @@ def sso_callback(code: str, state: str = "", conn=Depends(db_session)):
         with urllib.request.urlopen(req, timeout=10) as resp:
             tok = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
+        _audit_auth("auth_login", f"SSO 登录失败：IAM 换取 token 异常（{str(e)[:120]}）", "failed")
         raise HTTPException(502, f"IAM 换取 token 失败：{e}")
     access = tok.get("access_token") or ""
     if not access:
+        _audit_auth("auth_login", "SSO 登录失败：IAM 未返回 access_token", "failed")
         raise HTTPException(502, f"IAM 未返回 access_token：{tok}")
     # ② user-info（文档 §3.3.1 第三步）
     req2 = urllib.request.Request(
@@ -154,15 +177,19 @@ def sso_callback(code: str, state: str = "", conn=Depends(db_session)):
         with urllib.request.urlopen(req2, timeout=10) as resp:
             ui = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
+        _audit_auth("auth_login", f"SSO 登录失败：IAM 获取用户信息异常（{str(e)[:120]}）", "failed")
         raise HTTPException(502, f"IAM 获取用户信息失败：{e}")
     profile = (ui.get("result") or {}) if isinstance(ui, dict) else {}
     iam_id = str(profile.get("id") or "")
     display = profile.get("displayName") or f"iam-{iam_id}"
     if not iam_id:
+        _audit_auth("auth_login", "SSO 登录失败：IAM 用户信息缺少 id", "failed")
         raise HTTPException(502, f"IAM 用户信息缺少 id：{ui}")
     # ③ 本地建档（FR-UR-2）+ 签发会话
     u = _upsert_user(conn, f"iam-{iam_id}", display, source="iam")
     sess = _issue_session(conn, u["id"], iam_access_token=access)
+    _audit_auth("auth_login", f"SSO 登录成功：{display}（iam_id={iam_id}，user_id={u['id']}）",
+                "success", conn=conn, user=display)
     return {"ok": True, "token": sess["token"], "expires_at": sess["expires_at"],
             "user": _public_user(u)}
 
@@ -191,8 +218,15 @@ def logout(request: Request, conn=Depends(db_session)):
         return {"ok": True}
     row = conn.execute("SELECT * FROM auth_sessions WHERE token=?", (token,)).fetchone()
     if row:
+        # 删除前取归属用户（会话删掉后 current_user 就查不到了）
+        try:
+            from core.deps import current_user
+            _who = (current_user(request, conn) or {}).get("display_name") or "未知用户"
+        except Exception:
+            _who = "未知用户"
         conn.execute("DELETE FROM auth_sessions WHERE token=?", (token,))
         iam_tok = row["iam_access_token"]
+        _note, _res = "", "success"
         if iam_tok:
             cfg = _auth_cfg()
             try:
@@ -202,5 +236,10 @@ def logout(request: Request, conn=Depends(db_session)):
                 urllib.request.urlopen(req, timeout=5)
             except Exception:
                 pass  # SSO 侧登出失败不阻断本地登出（本地会话已删）
+        elif _auth_cfg().get("mode") == "sso":
+            # SSO 模式却拿不到 iam_access_token：会话数据不完整，本地已清但 IAM 侧未通知
+            _note = "（SSO 模式但会话无 iam_access_token，未通知 IAM）"
+            _res = "failed"
+        _audit_auth("auth_logout", f"登出成功：{_who}{_note}", _res, conn=conn, user=_who)
     return {"ok": True}
 
