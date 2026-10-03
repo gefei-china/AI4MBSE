@@ -450,19 +450,35 @@ async function savePerms(){
 
 // ── 审计 ──
 async function loadAudit() {
-  const search = document.getElementById('audit-search').value;
+  const searchEl = document.getElementById('audit-search');
+  const search = searchEl ? searchEl.value : '';
+  const statsEl = document.getElementById('audit-stats');
+  const tableEl = document.getElementById('audit-table');
   const d = await api(`/api/audit?limit=200${search?'&search='+encodeURIComponent(search):''}`);
-  document.getElementById('audit-stats').innerHTML = `
+  // 2026-10-03 根修：后端挂权限门后，无权限时回包是 {error:'无权限…'}（无 logs/stats）。
+  //   原实现直接读 d.stats.today_llm → TypeError → 页面永远停在「加载中…」，表现为「审计日志打不开」。
+  //   权限口径可能随时收紧，故前端一律先判错再渲染，不允许把页面卡在加载态。
+  if(!d || d.error || !d.stats){
+    const msg = (d && d.error) ? d.error : '审计数据暂不可用';
+    if(statsEl) statsEl.innerHTML = '';
+    if(tableEl) tableEl.innerHTML =
+      `<div class="mut" style="padding:16px;font-size:12px;">⚠ ${esc(msg)}<br>
+       <span style="color:var(--mut);">需要 admin:audit_view 或 audit:view 权限（当前角色未授予时请联系系统管理员）。</span></div>`;
+    return;
+  }
+  const logs = Array.isArray(d.logs) ? d.logs : [];
+  statsEl.innerHTML = `
     <div class="kpi"><div class="n">${d.stats.today_llm}</div><div class="l">今日 LLM 交互</div></div>
     <div class="kpi"><div class="n">${d.stats.today_upload}</div><div class="l">今日上传</div></div>
     <div class="kpi"><div class="n" style="color:var(--amb);">${d.stats.blocked}</div><div class="l">越权拦截</div></div>`;
-  document.getElementById('audit-table').innerHTML = `<table class="t">
+  tableEl.innerHTML = logs.length ? `<table class="t">
     <tr><th>时间</th><th>用户</th><th>事件</th><th>详情</th><th>结果</th></tr>` +
-    d.logs.map(l=>`<tr>
-      <td>${(l.created_at||'').slice(0,19)}</td><td>${l.user_name}</td>
-      <td><span class="st b">${l.event_type}</span></td><td>${l.detail}</td>
-      <td><span class="st ${l.result==='success'?'ok':l.result==='blocked'?'r':'w'}">${l.result}</span></td>
-    </tr>`).join('') + '</table>';
+    logs.map(l=>`<tr>
+      <td>${(l.created_at||'').slice(0,19)}</td><td>${esc(l.user_name||'')}</td>
+      <td><span class="st b">${esc(l.event_type||'')}</span></td><td>${esc(l.detail||'')}</td>
+      <td><span class="st ${l.result==='success'?'ok':l.result==='blocked'?'r':'w'}">${esc(l.result||'')}</span></td>
+    </tr>`).join('') + '</table>'
+    : '<div class="mut" style="padding:16px;font-size:12px;">暂无审计记录</div>';
 }
 
 // ── 统一监控平台（D12） ──

@@ -122,15 +122,26 @@ def backup_db(conn=Depends(db_session)):
     )
 
 
+# 审计查看权限：管理员（admin:audit_view）或持 audit:view 的审计只读角色
+AUDIT_VIEW_PERMS = [("admin", "audit_view"), ("audit", "view")]
+
+
 @router.get("/api/audit")
 def list_audit(limit: int = 100, event_type: Optional[str] = None, search: Optional[str] = None,
                branch: Optional[str] = None, conn=Depends(db_session),
-               user=Depends(require_permission("admin", "audit_view"))):
+               user=Depends(require_any_permission(AUDIT_VIEW_PERMS))):
     """审计日志。branch 非空 → 分支视角（只返回该分支的域事件，2026-09-14）。
 
-    P0-a（2026-10-03 评估）：补权限门 admin:audit_view。此前该端点无任何鉴权 ——
+    P0-a（2026-10-03 评估）：补鉴权。此前该端点无任何鉴权 ——
     enforce_login 关闭时匿名请求可读全量操作记录（含谁在什么时间改了什么），
     这是审计本身最不该有的洞。匿名请求仍按现有口径放行（兼容体验期与无头脚本）。
+
+    ⚠️ 2026-10-03 修正（登记为 P0-a 的设计缺陷，勿回退）：
+    首版只挂 admin:audit_view，而本平台 roles 里 **没有任何一个账号是系统管理员**
+    （实测 users 9/9 均为设计师 role_id=80，admin=[]），且 require_permission 对**匿名放行**
+    ⇒ 结果是「登录了反而 403、不登录却能看全量」，审计页与分支页审计 Tab 双双变空白
+    （前端 loadAudit 拿到 {error} 后访问 d.stats.today_llm 直接 TypeError，页面永远停在「加载中…」）。
+    现改为双通道：admin:audit_view 或 audit:view 均可查看；设计师/知识工程师角色已补 audit:view。
     """
     repo = MetaRepo(conn)
     logs = repo.list_audit(limit, event_type, search, branch=branch or None)
@@ -144,7 +155,7 @@ def list_audit(limit: int = 100, event_type: Optional[str] = None, search: Optio
 
 @router.get("/api/audit/verify")
 def verify_audit(limit: int = 0, conn=Depends(db_session),
-                 user=Depends(require_permission("admin", "audit_view"))):
+                 user=Depends(require_any_permission(AUDIT_VIEW_PERMS))):
     """P0-b（2026-10-03 评估）：审计链完整性校验（NIST AU-9 / SOC2 CC7.2 防篡改底线）。
 
     - ok=true：逐行摘要重算一致且 prev_hash 首尾相接
