@@ -467,7 +467,13 @@ async function loadAudit() {
 
 // ── 统一监控平台（D12） ──
 async function loadOps() {
-  const [d, m] = await Promise.all([api('/api/monitor/dashboard?days=7'), api('/api/ops/metrics')]);
+  // UX规范§11（2026-10-03）：UX 指标第三路并行拉取，失败只降级不拖垮监控主数据
+  const [d, m, ux] = await Promise.all([api('/api/monitor/dashboard?days=7'), api('/api/ops/metrics'),
+    api('/api/ux-metrics/summary?days=7').catch(()=>null)]);
+  // UX 交互指标面板：复用 29-flow.js 的 uxMetricsHtml（全局作用域；放在 ok 判定之前，UX 独立于监控接口可用性）
+  const uxEl = document.getElementById('ops-ux');
+  if(uxEl) uxEl.innerHTML = (ux && typeof uxMetricsHtml === 'function') ? uxMetricsHtml(ux)
+    : '<div class="mut" style="padding:10px;font-size:12px;">UX 指标暂不可用</div>';
   const ok = d.runs && d.llm && d.trend;
   if(!ok){ document.getElementById('ops-kpis').innerHTML = '<div class="mut">监控接口不可用</div>'; return; }
   // KPI 四卡：真实聚合（成功率/平均耗时/LLM Mock率/开放告警）
@@ -488,13 +494,17 @@ async function loadOps() {
   document.getElementById('ops-trend').insertAdjacentHTML('beforeend',
     `<div class="mut" style="font-size:11px;margin-top:6px;">PID ${sys.pid} · 运行 ${fmtUptime(sys.uptime_s)} · DB ${sys.db_size_kb} KB</div>`);
   // 错误码 + 备份容灾（沿用 7.1/7.2/7.3 运维信息）
-  document.getElementById('ops-errors').innerHTML = `<table class="t">
+  // 2026-10-03 根修：/api/ops/metrics 回包无 error_codes 字段，原 m.error_codes.map 每次进页必炸
+  //   （控制台 toast「Cannot read properties of undefined (reading 'map')」）——守卫 + 空态
+  document.getElementById('ops-errors').innerHTML = (m.error_codes || []).length ? `<table class="t">
     <tr><th>错误码</th><th>含义</th><th>解决方案</th></tr>` +
-    m.error_codes.map(e=>`<tr><td>${e.code}</td><td>${e.desc}</td><td>${e.solution}</td></tr>`).join('') + '</table>';
+    m.error_codes.map(e=>`<tr><td>${e.code}</td><td>${e.desc}</td><td>${e.solution}</td></tr>`).join('') + '</table>'
+    : '<div class="mut" style="padding:10px;font-size:12px;">错误码字典暂未接入（/api/ops/metrics 未返回 error_codes）</div>';
+  const bk = m.backup || {};
   document.getElementById('ops-backup').innerHTML = `
-    <div class="kv"><span>备份策略</span><b>${m.backup.strategy}</b></div>
-    <div class="kv"><span>最近备份</span><b>${m.backup.last_backup}</b></div>
-    <div class="kv"><span>下次维护</span><b>${m.backup.next_maintenance}</b></div>
+    <div class="kv"><span>备份策略</span><b>${bk.strategy || '—'}</b></div>
+    <div class="kv"><span>最近备份</span><b>${bk.last_backup || '—'}</b></div>
+    <div class="kv"><span>下次维护</span><b>${bk.next_maintenance || '—'}</b></div>
     <div class="kv"><span>实体总数</span><b>${m.total_entities}</b></div>
     <div class="kv"><span>对话总数</span><b>${m.total_conversations}</b></div>
     <div class="kv"><span>消息总数</span><b>${m.total_messages}</b></div>
