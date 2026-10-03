@@ -10,7 +10,6 @@ function loadStudioTab(id) {
     if(id==='st-mcp') switchToolTab(null, _toolTab);   // 工具管理：恢复上次子菜单（MCP/HTTP/内置）
   if(id==='st-agent') { loadAgents(); loadToolLogs(); }
   if(id==='st-market') { applyMarketPerm(); loadMarketManage(); }
-  if(id==='st-flow') loadFlows();
   if(id==='st-model') loadLLMProviders();
 }
 
@@ -967,113 +966,6 @@ async function marketPublishFrom(kind, name){
 }
 
 // ── 流程编排（可视化拖拽画布 + DAG 真实执行，参考 n8n/Dify 标准交互）──
-let flowEditId = null;
 
 // 节点类型定义（托盘 + 属性面板字段）
-const FLOW_NODE_TYPES = {
-  llm:   {label:'LLM 节点',    icon:'🧠', color:'#378ADD', fields:[
-    {k:'prompt',        label:'Prompt（支持 {{节点id.字段}} / {{blackboard.键}}）', type:'textarea'},
-    {k:'system_prompt', label:'System Prompt（可空）', type:'textarea'},
-    {k:'model',         label:'模型名（可空，默认 Provider 模型）', type:'text', source:'models'},
-    {k:'provider_id',   label:'Provider（可空，默认全局）', type:'text', source:'providers'},
-    {k:'write_keys',    label:'写入黑板 write_keys（逗号分隔，如 requirements, summary）', type:'text'},
-    {k:'subscribe',     label:'订阅黑板 subscribe（逗号分隔，如 requirements）', type:'text'},
-  ]},
-  tool:  {label:'工具节点',    icon:'🔧', color:'#639922', fields:[
-    {k:'tool',      label:'工具', type:'select', options:['graph_retrieve','conflict_check','impact_analyze','validate','entity_create','file_list','file_read','file_write','file_append','file_mkdir','file_delete','report_export']},
-    {k:'arguments', label:'参数 JSON（值可 {{节点id.字段}} 引用）', type:'json'},
-    {k:'branch',    label:'知识分支 branch（可空，默认 dev/main）', type:'text'},
-    {k:'hil_level', label:'HIL 分级（L2 时写操作需人工确认）', type:'select', options:['L0','L2']},
-  ]},
-  agent: {label:'Agent 节点',  icon:'🤖', color:'#7F77DD', fields:[
-    {k:'agent', label:'子 Agent（intent 名）', type:'text', source:'agents'},
-    {k:'query', label:'Query（支持 {{节点id.字段}} / {{blackboard.键}}）', type:'textarea'},
-    {k:'provider_id', label:'Provider（可空，默认 Agent 自身配置）', type:'text', source:'providers'},
-    {k:'memorize', label:'执行后沉淀长期记忆', type:'select', options:['true','false']},
-    {k:'write_keys', label:'写入黑板 write_keys（逗号分隔）', type:'text'},
-    {k:'subscribe', label:'订阅黑板 subscribe（逗号分隔）', type:'text'},
-  ]},
-  skill: {label:'Skill 节点',  icon:'🧩', color:'#BA7517', fields:[
-    {k:'skill', label:'Skill 名称（published）', type:'text', source:'skills'},
-  ]},
-  orchestrator: {label:'Manager 节点', icon:'⚖', color:'#534AB7', fields:[
-    {k:'workers', label:'Worker Agents（逗号分隔 intent 名）', type:'text', source:'agents', multi:true},
-    {k:'task', label:'团队任务（支持 {{节点id.字段}} / {{blackboard.键}}）', type:'textarea'},
-    {k:'strategy', label:'协作策略（contract_net 招标属高级模式，MBSE 主链路推荐 sequential/parallel）', type:'select', options:['sequential','parallel','contract_net']},
-  ]},
-  react: {label:'ReAct 节点', icon:'🧬', color:'#0E8F6E', fields:[
-    {k:'goal', label:'目标（支持 {{节点id.字段}} / {{blackboard.键}}）', type:'textarea'},
-    {k:'max_steps', label:'最大循环步数（默认 5）', type:'text'},
-    {k:'tools', label:'可用工具（逗号分隔，默认全部）', type:'text'},
-    {k:'provider_id', label:'Provider（可空，默认全局）', type:'text', source:'providers'},
-    {k:'write_keys', label:'写入黑板 write_keys（逗号分隔）', type:'text'},
-  ]},
-  planner: {label:'Planner 节点', icon:'🗂', color:'#B2347E', fields:[
-    {k:'goal', label:'团队目标（支持 {{节点id.字段}} / {{blackboard.键}}）', type:'textarea'},
-    {k:'agents', label:'可用 Agent 池（逗号分隔，空则计划器自主分配）', type:'text', source:'agents', multi:true},
-    {k:'max_tasks', label:'计划任务上限（默认 6）', type:'text'},
-    {k:'parallel', label:'就绪任务并行执行', type:'select', options:['false','true']},
-    {k:'provider_id', label:'Provider（可空，默认全局）', type:'text', source:'providers'},
-    {k:'write_keys', label:'写入黑板 write_keys（逗号分隔）', type:'text'},
-  ]},
-  reflection: {label:'反思节点', icon:'🔍', color:'#D4537E', fields:[
-    {k:'target', label:'被评审节点 id（如 n1）', type:'text'},
-    {k:'criteria', label:'评估标准（如：输出是否完整合理）', type:'textarea'},
-  ]},
-  mcp:   {label:'MCP 节点',    icon:'🔌', color:'#D4537E', fields:[
-    {k:'endpoint', label:'MCP 端点 URL', type:'text', source:'mcp_servers'},
-    {k:'tool',     label:'工具名', type:'text', source:'mcp_tools'},
-    {k:'arguments',label:'参数 JSON', type:'json'},
-    {k:'transport',label:'传输方式', type:'select', options:['sse','streamable_http','http']},
-  ]},
-  if:    {label:'条件节点',    icon:'🔀', color:'#E24B4A', fields:[
-    {k:'expression', label:'条件表达式（如 {{n1.data.result}} contains 冲突 / {{n2.data.value}} == true）', type:'text'},
-    {k:'max_iterations', label:'循环上限 max_iterations（配合 🔄 循环连线，防死循环）', type:'text'},
-  ]},
-  code:  {label:'代码节点',    icon:'👨‍💻', color:'#0E8F6E', fields:[
-    {k:'language', label:'语言（默认 python；js 需服务端已装 Node）', type:'select', options:['python','js']},
-    {k:'code',     label:'代码（_in 读输入，_out 写输出，JSON 序列化进 data.outputs；受限沙箱：仅纯计算内建，禁止文件/网络/反射）', type:'textarea'},
-    {k:'inputs',   label:'输入 inputs JSON（值可 {{节点id.字段}} / {{blackboard.键}} 引用）', type:'json'},
-    {k:'timeout',  label:'超时（秒，默认 10，防死循环）', type:'text'},
-  ]},
-  http:  {label:'HTTP 节点',   icon:'🌐', color:'#378ADD', fields:[
-    {k:'method',   label:'方法', type:'select', options:['GET','POST','PUT','PATCH','DELETE']},
-    {k:'url',      label:'URL（支持 {{节点id.字段}} / {{blackboard.键}}）', type:'text'},
-    {k:'headers',  label:'请求头 JSON', type:'json'},
-    {k:'body',     label:'请求体 JSON', type:'json'},
-    {k:'query',    label:'查询参数 JSON', type:'json'},
-    {k:'timeout',  label:'超时（秒，默认 15）', type:'text'},
-  ]},
-  iteration: {label:'迭代节点', icon:'🔁', color:'#639922', fields:[
-    {k:'items',    label:'迭代项（JSON 数组 或 {{节点.字段}} 引用 或 逗号分隔字符串）', type:'json'},
-    {k:'subflow',  label:'子流程节点 id（逗号分隔，每轮按序执行，可引用 {{blackboard.__item}}）', type:'text'},
-  ]},
-  knowledge: {label:'知识节点', icon:'📚', color:'#BA7517', fields:[
-    {k:'query',    label:'检索 Query（支持 {{节点id.字段}} / {{blackboard.键}}）', type:'textarea'},
-    {k:'top_k',    label:'返回条数 top_k（默认 5）', type:'text'},
-    {k:'branch',   label:'知识分支 branch（默认 dev）', type:'text'},
-  ]},
-  pubsub: {label:'消息节点', icon:'📡', color:'#0E8F6E', fields:[
-    {k:'op',       label:'操作', type:'select', options:['publish','subscribe']},
-    {k:'topic',    label:'主题 topic（发布/订阅同一主题互通；支持 {{节点id.字段}} / {{blackboard.键}}）', type:'text'},
-    {k:'payload',  label:'发布内容 payload（订阅方认领后注入；文本或 JSON，支持 {{节点id.字段}} 引用）', type:'textarea'},
-    {k:'write_key',label:'订阅写入黑板键 write_key（默认取 topic；下游 {{blackboard.键}} / llm subscribe 可用）', type:'text'},
-  ]},
-  debate: {label:'协商节点', icon:'⚖️', color:'#7B5CBF', fields:[
-    {k:'mode',     label:'协商模式', type:'select', options:['vote','price']},
-    {k:'proposal', label:'议题 proposal（支持 {{节点id.字段}} / {{blackboard.键}}）', type:'textarea'},
-    {k:'sources',  label:'观点来源 sources（节点 id 逗号分隔；留空取所有已执行节点）', type:'text'},
-    {k:'options',  label:'投票选项 options（逗号分隔；内容子串命中计票，未命中记弃权）', type:'text'},
-    {k:'threshold',label:'共识阈值 threshold（默认 0.6；最高得票比例达到即达成共识）', type:'text'},
-  ]},
-  webhook: {label:'Webhook 节点', icon:'🔔', color:'#D4537E', fields:[
-    {k:'url',      label:'回调 URL（支持 {{节点id.字段}} / {{blackboard.键}}）', type:'text'},
-    {k:'method',   label:'方法', type:'select', options:['POST','PUT','GET']},
-    {k:'payload',  label:'发送内容 payload（文本或 JSON；自动包装为 A2A message 发送）', type:'textarea'},
-    {k:'secret',   label:'签名密钥 secret（HMAC-SHA256，放 X-A2A-Signature 头；空=不签名）', type:'text'},
-    {k:'headers',  label:'附加请求头 JSON', type:'json'},
-    {k:'timeout',  label:'超时（秒，默认 10）', type:'text'},
-  ]},
-};
 
-let flowCanvas = {nodes:[], edges:[], sel:null, selEdge:null, nextId:1, link:null};

@@ -369,9 +369,9 @@ function procAddConfirmGate(cid, ev){
                   status:'run', statusText:'⏸ 待人工确认', detail});
   uxTrack('confirm_shown', {cid});   // §11 埋点：确认闸门曝光（转化率分母）
 }
-// 批准/拒绝：与工作流监控面板（29-flow.js）同一 decide API；失败恢复按钮可重试。
-// ⚠️ 必须叫 hilInlineDecide：29-flow.js 已有全局 hilDecide（其 onclick 引用它），
-// 两个 mod 都是全局作用域 —— 同名会互相覆盖（后加载者赢），本批盘点时实测发现。
+// 批准/拒绝：同一 decide API；失败恢复按钮可重试。
+// 函数名 hilInlineDecide（区别于聊天内联确认卡场景）：2026-10-03 29-flow.js 已随编排孤页移除，
+// 原「与 29-flow 全局 hilDecide 同名冲突」的约束不复存在，保留现名避免无关 churn。
 async function hilInlineDecide(cid, approve){
   const okBtn = document.getElementById('hil-ok-' + cid), noBtn = document.getElementById('hil-no-' + cid);
   if(okBtn) okBtn.disabled = true;
@@ -383,8 +383,6 @@ async function hilInlineDecide(cid, approve){
                                      : {status:'failed', statusText:'✗ 已拒绝 · 动作不生效'});
     uxTrack('confirm_decided', {cid, approve: !!approve});   // §11 埋点：闸门处置（分子）
     if(window.toast && toast.success) toast.success(approve ? '已批准，确认单 #' + cid + ' 将自动执行' : '已拒绝确认单 #' + cid);
-    // 状态同步：执行监控面板开着的话，同步刷新其 HIL 队列（monitorExtra 自带 el 缺失保护）
-    if(typeof monitorExtra === 'function'){ try{ monitorExtra(); }catch(e){} }
   }catch(e){
     if(okBtn) okBtn.disabled = false;
     if(noBtn) noBtn.disabled = false;

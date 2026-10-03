@@ -1177,37 +1177,6 @@
             </div>
           </div>
         </div>
-        <div class="subpage" id="st-flow" data-tabpanel="st" data-page-node-id="DOVgrpgUQ8zOVwaBoGBNna">
-          <div style="display:flex;flex-direction:column;height:calc(100vh - 152px);min-height:0;" data-page-node-id="Acn4iCXYysDHCTUYKeLAAf">
-            <!-- 工作区：左栏流程卡片（唯一滚动区）+ 右栏画布（不随页面滚动）；流程信息与运行结果 → 右侧弹窗（▶ 运行 / ⏩ 异步 / 📈 运行历史 触发） -->
-            <div style="flex:1;min-height:0;display:grid;grid-template-columns:300px minmax(0,1fr);gap:12px;" data-page-node-id="IwZHnX119DvXJNaYcV7ci1">
-              <div class="panel" style="min-height:0;" data-page-node-id="OyRGi6jp2BnPYsmz7To9as">
-                <div class="ph" data-page-node-id="upAnH98iu7TW2cdAZA4aNL">编排流程 <span style="flex:1" data-page-node-id="xv1JCMurhrsojOO52gDxYB"></span><button class="btn sm ghost" onclick="flowMonitor()" data-page-node-id="PhXin1UlQOVBFNfKXi7dG7">📊 监控</button><button class="btn sm" onclick="flowNew()" data-page-node-id="VzyqEMfQM1denwbfSlYtzk">＋ 新建</button></div>
-                <div class="pb" style="padding:8px;" id="flow-list" data-page-node-id="WOlAlOFEBOabIUwDTB0dDD"><div class="loading" data-page-node-id="DLW39pbe9R0GIQstmT3Kcb">加载中…</div></div>
-              </div>
-              <div class="panel" style="min-height:0;" data-page-node-id="JsvfjZnQXDkqS8sui3WVbC">
-                <div class="ph" data-page-node-id="qfhve3adkKG6yxx7uppf0J">编排画布 <span class="badge" data-page-node-id="OVJNarzsnHBjM34VnvLtmK">拖拽节点 · 端口连线 · AI 生成</span><span style="flex:1" data-page-node-id="bdoSxqV9YavEMo7kos2sSD"></span>
-                  <button class="btn sm" style="background:var(--blue-d);color:#fff;" onclick="aiFlowDialog()" data-page-node-id="nOWbM2xgccqPYqJTwqotJK">✨ AI 生成</button>
-                  <button class="btn sm ghost" onclick="flowCanvasClear()" data-page-node-id="PHNE0GYGAKr5nCCHP1IaZb">清空</button>
-                  <button class="btn sm ghost" onclick="flowToggleJson()" data-page-node-id="lDOyMtYyfWY6ybjKACMLAi">JSON ⇄</button>
-                  <button class="btn sm ghost" onclick="flowSave()" data-page-node-id="tyKewwJdpnvIy0RcjwTyBW">保存</button>
-                  <button class="btn sm" onclick="flowRun()" data-page-node-id="fcdJSSBkpmagf807ZKnbHd">▶ 运行</button>
-                  <button class="btn sm ghost" onclick="flowRunAsync()" title="异步运行：后台执行，SSE 实时推送进度，适合长流程" data-page-node-id="R5aetqQo1NHuTt3XdO4bEv">⏩ 异步</button>
-                </div>
-                <div class="pb" style="display:flex;padding:0;min-height:0;" data-page-node-id="opAfdWDp6rransLcEkbGkY">
-                  <div id="flow-palette" style="width:170px;border-right:1px solid var(--line);padding:10px;overflow-y:auto;flex:none;background:#fafaf7;" data-page-node-id="7juoFiVdnJizJZvTo2azeb"></div>
-                  <div id="flow-canvas-wrap" style="flex:1;position:relative;background:var(--color-background-tertiary,#f7f8fa);overflow:hidden;" data-page-node-id="rNosmsa6eA2sExYhI52vaq">
-                    <svg id="flow-canvas-svg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" data-page-node-id="wLB99Btr63epGPXOAdsIgN"></svg>
-                    <div id="flow-canvas-nodes" style="position:absolute;inset:0;" data-page-node-id="WyHFsSgE2yC7nxHVFiDEvt"></div>
-                    <div id="flow-canvas-hint" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--mut);font-size:12px;pointer-events:none;" data-page-node-id="17d8lJERZCbYHhsZjTKKXR">从左侧拖入节点，⚡ 端口拖线连接，点击节点配置属性</div>
-                  </div>
-                </div>
-                <!-- P0 优化：运行监控内联展示（📊 监控，含 LLM 用量 / HIL 队列实时刷新） -->
-                <div id="flow-monitor-inline" style="display:none;border-top:1px solid var(--line);padding:10px;font-size:11.5px;line-height:1.55;max-height:320px;overflow-y:auto;background:#fff;" data-page-node-id="G2kk1QsbKf3ZfOdoNSQwNi"></div>
-              </div>
-            </div>
-          </div>
-        </div>
         <!-- 生成规则面板：B 方案下线（与上方 tab 同步隐藏，接线后恢复） -->
         <!-- div class="subpage" id="st-rules" data-tabpanel="st">
           <div class="panel"><div class="ph">生成规则配置</div><div class="pb" style="padding:0;" id="rules-table"><div class="loading">加载中…</div></div></div>
@@ -1537,53 +1506,6 @@
 
 <!-- RDF/OWL 右侧滑窗已移除（2026-09-02 四轮调整）：预览改为中栏内联展示（顶部「🧬 OWL」全局 / toggle 第三态节点级），变更历史同理 -->
 
-<!-- 流程信息与运行结果（右侧弹窗：✏️ 信息 / 📈 历史 双 Tab，✕ / 遮罩可主动收起） -->
-<div class="slide-overlay" id="flow-run-overlay" onclick="closeFlowRunPanel()" data-page-node-id="UwjrLHZ7gDEEiCAX5IQlCP"></div>
-<div class="slide-panel flow-run-panel" id="flow-run-panel" data-page-node-id="iW6zGAFPI7w4dvm52CdYHB">
-  <div class="sp-resize" onmousedown="spResizeStart(event)" ondblclick="spResizeReset(event)" title="拖拽调整宽度（自动记忆）· 双击复位"></div>
-  <div class="sp-header" data-page-node-id="YhQBUZFI1LEjMMHVfPXCsy">
-    <span class="sp-title" id="flow-run-title" data-page-node-id="ODOSZPHsYmXPFwWuKIERXh">📈 运行历史</span>
-    <button class="sp-close" onclick="closeFlowRunPanel()" title="收起" data-page-node-id="qHBlj7bcqjCAiKhQvaUOug">✕</button>
-  </div>
-  <div class="sp-body" id="flow-run-body" data-page-node-id="taxKhBGvAxbCxCkupEvDZa">
-    <div style="flex:none;display:flex;gap:6px;margin-bottom:10px;" data-page-node-id="TBosqyNhPqAlmYomZ9MTcI">
-      <button class="btn sm ghost" id="flow-tab-info" onclick="flowRunTab('info')" data-page-node-id="PNXuC2FTUZgGsqHM0bLJyy">📋 流程信息</button>
-      <button class="btn sm" id="flow-tab-hist" onclick="flowRunTab('hist')" data-page-node-id="hZIUqQT1LGp3MNpsmOIUS7">📈 运行历史</button>
-    </div>
-    <!-- Tab 1：流程信息（名称/描述/JSON 编辑 + 保存） -->
-    <div id="flow-run-info" style="flex:none;margin-bottom:10px;display:none;" data-page-node-id="rWg94SBWZz6MSYf4N0whzg">
-      <div style="font-size:12.5px;font-weight:600;color:var(--blue-d);margin-bottom:6px;" data-page-node-id="hu4DD8HUJ9Ul7spFsRG5ku">📋 流程信息 <span style="font-weight:400;color:var(--mut);font-size:11px;" data-page-node-id="QpHodNDoAbAlfSF2AEgtGd">修改后点「✔ 保存流程」写回</span></div>
-      <div style="display:flex;gap:8px;margin-bottom:6px;" data-page-node-id="Nk4tBFY73oSeT9r32dDc3M">
-        <input id="flow-name" placeholder="流程名称" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;" data-page-node-id="zgh4wEOor3Du60JjGyoQyZ">
-        <input id="flow-desc" placeholder="描述（可空）" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;" data-page-node-id="9IvhmEaJfnIEfMWynoZf4b">
-      </div>
-      <textarea id="flow-json" style="display:none;min-height:120px;font-family:Consolas,monospace;font-size:11px;border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre;overflow:auto;" placeholder='{"nodes":[...],"edges":[...]}'></textarea>
-      <div style="display:flex;gap:6px;margin-top:6px;" data-page-node-id="SAJQuC52eMrE3f2iOptzgs">
-        <button class="btn sm" onclick="flowSave()" data-page-node-id="VPNsCItgtzEf608X2OezX4">✔ 保存流程</button>
-        <button class="btn sm ghost" onclick="flowToggleJson()" title="JSON ⇄ 画布编辑切换" data-page-node-id="xnMj0AK1TYU0eryt8IXgLW">JSON ⇄</button>
-        <span style="flex:1" data-page-node-id="locwudKJcr9chVBLdBYvlr"></span>
-        <button class="btn sm ghost" onclick="flowRunTab('hist')" data-page-node-id="wQwwCVNJXa3bVGRI79Imec">查看运行历史 →</button>
-      </div>
-    </div>
-    <!-- Tab 2：运行历史（范围 + 列表 + 详情） -->
-    <div id="flow-run-hist" style="flex:1;min-height:0;display:flex;flex-direction:column;" data-page-node-id="sIOCqj3OkiOCQHgg1W7FhB">
-      <div style="flex:none;margin-bottom:8px;" data-page-node-id="VL7DMxfBsn8n56zxaB1tqZ">
-        <div style="font-size:12.5px;font-weight:600;color:var(--blue-d);margin-bottom:6px;" data-page-node-id="9zfHFAG0t1KzqhSqHk4t0f">📈 运行历史 <span style="font-weight:400;color:var(--mut);font-size:11px;" data-page-node-id="U4YV42YGFVvAVaW0QTwGYi">点击记录 → 下方展示详情</span></div>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;" data-page-node-id="QgiLAQBOEEzt4638Tl3nHR">
-          <select id="flow-run-scope" onchange="loadFlowRuns()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11px;" title="运行历史范围：全部流程 / 仅当前流程" data-page-node-id="y3nhkJiRGYrBq9gjgteYHi">
-            <option value="" data-page-node-id="AzQYVQO6D9DDkPGmXNtYJB">全部流程</option>
-            <option value="current" data-page-node-id="aqxRAIkUiFxYPAFHTkNEkJ">当前流程</option>
-          </select>
-          <button class="btn sm ghost" onclick="loadFlowRuns()" title="刷新运行历史" data-page-node-id="VZn7FkSHFY7zqjieZn1AfW">🔄 刷新</button>
-          <button class="btn sm ghost" onclick="openEventSubs(0)" title="事件订阅" data-page-node-id="aUCjBDEza6zt33etVvGCfL">🔔 事件订阅</button>
-        </div>
-        <div id="flow-runs" style="max-height:220px;overflow-y:auto;margin-top:6px;" data-page-node-id="DF7hOWAVB5luFofhLKGXob"><div class="loading" style="padding:6px;" data-page-node-id="hIbypWGByE4zzXAKigoLSe">加载中…</div></div>
-      </div>
-      <div id="flow-result" style="flex:1;min-height:0;font-size:11.5px;line-height:1.55;border-top:1px solid var(--line);padding-top:10px;overflow-y:auto;" data-page-node-id="6f8WgKCCYnxlnRjIFmwYW7"></div>
-    </div>
-  </div>
-</div>
-
 <!-- 统一右侧滑动弹窗（工坊表单/确认/编辑共用） -->
 <div class="modal" id="modal" data-page-node-id="rtziYR9XLlzCZcuFhGFtee">
   <div class="mbox" data-page-node-id="k1M9QWwq8ojTwJKRzZuacz">
@@ -1735,7 +1657,6 @@
     <script src="/static/js/mods/26-grapheditor.js" defer></script>
     <script src="/static/js/mods/27-branch.js" defer></script>
     <script src="/static/js/mods/28-studio.js" defer></script>
-    <script src="/static/js/mods/29-flow.js" defer></script>
     <script src="/static/js/mods/30-agents.js" defer></script>
     <script src="/static/js/mods/31-admin.js" defer></script>
     <script src="/static/js/mods/32-approval.js" defer></script>

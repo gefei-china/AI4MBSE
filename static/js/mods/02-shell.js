@@ -143,43 +143,6 @@ function closePanel() {
   document.getElementById('panel-detail').classList.remove('open');
 }
 
-// ── 流程信息与运行结果 右侧弹窗（📋 流程信息 / 📈 运行历史 双 Tab，记忆上次 Tab，✕ / 遮罩可主动收起）──
-let _flowRunTab = 'hist';   // 记忆上次 Tab（info | hist）
-let _skipHistoryFill = false;   // 运行/异步弹窗场景：跳过历史列表加载（历史走流程卡「📈」入口）
-function flowRunTab(tab, loadList = true){
-  _flowRunTab = tab;
-  const info = document.getElementById('flow-run-info');
-  const hist = document.getElementById('flow-run-hist');
-  const bi = document.getElementById('flow-tab-info');
-  const bh = document.getElementById('flow-tab-hist');
-  const ti = document.getElementById('flow-run-title');
-  if(info) info.style.display = tab==='info' ? 'block' : 'none';
-  if(hist) hist.style.display = tab==='hist' ? 'flex' : 'none';
-  if(bi) bi.className = tab==='info' ? 'btn sm' : 'btn sm ghost';
-  if(bh) bh.className = tab==='hist' ? 'btn sm' : 'btn sm ghost';
-  if(ti) ti.textContent = tab==='info' ? '📋 流程信息' : '📈 运行历史';
-  if(tab==='hist'){
-    const fr = document.getElementById('flow-runs');
-    if(loadList){ _skipHistoryFill = false; loadFlowRuns(); }   // 正常入口（流程卡 📈 / 历史详情）加载历史列表
-    else { _skipHistoryFill = true; if(fr) fr.innerHTML = '<div style="color:var(--mut);font-size:11px;padding:6px;">运行历史请通过流程卡「📈」查看，本次弹窗仅展示当前运行结果</div>'; }
-  }
-}
-function openFlowRunPanel(tab, loadList) {
-  document.getElementById('flow-run-overlay').classList.add('show');
-  document.getElementById('flow-run-panel').classList.add('open');
-  flowRunTab(tab || _flowRunTab, loadList);
-}
-function closeFlowRunPanel() {
-  document.getElementById('flow-run-overlay').classList.remove('show');
-  document.getElementById('flow-run-panel').classList.remove('open');
-}
-// 历史详情 → 返回列表（清空详情 + 刷新列表）
-function flowRunBackToList(){
-  const el = document.getElementById('flow-result');
-  if(el) el.innerHTML = '';
-  loadFlowRuns();
-}
-
 // ── 导航 ──
 // 2026-09-17 D1：kb 的一级名统一为「知识中心」（与主导航项 nav-kbhub 对齐；原先写作「模型本体」，
 // 与导航标签口径不一致，会让「最近访问」标签显示成 模型本体）。
