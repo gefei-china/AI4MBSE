@@ -224,7 +224,8 @@ def update_setting(key: str, body: dict, conn=Depends(db_session)):
 @router.post("/api/documents/upload")
 def upload_document(file: UploadFile = File(...), title: str = Form(""), author: str = Form(""),
                     version: str = Form("v1.0"), tags: str = Form(""),
-                    branch: str = Form(""), folder_id: str = Form("0"), conn=Depends(db_session),
+                    branch: str = Form(""), folder_id: str = Form("0"),
+                    mode: str = Form(""), conn=Depends(db_session),
                     user=Depends(require_any_permission(DOC_WRITE_PERMS))):
     """文档上传 + 知识库真管道（KB-P0）：解析 → 结构感知分块 → Embedding → 落库 + 元数据。
 
@@ -234,8 +235,16 @@ def upload_document(file: UploadFile = File(...), title: str = Form(""), author:
     实体/关系等建模数据仍按分支隔离。
     parse_status 状态机：parsing → completed / failed；chunk_count 实时返回。
     （入库 + 上传即抽取共用 ingest_upload_document：AI 建模会话附件上传走同一入口）
+
+    ── P0-C（2026-10-04）异步模式：`mode=async` ──
+    实测三份规范的同步入库要 **13.4 分钟**，期间这个 HTTP 连接一直被占着
+    （且断开即前功尽弃）。传 `mode=async` 时本请求只做**轻量登记**
+    （建 documents 行 + 源文件副本落盘，通常毫秒级）并立刻返回
+    `{job_id, doc_id, parse_status:'queued'}`，管道交给后台 worker 跑。
+    ⚠️ 默认仍是 `sync`：既有前端（static/js/mods/20-docs.js 的批量上传进度条）
+       依赖同步返回里的 chunk_count / auto_extract 渲染，改默认会打断它。
     """
-    from knowledge_pipeline import ingest_upload_document
+    from knowledge_pipeline import ingest_upload_document, stage_upload_document
     content = file.file.read()
     file_type = file.filename.split(".")[-1] if "." in file.filename else ""
     metadata = {
@@ -244,6 +253,25 @@ def upload_document(file: UploadFile = File(...), title: str = Form(""), author:
         "version": version or "v1.0",
         "tags": [t.strip() for t in tags.split(",") if t.strip()] if tags else [],
     }
+    want_async = (mode or "").strip().lower() in ("async", "1", "true", "yes")
+    if want_async:
+        # 只登记不跑管道；解析/分块/向量化/抽取全部交给 worker
+        result = stage_upload_document(conn, file.filename, file_type, content,
+                                       metadata=metadata, branch="global")
+        from core import job_queue as jq
+        _job = jq.submit(conn, "doc_ingest",
+                         {"doc_id": int(result["doc_id"]), "metadata": metadata},
+                         # 幂等键锚定"这一份文档的这一批字节"：同一文档重复提交不重复入库
+                         job_key="doc_ingest:%d" % int(result["doc_id"]),
+                         reuse_terminal=False)
+        audit(audit_user(user), "upload_async",
+              f"上传文件(异步): {file.filename} ({len(content)} bytes) → job #{_job['job_id']}",
+              conn=conn)
+        result.update({"job_id": _job.get("job_id"), "job_status": _job.get("status"),
+                       "deduped": _job.get("deduped", False), "async": True,
+                       "poll": "/api/jobs/%d" % int(_job.get("job_id") or 0),
+                       "hint": "已排队，后台解析中；进度查 /api/jobs/{job_id}"})
+        return result
     result = ingest_upload_document(conn, file.filename, file_type, content, metadata=metadata,
                                     branch="global")
     doc_id = result.get("doc_id")
@@ -530,9 +558,23 @@ def update_document_category(doc_id: int, body: dict, conn=Depends(db_session)):
 
 
 @router.post("/api/documents/{doc_id}/reindex")
-def reindex_document(doc_id: int, conn=Depends(db_session)):
-    """KB-P0：重索引文档（embedding 升级/模型更换后重新向量化）。"""
+def reindex_document(doc_id: int, mode: str = "", conn=Depends(db_session),
+                     user=Depends(require_any_permission(DOC_WRITE_PERMS))):
+    """KB-P0：重索引文档（embedding 升级/模型更换后重新向量化）。
+
+    `mode=async`（P0-C）：提交后台 worker，立即返回 `{job_id}`。
+    重索引耗时与 chunk 数成正比（数百块文档可达分钟级），同步会占连接。
+    """
     from knowledge_pipeline import reindex_document as _reindex
+    if (mode or "").strip().lower() in ("async", "1", "true", "yes"):
+        from core import job_queue as jq
+        _job = jq.submit(conn, "doc_reindex", {"doc_id": int(doc_id)},
+                         job_key="doc_reindex:%d" % int(doc_id), reuse_terminal=False)
+        audit(audit_user(user), "reindex_async",
+              f"重索引(异步) → job #{_job['job_id']}", conn=conn)
+        return {"job_id": _job.get("job_id"), "job_status": _job.get("status"),
+                "doc_id": int(doc_id), "async": True, "deduped": _job.get("deduped", False),
+                "poll": "/api/jobs/%d" % int(_job.get("job_id") or 0)}
     result = _reindex(conn, doc_id)
     if result.get("parse_status") == "failed":
         return JSONResponse(result, 400)
@@ -540,9 +582,23 @@ def reindex_document(doc_id: int, conn=Depends(db_session)):
 
 
 @router.post("/api/documents/{doc_id}/retry")
-def retry_document(doc_id: int, conn=Depends(db_session), user=Depends(current_user)):
-    """失败文档一键重试：从源文件副本重新执行整条管道（解析→分块→向量化→入库）。"""
+def retry_document(doc_id: int, mode: str = "", conn=Depends(db_session),
+                   user=Depends(current_user)):
+    """失败文档一键重试：从源文件副本重新执行整条管道（解析→分块→向量化→入库）。
+
+    `mode=async`（P0-C）：与上传同理走作业队列，返回 `{job_id}`。
+    handler 内会做与同步路径**同一套**的抽取开关回填（见 core/job_handlers.py）。
+    """
     from knowledge_pipeline import retry_document as _retry
+    if (mode or "").strip().lower() in ("async", "1", "true", "yes"):
+        from core import job_queue as jq
+        _job = jq.submit(conn, "doc_retry", {"doc_id": int(doc_id)},
+                         job_key="doc_retry:%d" % int(doc_id), reuse_terminal=False)
+        audit(audit_user(user), "doc_retry_async",
+              f"文档#{doc_id} 重试(异步) → job #{_job['job_id']}", conn=conn)
+        return {"job_id": _job.get("job_id"), "job_status": _job.get("status"),
+                "doc_id": int(doc_id), "async": True, "deduped": _job.get("deduped", False),
+                "poll": "/api/jobs/%d" % int(_job.get("job_id") or 0)}
     result = _retry(conn, doc_id)
     audit(audit_user(user), "doc_retry", f"文档#{doc_id} 重试 → {result.get('parse_status')} {result.get('chunk_count',0)} 块", conn=conn)
     if result.get("parse_status") == "failed":

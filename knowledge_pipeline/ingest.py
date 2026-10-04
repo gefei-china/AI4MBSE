@@ -458,6 +458,134 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
         return {"doc_id": doc_id, "parse_status": "failed", "chunk_count": 0, "error": str(e)[:200]}
 
 
+def stage_upload_document(conn, filename: str, file_type: str, content: bytes,
+                          uploaded_by: str = "王工", metadata: dict | None = None,
+                          branch: str = "global") -> dict:
+    """【P0-C异步】上传轻量登记：建 documents 行 + 落源文件副本，**不跑管道**。
+
+    为什么拆这一步：异步入库要求"提交即返回"。若在 HTTP 线程里跑完整管道
+    （实测三份规范 ≈ 13.4 分钟），提交动作本身就要占13 分钟 —— 那不叫异步。
+    ⇒ HTTP 侧只做两件极快的事（一次 INSERT + 一次文件落盘），
+    管道交给 worker（`run_staged_ingest`）跑。
+
+    为什么把字节落到 `data/uploads/` 再让 worker 读回，而不是把字节塞进
+    `job_jobs.payload`：payload 是 JSON 文本列，大文件既撑爆它，又让"提交"变慢。
+    且这样 worker 走的是与失败重试（`retry_document`）**完全相同的读回路径**。
+
+    `parse_status` 用 `queued`（新增状态）：前端文档列表据此显示"排队中"，
+    不再把"刚上传"误显示成"解析失败"。既有前端只判failed/completed（已复核
+    static/js/mods/20-docs.js），新增状态不会让旧前端报错。
+    """
+    md = metadata or {}
+    # 生命周期沿用既有语义：uploaded →解析完成后 stored（见 ingest_document 第 6 步）
+    cur = conn.execute(
+        "INSERT INTO documents (filename, file_type, file_size, parse_status, uploaded_by, "
+        "branch, lifecycle_status, pipeline_detail) VALUES (?,?,?,'queued',?,?,'uploaded',?)",
+        (filename, file_type, len(content or b""), uploaded_by, branch,
+         json.dumps({"staged": "queued"}, ensure_ascii=False)))
+    doc_id = int(cur.lastrowid)
+    conn.commit()
+    _save_source_copy(doc_id, filename, content)
+    # 元数据先落一份：worker 跑管道时会用同一份 ON CONFLICT 更新，不会重复插入
+    try:
+        detected = (md.get("title") or "").strip() or extract_doc_title(
+            filename, extract_text(filename, content) or "")
+        conn.execute(
+            "INSERT INTO doc_metadata (document_id, title, author, version, tags, source, extra) "
+            "VALUES (?,?,?,?,?,?,?) ON CONFLICT(document_id) DO UPDATE SET "
+            "title=excluded.title, author=excluded.author, version=excluded.version, "
+            "tags=excluded.tags, extra=excluded.extra",
+            (doc_id, detected, md.get("author", ""), md.get("version", "v1.0"),
+             json.dumps(md.get("tags", []), ensure_ascii=False),
+             md.get("source", "upload"), json.dumps(md.get("extra", {}), ensure_ascii=False)))
+        conn.commit()
+    except Exception as e:
+        logger.warning("异步入库：元数据预登记失败（不阻断，管道内会补写）: %s", e)
+    return {"doc_id": doc_id, "filename": filename, "size": len(content or b""),
+            "parse_status": "queued", "staged": True}
+
+
+def auto_extract_stage(conn, doc_id: int, query: str) -> dict:
+    """「上传即抽取」阶段（同步/异步**共用**）。
+
+    为什么要抽出来：`ingest_upload_document`（同步上传）与 `run_staged_ingest`
+    （P0-C 异步入库）都必须执行这一步，若各写一份必然漂移 —— 而抽取结果直接决定
+    治理中心有没有待办候选，漂移的后果是"异步上传的文档不进治理面板"。
+    受 `settings.file_auto_extract_enabled` 开关控制（默认关闭）。
+    返回 auto_meta（结构与既有前端渲染契约一致，勿改字段名）。
+    """
+    import json as _j
+    try:
+        _sw = {r["key"]: r["value"] for r in conn.execute(
+            "SELECT key, value FROM settings").fetchall()}
+        extract_enabled = (_sw.get("file_auto_extract_enabled") or "0") == "1"
+        _row_pd = conn.execute(
+            "SELECT pipeline_detail FROM documents WHERE id=?", (doc_id,)).fetchone()
+        cur_d = _j.loads((_row_pd[0] if _row_pd else "") or "{}")
+        if not extract_enabled:
+            # 开关关闭：跳过自动抽取（管道抽取阶段标记 disabled，前端隐藏补抽入口）
+            cur_d["extraction"] = "disabled"
+            conn.execute("UPDATE documents SET pipeline_detail=? WHERE id=?",
+                         (_j.dumps(cur_d, ensure_ascii=False), doc_id))
+            conn.commit()
+            return {"enabled": False, "reason": "文件管理实体抽取开关未开启"}
+        from vector2graph import extract_candidates
+        ext = extract_candidates(conn, (query or "")[:80], doc_id=doc_id, top_k=5)
+        cur_d["extraction"] = "done"
+        cur_d["extract_candidates"] = len(ext.get("candidates") or [])
+        conn.execute("UPDATE documents SET pipeline_detail=? WHERE id=?",
+                     (_j.dumps(cur_d, ensure_ascii=False), doc_id))
+        conn.commit()
+        return {
+            "enabled": True,
+            "extracted": len(ext.get("candidates") or []),
+            "node_count": ext.get("node_count", 0),
+            "edge_count": ext.get("edge_count", 0),
+            "batch_id": ext.get("batch_id", ""),
+            "rejected": ext.get("rejected", []),
+            # 候选摘要（前端直接渲染，避免重复调用抽取）；关系候选带两端对象
+            "candidates": [{
+                "name": c.get("name", ""),
+                "entity_type": c.get("entity_type", ""),
+                "rel_type": c.get("rel_type", ""),
+                "rel_source": c.get("rel_source", ""),
+                "rel_target": c.get("rel_target", ""),
+            } for c in (ext.get("candidates") or [])][:12],
+        }
+    except Exception as e:
+        return {"extracted": 0, "error": str(e)[:120]}
+
+
+def run_staged_ingest(conn, doc_id: int, metadata: dict | None = None) -> dict:
+    """【P0-C 异步】worker 侧执行：从源文件副本把管道跑完（含上传即抽取）。
+
+    与 `ingest_upload_document` 的差别**仅在"字节从哪来"**：同步路径是上传请求内存里的
+    bytes，异步路径是副本文件。管道本体**不复制第二份实现** —— 直接复用
+    `retry_document`（它已经是"从副本读回并重跑整条管道"的既有实现），
+    再接同一个 `auto_extract_stage`，两条路径的行为差异被压到最小。
+    """
+    from .search import retry_document
+    res = retry_document(conn, doc_id, metadata=metadata)
+    if res.get("parse_status") == "failed":
+        # 解析失败 → 抽取跳过（与同步路径一致，不降级）
+        res["auto_extract"] = {}
+        return res
+    try:
+        _title = ""
+        _r = conn.execute("SELECT title FROM doc_metadata WHERE document_id=?",
+                          (doc_id,)).fetchone()
+        if _r:
+            _title = _r[0] or ""
+        if not _title:
+            _d = conn.execute("SELECT filename FROM documents WHERE id=?",
+                              (doc_id,)).fetchone()
+            _title = (_d[0] if _d else "") or ""
+        res["auto_extract"] = auto_extract_stage(conn, doc_id, _title)
+    except Exception as e:
+        res["auto_extract"] = {"extracted": 0, "error": str(e)[:120]}
+    return res
+
+
 def ingest_upload_document(conn, filename: str, file_type: str, content: bytes,
                            uploaded_by: str = "王工", metadata: dict | None = None,
                            branch: str = "global") -> dict:
@@ -471,7 +599,6 @@ def ingest_upload_document(conn, filename: str, file_type: str, content: bytes,
     返回 {doc_id, filename, size, parse_status, chunk_count, embed_version,
           detected_title, auto_extract, error?}
     """
-    import json as _j
     result = ingest_document(conn, filename, file_type, content,
                              uploaded_by=uploaded_by, metadata=metadata, branch=branch)
     doc_id = result.get("doc_id")
@@ -482,46 +609,12 @@ def ingest_upload_document(conn, filename: str, file_type: str, content: bytes,
                 "detected_title": "", "auto_extract": auto_meta,
                 "error": result.get("error", ""),
                 "parse_meta": result.get("parse_meta", {})}
-    try:
-        _sw = {r["key"]: r["value"] for r in conn.execute(
-            "SELECT key, value FROM settings").fetchall()}
-        extract_enabled = (_sw.get("file_auto_extract_enabled") or "0") == "1"
-        cur_d = _j.loads(conn.execute(
-            "SELECT pipeline_detail FROM documents WHERE id=?", (doc_id,)).fetchone()[0] or "{}")
-        if not extract_enabled:
-            # 开关关闭：跳过自动抽取（管道抽取阶段标记 disabled，前端隐藏补抽入口）
-            cur_d["extraction"] = "disabled"
-            conn.execute("UPDATE documents SET pipeline_detail=? WHERE id=?",
-                         (_j.dumps(cur_d, ensure_ascii=False), doc_id))
-            conn.commit()
-            auto_meta = {"enabled": False, "reason": "文件管理实体抽取开关未开启"}
-        else:
-            from vector2graph import extract_candidates
-            query = (result.get("detected_title") or filename or "")[:80]
-            ext = extract_candidates(conn, query, doc_id=doc_id, top_k=5)
-            cur_d["extraction"] = "done"
-            cur_d["extract_candidates"] = len(ext.get("candidates", []))
-            conn.execute("UPDATE documents SET pipeline_detail=? WHERE id=?",
-                         (_j.dumps(cur_d, ensure_ascii=False), doc_id))
-            conn.commit()
-            auto_meta = {
-                "enabled": True,
-                "extracted": len(ext.get("candidates", [])),
-                "node_count": ext.get("node_count", 0),
-                "edge_count": ext.get("edge_count", 0),
-                "batch_id": ext.get("batch_id", ""),
-                "rejected": ext.get("rejected", []),
-                # 候选摘要（前端直接渲染，避免重复调用抽取）；关系候选带两端对象
-                "candidates": [{
-                    "name": c.get("name", ""),
-                    "entity_type": c.get("entity_type", ""),
-                    "rel_type": c.get("rel_type", ""),
-                    "rel_source": c.get("rel_source", ""),
-                    "rel_target": c.get("rel_target", ""),
-                } for c in (ext.get("candidates") or [])][:12],
-            }
-    except Exception as e:
-        auto_meta = {"extracted": 0, "error": str(e)[:120]}
+    # ── P0-C（2026-10-04）统一出口：抽取段抽为 `auto_extract_stage`，与异步入库
+    #    （run_staged_ingest）共用同一实现。若两处各写一份，"异步上传的文档不进
+    #    治理面板待办"这种漂移只在真数据上才显形 —— 故此处**委托**而非复制。
+    #    query 口径与搬迁前逐字一致：detected_title → filename → 空串。
+    auto_meta = auto_extract_stage(
+        conn, doc_id, result.get("detected_title") or filename or "")
     return {"doc_id": doc_id, "filename": filename, "size": len(content),
             "parse_status": result.get("parse_status"), "chunk_count": result.get("chunk_count", 0),
             "embed_version": result.get("embed_version", ""),

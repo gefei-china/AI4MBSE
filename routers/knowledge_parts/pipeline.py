@@ -173,13 +173,29 @@ def graph_bulk_create(body: dict, conn=Depends(db_session),
 
 
 @router.post("/api/knowledge/v2g/extract")
-def v2g_extract(body: V2GExtractIn, conn=Depends(db_session), user=Depends(current_user)):
+def v2g_extract(body: V2GExtractIn, conn=Depends(db_session), user=Depends(current_user),
+                mode: str = ""):
     """O-1 Step1：按查询命中 chunks 抽取候选实体/关系（LLM 受本体 schema 约束）。
 
     doc_id 指定时限定在该文档的 chunks 内抽取（上传后自动抽取 → chunk↔entity 溯源指向本文档）。
     P1-1 编排已上提 Service。
+
+    `mode=async`（P0-C）：LLM 抽取为十秒~分钟级，可提交后台作业立即返回 job_id。
     """
     from services.knowledge_service import KnowledgeService
+    if (mode or "").strip().lower() in ("async", "1", "true", "yes"):
+        import hashlib
+        from core import job_queue as jq
+        _job = jq.submit(conn, "v2g_extract",
+                         {"query": body.query, "chunk_ids": body.chunk_ids,
+                          "top_k": body.top_k, "doc_id": body.doc_id,
+                          "actor": _actor(user)},
+                         job_key="v2g_extract:%s" % (hashlib.md5(
+                             (body.query or "").encode("utf-8")).hexdigest()[:12]),
+                         reuse_terminal=False)
+        return {"ok": True, "async": True, "job_id": _job.get("job_id"),
+                "job_status": _job.get("status"), "deduped": _job.get("deduped", False),
+                "poll": "/api/jobs/%d" % int(_job.get("job_id") or 0)}
     return KnowledgeService(conn).v2g_extract(
         body.query, body.chunk_ids, body.top_k, body.doc_id, actor=_actor(user))
 
@@ -513,12 +529,21 @@ def triples_delete_one(triple_id: str, conn=Depends(db_session),
 
 
 @router.post("/api/knowledge/reconcile")
-def knowledge_reconcile(conn=Depends(db_session),
+def knowledge_reconcile(body: dict = None, conn=Depends(db_session),
                         user=Depends(require_permission("kb_review", "confirm"))):
     """写后调和 Nightly Job：规则预处理（Blocking 化消歧）+ 冲突检测。
 
-    由外部 cron/平台定时调度触发（与写前融合闸互补）；幂等，可重复执行。"""
+    由外部 cron/平台定时调度触发（与写前融合闸互补）；幂等，可重复执行。
+    `body.async=true`（P0-C）：万级实体时该作业为分钟级，可提交后台执行。
+    """
     from services.knowledge_service import KnowledgeService
+    if bool((body or {}).get("async")):
+        from core import job_queue as jq
+        _job = jq.submit(conn, "knowledge_reconcile", {"actor": _actor(user)},
+                         job_key="knowledge_reconcile:adhoc", reuse_terminal=False)
+        return {"ok": True, "async": True, "job_id": _job.get("job_id"),
+                "job_status": _job.get("status"), "deduped": _job.get("deduped", False),
+                "poll": "/api/jobs/%d" % int(_job.get("job_id") or 0)}
     return KnowledgeService(conn).knowledge_reconcile(actor=_actor(user))
 
 
@@ -919,10 +944,36 @@ def project_ingest_preview(body: dict, conn=Depends(db_session), user=Depends(cu
 
 @router.post("/api/knowledge/project-ingest/commit")
 def project_ingest_commit(body: dict, conn=Depends(db_session), user=Depends(current_user)):
-    """工程入库提交：逐版本 候选化→融合闸→确认物化入个人分支图库+三元组，写批次记录。二次确认由前端向导承担。"""
+    """工程入库提交：逐版本 候选化→融合闸→确认物化入个人分支图库+三元组，写批次记录。二次确认由前端向导承担。
+
+    `body.async=true`（P0-C）：改为提交后台作业，立即返回 `{job_id}`。
+    实测该流程为分钟级（逐版本跑 sysml_to_candidates + 融合闸 + 全量落图），
+    同步会一直占着 HTTP 连接且断开即前功尽弃。
+    ⚠️ 幂等键带 `version_ids` 指纹：换版本集重跑 = 新作业（合法），
+       同版本集重复提交 = 复用/新建而不重复执行。
+    """
     pid = _project_id_from(body, conn)
     if not pid:
         return JSONResponse({"error": "缺少 project_id / conversation_id"}, 400)
+    if bool((body or {}).get("async")):
+        import hashlib
+        import json as _j
+        from core import job_queue as jq
+        _vids = (body or {}).get("version_ids") or []
+        _fp = hashlib.md5(_j.dumps(sorted(_vids), ensure_ascii=False).encode()).hexdigest()[:8]
+        _job = jq.submit(conn, "project_ingest",
+                         {"project_id": pid, "version_ids": _vids or None,
+                          "target_branch": (body or {}).get("target_branch") or "personal",
+                          "actor": _actor(user)},
+                         job_key="project_ingest:%s:%s" % (pid, _fp),
+                         reuse_terminal=False)
+        audit(_actor(user), "project_ingest_async",
+              f"工程入库(异步) {pid} → job #{_job['job_id']}", conn=conn)
+        return {"ok": True, "async": True, "project_id": pid,
+                "job_id": _job.get("job_id"), "job_status": _job.get("status"),
+                "deduped": _job.get("deduped", False),
+                "poll": "/api/jobs/%d" % int(_job.get("job_id") or 0),
+                "hint": "已排队；完成后查 /api/jobs/{job_id} 取 stats 与落图统计"}
     from services.knowledge_service import KnowledgeService
     return KnowledgeService(conn).project_ingest_commit(
         pid, actor=_actor(user),

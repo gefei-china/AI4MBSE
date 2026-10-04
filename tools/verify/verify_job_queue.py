@@ -271,16 +271,33 @@ def _run_in_mut(fn, ns, *args):
 
 
 def d1():
-    """D1：幂等失效（总是新插入）⇒ Q1c/Q1d/Q1e 必须判红。"""
-    print("\n=== 变异 D1：幂等键失效（每次都新建）===")
-    ns = _load(('    if k:\n        r = conn.execute(\n'
-                '            "SELECT id, status, progress, stage FROM job_jobs WHERE job_key=? LIMIT 1",\n'
-                '            (k,)).fetchone()',
-                '    if False:\n        r = conn.execute(\n'
-                '            "SELECT id, status, progress, stage FROM job_jobs WHERE job_key=? LIMIT 1",\n'
-                '            (k,)).fetchone()'))
+    """D1：幂等失效（总是新插入）⇒ Q1c/Q1d/Q1e 必须判红。
+
+    ⚠️ 锚点更新（2026-10-04）：`submit` 的幂等段已从"精确匹配 job_key 的那一行"
+       改为"在 job_key 家族里找**非终态**的行"（family LIKE + 状态过滤）。
+       旧锚点整段失效 ⇒ 断言 `old in src` 抛 AssertionError，门禁直接崩。
+       ⇒ 新变异打在**家族查询**上：让它永远查不到行 ⇒ 等价于"幂等完全失效，
+       每次都新建"。必须打在这里而不是 ACTIVE 过滤上：Q1 走的是默认
+       `reuse_terminal=True` 分支（`elif rows:`），改 ACTIVE→TERMINAL 那条
+       路径根本不会被Q1 触到 ⇒ 变异红灯 0 条（我第一版就犯了这个，
+       门禁报"D1 空转"才暴露出来）。
+    """
+    print("\n=== 变异 D1：幂等键失效（家族查询永远查不到 ⇒ 每次都新建）===")
+    ns = _load(('        fam = conn.execute(',
+                '        fam = conn.execute('))
+    # 把查询条件换成恒假（等价于"查不到任何既有作业" ⇒ 幂等完全失效）。
+    # 用真实 SQL 变异而不是塞替身对象：判据红灯必须来自**被测代码自己的行为**，
+    # 塞一个外部对象进来会引入"变异体依赖注入物"的耦合。
+    src2 = open(JQ_SRC, encoding="utf-8").read()
+    real_q = ('            "WHERE job_key=? OR job_key LIKE ? ESCAPE \'\\\\\' ORDER BY id",\n'
+              '            (k, _like_prefix(k))).fetchall()')
+    assert real_q in src2, "D1 查询锚点未命中"
+    ns2_src = src2.replace(real_q,
+                           '            "WHERE 0 ORDER BY id", ()).fetchall()', 1)
+    ns = {"__name__": "core.job_queue__d1", "__file__": JQ_SRC}
+    exec(compile(ns2_src, JQ_SRC, "exec"), ns)
     reds = _run_in_mut(t_q1, ns)
-    # 判据有两种等价形态：①断言变红 ②执行中断（撞 UNIQUE 约束 =幂等键确实存在）
+    # 判据有两种等价形态：①断言变红 ②执行中断（撞 UNIQUE 约束 = 幂等键确实存在）
     hit = any(("Q1c" in n or "Q1e" in n) or "中断" in n for _k, n, _d in reds)
     return _rec("D1 复现（幂等失效 ⇒ Q1c/Q1e 判红或撞 UNIQUE 约束）⇒ 证明 Q1 非空转", hit,
                 "变异组内红灯 %d 条：%s" % (len(reds), [n for _k, n, _d in reds][:3]))

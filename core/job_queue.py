@@ -85,37 +85,83 @@ def _cfg(section: str, key: str, default=None):
 # ══════════════════════════════════════════════════════════════════
 # 提交 / 查询
 # ══════════════════════════════════════════════════════════════════
+def _like_prefix(key: str) -> str:
+    """把业务键转成"家族 LIKE 前缀"（`k` 本身 + `k:...` 派生键）。
+
+    ⚠️ LIKE 通配符必须转义：业务键里可能含 `%` / `_`（如 job_key 里带序号、哈希时
+    未必，但doc_id /文件名等业务键会）。不转义会让 `doc_ingest:a_b` 命中
+    `doc_ingest:axb` 家族 ⇒ **把无关作业误判成同一次操作**而去重（静默丢作业）。
+    ESCAPE 侧用反斜杠，故这里先把反斜杠本身也一并转义（顺序不能反）。
+    """
+    return (key.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")) + ":%"
+
+
 def submit(conn, kind: str, payload: dict | None = None, *, job_key: str = "",
-           max_attempts: int = 3) -> dict:
+           max_attempts: int = 3, reuse_terminal: bool = True) -> dict:
     """提交一个作业并**立即返回**（不等待执行）。返回 `{job_id, status, deduped}`。
 
     :param job_key: 业务幂等键。**强烈建议传**（如"project_ingest:<pid>:<ts>"）：
-        同一 key 重复提交只会返回既有 job，不会重复执行 ——
+        同一 key重复提交只会返回既有 job，不会重复执行 ——
         这是"用户手抖点两下"的唯一防线，也是 Temporal idempotency key 的等价物。
+    :param reuse_terminal: 命中已有 job 时，**是否连终态作业一起复用**。
+        ⚠️ 默认 True 是为兼容"一次性提交"语义（同一 key 代表同一次意图）；
+        但**业务端点几乎都应传 False** —— 否则用户第二次点「重试」会被永久吞掉
+        （返回上一次的终态 job，看起来"点了没反应"）。
+        这正是本仓反复踩的同一型错误：**幂等判据必须锚定「当次在途操作」，
+        而不是「这一类操作历史上发生过」**（判据恒真 ⇒ 功能被焊死）。
+        `reuse_terminal=False` 的语义：只有 queued/running 才去重，
+        done/failed/canceled 一律新建 —— 既挡住手抖双击，又不挡合法重跑。
     :returns: deduped=True 表示命中已有作业（未重复执行）
     """
+    # ⚠️ 必须**在函数最开头**声明 global：Python 要求 global 出现在名字首次被使用之前，
+    #   放在分支里会SyntaxError: name '_AUTO_SEQ' is used prior to global declaration。
+    global _AUTO_SEQ
     k = (job_key or "").strip()
     if not k:
         # ⚠️ 必须保证**每次都不撞车**：第一版用 `time.time()*1000 + time.time()%1`，
         #   实测两次快速提交得到同一个 key（3/3）⇒ 第二个作业被幂等逻辑误判为重复
         #   ⇒ **静默丢作业**（比报错更糟）。
         #   改用 `uuid4` + 进程内自增序号，彻底消除撞车可能。
-        global _AUTO_SEQ
         _AUTO_SEQ += 1
         k = "%s:%s:%d:%d" % (kind or "job", uuid.uuid4().hex[:8],
                             int(time.time() * 1000), _AUTO_SEQ)
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     # 幂等：先查既有
+    #
+    # ⚠️⚠️ 查的**不是"job_key 等于 k 的那一行"**，而是"**k 家族里在途的任意一行**"。
+    # 第一版写成 `WHERE job_key=? LIMIT 1`，看起来等价，实测有个致命缺口：
+    #   第一次作业跑完（done）→ 第二次提交按reuse_terminal=False 换了新 key 入队 →
+    #   此时用户**手抖双击**：查 `job_key=?` 命中的仍是那条 **done 的老行** ⇒ 判它终态
+    #   ⇒ 又建一条新作业 ⇒ **在途的那条完全没被去重** ⇒ 双击产生了两个并发作业，
+    #   两者抢同一个 doc_id（写类副作用重复，正是队列要防的那件事）。
+    # ⇒ 正确判据：在 k 的家族（含历史派生 key）里找**非终态**的行，命中才去重。
+    # 这与 orch_checkpoint / 幂等键那几处踩的是同一型坑：**判据必须锚定当次在途操作**。
     if k:
-        r = conn.execute(
-            "SELECT id, status, progress, stage FROM job_jobs WHERE job_key=? LIMIT 1",
-            (k,)).fetchone()
-        if r:
-            d = _row(r)
-            if "id" in d:
+        fam = conn.execute(
+            "SELECT id, job_key, status, progress, stage FROM job_jobs "
+            "WHERE job_key=? OR job_key LIKE ? ESCAPE '\\' ORDER BY id",
+            (k, _like_prefix(k))).fetchall()
+        rows = [_row(r) for r in fam]
+        rows = [d for d in rows if "id" in d]
+        if not reuse_terminal:
+            # 家族内在途者（queued/running）才是"当次操作" ⇒ 命中即复用
+            active = [d for d in rows if d.get("status") in ACTIVE]
+            if active:
+                d = active[-1]
                 return {"job_id": int(d["id"]), "status": d.get("status"),
                         "deduped": True, "progress": int(d.get("progress") or 0),
                         "stage": d.get("stage") or ""}
+        elif rows:
+            d = rows[-1]
+            return {"job_id": int(d["id"]), "status": d.get("status"),
+                    "deduped": True, "progress": int(d.get("progress") or 0),
+                    "stage": d.get("stage") or ""}
+        if rows and not reuse_terminal:
+            # 家族内全终态 ⇒ 换一个新 key 真正新建作业。
+            # ⚠️ 必须换 key 而不是复用原 key：job_key 上有 UNIQUE 约束，
+            #   沿用原 key 会直接抛 IntegrityError。
+            _AUTO_SEQ += 1
+            k = "%s:r%d:%s:%d" % (k, int(rows[-1]["id"]), uuid.uuid4().hex[:6], _AUTO_SEQ)
     cur = conn.execute(
         "INSERT INTO job_jobs (job_key, kind, payload, status, max_attempts, "
         "created_at, updated_at) VALUES (?,?,?,'queued',?,?,?)",

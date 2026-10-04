@@ -9,6 +9,8 @@
 #   同理排除：
 #     - tools/verify/verify_s4_llm_params.py      （需要真实 LLM provider 的 api_key，CI 无 secret）
 #     - verify_orchestration_e2e.py 的 live 模式  （真调 LLM，产生费用；CI 只跑其 G0 静态哨兵）
+#     - tools/verify/verify_job_handpoints_live.py（真起服务 + 真embedding，约 3 分钟且写真库；
+#       开发机已跑通 22/22，见 docs/P0-C-长任务接入作业队列-20261004.md）
 #   以上在开发机（Windows，随包运行时齐备）上全绿，见 docs/ 各自检脚本登记。
 #
 # 已实测确认：本 workflow 的每一步都在开发机上以「干净数据库」（MBSE_DB_PATH 指向空库
@@ -102,6 +104,14 @@ jobs:
       # Q3d：重试超上限必须转 failed（防自愈死循环）。
       - name: Guard 异步作业队列（39 项 + 4 变异）
         run: python tools/verify/verify_job_queue.py
+
+      # P0-C 第二步：长任务业务端点接入队列。
+      # 这一条专门防"能力齐了但没人用"—— job_queue 交付后曾全仓 grep 不到任何
+      # 业务调用方，长任务仍同步占连接，且没有任何单测会报警。
+      # H3 是一对**必须成对**的断言：在途重复提交要去重 + 终态后必须新建；
+      # 只测前者会让"判据恒真"的写法蒙混过关（用户第二次点重试被永久吞掉）。
+      - name: Guard 长任务接入作业队列（30 项 + 4 变异）
+        run: python tools/verify/verify_job_handlers.py
 
       # ── P0-4（2026-10-04）：多租户隔离（图谱路径）────────────────────────────
       - name: Guard 多租户隔离（29 项 + 3 变异）

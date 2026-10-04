@@ -48,6 +48,7 @@ from routers import (
     memory_admin_router,  # 2026-10-02 AI 记忆管理（设置页可见 + 可删）
     ux_metrics_router,  # 2026-10-03 UX 埋点：§11 六指标采集与聚合
     orchestration_router,  # 2026-10-03 P0-2 编排检查点 + 断点续跑
+    jobs_router,           # 2026-10-04 P0-C 异步作业队列（长任务提交即返回 job_id）
 )
 
 @asynccontextmanager
@@ -101,6 +102,32 @@ async def lifespan(app: FastAPI):
                   "崩溃批次需人工点继续）", flush=True)
     except Exception as _e:
         print("[startup] 自动重投守护跳过：%s" % str(_e)[:120], flush=True)
+
+    # ── P0-C（2026-10-04）：异步作业队列 worker 守护 ──
+    # 为什么默认**开**：与 orch_supervisor 的auto_resume 刻意相反。
+    #   orch_supervisor 会**自己决定**重投哪些编排批次 → 会真的调 LLM 烧额度，故默认关；
+    #   job worker 只执行**用户显式提交**的作业（有人点了上传/入库才排队），
+    #   无人提交时空转（每轮一次 SELECT，成本可忽略）⇒ 默认开才是能力可用。
+    # 关掉它（jobs.worker_enabled=false）的唯一合理场景：单机排障，
+    # 此时提交仍会成功（作业留在 queued），只是没人执行 —— 端点会把这点明示出来。
+    try:
+        from core import job_queue as _jq
+        from core.job_handlers import register_all as _reg_jobs
+        _kinds = _reg_jobs()
+        if config.as_bool("jobs", "worker_enabled", True):
+            _n = _jq.start_workers(
+                count=int(config.get("jobs", "worker_count", 1) or 1),
+                interval_s=float(config.get("jobs", "worker_interval_s", 2)),
+                lease_s=int(config.get("jobs", "worker_lease_s", 900)))
+            print("[startup] 作业队列 worker 已启动：%d 个 / 已注册 %d 种作业（%s）"
+                  % (_n, len(_kinds), ",".join(_kinds)), flush=True)
+        else:
+            print("[startup] 作业队列 worker 未启用（jobs.worker_enabled=off）——"
+                  "提交仍会成功但作业留在 queued 无人执行；已注册 %d 种作业" % len(_kinds),
+                  flush=True)
+    except Exception as _e:
+        print("[startup] 作业队列 worker 启动失败（长任务将只能同步跑）：%s" % str(_e)[:160],
+              flush=True)
 
     # MCP-D1：后台健康巡检线程（每 5 分钟对 sse/http 服务器做 initialize 握手探测）
     try:
@@ -224,6 +251,7 @@ for _router in (
     memory_admin_router,  # 2026-10-02 AI 记忆管理：设置页可见 + 可删（评估报告 §4 P0）
     ux_metrics_router,  # 2026-10-03 UX 埋点：§11 六指标采集与聚合
     orchestration_router,  # 2026-10-03 P0-2 编排检查点 + 断点续跑（LangGraph checkpointer 等价物）
+    jobs_router,  # 2026-10-04 P0-C 异步作业队列（长任务提交即返回 job_id）
 ):
     app.include_router(_router)
 

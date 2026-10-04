@@ -48,6 +48,10 @@ from .ingest import (
     chunking_params,
     ingest_document,
     ingest_upload_document,
+    # P0-C（2026-10-04）异步入库：轻量登记（HTTP 侧）+ 管道执行（worker 侧）+ 共用抽取段
+    stage_upload_document,
+    run_staged_ingest,
+    auto_extract_stage,
 )
 # 检索
 from .search import (

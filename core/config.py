@@ -676,6 +676,19 @@ DEFAULT_CONFIG = {
         "auto_resume_include_failed": False,  # 是否连带重跑 failed（默认否：可能有副作用）
         "checkpoint_enabled": True,      # 旁路开关：检查点写入失败永不阻断编排
     },
+    # ── P0-C（2026-10-04）：异步作业队列（长任务提交即返回 job_id）──
+    # 队列语义与取舍见 core/job_queue.py 顶部；此处只列运行参数。
+    "jobs": {
+        # 默认开：worker 只执行**用户显式提交**的作业，空转成本仅每轮一次 SELECT。
+        #（与 orchestration.auto_resume_enabled 默认关刻意相反 —— 后者会自己决定重投）
+        "worker_enabled": True,
+        "worker_count": 1,           # SQLite 单写者：>1 会加剧写锁竞争（BaseRepo 有退避重试兜底）
+        "worker_interval_s": 2,# 轮询间隔（首轮立即执行，不等）
+        # 租约 = worker 领作业后多久内无人续租就判定为"崩溃残留"并回收。
+        # 必须大于最长单作业耗时，否则作业会被**自己**重领并双跑。
+        # 入库实测 13.4 min ⇒ 这里给 900 s；长作业另由 handler 的 LeaseKeeper 持续续租。
+        "worker_lease_s": 900,
+    },
     # ── P1-1（2026-10-03 整改）：入口限流（对标 Dify 配额 / Anthropic X-RateLimit-* 契约）──
     # 评估 §6 P1-1 实测：全仓 0 处限流；`budget_tokens` 曾超支 35%，后又被置 0 ⇒ 完全无闸。
     # 阈值为"远超当前真实用量、但能挡住失控"的量级，不是"刚好卡住现有业务"的量级：

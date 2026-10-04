@@ -39,6 +39,7 @@ from .intent_samples import router as intent_samples_router  # 2026-09-26 意图
 from .memory_admin import router as memory_admin_router  # 2026-10-02 AI 记忆管理（设置页可见+可删）
 from .ux_metrics import router as ux_metrics_router  # 2026-10-03 UX 埋点（评估规范 §11 六指标）
 from .orchestration import router as orchestration_router  # 2026-10-03 P0-2 编排检查点 + 断点续跑
+from .jobs import router as jobs_router  # 2026-10-04 P0-C 异步作业队列（提交即返回 job_id）
 
 __all__ = [
     "dashboard_router",
@@ -73,4 +74,5 @@ __all__ = [
     "memory_admin_router",  # 2026-10-02 AI 记忆管理
     "ux_metrics_router",  # 2026-10-03 UX 埋点
     "orchestration_router",  # 2026-10-03 P0-2 编排检查点 + 断点续跑
+    "jobs_router",  # 2026-10-04 P0-C 异步作业队列
 ]
