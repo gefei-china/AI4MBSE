@@ -136,6 +136,19 @@ jobs:
       - name: Guard 大文件链路（35 项 + 7 变异）
         run: python tools/verify/verify_largefile_pipeline.py
 
+      # ── P1-6 收口（2026-10-04）：重复定义审计从"没进 CI"变成"在 CI 里"─────
+      # 这个脚本早写好了但一直没接进流水线 ⇒ 一次都没在合并请求上跑过。
+      # 接之前先修了它两个会让门禁"形同虚设"的问题：
+      #   ① 原版**无条件 return 0** —— 查出 100 条重复定义 CI 也是绿的；
+      #   ② 遇SyntaxError 只 print 后 continue ⇒ 把文件改坏就能绕过审计。
+      # --selftest 先证明它**会红**（注入已知重复样本），
+      #   否则"没发现问题"与"审计器坏了"在输出上完全一样（都是 0 条）。
+      - name: Guard 重复定义审计 · 判红能力自检（S1-S4）
+        run: python tools/verify/audit_dup_defs.py --selftest
+
+      - name: Guard 重复定义审计（P1-6 · 一线代码）
+        run: python tools/verify/audit_dup_defs.py
+
       # ── P0-4（2026-10-04）：多租户隔离（图谱路径）────────────────────────────
       - name: Guard 多租户隔离（29 项 + 3 变异）
         run: python tools/verify/verify_tenant_isolation.py
