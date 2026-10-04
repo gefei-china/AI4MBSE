@@ -30,6 +30,80 @@ def _cfg_bool(value, default=False) -> bool:
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# P0-4 多租户隔离（2026-10-04）——⚠️ **已冻结：禁止开启**（2026-10-04 架构决策）
+# ══════════════════════════════════════════════════════════════════════════
+# 【决策】米爸拍板：「文档向量库、图库**不需要基于项目隔离，是统一使用的数据底座**」。
+#
+# 【为什么必须冻结，而不是"反正默认 off 就没事"】
+# 一旦有人把 `rag.tenant_isolation` 置 on，后果是**有害**的：它会把统一底座里的
+# 共享资产（标准构件、领域术语映射、通用模型）从检索结果里滤掉 ——
+# 不是"多看到别人的数据"，而是"**看不到本该看到的公共资产**"，直接损害建模质量。
+# 默认 off 只是运气；靠注释提醒不够，故由 `tools/verify/verify_tenant_isolation.py`
+# 的 D 组断言把"默认值恒为 off + 本决策声明存在"锁成 CI 门禁（改配置即判红）。
+#
+# 【本系统"隔离"的真实位置在哪（别再找错地方）】
+#   隔离实际发生在 **artifacts / messages**，按 `conversation_id` 而非 project_id
+#   —— 粒度比"按项目"更细，本来就安全。
+#   `project_id` 在本系统的角色是**组织/视图标签**（前端分组用），不是安全边界。
+#   数据自证：`entities` 189 行只有 1 个 project_id 值、`_release_branches` 返回
+#   **所有** release 分支（分支也不构成项目边界）⇒ 图谱从未按项目分区过。
+#
+# 【仍然有效的部分】
+#   · `GET /api/monitor/tenant-readiness` 仍有用 —— 但它的价值已从"开启隔离的体检"
+#     变成"**数据健康探测**"：它报出的 `orphan_project`（悬空 project_id 引用）
+#     是真缺陷的信号，成因见 `ProjectRepo.delete_project` / `detach_project_references`。
+#   · 下面的过滤机制**保留**（不再删除）：客户级私有化部署若真需要隔离，机制已就绪，
+#     届时再开。删除它等于毁掉将来的选项，而留着它成本为零。
+#
+# 【历史记录，勿当结论读】
+#   本块初版（2026-10-04 凌晨）曾把"检索链路缺 project_id 维度"列为 P0 缺陷并实现过滤，
+#   评估报告 §6 也据此写过。**该判断已被上述决策推翻**，报告已同步更正。
+#   保留这段历史是因为它记录了一个真实的推理错误：
+#   **从字段名反推数据归属**（看到 entities.project_id 就以为数据"属于某个项目"），
+#   而没有先确认数据模型意图 —— 字段存在 ≠ 该字段承担语义。
+#
+# ── 以下为保留的过滤机制实现（冻结状态，勿改、勿开）─────────────────────────
+TENANT_OFF, TENANT_ON = "off", "on"
+
+
+def tenant_scope(kb_scope: dict | None) -> dict:
+    """由 kb_scope 解出本次请求的租户上下文。
+
+    返回 {"enabled": bool, "pid": str, "unresolved": "passthrough"|"empty"}
+    —— `kb_scope["project_id"]` 由 pipeline 侧按**项目真源链**算好传入
+    （显式 → 会话 project_id → settings.default_project_id → 空，见
+    `pipeline_parts/memory._resolve_mem_project_id`），检索侧**不自己再解析一遍**
+    （两处解析必然漂移，这条口径已在 memory.py 注释里立过规矩）。
+    """
+    scope = kb_scope or {}
+    pid = str(scope.get("project_id") or "").strip()
+    mode = str(_cfg_get("rag", "tenant_isolation", TENANT_OFF) or TENANT_OFF).strip().lower()
+    unres = str(_cfg_get("rag", "tenant_unresolved", "passthrough") or "passthrough").strip().lower()
+    if unres not in ("passthrough", "empty"):
+        unres = "passthrough"      # 脏配置按宽松档处理：宁可少隔离，不可全量 0 命中
+    enabled = (mode == TENANT_ON)
+    if enabled and not pid:
+        # 开了隔离但解析不到项目：按配置决定是"放行全部"还是"直接 0 命中"
+        enabled = (unres == "empty")
+    return {"enabled": enabled, "pid": pid, "unresolved": unres, "mode": mode}
+
+
+def tenant_filter_rows(rows: list, ts: dict) -> list:
+    """按租户过滤**已物化成 dict 的行**（实体命中 / 词典桥接召回共用）。
+
+    为什么在 Python 侧过滤而不是一律加 SQL 条件：
+      图谱有两条取数路径 —— SQLite LIKE 回退 与 TDB(pyoxigraph) 命名图查询 ——
+      在 SQL 层加条件要改两处且 TDB 侧还要改 graph_db 签名；而两条路径**最终都回填
+      SQLite 的实体行**（属性以 SQLite 为治理权威源）。故在"物化点"一刀切，
+      覆盖面完整且不漏任何一条路径。
+    """
+    if not ts or not ts.get("enabled"):
+        return rows
+    pid = ts.get("pid") or ""
+    return [r for r in (rows or []) if str((r or {}).get("project_id") or "") == pid]
+
+
 class GraphRAG:
     """ArcR-5: Graph-first retrieval with vector fallback.
 
@@ -63,6 +137,8 @@ class GraphRAG:
         conn = get_db()
         t0 = time.time()
         scope = kb_scope or {}
+        # P0-4：租户上下文只解一次（下面实体/关系/词典桥接三处共用）
+        _ts = tenant_scope(scope)
         # 2026-09-21 G1：生命周期过滤的统一开关（默认排除「已下线」文档）。
         # 与 include_ai_generated 同款语义：默认 must-not-include，显式开启才纳入。
         # 之所以要在 retrieve() 入口就先算出来：下面 _resolve_scope_docs（白名单自愈）也要用同一个口径，
@@ -81,16 +157,29 @@ class GraphRAG:
         # 消费侧：默认只查已发布(release)分支；Agent kb_scope.branches 可显式指定其他集合
         kb_branches = (scope.get("branches") or []) or self._release_branches(conn)
         graph_results = self._entity_link(conn, query, kb_branches, source_docs=scope_docs)
+        # P0-4：图谱实体按项目隔离（在物化点过滤，覆盖 SQLite 与 TDB 两条取数路径）
+        _ent_before = len(graph_results)
+        graph_results = tenant_filter_rows(graph_results, _ts)
+        _tenant_dropped = _ent_before - len(graph_results)
 
         # Step 2: Subgraph traversal - get relations
         if graph_results:
             ids = [e["id"] for e in graph_results]
             placeholders = ",".join(["?"] * len(ids))
+            # P0-4：关系侧同样按项目隔离 —— 只过滤 r 侧不够：一条 relation 可能连着
+            #   本项目实体与**他项目实体**，e1/e2 的 JOIN 会把对方名字带进上下文（信息泄露面
+            #   比实体本身更大：名字+关系一起就勾勒出了对方的模型结构）。
+            _rel_where = ""
+            _rel_args = []
+            if _ts.get("enabled"):
+                _rel_where = " AND COALESCE(r.project_id,'') = ?"
+                _rel_args = [_ts["pid"]]
             relations = conn.execute(
                 f"SELECT r.*, e1.name as source_name, e2.name as target_name FROM relations r "
                 f"JOIN entities e1 ON r.source_id=e1.id JOIN entities e2 ON r.target_id=e2.id "
-                f"WHERE (r.source_id IN ({placeholders}) OR r.target_id IN ({placeholders})) AND r.status != 'deprecated'",
-                ids + ids
+                f"WHERE (r.source_id IN ({placeholders}) OR r.target_id IN ({placeholders})) "
+                f"AND r.status != 'deprecated'{_rel_where}",
+                ids + ids + _rel_args
             ).fetchall()
             graph_relations = [dict(r) for r in relations]
         else:
@@ -122,6 +211,9 @@ class GraphRAG:
             except Exception:
                 glossary_recall = {"concepts": [], "entities": []}
             _rec_ents = glossary_recall.get("entities") or []
+            # P0-4：词典桥接是**第三条实体入口**（maps_to 直查图谱），同样要过租户过滤，
+            #   否则"用领域词典绕开项目隔离"会成为一个现成的漏洞。
+            _rec_ents = tenant_filter_rows(_rec_ents, _ts)
             if _rec_ents:
                 _have = {e["id"] for e in graph_results}
                 _new = [e for e in _rec_ents if e["id"] not in _have]
@@ -129,11 +221,17 @@ class GraphRAG:
                     graph_results = graph_results + _new
                     _ids = [e["id"] for e in _new]
                     _ph = ",".join(["?"] * len(_ids))
+                    _rel_extra = ""
+                    _rel_args_extra = []
+                    if _ts.get("enabled"):
+                        _rel_extra = " AND COALESCE(r.project_id,'') = ?"
+                        _rel_args_extra = [_ts["pid"]]
                     _rel = conn.execute(
                         f"SELECT r.*, e1.name as source_name, e2.name as target_name FROM relations r "
                         f"JOIN entities e1 ON r.source_id=e1.id JOIN entities e2 ON r.target_id=e2.id "
-                        f"WHERE (r.source_id IN ({_ph}) OR r.target_id IN ({_ph})) AND r.status != 'deprecated'",
-                        _ids + _ids).fetchall()
+                        f"WHERE (r.source_id IN ({_ph}) OR r.target_id IN ({_ph})) "
+                        f"AND r.status != 'deprecated'{_rel_extra}",
+                        _ids + _ids + _rel_args_extra).fetchall()
                     graph_relations = graph_relations + [dict(x) for x in _rel]
                     graph_confidence = self._graph_confidence(graph_results, graph_relations)
         # 2026-09-16 修复（对话接口 500 的根因）：
@@ -271,6 +369,16 @@ class GraphRAG:
             "latency_ms": latency_ms,
             "knowledge": knowledge,   # P0-3: {"method":[...规范], "assets":[...资产], "uncategorized":[...]}
             "kb_scope_warn": scope_warn,   # KB-S：白名单失效告警（None=正常）；供上层事件/卡片回显
+            # P0-4 租户上下文回显：**可观测是隔离的前提** —— 出了问题要能一眼看出
+            # 「这次到底按哪个项目过滤的、滤掉了多少条」，而不是黑盒。
+            # ⚠️ 冻结状态下这里恒为 enabled=False（决策：图谱是统一底座，不隔离）。
+            # 保留回显是为了将来真开隔离时不用重新加观测字段。
+            "tenant": {"mode": _ts.get("mode"), "enabled": bool(_ts.get("enabled")),
+                       "project_id": _ts.get("pid") or "",
+                       "unresolved_policy": _ts.get("unresolved"),
+                       "entities_dropped": int(_tenant_dropped),
+                       "frozen": True,   # 标记：本链路按架构决策不做项目隔离（勿据此判断"已隔离"）
+                       },
         }
 
     @staticmethod

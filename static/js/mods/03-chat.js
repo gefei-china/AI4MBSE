@@ -587,6 +587,9 @@ async function selectConv(id) {
   // const _st2 = document.getElementById('chat-conv-status');
   // if(_st2) _st2.textContent = '已加载';
   resetArtPreview();
+  // P0-2 断点续跑（2026-10-03）：会话加载完成后再查可恢复批次（不阻塞首屏消息渲染）。
+  // 失败静默 —— 检查点是旁路能力，任何异常都不应影响会话正常打开。
+  if(typeof checkResumableRuns === 'function') checkResumableRuns(id);
   // 恢复该会话的预览状态：对应会话有已打开预览 → 展开渲染；无 → 预览区默认收起
   const saved = _convTabs[id];
   const pp = document.getElementById('preview-panel');
@@ -657,3 +660,83 @@ document.addEventListener('click', (e) => {
 });
 
 // 兼容旧调用（产物列表已改为浮层，不再有列折叠）
+
+/* ══════════════════════════════════════════════════════════════════════════
+   P0-2 断点续跑（2026-10-03）：会话打开时若存在"中断的编排批次"，顶部给一条
+   「继续」提示条；点继续 → 走 resume 端点（SSE 事件复用既有 handleSSE）。
+
+   为什么要做入口而不是"重发一遍原话"：重发会重跑意图识别 + planner LLM，
+   得到的任务拆分与旧批次不一致 → 已完成子任务的结果无法复用（等于从头再来，
+   还要再付一遍 LLM 费用）。resume 只补跑未完成部分。
+
+   注意：本文件是 03（早于 11-pipeline.js 加载），handleSSE 在首次用户交互时
+   早已可用；仍保留 typeof 防御，避免脚本加载顺序变化导致整段崩。
+   ══════════════════════════════════════════════════════════════════════════ */
+async function checkResumableRuns(convId){
+  try{
+    const area = document.getElementById('chat-area');
+    if(!area || !convId) return;
+    const old = document.getElementById('resumable-bar');
+    if(old) old.remove();
+    const r = await api(`/api/orchestration/resumable?conversation_id=${convId}&limit=3`);
+    const items = (r && r.items) || [];
+    if(!items.length) return;
+    const it = items[0];
+    // C-1：两种恢复模式对用户是**两件不同的事**，文案必须区分 ——
+    //   summary_only=true  → 子任务已全部完成，只需重做汇总（不重跑任务、不重复计费）
+    //   否则                → 还有子任务没做完，继续跑未完成部分
+    const onlySummary = !!it.summary_only;
+    const txt = onlySummary
+      ? `上次编排的子任务已全部完成，但最终汇总未生成（批次 #${it.run_id}）`
+      : `上次编排未完成（批次 #${it.run_id}，${it.pending} 个子任务待执行，` +
+        `${Math.round((it.age_s||0)/60)} 分钟前中断）`;
+    const bar = document.createElement('div');
+    bar.id = 'resumable-bar';
+    bar.className = 'resumable-bar' + (onlySummary ? ' rb-summary' : '');
+    bar.innerHTML =
+      `<span class="rb-dot"></span>` +
+      `<span class="rb-txt">${txt}</span>` +
+      `<button class="rb-btn" id="rb-go">${onlySummary ? '重新生成汇总' : '继续编排'}</button>` +
+      `<button class="rb-btn rb-ghost" id="rb-no">忽略</button>`;
+    area.insertBefore(bar, area.firstChild);
+    document.getElementById('rb-no').onclick = ()=> bar.remove();
+    document.getElementById('rb-go').onclick = ()=> startResumeRun(it.run_id, bar);
+  }catch(e){ /* 检查点查询失败静默：不应影响会话正常加载 */ }
+}
+
+async function startResumeRun(runId, bar){
+  if(bar){ bar.querySelector('.rb-btn').disabled = true; bar.querySelector('.rb-txt').textContent = '正在恢复编排…'; }
+  try{
+    const resp = await fetch(`/api/orchestration/runs/${runId}/resume`, {
+      method:'POST',
+      headers: streamHeaders()
+    });
+    if(!resp.ok){
+      let msg = `恢复失败（HTTP ${resp.status}）`;
+      try{ const j = await resp.json(); if(j && j.error) msg = j.error; }catch(e){}
+      if(typeof toast === 'function') toast(msg, 'error');
+      if(bar) bar.remove();
+      return;
+    }
+    if(bar) bar.remove();
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder('utf-8');
+    let buf = '';
+    while(true){
+      const {done, value} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let idx;
+      while((idx = buf.indexOf('\n\n')) >= 0){
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        if(frame.trim() && !frame.startsWith(':')){
+          if(typeof handleSSE === 'function') handleSSE(frame);
+        }
+      }
+    }
+  }catch(e){
+    if(typeof toast === 'function') toast('恢复编排时出错：' + (e && e.message || e), 'error');
+    if(bar) bar.remove();
+  }
+}

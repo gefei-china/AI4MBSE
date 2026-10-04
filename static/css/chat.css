@@ -334,3 +334,30 @@
 .xd-b{margin-top:5px;font-size:11px;color:var(--txt);line-height:1.65;word-break:break-word;
   max-height:260px;overflow:auto;}
 .xd-b .proc-tool-param{font-size:10.5px;color:var(--mut);margin-bottom:3px;}
+
+/* P0-2 断点续跑提示条（2026-10-03）：会话顶部「上次编排未完成」入口 */
+.resumable-bar{display:flex;align-items:center;gap:8px;margin:8px auto 12px;padding:7px 12px;
+  border:1px solid var(--blue-bd);border-left:3px solid var(--blue);border-radius:8px;
+  background:var(--blue-l);font-size:11.5px;color:var(--blue-d);width:fit-content;max-width:100%;}
+.resumable-bar .rb-dot{width:6px;height:6px;border-radius:50%;background:var(--blue);flex:none;
+  animation:think-pulse 1.3s ease-in-out infinite;}
+.resumable-bar .rb-txt{font-weight:600;}
+.resumable-bar .rb-btn{padding:3px 12px;border:1px solid var(--blue-bd);border-radius:14px;
+  background:var(--blue);color:#fff;font-size:11px;font-weight:600;cursor:pointer;transition:opacity .15s;}
+.resumable-bar .rb-btn:hover{opacity:.85;}
+.resumable-bar .rb-btn:disabled{opacity:.5;cursor:default;}
+.resumable-bar .rb-ghost{background:transparent;color:var(--blue-d);}
+/* C-1：仅重做汇总型恢复 —— 用不同底色区分"接着跑"与"重出汇总" */
+.resumable-bar.rb-summary{border-left-color:#c2410c;background:#fff7ed;border-color:#fed7aa;}
+.resumable-bar.rb-summary .rb-dot{background:#c2410c;}
+.resumable-bar.rb-summary .rb-btn{background:#c2410c;border-color:#c2410c;}
+.resumable-bar.rb-summary .rb-ghost{color:#c2410c;}
+
+/* ── 位置型修复（2026-10-04 真实浏览器验证抓出）────────────────────────────
+   症状：DOM 断言全绿（#resumable-bar 存在、class 对、按钮文案对），
+        但 getBoundingClientRect().top = -2948（视口仅 900px）—— **用户完全看不见**。
+   根因：提示条被 insertBefore 到 #chat-area（**可滚动容器**）的首位；
+        会话默认滚到底部（还带 8 秒 pinChatBottom 钉底），于是它被顶到视口之外。
+   修法：sticky 贴在滚动容器顶部 —— 语义仍是"顶部提示"，但滚动时始终可见。
+        ⚠️ 教训：往可滚动容器里插元素，"存在"不等于"看得见"，必须量 getBoundingClientRect。 */
+.resumable-bar{position:sticky;top:0;z-index:30;}

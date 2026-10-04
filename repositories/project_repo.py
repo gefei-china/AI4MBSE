@@ -163,12 +163,62 @@ class ProjectRepo(BaseRepo):
         )
 
     def delete_project(self, project_id: str) -> None:
+        """删除项目行本身。**引用清理请先调 `detach_project_references`**（见下）。
+
+        ⚠️ 本方法**故意不做级联**：「项目 = 任务的容器」（2026-09-24 用户拍板），
+        级联删数据会让用户误删几十轮建模历史。**但"不删内容"不等于"不处理引用"**——
+        直接 DELETE 会让 entities/relations 继续挂在一个已不存在的项目 id 上（悬空引用）。
+        保留本方法为裸 DELETE，是为了让"清理引用"与"删容器"两个动作在调用处**都可见**；
+        不要图省事把它写成自带清理 —— 那样调用方看不出副作用，也没法回报影响面。
+        """
         self.execute("DELETE FROM projects WHERE id=?", (project_id,))
 
     def count_project_tasks(self, project_id: str) -> int:
         """该项目下会话（任务）数——删除项目前的影响面提示。"""
         return int(self.scalar(
             "SELECT COUNT(*) FROM conversations WHERE project_id=?", (project_id,), default=0) or 0)
+
+    def count_project_assets(self, project_id: str) -> dict:
+        """该项目下的图谱资产数（实体/关系）——删除前的影响面提示。"""
+        out = {}
+        for t in ("entities", "relations"):
+            try:
+                out[t] = int(self.scalar(
+                    "SELECT COUNT(*) FROM %s WHERE project_id=?" % t, (project_id,), default=0) or 0)
+            except Exception:
+                out[t] = -1        # 表/列缺失：与"0 条"区分开
+        return out
+
+    def detach_project_references(self, project_id: str) -> dict:
+        """把所有指向该项目的引用**解绑**（project_id 置空），**不删任何内容**。
+
+        覆盖三张表，缺一不可（2026-10-04 实测）：
+          conversations —— 已有实现（`unassign_project_tasks`，保留为薄封装以不动既有调用点）
+          entities       —— 此前**漏**；种子项目 `project-satnet-broadband` 被删后，
+                             189 个实体全部变成悬空引用（`projects` 表里已查无此项目）
+          relations      —— 同上，249 条
+
+        为什么是"置空"而不是"回填到某个项目"：按 2026-10-04 架构决策，
+        **图谱/文档/本体是全项目共享的数据底座，不按项目隔离** ——
+        所以"这条数据属于哪个项目"这个问题**本身不该有答案**，置空最符合语义。
+        （若强行回填到某个项目，反而是给共享底座打上错误的归属标签。）
+
+        返回 {"tasks": n, "entities": n, "relations": n}，供路由回报影响面。
+        单表失败不影响其他表（尽最大努力解绑），但会记 warning。
+        """
+        out = {}
+        steps = [
+            ("tasks", "UPDATE conversations SET project_id='' WHERE project_id=?"),
+            ("entities", "UPDATE entities SET project_id='' WHERE project_id=?"),
+            ("relations", "UPDATE relations SET project_id='' WHERE project_id=?"),
+        ]
+        for key, sql in steps:
+            try:
+                out[key] = int(self.execute(sql, (project_id,)) or 0)
+            except Exception as e:
+                out[key] = -1
+                print("[project_repo] detach %s 失败：%s" % (key, str(e)[:120]), flush=True)
+        return out
 
     def unassign_project_tasks(self, project_id: str) -> int:
         """把该项目下的会话解绑（project_id 置空，会话与消息**保留**——删项目不删任务）。

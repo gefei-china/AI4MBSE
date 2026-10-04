@@ -236,7 +236,7 @@ def update_project(project_id: str, body: dict, conn=Depends(db_session)):
 
 @router.delete("/api/projects/{project_id}")
 def delete_project(project_id: str, conn=Depends(db_session)):
-    """移除项目。**只移除容器，不删内容**：其下会话解绑（project_id 置空）后仍留在「任务」列表。
+    """移除项目。**只移除容器，不删内容**：其下会话/图谱资产的 project_id 置空后内容仍保留。
 
     「项目 = 任务的容器」是本次左侧项目管理优化的既定语义（2026-09-24 用户拍板），
     级联删会话会让用户误删几十轮建模历史，故不做级联，只解绑并回报影响面。
@@ -245,30 +245,48 @@ def delete_project(project_id: str, conn=Depends(db_session)):
     否则默认项目会悬空指向已不存在的项目，表现为顶栏「⚠ 未匹配工程」、且前端「当前工程」
     高亮/自动展开全部失效（实测踩到：删项目后 /api/projects/default 返回 unset，
     项目组不再自动展开）。置空是既有合法状态（见 get_default_project 的 unset 语义）。
+
+    **2026-10-04 补齐引用完整性**：此前只解绑 `conversations`，**不管 entities/relations**
+    ⇒ 删项目必然留下悬空引用。实测证据：种子项目 `project-satnet-broadband` 被删后，
+    189 个实体 + 249 条关系全部指向一个 `projects` 表里已不存在的 id
+    （`GET /api/monitor/tenant-readiness` 的 `orphan_project` 报的正是这个）。
+    改为调 `detach_project_references()` 一次解绑三张表，并把各表影响面一并回报。
     """
     repo = ProjectRepo(conn)
     proj = repo.get_project(project_id)
     if not proj:
         return JSONResponse({"error": "Not found"}, 404)
-    detached = repo.unassign_project_tasks(project_id)
+    # 先解绑、后删容器：**顺序不能反**（先删 projects 行就再也定位不到引用了）
+    detached = repo.detach_project_references(project_id)
     cleared_default = (repo.get_default_project_id() or "").strip() == project_id
     if cleared_default:
         repo.set_default_project("")
     repo.delete_project(project_id)
     audit("王工", "project_delete",
-          f"移除项目: {proj.get('name')}({project_id})（解绑任务 {detached} 个，任务与消息保留"
+          f"移除项目: {proj.get('name')}({project_id})（解绑任务 {detached.get('tasks', 0)} 个、"
+          f"实体 {detached.get('entities', 0)} 个、关系 {detached.get('relations', 0)} 条，"
+          "内容与消息保留"
           + ("；该项目原为当前工程，已清除当前工程指针" if cleared_default else "") + "）",
           conn=conn)
-    return {"ok": True, "detached_tasks": detached, "cleared_default": cleared_default}
+    return {"ok": True, "detached_tasks": detached.get("tasks", 0),
+            "detached_entities": detached.get("entities", 0),
+            "detached_relations": detached.get("relations", 0),
+            "cleared_default": cleared_default}
 
 
 @router.get("/api/projects/{project_id}/task-count")
 def project_task_count(project_id: str, conn=Depends(db_session)):
-    """项目下任务数——「移除项目」确认框的影响面提示（移除前先告知会解绑几个任务）。"""
+    """项目下任务数——「移除项目」确认框的影响面提示（移除前先告知会解绑几个任务）。
+
+    2026-10-04：同时返回图谱资产数（实体/关系）。原先只报任务数，用户点确认后才知道
+    还解绑了 189 个实体——影响面提示不完整，就不算提示。
+    """
     repo = ProjectRepo(conn)
     if not repo.get_project(project_id):
         return JSONResponse({"error": "Not found"}, 404)
-    return {"project_id": project_id, "tasks": repo.count_project_tasks(project_id)}
+    assets = repo.count_project_assets(project_id)
+    return {"project_id": project_id, "tasks": repo.count_project_tasks(project_id),
+            "entities": assets.get("entities", 0), "relations": assets.get("relations", 0)}
 
 
 @router.post("/api/projects/pick-folder")
