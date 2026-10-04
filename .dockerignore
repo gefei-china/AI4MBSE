@@ -1,0 +1,63 @@
+# Docker 构建上下文排除清单（2026-10-04）
+#
+# 这个文件的价值全在**体积**：本机实测 tmp=7.7 GB、backups=1.8 GB、.venv=398 MB、
+# java-runtime=375 MB、checker.jar=126.79 MB。少排一项，构建上下文就多几百 MB 到 7 GB。
+# 写错的后果不是"镜像大一点"，而是**本地 push 失败 / CI 超时**，所以逐条写明理由。
+
+# ── Python 依赖与缓存（镜像内已用 /opt/venv 重建）─────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ── 本机运行产物：合计约 9.5 GB，是构建上下文爆炸的主因 ──────────────────
+tmp/
+backups/
+logs/
+data/
+perf-report/
+screenshots/
+outputs/
+.uploads/
+static/uploads/
+
+# ── 随包运行时（合计约 500 MB，**故意不进镜像**，改由 volume 挂载）────────
+# 理由见 Dockerfile 头部「硬约束 1」：不在 git 里，构建时 COPY 必然失败。
+java-runtime/
+sysml.library/
+checker.jar
+*.jar
+
+# ── 版本控制与 IDE ────────────────────────────────────────────────────────
+.git/
+.gitignore
+.github/
+.idea/
+.vscode/
+.trae/
+
+# ── 文档与本地笔记（不进运行镜像）────────────────────────────────────────
+docs/
+*.md
+!README.md
+
+# ── 数据库实体文件（走 volume 挂载，绝不能烤进镜像）───────────────────────
+*.db
+*.db-wal
+*.db-shm
+
+# ── 密钥类：一律不许进构建上下文 ─────────────────────────────────────────
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# ── 缓存与产物 ───────────────────────────────────────────────────────────
+.cache/
+node_modules/
+dist/
+build/

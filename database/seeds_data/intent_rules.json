@@ -1,0 +1,51 @@
+{
+  "_comment": [
+    "意图路由规则集 —— **版本化数据制品，不是代码**（2026-10-04 入库）。",
+    "",
+    "为什么要入库：这些规则原先只存在于 SQLite 的 intent_rules 表里，不在 git 中。",
+    "实测后果：干净库 init_db 后该表 **0 行** ⇒ CI 里的意图路由评测复现不出生产行为，",
+    "「规则改了会不会崩」在 CI 上无法回答；规则一旦丢失，行为不可追溯。",
+    "对标：LangChain 的 prompt、Dify 的 dataset 都作为**版本化制品**随代码走，",
+    "而不是躺在运行库里。",
+    "",
+    "语义：**只补不覆盖**。init_db 只插入缺失的 (trigger, intent)，",
+    "用户在设置页改过的规则不会被种子冲掉（与 glossary 种子同款 INSERT OR IGNORE 语义）。",
+    "",
+    "字段说明：",
+    "  trigger  触发词（子串匹配，见 agent/intent.py 的规则层）",
+    "  intent   目标意图名（须是 agents 表里存在的意图键，否则规则空转）",
+    "  weight   权重（30 = 强信号，实测可单独决定路由结果）",
+    "  source   出处，仅供追溯：builtin=随代码分发 / user=用户在设置页自建",
+    "  note     用途说明（改这条规则前先看它为什么存在）"
+  ],
+  "rules": [
+    {
+      "trigger": "结构树",
+      "intent": "design",
+      "weight": 30.0,
+      "source": "user",
+      "note": "结构树是 SysML v2 的一种视图说法，用户常直接说「生成结构树」而非「设计」。无此规则时该句会落到 chat（CI 黄金集实测错例之一）。"
+    },
+    {
+      "trigger": "追溯矩阵",
+      "intent": "review",
+      "weight": 30.0,
+      "source": "user",
+      "note": "「追溯矩阵检查」属评审类。无此规则时被术语归一化带偏到 knowledge_qa（CI 黄金集实测错例之一）。"
+    },
+    {
+      "trigger": "接口变更",
+      "intent": "impact",
+      "weight": 30.0,
+      "source": "user",
+      "note": "接口变更影响分析走 impact 意图（变更影响面分析 Agent）。"
+    },
+    {
+      "trigger": "参数图",
+      "intent": "design",
+      "weight": 20.0,
+      "source": "user",
+      "note": "「画一张参数图」= 参数视图生成，设计类子任务。权重 20 低于前三条（可被更强信号覆盖）。"
+    }
+  ]
+}

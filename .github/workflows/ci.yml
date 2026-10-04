@@ -64,3 +64,57 @@ jobs:
 
       - name: Guard 上下文防腐 / 范围自愈（51 项）
         run: python tools/verify/verify_context_scope_guard.py
+
+      # ── P1-8（2026-10-04）：意图路由评测门禁（可阻断）──────────────────────────
+      # 为什么单独一个 job 而不是塞进上面：它**自建干净库**（MBSE_DB_PATH 指向临时文件
+      # 并 init_db），口径与开发机生产库**故意不同** —— 因为准确率门禁只有在输入等价时
+      # 才有意义（详见 tools/eval/run_ci_eval.py 文件头的踩坑记录）。
+      # 锁的是「规则层+语义层不许塌」，阈值 0.70（干净库+无LLM 实测基线 0.828）。
+      # 模型质量评测另跑带 LLM 的夜间任务（CI 无 secret，且模型输出有温度）。
+      - name: Guard 意图路由评测（19 项，含准确率下限 0.70）
+        run: python tools/eval/run_ci_eval.py
+
+      # ── P0-2 批次 2/3（2026-10-03/04）：编排 checkpoint + 断点续跑 ──────────────
+      - name: Guard 编排 checkpoint / resume（79 项 + 6 变异）
+        run: python tools/verify/verify_orch_resume.py
+
+      # ── P0-4（2026-10-04）：多租户隔离（图谱路径）────────────────────────────
+      - name: Guard 多租户隔离（29 项 + 3 变异）
+        run: python tools/verify/verify_tenant_isolation.py
+
+      # ── P1-5（2026-10-04）：容器化静态门禁 ──────────────────────────────────
+      # 注意：本 workflow 跑在 ubuntu-latest，**有 Docker**，故这里除静态门禁外
+      # 再补一次真实构建 + 启动冒烟 —— 静态门禁验的是"该排除的排了、该有的指令有了"，
+      # 验不了"镜像能不能真起来"。两者缺一，容器化就只是纸面交付。
+      - name: Guard 容器化静态契约（36 项 + 5 变异）
+        run: python tools/verify/verify_containerization.py
+
+      - name: Docker build（真实构建，验静态门禁验不到的那一半）
+        run: docker build -t mbse-system:ci .
+
+      - name: Docker 启动冒烟（容器内 /api/monitor/orphan-runs 应可达）
+        run: |
+          docker run -d --name mbse_ci -p 18012:8012 mbse-system:ci
+          # 首次启动要建 130 张表 + 语义预热，给足等待；失败时把日志打出来便于定位
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:18012/api/monitor/orphan-runs >/dev/null 2>&1; then
+              echo "container healthy after ${i}0s"; break
+            fi
+            sleep 10
+          done
+          curl -fsS http://127.0.0.1:18012/api/monitor/orphan-runs || {
+            docker logs mbse_ci; docker rm -f mbse_ci; exit 1; }
+          docker rm -f mbse_ci
+
+      # ── 批次 1 的四项（鉴权 / SSE 心跳 / 孤儿回收 / 限流）──────────────────────
+      - name: Guard 鉴权强制（15 项 + 2 变异）
+        run: python tools/verify/verify_auth_enforce.py
+
+      - name: Guard SSE 心跳与降级可见（23 项 + 4 变异）
+        run: python tools/verify/verify_sse_heartbeat.py
+
+      - name: Guard 孤儿编排回收（29 项 + 2 变异）
+        run: python tools/verify/verify_orphan_reap.py
+
+      - name: Guard 入口限流（36 项 + 1 变异）
+        run: python tools/verify/verify_rate_limit.py

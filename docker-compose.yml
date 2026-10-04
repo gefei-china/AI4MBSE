@@ -1,0 +1,71 @@
+# mbse_system 主服务编排（2026-10-04 新增，P1-5）
+#
+# 启动：
+#   docker compose up -d
+#   docker compose logs -f app
+# 停止：docker compose down        （加 -v 会删库，慎用）
+#
+# ⚠️ **单副本是硬约束，不是保守建议**：
+#   本工程用 SQLite，且已实测确认它是**单写者**模型（WAL + busy_timeout）。
+#   两个副本各写各的库文件 ⇒ 两份数据分叉、会话与模型在两边不一致。
+#   要横向扩展必须先换 PostgreSQL（P0-3），不是把 replicas 调大。
+#   compose 里刻意不写 `deploy.replicas`，并在下方显式注释，避免有人顺手加上。
+#
+# ⚠️ 随包运行时必须挂载（否则 SysML v2 校验/视图投影不可用，其余功能正常）：
+#   把本机的 java-runtime / sysml.library / checker.jar 所在目录挂到 /opt/mbse-runtime。
+#   下面默认按「与本仓库同级目录」写，按实际位置改左侧路径即可。
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mbse-system:local
+    container_name: mbse_app
+    ports:
+      - "8012:8012"
+    environment:
+      # 出网配置（私有化部署按需覆盖；不要把密钥写进本文件，交给 .env）
+      - MBSE_DB_PATH=/data/mbse.db
+      - MBSE_HOST=0.0.0.0
+      - MBSE_PORT=8012
+    env_file:
+      # required:false —— .env 不存在时不报错（Compose v2 语法）。
+      # 写成裸 `- .env` 的话，没有 .env 的机器上 `docker compose up` 直接失败。
+      - path: .env
+        required: false
+    volumes:
+      # ① 数据（SQLite 单文件 + WAL 边车必须同目录）
+      - ./docker-data:/data
+      # ② 随包运行时：checker.jar + java-runtime + sysml.library
+      - ../mbse-system-runtime:/opt/mbse-runtime:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8012/api/monitor/orphan-runs"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s     # 首次启动要建 130 张表 + 语义预热，给足时间
+      retries: 3
+    restart: unless-stopped
+    # 单副本：见文件头「单副本是硬约束」
+    # deploy.replicas: 1     ← 刻意注释掉，防止有人以为可以横向扩
+
+  # ── 可选侧车：SPARQL 三元库（默认不启动，需要时用 --profile fuseki 起）──
+  # 为什么放 profile 而不是默认起：它与主服务是**可选**依赖（graph_db.enabled 关闭时不用），
+  # 默认起会让"最小可用部署"多一个必挂组件。
+  fuseki:
+    image: ghcr.io/ebraminio/fuseki:5.0.0-jdk17
+    container_name: mbse_fuseki
+    profiles: ["fuseki"]
+    ports:
+      - "3030:3030"
+    environment:
+      - FUSEKI_DATASET_1=mbse
+      - ADMIN_PASSWORD=${FUSEKI_ADMIN_PASSWORD:-mbse-admin}
+    volumes:
+      - ./fuseki-data:/fuseki/databases
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3030/$$/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped

@@ -446,3 +446,59 @@ def _seed_glossary(conn):
             (user_term, canonical, domain, intent, boost, desc),
         )
     conn.commit()
+
+
+# ── 意图路由规则集种子（2026-10-04 入库）────────────────────────────────────
+# 为什么规则集要入库：原先 4 条规则只存在于运行库的 intent_rules 表里，不在 git。
+# 实测后果：干净库 init_db 后该表 **0 行** ⇒ CI 的意图路由评测复现不出生产行为
+# （实测黄金集准确率 0.828，"生成结构树"/"画一张参数图"/"追溯矩阵检查一下" 三条全错），
+# 规则改动/丢失在 CI 上无法察觉。规则集应当是**随代码走的版本化制品**
+# （对标 LangChain prompt / Dify dataset 的做法）。
+#
+# 语义：**只补不覆盖** —— 只插缺失的 (trigger, intent)，
+# 用户在设置页改过的规则不会被种子冲掉（与 _seed_glossary 同款语义）。
+def _seed_intent_rules(conn) -> int:
+    """把 seeds_data/intent_rules.json 里的规则补进 intent_rules（幂等，不覆盖已有）。
+
+    返回本次新插入的行数。文件缺失/损坏 ⇒ 返回 0 并静默（**种子失败绝不能让服务起不来**）。
+    """
+    import json as _json
+    import os as _os
+    # ⚠️ 路径：`__file__` = database/seeds.py ⇒ 只需**退一级**到 database/，
+    #    再拼 seeds_data/。（初版写成退两级 ⇒ 指向仓库根，文件恒不存在 ⇒ 静默种 0 条，
+    #    而这个"静默"恰好把 bug 藏了三天 —— 由真实数据 A/B 验证抓出。
+    #    教训：种子/兜底逻辑的"什么都没做"必须**可观测**，否则它和"成功但无需做"无法区分。）
+    p = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "seeds_data", "intent_rules.json")
+    if not _os.path.exists(p):
+        print("[seed] ⚠️ 意图规则种子文件缺失：%s（规则未播种，意图路由会少一批关键词）" % p,
+              flush=True)
+        return 0
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = _json.load(f)
+        rules = data.get("rules") or []
+    except Exception as e:
+        print("[seed] ⚠️ 意图规则种子读取失败（不影响启动）：%s | %s" % (str(e)[:100], p), flush=True)
+        return 0
+    n = 0
+    for r in rules:
+        trig = (r.get("trigger") or "").strip()
+        intent = (r.get("intent") or "").strip()
+        if not trig or not intent:
+            continue
+        exists = conn.execute(
+            "SELECT 1 FROM intent_rules WHERE trigger=? AND intent=? LIMIT 1",
+            (trig, intent)).fetchone()
+        if exists:
+            continue
+        conn.execute(
+            "INSERT INTO intent_rules (trigger, intent, weight, enabled, created_by, created_at) "
+            "VALUES (?,?,?,1,?,datetime('now'))",
+            (trig, intent, float(r.get("weight") or 20.0),
+             "seed:%s" % (r.get("source") or "builtin")))
+        n += 1
+    conn.commit()
+    # 无条件打印"已检查 + 结果"，让"种了 0 条"和"文件读不到"在日志里可区分
+    print("[seed] 意图路由规则：文件 %d 条，本次新增 %d 条（已存在的 %d 条不覆盖）"
+          % (len(rules), n, len(rules) - n), flush=True)
+    return n
