@@ -658,6 +658,14 @@ DEFAULT_CONFIG = {
         "resume_max_attempts": 5,        # 单批次最多恢复几次，超过不再自愈（防"恢复→再崩"死循环）
         "resume_include_failed": False,  # 是否连带重跑 failed 任务（默认否：可能有副作用）
         "auto_resume_on_startup": False, # 启动自动重投（默认关，理由同上）
+        # ── P0-2b（2026-10-04）：自动重投守护（core/orch_supervisor.py）──
+        # 默认**关**，与 run_registry.reap_on_startup（启动必跑）刻意不同：
+        #   孤儿回收只改状态、零副作用；**自动重投会真的调 LLM 烧额度**。
+        # 开启前建议先跑几轮 scan_once(dry 观察) 看清它会投哪些批次。
+        "auto_resume_enabled": False,      # 总开关（守护线程是否启动）
+        "auto_resume_interval_s": 300,     # 扫描周期（与 alert_loop 同量级）
+        "auto_resume_max_runs": 3,         # 单轮最多重投几个批次（防一次性打爆额度）
+        "auto_resume_include_failed": False,  # 是否连带重跑 failed（默认否：可能有副作用）
         "checkpoint_enabled": True,      # 旁路开关：检查点写入失败永不阻断编排
     },
     # ── P1-1（2026-10-03 整改）：入口限流（对标 Dify 配额 / Anthropic X-RateLimit-* 契约）──

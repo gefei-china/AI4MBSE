@@ -85,6 +85,23 @@ async def lifespan(app: FastAPI):
                          cooldown_min=int(config.get("monitor", "alert_cooldown_min", 30)))
     except Exception as _e:
         print("[startup] 周期告警评估器跳过: %s" % str(_e)[:120], flush=True)
+    # P0-2b（2026-10-04）：编排自动重投守护 —— 让"崩溃的编排自己好"，不再等人点继续。
+    # 默认关（会真的调 LLM）；开关口径见 config.orchestration.auto_resume_*。
+    try:
+        if config.as_bool("orchestration", "auto_resume_enabled", False):
+            from core.orch_supervisor import start_resume_loop
+            start_resume_loop(
+                interval_sec=float(config.get("orchestration", "auto_resume_interval_s", 300)),
+                max_runs=int(config.get("orchestration", "auto_resume_max_runs", 3)),
+                stale_s=int(config.get("orchestration", "resume_stale_s", 1800)),
+                include_failed=bool(config.get("orchestration", "auto_resume_include_failed", False)),
+            )
+        else:
+            print("[startup] 编排自动重投守护未启用（orchestration.auto_resume_enabled=off，"
+                  "崩溃批次需人工点继续）", flush=True)
+    except Exception as _e:
+        print("[startup] 自动重投守护跳过：%s" % str(_e)[:120], flush=True)
+
     # MCP-D1：后台健康巡检线程（每 5 分钟对 sse/http 服务器做 initialize 握手探测）
     try:
         from mcp_health import start_health_loop
