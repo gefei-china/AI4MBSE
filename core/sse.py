@@ -28,9 +28,42 @@
 import queue
 import threading
 
-__all__ = ["iter_with_heartbeat", "snapshot", "degrade_delta"]
+__all__ = ["iter_with_heartbeat", "iter_with_heartbeat_async", "to_sse_frame",
+           "snapshot", "degrade_delta"]
 
 _SENTINEL = object()
+
+
+# ── 事件归一化：dict → SSE 帧字符串（2026-10-04 补，带血泪教训）──────────────
+# 【为什么必须有这个函数】`AgentPipeline.execute_stream` 产出的是 **dict** 事件
+# （{"type":"token","delta":...}），而 Starlette 的 `StreamingResponse` 只接受
+# str/bytes —— 直接把 dict 丢给它会抛
+#   `AttributeError: 'dict' object has no attribute 'encode'`
+# 而这**正是批次 1 引入的回归**：改用 iter_with_heartbeat 包装时，
+# 端点里的 `yield f"event: {ev['type']}\ndata: {json.dumps(ev)}\n\n"` 被简化成了
+# `yield raw`，**序列化就此丢失**，而当时的门禁只测包装器本身（喂的是字符串源），
+# 真机也没打这个端点 ⇒ 主功能 `/chat/stream` 一直是坏的，直到今天真机验证才暴露。
+#
+# 【为什么放在包装器里而不是端点里】
+# ① 单一真源：两个包装器（同步/异步）都过它，**不可能再丢一次**；
+# ② 对已序列化的字符串**原样透出**，flows.py 那条链路行为不变（向后兼容）；
+# ③ 可离线单测：给包装器喂 dict 源，断言产出是 `event: X\ndata: {...}\n\n`。
+def to_sse_frame(item) -> str:
+    """把事件源产出的元素归一化成 SSE 帧字符串。
+
+    - dict → `event: {type}\\ndata: {json}\\n\\n`
+    - str/bytes → 原样透出（已由调用方序列化好的）
+    - 其它类型 → 退化为 `data: {str}` 的一帧（不静默丢内容）
+    """
+    if isinstance(item, bytes):
+        return item.decode("utf-8", "replace")
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        import json as _json
+        et = item.get("type") or "message"
+        return "event: %s\ndata: %s\n\n" % (et, _json.dumps(item, ensure_ascii=False))
+    return "data: %s\n\n" % str(item)
 
 
 # ── P1-3（2026-10-03 降级显式化）：可测试的纯函数，路由层不做内联算术 ──
@@ -80,12 +113,14 @@ def iter_with_heartbeat(iterator, interval_s: float = 15.0, comment: str = "ping
         try:
             for frame in iterator:
                 if stop.is_set():
-                    try:
-                        iterator.close()   # 同线程调用：此刻 generator 未在执行，安全
+                    try:                        iterator.close()   # 同线程调用：此刻 generator 未在执行，安全
                     except Exception:
                         pass
                     return
-                q.put((False, frame))
+                # 2026-10-04：投递前归一化 —— dict 事件必须序列化成 SSE 帧，
+                # 否则 Starlette 会抛 `'dict' object has no attribute 'encode'`
+                # （这正是批次 1 丢掉端点里那行 json.dumps 造成的回归）
+                q.put((False, to_sse_frame(frame)))
         except BaseException as e:  # noqa: BLE001 —— 含 GeneratorExit，必须全部回传
             box["exc"] = e
         finally:
@@ -115,6 +150,87 @@ def iter_with_heartbeat(iterator, interval_s: float = 15.0, comment: str = "ping
         # 帧边界停下（最多滞后一帧，远好于"用户关了页面、LLM 还在烧钱跑到本轮结束"）。
         stop.set()
         # 兜底尝试：若此刻源刚好没在执行，close 直接生效（省掉一帧的滞后）
+        try:
+            close = getattr(iterator, "close", None)
+            if callable(close):
+                close()
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 异步版心跳包装（P0-1，2026-10-04）—— 让 SSE 长连接**不再占用线程池线程**
+# ══════════════════════════════════════════════════════════════════════════
+# 【问题：为什么同步 def 的 SSE 端点会拖垮并发】
+# 路由写 `def`（同步）时，FastAPI 把整个端点放 anyio **线程池**执行；返回
+# `StreamingResponse(同步生成器)` 后，Starlette 用 `iterate_in_threadpool` 消费它 ——
+# 每产出一帧都要占用一次线程池线程。本仓实测单轮编排 344~1155 s，而线程池上限 **40**
+# （anyio 默认），意味着**约 30 个并发 SSE 就会把线程池打满**，之后所有同步端点
+# （包括与 SSE 无关的普通读接口）一起排队 —— 这是 P0-1「同步阻塞执行模型」的
+# 最直观后果，也是本次只改 SSE、不动其余 560+ 端点的原因（性价比最高的切口）。
+#
+# 【解法】
+# 端点改 `async def` + 返回 **async** 生成器 ⇒ Starlette 直接 `async for` 消费，
+# **不碰线程池**。内部阻塞（LLM 调用）由一个自建 daemon 线程承担，通过
+# `loop.call_soon_threadsafe` 把帧投递到 `asyncio.Queue`；主协程只在
+# `await queue.get()` 处让出，**空闲时完全不占任何线程**。
+# 心跳仍由 `asyncio.wait_for` 的超时分支产出，语义与同步版一致（15 s）。
+#
+# 【为什么保留同步版】
+# ① flows.py 的流式执行仍用同步版（它自己 sleep(1) 轮询，改动面更大、收益相同但风险更高）；
+# ② 同步版仍被 verify_sse_heartbeat 的既有断言覆盖，不因新增异步版而失去回归保护。
+async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment: str = "ping"):
+    """把阻塞式同步事件源包装成 **async** 生成器（带心跳）。
+
+    与 `iter_with_heartbeat` 的差别只有一处，但很关键：消费侧不占线程池线程。
+    用法：端点写成 `async def` + `return StreamingResponse(agen(), media_type="text/event-stream")`。
+    """
+    import asyncio
+    import threading as _th
+
+    q: "asyncio.Queue" = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    box: dict = {}
+    stop = _th.Event()          # loop 关闭 / 消费端退出时，通知 worker 停止投递
+    _DONE = object()
+
+    def _worker():
+        """跑在自建 daemon 线程里（不占 anyio 线程池）。"""
+        try:
+            for frame in iterator:
+                if stop.is_set():
+                    break
+                # 2026-10-04：与同步版同一归一化（单一真源在 to_sse_frame）
+                try:
+                    loop.call_soon_threadsafe(q.put_nowait, (False, to_sse_frame(frame)))
+                except RuntimeError:
+                    break
+        except BaseException as e:      # noqa: BLE001 —— 含 GeneratorExit，必须回传
+            box["exc"] = e
+        finally:
+            try:
+                loop.call_soon_threadsafe(q.put_nowait, (True, _DONE))
+            except RuntimeError:
+                pass                        # loop 已关，无需收尾
+
+    _th.Thread(target=_worker, name="sse-source-async", daemon=True).start()
+
+    try:
+        while True:
+            try:
+                done, frame = await asyncio.wait_for(q.get(), timeout=interval_s)
+            except asyncio.TimeoutError:
+                yield ": %s\n\n" % comment
+                continue
+            if done:
+                break
+            yield frame
+        exc = box.get("exc")
+        if exc is not None and not isinstance(exc, GeneratorExit):
+            raise exc
+    finally:
+        stop.set()             # 先叫停 worker，再关事件源（顺序反了会漏帧）
+        # 客户端断开 → 外层关闭本生成器 → 连带把事件源关掉，避免 LLM 继续烧钱
         try:
             close = getattr(iterator, "close", None)
             if callable(close):

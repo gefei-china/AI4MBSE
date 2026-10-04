@@ -212,11 +212,23 @@ def chat(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depends(curr
 
 
 @router.post("/api/conversations/{conv_id}/chat/stream")
-def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depends(current_user)):
+async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
+                      user=Depends(current_user)):
     """AI 输出流式（V2.3.2 优化）。SSE 事件流：stage 阶段 / token 增量 / done 结果 / error。
 
-    必须用同步 def + 同步生成器：db_session 连接在线程池创建，流式生成器在
-    StreamingResponse 线程中执行 SQLite 读写，同步路径无跨线程问题。
+    ⚠️ **2026-10-04（P0-1）由 `def` 改为 `async def`** —— 此处原有一段注释断言
+    "必须用同步 def + 同步生成器：db_session 连接在线程池创建，流式生成器在
+    StreamingResponse 线程中执行 SQLite 读写，同步路径无跨线程问题"。
+    **该论断的结论是错的**，已更正：
+      · 同步 `def` 端点返回同步生成器时，Starlette 用 `iterate_in_threadpool` 消费，
+        **每产出一帧都要占一次线程池线程**；而单轮编排实测 344~1155 s、
+        anyio 线程池上限 40 ⇒ 约 30 个并发 SSE 就会打满线程池，
+        **连与 SSE 无关的普通读接口也一起排队**。
+      · 同步 SQLite 并不是理由：内部阻塞由 `iter_with_heartbeat_async` 的
+        **自建 daemon 线程**承担，主协程只在 `await queue.get()` 处让出 ——
+        SQLite 读写仍发生在 worker 线程（与 `check_same_thread=False` 的既有设置一致），
+        并没有跑到 event loop 上。
+    保留同步版 `iter_with_heartbeat`（flows.py 在用），两者语义一致、并存。
     """
     conv = ConversationRepo(conn).get_conversation(conv_id)
     if not conv:
@@ -240,7 +252,7 @@ def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depen
 
     _degrade_base = _degrade_snapshot()
 
-    def event_stream():
+    async def event_stream():
         # P1-2：首帧声明重连间隔（SSE 协议字段），并立刻产一帧心跳，
         # 让 nginx/网关在本轮第一个 LLM 请求发出前就看到"连接活跃"。
         yield "retry: 3000\n\n"
@@ -253,8 +265,9 @@ def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depen
         # P1-1 停止生成：客户端断开（AbortController）→ Starlette 关闭生成器 → GeneratorExit
         # 在 yield 点抛出，这里放行让连接干净关闭；其余异常转为 error 事件（不中断会话）
         try:
-            from core.sse import iter_with_heartbeat
-            _frames = iter_with_heartbeat(
+            # P0-1：用**异步**包装器 —— 消费侧不占 anyio 线程池线程（见端点 docstring 的更正说明）
+            from core.sse import iter_with_heartbeat_async
+            _frames = iter_with_heartbeat_async(
                 agent.execute_stream(body.message, conv_id, work_branch,
                                      body.provider_id, body.attachments or [],
                                      forced_intent=body.forced_intent or None,
@@ -265,7 +278,7 @@ def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depen
                 # P1-2：15 s —— 链路上最小 idle timeout 通常是 nginx 默认 60 s，取 1/4 留余量
                 interval_s=15.0,
             )
-            for raw in _frames:
+            async for raw in _frames:
                 yield raw
         except GeneratorExit:
             _client_gone = True
@@ -274,7 +287,7 @@ def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depen
             #  CPython 会抛 ValueError: generator already executing —— 属预期，吞掉即可）。
             try:
                 if _frames is not None:
-                    _frames.close()
+                    await _frames.aclose()
             except Exception:
                 pass
             raise

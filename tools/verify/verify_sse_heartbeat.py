@@ -301,9 +301,132 @@ def m_i6():
                 d["mock_calls"] == 0, "", VACUOUS)
 
 
+def t_i8_async():
+    """P0-1（2026-10-04）：主 SSE 端点必须是 async，否则长连接会占住全站 anyio 线程池。
+
+    真实压测数字（`tools/verify/bench_sse_concurrency.py`，30 并发、事件源每帧阻塞 0.8s）：
+        同步版：anyio 线程池 **+30**（+ 自建 30 = 总 +60）
+        异步版：anyio 线程池 **+0**  （+ 自建 30 = 总 +30）
+    本仓 anyio 上限 40 ⇒ 同步形态下约 30 个并发 SSE 就打满线程池，
+    **连与 SSE 无关的普通读接口也一起排队**。
+    """
+    print("\n=== I8 P0-1：主 SSE 端点异步化（不占 anyio 线程池）===")
+    import inspect
+    import os
+    conv = os.path.join(ROOT, "routers", "conversations.py")
+    src = open(conv, encoding="utf-8").read()
+    ok = _rec("I8a 主端点 chat_stream 定义为 async def",
+              "async def chat_stream(" in src,
+              "同步 def 会让每帧占用一次 anyio 线程池线程")
+    try:
+        sys.path.insert(0, ROOT)
+        from routers.conversations import chat_stream
+        ok &= _rec("I8b 运行时确认 iscoroutinefunction", inspect.iscoroutinefunction(chat_stream) is True)
+    except Exception as e:
+        ok &= _rec("I8b 运行时确认 iscoroutinefunction", False, str(e)[:80])
+    ok &= _rec("I8c 端点使用异步心跳包装器", "iter_with_heartbeat_async(" in src)
+    ok &= _rec("I8d 消费方式为 async for", "async for raw in _frames:" in src)
+    ok &= _rec("I8e 断连收尾用 aclose（async 生成器没有 close）",
+               "await _frames.aclose()" in src)
+    sse = open(SSE_SRC, encoding="utf-8").read()
+    ok &= _rec("I8f 异步包装器已导出", "iter_with_heartbeat_async" in
+               (sse.split("__all__")[1].split("]")[0] if "__all__" in sse else ""))
+    ok &= _rec("I8g 异步包装器有 stop 事件（loop 关闭后 worker 必须停，否则 RuntimeError 刷屏）",
+               "stop = _th.Event()" in sse and "stop.is_set()" in sse and "stop.set()" in sse)
+    ok &= _rec("I8h call_soon_threadsafe 的 RuntimeError 被捕获（实测会抛 Event loop is closed）",
+               "except RuntimeError" in sse)
+    ok &= _rec("I8i 同步版仍保留（flows.py 在用，勿删）", "def iter_with_heartbeat(" in sse)
+    return ok
+
+
+def m_i8():
+    """M7：把主端点改回同步 `def` ⇒ I8a/b 必须判红。"""
+    print("\n=== 变异 M7：主端点退回同步 def ===")
+    mutated = open(os.path.join(ROOT, "routers", "conversations.py"),
+                   encoding="utf-8").read().replace(
+        "async def chat_stream(", "def chat_stream(", 1)
+    ok = ("async def chat_stream(" in
+          open(os.path.join(ROOT, "routers", "conversations.py"), encoding="utf-8").read()
+          and "async def chat_stream(" not in mutated)
+    return _rec("M7 变异被复现（端点已非 async）→ 证明 I8a/b 非空转", ok, "", VACUOUS)
+
+
+def t_i9_regression():
+    """I9 **回归门禁**：包装器必须把 dict 事件序列化成 SSE 帧（补批次 1 的真实回归）。
+
+    2026-10-04 真机验证抓到：批次 1 改用 iter_with_heartbeat 后，端点里的
+    `yield f"event: {ev['type']}\\ndata: {json.dumps(ev)}\\n\\n"` 被简化成 `yield raw`，
+    而事件源产出的是 **dict** ⇒ Starlette 抛
+    `AttributeError: 'dict' object has no attribute 'encode'`
+    ⇒ **主功能 /chat/stream 自批次 1 起就是坏的**，直到真机打这个端点才暴露。
+
+    为什么之前没抓到：门禁只喂**字符串源**给包装器（`_slow_source` 产字符串），
+    真机 UI 验证又只验了恢复提示条、没打这个端点。
+    ⇒ 这条断言的价值是**把"事件源是 dict"这个真实前提写进门禁**。
+    """
+    print("\n=== I9 回归门禁：dict 事件必须被序列化为 SSE 帧 ===")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_sse_probe", SSE_SRC)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    to_frame = mod.to_sse_frame
+
+    ok = _rec("I9a dict 事件 → event/data 两行 SSE 帧",
+              to_frame({"type": "token", "delta": "hi"}) == 'event: token\ndata: {"type": "token", "delta": "hi"}\n\n',
+              repr(to_frame({"type": "token", "delta": "hi"})))
+    ok &= _rec("I9b 已序列化的字符串原样透出（flows.py 链路不变）",
+               to_frame("event: ping\ndata: {}\n\n") == "event: ping\ndata: {}\n\n")
+    ok &= _rec("I9c bytes 被解码", to_frame(b"event: x\n\n") == "event: x\n\n")
+    ok &= _rec("I9d 未知类型不静默丢内容", "data: " in to_frame(123))
+    ok &= _rec("I9e 非 ASCII 正确保留（不转义成 \\u）",
+               "负载" in to_frame({"type": "token", "delta": "负载"}))
+
+    # 端到端：喂 dict 源给**同步包装器**，断言产出可被 Starlette 直接使用
+    def dict_source():
+        yield {"type": "stage", "name": "生成与校验", "status": "run"}
+        yield {"type": "token", "delta": "你好"}
+        yield {"type": "done", "data": {"ok": True}}
+    ns = {}
+    exec(compile(open(SSE_SRC, encoding="utf-8").read(), SSE_SRC, "exec"), ns)
+    out = list(ns["iter_with_heartbeat"](dict_source(), interval_s=5.0))
+    ok &= _rec("I9f 同步包装器：dict 源 → 全部产出为 str",
+               out and all(isinstance(x, str) for x in out), f"types={[type(x).__name__ for x in out[:3]]}")
+    ok &= _rec("I9g 同步包装器：首帧含 event: stage", out and out[0].startswith("event: stage"),
+               repr(out[0][:40]) if out else "empty")
+    ok &= _rec("I9h 同步包装器：token 帧内容完整", any("你好" in x for x in out))
+
+    # 异步包装器同样要过（真机 async 端点就靠它）
+    import asyncio
+
+    async def _run():
+        return [x async for x in mod.iter_with_heartbeat_async(dict_source(), interval_s=5.0)]
+    out2 = asyncio.run(_run())
+    ok &= _rec("I9i 异步包装器：dict 源 → 全部产出为 str",
+               out2 and all(isinstance(x, str) for x in out2),
+               f"types={[type(x).__name__ for x in out2[:3]]}")
+    ok &= _rec("I9j 异步包装器：token 帧内容完整", any("你好" in x for x in out2))
+    return ok
+
+
+def m_i9():
+    """M8：还原成"直接透传 dict"（批次 1 的写法）⇒ I9a/f/i 必须判红。"""
+    print("\n=== 变异 M8：包装器直接透传 dict（批次 1 的真实写法）===")
+    ns = {}
+    exec(compile(open(SSE_SRC, encoding="utf-8").read(), SSE_SRC, "exec"), ns)
+    orig = ns["to_sse_frame"]
+    ns["to_sse_frame"] = lambda item: item          # 变异：不做归一化
+
+    def dict_source():
+        yield {"type": "token", "delta": "hi"}
+    out = list(ns["iter_with_heartbeat"](dict_source(), interval_s=5.0))
+    leaked = [x for x in out if isinstance(x, dict)]
+    ok = (len(leaked) > 0) and (orig({"type": "token"}) != {"type": "token"})
+    return _rec("M8 变异被复现（dict 泄漏到 SSE 帧）→ 证明 I9a/f 非空转", ok, f"leaked={len(leaked)}", VACUOUS)
+
+
 def main():
     print("=" * 78)
-    print("P1-2 SSE 心跳 / P1-3 降级显式化 —— 不变式 + 变异自证")
+    print("P1-2 SSE 心跳 / P1-3 降级显式化 / P0-1 SSE 异步化 —— 不变式 + 变异自证")
     print("=" * 78)
     t_i1()
     m_i1()
@@ -316,6 +439,10 @@ def main():
     t_i6_i7()
     t_i6_runtime()
     m_i6()
+    t_i8_async()
+    m_i8()
+    t_i9_regression()
+    m_i9()
 
     n_fail = sum(1 for k, _, _ in _results if k == FAIL)
     n_vac = sum(1 for k, _, _ in _results if k == VACUOUS)
