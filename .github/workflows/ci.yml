@@ -148,6 +148,19 @@ jobs:
       - name: Guard 大文件链路（35 项 + 7 变异）
         run: python tools/verify/verify_largefile_pipeline.py
 
+      # ── P1-8（2026-10-04）：意图路由评测进 CI ─────────────────────────────
+      # 评测脚本早就存在（tests/manual_verify/eval_intent_routing.py），但从没有门禁
+      # ⇒ "改完跌分才发现"。接之前先实测两组数字，发现它们**不是同一道题**：
+      #   本机现有库 pool(44 例)          accuracy 0.9773
+      #   **干净库（CI 等价）** builtin(29) accuracy 0.9310
+      # 样本池与关键词规则都是**数据、不在 git 里** ⇒ 阈值只能锚干净库，
+      # 且脚本每次**自建干净临时库 + 自证库路径已切**（MEMORY 里的教训：
+      # 环境变量设太晚 ⇒ 脚本在生产库上跑了一遍迁移）。
+      # 跑两遍并断言逐位一致，只挡塌陷（阈值 0.86 = 基线 −0.07）不追最优；
+      # 模型相关的波动不进PR 阻断（对标 LangSmith/Dify 的 eval-in-CI 分层）。
+      - name: Guard 意图路由评测（P1-8 · 阈值 0.86 / 基线 0.9310）
+        run: python tools/verify/verify_eval_routing.py
+
       # ── P1-6 收口（2026-10-04）：重复定义审计从"没进 CI"变成"在 CI 里"─────
       # 这个脚本早写好了但一直没接进流水线 ⇒ 一次都没在合并请求上跑过。
       # 接之前先修了它两个会让门禁"形同虚设"的问题：
