@@ -27,6 +27,47 @@ def db_session():
         conn.close()
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# P0-5（2026-10-03 整改）：强制鉴权收口
+#
+# 依据《架构-可扩展性-稳定性整体评估与标杆对标》§4.1 / §6 P0-5 实测三条漏洞：
+#   D1 身份可自报 —— `X-User-Id` 请求头自报身家即被采信 ⇒ 任意人冒充任意用户；
+#      叠加 `auth.enforce_login=False` 与 `users` 表无口令列 ⇒ 匿名请求一路 200。
+#   D2 token 无效仍回落 —— 旧实现「token 查得到就用，查不到继续读 X-User-Id」，
+#      于是**随手伪造一个 session token 就能把 X-User-Id 通道重新打开**：
+#      形式上加了锁，实际上留了窗。这条靠读代码极易漏判（分支互斥没做完），
+#      已锁进 tools/verify/verify_auth_enforce.py 的 I2 不变式。
+#   D3 RBAC 对匿名放行 —— `require_permission` 里 `if user is None: return user`。
+#
+# 对标 **Dify**（2026 平台综述：工作区多租户 + RBAC）：身份只有两条来路 ——
+# 会话凭据（浏览器）或 API Key（服务端），均不可伪造，且**不存在"弱凭据兜底强凭据"
+# 的回落路径**。本修复按该语义收口，三件事：
+#   ① 强凭据**排他**：带了 session token 就只看 token，失败即失败，绝不回落；
+#   ② X-User-Id 由 `auth.trust_user_id_header` 显式开关托管（默认 True=兼容期，
+#      上线 checklist 置 False —— 改配置就完成加固，无需再动代码）；
+#   ③ enforce_login=True 时无身份 → 401，此时 require_permission 的匿名分支
+#      不可达 ⇒ RBAC 自动闭合（不必另加开关，避免"两个开关语义打架"）。
+#
+# ⚠️ 变异锚点（勿改名）：以下 `_MUTATION_GUARD_*` / `_mut_*` 供自检脚本注入错误写法做
+#    变异自证。删除或改名会让 tools/verify/verify_auth_enforce.py 直接判 VACUOUS。
+# ══════════════════════════════════════════════════════════════════════════
+
+_MUTATION_GUARD_REJECT_FALLBACK = True      # 变异锚点：禁止"token 无效→回落 X-User-Id"
+_MUTATION_GUARD_ANON_PASSTHROUGH = True     # 变异锚点：非强制态匿名仍放行（脚本兼容）
+
+_USER_SQL = """SELECT u.*, r.name AS role_name, r.type AS role_type, r.permissions AS role_permissions
+               FROM users u LEFT JOIN roles r ON u.role_id=r.id WHERE u.id=?"""
+
+
+def _auth_cfg() -> dict:
+    try:
+        from core.config import get as _cfg_get
+        v = _cfg_get("auth", default={})
+        return v if isinstance(v, dict) else {}
+    except Exception:
+        return {}
+
+
 def _user_payload(row) -> dict:
     """users+roles 行 → 统一用户载荷（permissions 由 role_permissions JSON 解析）。"""
     u = dict(row)
@@ -37,71 +78,129 @@ def _user_payload(row) -> dict:
     return u
 
 
-def current_user(request: Request, conn=Depends(db_session)):
-    """会话双读（X-Session-Token 优先 / X-User-Id 兼容）识别当前登录用户。
+def _spoof_guard(request: Request, reason: str, extra: str = "") -> None:
+    """P0-5：身份伪造/失效嫌疑留痕 —— **只留痕，不改变控制流**。
 
-    enforce_login=True（settings auth.enforce_login）：无任何身份头直接 401 —— 正式上线开关；
-    False（现阶段）：未认证返回 None，端点自行按匿名/降级处理（兼容体验期与无头脚本）。
+    为什么必须是旁路：认证失败路径通常以 HTTPException 结束，`db_session` 会整体
+    ROLLBACK，若审计写在同事务里会被一并回滚 —— 恰恰最该留的证据没了。此处照
+    `routers/auth.py:_audit_auth` 的先例：审计写失败也不得阻断认证主流程。
+    """
+    try:
+        from core.audit import audit
+        peer = ""
+        try:
+            peer = (request.client.host if request and request.client else "") or ""
+        except Exception:
+            peer = ""
+        audit("可疑请求（未认证）", "auth_identity_reject",
+              f"{reason} source_ip={peer} {extra}".strip(), "failed")
+    except Exception as e:  # pragma: no cover
+        try:
+            import logging
+            logging.getLogger("mbse.auth").warning("身份校验告警写入失败：%s", str(e)[:120])
+        except Exception:
+            pass
+
+
+def _session_user(conn, token: str):
+    """按会话 token 解析用户；返回 user dict | None（无效/过期/表缺失均 None，不抛异常）。"""
+    try:
+        import datetime as _dt
+        sess = conn.execute(
+            "SELECT user_id, expires_at FROM auth_sessions WHERE token=?", (token,)).fetchone()
+    except sqlite3.OperationalError:
+        # auth_sessions 由 routers/auth.py 懒建（首次登录才 CREATE TABLE IF NOT EXISTS）。
+        # 尚未有人登录的环境若在此抛异常 ⇒ 全站 500。**安全性与可用性冲突时，这条只能
+        # 让可用性赢**：表都没有 = 没有任何会话可伪造，返回无身份与"查不到"等价。
+        return None
+    if not sess:
+        return None
+    exp = sess["expires_at"] or ""
+    now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if exp < now:                      # 字符串比较前提：expires_at 与 now 同为 localtime 口径
+        return None
+    row = conn.execute(_USER_SQL, (sess["user_id"],)).fetchone()
+    return _user_payload(row) if row else None
+
+
+def current_user(request: Request, conn=Depends(db_session)):
+    """当前登录用户识别：**会话 token 唯一强身份**（P0-5 整改）。
+
+    判定顺序（严格串行，弱凭据**永不**兜底强凭据）：
+      ① `X-Session-Token`（auth_sessions 表，routers/auth.py 签发）→ 命中即用；
+         **带了 token 却无效 ⇒ 直接判无身份**，不再读 X-User-Id（堵死 D2）。
+      ② 仅在**完全没带 token** 且 `auth.trust_user_id_header=True` 时读 `X-User-Id`
+         （兼容期：前端/自检脚本平滑迁移；上线置 False 即关闭）。
+      ③ `auth.enforce_login=True` 且走到这里仍无身份 → 401。此时 require_permission
+         的匿名分支不可达 ⇒ RBAC 自动闭合（D1/D3 一并解决）。
+
     返回 {id, username, display_name, role_id, role_name, role_type, permissions} | None。
     FastAPI 依赖缓存（use_cache）保证与路由 conn 共用同一请求级连接。
     """
-    try:
-        from core.config import get as _cfg_get
-        if bool(_cfg_get("auth.enforce_login")):
-            _tok = request.headers.get("X-Session-Token") or ""
-            _uid = request.headers.get("X-User-Id") or ""
-            if not _tok and not _uid:
-                from fastapi import HTTPException
-                raise HTTPException(status_code=401, detail="未登录（enforce_login 已开启）")
-    except ImportError:
-        pass
-    # 2026-09-23 FR-UR-1：会话 token 双读 —— X-Session-Token（auth_sessions 表，
-    # routers/auth.py 签发）优先；X-User-Id 兼容期保留（前端/脚本平滑迁移）。
-    sess_token = request.headers.get("X-Session-Token")
+    cfg = _auth_cfg()
+    enforce = bool(cfg.get("enforce_login"))
+    trust_uid = bool(cfg.get("trust_user_id_header", True))
+
+    # ① 强凭据优先且排他
+    sess_token = (request.headers.get("X-Session-Token") or "").strip()
     if sess_token:
-        sess = conn.execute(
-            "SELECT user_id, expires_at FROM auth_sessions WHERE token=?", (sess_token,)).fetchone()
-        if sess and sess["expires_at"] >= __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"):
-            row = conn.execute(
-                """SELECT u.*, r.name AS role_name, r.type AS role_type, r.permissions AS role_permissions
-                   FROM users u LEFT JOIN roles r ON u.role_id=r.id WHERE u.id=?""",
-                (sess["user_id"],),
-            ).fetchone()
-            if row:
-                return _user_payload(row)
+        u = _session_user(conn, sess_token)
+        if u:
+            return u
+        _mut_reject_fallback = _MUTATION_GUARD_REJECT_FALLBACK
+        if _mut_reject_fallback:
+            # ⚠️ 2026-10-03 P0-5/D2：这里是**整段修复的核心**。
+            #    旧实现在此处不做任何处理，继续往下走到 X-User-Id 分支 ——
+            #    于是「伪造任意 token + 真实 user_id」即可冒充登录。
+            #    现在的语义：token 无效 = 认证失败完整性，不再给第二条路。
+            _spoof_guard(request, "session_token_invalid_or_expired")
+            if enforce:
+                raise HTTPException(status_code=401, detail="会话无效或已过期，请重新登录")
+            return None
+
+    # ② 弱凭据兜底（仅兼容期）
     uid = request.headers.get("X-User-Id")
-    if not uid:
-        return None
-    try:
-        uid = int(uid)
-    except (TypeError, ValueError):
-        return None
-    row = conn.execute(
-        """SELECT u.*, r.name AS role_name, r.type AS role_type, r.permissions AS role_permissions
-           FROM users u LEFT JOIN roles r ON u.role_id=r.id WHERE u.id=?""",
-        (uid,),
-    ).fetchone()
-    if not row:
-        return None
-    u = dict(row)
-    try:
-        u["permissions"] = json.loads(u.get("role_permissions") or "{}")
-    except Exception:
-        u["permissions"] = {}
-    return u
+    if uid and trust_uid:
+        try:
+            uid = int(uid)
+        except (TypeError, ValueError):
+            uid = None
+        if uid is not None:
+            try:
+                row = conn.execute(_USER_SQL, (uid,)).fetchone()
+            except sqlite3.OperationalError:
+                row = None
+            if row:
+                if enforce:
+                    # 强制态下即便 trust 开着，也不得用自报 id 通过任何 RBAC 端点
+                    raise HTTPException(status_code=401, detail="请使用会话令牌登录（X-User-Id 不可用于正式环境）")
+                return _user_payload(row)
+    elif uid and not trust_uid:
+        _spoof_guard(request, "user_id_header_not_trusted", f"uid={str(uid)[:32]}")
+
+    # ③ 无身份
+    if enforce:
+        raise HTTPException(status_code=401, detail="未登录（auth.enforce_login 已开启）")
+    return None
 
 
 def require_permission(domain: str, op: str):
     """权限依赖工厂：要求当前用户拥有 domain:op 权限（角色权限矩阵）。
 
-    - 匿名请求（current_user 为 None，如测试脚本/未登录场景）→ 直接放行，向后兼容；
-    - 用户存在时：permissions 中 admin 域权限列表非空视为超级用户 → 放行；
-      否则 domain 存在且 op ∈ permissions[domain] → 放行；其余 → 403。
+    - 匿名请求 → 见下方说明；
+    - permissions 中 admin 域列表非空 = 超级用户 → 放行；
+    - 否则 domain 存在且 op ∈ permissions[domain] → 放行；其余 → 403。
     返回值仍为 current_user 用户信息，端点可继续用作审计归属。
     """
     def checker(user=Depends(current_user)):
         if user is None:
-            return user
+            # P0-5/D3：匿名放行**只在非强制态**成立。
+            # enforce_login=True 时 current_user 已先抛 401 ⇒ 本分支不可达，
+            # RBAC 因此自动闭合 —— 不需要第二个开关（两个开关的语义漂移比漏洞更难查）。
+            _mut_anon_passthrough = _MUTATION_GUARD_ANON_PASSTHROUGH
+            if _mut_anon_passthrough:
+                return user
+            raise HTTPException(status_code=401, detail="未登录")
         perms = user.get("permissions") or {}
         # admin 域权限列表非空才视为超级用户（种子数据中所有角色均带 "admin" 键，
         # 空列表不代表管理员，避免设计师/知识工程师被误判放行）
@@ -118,12 +217,16 @@ def require_permission(domain: str, op: str):
 def require_any_permission(pairs):
     """权限依赖工厂：任一 (domain, op) 满足即放行（如写操作双角色兼容）。
 
-    匿名请求直接放行；admin 域权限列表非空视为超级用户放行；全部不满足 → 403。
+    admin 域权限列表非空视为超级用户放行；全部不满足 → 403。
+    匿名行为与 require_permission 保持一致（非强制态放行，强制态不可达）。
     pairs: [(domain1, op1), (domain2, op2), ...]
     """
     def checker(user=Depends(current_user)):
         if user is None:
-            return user
+            _mut_anon_passthrough = _MUTATION_GUARD_ANON_PASSTHROUGH
+            if _mut_anon_passthrough:
+                return user
+            raise HTTPException(status_code=401, detail="未登录")
         perms = user.get("permissions") or {}
         # admin 域权限列表非空才视为超级用户（空列表不代表管理员，见 require_permission）
         if perms.get("admin"):

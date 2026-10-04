@@ -248,9 +248,8 @@ async function sendChat() {
     const resp = await fetch(`/api/conversations/${currentConvId}/chat/stream`, {
       method:'POST',
       signal: myAbort.signal,
-      headers: (() => { const h = {'Content-Type':'application/json'};
-        const uid = localStorage.getItem('mbse_user_id'); if(uid) h['X-User-Id'] = uid;  // P2：登录态透传 → 用户上下文/Skill角色过滤
-        return h; })(),
+      // P0-5：改走 streamHeaders()（01-core.js）—— 原 IIFE 只带 X-User-Id、漏了 X-Session-Token
+      headers: streamHeaders(),
       body: JSON.stringify({
         message:msg, attachments:atts,
         scope_ids: (typeof activeScopes!=='undefined'? activeScopes:[]).map(s=>s.id),   // 建模范围（可多选，全局）硬锁

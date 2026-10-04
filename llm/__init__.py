@@ -197,8 +197,14 @@ class LLMClient:
 
     def __init__(self):
         self.mock = ProviderRegistry.create("mock")
+        # ── P1-3（2026-10-03 降级显式化）：`real`/`mock`/`fallback_total` 是**单调累计计数** ──
+        # 用途：调用方只需在任务开始前快照一次、结束后再读一次，差值即"这段任务里发生了几次
+        # 降级"，从而把「AI 的回答其实来自 Mock」这一事实**显式告知用户**。
+        # 为什么不能用 `last_used_mock`：它是**瞬时值**，多会话/多子任务并发时会互相覆盖，
+        # 编排链路（ThreadPoolExecutor 跑子任务）恰恰是并发最多的路径 —— `last_*` 不可信。
         self.stats = {"real": 0, "mock": 0, "last_provider": "", "last_used_mock": True,
-                      "last_prompt_tokens": 0, "last_completion_tokens": 0}
+                      "last_prompt_tokens": 0, "last_completion_tokens": 0,
+                      "fallback_total": 0}
 
     def _record_usage(self, provider, resp, used_mock: bool, intent: str = "", latency_ms: int = 0) -> None:
         """M7：LLM 调用统计落库（失败不阻断主流程）。
@@ -397,6 +403,9 @@ class LLMClient:
                 provider, messages, _impl_kw, stream, tools, thinking)
             _fallback_used = 1 if (provider or {}).get("id", 0) != _prim_pid else 0
             _fb_pid = (provider or {}).get("id", 0) if _fallback_used else 0
+            if _fallback_used:
+                # P1-3：provider 回退也是"降级"（答案来自备选模型，可能更弱/更贵），同样要可见
+                self.stats["fallback_total"] = int(self.stats.get("fallback_total", 0)) + 1
             # 回退成功时 provider 已被换成实际使用的那个 → 同步名字，保证 _meta / usage 归属正确
             provider_name = provider.get("name", provider_name)
             model_name = provider.get("model_name", model_name)

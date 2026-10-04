@@ -52,6 +52,22 @@ async function api(path, opts={}) {
   if(!r.ok && data && !data.error && data.detail) data.error = data.detail;
   return data;
 }
+
+/* P0-5（2026-10-03）：流式请求的身份请求头 —— 与 api() 同源，禁止各写一份。
+   动机（实测）：聊天流式端点因为要用 `response.body.getReader()` 逐帧读 SSE，
+   没法复用 api()，于是 11-pipeline.js / 12-chatsend.js **各自手拼 headers**，
+   两份里都只带了 `X-User-Id`、**漏了 `X-Session-Token`**。
+   后果不是小事：一旦 `auth.enforce_login` 打开（上线必开），这两条主路径**直接 401** ——
+   偏偏它们是全站最常用的功能。同一份凭据规则散落三处，下一次改必然又漏一处，
+   所以收口成函数：身份头的**唯一真源**。 */
+function streamHeaders(extra){
+  const h = {'Content-Type':'application/json', ...(extra||{})};
+  const uid = localStorage.getItem('mbse_user_id');
+  const sess = localStorage.getItem('mbse_session');
+  if(sess) h['X-Session-Token'] = sess;   // 强凭据优先（后端 token 无效时不回落到 uid）
+  if(uid) h['X-User-Id'] = uid;           // 兼容期弱凭据（trust_user_id_header=True 时有效）
+  return h;
+}
 /* ── 2026-09-18 S6-4：全局 UI 服务（toast / 错误浮层 / 全局错误兜底 / alert 桥接）──
    背景：本文件原有一个指向已废弃 #toast 元素的旧版 toast（实际早已失效，只 console.warn）；
         真正生效的是 static/index.html 末尾内联块里的实现（它以 window.toast 覆盖了本函数）。

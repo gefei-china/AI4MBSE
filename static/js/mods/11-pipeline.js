@@ -783,6 +783,25 @@ function handleSSE(raw) {
     procAddSkill(ev);      // V2.5：技能执行环节（命中技能/指令注入可见）
   } else if(evType === 'multi_intent') {
     procAddMultiIntent(ev);  // Task 14：多意图分解 → 阶段序列 chips
+  } else if(evType === 'degraded') {
+    /* P1-3（2026-10-03 降级显式化）：模型降级必须在 UI 上可见。
+       背景（实测）：DeepSeek 402 余额不足 / 无 api_key / 调用异常三条路径都会**静默回落 Mock**——
+       用户看到一段语法正常、语气正常的回答，其实不是任何模型生成的。评估把它列为 P1-3
+       「外部依赖静默降级」，对标 Manus/Dify：模型不可用属**必须可见**的事件。
+       这里不做弹窗（打断性太强），只在消息体下方挂一条橙红警示条，既可见又不妨碍阅读。 */
+    _forceFlushTokens();
+    const box = document.getElementById('stream-ai');
+    if(box && !box.querySelector('.degraded-note')){
+      const note = document.createElement('div');
+      note.className = 'degraded-note';
+      note.style.cssText = 'margin-top:8px;padding:6px 10px;border-left:3px solid #e8590c;'
+        + 'background:rgba(232,89,12,.10);color:#b23c00;font-size:12px;line-height:1.6;';
+      note.textContent = '⚠ ' + (ev.message || '本次回答降级由本地兜底生成，内容不可直接采信')
+        + ' —— 请检查模型服务余额/密钥后重试';
+      // 优先挂在正文容器之后；容器缺失时退回消息体末尾（DOM 变动是常态，两种都要能活）
+      const body = box.querySelector('.body');
+      (body ? body.parentNode : box).appendChild(note);
+    }
   } else if(evType === 'token') {
     if(bodyEl.querySelector('.typing')) bodyEl.querySelector('.typing').remove();
     // P0-3：合帧渲染（详见 _flushTokens 注释）——不再每 token 写 DOM + 读 scrollHeight
@@ -1078,9 +1097,11 @@ async function sendResume(text){
   const _cs = document.getElementById('chat-status'); if(_cs) _cs.textContent = '正在继续执行…';
   resetPipeline();
   try{
+    // P0-5：改走 streamHeaders()（01-core.js）——原先此处只带 Content-Type，连 X-User-Id 都没有，
+    // 更不会有 X-Session-Token；enforce_login 一开，这条续答路径直接 401。
     const resp = await fetch(`/api/conversations/${currentConvId}/chat/stream`, {
       method:'POST', signal: myAbort.signal,
-      headers: {'Content-Type':'application/json'},
+      headers: streamHeaders(),
       body: JSON.stringify({message:text, attachments:[], branch:getCurrentBranch()})});
     if(!resp.ok || !resp.body) throw new Error('HTTP '+resp.status);
     const reader = resp.body.getReader();

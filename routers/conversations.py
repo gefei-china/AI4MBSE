@@ -225,22 +225,80 @@ def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depen
     import json as _json
     work_branch = _resolve_work_branch(conn, body.branch)
 
+    # ── P1-3（2026-10-03 降级显式化）：任务开始前快照 LLM 降级累计计数 ──
+    # 判据为什么用**累计数差值**而不是瞬时值 `stats.last_used_mock`：
+    # 编排链路的子任务跑在 ThreadPoolExecutor 里、`llm_client` 是**进程单例**，
+    # 瞬时值会被并发批次互相覆盖（最后一个子任务的状态冒充整批的状态）。
+    # 累计计数只增不减 ⇒ 差值即"本轮实际发生过几次降级"，语义严格。
+    # ⚠️ 已知局限：单例计数与多会话并发共存时会互相计入（偏保守，宁可多报不可漏报）；
+    #    彻底隔离需 request-scoped 上下文（依赖入口带 conversation_id），留作后续。
+    from core.sse import snapshot as _snap, degrade_delta as _delta
+    from llm import llm_client as _llm_singleton   # 延迟导入：避免路由加载期即连库
+
+    def _degrade_snapshot() -> dict:
+        return _snap(getattr(_llm_singleton, "stats", {}) or {})
+
+    _degrade_base = _degrade_snapshot()
+
     def event_stream():
+        # P1-2：首帧声明重连间隔（SSE 协议字段），并立刻产一帧心跳，
+        # 让 nginx/网关在本轮第一个 LLM 请求发出前就看到"连接活跃"。
+        yield "retry: 3000\n\n"
+        yield ": connected\n\n"
+        # ⚠️ 客户端已断开标志：GeneratorExit 期间**禁止再 yield**
+        # （CPython 会抛 "generator ignored GeneratorExit"，且该异常发生在收尾路径，
+        #  比断连本身更难排查）。下面的 finally 必须先判这个标志才能补发降级告知。
+        _client_gone = False
+        _frames = None
         # P1-1 停止生成：客户端断开（AbortController）→ Starlette 关闭生成器 → GeneratorExit
         # 在 yield 点抛出，这里放行让连接干净关闭；其余异常转为 error 事件（不中断会话）
         try:
-            for ev in agent.execute_stream(body.message, conv_id, work_branch,
-                                           body.provider_id, body.attachments or [],
-                                           forced_intent=body.forced_intent or None,
-                                           skill_name=body.skill_name or None,
-                                           team=body.team or None,
-                                           scope_id=body.scope_id, scope_ids=body.scope_ids, scope=body.scope,
-                                           user=user):
-                yield f"event: {ev['type']}\ndata: {_json.dumps(ev, ensure_ascii=False)}\n\n"
+            from core.sse import iter_with_heartbeat
+            _frames = iter_with_heartbeat(
+                agent.execute_stream(body.message, conv_id, work_branch,
+                                     body.provider_id, body.attachments or [],
+                                     forced_intent=body.forced_intent or None,
+                                     skill_name=body.skill_name or None,
+                                     team=body.team or None,
+                                     scope_id=body.scope_id, scope_ids=body.scope_ids, scope=body.scope,
+                                     user=user),
+                # P1-2：15 s —— 链路上最小 idle timeout 通常是 nginx 默认 60 s，取 1/4 留余量
+                interval_s=15.0,
+            )
+            for raw in _frames:
+                yield raw
         except GeneratorExit:
+            _client_gone = True
+            # 断连止损：显式关闭心跳包装器 → 其内部会连带 close 事件源
+            #（core/sse.py 的收尾逻辑；源生成器此时正跑在 worker 线程里，
+            #  CPython 会抛 ValueError: generator already executing —— 属预期，吞掉即可）。
+            try:
+                if _frames is not None:
+                    _frames.close()
+            except Exception:
+                pass
             raise
         except Exception as _e:
             yield f"event: error\ndata: {_json.dumps({'message': str(_e)[:200]}, ensure_ascii=False)}\n\n"
+        finally:
+            if _client_gone:
+                return
+            # P1-3：无论成功/失败，只要本轮发生过降级，**必须在流里显式说清楚**。
+            # 对标 Manus/Dify：模型不可用或回退到非预期实现时必须在事件流里可见，
+            # 而不是让用户拿着一段看起来正常的文字，误以为是目标模型的产出。
+            try:
+                d = _delta(_degrade_base, _degrade_snapshot())
+                if d["mock_calls"] or d["fallback_calls"]:
+                    yield ("event: degraded\ndata: " + _json.dumps({
+                        "mock_calls": d["mock_calls"], "real_calls": d["real_calls"],
+                        "fallback_calls": d["fallback_calls"],
+                        "message": ("本次回答中有 %d 次调用未真实到达模型、由本地兜底（Mock）生成%s"
+                                    % (d["mock_calls"],
+                                       ("；另有 %d 次发生 Provider 回退" % d["fallback_calls"])
+                                       if d["fallback_calls"] else "")),
+                    }, ensure_ascii=False) + "\n\n")
+            except Exception:
+                pass   # 降级告知失败绝不阻断已完成的主流程
 
     return StreamingResponse(
         event_stream(),
