@@ -246,13 +246,48 @@ def recognize_pdf_pages(content: bytes, page_indices, scale: float = None) -> di
 
 
 def max_ocr_pages() -> int:
-    """单次入库允许 OCR 的页数上限（config: extract.ocr_max_pages，默认 50）。
+    """**文档级**OCR 页数硬上限（config: extract.ocr_max_pages，默认 **0=不限**）。
 
-    实测 OCR 约 1.4~4.7 s/页（比文本层慢 50~200 倍），受限防止超大扫描件拖垮入库。
-    <=0 表示不限（慎用）。
+    ⚠️ P1-3（2026-10-04）语义变更：原默认 50，实际效果是**静默丢弃**超出部分
+    （用户传 200 页扫描 PDF 会得到"解析成功"、只索引前 50 页、界面毫无提示）。
+    标杆做法（RAGFlow v0.25 分段解析 / Unstructured 分批 / MinerU 按页并行）
+    一致：**页数不是产品语义，批大小才是** ⇒ 默认改为 0（不限），
+    内存与时长由 `ocr_page_batch`（分段）+ `ocr_time_budget_sec`（预算+续跑）控制。
+
+    保留本函数是因为 `extract.py` 仍读它做兼容判断；若被显式设为 >0
+    （有人刻意要硬上限），`extract.py` 会**显式告警**而不是静默丢弃。
     """
     try:
-        n = int(_cfg("ocr_max_pages", 50))
+        n = int(_cfg("ocr_max_pages", 0))
         return n if n > 0 else 0
     except Exception:
+        return 0
+
+
+def ocr_page_batch() -> int:
+    """分段粒度：每批处理多少页（config: extract.ocr_page_batch，默认 50）。
+
+    为什么分段而不是一次跑完：OCR 实测 1.4~4.7 s/页，691 页全量要 30~50 分钟。
+    一次 `recognize_pdf_pages_scored` 会把**所有页的识别结果**累积在内存里
+    （页图虽逐页释放，但文本 + 质量字典全留着）⇒ 500 页时字典本身就很可观。
+    分段后每批结束即合并进主结果并释放该批，内存峰值与**总页数解耦**。
+    """
+    try:
+        n = int(_cfg("ocr_page_batch", 50))
+        return max(1, n) if n > 0 else 50
+    except Exception:
         return 50
+
+
+def ocr_time_budget_sec() -> int:
+    """单文档 OCR 时间预算（秒，config: extract.ocr_time_budget_sec，默认 1800）。
+
+    为什么要预算而不是硬上限：预算是**可续跑**的 —— 超预算时把已完成页的文本
+    落盘（`documents.ocr_progress`），下次从断点继续；而硬上限只能"从头再来"。
+    这正是 RAGFlow「分段解析 +惰性加载」解决大 PDF 的同一思路。
+    """
+    try:
+        n = int(_cfg("ocr_time_budget_sec", 1800))
+        return n if n > 0 else 0
+    except Exception:
+        return 1800

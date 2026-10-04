@@ -987,7 +987,12 @@ def init_db():
         uploaded_by TEXT DEFAULT '',
         branch TEXT DEFAULT 'global',  -- KB分支：⚠️ 文档为全局资产，恒 'global'（列保留仅为历史兼容）
         knowledge_category TEXT DEFAULT '',  -- P0-3: 知识类别（设计方法知识/设计资产子类，空=未分类）
-        summary TEXT DEFAULT '',  -- 2026-09-29: LLM 真摘要（空=未生成，preview 回退「前2块截断」旧行为）
+        summary TEXT DEFAULT '',  -- 2026-09-29 LLM summary (empty => preview falls back)
+        -- P1-3 (2026-10-04) segmented OCR checkpoint: JSON {"resume": {"page0": text}, "total": n}
+        -- Written when a large scanned PDF exceeds the OCR time budget; the next ingest
+        -- resumes from this checkpoint instead of silently dropping the remaining pages
+        -- (benchmark: RAGFlow v0.25 segmented parse / Unstructured batching / MinerU per-page).
+        ocr_progress TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
@@ -1199,6 +1204,14 @@ def init_db():
     # P0-6：版本跟随代码文件——code_text 存该版本 SysML v2 源码（旧库幂等迁移）
     try:
         c.execute("ALTER TABLE sysml_versions ADD COLUMN code_text TEXT DEFAULT ''")
+    except Exception:
+        pass
+
+    # P1-3（2026-10-04）大文件 OCR 断点续跑：旧库幂等加列（同上写法）。
+    # 为什么必须 ALTER 而不只是改 CREATE TABLE：CREATE TABLE IF NOT EXISTS 对**已存在**
+    # 的表是**完全跳过**的 ⇒ 存量库（含开发机与客户私有化部署）永远拿不到这一列。
+    try:
+        c.execute("ALTER TABLE documents ADD COLUMN ocr_progress TEXT DEFAULT ''")
     except Exception:
         pass
 

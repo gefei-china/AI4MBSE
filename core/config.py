@@ -231,6 +231,26 @@ DEFAULT_CONFIG = {
         # 400 InvalidParameter）。Embedder._embed_api 内部按此切分，兜住「batch_size=0
         # 一次全发」的调用方（semantic.py 的 items+query、intent 语义路由等）。
         "api_batch_max": 10,     # /embeddings 单批条数上限（<=0 表示不切分）
+        # ── P0-2（2026-10-04）降级**显式化**：quota 耗尽时怎么办 ──────────────
+        # 起因（实测）：embedding 供应商返回 `403 Free quota exhausted`，
+        # 而 `embed_with_version` 的 except 会**静默**降级 bigram ⇒
+        # 入库"成功"、界面无任何提示，而 810 个 chunk 已用词面向量污染检索。
+        # 与 `llm.context_window_guard` / `llm.stats.fallback_total` 同一类问题：
+        # **降级本身不是 bug，静默降级才是 bug**。
+        # 三档：
+        #   block（默认）= 判定入库失败（parse_status=failed + 明确原因），
+        #     **不写入任何 bigram 向量** —— 宁可让用户看到"额度不足"，
+        #     也不要悄悄给一份没有语义的检索（米爸 2026-10-04 决策："不降级"）。
+        #   degrade = 旧行为（写入 bigram + 在 pipeline_detail 标 degraded=true），
+        #     仅在明确需要"离线确定性回归"时开（如无 key 的开发机）。
+        #   warn   = 写入 bigram 但不阻断，且留痕 + 监控告警。
+        # 为什么默认 block 而不是 degrade：降级向量会**永久留在库里**，
+        # 事后无法区分"哪些 chunk 是词面向量"，除非额外做审计（`degraded_report`）。
+        # ⇒ 宁可失败重来，也不要污染。
+        "on_quota_exhausted": "block",
+        # 熔断时长（P1-10 原有）：识别到 403/429 且 body 含 quota/insufficient ⇒ 封锁。
+        # 600s 内不再重试（重试只会每次打一个 403 + 白等网络往返）。
+        "quota_block_sec": 600,
         # ── 真 embedding（dense）路独立阈值 —— 2026-09-19 标定 ─────────────────
         # 背景：修掉「单批上限 → 静默降级 bigram」后，**dense 路首次真正生效**；而上面几个阈值
         #   都是当年按 bigram 量纲标的。两路余弦量纲不同（实测同一批 top1：dense 0.51 vs bigram 0.10）。
@@ -459,7 +479,27 @@ DEFAULT_CONFIG = {
         # 故**只对文本层稀疏的页**付这个成本，不可无差别全量 OCR（691 页规范全跑要 30~50 分钟）。
         "ocr_enabled": True,              # False=完全回到改动前行为（A/B 对比与故障回退用）
         "ocr_min_chars_per_page": 100,    # 页文本层字数低于此值视为"稀疏页"，该页补 OCR
-        "ocr_max_pages": 50,              # 单次入库允许 OCR 的页数上限（>0；防超大扫描件拖垮入库）
+        # ── P1-3（2026-10-04）分段 OCR：把"静默截断"换成"分段处理 + 断点续跑"──
+        # 旧：`ocr_max_pages: 50` = **文档级硬上限**，超出部分**静默丢弃**（用户看不出来：
+        #      传 200 页扫描 PDF 会得到"解析成功"，但只索引了前 50 页）。
+        # 标杆怎么做（2026-10 实测调研）：
+        #   · **RAGFlow v0.25（2026-04）**：>50 页 PDF 走"分段解析 + 惰性加载"，**不截断**。
+        #   · **Unstructured**：`pdf_hi_res_max_pages` 同样是"安全阀"而非产品语义，
+        #     其生产建议是 `--pages-per-worker` **分批处理**（即每批都跑，不丢页）。
+        #   · **MinerU**：按页切块并行，页数不设上限。
+        #   ⇒ 共识：**页数不是产品语义，批大小才是**。真正要防的是"单次占用内存/时长"，
+        #     靠**分段 + 续跑**解决，而不是靠"丢弃"。
+        # 本仓实现（受铁律 4「零新依赖」约束，不引 Ray/paddleocr，只用既有 rapidocr-onnx）：
+        #   ① `ocr_page_batch`：每批处理多少页（只影响内存峰值，不影响总页数）
+        #   ② `ocr_time_budget_sec`：单文档 OCR 时间预算（默认 1800s）。超预算 ⇒
+        #      **显式**记录 pages_pending + truncated，并**持久化已完成页的文本**，
+        #      下次续跑从断点继续（而不是从头再跑一遍）。
+        #   ③ `ocr_max_pages`：保留为**旧配置项的兼容兜底**（<=0 = 不限，默认改为 0）；
+        #      若被显式设为 >0 则仍作为硬上限，但会**显式告警**而不是静默丢弃。
+        "ocr_page_batch": 50,             # 每批页数（分段粒度；只影响内存峰值）
+        "ocr_time_budget_sec": 1800,      # 单文档 OCR 时间预算（秒）；超预算则落盘 + 可续跑
+        "ocr_max_pages": 0,               # 0=不限（推荐）。>0 才启用硬上限，且**会显式告警**
+        "ocr_resume_enabled": True,       # 断点续跑（读 documents.ocr_progress）
         "ocr_render_scale": 2.0,          # PDF 渲染倍率（2.0 ≈ 1224x1584 px，实测识别率与耗时的平衡点）
         # ── 结果质量门禁（2026-09-21 补）────────────────────────────────────────
         # 背景：OCR 对低质截图照样能"吐出"几百字，只是**全是错字**。原实现只看

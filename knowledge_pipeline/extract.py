@@ -73,7 +73,7 @@ def extract_text(filename: str, content) -> str:
     return text
 
 
-def extract_text_ex(filename: str, content):
+def extract_text_ex(filename: str, content, state: dict = None):
     """抽取纯文本 + 诊断元信息 → (text, meta)。
 
     meta 结构：
@@ -101,7 +101,7 @@ def extract_text_ex(filename: str, content):
         return _wrap_office(_extract_docx(content), "office",
                             "Word 文档解析失败（文件可能损坏，或为不支持的旧版 .doc 二进制格式）")
     if ext == ".pdf":
-        return _extract_pdf_ex(content)
+        return _extract_pdf_ex(content, state=state)
     if ext in (".xlsx", ".xls"):
         return _wrap_office(_extract_xlsx(content), "office",
                             "Excel 解析失败（请确认文件为有效 xlsx/xls）")
@@ -224,7 +224,7 @@ def _extract_image_ex(content: bytes, ext: str):
 
 # ── PDF：文本层优先 + 稀疏页补 OCR ──
 
-def _extract_pdf_ex(content: bytes):
+def _extract_pdf_ex(content: bytes, state: dict = None):
     info = _ocr_meta()
     try:
         import pdfplumber
@@ -278,34 +278,96 @@ def _extract_pdf_ex(content: bytes):
             "ocr": info,
         }
 
-    cap = ocr.max_ocr_pages()
-    todo = sparse if not cap else sparse[:cap]
-    info["pages_ocr"] = len(todo)
-    if cap and len(sparse) > cap:
-        info["note"] = (f"稀疏页共 {len(sparse)} 页，受 extract.ocr_max_pages={cap} 限制，"
-                        f"本次仅 OCR 前 {cap} 页")
+    cap = ocr.max_ocr_pages()          # 文档级硬上限（默认 0=不限，见 ocr.max_ocr_pages 的说明）
+    batch_n = ocr.ocr_page_batch()  # 分段粒度（只影响内存峰值）
+    budget = ocr.ocr_time_budget_sec()   # 时间预算（超预算 → 落盘 + 可续跑）
+    # 断点续跑：`state` 由 ingest_document 传入（含上次已识别的 {页号: 文本}）
+    resume = dict((state or {}).get("ocr_resume") or {})
 
-    got, elapsed = ocr.recognize_pdf_pages_scored(content, todo)
-    info["elapsed"] = elapsed
+    todo = [i for i in sparse if i not in resume]
+    info["pages_sparse"] = len(sparse)
+    info["pages_resumed"] = len(resume)
+    if cap and len(sparse) > cap:
+        # 硬上限仍保留（有人显式配置），但**必须显式告警**，不能静默丢页
+        dropped = sparse[cap:]
+        todo = [i for i in todo if i < cap]
+        info["pages_dropped_by_cap"] = len(dropped)
+        info["truncated"] = True
+        info["note"] = (f"⚠️ 稀疏页共 {len(sparse)} 页，但 extract.ocr_max_pages={cap}，"
+                        f"第 {cap + 1}~{len(sparse)} 页**未处理**"
+                        f"（把 ocr_max_pages 设为 0 可解除该限制）")
+    else:
+        info["truncated"] = False
 
     merged = list(layer)
+    # 续跑：先把上次已识别的页并回来（避免重复 OCR）
+    for i, t in resume.items():
+        if 0 <= i < len(merged) and t:
+            merged[i] = (merged[i] + "\n" + t) if merged[i].strip() else t
+
     added = 0
     rejected = []            # ★ 因质量不达标被丢弃的页（不并入正文，只留痕）
     qsum = {"lines": 0, "avg_score": [], "low_ratio": []}
-    for i, item in got.items():
-        t, quality = item
-        if not (t and t.strip()) or not (0 <= i < len(merged)):
-            continue
-        usable, _why = _ocr_quality_gate(quality)
-        if not usable:
-            rejected.append(i + 1)     # 页面号按人类习惯（1 起）
-            continue
-        # 该页有文本层 → 追加（图内文字是文本层的增量）；无 → 用 OCR 结果
-        merged[i] = (merged[i] + "\n" + t) if merged[i].strip() else t
-        added += len(t)
-        qsum["lines"] += int(quality.get("lines") or 0)
-        qsum["avg_score"].append(float(quality.get("avg_score") or 0))
-        qsum["low_ratio"].append(float(quality.get("low_ratio") or 0))
+    elapsed_total = 0.0
+    t_start = time.time()
+    processed_now = 0
+
+    # ── P1-3：分段处理（而不是截断）────────────────────────────────────────
+    # 每批 ocr_page_batch 页；批结束即合并 + 释放该批 ⇒ 内存峰值与总页数解耦。
+    # 超时间预算则**停下并落盘**（done_map），下次续跑从断点继续。
+    for bstart in range(0, len(todo), batch_n):
+        batch = todo[bstart:bstart + batch_n]
+        if budget and (time.time() - t_start) > budget and processed_now > 0:
+            info["pages_pending"] = len(todo) - bstart
+            info["truncated"] = True
+            info["note"] = ((info.get("note", "") + "；" if info.get("note") else "") +
+                            f"已达 OCR 时间预算 {budget}s，本轮处理 {processed_now} 页，"
+                            f"剩余 {len(todo) - bstart} 页**已保存进度，下次入库自动续跑**")
+            break
+        got, elapsed = ocr.recognize_pdf_pages_scored(content, batch)
+        elapsed_total += float(elapsed or 0.0)
+        processed_now += len(batch)
+        for i, item in got.items():
+            t, quality = item
+            if not (t and t.strip()) or not (0 <= i < len(merged)):
+                continue
+            usable, _why = _ocr_quality_gate(quality)
+            if not usable:
+                rejected.append(i + 1)     # 页面号按人类习惯（1 起）
+                continue
+            merged[i] = (merged[i] + "\n" + t) if merged[i].strip() else t
+            resume[i] = t                  # 落盘用：已识别页 → 文本
+            added += len(t)
+            qsum["lines"] += int(quality.get("lines") or 0)
+            qsum["avg_score"].append(float(quality.get("avg_score") or 0))
+            qsum["low_ratio"].append(float(quality.get("low_ratio") or 0))
+        # 批次检查点：每批结束把进度回写 `state`（由调用方落 documents.ocr_progress）
+        #⇒ 中途崩溃/超预算都不丢已完成页，下次入库从断点继续。
+        if state is not None:
+            state["ocr_resume"] = dict(resume)
+            state["ocr_resume_total"] = len(sparse)
+        if budget and (time.time() - t_start) > budget:
+            # 本批跑完但已超预算 ⇒ 剩余页留给下次
+            _done = processed_now
+            if _done < len(todo):
+                info["pages_pending"] = len(todo) - _done
+                info["truncated"] = True
+                info["note"] = ((info.get("note", "") + "；" if info.get("note") else "") +
+                                f"已达 OCR 时间预算 {budget}s，剩余 {len(todo) - _done} 页"
+                                f"**已保存进度，下次入库自动续跑**")
+            break
+
+    info["elapsed"] = round(elapsed_total, 2)
+    info["pages_ocr"] = len(resume)
+    info["pages_ocr_this_run"] = processed_now
+    if info.get("pages_pending"):
+        # 部分完成 ⇒ 进度落盘（由调用方 ingest_document 写入 documents.ocr_progress）
+        info["resume_token"] = "%s/%s" % (len(resume), len(sparse))
+    else:
+        # 全部完成 ⇒ 清掉续跑状态
+        info["resume_token"] = ""
+    if not info.get("note"):
+        info["note"] = f"稀疏页 {len(sparse)}/{len(layer)} 页已全部 OCR（分 {batch_n} 页/批）"
     info["chars_ocr"] = added
     if qsum["avg_score"]:
         info["quality"] = {

@@ -57,11 +57,29 @@ def _bigram_vector_fixed(text: str, dim: int = _BIGRAM_DIM) -> list:
     return vec
 
 
+class EmbedQuotaExceeded(RuntimeError):
+    """embedding 配额耗尽（且策略为 block）—— **必须让入库失败**而不是降级。
+
+    为什么单独一个异常类：调用方（`ingest_document`）要靠它把
+    `parse_status` 置为 `failed` 并写入明确原因，让用户看到"额度不足"；
+    若沿用普通 `Exception`，上层 `except` 会把它当成偶发网络抖动，
+    而 `_gen_llm_summary` 那种"失败返回 ''继续跑"的模式会把它吞掉。
+    """
+
+
 class Embedder:
     """可插拔 Embedding：OpenAI-compatible /embeddings → bigram TF 降级。
 
     - 真 embedding：llm_providers 有 key 的 provider 走 POST {base_url}/embeddings
     - 降级：VectorEngine 字符 bigram TF（零外部依赖，确定性回归可用）
+
+    ⚠️ **降级策略受 `embedding.on_quota_exhausted` 控制**（P0-2，2026-10-04）：
+    - `block`（默认）：配额耗尽时抛 `EmbedQuotaExceeded`，**不写任何 bigram 向量**。
+      实测事故：403 `Free quota exhausted` 被静默吞掉 ⇒ 810 chunk 用词面向量污染检索，
+      而界面无任何提示。降级向量会**永久留在库里**且事后无法区分，
+      所以宁可失败重来。
+    - `degrade`：旧行为（写 bigram + 在 pipeline_detail 标 degraded），仅供离线回归。
+    - `warn`：写 bigram + 留痕 + 告警，不阻断。
     """
 
     def __init__(self, conn=None):
@@ -77,12 +95,27 @@ class Embedder:
     # P1-10 配额熔断：insufficient_quota（免费额度耗尽）属「非临时」错误，反复重试只会
     # 每次打一次 403 + 刷一条日志、白等一次网络往返。识别到后熔断 10 分钟：期间直接降级
     # bigram，不再调 API。用户充值后下一个 probe 周期自然恢复。
+    # P0-2（2026-10-04）：熔断**不再等于降级** —— 熔断只是"别再打 API 了"，
+    # 接下来按 on_quota_exhausted 策略决定"抛错"还是"降级"。
     _QUOTA_BLOCK_UNTIL = 0.0
     _QUOTA_BLOCK_SEC = 600.0
+    # 最近一次熔断的原因（供 UI/监控显示："为什么这批 chunk 是词面向量"）
+    LAST_QUOTA_ERROR = ""
 
     @classmethod
-    def _note_quota_error(cls, exc) -> None:
-        """识别 403/429 且 body 含 quota/insufficient → 熔断（设类级封锁时间戳）。"""
+    def _note_quota_error(cls, exc) -> bool:
+        """识别 403/429 且 body 含 quota/insufficient → 熔断（设类级封锁时间戳）。
+
+        :returns: **True 表示确认为配额耗尽**（调用方据此决定抛错还是降级）。
+        ⚠️ 第一版忘了 return，标注也是 `-> None` ⇒ 调用方 `if blocked:` 恒假
+        ⇒ 配额耗尽时**第一次调用仍静默降级**（真机验证抓到的：策略=block
+        但实测仍返回 bigram-tf）。"记了熔断"不等于"告知了调用方"，两者都要。
+
+        P0-2：同时把**响应体原文**（截断）存进 `LAST_QUOTA_ERROR` ——
+        只记"发生了配额错误"没有用，用户要看到的是**供应商原话**
+        （实测：`Free quota exhausted. To continue accessing the model on a paid basis...`），
+        否则前端只能显示"额度不足"这种无法对账的措辞。
+        """
         try:
             import httpx
             if isinstance(exc, httpx.HTTPStatusError):
@@ -90,9 +123,52 @@ class Embedder:
                 if r.status_code in (403, 429):
                     body = (r.text or "").lower()
                     if "quota" in body or "insufficient" in body:
+                        cls._QUOTA_BLOCK_SEC = cls._quota_block_sec()
                         cls._QUOTA_BLOCK_UNTIL = time.time() + cls._QUOTA_BLOCK_SEC
+                        try:
+                            import json as _j
+                            msg = (_j.loads(r.text or "{}").get("error") or {}).get("message") or ""
+                        except Exception:
+                            msg = ""
+                        cls.LAST_QUOTA_ERROR = (msg or (r.text or "")[:200])[:300]
+                        return True
         except Exception:
             pass
+        return False
+
+    @classmethod
+    def _quota_block_sec(cls) -> float:
+        try:
+            from core import config as _c
+            return float(_c.get("embedding", "quota_block_sec", 600) or 600)
+        except Exception:
+            return 600.0
+
+    @classmethod
+    def quota_blocked(cls) -> bool:
+        """当前是否处于配额熔断期（即：API 已不可用，别再打）。"""
+        return time.time() < cls._QUOTA_BLOCK_UNTIL
+
+    @classmethod
+    def _on_quota_exhausted(cls) -> str:
+        """降级策略：block（默认，抛错）| degrade（旧行为）| warn（留痕不阻断）。"""
+        try:
+            from core import config as _c
+            v = _c.get("embedding", "on_quota_exhausted", "block")
+            return (v or "block").strip().lower()
+        except Exception:
+            return "block"
+
+    @classmethod
+    def reset_quota_block(cls) -> None:
+        """人工解除熔断（充值后调用，或运维面板"重试"按钮）。
+
+        为什么需要：熔断是**类级**的（`_QUOTA_BLOCK_UNTIL`），一旦触发，
+        后续 10 分钟内**即使供应商已恢复也不再尝试** —— 用户充值后立刻重试
+        仍会拿到"额度不足"，除非等到熔断自然过期或显式调用本方法。
+        """
+        cls._QUOTA_BLOCK_UNTIL = 0.0
+        cls.LAST_QUOTA_ERROR = ""
 
     # P2-1 query 向量缓存（单文本查询侧）：TTL 60s，上限 512 条
     _QUERY_CACHE = {}
@@ -125,16 +201,39 @@ class Embedder:
         Embedder._PROBE_STAMP = _t.time()
 
     def embed(self, texts: list) -> list:
-        """批量向量化，返回 list[list[float]]。真 API 失败自动降级 bigram TF。"""
+        """批量向量化，返回 list[list[float]]。真 API 失败自动降级 bigram TF。
+
+        P0-2：配额耗尽且策略=block 时抛 `EmbedQuotaExceeded`（不再静默降级）。
+        """
         if not texts:
             return []
-        if self._api and time.time() >= Embedder._QUOTA_BLOCK_UNTIL:
+        if self._api and not self.quota_blocked():
             try:
                 return self._embed_api(texts)
             except Exception as e:
-                Embedder._note_quota_error(e)
+                blocked = self._note_quota_error(e)
+                if blocked and self._on_quota_exhausted() == "block":
+                    raise EmbedQuotaExceeded(self._quota_message())
                 logger.warning("embedding API 调用失败，降级 bigram: %s", e)
+        elif self._api and self.quota_blocked():
+            if self._on_quota_exhausted() == "block":
+                raise EmbedQuotaExceeded(self._quota_message())
         return self._embed_bigram(texts)
+
+    @classmethod
+    def _quota_message(cls) -> str:
+        """给**用户看**的文案：供应商原话 + 可执行的下一步。
+
+        为什么不能只说"额度不足"：用户无法据此判断是"充值"还是"换模型"，
+        也不知道本系统到底调用了谁（实测供应商是阿里云百炼代理，
+        错误文案来自**上游账号**，不是本系统的 key）。
+        """
+        raw = (cls.LAST_QUOTA_ERROR or "").strip()
+        head = ("embedding 供应商额度已耗尽，本次入库**未生成语义向量**"
+                "（已阻断，未写入降级向量）。")
+        tail = ("请在供应商控制台充值或关闭「仅用免费额度」模式后重试；"
+                "若要临时离线运行，可将 embedding.on_quota_exhausted 设为 degrade。")
+        return head + (("供应商原话：%s" % raw) if raw else "") + tail
 
     def embed_with_version(self, texts: list, batch_size: int = 8) -> tuple:
         """批量向量化并返回实际使用的版本标记（openai-compat / bigram-tf）。
@@ -145,16 +244,21 @@ class Embedder:
 
         P2-1 query 缓存：真向量模式下单文本调用（查询侧）加 TTL 缓存，
         同 query 短时间重复检索直返，省一次 embedding API 往返（~300ms）。
+
+        ⚠️ P0-2（2026-10-04）：配额耗尽且 `embedding.on_quota_exhausted=block`
+        时抛 `EmbedQuotaExceeded`（**不返回 bigram-tf**）。
+        调用方（`ingest_document`）据此把 parse_status 置 failed 并写入原因 ——
+        让用户看到"额度不足"，而不是拿到一份没有语义的检索却毫无察觉。
         """
         if not texts:
             return [], "bigram-tf"
         # P2-1 query 缓存：单文本调用（查询侧）命中直返，省一次 embedding API 往返
-        if self._api and time.time() >= Embedder._QUOTA_BLOCK_UNTIL and len(texts) == 1:
+        if self._api and not self.quota_blocked() and len(texts) == 1:
             key = ("q", texts[0])
             hit = Embedder._QUERY_CACHE.get(key)
             if hit and time.time() - hit[1] < Embedder._QUERY_TTL:
                 return [hit[0]], "openai-compat"
-        if self._api and time.time() >= Embedder._QUOTA_BLOCK_UNTIL:
+        if self._api and not self.quota_blocked():
             try:
                 out = []
                 if batch_size <= 0:
@@ -169,8 +273,13 @@ class Embedder:
                         Embedder._QUERY_CACHE.clear()
                 return vecs, "openai-compat"
             except Exception as e:
-                Embedder._note_quota_error(e)
+                blocked = self._note_quota_error(e)
+                if blocked and self._on_quota_exhausted() == "block":
+                    raise EmbedQuotaExceeded(self._quota_message())
                 logger.warning("embedding API 调用失败，降级 bigram: %s", e)
+        elif self._api and self.quota_blocked():
+            if self._on_quota_exhausted() == "block":
+                raise EmbedQuotaExceeded(self._quota_message())
         return self._embed_bigram(texts), "bigram-tf"
 
     def _embed_api(self, texts: list) -> list:

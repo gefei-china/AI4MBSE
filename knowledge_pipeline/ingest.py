@@ -3,11 +3,11 @@ import json
 import logging
 import os
 import re
-import time
+import time as _time_mod   # P2：阶段耗时留痕（避免与函数内 `import time as _time` 冲突）
 import uuid
 from .extract import extract_text, extract_text_ex
 from .chunking import chunk_text_structured, _is_complete_sentence
-from .embedder import Embedder
+from .embedder import Embedder, EmbedQuotaExceeded  # P0-2：配额耗尽时可阻断
 from core.fs_guard import bounded_unlink
 
 logger = logging.getLogger(__name__)
@@ -257,17 +257,43 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
                 "UPDATE documents SET parse_status='parsing', chunk_count=0, error_msg='', pipeline_detail='{}' "
                 "WHERE id=?", (doc_id,))
 
+        # ── P2（2026-10-04）阶段耗时留痕 ──────────────────────────────────────
+        # 由来（实测）：排查"大文件入库慢在哪"时 pipeline_detail 只有 done|failed、
+        # **没有任何耗时** ⇒ 只能靠 cProfile 逐函数 cumtime 反推（本次花了 3 轮
+        # 才定位到真因是"写事务跨越 LLM 调用"）。加了耗时后直接可查。
+        # 口径：每个阶段记 {ms, status}；在写 pipeline_detail 时一并落库。
+        _timing = {}
+        _t0_all = _time_mod.time()
+
         def _stage(stage: str, status: str, error: str = ""):
+            """记录单个管道阶段的状态 + 耗时（ms）。
+
+            结算规则：进入某阶段时结算**上一段**（上一阶段到此刻的耗时）；
+            异常路径（status=failed）立即结算当前段并保留 error 便于定位。
+            """
             import json as _j
+            now = _time_mod.time()
+            prev = getattr(_stage, "_cur", None)
+            if prev and prev[0] != stage:
+                pname, pstart = prev
+                _timing.setdefault(pname, {})["ms"] = int((now - pstart) * 1000)
             try:
-                cur_d = _j.loads(conn.execute("SELECT pipeline_detail FROM documents WHERE id=?", (doc_id,)).fetchone()[0] or "{}")
+                cur_d = _j.loads(conn.execute(
+                    "SELECT pipeline_detail FROM documents WHERE id=?", (doc_id,)).fetchone()[0] or "{}")
             except Exception:
                 cur_d = {}
+            rec = _timing.setdefault(stage, {})
+            rec["status"] = status
+            if error:
+                rec["error"] = error[:200]
             cur_d[stage] = status
             conn.execute(
                 "UPDATE documents SET pipeline_detail=?, error_msg=? WHERE id=?",
                 (_j.dumps(cur_d, ensure_ascii=False), error or conn.execute(
                     "SELECT error_msg FROM documents WHERE id=?", (doc_id,)).fetchone()[0] or "", doc_id))
+            _stage._cur = (stage, now)
+
+        _stage._cur = None
 
         # 1.3) 保存源文件副本（源文件预览 + 失败重试）
         _save_source_copy(doc_id, filename, content)
@@ -276,7 +302,38 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
         md = metadata or {}
         # 2026-09-21：改用 extract_text_ex —— 除文本外还要拿到诊断信息
         #（失败原因 / OCR 是否参与 / 扫描件判别），用于落库状态与可操作提示。
-        text0, parse_meta = extract_text_ex(filename, content)
+        # ── P1-3（2026-10-04）断点续跑 ──
+        # `state` 承载"上次已识别的 OCR 页"，让分段 OCR 超预算后能**从断点继续**，
+        # 而不是重复 OCR 前 N 页（实测OCR 1.4~4.7 s/页，重复 50 页 = 白等 1~4 分钟）。
+        _state = {}
+        if doc_id is not None:
+            try:
+                from core import config as _cfgp
+                if _cfgp.as_bool("extract", "ocr_resume_enabled", True):
+                    _prev = conn.execute(
+                        "SELECT ocr_progress FROM documents WHERE id=?", (doc_id,)).fetchone()
+                    if _prev and _prev[0]:
+                        _pj = json.loads(_prev[0] or "{}")
+                        if _pj.get("resume"):
+                            _state["ocr_resume"] = {int(k): v for k, v in _pj["resume"].items()}
+            except Exception as e:
+                logger.warning("OCR 断点读取失败（按无断点处理）: %s", e)
+        text0, parse_meta = extract_text_ex(filename, content, state=_state)
+        # OCR 全跑完 ⇒ 清空断点（否则下次会拿过期文本重复并入正文）
+        try:
+            from core import config as _cfgp
+            if doc_id is not None and _cfgp.as_bool("extract", "ocr_resume_enabled", True):
+                _ocr_info = (parse_meta or {}).get("ocr") or {}
+                if _ocr_info and not _ocr_info.get("pages_pending"):
+                    conn.execute("UPDATE documents SET ocr_progress='' WHERE id=?", (doc_id,))
+                elif _state.get("ocr_resume"):
+                    conn.execute(
+                        "UPDATE documents SET ocr_progress=? WHERE id=?",
+                        (json.dumps({"resume": _state["ocr_resume"],
+                                     "total": _state.get("ocr_resume_total")}, ensure_ascii=False),
+                         doc_id))
+        except Exception as e:
+            logger.warning("OCR 断点写入失败（不阻断）: %s", e)
         detected_title = md.get("title", "").strip()
         if not detected_title:
             detected_title = extract_doc_title(filename, text0)
@@ -374,7 +431,40 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
             embed_texts = [sc.get("embed_text") or sc["content"] for sc in structured]
         else:
             embed_texts = chunks
-        vectors, embed_version = embedder.embed_with_version(embed_texts)
+        # ── P0-2（2026-10-04）：配额耗尽且策略=block ⇒ **失败**而不是静默降级 ──
+        # 事故背景：403 `Free quota exhausted` 被 except 吞掉 → 810 chunk 用词面向量
+        # 写入库、界面报"成功"、检索被污染且**无任何指标异常**。
+        # 降级向量会永久留在库里、事后无法区分 ⇒ 宁可失败重来。
+        try:
+            vectors, embed_version = embedder.embed_with_version(embed_texts)
+        except EmbedQuotaExceeded as _qe:
+            _msg = str(_qe)
+            _stage("embed", "failed", _msg[:200])
+            conn.execute("UPDATE documents SET parse_status='failed', error_msg=? WHERE id=?",
+                         (_msg[:300], doc_id))
+            conn.commit()
+            # P2：失败路径也要留耗时（"失败得多快"是排查配额/限流问题的关键信息）
+            _cur0 = getattr(_stage, "_cur", None)
+            if _cur0:
+                _timing.setdefault(_cur0[0], {})["ms"] = int((_time_mod.time() - _cur0[1]) * 1000)
+            _timing["total_ms"] = int((_time_mod.time() - _t0_all) * 1000)
+            try:
+                import json as _j3
+                _pd0 = _j3.loads(conn.execute(
+                    "SELECT pipeline_detail FROM documents WHERE id=?", (doc_id,)).fetchone()[0] or "{}")
+                _pd0["timing"] = _timing
+                conn.execute("UPDATE documents SET pipeline_detail=? WHERE id=?",
+                             (_j3.dumps(_pd0, ensure_ascii=False), doc_id))
+                conn.commit()
+            except Exception:
+                pass
+            return {"doc_id": doc_id, "parse_status": "failed", "chunk_count": 0,
+                    "error": _msg, "pipeline": "embed", "embed_blocked": True,
+                    "timing": dict(_timing)}
+        # HyDE 在真向量模式下**也要调 embedding** —— 这里同样可能撞配额耗尽。
+        # 注意：此处原有的 `except Exception: _hyde_vecs = [None]*len(...)`
+        # 是**正确的降级**（HyDE 只是检索增强，缺失不应阻断入库），
+        # 所以只把 EmbedQuotaExceeded 往上抛（但主向量已成功，所以这里不会触发）。
         _stage("embed", "done")
 
         # P0-2 域打标：按文件名/内容自动分类（高置信直接写库，低置信进 review 队列）
@@ -460,9 +550,24 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
         if _summary:
             conn.execute("UPDATE documents SET summary=? WHERE id=?", (_summary, doc_id))
             conn.commit()
+        # ── P2：阶段耗时收尾（落进 pipeline_detail.timing，并随返回值给出）──
+        _cur = getattr(_stage, "_cur", None)
+        if _cur:
+            _timing.setdefault(_cur[0], {})["ms"] = int((_time_mod.time() - _cur[1]) * 1000)
+        _timing["total_ms"] = int((_time_mod.time() - _t0_all) * 1000)
+        try:
+            import json as _j2
+            _pd = _j2.loads(conn.execute(
+                "SELECT pipeline_detail FROM documents WHERE id=?", (doc_id,)).fetchone()[0] or "{}")
+            _pd["timing"] = _timing
+            conn.execute("UPDATE documents SET pipeline_detail=? WHERE id=?",
+                         (_j2.dumps(_pd, ensure_ascii=False), doc_id))
+        except Exception as _e:
+            logger.debug("阶段耗时写入失败（不阻断）: %s", _e)
         return {"doc_id": doc_id, "parse_status": "completed", "chunk_count": len(chunks),
                 "embed_version": embed_version, "detected_title": detected_title,
                 "parse_meta": parse_meta, "summary_generated": bool(_summary),
+                "timing": dict(_timing),
                 "pipeline": {"parse": "done", "chunk": "done", "embed": "done", "insert": "done"}}
     except Exception as e:
         try:
