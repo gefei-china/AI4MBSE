@@ -78,6 +78,18 @@ jobs:
       - name: Guard 编排 checkpoint / resume（79 项 + 6 变异）
         run: python tools/verify/verify_orch_resume.py
 
+      # ── P0-2b（2026-10-04）：编排自动重投守护 ────────────────────────────────
+      # 锁的是"绝不误投活着的批次"：误投会让同一批次跑两遍（副作用重复 + 费用翻倍，
+      # 且用户完全无感），比不重投严重得多。
+      - name: Guard 编排自动重投守护（23 项 + 4 变异，含 dry_run 零副作用）
+        run: python tools/verify/verify_orch_supervisor.py
+
+      # ── Agent loop 护栏（2026-10-04）：token 预算 / 重复调用短路 / 工具超时 ────
+      # 关键断言是 G6c/G6d：两条 ReAct 路径都不得出现裸的 self._exec_tool_call(，
+      # 即"不可能绕过护栏" —— 这是防止新加的路径又落回无闸状态。
+      - name: Guard agent loop 三道护栏（40 项 + 5 变异）
+        run: python tools/verify/verify_loop_guard.py
+
       # ── P0-4（2026-10-04）：多租户隔离（图谱路径）────────────────────────────
       - name: Guard 多租户隔离（29 项 + 3 变异）
         run: python tools/verify/verify_tenant_isolation.py
