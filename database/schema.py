@@ -75,6 +75,7 @@ from .seeds import (
     _seed_builtin_tools,
     _backfill_domains,
     _seed_glossary,
+    _seed_intent_rules,
 )
 
 def init_db():
@@ -624,6 +625,36 @@ def init_db():
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ux_at_run ON agent_tasks(run_id, status)")
+
+    # ── P0-2 持久执行：编排 run 的检查点（LangGraph checkpointer 的最小等价物）──────────
+    # ⚠️ 设计口径（勿扩写成"整图状态快照"）：本表**不存**任务结果与 DAG 推进状态 ——
+    #   那些已经在 `agent_tasks` 里逐行持久化（status/result/metadata/retry_count 每步 commit）。
+    #   本表只存「重进这张图所需的坐标系」：原始用户输入、意图、分支、provider、原始计划、
+    #   以及 phase（执行阶段）+ updated_at（心跳）。缺的正是这几项 —— 进程崩了之后，
+    #   agent_tasks 还在，但**没人知道**这次 run 原本要跑什么、用哪个 provider、跑到哪一阶段。
+    # 为什么必须显式落这句：此前编排既无 run 级 phase、也无输入/ provider 留痕，崩溃现场只能
+    #   "整批标记 failed"（批次 1 孤儿回收已做），无法继续 —— 这正是缺 checkpoint 的代价。
+    c.execute("""CREATE TABLE IF NOT EXISTS orch_checkpoints (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,              -- 编排批次号（= agent_tasks.run_id）
+        conversation_id INTEGER DEFAULT 0,
+        phase TEXT DEFAULT 'planned',         -- planned|executing|summarizing|done|failed|interrupted
+        user_input TEXT DEFAULT '',           -- 触发本次编排的原始用户输入（恢复时用它重建 goal）
+        intent TEXT DEFAULT '',               -- 主意图（决定汇总口径与 Agent 选择）
+        branch TEXT DEFAULT '',               -- 工作分支（写库位置，恢复必须同源）
+        provider_id INTEGER DEFAULT 0,        -- LLM provider（恢复时保持同模型，避免半程换模型）
+        skill_name TEXT DEFAULT '',
+        team TEXT DEFAULT '',
+        plan_json TEXT DEFAULT '[]',          -- 原始 LLM 计划（保真，便于审计与离线复盘）
+        params_json TEXT DEFAULT '{}',        -- 其余调用参数（scope/team_forced/stage_hint 等）
+        attempt_count INTEGER DEFAULT 0,      -- resume 次数（每次恢复 +1，防无限自愈循环）
+        summary_written INTEGER DEFAULT 0,    -- ① 汇总产物是否已与消息**同事务**落库
+                                              --   （0=未落 ⇒ 可安全"仅重做汇总"；1=已落 ⇒ 重做会产生重复消息）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP   -- 心跳：主循环推进时刷新（存活判定依据）
+    )""")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_ock_run ON orch_checkpoints(run_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_ock_conv ON orch_checkpoints(conversation_id, updated_at)")
 
     # ── HIL 人机协作强制：L2 写操作确认队列（未确认前不落库/不生效）──
     c.execute("""CREATE TABLE IF NOT EXISTS hil_confirmations (
@@ -1201,6 +1232,8 @@ def init_db():
     _migrate_data_sources(conn)
     # ── Glossary 种子（空表时插入预置术语）──
     _seed_glossary(conn)
+    # 2026-10-04：意图路由规则集入库（此前只在运行库里，干净库 0 行 ⇒ CI 无法复现生产路由）
+    _seed_intent_rules(conn)
     conn.close()
 
 

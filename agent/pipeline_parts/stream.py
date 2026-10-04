@@ -23,7 +23,8 @@ class StreamMixin:
 
     def _stream_orchestrated_flow(self, user_input, conversation_id, branch, intent, agent_def,
                                   hil_level, kb_tags, attachments, slots, user, provider_id,
-                                  team_forced: bool = False, stage_hint=None) -> iter:
+                                  team_forced: bool = False, stage_hint=None,
+                                  resume_run_id: int = 0) -> iter:
         """P0-1 真流式编排：计划生成 → 子任务逐个串行流式执行（实时推送思考/工具/文本增量）
         → LLM 汇总 → 落库 → done。
 
@@ -36,6 +37,10 @@ class StreamMixin:
         （识别出 ['requirement_analysis','design'] 却不驱动任何决策）。
         2026-09-25：元素形式为 `"{意图}（{该阶段原句}）"` —— 带上原句后 planner 才知道每阶段
         具体做什么（只给意图名会丢失对象/范围）。
+        resume_run_id: P0-2 持久执行（2026-10-03）——非 0 时**从既有检查点恢复**而非重新规划：
+          计划不再问 LLM（避免第二次模型调用给出不同拆分）、既有 `agent_tasks` 里
+          已 `done` 的任务直接复用结果，只补跑没做完的（幂等，防重复写实体）。
+          与 LangGraph checkpointer 同语义：同一张图 + 恢复的状态，而非"再跑一次"。
         """
         from llm import llm_client
         from task_queue import TaskQueue
@@ -151,13 +156,48 @@ class StreamMixin:
                 + " → ".join(str(x) for x in stage_hint)
             )
         plan = []
-        try:
-            resp = llm_client.chat([{"role": "user", "content": plan_prompt}], provider_id=provider_id, _intent="planner")
-            raw = ((resp.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "")
-            data = _AP._parse_json_block(raw) if raw else None
-            plan = [t for t in ((data or {}).get("tasks") or []) if isinstance(t, dict) and t.get("key")]
-        except Exception:
-            plan = []
+        # ── P0-2 持久执行：恢复分支（resume_run_id 非 0 时**不调用 planner**）─────────────
+        # 为什么必须绕开 planner：resume 的核心是"按原计划继续"。若再问一次 LLM，
+        # 得到的拆分几乎必然不同（temperature + 会话摘要已变），于是旧 run 里已 done 的
+        # 任务与新 plan 对不上 —— 复用结果的前提（task_key 一致）直接失效。
+        _resume_ck = None
+        if resume_run_id:
+            try:
+                from agent.orch_checkpoint import load as _ck_load
+                _resume_ck = _ck_load(conn, int(resume_run_id))
+            except Exception:
+                _resume_ck = None
+            if _resume_ck:
+                # 用检查点里记录的坐标系覆盖入参：确保这一轮写的是**同一个分支**、
+                # 调的是**同一个 provider**（半程换模型会让前半轮的交付物风格/口径断裂）
+                branch = _resume_ck.get("branch") or branch
+                try:
+                    _rp = int(_resume_ck.get("provider_id") or 0)
+                    if _rp > 0:
+                        provider_id = _rp
+                except Exception:
+                    pass
+                if not (user_input or "").strip() and (_resume_ck.get("user_input") or ""):
+                    user_input = _resume_ck["user_input"]
+                    goal = user_input
+                # 把检查点里保真的原始计划作为 truthy 的 plan，使流程走"已有计划"分支；
+                # 下方 step 3 见 _resume_ck 即跳过 create_plan（任务行已在库里）
+                plan = list(_resume_ck.get("plan") or [])
+                yield {"type": "stage", "name": "检查点恢复", "status": "done"}
+                yield {"type": "reasoning",
+                       "delta": "（断点续跑）已从检查点恢复编排批次 #%s，复用已完成子任务，"
+                                "仅补跑未完成部分…" % resume_run_id}
+        if _resume_ck and not plan:
+            # 检查点存在但计划为空（异常数据）：退回常规规划，不让用户卡在空计划
+            _resume_ck = None
+        if not _resume_ck:
+            try:
+                resp = llm_client.chat([{"role": "user", "content": plan_prompt}], provider_id=provider_id, _intent="planner")
+                raw = ((resp.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "")
+                data = _AP._parse_json_block(raw) if raw else None
+                plan = [t for t in ((data or {}).get("tasks") or []) if isinstance(t, dict) and t.get("key")]
+            except Exception:
+                plan = []
 
         # 2) 降级：计划失败 → 单 Agent 流式直行
         if not plan:
@@ -198,10 +238,32 @@ class StreamMixin:
             # 3) 落计划 + 串行执行（子任务逐个流式）
             degraded = False
             try:
-                # P0-7：分配独立批次号（新号无残留，故不再 clear_run —— 那正是覆盖历史的原因）
-                run_id = TaskQueue.new_run_id(conn)
-                TaskQueue.create_plan(conn, run_id, plan, assigned_by="session",
-                                      conversation_id=int(conversation_id or 0))
+                if _resume_ck:
+                    # P0-2 resume：**不重建计划**。任务行（含已 done 的结果）已在库里，
+                    # 直接沿用原批次号；此时 `ready_tasks` 只会挑出未完成任务 → 天然幂等。
+                    run_id = int(resume_run_id)
+                    try:
+                        from agent.orch_checkpoint import touch as _ck_touch, bump_attempt as _ck_bump
+                        _ck_bump(conn, run_id)
+                        _ck_touch(conn, run_id, "executing")
+                    except Exception:
+                        pass
+                else:
+                    # P0-7：分配独立批次号（新号无残留，故不再 clear_run —— 那正是覆盖历史的原因）
+                    run_id = TaskQueue.new_run_id(conn)
+                    TaskQueue.create_plan(conn, run_id, plan, assigned_by="session",
+                                          conversation_id=int(conversation_id or 0))
+                    # P0-2 持久执行：落检查点 —— 崩溃后据此重进这张图（写失败静默，旁路不阻断编排）
+                    try:
+                        from agent.orch_checkpoint import save as _ck_save
+                        _ck_save(conn, run_id, conversation_id=int(conversation_id or 0),
+                                 phase="planned", user_input=user_input or goal or "",
+                                 intent=str(intent or ""), branch=str(branch or ""),
+                                 provider_id=int(provider_id or 0),
+                                 skill_name=str(getattr(self, "_ck_skill", "") or ""),
+                                 team=str(getattr(self, "_ck_team", "") or ""), plan=plan)
+                    except Exception:
+                        pass
                 # P0-c：编排 run 号纳入链路上下文 —— 本 run 内所有子任务的 LLM 调用可聚合
                 try:
                     from core.audit import bind_trace
@@ -461,6 +523,13 @@ class StreamMixin:
 
             while TaskQueue.pending_count(conn, run_id) > 0 and guard < 200:
                 guard += 1
+                # P0-2 持久执行：主循环心跳（节流 5 s —— 主循环每 50 ms 转一圈，不节流会把
+                # SQLite 单写者打满；节流后即使任务执行 20 分钟也只有几百次 UPDATE）
+                try:
+                    from agent.orch_checkpoint import touch as _ck_hb
+                    _ck_hb(conn, run_id, None, every_s=5.0)
+                except Exception:
+                    pass
                 # Task 7：run 级预算护栏——已执行任务数 ≥ _ORCH_MAX_TASKS 或累计 token ≥ 预算
                 # → 停止派新任务；未执行任务标记 blocked 后 break（汇总时记为 partial）
                 if executed_count >= _max_tasks or run_tokens >= run_token_budget:
@@ -676,6 +745,13 @@ class StreamMixin:
                 except Exception:
                     pass
             # 4) 汇总（P1-1 总结节点）
+            # P0-2：phase=summarizing —— 区分"任务执行中崩"与"汇总中崩"：
+            #   后者所有子任务都已 done，**不该重跑任务**，只需重做汇总。
+            try:
+                from agent.orch_checkpoint import touch as _ck_sm
+                _ck_sm(conn, run_id, "summarizing")
+            except Exception:
+                pass
             # T8：编排汇总前批量挂写操作确认队列——子任务暂存的写请求统一转人工确认（失败不阻断汇总）
             _queued_write = 0
             try:
@@ -878,6 +954,12 @@ class StreamMixin:
         llm_info = {"provider": "自动编排", "model": "-", "used_mock": False,
                     "latency_ms": int((_t.time() - t0) * 1000)}
         yield {"type": "stage", "name": "写入会话", "status": "run"}
+        # P0-2 持久执行：编排正常收尾 → phase=done。此后该 run 不再进入"可恢复"清单。
+        try:
+            from agent.orch_checkpoint import finish as _ck_fin
+            _ck_fin(conn, run_id, "done")
+        except Exception:
+            pass
         card_data = json.dumps({
             "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
@@ -911,6 +993,15 @@ class StreamMixin:
             _archive_artifacts(conn2, conversation_id, msg_id, card_data, orch_content, intent)
             conn2.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
                           (intent, conversation_id))
+            # C-1（2026-10-04）：「汇总产物已落库」标记**必须与消息 INSERT 同事务**。
+            #   分两次提交的话，中途崩溃会留下「消息在、标记 0」→ resume 误判"可只重做汇总"
+            #   → 同一份汇总在会话里出现两次。故写在同一个 with 块内，由 db_conn 统一提交。
+            if run_id:
+                try:
+                    from agent.orch_checkpoint import mark_summary_written as _ck_msw
+                    _ck_msw(conn2, run_id)
+                except Exception:
+                    pass
             # Audit log
 # P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——
 #   此前此处直插 audit_logs 只有 5 列，绕过溯源上下文（IP/UA/request_id）与哈希链，
@@ -1054,7 +1145,7 @@ class StreamMixin:
 
     def execute_stream(self, user_input, conversation_id, branch="dev", provider_id=None,
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
-                       team=None, scope_id=None, scope_ids=None, scope=None):
+                       team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0):
         """流式执行（V2.3.2 优化：AI 输出流式 + 执行过程可观测）。生成器逐段产出 SSE 事件：
 
         {"type":"stage","name":..., "status":"run|done"}   右侧智能体执行状态
@@ -1073,7 +1164,10 @@ class StreamMixin:
         # 修「流式进行中库中 0 条消息 → 切页再切回，selectConv 渲染空态覆盖 #stream-ai 现场」；
         # 也顺带修复澄清路径（clarify_ask 提前 return）user 消息从未落库的缺口。
         # 收尾块只插 assistant（三处已同步去除 user INSERT）；dry_run=True（编排子任务流式）不落库。
-        if not dry_run:
+        # ⚠️ resume_run_id 非 0 时**必须跳过**：恢复不是新一轮对话，`user_input` 传的是空串
+        # （真实输入存在检查点里，只用于重建 goal）——照插会在会话里留下一条空 user 消息。
+        # 这是批次 2 自查时才发现的缺陷：入口落库是无条件的，而恢复路径本不该产生新轮次。
+        if not dry_run and not resume_run_id:
             try:
                 with db_conn() as _conn0:
                     _conn0.execute(
@@ -1171,6 +1265,44 @@ class StreamMixin:
             agent_def = self.registry.get(intent)
             hil_level = agent_def.hil_level
             effective_provider = provider_id or self.registry.get_provider_id(intent)  # 优化2
+            # ── P0-2 断点续跑（2026-10-03）：resume 绕过"意图识别之后的一切前置判定" ──────
+            # 为什么必须在这里插队：内容级澄清（`_clarify_detect`）、复杂度判定（`_needs_orchestration`）、
+            # 沉淀流程复用（`_try_reuse_planner_flow`）都是**启发式**的。续跑时用户可能一句话都不输入，
+            # 这些判定会走向完全不同的分支（甚至直接回落单 Agent 重跑）——那就不是"续跑"而是"重跑"。
+            # 结论：resume 是一条**直达通道**，唯一依据是 run_id + 检查点。
+            if resume_run_id and not dry_run:
+                _ckr = None
+                try:
+                    from database import get_db as _gdb
+                    from agent.orch_checkpoint import load as _ck_load2
+                    _c0 = _gdb()
+                    try:
+                        _ckr = _ck_load2(_c0, int(resume_run_id))
+                    finally:
+                        try:
+                            _c0.close()
+                        except Exception:
+                            pass
+                except Exception:
+                    _ckr = None
+                if not _ckr:
+                    yield {"type": "error", "message": "编排检查点不存在或已被清理，无法恢复该批次"}
+                    yield {"type": "done", "data": {"ok": False, "intent": intent,
+                                                    "content": "该编排批次不可恢复（无检查点记录）"}}
+                    return
+                _r_intent = (_ckr.get("intent") or intent or "")
+                try:
+                    _r_agent = self.registry.get(_r_intent)
+                except Exception:
+                    _r_agent = agent_def
+                _r_text = (_ckr.get("user_input") or user_input or "")
+                yield from _yield_collect(self._stream_orchestrated_flow(
+                    _r_text, conversation_id, (_ckr.get("branch") or branch), _r_intent,
+                    _r_agent, getattr(_r_agent, "hil_level", hil_level),
+                    IntentRouter.extract_kb_tags(_r_text), attachments, None, user,
+                    int(_ckr.get("provider_id") or effective_provider or 0) or None,
+                    resume_run_id=int(resume_run_id)), _orch_acc)
+                return
             # P1 意图结构化拆解 + P2 用户上下文
             # P0-2：槽位跨轮合并——上轮槽位为底，本轮新值覆盖（entities/constraints 并集）
             # P1-4（2026-10-01）：带上 conversation_id/user_input —— 换话题时丢弃历史槽位

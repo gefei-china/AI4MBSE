@@ -19,6 +19,10 @@ def _migrate_columns(conn):
     _add("conversations", "project_id", "TEXT DEFAULT ''")
     _add("entities", "project_id", "TEXT DEFAULT ''")
     _add("relations", "project_id", "TEXT DEFAULT ''")
+    # ── P0-2 批次 2（2026-10-04）：编排检查点补列 ──
+    # summary_written：与 assistant 消息同事务置 1。它是"能否只重做汇总"的唯一判据 ——
+    #   崩在汇总阶段时子任务已全 done（重跑就是白烧 LLM），但若消息已落库又不能重做（会出重复消息）。
+    _add("orch_checkpoints", "summary_written", "INTEGER DEFAULT 0")
     # ── 内容级澄清挂起（AI 建模信息不清晰 → 选择题确认，回答后续答）──
     _add("conversations", "pending_clarify", "TEXT DEFAULT ''")
     # ── P1-3：SysML Profile 导入溯源（类型 → 来源 Profile/Stereotype）──
