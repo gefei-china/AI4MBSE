@@ -653,6 +653,39 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS ix_ae_status ON alert_events(status, created_at)")
     c.execute("CREATE INDEX IF NOT EXISTS ix_ae_rule ON alert_events(rule_id)")
 
+    # ── P0-C（2026-10-04）：通用异步作业队列（job_jobs）────────────────────────
+    # 为什么需要：长任务（如工程入库实测 13.4 分钟、SysML 导入）此前只能**同步占着
+    # HTTP 连接**跑完 —— 请求断开即前功尽弃，且期间该连接占一个线程池名额。
+    # 此前 `batch_id` 只是"数据批次标识"，**不是**异步作业句柄（已实测确认）。
+    #
+    # 为什么自己建表而不是引Redis+RQ：**AGENTS.md 铁律 4「私有化离线部署，
+    # 不引入外部 CDN / 构建链 / 新依赖」**。Redis 方案直接违反该铁律；
+    # 且本机实测无 redis-server / 无 redis-cli / 6379 无响应。
+    # ⇒ 用 SQLite 承载队列状态（本仓已有 WAL + busy_timeout，单写者够用），
+    #    消费端是后台 daemon worker（与 core/orch_supervisor 同一范本）。
+    c.execute("""CREATE TABLE IF NOT EXISTS job_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_key TEXT UNIQUE NOT NULL,        -- 业务键（幂等去重：同key 重复提交只返回既有 job）
+        kind TEXT DEFAULT '',                 -- 作业类型（决定用哪个 handler）
+        payload TEXT DEFAULT '{}',           -- JSON入参
+        status TEXT DEFAULT 'queued',        -- queued | running | done | failed | canceled
+        progress INTEGER DEFAULT 0,-- 0~100（由 handler 主动上报；不精确，仅供展示）
+        stage TEXT DEFAULT '',               -- 当前阶段文案（"正在解析 SysML…"，给人看）
+        result TEXT DEFAULT '',              -- 成功产出（JSON 文本，截断落库）
+        error TEXT DEFAULT '',
+        attempt INTEGER DEFAULT 0,-- 已重试次数（达上限转 failed，防无限自愈）
+        max_attempts INTEGER DEFAULT 3,
+        -- 租约：worker claim 时写心跳；进程崩溃后租约过期 ⇒ 其他 worker 可回收
+        lease_until TEXT DEFAULT '',
+        heartbeat_at TEXT DEFAULT '',
+        worker_id TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    # 状态索引：worker 扫"可领取的"作业（queued + 租约已回收的 running）
+    c.execute("CREATE INDEX IF NOT EXISTS ix_job_pick ON job_jobs(status, created_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_job_kind ON job_jobs(kind, status)")
+
 
     c.execute("""CREATE TABLE IF NOT EXISTS agent_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

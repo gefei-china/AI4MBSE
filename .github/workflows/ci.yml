@@ -97,6 +97,12 @@ jobs:
       - name: Guard 迁移安全闸（dry-run 零副作用 / 热备保真 / 无备份不迁移，15 项 + 3 变异）
         run: python tools/verify/verify_migration_guard.py
 
+      # ── P0-C（2026-10-04）：进程内异步作业队列 ────────────────────────────────
+      # 核心断言 Q2b：租约未过期的 running 作业**不得**被另一 worker 领走（防双跑）。
+      # Q3d：重试超上限必须转 failed（防自愈死循环）。
+      - name: Guard 异步作业队列（39 项 + 4 变异）
+        run: python tools/verify/verify_job_queue.py
+
       # ── P0-4（2026-10-04）：多租户隔离（图谱路径）────────────────────────────
       - name: Guard 多租户隔离（29 项 + 3 变异）
         run: python tools/verify/verify_tenant_isolation.py
