@@ -806,3 +806,85 @@ window.loginEntryClick = async function() {
 window.addEventListener('storage', function (e) {
   if (e.key === 'mbse_session' && !e.newValue) location.href = '/static/login.html';
 });
+
+/* ── P0-C（2026-10-04）异步作业轮询：长任务"提交即返回"的前端一半 ──────────────
+   背景：后端把文档入库 / 工程入库等长任务接进了作业队列
+   （提交 0.03s 返回 job_id，后台跑分钟级）。前端若不同步轮询，
+   用户会看到"上传完成但 chunk 数是 0"——比同步更让人困惑。
+
+   为什么放01-core.js 而不是 20-docs.js：作业态是**跨模块**的
+   （文档库 / 数据整理的工程入库 / 治理中心都要看同一个 job），
+   放文档模块里等于让别的模块反向依赖文档模块。
+
+   三条设计约束（都是踩过坑才定下来的）：
+   ① **判据只取 status**（done/failed/canceled），**不拿 progress 当完成判据** ——
+      progress 由 handler 主动上报，可能停在 80% 而实际已收尾；也可能是 0%
+      而任务已在跑（提交瞬间还没上报）。拿它判完成 ⇒ 误报"失败"或永不结束。
+      progress 只用来画条。
+   ② **轮询必须能被打断**：onTick 返回 false 即停止（页面切走/用户取消）。
+      否则后台 timer 会在切页后继续跑并覆写已消失的 DOM。
+   ③ **超时只提示不重试**：作业在服务端**已经排队**，前端超时 ≠ 任务失败。
+      误报失败会诱导用户重复提交（队列虽会去重，但用户不知道发生了什么）。
+      超时文案必须明确指向"仍在后台执行"，并给出 job_id 供事后查。*/
+const JOB_POLL = {
+  intervalMs: 2000,
+  maxMs: 30 * 60 * 1000,      // 30 分钟：实测单文档 178s，工程入库分钟级，30 分钟足够宽松
+};
+
+/**
+ * 轮询一个作业直到终态。
+ * @param {number} jobId
+ * @param {object} opts {onTick(job), label, maxMs}
+ * @returns {Promise<{ok:boolean, job:object, timedOut:boolean}>}
+ *   ok=true 仅表示 status==='done'；timedOut=true 表示**没失败，只是不再等了**。
+ */
+async function pollJob(jobId, opts = {}) {
+  const interval = opts.intervalMs || JOB_POLL.intervalMs;
+  const maxMs = opts.maxMs || JOB_POLL.maxMs;
+  const label = opts.label || '';
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxMs) {
+    let job = null;
+    try {
+      job = await api('/api/jobs/' + Number(jobId));
+    } catch (e) {
+      // 单次查询失败（网络抖动）不终止：作业在服务端仍会跑完，下一轮再查即可
+      await new Promise(r => setTimeout(r, interval));
+      continue;
+    }
+    if (job && job.error) {           // 例如作业不存在（库被重置）
+      return {ok:false, job:{status:'failed', error:job.error}, timedOut:false};
+    }
+    if (job && opts.onTick) {
+      let cont = true;
+      try { cont = await opts.onTick(job); } catch (e) { cont = false; }
+      if (cont === false) return {ok:false, job, timedOut:false, aborted:true};
+    }
+    const st = job && job.status;
+    if (st === 'done')  return {ok:true,  job, timedOut:false};
+    if (st === 'failed' || st === 'canceled') return {ok:false, job, timedOut:false};
+    await new Promise(r => setTimeout(r, interval));
+  }
+  // ⚠️ 超时**不是失败**：作业仍在服务端排队/执行中
+  return {ok:false, job:{status:'queued', id:jobId}, timedOut:true, label};
+}
+
+/** 作业 status → 展示文案（唯一真源：core/job_queue.py 的 TERMINAL/ACTIVE）。 */
+function jobStatusText(job) {
+  const st = (job && job.status) || '';
+  if (st === 'done')  return '✅ 完成';
+  if (st === 'failed') return '❌ 失败';
+  if (st === 'canceled') return '🚫 已取消';
+  if (st === 'running') return '⏳ 执行中';
+  if (st === 'queued')  return '🕐 排队中';
+  return st || '?';
+}
+
+/**
+ * 提交一个长任务并轮询（同步/异步的统一入口）。
+ * resp 来自后端异步分支：{async:true, job_id, poll}
+ */
+async function submitAndPoll(resp, opts = {}) {
+  if (!resp || !resp.job_id) return {ok:false, job:{status:'failed', error:'未返回 job_id'}};
+  return pollJob(resp.job_id, opts);
+}

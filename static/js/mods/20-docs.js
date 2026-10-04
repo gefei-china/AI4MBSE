@@ -164,6 +164,13 @@ async function doUploadDoc() {
     // 正停在回收站/全部文档/未归类时不指定目录（= 未归类），语义与用户看到的一致。
     const _landing = (!_docSmartView && _docFolderId !== '' && Number(_docFolderId) > 0) ? Number(_docFolderId) : 0;
     fd.append('folder_id', String(_landing));
+    // ── P0-C（2026-10-04）：大文件走异步入库 ──
+    // 为什么按大小分流而不是一律异步：小文件同步几十毫秒就完事，
+    // 异步反而多一轮轮询往返（体验反而变差）；而大文件实测 178s 起步
+    // （三份规范同步 13.4 min），同步会让这条请求**一直占着连接**，
+    // 用户连关页面都关不掉（请求中断 = 前功尽弃）。
+    const _useAsync = (f.size || 0) >= (window.MBSE_ASYNC_UPLOAD_MIN || 2*1024*1024);
+    if(_useAsync) fd.append('mode', 'async');
     try {
       const r = await fetch('/api/documents/upload', {method:'POST', body:fd}).then(x=>x.json());
       if(r.error) {
@@ -171,6 +178,58 @@ async function doUploadDoc() {
         bar.style.width = '100%'; bar.style.background = 'var(--red)';
         toast(`❌ ${f.name} 解析失败：${r.error||''}`);
         failCount++;
+        continue;
+      }
+      // ── 异步分支：只提交，不等管道 ──
+      // 提交这一步已经跑完了（毫秒级），接下来只是轮询作业状态。
+      if(r.async && r.job_id) {
+        setUploadStage(1, 'run', `(${label}) 已提交后台入库（作业 #${r.job_id}）…`);
+        bar.style.width = '8%';
+        const res = await submitAndPoll(r, {
+          label,
+          onTick: (job) => {
+            // progress 只用来画条；完成判据由 pollJob 内部的 status 决定
+            const p = Number(job.progress||0);
+            if(p > 0) bar.style.width = Math.max(8, Math.min(95, p)) + '%';
+            const stTxt = jobStatusText(job);
+            const stage = job.stage ? ` — ${job.stage}` : '';
+            document.getElementById('up-status').textContent =
+              `(${label}) ${stTxt}${stage}`;
+            return true;
+          }
+        });
+        if(res.ok) {
+          const rr = (res.job && res.job.result) || {};
+          setUploadStage(4, 'done', `(${label}) ✅ 入库完成（作业 #${r.job_id}）`);
+          bar.style.width = '92%';
+          okCount++;
+          if(rr.parse_status === 'failed') {
+            setUploadStage(1, 'fail', `(${label}) 解析失败：${rr.error||''}`);
+            bar.style.width = '100%'; bar.style.background = 'var(--red)';
+            toast(`❌ ${f.name} 解析失败：${rr.error||''}`);
+            failCount++; okCount--;
+          } else {
+            // 自动抽取结果从作业 result 里取（与同步路径同一份结构）
+            const ae = rr.auto_extract || {};
+            if(_fileExtractEnabled && ae.enabled && fi === totalN-1) {
+              const totalC = (ae.node_count||0) + (ae.edge_count||0);
+              setUploadStage(5, 'done', `(${label}) ✅ 抽取 ${ae.extracted||0} 条候选`);
+              renderExtractResult(r.doc_id, ae, totalC, r.doc_id);
+            }
+            bar.style.width = '100%';
+          }
+        } else if(res.timedOut) {
+          // ⚠️ 超时**不是失败**：作业仍在服务端跑。不要报"失败"——
+          //    误报会诱导用户重复提交（队列会去重，但用户被误导了）。
+          setUploadStage(4, 'run', `(${label}) ⏳ 后台仍在执行（作业 #${r.job_id}），可稍后在列表查看`);
+          bar.style.background = 'var(--blue)';
+        } else {
+          const err = (res.job && res.job.error) || '未知错误';
+          setUploadStage(1, 'fail', `(${label}) 失败：${err}`);
+          bar.style.width = '100%'; bar.style.background = 'var(--red)';
+          toast(`❌ ${f.name} 入库失败：${err}`);
+          failCount++;
+        }
         continue;
       }
       setUploadStage(2, 'done', `(${label}) 分块完成`); bar.style.width = '35%';
@@ -329,6 +388,8 @@ function _dhcRender(d, fallback){
     ? '<span class="st ok">已完成</span>'
     : d.parse_status==='failed'
     ? '<span class="st r">失败</span>'
+    : d.parse_status==='queued'
+    ? '<span class="st w">排队中</span>'
     : '<span class="st w">解析中</span>';
   const sum = (d.summary && d.summary.trim())
     ? `<div class="dhc-sum">${esc(d.summary)}</div>`
@@ -414,6 +475,7 @@ const DOC_STATES = {
   committed:  {cls:'lc-primary', icon:'🎯', label:'正式入库'},
   stored:     {cls:'lc-success', icon:'✅', label:'待入库'},
   processing: {cls:'lc-info',    icon:'⏳', label:'处理中'},
+  queued:     {cls:'lc-info',    icon:'🕐', label:'排队中'},   // P0-C 异步入库：已登记，等 worker 领
   failed:     {cls:'lc-danger',  icon:'⚠️', label:'解析失败'},
   deprecated: {cls:'lc-muted',   icon:'🚫', label:'已废弃'},
   archived:   {cls:'lc-warning', icon:'📦', label:'已归档'},
@@ -424,6 +486,10 @@ function docDerivedState(d){
   if(lc === 'deprecated') return 'deprecated';
   if(lc === 'archived') return 'archived';
   if(lc === 'stored') return 'stored';
+  // 2026-10-04（P0-C 异步入库）：`queued` 是新增的解析状态 —— 已登记、等 worker 领。
+  // 必须单独判：落到下面的兜底分支会被算成 committed（"已入库"），
+  // 也就是**还没解析的文档被显示成已入库** —— 比报错更坏（用户以为好了）。
+  if(d.parse_status === 'queued') return 'queued';
   if(lc === 'uploaded' || lc === 'processing' || d.parse_status === 'parsing') return 'processing';
   return 'committed';
 }
@@ -637,7 +703,9 @@ function renderDocs() {
           <div style="border-top:1px solid var(--line);margin:2px 0;"></div>
           ${lc === 'stored' ? `<div class="rm-item" onclick="closeRowMenus();commitDoc(${d.id})" style="color:var(--blue-d);font-weight:600;" title="人工确认：内容已进入图库，正式入库">正式入库</div>` : ''}
           ${d.parse_status==='completed' && _fileExtractEnabled?`<div class="rm-item" onclick="closeRowMenus();extractDoc(${d.id})">抽取</div>`:''}
-          ${d.parse_status==='failed'?`<div class="rm-item" onclick="closeRowMenus();retryDoc(${d.id})">重新解析</div>`:`<div class="rm-item" onclick="closeRowMenus();reindexDoc(${d.id})">重索引</div>`}
+          ${d.parse_status==='failed'?`<div class="rm-item" onclick="closeRowMenus();retryDoc(${d.id})">重新解析</div>`:(d.parse_status==='queued'?'':`<div class="rm-item" onclick="closeRowMenus();reindexDoc(${d.id})">重索引</div>`)}
+          <!-- P0-C：queued（异步入库排队中）不给"重索引"入口 ——
+               此时还没有分块，重索引无事可做；给了只会让用户点出一次无意义操作。 -->
           <div style="border-top:1px solid var(--line);margin:2px 0;"></div>
           ${isDep
             ? `<div class="rm-item" onclick="closeRowMenus();restoreDoc(${d.id})">撤销废弃</div>`
@@ -788,9 +856,21 @@ async function extractDoc(id) {
 async function reindexDoc(id) {
   if(!(await confirmDialog('重新向量化该文档全部块？（Embedding 模型升级后使用）'))) return;
   try {
-    const r = await api(`/api/documents/${id}/reindex`, {method:'POST'});
+    // P0-C：一律走异步（重索引耗时与 chunk 数成正比，同步会占连接），前端轮询作业。
+    const r = await api(`/api/documents/${id}/reindex?mode=async`, {method:'POST'});
     if(r.error) { toast('失败：'+r.error); return; }
-    toast(`✅ 重索引完成：${r.chunk_count} 块 / ${r.embed_version}`);
+    if(!r.job_id) { toast('失败：未返回 job_id'); return; }
+    toast(`⏳ 已提交后台重索引（作业 #${r.job_id}）`);
+    const res = await submitAndPoll(r, {label:'重索引',
+      onTick: (job) => { toast(jobStatusText(job)+' '+r.job_id, 1200); return true; }});
+    if(res.ok) {
+      const rr = (res.job && res.job.result) || {};
+      toast(`✅ 重索引完成：${rr.chunk_count||'?'} 块 / ${rr.embed_version||'-'}`);
+    } else if(res.timedOut) {
+      toast(`⏳ 重索引仍在后台执行（作业 #${r.job_id}），可稍后刷新查看`);
+    } else {
+      toast('❌ 重索引失败：'+((res.job&&res.job.error)||'未知错误'));
+    }
     loadDocs();
   } catch(e) { toast('失败：'+e.message); }
 }
@@ -832,11 +912,27 @@ function stageTable(detail) {
 }
 async function retryDoc(id) {
   if(!(await confirmDialog('使用已保存的源文件副本重新执行解析→切片→向量化→入库？'))) return;
-  toast('重试中…');
+  toast('提交中…');
   try {
-    const r = await api(`/api/documents/${id}/retry`, {method:'POST'});
+    // P0-C：走异步（整条管道实测 178s 起步，同步会把连接占死）
+    const r = await api(`/api/documents/${id}/retry?mode=async`, {method:'POST'});
     if(r.error) { toast('❌ 重试失败：'+r.error); loadDocs(); return; }
-    toast(`✅ 重试成功：${r.chunk_count} 块 / ${r.embed_version}`);
+    if(!r.job_id) { toast('❌ 重试失败：未返回 job_id'); loadDocs(); return; }
+    toast(`⏳ 已提交后台重试（作业 #${r.job_id}）`);
+    const res = await submitAndPoll(r, {label:'重试',
+      onTick: (job) => { toast(jobStatusText(job)+' '+r.job_id, 1200); return true; }});
+    if(res.ok) {
+      const rr = (res.job && res.job.result) || {};
+      if(rr.parse_status === 'failed') {
+        toast('❌ 重试失败：'+(rr.error||'未知错误'));
+      } else {
+        toast(`✅ 重试成功：${rr.chunk_count||'?'} 块 / ${rr.embed_version||'-'}`);
+      }
+    } else if(res.timedOut) {
+      toast(`⏳ 重试仍在后台执行（作业 #${r.job_id}），可稍后刷新查看`);
+    } else {
+      toast('❌ 重试失败：'+((res.job&&res.job.error)||'未知错误'));
+    }
     loadDocs();
   } catch(e) { toast('重试失败：'+e.message); loadDocs(); }
 }
@@ -859,7 +955,7 @@ async function viewDocTrace(id) {
     <div class="kv"><span>标题</span><b>${esc(d.title||'-')}</b></div>
     <div class="kv"><span>作者 / 版本</span><b>${esc(d.author||'-')} / ${d.version}</b></div>
     <div class="kv"><span>上传人 / 时间</span><b>${esc(d.uploaded_by||'-')} / ${esc((d.created_at||'').slice(0,16))}</b></div>
-    <div class="kv"><span>状态</span><b><span class="st ${d.parse_status==='completed'?'ok':d.parse_status==='failed'?'r':'w'}">${d.parse_status==='completed'?'已完成':d.parse_status==='failed'?'失败':'解析中'}</span></b></div>
+    <div class="kv"><span>状态</span><b><span class="st ${d.parse_status==='completed'?'ok':d.parse_status==='failed'?'r':'w'}">${d.parse_status==='completed'?'已完成':d.parse_status==='failed'?'失败':(d.parse_status==='queued'?'排队中':'解析中')}</span></b></div>
     ${d.parse_status==='failed'&&d.error_msg?`<div style="font-size:11px;color:var(--red);margin-top:4px;">✗ 失败原因：${esc(d.error_msg)}</div>`:''}
     <div style="margin-top:8px;border-top:1px dashed var(--line);padding-top:8px;font-size:12px;color:var(--mut);">管道阶段明细：</div>
     ${stageTable(d.pipeline_detail)}

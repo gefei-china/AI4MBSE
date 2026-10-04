@@ -113,6 +113,13 @@ jobs:
       - name: Guard 长任务接入作业队列（30 项 + 4 变异）
         run: python tools/verify/verify_job_handlers.py
 
+      # P0-C 第三步：前端接线。后端队列与前端轮询分属两个语言层，
+      # 中间只有 HTTP 一个契约 —— 任何一侧改字段名/状态口径，另一侧**不报错**，
+      # 只静默退化（轮询永不终止 / 永远等不到"完成" /显示成"已入库"）。
+      # F3 是跨语言契约哨兵；F2锁"完成判据只取 status，不拿 progress"。
+      - name: Guard 前端作业轮询接线（30 项 + 4 变异）
+        run: python tools/verify/verify_job_ui.py
+
       # ── P0-4（2026-10-04）：多租户隔离（图谱路径）────────────────────────────
       - name: Guard 多租户隔离（29 项 + 3 变异）
         run: python tools/verify/verify_tenant_isolation.py
