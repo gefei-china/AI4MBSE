@@ -30,6 +30,7 @@
 退出码：全绿 0 / 有失败 1。
 """
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -61,6 +62,29 @@ def c1_c4_dockerfile():
                "/opt/venv" in src and "pip install -r requirements.txt" in src)
     ok &= _rec("C2  以非 root 运行（USER 非 root）", _is_nonroot(src),
                "未找到非 root USER 指令")
+    # C2b（2026-10-04，由 CI 首次真实 docker build 暴露）：
+    #   原写法 `RUN useradd ... && chown -R mbse:mbse /app /data` 在**真实构建时必然失败**：
+    #   `VOLUME ["/data", ...]` 只是**声明**挂载点，构建阶段不会创建该目录
+    #   ⇒ `chown: cannot access '/data': No such file or directory` → build exit 1。
+    #   而本静态门禁当时是全绿的 —— **这类缺陷只有真构建能抓**。
+    #   现在把"chown 的目标目录必须先被创建"锁成断言。
+    _chown_targets = []
+    for _m in re.finditer(r"chown\s+-R\s+\S+\s+((?:/\S+\s*)+)", src):
+        _chown_targets += _m.group(1).split()
+    _vol = re.search(r"VOLUME\s+\[([^\]]*)\]", src)
+    _vol_paths = re.findall(r'"([^"]+)"', _vol.group(1)) if _vol else []
+    # mkdir 可以一次声明多个：`mkdir -p /data /opt/mbse-runtime`
+    # ⇒ 必须解析**参数集合**，不能对每个目标做子串匹配（第一版就是这么错的：
+    #    `/opt/mbse-runtime` 明明在同一行，却报"缺 mkdir"）。
+    _mkdir_paths = set()
+    for _m in re.finditer(r"mkdir\s+(?:-\w+\s+)*((?:/\S+\s*)+)", src):
+        _mkdir_paths |= set(_m.group(1).split())
+    _missing = [t for t in _chown_targets
+                if t in _vol_paths and t not in _mkdir_paths]
+    ok &= _rec("C2b chown 的挂载点目标已先 mkdir（VOLUME 不会在构建期建目录）",
+               not _missing,
+               "chown 目标=%s；已 mkdir=%s；缺=%s"
+               % (sorted(set(_chown_targets)), sorted(_mkdir_paths), _missing))
     ok &= _rec("C3a 有 HEALTHCHECK（行首有效指令，注释不算）", _has_healthcheck(src))
     ok &= _rec("C3b 健康检查打的是真实端点 /api/monitor/orphan-runs",
                "/api/monitor/orphan-runs" in src,
@@ -211,10 +235,51 @@ def m_mutations():
     m4 = df.replace("HEALTHCHECK --interval", "# HEALTHCHECK --interval")
     ok &= _rec("M4 注释掉 HEALTHCHECK ⇒ 判据判红",
                _has_healthcheck(df) and not _has_healthcheck(m4))
-    # M5 删掉随包运行时的挂载点声明
+    # M5（2026-10-04 改判）：删掉随包运行时的挂载点声明。
+    #   ⚠️ 第一版判据是「自己比自己」（`("/opt/mbse-runtime" in df) and (… not in m5)`）——
+    #   那只证明"字符串被替换掉了"，**没证明门禁能抓错** ⇒ 典型的变异自证空转。
+    #   改为：把判据函数抽出来，拿变异文本**真跑一遍**。
+    def _check_mounts(s: str) -> tuple:
+        """判据：VOLUME 必须同时声明 /data 与 /opt/mbse-runtime。"""
+        _v = re.search(r"VOLUME\s+\[([^\]]*)\]", s)
+        _paths = re.findall(r'"([^"]+)"', _v.group(1)) if _v else []
+        missing = [p for p in ("/data", "/opt/mbse-runtime") if p not in _paths]
+        return (not missing), ("VOLUME=%s 缺=%s" % (_paths, missing))
+
     m5 = df.replace('VOLUME ["/data", "/opt/mbse-runtime"]', 'VOLUME ["/data"]')
-    ok &= _rec("M5 删掉 /opt/mbse-runtime 挂载点 ⇒ 判据判红",
-               ("/opt/mbse-runtime" in df) and ("/opt/mbse-runtime" not in m5))
+    _ok_now, _why = _check_mounts(df)
+    _ok_mut, _why_mut = _check_mounts(m5)
+    ok &= _rec("M5 删掉 /opt/mbse-runtime 挂载点 ⇒ 判据判红（真跑判据函数，非自比）",
+               _ok_now and not _ok_mut,
+               "现状=%s(%s) / 变异=%s(%s)" % (_ok_now, _why, _ok_mut, _why_mut))
+
+    # M6（2026-04 新增）：去掉 mkdir 还原成原写法 ⇒ C2b 必须判红。
+    #   这条对应的是 CI 首次真实 docker build 暴露的真缺陷
+    #   （`VOLUME` 不会在构建期建目录 ⇒ `chown /data` 必然失败 ⇒ build exit 1）。
+    def _check_mkdir(s: str) -> tuple:
+        # 路径 token 只取"以 / 开头、且不含引号/反引号/逗号"的那种，
+        # 否则跨行续行（`\`）与反引号会被吃进路径，产生 `/data\` 这种脏值。
+        _tok = r"/[A-Za-z0-9_.\-/]+"
+        _chown = []
+        for _m in re.finditer(r"chown\s+-R\s+\S+\s+((?:%s\s*)+)" % _tok, s):
+            _chown += _m.group(1).split()
+        _v = re.search(r"VOLUME\s+\[([^\]]*)\]", s)
+        _vols = re.findall(r'"([^"]+)"', _v.group(1)) if _v else []
+        _mk = set()
+        for _m in re.finditer(r"mkdir\s+(?:-\w+\s+)*((?:%s\s*)+)" % _tok, s):
+            _mk |= set(_m.group(1).split())
+        miss = [t for t in _chown if t in _vols and t not in _mk]
+        return (not miss), ("chown=%s mkdir=%s 缺=%s" % (sorted(set(_chown)), sorted(_mk), miss))
+
+    _m6 = df.replace(" \\\n && mkdir -p /data /opt/mbse-runtime \\\n && chown", " \\\n && chown")
+    if _m6 == df:      # Dockerfile 换过写法 ⇒ 退回宽松匹配
+        _m6 = df.replace("mkdir -p /data /opt/mbse-runtime ", "")
+    _ok6, _w6 = _check_mkdir(df)
+    _ok6m, _w6m = _check_mkdir(_m6)
+    ok &= _rec("M6 去掉 mkdir 还原成原写法 ⇒ C2b 判据判红（真跑判据函数）",
+               _ok6 and _m6 != df and not _ok6m,
+               "变异是否生效=%s；现状=%s(%s) / 变异=%s(%s)"
+               % (_m6 != df, _ok6, _w6, _ok6m, _w6m))
     return ok
 
 

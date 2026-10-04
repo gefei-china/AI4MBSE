@@ -61,7 +61,15 @@ COPY . /app
 VOLUME ["/data", "/opt/mbse-runtime"]
 
 # 非 root 运行：容器逃逸时的影响面小一档
-RUN useradd -m -u 10001 mbse && chown -R mbse:mbse /app /data
+# ⚠️ 2026-10-04（CI 首次真跑暴露）：`VOLUME` 只是**声明**挂载点，构建时**不会创建目录**，
+#   所以原写法 `chown -R mbse:mbse /app /data` 必然失败：
+#     chown: cannot access '/data': No such file or directory
+#   ⇒ docker build 直接 exit 1（本机无 docker，只能靠 CI 暴露；这是本仓第一处
+#     "静态门禁查不出、只有真构建能抓"的缺陷）。
+#   修法：**先 mkdir 再 chown**，且用 `|| true` 兜住"目录已存在"（幂等，重建不炸）。
+RUN useradd -m -u 10001 mbse \
+ && mkdir -p /data /opt/mbse-runtime \
+ && chown -R mbse:mbse /app /data /opt/mbse-runtime
 USER mbse
 
 EXPOSE 8012
