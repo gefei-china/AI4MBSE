@@ -420,12 +420,9 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
                  embed_version, filename, sc.get("section", ""), sc.get("bm25_text", ""), branch,
                  domain, json.dumps(_hyde_questions[i], ensure_ascii=False),
                  json.dumps(normalize_vector(_hyde_vecs[i]), ensure_ascii=False) if _hyde_vecs[i] else "[]"))
-        # 数据变更：向量索引失效，下次检索重建
-        try:
-            from vector_index import ChunkVectorIndex
-            ChunkVectorIndex.invalidate()
-        except Exception as e:
-            logger.warning("向量索引失效标记失败（下次检索自动重建）: %s", e)
+        # ⚠️ 2026-10-04（P0-1）：此处原有的 `ChunkVectorIndex.invalidate()` 已**下移**到
+        #   落库 commit **之后** —— 它是一次写操作，放在长事务里会与"下次检索重建
+        #   向量索引"抢写锁。下方"先 commit 再放锁"段落里有且只有一次 invalidate。
         _stage("insert", "done")
 
         # 6) 完成状态
@@ -436,12 +433,33 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
             "lifecycle_status=CASE WHEN lifecycle_status IN ('uploaded','processing') "
             "THEN 'stored' ELSE lifecycle_status END WHERE id=?",
             (len(chunks), doc_id))
+
+        # ── P0-1（2026-10-04 实测修正）：**先 commit，再调 LLM** ──
+        # 为什么：cProfile 实测（143KB / 270 块 / 合计 177.1s）显示
+        #   分块 0.005s + 写库 0.010s + embedding 0.6s，而 `_gen_llm_summary` 占 175.9s；
+        #   其中 161s 花在 `_record_usage` 的 `sqlite3.execute` 上—— **全在等写锁**。
+        # 机制：270 行 INSERT 之后没有 commit，事务一路跨到 LLM 摘要结束
+        #      （叠加 `db_session` 的"请求结束才 commit"）⇒ 整个入库是**一个跨越
+        #      全部 LLM 调用的写事务** ⇒ 全库所有写者被堵到 busy_timeout（30s），
+        #      作业进度上报 / 租约心跳 / token 记账全被堵（这也是前端进度"卡住"的原因）。
+        # ⇒ 落库完成即提交，把 LLM 摘要挪到**锁外**。
+        #   语义不变：此前也不在同一事务里保证（摘要失败会整段 except 回滚，
+        #   但chunks 已经插入成功过），改成显式提交后语义更正确 ——
+        #   **摘要失败不再连带回滚已落库的 chunks**（这本来就是想要的：
+        #   `_gen_llm_summary` 内部已try/except 保证失败返回 ''）。
+        conn.commit()
+        try:
+            from vector_index import ChunkVectorIndex
+            ChunkVectorIndex.invalidate()   # 放锁后再标脏，避免与检索重建抢写锁
+        except Exception as e:
+            logger.warning("向量索引失效标记失败（不阻断）: %s", e)
+
         # 7) LLM 真摘要（2026-09-29 痛点2）：写 documents.summary（旧文档列为空 → preview 回退旧行为）。
         #    生成失败/mock 留空且**不覆盖旧值**（重解析失败时保住已有摘要）；绝不因摘要丢掉入库成果。
         _summary = _gen_llm_summary(text, filename)
         if _summary:
             conn.execute("UPDATE documents SET summary=? WHERE id=?", (_summary, doc_id))
-        conn.commit()
+            conn.commit()
         return {"doc_id": doc_id, "parse_status": "completed", "chunk_count": len(chunks),
                 "embed_version": embed_version, "detected_title": detected_title,
                 "parse_meta": parse_meta, "summary_generated": bool(_summary),

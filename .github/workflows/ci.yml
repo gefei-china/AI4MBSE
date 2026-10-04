@@ -120,6 +120,14 @@ jobs:
       - name: Guard 前端作业轮询接线（30 项 + 4 变异）
         run: python tools/verify/verify_job_ui.py
 
+      # P0-1（2026-10-04）：入库不得**跨 LLM 调用持有写事务**。
+      # 实测 143KB/270 块：177.1s 里161s 全在等写锁（真实 HTTP 只15s）。
+      # 这个缺陷单测测不出（不接 LLM 时无感）、人 review 看不出来
+      # （"插完行→生成摘要→commit" 完全正常，只是 commit 晚了）
+      # ⇒ 用结构断言把它钉住。
+      - name: Guard 入库事务边界（13 项 + 3 变异）
+        run: python tools/verify/verify_ingest_tx.py
+
       # ── P0-4（2026-10-04）：多租户隔离（图谱路径）────────────────────────────
       - name: Guard 多租户隔离（29 项 + 3 变异）
         run: python tools/verify/verify_tenant_isolation.py
