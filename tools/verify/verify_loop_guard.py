@@ -117,7 +117,11 @@ def t_g4():
     t0 = time.time()
     r = call_tool_guarded(slow, "slow_tool", {}, timeout_s=0.3)
     el = time.time() - t0
-    ok = _rec("G4a 超时按时返回（不等待真实执行）", el < 1.5, "elapsed=%.2fs" % el)
+    # ⚠️ 上限不能用"1.5s"这种固定值：本机实测在 CI 并发负载下python 启动 +
+    #   线程调度会明显变慢，曾出现 <2.4s 的用例判红 ⇒ **随机红的门禁是最糟的**
+    #   （会被习惯性忽略，真出问题时也没人看）。判据只保证"没有等满3s 的工具执行"。
+    ok = _rec("G4a 超时后未继续等待（耗时 << 被测工具的3s）", el < 2.4,
+              "elapsed=%.2fs（工具本身需 3s）" % el)
     ok &= _rec("G4b 结果标记 _t_timeout 与 error=tool_timeout",
                r.get("_t_timeout") is True and r.get("error") == "tool_timeout",
                "keys=%s" % sorted(r))

@@ -90,6 +90,13 @@ jobs:
       - name: Guard agent loop 三道护栏（40 项 + 5 变异）
         run: python tools/verify/verify_loop_guard.py
 
+      # ── P0-3 前置（2026-10-04）：迁移安全闸 ──────────────────────────────────
+      # init_db 是唯一迁移入口（建 129 表 + 补列 + 全部 _migrate_* + 播种），
+      # 一旦误跑就是不可回滚的全库变更。本机已踩过一次（验证脚本误在生产库上迁移）。
+      # M3b 是装配级断言：备份失败时**init_db 未被调用**（只看 action 字段会被抄实现绕过）。
+      - name: Guard 迁移安全闸（dry-run 零副作用 / 热备保真 / 无备份不迁移，15 项 + 3 变异）
+        run: python tools/verify/verify_migration_guard.py
+
       # ── P0-4（2026-10-04）：多租户隔离（图谱路径）────────────────────────────
       - name: Guard 多租户隔离（29 项 + 3 变异）
         run: python tools/verify/verify_tenant_isolation.py

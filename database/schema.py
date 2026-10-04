@@ -78,6 +78,142 @@ from .seeds import (
     _seed_intent_rules,
 )
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# P0-3 前置：迁移安全闸（2026-10-04）
+# ══════════════════════════════════════════════════════════════════════════
+# 【为什么需要】`init_db()` 是**唯一**的迁移入口，而它一次要做三件事：
+# 建 129 张表 + 补列 + 跑全部 `_migrate_*` 迁移 + 播种种子 —— 中间**没有闸**。
+# 实测代价（本机两次踩到）：
+#   ① 2026-10-04 `verify_orch_resume.py` 用 env 设库路径，但 `DB_PATH` 在 import 期
+#      就被绑进模块作用域 ⇒ env 设得太晚，`init_db()` **在生产库上跑了一遍迁移**；
+#   ② 三份规范入库实测 **13.4 分钟且必须停服务**（SQLite 单写者被占满）。
+# 两者叠加意味着：**一次误调用 init_db 就是一次不可回滚的全库变更**。
+#
+# 【本模块提供什么】`safe_init_db()` 薄壳：
+#   · 迁移前**自动在线热备**（`sqlite3.backup()`，不是 copy2 —— WAL 库的唯一正确方式）；
+#   · `dry_run=True` 时**只报告将要做什么**（盘点表/行数），不落任何写；
+#   · 备份失败即**拒绝迁移**（宁可不起动，也不做无备份的变更）；
+#   · 报告里给出耗时口径，便于判断"值不值得等"。
+#
+# 【为什么不改 init_db 本身】它是 1155 行的巨型函数，任何内联改动都会与
+# 「保持行为不变」冲突。薄壳是最小风险面：**init_db 的语义一字未动**。
+
+def inspect_db_state(db_path: str | None = None) -> dict:
+    """只读盘点当前库状态（**不落任何写操作**）。
+
+    返回：表清单数、总行数、行数top10、以及打开库时的报错（读不到也要报出来，
+    不能静默返回空 —— 否则"盘点不到"会被误读成"库是空的"）。
+    """
+    p = db_path or DB_PATH
+    info = {"path": p, "exists": False, "size_mb": 0.0, "tables": 0, "row_total": 0,
+            "top": [], "db_error": ""}
+    try:
+        if not os.path.exists(p):
+            return info
+        info["exists"] = True
+        info["size_mb"] = round(os.path.getsize(p) / 1e6, 1)
+    except Exception as e:
+        info["db_error"] = str(e)[:200]
+        return info
+    con = None
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % p.replace("\\", "/"), uri=True)
+        con.row_factory = sqlite3.Row
+        tabs = [r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+        info["tables"] = len(tabs)
+        rows = []
+        for t in tabs:
+            try:
+                rows.append((int(con.execute('SELECT COUNT(*) FROM "%s"' % t).fetchone()[0]), t))
+            except Exception:
+                pass
+        info["row_total"] = sum(n for n, _ in rows)
+        info["top"] = [{"table": t, "rows": n} for n, t in sorted(rows, reverse=True)[:10]]
+    except Exception as e:
+        info["db_error"] = str(e)[:200]
+    finally:
+        if con is not None:
+            con.close()
+    return info
+
+
+def backup_db(dest_dir: str | None = None, tag: str = "pre-migrate") -> str:
+    """在线热备数据库（WAL 安全的唯一正确方式），返回备份文件路径。
+
+    ⚠️ **不要用 `shutil.copy2`**：WAL 模式下 .db 文件可能不是最新状态（WAL 里还有
+    未 checkpoint 的事务），复制出来的是**不一致快照**。必须用 `sqlite3.Connection.backup`，
+    它会按页把 WAL 内容一并纳入。
+
+    :param dest_dir: 备份目录；默认 `<仓库>/backups`
+    :param tag:       文件名标签
+    """
+    import time as _t
+    d = dest_dir or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backups")
+    os.makedirs(d, exist_ok=True)
+    dst = os.path.join(d, "%s-%s.db" % (tag, _t.strftime("%Y%m%d-%H%M%S")))
+    src = sqlite3.connect(DB_PATH)
+    try:
+        out = sqlite3.connect(dst)
+        try:
+            src.backup(out)          # 在线热备，含 WAL
+        finally:
+            out.close()
+    finally:
+        src.close()
+    return dst
+
+
+def safe_init_db(dry_run: bool = False, *, backup: bool = True,
+                 backup_dir: str | None = None, tag: str = "pre-migrate",
+                 force: bool = False) -> dict:
+    """带备份与 dry-run 的 `init_db()` 包装（**推荐在人工/运维路径使用**）。
+
+    :param dry_run: 只盘点并返回报告，**不执行任何迁移**
+    :param backup:  迁移前是否自动热备（WAL 库的正确方式）
+    :param force:   备份失败时是否仍强行迁移。默认 False —— **没有备份就不迁移**。
+    :returns: 报告 dict，含 `action` / `backup` / `state` / `elapsed_s`
+
+    为什么默认不 dry_run：服务启动路径（lifespan）调的是 `init_db()`，保持原样；
+    本函数面向**人工变更、批量导入前、升级前**这些真正需要止损点的场景。
+    """
+    import time as _t
+    t0 = _t.time()
+    rep = {"action": "", "backup": "", "state": {}, "elapsed_s": 0.0,
+           "forced": False, "error": ""}
+
+    # ① dry-run：只报告，绝不写
+    if dry_run:
+        rep["action"] = "dry-run（未落任何写操作）"
+        rep["state"] = inspect_db_state()
+        rep["elapsed_s"] = round(_t.time() - t0, 2)
+        return rep
+
+    # ② 备份（失败即拒绝，除非显式 force）
+    if backup:
+        try:
+            rep["backup"] = backup_db(backup_dir, tag)
+        except Exception as e:
+            rep["error"] = "备份失败，已拒绝迁移：%s" % str(e)[:200]
+            if not force:
+                rep["action"] = "aborted（无备份不迁移）"
+                rep["elapsed_s"] = round(_t.time() - t0, 2)
+                return rep
+            rep["forced"] = True
+    rep["action"] = "migrated"
+    try:
+        init_db()
+    except Exception as e:
+        rep["error"] = str(e)[:300]
+        rep["action"] = "failed"
+        rep["elapsed_s"] = round(_t.time() - t0, 2)
+        raise
+    rep["elapsed_s"] = round(_t.time() - t0, 2)
+    rep["state"] = inspect_db_state()
+    return rep
+
 def init_db():
     """建表 + 种子数据 + 环境变量 key 注入。幂等：表已存在跳过，有数据跳过 seed。"""
     # 确保数据文件父目录存在（MBSE_DB_PATH 可指向任意目录）
