@@ -1643,13 +1643,25 @@ class StreamMixin:
             llm_content = ""
             # P0-2：多轮 ReAct——探测→执行工具→观察回填→再探测，直到无 tool_calls 或达上限（防死循环）
             max_tool_rounds = 3
+            # 2026-10-04：接入统一护栏（与 execute.py 的非流式 loop **同源**）。
+            # 为什么必须同源：这两段是同一套 ReAct 语义的两种实现，此前只有编排路径
+            # 有 token 预算，重复检测与工具超时两边都没有 ⇒ 补一边就会留下新的不对称。
+            from agent.loop_guard import LoopGuard as _LoopGuard, tokens_of as _tok_of
+            _lg = _LoopGuard(token_budget=60000, tool_timeout_s=120.0)
             _rnd = 0  # 工具轮次计数（供 reasoning 事件 round/phase 标识；无工具直出时保持 0）
             # 2026-09-17 S3：上一轮已回填的 tool 消息下标（下轮仅清空其 content，不删除消息）
             _prev_tool_idx = []
             for _rnd in range(max_tool_rounds):
                 if not tools_def:
                     break
+                # 预算耗尽 ⇒ 停止继续调工具，让模型基于已有信息直出（护栏三闸之一）
+                if not _lg.budget_left():
+                    yield {"type": "stage", "name": "工具预算耗尽，停止继续调用",
+                           "status": "done", "detail": _lg.stats()}
+                    tools_def = None
+                    break
                 probe = llm_client.chat(messages, provider_id=effective_provider, stream=False, tools=tools_def)
+                _lg.add_tokens(_tok_of(probe))
                 pmsg = probe["choices"][0]["message"]
                 ptool_calls = pmsg.get("tool_calls") or []
                 # V2.5：探测轮思考透传（模型决定是否调用工具的推理过程，非流式 message.reasoning_content）
@@ -1689,7 +1701,22 @@ class StreamMixin:
                     yield {"type": "tool", "status": "run", "name": tname, "arguments": targs,
                            "call_id": _call_id}
                     _t0 = time.time()   # P0-1 工具耗时：run→done 计时
-                    result = self._exec_tool_call(tname, targs)
+                    # 2026-10-04：重复调用短路（同工具同参数已成功跑过 ⇒ 回喂既有结果）。
+                    # ⚠️ 必须发生在 yield "run" **之前**：否则前端会先亮起一个节点，
+                    #    然后既没有真实执行也没有 done 事件 ⇒ 节点永久停在"执行中"。
+                    _dup = _lg.probe_dup(tname, targs)
+                    if _dup:
+                        _lg.dup_short_circuits += 1
+                        result = {"ok": True,
+                                  "result": _lg.last_result_for(tname, targs),
+                                  "_dup": _dup}
+                    else:
+                        result = _lg.call(self._exec_tool_call, tname, targs)
+                        _r0 = str(result.get("result") or "")
+                        if result.get("ok") and (result.get("weak")
+                                                 or ("未检索到" in _r0)
+                                                 or ("无新冲突" in _r0)):
+                            _lg.undo_dup_count(tname, targs)
                     _t_ok = bool(result.get("ok"))
                     _r_full = str(result.get("result") or "")
                     _t_trunc = len(_r_full) > _TOOL_RESULT_CAP
@@ -1697,14 +1724,22 @@ class StreamMixin:
                     _e_full = str(result.get("error") or "")
                     _t_error = _e_full[:_TOOL_RESULT_CAP]
                     _t_ms = int((time.time() - _t0) * 1000)   # P0-1：毫秒耗时
+                    # 2026-10-04：把护栏判定回显到事件里 —— 用户看到的必须是
+                    # "这一步因重复调用被跳过"，而不是一个看起来正常执行成功的节点
+                    # （否则重复调用在界面上完全不可见，用户以为模型白跑了几次）。
+                    _skipped = bool(result.get("_dup")) or bool(result.get("_t_timeout"))
+                    _skip_why = ("dup_short_circuit" if result.get("_dup")
+                                 else "tool_timeout" if result.get("_t_timeout") else "")
                     exec_tools.append({"name": tname, "ok": _t_ok,
                                        "arguments": targs, "result": _t_result,
                                        "error": _t_error, "truncated": _t_trunc,
-                                       "elapsed_ms": _t_ms})
+                                       "elapsed_ms": _t_ms,
+                                       "skipped": _skipped, "skip_reason": _skip_why})
                     yield {"type": "tool", "status": "done", "name": tname,
                            "ok": _t_ok, "result": _t_result, "error": _t_error,
                            "truncated": _t_trunc, "latency_ms": _t_ms,
-                           "call_id": _call_id}
+                           "call_id": _call_id,
+                           "skipped": _skipped, "skip_reason": _skip_why}
                     _weak = bool(result.get("weak")) or ("未检索到" in _t_result) or ("无新冲突" in _t_result)
                     if _weak:
                         weak_count += 1

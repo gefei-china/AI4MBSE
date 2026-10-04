@@ -323,10 +323,23 @@ class ExecuteMixin:
             llm_response = llm_client.chat(messages, provider_id=effective_provider, tools=tools_def or None)
             msg = llm_response["choices"][0]["message"]
             llm_content = msg.get("content") or ""
-            max_tool_rounds = 3  # P0-2：多轮 ReAct 上限（防死循环）
+            max_tool_rounds = 3  # P0-2：多轮ReAct 上限（防死循环）
+            # 2026-10-04：接入统一护栏（与编排路径同源，见 agent/loop_guard.py）。
+            # 原先这条路径只有轮次上限/token 上限/重复检测/工具超时，
+            # 而编排路径有前三者 —— 同一套 ReAct 语义的两处实现护栏不对称。
+            from agent.loop_guard import LoopGuard, tokens_of as _tokof
+            _guard = LoopGuard(
+                token_budget=int(self._LOOP_TOKEN_BUDGET) if getattr(self, "_LOOP_TOKEN_BUDGET", None) else 60000,
+                tool_timeout_s=float(getattr(self, "_LOOP_TOOL_TIMEOUT", 120.0)))
             for _round in range(max_tool_rounds):
                 tool_calls = msg.get("tool_calls") or []
                 if not tool_calls:
+                    break
+                # 预算耗尽 ⇒ 不再调工具，直接让模型基于已有信息作答
+                if not _guard.budget_left():
+                    llm_response = llm_client.chat(messages, provider_id=effective_provider, tools=None)
+                    msg = llm_response["choices"][0]["message"]
+                    llm_content = msg.get("content") or ""
                     break
                 tool_results = []
                 _weak_n = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
@@ -337,9 +350,30 @@ class ExecuteMixin:
                         targs = json.loads(fn.get("arguments") or "{}")
                     except Exception:
                         targs = {}
-                    result = self._exec_tool_call(tname, targs)
+                    # 重复调用短路：同(工具,参数) 已成功跑过 ⇒ 回喂既有结果，不再跑一遍。
+                    # 为什么这条是省钱闸不是提速闸：模型陷入循环时最典型的表现就是
+                    # 同参数反复调同一工具，每次都真执行一遍。
+                    _dup = _guard.probe_dup(tname, targs)
+                    if _dup:
+                        _guard.dup_short_circuits += 1
+                        _prev = _guard.last_result_for(tname, targs)
+                        _tool_results.append({
+                            "tool_call_id": tc.get("id", ""),
+                            "role": "tool", "name": tname,
+                            "content": json.dumps(
+                                {"ok": True, "result": _prev,
+                                 "hint": "该工具的相同参数已执行过（这是第 %d 次），直接采用既有结果，"
+                                         "不要再重复调用同一工具同一参数。" % _dup},
+                                ensure_ascii=False)})
+                        continue
+                    result = _guard.call(self._exec_tool_call, tname, targs)
                     _t_res = str(result.get("result") or "")
                     _weak = bool(result.get("weak")) or ("未检索到" in _t_res) or ("无新冲突" in _t_res)
+                    # ⚠️ 弱结果在**调用之后**才判定得出，无法预传给 call()，
+                    #   故在此回填：把刚计入的去重计数撤回，否则"工具本来就查不到东西"
+                    #   会在第 2~3 次被误判成重复调用而掩盖真实的"查不到"信号。
+                    if _weak and result.get("ok"):
+                        _guard.undo_dup_count(tname, targs)
                     if _weak:
                         _weak_n += 1
                         _t_content = {"ok": result.get("ok"), "result": result.get("result", ""),
@@ -367,8 +401,10 @@ class ExecuteMixin:
                     llm_response = llm_client.chat(messages, provider_id=effective_provider, tools=None)
                     msg = llm_response["choices"][0]["message"]
                     llm_content = msg.get("content") or ""
+                    _guard.add_tokens(_tokof(llm_response))
                     break
                 llm_response = llm_client.chat(messages, provider_id=effective_provider, tools=tools_def or None)
+                _guard.add_tokens(_tokof(llm_response))   # 2026-10-04：按累计量判预算（见 loop_guard 注释）
                 msg = llm_response["choices"][0]["message"]
                 if msg.get("content"):
                     llm_content = msg["content"]
