@@ -120,6 +120,18 @@ jobs:
       - name: Guard 前端作业轮询接线（30 项 + 4 变异）
         run: python tools/verify/verify_job_ui.py
 
+      # ── P2 / P1-3 收尾（2026-10-04）：前端展示阶段耗时与OCR 页数────────────
+      #后端 pipeline_detail.timing 与 parse_meta.ocr 已就绪，但前端**零展示**
+      # ⇒ 用户仍看不到"哪一步慢""OCR 只处理了 N 页"。
+      # 这个门禁的判据**直接 exec 20-docs.js 里的真函数**（抽函数体→Node 执行），
+      #不复刻渲染逻辑 —— 否则测的是零件不是装配。
+      # 判据需要 node（抽 20-docs.js 的真函数体在 Node 里执行）。
+      # CI 的 ubuntu runner **自带 node**（GitHub Actions 运行时本身就依赖它），
+      # 本 workflow 没有 setup-node 步骤 —— 首跑时若报 node not found，
+      # 就在这一步前加 actions/setup-node，别改门禁去迁就环境。
+      - name: Guard 前端管道明细展示（34 项 + 6 变异）
+        run: python tools/verify/verify_doc_trace_ui.py
+
       # P0-1（2026-10-04）：入库不得**跨 LLM 调用持有写事务**。
       # 实测 143KB/270 块：177.1s 里161s 全在等写锁（真实 HTTP 只15s）。
       # 这个缺陷单测测不出（不接 LLM 时无感）、人 review 看不出来

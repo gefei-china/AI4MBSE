@@ -902,13 +902,82 @@ function failStage(detail) {
 function stageTable(detail) {
   let d = {};
   try { d = JSON.parse(detail||'{}')||{}; } catch(e) {}
+  // ── P2（2026-10-04）：展示阶段耗时 ────────────────────────────────────
+  // 由来：本次排查"大文件入库 177s 慢在哪"时，pipeline_detail 只有
+  // done/failed、**没有任何耗时**，只能靠 cProfile 逐函数 cumtime 反推
+  //（花了三轮才定位到真因是"写事务跨越 LLM 调用"）。加了耗时后
+  // "哪一步慢"直接可查。
+  //
+  // 为什么旧文档会显示"—"而不是 0ms：timing 是 2026-10-04 才加的，
+  // 此前入库的文档没有该数据。显示"—"（未知）而不是 0ms（瞬时完成）
+  // ——后者是**误导**：会让用户以为那一步不耗时。
+  const T = d.timing || {};
+  const hasT = Object.keys(T).length > 0;
   const rows = [];
   for(const k of ['parse','chunk','embed','insert']) {
     const v = d[k];
     const icon = v==='done' ? '<span class="st ok">✓ 完成</span>' : (v==='failed' ? '<span class="st r">✗ 失败</span>' : '<span class="st w">…</span>');
-    rows.push(`<tr><td>${STAGE_NAMES[k]||k}</td><td>${icon}</td></tr>`);
+    const t = T[k];
+    const ms = (t && typeof t.ms === 'number') ? fmtMs(t.ms) : '<span style="color:var(--mut);">—</span>';
+    rows.push(`<tr><td>${STAGE_NAMES[k]||k}</td><td>${icon}</td><td style="text-align:right;font-variant-numeric:tabular-nums;">${ms}</td></tr>`);
   }
-  return `<table class="t" style="margin-top:4px;"><tr><th>管道阶段</th><th>状态</th></tr>${rows.join('')}</table>`;
+  let html = `<table class="t" style="margin-top:4px;"><tr><th>管道阶段</th><th>状态</th><th style="text-align:right;">耗时</th></tr>${rows.join('')}</table>`;
+  if(hasT && typeof T.total_ms === 'number') {
+    html += `<div style="font-size:11px;color:var(--mut);text-align:right;margin-top:3px;">合计 ${fmtMs(T.total_ms)}</div>`;
+  }
+  html += ocrInfoTable(d.parse_meta);
+  return html;
+}
+/** 毫秒 → 人类可读（<1s 用 ms，≥1s 用 s，超过 60s 用 m）。 */
+function fmtMs(ms) {
+  if(ms < 1000) return ms + ' ms';
+  if(ms < 60000) return (ms/1000).toFixed(1) + ' s';
+  return (ms/60000).toFixed(1) + ' min';
+}
+/** ── P1-3（2026-10-04）：OCR 页数与续跑状态 ──────────────────────────────
+ *  旧行为：`ocr_max_pages=50` 是**文档级硬上限**，超出部分**静默丢弃**，
+ *  且前端**零展示** ⇒ 用户传 200 页扫描 PDF 会看到"解析成功"，
+ *  实际只索引了 50 页，且界面完全看不出来。
+ *  现行为：分段 + 断点续跑，可能出现"部分完成"，**必须显式告知**。
+ *  三种状态要说清（否则用户仍会被误导）：
+ *   - 有 pages_pending：还剩页没识别（时间预算到了，可重试续跑）
+ *   - truncated=true：确实被截断，**明确告知**而不是静默
+ *   - pages_ocr == pages_total：全识别完
+ *
+ *  ⚠️ 字段口径必须对齐真机落库数据（实测 doc#819）：
+ *     quality 是**对象** {lines, avg_score, low_ratio, min_score}，不是数字；
+ *     elapsed 单位是**秒**（不是毫秒）。
+ *     写反了会显示 "NaN s" / "0.001 ms" 这类一眼假的数 —— 宁可少显示。
+ *     `available:false`（OCR 不可用）时整段不显示：那是"没发生"，不是"0 页"。
+ */
+function ocrInfoTable(parseMeta) {
+  const o = (parseMeta && parseMeta.ocr) || null;
+  if(!o || o.available === false) return '';
+  const parts = [];
+  if(o.pages_total) parts.push(`共 ${o.pages_total} 页`);
+  if(o.pages_ocr !== undefined && o.pages_ocr !== null) parts.push(`已识别 ${o.pages_ocr} 页`);
+  if(o.pages_pending) parts.push(`待识别 ${o.pages_pending} 页`);
+  if(!parts.length) return '';          // 全零 ⇒ 没实际OCR，别显示 "共 0 页"
+  let warn = '';
+  if(o.pages_pending) {
+    warn = `<div style="font-size:11px;color:var(--orange,#c47f00);margin-top:3px;">
+      ⚠️ 还有 ${o.pages_pending} 页未识别（达到单次时间预算）。重新入库会自动<b>从断点续跑</b>，不重复已识别的页。</div>`;
+  } else if(o.truncated) {
+    warn = `<div style="font-size:11px;color:var(--red);margin-top:3px;">
+      ✗ 内容被截断：仅索引了前 ${o.pages_ocr||0} 页（extract.ocr_max_pages 上限）。如需完整索引请调大该配置。</div>`;
+  }
+  // quality 是对象（实测：{lines:84, avg_score:0.696, low_ratio:48.8, min_score:0.505}）
+  let q = '';
+  if(o.quality && typeof o.quality === 'object') {
+    const qq = o.quality;
+    q = ` · 质量 ${qq.lines||'?'} 行/均分 ${Number(qq.avg_score||0).toFixed(2)}`
+      + (qq.low_ratio !== undefined ? `/低置信 ${Number(qq.low_ratio).toFixed(0)}%` : '');
+  }
+  const el = (typeof o.elapsed === 'number' && o.elapsed > 0)
+    ? ` · 耗时 ${o.elapsed.toFixed(1)}s` : '';   // 单位：秒
+  return `<div style="margin-top:8px;font-size:11px;color:var(--mut);">
+    <b>OCR</b>：${parts.join(' · ')}${q}${el}
+  </div>${warn}`;
 }
 async function retryDoc(id) {
   if(!(await confirmDialog('使用已保存的源文件副本重新执行解析→切片→向量化→入库？'))) return;
