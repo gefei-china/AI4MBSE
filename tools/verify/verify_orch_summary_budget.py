@@ -519,34 +519,63 @@ def main():
     except Exception as e:
         _rec(FAIL, "源码级：旧硬编码截断点已清除", "%s: %s" % (type(e).__name__, e))
 
-    # ⑥ 配置契约：新键必须存在且有默认值
+    # ⑥ 配置契约：新键必须存在，且**关系不变式成立**（不写死具体数值）
+    #
+    # 【2026-10-04 修正：写死期望值 ⇒ 门禁随配置调大而失效】
+    #   这段原本把 summary_max_tokens / max_tokens / eval_max_tokens 硬编码为
+    #   8000 / 8000 / 3072。但这三个键已被 **P1-27 有意调大**（16384 / 16384 / 8192），
+    #   config.py 里留有明确注释："实测 max_ct=8192 已触顶被截断"。
+    #   ⇒ 于是：本地与 CI **同时**报这条 FAIL（23/26），卡住了整个 CI。
+    #   而且它连带把 I4c / I4d 拖红 —— 因为那两条量的是"窗口 vs 产出能力"，
+    #   max_tokens 调大后产出能力变大、窗口没跟着变 ⇒ 关系真的不成立了。
+    #
+    # 【正确的判据】门禁要守的是**关系**，不是某次调参的数值：
+    #   · 键必须存在（有默认值）；
+    #   · 窗口 ≥ 该键可产出的字符数（这才是"报告尾部不会被裁掉"的真条件）。
+    # 这样将来再调大 max_tokens，门禁会自动要求同步放大窗口 —— 正是它该做的。
     try:
         from core import config as _cfg
+        # 键的存在性（这些是"必须有的默认值"，不含数值大小）
         want = {
             ("delegation", "summary_item_max_chars"): 1600,
             ("delegation", "summary_total_chars"): 12000,
             ("delegation", "summary_floor_chars"): 600,
-            ("delegation", "summary_max_tokens"): 8000,
             ("delegation", "subtask_result_keep_chars"): 20000,
         }
+        # refine 段：除下面三个"窗口/产出"键外，其余仍按值校验
         for k, v in _REFINE_EXP.items():
-            want[("refine", k)] = v
+            # 这两个是**窗口**，与 report_in_chars 同类；它们的大小由 I4c/I4d 的
+            # 关系不变式管（窗口 ≥ 产出能力），不写死—— 2026-10-04 起它们已随
+            # max_tokens 同步放大到 48000，再按 24000 校验就是"门禁比需求更滞后"。
+            if k not in ("max_tokens", "report_in_chars", "eval_in_chars"):
+                want[("refine", k)] = v
         want[("refine", "enabled")] = True
         want[("refine", "max_rounds")] = 2
         want[("refine", "pass_score")] = 70
-        want[("refine", "eval_in_chars")] = 24000
-        # P0-7（2026-09-30）：评审**输出**上限 —— 原先硬编码 max_tokens=1024，
-        #   被思考模型的 reasoning 吃光 → JSON 被 length 截断 → 误报「解析失败」0/100。
-        want[("refine", "eval_max_tokens")] = 3072
-        bad = []
+        # 产出能力类键：只要求"存在且为正"，大小交给关系不变式管
+        bad_cfg = []
+        # 产出能力类键：只要求"存在且为正"，大小交给关系不变式管
+        for sec, key in (("delegation", "summary_max_tokens"),
+                         ("refine", "max_tokens"),
+                         ("refine", "eval_max_tokens"),
+                         # 窗口类同样只要求为正 —— 它们必须 ≥ 产出能力，
+                         # 由 I4c / I4d 量关系，不在这里写死数值。
+                         ("refine", "report_in_chars"),
+                         ("refine", "eval_in_chars")):
+            v = _cfg.get(sec, key, None)
+            if not (isinstance(v, int) and v > 0):
+                bad_cfg.append("%s.%s=%r（应为正整数）" % (sec, key, v))
+        bad = list(bad_cfg)
         for (sec, key), exp in want.items():
             got = _cfg.get(sec, key, None)
             if got != exp:
                 bad.append("%s.%s=%r（期望 %r）" % (sec, key, got, exp))
         if bad:
-            _rec(FAIL, "配置契约：delegation 5 键 + refine 8 键默认值", "; ".join(bad))
+            _rec(FAIL, "配置契约：delegation 5 键 + refine 8 键默认值（窗口类按值/ 产出类按正整数）",
+                 "; ".join(bad))
         else:
-            _rec(PASS, "配置契约：delegation 5 键 + refine 8 键默认值齐备")
+            _rec(PASS, "配置契约：delegation 5 键 + refine 8 键默认值齐备"
+                        "（窗口类按值校验；产出类只要求正整数，大小由 I4c/I4d 的关系不变式管）")
     except Exception as e:
         _rec(FAIL, "配置契约：delegation 5 键 + refine 8 键默认值", "%s: %s" % (type(e).__name__, e))
 

@@ -216,14 +216,22 @@ try:
         database.get_db = _mk
 
     _orig_get_db = database.get_db
+    # ⚠️ 2026-10-04：`LLMClient()` 在**import 期**就通过 `get_db()` 连库，
+    #   而这行原本在 `_patch(...)` **之前** ⇒ 干净库里连的是"还没建 llm_providers 表"
+    #   的空库 ⇒ `sqlite3.OperationalError: no such table: llm_providers`。
+    #   症状极具欺骗性：**本地连生产库 PASS 29/29，CI（干净库）直接崩** ——
+    #   典型的"门禁只在自己的环境里验证过"。
+    #   修法：先 patch 工厂、再实例化（实例化延后到下方第一个 _patch 之后）。
     from llm import LLMClient, _load_provider_cfg
-    _cli = LLMClient()
+    _cli = None                 # 延后实例化，见下方 _cli = LLMClient()
+    _cli_patched_path = [None]  # 记录当前 patch 到的夹具库，供 _ensure_cli 使用
 
     try:
         # id=1 priority=10 / id=2 priority=90：rowid 序会给出 1，priority 序给出 2
         pth = _mkdb([(1, "A", "openai", "chat", 1, 10, "active", "[]"),
                      (2, "B", "openai", "chat", 1, 90, "active", "[]")])
         _patch(pth)
+        _cli = LLMClient()      # patch 之后才实例化（见上方注释）
         got = _cli.get_default_provider()
         chk("4.1 两行 is_default=1 → 取 priority 最高者（不是 rowid 最小者）",
             got is not None and got["id"] == 2, "得 id=%s" % (got or {}).get("id"))
@@ -232,6 +240,7 @@ try:
         pth2 = _mkdb([(1, "A", "openai", "chat", 1, 90, "active", "[]"),
                       (2, "B", "openai", "chat", 1, 10, "active", "[]")])
         _patch(pth2)
+        _cli = LLMClient()      # 换库后必须重新实例化（provider 缓存在实例上）
         got2 = _cli.get_default_provider()
         chk("4.2 priority 对调后选中另一行（证明判据确为 priority）",
             got2 is not None and got2["id"] == 1, "得 id=%s" % (got2 or {}).get("id"))
@@ -239,6 +248,7 @@ try:
         pth3 = _mkdb([(1, "A", "openai", "chat", 1, 10, "active", "[]"),
                       (2, "B", "openai", "chat", 0, 90, "active", "[]")])
         _patch(pth3)
+        _cli = LLMClient()      # 同上：换库后重新实例化
         got3 = _cli.get_default_provider()
         chk("4.3 只有一行 default 时，priority 更高的非 default 行**不得**被选中（零回归）",
             got3 is not None and got3["id"] == 1, "得 id=%s" % (got3 or {}).get("id"))
@@ -299,6 +309,13 @@ try:
 
     _llm.llm_router.route = _count_route
     _llm.llm_client._record_usage = lambda *a, **k: None   # 防写库（本脚本不产生副作用）
+    # ⚠️ 2026-10-04：上面 `[4]` 段的 finally 已把 database.get_db 恢复成原工厂，
+    #   而本段用的是**全局单例** `_llm.llm_client` ⇒ 它会连到 MBSE_DB_PATH 指的库
+    #   （CI 干净库 ⇒ 没有 llm_providers 表 ⇒ `no such table` 崩）。
+    #   修法：本段自己再 patch 一次到一个最小夹具库（单行 provider），
+    #   保证 `_record_usage` 不写库、且 `chat` 能取到 provider 配置。
+    _pth7 = _mkdb([(1, "A", "openai", "chat", 1, 10, "active", "[]")])
+    _patch(_pth7)
     try:
         _cnt["n"] = 0
         _llm.llm_client.chat(MSG)

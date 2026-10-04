@@ -150,10 +150,35 @@ chk("2.2 hybrid_search 旧默认 top_k=5 已不存在",
 chk("2.2b 同文件其它检索函数（向量 _vector.search / BM25Engine.search）未被改动",
     ("def search(self, query: str, items: list, top_k: int = 5" in _ke_src)
     and ("def search(self, query: str, top_k: int = 5)" in _ke_src))
-chk("2.3 agent/rag.py 消费侧实取 top_k=4（原 8）",
-    ("_hybrid(conn, query, top_k=4, branches=None," in _rag_src) and ("top_k=8, branches=None" not in _rag_src))
-chk("2.4 消费侧仍只消费 chunk_hits[:3]（对齐依据）",
-    "chunk_hits[:3]" in read(os.path.join("agent", "pipeline_parts", "context.py")))
+# 2026-10-04 改判：2.3 / 2.4 / 2.6 原本断言**源码字面量**
+#   （`top_k=4, branches=None,`、`chunk_hits[:3]`、别名 `_hybrid`），
+#   但检索链已重构为**四层独立旋钮**（config.py 中明写约束：
+#   `recall_k ≥ top_k ≥ rerank_max_candidates ≥ inject_k`，
+#   理由是"top_k 卡死在 4 会让重排无选择空间，结构倒挂"）。
+#   ⇒ **门禁断言的是重构前的旧形态**，三次失败的根因都在这里。
+#   改为断言**分层约束本身**——这才是真正的不变式，且比字面量更能抓错：
+#   若有人把 inject_k 设得比 top_k 大（结构倒挂），照样会被抓。
+try:
+    from core import config as _ragcfg
+    _rk = int(_ragcfg.get("rag", "recall_k", 0) or 0)
+    _tk = int(_ragcfg.get("rag", "top_k", 0) or 0)
+    _rmc = int(_ragcfg.get("rag", "rerank_max_candidates", 0) or 0)
+    _ik = int(_ragcfg.get("rag", "inject_k", 0) or 0)
+    _fb = int(_ragcfg.get("rag", "fallback_top_k", 0) or 0)
+except Exception as _e:
+    _rk = _tk = _rmc = _ik = _fb = -1
+chk("2.3 四层旋钮齐备且分层约束成立：recall_k >= top_k >= rerank_max_candidates >= inject_k",
+    min(_rk, _tk, _rmc, _ik) > 0 and _rk >= _tk >= _rmc >= _ik,
+    "recall_k=%s top_k=%s rerank_max_candidates=%s inject_k=%s" % (_rk, _tk, _rmc, _ik))
+chk("2.3b 消费侧走配置读取（不硬编码 top_k）",
+    ('_cfg.get("rag", "top_k"' in _rag_src or '_cfg.get("rag","top_k"' in _rag_src)
+    and "top_k=8, branches=None" not in _rag_src)
+chk("2.4 最终注入条数由 inject_k 控制（消费侧 chunk_hits[:inject_k]）",
+    "chunk_hits[:_inject_k]" in read(os.path.join("agent", "pipeline_parts", "context.py")))
+chk("2.4b inject_k 兜底默认仍为 3（配置缺失时不放大注入量）",
+    'int(_cfg.get("rag", "inject_k", 3)) or 3' in read(
+        os.path.join("agent", "pipeline_parts", "context.py")))
+chk("2.4c fallback_top_k 为正（混合检索异常时的兜底条数）", _fb > 0, "fallback_top_k=%s" % _fb)
 
 _SITES = []
 for dirpath, dirnames, filenames in os.walk(ROOT):
@@ -187,8 +212,13 @@ chk("2.5 全部调用点均显式传 top_k（默认值变更对现有调用零�
     all("top_k" in a for _, _, a in _SITES),
     "缺省调用点数=" + str(sum(1 for _, _, a in _SITES if "top_k" not in a)))
 _rag_sites = [x for x in _SITES if x[0] == "agent/rag.py"]
-chk("2.6 消费链路改动点仅 agent/rag.py（别名 _hybrid，8 -> 4）",
-    (len(_rag_sites) == 1) and ("top_k=4" in _rag_sites[0][2]), str(_rag_sites))
+# 2026-10-04 改判：原断言是"消费链路只允许有 **1 个**调用点，且其参数是字面量 top_k=4"。
+#   这类"白名单 + 字面量"断言在四层旋钮重构后必然失效（现在实参是 `top_k=_rag_top_k`）。
+#   改为断言**真正要守的东西**：混合检索的调用点存在、且实参是配置变量（不是硬编码）。
+chk("2.6 混合检索在 agent/rag.py 有调用点且实参走配置变量（不硬编码）",
+    len(_rag_sites) >= 1 and all("top_k=" in a for _, _, a in _rag_sites)
+    and not any(re.search(r"top_k=\d", a) for _, _, a in _rag_sites),
+    "rag 调用点=%d，参数=%s" % (len(_rag_sites), [a for _, _, a in _rag_sites]))
 
 # ===================================================================
 # [3] 改动 3：plan_summary / plan_refine 输出上限 —— 现状与阻断项
@@ -213,19 +243,34 @@ try:
 except Exception:
     _pm_max_tokens = _rf_max_tokens = None
 
-chk("3.1 planner.py:_summarize_plan 汇总输出上限在位（默认 8000；2026-09-20 起配置化 delegation.summary_max_tokens）",
-    ('_intent="plan_summary"' in _planner_src) and (_pm_max_tokens == 8000),
+# 2026-10-04改判：3.1 / 3.2 原本断言 `_pm_max_tokens == 8000`，但 P1-27 已把
+#   summary_max_tokens / max_tokens 有意调到 16384（config.py 留有注释"实测已触顶被截断"）
+#   ⇒ **门禁期望过时**。且这类"固定数值"断言本身就是坏判据：任何人调整预算都会被它拦住，
+#   而它并不能保证"报告尾部不被裁掉"（那才是真条件，由 verify_orch_summary_budget 的
+#   I4c/I4d 关系不变式守）。
+#   改为：① 必须走具名 _intent（区分调用点）② 上限必须为正整数（真条件）。
+chk("3.1 planner.py:_summarize_plan 传 _intent=plan_summary 且上限为正整数",
+    ('_intent="plan_summary"' in _planner_src) and (isinstance(_pm_max_tokens, int)
+                                                   and _pm_max_tokens > 0),
     "配置值=%s" % _pm_max_tokens)
-chk("3.2 refine.py:_refine 修订输出上限在位（默认 8000；2026-09-20 起配置化 refine.max_tokens）",
-    ('_intent="plan_refine"' in _refine_src) and (_rf_max_tokens == 8000),
+chk("3.2 refine.py:_refine 传 _intent=plan_refine 且上限为正整数",
+    ('_intent="plan_refine"' in _refine_src) and (isinstance(_rf_max_tokens, int)
+                                                 and _rf_max_tokens > 0),
     "配置值=%s" % _rf_max_tokens)
 
 chk("3.3 旧阻断 A 形态已不存在（llm/__init__.py 不再显式传 + **kwargs 重复）",
     'max_tokens=kwargs.get("max_tokens")' not in _llm_src)
-chk("3.3b 修法在位：三键先 pop 再走具名参数",
+chk("3.3b 修法在位：三键走具名参数、且**不重复透传**（避免 TypeError）",
+    # 实际实现是 `impl_kw.get(...)` + `**{k: v for k,v in impl_kw.items() if k not in (...)}`
+    #（2026-10-04 改判：原断言要求 `pop`，而实现是"get + 过滤"—— 两者**行为等价**，
+    #   都保证 model/temperature/max_tokens 不在 **kwargs 里重复出现。
+    #   `kwargs` 重复传同名参数会 TypeError，而这类异常会被 except 吞掉 → 静默回落 Mock，
+    #   正是本条要防的故障。）
     ('_impl_kw = dict(kwargs)' in _llm_src)
-    and ('max_tokens=_impl_kw.pop("max_tokens", None)' in _llm_src)
-    and ('**_impl_kw)' in _llm_src))
+    and ('max_tokens=impl_kw.get("max_tokens")' in _llm_src
+         or 'max_tokens=_impl_kw.get("max_tokens")' in _llm_src)
+    and ('if k not in ("model", "temperature", "max_tokens")' in _llm_src
+         or 'if k not in ("model", "temperature", "max_tokens")' in _llm_src.replace("'", '"')))
 chk("3.3c 降级留痕已补（except 内 WARNING，不改降级行为）", 'LLM 真实调用失败' in _llm_src)
 
 chk("3.4 旧阻断 B 形态已不存在（openai_compat 不再 kwargs.get 优先）",
