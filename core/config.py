@@ -98,6 +98,15 @@ DEFAULT_CONFIG = {
         "default_role_id": 80,   # IAM 新用户默认角色（设计师；IAM 用户信息无角色字段→本地映射）
         "session_ttl_hours": 12,
         "enforce_login": False,  # 现阶段 False：不强制登录（API 兼容 X-User-Id）；上线置 True
+        # ── P0-5（2026-10-03 整改）：弱凭据通道显式开关（对标 Dify：身份仅来自会话/API Key）──
+        # `X-User-Id` 是**自报身份**：任何人都能在请求头里写一个别人的 user_id 且被采信。
+        # 它存在的唯一理由是兼容期（前端 migration 前 + tools/verify 自检脚本直连 API）。
+        # 语义（见 core/deps.py:current_user 的三段判定）：
+        #   True（默认，兼容期）= **仅在请求完全没有 X-Session-Token 时**采信 X-User-Id；
+        #   False（上线形态）  = X-User-Id 一律不采信，仅会话令牌可证明身份。
+        # ⚠️ 带 X-Session-Token 但令牌无效时**永远不回落** X-User-Id（与开关无关）——
+        #    否则任意伪造令牌即可把自报通道重新打开（《架构评估》§4.1 D2）。
+        "trust_user_id_header": True,
     },
     "integration": {
         "timeout": 15,           # 通用 HTTP 工具默认调用超时（秒，工具 config 可覆盖）
@@ -538,6 +547,16 @@ DEFAULT_CONFIG = {
         # 当前 0.75 时正例仅短路 12/18。取「仍覆盖全部正例的最高阈值」0.70（阈值扫描平台上沿）。
         # ⚠️ 负例误短路那 1 例不随阈值变化（conf=0.90），属实体链接精度问题，非阈值问题。
         "route_threshold": 0.70,     # 检索路由阈值：图谱置信度 ≥ 阈值 → 纯图路由（跳过向量检索）
+        # ── P0-4（2026-10-04）检索 project 维度 —— ⚠️ **已冻结：不要开启** ──────────
+        # 架构决策（米爸 2026-10-04 拍板）：「文档向量库、图库**不需要基于项目隔离，
+        #   是统一使用的数据底座**」。图谱/文档/本体对所有项目可见，这是**设计意图**。
+        #   打开本开关的**真实危害**不是"多看到别人的数据"，而是
+        #   **"看不到本该可见的公共资产"**（标准构件/术语映射/通用模型被滤掉）—— 直接损害建模质量。
+        #   本系统真正的隔离在 artifacts/messages，按 `conversation_id` 粒度（比项目更细）。
+        #   决策声明与证据见 agent/rag.py 顶部注释块；防误开门禁见
+        #   tools/verify/verify_tenant_isolation.py 的 D 组（改本行默认值即判红）。
+        "tenant_isolation": "off",       # 冻结中，保持 off。客户级私有化部署若需隔离才可开
+        "tenant_unresolved": "passthrough",  # 开隔离但解析不到项目时：passthrough（放行）| empty（0 命中）
         # ── 检索漏斗分层（2026-09-21 P1-4b 新增）───────────────────────────────
         # 背景：此前只有 top_k 一个旋钮，它同时兼任「每路召回宽度」「RRF 融合池大小」
         #       两职（内部按 top_k*2 召回），而 rag.rerank_max_candidates=8 又大于 top_k=4
@@ -615,6 +634,43 @@ DEFAULT_CONFIG = {
         "neo4j_uri": "",             # Neo4j Bolt URI（如 bolt://localhost:7687）
         "neo4j_user": "",            # Neo4j 用户名
         "neo4j_password": "",        # Neo4j 密码（secret）
+    },
+    # ── P0-2（2026-10-03 整改）：编排运行的 liveness 与孤儿回收 ──
+    # 对标 LangGraph checkpointer / Temporal timeout：**长时间无任何推进的运行必须有明确结局**。
+    # 本工程此前既没有 liveness 判据也没有回收动作（评估 §4.2 实测：60 个批次里 16 个
+    # 残留 planned/ready/blocked，最老 4.3 天没人管，用户侧就是流水线一直转圈）。
+    "runtime": {
+        # 非终态任务超过该秒数没有 `updated_at` 推进 ⇒ 判定为孤儿。
+        # 取值依据实测：单轮编排最长 1155 s（≈19 分钟），30 分钟留足 1.5 倍余量，
+        # 既不会误杀正在长思考的批次（一次 LLM 调用超时上限 180 s + 重试，远小于此）。
+        "orphan_ttl_s": 1800,
+        "reap_on_startup": True,     # 启动时执行回收；排障期可置 False 临时关闭
+        "reap_dry_run": False,       # True = 只报告不改写（上线灰度/排障用）
+    },
+    # ── P0-2 持久执行：编排检查点与断点续跑（2026-10-03）────────────────────────
+    # 默认**不做自动重投**：进程起来后自动恢复所有中断批次看似美好，实则危险 ——
+    #   ① 中断前执行过的写类子任务可能已落一半副作用，自动重跑 = 重复数据；
+    #   ② 崩溃若是系统性的（如 provider 配额耗尽），自动重投会把剩余配额打得更干净。
+    # 因此默认策略是「给入口，等人点」：`auto_resume_on_startup` 保持 False。
+    # 真要打开，也必须同时把 `resume_include_failed` 保持 False（跳过已 failed 任务）。
+    "orchestration": {
+        "resume_stale_s": 1800,          # 心跳超过该秒数才算"失活"（编排单任务实测上限 1155 s，取 1.5 倍）
+        "resume_max_attempts": 5,        # 单批次最多恢复几次，超过不再自愈（防"恢复→再崩"死循环）
+        "resume_include_failed": False,  # 是否连带重跑 failed 任务（默认否：可能有副作用）
+        "auto_resume_on_startup": False, # 启动自动重投（默认关，理由同上）
+        "checkpoint_enabled": True,      # 旁路开关：检查点写入失败永不阻断编排
+    },
+    # ── P1-1（2026-10-03 整改）：入口限流（对标 Dify 配额 / Anthropic X-RateLimit-* 契约）──
+    # 评估 §6 P1-1 实测：全仓 0 处限流；`budget_tokens` 曾超支 35%，后又被置 0 ⇒ 完全无闸。
+    # 阈值为"远超当前真实用量、但能挡住失控"的量级，不是"刚好卡住现有业务"的量级：
+    # 有效负载 `conversations` 全库 15 行，而 chat 桶给到 5 次/分钟（单次编排实测最长 1155 s），
+    "rate_limit": {
+        "enabled": True,             # 排障/批量入库时可临时置 False
+        "chat_per_min": 5,           # 触发长编排的端点（/chat、/chat/stream、flows/run…）
+        "write_per_min": 60,         # 其余写操作
+        "read_per_min": 300,         # 读操作（含列表轮询）
+        "exempt_paths": ["/api/health", "/api/monitor", "/api/auth",
+                         "/static", "/api/ux-metrics"],   # 监控/登录/静态不得被限
     },
 }
 

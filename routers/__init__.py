@@ -38,6 +38,7 @@ from .mcp_gateway import router as mcp_gateway_router  # P0-1（2026-09-24）领
 from .intent_samples import router as intent_samples_router  # 2026-09-26 意图样本池（设置页可维护评测集）
 from .memory_admin import router as memory_admin_router  # 2026-10-02 AI 记忆管理（设置页可见+可删）
 from .ux_metrics import router as ux_metrics_router  # 2026-10-03 UX 埋点（评估规范 §11 六指标）
+from .orchestration import router as orchestration_router  # 2026-10-03 P0-2 编排检查点 + 断点续跑
 
 __all__ = [
     "dashboard_router",
@@ -71,4 +72,5 @@ __all__ = [
     "intent_samples_router",  # 2026-09-26 意图样本池
     "memory_admin_router",  # 2026-10-02 AI 记忆管理
     "ux_metrics_router",  # 2026-10-03 UX 埋点
+    "orchestration_router",  # 2026-10-03 P0-2 编排检查点 + 断点续跑
 ]

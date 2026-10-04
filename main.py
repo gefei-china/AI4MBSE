@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse
 
 from database import init_db, get_db
 from core import config
+from core.rate_limit import RateLimitMiddleware
 from routers import (
     auth_router,
     dashboard_router,
@@ -46,6 +47,7 @@ from routers import (
     intent_samples_router,  # 2026-09-26 意图样本池（设置页维护评测集）
     memory_admin_router,  # 2026-10-02 AI 记忆管理（设置页可见 + 可删）
     ux_metrics_router,  # 2026-10-03 UX 埋点：§11 六指标采集与聚合
+    orchestration_router,  # 2026-10-03 P0-2 编排检查点 + 断点续跑
 )
 
 @asynccontextmanager
@@ -99,6 +101,23 @@ async def lifespan(app: FastAPI):
         print("[startup] 语义层后台预热已启动", flush=True)
     except Exception as _e:
         print("[startup] 语义层预热跳过：%s" % str(_e)[:120], flush=True)
+    # ── P0-2（2026-10-03 整改）：孤儿编排任务回收 ──
+    # 对标 LangGraph checkpointer / Temporal timeout 的**第一步**：在没有独立 worker 之前，
+    # 先保证"任何一场永远不会结束的运行都有一个明确的结局"（见 core/run_registry.py 的说明）。
+    # 回收只改非终态且已停滞的任务状态，**不触碰任何执行路径**，失败也不阻断启动。
+    try:
+        if bool(config.get("runtime", "reap_on_startup", True)):
+            from core.run_registry import reap_orphans
+            from database import db_conn as _db_conn2
+            with _db_conn2() as _c2:
+                _res = reap_orphans(_c2, dry_run=bool(config.get("runtime", "reap_dry_run", False)))
+            if _res.get("reaped"):
+                print("[startup] 孤儿编排任务回收：%d 条 / %d 个批次（TTL=%ds）"
+                      % (_res["reaped"], len(_res.get("run_ids") or []), _res["ttl_s"]), flush=True)
+            if _res.get("error"):
+                print("[startup] 孤儿回收异常（已跳过）：%s" % _res["error"], flush=True)
+    except Exception as _e:
+        print("[startup] 孤儿回收跳过：%s" % str(_e)[:120], flush=True)
     yield
 
 
@@ -146,6 +165,12 @@ class AuditRequestContextMiddleware:
 
 app.add_middleware(AuditRequestContextMiddleware)
 
+# ── P1-1（2026-10-03 整改）：入口限流 ──
+# 纯 ASGI（同审计中间件的理由：不用 BaseHTTPMiddleware，避免包装 SSE 响应体）。
+# 注意中间件**注册顺序 = 执行顺序的逆序**，这里注册在审计之后 ⇒ 限流比审计**先**执行，
+# 于是被限掉的请求不会留下"看起来发生过"的审计痕迹（限流不是业务事件）。
+app.add_middleware(RateLimitMiddleware)
+
 
 # ── 注册功能域路由（URL 契约与重构前完全一致）──
 for _router in (
@@ -181,6 +206,7 @@ for _router in (
     intent_samples_router,  # 2026-09-26 意图样本池：设置页维护评测集 + 一键跑分
     memory_admin_router,  # 2026-10-02 AI 记忆管理：设置页可见 + 可删（评估报告 §4 P0）
     ux_metrics_router,  # 2026-10-03 UX 埋点：§11 六指标采集与聚合
+    orchestration_router,  # 2026-10-03 P0-2 编排检查点 + 断点续跑（LangGraph checkpointer 等价物）
 ):
     app.include_router(_router)
 
