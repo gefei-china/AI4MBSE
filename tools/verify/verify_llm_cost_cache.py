@@ -12,6 +12,12 @@
   3) 异常余量（hit+miss > pt）兜底不为负、不丢 token；
   4) 变异自证：把 cache_hit 单价改回 input（取消折扣）→ F1 目标断言被抓住。
 """
+
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: B 需真实 LLM 调用与用量数据（实测本地 rc=1）
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 import os
 import sqlite3
 import sys

@@ -19,6 +19,12 @@
     P3 验收同源        → acceptance[].value 恒等于 metrics[metric_key].value
     P3 性能可对账      → RT/慢查询分位与只读直查库的结果一致
 """
+
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: A 需服务在跑；且干净库上实测红（100 通过/2 失败，2026-10-05）
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 import argparse
 import json
 import re

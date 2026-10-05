@@ -56,16 +56,43 @@ except ImportError as e:
 print("== 0 前置：目标能力是否已落地 ==")
 check("0.1 common 暴露 reset_skill_state / load_forced_skill", _READY, _IMPORT_ERR)
 
-_c = sqlite3.connect("mbse.db")
+_DB = os.environ.get("MBSE_DB_PATH") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mbse.db")
+_c = sqlite3.connect(_DB)
 _c.row_factory = sqlite3.Row
+# ⚠️ 2026-10-04：原为 `sqlite3.connect("mbse.db")`（**相对路径硬编码**）——
+#   ⇒ CI 用 MBSE_DB_PATH 指向干净库时，本脚本**仍在读仓库根目录的生产库**，
+#   于是「本地绿 / CI 红」：干净库里没有"声明了白名单的已发布技能"，
+#   B1 组断言全部落空（实测 got=[] exp=[4个工具]）。
+#   正解：读 MBSE_DB_PATH（与全仓其它门禁一致）。
+#   教训与 MEMORY 里「测试切库必须改真正生效的那个源」同型 ——
+#   **这里生效的源是 sqlite3.connect 的参数，不是 core.config.DB_PATH。**
 _WL_SKILL = _c.execute("SELECT name FROM skills WHERE COALESCE(allowed_tools,'') "
                        "NOT IN ('','[]','null') AND status='published' LIMIT 1").fetchone()
 _NO_WL_SKILL = _c.execute("SELECT name FROM skills WHERE COALESCE(allowed_tools,'') "
                           "IN ('','[]','null') AND status='published' LIMIT 1").fetchone()
-check("0.2 库里存在「声明了白名单」的已发布技能（真实数据，不构造）", bool(_WL_SKILL),
-      _WL_SKILL["name"] if _WL_SKILL else "无")
-check("0.3 库里存在「未声明白名单」的已发布技能", bool(_NO_WL_SKILL),
-      _NO_WL_SKILL["name"] if _NO_WL_SKILL else "无")
+# 干净库里没有「已发布且带白名单」的技能 ⇒ 这不是缺陷，是**样本缺失**。
+# ⚠️ 纪律（MEMORY）：**数据不足报unknown，不许报 FAIL** ——
+#   否则 CI 每次都会红，而红的原因不是代码坏了，是库还没被灌数据。
+#   与「该门禁本地绿 / CI 红」的实测教训一致。
+_SAMPLES = bool(_WL_SKILL) and bool(_NO_WL_SKILL)
+print("[库] %s（带白名单技能样本=%s / 未带样本=%s）"
+      % (os.path.basename(_DB), bool(_WL_SKILL), bool(_NO_WL_SKILL)))
+# ⚠️ 纪律（MEMORY）：**数据不足报 unknown，不许报 FAIL**。
+#   原实现在这里 `check("0.2 …", bool(_WL_SKILL))` —— 于是 CI 干净库
+#   （init_db 只灌结构、不含"已发布且带白名单"的技能）**每次必红**，
+#   而红的原因不是代码坏了，是库还没灌数据。
+#   改成：`SKIP`（不计失败、不计入断言总数），并在输出里显式说明。
+if _SAMPLES:
+    check("0.2a 样本可用（带白名单 / 未带白名单的已发布技能各一）", True)
+else:
+    print("  [SKIP] 0.2a 样本不可用（本库无「已发布且带白名单」或「未带白名单」的技能）")
+    print("         ⇒ B 组中依赖样本的断言不适用。这是**样本缺失**，不是缺陷。")
+    print("         ⇒ 需要它们生效请在开发机灌数据后跑；CI 干净库下不阻塞。")
+if not _WL_SKILL:
+    print("  ⚠️ 本库无「带白名单的已发布技能」⇒ B1/B5 组不适用（样本缺失，非缺陷）")
+if not _NO_WL_SKILL:
+    print("  ⚠️ 本库无「未带白名单的已发布技能」⇒ B7 组不适用（样本缺失，非缺陷）")
 
 print()
 print("== A 状态起点：每轮清零（防跨轮/跨路径残留）==")
@@ -119,15 +146,29 @@ if _READY and _WL_SKILL:
     check("B6 include_resources=False 时不披露资源、也不产出白名单",
           "📄 参考文档" not in _blk2 and "⚙ 脚本" not in _blk2 and not _at2)
 else:
-    for n in ("B1 白名单 == 库里声明", "B2 块头为该技能", "B3 正文截断到 4000",
-              "B4 披露资源清单", "B5 白名单行出现在块里", "B6 include_resources=False 时不披露"):
-        check(n, False, "目标能力未落地或无可用技能")
+    # ⚠️ 分两种「进不来」的原因，**不能一律判红**：
+    #   ① `_READY=False` ⇒ **能力真的没落地**（import 失败）⇒ 必须判红
+    #   ② `_READY=True` 但 `_WL_SKILL is None` ⇒ 只是**本库缺这类样本**
+    #      （CI 干净库 init_db 只灌结构，不含「已发布且带白名单」的技能）
+    #      ⇒ 判红等于「每次 CI 都红，而红的原因不是代码坏了」
+    #   原实现两者都 `check(n, False)` ⇒ CI 必红（实测 got=[] exp=[6个工具]）。
+    _B_NAMES = ("B1 白名单 == 库里声明", "B2 块头为该技能", "B3 正文截断到 4000",
+                "B4 披露资源清单", "B5 白名单行出现在块里",
+                "B6 include_resources=False 时不披露")
+    if not _READY:
+        for n in _B_NAMES:
+            check(n, False, "目标能力未落地（import 失败）")
+    else:
+        for n in _B_NAMES:
+            print("  [SKIP] %s（本库无「已发布且带白名单」的技能 ⇒ 样本缺失）" % n)
 
 if _READY and _NO_WL_SKILL:
     _b, _a = load_forced_skill(_NO_WL_SKILL["name"], content_cap=4000, include_resources=True)
     check("B7 未声明白名单的技能 → 空集（调用方据此保持 None=不限制）", not _a, _a)
+elif not _READY:
+    check("B7 未声明白名单的技能 → 空集", False, "能力未落地")
 else:
-    check("B7 未声明白名单的技能 → 空集", False, "无可用技能")
+    print("  [SKIP] B7 未声明白名单的技能 → 空集（本库无「未带白名单」的已发布技能）")
 
 if _READY:
     _b3, _a3 = load_forced_skill("__不存在的技能__", content_cap=4000, include_resources=True)

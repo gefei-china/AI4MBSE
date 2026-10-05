@@ -8,6 +8,12 @@ chat/system_mgmt/requirement_quality，空则回退旧白名单。核心逻辑�
 
 防空转：变异必须真正改变被观察行为（去掉黑名单 → chat 混入；去掉兜底 → 空 rows 返回空集）。
 """
+
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: C 实测干净库上红（F3 缺多方案生成/结构视图生成/需求视图生成）⇒ 需先修
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 import inspect
 import os
 import sqlite3

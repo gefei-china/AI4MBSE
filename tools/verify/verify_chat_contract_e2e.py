@@ -7,6 +7,12 @@ exec（tools/reasoning/agent）与 used_mock → 输出给驱动层做浏览器�
 
 用法：.venv/Scripts/python.exe -X utf8 tools/verify/verify_chat_contract_e2e.py
 """
+
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: B 需服务在跑 + 实测本地 rc=1（42s）
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 import json
 import sqlite3
 import sys

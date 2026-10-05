@@ -1,5 +1,11 @@
 """验证：能力中心「内置」判据收敛 —— 真库只读 A/B + 变异测试。
 
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: C 实测本地红（无主条目 can_delete 判定失败）⇒ 需先修
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+
 被验证对象（生产代码，非复刻）：
   plugin_system.store.base.is_builtin_row
   plugin_system.store.queries.plugin_dto 的 is_builtin / can_delete 字段

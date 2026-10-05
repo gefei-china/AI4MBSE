@@ -7,6 +7,12 @@
 
 用法：python tools/verify/verify_conv_summary_api.py
 """
+
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: A 需服务在跑（同上，实测停服务后 rc=1）
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 import json
 import os
 import re

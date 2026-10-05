@@ -1,4 +1,10 @@
 #!/usr/bin/env python
+
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: C 实测干净库上红（file-ops 仍可经全局池触发，命中=0）⇒ 需先修
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 # -*- coding: utf-8 -*-
 """verify_plugin_bind_removed.py —— 验证「Agent 绑定插件」机制已彻底移除（2026-09-30 第 10 轮）
 

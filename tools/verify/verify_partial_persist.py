@@ -14,6 +14,12 @@ reason) → 落库 messages（assistant，带「以上为已生成内容」后�
   P4 内容过短(<4字) → 不落库
   P5 异常安全：conversation_id 为 None → 静默返回不抛
 """
+
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: C 实测本地红 ⇒ 需先修
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 import os
 import sqlite3
 import sys

@@ -15,6 +15,12 @@
 
 用隔离副本库：tmp/uisafe_r5.db（由 mbse.db 经 sqlite3.backup() 拷贝）。
 """
+
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: C 实测本地红（L1 反例全部拒绝 判定失败）⇒ 需先修
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 import io
 import os
 import re

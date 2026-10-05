@@ -4,8 +4,23 @@
 #   GitHub Actions 是 Linux，而本工程部分验证依赖**随包运行时**（不入库，见 .gitignore）：
 #     - `checker.jar`（126 MB，OMG SysML v2 官方解析器）+ `sysml.library` + `java-runtime/`
 #   因此依赖它们的门禁在 CI 上**无法执行**，不在本文件里假装能跑：
-#     - tools/verify/verify_sysml_check_gate.py   （需要 checker.jar + java）
-#     - tools/verify/verify_view_projection.py    （经 view_generator → sysml_ast → java）
+#   ⚠️ 更正（2026-10-05实测）：下面两个门禁**裸跑并不需要** checker.jar/java ——
+#     涉及运行时的那部分被脚本**显式跳过并在输出里注明口径**：
+#       verify_sysml_check_gate 裸跑 100/100（输出含"[6b] AST 级对拍已跳过"提示）
+#       verify_view_projection 裸跑 10 PASS / 0 FAIL
+#     ⇒ 已接进 CI。**「曾注明需要 X」不等于「需要 X」，要以实测为准。**
+#   真正无法在 CI 跑的是它们「加了 --base /走 view_generator 全链路」的形态，
+#     那一形态仍只在开发机跑（见下）。
+#   同理排除（实测：停掉本地服务后 rc=1）：
+#     - tools/verify/verify_chat_clarify_partial.py（BASE=http://127.0.0.1:8000）
+#     - tools/verify/verify_conv_summary_api.py    （同上）
+#     - tools/verify/verify_projects_nav.py        （同上）
+#     - tools/verify/verify_s3_e2e.py               （同上）
+#     - tools/verify/verify_kb_dashboard.py         （同上）
+#   以下 3 个在**干净库上红**（本地绿、CI 环境红 ⇒ 接进去会阻塞流水线，2026-10-05 实测）：
+#     - tools/verify/verify_ontology_dom_range.py
+#     - tools/verify/verify_orch_whitelist.py
+#     - tools/verify/verify_plugin_bind_removed.py
 #   同理排除：
 #     - tools/verify/verify_s4_llm_params.py      （需要真实 LLM provider 的 api_key，CI 无 secret）
 #     - verify_orchestration_e2e.py 的 live 模式  （真调 LLM，产生费用；CI 只跑其 G0 静态哨兵）
@@ -246,3 +261,140 @@ jobs:
 
       - name: Guard 入口限流（36 项 + 1 变异）
         run: python tools/verify/verify_rate_limit.py
+
+      # ── 存量门禁接线（2026-10-05）───────────────────────────────────────────
+      # 盘点发现：`tools/verify/` 有 87 个门禁，CI 里只有 29 个
+      #⇒ **58 个已写好的门禁一次都没在合并请求上跑过**。
+      # 本批把其中**已在本地绿、且在干净库上也绿**的 23 个接进来。
+      #
+      # ⚠️ 筛选不是凭印象，三条依据都是实测（见tools/audit_gate_ci_coverage.py）：
+      #  ① 本地 rc=0（逐个真跑，每个限时 120s）
+      #  ② **在 `init_db()` 出来的干净库上也 rc=0** —— MEMORY 里的坑：
+      #     「本地全绿」≠「CI 会过」（本机 306 MB 生产库 vs CI 干净库，
+      #       意图路由评测就因此测出 0.9773 vs 0.9310两个不同的数）。
+      #     实测有 4 个门禁本地绿、干净库红（verify_ontology_dom_range /
+      #       verify_orch_whitelist / verify_plugin_bind_removed / verify_kb_dashboard）
+      #     ⇒ **没有**直接接进 CI，先留在本地修。
+      #  ③ 不依赖「服务在跑」。停掉本地服务后实测 rc=1 的有 5 个
+      #    （verify_chat_clarify_partial / verify_conv_summary_api /
+      #      verify_projects_nav / verify_s3_e2e / verify_kb_dashboard）
+      #    ⇒ 按本文件头部的既有惯例排除（与 verify_sysml_check_gate 等同理）。
+
+      # ── 治理与权限 ──
+      - name: Guard 审计 P0 修复项（31 项）
+        run: python tools/verify/verify_audit_p0.py
+
+      - name: Guard 分支权限闸（19 项 + 变异）
+        run: python tools/verify/verify_branch_permission_gates.py
+
+      - name: Guard 分支保护规则
+        run: python tools/verify/verify_branch_protection_rules.py
+
+      # ── 意图识别 ──
+      - name: Guard 意图缓存键设计（含大写路径对照）
+        run: python tools/verify/verify_intent_cache_key.py
+
+      - name: Guard 意图缓存开关（11 项）
+        run: python tools/verify/verify_intent_cache_toggle.py
+
+      - name: Guard 工具无裸参数（Agent 定义面）
+        run: python tools/verify/verify_agent_tools_no_params.py
+
+      # ── 知识库与文档 ──
+      - name: Guard 文档目录树（19 项 + 变异）
+        run: python tools/verify/verify_doc_folders.py
+
+      - name: Guard 实体时态历史（entity_versions）
+        run: python tools/verify/verify_entity_versions.py
+
+      - name: Guard 工程归属标注（图库写入兜底）
+        run: python tools/verify/verify_p1_project_attribution.py
+
+      - name: Guard 工程归属 · 变异自证版
+        run: python tools/verify/verify_p1_project_attribution_mutate.py
+
+      - name: Guard 重试与降级统计（三列契约 + 幂等）
+        run: python tools/verify/verify_retry_fallback_stats.py
+
+      # ── 提示词与上下文 ──
+      - name: Guard 提示词分块（60 项）
+        run: python tools/verify/verify_prompt_blocks.py
+
+      - name: Guard 分层压缩（tiered compression + 变异）
+        run: python tools/verify/verify_tiered_compression.py
+
+      - name: Guard 技能注入边界（23 项）
+        run: python tools/verify/verify_skill_injection.py
+
+      # ── 记忆 ──
+      - name: Guard 记忆管理（40 项）
+        run: python tools/verify/verify_memory_admin.py
+
+      - name: Guard 记忆分层（8 项）
+        run: python tools/verify/verify_memory_tier.py
+
+      # ── LLM 可观测 ──
+      - name: Guard LLM 健康探针（48 项）
+        run: python tools/verify/verify_llm_health.py
+
+      - name: Guard 用量溯源列（20 项 + 降级不丢数）
+        run: python tools/verify/verify_trace_cols.py
+
+      - name: Guard 告警评估器（24 项）
+        run: python tools/verify/verify_alert_evaluator.py
+
+      # ── 工具与运行时 ──
+      - name: Guard 文件系统写入护栏（11 项 + 变异）
+        run: python tools/verify/verify_fs_guard.py
+
+      - name: Guard 工具结果 offload（含故障注入）
+        run: python tools/verify/verify_tool_offload.py
+
+      - name: Guard 工具命名规范（active 工具）
+        run: python tools/verify/verify_s4_toolname.py
+
+      - name: Guard 容器运行时冒烟（B1 校验结论字段）
+        run: python tools/verify/verify_b1_runtime_smoke.py
+
+      # ── 第二批接线（2026-10-05）：核实豁免时实测发现这批**两环境都绿** ──────
+      # 原以为它们要豁免（其中两个曾被注明「需 checker.jar + java」），
+      # 实测**裸跑不需要** checker.jar（涉及它的那一项被显式跳过并注明口径）：
+      #   verify_sysml_check_gate 裸跑 100/100（含"[6b] AST 级对拍已跳过"的口径提示）
+      #   verify_view_projection 裸跑 10 PASS / 0 FAIL
+      # ⇒ 可以接线。**「曾注明需要 X」不等于「需要 X」——要实测。**
+      - name: Guard 路由重复注册审计
+        run: python tools/verify/audit_dup_routes.py
+
+      - name: Guard 汇总降级路径（conv_summary_fallback）
+        run: python tools/verify/verify_conv_summary_fallback.py
+
+      - name: Guard 意图 DB 关键词层
+        run: python tools/verify/verify_intent_db_kw.py
+
+      - name: Guard 意图关键词分层
+        run: python tools/verify/verify_intent_kw_layers.py
+
+      - name: Guard 提示词分层装配
+        run: python tools/verify/verify_prompt_layering.py
+
+      - name: Guard RAG 配置口径
+        run: python tools/verify/verify_rag_config.py
+
+      - name: Guard S4 提示词契约
+        run: python tools/verify/verify_s4_prompt.py
+
+      - name: Guard 子任务隔离
+        run: python tools/verify/verify_subtask_isolation.py
+
+      - name: Guard SysML 校验门（裸跑 100项；checker.jar 相关项按口径跳过）
+        run: python tools/verify/verify_sysml_check_gate.py
+
+      - name: Guard 视图投影（裸跑 10 项）
+        run: python tools/verify/verify_view_projection.py
+
+      - name: Guard UX 指标口径
+        run: python tools/verify/verify_ux_metrics.py
+
+      # ── 元门禁：新写的门禁必须接线，或写明豁免理由 ──────────────────────
+      - name: Guard 门禁接线（每个门禁要么在 CI 里，要么带 #CI-OPTIONAL 理由）
+        run: python tools/verify/verify_gate_wiring.py

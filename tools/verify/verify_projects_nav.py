@@ -14,6 +14,12 @@
 用法（服务需已启动；脚本自建自清，不碰既有数据）：
   .venv/Scripts/python.exe -X utf8 tools/verify/verify_projects_nav.py
 """
+
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: A 需服务在跑（同上，实测停服务后 rc=1）
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 import json
 import sys
 import urllib.error

@@ -20,6 +20,12 @@ L7 `/api/jobs/{id}` 返回 cancelable/terminal 等派生字段正确
    用法：`python tools/verify/verify_job_handpoints_live.py`
    它只新增行，不删既有数据；跑完会打印新增行数便于人工核对。
 """
+
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: B 真起服务 + 真embedding + 写真库（约3 分钟；开发机已跑通 22/22）
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 import io
 import json
 import os

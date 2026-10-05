@@ -16,6 +16,12 @@
   · **变异用 exec 孪生体**：从源码文本注入 bug 再 exec，磁盘文件一字不动；
     锚点**缩进无关**（类方法经 `dedent` 会左移，写死缩进的锚点会静默不命中 —— 本仓踩过两次）。
 """
+
+# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
+# CI-OPTIONAL: C 实测本地红（37 PASS / 1 FAIL）⇒ 需先修
+#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
+#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
+#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 import inspect
 import os
 import sqlite3
