@@ -16,6 +16,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from core.pagination import clamp_limit
 from core.deps import db_session, current_user
 from core.audit import audit
 from core import ns
@@ -36,7 +37,9 @@ def graph_entity_search(q: str = "", branch: str = "", limit: int = 15,
     q = (q or "").strip()
     if len(q) < 1:
         return {"ok": True, "items": []}
-    limit = max(1, min(int(limit or 15), 50))
+    # P2-1：统一走 clamp_limit（原先手写 max(1,min(...))：limit=-5 会返回 1 条，
+    #     limit=0 会返回默认条数 —— 同类输入两套行为）。
+    limit = clamp_limit(limit, default=15, maximum=50)
     like = f"%{q}%"
     params = [like, like, like]
     br_sql = ""
@@ -68,7 +71,7 @@ def triples_browse(status: str = "", q: str = "", predicate: str = "",
                    limit: int = 50, offset: int = 0,
                    conn=Depends(db_session), user=Depends(current_user)):
     """三元组原子表浏览：S/P/O 列表 + 状态筛选 + 关键词 + 谓词筛选 + 分页。"""
-    limit = max(1, min(int(limit or 50), 200))
+    limit = clamp_limit(limit, default=50, maximum=200)
     offset = max(0, int(offset or 0))
     where, params = [], []
     if status and status != "all":
@@ -669,7 +672,7 @@ def reasoning_cohort_reject(cohort_id: int, body: dict = None,
 def reasoning_inferred_list(limit: int = 500,
                             conn=Depends(db_session), user=Depends(current_user)):
     """已物化推断三元组（status='inferred'）——图谱叠加 / 三元组 Tab 数据源。"""
-    limit = max(1, min(int(limit or 500), 2000))
+    limit = clamp_limit(limit, default=500, maximum=2000)
     rows = conn.execute(
         "SELECT * FROM triples WHERE status='inferred' ORDER BY id DESC LIMIT ?",
         (limit,)).fetchall()

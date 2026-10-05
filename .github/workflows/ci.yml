@@ -148,6 +148,17 @@ jobs:
       - name: Guard 大文件链路（35 项 + 7 变异）
         run: python tools/verify/verify_largefile_pipeline.py
 
+      # ── P2-1（2026-10-04）：列表 limit 边界语义统一 ───────────────────────
+      # 原估「82 处已分页 / 573 端点要覆盖，3~5 天重构」—— 实测**推翻**：
+      #   最大表 document_chunks 7269 行、业务表百级；
+      #   /api/documents 响应16 KB、/api/knowledge/entities?limit=2000 仅 126 KB；
+      #   缺夹紧的 limit 端点 **0 个**（44 处看着"无上限"的全部已有 min() 或 Query(le=)）。
+      # 真正剩下的是**边界语义不统一**：limit=-5 返 1 条、limit=0 返 15 条。
+      # 本项交付 core/pagination.clamp_limit 作为唯一口径（夹紧而非 422，
+      # 避免既有前端调用突然失败），真机验证 -5/0/不传三者已一致。
+      - name: Guard 列表分页边界（P2-1 · 18 项 + 4 变异）
+        run: python tools/verify/verify_pagination.py
+
       # ── P1-2（2026-10-04）：HyDE 成本闸 + 「不可关」的实测结论 ────────────
       # 原排序文档写「HyDE 使 embedding 成本 ×2 ⇒ 建议降级」。实测**推翻了降级建议**：
       # 切rag.hyde_enabled 开关后 8 条真实查询里 **6 条排序不同、44 处排名变动**，
