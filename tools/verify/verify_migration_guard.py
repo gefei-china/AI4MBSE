@@ -53,12 +53,29 @@ def _rec(name, ok, detail="", kind=FAIL):
 
 
 def _mk_db(path, n_tasks=7, n_chunks=11):
-    """造一个**带 WAL 的**小库：必须真有 WAL，才能验出 copy2 与 backup 的差别。"""
+    """造一个**带 WAL 的**小库：必须真有 WAL，才能验出 copy2 与 backup 的差别。
+
+    ⚠️ 2026-10-04：补了核心业务表（`documents` / `entities` / `agent_def` /
+    `settings`）。原因：`backup_db` 新增了"源库有效性校验"（拒绝空库备份 ——
+    实测`backups/` 里 14 份 20KB 空壳假备份的成因），而本校验以
+    **核心业务表是否存在**为判据。原夹具只有 3 张无关表 ⇒ 会被判成
+    "空库"而拒绝备份 ⇒ **门禁测的是夹具而非真实场景**。
+    这与 MEMORY 里「夹具不够真实时变异 VACUOUS」是同型：
+    **夹具必须贴近生产形态，否则门禁在测一个不存在的世界。**
+    """
     con = sqlite3.connect(path)
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("CREATE TABLE agent_tasks (id INTEGER PRIMARY KEY, status TEXT)")
     con.execute("CREATE TABLE document_chunks (id INTEGER PRIMARY KEY, body TEXT)")
     con.execute("CREATE TABLE small (id INTEGER PRIMARY KEY, v TEXT)")
+    # 核心业务表（真库 131 张表里有，这里只需 presence 即可过备份校验）
+    con.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY, filename TEXT)")
+    con.execute("CREATE TABLE entities (id INTEGER PRIMARY KEY, name TEXT)")
+    con.execute("CREATE TABLE agent_def (id INTEGER PRIMARY KEY, name TEXT)")
+    con.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+    con.execute("INSERT INTO documents VALUES (1,'a.md')")
+    con.execute("INSERT INTO entities VALUES (1,'E1')")
+    con.execute("INSERT INTO settings VALUES ('k','v')")
     for i in range(n_tasks):
         con.execute("INSERT INTO agent_tasks VALUES (?,?)", (i, "done"))
     for i in range(n_chunks):
@@ -291,11 +308,13 @@ def d1():
 def d2():
     """变异 D2：backup 换成 copy2 ⇒ M2 必须判红。"""
     print("\n=== 变异 D2：热备换成 shutil.copy2 ===")
-    ns = _load(("    src = sqlite3.connect(DB_PATH)\n    try:\n"
-                "        out = sqlite3.connect(dst)\n        try:\n"
-                "            src.backup(out)          # 在线热备，含 WAL\n"
-                "        finally:\n            out.close()\n    finally:\n        src.close()",
-                "    shutil.copy2(DB_PATH, dst)"))
+    # ⚠️ 锚点更新（2026-10-04，第二轮）：`backup_db` 里`out.close()` 之后
+    #   新增了一整块**中文注释**（说明为什么要校验备份有效性），所以任何
+    #   跨过注释的锚点都会失效 —— 第一版改锚点时又踩了一次。
+    #   正解：**只锚单行** `src.backup(out)`，注释与close 都不进锚点。
+    #   这与 MEMORY 里「锚点要打在判据真正走到的代码上，且避开易变文本」同源。
+    ns = _load(("            src.backup(out)          # 在线热备，含 WAL",
+                "            shutil.copy2(DB_PATH, dst)"))
     try:
         _IN_MUT[0] = True
         t_m2(ns, in_mut=True)

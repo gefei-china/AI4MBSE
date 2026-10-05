@@ -161,9 +161,95 @@ def backup_db(dest_dir: str | None = None, tag: str = "pre-migrate") -> str:
             src.backup(out)          # 在线热备，含 WAL
         finally:
             out.close()
+        # ⚠️ 备份**有效性校验**（2026-10-04 新增，实测发现的缺陷）：
+        #   `src.backup(out)` 只复制内容、**不校验源库有效性** —— 若 DB_PATH
+        #   指向一个刚创建的空库，backup 会"成功"并产出一个 20KB 的空壳
+        #   （实测：`backups/` 里 14 份 pre-migrate-*.db 全是 4 张表的空壳）。
+        #   ⇒ `safe_init_db` 的"有备份才迁移"闸会以为安全，实际留下**恢复时会炸**
+        #   的假备份 —— 迁移越危险，越要命。
+        #   ⚠️ 必须在 src 关闭**之前**校验（校验要读源库的表集合）。
+        _verify_backup(src, dst)
     finally:
         src.close()
     return dst
+
+
+def _verify_backup(src, dst: str) -> None:
+    """校验备份与源库的表集合一致；不一致则删掉备份并抛 RuntimeError。
+
+    :param src: **未关闭**的源连接（校验要读它的表集合）
+    :param dst: 备份文件路径
+    :raises RuntimeError: 表集合不一致（备份不可用于恢复）
+    """
+    def _tables(con):
+        return {r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%'")}
+
+    try:
+        s_tables = _tables(src)
+    except Exception as e:                       # 源库都读不了 ⇒ 更该失败
+        _unlink_backup(dst)
+        raise RuntimeError("备份校验失败：源库不可读（%s）" % e)
+    # ⚠️⚠️ 先查**源库本身**是否像一份真库（2026-10-04 实测补的第二个漏洞）。
+    #   第一版只查「备份是否比源库少表」—— 实测**空库备份照样通过**：
+    #   空库有 1 张表、备份复制出来也是这 1 张 ⇒ 集合一致 ⇒ 放行。
+    #   而这正是实测到的 14 份假备份的成因（`init_db` 在新空库上跑完就备份）。
+    #   ⇒ 判据必须是"**源库**像不像真库"，与备份无关。
+    #   门槛取业务核心表：一张都没有 ⇒ 这不是本工程的库。
+    CORE_TABLES = ("documents", "entities", "agent_def", "settings")
+    present = [t for t in CORE_TABLES if t in s_tables]
+    if not present:
+        _unlink_backup(dst)
+        raise RuntimeError(
+            "备份校验失败：源库 %s 只有 %d 张表且**不含任何核心业务表**（%s）"
+            "⇒ 这是一个空库/测试库，不是待迁移的库。"
+            "常见原因：MBSE_DB_PATH 指向了新创建的空库（迁移脚本自己 init_db 出来的）。"
+            % (os.path.basename(DB_PATH), len(s_tables), "/".join(CORE_TABLES)))
+    try:
+        d_con = sqlite3.connect(dst)
+        try:
+            d_tables = _tables(d_con)
+        finally:
+            d_con.close()
+    except Exception as e:
+        _unlink_backup(dst)
+        raise RuntimeError("备份校验失败：备份文件不可读（%s）" % e)
+
+    # ⚠️ 允许备份比源库「多」表（迁移已在备份之后加过表），
+    #   但**不允许少**：少了 ⇒ 备份是空壳/损坏，恢复必然丢数据。
+    missing = s_tables - d_tables
+    if missing:
+        _unlink_backup(dst)
+        raise RuntimeError(
+            "备份校验失败：备份缺少 %d 张表（%s…）⇒ 拒绝迁移。"
+            "常见原因：DB_PATH 指向了刚创建的空库 / 测试库。"
+            % (len(missing), ", ".join(sorted(missing)[:5])))
+    # 关键表行数抽样（表集合相同但数据为空的情况）
+    for t in ("documents", "entities"):
+        if t in s_tables:
+            try:
+                n_src = src.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0]
+                d_con = sqlite3.connect(dst)
+                try:
+                    n_dst = d_con.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0]
+                finally:
+                    d_con.close()
+            except Exception:
+                continue
+            if n_src > 0 and n_dst == 0:
+                _unlink_backup(dst)
+                raise RuntimeError(
+                    "备份校验失败：%s 源库 %d 行 / 备份 0 行 ⇒ 拒绝迁移。" % (t, n_src))
+
+
+def _unlink_backup(dst: str) -> None:
+    """删掉校验失败的备份（含 -wal/-shm 旁文件），不留下误导性的残留。"""
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.remove(dst + suffix)
+        except OSError:
+            pass
 
 
 def safe_init_db(dry_run: bool = False, *, backup: bool = True,
