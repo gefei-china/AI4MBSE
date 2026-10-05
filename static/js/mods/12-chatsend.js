@@ -65,7 +65,7 @@ async function handleChatInput(){
     const f = hit.filter.toLowerCase();
     items = [{ key:'工程数据', icon:'📊', name:'工程数据', desc:'引用全部工程数据（控制标签）', tag:'快捷' },
              { key:'知识库', icon:'🧬', name:'知识库', desc:'引用全部已发布知识库（控制标签）', tag:'快捷' }]
-      .concat(tags.map(t => ({ key:t.name, icon:'📄', name:t.name, desc:(t.branch||'') + ' · ' + (t.status||''), tag:'文档' })))
+      .concat(tags.map(t => ({ key:t.name, icon:'📄', name:t.name, desc:(t.status||''), tag:'文档' })))
       .filter(t => !f || t.name.toLowerCase().includes(f));
   }
   _mention.items = items.slice(0, 12);

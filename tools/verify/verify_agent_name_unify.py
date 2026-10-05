@@ -160,24 +160,47 @@ def lastrowid_sync(repo, old_row, new_name, new_disp):
     return stat
 
 
+def legacy_execute(conn, sql, params=()):
+    """【变体】复刻 2026-10-04 **修正前**的 BaseRepo.execute 语义：`lastrowid or rowcount`。
+
+    用途：证明"UPDATE/DELETE 必须用 rowcount"——因为 lastrowid 是"本连接最近一次
+    INSERT 的 rowid"，对写 UPDATE 无意义，会让"影响 0 行"与"影响 1 行"返回同一个值。
+    """
+    cur = conn.execute(sql, tuple(params))
+    return cur.lastrowid or cur.rowcount
+
+
 def c_lastrowid_trap():
-    print("\n── C. BaseRepo.execute 的 lastrowid 陷阱 ──")
+    print("\n── C. BaseRepo.execute 的 rowcount 语义（2026-10-04 修正后）──")
+    # ⚠️ 2026-10-05：本组原判据锁定的正是**已被修掉的旧行为** ——
+    #   原 C1 要求「UPDATE 后返回值 ≠ 0（lastrowid 脏值残留）」、原 C3 用
+    #   `lastrowid_sync` 变体证明"错误写法会多统计"。但产品已于 2026-10-04 改为
+    #   「INSERT 取 lastrowid，UPDATE/DELETE 取 rowcount」（见 repositories/base.py:46）。
+    #   ⇒ 变体与正确写法已无区别，C1/C3 必然红。**这不是产品退化，是门禁口径过期。**
+    #   ⇒ 改为验证**修正后的正确语义**：0 行 ⇒ 0、1 行 ⇒ 1，两者可区分。
     c, d = new_db()
     repo = AgentRepo(c)
     n0 = repo.execute("INSERT INTO agent_memory (agent_id) VALUES ('zzz')")
-    ret = repo.execute("UPDATE agent_tasks SET agent_id='bbb' WHERE agent_id='aaa'")
-    chk("C1 UPDATE 后 execute 返回值 ≠ 0（lastrowid 脏值残留）", ret != 0 and ret != 3, f"返回值={ret}（INSERT={n0}）")
+    chk("C1 INSERT 返回 lastrowid（>0）", n0 > 0, f"返回值={n0}")
+    ret0 = repo.execute("UPDATE agent_memory SET agent_id='yyy' WHERE agent_id='no_such_row'")
+    chk("C1b UPDATE 影响 0 行 ⇒ 返回 0（**不是** lastrowid 脏值）", ret0 == 0,
+        f"返回值={ret0}（上一次 INSERT 的 lastrowid={n0}）")
+    ret1 = repo.execute("UPDATE agent_memory SET agent_id='yyy' WHERE agent_id='zzz'")
+    chk("C1c UPDATE 影响 1 行 ⇒ 返回 1（与 0 行**可区分**= 修正的核心价值）", ret1 == 1,
+        f"返回值={ret1}")
     chk("C2 真实受影响行数此处为 0（无 aaa 行）", cnt(c, "agent_tasks", "agent_id", "bbb") == 0)
+
+    # 变异自证：旧写法下 0 行与 1 行返回**同一个脏值** ⇒ 证明 rowcount 语义不可省。
+    #   必须先 INSERT 一行制造 lastrowid，否则两次都返回 0、区分不出问题。
+    c.execute("INSERT INTO agent_memory (agent_id) VALUES ('uuu')")
+    c.commit()
+    leg0 = legacy_execute(c, "UPDATE agent_memory SET agent_id='v0' WHERE agent_id='no_such_row'")
+    leg1 = legacy_execute(c, "UPDATE agent_memory SET agent_id='v1' WHERE agent_id='uuu'")
+    chk("C3 变异自证：旧 lastrowid 写法下 0 行与 1 行**无法区分**（证明 rowcount 必要）",
+        leg0 == leg1 and leg0 != 0,
+        f"旧写法 0行={leg0} / 1行={leg1}（应相等且非 0）；新写法 0行={ret0} / 1行={ret1}")
     c.close()
     shutil.rmtree(d, ignore_errors=True)
-
-    global CUR
-    prev = CUR
-    CUR = MF
-    buggy_total = scenario(lastrowid_sync, "lastrowid变体", expect_rows=8)
-    CUR = prev
-    chk("C3 变异自证：错误写法统计出的行数 ≠ 8（证明 rowcount 不是可有可无）",
-        buggy_total != 8, f"变体统计={buggy_total}")
 
 
 def b_double_caliber():

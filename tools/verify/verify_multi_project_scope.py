@@ -334,8 +334,25 @@ check("P0-2 页面级当前工程：切换工程时先落本页状态",
 check("★ P0-2 平台默认值只在**本页未初始化**时用作初值（其它标签页切换不影响本页）",
       _js41.count("window._curProjectId === undefined") >= 1
       and "window._curProjectId === undefined" in _js13)
-check("P0-2 顶部新建任务带本页当前工程（后端已不回落，必须由发起方显式带上）",
-      "curProjectId()" in _js03 and "_pendingProjectId" in _js03)
+# ⚠️ 2026-10-05 重新定性：原判据要求「顶部新建任务带本页当前工程」，与**当前产品口径相反**。
+#   证据链（三处独立一致，不是漏改）：
+#   ① 后端 2026-09-20 起 project_id **刻意不回落**（repositories/conversation_repo.py:33-37
+#      注释明说"直接落空串 = 无工程会话"，不再用 settings.default_project_id）；
+#   ② 前端 2026-09-29 提交 54e8493「新建任务**归属口径**」把 `newTask()` 改成
+#      `newTask(projectId, projectName)`，**只有从项目下发起才带 pid**；
+#      顶部/空态/命令栏三处入口（index.html:42、03-chat.js:91、37-kbar.js:39）都调无参版；
+#   ③ 产品另有「本任务未关联工程 · 归入」补偿入口，允许先无工程、后续挂上。
+#   ⇒ 判据改为验证**当前口径的一致性**（而不是已被推翻的旧口径），
+#     并补一条「无工程时 UI 必须明确告知」——原实现在这点上确实有缺口（只说"草稿模式"，
+#     用户会误以为会归入某工程），已修。
+check("P0-2 顶部新建任务不强制归属（当前口径：仅从项目下发起才带工程）",
+      "_pendingProjectId" in _js03
+      and "newTask(pid," in _js41
+      and "curProjectId()" not in _js03,
+      "_pendingProjectId=%s, 41-projects 带参=%s, 03-chat 是否回落=%s"
+      % ("_pendingProjectId" in _js03, "newTask(pid," in _js41, "curProjectId()" in _js03))
+check("P0-2b 无工程时 UI **明确告知**（不能让用户误以为会归入某工程）",
+      "不归属任何工程" in _js03 and "未关联工程" in _js03)
 check("收敛入口：顶栏给「本任务未关联工程 · 归入」+ 调 /api/conversations/{id}/project",
       "convAssignCurrent" in _js13 and "assignConvToProject" in _js41
       and "/project`" in _js41)

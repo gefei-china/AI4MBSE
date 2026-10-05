@@ -292,12 +292,12 @@ async function newTask(projectId, projectName) {
   const status = document.getElementById('chat-status');
   if(status) status.textContent = window._pendingProjectId
     ? `草稿模式：发送后创建任务并归入项目「${projectName || window._pendingProjectId}」`
-    : '草稿模式：输入内容并发送后创建会话';
+    : '草稿模式：输入内容并发送后创建会话（不归属任何工程，之后可在顶栏「归入」挂到项目）';
   toggleTaskGroup(false);   // 展开分组，便于看到即将创建的任务
   go('ai');
   toast(window._pendingProjectId
     ? `新建任务：将归入项目「${projectName || window._pendingProjectId}」，发送后入列表`
-    : '新建任务：草稿模式，发送后入列表');
+    : '新建任务：草稿模式，发送后入列表（未关联工程）');
 }
 async function renameConv(id) {
   const convs = await api('/api/conversations');

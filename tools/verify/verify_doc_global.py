@@ -127,10 +127,17 @@ check("A7' doUploadDoc 已移除 branchWritable() 门禁（否则 release 分支
       "仍带分支门禁 → 全局文档却要求先切到 dev 分支")
 
 # A10：文档选择器不再展示恒为 'global' 的 branch
+# ⚠️ 2026-10-05：源码已重构（`key:'doc:'+_d.id` 那一支被合并为 `tags.map(t => ...)`），
+#   锚点里的 `_d.branch` 已不存在（现为 `t.branch`）⇒ 旧判据恒红（假红）。
+#   且重构后 `(t.branch||'')` **仍被拼进 desc** ⇒ 意图未实现（真缺陷，已修）。
+#   数据侧佐证：`documents.branch` 16 行**全是 'global'**（实测）⇒ 恒为哨兵值，
+#   展示给用户毫无信息量，只是把内部实现细节漏到界面上。
 send_js = strip_js_comments(read("static/js/mods/12-chatsend.js"))
-check("A8' 文档选择器 desc 不再拼 _d.branch（恒 'global'，内部哨兵值不该露给用户）",
-      "key:'doc:'+_d.id" in send_js and "_d.branch" not in send_js.split("key:'doc:'+_d.id")[1][:200],
-      "仍在展示恒为 global 的分支值")
+_doc_item = [ln for ln in send_js.split("\n") if "tag:'文档'" in ln]
+check("A8' 文档选择器 desc 不再拼 branch（恒为 'global' 的内部哨兵值不该露给用户）",
+      bool(_doc_item) and "branch" not in _doc_item[0],
+      ("文档项已不再引用 branch" if _doc_item and "branch" not in _doc_item[0]
+       else "仍在展示恒为 global 的分支值: " + (_doc_item[0].strip()[:120] if _doc_item else "未找到文档项")))
 
 # ══ B 行为断言（夹具驱动：临时库，不碰真实库）═══════════════════════════════
 print("\n── B 行为断言（夹具驱动）──")
@@ -249,10 +256,11 @@ MUT = [
      "  const files = pendingDocFiles.length ? pendingDocFiles",
      "  if(!branchWritable()) return;\n  const files = pendingDocFiles.length ? pendingDocFiles",
      ["A7' doUploadDoc 已移除 branchWritable() 门禁（否则 release 分支上无法上传资料）"]),
+    # ⚠️ 2026-10-05：锚点随上面的重构一并更新（旧锚点是 `_d.branch` 那一支，已不存在）
     ("前端恢复展示恒为 global 的 branch", "static/js/mods/12-chatsend.js",
-     """                    desc: (_d.status||'') + (_d.file_type ? ' · ' + _d.file_type : ''),""",
-     """                    desc: (_d.status||'') + ' · ' + (_d.branch||''),""",
-     ["A8' 文档选择器 desc 不再拼 _d.branch（恒 'global'，内部哨兵值不该露给用户）"]),
+     """desc:(t.status||''), tag:'文档'""",
+     """desc:(t.branch||'') + ' · ' + (t.status||''), tag:'文档'""",
+     ["A8' 文档选择器 desc 不再拼 branch（恒为 'global' 的内部哨兵值不该露给用户）"]),
 ]
 MUT_LABELS = [t for _, _, _, _, tags in MUT for t in tags]
 
