@@ -10,10 +10,15 @@
 """
 
 # ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测本地红（C1 变异后 6 条断言未转红）⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+# ── 已接进 CI（2026-10-05 第二轮第 2 项续）──────────
+# 修复要点：① 硬编码 `REPO/"mbse.db"`（本项目第 6 处）⇒ 改读 MBSE_DB_PATH；
+#   ② B6/B7/B8 原断言 `vec == N`，但 `hybrid_search` 在查询向量降级为 bigram-tf 时
+#      **设计性跳过向量路**（防词面向量污染检索）⇒ vec 恒 None，与 recall_k 无关；
+#      ⇒ 改为「向量路可用时验两侧，不可用时只验 bm25 侧（真正被测点）」；
+#   ③ 干净库无可检索数据 ⇒ 三条整体 SKIP，且变异自证同步 SKIP（否则为「无目标」判红）；
+#   ④ 变异自证的标签改**稳定前缀**（"B6 recall_k=7"）——断言名随分支变化，写全名恒判未抓到。
+# 双环境实测：生产库 29/0，全新干净库 26/0。
+
 import os
 import re
 import sqlite3
@@ -26,7 +31,16 @@ os.chdir(REPO)
 sys.path.insert(0, str(REPO))
 
 OK = FAIL = 0
+SKIPPED = []
 RESULTS = []
+_RECALL_SKIPPED = False      # B6/B7/B8 因「无可检索数据」被 SKIP ⇒ 变异自证失去目标
+
+
+def skip(tag, why):
+    """判据面不存在（无检索数据 / 无可用 embedding）→ SKIP，不判 FAIL。"""
+    SKIPPED.append(tag)
+    RESULTS.append(("SKIP", tag, why))
+    print(f"[SKIP] {tag}  <- {why}")
 
 
 def check(tag, cond, detail=""):
@@ -155,27 +169,70 @@ try:
     KE.BM25Engine.search = spy_bm25
     VI.ChunkVectorIndex.search = spy_vec
 
-    db = str(REPO / "mbse.db")
+    # ⚠️ 2026-10-05：原硬编码 `REPO/"mbse.db"`（本项目第 6 处）⇒ 设 MBSE_DB_PATH 也无效。
+    db = os.environ.get("MBSE_DB_PATH") or str(REPO / "mbse.db")
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row      # 必须：hybrid_search 依赖 Row 行对象（漏了会在 _bm25_cache_get 崩）
+
+    # 向量路可用性自检：`hybrid_search` 里 `if qv and version != "bigram-tf"` ——
+    # embedding 配额耗尽时查询向量降级为 bigram-tf ⇒ 向量路被**设计性跳过**（防词面向量污染检索）
+    # ⇒ `vec` 恒为 None。这不是 recall_k 没透传，是环境无可用 embedding。
+    # 判据必须实测（Embedder 有 60s probe 缓存 + 熔断），不能只看配置。
+    def _vec_available():
+        try:
+            from knowledge_pipeline import Embedder
+            _qv, _ver = Embedder(conn).embed_with_version(["探针"])
+            return bool(_qv) and _ver != "bigram-tf"
+        except Exception as _e:
+            print("     （向量路不可用，跳过 vec 侧断言：%s）" % str(_e)[:90])
+            return False
+
+    VEC_OK = _vec_available()
+    print("     向量路可用：%s" % VEC_OK)
+
+    def _ck_recall(tag, want):
+        """recall_k 透传的真正被测点是 bm25 侧；vec 侧仅在向量路可用时一并验。"""
+        _bm = cap.get("bm25")
+        if _bm is None:
+            # 库里没有可检索的 chunks ⇒ 两条路都没被调用 ⇒ 判据面不存在（干净库/CI 常态）
+            global _RECALL_SKIPPED
+            _RECALL_SKIPPED = True
+            skip("%s recall_k=%d" % (tag, want),
+                 "本库无可检索数据（bm25/vec 均未被调用）⇒ 判据面不存在")
+            return
+        if VEC_OK:
+            check("%s recall_k=%d → 检索器收到 top_k=%d" % (tag, want, want),
+                  _bm == want and cap.get("vec") == want,
+                  f"bm25={_bm} vec={cap.get('vec')}")
+        else:
+            check("%s recall_k=%d → bm25 侧收到 top_k=%d（向量路因 embedding 降级被设计性跳过，仅验 bm25）"
+                  % (tag, want, want), _bm == want,
+                  f"bm25={_bm} vec={cap.get('vec')}")
+
     try:
         setc("rag", "recall_k", 7)
         KE.hybrid_search(conn, "转发器", top_k=3)
-        check("B6 recall_k=7 → 检索器收到 top_k=7", cap.get("bm25") == 7 and cap.get("vec") == 7,
-              f"bm25={cap.get('bm25')} vec={cap.get('vec')}")
+        _ck_recall("B6", 7)
 
         cap.clear()
         setc("rag", "recall_k", 33)
         KE.hybrid_search(conn, "转发器", top_k=3)
-        check("B7 recall_k=33 → 检索器收到 top_k=33", cap.get("bm25") == 33 and cap.get("vec") == 33,
-              f"bm25={cap.get('bm25')} vec={cap.get('vec')}")
+        _ck_recall("B7", 33)
 
         cap.clear()
         setc("rag", "recall_k", 0)
         KE.hybrid_search(conn, "转发器", top_k=6)
-        check("B8 recall_k=0 → 回落旧行为 top_k*2 = 12",
-              cap.get("bm25") == 12 and cap.get("vec") == 12,
-              f"bm25={cap.get('bm25')} vec={cap.get('vec')}")
+        _bm8 = cap.get("bm25")
+        if _bm8 is None:
+            skip("B8 recall_k=0 → 回落旧行为 top_k*2 = 12",
+                 "本库无可检索数据（bm25/vec 均未被调用）⇒ 判据面不存在")
+        elif VEC_OK:
+            check("B8 recall_k=0 → 回落旧行为 top_k*2 = 12",
+                  _bm8 == 12 and cap.get("vec") == 12,
+                  f"bm25={_bm8} vec={cap.get('vec')}")
+        else:
+            check("B8 recall_k=0 → bm25 侧回落 top_k*2 = 12（向量路降级跳过，仅验 bm25）",
+                  _bm8 == 12, f"bm25={_bm8} vec={cap.get('vec')}")
     finally:
         KE.BM25Engine.search = orig_bm25
         VI.ChunkVectorIndex.search = orig_vec
@@ -196,13 +253,16 @@ if os.environ.get("P14B_MUT_CHILD") == "1":
 
 print("\n── C 变异自证（把改动还原 → 断言必须 FAIL）──")
 # 每项：(说明, 文件, 原文, 替换为旧写法, 期望失败的断言标签)
+# ⚠️ 2026-10-05：标签一律写**稳定前缀**（如 "B6 recall_k=7"），不写完整断言名 ——
+#   B6/B7/B8 的断言名会随"向量路是否可用"分支而变化（降级时只验 bm25 侧），
+#   写全名会让变异自证在降级环境下**恒判未抓到**（本次实测踩到）。
 MUT = [
     ("还原向量路 recall_k 回硬编码", "knowledge_engine.py",
      "top_k=_recall_k, only_ids=allowed_ids", "top_k=top_k * 2, only_ids=allowed_ids",
-     ["A9 knowledge_engine 检索调用点已无 top_k*2 硬编码", "B6 recall_k=7 → 检索器收到 top_k=7"]),
+     ["A9 knowledge_engine 检索调用点已无 top_k*2 硬编码", "B6 recall_k=7"]),
     ("还原 BM25 路 recall_k 回硬编码", "knowledge_engine.py",
      "bm25.search(query, top_k=_recall_k)", "bm25.search(query, top_k=top_k * 2)",
-     ["A9 knowledge_engine 检索调用点已无 top_k*2 硬编码", "B6 recall_k=7 → 检索器收到 top_k=7"]),
+     ["A9 knowledge_engine 检索调用点已无 top_k*2 硬编码", "B6 recall_k=7"]),
     ("还原 inject_k 回硬编码 [:3]", "agent/pipeline_parts/context.py",
      "chunk_hits[:_inject_k]", "chunk_hits[:3]",
      ["A11 context.py 已无 `chunk_hits[:3]` 硬编码注入", "A12 context.py 读取 rag.inject_k 并以 [:_inject_k] 注入"]),
@@ -211,6 +271,9 @@ MUT = [
      ["B2 占比=0.05 → 窗口×比例 = 3276", "B3 占比>0 时绝对值键被忽略（仍按占比）"]),
 ]
 MUT_LABELS = [t for _, _, _, _, tags in MUT for t in tags]
+# 判据面不存在（本库无可检索数据 ⇒ B6 已 SKIP）时，B6 相关标签永远不会被抓到
+# ⇒ 从期望集里剔除，并让 C1/C2 一并 SKIP（否则变异自证会为"没有目标"而判红）。
+_EXPECT = [t for t in MUT_LABELS if not (_RECALL_SKIPPED and t.startswith("B6"))]
 
 mutation_failed_as_expected = []
 backup = {}
@@ -226,18 +289,23 @@ try:
                        cwd=str(REPO), capture_output=True, text=True, encoding="utf-8", errors="replace",
                        env={**os.environ, "P14B_MUT_CHILD": "1"})   # 护栏：子进程不再进 C 段
     out = (r.stdout or "") + (r.stderr or "")
-    for tag in sorted(set(MUT_LABELS)):
+    for tag in sorted(set(_EXPECT)):
         hit = re.search(r"\[FAIL\] " + re.escape(tag), out)
         if hit:
             mutation_failed_as_expected.append(tag)
         else:
             print(f"    !! 变异后该断言仍通过（=空转断言）：{tag}")
-    uniq = sorted(set(MUT_LABELS))
-    check(f"C1 变异后全部 {len(uniq)} 条相关断言转为 FAIL",
-          len(mutation_failed_as_expected) == len(uniq),
-          f"仅 {len(mutation_failed_as_expected)}/{len(uniq)} 条：{mutation_failed_as_expected}")
-    check("C2 四处变异的断言组全部被抓到",
-          len(set(mutation_failed_as_expected)) == len(uniq),
+    uniq = sorted(set(_EXPECT))
+    if not uniq:
+        skip("C1 变异后相关断言转为 FAIL", "判据面不存在（无可检索数据）⇒ 无目标断言")
+        skip("C2 变异的断言组全部被抓到", "同上")
+    else:
+        check(f"C1 变异后全部 {len(uniq)} 条相关断言转为 FAIL",
+              len(mutation_failed_as_expected) == len(uniq),
+              f"仅 {len(mutation_failed_as_expected)}/{len(uniq)} 条：{mutation_failed_as_expected}")
+    if uniq:
+        check("C2 变异的断言组全部被抓到",
+              len(set(mutation_failed_as_expected)) == len(uniq),
           f"未抓到 {[t for t in uniq if t not in mutation_failed_as_expected]}")
 finally:
     for p, b in backup.items():

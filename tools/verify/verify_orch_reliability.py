@@ -18,10 +18,10 @@
 """
 
 # ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测本地红（编排质量门话术判定失败）⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+# ── 已接进 CI（2026-10-05 第二轮第 2 项续：变异锚点漂移修复）──────────
+# 修复要点：编排可靠性。原 `src_of` 用 `textwrap.dedent(getsource(flow))` —— 该函数体内多行 prompt\n#   含**顶格行** ⇒ dedent 算出公共缩进 0 ⇒ 原样返回（首行仍 4 格）⇒ exec 抛\n#   IndentationError；而 M1「锚点命中」却仍报 hits=1（按行内容匹配，与缩进无关）\n#   ⇒ 典型「锚点中了、执行炸了」。改用 _srctool.src_of（按首行缩进剥离）。\n#   M3 锚点同步改为按行内容定位（源码已重构 uniq → _shown）。
+# 双环境实测：生产库 + 全新干净库 均 rc=0。
+
 import inspect
 import os
 import sqlite3
@@ -52,6 +52,8 @@ import llm as LLM                                                # noqa: E402
 from agent.pipeline import AgentPipeline                         # noqa: E402
 import agent.pipeline_parts.stream as S                          # noqa: E402
 from task_queue import TaskQueue                                 # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "tools", "verify"))        # noqa: E402
+import _srctool                                                  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -69,7 +71,13 @@ def new_conn():
 
 
 def src_of(fn):
-    return textwrap.dedent(inspect.getsource(fn))
+    # ⚠️ 2026-10-05：`textwrap.dedent` 对 `_stream_orchestrated_flow` **静默失效** ——
+    #   该函数体内有多行 prompt 字符串含**顶格行** ⇒ dedent 算出的公共缩进是 0 ⇒
+    #   原样返回（首行仍带 4 格）⇒ exec 抛 `IndentationError: unexpected indent (<flow_twin>, line 1)`，
+    #   而 M1 的「锚点命中」却仍报 hits=1（因为 _drop_line 按行内容匹配，与缩进无关）
+    #   ⇒ 表现为「锚点中了、执行炸了」，极易误判成锚点漂移。
+    #   改用 tools/verify/_srctool.src_of：按**首行缩进**剥离，不被多行字符串欺骗。
+    return _srctool.src_of(fn)
 
 
 class _StubAgentDef:
@@ -440,13 +448,29 @@ try:
     check("M2 计数写死 0 → G4 目标断言失败（被抓住）", "未成功" not in wordings(_ev_m2))
 
     # M3 摘要去重口径退回旧写法 → I1 必须翻
+    # ⚠️ 2026-10-05：源码已重构（`uniq` → `_shown`，新增占位名过滤 `real`），
+    #   旧锚点 `if uniq and len(uniq) != cnt:` 已不存在 ⇒ 静默不命中 ⇒ M3 三条全红。
+    #   ⇒ 一律按**行内容**定位（`_srctool.find_block`），不再写死变量名与缩进。
     _sa_src = open("agent/session_artifacts.py", encoding="utf-8").read()
-    _new_fmt = '        if uniq and len(uniq) != cnt:\n'
-    check("M3 变异锚点命中（摘要口径分支）", _new_fmt in _sa_src)
+    _sa_lines = _sa_src.replace("\r\n", "\n").split("\n")
+    _sa_head_idx, _sa_tail_idx = -1, -1
+    for _i, _ln in enumerate(_sa_lines):
+        if "if _shown and len(_shown) != cnt:" in _ln:
+            _sa_head_idx = _i
+            break
+    if _sa_head_idx >= 0:
+        for _j in range(_sa_head_idx + 1, len(_sa_lines)):
+            if 'lines.append(f"- {label} {cnt} 项" + tail)' in _sa_lines[_j]:
+                _sa_tail_idx = _j
+                break
+    check("M3 变异锚点命中（摘要口径分支）",
+          _sa_head_idx >= 0 and _sa_tail_idx > _sa_head_idx,
+          "head=%s tail=%s" % (_sa_head_idx, _sa_tail_idx))
     _ns3 = {}
-    _sa_old = _sa_src.replace(
-        '        if uniq and len(uniq) != cnt:\n            tail = f"（{cnt} 条中不重名 {len(uniq)} 种：{\'、\'.join(uniq)}）"\n        else:\n            tail = (f"（{\'、\'.join(uniq)}）" if uniq else "")\n',
-        '        tail = (f"（{\'、\'.join(uniq)}）" if uniq else "")\n')
+    # 旧写法：不分「条/种」口径，直接列去重名
+    _old_body = '        tail = (f"（{\'、\'.join(_shown)}）" if _shown else "")\n'
+    _sa_old = "\n".join(_sa_lines[:_sa_head_idx] + [_old_body.rstrip("\n")]
+                        + _sa_lines[_sa_tail_idx:])
     check("M3b 变异已生效（文本确被替换）", _sa_old != _sa_src)
     exec(compile(_sa_old, "<sa_twin>", "exec"), _ns3)
     _c = new_conn()

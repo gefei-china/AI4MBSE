@@ -345,6 +345,33 @@ jobs:
       - name: Guard 卸载装回全链路（20 项）
         run: python tools/verify/verify_uninstall_flow.py
 
+      # ── 2026-10-05 第二轮第 2 项续：变异锚点漂移 5 个（锚点不中 ⇒ 变异自证恒绿 ⇒ 门禁形同虚设）──
+      # 五者根因不同，但共同点是「看起来红了，实际是自证失效」：
+      #   · orch_reliability / multiturn_context：`textwrap.dedent(getsource(flow))` 静默失效
+      #     （函数体内多行 prompt 含顶格行 ⇒ 公共缩进算成 0）⇒ 锚点整体偏移 4 格。
+      #   · token_budget：夹具缺依赖（源码改走 tool_offload 后新增 `_tool_offload`/`self`）。
+      #   · llm_context_guard_mutate：源码文件是 CRLF，而变异锚点写 `\n` ⇒ count 恒 0。
+      #   · intent_history：P1-31 把 cache_enabled 默认改 False ⇒ 缓存整体不落库。
+      - name: Guard 编排可靠性与话术（45 项，含 4 组变异自证）
+        run: python tools/verify/verify_orch_reliability.py
+
+      - name: Guard 多轮上下文与产物标题（132 项，含 8 组变异自证）
+        run: python tools/verify/verify_multiturn_context.py
+
+      - name: Guard 运行时 token 预算（34 项）
+        run: python tools/verify/verify_token_budget.py
+
+      - name: Guard LLM 上下文守卫变异自证（5 变异全抓住）
+        run: python tools/verify/verify_llm_context_guard_mutate.py
+
+      - name: Guard 意图历史与缓存防线（47 项，含 8 组变异自证）
+        run: python tools/verify/verify_intent_history.py
+
+      # p14b：recall_k 透传。向量路在 embedding 降级时被**设计性跳过**（防词面向量污染检索），
+      # 此时只验 bm25 侧；干净库无可检索数据时 recall 三条整体 SKIP（判据面不存在）。
+      - name: Guard P1-4 检索召回与注入（29 项）
+        run: python tools/verify/verify_p14b.py
+
       # ── 记忆 ──
       - name: Guard 记忆管理（40 项）
         run: python tools/verify/verify_memory_admin.py

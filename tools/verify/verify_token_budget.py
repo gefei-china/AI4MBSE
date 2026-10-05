@@ -12,10 +12,10 @@
 """
 
 # ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测本地红 ⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+# ── 已接进 CI（2026-10-05 第二轮第 2 项续：变异锚点漂移修复）──────────
+# 修复要点：token 预算。源码改走 `tool_offload.model_side_content` 后，切出的源码块新增对\n#   `_tool_offload`/`tname`/`self`/`tools_def` 的依赖，而 exec 的 ns 只给了 result/cap/json\n#   ⇒ NameError。**是夹具缺依赖，不是产品缺陷**。补全 ns；超限分支 patch 掉 save_offload\n#   （真函数会落库，门禁不得写库），并补一层「契约层」直接验真函数本身。
+# 双环境实测：生产库 + 全新干净库 均 rc=0。
+
 import os
 import sys
 import json
@@ -82,17 +82,52 @@ print("     切出源码块：stream.py:%d 起，共 %d 字符" % (line_a, len(b
 
 BIG = "X" * 20000
 SMALL = "Y" * 100
-for label, raw, cap in (("超长 20000 字", BIG, _TOOL_MODEL_CAP), ("短结果 100 字", SMALL, _TOOL_MODEL_CAP)):
-    ns = {"result": {"ok": True, "result": raw}, "_TOOL_MODEL_CAP": cap, "json": json}
-    exec(blk_a, ns)
-    tc = ns["_t_content"]
-    got = len(str(tc.get("result") or ""))
-    check("(%s) 回填 content 长度 <= %d" % (label, cap), got <= cap, "实际 %d" % got)
-    if len(raw) > cap:
-        check("(%s) 超长时 truncated=True 且带 note" % label,
-              tc.get("truncated") is True and bool(tc.get("note")), tc.get("note"))
-    else:
-        check("(%s) 未超限时不加 truncated" % label, "truncated" not in tc)
+
+# ⚠️ 2026-10-05 修：P1-4 之后封顶改走 `tool_offload.model_side_content`，源码块新增了对
+#   `_tool_offload` / `tname` / `self` / `tools_def` / `tc` / `results` 的依赖。
+#   门禁 exec 时仍只给 `result`/`cap`/`json` ⇒ NameError。
+#   **这不等于产品有缺陷**——是夹具漏配了被测代码依赖的约定（老坑，勿再踩）。
+#   另：超限时真函数会 `save_offload` **落库** ⇒ 门禁必须 patch 掉，否则污染生产库。
+import types as _types
+import agent.pipeline_parts.tool_offload as _TO
+
+_real_save = _TO.save_offload
+_TO.save_offload = lambda *a, **k: 900001      # 只返回假 oid，不落库
+try:
+    for label, raw, cap in (("超长 20000 字", BIG, _TOOL_MODEL_CAP),
+                            ("短结果 100 字", SMALL, _TOOL_MODEL_CAP)):
+        ns = {"result": {"ok": True, "result": raw}, "_TOOL_MODEL_CAP": cap, "json": json,
+              "_tool_offload": _TO, "tname": "probe_tool", "tools_def": [],
+              "self": _types.SimpleNamespace(_tool_conv_ctx=0, _tool_whitelist=None),
+              "_weak": False, "weak_count": 0, "tc": {"id": "probe_call"}, "results": []}
+        exec(blk_a, ns)
+        tc = ns["_t_content"]
+        got = len(str(tc.get("result") or ""))
+        check("(%s) 回填 content 长度 <= %d" % (label, cap), got <= cap, "实际 %d" % got)
+        if len(raw) > cap:
+            check("(%s) 超长时 truncated=True 且带 note" % label,
+                  tc.get("truncated") is True and bool(tc.get("note")), tc.get("note"))
+        else:
+            check("(%s) 未超限时不加 truncated" % label, "truncated" not in tc)
+finally:
+    _TO.save_offload = _real_save
+    check("(a) 夹具已还原 save_offload（门禁未改写落库行为）", _TO.save_offload is _real_save)
+
+# 契约层：真函数本身是否遵守 cap（不经过源码块，独立验证一侧）
+_c_short, _o_short = _TO.model_side_content("probe_tool", {"ok": True, "result": SMALL},
+                                            0, cap=_TOOL_MODEL_CAP)
+check("(a) 契约层：<=cap 时真函数原样返回且 offloaded=False",
+      _c_short.get("result") == SMALL and _o_short is False)
+_c_big, _o_big = (None, None)
+_TO.save_offload = lambda *a, **k: 900001
+try:
+    _c_big, _o_big = _TO.model_side_content("probe_tool", {"ok": True, "result": BIG},
+                                            0, cap=_TOOL_MODEL_CAP)
+finally:
+    _TO.save_offload = _real_save
+check("(a) 契约层：>cap 时真函数给出引用块且 offloaded=True",
+      _o_big is True and len(str(_c_big.get("result") or "")) <= _TOOL_MODEL_CAP,
+      "offloaded=%s len=%s" % (_o_big, len(str(_c_big.get("result") or "")) if _c_big else None))
 
 check("stream.py 中不再存在未截断回填 result.get(\"result\", \"\")",
       'result.get("result", "")' not in stream_src)

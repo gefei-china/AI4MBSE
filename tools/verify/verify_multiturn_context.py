@@ -27,10 +27,10 @@
 """
 
 # ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测本地红（PASS 107 / FAIL 2）⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+# ── 已接进 CI（2026-10-05 第二轮第 2 项续：变异锚点漂移修复）──────────
+# 修复要点：多轮上下文。同上的 dedent 失效根因；M3 锚点原写死 4/8 格缩进，而 `_digest`\n#   被包进 try/except 后实际是 8/12 ⇒ find 返回 -1 ⇒ 拼出畸形源码 ⇒ try 块异常中断\n#   ⇒ M5 的断言**根本没执行**（假绿）。改用 _srctool.src_of + 按行内容定位。
+# 双环境实测：生产库 + 全新干净库 均 rc=0。
+
 import inspect
 import json
 import os
@@ -43,6 +43,10 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 os.chdir(ROOT)
+_VERIFY_DIR = os.path.join(ROOT, "tools", "verify")
+if _VERIFY_DIR not in sys.path:
+    sys.path.insert(0, _VERIFY_DIR)
+import _srctool  # noqa: E402  —— 正确 dedent 的 getsource（见 _srctool 模块注释）
 
 LIVE_DB = os.path.join(ROOT, "mbse.db")
 
@@ -604,13 +608,29 @@ try:
     check("M2 撤回子任务快照注入 → C1 目标断言失败（被抓住）", m2 is True, "m2=%s" % m2)
 
     # M3 撤回流式 planner 的摘要注入 → C2 必须翻
-    # 锚点缩进 = dedent 后的真实值（`if _digest:` 4 格 / `plan_prompt += (` 8 格；
-    # 结束锚 `    if stage_hint:` 4 格）—— 写死 8/12 会静默不命中。
-    _flow_src = textwrap.dedent(inspect.getsource(AgentPipeline._stream_orchestrated_flow))
-    _m3_start = _flow_src.find("    if _digest:\n        plan_prompt += (")
-    _m3_end = _flow_src.find("    if stage_hint:", _m3_start)
-    check("M3 变异锚点命中（stream 摘要注入块）", _m3_start > 0 and _m3_end > _m3_start)
-    _mut_flow = _flow_src[:_m3_start] + _flow_src[_m3_end:]
+    # ⚠️ 2026-10-05（两次踩坑，勿回退）：
+    #   ① `textwrap.dedent(getsource(_stream_orchestrated_flow))` **静默失效** ——
+    #      函数体内多行 prompt 含顶格行 ⇒ dedent 算出公共缩进 0 ⇒ 原样返回（首行仍 4 格）
+    #      ⇒ exec 抛 IndentationError，且因异常中断 try 块，M5 的断言**根本没执行**（假绿）。
+    #      ⇒ 改用 `_srctool.src_of`（按首行缩进剥离）。
+    #   ② 缩进锚点不可写死：`_digest` 计算被包进 try/except 后缩进从 4/8 变 8/12，
+    #      写死 `    if _digest:` 静默不命中（`find` 返回 -1 ⇒ 拼出畸形源码）。
+    #      ⇒ 一律按**行内容**定位。
+    _flow_src = _srctool.src_of(AgentPipeline._stream_orchestrated_flow)
+    _fl = _flow_src.split("\n")
+    _m3_start, _m3_end = -1, -1
+    for _i in range(len(_fl) - 1):
+        if "if _digest:" in _fl[_i] and "plan_prompt += (" in _fl[_i + 1]:
+            _m3_start = _i
+            break
+    if _m3_start >= 0:
+        for _j in range(_m3_start + 1, len(_fl)):
+            if "if stage_hint:" in _fl[_j]:
+                _m3_end = _j
+                break
+    check("M3 变异锚点命中（stream 摘要注入块）",
+          _m3_start >= 0 and _m3_end > _m3_start, "start=%s end=%s" % (_m3_start, _m3_end))
+    _mut_flow = "\n".join(_fl[:_m3_start] + _fl[_m3_end:])
     _ns3 = dict(AgentPipeline._stream_orchestrated_flow.__globals__)
     exec(compile(_mut_flow, "<flow_mut>", "exec"), _ns3)
     cap3, _, _ = _drive_stream(_ns3["_stream_orchestrated_flow"], _pipe, 11)

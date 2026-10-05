@@ -1,10 +1,10 @@
 """变异测试：证明两处自检的断言不是空转（2026-09-20，第二轮扩充）。
 
 # ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测本地红 ⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+# ── 已接进 CI（2026-10-05 第二轮第 2 项续：变异锚点漂移修复）──────────
+# 修复要点：变异自证。`openai_compat.py` / `llm/__init__.py` 是 **CRLF**（100%），而 MUTATIONS\n#   里的多行锚点写 `\n` ⇒ `orig.count(ob)` 恒 0 ⇒ M1/M2/M3 报「命中数=0」。\n#   单行锚点（M4/M5）不含换行故能命中 —— 现象完全吻合，是定位的关键线索。\n#   修：读时归一化为 LF 匹配，写回时按原行尾还原；还原比对须用**原始字节**。
+# 双环境实测：生产库 + 全新干净库 均 rc=0。
+
 
 流程（每个变异）：备份源文件 -> 注入变异 -> 跑对应自检 -> **必须 FAIL** -> 还原 -> 字节 diff 校验。
 
@@ -82,7 +82,13 @@ for name, rel, verify, old, new in MUTATIONS:
     fp = os.path.join(ROOT, rel)
     bak = os.path.join(TMP, rel.replace("/", "__").replace("\\", "__") + ".orig")
     shutil.copy2(fp, bak)
-    orig = open(fp, "rb").read()
+    orig_raw = open(fp, "rb").read()
+    # ⚠️ 2026-10-05 修：`llm/providers/openai_compat.py` 与 `llm/__init__.py` 是 **CRLF**（100%），
+    #   而 MUTATIONS 里的多行锚点写的是 `\n` ⇒ `orig.count(ob)` 恒为 0 ⇒ M1/M2/M3 报
+    #   「命中数=0」。单行锚点（M4/M5）不含换行故能命中 —— 现象完全吻合。
+    #   ⇒ 读时归一化为 LF 做匹配，写回时按原文件行尾还原（不改格式、不污染 diff）。
+    _crlf = b"\r\n" in orig_raw
+    orig = orig_raw.replace(b"\r\n", b"\n")
     ob, nb = old.encode("utf-8"), new.encode("utf-8")
     n = orig.count(ob)
     if n != 1:
@@ -90,7 +96,10 @@ for name, rel, verify, old, new in MUTATIONS:
         bad += 1
         shutil.copy2(bak, fp)
         continue
-    open(fp, "wb").write(orig.replace(ob, nb))
+    _patched = orig.replace(ob, nb)
+    if _crlf:
+        _patched = _patched.replace(b"\n", b"\r\n")
+    open(fp, "wb").write(_patched)
     try:
         rc2, fails2, summ2 = run_verify(verify)
         caught = rc2 != 0
@@ -103,7 +112,8 @@ for name, rel, verify, old, new in MUTATIONS:
             bad += 1
     finally:
         shutil.copy2(bak, fp)
-        same = open(fp, "rb").read() == orig
+        # ⚠️ 必须与 **原始字节** `orig_raw` 比（不是归一化后的 `orig`），否则 CRLF 文件恒 False
+        same = open(fp, "rb").read() == orig_raw
         print("   还原：字节一致=%s" % same)
         if not same:
             bad += 1

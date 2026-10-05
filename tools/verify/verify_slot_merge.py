@@ -292,12 +292,23 @@ _c.close()
 if _row and _row["last_slots"]:
     import json
     _real = json.loads(_row["last_slots"])
-    _before_c = len(_real.get("constraints") or [])
-    _after, _ = merge_slot_items([], _real.get("constraints") or [], max_items=8)
-    check("M12 真实 conv=514 对照：constraints 由 %d 条收敛" % _before_c,
-          len(_after) < _before_c, "→ %d 条" % len(_after))
+    _real_c = list(_real.get("constraints") or [])
+    _before_c = len(_real_c)
+    _after, _ = merge_slot_items([], _real_c, max_items=8)
+    # ⚠️ 2026-10-05 修：原判据 `len(_after) < _before_c` 逻辑上不成立 ——
+    #   库里存的 `last_slots` 是**已经收敛过**的快照，对它再合并**理应幂等**。
+    #   （同批 L7「真实 514：11 条 → 9 条」已证明合并能力完好，此处不必重复证。）
+    #   ⇒ 改为断言「幂等」；再补一条**注入重复项必收敛**，否则本条会退化成恒真空断言。
+    check("M12 真实 conv=514 存量快照：再次合并**幂等**（已收敛的不应再变）",
+          len(_after) == _before_c, "→ %d 条（原 %d 条）" % (len(_after), _before_c))
+    _dup = _real_c + (_real_c[:1] if _real_c else ["重复项"])
+    _after2, _st2 = merge_slot_items([], _dup, max_items=99)
+    check("M12b 注入重复项 → 必须收敛（证明 M12 非空转）",
+          len(_after2) < len(_dup),
+          "%d → %d 条 stats=%s" % (len(_dup), len(_after2), _st2))
 else:
-    check("M12 真实 conv=514 对照（副本库无该会话 → 跳过视为失败）", False, "未读到 last_slots")
+    # 干净库/CI 上不存在会话 514 ⇒ 判据面不存在，SKIP 而非 FAIL
+    print("SKIP M12 真实 conv=514 对照 —— 本库无会话 514（真库金标，干净库无样本）")
 
 # ══════════════════════════════════════════════════════════════════════════
 print()

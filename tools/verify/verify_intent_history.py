@@ -60,10 +60,10 @@ A 净化（纯函数）｜C 采纳门**确定性**判据（stub 掉 LLM，零抖
 """
 
 # ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测本地红（B3 对照：不带历史的高置信结论仍写缓存）⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+# ── 已接进 CI（2026-10-05 第二轮第 2 项续：变异锚点漂移修复）──────────
+# 修复要点：意图历史。P1-31（2026-10-02）把 `intent.cache_enabled` 默认改为 False（实测收益≈0）\n#   ⇒ 缓存整体不落库 ⇒ B3 结构性不可达、M3 变异造不出差异（变异自证恒绿）。\n#   ⇒ 门禁在本进程显式开启开关；变异体是 exec 出的**新类**，须单独再开一次。\n#   另：本门禁 run() 会 `DELETE FROM intent_cache` ⇒ 进入时 dump、退出前还原并自证。\n#   D4/D5 属真库金标（会话 325 / system_mgmt 候选），干净库无样本 ⇒ SKIP 不 FAIL。
+# 双环境实测：生产库 + 全新干净库 均 rc=0。
+
 import os
 import sys
 
@@ -74,12 +74,23 @@ os.chdir(ROOT)
 from agent.pipeline import AgentPipeline   # noqa: E402
 from database import get_db                # noqa: E402
 
-OK, FAIL = [], []
+OK, FAIL, SKIPPED = [], [], []
 
 
 def chk(name, cond, ev=""):
     (OK if cond else FAIL).append(name)
     print(("  [PASS] " if cond else "  [FAIL] ") + name + (("  <- " + ev) if ev else ""))
+
+
+def skip(name, why):
+    """判据面不存在（缺样本/缺数据）→ 记 SKIP，**不**判 FAIL。
+
+    与 FAIL 的界线：**判据面不存在** vs **判据面存在但结论错**。
+    把前者判成 FAIL 会让门禁在干净库/CI 上恒红，逼得后来人去改阈值或改产品代码，
+    实际是"用不存在的数据去证伪"（本仓老坑）。
+    """
+    SKIPPED.append(name)
+    print("  [SKIP] %s  <- %s" % (name, why))
 
 
 HIST_TOPIC = [
@@ -150,6 +161,32 @@ def stub_run(router, ret, text=Q_FOLLOW, history=HIST_TOPIC, prev="impact"):
 pipe = AgentPipeline()
 pipe._load_db_agents()          # 必须：否则语义索引为空，本测试判据面整体不存在
 rt = pipe.router
+
+# ⚠️ 2026-10-05 修：P1-31（2026-10-02）把 `intent.cache_enabled` 默认改为 **False**
+#   （实测收益≈0：当初 6 行写入 / hit_count 恒 0，属"写了但永不读"的纯开销）
+#   ⇒ `_cache_put` 直接 return ⇒ 缓存**整体不落库** ⇒
+#     B3（期望"不带历史的高置信结论仍写缓存"）结构性不可达，恒 FAIL；
+#     M3 变异（强制 cacheable=True）也造不出差异 ⇒ 变异自证恒绿（门禁形同虚设）。
+#   B2/B3 验的是**缓存防线逻辑本身**（带历史不写 / 不带历史写），与开关默认值无关
+#   ⇒ 门禁在本进程内显式开启开关，让判据面真正存在；退出前还原并把表恢复原状。
+_RT_CLS = type(rt)
+_orig_cfg_get = _RT_CLS._cfg_get
+
+
+def _cfg_get_cache_on(key, default):
+    return True if key == "cache_enabled" else _orig_cfg_get(key, default)
+
+
+_RT_CLS._cfg_get = staticmethod(_cfg_get_cache_on)
+
+# 副作用封口：本门禁 `run()` 会 `DELETE FROM intent_cache`（清整表），且开启开关后会写入。
+# ⇒ 先把原表 dump 到内存，退出前整体还原，并自证行数一致（否则是静默污染生产库）。
+_C0 = get_db()
+_SNAP_COLS = [r[1] for r in _C0.execute("PRAGMA table_info(intent_cache)")]
+_SNAP = [tuple(r) for r in _C0.execute("SELECT * FROM intent_cache")]
+_C0.close()
+_SNAP_N = len(_SNAP)
+
 CTX_TOPIC = rt._sanitize_history(HIST_TOPIC, Q_FOLLOW)
 CTX_NOISY = rt._sanitize_history(HIST_NOISY, Q_FOLLOW)
 GATE = float(rt._cfg_get("history_llm_min", 0.55))
@@ -333,10 +370,15 @@ print(f"     规则命中 {Q_RULE!r} -> route={mR.get('route')} sem_alt={mR.get(
 chk("D2 规则命中路径 sem_alt 为 None（入口重置生效，不读上一轮残留）",
     mR.get("sem_alt") is None, f"实得={mR.get('sem_alt')}")
 chk("D3 _load_history_for_intent(0) → []", pipe._load_history_for_intent(0) == [])
+# ⚠️ 2026-10-05：D4 是**真库金标**（断言真实会话 325 的历史池），干净库/CI 上必然无此会话
+#   ⇒ 判据面不存在 ⇒ SKIP，不是 FAIL（否则 CI 恒红，会逼人去改产品代码——本仓老坑）。
 _pool = pipe._load_history_for_intent(325)
-chk("D4 真实会话 325 → 原始池非空，且净化后能拿到有效历史",
-    len(_pool) > 0 and bool(rt._sanitize_history(_pool, "那它的风险呢")),
-    f"池={len(_pool)} 条")
+if not _pool:
+    skip("D4 真实会话 325 → 原始池非空，且净化后能拿到有效历史",
+         "本库无会话 325 的历史消息（真库金标，干净库无样本）")
+else:
+    chk("D4 真实会话 325 → 原始池非空，且净化后能拿到有效历史",
+        bool(rt._sanitize_history(_pool, "那它的风险呢")), f"池={len(_pool)} 条")
 
 
 def _idx_of(opts, kw):
@@ -351,8 +393,14 @@ _q_al = pipe._intent_confirm_questions("随便说点啥", "chat", {"intent": "sy
 i_no = _idx_of(_q_no[0]["options"], "系统管理")
 i_al = _idx_of(_q_al[0]["options"], "系统管理")
 print(f"     「系统管理」在选项里的位次：无 sem_alt -> {i_no} ｜ 有 sem_alt -> {i_al}")
-chk("D5 语义意见进澄清卡排序（system_mgmt 位次前移且进前二）",
-    i_al < i_no and i_al <= 1, f"无={i_no} 有={i_al}")
+# 判据面自证：本库若连"系统管理"这个意图都没有（干净库无 system_mgmt agent），
+# 位次恒为 999 ⇒ 比大小没有意义 ⇒ SKIP（不是"排序功能坏了"）。
+if i_no == 999 and i_al == 999:
+    skip("D5 语义意见进澄清卡排序（system_mgmt 位次前移且进前二）",
+         "本库无 system_mgmt 意图候选（判据面不存在）")
+else:
+    chk("D5 语义意见进澄清卡排序（system_mgmt 位次前移且进前二）",
+        i_al < i_no and i_al <= 1, f"无={i_no} 有={i_al}")
 
 # ─────────────────── E. 变异自证 ───────────────────
 print("── E. 变异自证（只认「新增 FAIL」；全部走 stub → 判定确定性）──")
@@ -368,6 +416,13 @@ def make_router(src):
     mm = ns["IntentRouter"]()
     mm._semantic_index = rt._semantic_index
     mm._db_intents = dict(rt._db_intents)
+    # ⚠️ 变异体是 exec 出来的**新类**，与 `type(rt)` 无继承关系
+    #   ⇒ 上面给原类打的 `_cfg_get` patch 不会传导过来 ⇒ M3 造不出"写了缓存"的差异（假绿）。
+    #   这里必须对**每个**变异体同样开启 cache_enabled。
+    _cls = type(mm)
+    _orig = _cls._cfg_get
+    _cls._cfg_get = staticmethod(
+        lambda key, default: True if key == "cache_enabled" else _orig(key, default))
     return mm
 
 
@@ -479,9 +534,25 @@ print(f"     M5 规则命中 -> sem_alt={mm5.get('sem_alt')}")
 chk("M5 删入口重置 → D2 新增 FAIL（读到上一轮残留）", mm5.get("sem_alt") is not None,
     f"实得={mm5.get('sem_alt')}")
 
+# ── 副作用还原 + 自证（本门禁清空并写过 intent_cache）──
+try:
+    _C1 = get_db()
+    _C1.execute("DELETE FROM intent_cache")
+    if _SNAP:
+        _ph = ",".join("?" * len(_SNAP_COLS))
+        _C1.executemany("INSERT INTO intent_cache (%s) VALUES (%s)"
+                        % (",".join(_SNAP_COLS), _ph), _SNAP)
+    _C1.commit()
+    _n1 = _C1.execute("SELECT count(*) FROM intent_cache").fetchone()[0]
+    _C1.close()
+    chk("Z9 门禁未污染 intent_cache（退出前已还原）", _n1 == _SNAP_N,
+        "退出时 %d 行 / 进入时 %d 行" % (_n1, _SNAP_N))
+except Exception as _e:
+    chk("Z9 门禁未污染 intent_cache（退出前已还原）", False, "还原异常: %s" % _e)
+
 print(f"\n真实 LLM 观测：静默采纳 %d 次 / 需确认（llm_history 非静默）%d 次"
       % (INV["quiet"], INV["loud"]))
-print(f"结果：{len(OK)} 通过 / {len(FAIL)} 失败")
+print(f"结果：{len(OK)} 通过 / {len(FAIL)} 失败 / {len(SKIPPED)} 跳过（判据面不存在）")
 if FAIL:
     print("失败项：\n  " + "\n  ".join(FAIL))
     sys.exit(1)
