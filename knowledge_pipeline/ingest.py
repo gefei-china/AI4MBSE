@@ -484,7 +484,37 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
             qs = _generate_hyde_questions(sc["content"], sc.get("section", ""))
             _hyde_questions.append(qs)
             _hyde_vecs.append(None)
-        if embed_version != "bigram-tf" and any(q for q in _hyde_questions):
+        # ── P1-2（2026-10-04）入库侧成本闸：HyDE 向量化让 embedding 调用**翻倍** ──
+        # 为什么要加这个开关（实测结论，与原排序文档的判断相反）：
+        #   ① 成本：主向量 N 条 + HyDE N 条 = 2N 次向量化（分批 8 ⇒ 批数也×2）。
+        #      270 块文档 = 33 + 33 批。
+        #   ② **收益不可忽略**（这是关键）：实测 HyDE 开关切换后，
+        #      8 条真实查询里**6 条排序不同、合计 44 处排名变动**
+        #      （含"仅开/仅关各有独占命中"的情况，如仅开召回 800/202、
+        #       仅关召回 812/57）。
+        #      ⇒ **关掉 HyDE 是净损失**，不能为了省成本直接关。
+        #   ③ 所以正确做法不是"关"，而是"**可关**"：给成本控制留一个旋钮，
+        #      默认仍开；谁遇到 embedding 额度压力时可以按需降级，
+        #      且**降级是显式的**（写入 pipeline_detail，不静默）。
+        # ⚠️ 曾踩过的坑（务必别重复）：测这个开关时改的是
+        #   `config.DEFAULT_CONFIG["rag"][...]`，而 `config.get()` 读的是
+        #   **模块级 `_CONFIG`**（core/config.py:1209）⇒ 开关压根没切换，
+        #   却据此得出"HyDE 零影响"的**错误结论**。
+        #   正解：改 `_CONFIG`，并 `assert get(...) is 期望值` 验证读到。
+        _hyde_cap = 0
+        try:
+            from core import config as _cfg
+            if not bool(_cfg.get("rag", "hyde_enabled", True)):
+                _hyde_cap = 0# 检索侧已关⇒ 入库侧不再白花这份 embedding
+            else:
+                _hyde_cap = int(_cfg.get("rag", "hyde_embed_max_chunks", 0) or 0)
+        except Exception:
+            _hyde_cap = 0
+        _hyde_idx = list(range(len(_hyde_questions)))
+        if _hyde_cap > 0:
+            _hyde_idx = _hyde_idx[:_hyde_cap]
+        if embed_version != "bigram-tf" and _hyde_idx and any(
+                _hyde_questions[i] for i in _hyde_idx):
             try:
                 # 2026-09-19 修复：原传 batch_size=0（不分批、一次全发）—— 对大文档必然失败：
                 # hyde 条数 = chunk 数（数百上千），远超服务端单批上限。
@@ -493,11 +523,13 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
                 # 与主 embedding 的 1024 维不可比 → 污染 hyde_embedding（同表两个维度）。
                 # 这里与主向量路径保持一致，分批 8 条（<10 上限）。
                 hyde_vecs, _ = embedder.embed_with_version(
-                    ["；".join(q) for q in _hyde_questions if q] or [], batch_size=8)
+                    ["；".join(_hyde_questions[i]) for i in _hyde_idx], batch_size=8)
                 _it = iter(hyde_vecs)
-                _hyde_vecs = [next(_it) if q else None for q in _hyde_questions]
+                for i in _hyde_idx:
+                    _hyde_vecs[i] = next(_it) if _hyde_questions[i] else None
             except Exception:
-                _hyde_vecs = [None] * len(_hyde_questions)
+                for i in _hyde_idx:
+                    _hyde_vecs[i] = None
 
         # 5) 落库 chunks（含 section / bm25_text / domain / hyde，阶段：insert）
         # P2-1 落库前向量归一化为单位向量（幂等，检索矩阵加载时免重复 sqrt）

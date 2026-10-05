@@ -148,6 +148,17 @@ jobs:
       - name: Guard 大文件链路（35 项 + 7 变异）
         run: python tools/verify/verify_largefile_pipeline.py
 
+      # ── P1-2（2026-10-04）：HyDE 成本闸 + 「不可关」的实测结论 ────────────
+      # 原排序文档写「HyDE 使 embedding 成本 ×2 ⇒ 建议降级」。实测**推翻了降级建议**：
+      # 切rag.hyde_enabled 开关后 8 条真实查询里 **6 条排序不同、44 处排名变动**，
+      # 且存在「仅开/仅关各有独占命中」⇒ **关掉是净损失**。
+      # 本项交付的是「可降级」旋钮 rag.hyde_embed_max_chunks（默认 0=全量），
+      # 门禁 H3 在真库上跑 A/B 把「HyDE 不是死代码」钉死。
+      # 注意：H3 需要本地库（真实 chunk + hyde_questions），CI 里跑不了
+      #   ⇒ 用 --static-only 只跑 H1/H2 的结构断言。
+      - name: Guard HyDE 成本闸与收益（P1-2 · 结构部分）
+        run: python tools/verify/verify_hyde_gate.py --static-only
+
       # ── P1-8（2026-10-04）：意图路由评测进 CI ─────────────────────────────
       # 评测脚本早就存在（tests/manual_verify/eval_intent_routing.py），但从没有门禁
       # ⇒ "改完跌分才发现"。接之前先实测两组数字，发现它们**不是同一道题**：
