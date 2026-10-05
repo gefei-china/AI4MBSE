@@ -140,13 +140,19 @@ def t_ci_has_new_batch(root=ROOT):
             "verify_p1_project_attribution",
             "verify_p1_project_attribution_mutate",
             "verify_agent_tools_no_params", "verify_branch_protection_rules",
-            "verify_b1_runtime_smoke"]
+            "verify_b1_runtime_smoke",
+            # 第二轮第 2 项：红灯门禁归因后修复并接线（生产库 + 干净库双绿）
+            "verify_continuation", "verify_partial_persist",
+            "verify_orch_whitelist", "verify_plugin_bind_removed",
+            "verify_uninstall_flow"]
     missing = [m for m in must if ("tools/verify/%s.py" % m) not in cmds]
     ok = _rec("W2a 本批 %d 个门禁全部在 ci.yml 执行行里" % len(must),
               not missing, "缺：%s" % missing)
     # 反证：被排除的那几个**必须不在** CI 里（否则我的分类是错的）
-    excluded = ["verify_ontology_dom_range", "verify_orch_whitelist",
-                "verify_plugin_bind_removed", "verify_chat_clarify_partial",
+    # ⚠️ 2026-10-05 更新：verify_orch_whitelist / verify_plugin_bind_removed 已于第二轮第 2 项
+    # 修复并接线（双环境实测绿），故从「排除」移入上面的 `must`。
+    # 教训复现：**"曾排除过"不等于"该排除"** —— 排除清单本身也会过期，要重新实测。
+    excluded = ["verify_ontology_dom_range", "verify_chat_clarify_partial",
                 "verify_conv_summary_api", "verify_projects_nav",
                 "verify_s3_e2e", "verify_kb_dashboard"]
     wrongly = [e for e in excluded if ("tools/verify/%s.py" % e) in cmds]

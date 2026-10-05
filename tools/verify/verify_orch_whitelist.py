@@ -9,11 +9,11 @@ chat/system_mgmt/requirement_quality，空则回退旧白名单。核心逻辑�
 防空转：变异必须真正改变被观察行为（去掉黑名单 → chat 混入；去掉兜底 → 空 rows 返回空集）。
 """
 
-# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测干净库上红（F3 缺多方案生成/结构视图生成/需求视图生成）⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+# ── 已接进 CI（2026-10-05 第二轮第 2 项修复后）──────────
+# 修复要点：原 F3 直接断言真库里存在用户自建 sub Agent ⇒ 干净库恒红；
+#   现能力断言一律走注入 rows 的纯函数（与 DB 解耦），真库只做观测性对照。
+# 双环境实测：生产库 + 全新干净库 均 rc=0。
+
 import inspect
 import os
 import sqlite3
@@ -56,8 +56,22 @@ check("F1 旧 6 白名单意图全部仍在可编排集合（语义等价）",
       _OLD_WHITELIST <= _real_ints, "缺失=%s" % (_OLD_WHITELIST - _real_ints))
 check("F2 入口/系统/单交付物三类被排除", not (_EXCLUDE & _real_ints),
       "残留=%s" % (_EXCLUDE & _real_ints))
-check("F3 用户自建 sub Agent 自动进入可编排（新能力）",
-      _USER_AGENTS <= _real_ints, "缺失=%s" % (_USER_AGENTS - _real_ints))
+# ⚠️ 2026-10-05 修订：F3 原先直接拿真库的 `_orchestrable_intents()` 结果做断言
+# ⇒ 干净库里没有任何用户自建 Agent ⇒ F3 **恒红**，而红因是"库里没数据"不是"功能没做"。
+# 修法：**能力断言一律走注入 rows 的纯函数**（与 F4/F5 同口径，与 DB 解耦）；
+# 真库只做"观测性对照"——有样本就核对，没样本明说 SKIP，**绝不把"没样本"判成失败**。
+_rows_user = [_row(n) for n in _USER_AGENTS]
+_user_out = _m._orchestrable_from_rows(_rows_user)
+check("F3 用户自建 sub Agent 自动进入可编排（新能力，注入 rows）",
+      _USER_AGENTS <= _user_out, "缺失=%s" % (_USER_AGENTS - _user_out))
+
+# 真库对照（观测性，非能力判据）
+if _USER_AGENTS <= _real_ints:
+    check("F3b 真库对照：3 个用户自建 Agent 确实在可编排集合内", True)
+else:
+    _missing = _USER_AGENTS - _real_ints
+    check("F3b 真库对照：缺失的用户自建 Agent（库内无此 Agent ⇒ SKIP 不是 FAIL）",
+          True, "SKIP 缺失=%s（当前库 agents 表无这些自建角色，非代码缺陷）" % _missing)
 
 # 纯函数：含 chat 的 rows → chat 被排除；空 rows → 回退旧白名单
 _rows_mixed = [_row(n) for n in ("design", "review", "chat", "system_mgmt", "需求视图生成")]

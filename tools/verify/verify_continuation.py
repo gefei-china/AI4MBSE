@@ -16,11 +16,12 @@
 用隔离副本库：tmp/uisafe_r5.db（由 mbse.db 经 sqlite3.backup() 拷贝）。
 """
 
-# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测本地红（L1 反例全部拒绝 判定失败）⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+# ── 已接进 CI（2026-10-05 第二轮第 2 项修复后）──────────
+# 修复要点：carry 词表已收敛到 common.TOPIC_CARRY_WORDS（共享常量）；
+#   门禁原按内联元组取值 ⇒ 6 条断言恒红（假红，功能一直是好的）。
+#   现两种写法都解析 + 运行时交叉验证；变异锚点改打 common.py（先定义方后使用方 reload）。
+# 双环境实测：生产库 + 全新干净库 均 rc=0。
+
 import io
 import os
 import re
@@ -29,12 +30,14 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HIST = os.path.join(ROOT, "agent", "pipeline_parts", "history.py")
+COMMON = os.path.join(ROOT, "agent", "pipeline_parts", "common.py")
 STREAM = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
 DB = os.path.join(ROOT, "tmp", "uisafe_r5.db")
 
 # 必须在导入工程模块前设好库路径（core/config.py 读环境变量）
 os.environ["MBSE_DB_PATH"] = DB
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 fails, passes = [], []
 
@@ -52,8 +55,37 @@ def read(p):
 # ─────────────────────────────────────────────── L2 源码级
 print("\n=== L2 源码级：carry 词表 + 判据 + 注入锚点 ===")
 hist_src = read(HIST)
+common_src = read(COMMON)
+
+# ⚠️ 2026-10-05 修订（上一版在这里判成"产品没做"，是**误判**）：
+# carry 词表已从「history.py 内联元组」收敛为「common.py 的 TOPIC_CARRY_WORDS 共享常量」
+# （P1-4 单一来源：_tag_topics 与 _is_topic_switch 共用）。
+# 旧门禁只认内联元组 ⇒ 正则匹配不到 ⇒ 6 条"carry 含 X"全部恒 FAIL。
+# 功能一直是好的（L1 正例 13/13 全过就是反证），坏的是门禁的取值方式。
+# ⇒ 两种写法都要解析，并额外断言"确实是单一来源"。
 m = re.search(r"carry\s*=\s*\(([^)]*)\)", hist_src, re.S)
 carry_body = m.group(1) if m else ""
+if not carry_body:
+    m2 = re.search(r"^\s*carry\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:#.*)?$",
+                   hist_src, re.M)
+    const_name = m2.group(1) if m2 else None
+    ck("history.py 的 carry 指向共享常量（单一来源，未各写一份）",
+       const_name == "TOPIC_CARRY_WORDS", "实际=%r" % const_name)
+    m3 = re.search(r"^%s\s*=\s*\(([^)]*)\)" % re.escape(const_name or "TOPIC_CARRY_WORDS"),
+                   common_src, re.S | re.M)
+    carry_body = m3.group(1) if m3 else ""
+    ck("common.py 能解析出 %s 的字面量" % const_name, bool(carry_body),
+       "解析失败=常量改名或写法又变了")
+# 运行时交叉验证：防止"源码里写着、但导入进来的不是这一份"
+try:
+    from agent.pipeline_parts.common import TOPIC_CARRY_WORDS as _RT_CARRY
+    rt_ok = all(w in _RT_CARRY for w in ("重试", "重跑", "重新", "再来", "retry", "continue"))
+except Exception as _e:
+    rt_ok = False
+    _RT_CARRY = ()
+ck("运行时 TOPIC_CARRY_WORDS 含全部续作词（导入的就是源码那份）", rt_ok,
+   str(tuple(_RT_CARRY))[:90])
+
 for w in ("重试", "重跑", "重新", "再来", "retry", "continue"):
     ck("carry 含 '%s'" % w, w in carry_body)
 ck("_is_continuation_input 已定义", "def _is_continuation_input" in hist_src)
@@ -126,19 +158,36 @@ def run_tag(conn, force_reload=False):
     ⚠️ 变异自证必须 force_reload=True：`HistoryMixin` 在本进程已被 import，
     Python 用的是**内存里的旧类**，改盘上的 .py 不会生效 → 变异永远是"假绿"。
     （实测踩过：变异后仍继承话题，看似"断言空转"，实为模块未重载。）
+
+    ⚠️⚠️ 第二层（2026-10-05 补）：光 reload `history` **不够**。
+    carry 词表现在定义在 `common.TOPIC_CARRY_WORDS`，history 里是
+    `from .common import TOPIC_CARRY_WORDS` —— 只 reload history 时，
+    `common` 仍在 sys.modules 里，取到的是**缓存里的旧元组**，
+    于是"变异锚点命中了但行为没变"（n_sub=1 却观察不到差异）
+    ⇒ 这正是 MEMORY 里「变异 VACUOUS」的形态，别急着去改断言。
+    ⇒ 必须**先 reload 定义方（common），再 reload 使用方（history）**。
     """
     try:
         import importlib
+        from agent.pipeline_parts import common as _common_mod
         from agent.pipeline_parts import history as _hist_mod
     except Exception as e:
         return None, "导入失败 %s" % e
     if force_reload:
-        importlib.reload(_hist_mod)
+        importlib.reload(_common_mod)      # 先定义方
+        importlib.reload(_hist_mod)        # 再使用方（重新 from .common import）
     inst = _hist_mod.HistoryMixin()
     mapping = inst._tag_topics(conn, CONV_ID)
     conn.commit()
     return mapping, None
 
+
+# ⚠️ 2026-10-05：同 verify_partial_persist —— tmp/uisafe_r5.db 原先从不建表，
+# CI 上是 0 字节空库 ⇒ `no such table: messages` 崩溃。这里就地补 schema。
+from _tmpdb import ensure_schema  # noqa: E402
+
+ck("夹具自证：tmp 库已有完整 schema（空库则就地 init_db）", ensure_schema(DB),
+   "建库失败=门禁环境坏了")
 
 conn = sqlite3.connect(DB)
 conn.row_factory = sqlite3.Row
@@ -168,18 +217,20 @@ else:
 
 # ─────────────────────────────────────────────── L4 变异自证
 print("\n=== L4 变异自证：还原旧 carry 词表 → L3 断言必须转 FAIL ===")
-orig = read(HIST)
+# ⚠️ 变异锚点必须打在**词表真正的定义处**：现在它在 common.py 的 TOPIC_CARRY_WORDS，
+# 不在 history.py（history.py 只是引用）。打错地方 ⇒ 变异静默不命中，
+# 于是"变异后断言转 FAIL"永远证不出来 ⇒ 假绿（本项目已踩第三次）。
+orig = read(COMMON)
 try:
-    # 还原成"没有 重试/重跑/重新/再来/retry/continue"的旧词表（用正则定位，避免缩进/换行漂移）
     mutated, n_sub = re.subn(
-        r'carry\s*=\s*\([^)]*\)',
-        'carry = ("继续", "接着", "还有", "另外", "再说", "那", "再")',
-        orig, count=1, flags=re.S)
-    anchor_hit = (n_sub == 1 and "重试" not in re.search(r'carry\s*=\s*\([^)]*\)', mutated, re.S).group(0))
-    ck("变异锚点命中且确实移除了续作词", anchor_hit,
-       "n_sub=%d" % n_sub)
+        r'^TOPIC_CARRY_WORDS\s*=\s*\([^)]*\)',
+        'TOPIC_CARRY_WORDS = ("继续", "接着", "还有", "另外", "再说", "那", "再")',
+        orig, count=1, flags=re.S | re.M)
+    m_after = re.search(r'^TOPIC_CARRY_WORDS\s*=\s*\([^)]*\)', mutated, re.S | re.M)
+    anchor_hit = (n_sub == 1 and m_after is not None and "重试" not in m_after.group(0))
+    ck("变异锚点命中且确实移除了续作词", anchor_hit, "n_sub=%d" % n_sub)
     if anchor_hit:
-        with io.open(HIST, "w", encoding="utf-8", newline="") as f:
+        with io.open(COMMON, "w", encoding="utf-8", newline="") as f:
             f.write(mutated)
         # 重跑同一场景（必须先清空 topic，否则 _tag_topics 命中"已全打标"短路，变异无从生效）
         conn2 = sqlite3.connect(DB)
@@ -203,9 +254,9 @@ try:
            "" if variant_flipped else "变异无效：旧行为下 '重试' 仍继承话题 → 断言是空转")
         conn2.close()
 finally:
-    with io.open(HIST, "w", encoding="utf-8", newline="") as f:
+    with io.open(COMMON, "w", encoding="utf-8", newline="") as f:
         f.write(orig)
-restored = (read(HIST) == orig)
+restored = (read(COMMON) == orig)
 ck("源文件已逐字节还原", restored, "" if restored else "还原失败！")
 
 # 清场

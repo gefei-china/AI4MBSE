@@ -88,8 +88,22 @@ def _seed(conn):
                  VALUES ('MCP-文档解析', 'http://doc-mcp:4002', '["parse","ocr","chunk","extract"]', 'online', 210)""")
 
     # 预置本体类型（O-3：补 MBSE 通用类型 需求/部件/功能 支撑 SysML 导入）
+    #
+    # ⚠️ 2026-10-05 修复（真缺陷，实测取证）：下面 `包含` 的 allowed_values 引用了 21 个
+    # 系统元素族类型，而这里原先只种了 7 个 ⇒ 全新安装的本体自带 1 条 **high** 问题
+    # `bad_dom_range`（定义域/值域指向不存在的实体类型，18 个名字），
+    # 于是**新库的本体永远过不了发布门禁（high>0 拒绝发布）**，
+    # 且 validate 因无快照回落到 current ⇒ 恒报 high=1。
+    # 种子数据必须自洽：用到的类型就得种上（本体自己的规则就是这么判的）。
     for name, kind in [("载荷", "entity"), ("转发器", "entity"), ("天线", "entity"), ("TWTA", "entity"),
                         ("需求", "entity"), ("部件", "entity"), ("功能", "entity"),
+                        # ── 以下为 `包含` 约束引用到的系统元素族（缺则本体 high>0，无法发布）
+                        ("系统元素", "entity"), ("卫星系统", "entity"), ("卫星平台", "entity"),
+                        ("有效载荷", "entity"), ("通信载荷", "entity"), ("地面段", "entity"),
+                        ("用户段", "entity"), ("电源分系统", "entity"), ("姿轨控分系统", "entity"),
+                        ("测控分系统", "entity"), ("热控分系统", "entity"), ("相控阵天线", "entity"),
+                        ("功率放大器", "entity"), ("变频器", "entity"), ("滤波器", "entity"),
+                        ("信关站", "entity"), ("测控站", "entity"), ("用户终端", "entity"),
                         ("包含", "relation"), ("满足", "relation"), ("追溯", "relation"), ("派生", "relation"),
                         ("SATISFIES", "relation"), ("连接", "relation"), ("执行", "relation"),
                         ("频段", "attribute"), ("带宽", "attribute"), ("EIRP", "attribute")]:

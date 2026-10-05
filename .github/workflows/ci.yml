@@ -17,10 +17,11 @@
 #     - tools/verify/verify_projects_nav.py        （同上）
 #     - tools/verify/verify_s3_e2e.py               （同上）
 #     - tools/verify/verify_kb_dashboard.py         （同上）
-#   以下 3 个在**干净库上红**（本地绿、CI 环境红 ⇒ 接进去会阻塞流水线，2026-10-05 实测）：
+#   以下 1 个是**真库金标**门禁（断言的是生产库现值：249 条存量边 / active v170 /
+#   12 条规则 / 已发布快照），干净库上必然不成立 ⇒ 保持本地真库运行，不进 CI：
 #     - tools/verify/verify_ontology_dom_range.py
-#     - tools/verify/verify_orch_whitelist.py
-#     - tools/verify/verify_plugin_bind_removed.py
+#   （2026-10-05 第二轮第 2 项：verify_orch_whitelist / verify_plugin_bind_removed
+#    已归因修复，生产库 + 干净库双绿 ⇒ 已接线，不再排除。）
 #   同理排除：
 #     - tools/verify/verify_s4_llm_params.py      （需要真实 LLM provider 的 api_key，CI 无 secret）
 #     - verify_orchestration_e2e.py 的 live 模式  （真调 LLM，产生费用；CI 只跑其 G0 静态哨兵）
@@ -325,6 +326,24 @@ jobs:
 
       - name: Guard 技能注入边界（23 项）
         run: python tools/verify/verify_skill_injection.py
+
+      # ── 第二轮第 2 项：红灯门禁归因后修复，已双环境（生产库 + 干净库）实测绿 ──
+      - name: Guard 续作输入识别（22 项，carry 词表单一来源）
+        run: python tools/verify/verify_continuation.py
+
+      - name: Guard 流式中断兜底落库（11 项）
+        run: python tools/verify/verify_partial_persist.py
+
+      - name: Guard 编排触发白名单动态化（10 项）
+        run: python tools/verify/verify_orch_whitelist.py
+
+      - name: Guard Agent 绑定插件机制已移除（21 项）
+        run: python tools/verify/verify_plugin_bind_removed.py
+
+      # 卸载/装回全链路（20 项）。无插件数据的库会自行 SKIP（rc=0）而非崩溃；
+      # 有 plugins 数据时完整验证管理员/普通用户两类权限视角。
+      - name: Guard 卸载装回全链路（20 项）
+        run: python tools/verify/verify_uninstall_flow.py
 
       # ── 记忆 ──
       - name: Guard 记忆管理（40 项）

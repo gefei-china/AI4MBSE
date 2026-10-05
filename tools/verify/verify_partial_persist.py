@@ -15,11 +15,11 @@ reason) → 落库 messages（assistant，带「以上为已生成内容」后�
   P5 异常安全：conversation_id 为 None → 静默返回不抛
 """
 
-# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测本地红 ⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+# ── 已接进 CI（2026-10-05 第二轮第 2 项修复后）──────────
+# 修复要点：原从不建表，靠 tmp/uisafe_r5.db 的历史残留文件才能跑；
+#   现经 tools/verify/_tmpdb.py 就地 init_db，CI 全新 checkout 上亦可跑。
+# 双环境实测：生产库 + 全新干净库 均 rc=0。
+
 import os
 import sqlite3
 import sys
@@ -28,6 +28,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 DB = os.path.join(ROOT, "tmp", "uisafe_r5.db")
 os.environ["MBSE_DB_PATH"] = DB
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 fails, passes = [], []
 
@@ -35,6 +36,15 @@ fails, passes = [], []
 def ck(name, cond, detail=""):
     (passes if cond else fails).append(name)
     print(("  PASS " if cond else "  FAIL ") + name + (("  <- " + str(detail)) if detail else ""))
+
+
+# ⚠️ 2026-10-05：本门禁原先**从不建表**，只假设 tmp/uisafe_r5.db 已存在。
+# 本地能跑是因为历史残留文件；CI 全新 checkout 上是 0 字节空库
+# ⇒ 第一条 SQL 就崩 `no such table: messages`（崩溃 ≠ 判红，会把真实信号盖掉）。
+from _tmpdb import ensure_schema  # noqa: E402
+
+ck("夹具自证：tmp 库已有完整 schema（空库则就地 init_db）", ensure_schema(DB),
+   "建库失败=门禁环境坏了，不要当成'被测功能坏了'")
 
 
 def get_agent_cls():

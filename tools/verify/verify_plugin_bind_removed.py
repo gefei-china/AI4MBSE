@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 
-# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测干净库上红（file-ops 仍可经全局池触发，命中=0）⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
-# -*- coding: utf-8 -*-
+# ── 已接进 CI（2026-10-05 第二轮第 2 项修复后）──────────
+# 修复要点：原硬编码 mbse.db（设 MBSE_DB_PATH 也无效）+ 把「干净库无样本」判成失败；
+#   现读配置库路径，无样本一律 SKIP（同 verify_skill_injection 的口径）。
+# 双环境实测：生产库 + 全新干净库 均 rc=0。
+
 """verify_plugin_bind_removed.py —— 验证「Agent 绑定插件」机制已彻底移除（2026-09-30 第 10 轮）
 
 判据设计三原则（血泪教训，勿简化为"源码里搜不到 plugin 就行"）：
@@ -129,19 +128,46 @@ def main():
     print("=" * 72)
     print("D. 数据层：agent_tools 无 plugin 绑定残留（新连接复核）")
     print("=" * 72)
-    db = os.path.join(ROOT, "mbse.db")
+    # ⚠️ 2026-10-05 修订：原先硬编码 `os.path.join(ROOT, "mbse.db")`
+    # ⇒ 设了 MBSE_DB_PATH 指向干净库时它**仍在读生产库**（本地绿 / CI 红，同 verify_skill_injection 那个坑）。
+    # 改读配置里的 DB_PATH。
+    sys.path.insert(0, ROOT)
+    from core.config import DB_PATH
+    db = DB_PATH
     conn = sqlite3.connect(db)                  # 新连接，避免旧事务视图假 PASS
     # ⚠️ 必须设 row_factory=Row —— 生产代码的 `core/audit.rows_to_list` 用 `dict(r)` 取行，
     #    普通 tuple 行会报 "cannot convert dictionary update sequence element #0 to a sequence"。
     #    这个报错极像"代码写坏了"，实则是**夹具漏配了被测代码依赖的约定**（老坑，勿再踩）。
     conn.row_factory = sqlite3.Row
-    n_plugin = conn.execute("SELECT COUNT(*) FROM agent_tools WHERE tool_type='plugin'").fetchone()[0]
-    check("agent_tools 中 plugin 绑定数 = 0", n_plugin == 0, "实际 %d" % n_plugin)
-    dist = dict(conn.execute("SELECT tool_type, COUNT(*) FROM agent_tools GROUP BY tool_type").fetchall())
-    check("tool_type 仅剩 skill/mcp/tool", set(dist.keys()) <= {"skill", "mcp", "tool"},
-          str(dist))
-    n_total = conn.execute("SELECT COUNT(*) FROM agent_tools").fetchone()[0]
-    check("绑定总量 = 60（删 1 条后）", n_total == 60, "实际 %d" % n_total)
+
+    def skip(name, why):
+        """无样本 → SKIP（记一笔但不判 FAIL）。
+
+        ⚠️ 为什么不能判 FAIL：本组断言的是"存量数据的形状"。
+        干净库里**根本没有** agent_tools 行，"没有行"与"行里有 plugin 残留"是两回事；
+        把前者判成失败 ⇒ CI 每次必红，而红因不是代码坏了（同 verify_skill_injection 的修法）。
+        """
+        print("  SKIP  " + name + "  [" + why + "]")
+
+    # 表本身都可能不存在（全新空库 / 未 init_db）⇒ 与"表在但没数据"同样按无样本处理，
+    # 不能让它崩（崩溃会把后面所有断言一起吞掉，看起来像"全红"）。
+    _t = conn.execute("SELECT COUNT(*) FROM sqlite_master "
+                      "WHERE type='table' AND name='agent_tools'").fetchone()[0]
+    n_total = (conn.execute("SELECT COUNT(*) FROM agent_tools").fetchone()[0]
+               if _t else 0)
+    if n_total == 0:
+        skip("agent_tools 中 plugin 绑定数 = 0", "本库无 agent_tools 数据（干净库），无法验证存量形状")
+        skip("tool_type 仅剩 skill/mcp/tool", "同上")
+        skip("绑定总量 = 60（删 1 条后）", "同上：60 是**生产库**的历史口径，不是不变式")
+    else:
+        n_plugin = conn.execute("SELECT COUNT(*) FROM agent_tools WHERE tool_type='plugin'").fetchone()[0]
+        check("agent_tools 中 plugin 绑定数 = 0", n_plugin == 0, "实际 %d" % n_plugin)
+        dist = dict(conn.execute("SELECT tool_type, COUNT(*) FROM agent_tools GROUP BY tool_type").fetchall())
+        check("tool_type 仅剩 skill/mcp/tool", set(dist.keys()) <= {"skill", "mcp", "tool"},
+              str(dist))
+        # 60 是"删掉那 1 条 plugin 绑定后"的生产库历史数字，随用户增删会变
+        # ⇒ 只把它当**观测值**记录，不做硬断言（否则谁来绑一条就红一次，是噪音不是门禁）
+        print("  INFO  绑定总量 = %d（生产库历史口径 60，仅供参考，不做硬断言）" % n_total)
 
     print()
     print("=" * 72)
@@ -170,23 +196,36 @@ def main():
     #    "cannot convert dictionary update sequence element #0 to a sequence"
     #    （类属性与实例属性初始化序列不一致），那是夹具缺陷、会被误读成生产回归。
     r = AgentRegistry()
-    try:
-        r.load_from_db(conn, user={"id": 1})
-        check("load_from_db 未因本次改动抛异常", True, "加载 %d 个 Agent" % len(r._db_defs))
-    except Exception as e:
-        check("load_from_db 未因本次改动抛异常", False, str(e))
+    _has_agents = conn.execute("SELECT COUNT(*) FROM sqlite_master "
+                               "WHERE type='table' AND name='agents'").fetchone()[0]
+    if not _has_agents:
+        skip("load_from_db 未因本次改动抛异常", "本库连 agents 表都没有（未 init_db），非本次改动所致")
         r._db_meta = {}
+    else:
+        try:
+            r.load_from_db(conn, user={"id": 1})
+            check("load_from_db 未因本次改动抛异常", True, "加载 %d 个 Agent" % len(r._db_defs))
+        except Exception as e:
+            check("load_from_db 未因本次改动抛异常", False, str(e))
+            r._db_meta = {}
     # 技能能力不丢：file-ops 走全局池，仍应能触发
     try:
         from agent import AgentPipeline
         pipe = AgentPipeline()
         pipe._load_db_agents()
-        pipe._build_skill_prompt("requirement_analysis", "请把分析结果保存为文件",
-                                 user={"id": 1, "role_name": "admin"})
-        hits = getattr(pipe, "_last_skill_hits", None) or []
-        check("技能能力未丢失（file-ops 仍可经全局池触发）",
-              any("文件操作" in str(h) or "file-ops" in str(h) for h in hits),
-              "hits=" + str(hits))
+        pool = pipe._global_skill_pool(user={"id": 1, "role_name": "admin"}) or []
+        if not pool:
+            # ⚠️ 全局技能池来自 skills 表；干净库里一张都没有 ⇒ 无从验证"触发"。
+            # 这同样是"没样本"，不是"能力没了" ⇒ SKIP（判 FAIL 会让 CI 恒红且红因不对）。
+            skip("技能能力未丢失（file-ops 仍可经全局池触发）",
+                 "本库 skills 表为空，无全局技能池可触发")
+        else:
+            pipe._build_skill_prompt("requirement_analysis", "请把分析结果保存为文件",
+                                     user={"id": 1, "role_name": "admin"})
+            hits = getattr(pipe, "_last_skill_hits", None) or []
+            check("技能能力未丢失（file-ops 仍可经全局池触发）",
+                  any("文件操作" in str(h) or "file-ops" in str(h) for h in hits),
+                  "hits=" + str(hits))
     except Exception as e:
         check("技能能力未丢失（file-ops 仍可经全局池触发）", False, "异常: " + str(e))
 

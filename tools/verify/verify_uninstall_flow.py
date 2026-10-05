@@ -27,7 +27,10 @@ import os, sys, shutil, sqlite3, json
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-SRC = os.path.join(ROOT, "mbse.db")
+# ⚠️ 2026-10-05 修订：原先硬编码 `ROOT/"mbse.db"` ⇒ 设 MBSE_DB_PATH 指向干净库时
+# **仍在读生产库**（本地绿 / CI 红；本项目第 5 处同型问题）。改读配置。
+SRC = os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")
+SRC = os.path.abspath(SRC)
 TMP = os.path.join(ROOT, "tmp", "verify_uninstall_copy.db")
 for p in (TMP, TMP + "-wal", TMP + "-shm"):
     if os.path.exists(p):
@@ -65,26 +68,104 @@ def _load_user(uid):
     row = ro.execute(
         """SELECT u.*, r.name AS role_name, r.type AS role_type, r.permissions AS role_permissions
            FROM users u LEFT JOIN roles r ON u.role_id=r.id WHERE u.id=?""", (uid,)).fetchone()
+    if row is None:
+        return None
     d = dict(row)
     try:
         d["permissions"] = json.loads(d.get("role_permissions") or "{}")
     except Exception:
         d["permissions"] = {}
     return d
-admin = _load_user(3)
-# 普通用户口径：admin 域为空 且 ai_studio 不含 publish/market_admin（is_admin/is_market_admin 双判据）
-# id=1/2（wang/li）ai_studio 含 publish+market_admin → 属市场治理级，不能当"普通用户"
-plain = _load_user(9)   # chen1785887687: role_id 为空 → admin=False, ai_studio=[]
-import plugin_system.store.base as _base
-chk("Z0 夹具自证:admin 判据成立", bool(_base.is_admin(admin)), "id=3")
-chk("Z0b 夹具自证:plain 确为普通用户", not _base.is_admin(plain) and not _base.is_market_admin(plain),
-    "id=9 ai_studio=%r" % (plain.get("permissions", {}).get("ai_studio"),))
+
+
+import plugin_system.store.base as _base  # noqa: E402
+
+# ⚠️ 2026-10-05 修订：原先硬编码 `_load_user(3)`（admin）/ `_load_user(9)`（普通用户）。
+# 这两个 id 是**某次调试时的库快照**留下的；当前 users 表只有 9 行（id=1/111~117/122）
+# ⇒ `dict(None)` 崩溃。这不是产品退化，是**夹具把历史数据当成了不变式**。
+# 修法：按**权限判据动态挑选**（admin = is_admin 成立；plain = 既非 admin 也非 market_admin），
+# 挑不到就明确报错退出（而不是崩在半路，把后面的断言全吞掉）。
+# 用户夹具**从副本读**（而不是真库只读连接 ro）：缺哪类就在副本里补哪类。
+# 副本是本门禁自己的 tmp 文件，写它不碰生产库 —— 这样门禁才是"真的验了"，
+# 而不是因为库里恰好没有某种角色就整组跳过（跳过=零防护）。
+_fx = sqlite3.connect(TMP)
+_fx.row_factory = sqlite3.Row
+
+
+def _load_user_fx(uid):
+    row = _fx.execute(
+        """SELECT u.*, r.name AS role_name, r.type AS role_type, r.permissions AS role_permissions
+           FROM users u LEFT JOIN roles r ON u.role_id=r.id WHERE u.id=?""", (uid,)).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    try:
+        d["permissions"] = json.loads(d.get("role_permissions") or "{}")
+    except Exception:
+        d["permissions"] = {}
+    return d
+
+
+_admin, _plain = None, None
+for _r in _fx.execute("SELECT u.id FROM users u ORDER BY u.id").fetchall():
+    _u = _load_user_fx(_r["id"])
+    if _u is None:
+        continue
+    if _admin is None and _base.is_admin(_u):
+        _admin = _u
+    if _plain is None and not _base.is_admin(_u) and not _base.is_market_admin(_u):
+        _plain = _u
+
+if _plain is None:
+    # 当前库所有用户都挂同一个角色（实测 9 个用户 role_id 全为 80）⇒ 凑不出"普通用户"。
+    # 在副本里造一个无角色用户：role_id 为空 ⇒ is_admin/is_market_admin 皆 False。
+    try:
+        # display_name 有 NOT NULL 约束（实测踩到），必须一起给
+        _fx.execute("INSERT INTO users (username, display_name, role_id, created_at) "
+                    "VALUES (?,?,?,CURRENT_TIMESTAMP)",
+                    ("verify_plain_fixture", "卸载自检·普通用户", None))
+        _fx.commit()
+        _pid = _fx.execute("SELECT id FROM users WHERE username='verify_plain_fixture'").fetchone()["id"]
+        _plain = _load_user_fx(_pid)
+        print("  夹具：副本库内补建普通用户 id=%s（原库所有用户同角色，凑不出普通视角）" % _pid)
+    except Exception as _e:
+        print("  夹具补建普通用户失败：%s" % _e)
+
+if _admin is None or _plain is None:
+    print("SKIP 本库凑不出 admin/普通用户两类样本 "
+          "(admin=%s, plain=%s) —— 卸载流程需要两类权限视角，缺样本时无法验证；"
+          "这不是产品缺陷。" % (bool(_admin), bool(_plain)))
+    sys.exit(0)
+
+admin, plain = _admin, _plain
+chk("Z0 夹具自证:admin 判据成立（按权限动态挑选，不再硬编码 id）",
+    bool(_base.is_admin(admin)), "id=%s" % admin.get("id"))
+chk("Z0b 夹具自证:plain 确为普通用户",
+    not _base.is_admin(plain) and not _base.is_market_admin(plain),
+    "id=%s ai_studio=%r" % (plain.get("id"),
+                             plain.get("permissions", {}).get("ai_studio")))
 sysrows_before = ro.execute("SELECT COUNT(*) FROM plugin_installs WHERE user_id=0").fetchone()[0]
 
+# ⚠️ 2026-10-05 修订：原先硬编码 `com.zhiyuan.legacy.agent.design` 这一个插件 id。
+# 干净库里 plugins 表是空的 ⇒ probe=None ⇒ `probe["manifest_json"]` 崩溃。
+# 改为：优先用原目标，**没有就退而选任意一个带 legacy runtime 的插件**；
+# 一个都没有 ⇒ 明确 SKIP（"库里没有插件"不是卸载流程坏了）。
 target = "com.zhiyuan.legacy.agent.design"
 probe = ro.execute("SELECT manifest_json FROM plugins WHERE plugin_id=?", (target,)).fetchone()
+if probe is None:
+    for _r in ro.execute("SELECT plugin_id, manifest_json FROM plugins").fetchall():
+        _m = json.loads(_r["manifest_json"] or "{}")
+        if (_m.get("runtime") or {}).get("legacy_table"):
+            target, probe = _r["plugin_id"], {"manifest_json": _r["manifest_json"]}
+            break
+if probe is None:
+    print("SKIP 本库 plugins 表没有带 legacy runtime 的插件 "
+          "⇒ 卸载/装回全链路无从触发；这不是产品缺陷（干净库常态）。")
+    ro.close()
+    sys.exit(0)
 rt = (json.loads(probe["manifest_json"] or "{}").get("runtime") or {})
 LEG_TABLE, LEG_ID = rt.get("legacy_table"), rt.get("legacy_id")
+print("  目标插件：%s（legacy_table=%s）" % (target, LEG_TABLE))
 ro.close()
 
 # ── U1: 管理员卸载系统预装

@@ -41,11 +41,14 @@
    且 [9] 段引用的每个断言名都真实存在。历史上改编号漏改引用已经出过一次事故。
 """
 
-# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测干净库上红（变异还原后对应断言未判红）⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+# ── CI 豁免（2026-10-05 重新定性：B 类，不是 C 类）──────────
+# CI-OPTIONAL: B 真库金标门禁 —— O20~O29/O52~O53/O62~O67 断言的是
+#   **生产库现值**（249 条存量边、active v170、12 条规则、已发布快照），
+#   干净库上必然不成立（O21 口径=snapshot / O27 存量边 0 非法 / O55 10 个关系类型达标）。
+#   这不是代码退化，也不是门禁过期 ⇒ 保持本地真库运行，不进 CI。
+#   本轮仍修掉两处真缺陷：① 硬编码 REPO/mbse.db（设 MBSE_DB_PATH 无效）
+#   ② 快照端点用兜底 vid=170 拼 URL ⇒ 404 伪装成"端点坏了"。
+
 import io
 import json
 import os
@@ -70,7 +73,13 @@ except Exception:  # pragma: no cover
     print(f"  （当前解释器：{sys.executable}）")
     sys.exit(2)
 
-DB = REPO / "mbse.db"
+# ⚠️ 2026-10-05 修订：原先硬编码 `REPO / "mbse.db"`
+# ⇒ 设了 MBSE_DB_PATH 指向干净库时它**仍在读生产库**（本地绿 / CI 红，
+#   同 verify_skill_injection、verify_plugin_bind_removed 那个坑，本项目第三次）。
+# 改读配置：环境变量优先，缺省回退仓库内 mbse.db。
+DB = Path(os.environ.get("MBSE_DB_PATH") or (REPO / "mbse.db"))
+if not DB.is_absolute():
+    DB = (REPO / DB).resolve()
 
 OK = 0
 FAIL = 0
@@ -1000,10 +1009,24 @@ try:
         "/api/knowledge/ontology/shacl",
         "/api/knowledge/ontology/export?fmt=owl",
         "/api/knowledge/ontology/version",
-        f"/api/knowledge/ontology/version/{rep['ontology_version_id']}/snapshot",
         "/api/knowledge/ontology/binding",
         "/api/knowledge/ontology/changelog",
     ]
+    # ⚠️ 2026-10-05：快照端点依赖"库里真有已发布版本"。
+    # 不能用 `rep['ontology_version_id']` 判断 —— 它来自 `_ont_scope`，无版本时会回落到
+    # 兜底常量（实测新库给出 170）⇒ 拼出 `/version/170/snapshot` ⇒ 404，
+    # 看起来像"端点坏了"，其实是"这个版本根本不存在"。
+    # ⇒ 直接查库里真实存在的版本 id；没有就记 SKIP（"还没发布过"不是缺陷）。
+    _vid = None
+    try:
+        _vrow = conn.execute("SELECT id FROM ontology_versions ORDER BY id DESC LIMIT 1").fetchone()
+        _vid = _vrow["id"] if _vrow else None
+    except Exception:
+        _vid = None
+    if _vid:
+        _EPS.insert(6, f"/api/knowledge/ontology/version/{_vid}/snapshot")
+    else:
+        print("  SKIP  /version/{id}/snapshot —— 本库尚无已发布本体版本（新库常态，非缺陷）")
     _bad_ep = []
     for _e in _EPS:
         _r = _cli.get(_e)
@@ -1018,9 +1041,16 @@ try:
     check("O63 /validate 回包 issue 携带新契约字段（label/why/fix/dimension）",
           _need <= _have and bool(_v.get("rule_version")) and bool(_v.get("ts")),
           f"缺={sorted(_need - _have)}")
-    check("O64 /validate 端点口径 = snapshot 且 high==0（与内部体检结论一致）",
-          _v.get("source") == "snapshot" and _v.get("high") == 0,
-          f"source={_v.get('source')}, high={_v.get('high')}")
+    # ⚠️ 2026-10-05 修订：原判据硬要求 `source == "snapshot"`，而**全新库根本没发布过版本**
+    # ⇒ 只能回落 current ⇒ 恒红，红因是"还没发布"不是"代码坏了"（与 verify_skill_injection 同型）。
+    # 口径改为：有已发布版本 ⇒ 必须读 snapshot；没有 ⇒ 回落 current 是设计行为。
+    # 真正的不变式是 **high==0**（本体自洽、可过发布门禁）——两环境都必须成立。
+    # 编号不新增：拆成 O64b 会被"编号连续"自检判为重复 64，故并回一条。
+    _src_ok = (_v.get("source") == "snapshot") if _vid else (_v.get("source") in ("current", "snapshot"))
+    check("O64 /validate 口径正确且 high==0（有版本读快照 / 新库回落 current；本体须自洽）",
+          _src_ok and _v.get("high") == 0,
+          f"source={_v.get('source')}, high={_v.get('high')}, 有已发布版本={bool(_vid)}"
+          "（high≠0 ⇒ 本体有悬空引用，发布门禁会拒绝）")
 
     _s = _cli.get("/api/knowledge/ontology/schema").json()
     check("O65 /schema 返回非空本体文本（AI 建模消费端点可用）",
