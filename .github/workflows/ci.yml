@@ -372,6 +372,28 @@ jobs:
       - name: Guard P1-4 检索召回与注入（29 项）
         run: python tools/verify/verify_p14b.py
 
+      # ── 2026-10-05 第二轮第 2 项收尾：剩余 5 个红灯门禁（依赖生产库存量数据族）──
+      # 五者均已修到「生产库真验 + 干净库干净 SKIP」双绿：
+      #   · commit_hash  —— 修的是**数据**（6 行缺 content_hash，曾连锁毒化 7 条断言）；
+      #   · plugin_builtin / agent_name_unify / multi_project_scope / doc_global
+      #                —— 修的是**门禁口径**（锁定了已被产品决策推翻的旧数值）；
+      #   同时修掉 2 处真产品缺陷（文档选择器露 'global' 哨兵值、无工程时未告知）。
+      #   干净库上「无样本」的断言一律 SKIP（含原本空集恒真的假覆盖），不做假绿。
+      - name: Guard commit 内容哈希（13 项，含 M1~M3 变异自证）
+        run: python tools/verify/verify_commit_hash.py
+
+      - name: Guard 能力中心内置口径（16 项 + 变异自证）
+        run: python tools/verify/verify_plugin_builtin.py
+
+      - name: Guard Agent 名称统一与级联改名（71 项 + 变异自证）
+        run: python tools/verify/verify_agent_name_unify.py
+
+      - name: Guard 多工程作用域与新建任务归属（40 项）
+        run: python tools/verify/verify_multi_project_scope.py
+
+      - name: Guard 文档全局化（18 项 + 5 处变异自证）
+        run: python tools/verify/verify_doc_global.py
+
       # ── 记忆 ──
       - name: Guard 记忆管理（40 项）
         run: python tools/verify/verify_memory_admin.py
