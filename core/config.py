@@ -462,6 +462,21 @@ DEFAULT_CONFIG = {
         #   deposit 固定写 activation=1.0、record_access 只增不减、衰减下限 0.4 > 阈值 0.2，
         #   该通道在本工程实测恒定不触发（对 118 条跑出 0 遗忘）。保留为可运维开关，勿轻易打开。
         "forget_by_activation": False,
+        # ── 冲突消解（D1，2026-10-07 接线时才补的开关）──
+        # ⚠️ 判据本身在 2026-10-07 已实测收敛（存量 144 条误判 0 组，见 verify_memory_conflict_gate D5），
+        #    但**开关默认关**：因为它会**改数据**（标 superseded_by），
+        #    属"线上不可逆操作"，必须由你显式打开而不是默认生效。
+        #    打开后：maintain() 会跑detect_conflicts 并标记"旧条被新条取代"（仅打标记，不删内容）。
+        "conflict_detect_enabled": False,# 总开关（关=只做遗忘+合并，不检测冲突）
+        # ⚠️⚠️ **阈值 0.5 的口径说明（2026-10-07 二次实测后诚实标注）**：
+        #  这个 0.5 是**用 bigram 降级夹具**标定的（bigram 下互斥对相似度 0.7252）。
+        #  但生产库实测**真向量已生效**（129/144 行是 openai-compat），
+        #  而真向量口径下**存量 33 个同键对里没有一对是互斥的**，
+        #  同键对的相似度全在 0.85+（重复区 0.94~0.9986）。
+        #  ⇒ **0.5 这个数字在真向量口径下没有生产数据支撑**，属"能跑但未标定"。
+        #  真实阈值需等生产出现第一个真实互斥对后再标定（届时开开关并观察）。
+        #  现在取 0.5 的理由：宁可多报候选（互斥词已是很强的过滤器）也不漏。
+        "conflict_detect_sim_high": 0.5,  # 同键候选的相似度下限（**未在真向量口径下标定**，见上）
     },
     "semantic_cache": {
         "enabled": False,            # 语义缓存开关（高频相似查询 embedding 命中直返）
@@ -986,6 +1001,8 @@ CONFIG_SCHEMA = {
         "max_age_days":         {"type": "int", "desc": "零访问条目的存活天数上限（配合 forget_min_access 治“沉淀即死”噪音）"},
         "forget_min_access":    {"type": "int", "desc": "低于此访问次数视为“从未被用”（默认 0=只清零访问）"},
         "forget_by_activation": {"type": "bool", "desc": "启用按 activation 衰减阈值遗忘（遗留通道，本工程实测恒定不触发，默认关）"},
+        "conflict_detect_enabled": {"type": "bool", "desc": "冲突消解总开关：检出同键互斥记忆后打 superseded_by 标记（仅标记不删；默认关）"},
+        "conflict_detect_sim_high": {"type": "float", "desc": "冲突检测的同键候选相似度下限（互斥事实字面高度重叠，实测 0.73）"},
     },
     "semantic_cache": {
         "enabled":      {"type": "bool", "desc": "语义缓存开关（相似查询命中直返）"},

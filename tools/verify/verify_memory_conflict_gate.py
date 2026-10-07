@@ -147,6 +147,59 @@ ck(MemoryService.mark_superseded(c, a, a) is False, "C5 标记自己不成立")
 ck(MemoryService.mark_superseded(c, 0, b) is False, "C6 old_id=0 不成立")
 ck(MemoryService.mark_superseded(c, a, 0) is False, "C7 new_id=0 不成立")
 
+print("\n== C2. 生产接线（防「代码在、没接线」——2026-10-07 补） ==")
+# ⚠️ 这组断言是**接线回归守卫**：`detect_conflicts` / `mark_superseded` 一度
+# **零生产调用者**（写了但只在门禁里被调）——本仓反复出现的「能力在、没人用」。
+# ⇒ 断言的是"maintain() 这个唯一的维护入口会调它"，而不是"函数存在"。
+_msrc2 = open(os.path.join(ROOT, "memory_service.py"), encoding="utf-8").read()
+_mt = _msrc2[_msrc2.find("def maintain("):_msrc2.find("def run_maintenance(")]
+ck("detect_conflicts" in _mt, "C2a maintain() 内调用 detect_conflicts（不是只在门禁里被调）")
+ck("mark_superseded" in _mt, "C2b maintain() 内调用 mark_superseded")
+ck("conflict_detect_enabled" in _mt, "C2c 受 conflict_detect_enabled 开关控制（默认关=零行为漂移）")
+# 召回期仲裁：search() 必须排除被取代的旧条（否则模型仍看到旧口径）
+_sr = _msrc2[_msrc2.find("def search("):_msrc2.find("def search_core(")]
+ck("superseded_by" in _sr and "_has_superseded_col" in _sr,
+   "C2d search() 排除 superseded_by>0 的旧条（D1-c 召回期仲裁已接线）")
+ck("COALESCE(superseded_by,0)=0" in _sr,
+   "C2e ★用 COALESCE(...)：存量 NULL 必须当'未被取代'，否则会被静默漏掉")
+ck(_msrc2.count("_base_extra") >= 5,
+   "C2f ★4 个召回分支 + 1 处赋值全部拼上 _base_extra（漏一个分支=仲裁形同虚设）")
+# 默认关时零行为漂移
+_c2 = fresh()
+add(_c2, C_OLD)
+add(_c2, C_NEW)
+_r = MemoryService.maintain(_c2)
+ck(_r.get("conflicts") == 0, "C2g 默认关时 conflicts=0（生产库实测 144 条不会被动）")
+ck("conflicts" in _r, "C2h maintain() 返回含 conflicts 键（可观测）")
+# ★ 顺序守卫：consolidate 在 bigram 降级下会把互斥对当重复软删（阈值 0.5 < 0.7252），
+#   若冲突检测在其后跑，detect 的 WHERE forgotten=0 已排除旧条 ⇒ 恒 0 组且返回值无异常。
+#   ⇒ 顺序是实质性的，本断言锁死它（实测踩过：merged=1 / conflicts=0）。
+_i_det = _mt.find("detect_conflicts")
+_i_cons = _mt.find("MemoryService.consolidate")
+ck(0 < _i_det < _i_cons,
+   "C2h2 ★冲突检测在 consolidate **之前**（顺序颠倒会让冲突通道静默失效）")
+_c2.close()
+# 端到端：开开关 → 标记 → 仲裁生效
+_c3 = fresh()
+_a3, _b3 = add(_c3, C_OLD), add(_c3, C_NEW)
+import core.config as _cfg3
+_orig_bool = _cfg3.as_bool
+_cfg3.as_bool = lambda g, k, d=False: True if k == "conflict_detect_enabled" else _orig_bool(g, k, d)
+try:
+    _r3 = MemoryService.maintain(_c3)
+finally:
+    _cfg3.as_bool = _orig_bool
+_marked = _c3.execute("SELECT superseded_by FROM agent_memory WHERE id=?", (_a3,)).fetchone()[0]
+ck(_r3.get("conflicts") == 1, "C2i 开开关后 conflicts=1（端到端检出并标记）")
+ck(_marked == _b3, "C2j 旧条被标记为 superseded_by=新条 id（保留较新口径与 consolidate 一致）")
+_vis = [r[0] for r in _c3.execute(
+    "SELECT content FROM agent_memory WHERE forgotten=0 AND COALESCE(superseded_by,0)=0")]
+ck(len(_vis) == 1 and "不再是" in _vis[0],
+   "C2k ★召回期仲裁生效：只剩新口径一条（旧口径不再进 prompt）")
+ck(_c3.execute("SELECT COUNT(*) FROM agent_memory WHERE id=?", (_a3,)).fetchone()[0] == 1,
+   "C2l ★旧内容仍在库中（影子语义可回退，不是删除）")
+_c3.close()
+
 print("\n== D. 迁移幂等 ==")
 _prod = os.path.join(ROOT, "mbse.db")
 if os.path.exists(_prod):

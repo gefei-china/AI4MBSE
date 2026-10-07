@@ -60,6 +60,19 @@ class MemoryService:
             return False
 
     @staticmethod
+    def _has_superseded_col(conn) -> bool:
+        """探测 agent_memory 是否已有 superseded_by 列（D1 冲突消解；缺列 → False，逐字回到旧召回）。
+
+        ⚠️ 与 `_has_tier_col` 同一套守卫思路：**老库未跑迁移时不能拼该条件**，
+        否则 `no such column: superseded_by` 会让检索主链路整体报错。
+        """
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()]
+            return "superseded_by" in cols
+        except Exception:
+            return False
+
+    @staticmethod
     def _scope_filter(conn, agent_id: str, scopes):
         """构造作用域复合过滤 → (clause, params, idx_of)。
 
@@ -142,12 +155,22 @@ class MemoryService:
             # P1-18 分层：常规召回排除 archival（归档层不参与 query 相关性召回；存量 NULL tier 视为 recall）
             _tc = MemoryService._has_tier_col(conn)
             _no_arch = " AND (tier IS NULL OR tier != 'archival')" if _tc else ""
+            # ── D1-c 召回期仲裁（2026-10-07）──
+            # 被标记 superseded_by>0 的旧条**不进召回**（模型看不到已被取代的旧口径）。
+            # ⚠️ 用 `COALESCE(superseded_by,0)=0` 而非 `superseded_by=0`：
+            #    存量/夹具行的 NULL 必须当作"未被取代"，否则会被 NULL 比较静默漏掉。
+            # ⚠️ 用列存在性守卫：老库若尚未跑迁移（无该列），**不拼这个条件**，
+            #    逐字回到旧行为——不能因为缺列就让整个检索报错（与 ix_am_scope 纪律一致）。
+            if MemoryService._has_superseded_col(conn):
+                _base_extra = " AND COALESCE(superseded_by,0)=0"
+            else:
+                _base_extra = ""
             if not query:
                 # 作用域生效时不再用 agent_id 作唯一约束（user/global 槽需跨 Agent 复用）
                 if any_scope:
-                    _base = "forgotten=0" + _no_arch
+                    _base = "forgotten=0" + _no_arch + _base_extra
                 else:
-                    _base = ("forgotten=0" + _clause + _no_arch) if _clause else "agent_id=? AND forgotten=0" + _no_arch
+                    _base = (("forgotten=0" + _clause + _no_arch + _base_extra) if _clause else "agent_id=? AND forgotten=0" + _no_arch + _base_extra)
                 sql = "SELECT * FROM agent_memory WHERE " + _base
                 params: list = [] if any_scope else (list(_cparams) if _clause else [agent_id])
                 if mem_topic:
@@ -158,9 +181,9 @@ class MemoryService:
                 rows = conn.execute(sql, params).fetchall()
                 return [dict(r) for r in rows]
             if any_scope:
-                _base = "mem_type!='session' AND forgotten=0" + _no_arch
+                _base = "mem_type!='session' AND forgotten=0" + _no_arch + _base_extra
             else:
-                _base = ("mem_type!='session' AND forgotten=0" + _clause + _no_arch) if _clause else "agent_id=? AND mem_type!='session' AND forgotten=0" + _no_arch
+                _base = (("mem_type!='session' AND forgotten=0" + _clause + _no_arch + _base_extra) if _clause else "agent_id=? AND mem_type!='session' AND forgotten=0" + _no_arch + _base_extra)
             sql = "SELECT * FROM agent_memory WHERE " + _base
             params = [] if any_scope else (list(_cparams) if _clause else [agent_id])
             if mem_type:
@@ -527,24 +550,32 @@ class MemoryService:
         两道判据（**同时满足**才判冲突）：
         ① **同键**：同 `mem_topic`（无topic 时按 agent）、同 `scope_type/scope_id`
            —— 不跨作用域，避免把"项目 A 的口径"与"项目 B 的口径"当冲突。
-        ② **高相似**（`score >= sim_high`）**且任一方含互斥断言词**。
+        ② **相似度 ≥ `sim_high`**（默认 0.5）**且任一方含互斥断言词**。
 
-        ⚠️⚠️ **判据②的方向是"高相似"，与实施计划 §5 D1 写的"低相似"相反**——
-        这是 2026-10-07 实测推翻的，**别按计划书的字面理解**：
+        ⚠️⚠️ **两处与实施计划 §5 D1 相反的地方，都是实测推翻的（2026-10-07）**：
 
-        实测「工程 vc 格式为 branchId,quId」vs「工程 vc 格式**不再是** branchId,quId，
-        已废弃该规则」→ bigram 相似度 **0.7252**（很高）。
-        **原因很直白**：互斥事实改的正是那几个关键词，两条必然字面高度重叠。
-        ⇒ 原方案「相似度低 ⇒ 才判冲突」与判据①「同键」**自相矛盾**，
-           会把**所有真实互斥对全部漏判**（S1 正例实测0 检出）。
+        **(1) 判据②的方向是「相似度高」，计划书写的「低相似」是错的。**
+        计划书假设"互斥事实讲法不同⇒ 字面不像"。实测（bigram 口径）：
+        「vc 格式为 A,B」vs「vc 格式**不再是** A,B，已废弃」相似度 **0.7252**——
+        **互斥事实改的正是那几个关键词，两条必然字面高度重叠。**
+        ⇒ 「相似度低」与判据①「同键」自相矛盾，会把真实互斥对全部漏判。
 
-        **修正后的分工**（与 `consolidate()` 严丝合缝，不重叠）：
-        | 内容关系 | 相似度 | 互斥词 | 归谁管 |
-        |---|---|---|---|
-        | 重复（同一结论两种措辞） | 高 | 无 | `consolidate()` |
-        | **互斥（新口径否定旧口径）** | **高** | **有** | **`detect_conflicts()`** |
-        | 无关/互补 | 低 | 无 | 都不管 |
-        ⇒ 区分二者的**唯一可靠信号是互斥词**，不是相似度。
+        **(2) 但「0.5」这个阈值本身在真向量口径下未标定（诚实标注，别当实测值引用）。**
+        上面的 0.7252 是 **bigram 降级口径**。生产库实测：
+        - 真向量**已生效**（144 行里 129 行 `embed_version='openai-compat'`）；
+        - 真向量下同键 33 对，相似度**全在 0.85+**（重复区 0.9428~0.9986）；
+        - **其中没有一对是互斥的** ⇒ 真实互斥的相似度档位**在生产数据里还不存在样本**。
+        ⇒ 0.5 是"用降级夹具定的、能跑"的默认值，**不是标定值**。
+        真实阈值应等生产出现第一个互斥对后重标（开 `memory.conflict_detect_enabled` 观察）。
+
+        **与 `consolidate()` 的分工（真向量口径下实测清晰）**：
+        | 内容关系 | 真向量相似度 | 归谁管 |
+        |---|---|---|
+        | 重复（同一结论两种措辞） | 0.94~0.9986 | `consolidate()`（阈值 0.85）|
+        | **互斥**（新口径否定旧口径） | **无样本** | 本函数 |
+        ⇒ 两引擎在真向量口径下**不重叠**；只有在 **bigram 降级**时才会重叠
+        （降级阈值 0.5 < 互斥对 0.7252）—— 那种情况下consolidate 会用
+        `forgotten=1` 把互斥对一起软删掉（本函数标记 `superseded_by` 更保守）。
         """
         try:
             where = ["forgotten=0", "COALESCE(superseded_by,0)=0"]
@@ -620,7 +651,7 @@ class MemoryService:
     # ── P2：周期维护入口（遗忘 + 合并，幂等）──
     @staticmethod
     def maintain(conn, agent_id: str = "") -> dict:
-        """记忆维护：遗忘 + 合并。返回 {"forgotten": n, "merged": m}。
+        """记忆维护：遗忘 + 合并 + 冲突标记。返回 {"forgotten": n, "merged": m, "conflicts": c}。
 
         ⚠️ 2026-09-29：遗忘判据已修（见 `forget` 的 docstring —— 原公式结构性永不触发）。
         新增两个配置：`memory.max_unused_days`（主判据，默认 0=不启用时效遗忘）、
@@ -631,6 +662,7 @@ class MemoryService:
         from core import config as _cfg
         forget_n = 0
         merge_n = 0
+        conflict_n = 0
         if _cfg.as_bool("memory", "forget_enabled", True):
             forget_n = MemoryService.forget(
                 conn, agent_id,
@@ -638,9 +670,34 @@ class MemoryService:
                 max_age_days=int(_cfg.get("memory", "max_age_days", 90)),
                 max_unused_days=int(_cfg.get("memory", "max_unused_days", 0)),
                 min_access=int(_cfg.get("memory", "forget_min_access", 0)))
+        # ── D1 冲突消解接线（2026-10-07）──
+        # ⚠️⚠️ **顺序是实质性的：必须在 consolidate 之前跑**（2026-10-07 实测踩到）。
+        #  `consolidate()` 在 **bigram 降级口径**下阈值降到 0.5，而互斥对的相似度
+        #  实测 0.7252 ⇒ **consolidate 会把互斥对当"重复"用 forgotten=1 软删掉**。
+        #  若冲突检测在其后跑，`detect_conflicts` 的 `WHERE forgotten=0`
+        #  已把旧条排除 ⇒ 恒返回 0 组（实测：merged=1 / conflicts=0）。
+        #  ⇒ 顺序颠倒会让整个冲突通道**静默失效**，且返回值上看不出异常。
+        #  标记后（superseded_by>0）再走 consolidate：被取代的旧条相似度虽高，
+        #  但 consolidate 不看该列 ⇒ 可能重复标记 —— 故 detect 放在前面已足够，
+        #  且幂等（第二次跑时旧条已被 superseded 排除）。
+        # ⚠️ **默认关**（`memory.conflict_detect_enabled`）：它会**改数据**（标superseded_by），
+        #   属线上不可逆操作，必须显式打开。判据本身已实测零误伤（verify gate D5）。
+        if _cfg.as_bool("memory", "conflict_detect_enabled", False):
+            try:
+                _groups = MemoryService.detect_conflicts(
+                    conn, agent_id,
+                    sim_high=float(_cfg.get("memory", "conflict_detect_sim_high", 0.5)))
+                for _g in _groups:
+                    # 保留较新（id 大者）——与 consolidate 的"保留较新"口径一致
+                    _old, _new = min(_g), max(_g)
+                    if MemoryService.mark_superseded(conn, _old, _new):
+                        conflict_n += 1
+            except Exception:
+                # 冲突检测异常不得阻断遗忘/合并（它是最"可失败"的一环）
+                conflict_n = 0
         merge_n = MemoryService.consolidate(conn, agent_id,
                                             threshold=float(_cfg.get("memory", "consolidate_threshold", 0.85)))
-        return {"forgotten": forget_n, "merged": merge_n}
+        return {"forgotten": forget_n, "merged": merge_n, "conflicts": conflict_n}
 
     @staticmethod
     def run_maintenance(conn=None) -> dict:
