@@ -470,8 +470,152 @@ class MemoryService:
                             merged += 1
             conn.commit()
             return merged
-        except Exception:
+        except Exception as _ce:
+            # ⚠️ 2026-10-07：**不再静默 return 0**。
+            # 原实现 `except Exception: return 0` 会把「SQL 缺列 / 字段名写错 / schema 不一致」
+            # 这类**硬错误伪装成"没东西可合并"** —— 实测做门禁时因夹具缺 `created_at`
+            # 报 `no such column`，却被这句吞掉，表现为"consolidate 判重逻辑坏了"，
+            # 排查方向被完全带偏（第一版误以为是相似度阈值问题）。
+            # 本函数是**离线维护路径**（不是请求主链路），留一条 warning 不影响性能，
+            # 却能让"合并功能坏了"变成可诊断。
+            try:
+                import logging as _lg
+                _lg.getLogger("mbse.memory").warning(
+                    "consolidate 失败（合并未执行）：%s: %s", type(_ce).__name__, str(_ce)[:160])
+            except Exception:
+                pass
             return 0
+
+    # ══════════════════════════════════════════════════════════════════════
+    # 冲突消解（D1，2026-10-07）—— 方案 A：影子状态 + 召回期仲裁
+    #
+    # ⚠️ **与 consolidate() 的区别（最容易混为一谈，务必分清）**：
+    #   consolidate()：判据是**相似度高**（≥0.85） ⇒ 处理**重复**
+    #                （"需求追溯链五环节"两种措辞）
+    #   detect_conflicts()：判据是**相似度低但同键** ⇒ 处理**互斥**
+    #                （"vc 格式 A" vs "vc 格式 B"）
+    #   ⇒ **互斥事实的相似度天然偏低，永远达不到合并阈值，对 consolidate 零作用。**
+    #
+    # ⚠️ **为什么默认关闭**（`memory.conflict_enabled` 默认 False）：
+    #   本判据**会误判**——把"互补的两条经验"当成冲突。
+    #   存量 144 条里已有 id133/134/135 这类"措辞近似的重复"，
+    #   若误判会把互补内容挤掉⇒ **必须先用 S5 存量误判率抽检验证再开**。
+    # ══════════════════════════════════════════════════════════════════════
+
+    #: 互斥断言词（判据②用，②筛出候选后才走这里 ⇒ 从稀到贵省 LLM 调用）。
+    #:
+    #: ⚠️⚠️ **2026-10-07 存量实测后大幅收窄**（这是本轮最重要的一次纠错）：
+    #: 原本收录「不是 / 而非 / 而」等词，**实测在存量 144 条上造成 2 组误伤**：
+    #:   - #285「…须引用 requirement usage **而非** requirement definition」
+    #:   - #172「…两类专用关系表达」被同组另一条连带命中
+    #: 「**A 而非 B**」是 SysML/建模领域的**标准精确限定句式**，不是"互斥声明"。
+    #: ⇒ 凡表示「限定/排除/对比」的词一律剔除；**只保留明确指向"口径已变更"的**。
+    #:
+    #: 判据标准：**该词出现 ⇒ 说话者在宣告"旧的不作数了"**。
+    #: 「不再/已废弃/已更正/已过时/已失效」满足；「不是/而非/而不是」不满足。
+    _CONFLICT_MARKERS = (
+        "不再", "已废弃", "已废止", "已更正", "更正为",
+        "应改为", "已过时", "已失效", "已作废", "废止该规则",
+    )
+
+    @staticmethod
+    def detect_conflicts(conn, agent_id: str = "", topic: str = "",
+                         scope_type: str = "", scope_id: str = "",
+                         sim_high: float = 0.5) -> list:
+        """检测**互斥**记忆，返回冲突组列表 `[[id_a, id_b], ...]`（不写库）。
+
+        两道判据（**同时满足**才判冲突）：
+        ① **同键**：同 `mem_topic`（无topic 时按 agent）、同 `scope_type/scope_id`
+           —— 不跨作用域，避免把"项目 A 的口径"与"项目 B 的口径"当冲突。
+        ② **高相似**（`score >= sim_high`）**且任一方含互斥断言词**。
+
+        ⚠️⚠️ **判据②的方向是"高相似"，与实施计划 §5 D1 写的"低相似"相反**——
+        这是 2026-10-07 实测推翻的，**别按计划书的字面理解**：
+
+        实测「工程 vc 格式为 branchId,quId」vs「工程 vc 格式**不再是** branchId,quId，
+        已废弃该规则」→ bigram 相似度 **0.7252**（很高）。
+        **原因很直白**：互斥事实改的正是那几个关键词，两条必然字面高度重叠。
+        ⇒ 原方案「相似度低 ⇒ 才判冲突」与判据①「同键」**自相矛盾**，
+           会把**所有真实互斥对全部漏判**（S1 正例实测0 检出）。
+
+        **修正后的分工**（与 `consolidate()` 严丝合缝，不重叠）：
+        | 内容关系 | 相似度 | 互斥词 | 归谁管 |
+        |---|---|---|---|
+        | 重复（同一结论两种措辞） | 高 | 无 | `consolidate()` |
+        | **互斥（新口径否定旧口径）** | **高** | **有** | **`detect_conflicts()`** |
+        | 无关/互补 | 低 | 无 | 都不管 |
+        ⇒ 区分二者的**唯一可靠信号是互斥词**，不是相似度。
+        """
+        try:
+            where = ["forgotten=0", "COALESCE(superseded_by,0)=0"]
+            params: list = []
+            if agent_id:
+                where.append("agent_id=?")
+                params.append(agent_id)
+            if topic:
+                where.append("mem_topic=?")
+                params.append(topic)
+            if scope_type:
+                where.append("scope_type=?")
+                params.append(scope_type)
+            if scope_id:
+                where.append("scope_id=?")
+                params.append(scope_id)
+            rows = conn.execute(
+                "SELECT id, agent_id, mem_type, content, mem_topic, scope_type, scope_id, embedding, embed_version "
+                "FROM agent_memory WHERE " + " AND ".join(where) + " ORDER BY id", params).fetchall()
+            if len(rows) < 2:
+                return []
+            rows = [dict(r) for r in rows]
+            # 按「同 topic 或同 agent」分组（无 topic 时按 agent 分，避免全库两两比）
+            groups: dict = {}
+            for r in rows:
+                key = (r.get("scope_type") or "", r.get("scope_id") or "",
+                       r.get("mem_topic") or ("__agent__:" + str(r.get("agent_id"))))
+                groups.setdefault(key, []).append(r)
+            try:
+                from knowledge_engine import VectorEngine
+                ve = VectorEngine()
+            except Exception:
+                ve = None
+            out: list = []
+            for _key, g in groups.items():
+                if len(g) < 2:
+                    continue
+                for i in range(len(g)):
+                    for j in range(i + 1, len(g)):
+                        a, b = g[i], g[j]
+                        # ② 高相似（同主题下高度重叠 ⇒ 可能是"同一件事的两种说法"）
+                        s = _mem_cosine(ve, a, b)
+                        if s is None or s < sim_high:
+                            continue
+                        # 互斥词（任一方）—— 这是与 consolidate 的**唯一**区分信号
+                        if not (_has_conflict_marker(a["content"])
+                                or _has_conflict_marker(b["content"])):
+                            continue
+                        out.append([a["id"], b["id"]])
+            return out
+        except Exception:
+            return []
+
+    @staticmethod
+    def mark_superseded(conn, old_id: int, new_id: int) -> bool:
+        """把 `old_id` 标记为被 `new_id` 取代（**只打标记，不删内容**）。
+
+        ⚠️ **影子语义**：`superseded_by != 0` 表示"这条有更新的版本"，
+        但**原内容仍在库里**，可观察 / 可回退 / 可审计。
+        直接 UPDATE 覆盖旧内容会让误判不可逆（见类头注释）。
+        """
+        try:
+            if not old_id or not new_id or int(old_id) == int(new_id):
+                return False
+            cur = conn.execute(
+                "UPDATE agent_memory SET superseded_by=?, superseded_at=datetime('now','localtime') "
+                "WHERE id=? AND forgotten=0", (int(new_id), int(old_id)))
+            conn.commit()
+            return cur.rowcount > 0
+        except Exception:
+            return False
 
     # ── P2：周期维护入口（遗忘 + 合并，幂等）──
     @staticmethod
@@ -576,6 +720,10 @@ class MemoryService:
         r"方便补充一下",
         r"^[^\n]{0,30}[：:]\s*[^\n]{0,40}（来源\s*[A-Za-z0-9_\-]+）\s*$",  # 图谱实体「X：Y（来源 test-reg）」
         r"^\s*\d{1,6}\s*$",                                          # 纯数字输入
+        # ── Mock / 占位回声（2026-10-07 评测实测：id=276 `（Mock 回答）已收到你的消息：…`
+        #    access=70、召回 score 0.520 排第1 ⇒ 两道闸全漏）──
+        # 只锚**括号前缀**形态，不用宽泛的"含 Mock 就拒"（真经验里也可能出现该词）。
+        r"^[(（【\[]\s*(Mock|MOCK|mock)\s*(回答|回复|响应)?\s*[)）\]】]",
     )
     # 经验"可复用性"信号词：出现任意一个才认为含有方法论/判断（否则只是事实陈述）
     # ⚠️ 2026-09-29 两轮教训（均有实测样本支撑）：
@@ -728,4 +876,55 @@ class MemoryService:
                                                  scope_type=scope_type, scope_id=scope_id)
         except Exception:
             pass
+        return None
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 冲突消解的模块级辅助（D1，2026-10-07）
+#放模块级而非类内staticmethod：`_CONFLICT_MARKERS` 需在函数里直接引用，
+# 且这两个纯函数无状态、可被门禁直接import 做变异测试。
+# ══════════════════════════════════════════════════════════════════════════
+
+def _has_conflict_marker(text) -> bool:
+    """内容里是否出现**互斥断言词**。
+
+    ⚠️ 只认明确的"否定/更正/废弃"信号（`_CONFLICT_MARKERS`）。
+    **刻意不收**"新版/更新后/改为"这类宽泛词——实测「新旧版本对比」类正常经验
+    会命中，那是**互补**而非**互斥**，收了就是误判。
+    （本工程既有教训：用分不开的判据做删除决策 = 不可预测的误杀。）
+    """
+    s = str(text or "")
+    if not s:
+        return False
+    return any(m in s for m in MemoryService._CONFLICT_MARKERS)
+
+
+def _mem_cosine(ve, a: dict, b: dict) -> float | None:
+    """两条记忆的相似度。真向量优先（同 embed_version），降级 bigram。
+
+    与 `consolidate()` **完全同口径**（同一对`_cosine`/`_vector` 调用）——
+    ⚠️ 这是刻意的：冲突检测说"这俩不像"（低相似），
+    而 consolidate 说"这俩重复"（高相似），**两者必须用同一把尺**，
+    否则会出现"同一对内容被两个引擎给出矛盾结论"。
+    返回 None = 算不出（调用方据此跳过，不硬判）。
+    """
+    import json as _j
+    import math as _m
+    try:
+        va = (a or {}).get("embedding") or ""
+        vb = (b or {}).get("embedding") or ""
+        ea, eb = (a or {}).get("embed_version"), (b or {}).get("embed_version")
+        if ea and eb and ea == eb and va and vb:
+            xa = _j.loads(va) if isinstance(va, str) else list(va)
+            xb = _j.loads(vb) if isinstance(vb, str) else list(vb)
+            if xa and len(xa) == len(xb):
+                qa = _m.sqrt(sum(x * x for x in xa)) or 1.0
+                qb = _m.sqrt(sum(x * x for x in xb)) or 1.0
+                return sum(x * y for x, y in zip(xa, xb)) / (qa * qb)
+        if ve is None:
+            from knowledge_engine import VectorEngine as _VE
+            ve = _VE()
+        return ve._cosine(ve._vector((a or {}).get("content") or ""),
+                          ve._vector((b or {}).get("content") or ""))
+    except Exception:
         return None

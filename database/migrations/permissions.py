@@ -34,6 +34,15 @@ _GRANTS = {
     # 能看（列表）就等于能批（批准即触发写执行）。只授 approve 会让列表 403，
     # 只授 view 会让批准无门；两者一起给才是完整闭环。
     "hil": ["view", "approve"],
+    # ── memory（2026-10-07 D2-b 新增）：AI 记忆管理面板 ──
+    # view —— 看自己的记忆（list / export）；记忆内容可能含用户偏好，
+    #         **任何登录用户都能导出全库**是实打实的信息泄露面，故按人隔离。
+    # manage —— 真删/ 归档 / 恢复 / 清空。**比view 严**：删除是不可逆操作，
+    #         只配 view 会让"能看的人顺便能删"。
+    # ⚠️ 实测：加门前 `roles.permissions` **完全没有 memory 域**（3 个 preset 全无），
+    #   若只挂 `require_permission("memory","view")` 而不迁移 ⇒ **全员 403**
+    #   （`role_id=80` 承担 100% 用户）。**加门必须与本迁移同批交付**。
+    "memory": ["view", "manage"],
 }
 
 #: 只授给preset 角色。custom 保持最小权限（安全默认，需显式授权）。

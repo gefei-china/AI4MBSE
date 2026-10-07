@@ -58,15 +58,78 @@ class MemoryAdminRepo:
             sel.append("tier")
         return ", ".join(sel) if sel else "id"
 
+    # ── D2-b：admin 判定（**口径必须与 core/deps.require_permission 一致**）──
+    @staticmethod
+    def _is_admin(viewer) -> bool:
+        """admin 域权限列表**非空**才算超级用户。
+
+        ⚠️ 与 `core/deps.py:207` 完全同口径：**空列表不算管理员**——
+        种子数据里所有角色都带 `"admin"` 键（设计师/知识工程师都是 `[]`），
+        若把空列表当管理员，所有人都会看到全量记忆。
+        """
+        try:
+            return bool((viewer.get("permissions") or {}).get("admin"))
+        except Exception:
+            return False
+
+    @classmethod
+    def _viewer_clause(cls, viewer, cols: set):
+        """身份过滤子句 → (sql, params)。admin / 无身份 / 无 scope_type 列 → ("", [])。"""
+        if viewer is None or "scope_type" not in cols or cls._is_admin(viewer):
+            return "", []
+        uid = str((viewer.get("username") or viewer.get("display_name") or "")).strip()
+        if not uid:
+            return "", []                # 匿名/无用户名 → 只看公共（不泄露 user 记忆）
+        return "(scope_type<>'user' OR scope_id=?)", [uid]
+
+    @classmethod
+    def _can_touch(cls, row, viewer) -> bool:
+        """能否对该行做写操作（删/归档/恢复）。
+
+        与 `_viewer_clause` 同口径：admin 全量；普通用户**只能动自己的 user 记忆**，
+        公共记忆（project/global/空 scope）人人可动 —— 领域经验本就该共享。
+
+        ⚠️ 2026-10-07：真实库`scope_type='user'` **0 条** ⇒ 当前恒返回 True
+        （本仓还没启用按人记忆）。**这不是"隔离已生效"的证据**，
+        而是「一旦启用 user 作用域，这道门就自动生效」的前置守卫。
+        """
+        if row is None:
+            return False
+        if cls._is_admin(viewer):
+            return True
+        try:
+            st = str(row["scope_type"] or "")
+            sid = str(row["scope_id"] or "")
+            if st != "user":
+                return True                        # 公共记忆：共享
+            uid = str((viewer or {}).get("username")
+                      or (viewer or {}).get("display_name") or "").strip()
+            return bool(uid) and sid == uid
+        except Exception:
+            return False                          # 取不到字段 → 保守拒绝（不误删）
+
     # ── 查询 ──
     def list(self, agent_id=None, tier=None, mem_type=None, q=None,
-             include_forgotten=0, limit=200, offset=0) -> dict:
-        """分页列表 + 统计。`include_forgotten=0`（默认）只看存活记忆。"""
+             include_forgotten=0, limit=200, offset=0, viewer=None) -> dict:
+        """分页列表 + 统计。`include_forgotten=0`（默认）只看存活记忆。
+
+        `viewer`（D2-b2026-10-07）：**已认证用户**。非None 时按身份过滤：
+        - admin（`permissions['admin']` 非空）→ 不加过滤（运维需看全量）；
+        - 普通用户 → `user_scope_id` 为空时**看全部公共记忆**（本仓当前 0 条
+          user 作用域，且经验类本应全局共享）；非空时**只看他自己的 user 记忆**。
+        ⚠️ **服务端强制**：`viewer` 由路由从 `Depends(current_user)` 取得，
+        **不接受前端传参**——否则改个 URL 就能看别人的记忆。
+        """
         cols = self._cols()
         has_tier, has_fg = "tier" in cols, "forgotten" in cols
         where, args = [], []
         if not include_forgotten and has_fg:      # 无 forgotten 列 = 全部存活，不加条件
             where.append("forgotten=0")
+        # D2-b：身份过滤（admin 跳过；口径见 _viewer_clause）
+        _vc, _va = self._viewer_clause(viewer, cols)
+        if _vc:
+            where.append(_vc)
+            args.extend(_va)
         if agent_id and "agent_id" in cols:
             where.append("agent_id=?")
             args.append(agent_id)
@@ -178,9 +241,18 @@ class MemoryAdminRepo:
         return cur.rowcount
 
     # ── 导出（用户数据可携带，合规配套）──
-    def export_all(self, agent_id=None) -> list:
+    def export_all(self, agent_id=None, viewer=None) -> list:
+        """导出记忆 JSON。**D2-b：`viewer` 必传**（非 admin 只导出自己的 user 记忆）。
+
+        ⚠️ 这是**泄露面最大的端点**（一次调用导出全库）⇒ 过滤**必须服务端强制**，
+        路由层必须用 `Depends(current_user)` 传入已认证身份。
+        """
         cols = self._cols()
         where, args = [], []
+        _vc, _va = self._viewer_clause(viewer, cols)
+        if _vc:
+            where.append(_vc)
+            args.extend(_va)
         if agent_id and "agent_id" in cols:
             where.append("agent_id=?")
             args.append(agent_id)

@@ -144,6 +144,20 @@ def _migrate_columns(conn):
         _cols_am = [r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()]
         if "scope_type" in _cols_am and "scope_id" in _cols_am:
             conn.execute("CREATE INDEX IF NOT EXISTS ix_am_scope ON agent_memory(scope_type, scope_id, forgotten)")
+    # ── 记忆冲突消解（D1-A影子状态列，2026-10-07）──
+    # ⚠️ **为什么用影子列而不是直接 UPDATE 旧记忆**：
+    #   冲突消据本质是"判断谁对谁错"，而**判断会错**。
+    #   直接 UPDATE ⇒ 错误判断不可逆（文章反方："错误更新→不可逆污染"）；
+    #   影子列只标记"被谁取代"，旧内容仍在库里 ⇒ 可观察、可回退、可审计。
+    # 这两列**不参与检索过滤**（召回期仲裁在 memory_recall 层做），
+    # 加它们对既有行为零影响（默认 0/空 = "未被取代"）。
+    _add("agent_memory", "superseded_by", "INTEGER DEFAULT 0")           # 被哪条记忆取代（0=未被取代）
+    _add("agent_memory", "superseded_at", "TEXT DEFAULT ''")            # 标记时间
+    # 索引同样**必须在补列之后**（与上方 ix_am_scope 同纪律）
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_memory'").fetchone():
+        _cols_am2 = [r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()]
+        if "superseded_by" in _cols_am2:
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_am_superseded ON agent_memory(superseded_by)")
     _add("mcp_servers", "args", "TEXT DEFAULT '[]'")
     _add("mcp_servers", "env", "TEXT DEFAULT '{}'")
     _add("mcp_servers", "last_check", "TEXT DEFAULT ''")

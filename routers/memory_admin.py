@@ -27,7 +27,7 @@ Gemini）都有查看/删除/关闭。本模块补上「可见 + 可删」的最
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from core.deps import db_session, current_user
+from core.deps import db_session, current_user, require_permission
 from core.audit import audit, audit_user
 from repositories.memory_admin_repo import MemoryAdminRepo
 
@@ -37,28 +37,49 @@ router = APIRouter(tags=["AI 记忆管理"])
 @router.get("/api/memory/list")
 def list_memories(agent_id: str = "", tier: str = "", mem_type: str = "", q: str = "",
                   include_forgotten: int = 0, limit: int = 200, offset: int = 0,
-                  conn=Depends(db_session)):
-    """记忆列表 + 统计（页面顶部徽章与筛选器用它，避免前端多次请求）。"""
+                  conn=Depends(db_session), user=Depends(current_user)):
+    """记忆列表 + 统计（页面顶部徽章与筛选器用它，避免前端多次请求）。
+
+    D2-b（2026-10-07）：补 `user=Depends(current_user)`。
+    ⚠️ **这不是"顺手加个参数"** —— 此前本端点**无任何身份依赖**，
+    任何登录用户都能列出**全库**记忆（含他人偏好类内容）。
+    过滤在 `MemoryAdminRepo._viewer_clause` 内按**已认证身份**强制执行，
+    **不接受前端传参**（改 URL 也拿不到别人的）。
+    """
     return MemoryAdminRepo(conn).list(
         agent_id=agent_id or None, tier=tier or None, mem_type=mem_type or None,
         q=q or None, include_forgotten=1 if include_forgotten else 0,
-        limit=max(1, min(limit, 1000)), offset=max(0, offset))
+        limit=max(1, min(limit, 1000)), offset=max(0, offset), viewer=user)
 
 
 @router.get("/api/memory/export")
-def export_memories(agent_id: str = "", conn=Depends(db_session)):
-    """导出记忆为 JSON（数据可携带，合规配套）。"""
-    items = MemoryAdminRepo(conn).export_all(agent_id or None)
+def export_memories(agent_id: str = "", conn=Depends(db_session),
+                    user=Depends(current_user)):
+    """导出记忆为 JSON（数据可携带，合规配套）。
+
+    D2-b：**泄露面最大的端点**（一次调用导出全库）⇒ 强制身份过滤。
+    admin 看全量；普通用户只导出自己的 user 记忆 + 公共记忆。
+    """
+    items = MemoryAdminRepo(conn).export_all(agent_id or None, viewer=user)
     return {"count": len(items), "items": items}
 
 
 @router.delete("/api/memory/{mid}")
-def delete_memory(mid: int, conn=Depends(db_session), user=Depends(current_user)):
-    """**真删**单条记忆（用户行使被遗忘权；不可恢复）。"""
+def delete_memory(mid: int, conn=Depends(db_session), user=Depends(current_user),
+                  _u=Depends(require_permission("memory", "manage"))):
+    """**真删**单条记忆（用户行使被遗忘权；不可恢复）。
+
+    D2-b：补 `memory:manage` 权限门 + **按人过滤**。
+    ⚠️ 此前无门 ⇒ 任何登录用户可删任意记忆（含他人偏好）。
+    过滤口径与 list/export 一致：普通用户只能删自己的 user 记忆；
+    admin 可删全部（运维职责）。
+    """
     repo = MemoryAdminRepo(conn)
     row = repo.get(mid)
     if not row:
         return JSONResponse({"error": "记忆不存在"}, 404)
+    if not repo._can_touch(row, user):
+        return JSONResponse({"error": "无权操作该记忆（仅可操作自己的记忆）"}, 403)
     repo.hard_delete(mid)
     audit(audit_user(user), "memory_delete",
           "删除记忆#%d(%s): %s" % (mid, row.get("agent_id") or "", (row.get("content") or "")[:40]),
@@ -67,26 +88,47 @@ def delete_memory(mid: int, conn=Depends(db_session), user=Depends(current_user)
 
 
 @router.post("/api/memory/{mid}/forget")
-def forget_memory(mid: int, conn=Depends(db_session), user=Depends(current_user)):
-    """软删（forgotten=1）：检索跳过、可 restore。"""
-    if not MemoryAdminRepo(conn).soft_delete(mid):
+def forget_memory(mid: int, conn=Depends(db_session), user=Depends(current_user),
+                  _u=Depends(require_permission("memory", "manage"))):
+    """软删（forgotten=1）：检索跳过、可 restore。D2-b：同 delete 加门 + 按人过滤。"""
+    repo = MemoryAdminRepo(conn)
+    row = repo.get(mid)
+    if not row:
+        return JSONResponse({"error": "记忆不存在或已归档"}, 404)
+    if not repo._can_touch(row, user):
+        return JSONResponse({"error": "无权操作该记忆（仅可操作自己的记忆）"}, 403)
+    if not repo.soft_delete(mid):
         return JSONResponse({"error": "记忆不存在或已归档"}, 404)
     audit(audit_user(user), "memory_forget", "归档记忆#%d" % mid, conn=conn)
     return {"ok": True, "id": mid}
 
 
 @router.post("/api/memory/{mid}/restore")
-def restore_memory(mid: int, conn=Depends(db_session), user=Depends(current_user)):
-    """恢复软删记忆。"""
-    if not MemoryAdminRepo(conn).restore(mid):
+def restore_memory(mid: int, conn=Depends(db_session), user=Depends(current_user),
+                   _u=Depends(require_permission("memory", "manage"))):
+    """恢复软删记忆。D2-b：同 delete 加门 + 按人过滤。"""
+    repo = MemoryAdminRepo(conn)
+    row = repo.get(mid)
+    if not row:
+        return JSONResponse({"error": "记忆不存在或未归档"}, 404)
+    if not repo._can_touch(row, user):
+        return JSONResponse({"error": "无权操作该记忆（仅可操作自己的记忆）"}, 403)
+    if not repo.restore(mid):
         return JSONResponse({"error": "记忆不存在或未归档"}, 404)
     audit(audit_user(user), "memory_restore", "恢复记忆#%d" % mid, conn=conn)
     return {"ok": True, "id": mid}
 
 
 @router.post("/api/memory/purge-forgotten")
-def purge_forgotten(conn=Depends(db_session), user=Depends(current_user)):
-    """清除全部已软删（forgotten=1）记忆，返回清除条数。"""
+def purge_forgotten(conn=Depends(db_session), user=Depends(current_user),
+                    _u=Depends(require_permission("memory", "manage"))):
+    """清除全部已软删（forgotten=1）记忆，返回清除条数。
+
+    ⚠️ D2-b：**这是全局破坏性操作**（不可逆、影响所有人），故**限 admin**
+    ——普通用户即使有 `memory:manage` 也不放行，避免误清他人归档。
+    """
+    if not MemoryAdminRepo._is_admin(user):
+        return JSONResponse({"error": "清理全部已归档记忆仅限管理员"}, 403)
     n = MemoryAdminRepo(conn).hard_delete_forgotten()
     audit(audit_user(user), "memory_purge", "清除已归档记忆 %d 条" % n, conn=conn)
     return {"ok": True, "deleted": n}

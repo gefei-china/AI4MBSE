@@ -789,6 +789,10 @@ def init_db():
     # ⚠️ ix_am_scope 不在此处建：老库「表已存在」时 CREATE TABLE IF NOT EXISTS 不会加列，
     #    此处建索引会 `no such column: scope_type` 直接打断 init_db。统一放到补列迁移之后
     #    （database/migrations/columns.py 的 _migrate_columns 内）。
+    # ⚠️ **本仓约定：新库也走补列迁移**（forgotten / activation / tier / superseded_by 等
+    #    都不在上面的 CREATE TABLE 里，而是由 _migrate_columns 统一补）。
+    #    因此新增记忆列**只改 columns.py 一处**，不要在这里加 ——
+    #    两处都改会出现"新库有、老库无"的分叉，且索引必然 `no such column`（2026-10-07 实测踩过）。
 
     c.execute("""CREATE TABLE IF NOT EXISTS generate_rules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
