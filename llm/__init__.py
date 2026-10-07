@@ -157,6 +157,15 @@ def parse_stream_frame(raw) -> dict:
 _instances: dict = {}
 
 
+class _CircuitOpen(Exception):
+    """P1-4：主 provider 处于熔断态时抛出，用于把"熔断"与"调用失败"区分开。
+
+    ⚠️ 为什么不直接 raise 原异常：熔断时**根本没有打下游**，
+    若抛一个看起来像下游报错的异常，日志/告警会误导排查方向
+    （运维会去查provider 挂了，而实际上是"我们主动不再打它"）。
+    """
+
+
 def get_llm(provider_id=None, conn=None):
     """按 provider 配置创建 LLM 客户端实例（缓存）。
 
@@ -520,19 +529,69 @@ class LLMClient:
         · **回退成功必须把 provider 换成实际用的那个**：否则 `_meta` 与 `usage` 统计
           会把成功记到主 provider 头上，回退形同"隐形"，下次看数据还是错的
         · 全部失败 → 抛出最后一次异常（交由外层回落 Mock，行为不变）
+
+        P1-4（2026-10-06）：外层加**熔断**（llm/circuit_breaker.py，三态 CLOSED/OPEN/HALF_OPEN）。
+        ⚠️ 三条设计约束，改动时务必保留：
+        ① **熔断包在重试之外层**：若放在 `_chat_with_retry` 内部，一次调用产生的
+           3 次重试失败会被计成 3 次 → 阈值形同被放大 3 倍，熔断提前触发。
+        ② **熔断拒绝 ≠ 抛异常路径**：主 provider 被熔断时**不直接 raise**，
+           而是**跳过它、继续走 provider 回退** —— 因为「主路挂了就走备路」正是
+           回退机制存在的意义。若直接 raise，熔断会让「备选 provider」这条退路失效。
+        ③ **流式不计入熔断**：流式无重试，一次失败即整轮失败，
+           计入会把瞬时中断误判成"下游不可用"。
         """
         from core import config as _cfg
         ptype = provider.get("provider_type") or "openai_compat"
         if not ProviderRegistry.has(ptype):
             ptype = "openai_compat"
         impl = ProviderRegistry.create(ptype, provider)
+        # P1-4：熔断键用 provider 的稳定标识（id 优先，退回名字）。
+        _br = None
+        _pkey = str(provider.get("id") or provider.get("name") or "?")
+        try:
+            from llm.circuit_breaker import get_breaker as _gb
+            # P1-4：总开关。没开则完全退回"纯重试"旧行为（零漂移，便于灰度）。
+            if not bool(_cfg.get("llm", "circuit_breaker_enabled", True)):
+                _br = None
+            else:
+                _br = _gb()
+                _ok, _why = _br.allow(_pkey)
+        except Exception:
+            _br, _ok, _why = None, True, ""
+        if not _ok:
+            # 主 provider 已熔断 ⇒ 不打它，直接走回退（见约束②）
+            try:
+                import logging as _lg
+                _lg.getLogger("mbse.llm").warning("LLM 熔断跳过主 provider(%s)：%s",
+                                                 provider.get("name"), _why)
+            except Exception:
+                pass
+            return self._chat_fallback(provider, messages, impl_kw, stream, tools,
+                                       thinking, _CircuitOpen(_why))
         try:
             resp, n = self._chat_with_retry(
                 impl, messages, impl_kw, stream, tools, thinking,
                 provider.get("name", "-"), provider.get("model_name", "-"))
+            if _br and not stream:
+                _br.record_success(_pkey)
             return resp, n, provider
         except Exception as e:  # noqa: BLE001
             last = e
+            # P1-4：非流式失败计入熔断（见约束③）
+            if _br and not stream and self._retryable(e):
+                try:
+                    _br.record_failure(_pkey, f"{type(e).__name__}: {str(e)[:150]}")
+                except Exception:
+                    pass
+        return self._chat_fallback(provider, messages, impl_kw, stream, tools, thinking, last)
+
+    def _chat_fallback(self, provider, messages, impl_kw, stream, tools, thinking, last):
+        """主provider 之后的那一步：按配置走备选 provider，全败则抛 `last`。
+
+        P1-4 抽出此方法，是为了让「主路熔断」与「主路重试失败」走**同一条**回退路径，
+        避免两条路径各写一份、久而久之行为漂移。
+        """
+        from core import config as _cfg
         fb_id = int(_cfg.get("llm", "fallback_provider_id", 0) or 0)
         if not fb_id or fb_id == provider.get("id"):
             raise last
@@ -550,10 +609,30 @@ class LLMClient:
         if not ProviderRegistry.has(ftype):
             ftype = "openai_compat"
         fimpl = ProviderRegistry.create(ftype, fb)
-        resp, n = self._chat_with_retry(
-            fimpl, messages, impl_kw, stream, tools, thinking,
-            fb.get("name", "-"), fb.get("model_name", "-"))
-        return resp, n, fb
+        # P1-4：备选 provider 也各自计熔断（两个下游的可用性是独立事实）
+        _fbr, _fkey = None, str(fb.get("id") or fb.get("name") or "?")
+        try:
+            from llm.circuit_breaker import get_breaker as _gb2
+            _fbr = _gb2()
+            _fok, _fwhy = _fbr.allow(_fkey)
+        except Exception:
+            _fbr, _fok, _fwhy = None, True, ""
+        if not _fok:
+            raise last          # 两条路都熔断 ⇒ 无路可走，抛主路的原因（更有诊断价值）
+        try:
+            resp, n = self._chat_with_retry(
+                fimpl, messages, impl_kw, stream, tools, thinking,
+                fb.get("name", "-"), fb.get("model_name", "-"))
+            if _fbr and not stream:
+                _fbr.record_success(_fkey)
+            return resp, n, fb
+        except Exception:
+            if _fbr and not stream:
+                try:
+                    _fbr.record_failure(_fkey, "fallback provider 调用失败")
+                except Exception:
+                    pass
+            raise last
 
     @staticmethod
     def _stream_resp(usage, finish, chars) -> dict:

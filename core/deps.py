@@ -214,6 +214,94 @@ def require_permission(domain: str, op: str):
     return checker
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# P0-6（2026-10-06）：Agent 工具链的权限判定内核
+#
+# 为什么要单独抽出来（对标《Agent 生产化Harness 对照核查》P0-1）：
+#   实测 `grep require_permission` → routers/ 51 处、**agent/ 0 处**。
+#   即「HTTP 端点有 RBAC，Agent 调工具这条链完全没有」——
+#   用户提一句话 → LLM 选工具 → `_exec_tool_call()` 直接执行，无任何权限判定。
+#   25 个 active read 类工具（file_read / graph_retrieve / sys_query_users …）
+#   全部无门，这正是文章讲的「实习生用 Agent 读了他无权查看的文档」那个形态。
+#
+# 为什么不复用 require_permission 本身：它是 **FastAPI 依赖工厂**
+# （内含 `Depends(current_user)`，只能挂在路由签名上），
+# 而工具链需要的是**普通函数**（user 由业务侧从请求上下文拿）。
+# 所以这里把它的**判定语义原样抽成纯函数**，两边共用同一份规则——
+# 避免「HTTP 一套、Agent 另一套」这种同族漂移（本工程已吃过多次）。
+# ══════════════════════════════════════════════════════════════════════════
+
+#: 工具链权限矩阵的两个操作位（**op 名不含 domain 前缀** —— `roles.permissions`
+#: 的结构是 `{domain: [op, ...]`，domain 是 key、op 是列表项；
+#: 早期版本把常量写成 "agent_tool:read" 并整体当 domain 传，
+#: 导致 `perms.get("agent_tool:read")` 永远查不到 ⇒ **所有人被拒**（2026-10-06 实测踩到）。
+#: - read  —— 读图谱/文件/用户等。缺它 = 越权读（文章那个实习生案例）
+#: - write —— 写实体/建概念等。写类另有 HIL 人工确认 + destructive 门兜底，
+#:          此处是**第二道锁**（纵深防御：HIL 是流程闸，本项是权限闸）。
+TOOL_PERM_DOMAIN = "agent_tool"
+TOOL_PERM_READ = "read"
+TOOL_PERM_WRITE = "write"
+
+#: 匿名放行的开关语义与 `require_permission` 保持一致：
+#: enforce_login=True 时无身份 ⇒ 当前用户在调用侧就已被判 401，
+#: 所以本函数的 `user is None` 分支在强制态下不可达 ⇒ RBAC 自动闭合。
+def _tool_auth_cfg() -> dict:
+    return _auth_cfg()
+
+
+def has_perm(user, domain: str, op: str) -> bool:
+    """判定单个 (domain, op) 权限。**user=None（匿名）时恒为False**。
+
+    规则与 `require_permission` 的 checker 严格一致：
+      ① 匿名：仅非强制态放行（强制态下调用方已被 401，这里自然 False）；
+      ② `permissions["admin"]` 非空 ⇒ 超级用户放行
+         （**空列表不算**——种子数据里所有角色都带 "admin" 键，
+           空列表若被当管理员放行，设计师/知识工程师会全部变成超级用户）；
+      ③ `domain` 存在且 `op ∈ permissions[domain]` ⇒ 放行。
+    """
+    cfg = _tool_auth_cfg()
+    if user is None:
+        return not bool(cfg.get("enforce_login"))
+    perms = user.get("permissions") or {}
+    if perms.get("admin"):
+        return True
+    return op in (perms.get(domain) or [])
+
+
+def tool_side_effect_to_perm(side_effect: str) -> str:
+    """工具副作用 → 所需权限位。未知副作用按最严处理（当write）。
+
+    ⚠️ 这里刻意**不把未知当 read**（`_tool_side_effect()` 的查询失败兜底也是 "read"，
+    但那是有意的可用性兜底；这里是权限侧，宁可多问一句）。
+    与 `tools.side_effect` 的既有取值对齐：read / write / destructive。
+    """
+    se = (side_effect or "").strip().lower()
+    if se == "read":
+        return TOOL_PERM_READ
+    return TOOL_PERM_WRITE        # write / destructive / 空 / 未知 → 一律按写处理
+
+
+def check_tool_perm(user, tool_name: str, side_effect: str) -> tuple:
+    """Agent 工具链权限闸。返回 `(allowed: bool, reason: str)`。
+
+    - allowed=True  →放行，reason 为空串；
+    - allowed=False → 必须拒绝，reason 是**给用户看的中文原因**，
+      调用方应把它回喂给 LLM，让模型如实转述（文章原话：
+      「Agent 只能老老实实告诉员工你没有权限看这份文档」）。
+
+    ⚠️ **绝不抛异常**：Agent 工具链在 ReAct 循环内，抛异常会打断整个编排。
+    拒绝走结构化返回值，这是与 HTTP 层（抛 403）的关键差异。
+    """
+    need = tool_side_effect_to_perm(side_effect)
+    if has_perm(user, TOOL_PERM_DOMAIN, need):
+        return True, ""
+    return False, (
+        f"权限不足：当前用户没有「{TOOL_PERM_DOMAIN}:{need}」权限，无法执行工具「{tool_name}」。"
+        f"请提示用户联系管理员为其角色授权 {TOOL_PERM_DOMAIN}:{need} 权限，"
+        f"或改用其他方案。（权限必须在工具边界强制执行，不能由模型自行判断）"
+    )
+
+
 def require_any_permission(pairs):
     """权限依赖工厂：任一 (domain, op) 满足即放行（如写操作双角色兼容）。
 

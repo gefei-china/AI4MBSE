@@ -285,6 +285,10 @@ class ExecuteMixin:
         self._tool_intent_ctx = {"intent": intent}
         self._tool_agent_ctx = {"agent": agent_def.name}
         self._tool_conv_ctx = conversation_id
+        # P0-6（2026-10-06）：把当前用户透给工具链，供 `_exec_tool_call` 的权限闸判定。
+        # 为什么必须透：`execute()` 签名里就有 user（current_user 依赖产物），
+        # 但此前从未传到工具执行层 ⇒ 权限判定拿不到身份。
+        self._tool_user = user
         # D4：skill 工具白名单最小权限合并——命中 skill 声明了 allowed_tools 时，
         # 与委派白名单求交集（双限制取更严），未委派时直接用 skill 白名单
         try:

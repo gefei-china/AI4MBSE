@@ -53,6 +53,11 @@ def _migrate_columns(conn):
     _add("llm_usage_stats", "conversation_id", "INTEGER DEFAULT 0")
     _add("llm_usage_stats", "run_id", "INTEGER DEFAULT 0")
     _add("llm_usage_stats", "trace_id", "TEXT DEFAULT ''")
+    # ── P0-2（2026-10-06）工具调用日志补操作者──
+    # 此前 tool_call_logs 578 行**无 user 字段** ⇒ 只能回答"哪个会话调的"，
+    # 回答不了"**是谁**调的"（文章讲的「业务方追着问到底是谁改的」那个必答项）。
+    # 存量 578 行无法回溯（历史未记录），统一留空——**不编造**。
+    _add("tool_call_logs", "user_name", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "sub_task_key", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "prompt_cache_miss_tokens", "INTEGER DEFAULT 0")
     # P1-27 截断诊断（思考模型 reasoning 与正文共享 max_tokens 配额）

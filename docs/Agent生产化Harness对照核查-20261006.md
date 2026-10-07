@@ -254,7 +254,103 @@ grep -rn -i "circuit" --include=*.py .（排除 .venv/backups）  →  仅命中
 
 ---
 
-## 附 · 可复现命令
+## 8. 实施记录（2026-10-06 全部完成，1-4 项已落地并验证）
+
+> 基线 `b0882d4` → 工作区改动（**未提交**）。验证：pytest **34 passed + 1 skipped / rc=0**；
+> 两个新门禁 **46/46 + 41/41 ALL GREEN**；审计哈希链 **2554/2554ok=True**。
+
+### 实施前的一个重要修正（原判断需收窄）
+
+动手前实测发现：`agent/_exec_tool_call` **已有 7 道门**（白名单 P0-3 / Hooks block+require_confirm /
+编排子任务暂存 / HIL L2 / destructive 硬拒 / write 进确认队列），写类工具**并非完全无门**。
+真正的缺口更精确：
+
+| 原表述 | 收窄后实测 |
+|---|---|
+| 「Agent 工具链零权限门」 | **准确，但要说清是"权限维度"缺失**：既有 7 道全是**风险维度**（该不该做），没有一道问「**这个人**准不准」（授权维度）。实测 33 个 active 工具里 **25 个 read 类完全无门**，含 `file_read` / `graph_retrieve` / `sys_query_users`。 |
+
+⇒ 这恰好精确对应文章那个实习生案例：**读越权**（不是写越权）。
+
+### 实施中发现并修掉的两个真 bug
+
+1. **索引建在补列之前 → init_db 整体失败**
+   `CREATE TABLE IF NOT EXISTS` 对老库**不加列**，我在建表处建`idx_tool_logs_user(user_name)`
+   ⇒ `no such column: user_name`，启动直接挂。已移到 `_migrate_columns` 之后。
+   （与 `schema.py:1373` 既有注释「索引必须在 `_migrate_columns` 之后」是同一条纪律，我自己也踩了一次。）
+2. **权限常量写成 `"agent_tool:read"` → 全员被拒**
+   `roles.permissions` 结构是 `{domain: [op]}`，我把domain+op 连写再整体当 domain 查，
+   `perms.get("agent_tool:read")` 恒None ⇒ **权限位明明在库里，判定恒 False，米爸本人被拒**。
+   已拆成 `TOOL_PERM_DOMAIN="agent_tool"` + `TOOL_PERM_READ="read"`。
+   ⚠️ 这条正是 MEMORY「改配置≠改生效值」的同族：**光断言"授权已写入"判不出这类错，必须断言判定结果本身**。
+
+### 逐项交付
+
+| 项 | 落点 | 做了什么 |
+|---|---|---|
+| **P0-1 权限闸** | `core/deps.py`（+88行）<br>`agent/pipeline_parts/tools.py`（+70） | 抽出`has_perm`/`check_tool_perm`/`tool_side_effect_to_perm`（与 HTTP 层 `require_permission` **同源语义**）；闸门插在白名单之后、Hooks/HIL/destructive 之前（权限是第一道确定性边界）。**拒绝走结构化返回不抛异常**（ReAct 循环内抛异常会打断编排），并写 `tool_perm_denied` 审计 |
+| | `execute.py` / `stream.py`（各 +4） | 透传 `_tool_user`。**stream 是生产主路径**，只改execute 会给出虚假的安全结论 |
+| | `database/migrations/permissions.py`（新） | preset 角色补 `agent_tool:[read,write]` + `hil:[view,approve]`。**必须与加门同批交付**——实测 `role_id=80` 承担 100% 用户，只加门不授权当天全员 403。custom 角色（8 个）**刻意不授**（最小权限安全默认，非"没做"） |
+| **P0-2 审计归属** | `columns.py` / `schema.py` | `tool_call_logs` 加 `user_name` + 索引。存量 578 行**留空不编造** |
+| | `flows.py` | HIL 列表/批准端点加 `hil:view` / `hil:approve`（**能看=能批，须成对管控**）；`decided_by` 硬编码的 `"王工"` 改为**优先取已认证身份**，body 仅匿名兜底 |
+| **P0-3 脱敏** | `core/redact.py`（新，150行） | 键名敏感词+ `sk-`/`ghp_`/`Bearer`/JWT 形态 + 长blob 三层；**保留键名**（审计证据）、零误伤（实测中文/`satnet`/ID 不受影响） |
+| | `core/audit.py` | 在 `audit()` 内、**算哈希之前**脱敏 —— 否则 `hash=sha256(各字段)` 与明文不一致，`verify_chain()` 直接判失败 |
+| | `tools.py::_log_tool_call` | `arguments`/`result` 脱敏 + 补 `user_name` |
+| **P1-4 熔断** | `llm/circuit_breaker.py`（新） | 三态 CLOSED/OPEN/HALF_OPEN，按 provider 维度隔离。**HALF_OPEN 只放一个探针**（`probe_inflight` 占位，否则封锁期一过所有并发一起冲=第二次雪崩） |
+| | `llm/__init__.py` | 熔断**包在重试之外层**（放内侧则一次调用的 3 次重试被计成 3 次，阈值形同放大 3 倍）；**主路熔断不 raise 而是走回退**（否则熔断会让备选 provider 这条退路失效）；流式不计入 |
+| | `core/config.py` | 3 个配置项 + CONFIG_SCHEMA 注册，`circuit_breaker_enabled` 可灰度关（退回纯重试，零漂移） |
+
+### 顺带修掉的两个 API 缺陷（实测暴露，非本次目标）
+
+1. `CircuitBreaker.status(key)` 原本「传 key 返回详情、不传返回全部」⇒ `status("p1")["phase"]` KeyError。**同一函数两种形状**是隐式契约陷阱，已统一为都返回 `{key: {...}}`。
+2. `allow()` 用 `self._state(key)` 导致「只问一次闸」的 provider 也进 `_states` ⇒ `status()` 虚报一堆 `fail_count=0` 的健康下游。已改为只读路径不建条目。
+
+### 可测性设计（值得记一笔）
+
+熔断的 `reset_sec` 生产下界是 1 秒（低于 1 秒的熔断无意义），但这让 **HALF_OPEN 逻辑无法用秒级测试验证**
+⇒ 半开路径处于「写了但从没跑到」的状态，正是本工程反复出现的「代码在、没接线」同族问题。
+做法：生产保留下界，但 `_now` 可注入（`_t()` 方法），门禁用 `FakeClock` 子类 + `advance()`。
+⇒ **不牺牲生产约束，换来半开路径的真覆盖**。
+
+### 端到端验证证据（非静态断言）
+
+```
+无权限用户调 file_read → 拒绝  permission_denied=True
+  原因: 权限不足：当前用户没有「agent_tool:read」权限，无法执行工具「file_read」…
+tool_call_logs: tool=file_read | user='测试' | args={"path":"/x.md","api_key":"***REDACTED***"}
+审计落库: 探针事件 api_key=***REDACTED***    密钥是否残留: False
+哈希链校验: {'total': 2554, 'chained': 2554, 'broken_count': 0, 'ok': True}
+权限拒绝审计事件: tool=file_read side_effect=read convo=0
+```
+
+### 门禁的 4 处变异自证（防"假不红"）
+
+| 变异 | 注入 | 门禁表现 |
+|---|---|---|
+| M1 | 权限闸被摘除 | 锚点消失 → E 组判红 |
+| M2 | `has_perm`恒真 | 变异体放行 / 真实拒绝 → 对照判红 |
+| M3 | 脱敏打成恒等 | 变异体不遮 / 真实遮住 → 对照判红 |
+| M4 | domain 误拼 `agent_tool:read` | 复现本次真实 bug → 对照判红 |
+| H1 | 阈值判定永假 | 变异体永不熔断 → 对照判红 |
+| H2 | HALF_OPEN 不占位 | 变异体放行全部并发 → 对照判红 |
+
+⚠️ 门禁自身也踩了两次坑并修正：
+① **变异脚本自己崩**（`exec` 裸跑 `tools.py` 遇 `from .common import *` 报 `KeyError: __name__`）
+⇒ 变异脚本崩= 没变异，比不写更危险；改为「先断言锚点存在于磁盘 + 再断言真实实现会拒」。
+② **断言写错而非实现错**（共 5 处）：键名在嵌套层却查顶层、「王工」只在 docstring、
+`_row_hash(prev` 命中的是别的函数、CONFIG_SCHEMA 切分点选在注释处、变异对照组状态不同。
+⇒ 每处都先查证再改断言，**没有一处为了让门禁变绿而改实现**。
+
+---
+
+## 9. 待办（本次未做，需米爸拍板）
+- **`route_tags` 生产接线**（原报告第 6 项）：让编排链路传路由标签。是未来接贵模型的前置。
+- **成本闸**（原报告第 5 项）：接 `total_time_budget_s` + 按用户/部门阈值。
+- **请求层幂等**（原报告 P2）：写类端点支持 `Idempotency-Key` 头。
+- **上线前必须翻的开关**：`auth.enforce_login=False` → True、`auth.trust_user_id_header=True` → False。
+  现在权限体系已闭合，这两个开关一翻即完成加固。
+- **待拍板**：custom 角色（8 个载荷审评专家）是否需要显式授权 `agent_tool`？当前是安全默认（不可用）。
+
+---
 
 ```bash
 export PATH="/c/Users/gefei/.workbuddy/binaries/PortableGit/versions/1.2.0/usr/bin:$PATH"
@@ -285,4 +381,32 @@ wc -l agent/orch_checkpoint.py agent/loop_guard.py# 检查点 336 行 + 护栏
 print('orch_checkpoints',c.execute('SELECT COUNT(*) FROM orch_checkpoints').fetchone()[0]);
 print('llm_usage_stats',c.execute('SELECT COUNT(*) FROM llm_usage_stats').fetchone()[0]);
 print('cost',c.execute('SELECT ROUND(SUM(estimated_cost),4) FROM llm_usage_stats').fetchone()[0])"
+```
+## 附 · 可复现命令
+
+```bash
+export PATH="/c/Users/gefei/.workbuddy/binaries/PortableGit/versions/1.2.0/usr/bin:$PATH"
+R="C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system"; cd "$R"; PY="$R/.venv/Scripts/python.exe"
+
+# 门禁（本次新增，46+41 断言）
+"$PY" -X utf8 tools/verify/verify_agent_perm_gate.py       # → ALL GREEN / rc=0
+"$PY" -X utf8 tools/verify/verify_llm_circuit_breaker.py  # → ALL GREEN / rc=0
+
+# 权限覆盖面（实测值：改前 51 → 改后 53；agent 从 0 → 1）
+grep -rn "require_permission\|check_tool_perm" --include=*.py routers/ | wc -l   # 53
+grep -rn "check_tool_perm" --include=*.py agent/ | wc -l                          # 1（已接线）
+
+# 授权矩阵（迁移后）
+sqlite3 mbse.db "SELECT id,name,permissions FROM roles WHERE type='preset'"
+# → 80/81/82 均含 agent_tool:[read,write] 与 hil:[view,approve]
+
+# 审计结构与链完整性
+"$PY" -X utf8 -c "import sys;sys.path.insert(0,'.');from core.audit import verify_chain;print(verify_chain())"
+"$PY" -X utf8 -c "import sqlite3;print([x[1] for x in sqlite3.connect('mbse.db').execute('PRAGMA table_info(tool_call_logs)')])"
+
+# 熔断状态（进程内，重启即失效——这是刻意设计：熔断是瞬时事实，不跨进程）
+"$PY" -X utf8 -c "import sys;sys.path.insert(0,'.');from llm.circuit_breaker import breaker_status;print(breaker_status())"
+
+# pytest 基线
+"$PY" -m pytest -q            # → 34 passed + 1 skipped
 ```

@@ -296,6 +296,41 @@ class ToolMixin:
                           "result": f"工具「{name}」不在本次子任务授予的工具白名单内（最小权限，Worker ⊆ Supervisor），已拒绝执行"}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
+            # ── P0-6（2026-10-06）：权限闸（RBAC）——全链最靠前的确定性边界 ──────────
+            # 为什么插在这里：白名单管「这次子任务准不准用」，RBAC 管「**这个人**准不准用」。
+            # 顺序刻意在 Hooks / HIL / destructive 三道闸**之前** ——
+            #   无权限的人不该让工具走到「要不要人工确认」这一步（那等于把
+            #   「他本来没资格」伪装成「他够格但需要审批」）。
+            # 与既有 7 道闸的关系：本项是**权限维度**，其余是**风险维度**（白名单/HIL/destructive），
+            # 正交、互补，不是重复实现。
+            if not getattr(self, "_tool_perm_gate_disabled", False):
+                try:
+                    from core.deps import check_tool_perm as _check_perm
+                    _pu = getattr(self, "_tool_user", None)
+                    _se = self._tool_side_effect(name)
+                    _ok, _why = _check_perm(_pu, name, _se)
+                    if not _ok:
+                        # 拒绝也要留痕：这是「被拒绝的访问」——文章明确说
+                        # 「被拒绝的那些请求，往往才是真正值得关注的信号」。
+                        try:
+                            from core.audit import audit as _audit_perm, audit_user as _au
+                            _audit_perm(_au(_pu), "tool_perm_denied",
+                                        f"tool={name} side_effect={_se} convo={conv_ctx}",
+                                        "blocked", branch=str((agent_ctx or {}).get("branch") or ""))
+                        except Exception:
+                            pass
+                        result = {"ok": False, "permission_denied": True, "result": _why}
+                        self._log_tool_call(name, tool_type, arguments, result,
+                                            intent_ctx, agent_ctx, conv_ctx, t0)
+                        return result
+                except Exception as _pe:
+                    # 权限模块异常**不得静默放行**，也不得打断编排：
+                    # 按"最严"处理（拒绝），并把异常留在结果里可观测。
+                    result = {"ok": False, "permission_error": True,
+                              "result": f"权限校验异常，工具「{name}」已按最小权限拒绝执行：{str(_pe)[:150]}"}
+                    self._log_tool_call(name, tool_type, arguments, result,
+                                        intent_ctx, agent_ctx, conv_ctx, t0)
+                    return result
             # P1-4（2026-10-02）：工具结果 offload 重读——读类、无副作用、进程内直通。
             # 放行保障：offload 发生时 ensure_fetch_tool 已把本工具追加进 _tool_whitelist
             # 与本轮 tools_def；白名单未启用时自然放行。
@@ -694,22 +729,43 @@ class ToolMixin:
         return policy
 
     def _log_tool_call(self, name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0):
-        """优化1：工具调用可观测——落库 tool_call_logs（失败不阻断主流程）。"""
+        """优化1：工具调用可观测——落库 tool_call_logs（失败不阻断主流程）。
+
+        P0-2（2026-10-06）两处补强：
+        - **补 user_name**：此前本表无操作者字段 ⇒ 只能回答「哪个会话调的」，
+          回答不了「**是谁**调的」（文章讲的「业务方追着问到底是谁改的」那个必答项）。
+        - **参数脱敏**：`arguments` 此前**原样入库**，而 http 集成工具的入参可能含
+          鉴权头、MCP 配置含 token ⇒ 审计日志会变成新的泄露源（core/redact.py 文件头）。
+          脱敏在**序列化之后**做（对最终落库文本生效），键名保留、只遮值。
+        """
         try:
             import time as _time
             from database import db_conn
             import json as _json
             latency = int((_time.time() - t0) * 1000)
+            # P0-3：脱敏。失败不阻断（旁路原则），但要留痕让人知道没脱敏成功。
+            try:
+                from core.redact import redact_text as _redact
+                _args_txt = _redact(_json.dumps(arguments or {}, ensure_ascii=False)[:2000])
+                _res_txt = _redact(str(result.get("result", ""))[:2000])
+            except Exception:
+                _args_txt = _json.dumps(arguments or {}, ensure_ascii=False)[:2000]
+                _res_txt = "[redact-failed] " + str(result.get("result", ""))[:1900]
+            # P0-2：操作者。口径同 audit_logs.user_name（display_name，回落 username）。
+            _uname = ""
+            try:
+                from core.audit import audit_user as _au
+                _uname = _au(getattr(self, "_tool_user", None)) or ""
+            except Exception:
+                pass
             with db_conn() as conn:
                 conn.execute(
-                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id) "
-                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (intent_ctx.get("intent", ""), agent_ctx.get("agent", ""),
-                     name, tool_type,
-                     _json.dumps(arguments or {}, ensure_ascii=False)[:2000],
-                     str(result.get("result", ""))[:2000],
+                     name, tool_type, _args_txt, _res_txt,
                      1 if result.get("ok") else 0,
-                     latency, conv_ctx or 0),
+                     latency, conv_ctx or 0, _uname),
                 )
         except Exception:
             pass  # 观测落库失败不影响工具执行

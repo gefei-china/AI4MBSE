@@ -76,6 +76,12 @@ DEFAULT_CONFIG = {
         "retry_times": 2,            # 真实调用失败后的重试次数（指数退避；流式恒不重试）
         "retry_backoff_ms": 500,     # 首次重试退避毫秒（第 n 次 = backoff * 2^n）
         "fallback_provider_id": 0,   # 主 provider 重试后仍失败时的备选 provider id（0=不启用）
+        # ── P1-4（2026-10-06）熔断器：连续失败就停止打这个下游 ──
+        # 与上面retry_times 的分工：retry 管**单次调用内**的瞬时抖动，
+        # breaker 管**跨调用**的持续不可用（上游持续 5xx 时不再白等 3 次退避）。
+        "circuit_breaker_enabled": True,   # 总开关（关=退回纯重试，无熔断）
+        "circuit_breaker_fail_threshold": 5,  # 连续可重试失败 N 次 → 熔断
+        "circuit_breaker_reset_sec": 60,# 熔断封锁秒数；到点后半开放一个探针
     },
     "mcp": {
         "timeout": 15,           # MCP JSON-RPC 调用超时（秒）
@@ -860,6 +866,9 @@ CONFIG_SCHEMA = {
         "retry_times":          {"type": "int", "desc": "真实调用失败重试次数（指数退避；流式恒不重试）"},
         "retry_backoff_ms":     {"type": "int", "desc": "首次重试退避毫秒（第 n 次 = 该值 × 2^n）"},
         "fallback_provider_id": {"type": "int", "desc": "主 provider 重试后仍失败时的备选 provider id（0=不启用）"},
+        "circuit_breaker_enabled": {"type": "bool", "desc": "P1-4 熔断总开关：连续失败时停止打该 provider（关=仅重试）"},
+        "circuit_breaker_fail_threshold": {"type": "int", "desc": "连续可重试失败 N 次后熔断该 provider"},
+        "circuit_breaker_reset_sec": {"type": "int", "desc": "熔断封锁秒数；到点后半开放一个探针请求"},
     },
     "mcp": {
         "timeout":      {"type": "int", "desc": "MCP JSON-RPC 调用超时（秒）"},

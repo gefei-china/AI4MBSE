@@ -124,7 +124,7 @@ def _last_hash(conn) -> str:
 
 
 def audit(user, event, detail, result="success", conn=None, branch=""):
-    """写入审计日志（统一审计口径 + 请求溯源 + 哈希链）。
+    """写入审计日志（统一审计口径 + 请求溯源 + 哈希链 + 敏感值脱敏）。
 
     - conn 传入（推荐，P2 后路由持有请求级连接）：审计与业务写
       在同一事务提交，避免 SQLite 写锁冲突（database is locked）。
@@ -132,10 +132,25 @@ def audit(user, event, detail, result="success", conn=None, branch=""):
     - branch：分支归属（2026-09-14）——图谱/推理等域事件记录操作分支，
       供历史 Tab / 审计查询按分支过滤；全局事件（登录/LLM 等）留空。
     - user：审计归属；None/空 时落「未登录」，不要写死人名（可信性）。
+    - P0-3（2026-10-06）：`detail` 与 `user` 在**算哈希之前**脱敏。
+      顺序是硬约束 —— `hash = sha256(prev_hash|各字段)`，
+      若在哈希后才改detail，链校验 `verify_chain()` 会因字段不一致直接判失败。
+      详见 core/redact.py 文件头「哈希链一致性」。
     """
     ctx = request_context()
     ip, ua, rid = ctx.get("ip", ""), ctx.get("user_agent", ""), ctx.get("request_id", "")
     user = user or "未登录"
+    # P0-3：脱敏必须在 _row_hash 之前（见上「顺序是硬约束」）。
+    # user 也过一遍 —— 它理论上不该含密钥，但审计 user 来自请求头/自报字段，
+    # 属于**外部可控输入**，按"零漏出"口径一并处理。
+    try:
+        from core.redact import redact_text as _redact
+        detail = _redact(detail)
+        user = _redact(user)
+    except Exception:
+        # 脱敏模块自身故障**不得阻断审计**（旁路原则，同 _write_degrade）：
+        # 宁可记未脱敏的原文，也不能丢审计——但要留下痕迹让人知道脱敏没生效。
+        detail = f"[redact-failed] {detail}"
 
     sql = ("INSERT INTO audit_logs (user_name, event_type, detail, result, branch, "
            "ip_address, user_agent, request_id, prev_hash, hash) "

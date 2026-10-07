@@ -88,6 +88,9 @@ from .misc import (
     _migrate_tool_result_offloads,      # 2026-10-02 工具结果 offload 表（P1-4 Tier1 可寻址召回）
     _migrate_audit_chain,             # 2026-10-03 审计溯源列 + 哈希链（P0-a/P0-b）
 )
+from .permissions import (
+    _migrate_agent_tool_perm,         # 2026-10-06 Agent 工具链 RBAC + HIL 批准授权（P0-6/P0-2）
+)
 
 __all__ = [
     "_rebuild_entities_pk",
@@ -96,6 +99,7 @@ __all__ = [
     "_repair_documents_fk",
     "_rename_dev_branch",
     "_migrate_columns",
+    "_migrate_agent_tool_perm",
     "_ensure_ontology_types",
     "_migrate_ontology_change_tables",
     "_migrate_ontology_version_tables",

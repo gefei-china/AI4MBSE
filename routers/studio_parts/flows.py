@@ -312,7 +312,12 @@ def flow_run_events(rid: int):
 
 
 @router.get("/api/studio/hil-confirmations")
-def list_hil_confirmations(status: str = "pending", limit: int = 50, conn=Depends(db_session)):
+def list_hil_confirmations(status: str = "pending", limit: int = 50,
+                            conn=Depends(db_session),
+                            _u=Depends(require_permission("hil", "view"))):
+    """P0-6（2026-10-06）：此前**无任何权限门** —— 任何登录用户都能列出全部待批写操作
+    （含 payload 里的完整参数）。确认单是写操作的唯一闸门，能看=能批，必须成对管控。
+    """
     from hil_service import HILService
     if status == "pending":
         return HILService.pending(conn, limit=min(limit, 200))
@@ -327,16 +332,32 @@ def list_hil_confirmations(status: str = "pending", limit: int = 50, conn=Depend
 
 
 @router.post("/api/studio/hil-confirmations/{cid}/decide")
-def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_session), user=Depends(current_user)):
+def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_session),
+                            user=Depends(current_user),
+                            _u=Depends(require_permission("hil", "approve"))):
     """人工决策：{approve: true/false, decided_by?}。
 
     2026-09-11 人在回路闭环：approve 且为对话直发确认单（run_id=0）时，
     按确认单 payload 自动执行写操作（HTTP 集成工具，如智源覆盖导入），执行结果回写审计。
     编排确认单（run_id>0）仍由编排执行方按 payload 消费，此处不重复执行。
+
+    P0-6（2026-10-06）两处整改（依据《Agent 生产化 Harness 对照核查》§3.2/§6.2）：
+    ① 补 `hil:approve` 权限门——**批准即触发写操作自动执行**，
+       此前无门⇒ 任何登录用户可批准任意确认单，等于绕过全部 HIL 意图。
+    ② `decided_by` 原硬编码默认值 `"王工"`，且 body 可任意伪造 ⇒
+       审计里的「谁批准的」既不真实也不可追责。
+       现改为：**优先取已认证用户身份**（display_name → username），
+       body 里的 decided_by 仅在**匿名兼容期**兜底。
     """
     from hil_service import HILService
     body = body or {}
-    r = HILService.decide(conn, cid, bool(body.get("approve")), (body or {}).get("decided_by", "王工"))
+    # P0-6②：审计归属以**已认证身份**为准，不采信 body 自报。
+    _decider = ""
+    if user:
+        _decider = (user.get("display_name") or user.get("username") or "").strip()
+    if not _decider:
+        _decider = str(body.get("decided_by") or "")
+    r = HILService.decide(conn, cid, bool(body.get("approve")), _decider)
     exec_note = ""
     if r.get("status") == "approved":
         row = HILService.get(conn, cid) or {}

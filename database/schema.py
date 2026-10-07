@@ -9,6 +9,7 @@ from core.config import DB_PATH
 from .connection import get_db
 from .migrations import (
     _migrate_columns,
+    _migrate_agent_tool_perm,
     _migrate_branch_protection,
     _migrate_mr_status,
     _rebuild_entities_pk,
@@ -1137,9 +1138,18 @@ def init_db():
         ok INTEGER DEFAULT 0,                -- 1=成功 0=失败
         latency_ms INTEGER DEFAULT 0,        -- 调用耗时
         conversation_id INTEGER DEFAULT 0,
+        -- P0-2（2026-10-06）：操作者。此前本表**无 user 字段** ⇒ 578 行工具调用
+        -- 只能回答「哪个会话调的」，回答不了「**是谁**调的」——
+        -- 而后者正是文章讲的「业务方追着问到底是谁改的」那个必答项。
+        -- 取值口径同audit_logs.user_name（display_name，回落 username）。
+        user_name TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_time ON tool_call_logs(created_at)")
+    # ⚠️ idx_tool_logs_user（user_name）**不在这里建** —— 本段是 CREATE TABLE IF NOT EXISTS，
+    # 老库走该分支时表已存在、**不会加列**，索引建在缺列的表上会直接
+    # `no such column: user_name` 让 init_db 整体失败（2026-10-06 实测踩到）。
+    # 建索引必须晚于 _migrate_columns 的补列 —— 已移到紧跟其后的位置。
 
     # ── P1 知识引擎双引擎：查询路由统计（图/向量/混合消费观测）──
     c.execute("""CREATE TABLE IF NOT EXISTS query_routing_stats (
@@ -1369,8 +1379,18 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS ux_lus_conv ON llm_usage_stats(conversation_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS ux_lus_run ON llm_usage_stats(run_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS ux_lus_trace ON llm_usage_stats(trace_id)")
+    # ── P0-2（2026-10-06）工具调用日志操作者索引 ──
+    # **必须紧跟 _migrate_columns 之后**：老库的 tool_call_logs 已存在，
+    # CREATE TABLE IF NOT EXISTS 不加列 ⇒ 索引必须等columns.py 的 _add补完 user_name 才建。
+    # （与上方 ux_lus_conv/run/trace 同一约束，此处踩过一次 no such column。）
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_user ON tool_call_logs(user_name)")
     # ── P0-2 分支保护规则：branches.protection_rules 内置分支默认值回填（幂等，仅填空）──
     _migrate_branch_protection(conn)
+    # ── P0-6（2026-10-06）Agent 工具链 RBAC + HIL 批准授权 ──
+    # 必须**早于种子执行**：新库的角色行由 _seed_* 写入，若本迁移跑在种子之前，
+    # 新角色不会被授权（老库则因已落库、种子"存在即跳过"而必须靠本迁移补）。
+    # 详见 database/migrations/permissions.py 顶部「加门必须与授权同批交付」的说明。
+    _migrate_agent_tool_perm(conn)
     # ── 分支管理 GitHub 对标：merge_requests.status 旧枚举 → 新状态机（幂等）──
     _migrate_mr_status(conn)
     # ── 工坊四模块内置标识（skills/agents/mcp_servers/tools.builtin，内置禁删可编辑）──

@@ -1638,6 +1638,10 @@ class StreamMixin:
             self._tool_intent_ctx = {"intent": intent}
             self._tool_agent_ctx = {"agent": agent_def.name}
             self._tool_conv_ctx = conversation_id
+            # P0-6（2026-10-06）：透传当前用户给工具链权限闸（与 execute.py 同口径）。
+            # stream 是**生产主路径**（execute 是冷路径），权限闸必须在这里也生效，
+            # 否则「生产走 stream、自检走 execute」会给出虚假的安全结论。
+            self._tool_user = user
             tools_def = self._build_tools_def(intent, user_input, user)
             tool_injected = False
             llm_content = ""
