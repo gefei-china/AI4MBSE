@@ -206,7 +206,49 @@ async function sendChat() {
   }
   // P0-1 澄清改选重发：中止上一轮未读完的流（防旧 token 追加到新消息容器）
   // 2026-09-25：中止前先把上一轮**已生成内容固化落库**——否则"提交新消息"= 上一轮输出白丢
-  if(_streaming) await commitPartialStream(document.getElementById('stream-ai'));
+  // P1-② follow-up（2026-10-07）：**上一轮还在跑时**提交的消息，不再 abort 它，
+  //   而是投进该会话的 follow-up 队列 —— 上一轮跑完时会把队列里的补充并入本轮处理。
+  //
+  //   ★ 为什么改掉原来的 abort：abort 会让"用户补充一句"= **整轮作废重跑**，
+  //     而 follow-up 的语义是"不打断、跑完接着处理"，用户等待不翻倍。
+  //     （上一轮的内容照样固化落库，见下面的 commitPartialStream。）
+  //   ★ 会话口径必须用**流式现场归属**的 `el.dataset.convId`，与上一行
+  //     commitPartialStream 完全一致 —— 流式中切到别的会话再发消息时，
+  //     `currentConvId` 已变，用它会把补充投进错误会话。
+  if(_streaming){
+    const _el = document.getElementById('stream-ai');
+    const _fc = (_el && _el.dataset && _el.dataset.convId) || currentConvId;
+    if(_fc){
+      try{
+        const r = await api(`/api/conversations/${_fc}/followup`,
+                            {method:'POST', body: JSON.stringify({message: msg})});
+        if(r && r.ok !== false){
+          input.value = '';
+          _chatInputAutoGrow();
+          try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
+          const area0 = document.getElementById('chat-area');
+          if(area0){
+            area0.innerHTML += renderMessage({role:'user', content:esc(msg)});
+            scrollChatToBottom();
+          }
+          toast((r && r.pending > 1)
+            ? `已作为补充指令提交（待处理 ${r.pending} 条），本轮结束后并入处理`
+            : '已作为补充指令提交，本轮结束后并入处理');
+          return;                        // ★ 不 abort、不重发，直接返回
+        }
+        toast((r && r.error) || '补充指令提交失败');
+        return;
+      }catch(e){
+        //投递失败 ⇒ **回退到旧行为**（abort + 当新消息重发），不能静默吞掉用户输入
+        toast('补充指令提交失败：' + (e && (e.message || e)));
+      }
+    }
+    // 回退路径：维持原语义（固化上一轮 + abort + 作为新消息）
+    await commitPartialStream(_el);
+    if(_streamAbort) _streamAbort.abort();
+  }
+  // 走到这里只有两种情况：① 非流式（上一轮已结束，abort 是无害的空操作）
+  //   ② follow-up 投递失败走回退（上面已 abort）—— 保持原有的无条件 abort 语义。
   if(_streamAbort) _streamAbort.abort();
   const myAbort = new AbortController();
   _streamAbort = myAbort;

@@ -446,6 +446,47 @@ def commit_partial_message(conv_id: int, body: dict = None, conn=Depends(db_sess
     return {"ok": True, "id": mid}
 
 
+@router.post("/api/conversations/{conv_id}/followup")
+def post_followup(conv_id: int, body: dict = None, conn=Depends(db_session),
+                  user=Depends(current_user)):
+    """投递 follow-up（2026-10-07，P1-② 阶段 1）：**在生成过程中**追加指令。
+
+    场景：Agent 还在跑（正在调工具/正在流式输出），用户发现漏说了什么，
+    直接补一句 —— 不用等这一轮跑完，也不用打断它。
+    当前轮结束后，ReAct 循环会在**轮次边界**取走队列并重启一轮。
+
+    body: {message: "补充指令"}
+
+    ⚠️ **为什么必须校验会话归属**：`agent` 是**模块级单例**、follow-up 队列按
+    `conv_id` 分槽。若不校验归属，任何登录用户都能往**别人**的会话投指令，
+    而那轮对话**会把这段指令当作用户本人说的**执行 ⇒ 越权注入。
+    （与 MEMORY「服务端强制过滤，不信前端传参」同族。）
+    """
+    from agent import followup as _fup
+    body = body or {}
+    msg = str(body.get("message") or "").strip()
+    if not msg:
+        return JSONResponse({"error": "补充指令不能为空"}, 400)
+    uid = None
+    if isinstance(user, dict):
+        uid = user.get("id")
+    row = conn.execute("SELECT user_id FROM conversations WHERE id=?", (conv_id,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "Conversation not found"}, 404)
+    owner = row["user_id"] if row["user_id"] not in (None, 0) else None
+    # 口径：会话无 owner（历史数据/系统建）⇒ 不拦；有owner ⇒ 必须匹配。
+    # ⚠️ `uid` 为 None（匿名/enforce_login 关闭）时也要求匹配 —— 这是安全默认：
+    #    宁可"匿名投不进去"，也不可"匿名能往他人会话注入指令"。
+    if owner is not None and uid != owner:
+        return JSONResponse({"error": "无权向该会话投递指令"}, 403)
+    if not _fup.push(conv_id, msg):
+        return JSONResponse({"error": "投递失败（指令为空或会话号非法）"}, 400)
+    pending = _fup.pending_count(conv_id)
+    audit(audit_user(user), "conversation_followup",
+          "会话#%d 投递 follow-up（%d 字，待处理 %d 条）" % (conv_id, len(msg), pending), conn=conn)
+    return {"ok": True, "pending": pending}
+
+
 @router.post("/api/messages/{msg_id}/feedback")
 def message_feedback(msg_id: int, body: dict, conn=Depends(db_session),
                      user=Depends(current_user)):

@@ -24,7 +24,7 @@ class StreamMixin:
     def _stream_orchestrated_flow(self, user_input, conversation_id, branch, intent, agent_def,
                                   hil_level, kb_tags, attachments, slots, user, provider_id,
                                   team_forced: bool = False, stage_hint=None,
-                                  resume_run_id: int = 0) -> iter:
+                                  resume_run_id: int = 0, team_def: dict | None = None) -> iter:
         """P0-1 真流式编排：计划生成 → 子任务逐个串行流式执行（实时推送思考/工具/文本增量）
         → LLM 汇总 → 落库 → done。
 
@@ -41,6 +41,9 @@ class StreamMixin:
           计划不再问 LLM（避免第二次模型调用给出不同拆分）、既有 `agent_tasks` 里
           已 `done` 的任务直接复用结果，只补跑没做完的（幂等，防重复写实体）。
           与 LangGraph checkpointer 同语义：同一张图 + 恢复的状态，而非"再跑一次"。
+        team_def: C2（2026-10-07）—— 完整团队定义。team_forced 时把主 Agent system_prompt
+          （拆解规则 + 八视图依赖顺序）与成员名册（capabilities + 触发词）注入 planner prompt。
+          此前只注入「可用 Agent 池」的意图名，8 个「XX视图生成」近义成员无法区分。
         """
         from llm import llm_client
         from task_queue import TaskQueue
@@ -107,7 +110,20 @@ class StreamMixin:
         )
         if team_forced:
             # 团队模式：主 Agent（团队负责人）统一调度视角——意图识别 → 拆解 → 计划 → 分派 → 汇总
-            _lead_sp = (agent_def.system_prompt or "").strip()[:300]
+            # C2（2026-10-07）：拆解规则取 team_def.system_prompt **全文**。
+            # 此前是 `agent_def.system_prompt[:300]` —— 主 Agent 的 prompt 补齐后长1354B，
+            # 300 字截断恰好切在「拆解规则」中间（规则 1-2 保留、3-6 与输出格式全丢），
+            # 而规则 3（生成≠校验）、5（不虚构能力）正是编排最需要的那几条。
+            # 仍保留 4000B 上限防御异常超长 prompt。
+            _lead_sp = ((team_def or {}).get("system_prompt") or agent_def.system_prompt or "").strip()[:4000]
+            # 成员名册（capabilities + 触发词）——近义成员（结构视图 vs 需求视图）的唯一区分依据
+            _team_roster = ""
+            if team_def:
+                try:
+                    from agent import team_router as _tr
+                    _team_roster = _tr.roster_block(team_def)
+                except Exception:
+                    _team_roster = ""
             plan_prompt = (
                 "你是主 Agent 团队负责人（" + (agent_def.name or intent) + "）。\n"
                 "你的完整职责链路：\n"
@@ -121,6 +137,8 @@ class StreamMixin:
                 ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent",'
                 ' "context": "该任务必需的上下文/输入引用(精简事实，可空)"}]}\n'
                 f"可用 Agent 池：\n" + "\n".join(pool_lines) + "\n"
+                + ((f"团队成员名册（agent 字段必须**逐字取自**下列 name）：\n{_team_roster}\n")
+                   if _team_roster else "") +
                 "task_type 可选 agent / react / llm。\n"
                 f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；不要输出其他文字。\n"
                 f"目标：{goal}"
@@ -1211,17 +1229,22 @@ class StreamMixin:
                     yield _ev
             self._load_db_agents(user)  # P0 平台化：DB 驱动 Agent 注册表（P1-8：按用户隔离）
             self._last_skill_hits = []
-            # 团队模式：校验主 Agent（团队负责人）→ 定向到主 Agent 并强制编排
+            # 团队模式：校验主 Agent（团队负责人）。C1/C3：此处**不再**直接置 team_forced=True
+            # —— 是否编排改由团队定义路由决策（`_team_route_decision`）在意图识别之后判定，
+            # 否则问「你好」也会跑一次完整 Planner-Executor。
             team_forced = False
             team_intent = None
+            team_def = None
+            team_decision = None
+            team_direct = False
             if team:
+                team_def = self._team_definition(team)
                 team_intent = self._resolve_team(team)
                 if not team_intent:
                     yield {"type": "error", "message": (
                         f"智能体团队不存在或未启用：{team}，请到「Agent 管理」创建主 Agent 并启用后重试")}
                     return
                 forced_intent = forced_intent or team_intent
-                team_forced = True
             # ── 阶段 1：意图识别（V2.7：无论是否指定智能体，一律执行识别——
             # 指定智能体只作"执行 Agent 定向"，不再跳过识别；目标/槽位/澄清/多意图都依赖识别结果）──
             yield {"type": "stage", "name": "意图识别", "status": "run"}
@@ -1262,7 +1285,53 @@ class StreamMixin:
             if _multi_intent:
                 yield {"type": "multi_intent", "sequence": _multi_intent["sequence"],
                        "raw_subtasks": _multi_intent["raw_subtasks"]}
-            agent_def = self.registry.get(intent)
+            # ── C3/C4/C5：团队定义驱动路由（在意图识别之后、取agent_def 之前） ──
+            # 为什么必须在这里：路由需要 `_detected`（C4：识别结果要参与决策，
+            # 此前 team 模式下被forced_intent 直接覆盖丢弃），而下游全部按 `intent` 取
+            # agent_def ⇒ 必须在取 agent_def 之前改写 intent，否则改了不生效。
+            if team_def:
+                team_decision = self._team_route_decision(
+                    user_input, team_def, provider_id=provider_id, detected_intent=_detected or "")
+                _act = (team_decision or {}).get("action")
+                if _act == "reject":
+                    # 明确提示不支持 —— 必须带能力清单与出路，不返回死胡同
+                    _msg = self._team_unsupported_message(team_def,
+                                                          (team_decision or {}).get("reason"))
+                    yield {"type": "reasoning", "delta": f"（团队路由）{_msg}"}
+                    yield {"type": "stage", "name": "团队路由", "status": "skip",
+                           "reason": (team_decision or {}).get("reason")}
+                    yield {"type": "done", "data": {
+                        "ok": False, "intent": intent, "team": team_def.get("intent"),
+                        "team_decision": team_decision,
+                        "content": _msg, "message_id": 0}}
+                    return
+                if _act == "chat":
+                    # 短噪声/问候：走通用直答，不编排、不定向团队成员
+                    intent = "chat"
+                    forced_intent = None
+                    team_direct = True
+                elif _act == "direct" and (team_decision or {}).get("target"):
+                    # 定向到团队内最相近/命中的成员直行（仍不编排）
+                    intent = team_decision["target"]
+                    forced_intent = intent
+                    team_direct = True
+                    if _detected and _detected != intent:
+                        yield {"type": "reasoning", "delta": (
+                            f"（团队路由）已定向到团队成员「{team_decision['target']}」"
+                            f"（{team_decision.get('reason') or ''}）；"
+                            f"意图识别结果为 {_detected}")}
+                    else:
+                        yield {"type": "reasoning", "delta": (
+                            f"（团队路由）已定向到团队成员「{team_decision['target']}」"
+                            f"（{team_decision.get('reason') or ''}）")}
+                elif _act == "orchestrate":
+                    team_forced = True
+                else:
+                    # 团队无成员等兜底：主 Agent 直行
+                    team_forced = False
+                agent_def = self.registry.get(intent)
+            else:
+                agent_def = self.registry.get(intent)
             hil_level = agent_def.hil_level
             effective_provider = provider_id or self.registry.get_provider_id(intent)  # 优化2
             # ── P0-2 断点续跑（2026-10-03）：resume 绕过"意图识别之后的一切前置判定" ──────
@@ -1398,14 +1467,15 @@ class StreamMixin:
             # 复杂度判定 + 附件透传（带附件时仅规则信号可触发；附件为核心依据，优先单 Agent 直行）
             _orch = None
             if team_forced and not dry_run:
-                # 团队模式：主 Agent（团队负责人）强制编排——意图识别/拆解/计划/分派/汇总
+                # 团队模式：主 Agent（团队负责人）编排——意图识别/拆解/计划/分派/汇总
+                # （走到这里说明 `_team_route_decision` 判为 orchestrate，不再是无条件编排）
                 self._save_conversation_dst(conversation_id, intent, slots)
                 yield from _yield_collect(self._stream_orchestrated_flow(
                     user_input, conversation_id, branch, intent, agent_def, hil_level,
                     kb_tags, attachments, slots, user, effective_provider, team_forced=True,
-                    stage_hint=_stage_hint), _orch_acc)
+                    stage_hint=_stage_hint, team_def=team_def), _orch_acc)
                 return
-            if not forced_intent and self._needs_orchestration(user_input, intent,
+            if not forced_intent and not team_direct and self._needs_orchestration(user_input, intent,
                                                               has_attachments=bool(attachments),
                                                               multi=_multi_intent):
                 # P0-1 复用：已发布 planner_auto 沉淀流程语义命中 → 直接执行（省重新规划）
@@ -1651,11 +1721,51 @@ class StreamMixin:
             # 为什么必须同源：这两段是同一套 ReAct 语义的两种实现，此前只有编排路径
             # 有 token 预算，重复检测与工具超时两边都没有 ⇒ 补一边就会留下新的不对称。
             from agent.loop_guard import LoopGuard as _LoopGuard, tokens_of as _tok_of
+            # P0-①/P0-②（2026-10-07）协议护栏：并行 tool_calls 配对 + 截断参数拒绝。
+            # 与 execute.py **同源**（同一模块）—— 两条路径是同一套 ReAct 语义的两种实现，
+            # 协议层缺陷漏一条路径就是线上 HTTP 400（同 loop_guard 立规时的判断）。
+            from agent import loop_protocol as _lproto
             _lg = _LoopGuard(token_budget=60000, tool_timeout_s=120.0)
             _rnd = 0  # 工具轮次计数（供 reasoning 事件 round/phase 标识；无工具直出时保持 0）
             # 2026-09-17 S3：上一轮已回填的 tool 消息下标（下轮仅清空其 content，不删除消息）
             _prev_tool_idx = []
-            for _rnd in range(max_tool_rounds):
+            # ── P1-②（2026-10-07）follow-up 队列（第3 批阶段 1）──
+            #★ 循环头消费 follow-up，而不是循环尾：消费点在**轮次边界**，
+            #   此时上一轮 messages 已完整（含 tool_result），不会破坏 tool_call 配对。
+            #   （DecodingAI 的教训：即时注入会 corrupt 正在执行的 tool_call。）
+            # ★ 为什么用 `while True` + `_rnd` 计数而**不是** `for _rnd in range(...)`：
+            #   follow-up 要求"重启一轮"，而 for 无法重置计数。循环体内部**零改动**
+            #   （`_rnd` 仍是 0-based，事件里的 round= `_rnd+1` 语义不变）。
+            # ★ 为什么有 `_fu_budget`：用户可能狂点补充。每消费一次就重置轮次，
+            #   无上限 ⇒ 无限循环 + 无限 LLM 调用。限 3 次（够用且可控）。
+            # ★ 为什么队列按conversation_id 隔离而非挂self：agent 是**模块级单例**
+            #   （agent/__init__.py:25），挂实例 = 跨会话互相看到对方的补充（数据泄漏）。
+            from agent import followup as _fup
+            _FOLLOWUP_PREFIX = ("\n\n【用户在生成过程中补充了新指令】"
+                                "以下内容由用户在上一轮回答生成期间追加，"
+                                "请与上文结合处理；若与上文结论冲突，以上条补充为准：\n")
+            _fu_budget = 3
+            _fu_used = 0
+            _rnd = -1
+            while True:
+                _fu = ""
+                if (conversation_id and _fu_budget > 0
+                        and _fup.pending_count(conversation_id)):
+                    _fu = _fup.pop(conversation_id) or ""
+                if _fu:
+                    _fu_budget -= 1
+                    _fu_used += 1
+                    messages.append({"role": "user",
+                                     "content": _FOLLOWUP_PREFIX + _fu})
+                    _fu_delta = f"（{agent_def.name}）收到生成期间的补充指令，重新规划：{_fu[:60]}"
+                    exec_reasoning.append(_fu_delta)
+                    yield {"type": "reasoning", "delta": _fu_delta,
+                           "round": _rnd + 2, "phase": "followup"}
+                    # ★ 重置轮次：新指令值得完整的工具轮次预算（否则它只能拿到剩 1~2 轮）
+                    _rnd = -1
+                _rnd += 1
+                if _rnd >= max_tool_rounds:
+                    break
                 if not tools_def:
                     break
                 # 预算耗尽 ⇒ 停止继续调工具，让模型基于已有信息直出（护栏三闸之一）
@@ -1690,17 +1800,43 @@ class StreamMixin:
                 exec_reasoning.append(_p_delta)
                 yield {"type": "reasoning", "delta": _p_delta, "round": _rnd + 1, "phase": "plan"}
                 weak_count = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
-                for _ti, tc in enumerate(ptool_calls[:3]):
+                #── P0-①（2026-10-07）并行调用配对：切成「执行队列 / 未执行队列」────
+                # ⚠️ 不能删掉上限（那是失控护栏），必须为未执行的尾部补结果，
+                #    否则 pmsg 带全部 tool_calls 而 results 只有 3 笔 ⇒ 第 4 笔起悬空
+                #    ⇒ 下一轮 HTTP 400（tool_use ids without tool_result blocks）。
+                #    详见 agent/loop_protocol.py 模块 docstring 缺陷①。
+                _exec_calls, _skip_calls = _lproto.split_calls(ptool_calls)
+                for _ti, tc in enumerate(_exec_calls):
                     fn = tc.get("function") or {}
                     tname = fn.get("name", "")
                     # UX规范·硬规则1（2026-10-02）：一动作一节点 —— 每笔调用携带稳定 call_id
                     # （协议 tool_call id；缺失时用 名称#轮次-序号 兜底），前端以它为键复用节点，
                     # 同名并发两笔调用各自成卡、不再互相覆盖。
                     _call_id = str(tc.get("id") or f"{tname}#{_rnd + 1}-{_ti}")
+                    # ── P0-②（2026-10-07）截断参数：拒绝执行 + 明确告知重发 ──
+                    # ⚠️ 必须先判别再解析：`except: targs={}` 会让**空参数照常执行**，
+                    #    既可能误用工具默认行为，又掩盖了"模型输出被截断"这个真因。
+                    #    `is_truncated_args` 区分「非法 JSON=截断」与「合法空=正常请求」，避免误杀。
+                    if _lproto.is_truncated_args(fn):
+                        _tr = _lproto.truncated_result(tname)
+                        yield {"type": "tool", "status": "done", "name": tname,
+                               "ok": False, "result": _tr["result"],
+                               "error": "args_truncated", "call_id": _call_id,
+                               "truncated": True}
+                        results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
+                                        "name": tname,
+                                        "content": json.dumps(_tr, ensure_ascii=False)})
+                        continue
                     try:
                         targs = json.loads(fn.get("arguments") or "{}")
                     except Exception:
-                        targs = {}
+                        # 走到这里说明 `is_truncated_args` 判错了（非截断但仍解析失败）
+                        # ⇒ 保守当截断处理，**不**以空参数执行。
+                        _tr = _lproto.truncated_result(tname)
+                        results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
+                                        "name": tname,
+                                        "content": json.dumps(_tr, ensure_ascii=False)})
+                        continue
                     # 工具调用结果：执行前 → 执行后（流式透传；结果全量返回，前端可展开/复制）
                     yield {"type": "tool", "status": "run", "name": tname, "arguments": targs,
                            "call_id": _call_id}
@@ -1763,6 +1899,20 @@ class StreamMixin:
                         "name": tname,
                         "content": json.dumps(_t_content, ensure_ascii=False),
                     })
+                # ── P0-①（2026-10-07）为**未执行**的尾部调用补结果 ──
+                # pmsg 带的是**全部** ptool_calls，若不给尾部补 tool_result，
+                # 第 4 笔起永久悬空 ⇒ 下一轮 HTTP 400（protocol 硬约束）。
+                # ⚠️ 必须**在 `if results:` 之前**追加：全被截断时 results 也要非空，
+                #    否则整轮 tool_calls 一个结果都没有，配对同样缺失。
+                if _skip_calls:
+                    _skip_res = _lproto.skipped_results(_skip_calls)
+                    for _sr in _skip_res:
+                        _sfn = _sr.get("name") or "-"
+                        yield {"type": "tool", "status": "done", "name": _sfn,
+                               "ok": False, "result": "本轮并发已达上限，未执行",
+                               "error": "round_tool_limit", "call_id": _sr.get("tool_call_id"),
+                               "skipped": True, "skip_reason": "round_tool_limit"}
+                    results.extend(_skip_res)
                 # 工具结果回填后进入下一轮（观察 → 再思考）
                 if results:
                     # 2026-09-17 S3：上一轮 tool 内容换为省略标记
@@ -1778,15 +1928,51 @@ class StreamMixin:
                     messages.extend(results)
                     for _k in range(len(messages) - len(results), len(messages)):
                         _prev_tool_idx.append(_k)
-                    # P0-按需工具：本轮工具结果全弱相关 → 收敛（跳出循环走兜底流式生成，避免连环调用）
-                    if weak_count == len(results) and weak_count > 0:
+# P0-按需工具：本轮工具结果全弱相关 → 收敛（跳出循环走兜底流式生成，避免连环调用）
+                    # ⚠️ 分母用**执行数**（`_exec_calls`）而非 `len(results)`：
+                    #    P0-① 为未执行尾部补了 skipped 结果，计入分母会让本该收敛的场景
+                    #    变成"不收敛"，也可能让本该继续的场景误收敛。
+                    if weak_count == len(_exec_calls) and weak_count > 0:
                         _w_delta = f"（{agent_def.name}）本轮工具结果均与任务弱相关，不再继续调用工具，直接基于已有信息组织回答。"
                         exec_reasoning.append(_w_delta)
                         yield {"type": "reasoning", "delta": _w_delta, "round": _rnd + 1, "phase": "plan"}
                         break
-            # 兜底：多轮后仍无正文 → 流式生成（保持非空输出）
+            # P1-② 补救点（2026-10-07）：循环已 break、**最终生成之前**再消费一次 follow-up。
+            # ★ 为什么循环头不够（实测踩到）：循环头只覆盖「工具执行中 / 探测轮等待中」
+            #   两种时机；而用户**最常见的补充时机是"正在看最终回答流式输出"** ——
+            #   那时循环早已 break，队列永远等不到下一轮 ⇒ follow-up 静默失效。
+            #   实测证据：桩生效（run=3/skipped=3）但 follow-up 未被消费。
+            # ★ 为什么放在最终生成**之前**而不是之后：之后追加等于"再答一遍"，
+            #   用户会看到两段互相矛盾的答案；之前追加 = 用补充指令重塑这一次的最终回答。
+            if conversation_id and _fu_budget > 0 and _fup.pending_count(conversation_id):
+                _fu2 = _fup.pop(conversation_id) or ""
+                if _fu2:
+                    _fu_budget -= 1
+                    _fu_used += 1
+                    messages.append({"role": "user",
+                                     "content": _FOLLOWUP_PREFIX + _fu2})
+                    _fu2_delta = (f"（{agent_def.name}）生成最终回答前收到补充指令，"
+                                  f"已并入本轮：{_fu2[:60]}")
+                    exec_reasoning.append(_fu2_delta)
+                    yield {"type": "reasoning", "delta": _fu2_delta,
+                           "round": _rnd + 1, "phase": "followup"}
+                    # ★ 有正文也照样重来一次最终生成：补充必须真正影响答案，
+                    #   否则用户看到的是"完全没理会我的补充"。
+                    #   重来一次仍不带 tools（下方 chat 调用本就不传 tools）。
+                    # ★ 用  而不是新标志位：
+                    #   下方两个分支（tool_injected / not tool_injected）都以
+                    #   llm_content 为准，清空即重新生成一次，无需新增状态。
+                    llm_content = ""
+            # P1-①（2026-10-07）轮次用尽收尾。
+            # ★ 此处**早就在做「无 tools 收尾」**（`chat(messages, stream=True)` 不传 tools）——
+            #   方案 §3.1 说"stream 只兜底空正文"属实，但那个兜底本身**就是**收尾调用。
+            #   真正的缺口是：**没告诉模型工具次数已用尽** ⇒ 模型可能以为对话被截断，
+            #   给出残缺结论或重复已说过的内容。⇒ 这里补一条明确的收尾指令。
             if tool_injected and not llm_content:
-                chunks = llm_client.chat(messages, provider_id=effective_provider, stream=True)
+                # 追加提示走**副本**（finalize_messages 内部 list(messages) 复制）——
+                # 主流程的 messages 后续还要写卡片/落库，不能被收尾提示污染。
+                _fin_msgs = _lproto.finalize_messages(messages)
+                chunks = llm_client.chat(_fin_msgs, provider_id=effective_provider, stream=True)
                 for chunk in chunks:
                     for delta in self._extract_stream_deltas(chunk):
                         # V2.5：工具轮后的最终生成同样透传思考（原分支只取 content，丢思考内容）
@@ -1908,6 +2094,15 @@ class StreamMixin:
             # P0-2 DST：回写会话级意图状态（非 dry_run 验证运行）
             if not dry_run:
                 self._save_conversation_dst(conversation_id, intent, slots)
+            # P1-②（2026-10-07）本轮收口：丢弃未消费的 follow-up。
+            # ★ 为什么必须清：队列跨请求存在。若本轮正常结束但还剩着（例如用户在
+            #   done 之后、连接关闭之前又投了一条），**下一轮会莫名多出一段补充**，
+            #   表现为"AI 突然提起我上一轮之后才说的话"。⇒ 每轮结束即清。
+            if conversation_id:
+                try:
+                    _fup.drop(conversation_id)
+                except Exception:
+                    pass
             _intent_meta = self.router.get_last_meta()
             yield {"type": "done", "data": {
                 "message_id": msg_id,
@@ -1945,6 +2140,13 @@ class StreamMixin:
             #  已是"部分固化"消息则跳过，避免双写。
             self._persist_partial_stream(conversation_id, llm_content or "".join(_orch_acc),
                                          "stop", dry_run=dry_run)
+            # P1-②：断连同样要清 follow-up 队列（否则下次接着这个会话时
+            #  会消费到"上一轮被中断时没处理完的补充指令"）。
+            if conversation_id:
+                try:
+                    _fup.drop(conversation_id)
+                except Exception:
+                    pass
             raise
         except Exception as e:
             # 2026-09-29（用户五轮反馈4）：网络错误等异常 → 已生成内容同样固化（带中断说明后缀），

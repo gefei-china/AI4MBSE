@@ -51,16 +51,20 @@ class ExecuteMixin:
         self._tool_whitelist = tools_whitelist or None
         self._load_db_agents(user)  # P0 平台化：DB 驱动 Agent 注册表（P1-8：按用户隔离）
         self._last_skill_hits = []
-        # 团队模式：校验主 Agent（团队负责人）→ 定向到主 Agent 并强制编排
+        # 团队模式：校验主 Agent（团队负责人）。C1/C3：不再无条件 team_forced=True，
+        # 改由团队定义路由决策（与 stream.py 同一判据 `agent/team_router.decide`）。
         team_forced = False
         team_intent = None
+        team_def = None
+        team_decision = None
+        team_direct = False
         if team:
+            team_def = self._team_definition(team)
             team_intent = self._resolve_team(team)
             if not team_intent:
                 return {"error": f"智能体团队不存在或未启用：{team}，请到「Agent 管理」创建主 Agent 并启用后重试",
                         "content": "", "intent": "chat", "agent": team, "team": team}
             forced_intent = forced_intent or team_intent
-            team_forced = True
         # Step 1: Intent recognition（P0-3: 6 类意图路由；forced_intent 时跳过识别直接定向）
         # P0-1：Glossary 归一化——带 conn 的 detect 会优先做术语归一化（v2→SysML_V2）
         # P0-2：轻量 DST——读取会话级当前意图，无信号时继承（追问/续写不误判 chat）
@@ -83,6 +87,36 @@ class ExecuteMixin:
                       f"（conversation={conversation_id}）", flush=True)
             except Exception:
                 pass
+        # ── C3/C4/C5：团队定义驱动路由（与 stream.py 同一判据，须在取 agent_def 之前）──
+        if team_def:
+            team_decision = self._team_route_decision(
+                user_input, team_def, provider_id=provider_id, detected_intent=_detected or "")
+            _act = (team_decision or {}).get("action")
+            if _act == "reject":
+                _msg = self._team_unsupported_message(team_def, (team_decision or {}).get("reason"))
+                try:
+                    print(f"[team] 不支持：{(team_decision or {}).get('reason')}"
+                          f"（conversation={conversation_id}）", flush=True)
+                except Exception:
+                    pass
+                return {"ok": False, "error": "", "intent": intent,
+                        "content": _msg, "team": team_def.get("intent"),
+                        "team_decision": team_decision, "team_unsupported": True}
+            if _act == "chat":
+                intent = "chat"
+                forced_intent = None
+                # 显式标记：team 直答路径**不得**再进自动编排分支。
+                # 不依赖 `_ORCH_EXCLUDE_INTENTS` 黑名单兜底（那是巧合而非契约：
+                # 若日后有人把 chat 从黑名单移走，问「你好」又会触发编排）。
+                team_direct = True
+            elif _act == "direct" and (team_decision or {}).get("target"):
+                intent = team_decision["target"]
+                forced_intent = intent
+                team_direct = True
+            elif _act == "orchestrate":
+                team_forced = True
+            else:
+                team_forced = False
         agent_def = self.registry.get(intent)
         hil_level = agent_def.hil_level
         self._hil_level = hil_level  # M5：HIL 分级——L2 时写工具进入人工确认队列
@@ -119,15 +153,16 @@ class ExecuteMixin:
                         "content": "需要您确认建模信息（详见澄清卡片，回答后将继续）",
                         "msg_type": "clarify", "questions": _clarify_qs}
         if team_forced and not dry_run:
-            # 团队模式：主 Agent（团队负责人）强制编排——意图识别/拆解/计划/分派/汇总
+            # 团队模式：主 Agent（团队负责人）编排——意图识别/拆解/计划/分派/汇总
             _orch = self._try_orchestrate_team(user_input, team_intent, effective_provider,
-                                               attachments=attachments, conversation_id=conversation_id)
+                                               attachments=attachments, conversation_id=conversation_id,
+                                               team_def=team_def)
             if _orch is not None:
                 self._save_conversation_dst(conversation_id, intent, slots)
                 return self._finish_orchestrated(_orch, user_input, conversation_id, intent,
                                                  agent_def, hil_level, kb_tags, attachments, branch, slots,
                                                  team=team_intent, user=user)
-        elif not forced_intent and not dry_run:
+        elif not forced_intent and not team_direct and not dry_run:
             _orch = self._try_orchestrate(user_input, intent, effective_provider, attachments=attachments,
                                           conversation_id=conversation_id)
             if _orch is not None:
@@ -332,6 +367,8 @@ class ExecuteMixin:
             # 原先这条路径只有轮次上限/token 上限/重复检测/工具超时，
             # 而编排路径有前三者 —— 同一套 ReAct 语义的两处实现护栏不对称。
             from agent.loop_guard import LoopGuard, tokens_of as _tokof
+            # P0-①/P0-②（2026-10-07）协议护栏，与 stream.py **同源**。
+            from agent import loop_protocol as _lproto
             _guard = LoopGuard(
                 token_budget=int(self._LOOP_TOKEN_BUDGET) if getattr(self, "_LOOP_TOKEN_BUDGET", None) else 60000,
                 tool_timeout_s=float(getattr(self, "_LOOP_TOOL_TIMEOUT", 120.0)))
@@ -347,13 +384,32 @@ class ExecuteMixin:
                     break
                 tool_results = []
                 _weak_n = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
-                for tc in tool_calls[:3]:  # 每轮最多执行 3 个工具
+                # ── P0-①（2026-10-07）并行调用配对 / P0-② 截断参数拒绝 ──
+                # 与 stream.py **同源**（同一模块 agent/loop_protocol.py）：
+                # 这两条路径是同一套 ReAct 语义的两种实现，协议层缺陷漏一条就是线上 400。
+                # ⚠️ 不能删掉上限（失控护栏），必须为未执行尾部补 tool_result。
+                _exec_calls, _skip_calls = _lproto.split_calls(tool_calls)
+                for tc in _exec_calls:
                     fn = tc.get("function") or {}
                     tname = fn.get("name", "")
+                    # P0-②：参数被 max_tokens 截断 ⇒ 拒绝执行（不以降级的空参数执行）
+                    if _lproto.is_truncated_args(fn):
+                        _tr = _lproto.truncated_result(tname)
+                        _tool_results.append({
+                            "tool_call_id": tc.get("id", ""),
+                            "role": "tool", "name": tname,
+                            "content": json.dumps(_tr, ensure_ascii=False)})
+                        continue
                     try:
                         targs = json.loads(fn.get("arguments") or "{}")
                     except Exception:
-                        targs = {}
+                        # `is_truncated_args` 判漏时的保守兜底：**不**以空参数执行
+                        _tr = _lproto.truncated_result(tname)
+                        _tool_results.append({
+                            "tool_call_id": tc.get("id", ""),
+                            "role": "tool", "name": tname,
+                            "content": json.dumps(_tr, ensure_ascii=False)})
+                        continue
                     # 重复调用短路：同(工具,参数) 已成功跑过 ⇒ 回喂既有结果，不再跑一遍。
                     # 为什么这条是省钱闸不是提速闸：模型陷入循环时最典型的表现就是
                     # 同参数反复调同一工具，每次都真执行一遍。
@@ -395,13 +451,21 @@ class ExecuteMixin:
                         "name": tname,
                         "content": json.dumps(_t_content, ensure_ascii=False),
                     })
+                # ── P0-①（2026-10-07）为**未执行**的尾部调用补结果 ──
+                # msg 带的是**全部** tool_calls，不补尾部 ⇒ 第 4 笔起悬空 ⇒ 下一轮 400。
+                # ⚠️ 必须在 `if not tool_results:` **之前**：
+                #    全被截断/跳过时 tool_results 也要非空，否则一个结果都没有。
+                if _skip_calls:
+                    tool_results.extend(_lproto.skipped_results(_skip_calls))
                 if not tool_results:
                     break
                 # 工具结果回填后继续生成（观察 → 下一轮思考/工具或最终回答）
                 messages.append(msg)
                 messages.extend(tool_results)
                 # P0-按需工具：本轮工具结果全弱相关 → 收敛（不注入工具做最终生成，避免连环调用）
-                if _weak_n == len(tool_results) and _weak_n > 0:
+                # ⚠️ 分母用**执行数**而非 len(tool_results)：P0-① 补的 skipped 结果
+                #    计入分母会让收敛判定失真（同stream.py 的处理）。
+                if _weak_n == len(_exec_calls) and _weak_n > 0:
                     llm_response = llm_client.chat(messages, provider_id=effective_provider, tools=None)
                     msg = llm_response["choices"][0]["message"]
                     llm_content = msg.get("content") or ""
@@ -412,6 +476,21 @@ class ExecuteMixin:
                 msg = llm_response["choices"][0]["message"]
                 if msg.get("content"):
                     llm_content = msg["content"]
+            # P1-①（2026-10-07）轮次用尽收尾：append 一条「已达上限」提示 + 补一次**无 tools** 调用。
+            # ★ 与 stream.py **同源**（同一模块的 `should_finalize`/`finalize_messages`）。
+            # ★ execute.py 此前**完全没有收尾** ⇒ 模型连续 3 轮都要工具时
+            #   返回 content 长度 = 0（前端显示空白对话）。
+            # ★ 为什么用轮次计数而不用"msg 里有 tool_calls"：轮次用尽的最后一轮
+            #   必然带 tool_calls，用它当条件会对"已给正文+仍要工具"重复收尾。
+            if _lproto.should_finalize(msg, llm_content, _round + 1, max_tool_rounds):
+                try:
+                    _fm = _lproto.finalize_messages(messages)
+                    _resp = llm_client.chat(_fm, provider_id=effective_provider, tools=None)
+                    _guard.add_tokens(_tokof(_resp))
+                    llm_content = _resp["choices"][0]["message"].get("content") or llm_content
+                except Exception:
+                    # 收尾失败不得让整个请求失败（至少已有工具结果可展示）
+                    llm_content = llm_content or ""
             # P2：纯问答且无工具调用 → 写入语义缓存（供后续相似查询直返）
             if intent in ("chat", "knowledge_qa") and not att_blocks \
                     and not msg.get("tool_calls") and llm_content:
