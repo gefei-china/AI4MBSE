@@ -146,9 +146,11 @@ class OrchestrMixin:
     def _resolve_team(self, team: str) -> str | None:
         """校验团队（主 Agent）存在且启用，返回主 Agent 意图名；非法返回 None。
 
-        AI 会话页「工作流」下拉选中主 Agent 团队后，以主 Agent 为团队负责人
-        强制走编排：意图识别/任务拆分/计划制定/任务分派/内容整合输出均由主 Agent 完成。
-        支持按 agents.name（意图名）或 display_name 匹配。
+        ⚠️ 只返回 name，**不返回团队定义**——编排 prompt 拿不到 system_prompt /
+        capabilities /各成员的 intent_keywords ⇒ planner 只能看到一串意图名，
+        8 个「XX视图生成」近义成员无法区分（实测词法把「冷却回路建模」判成
+        requirement_analysis）。C1 起改用 `_team_definition()` 取完整定义。
+        保留本方法仅为向后兼容（多处调用点只校验合法性）。
         """
         if not team or not str(team).strip():
             return None
@@ -165,12 +167,52 @@ class OrchestrMixin:
         except Exception:
             return None
 
+    # ── C1：完整团队定义（主 Agent prompt + 成员能力/触发词） ──────────
+    def _team_definition(self, team: str) -> dict | None:
+        """返回完整团队定义（含 system_prompt 与成员 capabilities/keywords），非法返回 None。
+
+        与 `_resolve_team` 的区别：不再只回name。编排的拆解质量依赖主 Agent 的
+        system_prompt（拆解规则、八视图依赖顺序）与成员 capabilities（近义区分），
+        两者在此之前全部丢失。
+        """
+        from agent import team_router as _tr
+        if not team or not str(team).strip():
+            return None
+        try:
+            with db_conn() as _conn:
+                return _tr.load_team_definition(_conn, team)
+        except Exception:
+            return None
+
+    def _team_route_decision(self, user_input: str, team_def: dict, provider_id=None,
+                             detected_intent: str = "") -> dict:
+        """团队模式路由决策（chat / direct / orchestrate / reject）。
+
+        2026-10-07（C3/C4/C5）：改 team 前 `team_forced=True` 无条件编排，问「你好」也跑
+        一次完整 Planner-Executor。现按团队定义做四档决策，判据与实测见
+        `agent/team_router.decide` docstring。
+        """
+        from agent import team_router as _tr
+        return _tr.decide(user_input, team_def, provider_id=provider_id,
+                          detected_intent=detected_intent)
+
+    def _team_unsupported_message(self, team_def: dict, reason: str) -> str:
+        """「不支持」提示：必须带团队能力清单 + 出路（不返回死胡同）。"""
+        from agent import team_router as _tr
+        return _tr.unsupported_message(team_def, reason)
+
     def _try_orchestrate_team(self, user_input: str, team_intent: str, provider_id=None,
-                              attachments=None, conversation_id: int = 0) -> dict | None:
-        """团队模式强制编排：主 Agent（团队负责人）分解任务 → 分派团队成员 → 汇总。
+                              attachments=None, conversation_id: int = 0,
+                              team_def: dict | None = None) -> dict | None:
+        """团队模式编排：主 Agent（团队负责人）分解任务 → 分派团队成员 → 汇总。
 
         委派候选收敛到「团队成员 + 主 Agent 自身」最小权限池（非全量 Agent 池）；
         无成员的主 Agent 仅自身可被委派。编排异常返回 None（回落单 Agent 直行）。
+
+        C2：`team_def` 非空时把**主 Agent system_prompt + 成员名册（带 capabilities
+        与触发词）** 注入 planner 改写prompt。此前pool 只给意图名，planner 无法区分
+        「结构视图生成」与「需求视图生成」，也不��道 SysML v2 八视图依赖顺序
+        ⇒ 同一 query 两次拆解结果可能不同。
         """
         if not team_intent:
             return None
@@ -185,10 +227,22 @@ class OrchestrMixin:
             finally:
                 conn.close()
             pool = list(dict.fromkeys(members + [team_intent])) or [team_intent]
+            _kw = {}
+            if team_def:
+                from agent import team_router as _tr
+                _blocks = []
+                _sp = (team_def.get("system_prompt") or "").strip()
+                if _sp:
+                    _blocks.append("【主 Agent 拆解规则】\n" + _sp)
+                _rb = _tr.roster_block(team_def)
+                if _rb:
+                    _blocks.append("【团队成员名册（含专长与触发词，agent 字段须逐字取自名册）】\n" + _rb)
+                if _blocks:
+                    _kw["team_prompt"] = "\n\n".join(_blocks)
             return FlowExecutor().run_planner_plan(
                 goal=user_input, agents=self._ORCH_AGENTS, max_tasks=self._ORCH_MAX_TASKS,
                 parallel=True, provider_id=provider_id, attachments=attachments, pool=pool,
-                conversation_id=conversation_id)
+                conversation_id=conversation_id, **_kw)
         except Exception as e:
             self._orch_error = str(e)[:150]
             return None
