@@ -136,7 +136,7 @@ class FlowPlannerMixin:
 
     def run_planner_plan(self, goal: str = "", agents=None, max_tasks: int = 6, parallel: bool = True,
                          provider_id=None, run_id: int = 0, conn=None, attachments=None, pool=None,
-                         conversation_id: int = 0) -> dict:
+                         conversation_id: int = 0, team_prompt: str = "") -> dict:
         """P0-1/P1-1/P1-2 Planner-Executor 服务（会话入口自动编排 / Flow planner 节点共用）。
 
         - LLM 计划生成：目标 → 子任务 DAG（key/title/agent/deps/task_type），
@@ -147,6 +147,10 @@ class FlowPlannerMixin:
         - attachments：会话上传附件随编排透传（子任务执行时注入，避免丢附件）
         - pool（Task 5）：外部注入的编排候选池（如 pipeline._orch_pool 结果）；非空时覆盖 agents
           作为「可用 Agent 池」，向后兼容（不传 = 用 agents/内置旧池）。
+        - team_prompt（C2，2026-10-07）：团队模式注入的「主 Agent 拆解规则 + 成员名册」。
+          此前 pool 只给意图名，planner 分不清「结构视图生成」与「需求视图生成」，
+          也不知道 SysML v2 八视图依赖顺序 ⇒ 拆解质量不可控（同一 query 可能两次不同）。
+          为空 = 不注入（向后兼容，非团队模式行为完全不变）。
         返回 {"content","plan","task_summary","degraded","data","llm","latency_ms"}。
         """
         from database import get_db
@@ -154,7 +158,7 @@ class FlowPlannerMixin:
         conn = conn or get_db()
         try:
             return self._planner_core(goal, agents, max_tasks, parallel, provider_id, run_id, conn,
-                                      attachments, pool, conversation_id)
+                                      attachments, pool, conversation_id, team_prompt)
         finally:
             if own:
                 try:
@@ -164,11 +168,12 @@ class FlowPlannerMixin:
 
     def _planner_core(self, goal: str, agents, max_tasks: int, parallel: bool,
                       provider_id, run_id: int, conn, attachments=None, pool=None,
-                      conversation_id: int = 0) -> dict:
+                      conversation_id: int = 0, team_prompt: str = "") -> dict:
         """Planner-Executor 核心（run_planner_plan 的连接由外层管理）。
 
         pool（Task 5）：外部传入的编排候选池意图名列表（pipeline._orch_pool 结果），
         非空时覆盖 agents 作为「可用 Agent 池」；None/空 = 用 agents/内置旧池（向后兼容）。
+        team_prompt（C2）：团队模式注入的拆解规则与成员名册，追加在计划 prompt 末尾。
         """
         from llm import llm_client
         from task_queue import TaskQueue
@@ -242,6 +247,10 @@ class FlowPlannerMixin:
                 "若「本会话既有产物」非空且与本目标相关：任务必须**在既有产物上做增量** —— "
                 "title 写明增量的对象（如「在既有需求模型 v0.1 上补充参与者」），"
                 "context 写清引用哪个既有版本/元素；禁止规划「从零分析/重新建立」类任务。\n")
+        # C2（2026-10-07）：团队定义注入。**放在 `.format()` 之后** —— 名册里含中文括号与
+        # 可能的 { }，放进被 format 的模板会 KeyError（与 artifact_digest 同理）。
+        if team_prompt:
+            prompt += "\n" + team_prompt + "\n"
         try:
             resp = llm_client.chat([{"role": "user", "content": prompt}], provider_id=provider_id, _intent="planner")
             raw = ((resp.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "")
