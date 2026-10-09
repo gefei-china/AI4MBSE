@@ -144,7 +144,25 @@ def t_ci_has_new_batch(root=ROOT):
             # 第二轮第 2 项：红灯门禁归因后修复并接线（生产库 + 干净库双绿）
             "verify_continuation", "verify_partial_persist",
             "verify_orch_whitelist", "verify_plugin_bind_removed",
-            "verify_uninstall_flow"]
+            "verify_uninstall_flow",
+            # ── 2026-10-09：清「14 份写了从未执行」的欠账 ──
+            # 起因：本门禁 W1a 判红（未接线 14 / 豁免无理由 0）。
+            # 这 7 个经**干净库口径实测 rc=0** 才接线（MBSE_DB_PATH 指向空库）。
+            # 其余 7 个（需真 LLM / checker.jar / 真库金标）改在脚本内
+            # 写 `# CI-OPTIONAL: <理由>` 显式豁免 —— 见EXEMPTED 清单。
+            "verify_agent_loop_protocol", "verify_agent_perm_gate",
+            "verify_llm_circuit_breaker", "verify_memory_conflict_gate",
+            "verify_sysml_autofix", "verify_pipeline_closure",
+            "verify_sysml_baseline",
+            # 2026-10-09 续：产出雷同定性后补的两道**通用性**门禁
+            # （流式/非流式轮次漂移、行内工具调用不被识别）
+            "verify_tool_round_budget", "verify_inline_tool_call_salvage",
+            "verify_checker_diag_encoding"]
+    # 2026-10-09 新增接线（必须随 ci.yml 一起更新，否则本门禁自己会红）
+    _NEW = ["verify_agent_loop_protocol", "verify_agent_perm_gate",
+            "verify_llm_circuit_breaker", "verify_memory_conflict_gate",
+            "verify_sysml_autofix", "verify_pipeline_closure",
+            "verify_sysml_baseline"]
     missing = [m for m in must if ("tools/verify/%s.py" % m) not in cmds]
     ok = _rec("W2a 本批 %d 个门禁全部在 ci.yml 执行行里" % len(must),
               not missing, "缺：%s" % missing)

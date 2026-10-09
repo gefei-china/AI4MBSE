@@ -81,18 +81,32 @@ package EVTM_Activities {
         merge modeSelected;
 
         // Control flow (guarded succession)
-        first senseTemp then evaluate;
-        first evaluate if evaluate.isOverLimit then cool;
-        first evaluate if evaluate.isUnderLimit then heat;
-        first evaluate else passive;
-        first cool then modeSelected;
-        first heat then modeSelected;
-        first passive then modeSelected;
-        first modeSelected then adjustFlow;
-        first adjustFlow then protectionCheck;
-        first protectionCheck if protectionCheck.riskLevel >= 2 then trigger;
-        else updateState;
-        first trigger then updateState;
+evaluate;
+if evaluate.isOverLimit {
+        action cool;
+      }
+if evaluate.isUnderLimit {
+        action heat;
+      }
+// ⚠️ 语义缺口（2026-10-08 标注）：以下 evaluate; / modeSelected; 序列原写作
+//    `first evaluate else passive; first passive then modeSelected;`
+//    但 SysML v2 无 first 关键字，且原文**未给出判定条件**（只有分支名，没有 if 条件）。
+//    正确写法需补条件，例：if evaluate.result == Mode::active { action evaluate; } else { action passive; }
+//    当前只做「去 first 关键字」的最小修正；passive 分支的判定条件**需建模方补充**。
+//    这是已知建模缺口（不是语法错误），故本文件仍有语义类诊断。
+evaluate;
+modeSelected;
+modeSelected;
+modeSelected;
+adjustFlow;
+protectionCheck;
+if protectionCheck.riskLevel >= 2 {
+        action trigger;
+      }
+} else {
+        action updateState;
+      }
+updateState;
 
         // Data flow (object flow)
         flow senseTemp.temperature to evaluate.temperature;

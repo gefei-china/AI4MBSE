@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: 断言的是**生产真库金标**（名册 20 成员 / capabilities 落库），干净库上必然不成立 ⇒ 与 verify_ontology_dom_range 同类，保持真库运行。
 """团队定义驱动编排门禁（2026-10-07）—— C1~C5 + 两个实测缺陷修复。
 
 对应文档：`docs/主Agent提示词反推草案-团队定义驱动编排-20261007.md`
@@ -69,13 +70,39 @@ ck(len(td["system_prompt"]) > 600,
    "A3 ★prompt 长度 %d > 600（实测旧写法截断 300 字会把拆解规则切掉一半）"
    % len(td["system_prompt"]))
 _m = td.get("members") or []
-ck(len(_m) == 14, "A4 成员数 %d == 14（与库一致）" % len(_m))
+# ★ 2026-10-09：A4 由硬编码 14 改为动态下限。
+#   事实：2026-10-09 接入 8 个流水线节点后，名册从 14 增至 **25** 行
+#   （agent_team_members 实测 25 行 / enabled 23）。
+#   原写法 `len(_m) == 14` 是**过期快照**——门禁会随正常演进而误红，
+#   而红的原因不是能力退化。这与MEMORY 里「清单里的数字都是快照」同源。
+#   改为"下限 + 关键成员必须在"：既能守住退化，又不锁死演进。
+ck(len(_m) >= 14, "A4 成员数 %d >= 14（下限；随流水线节点接入会增长）" % len(_m))
+# 但**关键成员必须在册**——这是真断言，不随演进放松
+_KEY_MEMBERS = ("architecture_skeleton", "view_expansion",
+                "model_validation_repair", "trace_verification")
+_names = {m.get("name") or m.get("agent") or "" for m in _m}
+_missing = [k for k in _KEY_MEMBERS if k not in _names]
+ck(not _missing, "A4b ★关键流水线成员在册（缺：%s）" % (_missing or "无"))
+
 _caps = [m for m in _m if m.get("capabilities")]
 ck(len(_caps) == len(_m),
    "A5 ★全部成员 capabilities 非空（%d/%d）——空则 planner 分不清8 个视图成员"
    % (len(_caps), len(_m)))
-_kw = [m for m in _m if m.get("intent_keywords")]
-ck(len(_kw) == len(_m), "A6 全部成员 intent_keywords 非空（%d/%d）" % (len(_kw), len(_m)))
+# ⚠️ A6 由"全部非空"放宽为"主 Agent + 流水线节点必须有"。
+#   事实：2026-10-09 清空 8 个旧视图 Agent 的 intent_keywords（V15）后，
+#   实测名册里有 **8 个成员 intent_keywords 为空**——那是**有意为之**
+#   （让视图请求统一走 view_expansion 节点），不是缺陷。
+#   但主 Agent 与 8 个流水线节点仍**必须**有路由词，否则流水线进不去。
+_KEY_NEED_KW = ("MBSE建模总体负责人",) + _KEY_MEMBERS + (
+    "methodology_resolver", "requirement_structuring",
+    "change_safety_gate", "model_release")
+_kw_missing = [k for k in _KEY_NEED_KW
+               if k in _names and not next(
+                   (m for m in _m if (m.get("name") or m.get("agent")) == k),
+                   {}).get("intent_keywords")]
+ck(not _kw_missing,
+   "A6 ★主 Agent + 流水线节点必须有 intent_keywords（缺：%s；"
+   "旧视图 Agent 为空是有意的）" % (_kw_missing or "无"))
 _hil = {m["hil_level"] for m in _m}
 ck("L1" in _hil, "A7 L1 成员存在（review/impact 需人工确认，写进 prompt）")
 
@@ -94,18 +121,25 @@ for i, q in enumerate(ORCH, 1):
        "B1.%d 多交付物 ⇒ 编排（实得 %s：%s）" % (i, d["action"], q[:22]))
 
 # B2 单一交付物不得被误升级为编排（防过度编排——这是本次改造的主要目标）
-DIRECT = [
-    ("生成需求视图", "需求视图生成"),
-    ("对当前模型进行预评审校验", "review"),
-    ("用一句话介绍MBSE方法论", "knowledge_qa"),
-    ("请生成一份关于宽带通信系统的分析报告", "report_generation"),
-    ("查询#宽带通信 知识库资料", "knowledge_qa"),
-]
-for i, (q, want) in enumerate(DIRECT, 1):
+# ★ 2026-10-09 更新两条期望值（V15 清空了 8 个旧视图 Agent 的 intent_keywords，
+#   让视图请求统一走 `view_expansion` 流水线节点）：
+#   · "生成需求视图" → 期望目标由 `需求视图生成`（旧 Agent）改为 `view_expansion`
+#     ——断言的是**"直行而非编排"这个核心性质**，具体落到哪个 Agent 是架构选择，
+#       架构演进后若不同才是真问题。
+#   · "对当前模型进行预评审校验" → 期望目标由 `review` 改为 `model_validation_repair`
+#     （校验修复已由流水线 N4 节点承载）。
+_DIRECT_OK = [("生成需求视图", ("view_expansion", "需求视图生成")),
+              ("对当前模型进行预评审校验", ("model_validation_repair", "review")),
+              ("用一句话介绍MBSE方法论", ("knowledge_qa",)),
+              ("请生成一份关于宽带通信系统的分析报告", ("report_generation",)),
+              ("查询#宽带通信 知识库资料", ("knowledge_qa",))]
+for i, (q, wants) in enumerate(_DIRECT_OK, 1):
     # ★LLM 一律回 __ORCH__（最坏情况）：若仍判 direct，说明词法路径独立成立、不依赖 LLM
     d = tr.decide(q, td, llm_client=FakeLLM('{"agent":"__ORCH__","reason":"不该出现"}'))
-    ck(d["action"] == "direct" and d["target"] == want,
-       "B2.%d 单一交付物 ⇒ 直行 %s（实得 %s/%s）" % (i, want, d["action"], d["target"]))
+    hit = d["target"] in wants
+    ck(d["action"] == "direct" and hit,
+       "B2.%d 单一交付物 ⇒ 直行 %s（实得 %s/%s）"
+       % (i, "/".join(wants), d["action"], d["target"]))
 
 print("\n== C. 档① 噪声：不得被判成「团队不支持」 ==")
 for q in ("你好", "hi", "在吗"):
@@ -114,10 +148,18 @@ for q in ("你好", "hi", "在吗"):
        "C%d 「%s」⇒ chat直答（实得 %s）——修前会被判 reject，用户被无谓拒绝"
        % (q and 1 or 2, q, d["action"]))
 # 反例：短但有业务信号的 query 不得被当噪声
+# ★ 2026-10-09：V15 清空了 8 个旧视图 Agent 的 intent_keywords（让视图请求统一走
+#   `view_expansion` 流水线节点），因此「需求视图」不再命中旧 Agent。
+#   但它**也不该落到 chat**——正确行为是落到 `view_expansion`（N3 节点）。
+#   词条是「需求视图生成」/「视图展开生成」等，用户口语的「需求视图」是其子串，
+#   但**子串方向相反** ⇒ 匹配不上（这是路由词语序问题，见 verify_intent_routing_baseline）。
+#   本断言改为守住"不被当噪声"这一核心性质：可以是 direct 或 orchestrate，
+#   但**不能是 chat**（chat 意味着用户的话被当成寒暄丢掉）。
 d = tr.decide("需求视图", td, llm_client=FakeLLM(""))
 ck(d["action"] != "chat",
-   "C4 ★短但含触发词「需求视图」不被当噪声（实得 %s）——只看长度会误杀有效短指令"
-   % d["action"])
+   "C4 ★短但含触发词「需求视图」不被当噪声（实得 %s/%s）——"
+   "只看长度会把有效短指令丢进 chat；期望直行或编排，不能是闲聊"
+   % (d["action"], d["target"]))
 
 print("\n== D. LLM 容错与降级（实测 2/36 解析失败） ==")
 d = tr.decide("帮我写一首诗", td,
@@ -272,7 +314,7 @@ _db.row_factory = sqlite3.Row
 _n = _db.execute(
     """SELECT COUNT(*) n FROM agent_team_members m JOIN agents a ON a.id=m.sub_agent_id
        WHERE m.main_agent_id=160 AND a.capabilities NOT IN ('[]','')""").fetchone()["n"]
-ck(_n == 14, "J1 ★库内 14 个成员 capabilities 均已落库（实得 %d）" % _n)
+ck(_n >= 14, "J1 ★库内成员 capabilities 均已落库（实得 %d，下限 14）" % _n)
 _p = _db.execute("SELECT system_prompt FROM agents WHERE id=160").fetchone()["system_prompt"] or ""
 for kw in ("拆解规则", "八视图", "不要虚构能力", "逐字取自"):
     ck(kw in _p, "J2 prompt 含关键约束「%s」" % kw)

@@ -63,10 +63,10 @@ package EVTM_Requirements {
     }
 
     // ---------- Requirement relationships (refines / traces) ----------
-    requirement ReqBatteryTempDelta refines ReqBatteryTempRange;
-    requirement ReqColdStart refines ReqBatteryTempRange;
-    requirement ReqThermalRunawayProtection refines ReqBatteryTempRange;
-    requirement ReqHeatPumpCOP refines ReqCabinComfort;
-    requirement ReqReliability traces ReqBatteryTempRange;
-    requirement ReqEnergyBudget traces ReqCabinComfort;
+    requirement ReqBatteryTempDelta :> ReqBatteryTempRange;
+    requirement ReqColdStart :> ReqBatteryTempRange;
+    requirement ReqThermalRunawayProtection :> ReqBatteryTempRange;
+    requirement ReqHeatPumpCOP :> ReqCabinComfort;
+    dependency from ReqReliability to ReqBatteryTempRange;
+    dependency from ReqEnergyBudget to ReqCabinComfort;
 }

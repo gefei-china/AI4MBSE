@@ -66,7 +66,7 @@ package EVTM_UseCases {
         doc /* Pre-condition battery and cabin remotely before departure */
         subject system : EVThermalManagementSystem;
         actor driver : Driver;
-        extend energyMode : EnergySavingMode;
+        include use case energyMode : EnergySavingMode;
     }
     use case def EnergySavingMode {
         doc /* Optimize thermal energy consumption in eco driving mode */

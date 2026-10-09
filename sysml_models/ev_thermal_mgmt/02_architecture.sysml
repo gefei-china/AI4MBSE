@@ -109,13 +109,13 @@ package EVTM_Architecture {
     part def ChassisSystem;
 
     // ---------- Satisfaction trace (requirements <- design blocks) ----------
-    satisfaction satisfy ReqBatteryTempRange by BatteryThermalManagement;
-    satisfaction satisfy ReqBatteryTempDelta by BatteryThermalManagement;
-    satisfaction satisfy ReqCabinComfort by CabinThermalManagement;
-    satisfaction satisfy ReqColdStart by BatteryThermalManagement;
-    satisfaction satisfy ReqHeatPumpCOP by CabinThermalManagement;
-    satisfaction satisfy ReqEnergyBudget by EVThermalManagementSystem;
-    satisfaction satisfy ReqThermalRunawayProtection by BatteryThermalManagement;
-    satisfaction satisfy ReqIntegrationWeight by EVThermalManagementSystem;
-    satisfaction satisfy ReqReliability by CoolantLoop;
+    satisfy requirement SatReqBatteryTempRange by BatteryThermalManagement;
+    satisfy requirement SatReqBatteryTempDelta by BatteryThermalManagement;
+    satisfy requirement SatReqCabinComfort by CabinThermalManagement;
+    satisfy requirement SatReqColdStart by BatteryThermalManagement;
+    satisfy requirement SatReqHeatPumpCOP by CabinThermalManagement;
+    satisfy requirement SatReqEnergyBudget by EVThermalManagementSystem;
+    satisfy requirement SatReqThermalRunawayProtection by BatteryThermalManagement;
+    satisfy requirement SatReqIntegrationWeight by EVThermalManagementSystem;
+    satisfy requirement SatReqReliability by CoolantLoop;
 }

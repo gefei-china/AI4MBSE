@@ -74,15 +74,15 @@ package EVTM_InternalBlocks {
         port controlBus : SignalPort;
 
         // Connectors (internal structure)
-        connector c_coolant_in from coolantIn to pump.inlet;
-        connector c_pump_chiller from pump.outlet to chiller.coolantIn;
-        connector c_chiller_valve from chiller.coolantOut to valve.commonIn;
-        connector c_valve_plate from valve.branchAOut to coldPlate.coolantIn;
-        connector c_valve_heater from valve.branchBOut to heater.coolantIn;
-        connector c_plate_out from coldPlate.coolantOut to coolantOut;
-        connector c_heater_out from heater.coolantOut to coolantOut;
-        connector c_refrigerant_in from refrigerantIn to chiller.refrigerantIn;
-        connector c_refrigerant_out from chiller.refrigerantOut to refrigerantOut;
-        connector c_sensor_control from sensor.signal to controlBus;
+        connect coolantIn to pump.inlet;
+        connect pump.outlet to chiller.coolantIn;
+        connect chiller.coolantOut to valve.commonIn;
+        connect valve.branchAOut to coldPlate.coolantIn;
+        connect valve.branchBOut to heater.coolantIn;
+        connect coldPlate.coolantOut to coolantOut;
+        connect heater.coolantOut to coolantOut;
+        connect refrigerantIn to chiller.refrigerantIn;
+        connect chiller.refrigerantOut to refrigerantOut;
+        connect sensor.signal to controlBus;
     }
 }

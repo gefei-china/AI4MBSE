@@ -405,15 +405,21 @@ ck(all(m.get("role") != "assistant" for m in _mf[-1:]),
 # G8 接线（源码级：两条路径都要有）
 _e_s = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"), encoding="utf-8").read()
 _e_e = open(os.path.join(ROOT, "agent", "pipeline_parts", "execute.py"), encoding="utf-8").read()
-ck("finalize_messages(messages)" in _e_s, "G8 stream 收尾走 finalize_messages（同源）")
-ck("should_finalize(" in _e_e and "finalize_messages(messages)" in _e_e,
+ck("finalize_messages(messages" in _e_s, "G8 stream 收尾走 finalize_messages（同源）")
+ck("should_finalize(" in _e_e and "finalize_messages(messages" in _e_e,
    "G9 ★execute 冷路径接入收尾（此前**完全没有**，实测返回 content 长度 0）")
 # ★ 收尾调用不得传 tools（否则模型又要一轮工具 ⇒ 死循环）
-_i_fin_e = _e_e.find("finalize_messages(messages)")
-ck("tools=None" in _e_e[_i_fin_e:_i_fin_e + 400],
+# ⚠️ 2026-10-09 修正（**判据过期**，不是生产代码问题）：
+#   `finalize_messages` 已加 `extra_context` 参数（修「收尾时模型看不见已offload 的正文」），
+#   实际调用变成 `finalize_messages(messages, extra_context=_extra)`
+#   ⇒ 原判据锁死字面量`finalize_messages(messages)` 必然红，而代码是**对的**。
+#   两条修正：① 匹配去掉右括号，接受带参数的合法形态；
+#            ② 搜索窗 400→600 字——参数变多后 `tools=None` 会落到窗口外。
+_i_fin_e = _e_e.find("finalize_messages(messages")
+ck("tools=None" in _e_e[_i_fin_e:_i_fin_e + 600],
    "G10 ★execute 收尾调用不带 tools（物理上无法再请求工具）")
-_i_fin_s = _e_s.find("finalize_messages(messages)")
-ck(_i_fin_s > 0 and "stream=True" in _e_s[_i_fin_s:_i_fin_s + 300],
+_i_fin_s = _e_s.find("finalize_messages(messages")
+ck(_i_fin_s > 0 and "stream=True" in _e_s[_i_fin_s:_i_fin_s + 600],
    "G11 stream 收尾调用不传 tools（chat(..., stream=True) 无 tools 参数）")
 
 
