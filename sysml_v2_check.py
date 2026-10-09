@@ -216,8 +216,18 @@ def _run(merged, timeout):
         with open(tmp, "wb") as f:                     # 无 BOM 写出（纪律 ④）
             f.write(merged.encode("utf-8"))
         t0 = time.time()
+        # ★ 2026-10-09：`-Dsun.stdout.encoding=UTF-8` —— 修**诊断里中文全成乱码**。
+        #   实测（同一份代码、只差这一个 JVM 参数）：
+        #     默认                → `Type ''�����ڵ���������''`（U+FFFD × 14，中文全毁）
+        #     -Dsun.stdout.encoding=UTF-8 → `Type ''不存在的中文类型''`（U+FFFD = 0）
+        #   影响：诊断是**回喂 LLM 的唯一依据**，
+        #   乱码时模型认不出错在哪、也认不出那正是自己刚写的中文名 ⇒ 只能反复乱改
+        #   （实测 N3 参数视图一轮内改了 2 次仍产出雷同）。
+        #   ⚠️ 必须放在 -jar **之前**（JVM 参数，不是程序参数）。
+        #   ⚠️ `file.encoding` 单独设**无效**（实测 U+FFFD 仍 14）——只改 stdout 通道。
         proc = subprocess.run(
-            [JAVA, "-jar", JAR, "-i", tmp, LIB],       # 第 2 参数 = 库路径（缺省回退 ./sysml.library）
+            [JAVA, "-Dsun.stdout.encoding=UTF-8", "-Dsun.stderr.encoding=UTF-8",
+             "-jar", JAR, "-i", tmp, LIB],
             cwd=REPO, capture_output=True, timeout=timeout)
         return (proc.returncode,
                 proc.stdout.decode("utf-8", "replace"),
@@ -426,22 +436,47 @@ def _fix_char_msg(msg: str, source: str, col: int) -> str:
     而源码第 22 列**正是** `温`（`package P { part def ` 恰为 21 个字符）→ 列号是字符位置，
     因此 `source[col-1]` 就能精确取回那个字符。
 
-    这一步不是美化：LLM 拿到 `at character '?'` 无法知道是哪个字符不合法，
+    这一步不是美化：LLM拿到 `at character '?'` 无法知道是哪个字符不合法，
     而 `at character '温'` 立刻指向"标识符不能写中文"这个修法。
+
+    ★ 2026-10-09 扩展：原先只覆盖 `at character 'X'` 形态，**漏了引用类诊断**
+      （实测 N3 参数视图 52 条诊断全是这种）：
+      ```
+      Couldn't resolve reference to Type ''电池温区约束定义''   ← 引号里本该是中文
+      ```
+      实际回喂给 LLM 的是 `''�������Լ������''`
+      ⇒ **它认不出错在哪、也判断不出那正是自己刚写的中文名** ⇒ 只能反复乱改。
+      ⇒ 现在把引号内的乱码按**长度**与 `source[col-1:]` 对齐回填。
     """
     if not msg or not source:
         return msg
+    BAD = ("?", "\ufffd")
+    # ① `at character 'X'`（列号指向那个字符）
     # ⚠️ 引号内可能是**多个**替换字符：`温` 的 GBK 是 2 字节，按 UTF-8 decode 后变成 2 个 U+FFFD。
     #    所以此处必须用 `[^']*` 而非 `.`，否则整个正则匹配不上、回填静默失效（实测踩过）。
     m = re.search(r"at character '([^']*)'", msg)
-    if not m:
+    if m:
+        tok = m.group(1)
+        if tok and all(ch in BAD for ch in tok):
+            idx = int(col or 0) - 1
+            if 0 <= idx < len(source):
+                return msg[:m.start(1)] + source[idx] + msg[m.end(1):]
         return msg
-    tok = m.group(1)
-    if not tok or not all(ch in ("?", "\ufffd") for ch in tok):
-        return msg
-    idx = int(col or 0) - 1
-    if 0 <= idx < len(source):
-        return msg[:m.start(1)] + source[idx] + msg[m.end(1):]
+    # ② 引用类：`to Type ''xxx''` / `to Element ''xxx''`
+    #    校验器对未解析的**名字**用双单引号或单引号包裹，两种都试。
+    for pat in (r"(to\s+\w+\s+)''([^']*)''",
+                r"(to\s+\w+\s+)'([^']*)'"):
+        mm = re.search(pat, msg)
+        if not mm:
+            continue
+        tok = mm.group(2)
+        if not tok or not all(ch in BAD for ch in tok):
+            return msg
+        start = int(col or 0) - 1
+        frag = source[start:start + len(tok)]
+        if not frag:
+            return msg
+        return msg[:mm.start(2)] + frag + msg[mm.end(2):]
     return msg
 
 

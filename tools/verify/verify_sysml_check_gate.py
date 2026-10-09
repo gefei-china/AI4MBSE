@@ -214,6 +214,10 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="", help="改动前的 git ref（做 AST 级「只增不改」比对；需早于 P2 校验注入与缺陷④落地补丁）")
+    ap.add_argument("--update-baseline", action="store_true",
+                    help="用当前实测重建 sysml_check_baseline.json（必须配 --baseline-note 说明原因）")
+    ap.add_argument("--baseline-note", default="",
+                    help="重建基线的原因（强制留痕，禁止无解释的快照）")
     args = ap.parse_args()
 
     import sysml_v2_check as svc
@@ -234,23 +238,82 @@ def main():
     print("       " + svc.line_text(base))
     check("文件数 = 6", len(files) == 6, len(files))
     check("rc == 1（存在 ERROR）", base["rc"] == 1, base["rc"])
-    check("ERROR == 47", base["n_error"] == 47, base["n_error"])
-    # 三路化（2026-09-19）：词法/语法/语义分列。已入库模型实测 **词法 0** ——
-    # 那 32 条 `no viable alternative at input 'X'` 的引号内全是标识符/关键字
-    # （refines/traces/satisfy/by/ReqX…），按「引号内是否为单个非字母数字字符」判据归**语法路**，
-    # 故 n_syntax 与三路化前**逐项一致（33）**。
+
+    # ── 2026-10-09 修正：绝对数字快照 → 不变量 + 基线文件对拍 ──
+    # 为什么改：原判据写死 `ERROR==47 / n_syntax==33 / n_semantic==14 / WARN==48`。
+    #   这四个数是**写它那天的样例文件快照**，只要 `sysml_models/ev_thermal_mgmt/*.sysml`
+    #   正常演进（修语法错误是**这个目录的本来目的**），它们必然失效。
+    #   ⇒ 门禁会长期红，而红的原因不是代码退化，是**断言方式错了**。
+    #   （与 MEMORY 里「清单里的数字只是快照」同源，此处是判据里的快照。）
+    #
+    # 正解分两层：
+    #   ① **不变量**（永真，样例怎么改都该成立）：三路计数自洽、n_hard 定义一致、
+    #      每条 ERROR 都有三路归属 —— 这才是"校验器行为正确"的真判据。
+    #   ② **基线文件对拍**（可复现）：基线存在时要求逐项一致；
+    #      基线缺失时**明确告知需重建**，而不是靠一个写死的数字硬判。
     check("n_lexical == 0（已入库模型无词法错，实测）", base["n_lexical"] == 0, base["n_lexical"])
-    check("n_syntax == 33（与三路化前一致）", base["n_syntax"] == 33, base["n_syntax"])
-    check("n_semantic == 14", base["n_semantic"] == 14, base["n_semantic"])
-    check("n_hard == 词法 + 语法", base["n_hard"] == base["n_lexical"] + base["n_syntax"], base["n_hard"])
-    check("WARN == 48", base["n_warn"] == 48, base["n_warn"])
-    check("三路计数自洽：lexical + syntax + semantic == error",
+    check("n_hard == 词法 + 语法（定义自洽，不依赖样例内容）",
+          base["n_hard"] == base["n_lexical"] + base["n_syntax"], base["n_hard"])
+    check("三路计数自洽：lexical + syntax + semantic == error（定义自洽）",
           base["n_lexical"] + base["n_syntax"] + base["n_semantic"] == base["n_error"])
-    check("判据 == block（n_hard > 0）", base["verdict"] == "block", base["verdict"])
+    check("verdict == block（n_hard > 0 时必为 block，逻辑自洽）",
+          base["verdict"] == ("block" if base["n_hard"] > 0 else base["verdict"]),
+          f"verdict={base['verdict']} n_hard={base['n_hard']}")
+
+    # ② 基线对拍：把"绝对数字"从判据里搬到**可更新的数据文件**里
+    _bl_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "sysml_check_baseline.json")
+    _cur = {"n_error": base["n_error"], "n_lexical": base["n_lexical"],
+            "n_syntax": base["n_syntax"], "n_semantic": base["n_semantic"],
+            "n_warn": base["n_warn"], "n_hard": base["n_hard"], "rc": base["rc"]}
+    if os.path.isfile(_bl_path):
+        with open(_bl_path, encoding="utf-8") as _bf:
+            _bl = json.load(_bf)
+        _diff = {k: (v, _cur.get(k)) for k, v in _bl.get("counts", {}).items()
+                 if _cur.get(k) != v}
+        if _diff:
+            check(f"基线对拍一致（{os.path.basename(_bl_path)}）", False,
+                  f"不一致 {len(_diff)} 项：{_diff}"
+                  f" —— 若样例已**故意**演进，用 `--update-baseline` 更新并写明原因；"
+                  f"若未改样例则是校验器行为退化")
+            print(f"       ⚠️ 详见 {os.path.basename(_bl_path)} 的 note 字段")
+        else:
+            check(f"基线对拍一致（基线文件 {os.path.basename(_bl_path)}）", True, base["n_error"])
+    elif args.update_baseline:
+        # 显式重建基线：把当前实测写成基线，并要求写明原因（不留无解释的快照）
+        if not (args.baseline_note or "").strip():
+            print("       ❌ --update-baseline 必须配 --baseline-note \"<为什么变>\""
+                  "（禁止生成无解释的快照）")
+            _fails.append("更新基线但未写明原因")
+        else:
+            with open(_bl_path, "w", encoding="utf-8") as _bf:
+                json.dump({"counts": _cur,
+                           "note": args.baseline_note,
+                           "at": time.strftime("%Y-%m-%d %H:%M:%S")},
+                          _bf, ensure_ascii=False, indent=2)
+            print(f"       ✅ 已更新基线 → {os.path.basename(_bl_path)}"
+                  f"（note: {args.baseline_note}）")
+            check(f"基线已重建（note: {args.baseline_note}）", True, _cur)
+    else:
+        print(f"       ⚠️ 无基线文件 {_bl_path} ⇒ 跳过绝对数字对拍"
+              f"（不变量断言仍生效）；当前实测={_cur}")
+        print(f"          首次运行可用 `--update-baseline --baseline-note \"<原因>\"` 固化。")
+
     check("诊断行号能反查回源文件（工具硬编码 stdin 的补丁生效）",
           all(d["file"].endswith(".sysml") for d in base["errors"]), base["errors"][0]["file"] if base["errors"] else "")
-    check("v1 风格 refines 归类到语法路",
-          any(d["path"] == "syntax" and "refines" in d["msg"] for d in base["errors"]))
+    # ⚠️ 2026-10-09：原判据是「在**样例目录**的诊断里找 refines」。
+    #   但样例已被修复（语法 33→2），那条 refines 错**已不存在于样例**
+    #   ⇒ 判据随样例修复而失效（红的原因是样例好了，不是校验器坏了）。
+    #   正解：用**构造用例** `CASE_V1_REFINES` 验证分类规则（见 [2] 段），
+    #   这里只确认"样例目录里若存在 refines 错，它必须被归到语法路"这一**条件式**性质。
+    _refines_in_base = [d for d in base["errors"] if "refines" in d["msg"]]
+    if _refines_in_base:
+        check("v1 风格 refines 若出现在样例里则归类到语法路",
+              all(d["path"] == "syntax" for d in _refines_in_base),
+              f"样例内 refines 诊断 {len(_refines_in_base)} 条")
+    else:
+        print("       ℹ️ 当前样例已无 refines 语法错（样例修复后的正常状态）"
+              "⇒ 分类规则由 [2] 段的 CASE_V1_REFINES 构造用例验证，不依赖样例。")
     check("每条 ERROR 都带三路归属",
           all(d["path"] in ("lexical", "syntax", "semantic") for d in base["errors"]))
 

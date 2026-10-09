@@ -37,10 +37,66 @@ _VERDICT_HEAD = {
 
 
 def exec_tool(name: str, arguments: dict | None = None) -> dict:
-    """工具执行入口（`agent.pipeline_parts.tools._exec_tool_call` 按 `sysml_v2_` 前缀路由）。"""
+    """工具执行入口（`agent.pipeline_parts.tools._exec_tool_call` 按 `sysml_v2_` 前缀路由）。
+
+    路由表（`routers/studio_parts/tools.py:47`）把整个 `sysml_v2_` 前缀指向本模块，
+    故新增的 `sysml_v2_autofix` 在这里**代理**到 `sysml_autofix_tools` ——
+    避免改路由表（改了会影响前缀路由的既有行为）。
+    ⚠️ 代理必须放在**本模块自己处理之后**：`_autofix` 内部会回调 `check_code`，
+    不会递归回本函数，故无循环风险。
+    """
     args = arguments or {}
     if name == "sysml_v2_validate":
         return _validate(args)
+    if name == "sysml_v2_autofix":
+        # 延迟导入：autofix 依赖 sysml_v2_check，本模块又依赖它，避免 import 期循环
+        try:
+            import sysml_autofix_tools as _af
+            return _af.exec_tool(name, args)
+        except Exception as exc:                # noqa: BLE001
+            return {"ok": False,
+                    "result": f"自动修复模块不可用：{type(exc).__name__}: {exc}。"
+                              f"⚠️ 这不代表代码合法 —— 请如实说明『未能自动修复』，"
+                              f"或改用 sysml_v2_validate 获取诊断后自行修复。"}
+    if name == "sysml_v2_lint":
+        # 规约检查（命名规范 + forbid 规则）：只报告不改写
+        try:
+            import sysml_lint_tools as _lt
+            return _lt.exec_tool(name, args)
+        except Exception as exc:                # noqa: BLE001
+            return {"ok": False,
+                    "result": f"规约检查模块不可用：{type(exc).__name__}: {exc}。"
+                              f"⚠️ 这不代表规范已通过 —— 请如实说明『未能检查』，"
+                              f"不要声称『符合规范』。"}
+    if name == "sysml_import_graph":
+        # 图谱落库：默认 dry-run，只预演不写库
+        try:
+            import sysml_import_graph_tools as _ig
+            return _ig.exec_tool(name, args)
+        except Exception as exc:                # noqa: BLE001
+            return {"ok": False,
+                    "result": f"落库模块不可用：{type(exc).__name__}: {exc}。"
+                              f"⚠️ 模型**未落库** —— 请如实说明『未能落库』，"
+                              f"不要声称『已入库』。"}
+    if name == "sysml_stdlib_meta":
+        # 标准库元类查询：生成前查标准库，禁止臆造属性
+        try:
+            import sysml_stdlib_tools as _st
+            return _st.exec_tool(name, args)
+        except Exception as exc:                # noqa: BLE001
+            return {"ok": False,
+                    "result": f"标准库模块不可用：{type(exc).__name__}: {exc}。"
+                              f"⚠️ 这不代表标准库为空 —— 请如实说明『未能查询标准库』，不要臆造元类。"}
+    if name == "sysml_v2_project_check":
+        # 工程级门禁（多文件合并口径）—— 发布前必用，单文件口径会把跨文件引用报成伪错
+        try:
+            import sysml_project_check_tools as _pc
+            return _pc.exec_tool(name, args)
+        except Exception as exc:                # noqa: BLE001
+            return {"ok": False,
+                    "result": f"工程级门禁模块不可用：{type(exc).__name__}: {exc}。"
+                              f"⚠️ 这不代表模型合法 —— 请如实说明『本次未能校验』，"
+                              f"或改用 sysml_v2_validate 兜底。"}
     return {"ok": False, "result": f"未知 SysML 校验工具: {name}"}
 
 
