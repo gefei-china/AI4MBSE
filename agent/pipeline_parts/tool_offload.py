@@ -44,6 +44,45 @@ def fetch_offload(offload_id: int) -> str:
         conn.close()
 
 
+def save_offload_by_key(tool_name: str, content: str, conversation_id: int = 0,
+                        key: str = "") -> int:
+    """**幂等**落库：同 (conversation_id, tool_name, key) 已存在则复用其 id。
+
+    为什么需要（2026-10-08 实测）：skill 正文在一次会话里会被**反复注入**
+    （多轮对话每轮都装配技能块）⇒ 同一份正文会重复落库几十行，
+    既浪费存储，也让"取回哪个 id"变得不确定。
+
+    实现要点：**不加列**——key 复用 `tool_name` 前缀拼进参数，
+    靠 `content` 的哈希做等值判断（避免依赖 sqlite 的 hash 函数）。
+    """
+    key = key or ""
+    marker = f"{tool_name}#{key}" if key else tool_name
+    existing = fetch_offload_by_key(conversation_id, tool_name, content, key)
+    if existing:
+        return existing                 # 查重失败时返回 0 → 退化为「每次新建」，不阻断
+    return save_offload(marker, content, conversation_id)
+
+
+def fetch_offload_by_key(conversation_id: int, tool_name: str, content: str,
+                         key: str = "") -> int:
+    """按 key 查已存在的 offload id；没有则返回 0。与 save_offload_by_key 配对使用。"""
+    marker = f"{tool_name}#{key}" if key else tool_name
+    try:
+        from database import get_db
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT id FROM tool_result_offloads "
+                "WHERE conversation_id=? AND tool_name=? AND content=? "
+                "ORDER BY id DESC LIMIT 1",
+                (int(conversation_id or 0), marker, content)).fetchone()
+            return int(row["id"]) if row else 0
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
 def build_reference_block(offload_id: int, tool_name: str, full_len: int, full_text: str) -> str:
     """引用块：头部摘要（可判断是否值得重读）+ offload 编号 + 重读指引。"""
     head = (full_text or "")[:_HEAD_CHARS]

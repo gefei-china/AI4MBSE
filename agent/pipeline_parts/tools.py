@@ -158,8 +158,13 @@ class ToolMixin:
         # 仅当输入含明确写意图关键词（创建/入库/保存/修改/删除…）时注入，
         # 防「无关写工具被注入 / LLM 顺手调用」；白名单（委派最小权限）模式下跳过
         if not _wl:
+            # ⚠️ 「修复 / 修 / 校验后自修」是**写意图**：autofix 类工具干的是改写代码，
+            #    而典型触发语恰恰是「校验一下这段代码」「修复语法错误」——都不含原表里的词
+            #    （实测：漏了「修复」会导致 autofix 工具被本闸过滤掉，LLM 根本看不到它）。
+            #    故补入 repair 类词条。
             _write_intent_kw = ("创建", "新增", "添加", "入库", "写入", "保存", "修改", "更新", "删除",
-                                "录入", "登记", "生成实体", "建立实体", "落地", "持久化", "导入")
+                                "录入", "登记", "生成实体", "建立实体", "落地", "持久化", "导入",
+                                "修复", "修一下", "改写", "纠正", "自修", "修好")
             if not any(k in (user_input or "") for k in _write_intent_kw):
                 try:
                     from database import get_db as _gdb
@@ -616,6 +621,58 @@ class ToolMixin:
                 from coverage_tools import exec_tool as _exec_coverage
                 result = _exec_coverage(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            # SysML v2 结构化抽取 / 方法论规约卡（2026-10-08新增）。
+            # 这两个工具名**不带 sysml_v2_ 前缀**（历史前缀表已固定，改前缀会波及
+            # 已有绑定），故需独立分流分支。放在 sysml_v2_ 分支之前以免被误吞。
+            if name == "sysml_ast_extract":
+                try:
+                    import sysml_ast_tools as _at
+                    result = _at.exec_tool(name, arguments or {})
+                except Exception as exc:    # noqa: BLE001
+                    result = {"ok": False,
+                              "result": f"结构抽取模块不可用：{type(exc).__name__}: {exc}。"
+                                        f"⚠️ 这不代表模型里没有元素 —— 请如实说明"
+                                        f"『未能解析』，不要用正则猜测代替。"}
+                self._log_tool_call(name, tool_type, arguments, result,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            if name == "methodology_profile_load":
+                try:
+                    import methodology_profile_tools as _mp
+                    result = _mp.exec_tool(name, arguments or {})
+                except Exception as exc:    # noqa: BLE001
+                    result = {"ok": False,
+                              "result": f"方法论模块不可用：{type(exc).__name__}: {exc}。"
+                                        f"⚠️ 无法加载规约卡 —— 不要凭记忆假设方法论要求。"}
+                self._log_tool_call(name, tool_type, arguments, result,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            # ⚠️ 以下两个工具名**不带 sysml_v2_ 前缀**（注册名如此），
+            #    故走不到上面的前缀分支 —— 必须各自分流，否则会「入库并绑定了却
+            #    永远路由不到」（静默失效，2026-10-08 实测发现）。
+            if name == "sysml_import_graph":
+                try:
+                    import sysml_import_graph_tools as _ig
+                    result = _ig.exec_tool(name, arguments or {})
+                except Exception as exc:    # noqa: BLE001
+                    result = {"ok": False,
+                              "result": f"落库模块不可用：{type(exc).__name__}: {exc}。"
+                                        f"⚠️ 模型**未落库** —— 请如实说明『未能落库』。"}
+                self._log_tool_call(name, tool_type, arguments, result,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            if name == "sysml_stdlib_meta":
+                try:
+                    import sysml_stdlib_tools as _st
+                    result = _st.exec_tool(name, arguments or {})
+                except Exception as exc:    # noqa: BLE001
+                    result = {"ok": False,
+                              "result": f"标准库模块不可用：{type(exc).__name__}: {exc}。"
+                                        f"⚠️ 这不代表标准库为空 —— 请如实说明"
+                                        f"『未能查询标准库』，不要臆造元类。"}
+                self._log_tool_call(name, tool_type, arguments, result,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
             # SysML v2 校验工具（2026-09-19：AI 建模闭环的「暴露 + 回喂」段）。
             # 生成端把校验当**工具**调用 → 拿到三路诊断（词法/语法/语义）→ 自行修复 → 再校验，

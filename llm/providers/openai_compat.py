@@ -5,10 +5,110 @@
 """
 import json
 import logging
+import re
 import time
 from typing import Optional
 
 from ..base import BaseLLM
+
+# ══════════════════════════════════════════════════════════════════
+# 行内工具调用兜底解析（2026-10-09）
+#
+# 现象：部分模型不总走标准 `tool_calls` 字段，而是把工具调用
+#      **以标记语言写进 content 文本**：
+#        `<｜｜DSML｜｜ calls>`
+#        `<｜｜DSML｜｜ invoke name="sysml_v2_validate">`
+#        `  <｜｜DSML｜｜ parameter name="code" string="true">...</｜｜DSML｜｜>`
+#        `<｜｜DSML｜｜ endinvoke>`
+#      ⇒ 上游拿不到 tool_calls ⇒ 判定"无工具调用"⇒ 直接结束
+#      ⇒ 模型想调的工具没调、代码没产出，**还会把上一轮代码贴出来**
+#      （实测 N3 视图展开 state/parameter 产出雷同即此因）。
+#
+# 为什么修在 provider 层：这是**模型兼容性问题**，与哪个 Agent 无关
+# ⇒ 任何用该模型的 Agent 都会踩；修在这里对所有调用方生效。
+#
+# 安全性：解析不出任何调用时**返回 None**，调用方保留原响应 ⇒ 零回归面。
+# ══════════════════════════════════════════════════════════════════
+
+#: 各种模型可能用的标记前缀（实测 deepseek 用DSML；其它模型可能用别的）
+_INLINE_MARKERS = (r"DSML", r"tool_call", r"TOOL_CALL")
+
+#: `... invoke name="xxx"` 的参数块起始
+_RE_INVOKE = re.compile(
+    r"invoke\s+name\s*=\s*[\"']([^\"']+)[\"']", re.I)
+#: `... parameter name="xxx" [string="true"]>值<｜｜DSML｜｜ parameter>`
+#: ★ 实测 deepseek-v4-flash 的真实格式（2026-10-09 从库里捞的原文）：
+#:   `<｜｜DSML｜｜ parameter name="code" string="true">package ...<｜｜DSML｜｜ parameter>`
+#:   ⇒ 结束标记带**词**（parameter / invoke / calls），且用**全角** `｜`
+#:   ⇒ 不能用半角 `\|`；也不能只匹配 `>`（会一路吃到下一个标记）。
+_RE_PARAM = re.compile(
+    r"parameter\s+name\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)"
+    r"<[｜|]{2}\s*DSML\s*[｜|]{2}\s*parameter\s*>",
+    re.I | re.S)
+
+#: 剥标记语言：`<｜｜DSML｜｜ ... >` 与 `<｜｜DSML｜｜ ... />`
+_RE_STRIP_MARKUP = re.compile(
+    r"<[｜|]{2}\s*DSML\s*[｜|]{2}[^>]*?>[\s\S]*?"
+    r"<[｜|]{2}\s*DSML\s*[｜|]{2}\s*(?:parameter|invoke|calls"
+    r"|endinvoke|endcalls|end_calls)\s*>"
+    r"|<[｜|]{2}\s*DSML\s*[｜|]{2}[^>]*/>",
+    re.I)
+
+
+def _salvage_inline_tool_calls(data: dict):
+    """把 content 里的行内工具调用还原成标准 `tool_calls`。
+
+    返回**新的**响应 dict；**识别不到则返回 None**（调用方保留原响应）。
+    ★ 只在「原本没有 tool_calls」时出手——标准路径优先，绝不覆盖。
+    """
+    try:
+        choices = data.get("choices") or []
+        if not choices:
+            return None
+        msg = choices[0].get("message") or {}
+        if msg.get("tool_calls"):          # 标准路径已有 ⇒ 不碰
+            return None
+        content = msg.get("content") or ""
+        if not any(m in content for m in _INLINE_MARKERS):
+            return None
+        names = _RE_INVOKE.findall(content)
+        if not names:
+            return None
+
+        # 按 invoke 出现顺序切参数块：每个 invoke 之后的 parameter 归它所有
+        calls, pending = [], None
+        for seg in re.split(r"(?=invoke\s+name\s*=)", content, flags=re.I):
+            m = _RE_INVOKE.search(seg)
+            if not m:
+                continue
+            args = {}
+            for pname, pval in _RE_PARAM.findall(seg):
+                v = pval.strip()
+                # 能当 JSON 就解，否则当字符串（工具入参几乎都是字符串）
+                try:
+                    args[pname] = json.loads(v)
+                except (ValueError, TypeError):
+                    args[pname] = v
+            calls.append({"id": f"inline_{len(calls) + 1}",
+                          "type": "function",
+                          "function": {"name": m.group(1),
+                                       "arguments": json.dumps(args, ensure_ascii=False)}})
+        if not calls:
+            return None
+
+        # 把标记语言从 content 里剥掉，剩余文本仍作为正文（若有）
+        cleaned = _RE_STRIP_MARKUP.sub("", content).strip()
+        new = dict(data)
+        new["choices"] = [dict(choices[0])]
+        new["choices"][0] = dict(choices[0])
+        new["choices"][0]["message"] = dict(msg)
+        new["choices"][0]["message"]["content"] = cleaned
+        new["choices"][0]["message"]["tool_calls"] = calls
+        logging.getLogger(__name__).info(
+            "inline tool_calls salvaged: %s", [c["function"]["name"] for c in calls])
+        return new
+    except Exception:                # noqa: BLE001 —— 兜底解析失败不得影响主链路
+        return None
 
 _log = logging.getLogger("mbse.llm")
 
@@ -155,6 +255,17 @@ class OpenAICompatProvider(BaseLLM):
         data = resp.json()
         if resp.status_code != 200 or not data.get("choices"):
             raise ValueError(f"LLM API {resp.status_code}: {str(data)[:200]}")
+        # ★ 2026-10-09：部分模型（实测 deepseek-v4-flash）**不总是**把工具调用
+        #   放进标准 `tool_calls` 字段，而是把`<｜｜DSML｜｜ calls>` 这类标记
+        #   **直接写进 content 文本**。
+        #   ⇒ 上游 `msg.get("tool_calls")` 拿不到 ⇒ 判定为"无工具调用"⇒ 直接结束，
+        #   模型想调的工具没调、代码没产出，**还会把上一轮的代码贴出来**。
+        #   ⚠️ 这是 **provider 层通用缺口**（任何用该模型的 Agent 都会踩），
+        #   不是某个 Agent 的问题 ⇒ 修在这里，对所有 OpenAI 兼容模型生效。
+        #   解析不出内容时**逐字返回原响应**（零回归面）。
+        _salvaged = _salvage_inline_tool_calls(data)
+        if _salvaged:
+            data = _salvaged
         self.stats["real"] += 1
         self.stats["last_provider"] = provider_name
         self.stats["last_used_mock"] = False

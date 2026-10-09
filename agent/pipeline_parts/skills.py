@@ -4,6 +4,9 @@
 由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
 
+# 技能正文按需加载（长正文 offload + skill_body_fetch 取回）
+from agent.pipeline_parts import skill_body_on_demand as _sbody
+
 
 class SkillMixin:
     """技能池加载、语义匹配与技能提示词构建。"""
@@ -153,6 +156,7 @@ class SkillMixin:
         if not getattr(self, "_skill_forced", False):
             self._skill_allowed_tools = None
         parts = []
+        _offload_ids = []          # 本轮被offload 的技能正文 id（有则需注入 fetch 工具）
         for s in candidates:
             is_bound = any(s["name"] == b.get("name") for b in bound)
             if s["name"] not in hits:
@@ -166,11 +170,42 @@ class SkillMixin:
                 self._skill_allowed_tools |= set(at)
             meta = (s.get("frontmatter") or "").strip()[:400]
             body = (s.get("content") or "")
+            # 2026-10-08：正文**按需加载**（此前是 body[:600] 硬截断，
+            #   注释声称"按需加载"但代码里从无取回机制 ⇒ 半成品设计）。
+            #   长正文走 offload 通路：注入头部摘要 + 引用块，
+            #   模型可调 skill_body_fetch(id) 取回全文（与工具结果 offload 同一张表）。
+            #   ≤cap（默认 600）时**逐字保持原行为**，零回归面。
+            #   会话 id 取 self._tool_conv_ctx（execute/tools.py:293 同源），
+            #   不用虚构字段——否则恒为 0，退化成"每次会话都重新落库"。
+            _conv = int(getattr(self, "_tool_conv_ctx", 0) or 0)
+            _ref, _off, _oid = _sbody.offload_body(
+                s.get("name", ""), body, conversation_id=_conv)
+            if _off:
+                _offload_ids.append(_oid)
+                at_body = _ref                              # 引用块（含取回指引）
+            else:
+                at_body = body
             src_tag = "" if is_bound else "（全局匹配·未绑定 Agent，建议绑定）"
             snippet = f"【Skill 已触发：{s.get('name','')}{src_tag}】（正文按需加载，摘要如下）\n"
             if meta:
                 snippet += f"元数据：{meta}\n"
-            snippet += f"正文摘要：{body[:600]}"
+            # ★ 2026-10-09：把**真实的工具轮次预算**告诉模型（单一真源 = 配置）。
+            #   为什么必须注入：8 个视图 skill 正文里写着「轮次上限为 3，耗尽即中断」
+            #   「第 1 轮就产出」——那是**按旧上限 3 写的规划**。
+            #   实测把上限改成 6 之后，模型仍按 3 轮规划，
+            #   第 4~6 轮才想产出时就乱了（实测 activity/ibd 雷同、
+            #   骨架只产出 448 字符的探针代码）。
+            #   ⇒ skill 正文不该硬编码预算数字；**运行时注入真值**才是单一真源。
+            #   非产码 Agent 或读配置失败 ⇒ 不注入（保持原样，零回归面）。
+            try:
+                from core import config as _cfg
+                _rounds = int(_cfg.get("agent", "max_tool_rounds", 6))
+                snippet += (f"工具轮次预算（运行时真值，共 {_rounds} 轮）："
+                            f"请在**前 2 轮内产出代码**，"
+                            f"剩余轮次用于 validate 与按诊断修复。\n")
+            except Exception:
+                pass
+            snippet += f"正文摘要：{at_body}"
             # D4 渐进披露：仅披露资源清单（文件名/标题），正文按需加载省 token
             res_refs = [str(r) if isinstance(r, str) else str(r.get("title") or r.get("path") or r)
                         for r in (s.get("references") or [])]
@@ -186,6 +221,14 @@ class SkillMixin:
             if at:
                 snippet += f"\n🔒 工具白名单（仅可调用）：{', '.join(at)}"
             parts.append(snippet)
+        # 本轮有长正文被 offload ⇒ 记录并放行 fetch 工具
+        #（execute 侧据此把 skill_body_fetch 注入 tools_def；
+        #  白名单是「最小权限」最后一道闸，不放行则模型调不到）
+        self._skill_body_offloads = list(_offload_ids)
+        if _offload_ids:
+            _wl = getattr(self, "_tool_whitelist", None)
+            if _wl is not None and _sbody.FETCH_TOOL not in _wl:
+                _wl.append(_sbody.FETCH_TOOL)
         return "\n绑定技能：\n" + "\n".join(parts) + "\n" if parts else ""
 
     _ORCH_AGENTS = "requirement_analysis,design,impact,review,report_generation,knowledge_qa"

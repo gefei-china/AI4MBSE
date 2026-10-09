@@ -44,6 +44,8 @@ messages.extend(results)   # ★ 只有 3 笔结果
 """
 
 import json
+import re
+import sys
 
 __all__ = ["MAX_TOOLS_PER_ROUND", "split_calls", "skipped_results",
            "is_truncated_args", "truncated_result"]
@@ -162,31 +164,169 @@ FINALIZE_HINT = (
     "不要再请求任何工具。"
 )
 
+#: 收尾时若存在「已offload 但模型没取回」的技能正文，附上它。
+#:
+#: ★ 为什么需要它（2026-10-09 实测，N3 视图展开 6/8 产出雷同）：
+#:   模型把 3 轮工具预算全部花在"查标准库/graph 检索"上，
+#:   第 3 轮拿到的是**「未找到包 StandardViewDefinitions」**这种失败信息；
+#:   收尾轮**不给工具**⇒ 它手里没有任何视图规范正文
+#:   ⇒ 只能凭记忆写，于是交出上一轮残留的代码（6 个视图产出 md5 完全相同）。
+#:
+#: ⚠️ 这**不是给某个视图打补丁**，而是补一个通用缺口：
+#:   「正文已 offload 到库、但没进本轮 messages」⇒ 模型永远看不见它。
+#:   收尾轮既然不能再调工具，就把那份正文**直接放进 messages**。
+_FETCH_HINT = (
+    "\n\n以下是本轮已就绪但你尚未取回的技能规范正文（**权威依据**，"
+    "优先于你的记忆；若与你的印象冲突，以它为准）：\n"
+)
 
-def finalize_messages(messages: list) -> list:
-    """构造收尾请求的消息序列（**追加一条 user 提示**，不改原 messages）。
+
+def finalize_messages(messages: list, extra_context: str = "") -> list:
+    """构造收尾请求的消息序列（**追加一条 user 提示**，不改原messages）。
 
     - 用 `messages + [...]` 而非原地 append：调用方的 messages 后续还要复用
       （写卡片 / 落messages 表），原地改会污染主流程。
     - 只追加 user 消息：**不追加 assistant 空消息**（部分 provider 对
       "user 紧跟 assistant.tool_calls 且中间无 tool_result"的序列更敏感）。
+    - `extra_context`：调用方传入的补充材料（如未取回的技能正文）。
+      为空时行为与改动前**逐字相同**。
     """
     out = list(messages)
-    out.append({"role": "user", "content": FINALIZE_HINT})
+    hint = FINALIZE_HINT
+    if extra_context:
+        hint += _FETCH_HINT + extra_context
+    out.append({"role": "user", "content": hint})
     return out
 
 
+#: 代码块判定（与 tools/verify/* 各脚本取块正则同口径）
+_CODE_FENCE_RE = re.compile(r"```(?:sysml|sysmlv2)?[ \t]*\n", re.I)
+
+
+def lacks_deliverable(llm_content: str, expect_code: bool = False) -> bool:
+    """产出里**没有目标产物**（不是"没有文字"）。
+
+    ★ 为什么需要它（2026-10-08 实测，N3 视图展开 25% 无产出）：
+    `should_finalize` 原判据是 `not llm_content`（正文为空才补收尾）。
+    实测模型在轮次耗尽前常**只写一句过程叙述**就结束：
+
+        「我先抽取骨架结构并核实标准库中的顺序视图相关元类，再生成代码。」（31 字）
+        「标准库确认 Parts::Part、Ports::Port 均存在。现在生成结构视图…」（76 字）
+
+    ⇒ `llm_content` 非空 ⇒ **收尾被跳过** ⇒ 循环结束，一行代码都没产出。
+    这正是"模型言不由衷"的机制：**一句"我现在去生成"就骗过了收尾判定**。
+
+    ⚠️ `expect_code=True` 时才要求产出代码块；默认 `False` 保持原行为
+    （纯问答场景不需要代码，用它判反而会误触发收尾）。
+
+    代码块判定取 ``` 围栏（含 ```sysml / ```sysmlv2 / 裸``` ），
+    与 `tools/verify/*` 各脚本的取块正则同口径。
+    """
+    txt = llm_content or ""
+    if not expect_code:
+        return not txt.strip()
+    return not _CODE_FENCE_RE.search(txt)
+
+
 def should_finalize(msg: dict, llm_content: str, rounds_used: int,
-                    max_rounds: int) -> bool:
+                    max_rounds: int, expect_code: bool = False) -> bool:
     """是否需要补一次「无工具收尾」。
 
     两个条件同时成立才补：
     - `rounds_used >= max_rounds`：轮次真的用尽了（而非中途 break）；
-    - `not llm_content`：还没有任何正文产出（**空正文才是真缺口**——
-      已有正文时用户看到的是完整回复，不需要再追加一段）。
+    - **产出里没有目标产物**：
+      · `expect_code=False`（默认，纯问答）→ `llm_content` 为空才算缺口
+        （**保持原行为**：已有正文时用户看到的是完整回复，不需要再追加一段）；
+      · `expect_code=True`（产出代码的任务，如 N3 视图展开）→
+        只要**没有代码块**就算缺口，**哪怕已有一句过程叙述**
+        （2026-10-08 实测：模型常只写"现在生成…"就耗尽轮次，
+          原判据因此跳过收尾 ⇒ 零代码产出）。
 
     ⚠️ **不要用"有 tool_calls"当条件**：轮次用尽的最后一轮 `msg` 里必然还有
     tool_calls（否则循环已在 `if not tool_calls: break` 处退出），
     用它当条件会让「模型给了正文 + 仍要工具」的情况被重复收尾。
     """
-    return rounds_used >= max_rounds and not (llm_content or "").strip()
+    if rounds_used < max_rounds:
+        return False
+    return lacks_deliverable(llm_content, expect_code=expect_code)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 自测（直接 `python agent/loop_protocol.py` 运行）
+#
+# 重点验2026-10-08 的那条缺陷：**"有过程叙述但没有代码"也算缺口**。
+# 这正是 N3 视图展开 25% 无产出的根因，收尾被一句
+# 「现在生成结构视图…」骗过 ⇒ 轮次耗尽时零代码产出。
+# ══════════════════════════════════════════════════════════════════
+def _selftest():
+    import os
+    _r = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _r not in sys.path:
+        sys.path.insert(0, _r)
+    from agent.loop_protocol import lacks_deliverable, should_finalize
+
+    ok = 0
+    total = 0
+
+    def chk(desc, got, want):
+        nonlocal ok, total
+        total += 1
+        good = got == want
+        ok += good
+        print(f"  [{'OK  ' if good else 'FAIL'}] {desc}")
+        if not good:
+            print(f"期望 {want}，实际 {got}")
+
+    print("=" * 68)
+    print("loop_protocol 收尾判据自测")
+    print("=" * 68)
+
+    NARRATIVE = "标准库确认 Parts::Port 均存在。现在生成结构视图并校验。"
+    CODE = "生成完毕：\n```sysml\npackage P { part def V; }\n```"
+
+    print("\n① lacks_deliverable（产物缺失判定）")
+    chk("纯问答：空产出 → 缺", lacks_deliverable("", expect_code=False), True)
+    chk("纯问答：有叙述 → 不缺（保持原行为）",
+        lacks_deliverable(NARRATIVE, expect_code=False), False)
+    chk("产码：只有叙述、无代码 → **缺**（本轮修复的核心）",
+        lacks_deliverable(NARRATIVE, expect_code=True), True)
+    chk("产码：有代码块 → 不缺",
+        lacks_deliverable(CODE, expect_code=True), False)
+    chk("产码：裸 ``` 围栏也算",
+        lacks_deliverable("```\npackage P {}\n```", expect_code=True), False)
+    chk("产码：```sysmlv2 也算",
+        lacks_deliverable("```sysmlv2\npackage P {}\n```", expect_code=True), False)
+
+    print("\n② should_finalize（轮次用尽才收尾）")
+    msg_with_tools = {"tool_calls": [{"id": "1"}]}
+    chk("产码 + 轮次用尽 + 只有叙述 → **补收尾**",
+        should_finalize(msg_with_tools, NARRATIVE, 3, 3, expect_code=True), True)
+    chk("产码 + 已有代码 → 不补（避免重复）",
+        should_finalize(msg_with_tools, CODE, 3, 3, expect_code=True), False)
+    chk("产码 + 轮次未尽 → 不补",
+        should_finalize(msg_with_tools, NARRATIVE, 1, 3, expect_code=True), False)
+    chk("纯问答 + 有正文 → 不补（原行为不变）",
+        should_finalize(msg_with_tools, NARRATIVE, 3, 3, expect_code=False), False)
+    chk("纯问答 + 空正文 → 补（原行为不变）",
+        should_finalize(msg_with_tools, "", 3, 3, expect_code=False), True)
+
+    print("\n③ finalize_messages 的 extra_context（2026-10-09 通用补缺）")
+    base = [{"role": "system", "content": "S"}, {"role": "user", "content": "U"}]
+    m0 = finalize_messages(base)
+    m1 = finalize_messages(base, extra_context="ACTUAL_BODY_TEXT")
+    chk("空 extra_context ⇒ 提示与改动前逐字相同",
+        m0[-1]["content"] == FINALIZE_HINT, True)
+    chk("有 extra_context ⇒ 正文进入最后一条 user 消息",
+        "ACTUAL_BODY_TEXT" in m1[-1]["content"], True)
+    chk("有 extra_context ⇒ 仍说明不要再请求工具",
+        "不要再请求任何工具" in m1[-1]["content"], True)
+    chk("原messages 不被污染（不原地 append）", len(base) == 2, True)
+
+    print("\n" + "=" * 68)
+    print(f"  自测通过 {ok}/{total}")
+    print("=" * 68)
+    return 0 if ok == total else 1
+
+
+if __name__ == "__main__":
+    sys.exit(_selftest())
