@@ -17,6 +17,7 @@
 import hashlib
 import math
 import threading
+import time
 
 # ── 2026-09-25 候选集向量缓存 ────────────────────────────────────────────────
 # 背景：`_rank_dense` 原本把「候选集 + query」**整批**重新向量化，于是**每次**调用都要重算
@@ -30,6 +31,18 @@ _CAND_CACHE_MAX = 8
 # 2026-09-26 预热状态：已预热/正在预热的**文本指纹**（同一索引不重复起线程）
 _WARM_LOCK = threading.Lock()
 _WARM_KEY = ""
+
+# ── 2026-10-09 降级退避（修「embedding 额度耗尽 ⇒ 每请求重算 + 重打日志」）────
+# 实测现象：`verify_agent_loop_protocol` 从 ~40s 变成 >5 分钟且**永不结束**，
+#   日志里同一 `fp=d3202d0c` 的「候选缓存未命中」重复上百行。
+# 根因：额度耗尽 → 走 bigram 降级 → **故意不写缓存**（决策本身正确，
+#   降级向量进缓存没有意义）⇒ 每个请求都重算一遍候选集 + 打一行日志。
+# 解法：**不改那个正确决策**，只加失败退避 —— 同一指纹在冷却期内直接复用降级结果。
+#   冷却时长（30s）取「比重试一次 embedding 的报错耗时略长」，
+#   既不打爆上游，额度恢复后冷却一过也立即自动恢复。
+_DEGRADED_BACKOFF: dict = {}      # fp -> (ts, vecs, version)
+_BACKOFF_LOCK = threading.Lock()
+_DEGRADED_BACKOFF_S = 30.0
 
 
 class SemanticSearch:
@@ -122,6 +135,19 @@ class SemanticSearch:
         hit = _CAND_CACHE.get(key)
         if hit:
             return hit
+        # ── 2026-10-09：降级结果的**退避**，必须放在 `embed_with_version` **之前** ──
+        # 现象（实测）：embedding 额度耗尽 → version='bigram-tf' → **不写缓存**（该决策正确，
+        #   降级向量进缓存没有意义）⇒ 每个请求都重新向量化一遍候选集 + 打一行日志。
+        #   门禁 `verify_agent_loop_protocol` 因此从 ~40s 变成 >5 分钟且**永不结束**。
+        # ⚠️ 位置纪律（首版踩过）：退避判断写在 `embed_with_version` **之后** ⇒
+        #   向量化已经发生了，退避只拦住了后面的日志，**完全没省掉开销**。
+        #   ⇒ 探针必须统计 **Embedder 被调用次数**，不能只看日志行数
+        #     （只看日志会误判为"已生效"，因为日志确实少了）。
+        with _BACKOFF_LOCK:
+            _prev = _DEGRADED_BACKOFF.get(key)
+            if _prev and (time.time() - _prev[0]) < _DEGRADED_BACKOFF_S:
+                # 冷却期内：复用上次的降级结果，不向量化、不打日志。
+                return _prev[1], _prev[2]
         # 2026-09-26 诊断：**未命中时打出指纹**，用于与 `prewarm` 的指纹比对 ——
         #   "预热说它填了、请求却仍冷启动"只可能是两边 key 不同（实测在查这条）。
         print("[semantic] 候选缓存未命中 fp=%s texts=%d（已缓存 %d 个 key：%s）首=%r 尾=%r"
@@ -133,6 +159,10 @@ class SemanticSearch:
             _CAND_CACHE[key] = (vecs, version)
             if len(_CAND_CACHE) > _CAND_CACHE_MAX:
                 _CAND_CACHE.clear()
+        else:
+            # 降级：记入退避表（**不写 _CAND_CACHE** —— 那是失败路径，下次仍应重试真向量）
+            with _BACKOFF_LOCK:
+                _DEGRADED_BACKOFF[key] = (time.time(), vecs, version)
         return vecs, version
 
     def prewarm(self, items: list, key: str = "text") -> bool:

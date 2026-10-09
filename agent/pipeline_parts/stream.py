@@ -1178,6 +1178,11 @@ class StreamMixin:
         意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
         """
         attachments = attachments or []
+        # P1-30（2026-10-09）：**请求级瞬态状态统一清零**（与 execute.py 同源同处）。
+        # ★ 位置纪律：**必须早于本方法内任何 `self.X =` 赋值**（`self._mem_ctx = ...`），
+        #   否则清零会抹掉本次请求刚设好的上下文。
+        #   根因与实测证据见 `common.reset_request_state` 的 docstring。
+        reset_request_state(self)
         # 2026-09-29：user 消息在流开始即落库（原在流收尾与 assistant 一并 INSERT）。
         # 修「流式进行中库中 0 条消息 → 切页再切回，selectConv 渲染空态覆盖 #stream-ai 现场」；
         # 也顺带修复澄清路径（clarify_ask 提前 return）user 消息从未落库的缺口。
@@ -1627,6 +1632,13 @@ class StreamMixin:
                                                      sections=_sections, report_type=report_type)
                 except Exception:
                     report_prompt = ""
+            # ★ 2026-10-08 修**顺序 bug**（与 execute.py 同源）：
+            #   `_tool_conv_ctx` 原在下方 1710 行才赋值，而技能装配
+            #   （`build_prompt_blocks` → `_build_skill_prompt` → `offload_body`）
+            #   在 1656 行就要读它取会话 id ⇒ 永远读到**上一轮**的值。
+            #   后果：长 skill 正文的 offload 挂错会话，`skill_body_fetch` 取回时 id 对不上
+            #   ⇒ 多轮/多会话连续调用时产出互相串扰（实测两个视图产出 md5 完全相同）。
+            self._tool_conv_ctx = conversation_id
             # P1-29（2026-10-02）：状态起点统一 —— 此前本路径**不设** `_skill_forced`，
             # 导致「显式指定技能」的白名单授权在对话主路径上不生效（`skills.py:153/163`
             # 会按"未强制"重置并只并集*自动命中*技能的白名单）；且 `_skill_allowed_tools`
@@ -1707,6 +1719,9 @@ class StreamMixin:
             # 优化1：注入观测上下文
             self._tool_intent_ctx = {"intent": intent}
             self._tool_agent_ctx = {"agent": agent_def.name}
+            # `_tool_conv_ctx` 已在 prompt 装配**之前**设好（见上方注释：原在此处赋值太晚，
+            # 导致技能 offload 读到上一轮会话 id）—— 此处保留一次幂等赋值以防
+            # 未来有人在中间插入分支时依赖它。
             self._tool_conv_ctx = conversation_id
             # P0-6（2026-10-06）：透传当前用户给工具链权限闸（与 execute.py 同口径）。
             # stream 是**生产主路径**（execute 是冷路径），权限闸必须在这里也生效，
@@ -1716,7 +1731,14 @@ class StreamMixin:
             tool_injected = False
             llm_content = ""
             # P0-2：多轮 ReAct——探测→执行工具→观察回填→再探测，直到无 tool_calls 或达上限（防死循环）
-            max_tool_rounds = 3
+            # ★ 2026-10-09：3 → 6 且可配置，**与 execute.py 同源同值**。
+            #   实测依据见 execute.py 同位置注释：3 轮预算在
+            #   「查标准库 → 取回技能正文 → 生成」这条典型序列下会在生成前耗尽。
+            try:
+                from core import config as _cfg
+                max_tool_rounds = int(_cfg.get("agent", "max_tool_rounds", 6))
+            except Exception:
+                max_tool_rounds = 6
             # 2026-10-04：接入统一护栏（与 execute.py 的非流式 loop **同源**）。
             # 为什么必须同源：这两段是同一套 ReAct 语义的两种实现，此前只有编排路径
             # 有 token 预算，重复检测与工具超时两边都没有 ⇒ 补一边就会留下新的不对称。
@@ -1968,10 +1990,28 @@ class StreamMixin:
             #   方案 §3.1 说"stream 只兜底空正文"属实，但那个兜底本身**就是**收尾调用。
             #   真正的缺口是：**没告诉模型工具次数已用尽** ⇒ 模型可能以为对话被截断，
             #   给出残缺结论或重复已说过的内容。⇒ 这里补一条明确的收尾指令。
-            if tool_injected and not llm_content:
+            # ★ 2026-10-08：与 execute.py 同源修复——收尾判据从「正文为空」升级为
+            #   「**没有代码块**」（产码 Agent）。原判据 `not llm_content`
+            #   会被模型的一句过程叙述骗过：
+            #     「标准库确认 Parts::Port 均存在。现在生成结构视图…」（76 字）
+            #   ⇒ 非空 ⇒ 收尾跳过 ⇒ 轮次耗尽时**一行代码都没产出**
+            #   （实测 N3 视图展开 25% 无产出，根因即此）。
+            #   `_is_v2_code_agent` 是既有单一事实来源，不新增 intent 白名单。
+            _expect_code = bool(self._is_v2_code_agent(agent_def))
+            if tool_injected and _lproto.lacks_deliverable(llm_content,
+                                                             expect_code=_expect_code):
                 # 追加提示走**副本**（finalize_messages 内部 list(messages) 复制）——
                 # 主流程的 messages 后续还要写卡片/落库，不能被收尾提示污染。
-                _fin_msgs = _lproto.finalize_messages(messages)
+                # ★ 2026-10-09：与 execute.py **同源**——把「已 offload 但没取回」
+                #   的正文附进收尾（通用补缺，非视图专属）。
+                _extra = ""
+                try:
+                    from agent.pipeline_parts import skill_body_on_demand as _sbd
+                    _extra = _sbd.unfetched_bodies(
+                        getattr(self, "_skill_body_offloads", None))
+                except Exception:
+                    _extra = ""
+                _fin_msgs = _lproto.finalize_messages(messages, extra_context=_extra)
                 chunks = llm_client.chat(_fin_msgs, provider_id=effective_provider, stream=True)
                 for chunk in chunks:
                     for delta in self._extract_stream_deltas(chunk):

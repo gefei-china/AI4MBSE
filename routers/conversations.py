@@ -11,7 +11,7 @@ from core.deps import db_session, current_user
 from core.config import STATIC_DIR
 from repositories.conversation_repo import ConversationRepo
 from repositories.studio_repo import StudioRepo
-from agent import agent
+from agent import get_pipeline
 from core.audit import audit, audit_user
 from models import ConvIn, ChatIn, ConvProjectIn, RenameIn, FlowRunIn
 
@@ -203,7 +203,13 @@ def chat(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depends(curr
         return JSONResponse({"error": "Conversation not found"}, 404)
 
     branch = _resolve_work_branch(conn, body.branch)
-    result = agent.execute(body.message, conv_id, branch, body.provider_id, body.attachments or [],
+    # P1-31（2026-10-09，多用户并发）：**每请求新建 Pipeline**，不用模块级单例。
+    # 实测依据（`tools/verify/verify_pipeline_concurrency.py`）：
+    #   8 线程并发下共享单例的请求级字段被覆盖 **7/8**；
+    #   每请求新建为 **0/8**。构造成本仅 ≈0.001 ms，可忽略。
+    # ⚠️ 必须在**函数体内**取实例，不能提到模块级（那就又变回单例了）。
+    _pipe = get_pipeline()
+    result = _pipe.execute(body.message, conv_id, branch, body.provider_id, body.attachments or [],
                            forced_intent=body.forced_intent or None, skill_name=body.skill_name or None,
                            team=body.team or None,
                            scope_id=body.scope_id, scope_ids=body.scope_ids, scope=body.scope,
@@ -257,6 +263,10 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         # 让 nginx/网关在本轮第一个 LLM 请求发出前就看到"连接活跃"。
         yield "retry: 3000\n\n"
         yield ": connected\n\n"
+        # P1-31（2026-10-09，多用户并发）：**每请求新建 Pipeline**（同 chat 端点）。
+        # ⚠️ 建在生成器**体内**而非模块级/外层—— 建在外层等于每次请求建一个，
+        #    但若提到模块级就退回单例了；建在体内保证「一个 SSE 连接 = 一个实例」。
+        _pipe = get_pipeline()
         # ⚠️ 客户端已断开标志：GeneratorExit 期间**禁止再 yield**
         # （CPython 会抛 "generator ignored GeneratorExit"，且该异常发生在收尾路径，
         #  比断连本身更难排查）。下面的 finally 必须先判这个标志才能补发降级告知。
@@ -268,7 +278,7 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             # P0-1：用**异步**包装器 —— 消费侧不占 anyio 线程池线程（见端点 docstring 的更正说明）
             from core.sse import iter_with_heartbeat_async
             _frames = iter_with_heartbeat_async(
-                agent.execute_stream(body.message, conv_id, work_branch,
+                _pipe.execute_stream(body.message, conv_id, work_branch,
                                      body.provider_id, body.attachments or [],
                                      forced_intent=body.forced_intent or None,
                                      skill_name=body.skill_name or None,

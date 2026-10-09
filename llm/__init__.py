@@ -157,6 +157,43 @@ def parse_stream_frame(raw) -> dict:
 _instances: dict = {}
 
 
+class LLMUnavailableError(RuntimeError):
+    """LLM 不可用（无 key / 额度耗尽 / 调用失败）——**默认直接报错，不再回落 Mock**。
+
+    ── 为什么要改（2026-10-09，米爸决策 R1）──
+    原实现在这三处失败时**静默回落 Mock**：
+        ① 未配置 api_key      （`chat`）
+        ② 真实调用失败（402/超时）（`chat`）
+        ③ 流式调用失败        （`chat_stream`）
+    ⇒ 用户拿到的是 `（Mock 回答）…当前为 Mock 降级模式` 这种**编造的内容**，
+      而它在回答正文里看起来像一句正常回复（Mock 标记只在「执行详情」里可见）。
+
+    ★ 这比"产出雷同"更严重：产出雷同交付的至少是**真代码**（错的），
+      Mock 交付的是**不存在的内容**（假的）。
+
+    ── 为什么用异常而不是返回错误字典 ──
+    调用链有`execute` / `execute_stream` / 编排子任务等多层，
+    返回错误字典极易被某一层"当成正常结果继续处理"（这正是原缺陷的成因）。
+    抛异常则**默认不被吞**——只要某一层真的需要容错，它必须显式 `except`。
+
+    ── 与 `llm.force_mock` 的区别（务必分清）──
+    `force_mock=True` 是**显式**要求 Mock（回归测试不依赖网络）⇒ 仍然保留。
+    本异常管的是"**没要求 Mock 却悄悄给了 Mock**"。
+    """
+
+    def __init__(self, message: str, *, reason: str = "", provider: str = "", model: str = ""):
+        super().__init__(message)
+        self.reason = reason
+        self.provider = provider
+        self.model = model
+
+    def to_card(self) -> dict:
+        """给前端 `card_data` 用的结构化错误（前端据此显示醒目错误块而非正常回复）。"""
+        return {"llm_unavailable": True, "reason": self.reason,
+                "provider": self.provider, "model": self.model,
+                "error": str(self)}
+
+
 class _CircuitOpen(Exception):
     """P1-4：主 provider 处于熔断态时抛出，用于把"熔断"与"调用失败"区分开。
 
@@ -374,21 +411,17 @@ class LLMClient:
             return resp
 
         if not provider or not provider.get("api_key"):
-            resp = self.mock.chat(messages, stream=stream, tools=tools, thinking=thinking, **kwargs)
-            self.stats["mock"] += 1
-            self.stats["last_provider"] = provider_name
-            self.stats["last_used_mock"] = True
-            self.stats["last_latency_ms"] = int((time.time() - t0) * 1000)
-            if stream:
-                return resp
-            resp["_meta"] = {
-                "provider": provider_name, "model": model_name,
-                "used_mock": True, "latency_ms": int((time.time() - t0) * 1000),
-                "route_reason": route_reason,
-                "usage": dict(resp.get("usage") or {}),   # T5：真实 token 透传（TokenCounter 复用）
-            }
-            self._record_usage(provider, resp, True, kwargs.get("_intent", ""), resp["_meta"]["latency_ms"])
-            return resp
+            # 2026-10-09（R1）：**不再回落 Mock，直接报错**。
+            # 原静默给一段假回答，用户无法察觉——这是"编造内容"，比报错危险得多。
+            # ⚠️ 与上面 `llm.force_mock` 分工：那是有意的测试通道，此处是"没配却假装能跑"。
+            self._record_usage(provider, {"usage": {}}, True,
+                               kwargs.get("_intent", ""), int((time.time() - t0) * 1000))
+            raise LLMUnavailableError(
+                f"LLM 未配置 API Key（provider={provider_name or '未配置'}）"
+                f"——已停止请求，不返回模拟内容。"
+                f"请在「模型管理」配置该 provider 的 API Key；"
+                f"若需离线演示，显式开启 llm.force_mock。",
+                reason="no_api_key", provider=provider_name, model=model_name)
 
         # 真实调用（P1-3 插件化：按 provider_type 经注册表创建实现）
         try:
@@ -450,8 +483,8 @@ class LLMClient:
                     _caller = "%s:%d" % (_fr.f_code.co_filename.rsplit("\\", 1)[-1], _fr.f_lineno)
                 except Exception:
                     _caller = "-"
-                _lg.getLogger("mbse.llm").warning(
-                    "LLM 真实调用失败 → 静默回落 Mock：调用点=%s intent=%s provider_id=%s provider=%s model=%s "
+                _lg.getLogger("mbse.llm").error(
+                    "LLM 真实调用失败 → 已终止（不再回落 Mock）：调用点=%s intent=%s provider_id=%s provider=%s model=%s "
                     "stream=%s tools=%d 异常=%s: %s",
                     _caller, kwargs.get("_intent", ""), (provider or {}).get("id"), provider_name,
                     model_name, stream, len(tools or []),
@@ -459,19 +492,24 @@ class LLMClient:
                 )
             except Exception:
                 pass
-            resp = self.mock.chat(messages, stream=stream, thinking=thinking, **kwargs)
+            # 2026-10-09（R1）：**不再回落 Mock，改为抛错终止**。
+            # 实测该路径最常见的触发源就是 402 额度耗尽（2026-10-09 实测：
+            # 「LLM API 402: Insufficient Balance」→ 回落 Mock → 用户拿到编造内容）。
+            # 保留统计与落库（成本要计入、失败要可观测），但**不再伪造回答**。
             self.stats["mock"] += 1
             self.stats["last_provider"] = provider_name
             self.stats["last_used_mock"] = True
-            resp["_meta"] = {
-                "provider": provider_name, "model": model_name,
-                "used_mock": True, "latency_ms": int((time.time() - t0) * 1000),
-                "fallback_reason": str(e)[:120] if isinstance(e, Exception) else "api_error",
-                "route_reason": route_reason,
-                "usage": dict(resp.get("usage") or {}),   # T5：真实 token 透传（TokenCounter 复用）
-            }
-            self._record_usage(provider, resp, True, kwargs.get("_intent", ""), resp["_meta"]["latency_ms"])
-            return resp
+            self._record_usage(provider, {"usage": {}}, True,
+                               kwargs.get("_intent", ""), int((time.time() - t0) * 1000))
+            _hint = ""
+            _s = str(e)
+            if "402" in _s or "Insufficient Balance" in _s or "quota" in _s.lower():
+                _hint = ("（检测到额度/余额不足：请充值，或临时把 embedding/LLM 的"
+                         "仅用免费额度开关关闭）")
+            raise LLMUnavailableError(
+                f"LLM 调用失败，本次未生成任何内容。{_hint}原因：{type(e).__name__}: {_s[:200]}",
+                reason="call_failed", provider=provider_name, model=model_name) from e
+
 
     # P1-1（2026-09-24）：参数类错误**不重试** —— 重试也不会成功，只会放大延迟。
     _NO_RETRY_MARKERS = ("400", "401", "403", "404", "422")
@@ -746,28 +784,34 @@ class LLMClient:
                 pass
             raise
         except Exception as e:
-            # 2026-09-17 S4：流式路径是**第三个静默降级点** —— 原先只累加 stats["mock"]，
-            # 既不落 llm_usage_stats 也不打日志，"流式调用失败"在系统里完全不可见。
-            # 此处只补留痕与计数落库，不改变控制流（生成器已中断，无法再补吐内容）。
+            # 2026-10-09（R1）：流式路径的第三个降级点，**改为抛错**。
+            # 原行为：只累加 stats["mock"] 并打日志（生成器已中断，无法再补吐内容）
+            # ⇒ 前端收到的是一个**正常结束的流**，里面却没有任何有效内容。
+            # 现在抛 `LLMUnavailableError`：上层 execute_stream 会把它转成错误事件，
+            # 让前端显示"生成失败"而不是空回答。
+            #
+            # ⚠️ 此处在生成器内：raise 会终止迭代，
+            #    所以必须先落库 usage（P0-a：已累积的 token 是**真实计费**的）。
             self.stats["mock"] += 1
             self.stats["last_used_mock"] = True
             try:
+                self._record_usage(provider, self._stream_resp(_usage, _finish, _chars), True, intent,
+                                   int((time.time() - t0) * 1000))
+            except Exception:
+                pass
+            try:
                 import logging as _lg
                 _lg.getLogger("mbse.llm").warning(
-                    "LLM 流式调用失败（已中断，无法回落内容）：provider_id=%s provider=%s model=%s intent=%s "
+                    "LLM 流式调用失败（已中断，本次未产出内容）：provider_id=%s provider=%s model=%s intent=%s "
                     "异常=%s: %s",
                     (provider or {}).get("id"), provider_name, model_name, intent,
                     type(e).__name__, str(e)[:200],
                 )
             except Exception:
                 pass
-            try:
-                # P0-a：异常时已累积到的 usage/finish **照样落库**（比落空值准；
-                # 典型场景是客户端提前断开 —— 前面的 token 已经真实产生并计费了）。
-                self._record_usage(provider, self._stream_resp(_usage, _finish, _chars), True, intent,
-                                   int((time.time() - t0) * 1000))
-            except Exception:
-                pass
+            raise LLMUnavailableError(
+                f"LLM 流式调用中断，本次未生成完整内容。原因：{type(e).__name__}: {str(e)[:200]}",
+                reason="stream_failed", provider=provider_name, model=model_name) from e
 
     def test_connection(self, provider_id):
         """连通性测试：经注册表 provider 实现（P1-3）。"""

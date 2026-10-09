@@ -38,6 +38,15 @@ class ExecuteMixin:
         意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
         """
         attachments = attachments or []
+        # P1-30（2026-10-09）：**请求级瞬态状态统一清零** —— 本行是 N3 产出雷同的根因修复。
+        # 对话走模块级单例 Pipeline（`routers/conversations.py: from agent import agent`），
+        # 此前只有 `_skill_allowed_tools` 一个字段被清；`tools.py` 写的
+        # `_sysml_last_pass_code` 等字段**跨请求残留** ⇒ `cards.py` 兜底把上一次请求的
+        # 代码当成本次产出交付（现象即"叙述是新的、代码是旧的"）。
+        # ⚠️ 位置纪律：**必须早于本方法内任何 `self.X =` 赋值**，否则会抹掉本次请求
+        #   刚设好的上下文（`_mem_ctx` / `_tool_conv_ctx`）。
+        #   下方保留的 `reset_skill_state` 只管显式技能授权，管不到这些字段。
+        reset_request_state(self)
         # 记忆作用域上下文（对齐 mem0）：本会话的 conversation_id + 当前用户，供记忆读写取作用域
         self._mem_ctx = {"conversation_id": conversation_id, "user": user}
         # P0-c（2026-10-03 评估）：开启链路上下文（与流式主路径同一口径）
@@ -262,6 +271,14 @@ class ExecuteMixin:
             except Exception:
                 report_prompt = ""
         skill_block = ""
+        #★ 2026-10-08修**顺序 bug**：`_tool_conv_ctx` 原先在下方 322 行才赋值，
+        #   而技能装配（`build_prompt_blocks` → `_build_skill_prompt` → `offload_body`）
+        #   在 287 行就要读它取会话 id ⇒ **永远读到上一轮的值**（首轮读到 0）。
+        #   后果：长 skill 正文的 offload 落库挂错会话，
+        #   `skill_body_fetch` 取回时 id对不上 ⇒ 多视图连续调用时产出互相串扰
+        #   （实测 usecase 与 activity 产出 md5 完全相同、ibd 与 sequence 同样）。
+        #   ⇒ 会话上下文必须**先于**任何 prompt 装配建立。
+        self._tool_conv_ctx = conversation_id
         # P1-29（2026-10-02）：状态起点统一 —— 每轮**无条件清零**。
         # 对话走全局单例（`routers/conversations.py:14`），只"有技能时才赋值"会让上一轮的
         # 白名单残留到本轮。
@@ -319,7 +336,8 @@ class ExecuteMixin:
         # 优化1：注入观测上下文（intent/agent/conversation 供 tool_call_logs 落库）
         self._tool_intent_ctx = {"intent": intent}
         self._tool_agent_ctx = {"agent": agent_def.name}
-        self._tool_conv_ctx = conversation_id
+        # `_tool_conv_ctx` 已在 prompt 装配**之前**设好（见上方注释：原在此处赋值太晚，
+        # 导致技能 offload 读到上一轮会话 id）—— 此处不再重复赋值。
         # P0-6（2026-10-06）：把当前用户透给工具链，供 `_exec_tool_call` 的权限闸判定。
         # 为什么必须透：`execute()` 签名里就有 user（current_user 依赖产物），
         # 但此前从未传到工具执行层 ⇒ 权限判定拿不到身份。
@@ -362,7 +380,19 @@ class ExecuteMixin:
             llm_response = llm_client.chat(messages, provider_id=effective_provider, tools=tools_def or None)
             msg = llm_response["choices"][0]["message"]
             llm_content = msg.get("content") or ""
-            max_tool_rounds = 3  # P0-2：多轮ReAct 上限（防死循环）
+            # ★ 2026-10-09：3 → 6，且**改为可配置**（两侧同源，见 stream.py）。
+            #   实测依据（N3 视图展开 6/8 产出雷同的根因链）：
+            #     模型典型序列 = 查标准库(2 轮) + 取回技能正文(1 轮) + 生成(1 轮)
+            #     ⇒ 3 轮预算**必然在"生成"之前耗尽**，
+            #     收尾轮又不给工具 ⇒ 手里只有「未找到包 X」这类失败信息
+            #     ⇒ 只能凭记忆写 ⇒ 交出上一轮残留代码。
+            #   ⚠️ 这是**通用配置**（任何"先查资料再产出"的 Agent 都受益），
+            #     不是给视图开特例；上限仍存在，防死循环。
+            try:
+                from core import config as _cfg
+                max_tool_rounds = int(_cfg.get("agent", "max_tool_rounds", 6))
+            except Exception:
+                max_tool_rounds = 6
             # 2026-10-04：接入统一护栏（与编排路径同源，见 agent/loop_guard.py）。
             # 原先这条路径只有轮次上限/token 上限/重复检测/工具超时，
             # 而编排路径有前三者 —— 同一套 ReAct 语义的两处实现护栏不对称。
@@ -482,9 +512,31 @@ class ExecuteMixin:
             #   返回 content 长度 = 0（前端显示空白对话）。
             # ★ 为什么用轮次计数而不用"msg 里有 tool_calls"：轮次用尽的最后一轮
             #   必然带 tool_calls，用它当条件会对"已给正文+仍要工具"重复收尾。
-            if _lproto.should_finalize(msg, llm_content, _round + 1, max_tool_rounds):
+            # ★ 2026-10-08：产码 Agent（绑了 sysml_v2_validate）传 expect_code=True
+            #   —— 收尾判据从「正文是否为空」升级为「**有没有代码块**」。
+            #   实测 N3 视图展开 25% 无产出，根因正是模型只写一句
+            #   「现在生成结构视图…」就把轮次耗尽，`not llm_content` 为假 ⇒ 收尾跳过。
+            #   `_is_v2_code_agent` 是既有单一事实来源（绑了 validate 工具即产码），
+            #   **不新增 intent 白名单**（那会与 register 的规则漂移）。
+            _expect_code = bool(self._is_v2_code_agent(agent_def))
+            if _lproto.should_finalize(msg, llm_content, _round + 1, max_tool_rounds,
+                                       expect_code=_expect_code):
                 try:
-                    _fm = _lproto.finalize_messages(messages)
+                    # ★ 2026-10-09：把「已 offload 但模型始终没取回」的正文附进收尾。
+                    #   实测 N3 视图展开 6/8 产出雷同的根因：模型把工具预算花在
+                    #   查标准库上（拿到的是"未找到包 X"这种失败信息），
+                    #   收尾轮又**不给工具** ⇒ 视图规范正文还在 offload 里没取回
+                    #   ⇒ 只能凭记忆写 ⇒ 交出上一轮残留的代码。
+                    #   ⚠️ 这是**通用补缺**（任何"正文 offload 了但没进 messages"
+                    #   的场景都受益），不是给某个视图打补丁。
+                    _extra = ""
+                    try:
+                        from agent.pipeline_parts import skill_body_on_demand as _sbd
+                        _extra = _sbd.unfetched_bodies(
+                            getattr(self, "_skill_body_offloads", None))
+                    except Exception:
+                        _extra = ""
+                    _fm = _lproto.finalize_messages(messages, extra_context=_extra)
                     _resp = llm_client.chat(_fm, provider_id=effective_provider, tools=None)
                     _guard.add_tokens(_tokof(_resp))
                     llm_content = _resp["choices"][0]["message"].get("content") or llm_content

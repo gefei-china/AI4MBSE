@@ -359,6 +359,60 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
 #    重置/并集」），不是纯搬运 ⇒ 与 P1-28 分属两批，证据见 `tools/verify/verify_skill_injection.py`。
 # ════════════════════════════════════════════════════════════════════════════
 
+def reset_request_state(pipe) -> None:
+    """**请求级瞬态状态的统一清零点**（execute / stream 两路径都必须调用）。
+
+    ── 为什么必须有这个函数（2026-10-09 实测，非推断）──
+    对话入口是 `routers/conversations.py` 的 `from agent import agent`
+    ⇒ **模块级单例，所有用户、所有请求共用同一个 AgentPipeline 实例**。
+    而 Pipeline 把"本次请求的中间产物"挂在 `self` 上（实例属性），
+    这些字段**只要入口不清零就会跨请求残留**。
+
+    实测到的真实危害（N3 视图展开 6/8 产出雷同的根因）：
+        `tools.py` 在 `sysml_v2_*` 分派里写 `self._sysml_last_pass_code`，
+        `cards.py` 的 `_ensure_sysml_from_tools` / `_gen_sysml_views`
+        在**正文没代码时**拿它兜底交付 ⇒ 上一个请求的代码被当成本次产出交给用户。
+        现象正是此前记录到的"叙述是新的、代码是旧的"。
+
+    ⚠️ 这类泄漏**不会被任何现有门禁抓到**，因为：
+      单次跑必绿（首个请求本来就是干净的），只有**同实例连跑**才暴露。
+    ⇒ 必须靠"入口无条件清零"这一条不变量 + 专门的门禁守住。
+
+    ── 为什么要"无条件" ──
+    与 `reset_skill_state` 同理：写成"if 有值才设"时，脏值恰好是**上一轮留下的**
+    ⇒ 条件永远成立 ⇒ 等于没清。清零必须与"本轮是否用到"无关。
+
+    ── 清单怎么定 ──
+    **不在这里凭记忆列**，而是扫 `agent/pipeline_parts/*.py` 里所有 `self.X =`
+    赋值点，与本函数逐项比对；新增字段必须同步登记
+    （门禁 `verify_request_state_reset` 会查差集）。
+    """
+    # ── 分派状态：本次执行允许调什么 / 由谁调 ──
+    pipe._tool_whitelist = None          # 工具白名单
+    pipe._tool_conv_ctx = None           # 工具调用日志归属会话（否则日志串会话）
+    pipe._tool_user = None               # 工具审计归属用户（跨用户泄漏审计链）
+    pipe._tool_intent_ctx = None         # 工具审计归属意图
+    pipe._tool_agent_ctx = None          # 工具审计归属 Agent
+    pipe._skill_allowed_tools = None     # 显式技能授权（见 reset_skill_state 的历史注释）
+    pipe._skill_forced = False
+    pipe._hil_level = None               # HIL 分级（人工确认队列的判定依据）
+    # ── 技能注入：本次绑了哪些技能、正文被 offload 到哪里 ──
+    pipe._last_skill_hits = []           # 本次命中的技能（门禁与前端展示都读它）
+    pipe._skill_body_offloads = []       # ★ 本次 offload 的正文 id（不清 ⇒ 收尾注入上一轮的正文）
+    # ── 记忆作用域：mem0 式读写的作用域 ──
+    pipe._mem_ctx = None
+    pipe._mem_project_id_cache = None    # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
+    # ── ★ SysML 交付兜底缓存（本条即"产出雷同"的根因字段）──
+    pipe._sysml_last_checked_code = None
+    pipe._sysml_last_pass_code = None
+    # ── 编排 / 会话治理的瞬态标记 ──
+    pipe._orch_error = None
+    pipe._last_clarify_skip = ""
+    pipe._slot_merge_stats = {}
+    pipe._last_compaction = None
+    pipe._hook_warn = ""
+
+
 def reset_skill_state(pipe, skill_name) -> None:
     """显式技能注入的**状态起点**（两路径统一调用，且必须在任何分支之前）。
 
@@ -556,6 +610,8 @@ __all__ = [
     'build_slots_block', 'build_skill_block', 'build_prompt_blocks',
     # P1-29：显式指定技能的注入（两路径统一入口 + 每轮状态起点）
     'reset_skill_state', 'load_forced_skill',
+    # 请求级瞬态状态清零点（execute / stream 两路径统一调用，防单例跨请求泄漏）
+    'reset_request_state',
     # P1-4：会话槽位治理（纯函数，便于单测与变异自证）
     'SLOT_CLARIFY_MARK', 'SLOT_ORIGINAL_MARK', 'TOPIC_CARRY_WORDS',
     'extract_original_request', 'norm_slot_item', 'merge_slot_items', 'is_topic_switch',
