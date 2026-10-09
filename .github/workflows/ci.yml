@@ -108,6 +108,25 @@ jobs:
       - name: Guard agent loop 三道护栏（40 项 + 5 变异）
         run: python tools/verify/verify_loop_guard.py
 
+      # ── 2026-10-09：请求级状态隔离三道（均静态/AST + 线程探针，不需真实 LLM）──
+      # 这三道锁的是 2026-10-09 定位的 N3 产出雷同根因：模块级单例 Pipeline
+      # 把请求级产物挂�� self 上跨请求残留（叙述是新的、代码是旧的）。
+      # A2/A3 是**差集**判据（AST 扫全部 self._xxx 赋值点与清零清单求差），
+      # ⇒ 将来新增字段忘登记**立即判红**，不依赖人记得维护清单。
+      - name: Guard 请求级状态清零（AST 差集，清零早于首个赋值，13 项 + 4 变异）
+        run: python tools/verify/verify_request_state_reset.py
+
+      # ★ A4 是**双向**断言：共享单例**必须**观测到覆盖，否则说明风险不成立、
+      #   门禁该撤 —— 不让基于错误前提的门禁长期存在。
+      - name: Guard 多用户并发隔离（每请求新建 Pipeline，双向实测 9 项 + 3 变异）
+        run: python tools/verify/verify_pipeline_concurrency.py
+
+      # ★ 锁「不再静默回落 Mock」：LLM 不可用时必须抛 LLMUnavailableError，
+      #   否则用户读到的是**编造内容**（比产出雷同更严重：雷同至少交付真代码）。
+      #   保留 llm.force_mock（那是显式要求，回归测试依赖），管的是"没要求却悄悄给"。
+      - name: Guard 无静默 Mock 降级（AST 验证 3 处降级点均抛错，8 项）
+        run: python tools/verify/verify_no_mock_fallback.py
+
       # ── P0-3 前置（2026-10-04）：迁移安全闸 ──────────────────────────────────
       # init_db 是唯一迁移入口（建 129 表 + 补列 + 全部 _migrate_* + 播种），
       # 一旦误跑就是不可回滚的全库变更。本机已踩过一次（验证脚本误在生产库上迁移）。
@@ -344,6 +363,46 @@ jobs:
       # 有 plugins 数据时完整验证管理员/普通用户两类权限视角。
       - name: Guard 卸载装回全链路（20 项）
         run: python tools/verify/verify_uninstall_flow.py
+
+      # ── 2026-10-09：清掉「14 份防御写了但从未执行」的欠账 ──
+      # 起因：`verify_gate_wiring` 判红（门禁总数 104 / 未接线 14 / 豁免无理由 0）。
+      # 本批 6 个经**干净库口径实测 rc=0**（MBSE_DB_PATH 指向空库）才接线。
+      # 需真 LLM / checker.jar / 真库金标的那些，改在脚本内写`# CI-OPTIONAL: <理由>`
+      # 显式豁免（verify_gate_wiring 会校验理由非空），而不是默默不接。
+      - name: Guard AgentLoop 协议配对（tool_call 闭环）
+        run: python tools/verify/verify_agent_loop_protocol.py
+
+      - name: Guard Agent 工具链权限闸（RBAC）
+        run: python tools/verify/verify_agent_perm_gate.py
+
+      - name: Guard LLM 熔断降级
+        run: python tools/verify/verify_llm_circuit_breaker.py
+
+      - name: Guard 记忆冲突门禁
+        run: python tools/verify/verify_memory_conflict_gate.py
+
+      - name: Guard SysML 语法自动修复
+        run: python tools/verify/verify_sysml_autofix.py
+
+      - name: Guard 建模流水线链路闭环
+        run: python tools/verify/verify_pipeline_closure.py
+
+      - name: Guard SysML 校验基线
+        run: python tools/verify/verify_sysml_baseline.py
+
+      # ── 2026-10-09 续：产出雷同定性后补的两道通用门禁 ──
+      # 前者防「流式/非流式工具轮次漂移」，后者防「模型把工具调用写进 content
+      # 文本时不被识别」——两者都是**平台通用性**问题，不是某个 Agent 的。
+      - name: Guard ReAct 工具轮次预算两侧一致
+        run: python tools/verify/verify_tool_round_budget.py
+
+      - name: Guard 行内工具调用兜底解析
+        run: python tools/verify/verify_inline_tool_call_salvage.py
+
+      #诊断里的中文乱码会让LLM 认不出自己刚写的中文名 ⇒ 反复乱改。
+      # 修法是一行 JVM 参数（-Dsun.stdout.encoding=UTF-8），这里守住它不被回退。
+      - name: Guard 校验器诊断中文编码
+        run: python tools/verify/verify_checker_diag_encoding.py
 
       # ── 2026-10-05 第二轮第 2 项续：变异锚点漂移 5 个（锚点不中 ⇒ 变异自证恒绿 ⇒ 门禁形同虚设）──
       # 五者根因不同，但共同点是「看起来红了，实际是自证失效」：
