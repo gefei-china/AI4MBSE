@@ -27,11 +27,49 @@
 """
 import queue
 import threading
+import time
 
 __all__ = ["iter_with_heartbeat", "iter_with_heartbeat_async", "to_sse_frame",
            "snapshot", "degrade_delta"]
 
 _SENTINEL = object()
+
+
+def _stage_of(frame):
+    """从 SSE 帧里廉价提取「阶段名」（P1-33，2026-10-10 执行过程可见性）。
+
+    只对 stage/agent 两类事件做解析（其余帧直接返回 None，零开销）——
+    token/reasoning 等高频帧不进 JSON 解析，心跳路径绝不拖慢主链路。
+    解析失败一律返回 None（心跳绝不因提取失败而中断）。
+    """
+    try:
+        if isinstance(frame, bytes):
+            frame = frame.decode("utf-8", "replace")
+        if not (isinstance(frame, str) and (frame.startswith("event: stage")
+                                            or frame.startswith("event: agent"))):
+            return None
+        import json as _json
+        for line in frame.split("\n"):
+            if line.startswith("data: "):
+                d = _json.loads(line[6:])
+                return d.get("name") or d.get("display_name") or None
+    except Exception:
+        return None
+    return None
+
+
+def _ping_frame(elapsed_s: float, last_stage) -> str:
+    """可见心跳帧：告诉前端「还活着、正卡在哪一步、等了多久」。
+
+    背景（实测 2026-10-10）：LLM 网关/内网 embedding 故障时，单步重试链可达数分钟，
+    期间用户只看到无限转圈 —— 注释帧（`: ping`）按协议被客户端忽略，前端**无从展示**。
+    改为真事件帧后前端可显示「仍在执行：生成与校验（已等待 96s）」。
+    """
+    import json as _json
+    return "event: ping\ndata: " + _json.dumps(
+        {"elapsed_s": round(elapsed_s, 1),
+         "last_stage": last_stage or ""},
+        ensure_ascii=False) + "\n\n"
 
 
 # ── 事件归一化：dict → SSE 帧字符串（2026-10-04 补，带血泪教训）──────────────
@@ -90,25 +128,32 @@ def degrade_delta(before: dict, now: dict) -> dict:
             "fallback_calls": max(0, int(n.get("fallback", 0)) - int(b.get("fallback", 0)))}
 
 
-def iter_with_heartbeat(iterator, interval_s: float = 15.0, comment: str = "ping"):
+def iter_with_heartbeat(iterator, interval_s: float = 15.0, comment: str = "ping",
+                        visible_ping: bool = False):
     """把阻塞式同步事件源包装成「带心跳」的生成器。
 
     :param iterator: 原 SSE 帧字符串生成器（`f"event: x\\ndata: ...\\n\\n"`）
     :param interval_s: 无数据超过该秒数即产出一帧心跳；必须**明显小于**链路上最小的
                        idle timeout（推荐 ≤ 15 s，对应 nginx 默认 60 s 的 1/4）
     :param comment: 心跳注释内容（客户端按 SSE 协议忽略）
-    产出：**原帧原序输出**，中间穿插 `: {comment}\\n\\n`。
+    :param visible_ping: True 时空闲心跳改为**可见事件帧** `event: ping`（带阶段+耗时，
+                         供前端展示"仍在执行"）；False（默认）保持注释帧 `: ping`，
+                         flows.py 等既有消费方行为逐字节不变。
+    产出：**原帧原序输出**，中间穿插心跳帧。
     """
     q: "queue.Queue" = queue.Queue(maxsize=0)
     box: dict = {}
     stop = threading.Event()
     started = threading.Event()
+    _t0 = time.monotonic()
+    _last_stage = None
 
     def _worker():
         # 止损点必须在 **worker 线程内部**：CPython 里对"正在另一个线程栈上执行"的
         # generator 调 close() 会抛 `ValueError: generator already executing`
         #（实测复现过 —— 见 tools/verify/verify_sse_heartbeat.py 的 M4）。
         # 所以由消费侧置 stop 标志，worker 在**刚拿到一帧、源未 running 时**安全地关掉源。
+        nonlocal _last_stage
         started.set()
         try:
             for frame in iterator:
@@ -120,7 +165,11 @@ def iter_with_heartbeat(iterator, interval_s: float = 15.0, comment: str = "ping
                 # 2026-10-04：投递前归一化 —— dict 事件必须序列化成 SSE 帧，
                 # 否则 Starlette 会抛 `'dict' object has no attribute 'encode'`
                 # （这正是批次 1 丢掉端点里那行 json.dumps 造成的回归）
-                q.put((False, to_sse_frame(frame)))
+                _sf = to_sse_frame(frame)
+                _s = _stage_of(_sf)          # 只解析 stage/agent 帧，其余零开销
+                if _s:
+                    _last_stage = _s
+                q.put((False, _sf))
         except BaseException as e:  # noqa: BLE001 —— 含 GeneratorExit，必须全部回传
             box["exc"] = e
         finally:
@@ -135,7 +184,10 @@ def iter_with_heartbeat(iterator, interval_s: float = 15.0, comment: str = "ping
             try:
                 done, frame = q.get(timeout=interval_s)
             except queue.Empty:
-                yield ": %s\n\n" % comment
+                if visible_ping:
+                    yield _ping_frame(time.monotonic() - _t0, _last_stage)
+                else:
+                    yield ": %s\n\n" % comment
                 continue
             if done:
                 break
@@ -179,11 +231,13 @@ def iter_with_heartbeat(iterator, interval_s: float = 15.0, comment: str = "ping
 # 【为什么保留同步版】
 # ① flows.py 的流式执行仍用同步版（它自己 sleep(1) 轮询，改动面更大、收益相同但风险更高）；
 # ② 同步版仍被 verify_sse_heartbeat 的既有断言覆盖，不因新增异步版而失去回归保护。
-async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment: str = "ping"):
+async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment: str = "ping",
+                                    visible_ping: bool = False):
     """把阻塞式同步事件源包装成 **async** 生成器（带心跳）。
 
     与 `iter_with_heartbeat` 的差别只有一处，但很关键：消费侧不占线程池线程。
     用法：端点写成 `async def` + `return StreamingResponse(agen(), media_type="text/event-stream")`。
+    `visible_ping=True` 时空闲心跳为可见事件帧（带阶段+耗时，P1-33），默认注释帧不变。
     """
     import asyncio
     import threading as _th
@@ -193,6 +247,8 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
     box: dict = {}
     stop = _th.Event()          # loop 关闭 / 消费端退出时，通知 worker 停止投递
     _DONE = object()
+    _t0 = time.monotonic()
+    _last_stage = [None]        # list 包装：worker 线程写、主协程读，避免 nonlocal 跨线程歧义
 
     def _worker():
         """跑在自建 daemon 线程里（不占 anyio 线程池）。"""
@@ -201,8 +257,12 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
                 if stop.is_set():
                     break
                 # 2026-10-04：与同步版同一归一化（单一真源在 to_sse_frame）
+                _sf = to_sse_frame(frame)
+                _s = _stage_of(_sf)          # 只解析 stage/agent 帧，其余零开销
+                if _s:
+                    _last_stage[0] = _s
                 try:
-                    loop.call_soon_threadsafe(q.put_nowait, (False, to_sse_frame(frame)))
+                    loop.call_soon_threadsafe(q.put_nowait, (False, _sf))
                 except RuntimeError:
                     break
         except BaseException as e:      # noqa: BLE001 —— 含 GeneratorExit，必须回传
@@ -220,7 +280,10 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
             try:
                 done, frame = await asyncio.wait_for(q.get(), timeout=interval_s)
             except asyncio.TimeoutError:
-                yield ": %s\n\n" % comment
+                if visible_ping:
+                    yield _ping_frame(time.monotonic() - _t0, _last_stage[0])
+                else:
+                    yield ": %s\n\n" % comment
                 continue
             if done:
                 break

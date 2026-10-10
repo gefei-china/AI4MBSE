@@ -102,6 +102,55 @@ class Embedder:
     # 最近一次熔断的原因（供 UI/监控显示："为什么这批 chunk 是词面向量"）
     LAST_QUOTA_ERROR = ""
 
+    # ── P1-34（2026-10-10）：服务不可用短熔断（区别于配额熔断）──────────────────
+    # 实测事故：内网 embedding 网关（192.168.100.202:8004）经代理返回 502/连接超时，
+    # 每批都要白等 30s 超时；而工具 JIT 排序 / 语义路由一次请求里要做**多批多次**调用
+    # （27 候选 = 3 批 × 30s，还有多组候选集）⇒ 单个 SSE 请求在 embedding 上爬 5~10 分钟，
+    # 用户看到的是"无限转圈"（py-spy 实证卡在 _receive_response_headers）。
+    # 配额熔断（_QUOTA_*）只认 403/429；5xx / 连接失败 / 超时属**临时不可用**，
+    # 用短窗口熔断（默认 60s，可配 embedding.unavail_block_sec）：期间直接走 bigram，
+    # 不再打网络。窗口短 ⇒ 服务恢复后最多延迟 60s 自动回归真向量。
+    _UNAVAIL_BLOCK_UNTIL = 0.0
+    _UNAVAIL_BLOCK_SEC = 60.0
+
+    @classmethod
+    def _note_unavail_error(cls, exc) -> bool:
+        """识别「服务临时不可用」类错误（5xx/连接失败/超时）→ 短熔断。
+
+        :returns: True 表示已触发熔断（调用方日志里说明一次即可）。
+        """
+        try:
+            import httpx
+            hit = False
+            if isinstance(exc, httpx.HTTPStatusError):
+                hit = exc.response.status_code >= 500
+            elif isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout,
+                                  httpx.ReadTimeout, httpx.WriteTimeout,
+                                  httpx.PoolTimeout, httpx.RemoteProtocolError)):
+                hit = True
+            elif isinstance(exc, OSError):
+                # WinError 10054/10060 等 OS 网络错误（httpx 有时会包成 OSError）
+                hit = True
+            if hit:
+                try:
+                    from core import config as _c
+                    sec = float(_c.get("embedding", "unavail_block_sec", 60) or 60)
+                except Exception:
+                    sec = 60.0
+                if sec > 0:
+                    cls._UNAVAIL_BLOCK_SEC = sec
+                    cls._UNAVAIL_BLOCK_UNTIL = time.time() + sec
+                    cls.LAST_QUOTA_ERROR = ("embedding 服务不可用（%s: %s），熔断 %ds"
+                                            % (type(exc).__name__, str(exc)[:120], int(sec)))
+            return hit
+        except Exception:
+            return False
+
+    @classmethod
+    def unavail_blocked(cls) -> bool:
+        """当前是否处于服务不可用熔断期（期间直接走 bigram，不打网络）。"""
+        return time.time() < cls._UNAVAIL_BLOCK_UNTIL
+
     @classmethod
     def _note_quota_error(cls, exc) -> bool:
         """识别 403/429 且 body 含 quota/insufficient → 熔断（设类级封锁时间戳）。
@@ -166,9 +215,18 @@ class Embedder:
         为什么需要：熔断是**类级**的（`_QUOTA_BLOCK_UNTIL`），一旦触发，
         后续 10 分钟内**即使供应商已恢复也不再尝试** —— 用户充值后立刻重试
         仍会拿到"额度不足"，除非等到熔断自然过期或显式调用本方法。
+
+        P1-34：同时解除「服务不可用」短熔断 —— 运维面板点"重试"时，
+        用户预期是"立刻再试一次"，若只解配额熔断，短熔断仍会让它走 bigram。
         """
         cls._QUOTA_BLOCK_UNTIL = 0.0
+        cls._UNAVAIL_BLOCK_UNTIL = 0.0
         cls.LAST_QUOTA_ERROR = ""
+
+    @classmethod
+    def reset_unavail_block(cls) -> None:
+        """只解除「服务不可用」短熔断（窗口短，一般等自然过期即可）。"""
+        cls._UNAVAIL_BLOCK_UNTIL = 0.0
 
     # P2-1 query 向量缓存（单文本查询侧）：TTL 60s，上限 512 条
     _QUERY_CACHE = {}
@@ -207,17 +265,23 @@ class Embedder:
         """
         if not texts:
             return []
-        if self._api and not self.quota_blocked():
+        if self._api and not self.quota_blocked() and not self.unavail_blocked():
             try:
                 return self._embed_api(texts)
             except Exception as e:
                 blocked = self._note_quota_error(e)
                 if blocked and self._on_quota_exhausted() == "block":
                     raise EmbedQuotaExceeded(self._quota_message())
+                if self._note_unavail_error(e):
+                    logger.warning("embedding 服务不可用，短熔断 %ds：%s",
+                                   int(self._UNAVAIL_BLOCK_SEC), type(e).__name__)
                 logger.warning("embedding API 调用失败，降级 bigram: %s", e)
         elif self._api and self.quota_blocked():
             if self._on_quota_exhausted() == "block":
                 raise EmbedQuotaExceeded(self._quota_message())
+        elif self._api and self.unavail_blocked():
+            logger.info("embedding 服务熔断期内（剩 %ds），本次直接走 bigram",
+                        int(self._UNAVAIL_BLOCK_UNTIL - time.time()))
         return self._embed_bigram(texts)
 
     @classmethod
@@ -253,12 +317,12 @@ class Embedder:
         if not texts:
             return [], "bigram-tf"
         # P2-1 query 缓存：单文本调用（查询侧）命中直返，省一次 embedding API 往返
-        if self._api and not self.quota_blocked() and len(texts) == 1:
+        if self._api and not self.quota_blocked() and not self.unavail_blocked() and len(texts) == 1:
             key = ("q", texts[0])
             hit = Embedder._QUERY_CACHE.get(key)
             if hit and time.time() - hit[1] < Embedder._QUERY_TTL:
                 return [hit[0]], "openai-compat"
-        if self._api and not self.quota_blocked():
+        if self._api and not self.quota_blocked() and not self.unavail_blocked():
             try:
                 out = []
                 if batch_size <= 0:
@@ -276,10 +340,16 @@ class Embedder:
                 blocked = self._note_quota_error(e)
                 if blocked and self._on_quota_exhausted() == "block":
                     raise EmbedQuotaExceeded(self._quota_message())
+                if self._note_unavail_error(e):
+                    logger.warning("embedding 服务不可用，短熔断 %ds：%s",
+                                   int(self._UNAVAIL_BLOCK_SEC), type(e).__name__)
                 logger.warning("embedding API 调用失败，降级 bigram: %s", e)
         elif self._api and self.quota_blocked():
             if self._on_quota_exhausted() == "block":
                 raise EmbedQuotaExceeded(self._quota_message())
+        elif self._api and self.unavail_blocked():
+            logger.info("embedding 服务熔断期内（剩 %ds），本次直接走 bigram",
+                        int(self._UNAVAIL_BLOCK_UNTIL - time.time()))
         return self._embed_bigram(texts), "bigram-tf"
 
     def _embed_api(self, texts: list) -> list:

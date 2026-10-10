@@ -272,6 +272,7 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         #  比断连本身更难排查）。下面的 finally 必须先判这个标志才能补发降级告知。
         _client_gone = False
         _frames = None
+        _terminal = False   # P1-32：本流是否已发过 done/error（终态哨兵）
         # P1-1 停止生成：客户端断开（AbortController）→ Starlette 关闭生成器 → GeneratorExit
         # 在 yield 点抛出，这里放行让连接干净关闭；其余异常转为 error 事件（不中断会话）
         try:
@@ -287,8 +288,20 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                                      user=user),
                 # P1-2：15 s —— 链路上最小 idle timeout 通常是 nginx 默认 60 s，取 1/4 留余量
                 interval_s=15.0,
+                # P1-33（2026-10-10）：空闲心跳改为可见 ping 事件（带当前阶段+已耗时）。
+                # 实测背景：LLM 网关/embedding 故障时单步重试链达数分钟，注释帧 `: ping`
+                # 前端无法展示 ⇒ 用户只看到无限转圈，以为系统死了。
+                visible_ping=True,
             )
             async for raw in _frames:
+                # P1-32（2026-10-10）：终态哨兵 —— 记录是否发过 done/error。
+                # 实测事故（会话 9336 msg 3895/3896）：pipeline 内部吞掉 LLM 异常后
+                # 生成器**正常 return**（不抛异常）⇒ 这里 except 抓不到、done 也没有
+                # ⇒ 前端 _streaming 锁死、转圈到天荒地老；用户随后发的「重试」被当成
+                # followup 投进已死的轮次，**永远不会被消费** —— 即"重试无任何响应"。
+                # （本哨兵只认帧前缀，不解析 JSON —— 解析失败也不能影响转发。）
+                if isinstance(raw, str) and raw.startswith(("event: done", "event: error")):
+                    _terminal = True
                 yield raw
         except GeneratorExit:
             _client_gone = True
@@ -302,10 +315,35 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 pass
             raise
         except Exception as _e:
+            # P1-32：本分支也要置终态 —— 否则 finally 的兜底会再补一条 error，
+            # 同一条流里出现**两条互相矛盾的错误提示**（门禁 I11e 实证抓到：
+            # 除错分支那条 + 兜底那条）。兜底只在"从未发过终态"时才该出现。
+            _terminal = True
             yield f"event: error\ndata: {_json.dumps({'message': str(_e)[:200]}, ensure_ascii=False)}\n\n"
         finally:
             if _client_gone:
                 return
+            # P1-32：终态兜底 —— 流结束却从未发过 done/error ⇒ 必须补一条 error，
+            # 让前端解锁（_streaming=false、停止按钮复位、失败横条出现）。
+            # 没有这条，pipeline 内部任何"吞异常后正常返回"的路径都会让前端永久转圈。
+            if not _terminal:
+                # P1-36（2026-10-10）：本轮异常终止 ⇒ **生成期间投进来的补充指令不会被执行**
+                #（follow-up 只在轮次边界消费，见 stream.py:1807）。用户点「重试」时看到的是
+                # "已作为补充指令提交，本轮结束后并入处理"，而本轮已死 ⇒ 队列永久滞留
+                # ⇒ 这正是"重发重试未有任何响应"的最后一块拼图：不告诉用户，他不知道要重发。
+                _pending_fu = 0
+                try:
+                    from agent import followup as _fup
+                    _pending_fu = int(_fup.pending_count(conv_id) or 0)
+                except Exception:
+                    _pending_fu = 0
+                _msg = ("执行流程异常终止（未收到完成事件）。本次未产出结果，请直接重新发送消息重试；"
+                        "若反复出现，请到「AI 对话流」查看服务日志或联系管理员。")
+                if _pending_fu:
+                    _msg += ("另检测到 %d 条生成期间提交的补充指令未被执行（本轮已终止），"
+                             "请重新发送。" % _pending_fu)
+                yield ("event: error\ndata: " + _json.dumps(
+                    {"message": _msg}, ensure_ascii=False) + "\n\n")
             # P1-3：无论成功/失败，只要本轮发生过降级，**必须在流里显式说清楚**。
             # 对标 Manus/Dify：模型不可用或回退到非预期实现时必须在事件流里可见，
             # 而不是让用户拿着一段看起来正常的文字，误以为是目标模型的产出。
@@ -700,26 +738,29 @@ def _register_discoveries(conn, report: dict, source_ref: str = ""):
         pass
 
 
-@router.post("/api/conversations/{conv_id}/messages/{msg_id}/normalize-report")
-def normalize_report(conv_id: int, msg_id: int, conn=Depends(db_session),
-                     user=Depends(current_user)):
-    """对一条 AI 消息生成的 V2 产物做归一/消歧/校验报告，**只读不入库**。
+def _msg_code_text(conn, mid: int) -> str:
+    """V2 源码兜底：从消息正文抽 ```sysml 代码块（与前端 extractSysmlCode 对齐）。"""
+    import re as _re
+    t = conn.execute("SELECT content FROM messages WHERE id=?", (mid,)).fetchone()
+    if not (t and t["content"]):
+        return ""
+    m = _re.search(r"```(?:sysml|kerml|SysML|SysMLv2|sysmlv2|kerml2|sysml_v2|sysmlv1)?\s*\n"
+                   r"([\s\S]*?)```", t["content"] or "", _re.IGNORECASE)
+    return (m.group(1).strip() if m else "")
 
-    来源策略：优先取 sysml_versions.content（带 view 元数据），回退取 messages.card_data.sysml_views。
-    返回结构见 sysml_importer.build_normalize_report 注释。
+
+def _load_norm_report(conn, conv_id: int, msg_id: int):
+    """归一报告的**取数与构建**（2026-10-10 从 normalize_report 主体**纯搬运**抽出，行为逐字不变）。
+
+    来源策略：优先 sysml_versions.content（带 view 元数据），回退 messages.card_data.sysml_views。
+    返回 (report, None) 成功 / (None, JSONResponse) 失败。
+
+    ⚠️ 本函数**不做任何写操作**。发现池登记（_register_discoveries）交由**调用方**决定：
+       · POST /normalize-report → 登记（P2-10 AI 建议流）
+       · GET  /normalize-summary → **不登记**（只读统计，会被卡片渲染反复调用）
     """
     from sysml_importer import build_normalize_report
     import json as _json
-    import re as _re
-
-    def _msg_code_text(mid: int) -> str:
-        """V2 源码兜底：从消息正文抽 ```sysml 代码块（与前端 extractSysmlCode 对齐）。"""
-        t = conn.execute("SELECT content FROM messages WHERE id=?", (mid,)).fetchone()
-        if not (t and t["content"]):
-            return ""
-        m = _re.search(r"```(?:sysml|kerml|SysML|SysMLv2|sysmlv2|kerml2|sysml_v2|sysmlv1)?\s*\n"
-                       r"([\s\S]*?)```", t["content"] or "", _re.IGNORECASE)
-        return (m.group(1).strip() if m else "")
 
     # 1) 优先 sysml_versions（更纯，含 V2 源码）
     ver = conn.execute(
@@ -732,34 +773,90 @@ def normalize_report(conv_id: int, msg_id: int, conn=Depends(db_session),
         except Exception:
             content = {}
         # 版本记录未落 code_text 时回退到消息正文（否则 V2 定位/证据无源码可依）
-        _code = (ver["code_text"] or "").strip() or _msg_code_text(msg_id)
+        _code = (ver["code_text"] or "").strip() or _msg_code_text(conn, msg_id)
         report = build_normalize_report(
             conn, content, code_text=_code,
             version_id=ver["id"], message_id=msg_id)
-        _register_discoveries(conn, report, source_ref=f"msg:{msg_id}")   # P2-10：AI 建议流·自动收集（非阻断）
-        return report
+        return report, None
     # 2) 回退 messages.card_data.sysml_views（UI 渲染用的视图）
     msg = conn.execute(
         "SELECT id, card_data FROM messages "
         "WHERE conversation_id=? AND id=? LIMIT 1",
         (conv_id, msg_id)).fetchone()
     if not msg:
-        return JSONResponse({"error": "Message not found"}, 404)
-    import json as _json
+        return None, JSONResponse({"error": "Message not found"}, 404)
     try:
         cd = _json.loads(msg["card_data"] or "{}")
     except Exception:
         cd = {}
     sysml_views = cd.get("sysml_views") or {}
     if not sysml_views.get("views"):
-        return JSONResponse({"error": "该消息不含 SysML 视图（card_data.sysml_views.views 为空）"}, 400)
+        return None, JSONResponse(
+            {"error": "该消息不含 SysML 视图（card_data.sysml_views.views 为空）"}, 400)
     # V2 源码从 messages.content 中抽取（与前端 extractSysmlCode 逻辑对齐）
-    code_text = _msg_code_text(msg_id)
+    code_text = _msg_code_text(conn, msg_id)
     report = build_normalize_report(
         conn, {"views": sysml_views.get("views") or {}}, code_text=code_text,
         version_id=0, message_id=msg_id)
-    _register_discoveries(conn, report, source_ref=f"msg:{msg_id}")
+    return report, None
+
+
+@router.post("/api/conversations/{conv_id}/messages/{msg_id}/normalize-report")
+def normalize_report(conv_id: int, msg_id: int, conn=Depends(db_session),
+                     user=Depends(current_user)):
+    """对一条 AI 消息生成的 V2 产物做归一/消歧/校验报告。
+
+    来源策略：优先取 sysml_versions.content（带 view 元数据），回退取 messages.card_data.sysml_views。
+    返回结构见 sysml_importer.build_normalize_report 注释。
+    副作用：把未命中（matching_status=none）的实体名登记进发现池（P2-10 AI 建议流）。
+    """
+    report, err = _load_norm_report(conn, conv_id, msg_id)
+    if err:
+        return err
+    _register_discoveries(conn, report, source_ref=f"msg:{msg_id}")   # P2-10：AI 建议流·自动收集（非阻断）
     return report
+
+
+# 前端 `_NR_BLOCKING`（static/js/mods/06-cards.js）的**后端镜像** —— 两边必须逐项一致，
+# 否则按钮徽标上的数字会与清单卡头的「待确认 N 项」对不上。
+# 校验见 tools/verify/verify_norm_summary.py（D3 用例：grep 两端常量比对）。
+_NR_BLOCKING_STATUSES = ('matched_low', 'dup_high', 'dup_suspect', 'none', 'rejected')
+
+
+@router.get("/api/conversations/{conv_id}/messages/{msg_id}/normalize-summary")
+def normalize_summary(conv_id: int, msg_id: int, conn=Depends(db_session),
+                      user=Depends(current_user)):
+    """归一校验的**只读统计**：供代码卡「归一校验」按钮在**点开前**显示待确认数量与构成。
+
+    与 POST /normalize-report 的三点区别（重要）：
+      ① 只返回统计数字，**不返回 rows**（传输量小，够按钮徽标用）；
+      ② **不调 _register_discoveries** —— 那会把未命中词写进发现池（freq+1）。
+         本接口由卡片渲染触发、会**被反复调用**，必须严格只读；
+      ③ 判定口径与前端 `_nrIsBlocking` 完全一致（见 _NR_BLOCKING_STATUSES）。
+    """
+    report, err = _load_norm_report(conn, conv_id, msg_id)
+    if err:
+        try:
+            detail = (getattr(err, "body", b"") or b"").decode("utf-8", "ignore")
+        except Exception:
+            detail = ""
+        return {"ok": False, "msg_id": msg_id, "reason": detail or "无可用 SysML 视图"}
+    rows = report.get("rows") or []
+    by_kind, need_by_kind = {}, {}
+    for r in rows:
+        k = r.get("kind") or "entity"
+        by_kind[k] = by_kind.get(k, 0) + 1
+        if (r.get("matching_status") or "") in _NR_BLOCKING_STATUSES:
+            need_by_kind[k] = need_by_kind.get(k, 0) + 1
+    cons = report.get("consistency") or {}
+    return {"ok": True, "msg_id": msg_id,
+            "total": len(rows),
+            "need_decide": sum(need_by_kind.values()),
+            "by_kind": by_kind,
+            "need_by_kind": need_by_kind,
+            "consistency": {"batch_dups": len(cons.get("batch_dups") or []),
+                            "dangling": len(cons.get("dangling") or [])},
+            "error": report.get("error") or ""}
 
 
 # ── P0-2 归一确认应用（2026-09-08 闸口①）：人工决策 → 更新 V2 代码与视图（新版本，不覆盖）──

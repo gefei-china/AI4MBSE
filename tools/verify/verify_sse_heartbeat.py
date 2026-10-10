@@ -424,6 +424,220 @@ def m_i9():
     return _rec("M8 变异被复现（dict 泄漏到 SSE 帧）→ 证明 I9a/f 非空转", ok, f"leaked={len(leaked)}", VACUOUS)
 
 
+# ══════════════════ I10：可见心跳（P1-33）══════════════════
+# 实测背景（会话 9336，2026-10-10）：LLM 网关 502 / 内网 embedding 超时，
+# 单步重试链可达数分钟；期间只有注释帧 `: ping`（按 SSE 协议客户端**必须忽略**）
+# ⇒ 前端无从展示 ⇒ 用户只看到无限转圈，判定"系统死了"。
+# 修复：空闲心跳改真事件帧 `event: ping`，带 last_stage + elapsed_s。
+def _i10_pings(ns):
+    """跑一次「先 stage 后静默」的流，返回 (ping帧列表, 全部帧)。"""
+    frames = ['event: stage\ndata: {"name":"意图识别","status":"run"}\n\n']
+    out = list(ns["iter_with_heartbeat"](_slow_source(frames, 0.5),
+                                         interval_s=0.05, visible_ping=True))
+    return [f for f in out if f.startswith("event: ping")], out
+
+
+def _parse_ping(frame):
+    import json as _j
+    for line in frame.split("\n"):
+        if line.startswith("data: "):
+            return _j.loads(line[6:])
+    return {}
+
+
+def t_i10():
+    print("\n=== I10 可见心跳（P1-33）：静默期产出 event: ping（带阶段+耗时）===")
+    ns = _load_sse()
+    pings, out = _i10_pings(ns)
+    ok = _rec("I10a visible_ping=True ⇒ 静默期产出 ≥3 帧 event: ping", len(pings) >= 3,
+              f"got={len(pings)}")
+    ok &= _rec("I10b ping 帧格式合规（event/data 两行 + \\n\\n 结尾）",
+               all(p.startswith("event: ping\ndata: ") and p.endswith("\n\n") for p in pings),
+               f"sample={pings[:1]}")
+    datas = [_parse_ping(p) for p in pings]
+    ok &= _rec("I10c ping 携带 elapsed_s 且单调递增（前端可显示已等待秒数）",
+               len(datas) >= 2 and all("elapsed_s" in d for d in datas)
+               and datas[-1]["elapsed_s"] > datas[0]["elapsed_s"], f"got={[d.get('elapsed_s') for d in datas[:4]]}")
+    ok &= _rec("I10d ping 携带 last_stage = 最近一次 stage 名（前端可显示卡在哪一步）",
+               all(d.get("last_stage") == "意图识别" for d in datas), f"got={datas[:1]}")
+    ok &= _rec("I10e 业务帧未被 ping 破坏（stage 帧仍在且原样）",
+               any(f.startswith("event: stage") for f in out))
+
+    # 向后兼容：默认 False 时 flows.py 那条链路必须逐字节不变（仍为注释帧）
+    out2 = list(ns["iter_with_heartbeat"](
+        _slow_source(['event: stage\ndata: {"name":"x"}\n\n'], 0.3), interval_s=0.05))
+    ok &= _rec("I10f 默认 visible_ping=False ⇒ 仍产出注释帧、无 event: ping（flows.py 不变）",
+               (not any(f.startswith("event: ping") for f in out2))
+               and any(f.startswith(":") for f in out2), f"sample={out2[:2]}")
+
+    # 异步包装器（真机 SSE 端点走它）同样要过
+    import asyncio
+
+    async def _run():
+        return [x async for x in ns["iter_with_heartbeat_async"](
+            _slow_source(['event: stage\ndata: {"name":"生成与校验"}\n\n'], 0.4),
+            interval_s=0.05, visible_ping=True)]
+
+    out3 = asyncio.run(_run())
+    p3 = [f for f in out3 if f.startswith("event: ping")]
+    d3 = [_parse_ping(p) for p in p3]
+    ok &= _rec("I10g 异步包装器同样产出可见 ping", len(p3) >= 3, f"got={len(p3)}")
+    ok &= _rec("I10h 异步包装器 ping 的 last_stage 正确（跨线程写入生效）",
+               bool(d3) and all(d.get("last_stage") == "生成与校验" for d in d3), f"got={d3[:1]}")
+    return ok
+
+
+def m_i10():
+    """变异：把可见 ping 分支废掉（还原"只有注释帧"的旧写法）→ I10a 必须抓不到。"""
+    print("\n=== 变异 M9：可见 ping 退回注释帧（旧写法）===")
+    ns = _load_sse(mutate=("if visible_ping:", "if False:", "if visible_ping:"))
+    pings, _ = _i10_pings(ns)
+    return _rec("M9 旧写法复现（无 event: ping）→ 证明 I10a 非空转",
+                len(pings) == 0, f"got={len(pings)}", VACUOUS)
+
+
+# ══════════════════ I11：终态兜底（P1-32，端点级）══════════════════
+# 实测事故（会话 9336 msg 3895/3896）：pipeline 内部把 LLM 异常吞掉后生成器
+# **正常 return**（不抛异常）⇒ 端点 except 抓不到、done 也没有 ⇒ 前端 _streaming
+# 锁死、转圈到天荒地老；用户随后发的「重试」被当成 followup 投进已死的轮次，
+# **永远不会被消费** —— 这正是用户报的"重发重试未有任何响应"。
+def _build_conv_app(mutate=None):
+    """用真实 conversations.py 源码（可注入变异）搭一个最小 FastAPI app。
+
+    为什么 exec 源码而不是手写等价端点：手写的端点与被测代码脱钩，
+    改了端点守卫也不会红（本仓 2026-09-30 的教训）。这里 exec 的是**同一份源码文本**。
+    """
+    from fastapi import FastAPI
+    src = open(CONV_SRC, encoding="utf-8").read()
+    if mutate:
+        old, new, anchor = mutate
+        assert anchor in src, f"变异锚点丢失：{anchor}"
+        src = src.replace(old, new, 1)
+    ns = {"__name__": "routers.conversations_probe"}
+    exec(compile(src, CONV_SRC, "exec"), ns)
+
+    class _FakeRepo:
+        def __init__(self, conn):
+            pass
+
+        def get_conversation(self, cid):
+            return {"id": cid, "title": "t"}
+
+    class _Conn:
+        def execute(self, *a, **k):
+            raise RuntimeError("no db in probe")
+
+    ns["ConversationRepo"] = _FakeRepo
+    _app = FastAPI()
+    _app.include_router(ns["router"])
+    _app.dependency_overrides[ns["db_session"]] = lambda: _Conn()
+    _app.dependency_overrides[ns["current_user"]] = lambda: {"id": 1, "username": "probe"}
+    return _app, ns
+
+
+def _post_stream(app, ns, frames, raise_exc=None):
+    """用 fake pipeline 打真实端点，返回 (status, text)。"""
+    class _Pipe:
+        def __init__(self):
+            self._f = frames
+
+        # ⚠️ 必须是**同步**生成器：`iter_with_heartbeat_async` 的设计就是
+        # "把阻塞式同步事件源搬到 worker 线程"。首版写成 async 生成器 ⇒
+        # worker 里 `for frame in iterator` 直接抛
+        # `'async_generator' object is not iterable` ⇒ 测试走的是异常分支而非目标路径。
+        def execute_stream(self, *a, **k):
+            if raise_exc is not None:
+                raise raise_exc
+            for f in self._f:
+                yield f
+
+    ns["get_pipeline"] = lambda: _Pipe()
+    from fastapi.testclient import TestClient
+    with TestClient(app) as cli:
+        r = cli.post("/api/conversations/1/chat/stream", json={"message": "hi"})
+    return r.status_code, r.text
+
+
+def t_i11():
+    print("\n=== I11 终态兜底（P1-32）：流结束但无 done/error ⇒ 必须补发 error ===")
+    app, ns = _build_conv_app()
+    # 事故形态：stage/token 之后**正常 return**（不抛异常、不发 done）
+    code, text = _post_stream(app, ns, [
+        'event: stage\ndata: {"name":"意图识别"}\n\n',
+        'event: token\ndata: {"delta":"x"}\n\n',
+    ])
+    ok = _rec("I11a 端点 200（流本身未崩）", code == 200, f"code={code}")
+    ok &= _rec("I11b ★ 无 done/error 时补发 event: error（前端得以解锁）",
+               "event: error" in text and "执行流程异常终止" in text, f"text={text[:200]}")
+    ok &= _rec("I11c 补发的 error 带可执行下一步（不是干巴巴的报错）",
+               "重新发送消息重试" in text, f"text={text[:200]}")
+
+    # 反向：正常发过 done 时**不得**重复补发（否则每次成功都多一条假错误）
+    app2, ns2 = _build_conv_app()
+    code2, text2 = _post_stream(app2, ns2, [
+        'event: stage\ndata: {"name":"意图识别"}\n\n',
+        'event: done\ndata: {"ok":true}\n\n',
+    ])
+    ok &= _rec("I11d ★ 已发 done 时不得补发 error（终态哨兵生效）",
+               "执行流程异常终止" not in text2, f"text={text2[:200]}")
+    # 已发 error 时同样不得补发
+    app3, ns3 = _build_conv_app()
+    code3, text3 = _post_stream(app3, ns3, [
+        'event: error\ndata: {"message":"上游 502"}\n\n',
+    ])
+    ok &= _rec("I11e 已发 error 时不得二次补发",
+               text3.count("执行流程异常终止") == 0, f"text={text3[:160]}")
+
+    # ★ 事件源抛异常（走端点 except 分支）时同样只能有一条 error
+    # 实测修复：except 分支原本**不置**终态哨兵 ⇒ 兜底又补一条 ⇒ 前端弹两条互相矛盾的错误。
+    app4, ns4 = _build_conv_app()
+    _, text4 = _post_stream(app4, ns4, [], raise_exc=RuntimeError("上游 502"))
+    ok &= _rec("I11f ★ 事件源抛异常时只发一条 error（except 分支必须置终态）",
+               text4.count("event: error") == 1
+               and "上游 502" in text4
+               and "执行流程异常终止" not in text4, f"text={text4[:200]}")
+
+    # ★ P1-36：本轮异常终止时，生成期间投进来的补充指令**不会被消费**
+    # （follow-up 只在轮次边界消费）⇒ 必须显式告知，否则用户的「重试」永远石沉大海。
+    import agent as _agent
+    _real_fu = getattr(_agent, "followup", None)
+
+    class _FakeFU:
+        @staticmethod
+        def pending_count(cid):
+            return 2
+
+    _agent.followup = _FakeFU
+    try:
+        app5, ns5 = _build_conv_app()
+        _, text5 = _post_stream(app5, ns5, ['event: token\ndata: {"delta":"x"}\n\n'])
+    finally:
+        _agent.followup = _real_fu
+    ok &= _rec("I11g ★ 异常终止时告知未执行的补充指令条数（P1-36）",
+               "2 条生成期间提交的补充指令未被执行" in text5, f"text={text5[:220]}")
+    return ok
+
+
+def m_i11():
+    """变异：终态兜底恒不成立（还原"无哨兵"旧写法）→ I11b 必须判红。"""
+    print("\n=== 变异 M10：取消终态兜底（旧写法）===")
+    app, ns = _build_conv_app(mutate=("if not _terminal:", "if False:", "if not _terminal:"))
+    _, text = _post_stream(app, ns, ['event: token\ndata: {"delta":"x"}\n\n'])
+    return _rec("M10 旧写法复现（无兜底 error）→ 证明 I11b 非空转",
+                "执行流程异常终止" not in text, f"text={text[:160]}", VACUOUS)
+
+
+def m_i11b():
+    """变异：except 分支不再置终态（还原双 error 旧写法）→ I11f 必须判红。"""
+    print("\n=== 变异 M11：except 分支不置终态（旧写法，会弹两条 error）===")
+    app, ns = _build_conv_app(mutate=("            _terminal = True\n            yield f\"event: error",
+                                      "            yield f\"event: error",
+                                      "            _terminal = True\n            yield f\"event: error"))
+    _, text = _post_stream(app, ns, [], raise_exc=RuntimeError("上游 502"))
+    return _rec("M11 旧写法复现（两条 error）→ 证明 I11f 非空转",
+                text.count("event: error") == 2, f"count={text.count('event: error')}", VACUOUS)
+
+
 def main():
     print("=" * 78)
     print("P1-2 SSE 心跳 / P1-3 降级显式化 / P0-1 SSE 异步化 —— 不变式 + 变异自证")
@@ -443,6 +657,11 @@ def main():
     m_i8()
     t_i9_regression()
     m_i9()
+    t_i10()
+    m_i10()
+    t_i11()
+    m_i11()
+    m_i11b()
 
     n_fail = sum(1 for k, _, _ in _results if k == FAIL)
     n_vac = sum(1 for k, _, _ in _results if k == VACUOUS)

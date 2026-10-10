@@ -298,9 +298,10 @@ function cardSysmlTabs(cd, content) {
          onclick 仍传 this，但 openNormReport 的容器查找已改为「就近找 .msg[data-mid]」，
          不再依赖按钮在 .sv-card 内（按钮已移出卡片）。 -->
     <div class="svm-actions">
-      <button class="btn sm ghost" style="color:var(--grn,#2f855a);border-color:#C0DD97;"
+      <button class="btn sm ghost norm-btn" style="color:var(--grn,#2f855a);border-color:#C0DD97;"
         onclick="openNormReport(this)"
-        title="全屏查看本次生成的归一校验报告（术语词典对齐 / 同名消歧 / 未命中建议）">🧹 归一校验 · 全屏查看</button>
+        title="全屏查看本次生成的归一校验报告（术语词典对齐 / 同名消歧 / 未命中建议）"><span class="nr-ico">🧹</span><span class="nr-txt">归一校验</span><span class="nr-badge" style="display:none;"></span></button>
+      <span class="nr-hint"></span>
     </div>
   </div>`;
 }

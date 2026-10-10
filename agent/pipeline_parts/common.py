@@ -676,4 +676,11 @@ __all__ = [
     # P1-4：会话槽位治理（纯函数，便于单测与变异自证）
     'SLOT_CLARIFY_MARK', 'SLOT_ORIGINAL_MARK', 'TOPIC_CARRY_WORDS',
     'extract_original_request', 'norm_slot_item', 'merge_slot_items', 'is_topic_switch',
+    # 2026-10-10 修复：轮次角色常量与失败轮预算辅助函数（2026-10-10 批次新增，
+    #   ⚠️ 此前漏加进 __all__ ⇒ `from .common import *` 拿不到 ⇒ execute.py/stream.py
+    #   运行时 NameError: CHAT_TASK_PROBE is not defined ⇒ **全部对话一轮即挂**
+    #   （实测 2026-10-10 22:53 起所有会话失败，见会话 9336 msg 3895/3896）。
+    #   教训：新增 common.py 顶层名字必须同步 __all__；常驻守卫 tools/verify/verify_common_exports.py
+    'CHAT_TASK_PROBE', 'CHAT_TASK_REPAIR', 'CHAT_TASK_ANSWER',
+    '_lg_failed_rounds', '_lg_limit_of', '_lg_stop_reason',
 ]

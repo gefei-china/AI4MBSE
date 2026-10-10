@@ -783,6 +783,18 @@ function handleSSE(raw) {
     procAddSkill(ev);      // V2.5：技能执行环节（命中技能/指令注入可见）
   } else if(evType === 'multi_intent') {
     procAddMultiIntent(ev);  // Task 14：多意图分解 → 阶段序列 chips
+  } else if(evType === 'ping') {
+    /* P1-33（2026-10-10 执行过程可见性）：后端空闲心跳升级为可见事件帧（带当前阶段+已耗时）。
+       实测背景：LLM 网关 / 内网 embedding 故障时，单步重试链可达数分钟且期间零事件 ——
+       用户只看到无限转圈，无法区分"在正常跑"还是"挂了"。
+       处理：把状态栏更新为「仍在执行：<阶段>（已等待 Ns）」。
+       不动执行轨迹面板（阶段事件已驱动它）；ping 只在"长时间无事件"时才出现，
+       任何后续真实事件都会照常推进轨迹，状态栏也会被后续流程覆盖。 */
+    const _cs = document.getElementById('chat-status');
+    if(_cs){
+      const _st = ev.last_stage ? ('：' + ev.last_stage) : '';
+      _cs.textContent = '仍在执行' + _st + '（已等待 ' + Math.round(ev.elapsed_s || 0) + ' 秒）';
+    }
   } else if(evType === 'degraded') {
     /* P1-3（2026-10-03 降级显式化）：模型降级必须在 UI 上可见。
        背景（实测）：DeepSeek 402 余额不足 / 无 api_key / 调用异常三条路径都会**静默回落 Mock**——

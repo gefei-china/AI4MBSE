@@ -665,6 +665,13 @@ body.sp-resizing .slide-panel,body.sp-resizing .modal .mbox{transition:none;}
    放一个会触发后端副作用（生成归一清单）的操作按钮语义混淆，且挤占切换区宽度。
    独立操作条：上边框分隔、灰底，与卡头在视觉上分层。 */
 .svm-actions{display:flex;align-items:center;gap:8px;padding:7px 10px;border-top:1px solid var(--line);background:#fafbfd;}
+/* 归一校验按钮（卡片下方操作条）：徽标三态 + 右侧引导语，点开前就知道要做什么 */
+.norm-btn{display:inline-flex;align-items:center;gap:6px;flex:none;}
+.norm-btn .nr-badge{font-size:10px;padding:1px 7px;border-radius:9px;font-weight:700;line-height:1.7;white-space:nowrap;}
+.nr-badge-warn{background:#fff5f5;border:1px solid #F3C1C1;color:#b91c1c;}
+.nr-badge-doing{background:#fffbeb;border:1px solid #F0D9A6;color:#c98a2e;}
+.nr-badge-ok{background:#f7fbee;border:1px solid #C0DD97;color:#2f855a;}
+.nr-hint{flex:1;min-width:0;font-size:10.5px;color:var(--mut);line-height:1.5;}
 .bd-stat-card{border:1px solid var(--line);border-radius:9px;padding:10px;background:#fff;text-align:center;}
 .bd-stat-card .n{font-size:22px;font-weight:700;line-height:1.2;}
 .bd-stat-card .l{font-size:11px;color:var(--mut);margin-top:2px;}

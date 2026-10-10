@@ -23,6 +23,149 @@ window._nrState = window._nrState || {
   hostId: '',
 };
 
+/* ── 按钮状态（2026-10-10，米爸反馈）：让「归一校验」按钮**在点开前**就告诉用户有多少项、
+   点开后实时反映确认进度，从而指导"接下来做什么"。
+   三段式：① 预取统计（GET normalize-summary，**只读**，不写发现池）
+          ② 清单打开后：徽标随每次决策递增「已确认 k/N」
+          ③ 提交应用后：「已应用」
+   ⚠️ 口径必须与清单卡头的「待确认 N 项」一致：后端 _NR_BLOCKING_STATUSES 与
+      前端 _NR_BLOCKING 是两份镜像常量，由 tools/verify/verify_norm_summary.py 的 D3 用例比对。 */
+window._nrBtnCache = window._nrBtnCache || {};   // mid -> {…summary, _progress:{done,need}}
+
+function _nrBtnOf(mid){
+  const msg = document.querySelector('.msg[data-mid="' + mid + '"]');
+  return msg ? msg.querySelector('.norm-btn') : null;
+}
+function _nrBtnPaint(mid, badge, tone, hint, title){
+  const btn = _nrBtnOf(mid);
+  if(!btn) return false;
+  const bg = btn.querySelector('.nr-badge');
+  const bar = btn.closest('.svm-actions');
+  const hintEl = bar ? bar.querySelector('.nr-hint') : null;
+  if(bg){
+    bg.textContent = badge || '';
+    bg.style.display = badge ? '' : 'none';
+    bg.className = 'nr-badge' + (badge && tone ? (' nr-badge-' + tone) : '');
+  }
+  if(hintEl) hintEl.innerHTML = hint || '';
+  btn.title = title || '全屏查看本次生成的归一校验报告（术语词典对齐 / 同名消歧 / 未命中建议）';
+  return true;
+}
+/* 预取：只更新徽标，不打开面板；失败静默（按钮保持无徽标态，不误导） */
+function _nrPrefetch(mid){
+  if(!mid || !currentConvId) return;
+  if(window._nrBtnCache[mid]){ _nrBtnFromSummary(mid, window._nrBtnCache[mid]); return; }
+  api(`/api/conversations/${currentConvId}/messages/${mid}/normalize-summary`)
+    .then(s => {
+      if(!s || !s.ok) return;
+      window._nrBtnCache[mid] = s;
+      _nrBtnFromSummary(mid, s);
+    })
+    .catch(()=>{});
+}
+function _nrBtnFromSummary(mid, s){
+  const st = window._nrState;
+  if(st.msgId === String(mid) && st.report){ _nrSyncBtn(); return; }  // 清单已开：进度态更"新鲜"
+  if(st.msgId === String(mid) && st.applied){
+    _nrBtnPaint(mid, '已应用', 'ok', '归一决策已应用，V2 代码与视图已就地更新。', '已应用：V2 代码与视图已更新');
+    return;
+  }
+  const p = s._progress;
+  if(p && p.need > 0){
+    if(p.done >= p.need){
+      _nrBtnPaint(mid, `已确认 ${p.need}/${p.need}`, 'ok',
+        '全部拍板完成，点开清单提交即可更新 V2 代码。', `已全部确认（${p.need} 项）`);
+    } else {
+      _nrBtnPaint(mid, `已确认 ${p.done}/${p.need}`, 'doing',
+        `还剩 <b>${p.need - p.done}</b> 项待裁决，继续点开清单逐条拍板。`,
+        `已确认 ${p.done}/${p.need}，还剩 ${p.need - p.done} 项`);
+    }
+    return;
+  }
+  const need = s.need_decide || 0, total = s.total || 0, k = s.by_kind || {};
+  const cons = s.consistency || {};
+  // 只报非零项：实测出现过「悬空引用 0 处」这种噪音，0 值对用户是干扰
+  const consBits = [];
+  if(cons.dangling) consBits.push(`悬空引用 ${cons.dangling} 处`);
+  if(cons.batch_dups) consBits.push(`批内疑似重复 ${cons.batch_dups} 对`);
+  const consTxt = consBits.length ? `；另有${consBits.join('、')}（见清单「一致性」页）` : '';
+  const kindTxt = `共 ${total} 行（实体 ${k.entity||0} · 属性 ${k.attr||0} · 关系 ${k.relation||0}）`;
+  if(need > 0){
+    _nrBtnPaint(mid, `待确认 ${need}`, 'warn',
+      `${kindTxt}，其中 <b style="color:#b91c1c;">${need}</b> 项需你拍板${consTxt}。点开全屏逐条裁决，全部拍板后才能更新 V2 代码。`,
+      `待确认 ${need} 项 · 共 ${total} 行 · 点开全屏查看`);
+  } else {
+    _nrBtnPaint(mid, '无需确认', 'ok',
+      `${kindTxt}已与词典/图库对齐，无需人工裁决${consTxt}；点开可查看一致性检查。`,
+      `无需人工确认 · 共 ${total} 行 · 点开全屏查看`);
+  }
+}
+/* 清单打开期间：每次决策后回写按钮徽标（由 _nrRender 末尾调用） */
+function _nrSyncBtn(){
+  const st = window._nrState, mid = st.msgId;
+  if(!mid) return;
+  if(st.applied){
+    _nrBtnPaint(mid, '已应用', 'ok', '归一决策已应用，V2 代码与视图已就地更新。', '已应用：V2 代码与视图已更新');
+    return;
+  }
+  if(!st.report) return;
+  const all = _nrAllRows();
+  const need = all.filter(_nrIsBlocking).length;
+  const done = all.filter(r => _nrIsBlocking(r) && st.decisions[r._i]).length;
+  if(need === 0){
+    _nrBtnPaint(mid, '无需确认', 'ok', `共 ${all.length} 行已与词典/图库对齐，无需人工裁决。`,
+      `无需人工确认 · 共 ${all.length} 行`);
+  } else if(done >= need){
+    _nrBtnPaint(mid, `已确认 ${need}/${need}`, 'ok',
+      '全部拍板完成，可在清单内点「提交并更新 V2 代码」。', `已全部确认（${need} 项），可提交`);
+  } else {
+    _nrBtnPaint(mid, `已确认 ${done}/${need}`, 'doing',
+      `还剩 <b style="color:#c98a2e;">${need - done}</b> 项待裁决；全部拍板后才能提交更新 V2 代码。`,
+      `已确认 ${done}/${need}，还剩 ${need - done} 项`);
+  }
+}
+/* 关闭清单时留下进度（decisions 仍在内存，重新打开可继续），按钮不退回"未确认" */
+function _nrCloseBookkeep(){
+  const st = window._nrState, mid = st.msgId;
+  if(!mid || !st.report) return;
+  const all = _nrAllRows();
+  const need = all.filter(_nrIsBlocking).length;
+  const done = all.filter(r => _nrIsBlocking(r) && st.decisions[r._i]).length;
+  window._nrBtnCache[mid] = window._nrBtnCache[mid] || {};
+  window._nrBtnCache[mid]._progress = {done, need};
+}
+/* 卡片渲染后自动预取：挂一个 MutationObserver 覆盖**所有**渲染路径
+   （分批渲染 / 流式结束重渲染 / 加载更早消息），不必在每个渲染点各插一脚。 */
+function _nrPrefetchScan(){
+  try{
+    document.querySelectorAll('.svm-actions .norm-btn').forEach(btn => {
+      const msg = btn.closest('.msg[data-mid]');
+      if(!msg) return;
+      const mid = msg.getAttribute('data-mid');
+      if(!mid || btn.dataset.nrDone === '1') return;
+      btn.dataset.nrDone = '1';
+      _nrPrefetch(mid);
+    });
+  }catch(e){}
+}
+let _nrScanTimer = null;
+function _nrScheduleScan(){
+  if(_nrScanTimer) clearTimeout(_nrScanTimer);
+  _nrScanTimer = setTimeout(_nrPrefetchScan, 350);   // debounce：分批渲染只跑一次
+}
+(function _nrMountScan(){
+  function mount(){
+    const area = document.getElementById('chat-area');
+    if(!area){ setTimeout(mount, 600); return; }
+    if(window._nrObserver) return;
+    window._nrObserver = new MutationObserver(_nrScheduleScan);
+    window._nrObserver.observe(area, {childList:true, subtree:true});
+    _nrPrefetchScan();
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
+  else mount();
+})();
+
 /* ── 入口：全屏弹窗展示归一校验清单（2026-10-10 由「消息内联展开」改为全屏）
  * 变更原因（米爸反馈）：内联展开时宿主挂在消息 .body 内，可用高度只有几百 px
  *（#nr-rows 写死 340px），大清单要反复滚动、逐条裁决与 V2 对照都很困难。
@@ -203,7 +346,11 @@ function _nrToggleFullscreen(force) {
     _nrRender();
   } else {
     // 关闭后复位状态（决策保留在内存里，重新打开仍可继续）
+    _nrCloseBookkeep();     // ★ 先记进度：依赖 st.report，必须在清空之前
+    const _mid = st.msgId;
     st.hostId = ''; st.report = null; st.fullscreen = false; st.collapsed = false;
+    // 按钮退回「已确认 k/N」（而不是假装没看过），让用户知道还剩多少
+    if(_mid && window._nrBtnCache[_mid]) _nrBtnFromSummary(_mid, window._nrBtnCache[_mid]);
   }
 }
 // Esc 恢复（capture 阶段，不影响其它 Esc 处理器：如命令面板关闭）
@@ -612,6 +759,7 @@ function _nrRender() {
   }
   const box2 = document.getElementById('nr-rows');
   if(box2 && rowsTop) box2.scrollTop = rowsTop;
+  _nrSyncBtn();      // 每次重绘都把确认进度回写到卡片下方的「归一校验」按钮
 }
 function _nrApply() {
   const st = window._nrState;
