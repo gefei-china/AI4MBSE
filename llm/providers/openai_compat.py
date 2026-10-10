@@ -136,6 +136,158 @@ def _est_input_tokens(messages) -> int:
         return 0
 
 
+# ── 2026-10-10 形态规则层（thinking按「任务形态」自动判定，而非按名字枚举）─────
+def _c_module():
+    """取 core.config 模块（延迟导入，避免模块级循环依赖）；失败返回 None。"""
+    try:
+        from core import config as _c
+        return _c
+    except Exception:
+        return None
+
+
+def _looks_structured_output(messages) -> bool:
+    """判断这轮调用是否**要求模型输出纯结构化结果（JSON）** ⇒ 应关思考。
+
+    ★ **为什么必须关**（2026-10-10 实测真故障）：
+      开启 `rag.rerank_enabled` 后重排"完全没生效"（顺序一字未变），
+      根因是每次调用都抛 `JSONDecodeError: Expecting value: line 1 column 1`，
+      被 `services/rag_rerank.py` 的`except: return hits[:top_k]` **静默吞掉**。
+      真因：**reasoning 模型会在 JSON 之前输出思考**，于是 `json.loads` 失败。
+      ⇒ 不是重排实现有问题，是**思考污染了结构化输出**。
+
+    ★ **为什么按 messages 内容判断、而不是往off 名单里加 intent**：
+      实测全库有 **28 个**要求结构化输出的 intent
+      （planner / skill_route / intent_detect / task_decompose / plan_eval …），
+      逐个加名单**必然随系统演进而漂移** ——
+      这正是形态规则层要解决的老问题（`thinking_policy.off` 对 27 个 Agent 名覆盖率 0/27）。
+      ⇒ 判据取自**提示词本身**，新增调用点**零配置**被覆盖。
+
+    识别方式（保守，宁可不判也不误判）：
+      只在 **system 消息**里找"必须输出结构化结果"的强指令短语，
+      不看 user 消息（用户可能只是提问里带了 `{}`）。
+    """
+    try:
+        for m in (messages or []):
+            if not isinstance(m, dict):
+                continue
+            if m.get("role") != "system":
+                continue
+            c = str(m.get("content") or "")
+            if not c:
+                continue
+            if any(k in c for k in (
+                    "只输出 JSON", "只输出JSON", "仅输出 JSON",
+                    "输出 JSON", "输出JSON",
+                    "严格输出 JSON", "必须是 JSON", "返回 JSON")):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _looks_like_probe(intent: str) -> bool:
+    """判断 intent 是否属于「探针语义」（模型自选工具的决策轮）。
+
+    ★ **为什么必须有这个判据**（2026-10-10 实测发现）：
+      形态规则 1原本只看「带 tools + max_tokens 小」，但真库显示
+      **`view_expansion`（视图生成）的 max_ct 只有 76** —— 它带工具、正文短，
+      却是**重产码**任务（思考确有收益）⇒ 只看 max_tokens 会把它误关。
+
+      ⇒ 加一层「语义」判据：只有**名字本身就表明是探针/路由/探测**的 intent
+      才允许被规则关。这让规则对**新增 intent 也是安全的**：
+      新 Agent 起个正常业务名（"活动图生成"）⇒ 不会命中；
+      真要新增探针类 intent，走名单显式配即可（不依赖规则猜）。
+
+    匹配方式：**子串**（`probe`/`detect`/`route`/`routing`/`probe_model` 等），
+    不用全等 —— 因为探针类 intent 的命名习惯是加后缀（`probe_plain`/`probe_model`）。
+    """
+    try:
+        s = str(intent or "").lower()
+    except Exception:
+        return False
+    if not s:
+        return False
+    for k in ("probe", "detect", "route", "routing", "classify", "dispatch"):
+        if k in s:
+            return True
+    return False
+
+
+def _decide_by_shape(*, has_tools: bool, max_tokens: int, messages,
+                     config_mod, intent: str = ""):
+    """按**任务形态**判定思考开关。返回 True=开/ False=关/ None=不干预。
+
+    ★ **为什么要有这一层（可维护性，米爸 2026-10-10 提出）**
+    `_intent` 是**动态**的：`orchestration.py:111` 用 `agent_def.name` 当 intent，
+    而 `agents` 表有 **27 个** active Agent（名字含中文，如「活动图生成」）。
+    实测：现有 `thinking_policy.off` 名单 4 个，对 27 个 Agent 名的**覆盖率 = 0/27**
+    ⇒纯名单制**必然随系统演进而漂移**，漏加一个 = 该任务思考失控
+      （实测极端形态：思考占 99.2%、耗时 4017 秒）。
+
+    ⇒ 这一层让**新增 intent 天然被覆盖**，不需要任何人记得改配置。
+
+    ## 规则（每条都对应一个实测事实，不是拍脑袋）
+    1. **「探针轮」= 带 tools + 上限小 + intent 名字带探针语义** ⇒ 关思考
+       实测所有带 tools 的决策类调用思考占 **58%~98%** 而正文只产几十~几百 token
+       （`probe` 97.6% / `crypto_probe` 79.1% / `routing` 81.6%）。
+       ★ **真实 A/B 已验证安全**（flashY / deepseek-v4-flash，2026-10-10，
+         真库 id=10035~10038）：关思考后 **tool_calls 保留**，
+         难任务 token 省 78%、耗时省 73%。
+       ⚠️ **为什么还要intent 语义这一层**：`view_expansion`（视图生成）实测
+         max_ct 只有 76 —— 它"带工具 + 上限小"却**是重产码**，
+         只看 max_tokens 会误伤⇒ 追加 `_looks_like_probe()` 语义判据。
+    2. **「廉价摘要轮」= 输出上限小** ⇒ 关思考
+       实测重产码任务 `plan_refine` 上限 8195、`plan_summary` 8192，
+       而廉价任务上限普遍 ≤ 1224。
+       ⚠️ **默认 0=不启用**：无 tools 的调用里混着大量重产码任务
+         （实测 `plan_refine` 平均 5697 token），误判风险高、收益未验证。
+
+    ## 为什么默认关闭
+    `thinking_shape_enabled` 默认 **off**：规则是**新增能力**，
+    在没有真机 A/B 证据前不该改变任何现有行为（`probe` 那类可能丢 tool_calls 的风险，
+    见 `verify_real_thinking_ab.py`）。米爸拍板后再逐级放开。
+    """
+    if config_mod is None:
+        return None
+    try:
+        if not config_mod.as_bool("llm", "thinking_shape_enabled", False):
+            return None
+    except Exception:
+        return None
+    try:
+        # 规则 1：探针轮（带工具 + 输出上限小）⇒ 关
+        # ⚠️ **max_tokens 单独用不可靠**（2026-10-10 实测发现）：
+        #   `view_expansion`（视图生成，**重产码**、思考确有收益）实测 max_ct 只有 **76**
+        #   ⇒ 只要"带 tools + 上限小"就判关，会把它一起关掉。
+        #   ⇒ 追加第二条件：intent 必须是**已知的探针语义**。
+        #   判据来自真实 A/B（flashY，2026-10-10）：
+        #     · 探针轮（带工具，模型自选工具）：关思考后 tool_calls **保留**（1→1）
+        #     · 难任务带工具：思考 824→0、耗时 6.6s→1.8s，tool_calls 仍保留
+        #   ⇒ 「带工具 + 探针语义」这个组合是**实测安全**的。
+        probe_mt = int(config_mod.get("llm", "shape_probe_max_tokens", 1200) or 1200)
+        if has_tools and int(max_tokens or 0) <= probe_mt and _looks_like_probe(intent):
+            return False
+        # 规则 1.5：**结构化输出轮**⇒ 关思考（2026-10-10 实测真故障）
+        #   实测：`rag_rerank`（检索重排，要求模型"只输出 JSON"）
+        #   调用 28 次全部 `JSONDecodeError: Expecting value: line 1 column 1`
+        #   ⇒ 静默回退原排序 ⇒ **开了 rerank_enabled 也没生效**（顺序完全未变）。
+        #   根因：reasoning 模型在 JSON 前输出思考 ⇒ `json.loads` 失败。
+        #   ⚠️ **全库有 28 个要求结构化输出的 intent**
+        #     （planner / skill_route / intent_detect / task_decompose / …）
+        #     ⇒ **绝不逐个加名单**（那必然漂移，正是形态规则要解决的老问题）；
+        #     改为**按 messages 内容自动识别**（见 `_looks_structured_output`）。
+        if _looks_structured_output(messages):
+            return False
+        # 规则 2：廉价输出轮（无工具且上限极小）⇒ 关
+        cheap_mt = int(config_mod.get("llm", "shape_cheap_max_tokens", 0) or 0)
+        if not has_tools and cheap_mt > 0 and int(max_tokens or 0) <= cheap_mt:
+            return False
+    except Exception:
+        return None
+    return None
+
+
 def _warn_context_once(cfg, cw, mt, est_in, guard, why) -> None:
     """上下文额度留痕（同 provider + cw + guard 只报一次；自身异常静默，不影响调用）。
 
@@ -210,6 +362,35 @@ class OpenAICompatProvider(BaseLLM):
                 _warn_context_once(cfg, cw, mt, _est_in, _guard, "max_tokens 超过 context_window")
         elif _guard != "off" and _est_in > 0 and _est_in + mt > cw:
             _warn_context_once(cfg, cw, mt, _est_in, _guard, "估算输入 + max_tokens 超过 context_window")
+        # ★★ 2026-10-09 **reasoning 思考预算**（根治 541s 超时的真因，不是加限制）
+        #
+        # 实测根因（详见 docs/工具调用轮次耗尽 报告 §11）：
+        #   思考与正文**共享 max_tokens**，而思考模型（qwen3.8-*）默认开着思考：
+        #     · 10-05 之前（非 reasoning 模型）：思考占输出 **4%**  → 给用户 96%
+        #     · 今天（reasoning 模型）：思考占输出 **63%** → 给用户只剩 **37%**
+        #     · 今天慢调用（>120s）：思考占 **72%**
+        #   极端一例：143 秒那次 `completion=6425` / `reasoning=6322`
+        #   ⇒ **98% 的额度用来思考，只给用户 103 个 token**。
+        #   ⇒ 按 ~20~80 ms/token 线性拉长耗时 ⇒ 撞超时 ⇒ 重试 ⇒ 更慢（乘法）。
+        #
+        # 两个旋钮（默认 0 = 不启用 ⇒ 零行为漂移）：
+        #   llm.thinking_budget         给思考的**独立上限**（token）
+        #   llm.thinking_reserve_tokens **给正文的保底**（思考不得吃光这部分）
+        #   实际压算：max_tokens = min(max_tokens, thinking_budget + reserve)
+        #   —— 用「思考上限 + 正文保底」反推正文能拿多少，
+        #      比单纯砍 max_tokens 精确（不会无谓截短非思考模型）。
+        _think_cap = 0
+        _reserve = 0
+        try:
+            from core import config as _c
+            _think_cap = int(_c.get("llm", "thinking_budget", 0) or 0)
+            _reserve = int(_c.get("llm", "thinking_reserve_tokens", 0) or 0)
+        except Exception:
+            pass
+        if _think_cap > 0:
+            _allowed = _think_cap + _reserve
+            if mt > _allowed:
+                mt = _allowed
         payload = {
             "model": model_name,
             "messages": messages,
@@ -225,6 +406,19 @@ class OpenAICompatProvider(BaseLLM):
             mp = json.loads(cfg.get("model_params") or "{}")
         except Exception:
             mp = {}
+        # ★ P1-b（2026-10-10）**Agent 级 model_params 覆盖 provider 级**
+        #   为什么：`agents.model_params` 列一直有、前端一直在存，但**全仓无消费点**
+        #   ⇒ 在 Agent 表单里配思考档位/temperature **配了不生效**（死配置）。
+        #   语义：同名键以 **Agent 级为准**，其余沿用 provider 级（浅合并，Agent 优先）。
+        #   ⚠️ 调用方显式传参仍高于两者（语义分层：调用点 > Agent > provider > 模型默认）。
+        try:
+            _amp = kwargs.get("_model_params") or kwargs.get("model_params") or {}
+            if isinstance(_amp, dict) and _amp:
+                _merged = dict(mp)
+                _merged.update(_amp)
+                mp = _merged
+        except Exception:
+            pass
         if mp.get("top_p") is not None and mp["top_p"] != "":
             try:
                 payload["top_p"] = float(mp["top_p"])
@@ -235,14 +429,95 @@ class OpenAICompatProvider(BaseLLM):
                 payload["top_k"] = int(mp["top_k"])
             except (TypeError, ValueError):
                 pass
-        # 思考模式：模型默认 → 跟随调用方 thinking；开启/关闭 → 显式覆盖
-        thinking_mode = mp.get("thinking_mode")
-        if thinking_mode == "开启":
+        # ── 思考模式（2026-10-09 重构：**三态**）────────────────────────
+        #★★ 原实现有两个缺陷，米爸的"实施"要求先修它们：
+        #
+        # 缺陷 1（★致命）：`if thinking:` 只在**开启**时发字段，
+        #   关闭时**什么都不发** ⇒ 模型端按**默认**（= 开启）思考
+        #   ⇒ **我方的「关闭思考」从来没生效过**（实测思考占比 63% 就是证据）。
+        #   标杆实测要求**显式**下发：Qwen `enable_thinking:false` /
+        #   DeepSeek `thinking:{type:disabled}` / Claude `thinking:{type:disabled}`。
+        #缺陷 2（★陷阱）：若把"关闭"改成**总是**发disabled，
+        #   则全链路（`chat()` 默认 `thinking=False`，实测**无一处**传 True）
+        #   **全部被关掉思考** ⇒ 重产码任务（视图生成，正文 1.5 万token）
+        #   也会一起受害 —— **修缺陷 1 时若不做三态，会造出更大的事故**。
+        #
+        # ⇒ 三态（按 llm.thinking_policy，**per-intent**，实测数据驱动）：
+        #   on  列表 → 显式 enabled
+        #   off 列表 → 显式 disabled
+        #   其余     → **不发该字段**（= 保持改动前行为，零漂移）
+        _tmode = mp.get("thinking_mode")
+        # ★ P1-b（2026-10-10）记录 **thinking_mode 是「显式指定」还是「默认值」**。
+        #   为什么必须区分：`thinking_mode=关闭` 与 `thinking=False`(默认值) 在
+        #   `_decision` 里都表现为 False，但**语义完全相反**：
+        #     · 默认 False  ⇒「没表态」⇒ **不发字段**（保持改动前行为，防缺陷 2）
+        #     · 显式「关闭」⇒「表态了」⇒ **必须发 disabled**（否则配了不生效）
+        #   实测踩过：Agent 级 thinking_mode=关闭 传进来后`thinking=False`，
+        #   但下发条件只看 `_off` 名单 ⇒ **Agent 级的"关闭"根本没生效**（死配置）。
+        _tmode_explicit = _tmode in ("开启", "关闭")
+        if _tmode == "开启":
             thinking = True
-        elif thinking_mode == "关闭":
+        elif _tmode == "关闭":
             thinking = False
-        if thinking:
+
+        # per-intent 分流（2026-10-09；粒度选**任务维度**，标杆三家全是 per-request）
+        #─��� 2026-10-10 新增第0 层「形态规则」——
+        # ★ **为什么必须有这一层（可维护性）**：`_intent` 是**动态**的 ——
+        #   `orchestration.py` 用 `agent_def.name` 当 intent，而 agents 表有 **27 个**
+        #   active Agent（名字含中文，如「活动图生成」），**外加 skills/tools 未来新增**。
+        #   实测：现有off 名单 4 个，对27 个 Agent 名的**覆盖率 = 0/27**。
+        #   ⇒ 纯名单制**必然漂移**：漏加一个 = 该任务思考失控（实测可达 99.2% / 4017 秒）。
+        #   ⇒ 规则层按**任务形态**判定，新增 intent 天然被覆盖，**不需要人记得配**。
+        #
+        # 规则只做"加法"：命中规则且未被名单显式覆盖时才生效，绝不夺走例外权。
+        _decision = None            # None=不干预/  True=开/  False=关
+        _who = kwargs.get("_intent") or kwargs.get("intent") or ""
+        try:
+            from core import config as _c
+            _pol = json.loads(_c.get("llm", "thinking_policy", "{}") or "{}")
+        except Exception:
+            _pol = {}
+        _off = set(_pol.get("off") or [])
+        _on = set(_pol.get("on") or [])
+        # 第 0 层：形态规则（默认关闭，逐级放开；见 `_decide_by_shape`）
+        _cfg_mod = _c_module()
+        _by_shape = _decide_by_shape(
+            has_tools=bool(tools),
+            max_tokens=mt,
+            messages=messages,
+            config_mod=_cfg_mod,
+            intent=_who,
+        )
+        if _who:
+            if _who in _off:
+                _decision = False
+            elif _who in _on:
+                _decision = True
+        # ★ 名单**未命中**时才看形态规则（名单优先级最高）
+        if _decision is None and _who and _by_shape is not None:
+            _decision = _by_shape
+        if _decision is None:
+            # 没命中分流表：沿用 provider 级 thinking_mode 或调用方的 thinking
+            _decision = bool(thinking)
+        # ★ 决定依据只记到**本地日志**（`payload` 会原封不动作为请求体发给上游，
+        #   塞任何自定义键都会被当成非法参数 → 400；这个坑很隐蔽，因为本地测试不经过真实网关）。
+        #   日志的价值：出现"某个 intent 的思考异常"时，能直接看出是名单配的、还是形态规则判的。
+        _reason = ("policy_off" if (_who and _who in _off) else
+                   "policy_on" if (_who and _who in _on) else
+                   ("shape:" + ("off" if _by_shape is False else "on" if _by_shape else "none"))
+                   if (_who and _by_shape is not None) else
+                   "provider_default")
+        if _decision or (_tmode_explicit and _tmode == "开启"):
+            # ★ 同理：显式「开启」也必须真发出去（否则 Agent 配的"开启"也是死配置）
             payload["thinking"] = {"type": "enabled"}
+        elif (_off and _who in _off) or _by_shape is False or _tmode_explicit:
+            # ★ 只在「**显式命中 off 列表**」/「**形态规则判关**」/「**thinking_mode 显式表态**」
+            #   三者之一成立时才发 disabled —— 其余「关闭」一律不发字段（保持改动前行为）。
+            #   这是避免"全链路被一起关掉"的关键（见上方缺陷 2）。
+            payload["thinking"] = {"type": "disabled"}
+            if _who:
+                _log.info("[thinking] 关思考｜intent=%s 依据=%s has_tools=%s max_tokens=%s",
+                          _who, _reason, bool(tools), mt)
         headers = {
             "Authorization": f"Bearer {cfg.get('api_key', '')}",
             "Content-Type": "application/json",
@@ -251,7 +526,18 @@ class OpenAICompatProvider(BaseLLM):
         if stream:
             return self._stream_api(url, payload, headers, provider_name, model_name, t0)
         import httpx
-        resp = httpx.post(url, json=payload, headers=headers, timeout=180)
+        # ★ 2026-10-09：单次超时从**硬编码 180** 改为**可配置**（默认仍 180，零行为漂移）。
+        #   为什么要改（实测 v4 与 v1 连续两次命中）：
+        #     原 `timeout=180` 与 `llm.retry_times=2` 相乘 ⇒
+        #     **单次调用最坏 180×3 + 退避 ≈ 541.5 秒**（实测 545s 吻合）。
+        #     用户等 9 分钟换来**一个异常**（conv 9244 落库 0 行、什么都没拿到）。
+        #   ⚠️ 改小前先确认：慢模型（deepseek-v4-pro 实测单次 121s）别调太紧。
+        try:
+            from core import config as _c
+            _to = float(_c.get("llm", "http_timeout_s", 180))
+        except Exception:
+            _to = 180.0
+        resp = httpx.post(url, json=payload, headers=headers, timeout=_to)
         data = resp.json()
         if resp.status_code != 200 or not data.get("choices"):
             raise ValueError(f"LLM API {resp.status_code}: {str(data)[:200]}")

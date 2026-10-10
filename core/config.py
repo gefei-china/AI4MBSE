@@ -75,6 +75,71 @@ DEFAULT_CONFIG = {
         # 补注册后才能在配置面板 / 系统配置文件里真正调（当前默认值 = 原调用点默认值，零行为漂移）。
         "retry_times": 2,            # 真实调用失败后的重试次数（指数退避；流式恒不重试）
         "retry_backoff_ms": 500,     # 首次重试退避毫秒（第 n 次 = backoff * 2^n）
+        # ── 2026-10-09 超时治理：单次超时可配 + 总预算闸门（0=不启用）──
+        #实测：180×(2+1)+退避 ≈ 541.5s（实测 545s）⇒ 用户等 9 分钟换一个异常。
+        "http_timeout_s": 180,           # 单次 HTTP 超时（秒）
+        "total_timeout_budget": 0,       # 一次调用含重试的总预算（秒）；0=不启用
+        # reasoning 思考预算：思考与正文共享 max_tokens ⇒ 思考失控会把耗时线性拉长
+        #   （实测 10-05 前思考占输出 4%，今天占 63%，慢调用占 72%）
+        "thinking_budget": 0,            # 给思考的独立上限（token）；0=不启用
+        "thinking_reserve_tokens": 0,    # 给正文的保底额度（token）；0=不启用
+        # 思考超限**告警**阈值（token）；0=不启用。★ 只留痕不拦截（拦截用 thinking_budget）
+        "thinking_warn_tokens": 0,
+        # 按 intent 分流思考（L1）。★ 未命中的 intent 不发 thinking 字段（保持原行为）。
+        #   数据依据见 core/config.py 的 schema desc（廉价任务思考占 58~86% 属浪费）。
+        # ★ 只配 **off**（纯收益：这些任务思考占 58~86% 却只产出几十~几百 token）。
+        #   **on 列表刻意留空**：给 plan_refine/plan_summary 等重产码任务"开思考"
+        #   是**质量赌注**（会新增耗时与 token）⇒ 该由米爸决定，不擅自上。
+        # ── 2026-10-10 新增 `chat_probe`/`chat_answer`/`chat_repair`（主对话三类轮次）──
+        #   依据：**真实 A/B 实测**（2026-10-10，flashY / deepseek-v4-flash，
+        #   真库 id=10035~10040 可复核），不再是推断：
+        #     · 探针轮带工具：思考 16tok → 关思考 0，**tool_calls 保留**（1→1）
+        #     · 难任务带工具：思考 824tok / 6.6s → 关思考 0 / **1.8s**，tool_calls 仍保留
+        #       （token 省 78%、耗时省 73%）
+        #     · 纯推理问答：关思考后要点齐全（part def / port 都答到），
+        #       耗时 4.2s→1.4s，篇幅 287→258 字（**未见质量损失**）
+        #   ⚠️ **只加 probe（探针轮）**：答案轮/修复轮的正文长、思考确有收益，
+        #     保持默认（不关）—— 收益有限、风险未测。
+        "thinking_policy": '{"off": ["crypto_probe", "probe", "routing", "doc_summary", '
+                           '"chat_probe"], "on": []}',
+        # ── 2026-10-10 形态规则层（**可维护性**：让新增 intent 零配置被覆盖）──
+        # ★ 为什么需要：`_intent` 是**动态**的 —— `orchestration.py` 用 `agent_def.name`
+        #   当 intent，agents 表有**27 个** active Agent（含中文名）。
+        #   实测：off 名单 4 个对 27 个 Agent 名的**覆盖率 = 0/27**
+        #   ⇒ 纯名单制必然漂移，漏加一个 = 思考失控（实测 99.2% / 4017秒）。
+        #   ⇒ 规则按**任务形态**判定，新增 intent 天然被覆盖，不需人记得配。
+        # ⚠️ **2026-10-10 已改为默认 True**（原为 off，因缺 A/B 证据）。
+        #   开启依据 = **真实 A/B**（flashY / deepseek-v4-flash，真库 id=10035~10038）：
+        #     · 探针轮关思考后 tool_calls **保留**（1→1）—— 唯一会让功能坏掉的风险，已排除
+        #     · 难任务：思考 824→0、耗时 6.6s→1.8s、token 省 78%
+        #   ⇒ 风险已用真机实验排除，故放开。
+        #   ⚠️ 若将来换 provider / 换模型，**建议先重跑 verify_real_thinking_ab.py**。
+        "thinking_shape_enabled": True,
+        # 规则1阈值：带 tools + 上限 ≤ 此值 + **intent 名字带探针语义** ⇒ 关思考
+        #   默认 1200：实测廉价决策类任务上限 ≤ 1224，重产码 ≥ 8192，分界清晰。
+        #   ⚠️ **三重条件缺一不可** —— 单看 max_tokens 会误伤 `view_expansion`
+        #     （实测 max_ct 仅 76，但它是重产码任务）。
+        #   ⚠️ 不要调太大 —— 工具调用需要推理，长 JSON 参数的工具可能被误判。
+        "shape_probe_max_tokens": 1200,
+        # 规则 2 阈值：无 tools 且 max_tokens ≤ 此值 ⇒ 判定"廉价轮"⇒ 关思考；0=不启用
+        "shape_cheap_max_tokens": 0,
+        # ── 2026-10-10 数据自校正层（第 3 层：覆盖**任意**新增 intent）──
+        # ★ 为什么需要：形态规则只认「探针语义」这一类名字。
+        #   若新增一个叫「快速摘要」的 Agent（正文几十 token、思考占 80%），
+        #   形态规则不命中 ⇒ 思考继续失控 ⇒ **仍然要人配**。
+        #   ⇒ 这层按**真库实测数据**判定，不需要知道 intent 名字语义。
+        # ⚠️ **默认关闭 + 只建议不自动改**（三条安全阀，见 llm/thinking_autotune.py）：
+        #   ① 样本量 <min_samples 不判（数据不足不能定性）
+        #   ② 只产出**建议清单**，写不写进配置由人决定（避免统计口径错误直接变线上行为）
+        #   ③ 只 SELECT，不写库
+        "autotune_enabled": False,
+        # 思考占比阈值：≥ 此值且平均产出 ≤ autotune_max_output ⇒ 建议关思考。
+        #   0.5 来自实测分界：廉价任务 58%~98%，重产码 0%~2.5%（中间几乎无重叠）
+        "autotune_min_ratio": 0.5,
+        # 平均产出上限（token）。实测廉价任务 ≤ 1224，重产码 ≥ 4336
+        "autotune_max_output": 1200,
+        # 样本量下限：低于此数不判（2 次调用的均值没有代表性）
+        "autotune_min_samples": 5,
         "fallback_provider_id": 0,   # 主 provider 重试后仍失败时的备选 provider id（0=不启用）
         # ── P1-4（2026-10-06）熔断器：连续失败就停止打这个下游 ──
         # 与上面retry_times 的分工：retry 管**单次调用内**的瞬时抖动，
@@ -485,6 +550,9 @@ DEFAULT_CONFIG = {
     },
     "ingest": {
         "draft_flow": False,   # AI 建模入库发布门禁：确认后走合并请求待审/自动发布（默认关，保全现状）
+        # ── L1（2026-10-10）标题路径增强 HyDE 问句（借鉴 ragflow qa.go 算法）──
+        # ★ 默认关：关闭时 enhanced_hyde_questions() 返回 None ⇒ 行为与改动前逐字相同。
+        "hyde_heading_enabled": False,
         "review_source_types": ["ai_generated"],  # 需强制待审的来源（draft_flow 开启时生效）
     },
     "extract": {
@@ -588,7 +656,13 @@ DEFAULT_CONFIG = {
         # （graph_retrieve / validate / impact_analyze）。任何「必须常驻」的新工具都得在这里登记，
         # 否则它的注入会退化成「看语义预筛的心情」——对自校验闭环而言，概率性注入等于没有。
         # 逗号分隔工具名；留空=无追加（回到改动前行为）。
-        "core_keep_extra": "sysml_v2_validate",
+        # ★ 2026-10-10 追加 `sysml_v2_autofix`：实测它**被 JIT 预筛裁掉了** ——
+        #   `view_expansion` 的工具清单实测只有 6 个，**不含 autofix**。
+        #   ⇒ 我上一轮修的「收尾轮保留修复工具」（`_repair_tool_subset`）
+        #     与 L0 卡里「有硬错就调 autofix」都**没有前提**：
+        #     模型压根看不到这个工具 ⇒ 实测 autofix 调用 **0 次**。
+        #   ⇒ 修复的**第一前提**是"它得在清单里"，这才是根因。
+        "core_keep_extra": "sysml_v2_validate,sysml_v2_autofix",
     },
     "kb_scope": {
         # KB-S 消费范围（Agent 的 kb_scope.docs）**失效自愈**开关。
@@ -616,6 +690,17 @@ DEFAULT_CONFIG = {
         # 当前 0.75 时正例仅短路 12/18。取「仍覆盖全部正例的最高阈值」0.70（阈值扫描平台上沿）。
         # ⚠️ 负例误短路那 1 例不随阈值变化（conf=0.90），属实体链接精度问题，非阈值问题。
         "route_threshold": 0.70,     # 检索路由阈值：图谱置信度 ≥ 阈值 → 纯图路由（跳过向量检索）
+        # ── RAGFlow 接入（L3，2026-10-10）─────────────────────────────────
+        # ⚠️⚠️ 这 6 项**必须同时落在 DEFAULT_CONFIG**，
+        #   只登记 CONFIG_SCHEMA 是不够的——config.get() 读 _CONFIG（由 DEFAULT_CONFIG 构建），
+        #   缺这里 ⇒ get() 返回 None、as_bool 拿不到默认 ⇒ **开关调不动**（静默失效）。
+        #   （实测踩过：schema 里写好了、DEFAULT 漏了，门禁当场判红。）
+        "ragflow_enabled": False,        # ★ 默认关：不部署 RAGFlow 时行为逐字不变
+        "ragflow_base_url": "",          # 服务地址；启用时必填
+        "ragflow_api_key": "",           # API 令牌（界面 → 头像 → API 令牌）
+        "ragflow_dataset": "mbse",# 目标知识库名（不存在自动建）
+        "ragflow_chunk_method": "qna",   # naive / qna(★DeepDoc 模板切片) / overview
+        "ragflow_embedding_model": "BAAI/bge-m3",  # ⚠️ 改了会让已入库向量口径不一致
         # ── P0-4（2026-10-04）检索 project 维度 —— ⚠️ **已冻结：不要开启** ──────────
         # 架构决策（米爸 2026-10-04 拍板）：「文档向量库、图库**不需要基于项目隔离，
         #   是统一使用的数据底座**」。图谱/文档/本体对所有项目可见，这是**设计意图**。
@@ -656,7 +741,13 @@ DEFAULT_CONFIG = {
         # ndcg@10 仅 0.227 → 0.225（**+0.002，可忽略**）；但评测耗时 196.2s → 28.1s（**慢 7 倍**），
         # 且线上每轮多 2 次 LLM 往返（rag_rerank ~1775 + rerank ~810 tokens，**缓存命中恒 0**）。
         # 结论：当前语料/配置下 LLM 重排是纯成本。旋钮保留，换语料或换 provider 后可置 true 重评。
-        "rerank_enabled": False,     # LLM Rerank 重排开关（LLM 不可用/超时静默回退原排序）
+        "rerank_enabled": False,         # LLM Rerank 重排开关（LLM 不可用/超时静默回退原排序）
+        # ★ 重排专用 provider（2026-10-10）：实测默认 provider 可能**整体不可用**
+        #   （所有 intent 一律 31.7s 超时、ct=0）⇒ 重排 100% 静默降级，
+        #   表现为"开关开了但排序一字未变"，排查花了 4 轮。
+        #   ⚠️ **必须在 DEFAULT_CONFIG 的 rag 组**（与 CONFIG_SCHEMA["rag"] 同组），
+        #      否则 config.get("rag", ...) 读不到 ⇒ 又一次"注册了但调不动"。
+        "rerank_provider_id": 0,
         "rerank_max_candidates": 10, # 送 LLM 重排的候选上限（应 ≤ top_k，否则上限形同虚设）；0 = 全部候选
         # ── P0 记忆召回（2026-09-29）───────────────────────────────────────────
         # 背景：累积层（agent_memory/project_memories）早就建好，但检索侧零消费 ——
@@ -880,6 +971,39 @@ CONFIG_SCHEMA = {
         "stream_include_usage": {"type": "bool", "desc": "流式请求显式带 stream_options.include_usage（默认关；DeepSeek 流式默认就发 usage 帧，仅部分兼容端点需要打开）"},
         "retry_times":          {"type": "int", "desc": "真实调用失败重试次数（指数退避；流式恒不重试）"},
         "retry_backoff_ms":     {"type": "int", "desc": "首次重试退避毫秒（第 n 次 = 该值 × 2^n）"},
+        # ── 2026-10-09 超时治理（实测 v4/v1 两次踩中「等 9 分钟换一个异常」）──
+        # 原`httpx timeout=180` 是**硬编码**，且与 retry_times **相乘**：
+        #   180 × (2+1) + 退避 ≈ **541.5 秒**（实测 545s 吻合）。
+        "http_timeout_s":       {"type": "int", "desc": "单次 HTTP 调用超时秒数（默认 180）。★ 改小前先确认慢模型：deepseek-v4-pro 实测单次 121s"},
+        "total_timeout_budget": {"type": "int", "desc": "★ **一次调用（含全部重试）的总时间预算**秒数，默认 0=不启用。启用后即使 http_timeout_s × retry_times 仍会乘出长尾，也会被这个闸门截断（实测不加它最坏 541s）"},
+        # ── 2026-10-09 reasoning 思考预算（**根治** 541s 超时的真因）──
+        # 实测：思考与正文**共享 max_tokens**，而 qwen3.8-* 默认开着思考 ⇒
+        #   10-05 前思考占输出 4%（给用户 96%）→ 今天占 **63%**（给用户仅 37%），
+        #   慢调用占 **72%**；极端一例 98% 的额度用来思考、只给用户 103 token。
+        #   ⇒ 按 20~80ms/token 线性拉长耗时 ⇒ 撞超时 ⇒ 重试 ⇒ 更慢（乘法放大）。
+        "thinking_budget":         {"type": "int", "desc": "★ **给 reasoning 思考的独立上限**（token），默认 0=不启用。思考与正文共享 max_tokens，不设限时思考可吃掉 63% 输出（实测）"},
+        "thinking_reserve_tokens": {"type": "int", "desc": "★ **给正文的保底额度**（token，思考不得吃光），默认 0=不启用。实际压算 max_tokens = min(max_tokens, thinking_budget + thinking_reserve_tokens)"},
+        "thinking_warn_tokens": {"type": "int", "desc": "★ **思考超限告警阈值**（token），默认 0=不启用。只在 `_record_usage` 打 WARNING（流式/非流式唯一共同点），**只留痕不拦截**（拦截用 thinking_budget）。实测 310/6890 次调用 reasoning>2000tok，极端例 13430/13535=99.2% 耗 4017s。按 (intent, provider) 去重防刷屏"},
+        # ── 2026-10-09 thinking 按 intent 分流（L1；粒度=任务维度）──
+        # 依据实测（llm_usage_stats 按 intent 聚合思考占completion 的比例）：
+        #   廉价任务（输出 <1200 tok）思考占 58%~86% ⇒ 纯浪费
+        #     crypto_probe 30tok/86%、probe 863/82%、routing 217/69%、doc_summary 331/58%
+        #   重产码任务（输出 >4000 tok）思考占 0%~1.4% ⇒ 本该开
+        #     plan_refine 5697/0%、plan_summary 4336/1.4%、impact_advice 1619/0%
+        # ⚠️ **三态语义**（关键，见 openai_compat 注释）：
+        #   命中 off ⇒ 显式发 {"type":"disabled"}（**必须显式**，不发=模型端仍按默认开启）
+        #   命中 on  ⇒ 显式发 {"type":"enabled"}
+        #   **其余一律不发该字段**（保持改动前行为；否则全链路会被一起关掉思考）
+        "thinking_policy": {"type": "str", "desc": '★ **按 intent 分流思考**的 JSON：{"off":[...关思考的 intent...],"on":[...开思考的 intent...]}。★ 未命中的 intent **不发 thinking 字段**（保持原行为），**切勿**配"默认关闭"——那会把重产码任务的思考也一起关掉（见 openai_compat 缺陷 2 注释）。★ **界面改本项即时生效**（走`/api/system/config/static` → 写 `~/.workbuddy/mbse_config.json` → `reload()` → `get()` 读到；2026-10-10 实测链路确认，此前"改 settings 表无效"的提示是错的）。⚠️ 改完需**新建会话**才对已在跑的会话生效（分流在调用时读配置）'},
+        # ── 形态规则层（可维护性：新增 intent 零配置被覆盖）──
+        "thinking_shape_enabled": {"type": "bool", "desc": "★ **按任务形态自动判定思考**的总开关，默认 false=不启用（零行为漂移）。★ 为什么需要：`_intent` 是动态的（编排层直接用 Agent 名当 intent，库里有27 个 active Agent 含中文名），实测 off 名单对 Agent 名覆盖率 **0/27** ⇒ 纯名单制必然随系统演进而漂移。开启后新增 intent 也能被自动覆盖，不需人记得改配置"},
+        "shape_probe_max_tokens": {"type": "int", "desc": "★ 形态规则1：带 tools 且 max_tokens ≤ 此值 ⇒ 判为「探针轮」⇒ 关思考（默认 1200）。依据实测：廉价决策类任务思考占 58~98% 却只产几十~几百 token，而重产码任务上限 ≥8192。⚠️ **不要调太大** —— 工具调用本身需要推理，长 JSON 参数的工具可能被误判而丢 tool_calls"},
+        "shape_cheap_max_tokens": {"type": "int", "desc": "形态规则2：无 tools 且 max_tokens ≤ 此值 ⇒ 判为「廉价轮」⇒ 关思考；0=不启用（默认关，因为无 tools 的调用里混着大量重产码任务，误判风险高）"},
+        # ── 数据自校正层（第 3 层）──
+        "autotune_enabled": {"type": "bool", "desc": "★ **按真库实测数据自校正**思考分流的开关，默认 false=不启用。★ 为什么需要：形态规则只认「探针语义」这类名字，若新增「快速摘要」这类 Agent（思考占 80%、只产几十 token）则规则不命中、思考继续失控 ⇒ 仍要人配。这层按 `llm_usage_stats` 实测聚合判定，**不需要知道 intent 名字**。⚠️ 只产出**建议清单**（`llm.thinking_autotune.suggest_thinking_off()`），不自动改配置"},
+        "autotune_min_ratio": {"type": "float", "desc": "★ 自校正的思考占比阈值：≥ 此值**且**平均产出 ≤ autotune_max_output ⇒ 建议关思考（默认 0.5）。依据实测分界：廉价任务 58%~98%，重产码 0%~2.5%，中间几乎无重叠"},
+        "autotune_max_output": {"type": "int", "desc": "自校正的平均产出上限（token，默认 1200）。实测廉价任务 ≤1224，重产码 ≥ 4336"},
+        "autotune_min_samples": {"type": "int", "desc": "★ 安全阀：样本量低于此数**不判**（默认 5）。理由：2 次调用的均值没有代表性，而误判代价（关掉重产码的思考）远大于收益"},
         "fallback_provider_id": {"type": "int", "desc": "主 provider 重试后仍失败时的备选 provider id（0=不启用）"},
         "circuit_breaker_enabled": {"type": "bool", "desc": "P1-4 熔断总开关：连续失败时停止打该 provider（关=仅重试）"},
         "circuit_breaker_fail_threshold": {"type": "int", "desc": "连续可重试失败 N 次后熔断该 provider"},
@@ -925,6 +1049,14 @@ CONFIG_SCHEMA = {
         "max_tokens":         {"type": "int",  "desc": "修订输出上限（token，默认 8000；修订输出会整体替换报告 → 报告长度真正天花板）"},
         "eval_in_chars":      {"type": "int",  "desc": "评审时可读报告字符数（默认 24000，头尾采样；原先硬编码 [:2000] 只留头）"},
         "eval_max_tokens":    {"type": "int",  "desc": "评审输出上限（token，默认 3072；原先硬编码 1024，思考模型的 reasoning 会把额度吃光导致 JSON 被截断）"},
+    },
+    # ── agent 组（2026-10-09 新增）──
+    # ★ 为什么现在才进 schema：`max_tool_rounds` 一直在代码里读 `config.get("agent", …)`，
+    #   但**本组从未登记进 CONFIG_SCHEMA** ⇒ 界面上看不到、改不了，只能改代码。
+    #   实测（2026-10-09）：`CONFIG_SCHEMA` 无agent 组、`settings` 表 `agent.*` 0 行。
+    "agent": {
+        "max_tool_rounds":   {"type": "int", "desc": "ReAct 工具轮**绝对硬上限**（默认 12，防死循环）。★ 注意语义：正常成功推进**不受它限制** —— 成功轮不扣预算，见 max_failed_rounds"},
+        "max_failed_rounds": {"type": "int", "desc": "★ **失败轮预算**（默认 3）：只有工具失败/无效的轮次才扣；成功推进不扣（米爸 2026-10-09 纠正的语义，旧实现把成功轮也计入总轮数⇒ 连坐截断）"},
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},
@@ -1011,6 +1143,13 @@ CONFIG_SCHEMA = {
     },
     "ingest": {
         "draft_flow":          {"type": "bool", "desc": "AI 建模入库发布门禁（确认后走合并请求待审/自动发布）"},
+        # ── L1（2026-10-10）标题路径增强 HyDE 问句 ─────────────────────────
+        # 现状问题（实测）：`_generate_hyde_questions` 是「术语+固定模板」，
+        # 全库问句句式几乎一样 ⇒ 同质化稀释召回。
+        # 本项开启后：**含 markdown 标题的块**改用标题层级路径合成多种真实问法
+        #（算法借鉴 ragflow `qa.go:216 extractQAMarkdown` 的标题栈，纯本地实现、零依赖）；
+        # 无标题块（纯正文/表格/OCR）自动回落到原模板 ⇒ **永不劣化**。
+        "hyde_heading_enabled": {"type": "bool", "desc": "★ 用标题层级路径合成 HyDE 假设问题（替代单一模板，提升问句区分度）。仅对含 markdown 标题的块生效；无标题块自动回落原模板。默认关=行为不变"},
         "review_source_types": {"type": "str", "desc": "需强制待审的来源列表（逗号分隔，如 ai_generated）"},
     },
     # 2026-09-21 补注册：DEFAULT_CONFIG 里早有 extract/vision 段，但此前未进 CONFIG_SCHEMA，
@@ -1047,13 +1186,27 @@ CONFIG_SCHEMA = {
         "deliver_pick":        {"type": "str", "desc": "编排交付物取码策略：longest=只取最长的一份（默认，保证可校验单模型）/ all=全部拼接（旧行为）"},
     },
     "tool_jit": {
-        "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）"},
+        "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）。★ 2026-10-10 实测：修复类工具必须列进来，否则会被语义预筛裁掉（实测 view_expansion 清单 6 个里原本没有 sysml_v2_autofix，导致 autofix 一次都没被调用）"},
     },
     "kb_scope": {
         "docs_missing_fallback": {"type": "bool", "desc": "白名单文档不存在时剔除失效项；全失效则退化为不限文档"},
         "docs_missing_warn":     {"type": "bool", "desc": "白名单失效时写日志并在检索结果回显 kb_scope_warn"},
     },
     "rag": {
+        # ── RAGFlow 接入（L3 路线，2026-10-10）────────────────────────────
+        # 定位：RAGFlow **只替换「解析 + 切片」**，检索/图谱/四项治理全不动。
+        # 实测依据（ragflow-main v1.0.0-rc1，Go 重写版）：SDK 仅依赖
+        # requests + beartype（Apache-2.0）⇒ 客户端零重依赖、不破铁律 4；
+        # ⚠️ 但服务端仍需 Docker + ES + MySQL + Redis + 对象存储。
+        # ⚠️⚠️ **默认 false**：不部署 RAGFlow 时行为与改动前逐字相同。
+        # 启用后任何异常（连不上/认证失败/解析超时/返回空）自动回落本地
+        # chunk_text_structured —— 入库主链路绝不被可选依赖拖垮。
+        "ragflow_enabled":        {"type": "bool",  "desc": "★ 是否用 RAGFlow 做解析+切片（默认关）。关闭=本地 chunk_text_structured，零漂移。启用后失败自动降级回本地，绝不影响入库"},
+        "ragflow_base_url":       {"type": "str",   "desc": "RAGFlow 服务地址（如 http://127.0.0.1:9380）。⚠️ 仅启用时必填，未填⇒适配层直接返回 error 并降级"},
+        "ragflow_api_key":        {"type": "str",   "desc": "RAGFlow API Key（在 RAGFlow 界面 → 右上角头像 → API 令牌 生成）"},
+        "ragflow_dataset":        {"type": "str",   "desc": "目标知识库名（不存在会自动创建）。建议按项目/分支分库，如 mbse-default"},
+        "ragflow_chunk_method":   {"type": "str",   "desc": "切片方法：naive（按字数）/ qna（问题-答案对，★推荐，DeepDoc 模板化切片）/ overview（摘要视角）"},
+        "ragflow_embedding_model":{"type": "str",   "desc": "RAGFlow 侧 embedding 模型。⚠️ 改了会让已入库分块的向量口径不一致，建议与本工程 embedding 配置保持同源"},
         "route_threshold":       {"type": "float", "desc": "检索路由阈值：图谱置信度≥阈值走纯图路由（跳过向量检索）。0.70=已标定（2 实体命中满分恰 0.700，故 0.75 时该类正例永不短路）"},
         "recall_k":              {"type": "int",   "desc": "每路（BM25/向量）召回宽度（0=回落 top_k*2）"},
         "top_k":                 {"type": "int",   "desc": "RRF 融合后保留的候选池（送 LLM 重排）"},
@@ -1068,6 +1221,7 @@ CONFIG_SCHEMA = {
         "confidence_high":       {"type": "float", "desc": "命中置信等级「高」分界（真向量相似度口径）"},
         "confidence_mid":        {"type": "float", "desc": "命中置信等级「中」分界"},
         "rerank_enabled":        {"type": "bool",  "desc": "LLM Rerank 重排开关（失败静默回退原排序）"},
+        "rerank_provider_id":   {"type": "int",   "desc": "★ 重排专用 LLM provider_id（0=用默认）。实测默认 provider 可能整体不可用（所有 intent 一律 31.7s 超时、ct=0）⇒ 重排 100% 静默降级、表现为「开关开了但排序未变」。重排每次查询都跑、对延迟敏感，应独立指定更稳的 provider"},
         "rerank_max_candidates": {"type": "int",   "desc": "送 LLM 重排的候选上限（应 ≤ top_k，0=全部候选）"},
         "memory_enabled":        {"type": "bool",  "desc": "P0 记忆召回开关：把已沉淀的 agent_memory/project_memories 作为一路召回源"},
         "memory_weight":         {"type": "float", "desc": "记忆一路的融合权重（乘进该路得分；<1=让位给原文检索）"},

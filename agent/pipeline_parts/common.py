@@ -36,6 +36,67 @@ from agent.utils import (
 # P0-2：工具结果展示上限（SSE 事件与落库共用；超出截断并标记 truncated）
 _TOOL_RESULT_CAP = 6000
 
+# ── 2026-10-10 主对话任务类型标识（P0：让 llm.thinking_policy 管得到主对话）────────
+# ★ **为什么需要它**：`_intent` 此前只在辅助调用点传（如 `routing` / `doc_summary`），
+#   **主对话（ReAct 工具轮 / 收尾生成）全部没传** ⇒ `openai_compat` 里 `_who` 为空
+#   ⇒ 分流表**管不到它**。而真库实测这条路径恰恰是耗时第一：
+#   n=1856、思考占 completion **49.3%**、累计 **495 分钟**、最长 **4017s**
+#   （id=8188 `reasoning/completion=99.2%`）⇒ **最该管的路恰好没被接管**。
+#
+# ⚠️ **为什么用「任务类型」而不是业务 intent**：`intent` 变量在这两条路径上表达的是
+#   **业务意图**（如 `sysml_modeling` / `impact_analysis`），
+#   而思考分流的判据是**任务形态**（要不要调工具、正文多长、思考占比多少）
+#   —— 同一个业务意图下「探针轮」和「收尾生成轮」形态完全不同。
+#   混用会把"同一意图下所有轮次"绑成一个思考策略，粒度错位。
+#   ⇒ 这里定义的是**轮次角色**，与业务 intent 正交，可独立分流。
+#
+# 语义（为何这样分）：
+#   PROBE  = 带 tools 的探针轮（决定调不调工具）—— 决策性质，思考收益低
+#   REPAIR = 收尾修复轮（非流式独有：带修复工具改已知错误）
+#   ANSWER = 最终生成轮（流式收尾 / 无工具直出）—— 正文长，思考收益高
+CHAT_TASK_PROBE = "chat_probe"
+CHAT_TASK_REPAIR = "chat_repair"
+CHAT_TASK_ANSWER = "chat_answer"
+
+
+# ── 2026-10-10 收尾原因透传（消除"是哪个上限"的歧义）──────────────────────
+# 米爸提问："提示工具调用已达上限，是单个工具上限还是所有工具调用之和？"
+# ⇒ 要答清楚这个问题，前提是**收尾时知道到底撞了哪道闸**。
+# 本工程有四道闸（各自独立，不是同一个，也不是"调用次数之和"）：
+#   · MAX_TOOLS_PER_ROUND=3  单轮内工具**并发**上限（loop_protocol）
+#   · max_tool_rounds=12     ReAct **轮次**上限
+#   · max_failed_rounds=3    **失败轮**上限（成功轮不计数）
+#   · token 预算 60000       累计 token 上限
+def _lg_stop_reason(lg):
+    """取 LoopGuard 记录的真实停机原因；取不到 ⇒ ''（调用方据此走通用文案）。"""
+    try:
+        return str(getattr(lg, "stop_reason", "") or "")
+    except Exception:
+        return ""
+
+
+def _lg_failed_rounds(lg) -> int:
+    try:
+        return int(getattr(lg, "failed_rounds", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _lg_limit_of(lg, rounds_limit: int) -> int:
+    """按stop_reason 返回对应的**上限值**（用于提示文案里的具体数字）。"""
+    reason = _lg_stop_reason(lg)
+    if reason == "failed":
+        try:
+            return int(getattr(lg, "max_failed_rounds", 0) or 0)
+        except Exception:
+            return 0
+    if reason == "token_budget":
+        try:
+            return int(getattr(lg, "tokens_used", 0) or 0)
+        except Exception:
+            return 0
+    return int(rounds_limit or 0)
+
 # 2026-09-17 S3：回填给模型的工具结果上限（远小于展示上限，防长工具结果反复占用输入 token）
 _TOOL_MODEL_CAP = 3000
 # 2026-09-17 S3：上传资料注入 prompt 的字符上限（att_text 不在 _apply_context_budget 裁剪范围内）

@@ -47,8 +47,17 @@ _PKG_RE = re.compile(r"^\s*(?:standard\s+library\s+)?package\s+(\w+)\s*\{", re.M
 #   （实测踩过：`attribute def X :> Base {` 的 typed 被抽成 ">"，parent 为空 ⇒ 继承链丢失）
 # ⚠️ `sp` 分支是为 `part def X : Y : Z` 这类多重定型留的，但标准库里基本不出现，
 #    保留以免误吞。
+# ⚠️⚠️ 2026-10-09 修：`name` 原来只认 `\w+`，**漏掉 `<gv>` 这种尖括号标识符**。
+#   标准库**确实**在用它，且是系统建模的核心写法：
+#     `view def <gv> GeneralView`（StandardViewDefinitions）
+#     `attribute <g> gram : MassUnit`（SI 单位）
+#   ⇒ 实测 **7 个包声明了却索引到 0 个成员**，`sysml_stdlib_meta` 对它们一律回
+#     「未找到包」—— 而模型据此以为自己写的包不存在，**去查标准库 /改代码**。
+#   实测该包清单正是八视图耗时的大头（`sysml_stdlib_meta` 占工具调用 13/41 = 32%）。
+#   放宽为「`<...>` 或 `\w+`」后：全库定义 1286 → **1308（+22）**，4 个文件从 0 变非 0。
+#   判据：`tools/verify/verify_stdlib_index_coverage.py`（含变异自证）。
 _DEF_RE = re.compile(
-    r"^[ \t]*(?P<kind>(?:[a-z]\w*\s+)*?def)\s+(?P<name>\w+)"
+    r"^[ \t]*(?P<kind>(?:[a-z]\w*\s+)*?def)\s+(?P<name><[^>\n]+>|\w+)"
     r"(?:\s*:\s*(?P<typed>[^:>{\n]+?))?"
     r"(?:\s*:\s*(?P<sp>[^:>{\n]+?))?"
     r"(?:\s*:\s*>\s*(?P<parent>[\w:]+?)\s*(?=[{\s;]|$))?"
@@ -102,13 +111,21 @@ def build_index():
                     "typed": (m.group("typed") or "").strip(),
                     "line": line_no,
                 })
+            # ★ 2026-10-09 修：原为 `if members:` —— **"没有直接成员"的包整个不存在**。
+            #   实测 `DS_Views`（Domain Libraries/DSViewsAlias.sysml）只是
+            #   `package DS_Views { package SymbolicViews { … } }` 的**外层壳**，
+            #   自身 0 个成员 ⇒ 被整包丢弃 ⇒ 工具回「未找到包 DS_Views」。
+            #   ⇒ 模型据此以为这个包不存在。
+            #   现在**无条件登记包**（成员为 0 也登记），只有 `file` 与空成员列表。
+            #   ⚠️ 不能改成"登记所有 package"：`Symbols` 之类嵌套包会把
+            #   `member_owner` 的归属算错，保持现有归属逻辑不变。
+            pkgs.setdefault(pname, {"file": rel, "members": [], "kinds": Counter()})
             if members:
-                pkgs.setdefault(pname, {"file": rel, "members": [], "kinds": Counter()})
                 pkgs[pname]["members"].extend(members)
                 for m in members:
                     pkgs[pname]["kinds"][m["kind"]] += 1
                     member_owner.setdefault(m["name"], []).append(pname)
-                total += len(members)
+            total += len(members)
     for p in pkgs.values():
         p["kinds"] = dict(p["kinds"])
     _index = {"packages": pkgs, "owner": member_owner, "files": len(files), "members": total}
@@ -198,6 +215,49 @@ def _fmt_one(idx, name):
     return "\n".join(out)
 
 
+#: 2026-10-09 实测：模型把包名传成**自造参数名**（`package_name` / `__packages__`），
+#: 而契约里的参数叫 `package`。`exec_tool` 不校验未知参数 ⇒ 直接落到 `name` 分支
+#: ⇒ 回「标准库中未找到「StandardViewDefinitions」」。
+#:
+#: ★这个假阴性**极贵**：v1 里 `sysml_stdlib_meta` 调了 **4 次**，其中 3 次
+#:   都是这个原因（`name='StandardViewDefinitions'` / `name='Requirements'` /
+#:   `name='__packages__'`）。模型据此以为标准库没有这些包
+#:   ⇒ 去猜元类名 ⇒ 产出里出现 `import StandardViewDefinitions::*`。
+#:
+#: ⚠️ 实测基线（八视图首轮）：**同参数重复 0 次**，`probe_dup` 短路**一次都没触发**；
+#:   12 次「同工具重复」全是**不同参数**（属合理的多步查询，不是浪费）。
+#:   ⇒ 问题**不在重复调用**，而在**每次都查错**。
+#: 兼容别名：把常见自造名映射到契约参数，而不是让模型白跑一轮。
+_ARG_ALIASES = {
+    "package_name": "package",     # 模型最常自造的名字
+    "pkg": "package",
+    "packagename": "package",
+    "packages": "package",
+    "member_name": "name",
+    "member": "name",
+}
+
+#: 模型想「列全部包」时用的**自造成员名**（实测 v1 #2400：`name='__packages__'`）。
+#: 它不是契约参数，也查不到 ⇒ 现在显式当成「列包清单」的意图，**不当作成员名去查**。
+_PSEUDO_MEMBER_LIST = {"__packages__", "__package_list__", "packages", "all"}
+
+
+def _normalize_args(args: dict) -> dict:
+    """把自造参数名映射到契约参数，并回传可读的提示（不静默丢弃）。"""
+    out, remapped = dict(args), []
+    for k, v in list(out.items()):
+        kl = str(k).strip().lower()
+        tgt = _ARG_ALIASES.get(kl)
+        if tgt and not out.get(tgt):
+            out[tgt] = v
+            remapped.append(f"{k}→{tgt}")
+    # 伪成员名（要包清单）⇒ 清掉 name，让下面走"列包清单"分支
+    if str(out.get("name") or "").strip().lower() in _PSEUDO_MEMBER_LIST:
+        out.pop("name", None)
+        out["_want_pkg_list"] = True
+    return out, remapped
+
+
 def _stdlib_meta(args):
     try:
         idx = build_index()
@@ -206,8 +266,17 @@ def _stdlib_meta(args):
                 "result": f"标准库索引构建失败：{type(exc).__name__}: {exc}。"
                           f"⚠️ 这不代表标准库不可用 —— 请如实说明『未能查询标准库』，不要臆造元类。"}
 
+    _raw = dict(args or {})
+    args, _remapped = _normalize_args(_raw)
+    # 未知参数：显式点名，别让模型白跑一轮
+    _known = {"name", "package", "query"}
+    _unknown = [k for k in _raw if str(k).strip().lower() not in _known
+                and str(k).strip().lower() not in _ARG_ALIASES]
+
     name = str(args.get("name") or "").strip()
     pkg = str(args.get("package") or "").strip()
+    if args.pop("_want_pkg_list", None):
+        name, pkg = "", ""          # 显式要包清单（伪成员名转来的）
 
     if name:
         text = _fmt_one(idx, name)
@@ -215,6 +284,24 @@ def _stdlib_meta(args):
         text = _fmt_members(idx, pkg)
     else:
         text = _fmt_pkgs(idx)
+
+    # 拼上诊断尾巴：告诉模型「你传的参数名不对/这个包真的不存在」，
+    # 而不是让它把「工具说没有」当成事实。
+    if _remapped or _unknown:
+        tips = []
+        if _remapped:
+            tips.append(f"已按契约自动重映射：{', '.join(_remapped)}"
+                        f"（契约参数只有 name / package / query）")
+        if _unknown:
+            tips.append(f"以下参数不在契约里、已忽略：{', '.join(_unknown)}；"
+                        f"可用参数只有 name / package / query")
+        text = text + "\n\n⚠️ 参数提示：" + "；".join(tips)
+
+    #包名疑似被当成成员名来查：直接给出它到底是不是包
+    if name and not pkg and name not in idx["owner"]:
+        if name in idx["packages"]:
+            text += (f"\n\n💡 「{name}」是一个**包**（{len(idx['packages'][name]['members'])} 个成员），"
+                     f"不是成员名。要列它的成员请用 `package=\"{name}\"`。")
 
     if not idx["packages"]:
         return {"ok": False, "result": "标准库为空或路径不存在：" + LIB_DIR}

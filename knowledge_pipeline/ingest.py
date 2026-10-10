@@ -141,7 +141,7 @@ def _generate_hyde_questions(content: str, section: str = "") -> list:
         if len(terms) >= 3:
             break
     if section:
-        terms.insert(0, section.strip()[:30])
+        terms.insert(0, _clean_section(section))
     if terms:
         questions.append(f"什么是{terms[0]}？")
         if len(terms) > 1:
@@ -152,6 +152,41 @@ def _generate_hyde_questions(content: str, section: str = "") -> list:
         m = re.search(r"^(.{8,60}?[。！？；])", text)
         questions.append((m.group(1) if m else text[:40]) + "？")
     return questions[:3]
+
+
+def _clean_section(section: str) -> str:
+    """清洗 section 再用作假设问题的主语（2026-10-10 实测修复）。
+
+    ★ **实测发现的真缺陷**：原实现直接 `section.strip()[:30]` 塞进问句，
+      而 `section` 来自 markdown 标题行，**带原始标记**，导致真库里出现：
+        - `什么是## 附录 C：标准库可导入包清单（95 个）？`（**1261 种**带 `##`/`#`）
+        - `什么是0..* +elementId : String{id} +？`（把 KerML 基数语法当术语）
+        - `什么是1.2.1.2.3 子系统架构设计？`（编号被截断成 `1.2.1.2.3`）
+      ⇒ 16436 条 hyde 问题**重复率 60.4%**、语义大量失真。
+    ⇒ 这里剥 markdown 标记、去纯符号/编号、限长。
+    """
+    s = str(section or "").strip()
+    if not s:
+        return ""
+    # ① 剥 markdown 标记（# / ** / ` / >）
+    #    ⚠️ **不要把 `*` 放进全局剥离集**：实测 `0..*` 是 KerML 基数语法
+    #    （合法术语），全局剥 `*` 会变成 `0..`，反而破坏了有意义的术语。
+    #    粗体 `**Systems**` 用成对替换单独处理。
+    s = re.sub(r"^[#>\s]+", "", s)
+    s = re.sub(r"[#`>]+", "", s)
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)
+    # ② 剥编号前缀（"1.2.1 子系统架构" → "子系统架构"），但保留 "0..*" 这类有意义的
+    s = re.sub(r"^\d+(?:\.\d+)*\.?\s+(?=\D)", "", s)
+    s = re.sub(r"^\d+(?:\.\d+)*\.?$", "", s)          # 纯编号（如 "1.2.1"）→ 空
+    # ③ 去首尾空白与残留标点。
+    #   ⚠️ strip 时**不能**带上 `*`：`0..*` 是 KerML 基数语法（0..* 合法），
+    #   实测带上 `*` 会把它削成 `0..`（反而破坏了原本有意义的术语）。
+    #   同理不剥 `{}`——`String{id}` 的属性限定是有信息量的。
+    s = s.strip(" 　:：;；,，、-—_#")
+    if not s:
+        return ""
+    # ④ 长度限 30（与历史一致）
+    return s[:30]
 
 
 def chunking_params(filename: str = "") -> dict:
@@ -387,6 +422,23 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
             text, size=ck["size"], overlap=ck["overlap"], min_chunk=ck["min_chunk"],
             sentence_overlap=ck["sentence_overlap"], table_max_rows=ck["table_max_rows"],
             code_block_chunk=ck["code_block_chunk"], doc_title=detected_title or filename)
+        # ── RAGFlow 可选切片（L3 路线，2026-10-10）──────────────────────────
+        # 只替换「切片」这一段；检索/图谱/四项治理均不受影响。
+        # ★ 默认 ragflow_enabled=false ⇒ 下面立刻返回 None，**行为与改动前逐字相同**。
+        # ★ 失败也返回 None ⇒ 自动回落本地，**入库主链路不会被可选依赖拖垮**。
+        # ⚠️ 只对**有文本层**的文档走 RAGFlow：图片/OCR 已在本地做了阈值放宽
+        #    （min_chunk=8）与兜底单块包装，交给 RAGFlow 会丢这两个行为。
+        try:
+            from core import config as _rf_cfg      # 本函数作用域内无 config，需局部导入
+            from knowledge_pipeline.ragflow_adapter import ingest_with_ragflow
+            if _rf_cfg.as_bool("rag", "ragflow_enabled", False) and not _is_image_doc:
+                _rf = ingest_with_ragflow(
+                    conn, filename, file_type, content, doc_id=doc_id,
+                    size=ck["size"], overlap=ck["overlap"])
+                if _rf:
+                    structured = _rf
+        except Exception as e:      # 双保险：适配层内部已兜一层，这里再兜一层
+            logger.warning("ragflow 切片失败，回落本地: %s", e)
         # P0-3 数据卫生：按 content hash 去重 + 长度阈值（防重复拼接文档污染向量库，如 113/116）
         # 长度阈值与 chunk_text 一致：<min_chunk 且非完整句才丢弃（完整句豁免，防误杀短文本文档）
         # 2026-09-29 痛点1：图片文档 _is_image_doc 已在分块源头把 ck.min_chunk 放宽为 8；
@@ -482,6 +534,17 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
         _hyde_vecs = []
         for sc in structured:
             qs = _generate_hyde_questions(sc["content"], sc.get("section", ""))
+            # ── L1（2026-10-10）标题路径增强：仅在**含 markdown 标题**时接管─
+            # ★ 默认 ingest.hyde_heading_enabled=False ⇒ enhanced 返回 None
+            #   ⇒ 与改动前逐字相同（零漂移）。
+            # ★ 生成不出增强版时回落到模板版 ⇒ **永不劣化**。
+            try:
+                from knowledge_pipeline.chunking_deepdoc import enhanced_hyde_questions
+                _qs2 = enhanced_hyde_questions(sc["content"], sc.get("section", ""))
+                if _qs2:
+                    qs = _qs2
+            except Exception:
+                pass
             _hyde_questions.append(qs)
             _hyde_vecs.append(None)
         # ── P1-2（2026-10-04）入库侧成本闸：HyDE 向量化让 embedding 调用**翻倍** ──

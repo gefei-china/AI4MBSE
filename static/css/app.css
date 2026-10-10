@@ -660,6 +660,11 @@ body.sp-resizing .slide-panel,body.sp-resizing .modal .mbox{transition:none;}
 .svm-code code{font-family:Consolas,monospace;font-size:11.5px;color:var(--fg);line-height:1.55;white-space:pre;}
 /* 整合卡复用 sv-card 容器时：内部 tab 自带描边，外层 padding 收敛 */
 .svm-card-wrap{padding:0 !important;overflow:hidden;}
+/* 2026-10-10（米爸反馈）：代码卡片**下方**的操作条。
+   「归一校验」入口从卡头 tab 栏移到这里 —— 卡头是「代码/视图」的视图切换区，
+   放一个会触发后端副作用（生成归一清单）的操作按钮语义混淆，且挤占切换区宽度。
+   独立操作条：上边框分隔、灰底，与卡头在视觉上分层。 */
+.svm-actions{display:flex;align-items:center;gap:8px;padding:7px 10px;border-top:1px solid var(--line);background:#fafbfd;}
 .bd-stat-card{border:1px solid var(--line);border-radius:9px;padding:10px;background:#fff;text-align:center;}
 .bd-stat-card .n{font-size:22px;font-weight:700;line-height:1.2;}
 .bd-stat-card .l{font-size:11px;color:var(--mut);margin-top:2px;}

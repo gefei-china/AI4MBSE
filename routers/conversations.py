@@ -451,6 +451,38 @@ def commit_partial_message(conv_id: int, body: dict = None, conn=Depends(db_sess
     if not repo.get_conversation(conv_id):
         return JSONResponse({"error": "Conversation not found"}, 404)
     suffix = "\n\n> ⏹ 已停止生成（以上为已生成内容）" if body.get("stopped", True) else ""
+    # ── 去重（2026-10-10 修，实测会话 9335 出现两条几乎相同的 assistant 消息）──
+    # ★根因：用户点停止时**正常完成路径可能已落过一条**，本端点又写一条
+    #   ⇒ 库里两条内容相同（id=3884 len=2832 / id=3885 len=2853）。
+    #   后端 `_persist_partial_stream` 已按内容去重，本端点是**另一条写入路径**，
+    #   同样要防 —— 否则修了后端、前端这条路径仍会双写。
+    #判据：最后一条 assistant 去掉中断后缀后，与本次内容相同 ⇒ 不重复写。
+    # ⚠️2026-10-10 P0 修复（settrace 实测取证，勿回退）：
+    #   ① SELECT 必须**带上 id 列** —— 原写法只 SELECT role, content，
+    #      而下面 return 要取 `_last["id"]` ⇒ 命中去重时抛
+    #      `IndexError: No item with that key` ⇒ 被下面 except 吞掉
+    #      ⇒ **去重从未真正生效过**（会话 9336 实测：正常落库 + 停止固化 = 2 条）。
+    #   ② 查重失败必须**留痕**（原来 `pass` 静默，与"兜底必须可见"相悖）。
+    #      判红口径见 tools/verify/verify_dedup_and_finalize_hint.py。
+    try:
+        _last = conn.execute(
+            "SELECT id, role, content FROM messages WHERE conversation_id=? ORDER BY id DESC LIMIT 1",
+            (conv_id,)).fetchone()
+        if _last and _last["role"] == "assistant":
+            _lc = (_last["content"] or "").strip()
+            _marker = "以上为已生成内容"
+            if _marker in _lc:
+                # 已是固化消息：本次内容若已被它覆盖则跳过
+                _lc_body = _lc.split("> ⏹", 1)[0].strip()
+                if _lc_body == content.strip() or _lc_body.startswith(content.strip()[:200]):
+                    return {"ok": True, "id": _last["id"], "deduped": True}
+            elif _lc == content.strip() or (len(_lc) >= 200
+                                            and content.strip().startswith(_lc[:200])):
+                return {"ok": True, "id": _last["id"], "deduped": True}
+    except Exception as _dedup_err:
+        # 查重失败**不阻断固化**（宁可多写一条，也不能丢内容），但必须留痕：
+        # 静默 pass 会让"去重失效"这类缺陷完全不可见（2026-10-10 就是这么漏了一整天）。
+        print(f"[commit_partial] 去重判据异常，会退化为写入一条：{_dedup_err!r}")
     mid = repo.add_assistant_message(conv_id, content + suffix, msg_type="text")
     audit("王工", "conversation_partial_commit", f"会话#{conv_id} 固化已生成内容（{len(content)} 字）", conn=conn)
     return {"ok": True, "id": mid}

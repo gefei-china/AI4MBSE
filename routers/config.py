@@ -55,6 +55,38 @@ def update_static_config(body: StaticConfigIn):
         return JSONResponse({"ok": False, "error": f"保存配置失败: {str(e)[:200]}"}, 500)
 
 
+@router.get("/api/system/config/think-suggest")
+def get_think_suggestions():
+    """任务级思考：按真库实测数据给出「建议关思考」的意图清单（**只读，不改任何配置**）。
+
+    ★ 为什么要这个接口（而不是让用户自己查 SQL）：
+      自校正判据的三条阈值（思考占比 / 平均产出 / 样本量）都是**可配**的，
+      用户在界面上调完阈值后需要**立刻看到结果**，否则只能靠猜。
+
+    ★ 为什么「只建议不自动改」：
+      一次统计口径错误（比如某天embedding 降级导致 reasoning 全为 0）
+      若直接改配置，就是**把统计错误变成线上行为变更**，风险不可控。
+      ⇒ 采纳与否由人决定（界面点「加入 off 名单」也只是填进输入框，仍需手动保存）。
+    """
+    try:
+        from llm.thinking_autotune import suggest_thinking_off
+        items = suggest_thinking_off()
+        return {"ok": True,
+                "count": len(items),
+                "suggestions": [{"intent": s["intent"], "n": s["n"],
+                                 "ratio": round(float(s["ratio"]), 4),
+                                 "avg_completion": round(float(s["avg_completion"]), 1)}
+                                for s in items],
+                "thresholds": {
+                    "min_ratio": config.get("llm", "autotune_min_ratio", 0.5),
+                    "max_output": config.get("llm", "autotune_max_output", 1200),
+                    "min_samples": config.get("llm", "autotune_min_samples", 5),
+                },
+                "note": "只建议不自动改；采纳请用 POST /api/system/config/static 改 llm.thinking_policy"}
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": f"计算建议清单失败: {str(e)[:200]}"}, 500)
+
+
 @router.put("/api/system/config/runtime")
 def update_runtime_config(body: RuntimeConfigIn, conn=Depends(db_session)):
     """修改动态配置（settings 表，界面可调参数）。"""

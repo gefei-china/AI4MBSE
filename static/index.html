@@ -1215,6 +1215,7 @@
           <span data-tabgrp="stg" onclick="tab(this,'stg','st-hooks')" data-page-node-id="6GTByleBROiZq7EE5u3DV7">🪝 工具钩子</span>
           <span data-tabgrp="stg" onclick="tab(this,'stg','st-fextract')" data-page-node-id="87tTHhOFnxBDOt5cgXiGqT">📄 文件抽取</span>
           <span data-tabgrp="stg" onclick="tab(this,'stg','st-ctx')">🧠 AI 上下文</span>
+          <span data-tabgrp="stg" onclick="tab(this,'stg','st-think')" title="按**任务**类型决定是否让模型深度思考（与「模型管理」里的思考开关不同：那是模型级，这是任务级）">🧠 任务级思考</span>
           <span data-tabgrp="stg" onclick="tab(this,'stg','st-intent-samples')">🎯 意图样本</span>
           <span data-tabgrp="stg" onclick="tab(this,'stg','st-mem')">🧩 AI 记忆</span>
         </div>
@@ -1269,6 +1270,27 @@
             <button class="btn" onclick="saveCtxConfig()">💾 保存配置</button>
           </div>
           <div id="ctx-cfg-body"><div class="loading">加载中…</div></div>
+        </div>
+        <!-- ★ 任务级思考（2026-10-10）：thinking 的**任务维度**控制面。
+             ⚠️ 与「模型管理」里的 f-thinking **不是一回事**，极易混：
+               · 模型管理那一个= **模型级**（llm_providers.model_params.thinking_mode），
+                 对该provider 的**所有**调用统一开/关；
+               · 这里= **任务级**（按 intent / 任务形态 / 实测数据），
+                 决定"这一次调用要不要思考"。
+             为什么不并到 AI 上下文面板：该面板是**硬编码字段表** CTX_CFG_FIELDS
+             （cluster: budget/conf/dual/funnel/fuse/mem/ocr/route/split/vision），
+             **不含任何 llm.* 字段** ⇒ 挂进去也不会显示，故单开一个 tab。 -->
+        <div class="subpage" id="st-think" data-tabpanel="stg">
+          <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span style="font-size:11px;color:var(--mut);">
+              任务级思考：按<b style="color:var(--txt);">任务类型</b>决定这一次调用要不要深度思考
+              （<b style="color:var(--txt);">不是</b>「模型管理」里的模型级开关）。保存后<b style="color:var(--txt);">即时生效</b>。
+            </span>
+            <span style="flex:1"></span>
+            <button class="btn" onclick="loadThinkCfg()">🔄 刷新</button>
+            <button class="btn" onclick="saveThinkCfg()">💾 保存配置</button>
+          </div>
+          <div id="think-cfg-body"><div class="loading">加载中…</div></div>
         </div>
         <!-- 意图样本：意图识别**评测样本池**（采样 → 人工标注 → 评测闭环）。
              ⚠️ 只有 status=confirmed 才进评测；suggested 是系统自己的判定，拿它当标签是自我循环。 -->
@@ -1663,6 +1685,7 @@
     <script src="/static/js/mods/33-search.js" defer></script>
     <script src="/static/js/mods/34-graphtabs.js" defer></script>
     <script src="/static/js/mods/35-ctxconfig.js" defer></script>
+    <script src="/static/js/mods/36-thinking.js" defer></script>
     <script src="/static/js/mods/36-capability.js" defer></script>
 <div id="gnav-tip" data-page-node-id="0BjF8bZHUY5ifs1giLFsmS"></div>
 <div id="task-tip" data-page-node-id="dgEiAW2wHrbx1DoUK7cL0O"></div>

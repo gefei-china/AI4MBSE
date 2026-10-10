@@ -116,26 +116,84 @@ class QueryRouter:
 class BM25Engine:
     """KB-P1：零依赖 BM25 全文检索（中文友好：复用 bigram 切分 + 停用词过滤）。
 
-    - 构建：对 chunks 的 bm25_text（含章节前缀）建倒排索引 + 文档长度归一化
+    - 构建：对chunks 的 bm25_text（含章节前缀）建倒排索引 + 文档长度归一化
     - 检索：BM25 打分公式，精确词命中（补充向量检索的语义召回）
     - 零外部依赖、确定性可回归
+
+    ★ **中文分词增强（2026-10-10）**：默认仍是 **字符 bigram**（零依赖）。
+      实测 bigram 的精度损失（真实切分结果）：
+        `宽带通信系统` → [宽带, **带通**, 通信, **信系**, 系统]   ← 带通/信系 是无意义交叉
+        `需求条目化`   → [需求, **求条**, 条目, **目化**]
+        `part def`    → [pa, ar, rt, td, de]← 英文被按 2 字符切碎
+      ⇒ 若装了 jieba，改用「**jieba 精确词 + bigram 兜底**」混合切分
+        （保留 bigram 是为了不漏召回；纯 jieba 在未登录术语上会退化）。
+      ⚠️ **不装 jieba 也能跑**（自动回落 bigram，行为与改动前完全一致），
+         符合铁律 4「零新增依赖」。
     """
 
     K1 = 1.5
     B = 0.75
     STOP = {"的", "了", "和", "是", "在", "与", "及", "或", "个", "有", "对", "为", "从", "这", "那", "等", "并"}
 
-    def __init__(self):
+    #: MBSE / SysML 领域术语（jieba 自定义词典用）——
+    #: 从真库 6516 个唯一 hyde 首问里抽出的高频术语（2026-10-10 实测），
+    #: 这些词 jieba 默认会切错，必须显式登记。
+    MBSE_TERMS = (
+        "part def", "requirement def", "port def", "attribute def", "item def",
+        "package", "namespace", "import", "alias", "specialize", "subset",
+        "SysML", "KerML", "MBSE", "UML", "OCL", "requirement", "constraint",
+        "satisfy", "verify", "deriveReqt", "refine", "trace", "traceability",
+        "view def", "view usage", "view", "projection", "rendering", "expose",
+        "activity", "action", "control", "object", "parameter", "port",
+        "state", "transition", "guard", "do effect", "partition", "泳道",
+        "需求条目化", "条目化", "需求视图", "用例视图", "活动图", "状态机图",
+        "序列图", "参数图", "互连图", "块定义图", "内部块图", "概念图",
+        "系统运行交互视图", "追溯视图", "利益相关方需求视图", "场景视图",
+        "交换", "分配", " realizations", "抽象", "泛化", "聚合", "组合",
+        "时态", "双时态", "版本", "基线", "配置项", "追溯矩阵",
+    )
+
+    def __init__(self, use_jieba: bool = True):
         self._index = {}    # term -> {chunk_id: tf}
         self._doc_len = {}  # chunk_id -> length
         self._avg_len = 0.0
         self._total_len = 0  # 全部文档 token 累计（extend 增量构建用）
         self._docs = []     # chunk 元数据缓存（id 顺序对应）
+        self._jieba = self._init_jieba(use_jieba)
+
+    @classmethod
+    def _init_jieba(cls, enabled: bool):
+        """尝试加载 jieba + MBSE 术语词典；不可用返回 None（自动回落 bigram）。"""
+        if not enabled:
+            return None
+        try:
+            import jieba
+            for t in cls.MBSE_TERMS:
+                if t and " " not in t:
+                    jieba.add_word(t, freq=10000)
+            return jieba
+        except Exception:
+            return None
 
     def _tokens(self, text: str) -> list:
         ve = VectorEngine()
-        toks = ve._tokenize(text)
-        return [t for t in toks if t not in self.STOP and len(t) >= 2]
+        bigram = [t for t in ve._tokenize(text)
+                  if t not in self.STOP and len(t) >= 2]
+        if not self._jieba:
+            return bigram                      # ★ 零依赖路径：与改动前完全一致
+        # jieba 精确词（保留 len>=2 的中文/字母词）+ bigram 兜底（防未登录术语漏召回）
+        try:
+            words = [w.strip() for w in self._jieba.cut(text)
+                     if w.strip() and len(w.strip()) >= 2]
+        except Exception:
+            return bigram
+        # bigram 里若已是某个 jieba 词的子串，去重避免 TF 虚高
+        seen = set(words)
+        merged = list(words)
+        for b in bigram:
+            if b not in seen and not any(b in w for w in words):
+                merged.append(b)
+        return [t for t in merged if t not in self.STOP]
 
     def build(self, chunks: list) -> None:
         """chunks: [{id, bm25_text}] 或 [{id, content}]。幂等重建。"""

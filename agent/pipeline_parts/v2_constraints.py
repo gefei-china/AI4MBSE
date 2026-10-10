@@ -81,6 +81,30 @@ first A if C then B else D;      → if C { action X; } else { action Y; }
 render MyRendererDef;            → 先 rendering r : MyRendererDef; 再 render r;
 extend SubUC;                    → v2 没有 extend → include use case SubUC;
 
+■ 工具调用协议（2026-10-09 实测八视图后写入；**顺序错就是白花轮次**）
+实测 41 次工具调用里 80% 花在查资料，且 `sysml_v2_validate` 在 6/6 个会话里
+都排在**最后一次**⇒「校验了但没有轮次去修」。按此顺序走：
+  1) graph_retrieve   —— 可选，**最多 1 次**（查规范条文）
+  2) sysml_stdlib_meta —— 可选，**最多 1~2 次**，且**参数名只有 name / package**
+     · 查包成员用   package="StandardViewDefinitions"    ← 不是 name，也不是 package_name
+     · 查单个成员用 name="Part"
+     · 查全部包清单 **不传参数**即可；传 name="__packages__" 是错的
+  3) ★**先产出代码，再校验**：sysml_v2_autofix —— 手上还没有代码时不要调任何校验类工具
+  4) sysml_v2_validate —— 校验刚生成的代码；有硬错（判据 block）才继续下一步
+  5) 仍有硬错 → sysml_v2_autofix 修 → 回到 4；最多 2 轮，仍有错就**如实说明**不要再调
+  6) 收尾给出最终文本
+· ⚠️ 「手里没代码就调 validate / ast_extract」= 实测高频白跑（参数 code 为空的直接失败）。
+
+■ view / message / 数值的高频错（2026-10-09 实测 checker.jar 逐条验证过）
+· ❌ async message 'X' of Msg from a to b;   → `message` **没有 async 修饰符**
+  （实测同一行仅去掉 async，语法错 4~6 → 0；中文名/of/端口路径都不是问题）
+· ❌ 在 state 里写 expose 'X';                → `expose` **只能用在 view usage** 里
+  （知识文档 §4.15 有这条，实测 25 条语义错全部来自它）
+  ✅ 要表达"退出到某状态"，用 `exit` + 迁移，或写 transition，不是 expose
+· ❌ attribute x = 18446744073709551615;      → 大整数写**字面量**会报
+  `For input string: …`（实测 2 条语义错）
+  ✅ 写成约束表达式：2**64 - 1（实测 0 错）；或用 attr def + 单位类型
+
 ■ 需求与满足（TMS 领域最核心，实测翻车最多）
 · 细化 requirement r2 :> r1; ｜ 满足 satisfy r by <usage>; ｜ 分配 allocate r to <usage>;
 · ★ subject 与 satisfy 对同一个需求**只能二选一**：

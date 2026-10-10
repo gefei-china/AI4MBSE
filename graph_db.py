@@ -8,6 +8,34 @@
   本模块的图库是**查询镜像**——数据由物化消费链 / 存量迁移写入，只读查询走 SPARQL。
 - Writer 抽象对齐澄清文档「图数据库 Writer」接口，P2 可无缝切换 Jena Fuseki / Neo4j 适配器。
 
+★ **为什么图库永远只能是「镜像」，不能当权威源**（2026-10-10 实测补充）
+  权威源承载的是**工程治理**，不是检索：双时态（`valid_from/valid_to`，
+  实测 `knowledge_repo.py:100` 时态过滤 + `ontology_semantics.py:689` 时态推理）、
+  审核流（`status='approved'`，真库现存**107 条 `inferred` 待审**三元组）、
+  版本对齐（`sysml_version_id`，**15 个文件**在用，撑起五元素追溯链）、
+  画布坐标（`graph_x/graph_y`）。
+  ⇒ **任何图数据库（含 Neo4j / Fuseki / RAGFlow）都不会替你实现这四项**，
+    因为它们不是图存储的职责。⇒ 一旦把图库当权威源，治理能力**当场消失**，
+    且不可事后补回。
+  ⇒ 且这些能力**有活门禁在守**：`tools/verify/verify_entity_versions.py`
+    （[0]~[5] 分层判据 + 3 个变异自证 + 「UNIQUE(id,branch,valid_from) 真的在拦」）
+    —— 移除双时态/版本表会**直接判红**。
+
+★ **权威源换库时，本模块要改的面有多小**（2026-10-10 实测）
+  全文件 22 处 SQL：**18 处是 SPARQL**（图库查询，与权威源无关，**一行不用改**），
+  真SQLite 仅 **4 处**，全部集中在两个函数：
+    · `sync_pending_triples`（3 处：SELECT / UPDATE graph_stored / COUNT）
+    · `fetch_entity`（1 处：SELECT entities）
+  且本模块对 `sqlite3` / `db_conn` / `get_db` 的引用 **= 0 处**（纯图库层），
+  `conn` 一律由**调用方注入**（`triple_store.py:210`、`cards.py:657`，
+  两处都带 `config.graph_db.enabled` 开关 + 失败降级回SQLite）。
+  ⇒ 换权威源 = 改这 4 条 SQL + 提供一个 `conn` 等价物。
+  ⇒ 详见 `docs/图谱层稳定方案与治理字段移除影响-20261010.md`。
+
+⚠️ **红线**：`triples.graph_stored` 只是「已物化到镜像」的标记，
+  **不是**「权威源已确认」标记。两者语义不可混用——
+  把 `graph_stored` 当权威源标记会让**未审核数据被当成已确认**。
+
 IRI 约定（P0-1 / P0-2，2026-09-06 起：统一 HTTP 命名空间，且只依赖稳定 id）：
 - 基命名空间 : http://www.xingwang.mbse/     （与 ontology_owl.BASE 同源）
 - 本体类     : {BASE}ontology#{类局部名}      （TBox，与 OWL 导出完全一致）

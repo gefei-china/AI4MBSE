@@ -384,6 +384,13 @@ async function commitPartialStream(box){
     const _cid = el.dataset.convId || currentConvId;
     if(!_cid) return null;
     if(el.dataset.committedId) return el.dataset.committedId;   // 已固化过 → 幂等复用
+    // 2026-10-10（米爸实测「一轮对话输出两次内容」·会话 9336）：
+    //   后端 done 事件已带真实 message_id，且 `finishStream` 已用它重渲染 ⇒ 本轮**已落库**。
+    //   若此后仍走固化请求，就是同一段内容被写第二遍（库里 2 条 assistant 正文逐字相同）。
+    //   ⇒ 记下 done 的 message_id 并在这里短路，**从源头不再发这次请求**。
+    //   注：后端 `/messages/partial` 已有内容去重兜底，但那是最后一道防线，
+    //   正常完成后再发一次固化请求本身就是多余的往返 + 无谓的 200ms+ 写事务。
+    if(el.dataset.finalizedId) return el.dataset.finalizedId;   // 本轮已正常落库 → 不重复固化
     const bodyEl = el.querySelector('.body');
     const content = bodyEl ? (bodyEl.textContent || '').trim() : '';
     // 极短内容（只有 typing 占位/一两个字）没有固化价值，避免制造噪声消息

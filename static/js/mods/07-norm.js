@@ -18,15 +18,27 @@ window._nrState = window._nrState || {
   applying: null,   // 'ai' = AI 续写中
   newCode: '',      // 应用后的 V2 代码
   collapsed: false, // 归一确认区收起态（卡头点击切换；决策保留）
-  fullscreen: false,// 2026-09-17：全屏查看态（卡头「⛶ 全屏」，Esc 恢复）
-  _nrFullAnchor: null, // 全屏时宿主被搬到 <body>，这里记原父节点与后继兄弟，退出时原位归还
+  fullscreen: false,// 2026-10-10：全屏弹窗态（打开即全屏；Esc / 「✕ 关闭」退出）
+  _nrFullAnchor: null, // 2026-09-17 遗留字段（宿主已固定建在 <body>，不再需要原位归还锚点）
   hostId: '',
 };
 
-/* ── 入口：在对话消息内展开归一确认卡（人在回路，不跳独立页） ── */
+/* ── 入口：全屏弹窗展示归一校验清单（2026-10-10 由「消息内联展开」改为全屏）
+ * 变更原因（米爸反馈）：内联展开时宿主挂在消息 .body 内，可用高度只有几百 px
+ *（#nr-rows 写死 340px），大清单要反复滚动、逐条裁决与 V2 对照都很困难。
+ * 现改为：点击「归一校验」→ 直接以全屏弹窗展示清单（Esc / 关闭按钮退出）。
+ *
+ * ⚠️ 容器查找不再用 `btn.closest('.sv-card')`：按钮已移到**卡片下方**的操作条里
+ *   （见 06-cards.js 的 .svm-actions），已不在 .sv-card 内 ⇒ 原写法恒为 null。
+ *   改为就近找 `.msg[data-mid]`（再回退整页最后一条 .msg[data-mid]）。
+ * ─────────────────────────────────────────────────────────────────────── */
 function openNormReport(btn) {
-  const card = btn && btn.closest ? btn.closest('.sv-card') : null;
-  const msg = (card && card.closest) ? card.closest('.msg[data-mid]') : null;
+  let msg = (btn && btn.closest) ? btn.closest('.msg[data-mid]') : null;
+  if(!msg){
+    // 回退：本页最后一条带 id 的 AI 消息（按钮被重渲染/事件委托时 btn 可能已脱离）
+    const all = document.querySelectorAll('.msg.ai[data-mid]');
+    msg = all.length ? all[all.length - 1] : null;
+  }
   if(!msg){ toast('未找到消息容器'); return; }
   const mid = msg.getAttribute('data-mid');
   if(!mid){ toast('未找到消息 ID'); return; }
@@ -37,17 +49,24 @@ function openNormReport(btn) {
     host = document.createElement('div');
     host.id = hostId;
     host.className = 'nr-inline';
-    // .msg 是横向 flex（who + msg-inner），确认卡必须挂进消息正文容器才会在消息下方展开
-    const bodyEl = msg.querySelector('.body') || msg.querySelector('.msg-inner') || msg;
-    bodyEl.appendChild(host);
+    // 2026-10-10：宿主挂到 <body> 直下（**不挂进 .msg**）——
+    //  ① 全屏定位不依赖搬 DOM；② 顺带规避 `.msg` 的 content-visibility
+    //    隐式 contain 会成为 fixed 的包含块、导致覆盖层被限制在消息框内的问题。
+    document.body.appendChild(host);
   }
   if(window._nrState.hostId === hostId && window._nrState.report && window._nrState.msgId === mid){
-    // 已展开 → 切换展开/收起（不销毁状态与决策；不再提供关闭入口）
-    window._nrState.collapsed = !window._nrState.collapsed;
-    _nrRender();
+    // 已打开 → 切换显示/隐藏（不销毁状态与决策）
+    const st = window._nrState;
+    const nextHidden = !st.fullscreen;
+    st.fullscreen = !st.fullscreen;
+    host.classList.toggle('nr-full', st.fullscreen);
+    document.body.classList.toggle('nr-full-lock', st.fullscreen);
+    if(nextHidden){ _nrRender(); }
     return;
   }
   window._nrState.hostId = hostId;
+  host.classList.add('nr-full');                 // ★ 直接全屏展示（不再内联展开）
+  document.body.classList.add('nr-full-lock');
   host.innerHTML = `<div style="padding:22px;text-align:center;color:var(--mut);">
     <div style="font-size:13px;">⏳ 正在生成归一确认清单…</div>
     <div style="font-size:11px;margin-top:6px;">实例 → 本体类型对齐 · 词典归一 · 同形消歧 · 证据与置信度计算</div></div>`;
@@ -64,10 +83,11 @@ function openNormReport(btn) {
       window._nrState.evRow = null;
       window._nrState.v2Open = false;
       window._nrState.confirming = false;
+      window._nrState.fullscreen = true;          // 全屏态下必定展开主体
+      window._nrState.collapsed = false;
       window._nrState.msgId = mid;
       window._nrState.convId = currentConvId;
       _nrRender();
-      setTimeout(()=>{ try{ host.scrollIntoView({behavior:'smooth', block:'nearest'}); }catch(e){} }, 60);
     })
     .catch(e => {
       host.innerHTML = `<div style="padding:16px;color:var(--red);font-size:12px;">✕ 生成失败：${esc(e.message || String(e))}</div>`;
@@ -122,10 +142,9 @@ function _renderNormReport() {
       <span style="font-size:10.5px;padding:1px 8px;border-radius:9px;${pending?'background:#fff5f5;border:1px solid #F3C1C1;color:#b91c1c;':'background:#f7fbee;border:1px solid #C0DD97;color:#2f855a;'}">${pending?`待确认 ${pending} 项`:'已全部确认'}</span>
       <span style="font-size:10.5px;padding:1px 8px;border-radius:9px;background:#f3f4f6;border:1px solid #d1d5db;color:#6b7280;">实体 ${cnt.entity||0} · 属性 ${cnt.attr||0} · 关系 ${cnt.relation||0}</span>
       <span style="flex:1"></span>
-      <span style="font-size:10.5px;color:var(--mut);">决策暂存于本页，刷新后清空</span>
-      <button class="btn sm ghost" onclick="event.stopPropagation();_nrToggleFullscreen()"
-        title="${st.fullscreen?'恢复为消息内嵌视图（Esc）':'全屏查看归一确认清单，便于逐条裁决与 V2 对照（Esc 恢复）'}"
-        style="flex:none;padding:2px 9px;font-size:11px;">${st.fullscreen?'⤡ 恢复':'⛶ 全屏'}</button>
+    <span style="font-size:10.5px;color:var(--mut);">决策暂存于本页，刷新后清空</span>
+      <button class="btn sm ghost" onclick="event.stopPropagation();_nrToggleFullscreen(false)"
+   title="关闭全屏清单（Esc）" style="flex:none;padding:2px 9px;font-size:11px;">✕ 关闭</button>
       <span style="color:var(--mut);font-size:11px;flex:none;">${collapsed?'▸ 展开':'▾ 收起'}</span>
     </div>`;
   // ②~⑤ 主体（收起时仅隐藏，状态与决策保留）
@@ -159,37 +178,33 @@ function _nrToggleCollapse() {
   window._nrState.collapsed = !window._nrState.collapsed;
   _nrRender();
 }
-/* 2026-09-17 新增：归一确认区「全屏查看 / 恢复」
+/* 归一确认区「全屏弹窗 / 关闭」（2026-09-17 起全屏；2026-10-10 改为**打开即全屏**）
    动机：归一确认是逐条裁决作业（实体/属性/关系/一致性四类 + 批量勾选 + V2 代码对照），
    内嵌在消息流里可用高度只有几百 px（#nr-rows 写死 340px），大清单要反复滚动、对照困难。
-   实现要点（实测踩坑）：消息节点 `.msg` 带 content-visibility（→ 隐式 contain），**会成为 fixed 的包含块**，
-   只靠 CSS 的 position:fixed 无法真正铺满视口（实测覆盖层被限制在消息框内）。
-   因此全屏时把宿主搬到 <body> 直下（记锚点，退出时原位归还），DOM 位置对渲染无影响；
-   决策状态（window._nrState.decisions）与 _nrRender 重绘全程不受影响。 */
+   ⚠️ 历史坑（现已从根上规避）：消息节点 `.msg` 带 content-visibility（→ 隐式 contain），
+   **会成为 fixed 的包含块**，只靠 CSS 的 position:fixed 无法真正铺满视口
+   （实测覆盖层被限制在消息框内）⇒ 早期版本必须靠"把宿主搬到 <body>"来逃出它。
+   2026-10-10 起宿主**一开始就直接建在 <body> 直下**，不再进 .msg ⇒ 该问题不再发生。 */
 function _nrToggleFullscreen(force) {
   const st = window._nrState;
   const host = _nrHost();
   if(!host) return;
   const next = (typeof force === 'boolean') ? force : !st.fullscreen;
   st.fullscreen = next;
-  if(next){
-    st._nrFullAnchor = { parent: host.parentNode, next: host.nextSibling };  // 退出时的原位锚点
-    document.body.appendChild(host);       // 逃出 .msg 的包含块
-    if(st.collapsed) st.collapsed = false; // 全屏时必定展开主体
-  } else if(st._nrFullAnchor){
-    const a = st._nrFullAnchor;
-    if(a.parent && a.parent.isConnected){
-      if(a.next && a.next.parentNode === a.parent) a.parent.insertBefore(host, a.next);
-      else a.parent.appendChild(host);
-    } else {
-      host.remove();   // 原消息已被重渲染（如切换会话）→ 宿主无归处，直接摘除
-    }
-    st._nrFullAnchor = null;
-  }
+  // 2026-10-10：宿主已由 openNormReport 直接建在 <body> 直下（不再挂进 .msg），
+  //   故退出全屏时**直接把宿主摘除**即可，不需要"原位归还"那套锚点逻辑
+  //   （.msg 的 content-visibility → 隐式 contain 会成为 fixed 的包含块，
+  //     早期版本必须靠搬 DOM 逃出它；现在从一开始就不在 .msg 里，问题从根上消失）。
+  if(!next) host.remove();
   host.classList.toggle('nr-full', next);
   document.body.classList.toggle('nr-full-lock', next);
-  _nrRender();
-  if(next){ try{ host.scrollIntoView({block:'start'}); }catch(e){} }
+  if(next){
+    if(st.collapsed) st.collapsed = false; // 全屏时必定展开主体
+    _nrRender();
+  } else {
+    // 关闭后复位状态（决策保留在内存里，重新打开仍可继续）
+    st.hostId = ''; st.report = null; st.fullscreen = false; st.collapsed = false;
+  }
 }
 // Esc 恢复（capture 阶段，不影响其它 Esc 处理器：如命令面板关闭）
 document.addEventListener('keydown', function(e){

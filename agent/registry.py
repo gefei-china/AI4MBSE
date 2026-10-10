@@ -286,6 +286,14 @@ class AgentRegistry:
                 "intent_keywords": a.get("intent_keywords", []),
                 "system_prompt": a.get("system_prompt", ""),
                 "model_provider_id": a.get("model_provider_id"),  # 优化2：Agent 指定 LLM provider（无则全局默认）
+                # ★ P1-b（2026-10-10）Agent 级模型参数（**此前有列无消费点 = 死配置**）
+                #   `agents.model_params` 列一直存在（schema.py:830注释写的是
+                #   `{"temperature":0.2}`），前端也在存，但**全仓没有任何地方读它** ——
+                #   与 `model_provider_id` 不同，后者至少有 `get_provider_id()` 这条消费链。
+                #   ⇒ 「在 Agent 表单里配思考档位」此前是**配了不生效**。
+                #   这里装进元数据，供 `get_model_params()` 消费（与 provider 级合并，Agent 优先）。
+                #   ⚠️ 解析失败一律回落 {} —— 绝不因一个坏JSON 让整个 Agent 注册失败。
+                "model_params": _parse_json_obj(a.get("model_params")),
                 "bound_tools": bound,     # P1: 绑定工具元数据（skill/mcp/tool 全量）
                 # Task 4：能力元数据（供 discover 动态筛选 / 版本协议校验 / Task 5/6 编排池与智能分派）
                 "capabilities": _parse_json_array(a.get("capabilities")),   # 专长标签 JSON 数组
@@ -345,6 +353,24 @@ class AgentRegistry:
     def get_provider_id(self, intent: str):
         """优化2：返回 Agent 指定 model_provider_id（None=用全局默认 provider）。"""
         return self._db_meta.get(intent, {}).get("model_provider_id")
+
+    def get_model_params(self, intent: str) -> dict:
+        """P1-b（2026-10-10）：返回 Agent 级 `model_params`（默认 {} = 不覆盖）。
+
+        ★ **这个方法补的是一条"死配置"**：`agents.model_params` 列一直存在、
+          前端表单也在存，但**全仓无任何消费点** ⇒ 在 Agent 页面配 `thinking_mode`
+          / `temperature` 之类**配了不生效**（实测三套 thinking 判据都绕过了它）。
+
+        语义：**Agent 级覆盖 provider 级**（`thinking_mode` 等同名键以Agent 为准），
+        未配的键沿用 provider 级 —— 两级都在 `openai_compat.chat()` 里合并。
+
+        ⚠️ 返回**副本**而非原 dict：调用方若就地修改会污染 registry 缓存
+          （`_db_meta` 是实例级长生命周期对象，污染会跨请求蔓延）。
+        """
+        try:
+            return dict(self._db_meta.get(intent, {}).get("model_params") or {})
+        except Exception:
+            return {}
 
     def get_bound_skills(self, intent: str) -> list:
         """P1: Agent 绑定的 skill 列表（含 triggers/content），供触发路由。"""

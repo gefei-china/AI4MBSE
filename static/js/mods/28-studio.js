@@ -19,6 +19,8 @@ function loadSettingsTab(id) {
   if(id==='st-hooks') loadToolHooks();
   if(id==='st-fextract') renderFileExtractSettings();
   if(id==='st-ctx') loadCtxConfig();
+  // 2026-10-10：任务级思考控制面（thinking 的 per-task 维度），照 st-ctx 的懒加载约定
+  if(id==='st-think') loadThinkCfg();
   // 2026-09-26：意图样本池（采样→标注→评测闭环），照 st-ctx 的懒加载约定
   if(id==='st-intent-samples') loadIntentSamples();
   // 2026-10-02：AI 记忆（跨会话长期记忆可见 + 可删），照 st-ctx 的懒加载约定

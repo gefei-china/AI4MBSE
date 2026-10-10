@@ -146,7 +146,8 @@ class LoopGuard:
 
     def __init__(self, *, token_budget: int | None = DEFAULT_TOKEN_BUDGET,
                  tool_timeout_s: float | None = DEFAULT_TOOL_TIMEOUT_S,
-                 dup_threshold: int = DEFAULT_DUP_THRESHOLD):
+                 dup_threshold: int = DEFAULT_DUP_THRESHOLD,
+                 max_failed_rounds: int = 3):
         self.token_budget = token_budget
         self.tool_timeout_s = tool_timeout_s
         self.dup_threshold = dup_threshold
@@ -157,6 +158,11 @@ class LoopGuard:
         self.dup_short_circuits = 0
         self.timeouts = 0
         self.stop_reason = ""
+        # ── 失败轮预算（2026-10-09）：**只扣失败轮**，成功推进不扣。
+        # 上界取DEFAULT_DUP_THRESHOLD 同一量级（3）：连续 3 轮失败就该收手，
+        # 而成功轮再多也不限制（米爸 2026-10-09 纠正的语义）。
+        self.max_failed_rounds = max_failed_rounds
+        self.failed_rounds = 0
 
     # ── 重复检测 ──
     def probe_dup(self, name: str, args) -> int:
@@ -206,6 +212,31 @@ class LoopGuard:
         if budget_exhausted(self.tokens_used, self.token_budget):
             if not self.stop_reason:
                 self.stop_reason = "token_budget"
+            return False
+        return True
+
+    # ── 失败轮预算（2026-10-09）────────────────────────────
+    #★ 语义（米爸 2026-10-09 纠正）：
+    #   「工具调用上限」要管的是**失败重试**，不是**正常推进**。
+    #   ⇒ 成功的轮次**不扣预算**；只有失败/无效的轮次才扣。
+    #
+    # 为什么必须分：
+    #   实测八视图 41 轮里 **29 轮（71%）是成功推进**，无效仅 12 轮（29%）。
+    #   旧实现 `for _round in range(max_tool_rounds)` 把两者**一并计数**
+    #   ⇒ v1 的 6 轮里只有 3 轮是真推进，却和"查了6 次都查不到"的场景
+    #   **付同样的代价** —— 成功轮被失败轮"连坐"截断。
+    #   这正是 v6 报 78 个语法错后进无工具收尾的直接原因（详见 docs 报告 §2缺陷 C）。
+    def charge_failed_round(self, ok: bool) -> None:
+        """登记一轮的成败：**只有失败轮**才扣失败预算。"""
+        if ok:
+            return
+        self.failed_rounds += 1
+
+    def failed_rounds_left(self) -> bool:
+        """失败轮是否还有额度。`stop_reason` = `failed_rounds`。"""
+        if self.max_failed_rounds and self.failed_rounds >= self.max_failed_rounds:
+            if not self.stop_reason:
+                self.stop_reason = "failed_rounds"
             return False
         return True
 

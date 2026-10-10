@@ -53,6 +53,22 @@ def _migrate_columns(conn):
     _add("llm_usage_stats", "conversation_id", "INTEGER DEFAULT 0")
     _add("llm_usage_stats", "run_id", "INTEGER DEFAULT 0")
     _add("llm_usage_stats", "trace_id", "TEXT DEFAULT ''")
+    # ── P0-3（2026-10-09）LLM 调用失败可观测性：拆 used_mock + 加 failure_kind ──
+    #为什么拆（2026-10-09 实测踩坑）：
+    #   `used_mock` 这一列**同时**被两种语义写入：
+    #     ①真 Mock 内容（`force_mock` 测试通道 / 未配 API Key）
+    #     ②**真实调用失败**（`except` 分支记 `used_mock=1` 后`raise`，
+    #       用户实际什么都没拿到）
+    #   ⇒ 「哪些回答是 Mock 做的」这一问会把**所有失败调用**都算进来。
+    #   我据此误判过一次（以为系统"交出了编造内容"，复核发现落库 0 行）。
+    #   ⇒ 拆开：`used_mock` 只表示"内容是Mock"，`call_failed` 表示"这次调用失败了"。
+    #存量行**无法回溯**（历史未区分）⇒ 一律留默认 0，**不编造**。
+    _add("llm_usage_stats", "call_failed", "INTEGER DEFAULT 0")      # 1=本次调用失败（raise，未产出内容）
+    # failure_kind：让"545 秒零产出"这类问题**可按列聚合**，不必逐条翻日志。
+    # 取值：none | timeout | balance | quota | http_4xx | conn | other
+    _add("llm_usage_stats", "failure_kind", "TEXT DEFAULT ''")
+    _add("llm_usage_stats", "failure_msg", "TEXT DEFAULT ''")        # 异常摘要（截断），便于定位
+
     # ── P0-2（2026-10-06）工具调用日志补操作者──
     # 此前 tool_call_logs 578 行**无 user 字段** ⇒ 只能回答"哪个会话调的"，
     # 回答不了"**是谁**调的"（文章讲的「业务方追着问到底是谁改的」那个必答项）。

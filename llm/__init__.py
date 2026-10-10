@@ -11,6 +11,7 @@
 import json
 import re
 import time
+import logging
 
 from .base import BaseLLM
 from .registry import ProviderRegistry
@@ -18,6 +19,15 @@ from .providers import (  # noqa: F401  （注册副作用）
     MockLLM,
     OpenAICompatProvider,
 )
+
+#: LLM 层日志器（思考超限告警用；与 provider 层 `mbse.llm` 同族）
+_log = logging.getLogger("mbse.llm")
+
+#: 思考超限告警去重集合（2026-10-10）。
+#: 键 = (intent, provider_id)。**为什么进程内去重**：真实量级 310/6890≈4.5%，
+#: 且单次会话会连续多轮触发同一组合 ⇒ 不去重会把日志刷爆、反而看不见。
+#: 为什么不用"每小时 N 条"：那要引入时间轮子状态，收益不抵复杂度。
+_THINK_WARNED: set = set()
 
 __all__ = ["BaseLLM", "ProviderRegistry", "MockLLM", "OpenAICompatProvider",
            "llm_client", "llm_router", "get_llm",
@@ -252,14 +262,75 @@ class LLMClient:
                       "last_prompt_tokens": 0, "last_completion_tokens": 0,
                       "fallback_total": 0}
 
-    def _record_usage(self, provider, resp, used_mock: bool, intent: str = "", latency_ms: int = 0) -> None:
+    #: P0-3（2026-10-09）异常 → failure_kind 分类表。
+    #:
+    #: **为什么要有这列**：2026-10-09 实测出现「单次调用 545 秒后失败」，
+    #: 而 `llm_usage_stats` 里所有失败的 `finish_reason` 都是空、
+    #: `used_mock` 与真 Mock **同列为1** ⇒ 只能逐条翻日志才能知道是超时还是余额。
+    #: 有了 failure_kind，「哪些会话在超时上烧时间」变成一条 `GROUP BY`。
+    #:
+    #: ★ **首版bug（写这张表时踩的）**：`kind` 我写成了**单元素元组**
+    #:   `(("timeout",), ...)`，`return kind` 于是返回**元组**而非字符串
+    #:   ⇒ 所有用例都判失败（返回 `('timeout',)` ≠ `'timeout'`）。
+    #:   **判据当场抓住**（单测 8/8 失败），没等到线上。
+    #:   ⇒ 现在 `kind` 是**裸字符串**。
+    #: 判据用**异常类型 + 消息双通道**：同一类型在不同 provider 上文案不同
+    #: （httpx 的 ReadTimeout vs SDK 的 TimeoutException），只认类型会漏。
+    _FAILURE_KINDS = (
+        # (kind, 类型名子串, 消息小写子串)——按顺序匹配，先命中先用
+        ("timeout", ("readtimeout", "connecttimeout", "timeout", "timeoutexception"),
+         ("timed out", "timeout")),
+        ("balance", ("insufficientbalanceerror",),
+         ("insufficient balance", "insufficient_balance", "arrears")),
+        ("quota", ("ratelimiterror", "toomanyrequests"),
+         ("free quota exhausted", "quota", "rate limit", "too many requests")),
+        ("http_4xx", ("badrequesterror", "unprocessableentityerror",
+                      "permissiondeniederror", "authenticationerror"),
+         ("400", "401", "403", "404", "422")),
+        ("conn", ("remoteprotocolerror", "apiconnectionerror",
+                  "connecterror", "readerror", "writeerror"),
+         ("server disconnected", "connection", "broken pipe")),
+        # ⚠️ 必须排在**最后**：消息含 "未配置 API Key"，但也可能含别的词
+        ("no_api_key", ("llmunavailableerror",), ("no_api_key", "未配置 api key")),
+    )
+
+    @staticmethod
+    def classify_failure(exc: "BaseException | str | None") -> str:
+        """把异常分类成 failure_kind（不可判定时返回 `other`；无异常返回 `''`）。"""
+        if exc is None:
+            return ""
+        if isinstance(exc, BaseException):
+            tname = type(exc).__name__.lower()
+            msg = str(exc).lower()
+        else:
+            tname, msg = "", str(exc).lower()
+        for kind, tsubs, msubs in LLMClient._FAILURE_KINDS:
+            if any(s in tname for s in tsubs) or any(s in msg for s in msubs):
+                return kind
+        return "other" if (tname or msg) else ""
+
+    def _record_usage(self, provider, resp, used_mock: bool, intent: str = "",
+                      latency_ms: int = 0, *, call_failed: bool = False,
+                      failure: BaseException | str | None = None) -> None:
         """M7：LLM 调用统计落库（失败不阻断主流程）。
 
         Task 7 token 记账：响应含 usage 时按其 prompt/completion_tokens 落库；
         Mock / 无 usage 时按 len(输出文本)//2 估算 completion_tokens（估算兜底）；
         并将 token 总数回填 resp._meta.token_count（供子任务侧 meta.token_count 记账）。
+
+        ★ P0-3（2026-10-09）**`used_mock` 与"调用失败"是两件事**：
+          · `used_mock=True, call_failed=False` ⇒ 内容是 Mock（force_mock 测试通道等）
+          · `call_failed=True` ⇒ 真实调用失败，**用户什么都没拿到**
+          此前两者都记成 `used_mock=1`，于是"哪些回答是 Mock 做的"
+          会把**所有失败调用**算进来 —— 我据此误判过一次（见 docs 报告 §5.3）。
+          新增 `failure_kind` / `failure_msg` 两列，让失败可按类聚合。
         """
         try:
+            failure_kind = self.classify_failure(failure) if call_failed else ""
+            failure_msg = ""
+            if call_failed and failure is not None:
+                failure_msg = (str(failure) if isinstance(failure, str)
+                               else f"{type(failure).__name__}: {failure}")[:200]
             usage = resp.get("usage") or {}
             pt = int(usage.get("prompt_tokens") or 0)
             ct = int(usage.get("completion_tokens") or 0)
@@ -304,6 +375,44 @@ class LLMClient:
                 _fp = int((_meta or {}).get("fallback_provider_id") or 0)
             except Exception:
                 _rc, _fu, _fp = 0, 0, 0
+            # ── 思考超限告警（2026-10-10）────────────────────────────────
+            # ★ **为什么在这里打点**：这是流式与非流式**唯一都经过**的记账点，
+            #   而超限形态恰恰只在部分路径出现（实测极端例是流式主对话的收尾轮）。
+            #   在 provider 层打会漏掉流式 usage 帧，在业务层打会漏掉所有非主对话路径。
+            #
+            # 实测依据（mbse.db 只读，2026-10-10）：`reasoning>2000tok` 的调用 **310** 次，
+            #   极端例 id=8188 `reasoning=13430 / completion=13535 = 99.2%`、耗时 **4017 秒**
+            #   ⇒ 68 分钟换一个几乎空的回答。此前这类长尾**无任何留痕**，
+            #   只能靠翻日志逐条猜；而 `_record_usage` 已经算出了 `rt`，此处零成本。
+            #
+            # ⚠️ **默认关闭（`llm.thinking_warn_tokens=0`）** ——
+            #   一是避免刷屏（真实量级是 310/6890≈4.5%），二是告警本身是新增可见行为，
+            #   不应默认改变运行观感。**它是留痕，不是拦截**（真要拦用 thinking_budget）。
+            # 去重按 (intent, provider) 维度，同一组合只报一次，避免单会话连续多轮刷屏。
+            if not call_failed:
+                try:
+                    _wcap = 0
+                    try:
+                        from core import config as _cfg2
+                        _wcap = int(_cfg2.get("llm", "thinking_warn_tokens", 0) or 0)
+                    except Exception:
+                        _wcap = 0
+                    if _wcap > 0 and rt >= _wcap:
+                        _wkey = (intent, (provider or {}).get("id"))
+                        if _wkey not in _THINK_WARNED:
+                            _THINK_WARNED.add(_wkey)
+                            _log.warning(
+                                "[thinking] 思考 token 超限｜intent=%s provider=%s(%s) "
+                                "reasoning=%s completion=%s 占比=%.0f%% latency=%.1fs finish=%s"
+                                "｜思考与正文共享 max_tokens，正文仅得 %s tok"
+                                "｜处置：调低 llm.thinking_budget，或把该 intent 加入 thinking_policy.off",
+                                intent or "(空=未标注调用点)",
+                                (provider or {}).get("name"), (provider or {}).get("id"),
+                                rt, ct, (rt / ct * 100.0) if ct else 0.0,
+                                latency_ms / 1000.0, _fr or "-", max(ct - rt, 0),
+                            )
+                except Exception:
+                    pass
             # V2.6：最近一次调用 token 记账（stats 供 done 事件透传前端展示）
             try:
                 self.stats["last_prompt_tokens"] = pt
@@ -325,7 +434,10 @@ class LLMClient:
             _vals = (provider.get("id", 0) if provider else 0,
                      (provider or {}).get("name", "未配置"),
                      (provider or {}).get("model_name", "-"),
-                     intent, 1 if used_mock else 0, pt, ct, pt + ct, pch, pcm,
+                     # ★ P0-3：`used_mock` 只保留"内容是 Mock"这一语义；
+                     #   调用失败改记 `call_failed`（下方另两列）。
+                     intent, 1 if (used_mock and not call_failed) else 0,
+                     pt, ct, pt + ct, pch, pcm,
                      _fr, rt, _rc, _fu, _fp, round(est, 6), latency_ms)
             with db_conn() as conn:
                 try:
@@ -334,9 +446,12 @@ class LLMClient:
                         "prompt_tokens, completion_tokens, total_tokens, "
                         "prompt_cache_hit_tokens, prompt_cache_miss_tokens, "
                         "finish_reason, reasoning_tokens, retry_count, fallback_used, fallback_provider_id, "
-                        "estimated_cost, latency_ms, conversation_id, run_id, trace_id, sub_task_key) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        _vals + (_cid, _rid, _tid, _skey),
+                        "estimated_cost, latency_ms, conversation_id, run_id, trace_id, sub_task_key, "
+                        # ★ P0-3新增三列
+                        "call_failed, failure_kind, failure_msg) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        _vals + (_cid, _rid, _tid, _skey,
+                                 1 if call_failed else 0, failure_kind, failure_msg),
                     )
                 except Exception as _e2:
                     # 关联列迁移未跑到 → 降级写入原有 17 列（不丢用量数据，绝不因记账失败阻断调用）
@@ -414,8 +529,12 @@ class LLMClient:
             # 2026-10-09（R1）：**不再回落 Mock，直接报错**。
             # 原静默给一段假回答，用户无法察觉——这是"编造内容"，比报错危险得多。
             # ⚠️ 与上面 `llm.force_mock` 分工：那是有意的测试通道，此处是"没配却假装能跑"。
+            # ★ P0-3：同样记 `call_failed=1`（没产出任何内容），
+            #   kind=`no_api_key`——这是**配置错**，与运行期超时/余额要能分开统计。
             self._record_usage(provider, {"usage": {}}, True,
-                               kwargs.get("_intent", ""), int((time.time() - t0) * 1000))
+                               kwargs.get("_intent", ""), int((time.time() - t0) * 1000),
+                               call_failed=True,
+                               failure="no_api_key: LLM 未配置 API Key")
             raise LLMUnavailableError(
                 f"LLM 未配置 API Key（provider={provider_name or '未配置'}）"
                 f"——已停止请求，不返回模拟内容。"
@@ -496,11 +615,18 @@ class LLMClient:
             # 实测该路径最常见的触发源就是 402 额度耗尽（2026-10-09 实测：
             # 「LLM API 402: Insufficient Balance」→ 回落 Mock → 用户拿到编造内容）。
             # 保留统计与落库（成本要计入、失败要可观测），但**不再伪造回答**。
+            #
+            # ★ P0-3（2026-10-09）修正：此前这里记`used_mock=1`，
+            #   但本分支**没有**返回任何 Mock 内容 —— 它 raise，用户什么都没拿到。
+            #   两件事混在一列 ⇒ "哪些回答是 Mock 做的"会把**所有失败**算进来
+            #   （我据此误判过一次，实测 conv 9244 落库 0 行）。
+            #   ⇒ 改为记 `call_failed=1` + `failure_kind`，`used_mock` 留0。
             self.stats["mock"] += 1
             self.stats["last_provider"] = provider_name
             self.stats["last_used_mock"] = True
             self._record_usage(provider, {"usage": {}}, True,
-                               kwargs.get("_intent", ""), int((time.time() - t0) * 1000))
+                               kwargs.get("_intent", ""), int((time.time() - t0) * 1000),
+                               call_failed=True, failure=e)
             _hint = ""
             _s = str(e)
             if "402" in _s or "Insufficient Balance" in _s or "quota" in _s.lower():
@@ -532,10 +658,34 @@ class LLMClient:
         import time as _tt
         times = max(0, int(_cfg.get("llm", "retry_times", 2) or 0))
         backoff_ms = max(0, int(_cfg.get("llm", "retry_backoff_ms", 500) or 0))
+        # ★ 2026-10-09：**总时间预算**（默认 0=不启用，零行为漂移）。
+        #   为什么需要：`http_timeout_s` × `retry_times` 是**乘法**，
+        #   实测 180×3+ 退避 ≈ **541.5 秒**（实测 545s 吻合）⇒ 用户等 9 分钟。
+        #   只调小单次超时仍会乘出长尾；真正的闸门是**总预算**。
+        #   语义：每轮重试前检查"已耗时 + 单次超时 > 预算" ⇒ 不再重试，直接抛。
+        try:
+            _budget = float(_cfg.get("llm", "total_timeout_budget", 0) or 0)
+        except Exception:
+            _budget = 0.0
+        _t_start = _tt.time()
+        _per_try = float(_cfg.get("llm", "http_timeout_s", 180) or 180)
         if stream:
             times = 0
         last = None
         for attempt in range(times + 1):
+            # 总预算闸：剩余预算不够再跑一次就**不再重试**（避免长尾）
+            if _budget and attempt > 0:
+                _elapsed = _tt.time() - _t_start
+                if _elapsed + _per_try > _budget:
+                    try:
+                        import logging as _lg2
+                        _lg2.getLogger("mbse.llm").warning(
+                            "LLM 重试中止：已耗时 %.0fs + 单次超时 %.0fs > 总预算 %.0fs"
+                            "（provider=%s model=%s）",
+                            _elapsed, _per_try, _budget, provider_name, model_name)
+                    except Exception:
+                        pass
+                    break
             try:
                 return impl.chat(messages, model=impl_kw.get("model"),
                                  temperature=impl_kw.get("temperature"),

@@ -289,10 +289,19 @@ function cardSysmlTabs(cd, content) {
       <span class="svm-tab" data-tab="view" onclick="svmTabSwitch(this)" title="按「${esc(sv.intent||'模型')}」意图即时投影">视图<i class="sv-cnt">${entries.length}</i></span>
       <span style="flex:1;display:flex;align-items:center;justify-content:flex-end;font-size:10.5px;color:var(--mut);padding-right:6px;">按「${esc(sv.intent||'模型')}」意图投影 · ${parsed.nodes} 元素 / ${parsed.edges} 关系</span>
       <button class="btn sm ghost" style="padding:1px 8px;font-size:10.5px;flex:none;" onclick="svmCopyCode(this)" title="复制本消息全部 SysML v2 代码">📋 复制</button>
-      <button class="btn sm ghost" style="padding:1px 8px;font-size:10.5px;flex:none;color:var(--grn,#2f855a);border-color:#C0DD97;" onclick="openNormReport(this)" title="查看本次生成的归一校验报告（术语词典对齐 / 同名消歧 / 未命中建议）">🧹 归一校验</button>
     </div>
     <div class="svm-pane" data-pane="code">${codePane}</div>
     <div class="svm-pane" data-pane="view" style="display:none;">${svmThumbsHtml(sv)}</div>
+    <!-- 2026-10-10（米爸反馈）：「归一校验」入口从卡头 tab 栏移到**卡片下方**。
+         原因：卡头是「代码 / 视图」的视图切换区，塞一个会产生**副作用**（调后端生成清单）
+         的操作按钮在里面，语义混淆且挤占切换区宽度。下方独立操作条语义清晰。
+         onclick 仍传 this，但 openNormReport 的容器查找已改为「就近找 .msg[data-mid]」，
+         不再依赖按钮在 .sv-card 内（按钮已移出卡片）。 -->
+    <div class="svm-actions">
+      <button class="btn sm ghost" style="color:var(--grn,#2f855a);border-color:#C0DD97;"
+        onclick="openNormReport(this)"
+        title="全屏查看本次生成的归一校验报告（术语词典对齐 / 同名消歧 / 未命中建议）">🧹 归一校验 · 全屏查看</button>
+    </div>
   </div>`;
 }
 /* 2026-09-29（用户反馈）：AI 建模输出代码支持一键复制 —— 正文里的 sysml 代码块会被

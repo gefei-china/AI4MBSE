@@ -164,6 +164,36 @@ FINALIZE_HINT = (
     "不要再请求任何工具。"
 )
 
+
+#: ★ 收尾提示的**精确版**（2026-10-10，米爸提问"是单个工具上限还是所有之和"触发）。
+#:
+#: 为什么需要：上面 `FINALIZE_HINT` 说的是「调用次数已达上限」，
+#:   但本工程实际有**三个互不相同的上限**，文案混为一谈 ⇒ 用户看到提示时
+#:   无法判断是"某个工具被限流"还是"整体轮次用完"，也无法判断该不该调配置。
+#:
+#: 实测口径（2026-10-10，会话 9335 触发的是**轮次上限**）：
+#:   · `MAX_TOOLS_PER_ROUND=3` = **单轮内**最多执行 3 个工具（**并发维度**；
+#:     超出的拿到 `skip_reason=round_tool_limit`，**下一轮可以继续调**）
+#:   · `max_tool_rounds`（默认 12）= **整个 ReAct** 最多几轮（**轮次维度**）
+#:   · `max_failed_rounds`（默认 3）= 其中**失败轮**的上限（成功轮不计数）
+#:   · token 预算（默认 60000）= 第四道，与轮次无关
+#:
+#: ⇒ 它们是**各自独立**的，不是同一个，也不是"所有工具调用次数之和"。
+def finalize_hint_ex(*, reason: str = "rounds", used: int = 0, limit: int = 0) -> str:
+    """按真实触发原因生成收尾提示（消掉"是哪个上限"的歧义）。"""
+    label = {
+        "rounds": f"本轮 ReAct 已用满 {limit} 轮（**轮次**上限，非单个工具上限；"
+                  f"单轮内工具并发上限是 {MAX_TOOLS_PER_ROUND} 个）",
+        "failed": f"工具调用**失败轮**已达{limit} 次（成功轮不计数；"
+                  f"当前 {used}/{limit}）—— 这是失败次数上限，不是调用总数上限",
+        "budget": f"本轮 token 预算已用尽（已用 {used}）",
+    }.get(reason, "本轮工具调用已到上限")
+    return (
+        f"{label}。请**基于已经获得的信息**给出完整、"
+        f"自洽的最终结论（说明你做了什么、结论是什么、有哪些未覆盖的部分），"
+        f"不要再请求任何工具。"
+    )
+
 #: 收尾时若存在「已offload 但模型没取回」的技能正文，附上它。
 #:
 #: ★ 为什么需要它（2026-10-09 实测，N3 视图展开 6/8 产出雷同）：
@@ -181,7 +211,8 @@ _FETCH_HINT = (
 )
 
 
-def finalize_messages(messages: list, extra_context: str = "") -> list:
+def finalize_messages(messages: list, extra_context: str = "",
+                      reason: str = "", used: int = 0, limit: int = 0) -> list:
     """构造收尾请求的消息序列（**追加一条 user 提示**，不改原messages）。
 
     - 用 `messages + [...]` 而非原地 append：调用方的 messages 后续还要复用
@@ -190,9 +221,12 @@ def finalize_messages(messages: list, extra_context: str = "") -> list:
       "user 紧跟 assistant.tool_calls 且中间无 tool_result"的序列更敏感）。
     - `extra_context`：调用方传入的补充材料（如未取回的技能正文）。
       为空时行为与改动前**逐字相同**。
+    - ★ `reason/used/limit`（2026-10-10）：传了就用**精确版**提示，
+      说明到底是"轮次上限"还是"失败轮上限"还是"token 预算"——
+      不传则沿用通用 `FINALIZE_HINT`（**逐字兼容改动前行为**）。
     """
     out = list(messages)
-    hint = FINALIZE_HINT
+    hint = finalize_hint_ex(reason=reason, used=used, limit=limit) if reason else FINALIZE_HINT
     if extra_context:
         hint += _FETCH_HINT + extra_context
     out.append({"role": "user", "content": hint})
@@ -226,6 +260,42 @@ def lacks_deliverable(llm_content: str, expect_code: bool = False) -> bool:
     if not expect_code:
         return not txt.strip()
     return not _CODE_FENCE_RE.search(txt)
+
+
+def repair_tools_needed(messages: list) -> bool:
+    """轮次耗尽时，**是否该保留修复工具**给收尾轮。
+
+    ★ 为什么需要它（2026-10-09 实测八视图）：
+    收尾轮原本一律 `tools=None`。实测 v6 时序图：
+
+        sysml_v2_validate → 判据 **block**，语法错 **78 条**
+        → 收尾轮（tools=None）→ completion_tokens=**28**
+
+    28 token 写不出 15k 字符的修复代码 ⇒ **78 个错一个都没修**，
+    `sysml_v2_autofix` 实测**一次都没被调用过**。
+    ⇒ 「校验报错了却没人修」的直接原因就是这一句 `tools=None`。
+
+    判据（刻意保守，**默认 False = 零行为漂移**）：
+      · **只看最近一条 tool 结果**，且必须命中 `判据：block`
+        （即「存在必须修复的硬错」）——`report`（仅语义错，不阻断）
+        与 `pass` 都**不给工具**，保持改动前行为
+      · 结果文本必须含 `判据：` 标记 ⇒ 别的工具结果不会误触发
+      · 找不到匹配的校验结果 ⇒ False
+
+    与 `should_finalize` 同源放在本模块：两条ReAct 路径
+    （`execute.py` / `stream.py`）共用同一判据。
+    """
+    if not messages:
+        return False
+    # 从后往前找最近一条 tool 结果
+    for m in reversed(messages[-8:]):
+        if (m or {}).get("role") != "tool":
+            continue
+        content = str((m or {}).get("content") or "")
+        if "判据：" not in content:
+            return False              # 碰到别的工具结果就停，不跨条猜
+        return "判据：block" in content
+    return False
 
 
 def should_finalize(msg: dict, llm_content: str, rounds_used: int,

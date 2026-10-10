@@ -290,6 +290,12 @@ async function deleteStoredReport(id){
 function finishStream(r, aiBox) {
   // P1-1 流式结束：恢复发送按钮
   showStopBtn(false); _streaming = false; _stoppedManually = false;
+  // 2026-10-10（米爸实测「一轮对话输出两次内容」·会话 9336）：
+  //   done 事件带真实 message_id ⇒ 本轮 assistant 消息**已落库**。
+  //   在流式容器上打 `finalizedId` 标记，`commitPartialStream` 见到它就直接短路，
+  //   避免"正常完成之后又发一次固化请求"把同一段内容写第二遍。
+  //   ⚠️ 必须在 `aiBox.outerHTML = ...` 之前写：那一行会把 aiBox 从 DOM 摘掉。
+  try{ if(aiBox && r && r.message_id) aiBox.dataset.finalizedId = String(r.message_id); }catch(e){}
   // 内容级澄清收尾：done 用 renderMessage 重建会清掉交互卡 → 重建后重新插入澄清卡
   if(r && r.msg_type === 'clarify'){
     const _pb0 = document.getElementById('proc-box');

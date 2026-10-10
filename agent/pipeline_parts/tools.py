@@ -4,6 +4,13 @@
 由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
 
+#: ★2026-10-10：确定性**本地**修复类工具，豁免「写意图闸」（仅对产码类 Agent）。
+#: 为什么需要：它们的 side_effect=write（确实改代码），而八视图输入是
+#: 「生成 X 视图并校验」—— 不含修复词 ⇒ 被整类过滤 ⇒ 模型看不到它们
+#: ⇒ 实测 validate 报了 block 却没人修（autofix 调用 **0 次**）。
+#: ⚠️ 只豁免"改自己刚生成的代码"的工具，**不含任何入库/删改类工具**。
+_REPAIR_WRITE_EXEMPT = {"sysml_v2_autofix"}
+
 
 class ToolMixin:
     """工具定义、执行、重试策略与调用留痕。"""
@@ -177,9 +184,28 @@ class ToolMixin:
                 except Exception:
                     _se_map = {}
                 # 技能白名单声明的写/破坏工具视为显式授权契约，不受写意图关键词约束
-                candidates = [c for c in candidates
-                              if _se_map.get(c[0], "read") not in ("write", "destructive")
-                              or (_sk_wl and c[0] in _sk_wl)]
+                #
+                # ★★ 2026-10-10 补一个豁免（实测 autofix 从未被注入的真正根因）：
+                #   `sysml_v2_autofix` 的 side_effect=write（它确实改写代码），
+                #   而写意图闸要求输入含「创建/保存/修复…」等词。
+                #   八视图的输入是「**请生成 sequence 时序图并校验**」——**不含修复词**
+                #   ⇒ autofix 被**整类过滤** ⇒ 模型压根看不到这个工具。
+                #   实测证据：本轮重跑 autofix 调用 **0 次**，而 validate 报了 5 次 block。
+                #   ⇒ 修复的**第一前提**是"它得在清单里"，闸把它挡在门外。
+                #   豁免范围**仅限确定性修复工具**（不改库、不入库，只改本次产出的代码），
+                #   且仅当 Agent 名字里表明它在**产码**（视图/图生成）时。
+                #   ⚠️ 不扩大到其它 write 工具（防"顺手改库"）。
+                _repair_exempt = _REPAIR_WRITE_EXEMPT & {c[0] for c in candidates}
+                if _repair_exempt and any(k in (intent or "") for k in
+                                          ("view", "视图", "图生成", "design")):
+                    candidates = [c for c in candidates
+                                  if _se_map.get(c[0], "read") not in ("write", "destructive")
+                                  or (_sk_wl and c[0] in _sk_wl)
+                                  or c[0] in _repair_exempt]
+                else:
+                    candidates = [c for c in candidates
+                                  if _se_map.get(c[0], "read") not in ("write", "destructive")
+                                  or (_sk_wl and c[0] in _sk_wl)]
         # TR-P3a：JIT 语义预筛——候选 ≥2（多工具可挑）即按输入语义裁剪，防「无关工具也被注入/LLM 顺手调用」
         # 保底：读类核心工具（graph_retrieve/validate/impact_analyze）不因预筛丢失；全弱相关时空回退维持全量
         jit_threshold = 2

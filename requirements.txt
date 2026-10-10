@@ -95,3 +95,6 @@ wcwidth==0.8.3
 # 2026-09-21：rapidocr-onnxruntime 同理属「缺装即静默降级」——但已升为显式依赖。
 # 缺失时 knowledge_pipeline/ocr.py 的 available() 返回 (False, 原因)，extract_text_ex
 # 把原因写进 documents.error_msg（前端 20-docs.js 直接展示），不再静默。
+# 中文分词（2026-10-10）：BM25 精确词切分，纯 Python/MIT、无二进制依赖。
+# ★ 可选：未安装时 BM25Engine 自动回落字符 bigram（行为与改动前一致）。
+jieba==0.42.1

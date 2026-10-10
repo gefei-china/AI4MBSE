@@ -21,6 +21,28 @@ from .common import *
 from core.audit import audit, audit_user
 from . import tool_offload as _tool_offload  # P1-4：大工具结果 offload（补模型侧封顶缺口）
 
+#: 收尾轮「保留修复工具」时**只给这些**（2026-10-09）。
+#: 为什么收窄：收尾轮的目的是「把已知错误改掉」，不需要 graph_retrieve /
+#: sysml_stdlib_meta 之类查资料的工具 —— 给了反而会诱发新一轮查资料
+#: （实测 80% 轮次就花在查资料上）。
+#:
+#: ⚠️ **仅作用于非流式路径（execute.py）**。`stream.py` 的收尾是
+#:   `chat(..., stream=True)` 单次生成，**没有配套的工具执行循环**
+#:   （tools 要被执行必须再走一轮 `for _rnd in range(max_tool_rounds)`）。
+#:   在那里塞 tools 只会让provider 返回 tool_calls 而**无人消费** ⇒ 停摆。
+#:   ⇒ stream 路径要修需配套加"收尾轮工具执行循环"，属独立改动，本次**不做**。
+_REPAIR_TOOL_NAMES = ("sysml_v2_autofix", "sysml_v2_lint", "sysml_v2_validate")
+
+
+def _repair_tool_subset(tools_def):
+    """从本轮工具清单里挑出修复类工具；一个都没有 ⇒ 返回 None（等价改动前行为）。"""
+    try:
+        out = [t for t in (tools_def or [])
+               if ((t.get("function") or {}).get("name")) in _REPAIR_TOOL_NAMES]
+        return out or None
+    except Exception:
+        return None
+
 
 class ExecuteMixin:
     """主执行入口 execute（非流式全流程）。"""
@@ -131,6 +153,13 @@ class ExecuteMixin:
         self._hil_level = hil_level  # M5：HIL 分级——L2 时写工具进入人工确认队列
         # 优化2：Agent 指定 LLM provider 优先（显式 provider_id > Agent 绑定 > 全局默认）
         effective_provider = provider_id or self.registry.get_provider_id(intent)
+        # ★ P1-b（2026-10-10）Agent 级模型参数（含 thinking_mode）——
+        #   `agents.model_params` 此前是**死配置**（有列、有前端表单，无消费点）。
+        #   取一次供本方法所有 chat 调用复用；取不到一律 {} ⇒ 零行为漂移。
+        try:
+            _agent_mp = self.registry.get_model_params(intent)
+        except Exception:
+            _agent_mp = {}
         # P1 意图结构化拆解（建模类意图；Mock 环境自动降级 {}）
         # P0-2：槽位跨轮合并——上轮槽位为底，本轮新值覆盖（entities/constraints 并集）
         # P1-4（2026-10-01）：带上 conversation_id/user_input —— 换话题时丢弃历史槽位
@@ -377,7 +406,8 @@ class ExecuteMixin:
             msg = llm_response["choices"][0]["message"]
             llm_content = _cache_hit
         else:
-            llm_response = llm_client.chat(messages, provider_id=effective_provider, tools=tools_def or None)
+            llm_response = llm_client.chat(messages, provider_id=effective_provider,
+                                           tools=tools_def or None, _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
             msg = llm_response["choices"][0]["message"]
             llm_content = msg.get("content") or ""
             # ★ 2026-10-09：3 → 6，且**改为可配置**（两侧同源，见 stream.py）。
@@ -388,11 +418,22 @@ class ExecuteMixin:
             #     ⇒ 只能凭记忆写 ⇒ 交出上一轮残留代码。
             #   ⚠️ 这是**通用配置**（任何"先查资料再产出"的 Agent 都受益），
             #     不是给视图开特例；上限仍存在，防死循环。
+            #
+            # ★★ 2026-10-09（米爸纠正语义）：**成功的正常调用不该被限制**。
+            #   旧实现把 `range(max_tool_rounds)` 当**总轮次硬上限**，
+            #   成功轮与失败轮**一并计数** ⇒ 成功推进被失败轮"连坐"截断。
+            #   实测八视图 41 轮里 **29 轮（71%）是成功推进**，
+            #   v1 的 6 轮里只有 3 轮是真推进 —— 却和"查 6 次都查不到"付同样代价。
+            #   ⇒ 现在拆成**两道闸**（见下方 `_guard.failed_rounds_left()`）：
+            #     · `max_tool_rounds`   → **绝对硬上限**（防死循环），6 放宽到 12
+            #     · `max_failed_rounds` → **失败轮预算**，只有失败轮才扣（默认 3）
+            #   成功轮再多也不扣预算 ⇒ 正常推进不被限制。
             try:
                 from core import config as _cfg
-                max_tool_rounds = int(_cfg.get("agent", "max_tool_rounds", 6))
+                max_tool_rounds = int(_cfg.get("agent", "max_tool_rounds", 12))
+                max_failed_rounds = int(_cfg.get("agent", "max_failed_rounds", 3))
             except Exception:
-                max_tool_rounds = 6
+                max_tool_rounds, max_failed_rounds = 12, 3
             # 2026-10-04：接入统一护栏（与编排路径同源，见 agent/loop_guard.py）。
             # 原先这条路径只有轮次上限/token 上限/重复检测/工具超时，
             # 而编排路径有前三者 —— 同一套 ReAct 语义的两处实现护栏不对称。
@@ -401,18 +442,30 @@ class ExecuteMixin:
             from agent import loop_protocol as _lproto
             _guard = LoopGuard(
                 token_budget=int(self._LOOP_TOKEN_BUDGET) if getattr(self, "_LOOP_TOKEN_BUDGET", None) else 60000,
-                tool_timeout_s=float(getattr(self, "_LOOP_TOOL_TIMEOUT", 120.0)))
+                tool_timeout_s=float(getattr(self, "_LOOP_TOOL_TIMEOUT", 120.0)),
+                max_failed_rounds=max_failed_rounds)
             for _round in range(max_tool_rounds):
                 tool_calls = msg.get("tool_calls") or []
                 if not tool_calls:
                     break
                 # 预算耗尽 ⇒ 不再调工具，直接让模型基于已有信息作答
                 if not _guard.budget_left():
-                    llm_response = llm_client.chat(messages, provider_id=effective_provider, tools=None)
+                    llm_response = llm_client.chat(messages, provider_id=effective_provider,
+                                                  tools=None, _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
+                    msg = llm_response["choices"][0]["message"]
+                    llm_content = msg.get("content") or ""
+                    break
+                # ★★ 失败轮预算（2026-10-09，米爸纠正语义）：**只有失败轮才扣**。
+                #   成功的正常推进**不限制** —— 旧实现把成功轮也计入总轮数上限，
+                #   导致"查 6 次都查不到"与"正常推进 6 轮"付同样代价（连坐）。
+                if not _guard.failed_rounds_left():
+                    llm_response = llm_client.chat(messages, provider_id=effective_provider,
+                                                  tools=None, _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
                     msg = llm_response["choices"][0]["message"]
                     llm_content = msg.get("content") or ""
                     break
                 tool_results = []
+                _round_had_ok = False      # 本轮是否有工具拿到可用结果（失败预算判据）
                 _weak_n = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
                 # ── P0-①（2026-10-07）并行调用配对 / P0-② 截断参数拒绝 ──
                 # 与 stream.py **同源**（同一模块 agent/loop_protocol.py）：
@@ -425,7 +478,14 @@ class ExecuteMixin:
                     # P0-②：参数被 max_tokens 截断 ⇒ 拒绝执行（不以降级的空参数执行）
                     if _lproto.is_truncated_args(fn):
                         _tr = _lproto.truncated_result(tname)
-                        _tool_results.append({
+                        # ★ 2026-10-09 修 P0：原写 `_tool_results.append`，
+                        #   而本函数声明的是 `tool_results`（无下划线）⇒ NameError。
+                        #   触发后果：整轮崩在收尾前，**零产出 + 零落库**，
+                        #   前端表现为「点了没反应」，且日志只有一行 NameError。
+                        #   修法：三处统一append 到 `tool_results`——本分支是
+                        #   「跳过执行」，仍必须为该 tool_call_id 回喂结果，
+                        #   否则悬空 tool_calls 会让下一轮请求直接 400。
+                        tool_results.append({
                             "tool_call_id": tc.get("id", ""),
                             "role": "tool", "name": tname,
                             "content": json.dumps(_tr, ensure_ascii=False)})
@@ -435,7 +495,7 @@ class ExecuteMixin:
                     except Exception:
                         # `is_truncated_args` 判漏时的保守兜底：**不**以空参数执行
                         _tr = _lproto.truncated_result(tname)
-                        _tool_results.append({
+                        tool_results.append({
                             "tool_call_id": tc.get("id", ""),
                             "role": "tool", "name": tname,
                             "content": json.dumps(_tr, ensure_ascii=False)})
@@ -447,7 +507,7 @@ class ExecuteMixin:
                     if _dup:
                         _guard.dup_short_circuits += 1
                         _prev = _guard.last_result_for(tname, targs)
-                        _tool_results.append({
+                        tool_results.append({
                             "tool_call_id": tc.get("id", ""),
                             "role": "tool", "name": tname,
                             "content": json.dumps(
@@ -462,6 +522,9 @@ class ExecuteMixin:
                     # ⚠️ 弱结果在**调用之后**才判定得出，无法预传给 call()，
                     #   故在此回填：把刚计入的去重计数撤回，否则"工具本来就查不到东西"
                     #   会在第 2~3 次被误判成重复调用而掩盖真实的"查不到"信号。
+                    if result.get("ok") and not _weak:
+                        # ★ 真实拿到可用结果 ⇒ 本轮是**成功推进**，不扣失败预算
+                        _round_had_ok = True
                     if _weak and result.get("ok"):
                         _guard.undo_dup_count(tname, targs)
                     if _weak:
@@ -489,6 +552,13 @@ class ExecuteMixin:
                     tool_results.extend(_lproto.skipped_results(_skip_calls))
                 if not tool_results:
                     break
+                # ★★ 判定本轮成败，**只有失败轮才扣失败预算**（2026-10-09）。
+                #   `_round_had_ok` 在执行段累加（见上），比事后解析 result 文本可靠。
+                #   失败 = 本轮**实际执行**的工具全部没拿到可用结果（ok=0 / 超时 / 空结果）。
+                #   ⚠️「模型没调用工具」不算失败（那是正常收敛，由上面的 `if not tool_results` 处理）。
+                #   ⚠️ 全被跳过（参数截断）时 `_round_had_ok` 保持 False ⇒ 该轮扣预算 ——
+                #   这是**故意的**：截断意味着模型没把参数写出来，重试同样会截断。
+                _guard.charge_failed_round(_round_had_ok)
                 # 工具结果回填后继续生成（观察 → 下一轮思考/工具或最终回答）
                 messages.append(msg)
                 messages.extend(tool_results)
@@ -496,12 +566,14 @@ class ExecuteMixin:
                 # ⚠️ 分母用**执行数**而非 len(tool_results)：P0-① 补的 skipped 结果
                 #    计入分母会让收敛判定失真（同stream.py 的处理）。
                 if _weak_n == len(_exec_calls) and _weak_n > 0:
-                    llm_response = llm_client.chat(messages, provider_id=effective_provider, tools=None)
+                    llm_response = llm_client.chat(messages, provider_id=effective_provider,
+                                                  tools=None, _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
                     msg = llm_response["choices"][0]["message"]
                     llm_content = msg.get("content") or ""
                     _guard.add_tokens(_tokof(llm_response))
                     break
-                llm_response = llm_client.chat(messages, provider_id=effective_provider, tools=tools_def or None)
+                llm_response = llm_client.chat(messages, provider_id=effective_provider,
+                                               tools=tools_def or None, _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
                 _guard.add_tokens(_tokof(llm_response))   # 2026-10-04：按累计量判预算（见 loop_guard 注释）
                 msg = llm_response["choices"][0]["message"]
                 if msg.get("content"):
@@ -537,7 +609,24 @@ class ExecuteMixin:
                     except Exception:
                         _extra = ""
                     _fm = _lproto.finalize_messages(messages, extra_context=_extra)
-                    _resp = llm_client.chat(_fm, provider_id=effective_provider, tools=None)
+                    # ★ 2026-10-09：收尾轮**按需保留修复工具**。
+                    #   实测八视图：v6 在 `sysml_v2_validate` 报出**78 个语法错**之后，
+                    #   收尾轮是 `tools=None` 的纯文本调用 ⇒ 模型只能解释一句，
+                    #   `completion_tokens=28` —— **写不出 15k 字符的修复代码**，
+                    #   `sysml_v2_autofix` 实测**一次都没被调用过**。
+                    #   ⇒ 「报了错没人修」的直接原因就是这一行的 `tools=None`。
+                    #   判据（`_lproto.repair_tools_needed`）：
+                    #   · 上一轮 validate 判据为 **block（有硬错，必须修）** → 给修复工具
+                    #   · 若是 report（仅语义错，不阻断）→ 保持原行为（tools=None）
+                    #   · 非产码任务 / 无校验结果 → 保持原行为（**零行为漂移**）
+                    _repair_tools = None
+                    try:
+                        if _lproto.repair_tools_needed(messages):
+                            _repair_tools = _repair_tool_subset(tools_def)
+                    except Exception:
+                        _repair_tools = None
+                    _resp = llm_client.chat(_fm, provider_id=effective_provider,
+                                            tools=_repair_tools, _intent=CHAT_TASK_REPAIR, _model_params=_agent_mp)
                     _guard.add_tokens(_tokof(_resp))
                     llm_content = _resp["choices"][0]["message"].get("content") or llm_content
                 except Exception:

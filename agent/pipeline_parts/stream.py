@@ -1151,15 +1151,35 @@ class StreamMixin:
                 last = conn.execute(
                     "SELECT role, content FROM messages WHERE conversation_id=? ORDER BY id DESC LIMIT 1",
                     (conversation_id,)).fetchone()
-                if last and last["role"] == "assistant" and "以上为已生成内容" in (last["content"] or ""):
-                    return   # 前端停止路径已固化 → 不双写
+                if last and last["role"] == "assistant":
+                    _lc = last["content"] or ""
+                    # ── 去重（2026-10-10 修）────────────────────────────────
+                    # ★ **实测根因（会话 9335/9336）**：库里出现**两条几乎一样的 assistant 消息**
+                    #   （9336: id=3887 len=2185 / id=3888 len=2206，后者多一个「⏹ 已停止生成」后缀，
+                    #     剥离后缀后**逐字相同**）。
+                    #   原因：**正常完成时已落过一条**，随后用户点"停止"触发 GeneratorExit
+                    #   ⇒ 又走固化再写一条 ⇒ 两条内容相同。
+                    #   ⚠️ 原去重只认「以上为已生成内容」这个后缀，
+                    #   而**正常落库的那条没有后缀** ⇒ 判不出来 ⇒ 双写。
+                    #⇒ 改为**按内容比对**（更本质的判据）：
+                    #   后一条 = 前一条去掉中断后缀 ⇒ 同一段内容被写了两遍。
+                    if "以上为已生成内容" in _lc:
+                        return   # 前端停止路径已固化 → 不双写
+                    if _lc.strip() and _lc.strip() == text.strip():
+                        return   # ★ 正常落库已写过同样内容 → 不重复写
+                    if text.strip() and text.strip().startswith(_lc.strip()[:200]) \
+                            and len(_lc.strip()) >= 200:
+                        # 前一条是本内容的**前缀**（截断后补写）⇒ 同样不重复写
+                        return
                 conn.execute(
                     "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
                     (conversation_id, "assistant", text + suffix, "text", "{}"))
                 conn.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
                              (conversation_id,))
-        except Exception:
-            pass   # 固化失败不掩盖原始异常
+        except Exception as _persist_err:
+            # 固化失败不掩盖原始异常，但**必须留痕**（原来 `pass` 静默：
+            # 去重/写入这类缺陷会完全不可见，2026-10-10 的重复落库就是这样漏掉的）。
+            print(f"[_persist_partial_stream] 固化失败（reason={reason}）：{_persist_err!r}")
 
     def execute_stream(self, user_input, conversation_id, branch="dev", provider_id=None,
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
@@ -1339,6 +1359,13 @@ class StreamMixin:
                 agent_def = self.registry.get(intent)
             hil_level = agent_def.hil_level
             effective_provider = provider_id or self.registry.get_provider_id(intent)  # 优化2
+            # ★ P1-b（2026-10-10）Agent 级模型参数（含 thinking_mode）——
+            #   `agents.model_params` 此前是**死配置**（有列、有前端表单，无消费点）。
+            #   取一次供本方法所有 chat 调用复用；取不到一律 {} ⇒ 零行为漂移。
+            try:
+                _agent_mp = self.registry.get_model_params(intent)
+            except Exception:
+                _agent_mp = {}
             # ── P0-2 断点续跑（2026-10-03）：resume 绕过"意图识别之后的一切前置判定" ──────
             # 为什么必须在这里插队：内容级澄清（`_clarify_detect`）、复杂度判定（`_needs_orchestration`）、
             # 沉淀流程复用（`_try_reuse_planner_flow`）都是**启发式**的。续跑时用户可能一句话都不输入，
@@ -1734,11 +1761,16 @@ class StreamMixin:
             # ★ 2026-10-09：3 → 6 且可配置，**与 execute.py 同源同值**。
             #   实测依据见 execute.py 同位置注释：3 轮预算在
             #   「查标准库 → 取回技能正文 → 生成」这条典型序列下会在生成前耗尽。
+            # ★★ 2026-10-09（米爸纠正语义，与 execute.py **同源**）：
+            #   6 → 12 且拆出**失败轮预算**——成功推进不扣，只有失败轮才扣。
+            #   旧实现把成功轮也计入总轮数，成功推进被失败轮"连坐"截断。
+            #   ⚠️ 必须与 execute.py 的默认值**一致**（tools/verify/verify_tool_round_budget.py 会判）。
             try:
                 from core import config as _cfg
-                max_tool_rounds = int(_cfg.get("agent", "max_tool_rounds", 6))
+                max_tool_rounds = int(_cfg.get("agent", "max_tool_rounds", 12))
+                max_failed_rounds = int(_cfg.get("agent", "max_failed_rounds", 3))
             except Exception:
-                max_tool_rounds = 6
+                max_tool_rounds, max_failed_rounds = 12, 3
             # 2026-10-04：接入统一护栏（与 execute.py 的非流式 loop **同源**）。
             # 为什么必须同源：这两段是同一套 ReAct 语义的两种实现，此前只有编排路径
             # 有 token 预算，重复检测与工具超时两边都没有 ⇒ 补一边就会留下新的不对称。
@@ -1747,7 +1779,8 @@ class StreamMixin:
             # 与 execute.py **同源**（同一模块）—— 两条路径是同一套 ReAct 语义的两种实现，
             # 协议层缺陷漏一条路径就是线上 HTTP 400（同 loop_guard 立规时的判断）。
             from agent import loop_protocol as _lproto
-            _lg = _LoopGuard(token_budget=60000, tool_timeout_s=120.0)
+            _lg = _LoopGuard(token_budget=60000, tool_timeout_s=120.0,
+                             max_failed_rounds=max_failed_rounds)
             _rnd = 0  # 工具轮次计数（供 reasoning 事件 round/phase 标识；无工具直出时保持 0）
             # 2026-09-17 S3：上一轮已回填的 tool 消息下标（下轮仅清空其 content，不删除消息）
             _prev_tool_idx = []
@@ -1796,7 +1829,14 @@ class StreamMixin:
                            "status": "done", "detail": _lg.stats()}
                     tools_def = None
                     break
-                probe = llm_client.chat(messages, provider_id=effective_provider, stream=False, tools=tools_def)
+                # ★ 失败轮预算：**只有失败轮才扣**（成功的正常推进不限制）
+                if not _lg.failed_rounds_left():
+                    yield {"type": "stage", "name": "失败轮预算耗尽，停止继续调用",
+                           "status": "done", "detail": _lg.stats()}
+                    tools_def = None
+                    break
+                probe = llm_client.chat(messages, provider_id=effective_provider, stream=False,
+                                       tools=tools_def, _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
                 _lg.add_tokens(_tok_of(probe))
                 pmsg = probe["choices"][0]["message"]
                 ptool_calls = pmsg.get("tool_calls") or []
@@ -1822,6 +1862,7 @@ class StreamMixin:
                 exec_reasoning.append(_p_delta)
                 yield {"type": "reasoning", "delta": _p_delta, "round": _rnd + 1, "phase": "plan"}
                 weak_count = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
+                _round_had_ok = False   # 本轮是否有可用工具结果（失败轮预算判据）
                 #── P0-①（2026-10-07）并行调用配对：切成「执行队列 / 未执行队列」────
                 # ⚠️ 不能删掉上限（那是失控护栏），必须为未执行的尾部补结果，
                 #    否则 pmsg 带全部 tool_calls 而 results 只有 3 笔 ⇒ 第 4 笔起悬空
@@ -1881,6 +1922,11 @@ class StreamMixin:
                             _lg.undo_dup_count(tname, targs)
                     _t_ok = bool(result.get("ok"))
                     _r_full = str(result.get("result") or "")
+                    # ★ 失败轮预算判据（与 execute.py 同源）：本轮是否有可用结果
+                    if _t_ok and not (result.get("weak")
+                                      or ("未检索到" in _r_full)
+                                      or ("无新冲突" in _r_full)):
+                        _round_had_ok = True
                     _t_trunc = len(_r_full) > _TOOL_RESULT_CAP
                     _t_result = _r_full[:_TOOL_RESULT_CAP]
                     _e_full = str(result.get("error") or "")
@@ -1954,6 +2000,8 @@ class StreamMixin:
                     # ⚠️ 分母用**执行数**（`_exec_calls`）而非 `len(results)`：
                     #    P0-① 为未执行尾部补了 skipped 结果，计入分母会让本该收敛的场景
                     #    变成"不收敛"，也可能让本该继续的场景误收敛。
+                    # ★ 只有**失败轮**才扣失败预算（成功推进不限制，米爸 2026-10-09）
+                    _lg.charge_failed_round(_round_had_ok)
                     if weak_count == len(_exec_calls) and weak_count > 0:
                         _w_delta = f"（{agent_def.name}）本轮工具结果均与任务弱相关，不再继续调用工具，直接基于已有信息组织回答。"
                         exec_reasoning.append(_w_delta)
@@ -2011,8 +2059,87 @@ class StreamMixin:
                         getattr(self, "_skill_body_offloads", None))
                 except Exception:
                     _extra = ""
-                _fin_msgs = _lproto.finalize_messages(messages, extra_context=_extra)
-                chunks = llm_client.chat(_fin_msgs, provider_id=effective_provider, stream=True)
+                # ★ 2026-10-10：把**真实触发原因**传给收尾提示
+                #   （米爸问"是单个工具上限还是所有之和"——答案取决于撞的是哪道闸）。
+                #   `_lg.stop_reason` 是 LoopGuard 记录的真实原因（rounds/failed/token_budget），
+                #   拿不到就传空⇒ 沿用通用文案（逐字兼容）。
+                _fin_msgs = _lproto.finalize_messages(
+                    messages, extra_context=_extra,
+                    reason=_lg_stop_reason(_lg), used=_lg_failed_rounds(_lg),
+                    limit=_lg_limit_of(_lg, max_tool_rounds))
+
+                # ★★ 2026-10-09（与 execute.py 同源，米爸纠正后补齐）：
+                #   收尾轮原来一律 `stream=True` 且**不传 tools**
+                #   ⇒ 实测 v6 报出78 个语法错后，收尾只写了 28 token
+                #   ⇒ **「报了错没人修」在前端真实路径同样成立**。
+                #   而**不能**直接给这个 stream 调用塞 tools：
+                #   `stream=True` 返回的是**生成器**，没有配套的工具执行循环
+                #   ⇒ provider 返回 tool_calls 而**无人消费** ⇒ 停摆。
+                #   ⇒ 正解：**先用一个非流式探针**把工具跑掉（SSE 事件照常 yield），
+                #      再用**更新后的 messages** 做流式收尾。
+                #   判据复用 `_lproto.repair_tools_needed`（只在 `判据：block` 时给工具）。
+                try:
+                    _repair_msgs = None
+                    if tools_def and _lproto.repair_tools_needed(messages):
+                        _repair_msgs = _repair_tools = None
+                        from agent.pipeline_parts.execute import _repair_tool_subset
+                        _repair_tools = _repair_tool_subset(tools_def)
+                        if _repair_tools:
+                            _repair_msgs = messages
+                            # 上限用 2：只给「改一遍 + 复校」的机会，不放开成新ReAct 循环
+                            for _ri in range(2):
+                                if not _lg.failed_rounds_left():
+                                    break
+                                _probe = llm_client.chat(
+                                    _repair_msgs, provider_id=effective_provider,
+                                    stream=False, tools=_repair_tools,
+                                    _intent=CHAT_TASK_REPAIR, _model_params=_agent_mp)
+                                _pm = (_probe["choices"][0]["message"])
+                                _pcalls = _pm.get("tool_calls") or []
+                                if not _pcalls:
+                                    break                      # 无工具调用 ⇒ 收尾
+                                _repair_msgs = list(_repair_msgs) + [_pm]
+                                _got_ok = False
+                                for _tc in _pcalls:
+                                    _fn = _tc.get("function") or {}
+                                    _tn = _fn.get("name", "")
+                                    try:
+                                        _ta = json.loads(_fn.get("arguments") or "{}")
+                                    except Exception:
+                                        _ta = {}
+                                    yield {"type": "tool", "status": "run", "name": _tn,
+                                           "arguments": _ta, "call_id": _tc.get("id", ""),
+                                           "round": _rnd + 1, "phase": "repair"}
+                                    _res = _lg.call(self._exec_tool_call, _tn, _ta)
+                                    if _res.get("ok"):
+                                        _got_ok = True
+                                    yield {"type": "tool", "status": "done", "name": _tn,
+                                           "result": str(_res.get("result") or "")[:2000],
+                                           "ok": bool(_res.get("ok")),
+                                           "call_id": _tc.get("id", ""),
+                                           "round": _rnd + 1, "phase": "repair"}
+                                    _repair_msgs.append({
+                                        "tool_call_id": _tc.get("id", ""), "role": "tool",
+                                        "name": _tn,
+                                        "content": json.dumps(
+                                            {"ok": _res.get("ok"),
+                                             "result": _res.get("result", "")},
+                                            ensure_ascii=False)})
+                                _lg.charge_failed_round(_got_ok)
+                except Exception as _re:
+                    # 修复循环任何异常都**不得**让整个流式请求失败
+                    try:
+                        yield {"type": "reasoning",
+                               "delta": f"（收尾修复轮跳过：{type(_re).__name__}）",
+                               "round": _rnd + 1, "phase": "repair"}
+                    except Exception:
+                        pass
+                    _repair_msgs = None
+                if _repair_msgs:
+                    _fin_msgs = _lproto.finalize_messages(_repair_msgs,
+                                                           extra_context=_extra)
+                chunks = llm_client.chat(_fin_msgs, provider_id=effective_provider, stream=True,
+                                        _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
                 for chunk in chunks:
                     for delta in self._extract_stream_deltas(chunk):
                         # V2.5：工具轮后的最终生成同样透传思考（原分支只取 content，丢思考内容）
@@ -2025,7 +2152,8 @@ class StreamMixin:
                             yield {"type": "token", "delta": delta["content"]}
             # llm_client.chat(stream=True) 返回生成器；FORCE_MOCK 下 MockLLM 也走 _stream
             if not tool_injected:
-                chunks = llm_client.chat(messages, provider_id=effective_provider, stream=True)
+                chunks = llm_client.chat(messages, provider_id=effective_provider, stream=True,
+                                        _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
                 full = []
                 for chunk in chunks:
                     for delta in self._extract_stream_deltas(chunk):
