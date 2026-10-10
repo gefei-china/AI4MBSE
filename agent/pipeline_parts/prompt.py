@@ -231,19 +231,98 @@ class PromptMixin:
     # ══ 2026-09-17 S4：流式(stream) 与非流式(execute) 两条路径**共用**的装配片段 ══
     # 背景：这两个路径各自内联了一份约 2,100 字的 system prompt（约 95% 相同），
     #   任何一处改文案都要记得改另一处，已出现过口径漂移。此处收敛为单一实现，两侧只负责拼接顺序。
+
+    #: Agent prompt 的**段名契约**（8 个视图生成 Agent 实测完全一致，2026-11）。
+    #: 顺序即优先级，越前越必留。
+    _ROLE_SECTIONS = ("职责", "输入", "输出", "工作流程", "约束",
+                      "视图规范参考", "输出示例")
+
+    #: 必留段：砍掉任一段都会直接损害产出正确性。
+    #:   · 约束 / 输出示例 —— 这些 Agent 的 prompt 里明写"语法形式以【输出示例】为唯一依据"，
+    #:     示例是**唯一的语法权威**；砍掉它模型就自由发挥 ⇒ 回到"每轮重复犯同样的语法错"
+    #:     （v2_constraints 模块注释里记录的就是这个原始事故）。
+    #:   · 职责 / 输入 / 输出 / 工作流程 —— 干活必需的规程，量小（8 Agent 合计 8.5k tok）。
+    _ROLE_MUST_KEEP = ("职责", "输入", "输出", "工作流程", "约束", "输出示例")
+
+    #: 可裁段：与示例高度重叠，信息可从示例推出。整段留一行占位（细节在 DB，追问可恢复）。
+    _ROLE_TRIMMED = ("视图规范参考",)
+
+    _ROLE_TRIM_PLACEHOLDER = "（本段已折叠：内容与上方【输出示例】高度重叠，需要时可直接查看 Agent 定义原文）"
+
+    @classmethod
+    def _split_role_sections(cls, raw: str):
+        """把 Agent prompt 按段名切成 [(标题, 原始标题行, 正文)]。
+
+        ★ 标题写法**不统一**（实测 2026-11，8 个视图 Agent 全是 mixed）：
+            活动图生成/需求/IBD/结构/用例 → `## 职责`（二级+空格）
+            参数视图/状态机/顺序视图      → `#职责`（一级+无空格），但 `## 视图规范参考` 是二级
+          首版正则要求 `#{2,3}\\s+` ⇒ **3 个 Agent 整段解析为空**（实测 Q2 表"全 0"）。
+          ⇒ 这里必须同时容忍两种写法。
+
+        ★ 返回**原始标题行**而不是规范化标题：装配时必须原样写回，
+          否则 `## 职责` 被拼成 `职责` ⇒ 下游再解析就认不出段名（首版踩过：
+          装配后 token 回来了但段名全丢，等于把"有序结构"退化成"一堆文本"）。
+
+        无标题（短 prompt / 聊天类 Agent）→ 返回单段，调用方按原样处理。
+        """
+        import re as _re
+        secs, cur, head, buf = [], None, None, []
+        pat = _re.compile(r"^(#{1,6})\s*(.+?)\s*$")
+        for line in (raw or "").splitlines():
+            m = pat.match(line)
+            title = m.group(2).strip() if m else ""
+            if title and any(k in title for k in cls._ROLE_SECTIONS):
+                secs.append((cur, head, "\n".join(buf)))
+                cur, head, buf = title, line, []
+            else:
+                buf.append(line)
+        secs.append((cur, head, "\n".join(buf)))
+        return secs
+
     def _build_role_block(self, agent_def, cap: int = 0) -> str:
         """角色化首段（Agent 专属角色块）。
 
-        cap>0 → 按字符上限截断：流式路径用（Agent 定制必须生效，但不能让 7,981 字的
-                视图生成 Agent prompt 整块进入每一次请求）；
-        cap=0 → 不截断：非流式路径沿用原行为（该路径本就是"某个命中 Agent 在执行"）。
+        cap>0 → **段级装配**（流式路径）：超上限时折叠可裁段（`视图规范参考`），
+               必留段（`约束` / `输出示例` / `职责` / …）**永不裁剪**；
+        cap=0 → 不截断（非流式路径原行为）。
+
+        ★ 2026-11-11 修正（此前是 `raw[:cap] + "…"` **纯字符腰斩**）：
+          实测 8 个视图 Agent 的 prompt 为 2361~5956 tok，而 `_AGENT_ROLE_CAP=1200` **字符**
+          （≈1098 tok）⇒ 活动图生成被砍 82%、参数视图 -74%，且：
+            · 截断点落在 `## 工作流程` 第 3 条中间（句子腰斩）
+            · `## 约束`(906) / `### 视图规范参考`(844) / `## 输出示例`(2309) **整段消失**
+          即"省下的 token 是把最有约束力的部分删掉换来的"。而唯一能暴露这件事的
+          `verify_sysml_baseline_cases.py` 只校验 L0 卡内容、不看 Agent prompt 是否被腰斩
+          ⇒ 该问题长期未被发现。
         """
         raw = (getattr(agent_def, "system_prompt", "") or "").strip()
         if not raw:
             raw = "你是网络总体MBSE设计助手。"
-        if cap and len(raw) > cap:
-            raw = raw[:cap] + "…"
-        return raw
+        if not cap or len(raw) <= cap:
+            return raw
+        return self._assemble_role_sections(raw, cap)
+
+    def _assemble_role_sections(self, raw: str, cap: int) -> str:
+        """段级装配：超 cap 时折叠 `_ROLE_TRIMMED`，其余必留段**原样保留原始标题行**。
+
+        仍超 cap 时（必留段本身就超）**不再腰斩** —— 按 Anthropic 建议
+        "minimal ≠ short"：宁可多发，也不能把语法权威（示例/约束）砍掉。
+        超出部分交由 `_apply_total_budget` 的总闸统一处置。
+        """
+        secs = self._split_role_sections(raw)
+        if not any(t for t, _, _ in secs):
+            # 无可识别段（短 prompt / 聊天类 Agent）⇒ 保持原截断行为，不改变既有语义
+            return raw[:cap] + "…"
+        out = []
+        for title, head, body in secs:
+            if title and any(k in title for k in self._ROLE_TRIMMED):
+                out.append("%s\n%s\n" % (head, self._ROLE_TRIM_PLACEHOLDER))
+            elif title:
+                out.append("%s\n%s\n" % (head, body))
+            else:
+                out.append(body)          # 标题行本身等无标题内容
+        res = "\n".join(out).strip()
+        return res if len(res) > cap else res + "…"
 
     def _build_output_rules(self) -> str:
         """输出规范段（两条路径共用同一份文案）。"""
