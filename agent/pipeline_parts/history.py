@@ -935,6 +935,27 @@ class HistoryMixin:
                                       budget_fn=self._apply_context_budget,
                                       truncate_fn=self._truncate_tokens)
                 messages[0]["content"] = sys0
+                # ★ 2026-10-11（conv=514 实测修）：历史区在**主路径**下不是拼进
+                #   messages[0]，而是 `_load_history` 组装出的**多条独立 system 消息**
+                #   （`【话题：…摘要】` / `【相关历史片段…】` 各占一条，实测合计 1592 tok）。
+                #   原实现只裁 messages[0] ⇒ 这些块一档都不被裁 ⇒ 总闸静默失效
+                #   （实测 13692 tok 输入，裁完仍 11692 tok，日志只留"裁掉 0 tok"）。
+                #   这里对 messages[1:] 里 role=system 的块逐条走同一套档位动作。
+                #   ⚠️ 只动 role=system：user/assistant 历史**永不裁**（保住对话连续性与
+                #   tool_call 配对），这与既有"旧三层窗口把历史拼进 system 区"不冲突。
+                _extra_before = 0
+                for _mi in range(1, len(messages)):
+                    _m = messages[_mi]
+                    if _m.get("role") != "system":
+                        continue
+                    _c = _m.get("content") or ""
+                    if not _cp.is_main_path_hist_block(_c):
+                        continue        # 产物摘要等非历史块另由档 2 规则处理
+                    _extra_before += _cp.count_block_tokens(_c)
+                    _c2 = _cp.apply_tier(_c, "", step,
+                                         budget_fn=self._apply_context_budget,
+                                         truncate_fn=self._truncate_tokens)
+                    _m["content"] = _c2
                 after = count_messages_tokens(messages)
                 if after <= total_cap:
                     break

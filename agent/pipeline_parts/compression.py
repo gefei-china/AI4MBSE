@@ -27,13 +27,47 @@ TIER_SCALES = (0.6, 0.35, 0.2, 0.1)
 #: 档 i 的触发线：pressure = before/total_cap **严格大于** TIER_TRIGGERS[i-1] 才进档 i
 TIER_TRIGGERS = (1.0, 1.3, 1.6, 2.0)
 
+#: 各档对「主路径历史块」（话题摘要 / 相关片段 / 既有产物）保留的正文 token 上限。
+#:
+#: ★ 为什么档 1 也要裁（2026-10-11，conv=514 实测修）：
+#:   原设计里历史区只在档 1 做 `scale` 重裁，而 `_apply_context_budget` 的两个 `re.sub`
+#:   只认 `【更早对话摘要】/【历史对话概览】` ⇒ **主路径下一档都不裁**。
+#:   实测 pressure=1.37（13746/10000）只进**档 1** ⇒ 走完全程"裁掉 0 tok"，
+#:   也就是**最常见的超窗区间（100%~130%）恰好是总闸完全空转的区间**。
+#:   现在档 1 起就按上限裁历史块，档位越高上限越紧 ⇒ 每档都有真实收益。
+TIER_HIST_BLOCK_TOKENS = (900, 600, 400, 200)
+
 #: 附件块头（prompt.py::_build_attachment_block 唯一真源，勿在此复制第二份文案）
 ATT_HEADER = "【用户上传资料（优先依据）】"
+
+#: 主路径（话题分组成功）产出的块头 —— 2026-10-11 实测补齐。
+#:
+#: ★ 为什么必须补（这是一条 P0 级静默失效，conv=514 实测）：
+#:   压缩器此前只认 `【更早对话摘要】/【历史对话概览】` 这两个块名，而它们**只在旧的三层
+#:   窗口回退路径**产出（history.py:760/764，"话题打标失败 ⇒ _load_history_legacy"才走）。
+#:   生产里话题打标基本都成功 ⇒ 历史区实际是下面这三种块 ⇒ **总闸触发了却一档都裁不到**
+#:   （实测：13,692 tok 输入，裁完仍 11,692 tok；日志只留一行"裁掉 0 tok"）。
+#:
+#: ★ 纪律：**组装侧新增块名必须同步登记到这里**，否则总闸对该块静默失效。
+#:   由 tools/verify/verify_compression_anchor.py 从 history.py/session_artifacts.py
+#:   提取真实块名反向比对，新增块名而未登记 ⇒ 门禁判红。
+HIST_TOPIC_PREFIX = "【话题："                     # 形如【话题：<label> 摘要】
+HIST_FRAGMENT_PREFIX = "【相关历史片段（第"          # 形如【相关历史片段（第 N 轮 · …）】
+ARTIFACT_HEADER = "【本会话既有产物】"               # session_artifacts.build_digest
+
+#: 主路径历史区块头（作为前缀匹配使用）
+HIST_MAIN_PATH_PREFIXES = (HIST_TOPIC_PREFIX, HIST_FRAGMENT_PREFIX)
 
 #: 附件块的**下一个**块头候选（取最早出现者作为块尾；均无前导空行歧义）
 _NEXT_BLOCK_MARKERS = (
     "检索到的互联数据：",       # stream.py 拼装 + execute assemble 的检索块头
     "【需求质量分析结果",        # 报告场景 context_text 尾巴（stream.py:1341）
+    # ↓ 主路径块头（2026-10-11 补齐；缺了它们会把整段历史误算进上一块的正文）
+    HIST_TOPIC_PREFIX,
+    HIST_FRAGMENT_PREFIX,
+    ARTIFACT_HEADER,
+    ATT_HEADER,
+    # ↓ 旧回退路径块头（保留：打标失败时仍会产出）
     "【更早对话摘要】",
     "【历史对话概览】",
 )
@@ -102,14 +136,104 @@ def collapse_summary_block(system_prompt: str) -> str:
     """档 3+：【更早对话摘要】整块置一行占位（保留【历史对话概览】——它本来就是概览）。
 
     占位自身 ~40 tok，相比原块（上限 8000 字符正则域）净收益显著。
+
+    ★ 2026-10-11：同时折叠**主路径**的 `【话题：…摘要】` 块（同一档）。
+      旧实现只认 `【更早对话摘要】`，而主路径下该块根本不出现 ⇒ 档3 空转。
+      折叠话题摘要的理由与 `【更早对话摘要】` 完全一致：细节都在 messages 表，
+      追问即可恢复（占位文案已写明）。**按相关度保留**：块内的 `（第 N 轮…相关度 x）`
+      已被剥离，真正的排序在组装侧完成（top-k），所以这里可以整块折叠。
     """
     try:
         import re as _re
+        # 旧回退路径
         pat = _re.compile(r"【更早对话摘要】\n[\s\S]*?(?=\n【历史对话概览】|$)")
-        new, n = pat.subn("【更早对话摘要】\n" + _SUMMARY_PLACEHOLDER, system_prompt, count=1)
-        return new if n else system_prompt
+        system_prompt, n = pat.subn("【更早对话摘要】\n" + _SUMMARY_PLACEHOLDER,
+                                    system_prompt, count=1)
+        if n:
+            return system_prompt
+        # 主路径：连续多个【话题：…摘要】块（各自独立成段）→ 逐块折叠
+        pat2 = _re.compile(
+            r"【话题：[^\n】]{0,40}】\n[\s\S]*?(?=\n【|\Z)")
+        system_prompt, n2 = pat2.subn(
+            lambda m: m.group(0).split("\n")[0] + "\n" + _SUMMARY_PLACEHOLDER + "\n",
+            system_prompt)
+        return system_prompt if n2 else _collapse_legacy_tail(system_prompt)
     except Exception:
         return system_prompt
+
+
+def _collapse_legacy_tail(system_prompt: str) -> str:
+    """`【话题：…】` 与 `【更早对话摘要】` 都不存在时的收尾（保持原样，幂等）。"""
+    return system_prompt
+
+
+def cut_history_main_path_blocks(system_prompt: str, truncate_fn,
+                                 keep_tokens: int = 900) -> tuple:
+    """档 2+：**主路径历史区**逐块截断（对话题摘要块 / 相关历史片段块 / 既有产物块）。
+
+    为什么必须单独做（2026-10-11，conv=514 实测）：
+      主路径的历史区是由 `_load_history` 组装成**多条 system 消息**（每块一条），
+      而 `_apply_context_budget` 里的两个 `re.sub` 只在**单条 system 字符串**内匹配
+      `【更早对话摘要】/【历史对话概览】` ⇒ 对 `【话题：…】/【相关历史片段…】` 完全无效。
+      结果：总闸触发却 0 tok 收益（13,692 → 11,692，裁了个寂寞）。
+
+    裁剪语义（与既有 `cut_attachment_block` 同款）：**保留块头 + 正文按 token 截断**。
+      块头带 `（第 N 轮 · 助手，相关度 0.476）` 这类**检索元信息**，是模型判断
+      "这段值不值得看"的唯一依据 ⇒ 绝不能裁掉。
+
+    返回 (新 system 区, 被裁块数)。异常一律原样返回（与总闸同款故障保护）。
+    """
+    try:
+        cut = 0
+        for prefix in (HIST_TOPIC_PREFIX, HIST_FRAGMENT_PREFIX, ARTIFACT_HEADER):
+            # 反复处理：同一前缀可能出现多次（每块一条消息）
+            while True:
+                span = _block_span(system_prompt, prefix)
+                if not span:
+                    break
+                start, end = span
+                # 块头 = 从 prefix 到第一个换行（含【…】整段）
+                nl = system_prompt.find("\n", start)
+                header_end = (nl + 1) if (0 <= nl < end) else end
+                body = system_prompt[header_end:end]
+                if not body.strip():
+                    # 空块（只有块头）：把块头本身摘掉，避免 while 死循环
+                    system_prompt = system_prompt[:start] + system_prompt[end:]
+                    continue
+                kept = truncate_fn(body, keep_tokens, keep_head=True)
+                system_prompt = system_prompt[:header_end] + kept + system_prompt[end:]
+                cut += 1
+                if kept == body:
+                    break          # 已在预算内，换下一块
+        return system_prompt, cut
+    except Exception:
+        return system_prompt, 0
+
+
+def is_main_path_hist_block(content: str) -> bool:
+    """判断一条 system 消息是否是**主路径历史块**（可被总闸裁剪）。
+
+    用于 `history._apply_total_budget`：主路径历史是**多条独立 system 消息**
+    （`_load_history` 每块一条），必须逐条识别才能被裁到。
+
+    只认三种块头（`【话题：` / `【相关历史片段（第` / `【本会话既有产物】`）。
+    刻意**不认** role=system 的其它内容（如真实 system prompt、产物 digest 主体）
+    —— 认错等于裁掉不该裁的东西，那是比"不裁"更严重的事故。
+    """
+    if not isinstance(content, str) or not content:
+        return False
+    head = content.lstrip()[:40]
+    return head.startswith(HIST_TOPIC_PREFIX) or head.startswith(HIST_FRAGMENT_PREFIX) \
+        or head.startswith(ARTIFACT_HEADER)
+
+
+def count_block_tokens(content: str) -> int:
+    """块 token 数（复用 core.token_counter；失败返回 0，不阻断主链路）。"""
+    try:
+        from core.token_counter import count_tokens
+        return count_tokens(content or "")
+    except Exception:
+        return 0
 
 
 def apply_tier(system_prompt: str, context_text: str, tier: int,
@@ -121,6 +245,10 @@ def apply_tier(system_prompt: str, context_text: str, tier: int,
     （当前实现未消费该参数；缺失会让 TypeError 被 except 吞掉 ⇒ scale 重裁**静默失效**，
     2026-10-02 实测踩过：档1"裁掉 0 tok"即此根因，勿删）。
     逐档循环由调用方负责（每档后重算 tokens、够即停）。
+
+    ★ 2026-10-11：主路径历史块的截断从**档 1** 起生效（原先挂在档 2 ⇒ 100%~130%
+      这个最常见的超窗区间总闸完全空转，实测 conv=514：13746 tok 裁完仍 13746）。
+      各档上限见 `TIER_HIST_BLOCK_TOKENS`，档位越高越紧。
     """
     if tier < 1 or tier > len(TIER_SCALES):
         return system_prompt
@@ -129,6 +257,9 @@ def apply_tier(system_prompt: str, context_text: str, tier: int,
                                   scale=TIER_SCALES[tier - 1])
     except Exception:
         pass  # scale 重裁失败不阻断，后续档继续尝试别的块
+    # 主路径历史块（话题摘要 / 相关片段 / 既有产物）——**档 1 起**
+    system_prompt, _cut = cut_history_main_path_blocks(
+        system_prompt, truncate_fn, keep_tokens=TIER_HIST_BLOCK_TOKENS[tier - 1])
     if tier >= 2:
         system_prompt = cut_attachment_block(system_prompt, truncate_fn)
     if tier >= 3:
