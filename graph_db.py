@@ -536,11 +536,83 @@ class FusekiWriter(GraphDBWriter):
         text = self._post(self.endpoint + "/query", q, "application/sparql-query")
         return self._parse_json_results(text)
 
-    def query_sparql(self, query: str, limit: int = 50) -> list:
+    # ── 图谱不可用短熔断（2026-11-11）────────────────────────────────────
+    #: Fuseki 挂掉时，**一次对话会触发几十次** SPARQL（实体链接/关系展开/覆盖率…），
+    #: 每次都白等满 `timeout`（默认 15s）⇒ 实测首token 延迟 45~61s，
+    #: 而模型本身只要 0.4s（DeepSeek-V3 实测）—— 用户看到的是"转圈一分钟"。
+    #: 与 embedding 的 `_UNAVAIL_BLOCK_*`（P1-34）同款处置：**短期熔断 + 快失败**。
+    _UNAVAIL_BLOCK_UNTIL = 0.0
+    _UNAVAIL_BLOCK_SEC = 60.0
+    LAST_UNAVAIL_ERROR = ""
+    #: 熔断期的**探测间隔**（秒）：每隔这么久放一次真实请求去探活。
+    #: 解决"熔断期完全不打网络 ⇒ 永远感知不到服务恢复"的问题（门禁 I4）。
+    _PROBE_INTERVAL = 10.0
+    _last_probe_at = 0.0
+
+    def _note_unavail(self, exc) -> None:
+        """识别「图谱服务不可用」（连接被拒/超时/5xx）→ 短熔断。
+
+        只对**基础设施类**错误熔断；SPARQL 语法错（HTTP 400）属于查询本身的问题，
+        熔断它会把"某条查询写错了"放大成"整个图谱 60 秒不可用"。
+        """
         try:
-            return self._query(query, limit)
+            import urllib.error
+            msg = str(exc)
+            hit = ("10061" in msg or "timed out" in msg.lower()
+                   or "Connection refused" in msg
+                   or "HTTP 502" in msg or "HTTP 503" in msg
+                   or "HTTP 504" in msg)
+            if not hit:
+                return
+            sec = 60.0
+            try:
+                from core import config as _c
+                sec = float(_c.get("graph_db", "unavail_block_sec", 60) or 60)
+            except Exception:
+                sec = 60.0
+            if sec > 0:
+                type(self)._UNAVAIL_BLOCK_UNTIL = time.time() + sec
+                type(self).LAST_UNAVAIL_ERROR = msg[:200]
+        except Exception:
+            pass
+
+    @classmethod
+    def unavail_blocked(cls) -> bool:
+        """当前是否处于「图谱不可用」熔断期（期间直接返回空结果，不打网络）。"""
+        return time.time() < cls._UNAVAIL_BLOCK_UNTIL
+
+    def query_sparql(self, query: str, limit: int = 50) -> list:
+        if self.unavail_blocked():
+            # 熔断期：快失败。**返回空列表而不是抛错** —— 与既有"失败即返回 []"的
+            # 语义一致，调用方（检索路由）据此走向量/词面兜底，流程不中断。
+            #
+            # ⚠️ 这里**必须留一个探测口**（2026-11-11 门禁 I4 抓到）：
+            #   若熔断期完全不打网络，则"服务已恢复"这件事永远无法被感知
+            #   ⇒ 必须等满窗口（60s）才能恢复，而期间每次对话都白白走词面兜底。
+            #   做法：每`_PROBE_INTERVAL`秒放一次**探测请求**（打真实网络），
+            #   成功即解除；失败则继续熔断。
+            #   ⇒ 恢复延迟上界 = probe间隔（默认 10s），而不是整个窗口（60s）。
+            now = time.time()
+            cls = type(self)
+            if now - cls._last_probe_at < cls._PROBE_INTERVAL:
+                return []
+            cls._last_probe_at = now
+            try:
+                rows = self._query(query, limit)
+                cls._UNAVAIL_BLOCK_UNTIL = 0.0        # 探测成功 ⇒ 立即恢复
+                cls.LAST_UNAVAIL_ERROR = ""
+                return rows
+            except Exception as e:                     # 探测仍失败 ⇒ 继续熔断
+                self._note_unavail(e)
+                return []
+        try:
+            rows = self._query(query, limit)
+            # 成功即解除熔断（服务恢复后无需等窗口过期）
+            type(self)._UNAVAIL_BLOCK_UNTIL = 0.0
+            return rows
         except Exception as e:
             logger.warning("graph_db.fuseki.query_sparql 失败: %s", e)
+            self._note_unavail(e)
             return []
 
     def query_bind(self, query: str, binds: dict, limit: int = 50) -> list:

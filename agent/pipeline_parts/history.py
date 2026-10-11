@@ -33,7 +33,8 @@ def ctx_budget_tokens(kind: str, fallback_char_key: str, fallback: int) -> int:
                 try:
                     row = conn.execute(
                         "SELECT context_window FROM llm_providers WHERE status='active' "
-                        "AND model_type<>'embedding' ORDER BY is_default DESC, id LIMIT 1"
+                        "AND model_type<>'embedding' AND is_default=1 "
+                        "ORDER BY priority DESC, id ASC LIMIT 1"
                     ).fetchone()
                     win = int((row["context_window"] if row else 0) or 0)
                 finally:
@@ -952,12 +953,20 @@ class HistoryMixin:
                 try:
                     if provider_id:
                         row = conn.execute(
-                            "SELECT context_window FROM llm_providers WHERE id=?",
-                            (provider_id,)).fetchone()
+                            "SELECT context_window FROM llm_providers "
+                            "WHERE id=? AND status='active'", (provider_id,)).fetchone()
                     else:
+                        # ⚠️ **必须带 model_type 过滤**（2026-11-11 补）。
+                        #   主路由 `llm/__init__.py:52` 有 `model_type='chat'` 过滤，
+                        #   而本函数首版照抄时漏了 ⇒ 可能取到 **embedding 模型的窗口**
+                        #   （库里有 `Qwen3-Embedding-0.6B` 且 is_default=1、cw=128000）。
+                        #   后果：预算按 embedding 的窗口算 —— 看似"更宽"，
+                        #   实则把 chat 模型的真实上限算错，属于**我引入的缺陷**。
+                        #   取不到时回落 `budget_window_tokens`（保守），不静默用错的。
                         row = conn.execute(
                             "SELECT context_window FROM llm_providers WHERE status='active' "
-                            "ORDER BY is_default DESC, id LIMIT 1").fetchone()
+                            "AND model_type<>'embedding' AND is_default=1 "
+                            "ORDER BY priority DESC, id ASC LIMIT 1").fetchone()
                     cw = int((row["context_window"] if row else 0) or 0)
                 finally:
                     conn.close()
