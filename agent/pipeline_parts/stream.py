@@ -1729,7 +1729,11 @@ class StreamMixin:
                 pass
             # P1-2（2026-09-24）：总闸——分段预算之和可超窗，发送前算总账（预算内零开销）
             try:
-                messages = self._apply_total_budget(messages, context_text)
+                # 传 provider_id ⇒ 上限按**该 provider 的真实窗口**自适应
+                # （2026-11-11：原为硬编码 10000，而生产 provider 均为 128K，
+                #  10K 上限会把 13.7k 的正常请求误判为超窗并强行压缩）
+                messages = self._apply_total_budget(messages, context_text,
+                                                     provider_id=effective_provider)
             except Exception:
                 pass
             # UX规范 D1（2026-10-03）压缩三件套：总闸触发过 → 透传 compact 事件，

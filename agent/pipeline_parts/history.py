@@ -895,7 +895,63 @@ class HistoryMixin:
         except Exception:
             return system_prompt
 
-    def _apply_total_budget(self, messages, context_text: str):
+    def _total_budget_cap(self, provider_id=None) -> int:
+        """总闸上限：**按本次调用的真实 provider 窗口自适应**，不再拍固定值。
+
+        ★ 为什么必须改（2026-11-11，米爸"不要为了省 token 导致产品流程走不通"）：
+          原实现硬编码兜底 `10000`，而实测生产全部 active provider 的
+          `context_window` 都是 **128000**（`llm_providers` 表：DeepSeek-V3 /
+          deepseek-v4-flash / qwen3.8-max / ds-v4-flash-neibu 均 128000）。
+          ⇒ **12.8 倍的差距**：总闸在 128K 模型上按 10K 裁剪，
+            13.7k 的正常请求被强行压到 10k，触发本可不必的压缩与裁剪
+            （conv=514 实测就是被它判红的），**这正是"为省 token 牺牲流程"**。
+
+        口径（优先级从高到低）：
+          1. `context.total_budget_tokens` 显式配置 > 0 ⇒ 直接用它（运维最高优先）
+          2. `context.total_budget_window_ratio`（默认 **0.75**）× provider 的
+             `context_window` ⇒ 留 25% 余量给**输出**（Anthropic/DeepSeek 惯例：
+             输入占比 70~80% 即开始压缩）
+          3. provider 窗口取不到 ⇒ 回落 `context.budget_window_tokens`
+             （默认 **65536**，与 config 既有值一致 —— 原写 32000 是我随手取的值，
+               与 config 的 65536 口径矛盾，会在 provider 窗口缺失时又收紧一半）
+
+        ⚠️ **宁可放宽，不可误伤**：上限只用于"触发压缩"，不用于"限制输入"。
+          真撞到 provider 硬上限时，上游会返回明确错误（而不是静默截断），
+          那时再降级比"提前把用户的上下文砍掉 90%"要好得多。
+        """
+        try:
+            from core import config as _cfg
+            explicit = int(_cfg.get("context", "total_budget_tokens", 0) or 0)
+            if explicit > 0:
+                return explicit
+            cw = 0
+            try:
+                from database import get_db
+                conn = get_db()
+                try:
+                    if provider_id:
+                        row = conn.execute(
+                            "SELECT context_window FROM llm_providers WHERE id=?",
+                            (provider_id,)).fetchone()
+                    else:
+                        row = conn.execute(
+                            "SELECT context_window FROM llm_providers WHERE status='active' "
+                            "ORDER BY is_default DESC, id LIMIT 1").fetchone()
+                    cw = int((row["context_window"] if row else 0) or 0)
+                finally:
+                    conn.close()
+            except Exception:
+                cw = 0
+            if cw <= 0:
+                cw = int(_cfg.get("context", "budget_window_tokens", 65536) or 65536)
+            ratio = float(_cfg.get("context", "total_budget_window_ratio", 0.75) or 0.75)
+            if ratio <= 0 or ratio > 1:
+                ratio = 0.75
+            return int(cw * ratio)
+        except Exception:
+            return 49152        # 65536 × 0.75：与上面同口径的兜底
+
+    def _apply_total_budget(self, messages, context_text: str, provider_id=None):
         """P1-2（2026-09-24）上下文**总闸**：分段预算之和可超窗，发送前算总账、超了降档重裁。
 
         P1-3（2026-10-02，米爸拍板）升级为**五档分层压缩**（compression.py，评估报告 §2.1 P1）：
@@ -906,7 +962,9 @@ class HistoryMixin:
 
         · 常态（预算内）**零开销**：只算一次 token 就返回
         · 降档 = compression.apply_tier（同一套 _apply_context_budget + _truncate_tokens 原语）
-        · 可关：context.total_budget_guard=false；上限 context.total_budget_tokens（默认 10000）
+        · 可关：`context.total_budget_guard=false`
+        · **上限按 provider 真实窗口自适应**（见 `_total_budget_cap`；2026-11-11 起
+          不再是硬编码 10000 —— 生产 provider 均为 128K，按 10K 裁会误伤正常请求）
         · 每次降档打日志留痕（before/after/档位）——总闸若静默，等于没做
         """
         try:
@@ -920,7 +978,7 @@ class HistoryMixin:
                 return messages
             if not _cfg.as_bool("context", "total_budget_guard", True):
                 return messages
-            total_cap = int(_cfg.get("context", "total_budget_tokens", 10000) or 10000)
+            total_cap = self._total_budget_cap(provider_id)
             before = count_messages_tokens(messages)
             if before <= total_cap:
                 return messages
@@ -962,9 +1020,10 @@ class HistoryMixin:
             try:
                 import logging as _lg
                 _lg.getLogger("mbse.llm").warning(
-                    "[context_total] 总闸触发：估算输入 %d > 预算 %d，五档压缩档位 %d/%d，"
-                    "降档后 %d（裁掉 %d tok，messages=%d 条）",
-                    before, total_cap, step, tier, after, before - after, len(messages))
+                    "[context_total] 总闸触发：估算输入 %d > 预算 %d（provider=%s），"
+                    "五档压缩档位 %d/%d，降档后 %d（裁掉 %d tok，messages=%d 条）",
+                    before, total_cap, provider_id, step, tier, after,
+                    before - after, len(messages))
             except Exception:
                 pass
             # UX规范 D1（2026-10-03）：实际执行的档位是 step（逐档循环可能提前收敛），

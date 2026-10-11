@@ -487,6 +487,16 @@ DEFAULT_CONFIG = {
         "budget_window_tokens": 65536,  # 占比制分母：上下文窗口基准（当前 provider id=1 实测 65536）
         "budget_retrieval_ratio": 0.0,  # 检索区占窗口比例（0=关闭，用 budget_retrieval_tokens）
         "budget_history_ratio": 0.0,    # 历史区占窗口比例（0=关闭，用 budget_history_tokens）
+        # ── 总闸上限（2026-11-11）──────────────────────────────────────────────────
+        # 米爸口径：「不要为了省 token 导致产品流程走不通」。
+        # 原实现硬编码兜底 10000，而实测生产全部 active provider 的 context_window
+        # 都是 128000 ⇒ **12.8 倍差距**：13.7k 的正常请求被误判超窗并强行压缩
+        # （conv=514 实测）。总闸只该"防撞硬上限"，不该"限制输入"。
+        # 现在口径（见 history._total_budget_cap）：
+        #   total_budget_tokens > 0        → 直接用（运维最高优先）
+        #   否则 total_budget_window_ratio  → provider 窗口 × ratio（留余量给输出）
+        #   provider 窗口取不到            → 回退 budget_window_tokens
+        "total_budget_window_ratio": 0.75,  # 输入占比上限（0.75 = 75%，余 25% 给输出）
         # ── 会话产物摘要（P0-6，2026-09-30）────────────────────────────────────────
         # 修的是**多轮断链**：第 1 轮建好的模型（sysml_versions 版本链 / artifacts 产物）
         # 此前在后续轮次**没有任何注入通道** —— 实测会话 514 第 2 轮把"已经建好的需求模型"
@@ -1112,6 +1122,7 @@ CONFIG_SCHEMA = {
         "budget_retrieval_tokens": {"type": "int", "desc": "T6 检索区 token 预算（保头保留最相关，0=回退字符版）"},
         "budget_history_tokens":   {"type": "int", "desc": "T6 历史区 token 预算（话题原文/语义拉回/摘要分区复用，0=回退字符版）"},
         "budget_window_tokens":    {"type": "int", "desc": "占比制分母：上下文窗口基准 token（换模型时同步）"},
+        "total_budget_window_ratio": {"type": "float", "desc": "总闸上限=provider窗口×该比例（默认0.75；总闸只防撞硬上限，不用于省token）"},
         "budget_retrieval_ratio":  {"type": "float", "desc": "检索区占窗口比例（>0 覆盖绝对值键；0=关闭占比制）"},
         "budget_history_ratio":    {"type": "float", "desc": "历史区占窗口比例（>0 覆盖绝对值键；0=关闭占比制）"},
         "artifact_digest_enabled": {"type": "bool", "desc": "会话产物摘要注入开关（多轮：让后续轮次知道本会话已产出什么）"},

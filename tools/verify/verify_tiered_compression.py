@@ -129,6 +129,12 @@ class _E2EStub:
     _truncate_tokens = staticmethod(HistoryMixin._truncate_tokens)
     _apply_context_budget = HistoryMixin._apply_context_budget
     _apply_total_budget = HistoryMixin._apply_total_budget
+    # ★ 2026-11-11 必须补上这个：`_apply_total_budget` 现在会调 `self._total_budget_cap()`
+    #   （上限改为「按 provider 真实窗口自适应」）。stub 缺这个方法 ⇒ except 兜底返回 65536
+    #   口径的 cap，或 AttributeError 被吞 ⇒ 注入的 `total_budget_tokens` 根本不生效
+    #   ⇒ 端到端断言看到「59246→59244 几乎没裁」而误判为实现退化。
+    #   （门禁自身跟不上实现变化 = 又一次「锚点漂移」，同 compression 事故同族。）
+    _total_budget_cap = HistoryMixin._total_budget_cap
 
 
 stub2 = _E2EStub()
