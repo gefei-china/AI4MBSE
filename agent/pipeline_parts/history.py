@@ -12,15 +12,36 @@ def ctx_budget_tokens(kind: str, fallback_char_key: str, fallback: int) -> int:
     """P1-4b（2026-09-21）上下文预算取值：**占比制优先 → 绝对值 → 字符版兜底**。
 
     kind ∈ {'retrieval','history'}。占比键 `context.budget_{kind}_ratio` > 0 时，
-    以「budget_window_tokens × 占比」为准（换模型自适应，依据调研 §4.3）；
+    以「窗口 × 占比」为准（换模型自适应，依据调研 §4.3）；
     否则回落 T6 绝对值键 `budget_{kind}_tokens`（0 则再回落字符版键）。
     与既有「token 项填 0 回退字符版」的兼容模式同构。任何异常返回 fallback。
+
+    ★ 2026-11-11：分母改为 **provider 真实 `context_window`**（原先恒用
+      `budget_window_tokens=65536` 固定值）。口径同 `_total_budget_cap`：
+      拿跟真实约束无关的固定值当分母，等于把"换模型自适应"做成了一半 ——
+      窗口涨到 128K 时占比预算仍按 64K 算，检索/历史区被无谓压到一半。
+      取不到 provider 窗口时才回落 `budget_window_tokens`。
     """
     try:
         from core import config as _cfg
         ratio = float(_cfg.get("context", f"budget_{kind}_ratio", 0) or 0)
         if ratio > 0:
-            win = int(_cfg.get("context", "budget_window_tokens", 65536) or 65536)
+            win = 0
+            try:
+                from database import get_db
+                conn = get_db()
+                try:
+                    row = conn.execute(
+                        "SELECT context_window FROM llm_providers WHERE status='active' "
+                        "AND model_type<>'embedding' ORDER BY is_default DESC, id LIMIT 1"
+                    ).fetchone()
+                    win = int((row["context_window"] if row else 0) or 0)
+                finally:
+                    conn.close()
+            except Exception:
+                win = 0
+            if win <= 0:
+                win = int(_cfg.get("context", "budget_window_tokens", 65536) or 65536)
             return max(16, int(win * ratio))
         return (int(_cfg.get("context", f"budget_{kind}_tokens", 0))
                 or int(_cfg.get("context", fallback_char_key, fallback)))

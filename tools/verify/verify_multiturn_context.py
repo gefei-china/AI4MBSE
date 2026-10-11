@@ -808,10 +808,23 @@ H.get_db = new_conn
 
 
 def _h_run(cid, cur_input=P18_CUR, cfg_over=None):
-    """跑真实 `_load_history`（可临时覆盖 context 配置项；只覆盖指定键）。"""
+    """跑真实 `_load_history`（可临时覆盖 context 配置项；只覆盖指定键）。
+
+    ★ 2026-11-11：注入**绝对值预算**时必须把对应**占比键置 0**。
+      `ctx_budget_tokens` 的取值顺序是「占比制优先 → 绝对值 → 字符版」，
+      而 2026-11-11 起 `budget_history_ratio`/`budget_retrieval_ratio` 默认 > 0
+      ⇒ 只注入 `budget_history_tokens=400` 会被占比键**盖掉**（实测 65536×0.25=16384）
+      ⇒ "低预算"场景根本没造成，E7a/E7b/E7c/E11/M18/M23 六项连锁失败。
+      **门禁跟不上配置语义变化 = 又一次锚点漂移**（与 compression/tiered 同族）。
+      这里对 `*_tokens` 注入自动配对 `*_ratio=0`，保持"注入即生效"的原意。
+    """
+    _over = dict(cfg_over or {})
+    for _k in [k for k in _over if k.endswith("_tokens")]:
+        _over.setdefault(_k[:-len("_tokens")] + "_ratio", 0)
+
     def _fake_get(group, key, default=None, *a, **k):
-        if group == "context" and cfg_over and key in cfg_over:
-            return cfg_over[key]
+        if group == "context" and _over and key in _over:
+            return _over[key]
         return _orig_get_e(group, key, default, *a, **k)
     CFG.get = _fake_get
     try:
@@ -922,9 +935,29 @@ check("E10 短会话（2 条）零回归：唯一那条长回复（828 tok < raw
       len(_ass18) == 1 and _ass18[0]["content"] == _SHORT18,
       "len=%s / 原文 %d" % (len(_ass18[0]["content"]) if _ass18 else None, len(_SHORT18)))
 # E11 超预算会话：均分后的**余量要回填**（否则 ① 的 50% 额度被白扔）
-_raw_cap18 = int(H.ctx_budget_tokens("history", "budget_history_chars", 3000) * 0.5)
-_share16 = max(96, _raw_cap18 // len(_tail16))
-_newest16 = [m for m in _raw16 if m.get("id") == _tail16[-1]]
+#   ★ 2026-11-11：必须**显式注入低预算**才能构造"超预算"前提。
+#     2026-11-11 起历史区预算默认走占比制（窗口 128000 × 0.25 = 32000），
+#     `raw_cap` 从 ~2000 变 16000 ⇒ 会话 16（内容 ~2.4k tok）**不再超预算**，
+#     均分机制按设计不启用（E10 的"装得下就不得切"也是这条语义）⇒
+#     E11 的前提消失、判据失效。这是**行为按预期变化**，不是实现退化。
+#     修法：像 E7 那样用 cfg_over 注入 `budget_history_tokens=2000` + ratio=0，
+#     把"超预算"重新造出来，判据本身不变。
+_LOW_HIST_TOKENS = 2000     # E11/M18/M23 共用的"低预算"注入值（须与下面 raw_cap 同源）
+# ⚠️ `_raw_cap18` 必须用**注入的同一个值**算，不能读全局默认
+#   （注入后全局默认是占比制的 32000，算出 raw_cap=16000 而实际生效 2000 ⇒ 判据自相矛盾）。
+_orig_cap = CFG.get
+CFG.get = lambda g, k, d=None, *a, **kw: (
+    _LOW_HIST_TOKENS if (g == "context" and k == "budget_history_tokens")
+    else 0 if (g == "context" and k == "budget_history_ratio")
+    else _orig_cap(g, k, d, *a, **kw))
+try:
+    _raw_cap18 = int(H.ctx_budget_tokens("history", "budget_history_chars", 3000) * 0.5)
+finally:
+    CFG.get = _orig_cap
+_h16_low = _h_run(16, cfg_over={"budget_history_tokens": _LOW_HIST_TOKENS})
+_raw16_low = _raws(_h16_low)
+_share16 = max(96, _raw_cap18 // max(len(_raw16_low), 1))
+_newest16 = [m for m in _raw16_low if m.get("id") == _tail16[-1]]
 _ntok16 = count_tokens_fn(_newest16[0]["content"]) if _newest16 else 0
 check("E11 超预算会话：余量回填生效（最新一条原文 > 均分份额 %d tok）" % _share16,
       bool(_newest16) and _ntok16 > _share16,
@@ -953,6 +986,7 @@ check("M17 变异锚点命中（used_ids 语义）", _mut17 != _src_h)
 _f17 = _hist_variant_e(lambda s: s.replace(_M17_ANCHOR, _M17_ANCHOR + _M17_OLDCODE))
 CFG.get = lambda group, key, default=None, *a, **k: (
     400 if (group == "context" and key == "budget_history_tokens")
+    else 0 if (group == "context" and key == "budget_history_ratio")
     else _orig_get_e(group, key, default, *a, **k))
 try:
     _p17m = _pulls(_f17(_epipe, 17, cur_input=P18_CUR))
@@ -967,7 +1001,16 @@ _M18_NEW = "    _share = raw_cap * 1000  # M18: 回到「吃满为止」"
 _mut18 = _src_h.replace(_M18_ANCHOR, _M18_NEW)
 check("M18 变异锚点命中（均分份额）", _mut18 != _src_h and _src_h.count(_M18_ANCHOR) == 1)
 f18 = _hist_variant_e(lambda s: s.replace(_M18_ANCHOR, _M18_NEW))
-_r18m = _raws(f18(_epipe, 16, cur_input=P18_CUR))
+# ★ 与 E11 同理：注入低预算把"超预算"前提造出来（否则变异无差异 ⇒ 变异自证空转）
+_orig18 = CFG.get
+CFG.get = lambda g, k, d=None, *a, **kw: (
+    2000 if (g == "context" and k == "budget_history_tokens")
+    else 0 if (g == "context" and k == "budget_history_ratio")
+    else _orig18(g, k, d, *a, **kw))
+try:
+    _r18m = _raws(f18(_epipe, 16, cur_input=P18_CUR))
+finally:
+    CFG.get = _orig18
 check("M18 回到「吃满为止」 → E1 目标断言失败（近因窗口装不满，被抓住）",
       ([m.get("id") for m in _r18m] == _tail16) is False,
       "raw=%d 条（真实实现 8 条）" % len(_r18m))
@@ -1027,8 +1070,17 @@ _M23_ANCHOR = "    if used < raw_cap and raw_list:"
 _mut23 = _src_h.replace(_M23_ANCHOR, "    if False:  # M23: 去掉回填")
 check("M23 变异锚点命中（第二轮余额回填）", _mut23 != _src_h and _src_h.count(_M23_ANCHOR) == 1)
 f23 = _hist_variant_e(lambda s: s.replace(_M23_ANCHOR, "    if False:"))
-_a23 = [m for m in _raws(f23(_epipe, 18, cur_input=P18_CUR)) if m["role"] == "assistant"]
-_n23 = [m for m in _raws(f23(_epipe, 16, cur_input=P18_CUR)) if m.get("id") == _tail16[-1]]
+# ★ 同 E11/M18：注入低预算把"超预算"前提造出来，否则回填分支根本不会进（变异空转）
+_orig23 = CFG.get
+CFG.get = lambda g, k, d=None, *a, **kw: (
+    2000 if (g == "context" and k == "budget_history_tokens")
+    else 0 if (g == "context" and k == "budget_history_ratio")
+    else _orig23(g, k, d, *a, **kw))
+try:
+    _a23 = [m for m in _raws(f23(_epipe, 18, cur_input=P18_CUR)) if m["role"] == "assistant"]
+    _n23 = [m for m in _raws(f23(_epipe, 16, cur_input=P18_CUR)) if m.get("id") == _tail16[-1]]
+finally:
+    CFG.get = _orig23
 _n23tok = count_tokens_fn(_n23[0]["content"]) if _n23 else 0
 check("M23 去掉回填 → E10 目标断言失败（短会话长回复被白切，被抓住）",
       (bool(_a23) and _a23[0]["content"] == _SHORT18) is False,
