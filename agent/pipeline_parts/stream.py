@@ -1568,12 +1568,18 @@ class StreamMixin:
             matched_flows = self._match_flows(user_input + (" " + att_text[:500] if att_text else ""))
 
             # ── 阶段 2：知识检索（#标签 + 附件前 600 字符并入）──
-            yield {"type": "stage", "name": "知识库检索", "status": "run"}
             # 按需检索：#标签主动引用 / Agent kb_required 配置 二选一才检索
             # V3：上传附件不再默认触发知识库检索（附件仍作「优先依据」注入 prompt）
             should_retrieve = (bool(req_scope and req_scope.get('ok')) or bool(kb_tags) or bool(agent_def.kb_required)
                                or (intent == "report_generation" and report_type in ("impact", "review")))
+            # ★ 2026-11-11：stage 事件**移到 should_retrieve 判定之后**。
+            #   此前 `yield {"type":"stage","name":"知识库检索","status":"run"}` 是**无条件**的
+            #   （在 if 之前）⇒ 即使本轮根本没检索（`route_reason="kb_optional"`），
+            #   用户仍会看到一个「知识库检索·未引用」的幽灵环节——
+            #   这正是米爸反馈"为啥每次都有查询知识库的过程"的直接来源。
+            #   口径：**没真检索就不要出现这个环节**（不是隐藏结果，而是根本不宣称做了）。
             if should_retrieve:
+                yield {"type": "stage", "name": "知识库检索", "status": "run"}
                 retrieve_query = user_input + kb_hint
                 slot_ents = [str(e) for e in (slots.get("entities") or []) if str(e)][:5]
                 if slot_ents:
@@ -1635,7 +1641,10 @@ class StreamMixin:
             if self._last_skill_hits:
                 _r_delta += f" 自动触发技能：{'、'.join(self._last_skill_hits)}。"
                 # V2.5：技能执行环节独立事件（前端「🧩 技能执行」卡，命中技能与触发说明可见）
+                # ★ 2026-11-11 补层级字段（depth/agent/mcp），供前端三级展示归组。
                 yield {"type": "skill", "status": "done", "names": list(self._last_skill_hits),
+                       "agent": _ctx_agent, "depth": 1,
+                       "mcp": None,
                        "note": "技能指令已注入生成阶段（触发词命中，指导本回答的组织方式与工具白名单）"}
             exec_reasoning.append(_r_delta)
             yield {"type": "reasoning", "delta": _r_delta}
@@ -1684,7 +1693,12 @@ class StreamMixin:
                     self._skill_allowed_tools = _at
                 if skill_block:
                     # V2.5：手动指定技能也发独立事件（前端「🧩 技能执行」卡可见）
+                    # ★ 2026-11-11 补层级字段。注意此处**早于** `_ctx_agent` 的定义
+                    #   （在技能加载段，而 _ctx_agent 在工具循环段），故此处直接取
+                    #   `agent_def.name` 而不引用 `_ctx_agent` —— 值等价，但避免了
+                    #   "前向引用" 的隐性耦合（门禁 I2 正是抓到这处漏了字段）。
                     yield {"type": "skill", "status": "done", "names": [skill_name],
+                           "agent": (agent_def.name or "-"), "depth": 1, "mcp": None,
                            "note": "指定技能指令已注入生成阶段（完整指令强制遵循）"}
                     pass
             # P1-28（2026-10-02）：**块内容**收敛到 `common.build_prompt_blocks`（唯一真源）。
@@ -1785,6 +1799,45 @@ class StreamMixin:
             from agent import loop_protocol as _lproto
             _lg = _LoopGuard(token_budget=60000, tool_timeout_s=120.0,
                              max_failed_rounds=max_failed_rounds)
+            # ★ 2026-11-11：三级展示的**层级上下文**（Agent → Skill → 工具/MCP）。
+            #   为什么必须由后端回填：前端拿到的 tool 事件只有 {name, arguments, call_id}，
+            #   **没有任何"这是谁调的"的字段** ⇒ 前端只能把所有 agent/skill/tool 平铺到
+            #   同一层（实测 `11-pipeline.js` 的 procAddAgent/procAddSkill/procAddTool
+            #   各自 procUpsert 顶层）。这不是前端的问题，是协议没传。
+            #   契约（前端按此渲染三级）：
+            #     agent 事件 → depth=0，作为容器
+            #     skill 事件 → depth=1，挂在 agent 下
+            #     tool  事件 → depth=2，挂���命中的 skill 下；无 skill 命中时挂 agent 下
+            #   `mcp` 字段留给将来：`tools.mcp_server_id` 目前**全库为空**（0 条），
+            #   故 L3 实际是「本地工具」；协议先留位，MCP 接入后无需改结构。
+            _ctx_agent = agent_def.name or "-"
+            _ctx_skill = None            # None = 未命中技能（工具直接挂 agent 下）
+
+            def _mcp_of(tool_name):
+                """工具→MCP 服务器名（用于三级展示第3 层的标签）。
+
+                ★ 数据现状（2026-11-11 实测）：`tools.mcp_server_id` **全库 41 个工具全为空**
+                ⇒ 当前所有工具都是本地工具，`mcp` 恒为 None。
+                协议**先留位**：将来接入 MCP 时，这里会自动返回服务器名，
+                前端渲染「工具名（MCP:xxx）」**无需再改协议**。
+                查不到一律返回 None，**不得抛异常**（层级信息不该拖垮主链路）。
+                """
+                if not tool_name:
+                    return None
+                try:
+                    conn = get_db()
+                    try:
+                        row = conn.execute(
+                            "SELECT m.name FROM tools t LEFT JOIN mcp_servers m "
+                            "ON m.id = t.mcp_server_id "
+                            "WHERE t.name = ? AND t.status = 'active'", (tool_name,)
+                        ).fetchone()
+                        return (row["m"] if row else None) or None
+                    finally:
+                        conn.close()
+                except Exception:
+                    return None
+
             _rnd = 0  # 工具轮次计数（供 reasoning 事件 round/phase 标识；无工具直出时保持 0）
             # 2026-09-17 S3：上一轮已回填的 tool 消息下标（下轮仅清空其 content，不删除消息）
             _prev_tool_idx = []
@@ -1889,7 +1942,9 @@ class StreamMixin:
                         yield {"type": "tool", "status": "done", "name": tname,
                                "ok": False, "result": _tr["result"],
                                "error": "args_truncated", "call_id": _call_id,
-                               "truncated": True}
+                               "truncated": True,
+                               "agent": _ctx_agent, "skill": _ctx_skill,
+                               "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
                         results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
                                         "name": tname,
                                         "content": json.dumps(_tr, ensure_ascii=False)})
@@ -1906,7 +1961,10 @@ class StreamMixin:
                         continue
                     # 工具调用结果：执行前 → 执行后（流式透传；结果全量返回，前端可展开/复制）
                     yield {"type": "tool", "status": "run", "name": tname, "arguments": targs,
-                           "call_id": _call_id}
+                           "call_id": _call_id,
+                           # ★ 2026-11-11 三级展示层级（详见 _ctx_agent 处注释）
+                           "agent": _ctx_agent, "skill": _ctx_skill,
+                           "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
                     _t0 = time.time()   # P0-1 工具耗时：run→done 计时
                     # 2026-10-04：重复调用短路（同工具同参数已成功跑过 ⇒ 回喂既有结果）。
                     # ⚠️ 必须发生在 yield "run" **之前**：否则前端会先亮起一个节点，
@@ -1951,7 +2009,10 @@ class StreamMixin:
                            "ok": _t_ok, "result": _t_result, "error": _t_error,
                            "truncated": _t_trunc, "latency_ms": _t_ms,
                            "call_id": _call_id,
-                           "skipped": _skipped, "skip_reason": _skip_why}
+                           "skipped": _skipped, "skip_reason": _skip_why,
+                           # ★ 2026-11-11 三级展示层级（与上方 run 事件同源）
+                           "agent": _ctx_agent, "skill": _ctx_skill,
+                           "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
                     _weak = bool(result.get("weak")) or ("未检索到" in _t_result) or ("无新冲突" in _t_result)
                     if _weak:
                         weak_count += 1
@@ -1983,7 +2044,9 @@ class StreamMixin:
                         yield {"type": "tool", "status": "done", "name": _sfn,
                                "ok": False, "result": "本轮并发已达上限，未执行",
                                "error": "round_tool_limit", "call_id": _sr.get("tool_call_id"),
-                               "skipped": True, "skip_reason": "round_tool_limit"}
+                               "skipped": True, "skip_reason": "round_tool_limit",
+                               "agent": _ctx_agent, "skill": _ctx_skill,
+                               "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(_sfn)}
                     results.extend(_skip_res)
                 # 工具结果回填后进入下一轮（观察 → 再思考）
                 if results:
@@ -2113,7 +2176,9 @@ class StreamMixin:
                                         _ta = {}
                                     yield {"type": "tool", "status": "run", "name": _tn,
                                            "arguments": _ta, "call_id": _tc.get("id", ""),
-                                           "round": _rnd + 1, "phase": "repair"}
+                                           "round": _rnd + 1, "phase": "repair",
+                                           "agent": _ctx_agent, "skill": _ctx_skill,
+                                           "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(_tn)}
                                     _res = _lg.call(self._exec_tool_call, _tn, _ta)
                                     if _res.get("ok"):
                                         _got_ok = True
@@ -2121,7 +2186,9 @@ class StreamMixin:
                                            "result": str(_res.get("result") or "")[:2000],
                                            "ok": bool(_res.get("ok")),
                                            "call_id": _tc.get("id", ""),
-                                           "round": _rnd + 1, "phase": "repair"}
+                                           "round": _rnd + 1, "phase": "repair",
+                                           "agent": _ctx_agent, "skill": _ctx_skill,
+                                           "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(_tn)}
                                     _repair_msgs.append({
                                         "tool_call_id": _tc.get("id", ""), "role": "tool",
                                         "name": _tn,

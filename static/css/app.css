@@ -329,6 +329,28 @@ body.nr-full-lock{overflow:hidden;}
 .proc-block.tool{background:#f8fafc;}
 .proc-block.tool.success{background:linear-gradient(135deg,#f0fdf4 0%,#ecfdf5 100%);border-color:#86efac;}
 .proc-block.tool.error{background:linear-gradient(135deg,#fef2f2 0%,#fef1f0 100%);border-color:#fca5a5;}
+/* ── 2026-11-11 三级层级展示（Agent → Skill → 工具/MCP）────────────────────
+   问题：此前 agent / skill / tool 各自 procUpsert 到**同一层** timeline，
+        用户看到的是一串平铺条目，看不出「这个工具是谁调的」。
+   方案：后端在事件里回填 depth/parent（见 stream.py 的 _ctx_agent 注释），
+        这里只做**视觉层级**（缩进 + 左侧归属线），不重构数据结构。
+   层级：depth=0 Agent（容器）/ 1 Skill 或 Agent 直挂工具 / 2 Skill 下的工具。
+   ┄ 数据现状：`tools.mcp_server_id` 全库为空 ⇒ 第 3 级当前都是本地工具，
+     MCP 接入后会自动带「MCP:服务器名」标签，无需改样式。 */
+.proc-block[data-depth="1"]{margin-left:14px;}
+.proc-block[data-depth="2"]{margin-left:28px;}
+.proc-block[data-depth="1"]{border-left:2px solid #bfd4f5;}
+.proc-block[data-depth="2"]{border-left:2px solid #d9e2ee;}
+/* 折叠态下层级线仍要可见，否则缩进看着像"空一行" */
+.proc-block[data-depth="1"] .proc-guide,
+.proc-block[data-depth="2"] .proc-guide{
+  display:inline-block;width:0;height:0;flex:none;
+  border-right:6px solid transparent;
+  border-top:4px solid transparent;
+  border-bottom:4px solid transparent;
+  border-left:6px solid var(--mut);
+  margin-right:4px;opacity:.5;
+}
 /* 思考图标脉冲动画 */
 @keyframes think-pulse{0%,100%{opacity:1;}50%{opacity:.45;}}
 .proc-block.thinking .think-icon{animation:think-pulse 1.3s ease-in-out infinite;}

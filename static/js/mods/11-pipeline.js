@@ -119,8 +119,17 @@ function procRender(){
         : ((s.elapsedMs!==undefined && s.elapsedMs!==null && s.elapsedMs>=0) ? `<span class="tool-elapsed done">⏱ ${(s.elapsedMs/1000).toFixed(1)}s</span>` : '');
       // V2.6 动态效果：运行中条目 running 类（呼吸边框）+ 状态徽章前 spinner
       const spin = run ? '<span class="proc-spin"></span>' : '';
-      h += `<div class="proc-block ${s.type}${run?' running':''}${s.collapsed?' collapsed':''}">
-        <div class="proc-head" onclick="toggleProc(this)" title="点击${s.collapsed?'展开':'收起'}详情"><span>${s.icon}</span><span class="proc-title">${esc(s.title)}${sub}${subHtml}</span>${elapsed}<span class="st ${statusCls}" style="margin-left:auto;">${spin}${esc(s.statusText)}</span><span class="chev">▾</span></div>
+      // ── 2026-11-11 三级层级展示（Agent → Skill → 工具/MCP）────────────────
+      // 后端已在 skill/tool 事件里回填 `depth`（0=Agent / 1=Skill / 2=工具）与
+      // `parent`（归属的上级 id）。此前所有 agent/skill/tool 各自 procUpsert 到**同一层**，
+      // 用户看到的是一串平铺条目、看不出"这个工具是谁调的"。
+      // 这里做**最小侵入**：不重构 timeline 结构，只按 depth 缩进 + 左侧归属线。
+      const dp = s.depth|0;
+      const parentId = s.parent ? ` data-parent="${esc(s.parent)}"` : '';
+      const lvlCls = dp>0 ? ` proc-lv${Math.min(dp,2)}` : '';
+      const guide = dp>0 ? `<span class="proc-guide" aria-hidden="true"></span>` : '';
+      h += `<div class="proc-block ${s.type}${run?' running':''}${s.collapsed?' collapsed':''}${lvlCls}" data-depth="${dp}"${parentId}>
+        <div class="proc-head" onclick="toggleProc(this)" title="点击${s.collapsed?'展开':'收起'}详情">${guide}<span>${s.icon}</span><span class="proc-title">${esc(s.title)}${sub}${subHtml}</span>${elapsed}<span class="st ${statusCls}" style="margin-left:auto;">${spin}${esc(s.statusText)}</span><span class="chev">▾</span></div>
         ${s.detail?`<div class="proc-body">${s.detail}</div>`:''}
       </div>`;
     });
@@ -183,14 +192,21 @@ function procAddThinking(delta, round, key){
 function procAddAgent(ev){
   const name = ev.display_name||ev.name||'-';
   const run = ev.status!=='done';
+  // ★ 2026-11-11 三级层级：Agent 是**第 1 层容器**（depth=0），
+  //   后续 skill/tool 事件靠后端回填的 `agent` 字段挂到这里（parent=agent_<key>）。
   procUpsert('agent_'+(ev.name||ev.intent||'agent'), {type:'agent', icon:'🤖', title:'子智能体：'+name,
-    status: run?'run':'done', statusText: run?'执行中…':'✓ 已完成'});
+    status: run?'run':'done', statusText: run?'执行中…':'✓ 已完成',
+    depth: 0, parent: null, agentKey: ev.name||ev.intent||'agent'});
 }
 // V2.5：技能执行环节（SSE type=skill）——命中技能名 + 注入说明，可展开查看
 function procAddSkill(ev){
   const names = (ev.names||[]).join('、') || '-';
-  procUpsert('skill_'+names, {type:'skill', icon:'🧩', title:'技能执行：'+names,
+  // ★ depth=1（第 2 层）挂 Agent 下；多技能时取**首个**名字做 key，
+  //   保证「技能 → 其工具」有稳定父子锚点。
+  const key = (ev.names&&ev.names[0]) || names;
+  procUpsert('skill_'+key, {type:'skill', icon:'🧩', title:'技能执行：'+names,
     status:'done', statusText:'✓ 已注入',
+    depth: 1, parent: ev.agent ? 'agent_'+ev.agent : null, agent: ev.agent||null, skillKey: key,
     detail: `<div style="font-size:11.5px;color:var(--mut);line-height:1.6;">${esc(ev.note||'技能指令已注入生成阶段')}</div>` +
       `<div style="font-size:10.5px;color:var(--mut);margin-top:4px;">触发方式：${ev.note&&ev.note.includes('指定')?'手动指定（/ 或 # 选择）':'触发词命中（消息含技能触发词）'}</div>`});
 }
@@ -236,6 +252,20 @@ function procAddTool(ev){
   // UX规范·硬规则2（2026-10-02）：标题=「动词+宾语」完整活动短语（命中映射表不带「调用」前缀）；
   // 结果摘要只出现在 sub 槽位（下方 '· xxx'），与标题互斥、永不拼接成一句。
   const patch = {type:'tool', icon:'🛠', title: _toolActivity(ev.name)};
+  // ★ 2026-11-11 三级层级（Agent → Skill → 工具/MCP）：
+  //   后端已在 tool 事件回填 `agent`（谁调的）/ `skill`（命中哪个技能）/ `depth` / `mcp`。
+  //   归属规则：**命中技能 ⇒ depth=2 挂技能下；未命中 ⇒ depth=1 直挂 Agent 下**。
+  //   ⚠️ 后端给的是 `ev.skill`（技能名），而 timeline 里技能节点的 key 是
+  //   `skill_<首个技能名>` ⇒ 这里拼同样的 key 才能挂对。
+  //   `mcp` 字段：实测 `tools.mcp_server_id` 全库为空（41 个工具 0 条挂 MCP），
+  //   故当前恒为 null；协议已留位，将来 MCP 接入后标题自动带「MCP:服务器名」，
+  //   **前端无需再改**。
+  if(ev.agent){
+    patch.agent = ev.agent;
+    patch.parent = ev.skill ? ('skill_'+ev.skill) : ('agent_'+ev.agent);
+    patch.depth = ev.skill ? 2 : 1;
+    if(ev.mcp) patch.sub = (patch.sub?patch.sub+' · ':'') + 'MCP:' + ev.mcp;
+  }
   // 2026-09-25（对齐 Claude Code / Codex）：头部加**一行结果摘要**，折叠状态下也能一眼看出
   // "这个工具干了什么、成没成"；完整参数/结果仍在展开体里（信息密度与细节两者兼顾）。
   if(!run){
