@@ -263,12 +263,28 @@ async function loadDuplicates(status, channel) {
         <button class="btn sm red" onclick="dupBatchReview('reject')">🚫 批量驳回</button>
         <span style="color:var(--mut);">勾选后按「保留方优先」规则批量处理（属性融合 + 关系重指向，可审计撤销）</span>
       </div>`;
-      el.innerHTML = filterRow + batchBar + items.map(d=>{
+      // P1-4：从后端取真实分档阈值（消除前后端两份口径）
+    try {
+      const th = await api('/api/knowledge/fusion/status');
+      if(th && th.thresholds){
+        window.__dupThresholds = th.thresholds;
+      }
+    }catch(e){ /* 读不到则用前端回落值 0.9/0.7 */ }
+    el.innerHTML = filterRow + batchBar + items.map(d=>{
         const ev = JSON.parse(d.evidence||'{}');
         const keepN = ev.keep_name || d.keep_id.slice(0,10);
         const dupN = ev.dup_name || d.dup_id.slice(0,10);
         const score = parseFloat(d.score||0);
-        const lvl = score>=0.9 ? ['high','var(--red)','高'] : score>=0.75 ? ['mid','var(--amb)','中'] : ['low','var(--grn)','低'];
+        // P1-4（2026-10-11）：分档阈值与后端同源，不再各写一份。
+        //   此前前端硬编码 0.9/0.75、后端实际 0.9/0.7（staging_fuse 的 DB settings
+        //   覆盖了 entity_resolver 内置的 0.92/0.62）⇒ 0.70~0.75 的候选在界面显示「中」
+        //   但后端按「低」处理，用户看到的分档与真实判定不一致。
+        //   优先读后端返回的 thresholds（_entity_merge_thresholds），
+        //   读不到再回落 0.9/0.7（与后端默认同值）。
+        const _TH = window.__dupThresholds || {auto: 0.9, flag: 0.7};
+        const lvl = score>=_TH.auto ? ['high','var(--red)','高']
+                  : score>=_TH.flag ? ['mid','var(--amb)','中']
+                  : ['low','var(--grn)','低'];
         // S5：来源通道徽标（SysML 通道候选入库后自动显示；两侧通道不同 = 跨源对齐卡片）
         const _ch = chOf(d);
         // 工序② LLM 成对判定（消歧+对齐+冲突裁决+理由+置信度）——审核溯源
@@ -294,10 +310,11 @@ async function loadDuplicates(status, channel) {
           <div style="flex:1;">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
               <span class="fpill ${_ch==='cross'?'amb':_ch==='sysml'?'':'gray'}">${_ch==='cross'?'🔗 跨源对齐':_ch==='sysml'?'⌨ SysML 通道':'📄 文档'}</span>
-              <span class="fpill ${lvl[0]==='hi'?'amb':lvl[0]==='low'?'grn':'gray'}">相似度${lvl[2]} ${d.score}</span>
+              <span class="fpill ${lvl[0]==='hi'?'amb':lvl[0]==='low'?'grn':'gray'}" title="档位切分点（不是精度百分比）。Neo4j 官方口径：score cutoff ≠ precision；详见「📊 评分卡」">档位${lvl[2]}</span>
+              <button class="btn sm ghost" style="padding:1px 6px;font-size:10px;" onclick="dupScoreToggle(${d.id})" title="逐维度得分明细：哪个维度把分数推上去的">📊 评分卡</button>
             </div>
-            <div style="font-size:12.5px;"><b style="color:var(--grn,#2f855a);">${esc(keepN)}</b> <span style="color:var(--mut);font-size:11px;">(${esc(d.keep_id.slice(0,10))})</span> <span style="color:var(--mut);">⇄</span> <b style="color:var(--red);">${esc(dupN)}</b> <span style="color:var(--mut);font-size:11px;">(${esc(d.dup_id.slice(0,10))})</span></div>
-            <div style="font-size:11px;color:var(--mut);margin-top:3px;">得分依据：向量 ${ev.vec_score||'-'} / 模糊 ${ev.fuzzy_score||'-'} / 方法 ${esc(d.method)}${ev.a&&(ev.a.source_doc||ev.b&&ev.b.source_doc)?` · 📄 来源：${esc((ev.a&&ev.a.source_doc)||'')} / ${esc((ev.b&&ev.b.source_doc)||'')}`:''}</div>
+            <div style="font-size:12.5px;"><b style="color:var(--grn,#2f855a);">${esc(keepN)}</b> <span style="color:var(--mut);font-size:11px;">(${esc(d.keep_id.slice(0,10))})</span> <span style="color:var(--mut);">⇄</span> <b style="color:var(--red);">${esc(dupN)}</b> <span style="color:var(--mut);font-size:11px;">(${esc(dup_id.slice(0,10))})</span></div>
+            ${dupScoreCard(d, ev, _TH)}
             ${llmHtml}
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
@@ -305,6 +322,7 @@ async function loadDuplicates(status, channel) {
             ${lv && lv.verdict==='separate'
               ? `<button class="btn sm grn" onclick="dupReview(${d.id},'reject')" title="LLM 判定为不同实体：采纳即驳回合并候选">✅ 采纳(不同)</button>`
               : `<button class="btn sm grn" onclick="dupReview(${d.id},'confirm')" title="采纳 LLM/规则建议：合并候选（属性融合+关系重指向）">✅ 采纳</button>`}
+            <button class="btn sm ghost" style="color:var(--blue-d);" onclick="dupReview(${d.id},'relate')" title="P2-7：两者相关但**不是同一实体**（如部件⊂分系统、母子公司），标记为关联而非合并">🔗 判为相关</button>
             <button class="btn sm ghost" style="color:var(--red);" onclick="dupReview(${d.id},'reject')">🚫 驳回</button>
           </div>
           </div>
@@ -333,6 +351,8 @@ async function loadDuplicates(status, channel) {
           ${m.status==='merged'?`<button class="btn sm red" onclick="rollbackMerge(${m.id})">↩ 撤销</button>`:''}
         </div>`).join('');
     }
+    // 🏷 实体别名面板（与重复消歧同屏加载）——2026-10-11 新增
+    try { loadEntityAliases(); } catch(e) { /* 面板不在 DOM 时静默跳过 */ }
   } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${e.message}</div>`; }
 }
 // 批量处理消歧候选（confirm=合并 / reject=驳回；逐条调用后端，任一失败不影响其余）
@@ -372,9 +392,32 @@ async function triggerDupDetect() {
 }
 async function dupReview(cid, action) {
   if(!branchWritable()) return;
+  // P2-4（2026-10-11）：**单条采纳/关联加二次确认**。
+  //   此前单条 dupReview 直接发请求（批量 dupBatchReview 反而有确认）——
+  //   行业反模式「接受比驳回容易」：一键误触就软删实体（虽可撤销，但需再走流程）。
+  //   确认文案把**不可逆后果**写清（软删除 + 关系重指向），降低 automation bias
+  //   （Thematic/JAMIA 实证：默认动作 + 无确认会显著推高误操作率）。
+  if(action==='confirm'){
+    const ok = await confirmDialog(
+      '确认合并这两个实体？\n\n' +
+      '· 保留方属性保持，合并方缺失属性将补入\n' +
+      '· 合并方的关系会**重指向**到保留实体\n' +
+      '· 合并实体被**软删除**（可审计、可撤销，但需走「合并历史 → 撤销」）\n\n' +
+      '若二者其实是「相关但不同实体」（如部件 ⊂ 分系统），请改用「🔗 判为相关」。');
+    if(!ok) return;
+  }else if(action==='relate'){
+    const ok = await confirmDialog(
+      '标记为「相关但不是同一实体」？\n\n' +
+      '两个实体都会保留，不做任何合并。\n' +
+      '用于表达层级关系（部件 ⊂ 分系统）或同族关系（母公司 / 子公司）——\n' +
+      '这类关系**不该合并**（Neo4j 官方：不应因共享名称而合并）。');
+    if(!ok) return;
+  }
   const r = await api(`/api/knowledge/entity-dups/${cid}/review`, {method:'POST', body:JSON.stringify({action})});
   if(r.error) { toast('操作失败：'+r.error); return; }
-  toast(action==='confirm'?'✅ 已合并':'🚫 已驳回');
+  toast(action==='confirm' ? '✅ 已合并'
+      : action==='relate' ? '🔗 已标记为相关（非同一实体）'
+      : '🚫 已驳回');
   loadDuplicates();
   loadReviewQueue();
 }
@@ -392,10 +435,31 @@ async function dupEvidence(keepId, dupId) {
     const relsOf = e => (e.relations||[]).map(r=>`${r.source_name||r.source_id} ${r.relation_type} ${r.target_name||r.target_id}`).join('；') || '无';
     // 合并预览：幸存值规则（保留方优先，缺失由合并方补齐；别名并入）
     const newKeys = Object.keys(dp).filter(kk=>kp[kk]===undefined);
+    // P2-3（2026-10-11）：补「**受影响实体清单**」。
+    //   此前预览只有 3 个计数（属性 N / 补入 M / 关系重指向 X），用户看不到
+    //   「**到底哪些实体会被改动**」——dry-run 的核心诉求是影响面可评估。
+    //   参照 Neo4j consolidation「always dry-run first → inspect candidates before applying」。
+    const _relList = (arr, who) => (arr||[]).map(r => {
+      const s = r.source_name || r.source_id || '?', t = r.target_name || r.target_id || '?';
+      return `<li style="margin:1px 0;"><span style="color:var(--mut);">[${esc(who)}]</span> ${esc(s)} <span style="color:var(--mut);">—</span>${esc(r.relation_type||'')}<span style="color:var(--mut);">→</span> ${esc(t)}</li>`;
+    }).join('');
+    const _relKeep = _relList(k.relations, '保留');
+    const _relDup  = _relList(d.relations, '合并');
+    const _affected = (k.relations||[]).length + (d.relations||[]).length;
     const mergePreview = `<div style="border:1px dashed var(--blue);border-radius:6px;padding:8px 10px;margin:8px 0;font-size:11px;line-height:1.7;">
       <b style="color:var(--blue-d);">🧩 合并预览（幸存值规则：保留方优先，缺失项由合并方补齐）</b>
       <div style="margin-top:4px;">合并后属性 <b>${allKeys.length}</b> 项 · 合并方补入 <b style="color:var(--grn);">${newKeys.length}</b> 项（${newKeys.map(x=>esc(x)).join('、')||'无'}）</div>
       <div>🔗 关系重指向：保留实体关系 ${(k.relations||[]).length} 条 + 合并实体关系 ${(d.relations||[]).length} 条</div>
+      <details style="margin-top:6px;border-top:1px dashed var(--line);padding-top:5px;">
+        <summary style="cursor:pointer;color:var(--blue-d);font-size:10.5px;">⚠️ 受影响实体清单（${_affected + 2} 个：1 被软删 + 1 被改写 + ${_affected} 条关系改指向）</summary>
+        <div style="margin-top:4px;font-size:10.5px;">
+          <div style="color:var(--red);margin-bottom:2px;">🗑 将被软删除：<b>${esc(d.name)}</b>（${esc(d.id)}）· ${esc(d.entity_type)}</div>
+          <div style="color:var(--amb);margin-bottom:4px;">✏️ 属性被改写：<b>${esc(k.name)}</b>（${esc(k.id)}）${newKeys.length?`，补入 ${newKeys.length} 项属性`:'（无新增属性）'}</div>
+          <b style="font-size:10.5px;">🔗 关系端点将被改指向：</b>
+          ${_affected ? `<ul style="margin:2px 0 0 14px;padding:0;">${_relKeep}${_relDup}</ul>`
+                      : '<div style="color:var(--mut);">无关联关系，不受影响</div>'}
+        </div>
+      </details>
       <div style="margin-top:4px;">确认合并后：属性融合、关系重指向到保留实体、源实体软删除（可审计、可撤销）。</div>
     </div>`;
     openPanel('🔀 消歧证据对比', `
@@ -433,3 +497,135 @@ async function mergeEntities(keep, dup, dupName) {
 // ── KB-P0：文档管道管理（上传流程 + 进度 + 列表 + 追溯 + 元数据表单）──
 let pendingDocFiles = [];   // S4：批量上传队列
 let pendingDocFile = null;
+
+// ── 🏷 实体别名管理（entity_aliases）——2026-10-11 新增 ──
+// 背景：该表此前**只有写入、没有读取端点也没有 UI**（暗表），真库恒 0 行 ⇒
+//      「别名覆盖率」指标一直 N/A、AI 检索的别名召回通道（agent/rag.py:661）恒空。
+// 标杆：IBM WKC 官方「术语可编辑 + 改完立刻生效 + 驳回可撤销」。
+// 本实现给出最小闭环：列出 → 补录 → 删除 → 一键同步进受控词库。
+//
+// ⚠️ 口径说明（与术语库 glossary_terms 的关系）：
+//    entity_aliases = **运行时别名**（entity_id → mention 原文），随合并/对齐自动产生；
+//    glossary_terms  = **受控词表术语**（concept → term），人工维护、跨域通用；
+//    两者通过「🔄 同步到词库」单向流动：运行时别名 → 受控词表。
+let _aliasData = [];
+
+// ── P2-1（2026-10-11）：逐维度评分卡 ────────────────────────────────────
+// 依据 Neo4j 官方「Review needs more than a similarity score」与 Senzing `how`
+// 决策树：不要只给一个总分，要让用户看到**哪个维度把分数推上去的**。
+//
+// 设计要点：
+// 1. 三个维度都列出来（含此前**从未渲染**的 nb_score 图邻域），不过滤 0 值；
+// 2. 每维标出是否**过 floor**（红/绿），一眼看出"是哪一维拖累了"；
+// 3. 折算成 bar 宽度，横向可比；
+// 4. 底部注明"分数档位 ≠ 精度保证"（Neo4j 官方口径），防止把 cutoff 读成百分比。
+let _dupScoreOpen = {};
+const _DUP_FLOOR = { vec: 0.6, fuzzy: 0.6, nb: 0.0 };  // 与后端 _FLOOR_VEC/_FLOOR_FUZZY 同源
+function dupScoreToggle(id){
+  _dupScoreOpen[id] = !_dupScoreOpen[id];
+  loadDuplicates();   // 重渲染（状态挂在闭包，页面级）
+}
+function dupScoreCard(d, ev, TH){
+  if(!_dupScoreOpen[d.id]) return '';
+  const _num = v => (v===undefined||v===null||v==='') ? null : parseFloat(v);
+  const dims = [
+    {k:'向量', key:'vec',      v:_num(ev.vec_score),    floor:_DUP_FLOOR.vec,    tip:'bigram TF 余弦相似度（字符分布接近程度）'},
+    {k:'模糊', key:'fuzzy',    v:_num(ev.fuzzy_score), floor:_DUP_FLOOR.fuzzy,  tip:'字符集重叠率 / token 排序 / 部分匹配的加权'},
+    {k:'邻域', key:'nb',       v:_num(ev.nb_score),    floor:_DUP_FLOOR.nb,     tip:'图邻域 Jaccard：两者连接的邻居集合重合度（仅当邻域非空时参与打分）'},
+  ];
+  const rows = dims.map(x => {
+    const has = x.v !== null;
+    const pass = has && x.v >= x.floor;
+    const bar = has ? Math.max(2, Math.round(x.v * 100)) : 0;
+    const color = !has ? 'var(--mut)' : pass ? 'var(--grn)' : 'var(--red)';
+    const bg = !has ? 'var(--line)' : pass ? '#eaf7ec' : '#fdecec';
+    return `<tr title="${esc(x.tip)}">
+      <td style="padding:2px 6px;font-size:10.5px;color:var(--mut);white-space:nowrap;">${x.k}</td>
+      <td style="padding:2px 4px;width:96px;">
+        <div style="background:${bg};border-radius:3px;height:12px;overflow:hidden;">
+          <div style="width:${bar}%;height:100%;background:${color};opacity:.75;"></div>
+        </div>
+      </td>
+      <td style="padding:2px 6px;font-size:10.5px;color:${color};text-align:right;white-space:nowrap;">${has ? x.v.toFixed(2) : '—'}</td>
+      <td style="padding:2px 6px;font-size:10px;white-space:nowrap;">${!has ? '<span style="color:var(--mut)">未参与</span>' : pass ? '<span style="color:var(--grn)">✓ 过阈</span>' : `<span style="color:var(--red)">✗ 低于 ${x.floor}</span>`}</td>
+    </tr>`;
+  }).join('');
+  const _src = (ev.a && ev.a.source_doc) || (ev.b && ev.b.source_doc) || '';
+  return `<div style="margin-top:5px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;background:#fbfcfd;">
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+      <b style="font-size:10.5px;color:var(--mut);">📊 逐维度评分明细</b>
+      <span class="fpill" title="判定方法（matching method）">${esc(d.method||'-')}</span>
+      <span class="fpill ${parseFloat(d.score||0)>=TH.auto?'amb':'gray'}" title="总分">总分 ${d.score}</span>
+      <span style="flex:1"></span>
+      <span style="font-size:9.5px;color:var(--mut);">阈值档位：自动合并≥${TH.auto} / 待审≥${TH.flag}</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse;">${rows}</table>
+    <div style="font-size:9.5px;color:var(--mut);margin-top:4px;line-height:1.6;">
+      ⚠️ 分数是<b>档位切分点</b>，不是精度保证（Neo4j 官方口径）。任一维度低于阈值即不算匹配。
+      ${_src ? `<br>📄 来源：${esc(_src)}` : ''}
+    </div>
+  </div>`;
+}
+async function loadEntityAliases(entityId) {
+  const el = document.getElementById('alias-panel');
+  if(!el) return;
+  try {
+    const q = entityId ? `?entity_id=${encodeURIComponent(entityId)}` : '';
+    const r = await api(`/api/knowledge/entity-aliases${q}`);
+    _aliasData = r.aliases || [];
+    if(!_aliasData.length) {
+      el.innerHTML = `<div style="padding:10px;color:var(--mut);font-size:12px;">
+        暂无别名记录。别名会在<b>实体合并</b>或<b>候选对齐</b>时自动产生（被合并方原名 → 保留方别名）；
+        也可在上方手动补录。补录后点「🔄 同步到词库」即可对全量抽取归一生效。</div>`;
+      return;
+    }
+    const rows = _aliasData.map(a => {
+      const dang = a._dangling;
+      return `<div style="border:1px solid ${dang?'var(--amb)':'var(--line)'};border-radius:8px;padding:6px 10px;margin-bottom:4px;font-size:11.5px;display:flex;gap:8px;align-items:center;">
+        <span class="fpill" title="来源通道">${esc(a.source_type||'?')}</span>
+        <span style="flex:1;">
+          <b>${esc(a.entity_name||'(实体已删除)')}</b>
+          <span style="color:var(--mut)">${esc(a.entity_id||'')}</span>
+          <span class="fpill">分支 ${esc(a.branch||'-')}</span>
+          ← 别名 <b style="color:var(--grn)">${esc(a.alias_name)}</b>
+          ${dang?'<span class="fpill" style="color:var(--amb)">⚠ 实体已不存在</span>':''}
+          <small style="color:var(--mut)">${esc((a.created_by||'')+' '+(a.created_at||'').slice(0,16))}</small>
+        </span>
+        <button class="btn sm red" onclick="aliasDel('${esc(a.entity_id)}','${esc(a.alias_name)}')" title="删除该别名（可再补录回来）">🗑</button>
+      </div>`;
+    }).join('');
+    const stat = `共 ${_aliasData.length} 条 · 覆盖实体 ${new Set(_aliasData.map(a=>a.entity_id)).size} 个` +
+                 `${_aliasData.some(a=>a._dangling)?` · <span style="color:var(--amb)">悬空 ${_aliasData.filter(a=>a._dangling).length} 条</span>`:''}`;
+    el.innerHTML = `<div style="padding:6px 10px;font-size:11px;color:var(--mut);">${stat}</div>` + rows;
+  } catch(e) {
+    el.innerHTML = `<div style="padding:10px;color:var(--red);font-size:12px;">别名加载失败：${esc(e.message||e)}</div>`;
+  }
+}
+
+async function aliasAdd() {
+  const eidEl = document.getElementById('alias-new-eid');
+  const nmEl  = document.getElementById('alias-new-name');
+  const eid = (eidEl && eidEl.value || '').trim();
+  const nm  = (nmEl  && nmEl.value  || '').trim();
+  if(!eid || !nm) { toast('请填写实体 ID 与别名'); return; }
+  const r = await api('/api/knowledge/entity-aliases', {method:'POST', body:JSON.stringify({entity_id:eid, alias_name:nm})});
+  if(r.error) { toast('补录失败：'+r.error); return; }
+  toast('✅ 已补录别名：'+nm+' → '+(r.branch||''));
+  if(eidEl) eidEl.value=''; if(nmEl) nmEl.value='';
+  loadEntityAliases(); loadKBStats && loadKBStats();
+}
+
+async function aliasDel(entityId, aliasName) {
+  if(!(await confirmDialog(`删除别名「${aliasName}」？\n删除后该 mention 不再召回此实体（可随时补录回来）。`))) return;
+  const q = `?entity_id=${encodeURIComponent(entityId)}&alias_name=${encodeURIComponent(aliasName)}`;
+  const r = await api('/api/knowledge/entity-aliases' + q, {method:'DELETE'});
+  toast(r.deleted ? '🗑 已删除 '+r.deleted+' 条' : '未找到该别名');
+  loadEntityAliases(); loadKBStats && loadKBStats();
+}
+
+async function aliasSyncToGlossary() {
+  if(!(await confirmDialog('把运行时别名同步进受控词库（glossary_terms）？\n\n同步后别名对**全量抽取归一**生效——这是别名的正式生效路径。\n已存在的词条不会被覆盖（INSERT OR IGNORE）。'))) return;
+  const r = await api('/api/glossary/sync-aliases', {method:'POST'});
+  if(r.error) { toast('同步失败：'+r.error); return; }
+  toast(`🔄 已同步 ${r.synced} 条${r.skipped?`，跳过 ${r.skipped} 条（分支副本缺失）`:''}`, 4000);
+}

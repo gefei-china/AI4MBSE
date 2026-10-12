@@ -60,11 +60,12 @@ async function loadSysmlIngestBar(convId){
   const el = document.getElementById('preview-sysml-versions');
   if(!el || !convId){ if(el) el.innerHTML=''; return; }
   let pushBtn = '';
+  let cur = null;
   try{
     const r = await api('/api/sysml-versions?conversation_id=' + convId);
     const vs = (r && r.versions) || [];
     // 写回对象 = 当前版本（current 且留有源码）；已替代/空码版本不提供写回
-    const cur = vs.find(v=>v.status==='current' && (v.code_len||0) > 0) || null;
+    cur = vs.find(v=>v.status==='current' && (v.code_len||0) > 0) || null;
     if(cur){
       const pushed = String(cur.zhiyuan_imported_id || '').trim();
       const lbl = String(cur.version_label || '').replace(/['"\\]/g, '');
@@ -72,12 +73,51 @@ async function loadSysmlIngestBar(convId){
         ? `<button class="btn sm ghost" disabled style="font-size:10px;padding:0 8px;color:var(--mut);cursor:not-allowed;" title="当前版本已写回智源（${esc(pushed)}）。暂定规则：已写回的版本不可重复写回；归一修改会产生新版本，新版本可再次写回。">✅ 已写回智源</button>`
         : `<button class="btn sm ghost" style="font-size:10px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="sysmlPushModal(${cur.id},'${lbl}')" title="把当前版本 SysML v2 源码写入智源建模软件：先语法检测（只读），通过后覆盖导入；成功后「智源拉取」即可拉到本版本">🔗 写回智源</button>`;
     }
-  }catch(e){ pushBtn = ''; }
+  }catch(e){ pushBtn = ''; cur = null; }
   el.innerHTML = `<div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);text-align:left;display:flex;gap:4px;justify-content:flex-end;">
       ${pushBtn}
+      ${cur ? `<button class="btn sm ghost" style="font-size:10px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="sysmlGenCandidates(${cur.id})" title="把当前版本的 SysML v2 解析成候选清单，打开「AI 建模入库向导」。\n\n这是与图库已有实体做归一消歧的主入口：向导里可逐条勾选、查消歧徽章、选重复策略（对齐复用 / 强制新建 / 跳过）。\n解析后候选进入待审核队列，经三元组统一审核通过才落 personal 分支。">📥 入库向导</button>` : ''}
       <button class="btn sm ghost" style="font-size:10px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="zhiyuanPullIngest()" title="从智源拉取当前工程建模数据，后端直接转三元组入个人图库（对话流回执）">⇩ 智源拉取</button>
       <button class="btn sm ghost" style="font-size:10px;padding:0 8px;" onclick="projectIngestLogsPanel()" title="本工程历次入库批次台账（智源拉取 / 旧工程入库）">📜 入库台账</button>
   </div>`;
+}
+
+// ── P0-1（2026-10-11）：打通入库向导 ──
+// 背景：`openSysmlImportDialog` 自 2026-09 起已实现完整交互（候选清单勾选 + 消歧徽章 +
+//   批内疑似标记 + 重复策略下拉 + 放弃候选），但**全站零调用点**，且前端从未 POST
+//   `import-candidates`（全站唯一命中是 DELETE 放弃）⇒ 这是一条死链路。
+// 后果（真库实测）：`v2g_candidates` 351 行 `sysml_version_id` **全为 0**，
+//   而 `sysml_versions` 有 263 行 ⇒ 候选不是从该端点来的；
+//   同时 `vector2graph.py:769` 的「V2 候选待审门禁」因此**永不生效**。
+// 本函数补上缺失的入口：解析版本 → 拉候选 → 打开向导。
+async function sysmlGenCandidates(versionId) {
+  if(!versionId){ toast('缺少版本信息'); return; }
+  const btn = event && event.target ? event.target : null;
+  if(btn){ btn.disabled = true; btn.textContent = '解析中…'; }
+  try{
+    // ① 解析：POST 会把候选写入 v2g_candidates（带 version_id ⇒ 触发待审门禁）
+    const gen = await api(`/api/sysml-versions/${versionId}/import-candidates`, {
+      method:'POST', body: JSON.stringify({}),
+    });
+    if(gen && gen.error){ toast('解析失败：'+gen.error); return; }
+    // ② 拉候选清单（按批次）
+    const batchId = (gen && gen.batch_id) || '';
+    const list = await api(`/api/knowledge/v2g/candidates${batchId?('?batch_id='+encodeURIComponent(batchId)):''}`);
+    const cands = (list && (list.items || list.candidates || list)) || [];
+    if(!Array.isArray(cands) || !cands.length){
+      toast(batchId ? `批次 ${batchId} 无候选（可能被拒绝或已确认）` : '解析完成，无候选');
+      return;
+    }
+    // ③ 打开向导（消歧徽章/批内疑似/重复策略都在抽屉内）
+    const dup = cands.filter(c => c.matching_status === 'dup_high' || c.matching_status === 'dup_suspect').length;
+    openSysmlImportDialog(batchId, cands.map(c => Object.assign({}, c, {cid: c.id})), versionId, dup);
+    const rej = cands.filter(c => c.status === 'rejected').length;
+    toast(`已生成候选 ${cands.length} 条${dup?`（重复候选 ${dup} 条）`:''}${rej?` · ${rej} 条校验不通过`:''}`, 4000);
+  }catch(e){
+    toast('入库向导打开失败：' + (e.message||e));
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '📥 入库向导'; }
+  }
 }
 // ── 写回智源（modal 确认 → push-zhiyuan；异常分类提示）──
 // 复用 07-norm 归一页写回的确认范式（先检测后写入，二次点击才执行）；此处为入口条常驻入口。

@@ -415,17 +415,24 @@ function _nrTargetCellHtml(r) {
   const nn = r.normalized_name || '';
   const bd = r.batch_dup_of || '';
   let tag = '', name = '';
-  if (men) { tag = r.kind === 'attr' ? '词典词条' : '图库已有'; name = men; }
+  // P3-2 修正（2026-10-11）：标签判定必须看**对端是图库实体还是批内元素**。
+  //   后端 P3-2 为修「主列空白」把 batch_dup_of 兜底填进了 matched_entity_name，
+  //   于是 :418 的 `if (men)` 先命中 → 标签误报「图库已有」，
+  //   而它其实是**本次批次的另一个元素**（用户会以为要去图库里找一个不存在的东西）。
+  //   ⇒ 判据改为：有 batch_dup_of ⇒ 批内近似（图库实体只在无批内对端时才算）。
+  if (bd) { tag = '批内近似'; name = bd; }
+  else if (men) { tag = r.kind === 'attr' ? '词典词条' : '图库已有'; name = men; }
   else if (nn && nn !== (r.name || '') && r.kind !== 'relation') { tag = '词典规范名'; name = nn; }
-  if (bd && !name) { tag = '批内近似'; name = bd; }
   if (r.kind === 'relation' && !name && r.matched_entity_id) { tag = '图库已有关系'; name = '#' + r.matched_entity_id; }
   if (!name) return `<div style="min-width:0;font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.45;"
     title="词典/图库无对齐对象">—</div>`;
   const stt = r.matching_status;
   const isDup = stt === 'dup_high' || stt === 'dup_suspect';
-  const c = isDup ? (stt === 'dup_high' ? '#b91c1c' : '#c98a2e') : '#1e7e34';
-  const bg = isDup ? (stt === 'dup_high' ? '#fef2f2' : '#fffbeb') : '#f0fdf4';
-  const bdc = isDup ? (stt === 'dup_high' ? '#F3C1C1' : '#F0D9A6') : '#C0DD97';
+  // P3-1：related（相关但非同一实体）用**独立配色**，不与「无重复」的绿色混淆
+  const isRel = stt === 'related';
+  const c = isDup ? (stt === 'dup_high' ? '#b91c1c' : '#c98a2e') : (isRel ? '#0891b2' : '#1e7e34');
+  const bg = isDup ? (stt === 'dup_high' ? '#fef2f2' : '#fffbeb') : (isRel ? '#ecfeff' : '#f0fdf4');
+  const bdc = isDup ? (stt === 'dup_high' ? '#F3C1C1' : '#F0D9A6') : (isRel ? '#A5F3FC' : '#C0DD97');
   // 名称对照：实体/属性做字符级 diff，关系目标(端点串)不做
   const cmpSrc = r.kind === 'attr' ? (r.attr_name || r.instance_name || '') : (r.instance_name || '');
   const nameHtml = (r.kind === 'relation') ? esc(name) : _nrDiffHtml(cmpSrc, name);
@@ -476,12 +483,93 @@ function _nrInstanceHtml(r) {
     <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
       title="实例名称：${esc(r.instance_name||'')}">${esc(r.instance_name||'')}</div></div>`;
 }
+/* ── P3-1（2026-10-11）：逐维度评分卡（归一校验版）────────────────────
+   与治理中心 19-governance.js 的 dupScoreCard 同源思路、异源实现
+   （本工程前端模块各自独立，不跨文件复用私有函数）。
+   依据 Neo4j 官方「Review needs more than a similarity score」：
+   不要只给一个总分，要让用户看到**哪个维度把分数推上去的**。
+
+   ★ 真实数据实测的重要发现（10-11，版本 1000281）：
+     VehiclePowerManagement ⇄ VehiclePowerManagementReq
+       vec=0.9354  fuzzy=0.0  总分=0.6548  过floor=False ⇒ related
+     `fuzzy_score` 对「长串 + 少量后缀差异」返回 **0**，
+     即单维阈值完全不可靠 ⇒ per-dimension floor 是**必需**而非锦上添花。
+     本卡把两维都摊开，用户能直接看到"向量高但模糊为 0"这个反直觉事实。 */
+let _nrScoreOpen = {};
+function _nrScoresOf(r){
+  return (r && r.evidence && r.evidence.scores) || (r && r.scores) || null;
+}
+function _nrScoreBtnHtml(r){
+  const s = _nrScoresOf(r);
+  if (!s) return esc(((r.evidence||{}).sources||[])[0] || (r.evidence||{}).rule || '—');
+  return `📊 ${s.vec==null?'—':Number(s.vec).toFixed(2)}`;
+}
+function _nrScoreToggle(i){
+  _nrScoreOpen[i] = !_nrScoreOpen[i];
+  _nrRender && _nrRender();
+}
+function _nrScoreCardHtml(r){
+  const s = _nrScoresOf(r);
+  if (!s) return '';
+  const fl = s.floor || [0.6, 0.6];
+  const dim = (label, v, floor, tip) => {
+    const has = v != null;
+    const pass = has && v >= floor;
+    const bar  = has ? Math.max(2, Math.round(v * 100)) : 0;
+    const col  = !has ? 'var(--mut)' : pass ? '#1e7e34' : '#b91c1c';
+    const bg   = !has ? 'var(--line)' : pass ? '#f0fdf4' : '#fef2f2';
+    return `<tr title="${esc(tip)}">
+      <td style="padding:2px 6px;font-size:10px;color:var(--mut);white-space:nowrap;">${label}</td>
+      <td style="padding:2px 4px;width:80px;"><div style="background:${bg};border-radius:3px;height:11px;overflow:hidden;">
+        <div style="width:${bar}%;height:100%;background:${col};opacity:.75;"></div></div></td>
+      <td style="padding:2px 6px;font-size:10px;color:${col};text-align:right;">${has ? Number(v).toFixed(2) : '—'}</td>
+      <td style="padding:2px 6px;font-size:9.5px;white-space:nowrap;">${!has ? '<span style="color:var(--mut)">未参与</span>'
+        : pass ? '<span style="color:#1e7e34">✓过阈</span>' : `<span style="color:#b91c1c">✗低于${floor}</span>`}</td>
+    </tr>`;
+  };
+  const rows = dim('向量', s.vec, fl[0], 'bigram TF 余弦（字符分布接近度）')
+             + dim('模糊', s.fuzzy, fl[1], '字符 bigram 重叠度（2026-10-11 P4 修复：无空格连写的拉丁名此前恒返回 0，85% 候选受影响）');
+  return `<div style="margin:2px 0 4px;border:1px solid var(--line);border-radius:5px;padding:5px 7px;background:#fbfcfd;">
+    <div style="font-size:9.5px;color:var(--mut);margin-bottom:3px;">
+      逐维度评分（加权总分 <b>${Number(s.score||0).toFixed(2)}</b> · floor ${fl[0]}/${fl[1]} ·
+      判定 <b>${esc(s.floor_ok ? '过 floor' : '未过 floor')}</b>）
+    </div>
+    <table style="width:100%;border-collapse:collapse;">${rows}</table>
+    <div style="font-size:9px;color:var(--mut);margin-top:3px;">
+      分数是<b>档位切分点</b>不是精度保证（Neo4j 官方口径）；任一维低于 floor 即不算匹配。</div>
+  </div>`;
+}
+/* ── P3-1：「🔗 判为相关」按钮 ──────────────────────────────────────────
+   MBSE 真实案例（版本 1000281）：VehiclePowerManagement ⇄ VehiclePowerManagementReq
+   —— 同一能力的**两种写法**（实测两侧 entity_type 同为「需求」，
+   ⚠️ 并非我先前推测的「功能 vs 需求」）**该不该合并需人工判断**：
+   P4 修复拉丁名 fuzzy 恒 0 的缺陷后，这一条由 related 改判 dup_suspect（交人工），
+   而「🔗 判为相关」正是人工表达「保留为两个但确有关联」的那个出口。
+   此前只有 ✓接纳/✎改名/🔀合并 三个动作，用户无法表达这层语义。 */
+function _nrRelateBtnHtml(r, i){
+  const st = r.matching_status;
+  // 只在「有比对对端」的重复类状态上出现（none=无对象可关联）
+  if (!r.batch_dup_of && !r.matched_entity_name) return '';
+  return `<button style="padding:1px 6px;font-size:10.5px;border:1px solid #0891b2;color:#fff;background:#0891b2;border-radius:4px;cursor:pointer;"
+    onclick="_nrRelate(${i})" title="标记为「相关但不是同一实体」（如部件⊂分系统、功能⇄需求）——两者都保留，不合并">🔗</button>`;
+}
+async function _nrRelate(i){
+  const r = (window._nrState.report && window._nrState.report.rows || [])[i];
+  if (!r) return;
+  const tgt = r.batch_dup_of || r.matched_entity_name || '?';
+  if (!(await confirmDialog(
+    `标记为「相关但不是同一实体」？\n\n` +
+    `「${r.name}」与「${tgt}」都会保留，不做任何合并。\n` +
+    `用于表达层级关系（部件 ⊂ 分系统）或同能力不同视角（功能 ⇄ 需求）。`))) return;
+  _nrDecide(i, 'relate');
+  toast('🔗 已标记为相关（非同一实体）');
+}
 function _nrRowHtml(r) {
   const i = r._i, st = window._nrState;
   const d = st.decisions[i];
-  const decBg = d ? (d.action==='accept'?'#f0fdf4':d.action==='reject'?'#fef2f2':'#fffbeb') : 'transparent';
+  const decBg = d ? (d.action==='accept'?'#f0fdf4':d.action==='reject'?'#fef2f2':d.action==='relate'?'#ecfeff':'#fffbeb') : 'transparent';
   const decLbl = !d ? '' : d.action==='accept' ? '✓ 接纳' : d.action==='reject' ? '✕ 不入图库'
-    : d.action==='rename' ? '✎ 已改' : '🔀 已合并';
+    : d.action==='rename' ? '✎ 已改' : d.action==='relate' ? '🔗 已关联' : '🔀 已合并';
   const conf = r.confidence != null ? Number(r.confidence).toFixed(2) : '—';
   const confColor = conf==='—' ? 'var(--mut)' : (Number(conf)>=.85?'#1e7e34':Number(conf)>=.7?'#c98a2e':'#b91c1c');
   const sg = _nrSuggestOf(r);
@@ -502,8 +590,8 @@ function _nrRowHtml(r) {
     ${_nrTargetCellHtml(r)}
     <span><span style="font-size:10.5px;padding:1px 6px;border-radius:9px;border:1px solid ${sg.bd};background:${sg.bg};color:${sg.c};">${sg.l}</span></span>
     <span style="font-size:11px;color:${confColor};">${conf}</span>
-    <div title="${esc(evTitle)}" style="min-width:0;font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.45;${(r.attr_type_check==='mismatch')?'color:#b91c1c;':''}">${evFirst ? esc(evFirst) : '—'}</div>
-    <div style="display:flex;gap:3px;align-items:center;white-space:nowrap;">
+    <div title="${esc(evTitle)}" style="min-width:0;font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.45;${(r.attr_type_check==='mismatch')?'color:#b91c1c;':''}">${evSrcs.length?`<span onclick="_nrScoreToggle(${i});event.stopPropagation();" style="cursor:pointer;color:var(--blue-d);border-bottom:1px dotted var(--blue-bd,#B5D4F4);">${_nrScoreBtnHtml(r)}</span>`:(evFirst ? esc(evFirst) : '—')}</div>    <div style="display:flex;gap:3px;align-items:center;white-space:nowrap;">
+      ${_nrRelateBtnHtml(r, i)}
       <button style="padding:1px 6px;font-size:10.5px;border:1px solid #1e7e34;color:#fff;background:#1e7e34;border-radius:4px;cursor:pointer;"
         onclick="_nrDecide(${i},'accept')" title="接纳：按 AI 建议处理">✓</button>
       <button style="padding:1px 6px;font-size:10.5px;border:1px solid #c98a2e;color:#fff;background:#c98a2e;border-radius:4px;cursor:pointer;"
@@ -512,7 +600,8 @@ function _nrRowHtml(r) {
         onclick="_nrMerge(${i})" title="合并：合并到已有元素">🔀</button>
       <span style="font-size:9.5px;color:${d?'#1e7e34':'var(--mut)'};">${decLbl}</span>
     </div>
-  </div>`;
+  </div>
+  ${_nrScoreOpen[i] ? `<div style="padding:2px 8px 6px 26px;margin-top:-2px;">${_nrScoreCardHtml(r)}</div>` : ''}`;
   return h;
 }
 /* ── 一致性 tab（只读） ── */
@@ -644,8 +733,13 @@ function _nrDecide(i, action) {
   const rows = _nrAllRows(), r = rows[i];
   if(!r) return;
   const d = {action, ts: Date.now(), row_name: r.name, row_status: r.matching_status};
-  if(action === 'rename') d.new_name = r.matched_entity_name || r.normalized_name || r.name;
-  if(action === 'merge') d.merge_to = r.matched_entity_name || r.matched_entity_id || r.name;
+  // P3-2：`matched_entity_name` 可能是 batch_dup_of 的兜底值（批内近似），
+  //        rename/merge 的去向必须优先取**真实**对端，否则会把批内元素名当图库实体名。
+  const _tgt = r.batch_dup_of || r.matched_entity_name || '';
+  if(action === 'rename') d.new_name = _tgt || r.normalized_name || r.name;
+  if(action === 'merge') d.merge_to = _tgt || r.matched_entity_id || r.name;
+  // P3-1：「判为相关」把对端显式记下，便于回溯"哪些元素被判为相关"
+  if(action === 'relate') d.relate_to = _tgt || r.matched_entity_id || '';
   window._nrState.decisions[i] = d;
   _nrRender();
 }

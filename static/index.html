@@ -586,6 +586,19 @@
                     <div class="ph" data-page-node-id="Hqeewqj3DaJ3qOu4KBr4Up">重复消歧 <span class="tag" data-page-node-id="Zd08lRzgSKdqwiHpuCCJKX">解决「这是不是同一个实体？」—— 相似度介于 0.62~0.92 之间、系统不敢自动判的两条记录</span><span style="flex:1" data-page-node-id="oilvpdEiPErt62iO05duvq"></span>
                       <button class="btn sm ghost" onclick="loadDuplicates()" data-page-node-id="EUsTLoQbN9oa5gfb0E93tK">刷新</button></div>
                     <div class="pb" style="padding:0;" data-page-node-id="FbsVEkMb7S0tyFJtfclu41"><div class="pb" id="dup-panel" data-page-node-id="H8W1yH3XPBf0sxHP8M1wQi"><div style="color:var(--mut);font-size:12px;" data-page-node-id="XdEEaH7DFuYLIrGFLwRXPq">检测同名/近似实体候选，人工确认合并（属性融合 + 关系重指向）</div></div></div>
+                    <div class="panel" style="margin:12px 0 0;border-top:1px solid var(--line);" id="alias-panel-wrap" data-page-node-id="ALIASWRAP01">
+                      <div class="ph">
+                        🏷 实体别名 <span class="tag">运行时别名表 entity_aliases：合并/对齐时自动产生，也可手动补录；补录后经词库对抽取归一生效</span><span style="flex:1"></span>
+                        <input id="alias-new-eid" placeholder="实体 ID（如 S-4782d01d）" style="width:170px;font-size:11px;padding:3px 6px;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--fg);" data-page-node-id="ALIASINPEID1">
+                        <input id="alias-new-name" placeholder="别名（如 转发器/TR）" style="width:160px;font-size:11px;padding:3px 6px;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--fg);" data-page-node-id="ALIASINPNAME1">
+                        <button class="btn sm" onclick="aliasAdd()" title="补录别名：下一轮抽取归一即可命中（对齐 IBM WKC「词表可编辑+改完立刻生效」）" data-page-node-id="ALIASADDBTN1">＋ 补录</button>
+                        <button class="btn sm ghost" onclick="aliasSyncToGlossary()" title="把运行时别名同步进受控词库（glossary_terms），让别名对全量抽取生效" data-page-node-id="ALIASSYNBTN1">🔄 同步到词库</button>
+                        <button class="btn sm ghost" onclick="loadEntityAliases()" data-page-node-id="ALIASREFBTN1">刷新</button>
+                      </div>
+                      <div class="pb" style="padding:0;" data-page-node-id="ALIASPANELTB1">
+                        <div id="alias-panel" data-page-node-id="ALIASPANEL01"><div style="padding:10px;color:var(--mut);font-size:12px;">加载中…</div></div>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <!-- ③ 属性融合 -->

@@ -421,11 +421,12 @@ const _NR_SUGGEST = {
   matched_low:  { l:'采用?',  c:'#c98a2e', bg:'#fffaf0', bd:'#FAC775' },
   dup_high:     { l:'合并',   c:'#7c3aed', bg:'#f5f3ff', bd:'#DDD6FE' },
   dup_suspect:  { l:'合并?',  c:'#d97706', bg:'#fef3c7', bd:'#FCD9A1' },
+  related:      { l:'相关(非同一实体)', c:'#0891b2', bg:'#ecfeff', bd:'#A5F3FC' },
   none:         { l:'新增',   c:'#1d4ed8', bg:'#eff6ff', bd:'#93C5FD' },
   rejected:     { l:'不入图库', c:'#6b7280', bg:'#f3f4f6', bd:'#d1d5db' },
   generic:      { l:'忽略',   c:'#6b7280', bg:'#f8fafc', bd:'#e2e8f0' },
 };
-const _NR_BLOCKING = ['matched_low','dup_high','dup_suspect','none','rejected'];
+const _NR_BLOCKING = ['matched_low','dup_high','dup_suspect','none','related','rejected'];
 
 // P0 AI summary panel
 function renderSummaryPanel(cd) {
