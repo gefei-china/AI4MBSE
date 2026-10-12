@@ -661,12 +661,20 @@ def entity_duplicates(conn=Depends(db_session)):
 
 
 @router.post("/api/knowledge/entity-dups/detect")
-def entity_dup_detect(conn=Depends(db_session)):
-    """E-1：触发消歧检测（blocking → 评分 → 三档决策 → 候选落库 + auto-merge）。"""
+def entity_dup_detect(conn=Depends(db_session),
+                      user=Depends(require_any_permission(WRITE_PERMS))):
+    """E-1：触发消歧检测（blocking → 评分 → 三档决策 → 候选落库 + auto-merge）。
+
+    P1-3 修复（2026-10-11）：补权限门。此前**无任何权限门**却能触发 auto-merge（改数据），
+    与同文件 :675 的 review 端点（`require_permission("kb_review","confirm")`）和
+    :686 的 fusion/preprocess（`require_any_permission(WRITE_PERMS)`）口径不一致 ——
+    写权限最松的恰好是唯一会**批量改实体**的那个端点。
+    """
     from entity_resolver import detect_and_save_candidates
     result = detect_and_save_candidates(conn)
     audit("系统", "entity_dup_detect",
-          f"消歧检测: 候选 {result['candidates']} / 自动合并 {result['auto_merged']}", conn=conn)
+          f"消歧检测: 候选 {result['candidates']} / 自动合并 {result['auto_merged']}"
+          f" / 合并失败 {result.get('merge_failed', 0)}", conn=conn)
     return result
 
 
@@ -727,8 +735,22 @@ def fusion_status(conn=Depends(db_session)):
         "SELECT COUNT(*) FROM knowledge_conflicts WHERE status='pending'").fetchone()[0]
     auto_merged = conn.execute(
         "SELECT COUNT(*) FROM entity_merges WHERE operator='auto' AND status='merged'").fetchone()[0]
+    # P1-4（2026-10-11）：下发真实分档阈值，供前端分档与后端判定**同源**。
+    #   此前前端在 19-governance.js 里硬编码 0.9/0.75，而后端实际是
+    #   staging_fuse DB settings 的 0.9/0.7（覆盖了 entity_resolver 内置 0.92/0.62）
+    #   ⇒ 0.70~0.75 区间的候选界面显示「中」但按「低」处理。
+    #   Neo4j 官方口径：「Thresholds express a policy」—— 前端展示的必须是后端真值。
+    try:
+        from entity_resolver import _entity_merge_thresholds
+        _th = _entity_merge_thresholds(conn)
+        thresholds = {"auto": _th["auto"], "flag": _th["flag"],
+                      "auto_merge_enabled": _th["auto_merge_enabled"]}
+    except Exception:  # noqa: BLE001
+        thresholds = {"auto": 0.9, "flag": 0.7, "auto_merge_enabled": True}
     return {"entity_n": ent_n, "pending_pairs": pending_n, "llm_judged": llm_judged,
-            "conflict_n": conflict_n, "auto_merged": auto_merged}
+            "conflict_n": conflict_n, "auto_merged": auto_merged,
+            "thresholds": thresholds,
+            "note": "score cutoff ≠ 精度保证（Neo4j 官方口径）；分档仅表达策略档位"}
 
 
 @router.post("/api/knowledge/entity-merges/{mid}/rollback")

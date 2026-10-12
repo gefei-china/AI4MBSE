@@ -307,10 +307,33 @@ def fuse_batch(conn, batch_id: str | None = None, selected_ids: list | None = No
 
 # ═══════════════ 4. 批次质量闸（<90% 整批驳回） ═══════════════
 
+def _fuzzy_same_entity(a: str, b: str, thresh: float = 0.95) -> bool:
+    """质量闸的「是否同一实体」判定：fuzzy 高分 **且** 长度接近。
+
+    🔴 P4（2026-10-11）：为什么必须额外加「长度差 ≤2」约束 ——
+    修复 `text_normalize._bigrams` 后，**包含关系**的 fuzzy 会变得非常高：
+      VehiclePowerManagement   ⇄ VehiclePowerManagementReq  fuzzy=0.9545（≥0.95）
+      EVThermalManagementSystem ⇄ ThermalManagement        fuzzy=0.9524（≥0.95）
+    修复之前这些**恒为 0.0**，这道闸从未被它们触发；若不收紧，
+    0.95 这道「严格判官」会放行包含关系 ⇒ 层级 / 后缀变体被当作同一实体放行。
+
+    理由：真正的同一实体（拼写变体 / typo / 全半角差异）**长度几乎相同**；
+    包含关系（后缀变体、缩写前缀）的长度差天然偏大。
+    故 fuzzy 高 + 长度接近 ⇒ 才认可是同一实体的两种写法。
+    """
+    if not a or not b:
+        return False
+    from entity_resolver import fuzzy_score
+    if fuzzy_score(a, b) < thresh:
+        return False
+    return abs(len(str(a)) - len(str(b))) <= 2
+
+
 def quality_gate(conn, batch_id: str | None, sample_n: int = 10) -> dict:
     """批次质量闸：抽检本批 auto_merge 结果，精度 < 下限则整批驳回并回滚。
 
-    判官（严格版）：normalize_full(keep)==normalize_full(dup) 或 fuzzy_score≥0.95。
+    判官（严格版）：normalize_full(keep)==normalize_full(dup)，
+    或 fuzzy_score≥0.95 **且长度差 ≤2**（P4：后者否决包含关系，见 _fuzzy_same_entity）。
     不通过时：恢复被 merged 的候选为 pending（写前融合无主表污染，回滚天然安全），
     记录 batch_reject 审计事件。batch_id 为空（跨批次勾选）直接放行。
     返回 {pass, precision, sampled, auto_merged, reason}
@@ -330,7 +353,7 @@ def quality_gate(conn, batch_id: str | None, sample_n: int = 10) -> dict:
         "SELECT COUNT(*) FROM staging_fuse_log WHERE batch_id=? AND action='auto_merge'",
         (batch_id,)).fetchone()[0]
 
-    from entity_resolver import fuzzy_score, normalize_full
+    from entity_resolver import normalize_full   # fuzzy 判定走 _fuzzy_same_entity
     passed, failed_rows = 0, []
     for r in rows:
         # keep/dup 均为候选 id → 查候选名
@@ -342,7 +365,7 @@ def quality_gate(conn, batch_id: str | None, sample_n: int = 10) -> dict:
         if row:
             dup_name = row["entity_name"]
         if (normalize_full(keep_name) and normalize_full(keep_name) == normalize_full(dup_name)) \
-                or fuzzy_score(keep_name, dup_name) >= 0.95:
+                or _fuzzy_same_entity(keep_name, dup_name):
             passed += 1
         else:
             failed_rows.append(r)

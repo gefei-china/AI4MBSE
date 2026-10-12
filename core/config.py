@@ -560,6 +560,18 @@ DEFAULT_CONFIG = {
         #  现在取 0.5 的理由：宁可多报候选（互斥词已是很强的过滤器）也不漏。
         "conflict_detect_sim_high": 0.5,  # 同键候选的相似度下限（**未在真向量口径下标定**，见上）
     },
+    # ── 实体归一消歧（P1-1，2026-10-11）──
+    # ⚠️ 此前 entity_resolver.py 把 0.92 / 0.62 写成函数体内的**裸字面量**，既不可配也**无法关闭自动合并**；
+    #    而同类阈值在 staging_fuse 里走 DB settings（0.9 / 0.7）—— 两处口径独立维护，必然漂移。
+    #  独立成分组而非塞进 memory：memory 下的 conflict_detect_enabled 管的是**记忆**冲突，
+    #  与这里的**实体**消歧是同名不同物，同组会造成"以为已有开关"的误判（本工程真踩过）。
+    "entity_merge": {
+        # auto_threshold > 1.0 即等价于关闭自动合并（沿用 staging_fuse 既有语义）。
+        # 关闭时高分项**降级为待审候选**而非静默丢弃 —— 线索不丢。
+        "auto_threshold": 0.92,        # ≥ 该分自动合并（默认沿用历史值）
+        "flag_threshold": 0.62,        # [flag, auto) 建待审候选
+        "auto_merge_enabled": True,    # 自动合并总开关（关=只建候选不合并）
+    },
     "semantic_cache": {
         "enabled": False,            # 语义缓存开关（高频相似查询 embedding 命中直返）
         "threshold": 0.95,           # 命中相似度阈值
@@ -1153,6 +1165,11 @@ CONFIG_SCHEMA = {
         "forget_by_activation": {"type": "bool", "desc": "启用按 activation 衰减阈值遗忘（遗留通道，本工程实测恒定不触发，默认关）"},
         "conflict_detect_enabled": {"type": "bool", "desc": "冲突消解总开关：检出同键互斥记忆后打 superseded_by 标记（仅标记不删；默认关）"},
         "conflict_detect_sim_high": {"type": "float", "desc": "冲突检测的同键候选相似度下限（互斥事实字面高度重叠，实测 0.73）"},
+    },
+    "entity_merge": {
+        "auto_threshold": {"type": "float", "desc": "实体消歧自动合并分阈值（≥ 该分自动合并；>1.0 等价关闭。DB settings 的 auto_threshold 优先）"},
+        "flag_threshold": {"type": "float", "desc": "实体消歧建待审候选的下界（[flag,auto) 区间进人工队列）"},
+        "auto_merge_enabled": {"type": "bool", "desc": "实体消歧自动合并总开关（关=高分项降级为待审候选，不丢线索）"},
     },
     "semantic_cache": {
         "enabled":      {"type": "bool", "desc": "语义缓存开关（相似查询命中直返）"},

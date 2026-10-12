@@ -285,6 +285,50 @@ def _quality_group(conn, days: int) -> list:
                        "= 0", _status(dedup["queue_depth"], lower_better=True, warn=0),
                        detail=f"entity_dup_candidates 共 {dedup['queue_depth']} 条"
                               f"（待处理 {dedup['pending']}）"))
+    # P2-9（2026-10-11）：新增「裁决分布」指标 —— 只看队列长度无法判断质量。
+    #   Neo4j 官方：a small queue might mean accurate resolution **or**
+    #   an overly narrow candidate search **or** excessive automatic merging
+    #   ⇒ 队列空 ≠ 健康，必须同时看人工裁决的构成。
+    #   参照 Senzing：MERGE / SPLIT 双指标（错合与漏合都是一等公民）。
+    try:
+        _by_status = {r["status"]: r["n"] for r in conn.execute(
+            "SELECT status, COUNT(*) n FROM entity_dup_candidates GROUP BY status")}
+        _merged_n = _by_status.get("merged", 0)
+        _rejected_n = _by_status.get("rejected", 0)
+        _related_n = _by_status.get("related", 0)   # P2-7 新增的「相关但非同一实体」
+        _judged = _merged_n + _rejected_n + _related_n
+        if _judged:
+            # 采纳率：过高 = 自动合并太激进或审核草率；过低 = 阈值太严/召回不足
+            _accept_rate = round(_merged_n * 100.0 / _judged, 1)
+            # ⚠️ `_status` 只支持单侧（lower_better），而采纳率是**双侧**健康区间
+            #   （<20% 召回不足、>90% 过度自动合并）⇒ 这里显式算区间，不套 _status。
+            _accept_st = ("ok" if 40 <= _accept_rate <= 85
+                          else "warn" if 20 <= _accept_rate <= 90
+                          else "alert")
+            out.append(_metric(
+                "dedup_accept_rate", "消歧采纳率（人工裁决）", _accept_rate, "%", "global",
+                "40% ~ 85%（Neo4j：>90% 需警惕过度自动合并，<20% 需警惕召回不足）",
+                _accept_st,
+                detail=f"已裁决 {_judged} 条：采纳合并 {_merged_n} / 判为相关 {_related_n} / 驳回 {_rejected_n}"
+                       "。**采纳率过高或为零都是危险信号**（JAMIA 实证：零 override 不代表质量好）"))
+            out.append(_metric(
+                "dedup_related_rate", "判为相关（非同一实体）占比", round(_related_n * 100.0 / _judged, 1),
+                "%", "global", "无硬标准（观测用）", "ok" if _related_n else "warn",
+                detail=f"{_related_n} / {_judged} 条被判为「相关但不同实体」"
+                       "（层级关系如部件⊂分系统）。若长期为 0，说明 `name in other` 的层级误判未被人工纠正"))
+        else:
+            out.append(_na_metric(
+                "dedup_accept_rate", "消歧采纳率（人工裁决）", "%", "global",
+                "40% ~ 85%", "尚无已裁决记录（entity_dup_candidates 无 merged/rejected/related）",
+                drill={"page": "kb-b", "title": "去治理中心做消歧审核"}))
+    except Exception as _e:  # noqa: BLE001
+        # ⚠️ 本模块**没有 logger**（只 import 了 metrics_core._status 等符号），
+        #    用 logger.warning 会在 except 分支里抛 NameError 掩盖真实异常 ⇒ 这里不记日志，
+        #    仅静默跳过该指标（其余指标照常产出）。
+        out.append(_na_metric(
+            "dedup_accept_rate", "消歧采纳率（人工裁决）", "%", "global", "40% ~ 85%",
+            f"裁决分布统计失败：{type(_e).__name__}",
+            drill={"page": "kb-b", "title": "去治理中心做消歧审核"}))
     if dedup["accuracy"] is None:
         out.append(_na_metric("dedup_accuracy", "实体消歧准确率", "%", "global",
                               "≥ 85%（PRD §2.2）",

@@ -19,7 +19,8 @@ import uuid
 from ontology_semantics import GraphStore, OntologyValidator
 # P0-2 表面归一实现迁入 entity_resolver（诊断 §4.3 P1-1 解循环依赖）；
 # 本模块 re-export 保持既有调用方（sysml_importer / verify_kb_v2_enhance）零改动。
-from entity_resolver import _normalize_mentions  # noqa: F401  (re-export 兼容)
+from entity_resolver import (  # noqa: F401  (re-export 兼容)
+    _normalize_mentions, load_cross_ling_index)
 # P0 方案 v2 / S2：谓词与属性 key 归一（词典体系统一，保守策略未命中原样返回）
 from text_normalize import normalize_predicate, normalize_prop_key
 
@@ -150,13 +151,116 @@ def _mock_extract_v2(text: str, entity_types: list, relation_types: list) -> dic
     return {"nodes": nodes, "edges": edges}
 
 
-def _disambiguate_many(conn, names: list) -> dict:
+# AI 建模候选入库的目标分支（v2g/confirm 链路的唯一写入分支）。
+# 2026-10-11 提取为常量：此前 4 处硬编码 "personal"（create_edge / create_node /
+# UPDATE sysml_version_id / 版本打点），而 `_disambiguate_many` 的比对口径
+# 必须与写入分支一致，否则 `dup_action='align'` 会把候选合到别的分支的实体上
+# （`entities` 主键是复合键 (id, branch)，真库有 61 组同 id 跨 dev/personal/release）。
+_AI_INGEST_BRANCH = "personal"
+
+# ── 消歧三维度阈值（P1-1/P1-2，2026-10-11）────────────────────────────────
+# 口径与 entity_resolver.detect_and_save_candidates 同源（不重造第二轮算法），
+# 但**不含图邻域维度** —— 那是写后消歧路径才有的信息。
+#
+# ⚠️ floor 的意义（抄 Talend T-Swoosh「每个 matching function 各自过阈值」）：
+#   Neo4j 官方警告「score cutoffs ≠ precision」，Senzing 亦强调要区分
+#   「相似」与「同一实体」。若无 per-dimension floor，则
+#   「转发器」 vs 「有效载荷转发器」这类**层级关系**会因字符高度重叠被误判为重复。
+#
+# 实测标定（VectorEngine bigram TF 余弦 / fuzzy_score）：
+#   转发器 vs 转发器           vec=1.0000  fuzzy=1.0000   ⇒ 同一实体
+#   转发器 vs 有效载荷转发器    vec=0.5774  fuzzy=0.6667   ⇒ 层级关系（部件⊂分系统）
+#   转发器 vs 宽带载荷          vec=0.0000  fuzzy=0.0000   ⇒ 无关
+#   宽带载荷 vs 宽带载荷分系统   vec=0.7071  fuzzy=0.7500   ⇒ 层级关系（**vec 反而更高！**）
+#   转发器A vs 转发器B          vec=0.6667  fuzzy=0.6667   ⇒ 真重复（同位置字符替换）
+#
+# ⚠️ 由第 3、4 行可推出**关键结论**：层级关系的 vec 与真重复**同量级**（0.71 vs 0.67），
+#   单靠全局阈值无法区分 ⇒ related 判定必须用**前缀+聚合词后缀**信号（见 _disambiguate_many 内）。
+#   floor 的作用是**兜底**（挡住语义明显不同的假包含），不是 related 的主判据。
+_FLOOR_VEC = 0.60        # 向量维度下限（兜底）
+_FLOOR_FUZZY = 0.60     # 模糊维度下限（兜底）
+_SUSPECT_MIN = 0.72     # 三维加权分达到此值且过 floor ⇒ dup_suspect
+
+# ──「名称包含」的统一判定（P4，2026-10-11）────────────────────────────────
+# ⚠️ 单一实现：`_disambiguate_many`（AI 建模主链路）与
+#    `sysml_importer._score_pair`（归一校验批内）**共用本函数与 `_AGG_SUFFIX`**。
+#    此前两边各存一份拷贝且列表不一致（那边多 需求/功能/req），属典型「口径分裂」，
+#    是最易漏的缺陷形态 —— 单看任一份都正确。统一后由同一份代码产出，不可能再漂移。
+_AGG_SUFFIX = ("分系统", "子系统", "系统", "设备", "组件", "部件组", "载荷",
+               "平台", "总成", "需求", "功能", "req")
+
+
+def _containment_status(a: str, b: str, floor_ok: bool) -> str:
+    """两名为**包含关系**（其一是另一个的子串）时的状态判定。返回 related / dup_suspect。
+
+    ⚠️ 为什么「包含」不能直接判重复（Neo4j / Senzing 官方立场）：
+    名称包含通常是**层级 / 复合术语**而不是同一实体 ——
+      「转发器」⊂「有效载荷转发器」      部件 ⊂ 分系统
+      「热管理」⊂「EV 热管理系统」       主题 ⊂ 子系统
+    Neo4j 官方明确：「母公司 vs 子公司不该因共享品牌而合并」。
+
+    🔴 P4（2026-10-11）第 1 条判据 —— **包含但短名不是长名前缀 ⇒ related**：
+    修 `text_normalize._bigrams` 之前，无空格拉丁名的 fuzzy **恒为 0**
+    ⇒ floor_ok 恒 False ⇒ 这类恒落 related，问题被假阴性掩盖。
+    fuzzy 修复后 floor_ok 变真，`EVThermalManagementSystem ⊃ ThermalManagement`
+    会**直接升级为 dup_suspect**（假阳性：层级关系被当重复并建议合并）。
+    ⇒ 收紧：只有短名是长名**前缀**时才有可能是同根（同根 + 后缀）；
+      中缀 / 后缀包含一律当作复合术语 ⇒ related（不参与合并）。
+
+    判据（顺序敏感）：
+      短名不是长名前缀                    ⇒ related（复合术语 / 层级）
+      前缀 + 聚合词后缀 + 不过 floor       ⇒ related（层级）
+      前缀 + 聚合词后缀 + 过 floor         ⇒ dup_suspect（可能是同一实体被写全称，交人工）
+      不过 floor                          ⇒ related（语义不足以判同一实体）
+      其余（过 floor）                     ⇒ dup_suspect
+    """
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    if not long_.startswith(short):
+        return "related"          # P4：中缀/后缀包含 = 复合术语
+    tail = long_[len(short):]
+    has_agg = bool(tail) and any(s in tail for s in _AGG_SUFFIX)
+    if has_agg and not floor_ok:
+        return "related"          # 层级关系：部件 ⊂ 分系统
+    if has_agg:
+        # 前缀 + 聚合词后缀且三维都够：仍可能是「同一部件被写全称」
+        # → 判重复但降一档信任（不自动合并，交人工）
+        return "dup_suspect"
+    return "dup_suspect" if floor_ok else "related"
+
+# 进程级 VectorEngine 单例：避免每个候选重建词表（性能；`_vector` 内部有缓存）
+_VE_SINGLETON = None
+
+
+def _get_vector_engine():
+    global _VE_SINGLETON
+    if _VE_SINGLETON is None:
+        try:
+            from knowledge_engine import VectorEngine
+            _VE_SINGLETON = VectorEngine()
+        except Exception:  # noqa: BLE001  向量不可用时降级为纯 fuzzy（不阻断消歧）
+            _VE_SINGLETON = False
+    return _VE_SINGLETON or None
+
+
+def _disambiguate_many(conn, names: list, branch: str | None = None,
+                       cross_ling: dict | None = None) -> dict:
     """批量候选消歧（P1-2 Blocking 化）：一次全表扫描建索引，消灭 O(N×M)。
 
     与旧 _disambiguate 单候选语义一致（判定顺序保留）：
     - dup_high：与已有实体名称完全相同（或 normalize_name 后相同）
     - dup_suspect：名称包含/被包含（≥2 字）或字符重叠率 ≥0.8 且长度差 ≤2
     - none：无重复
+
+    ⚠️ P1-1/P1-2/P1-3（2026-10-11）：`dup_suspect` 判定**已从单一字符维度扩为三维度**
+    （vec 0.70 + fuzzy 0.30），并加 **per-dimension floor**（各维 ≥0.60）；
+    另新增 **`related` 状态**表达「相关但不同实体」（Senzing `Possibly related` 范式）。
+
+    状态集（⚠️ 新增 related，`_NR_BLOCKING_STATUSES` 与前端 `_NR_BLOCKING` 须同步）：
+    - dup_high    同名/归一全等/别名互为规范名 ⇒ 高度重复
+    - dup_suspect 疑似重复（三维过 floor）
+    - related     **相关但不同实体**（典型：部件 ⊂ 分系统，如「转发器」vs「有效载荷转发器」）
+    - none        无关联
+    related 不参与「重复合并」，供人判定层级关系（Neo4j 官方：母公司 vs 子公司不该因共享品牌而合并）。
     索引三件套（内存 dict，建索引 O(N)，查询 O(M×桶均)）：
     - exact{原名} / norm{归一名} → dup_high 零漏配（O(1) 命中）
     - prefix{normalize_full 前 4 字} → 覆盖「同前缀包含」类 dup_suspect
@@ -165,19 +269,60 @@ def _disambiguate_many(conn, names: list) -> dict:
       如 高轨卫星系统 vs 低轨卫星系统 → 公共 bigram「轨卫/卫星/星系/系统」）
     桶内顺序 = DB rows 插入序，与旧全表遍历首命中语义一致。
     复杂度：O(N 建索引 + M×桶均)。返回 {raw_name(strip 后): (status, entity_id)}。
+
+    P0-2 修复（2026-10-11）：SQL 补 branch 过滤。
+    根因：`entities` 主键是**复合键 (id, branch)**，真库有 61 组同 id 跨 dev/personal/release
+    三分支。此前本查询既无 branch 也无 entity_type 过滤 ⇒ 会把**别的分支的实体**拿来比对，
+    而 `confirm_candidates` 入库时硬编码写 `personal` 分支（:978）⇒
+    `dup_action='align'` 会把候选属性合到 dev 分支的实体上（跨分支错配）。
+    对照：`entity_resolver.detect_and_save_candidates` 已于 2026-10-11 补同口径
+    （`_canopy_key(..., branch=)` + `a["branch"] != b["branch"]: continue`），本函数尚未跟上。
+
+    ⚠️ backward-compat：`branch=None`（默认）= 保持旧的全分支扫描语义，
+    供既有调用方与测试脚本（`tests/manual_verify/verify_p1_blocking_smoke.py`）零改动沿用；
+    传入具体 branch 时才做分支隔离。
+
+    P5 跨语言消歧（2026-10-12）：新增**可选** `cross_ling`（由
+    `entity_resolver.load_cross_ling_index(conn)` 产出，形如
+    `{规范名normalize: [别名词原文, ...]}`，且**只含跨语言词条**）。
+    🔴 本函数此前是**跨语言消歧的断点**：它不读 `_normalize_mentions` 的结果、不查词库，
+    而图库实体全是中文、AI 候选全是英文 ⇒ 两侧 bigram 无交集 ⇒ 恒不命中
+    （真库实测 60 个英文候选只产出 2 个 `dup_high`）。
+    修法只在**索引侧**灌入别名词（查询侧与全部判定逻辑**一行未改**）：
+      - 别名进 `exact` ⇒ 候选 `Transponder` 与别名 normalize_full 全等
+        ⇒ 走既有 ②a 分支判 **dup_high**，返回的仍是真实中文实体的 id；
+      - 别名进 `norm` / `prefix` / `bigram` ⇒ 复合英文名（`TransponderUnit`）能被召回；
+        但相似度仍用**实际名字**计算 ⇒ 跨语言相似度≈0 ⇒ **过不了 floor ⇒ 不会误合并**，
+        最坏退化为 `none`/`related`，符合「宁可漏配不误合」。
+    ⚠️ 桶内存的是**别名词**（用于全等比对），不是实体真名 —— 这是上面第一条能生效的前提。
     """
     out = {str(n or "").strip(): ("none", "") for n in names if n}
     pending = [k for k in out if k]
     if not pending:
         return out
     from text_normalize import _bigrams_ordered, normalize_full, normalize_name
+    from text_normalize import fuzzy_score   # P1-1：三维度之一
+    _ve = _get_vector_engine()
+    _vcache = {}                              # name → vector
+    def _ve_cos(a: str, b: str) -> float:
+        """向量余弦（带 name 级缓存）；向量引擎不可用时返回 0.0（降级为纯 fuzzy）。"""
+        if not _ve:
+            return 0.0
+        if a not in _vcache:
+            _vcache[a] = _ve._vector(a)
+        if b not in _vcache:
+            _vcache[b] = _ve._vector(b)
+        try:
+            return float(_ve._cosine(_vcache[a], _vcache[b]))
+        except Exception:  # noqa: BLE001
+            return 0.0
     exact, norm, prefix_idx, bigram_idx = {}, {}, {}, {}
-    for r in conn.execute(
-            "SELECT id, name FROM entities WHERE status!='deprecated'").fetchall():
-        other = str(r["name"]).strip()
+
+    def _index_one(raw: str, eid):
+        """把一个名字灌进四套索引（P5 抽出，供实体真名与跨语言别名共用）。"""
+        other = str(raw).strip()
         if not other:
-            continue
-        eid = r["id"]
+            return
         exact.setdefault(other, eid)
         no = normalize_name(other)
         if no:
@@ -187,6 +332,23 @@ def _disambiguate_many(conn, names: list) -> dict:
             prefix_idx.setdefault(nfo[:4], []).append((other, eid, nfo))
             for bg in _bigrams_ordered(nfo):
                 bigram_idx.setdefault(bg, []).append((other, eid, nfo))
+
+    # P0-2：branch 有值时按分支隔离（entities 主键是 (id, branch)）
+    if branch:
+        _rows = conn.execute(
+            "SELECT id, name FROM entities WHERE status!='deprecated' AND branch=?",
+            (branch,)).fetchall()
+    else:
+        _rows = conn.execute(
+            "SELECT id, name FROM entities WHERE status!='deprecated'").fetchall()
+    for r in _rows:
+        _index_one(r["name"], r["id"])
+        # P5：跨语言别名入索引（值是别名词原文，走 normalize_full 建桶）
+        if cross_ling:
+            _own = normalize_name(str(r["name"]).strip())
+            for _alt in cross_ling.get(_own, ()) or ():
+                if normalize_name(str(_alt).strip()) != _own:
+                    _index_one(_alt, r["id"])
     for name in pending:
         # ① 精确/归一全等 → dup_high（旧逻辑第一优先，零漏配）
         eid = exact.get(name)
@@ -215,15 +377,57 @@ def _disambiguate_many(conn, names: list) -> dict:
             if nf and nfo_i and nf == nfo_i:
                 out[name] = ("dup_high", eid)
                 break
+            # ── P1-1 / P1-2 / P1-3（2026-10-11）：三维度打分 + per-dimension floor
+            #       + related 语义 ─────────────────────────────────────
+            # 原实现只有「字符重叠率」单一维度，却直接判 dup_suspect（会被当重复合并）。
+            # 问题（MBSE 场景实测）：`name in other` 会把**层级关系**误判为重复 ——
+            #   「转发器」 vs 「有效载荷转发器」是部件 ⊂ 分系统，是 related 不是同一实体；
+            #   「卫星」 vs 「主星」同理。Neo4j 官方亦警告「母公司 vs 子公司不该因共享品牌而合并」。
+            # 三维度（与 entity_resolver.detect_and_save_candidates 同源实现，不重造）：
+            #   vec  = VectorEngine bigram TF 余弦（0.70）
+            #   fuzzy= text_normalize.fuzzy_score（0.30）
+            # P1-2 per-dimension floor（抄 Talend T-Swoosh「每个 matching function 各自过阈值」）：
+            #   全局分高但**某一维度不及格** ⇒ 不算匹配，防「字符高度重叠掩盖语义不同」。
+            _v_sim = 0.0
+            if name and other:
+                try:
+                    _v_sim = float(_ve_cos(name, other))
+                except Exception:  # noqa: BLE001
+                    _v_sim = 0.0
+            _f_sim = float(fuzzy_score(name, other)) if (name and other) else 0.0
+            _score = round(0.70 * _v_sim + 0.30 * _f_sim, 4)
+            _floor_ok = _v_sim >= _FLOOR_VEC and _f_sim >= _FLOOR_FUZZY
+
+            # P1-3：包含关系 → 区分「层级关系(related)」与「重复(dup)」
+            #   ⚠️ **不能用全局阈值区分**（2026-10-11 实测标定）：
+            #       「宽带载荷 ⊂ 宽带载荷分系统」vec=0.7071（层级）
+            #       「转发器A vs 转发器B」  vec=0.6667（真重复）
+            #     两者同量级，单一 floor 阈值**必然误判其一**。
+            #   可靠信号是**前缀关系**：层级关系里短名通常是长名的词干/前缀
+            #     （「宽带载荷」→「宽带载荷分系统」前缀命中，剩余为「分系统」这类聚合词后缀）
+            #   而真重复是「同位置字符替换」（转发器**A** → 转发器**B**，前缀不成立）。
+            #   Neo4j 官方同此立场：母公司 vs 子公司不该因共享品牌而合并，应建模为 related。
             if len(name) >= 2 and len(other) >= 2 and (name in other or other in name):
-                out[name] = ("dup_suspect", eid)
+                # P4（2026-10-11）：包含判定统一由 `_containment_status` 产出
+                # （详见该函数注释：为何中缀包含必须是 related 而非重复）
+                out[name] = (_containment_status(name, other, _floor_ok), eid)
                 break
+            # 字符重叠率路径：加 floor 门 + 向量补强（原有口径保留为下限）
             if name and other:
                 s1, s2 = set(name), set(other)
                 inter = len(s1 & s2)
                 m = max(len(s1), len(s2))
                 if m and inter / m >= 0.8 and inter / m < 1.0 \
                         and abs(len(name) - len(other)) <= 2:
+                    # P1-2：字符重叠高但向量/模糊任一不及格 ⇒ 降级为 related，不判重复
+                    if not _floor_ok:
+                        out[name] = ("related", eid)
+                    else:
+                        out[name] = ("dup_suspect", eid)
+                    break
+                # P1-1 补强：原实现完全没有向量维度 ⇒ 漏配。
+                # 现在对未命中前两条规则的候选补一次三维判定，够 floor 才算 dup_suspect。
+                if _floor_ok and _score >= _SUSPECT_MIN:
                     out[name] = ("dup_suspect", eid)
                     break
     return out
@@ -891,7 +1095,7 @@ def confirm_candidates(conn, batch_id: str | None = None, selected_ids: list | N
             src_id = _lookup(src_name)
             tgt_id = _lookup(tgt_name)
             if src_id and tgt_id:
-                ok, res = gs.create_edge(src_id, tgt_id, rel_type, {"auto": True}, "personal",
+                ok, res = gs.create_edge(src_id, tgt_id, rel_type, {"auto": True}, _AI_INGEST_BRANCH,
                                          source_doc=c["source_doc"] or "", created_by=operator)
                 if ok:
                     # P0-A：关系候选确认 → relations(candidate) 待审（与实体同级治理，
@@ -976,14 +1180,14 @@ def confirm_candidates(conn, batch_id: str | None = None, selected_ids: list | N
         # R1 统一闸门：SYSM- 批次（ingest/stage 暂存）无版本关联，按批号前缀判定为 AI 建模来源
         is_ai = (c["sysml_version_id"] or 0) > 0 or str(c["batch_id"] or "").startswith("SYSM-")
         ok, res = gs.create_node(nid, c["entity_name"], c["entity_type"], props,
-                                 "personal", x=0, y=0,
+                                 _AI_INGEST_BRANCH, x=0, y=0,
                                  source_doc=c["source_doc"] or "",
                                  source_type="ai_generated" if is_ai else "vector",
                                  created_by=operator)
         if ok:
             if is_ai:
-                conn.execute("UPDATE entities SET sysml_version_id=? WHERE id=? AND branch='personal'",
-                             (c["sysml_version_id"], nid))
+                conn.execute("UPDATE entities SET sysml_version_id=? WHERE id=? AND branch=?",
+                             (c["sysml_version_id"], nid, _AI_INGEST_BRANCH))
             conn.execute("UPDATE v2g_candidates SET status='confirmed' WHERE id=?", (c["id"],))
             created_nodes.append({"id": nid, "name": c["entity_name"], "entity_type": c["entity_type"]})
             name_to_id[c["entity_name"]] = nid
@@ -1060,7 +1264,7 @@ def confirm_candidates(conn, batch_id: str | None = None, selected_ids: list | N
                 f"SELECT id, source_id, target_id, relation_type FROM relations WHERE id IN ({ph})",
                 rel_ids).fetchall()]
         CommitRepo(conn).create_commit(
-            "personal", "import",
+            _AI_INGEST_BRANCH, "import",
             (f"AI 建模入库 {len(ent_ids)} 实体/{len(rel_ids)} 关系" if ai_flag
              else f"抽取确认入库 {len(ent_ids)} 实体/{len(rel_ids)} 关系"),
             changes, snap, actor=operator)

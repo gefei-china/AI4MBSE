@@ -34,8 +34,35 @@ def normalize_name(name: str) -> str:
     return s
 
 
+# P4（2026-10-11）：纯拉丁/数字 token 的判定（见 _bigrams 内的由来说明）。
+# 只对该类 token 补字符级 bigram —— 含中文的 token 不拆，避免改变既有中文 fuzzy 语义。
+_LATIN_ONLY = re.compile(r"[a-z0-9]+\Z")
+
+
 def _bigrams(s):
-    """中文 bigram 切分（兼容英文空格分词）。"""
+    """中文 bigram 切分（兼容英文空格分词）。
+
+    🔴 P4 修复（2026-10-11）：**无空格拉丁名补字符级 bigram**。
+    原实现「英文按空格分词」，但 `fuzzy_score` 的入参恒为 `normalize_name` 的输出，
+    而该函数会**删除全部空白** ⇒ `VehiclePowerManagement` 这类**驼峰/连写拉丁名**
+    整串变成**单个 token** ⇒ bigram 集合只有 1 个元素 ⇒ 任意两个不同的此类名，
+    bigram 交集恒空 ⇒ `_partial_ratio` / `_token_sort_ratio` **恒为 0**
+    ⇒ **fuzzy 维度在这类名字上系统性失效**（不是个案）。
+
+    实测（真库）：`v2g_candidates` 297 个去重候选名中 **253 个（85.2%）** 因此失效
+    （AI 生成的 V2 标识符几乎全是英文驼峰）；图库 `entities` 60 个去重名**全为中文**，
+    0 个受影响 ⇒ 本修复**不改变任何中文场景的既有语义**。
+    例：`VehiclePowerManagement ⇄ VehiclePowerManagementReq`  fuzzy 0.0000 → 0.9545。
+
+    ⚠️ 为什么只对**纯拉丁/数字** token 拆字符 bigram：
+    含中文的 token（如 normalize 后的「转发器a」）不拆 —— 中文部分已由上面的
+    `zh` bigram 覆盖，再拆会引入「器a」这类**跨界 bigram**，实测会让
+    「转发器A ⇄ 转发器B」由 0.6667 **掉到** 0.5000（改变基线语义，属回归）。
+
+    ⚠️ 与 `_bigrams_ordered` 的分工（两者口径本就不同，勿统一）：
+      `_bigrams`        → **fuzzy 打分**专用（要细粒度字符重叠）
+      `_bigrams_ordered`→ **Blocking 建桶**专用（要用完整 token 当 key，保持桶粗而稳）
+    """
     if not s:
         return set()
     # 中文按 bigram，英文按 lowercase 词
@@ -47,6 +74,12 @@ def _bigrams(s):
     # 英文/数字按空格分词
     en = re.sub(r"[^\w\s]", " ", s).lower().split()
     bigrams.update(en)
+    # P4：无空格连写的拉丁名（normalize 后无空白）补字符级 bigram，
+    # 使其参与 fuzzy 比较；否则整串只算 1 个元素，交集恒空 ⇒ fuzzy 恒 0。
+    for tok in en:
+        if len(tok) > 2 and _LATIN_ONLY.match(tok):
+            for i in range(len(tok) - 1):
+                bigrams.add(tok[i:i + 2])
     return bigrams
 
 
@@ -228,15 +261,22 @@ def normalize_full(name: str) -> str:
 # ═══════════ 4. Canopy 粗筛键（新代：工序① 规则预处理桶） ═══════════
 
 
-def _canopy_key(entity_type: str, name: str) -> str:
+def _canopy_key(entity_type: str, name: str, branch: str = "") -> str:
     """Canopy 分桶 key：类型 + 归一化名称的前 4 个字符（含别名展开后）。
 
     与旧 _blocking_key 的区别：基于 normalize_full（别名/简全称已展开），
     桶粒度稍大（前 4 字符）减少漏配，桶内两两仍可接受。
+
+    branch（P0-1 修复，2026-10-11）：可选入参。传入时纳入桶键，
+    使不同分支的同名实体不落入同一桶。原因：`entities` 主键是复合键 (id, branch)，
+    同一 id 可在 dev/personal/release 各存一份；若不隔离，消歧引擎会把
+    「同一实体的三个分支副本」当成重复项，且 merge 时必然自合并失败。
+    默认空串 = 保持历史桶键不变（向后兼容既有调用方）。
     """
     nt = normalize_full(name)
     prefix = nt[:4] if len(nt) >= 3 else nt
-    return f"#{entity_type}#{prefix}"
+    head = f"{branch}|" if branch else ""
+    return f"{head}#{entity_type}#{prefix}"
 
 
 # ═══════════ 5. 去敬语（P0-2 表面归一） ═══════════
