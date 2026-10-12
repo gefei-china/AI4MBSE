@@ -107,5 +107,18 @@ docs/mbse-platform-prd/**/*.min.js
 .vscode/
 
 # ── 数据库备份与临时打包（不入库）──
-mbse.db.backup-*
+# ⚠️ 2026-10-12 修正：原规则 `mbse.db.backup-*` **漏掉了实际存在的命名**。
+#    实测根目录有两个 357 MB 的遗留备份：
+#      mbse.db.bak.provider_20261011_100805
+#      mbse.db.bak.binding_20261011_110120
+#    它们是 `.bak-<tag>_<stamp>`（**点号 + 下划线**），与 `backup-`（连字符）
+#    以及已有的 `*.bak`（要求以 .bak **结尾**）**都不匹配** ⇒ 一直挂在未跟踪列表里，
+#    一次 `git add -A` 就会把 714 MB 二进制写进历史（不可逆）。
+#    根目录 `mbse.db*` 一网打尽：库本体、WAL 边车、两种历史备份命名、未来新命名。
+#    反查：git check-ignore -v mbse.db.bak.binding_20261011_110120
+# ⚠️ 这些文件本身**不删除**——它们仍是出���前的数据保险；
+#    确认不需要后用项目自带工具清理（比手工 rm 安全，它识别旧式备份并可保留 N 份）：
+#      .venv\Scripts\python.exe -X utf8 tools\db_backup.py --list
+#      .venv\Scripts\python.exe -X utf8 tools\db_backup.py --gc-legacy 0
+/mbse.db*
 mbse_system.zip
