@@ -820,7 +820,15 @@ def normalize_report(conv_id: int, msg_id: int, conn=Depends(db_session),
 # 前端 `_NR_BLOCKING`（static/js/mods/06-cards.js）的**后端镜像** —— 两边必须逐项一致，
 # 否则按钮徽标上的数字会与清单卡头的「待确认 N 项」对不上。
 # 校验见 tools/verify/verify_norm_summary.py（D3 用例：grep 两端常量比对）。
-_NR_BLOCKING_STATUSES = ('matched_low', 'dup_high', 'dup_suspect', 'none', 'rejected')
+# ⚠️ 这是与前端 `_NR_BLOCKING`（static/js/mods/06-cards.js）的**镜像常量**，改一处必须改另一处
+#    （`tools/verify/verify_norm_summary.py` 的 D3 断言按**运行时属性**比对，漏改立刻判红）。
+# ⚠️ 本行的字面量还被 verify_norm_summary 的变异自证当**锚点**用（ANCHOR），
+#    它的变异体正是"故意漏掉 dup_suspect"那个 5 项元组。
+#    ⇒ **跑该脚本时若被强杀（SIGTERM/超时），变异体会残留在本文件里**，
+#      表现为 D3/D4 判红且 `assert ANCHOR in ORIG` 报「锚点未找到，自证中止」。
+#      2026-10-12 实测踩过：沙箱里被 SIGTERM 打断后文件留在变异态，
+#      一度被误判成"加 related 时误删了 dup_suspect"的产品缺陷。
+_NR_BLOCKING_STATUSES = ('matched_low', 'dup_high', 'dup_suspect', 'none', 'related', 'rejected')
 
 
 @router.get("/api/conversations/{conv_id}/messages/{msg_id}/normalize-summary")

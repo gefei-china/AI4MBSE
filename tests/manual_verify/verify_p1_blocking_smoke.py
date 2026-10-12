@@ -87,9 +87,23 @@ check("A3 同名自身 → dup_high",
 check("A4 跨前缀重叠(高轨/低轨, 重叠83%) → dup_suspect(bigram 索引)",
       _disambiguate(conn, "低轨卫星系统") == ("dup_suspect", "e3"),
       str(_disambiguate(conn, "低轨卫星系统")))
-check("A5 包含(星载转发器⊃转发器) → dup_suspect(e1 先见)",
-      _disambiguate(conn, "星载转发器") == ("dup_suspect", "e1"),
+# A5（2026-10-11 P4 修订期望值）：「星载转发器」⊃「转发器」，但短名**不是**长名前缀
+#   ⇒ 按 `_containment_status` 判 **related**（复合术语 = 层级关系，不该合并）。
+#   旧期望 dup_suspect 出自旧实现的 `_tail = _long[len(_short):]` 算法缺陷：
+#   短名非前缀时该式算出的是**无意义切片**（此处 "星载转发器"[3:] = "发器"），
+#   却参与 has_agg 判定 ⇒ 行为偶然、不可预测。
+#   且与已确立口径冲突：「转发器」vs「有效载荷转发器」与本例**结构完全相同**
+#   （同为「限定词 + 转发器」），后者按层级判 related —— 现在两者自洽（见 A5c）。
+check("A5 包含但非前缀(星载转发器⊃转发器) → related(e1 先见)",
+      _disambiguate(conn, "星载转发器") == ("related", "e1"),
       str(_disambiguate(conn, "星载转发器")))
+# A5b：补齐被 A5 腾出来的 dup_suspect 覆盖 —— 前缀 + 聚合词后缀 ⇒ 交人工
+check("A5b 前缀+聚合词后缀(转发器分系统) → dup_suspect(同一部件被写全称，交人工)",
+      _disambiguate(conn, "转发器分系统") == ("dup_suspect", "e1"),
+      str(_disambiguate(conn, "转发器分系统")))
+check("A5c 与 A5 同构(有效载荷转发器⊃转发器) → related（口径自洽性）",
+      _disambiguate(conn, "有效载荷转发器") == ("related", "e1"),
+      str(_disambiguate(conn, "有效载荷转发器")))
 check("A6 空串 → none",
       _disambiguate(conn, "") == ("none", ""),
       str(_disambiguate(conn, "")))
@@ -176,8 +190,19 @@ check("F2 entity_resolver 不再反向导入 vector2graph",
       not re.search(r"(?:from\s+vector2graph\s+import|import\s+vector2graph)", er))
 check("F3 entity_resolver → text_normalize 单向",
       bool(re.search(r"from\s+text_normalize\s+import", er)))
-check("F4 vector2graph → entity_resolver（仅 re-export _normalize_mentions）",
-      bool(re.search(r"from\s+entity_resolver\s+import\s+_normalize_mentions", v2g)))
+# F4（2026-10-12 P5 加强）：vector2graph 必须从 entity_resolver **单向** re-export。
+#   原断言的正则 `from\s+entity_resolver\s+import\s+_normalize_mentions` 只认**单行紧邻**形式，
+#   P5 为保持「sysml_importer → vector2graph」的依赖方向新增了第二个 re-export
+#   `load_cross_ling_index`（跨语言消歧取词库别名），import 改成多行括号形式 ⇒ 原正则失配。
+#   ⚠️ 这里**加强而非放宽**：现在要求两个名字都在同一处 import 块内，删掉任一个都判红。
+#   ⚠️ 取材用「定位 import 语句 + 取其后 200 字符」而非正则匹配括号 ——
+#      实测踩过：import 行的注释里含 `(re-export 兼容)`，`[^)]*` 会在注释的右括号处
+#      提前截断，导致 block 里看不到第二个名字 ⇒ 断言误判红。
+_i4 = v2g.find("from entity_resolver import")
+_blob4 = v2g[_i4:_i4 + 200] if _i4 >= 0 else ""
+check("F4 vector2graph → entity_resolver（单向 re-export 两个名字）",
+      "_normalize_mentions" in _blob4 and "load_cross_ling_index" in _blob4,
+      "import 块=%r" % _blob4[:90])
 check("F5 vector2graph → text_normalize 单向",
       bool(re.search(r"from\s+text_normalize\s+import", v2g)))
 check("F6 entity_resolver 有 _normalize_mentions 实现（尾部）",
