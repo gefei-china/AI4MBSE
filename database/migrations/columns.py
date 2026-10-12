@@ -323,6 +323,18 @@ def _migrate_columns(conn):
     #    也不按当前会话归属"倒推"历史的工程。
     _add("sysml_versions", "project_id", "TEXT DEFAULT ''")
     _add("artifacts", "project_id", "TEXT DEFAULT ''")
+    # ── 消歧可用性（2026-10-12）：把「能否参与消歧匹配」从 `term_status` 里拆出来 ──
+    # 起因：`glossary_terms.term_status` 一列同时承担了两种正交语义 ——
+    #   ① 术语**管理域**的生命周期（candidate/approved/admitted/deprecated/retired）；
+    #   ② 该词条对**消歧域**是否可信可用。
+    # 症状（实测）：`POST /api/glossary/import` 的 `_commit` 写 `admitted`，
+    #   而 `_normalize_mentions` / `load_cross_ling_index` 的 SQL 过滤 `term_status='approved'`
+    #   ⇒ **导入成功但对消歧完全无效**（效果为 0，且没有任何报错）。
+    # 解法：加独立列表达 ②，`term_status` 回归纯 ①。
+    # ⚠️ **刻意不设 DEFAULT**：NULL = 沿用旧规则（`term_status='approved'` 才参与）
+    #   ⇒ 存量行行为**逐字不变**、迁移零行为变更；只有显式写 1 的行才被"提权"。
+    #   消歧侧用 PRAGMA 检测该列是否存在，列不存在时自动回落到旧条件（见 entity_resolver）。
+    _add("glossary_terms", "use_in_matching", "INTEGER")
     conn.commit()
 
 

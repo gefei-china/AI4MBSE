@@ -191,20 +191,53 @@ def glossary_migrate(body: dict, conn=Depends(db_session), user=Depends(require_
 
 @router.get("/api/knowledge/ontology/alias-coverage")
 def ontology_alias_coverage(conn=Depends(db_session), user=Depends(current_user)):
-    """R3：本体类别名覆盖度——零别名类型=抽取归一盲区（词法层覆盖检查）。"""
-    types = conn.execute("SELECT name, type_kind FROM ontology_types WHERE type_kind IN ('entity','relation')").fetchall()
+    """R3：本体类别名覆盖度——零别名类型=抽取归一盲区（词法层覆盖检查）。
+
+    ★ P0-4 修复（2026-10-11）：口径从**已废弃的旧表 `glossary`** 切到**现役词库**
+    `glossary_terms` ⋈ `glossary_concepts`。
+
+    原实现只读 `glossary`（10 行、`kind` 全为 `'intent'`），而该表已于 2026-09-07 废弃
+    （`norm_apply.py:191`）。真库现役两表合计 65 行、JOIN 后有 25 条可用别名对，
+    却完全没被计入 ⇒ **该指标长期返回"零覆盖"**（绿灯是假象）。
+    与 `metrics_core.alias_coverage`（查 `entity_aliases`）的口径差异已在返回里显式标注。
+
+    口径说明：现役词库没有 `entity_type` 字段，实体级映射走 `glossary_concepts.maps_to_class`，
+    因此覆盖判定 = 「本体类型名出现在 pref_label / term / maps_to_class 任一处」。
+    """
+    types = conn.execute(
+        "SELECT name, type_kind FROM ontology_types WHERE type_kind IN ('entity','relation')"
+    ).fetchall()
     covered = set()
-    for r in conn.execute("SELECT provenance, canonical_term, kind FROM glossary WHERE active=1"):
-        if r["kind"] in ("entity", "predicate"):
+    # 现役词库：术语 → 概念（双 approved；跳过已废弃概念）
+    try:
+        for r in conn.execute(
+                "SELECT t.term, t.term_kind, c.pref_label, c.maps_to_class "
+                "FROM glossary_terms t JOIN glossary_concepts c ON c.concept_id = t.concept_id "
+                "WHERE t.term_status='approved' AND c.concept_status='approved' "
+                "AND COALESCE(c.replaced_by,'')=''").fetchall():
+            for field in (r["term"], r["pref_label"], r["maps_to_class"]):
+                if field:
+                    covered.add(str(field).strip())
+    except Exception:  # noqa: BLE001
+        pass
+    # 兼容：旧表若仍有实体/谓词类词条也计入（不删历史支持，只是不再是唯一来源）
+    try:
+        for r in conn.execute("SELECT provenance, canonical_term, kind FROM glossary "
+                              "WHERE active=1 AND kind IN ('entity','predicate')").fetchall():
             covered.add(r["canonical_term"])
-        try:
-            et = (json.loads(r["provenance"] or "{}") or {}).get("entity_type")
-            if et:
-                covered.add(et)
-        except Exception:
-            pass
+            try:
+                et = (json.loads(r["provenance"] or "{}") or {}).get("entity_type")
+                if et:
+                    covered.add(et)
+            except Exception:
+                pass
+    except Exception:  # noqa: BLE001
+        pass
     zero = [{"name": t["name"], "kind": t["type_kind"]} for t in types if t["name"] not in covered]
-    return {"total": len(types), "covered": len(types) - len(zero), "zero_count": len(zero), "zero_alias": zero}
+    return {"total": len(types), "covered": len(types) - len(zero), "zero_count": len(zero),
+            "zero_alias": zero,
+            "source": "glossary_terms+glossary_concepts(+legacy glossary)",
+            "note": "本体类型级覆盖；实体级别名覆盖率见 metrics_core.alias_coverage（查 entity_aliases）"}
 
 
 @router.patch("/api/knowledge/glossary/{gid}")

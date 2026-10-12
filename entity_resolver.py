@@ -24,6 +24,94 @@ from text_normalize import (  # noqa: F401  (re-export 兼容)
 logger = logging.getLogger(__name__)
 
 
+# ═══════════ 0. 阈值与开关（P1-1，2026-10-11） ═══════════
+# 此前 0.92 / 0.62 是函数体内的裸字面量，既不走 core/config.py，也无法关闭自动合并；
+# 而 staging_fuse 的同类阈值走 DB settings（0.9 / 0.7）——两处口径独立维护，容易漂移。
+# 统一口径：优先读 DB settings（运行时可调），回落 core/config.py 默认值，再回落硬编码常量。
+
+_ENTITY_MERGE_DEFAULTS = {"auto": 0.92, "flag": 0.62, "auto_merge_enabled": True}
+
+
+def _entity_merge_thresholds(conn=None) -> dict:
+    """读取实体归一/消歧阈值与自动合并总开关。
+
+    返回 {auto, flag, auto_merge_enabled}。
+    读取顺序：DB settings（staging_fuse，运行时可调）→ core/config.py → 内置默认。
+    **任何层级异常都静默回落默认**（阈值读不到绝不能让消歧整体失效）。
+
+    P1-1 说明：`auto_threshold`/`review_threshold` 与 staging_fuse 同名同义，
+    复用同一份 DB settings 是为了消除"两处独立维护、口径漂移"的历史缺陷
+    （此前 entity_resolver 用裸字面量 0.92/0.62，staging_fuse 用 0.9/0.7）。
+    注意 auto > 1.0 即等价于关闭自动合并（staging_fuse 的既有语义）。
+    """
+    out = dict(_ENTITY_MERGE_DEFAULTS)
+    # 1) core/config.py 的 entity_merge 分组（默认层：含总开关）
+    #    ⚠️ 注意不能用 core.config.get_config()（无此函数），真实 API 是 get(section, key, default)。
+    try:
+        from core.config import get as _cfg_get  # type: ignore
+
+        if _cfg_get("entity_merge", "auto_threshold") is not None:
+            out["auto"] = float(_cfg_get("entity_merge", "auto_threshold"))
+        if _cfg_get("entity_merge", "flag_threshold") is not None:
+            out["flag"] = float(_cfg_get("entity_merge", "flag_threshold"))
+        if _cfg_get("entity_merge", "auto_merge_enabled") is not None:
+            out["auto_merge_enabled"] = bool(_cfg_get("entity_merge", "auto_merge_enabled"))
+    except Exception:
+        pass
+    # 2) DB settings（staging_fuse，与写前融合闸同源；仅当其显式配置过才覆盖默认层）
+    #    get_fuse_config 在 staging_fuse 模块且需 conn 参数——不传 conn 时整层跳过。
+    if conn is not None:
+        try:
+            from staging_fuse import get_fuse_config  # type: ignore
+
+            cfg = get_fuse_config(conn) or {}
+            if cfg.get("auto") is not None:
+                out["auto"] = float(cfg["auto"])
+            if cfg.get("review") is not None:
+                out["flag"] = float(cfg["review"])
+            if out["auto"] > 1.0:
+                out["auto_merge_enabled"] = False
+        except Exception:
+            pass
+    # 3) 数值健壮性：flag 必须 < auto，否则决策树退化
+    if out["flag"] >= out["auto"]:
+        out["flag"] = min(_ENTITY_MERGE_DEFAULTS["flag"], out["auto"] - 1e-6)
+    return out
+
+
+def _insert_dup_candidate(conn, keep: dict, dup: dict, score: float,
+                          vec_sim: float, fz_sim: float, nb_sim: float = 0.0,
+                          method: str = "fuzzy", note: str = "") -> bool:
+    """写一条 pending 消歧候选（幂等：已存在则不重复写）。返回 True=新写入。
+
+    P1-1 抽出为函数：原先桶内 flag 分支与「自动合并关闭时的降级出口」需要同一份写库逻辑，
+    内联复制两份必然漂移。
+    """
+    evidence = {
+        "vec_score": round(vec_sim, 3),
+        "fuzzy_score": round(fz_sim, 3),
+        "nb_score": round(nb_sim, 3),
+        "keep_name": keep["name"],
+        "dup_name": dup["name"],
+        "same_type": True,
+        "branch": keep.get("branch") or "",
+    }
+    if note:
+        evidence["note"] = note
+    ex = conn.execute(
+        "SELECT id FROM entity_dup_candidates WHERE keep_id=? AND dup_id=?",
+        (keep["id"], dup["id"])).fetchone()
+    if ex:
+        return False
+    conn.execute(
+        "INSERT INTO entity_dup_candidates (keep_id,dup_id,entity_type,score,vec_score,fuzzy_score,method,evidence,status) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (keep["id"], dup["id"], dup.get("entity_type") or keep.get("entity_type") or "", score,
+         round(vec_sim, 3), round(fz_sim, 3), method,
+         json.dumps(evidence, ensure_ascii=False), "pending"))
+    return True
+
+
 # ═══════════ 1. 名称归一 + 字符串 fuzzy / Blocking 分块（已下沉 text_normalize） ═══════════
 # normalize_name / normalize_full / fuzzy_score / _blocking_key / _canopy_key /
 # _bigrams / _token_sort_ratio / _partial_ratio / strip_honorifics 的单一实现在
@@ -37,48 +125,84 @@ def detect_and_save_candidates(conn) -> dict:
     """
     ve = VectorEngine()
     # 1) 取所有非废弃实体
+    #    P0-1 修复（2026-10-11）：SELECT 补 branch 列。此前漏查 branch 是整条链路的缺陷源头 ——
+    #    下游按 branch 分组/按 branch 取数，却从没读到过 branch。
+    #    对照：run_rule_preprocess 的同名查询一直含 branch（#732），两处口径相反。
     rows = conn.execute(
-        "SELECT id, name, entity_type, properties, status FROM entities WHERE status!='deprecated'"
+        "SELECT id, name, entity_type, properties, status, branch FROM entities WHERE status!='deprecated'"
     ).fetchall()
     if len(rows) < 2:
-        return {"candidates": 0, "auto_merged": 0}
+        return {"candidates": 0, "auto_merged": 0, "merge_failed": 0}
 
     # 2) Canopy 分块（P1-2）：同类型 + normalize_full 前 4 字桶（别名/简全称已展开，粒度更稳）
+    #    P0-1 修复（2026-10-11）：bucket 键补 branch，跨分支同 id 不再同桶配对（否则必然自合并失败）。
     _BUCKET_LIMIT = 200  # 桶上限：防极端桶（空名/泛化前缀）O(n²) 爆炸，超限记 dropped
     buckets, bucket_dropped = {}, 0
     for r in rows:
-        key = _canopy_key(r["entity_type"], r["name"])
+        key = _canopy_key(r["entity_type"], r["name"], branch=r["branch"])
         lst = buckets.setdefault(key, [])
         if len(lst) < _BUCKET_LIMIT:
             lst.append(dict(r))
         else:
             bucket_dropped += 1
     if not buckets:
-        return {"candidates": 0, "auto_merged": 0, "buckets_dropped": bucket_dropped}
+        return {"candidates": 0, "auto_merged": 0, "merge_failed": 0,
+                "buckets_dropped": bucket_dropped}
 
     candidates, auto_merged = [], 0
-    seen = set()  # (keep_id, dup_id) 去重
+    seen = set()  # (branch, keep_id, dup_id) 去重
     ve_cache = {}  # id → vector
     nb_map = _load_neighbor_sets(conn, [r["id"] for r in rows])  # P2 图邻域特征
 
-    # 3) 强规则合并（P1-2）：normalize_full 全等 + 同类型 → 直接 auto-merge，免两两打分。
+    # P1-1（2026-10-11）：阈值与自动合并开关配置化（此前 0.92/0.62 是裸字面量，
+    # 与 staging_fuse 的 DB settings 0.9/0.7 两处独立维护、口径不一致）。
+    # 必须在强规则合并**之前**读取：强规则路径也要受开关约束（关=只建候选不合并）。
+    thresholds = _entity_merge_thresholds(conn)
+    AUTO_T = thresholds["auto"]        # ≥ 该值自动合并
+    FLAG_T = thresholds["flag"]        # [flag, auto) 建候选待人工审
+    AUTO_MERGE_ON = thresholds["auto_merge_enabled"]
+
+    # 3) 强规则合并（P1-2）：normalize_full 全等 + 同类型 + **同分支** → 直接 auto-merge，免两两打分。
     #    归一完全相同的名称，双判据必然满分（等价旧 auto-merge 分支），确定性更高。
+    #
+    #    P0-1 修复（2026-10-11）：分组键补 branch。
+    #    根因：entities 主键是复合键 (id, branch)，同一 id 可在 dev/personal/release 三分支各存一份。
+    #    原分组键 (entity_type, norm_name) 不含 branch ⇒ 把「同一实体的三个分支副本」当成
+    #    「三个不同实体的重复项」喂给 merge_entities；而 merge_entities 默认 branch='personal'
+    #    且按 `WHERE id=? AND branch=?` 取数 ⇒ keep/dup 取不到行时返回 {"ok":False,"error":"实体不存在"}，
+    #    同 id 时更早命中 `keep_id == dup_id` →「不能合并自身」。
+    #    该失败是**返回值错误而非异常**，走不到 except，导致 auto_merged 被无条件累加成
+    #    「122 次合并成功」而库内零变化（实测 auto_merged=122 / entity_merges 仍 8 行）。
+    #    对照：本模块 run_rule_preprocess 的 by_norm 分组键**一直含 branch**（#672），此前两处口径相反。
     by_full = {}
     for r in rows:
-        by_full.setdefault((r["entity_type"], normalize_full(r["name"])), []).append(dict(r))
+        by_full.setdefault(
+            (r["branch"], r["entity_type"], normalize_full(r["name"])), []).append(dict(r))
     merged_dups = set()
-    for (et, nf), group in by_full.items():
+    merge_failed = 0  # P0-2：合并失败数（此前失败被静默吞掉，只留下虚高的成功计数）
+    for (branch, et, nf), group in by_full.items():
         if len(group) < 2:
             continue
         keep = group[0]
         for dup in group[1:]:
-            try:
-                merge_entities(conn, keep["id"], dup["id"], operator="auto",
-                               score=1.0, method="norm_exact")
+            # P1-1：强规则路径同样受自动合并总开关约束。
+            #   开关关闭时不合并，但**必须留候选**——否则"归一后全等"这条最确定的线索
+            #   会被静默丢弃，比假合并更难排查。
+            if not AUTO_MERGE_ON:
+                _insert_dup_candidate(conn, keep, dup, 1.0, 1.0, 1.0,
+                                      nb_sim=0.0, method="norm_exact",
+                                      note="auto_merge_disabled:norm_exact")
+                continue
+            # P0-2：只在 merge_entities 真正返回 ok 时才计成功；失败单独计数（不再进 except 黑洞）。
+            res = merge_entities(conn, keep["id"], dup["id"], operator="auto",
+                                 score=1.0, method="norm_exact", branch=branch)
+            if res.get("ok"):
                 auto_merged += 1
                 merged_dups.add(dup["id"])
-            except Exception as e:
-                logger.warning("强规则合并失败 %s→%s: %s", dup["id"], keep["id"], e)
+            else:
+                merge_failed += 1
+                logger.warning("强规则合并失败 %s→%s (branch=%s): %s",
+                               dup["id"], keep["id"], branch, res.get("error"))
 
     # 4) 桶内配对 → 双判据评分（已强规则合并的 dup 跳过）
 
@@ -87,6 +211,7 @@ def detect_and_save_candidates(conn) -> dict:
             ve_cache[doc["id"]] = ve._vector(doc["name"] + " " + (doc.get("properties") or "{}"))
         return ve_cache[doc["id"]]
 
+    # P1-1（2026-10-11）：阈值已在上方读取（强规则路径也要用）。
     for bucket_items in buckets.values():
         if len(bucket_items) < 2:
             continue
@@ -95,7 +220,10 @@ def detect_and_save_candidates(conn) -> dict:
                 a, b = bucket_items[i], bucket_items[j]
                 if a["id"] in merged_dups or b["id"] in merged_dups:
                     continue  # 已强规则合并（dup 已废弃），不再参与配对
-                key = tuple(sorted([a["id"], b["id"]]))
+                # P0-1：跨分支实体不配对（同一 id 的分支副本不是重复项）
+                if a["branch"] != b["branch"]:
+                    continue
+                key = (a["branch"], *tuple(sorted([a["id"], b["id"]])))
                 if key in seen:
                     continue
                 seen.add(key)
@@ -109,36 +237,34 @@ def detect_and_save_candidates(conn) -> dict:
                 # keep: 优先已评/字段多
                 keep, dup = (a, b) if (a.get("status") == "reviewed" or b.get("status") != "reviewed") else (b, a)
                 # --- 三档决策 ---
-                if score >= 0.92:
-                    # auto-merge
-                    merge_entities(conn, keep["id"], dup["id"], operator="auto", score=score, method=method)
-                    auto_merged += 1
-                elif score >= 0.62:
+                if score >= AUTO_T:
+                    # auto-merge（P1-1：受总开关约束；关时降级为建候选，不静默丢弃）
+                    if AUTO_MERGE_ON:
+                        # P0-2：只在真正返回 ok 时才计成功
+                        res = merge_entities(conn, keep["id"], dup["id"], operator="auto",
+                                             score=score, method=method, branch=a["branch"])
+                        if res.get("ok"):
+                            auto_merged += 1
+                            merged_dups.add(dup["id"])
+                        else:
+                            merge_failed += 1
+                            logger.warning("桶内自动合并失败 %s→%s (branch=%s score=%s): %s",
+                                           dup["id"], keep["id"], a["branch"], score, res.get("error"))
+                    else:
+                        # 开关关闭：进人工队列（不丢线索）
+                        _insert_dup_candidate(conn, keep, dup, score, vec_sim, fz_sim,
+                                              nb_sim=nb_sim, method=method, note="auto_merge_disabled")
+                elif score >= FLAG_T:
                     # flag：建候选（pending 待审）
-                    evidence = {
-                        "vec_score": round(vec_sim, 3),
-                        "fuzzy_score": round(fz_sim, 3),
-                        "nb_score": round(nb_sim, 3),
-                        "keep_name": keep["name"],
-                        "dup_name": dup["name"],
-                        "same_type": True,
-                    }
-                    # upsert（防重复）
-                    ex = conn.execute(
-                        "SELECT id FROM entity_dup_candidates WHERE keep_id=? AND dup_id=?",
-                        (keep["id"], dup["id"])).fetchone()
-                    if not ex:
-                        conn.execute(
-                            "INSERT INTO entity_dup_candidates (keep_id,dup_id,entity_type,score,vec_score,fuzzy_score,method,evidence,status) "
-                            "VALUES (?,?,?,?,?,?,?,?,?)",
-                            (keep["id"], dup["id"], a["entity_type"], score,
-                             round(vec_sim, 3), round(fz_sim, 3), method,
-                             json.dumps(evidence, ensure_ascii=False), "pending"))
-                # else：score < 0.62 忽略
+                    _insert_dup_candidate(conn, keep, dup, score, vec_sim, fz_sim,
+                                          nb_sim=nb_sim, method=method)
+                # else：score < FLAG_T 忽略
     conn.commit()
     return {"candidates": conn.execute(
         "SELECT COUNT(*) FROM entity_dup_candidates WHERE status='pending'").fetchone()[0],
-            "auto_merged": auto_merged, "buckets_dropped": bucket_dropped}
+            "auto_merged": auto_merged, "merge_failed": merge_failed,
+            "buckets_dropped": bucket_dropped,
+            "thresholds": {"auto": AUTO_T, "flag": FLAG_T, "auto_merge_enabled": AUTO_MERGE_ON}}
 
 
 # ═══════════ 3. 候选列表（给前端） ═══════════
@@ -190,6 +316,18 @@ def review_candidate(conn, cid: int, action: str, operator: "", branch: str = "p
     elif action == "reject":
         conn.execute("UPDATE entity_dup_candidates SET status='rejected', reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?",
                      (operator, cid))
+    elif action == "relate":
+        # P2-7（2026-10-11）：「相关但不是同一实体」——**不合并、两个实体都保留**。
+        # 依据 Senzing `Possibly related` 与 Neo4j 官方警告（母公司 vs 子公司不该因
+        # 共享品牌而合并）。MBSE 场景的典型层级关系：部件 ⊂ 分系统、载荷 ⊂ 平台。
+        #
+        # 落库方式：状态置 'related'（不复用 rejected，否则与"判为重复但拒绝"混淆，
+        # 无法区分用户的两种否定理由 —— 这对后续标定阈值很有价值）。
+        # ⚠️ 该状态值不在 v2g/entity_dup_candidates 的既有枚举里，属新增，
+        #    读侧（前端筛选/指标）默认展示即可，无需迁移。
+        conn.execute(
+            "UPDATE entity_dup_candidates SET status='related', reviewed_by=?, "
+            "reviewed_at=CURRENT_TIMESTAMP WHERE id=?", (operator, cid))
     else:
         return {"ok": False, "error": "未知操作"}
     conn.commit()
@@ -899,6 +1037,132 @@ def _jaccard(s1: set, s2: set) -> float:
     return len(s1 & s2) / len(union) if union else 0.0
 
 
+# P5（2026-10-12）跨语言消歧：中文判定用的字符类（区分 pref_label 是中文还是拉丁）。
+_ZH_CH = re.compile(r"[\u4e00-\u9fff]")
+
+# ★ 单一真源：现役词库的「同义词 → 规范名」查询片段。
+# `_normalize_mentions`（工序①）与 `load_cross_ling_index`（P5 跨语言消歧）**必须共用**：
+#   ① 口径一致是两条消歧链路可对比的前提（任一处改了另一处就漂移）；
+#   ② 更硬的理由是**门禁变异锚点必须唯一** ——
+#      `verify_entity_resolver` 的 M4/M8 变异按 `raw.replace(anchor, repl, 1)` 只替换**第一处**。
+#      本轮曾在 load_cross_ling_index 里内联复制这段 SQL，导致第一处变成新函数、
+#      变异打空，`_normalize_mentions` 的 E29/E32 两条断言**假性失效**（段函数异常中断）。
+#      ⇒ 「复制一段 SQL 字符串」是门禁的隐形杀手，统一收口到这里。
+_GLOSSARY_ALIAS_FROM = (
+    "FROM glossary_terms t JOIN glossary_concepts c ON c.concept_id = t.concept_id ")
+_GLOSSARY_ALIAS_WHERE = (
+    "WHERE t.term IS NOT NULL AND TRIM(t.term) <> '' "
+    "AND c.pref_label IS NOT NULL AND TRIM(c.pref_label) <> '' "
+    "AND t.term <> c.pref_label "
+    "AND c.concept_status = 'approved' "
+    "AND COALESCE(c.replaced_by, '') = ''")
+
+
+def _matching_gate(conn) -> str:
+    """返回消歧可见性条件（SQL 片段）。
+
+    🔴 2026-10-12：`term_status` 一列两义问题的正解 —— 「能否参与消歧匹配」改由
+    独立列 `use_in_matching` 表达：
+        NULL（存量默认）⇒ 沿用旧规则 `term_status='approved'` 参与
+        1                 ⇒ 强制参与（无视 term_status，用于术语管理域已收录但
+                             生命周期状态不是 approved 的词条，如 HTTP 导入的 admitted）
+        0                 ⇒ 强制不参与（已收录但过于通用/不适合自动匹配，如 power、satellite）
+
+    ⚠️ **PRAGMA 检测列是否存在**：未跑迁移的老库/直接调函数的脚本（如 verify_*）
+    列不存在时**回落旧条件**，行为与迁移前逐字一致 ⇒ 迁移可安全后置，不产生行为跳变。
+    （若直接写死引用新列，老库上会因「no such column」抛错，
+      `_normalize_mentions` 的 except 会把它降级成读**废弃的旧表** glossary
+      —— 那才是真正的行为断裂：现役词库突然失效且无人察觉。）
+    """
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(glossary_terms)")}
+    except Exception:  # noqa: BLE001  词库表都不存在 ⇒ 按旧规则
+        return "AND t.term_status = 'approved'"
+    if "use_in_matching" not in cols:
+        return "AND t.term_status = 'approved'"
+    return ("AND (t.use_in_matching = 1 "
+            "OR (t.use_in_matching IS NULL AND t.term_status = 'approved'))")
+
+
+def load_cross_ling_index(conn) -> dict:
+    """构建**跨语言别名索引**：{规范名 normalize: [别名词原文, ...]}。
+
+    🔴 为什么需要它（2026-10-12 实测的链路断点）：
+    `_normalize_mentions` 其实**已经能把英文名折成中文规范名**
+    （SQL 读 `glossary_terms JOIN glossary_concepts`，方向 `term → pref_label`），
+    但它的返回值只用于报告里的 `normalized_name` **展示字段**；
+    `_disambiguate_many` 是**独立重算**的，既不读该结果、也不查词库
+    ⇒ **英文候选名与中文图库实体之间不存在任何比对通道**，
+    真库实测 `_disambiguate_many` 对 60 个英文候选只产出 2 个 `dup_high`
+    （且那 2 个是候选里恰好带中文名的「转发器」「宽带载荷」）。本函数补的就是这条通道。
+
+    ★ **两个数据源合并**（缺一不可）：
+      ① **DB 词库** `glossary_terms JOIN glossary_concepts` —— 可人工维护、可审计、可扩充；
+      ② **`text_normalize._ALIAS_TABLE` 硬编码常量**（实测 49 条中 **28 条是跨语言**）。
+         为什么必须并进来：该表的 key **保留空格**（`power subsystem`），
+         而 AI 生成的候选名是**驼峰无空格**（`PowerSubsystem`），
+         `normalize_full` 的查表因此**命不中**（实测改前 `PowerSubsystem` → none）。
+         而本索引用 `normalize_name`（删空格）建键 ⇒ **驼峰名天然可用**，
+         等于让这 28 条既有映射**零新增数据**即刻生效。
+         ⚠️ DB 优先：同名 key 以 DB 词库为准（数据可维护 > 硬编码常量）。
+
+    ⚠️ **只收跨语言词条**（term 与 pref_label 语言不同）：
+    同语言的别名（如「代码规范」→「SysML V2 语法规范」）已被 `normalize_name`
+    的精确匹配覆盖，额外入索引无收益；
+    更重要的是**层级误配风险**：「转发器」是「有效载荷转发器」的子串，
+    若把同语言的包含关系也灌进索引，等于把 P4 刚修好的层级判定又破坏一遍。
+
+    语言判定用字符类而非 DB 的 `lang` 列：SQL 只在 `glossary_terms` 上有 lang，
+    `glossary_concepts` **没有语言列**，无法直接比较两侧语言
+    ⇒ 统一按「是否含中文」推断（zh / 非 zh 二分）。
+
+    返回值里的值是**别名词原文**（不是 normalize 后的值）——
+    下游建 bigram 索引需要原文走 `normalize_full`。
+    读不到 DB 词库不算致命（回落仅用硬编码常量）；返回空 dict 时调用方按"无跨语言能力"降级。
+    """
+    out = {}
+    db_rows = []
+    try:
+        db_rows = conn.execute(
+            "SELECT t.term AS user_term, c.pref_label AS canonical_term "
+            + _GLOSSARY_ALIAS_FROM + _GLOSSARY_ALIAS_WHERE
+            + _matching_gate(conn)).fetchall()
+    except Exception as e:  # noqa: BLE001  词库不可用 ⇒ 降级为"仅硬编码常量"，不阻断主流程
+        logger.warning("load_cross_ling_index: 词库加载失败，仅用硬编码别名表: %s", e)
+
+    def _is_cross(alias: str, canon: str) -> bool:
+        """只保留**跨语言**词条（见 docstring 的层级误配风险说明）。"""
+        return bool(_ZH_CH.search(canon)) != bool(_ZH_CH.search(alias))
+
+    # ① DB 词库优先：全部收集，并记录已占用的别名键
+    #    ⚠️ 用**位置索引**而非 r["col"]：sqlite3.Row 支持但普通 tuple 不支持，
+    #    而本函数是通用件，不能要求调用方一定设了 `row_factory`。
+    db_alias_keys = set()
+    for r in db_rows:
+        alias, canon = r[0], r[1]
+        if not alias or not canon or not _is_cross(alias, canon):
+            continue
+        key = normalize_name(canon)
+        if not key:
+            continue
+        db_alias_keys.add(normalize_name(alias))
+        out.setdefault(key, []).append(alias)
+
+    # ② 硬编码常量补齐：**只跳过 DB 已收录的同一个别名**，其余**全部**加入。
+    #    ⚠️ 这里踩过一次坑：最初写成「同一 canonical 只保留第一个别名」，
+    #    结果 dict 插入序里排最前的 `aocs` 把同 canonical 的
+    #    `attitude control` / `attitude and orbit control` 全挤掉了。
+    for _k, _v in _ALIAS_TABLE.items():
+        if not _k or not _v or not _is_cross(_k, _v):
+            continue
+        if normalize_name(_k) in db_alias_keys:
+            continue          # DB 优先，同一个别名不重复注入
+        key = normalize_name(_v)
+        if key:
+            out.setdefault(key, []).append(_k)
+    return out
+
+
 def _normalize_mentions(conn, names: list, types: dict = None) -> dict:
     """P0-2 抽取后表面归一（融合第一步）：names → {raw: normalized}。
 
@@ -920,31 +1184,50 @@ def _normalize_mentions(conn, names: list, types: dict = None) -> dict:
     alias_map = {}
     scoped_map = {}   # P1 类型限定：norm_key -> [(ent_type_lower, canonical)]
     fuzzy_keys = []   # P1.5 match_type=fuzzy：仅支持全局（未绑定类型）词条参与近似匹配
+    # P0-3 修复（2026-10-11）：改读现役术语表 glossary_concepts + glossary_terms。
+    # 根因：此前读的是**旧表 glossary**，而该表已于 2026-09-07 废弃（norm_apply.py:191 明写）。
+    # 真库旧表仅 10 行且 kind 全为 'intent'，再叠加下面的 kind IN ('entity','predicate','prop_key')
+    # 过滤 ⇒ **恒命中 0 行**，别名映射表永远为空（现役两表合计 45 + 20 行却零引用）。
+    # 新表结构为 concept/term 二元组：glossary_concepts.pref_label 是规范名，
+    # glossary_terms.term 是同义词/别名，经 concept_id 关联 ⇒ 映射 direction 与旧表一致
+    # （user_term → canonical_term ≡ term → pref_label）。
     try:
-        # P0 方案 v2 / 词典隔离：归一化只读归一类映射（entity/predicate/prop_key），
-        # 不吃意图路由词（kind='intent'，如 v2→SysML_V2），防止意图词污染实体别名。
-        # P1：provenance.entity_type 非空 → 类型限定映射，与候选实体类型匹配才生效。
-        # P1.5：provenance.match_type='fuzzy' → 相似度≥0.85 近似匹配（仅全局词条）。
-        for r in conn.execute(
-                "SELECT user_term, canonical_term, provenance FROM glossary WHERE active=1 "
-                "AND (kind IN ('entity','predicate','prop_key') OR kind IS NULL OR kind='')").fetchall():
-            ent_type = ""
-            match_type = "exact"
-            try:
-                pv = json.loads(r["provenance"] or "{}")
-                ent_type = (pv.get("entity_type") or "").strip()
-                match_type = (pv.get("match_type") or "exact").strip().lower()
-            except Exception:
-                ent_type = ""
+        rows_g = conn.execute(
+            "SELECT t.term AS user_term, c.pref_label AS canonical_term, t.note AS note "
+            + _GLOSSARY_ALIAS_FROM + _GLOSSARY_ALIAS_WHERE
+            + _matching_gate(conn)).fetchall()
+        for r in rows_g:
             key = normalize_name(r["user_term"])
-            if ent_type:
-                scoped_map.setdefault(key, []).append((ent_type.lower(), r["canonical_term"]))
-            elif match_type == "fuzzy":
-                fuzzy_keys.append((key, r["canonical_term"]))
-            else:
+            if key:
                 alias_map.setdefault(key, r["canonical_term"])
     except Exception as e:
-        logger.warning("glossary 加载失败，别名映射为空: %s", e)
+        # 读不到新表不算致命：回落旧表（老库可能仍只有旧表）
+        logger.warning("glossary_terms/concepts 加载失败，回落旧表: %s", e)
+        try:
+            # P0 方案 v2 / 词典隔离：归一化只读归一类映射（entity/predicate/prop_key），
+            # 不吃意图路由词（kind='intent'，如 v2→SysML_V2），防止意图词污染实体别名。
+            # P1：provenance.entity_type 非空 → 类型限定映射，与候选实体类型匹配才生效。
+            # P1.5：provenance.match_type='fuzzy' → 相似度≥0.85 近似匹配（仅全局词条）。
+            for r in conn.execute(
+                    "SELECT user_term, canonical_term, provenance FROM glossary WHERE active=1 "
+                    "AND (kind IN ('entity','predicate','prop_key') OR kind IS NULL OR kind='')").fetchall():
+                ent_type = ""
+                match_type = "exact"
+                try:
+                    pv = json.loads(r["provenance"] or "{}")
+                    ent_type = (pv.get("entity_type") or "").strip()
+                    match_type = (pv.get("match_type") or "exact").strip().lower()
+                except Exception:
+                    ent_type = ""
+                key = normalize_name(r["user_term"])
+                if ent_type:
+                    scoped_map.setdefault(key, []).append((ent_type.lower(), r["canonical_term"]))
+                elif match_type == "fuzzy":
+                    fuzzy_keys.append((key, r["canonical_term"]))
+                else:
+                    alias_map.setdefault(key, r["canonical_term"])
+        except Exception as e2:
+            logger.warning("glossary 加载失败，别名映射为空: %s", e2)
     try:
         for r in conn.execute(
                 "SELECT name, properties FROM entities WHERE status!='deprecated'").fetchall():
@@ -1003,13 +1286,27 @@ def write_entity_alias(conn, entity_id: str, alias_name: str, branch: str = "dev
     - 表不存在（老库未迁移）→ 返回 False 不抛异常（不阻断业务主流程）
     - 实体不存在 → 跳过（防悬空别名）
     返回 True=已写入。
+
+    P0-3（2026-10-11）：存在性检查改用**复合键 (id, branch)**。
+    原实现只按 `WHERE id=?` 查，而 `entities` 主键是 (id, branch)、真库有 61 组同 id 跨三分支
+    ⇒ ① 拿到的可能是**别的分支**那一行的 name，导致「别名≠本名」判定用错名字；
+      ② branch 未显式传入时默认 'dev'，若实体只在 personal 分支存在会被误判为不存在。
     """
     alias = (alias_name or "").strip()
     eid = (entity_id or "").strip()
     if not alias or not eid:
         return False
+    br = (branch or "").strip()
     try:
-        row = conn.execute("SELECT name FROM entities WHERE id=?", (eid,)).fetchone()
+        # 优先按 (id, branch) 精确命中；未给 branch 时按 id 唯一命中（跨分支同名也算存在）
+        if br:
+            row = conn.execute(
+                "SELECT name FROM entities WHERE id=? AND branch=? AND status!='deprecated'",
+                (eid, br)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT name FROM entities WHERE id=? AND status!='deprecated' LIMIT 1",
+                (eid,)).fetchone()
         if not row:
             return False
         if alias == (row["name"] or "").strip():
@@ -1018,9 +1315,37 @@ def write_entity_alias(conn, entity_id: str, alias_name: str, branch: str = "dev
             "INSERT OR IGNORE INTO entity_aliases "
             "(entity_id, alias_name, branch, source_doc, source_type, created_by) "
             "VALUES (?,?,?,?,?,?)",
-            (eid, alias, branch or "dev", source_doc or "", source_type or "entity_merge",
+            (eid, alias, br or "dev", source_doc or "", source_type or "entity_merge",
              created_by or "system"))
         return conn.execute("SELECT changes()").fetchone()[0] > 0
     except Exception as e:  # noqa: BLE001
         logger.warning("write_entity_alias 跳过（不阻断业务）: %s", e)
         return False
+
+
+def entity_aliases_for(conn, entity_id: str | None = None, limit: int = 200) -> list:
+    """列出运行时别名（含实体本名与分支），供别名管理面板使用。
+
+    2026-10-11 新增：`entity_aliases` 此前**只有写入、没有读取端点与 UI**（暗表），
+    本函数是它的第一个读取出口。返回按 branch/entity_id 排序，悬空别名带 `_dangling` 标记
+    （实体已不存在 —— 用户应能看见并清理，而不是让脏行静默留着）。
+    """
+    sql = ("SELECT a.entity_id, a.alias_name, a.branch, a.source_type, a.created_by, "
+           "a.created_at, e.name AS entity_name "
+           "FROM entity_aliases a LEFT JOIN entities e "
+           "  ON e.id = a.entity_id AND e.branch = a.branch ")
+    params = []
+    if entity_id:
+        sql += "WHERE a.entity_id=? "
+        params.append(entity_id)
+    sql += "ORDER BY a.branch, a.entity_id, a.created_at DESC LIMIT ?"
+    params.append(int(limit or 200))
+    out = []
+    try:
+        for r in conn.execute(sql, params).fetchall():
+            d = dict(r)
+            d["_dangling"] = not (d.get("entity_name") or "")
+            out.append(d)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("entity_aliases_for 读取失败（表可能缺失）: %s", e)
+    return out

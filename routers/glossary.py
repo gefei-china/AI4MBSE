@@ -483,15 +483,39 @@ def term_delete(tid: int, conn=Depends(db_session)):
 
 
 @router.post("/api/glossary/sync-aliases")
-def sync_aliases(conn=Depends(db_session)):
-    """entity_aliases（写入缓冲）→ glossary_terms 同步。返回迁移条数。"""
-    from migrate_p1_semantic import _loc_key
+def sync_aliases(conn=Depends(db_session), user=Depends(current_user)):
+    """entity_aliases（运行时别名）→ glossary_terms 同步。返回迁移条数。
+
+    ★ 两处修复（2026-10-11）：
+    ① **ImportError 断链**：此前 `from migrate_p1_semantic import _loc_key`，
+       而该模块已于 2026-09-09 归档（`concept_create` 已改用等价实现 `core.ns.loc_key`），
+       ⇒ 本端点一调就 ImportError，**从未成功执行过**。现改用 `core.ns.loc_key`。
+    ② **跨分支歧义**：`entities` 主键是复合键 `(id, branch)`，真库有 61 组同 id 跨三分支；
+       此前 `SELECT name FROM entities WHERE id=?` 只按 id 查，返回**任意分支**那一行，
+       同一 id 在不同分支可能有不同名 ⇒ 同步出的 concept 可能挂在错误分支的别名上。
+       现按 branch 优先取，无则退回 id 唯一命中。
+    """
+    from core.ns import loc_key as _loc_key
     n = 0
-    aliases = conn.execute("SELECT entity_id, alias_name, source_type FROM entity_aliases "
-                           "LIMIT 5000").fetchall()
+    aliases = conn.execute("SELECT entity_id, alias_name, branch, source_type "
+                           "FROM entity_aliases LIMIT 5000").fetchall()
+    skipped = 0
     for a in aliases:
-        ent = conn.execute("SELECT name FROM entities WHERE id=?", (a["entity_id"],)).fetchone()
-        if not ent:
+        # 修复②：按 (id, branch) 复合键取实体，避免跨分支拿错名字
+        ent = conn.execute("SELECT name FROM entities WHERE id=? AND branch=?",
+                           (a["entity_id"], a["branch"] or "")).fetchone()
+        if ent is None:
+            # 该分支副本已不存在 → 退回按 id 取唯一命中；仍无 → 跳过（防悬空别名进词库）
+            rows_ent = conn.execute(
+                "SELECT name, COUNT(*) n FROM entities WHERE id=? GROUP BY name",
+                (a["entity_id"],)).fetchall()
+            uniq = {r["name"] for r in rows_ent}
+            if len(uniq) != 1:
+                skipped += 1
+                continue
+            ent = {"name": next(iter(uniq))}
+        if not ent["name"]:
+            skipped += 1
             continue
         cid = "I-" + _loc_key(ent["name"])
         conn.execute("INSERT OR IGNORE INTO glossary_concepts (concept_id, pref_label, "
@@ -504,7 +528,58 @@ def sync_aliases(conn=Depends(db_session)):
                             f"entity_aliases:{a['source_type']}"))
         n += cur.rowcount if cur.rowcount > 0 else 0
     conn.commit()
-    return {"ok": True, "synced": n}
+    return {"ok": True, "synced": n, "skipped": skipped,
+            "source_rows": len(aliases),
+            "note": "entity_aliases 为运行时别名（随合并产生）；词库是受控词表。"}
+
+
+@router.get("/api/knowledge/entity-aliases")
+def entity_aliases_list(entity_id: str = None, limit: int = 200, conn=Depends(db_session)):
+    """列出 entity_aliases（运行时别名），供前端别名管理面板使用。
+
+    2026-10-11 新增：此前该表**无任何读取端点也无 UI**，属"只写不读"的暗表。
+    """
+    from entity_resolver import entity_aliases_for  # type: ignore
+    return {"aliases": entity_aliases_for(conn, entity_id=entity_id, limit=limit)}
+
+
+@router.post("/api/knowledge/entity-aliases")
+def entity_aliases_add(body: dict, conn=Depends(db_session), user=Depends(current_user)):
+    """手动为实体添加别名（写入 entity_aliases，幂等）。
+
+    2026-10-11 新增：对应标杆 IBM WKC「词表可编辑 + 改完立刻生效」——
+    用户补一个别名，下一轮 `_normalize_mentions` 即可用它归一（经词库侧生效）。
+    """
+    from entity_resolver import write_entity_alias
+    eid = str(body.get("entity_id") or "").strip()
+    alias = str(body.get("alias_name") or "").strip()
+    branch = str(body.get("branch") or "").strip()
+    if not eid or not alias:
+        return JSONResponse({"error": "entity_id 与 alias_name 必填"}, 400)
+    # 复合键 (id, branch)：未显式给 branch 时，若该 id 仅存在于一个分支则自动补齐
+    if not branch:
+        rows = conn.execute("SELECT DISTINCT branch FROM entities WHERE id=? AND status!='deprecated'",
+                            (eid,)).fetchall()
+        if len(rows) == 1:
+            branch = rows[0]["branch"]
+    ok = write_entity_alias(conn, eid, alias, branch=branch or "dev",
+                            source_doc=str(body.get("source_doc") or ""),
+                            source_type=str(body.get("source_type") or "manual"),
+                            created_by="知识工程师")
+    if not ok:
+        return JSONResponse({"error": "别名未写入（可能与实体同名、实体不存在或表缺失）"}, 400)
+    conn.commit()
+    return {"ok": True, "entity_id": eid, "alias_name": alias, "branch": branch}
+
+
+@router.delete("/api/knowledge/entity-aliases")
+def entity_aliases_del(entity_id: str, alias_name: str, conn=Depends(db_session),
+                       user=Depends(current_user)):
+    """删除一条别名（对照 IBM WKC「驳回可撤销」的最小实现）。"""
+    cur = conn.execute("DELETE FROM entity_aliases WHERE entity_id=? AND alias_name=?",
+                       (entity_id, alias_name))
+    conn.commit()
+    return {"ok": True, "deleted": cur.rowcount}
 
 
 # ── 查询 Trace（P2-2）──

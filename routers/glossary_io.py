@@ -25,7 +25,7 @@ router = APIRouter(tags=["术语导入导出"])
 # 前 10 列为 2026-09-07 初版（存量 CSV 可无损导入）；后 5 列按 ISO 704 / ISO 1087 /
 # ISO 25964 补充：语境(context)、注(scopeNote)、定义来源(source)、上位概念(broader)、
 # 相关概念(related)。追加在末尾而非插入，保证老模板的下标与解析不失效。
-COLS = ["术语ID", "名称", "同义词", "英文", "缩写", "定义", "域", "关联概念", "来源", "状态",
+COLS = ["术语ID", "名称", "同义词", "英文", "缩写", "隐藏词条", "定义", "域", "关联概念", "来源", "状态",
         "语境", "注", "定义来源", "上位概念", "相关概念"]
 _STATUSES = ("candidate", "approved", "deprecated", "retired")
 _KINDS = ("synonym", "alias", "abbr", "hidden")
@@ -68,15 +68,29 @@ def _concept_rows(conn, domain: str = "", status: str = ""):
         c = dict(c)
         terms = [dict(t) for t in conn.execute(
             "SELECT * FROM glossary_terms WHERE concept_id=?", (c["concept_id"],)).fetchall()]
+        # ⚠️ 2026-10-12 修既有缺陷：英文同义词此前**同时**落进 `syn` 与 `en` 两个列表
+        #   （`_commit` 把「英文」列的词条也写成 term_kind='synonym'），
+        #   导出 CSV/SKOS 时同一词条重复出现；导出再回灌还会把隐藏变体带成正式别名。
+        #   现按语言分流：中文同义词 → syn，英文 → en，各归其位。
         syn = [t["term"] for t in terms
-               if t["term_kind"] in ("synonym", "alias") and t["term_kind"] != "preferred"]
-        en = [t["term"] for t in terms if t.get("lang") == "en" and t["term_kind"] != "abbr"]
+               if t["term_kind"] in ("synonym", "alias") and t["term_kind"] != "preferred"
+               and t.get("lang") != "en"]
+        # ⚠️ 2026-10-12：必须把 `hidden` 一并排除，否则「隐藏词条」里的英文变体会
+        #    **同时**出现在「英文」列里（导出后回灌会把它当正式英文别名重新导入）。
+        en = [t["term"] for t in terms
+              if t.get("lang") == "en" and t["term_kind"] not in ("abbr", "hidden")]
         abbr = [t["term"] for t in terms if t["term_kind"] == "abbr"]
+        # 🔴 SKOS `skos:hiddenLabel`（2026-10-12 补齐）：**只供检索、不展示**的变体，
+        #   典型用途是拼写错误形态（如 ProbeVehicl / 转发器分系统分系统）。
+        #   本工程 P4 实测：英文拼写变体的 fuzzy 只到 0.909，达不到消歧闸的 0.95
+        #   ⇒ 行业标准做法就是把它们登记为 hiddenLabel，而不是去调相似度阈值。
+        hidden = [t["term"] for t in terms if t["term_kind"] == "hidden"]
         mapping = (c.get("maps_to_class") or c.get("maps_to_prop") or c.get("maps_to_inst") or "")
         if mapping:
             mapping = mapping.split("#").pop().split("/").pop()
         out.append([
             c["concept_id"], c["pref_label"], "; ".join(syn), "; ".join(en), "; ".join(abbr),
+            "; ".join(hidden),
             c.get("definition") or "", c.get("domain") or "unknown", mapping,
             c.get("created_by") or "", c.get("concept_status") or "candidate",
             c.get("context") or "", c.get("note") or "", c.get("source") or "",
@@ -121,7 +135,7 @@ def export_skos(domain: str = "", conn=Depends(db_session)):
         '\tskos:prefLabel "AI4MBSE 术语词典"@zh .',
         "",
     ]
-    for cid, label, syn, en, abbr, definition, dom, mapping, src, status, \
+    for cid, label, syn, en, abbr, hidden, definition, dom, mapping, src, status, \
             ctx, note, defsrc, broader, related in rows:
         lines.append(f"mbse:{cid} a skos:Concept ;")
         lines.append(f"\tskos:inScheme mbse:glossary ;")
@@ -132,6 +146,8 @@ def export_skos(domain: str = "", conn=Depends(db_session)):
             lines.append(f'\tskos:altLabel "{t}"@en ;')
         for t in _split(abbr):
             lines.append(f'\tskos:altLabel "{t}"@{_lang(t)} ;')
+        for t in _split(hidden):   # skos:hiddenLabel：仅检索、不可见
+            lines.append(f'\tskos:hiddenLabel "{t}"@{_lang(t)} ;')
         if definition:
             lines.append(f'\tskos:definition "{definition}"@zh ;')
         if ctx:      # skos:example = ISO 704 语境
@@ -286,21 +302,28 @@ def _commit(conn, rows: list) -> dict:
                 (cid, label, definition, domain, status, mc, mp, mi,
                  _ctx, _note, _src, _broader, _related))
             stats["created"] += 1
+        # ⚠️ 2026-10-12：所有导入词条显式置 `use_in_matching`（消歧可见性）。
+        #   起因：本函数写 `term_status='admitted'`，而消歧两侧 SQL 原本只取 `approved`
+        #   ⇒ **导入成功但对消歧完全无效（效果 0）且无任何报错**。
+        #   `use_in_matching` 落地后，"术语管理域已收录" = 消歧域可用，
+        #   两者解耦；仍可人工对个别过于通用的词条显式置 0（如 power / satellite）。
         conn.execute("INSERT OR IGNORE INTO glossary_terms (concept_id, term, lang, term_kind, "
-                     "term_status, source, reliability) VALUES (?,?,?,?,?,?,?)",
-                     (cid, label, _lang(label), "preferred", "preferred", "import", 7))
-        for kind, col in (("synonym", "同义词"), ("abbr", "缩写")):
+                     "term_status, source, reliability, use_in_matching) "
+                     "VALUES (?,?,?,?,?,?,?,?)",
+                     (cid, label, _lang(label), "preferred", "preferred", "import", 7, 1))
+        # 「隐藏词条」列 = SKOS `skos:hiddenLabel`：只供检索、不展示（拼写变体等）
+        for kind, col in (("synonym", "同义词"), ("abbr", "缩写"), ("hidden", "隐藏词条")):
             for t in _split(r.get(col, "")):
                 cur = conn.execute("INSERT OR IGNORE INTO glossary_terms (concept_id, term, lang, "
-                                   "term_kind, term_status, source, reliability) "
-                                   "VALUES (?,?,?,?,?,?,?)",
-                                   (cid, t, _lang(t), kind, "admitted", "import", 6))
+                                   "term_kind, term_status, source, reliability, use_in_matching) "
+                                   "VALUES (?,?,?,?,?,?,?,?)",
+                                   (cid, t, _lang(t), kind, "admitted", "import", 6, 1))
                 stats["terms"] += cur.rowcount or 0
         for t in _split(r.get("英文", "")):
             cur = conn.execute("INSERT OR IGNORE INTO glossary_terms (concept_id, term, lang, "
-                               "term_kind, term_status, source, reliability) "
-                               "VALUES (?,?,?,?,?,?,?)",
-                               (cid, t, "en", "synonym", "admitted", "import", 6))
+                               "term_kind, term_status, source, reliability, use_in_matching) "
+                               "VALUES (?,?,?,?,?,?,?,?)",
+                               (cid, t, "en", "synonym", "admitted", "import", 6, 1))
             stats["terms"] += cur.rowcount or 0
     conn.commit()
     return stats
