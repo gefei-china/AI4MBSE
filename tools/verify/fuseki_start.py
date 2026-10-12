@@ -82,7 +82,14 @@ def main() -> int:
     if "--persistent" in sys.argv:
         os.makedirs(LOC, exist_ok=True)
         # ★--loc 必须是**绝对路径且用正斜杠**；用 os.path 转换避免 MSYS 介入
-        args += ["--loc=" + LOC.replace("\\", "/")]
+        # ★★ --update 不可省（2026-10-12 实测）：Fuseki 的 `--loc` 默认**只读**，
+        #    缺 --update 时 `POST /mbse/update` 直接 **HTTP 405**（Method Not Allowed），
+        #    表现为「图库能查、但服务侧 graph_db.write_triples 永远写不进去」。
+        #    官方口径："To allow update on the database, add --update. Updates are persisted."
+        #    即 `--update --loc=<dir>` = **可写 + 持久化** 二者兼得，不是二选一。
+        #    （历史注释曾写"实测 --loc(TDB2) 是只读的"，那是**漏加 --update** 的观察，
+        #      不是 TDB2 的限制；TDB2 本身支持事务写入。）
+        args += ["--update", "--loc=" + LOC.replace("\\", "/")]
     else:
         args += ["--mem"]
     args += ["--port", PORT, "/" + DS]      # ★关键：/mbse 传给 java，不经 shell
