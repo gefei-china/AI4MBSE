@@ -268,7 +268,8 @@ def sysml_to_candidates(conn, content, version_id: int = 0, model_name: str = "A
     返回 {batch_id, candidates, node_count, edge_count, rejected}
     """
     from ontology_semantics import OntologyValidator
-    from vector2graph import _disambiguate_many, _disambiguate_rel, _normalize_mentions
+    from vector2graph import (_disambiguate_many, _disambiguate_rel,
+                              _normalize_mentions, load_cross_ling_index)
     batch = batch_id or f"SYSM-{uuid.uuid4().hex[:8]}"
     # 1) 解析（文本/JSON/XML 自动探测，复用既有解析器）
     if source == "json" and isinstance(content, dict):
@@ -401,10 +402,20 @@ def sysml_to_candidates(conn, content, version_id: int = 0, model_name: str = "A
             except Exception:
                 _sysml_type_map[n["name"]] = n.get("entity_type", "")
     norms = _normalize_mentions(conn, _all_names, types=_sysml_type_map)
+    # P5 跨语言消歧（2026-10-12）：把词库里的**跨语言别名**灌进消歧索引，
+    # 否则英文候选名与中文图库实体之间没有任何比对通道（详见 load_cross_ling_index）。
+    _cross_ling = load_cross_ling_index(conn)
     # 2) 实体候选（本体类型对齐 + 预校验 + 消歧）
     # P1-2 批量消歧：所有实体名一次建索引，循环内零全表扫
+    # P0-2 修复（2026-10-11）：按**入库目标分支**做消歧。
+    #   候选最终写 personal 分支（vector2graph._AI_INGEST_BRANCH），若消歧时拿
+    #   dev/release 分支的同名实体来比，`dup_action='align'` 就会把候选属性
+    #   合到别的分支的实体上（entities 主键是复合键 (id, branch)，
+    #   真库有 61 组同 id 跨三分支）。此处与写入分支取同一常量，两端口径一致。
+    from vector2graph import _AI_INGEST_BRANCH
     disamb = _disambiguate_many(conn, [
-        str(n.get("name", "")).strip() for n in parsed.get("nodes", []) if n.get("name")]) \
+        str(n.get("name", "")).strip() for n in parsed.get("nodes", []) if n.get("name")],
+        branch=_AI_INGEST_BRANCH, cross_ling=_cross_ling) \
         if parsed.get("nodes") else {}
     # P2-10 批内消歧：跨视图去重后仍可能近似重复（载荷 vs 载荷分系统），
     # 批内包含关系（≥2 字）打标 properties.batch_dup，弹窗提示「批内疑似重复」
@@ -719,6 +730,42 @@ def _vdt_eq(a: str, b: str) -> bool:
     return _VDT_ALIASES.get(a, a) == _VDT_ALIASES.get(b, b)
 
 
+def _score_pair(a: str, b: str) -> tuple:
+    """对一对名称做三维打分，返回 (status, scores_dict)。
+
+    P3-1（2026-10-11）：供归一校验报告带出逐维度分值（前端评分卡），
+    并让**批内重复**与**图库匹配**走同一套判据（此前批内直接判 dup_suspect，无分值）。
+
+    ⚠️ 复用 `vector2graph` 的常量与向量引擎（**不重造第二轮算法**）：
+       floor 0.60 / 相关聚合词后缀判定都在那边，本函数只做"算分 + 套判据"。
+    返回 scores 含 {vec, fuzzy, score, floor_ok}；无法计算时 vec/fuzzy 为 None。
+    """
+    from vector2graph import (_get_vector_engine, _FLOOR_VEC, _FLOOR_FUZZY,
+                              _SUSPECT_MIN, _containment_status)
+    from text_normalize import fuzzy_score
+    ve = _get_vector_engine()
+    v = None
+    if ve and a and b:
+        try:
+            v = round(float(ve._cosine(ve._vector(a), ve._vector(b))), 4)
+        except Exception:  # noqa: BLE001
+            v = None
+    f = round(float(fuzzy_score(a, b)), 4) if (a and b) else 0.0
+    vv = v if v is not None else 0.0
+    total = round(0.70 * vv + 0.30 * f, 4)
+    floor_ok = vv >= _FLOOR_VEC and f >= _FLOOR_FUZZY
+    status = "none"
+    # P4（2026-10-11）：包含判定统一走 `vector2graph._containment_status`
+    # （此前本函数自带一份 agg 列表与 `vector2graph` 那份**不一致**，属口径分裂）。
+    if a and b and len(a) >= 2 and len(b) >= 2 and (a in b or b in a):
+        status = _containment_status(a, b, floor_ok)
+    elif floor_ok and total >= _SUSPECT_MIN:
+        status = "dup_suspect"
+    return status, {"vec": v, "fuzzy": f, "score": total,
+                    "floor_ok": bool(floor_ok),
+                    "floor": [_FLOOR_VEC, _FLOOR_FUZZY]}
+
+
 def _build_evidence(r: dict, ohow: str, onto_name: str) -> dict:
     """构造「为什么给这个建议」的证据与上下文（供人工判断可不可信）。"""
     src, rule = [], ""
@@ -862,7 +909,8 @@ def build_normalize_report(conn, content, code_text: str = "",
     try:
         from ontology_semantics import OntologyValidator
         from vector2graph import (_disambiguate_many, _disambiguate_rel,
-                                  _normalize_mentions)
+                                  _normalize_mentions, _AI_INGEST_BRANCH,
+                                  load_cross_ling_index)
         from core.relmap import canonical as _rel_canon
         ov = OntologyValidator(conn)
         known_types = set(ov.entity_types())
@@ -918,7 +966,11 @@ def build_normalize_report(conn, content, code_text: str = "",
                 except Exception:
                     _type_map[n["name"]] = n["entity_type"]
         norms = _normalize_mentions(conn, _all_names, types=_type_map)
-        disamb = _disambiguate_many(conn, list(all_node_names))
+        # P5 跨语言消歧（2026-10-12）：同 sysml_to_candidates，词库别名入消歧索引
+        _cross_ling = load_cross_ling_index(conn)
+        disamb = _disambiguate_many(conn, list(all_node_names),
+                                    branch=_AI_INGEST_BRANCH,
+                                    cross_ling=_cross_ling)
 
         # ── 跨视图去重（2026-09-08 修正）：同名节点只生成一行 ──
         # 实测：BDD/IBD 两视图节点 100% 重叠，此前按视图各生成一行导致
@@ -976,22 +1028,46 @@ def build_normalize_report(conn, content, code_text: str = "",
                     continue
                 m_status, m_eid = disamb.get(n["name"], ("none", ""))
                 batch_dup_of = ""
+                ev_scores = {}   # P3-1（2026-10-11）：逐维度分值，供前端评分卡
                 if m_status == "none":
                     nm = n["name"]
                     for other in all_node_names:
                         if other == nm or len(other) < 2 or len(nm) < 2:
                             continue
                         if other in nm or nm in other:
-                            m_status = "dup_suspect"
+                            # P3-1（2026-10-11）：批内重复**也走三维打分**。
+                            # 原实现在此直接判 dup_suspect —— 绕过 `_disambiguate_many`，
+                            # 后果是「既无分值也无目标名」，真库 8 条（如
+                            # VehiclePowerManagement ⇄ VehiclePowerManagementReq）
+                            # 的 `matched_entity_name` 全为空 ⇒ 前端「比对目标」列渲染空白，
+                            # 用户看到 dup_suspect 却没有比对对象，解释藏在 evidence 小字里。
+                            m_status, ev_scores = _score_pair(nm, other)
                             batch_dup_of = other
-                            consistency["batch_dups"].append([nm, other])
+                            consistency["batch_dups"].append([nm, other, m_status])
                             break
+                else:
+                    # 与图库实体匹配上：同样带出分值（评分卡需要三维明细）
+                    if m_eid:
+                        _r = conn.execute(
+                            "SELECT name FROM entities WHERE id=? AND branch=?",
+                            (m_eid, _AI_INGEST_BRANCH)).fetchone() or \
+                              conn.execute("SELECT name FROM entities WHERE id=?",
+                                           (m_eid,)).fetchone()
+                        if _r:
+                            ev_scores = _score_pair(n["name"], _r["name"])
                 matched_name = ""
                 if m_eid:
-                    r = conn.execute("SELECT name FROM entities WHERE id=?",
+                    r = conn.execute("SELECT name FROM entities WHERE id=? AND branch=?",
+                                     (m_eid, _AI_INGEST_BRANCH)).fetchone() or \
+                        conn.execute("SELECT name FROM entities WHERE id=?",
                                      (m_eid,)).fetchone()
                     if r:
                         matched_name = r["name"]
+                # P3-2（2026-10-11）：批内重复时 `matched_entity_name` 为空 ⇒ 前端
+                # 「比对目标」列渲染空白。批内对端**也是本次生成的元素**（不是图库实体），
+                # 用 `batch_dup_of` 兜底填入，让该列始终有可读的比对对象。
+                if not matched_name and batch_dup_of:
+                    matched_name = batch_dup_of
                 conf = 0.9 if etype in known_types else 0.6
                 if m_status in ("matched_high", "dup_high"):
                     conf = 0.92
@@ -999,6 +1075,8 @@ def build_normalize_report(conn, content, code_text: str = "",
                     conf = 0.7
                 elif m_status == "dup_suspect":
                     conf = 0.55
+                elif m_status == "related":
+                    conf = 0.5   # 「相关但非同一实体」置信度低于疑似重复
                 # 用户问题 #3：属性 keys；#5：跨视图去重 + kind 驱动的 def/usage
                 _props_keys = list((props or {}).keys())[:4]
                 rows.append({
@@ -1013,6 +1091,10 @@ def build_normalize_report(conn, content, code_text: str = "",
                     "_kind_detail": n["_kind_detail"],
                     "_views": n["_views"],
                     "_cross_view_dup": n["_cross_view_dup"],
+                    # P3-1：逐维度分值（前端评分卡用；空 = 该行未经三维比对）
+                    #   ⚠️ evidence 在后面（:1277 附近）统一构造 —— 那时 `_ohow` 才算出来，
+                    #   此处**不得**提前调 _build_evidence（会 UnboundLocalError）。
+                    "scores": ev_scores,
                     "batch_dup_of": batch_dup_of, "decision": "pending"})
                 idx += 1
 
@@ -1221,6 +1303,9 @@ def build_normalize_report(conn, content, code_text: str = "",
                             r["errors"] = list(r.get("errors") or []) + [
                                 f"数据类型不一致：V2 声明 {_v2dt} vs 本体 {_onto_dt}"]
             r["evidence"] = _build_evidence(r, _ohow, _on)
+            # P3-1（2026-10-11）：把逐维度分值带进 evidence（前端评分卡一处取到）
+            if r.get("scores"):
+                r["evidence"]["scores"] = r["scores"]
             if _kind == "attr" and (r.get("attr_type_check") or r.get("attr_type")):
                 _v2dt = r.get("attr_type") or ""
                 _onto_dt = _onto_datatype(_on if r["ontology_matched"] else "")
