@@ -232,6 +232,30 @@ class StreamMixin:
             except Exception:
                 plan = []
 
+        # ★ 2026-10-13（B1-7）：**负载感知分派** —— planner LLM 选好 Agent 名之后，
+        #   用确定性打分器补做两件事：
+        #     ① 打分**留痕**（assign_score / load_snapshot 落库）—— 此前这两列 0/222 有值，
+        #        导致"这次为什么派给它"**无法回答**（文章工程要点③要的正是这个）；
+        #     ② **只在候选能力等价时**按负载做择一 —— planner 已经做了语义选择，
+        #        确定性打分器不该推翻它（实测若强行改派，准确率反而低于 planner）。
+        #   ⚠️ 只改派的条件极严：**多个候选的专长匹配度并列最高**（差值 < 1e-9）。
+        #      不满足 ⇒ 保留 planner 的选择，仅记录分数。
+        #   ⚠️ 权重与匹配口径的标定实测见 `services/assignment.py` 模块 docstring
+        #      （含"原词表只覆盖 12% 真实词条"与"bigram 降级 embedding 无区分度"两条证据）。
+        #   开关 `agent_assignment.enabled` 关闭 ⇒ 完全退回改动前行为（不计算、不改派）。
+        try:
+            from core.config import get as _cfg_aa
+            _aa_on = bool(_cfg_aa("agent_assignment", "enabled", True))
+        except Exception:
+            _aa_on = True
+        if _aa_on and plan:
+            try:
+                from services.assignment_integration import _assign_load_aware
+                plan = _assign_load_aware(plan)
+            except Exception:
+                # 分派增强失败**不得影响编排**（它只是择优与留痕，不是门禁）
+                pass
+
         # 2) 降级：计划失败 → 单 Agent 流式直行
         if not plan:
             direct = "requirement_analysis"

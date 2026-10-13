@@ -706,6 +706,24 @@ DEFAULT_CONFIG = {
         # ⚠️ 解析失败一律降级为宽松 schema，**不得因单个脏 schema 拖垮整次工具定义构建**。
         "inject_input_schema": True,
     },
+    "agent_assignment": {
+        # ── 编排分派打分（2026-10-13，B1-7）────────────────────────────────
+        # 定位：**择优与留痕，不是决策者**。planner LLM 已产出每个子任务的 agent，
+        # 本打分器只在"候选专长匹配度并列"时按负载择一，并给每个任务留 assign_score
+        # 与 load_snapshot（此前两列 0/222 有值 ⇒ "这次为什么派给它"无法回答）。
+        # ⚠️ 三个权重的**标定实测**见 services/assignment.py 模块 docstring：
+        #   ① 原 SYNONYM_MAP 6 组只覆盖真库 76 个 capability 词条的 9 个（12%），
+        #      8 视图系列全未覆盖 ⇒ 那批任务 capability_match 恒 0，权重整项塌缩；
+        #   ② embed 兜底在当前 bigram-TF 降级 embedding 下**无区分度**
+        #      （实测正负样本余弦同为 0.236，都低于 0.55 阈值）；
+        #   ⇒ 新增字符 bigram 重合度作主匹配手段（标定后 8 视图 top-1 命中 6/6，
+        #      真配对 0.333 vs 错配对 0.0），并把成功率权重从 0.1 调到 0.2
+        #      （真库 168 done / 54 failed ⇒ 该信号实测可得且区分度最明显）。
+        "enabled": True,                        # 总开关；关 = 完全退回改动前行为（不算分、不改派）
+        "weight_capability": 0.5,               # 专长匹配（主因，但留余量给负载纠偏）
+        "weight_load": 0.3,                     # 负载
+        "weight_history": 0.2,                  # 历史成功率（实测区分度最明显，双倍权重）
+    },
     "kb_scope": {
         # KB-S 消费范围（Agent 的 kb_scope.docs）**失效自愈**开关。
         # 实现在 agent/rag.py::_resolve_scope_docs。
@@ -1236,6 +1254,12 @@ CONFIG_SCHEMA = {
     "tool_jit": {
         "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）。★ 2026-10-10 实测：修复类工具必须列进来，否则会被语义预筛裁掉（实测 view_expansion 清单 6 个里原本没有 sysml_v2_autofix，导致 autofix 一次都没被调用）"},
         "inject_input_schema": {"type": "bool", "desc": "把 tools.input_schema 注入 function-calling 的 parameters（关=回到 2026-10-13 之前的宽松空 schema）。★ 实测该列 39/41 有真值，此前被 SELECT 后丢弃、payload 恒为 properties:{}"},
+    },
+    "agent_assignment": {
+        "enabled": {"type": "bool", "desc": "编排分派打分总开关（关=不算分不改派，完全退回 2026-10-13 之前行为）。★ 该打分器只做择优与留痕，planner LLM 仍是决策者"},
+        "weight_capability": {"type": "float", "desc": "专长匹配权重（默认 0.5）。标定实测：原词表只覆盖真库 76 词条的 9 个，改为字符 bigram 重合度后 8 视图 top-1 命中 6/6"},
+        "weight_load": {"type": "float", "desc": "负载权重（默认 0.3）。负载来自 agent_tasks 里 status='running' 的行数（B1-3 之后才有数据）"},
+        "weight_history": {"type": "float", "desc": "历史成功率权重（默认 0.2，原 0.1 调高）。真库 168 done/54 failed ⇒ 该信号实测可得且区分度最明显"},
     },
     "kb_scope": {
         "docs_missing_fallback": {"type": "bool", "desc": "白名单文档不存在时剔除失效项；全失效则退化为不限文档"},
