@@ -1288,7 +1288,19 @@ class StreamMixin:
 
     def _stream_orchestrated(self, orch: dict, user_input: str, conversation_id, intent: str,
                              agent_def, hil_level: str, kb_tags: list, attachments: list,
-                             slots: dict, user) -> iter:
+                             slots: dict, user, run_id: int = 0) -> iter:
+        # ⚠️ `run_id` 是**本方法的显式参数**（默认 0），不是外层闭包的变量 ——
+        #   本方法与 `_stream_orchestrated_flow` 是**平级方法**，看不到对方的局部变量。
+        #   （2026-10-13 真实建模验证抓到：最初直接在函数体里写 `run_id`，
+        #    走"命中已发布沉淀流程"这条复用路径时崩，报 `name 'run_id' is not defined`，
+        #    **14 个离线门禁全绿也没抓到** —— 它们只查"源码里有没有这个字符串"，
+        #    不查它在该函数作用域内能不能解析。**静态字符串判据对作用域错误天生无能。**）
+        #
+        # ⚠️⚠️ **复用流程（`reused`）本来就不传**：那条路径用的是**预发布流程模板**，
+        #   本次没有 create_plan、没有 agent_tasks 行 ⇒ 客观上不存在批次号，
+        #   此时 `orch_run_id` 恒为 0。**这是事实，不是 bug** ——
+        #   但绝不能为了"让它有值"而引用一个不存在的变量（那正是原缺陷）。
+        #   真要让它有批次号，得在复用路径上补 create_plan，属独立议题。
         """P0-1 编排路径流式产出：子任务过程（agent 事件）→ 汇总 tokens → 落库 → done。
 
         与主路径落库段保持一致（card 含 orchestrated/plan），前端按 stage/agent/token 现有渲染直接可视化。
@@ -1310,7 +1322,7 @@ class StreamMixin:
         _n_bad = sum(1 for _ot in orch_tasks if str(_ot.get("status") or "done") != "done")
         _d = ("（自动编排）复杂任务已分解为 %d 个子任务执行完成%s，汇总最终结论…"
               % (len(orch_tasks), ("（其中 %d 个未成功）" % _n_bad) if _n_bad else ""))
-        yield {"type": "reasoning", "delta": _d}
+        yield {"type": "reasoning", "kind": "progress", "delta": _d}
         # P0-3（2026-09-17）：无节流切片 → 类人节奏产出（本路径不做事后补块，保持原行为）
         for _chunk in iter_stream_chunks(orch_content):
             yield {"type": "token", "delta": _chunk}
@@ -1758,6 +1770,12 @@ class StreamMixin:
                     yield {"type": "reasoning", "kind": "progress",
                            "delta": f"（自动编排）命中已发布沉淀流程「{reused.get('flow_name') or ''}」，按流程模板执行子任务…"}
                     reused["data"] = {"tasks": reused.get("plan") or []}
+                    # ⚠️ **不传 run_id**：复用流程走的是「已发布流程模板」，
+                    #   `reused` 是**预先算好的** orch（`_try_reuse_planner_flow` 返回），
+                    #   本次**没有** create_plan、没有 agent_tasks 行 ⇒ 压根不存在批次号。
+                    #   `execute_stream` 里也没有 `run_id` 局部变量（真 run_id 是
+                    #   `_stream_orchestrated_flow` 的局部变量）—— 在这里传 `run_id=`
+                    #   会把 NameError 从被调方挪到调用方，**等于没修**。
                     yield from _yield_collect(self._stream_orchestrated(
                         reused, user_input, conversation_id, intent, agent_def, hil_level,
                         kb_tags, attachments, slots, user), _orch_acc)

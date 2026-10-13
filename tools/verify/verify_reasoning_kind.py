@@ -152,23 +152,54 @@ def main():
                     if kv != "progress" and any(p in t[:120] for p in SYS_PREFIXES)]
 
     print("  带 kind=progress 的站点：%s" % [ln for ln, _ in tagged])
-    # ★ 12 而不是 8：初版我按"文案以（自动编排）开头"肉眼数，漏了 4 处
-    #   f-string 拼接的（写操作确认队列 / 编排部分完成 / 质量评审 / 命中沉淀流程），
-    #   是本门禁 B2 抓出来的 ⇒ **门禁比人眼数得准**。
-    check("B1 ★ 12 处系统提示都带 kind=progress",
-          len(tagged) == 12, "实测 %d 处（期望 12）" % len(tagged))
+    # ★ 13 处：初版我按"文案以（自动编排）开头"肉眼数得 8，门禁 B2 抓出 4 处 f-string
+    #   拼接的（写操作确认队列 / 编排部分完成 / 质量评审 / 命中沉淀流程）；
+    #   第 13 处是**真实建模验证**时补的 —— `_stream_orchestrated` 里的汇总提示，
+    #   它的 delta 是**变量** `_d`，AST 连一个字面量都取不到 ⇒ 第三类"数不到"。
+    #   ⇒ **门禁比人眼数得准，且真实流量会暴露肉眼与简单 AST 都数不到的站点。**
+    check("B1 ★ 13 处系统提示都带 kind=progress",
+          len(tagged) == 13, "实测 %d 处（期望 13）" % len(tagged))
     check("B2 ★ 没有系统提示漏标（漏标 ⇒ 仍与 CoT 混在同一框）",
           not untagged_sys,
           "漏标行号：%s" % [(ln, t[:30]) for ln, t in untagged_sys])
+    # ⚠️ delta 可能是**变量**（如 `_d`），此时 delta 子树里一个字面量都没有
+    #   （2026-10-13 真实建模验证补的那处就是：`_stream_orchestrated` 的汇总提示）
+    #   ⇒ 不能只看 delta 节点，要**回溯该变量在同函数内的赋值语句**。
+    #   这是"数不到"的第三类：① 多行拼接 ② 相邻站点串味 ③ delta 是变量。
+    _lines_all = s_src.split("\n")
+    _sys_re = re.compile("|".join(re.escape(p) for p in SYS_PREFIXES))
+
+    def _resolve_text(ln, txt):
+        """txt 是 **AST 字面量抽取**的结果 —— delta 是变量时它必然是空串。
+
+        ⇒ 这时要从**源码行**回溯：先在 yield 那一行里认出 delta 是个标识符，
+        再往上找该变量的赋值行。判据宽松：赋值行里出现过系统前缀就算数
+        （不解析 Python 表达式结构 —— 那是解释器的事，不是门禁的事）。
+        """
+        if _sys_re.search(txt[:200]):
+            return txt, "inline"
+        _src_line = _lines_all[ln - 1] if 0 < ln <= len(_lines_all) else ""
+        m = re.search(r'"delta":\s*([A-Za-z_]\w*)\s*[,}]', _src_line)
+        if not m:
+            return txt, "unknown"
+        var = m.group(1)
+        for k in range(ln - 2, max(0, ln - 16), -1):
+            if re.search(r"\b%s\s*=" % re.escape(var), _lines_all[k]) \
+                    and _sys_re.search(_lines_all[k]):
+                return _lines_all[k], "via:" + var
+        return txt, "no-assign-with-prefix:" + var
+
     for ln, t in tagged:
-        check("B3 L%d 的文案确属系统提示" % ln,
-              any(p in t[:120] for p in SYS_PREFIXES),
-              "文案=%r 看着不像系统提示，分类可能错了" % t[:60].replace("\n", " "))
+        _txt, _how = _resolve_text(ln, t)
+        check("B3 L%d 的文案确属系统提示（%s）" % (ln, _how),
+              bool(_sys_re.search(_txt[:200])),
+              "文案=%r 看着不像系统提示，分类可能错了"
+              % _txt[:80].replace("\n", " "))
 
     # ══════════════ C. 真实 CoT 不能被误标 ══════════════
     print("\n=== C. 真实 CoT 不被误标（误标会把模型思考赶出思考框）===")
     cot = [(ln, kv, t) for ln, has, kv, t in sites if kv != "progress"]
-    check("C1 真实 CoT 站点数 = 总数 - 12", len(cot) == len(sites) - 12,
+    check("C1 真实 CoT 站点数 = 总数 - 13", len(cot) == len(sites) - 13,
           "cot=%d total=%d" % (len(cot), len(sites)))
     # 逐字增量形如 `f"..."` / `_r_delta` / `delta[` 等，绝不能是系统提示文案
     _mis = [(ln, t) for ln, kv, t in cot
