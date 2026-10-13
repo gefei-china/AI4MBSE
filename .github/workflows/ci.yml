@@ -525,3 +525,51 @@ jobs:
       # ── 元门禁：新写的门禁必须接线，或写明豁免理由 ──────────────────────
       - name: Guard 门禁接线（每个门禁要么在 CI 里，要么带 #CI-OPTIONAL 理由）
         run: python tools/verify/verify_gate_wiring.py
+
+      # ── B1 批次一（2026-10-13）新增的 9 个门禁 ──────────────────────────
+      # 全部**零 LLM、不起服务、不写生产库**（临时库/内存库），故可直接进 CI。
+      # 一并接线是为消除 `verify_gate_wiring` 的 W1a 红灯（"新写的门禁必须接线"是本仓纪律）。
+      - name: Guard 工具参数契约注入（tools.input_schema 真值进 payload）
+        run: python tools/verify/verify_tool_input_schema.py
+      - name: Guard 子任务协议状态（normalize_text 不再恒 full）
+        run: python tools/verify/verify_subtask_status.py
+      - name: Guard 编排规划契约（两套 planner prompt 字段集合一致）
+        run: python tools/verify/verify_orch_planning.py
+      - name: Guard running 态真写入（claim 已接线）
+        run: python tools/verify/verify_running_state.py
+      - name: Guard 检查点 phase 与任务状态口径一致
+        run: python tools/verify/verify_ck_phase_consistency.py
+      - name: Guard 依赖图环检测（环不再静默阻塞）
+        run: python tools/verify/verify_plan_cycle_guard.py
+      - name: Guard 会话归属隔离（对话列表按用户 + 按项目）
+        run: python tools/verify/verify_conv_scope_guard.py
+      - name: Guard 失败分类与分类驱动重试
+        run: python tools/verify/verify_failure_class.py
+      - name: Guard Agent 名孤儿引用（快照留痕）
+        run: python tools/verify/verify_orphan_agent_ref.py
+
+      # ── B1-10（2026-10-13）：跑完所有门禁后，工作区必须仍是干净的 ────────
+      # 为什么需要（本仓实测踩过两次）：
+      #   `tools/verify/verify_norm_summary.py` 等少数门禁的「变异自证」会**就地改生产源文件**
+      #   （把常量字面量改掉、跑完再改回来）。一旦脚本被 **SIGTERM/超时/崩溃**打断，
+      #   变异体就**残留在生产文件里**：
+      #     · 表现为该门禁 D3/D4 判红 + 「锚点未找到，自证中止」；
+      #     · 2026-10-12 实测：沙箱里被 SIGTERM 打断后文件留在变异态，
+      #       **一度被误判成「加 related 时误删了 dup_suspect」的产品缺陷**。
+      #   逐个给这类脚本加 try/finally 只能治已知的几处；本断言是**兜底**：
+      #   任何门禁（**含本仓现有的 fix_*/analyze_* 类脚本**）意外改动了受版本控制的文件，
+      #   都会在这里被抓住，而不是等到下一个人接手时变成"神秘的产品缺陷"。
+      # ⚠️ 刻意**不**排除 db 之外的路径：CI 跑在 checkout 出来的干净树上，
+      #    门禁只读数据库（生产库不入库，见 .gitignore 的 mbse.db* 规则），
+      #    因此工作区变脏**只可能**是脚本改文件。
+      - name: Guard 工作区洁净（门禁跑完不得留下任何改动）
+        run: |
+          git status --porcelain
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::门禁运行后工作区出现改动（疑似变异自证被中断，变异体残留）："
+            git --no-pager diff --stat
+            echo "::error::请检查上一步的门禁是否被强杀；见 routers/conversations.py 与"
+            echo "::error::tools/verify/verify_norm_summary.py 的 _NR_BLOCKING_STATUSES 锚点。"
+            exit 1
+          fi
+          echo "工作区洁净 ✓"

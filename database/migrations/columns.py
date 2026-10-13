@@ -273,6 +273,12 @@ def _migrate_columns(conn):
     # ⇒ 权限拒绝等永久失败也会被重试一次（单子任务实测 344~1155 s + 一次完整 LLM 调用）。
     # 取值见 `services/failure_class.py::ERROR_CLASSES`（8 类）。
     _add("agent_tasks", "error_class", "TEXT DEFAULT ''")                 # 失败分类（timeout/transient/permission/…）
+    # ── B1-11（2026-10-13）Agent 名孤儿引用：留痕"派发当时的权威名" ──
+    # ⚠️ `agent_id` 列存的**是 Agent 名而非数字 id**，且 planner 产出的大小写/空格不受约束
+    #    （实测 `" DESIGN "` 能落库）。真库因此有 8 行指向已改名的 `智源平台管理`
+    #    （agents 里只剩 disabled 的 `zhiyuan_mgmt`）⇒ 孤儿，那批 run 的归属信息永久丢失。
+    #    本列存解析后的权威名，Agent 之后再改名也不丢证据。
+    _add("agent_tasks", "agent_name_snapshot", "TEXT DEFAULT ''")      # 派发时 agents.name 权威值（查不到时回落原值）
     # ── 架构优化：HIL 确认队列补 task_key（写操作暂存绑定子任务，先查表存在再 ALTER）──
     _add("hil_confirmations", "task_key", "TEXT DEFAULT ''")
     # ── 分支管理 GitHub 对标（P0-1/P0-2/P1-1/P1-2）：冲突重算时间戳 / MR 标题 / 驳回意见 ──

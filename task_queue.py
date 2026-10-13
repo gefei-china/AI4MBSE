@@ -12,6 +12,37 @@ import threading
 _ALLOC_LOCK = threading.Lock()   # P0-7：批次号分配互斥（本仓单进程 uvicorn，进程内锁即足够）
 
 
+def resolve_agent_name(conn, raw) -> str:
+    """★ 2026-10-13（B1-11）：把计划里写的 Agent 名解析成 `agents.name` 的**权威写法**。
+
+    **为什么需要**（真库实证，口径 2026-10-12 只读）：`agent_tasks.agent_id` 存的
+    **不是数字 id，而是 Agent 名**，而 planner 产出的大小写/空格不受约束
+    （实测 `" DESIGN "` 能落库）。真库因此出现 **8 行指向 `智源平台管理`**，
+    而 `agents.name` 里只有 `zhiyuan_mgmt`（且已 disabled）—— **孤儿引用**。
+    后果：`agent_tasks` 是"这批编排当初派给了谁"的唯一存证，孤儿化后该信息永久丢失。
+
+    口径：
+      · 只认 `status='active'` 的 Agent —— **已 disabled 的不算在役权威名**。
+        （否则改名过渡期新旧两名都算"存在"，孤儿检不出来。）
+      · 比对时两侧都 `strip().lower()`，命中后返回**库里的原样写法**（权威值）。
+      · 查不到 → 返回 `""`，由调用方回落原值（不写空、不丢信息、不抛错）。
+    """
+    if raw is None:
+        return ""
+    name = str(raw).strip()
+    if not name:
+        return ""
+    try:
+        row = conn.execute(
+            "SELECT name FROM agents WHERE LOWER(TRIM(name))=LOWER(?) AND status='active' LIMIT 1",
+            (name,)).fetchone()
+        if row and row["name"]:
+            return str(row["name"])
+    except Exception:
+        return ""
+    return ""
+
+
 class TaskQueue:
     """SQLite 持久化任务队列（零外部依赖，SQLite 连接由调用方传入）。"""
 
@@ -106,11 +137,22 @@ class TaskQueue:
         n = 0
         for t in plan:
             deps = [d for d in (t.get("deps") or []) if d in plan_keys]
+            # ★ B1-11：把 Agent 名解析成权威写法再落库，并**额外存一份快照**。
+            #   `_resolved_name` 为空 ⇒ planner 写的名字在 agents 里查不到（改名/下线/拼错），
+            #   回落原值保信息（探针数据常引用已下线的名字，不能直接吞掉）。
+            #   快照 `agent_name_snapshot` 是"派发当时的权威名"，Agent 之后再改名也留痕 ——
+            #   它是回答文章工程要点③「这次为什么得出这个结果」的依据。
+            try:
+                _resolved_name = resolve_agent_name(conn, t.get("agent"))
+            except Exception:
+                _resolved_name = ""
+            _agent_name = _resolved_name or str(t.get("agent") or "")
             conn.execute(
-                "INSERT INTO agent_tasks (run_id, task_key, title, agent_id, task_type, config, deps, "
-                "status, assigned_by, seq, context, expected_output, conversation_id) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (run_id, t.get("key", ""), t.get("title", ""), t.get("agent", ""),
+                "INSERT INTO agent_tasks (run_id, task_key, title, agent_id, agent_name_snapshot, "
+                "task_type, config, deps, status, assigned_by, seq, context, expected_output, "
+                "conversation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (run_id, t.get("key", ""), t.get("title", ""), _agent_name,
+                 _resolved_name or _agent_name,
                  t.get("task_type", "agent"), json.dumps(t.get("config") or {}, ensure_ascii=False),
                  json.dumps(deps, ensure_ascii=False),
                  "ready" if not deps else "planned", assigned_by, t.get("seq", 0),

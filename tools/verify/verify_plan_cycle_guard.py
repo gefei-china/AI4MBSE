@@ -109,9 +109,12 @@ TMP = tempfile.mkdtemp(prefix="verify_cycle_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _c = sqlite3.connect(TMP_DB)
+    # ⚠️ 列集合须与生产 agent_tasks 对齐：`create_plan` 现在会写 agent_name_snapshot（B1-11），
+    #    漏列会 OperationalError。⚠️ 注释**只能写在 SQL 三引号之外**（写在里面是语法错误）。
     _c.execute("""CREATE TABLE agent_tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, task_key TEXT, title TEXT,
-        agent_id TEXT, task_type TEXT, config TEXT, deps TEXT, status TEXT DEFAULT 'planned',
+        agent_id TEXT, agent_name_snapshot TEXT DEFAULT '',
+        task_type TEXT, config TEXT, deps TEXT, status TEXT DEFAULT 'planned',
         result TEXT, metadata TEXT, error TEXT, assigned_by TEXT, seq INTEGER DEFAULT 0,
         latency_ms INTEGER DEFAULT 0, context TEXT DEFAULT '', expected_output TEXT DEFAULT '',
         conversation_id INTEGER DEFAULT 0,

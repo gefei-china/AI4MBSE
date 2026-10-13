@@ -868,7 +868,12 @@ def init_db():
         run_id INTEGER DEFAULT 0,             -- 所属流程运行 id（0=独立编排）
         task_key TEXT DEFAULT '',             -- 计划内唯一键（t1/t2...）
         title TEXT DEFAULT '',
-        agent_id TEXT DEFAULT '',             -- 指派 Agent（intent 名）
+        agent_id TEXT DEFAULT '',             -- 指派 Agent（⚠️ 存的是 **Agent 名**而非数字 id）
+        -- B1-11（2026-10-13）派发当时的**权威名**快照。
+        -- agent_id 那列的大小写/空格不受约束（planner 产出 `" DESIGN "` 也能落库），
+        -- Agent 改名/下线后该列就成了孤儿（本仓真库有 8 行指向已改名的 `智源平台管理`）
+        -- ⇒ 本列存经 `task_queue.resolve_agent_name` 解析后的权威值，改名后仍留痕。
+        agent_name_snapshot TEXT DEFAULT '',
         task_type TEXT DEFAULT 'agent',       -- agent | llm | tool | react
         config TEXT DEFAULT '{}',             -- JSON: 节点级配置（query/prompt/max_steps 等）
         deps TEXT DEFAULT '[]',               -- JSON: 前置任务 key 列表

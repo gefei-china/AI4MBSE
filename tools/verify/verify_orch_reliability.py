@@ -47,6 +47,21 @@ _dst.close()
 _src.close()
 os.environ["MBSE_DB_PATH"] = COPY_DB
 
+# ★ 2026-10-13（B1-6/B1-11）：补跑列迁移。
+#   本脚本**复制的是生产库**，而生产库的 `agent_tasks` 还没有 B1 新增的两列
+#   （error_class / agent_name_snapshot）—— 服务重启时才会跑 init_db 补上。
+#   而 `TaskQueue.create_plan` 现在会写这两列 ⇒ 复制库上直接
+#   `OperationalError: no column named agent_name_snapshot`，门禁红。
+#   口径：**复制库上补迁移，绝不动生产库**（本脚本全程只写 _TMP 下的副本）。
+try:
+    import sqlite3 as _sq
+    _c = _sq.connect(COPY_DB)
+    from database.migrations.columns import _migrate_columns as _mcols
+    _mcols(_c)
+    _c.close()
+except Exception as _me:
+    print("[WARN] 复制库补列迁移失败：%s（后续断言可能因此报错）" % _me)
+
 import core.config as CFG                                        # noqa: E402
 import llm as LLM                                                # noqa: E402
 from agent.pipeline import AgentPipeline                         # noqa: E402

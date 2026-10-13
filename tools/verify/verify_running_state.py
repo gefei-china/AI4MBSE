@@ -107,13 +107,15 @@ check("C3 claim 带 commit（否则悬挂事务拖住主循环心跳）", "conn.
 # C4 与同类对齐：其余状态推进都带 commit
 # ⚠️ 窗口必须够宽：complete/resolve 的签名行较长（带默认参数），
 #    400 字符会在 commit 之前就截断 ⇒ 误判成"没带 commit"。用「到下一个 @staticmethod」切段。
-for _fn in ("def complete", "def fail", "def retry", "def resolve"):
+# ⚠️ 匹配必须带右括号 `def resolve(`：B1-11 新增了模块级函数 `resolve_agent_name`，
+#    用 `"def resolve"` 前缀匹配会**先撞上它**（它当然没有 commit）⇒ 假红。
+for _fn in ("def complete(", "def fail(", "def retry(", "def resolve("):
     _b = ""
     if _fn in t_src:
         _r = t_src.split(_fn, 1)[1]
         _nx = re.search(r'\n    @staticmethod', _r)
         _b = _r[:_nx.start()] if _nx else _r[:900]
-    check("C4 %s 也带 commit（同类一致性）" % _fn.replace("def ", ""),
+    check("C4 %s 也带 commit（同类一致性）" % _fn.replace("def ", "").rstrip("("),
           "conn.commit()" in _b,
           "未找到 commit —— 同类状态推进应一致")
 
@@ -136,12 +138,18 @@ TMP_DB = os.path.join(TMP, "t.db")
 try:
     _c = sqlite3.connect(TMP_DB)
     # ⚠️ 列集合对齐生产 agent_tasks（含 claim/update 用到的列）
+    # ⚠️ 2026-10-13（B1-11）：`agent_name_snapshot` 是 `create_plan` 现在会写的列 ——
+    #   漏了它，本脚本里调 create_plan 的用例会 `OperationalError`。
+    #   （这是"夹具 DDL 手工维护必然漏"的第 N 次复现，见 DDL 对齐纪律。）
     _c.execute("""CREATE TABLE agent_tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id INTEGER, task_key TEXT, title TEXT, agent_id TEXT,
+        agent_name_snapshot TEXT DEFAULT '',
         task_type TEXT, config TEXT, deps TEXT, status TEXT DEFAULT 'planned',
         result TEXT, metadata TEXT, error TEXT, assigned_by TEXT,
         seq INTEGER DEFAULT 0, latency_ms INTEGER DEFAULT 0,
+        error_class TEXT DEFAULT '', summary_json TEXT DEFAULT '{}',
+        retry_count INTEGER DEFAULT 0, token_count INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
     _c.execute("INSERT INTO agent_tasks (run_id,task_key,status,deps) VALUES (1,'t1','ready','[]')")
