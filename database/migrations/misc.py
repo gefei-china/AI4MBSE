@@ -449,3 +449,47 @@ def _migrate_audit_chain(conn):
         conn.execute("UPDATE audit_logs SET prev_hash=?, hash=? WHERE id=?", (prev, h, r["id"]))
         prev = h
     print(f"[init_db] 迁移: audit_logs 哈希链已回填 {len(rows)} 行（P0-b 防篡改基线）")
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 2026-10-13：`conflict_check` 下线（假实现退役）
+# ════════════════════════════════════════════════════════════════════════
+def _retire_fake_conflict_check(conn):
+    """把生产库里那条 `conflict_check` 工具**置为 disabled**（不删行）。
+
+    为什么是"下线"而不是"删行"：
+      · **不删行** —— `tool_call_logs` 里有 17 条历史调用留痕指向它，删掉 tools 行会让那些
+        流水变成"引用了不存在的工具"，排障时反而更难看；
+      · **置 disabled** —— 与本仓既有退役口径一致（`migrations/plugins.py:41` 对
+        deprecated/inactive 就是这么处理的），且 `_build_tools_def` 的 DB 工具查询带
+        `AND t.status='active'` ⇒ 下线后**自动不再注入**任何 Agent，无需改代码。
+
+    ⚠️ 这里**不动 `agents.tools` / `agent_tools`**：那两处已在本 commit 里从代码侧移除
+      （registry.py 与 seeds.py）；生产库的 `agent_tools` 实测**零绑定**，无需清理。
+
+    幂等：连跑多次只会把已 disabled 的行再确认一次，无副作用。
+    """
+    try:
+        cur = conn.execute(
+            "UPDATE tools SET status='disabled' WHERE name='conflict_check' AND status!='disabled'")
+        n = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        if n:
+            print(f"[init_db] 迁移: conflict_check 工具已下线（{n} 行 → disabled；"
+                  f"假实现，2026-10-13 移除）")
+        # ⚠️⚠️ **必须同时下线那个插件，否则下线无效**（2026-10-13 实测踩到）：
+        #   `plugins` 表里有一条 `com.zhiyuan.legacy.tool.conflict-check`（status=published、
+        #   `tool_entry_from_plugin()` 返回 `executable: True`），而 `_build_tools_def` 的
+        #   **P1-6「安装即可消费」路径只按插件状态过滤、不查 `tools.status`**
+        #   ⇒ 只把 tools.status 置 disabled 时，该工具**仍会被注入 payload**（实测确认）。
+        #   同一个工具名有**两条独立的进入路径**，少处理一条就等于没下线。
+        cur2 = conn.execute(
+            "UPDATE plugins SET status='disabled' "
+            "WHERE type='tool' AND (id='com.zhiyuan.legacy.tool.conflict-check' "
+            "OR manifest_json LIKE '%conflict_check%') AND status!='disabled'")
+        n2 = cur2.rowcount if cur2.rowcount and cur2.rowcount > 0 else 0
+        if n2:
+            print(f"[init_db] 迁移: conflict-check 插件已下线（{n2} 行 → disabled；"
+                  f"否则「安装即可消费」路径会把它重新注入）")
+        conn.commit()
+    except Exception:
+        pass

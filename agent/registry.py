@@ -122,7 +122,9 @@ class AgentRegistry:
         "requirement_analysis": AgentDefinition(
             name="需求分析Agent",
             description="解析输入文本，提取条目化需求并标注来源追溯",
-            tools=["graph_retrieve", "entity_create", "conflict_check"],
+            # ⚠️ 2026-10-13 移除 `conflict_check`（假实现：无条件返回"无新冲突"，从未真检测）。
+            #    模型看不到这个工具，比"看得到但必败/假成功"更诚实。
+            tools=["graph_retrieve", "entity_create"],
             hil_level="L2", kb_required=True,
             system_prompt=(
                 "你是网络总体MBSE设计助手，担任需求分析专家。\n"

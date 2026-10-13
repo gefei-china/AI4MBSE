@@ -329,7 +329,8 @@ def _seed_agents(conn):
 
     # Agent 工具绑定（等价旧 DEFINITIONS.tools）
     bindings = {
-        "requirement_analysis": [("tool", "graph_retrieve"), ("tool", "entity_create"), ("tool", "conflict_check")],
+        # ⚠️ 2026-10-13：`requirement_analysis` 原绑定 `conflict_check`，已移除（假实现，见 tools.py 注释）。
+        "requirement_analysis": [("tool", "graph_retrieve"), ("tool", "entity_create")],
         "design": [("tool", "graph_retrieve"), ("tool", "entity_create")],
         "impact": [("tool", "graph_retrieve"), ("tool", "impact_analyze")],
         "review": [("tool", "graph_retrieve"), ("tool", "validate")],
@@ -357,9 +358,9 @@ def _seed_builtin_tools(conn) -> None:
         ("graph_retrieve", "知识图谱检索（GraphRAG：实体链接 + 子图遍历 + 向量降级）", "builtin",
          "read", "low", "v1.0",
          '{"type":"object","properties":{"query":{"type":"string","description":"检索查询词"}},"required":["query"]}'),
-        ("conflict_check", "冲突检测（新元素与既有元素属性冲突）", "builtin",
-         "read", "low", "v1.0",
-         '{"type":"object","properties":{"name":{"type":"string"},"attributes":{"type":"object"}},"required":["name"]}'),
+        # ⚠️ 2026-10-13 已移除 `conflict_check` 的 seed 行（假实现，见 agent/pipeline_parts/tools.py 注释）。
+        #    留着会让**新库初始化时重新造出这个工具** ⇒ 删了代码但工具复活，移除不彻底。
+        #    生产库已有的那一行由迁移 `disable_fake_conflict_check` 置为 disabled（不删行，见下）。
         ("impact_analyze", "变更影响分析（BFS 三层遍历，产出影响图）", "builtin",
          "read", "medium", "v1.0",
          '{"type":"object","properties":{"source":{"type":"string","description":"变更源实体"}},"required":["source"]}'),

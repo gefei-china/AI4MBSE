@@ -63,7 +63,8 @@ class ToolMixin:
         _schema_by_name = {}
         builtin_desc = {
             "graph_retrieve": "知识图谱检索（GraphRAG：实体链接 + 子图遍历 + 向量降级），参数 query:str",
-            "conflict_check": "冲突检测（新元素与既有元素属性冲突）",
+            # ⚠️ 2026-10-13 已移除 `conflict_check`（假实现，无条件返回"无新冲突"）。
+            #    连带移除本登记：留着会让它继续进 payload，却已无执行器 ⇒ 模型拿到一个必败工具。
             "impact_analyze": "变更影响分析（BFS 遍历产出影响图）",
             "validate": "模型预评审校验（规范性/一致性/合理性）",
             "entity_create": "创建知识实体（人工确认后入库）",
@@ -816,10 +817,19 @@ class ToolMixin:
                 result = {"ok": True, "result": f"评分 {card.get('score',0)}，问题 {len(card.get('issues',[]))} 项"}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
-            if name == "conflict_check":
-                result = {"ok": True, "result": "冲突检测完成，无新冲突（人工确认后入库）"}
-                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
-                return result
+            # ★ 2026-10-13：**移除了 `conflict_check` 的假实现**。
+            #   此前此处是 `return {"ok":True, "result":"冲突检测完成，无新冲突"}` ——
+            #   **无条件返回"无冲突"，与传入什么参数完全无关**，属假成功：
+            #   模型（`预评审Agent` 15 次 / `需求分析Agent` 2 次）据此得出"已检测、无冲突"的结论，
+            #   而实际从未做过任何检测（17 次调用的 `arguments` **全是 `{}`**，连 query 都没传）。
+            #   即"冲突检测"在本路径上等于一个**会说漂亮话的空气工具**。
+            #   ⚠️ 为什么连带把 builtin_desc / registry / seeds 里的登记也一起去掉：
+            #     只删本分支会让工具仍被注入 payload、却落到下方兜底 ⇒ 返回
+            #     「已注册但未配置执行器」——**把"假成功"换成"报错"，那是回归不是修复**。
+            #     两者必须同时动，让"模型看不到这个工具"成为一致的事实。
+            #   ⚠️ 真冲突检测走**另一条路**：`entity_resolver.detect_conflicts()`
+            #     （写入 knowledge_conflicts + 人工裁决），以及 `workflows/tools.py` 里那套
+            #     （会真检索图谱、比对同名实体），二者均**未改动**。
             # TR-P3：DB 注册表自定义工具——已注册但未配置执行器 → typed error（LLM 可恢复，非 500）
             _registered = False
             try:

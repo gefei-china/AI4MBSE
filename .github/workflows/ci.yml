@@ -555,6 +555,8 @@ jobs:
         run: python tools/verify/verify_fact_inference.py
       - name: Guard 写操作幂等（§06，悬空注释已落实为真实去重）
         run: python tools/verify/verify_idempotency.py
+      - name: Guard conflict_check 假实现已下线（两条进入路径都断）
+        run: python tools/verify/verify_conflict_check_retired.py
 
       # ── B1-10（2026-10-13）：跑完所有门禁后，工作区必须仍是干净的 ────────
       # 为什么需要（本仓实测踩过两次）：
