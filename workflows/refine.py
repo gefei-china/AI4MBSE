@@ -35,6 +35,13 @@ class RefineGate:
     #   ② 标注上线之后又恰好没有多子任务编排流量。
     #   ⇒ **判据要看 messages.card_data 的 `reflection` 字段，不是这张表的计数**。
     @staticmethod
+    # ⚠️ 观测口径提醒（2026-10-13 复核）：`llm_usage_stats` 里 `plan_eval`
+    #   计数很低（真库 1 次）**不代表评审没跑** —— ① `_intent="plan_eval"`
+    #   标注是 2026-10-02（commit 42cf293）才上线的，此前 11 条真评审
+    #   （score 25~72、rounds 1~3、provider=deepseek-v4-flash）都没进这张表；
+    #   ② 标注上线之后又恰好没有多子任务编排流量。
+    #   ⇒ **判据要看 messages.card_data 的 `reflection` 字段，不是这张表的计数**。
+    @staticmethod
     def _enabled() -> bool:
         return _cfg.as_bool("refine", "enabled", True)
 
@@ -101,6 +108,32 @@ class RefineGate:
             issues = list(issues) + [_pt]
         return issues
 
+    @staticmethod
+    def _conflicts(done_items):
+        """★ 2026-10-14（批次三 #15）：评审前的**确定性结论冲突检测**。
+
+        为什么必须有这一步（取证见 `services/subtask_protocol.py::detect_conflicts` 头注）：
+        评审输入原本只有**拼接后的**报告 —— 两个子 Agent 对同一事实给了相反说法时，
+        综合报告会把它们揉成一句看似自洽的话，**评审拿不到"这是 t2 说的、那是 t3 说的"**。
+
+        返回 `(conflicts, stats)`：
+          · conflicts  非空 ⇒ 把条目文本拼进评审 criteria（评审必须显式裁决）；
+          · stats.verdict == "no-data" ⇒ **不得声称"已检查无冲突"**（无 claim 可判）。
+        ⚠️ 任何异常都降级为「无冲突 + 不可判定」，**绝不阻断编排**。
+        """
+        try:
+            from services import subtask_protocol as _sp
+            _sums = []
+            for it in (done_items or []):
+                _sm = it.get("summary") if isinstance(it, dict) else None
+                if isinstance(_sm, dict):
+                    _sums.append(_sm)
+            _cf = _sp.detect_conflicts(_sums)
+            return _cf, _sp.conflict_stats(_sums)
+        except Exception:
+            return [], {"claims_total": 0, "claims_anchored": 0,
+                        "subjects": 0, "subtasks_with_claims": 0, "verdict": "error"}
+
     @classmethod
     def run(cls, report: str, goal: str = "", done_items: list = None,
             plan: list = None, provider_id=None, criteria: str = DEFAULT_CRITERIA,
@@ -120,36 +153,69 @@ class RefineGate:
         if not cls._enabled():
             return {"content": report, "score": None, "passed": True, "rounds": 0,
                     "issues": cls._with_pt([], done_items, agg_status),
-                    "advice": "", "llm": None, "degraded": False}
+                    "advice": "", "llm": None, "degraded": False,
+                    # ⚠️ 与主路径**同键**（本仓老教训：两条路径字段不齐 ⇒ 前端/日志误判）
+                    "conflicts": {"count": 0, "stats": {"verdict": "skipped"},
+                                  "items": []}}
         if not report or not str(report).strip():
             return {"content": report or "", "score": None, "passed": True, "rounds": 0,
                     "issues": cls._with_pt([], done_items, agg_status),
-                    "advice": "", "llm": None, "degraded": False}
+                    "advice": "", "llm": None, "degraded": False,
+                    "conflicts": {"count": 0, "stats": {"verdict": "skipped"},
+                                  "items": []}}
         from workflows.nodes import FlowNodesMixin
         _ic = cls._item_chars()
         items_txt = "\n".join(
             f"[{it.get('task_key')}] {it.get('title')}（{it.get('agent_id') or '-'}）\n"
             + cls._clip(it.get('result') or '', _ic)
             for it in (done_items or [])[:20])
+        # ★ 2026-10-14（批次三 #15）：评审前先做**确定性冲突检测**，把命中项
+        #   写进评审标准 —— 评审必须显式裁决，不能让它在"综合报告"里被揉平。
+        #   ⚠️ 未命中**不追加任何文字**（提示词逐字节不变 ⇒ 零回归）；
+        #   ⚠️ stats.verdict != "checkable" 时**不谎称"已检查"**，只把口径带给调用方。
+        _conflicts, _cstats = cls._conflicts(done_items)
+        _eval_criteria = criteria
+        if _conflicts:
+            try:
+                from services.subtask_protocol import format_conflicts as _fmt
+                _eval_criteria = (criteria + "\n5) ⚠️**结论冲突裁决（最高优先级）**：以下子任务"
+                                  "对同一对象给出了互斥结论，必须在 issues 里**逐条指出采纳哪一侧"
+                                  "及理由**，不得回避或含糊带过：\n" + _fmt(_conflicts, limit=5))
+            except Exception:
+                _eval_criteria = criteria
         content = report
         ev = {"score": 0, "passed": False, "issues": [], "advice": "", "_meta": {}}
         rounds = 0
         try:
             for round_i in range(1, cls._max_rounds() + 2):  # 首评 + 最多 max_rounds 次修订
                 rounds = round_i
-                ev = FlowNodesMixin._evaluate_content(content, criteria)
+                ev = FlowNodesMixin._evaluate_content(content, _eval_criteria)
                 if ev.get("passed") or ev.get("score", 0) >= cls._pass_score():
                     break
                 if round_i > cls._max_rounds():
                     break
                 content = cls._refine(content, goal, items_txt, ev, provider_id)
+            _issues = list(ev.get("issues") or [])[:10]
+            # ★ 冲突项**无条件**进 issues（不依赖 LLM 是否照做）——
+            #   确定性检出的事实不该依赖另一个模型"记得写出来"。
+            if _conflicts:
+                try:
+                    from services.subtask_protocol import format_conflicts as _fmt2
+                    _issues = _issues + _fmt2(_conflicts, limit=3).split("\n")
+                except Exception:
+                    pass
             return {
                 "content": content,
                 "score": ev.get("score"),
                 "passed": bool(ev.get("passed", ev.get("score", 0) >= cls._pass_score())),
                 "rounds": rounds,
-                "issues": cls._with_pt((ev.get("issues") or [])[:10], done_items, agg_status),
+                "issues": cls._with_pt(_issues, done_items, agg_status),
                 "advice": ev.get("advice", ""),
+                # ★ 冲突口径随结果一并返回（card_data 可直接展示，排障不必翻日志）
+                "conflicts": {"count": len(_conflicts), "stats": _cstats,
+                              "items": [{"subject": c.get("subject"), "kind": c.get("kind"),
+                                         "reason": c.get("reason"),
+                                         "claims": c.get("claims")} for c in _conflicts[:5]]},
                 "llm": {"provider": (ev.get("_meta") or {}).get("provider", "-"),
                         "model": (ev.get("_meta") or {}).get("model", "-"),
                         "used_mock": (ev.get("_meta") or {}).get("used_mock", True)},
@@ -158,7 +224,8 @@ class RefineGate:
         except Exception:
             return {"content": report, "score": None, "passed": True, "rounds": 0,
                     "issues": cls._with_pt([], done_items, agg_status),
-                    "advice": "", "llm": None, "degraded": True}
+                    "advice": "", "llm": None, "degraded": True,
+                    "conflicts": {"count": 0, "stats": {"verdict": "error"}, "items": []}}
 
     @staticmethod
     def _refine(content: str, goal: str, items_txt: str, ev: dict, provider_id=None) -> str:

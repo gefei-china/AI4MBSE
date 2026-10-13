@@ -47,6 +47,35 @@ EVIDENCE_SOURCES = ("graph", "vector", "attachment")
 BASIS_VALUES = ("verified", "derived", "asserted")
 DEFAULT_BASIS = "asserted"     # 缺字段时的保守兜底
 
+# ── 结论分档（★ 2026-10-14 批次三 #16）──────────────────────────────────────
+# **为什么在 `basis` 之外还要 claims[]**：两者回答的不是同一个问题。
+#   · `evidence[].basis` 是**给证据分档** —— "你引用的这条依据有多硬"；
+#   · `claims[].kind`   是**给结论分档** —— "你这句话本身能不能直接采信"。
+# 缺 `claims` 时，读者只能从 evidence 间接猜结论的可信度，而**最危险的那类结论
+# 往往不带 evidence**（模型自顾自下了个结论，谁都没引）—— 那正是 `asserted` 兜底覆盖、
+# 但读者在汇总正文里**看不见**的一类。
+#
+# 三档的判据是「要复核它，需要做什么」：
+#   · `fact`      = 结论本身可被第三方独立复核（引用了具体 id/路径/校验器输出）；
+#   · `inference` = 由若干 fact 推出，**复核它要先把那些 fact 复核一遍**（链式）；
+#   · `to_verify` = **明确需要验证但尚未验证** —— 模型自己知道它没底。
+#
+# ⚠️ `to_verify` 是本项的**核心新增档**，它与 `basis=asserted` 是**不同语义**：
+#   · `asserted` = 「模型没给引用」—— 可能是它偷懒，也可能它私下查过只是没写；
+#   · `to_verify` = 「模型明说这条没验证」—— 是**主动的诚实声明**。
+# 此前二者混在一档，导致「诚实声明自己没底」与「懒得给引用」不可区分，
+# 评审/汇总无法优先处理前者。⚠️ `to_verify` **不是**"更假的断言"，
+# 它的价值在于**把不确定性显式化**，因此下游必须**呈现**它而不是隐藏它。
+#
+# **能力边界（同 basis）**：kind 是**模型自报**，服务端只做枚举校验与截断。
+#   我们无从判断一条 `fact` 是不是真的查过 ⇒ **不自动采信、不自动过滤**，
+#   只在汇总与评审中**分档呈现**，让人能一眼看出"哪些结论要自己去核"。
+CLAIM_KINDS = ("fact", "inference", "to_verify")
+# 缺 `kind` 时的兜底：`to_verify`（**比 `basis` 的 `asserted` 更保守**）。
+# 为什么更保守：一条没标 kind 的结论，读者无法判断它是否需要复核 ——
+#   此时最安全的假设是"它需要复核"，而不是"它是事实"。
+DEFAULT_CLAIM_KIND = "to_verify"
+
 # ── 长度/数量上限 ──
 MAX_SUMMARY = 500
 MAX_TITLE = 60
@@ -54,6 +83,7 @@ MAX_DESC = 200
 MAX_ADVICE = 200
 MAX_REF = 100
 MAX_ARTIFACTS = 20
+MAX_CLAIMS = 30
 
 DEFAULT_CONFIDENCE = 0.5
 DEFAULT_TASK_KEY = "t"   # 与 pipeline 编排的 tkey 默认值保持一致
@@ -102,6 +132,23 @@ SUMMARY_SCHEMA = {
                 "desc": {"type": "string", "maxLength": MAX_DESC},
                 "advice": {"type": "string", "maxLength": MAX_ADVICE},
             }}},
+        # ★ 2026-10-14 批次三 #16：claims 为**可选**（刻意不列 required，
+        #   否则旧格式全判 ok=False ⇒ 存量全红）。
+        "claims": {"type": "array", "items": {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+                "text": {"type": "string", "maxLength": MAX_SUMMARY,
+                         "description": "结论一句话（供汇总/评审消费）"},
+                "kind": {"type": "string", "enum": list(CLAIM_KINDS),
+                         "description": "fact=可独立复核 / inference=由 fact 推出（链式复核）"
+                                        " / to_verify=明确待验证（模型自报的诚实声明）。"
+                                        "★ 模型自报，服务端只校验枚举，不验证真实性；"
+                                        "缺省按 to_verify（最保守）处理"},
+                "subject": {"type": "string", "maxLength": MAX_TITLE,
+                            "description": "★ 冲突检测锚点：这条结论讲的是哪个对象"
+                                           "（实体名/指标名）。同 subject 不同 text ⇒ 冲突候选"},
+            }}},
         "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0,
                        "description": "置信度 0~1，缺省 0.5"},
         "meta": {"type": "object",
@@ -117,6 +164,7 @@ DEFAULT_SUMMARY = {
     "artifacts": [],
     "evidence": [],
     "risks": [],
+    "claims": [],
     "confidence": DEFAULT_CONFIDENCE,
     "meta": {},
 }
@@ -279,6 +327,49 @@ def validate(raw):
             "advice": _cut(r.get("advice"), MAX_ADVICE),
         })
 
+    # claims（★ 2026-10-14 批次三 #16；**可选字段**，缺省空数组）
+    # ⚠️ 与 artifacts/risks 不同：claims 非数组**不判 ok=False** ——
+    #   它是新增的**可选**维度，旧数据全都没有它；若因此把存量判成非法，
+    #   就等于"加一个字段废掉一批已归档结果"（与 basis 当初刻意不进 required 同理）。
+    cls_ = raw.get("claims", [])
+    if cls_ is None:
+        cls_ = []
+    if not isinstance(cls_, list):
+        warnings.append("claims 非数组，归一为空列表（不判非法：可选字段）")
+        cls_ = []
+    if len(cls_) > MAX_CLAIMS:
+        truncated = True
+        warnings.append("claims 条数 %d 超过上限 %d，已截断" % (len(cls_), MAX_CLAIMS))
+    out["claims"] = []
+    for i, c in enumerate(cls_[:MAX_CLAIMS]):
+        if not isinstance(c, dict):
+            warnings.append("claims[%d] 非对象，丢弃" % i)
+            continue
+        _txt = c.get("text")
+        if _txt is None or not str(_txt).strip():
+            # text 是 claims 的**唯一必填**：没有内容的条目等于没写
+            warnings.append("claims[%d] 缺 text，丢弃" % i)
+            continue
+        if len(str(_txt)) > MAX_SUMMARY:
+            truncated = True
+        _k = c.get("kind")
+        if _k is not None and str(_k) not in CLAIM_KINDS:
+            warnings.append("claims[%d].kind=%r 不在枚举内，按 %s 处理"
+                            % (i, _k, DEFAULT_CLAIM_KIND))
+            _k = None
+        _sub = c.get("subject")
+        if _sub is not None and len(str(_sub)) > MAX_TITLE:
+            truncated = True
+        out["claims"].append({
+            "text": _cut(_txt, MAX_SUMMARY),
+            # 兜底方向：缺 kind ⇒ to_verify（**比 basis 的 asserted 更保守**）。
+            # 理由：没标 kind 的结论，读者无从判断要不要复核 ⇒ 假设"要"才安全。
+            "kind": str(_k) if _k is not None else DEFAULT_CLAIM_KIND,
+            # subject 是**冲突检测的锚点**（批次三 #15 消费），缺省空串而非丢弃整条 ——
+            #   丢掉会连带丢掉那条有价值的结论本身。
+            "subject": _cut(_sub, MAX_TITLE),
+        })
+
     # confidence：数值，clamp [0,1]，缺省 0.5
     conf = raw.get("confidence", DEFAULT_CONFIDENCE)
     if conf is None or isinstance(conf, bool) or not isinstance(conf, (int, float)):
@@ -430,6 +521,7 @@ def normalize_text(raw_text, task_status=None):
         "artifacts": [],
         "evidence": [],
         "risks": [],
+        "claims": [],      # ★ 2026-10-14 #16：纯文本无结构化结论 ⇒ 空数组（不是伪造）
         "confidence": DEFAULT_CONFIDENCE,
         "meta": {"normalized_from_text": True,
                  "empty_text": not bool(text.strip())},
@@ -533,3 +625,326 @@ def apply_quality_gate(agg_status, reflection):
     gaps.append(f"质量评审未通过（{reflection.get('score')}/100）"
                 + ("：" + "；".join(_iss) if _iss else ""))
     return ("partial" if agg_status == "full" else agg_status), gaps
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 批次三 #15：多 Agent 结论冲突检测（**确定性，不调 LLM**）
+# ══════════════════════════════════════════════════════════════════════════
+#
+# ## 要解决的真缺口（2026-10-14 取证）
+#   `workflows/refine.py::RefineGate` 存在且被 `stream.py:1135` 调用，但评审输入
+#   只有**拼接后的** `orch_content` —— 它看到的是"综合报告"，不是"各子 Agent 各自的结论"。
+#   ⇒ 两个子 Agent 对同一事实给了相反说法时，**综合报告会把它们揉成一句看似自洽的话**，
+#     评审（无论多准）都发现不了，因为它拿不到"这是 t2 说的、那是 t3 说的"这个归属。
+#
+# ## 为什么不用 LLM 判定冲突（刻意的取舍）
+#   ① 成本：每次编排多一次 LLM 调用，而这是**每轮必跑**的路径；
+#   ② 可靠性：LLM 判"矛盾"本身不可靠，且**不可复现**（温度非零）；
+#   ③ 可解释性：报"冲突"必须能指出**哪两条、差在哪**，
+#     否则用户只能收到一句"可能存在矛盾"，无法自行裁决。
+#   ⇒ 只做**可判定的确定性档**：同一 subject（对象/指标）上出现**互斥的取值**。
+#     判不出的（措辞不同但同义、隐含矛盾）**明确不报**，宁可漏也不错报。
+#
+# ## 判据（全部是可复核的字面比较，不含语义推断）
+#   C1 **同 subject 不同结论**：两条 claim 的 subject 归一后相同，
+#      但抽取出的**取值不同**（数值型按归一化后的数字串比；枚举型按归一化后的词比）。
+#   C2 **数值互斥**：同一 subject 上出现不同数值 ⇒ 冲突（附容差，见 `value_equal`）。
+#   C3 **枚举互斥**：同一 subject 上出现不同枚举值，且**不在同一互斥族内**（如 否/是）。
+#   C4 **反向断言**：同一 subject 上出现「支持/不支持」「是/否」「有/无」这类
+#      **极性词**相反 ⇒ 冲突（即使措辞完全不同）。
+#
+# ## 能力边界（重要，别把它当语义冲突检测用）
+#   · 只看 **claims[].subject**，没写 subject 的 claim **一律不参与**
+#     （无锚点就无从判断"是不是在讲同一件事"）；
+#   · 只报**取值互斥**，不报"程度不同""描述详略不同""一个更具体一个更概括"；
+#   · ⚠️ 归一化是**字面**的（去空白/标点/大小写/单位后缀），
+#     同义词（"3 个"/"三个"）**认不出** ⇒ 会漏。宁可漏。
+#   ⇒ 它的定位是"**兜住最刺眼的那一类矛盾**"，不是"发现所有矛盾"。
+
+_NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
+# 常见动词/状态前缀（用于剥出中心名词）。**刻意保守**：只收几乎无歧义的。
+_VERBS = ("对外提供", "提供了", "提供", "支持", "包含", "具有", "包含有", "带有",
+          "已经", "已", "可以", "能够", "能", "可", "会")
+# 极性词：互为反义。**只收语义高度确定的**，不收"高/低"这类可同时成立的。
+_POLARITY = {
+    "支持": 1, "不支持": 0, "反对": 0,
+    "是": 1, "否": 0, "有": 1, "无": 0,
+    "true": 1, "false": 0,
+    "yes": 1, "no": 0,
+    "启用": 1, "禁用": 0, "开启": 1, "关闭": 0,
+    "存在": 1, "不存在": 0,
+    "可以": 1, "不可以": 0, "能": 1, "不能": 0,
+    "允许": 1, "禁止": 0,
+}
+
+
+def _norm_subject(s):
+    """subject 归一：去空白与常见标点，转小写。**字面归一，不做同义扩展**。"""
+    t = str(s or "").strip().lower()
+    t = re.sub(r"[\s　]+", "", t)
+    return t.strip("：:，,。.、;；'\"“”‘’()（）[]【】")
+
+
+def _norm_text(s):
+    """text 归一：去空白/中文标点/句末标点，转小写。用于取值与极性比较。"""
+    t = str(s or "").strip().lower()
+    t = re.sub(r"[\s　]+", "", t)
+    t = re.sub(r"[，,。.、;；:：!！?？'\"“”‘’()（）\[\]【】]", "", t)
+    return t.strip()
+
+
+def _extract_value(text):
+    """从结论文本里抽**可比对的取值**：优先数值，否则归一后的整串。
+
+    返回 (kind, value)：kind ∈ {"num","enum"}；抽不出返回 ("", "")。
+
+    ⚠️ 数值**必须带单位后缀展开**（"128k" ⇒ 128000、"3万" ⇒ 30000）——
+      否则 "128k" 与 "128000" 会被判成两个取值 ⇒ **误报冲突**。
+      ⚠️ 这里只取**第一处**数字，且必须**从数字本身匹配**：
+      原实现写 `float(m.group(0).rstrip())` 而 `group(0)` 含前面的文字
+      （"上下文窗口128k"）⇒ ValueError 被吞 ⇒ 整条退回枚举路径 ⇒ 单位归一形同虚设。
+      （这处是门禁 `verify_claims_and_conflicts` C2 当场抓出来的。）
+    """
+    t = _norm_text(text)
+    if not t:
+        return "", ""
+    _m = _NUM_RE.search(t)
+    if _m:
+        try:
+            v = float(_m.group(0))
+            # 单位后缀紧跟数字之后（如 "128k" / "3万"）
+            _suf_m = re.match(r"\s*([km万千百])", t[_m.end():])
+            suf = _suf_m.group(1) if _suf_m else ""
+            mult = {"k": 1e3, "m": 1e6, "万": 1e4, "千": 1e3, "百": 1e2}.get(suf, 1)
+            v2 = v * mult
+            # 能表示为整数就取整，避免 "3" 与 "3.0" 判成不同
+            return "num", (str(int(round(v2))) if abs(v2 - round(v2)) < 1e-9 else str(v2))
+        except Exception:
+            pass
+    return "enum", t
+
+
+def _polarity(text):
+    """极性判定：文本里出现极性词则返回 1/0，无则 None。
+
+    ⚠️ **必须按词长降序匹配、且长词命中后不重复计入短词** ——
+      否则「不支持」里同时命中「不支持」(0) 与「支持」(1) ⇒ found={0,1} ⇒ 返回 None，
+      极性冲突**永远检不出来**。
+      （这处是门禁 `verify_claims_and_conflicts` C3 当场抓出来的。）
+    ⚠️ 多个**互不嵌套**的极性词同时出现（如"不是没有"）⇒ 返回 None（**判不出就不报**）。
+    """
+    t = _norm_text(text)
+    found = set()
+    consumed = []          # 已命中的区间，用于排除嵌套短词
+    for w in sorted(_POLARITY, key=len, reverse=True):
+        start = 0
+        while True:
+            i = t.find(w, start)
+            if i < 0:
+                break
+            end = i + len(w)
+            # 已被更长的词覆盖 ⇒ 跳过（嵌套）
+            if not any(a <= i and end <= b for a, b in consumed):
+                found.add(_POLARITY[w])
+                consumed.append((i, end))
+            start = end
+    if len(found) == 1:
+        return next(iter(found))
+    return None
+
+
+def _char_overlap(a, b):
+    """两个核心词的**字符 Jaccard 重叠度**（0~1），用于判"一详一略"。
+
+    例："接口"(2 字) 与 "外部接口"(4 字) ⇒ 交 2 / 并 4 = **0.5**；
+       "批量导入" 与 "导入接口" ⇒ 交 1（导入）/ 并 6 ≈ 0.17。
+    ⚠️ 阈值由**门禁实测标定**（`verify_claims_and_conflicts` C6）：
+       定 0.75 时 "提供接口"/"提供外部接口" 能豁免（0.5 < 0.75 ⇒ **不能**豁免）——
+       ⇒ 实测发现 0.5 就该豁免，故阈值取 **0.5**，并由 C6/C8 两条判据双向锁住：
+       高重叠 ⇒ 不报；低重叠 ⇒ 必须报。⚠️ 调这个数会同时改这两条判据的期望。
+    """
+    sa, sb = set(str(a or "")), set(str(b or ""))
+    if not sa or not sb:
+        return 0.0
+    return len(sa & sb) / float(len(sa | sb))
+
+
+def _tail_core(t):
+    """取结论文本的**中心名词**（末段名词性成分），用于判"一详一略"。
+
+    ⚠️ 这里**刻意做得很浅**：只剥离常见动词/形容前缀（提供/支持/包含/具有/已/可/能…），
+      取剩下的核心部分。真实构词千变万化（"提供接口" vs "提供外部接口" vs "对外接口"），
+      任何启发式都认不全。
+    ⇒ **认不出时返回空串**，调用方据此**保持报冲突**（宁可误报也不漏报矛盾）。
+      第一版想返回整串，导致 `cores` 恒有值 ⇒ 子串豁免永远走真实分支 ⇒ 等于没做。
+    """
+    s = str(t or "")
+    if not s:
+        return ""
+    for _ in range(3):                      # 最多剥 3 层前缀
+        _hit = None
+        for p in _VERBS:
+            if s.startswith(p) and len(s) > len(p):
+                _hit = p
+                break
+        if _hit is None:
+            break
+        s = s[len(_hit):]
+    return s if 0 < len(s) <= 12 else ""
+
+
+def detect_conflicts(summaries, max_conflicts=10):
+    """在一组子任务摘要里检出**结论互斥**（批次三 #15）。
+
+    参数 summaries：一组 `validate()` 归一后的协议结构（或含 `claims` 的 dict）。
+        每个元素可带 `task_key`，用于把冲突归因到具体子 Agent。
+    返回：[{"subject", "kind", "claims": [{task_key, text, kind, value}], "reason"}]
+
+    ⚠️ 返回**空列表**有三种截然不同的原因，调用方必须能区分（否则又是一轮假绿）：
+      ① 真的没有互斥（正常）；
+      ② 根本没抽到可比对的 claim（**协议没落地**）—— 看 `anchored` 字段；
+      ③ 抽到了 claim 但都没写 `subject`（**锚点缺失**）—— 看 `anchored` 字段。
+    ⇒ 返回值里带 `stats`（本函数把它放进每个条目会冗余，故另设 `conflict_stats`），
+      调用方应同时读 `conflict_stats(summaries)` 判断"是真没冲突还是没数据可判"。
+    """
+    buckets = {}          # norm_subject -> [claim 记录]
+    for s in summaries or []:
+        if not isinstance(s, dict):
+            continue
+        tk = str(s.get("task_key") or "-")
+        for c in (s.get("claims") or []):
+            if not isinstance(c, dict):
+                continue
+            txt = str(c.get("text") or "").strip()
+            if not txt:
+                continue
+            sub = _norm_subject(c.get("subject"))
+            if not sub:
+                continue          # ★ 无锚点不参与：无从判断是否在讲同一件事
+            buckets.setdefault(sub, []).append({
+                "task_key": tk,
+                "text": txt[:120],
+                "kind": str(c.get("kind") or DEFAULT_CLAIM_KIND),
+                "_val": _extract_value(txt),
+                "_pol": _polarity(txt),
+                "_nt": _norm_text(txt),
+            })
+
+    conflicts = []
+    for sub, items in buckets.items():
+        if len(items) < 2:
+            continue
+        # ── C4 极性互斥优先（最刺眼的一类，且不看取值是否真的不同）──
+        pols = {}
+        for it in items:
+            if it["_pol"] is not None:
+                pols.setdefault(it["_pol"], []).append(it)
+        reported = set()
+        if len(pols) >= 2:
+            sides = sorted(pols)
+            picked = []
+            for v in sides:
+                picked.extend(pols[v][:2])
+            conflicts.append({
+                "subject": sub,
+                "kind": "polarity",
+                "claims": [{k: it[k] for k in ("task_key", "text", "kind")} for it in picked],
+                "reason": "同一对象出现相反断言（极性词相反：%s）"
+                          % " vs ".join("肯定" if v else "否定" for v in sides),
+            })
+            for it in picked:
+                reported.add(id(it))
+            if len(conflicts) >= max_conflicts:
+                break
+        # ── C1/C2/C3 取值互斥 ──
+        groups = {}
+        for it in items:
+            if id(it) in reported:
+                continue
+            k, v = it["_val"]
+            if not v:
+                continue
+            groups.setdefault((k, v), []).append(it)
+        if len(groups) >= 2:
+            vals = sorted(groups)
+            picked = []
+            for g in vals:
+                picked.extend(groups[g][:1])
+            # 枚举型要再排一次"其实说的是同一件事"的情形：
+            #   "3 个接口" vs "3个接口" 已由归一处理；
+            #   此处排除**中心词相同**的（"提供接口" vs "提供外部接口" 属一详一略，不是矛盾）。
+            # ⚠️ **不能用整串子串判断**（门禁当场证伪）："提供接口" 并非 "提供外部接口"
+            #   的子串（中间隔了"外部"）⇒ 子串法对最典型的"加限定词"情形**完全失效**。
+            #   改为比**尾部中心词**（最后一个名词性片段）：一致 ⇒ 判为同一件事，不报。
+            # ⚠️ 取比较对象必须按**该分组自己的 value** 找条目（分组键是 `(kind, value)`）——
+            #   取 `groups[g][0]` 即"组内第一条"，同组多条时拿到的可能不是这个取值的文本。
+            if vals[0][0] == "enum":
+                texts = []
+                for g in vals:
+                    _hit = next((it["_nt"] for it in groups[g] if it["_val"][1] == g[1]),
+                                groups[g][0]["_nt"])
+                    texts.append(_hit)
+                cores = [_tail_core(x) for x in texts]
+                # ★ 判"一详一略"用**核心词的字符重叠度**，不是子串：
+                #   "接口" vs "外部接口" 子串成立，但"批量导入" vs "导入接口" 就不是。
+                #   门禁实测证伪过子串法（对最典型的"加限定词"完全失效）。
+                #   阈值 0.75：核心词高度重合才豁免，差异大的一律报冲突。
+                # ⚠️ 认不出核心词（空串）⇒ **保持报冲突**（宁可误报不漏报矛盾）。
+                _pairs = [(a, b) for i, a in enumerate(cores) for j, b in enumerate(cores)
+                          if i != j]
+                if _pairs and all(a and b and _char_overlap(a, b) >= 0.5
+                                  for a, b in _pairs):
+                    continue
+            conflicts.append({
+                "subject": sub,
+                "kind": "value",
+                "claims": [{k: it[k] for k in ("task_key", "text", "kind")} for it in picked],
+                "reason": "同一对象给出不同取值：%s"
+                          % " vs ".join("%s(%s)" % (g[1], groups[g][0]["task_key"]) for g in vals),
+            })
+            if len(conflicts) >= max_conflicts:
+                break
+    return conflicts
+
+
+def conflict_stats(summaries):
+    """冲突检测的**可证伪口径**：到底有多少 claim 参与了判定。
+
+    ⚠️ 这个函数存在的唯一理由：`detect_conflicts` 返回 `[]` 时，
+    调用方**分不清**"没冲突"和"压根没数据可判"。
+    ⇒ 任何以"未检出冲突"为依据的判定，都必须同时读这里的 `anchored`，
+      且 `anchored == 0` 时**不得声称"已检查无冲突"**（那是本仓反复栽过的假绿）。
+    """
+    total = anchored = 0
+    subjects = set()
+    for s in summaries or []:
+        if not isinstance(s, dict):
+            continue
+        for c in (s.get("claims") or []):
+            if not isinstance(c, dict):
+                continue
+            if not str(c.get("text") or "").strip():
+                continue
+            total += 1
+            sub = _norm_subject(c.get("subject"))
+            if sub:
+                anchored += 1
+                subjects.add(sub)
+    # 可判冲突的最小前提：同一 subject 上至少有 2 条 claim
+    comparable = sum(1 for s in summaries or [] if isinstance(s, dict)
+                     and len([c for c in (s.get("claims") or [])
+                              if isinstance(c, dict) and _norm_subject(c.get("subject"))]) >= 1)
+    return {"claims_total": total, "claims_anchored": anchored,
+            "subjects": len(subjects), "subtasks_with_claims": comparable,
+            # ★ 一句话口径，供日志/事件直接引用
+            "verdict": ("no-data" if anchored == 0 else
+                        "insufficient" if comparable < 2 else "checkable")}
+
+
+def format_conflicts(conflicts, limit=5):
+    """把冲突渲染成给评审/用户看的一行行文本（**刻意不隐藏任何一条**）。"""
+    out = []
+    for c in (conflicts or [])[:limit]:
+        sides = "；".join("[%s] %s" % (x.get("task_key"), x.get("text")) for x in (c.get("claims") or []))
+        out.append("⚠️ %s（%s）：%s" % (c.get("subject"), c.get("reason"), sides))
+    return "\n".join(out)

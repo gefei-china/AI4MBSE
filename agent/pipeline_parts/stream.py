@@ -475,12 +475,21 @@ class StreamMixin:
                         '"title":"产物标题","ref":"产物定位或名称"}],'
                         '"evidence":[{"source":"graph|vector|attachment","ref":"引用位置","basis":"verified|derived|asserted"}],'
                         '"risks":[{"level":"high|mid|low","title":"风险名","desc":"描述","advice":"缓解建议"}],'
+                        '"claims":[{"text":"结论一句话","kind":"fact|inference|to_verify",'
+                        '"subject":"这条结论讲的对象/指标名"}],'
                         '"confidence":0.0}\n'
                         "规则：artifacts 列出**本次真实产出的可交付物**（无则 []）；"
                         "evidence 列出支撑结论的依据，并给每条标 basis："
                         "**verified**=有可复核引用（图谱实体/需求 id/校验器输出/附件路径）、"
                         "**derived**=由已验证事实推出、**asserted**=无引用的直接断言（最不可靠）；"
                         "没查证过的**一律写 asserted**，不要为显得可信而标 verified；"
+                        "★ claims 列出本次任务得出的**关键结论**（给人看的，不是日志）："
+                        "kind 三档 —— **fact**=第三方可独立复核（引了具体 id/路径/校验器输出）、"
+                        "**inference**=由若干 fact 推出、**to_verify**=你**明确知道还没验证**"
+                        "（如「推测上游接口可能返回 3 个字段，但未查证」）；"
+                        "**subject 必填**且要写对象名（如「转发器接口字段数」），"
+                        "系统据此检出多个子 Agent 对同一对象是否给出了互斥取值；"
+                        "拿不准该归哪一档就写 to_verify，**诚实标注不会被扣分**；"
                         "risks 用 level/title/desc/advice 四字段"
                         "（level 取 high|mid|low，title 是一句话风险名，desc 是描述，"
                         "advice 是缓解建议）——**字段名必须是这四个**，写错会被校验器丢弃；"
@@ -1045,6 +1054,29 @@ class StreamMixin:
                         if _rks:
                             _sec += "\n风险/待确认：" + "；".join(
                                 f"[{r.get('level')}]{r.get('title')}" for r in _rks[:5])
+                        # ★ 2026-10-14（批次三 #16）：关键结论分档呈现。
+                        #   目的与 evidence 的 basis 一致：**呈现而非过滤** ——
+                        #   `to_verify` 是模型主动声明"这条我没底"，把它显式带出来，
+                        #   用户才知道哪几条不能直接拿去验收。
+                        #   ⚠️ 无 claims 时**一字不加**（提示词/正文逐字节不变）。
+                        _cls_ = _sm.get("claims") or []
+                        if _cls_:
+                            _KLAB = {"fact": "已核实", "inference": "推断",
+                                     "to_verify": "待验证"}
+                            _ORDC = {"fact": 0, "inference": 1, "to_verify": 2}
+                            _cs = sorted(_cls_, key=lambda c: _ORDC.get(
+                                str(c.get("kind") or "to_verify"), 2))
+                            _sec += "\n关键结论：" + "；".join(
+                                "%s%s" % (
+                                    "【%s】" % _KLAB.get(str(c.get("kind") or "to_verify"),
+                                                        "待验证"),
+                                    (("[%s] " % c["subject"]) if c.get("subject") else "")
+                                    + str(c.get("text") or "")[:80])
+                                for c in _cs[:6])
+                            _ntv = sum(1 for c in _cls_
+                                       if str(c.get("kind") or "to_verify") == "to_verify")
+                            if _ntv:
+                                _sec += "\n（其中 %d 条为**待验证**结论，引用前请自行核实）" % _ntv
                         # 2026-09-19 conv 370 实测：原实现**用摘要替换**完整交付物 → 汇总只看到
                         # ~250 字符/子任务（`plan_summary` 实测输入仅 1,072 tokens，而 t1/t2/t3
                         # 交付物原文合计 12,998 字符）→ 报告只能如实写「交付物在约束条件处截断」。
@@ -1142,11 +1174,35 @@ class StreamMixin:
                     "advice": _ref.get("advice", ""),
                     "provider": (_ref.get("llm") or {}).get("provider", "-"),
                     "degraded": bool(_ref.get("degraded", False)),
+                    # ★ 2026-10-14（批次三 #15）：结论冲突口径随 card_data 落库，
+                    #   排障不必翻日志。⚠️ 含 stats.verdict —— 它区分
+                    #   「检出 0 冲突」与「压根没数据可判」，两者**不可混为一谈**。
+                    "conflicts": _ref.get("conflicts") or {"count": 0, "items": []},
                 }
                 if reflection_meta.get("score") is not None:
                     yield {"type": "reasoning", "kind": "progress", "delta": (
                         f"（自动编排）质量评审：{reflection_meta['score']}/100 · "
                         f"{'通过' if reflection_meta['passed'] else '未通过，已自动修订 ' + str(reflection_meta['rounds']) + ' 轮'}")}
+                # ★ 冲突：**先于**评分事件告知用户（这是需要人来裁决的事，
+                #   埋在分数后面会被忽略）。⚠️ stats.verdict 非 checkable 时
+                #   只报口径、不说"已检查无冲突"——那是本仓反复栽过的假绿。
+                _cftxt = ""
+                try:
+                    _cfm = reflection_meta.get("conflicts") or {}
+                    _n = int(_cfm.get("count") or 0)
+                    if _n > 0:
+                        _cftxt = "检出 %d 处子任务结论冲突（同一对象给出互斥取值），已在评审中要求裁决" % _n
+                    else:
+                        _vd = ((_cfm.get("stats") or {}).get("verdict"))
+                        if _vd == "no-data":
+                            _cftxt = "结论冲突检测：本次子任务未产出可判定的结构化结论（跳过，非「已检查无冲突」）"
+                        elif _vd == "insufficient":
+                            _cftxt = "结论冲突检测：仅 1 个子任务提供结论，无法比对（跳过）"
+                except Exception:
+                    _cftxt = ""
+                if _cftxt:
+                    yield {"type": "reasoning", "kind": "progress",
+                           "delta": "（自动编排）" + _cftxt}
                 orch_content = _ref.get("content") or orch_content
             # P0-3（2026-09-19）：质量门禁回接状态聚合——reflection 未通过必须**降级可见**。
             # 取证：会话 351 的 reflection 已判 passed=false / score=62，子任务交付物里也明确写着
