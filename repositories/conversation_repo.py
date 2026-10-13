@@ -4,27 +4,82 @@
 """
 from repositories.base import BaseRepo
 
+#: 「该会话属于用户 u」判定的**放行域**。
+#: ⚠️ 口径来源 = 2026-10-13 与米爸确认的三条（勿擅改，改前先看门禁
+#:    `tools/verify/verify_conv_scope_guard.py` 的 E1~E4）：
+#:  ① **user_id 为 NULL/0 的历史会话对所有人可见** —— 真库 316 条里 276 条 user_id 为 NULL，
+#:     若严格过滤，米爸现有的历史会话会**当场从界面消失**。这类无归属数据没有"原主"可言，
+#:     按"谁都能看"处理是唯一不丢数据的选择；后续可一键回填归属后再收紧。
+#:  ② **匿名/本机模式（user 为 None）放行全部** —— 私有化离线部署是本仓既有形态
+#:     （AGENTS.md 铁律），本机单用户使用不该被隔离挡住。
+#:  ③ 其余情况严格 `c.user_id = ?`。
+VISIBLE_USER_IDS_ALL = None   # 语义标记：user is None ⇒ 全部可见
+
+
+def conv_visible_to(row: dict | None, user) -> bool:
+    """★ 2026-10-13（B1-9）：会话可见性判据（单一事实源，端点与列表共用）。
+
+    `user` 形如 `{"id": 1, ...}`（current_user 返回值）或 None（匿名/本机模式）。
+    ⚠️ **只判"看得到"，不判"能不能改"** —— 写操作的鉴权仍走 require_permission，
+    这里只解决"能不能看到别人的会话"（此前任何 conv_id 都可读/可删）。
+    """
+    if user is None:
+        return True                       # 口径②：匿名/本机模式放行
+    if not row:
+        return False                      # 会话不存在 → 不可见
+    uid = row.get("user_id")
+    if not uid:                            # 口径①：历史无归属会话对所有人可见
+        # ⚠️ 必须区分「**该字段为 NULL**」与「**整行取不到**」：`_own_conv` 在会话不存在时
+        #   会先 `if not row` 兜住，但 `{}`（空 dict）也会落到这里。
+        #   把"取不到行"当成"无归属"⇒ 放行，等于给不存在的 conv_id 开了一个可见性口子。
+        #   判据用键是否存在：真实行必有 id 列，空 dict 没有。
+        return "id" in row or "conversation_id" in row
+    try:
+        return int(uid) == int(user.get("id") or 0)
+    except Exception:
+        return False
+
 
 class ConversationRepo(BaseRepo):
     """对话与消息数据访问。"""
 
     # ── conversations ──
-    def list_conversations(self) -> list:
+    def list_conversations(self, user=None, project_id: str | None = None) -> list:
         """会话列表 + `grouped` 标记（1 = 已归属某个**仍存在**的项目）。
 
         2026-09-24 左侧项目管理：项目下建立的任务**只在项目分组内展示**，
         下方「任务」列表降级为「未分组任务」兜底 —— 判定必须由后端给，
         不能让前端拿 project_id 非空来自判：项目被移除（或历史脏数据指向已删项目）时
         project_id 可能成为**孤儿值**，前端无 projects 清单就分不清「该收」与「该显示」。
+
+        ★ 2026-10-13（B1-9）新增两个**收窄**参数（默认 None = 行为不变，便于回退）：
+          · `user`：按 user_id 收窄（口径见模块级 `conv_visible_to`）。**在 SQL 里过滤**，
+            而不是取回全量再在 Python 里筛 —— 后者会让"看不到"变成"看不到但仍在库里可被逐个 id 捞"。
+          · `project_id`：**只传具体值**时按项目收窄；传 `None` 表示不按项目过滤（现状），
+            传 `""` 表示只看未分组会话。前端"当前工程"切换时传该参数。
         """
-        return self.rows("""
+        sql = """
             SELECT c.*, u.display_name as user_name,
             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) as msg_count,
             CASE WHEN TRIM(COALESCE(c.project_id,'')) <> ''
                   AND EXISTS(SELECT 1 FROM projects p WHERE p.id=c.project_id)
                  THEN 1 ELSE 0 END as grouped
-            FROM conversations c LEFT JOIN users u ON c.user_id=u.id
-            ORDER BY c.updated_at DESC""")
+            FROM conversations c LEFT JOIN users u ON c.user_id=u.id"""
+        args: list = []
+        # 口径②：匿名/本机模式不加 user 条件（与改动前一致）
+        if user is not None:
+            sql += " WHERE (c.user_id IS NULL OR c.user_id=0 OR c.user_id=?)"
+            args.append(int(user.get("id") or 0))
+        if project_id is not None:
+            if str(project_id).strip() == "":
+                sql += (" AND TRIM(COALESCE(c.project_id,'')) = ''"
+                        if user is not None else
+                        " WHERE TRIM(COALESCE(c.project_id,'')) = ''")
+            else:
+                sql += (" AND c.project_id=?" if user is not None else " WHERE c.project_id=?")
+                args.append(str(project_id))
+        sql += " ORDER BY c.updated_at DESC"
+        return self.rows(sql, args)
 
     def create_conversation(self, title: str, intent: str, user_id: int = 1,
                             project_id: str | None = None) -> int:

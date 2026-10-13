@@ -4,12 +4,12 @@ import time
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from core.deps import db_session, current_user
 from core.config import STATIC_DIR
-from repositories.conversation_repo import ConversationRepo
+from repositories.conversation_repo import ConversationRepo, conv_visible_to
 from repositories.studio_repo import StudioRepo
 from agent import get_pipeline
 from core.audit import audit, audit_user
@@ -40,13 +40,37 @@ def _resolve_work_branch(conn, branch: str | None) -> str:
     return want
 
 
+def _own_conv(conn, conv_id: int, user) -> dict:
+    """★ 2026-10-13（B1-9）：取会话并校验归属，**不可见即 404**（不是 403）。
+
+    为什么是 404 而不是 403：403 等于告诉调用方"这个 id 存在、只是你没权限"，
+    仍可用于**探测他人会话是否存在**（枚举 conv_id）。404 对外表达"没这个资源"，
+    是归属隔离的常规做法。
+    ⚠️ 口径见 `repositories/conversation_repo.py::conv_visible_to`（三条，米爸 2026-10-13 确认）：
+      历史无归属会话对所有人可见 / 匿名本机模式放行全部 / 其余严格按 user_id。
+    """
+    row = ConversationRepo(conn).get_conversation(conv_id)
+    if not conv_visible_to(row, user):
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return row or {}
+
+
 @router.get("/api/conversations")
-def list_conversations(conn=Depends(db_session)):
-    return ConversationRepo(conn).list_conversations()
+def list_conversations(conn=Depends(db_session),
+                       project_id: str | None = Query(None),
+                       user=Depends(current_user)):
+    """★ B1-9：按 user_id 收窄 + 支持按当前工程收窄。
+
+    · `project_id` **不传** = 不按项目过滤（保留"未分组任务"列表的现状用法）；
+      传空串 `?project_id=` = 只看未分组会话；传具体值 = 只看该项目的会话。
+      前端「当前工程」切换时带上该参数即可实现"关联到项目的基于项目过滤"。
+    """
+    return ConversationRepo(conn).list_conversations(user=user, project_id=project_id)
 
 
 @router.post("/api/conversations")
-def create_conversation(conv: ConvIn, conn=Depends(db_session)):
+def create_conversation(conv: ConvIn, conn=Depends(db_session),
+                        user=Depends(current_user)):
     """新建会话。归属语义（2026-09-28 多工程 P0-2）：
 
     · 请求显式给 `project_id` → 归入该项目（左侧「项目 → ＋ 新建任务」/ 顶部新建任务带当前工程）；
@@ -57,26 +81,31 @@ def create_conversation(conv: ConvIn, conn=Depends(db_session)):
       「当前工程」现在是前端**页面级**状态，随请求显式带上。
     """
     repo = ConversationRepo(conn)
-    cid = repo.create_conversation(conv.title, conv.intent, 1,
+    # ★ B1-9：归属取当前登录用户，不再硬编码 `1`。
+    #   原写法 `create_conversation(conv.title, conv.intent, 1, ...)` 把所有新会话都记到
+    #   user_id=1（王工）名下 —— 归属隔离若不改这里会**当场失效**（谁建的都算他的）。
+    #   匿名/本机模式（user is None）沿用 1，与改动前一致（口径②：私有化单用户不受阻）。
+    _uid = int((user or {}).get("id") or 1)
+    cid = repo.create_conversation(conv.title, conv.intent, _uid,
                                    project_id=conv.project_id)
     row = repo.get_conversation(cid) or {}
     _pid = str(row.get("project_id") or "")
-    audit("王工", "conversation_create",
+    audit(audit_user(user), "conversation_create",
           f"新建对话: {conv.title}" + (f"（项目 {_pid}）" if _pid else "（未关联工程）"), conn=conn)
     return {"id": cid, "title": conv.title, "project_id": _pid}
 
 
 @router.post("/api/conversations/{conv_id}/project")
-def set_conversation_project(conv_id: int, body: ConvProjectIn, conn=Depends(db_session)):
+def set_conversation_project(conv_id: int, body: ConvProjectIn,
+                             conn=Depends(db_session), user=Depends(current_user)):
     """把会话归入项目（**收敛入口**）：无工程会话 → 归属某项目；传空串 = 解除归属。
 
     为什么单开一个端点而不是塞进 PATCH（重命名）：归属变更是**独立动作**，需要独立审计留痕，
     且它要校验项目是否存在（不能把会话挂到一个不存在的 id 上，那会变成孤儿归属）。
+    ★ B1-9：先校验会话归属（越权改他人会话的归属 = 越权移动别人的资产）。
     """
     repo = ConversationRepo(conn)
-    cur = repo.get_conversation(conv_id)
-    if not cur:
-        return JSONResponse({"error": "Conversation not found"}, 404)
+    _own_conv(conn, conv_id, user)
     pid = (body.project_id or "").strip()
     if pid:
         from repositories.project_repo import ProjectRepo
@@ -84,29 +113,33 @@ def set_conversation_project(conv_id: int, body: ConvProjectIn, conn=Depends(db_
             return JSONResponse({"error": "项目不存在"}, 400)
     if not repo.set_conversation_project(conv_id, pid):
         return JSONResponse({"error": "Conversation not found"}, 404)
-    _old = str(cur.get("project_id") or "")
-    audit("王工", "conversation_project_set",
+    _old = str((repo.get_conversation(conv_id) or {}).get("project_id") or "")
+    audit(audit_user(user), "conversation_project_set",
           f"会话#{conv_id} 归属变更: {_old or '未关联工程'} → {pid or '未关联工程'}", conn=conn)
     return {"ok": True, "id": conv_id, "project_id": pid}
 
 
 @router.patch("/api/conversations/{conv_id}")
-def rename_conversation(conv_id: int, body: RenameIn, conn=Depends(db_session)):
-    """会话重命名（V2.3 优化：会话管理）。"""
+def rename_conversation(conv_id: int, body: RenameIn, conn=Depends(db_session),
+                        user=Depends(current_user)):
+    """会话重命名（V2.3 优化：会话管理）。★ B1-9：校验归属（此前任何 conv_id 都能改名）。"""
     repo = ConversationRepo(conn)
-    if not repo.get_conversation(conv_id):
-        return JSONResponse({"error": "Conversation not found"}, 404)
+    _own_conv(conn, conv_id, user)
     repo.rename_conversation(conv_id, body.title)
-    audit("王工", "conversation_rename", f"重命名对话#{conv_id}: {body.title}", conn=conn)
+    audit(audit_user(user), "conversation_rename", f"重命名对话#{conv_id}: {body.title}", conn=conn)
     return {"id": conv_id, "title": body.title}
 
 
 @router.delete("/api/conversations/{conv_id}")
-def delete_conversation(conv_id: int, conn=Depends(db_session)):
-    """删除会话：级联清理消息与反馈（V2.3 优化：会话管理）。"""
+def delete_conversation(conv_id: int, conn=Depends(db_session),
+                        user=Depends(current_user)):
+    """删除会话：级联清理消息与反馈（V2.3 优化：会话管理）。
+
+    ★ B1-9：删除是**破坏性且不可逆**的操作（messages/feedback/artifacts 级联清理），
+    此前只要猜到 conv_id 就能删别人的会话 —— 本次加归属校验（不可见即 404）。
+    """
     repo = ConversationRepo(conn)
-    if not repo.get_conversation(conv_id):
-        return JSONResponse({"error": "Conversation not found"}, 404)
+    _own_conv(conn, conv_id, user)
     repo.delete_conversation(conv_id)
     # P1-4（2026-10-02）：级联清理该会话的工具结果 offload（会话没了，全文引用失去意义）
     try:
@@ -114,7 +147,7 @@ def delete_conversation(conv_id: int, conn=Depends(db_session)):
         _to.cleanup_conversation(conv_id)
     except Exception:
         pass  # 级联清理失败不阻断删除主流程（offload 由 TTL 兜底）
-    audit("王工", "conversation_delete", f"删除对话#{conv_id}", conn=conn)
+    audit(audit_user(user), "conversation_delete", f"删除对话#{conv_id}", conn=conn)
     return {"ok": True}
 
 
@@ -171,14 +204,19 @@ def upload_file(file: UploadFile = File(...), conn=Depends(db_session)):
 
 
 @router.get("/api/conversations/{conv_id}/messages")
-def get_messages(conv_id: int, limit: int | None = None, before_id: int | None = None, conn=Depends(db_session)):
+def get_messages(conv_id: int, limit: int | None = None, before_id: int | None = None,
+                 conn=Depends(db_session), user=Depends(current_user)):
     """会话消息列表。
 
     性能分页（P0 修复：长会话全量返回导致前端一次性渲染数千条消息、页面卡死）：
     - limit：只返回最近 limit 条（默认不传=全量，兼容旧调用）
     - before_id：向上翻页游标，只返回 id < before_id 的消息，配合 limit 逐批加载更早消息
     返回体：{messages: [...], total: 会话消息总数}（结构升级，前端已同步适配）
+
+    ★ B1-9：加归属校验 —— 此前任何 conv_id 都能读到**别人会话的全部消息内容**，
+    这是本次修复里数据暴露面最大的一个端点。
     """
+    _own_conv(conn, conv_id, user)
     repo = ConversationRepo(conn)
     msgs = repo.list_messages(conv_id, limit=limit, before_id=before_id)
     total = repo.count_messages(conv_id)
@@ -198,6 +236,7 @@ def get_messages(conv_id: int, limit: int | None = None, before_id: int | None =
 
 @router.post("/api/conversations/{conv_id}/chat")
 def chat(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
     conv = ConversationRepo(conn).get_conversation(conv_id)
     if not conv:
         return JSONResponse({"error": "Conversation not found"}, 404)
@@ -220,6 +259,7 @@ def chat(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depends(curr
 @router.post("/api/conversations/{conv_id}/chat/stream")
 async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                       user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
     """AI 输出流式（V2.3.2 优化）。SSE 事件流：stage 阶段 / token 增量 / done 结果 / error。
 
     ⚠️ **2026-10-04（P0-1）由 `def` 改为 `async def`** —— 此处原有一段注释断言
@@ -369,7 +409,8 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
 
 
 @router.get("/api/conversations/{conv_id}/summary")
-def conversation_summary(conv_id: int, conn=Depends(db_session)):
+def conversation_summary(conv_id: int, conn=Depends(db_session),
+                         user=Depends(current_user)):
     """会话摘要（左侧任务列表 hover 信息卡用）。
 
     body: {summary, source, msg_count, updated_at, intent}
@@ -384,6 +425,7 @@ def conversation_summary(conv_id: int, conn=Depends(db_session)):
     "项目下的会话 hover 展示与非项目下不一致"）。接口作为唯一真源后，前端可在属性缺失时回填，
     从机制上消除不一致。
     """
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
     row = conn.execute(
         "SELECT updated_at, intent FROM conversations WHERE id=?", (conv_id,)).fetchone()
     if not row:
@@ -402,6 +444,7 @@ def conversation_summary(conv_id: int, conn=Depends(db_session)):
 @router.post("/api/conversations/{conv_id}/clarify-answer")
 def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
                    user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
     """内容级澄清回答：根据用户对澄清卡片（选择题/补充输入）的回答，构造续答输入并清空挂起。
 
     body: {answers: [{question_id, value}], note: "..."}（value=选择题选项文本或自定义补充；
@@ -471,6 +514,7 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
 @router.post("/api/conversations/{conv_id}/messages/partial")
 def commit_partial_message(conv_id: int, body: dict = None, conn=Depends(db_session),
                            user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
     """固化「已生成但未完成」的 AI 输出（2026-09-25）。
 
     触发场景：用户点「停止生成」，或流式输出中直接提交了新消息（后者会 abort 上一轮）。
@@ -529,6 +573,7 @@ def commit_partial_message(conv_id: int, body: dict = None, conn=Depends(db_sess
 @router.post("/api/conversations/{conv_id}/followup")
 def post_followup(conv_id: int, body: dict = None, conn=Depends(db_session),
                   user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
     """投递 follow-up（2026-10-07，P1-② 阶段 1）：**在生成过程中**追加指令。
 
     场景：Agent 还在跑（正在调工具/正在流式输出），用户发现漏说了什么，
@@ -631,6 +676,7 @@ def generate_message_summary(msg_id: int, conn=Depends(db_session)):
 @router.post("/api/conversations/{conv_id}/flow-run/{fid}")
 def conversation_flow_run(conv_id: int, fid: int, body: FlowRunIn = None, conn=Depends(db_session),
                           user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
     """方案 B：会话内运行匹配工作流——把流程执行结果写回会话（HIL 确认后触发）。
 
     闭环：会话匹配到工作流 → 用户点「运行此流程」→ 本接口执行 FlowExecutor →
@@ -652,6 +698,7 @@ def conversation_flow_run(conv_id: int, fid: int, body: FlowRunIn = None, conn=D
 @router.post("/api/conversations/{conv_id}/reflow")
 def conversation_reflow(conv_id: int, body: dict = None, conn=Depends(db_session),
                         user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
     """知识回流闭环：从会话最近消息提炼候选知识 → v2g_candidates（pending）→ 人工确认入图谱。
 
     body: {limit_messages?} 取最近 N 条（默认 20）。
@@ -804,6 +851,7 @@ def _load_norm_report(conn, conv_id: int, msg_id: int):
 @router.post("/api/conversations/{conv_id}/messages/{msg_id}/normalize-report")
 def normalize_report(conv_id: int, msg_id: int, conn=Depends(db_session),
                      user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
     """对一条 AI 消息生成的 V2 产物做归一/消歧/校验报告。
 
     来源策略：优先取 sysml_versions.content（带 view 元数据），回退取 messages.card_data.sysml_views。
@@ -834,6 +882,7 @@ _NR_BLOCKING_STATUSES = ('matched_low', 'dup_high', 'dup_suspect', 'none', 'rela
 @router.get("/api/conversations/{conv_id}/messages/{msg_id}/normalize-summary")
 def normalize_summary(conv_id: int, msg_id: int, conn=Depends(db_session),
                       user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
     """归一校验的**只读统计**：供代码卡「归一校验」按钮在**点开前**显示待确认数量与构成。
 
     与 POST /normalize-report 的三点区别（重要）：
@@ -871,6 +920,7 @@ def normalize_summary(conv_id: int, msg_id: int, conn=Depends(db_session),
 @router.post("/api/conversations/{conv_id}/messages/{msg_id}/normalize-apply")
 def normalize_apply(conv_id: int, msg_id: int, body: dict = None,
                     conn=Depends(db_session), user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
     """应用人工归一决策：改写 V2 代码与视图 → 写 sysml_versions 新版本 → 可选同步词库。
 
     body: {decisions: {"<row_idx>": {action: accept|reject|rename|merge, new_name?, merge_to?}},
