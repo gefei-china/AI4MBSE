@@ -281,6 +281,11 @@ def _migrate_columns(conn):
     _add("agent_tasks", "agent_name_snapshot", "TEXT DEFAULT ''")      # 派发时 agents.name 权威值（查不到时回落原值）
     # ── 架构优化：HIL 确认队列补 task_key（写操作暂存绑定子任务，先查表存在再 ALTER）──
     _add("hil_confirmations", "task_key", "TEXT DEFAULT ''")
+    # ── §06 幂等（2026-10-13）：写操作幂等键 ──
+    # 此前 hil_service.py 只有一句悬空注释「# 幂等 ID 命名空间（防生成重复确认）」，
+    # 而它描述的常量并不存在、queue_confirmation 是无条件 INSERT ⇒ 重复提交产出重复确认单。
+    # 真库实证：6 行里 id 13/14 完全重复（agent/action/payload 全同）。
+    _add("hil_confirmations", "idem_key", "TEXT DEFAULT ''")   # sha1 前 24 位；去重在代码层按窗口判定
     # ── 分支管理 GitHub 对标（P0-1/P0-2/P1-1/P1-2）：冲突重算时间戳 / MR 标题 / 驳回意见 ──
     _add("merge_requests", "conflict_updated_at", "TEXT DEFAULT ''")  # 冲突清单最近重算时间（P0-1）
     _add("merge_requests", "title", "TEXT DEFAULT ''")                 # MR 标题（缺省 source → target）

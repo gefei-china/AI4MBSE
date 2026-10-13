@@ -937,10 +937,19 @@ def init_db():
         status TEXT DEFAULT 'pending',        -- pending | approved | rejected
         decided_by TEXT DEFAULT '',
         decided_at TEXT DEFAULT '',
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        -- ★ 2026-10-13（文章 §06 幂等）：写操作幂等键（sha1 前 24 位，见 hil_service.idempotency_key）。
+        -- 存在的理由：此前 queue_confirmation 是**无条件 INSERT**，同一请求重复提交会产出多条待确认记录。
+        -- 真库实证：6 行里 id 13/14 就是完全重复的一对（agent/action/payload 全同）。
+        -- ⚠️ **不设 UNIQUE 约束**：确认单是"待办"，人工可能隔很久才处理；永久唯一会让
+        --   "上次被拒、今天想重来"被静默吞掉（返回那条已拒绝的旧记录）—— 那比重复确认更糟。
+        --   去重在**代码层**按 (idem_key, status='pending', 24h 窗口) 判定，可回退、可调参。
+        idem_key TEXT DEFAULT ''
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ux_hc_status ON hil_confirmations(status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_hc_run ON hil_confirmations(run_id)")
+    # 幂等查询专用索引（§06）：(idem_key, status) 命中即返回，窗口判定在 SQL 里做
+    c.execute("CREATE INDEX IF NOT EXISTS idx_hc_idem ON hil_confirmations(idem_key, status)")
 
     # ── LLM 调用统计（token 成本核算 + 可观测）──
     c.execute("""CREATE TABLE IF NOT EXISTS llm_usage_stats (

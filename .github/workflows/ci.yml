@@ -553,6 +553,8 @@ jobs:
         run: python tools/verify/verify_protocol_artifacts.py
       - name: Guard 事实/推断分档（§08，缺失一律按 asserted 兜底）
         run: python tools/verify/verify_fact_inference.py
+      - name: Guard 写操作幂等（§06，悬空注释已落实为真实去重）
+        run: python tools/verify/verify_idempotency.py
 
       # ── B1-10（2026-10-13）：跑完所有门禁后，工作区必须仍是干净的 ────────
       # 为什么需要（本仓实测踩过两次）：
