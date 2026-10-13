@@ -1005,10 +1005,22 @@ class StreamMixin:
         llm_info = {"provider": "自动编排", "model": "-", "used_mock": False,
                     "latency_ms": int((_t.time() - t0) * 1000)}
         yield {"type": "stage", "name": "写入会话", "status": "run"}
-        # P0-2 持久执行：编排正常收尾 → phase=done。此后该 run 不再进入"可恢复"清单。
+        # P0-2 持久执行：编排收尾 → phase=done / failed。此后该 run 不再进入"可恢复"清单。
+        # ★ 2026-10-13（B1-5）：终态 phase 由 `_agg_status` **推导**，不再无条件写 done。
+        #   背景（真库实证，口径 2026-10-12 只读）：run 531 `phase='done'`、`summary_written=1`，
+        #   而它的 4 条 `agent_tasks` **全是 failed** —— phase 与任务状态**口径分裂**。
+        #   危害：phase 是 resume 与「可恢复批次清单」的第一道判据，
+        #   一个"子任务全败"的批次被标成 done ⇒ 运维在清单里看不到它，也**不会去 resume**，
+        #   失败被静默吞掉。
+        #   映射：full→done；partial/failed→failed。
+        #   ⚠️ 为什么 partial 也算 failed 终态：`failed` 在 `TERMINAL_PHASES` 里（终态、不再可 resume），
+        #   而 partial 批次的问题在**子任务**层，resume 本来也只重排未完成任务；
+        #   若把 partial 标成 done 则彻底不可见，标成 failed 至少能在清单/监控里被看到。
+        #   `degraded`（降级直行、无子任务）保持 done —— 那条路径没有子任务失败可言。
         try:
             from agent.orch_checkpoint import finish as _ck_fin
-            _ck_fin(conn, run_id, "done")
+            _final_phase = "failed" if (not degraded and _agg_status in ("partial", "failed")) else "done"
+            _ck_fin(conn, run_id, _final_phase)
         except Exception:
             pass
         card_data = json.dumps({

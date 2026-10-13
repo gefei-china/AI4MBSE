@@ -32,6 +32,7 @@
 """
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -349,7 +350,18 @@ def t_i10():
     ok &= _rec("I10e 心跳接入主循环（含节流）",
                "_ck_hb(conn, run_id, None, every_s=5.0)" in src)
     ok &= _rec("I10f 汇总/收尾 phase 推进已接",
-               '_ck_sm(conn, run_id, "summarizing")' in src and '_ck_fin(conn, run_id, "done")' in src)
+               '_ck_sm(conn, run_id, "summarizing")' in src and "_ck_fin(conn, run_id," in src)
+    # ★ 2026-10-13（B1-5）：收尾 phase 由 `_agg_status` 推导，不再是字面量 "done"。
+    #   原断言 `_ck_fin(conn, run_id, "done")` 卡的是**旧字面量**，而非"phase 推进已接线"这件事，
+    #   于是修正实现反而把它打红 —— 这类"卡字面量而非卡契约"的断言会在正确改动时假红。
+    #   改为：① phase 推进仍接线；② 实参含推导变量；③ 推导确实读 _agg_status。
+    #     守的门禁在 tools/verify/verify_ck_phase_consistency.py（含真库分裂现场复算）。
+    ok &= _rec("I10g 收尾 phase 由 _agg_status 推导（非硬编码 done）",
+               "_final_phase" in src
+               and re.search(r'_final_phase\s*=\s*"failed"\s*if\s*\(\s*not degraded\s+and\s+'
+                             r'_agg_status in \("partial",\s*"failed"\)\s*\)\s*else\s*"done"',
+                             src) is not None,
+               "未找到 phase 推导表达式（应按 _agg_status 决定 done/failed）")
     return ok
 
 
