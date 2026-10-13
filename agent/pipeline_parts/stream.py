@@ -97,15 +97,30 @@ class StreamMixin:
             allowed = set(team_members) | {_self_intent}
             pool_lines = [l for l in pool_lines
                           if l[2:].split(":")[0].strip() in allowed]
+        # ★ 2026-10-13（B1-4）：补齐 `expected_output` / `tools` / `skills` 三个字段。
+        #   背景（对标取证）：实测 `agent_tasks.expected_output` **222 行里只有 1 行有值（0.5%）**，
+        #   而 DDL 有列、`create_plan` 会落库、`build_subtask_context` 会把它作为
+        #   「期望产出」注入子任务 prompt —— **整条消费链都在，只缺 planner 让 LLM 产出它**。
+        #   根因不是漏落库，是**主路径的 plan_prompt 只列了 5 个字段**，
+        #   而非流式的 `workflows/planner.py:227-240` 列了 8 个 ⇒ 两套 prompt 漂移。
+        #   主路径是前端唯一入口（`routers/conversations.py::chat_stream`），
+        #   所以 99.5% 的任务实际没有完成标准。
+        #   ⚠️ 字段顺序与措辞对齐非流式版，避免两套语义再漂。
         plan_prompt = (
             "你是任务规划器。把目标分解为可并行/串行执行的子任务清单，只输出 JSON：\n"
             '{"tasks": [{"key": "t1", "title": "子任务描述", "agent": "Agent 名",'
             ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent",'
-            ' "context": "该任务必需的上下文/输入引用(精简事实，可空)"}]}\n'
+            ' "context": "该任务必需的上下文/输入引用(精简事实，可空)",'
+            ' "expected_output": "该子任务的完成标准（可验证的交付物描述，50字内）",'
+            ' "tools": ["允许的工具白名单(可空，空=继承该 Agent 默认绑定)"],'
+            ' "skills": ["指定技能(可空)"]}]}\n'
             f"可用 Agent 池：\n" + "\n".join(pool_lines) + "\n"
             "task_type 可选 agent（走 Agent 完整管线）或 react（多步思考-工具求解）或 llm（纯生成）。\n"
             f"{skill_pool_txt}"
-            f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；有依赖关系的用 deps 表达；不要输出其他文字。\n"
+            f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；"
+            "有依赖关系的用 deps 表达；context 只写该任务必需的事实与输入引用（上下文隔离，避免膨胀）；"
+            "**每个任务都要写 expected_output**（下游据此把完成标准注入子任务，缺失即失去验收依据）；"
+            "不要输出其他文字。\n"
             f"目标：{goal}"
         )
         if team_forced:
