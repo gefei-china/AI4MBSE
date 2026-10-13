@@ -11,8 +11,9 @@
 - ui_summary(raw_text)：把子 Agent 原始输出压成**给用户看的一句话**（剔除内部交接语）
 - summarize_status(results)：一组子任务结果 status 三态聚合
 
-纯函数模块：不 import DB / 网络 / LLM（仅标准库 re），可被 pipeline 与验证脚本复用。
+纯函数模块：不 import DB / 网络 / LLM（仅标准库 json+re），可被 pipeline 与验证脚本复用。
 """
+import json
 import re
 
 SCHEMA_VERSION = 1
@@ -269,6 +270,69 @@ def validate(raw):
 
     return {"ok": ok, "sanitized": out, "reason": reason,
             "truncated": truncated, "warnings": warnings}
+
+
+def extract_protocol_json(text):
+    """★ 2026-10-13（批次二 P2-2）：从子任务输出里**抽出尾部的协议 JSON**。
+
+    为什么需要（实测踩到的一个真缺口）：子任务 prompt 要求的是
+    「**正文在前**，另起一段以单个 JSON 对象结尾」（不能只吐 JSON —— 那会毁掉
+    面向用户的可读交付物）。而调用方此前的解析只试 `text.strip().startswith("{")`，
+    对"正文 + JSON"这种形态**恒为 False** ⇒ 永远走 `normalize_text`
+    ⇒ 三数组永远为空 ⇒ **注入契约了却仍拿不到结构化字段**。
+    ⇒ 光注入契约不够，**解析端必须同步支持尾部 JSON**。
+
+    识别口径（从后往前找，优先取最后一个平衡的 JSON 对象）：
+      ① 整段就是 JSON → 直接用；
+      ② 否则找**最后一个** `}`，向前做括号配平，得到候选片段后 `json.loads`；
+      ③ 解析失败 → 返回 None（调用方回落 `normalize_text`，行为与改动前一致）。
+
+    ⚠️ 只取**一个** JSON 对象（不合并多个）—— 多 JSON 场景本协议未定义，
+    宁可漏也不猜（错的字段比空字段更坏）。
+    ⚠️ 配平时**跳过字符串字面量内的括号**，否则正文中出现 `"}"` 就会算错配平。
+    """
+    s = str(text or "")
+    if not s.strip():
+        return None
+    # ① 整段就是 JSON
+    t = s.strip()
+    if t.startswith("{"):
+        try:
+            obj = json.loads(t)
+            return obj if isinstance(obj, dict) else None
+        except Exception:
+            return None
+    # ② 从最后一个 } 向前配平
+    end = t.rfind("}")
+    if end < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(end, -1, -1):
+        ch = t[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "}":
+            depth += 1
+        elif ch == "{":
+            depth -= 1
+            if depth == 0:
+                frag = t[i:end + 1]
+                try:
+                    obj = json.loads(frag)
+                    return obj if isinstance(obj, dict) else None
+                except Exception:
+                    return None
+    return None
 
 
 def normalize_text(raw_text, task_status=None):

@@ -448,6 +448,40 @@ class StreamMixin:
                 _plan_ctx = str(tk.get("context") or cfg.get("context") or "").strip()
                 if _plan_ctx:
                     query += f"\n\n任务上下文（只读，勿编造上下文外事实）：\n{_plan_ctx[:2000]}"
+                # ★ 2026-10-13（批次二 P2-2）：**把交付协议契约注入子任务 query**。
+                #   真库实证（2026-10-12 只读）：`summary_json` 的
+                #   `artifacts`/`evidence`/`risks` 三数组**非空率 0%**（180 行全空）——
+                #   而 `services/subtask_protocol.py::validate` 会**按 schema 校验**这三个数组。
+                #   根因不是校验太松，而是**没有任何地方要求子 Agent 输出这个格式**：
+                #   全仓搜 `schema_version` 只在 registry 的协议版本协商里出现，
+                #   子 Agent 的 prompt 里**根本没有这段契约** ⇒ 模型只能返回纯文本，
+                #   于是永远走 `normalize_text`（三数组恒空）。**要一个字段有值，
+                #   得先有人要求它有值。**
+                #   ⚠️ 措辞刻意保留"正文在前、JSON 在最后"：直接让模型只吐 JSON 会毁掉
+                #     面向用户的可读交付物（`sub_res` 是要展示和汇总的正文）。
+                #   ⚠️ 开关可关（关 = 回到改动前行为），避免协议要求干扰个别纯生成型子任务。
+                try:
+                    from core.config import get as _cfg_sp
+                    _sp_on = bool(_cfg_sp("subtask_protocol", "inject_contract", True))
+                except Exception:
+                    _sp_on = True
+                if _sp_on:
+                    query += (
+                        "\n\n【交付格式】先用自然语言给出完整正文（用户要看的成果），"
+                        "然后**另起一段**，以单个 JSON 对象结尾（用于结构化归档，勿把 JSON 混进正文）：\n"
+                        '{"schema_version":1,"status":"full|partial|failed",'
+                        '"summary":"一句话成果","artifacts":[{"kind":"document|model|code|view|report|other",'
+                        '"title":"产物标题","ref":"产物定位或名称"}],'
+                        '"evidence":[{"source":"来源","ref":"引用位置"}],'
+                        '"risks":[{"level":"high|mid|low","title":"风险名","desc":"描述","advice":"缓解建议"}],'
+                        '"confidence":0.0}\n'
+                        "规则：artifacts 列出**本次真实产出的可交付物**（无则 []）；"
+                        "evidence 列出支撑结论的依据；"
+                        "risks 用 level/title/desc/advice 四字段"
+                        "（level 取 high|mid|low，title 是一句话风险名，desc 是描述，"
+                        "advice 是缓解建议）——**字段名必须是这四个**，写错会被校验器丢弃；"
+                        "status=partial 时在 missing 里标注缺什么。"
+                    )
                 skill_name2 = cfg.get("skill") or None
                 evs, sub_res, sub_has_token = [], "", False
                 tok_used = 0
@@ -499,14 +533,13 @@ class StreamMixin:
                         _summary_proto = None
                         try:
                             from services.subtask_protocol import validate as _sp_validate, \
-                                normalize_text as _sp_normalize
+                                normalize_text as _sp_normalize, \
+                                extract_protocol_json as _sp_extract
                             _s0 = str(sub_res or "").strip()
-                            _parsed = None
-                            if _s0.startswith("{"):
-                                try:
-                                    _parsed = json.loads(_s0)
-                                except Exception:
-                                    _parsed = None
+                            # ★ 2026-10-13：改用 `extract_protocol_json`（能处理「正文 + 尾部 JSON」）。
+                            #   原写法只试 `startswith("{")`，对"正文在前"的形态恒为 False
+                            #   ⇒ 注入契约后仍拿不到三数组（实测踩到的真缺口）。
+                            _parsed = _sp_extract(_s0)
                             if isinstance(_parsed, dict):
                                 _pr = _sp_validate(_parsed)
                                 _summary_proto = _pr.get("sanitized")
@@ -527,6 +560,66 @@ class StreamMixin:
                                     _c9.commit()
                                 finally:
                                     _c9.close()
+                            except Exception:
+                                pass
+                        # ★ 2026-10-13（批次二 P2-1/P2-2）：把协议三数组**物化**到 subtask_artifacts。
+                        #   为什么必须物化（真库实证，2026-10-12 只读）：
+                        #     · `subtask_artifacts` **0 行** —— 此前**只有** 写操作暂存
+                        #       （`store_write_request`，tools.py:544）会写它，而那条路径要求
+                        #       `is_write_tool` 命中 5 个硬编码名字，真库 10 个 write 工具里
+                        #       只有 5 个在白名单 ⇒ 交付类产物**从无路径进表**；
+                        #     · `summary_json` 的 `artifacts/evidence/risks` 三数组
+                        #       **非空率 0%**（180 行全空）—— 协议结构写了，但**没有第二份可检索的实体化数据**，
+                        #       汇总段只能读 summary 文本，下游无法按产物/证据做检索与统计。
+                        #   物化后：① 交付物从"只在 JSON 里"变成"库里有行、可查询"；
+                        #   ② 汇总/审计能按 kind 聚合，不必解 JSON。
+                        #   ⚠️ 只物化**非空**的数组项；`store()` 内部已对非 dict 做容错。
+                        #   ⚠️ 物化失败**不得影响子任务成败**（它只是可观测层，不是门禁）。
+                        if _summary_proto:
+                            try:
+                                _arts = []
+                                # 开关：materialize 关 ⇒ 不物化（只留在 summary_json）
+                                from core.config import get as _cfg_mat
+                                _mat_on = bool(_cfg_mat("subtask_protocol", "materialize", True))
+                                for _k, _kind, _title_keys in (("artifacts", "artifact", ("title", "ref", "name")),
+                                                       ("evidence", "evidence", ("source", "ref", "title")),
+                                                       ("risks", "risk", ("title", "desc", "advice"))):
+                                    if not _mat_on:
+                                        break
+                                    for _item in (_summary_proto.get(_k) or []):
+                                        if isinstance(_item, dict):
+                                            # ⚠️ 三类的"标题字段"不同：artifacts 用 title，
+                                            #   evidence 用 source、risks 用 issue
+                                            #   （见 subtask_protocol.SUMMARY_SCHEMA 的 required）。
+                                            #   只取 title ⇒ evidence/risks 物化出**空标题行**，
+                                            #   库里有行但没法看 ⇒ 等于没物化。按序取第一个非空。
+                                            # ⚠️ 变量名**不能叫 `_t`**：本模块顶层有
+                                            #   `import time as _t`，一旦在函数里赋值 `_t`，
+                                            #   Python 会把它当成**函数局部变量** ⇒ 同一函数内
+                                            #   所有 `_t.time()` 变成"未绑定" ⇒
+                                            #   UnboundLocalError（实测被 verify_orch_reliability 抓到）。
+                                            #   这里统一用 `_t_title`。
+                                            _t_title = ""
+                                            for _tk in _title_keys:
+                                                if str(_item.get(_tk) or "").strip():
+                                                    _t_title = str(_item.get(_tk))[:80]
+                                                    break
+                                            _arts.append({"kind": _kind,
+                                                          "title": _t_title,
+                                                          "content_json": _item})
+                                        elif isinstance(_item, str) and _item.strip():
+                                            _arts.append({"kind": _kind, "title": _item[:80],
+                                                          "content_json": {"text": _item}})
+                                if _arts:
+                                    from services.artifact_materializer import store as _art_store
+                                    _c10 = get_db()
+                                    try:
+                                        # ⚠️ 用闭包变量 `run_id`（不是 `_run_id`——
+                                        #   后者在本函数里不存在，会被 except 静默吞掉，
+                                        #   表现为"物化永远不生效"且无任何日志）。
+                                        _art_store(_c10, int(run_id or 0), tkey, _arts)
+                                    finally:
+                                        _c10.close()
                             except Exception:
                                 pass
                         return tkey, ttitle, ok, sub_res, evs, "", int((_t.time() - _t0) * 1000), tok_used, _summary_proto

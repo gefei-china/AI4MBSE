@@ -706,6 +706,22 @@ DEFAULT_CONFIG = {
         # ⚠️ 解析失败一律降级为宽松 schema，**不得因单个脏 schema 拖垮整次工具定义构建**。
         "inject_input_schema": True,
     },
+    "subtask_protocol": {
+        # ── 交付协议契约是否注入子任务 query（2026-10-13，批次二 P2-2）──────────
+        # 实测（2026-10-12 只读真库）：`summary_json` 的 artifacts/evidence/risks
+        # **非空率 0%**（180 行全空）。根因不是校验松，而是**没有任何地方要求子 Agent
+        # 输出该格式**——全仓搜 `schema_version` 只在 registry 的版本协商里出现，
+        # 子任务 prompt 里没有这段契约 ⇒ 模型只能返回纯文本 ⇒ 永远走 normalize_text
+        # （三数组恒空）。**要一个字段有值，得先有人要求它有值。**
+        # 措辞保留"正文在前、JSON 在最后"：直接让模型只吐 JSON 会毁掉面向用户的可读交付物。
+        # 关 = 回到改动前行为（纯文本，协议三数组恒空）。
+        "inject_contract": True,
+        # 是否把协议三数组**物化**到 subtask_artifacts（该表实测 0 行：此前只有
+        # "写操作暂存"一条路径会写它，而那条路径要求 is_write_tool 命中 5 个硬编码名字，
+        # 真库 10 个 write 工具里只有 5 个在白名单 ⇒ 交付类产物从无路径进表）。
+        # 物化后交付物"库里有行、可查询"，汇总/审计可按 kind 聚合，不必解 JSON。
+        "materialize": True,
+    },
     "agent_assignment": {
         # ── 编排分派打分（2026-10-13，B1-7）────────────────────────────────
         # 定位：**择优与留痕，不是决策者**。planner LLM 已产出每个子任务的 agent，
@@ -1254,6 +1270,10 @@ CONFIG_SCHEMA = {
     "tool_jit": {
         "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）。★ 2026-10-10 实测：修复类工具必须列进来，否则会被语义预筛裁掉（实测 view_expansion 清单 6 个里原本没有 sysml_v2_autofix，导致 autofix 一次都没被调用）"},
         "inject_input_schema": {"type": "bool", "desc": "把 tools.input_schema 注入 function-calling 的 parameters（关=回到 2026-10-13 之前的宽松空 schema）。★ 实测该列 39/41 有真值，此前被 SELECT 后丢弃、payload 恒为 properties:{}"},
+    },
+    "subtask_protocol": {
+        "inject_contract": {"type": "bool", "desc": "把交付协议契约注入子任务 query（关=模型只返纯文本，协议三数组恒空）。★ 实测注入前 artifacts/evidence/risks 非空率 0%"},
+        "materialize": {"type": "bool", "desc": "把协议三数组物化写入 subtask_artifacts（关=只留在 summary_json 里，该表实测 0 行）"},
     },
     "agent_assignment": {
         "enabled": {"type": "bool", "desc": "编排分派打分总开关（关=不算分不改派，完全退回 2026-10-13 之前行为）。★ 该打分器只做择优与留痕，planner LLM 仍是决策者"},

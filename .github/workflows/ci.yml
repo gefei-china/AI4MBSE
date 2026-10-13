@@ -547,6 +547,10 @@ jobs:
         run: python tools/verify/verify_failure_class.py
       - name: Guard Agent 名孤儿引用（快照留痕）
         run: python tools/verify/verify_orphan_agent_ref.py
+      - name: Guard 负载感知分派（权重已标定 + 不改派 planner）
+        run: python tools/verify/verify_load_aware_assign.py
+      - name: Guard 交付协议三数组 + 产物物化（批次二 P2）
+        run: python tools/verify/verify_protocol_artifacts.py
 
       # ── B1-10（2026-10-13）：跑完所有门禁后，工作区必须仍是干净的 ────────
       # 为什么需要（本仓实测踩过两次）：
