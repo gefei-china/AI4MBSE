@@ -268,6 +268,11 @@ def _migrate_columns(conn):
     _add("agent_tasks", "summary_json", "TEXT DEFAULT '{}'")              # 结构化摘要协议结果（含 status）
     _add("agent_tasks", "retry_count", "INTEGER DEFAULT 0")               # 编排内自动重试次数
     _add("agent_tasks", "token_count", "INTEGER DEFAULT 0")               # 子任务 token 统计
+    # ── B1-6（2026-10-13）失败分类：让「为什么失败 / 为什么重试」在数据层可查 ──
+    # 此前 `error` 是自由文本、无结构，重试判据只有 `retry_left <= 0`（不看原因）
+    # ⇒ 权限拒绝等永久失败也会被重试一次（单子任务实测 344~1155 s + 一次完整 LLM 调用）。
+    # 取值见 `services/failure_class.py::ERROR_CLASSES`（8 类）。
+    _add("agent_tasks", "error_class", "TEXT DEFAULT ''")                 # 失败分类（timeout/transient/permission/…）
     # ── 架构优化：HIL 确认队列补 task_key（写操作暂存绑定子任务，先查表存在再 ALTER）──
     _add("hil_confirmations", "task_key", "TEXT DEFAULT ''")
     # ── 分支管理 GitHub 对标（P0-1/P0-2/P1-1/P1-2）：冲突重算时间戳 / MR 标题 / 驳回意见 ──

@@ -521,6 +521,12 @@ class StreamMixin:
                 不中断、继续在后台运行直至自然结束（期间占用 task_pool 线程）；额度随
                 worker 返回即释放，保证后续批次不被超时任务阻塞。
                 """
+                # ★ 2026-10-13（B1-6）：失败分类器（局部 import，与本文件既有惯例一致）。
+                #   包在 try 里：分类器不可用时**必须退回旧行为**（照重试），不能因此中断编排。
+                try:
+                    from services import failure_class as _fc
+                except Exception:
+                    _fc = None
                 tkey = tk.get("task_key") or "t"
                 ttitle = tk.get("title") or tkey
                 _t0 = _t.time()
@@ -572,7 +578,23 @@ class StreamMixin:
                             # 超时：不等待线程（后台继续运行），标记 error 含 "timeout"
                             last_res = (tkey, ttitle, False, "", [], _stall,
                                         int((_t.time() - _t0) * 1000), 0, None)
-                        if retry_left <= 0:
+                        # ★ 2026-10-13（B1-6）：**先分类、再决定要不要重试**。
+                        #   改前判据只有 `if retry_left <= 0`，不看失败原因 ⇒ 权限拒绝、参数非法、
+                        #   输出不合格这类"重试也不会变"的永久失败也白白重试一次，
+                        #   而单子任务实测 344~1155 s，还要再烧一次完整的子 Agent LLM 调用。
+                        #   分类器 `services/failure_class.py` 复用 `tool_resilience` 的瞬态词表
+                        #   （不另造第二份 —— 两份词表必然漂移）。
+                        #   ⚠️ `_fc` 为 None（分类器不可用）时**按旧行为照重试**：
+                        #   拿不到分类能力时保守多试一次，优于直接放弃任务。
+                        if _fc is not None:
+                            _ecls = _fc.classify(last_res[5], ok=bool(last_res[2]))
+                            _retry_ok = _fc.is_retryable_class(_ecls)
+                        else:
+                            _ecls, _retry_ok = "", True
+                        if retry_left <= 0 or not _retry_ok:
+                            if last_res[5] and _ecls:
+                                last_res = last_res[:5] + (
+                                    "%s［%s］" % (str(last_res[5])[:130], _ecls),) + last_res[6:]
                             return last_res
                         # 自动重试：retry_count+1 写回 agent_tasks（容错：独立连接，失败不阻断）
                         retry_left -= 1
@@ -587,7 +609,11 @@ class StreamMixin:
                                 _c2.close()
                         except Exception:
                             pass
-                        _t.sleep(_backoff * (_max_retries - retry_left))  # 退避：首次 1s，逐次累乘
+                        # 指数退避（2026-10-13：原为线性 `_backoff * (max_retries - retry_left)`）。
+                        # ⚠️ 用指数而非线性不是为了"更优雅"——重试场景下等待时间成倍增长能显著降低
+                        #   对瞬态故障源的二次冲击；而 `_max_retries` 实测只有 1，退避总时长几乎不变，
+                        #   真正生效的是「等更久一点再打第二次」这个行为差异。
+                        _t.sleep(_backoff * (2 ** (_max_retries - retry_left)))
                 finally:
                     if sem is not None:
                         sem.release()   # 仅本 worker 线程自然结束时释放

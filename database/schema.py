@@ -876,6 +876,10 @@ def init_db():
         result TEXT DEFAULT '',               -- 执行结果（summary/content）
         metadata TEXT DEFAULT '{}',           -- JSON: handoff metadata（score/artifacts 等）
         error TEXT DEFAULT '',
+        -- B1-6（2026-10-13）失败分类：让「为什么失败 / 为什么重试」在数据层可查。
+        -- 取值见 services/failure_class.py::ERROR_CLASSES（timeout/transient/interrupted/
+        -- permission/input_invalid/output_rejected/business/internal）。空串=未分类或未失败。
+        error_class TEXT DEFAULT '',
         assigned_by TEXT DEFAULT 'planner',   -- planner | orchestrator | manual
         seq INTEGER DEFAULT 0,
         latency_ms INTEGER DEFAULT 0,

@@ -253,10 +253,33 @@ class TaskQueue:
 
     @staticmethod
     def fail(conn, task_id: int, error: str = "") -> None:
-        conn.execute(
-            "UPDATE agent_tasks SET status='failed', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (error[:500], task_id))
-        conn.commit()
+        """标记失败，并**结构化记录失败分类**（★ 2026-10-13 B1-6）。
+
+        为什么顺带分类：`error` 是自由文本，事后无法统计"哪类失败最多 / 哪些白重试了"。
+        `error_class` 落库后，"这个任务为什么失败、该不该重试"才在数据层可回答。
+        ⚠️ 分类器不可用时**不阻断失败流程**（error_class 留空），且不会把 error 吞掉。
+        """
+        _cls = ""
+        try:
+            from services import failure_class as _fc
+            _cls = _fc.classify(error, ok=False)
+        except Exception:
+            _cls = ""
+        try:
+            conn.execute(
+                "UPDATE agent_tasks SET status='failed', error=?, error_class=?, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (error[:500], _cls, task_id))
+            conn.commit()
+        except Exception:
+            # 极老库可能尚无 error_class 列 ⇒ 退回不分类的写入，保证失败仍被记录
+            try:
+                conn.execute(
+                    "UPDATE agent_tasks SET status='failed', error=?, "
+                    "updated_at=CURRENT_TIMESTAMP WHERE id=?", (error[:500], task_id))
+                conn.commit()
+            except Exception:
+                pass
 
     @staticmethod
     def block(conn, task_id: int, error: str = "") -> None:
