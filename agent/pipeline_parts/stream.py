@@ -284,8 +284,32 @@ class StreamMixin:
                 else:
                     # P0-7：分配独立批次号（新号无残留，故不再 clear_run —— 那正是覆盖历史的原因）
                     run_id = TaskQueue.new_run_id(conn)
-                    TaskQueue.create_plan(conn, run_id, plan, assigned_by="session",
-                                          conversation_id=int(conversation_id or 0))
+                    # ★ 2026-10-13（B1-8）：落计划前检依赖环。
+                    #   `create_plan(strict=True)` 会对非法图抛 ValueError（环 / 自环 / 空 key / 重复 key）。
+                    #   此处**不吞异常**：非法计划继续往下跑就是"静默全阻塞"（ready_tasks 恒空 →
+                    #   主循环 break → 界面上什么都没发生），那正是本条要修的病。
+                    #   但也不让它裸抛给用户看栈——落一条 blocked 任务行，让这次编排
+                    #   **明确终止且可在库里查到原因**（status=blocked + error），而不是静默消失。
+                    #   降级路径与门禁脚本可用 strict=False 显式取旧行为。
+                    try:
+                        TaskQueue.create_plan(conn, run_id, plan, assigned_by="session",
+                                              conversation_id=int(conversation_id or 0))
+                    except ValueError as _vde:
+                        try:
+                            conn.execute(
+                                "INSERT INTO agent_tasks (run_id, task_key, title, agent_id, task_type,"
+                                " config, deps, status, assigned_by, seq, error, conversation_id)"
+                                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                                (run_id, "_plan_invalid", "计划依赖图非法", "", "agent",
+                                 "{}", "[]", "blocked", "session", 0, str(_vde)[:500],
+                                 int(conversation_id or 0)))
+                            conn.commit()
+                        except Exception:
+                            pass
+                        yield {"type": "stage", "name": "生成与校验", "status": "done"}
+                        yield {"type": "error",
+                               "data": "计划依赖图存在环或结构非法，本次编排已中止：%s" % _vde}
+                        return
                     # P0-2 持久执行：落检查点 —— 崩溃后据此重进这张图（写失败静默，旁路不阻断编排）
                     try:
                         from agent.orch_checkpoint import save as _ck_save

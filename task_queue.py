@@ -19,14 +19,89 @@ class TaskQueue:
 
     # ── 计划落库 ──
     @staticmethod
+    def validate_plan(plan: list) -> dict:
+        """★ 2026-10-13（B1-8）：落库前校验依赖图 —— 返回 {"ok", "reason", "cycle", "self_loop"}。
+
+        为什么必须校验：原实现只把 `deps` 里**不存在的 key** 过滤掉，
+        **不检出环**。一旦 LLM 产出 A→B→A（或 t1 依赖 t1），运行期后果是
+        `ready_tasks` 永远返回空 → 主循环 `break` → **整批静默阻塞**，
+        既不报错也无日志（用户只看到"什么都没发生"）。
+        环是 planner 最常见的结构错误之一（多阶段任务里"生成→校验→回修"极易被写成环）。
+
+        判据（Kahn 拓扑排序，O(V+E)）：
+          · `self_loop`：任务依赖自己；
+          · `cycle`：**存在环**（等价于拓扑排序后剩余节点非空）。
+        ⚠️ 只做**检测与报错**，不静默改图（静默删边等于替 LLM 猜意图，
+        且会让"为什么这条依赖没了"无从追溯 —— 那正是本条要修的病）。
+        """
+        try:
+            rows = [t for t in (plan or []) if isinstance(t, dict)]
+        except Exception:
+            rows = []
+        if not rows:
+            return {"ok": False, "reason": "empty_plan", "cycle": [], "self_loop": []}
+
+        keys = [str(t.get("key") or "") for t in rows]
+        kset = set(keys)
+        # 空 key：无法参与拓扑，单独报错（否则它会被当独立节点，依赖永远悬空）
+        if any(not k for k in keys):
+            return {"ok": False, "reason": "empty_key", "cycle": [], "self_loop": []}
+        # 重复 key：后写的会覆盖先写的，且依赖语义不可解析
+        if len(kset) != len(keys):
+            dup = sorted({k for k in keys if keys.count(k) > 1})
+            return {"ok": False, "reason": "duplicate_key", "cycle": [], "self_loop": dup}
+
+        # 自环
+        self_loop = sorted({str(t.get("key")) for t in rows
+                            if str(t.get("key") or "") in {str(d) for d in (t.get("deps") or [])}})
+        if self_loop:
+            return {"ok": False, "reason": "self_loop", "cycle": [], "self_loop": self_loop}
+
+        # 邻接表 + 入度（只计**本计划内存在**的依赖；外部 key 已被 create_plan 过滤）
+        adj = {k: [] for k in keys}
+        indeg = {k: 0 for k in keys}
+        for t in rows:
+            k = str(t.get("key") or "")
+            for d in (t.get("deps") or []):
+                ds = str(d)
+                if ds in adj:          # 外部依赖不进图（与 create_plan 的过滤口径一致）
+                    adj[ds].append(k)
+                    indeg[k] += 1
+
+        # Kahn：反复弹出入度 0 的节点；剩余即环内节点
+        queue = [k for k in keys if indeg[k] == 0]
+        seen = 0
+        while queue:
+            cur = queue.pop()
+            seen += 1
+            for nxt in adj[cur]:
+                indeg[nxt] -= 1
+                if indeg[nxt] == 0:
+                    queue.append(nxt)
+        if seen < len(keys):
+            remain = sorted([k for k in keys if indeg[k] > 0])
+            return {"ok": False, "reason": "cycle", "cycle": remain, "self_loop": []}
+        return {"ok": True, "reason": "", "cycle": [], "self_loop": []}
+
+    @staticmethod
     def create_plan(conn, run_id: int, plan: list, assigned_by: str = "planner",
-                    conversation_id: int = 0) -> int:
+                    conversation_id: int = 0, *, strict: bool = True) -> int:
         """plan: [{key, title, agent, task_type, config, deps, seq, context, expected_output}] → 批量写入。
 
         依赖校验：deps 仅保留本计划内存在的 key（防脏数据导致永久阻塞）。
         P1b-2：context/expected_output 一并落库（委派协议结构化，子 Agent 执行时注入）。
         P0-7：conversation_id 记录批次归属会话（run_id 已唯一化，不再复用会话 id）。
+        B1-8（2026-10-13）：**先跑 `validate_plan` 检环**（strict=True 时抛 ValueError）。
+        ⚠️ 抛异常而不是打日志继续：环会让 `ready_tasks` 恒空 → 主循环 break → 整批静默阻塞，
+        那种失败在界面上完全不可见。宁可让这一次编排明确失败，也不能"看起来在跑但什么都没做"。
+        ⚠️ `strict=False` 保留旧行为（直接落库），供需要"尽力而为"的历史路径/门禁脚本显式选择。
         """
+        if strict:
+            _vd = TaskQueue.validate_plan(plan)
+            if not _vd.get("ok"):
+                raise ValueError(
+                    "计划依赖图非法（reason=%s cycle=%s self_loop=%s），已中止落库以避免静默阻塞"
+                    % (_vd.get("reason"), _vd.get("cycle"), _vd.get("self_loop")))
         plan_keys = {t.get("key") for t in plan}
         n = 0
         for t in plan:
