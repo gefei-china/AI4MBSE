@@ -47,6 +47,20 @@ class ToolMixin:
 
         tools = []
         bound = self.registry.get_bound_mcp(intent)
+        # ★ 2026-10-13：工具参数契约注入开关（config: tool_jit.inject_input_schema，默认开）。
+        #   背景见 core/config.py 同名键的注释——简言之：SQL 早就 SELECT 了 t.input_schema，
+        #   但 candidates 是 4 元组装不下它，payload 恒为 `"properties": {}`（模型以为任意参数）。
+        #   本次**只改注入、不改执行侧校验**；关掉即回到改动前行为。
+        try:
+            from core.config import get as _cfg_get_ii
+            _inject_schema = bool(_cfg_get_ii("tool_jit", "inject_input_schema", True))
+        except Exception:
+            _inject_schema = True
+        #: 工具名 → 已解析的 JSON Schema 片段（仅在 _inject_schema 为真时填充）。
+        #: ⚠️ 刻意**不塞进 candidates 元组**：那是个 4 元组，全文件有 15 处按 c[0]/c[1] 位置下标访问
+        #:   （过滤、角色校验、JIT 预筛、拼装…），扩成 5 元组会让每一处都变成潜在 IndexError。
+        #:   旁挂字典是零侵入方案，且与"过滤逻辑与 schema 无关"这个事实相符。
+        _schema_by_name = {}
         builtin_desc = {
             "graph_retrieve": "知识图谱检索（GraphRAG：实体链接 + 子图遍历 + 向量降级），参数 query:str",
             "conflict_check": "冲突检测（新元素与既有元素属性冲突）",
@@ -64,6 +78,32 @@ class ToolMixin:
             "report_export": "把报告内容导出为指定格式文档并落盘（参数 path:str, title:str, content:str 或 sections:str, fmt:md|docx|pdf；写操作）",
         }
         candidates = []  # (name, desc, type, server_name_or_None)
+
+        def _absorb_schema(name: str, raw) -> None:
+            """把 tools.input_schema 归一化后存进 _schema_by_name（★ 2026-10-13）。
+
+            归一化规则（逐条都是为了让**脏数据不得污染 payload**）：
+              · 非 str / 空串 → 不记（下游回落宽松 schema）
+              · json 解析失败 → 不记（**不抛异常**：单个脏 schema 不得拖垮整次构建）
+              · 解析结果非 dict → 不记
+              · 缺 `type` → 补 `"object"`（协议要求；存量数据有只写 properties 的）
+              · `properties` 非 dict → 置 `{}`（防止 LLM 侧拿到非法 schema 直接 400）
+              · 显式带 `additionalProperties=False` 的**保留**（那是作者收紧的意图，不该被我们抹掉）
+            """
+            if not _inject_schema or not name or not raw or not isinstance(raw, str):
+                return
+            try:
+                sch = json.loads(raw)
+            except Exception:
+                return
+            if not isinstance(sch, dict):
+                return
+            if not isinstance(sch.get("properties"), dict):
+                sch["properties"] = {}
+            if not sch.get("type"):
+                sch["type"] = "object"
+            _schema_by_name[name] = sch
+
         # MCP 绑定工具
         for m in bound:
             for t in (m.get("tools") or []):
@@ -92,10 +132,32 @@ class ToolMixin:
                         desc += "（高风险操作，必须人工确认）"
                     if not any(c[0] == row["name"] for c in candidates):
                         candidates.append((row["name"], desc, "db_tool", ""))
+                    _absorb_schema(row["name"], row["input_schema"])
             finally:
                 conn.close()
         except Exception:
             pass
+        # ★ 2026-10-13：内置工具的参数契约。
+        #   为什么必须单独查：上面那条 SQL 带 `t.source!='builtin'`，**刻意排除内置工具**
+        #   （内置的候选来源是 `builtin_desc` 字典，不是 DB 行）。但实测内置工具同样有真值 schema
+        #   （source='builtin' 的 18 个里 **16 个有**，包括 entity_create/file_write 这类写操作）。
+        #   ⇒ 不补这一段，接通的就只有"自定义/插件工具"，而**风险最高的写操作工具仍拿不到契约**。
+        #   按需点名查询（只查本次要注入的内置名），不打全表。
+        if _inject_schema and builtin_desc:
+            try:
+                from database import get_db as _bdb
+                _bc = _bdb()
+                try:
+                    _bnames = list(builtin_desc.keys())
+                    for _r in _bc.execute(
+                            "SELECT name, input_schema FROM tools "
+                            "WHERE name IN (%s) AND status='active'" % ",".join("?" * len(_bnames)),
+                            tuple(_bnames)).fetchall():
+                        _absorb_schema(_r["name"], _r["input_schema"])
+                finally:
+                    _bc.close()
+            except Exception:
+                pass
         # P1-6「安装即可消费」（2026-09-16）：已安装且启用的 tool 型插件自动进入候选——
         # 与 Agent 绑定无关：从市场装的 / 自建的 tool 只要启用即可被消费。
         # 只接纳「具备执行通道」的（有 legacy 映射落到 tools 表执行器，或 manifest 声明 HTTP 端点）；
@@ -270,27 +332,20 @@ class ToolMixin:
                     _bad_names)
             except Exception:
                 pass
+        # ★ 2026-10-13：按工具名注入真实参数契约（此前**两个分支都硬编码 properties:{}**，
+        #   等于把 DB 里 39/41 条已存在的 input_schema 全部丢弃 ⇒ 模型以为"任意参数"）。
+        #   _LOOSE 是回落形态，与改动前**逐字节一致**，保证关开关/无 schema 时行为不变。
+        _LOOSE = {"type": "object", "properties": {}, "additionalProperties": True}
         for name, desc, ctype, server in candidates:
-            if ctype == "mcp":
-                tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "description": desc,
-                        "parameters": {"type": "object", "properties": {},
-                                       "additionalProperties": True},
-                    },
-                })
-            else:
-                tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "description": desc,
-                        "parameters": {"type": "object", "properties": {},
-                                       "additionalProperties": True},
-                    },
-                })
+            _params = _schema_by_name.get(name) or _LOOSE
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": desc,
+                    "parameters": _params,
+                },
+            })
         return tools
 
     def _tool_side_effect(self, name: str) -> str:

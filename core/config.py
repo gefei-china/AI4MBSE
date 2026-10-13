@@ -692,6 +692,19 @@ DEFAULT_CONFIG = {
         #     模型压根看不到这个工具 ⇒ 实测 autofix 调用 **0 次**。
         #   ⇒ 修复的**第一前提**是"它得在清单里"，这才是根因。
         "core_keep_extra": "sysml_v2_validate,sysml_v2_autofix",
+        # ★ 2026-10-13：把 `tools.input_schema` 真值注入 function-calling payload（开关，可回退）。
+        # 背景（对标取证）：`_build_tools_def` 的 SQL **已经 SELECT 了 t.input_schema**，
+        # 但 candidates 是 4 元组、没有 schema 位，`:94` 直接丢弃；随后 `:280/:290` **两个分支**
+        # 都硬编码 `"properties": {}, "additionalProperties": True` ⇒
+        # **模型收到的是「这工具接受任意参数」**，而生产库 `tools.input_schema` 实测 **39/41 有真值**
+        # （builtin 16/18、local 9/9、coverage 5/5、zhiyuan 5/5），形同虚设。
+        # 三重后果：① 模型不知道参数长什么样，靠描述里的中文自由发挥；
+        #           ② 模型给非法参数也不会被拒（下游 `.get()` 拿 None）；
+        #           ③ 即使模型给了越权 id/path，也没有任何一层会说"不行"。
+        # ⚠️ 只改**注入**，不改**执行侧校验**（校验是独立批次 B1-9/E4-2）——
+        #    本开关关掉即回到改动前行为（宽松 schema），保证可回退。
+        # ⚠️ 解析失败一律降级为宽松 schema，**不得因单个脏 schema 拖垮整次工具定义构建**。
+        "inject_input_schema": True,
     },
     "kb_scope": {
         # KB-S 消费范围（Agent 的 kb_scope.docs）**失效自愈**开关。
@@ -1222,6 +1235,7 @@ CONFIG_SCHEMA = {
     },
     "tool_jit": {
         "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）。★ 2026-10-10 实测：修复类工具必须列进来，否则会被语义预筛裁掉（实测 view_expansion 清单 6 个里原本没有 sysml_v2_autofix，导致 autofix 一次都没被调用）"},
+        "inject_input_schema": {"type": "bool", "desc": "把 tools.input_schema 注入 function-calling 的 parameters（关=回到 2026-10-13 之前的宽松空 schema）。★ 实测该列 39/41 有真值，此前被 SELECT 后丢弃、payload 恒为 properties:{}"},
     },
     "kb_scope": {
         "docs_missing_fallback": {"type": "bool", "desc": "白名单文档不存在时剔除失效项；全失效则退化为不限文档"},
