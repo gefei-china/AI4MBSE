@@ -146,6 +146,18 @@ function procRender(){
   //   底部附近才钉底；用户上滑查看上文后不再被强行拽回（原为无条件 scrollTop=scrollHeight）。
   stickBottom();
 }
+// ★ B2-10（2026-10-13）：系统进度提示单独成行，**不拼进思考流**。
+//   为什么不用 procAddStage：那几处是「说明当前在做什么」，不是流程阶段（阶段有
+//   run/done 生命周期、有固定图标语义）；混进 stage 会让"生成与校验"这类真实阶段
+//   的完成判定受影响。独立行 + 顺序追加，最小侵入且不参与阶段状态机。
+//   合并同一文案（planner 可能重复发同一句）⇒ 用文案做 key，重复则只更新不新增行。
+function procAddSystemNotice(text){
+  const t = String(text || '').trim();
+  if(!t) return;
+  const id = 'notice_' + t.slice(0, 24);
+  procUpsert(id, {type:'notice', icon:'ℹ️', title:'系统提示', status:'done',
+    statusText:'提示', sub: t, detail: t});
+}
 function procAddStage(name, status, detail, detailHtml){
   const iconMap = {'意图识别':'🔍','知识库检索':'📚','生成与校验':'✍️','写入会话':'💾'};
   procUpsert('stage_'+name, {type:'stage', icon: iconMap[name]||'🔍', title: name,
@@ -802,7 +814,16 @@ function handleSSE(raw) {
   } else if(evType === 'agent') {
     procAddAgent(ev);      // V2.4 会话内执行过程：子智能体（内联会话流）
   } else if(evType === 'reasoning') {
-    procAddThinking(ev.delta || '', ev.round, ev.key);   // V2.4 思考流（V2.6：带子任务归属标记）
+    // ★ B2-10（2026-10-13）：`kind` 区分「模型 CoT」与「系统进度提示」。
+    //   此前 26 处 reasoning 里，8 处是系统提示（"（自动编排）检测到多 Agent 协作需求"
+    //   "（断点续跑）已从检查点恢复…"），却与真实思考流**拼进同一个思考框** ⇒
+    //   用户看到的"AI 思考"里混着系统自述，**分不清哪句是模型想的、哪句是系统说的**。
+    //   kind 缺失（老事件 / 未升级的服务端）按 CoT 处理 ⇒ 完全向后兼容。
+    if(ev.kind === 'progress'){
+      procAddSystemNotice(ev.delta || '');
+    } else {
+      procAddThinking(ev.delta || '', ev.round, ev.key);   // V2.4 思考流（V2.6：带子任务归属标记）
+    }
   } else if(evType === 'tool') {
     procAddTool(ev);       // V2.4 会话内执行过程：工具调用结果
   } else if(evType === 'compact') {

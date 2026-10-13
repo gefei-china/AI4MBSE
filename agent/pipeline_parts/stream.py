@@ -71,7 +71,8 @@ class StreamMixin:
         # token/reasoning/tool/done），会让用户看到一个从未真正执行过的「知识库检索·未引用」环节。
         # 现不再预发该阶段：检索真实性由各子任务按其 Agent 的 kb_required 决定。
         yield {"type": "stage", "name": "生成与校验", "status": "run"}
-        yield {"type": "reasoning", "delta": "（自动编排）检测到多 Agent 协作需求，正在规划子任务…"}
+        yield {"type": "reasoning", "kind": "progress",
+               "delta": "（自动编排）检测到多 Agent 协作需求，正在规划子任务…"}
         conn = get_db()
         skill_pool_txt = ""
         try:
@@ -217,7 +218,7 @@ class StreamMixin:
                 # 下方 step 3 见 _resume_ck 即跳过 create_plan（任务行已在库里）
                 plan = list(_resume_ck.get("plan") or [])
                 yield {"type": "stage", "name": "检查点恢复", "status": "done"}
-                yield {"type": "reasoning",
+                yield {"type": "reasoning", "kind": "progress",
                        "delta": "（断点续跑）已从检查点恢复编排批次 #%s，复用已完成子任务，"
                                 "仅补跑未完成部分…" % resume_run_id}
         if _resume_ck and not plan:
@@ -757,7 +758,7 @@ class StreamMixin:
                                 TaskQueue.block(conn, _tk["id"], "预算超限")
                     except Exception:
                         pass
-                    yield {"type": "reasoning",
+                    yield {"type": "reasoning", "kind": "progress",
                            "delta": "（自动编排）达到运行预算限制（任务数或 token），未派发子任务已标记，提前进入汇总…"}
                     break
                 ready = TaskQueue.ready_tasks(conn, run_id)
@@ -982,7 +983,7 @@ class StreamMixin:
             except Exception:
                 _queued_write = 0
             if _queued_write:
-                yield {"type": "reasoning",
+                yield {"type": "reasoning", "kind": "progress",
                        "delta": f"（自动编排）{_queued_write} 个写操作进入人工确认队列，确认后统一生效"}
             # Task 10：汇总消费结构化摘要——agg_status 三态聚合（全 full → full；有 partial/failed → partial）
             # + 构造汇总输入：优先用协议 summary（summary 文本 + artifacts 标题 + evidence）组织每节；
@@ -1121,13 +1122,14 @@ class StreamMixin:
             if _agg_status != "full" and done_items:
                 _gap_txt = f"，缺口：{','.join(_missing_keys)}" if _missing_keys else ""
                 orch_content = f"（编排部分完成：{len(_missing_keys)} 个交付物缺失/失败{_gap_txt}）\n\n" + orch_content
-                yield {"type": "reasoning",
+                yield {"type": "reasoning", "kind": "progress",
                        "delta": f"（自动编排）编排部分完成（{_agg_status}）：{len(_missing_keys)} 个交付物缺失/失败"
                                 + _gap_txt}
             # P0-1（T3）：反思闭环——汇总后质量评审 → 未达标修订（复用画布 reflection 公共评审）
             reflection_meta = None
             if done_items:
-                yield {"type": "reasoning", "delta": "（自动编排）对汇总结果进行质量评审…"}
+                yield {"type": "reasoning", "kind": "progress",
+                       "delta": "（自动编排）对汇总结果进行质量评审…"}
                 from workflows.refine import RefineGate
                 # Task 10：agg_status 传入 RefineGate——partial 时不自动重派（避免循环），仅评审 + 追加人工复核建议
                 _ref = RefineGate.run(orch_content, goal, done_items, plan, provider_id, agg_status=_agg_status)
@@ -1142,7 +1144,7 @@ class StreamMixin:
                     "degraded": bool(_ref.get("degraded", False)),
                 }
                 if reflection_meta.get("score") is not None:
-                    yield {"type": "reasoning", "delta": (
+                    yield {"type": "reasoning", "kind": "progress", "delta": (
                         f"（自动编排）质量评审：{reflection_meta['score']}/100 · "
                         f"{'通过' if reflection_meta['passed'] else '未通过，已自动修订 ' + str(reflection_meta['rounds']) + ' 轮'}")}
                 orch_content = _ref.get("content") or orch_content
@@ -1161,7 +1163,7 @@ class StreamMixin:
                 if _gate_gaps:
                     _missing_keys = list(_missing_keys) + _gate_gaps
                     orch_content = "（编排质量门禁：" + "；".join(_gate_gaps) + "）\n\n" + orch_content
-                    yield {"type": "reasoning",
+                    yield {"type": "reasoning", "kind": "progress",
                            "delta": "（自动编排）编排质量门禁：" + "；".join(_gate_gaps)}
             # P0-1：编排成功后沉淀为可复用工作流（draft，前端可另存/画布编辑/发布）
             saved_flow_id = None
@@ -1176,7 +1178,8 @@ class StreamMixin:
         _n_bad = sum(1 for _ot in orch_tasks if str(_ot.get("status") or "done") != "done")
         _done_wording = f"{len(orch_tasks)} 个子任务执行完成" + (
             f"（其中 {_n_bad} 个未成功）" if _n_bad else "")
-        yield {"type": "reasoning", "delta": f"（自动编排）{_done_wording if not degraded else '单 Agent 直行完成'}，汇总最终结论…"}
+        yield {"type": "reasoning", "kind": "progress",
+               "delta": f"（自动编排）{_done_wording if not degraded else '单 Agent 直行完成'}，汇总最终结论…"}
         for _chunk in iter_stream_chunks(orch_content):
             yield {"type": "token", "delta": _chunk}
         yield {"type": "stage", "name": "生成与校验", "status": "done"}
@@ -1752,7 +1755,7 @@ class StreamMixin:
                 reused = self._try_reuse_planner_flow(user_input, intent)
                 if reused and not dry_run:
                     self._save_conversation_dst(conversation_id, intent, slots)
-                    yield {"type": "reasoning",
+                    yield {"type": "reasoning", "kind": "progress",
                            "delta": f"（自动编排）命中已发布沉淀流程「{reused.get('flow_name') or ''}」，按流程模板执行子任务…"}
                     reused["data"] = {"tasks": reused.get("plan") or []}
                     yield from _yield_collect(self._stream_orchestrated(
@@ -1782,7 +1785,7 @@ class StreamMixin:
                               f"{type(_orch_exc).__name__}: {_orch_exc}\n{_tb.format_exc()}", flush=True)
                     except Exception:
                         pass
-                    yield {"type": "reasoning", "delta": (
+                    yield {"type": "reasoning", "kind": "progress", "delta": (
                         "（自动编排）编排执行中断（" + type(_orch_exc).__name__ +
                         "），已回落为单 Agent 直行重新作答；上方子任务轨迹仅供排查，最终结论以本次答复为准")}
                     _orch = None
@@ -1864,7 +1867,7 @@ class StreamMixin:
             # 却检索恒为空」，调用方无法区分「库里没有」与「白名单写错了」（实测 4887 块规范恒不可见）。
             _kbw = retrieval.get("kb_scope_warn")
             if _kbw:
-                yield {"type": "reasoning", "delta": (
+                yield {"type": "reasoning", "kind": "progress", "delta": (
                     "（知识库范围）Agent 配置的文档白名单有 "
                     f"{len(_kbw.get('missing') or [])} 篇不存在，已自动剔除"
                     + ("；因全部失效，本次已暂放宽为不限文档" if _kbw.get("unfiltered") else "")
