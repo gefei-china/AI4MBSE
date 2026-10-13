@@ -472,11 +472,14 @@ class StreamMixin:
                         '{"schema_version":1,"status":"full|partial|failed",'
                         '"summary":"一句话成果","artifacts":[{"kind":"document|model|code|view|report|other",'
                         '"title":"产物标题","ref":"产物定位或名称"}],'
-                        '"evidence":[{"source":"来源","ref":"引用位置"}],'
+                        '"evidence":[{"source":"graph|vector|attachment","ref":"引用位置","basis":"verified|derived|asserted"}],'
                         '"risks":[{"level":"high|mid|low","title":"风险名","desc":"描述","advice":"缓解建议"}],'
                         '"confidence":0.0}\n'
                         "规则：artifacts 列出**本次真实产出的可交付物**（无则 []）；"
-                        "evidence 列出支撑结论的依据；"
+                        "evidence 列出支撑结论的依据，并给每条标 basis："
+                        "**verified**=有可复核引用（图谱实体/需求 id/校验器输出/附件路径）、"
+                        "**derived**=由已验证事实推出、**asserted**=无引用的直接断言（最不可靠）；"
+                        "没查证过的**一律写 asserted**，不要为显得可信而标 verified；"
                         "risks 用 level/title/desc/advice 四字段"
                         "（level 取 high|mid|low，title 是一句话风险名，desc 是描述，"
                         "advice 是缓解建议）——**字段名必须是这四个**，写错会被校验器丢弃；"
@@ -1017,8 +1020,26 @@ class StreamMixin:
                                 f"{a.get('kind')}《{a.get('title')}》({a.get('ref')})" for a in _arts[:10])
                         _evs = _sm.get("evidence") or []
                         if _evs:
+                            # ★ 2026-10-13 §08：按 basis 分档呈现，**不给引用的排在前面**。
+                            #   目的不是"过滤掉低可信的"（那是拿未经验证的标签决定内容去留），
+                            #   而是让读者**一眼看出哪些结论可回查、哪些是模型断言**。
+                            #   顺序：verified → derived → asserted；组内保持原序。
+                            _ORD = {"verified": 0, "derived": 1, "asserted": 2}
+                            _ev_sorted = sorted(
+                                _evs, key=lambda e: _ORD.get(str(e.get("basis") or "asserted"), 2))
                             _sec += "\n证据：" + "；".join(
-                                f"{e.get('source')}:{e.get('ref')}" for e in _evs[:10])
+                                "%s:%s" % (e.get("source"), e.get("ref"))
+                                + ("[%s]" % e.get("basis") if e.get("basis") else "[无basis]")
+                                for e in _ev_sorted[:10])
+                            # 分档小结：让"有 N 条无引用断言"这类风险**在汇总里显形**，
+                            # 而不是埋进 JSON 里等人自己去翻。
+                            _nb = sum(1 for e in _evs
+                                      if str(e.get("basis") or "asserted") == "asserted")
+                            if _nb and _nb >= len(_evs):
+                                _sec += ("\n⚠️ 上述依据均为**模型断言（无可复核引用）**，"
+                                         "请勿直接作为验收依据")
+                            elif _nb:
+                                _sec += "\n（其中 %d 条为无引用断言）" % _nb
                         _rks = _sm.get("risks") or []
                         if _rks:
                             _sec += "\n风险/待确认：" + "；".join(

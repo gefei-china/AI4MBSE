@@ -24,6 +24,29 @@ KIND_VALUES = ("sysml", "requirement", "report", "doc")
 RISK_LEVELS = ("high", "mid", "low")
 EVIDENCE_SOURCES = ("graph", "vector", "attachment")
 
+# ── 事实/推断分档（★ 2026-10-13，文章 §08）─────────────────────────────────
+# **加一维"这句话的根据是什么"**，与 `source`（依据来自哪个检索通道）正交：
+#   · source 答"从哪儿找到的"（图谱/向量库/附件）；
+#   · basis  答"这是查到的还是想出来的"—— 后者才是**读者能不能直接信**的依据。
+#
+# 取值（三档，刻意不用"真/假"二元 —— 模型自报的"真"不可信，见下方"能力边界"）：
+#   · `verified`：有可复核的引用（图谱实体/需求条目 id/校验器输出/附件路径），
+#                 读者可自己回查；
+#   · `derived` ：由已验证事实**算出来/推出来**的（可复核，但需跟着依据一起看）；
+#   · `asserted`：模型**直接断言**、无可复核引用（可能是对的，也可能是在编）。
+#     ⚠️ 不叫 `inferred`：那会暗示"这是推理结论因而可靠"，
+#     实际上"无引用的断言"恰恰是**最不可靠**的一档，命名不能误导读者。
+#
+# **能力边界（重要，别把它当校验器用）**：
+# 本字段是**模型自报**，服务端**只做枚举校验与截断，不做真实性验证** ——
+# 我们没有任何手段判断一条 `verified` 是不是真的查过图谱。
+#   ⇒ 因此 `basis` 的正确用法是**呈现**（"以下 N 条为无引用断言"），
+#     **不是**自动采信/自动过滤（否则等于用一个未经验证的标签去决定内容去留）。
+#   ⇒ 兜底：缺 `basis` 时按 `asserted` 处理（最保守的一档）——
+#     旧数据（无该字段）与"模型忘了写"都落到这里，不会被高估。
+BASIS_VALUES = ("verified", "derived", "asserted")
+DEFAULT_BASIS = "asserted"     # 缺字段时的保守兜底
+
 # ── 长度/数量上限 ──
 MAX_SUMMARY = 500
 MAX_TITLE = 60
@@ -63,6 +86,12 @@ SUMMARY_SCHEMA = {
             "properties": {
                 "source": {"type": "string", "enum": list(EVIDENCE_SOURCES)},
                 "ref": {"type": "string", "maxLength": MAX_REF},
+                # ★ 2026-10-13 §08：basis 为**可选**（刻意不列进 required）——
+                #   列进去会让所有旧格式（无该字段）判 ok=False ⇒ 存量全红。
+                "basis": {"type": "string", "enum": list(BASIS_VALUES),
+                          "description": "依据强度：verified=有可复核引用 / derived=由已验证事实推出"
+                                         " / asserted=无引用的直接断言（最不可靠）。"
+                                         "★ 模型自报，服务端只校验枚举，不验证真实性"},
             }}},
         "risks": {"type": "array", "items": {
             "type": "object",
@@ -214,9 +243,17 @@ def validate(raw):
             warnings.append(f"evidence[{i}].source={src!r} 不在枚举内")
         if len(str(e.get("ref", ""))) > MAX_REF:
             truncated = True
+        # ★ 2026-10-13 §08：basis 归一化（**可选字段，缺则按 asserted 兜底**）。
+        # 兜底方向是"往更不可靠的一档靠"：宁可把没标的一律当未验证，
+        # 也不让"漏写 basis"被当成 verified —— 那等于用一个能高估自己的标签去决定内容可信度。
+        _basis = e.get("basis")
+        if _basis is not None and str(_basis) not in BASIS_VALUES:
+            warnings.append(f"evidence[{i}].basis={_basis!r} 不在枚举内，按 {DEFAULT_BASIS} 处理")
+            _basis = DEFAULT_BASIS
         out["evidence"].append({
             "source": str(src) if src is not None else "graph",
             "ref": _cut(e.get("ref"), MAX_REF),
+            "basis": str(_basis) if _basis is not None else DEFAULT_BASIS,
         })
 
     # risks（数组，level/title/desc/advice 截断）
