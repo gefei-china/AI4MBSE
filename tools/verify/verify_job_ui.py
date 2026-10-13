@@ -219,11 +219,31 @@ def t_f3(core, docs, jobs_py, schema_py):
     ok &= _rec("F3c 前后端作业路径一致",
                "'/api/jobs/'" in core and '"/api/jobs/{job_id}"' in jobs_py)
     # ④ 前端不得自己拼后端不存在的状态字面量
-    sts = set(re.findall(r"st === '([a-z]+)'", core)) | \
-        set(re.findall(r"status === '([a-z]+)'", core))
-    py_sts = {"queued", "running", "done", "failed", "canceled"}
+    # ★ 2026-10-13 修判据洞（实测注入 `st === 'timed_out'` 被漏掉）：
+    #   原正则 `st === '([a-z]+)'` 的字符类**不含下划线** ⇒ 带 `_` 的状态
+    #   （`timed_out` / `waiting_input` 这类命名很常见）**扫不到** ⇒ 判据恒真。
+    #   改为 `[a-z_]+`。这类"字符类写窄了 ⇒ 静默漏匹配"与"窗口开宽了 ⇒ 扫到噪声"
+    #   是同一族的判据缺陷：**都必须靠注入变异当场验，不能靠读代码确认**。
+    sts = set(re.findall(r"st === '([a-z_]+)'", core)) | \
+        set(re.findall(r"status === '([a-z_]+)'", core))
+    # ★ 2026-10-13：原先 `py_sts` 是**手抄的硬编码集合** —— 后端新增一个状态
+    #   （如 `timeout`）时门禁发现不了，它只会拿"手抄的老集合"去比前端，
+    #   **永远 PASS** ⇒ 这正是 `62c168e`「硬编码快照必然失效」在门禁自身的复现。
+    #   改为从**真相源** `core/job_queue.py` 的 TERMINAL/ACTIVE 真取。
+    py_sts = set()
+    try:
+        from core.job_queue import ACTIVE as _A, TERMINAL as _T
+        py_sts = set(_A) | set(_T)
+    except Exception:
+        pass
+    # ★ 必须**同时**有后端状态与前端比对点，否则下面 `not bad_st` 恒为真
+    #   （空集合 = 全通过 = 假绿；本仓已因同型问题栽过多次）。
+    ok &= _rec("F3c1 能从 core.job_queue 取到后端状态枚举（判据非空）",
+               len(py_sts) >= 4, "取到 %d 个：%s" % (len(py_sts), sorted(py_sts)))
+    ok &= _rec("F3c2 前端确实有状态比对点（否则 F3c3 恒真）",
+               len(sts) >= 1, "前端比对点=%s" % sorted(sts))
     bad_st = sorted(s for s in sts if s not in py_sts)
-    ok &= _rec("F3c 前端未使用后端不存在的状态字面量", not bad_st,
+    ok &= _rec("F3c3 前端未使用后端不存在的状态字面量", not bad_st,
                "前端=%s 后端=%s" % (sorted(sts), sorted(py_sts)))
     return ok
 
