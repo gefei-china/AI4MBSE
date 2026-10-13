@@ -212,6 +212,34 @@ def c_group():
           len(sp.detect_conflicts(s8)) == 1,
           "实测 %d 条：%s" % (len(sp.detect_conflicts(s8)), sp.detect_conflicts(s8)))
 
+    # C9 ★**真实场景实测得出**的误报形态（2026-10-14 真 LLM 跑出两子任务互斥结论时抓到）
+    #   真实产出："对外数据接口标识为 p1、p2、p3、p4、p5。" vs "3个对外数据接口分别为 IF1、IF2、IF3。"
+    #   两句讲的是同一 subject，但**首数是列表序号（1 / 3）而不是数量** ⇒ 被误判成
+    #   "同一对象给出不同取值 1 vs 3" ⇒ **纯误报**。
+    s9 = [_summ(task_key="t1", claims=[{"text": "对外数据接口标识为 p1、p2、p3、p4、p5。",
+                                        "subject": "转发器对外数据接口标识"}]),
+          _summ(task_key="t2", claims=[{"text": "3 个对外数据接口分别为 IF1、IF2、IF3。",
+                                        "subject": "转发器对外数据接口标识"}])]
+    check("C9 枚举清单里的序号不得当成数量（真实场景误报）",
+          len(sp.detect_conflicts(s9)) == 0,
+          "实测误报 %d 条：%s" % (len(sp.detect_conflicts(s9)), sp.detect_conflicts(s9)))
+    check("C9b 真数量仍然能被检出（修 C9 不能把真冲突一起修掉）",
+          len(sp.detect_conflicts([_summ(task_key="t1",
+                                          claims=[{"text": "该转发器对外数据接口共3个。",
+                                                   "subject": "转发器对外数据接口数量"}]),
+                                     _summ(task_key="t2",
+                                           claims=[{"text": "该型号转发器对外数据接口共5个。",
+                                                    "subject": "转发器对外数据接口数量"}])])) == 1,
+          "真实场景那对（3 vs 5）必须仍被检出")
+
+    # C10 task_key 必须带出来（冲突要能归因到具体子 Agent）
+    s10 = [_summ(task_key="t2", claims=[{"text": "共3个接口", "subject": "接口数"}]),
+           _summ(task_key="t5", claims=[{"text": "共7个接口", "subject": "接口数"}])]
+    cf10 = sp.detect_conflicts(s10)
+    check("C10 冲突条目带双方 task_key（可归因到子 Agent）",
+          bool(cf10) and {x["task_key"] for x in cf10[0]["claims"]} == {"t2", "t5"},
+          "实测=%s" % ([x.get("task_key") for x in cf10[0]["claims"]] if cf10 else None))
+
     # C7 真无冲突
     s7 = [_summ(task_key="t1", claims=[{"text": "3 个接口", "subject": "接口数"}]),
           _summ(task_key="t2", claims=[{"text": "已完成建模", "subject": "进度"}])]

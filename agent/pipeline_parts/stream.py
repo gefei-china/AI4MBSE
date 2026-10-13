@@ -623,6 +623,28 @@ class StreamMixin:
                                         elif isinstance(_item, str) and _item.strip():
                                             _arts.append({"kind": _kind, "title": _item[:80],
                                                           "content_json": {"text": _item}})
+                                # ★ 2026-10-14（批次三 #17）：给 report/requirement/doc
+                                #   三类交付物做**结构校验**并**随产物落库**。
+                                #   现状（取证）：`KIND_VALUES` 声明了 4 类，但**只有 sysml
+                                #   走 checker.jar** ⇒ 报告/需求/文档格式对不对全凭模型自觉。
+                                #   ⚠️ **只挂诊断不阻断**：物化是可观测层，不是门禁；
+                                #     校验器自身异常一律降级（degraded=True, checked=0）。
+                                #   ⚠️ `kind='artifact'`（本仓自造的一类）**不参与** ——
+                                #     它是 artifacts[] 的容器名，不是协议里的 kind。
+                                try:
+                                    from services.artifact_validator import (
+                                        validate_artifact as _av)
+                                    for _a in _arts:
+                                        if _a.get("kind") != "artifact":
+                                            continue
+                                        _ak = str((_a.get("content_json") or {}).get("kind") or "")
+                                        _av_res = _av(_ak, _a.get("content_json"))
+                                        if int(_av_res.get("checked") or 0) > 0:
+                                            _a["content_json"] = dict(
+                                                _a["content_json"],
+                                                structure_check=_av_res)
+                                except Exception:
+                                    pass
                                 if _arts:
                                     from services.artifact_materializer import store as _art_store
                                     _c10 = get_db()
@@ -1028,6 +1050,27 @@ class StreamMixin:
                         if _arts:
                             _sec += "\n交付物：" + "；".join(
                                 f"{a.get('kind')}《{a.get('title')}》({a.get('ref')})" for a in _arts[:10])
+                            # ★ 2026-10-14（#17）：把**结构体检未通过**的交付物显式带出来。
+                            #   目的与 basis/claims 一致：**呈现而非过滤** —— 用户要知道
+                            #   哪份报告"没有结论段"、哪条需求"不可测"，而不是收到一份
+                            #   看起来完整、实则没法验收的东西。
+                            #   ⚠️ 校验器不可用（degraded / checked=0）时**一个字都不加**。
+                            try:
+                                from services.artifact_validator import (
+                                    validate_artifact as _av2)
+                                _weak = []
+                                for _a in _arts[:10]:
+                                    _ak2 = str(_a.get("kind") or "")
+                                    _r2 = _av2(_ak2, _a)
+                                    if int(_r2.get("checked") or 0) > 0 and not _r2.get("ok"):
+                                        _weak.append("%s《%s》：%s"
+                                                     % (_ak2, _a.get("title"),
+                                                        (_r2.get("issues") or ["结构不合规"])[0]))
+                                if _weak:
+                                    _sec += ("\n⚠️ 交付物结构体检未通过（格式问题，不影响内容）："
+                                             + "；".join(_weak[:3]))
+                            except Exception:
+                                pass
                         _evs = _sm.get("evidence") or []
                         if _evs:
                             # ★ 2026-10-13 §08：按 basis 分档呈现，**不给引用的排在前面**。

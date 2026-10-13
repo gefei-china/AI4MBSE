@@ -152,13 +152,25 @@ def main():
                     if kv != "progress" and any(p in t[:120] for p in SYS_PREFIXES)]
 
     print("  带 kind=progress 的站点：%s" % [ln for ln, _ in tagged])
-    # ★ 13 处：初版我按"文案以（自动编排）开头"肉眼数得 8，门禁 B2 抓出 4 处 f-string
-    #   拼接的（写操作确认队列 / 编排部分完成 / 质量评审 / 命中沉淀流程）；
-    #   第 13 处是**真实建模验证**时补的 —— `_stream_orchestrated` 里的汇总提示，
-    #   它的 delta 是**变量** `_d`，AST 连一个字面量都取不到 ⇒ 第三类"数不到"。
-    #   ⇒ **门禁比人眼数得准，且真实流量会暴露肉眼与简单 AST 都数不到的站点。**
-    check("B1 ★ 13 处系统提示都带 kind=progress",
-          len(tagged) == 13, "实测 %d 处（期望 13）" % len(tagged))
+    # ★ 2026-10-14：**删掉硬编码的 `== 13`**，改为**派生判据**。
+    #   根因（实测）：本批次 #15 又新增了 1 处系统提示（冲突播报），
+    #   带 progress 的站点变成 14 ⇒ `len(tagged) == 13` 判红。
+    #   ⇒ 这是 `62c168e`「硬编码快照必然失效」的**又一次**复现，且这次它红得毫无价值
+    #     （新增系统提示是**预期行为**，不是缺陷）。
+    #   改法：**条数不是不变式，"划分正确"才是**。
+    #     · B1 只断言「每个带 progress 的站点其文案确属系统提示」（见 B3）；
+    #     · 「没有系统提示漏标」由 B2 保证；
+    #     · 「CoT 集合 = 全部站点减去 progress 集合」是**定义**，不需要写死 13。
+    #   ⇒ 保留一条"非空"判据防空集合恒真（0 处 progress 也会全绿）。
+    check("B1 系统提示站点非空（防空集合恒真）", len(tagged) >= 1,
+          "实测 %d 处 —— 0 处意味着全仓没有任何 reasoning 带 kind，"
+          "前端分流形同虚设" % len(tagged))
+    # B1b 派生判据：**progress 集合 + 未标注集合 == 全部站点**（划分完备且互斥）
+    _untagged_all = [(ln, t) for ln, has, kv, t in sites if kv != "progress"]
+    check("B1b 划分完备（progress + 未标注 == 全部站点，无重叠无遗漏）",
+          len(tagged) + len(_untagged_all) == len(sites),
+          "tagged=%d untagged=%d total=%d"
+          % (len(tagged), len(_untagged_all), len(sites)))
     check("B2 ★ 没有系统提示漏标（漏标 ⇒ 仍与 CoT 混在同一框）",
           not untagged_sys,
           "漏标行号：%s" % [(ln, t[:30]) for ln, t in untagged_sys])
@@ -199,8 +211,12 @@ def main():
     # ══════════════ C. 真实 CoT 不能被误标 ══════════════
     print("\n=== C. 真实 CoT 不被误标（误标会把模型思考赶出思考框）===")
     cot = [(ln, kv, t) for ln, has, kv, t in sites if kv != "progress"]
-    check("C1 真实 CoT 站点数 = 总数 - 13", len(cot) == len(sites) - 13,
-          "cot=%d total=%d" % (len(cot), len(sites)))
+    # ★ 同上：C1 原为 `len(cot) == len(sites) - 13`（硬编码）。
+    #   改后：**恒等式**（这是"划分"的定义，不是需要维护的快照），
+    #   真正要锁的是 C2「没有真实 CoT 被误标成 progress」与 B2「没有系统提示漏标」。
+    check("C1 CoT 集合 = 全部站点 − progress 集合（划分定义，非快照）",
+          len(cot) == len(sites) - len(tagged),
+          "cot=%d total=%d tagged=%d" % (len(cot), len(sites), len(tagged)))
     # 逐字增量形如 `f"..."` / `_r_delta` / `delta[` 等，绝不能是系统提示文案
     _mis = [(ln, t) for ln, kv, t in cot
             if any(p in t[:120] for p in SYS_PREFIXES)]

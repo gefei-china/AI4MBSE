@@ -558,6 +558,33 @@ jobs:
       - name: Guard conflict_check 假实现已下线（两条进入路径都断）
         run: python tools/verify/verify_conflict_check_retired.py
 
+      # ── 批次三（2026-10-14）：claims 协议 / 结论冲突检测 / 三类交付物结构校验 ──
+      # ⚠️ **这批门禁是"建好却不接线"的直接受害者**（米爸 2026-10-13 20:25 指出）：
+      #   上批次建的 `verify_orch_run_id_scope` / `verify_stream_event_log` /
+      #   `verify_reasoning_kind` / `verify_quality_review_wiring` 四条，
+      #   至今 `verify_gate_wiring` 仍报它们"未接线" ⇒ 本地能跑能报绿，**CI 里一次都不执行**。
+      #   本批新增的两条**当场接线**，并把上批次那四条一并补上（实测干净库 + 真库双绿）。
+      # 取舍说明：门禁**不是**发现缺陷的工具（唯一一次靠它抓到真缺陷的记录是
+      #   `dbc1e42`「14 个离线门禁全绿也没抓到」），它的价值是**防退化**——
+      #   把已修好的坑钉死，让下一个人无法悄悄改回去。所以该接的是"钉住了真缺陷"的那些。
+      - name: Guard 编排关键事件落库 + 工具调用可归因（B2-11/B2-12，45 条）
+        run: python tools/verify/verify_stream_event_log.py
+
+      - name: Guard run_id 作用域正确（真实建模验证抓出的崩溃，AST 级 + 9 处误报豁免）
+        run: python tools/verify/verify_orch_run_id_scope.py
+
+      - name: Guard reasoning 事件区分模型 CoT 与系统提示（36 条，派生判据非硬编码快照）
+        run: python tools/verify/verify_reasoning_kind.py
+
+      - name: Guard 质量评审接线（口径：plan_eval 计数低 ≠ 评审没跑）
+        run: python tools/verify/verify_quality_review_wiring.py
+
+      - name: Guard claims 协议 + 多 Agent 结论冲突检测（批次三 #16/#15，25 条 + 4 变异）
+        run: python tools/verify/verify_claims_and_conflicts.py
+
+      - name: Guard report/requirement/doc 三类交付物结构校验（批次三 #17，26 条 + 4 变异）
+        run: python tools/verify/verify_artifact_validator.py
+
       # ── B1-10（2026-10-13）：跑完所有门禁后，工作区必须仍是干净的 ────────
       # 为什么需要（本仓实测踩过两次）：
       #   `tools/verify/verify_norm_summary.py` 等少数门禁的「变异自证」会**就地改生产源文件**
