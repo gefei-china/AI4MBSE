@@ -796,9 +796,13 @@ class StreamMixin:
                     _sm = _it.get("summary")
                     if isinstance(_sm, dict) and _sm.get("status") in _sp.STATUS_VALUES:
                         _summaries.append(_sm)
-                    else:  # 旧数据（无协议 summary）→ normalize_text 兼容视为 full
+                    else:  # 旧数据（无协议 summary）→ normalize_text 兼容解析
                         try:
-                            _summaries.append(_sp.normalize_text(_it.get("result")))
+                            # ★ 2026-10-13（B1-2）：传入该任务的**执行状态**，
+                            #   让 normalize_text 能把"已知失败但正文非空"也判 failed。
+                            #   _it.get("status") 是 agent_tasks.status 的同名字段（done_items 元素）。
+                            _summaries.append(_sp.normalize_text(
+                                _it.get("result"), task_status=_it.get("status")))
                         except Exception:
                             _summaries.append(dict(_sp.DEFAULT_SUMMARY))  # 保守：视作 partial
                 if _summaries:

@@ -271,13 +271,38 @@ def validate(raw):
             "truncated": truncated, "warnings": warnings}
 
 
-def normalize_text(raw_text):
+def normalize_text(raw_text, task_status=None):
     """旧文本格式兼容解析：历史编排产物中纯文本子任务结果 → 协议结构。
 
     历史产物（card_data.exec.subtasks）里子 Agent 直接输出纯文本（pipeline
-    中 sub_res / done_items[].result）。解析规则：视为 status=full（有交付
-    内容）、summary=文本前 MAX_SUMMARY 字符、artifacts/evidence/risks 为空、
+    中 sub_res / done_items[].result）。**有产出**时视为 status=full，
+    summary=文本前 MAX_SUMMARY 字符、artifacts/evidence/risks 为空、
     confidence=0.5、meta 为空。非 str 输入（None 等）归为一空文本摘要。
+
+    ★ 2026-10-13（对标 B1-2）：原实现**无条件**写 `status="full"`，被实测证伪为假绿源头 ——
+      · `normalize_text` 是 `stream.py:450` 在 **LLM 未按协议输出 JSON** 时的唯一产出路径
+        （实测 `agent_tasks.summary_json` **180/180 行 status 全为 `full`**，
+         `artifacts/evidence/risks` 值非空率 **0%**、`confidence` 恒 0.5）；
+      · 与此同时 `agent_tasks` 里有 **54 行 `failed`** —— 这些失败在**交付协议层完全不可见**；
+      · `stream.py:805` 的三态聚合第 1 段因此**永久返回 full**，
+        只剩 `:846` 的「只降不升」硬修正在兜底 ⇒ **"编排成功"在数据上不可证伪**。
+
+      **修法只用一条可证伪的判据：文本是否为空**（不给启发式、不猜关键词）。
+      依据是生产库实测（2026-10-12 只读，见下）：
+        · `status='failed'` 的 54 行，`result` **100% 为空串**
+          （error 聚类：46 条「编排中断…孤儿运行」+ 7 条 `timeout` + 1 条 `timeout（240s 无产出）`）；
+        · `status='done'` 的 168 行，`result` **100% 非空**（最短 24 字符，p10=936，中位数 2562）。
+      ⇒ 空/空白文本判 `failed`、有文本判 `full`，**在真库上零错分**。
+
+      ⚠️ **刻意不做关键词判定**（曾评估并否决）：真库里 `done` 的 168 条中
+        「无法」出现 **93** 次、「失败」16 次、「未能」17 次 —— 这些是**子 Agent 在正文里
+        诚实描述上游缺口**（如"上游 t1 未产出需求条目，故本次无可校验对象"），
+        属**有价值交付**，不是失败。用关键词判 failed 会把它们全部误杀。
+      这也是本仓老教训「**「某条链路有噪声」≠「该修」——先证明噪声参与决策**」的同族应用。
+
+    参数 task_status：调用方已知的执行状态（`agent_tasks.status`）。
+      传入 `failed`/`blocked` 时**优先采用**，避免"执行已知失败但正文非空"被误判 full。
+      None 表示不采信（保持纯文本判据）。
     """
     if raw_text is None:
         text = ""
@@ -285,16 +310,28 @@ def normalize_text(raw_text):
         text = raw_text
     else:
         text = str(raw_text)
+    # ── 状态判定（2026-10-13 新增；此前恒为 "full"）──
+    # 优先级：调用方给的执行状态 > 空文本判据。
+    # ⚠️ 只认 failed/blocked 两个"已确定未交付"的值；planned/ready/running 不采纳
+    #    （那是瞬态，传进来说明调用方用错了字段，静默降级到文本判据更安全）。
+    _ts = str(task_status or "").strip().lower()
+    if _ts in ("failed", "blocked"):
+        _status = "failed"
+    elif not text.strip():
+        _status = "failed"
+    else:
+        _status = "full"
     return {
         "schema_version": SCHEMA_VERSION,
         "task_key": DEFAULT_TASK_KEY,
-        "status": "full",
+        "status": _status,
         "summary": text[:MAX_SUMMARY],
         "artifacts": [],
         "evidence": [],
         "risks": [],
         "confidence": DEFAULT_CONFIDENCE,
-        "meta": {},
+        "meta": {"normalized_from_text": True,
+                 "empty_text": not bool(text.strip())},
     }
 
 
