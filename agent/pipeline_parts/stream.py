@@ -500,6 +500,20 @@ class StreamMixin:
                 tkey = tk.get("task_key") or "t"
                 ttitle = tk.get("title") or tkey
                 _t0 = _t.time()
+                # ★ 2026-10-13（B1-3）：写入 `running` 态。
+                #   为什么在**worker 内**而不是主循环批量写：主循环拿到的是 `ready` 全量
+                #   （可能 6 个而只有 3 个并发槽），批量标 running 会把**尚未开始**的任务
+                #   也标成"执行中"—— 崩溃后 resume 分不清"从未开始"与"跑到一半"，
+                #   反而制造了比现在更糟的失真。worker 真正被调度即开始执行，此刻标才对。
+                #   `claim` 自带 `WHERE status IN ('planned','ready')` 前置条件：
+                #   并发下同一任务不会被标两次，且幂等（重复调用不报错）。
+                #   ⚠️ resume 侧**已经能正确处理 running**（`orch_checkpoint.policy_classify`：
+                #   有活进程 ⇒ `owned` 拒接管；无主 ⇒ `requeue`），此前只是从没被写入过。
+                try:
+                    TaskQueue.claim(conn, tk["id"])
+                except Exception:
+                    # 标 running 失败**不得阻断执行**（它只是可观测性，不是门禁）
+                    pass
                 sem = agent_sems.get(tk.get("agent_id"))
                 if sem is not None:
                     sem.acquire()   # 进入该 Agent 并发额度（同 Agent 并发 ≤ max_concurrency）

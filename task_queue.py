@@ -136,9 +136,19 @@ class TaskQueue:
     # ── 状态推进 ──
     @staticmethod
     def claim(conn, task_id: int) -> None:
+        """把任务标为执行中（planned/ready → running）。
+
+        ★ 2026-10-13（B1-3）：首次被真实调用（此前零调用点，running 态库内 0 行）。
+        **补 `commit()` 是必需的，不是风格问题**：conn 是编排主循环与 worker 线程**共用**的
+        连接，python-sqlite3 在 UPDATE 时会隐式开事务；不提交则事务悬挂，
+        主循环的心跳/pending_count 被拖住 → 实测 G1「活跃产出不误杀」判红
+        （子任务持续吐 token 却被判 "timeout（1s 无产出）"）。
+        本类其余状态推进（complete/fail/block/retry/resolve）**均带 commit**，claim 原本是唯一例外。
+        """
         conn.execute(
             "UPDATE agent_tasks SET status='running', updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('planned','ready')",
             (task_id,))
+        conn.commit()
 
     @staticmethod
     def _result_keep_chars() -> int:
