@@ -49,6 +49,13 @@ class RefineGate:
     #   ② 标注上线之后又恰好没有多子任务编排流量。
     #   ⇒ **判据要看 messages.card_data 的 `reflection` 字段，不是这张表的计数**。
     @staticmethod
+    # ⚠️ 观测口径提醒（2026-10-13 复核）：`llm_usage_stats` 里 `plan_eval`
+    #   计数很低（真库 1 次）**不代表评审没跑** —— ① `_intent="plan_eval"`
+    #   标注是 2026-10-02（commit 42cf293）才上线的，此前 11 条真评审
+    #   （score 25~72、rounds 1~3、provider=deepseek-v4-flash）都没进这张表；
+    #   ② 标注上线之后又恰好没有多子任务编排流量。
+    #   ⇒ **判据要看 messages.card_data 的 `reflection` 字段，不是这张表的计数**。
+    @staticmethod
     def _enabled() -> bool:
         return _cfg.as_bool("refine", "enabled", True)
 
