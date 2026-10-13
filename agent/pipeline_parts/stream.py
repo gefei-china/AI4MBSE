@@ -1270,6 +1270,10 @@ class StreamMixin:
         yield {"type": "done", "data": {
             "message_id": msg_id, "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
+            # B2-11（2026-10-13）：把编排批次号带给路由层 —— 事件落库靠它与
+            # agent_tasks / tool_call_logs 关联（此前 done 不带 run_id，
+            # 落下来的事件无法归到某次编排，等于又一批孤岛数据）。
+            "orch_run_id": int(run_id or 0),
             "content": orch_content, "report": None, "card": json.loads(card_data),
             "sysml_views": sysml_views, "llm": llm_info, "orchestrated": True,
             "plan": orch_tasks, "degraded": degraded,
@@ -1356,6 +1360,7 @@ class StreamMixin:
         yield {"type": "done", "data": {
             "message_id": msg_id, "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
+            "orch_run_id": int(run_id or 0),   # B2-11：同上
             "content": orch_content, "report": None, "card": json.loads(card_data),
             "sysml_views": sysml_views, "llm": llm_info, "orchestrated": True,
             "plan": orch_tasks, "degraded": bool(orch.get("degraded")),

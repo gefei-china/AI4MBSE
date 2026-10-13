@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from core.deps import db_session, current_user
 from core.config import STATIC_DIR
+from database import db_conn   # B2-11：事件落库用**独立连接**（请求级 conn 在流式循环里会抢写锁）
 from repositories.conversation_repo import ConversationRepo, conv_visible_to
 from repositories.studio_repo import StudioRepo
 from agent import get_pipeline
@@ -312,6 +313,16 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         #  比断连本身更难排查）。下面的 finally 必须先判这个标志才能补发降级告知。
         _client_gone = False
         _frames = None
+        # ── B2-11 事件落库用的缓冲与状态（建在生成器体内，每请求独立）──
+        # `_evbuf` 收 stage/tool 帧；`_orch_run_id[0]` 收到 done 后才拿到真批次号；
+        # `_ev_flushing` 防同一次流里重复刷库（done 之后还有 token 帧时会再进循环）。
+        _evbuf = []
+        _evbuf_max = 200
+        _orch_run_id = [0]
+        _ev_flushing = False
+        _et = None
+        _maxr = 0
+        _SER_TYPES = ("stage", "tool")
         _terminal = False   # P1-32：本流是否已发过 done/error（终态哨兵）
         # P1-1 停止生成：客户端断开（AbortController）→ Starlette 关闭生成器 → GeneratorExit
         # 在 yield 点抛出，这里放行让连接干净关闭；其余异常转为 error 事件（不中断会话）
@@ -342,6 +353,53 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 # （本哨兵只认帧前缀，不解析 JSON —— 解析失败也不能影响转发。）
                 if isinstance(raw, str) and raw.startswith(("event: done", "event: error")):
                     _terminal = True
+                # ── B2-11（2026-10-13）：编排关键事件落库 ──
+                # 落点选这里，因为 `async for raw in _frames` 是**真正唯一的收口**：
+                # 生成器内部 88 处 yield 分散、无收口（编排子任务的 _evq 队列只带子任务事件，
+                # 主路径事件不经它）⇒ 改一处即可覆盖全部事件，不碰生成器语义。
+                #
+                # ⚠️ **run_id 只在最后一个事件（done）里才带**（`data.orch_run_id`，
+                #    本次一并补上）⇒ 流中途拿不到批次号。**不缓冲的话只能落 run_id=0 的孤岛行**，
+                #    那正是本项要修的"数据无法归到某次编排"的同一种毛病。
+                #    故：**内存缓冲 → 收到 done 后带真 run_id 一次性刷入**。
+                #    缓冲有上限（`_evbuf_max`），超了丢弃最旧的（防异常流把内存吃满）。
+                # 只落 stage/tool（services/stream_event_recorder.PERSIST_TYPES）：
+                # token 与 reasoning 是**逐字增量**，一次真实建模可达数百上千帧。
+                # ⚠️ 落库用**独立连接**：请求级 `conn` 在流式循环里写会与主流程抢写锁。
+                try:
+                    from core.config import get as _cfg_get
+                    if _cfg_get("stream_event_log", "enabled", True):
+                        _maxr = int(_cfg_get("stream_event_log", "max_per_run", 200) or 0)
+                        from services.stream_event_recorder import (
+                            parse_frame as _ser_parse, record as _ser_record)
+                        _et, _pl = _ser_parse(raw)
+                        if _et == "done":
+                            try:
+                                _orch_run_id[0] = int((_pl.get("data") or {}).get("orch_run_id") or 0)
+                            except Exception:
+                                _orch_run_id[0] = 0
+                        elif _et in _SER_TYPES:
+                            _evbuf.append(raw)
+                            if len(_evbuf) > _evbuf_max:
+                                del _evbuf[:len(_evbuf) - _evbuf_max]
+                except Exception:
+                    pass  # 观测收集失败绝不影响用户拿结果
+                # ── 缓冲刷库：收到 done/error 时执行一次 ──
+                #   放在 yield **之前**：yield 之后代码要等下一次 __anext__ 才继续跑，
+                #   而客户端断连（GeneratorExit）会让生成器停在 yield 处 ⇒ 缓冲永不清空。
+                if _evbuf and _et in ("done", "error"):
+                    _ev_flushing = True
+                    try:
+                        with db_conn() as _evc:
+                            for _f in _evbuf:
+                                _ser_record(_evc, conv_id, _f,
+                                            run_id=int(_orch_run_id[0]),
+                                            task_key="", max_per_run=_maxr)
+                            _evc.commit()
+                    except Exception:
+                        pass
+                    _evbuf[:] = []
+                    _ev_flushing = False
                 yield raw
         except GeneratorExit:
             _client_gone = True

@@ -907,13 +907,32 @@ class ToolMixin:
             except Exception:
                 pass
             with db_conn() as conn:
+                # B2-12（2026-10-13）补编排归因三列。**关键点：run_id/task_key 早就挂在
+                # self 上**（stream.py:497-498 设 `_tool_run_ctx`/`_tool_task_key`，
+                # 原先只有"写操作暂存"那条路径消费，见 tools.py:546-547），
+                # 本表 8 个调用点却一个都没用 ⇒ 工具调用日志**无法归到某次编排**。
+                # 不改签名：8 处调用点各自加参数风险远大于收益，直接从 self 读。
+                _run_id = int(getattr(self, "_tool_run_ctx", 0) or 0)
+                _task_key = str(getattr(self, "_tool_task_key", "") or "")
+                # failure_kind：复用 B1-6 的分类器（不另造第二份词表——两份必然漂移）。
+                # 只在失败时写，成功留空（避免"成功"也带一个无意义的分类）。
+                _fkind = ""
+                if not result.get("ok"):
+                    try:
+                        from services.failure_class import classify as _fc
+                        _fkind = _fc(classify(
+                            _res_txt if _res_txt and not _res_txt.startswith("[redact-failed]")
+                            else str(result.get("error") or _res_txt or ""),
+                            ok=False))
+                    except Exception:
+                        _fkind = ""
                 conn.execute(
-                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name, run_id, task_key, failure_kind) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (intent_ctx.get("intent", ""), agent_ctx.get("agent", ""),
                      name, tool_type, _args_txt, _res_txt,
                      1 if result.get("ok") else 0,
-                     latency, conv_ctx or 0, _uname),
+                     latency, conv_ctx or 0, _uname, _run_id, _task_key, _fkind),
                 )
         except Exception:
             pass  # 观测落库失败不影响工具执行

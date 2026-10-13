@@ -722,6 +722,19 @@ DEFAULT_CONFIG = {
         # 物化后交付物"库里有行、可查询"，汇总/审计可按 kind 聚合，不必解 JSON。
         "materialize": True,
     },
+    "stream_event_log": {
+        # ── 编排 SSE 关键事件落库（2026-10-13，B2-11）──────────────────────
+        # 此前 stream.py 的 88 处 yield 事件**只到前端即丢**，生产库无任何编排事件表
+        # ⇒ 排障时无法回放"这次编排到底走了哪些阶段、调了哪些工具、结果如何"。
+        # 落点：路由层 chat_stream 的 `async for raw`（**真正唯一的收口**；生成器内部
+        #   88 处分散 yield 无收口，_evq 队列只带子任务事件）。改一处 vs 改 88 处。
+        # **只落 stage/tool 两类**（services/stream_event_recorder.PERSIST_TYPES）：
+        #   token 与 reasoning 都是**逐字增量**，一次真实建模可达数百上千帧，
+        #   全量落库会撑爆表，且排障时没人会逐字读 CoT。
+        "enabled": True,               # 总开关；关 = 完全不落事件（行为与改动前一致）
+        "types": "stage,tool",         # 落哪几类（逗号分隔）；改这个不会让转发丢事件
+        "max_per_run": 200,            # 单次编排事件数兜底（防异常循环撑爆表）
+    },
     "agent_assignment": {
         # ── 编排分派打分（2026-10-13，B1-7）────────────────────────────────
         # 定位：**择优与留痕，不是决策者**。planner LLM 已产出每个子任务的 agent，
@@ -1280,6 +1293,11 @@ CONFIG_SCHEMA = {
         "weight_capability": {"type": "float", "desc": "专长匹配权重（默认 0.5）。标定实测：原词表只覆盖真库 76 词条的 9 个，改为字符 bigram 重合度后 8 视图 top-1 命中 6/6"},
         "weight_load": {"type": "float", "desc": "负载权重（默认 0.3）。负载来自 agent_tasks 里 status='running' 的行数（B1-3 之后才有数据）"},
         "weight_history": {"type": "float", "desc": "历史成功率权重（默认 0.2，原 0.1 调高）。真库 168 done/54 failed ⇒ 该信号实测可得且区分度最明显"},
+    },
+    "stream_event_log": {
+        "enabled": {"type": "bool", "desc": "编排 SSE 关键事件落库总开关（关=不落任何事件，转发不受影响）"},
+        "types": {"type": "str", "desc": "落哪几类事件（逗号分隔）。★ 刻意不含 token/reasoning：两者是逐字增量，一次真实建模可达数百帧，全量落库会撑爆表"},
+        "max_per_run": {"type": "int", "desc": "单次编排（conversation_id+run_id）事件数上限，超出丢弃最旧的"},
     },
     "kb_scope": {
         "docs_missing_fallback": {"type": "bool", "desc": "白名单文档不存在时剔除失效项；全失效则退化为不限文档"},

@@ -74,6 +74,13 @@ def _migrate_columns(conn):
     # 回答不了"**是谁**调的"（文章讲的「业务方追着问到底是谁改的」那个必答项）。
     # 存量 578 行无法回溯（历史未记录），统一留空——**不编造**。
     _add("tool_call_logs", "user_name", "TEXT DEFAULT ''")
+    # ── B2-12（2026-10-13）编排归因三列 ──
+    # 此前 2013 行工具调用**无任何编排标识** ⇒ 回答不了"这次编排里哪个子任务调的"，
+    # 排障时无法把一次编排的工具调用串成一条链。存量无法回溯（历史未记录），统一留 0/''。
+    _add("tool_call_logs", "run_id", "INTEGER DEFAULT 0")
+    _add("tool_call_logs", "task_key", "TEXT DEFAULT ''")
+    # failure_kind 复用 services/failure_class 的分类（与 agent_tasks.error_class 同一份词表）
+    _add("tool_call_logs", "failure_kind", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "sub_task_key", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "prompt_cache_miss_tokens", "INTEGER DEFAULT 0")
     # P1-27 截断诊断（思考模型 reasoning 与正文共享 max_tokens 配额）

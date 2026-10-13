@@ -1166,6 +1166,16 @@ def init_db():
         -- 而后者正是文章讲的「业务方追着问到底是谁改的」那个必答项。
         -- 取值口径同audit_logs.user_name（display_name，回落 username）。
         user_name TEXT DEFAULT '',
+        -- B2-12（2026-10-13）：编排归因三列。此前本表**无任何编排标识**
+        -- ⇒ 2013 行工具调用只能回答"哪个会话/谁调的"，回答不了
+        -- 「**这次编排里哪个子任务调的**」——排障时无法把一次编排的全链路串起来。
+        -- run_id/task_key：编排批次号 + 子任务键（主路径 stream.py:497-498 已挂在
+        --   self 上，本表原先只有"写操作暂存"那条路径在用，见 tools.py:546-547）。
+        -- failure_kind：失败分类（复用 services/failure_class，与 B1-6 同一份词表）；
+        --   **只在失败时写**，成功留空（避免给成功也挂一个无意义分类）。
+        run_id INTEGER DEFAULT 0,
+        task_key TEXT DEFAULT '',
+        failure_kind TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_time ON tool_call_logs(created_at)")
@@ -1173,6 +1183,23 @@ def init_db():
     # 老库走该分支时表已存在、**不会加列**，索引建在缺列的表上会直接
     # `no such column: user_name` 让 init_db 整体失败（2026-10-06 实测踩到）。
     # 建索引必须晚于 _migrate_columns 的补列 —— 已移到紧跟其后的位置。
+
+    # ── B2-11（2026-10-13）编排 SSE 关键事件落库（stage/tool 两类）──
+    # 此前 88 处 yield 事件**只到前端即丢**，生产库无任何编排事件表 ⇒ 排障无法回放。
+    # 只落 stage/tool：token/reasoning 是**逐字增量**（一次真实建模可达数百帧），
+    # 全量落库会撑爆表，且排障时没人会逐字读 CoT。详见 services/stream_event_recorder.py。
+    c.execute("""CREATE TABLE IF NOT EXISTS orch_stream_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER DEFAULT 0,   -- 归属会话
+        run_id INTEGER DEFAULT 0,            -- 编排批次号（0=非编排/直行）
+        task_key TEXT DEFAULT '',            -- 子任务键（顶层事件为空）
+        event_type TEXT DEFAULT '',          -- stage | tool（刻意只这两类）
+        payload_json TEXT DEFAULT '{}',      -- 事件原始 JSON（截断 4000）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ose_conv_run "
+              "ON orch_stream_events(conversation_id, run_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ose_time ON orch_stream_events(created_at)")
 
     # ── P1 知识引擎双引擎：查询路由统计（图/向量/混合消费观测）──
     c.execute("""CREATE TABLE IF NOT EXISTS query_routing_stats (
