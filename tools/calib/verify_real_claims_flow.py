@@ -133,13 +133,13 @@ def main():
     ]
     subs = []
     # ★ max_tokens 必须给足（2026-10-14 实测）：deepseek-v4-flash 的 reasoning
-    #   与正文**共享额度** —— 给 1500 时 reasoning_tokens=1500、`finish_reason=length`、
+    #   与正文**共享额度** —— 给 1500/4000 时 reasoning 被吃满、`finish_reason=length`、
     #   **正文 0 字**；给 4000 才拿到 19 字正文。
     #   ⚠️ 这不是本批改动引入的缺陷，是**既有**的"思考分流额度不足"问题
     #   （MEMORY 已记过一次）。此处记下来是因为它会**伪装成"模型不遵守契约"**：
     #   正文为空 ⇒ 尾部 JSON 必然取不到 ⇒ claims 必然为空 ⇒
     #   很容易被误读成"协议注入没生效"。**先看 finish_reason 与 usage 再下结论。**
-    MAXTOK = 4000
+    MAXTOK = 8000
     for tk, q in asks:
         try:
             r = llm_client.chat([{"role": "user", "content": q + CONTRACT}],
@@ -239,38 +239,79 @@ def main():
     run_ok = False
     try:
         from agent.pipeline import AgentPipeline
-        from core.config import get as _cfg_get
         pipe = AgentPipeline()
-        user = {"id": 1, "name": "verify"}
-        _conv = sqlite3.connect(DB)
+        # ★ 打桩 `_try_reuse_planner_flow` ⇒ **强制走主路径** `_stream_orchestrated_flow`。
+        #   理由（实测）：生产库里有多条已发布沉淀流程，问什么都会命中它
+        #   ⇒ 走 `_stream_orchestrated` 复用路径 —— 而那条路径**只 yield 占位事件、
+        #   不执行子任务** ⇒ claims / conflicts / structure_check 三项**无从产生**。
+        #   ⇒ 那条路径验不出本批改动，继续跑只是浪费 token。
+        #   ⚠️ 这是**为验证而限定路径**，不是掩盖问题 —— 脚本末尾会如实标注
+        #     「本次刻意绕开复用路径」，而复用路径是能力盲区这件事写在记忆里。
+        _orig_reuse = AgentPipeline._try_reuse_planner_flow
+        AgentPipeline._try_reuse_planner_flow = lambda *a, **k: None
         try:
-            cid = _conv.execute(
-                "INSERT INTO conversations (title,intent,user_id,project_id)"
-                " VALUES ('b3-verify','chat',1,'')").lastrowid
-            _conv.commit()
+            user = {"id": 1, "name": "verify"}
+            _conv = sqlite3.connect(DB)
+            try:
+                cid = _conv.execute(
+                    "INSERT INTO conversations (title,intent,user_id,project_id)"
+                    " VALUES ('b3-verify','chat',1,'')").lastrowid
+                _conv.commit()
+            finally:
+                _conv.close()
+            # ⚠️ 提问必须**能触发编排**（意图路由判否 ⇒ 走单 Agent，
+            #   事件里只有 1 对 agent ⇒ 同样验不出子任务协议）。
+            #   实测踩过：「梳理一份通用的接口评审清单」⇒ 未进编排（agent 事件仅 2 个）。
+            #   判据：事件统计里 agent 数应 ≥ 4（≥2 子任务 × run/done）。
+            goal = ("请为一个新的城市轨道交通信号系统做完整的 MBSE 建模："
+                    "先做需求分析，再做架构设计，最后给出校验结论")
+            types = [e.get("type") for e in
+                     pipe.execute_stream(goal, 0, None, None, user=user)]
         finally:
-            _conv.close()
-        goal = "分析卫星通信地面站的转发器接口设计，给出结论与建议"
-        types = [e.get("type") for e in pipe.execute_stream(goal, 0, None, None, user=user)]
+            AgentPipeline._try_reuse_planner_flow = _orig_reuse
         run_ok = True
         n_tok = sum(1 for t in types if t == "token")
         print("  编排事件类型统计：%s"
               % {t: sum(1 for x in types if x == t) for t in set(types)})
-        check("C1 真编排跑通并产出 token", n_tok > 0,
+        print("  （已刻意打桩 `_try_reuse_planner_flow` ⇒ 强制走主路径"
+              " `_stream_orchestrated_flow`）")
+        check("C1 主路径真编排跑通并产出 token", n_tok > 0,
               "事件类型=%s（token 数=%d）" % (set(types), n_tok),
               note="编排未跑通时，下面的落库判据会标注「不可判定」而非「未生效」")
     except Exception as e:                                       # noqa: BLE001
         print("  编排异常：%r" % e)
-        check("C1 真编排跑通并产出 token", False, "异常：%r" % e,
+        check("C1 主路径真编排跑通并产出 token", False, "异常：%r" % e,
               note="链路本身没跑通 ⇒ C2/C3 的落库结论**不成立**，不据此判定本批改动无效")
 
-    # C2/C3 落库核验（**只在编排真的跑过时才有意义**）
+    # C2/C3 落库核验
+    # ⚠️⚠️ **必须按本次 run_id 过滤**（2026-10-14 真实踩到）：
+    #   复用路径 `_stream_orchestrated`（stream.py:1388）**不创建 agent_tasks、不执行子任务**
+    #   ——它只 yield 一对 `agent run/done` 占位事件，`orch_content` 来自**预发布流程模板**。
+    #   ⇒ "查 agent_tasks 最近 20 条" 拿到的全是**历史存量**（实测 run_id=532、
+    #     created_at=2026-10-07，是 10-07 那次跑的历史行），
+    #     于是 claims=0 / structure_check=0 被误读成"本批改动没生效"。
+    #   这与 MEMORY 里「查了不存在的列/查错了对象 ⇒ 拿到一个像模像样的错误数字」同族。
+    # ⇒ 先取本次真实 run_id（orch_run_id 事件），再按它过滤；取不到就**如实报不可判定**。
     _c2 = sqlite3.connect("file:%s?mode=ro" % DB, uri=True)
     try:
+        # 本次运行的 run_id（若该表存在）—— ⚠️ **表可能不存在**（生产库未迁移时就没有），
+        #   实测踩过：`sqlite3.OperationalError: no such table` 直接把脚本打断，
+        #   后面的判据一条都没跑到。⇒ 一律用 try 包住，缺表只是"拿不到 run_id"，不是致命。
+        try:
+            _rid = _c2.execute(
+                "SELECT MAX(run_id) FROM orch_stream_events").fetchone()[0]
+        except Exception:
+            _rid = None
+        _since = time.strftime("%Y-%m-%d %H:%M:%S",
+                               time.localtime(time.time() - 1800))
         rows = _c2.execute(
             "SELECT task_key, summary_json FROM agent_tasks"
-            " WHERE summary_json IS NOT NULL AND summary_json!=''"
-            " ORDER BY id DESC LIMIT 20").fetchall()
+            " WHERE created_at > ? ORDER BY id DESC", (_since,)).fetchall()
+        print("\n  本次 run_id（orch_stream_events 最新）= %s" % _rid)
+        print("  本次时间窗(%s 之后)新建的 agent_tasks = %d 行" % (_since, len(rows)))
+        if len(rows) == 0:
+            print("  ⇒ 本次编排**未创建任何 agent_tasks**：与 `_stream_orchestrated`"
+                  "（复用路径只播报占位事件、不执行子任务）一致。")
         n_with_claims = 0
         for _tk, sj in rows:
             try:
@@ -279,30 +320,49 @@ def main():
                 continue
             if d.get("claims"):
                 n_with_claims += 1
-        print("  agent_tasks 近 %d 条有 summary_json，其中含 claims 的 %d 条"
-              % (len(rows), n_with_claims))
-        if run_ok:
-            check("C2 编排产出的 summary_json 含 claims", n_with_claims > 0,
+        print("  其中含 claims 的：%d 条" % n_with_claims)
+        if len(rows) == 0:
+            check("C2 本次编排创建了 agent_tasks 且含 claims", False,
+                  "本次无 agent_tasks（走的是复用路径）",
+                  note="**这条不构成「改动没生效」的证据** —— 复用路径本来就不执行子任务，"
+                       "claims 无从产生。要验证 claims 落地须走**主路径**"
+                       "（`_stream_orchestrated_flow`，即未命中已发布流程时的那条）")
+        else:
+            check("C2 本次编排产出的 summary_json 含 claims", n_with_claims > 0,
                   "%d/%d 条含 claims" % (n_with_claims, len(rows)),
                   note="=0 说明模型这轮没遵守契约（prompt 注入生效与否可由 W3b 门禁证明），"
                        "**不等于**改动没生效")
 
-        # C3 #17 的 structure_check 是否落库
+        # C3 #17 的 structure_check 是否落库（同样只认本次）
         n_sc = _c2.execute(
-            "SELECT COUNT(*) FROM subtask_artifacts"
-            " WHERE content_json LIKE '%structure_check%'").fetchone()[0]
-        print("  subtask_artifacts 含 structure_check 的行：%d" % n_sc)
-        if run_ok:
-            check("C3 #17 结构校验结果已落库（structure_check）", n_sc > 0,
-                  "实测 %d 行" % n_sc,
+            "SELECT COUNT(*) FROM subtask_artifacts WHERE created_at > ?",
+            (_since,)).fetchone()[0]
+        n_sc_ck = _c2.execute(
+            "SELECT COUNT(*) FROM subtask_artifacts WHERE content_json LIKE '%structure_check%'"
+            " AND created_at > ?", (_since,)).fetchone()[0]
+        print("  本次 subtask_artifacts = %d 行，其中含 structure_check = %d 行"
+              % (n_sc, n_sc_ck))
+        if n_sc > 0:
+            check("C3 #17 结构校验结果已落库（structure_check）", n_sc_ck > 0,
+                  "本次 %d 行产物里 %d 行带 structure_check" % (n_sc, n_sc_ck),
                   note="=0 可能是「这轮没有 report/requirement/doc 类交付物」，"
                        "**不能**据此判定校验器没接线")
+        else:
+            check("C3 #17 结构校验结果已落库（structure_check）", False,
+                  "本次无产物行（未创建 agent_tasks）",
+                  note="不可判定：本次编排没产生子任务产物")
 
-        # C4 #15 的 conflicts 口径是否落库
+        # C4 #15 的 conflicts 口径是否落库（只看本次窗口）
         n_cf = _c2.execute(
+            "SELECT COUNT(*) FROM messages WHERE created_at > ?"
+            " AND card_data LIKE '%\"conflicts\"%'", (_since,)).fetchone()[0]
+        n_cf_all = _c2.execute(
             "SELECT COUNT(*) FROM messages WHERE card_data LIKE '%\"conflicts\"%'"
         ).fetchone()[0]
-        print("  messages.card_data 含 conflicts 的行：%d" % n_cf)
+        print("  本次窗口内 card_data 含 conflicts 的消息 = %d 条（全库累计 %d 条）"
+              % (n_cf, n_cf_all))
+        check("C4 #15 conflicts 口径已落库（至少全库有数据）", n_cf_all > 0,
+              "全库 %d 条" % n_cf_all)
     finally:
         _c2.close()
 
