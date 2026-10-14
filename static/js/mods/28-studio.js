@@ -178,9 +178,17 @@ async function loadMCPCombined(){
   const f = document.getElementById('mcp-filter')?.value || '';
   const sum = document.getElementById('mcp-market-summary');
   try{
-    const [mkt, mine] = await Promise.all([
+    // ★ B5-3：把 **mcp_servers 表**也纳入（此前只有市场/插件两条来源）。
+    //   根因（实测）：用户在「＋ 添加 MCP 服务器」里新增的记录落在 `mcp_servers`，
+    //   而本视图只读 `/api/studio/market?kind=mcp` 与 `/api/studio/plugins/mine?kind=mcp`
+    //   ⇒ 实测 `plugins/mine` 返回 **0 条**、市场侧只有 1 条未安装的
+    //   ⇒ **用户在 mcp_servers 里新增的 MCP 一条都不显示**，
+    //   界面上像"新增根本没生效"，而 `/api/studio/mcp-servers` 里它明明存在。
+    //   与 MEMORY「落库了 ≠ 用户看得见」同源，但这次是**跨数据源**：写 A 表、读 B 表。
+    const [mkt, mine, srv] = await Promise.all([
       api('/api/studio/market?kind=mcp'),
       api('/api/studio/plugins/mine?kind=mcp'),
+      api('/api/studio/mcp-servers'),
     ]);
     const mktItems = mkt.items || [];   // 内置由市场侧渲染（平台内置；个人空间不提供内置插件）
     const mineItems = mine.items || [];
@@ -194,12 +202,23 @@ async function loadMCPCombined(){
       if(it.installed) continue;  // 已添加副本已由私人侧渲染
       items.push(it.builtin ? {...it, view:'builtin'} : {...it, view:'market-add'});
     }
-    if(f==='custom') items = items.filter(x=>x.view==='personal');
+    // ── 第三来源：mcp_servers（本平台自己的 MCP 服务器表）──
+    //   ⚠️ 按 `name` 去重（与市场/插件侧可能同名，同名时**以 mcp_servers 为准**，
+    //      因为那才是真正跑 tools/call 的那条记录）。
+    const _seen = new Set(items.map(x=>x.name));
+    let srvN = 0;
+    for(const it of (Array.isArray(srv)?srv:[])){
+      if(_seen.has(it.name)) continue;
+      _seen.add(it.name);
+      items.push({...it, view:'mcp-server'});
+      srvN++;
+    }
+    if(f==='custom') items = items.filter(x=>x.view==='personal'||x.view==='mcp-server');
     else if(f==='market') items = items.filter(x=>x.view==='market-add' || x.view==='market-installed');
     else if(f==='builtin') items = items.filter(x=>x.view==='builtin');
     const mkN = items.filter(x=>x.view==='market-add' || x.view==='market-installed' || x.view==='builtin').length;
     const pN = items.filter(x=>x.view==='personal').length;
-    if(sum) sum.textContent = `共 ${items.length} 个 · 插件市场 ${mkN} · 自定义 ${pN}`;
+    if(sum) sum.textContent = `共 ${items.length} 个 · 插件市场 ${mkN} · 自定义 ${pN+ (items.filter(x=>x.view==='mcp-server').length)}`;
     const mcpCnt = document.getElementById('tm-mcp-count');
     if(mcpCnt) mcpCnt.textContent = items.length;
     if(!items.length){ box.innerHTML = '<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:12px;">暂无匹配的工具（调整筛选条件），或点击「＋ 创建工具」创建</div>'; return; }
@@ -218,7 +237,28 @@ async function loadMCPCombined(){
           <div style="margin-top:8px;"><span style="font-size:10.5px;color:var(--mut);">平台预置，直接可用</span></div>
         </div></div>`;
       }
-      const tag = it.view==='market-installed' ? '<span class="st" style="background:#e8f5e9;color:#2e7d32;">来自市场</span>' : '<span class="st amb">自定义</span>';
+      // ★ B5-3：`mcp-server` 是本平台 mcp_servers 表的记录（用户在「＋ 添加 MCP 服务器」建的），
+      //   它**自带 builtin 标记** ⇒ 不能一律显示"自定义"，否则内置那条被错标。
+      const tag = it.view==='market-installed'
+        ? '<span class="st" style="background:#e8f5e9;color:#2e7d32;">来自市场</span>'
+        : (it.view==='mcp-server' && it.builtin)
+          ? '<span class="st b">内置</span>'
+          : (it.view==='mcp-server'
+              ? '<span class="st amb">MCP 服务器</span>'
+              : '<span class="st amb">自定义</span>');
+      // ★ 内置 MCP 的用途说明（回答"这个是什么、为什么删不掉"）
+      const _srvUse = (it.view==='mcp-server' && it.builtin)
+        ? `<div class="kv"><span>用途</span><b>本平台自己的 MCP 网关（${esc(it.endpoint||'')}）——
+             把 graphrag_search / impact_analysis / ontology_validate 通过 MCP 协议对外供给</b></div>
+           <div class="kv"><span>真实调用</span><b>${it.call_scope==='platform_gateway_all'
+               ? `网关被调用 <b>${esc(it.call_total ?? 0)}</b> 次${it.call_last?('，末次 '+esc(String(it.call_last).slice(0,16))):''}`
+               : '统计不可用'}</b></div>` : '';
+      const _srvOps = (it.view==='mcp-server' && it.builtin)
+        ? `<button class="btn sm ghost" onclick="testMCP(${it.id})">🔌 测试</button>
+           <button class="btn sm ghost" onclick="editMCP(${it.id})">✏️</button>
+           <button class="btn sm ${it.enabled===0?'ok':'ghost amb'}" onclick="toggleMCPStatus(${it.id},${it.enabled===0?1:0})">${it.enabled===0?'启用':'停用'}</button>
+           <span style="font-size:10.5px;color:var(--mut);align-self:center;">内置不可删</span>`
+        : '';
       const st = it.enabled===0 ? '<span class="st r">停用</span>' : '<span class="st ok">启用</span>';
       // 2026-09-17 第二刀：分享/撤回统一走 /api/plugins/{plugin_id}/*（与能力中心同一套守卫与语义）。
       //   · 旧实现调 /api/studio/share/submit 且传 plugins 表数值主键，后端按 name/label 查找
@@ -235,13 +275,16 @@ async function loadMCPCombined(){
         else if(it.scope !== 'public')
           share = `<button class="btn sm ghost" onclick="sharePlugin('${_sk}','${esc(it.plugin_id)}')">⬆ 分享到市场</button>`;
       }
-      let ops = `<button class="btn sm ghost" onclick="editMCP(${it.id})">✏️</button>
+      // ★ B5-3：内置项**不给删除按钮**（后端也会拒），避免"按钮在那儿点了必失败"
+      let ops = _srvOps || `<button class="btn sm ghost" onclick="testMCP(${it.id})">🔌 测试</button>
+        <button class="btn sm ghost" onclick="editMCP(${it.id})">✏️</button>
         <button class="btn sm ghost" title="复制为副本" onclick="copyMCP(${it.id})">📑 复制</button>
         <button class="btn sm ${it.enabled===0?'ok':'ghost amb'}" onclick="toggleMCPStatus(${it.id},${it.enabled===0?1:0})">${it.enabled===0?'启用':'停用'}</button>
         <button class="btn sm red" onclick="deleteMCP(${it.id})">删除</button>`;
       return `<div class="panel"><div class="ph"> ${esc(it.name)} ${tag} <span style="flex:1"></span>${st}</div>
       <div class="pb">
         <div style="font-size:11.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
+        ${_srvUse}
         <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${ops}${share}</div>
       </div></div>`;
     }).join('');

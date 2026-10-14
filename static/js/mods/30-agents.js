@@ -207,11 +207,27 @@ async function loadMCPServers() {
     const proto = s.protocol_version?`<span class="st b">${s.protocol_version}</span>`:'';
     const err = s.last_error?`<div style="font-size:11px;color:var(--red);margin-top:4px;" title="${esc(s.last_error)}">⚠ ${esc(s.last_error).slice(0,80)}</div>`:'';
     const statusBadge = s.status==='online' ? '<span class="st ok">online</span>' : '';
+    // ★ B5-3：内置 MCP 必须说清「它是什么」——
+    //   此前卡片只有名字 +「内置不可删」，用户看不出这个条目指向哪、为什么删不掉。
+    //   事实（据 audit_logs.event_type='mcp_tool_call' 审计）：它**被真实调用过 22 次**
+    //   （2026-09-24 02:24~06:33，user=mcp-client，含成功与失败），
+    //   但 **09-25 之后零调用** ⇒ 「建库时验证过、此后未被使用」。
+    const builtinNote = s.builtin
+      ? `<div class="kv"><span>用途</span><b>本平台<b style="color:var(--blue-d,#3478f6);">自己</b>的 MCP 网关（${esc(s.endpoint||'')}）
+           —— 把 graphrag_search / impact_analysis / ontology_validate 通过 MCP 协议对外供给，
+           再作为「内置 MCP」回注给 Agent</b></div>
+         <div class="kv"><span>真实调用</span><b>${s.call_scope==='platform_gateway_all'
+             ? `本平台 MCP 网关被调用 <b>${esc(s.call_total ?? 0)}</b> 次${s.call_last?('，末次 '+esc(String(s.call_last).slice(0,16))):''}
+                <span style="font-size:11px;color:var(--mut);">（口径：audit_logs · mcp_tool_call，
+                <b>尚未按服务器区分</b>，故不能归因到单个 MCP）</span>`
+             : '统计不可用'}</b></div>`
+      : '';
     return `<div class="panel"><div class="ph">${s.name} ${s.builtin?'<span class="st b">内置</span>':''} ${statusBadge} <span class="st ${s.enabled===0?'r':'ok'}">${s.enabled===0?'停用':'启用'}</span> ${proto}</div>
     <div class="pb"><div class="kv"><span>端点</span><b>${s.endpoint}</b></div>
     <div class="kv"><span>传输</span><b>${s.transport||'sse'}</b></div>
     <div class="kv"><span>清单</span><b>${toolN} 工具 / ${resN} 资源 / ${prmN} 提示词</b></div>
     <div class="kv"><span>延迟</span><b>${s.latency_ms}ms</b> <span style="font-size:11px;color:var(--mut);">巡检 ${(s.last_check||'').slice(5,19)||'-'}</span></div>
+    ${builtinNote}
     ${err}
     <div style="margin-top:6px;display:flex;gap:6px;">
       <button class="btn sm ghost" onclick="testMCP(${s.id})">🔌 测试</button>
@@ -746,7 +762,24 @@ async function loadAgentBindOptions(selected){
       api('/api/studio/skills'), api('/api/studio/mcp-servers'), api('/api/studio/agent-tools'),
     ]);
     _agentBindCands.skill = (skills||[]).filter(s=>s.enabled!==0).map(s=>({value:s.name, note:'', on:1}));
-    _agentBindCands.mcp = (mcps||[]).filter(m=>m.status==='online' && m.enabled!==0).map(m=>({value:m.name, note:'', on:m.status}));
+    // ★ B5-3：MCP 候选不再「不满足条件就悄悄消失」。
+    //   修复前：`filter(m => m.status==='online' && m.enabled!==0)`
+    //   ⇒ 新增的 MCP 只要还没测通（status=offline）或被停用（enabled=0），
+    //     就**从下拉里彻底消失**，用户完全看不出"我配的 MCP 去哪了"。
+    //   实测：`dev_ai_mcp`（status=online / enabled=0）⇒ 下拉里一个 MCP 都没有，
+    //     界面上只剩内置那一条，像是"新增根本没生效"。
+    //   现在：**全部列出**，用 note 标明状态（离线/已停用），并把原因挂在 title 上。
+    //   ⚠️ 仍允许勾选离线项 —— 绑定的是"这个 MCP 服务器"，
+    //     不是"此刻它通不通"（测试连通是 `/test` 的职责，不是绑定的门槛）。
+    _agentBindCands.mcp = (mcps||[]).map(m=>{
+      const dis = (m.enabled===0 || String(m.enabled)==='0');
+      const off = m.status !== 'online';
+      const note = dis ? '已停用（不参与发现）'
+                : off ? '离线（尚未测通 / 上次探测失败）' : '';
+      return {value:m.name, note,
+              title:[m.endpoint, note, m.last_error ? ('上次错误：'+m.last_error) : ''].filter(Boolean).join(' · '),
+              on:m.status};
+    });
     // ⚠️「工具」候选口径（2026-09-30 更正 —— 上一版在这里过度收紧了，必须写清为什么）：
     //   上一版按运行时那条 SQL（tools.py:76，WHERE ... t.status='active' AND t.source!='builtin'）
     //   把 source==='builtin' 全排掉，判词是「内置绑定到不了运行时」。这个结论**是错的**，实测推翻：

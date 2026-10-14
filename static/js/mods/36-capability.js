@@ -172,6 +172,36 @@ async function capLoad(page) {
   const mn = await api('/api/plugins/mine?kind=' + encodeURIComponent(s.type) + '&q=' + encodeURIComponent(s.q))
     .catch(function () { return { items: [] }; });
   s.mine = (mn && mn.items) || [];
+  // ★ B5-3：MCP 类型下**并入 `mcp_servers` 表**。
+  //   根因（实测）：本函数只读 `/api/plugins/mine?kind=mcp`，
+  //   而用户在「＋ 添加 MCP 服务器」里新增的记录落在 **`mcp_servers`** 表
+  //   ⇒ 实测该接口对 `dev_ai_mcp` 返回 **0 条**
+  //   ⇒ **用户新增的 MCP 在能力中心界面上一条都看不到**，
+  //      界面上只剩内置那一条，像是"新增根本没生效"
+  //      （而 `/api/studio/mcp-servers` 里它明明存在、还 online）。
+  //   这是**写 A 表、读 B 表**的跨源断层 —— 与 MEMORY「落库了 ≠ 用户看得见」同源。
+  //   并入时按 `name` 去重（同名以 mcp_servers 为准：那才是真正跑 tools/call 的记录），
+  //   并打上 `_from_server` 供渲染区分（编辑/删除仍走 mcp-servers 端点）。
+  if (page === 'st-mcp' && s.type === 'mcp') {
+    try {
+      const _srv = await api('/api/studio/mcp-servers');
+      const _seen = new Set(s.mine.map(function (x) { return x.name; }));
+      (Array.isArray(_srv) ? _srv : []).forEach(function (it) {
+        if (_seen.has(it.name)) return;
+        _seen.add(it.name);
+        s.mine.push({
+          name: it.name, label: it.name,
+          description: it.endpoint || '',
+          enabled: it.enabled, builtin: it.builtin,
+          legacy_table: 'mcp_servers', legacy_id: it.id,
+          status: it.status, endpoint: it.endpoint,
+          call_total: it.call_total, call_last: it.call_last,
+          call_scope: it.call_scope,
+          _from_server: true,
+        });
+      });
+    } catch (e) { /* 取不到就只显示 plugins 侧，不阻断 */ }
+  }
   await _pre;
   capRender(page);
 }

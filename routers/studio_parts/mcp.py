@@ -47,6 +47,34 @@ def list_mcp_servers(conn=Depends(db_session)):
         if isinstance(it, dict):
             it["headers_masked"] = _mask_headers(it)
             it.pop("headers", None)
+            # ★ B5-3：附真实调用统计 —— 让「这个 MCP 到底有没有被用过」**可见**。
+            #   口径必须用 `audit_logs.event_type='mcp_tool_call'`：
+            #   ⚠️ `tool_call_logs` 记的是 **Agent 路径**的工具调用，
+            #      **MCP 网关自己的调用不落在那里** —— 我先前用错表得出
+            #      「内置 MCP 零调用」的结论，实测审计里有 22 次（2026-09-24）。
+            #   ⇒ 「有没有被用」这个问题，**问错了表就得到相反答案**。
+            #   ⚠️ 口径踩过的坑（两次，都会给出"看起来对"的错数字）：
+            #     ① `tool_call_logs` 记的是 **Agent 路径**的工具调用，
+            #        **MCP 网关自己的调用不落在那里** ⇒ 用它查得到「零调用」的错误结论
+            #        （实测 `audit_logs` 里明明有 22 次，2026-09-24）。
+            #     ② 审计 `detail` 实际格式是「[MCP供给] graphrag_search 成功」，
+            #        **不含服务器名** ⇒ 用服务器名 `LIKE '%name%'` **恒为 0**
+            #        （又一个"看起来在起作用、实则恒假"的判据）。
+            #   ⇒ 正确口径：`audit_logs` 里 event_type='mcp_tool_call' 的**全局计数**。
+            #     ⚠️ **GAP**：审计尚未按服务器维度区分（detail 里没有服务器标识），
+            #     所以这是"平台 MCP 网关被调用过多少次"，**不能**归因到某个具体服务器。
+            #     要精确归因需给审计 detail 加服务器标识 —— 已记入待办，不在这里猜。
+            try:
+                _n, _last = conn.execute(
+                    "SELECT COUNT(*), MAX(created_at) FROM audit_logs "
+                    "WHERE event_type='mcp_tool_call'").fetchone()
+                it["call_total"] = _n or 0
+                it["call_last"] = _last or ""
+                it["call_scope"] = "platform_gateway_all"
+            except Exception:
+                it["call_total"] = 0
+                it["call_last"] = ""
+                it["call_scope"] = "unavailable"
     return items
 
 
