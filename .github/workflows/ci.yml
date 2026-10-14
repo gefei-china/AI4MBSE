@@ -643,6 +643,15 @@ jobs:
       - name: Guard 规则→LLM 意图复核（B4-5，31 条含 C5 与改造前逐条比对）
         run: python tools/verify/verify_intent_llm_review.py
 
+      # ── B4-6（2026-10-14）：8 阶段建模流水线的子 Agent ──────────────────
+      # 米爸第 3 点：主 Agent 管意图/拆分/编排/输出，子 Agent 用**自己绑定的技能与工具**
+      # 完成任务再交回主 Agent。库里有一套完整的 8 阶段流水线（stage_order 0~7），
+      # 但取证发现它们**上线后一次编排都没跑过**（不是僵尸，是"落地未启用"）。
+      # 本门禁守住「它们齐备 + 能被 planner 选中」，并把"未被真实流量验证"
+      # 作为 GAP 显式记录（差距消失时会主动提醒关闭口径）。
+      - name: Guard 8 阶段流水线子 Agent（齐备 + 可被 planner 选中，11 条 + 1 GAP）
+        run: python tools/verify/verify_stage_pipeline_agents.py
+
       # ── B1-10（2026-10-13）：跑完所有门禁后，工作区必须仍是干净的 ────────
       # 为什么需要（本仓实测踩过两次）：
       #   `tools/verify/verify_norm_summary.py` 等少数门禁的「变异自证」会**就地改生产源文件**
