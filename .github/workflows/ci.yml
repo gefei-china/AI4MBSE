@@ -631,6 +631,18 @@ jobs:
       - name: Guard 架构假设（意图分析 / 能力承载 / 主子职责，14 条 + 3 项已知差距）
         run: python tools/verify/verify_arch_assumptions.py
 
+      # ── B4-5（2026-10-14）：规则命中 → LLM 独立复核 ────────────────────
+      # 米爸：「意图识别必须是那几个 agent？应该经过 LLM 分析来判断有哪些意图，
+      #       再和平台的能力进行匹配」。
+      # 改造前 detect() 里 `_done(..., "rule", 0.95)` 散落 11 处，规则命中即直返。
+      # 本门禁锁：①11 处规则直返必须走复核层（AST，反向变异自证）
+      #          ②四态 confirmed/vetoed/unavailable/skipped 全部可达且互不混淆
+      #          ③降级必须退回规则结果、vetoed 必须出澄清条（不得静默换方向）
+      #          ④**C5 与改造前（git HEAD）逐条比对** —— 这才是零回归的证据，
+      #            手写期望值只能自证（首版就因期望写错而假红）
+      - name: Guard 规则→LLM 意图复核（B4-5，31 条含 C5 与改造前逐条比对）
+        run: python tools/verify/verify_intent_llm_review.py
+
       # ── B1-10（2026-10-13）：跑完所有门禁后，工作区必须仍是干净的 ────────
       # 为什么需要（本仓实测踩过两次）：
       #   `tools/verify/verify_norm_summary.py` 等少数门禁的「变异自证」会**就地改生产源文件**

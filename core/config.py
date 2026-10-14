@@ -401,6 +401,17 @@ DEFAULT_CONFIG = {
         #   这是本批唯一的行为变化，且它不改路由方向（意图恒等于 inherit 会给的那个）、
         #   只免去一次无谓的追问确认。置 False 即回到"与旧行为零差异"（仅多置信度与 meta 标记）。
         "history_confirm_silent": True,
+        # ── B4-5（2026-10-14）：规则命中 → LLM 复核 ────────────────────────
+        #   现状问题（实测）：detect() 里 `_done(..., "rule", 0.95)` 散落 **11 处**，
+        #   规则命中即直返，**不进步-semantic、不进 LLM** ⇒「关键词→固定 Agent 名」映射表。
+        #   本开关让规则**先给候选、再经 LLM 独立复核**（确认 / 否决 / 不可用三态，
+        #   见 agent/intent.py `_llm_confirm_rule`）。
+        #
+        #   ⚠️ **默认 False（三态里 skipped）**：这是**延迟/成本敏感**开关。
+        #      实测规则直返 0.0s、每条走 LLM 约 3.6s（244 条评测里 LLM 档还会触发重试）。
+        #      ⇒ 默认关 = **线上行为与改造前逐字节一致**（零回归）；
+        #      开关打开前请先用 tools/calib/eval_intent_baseline.py 做 A/B 对比。
+        "rule_llm_confirm": False,
     },
     # P1-4（2026-10-01）会话槽位（DST slots）治理：合并口径 + 入参净化。
     #   三层根因与实测见 agent/pipeline_parts/common.py 顶部注释。
@@ -1047,6 +1058,27 @@ CONFIG_SCHEMA = {
         "version":     {"type": "str",  "desc": "版本号"},
         "host":        {"type": "str",  "desc": "监听地址（需重启生效）"},
         "port":        {"type": "int",  "desc": "监听端口（需重启生效）"},
+    },
+    # ★ B4-5（2026-10-14）：**`intent` 段此前整段不在 SCHEMA 里** ——
+    #   `save_override` 用 `CONFIG_SCHEMA` 做白名单校验（core/config.py:1451），
+    #   于是 `intent.keyword_scored` / `keyword_generic` / `history_llm_min` 等
+    #   **12 个既有开关一律无法通过设置页 / REST API 保存**（一律抛「未知配置项」）。
+    #   即：代码里能读到的开关，用户在界面上根本改不了 —— **"文档有、代码有、界面没有"**。
+    #   ⚠️ 与 MEMORY 里「静态 grep 到 ≠ 用户看得见」同族：这次是**配置存在 ≠ 可被配置**。
+    #   ⇒ 本段把 intent 全部开关补进白名单（含 B4-5 新增的 rule_llm_confirm），
+    #     门禁 `verify_intent_config_reachable` 锁住"SCHEMA 与 DEFAULT_CONFIG 的 intent 段不漂移"。
+    "intent": {
+        "keyword_scored":         {"type": "bool", "desc": "关键词层「竞争打分」（False = 回到「首个命中即返回」旧行为，A/B 用）"},
+        "keyword_generic":        {"type": "bool", "desc": "泛词是否参与打分（False = 泛词既不加分也不触发共现，A/B 用）"},
+        "sample_collect":         {"type": "bool", "desc": "真实请求是否把用户输入采集进意图样本池"},
+        "cache_enabled":          {"type": "bool", "desc": "意图级缓存（精确文本 + 索引指纹双匹配）"},
+        "confirm_when_unsure":    {"type": "bool", "desc": "低置信/冲突时是否转入澄清确认"},
+        "llm_sem_conflict_min":   {"type": "float", "desc": "语义与 LLM 意图互斥时的语义分下限（达阈转澄清）"},
+        "history_recall":         {"type": "bool", "desc": "是否把历史用户话喂给 LLM 一路"},
+        "history_recall_turns":   {"type": "int", "desc": "喂给 LLM 的最近几轮用户话"},
+        "history_llm_min":        {"type": "float", "desc": "带历史采纳（route=llm_history）的地板值（非分离阈）"},
+        "history_confirm_silent": {"type": "bool", "desc": "两路一致（确认）时不弹「可改选」澄清细条"},
+        "rule_llm_confirm":       {"type": "bool", "desc": "B4-5：规则命中后先经 LLM 独立复核（确认/否决/不可用三态）。默认关=零回归；开启前请用 tools/calib/eval_intent_baseline.py 做 A/B"},
     },
     "database": {
         "path":           {"type": "str", "desc": "SQLite 数据文件路径（需重启生效）"},

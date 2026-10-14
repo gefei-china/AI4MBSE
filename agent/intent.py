@@ -186,6 +186,11 @@ class IntentRouter:
         # P0-1（2026-09-30）：语义层的"弃权意见"——**意图级** top1（达阈但未过采纳门槛）。
         # 供 LLM 兜底段做互证（融合矩阵缺的那一格），详见 detect_semantic / detect 内注释。
         self._last_sem_alt = None
+        # ★ B4-5（2026-10-14，回应「意图识别应由 LLM 分析后匹配平台能力」）：
+        #   最近一次**规则→LLM 复核**的结果，供观测与门禁判读。
+        #   结构见 `_llm_confirm_rule` 的返回值说明；**不填就是"没复核过"**，
+        #   绝不让"复核过但 LLM 挂了"与"压根没复核"长得一样（否则又是一轮假绿）。
+        self._last_rule_confirm = None
 
     def register_keywords(self, intent: str, keywords: list) -> None:
         """注册 DB Agent 的意图关键词（新建 Agent 即可路由，无需改代码）。"""
@@ -480,7 +485,7 @@ class IntentRouter:
         if not self._is_report_command(t) and not self._is_composite_task(t):
             _db_pri = self._db_kw_priority(t)
             if _db_pri:
-                return self._done(_db_pri, "rule_scored", 0.95, text, fp)
+                return self._rule_done(_db_pri, "rule_scored", 0.95, text, fp, conn=conn)
         # 2026-09-25（评测集查出，错例 #2）：**review 强信号前置到 P0-2 建模强信号之前**。
         # 根因：P0-2 的第二条正则 `(sysml|…).{0,24}(生成|代码|建模)` 没有"动作词"约束，
         # 于是「帮我校验一下这段sysml代码」里的 "sysml…代码" 就被判成 design（期望 review）。
@@ -491,12 +496,12 @@ class IntentRouter:
         if any(k in t for k in ("校验", "预评审", "评审")) and not any(
                 k in t for k in ("生成", "给出", "输出", "编写", "创建", "设计", "绘制",
                                  "需求质量", "质量评审", "质量分析", "模糊词", "不可验证")):
-            return self._done("review", "rule", 0.95, text, fp)
+            return self._rule_done("review", "rule", 0.95, text, fp, conn=conn)
         # P0-2 建模强信号优先：生成/输出 + SysML/建模/视图/代码 → design（先于 Glossary 强制路由，
         # 避免「SysML v2 建模」被术语归一化强制到 knowledge_qa）
         if re.search(r"(生成|给出|输出|编写|创建).{0,24}(sysml|kerml|建模|模型|bdd|ibd|视图|代码)", t) or \
            re.search(r"(sysml|kerml|建模|bdd|ibd|视图|块定义|内部块).{0,24}(生成|代码|建模)", t):
-            return self._done("design", "rule", 0.95, text, fp)
+            return self._rule_done("design", "rule", 0.95, text, fp, conn=conn)
         # P0-1：Glossary 术语归一化——命中即强制路由（如「v2代码规范」→ knowledge_qa + sysml_norm 域）
         if conn is not None:
             try:
@@ -510,21 +515,21 @@ class IntentRouter:
                 # 用户明确表达的影响分析意图丢失。术语归一化仍记录（检索 domain 过滤用），仅意图让路。
                 if res["force_intent"] and not any(
                         k in t for k in ("变更影响", "影响分析", "影响范围", "波及")):
-                    return self._done(res["force_intent"], "rule", 0.95, text, fp)
+                    return self._rule_done(res["force_intent"], "rule", 0.95, text, fp, conn=conn)
             except Exception:
                 pass
         # SP-R：报告生成命令优先路由——「生成/撰写/输出…报告」一律走 report_generation
         # （内部再由 ReportGenerator 按关键词识别 分析/变更影响/预评审 类型模板）
         if self._is_report_command(t):
-            return self._done("report_generation", "rule", 0.95, text, fp)
+            return self._rule_done("report_generation", "rule", 0.95, text, fp, conn=conn)
         # CIA：变更影响分析强信号优先——「变更影响/影响分析/影响范围」明确触发 impact
         # （放报告路由之后：含报告生成词的走 report_generation，其余含影响信号的一律 impact，
         #   避免「影响」这类泛词被 requirement_analysis/chat 误路由）
         if any(k in t for k in ("变更影响", "影响分析", "影响范围", "波及", "impact_analyze")):
-            return self._done("impact", "rule", 0.95, text, fp)
+            return self._rule_done("impact", "rule", 0.95, text, fp, conn=conn)
         # P0 需求质量：V2.6 收紧为明确要求——仅高特异词触发（单"质量/验收标准"等泛词不再命中）
         if any(k in t for k in ("需求质量", "质量评审", "需求质量评审", "质量分析", "模糊词", "不可验证")):
-            return self._done("requirement_quality", "rule", 0.95, text, fp)
+            return self._rule_done("requirement_quality", "rule", 0.95, text, fp, conn=conn)
         # P2 逻辑规则配置化：intent_rules 规则层优先（trigger 为输入子串（忽略大小写），按 weight 降序取首个命中）
         # P0-3：epoch 不符即重载 —— 规则表改了**不用重启**（原判据只看 `is None`，
         # 而失效机制又作用不到本实例，导致规则改动必须重启才生效）。
@@ -532,7 +537,7 @@ class IntentRouter:
             self.load_rules(conn=conn)
         for trigger, intent, weight in self._rules:
             if trigger and trigger.lower() in t:
-                return self._done(intent, "rule", 0.95, text, fp)
+                return self._rule_done(intent, "rule", 0.95, text, fp, conn=conn)
         # 2026-09-25 关键词层：DB 自定义 Agent 关键词 + 内置词表，**竞争打分**（不再"首个命中即 return"）。
         # 开关：intent.keyword_scored（默认 True）——置 False 可回到旧行为，用于 A/B 与回滚
         # （评测脚本 tests/manual_verify/eval_intent_routing.py --scored 0 即用此开关出基线）。
@@ -547,7 +552,7 @@ class IntentRouter:
             if pick:
                 # 强特异词（≥2.0，如"方案设计/变更影响/追溯矩阵"）→ 直接采信，**不调语义**（省一次 embedding）。
                 if sc >= 2.0:
-                    return self._done(pick, "rule_scored", 0.95, text, fp)
+                    return self._rule_done(pick, "rule_scored", 0.95, text, fp, conn=conn)
                 # 2026-09-25 语义融合（对标 HybridRouter 的 dense+sparse 融合 / vLLM 多信号组合决策）：
                 # 弱关键词信号（1.0~2.0）时再取一路语义信号：
                 #   · 与关键词**一致** → 两路互证，置信升到 0.92（route='fused'）
@@ -561,7 +566,7 @@ class IntentRouter:
                     return self._done(pick, "fused", 0.92, text, fp)
                 if sem_pick and sem_pick != pick:
                     return self._done(pick, "fused_conflict", 0.60, text, fp)
-                return self._done(pick, "rule_scored", 0.90, text, fp)
+                return self._rule_done(pick, "rule_scored", 0.90, text, fp, conn=conn)
             # 关键词层**无信号**（未命中，或只命中泛词）→ 下沉：语义 → LLM → 继承 → chat
             # （对标：低于阈值不硬路由，交给更强的下一层；泛词不得单独决定路由）
         else:
@@ -572,7 +577,7 @@ class IntentRouter:
                     if intent == "chat":
                         continue
                     if any(k in t for k in keywords):
-                        return self._done(intent, "rule", 0.95, text, fp)
+                        return self._rule_done(intent, "rule", 0.95, text, fp, conn=conn)
         # ── P0-5（2026-09-30，v2）：历史联合召回 —— 走到这里就是"低置信分支"（关键词层无信号）──
         #   **仍成立**的部分：追问句「那它的风险呢」「再详细一点」「展开说说」单发时 LLM 只给
         #   chat@0.20~0.35（等于判不出）；带上同话题上文后能判出 impact（实测 9/9，分 0.62~0.95）。
@@ -697,8 +702,152 @@ class IntentRouter:
             return self._done(prev_intent, "inherit", 0.55, text, fp)
         return self._done("chat", "chat", 0.0, text, fp)
 
+    # ══════════════════════════════════════════════════════════════════════
+    # B4-5（2026-10-14）：规则命中 → LLM 复核（回应"意图识别应由 LLM 分析后匹配能力"）
+    # ══════════════════════════════════════════════════════════════════════
+    #
+    # ## 为什么要加这一层（米爸的原话与实测）
+    #   「意图识别这个环节我很不满意，为什么必须是那几个 agent？应该**经过 LLM 分析**
+    #     来判断有哪些意图，再和平台的能力进行匹配」
+    #   实测（11:38）：`_done(..., "rule", 0.95, ...)` 散落在 detect() 的 **11 处**，
+    #   规则命中即直返，**根本不进步-semantic、不进 LLM**。
+    #   ⇒ 现状是「关键词 → 固定 Agent 名」的映射表，LLM 只在**全部规则都没命中**时才登场。
+    #
+    # ## 为什么不是"把规则全删掉、交给 LLM"
+    #   仓库里有**大量实测标定**证明规则层的判据是有价值的（`_is_report_command`、
+    #   `_is_composite_task`、`_db_kw_priority`、CIA 强信号、RFC 强信号…），
+    #   且**成本为零**（纯正则/查表）。删掉它们换 LLM 是**负优化**：
+    #   每请求多一次 LLM 调用（当前 ~3.6s）、结果不可复现（温度非零）、
+    #   且规则层那些互斥守卫（"报告优先于 impact"）在 LLM 面前没有等价物。
+    #
+    # ## 所以做什么：**规则给候选 + LLM 确认/否决**
+    #   规则照旧产出候选（快、免费、可复现），
+    #   但**不再直接返回** —— 把候选交给 LLM 复核一次：
+    #     · LLM 同意            → route='rule_llm_confirmed'（置信提升到 0.97，两路互证）
+    #     · LLM 给出别的意图     → route='rule_llm_vetoed'（**采信 LLM**，规则被否决）
+    #     · LLM 不可用/超时/解析失败 → route='rule_llm_skipped'（**退回规则结果**，
+    #                              并在 meta 里标 `llm_review='unavailable'`）
+    #
+    # ## ★ 降级口径（米爸的「稳定/健壮」要求，也是本仓的老教训）
+    #   `llm_review` 三态**必须**如实播报，绝不把"没复核成"说成"复核通过"：
+    #     'confirmed'   —— LLM 明确同意规则
+    #     'vetoed'      —— LLM 给了不同意图，规则被推翻
+    #     'unavailable' —— LLM 挂了/超时/不可解析 ⇒ **没复核成**（不是"同意"）
+    #     'skipped'     —— 开关关闭 / 走了白名单（显式豁免，也算"没复核"）
+    #   `_done` 的 `needs_clarify` 对 'vetoed' **强制为 True** ——
+    #   两路结论不一致时必须让用户能一眼否掉，不能静默换方向。
+    #
+    # ## 为什么默认关闭（`intent.rule_llm_confirm` 默认 False）
+    #   ⚠️ 这是**延迟/成本敏感**的改动：244 条评测里每条走 LLM 约 3.6s，
+    #      而规则直返是 0.0s。默认开会把**所有**意图识别请求都加一次 LLM 调用。
+    #   ⇒ 默认关（**零回归**），但**代码路径已就位**并被门禁覆盖；
+    #      开启方式：`intent.rule_llm_confirm = True`（A/B 对比见 tools/calib/eval_intent_baseline.py）。
+
+    def _known_intents_for_review(self, conn=None) -> set:
+        """复核时可用的**平台能力意图集合**（= LLM 允许输出的意图全集）。
+
+        ## 为什么不能直接用 `self._db_intents`
+        实测（2026-10-14 B4-5）：`_db_intents` **只有 `register_keywords` 一个填充入口**，
+        由 `AgentPipeline.__init__` 调用。任何**不经过 pipeline 构造**的路由器
+        （脚本、门禁、单测、直接 new）它的值就是 `{}`
+        ⇒ 复核时 `known = set() - {chat}` 为空集
+        ⇒ LLM 返回任何正常意图都被判成「平台不存在的意图」
+        ⇒ `llm_review` **恒为 unavailable**，复核层形同虚设。
+        （首版就是这么写的，实测复现；`detect_llm` 的 `known` 用的是**同一个**
+          `_db_intents`，所以它是**同一个坑的既有两处**，不是我的复核独有。）
+
+        ⇒ 这里改为**三源合并**，任一可用即可：
+          ① `_SEMANTIC_UTTERANCES` 的键（内置粗粒度意图，必有、静态、无依赖）
+          ② `_db_intents` 的键（DB 自定义 Agent 关键词意图，pipeline 路径会有）
+          ③ **平台能力表 `agents`** 里 `status='active'` 的 Agent 名
+             —— ③ 才是米爸要的那份清单（「经过 LLM 分析后**与平台的能力匹配**」），
+             需 `conn`；拿不到（未传/查询失败）就只用 ①②，**不抛**。
+        ⚠️ ③ 查库**失败必须静默降级**到 ①②：复核是路由热路径，
+           一次库异常不该让意图识别整体失败（与本函数其余路径同纪律）。
+        """
+        ks = set(self._SEMANTIC_UTTERANCES.keys())
+        ks |= set(self._db_intents.keys())
+        if conn is not None:
+            try:
+                _rows = conn.execute(
+                    "SELECT name FROM agents WHERE status='active'"
+                ).fetchall()
+                for _r in _rows:
+                    _n = _r[0] if not isinstance(_r, dict) else _r.get("name")
+                    if _n:
+                        ks.add(_n)
+            except Exception:
+                pass          # 查不到就用 ①②，不抛
+        ks.discard("chat")
+        return ks
+
+    def _llm_confirm_rule(self, text: str, rule_intent: str, conn=None) -> dict:
+        """把规则给出的候选意图交给 LLM 复核一次。
+
+        返回 `{"llm_review": ..., "llm_intent": ..., "llm_conf": ..., "reason": ...}`，
+        **永不留空**：任何异常路径都归到 `unavailable`（"没复核成"），绝不静默当作"同意"。
+        """
+        # 开关关闭 ⇒ 显式记 skipped（不是 confirmed，也不是 unavailable）
+        if not bool(self._cfg_get("rule_llm_confirm", False)):
+            return {"llm_review": "skipped", "llm_intent": "", "llm_conf": 0.0,
+                    "reason": "开关 intent.rule_llm_confirm=False"}
+        try:
+            from llm import llm_client
+            known = self._known_intents_for_review(conn)
+            if not known:
+                # 三源全空 = 平台能力未加载 ⇒ 明确记 unavailable，不做"盲复核"
+                return {"llm_review": "unavailable", "llm_intent": "", "llm_conf": 0.0,
+                        "reason": "平台能力意图集合为空，拒绝盲复核"}
+            known_list = "、".join(sorted(known))
+            resp = llm_client.chat(
+                [{"role": "system", "content": (
+                    f"你是 MBSE 助手意图复核员。系统用规则判出了意图「{rule_intent}」，"
+                    f"你的任务是**独立复核**：判断用户输入的真实意图是否确实是它。"
+                    f"可选意图：{known_list}。"
+                    f"只输出一个 JSON 对象，格式："
+                    f'{{"agree": true或false, "intent": "意图名", "confidence": 0到1}}。'
+                    f"若不同意，intent 填你认为正确的意图名。无法判断时 agree 给 true、confidence 给低值。")},
+                 {"role": "user", "content": str(text)[:500]}],
+                _intent="intent_confirm",
+            )
+            content = (resp.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            m_ag = re.search(r'"agree"\s*:\s*(true|false)', content, re.I)
+            m_it = re.search(r'"intent"\s*:\s*"([\w_]+)"', content)
+            m_cf = re.search(r'"confidence"\s*:\s*([0-9.]+)', content)
+            if not m_it:
+                # LLM 回了但**格式不可解析** ⇒ 这是"没复核成"，不是"同意"
+                return {"llm_review": "unavailable", "llm_intent": "", "llm_conf": 0.0,
+                        "reason": "LLM 返回不可解析：%s" % content[:80]}
+            llm_intent = m_it.group(1)
+            llm_conf = float(m_cf.group(1)) if m_cf else 0.0
+            agree = (m_ag.group(1).lower() == "true") if m_ag else (llm_intent == rule_intent)
+            # LLM 说的意图不在平台能力里 ⇒ 视为不可用（不能采纳一个不存在的意图）
+            if llm_intent not in known:
+                return {"llm_review": "unavailable", "llm_intent": llm_intent,
+                        "llm_conf": llm_conf,
+                        "reason": "LLM 给出平台不存在的意图 %s" % llm_intent}
+            if agree and llm_intent == rule_intent:
+                return {"llm_review": "confirmed", "llm_intent": rule_intent,
+                        "llm_conf": llm_conf, "reason": ""}
+            if agree:
+                # 同意但指名不同意图 ⇒ 以 LLM 的名字为准（它更具体）
+                return {"llm_review": "vetoed", "llm_intent": llm_intent,
+                        "llm_conf": llm_conf,
+                        "reason": "LLM 同意但指名 %s" % llm_intent}
+            if llm_intent == rule_intent:
+                # 不同意但给同一个名字 ⇒ 自相矛盾，判不可用（不能装作是 veto）
+                return {"llm_review": "unavailable", "llm_intent": llm_intent,
+                        "llm_conf": llm_conf, "reason": "LLM 自相矛盾（agree=false 但同名）"}
+            return {"llm_review": "vetoed", "llm_intent": llm_intent,
+                    "llm_conf": llm_conf, "reason": "LLM 否决规则候选"}
+        except Exception as e:                       # noqa: BLE001
+            # ⚠️ 这里**必须**吞掉一切异常并归到 unavailable：
+            #   复核是"锦上添花"，它挂了绝不能让意图识别整体失败。
+            return {"llm_review": "unavailable", "llm_intent": "", "llm_conf": 0.0,
+                    "reason": "复核异常：%r" % (e,)[:120]}
+
     def _done(self, intent, route, confidence, text, fp, cacheable=True, used_history=False,
-              confirmed=False):
+              confirmed=False, llm_review=None):
         """统一出口：填充 _last_meta + 高置信写意图缓存。
 
         澄清判定：中置信（弱语义/继承/fused_conflict/llm_conflict/**llm_history**）或
@@ -723,18 +872,60 @@ class IntentRouter:
         _silent_ok = bool(confirmed) and bool(self._cfg_get("history_confirm_silent", True))
         needs_clarify = (not _silent_ok) and (
             route in ("semantic_weak", "inherit", "fused_conflict", "llm_conflict",
-                      "llm_history") or (route == "llm" and confidence < 0.85))
+                      "llm_history", "rule_llm_vetoed")
+            or (route == "llm" and confidence < 0.85))
         _alt = getattr(self, "_last_sem_alt", None)
+        # ★ B4-5：`llm_review` 三态如实写进 meta —— 让"复核过且一致"与"没复核成"可区分。
+        #   ⚠️ **不写默认 None 就等于丢失信息**：调用方无法区分"开关关闭"与"LLM 挂了"。
+        _rc = llm_review if isinstance(llm_review, dict) else getattr(
+            self, "_last_rule_confirm", None)
         self._last_meta = {"intent": intent, "route": route, "confidence": confidence,
                            "needs_clarification": needs_clarify,
                            "sem_alt": ({"intent": _alt["intent"], "score": _alt["score"]}
                                        if _alt else None),
                            "used_history": bool(used_history),
-                           "confirmed": bool(confirmed)}
+                           "confirmed": bool(confirmed),
+                           # None = 本次路由根本没走规则层（如 explain/semantic/llm）
+                           "llm_review": (_rc or {}).get("llm_review"),
+                           "rule_candidate": (_rc or {}).get("rule_candidate"),
+                           "rule_review_reason": (_rc or {}).get("reason", "")}
         # P1-31（2026-10-02）：写入侧同受开关约束（开关在 `_cache_set` 内部把关）。
         if cacheable:
             self._cache_set(text, fp, intent, route, confidence)
         return intent
+
+    def _rule_done(self, rule_intent: str, rule_route: str, confidence: float,
+                   text: str, fp: str, conn=None, **kw):
+        """★ B4-5 接线点：规则命中后**先经 LLM 复核**再返回（不再直返）。
+
+        行为矩阵（`intent.rule_llm_confirm` 默认 False ⇒ 全部走 skipped ⇒ **零回归**）：
+
+        | LLM 复核结果 | 返回意图 | route | 置信 | needs_clarify |
+        |---|---|---|---|---|
+        | confirmed  | 规则意图 | `rule_llm_confirmed` | max(conf, 0.97) | 否 |
+        | vetoed     | **LLM 意图** | `rule_llm_vetoed` | LLM 置信 | **强制 True** |
+        | unavailable | 规则意图（**退回**） | `rule_llm_skipped` | 原值 | 否 |
+        | skipped（开关关） | 规则意图 | 原 route（**逐字节不变**） | 原值 | 否 |
+
+        ⚠️ `skipped` 时 route **保持调用方传入的原值**（`rule` / `rule_scored` / `fused` …）
+           —— 这样开关关闭时线上行为与改造前**完全一致**，门禁与历史 route 统计都不受影响。
+        """
+        rc = self._llm_confirm_rule(text, rule_intent, conn=conn)
+        verdict = rc.get("llm_review")
+        rc["rule_candidate"] = rule_intent
+        self._last_rule_confirm = rc
+        if verdict == "vetoed":
+            # 规则被否决 ⇒ 采信 LLM，并强制出澄清条（两路不一致不能静默换方向）
+            return self._done(rc.get("llm_intent") or rule_intent, "rule_llm_vetoed",
+                              float(rc.get("llm_conf") or 0.6), text, fp,
+                              llm_review=rc, **kw)
+        if verdict == "confirmed":
+            return self._done(rule_intent, "rule_llm_confirmed",
+                              max(float(confidence), 0.97), text, fp,
+                              llm_review=rc, **kw)
+        # unavailable / skipped：退回规则结果，**route 逐字节不变**（开关关闭时的零回归保证）
+        return self._done(rule_intent, rule_route, confidence, text, fp,
+                          llm_review=rc, **kw)
 
     def detect_llm(self, text: str, context: str = "") -> tuple:
         """M2：LLM 意图识别兜底——规则未命中时交给 LLM 结构化判断。
