@@ -539,6 +539,8 @@ def init_db():
         --   实测：需要 Bearer 的 MCP 此前**无法接入**（无此列 ⇒ 新增"成功"但探测 401）。
         --   ⚠️ 出参一律脱敏（只回 key 名），见 routers/studio_parts/mcp.py。
         headers TEXT DEFAULT '{}',
+        -- ★ B5-4：MCP 描述（此前只在前端表单里，保存即丢弃 ⇒ 再次编辑必为空）
+        description TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 

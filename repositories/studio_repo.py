@@ -131,34 +131,43 @@ class StudioRepo(BaseRepo):
 
     def create_mcp_server(self, name: str, endpoint: str, tools: str,
                           transport: str = "sse", command: str = "",
-                          args: str = "[]", env: str = "{}", headers: str = "{}") -> int:
+                          args: str = "[]", env: str = "{}", headers: str = "{}",
+                          description: str = "") -> int:
         # ★ B5-2：headers 贯通（此前无此列/参数 ⇒ 需认证的 MCP 无法接入）
+        # ★ B5-4：description 贯通（此前保存即丢弃）
         rid = self.execute(
             """INSERT INTO mcp_servers
-               (name, endpoint, tools, transport, command, args, env, headers)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (name, endpoint, tools, transport, command, args, env, headers),
+               (name, endpoint, tools, transport, command, args, env, headers, description)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (name, endpoint, tools, transport, command, args, env, headers, description),
         )
         self._sync("mcp_servers", rid)
         return rid
 
-    def update_mcp_server(self, sid: int, name: str, endpoint: str, tools: str,
-                          transport: str, command: str, args: str, env: str,
-                          headers: str | None = None) -> None:
-        # ⚠️ `headers=None` 表示"**未提供**"（保持原值），
-        #    `headers="{}"` 表示"显式清空" —— 两者语义不同，勿合并。
-        if headers is None:
-            self.execute(
-                """UPDATE mcp_servers SET name=?, endpoint=?, tools=?, transport=?,
-                   command=?, args=?, env=? WHERE id=?""",
-                (name, endpoint, tools, transport, command, args, env, sid),
-            )
-        else:
-            self.execute(
-                """UPDATE mcp_servers SET name=?, endpoint=?, tools=?, transport=?,
-                   command=?, args=?, env=?, headers=? WHERE id=?""",
-                (name, endpoint, tools, transport, command, args, env, headers, sid),
-            )
+    def update_mcp_server(self, sid: int, name: str, endpoint: str, tools: str | None,
+                          transport: str, command: str | None, args: str | None, env: str | None,
+                          headers: str | None = None, description: str | None = None) -> None:
+        """更新 MCP 服务器配置。
+
+        ⚠️ **`tools` / `args` / `env` / `headers` / `description` 五者统一用 `None` 表"未提供"**，
+        与"显式给值"语义不同、勿合并：
+          · `tools=None`  → 保持已发现的工具清单不变。
+            **这条是 B5-4 修的真 bug**：编辑弹窗保存时若提交 `tools=[]`，
+            会把探测发现的工具清单**清空**（实测 dev_ai_mcp 有 4 个工具，
+            一次编辑保存就归零 ⇒ 该 MCP 对 Agent 彻底不可用）。
+          · `tools="[]"`  → 显式清空（用户主动清空的合法诉求）。
+          · `description=None` → 保持原描述（旧客户端不传该字段时不误清）。
+        字段集用白名单逐列拼，避免"新增一列就要改三处 SQL"。
+        """
+        sets = ["name=?", "endpoint=?", "transport=?"]
+        args_: list = [name, endpoint, transport]
+        for col, val in (("tools", tools), ("command", command), ("args", args),
+                         ("env", env), ("headers", headers), ("description", description)):
+            if val is not None:
+                sets.append("%s=?" % col)
+                args_.append(val)
+        args_.append(sid)
+        self.execute("UPDATE mcp_servers SET %s WHERE id=?" % ", ".join(sets), tuple(args_))
         self._sync("mcp_servers", sid)
 
     def update_mcp_status(self, sid: int, status: str, latency_ms: int, tools: str | None = None) -> None:

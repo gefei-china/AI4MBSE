@@ -12,6 +12,50 @@ import json
 import time
 
 
+def _parse_jsonrpc_body(resp) -> dict:
+    """解析 JSON-RPC 响应体，**同时吃两种封装**（★ B5-4 真流量抓到）。
+
+    MCP 的 Streamable HTTP 传输（协议 2025-03-26 起）允许服务端用两种方式回包：
+      · `application/json`      → 裸 JSON，本文件原先只认这一种；
+      · `text/event-stream`    → SSE 帧：`event: message\\ndata: {…}\\n\\n`。
+
+    原实现无条件 `resp.json()`，于是**平台自己的内置网关恒定 offline** ——
+    实测 `POST /mcp` 返回 `content_type=text/event-stream`、握手数据完全正确，
+    客户端却抛 `Expecting value: line 1 column 1`（把 `event: message` 当JSON 解析）。
+    这正是"服务端好好的、客户端自己把自己判死"的典型。
+
+    ⚠️ 判据纪律：这是**响应封装格式**的兼容，不是"两种协议"——
+    解析成功后仍要校验拿到的是 JSON-RPC 响应（`jsonrpc`/`result`/`error`），
+    否则一个碰巧返回 `data:` 开头的 HTML 错误页会被当成"成功但空结果"。
+    """
+    raw = resp.text or ""
+    ctype = (resp.headers.get("content-type") or "").lower()
+    # 快路径：确实是 JSON 就直接解
+    if "application/json" in ctype and not raw.lstrip().startswith(("event:", "data:")):
+        return resp.json()
+    text = raw.strip()
+    if text.startswith("{") or text.startswith("["):
+        return resp.json()
+    # SSE 封装：取第一条 `data:` 的载荷（JSON-RPC 单响应场景）
+    if "text/event-stream" in ctype or text.startswith(("event:", "data:")):
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("data:"):
+                payload = line[5:].strip()
+                if payload and payload != "[DONE]":
+                    try:
+                        obj = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(obj, dict) and ("result" in obj or "error" in obj
+                                                   or "jsonrpc" in obj):
+                        return obj
+        # 只有 event:/注释，没有可解析的 data → 明确报错，别返回空 dict 假装成功
+        raise ValueError("SSE 响应中未找到可解析的 JSON-RPC data 帧")
+    # 都不是：给出可诊断的信息（含前若干字符，避免把 HTML 错误页当成 JSON 报错）
+    raise ValueError(f"MCP 响应无法解析（content-type={ctype or 'unknown'}，body 前 120 字：{raw[:120]!r}）")
+
+
 class MCPClient:
     """轻量 MCP 客户端：initialize 握手 + 三类原语（Tools/Resources/Prompts）。
 
@@ -28,7 +72,16 @@ class MCPClient:
                  headers: dict | None = None):
         from core import config
         self.endpoint = endpoint
-        self.transport = transport
+        # ★ B5-4（2026-10-14 真流量抓到）：传输方式**三方枚举不一致**——
+        #   前端下拉给的是 `streamable_http`，而 `_post` 只认 `("sse","http")`
+        #   ⇒ 用户在界面上选"推荐"项，真实调用直接被 `raise ValueError` 挡掉；
+        #   反过来库里存 `http` 的行，下拉里**没有对应 option**，
+        #   `select.value='http'` 会被浏览器置空 ⇒ 一次编辑保存就把 transport 写成空串。
+        #   （库里 4 台 MCP 有 3 台是 `http`，此前全靠"下拉没匹配项→空值"歪打正着。）
+        #   处置：**入口归一**，把各历史叫法都折叠到 `http`，让 `_post` 的白名单是唯一事实源。
+        self.transport = {"streamable_http": "http", "streamablehttp": "http",
+                          "https": "http", "": "http"}.get((transport or "").strip().lower(),
+                                                           (transport or "sse").strip().lower())
         self.timeout = timeout if timeout is not None else int(config.get("mcp", "timeout", 15))
         self.max_response = max_response if max_response is not None else int(config.get("mcp", "max_response", 4000))
         # ★ B5-2（2026-10-14）：认证头。此前 `_post` 的 headers 是**硬编码**的
@@ -69,7 +122,7 @@ class MCPClient:
         resp = httpx.post(url, json=payload, headers=self._req_headers(),
                           timeout=timeout or self.timeout)
         resp.raise_for_status()
-        return resp.json()
+        return _parse_jsonrpc_body(resp)
 
     def initialize(self, force: bool = False) -> dict:
         """initialize 握手：协商 protocolVersion 并读取 capabilities/serverInfo。

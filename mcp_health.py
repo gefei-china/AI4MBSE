@@ -11,6 +11,21 @@ import threading
 import time
 
 
+def _norm_transport(t: str | None) -> str:
+    """传输方式归一（★ B5-4：前端 `streamable_http` vs 后端 `http` 三方枚举不一致）。
+
+    本模块有 **4 处**用 `transport in ("sse","http")` 做分支判断，
+    而前端下拉给的默认值是 `streamable_http` ⇒ 这些判断会全部走不进来
+    （表现为"界面配好了，健康巡检/动态发现却说不自动拉起"）。
+    归一后与 `MCPClient.__init__` 用同一张映射表，避免两处各写一份。
+    ⚠️ 兜底分支也**统一小写**：库里若存了 `'SSE'`，不归一就会在
+    `in ("sse","http")` 处落空（大小写敏感）—— 同"枚举不一致"族的第4种表现。
+    """
+    return {"streamable_http": "http", "streamablehttp": "http",
+            "https": "http", "": "http"}.get((t or "").strip().lower(),
+                                             (t or "sse").strip().lower())
+
+
 def _make_client(srv: dict):
     from mcp_client import MCPClient
     # ★ B5-2：带上认证头（否则健康探测对需认证的 MCP 永远 offline）
@@ -22,7 +37,7 @@ def _make_client(srv: dict):
         _h = {}
     return MCPClient(
         endpoint=srv.get("endpoint", ""),
-        transport=srv.get("transport", "sse"),
+        transport=_norm_transport(srv.get("transport")),
         timeout=int(srv.get("timeout") or 15),
         headers=_h if isinstance(_h, dict) else {},
     )
@@ -32,7 +47,7 @@ def check_server(srv: dict, repo=None):
     """轻量健康探测：initialize 握手 → 更新状态/延迟/last_error。返回 (ok, detail)。"""
     import time as _t
     t0 = _t.time()
-    transport = srv.get("transport", "sse")
+    transport = _norm_transport(srv.get("transport"))
     sid = srv["id"]
     if transport in ("sse", "http"):
         try:
@@ -54,7 +69,7 @@ def check_server(srv: dict, repo=None):
 def discover_server(srv: dict, repo=None):
     """全量动态发现：initialize + 三原语 list → 落库。返回结果 dict。"""
     t0 = time.time()
-    transport = srv.get("transport", "sse")
+    transport = _norm_transport(srv.get("transport"))
     sid = srv["id"]
     if transport not in ("sse", "http"):
         note = f"transport {transport} 不自动拉起子进程，跳过动态发现"
@@ -107,7 +122,7 @@ def check_all(repo):
     """批量巡检全部 sse/http 服务器。返回汇总。"""
     results = {"checked": 0, "online": 0, "offline": 0, "details": []}
     for srv in repo.rows("SELECT * FROM mcp_servers"):
-        if srv.get("transport", "sse") not in ("sse", "http"):
+        if _norm_transport(srv.get("transport")) not in ("sse", "http"):
             continue
         ok, detail = check_server(srv, repo=repo)
         results["checked"] += 1

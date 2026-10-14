@@ -427,7 +427,7 @@ const MODAL_FORMS = {
       </div>
       <div class="form-section" id="tool-mcp-fields">
         <div class="form-section-head"><span class="fs-icon">📡</span><span class="fs-title">MCP Server 配置</span></div>
-        <div class="form-row"><label>传输方式 <b class="req">*</b> <span class="info-tip" title="生产环境请使用公网 https 端点；鉴权开启后私网/localhost URL 会被拒绝">ⓘ</span></label><select id="f-tool-transport"><option value="streamable_http">streamable_http（推荐）</option><option value="sse">SSE</option><option value="stdio">stdio</option></select></div>
+        <div class="form-row"><label>传输方式 <b class="req">*</b> <span class="info-tip" title="生产环境请使用公网 https 端点；鉴权开启后私网/localhost URL 会被拒绝；stdio 出于安全不自动拉起子进程">ⓘ</span></label><select id="f-tool-transport"><option value="http">Streamable HTTP（推荐）</option><option value="sse">SSE</option><option value="stdio">stdio（不自动拉起）</option></select></div>
         <div class="form-row"><label>URL <b class="req">*</b> <span class="info-tip" title="示例：https://mcp.example.com/mcp（勿填内网/元数据地址）">ⓘ</span></label><input id="f-tool-url-mcp" placeholder="https://mcp.example.com/mcp"></div>
       </div>
       <div class="form-section" id="tool-http-fields" style="display:none;">

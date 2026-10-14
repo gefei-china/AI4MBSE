@@ -163,6 +163,12 @@ def _migrate_columns(conn):
     #   MCP token 本就是"该服务自己的凭据"，与 env（同样含凭据）同一处置层级；
     #   API 出参一律**脱敏**（只回 key 名与是否已设），见 routers/studio_parts/mcp.py。
     _add("mcp_servers", "headers", "TEXT DEFAULT '{}'")               # JSON：{"Authorization":"Bearer …"}
+    # ★ B5-4（2026-10-14 真流量抓到）：MCP 的**描述**此前只活在前端表单里 ——
+    #   `mcp_servers` 无此列、`MCPIn` 无此字段 ⇒ 用户填的描述在保存那一刻被丢弃，
+    #   下次编辑必然是空的（米爸报「描述信息也不见了」）。
+    #   ⚠️ 这是「**写 A 表、读 B 表**」的另一个形态：不是读不到，是**根本没存**。
+    #   与 tools/args/env/headers 同形态（TEXT 存标量），出参直出（描述非敏感）。
+    _add("mcp_servers", "description", "TEXT DEFAULT ''")
     # ── P0 语义升级：长期记忆真向量版本标记（同 document_chunks.embed_version 语义）──
     _add("agent_memory", "embed_version", "TEXT DEFAULT ''")             # 真 embedding 版本（''=bigram/未向量化）
     # ── P2 记忆认知化：遗忘引擎（激活度）+ 合并引擎（反思）──

@@ -350,6 +350,15 @@
 /* C-1：仅重做汇总型恢复 —— 用不同底色区分"接着跑"与"重出汇总" */
 .resumable-bar.rb-summary{border-left-color:#c2410c;background:#fff7ed;border-color:#fed7aa;}
 .resumable-bar.rb-summary .rb-dot{background:#c2410c;}
+/* ★ B5-5：恢复失败态 —— 提示条改为"停在原地说明原因"而不是 toast 一闪 + 整条消失。
+   色值只取**已存在**的变量（--red / --red-l，见 app.css 的 :root；
+   ⚠️ 没有 --red-bd / --red-d，硬写会静默失效 → 边框退回默认、字色变继承色）。 */
+.resumable-bar.rb-error{border-left-color:var(--red);border-color:#F7C1C1;
+  background:var(--red-l);color:var(--red);}
+.resumable-bar.rb-error .rb-dot{background:var(--red);animation:none;}
+.resumable-bar.rb-error .rb-btn{border-color:var(--red);background:transparent;color:var(--red);}
+.resumable-bar.rb-error .rb-btn:hover{background:var(--red);color:#fff;}
+.resumable-bar.rb-error .rb-txt{font-weight:600;}
 .resumable-bar.rb-summary .rb-btn{background:#c2410c;border-color:#c2410c;}
 .resumable-bar.rb-summary .rb-ghost{color:#c2410c;}
 

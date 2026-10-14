@@ -13,7 +13,11 @@
   ③ 可能触发内容级澄清，把执行拦回去。
 所以 resume 的唯一依据是 `run_id` + 检查点，见 `agent/pipeline_parts/stream.py` 的直达分支。
 
-## 三道闸门（缺一不可）
+## 四道闸门（缺一不可）
+ ⓪ **归属闸门**（★ B5-5，2026-10-14 补）：批次经`conversation_id` 挂在会话上，
+     读/写都必须先校验该会话归属（复用 `conv_visible_to` 单一事实源）。
+     此前三个端点**一个都没有**；而 resume 上那个恒 403 的错权限域恰好把洞挡住了 ——
+     放宽权限若不同步补这道门，等于当场打开越权续跑/读取他人会话的洞。
   ① **存活闸门**：心跳未超时说明还有活进程在跑，拒绝接管（否则两进程同时执行同一任务，
      写类工具会产生重复实体）。判定在 SQL 内完成（SQLite CURRENT_TIMESTAMP 是 UTC，
      Python datetime.now() 是本地时间，取回 Python 做差会凭空多 8 小时）。
@@ -37,22 +41,66 @@ def _stale_default(conn) -> int:
         return 1800
 
 
+def _own_run(conn, run_id: int, user) -> dict:
+    """★ B5-5（2026-10-14）：按**会话归属**校验编排批次的读/写权限。
+
+    ## 为什么必须加这道门（此前三个端点一个都没有）
+    `orch_checkpoints` 行经`conversation_id` 挂在会话上，但本文件原先**从不校验该会话归属**：
+    `get_run(run_id)` 只要猜到 run_id 就能读出 `user_input` 原文、检查点与全部任务标题；
+    `resumable?conversation_id=<别人的>` 同理。⇒ 任何登录用户可枚举他人会话内容。
+
+    ## 一个必须记住的教训：**此前的 403 恰好掩盖了这个洞**
+    `resume` 端点挂着 `require_permission("config","write")`，而**三个角色的
+    `permissions` 里都没有 `config` 域**（实测 role 80/81 的 config 键为 None）⇒
+    所有登录用户点「继续编排」恒 403。安全上看似"门关着"，实际是
+    **"门焊死了 + 旁边两个门敞着"**。若只把 `config:write` 放宽了事、不补归属校验，
+    就等于当场把这个 IDOR 打开。⇒ **放宽权限与补归属校验必须同一处改**。
+
+    口径与 `routers/conversations.py::_own_conv` 对齐（复用 `conv_visible_to` 单一事实源）：
+    不可见即 404（不泄露"该 id 存在"）。
+    """
+    from fastapi import HTTPException
+    from agent.orch_checkpoint import load as _ck_load
+    from repositories.conversation_repo import conv_visible_to
+    ck = _ck_load(conn, run_id)
+    if not ck:
+        raise HTTPException(status_code=404, detail="编排批次不存在")
+    conv_id = int(ck.get("conversation_id") or 0)
+    if conv_id:
+        row = conn.execute("SELECT * FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        row = dict(row) if row is not None else None
+        if not conv_visible_to(row, user):
+            raise HTTPException(status_code=404, detail="编排批次不存在")
+    return ck
+
+
 @router.get("/api/orchestration/resumable")
-def list_resumable(conn=Depends(db_session),
+def list_resumable(conn=Depends(db_session), user=Depends(current_user),
                    conversation_id: int = 0,
                    limit: int = Query(10, ge=1, le=50)):
-    """列出可恢复的编排批次（供前端在会话顶部显示"上次编排中断，是否继续"）。"""
+    """列出可恢复的编排批次（供前端在会话顶部显示"上次编排中断，是否继续"）。
+
+    ★ B5-5：显式传 `conversation_id` 时**必须校验归属**（出参含 `user_input` 原文）。
+    """
     from agent.orch_checkpoint import resumable
+    if conversation_id:
+        from fastapi import HTTPException
+        from repositories.conversation_repo import conv_visible_to
+        row = conn.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+        row = dict(row) if row is not None else None
+        if not conv_visible_to(row, user):
+            raise HTTPException(status_code=404, detail="会话不存在")
     return {"items": resumable(conn, conversation_id=conversation_id, limit=limit,
                                stale_s=_stale_default(conn)),
             "stale_s": _stale_default(conn)}
 
 
 @router.get("/api/orchestration/runs/{run_id}")
-def get_run(run_id: int, conn=Depends(db_session)):
+def get_run(run_id: int, conn=Depends(db_session), user=Depends(current_user)):
     """单个编排批次：检查点 + 任务快照 + 是否可恢复（含不可恢复的原因）。"""
     from agent.orch_checkpoint import load, prepare_resume, stale_seconds, TERMINAL_PHASES
-    ck = load(conn, run_id)
+    ck = _own_run(conn, run_id, user)   # ★ B5-5：归属校验（此前完全没有）
+    _ = load   # 保留原导入语义（下方仍直接用 ck）
     if not ck:
         return JSONResponse({"error": "检查点不存在", "run_id": run_id}, 404)
     try:
@@ -83,12 +131,32 @@ def resume_run(run_id: int, conn=Depends(db_session),
     import json as _json
     from starlette.responses import StreamingResponse
     from agent.orch_checkpoint import prepare_resume, apply_resume, touch
+    # ── 归属门（★ B5-5，必须**先于**权限门）────────────────────────────────────
+    #   权限域从 `config:write`（无人持有）改为 `ai_chat:generate`（设计师/知识工程师均持有）
+    #   之后，若不同步补上归属校验，就等于**当场打开了越权续跑他人会话**的洞
+    #   （原先那个恒 403 的错域，恰好把这个洞挡住了）。
+    #   ⇒ 权限门放宽与归属门补齐必须成对出现，缺一即等于埋洞。
+    _own_run(conn, run_id, user)
     # ── 权限门（与其他写端点的**行内调用**写法保持一致）──────────────────────────
     # 为什么这里必须有门：resume 会真实触发 LLM 调用与写库/写图谱，匿名可调用等于把
     # 编排重跑能力对外开放。这与遥测类端点（UX 埋点刻意不加门）的处理恰好相反。
-    _err = require_permission("config", "write")(user=user)
-    if _err:
-        return JSONResponse({"error": str(_err.detail) if hasattr(_err, "detail") else "无权限"}, 403)
+    #
+    # ★ B5-5 **门必须选目标用户角色真实持有的域**：原实现挂 `config:write`，而本仓三个
+    #   种子角色的 `permissions` 里**根本没有 `config` 键**（实测 role 80/81 的
+    #   `p.get("config") is None`）⇒ 判定恒走"domain 不存在"分支 ⇒
+    #   **任何登录用户点「继续编排」恒 403**；前端又只弹一个 toast 就移除提示条
+    #   ⇒ 用户侧表现为「点了没反应、后续流程一点不走」（米爸 2026-10-14 报的正是这个）。
+    #   正确域：`ai_chat:generate` —— 续跑的本质就是"继续这次 AI 对话"，
+    #   与 `/chat/stream`（本身不挂额外门、只靠 `_own_conv` 归属隔离）同档。
+    #
+    # ⚠️⚠️ **不要写成 `_err = require_permission(...)(user=user); if _err:`**——
+    #   `require_permission` 的 checker 是**失败抛 HTTPException、成功 return user**，
+    #   成功时返回的是**用户字典（恒为真值）** ⇒ 那个 `if _err` **永远为真**
+    #   ⇒ **改对权限域之后仍然是 403**（实测：域换成 ai_chat:generate 后，
+    #   归属者调用依旧返回 `{"error":"无权限"}`）。
+    #   ⇒ 本仓其余 7 处行内调用（`routers/branches.py`）都是**直接调用、不接返回值**，
+    #      这里必须与它们一致；靠异常表达失败，交给 FastAPI 异常处理器转 403。
+    require_permission("ai_chat", "generate")(user=user)
 
     stale = _stale_default(conn)
     dec = prepare_resume(conn, run_id, include_failed=include_failed, stale_s=stale)

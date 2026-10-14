@@ -255,22 +255,84 @@ async function readMCPResource(sid, uri) {
   } catch(e) { toast('❌ 读取失败：'+e.message); }
 }
 let mcpEditId = null;
+/** 安全回填 transport 下拉（★ B5-4）。
+ *
+ *  `<select>` 的铁律：**value 只能取现有 option 的 value**。
+ *  设一个不存在的值，浏览器会**默默把 value 置成 ""**（不是报错、不是保持原值）——
+ *  于是「编辑打开时下拉是空的 → 用户没管它 → 保存 → transport 被写成空串」。
+ *  库里确实存在这种值（早期前端下发 `streamable_http`，而后端只认 `http`），
+ *  所以**不能只对齐枚举**，还得防"库里出现下拉没有的值"—— 补一个临时 option 原样保留，
+ *  用户看得见自己那台是什么、并且能主动改成别的（这才是"允许修正"而不是"静默改写"）。
+ */
+function setTransportSelect(sel, val) {
+  if (!sel) return;
+  const v = (val == null ? '' : String(val)).trim() || 'http';
+  if (!Array.from(sel.options).some(o => o.value === v)) {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = v + '（历史值，可改为 http / sse）';
+    sel.appendChild(o);
+  }
+  sel.value = v;
+}
+/** MCP 编辑弹窗回填（★ B5-4）。
+ *
+ *  改前（米爸报「编辑后保存，页面内容还是展示默认信息」）的三个独立缺陷：
+ *   ① `f-tool-desc` 被**硬编码成空串** —— 描述既不加载也无处保存（后端当时也没这列）。
+ *   ② Headers 只调 `addToolHeader()` 铺一条**空行**，既没读 `headers_masked`，
+ *      用户看到的是"我配的认证头不见了"（值确实脱敏了，但**key 名与"已配置"必须显示**）。
+ *   ③ 重试/退避三框（`f-tool-retries` 等）**完全没管** —— 而 MCP 走的是
+ *      `mcp-servers` 端点、根本没有 retry_policy 字段 ⇒ 展示的是纯装饰，
+ *      用户改了以为生效、实际毫无作用。
+ *
+ *  判据纪律：脱敏 ≠ 不显示。凭据类字段的形态是
+ *  **回显 key + 「已配置」标记 + 留空即"不改"**，而不是留一条空白输入框装作没配过。
+ */
 function editMCP(id) {
   toolEditId = id;
+  mcpEditId = id;
   showModal('tool');
-  document.getElementById('tool-modal-title').textContent = '编辑工具';
+  document.getElementById('tool-modal-title').textContent = '编辑 MCP 服务器';
   api('/api/studio/mcp-servers').then(items=>{
     const s = items.find(x=>x.id===id);
-    if(!s) return;
+    if(!s) { toast('未找到该 MCP 服务器，请刷新后重试'); return; }
     document.getElementById('f-tool-type').value = 'mcp';
     toggleToolType();
     document.getElementById('f-tool-name').value = s.name;
     document.getElementById('f-tool-name').disabled = true;
-    document.getElementById('f-tool-desc').value = '';
-    document.getElementById('f-tool-transport').value = s.transport||'streamable_http';
+    // ★ 描述：此前恒为空串（用户"描述信息不见了"的直接原因）
+    document.getElementById('f-tool-desc').value = s.description||'';
+    setTransportSelect(document.getElementById('f-tool-transport'), s.transport);
     document.getElementById('f-tool-url-mcp').value = s.endpoint||'';
-    addToolHeader();
-  });
+    // Headers：出参已脱敏（只有 {key: {set, len}}），回显 key 名 + 已配置标记
+    const hdrList = document.getElementById('tool-headers-list');
+    if (hdrList) {
+      hdrList.innerHTML = '';
+      const masked = s.headers_masked || {};
+      const keys = Object.keys(masked);
+      if (!keys.length) addToolHeader();
+      else keys.forEach(k=>{
+        const info = masked[k] || {};
+        // ⚠️ 先算好 title 再拼进 innerHTML：三元表达式里直接内嵌中文全角括号极易漏闭合括号，
+        //   而 `node --check` 会当场拦下（本次即由此发现）。
+        const tip = info.set
+          ? ('已配置（长度 ' + info.len + '，出于安全不回显）；留空=保持原值，填入新值=覆盖')
+          : '尚未配置；填入即新增';
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        row.style.cssText = 'display:flex;gap:6px;align-items:center;';
+        // ⚠️ 值**故意留空**：占位符说明"已配置且不展示"，留空保存时后端按"未提供"处理
+        //   （`headers=None` 保持原值）⇒ 用户不碰它就不会把凭据清掉。
+        row.innerHTML =
+          '<input class="tool-hdr-key" placeholder="Key" title="请求头名称" ' +
+          'style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" value="'+esc(k)+'">' +
+          '<input class="tool-hdr-val" placeholder="留空则保持原值" title="'+esc(tip)+'" ' +
+          'style="flex:1.5;border:1px dashed var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" value="">' +
+          '<button class="btn sm ghost" onclick="this.parentElement.remove()" title="移除该请求头" ' +
+          'style="padding:2px 8px;font-size:11px;">✕</button>';
+        hdrList.appendChild(row);
+      });
+    }
+  }).catch(e=>{ toast('加载 MCP 配置失败：'+(e && e.message || e)); });
 }
 async function testMCP(id) {
   toast('正在测试连通…');
@@ -1058,7 +1120,10 @@ function toggleToolType() {
   show('tool-mcp-fields', mode === 'mcp');
   show('tool-http-fields', mode === 'http');
   // 容错 / 请求头只对真正走网络的集成工具有意义；给内置工具保留只会让人以为「有哪些项漏配了」
-  show('tool-resilience-box', !builtin);
+  // ★ B5-4：容错策略（重试/退避）**只对 HTTP 工具有意义** —— MCP 走 `mcp-servers` 端点，
+  //   该表**没有 retry_policy 字段** ⇒ 此前在 MCP 编辑弹窗里展示这三框纯属装饰，
+  //   用户改了以为生效、实际毫无作用（本次一并藏起来，减少"改了没用"的困惑）。
+  show('tool-resilience-box', !builtin && mode === 'http');
   show('tool-headers-box', !builtin);
   // ⚠️ 这里曾因模板缺 #f-tool-name-hint 而拿到 null，紧接着 hint.title=... 抛出 TypeError，
   //    导致 showToolForm 后续回填一行都没跑 → 整个编辑表单空白。加空防御，别再让一个缺 id 炸掉全页。
@@ -1188,7 +1253,7 @@ async function showToolForm(id) {
   document.getElementById('f-tool-desc').value = t ? (t.description||'') : '';
   // MCP 字段回填
   if (isMcp && t) {
-    document.getElementById('f-tool-transport').value = t.transport || 'streamable_http';
+    setTransportSelect(document.getElementById('f-tool-transport'), t.transport);
     document.getElementById('f-tool-url-mcp').value = t.endpoint || '';
   }
   // HTTP 字段回填
@@ -1245,25 +1310,50 @@ async function saveTool() {
   }
   const type = document.getElementById('f-tool-type').value;
   // 收集 Headers
+  // ★ B5-4：凭据类字段的「留空 = 保持原值」语义。
+  //   脱敏后回显的是「key + 空值输入框」，若照直收集 `headers[k]=""`，
+  //   保存就会把用户早已配好的 Authorization **清成空串** ⇒ 认证头被静默抹掉、
+  //   下次探测直接 401（而界面看上去"保存成功了"）。
+  //   ⇒ **值留空的一律不进 payload**（后端按"未提供"保持原值）；
+  //     真要删某个头，用行尾的 ✕ 把整行删掉（那才是"显式删除"的表达）。
   const hdrKeys = document.querySelectorAll('#tool-headers-list .tool-hdr-key');
   const hdrVals = document.querySelectorAll('#tool-headers-list .tool-hdr-val');
   const headers = {};
-  hdrKeys.forEach((el,i) => { const k = el.value.trim(); if(k) headers[k] = hdrVals[i].value; });
+  hdrKeys.forEach((el,i) => {
+    const k = el.value.trim();
+    const v = hdrVals[i].value.trim();
+    if(k && v) headers[k] = v;
+  });
   if (type === 'mcp') {
     // MCP Server → 走 mcp-servers API
     const endpoint = document.getElementById('f-tool-url-mcp').value.trim();
     if(!endpoint) { toast('URL 必填'); return; }
+    // ★ B5-4：`description` 必须带上 —— 此前**根本没进 body**，
+    //   后端也无此字段 ⇒ 用户填的描述在保存那一刻被丢弃（"描述信息不见了"）。
     const body = {name, endpoint, transport: document.getElementById('f-tool-transport').value,
-                  command: '', tools: [], args: [], env: {},
+                  description: desc,
                   // ★ B5-2：headers **上面已经收集好了**（`#tool-headers-list`），
                   //   但 MCP 分支的 body **从来没把它带上** ⇒ 用户在表单里填了
                   //   Authorization，保存后被静默丢弃 ⇒ 「配了但用不了」。
                   //   （实测：无 header 时 /test 返回 `HTTP 401 invalid_token`，
                   //     而 POST 新增仍返回 {"ok":true} ⇒ 看起来成功、实则失效。）
                   headers};
-    if(toolEditId) { await api(`/api/studio/mcp-servers/${toolEditId}`, {method:'PUT', body:JSON.stringify(body)}); toast('已更新'); }
-    else { await api('/api/studio/mcp-servers', {method:'POST', body:JSON.stringify(body)}); toast('已添加'); }
-    closeModal(); toolEditId = null; loadMCPServers(); loadMinePlugins(); loadMarket(); loadMarketManage();
+    // ★ B5-4：**编辑态不提交 tools / args / env / command** ——
+    //   tools 是「探测发现的清单」，前端并不掌握；写回 `tools: []` 会把已发现的
+    //   工具清单清空 ⇒ 该 MCP 对 Agent 彻底不可用（一次编辑保存就能触发）。
+    //   后端对"未提供"保持原值；新增时这些字段本就为空，不影响。
+    if (toolEditId) {
+      const _r = await api(`/api/studio/mcp-servers/${toolEditId}`, {method:'PUT', body:JSON.stringify(body)});
+      if (_r && _r.error) { toast('保存失败：' + _r.error); return; }
+      toast('已更新');
+    }
+    else {
+      await api('/api/studio/mcp-servers', {method:'POST', body:JSON.stringify(
+        Object.assign({command:'', tools:[], args:[], env:{}}, body))});
+      toast('已添加');
+    }
+    closeModal(); toolEditId = null; mcpEditId = null;
+    loadMCPServers(); loadMCPCombined && loadMCPCombined(); loadMinePlugins(); loadMarket(); loadMarketManage();
   } else {
     // HTTP 接口 → 走 tools API
     const url = document.getElementById('f-tool-url-http').value.trim();

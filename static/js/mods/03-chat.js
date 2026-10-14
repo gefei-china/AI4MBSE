@@ -704,18 +704,44 @@ async function checkResumableRuns(convId){
   }catch(e){ /* 检查点查询失败静默：不应影响会话正常加载 */ }
 }
 
-async function startResumeRun(runId, bar){
+async function startResumeRun(runId, bar, includeFailed){
   if(bar){ bar.querySelector('.rb-btn').disabled = true; bar.querySelector('.rb-txt').textContent = '正在恢复编排…'; }
   try{
-    const resp = await fetch(`/api/orchestration/runs/${runId}/resume`, {
+    const resp = await fetch(`/api/orchestration/runs/${runId}/resume` +
+      (includeFailed ? '?include_failed=true' : ''), {
       method:'POST',
       headers: streamHeaders()
     });
     if(!resp.ok){
+      // ★ B5-5：失败**不许静默移除提示条**。
+      //改前是 `toast(msg) + bar.remove()` ⇒ 提示条一消失，"可继续"的假象也没了，
+      //   用户看到的就是「点了一下什么都没发生」（米爸 2026-10-14 报的正是这个）。
+      //   现在：把原因**留在横幅上**（不靠一闪而过的 toast），并按错误类型给出下一步动作。
       let msg = `恢复失败（HTTP ${resp.status}）`;
-      try{ const j = await resp.json(); if(j && j.error) msg = j.error; }catch(e){}
+      let reason = '';
+      try{
+        const j = await resp.json();
+        if(j && j.error) msg = j.error;
+        if(j && j.detail) msg = j.detail;
+        if(j && j.reason) reason = j.reason;
+      }catch(e){}
       if(typeof toast === 'function') toast(msg, 'error');
-      if(bar) bar.remove();
+      if(bar){
+        bar.classList.add('rb-error');
+        const t = bar.querySelector('.rb-txt');
+        if(t) t.textContent = msg;
+        // `nothing_to_do` 是**可自愈**的一类：批次里剩下的任务已被孤儿回收标成 failed，
+        // 而 resume 默认 include_failed=false 会把它们一律跳过 ⇒ 必须让用户能显式重跑。
+        if(reason === 'nothing_to_do' || resp.status === 409){
+          const again = document.createElement('button');
+          again.className = 'rb-btn';
+          again.textContent = '连失败任务一起重跑';
+          again.onclick = ()=> startResumeRun(runId, bar, true);
+          bar.insertBefore(again, bar.querySelector('.rb-ghost'));
+        }
+        const btn = bar.querySelector('.rb-btn');
+        if(btn) btn.disabled = false;
+      }
       return;
     }
     if(bar) bar.remove();

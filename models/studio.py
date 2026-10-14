@@ -40,7 +40,17 @@ class MCPIn(BaseModel):
     env: Optional[dict] = {}
     # ★ B5-2（2026-10-14）：外部 MCP 普遍需认证头（Authorization: Bearer …）。
     #   此前模型无此字段 ⇒ **需要认证的 MCP 根本无法接入**（新增"成功"但探测 401）。
-    headers: Optional[dict] = {}
+    # ⚠️ B5-4 修正（2026-10-14，真流量抓到）：默认值**必须是 None，不能是 {}**。
+    #   本模型用 `None = 未提供（保持原值）` / `{} = 显式清空` 这套语义区分"没传"与"清空"，
+    #   而 `{}` 作默认值等于**把"字段没出现"直接翻译成"用户要清空"** ——
+    #   后果：任何不提交 headers 的保存（编辑弹窗、第三方 API 调用、旧客户端）
+    #        都会把已配好的 Authorization 抹成空串 ⇒ 下次探测直接 401，
+    #        而界面显示"保存成功"。这是 Pydantic 可选字段用可变默认值最典型的坑。
+    headers: Optional[dict] = None
+    # ★ B5-4（2026-10-14）：描述此前**只存在于前端表单**，后端既无模型字段也无表列
+    #   ⇒ 用户填的描述在保存那一刻就被丢弃 ⇒ 再次编辑必然是空的（"描述信息也不见了"）。
+    #   与 tools/args/env 同形态：None = 未提供（保持原值），"" = 显式清空。
+    description: Optional[str] = None
 
 
 class ToolIn(BaseModel):

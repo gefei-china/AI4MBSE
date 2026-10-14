@@ -84,7 +84,8 @@ def create_mcp_server(body: MCPIn, conn=Depends(db_session), user=Depends(curren
         body.name, body.endpoint, json.dumps(body.tools, ensure_ascii=False),
         body.transport, body.command, json.dumps(body.args, ensure_ascii=False),
         json.dumps(body.env, ensure_ascii=False),
-        json.dumps(body.headers or {}, ensure_ascii=False))   # ★ B5-2
+        json.dumps(body.headers or {}, ensure_ascii=False),   # ★ B5-2
+        description=body.description or "")                   # ★ B5-4
     audit(audit_user(user), "mcp_create", f"添加MCP服务器: {body.name}", conn=conn)
     return {"ok": True}
 
@@ -95,12 +96,21 @@ def update_mcp_server(sid: int, body: MCPIn, conn=Depends(db_session), user=Depe
     if not repo.get_mcp_server(sid):
         return JSONResponse({"error": "MCP server not found"}, 404)
     # ★ B5-2：`headers` 字段**未提供**时传 None（repo 层区分"未提供"与"显式清空"）
+    # ★ B5-4：`tools` / `args` / `env` / `description` 同理 ——
+    #   前端编辑弹窗**不掌握** tools（那是探测发现的清单）与 args/env，
+    #   若照单全收地写回 `tools=[]` ⇒ **一次编辑保存就把已发现的工具清单清空**，
+    #   该 MCP 对 Agent 立刻彻底不可用（实测 dev_ai_mcp 有 4 个工具，保存后归零）。
+    #   ⇒ 只有前端**真的填了**才写，未提供的一律保持原值。
+    #   description 例外：它就是给人填的，前端总会带（空串 = 用户主动清空）。
+    _tools = json.dumps(body.tools, ensure_ascii=False) if body.tools else None
+    _args = json.dumps(body.args, ensure_ascii=False) if body.args else None
+    _env = json.dumps(body.env, ensure_ascii=False) if body.env else None
     repo.update_mcp_server(
-        sid, body.name, body.endpoint, json.dumps(body.tools, ensure_ascii=False),
-        body.transport, body.command, json.dumps(body.args, ensure_ascii=False),
-        json.dumps(body.env, ensure_ascii=False),
+        sid, body.name, body.endpoint, _tools,
+        body.transport, body.command or None, _args, _env,
         json.dumps(body.headers, ensure_ascii=False)
-        if body.headers is not None else None)
+        if body.headers is not None else None,
+        description=body.description)
     audit(audit_user(user), "mcp_update", f"更新MCP服务器#{sid}: {body.name}", conn=conn)
     return {"ok": True}
 
@@ -154,7 +164,11 @@ def test_mcp_server(sid: int, conn=Depends(db_session), user=Depends(current_use
         return JSONResponse({"error": "MCP server not found"}, 404)
 
     t0 = time.time()
-    transport = srv.get("transport", "sse")
+    # ★ B5-4：与 `mcp_health._norm_transport` 同一张映射表 ——
+    #   前端下拉存的是 `streamable_http`，此处若直接拿去比对白名单就会落空。
+    from mcp_health import _norm_transport
+    from mcp_client import _parse_jsonrpc_body   # ★ B5-4：与真实调用共用同一解析器
+    transport = _norm_transport(srv.get("transport"))
     # ★ B5-2：带上该服务器配置的认证头（此前**硬编码只有 Content-Type**
     #   ⇒ 需要 Bearer 的 MCP 必然 401 ⇒ 实测"新增成功但用不了"）。
     #   ⚠️ 解析失败**不阻断**（按无 header 处理）—— 配置坏了不该让探测崩掉。
@@ -184,13 +198,16 @@ def test_mcp_server(sid: int, conn=Depends(db_session), user=Depends(current_use
                 r = client.post(url, json=payload, headers=_hdr)
                 if r.status_code != 200:
                     raise ValueError(f"HTTP {r.status_code}: {r.text[:120]}")
-                init_data = r.json()
+                # ★ B5-4：用共用的双封装解析器（此前裸 `r.json()`，
+                #   对返回 text/event-stream 的服务端（含**平台自己的内置网关**）必抛
+                #   `Expecting value: line 1 column 1` ⇒ 内置 MCP 恒 offline）
+                init_data = _parse_jsonrpc_body(r)
                 # tools/list
                 tools_payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
                 r2 = client.post(url, json=tools_payload, headers=_hdr)
                 tools = []
                 if r2.status_code == 200:
-                    tr = r2.json()
+                    tr = _parse_jsonrpc_body(r2)   # ★ B5-4：同上，tools/list 同样可能是 SSE 封装
                     tools = [t.get("name") for t in (tr.get("result", {}).get("tools") or [])]
             latency = int((time.time() - t0) * 1000)
             repo.update_mcp_status(sid, "online", latency, json.dumps(tools, ensure_ascii=False))
