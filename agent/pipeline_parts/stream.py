@@ -1486,6 +1486,37 @@ class StreamMixin:
         # 现不再预发该阶段：检索真实性由各子任务按其 Agent 的 kb_required 决定。
         yield {"type": "stage", "name": "生成与校验", "status": "run"}
         orch_tasks = ((orch.get("data") or {}).get("tasks")) or []
+        # ★ B5-6（A-1）：复用路径**也要产出 subtasks 轨迹**。
+        #   根因：`_stream_orchestrated`（复用）与 `_stream_orchestrated_flow`（真实执行）
+        #   各写一份 card_data，而**只有后者带 `exec.subtasks`**
+        #   ⇒ 复用路径落库的消息 `subtasks=[]`
+        #   ⇒ 前端 `06-cards.js: if(subs.length)` 判空 → **整块不渲染**
+        #   ⇒ 用户看到「有计划编导、有一堆子智能体状态，但没有任何子任务卡片」，
+        #   且**刷新后实时 timeline 全丢**（那只是 DOM，从未落库）。
+        #   实测（真库 conv 9360）：msg3983（真实执行）subtasks 3 条 /
+        #   msg3985（复用）**0 条**，而 run535 实际跑5 个子任务、产出 3.6 万字符。
+        #   ⇒ 数据在 `agent_tasks` 表里躺着，界面一条都看不到。
+        #   本路径不逐个执行子任务，故 status 统一取 `orch_tasks` 自带值（缺省 done），
+        #   **不伪造** latency/token —— 模板复用的口径本就`template_reuse`（见 capability_scope）。
+        _subtasks = []
+        for _i, _tk in enumerate(orch_tasks):
+            _st = str(_tk.get("status") or "done")
+            _subtasks.append({
+                "key": _tk.get("key") or ("t%d" % (_i + 1)),
+                "title": _tk.get("title") or _tk.get("key") or ("t%d" % (_i + 1)),
+                "agent": _tk.get("agent") or "",
+                # ★ 复用路径没有真实执行耗时/ token，**显式留空而不是填 0** ——
+                #   填 0 会被前端 `(s.latency_ms/1000).toFixed(1)` 渲染成 "⏱ 0.0s"，
+                #   看起来像"瞬间完成"，是**假数据**；留空则前端整段不显示（正确）。
+                "latency_ms": _tk.get("latency_ms") or None,
+                "token_count": _tk.get("token_count") or None,
+                "deps": _tk.get("deps") or [],
+                "status": "done" if _st == "done" else ("run" if _st == "running" else _st),
+                "summary": _tk.get("summary") or "",
+                "error": _tk.get("error") or "",
+                # 标记来源，便于前端与后续排查区分"真跑过"与"模板声明"
+                "from_template": True,
+            })
         for tk in orch_tasks:
             tkey = tk.get("key") or "t"
             ttitle = tk.get("title") or tkey
@@ -1533,7 +1564,10 @@ class StreamMixin:
                         "结论分档/冲突检测/交付物结构校验均未应用",
             },
             "exec": {"reasoning": f"自动编排：复杂任务分解为 {len(orch_tasks)} 个子任务由多 Agent 协作执行",
-                     "agent": agent_def.name, "tools": []},
+                     "agent": agent_def.name, "tools": [],
+                     # ★ B5-6：与真实执行路径（:1409）字段集对齐 ——
+                     #   此前此处的 exec 只有 3 个键，缺 subtasks ⇒ 前端整块不渲染。
+                     "subtasks": _subtasks},
         }, ensure_ascii=False)
         with db_conn() as conn:
             # 2026-09-29：user 消息已在 execute_stream 入口落库，此处只插 assistant（防重复）

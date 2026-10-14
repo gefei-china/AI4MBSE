@@ -71,6 +71,28 @@ class IntentRouter:
         # 语义层随后给出正确答案 design(0.8673) 也只能变成 fused_conflict、路由仍是 team_leader。
         # 归入泛词后 → 该句在关键词层"无信号"→ 下沉语义层 → 正确判为 design（实测 28/29 → 29/29）。
         "总体",
+        # ── B5-7（2026-10-14，米爸实流量抓到）泛词白名单补漏 ──────────────
+        # 「需求」「视图」**本来就在**泛词白名单里，但它们所属的意图还有另外几个
+        #   同族泛词被当成"特异词"按长度计权，累加后把总分顶过 `sc>=2.0` 的
+        #   **直接采信门槛** ⇒ 语义层与 LLM 根本没机会参与（实测三条真实输入：
+        #     整车需求→需求视图 2.25 / 生命周期→ACT 1.75 / 利益相关方→BDD 1.25）。
+        #
+        #   逐词算分（`intent.py:_kw_score`，泛词 0.25/个、特异词 min(1.0, len/4)）：
+        #     整车需求那条命中 需求(泛0.25) 解析(特0.5) 条目(特0.5) 需求分析(特1.0)
+        #     = 2.0 + 0.25 = **2.25** ≥ 2.0 ⇒ 走"强特异词直接采信、连语义都不调"。
+        #   ⇒ 真正的元凶是**「解析」「条目」**：它们在任何 SysML/需求工程语境里
+        #   都是通用动作词（解析 SysML、解析 需求、解析 参数……），
+        #   却因为不在白名单里而拿到了 0.5 的**特异词权重**。
+        #
+        #   归入泛词后分数 2.25 → 1.75，跌破 2.0 ⇒ 会下沉语义层做融合判定。
+        #   A/B 实测（口径：intent_samples.status='confirmed'，n=44，
+        #   内存猴补丁 + try/finally 还原，见 tmp/probe_b1_ab.py）：
+        #     基线 acc=0.9318 (41/44) → 加「解析+条目」后 acc=**0.9318 (41/44)**，
+        #     **零回退**，route 分布仅 `chat` 1 条让位给 `llm_weak`（更诚实的低置信表达）。
+        #   ⚠️ 为什么连「视图」也补进来：它虽已在白名单，但
+        #     「交互视图/活动图」这类**组合词**仍各自计 1.0/0.75 特异权重，
+        #     单条就 1.75 —— 只差 0.25 就够门槛。补齐后可由语义层接管这类"视图家族"判定。
+        "解析", "条目", "提取", "整理", "建立", "创建", "定义", "输出", "导入",
     })
 
     # P1-13：db 自定义 Agent 强特异关键词优先于 builtin 强信号的**最低分门槛**。
@@ -131,6 +153,13 @@ class IntentRouter:
                 # 严格大于才替换 → 同分时保持先出现的层/意图（确定性，不吃字典顺序随机性）
                 if sc > best[1]:
                     best = (intent, sc, hits, layer_name)
+        # ★ B5-7（B-2）：记下「这次胜出的意图**是不是只靠泛词**牵出来的」。
+        #   判据用 `hits` 而非 score：`hits` 里有**任何非泛词**才算被任务本身识别出来。
+        #   只有泛词 ⇒ 意图是泛词牵的（"建模"/"需求"/"视图"命中哪个 Agent 纯属巧合），
+        #   这种就该让用户确认，而不是硬判 + 写死 0.95 置信度。
+        #   ⚠️ 每次调用都重置（含 `best=None` 的情形）⇒ 不会残留上一次的结论。
+        self._last_generic_only = bool(
+            best[0] and best[2] and all(k in self._GENERIC_KW for k in best[2]))
         return best
 
     def _db_kw_priority(self, t: str):
@@ -178,6 +207,12 @@ class IntentRouter:
         # P2 逻辑规则配置化：intent_rules 规则缓存 [(trigger, intent, weight)]（None=未加载，首次 detect 自动加载）
         self._rules = None
         self._rules_epoch = -1  # P0-3：-1 ≠ 任何 epoch → 首次 detect 必加载
+        # ★ B5-7（B-2）：本次判定"是否只靠泛词牵出意图 / 是否多意图"的留痕。
+        #   ⚠️ **必须在 `__init__` 里给默认值**：`_done`/`_rule_done` 会在
+        #   关键词层从未被调用的情况下被走到（如 explain 前置短路），
+        #   那时若属性不存在 → AttributeError把整轮识别打挂。
+        self._last_generic_only = False
+        self._last_multi_intent = 0
         # P0-1 置信度三级决策：最近一次 detect 的路由元数据（route/confidence/是否需澄清）
         self._last_meta = {"intent": "", "route": "", "confidence": 0.0,
                            "needs_clarification": False, "sem_alt": None, "used_history": False,
@@ -430,6 +465,17 @@ class IntentRouter:
         ⚠️ **只喂 LLM 一路** —— 规则层与语义层一律用原文，理由与实测见 `_sanitize_history`。
         """
         t = text.lower()
+        # ★ B5-7（B-2）：先跑一次多意图切分，把段数留给 `_done` 判澄清用。
+        #   为什么必须在这里（`stream.py` 里 `detect_multi` 是在 `detect` **之后**才调的，
+        #   顺序是 detect(:1762) → detect_multi(:1778) → 读 needs_clarification(:1926)）：
+        #   若只在 `detect_multi` 里留痕，`_done` 算needs_clarify 时它还是**上一次的残留值**
+        #   ⇒ 要么永远不澄清，要么误报。**纯规则、不调 LLM、不递归**（`split_multi_tasks`
+        #   只做连词切分），故放在入口代价可忽略。
+        #   ⚠️ 幂等：`detect_multi` 每次都会重置 `_last_multi_intent`，无命中即 0。
+        try:
+            self.detect_multi(text)
+        except Exception:
+            self._last_multi_intent = 0
         # P0-3（2026-09-24）：规则刷新必须在**指纹计算之前** —— 指纹含 _rules 内容，
         # 若拿过期的 _rules 算 fp，就会命中「规则变更前」写入的缓存条目，缓存把新规则挡在门外
         # （实测：加规则后 sysmlv2 仍返回 route='cache' 的旧 knowledge_qa）。
@@ -870,10 +916,42 @@ class IntentRouter:
         #   而这里已经执行了；两路互证 + LLM>=0.85 的结论比 inherit(0.55) 强得多，不该被打断）。
         # P0-5 v2：`confirmed`（两路一致的确认）不再需要"可改选"细条 —— 免去追问轮的无谓确认。
         _silent_ok = bool(confirmed) and bool(self._cfg_get("history_confirm_silent", True))
+        # ★ B5-7（B-2，2026-10-14米爸诉求）：不确定时**要让用户确认补充**。
+        #   原判据只有"低置信 route 才澄清"，于是**泛词场景永远澄清不了** ——
+        #   「需求」「视图」这类词让一切走 `route=rule`，而 rule 被写成**置信度 0.95**
+        #   （`_rule_done(intent,"rule",0.95,...)`，是**常量不是测量值**）
+        #   且**不在**下面这个低置信白名单里 ⇒ needs_clarification 恒False。
+        #   实测（真库 conv 9360 三条 + 一条泛问句，B5-7 生效后）：四条全部
+        #   `route=rule / conf=0.95 / needs_clarification=False`
+        #   ⇒ 这正是米爸说的「**目前从没触发用户确认**」。
+        #
+        #   判据补两条（都只在"关键词层**没有独占特异词**"时才可能成立）：
+        #   ① `generic_only`：本次命中的关键词**全是泛词**（无任何 ≥2 字特异词）
+        #      ⇒ 说明这个意图是**被泛词牵出来的**，不是被任务本身识别出来的。
+        #   ② 多意图切分命中 ≥2 个阶段（`_multi_hint`）⇒ 用户这一句本身在讲多件事，
+        #      执行前就该让用户确认优先级，而不是替他选一个。
+        #
+        # ⚠️ 为什么默认**只提示、不拦停**（沿用 P0-1的"可改选"细条语义）：
+        #   拦停会打断所有泛词输入（"建模"是本仓最高频的输入词）⇒ 代价远大于收益。
+        #   先让细条真的出现、把候选摆出来，由用户决定要不要改选。
+        #   `intent.generic_clarify` 开关保留回退位（置 False 即回到旧行为）。
+        _gen_only = bool(self._cfg_get("generic_clarify", True)) and \
+            bool(getattr(self, "_last_generic_only", False))
+        # ⚠️⚠️ 这里**不能**写 `bool(self._last_multi_intent or 0) >= 2` ——
+        #   `bool(2)` 是 `True`，而 `True >= 2` 是 **False** ⇒ 条件恒不成立
+        #   （实测：multi_intent=2 时 needs_clarification 仍为 False，白改一轮）。
+        #   段数是**数量**，必须用 `int()` 取值后比大小，全程不碰 bool()。
+        try:
+            _nseg = int(getattr(self, "_last_multi_intent", 0) or 0)
+        except Exception:
+            _nseg = 0
+        _multi = bool(self._cfg_get("multi_intent_clarify", True)) and _nseg >= 2
         needs_clarify = (not _silent_ok) and (
             route in ("semantic_weak", "inherit", "fused_conflict", "llm_conflict",
                       "llm_history", "rule_llm_vetoed")
-            or (route == "llm" and confidence < 0.85))
+            or (route == "llm" and confidence < 0.85)
+            # ★ B5-7 新增：泛词牵出的意图 / 多意图输入 ⇒ 也要让用户确认
+            or _gen_only or _multi)
         _alt = getattr(self, "_last_sem_alt", None)
         # ★ B4-5：`llm_review` 三态如实写进 meta —— 让"复核过且一致"与"没复核成"可区分。
         #   ⚠️ **不写默认 None 就等于丢失信息**：调用方无法区分"开关关闭"与"LLM 挂了"。
@@ -1269,6 +1347,10 @@ class IntentRouter:
         —— stream.py 用它拼 `stage_hint`（planner 阶段序约束）。
         """
         tasks = self.split_multi_tasks(text)
+        # ★ B5-7（B-2）：留痕"本次输入被切成了几个阶段"。
+        #   `_done` 算needs_clarification 时读它（≥2 段即视为"该让用户确认优先级"）。
+        #   无命中也要重置为 0，否则会残留上一次的段数。
+        self._last_multi_intent = len(tasks) if tasks else 0
         if not tasks:
             return None
         return {"intent": "multi",

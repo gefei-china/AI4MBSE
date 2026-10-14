@@ -381,6 +381,15 @@ body.nr-full-lock{overflow:hidden;}
 .code-fold .cf-act{cursor:pointer;color:var(--blue-d,#3478f6);text-decoration:underline;margin-left:auto;}
 .code-fold .md-code{display:none;margin:0;max-height:340px;overflow:auto;}
 .code-fold.open .md-code{display:block;}
+/* ★ B5-6（A-2）：正文长文档折叠 —— 视觉语言**完全复用 .code-fold**（同一套边框/头/箭头），
+   避免"代码会折叠、正文不会"这种口径不一致（米爸 2026-10-14 报"页面拉得很长"）。
+   展开态同样限高+ 内滚，避免展开后又是超长页面。 */
+.body-fold{border:1px solid var(--line,#e5e8ee);border-radius:8px;background:#f8fafc;margin:6px 0;overflow:hidden;}
+.body-fold .bf-head{display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;user-select:none;font-size:10.5px;color:var(--mut);background:rgba(0,0,0,.02);}
+.body-fold .bf-head .cf-lang{font-weight:700;color:var(--blue-d,#3478f6);text-transform:uppercase;}
+.body-fold .bf-head .bf-meta{margin-left:auto;}
+.body-fold .bf-body{display:none;padding:2px 4px;background:#fff;max-height:560px;overflow:auto;}
+.body-fold.open .bf-body{display:block;}
 .hist-proc .proc-timeline{display:none;}
 .hist-proc.open .proc-timeline{display:flex;flex-direction:column;gap:6px;margin-top:6px;}
 /* 步骤头部副标题（折叠后仍可见的阶段详情，Trae 式时间线） */

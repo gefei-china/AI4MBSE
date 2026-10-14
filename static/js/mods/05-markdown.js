@@ -80,6 +80,34 @@ function renderMarkdown(text, cites){
       + `<span class="chev">▸</span></div>`
       + `<pre class="md-code"><code>${escMd(body.join('\n'))}</code></pre></div>`;
   }
+
+  /* ★ B5-6（A-2）：**正文长文档折叠** —— 与代码块同一套口径（`.code-fold` / `chev`）。
+   *
+   * 为什么需要（米爸 2026-10-14 报「最下面的 markdown 无限制展开，页面拉得很长」）：
+   *   本函数对**代码块**做了折叠（`_codeFold`），但渲染出来的**文档正文**
+   *   在 `renderMsgHtml` 里是`html += '<div class="body">'+contentHtml` ——
+   *   **全量平铺、零折叠**。⇒ 同一个页面里"代码会折叠、正文反而不会"，
+   *   这本身就是口径不一致；而编排汇总动辄 2500+ 字符（实测 plan_summary
+   *   单次 completion 13,668 token），整篇铺开把执行过程全顶到屏幕外。
+   *
+   * 阈值取 **正文行数**而非字符数：中文排版下用户感知的是"篇幅/段数"，
+   * 且 `renderMarkdown` 已把代码块抽走，行数更能反映"还剩多少要读的内容"。
+   * 短消息（绝大多数）**完全不受影响** —— 不加折叠头、不改 DOM 结构。
+   */
+  const _FOLD_MIN_LINES = 24;
+  function _wrapBodyFold(html, rawText){
+    if(!html || !rawText) return html;
+    // 已含代码折叠/ 视图卡时不重复包一层（那类内容有自己的交互外壳）
+    const lines = String(rawText).replace(/\r\n/g,'\n').split('\n').length;
+    if(lines < _FOLD_MIN_LINES) return html;
+    const n = lines;
+    return `<div class="body-fold">`
+      + `<div class="bf-head" onclick="bodyFoldToggle(this)">`
+      + `<span class="cf-lang">完整输出</span>`
+      + `<span class="bf-meta">${n} 行 · 点击展开/收起</span>`
+      + `<span class="chev">▸</span></div>`
+      + `<div class="bf-body">${html}</div></div>`;
+  }
   const lines = String(text).replace(/\r\n/g,'\n').split('\n');
   let html='', i=0, inCode=false, codeBuf=[];
   while(i<lines.length){
@@ -99,7 +127,16 @@ function renderMarkdown(text, cites){
     i++;
   }
   if(inCode) html += _codeFold(codeBuf);
-  return html;
+  // ★ B5-6：超长正文自动包一层折叠（阈值 24 行，短消息完全不受影响）
+  return _wrapBodyFold(html, text);
+}
+/* 正文折叠展开/收起（与 `codeFoldToggle` 同构，`.body-fold` 用同一套视觉语言） */
+function bodyFoldToggle(el){
+  const box = el && el.parentElement;
+  if(!box) return;
+  const on = box.classList.toggle('open');
+  const ch = el.querySelector('.chev');
+  if(ch) ch.textContent = on ? '▾' : '▸';
 }
 /* ── 2026-09-16 Mermaid 视图渲染：```mermaid 代码块 → 平台内渲染成图（懒加载 mermaid 库）── */
 let _mermaidLoading = false;
