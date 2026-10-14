@@ -253,7 +253,23 @@ class BM25Engine:
 # - 容量上限 8，超限淘汰最旧（dict 插入序）
 _BM25_CACHE = {}
 _BM25_CACHE_MAX = 8
-_CHUNK_COLS = "id, document_id, source_doc, section, chunk_index, content, domain, embed_version"
+# ⚠️⚠️ 2026-10-14 修复实测缺陷：此列表**漏了 bm25_text** ⇒
+#   BM25Engine.extend() 里 `c.get("bm25_text") or c.get("content")`
+#   永远拿到 None ⇒ **BM25 一直在索引 content，而不是 bm25_text**。
+#   而 bm25_text 才是"带 section 标题前缀"的那份（入库时按 title-enriched 构造），
+#   content 则是正文切片、**不含所属章节标题**。
+#
+#   实测代价（24 例 doc 域，真实库）：
+#     索引 content 时 BM25-only R@1 = 0%（'4.1 说明性对象配置' 在 top-20 **一次都没出现**）
+#     索引 bm25_text 时 BM25-only R@1 = **95.8%**、R@10 = **100%**
+#   ⇒ 这不是调参问题，是**一行字段遗漏**。
+#
+#   与行业实践一致：Anthropic Contextual Retrieval 明确要求
+#   「prepend section headers **before indexing**，BM25 与 embedding 都用补过的文本」
+#   （官方口径：检索失败率降 49%，叠加混合检索降 67%）。
+#   我们早就把"补过的文本"存进了 bm25_text，只是检索侧没去取。
+_CHUNK_COLS = ("id, document_id, source_doc, section, chunk_index, content, "
+               "bm25_text, domain, embed_version")
 _BM25_PAGE = 2000  # 分页流式构建页大小（内存 O(page)）
 
 
