@@ -860,6 +860,8 @@ class StreamMixin:
                                              "agent": tk.get("agent_id") or "", "deps": [],
                                              "status": "partial", "latency_ms": 0,
                                              "error": "依赖任务失败，无法推进",
+                                             # ★ F-3：输入不展示；本步未执行故 output=None。
+                                             "output": None,
                                              "retry_count": _rt, "summary_status": "partial"})
                     break
                 # T8：并行执行全部就绪任务（≤_ORCH_MAX_WORKERS）；worker 只执行子管道收集事件，
@@ -987,12 +989,29 @@ class StreamMixin:
                                                "ui_summary": _ui_summary,
                                                "summary_status": _sm_status})
                             # P0-2：子任务轨迹实时事件（done/failed）+ 轨迹持久化
+                            # ★ E-1（2026-10-14 米爸问「步骤节点有显示具体执行内容、
+                            #   输入输出吗」）：补 `input` / `output` 两个字段。
+                            #   实测（会话 9360 / run535，5 个子任务）：
+                            #     · 完整产出 `agent_tasks.result` 合计 **36,696 字**
+                            #       （t1=9021 / t2=9900 / t3=6176 / t4=7015 / t5=4584）
+                            #     · 而 subtasks 只带了 `ui_summary` ⇒ 界面**仅展示 214 字（0.6%）**
+                            #     · 输入 `agent_tasks.context` 合计 357 字，**完全没进 card_data**
+                            #   ⇒ 中间层「每个子任务自己产出了什么」既没进 card_data、也没进正文，
+                            #     用户看不到执行过程，也无法把正文内容回溯到具体环节。
+                            #   修法：把 input/output 一并带上（tk 来自 `SELECT *`，两列都在）。
+                            #   ⚠️ `output` **不截断** —— 用户明确要求"点开能看完整产出"；
+                            #      截断会让"查看完整产出"变成看不全，反而不如不给。
+                            #      代价是 card_data 变大（实测单条约 +7~10KB），SQLite 无压力。
                             subtasks.append({"key": tkey, "title": ttitle, "agent": tk.get("agent_id") or "",
                                              "deps": _deps_map.get(tkey, []),
                                              "status": "done" if tk_ok else "failed",
                                              # 落库这份也带用户向摘要：否则**刷新历史会话**时前端只能回退到
                                              # 内部交接语（老数据显示"承接上游…"会让人以为没改）
                                              "ui_summary": _ui_summary,
+                                             # ★ F-3：只传输出。米爸明确「只显示输出结果，输入暂不
+                                             #   展示（工具执行除外）」⇒ 不再往 card_data 塞 input。
+                                             #   （E-1 那版传了 input，已被本条覆盖。）
+                                             "output": (sub_res or "").strip() or None,
                                              "latency_ms": _t_lat, "error": _t_err or None,
                                              "token_count": _tok,
                                              "retry_count": _rc,
@@ -1008,6 +1027,9 @@ class StreamMixin:
                                    #    ui_summary 只加在 orch_tasks 上，真机验收时事件里根本没这个键（实测踩到）。
                                    #    展示用"面向用户的一句"，协议 summary 同时保留给下游承接。
                                    "ui_summary": _ui_summary,
+                                   # ★ F-3：实时事件同样只带 output（输入不展示）——
+                                   #   否则实时播放与刷新后历史路径的数据集不一致。
+                                   "output": (sub_res or "").strip() or None,
                                    "summary_status": _sm_status}
                             yield {"type": "agent", "status": "done", "name": tkey, "display_name": ttitle,
                                    "intent": intent, "hil_level": hil_level}
@@ -1039,6 +1061,8 @@ class StreamMixin:
                             subtasks.append({"key": _tk.get("task_key"), "title": _tk.get("title"),
                                              "agent": _tk.get("agent_id") or "", "deps": [],
                                              "status": "partial", "latency_ms": 0, "error": "预算超限",
+                                             # ★ F-3：输入不展示；预算超限未执行故 output=None。
+                                             "output": None,
                                              "retry_count": int(_tk.get("retry_count") or 0),
                                              "summary_status": "partial"})
                 except Exception:
@@ -1514,6 +1538,10 @@ class StreamMixin:
                 "status": "done" if _st == "done" else ("run" if _st == "running" else _st),
                 "summary": _tk.get("summary") or "",
                 "error": _tk.get("error") or "",
+                # ★ F-3：复用路径（模板声明）**没有真实执行** ⇒ output 恒为 None。
+                #   前端据此不渲染结果块，而不是渲染空块或编造内容
+                #   （与 latency_ms/token_count 留空的理由同源：不许造假数据）。
+                "output": _tk.get("output") or None,
                 # 标记来源，便于前端与后续排查区分"真跑过"与"模板声明"
                 "from_template": True,
             })

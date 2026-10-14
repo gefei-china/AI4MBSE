@@ -35,7 +35,12 @@ function onStageEvent(ev){
 
 // ── V2.4 会话内执行过程（Trae 式时间线）：按事件到达顺序依次展示，进行中展开、完成自动收起 ──
 let _procS = {timeline: [], thinking: '', thinkingRounds: {}, thinkingOrder: [], dag: {nodes:{}, order:[]}, dagDirty: false,
-              startTime: null, endTime: null, summaryCollapsed: false, done: false, tokens: '', subChildren: {}, keyMarked: {}};
+              startTime: null, endTime: null, summaryCollapsed: false, done: false, tokens: '', subChildren: {}, keyMarked: {},
+              // ★ F-1：子任务实时输出缓冲 {task_key: 文本}。
+              //   子任务的 token **绝不能**流进正文区（米爸需求3：最终输出正文在流程执行
+              //   完成后再输出）—— 后端 subtask token 带 `key`、最终正文 token 不带，
+              //   据此分流；此前无条件全进 _tokBuf，子任务产出与最终正文混在一起。
+              subOutput: {}, subOutputRaf: 0};
 function toggleProc(headEl){
   const blk = headEl.closest('.proc-block');
   if(!blk) return;
@@ -451,7 +456,10 @@ function _procAddSubTool(pk, ev, displayName){
   }
   // 子任务卡执行明细变化 → 重渲染（保留其展开/收起状态）
   const card = _procS.timeline.find(x=>x.id==='subtask_'+pk);
-  if(card){ card.detail = subtaskCardHtml({key:pk, title:card.title, agent:card.agent||'', status:card.status, latency_ms:card.latencyMs||0}) + _subChildrenHtml(pk); }
+  // ★ E-2：原来这里只传 5 个字段（key/title/agent/status/latency_ms）
+  //   ⇒ 重渲染后 **ui_summary/input/output 全部丢失**，卡退化成只有标题。
+  //   改为把 timeline 上已有的完整字段透传（card 本身就是 procAddSubtask 存的那个 s）。
+  if(card){ card.detail = subtaskCardHtml(card) + _subChildrenHtml(pk); }
   procRender();
 }
 // V2.6：子任务内部执行明细 HTML（工具参数/结果/状态/耗时）
@@ -612,9 +620,70 @@ function subtaskCardHtml(s){
   const tk = (s.token_count||0) > 0 ? ` <span style="color:var(--mut);font-size:10.5px;" title="本子任务 token 消耗">🪙 ${Number(s.token_count).toLocaleString()}</span>` : '';
   // 2026-09-29（用户三轮反馈）：外层阶段卡头部已展示标题，展开详情内**不再重复渲染名称**
   // （此前第一行 <b>title</b> 与外层 head 完全一样，用户指出冗余）。本行只保留状态符号与徽章。
+
+  // ★ F-2/F-3（2026-10-14 米爸重新明确，覆盖 E-2 的设计）：
+  //   ① **默认就要显示真实执行摘要和结果** —— 不是只显示一句 ui_summary；
+  //   ② 只显示**输出**，输入暂不展示（**工具执行除外**，工具的"参数"在 _subChildrenHtml 里）；
+  //   ③ 内容显示卡片要**限高**（内滚看全，不把页面撑爆）；
+  //   ④ 展开可查看**详情**（协议摘要里的 artifacts/claims/risks/missing 等结构化交付信息）。
+  //
+  //   ⚠️ E-2 那版把产出做成"默认折叠、点开再看"，米爸已明确否决：
+  //     他要的是"每个环节默认要真实执行摘要和结果"。
+  //     「默认折叠」只保留给**详情**（结构化交付清单），不用于摘要与结果本身。
+  const _LIM = 'max-height:300px;overflow:auto;';
+  // ── 结果块（默认展示，限高内滚）──
+  const outRaw = s.output || s.liveOutput || '';
+  const outHtml = outRaw ? `
+    <div style="margin-top:4px;">
+      <div style="font-size:10px;color:var(--mut);font-weight:600;margin-bottom:2px;">📤 执行结果（${String(outRaw).length} 字）</div>
+      <div style="padding:5px 7px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;${_LIM}font-size:10.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;color:var(--fg);">${esc(String(outRaw))}</div>
+    </div>` : '';
+  // ── 详情块（默认折叠，点开再看）──
+  //   来源：协议摘要 summary（artifacts/claims/risks/missing/evidence/confidence）。
+  //   这些是"这一步交付了什么、缺什么、有什么风险"的结构化清单，属于**补充信息**，
+  //   默认收起不碍事；米爸要求默认可见的是"摘要 + 结果"，不是这张清单。
+  let detailHtml = '';
+  const smObj = (s.summary && typeof s.summary === 'object') ? s.summary : null;
+  if(smObj){
+    const _row = (label, v) => {
+      let txt = '';
+      if(Array.isArray(v)) txt = v.map(x=>typeof x==='string'?x:JSON.stringify(x)).join('\n');
+      else if(v && typeof v === 'object') txt = JSON.stringify(v, null, 1);
+      else txt = (v===undefined||v===null||v==='') ? '' : String(v);
+      return txt ? `<div style="margin-top:3px;"><b style="font-size:10px;color:var(--mut);">${label}</b><div style="font-size:10.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;">${esc(txt)}</div></div>` : '';
+    };
+    const _inner = _row('交付物 artifacts', smObj.artifacts)
+      + _row('结论 claims', smObj.claims)
+      + _row('证据 evidence', smObj.evidence)
+      + _row('缺失 missing', smObj.missing)
+      + _row('风险 risks', smObj.risks)
+      + (smObj.confidence!==undefined ? `<div style="margin-top:3px;font-size:10px;color:var(--mut);">置信度：${esc(String(smObj.confidence))}</div>` : '');
+    if(_inner.trim()){
+      detailHtml = `
+    <div class="io-fold" data-k="detail" style="margin-top:4px;">
+      <div class="io-head" onclick="ioFoldToggle(this)" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;font-size:10px;color:var(--blue-d,#3478f6);">
+        <span class="chev">▸</span><span>查看详情（交付物 / 结论 / 风险）</span>
+      </div>
+      <div class="io-body" style="display:none;margin-top:3px;padding:5px 7px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;${_LIM}">${_inner}</div>
+    </div>`;
+    }
+  }
   return `<div class="proc-line" style="border:1px solid var(--line);border-radius:8px;padding:5px 8px;margin:3px 0;background:#fff;">
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${ok?'✓':part?'◐':run?'⟳':stopped?'⏹':'✗'}${badge}${s.agent?` <span class="tag" style="font-size:10px;">${esc(s.agent)}</span>`:''}${caps}${retry}${sumBadge}${s.latency_ms?` <span style="color:var(--mut);font-size:10.5px;">⏱ ${(s.latency_ms/1000).toFixed(1)}s</span>`:''}${tk}${run?' <span class="st w">执行中…</span>':''}${stopped?' <span class="st w">已终止</span>':''}</div>
-    ${sum}${s.error?`<div style="color:var(--red);font-size:10.5px;margin-top:2px;">${esc(s.error)}</div>`:''}${failNote}</div>`;
+    ${sum}${outHtml}${detailHtml}${s.error?`<div style="color:var(--red);font-size:10.5px;margin-top:2px;">${esc(s.error)}</div>`:''}${failNote}</div>`;
+}
+// ★ F-2：子任务「详情」的展开-收起（摘要与结果是**默认展示**的，不在这里折叠）。
+//   ⚠️ 与 B5-8 删除的 bodyFoldToggle **不是同一个东西**：那个折的是"最终输出正文"，
+//      因米爸要求"不许收起"而撤销；这里折的是执行环节里的**结构化详情清单**，
+//      米爸原话"展开可以查看详情"——即默认收起、点开再看。
+function ioFoldToggle(el){
+  const box = el && el.closest('.io-fold');
+  if(!box) return;
+  const on = box.classList.toggle('open');
+  const body = box.querySelector('.io-body');
+  const ch = el.querySelector('.chev');
+  if(body) body.style.display = on ? 'block' : 'none';
+  if(ch) ch.textContent = on ? '▾' : '▸';
 }
 // ── 五轮反馈5：终止/中断后，所有 run 态环节统一翻转为「⏹ 已终止」──
 //  此前 finalizeStopped 只把块折叠，"执行中…/思考中…/执行中 1/1" 徽章原样进历史，
@@ -632,8 +701,9 @@ function procMarkStopped(){
       x.elapsedStart = null;
       x.collapsed = true;
       if(x.type === 'subtask' && x.key !== undefined){
-        x.detail = subtaskCardHtml({key:x.key, title:x.title, agent:x.agent||'', status:'stopped',
-                                    latency_ms:x.elapsedMs, error:''}) + _subChildrenHtml(x.key);
+        // ★ E-2：同样透传完整字段（原来只传 5 个，终止后 ui_summary/input/output 全丢）。
+        //   status 改 'stopped' 是这里的**唯一**语义变化，其余字段原样带出。
+        x.detail = subtaskCardHtml(Object.assign({}, x, {status:'stopped', error:''})) + _subChildrenHtml(x.key);
       }
       flipped++;
     });
@@ -717,9 +787,17 @@ function dagBuild(containerId, data){
 function procAddSubtask(ev){
   const key = ev.key||'t';
   const cur = _procS.timeline.find(x=>x.id==='subtask_'+key) || {};
+  // ★ E-2：补 `ui_summary` / `input` / `output` 三个字段。
+  //   原实现只取 11 个字段，**漏了 ui_summary** ⇒ 实时播放时子任务卡连短摘要都没有；
+  //   E-2 又加了 input/output（后端 subtask 事件已一并透出），此处不接就等于实时路上永远看不到。
+  //   ⚠️ 用 `ev.x!==undefined ? ev.x : cur.x` 而不是 `ev.x||cur.x` ——
+  //      后者会把合法的空串/0 也判成"没带"，从而回退到旧值（本轮实测踩过）。
+  const _pick = (k) => (ev[k]!==undefined ? ev[k] : cur[k]);
   const s = {key, title: ev.title||cur.title||key, agent: ev.agent||cur.agent||'',
     deps: ev.deps||cur.deps||[], status: ev.status, latency_ms: ev.latency_ms||cur.latency_ms||0,
     error: ev.error||cur.error||'', summary: ev.summary||cur.summary||'',
+    ui_summary: _pick('ui_summary'),
+    input: _pick('input'), output: _pick('output'),
     summary_status: ev.summary_status||cur.summary_status||'', retry_count: ev.retry_count||cur.retry_count||0,
     token_count: ev.token_count||cur.token_count||0};
   // 计划清单数据维护（V2.7 文本清单替代 DAG 画布；deps 驱动顺序展示）
@@ -797,6 +875,36 @@ function _forceFlushTokens(){
   _flushTokens();
 }
 
+// ★ F-1：子任务实时输出的合帧刷新（与 _flushTokens 同构，但写入子任务卡而非正文）。
+//   用 rAF 合帧的原因同正文：子任务 token 也很密（实测两阶段编排 89 条 token 事件），
+//   每条都写 DOM + 读 scrollHeight 会把执行过程拖卡。
+function _scheduleSubOutputFlush(key){
+  if(_procS.subOutputRaf) return;
+  _procS.subOutputRaf = requestAnimationFrame(()=>{
+    _procS.subOutputRaf = 0;
+    const ks = Object.keys(_procS.subOutput);
+    ks.forEach(k=>{
+      const card = _procS.timeline.find(x=>x.id==='subtask_'+k);
+      if(!card) return;                      // 卡还没建（subtask run 事件未到）→ 下轮再刷
+      const txt = _procS.subOutput[k] || '';
+      card.liveOutput = txt;
+      // 只在"用户没有手动展开/收起"时重渲染 detail，避免打断交互
+      if(!card.collapsed) card.detail = subtaskCardHtml(card) + _subChildrenHtml(k);
+    });
+    if(typeof procRender === 'function') procRender();
+  });
+}
+// 流结束（done/error）时把残留的子任务输出一次性刷齐，防末帧丢失
+function _forceFlushSubOutput(){
+  if(_procS.subOutputRaf){ cancelAnimationFrame(_procS.subOutputRaf); _procS.subOutputRaf = 0; }
+  Object.keys(_procS.subOutput).forEach(k=>{
+    const card = _procS.timeline.find(x=>x.id==='subtask_'+k);
+    if(!card) return;
+    card.liveOutput = _procS.subOutput[k] || '';
+    if(!card.collapsed) card.detail = subtaskCardHtml(card) + _subChildrenHtml(k);
+  });
+}
+
 function handleSSE(raw) {
   let evType = 'message', dataStr = '';
   raw.split('\n').forEach(line=>{
@@ -866,6 +974,17 @@ function handleSSE(raw) {
       (body ? body.parentNode : box).appendChild(note);
     }
   } else if(evType === 'token') {
+    // ★ F-1（米爸需求3：最终输出正文在流程执行完成后再输出）：
+    //   带 `key` 的 token 是**子任务的实时产出**，归到该子任务卡的"实时输出"区；
+    //   不带 `key` 的才是**最终正文**（plan_summary 产出，时序上在所有子任务完成之后）。
+    //   原实现无条件 `_tokBuf += delta` ⇒ 子任务产出直接流进正文区，
+    //   与最终正文混在一起，用户看到的是"过程与结果糊成一片"。
+    if(ev.key){
+      const _k = String(ev.key);
+      _procS.subOutput[_k] = (_procS.subOutput[_k] || '') + (ev.delta || '');
+      _scheduleSubOutputFlush(_k);
+      return;
+    }
     if(bodyEl.querySelector('.typing')) bodyEl.querySelector('.typing').remove();
     // P0-3：合帧渲染（详见 _flushTokens 注释）——不再每 token 写 DOM + 读 scrollHeight
     _tokEl = bodyEl;
@@ -887,10 +1006,12 @@ function handleSSE(raw) {
     renderClarifyAsk(ev);   // 内容级澄清：信息不清晰 → 选择题确认（回答后续答）
   } else if(evType === 'done') {
     _forceFlushTokens();
+    _forceFlushSubOutput();   // ★ F-1：子任务实时输出末帧刷齐（防 rAF 未触发丢尾巴）
     uxTrack('task_done');   // §11 埋点：任务完成率分子
     finishStream(ev.data, aiBox);
   } else if(evType === 'error') {
     _forceFlushTokens();
+    _forceFlushSubOutput();   // ★ F-1：同上，中断时也不能丢子任务已产出的内容
     showStopBtn(false); _streaming = false;
     uxTrack('task_error', {message: String(ev.message||'').slice(0,120)});   // §11 埋点：失败分母 + 失败类别
     // V2.6：中断也收口（汇总条切「已中断」，不停留"执行中"）
