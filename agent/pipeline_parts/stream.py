@@ -1393,6 +1393,17 @@ class StreamMixin:
             "saved_flow_id": saved_flow_id,   # P0-1：编排沉淀的工作流 id（前端「另存为流程」）
             "saved_flow_name": f"自动编排·{(goal or '')[:18]}" if saved_flow_id else None,
             "reflection": reflection_meta,    # P0-1（T3）：反思闭环评审轨迹（评分/修订轮次/问题）
+            # ★ 2026-10-14：**主路径的能力口径**（与复用路径的 `template_reuse` 对称）。
+            #   前端据此区分「本次真执行了子任务，结构化能力已应用」与「模板复用，未应用」。
+            #   `conflict_verdict` 直接透出 RefineGate 的三态口径
+            #   （no-data / insufficient / checkable）—— **绝不把"未检出"说成"已检查无冲突"**。
+            "capability_scope": {
+                "mode": "subtasks_executed",
+                "subtasks_executed": True,
+                "structure_checks_applied": True,
+                "conflict_verdict": ((reflection_meta or {}).get("conflicts") or {}
+                                    .get("stats", {})).get("verdict") if reflection_meta else None,
+            },
             "exec": {"reasoning": f"自动编排：{len(orch_tasks)} 个子任务由多 Agent 协作执行",
                      "agent": agent_def.name, "tools": [],
                      "subtasks": subtasks},   # P0-2：子任务轨迹持久化（历史消息还原）
@@ -1506,6 +1517,21 @@ class StreamMixin:
             "sysml_views": sysml_views,
             "source": "none", "confidence": 0, "graph_count": 0, "vector_count": 0,
             "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
+            # ★ 2026-10-14（#19 之外的通用性项）：**复用路径的能力盲区显式化**。
+            #   这条路径只播报 `agent run/done` 占位事件、**不执行子任务** ⇒
+            #   挂在子任务上的结构化能力（claims 结论分档 / 结论冲突检测 /
+            #   交付物结构校验）**在这里完全不会发生**，而用户看不出区别。
+            #   ⇒ 落一条明确标记，前端可据此提示「本次为流程模板复用，
+            #     未执行子任务，故未做结论分档/冲突检测/交付物结构校验」。
+            #   ⚠️ 这**不是**缺陷标记（复用是刻意的产品语义），是**口径说明**：
+            #     避免用户把"没检出冲突"误解成"检查过且无冲突"。
+            "capability_scope": {
+                "mode": "template_reuse",
+                "subtasks_executed": False,
+                "structure_checks_applied": False,
+                "note": "本次命中已发布流程模板，未执行子任务；"
+                        "结论分档/冲突检测/交付物结构校验均未应用",
+            },
             "exec": {"reasoning": f"自动编排：复杂任务分解为 {len(orch_tasks)} 个子任务由多 Agent 协作执行",
                      "agent": agent_def.name, "tools": []},
         }, ensure_ascii=False)

@@ -421,6 +421,15 @@ class OrchestrMixin:
             "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
             "saved_flow_id": saved_flow_id,   # P0-1：编排沉淀的工作流 id
             "saved_flow_name": f"自动编排·{(user_input or '')[:18]}" if saved_flow_id else None,
+            # ★ 2026-10-14：**能力口径**（与 stream.py 的两条编排路径对称 ——
+            #   本文件是**第三条**编排路径，此前它与另两条的 card_data 字段**不对齐**，
+            #   前端按同一套渲染读不到能力口径 ⇒ 又是一个"同名能力多路径"的口子）。
+            "capability_scope": {
+                "mode": "subtasks_executed",
+                "subtasks_executed": True,
+                "structure_checks_applied": True,
+                "note": "非流式编排路径；结构化能力已应用",
+            },
             "exec": {"reasoning": f"自动编排：{len(plan_meta)} 个子任务由多 Agent 协作执行",
                      "agent": agent_def.name, "tools": [],
                      "subtasks": plan_meta},  # P0-2：子任务轨迹持久化

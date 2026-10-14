@@ -47,6 +47,7 @@ if _ROOT not in sys.path:
 
 STREAM = os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py")
 VALIDATOR = os.path.join(_ROOT, "services", "artifact_validator.py")
+ORCH = os.path.join(_ROOT, "agent", "pipeline_parts", "orchestration.py")
 
 PASS, FAIL = "PASS", "FAIL"
 _results = []
@@ -154,6 +155,25 @@ def r_group():
     check("R2 不可判定（无正文）不报成「结构不合规」",
           "内容为空" in seg2,
           "汇总段未区分「无正文」与「结构不合规」⇒ 会产生假红")
+
+
+    # R3 ★**三条编排路径都要有能力口径**（防"同名能力多路径"再现）
+    #    复用路径 `_stream_orchestrated` **不执行子任务** ⇒ 结构化能力不生效；
+    #    若只有主路径标了口径，复用路径仍是**用户看不出的盲区**。
+    paths = (
+        ("stream.py 主路径", src, '"mode": "subtasks_executed"'),
+        ("stream.py 复用路径", src, '"mode": "template_reuse"'),
+        ("orchestration.py 非流式", open(ORCH, encoding="utf-8").read(),
+         '"mode": "subtasks_executed"'),
+    )
+    for label, text, mode in paths:
+        check("R3 %s 有 capability_scope 标记" % label,
+              "capability_scope" in text and mode in text,
+              "未找到 capability_scope 或 mode=%s" % mode)
+    # R3b 复用路径必须显式声明"未执行子任务"
+    check("R3b 复用路径显式声明未执行子任务（用户能看出区别）",
+          '"subtasks_executed": False' in src and '"mode": "template_reuse"' in src,
+          "复用路径未声明 subtasks_executed=False")
 
 
 def main() -> int:
