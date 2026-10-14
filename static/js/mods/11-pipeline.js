@@ -1328,7 +1328,19 @@ function openExecDetail(el){
   const d = _execCollect(msgEl);
   const total = d.stages.length + d.agents.length + d.skills.length + d.tools.length
               + d.plans.length + d.thinking.length + d.others.length;
-  if(!total){
+  // ★ B4-7（2026-10-14 真流量抓到）：原逻辑 `if(!total) return`，导致
+  //   **模板复用路径的面板永远打不开** —— 该路径只 yield 一对 agent 占位事件，
+  //   `total` 基本为 0 ⇒ 早退 ⇒ 用户点「执行」只看到一个 toast，
+  //   **而 card_data 里恰恰有最该让他看到的东西**（capability_scope：
+  //   「本次未执行子任务 / 结构化能力未应用」）。
+  //   ⇒ 这是「用户看不见能力口径」的**直接原因**：不是没渲染，是压根没进渲染。
+  //   修法：`total` 为 0 时**只要 card_data 有实质信息就仍然渲染**
+  //   （capability_scope / orchestrated / 校验结果都算），
+  //   只有连 card_data 都空才早退。
+  const cd0 = d.card || {};
+  const hasCardInfo = !!(cd0.capability_scope || cd0.orchestrated
+                      || cd0.intent || cd0.provider || cd0.skill_hits);
+  if(!total && !hasCardInfo){
     toast('本条回复没有可展示的执行过程（可能是直接问答或历史数据较早）');
     return;
   }
@@ -1346,6 +1358,34 @@ function openExecDetail(el){
     ['HIL 等级', cd.hil_level != null ? String(cd.hil_level) : ''],
     ['引用来源', (cd.citations || []).length ? `${(cd.citations||[]).length} 条` : ''],
   ].filter(r => r[1]);
+  // ★ B4-7（2026-10-14）：渲染 card_data.capability_scope。
+  //   后端 B4-2 已把「本次结构化能力有没有生效」落库（template_reuse / subtasks_executed /
+  //   structure_checks_applied / conflict_verdict），但**前端从未消费它** ——
+  //   实测：`grep capability_scope static/js/` 零命中，而真流量下命中已发布流程模板时
+  //   该字段**确实存在** ⇒ 「后端做了、前端不显示，用户看不出这次能力没生效」。
+  //   ⚠️ 这与 MEMORY 里「静态 grep 到 ≠ 用户看得见」同族，这次方向相反：
+  //   **落库了 ≠ 用户看得见**。
+  const cs = cd.capability_scope || null;
+  let csHtml = '';
+  if(cs && cs.mode){
+    const applied = cs.structure_checks_applied;
+    const badge = applied
+      ? '<b style="color:#0a7">已应用</b>'
+      : '<b style="color:#c60">未应用</b>';
+    const rows = [
+      ['本次模式', cs.mode === 'template_reuse' ? '沉淀流程模板复用' : '子任务实跑'],
+      ['子任务', cs.subtasks_executed ? '已执行' : '<b style="color:#c60">未执行</b>'],
+      ['结论分档 / 冲突检测 / 交付物结构校验', badge],
+    ];
+    if(cs.conflict_verdict){
+      const vmap = { checkable:'已检查（无冲突）', 'no-data':'无可判数据（非"无冲突"）',
+                     insufficient:'证据不足', skipped:'本路径不适用' };
+      rows.push(['冲突检测口径', vmap[cs.conflict_verdict] || cs.conflict_verdict]);
+    }
+    csHtml = `<div class="xd-sec"><div class="xd-h">⚠️ 本次结构化能力口径</div>
+      <div class="xd-meta">${rows.map(r=>`<div class="xd-mr"><span>${r[0]}</span><b>${r[1]}</b></div>`).join('')}</div>
+      ${cs.note?`<div class="xd-tip">${esc(cs.note)}</div>`:''}</div>`;
+  }
   const sec = (icon, name, arr, cls) => !arr.length ? '' :
     `<div class="xd-sec"><div class="xd-h">${icon} ${name}<span class="xd-n">${arr.length}</span></div>
       ${arr.map(t=>`<div class="xd-item ${cls}">
@@ -1363,6 +1403,7 @@ function openExecDetail(el){
       ${metaRows.length?`<div class="xd-meta">${metaRows.map(r=>`<div class="xd-mr"><span>${r[0]}</span><b>${esc(String(r[1]))}</b></div>`).join('')}</div>`:''}
       <div class="xd-tip">数据来自本条回复已落库的 card_data / exec（刷新后仍可查看）。跨会话/跨时间的统计请在「运行监控中心」「审计日志」查看。</div>
     </div>
+    ${csHtml}
     ${(!d.agents.length && cd.agent)?sec('🤖','子智能体',[{title:'子智能体：'+cd.agent,status:'✓ 已完成',body:''}],'agent'):''}
     ${sec('🤖','子智能体', d.agents, 'agent')}
     ${sec('🧩','技能注入', d.skills, 'skill')}
