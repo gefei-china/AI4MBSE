@@ -16,9 +16,29 @@ def _citations_payload(hits) -> list:
     """把检索到的 chunk_hits 裁剪为前端引用数据（[n] 引用链接 → 来源段落/模型元素跳转）。
 
     与 _build_context 中【来源n】编号保持 1 基对齐：前端 [n] 映射 cites[n-1]。
+
+    ★ B5-10（2026-10-14 米爸报「引用内容区域总是显示 8 条」）：
+      原实现是**写死的 `[:8]`**，与"实际注入了几条"完全脱钩 ⇒
+      ① 界面恒显 8 条，看着像"检索到 8 条"，实际是截断常量；
+      ② 更要命的是**编号体系错位** —— `_build_context` 只注入
+         `rag.inject_k`（默认 3）条【来源n】到 prompt，
+         于是正文最多标到 `[3]`，而界面给了 8 个可点条目
+         ⇒ **后 5 条的编号在 prompt 里根本不存在，正文永远不可能引用到它们**；
+      ③ 实测 4 条真实消息：citations 全是 8，正文 [n] 标注**全是 0**
+         —— 用户看到的是一排点不动的编号。
+
+      修法：**与注入同源** —— 取同一个 `rag.inject_k` 作为上限，
+      这样"界面有多少条 ⇔ prompt 里有多少个【来源n】"逐一对齐，
+      多出来的命中只作为后续轮次的候选池，不再冒充"已引用来源"。
+      ⚠️ 读配置失败时回落到 8（原值），保证异常态不把引用区清空。
     """
+    try:
+        from core import config as _cfg
+        _k = int(_cfg.get("rag", "inject_k", 3)) or 3
+    except Exception:
+        _k = 8
     out = []
-    for h in (hits or [])[:8]:
+    for h in (hits or [])[:_k]:
         out.append({
             "document_id": h.get("document_id"),
             "source_doc": h.get("source_doc", ""),

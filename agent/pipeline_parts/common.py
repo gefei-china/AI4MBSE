@@ -300,6 +300,36 @@ class PromptBlocksCtx:
     include_tool_rules: bool = False
 
 
+def _citation_footer(context_text: str) -> str:
+    """★ B5-10：在检索数据**尾部**就近复述引用规范，并列出本次可用的编号。
+
+    为什么必须放在这里（而不是只靠 blocks 第 7 位的 `citation_rules`）：
+      ① 原指令与数据**相距 12 个 block**（skill_prompt / template / memory /
+         model_context / slots / attachment 全夹在中间），稀释效应明显；
+      ② 实测 4 条真实消息正文 `[n]` 标注 **0/4** —— 软约束"若引用请标"下，
+         LLM 输出结构化建模说明时**不标没有任何代价**。
+      ⇒ 让指令与数据零距离，并把编号**直接列出来供照抄**。
+
+    编号上限与 `agent/utils.py::_citations_payload` **同源于 `rag.inject_k`**，
+    这样「prompt 里有多少个【来源n】」与「界面有多少个可点条目」永远一致，
+    不会再出现"后 5 条编号在 prompt 里不存在"那种错位。
+
+    `context_text` 里没有【来源n】时返回 ""（不留多余空行）。
+    """
+    if not context_text or "【来源" not in context_text:
+        return ""
+    # 从正文里数出实际注入了几条【来源n】（与 _build_context 的注入同源）
+    n = len(re.findall(r"【来源\d+】", context_text))
+    if n <= 0:
+        return ""
+    if n == 1:
+        return ("\n\n【引用提示】以上数据含【来源1】；"
+                "凡用到它的内容，请在对应论述末尾标注 [1]。\n")
+    return ("\n\n【引用提示】以上数据含【来源1】～【来源%d】；"
+            "凡用到其中任一条，请在对应论述末尾标注对应编号（如 [1] 或 [2,3]）；"
+            "未使用到的来源不要标注。\n" % n)
+
+
 def build_slots_block(slots) -> str:
     """「【任务拆解（P1 结构化）】」块（**唯一真源**；两条路径此前逐字重复同一段 f-string）。
 
@@ -392,7 +422,16 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
         "slots": build_slots_block(ctx.slots),
         "user_ctx": ctx.user_ctx or "",
         "attachment": pipe._build_attachment_block(ctx.att_text),
-        "retrieval": "检索到的互联数据：\n%s" % ctx.context_text,
+        # ★ B5-10：引用规范**在数据尾部就近复述**。
+        #   原实现只在 blocks 第 7 位放一次 `citation_rules`，而带【来源n】的
+        #   检索块排第 19 位 —— 中间隔 12 个 block（skill/template/memory/slots…），
+        #   指令与数据相距太远，实测正文 [n] 标注 0/4。
+        #   ⇒ 在数据末尾再放一句"就地可抄"的提示，并把**本次真实可用编号**列出来
+        #     （编号上限与 `_citations_payload` 同源于 rag.inject_k，两侧不会错位）。
+        "retrieval": "检索到的互联数据：\n%s%s" % (
+            ctx.context_text,
+            _citation_footer(ctx.context_text),
+        ),
         "report": ("\n\n%s" % ctx.report_prompt) if ctx.report_prompt else "",
     }
     if ctx.include_tool_rules:
