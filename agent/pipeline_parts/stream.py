@@ -631,18 +631,36 @@ class StreamMixin:
                                 #     校验器自身异常一律降级（degraded=True, checked=0）。
                                 #   ⚠️ `kind='artifact'`（本仓自造的一类）**不参与** ——
                                 #     它是 artifacts[] 的容器名，不是协议里的 kind。
+                                #
+                                # ★ 2026-10-14 米爸定位纠正后的修正（**通用性**）：
+                                #   `content_json` 里只有协议字段（{kind,title,ref}），
+                                #   **没有正文** ⇒ 校验器会拿到空内容并判「内容为空」红。
+                                #   那个红是**假红**：模型没按协议给结构化字段是常态，
+                                #   但正文一直都在（`sub_res`）。
+                                #   ⇒ 把 `sub_res`（子任务正文）作为**回落正文**传进去。
+                                #   效果：模型配合协议时校验协议字段；**不配合时校验正文**
+                                #   —— 后者与模型无关，是真正的工程能力。
                                 try:
                                     from services.artifact_validator import (
                                         validate_artifact as _av)
+                                    _body_fallback = str(sub_res or "")
                                     for _a in _arts:
                                         if _a.get("kind") != "artifact":
                                             continue
-                                        _ak = str((_a.get("content_json") or {}).get("kind") or "")
-                                        _av_res = _av(_ak, _a.get("content_json"))
+                                        _cj = _a.get("content_json") or {}
+                                        _ak = str(_cj.get("kind") or "")
+                                        # 优先用协议里的正文字段；没有就回落到子任务正文
+                                        _av_src = _cj
+                                        if not any(str(_cj.get(k) or "").strip()
+                                                   for k in ("content", "text", "body",
+                                                             "markdown", "value")):
+                                            _av_src = dict(_cj)
+                                            if _body_fallback.strip():
+                                                _av_src["content"] = _body_fallback
+                                        _av_res = _av(_ak, _av_src)
                                         if int(_av_res.get("checked") or 0) > 0:
                                             _a["content_json"] = dict(
-                                                _a["content_json"],
-                                                structure_check=_av_res)
+                                                _cj, structure_check=_av_res)
                                 except Exception:
                                     pass
                                 if _arts:
@@ -1059,13 +1077,28 @@ class StreamMixin:
                                 from services.artifact_validator import (
                                     validate_artifact as _av2)
                                 _weak = []
+                                # ★ 2026-10-14 通用性修正：协议里的 artifact 条目
+                                #   **没有正文字段**（只有 kind/title/ref）⇒
+                                #   直接送进校验器会**每条都报「内容为空」**（假红）。
+                                #   ⇒ 回落到该子任务的**完整交付物正文**。
                                 for _a in _arts[:10]:
                                     _ak2 = str(_a.get("kind") or "")
-                                    _r2 = _av2(_ak2, _a)
+                                    _src2 = _a
+                                    if not any(str(_a.get(k) or "").strip()
+                                               for k in ("content", "text", "body",
+                                                         "markdown", "value")):
+                                        _src2 = dict(_a)
+                                        _bd = str(_it.get("result") or "").strip()
+                                        if _bd:
+                                            _src2["content"] = _bd
+                                    _r2 = _av2(_ak2, _src2)
                                     if int(_r2.get("checked") or 0) > 0 and not _r2.get("ok"):
-                                        _weak.append("%s《%s》：%s"
-                                                     % (_ak2, _a.get("title"),
-                                                        (_r2.get("issues") or ["结构不合规"])[0]))
+                                        # ⚠️ 「无正文可校验」是**不可判定**，不是缺陷 ——
+                                        #   不得报成"结构体检未通过"（那会让用户误以为格式错）
+                                        _iss = _r2.get("issues") or []
+                                        if _iss and "**内容为空**" not in _iss[0]:
+                                            _weak.append("%s《%s》：%s"
+                                                         % (_ak2, _a.get("title"), _iss[0]))
                                 if _weak:
                                     _sec += ("\n⚠️ 交付物结构体检未通过（格式问题，不影响内容）："
                                              + "；".join(_weak[:3]))
