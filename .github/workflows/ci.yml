@@ -585,6 +585,18 @@ jobs:
       - name: Guard report/requirement/doc 三类交付物结构校验（批次三 #17，26 条 + 4 变异）
         run: python tools/verify/verify_artifact_validator.py
 
+      # ── 2026-10-14：init_db 在**老库**上的启动安全 ──────────────────────
+      # 为什么这条必须进 CI（生产库补迁移时实拍的真缺陷）：
+      #   `init_db` 里 `idx_hc_idem(idem_key, status)` 建在**建表段**（第 953 行），
+      #   而补列的 `_migrate_columns` 在第 1426 行 —— **晚 473 行**。
+      #   对已存在的旧表，`CREATE TABLE IF NOT EXISTS` **不会加列**
+      #   ⇒ 老库启动即 `no such column: idem_key` ⇒ **init_db 整体失败、服务起不来**。
+      # ⚠️ **干净库永远不暴露这个 bug**（第一次建表时就带 idem_key）——
+      #   与「门禁验的是另一个库」同族，判据必须扫**结构**而不是依赖某个库的实际状态。
+      #   本仓已踩过同型坑（`llm_usage_stats` 的 `ux_lus_*`，注释里写着"本次启动失败实拍"）。
+      - name: Guard 索引顺序（补列必须先于建索引，7 条 + 变异自证）
+        run: python tools/verify/verify_schema_index_order.py
+
       # ── B1-10（2026-10-13）：跑完所有门禁后，工作区必须仍是干净的 ────────
       # 为什么需要（本仓实测踩过两次）：
       #   `tools/verify/verify_norm_summary.py` 等少数门禁的「变异自证」会**就地改生产源文件**

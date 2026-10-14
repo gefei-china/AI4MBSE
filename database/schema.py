@@ -949,8 +949,11 @@ def init_db():
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ux_hc_status ON hil_confirmations(status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_hc_run ON hil_confirmations(run_id)")
-    # 幂等查询专用索引（§06）：(idem_key, status) 命中即返回，窗口判定在 SQL 里做
-    c.execute("CREATE INDEX IF NOT EXISTS idx_hc_idem ON hil_confirmations(idem_key, status)")
+    # ⚠️⚠️ `idx_hc_idem` **必须建在 `_migrate_columns` 之后**（本段下方）——
+    #   老库走 `CREATE TABLE IF NOT EXISTS` **不会加列**（idem_key 是后来加的），
+    #   索引若建在迁移前 ⇒ `sqlite3.OperationalError: no such column: idem_key`
+    #   ⇒ **init_db 整体失败、服务起不来**（2026-10-14 生产库补迁移时实拍）。
+    #   与下方 `ux_lus_*` 是同一个坑、同一种修法（那边注释已写明"本次启动失败实拍"）。
 
     # ── LLM 调用统计（token 成本核算 + 可观测）──
     c.execute("""CREATE TABLE IF NOT EXISTS llm_usage_stats (
@@ -1424,6 +1427,12 @@ def init_db():
 
     # ── 幂等列迁移（老库补 P0-1 新增的 project_id 列，回填默认项目）──
     _migrate_columns(conn)
+    # ── 依赖「迁移后才有」的列的索引，**必须**建在这一步之后 ──────────────
+    # 幂等查询专用索引（§06）：(idem_key, status) 命中即返回，窗口判定在 SQL 里做。
+    # ⚠️ 原先建在上面的建表段里 ⇒ 老库（无 idem_key 列）启动即崩
+    #   （2026-10-14 生产库补迁移实拍：`no such column: idem_key`，init_db 整体失败）。
+    #   根因与 `ux_lus_*` 那三条**完全同型**：`CREATE TABLE IF NOT EXISTS` 不加列。
+    c.execute("CREATE INDEX IF NOT EXISTS idx_hc_idem ON hil_confirmations(idem_key, status)")
     # P0-c 追踪索引：**必须在 _migrate_columns 之后** —— 老库走 CREATE TABLE IF NOT EXISTS
     # 不会加列，索引若建在迁移前会 "no such column: conversation_id"（本次启动失败实拍）。
     conn.execute("CREATE INDEX IF NOT EXISTS ux_lus_conv ON llm_usage_stats(conversation_id)")

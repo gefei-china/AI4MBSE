@@ -102,22 +102,18 @@ def backup():
 
 
 def apply_migrations():
-    """只跑「建表 + 补列」，不跑 seed、不跑其它迁移。"""
-    done = []
-    # ① 缺表
-    from database.schema import init_schema
-    init_schema()
-    done.append("建表（init_schema，幂等 IF NOT EXISTS）")
-    # ② 缺列
-    from database.migrations.columns import _migrate_columns
-    conn = sqlite3.connect(PROD_DB)
-    try:
-        _migrate_columns(conn)
-        conn.commit()
-    finally:
-        conn.close()
-    done.append("补列（_migrate_columns）")
-    return done
+    """走 `database.schema.safe_init_db` —— 本仓**自带备份与 dry-run 闸**的安全入口。
+
+    ⚠️ 2026-10-14 实测踩坑：初版自己拼 `from database.schema import init_schema`
+       ⇒ `ImportError: cannot import name 'init_schema'`（**没有这个函数**）。
+       与 MEMORY 里「查了不存在的列」同族：动手前先看清真实入口。
+    ⇒ 已改为调用既有的 `safe_init_db(dry_run=False, backup=True)`：
+       它内部会 ① 备份（WAL 库用 backup()）② 备份失败**即拒绝迁移** ③ 调 `init_db()` ④ 自检。
+       比自己拼更可靠，且**与生产服务启动路径走同一套代码**。
+    """
+    from database.schema import safe_init_db
+    rep = safe_init_db(dry_run=False, backup=True, tag="link-acceptance")
+    return rep
 
 
 def main():
@@ -158,9 +154,10 @@ def main():
     dst = backup()
     print("        备份 → %s（%.1f MB）"
           % (os.path.relpath(dst, ROOT), os.path.getsize(dst) / 1048576.0))
-    print("[apply] ② 执行迁移…")
-    for d in apply_migrations():
-        print("        %s" % d)
+    print("[apply] ② 执行迁移（safe_init_db，内部再做一次热备 + 自检）…")
+    rep = apply_migrations()
+    print("        action=%s error=%s 耗时=%ss"
+          % (rep.get("action"), rep.get("error") or "无", rep.get("elapsed_s")))
 
     print("[apply] ③ 自检…")
     mt2, mc2 = inspect_prod()
@@ -169,6 +166,7 @@ def main():
         return 1
     print("        生产库已补齐 ✅")
     print("\n提示：迁移只改**结构**（建表/加列），不触碰任何业务数据。")
+    print("      如需回滚：用上面的备份文件覆盖 mbse.db（并删除 mbse.db-wal / -shm）。")
     return 0
 
 
