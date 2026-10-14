@@ -652,6 +652,14 @@ jobs:
       - name: Guard 8 阶段流水线子 Agent（齐备 + 可被 planner 选中，11 条 + 1 GAP）
         run: python tools/verify/verify_stage_pipeline_agents.py
 
+      # ── B4-7（2026-10-14）：沉淀流程复用的「泛词劫持」 ──────────────────
+      # 真实前端验证抓到：`_try_reuse_planner_flow` 的准入是 `score >= 2`，
+      # 而 `_flow_tokens` 是字符 bigram、模板名只有 12 个 bigram
+      # ⇒ **一个泛词就足以劫持整条编排**（「生成一份报告」被当成建模流程）。
+      # 本门禁用 3 条实测负样本锁住，并强制带「区分度」判据防空转。
+      - name: Guard 沉淀复用泛词劫持（B4-7，5 条 + 1 已知 GAP）
+        run: python tools/verify/verify_reuse_gate.py
+
       # ── B1-10（2026-10-13）：跑完所有门禁后，工作区必须仍是干净的 ────────
       # 为什么需要（本仓实测踩过两次）：
       #   `tools/verify/verify_norm_summary.py` 等少数门禁的「变异自证」会**就地改生产源文件**

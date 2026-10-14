@@ -525,6 +525,50 @@ class OrchestrMixin:
         except Exception:
             return None
 
+    # ── B4-7：复用匹配的「泛词」判定 ────────────────────────────────────
+    # 这些 bigram 在**几乎任何** MBSE 请求里都会出现（"生成/分析/输出/给出/帮我/请…"），
+    # 用它们判"是不是同一个流程"等于没判。
+    # ⚠️ 刻意**不用数量阈值**而用"命中是否全是泛词"—— 首版按数量/占比把关，
+    #   结果把真请求（"为卫星…生成 SysML V2 结构视图模型代码并校验"）也挡住了。
+    #   根因是 bigram 计数随文本长度两边同时爆炸，**任何单一阈值都会在
+    #   "挡住泛词"与"保住真请求"之间来回摆**。判据的**性质**才稳定。
+    _REUSE_GENERIC_WORDS = (
+        "生成", "结果", "分析", "输出", "给出", "帮我", "请问", "一下",
+        "一个", "一份", "一段", "需求", "方案", "设计", "文档", "模型",
+        "代码", "视图", "建模", "先做", "再做", "然后", "以及", "进行",
+        "架构", "自动", "编排", "沉淀", "意图", "流程", "工程", "系统",
+    )
+
+    @classmethod
+    def _reuse_generic_set(cls) -> frozenset:
+        """泛词 bigram 集（**程序化生成**，不手写 —— 手打过一次，出了两个乱码项）。
+
+        `_flow_tokens` 产出的是**字符 bigram**（长 2 的子串），所以泛词表也必须
+        是同一形态：用 `_bigrams("生成")` 生成，而不是把「生成」两个字直接塞进去。
+        """
+        out = set()
+        for w in cls._REUSE_GENERIC_WORDS:
+            out |= cls._bigrams(w)
+        return frozenset(out)
+
+    @classmethod
+    def _bigrams(cls, s: str) -> set:
+        t = str(s or "").lower()
+        return {t[i:i + 2] for i in range(len(t) - 1)}
+
+    @classmethod
+    def _reuse_generic_only(cls, hit_name: set, hit_desc: set) -> bool:
+        """命中的 bigram **是否全部**为泛词。
+
+        返回 True ⇒ 只是碰巧含有泛词，判为"不同流程"，不进复用候选。
+        ⚠️ **空命中返回 False**（"没命中任何东西"不该被当成"全是泛词"）——
+           否则它会被 `score >= 2` 之外的路径误收；这里只管"命中了但都是泛词"。
+        """
+        hits = {t for t in (hit_name or set()) | (hit_desc or set())}
+        if not hits:
+            return False
+        return hits.issubset(cls._reuse_generic_set())
+
     def _try_reuse_planner_flow(self, user_input: str, intent: str) -> dict | None:
         """复用已发布（published）的 planner_auto 沉淀流程：词法+语义匹配 → FlowExecutor 执行。
 
@@ -555,26 +599,45 @@ class OrchestrMixin:
                 score = len(qn) * 3 + len(qd) * 2
                 if name and name in user_input:
                     score += 5
-                if score >= 2:
+                # ★ B4-7（2026-10-14 真实前端验证抓到）：**绝对阈值 2 太松，
+                #   一个泛词就足以劫持整条编排**。实测（flow 234「先做需求分析再生成方案设计」）：
+                #     「生成一份报告」/「帮我生成设计文档」/「请输出这份需求的影响分析」
+                #     全部命中（词法分 3~6）⇒ 8 个探针里 6 个被劫持。
+                #   根因：`_flow_tokens` 是**字符 bigram**，`_flow_tokens(name)` 只有 12 个 bigram，
+                #   长输入与它的交集**天然只有 1~3 个** ⇒ 门槛等于"有一个泛词就算命中"。
+                #
+                # ⚠️ 下面这套判据是**试了 4 轮才收敛的**，中间 3 版都被实测否掉，
+                #   **别再走回头路**（每一条都有实测反例，见 tools/verify 里同名门禁）：
+                #   ① 命中数量/覆盖度 → 挡住真请求（真请求只命中 1~3 个）
+                #   ② 命中占比（命中数÷模板 bigram 数）→ 两边同时爆炸，仍挡真请求
+                #   ③ 「命中是否全为泛词」→ **真请求命中的恰好就是泛词**，仍被挡
+                #      （实测 `{'生成'}`、`{'生成','需求'}∪{'建模'}` 都 ⊆ 泛词集）
+                #   ④ 语义相似度阈值 → **无语中区分力**：
+                #      「帮我生成设计文档」0.6636 **>** 「为卫星…生成 SysML V2 结构视图模型并校验」0.5233
+                #      ⇒ 泛词请求分**更高**（embedding 是 bigram 降级态，同样不可靠）
+                #   ⑤ 阶段结构判据（节点 label 命中 ≥2）→ 模板 label 是
+                #      「需求分析/方案设计」，而用户说「架构设计」⇒ 只命中 1 ⇒ 也挡掉真命中
+                #
+                # ⇒ **收敛到的判据只有两条实测站得住的**：
+                #   A. **模板名整体出现在输入里**（`name in user_input`）—— 强、唯一可靠；
+                #   B. **命中 bigram 里有非泛词的** —— 能挡住"只因泛词而命中"。
+                #   ⇒ 二者取或。词法分只用于**排序**，不用于准入。
+                #
+                # ⚠️ 这仍**不是完美的判据**：一个既说「生成一份报告」又恰好提到
+                #   「需求」的输入仍可能被劫持。**根因是「按文本相似度复用流程」
+                #   这个机制本身就不精确** —— 真正的收口是**不要随手发布流程模板**
+                #   （本仓当前只有 1 个已发布模板，且是自动沉淀的 2 节点流程）。
+                # ⚠️ **必须去掉「自动编排·」这类前缀再比**（实测踩到）：
+                #   自动沉淀的模板名 = `自动编排·先做需求分析再生成方案设计`，
+                #   用户输入里绝不会出现全名 ⇒ `name in user_input` **恒为假**
+                #   ⇒ 这条判据在自动沉淀的模板上**从未生效过**
+                #   （典型的「判据看起来在起作用，实测恒假」）。
+                #   正确做法：`core = name.split('·', 1)[-1]`，比对 core。
+                _name_core = (name.split("·", 1)[-1] if "·" in name else name).strip()
+                _name_exact = bool(_name_core) and (_name_core in user_input)
+                _all_generic = (not _name_exact) and self._reuse_generic_only(qn, qd)
+                if score >= 2 and not _all_generic:
                     lex_scored.append((score, r))
-            if not lex_scored:
-                return None
-            lex_scored.sort(key=lambda x: -x[0])
-            # 语义精排：词法分同档时用语义微调（仅精排 top5）
-            best = None
-            try:
-                from semantic import rank_items
-                sem_items = [{"id": r["id"], "text": f"{r['name'] or ''} {r['description'] or ''}"}
-                             for _, r in lex_scored[:5]]
-                scored = rank_items(user_input, sem_items, top_k=3, threshold=0.0, key="text", conn=None)
-                sem_by_id = {it["id"]: s for s, it in scored}
-                cands = []
-                for s, r in lex_scored[:5]:
-                    cands.append((s + sem_by_id.get(r["id"], 0.0) * 0.5, r))
-                cands.sort(key=lambda x: -x[0])
-                best = cands[0][1]
-            except Exception:
-                best = lex_scored[0][1]
             if best is None:
                 return None
             try:
