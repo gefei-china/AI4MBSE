@@ -131,22 +131,34 @@ class StudioRepo(BaseRepo):
 
     def create_mcp_server(self, name: str, endpoint: str, tools: str,
                           transport: str = "sse", command: str = "",
-                          args: str = "[]", env: str = "{}") -> int:
+                          args: str = "[]", env: str = "{}", headers: str = "{}") -> int:
+        # ★ B5-2：headers 贯通（此前无此列/参数 ⇒ 需认证的 MCP 无法接入）
         rid = self.execute(
-            """INSERT INTO mcp_servers (name, endpoint, tools, transport, command, args, env)
-               VALUES (?,?,?,?,?,?,?)""",
-            (name, endpoint, tools, transport, command, args, env),
+            """INSERT INTO mcp_servers
+               (name, endpoint, tools, transport, command, args, env, headers)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (name, endpoint, tools, transport, command, args, env, headers),
         )
         self._sync("mcp_servers", rid)
         return rid
 
     def update_mcp_server(self, sid: int, name: str, endpoint: str, tools: str,
-                          transport: str, command: str, args: str, env: str) -> None:
-        self.execute(
-            """UPDATE mcp_servers SET name=?, endpoint=?, tools=?, transport=?, command=?,
-               args=?, env=? WHERE id=?""",
-            (name, endpoint, tools, transport, command, args, env, sid),
-        )
+                          transport: str, command: str, args: str, env: str,
+                          headers: str | None = None) -> None:
+        # ⚠️ `headers=None` 表示"**未提供**"（保持原值），
+        #    `headers="{}"` 表示"显式清空" —— 两者语义不同，勿合并。
+        if headers is None:
+            self.execute(
+                """UPDATE mcp_servers SET name=?, endpoint=?, tools=?, transport=?,
+                   command=?, args=?, env=? WHERE id=?""",
+                (name, endpoint, tools, transport, command, args, env, sid),
+            )
+        else:
+            self.execute(
+                """UPDATE mcp_servers SET name=?, endpoint=?, tools=?, transport=?,
+                   command=?, args=?, env=?, headers=? WHERE id=?""",
+                (name, endpoint, tools, transport, command, args, env, headers, sid),
+            )
         self._sync("mcp_servers", sid)
 
     def update_mcp_status(self, sid: int, status: str, latency_ms: int, tools: str | None = None) -> None:

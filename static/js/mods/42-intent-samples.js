@@ -12,14 +12,26 @@
 // 约束：本页只维护样本池，**不改路由规则/词表**（那只在「意图规则」配置里改），避免越权。
 
 // ── 静态元数据（意图/状态的中文名与配色）────────────────────────────────────
-// 后端 intents 列表是唯一事实源，此处只做**默认兜底**（首次请求回来前也要能渲染标签），
-// 且仅承担"给人看的名字"这一件事 —— 不做任何合法性判断。
+// 后端 `intents` 是唯一事实源（**B5-2 起是动态派生**：agents.status='active' ∪
+// 样本池已用值 ∪ 下面这份兜底常量）。实测硬编码 9 个时，库里 19 个真实意图里有
+// **10 个在下拉里选不到**（8 阶段 Agent 全家 + 主 Agent + 多方案生成），
+// 一旦标注这些意图就无法复核/改判。
+// 下方常量**只作首次请求返回前的兜底**，不承担"合法值"语义（写入侧也从不校验 intent）。
 const IS_INTENTS = ['requirement_analysis', 'requirement_quality', 'design', 'impact',
   'review', 'report_generation', 'system_mgmt', 'knowledge_qa', 'chat'];
+// ⚠️ 中文名同样必须能动态扩展：后端返回的新 intent（自定义 Agent 名）没有对应中文标签，
+//   isIntentLabel 会回落显示英文原名（`IS_INTENT_LABEL[k] || k`）⇒ 不阻塞使用，
+//   但可读性差。⇒ 后端会一并返回 `intent_labels`（有 display_name 的用它），此处合并。
 const IS_INTENT_LABEL = {
   requirement_analysis: '需求分析', requirement_quality: '需求质量', design: '设计/建模',
   impact: '影响分析', review: '评审', report_generation: '报告生成',
   system_mgmt: '系统管理', knowledge_qa: '知识问答', chat: '闲聊',
+  // 8 阶段建模流水线（B5-2 补：这些意图真实可路由，但此前下拉里根本没有）
+  methodology_resolver: '方法论解析', requirement_structuring: '需求结构化',
+  architecture_skeleton: '架构骨架生成', view_expansion: '视图展开',
+  model_validation_repair: '模型校验修复', trace_verification: '追溯核验',
+  change_safety_gate: '变更安全门', model_release: '模型发布',
+  多方案生成: '多方案生成', 'MBSE建模总体负责人': 'MBSE 建模总体负责人',
 };
 // cls 用既有 .st 配色（ok=绿已确认 / w=黄待确认 / g=灰新采集 / r=红已驳回），与全站状态徽章同一视觉语言
 const IS_STATUS_META = {
@@ -63,6 +75,11 @@ async function loadIntentSamples() {
     const d = await api('/api/intent-samples?' + qs.toString());
     if (d && d.error) { toast.error('加载失败：' + d.error); return; }
     if (d && d.intents && d.intents.length) _isIntents = d.intents;
+    // B5-2：后端一并给中文标签（Agent 的 display_name）——合并到静态字典，
+    //   后端有的以**后端为准**（那是用户自己起的名字，更贴近他的叫法）。
+    if (d && d.intent_labels && typeof d.intent_labels === 'object') {
+      try { Object.assign(IS_INTENT_LABEL, d.intent_labels); } catch(e){}
+    }
     isFillIntentFilter();
     isRenderStats(d);
     isRenderList(d);

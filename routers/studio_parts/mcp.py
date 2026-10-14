@@ -5,9 +5,49 @@
 from routers.studio_parts.shared import *
 
 
+def _srv_headers(srv: dict) -> dict:
+    """从 mcp_servers 行取认证头（★ B5-2）。
+
+    解析失败**不阻断**（按无 header 处理）—— 配置坏了应让探测/调用报 401，
+    而不是在读配置的瞬间抛一个更让人困惑的异常。
+    """
+    try:
+        h = json.loads(srv.get("headers") or "{}")
+    except Exception:
+        return {}
+    return {str(k): str(v) for k, v in h.items() if k and v} if isinstance(h, dict) else {}
+
+
+def _mask_headers(srv: dict) -> dict:
+    """★ B5-2：MCP 出参**脱敏** —— 只回 key 名与长度，绝不回 header 值。
+
+    为什么必须脱敏：`headers` 里放的是 `Authorization: Bearer …`，
+    而 `GET /api/studio/mcp-servers` 是**任何登录用户都能调**的列表接口
+    ⇒ 不脱敏等于把每个 MCP 的凭据广播给所有用户。
+    ⚠️ 这是「新增/编辑时能用、列表时不能回显」的常见形态（与 token 类配置同纪律），
+    前端编辑框应显示"已配置 N 个 header"并允许逐项覆盖重填。
+    """
+    import json as _json
+    out = {}
+    try:
+        h = _json.loads(srv.get("headers") or "{}")
+    except Exception:
+        h = {}
+    for k, v in (h or {}).items():
+        s = str(v or "")
+        out[k] = {"set": bool(s), "len": len(s)}
+    return out
+
+
 @router.get("/api/studio/mcp-servers")
 def list_mcp_servers(conn=Depends(db_session)):
-    return StudioRepo(conn).list_mcp_servers()
+    items = StudioRepo(conn).list_mcp_servers()
+    # ★ B5-2：出参脱敏（headers 值绝不出现在列表接口）
+    for it in (items or []):
+        if isinstance(it, dict):
+            it["headers_masked"] = _mask_headers(it)
+            it.pop("headers", None)
+    return items
 
 
 @router.post("/api/studio/mcp-servers")
@@ -15,7 +55,8 @@ def create_mcp_server(body: MCPIn, conn=Depends(db_session), user=Depends(curren
     StudioRepo(conn).create_mcp_server(
         body.name, body.endpoint, json.dumps(body.tools, ensure_ascii=False),
         body.transport, body.command, json.dumps(body.args, ensure_ascii=False),
-        json.dumps(body.env, ensure_ascii=False))
+        json.dumps(body.env, ensure_ascii=False),
+        json.dumps(body.headers or {}, ensure_ascii=False))   # ★ B5-2
     audit(audit_user(user), "mcp_create", f"添加MCP服务器: {body.name}", conn=conn)
     return {"ok": True}
 
@@ -25,10 +66,13 @@ def update_mcp_server(sid: int, body: MCPIn, conn=Depends(db_session), user=Depe
     repo = StudioRepo(conn)
     if not repo.get_mcp_server(sid):
         return JSONResponse({"error": "MCP server not found"}, 404)
+    # ★ B5-2：`headers` 字段**未提供**时传 None（repo 层区分"未提供"与"显式清空"）
     repo.update_mcp_server(
         sid, body.name, body.endpoint, json.dumps(body.tools, ensure_ascii=False),
         body.transport, body.command, json.dumps(body.args, ensure_ascii=False),
-        json.dumps(body.env, ensure_ascii=False))
+        json.dumps(body.env, ensure_ascii=False),
+        json.dumps(body.headers, ensure_ascii=False)
+        if body.headers is not None else None)
     audit(audit_user(user), "mcp_update", f"更新MCP服务器#{sid}: {body.name}", conn=conn)
     return {"ok": True}
 
@@ -83,6 +127,16 @@ def test_mcp_server(sid: int, conn=Depends(db_session), user=Depends(current_use
 
     t0 = time.time()
     transport = srv.get("transport", "sse")
+    # ★ B5-2：带上该服务器配置的认证头（此前**硬编码只有 Content-Type**
+    #   ⇒ 需要 Bearer 的 MCP 必然 401 ⇒ 实测"新增成功但用不了"）。
+    #   ⚠️ 解析失败**不阻断**（按无 header 处理）—— 配置坏了不该让探测崩掉。
+    _hdr = {"Content-Type": "application/json"}
+    try:
+        _hs = json.loads(srv.get("headers") or "{}")
+        if isinstance(_hs, dict):
+            _hdr.update({str(k): str(v) for k, v in _hs.items() if k and v})
+    except Exception:
+        pass
     if transport in ("sse", "http"):
         url = srv["endpoint"].rstrip("/")
         if not url.startswith("http"):
@@ -96,14 +150,16 @@ def test_mcp_server(sid: int, conn=Depends(db_session), user=Depends(current_use
                     "clientInfo": {"name": "ai4mbse", "version": "1.0"},
                 },
             }
+            # MCP Streamable HTTP 服务端普遍要求 Accept 同时含两种类型
+            _hdr.setdefault("Accept", "application/json, text/event-stream")
             with httpx.Client(timeout=8) as client:
-                r = client.post(url, json=payload, headers={"Content-Type": "application/json"})
+                r = client.post(url, json=payload, headers=_hdr)
                 if r.status_code != 200:
                     raise ValueError(f"HTTP {r.status_code}: {r.text[:120]}")
                 init_data = r.json()
                 # tools/list
                 tools_payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
-                r2 = client.post(url, json=tools_payload, headers={"Content-Type": "application/json"})
+                r2 = client.post(url, json=tools_payload, headers=_hdr)
                 tools = []
                 if r2.status_code == 200:
                     tr = r2.json()
@@ -167,7 +223,8 @@ def read_mcp_resource(sid: int, uri: str, conn=Depends(db_session)):
         return JSONResponse({"error": "MCP server not found"}, 404)
     if srv.get("transport", "sse") not in ("sse", "http"):
         return JSONResponse({"error": "stdio 资源读取暂不支持"}, 400)
-    client = MCPClient(endpoint=srv["endpoint"], transport=srv.get("transport", "sse"))
+    client = MCPClient(endpoint=srv["endpoint"], transport=srv.get("transport", "sse"),
+                       headers=_srv_headers(srv))          # ★ B5-2
     return client.read_resource(uri)
 
 
@@ -181,5 +238,6 @@ def get_mcp_prompt(sid: int, name: str, conn=Depends(db_session)):
         return JSONResponse({"error": "MCP server not found"}, 404)
     if srv.get("transport", "sse") not in ("sse", "http"):
         return JSONResponse({"error": "stdio 提示模板获取暂不支持"}, 400)
-    client = MCPClient(endpoint=srv["endpoint"], transport=srv.get("transport", "sse"))
+    client = MCPClient(endpoint=srv["endpoint"], transport=srv.get("transport", "sse"),
+                       headers=_srv_headers(srv))          # ★ B5-2
     return client.get_prompt(name)

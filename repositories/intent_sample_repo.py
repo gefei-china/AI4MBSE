@@ -12,7 +12,11 @@
 import json
 from datetime import datetime
 
-# 池内合法意图（与内置 Agent（builtin=1）对齐；chat 也算有效样本，它是"该走闲聊"的正例）
+# 历史内置意图（**仅作为兜底**；不是白名单，见 `_dynamic_intents`）
+# ⚠️ B5-2 之前这里是**唯一事实源**（硬编码 9 个），而库里 active Agent 有 19 个
+#   ⇒ 页面上标注下拉**选不到** 10 个真实意图（含 8 阶段 Agent 全家 + 主 Agent + 多方案生成）。
+#   且**写入侧从不校验** intent（只有 status 校验）⇒ 这不是安全边界，只是"下拉候选集"。
+#   ⇒ 现在改为**从平台能力表动态派生**，这份常量只保证「数据库不可用时页面仍能渲染」。
 VALID_INTENTS = ("requirement_analysis", "requirement_quality", "design", "impact",
                  "review", "report_generation", "system_mgmt", "knowledge_qa", "chat")
 VALID_STATUS = ("new", "suggested", "confirmed", "rejected")
@@ -21,6 +25,60 @@ VALID_STATUS = ("new", "suggested", "confirmed", "rejected")
 class IntentSampleRepo:
     def __init__(self, conn):
         self.conn = conn
+
+    # ── 意图候选集（B5-2：动态派生）────────────────────────────────────
+    def _dynamic_intents(self) -> list:
+        """标注/筛选下拉的候选意图 = **平台能力 ∪ 已在用的历史值**。
+
+        为什么不能是常量（实测证据）：
+          · `VALID_INTENTS` 硬编码 9 个，而 `agents.status='active'` 实有 **19 个**
+            ⇒ `MBSE建模总体负责人` / `architecture_skeleton` / `view_expansion` /
+              `requirement_structuring` / `model_validation_repair` / `trace_verification` /
+              `change_safety_gate` / `model_release` / `methodology_resolver` / `多方案生成`
+              这 10 个**真实存在、可被路由到的意图，页面上一个都选不到**。
+          · 一旦有人标注这些意图，下拉里没有该项 ⇒ 无法复核/改判，评测集也会被卡住。
+          · 而**写入侧本来就不校验 intent** ⇒ 常量既不安全、也不必要。
+
+        三源合并（任一即可，避免单一来源漏）：
+          ① `agents.status='active'` 的 name —— 平台当前真实能力（动态：新建 Agent 立刻出现）
+          ② `intent_samples.intent` 的历史 DISTINCT 值 —— **存量样本一个都不能丢**
+             （常量不认识的旧标注若被从下拉里抹掉，等于「数据还在但改不了」）
+          ③ `VALID_INTENTS` 常量兜底 —— 数据库不可用时页面仍能渲染
+        ⚠️ 查询失败**静默降级**到常量，不抛：这是列表接口的附属信息，
+           拿不到不该让整个页面 500。
+        """
+        out = set(VALID_INTENTS)
+        try:
+            for r in self.conn.execute(
+                    "SELECT name FROM agents WHERE status='active'"):
+                if r[0]:
+                    out.add(r[0])
+            for r in self.conn.execute(
+                    "SELECT DISTINCT intent FROM intent_samples "
+                    "WHERE intent IS NOT NULL AND intent!=''"):
+                if r[0]:
+                    out.add(r[0])
+        except Exception:
+            return list(VALID_INTENTS)
+        return sorted(out)
+
+    def _intent_labels(self) -> dict:
+        """意图 → 中文显示名（取 `agents.display_name`）。
+
+        B5-2：动态加进来的意图（自定义 Agent 名，如 `多方案生成`、`architecture_skeleton`）
+        在前端静态字典里**没有中文名** ⇒ 下拉里只能显示英文/拼音。
+        ⇒ 后端一并给出标签，前端合并；前端有同名字段则**以后端为准**
+        （Agent 的 display_name 是用户自己起的，更贴近他的叫法）。
+        """
+        out = {}
+        try:
+            for r in self.conn.execute(
+                    "SELECT name, display_name FROM agents WHERE status='active'"):
+                if r[0] and r[1] and str(r[1]).strip():
+                    out[r[0]] = str(r[1]).strip()
+        except Exception:
+            pass
+        return out
 
     # ── 查询 ──
     def list(self, status=None, intent=None, source=None, q=None, limit=200, offset=0) -> dict:
@@ -47,7 +105,10 @@ class IntentSampleRepo:
             "seen_count DESC, id DESC LIMIT ? OFFSET ?", args + [limit, offset]).fetchall()
         items = [dict(r) for r in rows]
         return {"items": items, "total": total, "limit": limit, "offset": offset,
-                "stats": self.stats(), "intents": list(VALID_INTENTS)}
+                "stats": self.stats(),
+                # B5-2：动态候选集（不再硬编码 9 个）+ 中文标签
+                "intents": self._dynamic_intents(),
+                "intent_labels": self._intent_labels()}
 
     def stats(self) -> dict:
         g = lambda sql: {r[0]: r[1] for r in self.conn.execute(sql).fetchall()}

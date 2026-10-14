@@ -152,6 +152,17 @@ def _migrate_columns(conn):
     _add("tools", "fallback_to", "TEXT DEFAULT ''")       # 降级工具名（主工具失败重试耗尽后自动切换）
     _add("mcp_servers", "transport", "TEXT DEFAULT 'sse'")               # sse | stdio | http
     _add("mcp_servers", "command", "TEXT DEFAULT ''")                    # stdio 启动命令
+    # ★ B5-2（2026-10-14 真流量抓到）：外部 MCP **普遍需要认证头**（如米爸提供的
+    #   dev_ai_mcp：`Authorization: Bearer …`）。此前 mcp_servers **既无 headers 列、
+    #   MCPIn 模型也无该字段**、探测时 headers 又是硬编码的
+    #   ⇒ 实测「POST 新增返回 {"ok":true}（看起来成功），
+    #      紧接着 /test 返回 `HTTP 401 invalid_token`」
+    #   ⇒ **需要认证的 MCP 根本无法接入**，且失败发生在"新增成功之后"，用户只会
+    #      看到"配了但用不了"。
+    #   存储用 JSON 文本（与 env/args 同形态），**明文存**：
+    #   MCP token 本就是"该服务自己的凭据"，与 env（同样含凭据）同一处置层级；
+    #   API 出参一律**脱敏**（只回 key 名与是否已设），见 routers/studio_parts/mcp.py。
+    _add("mcp_servers", "headers", "TEXT DEFAULT '{}'")               # JSON：{"Authorization":"Bearer …"}
     # ── P0 语义升级：长期记忆真向量版本标记（同 document_chunks.embed_version 语义）──
     _add("agent_memory", "embed_version", "TEXT DEFAULT ''")             # 真 embedding 版本（''=bigram/未向量化）
     # ── P2 记忆认知化：遗忘引擎（激活度）+ 合并引擎（反思）──

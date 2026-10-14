@@ -1221,7 +1221,13 @@ async function saveTool() {
     const endpoint = document.getElementById('f-tool-url-mcp').value.trim();
     if(!endpoint) { toast('URL 必填'); return; }
     const body = {name, endpoint, transport: document.getElementById('f-tool-transport').value,
-                  command: '', tools: [], args: [], env: {}};
+                  command: '', tools: [], args: [], env: {},
+                  // ★ B5-2：headers **上面已经收集好了**（`#tool-headers-list`），
+                  //   但 MCP 分支的 body **从来没把它带上** ⇒ 用户在表单里填了
+                  //   Authorization，保存后被静默丢弃 ⇒ 「配了但用不了」。
+                  //   （实测：无 header 时 /test 返回 `HTTP 401 invalid_token`，
+                  //     而 POST 新增仍返回 {"ok":true} ⇒ 看起来成功、实则失效。）
+                  headers};
     if(toolEditId) { await api(`/api/studio/mcp-servers/${toolEditId}`, {method:'PUT', body:JSON.stringify(body)}); toast('已更新'); }
     else { await api('/api/studio/mcp-servers', {method:'POST', body:JSON.stringify(body)}); toast('已添加'); }
     closeModal(); toolEditId = null; loadMCPServers(); loadMinePlugins(); loadMarket(); loadMarketManage();

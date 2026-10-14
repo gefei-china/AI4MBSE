@@ -38,6 +38,9 @@ class MCPIn(BaseModel):
     command: Optional[str] = ""
     args: Optional[List[str]] = []
     env: Optional[dict] = {}
+    # ★ B5-2（2026-10-14）：外部 MCP 普遍需认证头（Authorization: Bearer …）。
+    #   此前模型无此字段 ⇒ **需要认证的 MCP 根本无法接入**（新增"成功"但探测 401）。
+    headers: Optional[dict] = {}
 
 
 class ToolIn(BaseModel):

@@ -24,17 +24,33 @@ class MCPClient:
     """
 
     def __init__(self, endpoint: str, transport: str = "sse",
-                 timeout: int | None = None, max_response: int | None = None):
+                 timeout: int | None = None, max_response: int | None = None,
+                 headers: dict | None = None):
         from core import config
         self.endpoint = endpoint
         self.transport = transport
         self.timeout = timeout if timeout is not None else int(config.get("mcp", "timeout", 15))
         self.max_response = max_response if max_response is not None else int(config.get("mcp", "max_response", 4000))
+        # ★ B5-2（2026-10-14）：认证头。此前 `_post` 的 headers 是**硬编码**的
+        #   ⇒ 需要 Bearer 的 MCP **探测能过、真实调用必 401**（"测得通、用不了"）。
+        #   现在从构造参数传入（由 mcp_servers.headers 提供）。
+        self.headers = {str(k): str(v) for k, v in (headers or {}).items() if k and v}
         self._id = 0
         self._handshake = None          # initialize 结果缓存（未握手为 None）
         self.capabilities = {}          # 服务端能力声明
         self.server_info = {}           # serverInfo
         self.protocol_version = ""
+
+    def _req_headers(self) -> dict:
+        """请求头 = 配置的认证头 + Content-Type + Accept。
+
+        ⚠️ `Accept` 同时含两种类型是 MCP Streamable HTTP 的要求
+        （只给 application/json 的服务端可能 406）。
+        """
+        h = dict(self.headers)
+        h.setdefault("Content-Type", "application/json")
+        h.setdefault("Accept", "application/json, text/event-stream")
+        return h
 
     def _post(self, method: str, params: dict, timeout: int | None = None) -> dict:
         import httpx
@@ -50,7 +66,7 @@ class MCPClient:
             "method": method,
             "params": params,
         }
-        resp = httpx.post(url, json=payload, headers={"Content-Type": "application/json"},
+        resp = httpx.post(url, json=payload, headers=self._req_headers(),
                           timeout=timeout or self.timeout)
         resp.raise_for_status()
         return resp.json()

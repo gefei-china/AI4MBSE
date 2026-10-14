@@ -535,6 +535,10 @@ def init_db():
         share_status TEXT DEFAULT '',      -- 个人分享审核：'' | submitted | approved | rejected
         origin TEXT DEFAULT '',            -- 来源：admin（管理员创建）| share（个人分享通过）
         latency_ms INTEGER DEFAULT 0,
+        -- ★ B5-2：外部 MCP 的认证头（JSON，如 {"Authorization":"Bearer …"}）。
+        --   实测：需要 Bearer 的 MCP 此前**无法接入**（无此列 ⇒ 新增"成功"但探测 401）。
+        --   ⚠️ 出参一律脱敏（只回 key 名），见 routers/studio_parts/mcp.py。
+        headers TEXT DEFAULT '{}',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 

@@ -13,10 +13,18 @@ import time
 
 def _make_client(srv: dict):
     from mcp_client import MCPClient
+    # ★ B5-2：带上认证头（否则健康探测对需认证的 MCP 永远 offline）
+    _h = {}
+    try:
+        import json as _j
+        _h = _j.loads(srv.get("headers") or "{}") or {}
+    except Exception:
+        _h = {}
     return MCPClient(
         endpoint=srv.get("endpoint", ""),
         transport=srv.get("transport", "sse"),
         timeout=int(srv.get("timeout") or 15),
+        headers=_h if isinstance(_h, dict) else {},
     )
 
 

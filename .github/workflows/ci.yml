@@ -660,6 +660,15 @@ jobs:
       - name: Guard 沉淀复用泛词劫持（B4-7，5 条 + 1 已知 GAP）
         run: python tools/verify/verify_reuse_gate.py
 
+      # ── B5-2（2026-10-14）：能力中心「工具/MCP 配置无效」+「意图标签枚举化」 ──
+      # ① 需认证的 MCP 此前**无法接入**：新增返回 {"ok":true}，紧接着 /test 就是
+      #    `HTTP 401 invalid_token` —— 因为 headers 在表/模型/探测/执行/健康/客户端
+      #    **六个环节**全都不通，前端更是「收集了 headers 却没放进 body」。
+      # ② 意图标签是硬编码 9 个，而库里 19 个真实意图里**有 10 个在下拉里选不到**。
+      # 本门禁锁 6 个环节 + 出参脱敏（凭据不得出现在列表接口）+ 候选集动态派生。
+      - name: Guard 能力配置可用性（headers 六环节 / 出参脱敏 / 意图动态候选集，24 条）
+        run: python tools/verify/verify_capability_config.py
+
       # ── B1-10（2026-10-13）：跑完所有门禁后，工作区必须仍是干净的 ────────
       # 为什么需要（本仓实测踩过两次）：
       #   `tools/verify/verify_norm_summary.py` 等少数门禁的「变异自证」会**就地改生产源文件**

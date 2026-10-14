@@ -622,7 +622,17 @@ class ToolMixin:
                 from mcp_client import MCPClient
                 from tool_resilience import retry_exec
                 tool_type = "mcp"
-                client = MCPClient(row["endpoint"], row["transport"] or "sse")
+                # ★ B5-2：带上该 MCP 配置的认证头（此前硬编码 ⇒ Bearer 类必 401）
+                # ⚠️ 本模块的 json **不是全局导入**（第 899 行是函数内 `import json as _json`），
+                #   这里直接用 `json.` 会在运行时 NameError ⇒ 必须用局部别名导入。
+                _mh = {}
+                try:
+                    import json as _json_mcp
+                    _mh = _json_mcp.loads(row["headers"] or "{}") or {}
+                except Exception:
+                    _mh = {}
+                client = MCPClient(row["endpoint"], row["transport"] or "sse",
+                                   headers=_mh if isinstance(_mh, dict) else {})
                 # D2：MCP 工具按注册表 retry_policy 做指数退避重试（仅瞬态失败）
                 result, retried, _did = retry_exec(
                     lambda: client.call_tool(name, arguments or {}),
