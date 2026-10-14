@@ -53,13 +53,84 @@ def ctx_budget_tokens(kind: str, fallback_char_key: str, fallback: int) -> int:
 class HistoryMixin:
     """附件加载、历史检索、话题标注与上下文预算。"""
 
+    def _load_doc_chunks(self, doc_id: int, fname: str = "") -> str:
+        """★ B5-9：按 `doc_id` 取文档库**已解析**的 chunk 文本（供附件入模）。
+
+        为什么需要：产物/文档库选文件时前端给的是
+        `/api/documents/{doc_id}/download`（`10-chatinput.js:240`），
+        而本方法原先只认 `/static/` 下的本地文件 ⇒ 附件在入口被静默丢弃。
+        取**已入库的 chunk** 而不再解一遍文件：① 省一次解析；
+        ② 与知识库检索口径一致（同一份内容不会"库里一份、附件里另一份"）。
+
+        返回拼接文本；取不到返回空串（调用方据此回落到 url 分支/ 记 skipped）。
+        ⚠️ 只读、失败即返回空串 —— 附件取不到绝不能让整轮对话失败。
+        """
+        try:
+            from database import get_db
+            conn = get_db()
+            # ⚠️ 列名是 **`document_id`**（不是 `doc_id`）—— 写错会抛
+            #   `no such column: doc_id`，而本函数用 `except: return ""`兜底
+            #   ⇒ 附件又变成"取不到" ⇒ 静默退��原路径，**症状与改动前完全一样**。
+            #   （判据纪律：这类"查表"必须先 PRAGMA 看列名，不凭直觉写。）
+            rows = conn.execute(
+                "SELECT content FROM document_chunks WHERE document_id=? "
+                "ORDER BY chunk_index",
+                (int(doc_id),)).fetchall()
+            if not rows:
+                return ""
+            parts = []
+            for r in rows:
+                c = r[0] if not isinstance(r, dict) else (r.get("content") or "")
+                if c:
+                    parts.append(str(c))
+            return "\n".join(parts).strip()
+        except Exception:
+            return ""
+
     def _load_attachment_text(self, attachments):
-        """返回 (parsed_blocks, parsed_count, skipped_names)。parsed_blocks 为 ["[文件名]\n内容…"] 列表。"""
+        """返回 (parsed_blocks, parsed_count, skipped_names)。parsed_blocks 为 ["[文件名]\n内容…"] 列表。
+
+        ★ B5-9（2026-10-14 米爸报「上传附件 / 从产物中选择文件后建模，流程异常，
+          没真正发起会话」）：原先只认 `/static/` 开头的 URL，其余**静默 `continue`**：
+
+              if not url.startswith("/static/"):
+                  continue# ⚠️ 不进 skipped、不留任何痕迹
+
+          而前端**两条**入队路径给的是**不同形态**的 url：
+            · `10-chatinput.js:413` 上传文件   → `/api/upload` 返回的 `r.url`（`/static/...`）✅ 能读
+            · `10-chatinput.js:240` **从产物/文档库选文件** → `/api/documents/{doc_id}/download` ❌ **被丢弃**
+              （有 `d.url` 时才用；否则按 doc_id 拼 download 路径 —— 那条必然落到 continue）
+          ⇒ 用户看到的是「选完文件、发出去，模型说**没携带任何附件**」，
+             看起来像"流程没发起"，实际是**附件在入口就被扔了、且无任何提示**。
+
+          修法（两条，缺一不可）：
+            ① 支持按 `doc_id` 直取文档库已解析的 chunk 文本（不必再解一遍文件）；
+            ② **所有无法解析的附件一律进 `skipped`**（前端会显示"未消费"），
+               **绝不静默丢弃** —— 静默丢弃正是"看起来没发起会话"的直接成因。
+        """
         blocks, parsed, skipped = [], 0, []
         for a in attachments or []:
-            url = (a.get("url") or "") if isinstance(a, dict) else ""
-            fname = (a.get("filename") or url.split("/")[-1] or "附件") if isinstance(a, dict) else "附件"
+            if not isinstance(a, dict):
+                skipped.append("附件(结构非法)")
+                continue
+            url = a.get("url") or ""
+            fname = a.get("filename") or url.split("/")[-1] or "附件"
+            doc_id = a.get("doc_id") or 0
+            # ★ B5-9①：先按 doc_id 取文档库**已解析**的 chunk 文本。
+            #   产物/文档库选文件走的就是这条（url 是 download 路径、文件本体不一定在 static 下）。
+            if doc_id:
+                _txt = self._load_doc_chunks(int(doc_id), fname)
+                if _txt:
+                    blocks.append(f"【{fname}】\n{_txt[:2500]}")
+                    parsed += 1
+                    continue
+            if not url:
+                # 无 url 又没取到 doc_id 文本 ⇒ 明确告知"未消费"，而不是无声消失
+                skipped.append(fname + "(无可用来源)")
+                continue
             if not url.startswith("/static/"):
+                # ★ B5-9②：不认的 URL **进 skipped**，前端会显示"未消费"
+                skipped.append(fname + "(不支持的地址)")
                 continue
             rel = url.replace("/static/", "")
             path = os.path.join(STATIC_DIR, rel)

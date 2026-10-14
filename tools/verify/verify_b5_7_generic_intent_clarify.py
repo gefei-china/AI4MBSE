@@ -113,34 +113,40 @@ chk("M1 变异（复用路径不带 subtasks）被 A2 抓住", M1)
 
 
 # ══════════════════════════════════════════════════════════════════
-# [B] 正文长文档折叠（A-2）
+# [B] 正文**一律不折叠**（B5-8：撤销 B5-6/A-2，米爸明确要求）
 # ══════════════════════════════════════════════════════════════════
-section("[B] 正文折叠与代码块口径统一（A-2）")
+section("[B] 正文不折叠（B5-8，撤销 A-2）")
 mdjs = read("static/js/mods/05-markdown.js")
 mdcode = strip_js_comments(mdjs)
+appcss_now = read("static/css/app.css")
 
-chk("B1 存在 _wrapBodyFold 折叠包装函数", "function _wrapBodyFold(" in mdcode)
-chk("B2 折叠阈值是行数常量（_FOLD_MIN_LINES）", "_FOLD_MIN_LINES = 24" in mdcode)
-chk("B3 renderMarkdown 的收尾调用了折叠包装",
-    "return _wrapBodyFold(html, text);" in mdcode)
-chk("B4 有 bodyFoldToggle 交互函数", "function bodyFoldToggle(el)" in mdcode)
-chk("B5 折叠头复用 .cf-lang（与代码块同一视觉语言）",
-    'class="cf-lang">完整输出' in mdjs)
-chk("B6 短消息不受影响（低于阈值直接返回原html）",
-    "if(lines < _FOLD_MIN_LINES) return html;" in mdcode)
-chk("B7 展开态限高内滚（避免展开后又是超长页面）",
-    "body-fold.open .bf-body" in read("static/css/app.css"))
+# ★ 判据从「有折叠」反转成「**无折叠**」——
+#   米爸验收原话：「最终输出结果不要收起来，也不允许收起来」。
+#   这类**改变用户可见信息默认状态**的需求变更，判据必须同步反转，
+#   否则旧判据会持续假红（本次实测 B2/B3/M2/M3 四条全红即此）。
+chk("B1 正文折叠包装函数已移除", "function _wrapBodyFold(" not in mdcode)
+chk("B2 折叠阈值常量已移除", "_FOLD_MIN_LINES" not in mdcode)
+chk("B3 renderMarkdown 收尾原样返回（不包折叠）",
+    "return html;" in mdcode and "return _wrapBodyFold(" not in mdcode)
+chk("B4 bodyFoldToggle 交互函数已移除", "function bodyFoldToggle(" not in mdcode)
+chk("B5 .body-fold 样式已整体移除",
+    ".body-fold{" not in appcss_now and ".bf-body{" not in appcss_now)
+# —— 保留项：代码块折叠（2026-09-16 既有）与引用抽屉不在撤销范围内
+chk("B6 代码块折叠保留（.code-fold / _codeFold 未动）",
+    "function _codeFold(" in mdcode and ".code-fold{" in appcss_now)
+chk("B7 代码块折叠的展开逻辑保留",
+    ".code-fold.open .md-code{display:block;}" in appcss_now)
 
-# 变异 M2：阈值调到 0（等于全部折叠，短消息也被折叠 = 回归）
-_m2 = mdcode.replace("_FOLD_MIN_LINES = 24", "_FOLD_MIN_LINES = 0")
-M2 = ("_FOLD_MIN_LINES = 24" in mdcode) and ("_FOLD_MIN_LINES = 24" not in _m2)
-chk("M2 变异（阈值归零）被 B2 抓住", M2)
+# 变异 M2：把折叠包装**重新加回去**（若判据空转，这条不会 FAIL）
+_m2 = mdcode.replace("  return html;\n}",
+                     "  function _wrapBodyFold(h,t){return h;}\n  return _wrapBodyFold(html, text);\n}", 1)
+M2 = ("return html;" in mdcode) and ("function _wrapBodyFold(" in _m2)
+chk("M2 变异（把正文折叠加回来）被 B1/B3 抓住", M2)
 
-# 变异 M3：去掉 renderMarkdown 收尾的包装调用
-_m3 = mdcode.replace("return _wrapBodyFold(html, text);", "return html;")
-M3 = ("return _wrapBodyFold(html, text);" in mdcode) and \
-     ("return _wrapBodyFold(html, text);" not in _m3)
-chk("M3 变异（收尾不包折叠）被 B3 抓住", M3)
+# 变异 M3：把 .body-fold 样式加回去
+_m3 = appcss_now.replace(".code-fold{", ".body-fold{display:none;}\n.code-fold{", 1)
+M3 = (".body-fold{" not in appcss_now) and (".body-fold{" in _m3)
+chk("M3 变异（把 .body-fold 样式加回来）被 B5 抓住", M3)
 
 
 # ══════════════════════════════════════════════════════════════════
