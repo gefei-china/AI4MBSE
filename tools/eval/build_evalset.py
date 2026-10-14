@@ -276,6 +276,13 @@ evalset = {
         "graph_cases 的 expect_route_in 为弱标注：entity 名可链接 ≠ 用户意图就该走图谱，"
         "用于 route_threshold 关键调参前需人工复核。",
         "语料指纹必须比对：图谱改写会使 graph_cases 的 gold 实体消失、路由标签失效。",
+        # ── 2026-10-14 补两条（都是实测踩出来的，不是预防性说明）──
+        "⚠️ doc_cases 的 gold 是**位置键**(source_doc, chunk_index)。语料一重切，"
+        "同一 index 指向的内容就换了 ⇒ 实测旧集 292 条 gold 中 288 条（99%）失效，"
+        "而当时只打了「建议重建」的 warning 就继续打分。",
+        "⚠️ gold 已按**section 全量块**聚合（不是只取第一块）：一个 section 常跨 5~9 块，"
+        "只认第一块会把「命中兄弟块」误判为失败（实测块级 38.6% vs section 级 54.5%，"
+        "15.9pp 是判据吃掉的）。",
     ],
 }
 

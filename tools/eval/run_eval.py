@@ -59,7 +59,11 @@ ap.add_argument("--control", action="store_true",
 ap.add_argument("--cfg", action="append", default=[], metavar="GROUP.KEY=VALUE",
                 help="临时覆写生效配置（可重复，如 --cfg rag.hyde_enabled=false）。"
                      "只改本进程内存，不落盘、不动生产配置 → 用于 A/B 单参数对照。")
+ap.add_argument("--allow-drift", action="store_true",
+                help="语料指纹漂移时仍强行打分（默认直接终止，exit 3）。"
+                     "仅用于排查，漂移下的分数不得作为结论依据。")
 ARGS = ap.parse_args()
+_allow_drift = ARGS.allow_drift
 
 # ── 纪律 3：解释器自检（缺失 httpx 会静默降级，必须拒跑）────────────────────
 try:
@@ -139,6 +143,14 @@ if drift:
     for d in drift:
         print("     • %s" % d)
     print("    建议：重建评测集（build_evalset.py）后再对比。")
+    # ── 2026-10-14：漂移从「仅告警」改为**拦截**（实测代价见 tools/eval/fingerprint_gate.py）──
+    # 实测：tmp/p21/evalset.json 记录 16doc/7269chunks，真库已 12/6727，
+    #      292 条 gold 中 288 条（99%）指向的 chunk 内容已被重切移位。
+    #      而此前这里只打一句"建议重建"就**继续打分** ⇒ 打分结果"看起来正常但已无意义"。
+    # 门禁要能拦住批量脚本，就必须 **exit**，不能只是 warning（warning 在批处理里必被忽略）。
+    if not _allow_drift:
+        print("     ⛔ 已终止打分：加 --allow-drift 可强行跑（仅用于排查，不作为结论依据）。")
+        sys.exit(3)
 else:
     print("✅ 语料指纹一致（chunks=%s, release 实体名 sha1=%s）"
           % (now_finger["chunks"], now_finger["release_entity_names_sha1"]))

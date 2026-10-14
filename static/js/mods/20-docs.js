@@ -950,6 +950,21 @@ function fmtMs(ms) {
  *     写反了会显示 "NaN s" / "0.001 ms" 这类一眼假的数 —— 宁可少显示。
  *     `available:false`（OCR 不可用）时整段不显示：那是"没发生"，不是"0 页"。
  */
+function qualityRow(d) {
+  // 解析质量分（documents.quality_score，2026-09-29 起由 OCR 识别均分写入）
+  // ⚠️ 列默认值是 0，且**只有走 OCR 的文档才会有真值**。
+  //    文本层 PDF / office / md 走的是 pdfplumber/docx 抽取，没有"识别均分"这个概念
+  //    ⇒ 实测全库 12 行全是 0.0，把 0 当"质量极差"显示是**误导**。
+  //    故：只有 >0 才显示，并如实说明它的口径是"OCR 识别均分"，不代表其它抽取路径。
+  const q = Number(d.quality_score||0);
+  if(!(q > 0)) return '';
+  const pct = (q*100).toFixed(1);
+  const color = q >= 0.7 ? 'var(--green,#3fb950)' : q >= 0.5 ? 'var(--orange,#d29922)' : 'var(--red,#f85149)';
+  return `<div class="kv"><span>解析质量分</span><b style="color:${color}">${pct}%</b></div>`
+       + `<div style="font-size:11px;color:var(--mut);margin-top:2px;">`
+       + `口径：OCR 识别行平均置信度（仅走 OCR 的文档有此值；文本层抽取不计）。</div>`;
+}
+
 function ocrInfoTable(parseMeta) {
   const o = (parseMeta && parseMeta.ocr) || null;
   if(!o || o.available === false) return '';
@@ -1029,6 +1044,7 @@ async function viewDocTrace(id) {
     <div style="margin-top:8px;border-top:1px dashed var(--line);padding-top:8px;font-size:12px;color:var(--mut);">管道阶段明细：</div>
     ${stageTable(d.pipeline_detail)}
     <div class="kv"><span>块数 / 向量</span><b>${d.chunk_count||0} / ${d.embed_version}</b></div>
+    ${qualityRow(d)}
     <div style="margin-top:8px;"><button class="btn sm ghost" onclick="viewDocSource(${id})">📖 查看完整文档</button></div>
     <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px;font-size:12px;color:var(--mut);">关联实体（图谱追溯）：</div>
     <div style="margin-top:6px;">${ents}</div>
