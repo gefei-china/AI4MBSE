@@ -331,6 +331,132 @@ class TaskQueue:
             (error[:500], task_id))
         conn.commit()
 
+    # ── 取消（★ 2026-10-14 批次四 #19：健壮性）────────────────────────────
+    # 为什么现在才做（真实账单，不是理论风险）：
+    #   真库实测有 1 个 run（run_id=530）**卡在 `phase=planned` 已 10 天**、
+    #   `summary_written=0`、4 条 agent_tasks 悬着 —— **没有任何手段中止它**。
+    #   崩溃/超时能区分"从未开始 / 跑到一半"，但**无法主动收敛**。
+
+    #: 终态集合 —— 这些状态的任务**不再受取消影响**（取消不复活已完成的事）
+    TERMINAL_STATUSES = ("done", "failed", "cancelled")
+
+    @staticmethod
+    def is_cancel_requested(conn, task_id: int) -> bool:
+        """★ 协作式中止探针：worker 在**每次产出后**调它，命中即停止继续执行。
+
+        ⚠️ **为什么是"协作式"而不是 kill 线程**：
+          Python 无法安全杀死线程（`PyThreadState_SetAsyncExc` 在本仓踩过坑），
+          而编排的子任务正在持有 LLM 流式连接、DB 事务、文件句柄 ——
+          强杀会造成**资源泄漏 + 事务悬挂**（比不取消更糟）。
+        ⇒ 正确做法是"落一个意图 + worker 在安全点自行收敛"。
+        ⇒ 代价：正在飞行中的那一次 LLM 调用会跑完（无法中断），
+          但**之后的步骤全部跳过** ⇒ 从"永远卡住"变成"最多多等一轮"。
+        """
+        try:
+            row = conn.execute(
+                "SELECT status FROM agent_tasks WHERE id=?", (task_id,)).fetchone()
+            return bool(row) and str(row["status"]) == "cancelled"
+        except Exception:
+            # ⚠️ 探针**绝不能抛**：它跑在 worker 的产出热路径上，
+            # 抛异常会把"取消功能"变成"新的崩溃源"。
+            return False
+
+    @staticmethod
+    def cancel(conn, task_id: int, reason: str = "") -> bool:
+        """取消单个任务（非终态 → cancelled），返回是否真的改动了。
+
+        ⚠️ **幂等**：对已 cancelled 的再调返回 False（不报错、不重复改）。
+        ⚠️ **不碰终态**：done/failed 的任务**取消不了** —— 否则"取消"会变成
+          "把已完成的事改成没做"，那比不做更危险。
+        """
+        try:
+            _ph = ",".join("?" * len(TaskQueue.TERMINAL_STATUSES))
+            cur = conn.execute(
+                "UPDATE agent_tasks SET status='cancelled', error=?, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status NOT IN (%s)" % _ph,
+                ((reason or "用户取消")[:500], task_id) + TaskQueue.TERMINAL_STATUSES)
+            conn.commit()
+            return bool(cur.rowcount)
+        except Exception:
+            # 极老库可能没有对应列/表结构 ⇒ 降级为"取消失败但不影响其他任务"
+            try:
+                conn.commit()
+            except Exception:
+                pass
+            return False
+
+    @staticmethod
+    def cancel_run(conn, run_id: int, reason: str = "") -> int:
+        """★ 取消**整批**编排（run 维度），返回被取消的任务数。
+
+        为什么需要 run 维度：用户点"停止"时，他看到的是**一个会话在跑**，
+        不是"4 个 task_id"。逐任务取消要求前端先知道全部 task_id —— 不现实。
+        ⇒ 同时把 checkpoint 标成 `cancelled`，让该 run 不再出现在"可恢复"清单里
+          （否则下次进来它又会被人看到并重试）。
+        """
+        _ph = ",".join("?" * len(TaskQueue.TERMINAL_STATUSES))
+        try:
+            cur = conn.execute(
+                "UPDATE agent_tasks SET status='cancelled', error=?, "
+                "updated_at=CURRENT_TIMESTAMP WHERE run_id=? AND status NOT IN (%s)" % _ph,
+                ((reason or "用户取消整批")[:500], run_id) + TaskQueue.TERMINAL_STATUSES)
+            n = int(cur.rowcount or 0)
+            conn.commit()
+        except Exception:
+            try:
+                conn.commit()
+            except Exception:
+                pass
+            n = 0
+        # 同步 checkpoint（失败不影响任务取消结果 —— 任务已收，checkpoint 只是可见性）
+        try:
+            conn.execute(
+                "UPDATE orch_checkpoints SET phase='cancelled', updated_at=CURRENT_TIMESTAMP "
+                "WHERE run_id=? AND phase NOT IN ('done','failed','cancelled')", (run_id,))
+            conn.commit()
+        except Exception:
+            pass
+        return n
+
+    @staticmethod
+    def reap_stuck_runs(conn, older_than_minutes: int = 30, reason: str = "") -> list:
+        """★ 卡住的 run **自动收敛**（reaper）：长时间无推进的非终态 run 标为 cancelled。
+
+        为什么需要它（B1-3 之后 `running` 态真的有数据了）：
+          `orch_checkpoints.updated_at` 由 worker 每轮 touch（`every_s=5.0`）——
+          **进程被杀/机器休眠时它就永远不再更新** ⇒ 该 run 永远停在"可恢复"清单里，
+          用户每次进来都看到它、每次都不知道能不能重试。
+        ⇒ 超过 `older_than_minutes` 无推进 ⇒ 判定为"已死" ⇒ 自动收敛。
+
+        ⚠️ **默认 30 分钟是保守值**：必须大于单次编排的正常时长
+          （真库观测：run 530/531/532 的正常耗时在 7~66 分钟量级）。
+          ⇒ 调太小会把"正在跑但慢"误杀成 cancelled。
+        ⚠️ 判据用 `updated_at`（最后推进时刻）**而非 created_at**：
+          前者才代表"还活着吗"。
+
+        ⚠️⚠️ **不要求该 run 下还有非终态任务**（2026-10-14 实测发现并修）：
+          原实现加了 `EXISTS(... status NOT IN 终态)` 才收敛
+          ⇒ **真库 run 530 恰好不符合**：它的 4 条任务**全是 `failed`（终态）**，
+          而 checkpoint 卡在 `phase=planned`、`summary_written=0`
+          —— 用户看到的是"这条任务还挂着"，但按原条件它**永远不会被回收**。
+          ⇒ 去掉该 EXISTS 条件：判断"是否卡住"只看 checkpoint 自身的推进时刻，
+          任务状态**不参与**（任务的终态与否，与"这条 run 是否还在被人看得见"无关）。
+        """
+        _ph = ",".join("?" * len(TaskQueue.TERMINAL_STATUSES))
+        rows = conn.execute(
+            "SELECT run_id FROM orch_checkpoints "
+            "WHERE phase NOT IN ('done','failed','cancelled') "
+            "AND updated_at IS NOT NULL "
+            "AND updated_at <= datetime('now', ?) ORDER BY run_id",
+            ("-%d minutes" % max(1, int(older_than_minutes)),)).fetchall()
+        out = []
+        for r in rows:
+            rid = int(r["run_id"])
+            n = TaskQueue.cancel_run(conn, rid, reason or ("停滞超过 %d 分钟，自动收敛"
+                                                           % older_than_minutes))
+            out.append({"run_id": rid, "cancelled_tasks": n})
+        return out
+
     # ── DAG 推进 ──
     @staticmethod
     def retry(conn, task_id: int) -> None:

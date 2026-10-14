@@ -499,6 +499,26 @@ class StreamMixin:
                 evs, sub_res, sub_has_token = [], "", False
                 tok_used = 0
                 _t0 = _t.time()
+
+                def _cancel_probe(task_id):
+                    """#19 协作式中止探针：**每次开独立连接**查一次 status。
+
+                    ⚠️ **必须独立连接**：主路径的 `conn` 可能正持有未提交事务
+                       （写操作暂存），在它上面再查会：
+                       ① 读到未提交数据 ② 长期占用连接 ⇒ 与 B1-3 修过的
+                       "悬挂事务"同型。⇒ 宁可多一次短连接，也不碰主连接。
+                    ⚠️ 任何异常都当"未取消"（fail-safe 方向 = 继续跑，
+                       因为误判成取消会**丢掉用户要的东西**）。
+                    """
+                    try:
+                        _c = get_db()
+                        try:
+                            return bool(TaskQueue.is_cancel_requested(_c, task_id))
+                        finally:
+                            _c.close()
+                    except Exception:
+                        return False
+
                 try:
                     sub = type(self)()  # 拆包后避免循环导入：type(self)==AgentPipeline
                     sub._load_db_agents(user)
@@ -516,6 +536,18 @@ class StreamMixin:
                                                      forced_intent=tk.get("agent_id") or None,
                                                      skill_name=skill_name2, user=user, dry_run=True):
                             _hb[tkey] = _t.time()   # P0-7：任何产出（token/reasoning/tool）都算"活着"
+                            # ★ 2026-10-14（#19 健壮性）：**协作式中止探针**。
+                            #   每收到一个产出就问一次"这个任务被取消了吗"，命中即 `break`
+                            #   —— 正在飞行的那一次 LLM 调用会跑完，但**后续步骤全部跳过**
+                            #   ⇒ 从"永远卡住"变成"最多多等一轮"。
+                            #   ⚠️ 探针自带 try（`is_cancel_requested` 内部也不抛）：
+                            #     它跑在**产出热路径**上，抛异常就成了新的崩溃源。
+                            try:
+                                if _cancel_probe(tk["id"]):
+                                    _hb.pop(tkey, None)
+                                    break
+                            except Exception:
+                                pass
                             _et = ev.get("type")
                             if _et == "token":
                                 sub_has_token = True

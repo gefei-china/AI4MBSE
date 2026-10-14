@@ -608,6 +608,19 @@ jobs:
       - name: Guard 平台通用性（正文回落 / 不依赖模型 / 异常不阻断，8 条）
         run: python tools/verify/verify_platform_generality.py
 
+      # ── 2026-10-14（健壮性）：取消链路 + 卡住自动收敛 ──────────────────────
+      # 真实账单：真库 `run_id=530` 卡在 `phase=planned` 已 **10 天**、`summary_written=0`、
+      #   4 条 agent_tasks 悬着 —— **没有任何手段中止它**。
+      # 三条设计各有反例驱动（门禁里逐条锁住）：
+      #   ① **协作式**中止，不是 kill 线程（子任务正持有 LLM 流/DB 事务/文件句柄，
+      #      强杀造成泄漏 + 悬挂事务，比不取消更糟）；
+      #   ② **终态不可取消**（否则"取消"= "把已完成的事改成没做"）；
+      #   ③ reaper **不看任务状态、只看 checkpoint 推进时刻** ——
+      #      初版要求"存在非终态任务"才收敛，而 run 530 的 4 条任务**全是 failed**
+      #      ⇒ 按初版它**永远不会被回收**。门禁 R4 专门锁这条反向判据。
+      - name: Guard 取消链路 + 卡住自动收敛（16 条 + 反向判据）
+        run: python tools/verify/verify_cancel_and_reap.py
+
       # ── B1-10（2026-10-13）：跑完所有门禁后，工作区必须仍是干净的 ────────
       # 为什么需要（本仓实测踩过两次）：
       #   `tools/verify/verify_norm_summary.py` 等少数门禁的「变异自证」会**就地改生产源文件**
