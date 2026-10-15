@@ -560,12 +560,20 @@ def save_plan(conn, plan: dict, version_id: int = 0, user=None) -> int:
                 (clid, op["op_type"], op.get("target") or "")).fetchone()
         if dup:
             continue
+        # P1-3（2026-10-15）★ 违例明细随 op 存档（此前缺陷：build_plan 把 violations[:50]
+        # 挂在 op 内存态，save_plan 只取前 10 条进 sample、payload 整个丢掉——
+        # apply 注记却说"50 条已存档"，人工裁决时只有 10 条抽样可看，宣称与存档不符。
+        # 修法：violations 一并落进 payload（≤50，与 build_plan 截断一致）；sample 仍 ≤10 供列表速览。
+        _payload = dict(op.get("payload") or {})
+        if op.get("violations"):
+            _payload["violations"] = op["violations"][:50]
+            _payload["violations_total"] = op.get("affected") or len(op["violations"])
         conn.execute(
             "INSERT INTO ontology_instance_migrations "
             "(plan_id, change_log_id, version_id, op_type, target, payload, affected, sample, status, created_by) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (plan_id, clid, version_id or 0, op["op_type"],
-             op.get("target") or "", _dumps(op.get("payload") or {}),
+             op.get("target") or "", _dumps(_payload),
              op.get("affected") or 0,
              _dumps((op.get("violations") or op.get("sample") or [])[:10]),
              "pending", actor or ""))
@@ -721,7 +729,15 @@ def apply(conn, plan_id: int, user=None) -> dict:
                     n += 1
                 note = f"已转换 {n} 条" + (f"，{fail} 条无法自动转换需人工处理" if fail else "")
             elif t in ("flag_violations", "flag_dangling"):
-                note = f"违例清单 {r['affected']} 条已存档（人工裁决，不自动改数据）"
+                # P1-3（2026-10-15）诚实化：明细实际存档数以 payload.violations / sample 为准，
+                # 不再拿 affected 冒充存档数（此前 50 条违例只存 10 条抽样却宣称"50 条已存档"）。
+                try:
+                    _arch = len(_loads(r["payload"], {}).get("violations", [])) or len(_loads(r["sample"], []))
+                except Exception:
+                    _arch = 0
+                note = (f"违例 {r['affected']} 条需人工裁决（明细存档 {_arch} 条，不自动改数据）"
+                        if t == "flag_violations"
+                        else f"悬空扫描存档（{r['affected']} 条，不自动改数据）")
             else:
                 note = "未知 op 类型，跳过"
             conn.execute(

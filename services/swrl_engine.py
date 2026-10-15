@@ -99,6 +99,7 @@ class RunSummary:
     rules_run: int = 0
     rules_skipped: int = 0
     facts_inferred: int = 0
+    facts_deduped: int = 0   # D4：同内容已存在而跳过的条数（幂等重跑=上次产出数）
     errors: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     started_at: str = ""
@@ -110,6 +111,7 @@ class RunSummary:
             "rules_run": self.rules_run,
             "rules_skipped": self.rules_skipped,
             "facts_inferred": self.facts_inferred,
+            "facts_deduped": self.facts_deduped,
             "errors": self.errors,
             "warnings": self.warnings,
             "started_at": self.started_at,
@@ -299,11 +301,13 @@ class SWRLEngine:
         # P1-①：推理前确保能定位 JVM（捆绑便携 JRE / JAVA_HOME / PATH）
         ensure_jvm_home()
 
+        # D4（2026-10-15）：不再「先清空未裁决再重插」——那是 id churn 的根源
+        # （实测每次推理 fact id 27→39 全换，历史轨迹被冲掉）。
+        # 改为物化后按内容幂等落库（同内容跳过保留原 id），再清「本轮不再产出」的陈旧项。
+        # 仅 clear_accepted=True（用户显式要求）才全清。
         if clear_accepted:
             self.conn.execute("DELETE FROM inferred_facts")
-        else:
-            self.conn.execute("DELETE FROM inferred_facts WHERE is_accepted=0")
-        self.conn.commit()
+            self.conn.commit()
 
         target_ids = set(rule_ids) if rule_ids else None
         rules = [
@@ -360,7 +364,22 @@ class SWRLEngine:
                 seen.add(key)
                 new_facts.append(f)
 
+        # D4（2026-10-15）幂等落库：同 (rule,fact_type,s,p,o) 已存在则跳过（保留原 id），
+        # 只插真新增；随后清「本轮不再产出」的陈旧未裁决事实（规则停用/数据变化后不再成立）。
+        # 已裁决（is_accepted=1）事实永不在此清理——人工裁决结论不被重跑冲掉。
+        summary.facts_deduped = 0
+        stale_pending_ids = []
+        keep_keys = set()
         for fact in new_facts:
+            ck = (fact["rule_id"], fact["fact_type"], fact["subject"],
+                  fact["predicate"], fact["object"])
+            keep_keys.add(ck)
+            exists = self.conn.execute(
+                "SELECT 1 FROM inferred_facts WHERE rule_id=? AND fact_type=? "
+                "AND subject=? AND predicate=? AND object=? LIMIT 1", ck).fetchone()
+            if exists:
+                summary.facts_deduped += 1
+                continue
             self.conn.execute(
                 "INSERT INTO inferred_facts "
                 "(rule_id, fact_type, subject, predicate, object, confidence) "
@@ -369,8 +388,20 @@ class SWRLEngine:
                  fact["subject"], fact["predicate"], fact["object"],
                  fact.get("confidence", 1.0)),
             )
+        for (fid, rid, ftype, s, p, o) in self.conn.execute(
+                "SELECT id, rule_id, fact_type, subject, predicate, object "
+                "FROM inferred_facts WHERE is_accepted=0").fetchall():
+            if (rid, ftype, s, p, o) not in keep_keys:
+                stale_pending_ids.append(fid)
+        if stale_pending_ids:
+            self.conn.executemany(
+                "DELETE FROM inferred_facts WHERE id=?",
+                [(i,) for i in stale_pending_ids])
         self.conn.commit()
-        summary.facts_inferred = len(new_facts)
+        summary.facts_inferred = len(new_facts) - summary.facts_deduped
+        if stale_pending_ids:
+            summary.warnings.append(
+                f"清除 {len(stale_pending_ids)} 条本轮不再产出的陈旧未裁决事实")
 
         finished = summary.finished_at or (datetime.utcnow().isoformat() + "Z")
         for r in rules:
@@ -386,7 +417,8 @@ class SWRLEngine:
         self.conn.commit()
 
         summary.finished_at = datetime.utcnow().isoformat() + "Z"
-        if mode == "warn" and not summary.facts_inferred and summary.rules_run:
+        if mode == "warn" and not summary.facts_inferred \
+                and not summary.facts_deduped and summary.rules_run:
             summary.warnings.append(
                 "推理完成但无新事实：" + str(summary.rules_run) + " 条规则可能过严或本体缺数据"
             )
@@ -540,3 +572,46 @@ def seed_builtin_templates(conn) -> int:
         added += 1
     conn.commit()
     return added
+
+
+def run_dl_check(conn) -> dict:
+    """P2-1（2026-10-15）：Pellet DL 深检 —— 手动低频（/validate?dl=1），默认关闭。
+
+    依据：实测 52 类型/249 边推理 ~2.0s（vs 结构体检 44ms，45 倍差），不宜进发布门禁；
+    但 DL 语义一致性（如 reflexive+asymmetric 互斥，结构规则曾盲区）只有它能抓。
+    返回（**永不抛异常**，任何失败降级为 error 字段——静默失败=假绿的纪律反面）：
+      ran / consistent / elapsed_ms / classes / properties / error
+    ⚠️ 进程内 jpype 跑 JVM：理论上 JVM 崩溃会连带主进程，属已知可接受风险
+    （手动模式频率低）；将来若需硬隔离改 subprocess 版本。
+    """
+    import io as _io
+    import time as _time
+
+    t0 = _time.perf_counter()
+    try:
+        from ontology_owl import to_owl
+        xml, _warns = to_owl(conn)
+    except Exception as e:
+        return {"ran": False, "elapsed_ms": int((_time.perf_counter() - t0) * 1000),
+                "error": f"OWL 导出失败：{type(e).__name__}: {e}"}
+    try:
+        ensure_jvm_home()
+        import owlready2
+        world = owlready2.World()
+        onto = world.get_ontology("http://mbse/onto/dlcheck").load(
+            fileobj=_io.BytesIO(xml.encode("utf-8")))
+        with onto:
+            owlready2.sync_reasoner_pellet(world, infer_property_values=True)
+        n_cls = len(list(onto.classes()))
+        n_prop = len(list(onto.object_properties())) + len(list(onto.data_properties()))
+        return {"ran": True, "consistent": True,
+                "elapsed_ms": int((_time.perf_counter() - t0) * 1000),
+                "classes": n_cls, "properties": n_prop}
+    except Exception as e:
+        elapsed = int((_time.perf_counter() - t0) * 1000)
+        msg = str(e)
+        if "Inconsistent" in type(e).__name__ or "inconsistent" in msg.lower():
+            return {"ran": True, "consistent": False, "elapsed_ms": elapsed,
+                    "error": "Pellet 判本体 INCONSISTENT（DL 语义矛盾；结构体检抓不到的那类）"}
+        return {"ran": False, "elapsed_ms": elapsed,
+                "error": f"{type(e).__name__}: {msg[:200]}"}

@@ -33,6 +33,8 @@ from .ontology import (
     _migrate_swrl_tables,
     _migrate_reasoning_cohorts,
     _migrate_ontology_instance_migrations,
+    _migrate_ontology_health_logs,
+    _migrate_ontology_questions,
 )
 from .graph import (
     _backfill_pipeline_detail,
@@ -110,6 +112,8 @@ __all__ = [
     "_migrate_swrl_tables",
     "_migrate_reasoning_cohorts",
     "_migrate_ontology_instance_migrations",
+    "_migrate_ontology_health_logs",
+    "_migrate_ontology_questions",
     "_backfill_pipeline_detail",
     "_migrate_graph_tables",
     "_migrate_v2g_tables",

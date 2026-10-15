@@ -87,6 +87,11 @@ table.t tr:last-child td{border-bottom:none;}
 .subtab span{padding:8px 16px;font-size:13px;color:var(--mut);cursor:pointer;border-bottom:2px solid transparent;}
 .subtab span .tag{padding:1px 7px;font-size:11px;line-height:normal;vertical-align:middle;}
 .subtab span.on{color:var(--blue-d);font-weight:600;border-bottom-color:var(--blue);}
+/* 2026-10-15 本体顶栏对齐修复：#ont-subtab-row 混排「Tab span + 直挂按钮 + .dd 包裹的按钮」，
+   flex 默认 stretch 使直挂按钮被拉满行高、.dd 内按钮保持原高 ⇒ 导入/导出与一致性检查等错位。
+   统一底对齐（Tab 下划线本就贴行底边框，视觉不变）；小尺寸状态文字/版本徽标改居中免贴底。 */
+#ont-subtab-row{align-items:flex-end;}
+#ont-subtab-row #oe-consistency,#ont-subtab-row #ont-version-badge{align-self:center;}
 .subpage{display:none;} .subpage.on{display:block;}
 /* v6.3 2026-09-06：以下 #ont-graph.ont-fullscreen 系列已迁移至 static/css/kb.css（kb 模块解耦）。
    保留注释以备回溯，原始行 139-140。 */

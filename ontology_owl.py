@@ -102,6 +102,12 @@ def _export_warnings(conn) -> list:
 
     走查 P0-2：悬空引用此前在 TTL/OWL 导出时静默丢失（subClassOf 行无声消失）。
     现导出函数会收集警告并：① 行内输出 WARNING 注释 ② 汇总进 X-Ont-Warnings 响应头。
+
+    2026-10-15（P0-4）新增第三条：**等价关系（equivalent_to）仅以注释保留**。
+    此前该事实只在导出文件里以 `<!-- equivalentTo: X -->` 静默存在，
+    响应头/警告里一个字都没有 —— 消费方（Protégé 等）拿到的是**不含等价公理**的本体，
+    却看不到任何提示，等于"悄悄少导出了一种公理"。
+    故显式登记：哪些类型声明了 equivalent_to、导出后它们只剩注释。
     """
     warns = []
     rows = conn.execute("SELECT id, name, type_kind, parent_id, constraints FROM ontology_types").fetchall()
@@ -121,6 +127,21 @@ def _export_warnings(conn) -> list:
                       if c.get(k) and c.get(k) not in ent_names})
         if bad:
             warns.append(f"对象属性 {r['name']} 的定义域/值域指向不存在的实体类型: {'、'.join(bad)}")
+    # ── 2026-10-15（P0-4）：等价关系仅注释保留 ──
+    # 按类型逐条列出（而不是合并成一句）：消费方需要知道**具体是哪几个类型**丢了公理。
+    for r in rows:
+        try:
+            c = __import__("json").loads(r["constraints"] or "{}")
+        except Exception:
+            continue
+        eq = c.get("equivalent_to") or []
+        if not eq:
+            continue
+        eqs = "、".join(str(x) for x in eq)
+        warns.append(
+            f"等价关系仅注释保留：{r['name']} 声明 equivalent_to={eqs}，"
+            f"导出为 <!-- equivalentTo: ... --> 注释而非 owl:equivalentClass 三元组"
+            f"（OWL/RDF-XML 与 Turtle 两侧均如此）—— 下游推理器不会应用该等价公理")
     return warns
 
 

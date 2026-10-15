@@ -1118,7 +1118,58 @@ async function loadPluginLib(){
   }catch(e){ body.innerHTML = '<div style="color:var(--red);padding:12px;">插件库加载失败：'+esc(e.message||e)+'</div>'; }
 }
 
+// P1-4（2026-10-15）：CQ（能力问题）结果渲染 —— validation 层，与上方机械体检（verification）互补。
+// fail/skip 不混入四档计数（它们不是结构问题）；fail 不阻断发布（R1），仅留痕可追责。
+function oeCqHtml(cq){
+  if(!cq) return '';
+  if(cq.error) return `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;font-size:11px;color:#c77700;">⚠️ 能力问题（CQ）执行降级：${esc(cq.error)}</div>`;
+  const tone = s => s==='pass' ? {fg:'var(--grn,#2f855a)',ico:'✅'} : s==='fail' ? {fg:'var(--red)',ico:'❌'} : {fg:'#c77700',ico:'⚠️'};
+  const rows = (cq.results||[]).map(x=>{ const t=tone(x.status);
+    return `<div style="display:flex;align-items:flex-start;gap:8px;padding:5px 8px;border-radius:6px;margin-top:5px;background:#F7F9FB;border:1px solid ${x.status==='fail'?'#F0C4C4':'#DFE5EC'};">
+      <span style="flex:none;font-size:10px;font-weight:700;color:${t.fg};margin-top:1px;" title="pass=符合期望 / fail=不符合 / skip=执行不了（降级）">${t.ico} ${esc(x.status)}</span>
+      <div style="flex:1;min-width:0;"><div style="font-size:11.5px;">${esc(x.question)}</div>
+      ${x.message?`<div style="font-size:10.5px;color:var(--mut);margin-top:1px;">${esc(x.message)}</div>`:''}</div>
+    </div>`; }).join('');
+  const bad = (cq.failed||0) + (cq.skipped||0);
+  return `<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px;">
+    <b style="font-size:12.5px;">❓ 能力问题（CQ）· validation 层</b>
+    <span style="font-size:11px;color:var(--mut);margin-left:6px;">业务问题问答，与上方机械体检互补；${(cq.failed||0)?`<span style="color:var(--red);font-weight:600;">fail ${cq.failed}</span>`:'fail 0'} / skip ${(cq.skipped||0)} / 共 ${cq.total||0}（不阻断发布，留痕可追责）</span>
+    ${rows || '<div class="hint" style="margin-top:5px;">（无启用的 CQ，到「❓ CQ」面板登记）</div>'}
+  </div>`;
+}
+
 // 一致性校验（2026-08-31 交互优化）：工具行只留摘要，完整问题清单走右侧滑窗（级别徽标 + 实体名可点击定位）
+// P2-1（2026-10-15）：DL 深检按钮 —— 手动低频 Pellet 语义检查（~2s，默认不跑）
+async function oeDlCheck(){
+  const box = document.getElementById('oe-consistency');
+  if(box) box.innerHTML = 'DL 深检中…';
+  toast('Pellet 语义深检中…（约 2s）');
+  try{
+    const r = await api('/api/knowledge/ontology/validate?dl=1&record=0');
+    if(r.error){ if(box) box.innerHTML = '<span style="color:var(--red);">'+esc(r.error)+'</span>'; return; }
+    const d = r.dl || {};
+    if(box) box.innerHTML = issues0(d);
+    const body = d.ran
+      ? (d.consistent
+        ? `<div style="display:flex;align-items:center;gap:10px;padding:18px 16px 6px;"><span style="font-size:26px;">🧠</span>
+           <div><b style="font-size:13.5px;color:var(--grn,#2f855a);">DL 语义一致（Pellet）</b>
+           <div style="font-size:11.5px;color:var(--mut);margin-top:3px;">${d.classes||'-'} 类 / ${d.properties||'-'} 属性，耗时 ${d.elapsed_ms}ms —— 无不可满足类、无互斥特性矛盾</div></div></div>`
+        : `<div style="display:flex;align-items:center;gap:10px;padding:18px 16px 6px;"><span style="font-size:26px;">💥</span>
+           <div><b style="font-size:13.5px;color:var(--red);">DL 语义不一致（Pellet）</b>
+           <div style="font-size:11.5px;color:var(--mut);margin-top:3px;">${esc(d.error||'本体存在 DL 语义矛盾（如互斥特性同声明）')}</div></div></div>`)
+      : `<div style="padding:18px 16px 6px;color:#c77700;font-size:12px;">⚠️ DL 深检未能执行：${esc(d.error||'')}</div>`;
+    openPanel('🧠 DL 语义深检（Pellet）', body +
+      `<div style="font-size:11px;color:var(--mut);padding:0 16px 4px;line-height:1.6;">DL 深检为手动低频操作（~2s），不发发布门禁；能抓结构规则抓不到的语义矛盾（P2-1 实证：reflexive+asymmetric 同声明时结构体检全绿而 Pellet 判不一致）。</div>
+       <div style="text-align:right;padding:8px 16px 16px;"><button class="btn ghost" onclick="closePanel()">关闭</button></div>`);
+  }catch(e){ if(box) box.innerHTML = ''; toast('DL 深检失败：'+(e.message||e)); }
+}
+// DL 按钮在工具行的小徽标（无 r.issues 上下文，独立小状态）
+function issues0(d){
+  if(!d || !d.ran) return '<span style="color:#c77700;">⚠️ DL 深检未执行</span>';
+  return d.consistent ? '<span style="color:var(--grn,#2f855a);">🧠 DL 一致</span>'
+                      : '<span style="color:var(--red);">💥 DL 不一致</span>';
+}
+
 async function oeConsistency(withInstances){
   const box = document.getElementById('oe-consistency'); if(!box) return;
   box.innerHTML = '校验中…';
@@ -1146,6 +1197,8 @@ async function oeConsistency(withInstances){
         <span style="font-size:30px;">✅</span>
         <div><b style="font-size:14px;color:var(--grn,#2f855a);">校验通过</b>
         <div style="font-size:11.5px;color:var(--mut);margin-top:4px;">未发现本体结构/一致性高危问题</div></div></div>
+        ${oeCqHtml(r.cq)}
+        <div style="padding:8px 16px 0;"><button class="btn sm ghost" onclick="oeDlCheck()" title="Pellet DL 语义深检（~2s，手动低频）：抓结构规则抓不到的语义矛盾">🧠 DL 深检</button></div>
         <div style="text-align:right;padding:0 16px 16px;"><button class="btn ghost" onclick="closePanel()">关闭</button></div>`);
       return;
     }
@@ -1170,6 +1223,15 @@ async function oeConsistency(withInstances){
       const tn = sevTone(x.severity);
       const t = (ontData && ontData.types||[]).find(tt=>tt.name===x.name);
       const kindIcon = t ? (t.type_kind==='relation'?'🔗':t.type_kind==='attribute'?'◆':'🟦') : '📄';
+      // P0-1（2026-10-15）：已实现未接线的两个治理入口挂到这里——
+      //  ① 影响预览：仅当类型在**编辑态**数据里（有 id，可构造 tid）；快照口径缺失时不显示（不猜）。
+      //  ② 迁移计划：实例类问题（未注册/悬空/存量违例）→ 复用 21-ontology.js 的 ontMigBuild()
+      //     （全局作用域，onclick 点击时解析，加载顺序无关）。
+      const instIssue = /instance|unregistered|dangling|conflict/i.test(String(x.code||'')+' '+(x.label||''));
+      const actBtns = [
+        t && t.id ? `<button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="oeImpactPreview('${ontJs(x.name)}')" title="预览「保存该类型当前声明」对存量实例的影响（只读，不写库）">🧭 影响预览</button>` : '',
+        instIssue ? `<button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="ontMigBuild()" title="扫描悬空实例/未处理留痕，生成 L2 迁移工单（幂等，不直接改数据）">🧩 生成迁移计划</button>` : ''
+      ].filter(Boolean).join(' ');
       return `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid ${tn.bd};border-radius:8px;margin-bottom:6px;background:${tn.bg};">
         <span style="flex:none;font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;background:${tn.fg};color:#fff;margin-top:1px;">${esc(sevLabel(x.severity))}</span>
         <div style="flex:1;min-width:0;">
@@ -1180,9 +1242,12 @@ async function oeConsistency(withInstances){
           <div style="font-size:11.5px;color:var(--txt,#222);margin-top:3px;">${esc(x.message)}</div>
           ${x.why?`<div style="font-size:11px;color:var(--mut);margin-top:3px;">❓ ${esc(x.why)}</div>`:''}
           ${x.fix?`<div style="font-size:11px;color:var(--mut);margin-top:3px;">🛠 ${esc(x.fix)}</div>`:''}
+          ${actBtns?`<div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;">${actBtns}</div>`:''}
         </div>
       </div>`;
     }).join('');
+    h += oeCqHtml(r.cq);
+    h += `<div style="padding:8px 0 0;"><button class="btn sm ghost" onclick="oeDlCheck()" title="Pellet DL 语义深检（~2s，手动低频）：抓结构规则抓不到的语义矛盾">🧠 DL 深检</button></div>`;
     h += `<div style="margin-top:10px;text-align:right;"><button class="btn ghost" onclick="closePanel()">关闭</button></div>`;
     openPanel('🩺 一致性校验结果', h);
   }catch(e){ box.innerHTML = '<span style="color:var(--red);">'+esc(e.message||e)+'</span>'; }
@@ -1197,6 +1262,38 @@ function _locateOntType(name){
     else setTimeout(_try, 300);
   };
   setTimeout(_try, 300);
+}
+
+// P0-1（2026-10-15）：一致性面板 → 影响预览（只读）。
+// 从编辑态数据取该类型完整字段构造 body（与 23-ontform.js saveOntType 同构），
+// POST impact-preview —— 语义是「如果现在保存该类型，存量实例会怎样」：
+// 对 rule_data_conflict（声明 vs 存量边）类问题正好返回违例清单，高危一目了然。
+async function oeImpactPreview(typeName){
+  const t = (ontData && ontData.types||[]).find(tt=>tt.name===typeName);
+  if(!t || !t.id){ toast('该类型不在编辑态数据中（可能来自快照口径），无法预览'); return; }
+  openPanel('🧭 影响预览 — '+typeName, '<div class="loading">计算中…</div>');
+  try{
+    const body = {tid: t.id, name: t.name, type_kind: t.type_kind,
+      properties: t.properties||{}, constraints: t.constraints||{},
+      description: t.description||'', parent_id: t.parent_id||null,
+      iri: t.iri||'', status: t.status||null,
+      profile_source: t.profile_source||'', profile_ref: t.profile_ref||''};
+    const pv = await api('/api/knowledge/ontology/impact-preview', {method:'POST', body:JSON.stringify(body)});
+    if(pv.error){ openPanel('🧭 影响预览 — '+typeName, `<div style="color:var(--red);padding:10px;font-size:12px;">${esc(pv.error)}</div>`); return; }
+    const tone = {red:['var(--red)','#FFF6F6','🔴 破坏性'],yellow:['#c77700','#FFFBF1','🟡 有违例需裁决'],green:['var(--grn,#2f855a)','#F4FBF6','🟢 无实例影响']}[pv.severity]||['#5a6675','#F7F9FB',pv.severity];
+    const rows = (pv.violations||[]).slice(0,20).map(v=>
+      `<div style="font-size:11px;color:var(--txt,#222);padding:3px 0;border-bottom:1px dashed var(--line);">${esc(typeof v==='string'?v:JSON.stringify(v))}</div>`).join('');
+    openPanel('🧭 影响预览 — '+typeName, `
+      <div style="border:1px solid ${tone[0]};border-radius:10px;padding:12px;background:${tone[1]};margin-bottom:10px;">
+        <b style="color:${tone[0]};font-size:13px;">${tone[2]}</b>
+        <div style="font-size:12px;margin-top:5px;line-height:1.7;">${esc(pv.summary||'')}</div>
+        ${pv.auto_fix!==undefined?`<div style="font-size:11px;color:var(--mut);margin-top:4px;">auto_fix（保存时自动内联迁移）：${pv.auto_fix?'是':'否'}</div>`:''}
+      </div>
+      ${pv.usage?`<div style="font-size:11.5px;color:var(--mut);margin-bottom:8px;">存量引用：${esc(JSON.stringify(pv.usage))}</div>`:''}
+      ${rows?`<div style="font-size:11px;color:var(--mut);margin-bottom:4px;">违例明细（≤20 条）：</div>${rows}
+        ${(pv.violations||[]).length>20?`<div style="font-size:11px;color:var(--mut);">…共 ${pv.violation_count||pv.violations.length} 条</div>`:''}`:''}
+      <div style="margin-top:10px;text-align:right;"><button class="btn ghost" onclick="closePanel()">关闭</button></div>`);
+  }catch(e){ openPanel('🧭 影响预览 — '+typeName, `<div style="color:var(--red);padding:10px;font-size:12px;">预览失败：${esc(e.message||e)}</div>`); }
 }
 
 // ── Cursor 式圈定 v2（2026-08-29，按用户截图样式）：选区浮动工具条（图1）+ 输入框引用 chip（图2）──

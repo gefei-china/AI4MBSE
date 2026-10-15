@@ -756,17 +756,26 @@ async function openOntVersionHistory(){
     // 2026-09-02 发布语义对齐：版本历史 = 已发布版本（发布产物）+ 草稿变更记录（自动日志，折叠）
     const releasedRows = rows.filter(r=>r.status==='released');
     const draftRows = rows.filter(r=>r.status!=='released');
+    // 2026-10-15（P0-3）：可回滚性**一律读后端 r.restorable**（判据=有无不可变快照），
+    // 前端**不得**用 status==='released' 自行推断 —— 实测有 2 个 released 但无快照的历史版本，
+    // 那种行显示成可点「启用」，点下去后端静默回落到编辑态、界面提示"成功"而实际没变。
+    const _rs = r => (r.restorable === undefined ? r.status==='released' : !!r.restorable);
+    const _rsReason = r => r.reason || '未发布（草稿版本无快照，本就不可作为消费基线）';
     const releasedList = releasedRows.map(r=>`
-      <div style="border:1px solid ${r.active?'var(--grn,#2f855a)':'var(--line)'};border-radius:8px;padding:8px 10px;margin:6px 0;background:${r.active?'#f0faf4':'#fff'};">
+      <div style="border:1px solid ${r.active?'var(--grn,#2f855a)':'var(--line)'};border-radius:8px;padding:8px 10px;margin:6px 0;background:${r.active?'#f0faf4':'#fff'};${!_rs(r)?'opacity:.72;':''}">
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
           <b style="color:var(--blue-d);min-width:64px;">${esc(r.version_label)}</b>
           <span class="st ok" title="已发布（稳定基线）">✅ 已发布</span>
+          ${_rs(r) ? '' : `<span class="st r" title="${esc(_rsReason(r))}">⛔ 不可回滚</span>`}
           ${_compatBadge(r)}
           ${r.active?'<span class="tag" style="border:1px solid var(--grn,#2f855a);color:var(--grn,#2f855a);" title="当前消费基线：AI 语义注入/图谱/导出以该版本为准">📌 消费基线（启用中）</span>':''}
           <span style="flex:1;"></span>
           <button class="btn sm ghost" style="padding:1px 8px;font-size:11px;" onclick="viewOntVersionSnapshot(${r.id})" title="查看该版本快照的完整本体数据（只读，不可变）">📋 数据</button>
-          ${!r.active && _ontVerPerm
+          ${!r.active && _ontVerPerm && _rs(r)
             ? `<button class="btn sm" style="padding:1px 8px;font-size:11px;" onclick="activateOntVersion(${r.id})" title="启用该版本为消费基线（快照不删，版本不可变）">▶ 启用</button>`
+            : ''}
+          ${!r.active && _ontVerPerm && !_rs(r)
+            ? `<button class="btn sm ghost" disabled style="padding:1px 8px;font-size:11px;cursor:not-allowed;opacity:.6;" title="${esc(_rsReason(r))}">▶ 启用（不可用）</button>`
             : ''}
         </div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:3px;">
@@ -774,6 +783,7 @@ async function openOntVersionHistory(){
           ${_diffBadge(r)}
         </div>
         <div style="color:var(--mut);font-size:11px;margin-top:1px;">🚀 ${esc((r.released_at||r.created_at||'').slice(0,16))} · ${esc(r.released_by||r.operator||'')}${r.snapshot_count?` · 快照 ${r.snapshot_count} 类型`:''}</div>
+        ${_rs(r) ? '' : `<div style="color:#c77700;font-size:10.5px;margin-top:2px;line-height:1.5;">⚠️ ${esc(_rsReason(r))}</div>`}
       </div>`).join('');
     // 2026-09-08 版本语义收敛：编辑态不再产生草稿版本行，「编辑留痕」区改读 ontology_change_logs
     //（比旧 draft 行更细：每条含 before/after 全行 diff）；存量草稿行（旧版本语义产物）保留折叠展示
@@ -814,8 +824,9 @@ async function openOntVersionHistory(){
       `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
         <b style="color:var(--blue-d);font-size:13px;">${releasedRows.length ? '已发布 '+esc(_activeRel.version_label||'') : '尚未发布'}</b>
         ${v.dirty?`<span class="st w" title="最近 ${v.pending} 条编辑留痕晚于当前基线发布时间——编辑只记录不升版本，点「发布当前数据」生成新版本">🟡 ${v.pending} 条未发布变更</span>`:''}
+        ${v.publish_gate?`<span class="st ${v.publish_gate==='warn'?'r':v.publish_gate==='high'?'b':''}" title="发布门禁档位（设置页 ontology.publish_gate 可调）：${esc(v.publish_gate_desc||'')}——发布前按「待发布编辑态数据」跑一致性体检，未过档位即拦截">🚦 门禁 ${esc(v.publish_gate)}（${esc(v.publish_gate_desc||'')}）</span>`:''}
         ${_ontVerPerm
-          ? `<button class="btn sm" style="padding:3px 12px;font-size:12px;" onclick="publishOntology()" title="将当前编辑的本体数据发布为新版本（按变更 diff 自动定 SemVer：破坏性=major/新增=minor，生成不可变快照并设为消费基线）">🚀 发布当前数据</button>
+          ? `<button class="btn sm" style="padding:3px 12px;font-size:12px;" onclick="publishOntology()" title="将当前编辑的本体数据发布为新版本（按变更 diff 自动定 SemVer：破坏性=major/新增=minor，生成不可变快照并设为消费基线；发布前过门禁档位检查）">🚀 发布当前数据</button>
              <button class="btn sm ghost" style="padding:3px 10px;font-size:12px;" onclick="openOntMigrations()" title="本体变更→实例迁移计划列表（发布时自动生成，支持预演与确认执行；也可手动扫描历史悬空实例）">🧩 实例迁移</button>`
           : ''}
         <span style="flex:1;"></span>
@@ -870,11 +881,16 @@ async function openOntMigrations(){
     const _html = r.plans.map(p=>{
       const ops = p.ops.map(o=>{
         const st = {pending:['w','待处理'],dry_run:['b','已预演'],applied:['g','已执行'],failed:['r','失败'],dismissed:['','已忽略']}[o.status]||['',''];
+        // P1-3（2026-10-15）：flag_violations 的违例明细已随 op 存档（payload.violations），人工裁决从这里看
+        const _viol = (o.payload&&o.payload.violations)||[];
+        const _violBtn = (_viol.length && o.op_type==='flag_violations')
+          ? `<button class="btn sm ghost" style="font-size:10px;padding:0 6px;" onclick="ontMigViolations('${esc(o.target)}',${p.plan_id},'${o.id||''}')" title="查看存档的违例明细（人工裁决依据）">📋 明细 ${_viol.length}</button>` : '';
         return `<div style="display:flex;gap:6px;align-items:baseline;padding:4px 2px;border-bottom:1px dashed var(--line);font-size:11.5px;flex-wrap:wrap;">
           <span class="st ${st[0]}" style="font-size:9.5px;padding:0 5px;">${st[1]}</span>
           <b style="min-width:70px;">${_migOpLbl[o.op_type]||esc(o.op_type)}</b>
           <span style="color:var(--blue-d);">${esc(o.target)}</span>
           <span style="color:var(--mut);">影响 ${o.affected} 条</span>
+          ${_violBtn}
           <span style="flex:1;min-width:120px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;" title="${esc(o.note||'')}">${esc(o.note||esc((o.payload||{}).reason||''))}</span>
         </div>`;
       }).join('');
@@ -921,6 +937,30 @@ async function ontMigBuild(){
     toast(`已生成迁移计划 #${r.plan_id}（${r.ops} op / 影响 ${r.affected} 条）`);
     openOntMigrations();
   }catch(e){ toast('生成失败：'+e.message); }
+}
+// P1-3（2026-10-15）：flag_violations 存档明细查看（人工裁决依据）。
+// 数据源=GET /migrations 列表（payload.violations 随 op 存档），不另开端点。
+async function ontMigViolations(target, planId, opId){
+  openPanel('📋 违例明细 — '+target, '<div class="loading">加载中…</div>');
+  try{
+    const r = await api('/api/knowledge/ontology/migrations');
+    if(r.error){ openPanel('📋 违例明细 — '+target, `<div style="color:var(--red);padding:10px;">${esc(r.error)}</div>`); return; }
+    const plan = (r.plans||[]).find(p=>p.plan_id===planId);
+    const op = plan && (plan.ops||[]).find(o=>String(o.id)===String(opId) || o.target===target && o.op_type==='flag_violations');
+    const viol = (op && op.payload && op.payload.violations) || [];
+    if(!viol.length){ openPanel('📋 违例明细 — '+target, '<div style="padding:12px;color:var(--mut);font-size:12px;">该 op 无存档明细（P1-3 修复前的旧工单只有 sample 抽样）</div>'); return; }
+    const total = (op.payload&&op.payload.violations_total) || op.affected || viol.length;
+    const rows = viol.map(v=>`<div style="padding:6px 8px;border-bottom:1px dashed var(--line);font-size:11.5px;line-height:1.6;">
+      <span class="st ${v.kind==='domain'?'b':'w'}" style="font-size:9.5px;padding:0 5px;">${v.kind==='domain'?'定义域':'值域'}</span>
+      <b>${esc(v.source_type||'')}</b> <span style="color:var(--mut);">—${v.kind==='domain'?'[':'}—'}</span> <b>${esc(v.target_type||'')}</b>
+      <span style="color:var(--red);">${esc(v.detail||'')}</span>
+      <span style="color:var(--mut);font-size:10.5px;">（边 #${v.relation_id||'-'} · ${esc(v.source_id||'')}→${esc(v.target_id||'')}）</span>
+    </div>`).join('');
+    openPanel('📋 违例明细 — '+target, `
+      <div style="font-size:11.5px;color:var(--mut);margin-bottom:8px;">共 ${total} 条违例 · 存档明细 ${viol.length} 条 · 裁决方式：放宽约束 或 修正存量边端点（改数据请走实例编辑，不在本面板自动改）</div>
+      <div style="border:1px solid var(--line);border-radius:8px;max-height:60vh;overflow:auto;">${rows}</div>
+      <div style="margin-top:10px;text-align:right;"><button class="btn ghost" onclick="closePanel()">关闭</button></div>`);
+  }catch(e){ openPanel('📋 违例明细 — '+target, `<div style="color:var(--red);padding:10px;">加载失败：${esc(e.message||e)}</div>`); }
 }
 // 2026-09-02 P1：回滚（切换消费基线到指定已发布版本，快照不删）
 async function activateOntVersion(vid){
@@ -2351,3 +2391,258 @@ let oiPanOn = false, oiPanStartX = 0, oiPanStartY = 0, oiPanOrigX = 0, oiPanOrig
 // 全局图谱视图（共享 zoom/pan）
 const graphView = {scale: 1, panX: 0, panY: 0};
 let ogFitKey = '';   // 2026-09-07 筛选/聚焦视图切换检测：变更时重置 graphView（内层 g 变换），避免全量 fit 缩放叠加
+
+// ══ P1-4（2026-10-15）：CQ（能力问题）管理面板 ═══════════════════════════════
+// 入口：本体页顶栏「❓ CQ」按钮。结果查看另见 🩺 一致性校验滑窗的 CQ 分区（09-impact.js）。
+// 机制：每条 CQ = 业务问题 + 只读 SQL + 期望（empty/nonempty）；发布门禁与 /validate 自动执行，
+// fail 不拦截发布（R1），落 ontology_cq_logs 可追责。此面板负责登记/修改/删除/手动执行/看历史。
+async function openOntCQs(){
+  openPanel('❓ 能力问题（CQ）管理', '<div class="loading">加载中…</div>');
+  try{
+    const r = await api('/api/knowledge/ontology/cqs');
+    if(r.error){ openPanel('❓ 能力问题（CQ）管理', `<div style="color:var(--red);padding:12px;font-size:12px;">${esc(r.error)}</div>`); return; }
+    const qs = r.questions || [];
+    window.__ontCqs = qs;   // 供 ontCqEdit/ontCqDel 按 id 取行（避免 onclick 字符串传对象）
+    const stIco = s => s==='pass' ? '<span style="color:var(--grn,#2f855a);font-weight:700;">✅ pass</span>'
+                    : s==='fail' ? '<span style="color:var(--red);font-weight:700;">❌ fail</span>'
+                    : s==='skip' ? '<span style="color:#c77700;font-weight:700;">⚠️ skip</span>'
+                    : '<span style="color:var(--mut);">未执行</span>';
+    const rows = qs.map(q=>{
+      const lr = q.last_run;
+      return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:7px;background:#fff;">
+        <div style="display:flex;align-items:flex-start;gap:8px;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12.5px;font-weight:600;">${esc(q.question)}${q.source==='seed'?' <span class="tag" style="font-size:9.5px;">内置</span>':''}${q.enabled?'':' <span class="tag" style="font-size:9.5px;color:var(--mut);">已停用</span>'}</div>
+            <div style="font-size:10.5px;color:var(--mut);margin-top:2px;">期望${q.expected==='nonempty'?'非空':'为空'} · 最近：${lr?stIco(lr.status)+' <span style="color:var(--mut);">'+esc(lr.ts||'')+(lr.message?' · '+esc(lr.message):'')+'</span>':'<span style="color:var(--mut);">未执行过</span>'}</div>
+          </div>
+          <div style="flex:none;display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;">
+            <button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="ontCqRunOne(${q.id})" title="立即执行该问题（结果落执行历史）">▶ 执行</button>
+            <button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="ontCqEdit(${q.id})">✎ 编辑</button>
+            <button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;color:var(--red);" onclick="ontCqDel(${q.id})">🗑</button>
+          </div>
+        </div>
+      </div>`; }).join('');
+    openPanel('❓ 能力问题（CQ）管理', `
+      <div style="font-size:11.5px;color:var(--mut);line-height:1.6;margin-bottom:10px;">
+        CQ 回答「这个本体是否建对了域」的<b>业务问题</b>（validation 层），与「🩺 一致性检查」的机械体检（verification 层）互补。<br>
+        发布门禁与体检会自动执行全部启用的 CQ；<b>fail 不阻断发布</b>，但随发布留痕、可追责。<br>
+        查询仅允许单条只读 SELECT（对 entities / relations / ontology_types）。</div>
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <button class="btn sm" onclick="ontCqEdit()">＋ 登记新问题</button>
+        <button class="btn sm ghost" onclick="ontCqRunAll()">▶ 执行全部</button>
+        <button class="btn sm ghost" onclick="ontCqLogs()">🕘 执行历史</button>
+      </div>
+      ${rows || '<div class="hint">（无 CQ，点「登记新问题」创建）</div>'}
+    `);
+  }catch(e){ openPanel('❓ 能力问题（CQ）管理', `<div style="color:var(--red);padding:12px;font-size:12px;">加载失败：${esc(e.message||e)}</div>`); }
+}
+
+async function ontCqRunAll(){
+  toast('执行中…');
+  try{
+    const r = await api('/api/knowledge/ontology/cqs/run', {method:'POST', body:JSON.stringify({})});
+    if(r.error){ toast('执行失败：'+r.error); return; }
+    const s = r.summary || {};
+    toast(`CQ 完成：pass ${s.total-(s.failed||0)-(s.skipped||0)} / fail ${s.failed||0} / skip ${s.skipped||0}`);
+    openOntCQs();
+  }catch(e){ toast('执行失败：'+(e.message||e)); }
+}
+
+async function ontCqRunOne(id){
+  try{
+    const r = await api('/api/knowledge/ontology/cqs/run', {method:'POST', body:JSON.stringify({id})});
+    if(r.error){ toast('执行失败：'+r.error); return; }
+    const x = (r.results||[])[0] || {};
+    toast(x.status==='pass' ? '✅ pass — '+ (x.message||'符合期望')
+        : x.status==='fail' ? '❌ fail — '+ (x.message||'不符合期望')
+        : '⚠️ skip — '+ (x.message||'执行不了'));
+    openOntCQs();
+  }catch(e){ toast('执行失败：'+(e.message||e)); }
+}
+
+function ontCqEdit(id){
+  const q = id ? (window.__ontCqs||[]).find(x=>x.id===id) : null;
+  openPanel(q ? '✎ 编辑 CQ #'+id : '＋ 登记新 CQ', `
+    <div style="padding:2px 0;">
+      <div style="font-size:11.5px;color:var(--mut);margin-bottom:6px;">业务问题（中文，给人读）</div>
+      <input id="ocq-q" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;" value="${q?escA(q.question):''}" placeholder="例：所有需求是否都被满足关系覆盖？">
+      <div style="font-size:11.5px;color:var(--mut);margin:8px 0 4px;">只读查询（单条 SELECT，结果为「空 / 非空」即答案）</div>
+      <textarea id="ocq-sql" rows="7" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:11.5px;font-family:Consolas,monospace;" placeholder="SELECT ... FROM relations r WHERE ...">${q?esc(q.query):''}</textarea>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:8px;">
+        <span style="font-size:11.5px;color:var(--mut);">期望结果：</span>
+        <label style="font-size:12px;"><input type="radio" name="ocq-exp" value="empty" ${!q||q.expected==='empty'?'checked':''}> 为空（0 行 = 绿）</label>
+        <label style="font-size:12px;"><input type="radio" name="ocq-exp" value="nonempty" ${q&&q.expected==='nonempty'?'checked':''}> 非空（&gt;0 行 = 绿）</label>
+      </div>
+      <div id="ocq-err" style="color:var(--red);font-size:11.5px;margin-top:6px;display:none;"></div>
+      <div style="text-align:right;margin-top:10px;display:flex;gap:6px;justify-content:flex-end;">
+        <button class="btn ghost sm" onclick="openOntCQs()">取消</button>
+        <button class="btn sm" onclick="ontCqSave(${id||0})">保存</button>
+      </div>
+    </div>`);
+  if(q) window.__ontCqEditing = q; else window.__ontCqEditing = null;
+}
+
+async function ontCqSave(id){
+  const question = (document.getElementById('ocq-q')||{}).value?.trim();
+  const query = (document.getElementById('ocq-sql')||{}).value?.trim();
+  const exp = (document.querySelector('input[name=ocq-exp]:checked')||{}).value || 'empty';
+  const errBox = document.getElementById('ocq-err');
+  const showErr = m => { errBox.textContent = m; errBox.style.display = 'block'; };
+  if(!question) return showErr('问题不能为空');
+  if(!query) return showErr('查询不能为空');
+  try{
+    const r = id ? await api('/api/knowledge/ontology/cqs/'+id, {method:'PUT', body:JSON.stringify({question, query, expected:exp})})
+                 : await api('/api/knowledge/ontology/cqs', {method:'POST', body:JSON.stringify({question, query, expected:exp})});
+    if(r.error) return showErr(r.error);
+    toast('已保存');
+    openOntCQs();
+  }catch(e){ showErr(e.message||e); }
+}
+
+async function ontCqDel(id){
+  const q = (window.__ontCqs||[]).find(x=>x.id===id);
+  if(!confirm('删除该 CQ？\n\n'+((q&&q.question)||('#'+id))+'\n\n（执行历史保留，问题本身移除）')) return;
+  try{
+    const r = await api('/api/knowledge/ontology/cqs/'+id, {method:'DELETE'});
+    if(r.error){ toast('删除失败：'+r.error); return; }
+    toast('已删除');
+    openOntCQs();
+  }catch(e){ toast('删除失败：'+(e.message||e)); }
+}
+
+async function ontCqLogs(){
+  openPanel('🕘 CQ 执行历史', '<div class="loading">加载中…</div>');
+  try{
+    const r = await api('/api/knowledge/ontology/cqs/logs?limit=100');
+    if(r.error){ openPanel('🕘 CQ 执行历史', `<div style="color:var(--red);padding:12px;font-size:12px;">${esc(r.error)}</div>`); return; }
+    const rows = (r.logs||[]).map(l=>{
+      const c = l.status==='pass' ? 'var(--grn,#2f855a)' : l.status==='fail' ? 'var(--red)' : '#c77700';
+      const srcTag = l.source==='gate' ? '🚦 发布门禁' : l.source==='validate' ? '🩺 体检' : '▶ 手动';
+      return `<div style="display:flex;align-items:flex-start;gap:8px;padding:5px 8px;border-bottom:1px solid var(--line);font-size:11px;">
+        <span style="flex:none;color:var(--mut);width:130px;">${esc(l.ts||'')}</span>
+        <span style="flex:none;width:70px;color:var(--mut);">${srcTag}</span>
+        <span style="flex:none;width:44px;font-weight:700;color:${c};">${esc(l.status)}</span>
+        <span style="flex:1;min-width:0;">${esc(l.question||('#'+l.question_id))}${l.message?` <span style="color:var(--mut);">— ${esc(l.message)}</span>`:''}</span>
+      </div>`; }).join('');
+    openPanel('🕘 CQ 执行历史', `<div style="font-size:11px;color:var(--mut);margin-bottom:8px;">最近 ${(r.logs||[]).length} 条（含发布门禁/体检/手动三个来源 —— 「谁放行了带红 CQ 的发布」可在此追责）</div>${rows || '<div class="hint">（暂无执行记录）</div>'}`);
+  }catch(e){ openPanel('🕘 CQ 执行历史', `<div style="color:var(--red);padding:12px;font-size:12px;">加载失败：${esc(e.message||e)}</div>`); }
+}
+
+// ══ P2-4（2026-10-15）：SWRL 规则管理面板 ════════════════════════════════════
+// 背景：/api/swrl/* 13 个端点自 2026-09-11 起就在，但前端零入口（注释里的
+// swrl_editor.html 从未被建出）—— SWRL 孤岛的成因之一。此面板补齐入口。
+// 注意：/run 消费引擎 load() 缓存，后端 run_reasoning 每次重新 load（安全）。
+async function openOntSWRL(){
+  openPanel('⚖ SWRL 规则（推理）', '<div class="loading">加载中…</div>');
+  try{
+    const [dep, rl] = await Promise.all([
+      api('/api/swrl/dependency'), api('/api/swrl/rules')]);
+    if(rl.error){ openPanel('⚖ SWRL 规则（推理）', `<div style="color:var(--red);padding:12px;font-size:12px;">${esc(rl.error)}</div>`); return; }
+    const rules = rl.rules || [];
+    window.__ontSwrlRules = rules;
+    const depOk = dep && dep.owlready2 && dep.jpype;
+    const facts0 = await api('/api/swrl/facts?limit=200');
+    const facts = (facts0.facts || []);
+    const pend = facts.filter(f => !f.is_accepted);
+    const rows = rules.map(r=>`
+      <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:7px;background:#fff;">
+        <div style="display:flex;align-items:flex-start;gap:8px;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12.5px;font-weight:600;">${esc(r.name)}${r.is_active?'':' <span class="tag" style="font-size:9.5px;color:var(--mut);">已停用</span>'}</div>
+            <div style="font-size:10.5px;font-family:Consolas,monospace;color:var(--mut);margin-top:2px;word-break:break-all;">${esc(r.body)} → ${esc(r.head)}</div>
+            ${r.last_inferred_count!=null?`<div style="font-size:10px;color:var(--mut);margin-top:2px;">最近一次：推出 ${r.last_inferred_count} 条事实</div>`:''}
+          </div>
+          <div style="flex:none;display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;">
+            <button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="ontSwrlToggle(${r.id})">${r.is_active?'⏸ 停用':'▶ 启用'}</button>
+            <button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;color:var(--red);" onclick="ontSwrlDel(${r.id})">🗑</button>
+          </div>
+        </div>
+      </div>`).join('');
+    openPanel('⚖ SWRL 规则（推理）', `
+      <div style="font-size:11.5px;color:var(--mut);line-height:1.6;margin-bottom:10px;">
+        SWRL 规则在本体之上做<b>规则推理</b>（如传递闭包、跨关系蕴含），产出事实（facts）供人工裁决后采纳。<br>
+        依赖：${depOk ? '<span style="color:var(--grn,#2f855a);">✅ owlready2 + JPype + 捆绑 JRE 就绪</span>' : `<span style="color:#c77700;">⚠️ 未就绪：${esc((dep&&dep.install_hint)||'')}</span>`}。<br>
+        ⚠️ 规则引用的类/属性必须在本体已注册，否则规则零产出（体检 swrl_orphan 会报警）。</div>
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <button class="btn sm" onclick="ontSwrlEdit()">＋ 新建规则</button>
+        <button class="btn sm ghost" onclick="ontSwrlRun()" ${depOk ? '' : 'disabled title="owlready2/JPype 未安装，推理不可用（见上方依赖提示）"'}>▶ 执行推理</button>
+        <button class="btn sm ghost" onclick="openOntCQs()">❓ CQ</button>
+      </div>
+      ${rows || '<div class="hint">（无规则）</div>'}
+      <div style="margin-top:12px;font-size:12px;font-weight:700;">🧠 推理事实（${pend.length} 条待裁决 / ${facts.length} 条历史）</div>
+      <div style="max-height:240px;overflow:auto;margin-top:6px;">${facts.length ? facts.map(f=>`
+        <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid var(--line);font-size:11px;">
+          <span style="flex:1;min-width:0;font-family:Consolas,monospace;">${esc(f.subject)} <b>${esc(f.predicate)}</b> ${esc(f.object)}</span>
+          ${f.is_accepted ? '<span style="color:var(--grn,#2f855a);font-weight:700;">已采纳</span>'
+            : `<button class="btn sm ghost" style="font-size:10px;padding:0 6px;" onclick="ontSwrlFact(${f.id},1)">✓ 采纳</button>
+               <button class="btn sm ghost" style="font-size:10px;padding:0 6px;color:var(--red);" onclick="ontSwrlFact(${f.id},0)">✕ 拒绝</button>`}
+        </div>`).join('') : '<div class="hint">（暂无推理事实——点「执行推理」）</div>'}</div>
+    `);
+  }catch(e){ openPanel('⚖ SWRL 规则（推理）', `<div style="color:var(--red);padding:12px;font-size:12px;">加载失败：${esc(e.message||e)}</div>`); }
+}
+
+async function ontSwrlRun(){
+  toast('Pellet 推理中…（约 2s）');
+  try{
+    const r = await api('/api/swrl/run', {method:'POST', body:JSON.stringify({mode:'warn'})});
+    if(r.error || r.ok === false){ toast('推理失败：'+(r.error||'')); return; }
+    const s = r.summary || r;
+    toast(`推理完成：规则 ${s.rules_run ?? '?'} 条${s.rules_skipped?`（跳过 ${s.rules_skipped}）`:''}${s.warnings&&s.warnings.length?'，'+s.warnings[0]:''}`);
+    openOntSWRL();
+  }catch(e){ toast('推理失败：'+(e.message||e)); }
+}
+
+async function ontSwrlToggle(id){
+  try{ const r = await api(`/api/swrl/rules/${id}/toggle`, {method:'POST'});
+    if(r.error){ toast('失败：'+r.error); return; }
+    toast(r.is_active ? '已启用' : '已停用'); openOntSWRL();
+  }catch(e){ toast('失败：'+(e.message||e)); }
+}
+
+async function ontSwrlDel(id){
+  const r = (window.__ontSwrlRules||[]).find(x=>x.id===id);
+  if(!confirm('删除 SWRL 规则？\n\n'+((r&&r.name)||('#'+id)))) return;
+  try{ const d = await api(`/api/swrl/rules/${id}`, {method:'DELETE'});
+    if(d.error){ toast('失败：'+d.error); return; }
+    toast('已删除'); openOntSWRL();
+  }catch(e){ toast('失败：'+(e.message||e)); }
+}
+
+function ontSwrlEdit(){
+  openPanel('＋ 新建 SWRL 规则', `
+    <div style="padding:2px 0;">
+      <div style="font-size:11.5px;color:var(--mut);margin-bottom:4px;">规则名</div>
+      <input id="osw-name" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;" placeholder="例：ContainsTransitive">
+      <div style="font-size:11.5px;color:var(--mut);margin:8px 0 4px;">规则体（Manchester 语法，atom 逗号分隔；类/属性必须已在本体注册）</div>
+      <textarea id="osw-body" rows="3" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:11.5px;font-family:Consolas,monospace;" placeholder="CONTAINS(?a, ?b), CONTAINS(?b, ?c)"></textarea>
+      <div style="font-size:11.5px;color:var(--mut);margin:8px 0 4px;">规则头（结论）</div>
+      <input id="osw-head" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:11.5px;font-family:Consolas,monospace;" placeholder="CONTAINS(?a, ?c)">
+      <div id="osw-err" style="color:var(--red);font-size:11.5px;margin-top:6px;display:none;"></div>
+      <div style="text-align:right;margin-top:10px;display:flex;gap:6px;justify-content:flex-end;">
+        <button class="btn ghost sm" onclick="openOntSWRL()">取消</button>
+        <button class="btn sm" onclick="ontSwrlSave()">保存</button>
+      </div>
+    </div>`);
+}
+
+async function ontSwrlSave(){
+  const name = (document.getElementById('osw-name')||{}).value?.trim();
+  const body = (document.getElementById('osw-body')||{}).value?.trim();
+  const head = (document.getElementById('osw-head')||{}).value?.trim();
+  const errBox = document.getElementById('osw-err');
+  const showErr = m => { errBox.textContent = m; errBox.style.display = 'block'; };
+  if(!name || !body || !head) return showErr('规则名 / 规则体 / 规则头 均不能为空');
+  try{
+    const r = await api('/api/swrl/rules', {method:'POST', body:JSON.stringify({name, body, head, comment:'人工登记'})});
+    if(r.error) return showErr(r.error);
+    toast('已保存'); openOntSWRL();
+  }catch(e){ showErr(e.message||e); }
+}
+
+async function ontSwrlFact(id, accept){
+  try{
+    const r = await api(`/api/swrl/facts/${id}/${accept?'accept':'reject'}`, {method:'POST'});
+    if(r.error){ toast('失败：'+r.error); return; }
+    toast(accept ? '已采纳' : '已拒绝'); openOntSWRL();
+  }catch(e){ toast('失败：'+(e.message||e)); }
+}

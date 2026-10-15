@@ -1,0 +1,60 @@
+{
+ "results": [
+  {
+   "name": "S0 进入本体模型工作台",
+   "ok": true,
+   "detail": "深链 go(kb,kb-c) 完成，#ont-subtab-row 可见"
+  },
+  {
+   "name": "S1 顶栏按钮底边对齐（真实 app）",
+   "ok": true,
+   "detail": "底边差=0px 高度差=16px n=7"
+  },
+  {
+   "name": "S2a /validate 返回结构化体检",
+   "ok": true,
+   "detail": "total=52 high=0 warn=0 source=snapshot rv=2026-10-15.4"
+  },
+  {
+   "name": "S2b 前端呈现体检结论",
+   "ok": true,
+   "detail": "⚠️ 28 项问题（待补项 1 · 设计说明 27）"
+  },
+  {
+   "name": "S3a CQ 面板列出问题",
+   "ok": true,
+   "detail": "6 条（预期 6 种子）"
+  },
+  {
+   "name": "S3b 执行全部 CQ 有结果",
+   "ok": true,
+   "detail": "{\"pass\":6}"
+  },
+  {
+   "name": "S4a SWRL 执行推理产出事实",
+   "ok": true,
+   "detail": "facts=0 keys=rules_run,rules_skipped,facts_inferred,errors,warnings,started_at"
+  },
+  {
+   "name": "S4b 采纳一条推理事实",
+   "ok": true,
+   "detail": "{\"ok\":true,\"affected\":1}"
+  },
+  {
+   "name": "S5 版本历史面板加载",
+   "ok": true,
+   "detail": "含版本号/发布字样"
+  }
+ ],
+ "api": [
+  "/api/knowledge/ontology/version",
+  "/api/knowledge/ontology/validate",
+  "/api/knowledge/ontology/cqs",
+  "/api/knowledge/ontology/cqs/run",
+  "/api/swrl/rules",
+  "/api/swrl/dependency",
+  "/api/swrl/facts?limit=200",
+  "/api/swrl/run",
+  "/api/swrl/facts/27/accept"
+ ]
+}

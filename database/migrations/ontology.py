@@ -501,3 +501,83 @@ def _migrate_ontology_instance_migrations(conn):
     c.execute("CREATE INDEX IF NOT EXISTS idx_entities_entity_type ON entities(entity_type)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_relations_relation_type ON relations(relation_type)")
     conn.commit()
+
+
+def _migrate_ontology_health_logs(conn):
+    """2026-10-15（P0-2）本体体检历史表：把「一次性体检」变成「持续守护」。
+
+    为什么需要：此前 `_ontology_check` 的结论只在**调用那一刻**存在于响应里，
+    关掉页面即丢失 —— 于是"本体现在几处 low"只能靠人再点一次才知道，
+    而"上次 3 处、这次 1 处，中间是否反复"这类**漂移**没有任何记录可查。
+    本表让每次真实体检留一行，形成可比较的时间序列。
+
+    字段口径（与 `_ontology_check` 返回**同源**，不另立一套）：
+      · ts / source / ontology_version_id：口径可复现（快照 vs 编辑态、读哪个版本）
+      · high/warn/low/info + total：档位计数
+      · rule_version / rule_count：**规则目录版本**——规则一改，同一份数据的问题数会变，
+        不记规则版本就无法区分"数据变差了"还是"判据变严了"（这是趋势线最容易骗人的地方）
+      · degraded_count：本次体检有几项扫描被跳过（>0 结论不完整，不能与完整体检直接比）
+      · instances_checked：是否含逐实例扫描（慢口径，与默认口径不可直接比较）
+      · codes：该次各问题码计数 JSON（看**问题类型**的此消彼长，而不只看总数）
+
+    幂等：CREATE TABLE IF NOT EXISTS，仅建表不写数据（写入由体检请求按需触发）。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS ontology_health_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,                       -- 体检时刻（%Y-%m-%d %H:%M:%S）
+        source TEXT DEFAULT '',                 -- snapshot（消费口径）| current（编辑态）
+        ontology_version_id INTEGER DEFAULT 0,  -- 体检所读的 active 版本 id
+        total INTEGER DEFAULT 0,                -- 类型总数
+        high INTEGER DEFAULT 0,
+        warn INTEGER DEFAULT 0,
+        low INTEGER DEFAULT 0,
+        info INTEGER DEFAULT 0,
+        rule_version TEXT DEFAULT '',           -- 规则目录版本（区分"数据变差"vs"判据变严"）
+        rule_count INTEGER DEFAULT 0,
+        degraded_count INTEGER DEFAULT 0,       -- >0 表示本次结论不完整，不可与完整体检直接比
+        instances_checked INTEGER DEFAULT 0,    -- 1=含逐实例扫描（慢口径）
+        codes TEXT DEFAULT '{}',                -- {问题码: 条数} JSON
+        note TEXT DEFAULT ''                    -- 留痕说明（如触发来源）
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ohl_ts ON ontology_health_logs(ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ohl_vid ON ontology_health_logs(ontology_version_id)")
+    conn.commit()
+
+
+def _migrate_ontology_questions(conn):
+    """P1-4（2026-10-15）：CQ（能力问题）机制两表。
+
+    · ontology_questions —— 问题登记：业务问题 + 只读查询 + 期望（empty=结果应为空 / nonempty=应非空）。
+      业界用 SPARQL ASK 实现 CQ；本工程数据真源在 SQLite（Fuseki 是投影且可能不在线，
+      发布门禁不能依赖它）→ kind 仅 'sql'，引擎侧只读 SELECT 白名单（services/ontology_cq.py）。
+    · ontology_cq_logs —— 执行历史：门禁/体检/手动执行各留一行/题，
+      可追责「谁放行了带红 CQ 的发布」（对齐 ontology_health_logs 的 P0-2 纪律）。
+
+    幂等：CREATE TABLE IF NOT EXISTS，仅建表不写数据（种子由 ensure_seed 按需补）。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS ontology_questions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        question TEXT NOT NULL,                 -- 业务问题（中文，给人读）
+        kind TEXT NOT NULL DEFAULT 'sql',       -- 查询语言（MVP 仅 sql）
+        query TEXT NOT NULL,                    -- 只读查询（SELECT）
+        expected TEXT NOT NULL DEFAULT 'empty', -- empty=0 行为绿 / nonempty=>0 行为绿
+        enabled INTEGER NOT NULL DEFAULT 1,
+        source TEXT NOT NULL DEFAULT 'user',    -- seed=内置种子 / user=人工登记
+        created_by TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS ontology_cq_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT DEFAULT CURRENT_TIMESTAMP,
+        question_id INTEGER NOT NULL,
+        source TEXT DEFAULT '',                 -- gate（发布门禁）/ validate / manual
+        status TEXT NOT NULL,                   -- pass / fail / skip
+        row_count INTEGER DEFAULT 0,
+        message TEXT DEFAULT ''
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ocq_ts ON ontology_cq_logs(ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ocq_qid ON ontology_cq_logs(question_id)")
+    conn.commit()

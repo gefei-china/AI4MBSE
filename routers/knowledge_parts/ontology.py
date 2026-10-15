@@ -58,6 +58,16 @@ def ontology_add_type(body: OntologyTypeIn, conn=Depends(db_session),
     errs = _normalize_relation_domain_range(conn, body)
     if errs:
         return JSONResponse({"error": "; ".join(errs)}, 400)
+    # P1-5（2026-10-15）：inverse_of 必须指向已注册的 relation 类型且不能自指（防悬空反向引用）
+    if body.type_kind == "relation":
+        _inv = str((body.constraints or {}).get("inverse_of") or "").strip()
+        if _inv:
+            if _inv == body.name:
+                return JSONResponse({"error": "inverse_of 不能指向自身"}, 400)
+            _rel_names = {r["name"] for r in conn.execute(
+                "SELECT name FROM ontology_types WHERE type_kind='relation'").fetchall()}
+            if _inv not in _rel_names:
+                return JSONResponse({"error": f"inverse_of 指向不存在的关系类型: {_inv}"}, 400)
     # P0-1：IRI 主轴——空则按策略自动生成；显式指定则校验唯一
     from ontology_semantics import make_iri
     iri = (body.iri or "").strip()
@@ -130,6 +140,15 @@ def ontology_update_type(tid: int, body: OntologyTypeIn, conn=Depends(db_session
         _badc = sorted({c for c in body.constraints["characteristics"] if c not in _OWL_CHARS})
         if _badc:
             return JSONResponse({"error": f"非法推理性质: {'、'.join(_badc)}（支持: 传递/对称/反对称/自反/函数型/反函数型）"}, 400)
+    # P1-5（2026-10-15）：inverse_of 必须指向已注册的 relation 类型且不能自指（防悬空反向引用）
+    _inv = str((body.constraints or {}).get("inverse_of") or "").strip()
+    if _inv:
+        if _inv == body.name:
+            return JSONResponse({"error": "inverse_of 不能指向自身"}, 400)
+        _rel_names = {r["name"] for r in conn.execute(
+            "SELECT name FROM ontology_types WHERE type_kind='relation'").fetchall()}
+        if _inv not in _rel_names:
+            return JSONResponse({"error": f"inverse_of 指向不存在的关系类型: {_inv}"}, 400)
     # R4：关系端点基数 card_src/card_tgt 校验（SHACL 基数输入）
     for _ck in ("card_src", "card_tgt"):
         _cd = body.constraints.get(_ck)

@@ -3,6 +3,7 @@
 
 由 tools/split_router_knowledge.py 从 routers/knowledge.py 机械切分而成（本文件是各分片共享的 router 与 helper 装配点）；⚠️ 切分脚本**已一次性执行完毕、不可重跑**（重跑会以薄入口为输入、覆盖本目录）—— 此后本文件按普通源码维护。"""
 import json
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -34,6 +35,24 @@ from models import (
 router = APIRouter(tags=["知识库"])
 
 RELEASE_BRANCH = "release"
+
+# P2-1（2026-10-15）：OWL 推理特性互斥对（单一真源）。
+# asymmetric 蕴含非自反 ⇒ 与 reflexive 互斥（Pellet 实测 ALLOCATED_TO reflexive+asymmetric
+# 直接判本体 inconsistent）；symmetric+asymmetric 同理。symmetric+irreflexive 合法（空关系）。
+_CHAR_MUTEX = (("symmetric", "asymmetric"), ("reflexive", "asymmetric"))
+
+# P2-4：SWRL atom 提取的排除清单 —— SWRL 内建函数（语法与属性 atom 相同：
+# lessThan(?a,?b) / add(?x,?y,?z)，无法从形态区分，只能枚举；3+ 变量 atom 一律按内建处理）。
+_SWRL_BUILTINS = frozenset({
+    "lessThan", "lessThanOrEqual", "greaterThan", "greaterThanOrEqual",
+    "equal", "notEqual", "add", "subtract", "multiply", "divide", "pow",
+    "abs", "modulo", "round", "ceiling", "floor", "min", "max",
+    "stringLiteralEqual", "stringConcat", "stringLength", "stringMatches",
+    "anyURI", "notEmpty", "addToCollection",
+})
+_SWRL_ATOM_RE = re.compile(
+    r"([A-Za-z_][\w\u4e00-\u9fff]*)\s*\(\s*(\?[\w\u4e00-\u9fff]*"
+    r"(?:\s*,\s*\?[\w\u4e00-\u9fff]*)*)\s*\)")
 
 # 写操作权限：设计师（kb_review:modify）与知识工程师（kb_ontology:edit）双角色放行
 WRITE_PERMS = [("kb_review", "modify"), ("kb_ontology", "edit")]
@@ -394,7 +413,57 @@ def _check_brief(chk) -> dict:
     d["ontology_version_id"] = chk.get("ontology_version_id")
     d["rule_version"] = chk.get("rule_version")
     d["degraded"] = list(chk.get("degraded") or [])
+    # P1-4：CQ（能力问题）摘要随发布留痕下发（fail 不拦截，仅可追责）。
+    # error 必须透传 —— 实测教训：执行降级时只留 total=0 会被读成「跑了 0 条」，掩盖降级。
+    _cq = chk.get("cq")
+    if isinstance(_cq, dict):
+        d["cq"] = {"total": _cq.get("total", 0), "failed": _cq.get("failed", 0),
+                   "skipped": _cq.get("skipped", 0)}
+        if _cq.get("error"):
+            d["cq"]["error"] = str(_cq["error"])[:200]
     return d
+
+
+def _record_health_log(conn, report: dict, note: str = "") -> bool:
+    """P0-2：把一次体检结论落进 `ontology_health_logs`（趋势线数据源）。
+
+    刻意设计成**独立函数 + 显式调用**，而不是塞进 `_ontology_check` 内部：
+    `_ontology_check` 被 4 类路径复用 —— ①`/validate` 真实体检 ②publish/release 发布门禁
+    ③`mcp_gateway` Agent 调用 ④常驻验证脚本（一次跑几百次）。若在函数内部无条件落库，
+    门禁预检与验证脚本会把趋势线**灌满无意义的行**，真正的"人/Agent 体检历史"被冲掉
+    —— 那是"数据看起来很热闹、实际不可读"的典型。⇒ 落库必须是**显式选择**。
+
+    返回是否落库成功；**失败只登记不抛**（体检结论本身是主产物，不能因趋势线写不进而丢）。
+    """
+    try:
+        codes = {}
+        for x in report.get("issues") or []:
+            k = x.get("code") or "?"
+            codes[k] = codes.get(k, 0) + 1
+        conn.execute(
+            "INSERT INTO ontology_health_logs (ts, source, ontology_version_id, total, "
+            "high, warn, low, info, rule_version, rule_count, degraded_count, "
+            "instances_checked, codes, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            # 注意（D2，2026-10-15）：total 列语义 = 扫描类型数（len(rows)），
+            # 不是问题数；问题总数 = high+warn+low+info（或报告的 issue_total）。
+            (report.get("ts") or "", report.get("source") or "",
+             int(report.get("ontology_version_id") or 0), int(report.get("total") or 0),
+             int(report.get("high") or 0), int(report.get("warn") or 0),
+             int(report.get("low") or 0), int(report.get("info") or 0),
+             str(report.get("rule_version") or ""), int(report.get("rule_count") or 0),
+             len(report.get("degraded") or []), 1 if report.get("instances_checked") else 0,
+             json.dumps(codes, ensure_ascii=False), note))
+        conn.commit()
+        return True
+    except Exception as e:
+        # 留痕但不打断主流程：体检结论已产出，趋势线只是附加产物
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[ontology_health] 体检历史落库失败（不影响本次结论）: %s", e)
+        except Exception:
+            pass
+        return False
 
 
 def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
@@ -470,6 +539,7 @@ def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
             issues.append(_issue("isolated", t["name"], "孤立类：无实例且无子类"))
     ent_names = {x["name"] for x in rows if x["type_kind"] == "entity"}
     decl = {}          # 关系类型名 → (定义域, 值域)，供 rule_data_conflict 复算存量边
+    rel_meta = {}      # P1-5：关系类型名 → {chars, inverse_of}（特性/反向声明，供对称性与反向规则复算）
     for t in rows:
         if t["type_kind"] != "relation":
             continue
@@ -477,13 +547,34 @@ def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
             c = json.loads(t["constraints"] or "{}")
         except Exception:
             c = {}
+        rel_meta[t["name"]] = {"chars": c.get("characteristics") or [],
+                               "inverse_of": str(c.get("inverse_of") or "").strip()}
         # 2026-09-02 修复：定义域/值域实际存于 allowed_values.src/tgt（兼容旧字段 domain/range）
         av = c.get("allowed_values") or {}
         dom = c.get("domain") if c.get("domain") is not None else av.get("src")
         rng = c.get("range") if c.get("range") is not None else av.get("tgt")
         dom_l, rng_l = _norm(dom), _norm(rng)
         if not dom_l and not rng_l:
-            issues.append(_issue("missing_dom_range", t["name"], "对象属性未定义定义域/值域"))
+            # 2026-10-15（P0-5）：归一别名型关系不报「待补」，改报「设计说明」。
+            # 判据取自 core.relmap.REL_CANONICAL（**唯一真源，不在此硬编码中文名**）：
+            #   值不为 None → 该名是别名，写库路径先 canonical() 归一到 canonical 类型
+            #                 （如 连接→CONNECTS），relations 表里它恒 0 条边；
+            #   值为 None   → 该名已废弃且无映射，导入器把边直接剔除并计入 rejected
+            #                 （如 执行，语义未定）。
+            # 两种情况下「无定义域/值域」都不是漏填，约束由归一后的 canonical 类型承载。
+            try:
+                from core.relmap import REL_CANONICAL as _RC
+                _is_alias = t["name"] in _RC
+            except Exception as _e:            # 兜底不静默：查不到判据就按原规则报待补
+                degraded.append(f"归一别名判定不可用（{t['name']}: {_e}）")
+                _is_alias = False
+            if _is_alias:
+                issues.append(_issue("normalized_alias_relation", t["name"],
+                                     "归一别名/已废弃名：写库路径一律先过 canonical()，"
+                                     "该类型在 relations 表恒 0 条边，"
+                                     "约束由归一目标（如 CONNECTS）承载"))
+            else:
+                issues.append(_issue("missing_dom_range", t["name"], "对象属性未定义定义域/值域"))
         else:
             bad = sorted({x for x in dom_l + rng_l if x not in ent_names})
             if bad:
@@ -530,6 +621,82 @@ def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
                                  f"一侧声明多个类型（定义域(src) {len(dl)} 个 / 值域(tgt) {len(rl)} 个）"
                                  "：按本工程设计用法视为「允许的类型集合」",
                                  multi={"src": dl, "tgt": rl}))
+    # ── P1-5（2026-10-15）OOPS! 陷阱补码：特性矛盾 + 声明 vs 边对称性 + 方向可判性 + 反向声明 ──
+    # 边计数一次聚合；以「有存量边」为前提（纯声明型关系不提示，防噪声）。
+    # P2-1 评估（2026-10-15）：互斥对泛化——Pellet 实测 ALLOCATED_TO 的
+    # reflexive+asymmetric 组合会直接判本体 inconsistent（结构规则此前只查 symmetric+asymmetric，
+    # 是盲区；asymmetric 蕴含非自反，故与 reflexive 互斥）。互斥对在 _CHAR_MUTEX 单一真源维护。
+    for t in rows:
+        if t["type_kind"] != "relation":
+            continue
+        _ch5 = rel_meta.get(t["name"], {}).get("chars") or []
+        _mutex_hits = [f"{a}+{b}" for a, b in _CHAR_MUTEX if a in _ch5 and b in _ch5]
+        if _mutex_hits:
+            issues.append(_issue("char_conflict", t["name"],
+                                 "同时声明互斥特性：" + "、".join(_mutex_hits)
+                                 + "（逻辑上不可能同时成立，DL 推理器会判本体 inconsistent）",
+                                 chars=sorted(_ch5), conflicts=_mutex_hits))
+    try:
+        _edge_cnt = {r["relation_type"]: r["c"] for r in conn.execute(
+            "SELECT relation_type, COUNT(*) c FROM relations GROUP BY relation_type").fetchall()}
+    except Exception as _e:
+        _edge_cnt = {}
+        degraded.append(f"P1-5 边计数跳过（relations 聚合失败）：{type(_e).__name__}: {_e}")
+        print(f"[ontology_check] P1-5 边计数失败，对称/方向类规则本次跳过："
+              f"{type(_e).__name__}: {_e}", flush=True)
+    for _nm, (_dl5, _rl5) in decl.items():
+        _m5 = rel_meta.get(_nm) or {}
+        _ch5 = _m5.get("chars") or []
+        _n5 = _edge_cnt.get(_nm, 0)
+        if not _n5:
+            continue
+        if "symmetric" in _ch5:
+            try:
+                _pairs = {(r["source_id"], r["target_id"]) for r in conn.execute(
+                    "SELECT source_id, target_id FROM relations WHERE relation_type=?",
+                    (_nm,)).fetchall()}
+                _unpaired = [p for p in _pairs if p[0] != p[1] and (p[1], p[0]) not in _pairs]
+            except Exception as _e:
+                _unpaired = []
+                degraded.append(f"symmetric_not_paired 跳过（{_nm} 边读取失败）：{type(_e).__name__}: {_e}")
+            if _unpaired:
+                issues.append(_issue("symmetric_not_paired", _nm,
+                                     f"声明 symmetric 但 {len(_unpaired)} 对边非成对"
+                                     f"（如 {(_unpaired[0][0], _unpaired[0][1])} 无反向边）",
+                                     unpaired=[list(p) for p in _unpaired[:10]]))
+        elif set(_dl5) == set(_rl5):
+            issues.append(_issue("unspecified_direction", _nm,
+                                 f"定义域与值域为同一类型集合（{len(_dl5)} 个）且有存量边 {_n5} 条，"
+                                 "未声明 symmetric → src/tgt 方向语义不可判"))
+        if "symmetric" not in _ch5 and not (_m5.get("inverse_of") or ""):
+            issues.append(_issue("missing_inverse", _nm,
+                                 f"有存量边 {_n5} 条但未声明反向关系（inverse_of）且非 symmetric → "
+                                 "反向导航只能靠查询侧硬编码（按需补，不强制；纯单向语义可忽略）"))
+    # ── P2-4（2026-10-15）swrl_orphan：启用的 SWRL 规则引用本体不存在的类型（warn）──
+    # P2-4 实测根因：模板种子引用 Person/hasAge 等 7 个不存在类型，推理引擎对未知 atom
+    # 静默建空类 → 规则"看起来在跑"实际零产出（inferred_facts 恒 0）。此规则防再犯。
+    # atom 提取启发式：`Name(?v)` 单变量 = 类/属性引用；多变量 atom（如 lessThan(?a,?b)）
+    # = SWRL 内建函数，不参与比对。表缺失（新库未迁移）记 degraded 不静默。
+    try:
+        _swrl_active = conn.execute(
+            "SELECT id, name, body, head FROM swrl_rules WHERE is_active=1").fetchall()
+    except Exception as _e:
+        _swrl_active = []
+        degraded.append(f"swrl_orphan 跳过（swrl_rules 表不可读）：{type(_e).__name__}: {_e}")
+    _known_names = {x["name"] for x in rows}  # ontology_types 全部名称（类+关系+属性）
+    for _sr in _swrl_active:
+        # atom = 类(?v) 单变量 / 属性(?v1,?v2) 双变量；内建（名单 + 3+ 变量）排除。
+        _atoms = set()
+        for _m in _SWRL_ATOM_RE.finditer(f"{_sr['body']} , {_sr['head']}"):
+            _nv = _m.group(2).count("?")
+            if _nv in (1, 2) and _m.group(1) not in _SWRL_BUILTINS:
+                _atoms.add(_m.group(1))
+        _unknown = sorted(a for a in _atoms if a not in _known_names)
+        if _unknown:
+            issues.append(_issue("swrl_orphan", _sr["name"],
+                                 f"规则 #{_sr['id']} 引用本体未注册的类型/属性：{'、'.join(_unknown)} "
+                                 "→ 推理引擎将静默建空类，规则零产出（引用存在类型或删除本规则）",
+                                 unknown=_unknown, rule_id=_sr["id"]))
     # ── O1-2(a) ⭐ 声明 vs 存量边端点（§1.3「141 条边」的常驻守门人）───────────
     try:
         for g in _scan_edge_conflicts(conn, decl):
@@ -581,6 +748,9 @@ def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
         if x["severity"] in counts:
             counts[x["severity"]] += 1
     return {"ok": True, "total": len(rows), "issues": issues,
+            # D2（2026-10-15）：total 是「扫描类型数」不是「问题数」——命名陷阱。
+            # 问题总数用 issue_total（== len(issues) == 各档位计数之和），消费方勿再自算。
+            "issue_total": len(issues),
             "high": counts["high"], "warn": counts["warn"],
             "low": counts["low"], "info": counts["info"],
             # O0-3 报告可复现 + D2 口径透明（这份报告读的是快照还是编辑态）
@@ -664,6 +834,58 @@ def _count_dom_range_changed(prev_rows, cur_rows) -> int:
     for p in prev_rows:
         key = (p["name"], p["type_kind"])
         if key in cur_map and _norm(p["constraints"]) != _norm(cur_map[key]):
+            n += 1
+    return n
+
+
+def _count_constraints_changed(prev_rows, cur_rows) -> int:
+    """P1-5 配套（2026-10-15）：对比上一快照与当前类型的**完整约束**（定义域/值域之外的
+    特性 characteristics / 反向 inverse_of / 基数 / xsd / 白名单等），返回变更类型数。
+
+    为什么单独一个函数：`_count_dom_range_changed` 只看 dom/range（判 major 破坏性），
+    而特性/基数类变更**无法借此发布**——实测 R2 摘除 ALLOCATED_TO/TRACE 的 symmetric 后
+    publish 报「无差异」。约束变更是语义修正（多为收紧/纠错），不破坏消费方查询形状
+    → 判 minor（compatible=1），与 dom/range（改了端点形状，判 major）分开算。
+    """
+    def _norm(c):
+        try:
+            c = json.loads(c or "{}")
+        except Exception:
+            c = {}
+        av = c.get("allowed_values") or {}
+        out = []
+        for side in ("src", "tgt"):
+            v = av.get(side)
+            out.append(sorted({str(x).strip() for x in (v if isinstance(v, list) else ([v] if v else []))
+                               if str(x).strip() and str(x) != "?"}))
+        return out
+
+    def _full(c):
+        """全约束规范化（dom/range 之外全部纳入；排序保证等价 JSON 同判）。"""
+        try:
+            c = json.loads(c or "{}")
+        except Exception:
+            return {}
+        if not isinstance(c, dict):
+            return {}
+
+        def _deep(x):
+            if isinstance(x, dict):
+                return {k: _deep(x[k]) for k in sorted(x)}
+            if isinstance(x, list):
+                return sorted((_deep(i) for i in x), key=lambda v: json.dumps(v, ensure_ascii=False, sort_keys=True))
+            return x
+        return _deep(c)
+
+    cur_map = {(r["name"], r["type_kind"]): r["constraints"] for r in cur_rows}
+    n = 0
+    for p in prev_rows:
+        key = (p["name"], p["type_kind"])
+        if key not in cur_map:
+            continue
+        # 只在 dom/range 未变时数约束变更（dom/range 变更已由破坏性口径单独计）
+        if _norm(p["constraints"]) == _norm(cur_map[key]) and \
+                _full(p["constraints"]) != _full(cur_map[key]):
             n += 1
     return n
 
@@ -769,4 +991,4 @@ def v2g_fuse_config(body: dict, conn=Depends(db_session),
         review_threshold=body.get("review_threshold"), quality_gate=body.get("quality_gate"),
         weights=body.get("weights"), actor=_actor(user))
 
-__all__ = ['router', 'json', 'Optional', 'Depends', 'HTTPException', 'JSONResponse', 'db_session', 'current_user', 'require_permission', 'require_any_permission', 'typevocab', 'QueryRouter', 'KnowledgeRepo', 'CommitRepo', 'audit', 'EntityIn', 'BatchReviewIn', 'GraphNodeIn', 'GraphEdgeIn', 'OntologyTypeIn', 'V2GExtractIn', 'V2GConfirmIn', 'V2GRejectIn', 'V2GUpdateIn', 'SysMLIn', 'MergeIn', 'RetrieveIn', 'RELEASE_BRANCH', 'WRITE_PERMS', '_FALLBACK_STOP_WORDS', '_actor', '_is_release_branch', '_release_guard', '_entity_dup_warning', '_dprop_proj', '_log_graph_edit', '_fallback_topics', '_validate_ont_parent', '_log_ont_change', '_ont_props_keys', '_ont_version_bump', '_normalize_relation_domain_range', '_ont_scope', '_ont_edit_rows', '_scan_edge_conflicts', '_check_brief', '_ontology_check', '_snapshot_diff', '_count_dom_range_changed', '_snapshot_dom_range_diff', '_active_ont_rows', '_filter_ont_rows_for_type', 'triples_stats', 'v2g_fuse_config']
+__all__ = ['router', 'json', 'Optional', 'Depends', 'HTTPException', 'JSONResponse', 'db_session', 'current_user', 'require_permission', 'require_any_permission', 'typevocab', 'QueryRouter', 'KnowledgeRepo', 'CommitRepo', 'audit', 'EntityIn', 'BatchReviewIn', 'GraphNodeIn', 'GraphEdgeIn', 'OntologyTypeIn', 'V2GExtractIn', 'V2GConfirmIn', 'V2GRejectIn', 'V2GUpdateIn', 'SysMLIn', 'MergeIn', 'RetrieveIn', 'RELEASE_BRANCH', 'WRITE_PERMS', '_FALLBACK_STOP_WORDS', '_actor', '_is_release_branch', '_release_guard', '_entity_dup_warning', '_dprop_proj', '_log_graph_edit', '_fallback_topics', '_validate_ont_parent', '_log_ont_change', '_ont_props_keys', '_ont_version_bump', '_normalize_relation_domain_range', '_ont_scope', '_ont_edit_rows', '_scan_edge_conflicts', '_check_brief', '_ontology_check', '_record_health_log', '_snapshot_diff', '_count_dom_range_changed', '_count_constraints_changed', '_snapshot_dom_range_diff', '_active_ont_rows', '_filter_ont_rows_for_type', 'triples_stats', 'v2g_fuse_config']

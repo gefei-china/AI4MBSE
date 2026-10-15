@@ -26,7 +26,7 @@ severity 语义（对齐 SHACL 三档 + SAIC「语言类 vs 风格类」分层�
 """
 
 # 目录版本：新增/改档位时递增（报告里回显，便于"体检结论可复现"）
-RULE_VERSION = "2026-09-23.2"
+RULE_VERSION = "2026-10-15.4"
 
 # code → 规则元数据
 RULES = {
@@ -127,6 +127,90 @@ RULES = {
                "—— 该能力此前只在「改那个类型时」被调用，全局无从回答",
         "fix": "用 GET /api/knowledge/ontology/validate?instances=1 复现明细；"
                "再按影响预览 → 迁移工单处理（不静默改存量）",
+    },
+    # ─────────────────────────────────────────────────────────────────────
+    # 2026-10-15（P0-5）：`missing_dom_range` 对「归一别名型关系」是**误报**。
+    #
+    # 实测根因（真库只读 + 代码走读）：
+    #   · `连接` 是 core.relmap.REL_CANONICAL 登记的**输入别名**，sysml_importer
+    #     落库前一律 canonical() 归一为 `CONNECTS`（props.rel_normalized_from="连接"）
+    #     → relations 表里 `连接` 恒为 0 条边；
+    #   · `执行` 的 canonical() 返回 **None**（relmap 注释：语义≈REALIZES/USES 未定，
+    #     废弃），导入器把该边**直接剔除并计入 rejected** → 同样恒 0 条边。
+    # 于是原方案「按存量端点反推 dom/range」在数据上**无从执行**（没有存量端点），
+    # 硬补一份 dom/range 反而会：① 与归一后的 CONNECTS 语义各写一份、必然漂移；
+    # ② 让 sysml_importer 未来的连接边被 rule_data_conflict 判违规。
+    #
+    # 处置：登记为设计说明（info），**明确告知"该类型在数据层恒 0 边、约束由归一后的
+    # canonical 类型承载"**，不再以待补项(low)反复提示——避免噪声掩盖真正待补的 low。
+    "normalized_alias_relation": {
+        "label": "归一别名型关系（无存量边，约束由归一目标承载）",
+        "severity": "info",
+        "dimension": "design",
+        "why": "该关系名是 core.relmap 登记的**归一别名/已废弃名**：写库路径一律先过 "
+               "canonical()，别名要么归一到 canonical 类型（如 连接→CONNECTS），"
+               "要么因无映射被剔除（如 执行，语义未定已废弃）"
+               "—— 因此它在 relations 表里恒为 0 条边，"
+               "「无定义域/值域」不是漏填，而是约束本就由归一后的 canonical 类型承载",
+        "fix": "无需修（这是登记的归一设计意图）。若该关系将来要直接承载数据，"
+               "须先在 core.relmap.py 登记 canonical 映射并停用归一，"
+               "再在此为其声明定义域/值域（届时本条会自动消失）",
+    },
+    # ─────────────────────────────────────────────────────────────────────
+    # 2026-10-15（P1-5）：OOPS! 关键陷阱补码（适用项 4 条；不适用清单见
+    # docs/本体模型管理模块-…-20261014.md §11.1 —— SWRL 无触发数据（本工程
+    # 无 SWRL 存储，P2-4 判孤岛）、命名类歧义（中文 schema 场景）明确不做）。
+    # 档位裁定依据真库预演：inverse_of 全库 0 声明 → missing_inverse 若开 low
+    # 会命中全部 7 个有边关系（噪声淹没问题清单）→ 定 info；两条「声明与
+    # 矛盾/数据打架」类有真命中（ALLOCATED_TO/TRACE）→ warn，与 rule_data_conflict 同族。
+    # ─────────────────────────────────────────────────────────────────────
+    "char_conflict": {
+        "label": "推理性质互斥声明",
+        "severity": "warn",
+        "dimension": "consistency",
+        "why": "同一关系同时声明了互斥的特性（symmetric+asymmetric / reflexive+asymmetric）——"
+               "逻辑上不可能同时成立（asymmetric 蕴含非自反），标准 DL 推理器（Pellet 实测 "
+               "2026-10-15）会直接判本体 inconsistent，推理与 SHACL 导出无法判定该信哪个"
+               "（OOPS! 特性矛盾类陷阱）",
+        "fix": "在关系编辑页按业务语义二选一：方向性关系保留 asymmetric 并摘除 symmetric/reflexive；"
+               "真对称/自反关系则摘除 asymmetric",
+    },
+    "symmetric_not_paired": {
+        "label": "声明对称但存量边非成对",
+        "severity": "warn",
+        "dimension": "consistency",
+        "why": "声明了 symmetric，但存在 A→B 而无 B→A 的存量边——声明与数据打架："
+               "要么漏录反向边，要么该关系本就不是对称的（与 rule_data_conflict 同族）",
+        "fix": "二选一：补齐反向边（走导入/迁移留痕，不静默改数据），或摘除 symmetric 声明",
+    },
+    "unspecified_direction": {
+        "label": "关系方向语义不可判",
+        "severity": "low",
+        "dimension": "structure",
+        "why": "定义域与值域为同一类型集合、未声明 symmetric 且有存量边——src/tgt 语义上无法区分"
+               "（OOPS! 方向未指明类陷阱；如 CONNECTS 两端都是『组件』时哪边是源不可判）",
+        "fix": "若两端确实无方向差别，请声明 symmetric；否则收窄一侧的定义域/值域使方向可判",
+    },
+    "missing_inverse": {
+        "label": "有边但无反向关系声明（按需补）",
+        "severity": "info",
+        "dimension": "design",
+        "why": "该关系有存量边但未声明 inverse_of 也非 symmetric——反向导航"
+               "（如 CONTAINS ↔ CONTAINED_BY）只能靠查询侧硬编码（OOPS! 缺反向关系陷阱）。"
+               "登记为设计提示而非缺陷：并非所有关系都需要反向（纯单向语义如 VERIFIED_BY 可忽略）",
+        "fix": "确需反向导航时，在关系编辑页声明 inverse_of 指向反向关系"
+               "（推荐反向关系同时互指回来）；纯单向语义可忽略本条",
+    },
+    "swrl_orphan": {
+        "label": "SWRL 规则引用未注册类型",
+        "severity": "warn",
+        "dimension": "consistency",
+        "why": "启用的 SWRL 规则引用了本体中不存在的类/属性（P2-4 实测：4 条模板种子引用 "
+               "Person/hasAge/Component 等 7 个不存在类型，永久空转且推不出任何事实——"
+               "推理引擎对未知 atom 静默建空类，规则'看起来在跑'实际零产出）",
+        "fix": "改写规则引用本体已注册的类型/关系，或删除该规则"
+               "（管理入口：本体页顶栏「⚖ SWRL」面板；历史上引用不存在类型的规则已备份至 "
+               "tools/_swrl_dead_rules_backup.json）",
     },
 }
 

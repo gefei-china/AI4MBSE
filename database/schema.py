@@ -45,6 +45,8 @@ from .migrations import (
     _migrate_data_sources,  # P0-4 数据源注册表重建（db/api/file 三类源）
     _migrate_swrl_tables,  # P1-① SWRL 规则管理（2026-09-11）
     _migrate_ontology_instance_migrations,  # 2026-09-14 本体变更→实例迁移计划表
+    _migrate_ontology_health_logs,         # 2026-10-15 P0-2 本体体检历史表（趋势线数据源）
+    _migrate_ontology_questions,           # 2026-10-15 P1-4 CQ（能力问题）两表
     _migrate_artifact_ingest,  # 2026-09-15 AI 产物收编资料库（origin 溯源/块级过滤/时效取代）
     _seed_departments,
     _seed_knowledge_categories,
@@ -1562,6 +1564,10 @@ def init_db():
     _migrate_swrl_tables(conn)
     # ── 2026-09-14 本体变更→实例迁移计划表（impact-preview / 发布挂钩 / 悬空补迁）──
     _migrate_ontology_instance_migrations(conn)
+    # ── P0-2（2026-10-15）本体体检历史表：一次性体检 → 持续守护（趋势线数据源）──
+    _migrate_ontology_health_logs(conn)
+    # ── P1-4（2026-10-15）CQ（能力问题）机制两表：问题登记 + 执行历史 ──
+    _migrate_ontology_questions(conn)
     # ── 2026-09-15 AI 产物收编资料库（origin 溯源 / 块级过滤 / superseded 时效链）──
     _migrate_artifact_ingest(conn)
     # ── P0 Staging 写前融合改造：v2g_candidates 三义拆分 + Mention/Canonical 双层模型 ──

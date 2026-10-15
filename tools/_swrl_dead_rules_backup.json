@@ -1,0 +1,50 @@
+[
+ {
+  "id": 1,
+  "name": "AdultRequiresNoGuardian",
+  "comment": "年龄 ≥ 18 的人不需要监护人（示例规则，工程师可改写）",
+  "body": "Person(?p), hasAge(?p, ?age), greaterThanOrEqual(?age, 18)",
+  "head": "requiresGuardian(?p, false)",
+  "priority": 0,
+  "is_active": 1,
+  "created_at": "2026-09-11 11:41:28",
+  "last_executed_at": "2026-10-15T08:00:12.196593Z",
+  "last_inferred_count": 0
+ },
+ {
+  "id": 2,
+  "name": "MinorRequiresGuardian",
+  "comment": "年龄 < 18 的人需要监护人",
+  "body": "Person(?p), hasAge(?p, ?age), lessThan(?age, 18)",
+  "head": "requiresGuardian(?p, true)",
+  "priority": 0,
+  "is_active": 1,
+  "created_at": "2026-09-11 11:41:28",
+  "last_executed_at": "2026-10-15T08:00:12.196593Z",
+  "last_inferred_count": 0
+ },
+ {
+  "id": 3,
+  "name": "TransitivelyRelated",
+  "comment": "通过 partOf 关系，所有部件都属于整个系统（传递闭包）",
+  "body": "Component(?c), partOf(?c, ?p), System(?p)",
+  "head": "belongsTo(?c, ?p)",
+  "priority": 0,
+  "is_active": 1,
+  "created_at": "2026-09-11 11:41:28",
+  "last_executed_at": "2026-10-15T08:00:12.196593Z",
+  "last_inferred_count": 0
+ },
+ {
+  "id": 8,
+  "name": "AdultNoGuardian",
+  "comment": "实测: 20 岁成人判定",
+  "body": "Person(?p), hasAge(?p, ?age), greaterThanOrEqual(?age, 18)",
+  "head": "requiresGuardian(?p, false)",
+  "priority": 0,
+  "is_active": 1,
+  "created_at": "2026-09-11 15:06:32",
+  "last_executed_at": "2026-10-15T08:00:12.196593Z",
+  "last_inferred_count": 0
+ }
+]

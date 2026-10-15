@@ -43,6 +43,11 @@ DEFAULT_CONFIG = {
         "path": os.path.join(BASE_DIR, "mbse.db"),   # SQLite 数据文件
         "connect_timeout": 30,                        # 连接超时（秒）
     },
+    "ontology": {
+        # P1-1（2026-10-15）：发布门禁档位——publish/release 双端点同读此键（单一真源）。
+        # 档位语义（「最低拦截级别」）：off=不拦截 ｜ high=仅 high 拦截（默认，与历史行为等价）｜ warn=warn 及以上拦截（最严）。
+        "publish_gate": "high",
+    },
     "llm": {
         "force_mock": False,     # 强制 Mock 模式（测试/无 key 环境）
         "deepseek_api_key": "",  # 预置 provider 注入用（无 key 时启动自动写入）
@@ -1083,6 +1088,11 @@ CONFIG_SCHEMA = {
     "database": {
         "path":           {"type": "str", "desc": "SQLite 数据文件路径（需重启生效）"},
         "connect_timeout": {"type": "int", "desc": "数据库连接超时（秒）"},
+    },
+    # P1-1（2026-10-15）：本体治理组。⚠️ 白名单纪律——save_override 以 CONFIG_SCHEMA 为准，
+    # DEFAULT_CONFIG 有而 SCHEMA 无 = 界面/API 均改不了（intent 组 12 个开关的教训）。
+    "ontology": {
+        "publish_gate": {"type": "str", "desc": "★ 发布门禁档位（最低拦截级别）：off=发布不做一致性拦截｜high=仅 high 拦截（默认，与历史行为等价）｜warn=warn 及以上拦截（最严）。检查口径=待发布编辑态数据；改完即时生效，版本历史面板显示当前档位"},
     },
     "llm": {
         "force_mock":      {"type": "bool",   "desc": "强制 Mock 模式（不依赖外部网络）"},
