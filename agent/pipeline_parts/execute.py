@@ -773,7 +773,11 @@ class ExecuteMixin:
                 "confidence": retrieval["confidence"],
                 "graph_count": retrieval["graph_count"],
                 "vector_count": retrieval["vector_count"],
-                "attachment_used": bool(retrieval.get("attachment_hits")),
+                # ★ B5-11：口径修正 —— 附件全文注入（att_parsed）也算"已使用"。
+                #   原口径只算 attachment_hits（语义命中片段），而上传附件的主路径是
+                #   **全文注入**（_load_attachment_text → att_text，不走 hit 通道）
+                #   ⇒ 实测附件内容被模型逐字引用（📎标注）时该字段仍 False，误导排查。
+                "attachment_used": bool(retrieval.get("attachment_hits")) or (att_parsed_info.get("parsed", 0) > 0),
                 "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
             },
             "attachments_info": {**att_parsed_info, "consumed": len(retrieval.get("attachment_hits") or [])},
