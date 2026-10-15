@@ -187,7 +187,16 @@ async function sendChat() {
   }
   // 2026-09-25：待澄清状态下，主输入框内容即"澄清补充"——走 clarify-answer（会清空挂起），
   // 不再当成普通新消息。此前两条路都不通：挂起永不清除（AI 反复追问）、用户也看不到"在哪作答"。
-  if(window._pendingClarify && currentConvId){
+  //
+  // ★ G-1（2026-10-15 米爸报「携带多个产物文件建模仍异常：消息不上屏、按钮一直进行中」）：
+  //   **带附件时绝不能走 clarify 分支** —— 原实现对任何输入都先判 _pendingClarify：
+  //     ① clarify-answer 只发 {free_text: msg}，**附件被静默丢弃**（后端该接口本就不收附件）；
+  //     ② 该分支**不渲染用户消息** ⇒ "对话流中没有展示用户发送的信息"；
+  //     ③ 任一失败 → toast + return ⇒ **输入框不清空**（截图输入框还留着全文）、消息丢失；
+  //     ④ 按钮红是上一轮的流/挂起态，用户看起来就是"点了发送但什么都没发生"。
+  //   带附件的输入是**新的建模请求**（附件是建模输入的一部分），不是"澄清补充"
+  //   ⇒ 直接走正常发送；澄清卡保持挂起，由用户在卡上作答或随本轮 done 清除。
+  if(window._pendingClarify && currentConvId && !(pendingAttachments && pendingAttachments.length)){
     try{
       const r = await api(`/api/conversations/${currentConvId}/clarify-answer`,
                           {method:'POST', body: JSON.stringify({free_text: msg})});
@@ -200,9 +209,16 @@ async function sendChat() {
         sendResume(r.resume_text);
         return;
       }
-      toast((r && r.error) || '澄清提交失败');
-      return;
-    }catch(e){ toast('澄清提交失败：' + (e.message || '')); return; }
+      // ★ G-1：后端返回"无待澄清"等业务失败 ⇒ **本地挂起态已与后端不同步**，
+      //   清掉本地状态并**落入正常发送** —— 绝不 return 吞掉用户输入。
+      //   （后端 400 原文："当前无待澄清问题（可能已作答或已过期）"）
+      setPendingClarify(null);
+      toast((r && r.error) || '澄清状态已过期，按新消息发送');
+    }catch(e){
+      // ★ G-1：接口异常同理 —— 清挂起、继续正常发送，不吞输入。
+      setPendingClarify(null);
+      toast('澄清提交失败，已按新消息发送');
+    }
   }
   // P0-1 澄清改选重发：中止上一轮未读完的流（防旧 token 追加到新消息容器）
   // 2026-09-25：中止前先把上一轮**已生成内容固化落库**——否则"提交新消息"= 上一轮输出白丢
@@ -218,7 +234,11 @@ async function sendChat() {
   if(_streaming){
     const _el = document.getElementById('stream-ai');
     const _fc = (_el && _el.dataset && _el.dataset.convId) || currentConvId;
-    if(_fc){
+    // ★ G-3：follow-up 分支**同样不得吞附件** —— 原实现只发 {message}，附件静默消失，
+    //   且上屏渲染不带 attachments ⇒ 用户看到自己发了文件、AI 却"没收到"。
+    //   改法：带附件时**不走 followup**（follow-up 接口只吃纯文本补充指令），
+    //   落到下方正常发送路径 —— 上一轮会被 abort 并固化（原回退语义），附件随新消息完整送达。
+    if(_fc && !(pendingAttachments && pendingAttachments.length)){
       try{
         const r = await api(`/api/conversations/${_fc}/followup`,
                             {method:'POST', body: JSON.stringify({message: msg})});

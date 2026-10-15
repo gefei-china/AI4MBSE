@@ -190,7 +190,12 @@ async function loadAttachProjectFiles(){
           const key = a.filename || a.url || '';
           if(!key || seen[key]) return;
           seen[key] = 1;
-          _attachProjectDocs.push({id:a.doc_id||'', filename:key, url:a.url||'', size:a.size||0, is_image:!!a.is_image, file_type:key.split('.').pop()||'文件'});
+          // ★ G-2（2026-10-15）：补 `doc_id` 字段 —— 下面 attachConvFile 读的是 **`d.doc_id`**，
+          //   而这里 push 的字段名是 `id` ⇒ 永远 undefined ⇒
+          //     · url 退化成 ''（d.url 为空且 doc_id 判不出）；
+          //     · **B5-9 后端的 doc_id 取 chunk 通道收不到 id** ⇒ "从产物选文件"依旧异常。
+          //   （与 file_type 等同放一行；两个字段都带，旧代码读 id 的不受影响。）
+          _attachProjectDocs.push({id:a.doc_id||'', doc_id:a.doc_id||'', filename:key, url:a.url||'', size:a.size||0, is_image:!!a.is_image, file_type:key.split('.').pop()||'文件'});
         });
       });
     }catch(e){}
