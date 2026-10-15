@@ -322,7 +322,20 @@ async function sendChat() {
         provider_id: Number(document.getElementById('llm-providers')?.value) || undefined,
       }),
     });
-    if(!resp.ok || !resp.body) throw new Error('HTTP '+resp.status);
+    // ★ H-1（2026-10-15）：404（会话不存在/登录态失效）**单独给可操作的文案**。
+    //   现场实测：未登录/登录账号不符 ⇒ 归属校验（B1-9，不可见即 404）拦截（实测：未登录 profile 访问他人会话必 404，属权限系统正确行为）
+    //   ⇒ 页面只显示笼统"调用失败"，用户不知道要刷新 —— 上传/读消息又不校验归属，
+    //     组合表现恰是"附件能传、消息发不出"。
+    //   读 body 里的 error（"Conversation not found"）一起带上，便于区分网络错。
+    if(!resp.ok || !resp.body){
+      let _detail = '';
+      try{ _detail = (await resp.json()).error || ''; }catch(e){}
+      if(resp.status === 404){
+        throw new Error('会话不存在或当前账号无权访问——请确认已登录正确账号后刷新页面'
+                        + (_detail ? '［' + _detail + '］' : ''));
+      }
+      throw new Error('HTTP ' + resp.status + (_detail ? '：' + _detail : ''));
+    }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';

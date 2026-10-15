@@ -1287,7 +1287,17 @@ async function sendResume(text){
       method:'POST', signal: myAbort.signal,
       headers: streamHeaders(),
       body: JSON.stringify({message:text, attachments:[], branch:getCurrentBranch()})});
-    if(!resp.ok || !resp.body) throw new Error('HTTP '+resp.status);
+    // ★ H-1：404（会话不存在/登录态失效）给可操作文案 —— 与 12-chatsend 同口径。
+    //   场景：服务重启后 session 失效 ⇒ B1-9 归属校验 404 ⇒ 笼统"调用失败"误导用户。
+    if(!resp.ok || !resp.body){
+      let _detail = '';
+      try{ _detail = (await resp.json()).error || ''; }catch(e){}
+      if(resp.status === 404){
+        throw new Error('会话不存在或当前账号无权访问——请确认已登录正确账号后刷新页面'
+                        + (_detail ? '［' + _detail + '］' : ''));
+      }
+      throw new Error('HTTP ' + resp.status + (_detail ? '：' + _detail : ''));
+    }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';

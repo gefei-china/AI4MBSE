@@ -467,12 +467,27 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
                 "embed_text": f"{detected_title or filename} 图片OCR {text.strip()}",
                 "bm25_text": f"{filename} 图片OCR {text.strip()}",
             }]
+        # ★ H-2（2026-10-15 米爸验证附件链路时复现 3 次）：**超短但非空**的纯文本文档
+        #   （如几行清单）被上方长度阈值全滤掉 ⇒ chunks 空 ⇒ 报"文本为空"——
+        #   文案误导（实际是"内容过短被过滤"），且这类文档彻底进不了知识库。
+        #   兜底与图片 OCR 同构：原文非空 ⇒ 整篇包成单块入库（前缀标注"短文档"），
+        #   可检索可溯源；**只有原文真空**才走 failed。
+        #   ⚠️ 不放宽阈值本身（数据卫生不变：长文档的碎片仍照滤），
+        #      只在"全军覆没"时保底整篇一块 —— 与 2026-09-29 痛点1 的兜底思路一致。
+        if not structured and not _is_image_doc and text.strip():
+            structured = [{
+                "content": f"【短文档】{filename}\n{text.strip()}",
+                "section": "全文",
+                "embed_text": f"{detected_title or filename} {text.strip()}",
+                "bm25_text": f"{filename} {text.strip()}",
+            }]
         chunks = [c["content"] for c in structured]
         if not chunks:
-            _stage("chunk", "failed", "文本为空")
+            _stage("chunk", "failed", "内容为空或过短，被分块规则过滤")
             conn.execute("UPDATE documents SET parse_status='failed' WHERE id=?", (doc_id,))
             conn.commit()
-            return {"doc_id": doc_id, "parse_status": "failed", "chunk_count": 0, "error": "文本为空",
+            return {"doc_id": doc_id, "parse_status": "failed", "chunk_count": 0,
+                    "error": "内容为空或过短，被分块规则过滤",
                     "pipeline": "chunk"}
         _stage("chunk", "done")
 
