@@ -187,7 +187,11 @@ class GraphRAG:
 
         # 多因子置信度（ArcR-5 路由增强）：
         #   0.50 * 命中实体覆盖度(min(n/5,1)) + 0.30 * 关系连接性(min(rels/3,1)) + 0.20 * 类型匹配度
-        graph_confidence = self._graph_confidence(graph_results, graph_relations)
+        # 2026-10-16 修：关系连接性只数**与 query 相关的关系**（两端实体名均出现在 query 中）——
+        #   否则任何提及系统级实名的域外查询都会因"命中实体+系统间有关系"拿到高置信走图谱路由
+        #   （实测 neg-07「宽带通信卫星的太阳能板清洗周期」：4 实体 432 关系 → conf 0.9 → graph，
+        #   而图谱根本没有"太阳能板清洗周期"的关系可答）。开关 rag.relation_relevance_gate。
+        graph_confidence = self._graph_confidence(graph_results, graph_relations, query=query)
 
         # Step 3: 真路由——GraphRAG 命中且置信足够 → 跳过向量；否则向量兜底（chunk 优先，文档粗匹配兜底）
         vector_results = []
@@ -233,7 +237,7 @@ class GraphRAG:
                         f"AND r.status != 'deprecated'{_rel_extra}",
                         _ids + _ids + _rel_args_extra).fetchall()
                     graph_relations = graph_relations + [dict(x) for x in _rel]
-                    graph_confidence = self._graph_confidence(graph_results, graph_relations)
+                    graph_confidence = self._graph_confidence(graph_results, graph_relations, query=query)
         # 2026-09-16 修复（对话接口 500 的根因）：
         # `_exclude_ai` 原先只在「向量检索兜底分支」内赋值，当 hybrid_search 正常返回
         # 但命中 0 条时，控制流会落到下方 else 分支引用该变量，抛 UnboundLocalError
@@ -449,12 +453,20 @@ class GraphRAG:
             return 0.0
 
     @staticmethod
-    def _graph_confidence(graph_results: list, graph_relations: list) -> float:
+    def _graph_confidence(graph_results: list, graph_relations: list, query: str | None = None) -> float:
         """多因子图谱置信度（2026-09-01 路由增强；P1-4 权重配置化）。
 
         w_coverage * 命中实体覆盖度(min(n/5,1)) + w_relations * 关系连接性(min(rels/3,1))
         + w_typing * 类型匹配度 —— 默认 0.50/0.30/0.20（改动前硬编码值）。
         相比原 min(n/5,1) 单因子，带关系的强命中不会被弱命中稀释；有类型标注的实体更可信。
+
+        2026-10-16（neg 域误路由修复）：关系连接性**默认只计入与 query 相关的关系**——
+        两端实体名均作为子串出现在 query 中（图谱能回答该问题的前提：问题问的就是这两个
+        实体之间的关系）。域外查询即便命中系统级实体、图谱里有成百上千条系统间关系，
+        相关关系也为 0 → 置信度封顶 0.70 < 阈值 0.75 → 不再走高置信图谱路由。
+        开关 rag.relation_relevance_gate（默认 True；置 False 回到旧行为：全量关系计数）。
+        实测（2026-10-16 74 例评测集）：graph 18 例相关关系全部 ≥3（置信度不变，零回归）；
+        neg-07 相关关系 0 → conf 0.90→0.60，误路由消除。
         """
         if not graph_results:
             return 0.0
@@ -463,10 +475,19 @@ class GraphRAG:
             w_cov = float(_cfg.get("rag", "w_coverage", 0.50))
             w_rel = float(_cfg.get("rag", "w_relations", 0.30))
             w_typ = float(_cfg.get("rag", "w_typing", 0.20))
+            _rel_gate = bool(_cfg.get("rag", "relation_relevance_gate", True))
         except Exception:
             w_cov, w_rel, w_typ = 0.50, 0.30, 0.20
+            _rel_gate = True
+        # 关系相关性门禁：只数「两端实体名都出现在 query 里」的关系（见 docstring）
+        _rels = graph_relations or []
+        if _rel_gate and query:
+            _q = str(query)
+            _rels = [r for r in _rels
+                     if str(r.get("source_name") or "") and str(r.get("target_name") or "")
+                     and str(r.get("source_name")) in _q and str(r.get("target_name")) in _q]
         hit = min(len(graph_results) / 5.0, 1.0)
-        rels = min(len(graph_relations or []) / 3.0, 1.0)
+        rels = min(len(_rels) / 3.0, 1.0)
         typed = sum(1 for e in graph_results
                     if str(e.get("entity_type") or "").strip() and str(e.get("entity_type")) != str(e.get("name")))
         type_match = typed / len(graph_results) if graph_results else 0.0

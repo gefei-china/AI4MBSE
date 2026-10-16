@@ -795,6 +795,11 @@ DEFAULT_CONFIG = {
         # 当前 0.75 时正例仅短路 12/18。取「仍覆盖全部正例的最高阈值」0.70（阈值扫描平台上沿）。
         # ⚠️ 负例误短路那 1 例不随阈值变化（conf=0.90），属实体链接精度问题，非阈值问题。
         "route_threshold": 0.70,     # 检索路由阈值：图谱置信度 ≥ 阈值 → 纯图路由（跳过向量检索）
+        # 2026-10-16 关系相关性门禁：图谱置信度的「关系连接性」因子只数**与 query 相关的关系**
+        # （两端实体名均出现在 query 中）。False = 旧行为（全量关系计数）：
+        # 任何提及系统级实名的域外查询都会拿到高置信走图谱（neg-07 实测 conf 0.9 → graph）。
+        # 修复实测：neg-07 conf 0.90→0.60 误路由消除；graph 18 正例相关关系均 ≥3，置信度不变。
+        "relation_relevance_gate": True,
         # ── RAGFlow 接入（L3，2026-10-10）─────────────────────────────────
         # ⚠️⚠️ 这 6 项**必须同时落在 DEFAULT_CONFIG**，
         #   只登记 CONFIG_SCHEMA 是不够的——config.get() 读 _CONFIG（由 DEFAULT_CONFIG 构建），
@@ -1371,6 +1376,7 @@ CONFIG_SCHEMA = {
         "w_coverage":            {"type": "float", "desc": "图谱置信权重：命中实体覆盖度因子"},
         "w_relations":           {"type": "float", "desc": "图谱置信权重：关系连接性因子"},
         "w_typing":              {"type": "float", "desc": "图谱置信权重：类型标注完整度因子"},
+        "relation_relevance_gate": {"type": "bool", "desc": "图谱置信度关系因子只计入与 query 相关的关系（两端实体名均在 query 中）；False=旧行为全量计数"},
         "confidence_high":       {"type": "float", "desc": "命中置信等级「高」分界（真向量相似度口径）"},
         "confidence_mid":        {"type": "float", "desc": "命中置信等级「中」分界"},
         "rerank_enabled":        {"type": "bool",  "desc": "LLM Rerank 重排开关（失败静默回退原排序）"},
