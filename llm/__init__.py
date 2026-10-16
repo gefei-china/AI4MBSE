@@ -37,7 +37,8 @@ __all__ = ["BaseLLM", "ProviderRegistry", "MockLLM", "OpenAICompatProvider",
 def _load_provider_cfg(conn, provider_id):
     """按 provider_id 查 DB 配置；None/未找到 → {}（get_llm 默认走 Mock 兜底）。
 
-    provider_id=None 时取「对话默认模型」（model_type='chat' 且 is_default=1）；
+    provider_id=None 时取「对话默认模型」（model_type IN ('chat','multimodal') 且 is_default=1；
+    多模态模型可对话，故与 chat 同池）；
     向量默认模型由 knowledge_pipeline/embedder 按 model_type='embedding' 单独选择。
     """
     try:
@@ -49,7 +50,7 @@ def _load_provider_cfg(conn, provider_id):
             # 由 SQLite 按 rowid 序任意返回一行（无 ORDER BY 即无保证）。语义定为「默认模型中
             # priority 最高者」——priority 正是该列既有的唯一用途（智能路由里也这么用）。
             # 当前库只有 1 行 is_default=1 → 取值与改动前完全一致，属零回归。
-            row = conn.execute("SELECT * FROM llm_providers WHERE model_type='chat' AND is_default=1 AND status='active' ORDER BY priority DESC, id ASC LIMIT 1").fetchone()
+            row = conn.execute("SELECT * FROM llm_providers WHERE model_type IN ('chat','multimodal') AND is_default=1 AND status='active' ORDER BY priority DESC, id ASC LIMIT 1").fetchone()
         return dict(row) if row else {}
     except Exception:
         return {}
@@ -99,7 +100,7 @@ def provider_supports_vision(cfg) -> bool:
     """
     if not isinstance(cfg, dict) or not cfg:
         return False
-    if str(cfg.get("model_type") or "").strip().lower() == "vision":
+    if str(cfg.get("model_type") or "").strip().lower() in ("vision", "multimodal"):
         return True
     raw = cfg.get("tags") or "[]"
     try:
@@ -470,9 +471,9 @@ class LLMClient:
     def get_default_provider(self):
         from database import get_db
         conn = get_db()
-        # 对话默认模型（model_type='chat'）；向量默认由 embedder 单独选择
+        # 对话默认模型（model_type IN ('chat','multimodal')，多模态可对话故同池）；向量默认由 embedder 单独选择
         # ORDER BY / LIMIT：同上（多行 default 时取 priority 最高者，消除不确定性）
-        row = conn.execute("SELECT * FROM llm_providers WHERE model_type='chat' AND is_default=1 AND status='active' ORDER BY priority DESC, id ASC LIMIT 1").fetchone()
+        row = conn.execute("SELECT * FROM llm_providers WHERE model_type IN ('chat','multimodal') AND is_default=1 AND status='active' ORDER BY priority DESC, id ASC LIMIT 1").fetchone()
         conn.close()
         return dict(row) if row else None
 
@@ -1019,7 +1020,7 @@ class LLMRouter:
         conn = get_db()
         try:
             rows = conn.execute(
-                "SELECT * FROM llm_providers WHERE model_type='chat' AND status='active'").fetchall()
+                "SELECT * FROM llm_providers WHERE model_type IN ('chat','multimodal') AND status='active'").fetchall()
             req = [str(t).strip() for t in (required_tags or []) if str(t).strip()]
             candidates, exhausted, rejected = [], [], []
             for r in rows:

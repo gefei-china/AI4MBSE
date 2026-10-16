@@ -141,7 +141,7 @@ async function loadChatProviders(){
     const providers = await api('/api/llm/providers');
     _chatProvidersCache = providers || [];
     const sel = document.getElementById('llm-providers');
-    const chatOnes = (providers||[]).filter(p=>p.model_type==='chat' && p.status!=='disabled');  // 对话模型：向量模型不进选择器
+    const chatOnes = (providers||[]).filter(p=>(p.model_type==='chat'||p.model_type==='multimodal') && p.status!=='disabled');  // 对话/多模态模型：向量模型不进选择器
     if(sel){
       if(chatOnes.length){
         const def = chatOnes.find(p=>p.is_default) || chatOnes[0];

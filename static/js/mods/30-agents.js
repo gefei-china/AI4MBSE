@@ -1519,7 +1519,7 @@ async function loadLLMProviders() {
       const disabled = p.status==='disabled';
       return `<tr>
       <td><b>${esc(p.name)}</b></td>
-      <td>${p.model_type==='embedding'?'<span class="st b">向量</span>':'<span class="st g">对话</span>'}${p.model_type!=='embedding'&&hasVisionTag(p)?' <span class="st" style="background:#eef2ff;color:#3f51b5;" title="支持图片理解：AI 建模会话中上传的图片会作为多模态内容送给该模型">🖼 视觉</span>':''}</td>
+      <td>${p.model_type==='embedding'?'<span class="st b">向量</span>':(p.model_type==='multimodal'?'<span class="st" style="background:#f3e8ff;color:#7c3aed;">多模态</span>':'<span class="st g">对话</span>')}${p.model_type!=='embedding'&&p.model_type!=='multimodal'&&hasVisionTag(p)?' <span class="st" style="background:#eef2ff;color:#3f51b5;" title="支持图片理解：AI 建模会话中上传的图片会作为多模态内容送给该模型">🖼 视觉</span>':''}</td>
       <td style="font-size:11px;">${esc(p.model_name)}</td>
       <td><label class="sw" title="设为该类型（对话/向量）的默认模型"><input type="checkbox" ${p.is_default===1?'checked':''} onchange="toggleLLMDefault(${p.id},this.checked)"><span class="sl"></span></label></td>
       <td>${disabled?'<span class="st g">停用</span>':'<span class="st ok">启用</span>'}</td>
@@ -1682,7 +1682,7 @@ async function toggleLLMDefault(id, on) {
     tags:p.tags||[], priority:p.priority||0, budget_tokens:p.budget_tokens||0,
     provider_type:p.provider_type||'openai',
   })});
-  toast(on ? `已将「${p.name}」设为${p.model_type==='embedding'?'向量':'对话'}默认模型` : `已取消「${p.name}」的默认标记`);
+  toast(on ? `已将「${p.name}」设为${p.model_type==='embedding'?'向量':(p.model_type==='multimodal'?'多模态':'对话')}默认模型` : `已取消「${p.name}」的默认标记`);
   loadLLMProviders(); loadHome();
 }
 // 停用/启用：PATCH status（active|disabled）；停用后不参与调用与智能路由

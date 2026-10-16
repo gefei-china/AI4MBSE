@@ -819,7 +819,7 @@ def init_db():
         base_url TEXT NOT NULL,
         api_key TEXT DEFAULT '',
         model_name TEXT NOT NULL,
-        model_type TEXT DEFAULT 'chat',       -- chat 对话模型 | embedding 向量模型
+        model_type TEXT DEFAULT 'chat',       -- chat 对话模型 | embedding 向量模型 | multimodal 多模态
         max_tokens INTEGER DEFAULT 8192,
         context_window INTEGER DEFAULT 8192,  -- 上下文窗口（tokens），对话请求 max_tokens 不超过该值
         temperature REAL DEFAULT 0.3,

@@ -37,7 +37,7 @@ def _mask_providers(providers: list) -> list:
 
 @router.get("/api/llm/providers")
 def list_providers(model_type: Optional[str] = None, conn=Depends(db_session)):
-    """模型列表；?model_type=chat|embedding 可过滤（管理面板按类型切换）。
+    """模型列表；?model_type=chat|embedding|multimodal 可过滤（管理面板按类型切换）。
 
     D10：每条附带 tags/priority/budget_tokens 与已用 token（budget_used，供前端展示预算条）。
     """
@@ -64,9 +64,9 @@ def llm_status(conn=Depends(db_session)):
     供前端「AI 建模」顶部 chip 展示：真实 LLM 已接通 / Mock 降级中。
     """
     providers = _mask_providers(LlmRepo(conn).list_providers())
-    # 顶部状态展示「对话默认模型」；向量默认由向量化服务（embedder）单独使用
-    default = next((p for p in providers if p.get("model_type") == "chat" and p.get("is_default") == 1),
-                   next((p for p in providers if p.get("model_type") == "chat"), providers[0] if providers else None))
+    # 顶部状态展示「对话默认模型」；多模态可对话故与 chat 同池；向量默认由向量化服务（embedder）单独使用
+    default = next((p for p in providers if p.get("model_type") in ("chat", "multimodal") and p.get("is_default") == 1),
+                   next((p for p in providers if p.get("model_type") in ("chat", "multimodal")), providers[0] if providers else None))
     return {
         "connected": bool(default and default.get("api_key_masked")),
         "used_mock": llm_client.stats["last_used_mock"],

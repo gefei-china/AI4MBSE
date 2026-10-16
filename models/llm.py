@@ -10,7 +10,7 @@ class ProviderIn(BaseModel):
     base_url: str
     api_key: Optional[str] = ""
     model_name: str
-    model_type: Optional[str] = "chat"   # chat 对话模型 | embedding 向量模型
+    model_type: Optional[str] = "chat"   # chat 对话模型 | embedding 向量模型 | multimodal 多模态
     max_tokens: Optional[int] = 8192
     context_window: Optional[int] = 8192  # 上下文窗口（tokens），对话请求 max_tokens 不超过该值
     temperature: Optional[float] = 0.3

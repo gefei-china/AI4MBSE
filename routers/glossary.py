@@ -802,7 +802,7 @@ def discovery_suggest(did: int, conn=Depends(db_session), user=Depends(current_u
         from llm import llm_client
         # 显式选默认 chat provider（glossary_advisor 意图未绑定 Agent，不传会落 Mock）
         _pv = conn.execute("SELECT id FROM llm_providers WHERE is_default=1 AND status='active' "
-                           "AND (model_type='chat' OR model_type IS NULL) ORDER BY priority DESC LIMIT 1").fetchone()
+                           "AND (model_type IN ('chat','multimodal') OR model_type IS NULL) ORDER BY priority DESC LIMIT 1").fetchone()
         resp = llm_client.chat(
             [{"role": "system", "content": prompt},
              {"role": "user", "content": f"候选词：{term}"}],

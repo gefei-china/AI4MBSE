@@ -607,17 +607,34 @@ class OpenAICompatProvider(BaseLLM):
             self.stats["last_used_mock"] = False
             self.stats["last_latency_ms"] = int((time.time() - (t0 or time.time())) * 1000)
 
+    # 1x1 像素 PNG（base64 内联，零外部依赖）：multimodal 探测的最小图像载荷
+    _PX_PNG_B64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+        "AAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    )
+
     def test_connection(self, cfg: Optional[dict] = None) -> dict:
-        """连通性测试：优先 GET /models，失败则降级最小 chat 探测。cfg 覆盖实例配置。"""
+        """连通性测试（2026-10-16 起 = **真实可用验证**，废除"只列模型"的假绿探测）。
+
+        背景（2026-10-16 实测）：阿里云 MaaS embedding 配额 403 时，GET /models 仍返回 200
+        ⇒ chat 类型原实现（先 /models 后兜底 chat）会给出"连接成功"的假绿；用户在
+        列表页看到成功、编辑页（表单同样走本函数）看到 403，两边都没说谎，是口径不一。
+        现统一为真实最小调用：
+        - embedding:  POST /embeddings（原逻辑保持，本来就是真调用）
+        - chat:       POST /chat/completions，"ping"，max_tokens=5 —— 证明配额/模型真的可用
+        - multimodal: POST /chat/completions，文本 + 1x1 PNG data URI —— 证明图像输入真被接受
+        失败时返回上游原始错误（含 403 配额信息），不再有任何"列到模型就算通"的路径。
+        """
         c = cfg or self.cfg
         if not c.get("api_key"):
             return {"ok": False, "error": "API key not configured", "mock": True}
         if "{" in str(c.get("base_url", "")) or "}" in str(c.get("base_url", "")):
             return {"ok": False, "error": "Base URL 含未替换的占位符（如 {WorkspaceId}），请替换为实际值后再测试"}
+        mtype = str(c.get("model_type") or "chat").strip().lower()
         try:
             import httpx
             headers = {"Authorization": f"Bearer {c['api_key']}"}
-            if c.get("model_type") == "embedding":
+            if mtype == "embedding":
                 url = str(c["base_url"]).rstrip("/") + "/embeddings"
                 resp = httpx.post(url, json={"model": c["model_name"], "input": ["ping"]},
                                   headers=headers, timeout=15)
@@ -625,21 +642,30 @@ class OpenAICompatProvider(BaseLLM):
                     return {"ok": True, "status": 200, "method": "embeddings"}
                 return {"ok": False, "status": resp.status_code, "method": "embeddings",
                         "error": f"HTTP {resp.status_code}: {self._resp_error(resp)}"}
-            url = str(c["base_url"]).rstrip("/") + "/models"
-            resp = httpx.get(url, headers=headers, timeout=10)
+            url = str(c["base_url"]).rstrip("/") + "/chat/completions"
+            if mtype == "multimodal":
+                payload = {
+                    "model": c["model_name"],
+                    "messages": [{"role": "user", "content": [
+                        {"type": "text", "text": "回复：OK"},
+                        {"type": "image_url", "image_url": {
+                            "url": "data:image/png;base64," + self._PX_PNG_B64}},
+                    ]}],
+                    "max_tokens": 8,
+                }
+                method = "multimodal"
+            else:
+                payload = {
+                    "model": c["model_name"],
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 5,
+                }
+                method = "chat"
+            resp = httpx.post(url, json=payload, headers=headers, timeout=30)
             if resp.status_code == 200:
-                return {"ok": True, "status": resp.status_code, "method": "models"}
-            chat_url = str(c["base_url"]).rstrip("/") + "/chat/completions"
-            payload = {
-                "model": c["model_name"],
-                "messages": [{"role": "user", "content": "ping"}],
-                "max_tokens": 5,
-            }
-            resp2 = httpx.post(chat_url, json=payload, headers=headers, timeout=15)
-            if resp2.status_code == 200:
-                return {"ok": True, "status": 200, "method": "chat"}
-            return {"ok": False, "status": resp2.status_code, "method": "chat",
-                    "error": f"HTTP {resp2.status_code}: {self._resp_error(resp2)}"}
+                return {"ok": True, "status": 200, "method": method}
+            return {"ok": False, "status": resp.status_code, "method": method,
+                    "error": f"HTTP {resp.status_code}: {self._resp_error(resp)}"}
         except UnicodeEncodeError:
             return {"ok": False,
                     "error": "配置含非 ASCII 字符（中文等）：请检查 Base URL / API Key / 模型名是否含中文，API Key 应为服务商签发的真实密钥（sk- 开头）"}

@@ -365,10 +365,10 @@ function currentChatProvider(){
   const id = Number(document.getElementById('llm-providers')?.value) || 0;
   if(id) return _chatProvidersCache.find(p=>p.id===id) || null;
   // 未显式选择 → 会话实际用的就是「全局默认对话模型」（后端 llm._load_provider_cfg 的选取规则：
-  // model_type='chat' AND is_default=1）。原先直接 return null，会让下面 modelSupportsVision 的
-  // `if(!p) return true` 静默放行 → **提示说的和实际会不会发图对不上**。回落以对齐二者。
-  return _chatProvidersCache.find(p=>p.model_type==='chat' && p.is_default===1)
-      || _chatProvidersCache.find(p=>p.model_type==='chat') || null;
+  // model_type IN ('chat','multimodal') AND is_default=1，多模态可对话故同池）。原先直接 return null，
+  // 会让下面 modelSupportsVision 的 `if(!p) return true` 静默放行 → 提示说的和实际会不会发图对不上。回落以对齐二者。
+  return _chatProvidersCache.find(p=>(p.model_type==='chat'||p.model_type==='multimodal') && p.is_default===1)
+      || _chatProvidersCache.find(p=>p.model_type==='chat'||p.model_type==='multimodal') || null;
 }
 // ⚠️ 2026-09-21 修：API 返回的 tags 是**数组**（如 ['chinese','fast']），原实现对数组做 JSON.parse ——
 //    JSON.parse(String(['vision'])) === JSON.parse('vision') → 抛 SyntaxError → 恒返回 []。
@@ -383,6 +383,7 @@ function providerProviderTags(p){
 }
 function modelSupportsVision(p){
   if(!p) return true;  // 无 provider 配置（Mock 兜底）：无法判定，不拦截
+  if(String(p.model_type||'')==='multimodal') return true;  // 多模态类型本身就具备图像输入能力（与后端 provider_supports_vision 同套）
   const tags = providerProviderTags(p);
   // 字符集与后端 llm/__init__.py 的 VISION_TAG_RE 同套（用户标 'vision' 或 '多模态' 两侧都认）
   if(tags.some(t=>/vision|image|multimodal|多模态|图片/i.test(String(t)))) return true;

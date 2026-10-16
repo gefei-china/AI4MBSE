@@ -382,8 +382,9 @@ const MODAL_FORMS = {
       <input type="hidden" id="f-tags" value="">
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🤖</span><span class="fs-title">基础信息</span></div>
-        <div class="form-row"><label>模型类型 <span class="info-tip" title="对话模型=LLM（生成文本）；向量模型=Embedding（生成向量用于 RAG/检索）。⚠️ 多模态/视觉模型（如 qwen-vl-max、gpt-4o）请选「对话模型」，再勾选下方「支持图片理解」——不要在这里找 vision 类型：会话模型选择器只收对话模型，标成独立 vision 类型会导致该模型在会话里选不到。">ⓘ</span></label><select id="f-model-type" onchange="onLLMTypeChange()">
+        <div class="form-row"><label>模型类型 <span class="info-tip" title="对话模型=LLM（生成文本）；向量模型=Embedding（生成向量用于 RAG/检索）；多模态=既能对话又能理解图像（如 qwen-vl-max、gpt-4o、qwen3.8-omni），会话选择器与对话默认模型都会收录它；纯对话模型如需传图，改用「支持图片理解」标签。">ⓘ</span></label><select id="f-model-type" onchange="onLLMTypeChange()">
           <option value="chat">对话模型（LLM）</option>
+          <option value="multimodal">多模态（Multimodal）</option>
           <option value="embedding">向量模型（Embedding）</option>
         </select></div>
         <div id="f-embed-hint" style="display:none;font-size:11.5px;color:var(--amb);background:var(--amb-l);padding:6px 8px;border-radius:6px;margin-bottom:10px;line-height:1.7;">💡 <b>BGE-M3 接入示例</b>：先用 Xinference / TEI / Ollama / vLLM 本地部署 BGE-M3（暴露 OpenAI 兼容 /embeddings），再在此配置：<br>Base URL = 服务地址，如 <code>http://localhost:9997/v1</code><br>模型名 = BGE-M3 服务名，如 <code>text-embedding-bge-m3</code></div>

@@ -39,7 +39,7 @@ def _migrate_columns(conn):
     _add("agent_memory", "tier", "TEXT DEFAULT 'recall'")               # core | recall | archival
     # ── KB-S：Agent 级知识库消费范围（{"mode":"all_release"|"custom","branches":[],"docs":[]}）──
     _add("agents", "kb_scope", "TEXT DEFAULT '{}'")
-    _add("llm_providers", "model_type", "TEXT DEFAULT 'chat'")          # chat 对话模型 | embedding 向量模型
+    _add("llm_providers", "model_type", "TEXT DEFAULT 'chat'")          # chat 对话模型 | embedding 向量模型 | multimodal 多模态
     _add("llm_providers", "context_window", "INTEGER DEFAULT 8192")     # 上下文窗口（tokens）
     # ── D9 分层式多级管理：子工作流递归——父运行 id（Supervisor 树层级关联）──
     _add("flow_runs", "parent_run_id", "INTEGER DEFAULT 0")             # 0=顶层；>0=父运行 id（子流程 run）
