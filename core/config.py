@@ -800,6 +800,12 @@ DEFAULT_CONFIG = {
         # 任何提及系统级实名的域外查询都会拿到高置信走图谱（neg-07 实测 conf 0.9 → graph）。
         # 修复实测：neg-07 conf 0.90→0.60 误路由消除；graph 18 正例相关关系均 ≥3，置信度不变。
         "relation_relevance_gate": True,
+        # 2026-10-16 低置信检索抑制（neg 域收敛）：向量兜底注入宽度内（rag.top_k 条）
+        # 置信等级**全部**为「低」⇒ 向量内容整体不返回（chunk + 文档粗匹配兜底都不给 LLM）。
+        # 标定：doc 43 例全低判据下 0 误伤（唯一 top1 低的 doc-27 后续条全高）；neg 8 例
+        # 7 例 top5 全低（最大 vec_score 0.359）。图谱路由有独立 route_threshold 门禁、
+        # 附件命中不拦。置 False 回旧行为（低置信命中照常注入）。
+        "suppress_low_confidence": True,
         # ── RAGFlow 接入（L3，2026-10-10）─────────────────────────────────
         # ⚠️⚠️ 这 6 项**必须同时落在 DEFAULT_CONFIG**，
         #   只登记 CONFIG_SCHEMA 是不够的——config.get() 读 _CONFIG（由 DEFAULT_CONFIG 构建），
@@ -1377,6 +1383,7 @@ CONFIG_SCHEMA = {
         "w_relations":           {"type": "float", "desc": "图谱置信权重：关系连接性因子"},
         "w_typing":              {"type": "float", "desc": "图谱置信权重：类型标注完整度因子"},
         "relation_relevance_gate": {"type": "bool", "desc": "图谱置信度关系因子只计入与 query 相关的关系（两端实体名均在 query 中）；False=旧行为全量计数"},
+        "suppress_low_confidence": {"type": "bool", "desc": "低置信检索抑制：向量兜底注入宽度内全为「低」置信时不返回任何向量内容（neg 域收敛）；False=旧行为"},
         "confidence_high":       {"type": "float", "desc": "命中置信等级「高」分界（真向量相似度口径）"},
         "confidence_mid":        {"type": "float", "desc": "命中置信等级「中」分界"},
         "rerank_enabled":        {"type": "bool",  "desc": "LLM Rerank 重排开关（失败静默回退原排序）"},

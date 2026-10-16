@@ -34,13 +34,22 @@ function onStageEvent(ev){
 }
 
 // ── V2.4 会话内执行过程（Trae 式时间线）：按事件到达顺序依次展示，进行中展开、完成自动收起 ──
-let _procS = {timeline: [], thinking: '', thinkingRounds: {}, thinkingOrder: [], dag: {nodes:{}, order:[]}, dagDirty: false,
-              startTime: null, endTime: null, summaryCollapsed: false, done: false, tokens: '', subChildren: {}, keyMarked: {},
-              // ★ F-1：子任务实时输出缓冲 {task_key: 文本}。
-              //   子任务的 token **绝不能**流进正文区（米爸需求3：最终输出正文在流程执行
-              //   完成后再输出）—— 后端 subtask token 带 `key`、最终正文 token 不带，
-              //   据此分流；此前无条件全进 _tokBuf，子任务产出与最终正文混在一起。
-              subOutput: {}, subOutputRaf: 0};
+// ★ 2026-10-16（会话 9362 实测修复）：procReset 与模块级初始化此前**各写一份字面量**，
+//   procReset 漏了 subOutput/subOutputRaf ⇒ 第 2 条消息起 _procS.subOutput 为 undefined：
+//   done 事件的 _forceFlushSubOutput 里 Object.keys(undefined) 抛
+//   "Cannot convert undefined or null to object" → finishStream 永不执行 → 直播 proc 盒
+//   卡在「执行中」、错误横条却已渲染（用户看到"失败但卡死"）。子任务 token 写入同样崩。
+//   收敛为**单一工厂函数**，两处共用，杜绝再次漂移（同一状态写两份必对不上）。
+function _newProcState(){
+  return {timeline: [], thinking: '', thinkingRounds: {}, thinkingOrder: [], dag: {nodes:{}, order:[]}, dagDirty: false,
+          startTime: null, endTime: null, summaryCollapsed: false, done: false, tokens: '', subChildren: {}, keyMarked: {},
+          // ★ F-1：子任务实时输出缓冲 {task_key: 文本}。
+          //   子任务的 token **绝不能**流进正文区（米爸需求3：最终输出正文在流程执行
+          //   完成后再输出）—— 后端 subtask token 带 `key`、最终正文 token 不带，
+          //   据此分流；此前无条件全进 _tokBuf，子任务产出与最终正文混在一起。
+          subOutput: {}, subOutputRaf: 0};
+}
+let _procS = _newProcState();
 function toggleProc(headEl){
   const blk = headEl.closest('.proc-block');
   if(!blk) return;
@@ -58,8 +67,8 @@ function toggleProc(headEl){
   }
 }
 function procReset(){
-  _procS = {timeline: [], thinking: '', thinkingRounds: {}, thinkingOrder: [], dag: {nodes:{}, order:[]}, dagDirty: false,
-            startTime: Date.now(), endTime: null, summaryCollapsed: false, done: false, tokens: '', subChildren: {}, keyMarked: {}};
+  _procS = _newProcState();
+  _procS.startTime = Date.now();
   const b = document.getElementById('proc-box'); if(b) b.innerHTML='';
 }
 // 按 id 更新或追加时间线步骤；status 离开 run（完成/失败）时自动收起，进行中保持展开
@@ -740,11 +749,16 @@ function procMarkStopped(){
       }
       flipped++;
     }
-    _procS.done = true;
-    _procS.endTime = _procS.endTime || Date.now();
-    stopElapsedTimer();
-    if(flipped) procRender();
-  }catch(e){ /* 收口翻转失败不阻断主收口流程 */ }
+  }catch(e){ /* 翻转失败不阻断收口 */
+    // ★ 2026-10-16（会话 9362 实测）：收口三件套原在 try 内，翻转链任一步抛异常都会使
+    //   done/endTime/stopElapsedTimer/procRender 不执行 ⇒ 汇总条永远停在「执行中…N 个环节」
+    //   （用户看到"调用失败、顶部还在转、点不了新的"）。改为各自独立 try 无条件执行，
+    //   任何单项失败都不能阻止其余项；procRender 也从 if(flipped) 改无条件——零翻转同样要收口。
+  }
+  try{ _procS.done = true; }catch(e){}
+  try{ _procS.endTime = _procS.endTime || Date.now(); }catch(e){}
+  try{ stopElapsedTimer(); }catch(e){}
+  try{ procRender(); }catch(e){}
 }
 // P0-1：编排 DAG 轨迹图（Cytoscape + dagre，节点=子任务，边=deps 依赖，按状态着色）
 function dagBuild(containerId, data){
@@ -882,7 +896,7 @@ function _scheduleSubOutputFlush(key){
   if(_procS.subOutputRaf) return;
   _procS.subOutputRaf = requestAnimationFrame(()=>{
     _procS.subOutputRaf = 0;
-    const ks = Object.keys(_procS.subOutput);
+    const ks = Object.keys(_procS.subOutput || {});
     ks.forEach(k=>{
       const card = _procS.timeline.find(x=>x.id==='subtask_'+k);
       if(!card) return;                      // 卡还没建（subtask run 事件未到）→ 下轮再刷
@@ -897,7 +911,7 @@ function _scheduleSubOutputFlush(key){
 // 流结束（done/error）时把残留的子任务输出一次性刷齐，防末帧丢失
 function _forceFlushSubOutput(){
   if(_procS.subOutputRaf){ cancelAnimationFrame(_procS.subOutputRaf); _procS.subOutputRaf = 0; }
-  Object.keys(_procS.subOutput).forEach(k=>{
+  Object.keys(_procS.subOutput || {}).forEach(k=>{
     const card = _procS.timeline.find(x=>x.id==='subtask_'+k);
     if(!card) return;
     card.liveOutput = _procS.subOutput[k] || '';
@@ -981,6 +995,9 @@ function handleSSE(raw) {
     //   与最终正文混在一起，用户看到的是"过程与结果糊成一片"。
     if(ev.key){
       const _k = String(ev.key);
+      // 2026-10-16 防御：subOutput 缺失时自建（工厂修复后不该发生；真发生了也不能让
+      //   整条流死在这里——子任务 token 丢失只是少一段实时输出，比会话崩掉轻得多）
+      if(!_procS.subOutput) _procS.subOutput = {};
       _procS.subOutput[_k] = (_procS.subOutput[_k] || '') + (ev.delta || '');
       _scheduleSubOutputFlush(_k);
       return;

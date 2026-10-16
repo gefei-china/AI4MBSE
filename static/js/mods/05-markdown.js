@@ -319,20 +319,36 @@ function formatMsgTime(ts){
 }
 // ── 复制消息内容（按钮默认仅 icon，hover 展开文字；成功反馈显示 ✓ 已复制）──
 function copyMsg(btn){
-  const body = btn.closest('.body');
-  if(!body) return;
+  // 2026-10-16 修（米爸实测「复制用户输入无效」）：复制按钮渲染在 .msg-footer 里，
+  //   是 .body 的**兄弟节点**而非子节点 ⇒ 原实现 btn.closest('.body') 恒为 null →
+  //   静默 return，无提示无反应。改为先取消息容器（.msg）再在其内查 .body。
+  const msg = btn.closest('.msg');
+  const body = msg ? msg.querySelector('.body') : null;
+  if(!body){ toast('未找到消息内容'); return; }
   const clone = body.cloneNode(true);
   const footer = clone.querySelector('.msg-footer');
   if(footer) footer.remove();
   const text = clone.textContent.trim();
-  navigator.clipboard.writeText(text).then(()=>{
+  if(!text){ toast('无可复制内容'); return; }
+  const _done = () => {
     btn.innerHTML = '<span class="cp-txt" style="display:inline;">✓ 已复制</span>';
     btn.classList.add('copied');
     setTimeout(()=>{
       btn.classList.remove('copied');
       btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><rect x="6" y="6" width="8" height="8" rx="1.5"></rect><path d="M4 10 H3.5 A1.5 1.5 0 0 1 2 8.5 v-5 A1.5 1.5 0 0 1 3.5 2 h5 A1.5 1.5 0 0 1 10 3.5 V4"></path></svg><span class="cp-txt">复制</span>';
     }, 1500);
-  }).catch(()=>{ toast('复制失败'); });
+  };
+  // 剪贴板 API 在非安全上下文/被拒绝时不可用 → execCommand 兜底（与 copyExecDetail 同套路）
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(_done, ()=>{
+      if(typeof fallbackCopy === 'function'){ try{ fallbackCopy(text); _done(); return; }catch(e){} }
+      toast('复制失败');
+    });
+  } else if(typeof fallbackCopy === 'function'){
+    try{ fallbackCopy(text); _done(); }catch(e){ toast('复制失败，请手动选择'); }
+  } else {
+    toast('当前浏览器不支持自动复制，请手动选择文本');
+  }
 }
 
 // ── V3 会话内执行过程：持久化数据（card_data.exec）→ 时间线顺序 HTML ──

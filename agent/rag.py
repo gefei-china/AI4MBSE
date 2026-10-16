@@ -296,7 +296,18 @@ class GraphRAG:
                                                include_deprecated=_inc_dep)
                 except Exception:
                     chunk_hits = []
-            if chunk_hits:
+            # P1-5（2026-10-16）低置信检索抑制（neg 域收敛）：
+            # 域外查询的向量命中置信度极低（2026-10-16 标定：neg 8 例中 7 例 top5 全「低」、
+            # 最大 vec_score 0.359；doc 43 例在全低判据下 0 误伤）——把这些命中喂给 LLM
+            # 是幻觉温床（问"今天北京天气"也拿到 20 条"相关知识"）。判据：注入宽度内
+            # （chunk_hits 全部）confidence_level 全为「低」⇒ 向量内容**整体不返回**
+            # （chunk 级 + 文档粗匹配兜底）。只作用于向量兜底路径：图谱路由有独立
+            # route_threshold 门禁、附件命中不拦（用户上传资料是首要依据）。
+            # 开关 rag.suppress_low_confidence（默认 True）。
+            if chunk_hits and self._low_conf_suppressed(chunk_hits):
+                chunk_hits = []
+                vector_results = []
+            elif chunk_hits:
                 vector_results = chunk_hits
             else:
                 doc_sql, doc_params = "", []
@@ -492,6 +503,30 @@ class GraphRAG:
                     if str(e.get("entity_type") or "").strip() and str(e.get("entity_type")) != str(e.get("name")))
         type_match = typed / len(graph_results) if graph_results else 0.0
         return min(w_cov * hit + w_rel * rels + w_typ * type_match, 1.0)
+
+    @staticmethod
+    def _low_conf_suppressed(chunk_hits: list) -> bool:
+        """P1-5：低置信检索抑制判据——注入宽度内（chunk_hits 全部，即 rag.top_k 条）**全部**为「低」置信。
+
+        标定（2026-10-16，69 例评测集，注入宽度 top_k=4）：
+          doc 43 例：top1 低仅 doc-27 一例，且其 top2-5 全「高」（gold 在前 5）⇒ 全低判据下 **0 误伤**
+          neg  8 例：7 例 top5 全「低」（最大 vec_score 0.359）⇒ 全低判据下 **全命中**
+        判据从「首条低」升级为「全批低」的原因：A/B 实测「首条低」误伤 doc 2/43
+        （recall@5 0.837 vs 0.884）——那些查询 top1 低但后续条高置信，整批挡掉会丢金标。
+        开关 rag.suppress_low_confidence（默认 True，置 False 回旧行为）。
+        """
+        try:
+            from core import config as _cfg
+            if not _cfg.as_bool("rag", "suppress_low_confidence", True):
+                return False
+        except Exception:
+            pass
+        try:
+            if not chunk_hits:
+                return False
+            return all(str(h.get("confidence_level") or "") == "低" for h in chunk_hits)
+        except Exception:
+            return False
 
     @staticmethod
     def _resolve_scope_docs(conn, raw_docs, include_deprecated: bool = False) -> tuple:
