@@ -95,7 +95,27 @@ class ExecuteMixin:
             if not team_intent:
                 return {"error": f"智能体团队不存在或未启用：{team}，请到「Agent 管理」创建主 Agent 并启用后重试",
                         "content": "", "intent": "chat", "agent": team, "team": team}
-            forced_intent = forced_intent or team_intent
+            # ★ 2026-10-16（米爸决策 R1+R2）：**主 Agent 优先于 forced_intent**（与 stream.py:1777 同构）。
+            #   原写法 `forced_intent or team_intent` 让前端隐藏 select 的残留值压过用户所选主 Agent
+            #   ⇒ 选「智源对接agent」却以「需求分析Agent」作答（会话 9367 实测）。
+            #   forced_intent 参数本身保留（编排内部直连子 Agent 仍依赖它），只反转入口优先级。
+            if forced_intent and forced_intent != team_intent:
+                forced_intent = None
+            else:
+                forced_intent = team_intent
+            # ★ 2026-10-16 R1：落到会话，供后续未显式带 team 的请求回读（同构 stream.py）
+            self._save_main_agent(conversation_id, team_intent)
+        elif conversation_id and int(conversation_id) > 0:
+            # ★ 2026-10-16 R1：未带 team ⇒ 回读会话绑定（非流式路径同构）
+            _bound = self._load_main_agent(conversation_id)
+            if _bound:
+                team_intent = _bound
+                forced_intent = forced_intent or _bound
+                try:
+                    print(f"[main-agent] 会话#{conversation_id} 未指定主 Agent，"
+                          f"按绑定「{_bound}」执行", flush=True)
+                except Exception:
+                    pass
         # Step 1: Intent recognition（P0-3: 6 类意图路由；forced_intent 时跳过识别直接定向）
         # P0-1：Glossary 归一化——带 conn 的 detect 会优先做术语归一化（v2→SysML_V2）
         # P0-2：轻量 DST——读取会话级当前意图，无信号时继承（追问/续写不误判 chat）
@@ -147,7 +167,16 @@ class ExecuteMixin:
             elif _act == "orchestrate":
                 team_forced = True
             else:
+                # ★ 2026-10-16 R2：主 Agent 无成员 → 由本体自主执行（同构 stream.py:1871）。
+                #   team_direct=True 必须拦住下游自动编排，否则会换执行主体。
                 team_forced = False
+                team_direct = True
+                _notice = (team_decision or {}).get("notice") or ""
+                if _notice:
+                    try:
+                        print(f"[team] {team_intent}：{_notice}", flush=True)
+                    except Exception:
+                        pass
         agent_def = self.registry.get(intent)
         hil_level = agent_def.hil_level
         self._hil_level = hil_level  # M5：HIL 分级——L2 时写工具进入人工确认队列

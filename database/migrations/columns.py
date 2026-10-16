@@ -25,6 +25,14 @@ def _migrate_columns(conn):
     _add("orch_checkpoints", "summary_written", "INTEGER DEFAULT 0")
     # ── 内容级澄清挂起（AI 建模信息不清晰 → 选择题确认，回答后续答）──
     _add("conversations", "pending_clarify", "TEXT DEFAULT ''")
+    # ── 2026-10-16 R1：会话级「主 Agent」绑定（执行主体持久化）──
+    # 背景：team 原先只存在于前端下拉 + localStorage（全局、不按会话分），
+    #   任何不起源于该下拉的路径（澄清续答/换标签页/清缓存/新接口忘传）都会静默掉回
+    #   通用问答 Agent —— 实测会话 9372：选「智源对接agent」发问，澄清续答后掉回 chat，
+    #   导致该会话的 MCP 工具全部不可用。
+    # 语义：会话一旦用过某主 Agent 就记在这里；请求未显式带 team 时回读它，
+    #   避免"选了主 Agent 却像没选"。用户主动改选会覆盖（下拉change即写）。
+    _add("conversations", "main_agent", "TEXT DEFAULT ''")
     # ── P1-3：SysML Profile 导入溯源（类型 → 来源 Profile/Stereotype）──
     _add("ontology_types", "profile_source", "TEXT DEFAULT ''")   # 来源 Profile 名
     _add("ontology_types", "profile_ref", "TEXT DEFAULT ''")      # 来源 Stereotype/metadata 元素名

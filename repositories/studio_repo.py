@@ -190,9 +190,9 @@ class StudioRepo(BaseRepo):
 
     def set_mcp_enabled(self, sid: int, enabled: int) -> None:
         self.execute("UPDATE mcp_servers SET enabled=? WHERE id=?", (enabled, sid))
+        self._sync("mcp_servers", sid)
 
     # ── MCP-D1：动态发现与健康巡检落库 ──
-        self._sync("mcp_servers", sid)
     def update_mcp_discovery(self, sid: int, status: str, latency_ms: int,
                              tools: str, capabilities: str, protocol_version: str,
                              server_info: str, resources: str, prompts: str) -> None:

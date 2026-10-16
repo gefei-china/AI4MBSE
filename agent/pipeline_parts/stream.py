@@ -1774,7 +1774,34 @@ class StreamMixin:
                     yield {"type": "error", "message": (
                         f"智能体团队不存在或未启用：{team}，请到「Agent 管理」创建主 Agent 并启用后重试")}
                     return
-                forced_intent = forced_intent or team_intent
+                # ★ 2026-10-16（米爸决策 R1+R2）：**主 Agent 优先于 forced_intent**。
+                #   原写法 `forced_intent = forced_intent or team_intent` 让 forced_intent 压过主 Agent，
+                #   而 forced_intent 会话由前端隐藏 select（quick-agent）从 localStorage 恢复 ⇒
+                #   选「智源对接agent」却被 residual requirement_analysis 劫持（会话 9367 / 消息 4029 实测）。
+                #   现在：用户显式选了主 Agent，就以主 Agent 为准，forced_intent 一律丢弃。
+                #   ⚠️ forced_intent **参数本身必须保留** —— 编排内部
+                #   （workflows/nodes.py:88、planner.py:278、stream.py:267/536 分派子 Agent）
+                #   仍靠它直连指定 Agent；此处只改"用户入口"这条路径的优先级。
+                if forced_intent and forced_intent != team_intent:
+                    yield {"type": "reasoning", "delta": (
+                        f"（执行主体）已按你选择的主 Agent「{team_intent}」执行；"
+                        f"忽略外部传入的定向值 {forced_intent}")}
+                    forced_intent = None
+                else:
+                    forced_intent = team_intent
+                # ★ 2026-10-16 R1：把所选主 Agent **落到会话**，供后续任何未显式带 team 的
+                #   请求回读（澄清续答/换标签页/新接口忘传都不再静默掉回通用 Agent）。
+                self._save_main_agent(conversation_id, team_intent)
+            elif conversation_id and int(conversation_id) > 0:
+                # ★ 2026-10-16 R1：请求未带 team ⇒ 回读会话绑定。命中则按它执行并**明示**，
+                #   让"为什么是这个 Agent"始终可解释（不静默继承）。
+                _bound = self._load_main_agent(conversation_id)
+                if _bound:
+                    team_intent = _bound
+                    forced_intent = forced_intent or _bound
+                    yield {"type": "reasoning", "delta": (
+                        f"（执行主体）本次未指定主 Agent，已按本会话绑定的「{_bound}」继续执行；"
+                        "如需更换，请在输入框上方重新选择主 Agent")}
             # ── 阶段 1：意图识别（V2.7：无论是否指定智能体，一律执行识别——
             # 指定智能体只作"执行 Agent 定向"，不再跳过识别；目标/槽位/澄清/多意图都依赖识别结果）──
             yield {"type": "stage", "name": "意图识别", "status": "run"}
@@ -1857,8 +1884,16 @@ class StreamMixin:
                 elif _act == "orchestrate":
                     team_forced = True
                 else:
-                    # 团队无成员等兜底：主 Agent 直行
+                    # ★ 2026-10-16 R2：主 Agent 无成员 → **由本体自主执行**（不是错误，也不静默）。
+                    #   改前这里是纯 `team_forced = False`，无任何提示 ⇒ 用户选了主 Agent 却像没选。
+                    #   现在把 decide 备好的 notice 显式说出来，并保持 team_direct=True ——
+                    #   它必须**拦住**下游 `_needs_orchestration`（否则会另起 Planner-Executor，
+                    #   换一个执行主体，与"由所选主 Agent 执行"矛盾）。
                     team_forced = False
+                    team_direct = True
+                    _notice = (team_decision or {}).get("notice") or ""
+                    if _notice:
+                        yield {"type": "reasoning", "delta": f"（主 Agent 自主执行）{_notice}"}
                 agent_def = self.registry.get(intent)
             else:
                 agent_def = self.registry.get(intent)
@@ -2129,10 +2164,20 @@ class StreamMixin:
                         context_text = context_text + "\n\n【需求质量分析结果（供引用，按此输出报告）】\n" + "\n".join(_q_lines)
                 except Exception:
                     quality_report = None
-            yield {"type": "stage", "name": "知识库检索", "status": "done",
-                   "retrieved": should_retrieve, "route": retrieval.get("route", "none"),
-                   "route_reason": retrieval.get("route_reason", ""),
-                   "kb_scope_warn": retrieval.get("kb_scope_warn")}   # KB-S：白名单失效告警（供前端/抓包）
+            # ★ 2026-10-16（米爸反馈「为啥每次都有知识库检索这个环节」· 补齐漏改的一处）：
+            #   `done` 事件原先**无条件发射**，于是 should_retrieve=False 时前端
+            #   `onStageEvent` 仍会 `procAddStage('知识库检索','done','未引用')`
+            #   ⇒ 用户每轮都看到一个"完成了但其实没做"的幽灵环节。
+            #   注意这与 2108-2113 修的是**同一处语义的两半**：那一轮只把 `run` 移进了
+            #   if，`done` 忘了一起移 ⇒ 幽灵环节依旧（"同一个量在多个环节各写一份必对不上"）。
+            #   另两处路径（本文件 69-72 编排规划、1507-1510 编排复用）早已整段移除，
+            #   只剩主直行路径漏改 —— 三处各写一份，改两处漏一处是必然。
+            #   口径：没真检索就**一个事件都不发**（不是隐藏结果，而是根本不宣称做了）。
+            if should_retrieve:
+                yield {"type": "stage", "name": "知识库检索", "status": "done",
+                       "retrieved": should_retrieve, "route": retrieval.get("route", "none"),
+                       "route_reason": retrieval.get("route_reason", ""),
+                       "kb_scope_warn": retrieval.get("kb_scope_warn")}   # KB-S：白名单失效告警（供前端/抓包）
             # KB-S（2026-09-19）：Agent 文档白名单失效 → 显式提示。否则表现为「Agent 配了知识库依赖
             # 却检索恒为空」，调用方无法区分「库里没有」与「白名单写错了」（实测 4887 块规范恒不可见）。
             _kbw = retrieval.get("kb_scope_warn")

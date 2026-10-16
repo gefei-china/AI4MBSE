@@ -70,29 +70,13 @@ async function loadQuickBar(){
     _agentsCache = agents || _agentsCache;  // V3：供 @智能体弹窗/chip 复用
     _skillsCache = skills || _skillsCache;  // V3：供 /技能弹窗/chip 复用
     _teamsCache = teams || _teamsCache;     // 团队模式：主 Agent 团队（工作流下拉）数据源
-    const aSel = document.getElementById('quick-agent');
-    if(aSel && agents && agents.length){
-      aSel.innerHTML = '<option value="">自动匹配</option>' + agents.map(a=>`<option value="${esc(a.name)}">${esc(a.display_name||a.name)}</option>`).join('');
-      // 2026-09-23 修复（默认定向）：默认「自动匹配」，不再默认选中列表第一个 Agent。
-      // 原写法无记录时取 names[0]（/api/studio/agents 按 id 升序 → 需求分析Agent），
-      // 而 sendChat 会把下拉值作为 forced_intent 发送 → 后端 `intent = forced_intent or _detected`
-      // 恒定覆盖意图识别；且 `_needs_orchestration` 在 forced_intent 非空时直接 return False
-      // → 现象：问什么都以「需求分析Agent」作答、末尾恒定挂一张空的候选需求卡、从不自动编排。
-      // 现在仅当用户显式选过（localStorage 有有效记录）才恢复，否则保持「自动匹配」。
-      let last = '';
-      try{ last = localStorage.getItem('mbse_last_agent') || ''; }catch(e){}
-      const names = agents.map(a=>a.name);
-      aSel.value = (last && names.includes(last)) ? last : '';
-      // 记录上次选择（change 防重复绑定；@提及等程序赋值点需手动 dispatchEvent('change')）
-      if(!aSel.dataset.lastBind){
-        aSel.dataset.lastBind = '1';
-        aSel.addEventListener('change', ()=>{
-          try{ localStorage.setItem('mbse_last_agent', aSel.value || ''); }catch(e){}
-          if(typeof renderChips === 'function') renderChips();
-        });
-      }
-      if(typeof renderChips === 'function') renderChips();
-    }
+    // ★ 2026-10-16（米爸决策 R1）：**quick-agent 下拉整体退役**，执行主体唯一由「主 Agent」
+    //   （quick-team）承载。事故背景：quick-agent 是 display:none 的隐藏 select，却仍被
+    //   sendChat 无条件当作 forced_intent 发送，且从 localStorage.mbse_last_agent 恢复历史值
+    //   ⇒ 残留的 requirement_analysis 静默压过用户所选的主 Agent（会话 9367 / 消息 4029 实测：
+    //   选「智源对接agent」却以「需求分析Agent」作答）。
+    //   现在不再填充、不再记录、不再发送；下方先清理历史残留键，避免旧值复活。
+    try{ localStorage.removeItem('mbse_last_agent'); }catch(e){}
     const sSel = document.getElementById('quick-skill');
     if(sSel && skills && skills.length){
       sSel.innerHTML = '<option value="">自动匹配</option>' + skills.map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
@@ -100,26 +84,28 @@ async function loadQuickBar(){
     const tSel = document.getElementById('quick-team');
     if(tSel){
       if(teams && teams.length){
-        // 团队按主 Agent 划分：每个主 Agent 即一个智能体团队（工作流）
-        tSel.innerHTML = '<option value="">自动（不指定团队）</option>' + teams.map(t=>`<option value="${esc(t.name)}">👑 ${esc(t.display_name||t.name)}${t.team_count?`（${t.team_count}人）`:''}</option>`).join('');
-        tSel.title = '选择智能体团队（工作流）：主 Agent 负责意图识别/任务拆分/计划制定/任务分派/内容整合输出';
-        // 2026-09-29（默认选中第一团队）：/api/studio/agent-teams 按 agents.id 升序返回，
-        //   teams[0] 即「排序第一的团队」，未记录过用户选择时默认选中它，免去每次手动选择。
-        //   与 Agent 下拉（2026-09-23 改回"自动匹配"）**并不矛盾**：两者语义不同 ——
-        //     · Agent 下拉值 → forced_intent，走 `intent = forced_intent or _detected`
-        //       **恒定覆盖**意图识别，故必须默认"自动匹配"；
-        //     · 团队下拉值 → team，走 `team_forced=True` 的**强制编排**分支
-        //       （_try_orchestrate_team：主 Agent 负责识别/拆解/分派/汇总），
-        //       这是团队模式的既定语义，默认选中即"默认走团队编排"，符合预期。
-        //   用户显式改过（含主动选"自动"）则以记录为准 —— 空串也是有效记录。
-        let lastTeam = null;
-        try{ lastTeam = localStorage.getItem('mbse_last_team'); }catch(e){}
+        // ★ 2026-10-16（米爸决策 R1 第二步）：**取消「自动（不指定团队）」选项**。
+        //   原实现有空串 option，选中后 team='' ⇒ 后端意图识别自由发挥 ⇒ 执行主体随机
+        //   （实测会话 9372 就这么掉到「通用问答Agent」，MCP 工具全不可用）。
+        //   米爸口径："必须选择主 agent 才能发起会话" ⇒ 下拉**只列主 Agent**，无空串项；
+        //   默认值见下方（会话绑定 > localStorage 记录 > 排序第一）。
+        tSel.innerHTML = teams.map(t=>`<option value="${esc(t.name)}">👑 ${esc(t.display_name||t.name)}${t.team_count?`（${t.team_count}人）`:''}</option>`).join('');
+        tSel.title = '选择主 Agent（执行主体）：每次会话都必须指定；其负责意图识别/任务拆分/计划制定/任务分派/内容整合输出，也可直接用自己绑定的技能/工具/MCP 完成任务';
+        // 默认值三级优先：
+        //   ① 当前会话已绑定的主 Agent（window._convMainAgent，由 loadConversations 详情带出）
+        //      —— 保证"这个会话一直由同一个主 Agent 执行"，换标签页/刷新都不漂移；
+        //   ② localStorage 上次选择（跨会话的记忆）；
+        //   ③ 排序第一的团队（/api/studio/agent-teams 按 agents.id 升序）。
+        // ⚠️ 不再认空串记录：用户显式选"自动"这条路已被产品上移除，
+        //   历史 localStorage 里的 '' 一律忽略，否则会把下拉打回"无主 Agent"状态。
+        let lastTeam = '';
+        try{ lastTeam = localStorage.getItem('mbse_last_team') || ''; }catch(e){}
+        const convBound = (typeof window._convMainAgent==='string') ? window._convMainAgent : '';
         const teamNames = teams.map(t=>t.name);
-        if(lastTeam !== null && (lastTeam === '' || teamNames.includes(lastTeam))){
-          tSel.value = lastTeam;
-        } else {
-          tSel.value = teamNames[0] || '';
-        }
+        const pick = (convBound && teamNames.includes(convBound)) ? convBound
+                   : ((lastTeam && teamNames.includes(lastTeam)) ? lastTeam : (teamNames[0] || ''));
+        tSel.value = pick;
+        if(pick) window._convMainAgent = pick;   // 供 _requireMainAgent() 判定
         if(!tSel.dataset.lastBind){
           tSel.dataset.lastBind = '1';
           tSel.addEventListener('change', ()=>{
@@ -128,8 +114,9 @@ async function loadQuickBar(){
           });
         }
       } else {
-        tSel.innerHTML = '<option value="">无智能体团队</option>';
-        tSel.title = '暂无主 Agent 团队，请到「Agent 管理」创建主 Agent 并配置成员';
+        // 无任何主 Agent：给一个禁用的占位（不是空串 option —— 空串会被当成"未选择"放行）
+        tSel.innerHTML = '<option value="" disabled selected>暂无主 Agent</option>';
+        tSel.title = '暂无主 Agent，请到「Agent 管理」创建主 Agent 并启用';
       }
     }
   }catch(e){ /* 候选加载失败静默：快捷条仍可用（可手输） */ }
@@ -290,6 +277,10 @@ async function deleteStoredReport(id){
 function finishStream(r, aiBox) {
   // P1-1 流式结束：恢复发送按钮
   showStopBtn(false); _streaming = false; _stoppedManually = false;
+  // ★ 2026-10-16 Q2：本盒正被「澄清改选 / 澄清续答」复用接管（reuseForPick 标记）——
+  //   这是上一轮被 abort 后遗留的 cleanup 触发，不该把接管流的盒替换掉。直接返回。
+  //   （正常续答流在自身 done 时此标记已由其接管逻辑清掉，不会命中这里。）
+  if(aiBox && aiBox.dataset && aiBox.dataset.reuseForPick === '1') return;
   // 2026-10-10（米爸实测「一轮对话输出两次内容」·会话 9336）：
   //   done 事件带真实 message_id ⇒ 本轮 assistant 消息**已落库**。
   //   在流式容器上打 `finalizedId` 标记，`commitPartialStream` 见到它就直接短路，

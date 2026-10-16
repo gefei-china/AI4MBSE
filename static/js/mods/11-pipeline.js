@@ -1076,18 +1076,65 @@ function renderClarify(ev){
   const st = document.getElementById('chat-status');
   if(st) st.textContent = `意图置信度 ${pct}% · 已按「${ev.intent}」继续（可点选改选重发）`;
 }
-// 澄清改选：切智能体下拉 + 恢复原文 → 重发（forced_intent 跳过识别直接定向）
+// 澄清改选：改判本轮意图 → **在原输出流内**重跑（不新起一轮）
+// ★ 2026-10-16（米爸决策 R1）：改判意图只影响"谁理解"，不改"谁执行"（执行主体永远是 quick-team）。
+// ★ 2026-10-16 Q2：原实现把原文塞回输入框再 sendChat() ⇒ 新建用户气泡 + 新 AI 气泡 = 新的一轮
+//   （米爸："确认后会重新起一轮对话，应该在原来的输出流中继续后续环节"）。
+//   现改为：复用**同一个 AI 输出盒**，abort 当前流后原地重置并续跑，不新建任何气泡。
 async function pickIntent(msg, intent){
-  const qa = document.getElementById('quick-agent');
-  if(qa){
-    // 下拉懒加载：先补 option 再设值——select.value 赋不存在的值会被浏览器重置为空串
-    if(![...qa.options].some(o=>o.value===intent)) qa.add(new Option(intent, intent));
-    qa.value = intent;
-    qa.dispatchEvent(new Event('change'));   // V2.7：程序赋值也记录上次选择
+  window._intentOverride = intent || '';   // 一次性标记，pumpStream 读取后即清
+  if(!requireMainAgent()) return;          // 主 Agent 闸（与发起同口径），不放行则不重置盒
+  let box = document.getElementById('stream-ai');
+  if(!box){                                 // 轮次已 done（bar 被 finishStream 摘除）→ 取最后一个 AI 盒复用
+    const _all = Array.from(document.querySelectorAll('#chat-area .msg.ai'));
+    box = _all[_all.length - 1];
   }
-  const inp = document.getElementById('chat-input');
-  if(inp) inp.value = msg;
-  sendChat();
+  if(!box) return;
+  // 标记接管 + 中止旧流（旧流 cleanup 见 reuseForPick/_streamSuperseded 会跳过替换与状态抢占）
+  box.dataset.reuseForPick = '1';
+  window._streamSuperseded = true;
+  if(_streaming && _streamAbort) _streamAbort.abort();
+  box = _resetBoxForContinue(box);          // 原地重置为干净流式态（覆盖改选前的错误输出）
+  const st = document.getElementById('chat-status');
+  if(st) st.textContent = `已改选「${intent}」，正在按此意图重新执行…`;
+  resetPipeline();
+  pumpStream(box, msg, []);
+}
+// 把指定 AI 盒**原地**重置为干净流式态，供「澄清改选 / 澄清续答」续接（不新起一轮）。
+//   返回同一 DOM 元素（id 复位为 stream-ai，保证 handleSSE 仍能命中），清除 finalizedId/committedId
+//   防 commitPartialStream 短路、清 reuseForPick 之外的状态；调用方负责设 reuseForPick 与 abort。
+function _resetBoxForContinue(box){
+  box.className = 'msg ai';
+  box.id = 'stream-ai';
+  box.dataset.convId = String(currentConvId);
+  box.removeAttribute('data-finalizedid');
+  box.removeAttribute('data-committedid');
+  box.dataset.reuseForPick = '1';          // 接管期间防旧流 cleanup 替换此盒
+  box.innerHTML = '<span class="who">AI</span><div class="msg-inner">'
+                + '<div class="proc" id="proc-box"></div>'
+                + '<div class="body streaming"><span class="typing"></span></div></div>';
+  return box;
+}
+// 取出会话区最后一个 AI 消息盒（即"发起了澄清确认"的那条），供澄清续答原地续接。
+function _lastAiBox(){
+  const _all = Array.from(document.querySelectorAll('#chat-area .msg.ai'));
+  return _all[_all.length - 1] || null;
+}
+// 澄清续答统一入口：在**原 AI 输出盒**内续跑，不新建用户气泡、不新建 AI 盒（米爸 Q2）。
+//   card 形参保留以便将来定位，但续接盒统一取"最后一个 AI 消息"（澄清交互卡挂在输入区 dock，
+//   不在 AI 盒内，故不能用 card.closest）。兜底：取不到盒时退回原 sendResume（新气泡）。
+function _continueInSameBox(card, text){
+  if(!requireMainAgent()) return;            // 主 Agent 闸（与发起同口径）；未选不放行、不扰动状态
+  let box = _lastAiBox();
+  if(!box){ sendResume(text); return; }      // 兜底（理论上不会走到）
+  box.dataset.reuseForPick = '1';
+  window._streamSuperseded = true;
+  if(_streaming && _streamAbort) _streamAbort.abort();   // 中止当前流（其 cleanup 见标记跳过替换）
+  box = _resetBoxForContinue(box);
+  const st = document.getElementById('chat-status');
+  if(st) st.textContent = '正在按你的确认继续…';
+  resetPipeline();
+  pumpStream(box, text, []);
 }
 
 // ── 内容级澄清（clarify_ask）：信息不清晰 → 选择题确认（优先选择题，支持补充输入），回答后续答 ──
@@ -1264,7 +1311,8 @@ async function clarifyAnswerSend(){
     uxTrack('clarify_answered');   // §11 埋点：澄清命中率分子
     toast('✓ 已提交，正在继续…');
     setPendingClarify(null);   // 2026-09-25：挂起已由后端清空 → 前端同步（撤掉输入框上方确认卡）
-    sendResume(r.resume_text);
+    // ★ 2026-10-16 Q2：在原输出盒内续接，不新起一轮（不再走 sendResume 新建气泡）
+    _continueInSameBox(card, r.resume_text || '【已回答澄清】请继续');
   }catch(e){ toast('提交失败：' + (e.message||'')); if(btn){ btn.disabled=false; btn.textContent='✉ 发送补充信息'; } }
 }
 // 跳过澄清：按现有信息继续（含澄清标记，agent 侧不再提问，防循环）
@@ -1275,11 +1323,16 @@ function clarifySkipSend(){
   uxTrack('clarify_skipped');   // §11 埋点：跳过不算命中（区别于 answered）
   toast('已跳过澄清，按现有信息继续…');
   setPendingClarify(null);
-  sendResume('【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。');
+  // ★ 2026-10-16 Q2：在原输出盒内续接，不新起一轮
+  _continueInSameBox(card, '【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。');
 }
 // 续答流式请求（复用 chat/stream；user 消息显示简短摘要，完整补充见澄清卡）
 async function sendResume(text){
   if(!currentConvId || !text) return;
+  // ★ 2026-10-16（米爸决策 R1）：续答同样必须过主 Agent 闸。
+  //   澄清续答是"同一会话的下一轮"，理应继承同一主 Agent；若下拉因刷新/切标签丢失，
+  //   这里拦下来并提示，而不是静默用空 team 发出去（那正是事故 9372 的形态）。
+  if(!requireMainAgent()) return;
   if(_streamAbort) _streamAbort.abort();
   const myAbort = new AbortController();
   _streamAbort = myAbort;
@@ -1300,10 +1353,21 @@ async function sendResume(text){
   try{
     // P0-5：改走 streamHeaders()（01-core.js）——原先此处只带 Content-Type，连 X-User-Id 都没有，
     // 更不会有 X-Session-Token；enforce_login 一开，这条续答路径直接 401。
+    // ★ 2026-10-16（米爸报「MCP 查工程列表无法返回」· 会话 9372 实证）：
+    //   **必须带上 team / skill_name**。改前本请求体只有 {message, attachments, branch}，
+    //   用户在 AI 会话页选的主 Agent（quick-team）在**澄清续答这一步被静默丢弃**
+    //   ⇒ 后端失去 team 兜底，意图识别重新自由发挥
+    //   ⇒ 实测：第一轮正确走「智源对接agent」（msg 4041），澄清后续答掉回
+    //     「通用问答Agent」（msg 4045）⇒ 该 Agent 没绑 MCP ⇒ 工程列表查询必然失败。
+    //   与 sendChat 同口径：执行主体唯一由 quick-team 承载，任何续答/改选路径都不得丢。
     const resp = await fetch(`/api/conversations/${currentConvId}/chat/stream`, {
       method:'POST', signal: myAbort.signal,
       headers: streamHeaders(),
-      body: JSON.stringify({message:text, attachments:[], branch:getCurrentBranch()})});
+      body: JSON.stringify({
+        message:text, attachments:[], branch:getCurrentBranch(),
+        team: document.getElementById('quick-team')?.value || '',
+        skill_name: document.getElementById('quick-skill')?.value || '',
+      })});
     // ★ H-1：404（会话不存在/登录态失效）给可操作文案 —— 与 12-chatsend 同口径。
     //   场景：服务重启后 session 失效 ⇒ B1-9 归属校验 404 ⇒ 笼统"调用失败"误导用户。
     if(!resp.ok || !resp.body){

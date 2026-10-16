@@ -23,10 +23,13 @@ class ChatIn(BaseModel):
     message: str
     provider_id: Optional[int] = None
     attachments: Optional[list] = []  # V2.3: [{url, filename, size, is_image}]
-    forced_intent: Optional[str] = ""  # 快捷指定 Agent：跳过意图识别直接定向
+    forced_intent: Optional[str] = ""  # ⚠️ 编排内部直连指定 Agent 用（workflows/nodes·planner）。**不再由前端发送**
+                                        #   —— 2026-10-16 起执行主体唯一由 `team`（主 Agent）承载，见 R1
+    intent_override: Optional[str] = ""  # 澄清改选：只改判本轮意图，**不改变执行主体**（执行主体永远是所选主 Agent）
     skill_name: Optional[str] = ""     # 快捷指定 Skill：强制注入技能指令
     branch: Optional[str] = None       # AI 建模输出侧工作分支（默认 dev；release 只读不可作工作分支）
-    team: Optional[str] = ""           # 团队模式：选择主智能体团队（AI 会话页「工作流」下拉）→ 主智能体负责意图识别/拆解/计划/分派/汇总
+    team: Optional[str] = ""           # ★ 执行主体唯一入口：所选主 Agent（AI 会话页「工作流」下拉）→ 其负责意图识别/拆解/计划/分派/汇总；
+                                        #   **无需子 Agent**——主 Agent 可直接绑定 skill/工具/MCP 自主完成任务（2026-10-16 R2）
     scope_id: Optional[int] = None    # 建模范围：引用已保存范围（文件管理→建模范围，全局分词不分分支）
     scope: Optional[dict] = None      # 或内联范围 {"mode":"doc|fragment_group|chunk","doc_names":[...],"fragment_text":"...","chunk_ids":[...]}
     scope_ids: Optional[list] = []    # 多个已保存建模范围 id（可多选合并，文档取并集）

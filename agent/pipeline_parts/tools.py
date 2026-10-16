@@ -106,8 +106,19 @@ class ToolMixin:
             _schema_by_name[name] = sch
 
         # MCP 绑定工具
+        # ★ 2026-10-16：同时记下「本 Agent 显式绑定的 MCP 工具名」——它们是**显式契约**，
+        #   JIT 语义预筛不得裁剪（与技能白名单 `_sk_wl` 同性质，见下方 core_keep 拼接处）。
+        #   事故依据（米爸报「让 MCP 查工程列表却没调用」· 实测复现）：
+        #     智源对接agent 绑了 71 个 MCP 工具，问「查询工程列表」时 JIT 按语义裁到 top 6，
+        #     实际注入 `['sysml_v2_validate','graph_retrieve','impact_analyze',
+        #     'sys_query_roles','sys_query_users','validate']` —— `query_projects` **不在内**。
+        #   ⇒ 模型如实回答"我可用的工具只有 5 项、不含工程列表查询"（那不是幻觉，是事实）。
+        #   根因：JIT 的本意是防「无关工具被顺手调用」，但**绑定动作本身就是用户的显式授权**，
+        #   把绑定工具和偶然候选一起语义裁剪 ⇒ 绑了 71 个只露 6 个，绑定形同虚设。
+        _bound_mcp_names = set()
         for m in bound:
             for t in (m.get("tools") or []):
+                _bound_mcp_names.add(t)
                 candidates.append((t, f"MCP 工具（{m.get('name','')}），端点 {m.get('endpoint','')}",
                                    "mcp", m.get("name", "")))
         # 内置工具（仅 Agent 声明过的）
@@ -289,6 +300,11 @@ class ToolMixin:
         # 技能白名单声明的工具是显式契约，JIT 语义预筛不得裁剪（与 core_keep 同等保底）
         if _sk_wl:
             core_keep = core_keep | set(_sk_wl)
+        # ★ 2026-10-16：Agent 显式绑定的 MCP 工具同样是显式契约 —— 用户在「绑定 MCP 服务器」
+        #   面板里逐个绑上去的，JIT 无权以"语义不相关"为由把它们裁掉。
+        #   （不设这一步 ⇒ 绑 71 个只露 6 个，工程列表查询类工具必被裁，见上方事故依据。）
+        if _bound_mcp_names:
+            core_keep = core_keep | _bound_mcp_names
         if len(candidates) >= jit_threshold and user_input:
             try:
                 from semantic import SemanticSearch

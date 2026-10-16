@@ -122,6 +122,27 @@ function handleChatKey(e){
   }
   if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); }
 }
+// ★ 2026-10-16（米爸决策 R1）：发起会话的前置闸 —— 必须选定主 Agent。
+//   返回 true=放行；false=已提示用户，调用方应直接 return（**不要**继续建会话/发请求）。
+//   为什么单独成函数：sendChat / sendResume（澄清续答）/ 未来任何新发送入口都走同一判据，
+//   避免"改了主路径漏了续答路径"（那正是本次事故的形态：主路径对、续答路径丢 team）。
+function requireMainAgent(){
+  const sel = document.getElementById('quick-team');
+  const v = (sel && sel.value) ? String(sel.value).trim() : '';
+  if(v){ window._convMainAgent = v; return true; }
+  // 未选：明确告知 + 引导，不做静默放行
+  toast('请先选择主 Agent 才能发起会话（输入框左侧「👑」下拉）');
+  const st = document.getElementById('chat-status');
+  if(st) st.textContent = '请先选择主 Agent';
+  if(sel){
+    sel.focus();
+    // 轻量视觉提示：描边一闪，不改变布局（不弹窗、不阻断）
+    sel.style.transition = 'box-shadow .18s';
+    sel.style.boxShadow = '0 0 0 2px rgba(245,90,90,.55)';
+    setTimeout(()=>{ try{ sel.style.boxShadow=''; }catch(e){} }, 1200);
+  }
+  return false;
+}
 // mention chip 条：与 quick-skill / quick-team 下拉双向同步（V2.7：智能体选中不再渲染 chip——
 // 选定智能体只作定向偏好，意图识别照常执行）
 function renderChips(){
@@ -154,6 +175,11 @@ function clearTeamChip(){
 let _streamAbort = null;
 let _streaming = false;        // P1-1 流式进行中标记（控制发送/停止按钮切换）
 let _stoppedManually = false;  // 手动停止 vs 澄清改选自动中止
+// ★ 2026-10-16 Q2：澄清改选 / 澄清续答**复用原输出盒**时，会先 abort 当前流再用同一盒重跑。
+//   旧流的 catch 本会把 _streaming 置 false、并触发 _finalizeStoppedRender 把盒子 outerHTML 替换掉
+//   ⇒ 新流刚启动就被旧流 cleanup 抢走状态/盒子。用此标记让"被接管的中止流"提前 return、
+//   既不动全局状态也不替换盒子（新的接管流已掌管）。仅在新流接管前为 true，旧流 catch 内清回 false。
+let _streamSuperseded = false;
 // 从首条消息生成会话标题（草稿首次提交时使用）
 function draftTitle(msg){
   const clean = String(msg||'').replace(/[#*`>\[\](){}«»"':]/g,' ').replace(/\s+/g,' ').trim();
@@ -164,6 +190,12 @@ async function sendChat() {
   const input = document.getElementById('chat-input');
   const msg = input.value.trim();
   if(!msg) return;
+  // ★ 2026-10-16（米爸决策 R1）：**必须先选主 Agent 才能发起会话**。
+  //   原实现允许 team=''（下拉有空串"自动"项）⇒ 后端意图识别自由发挥 ⇒ 执行主体随机
+  //   （实测会话 9372 掉到「通用问答Agent」，该 Agent 没绑 MCP ⇒ 工程列表查询必失败）。
+  //   判据用**下拉当前值**而非 localStorage：后者是全局记忆，可能与当前页面状态不同步。
+  //   ⚠️ 放在最前面（建会话之前）：否则会先造一个空会话再被拦下，留下垃圾会话。
+  if(!requireMainAgent()) return;
   // 2026-09-04 v3：草稿态首次提交时创建会话（未提交前左侧列表不出现空会话）
   // 2026-09-24：若由「项目 → ＋ 新建任务」发起，带走该项目归属（window._pendingProjectId），
   //   创建成功后立刻刷新项目组（任务数 +1），并清除暂存避免下一次误归属。
@@ -270,10 +302,8 @@ async function sendChat() {
   // 走到这里只有两种情况：① 非流式（上一轮已结束，abort 是无害的空操作）
   //   ② follow-up 投递失败走回退（上面已 abort）—— 保持原有的无条件 abort 语义。
   if(_streamAbort) _streamAbort.abort();
-  const myAbort = new AbortController();
-  _streamAbort = myAbort;
-  _streaming = true; _stoppedManually = false;
-  showStopBtn(true);
+  // 2026-10-16 Q2 重构：流式执行状态（_streaming / showStopBtn / _streamAbort）改由 pumpStream() 接管，
+  // sendChat / pickIntent / 澄清续答三者共用同一段流式逻辑，避免"复用即新起一轮"。
   const atts = pendingAttachments.slice();  // V2.3 富输入：附件随消息发送
   const _refs = (chatRefs||[]).splice(0, chatRefs.length);   // Cursor 式引用随消息发送
   renderRefBar();
@@ -306,27 +336,44 @@ async function sendChat() {
   _bindStickDetach();   // 首次发送时绑定"用户上滑即脱离跟读"的监听（幂等）
   const _cs = document.getElementById('chat-status'); if(_cs) _cs.textContent = '正在识别意图并调度 Agent…';
   resetPipeline();  // 意图识别前：清空旧流水线，展示执行中占位
+  const _selTeam = document.getElementById('quick-team')?.value || '';   // 主 Agent（执行主体唯一入口）
+  const _selSkill = document.getElementById('quick-skill')?.value || '';
+  // ★ 2026-10-16 Q2 重构：把"建 abort → 拉流 → SSE 处理 → 收口"整段抽到 pumpStream()。
+  //   原 sendChat 把这段与"建用户气泡 + 建 AI 框"写死在一起 ⇒ 任何复用（澄清改选 / 澄清续答）
+  //   都必然新起一轮（新用户消息 + 新 AI 气泡）。抽出来后三者共享同一段流式逻辑，
+  //   pickIntent / 澄清续答即可"在**同一输出框**内重跑"，不再新起一轮（米爸 Q2）。
+  await pumpStream(aiBox, msg, atts);
+}
+// ── 流式执行核心（sendChat / pickIntent / 澄清续答 共用）──
+//   职责：建 abort → 拉 /chat/stream → 逐帧 handleSSE → 收口（正常 done / 中断固化 / 失败提示）。
+//   入参 aiBox = 流式承载盒（**可复用**：澄清改选 / 澄清续答传"原输出框"，不新建）。
+//   ★ 2026-10-16 Q2：抽出此函数是为让"澄清改选 / 澄清续答"能在同一输出框内重跑，
+//     不再新起用户气泡 + 新 AI 气泡（米爸 Q2：确认后应在原输出流续接后续环节）。
+async function pumpStream(aiBox, msg, atts){
+  const myAbort = new AbortController();
+  _streamAbort = myAbort;
+  _streaming = true; _stoppedManually = false;
+  showStopBtn(true);
+  const _selTeam = document.getElementById('quick-team')?.value || '';   // 主 Agent（执行主体唯一入口）
+  const _selSkill = document.getElementById('quick-skill')?.value || '';
+  const _cid = aiBox.dataset.convId || currentConvId;
   try {
-    const resp = await fetch(`/api/conversations/${currentConvId}/chat/stream`, {
+    const resp = await fetch(`/api/conversations/${_cid}/chat/stream`, {
       method:'POST',
       signal: myAbort.signal,
       // P0-5：改走 streamHeaders()（01-core.js）—— 原 IIFE 只带 X-User-Id、漏了 X-Session-Token
       headers: streamHeaders(),
       body: JSON.stringify({
-        message:msg, attachments:atts,
+        message:msg, attachments:atts||[],
         scope_ids: (typeof activeScopes!=='undefined'? activeScopes:[]).map(s=>s.id),   // 建模范围（可多选，全局）硬锁
         branch: getCurrentBranch(),   // AI 建模输出侧工作分支（默认 dev；release 只读不可作工作分支）
-        forced_intent: document.getElementById('quick-agent')?.value || '',
-        skill_name: document.getElementById('quick-skill')?.value || '',
-        team: document.getElementById('quick-team')?.value || '',   // 团队模式：AI 会话页「工作流」下拉 → 主 Agent 团队负责人统一调度
+        intent_override: window._intentOverride || '',
+        skill_name: _selSkill,
+        team: _selTeam,                // 主 Agent：负责意图识别/任务拆分/计划制定/任务分派/内容整合输出
         provider_id: Number(document.getElementById('llm-providers')?.value) || undefined,
       }),
     });
-    // ★ H-1（2026-10-15）：404（会话不存在/登录态失效）**单独给可操作的文案**。
-    //   现场实测：未登录/登录账号不符 ⇒ 归属校验（B1-9，不可见即 404）拦截（实测：未登录 profile 访问他人会话必 404，属权限系统正确行为）
-    //   ⇒ 页面只显示笼统"调用失败"，用户不知道要刷新 —— 上传/读消息又不校验归属，
-    //     组合表现恰是"附件能传、消息发不出"。
-    //   读 body 里的 error（"Conversation not found"）一起带上，便于区分网络错。
+    window._intentOverride = '';      // 一次性：仅本轮生效，防下一条消息继承改判
     if(!resp.ok || !resp.body){
       let _detail = '';
       try{ _detail = (await resp.json()).error || ''; }catch(e){}
@@ -350,13 +397,18 @@ async function sendChat() {
       }
     }
     _forceFlushTokens();   // P0-3：流结束前清空合帧缓冲，防末帧丢失
-    // 2026-09-29：流结束时改为贴底才跟随 —— 用户上滑在阅读上文时不被打断；
-    //   仍在底部者自动对齐到最终内容。
     stickBottom();
     showStopBtn(false);
     _streaming = false;
     if(_streamAbort === myAbort) _streamAbort = null;
   } catch(e) {
+    // ★ 2026-10-16 Q2：本流正被「澄清改选 / 澄清续答」主动中止以复用此盒接管 ——
+    //   不要改 _streaming/showStopBtn（会被错置成"已停"），也别进 _finalizeStoppedRender 替换盒子。
+    //   标记在 pickIntent / clarifyAnswerSend / clarifySkipSend 里于 abort 前置 true，此处清回 false。
+    if(aiBox && (aiBox.dataset.reuseForPick === '1' || window._streamSuperseded)){
+      window._streamSuperseded = false;
+      return;
+    }
     _forceFlushTokens();
     showStopBtn(false);
     _streaming = false;
@@ -366,14 +418,12 @@ async function sendChat() {
       return;
     }
     const bodyEl = aiBox.querySelector('.body');
-    // 2026-09-29（用户五轮反馈4）：网络错误不再整体覆盖 body —— 覆盖即"已生成内容全丢"。
-    //  现保留已流出的文字，错误说明追加在下方，并把已生成部分固化落库（刷新后仍在）。
     const _typ = bodyEl ? bodyEl.querySelector('.typing') : null; if(_typ) _typ.remove();
     if(bodyEl) bodyEl.classList.remove('streaming');
     if(typeof commitPartialStream === 'function') commitPartialStream(aiBox);   // 同步段先抓正文再追加错误条
     if(typeof procMarkStopped === 'function') procMarkStopped();   // 五轮反馈5：环节卡全部翻转为已终止
+    try{ aiBox.dataset.reuseForPick = ''; }catch(_e){}   // 异常收口：清防替换标记，避免下次 done 误跳过
     const errNote = document.createElement('div');
-    // 2026-09-29（用户三轮反馈）：失败横条补"系统现状 + 下一步"
     errNote.style.cssText = 'margin-top:8px;';
     errNote.innerHTML = `<div style="color:var(--red);font-size:11.5px;">调用失败：${esc(e.message)}</div>`
       + `<div style="color:var(--mut);font-size:10.5px;margin-top:4px;line-height:1.6;">`
@@ -389,7 +439,8 @@ function showStopBtn(on){
   if(s) s.style.display = on ? '' : 'none';
   if(sn) sn.style.display = on ? 'none' : '';
   // AI 输出期间禁止切换智能体/技能/团队，防中途改选导致上下文错乱（showStopBtn true=流式开始, false=结束）
-  ['quick-agent','quick-skill','quick-team'].forEach(id=>{
+  // 2026-10-16：quick-agent 已退役（执行主体唯一为 quick-team）
+  ['quick-skill','quick-team'].forEach(id=>{
     const el = document.getElementById(id);
     if(el) el.disabled = !!on;
   });
@@ -437,6 +488,13 @@ async function commitPartialStream(box){
 function _finalizeStoppedRender(aiBox){
   if(!aiBox) aiBox = document.getElementById('stream-ai');
   if(!aiBox) return;
+  // ★ 2026-10-16 Q2：若此盒正被「澄清改选 / 澄清续答」复用接管（reuseForPick 标记），
+  //   不得用 outerHTML 替换它 —— 否则续答盒刚建好就被旧流 cleanup 摘掉。直接返回即可
+  //   （状态已被接管的新流掌管，旧流的全局状态改动也已在 pumpStream catch 里跳过）。
+  if(aiBox.dataset && aiBox.dataset.reuseForPick === '1'){
+    try{ aiBox.dataset.reuseForPick = ''; }catch(_e){}   // 接管流稍后会清，这里清也无害
+    return;
+  }
   // 2026-09-29（用户五轮反馈5）：终止后所有 run 态环节（含"执行中…/思考中…/执行中 1/1"）
   //  先翻转为「⏹ 已终止」并重渲染，再快照进历史 —— 此前只折叠不翻转，残影永远停在执行中。
   if(typeof procMarkStopped === 'function') procMarkStopped();

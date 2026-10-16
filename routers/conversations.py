@@ -265,7 +265,17 @@ def get_messages(conv_id: int, limit: int | None = None, before_id: int | None =
             pending = _pj.loads(row["pending_clarify"])
         except Exception:
             pending = None
-    return {"messages": msgs, "total": total, "pending_clarify": pending}
+    # 2026-10-16 R1：带上会话级绑定的主 Agent（main_agent），前端 selectConv 据此回填
+    #   `window._convMainAgent`，使"这个会话一直由同一个主 Agent 执行"在刷新/切换会话后也成立
+    #   （此前只靠 localStorage，与库里真实绑定易漂移）。空串=本会话从未绑定（待用户在发起时选）。
+    main_agent = ""
+    try:
+        _ma = conn.execute("SELECT main_agent FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        main_agent = (_ma["main_agent"] or "") if _ma else ""
+    except Exception:
+        pass
+    return {"messages": msgs, "total": total, "pending_clarify": pending,
+            "main_agent": main_agent}
 
 
 @router.post("/api/conversations/{conv_id}/chat")
@@ -283,7 +293,7 @@ def chat(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depends(curr
     # ⚠️ 必须在**函数体内**取实例，不能提到模块级（那就又变回单例了）。
     _pipe = get_pipeline()
     result = _pipe.execute(body.message, conv_id, branch, body.provider_id, body.attachments or [],
-                           forced_intent=body.forced_intent or None, skill_name=body.skill_name or None,
+                           forced_intent=body.intent_override or None, skill_name=body.skill_name or None,
                            team=body.team or None,
                            scope_id=body.scope_id, scope_ids=body.scope_ids, scope=body.scope,
                            user=user)
@@ -365,7 +375,9 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             _frames = iter_with_heartbeat_async(
                 _pipe.execute_stream(body.message, conv_id, work_branch,
                                      body.provider_id, body.attachments or [],
-                                     forced_intent=body.forced_intent or None,
+                                     # ★ 2026-10-16：前端不再发 forced_intent；澄清改选走 intent_override，
+                                     #   且后端 team 分支会让主 Agent 覆盖它（用户所选主 Agent 为最高优先）。
+                                     forced_intent=body.intent_override or None,
                                      skill_name=body.skill_name or None,
                                      team=body.team or None,
                                      scope_id=body.scope_id, scope_ids=body.scope_ids, scope=body.scope,

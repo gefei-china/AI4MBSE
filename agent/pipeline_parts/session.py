@@ -60,6 +60,44 @@ class SessionMixin:
         except Exception:
             pass
 
+    # ── 2026-10-16 R1：会话级主 Agent（执行主体持久化） ─────────────────────
+    #   为什么单独立方法而不塞进 DST：DST 管的是"这一轮在聊什么意图"（每轮都变），
+    #   主 Agent 管的是"这个会话由谁执行"（用户选定后长期不变）—— 两者生命周期不同，
+    #   混在一个 JSON 里会被 `_merge_slots` 的覆盖语义冲掉。
+    def _load_main_agent(self, conversation_id) -> str:
+        """读会话绑定的主 Agent 名（空串=未绑定/会话不存在）。绝不抛。"""
+        if not conversation_id or int(conversation_id) <= 0:
+            return ""
+        try:
+            from repositories.conversation_repo import ConversationRepo
+            from database import get_db
+            conn = get_db()
+            try:
+                return ConversationRepo(conn).get_main_agent(int(conversation_id))
+            finally:
+                conn.close()
+        except Exception:
+            return ""
+
+    def _save_main_agent(self, conversation_id, main_agent: str) -> None:
+        """把所选主 Agent 落到会话（幂等）。失败不影响本轮执行——静默但留日志。"""
+        if not conversation_id or int(conversation_id) <= 0 or not main_agent:
+            return
+        try:
+            from repositories.conversation_repo import ConversationRepo
+            from database import get_db
+            conn = get_db()
+            try:
+                ConversationRepo(conn).set_main_agent(int(conversation_id), str(main_agent))
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as _e:
+            try:
+                logger.warning("[main-agent] 持久化失败（不影响本轮）：%s", _e)
+            except Exception:
+                pass
+
     # ── P0-5（2026-09-30）：意图识别用的"最近几轮用户原话" ─────────────────────────
     #  与 `context.history_*`（给**生成模型**注入的对话上下文，默认 6 轮）刻意分开：
     #  意图识别只需要"最近 1~2 条用户话"，且**只取 user 且 msg_type=text** ——

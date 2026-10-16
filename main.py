@@ -132,9 +132,25 @@ async def lifespan(app: FastAPI):
     # MCP-D1：后台健康巡检线程（每 5 分钟对 sse/http 服务器做 initialize 握手探测）
     try:
         from mcp_health import start_health_loop
-        start_health_loop(lambda: get_db(), interval_sec=float(config.get("mcp", "health_interval", 300)))
-    except Exception:
-        pass
+        from repositories.studio_repo import StudioRepo as _StudioRepo
+        # ★ 2026-10-16（米爸报「MCP 为啥不可用」· 已定位）：factory 必须给 **repo 对象**，
+        #   不是裸连接。改前写 `lambda: get_db()` —— get_db() 返回 sqlite3.Connection，
+        #   而 check_all() 要调 `repo.rows(...)` / `repo.update_mcp_status(...)`
+        #   ⇒ 每轮 AttributeError，被 _loop 的 `except: pass` 吞掉
+        #   ⇒ **巡检自服务启动起从未成功执行过一次**，全部 MCP 的 last_check 停在
+        #      2026-10-14 08:25（那次是手动「测试」按钮走的 StudioRepo 正确路径）。
+        #   后果：zhiyuan-dev-mcp 实测能连通（online 2551ms），库里却僵尸 offline；
+        #   而 `AgentRepo.bound_tools_for()` 对 mcp 要求 `status=='online' and enabled`
+        #   ⇒ 绑了也取不到 ⇒「MCP 不可用」的假象。
+        #   ⚠️ `db_session` 依赖注入返回的是 conn，本处与之同源，勿再改回裸连接。
+        start_health_loop(lambda: _StudioRepo(get_db()),
+                          interval_sec=float(config.get("mcp", "health_interval", 300)))
+        print("[startup] MCP 健康巡检线程已启动（间隔 %ss）"
+              % config.get("mcp", "health_interval", 300), flush=True)
+    except Exception as _e:
+        # 静默 pass 会让「巡检没跑」完全不可见 —— 这条链上已栽过一次（见上方注释）。
+        print("[startup] MCP 健康巡检启动失败（MCP 状态将停滞，绑定的 MCP 可能取不到）："
+              "%s: %s" % (type(_e).__name__, str(_e)[:160]), flush=True)
     # 2026-09-26：语义层**后台预热** —— 候选集向量是惰性算的，此前这笔开销（实测约 8.6s）全落在
     #   第一个真实请求上；这里在启动时构造一次路由（触发 set_semantic_index → 守护线程预热），
     #   让向量化发生在用户开口之前。整体 try/except：预热失败不得影响启动。

@@ -664,6 +664,12 @@ async function selectConv(id) {
   // 切换不改变列表内容，改为只做「高亮态」局部更新（零网络、零整列重建）。
   _refreshConvSelection(id);
   const r = await api(`/api/conversations/${id}/messages?limit=${MSG_PAGE_SIZE}`);
+  // 2026-10-16 R1：会话级主 Agent 回填 —— 用服务端库值覆盖 localStorage，
+  //   保证"这个会话一直由同一个主 Agent 执行"在刷新/切换会话后也成立（不漂移）。
+  //   空串=本会话从未绑定，交给下方下拉三级优先逻辑（此时会落到 localStorage/排序第一）。
+  if(r && typeof r.main_agent === 'string' && r.main_agent){
+    window._convMainAgent = r.main_agent;
+  }
   // 2026-09-25：打开会话先恢复「待澄清」状态（在渲染消息之前）——历史澄清卡据此决定
   // 是可作答的卡还是只读摘要，输入区上方的提示条也据此显示（刷新后作答路径）。
   if(typeof setPendingClarify === 'function') setPendingClarify(r && r.pending_clarify);

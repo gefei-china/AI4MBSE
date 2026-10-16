@@ -380,6 +380,7 @@ def init_db():
         project_id TEXT DEFAULT '',  -- P0-1: 会话归属项目（2026-09-20：去硬编码默认）
         phase TEXT DEFAULT 'requirement',  -- requirement|design|change|review|merge
         pending_clarify TEXT DEFAULT '',  -- 内容级澄清挂起：{questions, context} JSON（未答清空前为空）
+        main_agent TEXT DEFAULT '',      -- 2026-10-16 R1：会话级主 Agent（执行主体持久化；请求未带 team 时回读）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")

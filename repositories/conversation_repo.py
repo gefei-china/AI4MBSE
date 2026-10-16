@@ -141,6 +141,25 @@ class ConversationRepo(BaseRepo):
             (title, conv_id),
         )
 
+    # ── 2026-10-16 R1：会话级主 Agent（执行主体持久化）──
+    def get_main_agent(self, conv_id: int) -> str:
+        """读会话绑定的主 Agent 名（空串=未绑定）。"""
+        try:
+            row = self.one("SELECT main_agent FROM conversations WHERE id=?", (int(conv_id),))
+            return (row or {}).get("main_agent") or ""
+        except Exception:
+            return ""
+
+    def set_main_agent(self, conv_id: int, main_agent: str) -> bool:
+        """写/覆盖会话绑定的主 Agent。传空串 = 解除绑定（回到自动识别）。
+
+        ⚠️ 不动 `updated_at`：它与「重命名/发消息」同类语义都会扰乱"最近更新"排序基线，
+           而改选主 Agent 是**配置动作**，不该把老会话顶到列表最前面（与 set_pinned 同口径）。
+        """
+        self.execute("UPDATE conversations SET main_agent=? WHERE id=?",
+                     (str(main_agent or ""), int(conv_id)))
+        return True
+
     def delete_conversation(self, conv_id: int) -> None:
         """删除会话：级联清理 feedback → messages → artifacts → conversations（V2.3 优化：会话管理-删除）。"""
         msg_ids = [r["id"] for r in self.rows("SELECT id FROM messages WHERE conversation_id=?", (conv_id,))]

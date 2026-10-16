@@ -287,8 +287,9 @@ def decide(user_input: str, team_def: dict, provider_id=None, llm_client=None,
 
         {"action": "chat"|"direct"|"orchestrate"|"reject",
          "target": <成员 name 或 None>,
-         "reason": str, "source": "noise"|"lexical"|"llm"|"lexical_fallback",
-         "score": float}
+         "reason": str, "source": "noise"|"lexical"|"llm"|"lexical_fallback"|"solo",
+         "score": float,
+         "notice": str,   # ★ 2026-10-16 R2：需要告知用户的原因（无则空串）
 
     action 语义（供stream.py / execute.py 分支）：
         chat        → 走通用直答（chat意图），不编排、不定向团队成员
@@ -302,9 +303,23 @@ def decide(user_input: str, team_def: dict, provider_id=None, llm_client=None,
     members = (team_def or {}).get("members") or []
     q = (user_input or "").strip()
     if not members:
-        # 团队无成员：无从路由 → 直行（由主Agent 自己处理），不编排、不拒。
-        return {"action": "direct", "target": None, "reason": "团队无成员，主 Agent 直行",
-                "source": "lexical", "score": 0.0}
+        # ★ 2026-10-16（米爸决策 R2）：**主 Agent 无成员不是错误**。
+        #   改前是一个静默分支：返回 direct/None → 调用方 team_forced=False，
+        #   既不报错也不提示 ⇒ 用户「选了主 Agent 却像没选」，完全无从察觉
+        #   （实测：选了 0 成员的「智源对接agent」，界面显示由「需求分析Agent」作答）。
+        #   现语义：**主 Agent 本体自主执行** —— 它自己绑定的 skill / 工具 / MCP
+        #   （`registry.get_bound_skills` / `tools=[...]`）照常生效，足以完成智能任务。
+        #   `notice` 明确告知"未配置成员、由本体应答"，既不打断流程也不制造错觉。
+        main_nm = ((team_def or {}).get("display_name")
+                   or (team_def or {}).get("intent") or "所选主 Agent")
+        _nt = (f"「{main_nm}」未配置子 Agent 成员，已由主 Agent 本体"
+               f"（使用其自身绑定的技能/工具/MCP）直接应答。")
+        # ⚠️ `reason` 键**必须保留**：下游多处按 `decision.get("reason")` 取值
+        #   （stream.py:1843/1846 的 reject 分支、1865/1870 的 direct 分支文案），
+        #   虽都有 `or ''` 兜底不会崩，但契约上每个 action 都应带 reason。
+        return {"action": "direct", "target": None,
+                "reason": "主 Agent 未配置成员，由本体自主执行",
+                "source": "solo", "score": 0.0, "notice": _nt}
 
     # 档① 噪声/问候
     if is_noise(q, members):

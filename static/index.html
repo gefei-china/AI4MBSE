@@ -206,7 +206,7 @@
                 <div class="ibox-toolbar" data-page-node-id="RgoebN7grQWAct2URm4bKT">
                   <div class="tb-left" data-page-node-id="0OEY8GHNJGeSI5X11XTLNU">
                     <button class="tb-icon" title="上传附件" onclick="toggleAttachMenu(this)" style="font-weight:700;font-size:18px;line-height:1;" data-page-node-id="rFApmgRMPfNDjDPsaJbyU2">＋</button>
-                    <select id="quick-team" onchange="renderChips()" title="选择智能体团队（工作流）：主 Agent 负责意图识别/任务拆分/计划制定/任务分派/内容整合输出" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--mut);max-width:180px;" data-page-node-id="mfe91BnXLMQjdEpuX2FQ9W"><option value="" data-page-node-id="fHfWAQevh2wK9ikqq2TUdr">👑 工作流（智能体团队）</option></select>
+                    <select id="quick-team" onchange="renderChips()" title="选择主 Agent（执行主体）：每次会话都必须指定" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--mut);max-width:180px;" data-page-node-id="mfe91BnXLMQjdEpuX2FQ9W"><option value="" disabled selected data-page-node-id="fHfWAQevh2wK9ikqq2TUdr">👑 加载中…</option></select>
                   </div>
                   <div class="tb-right" data-page-node-id="02FGR2NbOGDH45IYPAbFmm">
                     <select id="llm-providers" title="对话模型" data-page-node-id="KhoScLf0ptcp5kcw1z0ugz"><option value="" data-page-node-id="rSu5DVIh6UJxCztAStpCml">默认模型</option></select>
@@ -216,7 +216,6 @@
                   </div>
                 </div>
                 <div style="display:none;" data-page-node-id="P0p2m1TicBq7gZM6UzR6ev"><!-- 兼容：@提及 / 澄清改选等强制路由依赖的隐藏选择器 -->
-                  <select id="quick-agent" onchange="renderChips()" data-page-node-id="nGRCMaeOqXYHpC2J1tvaG5"><option value="" data-page-node-id="4xe5j4w3s7JQfSFeQAKTxD">自动匹配</option></select>
                   <select id="quick-skill" onchange="renderChips()" data-page-node-id="F81jCzGlHVHSAi6Mwt43eX"><option value="" data-page-node-id="kH6b8jsDsxsZ5UslwFrM87">自动匹配</option></select>
                 </div>
                 <input type="file" id="file-input" style="display:none;" multiple onchange="uploadFiles(this,'file')" data-page-node-id="YYqNXOr4cnwYFlWoqk0sXQ">
