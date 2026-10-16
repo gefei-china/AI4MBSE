@@ -71,8 +71,13 @@ function previewApplySavedWidth(){
   const savedW = localStorage.getItem('mbse_preview_width');
   if(savedW){
     const w = parseInt(savedW,10);
-    if(w >= 280 && w <= 800) pp.style.width = w + 'px';
+    // 2026-10-16：上限从固定 800px 改为动态 50% 页宽（与拖拽上限同源 _previewMaxW）
+    if(w >= 280) pp.style.width = Math.min(w, _previewMaxW()) + 'px';
   }
+}
+// 2026-10-16：预览面板宽度上限 = 页面宽度的 50%（下限仍 280px）；拖拽与恢复共用同一上限，避免两处常量错位
+function _previewMaxW(){
+  return Math.max(280, Math.round(window.innerWidth * 0.5));
 }
 // 收起预览面板时清除 inline 宽度，确保 collapsed（width:0 !important）彻底生效
 function previewClearWidth(){
@@ -130,7 +135,9 @@ function previewDragMove(e){
   const dx = e.clientX - _previewDrag.startX;
   let newW = _previewDrag.startW - dx;
   if(newW < 280) newW = 280;
-  if(newW > 800) newW = 800;
+  // 2026-10-16：上限从固定 800px 改为页面宽度的 50%（动态，随窗口变化）
+  const maxW = _previewMaxW();
+  if(newW > maxW) newW = maxW;
   _previewDrag.panel.style.width = newW + 'px';
 }
 function previewDragEnd(){
@@ -146,6 +153,16 @@ function previewDragEnd(){
   document.removeEventListener('mouseup', previewDragEnd);
   _previewDrag = null;
 }
+// 2026-10-16：窗口缩小时，把已展开预览面板收敛到 50% 页宽上限内（与 gnav 宽度收敛同策略）
+window.addEventListener('resize', ()=>{
+  const pp = document.getElementById('preview-panel');
+  if(!pp || pp.classList.contains('collapsed')) return;
+  const maxW = _previewMaxW();
+  if(pp.getBoundingClientRect().width > maxW){
+    pp.style.width = maxW + 'px';
+    try{ localStorage.setItem('mbse_preview_width', maxW + 'px'); }catch(e){}
+  }
+});
 
 // ── 会话产物分栏（V3：由 art-list-panel + preview-panel 替代原 art-side）──
 let _artConv = null, _artKind = '', _artActive = null;

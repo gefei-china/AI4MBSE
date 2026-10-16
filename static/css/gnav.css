@@ -24,7 +24,12 @@
   display:flex;flex-direction:column;flex:none;
   transition:width .25s ease;
   overflow:hidden;
+  position:relative;   /* 2026-10-16：为右缘拖拽手柄 #gnav-resizer 提供定位上下文 */
 }
+/* 2026-10-16：导航宽度拖拽手柄（右缘 6px，上限 20vw，见 02-shell.js initGnavResizer） */
+.gnav-resizer{position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;z-index:6;background:transparent;}
+.gnav-resizer:hover{background:linear-gradient(to right, transparent, var(--color-primary));}
+.gnav.collapsed .gnav-resizer{display:none;}
 .gnav.collapsed{width:56px;}
 .gnav.collapsed .brand{justify-content:center;padding:16px 0 12px;}
 .gnav.collapsed .brand .t,
@@ -223,6 +228,24 @@
 .gnav-task-body .task-empty{padding:14px 18px;font-size:11.5px;color:var(--gnav-fg-soft);text-align:center;}
 .gnav-task-body::-webkit-scrollbar{width:5px;}
 .gnav-task-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.28);border-radius:3px;}
+
+/* ── 2026-10-16 P1/P2 会话列表增强：搜索 / 时间分组 / 行画像 / 分页 ── */
+.gnav-task .conv-search-row{display:flex;gap:4px;padding:6px 10px 4px;}
+/* 搜索框本体作为定位容器：输入框撑满，✕ 清除键绝对定位于右侧内部（仅输入时显示） */
+.gnav-task .conv-search-input{position:relative;flex:1;min-width:0;display:block;}
+.gnav-task .conv-search-field{width:100%;font-size:12px;padding:5px 26px 5px 8px;border:1px solid var(--gnav-border,#2a3340);border-radius:6px;background:var(--gnav-input,#1c232e);color:var(--gnav-fg);outline:none;}
+.gnav-task .conv-search-field:focus{border-color:var(--color-primary);}
+.gnav-task .conv-search-clear{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:20px;height:20px;border:none;background:transparent;color:var(--gnav-fg-soft);cursor:pointer;font-size:12px;line-height:1;border-radius:4px;display:none;}
+.gnav-task .conv-search-input.has-text .conv-search-clear{display:inline-flex;align-items:center;justify-content:center;}
+.gnav-task .conv-search-clear:hover{background:var(--gnav-hover);color:var(--gnav-fg);}
+.gnav-task-body .conv-grp-h{display:flex;align-items:center;gap:6px;padding:8px 14px 3px;font-size:10.5px;font-weight:600;letter-spacing:.04em;color:var(--gnav-fg-soft);}
+.gnav-task-body .conv-grp-n{font-weight:400;opacity:.55;}
+/* 2026-10-16：ti-meta 行已按用户要求移除（标题下副行不需要，信息保留在 hover 提示 data-* 中） */
+.gnav-task-body .task-it .ti-ops button svg{display:block;pointer-events:none;}  /* 竖向铅笔 SVG 对齐 */
+.gnav-task-body .task-it .ti-pin{opacity:.45;}
+.gnav-task-body .task-it .ti-pin.on{opacity:1;}
+.gnav-task-body .conv-more{margin:6px 14px;padding:5px 0;width:calc(100% - 28px);font-size:11.5px;color:var(--gnav-fg-soft);background:transparent;border:1px dashed var(--gnav-border,#2a3340);border-radius:6px;cursor:pointer;}
+.gnav-task-body .conv-more:hover{background:var(--gnav-hover);color:var(--gnav-fg);}
 
 /* ── 8. #task-tip 信息卡（hover 任务条目显示） ── */
 #task-tip{

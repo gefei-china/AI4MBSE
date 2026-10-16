@@ -1,0 +1,114 @@
+{
+  "_comment": "人工介入策略种子（P0，2026-10-16）。设计约束：全部取现状语义 ⇒ 零行为变化。要收紧由用户在管理页自行调高，不在此预设。",
+  "_levels": "auto < notify < approve < confirm，越严数字越大",
+  "_decision_points": [
+    "tool_write",
+    "retrieval_domain_conflict",
+    "retrieval_empty",
+    "answer_ungrounded",
+    "model_conflict",
+    "plan_divergence",
+    "external_effect"
+  ],
+  "policies": [
+    {
+      "scope": "global",
+      "match_key": "destructive",
+      "decision_point": "tool_write",
+      "level": "confirm",
+      "conditions": {"side_effect": "destructive"},
+      "reason": "不可逆操作：删除/覆盖类动作须人工确认后方可执行",
+      "timeout_min": 0,
+      "fallback_level": "confirm",
+      "priority": 10
+    },
+    {
+      "scope": "global",
+      "match_key": "write",
+      "decision_point": "tool_write",
+      "level": "confirm",
+      "conditions": {"side_effect": "write"},
+      "reason": "写库/对外生效动作逐条确认（与现状 hil_service L2 语义一致）",
+      "timeout_min": 0,
+      "fallback_level": "confirm",
+      "priority": 20
+    },
+    {
+      "scope": "global",
+      "match_key": "read",
+      "decision_point": "tool_write",
+      "level": "auto",
+      "conditions": {"side_effect": "read"},
+      "reason": "只读操作直接放行，仅记审计",
+      "timeout_min": 0,
+      "fallback_level": "auto",
+      "priority": 90
+    },
+    {
+      "scope": "global",
+      "match_key": "retrieval_domain_conflict",
+      "decision_point": "retrieval_domain_conflict",
+      "level": "notify",
+      "conditions": {},
+      "reason": "词典命中某域但撤域重查后召回为空：默认仅留痕，不打断（要拦可在管理页调为 approve）",
+      "timeout_min": 0,
+      "fallback_level": "notify",
+      "priority": 50
+    },
+    {
+      "scope": "global",
+      "match_key": "retrieval_empty",
+      "decision_point": "retrieval_empty",
+      "level": "auto",
+      "conditions": {},
+      "reason": "召回为空：域外闲聊本就无依据可查，问人只会造成打扰（neg 域 8 例中 7 例属此类）",
+      "timeout_min": 0,
+      "fallback_level": "auto",
+      "priority": 60
+    },
+    {
+      "scope": "global",
+      "match_key": "answer_ungrounded",
+      "decision_point": "answer_ungrounded",
+      "level": "notify",
+      "conditions": {},
+      "reason": "无检索依据的生成：在输出侧显式标注「无检索依据」，并留痕供后续评估",
+      "timeout_min": 0,
+      "fallback_level": "notify",
+      "priority": 50
+    },
+    {
+      "scope": "global",
+      "match_key": "model_conflict",
+      "decision_point": "model_conflict",
+      "level": "notify",
+      "conditions": {},
+      "reason": "实体冲突检出：先留痕并标出冲突字段，不自动消解",
+      "timeout_min": 0,
+      "fallback_level": "notify",
+      "priority": 50
+    },
+    {
+      "scope": "global",
+      "match_key": "plan_divergence",
+      "decision_point": "plan_divergence",
+      "level": "notify",
+      "conditions": {},
+      "reason": "编排子任务结论分歧：留痕并在汇总中显式标注分歧点",
+      "timeout_min": 0,
+      "fallback_level": "notify",
+      "priority": 50
+    },
+    {
+      "scope": "global",
+      "match_key": "external_effect",
+      "decision_point": "external_effect",
+      "level": "approve",
+      "conditions": {},
+      "reason": "导入智源/对外推送：影响外部系统，须人工放行",
+      "timeout_min": 1440,
+      "fallback_level": "approve",
+      "priority": 15
+    }
+  ]
+}

@@ -305,6 +305,8 @@ def _migrate_columns(conn):
     _add("agent_tasks", "agent_name_snapshot", "TEXT DEFAULT ''")      # 派发时 agents.name 权威值（查不到时回落原值）
     # ── 架构优化：HIL 确认队列补 task_key（写操作暂存绑定子任务，先查表存在再 ALTER）──
     _add("hil_confirmations", "task_key", "TEXT DEFAULT ''")
+    # ── 会话列表优化（2026-10-16）：置顶/收藏（P2）—— pinned_at 非空=已置顶，存置顶时间戳 ──
+    _add("conversations", "pinned_at", "TEXT DEFAULT NULL")
     # ── §06 幂等（2026-10-13）：写操作幂等键 ──
     # 此前 hil_service.py 只有一句悬空注释「# 幂等 ID 命名空间（防生成重复确认）」，
     # 而它描述的常量并不存在、queue_confirmation 是无条件 INSERT ⇒ 重复提交产出重复确认单。

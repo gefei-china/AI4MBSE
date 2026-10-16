@@ -511,6 +511,11 @@ const MODAL_FORMS = {
         </div>
         <div class="form-row"><label>描述</label><textarea id="f-desc" rows="2" style="min-height:64px;resize:vertical;" placeholder="Agent 职责描述"></textarea></div>
         <div class="form-row"><label>指定模型 <span class="info-tip" title="可空=使用全局默认模型；指定后强制使用">ⓘ</span></label><select id="f-provider"><option value="">（全局默认）</option></select></div>
+        <div class="form-row"><label>HIL 人机协作级别 <span class="info-tip" title="L0=纯问答直出，不打断用户；L1=生成草稿/候选预览，一键采纳或丢弃；L2=写库/对外生效前逐条进人工确认队列（FR-HIL-1 强制）">ⓘ</span></label><select id="f-hil">
+          <option value="L0">L0 · 直出（不打断）</option>
+          <option value="L1">L1 · 预览采纳（草稿/候选）</option>
+          <option value="L2">L2 · 写前确认（逐条审批）</option>
+        </select></div>
       </div>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🧠</span><span class="fs-title">系统提示词</span></div>

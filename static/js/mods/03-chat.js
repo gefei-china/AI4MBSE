@@ -48,7 +48,7 @@ function renderRecentPages(){
 // ── AI 建模 ──
 async function loadConversations() {
   // 2026-09-06 P0-3：拉取前给任务列表插 skeleton 占位，0 网络等待的空白感
-  const _list = document.getElementById('task-conv-list') || document.getElementById('conv-list');
+  const _list = _getConvListEl();
   if(_list && !_list.children.length){
     _list.innerHTML = Array.from({length:5}).map(()=>`
       <div class="task-it skel" style="padding:7px 10px;">
@@ -59,60 +59,172 @@ async function loadConversations() {
   const convs = await api('/api/conversations');
   const _isArr = Array.isArray(convs);
   // 2026-09-24 左侧项目管理：**项目下的任务只在项目分组内展示**，本组降级为「未分组任务」兜底。
-  // 归属判定用后端给的 c.grouped（= 已归属某个仍存在的项目），前端不拿 project_id 非空自判——
-  // 项目被移除/脏数据会留孤儿 project_id，那样会把本该显示的会话藏掉（详见 conversation_repo.list_conversations）。
+  // 归属判定用后端给的 c.grouped（= 已归属某个仍存在的项目），前端不拿 project_id 非空自判。
   const all = _isArr ? convs : [];
+  // 2026-10-16 P0：缓存最近一次全量列表，供切换会话时局部刷新高亮（避免每次切换都重拉全量）
+  window._convListCache = all;
   const ungrouped = all.filter(c=>!c.grouped);
   // 2026-09-28 多工程 P0-2：记录当前任务的工程归属（顶栏据此给出「未关联工程 · 归入」收敛入口）。
-  // 未选中会话时为 undefined（区分「无会话」与「会话未关联工程」两种状态）。
   const _cc = currentConvId ? all.find(c=>c.id===currentConvId) : null;
   window._curConvProjectId = _cc ? String(_cc.project_id || '') : undefined;
   if(typeof renderProjectTag === 'function') renderProjectTag();
-  // 2026-09-04 v2：会话列表主渲染目标 = gnav 内的 #task-conv-list；旧 .conv 容器若被其它 JS 引用，仍兼容渲染
-  const list = _list || document.getElementById('task-conv-list') || document.getElementById('conv-list');
-  const cnt = document.getElementById('task-count');
-  if(cnt) {
-    cnt.textContent = String(ungrouped.length);
-    cnt.classList.toggle('zero', ungrouped.length === 0);
+  // 2026-09-04 v4：AI 页且无会话 → 中栏展示欢迎屏（非草稿态）
+  const onAI = document.getElementById('pg-ai') && document.getElementById('pg-ai').classList.contains('on');
+  if(onAI && !currentConvId && !_isDraft) renderChatWelcome();
+  // 2026-10-16 P1/P2：搜索 / 置顶优先 / 按时间分组 / 行画像 / 分页，统一由 _renderConvListView 渲染
+  _renderConvListView();
+}
+
+// ── 2026-10-16 P1/P2 会话列表增强：搜索 / 置顶优先 / 按时间分组 / 行画像 / 分页 ──
+// 数据全部来自 window._convListCache（切换会话不再重拉，见 _refreshConvSelection）；
+// 本段只做「过滤(标题/意图即时 + 内容后端合并) → 排序(置顶优先) → 时间分组 → 分页渲染」。
+const _CONV_PAGE = 50;
+let _convView = { search: '', rendered: 0, contentMatches: null };
+let _convContentTimer = null;
+
+function _getConvListEl(){
+  return document.getElementById('task-conv-list') || document.getElementById('conv-list');
+}
+function _nowISO(){
+  const d = new Date(), p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function _convTimeBucket(iso){
+  if(!iso) return 'earlier';
+  const d = new Date(String(iso).replace(' ','T'));
+  if(isNaN(d.getTime())) return 'earlier';
+  const now = new Date();
+  const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const y0 = new Date(t0); y0.setDate(y0.getDate()-1);
+  const w0 = new Date(t0); w0.setDate(w0.getDate()-7);
+  if(d >= t0) return 'today';
+  if(d >= y0) return 'yest';
+  if(d >= w0) return 'week';
+  return 'earlier';
+}
+// 从缓存过滤（未分组）+ 搜索（标题/意图即时，内容后端合并）+ 置顶优先排序
+function _convFiltered(){
+  let list = (window._convListCache || []).filter(c => !c.grouped);
+  const q = (_convView.search || '').toLowerCase().trim();
+  if(q){
+    list = list.filter(c =>
+      (c.title||'').toLowerCase().includes(q) || (c.intent||'').toLowerCase().includes(q));
+    const cm = _convView.contentMatches;
+    if(cm && cm.length){
+      const have = new Set(list.map(c => c.id));
+      for(const c of cm){ if(!c.grouped && !have.has(c.id)){ list.push(c); have.add(c.id); } }
+    }
   }
-  if(!list) return;
-  if(!ungrouped.length) {
-    // 2026-09-06 P0-4：任务列表空态引导 —— 点新建任务开始（而不是冷冰冰一行字）
-    // 2026-09-06 P1-4：用 SVG sprite 的 empty-inbox 图标 + emoji 回退
-    // 2026-09-24：区分「真没有任务」与「任务都在项目里了」两种空态，避免用户误以为任务丢了
-    const inProjects = all.length - ungrouped.length;
-    list.innerHTML = `
-      <div class="task-empty">
-        <div class="te-ic">
-          <svg width="34" height="34" aria-hidden="true" style="color:var(--color-primary);"><use href="#ic-empty-inbox"/></svg>
-        </div>
-        <div class="te-title">${inProjects ? '暂无未分组任务' : '暂无任务'}</div>
-        <div class="te-sub">${inProjects ? `${inProjects} 个任务已归入上方「项目」分组<br>展开项目即可查看` : '点击「＋ 新建任务」<br>或下方快捷入口'}</div>
-        <button class="te-go" onclick="go('ai');setTimeout(newTask,200);"><svg width="12" height="12" aria-hidden="true" style="color:currentColor;margin-right:4px;"><use href="#ic-plus"/></svg>新建任务</button>
-      </div>`;
-    // 2026-09-04 v4：AI 页且无会话 → 中栏展示 WorkBuddy 风格欢迎初始化屏（非草稿态）
-    const onAI = document.getElementById('pg-ai') && document.getElementById('pg-ai').classList.contains('on');
-    if(onAI && !currentConvId && !_isDraft) renderChatWelcome();
-    return;
-  }
-  list.innerHTML = ungrouped.map(c=>`
+  list.sort((a,b) => {
+    const pa = a.pinned_at ? 1 : 0, pb = b.pinned_at ? 1 : 0;
+    if(pa !== pb) return pb - pa;
+    return (b.updated_at||'').localeCompare(a.updated_at||'');
+  });
+  return list;
+}
+function _convItemHTML(c){
+  const pinned = !!c.pinned_at;
+  // 2026-10-16：竖向铅笔 SVG 替代 ✏ emoji（emoji 在 Windows 渲染为横放笔形，用户要求竖向）；
+  // 移除标题下方 ti-meta 行（intent/条数/时间）——信息仍保留在 data-* 属性，hover 提示可见。
+  const PEN_V = '<svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path fill="currentColor" d="M10 2.5h4v3h-4zM10 7h4v9.5l-2 4.5-2-4.5z"/></svg>';
+  return `
     <div class="task-it ${c.id===currentConvId?'on':''}" data-id="${c.id}" data-intent="${escA(c.intent||'')}" data-updated="${escA(c.updated_at||'')}" data-msg="${c.msg_count||0}"
       onclick="selectConv(${c.id})" onmouseenter="showTaskTip(this)" onmouseleave="hideTaskTip()">
       <div class="ti-row">
         <span class="ti-tt" title="${esc(c.title)}">${esc(c.title)}</span>
         <span class="ti-ops" onclick="event.stopPropagation()">
-          <button title="重命名" onclick="renameConv(${c.id})">✏</button>
+          <button class="ti-pin ${pinned?'on':''}" title="${pinned?'取消置顶':'置顶'}" onclick="togglePinConv(${c.id})">${pinned?'📌':'📍'}</button>
+          <button title="重命名" onclick="renameConv(${c.id})">${PEN_V}</button>
           <button title="删除" onclick="deleteConv(${c.id})">🗑</button>
         </span>
       </div>
-    </div>`).join('');
-  // 2026-09-04 v6：初始进入 AI 建模页一律展示「画布中部欢迎屏」（会话框居中），不自动选中会话。
-  // 用户从左侧任务列表手动点击某条会话时，才通过 selectConv 进入聊天态。
-  // 注：v4 曾要求"默认选中首条会话"，后 v5 调整为"初始中栏=欢迎屏布局"，故以 v6 为准（仅当用户明确点选才进会话）。
-  const onAI = document.getElementById('pg-ai') && document.getElementById('pg-ai').classList.contains('on');
-  if(onAI && !currentConvId && !_isDraft){
-    renderChatWelcome();
+    </div>`;
+}
+function _convGroupBlock(label, items){
+  return `<div class="conv-grp-h">${label}<span class="conv-grp-n">${items.length}</span></div>`
+       + items.map(_convItemHTML).join('');
+}
+function _convGroupRender(items){
+  const pinned = items.filter(c => c.pinned_at);
+  const rest = items.filter(c => !c.pinned_at);
+  const b = {today:[],yest:[],week:[],earlier:[]};
+  for(const c of rest) b[_convTimeBucket(c.updated_at)].push(c);
+  let h = '';
+  if(pinned.length)   h += _convGroupBlock('📌 置顶', pinned);
+  if(b.today.length) h += _convGroupBlock('今天', b.today);
+  if(b.yest.length)  h += _convGroupBlock('昨天', b.yest);
+  if(b.week.length)  h += _convGroupBlock('本周', b.week);
+  if(b.earlier.length) h += _convGroupBlock('更早', b.earlier);
+  return h;
+}
+function _renderConvListView(){
+  const list = _getConvListEl();
+  if(!list) return;
+  const items = _convFiltered();
+  const cnt = document.getElementById('task-count');
+  if(cnt){ cnt.textContent = String(items.length); cnt.classList.toggle('zero', items.length === 0); }
+  if(!items.length){
+    const searching = !!_convView.search;
+    const inProjects = (window._convListCache||[]).some(c => c.grouped);
+    list.innerHTML = searching
+      ? `<div class="task-empty"><div class="te-title">未找到匹配的会话</div><div class="te-sub">换个关键词，或检查是否含错别字</div></div>`
+      : `<div class="task-empty">
+           <div class="te-ic"><svg width="34" height="34" aria-hidden="true" style="color:var(--color-primary);"><use href="#ic-empty-inbox"/></svg></div>
+           <div class="te-title">${inProjects ? '暂无未分组任务' : '暂无任务'}</div>
+           <div class="te-sub">${inProjects ? `${inProjects} 个任务已归入上方「项目」分组<br>展开项目即可查看` : '点击「＋ 新建任务」<br>或下方快捷入口'}</div>
+           <button class="te-go" onclick="go('ai');setTimeout(newTask,200);"><svg width="12" height="12" aria-hidden="true" style="color:currentColor;margin-right:4px;"><use href="#ic-plus"/></svg>新建任务</button>
+         </div>`;
+    return;
   }
+  const shown = items.slice(0, _convView.rendered + _CONV_PAGE);
+  let html = _convGroupRender(shown);
+  if(shown.length < items.length){
+    html += `<button class="conv-more" onclick="_convLoadMore()">加载更多（还剩 ${items.length - shown.length} 条）</button>`;
+  }
+  list.innerHTML = html;
+}
+function _convLoadMore(){ _convView.rendered += _CONV_PAGE; _renderConvListView(); }
+function _onConvSearch(val){
+  _convView.search = (val || '').trim();
+  _convView.rendered = 0;
+  _renderConvListView();
+  clearTimeout(_convContentTimer);
+  if(_convView.search){
+    const q = _convView.search;
+    _convContentTimer = setTimeout(async () => {
+      try{
+        const res = await api('/api/conversations/search?q=' + encodeURIComponent(q));
+        _convView.contentMatches = Array.isArray(res) ? res : [];
+      }catch(e){ _convView.contentMatches = null; }
+      if(_convView.search === q) _renderConvListView();   // 仅当搜索词未变才刷新，避免旧请求覆盖新输入
+    }, 350);
+  } else {
+    _convView.contentMatches = null;
+  }
+}
+async function togglePinConv(id){
+  const c = (window._convListCache || []).find(x => x.id === id);
+  const willPin = !(c && c.pinned_at);
+  try{
+    await api(`/api/conversations/${id}`, {method:'PATCH', body: JSON.stringify({pinned: willPin})});
+    if(c) c.pinned_at = willPin ? _nowISO() : null;   // 乐观更新缓存，免二次全量拉取
+    _renderConvListView();
+  }catch(e){ toast('置顶操作失败：' + (e.message || '')); }
+}
+// ── 2026-10-16 P0 切换慢修复：切换会话时的「选中态」局部刷新 ──
+// 替代 selectConv 内原先的 loadConversations()+renderGnavProjects() 全量重拉。
+// 那两个调用各自拉一次全量 /api/conversations（当前 325 行、每行带关联 COUNT 子查询）并重建整棵侧栏 DOM，
+// 单次切换 = 2 次全量查询 + 2 次整列重建；而切换并不改变列表内容，纯属浪费。
+// 本函数只做高亮态局部更新：切换 .on 类 + 刷新当前会话工程归属，零网络、零整列重建。
+function _refreshConvSelection(id){
+  document.querySelectorAll('.task-it[data-id]').forEach(el=>{
+    el.classList.toggle('on', +el.dataset.id === id);
+  });
+  // 顶栏「归入项目」收敛入口依赖 _curConvProjectId：从最近一次列表缓存取，不重新拉服务端
+  const cache = (window._convListCache || []);
+  const c = cache.find(x=>x.id === id);
+  window._curConvProjectId = c ? String(c.project_id || '') : undefined;
+  if(typeof renderProjectTag === 'function') renderProjectTag();
 }
 // ── 2026-09-04 v3：会话条目 hover 信息卡（名称/类型/更新时间/内容摘要）──
 // 2026-09-28：两处修正（用户反馈）
@@ -547,10 +659,10 @@ async function selectConv(id) {
   svmVmStorePrune();                    // 清理旧会话缩略图视图数据缓存
   // 2026-09-04 v5：选中会话进入聊天态 → 先把居中的输入区归位到底部，避免被下方 area.innerHTML 覆盖丢失
   if(_welcomeMode) unmountWelcomeDock();
-  loadConversations();
-  // 2026-09-24：项目下的任务在「项目」分组内渲染（loadConversations 只管未分组任务），
-  // 故选中态需另行刷新项目组，否则点项目内任务不会高亮、旧高亮也不清除。
-  if(typeof renderGnavProjects === 'function') renderGnavProjects();
+  // 2026-10-16 P0 切换慢修复：原先此处调 loadConversations()+renderGnavProjects()，
+  // 二者各拉一次全量 /api/conversations 并重建整棵侧栏 DOM ⇒ 单次切换 = 2 次全量查询 + 2 次整列重建。
+  // 切换不改变列表内容，改为只做「高亮态」局部更新（零网络、零整列重建）。
+  _refreshConvSelection(id);
   const r = await api(`/api/conversations/${id}/messages?limit=${MSG_PAGE_SIZE}`);
   // 2026-09-25：打开会话先恢复「待澄清」状态（在渲染消息之前）——历史澄清卡据此决定
   // 是可作答的卡还是只读摘要，输入区上方的提示条也据此显示（刷新后作答路径）。

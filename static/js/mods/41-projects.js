@@ -196,7 +196,7 @@ function _zpProjectRow(p, defId, convs){
         <div class="ti-row">
           <span class="ti-tt" title="${esc(c.title)}">${esc(c.title)}</span>
           <span class="ti-ops" onclick="event.stopPropagation()">
-            <button title="重命名" onclick="prjRenameTask(${c.id})">✏</button>
+            <button title="重命名" onclick="prjRenameTask(${c.id})"><svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path fill="currentColor" d="M10 2.5h4v3h-4zM10 7h4v9.5l-2 4.5-2-4.5z"/></svg></button>
             <button title="删除" onclick="prjDeleteTask(${c.id})">🗑</button>
           </span>
         </div>

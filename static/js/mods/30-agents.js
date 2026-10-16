@@ -686,6 +686,8 @@ function editAgent(id) {
     _agentNameTouched = true;   // 编辑既有 Agent：标识名是路由键，绝不随展示名自动改写（要改由用户显式改）
     document.getElementById('f-desc').value = a.description||'';
     document.getElementById('f-provider').value = a.model_provider_id || '';
+    // 2026-10-16：HIL 等级回填（此前表单未曝光该字段，PUT 时被 Pydantic 默认值静默改成 L0）
+    document.getElementById('f-hil').value = a.hil_level || 'L0';
     document.getElementById('f-sp').value = a.system_prompt||'';
     // 主/子 Agent 角色回填 + 团队成员（主 Agent 才加载）
     document.getElementById('f-role').value = a.agent_role==='main' ? 'main' : 'sub';
@@ -970,6 +972,7 @@ function openAgentForm(){
   document.getElementById('f-desc').value = '';
   document.getElementById('f-sp').value = '';
   document.getElementById('f-role').value = 'sub';      // 新建默认子 Agent
+  document.getElementById('f-hil').value = 'L0';        // 新建默认 L0（纯问答直出）
   const row = document.getElementById('f-team-row');
   if(row) row.style.display = 'none';
   _agentTeamSet.clear(); _agentTeamCands = []; teamDdClose(); renderTeamChecks();
@@ -1009,6 +1012,7 @@ async function saveAgent() {
     display_name: disp,
     description: document.getElementById('f-desc').value,
     model_provider_id: provVal ? parseInt(provVal) : null,
+    hil_level: document.getElementById('f-hil').value || 'L0',   // 2026-10-16：显式携带，防保存时被默认值静默改写
     intent_keywords: [],
     system_prompt: document.getElementById('f-sp').value,
     kb_required: false,

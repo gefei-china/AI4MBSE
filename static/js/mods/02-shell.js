@@ -178,12 +178,23 @@ function navFallbackOn(p){
   if(el) el.classList.add('on');
 }
 function toggleNav() {
-  // 2026-09-04 v4：☰ 折叠条作用于「会话列表区」（gnav-task 任务分组），不再折叠上方菜单区
-  toggleTaskGroup();
+  // 2026-10-16：恢复「导航页」整条折叠 —— ☰ 折叠整个 .gnav 侧栏（width→56px 图标栏）；
+  // 会话列表(任务分组)的折叠是**独立**控制（任务头 ▾ 箭头 → toggleTaskGroup），二者解耦，
+  // 不再让导航折叠误作用到会话列表上（此前 2026-09-04 v4 把 ☰ 重定向为 toggleTaskGroup，导致导航收起失效）。
+  const gnav = document.querySelector('.gnav');
+  if(!gnav) return;
+  const next = !gnav.classList.contains('collapsed');
+  gnav.classList.toggle('collapsed', next);
+  try{ localStorage.setItem('mbse_nav_collapsed', next ? '1' : '0'); }catch(e){}
 }
 function initNav() {
-  // 2026-09-04 v4：☰ 现专用于「会话列表区」，整条导航不再由按键折叠 —— 清除旧版整条折叠键，避免启动时导航卡在收起态
-  try{ localStorage.removeItem('mbse_nav_collapsed'); }catch(e){}
+  // 2026-10-16：恢复导航整条折叠态持久化（☰ 控制，默认展开；用户曾收起则恢复，避免启动卡在收起态）。
+  // 仅当用户**显式**收起过（key==='1'）才加 collapsed —— 不会自动收起，规避旧版启动卡死回归。
+  try{
+    if(localStorage.getItem('mbse_nav_collapsed') === '1'){
+      document.querySelector('.gnav')?.classList.add('collapsed');
+    }
+  }catch(e){}
   // 2026-09-04 v3：折叠态 hover 提示——用 fixed #gnav-tip，避免被 gnav/nav overflow 裁剪
   document.querySelectorAll('#mainnav a').forEach(a=>{
     const ic = a.querySelector('.ic');
@@ -208,8 +219,58 @@ function initNav() {
     fo.addEventListener('mouseenter', ()=>{ clearTimeout(_flyTimer); });
     fo.addEventListener('mouseleave', closeMoreFlyout);
   }
+  // 2026-10-16：导航宽度拖拽手柄初始化
+  initGnavResizer();
 }
 let _gnavTipTimer = null;
+// 2026-10-16：导航宽度拖拽（右缘手柄 #gnav-resizer）
+//   · min = 200px（默认最小宽度，再窄会挤掉会话列表）；
+//   · max = 20vw（页面宽度的 20%，用户明确要求"可向右拓宽至页面的 20%"）；
+//   · 宽度写入 gnav 内联 style 并持久化到 localStorage('mbse_nav_width')；
+//   · 导航处于整条折叠态(.gnav.collapsed)时手柄隐藏，不参与拖拽。
+function initGnavResizer(){
+  const gnav = document.querySelector('.gnav');
+  const handle = document.getElementById('gnav-resizer');
+  if(!gnav || !handle) return;
+  const MIN = 200;
+  const MAX = () => Math.max(MIN, Math.round(window.innerWidth * 0.20));
+  // 恢复上次保存宽度（落在合法区间才应用）
+  try{
+    const w = parseInt(localStorage.getItem('mbse_nav_width') || '', 10);
+    if(w >= MIN && w <= MAX()) gnav.style.width = w + 'px';
+  }catch(e){}
+  let startX = 0, startW = 0, dragging = false;
+  handle.addEventListener('mousedown', (e)=>{
+    if(gnav.classList.contains('collapsed')) return;   // 折叠态不拖
+    dragging = true; startX = e.clientX; startW = gnav.getBoundingClientRect().width;
+    gnav.style.transition = 'none';                     // 拖拽期间禁用过渡，避免抖动
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e)=>{
+    if(!dragging) return;
+    let w = startW + (e.clientX - startX);
+    w = Math.max(MIN, Math.min(MAX(), Math.round(w)));
+    gnav.style.width = w + 'px';
+  });
+  window.addEventListener('mouseup', ()=>{
+    if(!dragging) return;
+    dragging = false;
+    gnav.style.transition = '';
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    try{ localStorage.setItem('mbse_nav_width', String(Math.round(gnav.getBoundingClientRect().width))); }catch(e){}
+  });
+  // 窗口缩放时若超过 20vw 上限，自动回收到上限（防止横向溢出）
+  window.addEventListener('resize', ()=>{
+    const cur = gnav.getBoundingClientRect().width;
+    if(cur > MAX()){
+      gnav.style.width = MAX() + 'px';
+      try{ localStorage.setItem('mbse_nav_width', String(MAX())); }catch(e){}
+    }
+  });
+}
 function showGnavTip(a){
   const gnav = document.querySelector('.gnav');
   if(!gnav || !gnav.classList.contains('collapsed')) return;

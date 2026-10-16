@@ -80,6 +80,7 @@ from .seeds import (
     _backfill_domains,
     _seed_glossary,
     _seed_intent_rules,
+    _seed_hil_policies,
 )
 
 
@@ -1296,6 +1297,31 @@ def init_db():
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_hooks_enabled ON tool_hooks(enabled)")
 
+    # ── P0-8（2026-10-16）人工介入治理策略表 ──
+    # 目的：把「哪些场景需要人参与」从代码常量变为可配置数据，新增决策场景不改代码。
+    # P0 边界：仅建表 + 播种 + 纯函数裁决器，**不接入任何现有执行链路**
+    # （tools.py:434 优先级链 / hil_service L2 行为完全不变）。
+    c.execute("""CREATE TABLE IF NOT EXISTS hil_policies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scope TEXT DEFAULT 'global',         -- global | <agent_name>（继承与覆盖）
+        match_key TEXT NOT NULL,             -- 工具名 / 决策点枚举 / any
+        decision_point TEXT DEFAULT '',      -- tool_write|retrieval_domain_conflict|...
+        level TEXT DEFAULT 'notify',         -- auto|notify|approve|confirm（越严越需人）
+        conditions_json TEXT DEFAULT '{}',   -- 条件判据 {"side_effect":"write"}
+        reason TEXT DEFAULT '',              -- 命中理由（证据包文案，用户可读）
+        timeout_min INTEGER DEFAULT 0,       -- 0=不设超时；>0=超时分钟数
+        fallback_level TEXT DEFAULT '',      -- 超时裁决（空⇒取 level；fail-closed 依赖它）
+        enabled INTEGER DEFAULT 1,
+        priority INTEGER DEFAULT 100,        -- 数值小者先匹配；同位取更严者
+        created_by TEXT DEFAULT '',
+        updated_by TEXT DEFAULT '',
+        updated_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_hil_pol_enabled ON hil_policies(enabled)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_hil_pol_scope ON hil_policies(scope)")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_hil_pol_key ON hil_policies(match_key, level)")
+
     # ── 报告中心：AI 建模产出报告（变更影响/预评审/模型分析等）统一归档、检索与导出 ──
     c.execute("""CREATE TABLE IF NOT EXISTS reports (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1596,6 +1622,8 @@ def init_db():
     _seed_glossary(conn)
     # 2026-10-04：意图路由规则集入库（此前只在运行库里，干净库 0 行 ⇒ CI 无法复现生产路由）
     _seed_intent_rules(conn)
+    # 2026-10-16 P0-8：人工介入治理策略种子（hil_policies，不改现有链路行为）
+    _seed_hil_policies(conn)
     conn.close()
 
 

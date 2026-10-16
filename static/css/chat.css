@@ -222,7 +222,12 @@
 .impact-item{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;}
 .impact-item .dot{width:8px;height:8px;border-radius:50%;flex:none;}
 /* ── 富卡片（AI 建模对话内） ── */
-.rc{width:100%;min-width:0;}
+/* 2026-10-16（米爸实测「引用卡上下方边距太大」）：.msg .body 的 white-space:pre-wrap
+   （为用户消息原样换行而设）会**继承**进消息体内的结构化卡片，多行模板缩进产生的
+   "\n+空格" 文本节点被渲染成可见空行（实测引用卡被从 30px 撑到 113px）。
+   先例：app.css:294 .nr-inline / 本文件 .art-card 均已显式复位。凡挂进 .body 的
+   多行模板卡片容器，一律显式 white-space:normal。 */
+.rc{width:100%;min-width:0;white-space:normal;}
 /* 聊天区子项防被内容撑开（拖拽分割线变窄时内容自适应，不产生横向溢出） */
 #chat-area > *{min-width:0;max-width:100%;}
 
@@ -240,7 +245,7 @@
 .errface .ef-v{flex:1;min-width:0;color:var(--txt,#222);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .errface .ef-v:hover{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.03);border-radius:4px;}
 .errface .ef-act{margin-top:2px;}
-.art-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.art-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;white-space:normal;}
 .art-grid.many{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;}
 .art-card{flex:0 0 auto;min-width:168px;max-width:212px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe;padding:8px 10px;cursor:pointer;transition:border-color .15s,background .15s;white-space:normal;}
 .art-card:hover{border-color:var(--blue-bd,#b8d4f5);background:#f2f7ff;}
@@ -295,6 +300,7 @@
 .clarify-inline-note{
   border:1px dashed #c7d9f5;background:#f4f8ff;border-radius:6px;
   padding:5px 9px;font-size:11px;color:var(--blue-d,#3478f6);line-height:1.6;margin-top:6px;
+  white-space:normal;   /* 2026-10-16：复位 .body 继承的 pre-wrap，模板缩进空白不渲染成空行 */
 }
 .clarify-inline-note b{color:var(--blue-d,#3478f6);}
 .clarify-inline-note.hist{opacity:.85;}

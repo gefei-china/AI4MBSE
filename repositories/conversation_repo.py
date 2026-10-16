@@ -2,6 +2,8 @@
 
 对应 routers/conversations.py 的全部数据访问。
 """
+from datetime import datetime
+
 from repositories.base import BaseRepo
 
 #: 「该会话属于用户 u」判定的**放行域**。
@@ -44,7 +46,8 @@ class ConversationRepo(BaseRepo):
     """对话与消息数据访问。"""
 
     # ── conversations ──
-    def list_conversations(self, user=None, project_id: str | None = None) -> list:
+    def list_conversations(self, user=None, project_id: str | None = None,
+                            limit: int | None = None, offset: int = 0) -> list:
         """会话列表 + `grouped` 标记（1 = 已归属某个**仍存在**的项目）。
 
         2026-09-24 左侧项目管理：项目下建立的任务**只在项目分组内展示**，
@@ -57,28 +60,42 @@ class ConversationRepo(BaseRepo):
             而不是取回全量再在 Python 里筛 —— 后者会让"看不到"变成"看不到但仍在库里可被逐个 id 捞"。
           · `project_id`：**只传具体值**时按项目收窄；传 `None` 表示不按项目过滤（现状），
             传 `""` 表示只看未分组会话。前端"当前工程"切换时传该参数。
+
+        ★ 2026-10-16 性能优化（P1 后端）：
+          · 把每行关联的 `(SELECT COUNT(*) FROM messages ...)` 相关子查询改为一次性
+            `LEFT JOIN (SELECT conversation_id, COUNT(*) cnt ... GROUP BY) mc` 聚合 ——
+            325 个会话原本要跑 325 次子查询，现在 messages 表只扫描一次。
+          · 排序改为「置顶优先（pinned_at 非空在前），再按 updated_at 倒序」，支撑前端置顶。
+          · 新增可选游标分页 `limit`/`offset`（默认 None = 全量，向后兼容 renderGnavProjects）。
         """
         sql = """
             SELECT c.*, u.display_name as user_name,
-            (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) as msg_count,
+            COALESCE(mc.cnt, 0) as msg_count,
             CASE WHEN TRIM(COALESCE(c.project_id,'')) <> ''
                   AND EXISTS(SELECT 1 FROM projects p WHERE p.id=c.project_id)
                  THEN 1 ELSE 0 END as grouped
-            FROM conversations c LEFT JOIN users u ON c.user_id=u.id"""
+            FROM conversations c
+            LEFT JOIN users u ON c.user_id=u.id
+            LEFT JOIN (SELECT conversation_id, COUNT(*) cnt FROM messages GROUP BY conversation_id) mc
+                   ON mc.conversation_id=c.id"""
         args: list = []
+        wheres: list = []
         # 口径②：匿名/本机模式不加 user 条件（与改动前一致）
         if user is not None:
-            sql += " WHERE (c.user_id IS NULL OR c.user_id=0 OR c.user_id=?)"
+            wheres.append("(c.user_id IS NULL OR c.user_id=0 OR c.user_id=?)")
             args.append(int(user.get("id") or 0))
         if project_id is not None:
             if str(project_id).strip() == "":
-                sql += (" AND TRIM(COALESCE(c.project_id,'')) = ''"
-                        if user is not None else
-                        " WHERE TRIM(COALESCE(c.project_id,'')) = ''")
+                wheres.append("TRIM(COALESCE(c.project_id,'')) = ''")
             else:
-                sql += (" AND c.project_id=?" if user is not None else " WHERE c.project_id=?")
+                wheres.append("c.project_id=?")
                 args.append(str(project_id))
-        sql += " ORDER BY c.updated_at DESC"
+        if wheres:
+            sql += " WHERE " + " AND ".join(wheres)
+        sql += " ORDER BY (c.pinned_at IS NOT NULL) DESC, c.updated_at DESC"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            args += [int(limit), int(offset)]
         return self.rows(sql, args)
 
     def create_conversation(self, title: str, intent: str, user_id: int = 1,
@@ -132,6 +149,37 @@ class ConversationRepo(BaseRepo):
         self.execute("DELETE FROM messages WHERE conversation_id=?", (conv_id,))
         self.execute("DELETE FROM artifacts WHERE conversation_id=?", (conv_id,))
         self.execute("DELETE FROM conversations WHERE id=?", (conv_id,))
+
+    def set_pinned(self, conv_id: int, pinned: bool) -> bool:
+        """置顶/取消置顶（P2 收藏）。pinned_at 非空=已置顶，存置顶时间戳；
+        取消置顶置 NULL。不动 updated_at（置顶不应改变"最近更新"排序基线）。"""
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if pinned else None
+        self.execute("UPDATE conversations SET pinned_at=? WHERE id=?", (ts, conv_id))
+        return True
+
+    def search_conversations(self, user=None, q: str = "", limit: int = 100) -> list:
+        """内容检索（P1 列表搜索「标题+内容」）：标题/意图 LIKE 或消息正文 LIKE。
+        一次性聚合消息数（与 list_conversations 同款 LEFT JOIN），结果按 updated_at 倒序。"""
+        like = "%" + (q or "") + "%"
+        sql = """
+            SELECT c.*, u.display_name as user_name,
+                   COALESCE(mc.cnt, 0) as msg_count,
+                   CASE WHEN TRIM(COALESCE(c.project_id,'')) <> ''
+                        AND EXISTS(SELECT 1 FROM projects p WHERE p.id=c.project_id)
+                       THEN 1 ELSE 0 END as grouped
+            FROM conversations c
+            LEFT JOIN users u ON c.user_id=u.id
+            LEFT JOIN (SELECT conversation_id, COUNT(*) cnt FROM messages GROUP BY conversation_id) mc
+                   ON mc.conversation_id=c.id
+            WHERE (c.title LIKE ? OR c.intent LIKE ? OR EXISTS(
+                    SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND m.content LIKE ?))"""
+        args = [like, like, like]
+        if user is not None:
+            sql += " AND (c.user_id IS NULL OR c.user_id=0 OR c.user_id=?)"
+            args.append(int(user.get("id") or 0))
+        sql += " ORDER BY c.updated_at DESC LIMIT ?"
+        args.append(int(limit))
+        return self.rows(sql, args)
 
     # ── messages ──
     def add_assistant_message(self, conv_id: int, content: str, msg_type: str = "text",

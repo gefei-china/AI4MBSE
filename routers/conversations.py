@@ -14,7 +14,7 @@ from repositories.conversation_repo import ConversationRepo, conv_visible_to
 from repositories.studio_repo import StudioRepo
 from agent import get_pipeline
 from core.audit import audit, audit_user
-from models import ConvIn, ChatIn, ConvProjectIn, RenameIn, FlowRunIn
+from models import ConvIn, ChatIn, ConvProjectIn, FlowRunIn
 
 router = APIRouter(tags=["对话"])
 
@@ -59,14 +59,28 @@ def _own_conv(conn, conv_id: int, user) -> dict:
 @router.get("/api/conversations")
 def list_conversations(conn=Depends(db_session),
                        project_id: str | None = Query(None),
+                       limit: int | None = Query(None, ge=1, le=1000),
+                       offset: int = Query(0, ge=0),
                        user=Depends(current_user)):
-    """★ B1-9：按 user_id 收窄 + 支持按当前工程收窄。
+    """★ B1-9：按 user_id 收窄 + 支持按当前工程收窄 + 游标分页（2026-10-16 P1 后端）。
 
     · `project_id` **不传** = 不按项目过滤（保留"未分组任务"列表的现状用法）；
       传空串 `?project_id=` = 只看未分组会话；传具体值 = 只看该项目的会话。
       前端「当前工程」切换时带上该参数即可实现"关联到项目的基于项目过滤"。
+    · `limit`/`offset` 为可选游标分页（默认全量，向后兼容 renderGnavProjects）。
     """
-    return ConversationRepo(conn).list_conversations(user=user, project_id=project_id)
+    return ConversationRepo(conn).list_conversations(
+        user=user, project_id=project_id, limit=limit, offset=offset)
+
+
+@router.get("/api/conversations/search")
+def search_conversations(q: str = Query("", min_length=0),
+                         conn=Depends(db_session),
+                         user=Depends(current_user)):
+    """列表搜索（P1）：标题/意图/消息正文模糊匹配，返回未分组+项目内全部命中（置顶优先由前端再排）。"""
+    if not (q or "").strip():
+        return []
+    return ConversationRepo(conn).search_conversations(user=user, q=(q or "").strip())
 
 
 @router.post("/api/conversations")
@@ -121,14 +135,33 @@ def set_conversation_project(conv_id: int, body: ConvProjectIn,
 
 
 @router.patch("/api/conversations/{conv_id}")
-def rename_conversation(conv_id: int, body: RenameIn, conn=Depends(db_session),
+def rename_conversation(conv_id: int, body: dict = None, conn=Depends(db_session),
                         user=Depends(current_user)):
-    """会话重命名（V2.3 优化：会话管理）。★ B1-9：校验归属（此前任何 conv_id 都能改名）。"""
+    """会话重命名 / 置顶（V2.3 优化：会话管理 + 2026-10-16 P2 收藏）。
+
+    ★ B1-9：校验归属（此前任何 conv_id 都能改名）。body 支持：
+      · {"title": "..."}            重命名
+      · {"pinned": true|false}      置顶 / 取消置顶
+      · 二者可同时给（dict 解析，与文件内多数端点一致）。
+    """
     repo = ConversationRepo(conn)
     _own_conv(conn, conv_id, user)
-    repo.rename_conversation(conv_id, body.title)
-    audit(audit_user(user), "conversation_rename", f"重命名对话#{conv_id}: {body.title}", conn=conn)
-    return {"id": conv_id, "title": body.title}
+    body = body or {}
+    out: dict = {"id": conv_id}
+    if body.get("title"):
+        repo.rename_conversation(conv_id, str(body["title"]))
+        out["title"] = str(body["title"])
+    if body.get("pinned") is not None:
+        repo.set_pinned(conv_id, bool(body["pinned"]))
+        out["pinned"] = bool(body["pinned"])
+    if len(out) <= 1:   # 只含 id，无任何有效字段
+        return JSONResponse({"error": "无可更新字段（title / pinned）"}, 400)
+    if "title" in out:
+        audit(audit_user(user), "conversation_rename", f"重命名对话#{conv_id}: {out['title']}", conn=conn)
+    if "pinned" in out:
+        audit(audit_user(user), "conversation_pin",
+              f"对话#{conv_id} {'置顶' if out['pinned'] else '取消置顶'}", conn=conn)
+    return out
 
 
 @router.delete("/api/conversations/{conv_id}")

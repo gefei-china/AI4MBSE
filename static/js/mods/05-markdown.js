@@ -244,7 +244,12 @@ function renderMessage(m) {
           <span style="color:var(--mut);font-size:10px;">· 相关度 ${c.score}${c.confidence_level?`（${esc(c.confidence_level)}）`:''}${c.reranked?' · LLM重排':''}</span>
           <div style="color:var(--mut);font-size:10.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc((c.content||'').slice(0,120))}</div>
         </div>`).join('');
-        html += `<div style="margin-top:8px;border:1px solid var(--line,#e5e8ee);border-radius:8px;overflow:hidden;">
+        // 2026-10-16（米爸实测「引用卡上下方边距太大」·截图复现）：.msg .body 设了
+        //   white-space:pre-wrap（为用户消息原样换行），该属性**可继承**——本卡容器是多行
+        //   模板，缩进产生的两个 "\n+空格" 文本节点在 pre-wrap 下各自撑成一条可见空行
+        //   （浏览器实测各 ~42px），把 30px 的卡撑到 113px。结构化卡片必须显式复位
+        //   white-space:normal（同 app.css:294 .nr-inline / chat.css:245 .art-card 先例）。
+        html += `<div style="margin-top:8px;border:1px solid var(--line,#e5e8ee);border-radius:8px;overflow:hidden;white-space:normal;">
           <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:#fafbfc;font-size:11px;color:var(--mut);cursor:pointer;user-select:none;" onclick="citeSrcToggle(this)">
           <span class="chev" style="font-size:9px;">▸</span>📚 引用内容（${cites.length} 条 chunk，点击条目查看详情）</div>
           <div class="cite-src-body" style="display:none;max-height:280px;overflow:auto;background:#fff;">${items}</div></div>`;

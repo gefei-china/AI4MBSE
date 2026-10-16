@@ -81,7 +81,11 @@ class AgentIn(BaseModel):
     system_prompt: Optional[str] = ""
     model_provider_id: Optional[int] = None
     model_params: Optional[dict] = {}
-    hil_level: Optional[str] = "L0"
+    # 2026-10-16：缺省改 None（与原 "L0" 的区别是语义关键的）—— PUT 更新时 None=保留既有值。
+    #   原缺省 "L0" 会让未感知该字段的调用方（前端表单此前未曝光 hil_level）把 L1/L2 的
+    #   Agent **静默降级**成 L0（实测：requirement_analysis 种子 L2、库中已被存成 L0）。
+    #   POST 新建时由 router 归一为 "L0"。
+    hil_level: Optional[str] = None
     kb_required: Optional[bool] = False
     kb_scope: Optional[dict] = None  # KB-S：None=不更新（保留既有值）；{}=清空；{mode,branches,docs}=自定义范围
     intent_keywords: Optional[List[str]] = []

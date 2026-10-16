@@ -84,6 +84,13 @@
         <span class="gth-cnt" id="task-count" data-page-node-id="l23CFXTY0m6fNTwxxqYiiS">0</span>
         <span class="gth-tail"><span class="gth-arr" data-page-node-id="ZeeJg3wo9K0hJk5T3QZqcU">▾</span></span>
       </div>
+      <!-- 2026-10-16 P1：会话列表实时搜索（标题/意图即时，内容走后端模糊匹配）；✕ 清除键内嵌输入框右侧，仅输入时显示 -->
+      <div class="conv-search-row">
+        <div class="conv-search-input">
+          <input id="conv-search" class="conv-search-field" type="text" placeholder="搜索会话（标题 / 意图 / 内容）" oninput="_onConvSearch(this.value); this.parentElement.classList.toggle('has-text', !!this.value)" />
+          <button class="conv-search-clear" type="button" title="清空搜索" onclick="var w=this.parentElement.querySelector('#conv-search'); w.value=''; _onConvSearch(''); this.parentElement.classList.remove('has-text');">✕</button>
+        </div>
+      </div>
       <div class="gnav-task-body" id="task-conv-list" data-page-node-id="sj0BGNFQ5EnnhEzHsjTtLz"></div>
     </div>
     <!-- 2026-09-04 v2：左下角仅账号入口，不再有消息通知 -->
@@ -113,6 +120,8 @@
         </div>
       </div>
     </div>
+    <!-- 2026-10-16：导航宽度拖拽手柄（仅拖拽右缘，min=200px / max=20vw，见 02-shell.js initGnavResizer） -->
+    <div class="gnav-resizer" id="gnav-resizer" title="拖拽调整导航宽度"></div>
   </div>
   <!-- 2026-09-04 v3：「更多」已改为 hover 右侧滑出卡片（#more-flyout），原右侧抽屉移除 -->
   <!-- R3：全局会话侧栏（会话一等公民，借鉴 Codex/Claude Code） -->
@@ -133,7 +142,7 @@
   </aside>
   <div class="workspace" data-page-node-id="Zh7S64wWRUJELdnYpFxmfF">
     <div class="gbar" data-page-node-id="FFgooHovzgVrSLQHvpWhxp">
-      <button class="icobtn hamburger-btn" style="border:1px solid var(--line);border-radius:6px;background:#fff;width:30px;height:26px;padding:0;" onclick="toggleNav()" title="收起/展开会话列表" data-page-node-id="pHvTFJSJlRJQnHDFGpQrLj"></button>
+      <button class="icobtn hamburger-btn" style="border:1px solid var(--line);border-radius:6px;background:#fff;width:30px;height:26px;padding:0;" onclick="toggleNav()" title="收起/展开导航（整条侧栏）" data-page-node-id="pHvTFJSJlRJQnHDFGpQrLj"></button>
       <!-- 顶栏标题：面包屑化（root=产品名 · cur=当前页面/Tab），避免与页内 H3 重复 -->
       <span class="ptitle" id="ptitle" data-page-node-id="sxCUczcS5KyQo4t0MRVMr4"><span class="br-cur" id="br-cur" data-page-node-id="ZHEsP2D7VKlMQq0luIGlN3">总览</span></span>
       <span class="sp" data-page-node-id="YsD56FVcRABrzMOFqhANce"></span>
@@ -410,7 +419,7 @@
                 <input type="date" id="doc-date-to" onchange="loadDocs()" title="上传结束日期" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;" data-page-node-id="6cbywc3DrkSZzQVsQAOpDd">
                 <select id="doc-format-filter" onchange="loadDocs()" title="按文件格式筛选" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="0JjRSI0UQGI5HV0Doktuv2"><option value="" data-page-node-id="HGF4ySLPaUwdCZkT2WqTqK">全部格式</option></select>
                 <select id="doc-origin-filter" onchange="loadDocs()" title="按来源筛选（用户上传 / AI 生成收编）" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
-                  <option value="">全部来源</option><option value="upload">👤 用户上传</option><option value="ai_generated">🤖 AI 生成</option>
+                  <option value="upload" selected>👤 用户上传</option><option value="">全部来源</option><option value="ai_generated">🤖 AI 生成</option>
                 </select>
                 <select id="doc-status-filter" onchange="setDocStateFilter(this.value)" title="统一状态（解析×生命周期）" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
                   <option value="">全部状态</option><option value="committed">🎯 正式入库</option><option value="stored">✅ 待入库</option><option value="processing">⏳ 处理中</option><option value="failed">⚠️ 解析失败</option><option value="deprecated">🚫 已废弃</option><option value="archived">📦 已归档</option>

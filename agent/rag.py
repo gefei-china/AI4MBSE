@@ -266,6 +266,23 @@ class GraphRAG:
                               glossary_boost=boost, doc_names=scope_docs or None,
                               include_deprecated=_inc_dep)
                 chunk_hits = _hy["hits"]
+                # ── P1-7（2026-10-16）检索侧 Corrective：域约束致零召回 ⇒ 撤域重查一次 ──
+                # 实测根因（69 例评测集 doc 43 例）：4 例金标在召回池位次 1~4、confidence_level「高」，
+                # 但 retrieve() 返回 chunk_hits=0 —— **不是召回差，是被 domain 过滤整个掉**。
+                # 链条：query 里的 `PA`(part 首字母缩写) / `SA` 被 Glossary 命中
+                #   → force_domain=satellite_comms（卫星通信域）
+                #   → 强制按该域过滤，而金标在**热管理建模**知识库 ⇒ 跨域污染，命中 0
+                #   → 退化到文档粗匹配（search_chunks 对这 4 例金标一个都召不回）。
+                # ⇒ 对策：**只在「带域约束 且 命中为空」这一窄条件下**撤掉 domain 重查一次。
+                #   刻意不做泛化的 LLM 查询改写：评测显示这 4 例原始 query 本就能召全
+                #   （金标位次 1,2,3,4），坏的是域约束而非措辞，改写只会引入新噪声。
+                # 约束：最多重查 1 次（撤域后仍空即认账，走原降级路径）。
+                # 开关 rag.corrective_domain_retry（默认 True，置 False 回旧行为）。
+                if not chunk_hits and force_domain:
+                    _retry = self._retry_without_domain(
+                        conn, query, boost, scope_docs, _rag_top_k, _inc_dep)
+                    if _retry:
+                        chunk_hits = _retry
                 # P2-2：查询 Trace（含归一化/域/命中文档/召回原因）
                 if conn is not None:
                     try:
@@ -296,7 +313,6 @@ class GraphRAG:
                                                include_deprecated=_inc_dep)
                 except Exception:
                     chunk_hits = []
-            # P1-5（2026-10-16）低置信检索抑制（neg 域收敛）：
             # 域外查询的向量命中置信度极低（2026-10-16 标定：neg 8 例中 7 例 top5 全「低」、
             # 最大 vec_score 0.359；doc 43 例在全低判据下 0 误伤）——把这些命中喂给 LLM
             # 是幻觉温床（问"今天北京天气"也拿到 20 条"相关知识"）。判据：注入宽度内
@@ -503,6 +519,49 @@ class GraphRAG:
                     if str(e.get("entity_type") or "").strip() and str(e.get("entity_type")) != str(e.get("name")))
         type_match = typed / len(graph_results) if graph_results else 0.0
         return min(w_cov * hit + w_rel * rels + w_typ * type_match, 1.0)
+
+    @staticmethod
+    def _retry_without_domain(conn, query: str, boost: float, scope_docs,
+                              top_k: int, inc_dep: bool) -> list:
+        """P1-7：撤掉 domain 约束重查一次（检索侧 Corrective 的唯一动作）。
+
+        ## 为什么只撤域、不做 LLM 查询改写
+        2026-10-16 实测（69 例评测集，doc 43 例）确认的失败形态**不是"措辞对不上"**：
+        doc-22/23/30/37 这 4 例用**原始 query** 直调 hybrid_search(top_k=4) 时，
+        金标位次分别是 [1,2,3,4] / [1,2,3,4] / [1,2,3,4] / [1,2,3]，
+        confidence_level 全为「高」，bm25 48~91 —— 查询本身完全没问题。
+        坏的是 **Glossary 把 `PA`/`SA` 误判成卫星通信术语 → force_domain=satellite_comms
+        → 跨域过滤把热管理知识库的金标全部滤掉**。
+        ⇒ 泛化的 HyDE/LLM 改写在这里是**纯噪声**（把已经能召全的 query 改坏）；
+        真正该撤销的是那个**域约束**。
+
+        ## 触发条件（刻意收窄）
+        必须**同时**满足：① 带了 domain 约束；② 带约束时命中为 0。
+        命中非空时一律不重查——那时域约束是有信息量的，不能撤。
+
+        ## 安全边界
+        - **最多重查 1 次**，无递归；撤域后仍空即返回 []，由调用方走原降级路径。
+        - 撤域后仍保留 `glossary_boost` 与 `doc_names`（来源文档隔离是**租户/项目边界**，
+          不是行业偏好，撤掉会有越权风险）。只撤 domain 这一个**软约束**。
+        - 开关 `rag.corrective_domain_retry`（默认 True，置 False 精确回退到 P1-7 之前行为）。
+        - 纯函数语义：只调 hybrid_search，不改任何状态；失败一律返回 []。
+        """
+        try:
+            from core import config as _cfg
+            if not _cfg.as_bool("rag", "corrective_domain_retry", True):
+                return []
+        except Exception:
+            pass
+        try:
+            from knowledge_engine import hybrid_search as _hybrid
+            _hy = _hybrid(conn, query, top_k=top_k, branches=None,
+                          domain=None,                # ← 唯一被撤销的约束
+                          glossary_boost=boost,
+                          doc_names=scope_docs or None,
+                          include_deprecated=inc_dep)
+            return _hy.get("hits") or []
+        except Exception:
+            return []
 
     @staticmethod
     def _low_conf_suppressed(chunk_hits: list) -> bool:

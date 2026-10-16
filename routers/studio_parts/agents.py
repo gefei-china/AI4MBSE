@@ -11,6 +11,9 @@ def create_agent(body: AgentIn, conn=Depends(db_session), user=Depends(current_u
     if repo.get_agent_by_name(body.name):
         return JSONResponse({"error": f"Agent 名称已存在: {body.name}"}, 400)
     data = body.model_dump()
+    # 2026-10-16：新建时 hil_level 缺省归一为 L0（模型侧默认已改 None，见 models/studio.py）
+    if data.get("hil_level") is None:
+        data["hil_level"] = "L0"
     sanitized = _sanitize_agent_meta(data)
     aid = repo.create_agent(data)
     audit(audit_user(user), "agent_create", f"创建Agent: {body.display_name} ({body.name})", conn=conn)
@@ -107,6 +110,10 @@ def update_agent(aid: int, body: AgentIn, conn=Depends(db_session), user=Depends
     if not old:
         return JSONResponse({"error": "Agent not found"}, 404)
     data = body.model_dump()
+    # 2026-10-16：hil_level 缺省（None）= 保留既有值，防止未曝光该字段的调用方把
+    #   L1/L2 静默降级成 L0（见 models/studio.py AgentIn.hil_level 注释）。
+    if data.get("hil_level") is None:
+        data["hil_level"] = old.get("hil_level") or "L0"
     sanitized = _sanitize_agent_meta(data)
 
     # ── 名称口径统一（2026-09-30 用户反馈 2）：name 可编辑 → 改名须联动历史软外键 ──

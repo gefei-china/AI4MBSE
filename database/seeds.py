@@ -517,3 +517,114 @@ def _seed_intent_rules(conn) -> int:
     print("[seed] 意图路由规则：文件 %d 条，本次新增 %d 条（已存在的 %d 条不覆盖）"
           % (len(rules), n, len(rules) - n), flush=True)
     return n
+
+
+# ══════════════════════════════════════════════════════════════════════
+# P0-8 人工介入治理策略（hil_policies）种子
+# ══════════════════════════════════════════════════════════════════════
+# 为什么需要（2026-10-16 决策）：
+#   决策场景随能力增长，硬编码不可持续。要把「哪些场景要人参与」从代码常量
+#   变成**可配置数据**，新增场景不改代码。
+#
+# ⚠️ P0 的边界（刻意收窄，避免"半吊子机制"）：
+#   本阶段**只建表 + 播种 + 提供纯函数裁决器**，**不接入任何现有执行链路**。
+#   现有 tools.py:434 优先级链 / hil_service.L2 行为**完全不变**。
+#   接入是后续阶段的事——因为接入必然要动同步/异步语义，风险高于本阶段。
+#
+# 为什么种子来自 JSON 而不是硬编码在 Python 里：
+#   与 _seed_intent_rules 同构——策略表本身是"要给人改的数据"，
+#   埋在 Python 里就又变成了写死，与本阶段的初衷相反。
+#   且 JSON 可被用户编辑、被版本管理、被 review。
+#
+# 等级语义（对齐 AWS AGENTREL02-BP05 三档 + notify 细分）：
+#   auto    自动放行，仅记审计
+#   notify  通知后继续，不阻塞（终态审计标 notify）
+#   approve 入队异步审批，本次 run 结束为 pending_approval
+#   confirm 入队 + 必须人工决策后才继续（当前 L2 等价语义）
+#
+# 种子策略**刻意保守**：全部取现状语义，**零行为变化**。
+#   尤其检索类给 notify 而非 approve——因为 neg 域 8 例中有 7 例本就无依据可查，
+#   给 approve 会造成审批洪水（industry 的 approval fatigue）。
+#   真要拦（如 destructive 工具）在此基础上**由用户自行调高**，不预设。
+
+#: 决策点枚举。与 services/hil_policy.py 的 DECISION_POINTS 必须同源。
+_HIL_DECISION_POINTS = (
+    "tool_write",                # 工具写操作（现状由 hil_service L2 覆盖）
+    "retrieval_domain_conflict",  # 域约束冲突且撤域重查为空（P1-7 重试仍失败的出口）
+    "retrieval_empty",           # 召回为空（须与其他决策点区分，否则域外闲聊会被拦）
+    "answer_ungrounded",         # 无检索依据的生成
+    "model_conflict",            # ConflictDetector 检出实体冲突
+    "plan_divergence",           # 编排子任务结论分歧
+    "external_effect",           # 导入智源 / 对外推送
+)
+
+#: 四级裁决的严格程度排序。数字越大越严。
+_HIL_LEVEL_RANK = {"auto": 0, "notify": 1, "approve": 2, "confirm": 3}
+
+
+def _seed_hil_policies(conn) -> int:
+    """把 seeds_data/hil_policies.json 里的策略补进 hil_policies（幂等，不覆盖已有）。
+
+    返回本次新插入的行数。
+
+    ⚠️ **幂等键是 (match_key, level)** 而不是 id —— 用户调整过等级后重新播种，
+       绝不能把人家的选择静默改回去（这与 hil_service.idempotency_key
+       「只对 pending 去重，已决策的不挡新提交」是同一条原则：
+       **不要替用户做决定，也不要推翻用户已做的决定。**）
+
+    ⚠️ 播种失败（文件缺失/损坏）**必须可观测**：
+       沿用 _seed_intent_rules 的教训——种子"什么都没做"若静默，
+       就与"成功但无需做"无法区分（那边初版藏了三天 bug）。
+    """
+    import os as _os
+    p = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "seeds_data", "hil_policies.json")
+    if not _os.path.exists(p):
+        print("[seed] ⚠️ 人工介入策略种子文件缺失：%s（策略表为空，裁决器将走 fail-closed 默认）" % p,
+              flush=True)
+        return 0
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        # 文件是 {"_comment":..., "policies":[...]} 结构（带说明字段，便于用户理解后再改）
+        rows = data.get("policies") if isinstance(data, dict) else data
+        rows = rows or []
+    except Exception as e:
+        print("[seed] ⚠️ 人工介入策略种子读取失败（不影响启动）：%s | %s" % (str(e)[:100], p),
+              flush=True)
+        return 0
+    n = 0
+    skipped = 0
+    for r in rows:
+        mk = (r.get("match_key") or "").strip()
+        lvl = (r.get("level") or "").strip()
+        # 跳过非法行而不是报错中断：一条脏数据不该让整个策略层空掉
+        if not mk or lvl not in _HIL_LEVEL_RANK:
+            skipped += 1
+            continue
+        dp = (r.get("decision_point") or "").strip()
+        if dp and dp not in _HIL_DECISION_POINTS:
+            skipped += 1
+            continue
+        exists = conn.execute(
+            "SELECT 1 FROM hil_policies WHERE match_key=? AND level=? LIMIT 1",
+            (mk, lvl)).fetchone()
+        if exists:
+            continue
+        try:
+            conn.execute(
+                "INSERT INTO hil_policies "
+                "(scope, match_key, decision_point, level, conditions_json, reason, "
+                " timeout_min, fallback_level, enabled, priority, created_by, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,1,?,?,datetime('now'))",
+                ((r.get("scope") or "global").strip(), mk, dp, lvl,
+                 json.dumps(r.get("conditions") or {}, ensure_ascii=False),
+                 (r.get("reason") or "").strip()[:500],
+                 int(r.get("timeout_min") or 0), (r.get("fallback_level") or "").strip(),
+                 int(r.get("priority") or 100), "seed:hil_policies"))
+            n += 1
+        except Exception:
+            skipped += 1
+    conn.commit()
+    print("[seed] 人工介入策略：文件 %d 条，本次新增 %d 条（已存在不覆盖，跳过非法 %d 条）"
+          % (len(rows), n, skipped), flush=True)
+    return n
