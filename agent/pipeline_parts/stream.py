@@ -2027,34 +2027,66 @@ class StreamMixin:
                        "route": _intent_meta["route"], "message": str(user_input),
                        "detected": _detected if forced_intent and _detected != intent else None,
                        "candidates": self._clarify_candidates(intent)}
+            # ── 承接轮判定（2026-10-17 米爸反馈，实证会话 9446）──
+            #  上一轮走过 澄清→作答（answered 卡存在）且本轮是短输入 ⇒ 用户在回应
+            #  AI 上一轮的邀请补充（「您可以直接告我分支名」→「取主分支最新版本数据」），
+            #  不是开新话题。此时两道澄清门全跳过、直接执行：Agent 持有完整上下文，
+            #  自行理解「用户在回答我上一轮的问题」。否则又被 1.4 固定意图清单
+            #  「我不确定你想做哪件事」拦住，上下文生生断裂（米爸截图现象）。
+            try:
+                _clarify_followup = self._is_clarify_followup(conversation_id, user_input)
+            except Exception:
+                _clarify_followup = False
+            if _clarify_followup:
+                yield {"type": "reasoning", "delta": (
+                    "（承接上轮）检测到你在补充上一轮的关键信息，已跳过澄清确认，"
+                    "结合上下文继续执行")}
             # ── 阶段 1.4（2026-09-26）：**意图确定不了 → 停下来问**，不要自己硬选一个（用户要求）──
             #  与上面那条 `clarify`（细条，"先按猜的跑、你可改选重发"）的本质区别：这里**不执行**。
             #  复用内容级澄清的选择题卡（选项 + 其他/自定义 + 答完续跑），因为"不硬选"的完整机制
             #  （落挂起 → /clarify-answer → 带【澄清补充】续跑）后端已有，不另造一套状态。
             #  放在 `_clarify_detect` **之前**：意图都没定，谈"建模信息够不够"没有意义。
+            # ★ 2026-10-17（米爸反馈「确认卡还是系统默认内容」）：承接轮不弹卡（上行）；
+            #   确需确认时卡片内容改由 LLM 基于上下文动态生成（`_llm_intent_confirm_questions`：
+            #   LLM 认为意图已明确 ⇒ 连卡都不弹；生成失败 ⇒ 兜底固定列表版）。
             try:
-                _need_iq = self._should_confirm_intent(user_input, _intent_meta)
+                _need_iq = (not _clarify_followup) and self._should_confirm_intent(user_input, _intent_meta)
             except Exception:
                 _need_iq = False
             if _need_iq:
                 # P0-5：把本次语义意见带进候选排序（只影响顺序，不构成路由决定）
-                _iqs = self._intent_confirm_questions(user_input, intent,
-                                                      _intent_meta.get("sem_alt"))
-                _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
-                                             forced_intent, skill_name, team, _iqs)
-                yield {"type": "clarify_ask", "questions": _iqs, "intent": intent,
-                       "title": "❓ 我不确定你想做哪件事，请确认",
-                       "message": str(user_input)[:200]}
-                yield {"type": "done", "data": {
-                    "ok": True, "clarify_asked": True, "intent": intent,
-                    "content": "意图不确定，需要您确认后再执行（详见澄清卡片）", "msg_type": "clarify",
-                    "usage": {}, "questions": _iqs, "message_id": _mid or 0}}
-                return
+                _iqs = None
+                _llm_skip_to = ""
+                try:
+                    _llm_r = self._llm_intent_confirm_questions(user_input, intent, conversation_id)
+                except Exception:
+                    _llm_r = None
+                if _llm_r and _llm_r[0] == "skip":
+                    # LLM 结合上下文判定：意图其实明确（多为承接轮误触发）⇒ 不弹卡，直接执行
+                    _llm_skip_to = _llm_r[1]
+                    yield {"type": "reasoning", "delta": (
+                        f"（意图确认）结合上下文判断你的事情已明确（{_llm_skip_to}），不再打断确认，继续执行")}
+                elif _llm_r and _llm_r[0] == "ask":
+                    _iqs = _llm_r[1]
+                if not _iqs and not _llm_skip_to:
+                    _iqs = self._intent_confirm_questions(user_input, intent,
+                                                          _intent_meta.get("sem_alt"))
+                if _iqs:
+                    _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
+                                                 forced_intent, skill_name, team, _iqs)
+                    yield {"type": "clarify_ask", "questions": _iqs, "intent": intent,
+                           "title": "❓ 需要你确认几个关键信息",
+                           "message": str(user_input)[:200]}
+                    yield {"type": "done", "data": {
+                        "ok": True, "clarify_asked": True, "intent": intent,
+                        "content": "需要你确认后才能继续（详见澄清卡片）", "msg_type": "clarify",
+                        "usage": {}, "questions": _iqs, "message_id": _mid or 0}}
+                    return
             # ── 阶段 1.5：内容级澄清（信息不清晰 → 选择题确认，回答后续答；打断本次执行）──
             try:
-                _clarify_qs = self._clarify_detect(
+                _clarify_qs = (None if _clarify_followup else self._clarify_detect(
                     user_input, intent, effective_provider,
-                    forced_intent=_clarify_gate_intent, skill_name=skill_name)
+                    forced_intent=_clarify_gate_intent, skill_name=skill_name))
             except Exception:
                 _clarify_qs = None
             if _clarify_qs:

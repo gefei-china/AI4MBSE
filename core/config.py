@@ -385,6 +385,16 @@ DEFAULT_CONFIG = {
         # 候选主序 = 本次输入的语义意图级排名（动态），不足才按 Agent 注册序兜底填满。
         # 10 = 一屏滚动内可览尽；前端选项区限高滚动，卡片不会被撑长。
         "confirm_options_max": 10,
+        # ★ 2026-10-17（米爸反馈「澄清确认卡还是系统默认内容，没有基于上下文分析提供
+        #   准确的确认信息」）：意图确认卡 LLM 动态化开关。开启时 1.4 触发后先让 LLM
+        #   结合上下文判断——意图已明确则直接放行（连卡都不弹）；确需确认则生成针对
+        #   本次场景的问题与选项（选项须映射回系统意图 key）。关闭 = 旧的固定列表。
+        "confirm_llm_dynamic": True,
+        # ★ 2026-10-17（米爸反馈会话 9446：用户答「取主分支最新版本数据」——对上一轮
+        #   AI「您可以直接告我分支名」邀请的直接承接——却被「我不确定你想做哪件事」+
+        #   固定意图清单拦住）：本会话有过「澄清→作答」记录且本轮输入不超过此长度时，
+        #   判定为承接补充，两道澄清门全跳过、Agent 基于完整上下文自行理解。
+        "clarify_followup_max_chars": 25,
         # P0-1（2026-09-30）语义 ↔ LLM 互证：语义意图级 top1 与 LLM 结论互斥、且语义分数达到
         #   此阈值（默认取 dense `th`）→ 转澄清（route='llm_conflict'），不硬选。
         "llm_sem_conflict_min": 0.49,
@@ -1094,6 +1104,8 @@ CONFIG_SCHEMA = {
         "cache_enabled":          {"type": "bool", "desc": "意图级缓存（精确文本 + 索引指纹双匹配）"},
         "confirm_when_unsure":    {"type": "bool", "desc": "低置信/冲突时是否转入澄清确认"},
         "confirm_options_max":    {"type": "int", "desc": "意图确认卡的候选选项数上限（按本次输入语义相关序动态选取）"},
+        "confirm_llm_dynamic":    {"type": "bool", "desc": "意图确认卡内容由 LLM 基于上下文动态生成（关闭=固定意图列表；LLM 失败自动兜底）"},
+        "clarify_followup_max_chars": {"type": "int", "desc": "澄清后承接补充的最大字符数（本会话有过澄清作答且输入不超过此长度 ⇒ 跳过澄清门直接执行）"},
         "llm_sem_conflict_min":   {"type": "float", "desc": "语义与 LLM 意图互斥时的语义分下限（达阈转澄清）"},
         "history_recall":         {"type": "bool", "desc": "是否把历史用户话喂给 LLM 一路"},
         "history_recall_turns":   {"type": "int", "desc": "喂给 LLM 的最近几轮用户话"},

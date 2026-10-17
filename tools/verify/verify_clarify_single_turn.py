@@ -19,21 +19,26 @@
 · 前端：clarifyAnswerSend / 自由文本分支 / clarifySkipSend 统一走 _continueInSameBox
   并转呈追认信息；pumpStream 请求体带两个新字段。
 
-触发路径说明（2026-10-17 实测校正）
+触发路径说明（2026-10-17 二次校正）
 ----------------------------------
-初版用「建模」+team 触发内容级澄清（阶段 1.5），实测三处不可行：① team 选中时
-`intent = forced_intent or _detected` 被覆写为 team_intent（Agent 名），而 1.5 首道门
-`intent ∈ CLARIFY_INTENTS` 即返回 None；② 「建模」本身是 `_CLARIFY_ACTION_VERBS` 动作
-词，`_clarify_skip_reason` 命中 action_kw；③ 内置 agent 的 intent_keywords 均
-active=0（关键词层整体关闭），语义层 embedding 服务 502 降级 bigram ⇒ 短输入全部
-route=chat/conf=0。
-故改用**阶段 1.4 意图确认**触发：短输入 + 求助暗示词（帮我/请/我想…）+ route=chat
-conf<=0 ⇒ `_should_confirm_intent` 命中 ⇒ 落挂起 + clarify 卡。该路径与 1.5 **共用**
-同一套澄清卡 / /clarify-answer / 续跑机制，DB 层单轮化判据与路径无关。
+· 初版用「建模」+team 撞内容级澄清（1.5）不可行：team 覆写 forced_intent 使 1.5 首道门
+  即返回 None；「建模」本身是动作词命中 action_kw；内置 agent 关键词 active=0 +
+  embedding 502 降级 bigram ⇒ 短输入全部 route=chat/conf=0。
+· 二版改撞阶段 1.4 意图确认（短输入+求助暗示词）。★ 但 2026-10-17「确认卡 LLM 动态化」
+  上线后此路又不可测：1.4 前新增的 `_llm_intent_confirm_questions` 会让真实 LLM 结合
+  上下文判断——若判 need=false（连卡都不弹）或生成选项不足，脚本即崩；且本脚本历史上
+  两次被真实 LLM 429 限流搞崩。
+· 三版（当前）：**进程内 execute_stream + mock LLM 走 ask_user 路径**——ReAct 探测轮
+  返 ask_user tool_call ⇒ 弹上下文相关确认卡（与 4294 真实案例同形态）。优势：
+  ① 触发完全可控，不受 LLM 抖动/限流/语义服务状态影响；② 顺带覆盖「AI 执行中主动
+  确认 → /clarify-answer → 续跑单轮化」完整链路；③ DB 层单轮化判据与触发路径无关
+  （续答入口的 UPDATE 逻辑不关心卡从哪来）。HTTP 仅用于建会话与 /clarify-answer。
 
 判据
 ----
-T0 触发澄清（阶段 1.4 意图确认卡）：questions 非空、pending 挂起、落 1 条 user 消息
+T0 触发澄清（ask_user 卡）：clarify_ask 事件、卡片点名上下文（工程+版本）、
+   title 标明执行中确认 + source=ask_user、done.clarify_asked=True、pending 挂起、
+   落 1 条 user 消息
 T1 clarify-answer 返回追认信息（answers 路径，问题 id 取自真实挂起状态）：
    resume_of_user_msg_id = 触发澄清的 user 消息
 T2 续跑后 DB 单轮：user 消息数不变、原 user 消息 content 含追加文本、新增 assistant 消息
@@ -54,10 +59,13 @@ ROOT = Path(__file__).resolve().parents[2]
 DB = ROOT / "mbse.db"
 BASE = "http://127.0.0.1:8000"
 HDR = {"Content-Type": "application/json", "X-User-Id": "1", "X-Session-Token": "verify-d1"}
-# 阶段 1.4 触发输入：短（<18字）+ 求助暗示词「帮我」+ 无领域关键词/动作词 ⇒
-# route=chat/conf=0 时 _should_confirm_intent 命中（详见模块 docstring 的路径说明）。
-TRIGGER_INPUT = "帮我弄一下这个"
-# 干净普通输入：不含任何 _REQUEST_HINTS（不触发 1.4），供 T4/T5 使用
+# 触发输入：导出任务（mock LLM 会在 ReAct 探测轮返 ask_user tool_call ⇒ 弹上下文相关
+# 确认卡）。★ 2026-10-17 改造：触发路径由「HTTP SSE 撞 1.4 真实 LLM」改为进程内
+# execute_stream + mock LLM 走 ask_user —— 真实 LLM 可能判 need=false 连卡都不弹
+# （LLM 动态化上线后），且本脚本两次被 429 限流搞崩；ask_user 路径可控且覆盖
+# 「AI 执行中主动确认 → 作答 → 续跑单轮化」完整链路（probe_ask_user 已证形态）。
+TRIGGER_INPUT = "导出广汽元模型1010的sysml v2源码"
+# 干净普通输入：mock 下不触发 ask_user，供 T4/T5 使用
 PLAIN_INPUT = "今天天气不错"
 
 _fails: list[str] = []
@@ -91,29 +99,6 @@ def get(path: str) -> dict:
         return json.loads(r.read().decode())
 
 
-def sse_collect(cid: int, body: dict) -> list:
-    """走真实 SSE 流，收集全部事件（只取 JSON data 行）。"""
-    req = urllib.request.Request(BASE + f"/api/conversations/{cid}/chat/stream",
-                                 data=json.dumps(body).encode(), headers=HDR, method="POST")
-    out = []
-    with urllib.request.urlopen(req, timeout=240) as r:
-        buf = ""
-        while True:
-            chunk = r.read(4096)
-            if not chunk:
-                break
-            buf += chunk.decode("utf-8", "ignore")
-            while "\n\n" in buf:
-                frame, buf = buf.split("\n\n", 1)
-                for ln in frame.splitlines():
-                    if ln.startswith("data:"):
-                        try:
-                            out.append(json.loads(ln[5:].strip()))
-                        except Exception:
-                            pass
-    return out
-
-
 def db_msgs(cid: int) -> list:
     con = sqlite3.connect(DB)
     con.row_factory = sqlite3.Row
@@ -124,19 +109,94 @@ def db_msgs(cid: int) -> list:
         con.close()
 
 
+# ── mock LLM（ask_user 触发 / 普通生成两态，按 _ask_state 切换）─────────────────
+_ask_state = {"asked": False}
+
+
+def _fake_chat(messages, provider_id=None, stream=False, tools=None,
+               _intent="", _model_params=None, **kw):
+    """进程内 execute_stream 的 LLM 替身：
+    · ReAct 探测轮（CHAT_TASK_PROBE + tools）：首次返 ask_user tool_call（上下文相关
+      确认卡），其后返无 tool_calls 的 content（结束循环，正常生成）；
+    · 其余调用（意图兜底/澄清探测/生成）：无害占位响应。
+    """
+    from agent.pipeline_parts.common import CHAT_TASK_PROBE
+    if _intent == CHAT_TASK_PROBE and tools and not _ask_state["asked"]:
+        _ask_state["asked"] = True
+        return {"choices": [{"message": {
+            "role": "assistant", "content": "",
+            "tool_calls": [{"id": "call_ask_1", "type": "function", "function": {
+                "name": "ask_user",
+                "arguments": json.dumps({
+                    "question": "导出「广汽元模型1010」的 SysML v2 源码，用哪个版本、什么范围？",
+                    "options": ["版本 3（最新）+ 整工程导出", "版本 3（最新）+ 按包导出（先展开数据树选包）",
+                                "版本 2 + 整工程导出", "版本 1 + 整工程导出"],
+                    "context": "该工程有 3 个已发布版本：版本 3（2026-10-13 14:09，最新）、"
+                               "版本 2（2026-10-13 09:33）、版本 1（2026-10-12 16:42）。",
+                }, ensure_ascii=False)}}]}}]}
+    return {"choices": [{"message": {"role": "assistant",
+                                     "content": "（验证替身）已按你的确认继续执行。"}}],
+            "_meta": {"provider": "verify", "model": "-", "used_mock": True}}
+
+
+def run_stream(cid: int, body: dict) -> list:
+    """进程内 execute_stream（mock LLM 已装），返回事件列表。"""
+    import sys as _sys
+    if str(ROOT) not in _sys.path:
+        _sys.path.insert(0, str(ROOT))
+    from agent.pipeline import AgentPipeline
+    if not hasattr(run_stream, "_pipe"):
+        run_stream._pipe = AgentPipeline()
+    evs = list(run_stream._pipe.execute_stream(
+        body["message"], conversation_id=cid, branch=body.get("branch") or "dev",
+        attachments=body.get("attachments"),
+        resume_of_user_msg_id=int(body.get("resume_of_user_msg_id") or 0),
+        resume_append=body.get("resume_append") or ""))
+    return evs
+
+
 def main() -> int:
-    section("T0 · 前置：造一个会触发澄清的会话（阶段1.4：短输入+求助暗示词，无 team）")
+    # 进程内 mock LLM（T0/T2/T3-续跑/T4/T5 全部走 execute_stream，不依赖真实 LLM）
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))      # 进程内 import llm / agent 需要项目根在 path
+    from llm import llm_client as _lc
+    _orig_chat = _lc.chat
+    _lc.chat = _fake_chat
+    try:
+        _run_all()
+    finally:
+        _lc.chat = _orig_chat     # 任何路径退出都还原 LLM
+    section("结果")
+    print(f"  通过 {_passes} 项，失败 {len(_fails)} 项")
+    for f in _fails:
+        print(f"    · {f}")
+    if not _fails:
+        print("  全部通过 ✓  澄清续答 DB 层单轮化生效")
+    return 0 if not _fails else 1
+
+
+def _run_all() -> None:
+    section("T0 · 前置：造一个会触发澄清的会话（ask_user：AI 执行中主动确认，mock LLM）")
     cv = post("/api/conversations", {"title": "verify-d1-single-turn"})
     cid = cv.get("id")
     chk("新建会话", bool(cid), f"cid={cid}")
 
-    evs = sse_collect(cid, {"message": TRIGGER_INPUT})
+    _ask_state["asked"] = False
+    evs = run_stream(cid, {"message": TRIGGER_INPUT})
     clarify = next((e for e in evs if e.get("type") == "clarify_ask"), None)
-    chk("第一轮触发 clarify_ask（拿到挂起状态）", bool(clarify),
+    chk("第一轮触发 clarify_ask（AI 执行中主动确认）", bool(clarify),
         f"questions={len((clarify or {}).get('questions') or [])}")
-    _opts = ((clarify or {}).get("questions") or [{}])[0].get("options") or []
-    chk("T0 澄清卡候选为动态清单（≥6 项；旧行为恒为字典序 4 项）",
-        len(_opts) >= 6, f"options={len(_opts)} 首项={_opts[0][:30] if _opts else '无'}")
+    _q0 = ((clarify or {}).get("questions") or [{}])[0]
+    _opts = _q0.get("options") or []
+    chk("T0 卡片为上下文相关内容（点名工程+版本，非系统固定清单）",
+        "广汽元模型1010" in (_q0.get("question") or "") and len(_opts) >= 3,
+        f"question={ (_q0.get('question') or '')[:40]!r } opts={len(_opts)}")
+    chk("T0 title 标明执行中确认 + source=ask_user",
+        "执行中" in ((clarify or {}).get("title") or "")
+        and (clarify or {}).get("source") == "ask_user")
+    done0 = next((e for e in evs if e.get("type") == "done"), None)
+    chk("T0 done.clarify_asked=True（未写空 assistant 直接挂起）",
+        bool(done0 and done0["data"].get("clarify_asked")))
 
     pend = get(f"/api/conversations/{cid}/messages?limit=1").get("pending_clarify")
     chk("pending_clarify 已挂起", bool(pend))
@@ -169,7 +229,8 @@ def main() -> int:
         get(f"/api/conversations/{cid}/messages?limit=1").get("pending_clarify") is None)
 
     section("T2 · 续跑后 DB 单轮（核心判据）")
-    evs2 = sse_collect(cid, {
+    _ask_state["asked"] = True      # 续跑不再触发 ask_user，走普通生成
+    evs2 = run_stream(cid, {
         "message": r["resume_text"],
         "resume_of_user_msg_id": r["resume_of_user_msg_id"], "resume_append": r["append_text"],
     })
@@ -192,7 +253,8 @@ def main() -> int:
     section("T3 · skip 分支：清挂起 + 同样追认")
     cv2 = post("/api/conversations", {"title": "verify-d1-skip"})
     cid2 = cv2.get("id")
-    sse_collect(cid2, {"message": TRIGGER_INPUT})
+    _ask_state["asked"] = False
+    run_stream(cid2, {"message": TRIGGER_INPUT})
     pend2 = get(f"/api/conversations/{cid2}/messages?limit=1").get("pending_clarify")
     chk("T3 前置：cid2 已挂起澄清", bool(pend2))
     rs = post(f"/api/conversations/{cid2}/clarify-answer", {"skip": True})
@@ -205,7 +267,8 @@ def main() -> int:
     u2_id = next((m["id"] for m in msgs2b if m["role"] == "user"), 0)
     chk("T3 skip 也返回追认 id", rs.get("resume_of_user_msg_id") == u2_id,
         f"got={rs.get('resume_of_user_msg_id')} expect={u2_id}")
-    sse_collect(cid2, {
+    _ask_state["asked"] = True      # 续跑不再触发 ask_user
+    run_stream(cid2, {
         "message": rs["resume_text"],
         "resume_of_user_msg_id": rs.get("resume_of_user_msg_id") or 0,
         "resume_append": rs.get("append_text") or "",
@@ -217,10 +280,11 @@ def main() -> int:
     section("T4 · 追认失败兜底（传不存在的 user_msg_id）")
     cv3 = post("/api/conversations", {"title": "verify-d1-fallback"})
     cid3 = cv3.get("id")
-    sse_collect(cid3, {"message": PLAIN_INPUT})
+    _ask_state["asked"] = True
+    run_stream(cid3, {"message": PLAIN_INPUT})
     before = len([m for m in db_msgs(cid3) if m["role"] == "user"])
-    sse_collect(cid3, {"message": "【澄清补充】追认失败兜底测试",
-                       "resume_of_user_msg_id": 999999999, "resume_append": "（兜底追加文本）"})
+    run_stream(cid3, {"message": "【澄清补充】追认失败兜底测试",
+                      "resume_of_user_msg_id": 999999999, "resume_append": "（兜底追加文本）"})
     after = db_msgs(cid3)
     users3 = [m for m in after if m["role"] == "user"]
     chk("T4 追认失败 ⇒ 回落新 user 消息（内容不丢）", len(users3) == before + 1,
@@ -230,7 +294,7 @@ def main() -> int:
 
     section("T5 · 普通发送不受影响（无追认字段照旧新起一轮）")
     before5 = len([m for m in db_msgs(cid3) if m["role"] == "user"])
-    sse_collect(cid3, {"message": "再问一个普通问题"})
+    run_stream(cid3, {"message": "再问一个普通问题"})
     after5 = [m for m in db_msgs(cid3) if m["role"] == "user"]
     chk("T5 普通发送照旧新起 user 轮次", len(after5) == before5 + 1,
         f"user {before5} → {len(after5)}")
@@ -250,14 +314,6 @@ def main() -> int:
         print(f"  会话 {_cid}（{n} 条消息）已删")
     con.commit()
     con.close()
-
-    section("结果")
-    print(f"  通过 {_passes} 项，失败 {len(_fails)} 项")
-    for f in _fails:
-        print(f"    · {f}")
-    if not _fails:
-        print("  全部通过 ✓  澄清续答 DB 层单轮化生效")
-    return 0 if not _fails else 1
 
 
 if __name__ == "__main__":

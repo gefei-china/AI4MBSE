@@ -333,6 +333,182 @@ class SessionMixin:
             "allow_custom": True,
         }]
 
+    # ── 2026-10-17 澄清承接轮 + 确认卡 LLM 动态化（米爸反馈，实证会话 9446）─────────────
+    def _is_clarify_followup(self, conversation_id, user_input) -> bool:
+        """本轮是否为「上一轮澄清/未完成任务的承接补充」。
+
+        实证案例（会话 9446，米爸截图）：AI 导出失败后明确邀请「下一轮先补全
+        分支→版本标识」「您若方便，也可以直接告我该工程下分支的名称」；用户答
+        「取主分支最新版本数据」（9 字）——这是对邀请的直接回应，却被阶段 1.4
+        「我不确定你想做哪件事」+ 固定意图清单拦住，上下文生生断裂。
+
+        判据（全满足才是承接）：
+          1) 本会话存在带 answered 记录的 clarify 卡（走过 澄清→作答，任务未闭合）
+          2) 该卡之后已有 assistant 产出（续跑过），且其后**只有本轮这一条** user 消息
+             （即用户紧跟作答后回应，中间没开新话题）
+          3) 本轮输入 ≤ `intent.clarify_followup_max_chars`（默认 25）——短句像补充、
+             不像新任务（新任务通常带明确动作/对象，字数也更多）
+        承接 ⇒ 调用方（stream.py）两道澄清门（1.4 意图确认 / 1.5 内容澄清）全跳过，
+        直接执行；Agent 持有完整上下文，能自行理解「用户在回答我上一轮的问题」。
+        ⚠️ 任何查询异常返回 False——宁可误弹卡（旧行为），不可误放行。
+        """
+        try:
+            from core import config as _cfg
+            _max_chars = int(_cfg.get("intent", "clarify_followup_max_chars", 25) or 25)
+        except Exception:
+            _max_chars = 25
+        _text = str(user_input or "").strip()
+        if not _text or len(_text) > _max_chars:
+            return False
+        if not conversation_id or int(conversation_id) <= 0:
+            return False
+        try:
+            from database import db_conn
+            with db_conn() as _cc:
+                _card = _cc.execute(
+                    "SELECT id FROM messages WHERE conversation_id=? AND msg_type='clarify' "
+                    "AND card_data LIKE '%\"answered\"%' ORDER BY id DESC LIMIT 1",
+                    (int(conversation_id),)).fetchone()
+                if not _card:
+                    return False
+                _rows = _cc.execute(
+                    "SELECT role FROM messages WHERE conversation_id=? AND id>? ORDER BY id",
+                    (int(conversation_id), _card["id"])).fetchall()
+        except Exception:
+            return False
+        _roles = [r["role"] for r in _rows]
+        if not _roles or "assistant" not in _roles:
+            return False
+        _user_idx = [i for i, r in enumerate(_roles) if r == "user"]
+        # 本轮 user 消息（入口已落库）必须是卡之后唯一一条 user 且排在最后
+        if len(_user_idx) != 1 or _user_idx[0] != len(_roles) - 1:
+            return False
+        return True
+
+    def _llm_intent_confirm_questions(self, user_input, current_intent, conversation_id=None):
+        """LLM 基于上下文生成「意图确认」题（米爸反馈：「澄清确认卡还是会有系统默认的
+        内容，应该是没有基于上下文分析提供准确的确认信息」）。
+
+        与固定列表版 `_intent_confirm_questions` 的关系：
+        - 本函数是**主路径**：把「用户输入 + 最近几轮上下文 + 可选意图清单」交给 LLM，
+          生成针对本次场景的确认问题与选项。LLM 看到上下文后有两种结论：
+          a) `{"need": false, "intent": "..."}` —— 意图其实已明确（误触发 1.4，
+             如承接补充轮）⇒ 返回 `("skip", intent)`，调用方**不弹卡直接执行**；
+          b) `{"need": true, "questions": [...]}` —— 确需用户拍板 ⇒ 生成针对性
+             问题与选项（每个选项须映射回清单里的意图 key，见下方 _map_option）。
+        - LLM 失败/Mock/超时 ⇒ 返回 `None`，调用方兜底回固定列表版（确定性可回归）。
+        - 选项为什么必须映射回意图 key：选项被选中后原样进入续答文本
+          （【澄清补充】…），续答要重新过意图识别——选项含该意图的**特异词**
+          （如「方案设计/建模」）关键词层才能稳定命中；纯自由文本会再次落空。
+
+        开关：`intent.confirm_llm_dynamic`（默认 True）。
+        """
+        try:
+            from core import config as _cfg
+            if not bool(_cfg.get("intent", "confirm_llm_dynamic", True)):
+                return None
+        except Exception:
+            pass
+        # ── 可选意图清单（给 LLM 的候选池：key | 中文名 | 一句职责）──
+        _lines = []
+        for _k, _v in (getattr(self.router, "_db_intents", {}) or {}).items():
+            if _k == "chat":
+                continue
+            try:
+                _desc = (self.registry.get(_k).description or "").strip()[:40]
+            except Exception:
+                _desc = ""
+            _label = self._INTENT_LABEL.get(_k, _k)
+            _lines.append(f"{_k} | {_label} | {_desc}" if _desc else f"{_k} | {_label}")
+        if not _lines:
+            return None
+        # ── 最近上下文（用户原话 + AI 回复尾部，截断防爆）──
+        _ctx_lines = []
+        if conversation_id and int(conversation_id) > 0:
+            try:
+                from database import db_conn
+                with db_conn() as _cc:
+                    _rows = _cc.execute(
+                        "SELECT role, content FROM messages WHERE conversation_id=? "
+                        "AND role IN ('user','assistant') AND msg_type='text' "
+                        "ORDER BY id DESC LIMIT 4", (int(conversation_id),)).fetchall()
+                for _r in reversed(_rows):
+                    _who = "用户" if _r["role"] == "user" else "AI"
+                    _ctx_lines.append(f"{_who}: {str(_r['content'] or '')[-300:]}")
+            except Exception:
+                _ctx_lines = []
+        _ctx = "\n".join(_ctx_lines)
+        try:
+            from llm import llm_client
+            resp = llm_client.chat([
+                {"role": "system", "content": (
+                    "你是 MBSE 智能助手的意图澄清模块。系统对用户最新这句话的路由置信度很低。"
+                    "请结合对话上下文判断用户意图：\n"
+                    "1) 若上下文已能明确用户要用哪项能力（含用户正在回答上一轮 AI 的提问/补充"
+                    "上一轮未完成任务的信息），输出 {\"need\":false,\"intent\":\"<意图key>\"}；\n"
+                    "2) 若确实需要用户拍板，输出 {\"need\":true,\"questions\":[{\"id\":\"q1\","
+                    "\"question\":\"<基于上下文的针对性提问>\",\"options\":[\"<中文名：说明>\",...],"
+                    "\"allow_custom\":true}]}——只出 1 题，2-5 个选项，**不同选项应指向不同意图**；\n"
+                    "选项的中文名部分必须出自下方可选意图清单（这样用户选完系统才知道该跑什么）；"
+                    "提问要贴合上下文，点明用户这句话与哪个未决事项相关，"
+                    "禁止输出清单式罗列（如「请选一项」这种没有信息量的话）。\n"
+                    "只输出 JSON，不要其他文字。\n\n可选意图清单（key | 中文名 | 职责）：\n"
+                    + "\n".join(_lines))},
+                {"role": "user", "content": (
+                    (f"最近对话上下文：\n{_ctx}\n\n" if _ctx else "")
+                    + f"用户最新输入：{str(user_input)[:300]}")},
+            ], _intent="clarify_detect")
+            content = (resp.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            j = self._parse_json_block(content)
+        except Exception:
+            return None
+        if not isinstance(j, dict):
+            return None
+        if j.get("need") is False:
+            _skip_to = str(j.get("intent") or "").strip()
+            # 只在 LLM 给出清单内的意图 key 时才敢放行（否则按需确认处理）
+            if _skip_to in (getattr(self.router, "_db_intents", {}) or {}):
+                return ("skip", _skip_to)
+            return None
+        _qs = j.get("questions")
+        if not (isinstance(_qs, list) and _qs):
+            return None
+        # ── 中文名 → key 反查表（选项必须能映射回系统意图，保证续答可路由）──
+        _label2key = {}
+        for _k in (getattr(self.router, "_db_intents", {}) or {}).keys():
+            if _k != "chat":
+                _label2key[self._INTENT_LABEL.get(_k, _k)] = _k
+        _out_qs = []
+        for _q in _qs[:1]:
+            if not isinstance(_q, dict):
+                continue
+            _opts, _mapped = [], []
+            for _o in (_q.get("options") or [])[:6]:
+                _t = str(_o or "").strip()
+                if not _t:
+                    continue
+                _key = ""
+                for _lb, _k in sorted(_label2key.items(), key=lambda x: -len(x[0])):
+                    if _t.startswith(_lb):
+                        _key = _k
+                        break
+                if _key:
+                    _opts.append(_t[:60])
+                    _mapped.append(_key)
+            if len(_opts) < 2:
+                continue     # 有效选项不足 ⇒ 整组作废，调用方兜底固定列表
+            _out_qs.append({
+                "id": "q_intent",
+                "question": str(_q.get("question") or "")[:150],
+                "options": _opts,
+                "allow_custom": True,
+                # 供续答路由：选项→意图 key 的映射（前端透传，回填进【澄清补充】）
+                "option_intents": _mapped,
+            })
+        if not _out_qs:
+            return None
+        return ("ask", _out_qs)
+
     # ── 内容级澄清：信息不清晰 → 选择题确认（优先选择题，支持补充输入），回答后续答 ──
     # 混合触发：LLM 声明式 quick 判定为主 + 规则兜底（输入过短/未提及领域实体）
     CLARIFY_INTENTS = ("design", "requirement_analysis", "impact", "requirement_quality")
