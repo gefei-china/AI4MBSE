@@ -47,6 +47,10 @@ class ToolRegistry:
         #   /api/studio/agent-tools 候选没有它 ⇒ Agent 编辑页「绑定工具」看不到
         #   （米爸实测反馈，2026-10-17）。
         "save_artifact": {"desc": "把代码/文档全文保存为会话产物（入产物库，用户可在产物面板查看下载；参数 title:str, content:str, kind:str 可选, lang:str 可选；写操作）", "handler": "artifact_tools.exec_tool"},
+        # ★ 2026-10-17（米爸需求）：联网搜索/网页抓取（⚠️ 内置工具三处登记之一——
+        #   漏这里则编辑页候选看不到，见 save_artifact 的教训）
+        "web_search": {"desc": "联网搜索互联网最新消息（参数 query:str, max_results:int 可选；时效性问题必用）", "handler": "web_tools.exec_tool"},
+        "web_fetch": {"desc": "抓取指定网页的正文文本（参数 url:str, max_chars:int 可选）", "handler": "web_tools.exec_tool"},
     }
 
     def __init__(self, conn=None):

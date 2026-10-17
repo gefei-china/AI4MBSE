@@ -296,6 +296,14 @@ DEFAULT_CONFIG = {
     "conv_summary": {
         "max_tokens": 4096,       # 摘要**输出**上限（token）
     },
+    # ★ 2026-10-17（米爸需求：联网获取最新消息）：web_search/web_fetch 工具的搜索 API 通道。
+    #   免费抓取搜索引擎（Bing/百度/搜狗）在本网络环境实测全线反爬/风控降级（见 web_tools.py），
+    #   稳定联网检索必须配正式 API：provider=tavily（国际，免费 1000 次/月）或 bocha（国内博查）。
+    #   不配置时 web_search 仍可调用，但会走免费链并在不可达时**如实报告失败**（不编造）。
+    "web_search": {
+        "provider": "",          # tavily | bocha（空=未配置，走免费抓取链）
+        "api_key": "",           # 对应 provider 的 API key
+    },
     "embedding": {
         "enabled": True,         # 语义出口总开关；False 强制 bigram（Mock/离线确定性）
         "intent_threshold": 0.15,  # 意图路由语义兜底阈值（**bigram 路**；dense 路见 intent_threshold_dense）

@@ -20,6 +20,7 @@ from knowledge_engine import VectorEngine, QueryRouter
 from llm import llm_client
 from core.config import STATIC_DIR
 from file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES
+from web_tools import WEB_TOOL_NAMES as _WEB_TOOL_NAMES   # 联网搜索/网页抓取（2026-10-17）
 from report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES
 from agent.definition import AgentDefinition
 from agent.registry import AgentRegistry
@@ -748,7 +749,7 @@ def is_topic_switch(sim, shared, is_carry, threshold, use_shared=True):
 __all__ = [
     'os', 're', 'json', 'time', 'uuid', 'logging', 'logger',
     'get_db', 'db_conn', 'VectorEngine', 'QueryRouter', 'llm_client', 'STATIC_DIR',
-    'exec_file_tool', '_FILE_TOOL_NAMES', 'exec_report_tool', '_REPORT_TOOL_NAMES',
+    'exec_file_tool', '_FILE_TOOL_NAMES', '_WEB_TOOL_NAMES', 'exec_report_tool', '_REPORT_TOOL_NAMES',
     'AgentDefinition', 'AgentRegistry', 'IntentRouter', 'GraphRAG', 'ConflictDetector',
     '_citations_payload', '_extract_code_blocks', '_archive_impact_analysis',
     '_archive_sysml_version', '_archive_artifacts', '_TOOL_RESULT_CAP',

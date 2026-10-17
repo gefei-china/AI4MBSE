@@ -419,6 +419,20 @@ def _seed_builtin_tools(conn) -> None:
         print("[init_db] 内置产物工具迁库: save_artifact")
     except Exception as e:
         print(f"[init_db] ⚠️ 产物工具注册失败（忽略）: {e}")
+    # web_search / web_fetch（2026-10-17 米爸需求：联网获取最新消息；定义见 web_tools.py）
+    try:
+        from web_tools import WEB_TOOL_DEFS as _WEB_DEFS
+        for d in _WEB_DEFS:
+            conn.execute(
+                "INSERT OR IGNORE INTO tools (name, source, description, status, input_schema, version, side_effect, risk_level, builtin) "
+                "VALUES (?,?,?,?,?,?,?,?,1)",
+                (d["name"], "builtin", d["description"], "active",
+                 json.dumps(d["input_schema"], ensure_ascii=False),
+                 d["version"], d["side_effect"], d["risk_level"]),
+            )
+        print(f"[init_db] 内置联网工具迁库: {len(_WEB_DEFS)} 个")
+    except Exception as e:
+        print(f"[init_db] ⚠️ 联网工具注册失败（忽略）: {e}")
     conn.commit()
     print(f"[init_db] 内置工具迁库: {len(builtin_tools)} 个")
 

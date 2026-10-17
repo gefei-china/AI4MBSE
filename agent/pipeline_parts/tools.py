@@ -121,6 +121,9 @@ class ToolMixin:
             #   （file_write 只写磁盘进不了产物库；参数 title:str, content:str,
             #   kind:code|document|sysml|report 可选, lang:str 可选；写操作）
             "save_artifact": "把代码/文档全文保存为会话产物（入产物库，用户可在产物面板查看下载；参数 title:str, content:str, kind:str 可选, lang:str 可选；写操作）",
+            # ★ 2026-10-17（米爸需求）：联网搜索/网页抓取（定义见 web_tools.py）
+            "web_search": "联网搜索互联网最新消息（参数 query:str, max_results:int 可选；时效性问题——最新/今天/新闻/发布——必用本工具，不要凭训练记忆回答时效问题）",
+            "web_fetch": "抓取指定网页的正文文本（参数 url:str, max_chars:int 可选；配合 web_search 结果链接深读）",
         }
         candidates = []  # (name, desc, type, server_name_or_None)
 
@@ -803,6 +806,13 @@ class ToolMixin:
             # 基础通用文件操作工具（file_*：系统文件读写/增删，双链路共用 file_tools.exec_file_tool）
             if name in _FILE_TOOL_NAMES:
                 result = exec_file_tool(name, arguments or {})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            # ★ 2026-10-17（米爸需求）：web_search/web_fetch——联网获取最新消息。
+            #   read-only 免确认；时效性问题（最新/今天/新闻）AI 应主动调用。
+            if name in _WEB_TOOL_NAMES:
+                import web_tools as _wt
+                result = _wt.exec_tool(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
             # ★ 2026-10-17（米爸能力配置）：save_artifact——AI 显式归档产物到产物库。
