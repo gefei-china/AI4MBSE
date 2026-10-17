@@ -134,6 +134,9 @@ def main() -> int:
     clarify = next((e for e in evs if e.get("type") == "clarify_ask"), None)
     chk("第一轮触发 clarify_ask（拿到挂起状态）", bool(clarify),
         f"questions={len((clarify or {}).get('questions') or [])}")
+    _opts = ((clarify or {}).get("questions") or [{}])[0].get("options") or []
+    chk("T0 澄清卡候选为动态清单（≥6 项；旧行为恒为字典序 4 项）",
+        len(_opts) >= 6, f"options={len(_opts)} 首项={_opts[0][:30] if _opts else '无'}")
 
     pend = get(f"/api/conversations/{cid}/messages?limit=1").get("pending_clarify")
     chk("pending_clarify 已挂起", bool(pend))

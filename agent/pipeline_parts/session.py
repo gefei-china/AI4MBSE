@@ -204,9 +204,21 @@ class SessionMixin:
         return out
 
     def _clarify_candidates(self, current: str) -> list:
-        """澄清候选：除当前意图外的已知意图列表（供前端「改选重发」按钮）。"""
+        """澄清候选：除当前意图外的已知意图列表（供前端「改选重发」按钮）。
+
+        ★ 2026-10-17（米爸反馈"澄清候选每次都是固定清单"）：排序改按**本次输入的语义
+        意图级排名**（`router._last_sem_ranking`，detect_semantic 旁路存下，动态），
+        字典序仅兜底 —— 与意图确认卡同口径（此前是字典序前 5，换输入不换清单）。
+        """
         known = [k for k in self.router._db_intents.keys() if k != "chat"]
-        return [k for k in known if k != current][:5]
+        _ranking = [(_r.get("intent", "") if isinstance(_r, dict) else str(_r[0]))
+                    for _r in (getattr(self.router, "_last_sem_ranking", None) or [])]
+        _out, _seen = [], set()
+        for _n in list(_ranking) + known:
+            if _n and _n != current and _n != "chat" and _n not in _seen:
+                _seen.add(_n)
+                _out.append(_n)
+        return _out[:5]
 
     # ── 2026-09-26 意图确认（「确定不了就别硬选」，用户明确要求）─────────────────────
     #  背景：低置信/无信号时系统会**自己挑一个**意图去执行 —— 「帮我看看这个项目的预算」落到 chat，
@@ -218,6 +230,12 @@ class SessionMixin:
         "design": "设计/建模", "impact": "变更影响分析", "review": "评审/校验",
         "report_generation": "报告生成", "system_mgmt": "系统管理",
         "knowledge_qa": "知识问答", "chat": "闲聊/其他",
+        # ★ 2026-10-17：候选清单扩到 10 项（confirm_options_max）后，下述细粒度 Agent
+        #   会进选项 —— 不补中文名，卡片上就是裸英文 key（architecture_skeleton：…）。
+        "requirement_structuring": "需求结构化", "architecture_skeleton": "架构骨架生成",
+        "view_expansion": "视图展开生成", "model_validation_repair": "模型校验修复",
+        "trace_verification": "追溯验证", "change_safety_gate": "变更安全门",
+        "model_release": "模型发布入库", "zhiyuan_mgmt": "智源工程管理",
     }
     # 「像在求助」的语气词：完全无信号时用它区分"用户在提请求"与"纯寒暄"——后者弹卡是打扰。
     _REQUEST_HINTS = ("帮我", "请", "我想", "我要", "能不能", "能否", "如何", "怎么", "怎样",
@@ -261,20 +279,44 @@ class SessionMixin:
         关键词层才能稳定命中；只写"设计"这种泛词反而会再次落空（泛词不单独构成信号）。
 
         P0-5（2026-09-30）`sem_alt`：本次**语义层的意图级 top1**（{intent, score}）。
-        它此前只被用来判"互斥/澄清"，**在候选排序上完全没被消费** —— 于是「导出最近审计日志」
-        这类句子的卡片永远只显示 `_db_intents` 字典的**前 4 个**（requirement_analysis /
-        requirement_quality / design / impact），真正的 system_mgmt 连选项都进不去，
-        用户只能靠"其他/自定义"手打。现在把它插到「当前猜测」之后、其余之前。
-        ⚠️ **只影响顺序，不改变"谁被选中"** —— 语义意见本身不构成路由决定（与 P0-1 的
-        "不硬选"一致），所以这里可以安全地消费它。
+        ★ 2026-10-17（米爸反馈"为啥每次澄清都是这个固定的问题清单…可以十多个"）：
+        候选主序升级为 `router._last_sem_ranking` —— **本次输入的语义意图级全量排名**
+        （detect_semantic 按意图名聚合后旁路存下，见 intent.py 同处注释）。此前消费方
+        只有 top1 一个（插在"当前猜测"之后），其余候选按 `_db_intents` 字典序填满
+        **前 4 项** —— 于是「导出最近审计日志」这类句子的卡片永远只显示字典前 4 个，
+        真正的 system_mgmt 连选项都进不去，用户只能靠"其他/自定义"手打。
+        现在：当前猜测置顶 → sem_alt 第二 → 语义排名其余（按本次输入相关度）→
+        字典序兜底填满；数量取 `intent.confirm_options_max`（默认 10，设置页可配）。
+        语义层没跑/没结论（排名为空）时整体退回旧行为（纯字典序），保证确定性可回归。
+
+        ⚠️ **只影响候选呈现的顺序与数量，不改变"谁被选中"** —— 语义意见本身不构成
+        路由决定（与 P0-1 的"不硬选"一致），所以这里可以安全地消费它。
         """
         names = [k for k in (getattr(self.router, "_db_intents", {}) or {}).keys() if k != "chat"]
         _alt_name = sem_alt.get("intent", "") if isinstance(sem_alt, dict) else ""
-        ordered = (([current_intent] if current_intent in names else [])
-                   + ([_alt_name] if _alt_name in names and _alt_name != current_intent else [])
-                   + [n for n in names if n != current_intent and n != _alt_name])
+        _ranking = [(_r.get("intent", "") if isinstance(_r, dict) else str(_r[0]))
+                    for _r in (getattr(self.router, "_last_sem_ranking", None) or [])]
+        try:
+            from core import config as _cfg
+            _max_opts = int(_cfg.get("intent", "confirm_options_max", 10) or 10)
+        except Exception:
+            _max_opts = 10
+        _max_opts = max(4, min(_max_opts, len(names) or 1))
+        _ordered, _seen = [], set()
+
+        def _push(_n):
+            if _n and _n in names and _n not in _seen:
+                _seen.add(_n)
+                _ordered.append(_n)
+
+        _push(current_intent)          # 当前猜测置顶（标注"我的猜测"）
+        _push(_alt_name)               # 语义 top1 第二
+        for _n in _ranking:
+            _push(_n)                  # 语义排名其余（本次输入的相关序，动态）
+        for _n in names:
+            _push(_n)                  # 字典序兜底填满（排名为空时即旧行为）
         opts = []
-        for n in ordered[:4]:
+        for n in _ordered[:_max_opts]:
             try:
                 desc = (self.registry.get(n).description or "").strip()[:22]
             except Exception:

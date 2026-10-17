@@ -221,6 +221,13 @@ class IntentRouter:
         # P0-1（2026-09-30）：语义层的"弃权意见"——**意图级** top1（达阈但未过采纳门槛）。
         # 供 LLM 兜底段做互证（融合矩阵缺的那一格），详见 detect_semantic / detect 内注释。
         self._last_sem_alt = None
+        # ★ 2026-10-17（米爸反馈"澄清卡每次都是固定 4 项清单"）：语义层**意图级全量排名**
+        #   （按分降序，detect_semantic 内聚合后旁路存于此）。此前的消费方只有
+        #   `_last_sem_alt` 一个 top1，澄清卡其余候选只能按 `_db_intents` 字典序填 ——
+        #   换任何输入都是同一张清单。排名存这里供 `_intent_confirm_questions` 按
+        #   "本次输入"的相关序取候选。⚠️ 与 `_last_sem_alt` 同为**纯旁路观测**，
+        #   不参与 detect_semantic 任何 return 判定（零路由行为变更）。
+        self._last_sem_ranking: list = []
         # ★ B4-5（2026-10-14，回应「意图识别应由 LLM 分析后匹配平台能力」）：
         #   最近一次**规则→LLM 复核**的结果，供观测与门禁判读。
         #   结构见 `_llm_confirm_rule` 的返回值说明；**不填就是"没复核过"**，
@@ -518,6 +525,9 @@ class IntentRouter:
         #   "本次意见"误用（可行性探针里已踩到：规则命中的那些行，alt 显示的全是上一轮的）。
         self._last_sem_score = 0.0
         self._last_sem_alt = None
+        # ★ 2026-10-17：与 `_last_sem_alt` 同口径——每次 detect 重置，防跨调用残留
+        #   （规则层直接 return 的路径不进 detect_semantic，不在此重置就会读到上一轮排名）。
+        self._last_sem_ranking = []
         # P1-13（2026-10-02）：DB 自定义 Agent 的**强特异关键词**优先于 builtin 建模强信号。
         # 实测：「生成需求视图/结构视图/参数视图」全被下方 444 行泛词正则「生成+视图」劫持到
         # design —— 用户自建 Agent（需求视图生成等）即使配了关键词也永远轮不到（db 关键词匹配
@@ -1077,6 +1087,7 @@ class IntentRouter:
         """
         self._last_sem_score = 0.0
         self._last_sem_alt = None
+        self._last_sem_ranking = []
         if not self._semantic_index:
             return ""
         from semantic import SemanticSearch
@@ -1112,6 +1123,14 @@ class IntentRouter:
                 "intent": _a1[0], "score": _a1[1], "runner": _a2[0], "runner_score": _a2[1],
                 "lead": (_a1[1] / _a2[1]) if _a2[1] > 0 else 99.0,
             }
+            # ★ 2026-10-17（米爸反馈"澄清卡每次都是固定 4 项"）：把**意图级全量排名**
+            #   旁路存下来（top1 已有 `_last_sem_alt`，这里补其余），供意图确认卡按
+            #   "本次输入"的动态相关序取候选 —— 此前卡片候选只能按 `_db_intents`
+            #   字典序填，换任何输入都是同一张清单。取前 12 条：覆盖确认卡默认
+            #   10 项上限（`intent.confirm_options_max`）仍留 2 条余量。
+            #   ⚠️ 纯旁路观测：不参与本函数任何 return 判定（零路由行为变更）。
+            self._last_sem_ranking = [
+                {"intent": _n, "score": float(_s)} for _n, _s in _ranked[:12]]
         # 2026-09-19：分档阈值按**本次实际走的路**选 —— 两路余弦量纲不同
         # （实测同一批 top1：dense 0.51 / bigram 0.10），一套阈值套两路必有一路失准。
         # dense 值由 calibrate_dense_thresholds.py 做**分位等价映射**标定

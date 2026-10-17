@@ -1071,7 +1071,9 @@ sup.cite:hover{background:var(--blue-d);color:#fff;border-color:var(--blue-d);}
 .clarify-step .cq-n{font-size:10px;color:var(--blue-d,#3478f6);background:#e3edfd;border-radius:9px;padding:1px 7px;font-weight:600;}
 .clarify-step .cq-tag{font-size:10px;color:#8b95a6;}
 .clarify-step .cq-q{font-size:12.5px;font-weight:600;color:#1f2b45;line-height:1.55;margin-bottom:7px;}
-.clarify-opts{display:flex;flex-direction:column;gap:1px;}
+/* 2026-10-17：意图确认卡候选扩到 10 项（confirm_options_max）后限高滚动 ——
+   否则一次一题的向导里选项区会把提交按钮顶出可视范围。 */
+.clarify-opts{display:flex;flex-direction:column;gap:1px;max-height:264px;overflow-y:auto;}
 .cq-opt{display:flex;align-items:flex-start;gap:7px;cursor:pointer;font-size:11.5px;color:#333f55;
   padding:4px 6px;border-radius:6px;line-height:1.45;}
 .cq-opt:hover{background:rgba(52,120,246,.08);}
