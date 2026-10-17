@@ -377,6 +377,17 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                 r["executed"] = True
                 r["exec_result"] = {"ok": _er.get("ok"), "result": str(_er.get("result", ""))[:2000]}
                 exec_note = f" · 已自动执行: {'成功' if _er.get('ok') else '失败'}"
+            elif action == "save_artifact":
+                # ★ 2026-10-17（米爸能力配置）：本地工具 save_artifact 的批准即执行——
+                #   确认单 payload 就是工具参数（title/content/kind/lang），
+                #   会话上下文取确认单归属会话。此前本地工具批准后死在队列
+                #   （"非 HTTP 集成类型不支持自动执行"），冒烟实测（确认单 #20）。
+                import artifact_tools as _at_hil
+                _er = _at_hil.exec_tool(action, payload if isinstance(payload, dict) else {},
+                                        conversation_id=int(row.get("conversation_id") or 0))
+                r["executed"] = True
+                r["exec_result"] = {"ok": _er.get("ok"), "result": str(_er.get("result", ""))[:2000]}
+                exec_note = f" · 已自动执行: {'成功' if _er.get('ok') else '失败'}"
             else:
                 r["executed"] = False
                 r["exec_result"] = {"ok": False, "result": f"工具「{action}」非 HTTP 集成类型，不支持批准后自动执行，请手动操作"}

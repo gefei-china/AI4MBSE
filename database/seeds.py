@@ -405,6 +405,20 @@ def _seed_builtin_tools(conn) -> None:
         print(f"[init_db] 内置报告工具迁库: {len(REPORT_TOOL_DEFS)} 个")
     except Exception as e:
         print(f"[init_db] ⚠️ 报告工具注册失败（忽略）: {e}")
+    # save_artifact（2026-10-17 米爸能力配置：AI 显式归档产物到产物库——
+    # file_write 只写沙箱磁盘进不了产物库；定义见 artifact_tools.py）
+    try:
+        from artifact_tools import input_schema as _sa_schema
+        conn.execute(
+            "INSERT OR IGNORE INTO tools (name, source, description, status, input_schema, version, side_effect, risk_level, builtin) "
+            "VALUES ('save_artifact','builtin',"
+            "'把代码/文档全文保存为会话产物（入产物库，用户可在产物面板查看下载；参数 title:str, content:str, kind:str 可选, lang:str 可选；写操作）',"
+            "'active',?, 'v1.0','write','medium',1)",
+            (_sa_schema(),),
+        )
+        print("[init_db] 内置产物工具迁库: save_artifact")
+    except Exception as e:
+        print(f"[init_db] ⚠️ 产物工具注册失败（忽略）: {e}")
     conn.commit()
     print(f"[init_db] 内置工具迁库: {len(builtin_tools)} 个")
 

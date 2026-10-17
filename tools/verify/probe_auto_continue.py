@@ -199,8 +199,8 @@ chk("C3 execute：外层 while + 评估门（工具计数/clarify 优先）+ cla
         "if _ac_full:")),
     )
 
-chk("C4 prompt：AUTOPILOT_RULES_TEXT 纯追加在 tool_rules 末尾",
-    'blocks["tool_rules"] = TOOL_RULES_TEXT + ASK_USER_RULES_TEXT + AUTOPILOT_RULES_TEXT' in _m
+chk("C4 prompt：AUTOPILOT_RULES_TEXT 纯追加进 tool_rules（其后可续追加其他规则段）",
+    'TOOL_RULES_TEXT + ASK_USER_RULES_TEXT' in _m and 'AUTOPILOT_RULES_TEXT' in _m
     and "禁止用『需要我继续吗" in _m)
 
 chk("C5 前端：两个续跑环节块 + 图标",

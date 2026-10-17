@@ -26,8 +26,12 @@ SKILL_PACKAGES = [
         "category": "基础通用",
         "author": "平台内置",
         "version": "v1.0",
-        "triggers": ["文件", "读写文件", "创建文件", "保存文件", "追加内容", "删除文件", "目录", "文件操作", "素材文件", "file_"],
-        "allowed_tools": ["file_list", "file_read", "file_write", "file_append", "file_mkdir", "file_delete"],
+        "triggers": ["文件", "读写文件", "创建文件", "保存文件", "追加内容", "删除文件", "目录", "文件操作", "素材文件", "file_",
+                     # ★ 2026-10-17（米爸能力配置）：「把代码存入产物文档」话术命中
+                     "存入产物", "写入产物", "产物文档", "保存代码", "存代码"],
+        "allowed_tools": ["file_list", "file_read", "file_write", "file_append", "file_mkdir", "file_delete",
+                          # ★ 2026-10-17：AI 显式归档产物（file_write 只写沙箱磁盘，进不了产物库）
+                          "save_artifact"],
         "references": [{"title": "文件操作安全规范", "path": "references/文件操作安全规范.md"}],
         "scripts": ["scripts/main.py"],
         "skill_md": """---
@@ -49,6 +53,10 @@ version: v1.0
 - 追加 → **file_append**（文件不存在则创建）
 - 建目录 → **file_mkdir**
 - 删除 → **file_delete**（destructive 高风险，需人工确认；目录非空需显式 recursive=true）
+- ★ 保存产物 → **save_artifact**（2026-10-17 新增：把代码/文档全文登记进**产物库**；
+  用户说「存入产物/写入产物文档」时用它，参数 title/content/kind(code|document|sysml|report)/lang。
+  ⚠️ file_write 只写服务器磁盘文件、进不了产物库——产物归档一律用 save_artifact；
+  保存成功后告知用户到产物面板查看，不要谎称已保存而不调用工具）
 
 ## 安全规范
 - 写前先 file_list / file_read 确认目标是否存在、是否会被覆盖

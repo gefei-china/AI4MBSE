@@ -117,6 +117,10 @@ class ToolMixin:
             "file_delete": "删除文件或空目录（参数 path:str，recursive:bool 可选；destructive 高风险需人工确认）",
             # 基础通用报告导出工具（内容→md/docx/pdf，定义见 report_tools.py）
             "report_export": "把报告内容导出为指定格式文档并落盘（参数 path:str, title:str, content:str 或 sections:str, fmt:md|docx|pdf；写操作）",
+            # ★ 2026-10-17（米爸能力配置）：save_artifact——把内容显式登记进**产物库**
+            #   （file_write 只写磁盘进不了产物库；参数 title:str, content:str,
+            #   kind:code|document|sysml|report 可选, lang:str 可选；写操作）
+            "save_artifact": "把代码/文档全文保存为会话产物（入产物库，用户可在产物面板查看下载；参数 title:str, content:str, kind:str 可选, lang:str 可选；写操作）",
         }
         candidates = []  # (name, desc, type, server_name_or_None)
 
@@ -269,6 +273,14 @@ class ToolMixin:
             for _d in FILE_TOOL_DEFS:
                 if _d["name"] in _sk_wl and not any(c[0] == _d["name"] for c in candidates):
                     candidates.append((_d["name"], _d["description"], "builtin", ""))
+            # ★ 2026-10-17（米爸能力配置）：save_artifact 同通道补入——技能 48「文件操作」
+            #   声明了它 ⇒ 显式归档产物能力随技能命中注入。
+            #   ⚠️ 实测冒烟（会话 9543）：只扩技能 allowed_tools 不够——本段只遍历
+            #   FILE_TOOL_DEFS，save_artifact 不在其中 ⇒ 技能命中了候选里也没有，
+            #   AI 如实回答"工具集中没有 save_artifact"。"在白名单"≠"在候选"。
+            if "save_artifact" in _sk_wl and not any(c[0] == "save_artifact" for c in candidates):
+                candidates.append(("save_artifact", builtin_desc.get("save_artifact", ""),
+                                   "builtin", ""))
         # P0-3：委派最小权限——本次调用指定的工具白名单（Worker ⊆ Supervisor），
         # 白名单模式下不做「读类核心工具保底」，避免突破最小权限
         _wl = getattr(self, "_tool_whitelist", None)
@@ -289,7 +301,10 @@ class ToolMixin:
                                 # ★ 2026-10-17（米爸反馈4）：导出/取回类任务同样需要落盘通道
                                 #   ——实测（会话 9446）「导出全量模型」不含原表任何关键词，
                                 #   file_write 被写意图闸滤掉 ⇒ AI 只能读取不能保存。
-                                "导出", "留存", "取回", "落盘", "下载", "存档", "备份")
+                                "导出", "留存", "取回", "落盘", "下载", "存档", "备份",
+                                # ★ 2026-10-17（米爸能力配置）：「把代码存入产物文档」话术
+                                #   不含"保存/写入"——实测（9446 msg 4600）会被本闸滤掉
+                                "存入", "产物文档")
             if not any(k in (user_input or "") for k in _write_intent_kw):
                 try:
                     from database import get_db as _gdb
@@ -788,6 +803,16 @@ class ToolMixin:
             # 基础通用文件操作工具（file_*：系统文件读写/增删，双链路共用 file_tools.exec_file_tool）
             if name in _FILE_TOOL_NAMES:
                 result = exec_file_tool(name, arguments or {})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            # ★ 2026-10-17（米爸能力配置）：save_artifact——AI 显式归档产物到产物库。
+            #   file_write 只写沙箱磁盘、进不了产物库（9446 实证 AI 自述"没有写入能力"
+            #   的真正缺口）；harness 兜底只认完整文件形态，分段展示/片段不命中。
+            #   ⇒ 本工具是模型主动通道：技能 48「文件操作」声明、agent 绑定技能后经
+            #   白名单注入，写意图闸按技能契约放行。
+            if name == "save_artifact":
+                import artifact_tools as _at2
+                result = _at2.exec_tool(name, arguments or {}, conversation_id=conv_ctx)
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
             # 基础通用报告导出工具（report_export：内容→md/docx/pdf，双链路共用 report_tools.exec_report_tool）
