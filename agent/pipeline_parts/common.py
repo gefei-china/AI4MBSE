@@ -297,6 +297,19 @@ AUTOPILOT_RULES_TEXT = (
     "· 每步产出后自检是否已覆盖用户请求的全部要求，未覆盖就继续，不要分批交付；\n"
     "· 仅当真正被阻塞（缺关键信息、需用户授权/拍板、遇不可解错误）时才 ask_user 或收尾说明阻塞原因。\n")
 
+#: ★ 2026-10-17（米爸方案A1）：产物自动归档说明——**纯追加进 tool_rules**（与
+#: AUTOPILOT_RULES_TEXT 同模式，所有 agent 生效）。作用：
+#: 1) 告知模型「工具取回的完整模型文件平台会自动存入产物」，杜绝 9446 那种
+#:    「我没有写入能力，无法保存」的自怨式收尾；
+#: 2) 明确模型正文无需复述全文（平台已归档），提示用户去产物面板查看即可。
+ARTIFACT_AUTO_RULES_TEXT = (
+    "产物自动归档：工具执行结果中的完整 SysML/KerML 模型文件"
+    "（如智源导出返回的 .sysml 全文）由平台**自动识别并存入产物库**。\n"
+    "· 你**不需要**也无法自行把文件落盘——不要说『我没有写入能力/无法保存文件』，"
+    "平台已经替你保存；\n"
+    "· 会话流会显示『📄 取回模型文件 …已自动存入产物』环节，提醒用户到产物面板查看"
+    "或下载全文即可，你的回答里只需给出分析结论，**不要**整段复述文件全文。\n")
+
 #: 流式技能正文截断上限（`skill_block` 的 `content_cap`）。**流式路径专用**：
 #: 技能正文可能很长，而流式请求每轮都带 ⇒ 按 4000 字控 token（execute 路径不截断）。
 _SKILL_CONTENT_CAP = 4000
@@ -469,7 +482,8 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
         # ★ 2026-10-17（harness 持续工作）：AUTOPILOT_RULES_TEXT **纯追加在末尾**——
         #   旧值（TOOL_RULES + ASK_USER）保持为前缀，verify_prompt_blocks 的 B 组
         #   等价判据（除 tool_rules 外逐字节 + tool_rules 旧值纯追加）因此不被破坏。
-        blocks["tool_rules"] = TOOL_RULES_TEXT + ASK_USER_RULES_TEXT + AUTOPILOT_RULES_TEXT
+        blocks["tool_rules"] = (TOOL_RULES_TEXT + ASK_USER_RULES_TEXT
+                                + AUTOPILOT_RULES_TEXT + ARTIFACT_AUTO_RULES_TEXT)
     return blocks
 
 
@@ -740,7 +754,8 @@ __all__ = [
     'PROMPT_CACHEABLE_KEYS', 'PROMPT_DYNAMIC_KEYS', 'PROMPT_BLOCK_ORDER',
     'PROMPT_LAYER_BOUNDARY', 'assemble_system_prompt',
     # P1-28：system_prompt 块内容单一真源（两条路径共用；差异显式参数化）
-    'TOOL_RULES_TEXT', 'ASK_USER_RULES_TEXT', 'AUTOPILOT_RULES_TEXT', '_SKILL_CONTENT_CAP', 'PromptBlocksCtx',
+    'TOOL_RULES_TEXT', 'ASK_USER_RULES_TEXT', 'AUTOPILOT_RULES_TEXT',
+    'ARTIFACT_AUTO_RULES_TEXT', '_SKILL_CONTENT_CAP', 'PromptBlocksCtx',
     'build_slots_block', 'build_skill_block', 'build_prompt_blocks',
     # P1-29：显式指定技能的注入（两路径统一入口 + 每轮状态起点）
     'reset_skill_state', 'load_forced_skill',

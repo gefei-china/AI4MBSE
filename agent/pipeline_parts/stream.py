@@ -2673,6 +2673,7 @@ class StreamMixin:
                         _r_full = str(result.get("result") or "")
                         # ★ 2026-10-17（米爸反馈4）：识别工具结果里的完整 SysML 文档
                         #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
+                        _doc_hit = None
                         try:
                             from agent.utils import extract_sysml_doc_from_result as _esd
                             _doc = _esd(tname, _r_full)
@@ -2681,8 +2682,19 @@ class StreamMixin:
                                 if _dk not in self._tool_sysml_docs_seen:
                                     self._tool_sysml_docs_seen.add(_dk)
                                     self._tool_sysml_docs.append(_doc)
+                                    _doc_hit = _doc
                         except Exception:
                             pass
+                        # ★ 会话流环节块（米爸方案A1）：取回即告知——「已自动存入产物」，
+                        #   点击产物面板可看全文。yield 必须在 try/except 之外。
+                        if _doc_hit:
+                            _dsz = len(_doc_hit.get("text") or "")
+                            yield {"type": "stage", "name": "取回模型文件",
+                                   "status": "done",
+                                   "detail": "{}（{}）已自动存入产物".format(
+                                       _doc_hit.get("title") or "模型文件",
+                                       "{:.1f}KB".format(_dsz / 1024) if _dsz >= 1024
+                                       else "{}B".format(_dsz))}
                         # ★ 失败轮预算判据（与 execute.py 同源）：本轮是否有可用结果
                         if _t_ok and not (result.get("weak")
                                           or ("未检索到" in _r_full)

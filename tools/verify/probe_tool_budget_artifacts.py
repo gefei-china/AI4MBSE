@@ -284,6 +284,17 @@ _e_w = io.open(ROOT / "agent" / "pipeline_parts" / "execute.py", encoding="utf-8
 chk("E9 stream/execute 两路径均已接线工具结果拦截",
     "extract_sysml_doc_from_result" in _s_w and "extract_sysml_doc_from_result" in _e_w)
 
+_common = io.open(ROOT / "agent" / "pipeline_parts" / "common.py", encoding="utf-8").read()
+_p11 = io.open(ROOT / "static" / "js" / "mods" / "11-pipeline.js", encoding="utf-8").read()
+chk("E10 会话流环节块已接线（stream 发射 + 前端分支/图标）",
+    '"name": "取回模型文件"' in _s_w and "取回模型文件" in _p11
+    and "取回模型文件" in _p11.split("iconMap")[1][:200])
+chk("E11 平台 tool_rules 已追加产物自动归档说明",
+    "ARTIFACT_AUTO_RULES_TEXT" in _common
+    and "blocks[\"tool_rules\"]" in _common
+    and _common.count("ARTIFACT_AUTO_RULES_TEXT") >= 3
+    and "没有写入能力" in _common)
+
 # ── D. 变异自证 ────────────────────────────────────────────
 section("D. 变异自证（判据必须能红）")
 
