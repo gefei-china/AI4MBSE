@@ -38,6 +38,15 @@ function onStageEvent(ev){
   } else if(name === '写入会话'){
     if(st === 'run'){ procAddStage('写入会话','run'); }
     else { procAddStage('写入会话','done',''); }
+  } else if(name === '任务完成度评估'){
+    // ★ 2026-10-17（harness 持续工作）：评估器每轮收尾判定「完成/未完成」，
+    //   done 事件的 detail 是四道闸给出的理由（为什么继续/为什么停）——必透传。
+    if(st === 'run'){ procAddStage('任务完成度评估','run','评估器判定任务是否完成…'); }
+    else { procAddStage('任务完成度评估','done', ev.detail||''); }
+  } else if(name === '自主续跑'){
+    // 续跑不是新会话盒：时间线继续追加（新轮工具事件自然接到下面），只提示用户「还在干活」
+    if(st === 'run'){ procAddStage('自主续跑','run','准备继续…'); }
+    else { procAddStage('自主续跑','done', ev.detail||''); }
   }
 }
 
@@ -181,7 +190,8 @@ function procAddSystemNotice(text){
     statusText:'提示', sub: t, detail: t});
 }
 function procAddStage(name, status, detail, detailHtml){
-  const iconMap = {'意图识别':'🔍','知识库检索':'📚','生成与校验':'✍️','写入会话':'💾'};
+  const iconMap = {'意图识别':'🔍','知识库检索':'📚','生成与校验':'✍️','写入会话':'💾',
+                   '任务完成度评估':'⚖️','自主续跑':'🔄'};
   procUpsert('stage_'+name, {type:'stage', icon: iconMap[name]||'🔍', title: name,
     status, statusText: status==='run'?'执行中…':'✓ 完成',
     sub: detail||'', subHtml: detailHtml||''});

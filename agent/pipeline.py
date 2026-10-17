@@ -26,6 +26,7 @@ from .utils import (  # noqa: F401  （P1-5 拆分：纯函数移至 agent/utils
     _archive_artifacts,
 )
 from .pipeline_parts.session import SessionMixin
+from .pipeline_parts.autopilot import AutoPilotMixin
 from .pipeline_parts.skills import SkillMixin
 from .pipeline_parts.orchestration import OrchestrMixin
 from .pipeline_parts.memory import MemoryMixin
@@ -39,7 +40,7 @@ from .pipeline_parts.context import ContextMixin
 from .pipeline_parts.common import *  # noqa: F401,F403  模块级名字 re-export 兼容旧引用
 
 
-class AgentPipeline(SessionMixin, SkillMixin, OrchestrMixin, MemoryMixin, PromptMixin, ToolMixin, ExecuteMixin, StreamMixin, CardMixin, HistoryMixin, ContextMixin):
+class AgentPipeline(SessionMixin, AutoPilotMixin, SkillMixin, OrchestrMixin, MemoryMixin, PromptMixin, ToolMixin, ExecuteMixin, StreamMixin, CardMixin, HistoryMixin, ContextMixin):
     """Agent execution pipeline: intent → retrieve → generate → validate → confirm → merge."""
 
     def __init__(self):

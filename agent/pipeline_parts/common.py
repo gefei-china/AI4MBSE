@@ -57,6 +57,11 @@ _TOOL_RESULT_CAP = 6000
 CHAT_TASK_PROBE = "chat_probe"
 CHAT_TASK_REPAIR = "chat_repair"
 CHAT_TASK_ANSWER = "chat_answer"
+# ★ 2026-10-17（米爸「harness 持续工作」）：EVAL = 自主续跑的完成度评估轮
+#   （对齐 Claude Code /goal 的 evaluator：模型想停时由它决定放行还是打回）。
+#   形态与 PROBE 同类（非流式、无 tools、输出短），但分流意义不同：它是**决策轮**，
+#   错杀它 = 多跑一轮续跑（烧钱），故单独一档，便于将来按档位调思考策略。
+CHAT_TASK_EVAL = "chat_eval"
 
 
 # ── 2026-10-10 收尾原因透传（消除"是哪个上限"的歧义）──────────────────────
@@ -280,6 +285,18 @@ ASK_USER_RULES_TEXT = (
     "⚠️ 不要用纯文本写『请确认：……』然后自行结束——那不会生成确认卡片；"
     "信息足够时直接执行，不要为确认而确认。\n")
 
+#: ★ 2026-10-17（米爸「harness 持续工作」）：持续工作模式指引（prompt 层）。
+#: 为什么需要：完成度评估器只能兜住「模型以为自己完成了」；如果模型**计划上**就只做
+#: 一步（「我先查列表，结果如下，需要我继续吗」），评估器看到的就是一个完整的单步交付。
+#: ⇒ 必须在 system prompt 层把「多步任务要一口气做完」写成显式规则——
+#:   Claude Code 的同款机制：loop 由 stop_reason 驱动，模型不被鼓励中途停下来问。
+AUTOPILOT_RULES_TEXT = (
+    "持续工作模式：你是可长时间自主工作的 harness 智能体，接到任务后持续工作直至完成。\n"
+    "· 任务未完成时**直接继续下一步**（调用工具或产出内容），"
+    "禁止用『需要我继续吗 / 要我接着做吗 / 是否继续』这类问句停下来等人吩咐；\n"
+    "· 每步产出后自检是否已覆盖用户请求的全部要求，未覆盖就继续，不要分批交付；\n"
+    "· 仅当真正被阻塞（缺关键信息、需用户授权/拍板、遇不可解错误）时才 ask_user 或收尾说明阻塞原因。\n")
+
 #: 流式技能正文截断上限（`skill_block` 的 `content_cap`）。**流式路径专用**：
 #: 技能正文可能很长，而流式请求每轮都带 ⇒ 按 4000 字控 token（execute 路径不截断）。
 _SKILL_CONTENT_CAP = 4000
@@ -449,7 +466,10 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
     if ctx.include_tool_rules:
         # ★ 2026-10-17：ask_user 指引并进 tool_rules 块（stream 路径可见）。
         #   execute 路径无 tool_rules 块（P1-28 刻意保留的差异），靠工具 description。
-        blocks["tool_rules"] = TOOL_RULES_TEXT + ASK_USER_RULES_TEXT
+        # ★ 2026-10-17（harness 持续工作）：AUTOPILOT_RULES_TEXT **纯追加在末尾**——
+        #   旧值（TOOL_RULES + ASK_USER）保持为前缀，verify_prompt_blocks 的 B 组
+        #   等价判据（除 tool_rules 外逐字节 + tool_rules 旧值纯追加）因此不被破坏。
+        blocks["tool_rules"] = TOOL_RULES_TEXT + ASK_USER_RULES_TEXT + AUTOPILOT_RULES_TEXT
     return blocks
 
 
@@ -720,7 +740,7 @@ __all__ = [
     'PROMPT_CACHEABLE_KEYS', 'PROMPT_DYNAMIC_KEYS', 'PROMPT_BLOCK_ORDER',
     'PROMPT_LAYER_BOUNDARY', 'assemble_system_prompt',
     # P1-28：system_prompt 块内容单一真源（两条路径共用；差异显式参数化）
-    'TOOL_RULES_TEXT', 'ASK_USER_RULES_TEXT', '_SKILL_CONTENT_CAP', 'PromptBlocksCtx',
+    'TOOL_RULES_TEXT', 'ASK_USER_RULES_TEXT', 'AUTOPILOT_RULES_TEXT', '_SKILL_CONTENT_CAP', 'PromptBlocksCtx',
     'build_slots_block', 'build_skill_block', 'build_prompt_blocks',
     # P1-29：显式指定技能的注入（两路径统一入口 + 每轮状态起点）
     'reset_skill_state', 'load_forced_skill',

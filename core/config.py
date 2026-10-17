@@ -1217,6 +1217,13 @@ CONFIG_SCHEMA = {
         "max_tool_rounds":   {"type": "int", "desc": "ReAct 工具轮**绝对硬上限**（默认 12，防死循环）。★ 注意语义：正常成功推进**不受它限制** —— 成功轮不扣预算，见 max_failed_rounds"},
         "max_failed_rounds": {"type": "int", "desc": "★ **失败轮预算**（默认 3）：只有工具失败/无效的轮次才扣；成功推进不扣（米爸 2026-10-09 纠正的语义，旧实现把成功轮也计入总轮数⇒ 连坐截断）"},
         "ask_user_enabled":  {"type": "bool", "desc": "★ ask_user 澄清工具开关（默认开，2026-10-17 米爸反馈3）：开启后 AI 执行中「真的需要用户拍板」时调用该工具，弹出可点选确认卡片并暂停流程等回答；关闭则回到纯文本提问的旧形态"},
+        # ── 自主续跑（2026-10-17 米爸「harness 持续工作」需求）──
+        # 对齐标杆：Claude Code /goal（评估器决定放行还是打回）+ AutoGPT boundedness
+        # 教训（次数/墙钟/token/空转四道闸，缺一即失控）。触发门：本轮**实际调用过工具**
+        # （_lg.calls 非空）才评估——纯问答轮没有「剩余步骤」可言，且省评估器成本。
+        "auto_continue_enabled": {"type": "bool", "desc": "★ 自主续跑总开关（默认开）：AI 完成度评估判定「任务未完成」时自动继续工作，无需用户逐条下达指令；关闭则维持一问一答形态"},
+        "auto_continue_max":     {"type": "int", "desc": "★ 自主续跑次数上限（默认 3）：单轮请求内最多自动续跑几次（AutoGPT「无完成任务生成」对策；每次续跑重置 ReAct 轮次预算，但仍共享 token 预算）"},
+        "auto_continue_deadline_s": {"type": "int", "desc": "★ 自主续跑墙钟上限（秒，默认 600；0=不设）：从本轮请求开始累计，超时不再续跑（仍受次数/token 闸约束）"},
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},
