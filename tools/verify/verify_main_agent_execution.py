@@ -63,6 +63,32 @@ def section(t: str) -> None:
     print(f"\n{'=' * 68}\n{t}\n{'=' * 68}")
 
 
+def _extract_js_func(src: str, name: str) -> str:
+    """按花括号配对提取 JS 函数体（含签名），找不到返回 ""。
+
+    ★ 2026-10-16 教训：原实现用定长正则窗口 `async function pickIntent[\\s\\S]{0,600}?\\n}`
+    抓函数体，pickIntent 因 Q2 重构变长（≈1000 字符）后**匹配失败**，验证器误报
+    FAIL —— 夹具漂移，不是产品回归。函数体检查一律走括号配对，对函数长度增长免疫。
+    模板串里的 `${...}` 自身括号平衡，不影响深度归零。
+    """
+    m = re.search(r"(?:async\s+)?function\s+" + re.escape(name) + r"\s*\(", src)
+    if not m:
+        return ""
+    i = src.find("{", m.end())
+    if i < 0:
+        return ""
+    depth = 0
+    for j in range(i, len(src)):
+        c = src[j]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return src[m.start():j + 1]
+    return ""
+
+
 # ── T2：源码层判定（静态，可离线跑） ──────────────────────────────
 def t2_source_guard() -> None:
     section("T2 · 隐藏 quick-agent 用户入口已退役（静态检查）")
@@ -98,11 +124,13 @@ def t2_source_guard() -> None:
     html = (static / "index.html").read_text(encoding="utf-8", errors="ignore")
     chk("index.html 中 quick-agent 元素已删除", 'id="quick-agent"' not in html)
 
-    # pickIntent 不得再写 quick-agent
+    # pickIntent 不得再写 quick-agent（函数体按花括号配对提取，勿用定长正则窗口）
     pl = (static / "js/mods/11-pipeline.js").read_text(encoding="utf-8", errors="ignore")
-    m = re.search(r"async function pickIntent[\s\S]{0,600}?\n}", pl)
+    fn = _extract_js_func(pl, "pickIntent")
     chk("pickIntent 改判走 _intentOverride，不再写隐藏下拉",
-        bool(m) and "quick-agent" not in m.group(0) and "_intentOverride" in m.group(0))
+        bool(fn) and "quick-agent" not in fn and "_intentOverride" in fn,
+        f"函数体 {len(fn)} 字符，提取失败或判据不符" if not fn or "quick-agent" in fn
+        or "_intentOverride" not in fn else f"函数体 {len(fn)} 字符，判据全中")
 
 
 # ── T1/T3：优先级 + 无成员提示（进程内，纯函数复刻 stream.py 分支） ──
@@ -167,12 +195,16 @@ def t4_bindings() -> None:
         bool(getattr(d, "tools", [])), f"tools={getattr(d, 'tools', [])}")
 
     # bound_tools 的 MCP 能否解析出来（status/online 门禁）
+    # 判据口径：绑定**非空** = 门禁没丢；为空时不算失败（可能是 token 失效等
+    # 环境因素，verify_mcp_availability.py 的 C3/C5 才是该项的权威判据），
+    # 但 detail 必须说真话——2026-10-16 见过"绑定明明有、detail 却写空"的误导输出。
     bound = p.registry.get_bound_mcp(MAIN_AGENT)
     skills = p.registry.get_bound_skills(MAIN_AGENT)
     print(f"         · get_bound_mcp   = {bound}")
     print(f"         · get_bound_skills = {skills}")
-    chk("绑定解析未因 status 门禁被整体丢弃（有则正常，空则提示见报告）", True,
-        "MCP 绑定为空 → 检查 mcp_servers.status（需 online 且 enabled）")
+    chk("绑定解析未因 status 门禁被整体丢弃（有则正常，空则转 C3/C5 判）", True,
+        f"门禁未丢：{len(bound)} 台 MCP 绑定可解析" if bound
+        else "MCP 绑定为空 → 转 verify_mcp_availability.py C3/C5 判（需 online 且 enabled）")
 
 
 # ── T1'：真实 HTTP 端到端（权威判据） ──────────────────────────

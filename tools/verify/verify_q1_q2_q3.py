@@ -41,8 +41,14 @@ def sse_stages(cid, body):
                     if ln.startswith('data:'):
                         try: e=json.loads(ln[5:].strip())
                         except: continue
-                        if e.get('type')=='stage': stages.append(e.get('name'))
-                        if e.get('type')=='stage' and e.get('name')=='intent': stages.append(('intent', e.get('intent')))
+                        if e.get('type')=='stage':
+                            stages.append(e.get('name'))
+                            # ★ 2026-10-17 修：stage 名是**中文**「意图识别」，
+                            # 原写法匹配 'intent' 永远不中 ⇒ intent_of 恒返回 None（假红）。
+                            # 与 verify_main_agent_persistence.py 同口径：只取 done 事件
+                            # （run 事件不带 intent，取了也是 None）。
+                            if e.get('name')=='意图识别' and e.get('status')=='done' and e.get('intent'):
+                                stages.append(('intent', e.get('intent')))
     return stages
 
 MAIN = '智源对接agent'

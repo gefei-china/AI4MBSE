@@ -20,8 +20,9 @@ Q2「为啥每次都固定有这几个环节，特别是知识库检索」
 ----
 S1 澄清续答请求体必须带 team（前端源码静态检查）
 S2 端到端：带 team 的主 Agent 请求 ⇒ intent 是主 Agent
-S3 端到端：**不带 team**（复刻事故请求形态）时不再静默掉回 chat ——
-   至少要可见（warning）而不是无声换执行主体
+S3 端到端：**不带 team**（复刻事故请求形态）时按 R1 回读会话绑定的主 Agent
+   —— 执行主体不换人，且以 reasoning 明示（不静默继承）；
+   S3' 全新会话无绑定可继承时走自动识别兜底（不崩、不被劫持）
 S4 未配 kb_required 的 Agent ⇒ 流里**不出现**「知识库检索」stage 事件
 S5 配了 kb_required / 有 # 标签时 ⇒ 该 stage 正常出现（不误伤）
 """
@@ -157,14 +158,32 @@ def main() -> int:
         "知识库检索" not in names,
         f"stages={names}（出现即幽灵环节未除净）")
 
-    # S3：不带 team（复刻事故请求形态）⇒ 记录实际掉向何方
+    # S3：不带 team（复刻事故请求形态）⇒ R1 语义：回读会话绑定的主 Agent，
+    #   **不静默掉回**（既有 reasoning 明示，执行主体也不换人）。
+    #   ⚠️ 2026-10-16 修订：原判据是 `it2 != MAIN_AGENT`（掉回自动识别），
+    #   那是 R1 持久化**上线前**的旧预期；R1 的目的就是"主 Agent 不丢"，
+    #    Same 会话不带 team 时必须仍走主 Agent，且明示原因。
     evs2 = sse_events({"_cid": cid, "message": "帮我查询工程列表"})
     st2 = [e for e in evs2 if e.get("type") == "stage"]
     it2 = next((s.get("intent") for s in st2
                 if s.get("name") == "意图识别" and s.get("status") == "done"), None)
+    _reason2 = " ".join(e.get("delta", "") for e in evs2 if e.get("type") == "reasoning")
     print(f"         · 不带 team 时 intent={it2}")
-    chk("S3 不带 team 时 intent 掉回自动识别（不再是主 Agent）",
-        it2 != MAIN_AGENT, f"intent={it2}")
+    chk("S3 不带 team ⇒ 仍按会话绑定的主 Agent 执行（R1：主 Agent 不丢）",
+        it2 == MAIN_AGENT, f"intent={it2}")
+    chk("S3 继承主 Agent 有明示（不静默）",
+        "本次未指定主 Agent" in _reason2 and MAIN_AGENT in _reason2,
+        f"reasoning 片段={_reason2[:80]!r}")
+
+    # S3'：**全新会话** + 不带 team ⇒ 无绑定可继承，走自动识别（不能崩、不能被劫持）
+    cv2 = post("/api/conversations", {"title": "verify-r3-fresh-noagent"})
+    cid2 = cv2.get("id")
+    evs3 = sse_events({"_cid": cid2, "message": "你好，请介绍下你的能力"})
+    st3 = [e for e in evs3 if e.get("type") == "stage"]
+    it3 = next((s.get("intent") for s in st3
+                if s.get("name") == "意图识别" and s.get("status") == "done"), None)
+    chk("S3' 全新会话不带 team ⇒ 自动识别兜底（不崩、不劫持）",
+        bool(it3), f"intent={it3}")
 
     _finish()
     return 0 if not _fails else 1

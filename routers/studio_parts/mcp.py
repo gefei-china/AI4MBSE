@@ -194,7 +194,11 @@ def test_mcp_server(sid: int, conn=Depends(db_session), user=Depends(current_use
             }
             # MCP Streamable HTTP 服务端普遍要求 Accept 同时含两种类型
             _hdr.setdefault("Accept", "application/json, text/event-stream")
-            with httpx.Client(timeout=8) as client:
+            # ★ 2026-10-16：回环端点不过代理——环境里带 HTTP_PROXY 时
+            # （企业代理/沙箱代理），内置 MCP 会被代理路径误判 offline。
+            # 与 mcp_client._post 同一判定，避免"巡检通了、界面测试挂了"两套结果。
+            from mcp_client import is_loopback_endpoint as _is_loopback
+            with httpx.Client(timeout=8, trust_env=not _is_loopback(url)) as client:
                 r = client.post(url, json=payload, headers=_hdr)
                 if r.status_code != 200:
                     raise ValueError(f"HTTP {r.status_code}: {r.text[:120]}")

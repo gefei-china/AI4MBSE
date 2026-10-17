@@ -56,6 +56,27 @@ def _parse_jsonrpc_body(resp) -> dict:
     raise ValueError(f"MCP 响应无法解析（content-type={ctype or 'unknown'}，body 前 120 字：{raw[:120]!r}）")
 
 
+def is_loopback_endpoint(endpoint: str) -> bool:
+    """endpoint 是否指向本机回环（127.0.0.1 / localhost / ::1 / 0.0.0.0）。
+
+    ★ 2026-10-16 实证：机器/进程环境里带 `HTTP_PROXY`（企业代理、或本机
+    agent 沙箱代理）时，httpx 默认 `trust_env=True` 会把**回环请求也塞给代理**，
+    而代理对 `/mcp` 这类路径往往另行路由或拒绝 ⇒ 平台自己的内置 MCP
+    （http://127.0.0.1:8000/mcp）被误判 offline（WinError 10061 / 502），
+    表现为"领域能力工具全消失"——与服务端本身好不好毫无关系。
+
+    回环流量永远不该过代理：本机服务走公网出口既绕路又大概率被策略挡。
+    探测与真实调用同一判定（`_post` 与 studio 的 test 端点共用）。
+    """
+    try:
+        from urllib.parse import urlparse
+        u = endpoint if "://" in endpoint else "http://" + endpoint
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return False
+    return host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+
+
 class MCPClient:
     """轻量 MCP 客户端：initialize 握手 + 三类原语（Tools/Resources/Prompts）。
 
@@ -120,7 +141,10 @@ class MCPClient:
             "params": params,
         }
         resp = httpx.post(url, json=payload, headers=self._req_headers(),
-                          timeout=timeout or self.timeout)
+                          timeout=timeout or self.timeout,
+                          # ★ 2026-10-16：回环端点不过代理（否则企业代理/沙箱代理
+                          # 会把内置 MCP 误判 offline，见 is_loopback_endpoint 注释）
+                          trust_env=not is_loopback_endpoint(url))
         resp.raise_for_status()
         return _parse_jsonrpc_body(resp)
 

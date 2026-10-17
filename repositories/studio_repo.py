@@ -171,17 +171,26 @@ class StudioRepo(BaseRepo):
         self._sync("mcp_servers", sid)
 
     def update_mcp_status(self, sid: int, status: str, latency_ms: int, tools: str | None = None) -> None:
+        # ★ 2026-10-16：探测恢复 online 时同步清掉 last_error ——
+        # 否则"状态 online 却挂着一条 403 旧账"，排查时先被错误信息带偏
+        # （与 update_mcp_discovery 的清零行为对齐，两路写入口径一致）。
+        _clear_err = ", last_error=CASE WHEN ?='online' THEN '' ELSE last_error END"
+        _params = (status, status)
         if tools is not None:
+            _params = _params + (latency_ms, tools, sid)
             self.execute(
-                """UPDATE mcp_servers SET status=?, latency_ms=?, tools=?,
-                   last_check=CURRENT_TIMESTAMP WHERE id=?""",
-                (status, latency_ms, tools, sid),
+                """UPDATE mcp_servers SET status=?, latency_ms=?, tools=?,"""
+                + _clear_err +
+                """, last_check=CURRENT_TIMESTAMP WHERE id=?""",
+                _params,
             )
         else:
+            _params = _params + (latency_ms, sid)
             self.execute(
-                """UPDATE mcp_servers SET status=?, latency_ms=?,
-                   last_check=CURRENT_TIMESTAMP WHERE id=?""",
-                (status, latency_ms, sid),
+                """UPDATE mcp_servers SET status=?, latency_ms=?"""
+                + _clear_err +
+                """, last_check=CURRENT_TIMESTAMP WHERE id=?""",
+                _params,
             )
 
     def delete_mcp_server(self, sid: int) -> None:
