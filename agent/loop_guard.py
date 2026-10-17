@@ -45,9 +45,13 @@ DEFAULT_TOKEN_BUDGET = 60000
 DEFAULT_TOOL_TIMEOUT_S = 120.0
 DEFAULT_DUP_THRESHOLD = 2      # 同一 (工具,参数) 出现第几次开始短路
 #: ★ 2026-10-17（米爸反馈）：单次工具调用**报错自动重试**次数。
-#: 只重试「执行异常」（瞬时故障如 HTTP 502/连接重置），不重试超时（线程仍在后台跑，
-#: 重试=同一副作用执行两遍）与业务失败（权限拒绝/参数截断——重试也不会有不同的结果）。
+#: 重试「执行异常」（瞬时故障如 HTTP 502/连接重置）；超时按米爸第二反馈也纳入重试，
+#: 但**每次重试的等待时间有上限**（见 DEFAULT_RETRY_TIMEOUT_S），防单工具拖死整轮。
 DEFAULT_TOOL_RETRIES = 3
+#: ★ 2026-10-17（米爸反馈「超时也需要重试，但是需要时间上限，比如30s」）：
+#: 重试尝试的**单次等待上限**（秒）。首轮仍用完整 tool_timeout_s（给慢工具公平机会），
+#: 重试一律收紧到这个值——120s × 3 次的全额等待会把一轮拖到 8 分钟，不可接受。
+DEFAULT_RETRY_TIMEOUT_S = 30.0
 
 
 def normalize_args(args) -> str:
@@ -152,12 +156,15 @@ class LoopGuard:
                  tool_timeout_s: float | None = DEFAULT_TOOL_TIMEOUT_S,
                  dup_threshold: int = DEFAULT_DUP_THRESHOLD,
                  max_failed_rounds: int = 3,
-                 tool_retries: int = DEFAULT_TOOL_RETRIES):
+                 tool_retries: int = DEFAULT_TOOL_RETRIES,
+                 retry_timeout_s: float | None = DEFAULT_RETRY_TIMEOUT_S):
         self.token_budget = token_budget
         self.tool_timeout_s = tool_timeout_s
         self.dup_threshold = dup_threshold
         # ★ 2026-10-17（米爸反馈）：单次调用报错重试次数（0=不重试）
         self.tool_retries = max(0, int(tool_retries or 0))
+        # ★ 2026-10-17（米爸反馈2）：重试尝试的单次等待上限（0/None=沿用 tool_timeout_s）
+        self.retry_timeout_s = (float(retry_timeout_s) or None) if retry_timeout_s else None
         self.tool_retry_count = 0        # 实际发生的重试总次数（可观测）
         self.tokens_used = 0
         self.calls: list = []              # [(name, args, ok, elapsed_ms)]
@@ -255,23 +262,28 @@ class LoopGuard:
         记账必须在这里而不能靠调用方再调`mark_done` —— 否则漏一处
         `mark_done` 就会让重复检测静默失效（而这类漏调用极难在测试里发现）。
 
-        ★ 2026-10-17（米爸反馈「正常的使用总是被中断」）：**报错自动重试**。
-        重试判据（窄判据，宁漏勿滥）：
-          · 只重试 ``error`` 键存在**且非** ``tool_timeout`` 的失败 —— 即工具执行
-            抛异常（瞬时故障：HTTP 502 / 连接重置 / 服务重启窗口）。
-          · **不重试超时**：Python 杀不掉线程，超时调用的副作用可能仍在后台执行，
-            自动重试 = 同一副作用跑两遍（写实工具会造成重复导入/重复建模）。
+        ★ 2026-10-17（米爸反馈）：**报错自动重试**（含超时）。
+        重试判据：
+          · ``error`` 键存在的失败 —— 即工具执行抛异常（瞬时故障：HTTP 502 / 连接重置 /
+            服务重启窗口），**或** ``tool_timeout``（米爸第二反馈：超时也重试）。
+            ⚠️ 超时重试的诚实代价：Python 杀不掉线程，前一次调用的副作用可能仍在后台
+            执行 ⇒ 重试 = 同一副作用可能跑两遍。写类工具的安全网是各自的人机确认闸
+            （L2 HIL），不在本层重复设防。
           · **不重试业务失败**：权限拒绝（``permission_denied``）、参数截断等
             没有 ``error`` 键 —— 重试不会有不同结果，只会白烧预算。
+        等待时间上限（米爸：『需要时间上限，比如30s』）：首轮用完整 ``tool_timeout_s``
+        给慢工具公平机会；**重试尝试一律收紧到 ``retry_timeout_s``**（默认 30s）——
+        否则 120s × 3 次重试会把一轮拖到 8 分钟。
         重试对模型透明：它只看到最终一次的结果（重试细节在 stats 里可观测）。
         """
         t0 = time.time()
         _attempt = 0
         while True:
-            r = call_tool_guarded(exec_fn, name, args, timeout_s=self.tool_timeout_s)
+            _wait = self.tool_timeout_s if _attempt == 0 else (
+                self.retry_timeout_s or self.tool_timeout_s)
+            r = call_tool_guarded(exec_fn, name, args, timeout_s=_wait)
             _err = str(r.get("error") or "")
-            if (not r.get("ok")) and _err and _err != "tool_timeout" \
-                    and _attempt < self.tool_retries:
+            if (not r.get("ok")) and _err and _attempt < self.tool_retries:
                 _attempt += 1
                 self.tool_retry_count += 1
                 continue

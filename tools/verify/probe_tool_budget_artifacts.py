@@ -6,8 +6,10 @@
 反馈1（截图）：AI 自述「停下是因为本轮可用的工具调用次数已用尽——执行预算限制」。
   ⇒ max_tool_rounds 12→100（防死循环天花板；成功推进本就不扣预算）；
     loop_token_budget 60000→300000（否则中断点从轮次挪到 token，等于没修）；
-    单次工具调用报错自动重试 3 次（tool_call_retries，仅限执行异常——
-    超时不重试：Python 杀不掉线程，重试=同一副作用跑两遍）。
+    单次工具调用报错自动重试 3 次（tool_call_retries，仅限执行异常）。
+反馈3（2026-10-17 追加）：「超时也需要重试，但是需要时间上限，比如30s」
+  ⇒ 超时（tool_timeout）纳入重试判据；首轮仍用完整 tool_timeout_s（120s）给慢工具
+    公平机会，**重试尝试一律收紧到 retry_timeout_s=30s**——否则 120s×3 会拖死一轮。
 反馈2：每次 AI 对话输出自动创建一份产物文档。
   ⇒ 根因 agent/utils.py::_archive_artifacts 第 4 节（正文 ≥200 字即登记 document），
     整节删除；代码块产物收窄到 SysML/KerML 族（答复里顺手写的 Python 不是交付物）；
@@ -15,11 +17,14 @@
 
 判据
 ----
-A LoopGuard 重试：异常重试 3 次后透传 / 重试后成功 / 超时不重试 / 业务失败不重试 /
-  retries=0 关闭 / stats 可观测
+A LoopGuard 重试：异常重试 3 次后透传 / 重试后成功 / 超时也重试 + 重试等待收紧 30s /
+  业务失败不重试 / retries=0 关闭 / stats 可观测
 B 预算配置：两侧路径读 config 默认 100/300000/3；schema 登记；默认值一致
 C 产物行为：纯正文零产物 / python 块零产物 / sysml 块登记 / document 判据死亡
-D 变异自证：M1 重试条件放开到超时 ⇒ A 红；M2 恢复 document 节 ⇒ C 红
+E 工具结果 SysML 文档（米爸反馈4）：JSON 信封命中 / 裸文本命中 / 分片不归档 /
+  短文本不归档 / 归档登记 code / 正文同文不双登记 / 两路径拦截接线
+D 变异自证：M1 重试等待收紧被移除 ⇒ A3b 红；M2 恢复 document 节 ⇒ C 红；
+  M3 tool_docs 归档节失效 ⇒ E 红
 """
 import io
 import importlib
@@ -81,18 +86,32 @@ _g2 = LoopGuard()
 _r2 = _g2.call(_Flaky(), "t", {})
 chk("A2 首错重试后成功 ⇒ ok=True", _r2.get("ok") is True and _g2.tool_retry_count == 1, (_r2, _g2.tool_retry_count))
 
-# 超时**不**重试：monkeypatch call_tool_guarded 返回超时形态
+# 超时**也**重试（米爸反馈3：超时也需要重试，但要有时间上限）——
+# monkeypatch call_tool_guarded 返回超时形态，并捕获每次调用传入的 timeout_s
 import agent.loop_guard as _lgmod   # noqa: E402
 _orig_ctg = _lgmod.call_tool_guarded
 _TO = {"ok": False, "_t_timeout": True, "error": "tool_timeout", "result": "超时"}
 _n = {"n": 0}
-_lgmod.call_tool_guarded = lambda *a, **k: (_n.__setitem__("n", _n["n"] + 1), _TO)[1]
+_waits = []
+
+
+def _to_ctg(fn, name, args, timeout_s=None):
+    _n["n"] += 1
+    _waits.append(timeout_s)
+    return _TO
+
+
+_lgmod.call_tool_guarded = _to_ctg
 try:
     _g3 = LoopGuard()
     _r3 = _g3.call(lambda n, a: {}, "t", {})
-    chk("A3 超时不重试（副作用可能在后台继续）",
-        _n["n"] == 1 and _r3.get("_t_timeout") is True and _g3.tool_retry_count == 0,
+    chk("A3 超时也重试：3 次重试后透传失败结果",
+        _n["n"] == 4 and _r3.get("_t_timeout") is True and _g3.tool_retry_count == 3,
         (_n["n"], _r3.get("error")))
+    chk("A3b 重试等待有上限：首轮完整超时(120s)、重试收紧到 30s",
+        _waits[0] == _g3.tool_timeout_s == 120.0
+        and len(_waits) == 4 and all(w == 30.0 for w in _waits[1:]),
+        _waits)
 finally:
     _lgmod.call_tool_guarded = _orig_ctg
 
@@ -179,13 +198,14 @@ import agent.utils as _aumod                     # noqa: E402
 _armod.ArtifactRepo, _rrmod.ReportRepo = _FakeRepo, _FakeReportRepo
 
 
-def _run_archive(content, card=None, intent="chat"):
+def _run_archive(content, card=None, intent="chat", tool_docs=None):
     repo = _FakeRepo()
     _armod.ArtifactRepo = lambda conn=None: repo
     try:
         # ⚠️ 必须经模块属性动态解析：M2 reload 后函数对象换新，
         #   探针顶部 import 拿到的旧对象会让变异测试假红（测不到突变体）。
-        _aumod._archive_artifacts(_FakeConn(), 1, 1, card or {}, content, intent, "tester")
+        _aumod._archive_artifacts(_FakeConn(), 1, 1, card or {}, content, intent,
+                                  "tester", tool_docs=tool_docs)
     finally:
         pass
     return repo.created
@@ -217,27 +237,77 @@ chk("C6 utils.py 已无 document create_artifact 路径",
 chk("C7 代码块登记限 SysML/KerML 族",
     '("sysml", "kerml", "sysmlv2", "kerml2")' in _u)
 
+# ── E. 工具结果 SysML 文档识别与归档（米爸反馈4）─────────
+section("E. 工具结果取回的 SysML 文档 → 产物")
+
+from agent.utils import extract_sysml_doc_from_result as _ext   # noqa: E402
+
+_pkg = "package '广汽元模型1010' { part p1; attribute a1; }\n" + "// line\n" * 70
+assert len(_pkg) >= 500    # 门槛夹具自检：识别判据要求 ≥500 字符
+_envelope = ('{"fileName": "广汽元模型1010_master_v3_20261017092140.sysml", '
+             '"sizeBytes": 24688, "eof": true, "completeFile": true, '
+             '"content": ' + __import__("json").dumps(_pkg, ensure_ascii=False) + '}')
+
+_d1 = _ext("mcp_export_read", _envelope)
+chk("E1 形态A：JSON 信封（fileName+.sysml+eof）命中",
+    _d1 and _d1["title"].endswith(".sysml") and _d1["text"] == _pkg, _d1 and _d1["title"])
+
+_d2 = _ext("t", _pkg)
+chk("E2 形态B：裸文本 package 开头命中",
+    _d2 and _d2["text"] == _pkg.strip(), bool(_d2))
+
+_frag = ('{"fileName": "m.sysml", "eof": false, "completeFile": false, "content": '
+         + __import__("json").dumps(_pkg, ensure_ascii=False) + '}')
+chk("E3 分片中间片段（eof/completeFile 均 false）不归档", _ext("t", _frag) is None)
+
+chk("E4 短文本（<500 字符）不归档", _ext("t", "package P { part p1; }") is None)
+
+chk("E5 普通工具结果（长 markdown 回显）不归档",
+    _ext("t", "查询结果如下：\n" + "普通文本内容。" * 100) is None)
+
+_noext = ('{"sizeBytes": 24688, "eof": true, "content": '
+          + __import__("json").dumps(_pkg, ensure_ascii=False) + '}')
+_d6 = _ext("t", _noext)
+chk("E6 无 fileName 但 content 是 package 源码 ⇒ 命中", _d6 is not None, bool(_d6))
+
+_docs = [{"title": "广汽元模型1010_master_v3.sysml", "text": _pkg}]
+_r7 = _run_archive("纯分析描述，不含代码。", tool_docs=_docs)
+chk("E7 工具取回文档登记 code 产物",
+    any(k == "code" and "广汽元模型1010" in t for k, t in _r7), _r7)
+
+_r8 = _run_archive("```sysml\n" + _pkg + "\n```", tool_docs=_docs)
+chk("E8 正文已含同文 ⇒ 不双登记（代码块路径已覆盖）",
+    sum(1 for k, _ in _r8 if k == "code") == 1, _r8)
+
+_s_w = io.open(ROOT / "agent" / "pipeline_parts" / "stream.py", encoding="utf-8").read()
+_e_w = io.open(ROOT / "agent" / "pipeline_parts" / "execute.py", encoding="utf-8").read()
+chk("E9 stream/execute 两路径均已接线工具结果拦截",
+    "extract_sysml_doc_from_result" in _s_w and "extract_sysml_doc_from_result" in _e_w)
+
 # ── D. 变异自证 ────────────────────────────────────────────
 section("D. 变异自证（判据必须能红）")
 
 _lg_path = ROOT / "agent" / "loop_guard.py"
 _LG_ORIG = _lg_path.read_text(encoding="utf-8")
 try:
-    # M1：重试条件放开到超时 ⇒ A3 必红
-    _old = '_err != "tool_timeout"'
+    # M1：重试等待收紧被移除（重试沿用完整 tool_timeout_s）⇒ A3b 必红
+    _old = ('            _wait = self.tool_timeout_s if _attempt == 0 else (\n'
+            '                self.retry_timeout_s or self.tool_timeout_s)')
     assert _old in _LG_ORIG
     _lg_path.write_text(_LG_ORIG.replace(
-        'if (not r.get("ok")) and _err and _err != "tool_timeout" \\\n'
-        '                    and _attempt < self.tool_retries:',
-        'if (not r.get("ok")) and _err and _attempt < self.tool_retries:'), encoding="utf-8")
+        _old, '            _wait = self.tool_timeout_s'), encoding="utf-8")
     importlib.reload(_lgmod)
     _TO2 = {"ok": False, "_t_timeout": True, "error": "tool_timeout", "result": "超时"}
     _n["n"] = 0    # ⚠️ A3 已用过 _n，必须清零（实测复用计数把 4 算成 5）
-    _lgmod.call_tool_guarded = lambda *a, **k: (_n.__setitem__("n", _n["n"] + 1), _TO2)[1]
+    _waits.clear()
+    _lgmod.call_tool_guarded = lambda fn, name, args, timeout_s=None: (
+        _n.__setitem__("n", _n["n"] + 1), _waits.append(timeout_s), _TO2)[2]
     _gm = _lgmod.LoopGuard()
     _gm.call(lambda n, a: {}, "t", {})
-    _red = _n["n"] == 4          # 突变后超时也被重试 3 次
-    chk("D-M1 重试条件放开到超时 ⇒ A3 判据转红", _red, _n["n"])
+    # 突变后 4 次尝试全部用完整 120s ⇒ A3b 的「重试收紧到 30s」不再成立
+    _red = (len(_waits) == 4 and all(w == _gm.tool_timeout_s for w in _waits)
+            and _gm.tool_timeout_s != (_gm.retry_timeout_s or 0))
+    chk("D-M1 重试等待收紧被移除 ⇒ A3b 判据转红", _red, _waits)
 finally:
     _lg_path.write_text(_LG_ORIG, encoding="utf-8")
     importlib.reload(_lgmod)
@@ -265,6 +335,20 @@ try:
     _c1m = _run_archive(_mark)
     chk("D-M2 恢复 document 自动创建 ⇒ C1 判据转红",
         any(k == "document" for k, _ in _c1m), _c1m)
+finally:
+    _u_path.write_text(_U_ORIG, encoding="utf-8")
+    importlib.reload(sys.modules["agent.utils"])
+
+try:
+    # M3：tool_docs 归档节失效（不遍历 tool_docs）⇒ E7 必红
+    _m3_old = "for _i, _doc in enumerate(tool_docs or [], 1):"
+    assert _m3_old in _U_ORIG
+    _u_path.write_text(_U_ORIG.replace(_m3_old, "for _i, _doc in enumerate([], 1):"),
+                       encoding="utf-8")
+    importlib.reload(sys.modules["agent.utils"])
+    _r7m = _run_archive("纯分析描述，不含代码。", tool_docs=_docs)
+    chk("D-M3 tool_docs 归档节失效 ⇒ E7 判据转红",
+        not any(k == "code" for k, _ in _r7m), _r7m)
 finally:
     _u_path.write_text(_U_ORIG, encoding="utf-8")
     importlib.reload(sys.modules["agent.utils"])

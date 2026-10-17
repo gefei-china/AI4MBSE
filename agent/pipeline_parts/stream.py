@@ -2411,6 +2411,12 @@ class StreamMixin:
             _auto_continues = 0
             _ac_cfg = self._auto_continue_cfg()
             _ac_seen_steps = []
+            # ★ 2026-10-17（米爸反馈4）：工具结果里取回的完整 SysML 文档暂存。
+            #   智源导出→读取链路的全文在工具结果 JSON 信封里、AI 正文只有分析，
+            #   persist 时由 _archive_artifacts 第 5 节登记进产物库（实测 24688 字节
+            #   导出全文漏归档、AI 又无写入通道的根因修复）。
+            self._tool_sysml_docs = []
+            self._tool_sysml_docs_seen = set()
             _ac_deadline = ((time.time() + _ac_cfg["deadline_s"])
                             if (_ac_cfg["enabled"] and _ac_cfg["deadline_s"] > 0) else None)
             _tools_def_full = tools_def   # 每轮续跑恢复完整工具集（offload 注入/预算闸会改它）
@@ -2436,9 +2442,10 @@ class StreamMixin:
                 #   100 轮的合法长任务 6 万必提前触闸 —— 中断点从轮次挪到 token 等于没修。
                 _lg_budget = int(_cfg.get("agent", "loop_token_budget", 300000) or 300000)
                 _lg_retries = max(0, int(_cfg.get("agent", "tool_call_retries", 3) or 0))
+                _lg_retry_wait = float(_cfg.get("agent", "tool_retry_timeout_s", 30) or 0)
             except Exception:
                 max_tool_rounds, max_failed_rounds = 100, 3
-                _lg_budget, _lg_retries = 300000, 3
+                _lg_budget, _lg_retries, _lg_retry_wait = 300000, 3, 30.0
             # 2026-10-04：接入统一护栏（与 execute.py 的非流式 loop **同源**）。
             # 为什么必须同源：这两段是同一套 ReAct 语义的两种实现，此前只有编排路径
             # 有 token 预算，重复检测与工具超时两边都没有 ⇒ 补一边就会留下新的不对称。
@@ -2448,7 +2455,8 @@ class StreamMixin:
             # 协议层缺陷漏一条路径就是线上 HTTP 400（同 loop_guard 立规时的判断）。
             from agent import loop_protocol as _lproto
             _lg = _LoopGuard(token_budget=_lg_budget, tool_timeout_s=120.0,
-                             max_failed_rounds=max_failed_rounds, tool_retries=_lg_retries)
+                             max_failed_rounds=max_failed_rounds, tool_retries=_lg_retries,
+                             retry_timeout_s=_lg_retry_wait)
             # ★ 2026-10-17（米爸「harness 持续工作」）：自主续跑外层循环。
             #   round 1 = 原始请求；round 2+ = 评估器判定「未完成」放行的续跑。
             #   _lg（LoopGuard）**故意在循环外创建**：token 预算跨轮共享（config 既定语义），
@@ -2663,6 +2671,18 @@ class StreamMixin:
                                 _lg.undo_dup_count(tname, targs)
                         _t_ok = bool(result.get("ok"))
                         _r_full = str(result.get("result") or "")
+                        # ★ 2026-10-17（米爸反馈4）：识别工具结果里的完整 SysML 文档
+                        #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
+                        try:
+                            from agent.utils import extract_sysml_doc_from_result as _esd
+                            _doc = _esd(tname, _r_full)
+                            if _doc:
+                                _dk = _doc["text"][:200]
+                                if _dk not in self._tool_sysml_docs_seen:
+                                    self._tool_sysml_docs_seen.add(_dk)
+                                    self._tool_sysml_docs.append(_doc)
+                        except Exception:
+                            pass
                         # ★ 失败轮预算判据（与 execute.py 同源）：本轮是否有可用结果
                         if _t_ok and not (result.get("weak")
                                           or ("未检索到" in _r_full)
@@ -3049,7 +3069,10 @@ class StreamMixin:
                         (conversation_id, "assistant", llm_content, self._get_card_type(intent), card_data)
                     )
                     msg_id = cursor.lastrowid
-                    _archive_artifacts(conn, conversation_id, msg_id, card_data, llm_content, intent)
+                    # ★ 2026-10-17（米爸反馈4）：工具结果取回的 SysML 文档一并归档
+                    _archive_artifacts(conn, conversation_id, msg_id, card_data, llm_content, intent,
+                                       tool_docs=getattr(self, "_tool_sysml_docs", None))
+                    self._tool_sysml_docs = []      # 已登记，防重复归档
                     # CIA：变更影响分析记录（FR-CIA-3 每次分析结果快照落库，可追溯）
                     _archive_impact_analysis(conn, conversation_id, msg_id, card_data, user_input)
                     conn.execute(

@@ -186,15 +186,57 @@ def _archive_sysml_version(conn, conversation_id: int, message_id: int,
         return None
 
 
+def extract_sysml_doc_from_result(tool_name: str, result_text: str) -> dict | None:
+    """从工具结果里识别「完整 SysML/KerML 文档」（纯函数，2026-10-17 米爸反馈4）。
+
+    背景（会话 9446 实测）：智源导出→读取链路取回的 24688 字节全文在**工具结果**
+    里（JSON 信封 fileName+content），AI 正文只有分析描述——
+    `_archive_artifacts` 的正文代码块判据够不着 ⇒ 产物库空；
+    AI 想落盘又无写入通道（技能未命中 file_write 不注入）⇒ 自述「没有写入能力」。
+    ⇒ 在**工具结果返回的瞬间**把交付物摘出来，persist 时登记进产物库。
+
+    识别形态（两种都认）：
+    A. JSON 信封：有 ``fileName``（.sysml/.kerml 结尾）+ ``content``（≥500 字符），
+       且 ``eof``/``completeFile`` 标记完整（分片读取的中间片段不归档，防半个文件）；
+    B. 裸文本：直接以 ``package`` 开头的 SysML 源码 ≥500 字符。
+
+    :returns: ``{"title": 文件名或通用标题, "text": 全文}``，不命中返 None。
+    """
+    t = (result_text or "").strip()
+    if len(t) < 500:
+        return None
+    # 形态 A：JSON 信封（智源 export READ 动作的实际形态）
+    if t.startswith("{"):
+        try:
+            d = json.loads(t)
+        except Exception:
+            d = None
+        if isinstance(d, dict):
+            fn = str(d.get("fileName") or "").strip()
+            body = d.get("content")
+            if isinstance(body, str) and len(body) >= 500:
+                _complete = (d.get("eof") is True) or (d.get("completeFile") is True) \
+                    or ("eof" not in d and "completeFile" not in d)
+                _is_sysml = fn.lower().endswith((".sysml", ".kerml")) or \
+                    body.lstrip().lower().startswith("package")
+                if _complete and _is_sysml:
+                    return {"title": fn or "SysML 源码（工具取回）", "text": body}
+    # 形态 B：裸文本 SysML 源码
+    if t.lower().startswith("package"):
+        return {"title": "SysML 源码（工具取回）", "text": t}
+    return None
+
+
 def _archive_artifacts(conn, conversation_id: int, message_id: int,
-                       card_data, content: str, intent: str, created_by: str = "王工") -> None:
+                       card_data, content: str, intent: str, created_by: str = "王工",
+                       tool_docs=None) -> None:
     """把 AI 生成内容登记为会话产物（幂等：同 (会话,消息,类型,标题) 不重复）。
 
     - card_data.sysml_views → kind=sysml（预览走 Cytoscape 投影）
     - 报告意图（report_generation / card 含 sections）→ kind=report，并同时写 reports 表（报告中心自动归档）
-    - 正文含代码块 → kind=code（每条代码块登记一项）
-    - 长 markdown 正文 → kind=document（preview_type=markdown）
-    仅 AI 生成内容；用户上传附件不进入产物库。
+    - 正文含 SysML/KerML 代码块 → kind=code（每条代码块登记一项）
+    - tool_docs → 工具结果取回的完整 SysML 文档（米爸反馈4：导出文件不在正文里）
+    仅 AI 生成内容；用户上传附件不进产物表（前端由消息附件合成文件清单项）。
     """
     try:
         from repositories.artifact_repo import ArtifactRepo
@@ -312,6 +354,24 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
         #   （SysML 代码文件 / 报告 / 导入附件），AI 的正常回答就是回答，不是产物。
         #   注：附件本就进产物库——前端 04-artifacts.js collectAttachFiles 从会话
         #   消息 attachments 合成「文件」清单项（url 去重），无需后端重复登记。
+
+        # 5) ★ 2026-10-17（米爸反馈4）：工具结果取回的完整 SysML 文档 → code 产物。
+        #    实测（会话 9446）：智源导出 24688 字节全文在工具结果的 JSON 信封里、
+        #    AI 正文只有分析描述，正文代码块判据够不着 ⇒ 产物库空。
+        #    拦截在工具结果返回的瞬间（stream/execute 两处同构），persist 时登记。
+        for _i, _doc in enumerate(tool_docs or [], 1):
+            _dt = str((_doc or {}).get("text") or "")
+            if not _dt:
+                continue
+            if _dt[:400] in (content or ""):
+                continue    # 正文已带同文（代码块路径已覆盖），避免双登记
+            _t5 = str((_doc or {}).get("title") or "").strip() \
+                or f"SysML 源码（工具取回 #{_i}）"
+            if not repo.exists(conversation_id, message_id, "code", _t5):
+                repo.create_artifact(
+                    conversation_id, message_id, "code", _t5, "code", _dt,
+                    {"lang": "sysml", "source": "tool_result"},
+                    source="conversation", created_by=created_by)
     except Exception:
         # 归档失败不阻断主流程（对齐既有降级原则）
         pass

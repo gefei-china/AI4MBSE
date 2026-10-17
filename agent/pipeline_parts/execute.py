@@ -473,9 +473,10 @@ class ExecuteMixin:
                 # ★ 2026-10-17（米爸反馈1）：token 预算 60000 → 30 万（与 stream.py 同步）。
                 _lg_budget = int(_cfg.get("agent", "loop_token_budget", 300000) or 300000)
                 _lg_retries = max(0, int(_cfg.get("agent", "tool_call_retries", 3) or 0))
+                _lg_retry_wait = float(_cfg.get("agent", "tool_retry_timeout_s", 30) or 0)
             except Exception:
                 max_tool_rounds, max_failed_rounds = 100, 3
-                _lg_budget, _lg_retries = 300000, 3
+                _lg_budget, _lg_retries, _lg_retry_wait = 300000, 3, 30.0
             # 2026-10-04：接入统一护栏（与编排路径同源，见 agent/loop_guard.py）。
             # 原先这条路径只有轮次上限/token 上限/重复检测/工具超时，
             # 而编排路径有前三者 —— 同一套 ReAct 语义的两处实现护栏不对称。
@@ -485,7 +486,8 @@ class ExecuteMixin:
             _guard = LoopGuard(
                 token_budget=_lg_budget,
                 tool_timeout_s=float(getattr(self, "_LOOP_TOOL_TIMEOUT", 120.0)),
-                max_failed_rounds=max_failed_rounds, tool_retries=_lg_retries)
+                max_failed_rounds=max_failed_rounds, tool_retries=_lg_retries,
+                retry_timeout_s=_lg_retry_wait)
             # ★ 2026-10-17（米爸反馈3）：ask_user 人在回路澄清信号（None=未触发）。
             #   LLM 调 ask_user ⇒ _exec_tool_call 返回 clarify_required ⇒ 中断循环，
             #   由下方统一落挂起 + 返回 clarify_asked（与 1.5 内容级澄清同构）。
@@ -497,6 +499,9 @@ class ExecuteMixin:
             from agent import auto_continue as _ac
             _ac_cfg = self._auto_continue_cfg()
             _ac_seen_steps = []       # 已放行的 next_step（空转检测）
+            # ★ 2026-10-17（米爸反馈4）：工具结果取回的 SysML 文档暂存（persist 时归档）
+            self._tool_sysml_docs = []
+            self._tool_sysml_docs_seen = set()
             _ac_tools_hist = []       # 全程工具调用史（评估器输入，tools_brief 内截断）
             _ac_tool_n = 0            # 本轮实际执行的工具调用数（评估触发门）
             _ac_deadline = ((time.time() + _ac_cfg["deadline_s"])
@@ -594,6 +599,18 @@ class ExecuteMixin:
                             _clarify_req = result.get("clarify") or {}
                             break
                         _t_res = str(result.get("result") or "")
+                        # ★ 2026-10-17（米爸反馈4）：识别工具结果里的完整 SysML 文档
+                        #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
+                        try:
+                            from agent.utils import extract_sysml_doc_from_result as _esd
+                            _doc = _esd(tname, _t_res)
+                            if _doc:
+                                _dk = _doc["text"][:200]
+                                if _dk not in self._tool_sysml_docs_seen:
+                                    self._tool_sysml_docs_seen.add(_dk)
+                                    self._tool_sysml_docs.append(_doc)
+                        except Exception:
+                            pass
                         _weak = bool(result.get("weak")) or ("未检索到" in _t_res) or ("无新冲突" in _t_res)
                         # ⚠️ 弱结果在**调用之后**才判定得出，无法预传给 call()，
                         #   故在此回填：把刚计入的去重计数撤回，否则"工具本来就查不到东西"
@@ -833,7 +850,10 @@ class ExecuteMixin:
                     (conversation_id, "assistant", llm_content, self._get_card_type(intent), card_data)
                 )
                 msg_id = cursor.lastrowid
-                _archive_artifacts(conn, conversation_id, msg_id, card_data, llm_content, intent)
+                # ★ 2026-10-17（米爸反馈4）：工具结果取回的 SysML 文档一并归档
+                _archive_artifacts(conn, conversation_id, msg_id, card_data, llm_content, intent,
+                                   tool_docs=getattr(self, "_tool_sysml_docs", None))
+                self._tool_sysml_docs = []      # 已登记，防重复归档
                 # CIA：变更影响分析记录（FR-CIA-3 每次分析结果快照落库，可追溯）
                 if intent == "impact":
                     try:

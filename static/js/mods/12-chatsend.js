@@ -287,7 +287,7 @@ async function sendChat() {
           try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
           const area0 = document.getElementById('chat-area');
           if(area0){
-            area0.innerHTML += renderMessage({role:'user', content:esc(msg)});
+            area0.insertAdjacentHTML('beforeend', renderMessage({role:'user', content:esc(msg)}));
             scrollChatToBottom();
           }
           toast((r && r.pending > 1)
@@ -329,7 +329,11 @@ async function sendChat() {
   // 2026-09-04 v3：草稿态占位符清空后再追加真实消息
   if(area && (area.querySelector('.chat-empty') || area.querySelector('.chat-welcome'))) area.innerHTML = '';
   // Show user message immediately（V2.3：附件内联渲染 + 文本转义）
-  area.innerHTML += renderMessage({role:'user', content:esc(msg), attachments:atts});
+  // ★ 2026-10-17（米爸反馈2）：`innerHTML +=` 会**序列化并重建整段历史 DOM**——
+  //   长会话里重解析副作用（图片重载/异步高度塌缩瞬间 scrollHeight 骤减 ⇒ scrollTop
+  //   被钳到 0）正是「发送后页面跳到最上方」的根因。insertAdjacentHTML 只在末尾
+  //   追加新节点，既有节点原样保留（长会话还顺带省一次全量重排）。
+  area.insertAdjacentHTML('beforeend', renderMessage({role:'user', content:esc(msg), attachments:atts}));
   // V2.3.2 流式：AI 消息容器（streaming 态,追加 delta）；V2.4 会话内执行过程块（思考/子智能体/工具）
   const aiBox = document.createElement('div');
   aiBox.className = 'msg ai';
@@ -340,6 +344,9 @@ async function sendChat() {
   // 2026-09-29：用户主动发送 → 强制滚到底（绕过贴底判断），但**复位跟读态**，
   //   使随后的流式输出按"贴底才跟随"策略工作。
   scrollChatToBottom();
+  // ★ 2026-10-17（米爸反馈2）：布局完成后再钉一次——首帧异步内容（图片/公式/mermaid）
+  //   会在钉底之后继续改变高度，同步滚动可能落在中间态上。
+  requestAnimationFrame(scrollChatToBottom);
   _bindStickDetach();   // 首次发送时绑定"用户上滑即脱离跟读"的监听（幂等）
   const _cs = document.getElementById('chat-status'); if(_cs) _cs.textContent = '正在识别意图并调度 Agent…';
   resetPipeline();  // 意图识别前：清空旧流水线，展示执行中占位

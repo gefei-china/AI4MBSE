@@ -382,6 +382,9 @@ function finishStream(r, aiBox) {
   if(currentConvId) loadArtifacts(currentConvId);
   // 2026-09-29：流结束改贴底才跟随（用户上滑阅读上文时不被打断）
   stickBottom();
+  // ★ 2026-10-17（米爸反馈2）：收口替换（outerHTML 重渲染 + 卡片/报告附加块）之后
+  //   布局仍会异步长高（mermaid/图片/代码高亮），再钉一次底，保证视口停在最新内容区。
+  requestAnimationFrame(function(){ stickBottom(); });
 }
 // V2.6 需求质量参考：折叠明细切换
 function qrToggle(sumEl){
