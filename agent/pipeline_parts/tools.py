@@ -11,6 +11,46 @@ from .common import *
 #: ⚠️ 只豁免"改自己刚生成的代码"的工具，**不含任何入库/删改类工具**。
 _REPAIR_WRITE_EXEMPT = {"sysml_v2_autofix"}
 
+#: ★ 2026-10-17（米爸三轮反馈的收口件）：**AI 主动澄清工具**（human-in-the-loop）。
+#: 背景：米爸要求「基于实际上下文、基于 AI 真的需要澄清的内容输出确认清单」，
+#: 而旧机制只有两道**路由层**澄清（阶段 1.4 意图确认 / 1.5 内容级探测）——
+#: AI 执行到一半发现自己缺信息（要选版本/定范围/缺参数）时，只能写一段
+#: markdown「请确认：……」然后停（截图实证：用户拿到纯文本，无法点选）。
+#: 本工具让"需要用户拍板"成为 Agent 循环里的**一等动作**：
+#:   LLM 调 ask_user → _exec_tool_call 拦截返回 clarify_required 信号
+#:   → ReAct 循环中断 → 发射 clarify_ask 事件（结构化卡片）+ 落挂起 → 等用户回答
+#:   → 用户点选/跳过 → 续跑（答案随【澄清补充】进原轮）。
+#: ⚠️ 注入位置在**所有过滤之后无条件 append**（见 _build_tools_def 末尾）：
+#:   它是对话级能力，不属于任何 Agent 绑定 ⇒ 白名单/JIT/写意图闸都不该挡它。
+_ASK_USER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ask_user",
+        "description": (
+            "向用户发起确认/澄清（人在回路）：当你**确实需要用户拍板**才能继续时调用——"
+            "① 缺少关键信息（未指定工程/版本/范围/格式等，且无法从上下文合理推断）；"
+            "② 有多个合理方案需要用户选择（如选哪个版本、导出多大范围）；"
+            "③ 动作影响面大，执行前需要用户确认。调用后流程暂停并弹出**可点选的确认卡片**，"
+            "用户回答后自动继续执行。⚠️ 不要用纯文本提问然后自行结束——那不会生成确认卡片，"
+            "用户只能手打回复；也不要为确认而确认（信息足够时直接执行，不要滥用）。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string",
+                             "description": "要用户确认/回答的问题：一句话说清这次要决定什么，必须结合当前上下文具体化（如『要导出哪个版本的 SysML v2 代码？』），不要写泛泛的『请问您想做什么』"},
+                "options": {"type": "array", "items": {"type": "string"},
+                            "description": "供用户点选的候选答案：2-6 个，基于当前上下文生成（如具体版本号/具体范围/具体工程名）；用户也可选『其他/自定义』自由输入"},
+                "context": {"type": "string",
+                            "description": "（可选）补充背景：为什么需要确认、各选项的含义与差异，帮助用户决策（限 500 字内）"},
+                "allow_custom": {"type": "boolean",
+                                 "description": "（可选，默认 true）是否允许用户选『其他/自定义』自由输入"},
+            },
+            "required": ["question"],
+        },
+    },
+}
+
 
 class ToolMixin:
     """工具定义、执行、重试策略与调用留痕。"""
@@ -363,6 +403,18 @@ class ToolMixin:
                     "parameters": _params,
                 },
             })
+        # ★ 2026-10-17（米爸反馈「AI 执行中需要确认时请输出确认卡片」）：ask_user
+        #   **无条件**注入（在所有过滤之后）。它是对话级能力而非 Agent 绑定工具，
+        #   白名单（委派最小权限）/ JIT 预筛 / 写意图闸都不该把它挡掉——
+        #   挡掉它 = AI 只能回到"写一段请确认的纯文本然后停"的旧形态（截图实证）。
+        #   关闭开关：config `agent.ask_user_enabled`（默认开）。
+        try:
+            from core.config import get as _cfg_ask
+            _ask_on = bool(_cfg_ask("agent", "ask_user_enabled", True))
+        except Exception:
+            _ask_on = True
+        if _ask_on and not any(t.get("function", {}).get("name") == "ask_user" for t in tools):
+            tools.append(_ASK_USER_TOOL)
         return tools
 
     def _tool_side_effect(self, name: str) -> str:
@@ -392,6 +444,35 @@ class ToolMixin:
         t0 = _time.time()
         tool_type = "builtin"
         try:
+            # ── ★ 2026-10-17（米爸反馈3）：ask_user 拦截（人在回路澄清）─────────
+            #   放在**白名单检查之前**：ask_user 是对话级能力，不属于任何 Agent
+            #   绑定/子任务授权 ⇒ 不受委派最小权限约束（Worker 也准问用户）。
+            #   不真正"执行"任何副作用，只把 LLM 的提问结构化成 clarify_required
+            #   信号上交：ReAct 循环（execute.py / stream.py 两处同构）见到它即
+            #   中断本轮，由外层发射 clarify_ask 事件 + 落挂起等用户回答。
+            if name == "ask_user":
+                _a = arguments or {}
+                _q = str(_a.get("question") or "").strip()
+                if not _q:
+                    result = {"ok": False,
+                              "result": "ask_user 缺少 question（要问的问题）——请把要用户确认"
+                                        "的内容写进 question 后重试"}
+                else:
+                    _opts = [str(o).strip() for o in (_a.get("options") or [])
+                             if str(o).strip()][:6]
+                    result = {"ok": True, "clarify_required": True,
+                              "clarify": {
+                                  "id": "q_ask_user",
+                                  "question": _q[:500],
+                                  "options": _opts,
+                                  "context": str(_a.get("context") or "").strip()[:500],
+                                  "allow_custom": bool(_a.get("allow_custom", True)),
+                              },
+                              "result": "已向用户发起确认（%s，%d 个选项）——流程暂停，"
+                                        "等待用户回答后继续" % (_q[:60], len(_opts))}
+                self._log_tool_call(name, tool_type, arguments, result,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
             # P0-3：委派最小权限防御——白名单外的工具直接拒绝（即使 tool def 未注入，模型也可能臆造）
             _wl0 = getattr(self, "_tool_whitelist", None)
             if _wl0 and name not in _wl0:

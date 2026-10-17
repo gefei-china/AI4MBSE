@@ -241,10 +241,11 @@ async function sendChat() {
         // ★ 2026-10-16 Q2：与卡片作答同口径——在**原 AI 输出盒**内续答，不新起气泡；
         //   ★ 2026-10-17 Q1：带上 resume_of_user_msg_id/append ⇒ DB 层追加进原 user 消息，
         //   刷新后历史与直播一致（此前此路走 sendResume，新起用户气泡+新 AI 盒）。
+        //   ★ 2026-10-17 反馈1：答案摘要 → 确认环节标记「✓ 已确认 · <补充内容>」。
         _continueInSameBox(null, r.resume_text, {
           user_msg_id: r.resume_of_user_msg_id || 0,
           append: r.resume_append || '',
-        });
+        }, msg.slice(0, 40));
         return;
       }
       // ★ G-1：后端返回"无待澄清"等业务失败 ⇒ **本地挂起态已与后端不同步**，
@@ -362,6 +363,13 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
   _streamAbort = myAbort;
   _streaming = true; _stoppedManually = false;
   showStopBtn(true);
+  // ★ 2026-10-17：接管流（澄清改选/续答复用盒）启动即清 reuseForPick。
+  //   时序依据：旧流的 abort catch 在本函数的 `await fetch` 之前**同步执行完**
+  //   （AbortController.abort 是同步触发 read 拒绝 ⇒ 旧流 catch 先于本流首个
+  //   SSE 事件），防替换窗口只到此处为止。此前不清 ⇒ 本流自身的 done 被
+  //   finishStream 的 reuseForPick 检查挡掉 ⇒ **永远不收口**（停留在
+  //   「执行中…N 个环节」live 条；刷新后才变 hist 收口条）。
+  try{ if(aiBox) aiBox.dataset.reuseForPick = ''; }catch(_e){}
   const _selTeam = document.getElementById('quick-team')?.value || '';   // 主 Agent（执行主体唯一入口）
   const _selSkill = document.getElementById('quick-skill')?.value || '';
   const _cid = aiBox.dataset.convId || currentConvId;

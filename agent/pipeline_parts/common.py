@@ -268,6 +268,18 @@ TOOL_RULES_TEXT = ("工具使用约束：仅调用完成当前任务所必需的
                    "工具返回与任务无关、结果为空或已足够作答时，直接基于已有信息回答，"
                    "禁止反复/连环调用工具。\n")
 
+#: ★ 2026-10-17（米爸反馈3）：ask_user 使用指引（prompt 层；工具 description 是主契约）。
+#: 为什么两层都写：实测 LLM 对"放在 description 里的软约束"遵循率不稳定，
+#: 而 system prompt 里的显式规则遵循率高得多。execute 路径不注入 tool_rules 块，
+#: 靠工具 description 生效（零行为变动，见 P1-28 的显式差异化决策）。
+ASK_USER_RULES_TEXT = (
+    "需要用户确认时：执行中若缺少关键信息（未指定工程/版本/范围等且无法合理推断）、"
+    "有多个合理方案需要用户选择、或动作影响面大需要拍板 —— 调用 **ask_user** 工具"
+    "（question 结合当前上下文具体化 + options 给 2-6 个基于上下文的候选），"
+    "调用后流程会暂停并弹出可点选的确认卡片，用户回答后自动继续。"
+    "⚠️ 不要用纯文本写『请确认：……』然后自行结束——那不会生成确认卡片；"
+    "信息足够时直接执行，不要为确认而确认。\n")
+
 #: 流式技能正文截断上限（`skill_block` 的 `content_cap`）。**流式路径专用**：
 #: 技能正文可能很长，而流式请求每轮都带 ⇒ 按 4000 字控 token（execute 路径不截断）。
 _SKILL_CONTENT_CAP = 4000
@@ -435,7 +447,9 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
         "report": ("\n\n%s" % ctx.report_prompt) if ctx.report_prompt else "",
     }
     if ctx.include_tool_rules:
-        blocks["tool_rules"] = TOOL_RULES_TEXT
+        # ★ 2026-10-17：ask_user 指引并进 tool_rules 块（stream 路径可见）。
+        #   execute 路径无 tool_rules 块（P1-28 刻意保留的差异），靠工具 description。
+        blocks["tool_rules"] = TOOL_RULES_TEXT + ASK_USER_RULES_TEXT
     return blocks
 
 
@@ -706,7 +720,7 @@ __all__ = [
     'PROMPT_CACHEABLE_KEYS', 'PROMPT_DYNAMIC_KEYS', 'PROMPT_BLOCK_ORDER',
     'PROMPT_LAYER_BOUNDARY', 'assemble_system_prompt',
     # P1-28：system_prompt 块内容单一真源（两条路径共用；差异显式参数化）
-    'TOOL_RULES_TEXT', '_SKILL_CONTENT_CAP', 'PromptBlocksCtx',
+    'TOOL_RULES_TEXT', 'ASK_USER_RULES_TEXT', '_SKILL_CONTENT_CAP', 'PromptBlocksCtx',
     'build_slots_block', 'build_skill_block', 'build_prompt_blocks',
     # P1-29：显式指定技能的注入（两路径统一入口 + 每轮状态起点）
     'reset_skill_state', 'load_forced_skill',

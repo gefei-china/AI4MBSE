@@ -224,8 +224,26 @@ for tag, kw in _CASES:
     old = _exec_old("_r = " + OLD_STREAM_DICT, kw, stub)["_r"]
     new = build_prompt_blocks(stub, PromptBlocksCtx(**kw, role_cap=_AGENT_ROLE_CAP,
                                                     include_tool_rules=True))
-    same = _norm(old) == _norm(new)
-    check("B[%s] interactive 模式块集合与值逐字节一致" % tag, same,
+    # ★ 2026-10-17（ask_user 批次·米爸反馈3）：tool_rules 块**有意**追加了
+    #   ask_user 使用指引（ASK_USER_RULES_TEXT）—— 逐字节等价被有意打破。
+    #   等价判据升级为：**除 tool_rules 外**块集合与值逐字节一致 +
+    #   tool_rules 以旧值为**前缀**（纯追加，不改写/不删除旧文案）。
+    #   这样"意外漂移"（其他块变化 / tool_rules 被改写）仍然全红，
+    #   不会把有意的 prompt 增补误报成回归，也不会放过真漂移。
+    def _b_same(o, n):
+        if _norm(o) == _norm(n):
+            return True
+        od, nd = dict(o), dict(n)
+        o_tr = od.pop("tool_rules", None)
+        n_tr = nd.pop("tool_rules", None)
+        if od != nd:
+            return False                      # 其他块集合/值漂移 → 红
+        if o_tr is None:
+            return n_tr is None
+        return (isinstance(n_tr, str) and n_tr.startswith(o_tr)
+                and len(n_tr) > len(o_tr))    # 必须纯追加且非空增补
+    same = _b_same(old, new)
+    check("B[%s] interactive 模式块集合与值逐字节一致（tool_rules 允许纯追加）" % tag, same,
           "" if same else "old=%s\nnew=%s" % (_norm(old), _norm(new)))
     check("B[%s] 旧路径确实有 tool_rules 块" % tag, "tool_rules" in old and "tool_rules" in new)
 

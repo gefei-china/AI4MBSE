@@ -7,7 +7,15 @@ function resetPipeline(){ procReset(); }
 function onStageEvent(ev){
   const st = ev.status, name = ev.name;
   if(name === '意图识别'){
-    if(st === 'run'){ resetPipeline(); procAddStage('意图识别','run','正在识别意图…'); }
+    // ★ 2026-10-17（米爸反馈1）：澄清续跑接管中（盒带 data-clarify-continue）——
+    //   **不清时间线**：澄清是原输出流程的一个环节，续跑的「意图识别」及后续
+    //   环节要接着往同一条时间线上追加（否则确认环节被抹掉，又裂成两轮）。
+    const _ccBox = document.getElementById('stream-ai');
+    const _cont = !!(_ccBox && _ccBox.dataset.clarifyContinue === '1');
+    if(st === 'run'){
+      if(_cont){ procAddStage('意图识别','run','按你的确认继续…'); }
+      else { resetPipeline(); procAddStage('意图识别','run','正在识别意图…'); }
+    }
     else { procAddStage('意图识别','done', ev.intent ? `→ ${ev.agent||ev.intent}（HIL ${ev.hil_level||'-'}）` : ''); }
   } else if(name === '知识库检索'){
     if(st === 'run'){ procAddStage('知识库检索','run', ev.retrieved===false ? '按需检索未触发（纯问答）' : '图谱 / 向量检索中…'); }
@@ -405,6 +413,42 @@ function compactRecoveryAsk(){
   if(window.toast && toast.info) toast.info('已填入恢复性提问，发送后 AI 将从会话库拉回完整上下文');
 }
 
+// ── 2026-10-17（米爸反馈1/2）：澄清确认环节（AI 输出流程时间线上的一个阶段）──
+// 与 procAddConfirmGate（HIL 写操作闸门）同性质：timeline 上的一个块，run 态
+// 常驻展开等用户作答；作答/跳过后由 procMarkClarifyAnswered 落终态。
+// ★ 与旧形态的本质区别：澄清卡**不再是独立的 AI 消息气泡**，而是原输出流程
+//   内的一个环节 —— 用户回答后流程在原盒内继续往下跑，最终收口条
+//   「✓ 已完成 · N 环节」自然包含本环节（米爸："应该在原来的输出流程增加
+//   阶段环节来承载这部分信息"）。
+// ★ 卡片内容来自 AI 真的需要澄清的内容：阶段 1.4 意图确认 / 1.5 内容探测 /
+//   ask_user 工具（执行中主动发起）三源共用本块与同一套续跑机制。
+function procAddClarifyGate(ev){
+  const qs = ev.questions || [];
+  if(!qs.length) return;
+  const id = 'clarify_ask_gate';
+  if(_procS.timeline.some(x=>x.id === id)) return;   // 同一轮只建一次（续跑可能重发）
+  const qHtml = qs.map(q=>{
+    const opts = (q.options||[]).map(o=>
+      `<span style="display:inline-block;border:1px solid var(--line);border-radius:4px;padding:1px 8px;margin:2px 4px 2px 0;font-size:10.5px;background:#fff;">${esc(o)}</span>`).join('');
+    return `<div style="margin-top:6px;">
+      <div style="font-size:11.5px;"><b>${esc(q.question||'')}</b></div>
+      <div style="margin-top:3px;">${opts}${q.allow_custom!==false?'<span style="font-size:10px;color:var(--mut);">＋ 其他/自定义</span>':''}</div>
+    </div>`;
+  }).join('');
+  const detail = `<div style="font-size:11.5px;line-height:1.7;">`
+    + `<div style="color:var(--mut);">${esc(String(ev.title||'需要你确认以下内容才能继续').replace(/^❓\s*/,''))}</div>`
+    + qHtml
+    + `<div style="color:var(--mut);margin-top:8px;">请在<b>输入框上方</b>的确认卡中作答（或直接在输入框补充），回答后本流程继续。</div></div>`;
+  procUpsert(id, {type:'clarify', icon:'❓', title:'等待用户确认',
+                  status:'run', statusText:'⏸ 待确认', detail});
+}
+// 用户已作答/跳过：确认环节落终态。answerText = 用户答案摘要（显示在环节标题旁）。
+function procMarkClarifyAnswered(answerText){
+  const id = 'clarify_ask_gate';
+  if(!_procS.timeline.some(x=>x.id === id)) return;
+  procUpsert(id, {status:'done', statusText:'✓ 已确认',
+                  sub: answerText ? (' · ' + String(answerText).slice(0, 40)) : ''});
+}
 // ── UX规范 B3（2026-10-03）内联确认闸门 ──
 // 同一确认单在时间线上只允许一个节点（硬规则1）；确认卡 = 需要用户行动的单元，
 // 保持 run 态常驻展开，直至批准/拒绝落终态。
@@ -1021,6 +1065,7 @@ function handleSSE(raw) {
     _forceFlushTokens();
     setPendingClarify(ev);   // 2026-09-25：登记挂起 → 输入框上方出现「AI 正在等待确认」提示（可在此直接作答）
     renderClarifyAsk(ev);   // 内容级澄清：信息不清晰 → 选择题确认（回答后续答）
+    procAddClarifyGate(ev); // ★ 2026-10-17（米爸反馈1）：澄清 = 原输出流程时间线上的一个环节（不再是独立气泡）
   } else if(evType === 'done') {
     _forceFlushTokens();
     _forceFlushSubOutput();   // ★ F-1：子任务实时输出末帧刷齐（防 rAF 未触发丢尾巴）
@@ -1120,22 +1165,41 @@ function _lastAiBox(){
   const _all = Array.from(document.querySelectorAll('#chat-area .msg.ai'));
   return _all[_all.length - 1] || null;
 }
-// 澄清续答统一入口：在**原 AI 输出盒**内续跑，不新建用户气泡、不新建 AI 盒（米爸 Q2）。
-//   card 形参保留以便将来定位，但续接盒统一取"最后一个 AI 消息"（澄清交互卡挂在输入区 dock，
-//   不在 AI 盒内，故不能用 card.closest）。兜底：取不到盒时退回原 sendResume（新气泡）。
+// ── 2026-10-17（米爸反馈1）澄清续答统一入口 ──────────────────────────
+// 在**原 AI 输出盒**内续跑，不新建用户气泡、不新建 AI 盒，且**不清空原盒内容**：
+// 澄清是原输出流程的一个「环节」—— 保留时间线（含「⏸ 等待确认」块，标记为
+// ✓ 已确认）与已产出内容，body 复位为流式态，后续环节接着往里追加。
+// 最终收口「✓ 已完成 · N 环节」中的 N 包含确认环节，刷新后历史渲染同构
+// （renderMessage 的 _clarify_prev 合并路径）。
+//   card 形参保留以便定位；兜底：取不到盒时退回原 sendResume（新气泡）。
 //   resumeOf = {user_msg_id, append}（2026-10-17 米爸 Q1）：DB 层单轮化追认信息，
 //     由 /clarify-answer 返回、原样转呈给 /chat/stream（追加进原 user 消息，不新起一轮）。
-function _continueInSameBox(card, text, resumeOf){
+//   answerText = 用户答案摘要（显示在确认环节标题旁；空 = 跳过/未知）。
+function _continueInSameBox(card, text, resumeOf, answerText){
   if(!requireMainAgent()) return;            // 主 Agent 闸（与发起同口径）；未选不放行、不扰动状态
   let box = _lastAiBox();
   if(!box){ sendResume(text); return; }      // 兜底（理论上不会走到）
-  box.dataset.reuseForPick = '1';
+  box.dataset.reuseForPick = '1';            // 防旧流 cleanup 替换此盒（pumpStream 启动时会清）
+  box.dataset.clarifyContinue = '1';         // ★ 续跑不清时间线（onStageEvent 意图识别据此跳过 resetPipeline）
   window._streamSuperseded = true;
   if(_streaming && _streamAbort) _streamAbort.abort();   // 中止当前流（其 cleanup 见标记跳过替换）
-  box = _resetBoxForContinue(box);
+  // ★ 不再 _resetBoxForContinue 清空整盒：确认环节 + 已产出内容保留在原位，
+  //   只把确认块标记为已答、body 复位流式态（typing 占位），续跑 token 接着往里写。
+  box.removeAttribute('data-finalizedid');
+  box.removeAttribute('data-committedid');
+  box.className = 'msg ai';
+  box.id = 'stream-ai';
+  box.dataset.convId = String(currentConvId);
+  procMarkClarifyAnswered(answerText || '');
+  const bodyEl = box.querySelector('.body');
+  if(bodyEl){
+    bodyEl.classList.add('streaming');
+    if(!bodyEl.querySelector('.typing')){
+      const _t = document.createElement('span'); _t.className = 'typing'; bodyEl.appendChild(_t);
+    }
+  }
   const st = document.getElementById('chat-status');
   if(st) st.textContent = '正在按你的确认继续…';
-  resetPipeline();
   pumpStream(box, text, [], resumeOf || null);
 }
 
@@ -1316,10 +1380,12 @@ async function clarifyAnswerSend(){
     // ★ 2026-10-16 Q2：在原输出盒内续接，不新起一轮（不再走 sendResume 新建气泡）
     // ★ 2026-10-17 Q1：resume_of_user_msg_id/append 转呈给 /chat/stream —— DB 层追加进
     //   触发本轮澄清的 user 消息（一轮 = 一条 user 消息），刷新后历史与直播一致。
+    // ★ 2026-10-17 反馈1：answerText = 答案摘要 → 确认环节标记「✓ 已确认 · <答案>」。
+    const _ansSummary = (answers.map(a=>a.value).join('；') || note || '').trim();
     _continueInSameBox(card, r.resume_text || '【已回答澄清】请继续', {
       user_msg_id: r.resume_of_user_msg_id || 0,
       append: r.resume_append || '',
-    });
+    }, _ansSummary);
   }catch(e){ toast('提交失败：' + (e.message||'')); if(btn){ btn.disabled=false; btn.textContent='✉ 发送补充信息'; } }
 }
 // 跳过澄清：按现有信息继续（含澄清标记，agent 侧不再提问，防循环）
@@ -1345,7 +1411,8 @@ async function clarifySkipSend(){
     }
   }catch(e){ /* 接口异常不阻断续答：用本地兜底文案直接跑（退回旧的"不清挂起"行为） */ }
   // ★ 2026-10-16 Q2：在原输出盒内续接，不新起一轮
-  _continueInSameBox(card, _text, _resumeOf);
+  // ★ 2026-10-17 反馈1：确认环节标记「✓ 已确认 · 已跳过，按现有信息继续」
+  _continueInSameBox(card, _text, _resumeOf, '已跳过，按现有信息继续');
 }
 // 续答流式请求（复用 chat/stream；user 消息显示简短摘要，完整补充见澄清卡）
 async function sendResume(text){

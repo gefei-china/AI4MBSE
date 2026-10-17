@@ -1204,6 +1204,7 @@ CONFIG_SCHEMA = {
     "agent": {
         "max_tool_rounds":   {"type": "int", "desc": "ReAct 工具轮**绝对硬上限**（默认 12，防死循环）。★ 注意语义：正常成功推进**不受它限制** —— 成功轮不扣预算，见 max_failed_rounds"},
         "max_failed_rounds": {"type": "int", "desc": "★ **失败轮预算**（默认 3）：只有工具失败/无效的轮次才扣；成功推进不扣（米爸 2026-10-09 纠正的语义，旧实现把成功轮也计入总轮数⇒ 连坐截断）"},
+        "ask_user_enabled":  {"type": "bool", "desc": "★ ask_user 澄清工具开关（默认开，2026-10-17 米爸反馈3）：开启后 AI 执行中「真的需要用户拍板」时调用该工具，弹出可点选确认卡片并暂停流程等回答；关闭则回到纯文本提问的旧形态"},
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},

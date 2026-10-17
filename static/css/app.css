@@ -334,6 +334,11 @@ body.nr-full-lock{overflow:hidden;}
 .proc-block.tool{background:#f8fafc;}
 .proc-block.tool.success{background:linear-gradient(135deg,#f0fdf4 0%,#ecfdf5 100%);border-color:#86efac;}
 .proc-block.tool.error{background:linear-gradient(135deg,#fef2f2 0%,#fef1f0 100%);border-color:#fca5a5;}
+/* ★ 2026-10-17（米爸反馈1）：澄清确认环节（与 chat.css 同源维护） */
+.proc-block.clarify{background:linear-gradient(135deg,#f5f8ff 0%,#eef4ff 100%);border-color:#c9dcff;}
+.proc-block.clarify.running{border-color:var(--blue-bd,#bcd4f7);box-shadow:0 0 0 1px rgba(52,120,246,.14);}
+.proc-block.clarify.running .proc-head{color:var(--blue-d,#3478f6);}
+.proc-block.clarify.done{border-color:#bbf0cd;background:linear-gradient(135deg,#f4fdf7 0%,#eefbf3 100%);}
 /* ── 2026-11-11 三级层级展示（Agent → Skill → 工具/MCP）────────────────────
    问题：此前 agent / skill / tool 各自 procUpsert 到**同一层** timeline，
         用户看到的是一串平铺条目，看不出「这个工具是谁调的」。

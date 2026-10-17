@@ -218,6 +218,35 @@ function renderMessage(m) {
   if(m.id && cd) { (window._msgCardCache = window._msgCardCache || {})[m.id] = cd; }
   if(m.process_html) html += `<div class="proc">${m.process_html}</div>`;
   else if(cd && cd.exec) html += procBlocksHtml(cd.exec, m.id);
+  // ★ 2026-10-17（米爸反馈1）：同轮澄清卡合并渲染 —— 由 03-chat.js 预处理挂到
+  //   续答消息的 _clarify_prev 上（clarify 消息本身不再独立成气泡）。渲染为
+  //   本消息流程时间线上的「确认环节」：问题清单 + 用户实际回答（card_data.answered，
+  //   由 /clarify-answer 回写）+ 已继续执行标记。直播路径的同构块见
+  //   11-pipeline.js 的 procAddClarifyGate。
+  if(m.role==='assistant' && m._clarify_prev){
+    const _cq = m._clarify_prev || {};
+    let _ccd = {};
+    try { _ccd = _cq.card_data ? (typeof _cq.card_data==='string' ? JSON.parse(_cq.card_data) : _cq.card_data) : {}; } catch(e){ _ccd = {}; }
+    const _qs = (_ccd && _ccd.questions) || [];
+    const _ans = _ccd && _ccd.answered;
+    const _qHtml = _qs.map(q=>{
+      const opts = (q.options||[]).map(o=>
+        `<span style="display:inline-block;border:1px solid var(--line);border-radius:4px;padding:1px 8px;margin:2px 4px 2px 0;font-size:10.5px;background:#fff;">${esc(o)}</span>`).join('');
+      return `<div style="margin-top:6px;"><div style="font-size:11.5px;"><b>${esc(q.question||'')}</b></div><div style="margin-top:3px;">${opts}</div></div>`;
+    }).join('');
+    let _ansHtml = '';
+    if(_ans){
+      if(_ans.skipped){
+        _ansHtml = `<div style="margin-top:6px;font-size:11px;color:var(--mut);">已跳过确认，按现有信息继续执行</div>`;
+      } else if((_ans.answers||[]).length){
+        _ansHtml = `<div style="margin-top:6px;font-size:11.5px;">✓ 已回答：<b>${esc((_ans.answers||[]).join('；'))}</b></div>`;
+      }
+    }
+    html += `<div class="proc-block clarify done collapsed" data-depth="0">
+      <div class="proc-head" onclick="toggleProc(this)" title="点击展开详情"><span>❓</span><span class="proc-title">等待用户确认${_ans?'<span class="proc-sub"> · ' + (_ans.skipped?'已跳过':'已回答') + '</span>':''}</span><span class="st ok" style="margin-left:auto;">✓ 已确认</span><span class="chev">▾</span></div>
+      <div class="proc-body"><div style="font-size:11.5px;line-height:1.7;">${_qHtml}${_ansHtml}<div style="color:var(--mut);margin-top:6px;">已在原输出流程内继续执行（本卡为流程中的一个确认环节）</div></div></div>
+    </div>`;
+  }
   html += `<div class="body" style="min-width:0;">${contentHtml}`;
   // V2.3 富输入：user 消息附件渲染（图片内联 / 文件链接）
   if(m.attachments) {

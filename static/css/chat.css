@@ -152,6 +152,13 @@
 .proc-block.thinking .think-icon{animation:think-pulse 1.3s ease-in-out infinite;}
 /* 工具状态指示器 */
 .tool-status{font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;}
+/* ★ 2026-10-17（米爸反馈1）：澄清确认环节（AI 输出流程时间线上的一个阶段）。
+   待确认态 = 蓝色呼吸边框 + 常驻展开（与 HIL confirm 闸门同性质）；
+   已确认态 = 绿色收边。历史渲染（_clarify_prev）与直播（procAddClarifyGate）共用。 */
+.proc-block.clarify{background:linear-gradient(135deg,#f5f8ff 0%,#eef4ff 100%);border-color:#c9dcff;}
+.proc-block.clarify.running{border-color:var(--blue-bd,#bcd4f7);box-shadow:0 0 0 1px rgba(52,120,246,.14);}
+.proc-block.clarify.running .proc-head{color:var(--blue-d,#3478f6);}
+.proc-block.clarify.done{border-color:#bbf0cd;background:linear-gradient(135deg,#f4fdf7 0%,#eefbf3 100%);}
 .tool-status.ok{background:#dcfce7;color:#166534;}
 .tool-status.err{background:#fef2f2;color:#991b1b;}
 .tool-status.run{background:#e0f2fe;color:#0369a1;}

@@ -2404,6 +2404,10 @@ class StreamMixin:
             #   故 L3 实际是「本地工具」；协议先留位，MCP 接入后无需改结构。
             _ctx_agent = agent_def.name or "-"
             _ctx_skill = None            # None = 未命中技能（工具直接挂 agent 下）
+            # ★ 2026-10-17（米爸反馈3）：ask_user 人在回路澄清信号（None=未触发）。
+            #   LLM 调 ask_user ⇒ _exec_tool_call 返回 clarify_required ⇒ 中断循环，
+            #   由下方（follow-up 消费前）发射 clarify_ask + 落挂起 + return。
+            _clarify_req = None
 
             def _mcp_of(tool_name):
                 """工具→MCP 服务器名（用于三级展示第3 层的标签）。
@@ -2569,6 +2573,11 @@ class StreamMixin:
                                   "_dup": _dup}
                     else:
                         result = _lg.call(self._exec_tool_call, tname, targs)
+                        # ★ 2026-10-17：ask_user 人在回路澄清 —— 记录信号并中断 ReAct 循环
+                        #   （不再喂 tool_result、不再继续探测：等用户回答后续跑）
+                        if isinstance(result, dict) and result.get("clarify_required"):
+                            _clarify_req = result.get("clarify") or {}
+                            break
                         _r0 = str(result.get("result") or "")
                         if result.get("ok") and (result.get("weak")
                                                  or ("未检索到" in _r0)
@@ -2666,6 +2675,22 @@ class StreamMixin:
                         exec_reasoning.append(_w_delta)
                         yield {"type": "reasoning", "delta": _w_delta, "round": _rnd + 1, "phase": "plan"}
                         break
+            # ★ 2026-10-17（米爸反馈3）：ask_user 澄清收口 —— 落挂起 + 发射卡片 + 结束本次流。
+            #   位置选在「最终生成之前」：此时 ReAct 循环已中断，继续生成只会空转。
+            #   与 1.4/1.5 共用 _persist_clarify + clarify_ask 协议（前端同一套卡片/续跑机制）。
+            if _clarify_req:
+                _iqs = [dict(_clarify_req)]
+                _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
+                                             forced_intent, skill_name, team, _iqs)
+                yield {"type": "clarify_ask", "questions": _iqs, "intent": intent,
+                       "title": "❓ AI 执行中需要你确认后才能继续",
+                       "message": str(user_input)[:200], "source": "ask_user"}
+                yield {"type": "done", "data": {
+                    "ok": True, "clarify_asked": True, "intent": intent,
+                    "content": "AI 执行中需要你确认（详见澄清卡片，回答后将继续）",
+                    "msg_type": "clarify", "usage": {}, "questions": _iqs,
+                    "message_id": _mid or 0, "clarify_source": "ask_user"}}
+                return
             # P1-② 补救点（2026-10-07）：循环已 break、**最终生成之前**再消费一次 follow-up。
             # ★ 为什么循环头不够（实测踩到）：循环头只覆盖「工具执行中 / 探测轮等待中」
             #   两种时机；而用户**最常见的补充时机是"正在看最终回答流式输出"** ——

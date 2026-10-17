@@ -477,6 +477,10 @@ class ExecuteMixin:
                 token_budget=int(self._LOOP_TOKEN_BUDGET) if getattr(self, "_LOOP_TOKEN_BUDGET", None) else 60000,
                 tool_timeout_s=float(getattr(self, "_LOOP_TOOL_TIMEOUT", 120.0)),
                 max_failed_rounds=max_failed_rounds)
+            # ★ 2026-10-17（米爸反馈3）：ask_user 人在回路澄清信号（None=未触发）。
+            #   LLM 调 ask_user ⇒ _exec_tool_call 返回 clarify_required ⇒ 中断循环，
+            #   由下方统一落挂起 + 返回 clarify_asked（与 1.5 内容级澄清同构）。
+            _clarify_req = None
             for _round in range(max_tool_rounds):
                 tool_calls = msg.get("tool_calls") or []
                 if not tool_calls:
@@ -550,6 +554,11 @@ class ExecuteMixin:
                                 ensure_ascii=False)})
                         continue
                     result = _guard.call(self._exec_tool_call, tname, targs)
+                    # ★ 2026-10-17：ask_user 人在回路澄清 —— 记录信号并中断 ReAct 循环
+                    #   （不再喂 tool_result、不再继续探测：等用户回答后续跑）
+                    if isinstance(result, dict) and result.get("clarify_required"):
+                        _clarify_req = result.get("clarify") or {}
+                        break
                     _t_res = str(result.get("result") or "")
                     _weak = bool(result.get("weak")) or ("未检索到" in _t_res) or ("无新冲突" in _t_res)
                     # ⚠️ 弱结果在**调用之后**才判定得出，无法预传给 call()，
@@ -680,6 +689,29 @@ class ExecuteMixin:
                             _cc.close()
                 except Exception:
                     pass
+        # ★ 2026-10-17（米爸反馈3）：ask_user 澄清收口 —— 落 user 消息 + 澄清卡后直接返回。
+        #   **不能**落进下面的常规落库段：那会写一条 llm_content 可能为空的 assistant
+        #   消息（UI 上多一个空气气泡），且 pending_clarify 没挂起（用户无法作答）。
+        if _clarify_req:
+            _iqs = [dict(_clarify_req)]
+            _mid = 0
+            if not dry_run and conversation_id:
+                try:
+                    with db_conn() as _cc:
+                        _cc.execute(
+                            "INSERT INTO messages (conversation_id, role, content, msg_type, attachments) "
+                            "VALUES (?,?,?,?,?)",
+                            (conversation_id, "user", user_input, "text",
+                             json.dumps(attachments or [], ensure_ascii=False)))
+                except Exception:
+                    pass
+                _mid = self._persist_clarify(conversation_id, user_input, intent, branch,
+                                             attachments or [], forced_intent, skill_name,
+                                             team, _iqs) or 0
+            return {"ok": True, "clarify_asked": True, "intent": intent,
+                    "content": "AI 执行中需要你确认（详见澄清卡片，回答后将继续）",
+                    "msg_type": "clarify", "questions": _iqs,
+                    "message_id": _mid, "clarify_source": "ask_user"}
         # P0-2: 透传 LLM 运行元信息（provider / Mock 降级），前端展示「真实/试用 LLM 接入状态」
         llm_meta = llm_response.get("_meta", {})
         llm_info = {

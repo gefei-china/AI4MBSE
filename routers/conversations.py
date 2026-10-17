@@ -631,11 +631,13 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
     #   澄清卡 = 本会话最后一条 msg_type='clarify'（pending 刚非空，即它）；
     #   触发user消息 = 澄清卡之前最近的一条 user 消息。
     _resume_of_uid = 0
+    _card_id = 0
     try:
         _card = conn.execute(
             "SELECT id FROM messages WHERE conversation_id=? AND msg_type='clarify' "
             "ORDER BY id DESC LIMIT 1", (conv_id,)).fetchone()
         if _card:
+            _card_id = int(_card["id"])
             _u = conn.execute(
                 "SELECT id FROM messages WHERE conversation_id=? AND role='user' AND id<? "
                 "ORDER BY id DESC LIMIT 1", (conv_id, _card["id"])).fetchone()
@@ -643,6 +645,41 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
                 _resume_of_uid = int(_u["id"])
     except Exception:
         _resume_of_uid = 0     # 查不到不阻断作答：前端退回"新起一轮"的旧行为
+    # ★ 2026-10-17（米爸反馈1·确认环节形态改造）：把用户的**实际回答**回写进澄清卡
+    #   消息的 card_data.answered —— 历史渲染据此在「确认环节」里显示
+    #   「已回答：<答案>」（含跳过/自由文本两态），不再从 user 消息追加文本反解析。
+    #   ⚠️ 回写失败**不阻断作答**（挂起已清、续答照常）；下次渲染退回只读问题列表。
+    if _card_id:
+        try:
+            import datetime as _dt
+            _row = conn.execute("SELECT card_data FROM messages WHERE id=?", (_card_id,)).fetchone()
+            _cd = {}
+            if _row and _row["card_data"]:
+                try:
+                    _cd = _j.loads(_row["card_data"])
+                except Exception:
+                    _cd = {}
+            if not isinstance(_cd, dict):
+                _cd = {}
+            _ans_lines = [str(a.get("value") or "").strip()
+                          for a in (body.get("answers") or [])
+                          if str(a.get("value") or "").strip()]
+            _note_v = str(body.get("note") or "").strip()
+            if _note_v:
+                _ans_lines.append(_note_v)
+            _ft_v = str(body.get("free_text") or "").strip()
+            if _ft_v:
+                _ans_lines.append(_ft_v)
+            _cd["answered"] = {
+                "at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "answers": _ans_lines,
+                "skipped": bool(body.get("skip")),
+            }
+            conn.execute("UPDATE messages SET card_data=? WHERE id=?",
+                         (_j.dumps(_cd, ensure_ascii=False), _card_id))
+            conn.commit()
+        except Exception:
+            pass
     _n = len((body.get("answers") or []))
     _tail = '跳过' if body.get("skip") else (
         '自由文本' if free_text else (f"{_n} 条选项" + (f" + 补充说明" if (body.get("note") or "").strip() else "")))

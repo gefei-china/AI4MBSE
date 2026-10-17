@@ -108,9 +108,17 @@ def t2_source_guard() -> None:
         f"残留于 {fe}" if fe else "仅注释提及，功能引用已清零")
 
     # sendChat 必须发 team，且不得发 forced_intent
+    # ★ 2026-10-17 修夹具漂移（与 pickIntent 同款教训）：原判据用
+    #   `cs.find("/chat/stream") + 1500` 定长窗口抓请求体 —— Q1/Q2 两轮迭代
+    #   （_continueInSameBox 注释块、pumpStream 的 reuseForPick 清理注释）
+    #   把 fetch body 挤出窗口 ⇒ team 判据假红。改为**花括号配对提取
+    #   pumpStream 函数体**（请求体的唯一真源，对注释/函数长度增长免疫）。
     cs = (static / "js/mods/12-chatsend.js").read_text(encoding="utf-8", errors="ignore")
-    body = cs[cs.find("/chat/stream"): cs.find("/chat/stream") + 1500]
-    chk("sendChat 请求体携带 team（主 Agent）", "team: _selTeam" in body or "team:" in body)
+    body = _extract_js_func(cs, "pumpStream")
+    # ★ 2026-10-17 收紧（变异自证抓出逃逸）：原判据 `"team: _selTeam" in body
+    #   or "team:" in body` 的弱分支让 `team: ""`（静默丢弃主 Agent —— 事故
+    #   9372 的形态）也能 PASS。改为**必须**真实传递下拉值 _selTeam。
+    chk("sendChat 请求体携带 team（主 Agent）", "team: _selTeam" in body)
     chk("sendChat 请求体不再发送 forced_intent",
         "forced_intent:" not in body, "改判意图改由 intent_override 承载")
 

@@ -544,8 +544,28 @@ function pinChatBottom(area, ms){
     setTimeout(tick, 150);
   })();
 }
+// ★ 2026-10-17（米爸反馈1）：同轮澄清卡合并预处理 —— msg_type='clarify' 的
+// AI 消息**不再独立成气泡**，作为「确认环节」挂到其后第一条 assistant 消息的
+// _clarify_prev 上（renderMessage 据此在流程时间线里渲染确认块）。
+// 仅合并「后面还有 assistant」的卡；末尾挂起态（用户尚未作答）保留独立渲染，
+// 作答入口由 setPendingClarify 挂在输入框上方。
+// ⚠️ 对 DB 层未单轮化的旧数据（[U1][C1][U2][A2]）同样生效：U2 照常渲染，
+//   C1 仍合并进 A2 ⇒ 刷新后从 4 气泡收敛为 3 气泡（AI 输出只剩 1 个）。
+function _mergeClarifyTurns(msgs){
+  if(!Array.isArray(msgs)) return msgs;
+  const out = [];
+  let pending = null;
+  for(const m of msgs){
+    if(m && m.role==='assistant' && m.msg_type==='clarify'){ pending = m; continue; }
+    if(pending && m && m.role==='assistant'){ m._clarify_prev = pending; pending = null; }
+    out.push(m);
+  }
+  if(pending) out.push(pending);   // 末尾挂起态：保留独立渲染（等用户作答）
+  return out;
+}
 function renderMessagesChunked(area, msgs, done){
   const token = ++_renderToken;
+  msgs = _mergeClarifyTurns(msgs);
   let i = 0;
   (function step(){
     if(token !== _renderToken) return;          // 已被新一轮渲染取代：丢弃
@@ -573,8 +593,9 @@ async function loadEarlierMessages(){
     if(msgs.length){
       _oldestMsgId = msgs[0].id;
       const prevHeight = area.scrollHeight;
+      const _merged = _mergeClarifyTurns(msgs);   // ★ 2026-10-17：同轮澄清卡合并为确认环节
       const frag = document.createDocumentFragment();
-      msgs.forEach(m=>{
+      _merged.forEach(m=>{
         const holder = document.createElement('div');
         holder.innerHTML = renderMessage(m);
         while(holder.firstChild) frag.appendChild(holder.firstChild);
