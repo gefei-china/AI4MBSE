@@ -466,10 +466,16 @@ class ExecuteMixin:
             #   成功轮再多也不扣预算 ⇒ 正常推进不被限制。
             try:
                 from core import config as _cfg
-                max_tool_rounds = int(_cfg.get("agent", "max_tool_rounds", 12))
+                # ★ 2026-10-17（米爸反馈1）：12 → 100（与 stream.py 同步，一致性门禁会判）。
+                #   100 是防死循环的绝对天花板；正常成功推进本就不扣失败轮预算。
+                max_tool_rounds = int(_cfg.get("agent", "max_tool_rounds", 100))
                 max_failed_rounds = int(_cfg.get("agent", "max_failed_rounds", 3))
+                # ★ 2026-10-17（米爸反馈1）：token 预算 60000 → 30 万（与 stream.py 同步）。
+                _lg_budget = int(_cfg.get("agent", "loop_token_budget", 300000) or 300000)
+                _lg_retries = max(0, int(_cfg.get("agent", "tool_call_retries", 3) or 0))
             except Exception:
-                max_tool_rounds, max_failed_rounds = 12, 3
+                max_tool_rounds, max_failed_rounds = 100, 3
+                _lg_budget, _lg_retries = 300000, 3
             # 2026-10-04：接入统一护栏（与编排路径同源，见 agent/loop_guard.py）。
             # 原先这条路径只有轮次上限/token 上限/重复检测/工具超时，
             # 而编排路径有前三者 —— 同一套 ReAct 语义的两处实现护栏不对称。
@@ -477,9 +483,9 @@ class ExecuteMixin:
             # P0-①/P0-②（2026-10-07）协议护栏，与 stream.py **同源**。
             from agent import loop_protocol as _lproto
             _guard = LoopGuard(
-                token_budget=int(self._LOOP_TOKEN_BUDGET) if getattr(self, "_LOOP_TOKEN_BUDGET", None) else 60000,
+                token_budget=_lg_budget,
                 tool_timeout_s=float(getattr(self, "_LOOP_TOOL_TIMEOUT", 120.0)),
-                max_failed_rounds=max_failed_rounds)
+                max_failed_rounds=max_failed_rounds, tool_retries=_lg_retries)
             # ★ 2026-10-17（米爸反馈3）：ask_user 人在回路澄清信号（None=未触发）。
             #   LLM 调 ask_user ⇒ _exec_tool_call 返回 clarify_required ⇒ 中断循环，
             #   由下方统一落挂起 + 返回 clarify_asked（与 1.5 内容级澄清同构）。

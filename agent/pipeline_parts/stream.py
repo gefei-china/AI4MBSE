@@ -2424,12 +2424,21 @@ class StreamMixin:
             #   6 → 12 且拆出**失败轮预算**——成功推进不扣，只有失败轮才扣。
             #   旧实现把成功轮也计入总轮数，成功推进被失败轮"连坐"截断。
             #   ⚠️ 必须与 execute.py 的默认值**一致**（tools/verify/verify_tool_round_budget.py 会判）。
+            #   ★ 2026-10-17（米爸反馈1）：12 → 100。截图实证：模型因「工具调用次数已用尽」
+            #     中断正常工作（FINALIZE_HINT 收尾）。语义分工：成功推进本就不扣失败预算，
+            #     100 只是防死循环的**绝对天花板**（+ 空转检测/token 预算/自主续跑四道闸兜底），
+            #     正常长任务（先查标准库→取技能→生成→校验→修复）不再被 12 轮掐断。
             try:
                 from core import config as _cfg
-                max_tool_rounds = int(_cfg.get("agent", "max_tool_rounds", 12))
+                max_tool_rounds = int(_cfg.get("agent", "max_tool_rounds", 100))
                 max_failed_rounds = int(_cfg.get("agent", "max_failed_rounds", 3))
+                # ★ 2026-10-17（米爸反馈1）：token 预算 60000 → 30 万（可配）。
+                #   100 轮的合法长任务 6 万必提前触闸 —— 中断点从轮次挪到 token 等于没修。
+                _lg_budget = int(_cfg.get("agent", "loop_token_budget", 300000) or 300000)
+                _lg_retries = max(0, int(_cfg.get("agent", "tool_call_retries", 3) or 0))
             except Exception:
-                max_tool_rounds, max_failed_rounds = 12, 3
+                max_tool_rounds, max_failed_rounds = 100, 3
+                _lg_budget, _lg_retries = 300000, 3
             # 2026-10-04：接入统一护栏（与 execute.py 的非流式 loop **同源**）。
             # 为什么必须同源：这两段是同一套 ReAct 语义的两种实现，此前只有编排路径
             # 有 token 预算，重复检测与工具超时两边都没有 ⇒ 补一边就会留下新的不对称。
@@ -2438,8 +2447,8 @@ class StreamMixin:
             # 与 execute.py **同源**（同一模块）—— 两条路径是同一套 ReAct 语义的两种实现，
             # 协议层缺陷漏一条路径就是线上 HTTP 400（同 loop_guard 立规时的判断）。
             from agent import loop_protocol as _lproto
-            _lg = _LoopGuard(token_budget=60000, tool_timeout_s=120.0,
-                             max_failed_rounds=max_failed_rounds)
+            _lg = _LoopGuard(token_budget=_lg_budget, tool_timeout_s=120.0,
+                             max_failed_rounds=max_failed_rounds, tool_retries=_lg_retries)
             # ★ 2026-10-17（米爸「harness 持续工作」）：自主续跑外层循环。
             #   round 1 = 原始请求；round 2+ = 评估器判定「未完成」放行的续跑。
             #   _lg（LoopGuard）**故意在循环外创建**：token 预算跨轮共享（config 既定语义），

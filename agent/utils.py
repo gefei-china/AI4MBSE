@@ -289,30 +289,29 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
         else:
             # 幂等修复（2026-09-01）：重复归档时 sysml 版本幂等返回 None → _vid 分支漂移。
             # 同消息已有任一 code 产物（如首次走 if _vid 分支的「代码文件」）则跳过代码块登记。
+            # ★ 2026-10-17（米爸反馈2）：代码块产物**只收 SysML/KerML 族**——
+            #   答复里顺手写的 Python/JS/SQL 片段是「正常对话输出」不是交付物，
+            #   自动登记会把产物库变成聊天记录（与 document 误创建同根）。
             has_code = conn.execute(
                 "SELECT 1 FROM artifacts WHERE conversation_id=? AND message_id=? AND kind='code' LIMIT 1",
                 (conversation_id, message_id)).fetchone()
             if not has_code:
-                for i, blk in enumerate(_extract_code_blocks(content), 1):
+                for i, blk in enumerate(
+                        [b for b in _extract_code_blocks(content)
+                         if str(b.get("lang", "")).lower() in ("sysml", "kerml", "sysmlv2", "kerml2")], 1):
                     title = f"代码块 {i}（{blk['lang']}）"
                     if not repo.exists(conversation_id, message_id, "code", title):
                         repo.create_artifact(
                             conversation_id, message_id, "code", title, "code", blk["code"],
                             {"lang": blk["lang"]}, source="conversation", created_by=created_by)
-        
-        # 4) 长 markdown 文档产物（无结构化 card 且无明显代码块）
-        if not cd.get("sysml_views") and not is_report and content and len(content) >= 200:
-            # P1-9（2026-10-01）：document 是**重灾区** —— 实测真库 23/23 全是占位名，
-            # 因为这条「长 markdown 文档」路径的 cd 里**从来不产出 title**。内容自带
-            # `# 巡飞弹参数变更影响分析报告…` 这类首标题，信息量远高于「AI 生成文档」。
-            title = (str(cd.get("title") or "").strip()
-                     or derive_title_from_content(content)
-                     or FALLBACK_DOCUMENT_TITLE)[:120]
-            if not repo.exists(conversation_id, message_id, "document", title):
-                repo.create_artifact(
-                    conversation_id, message_id, "document", title, "markdown", content,
-                    {"source_msg_type": cd.get("msg_type", "text")}, source="conversation",
-                    created_by=created_by)
+
+        # ★ 2026-10-17（米爸反馈2）：**删除「长 markdown → document 产物」自动登记**。
+        #   原第 4 节：正文 ≥200 字且非 sysml/报告 ⇒ 自动建一份 document 产物——
+        #   这正是「每次 AI 对话输出都自动创建一份产物文档」的根因（实测真库
+        #   document 产物 23/23 全是此类误创建）。米爸口径：产物库只收**交付物**
+        #   （SysML 代码文件 / 报告 / 导入附件），AI 的正常回答就是回答，不是产物。
+        #   注：附件本就进产物库——前端 04-artifacts.js collectAttachFiles 从会话
+        #   消息 attachments 合成「文件」清单项（url 去重），无需后端重复登记。
     except Exception:
         # 归档失败不阻断主流程（对齐既有降级原则）
         pass
