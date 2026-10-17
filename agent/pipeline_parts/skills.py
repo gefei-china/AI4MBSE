@@ -62,18 +62,26 @@ class SkillMixin:
             return []
 
     def _semantic_skill_match(self, user_input: str, skills: list, threshold: float = 0.15) -> list:
-        """语义匹配（真 embedding 优先，bigram 降级；复用双条件防误路由）：返回命中技能名列表。"""
+        """语义匹配（真 embedding 优先，bigram 降级；复用双条件防误路由）：返回命中技能名列表。
+
+        ★ 2026-10-17：阈值按实际后端分级——semantic.py 明确警告「两路余弦量纲不同」
+        （同一正例对实测 dense 0.6652 / bigram 0.3091），此前固定 0.15 对 dense 路
+        形同虚设（几乎全部过线，仅靠 top1<top2×1.5 歧义保护兜底）。现在 dense 用 0.40，
+        bigram 维持调用方经验值 0.15。
+        """
         if not skills or not user_input:
             return []
         from semantic import SemanticSearch
         idx = [{"name": s["name"], "text": " ".join(filter(None, [
             s.get("name", ""), s.get("description", ""),
             *[str(t) for t in (s.get("triggers") or [])]]))} for s in skills]
-        scored = SemanticSearch().rank(user_input, idx, top_k=2, threshold=0, key="text")
+        _searcher = SemanticSearch()
+        scored = _searcher.rank(user_input, idx, top_k=2, threshold=0, key="text")
         if not scored:
             return []
+        _thr = 0.40 if _searcher.last_backend == "dense" else threshold
         top_score, top = scored[0]
-        if top_score < threshold:
+        if top_score < _thr:
             return []
         if len(scored) >= 2 and top_score < scored[1][0] * 1.5:
             return []
