@@ -41,6 +41,12 @@ class ToolRegistry:
         "file_mkdir": {"desc": "创建目录（参数 path:str；写操作）", "handler": "file_tools.exec_file_tool"},
         "file_delete": {"desc": "删除文件或空目录（参数 path:str，recursive:bool 可选；destructive 高风险需人工确认）", "handler": "file_tools.exec_file_tool"},
         "report_export": {"desc": "把报告内容导出为指定格式文档并落盘（参数 path/title/content 或 sections/fmt:md|docx|pdf；写操作）", "handler": "report_tools.exec_report_tool"},
+        # ★ 2026-10-17（米爸能力配置）：save_artifact——AI 显式归档产物到产物库。
+        #   ⚠️ 必须登记在这里：ToolRegistry.list() 对 source='builtin' 的 DB 行只认
+        #   BUILTINS 字典里有的名字，不在 ⇒ 被 list() 第二段静默丢弃 ⇒
+        #   /api/studio/agent-tools 候选没有它 ⇒ Agent 编辑页「绑定工具」看不到
+        #   （米爸实测反馈，2026-10-17）。
+        "save_artifact": {"desc": "把代码/文档全文保存为会话产物（入产物库，用户可在产物面板查看下载；参数 title:str, content:str, kind:str 可选, lang:str 可选；写操作）", "handler": "artifact_tools.exec_tool"},
     }
 
     def __init__(self, conn=None):
