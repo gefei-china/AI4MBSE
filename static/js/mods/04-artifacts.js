@@ -280,48 +280,10 @@ function artFileSaveAsByIdx(i){
   toast('💾 开始下载：'+(f.title||''));
 }
 document.addEventListener('click', ()=>{ const m=document.getElementById('art-file-ctx-menu'); if(m) m.remove(); });
-// ── 2026-10-17（米爸反馈3）：AI 产物右键菜单（打开 / 加入会话 / 删除）──
-// 此前 item 模板引用 artContextMenu 但该函数从未定义 ⇒ AI 产物右键悬空无菜单（导入文件却一直有）。
-function artContextMenu(ev, id){
-  ev.preventDefault(); ev.stopPropagation();
-  const m = document.createElement('div');
-  m.id = 'art-ctx-menu';
-  m.style.cssText = 'position:fixed;z-index:6000;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:4px;font-size:12px;';
-  const item = (label, fn) => '<div class="rm-item" style="padding:6px 10px;border-radius:6px;" onclick="'+fn+'">'+label+'</div>';
-  m.innerHTML = item('📖 打开', `artPreviewV3(${id})`)
-    + item('📎 加入会话', `artAddToChat(${id})`)
-    + item('🗑 删除', `artDelete(${id})`);
-  document.body.appendChild(m);
-  const w = m.offsetWidth, h = m.offsetHeight;
-  m.style.left = Math.min(ev.clientX, window.innerWidth - w - 8) + 'px';
-  m.style.top = Math.min(ev.clientY, window.innerHeight - h - 8) + 'px';
-}
-document.addEventListener('click', ()=>{ const m=document.getElementById('art-ctx-menu'); if(m) m.remove(); });
-// AI 产物加入会话：取产物内容注入引用 chip（与文件项 artFileAddToChat 同通道）
-async function artAddToChat(id){
-  try{
-    const a = await api('/api/artifacts/'+id);
-    if(!a || a.error){ toast('读取产物失败：'+((a&&a.error)||'未知错误')); return; }
-    let text = a.preview_content || a.content || '';
-    if(!String(text).trim()) text = '[产物] ' + (a.title||'');
-    injectChatRef(String(text).slice(0, 4000), '产物 · '+(a.title||''));
-    toast('📎 已加入会话（'+(a.title||'')+'），输入问题后发送');
-  }catch(e){ toast('加入会话失败：'+(e.message||e)); }
-}
-// AI 产物删除：非阻塞确认 → DELETE /api/artifacts/{id}（后端已存在，带审计）→ 刷新列表与预览
-async function artDelete(id){
-  const a = (_artList||[]).find(x=>x.id===id);
-  const name = (a && a.title) || ('#'+id);
-  const ok = await confirmDialog('删除后不可恢复，确定删除产物「'+name+'」吗？', {title:'删除产物', okText:'删除'});
-  if(!ok) return;
-  try{
-    const r = await api('/api/artifacts/'+id, {method:'DELETE'});
-    if(r && r.error){ toast('删除失败：'+r.error); return; }
-    toast('🗑 已删除产物：'+name);
-    if(_artActive===id){ _artActive=null; resetArtPreview(); }
-    if(_artConv) loadArtifacts(_artConv);
-  }catch(e){ toast('删除失败：'+(e.message||e)); }
-}
+// ★ 2026-10-17（米爸反馈3）：AI 产物右键菜单（artContextMenu）与删除（artDelete）
+//   **不定义在本文件**——09-impact.js 有一份更老的完整菜单生态（打开/加入会话/另存为/
+//   收编入文档库/删除），且加载序在 04 之后 ⇒ 同名定义会被覆盖（实测：删除项不出现
+//   的根因）。菜单统一在 09-impact.js 维护，本文件只负责列表渲染模板引用。
 // ── V3 文件列表：分组（AI 生成产物 / 导入文件）+ 上下列表 ──
 function renderArtV3List(stats){
   const el = document.getElementById('art-list-v3');
@@ -332,7 +294,7 @@ function renderArtV3List(stats){
     el.innerHTML = `<div style="color:var(--mut);font-size:11px;padding:12px 4px;text-align:center;">暂无文件</div>`;
     return;
   }
-  const item = (a, icon, fmt) => `<div class="art-list-item ${_artActive===a.id?'active':''}" onclick="${a.onclick||('artPreviewV3('+a.id+')')}" oncontextmenu="${a.onctx||'artContextMenu(event,'+a.id+')'}" title="${esc(a.title)} (${fmt}) · 右键：打开/加入会话/删除">
+  const item = (a, icon, fmt) => `<div class="art-list-item ${_artActive===a.id?'active':''}" onclick="${a.onclick||('artPreviewV3('+a.id+')')}" oncontextmenu="${a.onctx||'artContextMenu(event,'+a.id+')'}" title="${esc(a.title)} (${fmt}) · 右键：打开/加入会话/另存为/收编/删除">
     <span class="art-icon">${icon}</span><span class="art-name">${esc(a.title)}</span><span class="art-format">${esc(fmt)}</span></div>`;
   const group = (title, list) => list.length ?
     `<div style="font-size:10.5px;color:var(--mut);padding:8px 4px 4px;letter-spacing:.5px;border-top:${_artList.length?'1px dashed var(--line)':'none'};margin-top:${_artList.length?'4px':'0'};">${title}（${list.length}）</div>` +

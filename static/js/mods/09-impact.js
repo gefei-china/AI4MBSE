@@ -1368,11 +1368,12 @@ function artContextMenu(ev, id){
   const m = document.createElement('div');
   m.id = 'doc-ctx-menu';
   m.style.cssText = 'position:fixed;z-index:6000;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:4px;font-size:12px;';
-  const item = (label, fn) => '<div class="rm-item" style="padding:6px 10px;border-radius:6px;" onclick="'+fn+'">'+label+'</div>';
+  const item = (label, fn, red) => '<div class="rm-item" style="padding:6px 10px;border-radius:6px;'+(red?'color:var(--red);':'')+'" onclick="'+fn+'">'+label+'</div>';
   m.innerHTML = item('📖 打开', `artPreviewV3(${id})`)
     + item('📎 加入会话', `artAddToChat(${id})`)
     + item('💾 另存为', `artSaveAs(${id})`)
-    + item('📥 收编入文档库', `artIngestToDocs(${id})`);
+    + item('📥 收编入文档库', `artIngestToDocs(${id})`)
+    + item('🗑 删除', `artDelete(${id})`, true);
   document.body.appendChild(m);
   m.style.left = Math.min(ev.clientX, window.innerWidth - m.offsetWidth - 8) + 'px';
   m.style.top = Math.min(ev.clientY, window.innerHeight - m.offsetHeight - 8) + 'px';
@@ -1466,6 +1467,27 @@ function artSaveAs(id){
   el.download = a.title || ('artifact_'+id);
   document.body.appendChild(el); el.click(); el.remove();
   toast('💾 开始下载：'+(a.title||('artifact#'+id)));
+}
+// 2026-10-17（米爸反馈3）：AI 产物删除——非阻塞确认 → DELETE /api/artifacts/{id}
+// （后端已存在，带审计）→ 刷新列表；若正预览该产物则一并清空右侧预览。
+// ⚠️ 定义放这里而非 04-artifacts：artContextMenu 菜单生态（打开/加入会话/另存为/
+//   收编/删除）统一在本文件维护。此前在 04 新写同名 artContextMenu 被本文件
+//   后加载覆盖 ⇒ 右键始终是旧菜单、无删除项（实测踩坑：同名全局函数按加载序覆盖）。
+async function artDelete(id){
+  const a = (_artList||[]).find(x=>x.id===id);
+  const name = (a && a.title) || ('#'+id);
+  const ok = await confirmDialog('删除后不可恢复，确定删除产物「'+name+'」吗？', {title:'删除产物', okText:'删除'});
+  if(!ok) return;
+  try{
+    const r = await api('/api/artifacts/'+id, {method:'DELETE'});
+    if(r && r.error){ toast('删除失败：'+r.error); return; }
+    toast('🗑 已删除产物：'+name);
+    if(typeof _artActive !== 'undefined' && _artActive===id){
+      _artActive = null;
+      if(typeof resetArtPreview === 'function') resetArtPreview();
+    }
+    if(currentConvId) loadArtifacts(currentConvId);
+  }catch(e){ toast('删除失败：'+(e.message||e)); }
 }
 
 // ── 文件列表右键菜单（2026-09-11 米爸：去 icon，打开/另存为 → 下载）──
