@@ -89,6 +89,10 @@ class ExecuteMixin:
         team_def = None
         team_decision = None
         team_direct = False
+        # ★ 2026-10-17：澄清探测的 quick_pick 判据取**用户入口原值**（intent_override），
+        #   不是被 team/R1 覆写后的 forced_intent（覆写后恒非空 ⇒ 内容级澄清恒被跳过，
+        #   见 stream.py 同处注释）。与 `_persist_clarify` 存覆写后的值分工不冲突。
+        _clarify_gate_intent = forced_intent
         if team:
             team_def = self._team_definition(team)
             team_intent = self._resolve_team(team)
@@ -210,7 +214,7 @@ class ExecuteMixin:
             try:
                 _clarify_qs = self._clarify_detect(
                     user_input, intent, effective_provider,
-                    forced_intent=forced_intent, skill_name=skill_name)
+                    forced_intent=_clarify_gate_intent, skill_name=skill_name)
             except Exception:
                 _clarify_qs = None
             if _clarify_qs:

@@ -33,6 +33,11 @@ class ChatIn(BaseModel):
     scope_id: Optional[int] = None    # 建模范围：引用已保存范围（文件管理→建模范围，全局分词不分分支）
     scope: Optional[dict] = None      # 或内联范围 {"mode":"doc|fragment_group|chunk","doc_names":[...],"fragment_text":"...","chunk_ids":[...]}
     scope_ids: Optional[list] = []    # 多个已保存建模范围 id（可多选合并，文档取并集）
+    # ★ 2026-10-17（米爸 Q1 DB 层收口）：澄清续答的**单轮化**两个转呈字段。
+    #   由 /clarify-answer 生成、前端原样带回 —— 后端不信任客户端自行编造 id，
+    #   只认 clarify-answer 当时从本会话查出来的那一条。
+    resume_of_user_msg_id: Optional[int] = 0   # 触发本轮澄清的那条 user 消息 id（追加目标）
+    resume_append: Optional[str] = ""          # 要追加进该 user 消息的澄清补充文本（不含"原请求"复述）
 
 
 class RenameIn(BaseModel):

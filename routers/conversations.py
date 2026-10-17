@@ -381,6 +381,9 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                                      skill_name=body.skill_name or None,
                                      team=body.team or None,
                                      scope_id=body.scope_id, scope_ids=body.scope_ids, scope=body.scope,
+                                     # ★ 2026-10-17：澄清续答单轮化 —— 追加到原 user 消息，不新起一轮
+                                     resume_of_user_msg_id=int(body.resume_of_user_msg_id or 0),
+                                     resume_append=body.resume_append or "",
                                      user=user),
                 # P1-2：15 s —— 链路上最小 idle timeout 通常是 nginx 默认 60 s，取 1/4 留余量
                 interval_s=15.0,
@@ -553,8 +556,13 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
     body: {answers: [{question_id, value}], note: "..."}（value=选择题选项文本或自定义补充；
           note=卡片末步「补充说明（选填）」的多行文本，**与 answers 同时生效**）
           或 {free_text: "..."}（**自由文本作答**：用户直接在主输入框打的那段话）
-    返回 {ok, resume_text}——前端把 resume_text 作为新消息发送，走正常流式续答
-    （含【澄清补充】标记，agent 侧跳过再次澄清，防循环）。
+          或 {skip: true}（**跳过澄清**：2026-10-17 收口到本接口，此前前端直接发流
+          ⇒ pending_clarify 永不清除，刷新后确认卡复活、下一条消息被当成澄清补充）
+    返回 {ok, resume_text, append_text, resume_of_user_msg_id, free_text}——
+      · resume_text：给 LLM 的续跑输入（含【澄清补充】标记 + 原请求复述，防循环）
+      · append_text / resume_of_user_msg_id：**DB 层单轮化**用（米爸 Q1，2026-10-17）——
+        前端把它们原样带回 /chat/stream，后端把 append_text 追加进触发本轮澄清的
+        那条 user 消息，而不是新起一条 user 轮次（刷新后历史与直播一致）。
 
     2026-09-28 新增 note 字段：澄清卡改为「一次一题」向导后，末步是「补充说明（选填）」多行输入。
     此前只有 answers 一条路，note 若塞进 free_text 会把 answers **整体丢弃**（free_text 分支
@@ -578,12 +586,22 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
     questions = pending.get("questions") or []
     context = pending.get("context") or {}
     free_text = str(body.get("free_text") or "").strip()
-    if free_text:
+    # ★ 2026-10-17（米爸 Q1 DB 层收口）：澄清补充的**追加文本**（进原 user 消息）。
+    #   与 resume_text 的分工：resume_text 给 LLM（含"原请求"复述，防模型丢失上下文），
+    #   append_text 进 DB 历史（原消息内容本身就是"原请求"，复述一遍会重复）。
+    append_text = ""
+    if body.get("skip"):
+        # 2026-10-17：「跳过澄清」此前不走本接口 ⇒ pending_clarify 永不清除
+        # （刷新后确认卡复活、下一条消息被当成澄清补充）。统一收口到本接口。
+        resume_text = "【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。"
+        append_text = "\n\n———\n\n【澄清补充】用户选择跳过澄清，按现有信息继续执行"
+    elif free_text:
         resume_text = (
             "【澄清补充】用户在待澄清状态下直接补充了以下信息（请据此继续，无需再确认）：\n"
             + free_text[:4000]
             + f"\n\n原请求：{(context.get('input') or '')[:2000]}"
         )
+        append_text = "\n\n———\n\n【澄清补充】" + free_text[:4000]
     else:
         qmap = {str(q.get("id")): q for q in questions}
         lines = []
@@ -598,20 +616,39 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
         note = str(body.get("note") or "").strip()
         if note:
             lines.append("补充说明：" + note[:2000])
-        if not lines:
+        if not lines and not body.get("skip"):
             return JSONResponse({"error": "请至少回答一个问题或填写补充说明"}, 400)
         resume_text = (
             "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n"
             + "\n".join(lines)
             + f"\n\n原请求：{(context.get('input') or '')[:2000]}"
         )
+        append_text = "\n\n———\n\n【澄清补充】" + "\n".join(lines)
     conn.execute("UPDATE conversations SET pending_clarify='', updated_at=CURRENT_TIMESTAMP WHERE id=?",
                  (conv_id,))
     conn.commit()
+    # ★ 2026-10-17：追认"本轮澄清"的消息对，供 /chat/stream 单轮化追加：
+    #   澄清卡 = 本会话最后一条 msg_type='clarify'（pending 刚非空，即它）；
+    #   触发user消息 = 澄清卡之前最近的一条 user 消息。
+    _resume_of_uid = 0
+    try:
+        _card = conn.execute(
+            "SELECT id FROM messages WHERE conversation_id=? AND msg_type='clarify' "
+            "ORDER BY id DESC LIMIT 1", (conv_id,)).fetchone()
+        if _card:
+            _u = conn.execute(
+                "SELECT id FROM messages WHERE conversation_id=? AND role='user' AND id<? "
+                "ORDER BY id DESC LIMIT 1", (conv_id, _card["id"])).fetchone()
+            if _u:
+                _resume_of_uid = int(_u["id"])
+    except Exception:
+        _resume_of_uid = 0     # 查不到不阻断作答：前端退回"新起一轮"的旧行为
     _n = len((body.get("answers") or []))
-    _tail = '自由文本' if free_text else (f"{_n} 条选项" + (f" + 补充说明" if (body.get("note") or "").strip() else ""))
+    _tail = '跳过' if body.get("skip") else (
+        '自由文本' if free_text else (f"{_n} 条选项" + (f" + 补充说明" if (body.get("note") or "").strip() else "")))
     audit("王工", "clarify_answer", f"会话#{conv_id} 澄清回答（{_tail}）", conn=conn)
-    return {"ok": True, "resume_text": resume_text, "free_text": bool(free_text)}
+    return {"ok": True, "resume_text": resume_text, "append_text": append_text,
+            "resume_of_user_msg_id": _resume_of_uid, "free_text": bool(free_text)}
 
 
 @router.post("/api/conversations/{conv_id}/messages/partial")

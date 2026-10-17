@@ -1688,7 +1688,8 @@ class StreamMixin:
 
     def execute_stream(self, user_input, conversation_id, branch="dev", provider_id=None,
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
-                       team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0):
+                       team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0,
+                       resume_of_user_msg_id: int = 0, resume_append: str = ""):
         """流式执行（V2.3.2 优化：AI 输出流式 + 执行过程可观测）。生成器逐段产出 SSE 事件：
 
         {"type":"stage","name":..., "status":"run|done"}   右侧智能体执行状态
@@ -1715,7 +1716,10 @@ class StreamMixin:
         # ⚠️ resume_run_id 非 0 时**必须跳过**：恢复不是新一轮对话，`user_input` 传的是空串
         # （真实输入存在检查点里，只用于重建 goal）——照插会在会话里留下一条空 user 消息。
         # 这是批次 2 自查时才发现的缺陷：入口落库是无条件的，而恢复路径本不该产生新轮次。
-        if not dry_run and not resume_run_id:
+        # ★ 2026-10-17（米爸 Q1 DB 层收口）：`resume_of_user_msg_id` 非 0 = 澄清续答 ——
+        #   同样不新起 user 轮次，改为把澄清补充**追加到触发本轮澄清的那条 user 消息**上
+        #   （一轮 = 一条 user 消息；AI 的澄清卡与续答输出同属该轮，刷新后与直播一致）。
+        if not dry_run and not resume_run_id and not resume_of_user_msg_id:
             try:
                 with db_conn() as _conn0:
                     _conn0.execute(
@@ -1726,6 +1730,32 @@ class StreamMixin:
                                    (conversation_id,))
             except Exception:
                 pass   # 入口落库失败不阻断流：收尾 done 事件仍会到达，避免整轮白跑
+        elif not dry_run and not resume_run_id and resume_of_user_msg_id and conversation_id:
+            # 追认追加：目标 user 消息必须同会话同角色，防跨会话/错角色写入
+            try:
+                with db_conn() as _connR:
+                    _cur = _connR.execute(
+                        "UPDATE messages SET content = COALESCE(content,'') || ? "
+                        "WHERE id=? AND conversation_id=? AND role='user'",
+                        (resume_append or "", int(resume_of_user_msg_id), int(conversation_id)))
+                    _hit = _cur.rowcount or 0
+                    if _hit:
+                        _connR.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                                       (conversation_id,))
+                if not _hit:
+                    raise RuntimeError(f"追认目标 user 消息不存在（id={resume_of_user_msg_id}）")
+            except Exception as _re:
+                # 兜底：追不上（消息被删/跨会话）就按老行为落一条新 user 消息 ——
+                # 内容不丢，只是轮次退回"新起一条"（可视化为两条 user 气泡）。
+                print(f"[resume-append] 追加失败，回退新 user 消息：{_re!r}")
+                try:
+                    with db_conn() as _conn0:
+                        _conn0.execute(
+                            "INSERT INTO messages (conversation_id, role, content, msg_type, card_data, attachments) VALUES (?,?,?,?,NULL,?)",
+                            (conversation_id, "user", user_input, "text", json.dumps(attachments, ensure_ascii=False))
+                        )
+                except Exception:
+                    pass
         # 记忆作用域上下文（对齐 mem0）：本会话的 conversation_id + 当前用户，供记忆读写取作用域
         self._mem_ctx = {"conversation_id": conversation_id, "user": user}
         # P0-c（2026-10-03 评估）：开启链路上下文 —— 本次请求内所有 LLM 调用自动带上
@@ -1767,6 +1797,12 @@ class StreamMixin:
             team_def = None
             team_decision = None
             team_direct = False
+            # ★ 2026-10-17：澄清探测的 quick_pick 判据取**用户入口原值**（intent_override），
+            #   不是被 team/R1 覆写后的 forced_intent。覆写后的值恒非空 ⇒ `_clarify_skip_reason`
+            #   对每个带 team 的请求都返回 quick_pick ⇒ 内容级澄清（阶段 1.5）在 UI 路径
+            #   **恒被跳过**（2026-10-16 R1 引入的回归：选主 Agent ≠ 用户说明了建模内容）。
+            #   注意与 `_persist_clarify` 的分工：那里存覆写后的值（续答定向用），这里只看入口。
+            _clarify_gate_intent = forced_intent
             if team:
                 team_def = self._team_definition(team)
                 team_intent = self._resolve_team(team)
@@ -2018,7 +2054,7 @@ class StreamMixin:
             try:
                 _clarify_qs = self._clarify_detect(
                     user_input, intent, effective_provider,
-                    forced_intent=forced_intent, skill_name=skill_name)
+                    forced_intent=_clarify_gate_intent, skill_name=skill_name)
             except Exception:
                 _clarify_qs = None
             if _clarify_qs:

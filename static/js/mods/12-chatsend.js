@@ -238,7 +238,13 @@ async function sendChat() {
         try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
         toast('已作为澄清补充提交，正在继续…');
         setPendingClarify(null);
-        sendResume(r.resume_text);
+        // ★ 2026-10-16 Q2：与卡片作答同口径——在**原 AI 输出盒**内续答，不新起气泡；
+        //   ★ 2026-10-17 Q1：带上 resume_of_user_msg_id/append ⇒ DB 层追加进原 user 消息，
+        //   刷新后历史与直播一致（此前此路走 sendResume，新起用户气泡+新 AI 盒）。
+        _continueInSameBox(null, r.resume_text, {
+          user_msg_id: r.resume_of_user_msg_id || 0,
+          append: r.resume_append || '',
+        });
         return;
       }
       // ★ G-1：后端返回"无待澄清"等业务失败 ⇒ **本地挂起态已与后端不同步**，
@@ -347,9 +353,11 @@ async function sendChat() {
 // ── 流式执行核心（sendChat / pickIntent / 澄清续答 共用）──
 //   职责：建 abort → 拉 /chat/stream → 逐帧 handleSSE → 收口（正常 done / 中断固化 / 失败提示）。
 //   入参 aiBox = 流式承载盒（**可复用**：澄清改选 / 澄清续答传"原输出框"，不新建）。
+//   resumeOf = {user_msg_id, append}（澄清续答单轮化，2026-10-17 米爸 Q1）：
+//     后端把 append 追加进触发澄清的那条 user 消息，不新起 user 轮次。
 //   ★ 2026-10-16 Q2：抽出此函数是为让"澄清改选 / 澄清续答"能在同一输出框内重跑，
 //     不再新起用户气泡 + 新 AI 气泡（米爸 Q2：确认后应在原输出流续接后续环节）。
-async function pumpStream(aiBox, msg, atts){
+async function pumpStream(aiBox, msg, atts, resumeOf){
   const myAbort = new AbortController();
   _streamAbort = myAbort;
   _streaming = true; _stoppedManually = false;
@@ -371,6 +379,9 @@ async function pumpStream(aiBox, msg, atts){
         skill_name: _selSkill,
         team: _selTeam,                // 主 Agent：负责意图识别/任务拆分/计划制定/任务分派/内容整合输出
         provider_id: Number(document.getElementById('llm-providers')?.value) || undefined,
+        // ★ 2026-10-17（米爸 Q1 DB 层收口）：澄清续答单轮化转呈字段（普通发送为 0/空）
+        resume_of_user_msg_id: (resumeOf && resumeOf.user_msg_id) || 0,
+        resume_append: (resumeOf && resumeOf.append) || '',
       }),
     });
     window._intentOverride = '';      // 一次性：仅本轮生效，防下一条消息继承改判

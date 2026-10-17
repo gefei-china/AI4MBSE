@@ -1123,7 +1123,9 @@ function _lastAiBox(){
 // 澄清续答统一入口：在**原 AI 输出盒**内续跑，不新建用户气泡、不新建 AI 盒（米爸 Q2）。
 //   card 形参保留以便将来定位，但续接盒统一取"最后一个 AI 消息"（澄清交互卡挂在输入区 dock，
 //   不在 AI 盒内，故不能用 card.closest）。兜底：取不到盒时退回原 sendResume（新气泡）。
-function _continueInSameBox(card, text){
+//   resumeOf = {user_msg_id, append}（2026-10-17 米爸 Q1）：DB 层单轮化追认信息，
+//     由 /clarify-answer 返回、原样转呈给 /chat/stream（追加进原 user 消息，不新起一轮）。
+function _continueInSameBox(card, text, resumeOf){
   if(!requireMainAgent()) return;            // 主 Agent 闸（与发起同口径）；未选不放行、不扰动状态
   let box = _lastAiBox();
   if(!box){ sendResume(text); return; }      // 兜底（理论上不会走到）
@@ -1134,7 +1136,7 @@ function _continueInSameBox(card, text){
   const st = document.getElementById('chat-status');
   if(st) st.textContent = '正在按你的确认继续…';
   resetPipeline();
-  pumpStream(box, text, []);
+  pumpStream(box, text, [], resumeOf || null);
 }
 
 // ── 内容级澄清（clarify_ask）：信息不清晰 → 选择题确认（优先选择题，支持补充输入），回答后续答 ──
@@ -1312,19 +1314,38 @@ async function clarifyAnswerSend(){
     toast('✓ 已提交，正在继续…');
     setPendingClarify(null);   // 2026-09-25：挂起已由后端清空 → 前端同步（撤掉输入框上方确认卡）
     // ★ 2026-10-16 Q2：在原输出盒内续接，不新起一轮（不再走 sendResume 新建气泡）
-    _continueInSameBox(card, r.resume_text || '【已回答澄清】请继续');
+    // ★ 2026-10-17 Q1：resume_of_user_msg_id/append 转呈给 /chat/stream —— DB 层追加进
+    //   触发本轮澄清的 user 消息（一轮 = 一条 user 消息），刷新后历史与直播一致。
+    _continueInSameBox(card, r.resume_text || '【已回答澄清】请继续', {
+      user_msg_id: r.resume_of_user_msg_id || 0,
+      append: r.resume_append || '',
+    });
   }catch(e){ toast('提交失败：' + (e.message||'')); if(btn){ btn.disabled=false; btn.textContent='✉ 发送补充信息'; } }
 }
 // 跳过澄清：按现有信息继续（含澄清标记，agent 侧不再提问，防循环）
-function clarifySkipSend(){
+async function clarifySkipSend(){
   const card = document.getElementById('clarify-ask') || document.querySelector('.clarify-ask-card');
   if(!card) return;
   // 2026-09-29（五轮反馈2）：卡已挂 dock，setPendingClarify(null) 会直接撤卡 → 反馈走 toast
   uxTrack('clarify_skipped');   // §11 埋点：跳过不算命中（区别于 answered）
   toast('已跳过澄清，按现有信息继续…');
   setPendingClarify(null);
+  // ★ 2026-10-17：跳过也收口到 /clarify-answer（{skip:true}）——
+  //   ① **清 pending_clarify**：此前跳过不走该接口 ⇒ 挂起永不清除，刷新后确认卡复活、
+  //      下一条用户消息被当成"澄清补充"答进旧轮次（本地复现过）；
+  //   ② 取 resume_of_user_msg_id/append ⇒ 与作答同口径单轮化（不新起 user 轮次）。
+  let _text = '【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。';
+  let _resumeOf = null;
+  try{
+    const r = await api('/api/conversations/' + currentConvId + '/clarify-answer',
+                        {method:'POST', body:JSON.stringify({skip:true})});
+    if(r && r.resume_text){
+      _text = r.resume_text;
+      _resumeOf = {user_msg_id: r.resume_of_user_msg_id || 0, append: r.resume_append || ''};
+    }
+  }catch(e){ /* 接口异常不阻断续答：用本地兜底文案直接跑（退回旧的"不清挂起"行为） */ }
   // ★ 2026-10-16 Q2：在原输出盒内续接，不新起一轮
-  _continueInSameBox(card, '【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。');
+  _continueInSameBox(card, _text, _resumeOf);
 }
 // 续答流式请求（复用 chat/stream；user 消息显示简短摘要，完整补充见澄清卡）
 async function sendResume(text){
