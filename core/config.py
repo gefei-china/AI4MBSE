@@ -1021,6 +1021,18 @@ DEFAULT_CONFIG = {
         "auto_bump_version": True,   # 调用方未显式给版本号时自动递升（v1→v2 / v1.0→v1.1）
         "max_value_chars": 4000,     # 单字段审计值截断上限（system_prompt/content 可能几十 KB）
     },
+    # ── P0-3（2026-10-18 自进化调研整改）：Bad Case 收集 ──────────────
+    # 背景：LLM 失败/截断、用户负向反馈散落无汇总，自进化选不出「下一轮改什么」。
+    # 本组控制 core/badcase.py 的判据窗口与入库形态；收集默认 dry-run（人工确认后
+    # 才 apply），与 lifecycle「只建议不自动执行」同一纪律。
+    "badcase": {
+        "enabled": True,             # 总开关（False 时收集端点返空而非 500）
+        "window_days": 30,           # 判据窗口：只扫最近 N 天的坏样本（避免全表扫）
+        "include_probes": False,     # conversation_id=0 且 run_id=0 的探测调用是否算坏样本
+        "max_detail_chars": 2000,    # 单条 evidence 截断上限（failure_msg 可能很长）
+        "reopen_on_recur": True,     # 已 triage 的主题复现时重开（否则告警闭环对复发失明）
+        "alert_threshold": 5,        # 默认告警线（open 数 ≥N 触发；也可在 alert_rules 自建规则）
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1496,6 +1508,15 @@ CONFIG_SCHEMA = {
         "enabled":            {"type": "bool",  "desc": "变更审计总开关（False 时正常更新但不写审计行）"},
         "auto_bump_version":  {"type": "bool",  "desc": "调用方未显式给版本号时自动递升版本"},
         "max_value_chars":    {"type": "int",   "desc": "单字段审计值截断上限（字符）"},
+    },
+    # P0-3（2026-10-18）：Bad Case 收集（core/badcase.py 消费；前端契约登记处）
+    "badcase": {
+        "enabled":            {"type": "bool",  "desc": "Bad Case 收集总开关（False 时端点返空结果）"},
+        "window_days":        {"type": "int",   "desc": "判据窗口：只扫最近 N 天的坏样本"},
+        "include_probes":     {"type": "bool",  "desc": "探测调用（无会话且无 run）是否算坏样本"},
+        "max_detail_chars":   {"type": "int",   "desc": "单条 evidence 截断上限（字符）"},
+        "reopen_on_recur":    {"type": "bool",  "desc": "已 triage 的主题复现时重开为 open"},
+        "alert_threshold":    {"type": "int",   "desc": "默认告警线：open 数达到即值得关注"},
     },
 }
 

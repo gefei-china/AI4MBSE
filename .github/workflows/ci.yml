@@ -683,6 +683,15 @@ jobs:
       - name: Guard 资产变更审计（diff 驱动 + 版本跃迁 + 逐字段审计 + 配置变异）
         run: python tools/verify/verify_asset_audit.py
 
+      # ── P0-3（2026-10-18 自进化调研整改）：Bad Case 闭环 ──────────────
+      # 监控（llm_usage_stats/feedback 判据面）→ bad_cases 台账 → badcase_open_count
+      # 告警指标（复用 alert_rules/alert_events，不造第二套）。收集默认 dry-run
+      # （人工确认后 apply）；同 kind 同 subject 去重累加；(seen_at, src_id) 二元组
+      # 水位防同秒 burst 漏计；triage 三态 + 复现重开（开关可关）。真库段只读
+      # dry-run 取证（CI 无库按惯例 SKIP）。
+      - name: Guard Bad Case 闭环（dry-run 人工关口 + 去重累加 + 告警指标/规则/冷却）
+        run: python tools/verify/verify_badcase.py
+
       - name: Guard 向量二进制缓存保真
         run: python tools/verify/verify_vector_binary_cache.py
 

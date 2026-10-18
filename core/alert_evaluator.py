@@ -31,6 +31,7 @@ GLOBAL_METRICS = (
     "auth_failed_1h",          # 近 1h 登录失败次数（P0-a 已有认证审计，这里消费它）
     "audit_blocked_1h",        # 近 1h 被权限门拦下的操作次数
     "audit_chain_ok",          # 审计链完整性：1=完好，0=有损（P0-b 的 verify_chain 结果）
+    "badcase_open_count",      # 未处理 Bad Case 数（P0-3：core/badcase 台账，open 状态计）
 )
 
 _P95_MIN_SAMPLES = 5     # 样本不足不出分位数（避免用 3 个样本算 p95 误导告警）
@@ -101,6 +102,13 @@ def collect_global_metrics(conn) -> dict:
         from core.audit import verify_chain
         v = verify_chain(limit=3000, conn=conn)
         m["audit_chain_ok"] = 0.0 if (v.get("broken_count") or 0) else 1.0
+    except Exception:
+        pass
+
+    # ── Bad Case 台账（P0-3）：未处理坏样本数；缺表（迁移未跑）⇒ 0，不制造假告警 ──
+    try:
+        from core.badcase import open_badcase_count
+        m["badcase_open_count"] = float(open_badcase_count(conn))
     except Exception:
         pass
 

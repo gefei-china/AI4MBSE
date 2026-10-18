@@ -511,6 +511,8 @@ async function loadOps() {
   try{ loadOpsCapability(d); }catch(e){}
   // 资产长尾治理（2026-10-18 P0-1）：agents/skills 四档建议，独立端点独立降级
   try{ loadOpsLifecycle(); }catch(e){}
+  // Bad Case 台账（2026-10-18 P0-3）：LLM 失败/截断 + 负向反馈，独立端点独立降级
+  try{ loadOpsBadCases(); }catch(e){}
   // 系统信息（进程 PID / 运行时长 / DB 大小）挂到趋势面板右上角
   const sys = d.system || {};
   document.getElementById('ops-trend').insertAdjacentHTML('beforeend',
@@ -1052,4 +1054,96 @@ function renderOpsLifecycle(d){
     .map(([k,label,c])=>`<span class="st ${c}" style="margin-right:6px;">${label} ${bv[k]||0}</span>`).join('');
   return `<div style="margin-bottom:6px;font-size:11px;">${chips}<span class="mut">共 ${s.total||0} 项 · 生成于 ${escMd(d.generated_at||'')}</span></div>` +
     `<table class="t"><tr><th>资产</th><th>名称</th><th>档位</th><th>使用/失败</th><th>失败率</th><th>闲置</th><th>判定理由</th></tr>${rows}</table>`;
+}
+
+// ── P0-3 Bad Case 台账（core/badcase.py；收集默认 dry-run，triage 人工关口）──
+function _bcSevSt(s){
+  const m = { high:['r','高'], medium:['w','中'], low:['g','低'] };
+  return `<span class="st ${m[s]?m[s][0]:'g'}">${m[s]?m[s][1]:escMd(s||'?')}</span>`;
+}
+function _bcStatusSt(s){
+  const m = { open:['r','待处理'], resolved:['ok','已解决'], ignored:['g','已忽略'] };
+  return `<span class="st ${m[s]?m[s][0]:'g'}">${m[s]?m[s][1]:escMd(s||'?')}</span>`;
+}
+async function loadOpsBadCases(){
+  const box = document.getElementById('ops-badcases');
+  if(!box) return;
+  try{
+    const p = new URLSearchParams();
+    const k = (document.getElementById('ops-bc-kind')||{}).value || '';
+    const st = (document.getElementById('ops-bc-status')||{}).value || '';
+    if(k) p.set('kind', k);
+    if(st) p.set('status', st);
+    const d = await api('/api/monitor/badcases?'+p.toString());
+    const badge = document.getElementById('ops-bc-open');
+    const nOpen = (d.summary && d.summary.open) || 0;
+    if(badge){ badge.style.display = nOpen>0 ? '' : 'none'; badge.textContent = nOpen+' 待处理'; }
+    if(!d.items || !d.items.length){
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">'+
+        (d.note ? escMd(d.note) : '暂无 Bad Case（可点「试运行收集」扫描判据面）')+'</div>'; return;
+    }
+    box.innerHTML = renderOpsBadCases(d);
+  }catch(e){
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">Bad Case 数据加载失败：'+escMd(String(e).slice(0,80))+'</div>';
+  }
+}
+function renderOpsBadCases(d){
+  const rows = (d.items||[]).map(it=>`
+    <tr>
+      <td style="font-size:11px;white-space:nowrap;">${escMd(it.kind)}<br><span class="mut">${escMd(it.subject||'')}</span></td>
+      <td><b>${escMd(String(it.title||'').slice(0,40))}</b><div class="mut" style="font-size:10.5px;max-width:340px;overflow:hidden;text-overflow:ellipsis;" title="${escMd(it.detail||'')}">${escMd(String(it.detail||'').slice(0,80))}</div></td>
+      <td>${_bcSevSt(it.severity)}</td>
+      <td style="font-size:11px;">×${it.occurrences}</td>
+      <td style="font-size:11px;color:var(--mut);white-space:nowrap;">${escMd((it.first_seen_at||'').slice(0,10))}<br>→ ${escMd((it.last_seen_at||'').slice(0,10))}</td>
+      <td>${_bcStatusSt(it.status)}${it.resolved_by?'<div class="mut" style="font-size:10px;">'+escMd(it.resolved_by)+'</div>':''}</td>
+      <td style="white-space:nowrap;">
+        ${it.status==='open'
+          ? `<button class="btn sm ghost" onclick="triageBadcase(${it.id},'resolved')">解决</button>
+             <button class="btn sm ghost" onclick="triageBadcase(${it.id},'ignored')">忽略</button>`
+          : `<button class="btn sm ghost" onclick="triageBadcase(${it.id},'open')">重开</button>`}
+      </td>
+    </tr>`).join('');
+  const s = d.summary || {};
+  const chips = [['open','待处理','r'],['resolved','已解决','ok'],['ignored','已忽略','g']]
+    .map(([k,label,c])=>`<span class="st ${c}" style="margin-right:6px;">${label} ${s[k]||0}</span>`).join('');
+  return `<div style="margin-bottom:6px;font-size:11px;">${chips}<span class="mut">共 ${s.total||0} 条</span></div>` +
+    `<table class="t"><tr><th>类型/主题</th><th>摘要与证据</th><th>严重度</th><th>复现</th><th>首现→最近</th><th>状态</th><th>处理</th></tr>${rows}</table>`;
+}
+async function runBadcaseCollect(apply){
+  const dry = document.getElementById('ops-bc-dryrun');
+  const applyBtn = document.getElementById('ops-bc-apply-btn');
+  try{
+    const r = await api('/api/monitor/badcases/collect', {method:'POST', body: JSON.stringify({apply: !!apply})});
+    if(r.error){ toast(r.error); return; }
+    if(!apply){
+      const pl = r.plan || {};
+      const nAct = (pl.new||0) + (pl.recur||0) + (pl.reopen||0);
+      if(dry){
+        dry.style.display = '';
+        dry.innerHTML = `<div class="mut" style="font-size:11.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
+          试运行结果（未写库）：窗口 ${escMd(String(r.window_days))} 天 · 命中事件 ${(r.summary&&r.summary.total_events)||0} 起 · 主题 ${(r.candidates||[]).length} 个
+          <span class="st b" style="margin-left:6px;">新建 ${pl.new||0}</span>
+          <span class="st w" style="margin-left:4px;">复现累加 ${pl.recur||0}</span>
+          <span class="st r" style="margin-left:4px;">重开 ${pl.reopen||0}</span>
+          <span class="st g" style="margin-left:4px;">无新事件 ${pl.stale||0}</span>
+          ${nAct>0 ? '<div style="margin-top:4px;">确认无误后点「✅ 确认入库」（同 kind 同 subject 去重累加 occurrences）。</div>' : '<div style="margin-top:4px;">没有需要入库的新事件。</div>'}
+        </div>`;
+      }
+      if(applyBtn) applyBtn.style.display = nAct>0 ? '' : 'none';
+    } else {
+      const ar = r.apply_result || {};
+      toast(ar.skipped ? '试运行未入库' : `已入库：新增 ${ar.inserted||0} · 累加 ${ar.updated||0} · 重开 ${ar.reopened||0}`);
+      if(dry) dry.style.display = 'none';
+      if(applyBtn) applyBtn.style.display = 'none';
+      loadOpsBadCases();
+    }
+  }catch(e){ toast('收集失败：' + (e.message||e)); }
+}
+async function triageBadcase(id, status){
+  try{
+    const r = await api(`/api/monitor/badcases/${id}/triage`, {method:'POST', body: JSON.stringify({status})});
+    if(r.error){ toast(r.error); return; }
+    toast(status==='open' ? '已重开' : (status==='resolved' ? '已标记解决' : '已忽略'));
+    loadOpsBadCases();
+  }catch(e){ toast('处理失败：' + (e.message||e)); }
 }

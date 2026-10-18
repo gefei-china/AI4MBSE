@@ -1477,6 +1477,22 @@
             <div style="max-height:360px;overflow:auto;" id="ops-lifecycle"><div class="mut" style="padding:10px;font-size:12px;">加载中…</div></div>
           </div>
         </div>
+        <!-- Bad Case 台账（2026-10-18 P0-3）：LLM 失败/截断 + 用户负向反馈汇总，
+             收集默认 dry-run（人工确认后入库），triage 人工关口；open 数入告警指标 badcase_open_count。 -->
+        <div class="panel" style="margin-bottom:14px;"><div class="ph">Bad Case 台账 <span class="badge">只建议不自动执行</span><span class="badge r" id="ops-bc-open" style="display:none;">0 待处理</span></div>
+          <div class="pb">
+            <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center;">
+              <select id="ops-bc-kind" style="width:130px;"><option value="">全部类型</option><option value="llm_call_failed">LLM 调用失败</option><option value="user_negative_feedback">用户负向反馈</option><option value="llm_truncated">输出截断</option></select>
+              <select id="ops-bc-status" style="width:110px;"><option value="">全部状态</option><option value="open">待处理</option><option value="resolved">已解决</option><option value="ignored">已忽略</option></select>
+              <button class="btn sm" onclick="loadOpsBadCases()">刷新</button>
+              <button class="btn sm ghost" onclick="runBadcaseCollect(false)" title="扫描判据面（llm_usage_stats / feedback），只预判不写库">🔍 试运行收集</button>
+              <button class="btn sm" id="ops-bc-apply-btn" style="display:none;" onclick="runBadcaseCollect(true)" title="把试运行候选写入 bad_cases（同主题去重累加）">✅ 确认入库</button>
+              <span class="mut" style="font-size:11px;" id="ops-bc-thr"></span>
+            </div>
+            <div id="ops-bc-dryrun" style="display:none;margin-bottom:8px;"></div>
+            <div style="max-height:360px;overflow:auto;" id="ops-badcases"><div class="mut" style="padding:10px;font-size:12px;">加载中…</div></div>
+          </div>
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;" data-page-node-id="1QPPFGR66kxFhP8arcB5ND">
           <div class="panel" data-page-node-id="lcsjbJ8PGHVFfc0V4cQaLR"><div class="ph" data-page-node-id="BGqEAVMJnOAdiVeLREfPFO">近 7 天趋势 <span class="badge" data-page-node-id="DzhIqpy7yTpeKSvVUu0159">运行数/平均耗时</span></div><div class="pb" id="ops-trend" data-page-node-id="n5Ebw6CeqFNv9NlW2ug6ri"><div class="loading" data-page-node-id="f8vsELao76eYA5VmNIpfeo">加载中…</div></div></div>
           <div class="panel" data-page-node-id="AfYGcEKnNkW3hiu0HwCGuj"><div class="ph" data-page-node-id="agtdlaJJ7JXQcilOJVO9q9">⏱ 节点耗时分布 <span class="badge" data-page-node-id="qPPb0g8qpvOzKtCoK7d7oC">按节点类型</span></div><div class="pb" id="ops-node-stats" data-page-node-id="sjMtrC1Gm0ZfAdwGuGDJJx"><div class="loading" data-page-node-id="9eYIYm537dGKwSY2vYHdFx">加载中…</div></div></div>

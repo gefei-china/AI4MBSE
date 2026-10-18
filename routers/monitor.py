@@ -591,4 +591,66 @@ def monitor_lifecycle(kind: str = "all", verdict: str = "", limit: int = 200,
     return res
 
 
+# ── P0-3：Bad Case（监控 → Bad Case → 告警闭环）──────────────────
+@router.get("/api/monitor/badcases")
+def monitor_badcases(kind: str = "", status: str = "", limit: int = 200,
+                     conn=Depends(db_session)):
+    """Bad Case 台账（core/badcase.py，表 bad_cases）。
+
+    老库（迁移未跑）无表 ⇒ 返空列表而非 500。kind/status 可过滤。
+    """
+    from core import badcase
+    if not badcase._table_exists(conn):
+        return {"ok": True, "items": [], "total": 0, "summary": badcase.badcase_summary(conn),
+                "note": "bad_cases 表未建立（迁移未执行）"}
+    conds, args = [], []
+    if kind:
+        conds.append("kind=?")
+        args.append(kind)
+    if status:
+        conds.append("status=?")
+        args.append(status)
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    total = conn.execute(f"SELECT COUNT(*) FROM bad_cases{where}", args).fetchone()[0]
+    rows = [dict(r) for r in conn.execute(
+        f"SELECT * FROM bad_cases{where} ORDER BY "
+        f"CASE status WHEN 'open' THEN 0 ELSE 1 END, occurrences DESC, id DESC LIMIT ?",
+        (*args, int(limit))).fetchall()]
+    return {"ok": True, "items": rows, "total": total,
+            "summary": badcase.badcase_summary(conn)}
+
+
+@router.post("/api/monitor/badcases/collect")
+def monitor_badcase_collect(body: dict = None, apply: bool = False,
+                            conn=Depends(db_session)):
+    """收集 Bad Case。**默认 dry-run**：只返回候选与入库预判，不动库。
+
+    人工关口：body 带 {"apply": true}（或 ?apply=true）才真正写入 bad_cases ——
+    与自进化「只建议不自动执行」同一纪律（lifecycle 亦不提供一键退役）。
+    """
+    from core import badcase
+    do_apply = bool(apply or (body or {}).get("apply"))
+    try:
+        res = badcase.collect_bad_cases(conn, apply=do_apply)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Bad Case 收集失败: {e}"}, 500)
+    if not do_apply:
+        res["apply_result"] = {"skipped": True, "reason": "dry-run（人工确认后带 apply=true 入库）"}
+    return res
+
+
+@router.post("/api/monitor/badcases/{case_id}/triage")
+def monitor_badcase_triage(case_id: int, body: dict, conn=Depends(db_session)):
+    """人工处理 Bad Case：open/resolved/ignored 三态流转（人工关口）。"""
+    from core import badcase
+    status = str((body or {}).get("status") or "")
+    actor = str((body or {}).get("actor") or "") or "admin"
+    note = str((body or {}).get("note") or "")
+    res = badcase.triage_bad_case(conn, case_id, status, actor=actor, note=note)
+    if not res.get("ok"):
+        return JSONResponse(res, 400)
+    res["summary"] = badcase.badcase_summary(conn)
+    return res
+
+
 _PROC_START = time.time()

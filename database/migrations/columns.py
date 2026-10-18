@@ -428,6 +428,36 @@ def _migrate_columns(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS ix_acl_asset ON asset_change_logs(asset_type, asset_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_acl_created ON asset_change_logs(created_at)")
     conn.commit()
+    # ── P0-3（2026-10-18 自进化调研整改）：Bad Case 台账 ──────────────
+    # 背景：LLM 调用失败/回退/截断、用户负向反馈（modify/wrong/corrected）散落在
+    #   llm_usage_stats 与 feedback 两张表里，**没有汇总视图、没有处理状态** ——
+    #   「哪些坏样本已修、哪些还挂着」不可考，自进化选不出「下一轮改什么」。
+    # 形态：一行一个坏样本主题（kind+subject 唯一），occurrences 累加复现；
+    #   status 只有人工 triage 能改（open/resolved/ignored）—— 收集默认 dry-run，
+    #   与自进化「只建议不自动执行」同一纪律。
+    conn.execute("""CREATE TABLE IF NOT EXISTS bad_cases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,                -- 检测器名（llm_call_failed | user_negative_feedback | llm_truncated | ...）
+        subject TEXT NOT NULL,             -- 去重主体（conv:<id> | msg:<id>），同 kind 同 subject 复现只累加
+        title TEXT DEFAULT '',             -- 一句话摘要（人读）
+        detail TEXT DEFAULT '',            -- 证据（失败信息/反馈原文，按 badcase.max_detail_chars 截断）
+        severity TEXT DEFAULT 'medium',    -- high | medium | low（检测器声明，triage 可改）
+        occurrences INTEGER DEFAULT 1,     -- 复现次数（去重累加，非插新行）
+        first_seen_at TEXT DEFAULT '',     -- 首次出现（判据面时间，非收集时间）
+        last_seen_at TEXT DEFAULT '',      -- 最近出现
+        last_src_id INTEGER DEFAULT 0,     -- 最近事件的源行水位（llm_usage_stats.id / feedback.id）：
+                                            -- 同秒复现只靠时间戳分不出新旧，必须带源行 id 二元组
+        status TEXT DEFAULT 'open',        -- open | resolved | ignored（人工关口）
+        resolved_by TEXT DEFAULT '',       -- triage 操作人
+        source TEXT DEFAULT 'collector',   -- 产生方式（collector | manual）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_bc_kind_subject ON bad_cases(kind, subject)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_bc_status ON bad_cases(status)")
+    # 防御性补列：早期版本库已建过 bad_cases（无 last_src_id）时补齐，避免通用层读列炸。
+    _add("bad_cases", "last_src_id", "INTEGER DEFAULT 0")
+    conn.commit()
 
 
 def _migrate_branch_protection(conn):
