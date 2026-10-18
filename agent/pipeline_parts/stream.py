@@ -71,7 +71,7 @@ class StreamMixin:
         # token/reasoning/tool/done），会让用户看到一个从未真正执行过的「知识库检索·未引用」环节。
         # 现不再预发该阶段：检索真实性由各子任务按其 Agent 的 kb_required 决定。
         yield {"type": "stage", "name": "生成与校验", "status": "run"}
-        yield {"type": "reasoning", "kind": "progress",
+        yield {"type": "progress", "kind": "progress",
                "delta": "（自动编排）检测到多 Agent 协作需求，正在规划子任务…"}
         conn = get_db()
         skill_pool_txt = ""
@@ -218,7 +218,7 @@ class StreamMixin:
                 # 下方 step 3 见 _resume_ck 即跳过 create_plan（任务行已在库里）
                 plan = list(_resume_ck.get("plan") or [])
                 yield {"type": "stage", "name": "检查点恢复", "status": "done"}
-                yield {"type": "reasoning", "kind": "progress",
+                yield {"type": "progress", "kind": "progress",
                        "delta": "（断点续跑）已从检查点恢复编排批次 #%s，复用已完成子任务，"
                                 "仅补跑未完成部分…" % resume_run_id}
         if _resume_ck and not plan:
@@ -271,7 +271,8 @@ class StreamMixin:
                     if _et == "token":
                         _sub_content += ev.get("delta") or ""
                         yield ev
-                    elif _et == "reasoning":
+                    elif _et in ("reasoning", "progress"):
+                        # #10 拆型：系统进度提示独立为 progress 事件，透传规则与原 reasoning 相同
                         yield ev
                     elif _et == "tool":
                         ev = dict(ev); ev["name"] = f"t1:{ev.get('name','')}"
@@ -554,7 +555,9 @@ class StreamMixin:
                                 sub_res += ev.get("delta") or ""
                                 evs.append(ev)
                                 _evq.put(ev)          # 实时转发（就地输出）
-                            elif _et == "reasoning":
+                            elif _et in ("reasoning", "progress"):
+                                # #10 拆型：progress（系统提示）与 reasoning 同路透传；
+                                # key 标记对 notice 无害（procAddSystemNotice 以文案为键）
                                 ev = dict(ev); ev["key"] = tkey   # V2.6：子任务思考归属标记（前端归组展示）
                                 evs.append(ev)
                                 _evq.put(ev)
@@ -839,7 +842,7 @@ class StreamMixin:
                                 TaskQueue.block(conn, _tk["id"], "预算超限")
                     except Exception:
                         pass
-                    yield {"type": "reasoning", "kind": "progress",
+                    yield {"type": "progress", "kind": "progress",
                            "delta": "（自动编排）达到运行预算限制（任务数或 token），未派发子任务已标记，提前进入汇总…"}
                     break
                 ready = TaskQueue.ready_tasks(conn, run_id)
@@ -1088,7 +1091,7 @@ class StreamMixin:
             except Exception:
                 _queued_write = 0
             if _queued_write:
-                yield {"type": "reasoning", "kind": "progress",
+                yield {"type": "progress", "kind": "progress",
                        "delta": f"（自动编排）{_queued_write} 个写操作进入人工确认队列，确认后统一生效"}
             # Task 10：汇总消费结构化摘要——agg_status 三态聚合（全 full → full；有 partial/failed → partial）
             # + 构造汇总输入：优先用协议 summary（summary 文本 + artifacts 标题 + evidence）组织每节；
@@ -1286,13 +1289,13 @@ class StreamMixin:
             if _agg_status != "full" and done_items:
                 _gap_txt = f"，缺口：{','.join(_missing_keys)}" if _missing_keys else ""
                 orch_content = f"（编排部分完成：{len(_missing_keys)} 个交付物缺失/失败{_gap_txt}）\n\n" + orch_content
-                yield {"type": "reasoning", "kind": "progress",
+                yield {"type": "progress", "kind": "progress",
                        "delta": f"（自动编排）编排部分完成（{_agg_status}）：{len(_missing_keys)} 个交付物缺失/失败"
                                 + _gap_txt}
             # P0-1（T3）：反思闭环——汇总后质量评审 → 未达标修订（复用画布 reflection 公共评审）
             reflection_meta = None
             if done_items:
-                yield {"type": "reasoning", "kind": "progress",
+                yield {"type": "progress", "kind": "progress",
                        "delta": "（自动编排）对汇总结果进行质量评审…"}
                 from workflows.refine import RefineGate
                 # Task 10：agg_status 传入 RefineGate——partial 时不自动重派（避免循环），仅评审 + 追加人工复核建议
@@ -1312,7 +1315,7 @@ class StreamMixin:
                     "conflicts": _ref.get("conflicts") or {"count": 0, "items": []},
                 }
                 if reflection_meta.get("score") is not None:
-                    yield {"type": "reasoning", "kind": "progress", "delta": (
+                    yield {"type": "progress", "kind": "progress", "delta": (
                         f"（自动编排）质量评审：{reflection_meta['score']}/100 · "
                         f"{'通过' if reflection_meta['passed'] else '未通过，已自动修订 ' + str(reflection_meta['rounds']) + ' 轮'}")}
                 # ★ 冲突：**先于**评分事件告知用户（这是需要人来裁决的事，
@@ -1333,7 +1336,7 @@ class StreamMixin:
                 except Exception:
                     _cftxt = ""
                 if _cftxt:
-                    yield {"type": "reasoning", "kind": "progress",
+                    yield {"type": "progress", "kind": "progress",
                            "delta": "（自动编排）" + _cftxt}
                 orch_content = _ref.get("content") or orch_content
             # P0-3（2026-09-19）：质量门禁回接状态聚合——reflection 未通过必须**降级可见**。
@@ -1351,7 +1354,7 @@ class StreamMixin:
                 if _gate_gaps:
                     _missing_keys = list(_missing_keys) + _gate_gaps
                     orch_content = "（编排质量门禁：" + "；".join(_gate_gaps) + "）\n\n" + orch_content
-                    yield {"type": "reasoning", "kind": "progress",
+                    yield {"type": "progress", "kind": "progress",
                            "delta": "（自动编排）编排质量门禁：" + "；".join(_gate_gaps)}
             # P0-1：编排成功后沉淀为可复用工作流（draft，前端可另存/画布编辑/发布）
             saved_flow_id = None
@@ -1366,7 +1369,7 @@ class StreamMixin:
         _n_bad = sum(1 for _ot in orch_tasks if str(_ot.get("status") or "done") != "done")
         _done_wording = f"{len(orch_tasks)} 个子任务执行完成" + (
             f"（其中 {_n_bad} 个未成功）" if _n_bad else "")
-        yield {"type": "reasoning", "kind": "progress",
+        yield {"type": "progress", "kind": "progress",
                "delta": f"（自动编排）{_done_wording if not degraded else '单 Agent 直行完成'}，汇总最终结论…"}
         for _chunk in iter_stream_chunks(orch_content):
             yield {"type": "token", "delta": _chunk}
@@ -1556,7 +1559,7 @@ class StreamMixin:
         _n_bad = sum(1 for _ot in orch_tasks if str(_ot.get("status") or "done") != "done")
         _d = ("（自动编排）复杂任务已分解为 %d 个子任务执行完成%s，汇总最终结论…"
               % (len(orch_tasks), ("（其中 %d 个未成功）" % _n_bad) if _n_bad else ""))
-        yield {"type": "reasoning", "kind": "progress", "delta": _d}
+        yield {"type": "progress", "kind": "progress", "delta": _d}
         # P0-3（2026-09-17）：无节流切片 → 类人节奏产出（本路径不做事后补块，保持原行为）
         for _chunk in iter_stream_chunks(orch_content):
             yield {"type": "token", "delta": _chunk}
@@ -1695,6 +1698,7 @@ class StreamMixin:
         {"type":"stage","name":..., "status":"run|done"}   右侧智能体执行状态
         {"type":"agent","status":"run|done",...}           子智能体执行（路由到的 Agent）
         {"type":"reasoning","delta":...}                    思考过程（LLM reasoning 增量）
+        {"type":"progress","delta":...}                     系统进度提示（#10 拆型：原混在 reasoning 里仅靠 kind 区分）
         {"type":"tool","status":"run|done",...}             工具调用结果
         {"type":"token","delta":...}                        LLM 增量文本
         {"type":"done","data":{...}}                        最终结果（与 execute 返回结构一致）
@@ -2124,7 +2128,7 @@ class StreamMixin:
                 reused = self._try_reuse_planner_flow(user_input, intent)
                 if reused and not dry_run:
                     self._save_conversation_dst(conversation_id, intent, slots)
-                    yield {"type": "reasoning", "kind": "progress",
+                    yield {"type": "progress", "kind": "progress",
                            "delta": f"（自动编排）命中已发布沉淀流程「{reused.get('flow_name') or ''}」，按流程模板执行子任务…"}
                     reused["data"] = {"tasks": reused.get("plan") or []}
                     # ⚠️ **不传 run_id**：复用流程走的是「已发布流程模板」，
@@ -2160,7 +2164,7 @@ class StreamMixin:
                               f"{type(_orch_exc).__name__}: {_orch_exc}\n{_tb.format_exc()}", flush=True)
                     except Exception:
                         pass
-                    yield {"type": "reasoning", "kind": "progress", "delta": (
+                    yield {"type": "progress", "kind": "progress", "delta": (
                         "（自动编排）编排执行中断（" + type(_orch_exc).__name__ +
                         "），已回落为单 Agent 直行重新作答；上方子任务轨迹仅供排查，最终结论以本次答复为准")}
                     _orch = None
@@ -2252,7 +2256,7 @@ class StreamMixin:
             # 却检索恒为空」，调用方无法区分「库里没有」与「白名单写错了」（实测 4887 块规范恒不可见）。
             _kbw = retrieval.get("kb_scope_warn")
             if _kbw:
-                yield {"type": "reasoning", "kind": "progress", "delta": (
+                yield {"type": "progress", "kind": "progress", "delta": (
                     "（知识库范围）Agent 配置的文档白名单有 "
                     f"{len(_kbw.get('missing') or [])} 篇不存在，已自动剔除"
                     + ("；因全部失效，本次已暂放宽为不限文档" if _kbw.get("unfiltered") else "")
@@ -3018,9 +3022,11 @@ class StreamMixin:
                                              user_input, _verdict, _auto_continues)})
                         _ac_delta = f"（harness 持续工作）{_why}"
                         exec_reasoning.append(_ac_delta)
-                        # ★ kind=progress（B2-10 约定）：这是**系统进度提示**不是模型 CoT，
-                        #   必须走 procAddSystemNotice 通道，不能混进"AI 思考"框。
-                        yield {"type": "reasoning", "delta": _ac_delta, "kind": "progress",
+                        # ★ type=progress（#10 拆型：系统提示独立事件类型，不再混入 reasoning）
+                        #   + kind=progress（B2-10 兼容层：老消费方按 kind 分流仍生效）。
+                        #   这是**系统进度提示**不是模型 CoT，必须走 procAddSystemNotice
+                        #   通道，不能混进"AI 思考"框。
+                        yield {"type": "progress", "delta": _ac_delta, "kind": "progress",
                                "round": _auto_continues, "phase": "autopilot"}
                         try:
                             yield {"type": "stage", "name": _ac.AUTO_CONTINUE_STAGE,

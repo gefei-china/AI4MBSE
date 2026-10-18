@@ -11,10 +11,13 @@
 都按 `type` 分派（`evType === 'reasoning'`），改 `type` 会打断既有渲染与兼容。
 加 `kind` 是**纯增量**：老消费方忽略它即行为不变。
 
-**本门禁守三件事**：
-1. 系统提示那 8 处**真的带了** `kind: "progress"`（不是"应该加"而是"已加"）；
-2. 真实 CoT 那 18 处**没有**被误标（误标会把模型思考从思考框里赶出去）；
-3. 前端**真的分流**了（`kind==='progress'` 走独立行）——
+**2026-10-18 #10 拆型后的角色收敛**：系统提示已升级为独立 SSE 事件类型
+`type: "progress"`（终局门禁见 `verify_event_type_split.py`）。本门禁收敛为守护
+**CoT 纯净性与兼容层**：
+1. reasoning 站点**零** kind=progress 残留（残留 = 拆型不彻底，又混流）；
+2. reasoning 站点**零**系统提示文案（双保险：漏拆的即使没带 kind，文案指纹也藏不住，
+   含 delta 为变量时回溯赋值行的解析）；
+3. 前端**仍保留** kind 兼容分支（老服务端灰度期发 reasoning+kind，行为不能变）——
    ⚠️ 这一条最关键：**只改后端不改编前端 = 改动完全无效**，而从返回值上看不出来。
 """
 import io
@@ -110,8 +113,12 @@ def main():
             kind_val = kv["kind"].value
         sites.append((node.lineno, has_kind, kind_val, ""))
 
+    # ★ 2026-10-18 #10 拆型：15 处系统提示已迁往 type=progress（终局门禁
+    #   verify_event_type_split.py），reasoning 站点从 33 降为 18（纯 CoT）。
+    #   下限从 20 调为 10：仍远高于"扫到 0 个"的失效形态，又给后续增删留余量
+    #   （不复用硬编码等值判据——`62c168e` 的教训：条数不是不变式）。
     check("A0 ★ 确实扫到了 reasoning 站点（防\"扫到 0 个 ⇒ 全部合规\"的假绿）",
-          len(sites) >= 20, "只扫到 %d 个 —— 判据可能失效" % len(sites))
+          len(sites) >= 10, "只扫到 %d 个 —— 判据可能失效" % len(sites))
     print("  共 %d 处 reasoning 站点" % len(sites))
 
     # ⚠️ 取 delta 文案有两次踩坑，都记在这里防第三次：
@@ -141,43 +148,24 @@ def main():
             _by_line[node.lineno] = _lits(kv2.get("delta")) if "delta" in kv2 else ""
     sites = [(ln, has, kv, _by_line.get(ln, "")) for (ln, has, kv, _) in sites]
 
-    # ══════════════ B. 系统提示那几处必须带 kind=progress ══════════════
-    print("\n=== B. 系统进度提示带 kind=progress ===")
-    # ⚠️ sites 的元组是 (lineno, has_kind, kind_val, txt) —— 第 2 位是**布尔 has_kind**，
-    #   第 3 位才是 kind_val。本门禁第一版解包成 `for ln, k, kv, t`（k 拿到的是 bool）
-    #   ⇒ `k != "progress"` 恒真 ⇒ 把**已标的 12 处全列成漏标**。
-    #   ⇒ **解包元组时别给位置起错名字**：布尔与字符串混用时 `!=` 不会报错，只会恒真。
+    # ══════════════ B. 拆型后 reasoning 不得残留系统提示（#10 演进）══════════════
+    print("\n=== B. reasoning 站点无 kind=progress 残留（拆型彻底性）===")
+    # #10 拆型后：系统提示迁往 type=progress，reasoning 站点应**全部**无 kind。
+    # B1 因此反转为"零残留"判据 —— 残留一处 = 那条提示又与 CoT 同框。
     tagged = [(ln, t) for ln, has, kv, t in sites if kv == "progress"]
-    untagged_sys = [(ln, t) for ln, has, kv, t in sites
-                    if kv != "progress" and any(p in t[:120] for p in SYS_PREFIXES)]
-
-    print("  带 kind=progress 的站点：%s" % [ln for ln, _ in tagged])
-    # ★ 2026-10-14：**删掉硬编码的 `== 13`**，改为**派生判据**。
-    #   根因（实测）：本批次 #15 又新增了 1 处系统提示（冲突播报），
-    #   带 progress 的站点变成 14 ⇒ `len(tagged) == 13` 判红。
-    #   ⇒ 这是 `62c168e`「硬编码快照必然失效」的**又一次**复现，且这次它红得毫无价值
-    #     （新增系统提示是**预期行为**，不是缺陷）。
-    #   改法：**条数不是不变式，"划分正确"才是**。
-    #     · B1 只断言「每个带 progress 的站点其文案确属系统提示」（见 B3）；
-    #     · 「没有系统提示漏标」由 B2 保证；
-    #     · 「CoT 集合 = 全部站点减去 progress 集合」是**定义**，不需要写死 13。
-    #   ⇒ 保留一条"非空"判据防空集合恒真（0 处 progress 也会全绿）。
-    check("B1 系统提示站点非空（防空集合恒真）", len(tagged) >= 1,
-          "实测 %d 处 —— 0 处意味着全仓没有任何 reasoning 带 kind，"
-          "前端分流形同虚设" % len(tagged))
-    # B1b 派生判据：**progress 集合 + 未标注集合 == 全部站点**（划分完备且互斥）
+    print("  仍带 kind=progress 的 reasoning 站点（应为空）：%s" % [ln for ln, _ in tagged])
+    check("B1 ★ reasoning 站点无 kind=progress 残留（拆型彻底）",
+          not tagged, "残留行号：%s —— 该处应迁往 type=progress" % [ln for ln, _ in tagged])
+    # B1b 派生判据：**带 kind + 不带 kind == 全部站点**（划分完备且互斥）
     _untagged_all = [(ln, t) for ln, has, kv, t in sites if kv != "progress"]
-    check("B1b 划分完备（progress + 未标注 == 全部站点，无重叠无遗漏）",
+    check("B1b 划分完备（带 kind + 不带 kind == 全部站点，无重叠无遗漏）",
           len(tagged) + len(_untagged_all) == len(sites),
           "tagged=%d untagged=%d total=%d"
           % (len(tagged), len(_untagged_all), len(sites)))
-    check("B2 ★ 没有系统提示漏标（漏标 ⇒ 仍与 CoT 混在同一框）",
-          not untagged_sys,
-          "漏标行号：%s" % [(ln, t[:30]) for ln, t in untagged_sys])
-    # ⚠️ delta 可能是**变量**（如 `_d`），此时 delta 子树里一个字面量都没有
-    #   （2026-10-13 真实建模验证补的那处就是：`_stream_orchestrated` 的汇总提示）
-    #   ⇒ 不能只看 delta 节点，要**回溯该变量在同函数内的赋值语句**。
-    #   这是"数不到"的第三类：① 多行拼接 ② 相邻站点串味 ③ delta 是变量。
+    # B2 ★ 双保险：即使漏拆的站点**没带** kind，系统提示的文案指纹也藏不住。
+    #   ⚠️ delta 可能是**变量**（如 `_d`/`_ac_delta`），字面量抽取拿到空串 ⇒
+    #      必须回溯该变量在同函数内的赋值行（2026-10-13/14 两次踩坑的沉淀，
+    #      解析能力与逐站点正向判定现由 verify_event_type_split.py 的 S3 承担）。
     _lines_all = s_src.split("\n")
     _sys_re = re.compile("|".join(re.escape(p) for p in SYS_PREFIXES))
 
@@ -201,12 +189,13 @@ def main():
                 return _lines_all[k], "via:" + var
         return txt, "no-assign-with-prefix:" + var
 
-    for ln, t in tagged:
+    sys_in_cot = []
+    for ln, has, kv, t in sites:
         _txt, _how = _resolve_text(ln, t)
-        check("B3 L%d 的文案确属系统提示（%s）" % (ln, _how),
-              bool(_sys_re.search(_txt[:200])),
-              "文案=%r 看着不像系统提示，分类可能错了"
-              % _txt[:80].replace("\n", " "))
+        if _sys_re.search(_txt[:200]):
+            sys_in_cot.append((ln, _how))
+    check("B2 ★ reasoning 站点无系统提示文案（漏拆 ⇒ 仍与 CoT 混在同一框）",
+          not sys_in_cot, "漏拆行号（含变量回溯）：%s" % sys_in_cot)
 
     # ══════════════ C. 真实 CoT 不能被误标 ══════════════
     print("\n=== C. 真实 CoT 不被误标（误标会把模型思考赶出思考框）===")
@@ -321,19 +310,27 @@ console.log(JSON.stringify(out));
 
     # ══════════════ F. 变异自证 ══════════════
     print("\n=== F. 变异自证===")
-    # F1：把 8 处 kind 去掉 ⇒ B1 必须 FAIL
-    _mut = s_src.replace('"kind": "progress",\n               "delta"', '"delta"')
-    _mut = _mut.replace('"kind": "progress",\n                           "delta"', '"delta"')
-    _mut = _mut.replace('"kind": "progress",\n                       "delta"', '"delta"')
-    _mut = _mut.replace('"type": "reasoning", "kind": "progress", "delta"',
-                        '"type": "reasoning", "delta"')
-    _mut = _mut.replace('"type": "reasoning",\n                       "delta"', '"type": "reasoning", "delta"')
-    _mut = _mut.replace('"type": "reasoning",\n                           "delta"', '"type": "reasoning", "delta"')
-    _n_tag = _mut.count('"kind": "progress"')
-    check("F1 变异体（去掉 kind 标注）后 B1 必须 FAIL",
-          _n_tag == 0, "变异体里还有 %d 处 kind ⇒ 变异没生效" % _n_tag)
-    print("  [SELF-PROOF] M1 系统提示不带 kind —— 重新与 CoT 混流，"
-          "用户看到的\"AI 思考\"里又混进系统自述")
+    # F1：把 progress 改回 reasoning（模拟 #10 漏拆一半）⇒ B1 必须 FAIL
+    _mut = s_src.replace('"type": "progress"', '"type": "reasoning"')
+    _n_prog = _mut.count('"type": "progress"')
+    check("F1a 变异体已无 progress 事件（变异生效）", _n_prog == 0,
+          "变异体里还有 %d 处 progress ⇒ 变异没生效" % _n_prog)
+    # 用 B1 的真实逻辑跑变异体：必须抓到 kind=progress 残留（不只是字符串没了）
+    import ast as _ast
+    _mt = _ast.parse(_mut)
+    _resid = 0
+    for _nd in _ast.walk(_mt):
+        if isinstance(_nd, _ast.Yield) and isinstance(_nd.value, _ast.Dict):
+            _kv = {k.value: v for k, v in zip(_nd.value.keys, _nd.value.values)
+                   if isinstance(k, _ast.Constant)}
+            _tv, _kk = _kv.get("type"), _kv.get("kind")
+            if isinstance(_tv, _ast.Constant) and _tv.value == "reasoning" \
+                    and isinstance(_kk, _ast.Constant) and _kk.value == "progress":
+                _resid += 1
+    check("F1b ★ 变异体（漏拆）上 B1 必须 FAIL（AST 实跑抓到 %d 处残留）" % _resid,
+          _resid > 0, "变异体上 B1 竟没抓到残留 ⇒ B1 判据失效")
+    print("  [SELF-PROOF] M1 系统提示改回 reasoning 事件 —— 与 CoT 同框混流，"
+          "B1 在变异体上抓到 %d 处" % _resid)
 
     # F2：前端不分流（直接走 procAddThinking）⇒ D1/D2 必须 FAIL
     _jmut = j_src.replace("if(ev.kind === 'progress'){", "if(false){")

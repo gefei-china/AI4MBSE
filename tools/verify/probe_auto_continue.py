@@ -186,7 +186,7 @@ chk("C1 stream：外层 while + 评估门 + continue/break + 全量并回 + done
         "if _full_content:\n                llm_content = _full_content")),
     )
 
-chk("C2 stream：autopilot reasoning 走 progress 通道（B2-10 约定）",
+chk("C2 stream：autopilot 系统提示走 progress 事件 + kind 兼容层（#10 拆型 / B2-10 约定）",
     '"kind": "progress"' in _s and '"phase": "autopilot"' in _s)
 
 chk("C3 execute：外层 while + 评估门（工具计数/clarify 优先）+ clarify 跳过收尾 + 返回计数",

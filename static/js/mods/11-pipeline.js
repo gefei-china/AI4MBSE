@@ -993,6 +993,13 @@ function handleSSE(raw) {
     onStageEvent(ev);
   } else if(evType === 'agent') {
     procAddAgent(ev);      // V2.4 会话内执行过程：子智能体（内联会话流）
+  } else if(evType === 'progress') {
+    // ★ #10（2026-10-18）：系统进度提示拆为**独立 SSE 事件类型**。
+    //   原与模型 CoT 同走 reasoning 事件、仅靠 kind 字段区分（B2-10）——前端分派、
+    //   事件录制（orch_stream_events）、监控检索全都按 type 走，"事件名即语义"
+    //   才能让思考时间线降噪（系统提示不再占用"AI 思考"框）。
+    //   老服务端（仍发 reasoning+kind=progress）走下方兼容分支，行为不变。
+    procAddSystemNotice(ev.delta || '');
   } else if(evType === 'reasoning') {
     // ★ B2-10（2026-10-13）：`kind` 区分「模型 CoT」与「系统进度提示」。
     //   此前 26 处 reasoning 里，8 处是系统提示（"（自动编排）检测到多 Agent 协作需求"
