@@ -1,3 +1,4 @@
+# CI-OPTIONAL: A 需运行中的 Fuseki SPARQL 服务（2026-10-18 干净库实测 C1 ping 即 HTTPError——服务不在）；CI 无此外部依赖
 """门禁：Fuseki 图库「可写 + 持久化」必须同时成立。
 
 ## 为什么要有这个门禁

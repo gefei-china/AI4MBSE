@@ -1,3 +1,4 @@
+# CI-OPTIONAL: A 需真实 LLM rerank provider（2026-10-18 干净库实测 LLMUnavailableError「未配置 API Key」⇒ 0/3 条被打分）；CI 无 secret
 """门禁：检索重排（rerank）必须"真生效"，而不只是"开关是开的"。
 
 ══════════════════════════════════════════════════════════════════════

@@ -775,6 +775,8 @@ __all__ = [
     #   运行时 NameError: CHAT_TASK_PROBE is not defined ⇒ **全部对话一轮即挂**
     #   （实测 2026-10-10 22:53 起所有会话失败，见会话 9336 msg 3895/3896）。
     #   教训：新增 common.py 顶层名字必须同步 __all__；常驻守卫 tools/verify/verify_common_exports.py
-    'CHAT_TASK_PROBE', 'CHAT_TASK_REPAIR', 'CHAT_TASK_ANSWER',
+    # 2026-10-18 续修：CHAT_TASK_EVAL 又漏了一次（autopilot.py 显式 import 兜着没炸，
+    #   但守卫 [1] import * 语义判红）—— 同族漏网第二次，正说明守卫不能只靠"记得"。
+    'CHAT_TASK_PROBE', 'CHAT_TASK_REPAIR', 'CHAT_TASK_ANSWER', 'CHAT_TASK_EVAL',
     '_lg_failed_rounds', '_lg_limit_of', '_lg_stop_reason',
 ]

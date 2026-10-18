@@ -1,3 +1,4 @@
+# CI-OPTIONAL: B 结构上入不了 CI——本脚本 DB 路径硬编码仓库根 mbse.db（判据② 真触发一次 LLM 失败并写真库），且依赖真实 provider id=72（余额不足稳定复现）；2026-10-18 干净库实测 before==after（行数读的是写死的生产库）
 """verify_p0_failure_kind — P0-3 判据：`used_mock` 拆分 + `failure_kind` 分类。
 
 ## 缺陷

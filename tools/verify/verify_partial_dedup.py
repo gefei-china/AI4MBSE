@@ -87,8 +87,12 @@ def case(tag, seeded, incoming):
         conn.execute("INSERT INTO messages (conversation_id,role,content,msg_type,card_data)"
                      " VALUES (?,?,?,'card_candidates','{}')", (cid, "assistant", seeded))
     conn.commit()
+    # ★ 2026-10-18：user 必须带 id —— B1-9 归属校验（2026-10-13）按
+    #   `row.user_id == user.id` 判可见性；此前只传 {"name": "verify"}（无 id）
+    #   ⇒ 1 == 0 不可见 ⇒ _own_conv 404「会话不存在」⇒ 整门禁 Traceback。
+    #   产品行为是对的（归属不一致就该 404），是门禁载荷该对齐契约。
     r = RC.commit_partial_message(cid, {"content": incoming, "stopped": True},
-                                 conn=conn, user={"name": "verify"})
+                                 conn=conn, user={"id": 1, "name": "verify"})
     conn.commit()
     rows = conn.execute("SELECT id, content FROM messages"
                         " WHERE conversation_id=? AND role='assistant' ORDER BY id",

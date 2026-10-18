@@ -87,9 +87,14 @@ def structure_checks() -> list[tuple[str, bool]]:
     out.append(("修复轮也走 `charge_failed_round`（失败轮才扣预算）",
                 "charge_failed_round" in seg))
     # ⑤ ★防回退：**流式**收尾仍不许传 tools
-    stream_call = "chat(_fin_msgs, provider_id=effective_provider, stream=True)"
+    #    2026-10-18 锚点演进（#10 拆型批次漂移）：收尾调用形态已变为
+    #    `chat(_fin_msgs, ..., stream=True,\n  _intent=CHAT_TASK_ANSWER, _model_params=...)`
+    #    —— 原锚串结尾的右括号 `)` 永远匹配不上（假红：seg2 取空）。
+    #    改为不带右括号的锚；窗口放到 200 字符覆盖整个调用语句
+    #    （tools= 若被加回来，只会落在这个窗口内）。
+    stream_call = "chat(_fin_msgs, provider_id=effective_provider, stream=True"
     i2 = seg.find(stream_call)
-    seg2 = seg[i2:i2 + 160] if i2 >= 0 else ""
+    seg2 = seg[i2:i2 + 200] if i2 >= 0 else ""
     out.append((f"★ 流式收尾**不传 tools**（实测：...{seg2[:66]}…）",
                 i2 >= 0 and "tools=" not in seg2))
     return out

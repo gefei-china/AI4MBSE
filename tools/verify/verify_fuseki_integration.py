@@ -1,3 +1,4 @@
+# CI-OPTIONAL: A 需运行中的 Fuseki SPARQL 服务（HTTP 查询/更新接口，2026-10-18 干净库实测查询返 JSONDecodeError——服务不在）；CI 无此外部依赖
 """Fuseki 对接验证（2026-10-10）—— ★ 走**生产代码链路**，不手工拼 N-Quads。
 
 ## 为什么必须用 Python 而不是 curl

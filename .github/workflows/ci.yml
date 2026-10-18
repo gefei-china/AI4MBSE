@@ -522,6 +522,153 @@ jobs:
       - name: Guard UX 指标口径
         run: python tools/verify/verify_ux_metrics.py
 
+      # ── 存量门禁接线清零（2026-10-18）───────────────────────────────────────────
+      # 起因：`verify_gate_wiring` 判红（门禁 189 / 未接线 48 / W1a FAIL）。
+      # 逐个按**干净库口径**实测（MBSE_DB_PATH 指向空库 + init_db，与 CI 等价）：
+      #   ① 29 个直接 rc=0 ⇒ 接线；
+      #   ② 4 个先修后绿（common_exports 补 __all__ / stream_repair_loop 锚点演化 /
+      #      partial_dedup 对齐 B1-9 载荷 / budget_headroom I5 结构化）⇒ 接线；
+      #   ③ 其余 15 个按实测原因在脚本内写 `# CI-OPTIONAL: <理由>` 显式豁免
+      #      （需 Fuseki/MCP/真 LLM/真库金标/运行中服务/checker.jar/超时），不默默不接。
+      # ⚠️ 纪律同 2026-10-05：「本地全绿」≠「CI 会过」——本批全部以**干净库实测**为准。
+
+      # ── 思考链（thinking）一族：预算/策略/形态/调优/超时 ──
+      # 五道共锁「思考 token 花得起、花在刀刃上、不无限膨胀」：
+      #   budget=单轮上限 / policy=何时思考 / shape=输出形态 / autotune=自调参 /
+      #   total_timeout=端到端总闸。任一失守都会要么烧钱要么把用户挂死。
+      - name: Guard 思考预算（34 项）
+        run: python tools/verify/verify_thinking_budget.py
+
+      - name: Guard 思考策略（何时思考）
+        run: python tools/verify/verify_thinking_policy.py
+
+      - name: Guard 思考形态（输出形状不变式）
+        run: python tools/verify/verify_thinking_shape.py
+
+      - name: Guard 思考自动调优
+        run: python tools/verify/verify_thinking_autotune.py
+
+      - name: Guard 端到端总超时预算
+        run: python tools/verify/verify_total_timeout_budget.py
+
+      # 2026-10-18 修复后接线：I5 原按生产 128K 窗口标定 48000，干净库种子
+      # 窗口 8192 ⇒ 自适应 6144 被判假红；已演化为结构化判据（显式 0 ≡ 自适应路径）。
+      - name: Guard 总闸上限贴合 provider 窗口（不误伤）
+        run: python tools/verify/verify_budget_headroom.py
+
+      # ── Agent 执行与参数契约 ──
+      - name: Guard Agent 模型参数契约
+        run: python tools/verify/verify_agent_model_params.py
+
+      # ── P0 批次：工具结果变量 / 重复短路 / 失败轮预算 ──
+      - name: Guard 工具结果变量作用域（P0）
+        run: python tools/verify/verify_p0_tool_results_var.py
+
+      # 锁「在途重复提交必须去重」（副作用重复 + 费用翻倍，用户无感——比不重投严重得多）
+      - name: Guard 重复短路运行时（P0）
+        run: python tools/verify/verify_p0_dup_shortcircuit_runtime.py
+
+      # 锁「失败轮不得无限吃预算」：ReAct 两轮失败后必须收敛，不能拿预算换死循环
+      - name: Guard 失败轮预算
+        run: python tools/verify/verify_failed_round_budget.py
+
+      # ── embedding 不可用熔断 ──
+      # 锁的是 P0-2 的教训：embedding 配额耗尽**静默**降级 ⇒ 词面向量污染检索。
+      # 本门禁验「不可用必须显式熔断，不静默给脏结果」。
+      - name: Guard embedding 不可用熔断
+        run: python tools/verify/verify_embed_unavail_breaker.py
+
+      # ── 检索族：BM25 索引与修复 / HyDE 标题 / 引用对齐 ──
+      # bm25 两道锁的是 2026-10 实修的两个真缺陷：bm25_text 漏建（召回率 0%）与
+      # 修复路径不回写。干净库口径 rc=0（无样本处自动 SKIP）。
+      - name: Guard BM25 索引覆盖 bm25_text（10 项）
+        run: python tools/verify/verify_bm25_indexes_bm25_text.py
+
+      - name: Guard BM25 修复路径（6 项）
+        run: python tools/verify/verify_bm25_fix_live.py
+
+      - name: Guard HyDE 标题注入
+        run: python tools/verify/verify_hyde_heading.py
+
+      # ⚠️ verify_checker_three_paths **不在**本文件：实测（2026-10-18）CI 的 ubuntu
+      #    runner 无 checker.jar 三件套（java/jar/library 随包运行时、不入库）时，
+      #    该脚本返回 FAIL（不是 SKIP）⇒ 接进来就是常红。已按仓内惯例在脚本内写
+      #    `# CI-OPTIONAL:` 显式豁免，开发机（三件套齐备）上继续跑。
+      - name: Guard 引用对齐（22 项）
+        run: python tools/verify/verify_citation_alignment.py
+
+      # ── 图谱族：开关 / 熔断 / 镜像契约 / 层级事件 ──
+      # graph_db_enabled 是总闸；breaker 锁「图谱挂了不拖死主链路」；
+      # mirror_contract 锁「镜像与主库字段一致」；hier_events 锁层级事件不丢。
+      - name: Guard 图谱库开关
+        run: python tools/verify/verify_graph_db_enabled.py
+
+      - name: Guard 图谱熔断（挂了不拖死主链路）
+        run: python tools/verify/verify_graph_breaker.py
+
+      - name: Guard 图谱镜像契约
+        run: python tools/verify/verify_graph_mirror_contract.py
+
+      - name: Guard 层级事件不丢
+        run: python tools/verify/verify_hier_events.py
+
+      # ── 编排执行族：去重 / 收尾提示 / 压缩锚点 / 预算余量 ──
+      - name: Guard 子任务去重与收尾提示
+        run: python tools/verify/verify_dedup_and_finalize_hint.py
+
+      - name: Guard 分层压缩锚点
+        run: python tools/verify/verify_compression_anchor.py
+
+      # ── 澄清与意图 ──
+      - name: Guard 泛词劫持澄清（B5-7，无样本自动 SKIP）
+        run: python tools/verify/verify_b5_7_generic_intent_clarify.py
+
+      # ── 观测与评测 ──
+      - name: Guard 评测指纹门禁（13 项）
+        run: python tools/verify/verify_eval_fingerprint_gate.py
+
+      - name: Guard 真实思考 A/B（无样本自动 SKIP）
+        run: python tools/verify/verify_real_thinking_ab.py
+
+      # ── #10 reasoning 事件拆型（2026-10-18，时间线降噪）────────────────────
+      # 系统进度提示独立为 type=progress（kind 兼容层保留），不再混入 reasoning。
+      # 含 S7 真实前端 vm E2E（四类事件保序路由）+ S8 变异自证。
+      - name: Guard reasoning/progress 事件拆型（20 项 + 2 变异）
+        run: python tools/verify/verify_event_type_split.py
+
+      # ── MCP 编辑与恢复门（36 项）────────────────────────────────────────
+      - name: Guard MCP 编辑保存与断点恢复
+        run: python tools/verify/verify_mcp_edit_and_resume_gate.py
+
+      # ── 标准库索引覆盖 ──
+      - name: Guard 标准库索引覆盖
+        run: python tools/verify/verify_stdlib_index_coverage.py
+
+      # ── Agent 收尾链路（2026-10-18 修复后接线）────────────────────────────
+      # common_exports：2026-10-10「CHAT_TASK_PROBE 漏 __all__ ⇒ 全部对话一轮即挂」
+      #   的同族漏网第二次（CHAT_TASK_EVAL，2026-10-18 抓到并修复）⇒ 必须常驻。
+      # stream_repair_loop：锁「报错后必须真修」的收尾修复轮（锚点 2026-10-18 随
+      #   #10 拆型批次演进：流式收尾调用多了 _intent 透传参数）。
+      - name: Guard common.py 导出完整性（import * 语义）
+        run: python tools/verify/verify_common_exports.py
+
+      - name: Guard 流式收尾修复轮（不传 tools + 轮次上限）
+        run: python tools/verify/verify_stream_repair_loop.py
+
+      # ── 平台能力总览 + 会话运行监控 + 向量二进制缓存 ──
+      # 前者是 2026-10-18 运行监控 v2 收口的面板门禁（四层取数真实 + 前端 vm 渲染
+      # 无泄漏 + 降级路径健壮 + 告警跳会话）；中者锁会话级监控四段断言（迁移幂等 +
+      # 写入链路 + 列表加权排序 + 下钻证据链，干净库无样本处按仓内惯例 SKIP）；
+      # 后者锁向量缓存的二进制保真。
+      - name: Guard 平台能力总览面板（40 项，含 Node vm 前端渲染冒烟）
+        run: python tools/verify/verify_capability_overview.py
+
+      - name: Guard 会话运行监控（迁移幂等 + 列表加权 + 下钻证据链）
+        run: python tools/verify/verify_session_monitor.py
+
+      - name: Guard 向量二进制缓存保真
+        run: python tools/verify/verify_vector_binary_cache.py
+
       # ── 元门禁：新写的门禁必须接线，或写明豁免理由 ──────────────────────
       - name: Guard 门禁接线（每个门禁要么在 CI 里，要么带 #CI-OPTIONAL 理由）
         run: python tools/verify/verify_gate_wiring.py
@@ -543,6 +690,11 @@ jobs:
         run: python tools/verify/verify_plan_cycle_guard.py
       - name: Guard 会话归属隔离（对话列表按用户 + 按项目）
         run: python tools/verify/verify_conv_scope_guard.py
+
+      # 2026-10-18 修复后接线：worker 的 user 载荷缺 id ⇒ 与 B1-9 归属契约
+      # （row.user_id == user.id）脱节，404 假红；产品行为正确，门禁已对齐。
+      - name: Guard 中断固化不重复落库（去重语义 + 变异自证）
+        run: python tools/verify/verify_partial_dedup.py
       - name: Guard 失败分类与分类驱动重试
         run: python tools/verify/verify_failure_class.py
       - name: Guard Agent 名孤儿引用（快照留痕）

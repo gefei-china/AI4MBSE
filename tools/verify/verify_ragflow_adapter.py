@@ -1,3 +1,4 @@
+# CI-OPTIONAL: A 需 ragflow-main/sdk/python（RAGFlow SDK 不在本仓库内，2026-10-18 干净库实测「SDK 目录探测命中但 sdk_available=False」——仓里没有该目录）；接进来就是常红
 """门禁：RAGFlow 适配层（L3 路线）必须满足的三条底线。
 
 本脚本守三条，缺一条就不许启用 ragflow_enabled：

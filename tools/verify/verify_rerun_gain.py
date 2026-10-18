@@ -1,3 +1,4 @@
+# CI-OPTIONAL: B 真库金标门禁——重跑会话样本（id > 9288 且 title like 'crypto_chain%'）只存在于生产库；2026-10-18 干净库实测「未找到重跑会话」
 """verify_rerun_gain — 判据：九处修复后的**端到端对照**（基线 vs 重跑）。
 
 ## 为什么要有这个

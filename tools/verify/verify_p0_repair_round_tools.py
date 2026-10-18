@@ -1,3 +1,4 @@
+# CI-OPTIONAL: A 真起子进程跑完整 Agent 链路，2026-10-18 干净库实测 150s 超时（harness 杀）；超出 CI 单步合理时长，开发机手动跑
 """verify_p0_repair_round_tools — 判据：校验报block 后**收尾轮要留修复工具**。
 
 ## 缺陷（2026-10-09 实测八视图）

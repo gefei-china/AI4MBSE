@@ -1,3 +1,4 @@
+# CI-OPTIONAL: A+B 需运行中服务（BASE=http://127.0.0.1:8000 真实 SSE 全链路）+ 真库主 Agent 金标（智源对接agent 绑定 MCP 工具）+ 2026-10-18 实测单次 122s；CI 无服务无金标且超长
 """R3 verify: Q1 main-agent persistence + Q3 MCP tool not JIT-pruned + /messages returns main_agent.
 Usage: .venv/Scripts/python.exe tools/verify/verify_q1_q2_q3.py
 """

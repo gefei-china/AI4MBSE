@@ -1,3 +1,4 @@
+# CI-OPTIONAL: A 需 checker.jar 三件套（java/jar/library 随包运行时、不入库）——2026-10-18 实测：开发机三件套齐备 rc=0（56s），但 `real_checker_checks()` 在 `C.available()` 为假时返回 FAIL 而非 SKIP ⇒ CI 的 ubuntu runner 上接进来就是常红；开发机手动跑
 """verify_checker_three_paths — 判据：**三路计数（词法/语法/语义）归类正确**。
 
 ## 为什么要有这道门禁（脆弱点实测）
