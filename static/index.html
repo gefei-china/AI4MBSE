@@ -1442,6 +1442,19 @@
         <!-- 平台能力总览（2026-10-18 v2 方案收口）：LLM 健康 / 编排运行 / 会话排查 / 治理就绪 四层一屏总览。
              取数全部复用既有口径（llm_health 为 LLM 层唯一真源），各段独立降级，不新造指标。 -->
         <div class="panel" style="margin-bottom:14px;"><div class="ph">平台能力 <span class="badge">四层健康度</span><span class="badge">口径复用 /api/monitor/*</span></div><div class="pb" id="ops-capability"><div class="loading">加载中…</div></div></div>
+        <!-- 资产长尾治理（2026-10-18 P0-1）：agents/skills 四档建议（keep/watch/review/retire_candidate）。
+             判据走 core.config lifecycle 组；只建议不自动执行，退役动作仍由人确认。 -->
+        <div class="panel" style="margin-bottom:14px;"><div class="ph">资产长尾治理 <span class="badge">只建议不自动执行</span><span class="badge r" id="ops-lifecycle-retire" style="display:none;">0 待评估</span></div>
+          <div class="pb">
+            <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center;">
+              <select id="ops-lifecycle-kind" style="width:110px;"><option value="all">全部资产</option><option value="agent">智能体</option><option value="skill">技能</option></select>
+              <select id="ops-lifecycle-verdict" style="width:130px;"><option value="">全部档位</option><option value="retire_candidate">待评估退役</option><option value="review">需复核</option><option value="watch">观察</option><option value="keep">健康</option></select>
+              <button class="btn sm" onclick="loadOpsLifecycle()">刷新</button>
+              <span class="mut" style="font-size:11px;" id="ops-lifecycle-thr"></span>
+            </div>
+            <div style="max-height:360px;overflow:auto;" id="ops-lifecycle"><div class="mut" style="padding:10px;font-size:12px;">加载中…</div></div>
+          </div>
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;" data-page-node-id="1QPPFGR66kxFhP8arcB5ND">
           <div class="panel" data-page-node-id="lcsjbJ8PGHVFfc0V4cQaLR"><div class="ph" data-page-node-id="BGqEAVMJnOAdiVeLREfPFO">近 7 天趋势 <span class="badge" data-page-node-id="DzhIqpy7yTpeKSvVUu0159">运行数/平均耗时</span></div><div class="pb" id="ops-trend" data-page-node-id="n5Ebw6CeqFNv9NlW2ug6ri"><div class="loading" data-page-node-id="f8vsELao76eYA5VmNIpfeo">加载中…</div></div></div>
           <div class="panel" data-page-node-id="AfYGcEKnNkW3hiu0HwCGuj"><div class="ph" data-page-node-id="agtdlaJJ7JXQcilOJVO9q9">⏱ 节点耗时分布 <span class="badge" data-page-node-id="qPPb0g8qpvOzKtCoK7d7oC">按节点类型</span></div><div class="pb" id="ops-node-stats" data-page-node-id="sjMtrC1Gm0ZfAdwGuGDJJx"><div class="loading" data-page-node-id="9eYIYm537dGKwSY2vYHdFx">加载中…</div></div></div>

@@ -5,6 +5,7 @@
 - logs：运行日志检索（run_id / 节点类型 / 状态 / 关键词，分页）
 - alerts：告警事件列表 + 确认
 - alert-rules：告警规则 CRUD + 启停
+- lifecycle：资产长尾治理建议（P0-1，四档 verdict，只建议不自动执行）
 告警评估在执行器（FlowExecutor._evaluate_alerts）运行结束后触发，本域只读/管理。
 """
 import json
@@ -566,6 +567,28 @@ def monitor_session_detail(conversation_id: int, conn=Depends(db_session)):
                          + profile["llm_fallback"] * 2 + profile["llm_retries"] + profile["hil"])
     out["error_profile"] = profile
     return out
+
+
+@router.get("/api/monitor/lifecycle")
+def monitor_lifecycle(kind: str = "all", verdict: str = "", limit: int = 200,
+                      conn=Depends(db_session)):
+    """资产长尾治理（P0-1）：agents/skills 的 keep/watch/review/retire_candidate 四档建议。
+
+    判据全部走 core.config 的 lifecycle 组（模块不写死阈值），只建议不自动执行。
+    kind=all 或逗号分隔种类（agent,skill）；verdict 非空时按档位过滤。
+    """
+    from core import lifecycle
+    kinds = None if kind in ("", "all") else [k.strip() for k in kind.split(",") if k.strip()]
+    try:
+        res = lifecycle.analyze(conn, kinds=kinds)
+    except Exception as e:                      # 看板不能因巡检失败而整体 500（既有哲学）
+        return JSONResponse({"ok": False, "error": f"长尾分析失败: {e}"}, 500)
+    items = res.get("items") or []
+    if verdict:
+        items = [it for it in items if it.get("verdict") == verdict]
+    res["items"] = items[:limit]
+    res["filter"] = {"kind": kind, "verdict": verdict}
+    return res
 
 
 _PROC_START = time.time()

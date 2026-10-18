@@ -666,6 +666,15 @@ jobs:
       - name: Guard 会话运行监控（迁移幂等 + 列表加权 + 下钻证据链）
         run: python tools/verify/verify_session_monitor.py
 
+      # ── P0-1（2026-10-18 自进化调研整改）：资产长尾治理 ──────────────
+      # 把一次性硬编码退役工具（retire_view_agents）泛化为配置驱动分析器后的守门条：
+      # 纯函数四档矩阵 + 阈值变异自证（判据走 core.config 不被常量旁路）+ 干净库
+      # 十类形态端到端 + 真库 name-join 只读 smoke（CI 无库按惯例不执行该段）
+      # + 前后端接线（只改后端不改编前端 = 改动无效）。干净库口径：门禁自建
+      # MBSE_DB_PATH 临时空库 + init_db，与 CI 环境等价。
+      - name: Guard 资产长尾治理（四档判定 + 配置消费 + name-join smoke + 前后端接线）
+        run: python tools/verify/verify_lifecycle.py
+
       - name: Guard 向量二进制缓存保真
         run: python tools/verify/verify_vector_binary_cache.py
 

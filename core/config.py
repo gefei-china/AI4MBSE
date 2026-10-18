@@ -998,6 +998,19 @@ DEFAULT_CONFIG = {
         "exempt_paths": ["/api/health", "/api/monitor", "/api/auth",
                          "/static", "/api/ux-metrics"],   # 监控/登录/静态不得被限
     },
+    # ── P0-1（2026-10-18 自进化调研整改）：资产长尾治理阈值 ──────────────
+    # 背景：tools/calib/retire_view_agents.py 是一次性硬编码退役工具（点名 8 个
+    #   VIEW_AGENTS + 人工 precondition），同类「谁闲置/谁持续失败」判断此后每次重写。
+    # 本组把判据收敛为配置：core/lifecycle.py 读取，GET /api/monitor/lifecycle 呈现，
+    # 只建议不自动执行（退役动作仍走人工确认）。
+    "lifecycle": {
+        "enabled": True,             # 总开关（False 时分析端点返回空结果而非 500）
+        "idle_days": 30,             # 退出线：超过 N 天无使用记录 ⇒ 闲置
+        "min_uses": 5,               # 退出线：窗口内使用次数下限（低于视为没人用）
+        "fail_rate_pct": 30,         # 退出线：失败率阈值（%，足量样本下持续失败 ⇒ 质量退出）
+        "watch_idle_days": 15,       # 观察线：闲置天数（达到即 watch，未到 keep）
+        "watch_fail_rate_pct": 15,   # 观察线：失败率（%，达到即 watch）
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1458,6 +1471,15 @@ CONFIG_SCHEMA = {
         "neo4j_uri":         {"type": "str",   "desc": "Neo4j Bolt URI（如 bolt://localhost:7687）"},
         "neo4j_user":        {"type": "str",   "desc": "Neo4j 用户名"},
         "neo4j_password":    {"type": "secret","desc": "Neo4j 密码"},
+    },
+    # P0-1（2026-10-18）：资产长尾治理阈值（core/lifecycle.py 消费；前端契约登记处）
+    "lifecycle": {
+        "enabled":            {"type": "bool",  "desc": "长尾治理分析总开关（False 时端点返空结果）"},
+        "idle_days":          {"type": "int",   "desc": "退出线：闲置天数（超过无使用记录）"},
+        "min_uses":           {"type": "int",   "desc": "退出线：窗口内使用次数下限"},
+        "fail_rate_pct":      {"type": "int",   "desc": "退出线：失败率阈值（%）"},
+        "watch_idle_days":    {"type": "int",   "desc": "观察线：闲置天数（达到即 watch）"},
+        "watch_fail_rate_pct":{"type": "int",   "desc": "观察线：失败率（%，达到即 watch）"},
     },
 }
 

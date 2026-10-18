@@ -509,6 +509,8 @@ async function loadOps() {
   try{ loadOpsSessions(); }catch(e){}
   // 平台能力总览（2026-10-18 v2 方案收口）：四层健康度，同样 fire-and-forget 降级
   try{ loadOpsCapability(d); }catch(e){}
+  // 资产长尾治理（2026-10-18 P0-1）：agents/skills 四档建议，独立端点独立降级
+  try{ loadOpsLifecycle(); }catch(e){}
   // 系统信息（进程 PID / 运行时长 / DB 大小）挂到趋势面板右上角
   const sys = d.system || {};
   document.getElementById('ops-trend').insertAdjacentHTML('beforeend',
@@ -997,4 +999,57 @@ async function openSessionDrill(cid){
     m.classList.add('show');
     m.onclick = e => { if(e.target===m) closeModal(); };  // 与 showModal 同款遮罩关闭
   }catch(e){ toast('会话详情加载失败'); }
+}
+// ── 资产长尾治理（2026-10-18 P0-1）：agents/skills 四档建议 ──
+// 口径：GET /api/monitor/lifecycle（core/lifecycle.py + core.config lifecycle 组）。
+// 纪律：只建议不自动执行——retire_candidate 也只提示「人工评估后停用」，不提供一键停用按钮。
+async function loadOpsLifecycle(){
+  const box = document.getElementById('ops-lifecycle');
+  if(!box) return;
+  try{
+    const p = new URLSearchParams();
+    const k = (document.getElementById('ops-lifecycle-kind')||{}).value || 'all';
+    const v = (document.getElementById('ops-lifecycle-verdict')||{}).value || '';
+    p.set('kind', k);
+    if(v) p.set('verdict', v);
+    const d = await api('/api/monitor/lifecycle?'+p.toString());
+    const badge = document.getElementById('ops-lifecycle-retire');
+    const nRet = (d.summary && d.summary.by_verdict && d.summary.by_verdict.retire_candidate) || 0;
+    if(badge){ badge.style.display = nRet>0 ? '' : 'none'; badge.textContent = nRet+' 待评估'; }
+    const thr = document.getElementById('ops-lifecycle-thr');
+    if(thr && d.thresholds){
+      thr.textContent = `判据：闲置≥${d.thresholds.idle_days}天 · 使用<${d.thresholds.min_uses}次 · 失败率≥${d.thresholds.fail_rate_pct}%（core.config lifecycle 组）`;
+    }
+    if(!d.items || !d.items.length){
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">'+
+        (v ? '该档位下无资产' : '暂无可分析资产')+'</div>'; return;
+    }
+    box.innerHTML = renderOpsLifecycle(d);
+  }catch(e){
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">长尾治理数据加载失败：'+escMd(String(e).slice(0,80))+'</div>';
+  }
+}
+function _lcVerdictSt(v){
+  const m = { retire_candidate:['r','待评估退役'], review:['w','需复核'], watch:['b','观察'], keep:['ok','健康'] };
+  return `<span class="st ${m[v]?m[v][0]:'g'}">${m[v]?m[v][1]:v}</span>`;
+}
+function renderOpsLifecycle(d){
+  const rows = (d.items||[]).map(it=>{
+    const fail = it.fail_rate>=30 ? 'var(--red)' : (it.fail_rate>=15 ? 'var(--amb)' : 'var(--mut)');
+    return `<tr>
+      <td style="font-size:11px;white-space:nowrap;">${escMd(it.kind_label||it.kind)} #${it.id}</td>
+      <td><b>${escMd(String(it.name||'').slice(0,24))}</b>${it.online===false?' <span class="st g">已下线</span>':''}</td>
+      <td>${_lcVerdictSt(it.verdict)}</td>
+      <td style="font-size:11px;">${it.uses} 次 / ${it.failures} 败</td>
+      <td style="font-size:11px;color:${fail};">${it.fail_rate}%</td>
+      <td style="font-size:11px;">${it.idle_days===null||it.idle_days===undefined?'—':it.idle_days+' 天'}</td>
+      <td style="font-size:11px;color:var(--mut);">${escMd((it.reasons||[]).join('；')||'—')}</td>
+    </tr>`;
+  }).join('');
+  const s = d.summary || {};
+  const bv = s.by_verdict || {};
+  const chips = [['retire_candidate','待评估退役','r'],['review','需复核','w'],['watch','观察','b'],['keep','健康','ok']]
+    .map(([k,label,c])=>`<span class="st ${c}" style="margin-right:6px;">${label} ${bv[k]||0}</span>`).join('');
+  return `<div style="margin-bottom:6px;font-size:11px;">${chips}<span class="mut">共 ${s.total||0} 项 · 生成于 ${escMd(d.generated_at||'')}</span></div>` +
+    `<table class="t"><tr><th>资产</th><th>名称</th><th>档位</th><th>使用/失败</th><th>失败率</th><th>闲置</th><th>判定理由</th></tr>${rows}</table>`;
 }
