@@ -675,6 +675,14 @@ jobs:
       - name: Guard 资产长尾治理（四档判定 + 配置消费 + name-join smoke + 前后端接线）
         run: python tools/verify/verify_lifecycle.py
 
+      # ── P0-2（2026-10-18 自进化调研整改）：资产变更审计 ──────────────
+      # 四类资产（agents/prompts/skills/agent_flows）更新收敛到 audited_update：
+      # 字段级 diff（无 diff 不动手）+ 版本跃迁（调用方显式版本受尊重，缺省自动递升）
+      # + asset_change_logs 逐字段审计。门禁走真实 repo 方法（不绕道 SQL），
+      # 配置三键变异自证；真库段备份后幂等建表（CI 无库按惯例 SKIP）。
+      - name: Guard 资产变更审计（diff 驱动 + 版本跃迁 + 逐字段审计 + 配置变异）
+        run: python tools/verify/verify_asset_audit.py
+
       - name: Guard 向量二进制缓存保真
         run: python tools/verify/verify_vector_binary_cache.py
 

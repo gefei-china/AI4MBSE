@@ -1014,3 +1014,44 @@ async function marketPublishFrom(kind, name){
 
 // 节点类型定义（托盘 + 属性面板字段）
 
+// ── P0-2 资产变更审计（asset_change_logs 只读视图；写侧经 core/asset_audit.audited_update 收敛）──
+const _CL_TYPE_LABEL = {agent:'Agent', skill:'技能', prompt:'提示词', agent_flow:'工作流'};
+function _clClip(s, n){
+  s = (s==null?'':String(s));
+  return s.length>n ? esc(s.slice(0,n))+'…' : esc(s);
+}
+async function loadStChangelog(){
+  const box = document.getElementById('st-changelog-box');
+  if(!box) return;
+  box.innerHTML = '<div class="loading">加载中…</div>';
+  try{
+    const type = document.getElementById('st-cl-type')?.value || '';
+    const r = await api('/api/studio/asset-changelog?limit=200&asset_type=' + encodeURIComponent(type));
+    const items = (r && r.items) || [];
+    const sum = document.getElementById('st-cl-summary');
+    if(sum) sum.textContent = r && r.note ? r.note : `共 ${items.length} 条字段级变更`;
+    if(!items.length){
+      box.innerHTML = '<div style="padding:24px;text-align:center;color:var(--mut);font-size:12px;">暂无变更记录（迁移未执行或尚无资产更新）</div>';
+      return;
+    }
+    const rows = items.map(it=>{
+      const tl = _CL_TYPE_LABEL[it.asset_type] || it.asset_type || '?';
+      const nm = it.asset_name || ('#'+it.asset_id);
+      const ver = (it.version_from && it.version_to)
+        ? `<span class="st gray">${esc(it.version_from)}</span> → <span class="st b">${esc(it.version_to)}</span>`
+        : '<span style="color:var(--mut);">—</span>';
+      const ov = (it.old_value==null||it.old_value==='') ? '<span style="color:var(--mut);">（空）</span>' : _clClip(it.old_value, 120);
+      const nv = (it.new_value==null||it.new_value==='') ? '<span style="color:var(--mut);">（空）</span>' : _clClip(it.new_value, 120);
+      return `<tr><td style="white-space:nowrap;color:var(--mut);font-size:11px;">${esc((it.created_at||'').replace('T',' ').slice(0,19))}</td>`
+        + `<td><span class="st b">${esc(tl)}</span> ${esc(nm)} <span style="color:var(--mut);">#${it.asset_id}</span></td>`
+        + `<td><code>${esc(it.field)}</code></td>`
+        + `<td style="max-width:260px;" title="${esc(it.old_value==null?'':String(it.old_value))}">${ov}</td>`
+        + `<td style="max-width:260px;" title="${esc(it.new_value==null?'':String(it.new_value))}">${nv}</td>`
+        + `<td style="white-space:nowrap;">${ver}</td>`
+        + `<td style="white-space:nowrap;">${esc(it.changed_by||'—')}<div style="font-size:10px;color:var(--mut);">${esc(it.source||'')}</div></td></tr>`;
+    }).join('');
+    box.innerHTML = '<table class="t"><tr><th>时间</th><th>资产</th><th>字段</th><th>旧值</th><th>新值</th><th>版本</th><th>操作人</th></tr>' + rows + '</table>';
+  }catch(e){
+    box.innerHTML = '<div style="padding:24px;text-align:center;color:var(--red,#c00);font-size:12px;">加载失败：' + esc(e.message||e) + '</div>';
+  }
+}

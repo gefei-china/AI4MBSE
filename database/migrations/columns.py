@@ -402,6 +402,31 @@ def _migrate_columns(conn):
         _cols_fr = [r[1] for r in conn.execute("PRAGMA table_info(flow_runs)").fetchall()]
         if "conversation_id" in _cols_fr:
             conn.execute("CREATE INDEX IF NOT EXISTS ix_fr_conv ON flow_runs(conversation_id)")
+    # ── P0-2（2026-10-18 自进化调研整改）：资产变更审计表 ──────────────
+    # 背景：agents/prompts/skills/agent_flows 四类资产的更新路径此前只有一条
+    #   audit_logs 文字流水（「更新Agent#3」），**没有字段级 diff、没有版本号** ——
+    #   谁把 system_prompt 从 A 改成 B、上一版长什么样，一律不可考；自进化若要
+    #   「评估每次变更的效果」，首先得能回答「上次改了什么」。
+    # 形态：一行一个变更字段（field-level diff），version_from/to 记录版本跃迁；
+    #   与 audit_logs 分工——后者记「谁在什么时候做了哪个动作」（不可变哈希链），
+    #   本表记「这个动作具体改了什么」（可回放）。
+    conn.execute("""CREATE TABLE IF NOT EXISTS asset_change_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset_type TEXT NOT NULL,            -- agent | prompt | skill | agent_flow | ...（注册表扩展）
+        asset_id INTEGER NOT NULL,
+        asset_name TEXT DEFAULT '',          -- 变更时名称快照（改名后仍可追溯）
+        field TEXT NOT NULL,                 -- 变更字段（列名）
+        old_value TEXT,                      -- 变更前（超长按 asset_audit.max_value_chars 截断）
+        new_value TEXT,                      -- 变更后（同上）
+        version_from TEXT DEFAULT '',        -- 变更前版本
+        version_to TEXT DEFAULT '',          -- 变更后版本
+        changed_by TEXT DEFAULT '',          -- 操作人（audit_user）
+        source TEXT DEFAULT '',              -- 变更来源（api | seed | migration ...）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    # 索引放在建表之后（与 ix_fr_conv 同纪律：先表后索引）。
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_acl_asset ON asset_change_logs(asset_type, asset_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_acl_created ON asset_change_logs(created_at)")
     conn.commit()
 
 

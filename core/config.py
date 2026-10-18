@@ -1011,6 +1011,16 @@ DEFAULT_CONFIG = {
         "watch_idle_days": 15,       # 观察线：闲置天数（达到即 watch，未到 keep）
         "watch_fail_rate_pct": 15,   # 观察线：失败率（%，达到即 watch）
     },
+    # ── P0-2（2026-10-18 自进化调研整改）：资产变更审计 ──────────────
+    # 背景：四类资产（agents/prompts/skills/agent_flows）的更新此前无字段级 diff、
+    #   无版本跃迁记录 ⇒ 「上次改了什么、上一版长什么样」不可考，自进化失去评估基线。
+    # 本组控制 core/asset_audit.py 的审计行为；审计表 asset_change_logs 由
+    # database/migrations/columns.py 幂等创建。
+    "asset_audit": {
+        "enabled": True,             # 总开关（False 时仍正常更新，只是不写审计行）
+        "auto_bump_version": True,   # 调用方未显式给版本号时自动递升（v1→v2 / v1.0→v1.1）
+        "max_value_chars": 4000,     # 单字段审计值截断上限（system_prompt/content 可能几十 KB）
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1480,6 +1490,12 @@ CONFIG_SCHEMA = {
         "fail_rate_pct":      {"type": "int",   "desc": "退出线：失败率阈值（%）"},
         "watch_idle_days":    {"type": "int",   "desc": "观察线：闲置天数（达到即 watch）"},
         "watch_fail_rate_pct":{"type": "int",   "desc": "观察线：失败率（%，达到即 watch）"},
+    },
+    # P0-2（2026-10-18）：资产变更审计（core/asset_audit.py 消费；前端契约登记处）
+    "asset_audit": {
+        "enabled":            {"type": "bool",  "desc": "变更审计总开关（False 时正常更新但不写审计行）"},
+        "auto_bump_version":  {"type": "bool",  "desc": "调用方未显式给版本号时自动递升版本"},
+        "max_value_chars":    {"type": "int",   "desc": "单字段审计值截断上限（字符）"},
     },
 }
 

@@ -10,4 +10,5 @@ from routers.studio_parts.hooks_copy import *  # noqa: F401,F403  路由注册�
 from routers.studio_parts.agents import *  # noqa: F401,F403  路由注册（副作用 import）
 from routers.studio_parts.a2a_events import *  # noqa: F401,F403  路由注册（副作用 import）
 from routers.studio_parts.market import *  # noqa: F401,F403  路由注册（副作用 import）
+from routers.studio_parts.changelog import *  # noqa: F401,F403  路由注册（P0-2 资产变更审计读取）
 from routers.studio_parts.shared import router  # noqa: F401  re-export 兼容旧引用

@@ -152,7 +152,7 @@ const TITLES = {home:'总览',ai:'AI 建模',kb:'知识中心',reports:'报告',
 const KB_TAB_TITLES = {'kb-a':'数据看板','kb-e':'文档库','kb-b':'治理中心','kb-c':'本体模型','kb-d':'知识图谱',};
 // 2026-09-17 R7：补 'st-prompt'（提示词模板，真实 subpage，`09-impact.js:1134` / `36-capability.js:72` 会 go 过来），
 // 缺它会让面包屑退化成「能力中心」、且 loadPage 走不到子 Tab 直达分支
-const ST_TAB_TITLES = {'st-agent':'Agent','st-skill':'技能','st-mcp':'工具与 MCP','st-market':'插件市场','st-model':'模型配置','st-prompt':'提示词模板'};
+const ST_TAB_TITLES = {'st-agent':'Agent','st-skill':'技能','st-mcp':'工具与 MCP','st-market':'插件市场','st-model':'模型配置','st-prompt':'提示词模板','st-changelog':'变更记录'};
 const STG_TAB_TITLES = {'st-projmem':'项目记忆','st-hooks':'工具钩子','st-fextract':'文件抽取'};
 // 2026-09-17 D2：面包屑取名唯一入口。知识中心域（kb-a 数据看板 / kb-d 图谱工作区 / kb-e 资料库）只显示一级名「知识中心」，
 // 不再下钻到子域 —— 明确「主导航=域，面包屑=域」的口径（其余页面仍取子 Tab 名）。

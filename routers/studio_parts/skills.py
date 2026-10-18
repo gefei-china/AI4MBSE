@@ -49,6 +49,7 @@ def update_skill(sid: int, body: SkillIn, conn=Depends(db_session), user=Depends
         references=json.dumps(body.references or [], ensure_ascii=False),
         examples=json.dumps(body.examples or [], ensure_ascii=False),
         scripts=json.dumps(body.scripts or [], ensure_ascii=False),
+        actor=audit_user(user), source="api",
     )
     audit(audit_user(user), "skill_update", f"更新Skill#{sid}: {body.name}", conn=conn)
     return {"ok": True}

@@ -33,7 +33,8 @@ def save_agent_flow(body: dict, conn=Depends(db_session), user=Depends(current_u
     if fid:
         if not repo.get_agent_flow(fid):
             return JSONResponse({"error": "Not found"}, 404)
-        repo.update_agent_flow(fid, body["name"], body.get("description", ""), nodes, edges, version=version, status=status, source=source)
+        # P0-2：字段级审计 changed_by 取当前用户（asset_change_logs）
+        repo.update_agent_flow(fid, body["name"], body.get("description", ""), nodes, edges, version=version, status=status, source=source, actor=audit_user(user))
     else:
         fid = repo.create_agent_flow(
             body["name"], body.get("description", ""), nodes, edges, version=version, status=status, source=source)

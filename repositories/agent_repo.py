@@ -120,47 +120,57 @@ class AgentRepo(BaseRepo):
         return rid
 
 
-    def update_agent(self, agent_id: int, data: dict) -> None:
-        # kb_scope 缺省/None 时保留既有值（防止未感知该字段的旧调用方清空范围配置）
-        if data.get("kb_scope") is not None:
-            kb_scope_json = json.dumps(data.get("kb_scope") or {}, ensure_ascii=False)
+    def update_agent(self, agent_id: int, data: dict, *, actor: str = "", source: str = "api") -> dict:
+        # P0-2（2026-10-18）：收敛到 core/asset_audit.audited_update —— 读现值→diff→
+        #   递升版本→应用→逐字段写 asset_change_logs。语义保持（逐条对照旧实现）：
+        #   kb_scope 缺省/None 时保留既有值（旧调用方不清空范围配置）= 不进 diff；
+        #   能力元数据列显式 None 保留既有（原 SQL COALESCE 语义）= 不进 diff；
+        #   version 缺省旧实现会**重置为 v1.0.0**（潜在缺陷：不传即丢版本）⇒ 现改为
+        #   缺省不传、由审计层按 asset_audit.auto_bump_version 自动递升。
+        from core import asset_audit
+        kb_scope = data.get("kb_scope")
+        if kb_scope is not None:
+            kb_scope_json = json.dumps(kb_scope or {}, ensure_ascii=False)
             # 保存侧预防：与 create_agent 对齐 —— **改范围的主路径其实在这里**（旧配置多由编辑产生）；
             # 仅在调用方显式写入 kb_scope 时告警，未感知该字段的字段级更新不产生噪音。
             self._warn_kb_scope_docs(kb_scope_json, f"update_agent(id={agent_id})")
-        else:
-            cur = self.one("SELECT kb_scope FROM agents WHERE id=?", (agent_id,))
-            kb_scope_json = (cur or {}).get("kb_scope") or "{}"
-        # Task 14：能力元数据列——显式传 None 时保留既有值（SQL COALESCE 条件更新），前端表单总带值则整体更新
-        def _field_json(v, fallback):
-            return json.dumps(v or fallback, ensure_ascii=False) if v is not None else None
-        caps_json = _field_json(data.get("capabilities"), [])
-        in_json = _field_json(data.get("input_schema"), {})
-        out_json = _field_json(data.get("output_schema"), {})
+        # Task 14：能力元数据列——显式传 None 时保留既有值（前端表单总带值则整体更新）
+        new_values = {
+            "name": data.get("name", ""),
+            "display_name": data.get("display_name", ""),
+            "description": data.get("description", ""),
+            "system_prompt": data.get("system_prompt", ""),
+            "model_provider_id": data.get("model_provider_id"),
+            "model_params": json.dumps(data.get("model_params", {}) or {}, ensure_ascii=False),
+            "hil_level": data.get("hil_level", "L0"),
+            "kb_required": 1 if data.get("kb_required") else 0,
+            "kb_scope": kb_scope_json if kb_scope is not None else None,
+            "intent_keywords": json.dumps(data.get("intent_keywords", []) or [], ensure_ascii=False),
+            "icon": data.get("icon", "🤖"),
+            "status": data.get("status", "active"),
+        }
+        if data.get("version") is not None:
+            new_values["version"] = data.get("version")   # 调用方显式给 ⇒ 尊重（不自动递升）
+        for key, empty in (("capabilities", []), ("input_schema", {}), ("output_schema", {})):
+            v = data.get(key)
+            if v is not None:
+                new_values[key] = json.dumps(v or empty, ensure_ascii=False)
         mc = data.get("max_concurrency")
-        mc_val = int(mc) if mc is not None else None
+        if mc is not None:
+            new_values["max_concurrency"] = int(mc)
         pr = data.get("protocol_range")
-        pr_val = pr if pr is not None else None
+        if pr is not None:
+            new_values["protocol_range"] = pr
         role = data.get("agent_role")
-        role_val = role if role in ("main", "sub") else None  # 显式非法值忽略（保留既有）
-        self.execute(
-            """UPDATE agents SET name=?, display_name=?, description=?, system_prompt=?,
-               model_provider_id=?, model_params=?, hil_level=?, kb_required=?, kb_scope=?, intent_keywords=?,
-               icon=?, status=?, version=?, capabilities=COALESCE(?, capabilities),
-               input_schema=COALESCE(?, input_schema), output_schema=COALESCE(?, output_schema),
-               max_concurrency=COALESCE(?, max_concurrency), protocol_range=COALESCE(?, protocol_range),
-               agent_role=COALESCE(?, agent_role),
-               updated_at=CURRENT_TIMESTAMP WHERE id=?""",
-            (data.get("name", ""), data.get("display_name", ""), data.get("description", ""),
-             data.get("system_prompt", ""), data.get("model_provider_id"),
-             json.dumps(data.get("model_params", {}), ensure_ascii=False),
-             data.get("hil_level", "L0"), 1 if data.get("kb_required") else 0,
-             kb_scope_json,
-             json.dumps(data.get("intent_keywords", []), ensure_ascii=False),
-             data.get("icon", "🤖"), data.get("status", "active"), data.get("version", "v1.0.0"),
-             caps_json, in_json, out_json, mc_val, pr_val, role_val,
-             agent_id),
-        )
+        if role in ("main", "sub"):
+            new_values["agent_role"] = role               # 显式非法值忽略（保留既有）
+        # kb_scope=None 语义 = 保留既有 ⇒ 从 new_values 摘掉（diff 驱动下「不进即不动」）
+        if new_values.get("kb_scope") is None:
+            new_values.pop("kb_scope", None)
+        res = asset_audit.audited_update(self, "agent", agent_id, new_values, table="agents",
+                                         actor=actor, source=source)
         self._sync("agents", agent_id)
+        return res
 
     def delete_agent(self, agent_id: int) -> None:
         # agent_tools 有 ON DELETE CASCADE，显式删除双保险（兼容无外键开关的旧连接）

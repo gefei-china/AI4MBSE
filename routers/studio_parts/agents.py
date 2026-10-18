@@ -129,7 +129,9 @@ def update_agent(aid: int, body: AgentIn, conn=Depends(db_session), user=Depends
     new_disp = (data.get("display_name") or "").strip() or new_name
     data["name"], data["display_name"] = new_name, new_disp
 
-    repo.update_agent(aid, data)
+    # P0-2：字段级审计（asset_change_logs）由 repo 内 audited_update 落地，
+    #   changed_by 取当前登录用户——与下行 audit_logs 动作流水的操作人同源。
+    repo.update_agent(aid, data, actor=audit_user(user), source="api")
     # 级联：把历史表里当软外键存的旧名字改写为新名字（改名不同步 = 历史行全变孤儿）
     synced = repo.sync_agent_name_refs(old, new_name, new_disp)
     renamed = bool(new_name != old_name or new_disp != (old.get("display_name") or "").strip())

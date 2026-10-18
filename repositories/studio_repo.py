@@ -36,12 +36,17 @@ class StudioRepo(BaseRepo):
         self._sync("prompts", rid)
         return rid
 
-    def update_prompt(self, pid: int, name: str, scenario: str, content: str, variables: str, version: str) -> None:
-        self.execute(
-            "UPDATE prompts SET name=?, scenario=?, content=?, variables=?, version=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (name, scenario, content, variables, version, pid),
-        )
+    def update_prompt(self, pid: int, name: str, scenario: str, content: str, variables: str, version: str,
+                      *, actor: str = "", source: str = "api") -> dict:
+        # P0-2：收敛到 audited_update（字段级 diff + 版本跃迁 + asset_change_logs）
+        from core import asset_audit
+        res = asset_audit.audited_update(
+            self, "prompt", pid,
+            {"name": name, "scenario": scenario, "content": content,
+             "variables": variables, "version": version},
+            table="prompts", actor=actor, source=source)
         self._sync("prompts", pid)
+        return res
 
     def delete_prompt(self, pid: int) -> None:
         self.execute("DELETE FROM prompts WHERE id=?", (pid,))
@@ -99,15 +104,22 @@ class StudioRepo(BaseRepo):
                      triggers: str, category: str, content: str, frontmatter: str,
                      dependencies: str = "[]", allowed_roles: str = "[]",
                      allowed_tools: str = "[]", references: str = "[]",
-                     examples: str = "[]", scripts: str = "[]") -> None:
-        self.execute(
-            """UPDATE skills SET name=?, description=?, skill_type=?, triggers=?, category=?,
-               content=?, frontmatter=?, dependencies=?, allowed_roles=?,
-               allowed_tools=?, `references`=?, examples=?, scripts=?, updated_at=CURRENT_TIMESTAMP WHERE id=?""",
-            (name, description, skill_type, triggers, category, content, frontmatter,
-             dependencies, allowed_roles, allowed_tools, references, examples, scripts, sid),
-        )
+                     examples: str = "[]", scripts: str = "[]",
+                     *, actor: str = "", source: str = "api") -> dict:
+        # P0-2：收敛到 audited_update。skills 无 version 入参 ⇒ 每次真实变更按
+        #   asset_audit.auto_bump_version 自动递升（v1.0→v1.1…），审计行带
+        #   version_from/to——自进化评估「这版技能比上版好多少」的基线在此落地。
+        from core import asset_audit
+        res = asset_audit.audited_update(
+            self, "skill", sid,
+            {"name": name, "description": description, "skill_type": skill_type,
+             "triggers": triggers, "category": category, "content": content,
+             "frontmatter": frontmatter, "dependencies": dependencies,
+             "allowed_roles": allowed_roles, "allowed_tools": allowed_tools,
+             "references": references, "examples": examples, "scripts": scripts},
+            table="skills", actor=actor, source=source)
         self._sync("skills", sid)
+        return res
 
     def delete_skill(self, sid: int) -> None:
         self.execute("DELETE FROM skills WHERE id=?", (sid,))
@@ -289,11 +301,19 @@ class StudioRepo(BaseRepo):
             (name, description, nodes, edges, version, status, source),
         )
 
-    def update_agent_flow(self, flow_id: int, name: str, description: str, nodes: str, edges: str, version: str = "v1", status: str = "draft", source: str = "manual") -> None:
-        self.execute(
-            "UPDATE agent_flows SET name=?, description=?, nodes=?, edges=?, version=?, status=?, source=? WHERE id=?",
-            (name, description, nodes, edges, version, status, source, flow_id),
-        )
+    def update_agent_flow(self, flow_id: int, name: str, description: str, nodes: str, edges: str,
+                          version: str = "v1", status: str = "draft", source: str = "manual",
+                          *, actor: str = "") -> dict:
+        # P0-2：收敛到 audited_update（nodes/edges 是画布 JSON，字段级 diff 让
+        #   「上次拖动改了哪个节点」可回放；source 在此是资产列而非审计来源，
+        #   审计来源固定为 "api"——入参名冲突故用 flow_source 承接）。
+        from core import asset_audit
+        res = asset_audit.audited_update(
+            self, "agent_flow", flow_id,
+            {"name": name, "description": description, "nodes": nodes,
+             "edges": edges, "version": version, "status": status, "source": source},
+            table="agent_flows", actor=actor, source="api")
+        return res
 
     def delete_agent_flow(self, flow_id: int) -> None:
         self.execute("DELETE FROM agent_flows WHERE id=?", (flow_id,))

@@ -19,7 +19,9 @@ def create_prompt(p: PromptIn, conn=Depends(db_session), user=Depends(current_us
 
 @router.put("/api/studio/prompts/{pid}")
 def update_prompt(pid: int, p: PromptIn, conn=Depends(db_session), user=Depends(current_user)):
-    StudioRepo(conn).update_prompt(pid, p.name, p.scenario, p.content, json.dumps(p.variables), p.version)
+    # P0-2：字段级审计 changed_by 取当前用户（asset_change_logs）
+    StudioRepo(conn).update_prompt(pid, p.name, p.scenario, p.content, json.dumps(p.variables), p.version,
+                                   actor=audit_user(user), source="api")
     audit(audit_user(user), "prompt_update", f"更新提示词#{pid}", conn=conn)
     return {"ok": True}
 
