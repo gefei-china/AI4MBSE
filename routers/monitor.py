@@ -385,4 +385,187 @@ def toggle_alert_rule(rid: int, conn=Depends(db_session)):
     return {"ok": True, "id": rid, "status": new}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 会话级运行监控（2026-10-18《运行监控选型建议 v2》实施）
+#
+# 目标：给定任一 conversation_id，**一次调用**拿到该会话的完整执行证据链
+# （编排 run / 子任务 / LLM 调用 / 工作流 run / HIL / 事件流），并给出错误画像；
+# 排查入口从"人工查 5 张表"收敛为"两次点击"。
+#
+# 口径纪律：只读聚合，本域是会话级口径的唯一真源（与 metrics_core.py 同纪律）；
+# 各分段独立 try/except —— 单表缺列/缺表只降级该段，不整体 500（同 dashboard 的守卫思路）。
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _table_cols(conn, table: str) -> set:
+    """表现有列集合（缺表 → 空集）。老库列差异按此自适应，缺列指标回退 0。"""
+    try:
+        return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        return set()
+
+
+def _sess_rows(conn, sql: str, args=(), clip: int = 0) -> list:
+    """防御式查询：异常返回 []（单段降级不拖垮整体）。clip>0 时截断超长文本字段。"""
+    try:
+        rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
+    except Exception:
+        return []
+    if clip:
+        for r in rows:
+            for k, v in r.items():
+                if isinstance(v, str) and len(v) > clip:
+                    r[k] = v[:clip] + "…"
+    return rows
+
+
+def _session_weight(s: dict) -> int:
+    """问题信号加权（越大越优先展示）：失败调用/任务/运行 > 截断/回退 > 重试/HIL。"""
+    return (int(s.get("llm_failed") or 0) * 5 + int(s.get("failed_tasks") or 0) * 4
+            + int(s.get("failed_runs") or 0) * 4 + int(s.get("llm_trunc") or 0) * 2
+            + int(s.get("llm_fallback") or 0) * 2 + int(s.get("llm_retries") or 0)
+            + int(s.get("hil") or 0))
+
+
+@router.get("/api/monitor/sessions")
+def monitor_sessions(days: int = 7, limit: int = 30, q: str = "", conn=Depends(db_session)):
+    """异常会话列表：按问题信号加权排序（有问题的排前，正常会话随后按活跃度排）。
+
+    数据全部来自既有表（llm_usage_stats / agent_tasks / orch_checkpoints / hil_confirmations），
+    不新造指标 —— 各列口径与 dashboard / llm_health 保持同一份 SQL 语义。
+    """
+    days = max(min(days, 90), 1)
+    limit = min(max(limit, 1), 100)
+    lus = _table_cols(conn, "llm_usage_stats")
+    # 老库列自适应：call_failed / finish_reason / fallback_used / retry_count 均为后补列
+    failed_e = "SUM(call_failed)" if "call_failed" in lus else "0"
+    trunc_e = "SUM(CASE WHEN finish_reason='length' THEN 1 ELSE 0 END)" if "finish_reason" in lus else "0"
+    fb_e = "SUM(fallback_used)" if "fallback_used" in lus else "0"
+    retry_e = "SUM(retry_count)" if "retry_count" in lus else "0"
+    mock_e = "SUM(used_mock)" if "used_mock" in lus else "0"
+    lls = _sess_rows(conn, f"""
+        SELECT conversation_id cid, COUNT(*) calls, {failed_e} failed, {trunc_e} trunc,
+               {fb_e} fallback, {retry_e} retries, {mock_e} mock,
+               ROUND(COALESCE(SUM(estimated_cost),0),6) cost,
+               COALESCE(MAX(latency_ms),0) max_ms, MAX(created_at) last_at
+        FROM llm_usage_stats WHERE conversation_id>0 AND created_at >= datetime('now', ?)
+        GROUP BY conversation_id""", (f"-{days} days",))
+    tasks = _sess_rows(conn, """
+        SELECT conversation_id cid, COUNT(*) total_tasks,
+               SUM(CASE WHEN status IN ('failed','error') THEN 1 ELSE 0 END) failed_tasks
+        FROM agent_tasks GROUP BY conversation_id""")
+    runs = _sess_rows(conn, """
+        SELECT conversation_id cid, COUNT(*) runs,
+               SUM(CASE WHEN phase='failed' THEN 1 ELSE 0 END) failed_runs,
+               SUM(COALESCE(attempt_count,0)) resumes
+        FROM orch_checkpoints GROUP BY conversation_id""")
+    hils = _sess_rows(conn, """
+        SELECT conversation_id cid, COUNT(*) hil FROM hil_confirmations
+        GROUP BY conversation_id""")
+    by = lambda rows: {r["cid"]: r for r in rows}
+    lb, tb, ob, hb = by(lls), by(tasks), by(runs), by(hils)
+    # 候选会话 = 近 N 天有 LLM 流量 或 有编排 run 的会话（纯闲聊无监控数据的按活跃度补充）
+    conds, args = ["c.updated_at >= datetime('now', ?)"], [f"-{days} days"]
+    if q:
+        conds.append("(c.title LIKE ? OR c.current_intent LIKE ? OR CAST(c.id AS TEXT)=?)")
+        args += [f"%{q}%", f"%{q}%", q]
+    convs = _sess_rows(conn, f"""SELECT c.id, c.title, c.intent, c.status, c.phase, c.main_agent,
+        c.updated_at, c.created_at FROM conversations c WHERE {' AND '.join(conds)}
+        ORDER BY c.updated_at DESC LIMIT 500""", args)
+    out = []
+    for c in convs:
+        cid = c["id"]
+        l, t, o, h = lb.get(cid, {}), tb.get(cid, {}), ob.get(cid, {}), hb.get(cid, {})
+        s = {"conversation_id": cid, "title": c.get("title") or "", "intent": c.get("current_intent") or c.get("intent") or "",
+             "status": c.get("status") or "", "main_agent": c.get("main_agent") or "",
+             "updated_at": c.get("updated_at") or "",
+             "llm_calls": l.get("calls") or 0, "llm_failed": l.get("failed") or 0,
+             "llm_trunc": l.get("trunc") or 0, "llm_fallback": l.get("fallback") or 0,
+             "llm_retries": l.get("retries") or 0, "llm_mock": l.get("mock") or 0,
+             "llm_cost": l.get("cost") or 0, "llm_max_ms": l.get("max_ms") or 0,
+             "llm_last_at": l.get("last_at") or "",
+             "total_tasks": t.get("total_tasks") or 0, "failed_tasks": t.get("failed_tasks") or 0,
+             "runs": o.get("runs") or 0, "failed_runs": o.get("failed_runs") or 0,
+             "resumes": o.get("resumes") or 0, "hil": h.get("hil") or 0}
+        s["weight"] = _session_weight(s)
+        out.append(s)
+    # 排序：问题权重高的绝对优先；同权重按最近活跃（updated_at 为 'YYYY-MM-DD HH:MM:SS' 可字典序比较）
+    out.sort(key=lambda s: (s["weight"], s["updated_at"] or ""), reverse=True)
+    flagged = sum(1 for s in out if s["weight"] > 0)
+    return {"ok": True, "days": days, "total": len(out), "flagged": flagged,
+            "sessions": out[:limit]}
+
+
+@router.get("/api/monitor/session/{conversation_id}")
+def monitor_session_detail(conversation_id: int, conn=Depends(db_session)):
+    """会话执行证据链：概览 + 时间线分段 + 错误画像。全部只读，单段降级。"""
+    cid = int(conversation_id)
+    out = {"ok": True, "conversation_id": cid}
+    conv = _sess_rows(conn, "SELECT * FROM conversations WHERE id=?", (cid,), clip=200)
+    out["conversation"] = conv[0] if conv else None
+    if not conv:
+        out["ok"] = False
+        out["error"] = "会话不存在"
+        return out
+    run_rows = _sess_rows(conn, """SELECT run_id, phase, attempt_count, intent, team, skill_name,
+        provider_id, created_at, updated_at FROM orch_checkpoints
+        WHERE conversation_id=? ORDER BY run_id DESC LIMIT 50""", (cid,))
+    out["orch_runs"] = run_rows
+    out["agent_tasks"] = _sess_rows(conn, """SELECT * FROM agent_tasks WHERE conversation_id=?
+        ORDER BY id DESC LIMIT 100""", (cid,), clip=240)
+    lus = _table_cols(conn, "llm_usage_stats")
+    extra = []
+    for col, alias in (("call_failed", "call_failed"), ("failure_kind", "failure_kind"),
+                       ("failure_msg", "failure_msg"), ("finish_reason", "finish_reason"),
+                       ("retry_count", "retry_count"), ("fallback_used", "fallback_used"),
+                       ("fallback_provider_id", "fallback_provider_id"),
+                       ("sub_task_key", "sub_task_key")):
+        if col in lus:
+            extra.append(col)
+    out["llm_calls"] = _sess_rows(conn, f"""SELECT id, created_at, provider_name, model_name, intent,
+        used_mock, prompt_tokens, completion_tokens, total_tokens, estimated_cost, latency_ms,
+        trace_id, run_id{',' + ','.join(extra) if extra else ''}
+        FROM llm_usage_stats WHERE conversation_id=? ORDER BY id DESC LIMIT 200""",
+        (cid,), clip=200)
+    out["llm_calls"].reverse()
+    out["messages"] = _sess_rows(conn, """SELECT id, role, msg_type, feedback, created_at,
+        substr(content,1,200) content FROM messages WHERE conversation_id=?
+        ORDER BY id DESC LIMIT 100""", (cid,))
+    out["messages"].reverse()
+    out["stream_events"] = _sess_rows(conn, """SELECT * FROM orch_stream_events
+        WHERE conversation_id=? ORDER BY id DESC LIMIT 100""", (cid,), clip=200)
+    out["stream_events"].reverse()
+    fr_cols = _table_cols(conn, "flow_runs")
+    out["flow_runs"] = _sess_rows(conn, """SELECT id, flow_name, status, total_latency_ms,
+        error_count, created_at FROM flow_runs WHERE conversation_id=?
+        ORDER BY id DESC LIMIT 20""", (cid,)) if "conversation_id" in fr_cols else []
+    fr_ids = [r["id"] for r in out["flow_runs"]]
+    out["flow_steps"] = (_sess_rows(conn, f"""SELECT run_id, seq, node_id, node_type, node_label,
+        status, latency_ms, substr(content,1,160) content FROM flow_run_steps
+        WHERE run_id IN ({','.join('?' * len(fr_ids))}) ORDER BY run_id, seq""",
+        fr_ids, clip=200) if fr_ids else [])
+    out["hil"] = _sess_rows(conn, """SELECT id, agent_id, run_id, action, status, created_at
+        FROM hil_confirmations WHERE conversation_id=? ORDER BY id DESC LIMIT 20""", (cid,))
+    # ── 错误画像：一次看全该会话的问题信号（排查首屏直接给结论）──
+    llm = out["llm_calls"]
+    def _n(key): return sum(1 for x in llm if x.get(key))
+    profile = {
+        "llm_calls": len(llm),
+        "llm_failed": _n("call_failed"),
+        "llm_trunc": sum(1 for x in llm if x.get("finish_reason") == "length"),
+        "llm_fallback": _n("fallback_used"),
+        "llm_retries": sum(int(x.get("retry_count") or 0) for x in llm),
+        "llm_mock": _n("used_mock"),
+        "failed_tasks": sum(1 for t in out["agent_tasks"] if t.get("status") in ("failed", "error")),
+        "failed_runs": sum(1 for r in run_rows if r.get("phase") == "failed"),
+        "hil": len(out["hil"]),
+        "llm_cost": round(sum(float(x.get("estimated_cost") or 0) for x in llm), 6),
+        "llm_max_ms": max([int(x.get("latency_ms") or 0) for x in llm] or [0]),
+    }
+    profile["weight"] = (profile["llm_failed"] * 5 + profile["failed_tasks"] * 4
+                         + profile["failed_runs"] * 4 + profile["llm_trunc"] * 2
+                         + profile["llm_fallback"] * 2 + profile["llm_retries"] + profile["hil"])
+    out["error_profile"] = profile
+    return out
+
+
 _PROC_START = time.time()

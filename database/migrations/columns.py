@@ -385,6 +385,23 @@ def _migrate_columns(conn):
     #   ⇒ 存量行行为**逐字不变**、迁移零行为变更；只有显式写 1 的行才被"提权"。
     #   消歧侧用 PRAGMA 检测该列是否存在，列不存在时自动回落到旧条件（见 entity_resolver）。
     _add("glossary_terms", "use_in_matching", "INTEGER")
+    # ── 会话级运行监控（2026-10-18《运行监控选型建议 v2》实施）：关联断链补齐 ──
+    # flow_runs.conversation_id：旧编排 run 归属会话。monitor 域的 logs/仪表盘一直以
+    #   flow_runs 为主数据源，但该表没有会话键 ⇒ 会话级下钻在此断链。写入点
+    #   workflows/persistence._ensure_run 从 core.audit.trace_context() 自动取值；
+    #   存量行无法回溯（历史未记录），统一留 0 —— **不编造**（与 tool_call_logs.run_id 同纪律）。
+    _add("flow_runs", "conversation_id", "INTEGER DEFAULT 0")
+    # alert_events.conversation_id / request_id：告警（尤其 run 级）触发后要能一键跳到
+    #   肇事会话与请求。run 级告警从 flow_runs 回读 conversation_id；request_id 取
+    #   core.audit.request_context()。全局周期告警两列恒 0/''（本来就没有具体会话）。
+    _add("alert_events", "conversation_id", "INTEGER DEFAULT 0")
+    _add("alert_events", "request_id", "TEXT DEFAULT ''")
+    # 会话下钻主查询按 conversation_id 过滤 flow_runs —— 索引必须**在补列之后**建
+    # （与 ix_am_scope 同纪律：先补列再建索引，老库才不会因缺列而崩）。
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='flow_runs'").fetchone():
+        _cols_fr = [r[1] for r in conn.execute("PRAGMA table_info(flow_runs)").fetchall()]
+        if "conversation_id" in _cols_fr:
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_fr_conv ON flow_runs(conversation_id)")
     conn.commit()
 
 

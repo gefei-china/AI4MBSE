@@ -11,10 +11,19 @@ class FlowPersistenceMixin:
     """FlowExecutor 持久化拆分（解耦拆分：原 workflows.py 单体类方法）。"""
 
     def _ensure_run(self, conn, flow_id, flow_name, parent_run_id: int = 0) -> int:
+        # 会话级监控（2026-10-18）：编排请求线程里 ContextVar 已带 conversation_id
+        # （core.audit.bind_trace/begin_trace 写入；线程池 copy_context 传播，见 audit.py 注释）。
+        # 取不到（工作台手工试跑等无会话上下文）→ 0，行为与旧版一致。
+        conv_id = 0
+        try:
+            from core.audit import trace_context as _tc
+            conv_id = int((_tc() or {}).get("conversation_id") or 0)
+        except Exception:
+            conv_id = 0
         cur = conn.execute(
-            "INSERT INTO flow_runs (flow_id, flow_name, status, order_json, total_latency_ms, error_count, parent_run_id) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (flow_id or 0, flow_name or "", "running", "[]", 0, 0, parent_run_id or 0))
+            "INSERT INTO flow_runs (flow_id, flow_name, status, order_json, total_latency_ms, error_count, parent_run_id, conversation_id) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (flow_id or 0, flow_name or "", "running", "[]", 0, 0, parent_run_id or 0, conv_id))
         return cur.lastrowid
 
     def _safe_cp(self, conn, run_id, seq, node_id, results) -> None:
@@ -117,15 +126,39 @@ class FlowPersistenceMixin:
                 continue
             fired = True
             flow_name = getattr(self, "_run_flow_name", "") or ""
+            # 会话级监控（2026-10-18）：告警落库时带上会话/请求溯源，收到告警可一键跳肇事会话。
+            # conversation_id 从本 run 回读（_ensure_run 已写）；request_id 取当前请求上下文。
+            conv_id, rid = 0, ""
+            try:
+                _row = conn.execute("SELECT conversation_id FROM flow_runs WHERE id=?", (run_id,)).fetchone()
+                conv_id = int((_row["conversation_id"] if _row else 0) or 0)
+            except Exception:
+                conv_id = 0
+            try:
+                from core.audit import request_context as _rc
+                rid = str((_rc() or {}).get("request_id") or "")
+            except Exception:
+                rid = ""
             try:
                 conn.execute(
                     "INSERT INTO alert_events (rule_id, rule_name, run_id, flow_name, metric, actual, "
-                    "threshold, operator, level, status) VALUES (?,?,?,?,?,?,?,?,?,'open')",
-                    (r["id"], r["name"], run_id, flow_name, metric, actual, th, op, r["level"] or "warning"))
+                    "threshold, operator, level, status, conversation_id, request_id) VALUES (?,?,?,?,?,?,?,?,?,'open',?,?)",
+                    (r["id"], r["name"], run_id, flow_name, metric, actual, th, op,
+                     r["level"] or "warning", conv_id, rid))
                 conn.execute("UPDATE alert_rules SET last_fired_at=datetime('now') WHERE id=?", (r["id"],))
                 conn.commit()
             except Exception:
-                pass
+                # 老库列尚未迁移（极端：代码新于 schema）→ 回落旧列 INSERT，不丢告警
+                try:
+                    conn.execute(
+                        "INSERT INTO alert_events (rule_id, rule_name, run_id, flow_name, metric, actual, "
+                        "threshold, operator, level, status) VALUES (?,?,?,?,?,?,?,?,?,'open')",
+                        (r["id"], r["name"], run_id, flow_name, metric, actual, th, op,
+                         r["level"] or "warning"))
+                    conn.execute("UPDATE alert_rules SET last_fired_at=datetime('now') WHERE id=?", (r["id"],))
+                    conn.commit()
+                except Exception:
+                    pass
             # 可选 webhook 通知（A2A alert 事件，失败不阻断主流程）
             if (r["notify_url"] or "").strip():
                 self._notify_alert(conn, run_id, dict(r), metric, actual, th, op)

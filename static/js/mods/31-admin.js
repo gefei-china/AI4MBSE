@@ -505,6 +505,10 @@ async function loadOps() {
   document.getElementById('ops-node-stats').innerHTML = renderOpsNodeStats(d.node_stats);
   // 最近告警
   renderOpsAlerts(d.recent_alerts);
+  // 会话级监控（2026-10-18 v2 方案）：异常会话列表并行加载，失败只降级不拖垮监控主数据
+  try{ loadOpsSessions(); }catch(e){}
+  // 平台能力总览（2026-10-18 v2 方案收口）：四层健康度，同样 fire-and-forget 降级
+  try{ loadOpsCapability(d); }catch(e){}
   // 系统信息（进程 PID / 运行时长 / DB 大小）挂到趋势面板右上角
   const sys = d.system || {};
   document.getElementById('ops-trend').insertAdjacentHTML('beforeend',
@@ -530,6 +534,90 @@ function fmtUptime(sec){
   sec = Number(sec)||0;
   const h = Math.floor(sec/3600), mi = Math.floor(sec%3600/60);
   return h?`${h}h ${mi}m`:`${Math.floor(sec/60)}m`;
+}
+// ── 平台能力总览（2026-10-18《运行监控选型建议 v2》收口）──
+// 四层能力一屏总览：LLM 调用健康（口径真源 core/llm_health.py）/ 编排运行（dashboard.runs + orphan-runs）/
+// 会话排查（sessions 异常计数，点击下钻）/ 治理就绪（tenant-readiness + 开放告警）。
+// 纪律：全部复用既有口径，不新造指标；补充取数各自 .catch 降级，单层缺失只显示「—」不拖垮整屏。
+async function loadOpsCapability(d){
+  const box = document.getElementById('ops-capability');
+  if(!box) return;
+  let orphan=null, sess=null, tenant=null;
+  try{
+    const rs = await Promise.all([
+      api('/api/monitor/orphan-runs?limit=20').catch(()=>null),
+      api('/api/monitor/sessions?days=7&limit=1').catch(()=>null),
+      api('/api/monitor/tenant-readiness').catch(()=>null)
+    ]);
+    orphan=rs[0]; sess=rs[1]; tenant=rs[2];
+  }catch(e){ /* 三路全失败也继续渲染：LLM/编排层来自 dashboard 主数据 */ }
+  box.innerHTML = renderOpsCapability(d, orphan, sess, tenant);
+}
+function _capLayer(title, statusCls, statusTxt, rows, onclick){
+  const rowHtml = rows.map(r=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;padding:2.5px 0;border-bottom:1px dashed var(--line);">
+      <span style="color:var(--mut);white-space:nowrap;">${r[0]}</span>
+      <b style="text-align:right;${r[2]?'color:'+r[2]:''};">${r[1]}</b></div>`).join('');
+  return `<div ${onclick?`style="cursor:pointer;" onmouseover="this.style.background='#f7f8fa'" onmouseout="this.style.background=''" onclick="${onclick}"`:''}>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">
+      <b style="font-size:12px;">${title}</b><span class="st ${statusCls}">${statusTxt}</span>
+    </div>${rowHtml}</div>`;
+}
+function renderOpsCapability(d, orphan, sess, tenant){
+  const _g='var(--grn)', _a='var(--amb)', _r='var(--red)';
+  const pct = v => (v===null||v===undefined) ? '—' : (v*100).toFixed(1)+'%';
+  const num = v => (v===null||v===undefined) ? '—' : String(v);
+  const layers = [];
+  // ① LLM 调用健康（dashboard.llm_health，口径唯一真源；unknown=样本不足，不报 ok）
+  const h = (d && d.llm_health) || {};
+  const sum = h.summary || {};
+  const contract = h.contract || {};
+  const hs = h.status || 'unknown';
+  layers.push(_capLayer('LLM 调用健康',
+    hs==='alert'?'r':hs==='warn'?'w':hs==='ok'?'ok':'g', hs==='unknown'?'样本不足':hs, [
+    ['调用（真实/Mock）', `${num(sum.calls)}（${num(sum.real_calls)}/${num(sum.mock_calls)}）`],
+    ['截断 / 推理吃光', `${num(sum.truncated)} / ${num(sum.reasoning_eaten)}`,
+      (sum.reasoning_eaten||0)>0?_r:((sum.truncated||0)>0?_a:null)],
+    ['推理占比', pct(sum.reasoning_share)],
+    ['缓存命中率', pct(sum.cache_hit_rate)],
+    ['判据覆盖率', pct(sum.finish_coverage),
+      (sum.finish_coverage===null||sum.finish_coverage<0.5)?_a:null],
+    ['配置契约', contract.ok ? '通过' : '违规 '+(contract.violations||[]).length+' 项',
+      contract.ok?null:_r]
+  ]));
+  // ② 编排运行（dashboard.runs + orphan-runs：孤儿=超 TTL 未终态任务，此前完全不可见）
+  const runs = (d && d.runs) || {};
+  const orph = orphan || {};
+  const orphN = orph.orphan_tasks;
+  layers.push(_capLayer('编排运行',
+    (runs.failed||0)>0||(orphN||0)>0?'w':'ok',
+    (runs.failed||0)>0||(orphN||0)>0?'需关注':'正常', [
+    ['运行总数 / 失败', `${num(runs.total)} / ${num(runs.failed)}`, (runs.failed||0)>0?_a:null],
+    ['成功率', `${num(runs.success_rate)}%`, (runs.total||0)>0&&runs.success_rate<100?_a:_g],
+    ['非终态批次', num((orph.active||[]).length)],
+    ['孤儿任务（超 TTL）', orphN===undefined?'—':num(orphN), (orphN||0)>0?_r:null],
+    ['最老年龄 / TTL', orph.oldest_age_s===undefined?'—':
+      `${Math.round((orph.oldest_age_s||0)/60)}m / ${Math.round((orph.ttl_s||0)/60)}m`]
+  ]));
+  // ③ 会话排查（sessions 异常计数；点击刷新并滚动到会话排查面板）
+  const flagged = sess ? sess.flagged : null;
+  layers.push(_capLayer('会话排查', (flagged||0)>0?'r':'ok', (flagged||0)>0?flagged+' 异常':'正常', [
+    ['窗口内会话', num(sess?sess.total:null)],
+    ['异常会话', num(flagged), (flagged||0)>0?_r:_g],
+    ['时间窗', sess?`近 ${sess.days||7} 天`:'近 7 天']
+  ], "loadOpsSessions();const _s=document.getElementById('ops-sessions');if(_s)_s.scrollIntoView({behavior:'smooth',block:'center'})"));
+  // ④ 治理就绪（tenant-readiness：打开租户隔离前会不会漏数据 + 开放告警）
+  const t = tenant || {};
+  const blockers = (t.blockers||[]).length;
+  layers.push(_capLayer('治理就绪', blockers>0?'w':'ok', blockers>0?blockers+' 项阻断':'就绪', [
+    ['开放告警', num(d?d.open_alerts:null), (d&&d.open_alerts>0)?_r:_g],
+    ['租户隔离', t.mode||'—'],
+    ['数据阻断项', num(blockers), blockers>0?_a:null],
+    ['实体挂错项目', num(t.entities?t.entities.orphan_project:null)]
+  ]));
+  return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+    ${layers.map(l=>`<div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;">${l}</div>`).join('')}
+  </div>
+  <div style="font-size:9.5px;color:var(--mut);margin-top:6px;">口径：LLM 层=core/llm_health.py（唯一真源）· 编排层=/api/monitor/orphan-runs · 会话层=/api/monitor/sessions · 治理层=/api/monitor/tenant-readiness；「样本不足」= 无真实调用样本，任何质量结论均不成立。</div>`;
 }
 function renderOpsTrend(trend){
   if(!trend || !trend.length) return '<div class="mut">暂无趋势数据</div>';
@@ -582,12 +670,12 @@ function renderOpsAlerts(alerts){
   box.innerHTML = `<table class="t"><tr><th>时间</th><th>规则</th><th>条件</th><th>触发值</th><th>等级</th><th>状态</th><th></th></tr>` +
     alerts.map(a=>`<tr>
       <td style="font-size:11px;">${escMd((a.created_at||'').slice(5,16))}</td>
-      <td><b>${escMd(a.rule_name)}</b><div style="font-size:10px;color:var(--mut);">run#${a.run_id} ${escMd(a.flow_name||'')}</div></td>
+      <td><b>${escMd(a.rule_name)}</b><div style="font-size:10px;color:var(--mut);">run#${a.run_id}${(a.conversation_id>0)?` · 会话#${a.conversation_id}`:''} ${escMd(a.flow_name||'')}</div></td>
       <td>${escMd(a.metric)} ${escMd(a.operator)} ${a.threshold}</td>
       <td style="color:${a.actual>=a.threshold?'var(--red)':'var(--amb)'};font-weight:600;">${a.actual}</td>
       <td>${levelBadge(a.level)}</td>
       <td>${a.status==='open'?'<span class="st w">open</span>':'<span class="st ok">acked</span>'}</td>
-      <td>${a.status==='open'?`<button class="btn sm ghost" onclick="ackAlert(${a.id})">✅ 确认</button>`:''}</td>
+      <td style="white-space:nowrap;">${(a.conversation_id>0)?`<button class="btn sm ghost" title="查看该告警所属会话的完整执行证据链" onclick="openSessionDrill(${a.conversation_id})">🔎 跳会话</button>`:''}${a.status==='open'?`<button class="btn sm ghost" onclick="ackAlert(${a.id})">✅ 确认</button>`:''}</td>
     </tr>`).join('') + '</table>';
 }
 async function loadOpsAlerts(){
@@ -784,4 +872,129 @@ function uxMetricsHtml(ux){
     </div>
     <div style="font-size:9.5px;color:var(--mut);margin-top:5px;">目标：完成率≥85% · 中断率15–25% · 澄清命中≥90% · 等待放弃&lt;5% · 自恢复≥70% · 滚动抢夺=0</div>
   </div>`;
+}
+
+// ════════════ 会话级运行监控（2026-10-18《运行监控选型建议 v2》实施）════════════
+// 目标：给定任一 conversation_id，两次点击内看到该会话的完整执行时间线
+// （消息 → 编排 run → 子任务 → LLM 调用 → 工作流 → HIL），每段有耗时与错误证据。
+// 渲染纪律：只读展示，不改任何数据；错误红 / 截断·回退·Mock 黄 / 正常绿。
+
+function _sessBadge(n, label, color){
+  return n > 0 ? `<span class="st ${color}" style="margin-right:4px;">${label}×${n}</span>` : '';
+}
+async function loadOpsSessions(){
+  const box = document.getElementById('ops-sessions');
+  if(!box) return;
+  try{
+    const p = new URLSearchParams();
+    p.set('days', (document.getElementById('ops-sess-days')||{}).value || 7);
+    p.set('limit', '30');
+    const q = (document.getElementById('ops-sess-q')||{}).value || '';
+    if(q.trim()) p.set('q', q.trim());
+    const d = await api('/api/monitor/sessions?'+p.toString());
+    const fb = document.getElementById('ops-sess-flagged');
+    if(fb){ fb.style.display = d.flagged>0 ? '' : 'none'; fb.textContent = d.flagged+' 异常'; }
+    if(!d.sessions || !d.sessions.length){
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">该时间窗内无会话</div>'; return;
+    }
+    box.innerHTML = `<table class="t"><tr><th>最近活跃</th><th>会话</th><th>意图</th><th>问题信号</th><th>LLM</th><th>编排</th><th>成本</th></tr>` +
+      d.sessions.map(s=>{
+        const sig = [
+          _sessBadge(s.llm_failed,'调用失败','r'), _sessBadge(s.failed_tasks,'任务失败','r'),
+          _sessBadge(s.failed_runs,'run失败','r'), _sessBadge(s.llm_trunc,'截断','w'),
+          _sessBadge(s.llm_fallback,'回退','w'), _sessBadge(s.llm_retries,'重试','w'),
+          _sessBadge(s.hil,'HIL','b')
+        ].filter(Boolean).join('') || '<span class="st ok">正常</span>';
+        const cost = Number(s.llm_cost||0);
+        return `<tr style="cursor:pointer;" onclick="openSessionDrill(${s.conversation_id})">
+          <td style="font-size:11px;">${escMd((s.updated_at||'').slice(5,16))}</td>
+          <td><b>${escMd(String(s.title||'').slice(0,28))}</b> <span style="color:var(--mut);font-size:10px;">#${s.conversation_id}</span></td>
+          <td style="font-size:11px;">${escMd(s.intent||'')}</td>
+          <td style="white-space:nowrap;">${sig}</td>
+          <td style="font-size:11px;">${s.llm_calls} 次${s.llm_max_ms ? ` / 峰值 ${s.llm_max_ms}ms` : ''}</td>
+          <td style="font-size:11px;">${s.runs} run / ${s.total_tasks} 任务</td>
+          <td style="font-size:11px;">$${cost.toFixed(4)}</td>
+        </tr>`;
+      }).join('') + '</table>';
+  }catch(e){
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">会话列表加载失败：'+escMd(String(e).slice(0,80))+'</div>';
+  }
+}
+function _tlEvent(t, kind, level, html, raw){
+  // level: err | warn | ok | info
+  const c = level==='err' ? 'var(--red)' : level==='warn' ? 'var(--amb)' : level==='ok' ? 'var(--grn)' : 'var(--line)';
+  const body = raw
+    ? `<details style="border-left:3px solid ${c};margin:0 0 6px 0;padding:4px 8px;background:#fff;border-radius:6px;">
+         <summary style="cursor:pointer;font-size:12px;"><span class="st b" style="font-size:10px;">${escMd(t)}</span> <span class="badge" style="font-size:9.5px;">${escMd(kind)}</span> ${html}</summary>
+         <pre style="font-size:10.5px;white-space:pre-wrap;word-break:break-all;margin:6px 0 0;color:#444;background:#f7f8fa;padding:6px;border-radius:6px;max-height:220px;overflow:auto;">${escMd(raw)}</pre>
+       </details>`
+    : `<div style="border-left:3px solid ${c};margin:0 0 6px 0;padding:4px 8px;background:#fff;border-radius:6px;font-size:12px;">
+         <span class="st b" style="font-size:10px;">${escMd(t)}</span> <span class="badge" style="font-size:9.5px;">${escMd(kind)}</span> ${html}
+       </div>`;
+  return {t, body};
+}
+function _renderSessionDrill(d){
+  const c = d.conversation || {};
+  const p = d.error_profile || {};
+  const head = `<div style="margin-bottom:10px;">
+    <div style="font-size:14px;font-weight:600;">${escMd(c.title||'')} <span style="color:var(--mut);font-size:11px;">#${d.conversation_id} · ${escMd(c.status||'')} · ${escMd(c.main_agent||'')}</span></div>
+    <div style="font-size:11px;color:var(--mut);margin-top:2px;">意图 ${escMd(c.current_intent||c.intent||'—')} · 创建 ${(c.created_at||'').slice(0,19)} · 最近活跃 ${(c.updated_at||'').slice(0,19)}</div>
+  </div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+    <span class="st ${p.llm_calls?'b':'g'}">LLM ${p.llm_calls||0} 次 / $${Number(p.llm_cost||0).toFixed(4)}</span>
+    ${p.llm_failed?`<span class="st r">失败 ${p.llm_failed}</span>`:''}
+    ${p.llm_trunc?`<span class="st w">截断 ${p.llm_trunc}</span>`:''}
+    ${p.llm_fallback?`<span class="st w">回退 ${p.llm_fallback}</span>`:''}
+    ${p.llm_retries?`<span class="st w">重试 ${p.llm_retries}</span>`:''}
+    ${p.llm_mock?`<span class="st w">Mock ${p.llm_mock}</span>`:''}
+    ${p.failed_tasks?`<span class="st r">任务失败 ${p.failed_tasks}</span>`:''}
+    ${p.failed_runs?`<span class="st r">run 失败 ${p.failed_runs}</span>`:''}
+    ${p.hil?`<span class="st b">HIL ${p.hil}</span>`:''}
+    ${p.weight===0?'<span class="st ok">无异常信号</span>':''}
+  </div>
+  <div style="font-size:12px;font-weight:500;margin:8px 0 8px;">执行时间线 <span style="color:var(--mut);font-size:10.5px;font-weight:400;">（点条目展开原始数据）</span></div>`;
+  const ev = [];
+  (d.messages||[]).forEach(m => ev.push(_tlEvent((m.created_at||'').slice(0,19), '消息', 'info',
+    `<b>${escMd(m.role||'')}</b> ${escMd(String(m.content||'').slice(0,70))}`, m.content)));
+  (d.orch_runs||[]).forEach(r => ev.push(_tlEvent((r.created_at||'').slice(0,19), '编排run',
+    (r.phase==='failed'||r.phase==='interrupted')?'err':((r.attempt_count||0)>0?'warn':'ok'),
+    `<b>run#${r.run_id}</b> ${escMd(r.phase||'')} · 意图 ${escMd(r.intent||'—')}${(r.attempt_count||0)>0?` · resume×${r.attempt_count}`:''}${r.team?` · team=${escMd(r.team)}`:''}`,
+    JSON.stringify(r, null, 1))));
+  (d.agent_tasks||[]).forEach(t => ev.push(_tlEvent((t.created_at||'').slice(0,19), '子任务',
+    (t.status==='failed'||t.status==='error')?'err':(t.status==='done'?'ok':'info'),
+    `<b>${escMd(t.agent_name_snapshot||t.agent_id||'?')}</b> ${escMd(t.status||'')}${(t.retry_count||0)>0?` · retry×${t.retry_count}`:''}${t.error_class?` · ${escMd(t.error_class)}`:''}`,
+    JSON.stringify(t, null, 1))));
+  (d.llm_calls||[]).forEach(l => {
+    const fail = l.call_failed || l.failure_kind;
+    const warn = l.finish_reason==='length' || l.fallback_used || l.used_mock;
+    const flags = [l.finish_reason==='length'?'截断(length)':'', l.fallback_used?`回退→provider#${l.fallback_provider_id}`:'',
+                   (l.retry_count||0)>0?`重试×${l.retry_count}`:'', l.used_mock?'Mock':'',
+                   l.failure_kind?`失败(${escMd(l.failure_kind)})`:'' ].filter(Boolean).join(' · ');
+    ev.push(_tlEvent((l.created_at||'').slice(0,19), 'LLM', fail?'err':(warn?'warn':'ok'),
+      `<b>${escMd(l.model_name||l.provider_name||'?')}</b> ${l.total_tokens||0}tok / ${l.latency_ms||0}ms / $${Number(l.estimated_cost||0).toFixed(5)}${flags?' · <span style="color:'+(fail?'var(--red)':'var(--amb)')+';">'+flags+'</span>':''}`,
+      JSON.stringify(l, null, 1)));
+  });
+  (d.flow_runs||[]).forEach(f => {
+    const steps = (d.flow_steps||[]).filter(s => s.run_id===f.id)
+      .map(s => `  step#${s.seq} [${s.status}] ${s.node_type}/${s.node_label||s.node_id} ${s.latency_ms}ms`).join('\n');
+    ev.push(_tlEvent((f.created_at||'').slice(0,19), '工作流',
+      (f.status!=='completed'&&f.status!=='running')?'err':(f.error_count>0?'warn':'ok'),
+      `<b>${escMd(f.flow_name||'flow#'+f.id)}</b> ${escMd(f.status||'')} · ${f.total_latency_ms||0}ms · 错误 ${f.error_count||0}`,
+      JSON.stringify(f, null, 1) + (steps?'\nsteps:/n'+steps:'')));
+  });
+  (d.hil||[]).forEach(h => ev.push(_tlEvent((h.created_at||'').slice(0,19), 'HIL', 'warn',
+    `<b>${escMd(h.agent_id||'')}</b> ${escMd(h.action||'')} · ${escMd(h.status||'')}`, JSON.stringify(h, null, 1))));
+  ev.sort((a,b) => a.t < b.t ? -1 : a.t > b.t ? 1 : 0);
+  return head + (ev.length ? ev.map(e => e.body).join('') : '<div class="mut" style="padding:8px;font-size:12px;">该会话暂无执行记录</div>');
+}
+async function openSessionDrill(cid){
+  try{
+    const d = await api('/api/monitor/session/'+cid);
+    if(d.ok === false){ toast(d.error || '会话不存在'); return; }
+    const b = document.getElementById('modal-body');
+    b.innerHTML = _renderSessionDrill(d);
+    const m = document.getElementById('modal');
+    m.classList.add('show');
+    m.onclick = e => { if(e.target===m) closeModal(); };  // 与 showModal 同款遮罩关闭
+  }catch(e){ toast('会话详情加载失败'); }
 }

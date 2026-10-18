@@ -1439,12 +1439,26 @@
         <h3 class="pt" data-page-node-id="tFeFcsZXNRQLth7z9hCJcK">统一监控平台</h3>
         <div class="pd" data-page-node-id="9QIsdA7ooP7stEPAG7k345">运行 · LLM · 系统 一体化监控 + 日志检索 + 告警中心 <span class="badge" data-page-node-id="fFmQ5pHUPgXnZBu5CbUNWV">7.1/7.2/7.3</span><span class="badge" data-page-node-id="kFEyY0Ig38sbACZaXhycQL">11.3</span><span class="badge" data-page-node-id="ULsIw2gh3EB5937ywjFG5n">D12</span></div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px;" id="ops-kpis" data-page-node-id="j7t9LTQW4sbWXn0HOGCqz5"></div>
+        <!-- 平台能力总览（2026-10-18 v2 方案收口）：LLM 健康 / 编排运行 / 会话排查 / 治理就绪 四层一屏总览。
+             取数全部复用既有口径（llm_health 为 LLM 层唯一真源），各段独立降级，不新造指标。 -->
+        <div class="panel" style="margin-bottom:14px;"><div class="ph">平台能力 <span class="badge">四层健康度</span><span class="badge">口径复用 /api/monitor/*</span></div><div class="pb" id="ops-capability"><div class="loading">加载中…</div></div></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;" data-page-node-id="1QPPFGR66kxFhP8arcB5ND">
           <div class="panel" data-page-node-id="lcsjbJ8PGHVFfc0V4cQaLR"><div class="ph" data-page-node-id="BGqEAVMJnOAdiVeLREfPFO">近 7 天趋势 <span class="badge" data-page-node-id="DzhIqpy7yTpeKSvVUu0159">运行数/平均耗时</span></div><div class="pb" id="ops-trend" data-page-node-id="n5Ebw6CeqFNv9NlW2ug6ri"><div class="loading" data-page-node-id="f8vsELao76eYA5VmNIpfeo">加载中…</div></div></div>
           <div class="panel" data-page-node-id="AfYGcEKnNkW3hiu0HwCGuj"><div class="ph" data-page-node-id="agtdlaJJ7JXQcilOJVO9q9">⏱ 节点耗时分布 <span class="badge" data-page-node-id="qPPb0g8qpvOzKtCoK7d7oC">按节点类型</span></div><div class="pb" id="ops-node-stats" data-page-node-id="sjMtrC1Gm0ZfAdwGuGDJJx"><div class="loading" data-page-node-id="9eYIYm537dGKwSY2vYHdFx">加载中…</div></div></div>
         </div>
         <!-- UX规范§11（2026-10-03）：六指标评估面板由旧编排监控区（st-flow 孤页）迁入统一监控平台 -->
         <div class="panel" style="margin-bottom:14px;"><div class="ph">UX 交互指标 <span class="badge">§11 评估体系</span></div><div class="pb" id="ops-ux"><div class="loading">加载中…</div></div></div>
+        <!-- 会话级运行监控（2026-10-18 v2 方案）：异常会话列表 + 会话执行证据链下钻 -->
+        <div class="panel" style="margin-bottom:14px;"><div class="ph">会话排查 <span class="badge">异常会话优先</span><span class="badge r" id="ops-sess-flagged" style="display:none;">0 异常</span></div>
+          <div class="pb">
+            <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+              <select id="ops-sess-days" style="width:110px;"><option value="1">近 24 小时</option><option value="7" selected>近 7 天</option><option value="30">近 30 天</option></select>
+              <input id="ops-sess-q" placeholder="会话标题/意图/会话ID" style="flex:1;min-width:140px;" onkeydown="if(event.key==='Enter')loadOpsSessions()">
+              <button class="btn sm" onclick="loadOpsSessions()">检索</button>
+            </div>
+            <div style="max-height:340px;overflow:auto;" id="ops-sessions"><div class="mut" style="padding:10px;font-size:12px;">加载中…</div></div>
+          </div>
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;" data-page-node-id="MZRMdezLJfBwLdPNdKEZyu">
           <div class="panel" data-page-node-id="IhCOoPzkZHFM8e3X3Adx2j">
             <div class="ph" data-page-node-id="ypDeKZ9dgfmnIpNpCeH5iI">运行日志检索 <span class="badge" data-page-node-id="hRFuLLdGImSjmTu90aUYq8">节点级执行日志</span></div>
