@@ -33,6 +33,13 @@ route 标签是**弱标注**（entity 名可链接 ⇒ 期望 graph），已在�
 用法（必须在项目 venv 内跑，见 tools/eval/preflight.py 的说明）：
     "<repo>/.venv/Scripts/python.exe" -X utf8 tools/eval/build_evalset.py
 可调环境变量：DOC_PER_DOC / GRAPH_MAX / SEED
+
+## P1-1（2026-10-18 自进化调研路线图）：Trace2Dataset
+本工具**默认附带**构建 trace 评测集（tmp/p21/trace_evalset.json）——生产证据链
+（会话 / HIL 裁决 / 意图样本 / 编排运行 / P0-3 Bad Case 台账）→ 可复用评测样本，
+AgentLoop「生产轨迹 → 评测集 → 优化 → 再部署」闭环的供料环。实现见同目录
+trace2dataset.py（抽取器注册表 + 指纹 + 漂移拒绝）。`--no-trace` 退回纯检索集
+构建（旧行为，输出字节级不变）。
 """
 import hashlib
 import json
@@ -300,3 +307,36 @@ print("   %.1f KB | doc %d + graph %d + neg %d = %d 例"
          len(doc_cases) + len(graph_cases) + len(neg_cases)))
 print("   指纹: chunks=%s entities(release)=%s names_sha1=%s"
       % (finger["chunks"], finger["entities_release"], finger["release_entity_names_sha1"]))
+
+# ── P1-1（2026-10-18 自进化调研路线图）：Trace2Dataset ─────────────────────
+# 生产证据链 → 评测集（默认随本工具一起构建；--no-trace 退回纯检索集旧行为）。
+# 实现与抽取器注册表在 tools/eval/trace2dataset.py（只读取材，绝不写库）。
+if "--no-trace" in sys.argv:
+    print("\n（--no-trace：跳过 P1-1 trace 评测集，仅构建检索评测集）")
+else:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import trace2dataset
+
+    print()
+    print("=" * 78)
+    print("步骤 5/4  P1-1 trace 域：生产证据链 → 评测样本")
+    print("=" * 78)
+    trace = trace2dataset.build(conn)
+    trace_out = trace2dataset.default_out_path()
+    trace2dataset.write(trace_out, trace)
+    tc = trace["counts"]
+    print("  按抽取器: %s" % tc["by_extractor"])
+    print("  按标注口径: %s" % tc["by_label"])
+    _sk = trace["summary"].get("skipped_extractors") or {}
+    if _sk:
+        print("  跳过证据源（老库缺表等，不连坐其它源）: %s" % _sk)
+    if trace["summary"].get("skipped_mock"):
+        print("  排除 Mock 回答 %d 条（Mock 不是系统能力证据）"
+              % trace["summary"]["skipped_mock"])
+    print("→ %s" % trace_out)
+    print("   %.1f KB | %d 例（strong=人工裁决 / weak=回归证据 / negative=已知失败）"
+          % (os.path.getsize(trace_out) / 1024, tc["total"]))
+    print("   trace 指纹: messages=%s intent_confirmed=%s hil=%s"
+          % (trace["fingerprint"].get("messages"),
+             trace["fingerprint"].get("intent_samples"),
+             trace["fingerprint"].get("hil_confirmations")))

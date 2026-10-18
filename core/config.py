@@ -1033,6 +1033,20 @@ DEFAULT_CONFIG = {
         "reopen_on_recur": True,     # 已 triage 的主题复现时重开（否则告警闭环对复发失明）
         "alert_threshold": 5,        # 默认告警线（open 数 ≥N 触发；也可在 alert_rules 自建规则）
     },
+    # ── P1-1（2026-10-18 自进化调研路线图）：Trace2Dataset ────────────
+    # 背景：生产轨迹（会话/HIL 裁决/意图样本/编排运行/Bad Case 台账）此前没有
+    #   任何通路变成可复用评测样本 —— 飞轮不接回管道就是数据坟墓（Airbnb AITL /
+    #   NVIDIA MAPE 同款失败模式）。AgentLoop 闭环的供料环。
+    # 本组控制 tools/eval/trace2dataset.py 的取材口径；只读取材，绝不写库。
+    "trace2dataset": {
+        "enabled": True,             # 总开关（False 时 build 返空而非报错）
+        "window_days": 90,           # 取材窗口：只取最近 N 天的证据（评测集要新）
+        "max_per_extractor": 300,    # 单抽取器样本上限（防单一证据源淹掉全集）
+        "exclude_mock": True,        # 排除 Mock 降级回答（Mock 不是系统能力证据）
+        "mock_markers": "（Mock 回答）,Mock 降级模式",  # Mock 标记（逗号分隔，命中即排除）
+        "min_query_chars": 4,        # query 最短长度（"嗯"/"好"不构成评测样本）
+        "max_response_chars": 600,   # response 截断上限（回归集只需可读开头）
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1517,6 +1531,16 @@ CONFIG_SCHEMA = {
         "max_detail_chars":   {"type": "int",   "desc": "单条 evidence 截断上限（字符）"},
         "reopen_on_recur":    {"type": "bool",  "desc": "已 triage 的主题复现时重开为 open"},
         "alert_threshold":    {"type": "int",   "desc": "默认告警线：open 数达到即值得关注"},
+    },
+    # P1-1（2026-10-18）：Trace2Dataset（tools/eval/trace2dataset.py 消费）
+    "trace2dataset": {
+        "enabled":            {"type": "bool",  "desc": "Trace2Dataset 取材总开关（False 时构建返空）"},
+        "window_days":        {"type": "int",   "desc": "取材窗口：只取最近 N 天的生产证据"},
+        "max_per_extractor":  {"type": "int",   "desc": "单抽取器样本上限（防单一证据源淹掉全集）"},
+        "exclude_mock":       {"type": "bool",  "desc": "排除 Mock 降级回答（Mock 不是系统能力证据）"},
+        "mock_markers":       {"type": "str",   "desc": "Mock 标记（逗号分隔，query/response 命中即排除）"},
+        "min_query_chars":    {"type": "int",   "desc": "query 最短长度（短于则不构成评测样本）"},
+        "max_response_chars": {"type": "int",   "desc": "response 截断上限（字符）"},
     },
 }
 
