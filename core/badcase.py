@@ -18,6 +18,13 @@
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
+from core.statemachine import get as _sm_get
+
+# #18 统一状态机：bad_case 三态机的唯一定义在 core/statemachine.py，
+# 本文件的所有 status 写入（triage 人工流转 / 复现重开）都必须过它校验 ——
+# 包括「人工结论」：resolve/ignore 之后只有 reopen 边能回 open，不存在绕过。
+_BC = _sm_get("bad_case")
+
 # ── 检测器注册表 ────────────────────────────────────────────────
 # 每个检测器是一条只读 SQL，统一输出五列：
 #   src_id   源行 id（llm_usage_stats.id / feedback.id）——事件水位的一半
@@ -213,7 +220,11 @@ def collect_bad_cases(conn, *, apply: bool = False, kinds: Optional[List[str]] =
             g["plan"] = "stale"
             plan["stale"] += 1
         else:
-            g["plan"] = "reopen" if (status != "open" and cfg.get("reopen_on_recur")) else "recur"
+            # #18：重开判定过状态机（reopen 边存在才计划重开；库存状态被外部改脏时
+            # 按 recur 处理只累加次数，不与 apply 的机检结论漂移）
+            st = _BC.normalize(status)
+            reopenable = st != "open" and "open" in _BC.targets(st)
+            g["plan"] = "reopen" if (reopenable and cfg.get("reopen_on_recur")) else "recur"
             plan[g["plan"]] += 1
         out["summary"]["total_events"] += len(g["events"])
 
@@ -261,7 +272,12 @@ def apply_bad_cases(conn, candidates: list, *, settings: Optional[dict] = None) 
             continue
         status = row["status"] or "open"
         keep_by = row["resolved_by"] or ""
-        if status != "open" and cfg.get("reopen_on_recur"):
+        # #18：重开判定与 collect 的 plan 分类**同源**（normalize + targets + 开关，
+        # 见 collect_bad_cases 内同一算式）—— 库存状态不在状态域（表被外部改脏）时
+        # 按 recur 处理：只累加次数，不覆盖一个自己不认识的 status，也不整批拒绝
+        # 连坐无辜的新主题（脏行被机检冻结，triage 同样拒，直至人工修库）。
+        st = _BC.normalize(status)
+        if st != "open" and "open" in _BC.targets(st) and cfg.get("reopen_on_recur"):
             status, keep_by = "open", ""      # 复现重开：解决后又坏 ⇒ 重新进入告警视野
             reopened += 1
         first = min(row["first_seen_at"] or g["first_seen_at"], g["first_seen_at"])
@@ -277,14 +293,22 @@ def apply_bad_cases(conn, candidates: list, *, settings: Optional[dict] = None) 
 
 
 def triage_bad_case(conn, case_id: int, status: str, actor: str = "", note: str = "") -> dict:
-    """人工关口：open/resolved/ignored 三态流转（只有这里能改 status）。"""
-    if status not in ("open", "resolved", "ignored"):
-        return {"ok": False, "error": f"非法状态: {status}（open/resolved/ignored）"}
+    """人工关口：open/resolved/ignored 三态流转（只有这里能改 status）。
+
+    #18 统一状态机：成员校验 + 迁移边校验都走 bad_case 机（core/statemachine）——
+    非法状态（如 done）拒；合法状态间的非法迁移（如 resolved→resolved 原地流转、
+    ignored→ignored）同样拒：人工结论也不允许绕过状态机自说自话。
+    """
+    if status not in _BC.states:
+        return {"ok": False, "error": f"非法状态: {status}（{'/'.join(_BC.states)}）"}
     if not _table_exists(conn):
         return {"ok": False, "error": "bad_cases 表不存在（迁移未执行）"}
-    row = conn.execute("SELECT id FROM bad_cases WHERE id=?", (case_id,)).fetchone()
+    row = conn.execute("SELECT id, status FROM bad_cases WHERE id=?", (case_id,)).fetchone()
     if not row:
         return {"ok": False, "error": f"Bad Case #{case_id} 不存在"}
+    ok, err = _BC.check(row["status"] or "open", status)
+    if not ok:
+        return {"ok": False, "error": err}
     conn.execute(
         "UPDATE bad_cases SET status=?, resolved_by=?, updated_at=datetime('now') WHERE id=?",
         (status, actor if status != "open" else "", case_id))

@@ -7,11 +7,16 @@ from fastapi.responses import JSONResponse
 
 from core.deps import db_session, current_user, require_permission
 from core import branch_rules
+from core.statemachine import get as _sm_get
 from repositories.branch_repo import BranchRepo
 from repositories.commit_repo import CommitRepo
 from core.audit import audit
 
 router = APIRouter(tags=["分支管理"])
+
+# #18 统一状态机：MR 评审生命周期的唯一定义在 core/statemachine.py
+# （MACHINES["merge_request"]），本文件不再维护 inline if 状态表。
+_MR = _sm_get("merge_request")
 
 # 分支类型全集：dev（主开发，系统预置唯一）/ release（发布，系统预置唯一）/ personal（个人分支）/ local（本地分支）
 # 可手动创建的类型仅 personal 与 local（见 create_branch 的校验）：personal 须从 dev/release 拉基线；
@@ -312,11 +317,12 @@ def resolve_merge(mr_id: int, body: dict, conn=Depends(db_session), user=Depends
     mr = repo.get_merge_request(mr_id)
     if not mr:
         return JSONResponse({"error": f"合并请求 #{mr_id} 不存在"}, 404)
-    # P1-1 状态机：approve 仅 open 可；reject 允许 open/draft（草稿也可直接关闭）
-    if action == "approve" and mr["status"] != "open":
-        return JSONResponse({"error": f"仅待评审（open）合并请求可通过（当前状态：{mr['status']}）"}, 400)
-    if action == "reject" and mr["status"] not in ("draft", "open"):
-        return JSONResponse({"error": f"该合并请求已处理（{mr['status']}）"}, 400)
+    # #18 统一状态机：approve 仅 open 可执行、reject 允许 draft/open（草稿也可直接
+    # 关闭）—— 判定收口到 merge_request 机（与 repo 层 resolve_merge 的自卫同源），
+    # 错误文案含当前状态与可执行动作，可直接回给调用方。
+    ok, _to, err = _MR.check_action(mr["status"], action)
+    if not ok:
+        return JSONResponse({"error": err}, 400)
     review_note = (body.get("review_note") or "").strip()
     if action == "reject" and len(review_note) < 5:
         return JSONResponse({"error": "驳回必须填写意见（≥5 字，用于追溯）"}, 400)

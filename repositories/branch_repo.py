@@ -4,21 +4,25 @@
 """
 import json
 
+from core.statemachine import get as _sm_get
 from repositories.base import BaseRepo
 
 
-# ── MR 状态机（对标 GitHub PR：draft → open → merged / closed，closed 可 reopen）──
+# ── MR 状态机（#18 统一状态机注册表；对标 GitHub PR：draft → open → merged / closed，closed 可 reopen）──
+# 状态域与迁移边的唯一定义处在 core/statemachine.py（MACHINES["merge_request"]），
+# 此处只做兼容别名与归一化 —— 禁止在本文件再写一套 if 状态表（那正是 #18 要收口的问题）。
+_MR = _sm_get("merge_request")
 MR_DRAFT = "draft"      # 草稿（不可审批，需先发布评审）
 MR_OPEN = "open"        # 待评审
 MR_MERGED = "merged"    # 已合并
 MR_CLOSED = "closed"    # 已关闭（驳回后可 reopen）
-# 旧枚举 → 新枚举（存量数据 / 旧调用方兼容映射）
-LEGACY_MR_STATUS = {"pending": MR_OPEN, "approved": MR_MERGED, "rejected": MR_CLOSED}
+# 旧枚举 → 新枚举（存量数据 / 旧调用方兼容映射；与注册表 legacy 同源）
+LEGACY_MR_STATUS = dict(_MR.legacy)
 
 
 def _norm_mr_status(status: str) -> str:
     """MR 状态归一化：旧枚举（pending/approved/rejected）映射为新状态机。"""
-    return LEGACY_MR_STATUS.get(status, status)
+    return _MR.normalize(status)
 
 
 class BranchRepo(BaseRepo):
@@ -454,7 +458,9 @@ class BranchRepo(BaseRepo):
         mr = self.get_merge_request(mr_id)
         if not mr:
             return {"ok": False, "error": f"合并请求 #{mr_id} 不存在"}
-        if mr.get("status") not in (MR_DRAFT, MR_OPEN):
+        # 可编辑态 = 评审尚未终结（draft/open；legacy pending 经状态机归一化为 open）——
+        # 状态域字面量与归一化都出自 merge_request 机，此处不另写一套 if 状态表。
+        if _norm_mr_status(mr.get("status")) not in (MR_DRAFT, MR_OPEN):
             return {"ok": False, "error": f"该合并请求已处理（{mr.get('status')}），不可再解决冲突"}
         try:
             resolutions = json.loads(mr.get("resolutions") or "{}")
@@ -765,6 +771,11 @@ class BranchRepo(BaseRepo):
         mr = self.one("SELECT * FROM merge_requests WHERE id=?", (mr_id,))
         if not mr:
             return {"ok": False, "error": f"合并请求 #{mr_id} 不存在"}
+        # #18 状态机自卫：repo 层独立校验迁移合法性（此前只靠路由层偶然守卫，
+        # 任何新调用方绕过路由就会把 merged 的 MR 二次改写）
+        ok, err = _MR.check(mr.get("status"), status)
+        if not ok:
+            return {"ok": False, "error": err}
         if status == MR_CLOSED and len((review_note or "").strip()) < 5:
             return {"ok": False, "error": "驳回合并请求必须填写意见（≥5 字，用于追溯）"}
         if status == MR_MERGED:
@@ -1028,23 +1039,25 @@ class BranchRepo(BaseRepo):
                 "updated": updated, "doc_snapshot": snap}
 
     def open_merge_request(self, mr_id: int, actor: str = "王工") -> dict:
-        """P1-1：草稿转正式评审（draft → open）。"""
+        """P1-1：草稿转正式评审（draft → open）。守卫走 #18 状态机。"""
         mr = self.get_merge_request(mr_id)
         if not mr:
             return {"ok": False, "error": f"合并请求 #{mr_id} 不存在"}
-        if mr.get("status") != MR_DRAFT:
-            return {"ok": False, "error": f"仅草稿（draft）合并请求可发布评审（当前状态：{mr.get('status')}）"}
+        ok, err = _MR.check(mr.get("status"), MR_OPEN)
+        if not ok:
+            return {"ok": False, "error": err}
         self.execute("UPDATE merge_requests SET status=?, reviewed_by=?, resolved_at='' WHERE id=?",
                      (MR_OPEN, actor, mr_id))
         return {"ok": True, "action": MR_OPEN}
 
     def reopen_merge_request(self, mr_id: int, actor: str = "王工") -> dict:
-        """P1-1：重新打开已关闭的合并请求（closed → open）。"""
+        """P1-1：重新打开已关闭的合并请求（closed → open）。守卫走 #18 状态机。"""
         mr = self.get_merge_request(mr_id)
         if not mr:
             return {"ok": False, "error": f"合并请求 #{mr_id} 不存在"}
-        if mr.get("status") != MR_CLOSED:
-            return {"ok": False, "error": f"仅已关闭（closed）合并请求可重新打开（当前状态：{mr.get('status')}）"}
+        ok, err = _MR.check(mr.get("status"), MR_OPEN)
+        if not ok:
+            return {"ok": False, "error": err}
         self.execute("UPDATE merge_requests SET status=?, reviewed_by=?, review_note='', resolved_at='' WHERE id=?",
                      (MR_OPEN, actor, mr_id))
         return {"ok": True, "action": MR_OPEN}

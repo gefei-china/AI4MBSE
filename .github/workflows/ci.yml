@@ -692,6 +692,16 @@ jobs:
       - name: Guard Bad Case 闭环（dry-run 人工关口 + 去重累加 + 告警指标/规则/冷却）
         run: python tools/verify/verify_badcase.py
 
+      # ── #18（2026-10-18 自进化调研路线图）：统一状态机 ─────────────────
+      # 一个纯函数引擎 + 一张声明式注册表收口全仓状态字面量（MR/bad_case/V2G 双
+      # 生命周期/文档生命周期/意图样本/HIL/flow_run/进化流水线模板机）。已接线
+      # 实体（merge_request/bad_case）的读写路径**必须过 Machine.check**：merged
+      # 的 MR 二次改写、triage 原地流转在数据层即拒。未接线实体先声明覆盖，
+      # 门禁 D 段用真库 9 列状态值勘察佐证（不是纸上机器）。真库段只读（CI 无库
+      # 按惯例 SKIP）。
+      - name: Guard 统一状态机（迁移矩阵 + 注册表自检 + MR/badcase 过机检 + 真库状态域勘察）
+        run: python tools/verify/verify_statemachine.py
+
       - name: Guard 向量二进制缓存保真
         run: python tools/verify/verify_vector_binary_cache.py
 
