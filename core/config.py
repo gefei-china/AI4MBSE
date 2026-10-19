@@ -1060,6 +1060,21 @@ DEFAULT_CONFIG = {
         "max_steps": 500,            # 单会话步骤上限（真库实测最大 324；超限保留最早的）
         "session_scan_limit": 200,   # patterns 扫描会话数上限（最近活跃优先）
     },
+    # ── P1-3（2026-10-18 自进化调研路线图）：配置提案器 ──────────────
+    # 背景：RefineGate 只评审「内容」；P1-2 聚出首坏步模式后，没有任何消费者
+    #   把模式变成「该改什么」的建议——诊断环到行动环之间断了一环。GEPA 式
+    #   反思改写补上这一环，且守住铁律：只提议，不自动应用（自动改生产配置
+    #   是 misevolution 直通道；应用由人在设置页改配置，本链路零配置写路径）。
+    # 本组控制 core/config_proposal.py 的提议口径。
+    "config_proposal": {
+        "enabled": True,             # 总开关（False 时 generate 返空不报错）
+        "min_occurrences": 2,        # 模式入提案下限（与 attribution 同语义：防一次性噪声）
+        "prompt_min_occurrences": 4, # prompt/skill 提案的更高下限（改提示词影响面更大）
+        "unattributed_min": 1,       # unattributed 会话数达阈值即提埋点提案（缺口可见）
+        "max_proposals": 20,         # 单次 generate 入库上限（防长尾淹掉评审队列）
+        "llm_draft": False,          # GEPA 式 LLM 反思改写 rationale（False=纯模板，确定性）
+        "max_rationale_chars": 500,  # rationale 截断上限（LLM 改写后仍受此约束）
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1563,6 +1578,15 @@ CONFIG_SCHEMA = {
         "max_patterns":       {"type": "int",   "desc": "模式条数上限（防看板被长尾淹掉）"},
         "max_steps":          {"type": "int",   "desc": "单会话步骤上限（超限保留最早的，首坏步在头部）"},
         "session_scan_limit": {"type": "int",   "desc": "模式聚合扫描会话数上限（最近活跃优先）"},
+    },
+    "config_proposal": {
+        "enabled":               {"type": "bool",  "desc": "提案总开关（False 时 generate 返空）"},
+        "min_occurrences":       {"type": "int",   "desc": "模式入提案下限（出现次数，防一次性噪声）"},
+        "prompt_min_occurrences": {"type": "int",  "desc": "prompt/skill 提案下限（更高：改提示词影响面更大）"},
+        "unattributed_min":      {"type": "int",   "desc": "unattributed 会话数达阈值即提埋点提案"},
+        "max_proposals":         {"type": "int",   "desc": "单次 generate 入库上限（防长尾淹掉评审队列）"},
+        "llm_draft":             {"type": "bool",  "desc": "GEPA 式 LLM 反思改写 rationale（False=纯模板）"},
+        "max_rationale_chars":   {"type": "int",   "desc": "rationale 截断上限（字符）"},
     },
 }
 

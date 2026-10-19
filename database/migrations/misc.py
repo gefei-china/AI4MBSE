@@ -493,3 +493,45 @@ def _retire_fake_conflict_check(conn):
         conn.commit()
     except Exception:
         pass
+
+
+def _migrate_config_proposals(conn):
+    """P1-3（2026-10-18 自进化调研路线图）：配置提案队列表。
+
+    ## 为什么需要它
+    RefineGate 只评审「内容」；P1-2 归因器聚出首坏步模式后，没有任何通路把
+    模式变成「该改什么」的建议。本表是 GEPA 式反思改写的**落点**：规则从
+    失败轨迹提议 prompt/skill/配置修订，**只提议不自动应用**——自动改生产
+    配置是 misevolution 的直接通道。
+
+    ## 去重/状态语义
+    - fingerprint UNIQUE：sha1(rule|section|key|proposed_value)。同一提案不
+      重复入队；现场配置变化 ⇒ proposed 变 ⇒ 指纹变 ⇒ 可重新提议（闭环不卡死）。
+    - status 三态：pending → applied | rejected（终态不重开，与 #18 状态机纪律
+      一致）。applied/rejected 只记录**人的裁决**；应用是人在设置页改配置，
+      本链路没有任何写配置的路径。
+    - 幂等：IF NOT EXISTS + 索引；不塞种子数据（提案只能从真实失败轨迹生成）。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS config_proposals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rule TEXT NOT NULL,
+        target_section TEXT NOT NULL,
+        target_key TEXT DEFAULT '',
+        current_value TEXT DEFAULT '',
+        proposed_value TEXT DEFAULT '',
+        rationale TEXT DEFAULT '',
+        evidence_json TEXT DEFAULT '{}',
+        fingerprint TEXT NOT NULL UNIQUE,
+        status TEXT DEFAULT 'pending',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        reviewed_by TEXT DEFAULT '',
+        reviewed_at TEXT,
+        review_note TEXT DEFAULT ''
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_config_proposals_status "
+              "ON config_proposals(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_config_proposals_rule "
+              "ON config_proposals(rule)")
+    conn.commit()
+    print("[init_db] 迁移: 配置提案队列表 config_proposals 已建立（P1-3，只提议不自动应用）")

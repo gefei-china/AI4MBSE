@@ -49,6 +49,7 @@ from routers import (
     ux_metrics_router,  # 2026-10-03 UX 埋点：§11 六指标采集与聚合
     orchestration_router,  # 2026-10-03 P0-2 编排检查点 + 断点续跑
     jobs_router,           # 2026-10-04 P0-C 异步作业队列（长任务提交即返回 job_id）
+    proposals_router,      # 2026-10-18 P1-3 配置提案（失败轨迹→修订提议，只提议不自动应用）
 )
 
 @asynccontextmanager
@@ -268,6 +269,7 @@ for _router in (
     ux_metrics_router,  # 2026-10-03 UX 埋点：§11 六指标采集与聚合
     orchestration_router,  # 2026-10-03 P0-2 编排检查点 + 断点续跑（LangGraph checkpointer 等价物）
     jobs_router,  # 2026-10-04 P0-C 异步作业队列（长任务提交即返回 job_id）
+    proposals_router,  # 2026-10-18 P1-3 配置提案（失败轨迹→修订提议，只提议不自动应用）
 ):
     app.include_router(_router)
 

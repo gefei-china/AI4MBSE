@@ -71,6 +71,7 @@ from .migrations import (
     _migrate_tool_result_offloads,  # 2026-10-02 工具结果 offload 表（P1-4 Tier1 可寻址召回）
     _migrate_audit_chain,  # 2026-10-03 审计溯源列 + 哈希链（P0-a/P0-b）
     _retire_fake_conflict_check,  # 2026-10-13 conflict_check 假实现下线（置 disabled，不删行）
+    _migrate_config_proposals,  # 2026-10-18 配置提案队列（P1-3，只提议不自动应用）
 )
 from .seeds import (
     _seed,
@@ -1585,6 +1586,9 @@ def init_db():
     _retire_fake_conflict_check(conn)
     # ── P0-a/P0-b（2026-10-03）审计溯源 + 哈希链（评估 P0）──
     _migrate_audit_chain(conn)
+    # ── P1-3（2026-10-18 自进化调研路线图）：配置提案队列 ──
+    #    失败轨迹（P1-2 首坏步模式）→ 修订提议（只提议不自动应用）
+    _migrate_config_proposals(conn)
     # ── P0-④（2026-09-11）时态管理：双时态列 + 索引 + 视图 + W3C Time 对齐表 ──
     _migrate_entity_temporal(conn)
     # ── P1-①（2026-09-11）SWRL 规则管理表：swrl_rules + inferred_facts（推理产出暂存）──

@@ -723,6 +723,15 @@ jobs:
       - name: Guard 步骤级归因（3 源注册表 + 首坏/级联 + 三态 verdict + 六键变异自证 + 真库对账 + 写入点行为级证明）
         run: python tools/verify/verify_attribution.py
 
+      # ── P1-3（2026-10-18 自进化调研路线图）：配置提案器 ───────────────
+      # RefineGate 从「内容评审」泛化为「配置评审」：读 P1-2 首坏步模式，按 5
+      # 条规则注册表提议 prompt/skill/配置修订（GEPA 式反思改写，llm_draft
+      # 可选增强、默认纯模板）。铁律**只提议不自动应用**：指纹去重 + 三态
+      # 裁决（终态不重开、已决不重开），应用由人在设置页改配置——引擎/repo/
+      # 路由三层零配置写路径（门禁静态 + 行为级双重证明）。
+      - name: Guard 配置提案（5 规则注册表 + 指纹去重 + 三态裁决 + 七键变异自证 + 零配置写路径 + 真库活配置对账）
+        run: python tools/verify/verify_config_proposal.py
+
       - name: Guard 向量二进制缓存保真
         run: python tools/verify/verify_vector_binary_cache.py
 
