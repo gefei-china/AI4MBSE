@@ -535,3 +535,64 @@ def _migrate_config_proposals(conn):
               "ON config_proposals(rule)")
     conn.commit()
     print("[init_db] 迁移: 配置提案队列表 config_proposals 已建立（P1-3，只提议不自动应用）")
+
+
+def _migrate_sandbox_p14(conn):
+    """P1-4（2026-10-19 自进化调研路线图）：沙箱 A/B + 配置晋升两张表。
+
+    ## sandbox_runs —— 一次配置影子评估 = 一行
+    提案（P1-3）想改某个配置键 ⇒ 先在这里跑一次双臂评估：对照组（活配置）
+    vs 实验组（影子配置，只活在被评估的门禁子进程里）各跑 CI 门禁集，
+    差分判回归。status: queued → running → done | failed；verdict:
+    pass | regression | error（error=评估环境坏，结论无效）。
+    summary_json 存逐门禁明细（按严重度排序、max_report_gates 截断）。
+
+    ## config_history —— 配置变更台账（晋升与回滚的唯一落点）
+    每次「经 HIL 批准的真实配置变更」记一行：旧值→新值、来源
+    （proposal 晋升 / rollback 回滚）、谁、何时。回滚 = 以某行的
+    old_value 为新值再走一次 HIL 批准的应用 ⇒ 闭环且无自动后门。
+    applied=False 的行是幂等未应用记录（台账不撒谎：发生过评估，
+    只是值没变）。
+
+    幂等：IF NOT EXISTS + 索引；不塞种子（评估只能从真实提案发起，
+    变更只能经人批准产生）。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS sandbox_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        proposal_id INTEGER NOT NULL,
+        scope TEXT DEFAULT 'full',
+        shadow_json TEXT DEFAULT '{}',
+        status TEXT DEFAULT 'queued',
+        verdict TEXT DEFAULT '',
+        summary_json TEXT DEFAULT '{}',
+        job_id INTEGER DEFAULT 0,
+        error TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        started_at TEXT,
+        finished_at TEXT,
+        duration_s INTEGER DEFAULT 0
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sandbox_runs_proposal "
+              "ON sandbox_runs(proposal_id, id DESC)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sandbox_runs_status "
+              "ON sandbox_runs(status)")
+    c.execute("""CREATE TABLE IF NOT EXISTS config_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        section TEXT NOT NULL,
+        key TEXT NOT NULL,
+        old_value TEXT DEFAULT '',
+        new_value TEXT DEFAULT '',
+        source TEXT DEFAULT 'proposal',
+        source_id INTEGER DEFAULT 0,
+        applied_by TEXT DEFAULT '',
+        applied_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        note TEXT DEFAULT '',
+        applied INTEGER DEFAULT 1
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_config_history_section "
+              "ON config_history(section, key, id DESC)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_config_history_source "
+              "ON config_history(source, source_id)")
+    conn.commit()
+    print("[init_db] 迁移: 沙箱运行/配置台账表 sandbox_runs + config_history 已建立（P1-4，晋升须过人）")

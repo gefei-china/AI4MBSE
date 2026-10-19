@@ -91,6 +91,7 @@ from .misc import (
     _migrate_audit_chain,             # 2026-10-03 审计溯源列 + 哈希链（P0-a/P0-b）
     _retire_fake_conflict_check,       # 2026-10-13 conflict_check 假实现下线（置 disabled，不删行）
     _migrate_config_proposals,         # 2026-10-18 配置提案队列（P1-3，只提议不自动应用）
+    _migrate_sandbox_p14,              # 2026-10-19 沙箱运行 + 配置台账（P1-4，晋升须过人）
 )
 from .permissions import (
     _migrate_agent_tool_perm,         # 2026-10-06 Agent 工具链 RBAC + HIL 批准授权（P0-6/P0-2）
@@ -160,4 +161,5 @@ __all__ = [
     "_migrate_audit_chain",  # 2026-10-03 审计溯源列 + 哈希链（P0-a/P0-b）
     "_retire_fake_conflict_check",  # 2026-10-13 conflict_check 假实现下线
     "_migrate_config_proposals",  # 2026-10-18 配置提案队列（P1-3）
+    "_migrate_sandbox_p14",  # 2026-10-19 沙箱运行 + 配置台账（P1-4）
 ]

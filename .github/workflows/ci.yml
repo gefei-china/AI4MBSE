@@ -732,6 +732,19 @@ jobs:
       - name: Guard 配置提案（5 规则注册表 + 指纹去重 + 三态裁决 + 七键变异自证 + 零配置写路径 + 真库活配置对账）
         run: python tools/verify/verify_config_proposal.py
 
+      # ── P1-4（2026-10-19 自进化调研路线图）：沙箱 A/B + 门禁晋升 ──────────
+      # 影子配置层（MBSE_SHADOW_CONFIG，第四层最高优先级，未知键/非法 JSON
+      # fail-loud——typo 影子键若静默失效，"无回归"结论就是假的）驱动新配置
+      # 候选：CI 口径评估集（ci.yml 执行行的门禁及原参数）**双臂顺序**跑
+      # （门禁工作目录两臂共享固定路径，并行互删 ⇒ 假回归，故顺序），每臂
+      # 独立临时库 + 配置副本；源码内容指纹防外部编辑污染 ⇒ 假回归；双臂同败
+      # 记中性（环境性），只判「对照 pass、实验 fail」为回归。晋升铁律：
+      # verdict=pass 才入 hil_confirmations，**人批准后**才经 save_override
+      # 真改配置并落 config_history，回滚同样过人（不开自动后门）；陈旧结论
+      # 防护（现场配置变过 ⇒ 必须重跑）；非配置键目标不走该通道。
+      - name: Guard 沙箱 A/B 与门禁晋升（影子层四态 + 双臂顺序隔离 + 指纹防变异 + 差分中性判定 + 晋升过人 + 零生产副作用）
+        run: python tools/verify/verify_sandbox.py
+
       - name: Guard 向量二进制缓存保真
         run: python tools/verify/verify_vector_binary_cache.py
 

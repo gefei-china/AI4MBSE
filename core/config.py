@@ -4,10 +4,12 @@
 智源平台等）统一收敛，一处定义、多处读取，避免魔数与各写各的环境变量。
 
 来源优先级（高 → 低）：
-1. 环境变量  —— 部署友好，业务代码无感覆盖（见 ENV_MAP）
-2. 系统级配置文件 —— 默认 <用户目录>/.workbuddy/mbse_config.json，
+1. 影子配置（MBSE_SHADOW_CONFIG）—— P1-4 沙箱专用：一次传一组候选配置，
+   只活在被评估的子进程里；生产进程不设（见 _load_shadow 的 fail-loud 校验）
+2. 环境变量  —— 部署友好，业务代码无感覆盖（见 ENV_MAP）
+3. 系统级配置文件 —— 默认 <用户目录>/.workbuddy/mbse_config.json，
    跨工程全局生效（模板见工程根 mbse_config.example.json）
-3. 内置默认值 —— 本文件 DEFAULT_CONFIG
+4. 内置默认值 —— 本文件 DEFAULT_CONFIG
 
 职责边界：
 - 本模块只管「静态/部署配置」（启动时确定，不随界面变化）。
@@ -1075,6 +1077,14 @@ DEFAULT_CONFIG = {
         "llm_draft": False,          # GEPA 式 LLM 反思改写 rationale（False=纯模板，确定性）
         "max_rationale_chars": 500,  # rationale 截断上限（LLM 改写后仍受此约束）
     },
+    # 本组控制 core/sandbox.py 的沙箱 A/B 评估口径（P1-4）。
+    "sandbox": {
+        "enabled": True,             # 总开关（False 时拒绝发起沙箱评估，不静默降级）
+        "gate_timeout_s": 150,       # 单门禁超时（秒）：超时记 error，不进 fail 混淆回归信号）
+        "default_scope": "full",     # 默认评估范围：full=全门禁 | referenced=静态引用该配置的门禁
+        "infra_error_ratio": 0.3,    # 双臂 error 占比超此值 ⇒ verdict=error（评估环境坏了，结论无效）
+        "max_report_gates": 400,     # 报告内门禁明细条数上限（防长尾淹掉摘要）
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1139,6 +1149,51 @@ def _load_env() -> dict:
     return out
 
 
+# ── P1-4（2026-10-19）影子配置层 ────────────────────────────────────────
+#: 影子配置环境变量名。**只有沙箱评估的子进程会设置它**；生产进程永不设置
+#: ⇒ 不设时 _load_shadow() 返 {}，四层合并与改动前完全一致（行为零变化）。
+SHADOW_ENV = "MBSE_SHADOW_CONFIG"
+
+
+def _load_shadow() -> dict:
+    """影子配置层（最高优先级）：MBSE_SHADOW_CONFIG（JSON）→ {section: {key: value}}。
+
+    ## 为什么单开一个环境变量而不是复用 ENV_MAP
+    ENV_MAP 是"每个键一个环境变量"的部署覆盖通道；沙箱需要的是"一次传一组
+    候选配置、且只活在一个评估子进程里"——一组 JSON 更贴合，也不会和部署
+    覆盖混用（误设 MBSE_SHADOW_CONFIG 的生产进程会得到最高优先级覆盖，
+    故校验必须 fail-loud，见下）。
+
+    ## fail-loud 校验（不是静默忽略）
+    未知分组/未知键/类型非法一律抛 ValueError：影子键拼错若静默失效，
+    "影子配置下无回归" 的结论就是假的——比没有评估更坏。同理 JSON 解析
+    失败也抛。唯一不抛的情况：变量未设/为空串（返 {}）。
+    """
+    raw = os.environ.get(SHADOW_ENV) or ""
+    if not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        raise ValueError(f"{SHADOW_ENV} 不是合法 JSON: {e}")
+    if not isinstance(data, dict):
+        raise ValueError(f"{SHADOW_ENV} 必须是 JSON 对象 {{section: {{key: value}}}}")
+    out: dict = {}
+    for section, items in data.items():
+        if not isinstance(items, dict):
+            raise ValueError(f"{SHADOW_ENV}.{section} 必须是对象 {{key: value}}，收到 {type(items).__name__}")
+        meta_sec = CONFIG_SCHEMA.get(section)
+        if meta_sec is None:
+            raise ValueError(
+                f"未知配置分组: {section!r}（{SHADOW_ENV} 只接受 CONFIG_SCHEMA 已登记的分组）")
+        for key, val in items.items():
+            meta = meta_sec.get(key)
+            if meta is None:
+                raise ValueError(f"未知配置项: {section}.{key}（{SHADOW_ENV} 只接受 CONFIG_SCHEMA 已登记的键）")
+            out.setdefault(section, {})[key] = _coerce(meta, val)
+    return out
+
+
 # ── 生效配置（模块加载时计算，可由 reload() 刷新）──
 _CONFIG: dict = {}
 
@@ -1155,13 +1210,17 @@ def _sync_compat() -> None:
 
 
 def reload() -> dict:
-    """重新合并三层配置（环境变量 > 配置文件 > 默认值）并刷新内存/兼容属性。
+    """重新合并四层配置（影子 > 环境变量 > 配置文件 > 默认值）并刷新内存/兼容属性。
 
     静态配置经 save_override() 落盘后调用本函数即可即时生效；
     host/port/db path 等启动级参数需重启服务完全生效。
+
+    P1-4：影子层（MBSE_SHADOW_CONFIG）只在沙箱评估子进程内设置，
+    生产进程不设 ⇒ _load_shadow() 返 {} ⇒ 合并结果与三层时代一致。
     """
     global _CONFIG
-    _CONFIG = _merge(_merge(DEFAULT_CONFIG, _load_file(CONFIG_PATH)), _load_env())
+    _CONFIG = _merge(_merge(_merge(DEFAULT_CONFIG, _load_file(CONFIG_PATH)),
+                            _load_env()), _load_shadow())
     _sync_compat()
     return _CONFIG
 
@@ -1587,6 +1646,14 @@ CONFIG_SCHEMA = {
         "max_proposals":         {"type": "int",   "desc": "单次 generate 入库上限（防长尾淹掉评审队列）"},
         "llm_draft":             {"type": "bool",  "desc": "GEPA 式 LLM 反思改写 rationale（False=纯模板）"},
         "max_rationale_chars":   {"type": "int",   "desc": "rationale 截断上限（字符）"},
+    },
+    # P1-4（2026-10-19）：沙箱 A/B 评估器（core/sandbox.py 消费）
+    "sandbox": {
+        "enabled":            {"type": "bool",  "desc": "沙箱评估总开关（False 时拒绝发起，不静默降级）"},
+        "gate_timeout_s":     {"type": "int",   "desc": "单门禁子进程超时（秒，超时记 error）"},
+        "default_scope":      {"type": "str",   "desc": "默认评估范围：full=全门禁；referenced=静态引用该配置的门禁"},
+        "infra_error_ratio":  {"type": "float", "desc": "双臂 error 占比超此值 ⇒ verdict=error（环境坏，结论无效）"},
+        "max_report_gates":   {"type": "int",   "desc": "报告门禁明细条数上限（防长尾淹掉摘要）"},
     },
 }
 

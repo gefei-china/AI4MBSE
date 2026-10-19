@@ -351,6 +351,7 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
        body 里的 decided_by 仅在**匿名兼容期**兜底。
     """
     from hil_service import HILService
+    from core import config_promotion as _promo
     body = body or {}
     # P0-6②：审计归属以**已认证身份**为准，不采信 body 自报。
     _decider = ""
@@ -364,35 +365,57 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
         row = HILService.get(conn, cid) or {}
         _run_id = int(row.get("run_id") or 0)
         _task_key = str(row.get("task_key") or "")
-        if not _run_id and not _task_key:
-            # 对话直发：批准即执行（仅 HTTP 集成工具支持自动执行）
-            action = str(row.get("action") or "")
+        action = str(row.get("action") or "")
+        # P1-4：配置晋升/回滚确认单——批准即执行（全仓唯一经人批准写配置的入口，
+        #   经 core.config.save_override 落 config_history 台账）。带 task_key
+        #   （proposal:N / history:N）溯源，故不能只靠"对话直发"判据放行。
+        _is_cfg_action = action in (_promo.HIL_ACTION_APPLY, _promo.HIL_ACTION_ROLLBACK)
+        if _is_cfg_action or (not _run_id and not _task_key):
             try:
-                payload = json.loads(row.get("payload") or "{}")
+                payload = row.get("payload")
+                if not isinstance(payload, dict):
+                    payload = json.loads(row.get("payload") or "{}")
             except Exception:
                 payload = row.get("payload") or {}
-            trow = conn.execute("SELECT kind FROM tools WHERE name=? AND status='active'", (action,)).fetchone()
-            if trow and trow["kind"] == "http":
-                from http_tool_executor import exec_http_tool
-                _er = exec_http_tool(action, payload if isinstance(payload, dict) else {})
-                r["executed"] = True
-                r["exec_result"] = {"ok": _er.get("ok"), "result": str(_er.get("result", ""))[:2000]}
-                exec_note = f" · 已自动执行: {'成功' if _er.get('ok') else '失败'}"
-            elif action == "save_artifact":
-                # ★ 2026-10-17（米爸能力配置）：本地工具 save_artifact 的批准即执行——
-                #   确认单 payload 就是工具参数（title/content/kind/lang），
-                #   会话上下文取确认单归属会话。此前本地工具批准后死在队列
-                #   （"非 HTTP 集成类型不支持自动执行"），冒烟实测（确认单 #20）。
-                import artifact_tools as _at_hil
-                _er = _at_hil.exec_tool(action, payload if isinstance(payload, dict) else {},
-                                        conversation_id=int(row.get("conversation_id") or 0))
-                r["executed"] = True
-                r["exec_result"] = {"ok": _er.get("ok"), "result": str(_er.get("result", ""))[:2000]}
-                exec_note = f" · 已自动执行: {'成功' if _er.get('ok') else '失败'}"
+            if _is_cfg_action:
+                try:
+                    er = _promo.execute_confirmation(conn, row)
+                    r["executed"] = bool(er.get("executed"))
+                    r["exec_result"] = er
+                    if er.get("executed"):
+                        exec_note = (" · 配置已变更: %s.%s %s → %s（台账 #%s）"
+                                     % (er.get("section", ""), er.get("key", ""),
+                                        er.get("old", ""), er.get("new", ""),
+                                        er.get("history_id", "")))
+                    else:
+                        exec_note = " · 配置无变化（%s）" % er.get("reason", "")
+                except Exception as e:  # noqa: BLE001
+                    r["executed"] = False
+                    r["exec_result"] = {"ok": False, "error": str(e)[:300]}
+                    exec_note = " · 配置执行失败: %s" % str(e)[:80]
             else:
-                r["executed"] = False
-                r["exec_result"] = {"ok": False, "result": f"工具「{action}」非 HTTP 集成类型，不支持批准后自动执行，请手动操作"}
-                exec_note = " · 非 HTTP 工具未自动执行"
+                trow = conn.execute("SELECT kind FROM tools WHERE name=? AND status='active'", (action,)).fetchone()
+                if trow and trow["kind"] == "http":
+                    from http_tool_executor import exec_http_tool
+                    _er = exec_http_tool(action, payload if isinstance(payload, dict) else {})
+                    r["executed"] = True
+                    r["exec_result"] = {"ok": _er.get("ok"), "result": str(_er.get("result", ""))[:2000]}
+                    exec_note = f" · 已自动执行: {'成功' if _er.get('ok') else '失败'}"
+                elif action == "save_artifact":
+                    # ★ 2026-10-17（米爸能力配置）：本地工具 save_artifact 的批准即执行——
+                    #   确认单 payload 就是工具参数（title/content/kind/lang），
+                    #   会话上下文取确认单归属会话。此前本地工具批准后死在队列
+                    #   （"非 HTTP 集成类型不支持自动执行"），冒烟实测（确认单 #20）。
+                    import artifact_tools as _at_hil
+                    _er = _at_hil.exec_tool(action, payload if isinstance(payload, dict) else {},
+                                            conversation_id=int(row.get("conversation_id") or 0))
+                    r["executed"] = True
+                    r["exec_result"] = {"ok": _er.get("ok"), "result": str(_er.get("result", ""))[:2000]}
+                    exec_note = f" · 已自动执行: {'成功' if _er.get('ok') else '失败'}"
+                else:
+                    r["executed"] = False
+                    r["exec_result"] = {"ok": False, "result": f"工具「{action}」非 HTTP 集成类型，不支持批准后自动执行，请手动操作"}
+                    exec_note = " · 非 HTTP 工具未自动执行"
     audit(audit_user(user), "hil_decide", f"HIL确认单#{cid} → {r['status']}{exec_note}", conn=conn)
     return r
 

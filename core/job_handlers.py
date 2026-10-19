@@ -56,7 +56,8 @@ import traceback
 
 __all__ = ["register_all", "KINDS", "LeaseKeeper", "handler_doc_ingest",
            "handler_doc_retry", "handler_doc_reindex", "handler_project_ingest",
-           "handler_v2g_extract", "handler_knowledge_reconcile"]
+           "handler_v2g_extract", "handler_knowledge_reconcile",
+           "handler_config_sandbox"]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -325,6 +326,37 @@ def handler_knowledge_reconcile(payload: dict, job: dict) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════
+# handler：自进化域（P1-4）
+# ══════════════════════════════════════════════════════════════════
+def handler_config_sandbox(payload: dict, job: dict) -> dict:
+    """P1-4 沙箱 A/B 评估：影子配置 vs 活配置各跑 CI 门禁集，差分判回归。
+
+    为什么走队列：full 口径 = 整套 CI 门禁跑两遍，分钟级（远超 HTTP
+    合理等待）。三条既有约束全部遵守：自开连接（③）、LeaseKeeper 续租
+    （①——full 跑 >默认租约 300s，不续租会被自己的 worker 当崩溃残留
+    重领 ⇒ 双臂双跑 + 重复写 run 行）、进度经 _report 上报。
+    评估期间零生产副作用由 core/sandbox 保证（每臂独立临时库/配置副本）。
+    """
+    run_id = int(payload.get("run_id") or 0)
+    if not run_id:
+        raise ValueError("缺少 run_id")
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=int(payload.get("lease_s") or 1800)):
+            _report(job, 1, "沙箱评估启动（run#%s）…" % run_id)
+            from core import sandbox as _sandbox
+            run = _sandbox.evaluate(conn, run_id, job=job,
+                                    progress=lambda p, s: _report(job, p, s))
+            return {"run_id": run_id, "status": run.get("status"),
+                    "verdict": run.get("verdict", "")}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════
 # 注册表
 # ══════════════════════════════════════════════════════════════════
 KINDS = {
@@ -334,6 +366,7 @@ KINDS = {
     "project_ingest": handler_project_ingest,
     "v2g_extract": handler_v2g_extract,
     "knowledge_reconcile": handler_knowledge_reconcile,
+    "config_sandbox": handler_config_sandbox,
 }
 
 
@@ -354,4 +387,5 @@ def describe() -> dict:
         "project_ingest": {"label": "工程入库", "required": ["project_id"]},
         "v2g_extract": {"label": "向量转图谱抽取", "required": ["query"]},
         "knowledge_reconcile": {"label": "写后调和", "required": []},
+        "config_sandbox": {"label": "配置沙箱 A/B 评估", "required": ["run_id"]},
     }

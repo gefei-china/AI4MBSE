@@ -12,11 +12,12 @@
 """
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse
 
 from core import config
-from core.deps import db_session
+from core.audit import audit
+from core.deps import current_user, db_session
 from models import StaticConfigIn, RuntimeConfigIn
 
 router = APIRouter()
@@ -30,7 +31,7 @@ def get_system_config(conn=Depends(db_session)):
         "static": config.dump(mask_secrets=True),
         "runtime": config.runtime_settings(conn),
         "config_path": config.CONFIG_PATH,
-        "levels": ["env", "system_config_file", "defaults"],
+        "levels": ["shadow(MBSE_SHADOW_CONFIG, 仅沙箱子进程)", "env", "system_config_file", "defaults"],
         "note": "host/port/database.path 为启动级参数，修改后需重启服务完全生效；其余项即时生效",
     }
 
@@ -105,3 +106,39 @@ def reload_config():
         return {"ok": True, "static": config.dump(mask_secrets=True)}
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"重载配置失败: {str(e)[:200]}"}, 500)
+
+
+# ── P1-4：配置变更台账 + 回滚（回滚同样经 HIL 批准，不开自动后门）────────
+@router.get("/api/config/history")
+def config_history(section: str = "", limit: int = 100,
+                   conn=Depends(db_session), user=Depends(current_user)):
+    """配置变更台账（config_history）：每次经 HIL 批准的变更一行，旧值→新值可追溯。
+
+    回滚的数据源：对某行发起 POST /api/config/rollback {history_id}。
+    """
+    from core import config_promotion as _promo
+    rows = _promo.list_history(conn, limit=limit, section=section)
+    return {"ok": True, "history": rows, "sources": [_promo.SRC_PROPOSAL,
+                                                     _promo.SRC_ROLLBACK,
+                                                     _promo.SRC_MANUAL]}
+
+
+@router.post("/api/config/rollback")
+def config_rollback(body: dict = Body(default={}),
+                    conn=Depends(db_session), user=Depends(current_user)):
+    """回滚某条台账：把该行 new_value 改回 old_value。**同样入 HIL 待批准队列**
+    ——回滚也是配置变更，不留自动后门；批准后经 config_promotion 执行并落新台账。
+    """
+    from core import config_promotion as _promo
+    history_id = int((body or {}).get("history_id") or 0)
+    note = str((body or {}).get("note") or "").strip()
+    if not history_id:
+        return JSONResponse({"ok": False, "error": "缺少 history_id"}, 400)
+    out = _promo.request_rollback(conn, history_id, note=note)
+    if not out.get("ok"):
+        return JSONResponse({"ok": False, "error": out.get("error")}, 400)
+    audit(user, "config_rollback_request",
+          "回滚台账 #%s → HIL 确认单 #%s" % (history_id, out.get("confirmation_id")),
+          conn=conn)
+    return {"ok": True, "confirmation_id": out.get("confirmation_id"),
+            "note": "已入 HIL 待批准队列；批准后配置才回滚"}
