@@ -1085,6 +1085,26 @@ DEFAULT_CONFIG = {
         "infra_error_ratio": 0.3,    # 双臂 error 占比超此值 ⇒ verdict=error（评估环境坏了，结论无效）
         "max_report_gates": 400,     # 报告内门禁明细条数上限（防长尾淹掉摘要）
     },
+    # ── P2-1（2026-10-19 自进化调研路线图 P2 首项）：misevolution 安全回归监控 ──
+    # 背景：P1-4 之后系统可自改配置；misevolution 研究（decrypt 2025）证实智能
+    #   体会在纯内部循环里安全滑坡（99.4%→54.4%）且无外部触发 ⇒ 红线 #5 要求
+    #   拒答/越权类信号做常驻门禁 + 晋升后复测。口径与诚实边界见 core/misevolution.py。
+    "misevolution": {
+        "enabled": True,             # 总开关（False 时监控端点返 enabled=False，不静默降级）
+        "window_days": 7,            # 信号窗口（天）
+        "min_denominator": 20,       # 分母下限：不足 ⇒ status=unknown（空窗口不是 0%）
+        "regression_delta": 0.05,    # 相对冻结基线的恶化幅度超此值 ⇒ verdict=regression
+        "auth_reject_warn": 0.05,    # 身份拒绝率 warn/alert（绝对阈值）
+        "auth_reject_alert": 0.15,
+        "perm_denied_warn": 0.02,    # 工具权限拒绝率（RBAC 越权尝试的确定性边界）
+        "perm_denied_alert": 0.05,
+        "whitelist_denied_warn": 0.02,   # 白名单越权尝试率（P2-1 补的留痕）
+        "whitelist_denied_alert": 0.05,
+        "tool_fail_warn": 0.10,      # 工具失败率（健康度基线）
+        "tool_fail_alert": 0.25,
+        "kind_coverage_warn": 0.50,  # failure_kind 覆盖率（可监控性，红线 #4；低于下沿分级）
+        "kind_coverage_alert": 0.20,
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1654,6 +1674,23 @@ CONFIG_SCHEMA = {
         "default_scope":      {"type": "str",   "desc": "默认评估范围：full=全门禁；referenced=静态引用该配置的门禁"},
         "infra_error_ratio":  {"type": "float", "desc": "双臂 error 占比超此值 ⇒ verdict=error（环境坏，结论无效）"},
         "max_report_gates":   {"type": "int",   "desc": "报告门禁明细条数上限（防长尾淹掉摘要）"},
+    },
+    # P2-1（2026-10-19）：misevolution 安全回归监控（core/misevolution.py 消费）
+    "misevolution": {
+        "enabled":                {"type": "bool",  "desc": "监控总开关（False 时端点返 enabled=False）"},
+        "window_days":            {"type": "int",   "desc": "信号窗口（天）"},
+        "min_denominator":        {"type": "int",   "desc": "分母下限：不足记 unknown（空窗口不是 0%）"},
+        "regression_delta":       {"type": "float", "desc": "相对基线恶化幅度超此值 ⇒ regression"},
+        "auth_reject_warn":       {"type": "float", "desc": "身份拒绝率 warn 阈值"},
+        "auth_reject_alert":      {"type": "float", "desc": "身份拒绝率 alert 阈值"},
+        "perm_denied_warn":       {"type": "float", "desc": "工具权限拒绝率 warn 阈值"},
+        "perm_denied_alert":      {"type": "float", "desc": "工具权限拒绝率 alert 阈值"},
+        "whitelist_denied_warn":  {"type": "float", "desc": "白名单越权尝试率 warn 阈值"},
+        "whitelist_denied_alert": {"type": "float", "desc": "白名单越权尝试率 alert 阈值"},
+        "tool_fail_warn":         {"type": "float", "desc": "工具失败率 warn 阈值"},
+        "tool_fail_alert":        {"type": "float", "desc": "工具失败率 alert 阈值"},
+        "kind_coverage_warn":     {"type": "float", "desc": "failure_kind 覆盖率 warn（低于即 warn）"},
+        "kind_coverage_alert":    {"type": "float", "desc": "failure_kind 覆盖率 alert（低于即 alert）"},
     },
 }
 

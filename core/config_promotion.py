@@ -238,6 +238,53 @@ def request_rollback(conn, history_id: int, *, user: str = "", note: str = "") -
             "history": d}
 
 
+def _recheck_after_change(conn, *, conf: dict, kind: str, result: dict) -> None:
+    """红线 #5「自进化后必须复测」：一次经 HIL 批准的配置变更落地后，记录晋升
+    时刻的安全信号快照 + 与当前冻结基线的比较结论（misevolution_checks 一行，
+    P2-1）。verdict ∈ clean / regression / insufficient_data / no_baseline。
+
+    纪律：
+    - **监控失败不得搞坏晋升**：全链路 try 包住，异常只落 result['recheck_error']
+      ——晋升本身已提交，因监控抖动去回滚一次成功的晋升才是真事故；
+    - **不自动回滚**：regression 只记录并在监控端点/checks 列表对人可见，
+      回滚由人从台账发起（P1-4「回滚过人」铁律的延伸——监控的职责是让滑坡
+      可见，不是代替人裁断）；
+    - **无基线也记录**：verdict='no_baseline'，复测留痕不等基线——没有人能为
+      「还没冻结基线」豁免复测义务；快照本身供事后补判；
+    - **归因诚实**：窗口含晋升前数据 ⇒ 结论是「此刻 vs 基线」的事实记录，
+      detail 明写「归因需人工」，不暗示恶化由本次晋升导致。
+    """
+    try:
+        from core import misevolution as _me
+        from repositories.misevolution_repo import MisevolutionRepo
+        settings = _me.get_settings()
+        if not settings.get("enabled"):
+            return
+        repo = MisevolutionRepo(conn)
+        signals = _me.collect_signals(conn, settings=settings)
+        baseline = repo.latest_baseline()
+        if baseline and baseline.get("signals"):
+            comparison = _me.compare_signals(signals, baseline["signals"],
+                                             settings=settings)
+            verdict = comparison["verdict"]
+            detail = ("vs baseline #%s（%s）；regressed=%s；窗口含晋升前数据，"
+                      "归因需人工"
+                      % (baseline.get("id"), baseline.get("epoch"),
+                         ",".join(comparison.get("regressed") or []) or "无"))
+        else:
+            comparison = None
+            verdict = "no_baseline"
+            detail = "无冻结基线：仅记录晋升时刻快照，不做相对判定"
+        check = repo.insert_check(
+            epoch="promotion:conf#%s:%s" % (conf.get("id") or 0, kind),
+            source=_me.SOURCE_PROMOTION, signals=signals,
+            comparison=comparison or {}, verdict=verdict, detail=detail)
+        result["recheck"] = {"check_id": check.get("id"), "verdict": verdict,
+                             "detail": detail}
+    except Exception as e:                           # 监控失败不搞坏晋升
+        result["recheck_error"] = str(e)[:200]
+
+
 def execute_confirmation(conn, conf: dict) -> dict:
     """HIL 批准后执行确认单（**本模块对外的唯一执行入口**）。
 
@@ -270,7 +317,9 @@ def execute_confirmation(conn, conf: dict) -> dict:
             source=SRC_PROPOSAL, source_id=int(payload.get("proposal_id") or 0),
             applied_by=decided_by,
             note="HIL 晋升批准（确认单 #%s）" % (conf.get("id") or 0))
-        return {"executed": True, "kind": HIL_ACTION_APPLY, **out}
+        result = {"executed": True, "kind": HIL_ACTION_APPLY, **out}
+        _recheck_after_change(conn, conf=conf, kind=HIL_ACTION_APPLY, result=result)
+        return result
     # HIL_ACTION_ROLLBACK
     section = str(payload.get("section") or "")
     key = str(payload.get("key") or "")
@@ -282,7 +331,9 @@ def execute_confirmation(conn, conf: dict) -> dict:
         applied_by=decided_by,
         note="HIL 回滚批准（确认单 #%s，回滚历史 #%s）"
              % (conf.get("id") or 0, payload.get("history_id") or 0))
-    return {"executed": True, "kind": HIL_ACTION_ROLLBACK, **out}
+    result = {"executed": True, "kind": HIL_ACTION_ROLLBACK, **out}
+    _recheck_after_change(conn, conf=conf, kind=HIL_ACTION_ROLLBACK, result=result)
+    return result
 
 
 # ── 台账读取（回滚面板的数据源）────────────────────────────────────────

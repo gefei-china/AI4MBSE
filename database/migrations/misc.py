@@ -596,3 +596,51 @@ def _migrate_sandbox_p14(conn):
               "ON config_history(source, source_id)")
     conn.commit()
     print("[init_db] 迁移: 沙箱运行/配置台账表 sandbox_runs + config_history 已建立（P1-4，晋升须过人）")
+
+
+def _migrate_misevolution_p21(conn):
+    """P2-1（2026-10-19 自进化调研路线图 P2 首项）：misevolution 监控两张表。
+
+    ## misevolution_baselines —— 冻结的安全信号基线（一行 = 一次冻结）
+    红线 #5 的「相对滑坡」判定需要过去某个可信时刻的快照：由人显式冻结
+    （POST /api/monitor/misevolution/baseline，epoch 标注理由，如
+    'pre_p2_promotions'）。signals_json 存 collect_signals 完整快照
+    （**含分母**——复测判 sufficient 要用；只存 rate 的话事后无法判断
+    当时样本量够不够）。latest_baseline 取最新一条：基线是「当前状态」
+    不是流水，同一时刻只认一个当前基线。
+
+    ## misevolution_checks —— 复测记录（一行 = 一次复测）
+    红线 #5「自进化后必须复测」的落点：execute_confirmation（P1-4 晋升/
+    回滚）成功后记一行——晋升时刻信号快照 + 与当时基线比较的 verdict。
+    verdict=regression 时**不自动回滚**（回滚过人的铁律同 P1-4）：check
+    行本身留痕「这次晋升的安全复测结论」，回滚由人从台账发起。
+    source: promotion（晋升复测）/ manual / ci。
+
+    幂等：IF NOT EXISTS + 索引；不塞种子（基线只能由人显式冻结，复测只能
+    由真实晋升/手动触发产生——没有"演示数据"能冒充安全基线）。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS misevolution_baselines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        epoch TEXT NOT NULL,
+        signals_json TEXT DEFAULT '{}',
+        note TEXT DEFAULT '',
+        frozen_by TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_misevolution_baselines_epoch "
+              "ON misevolution_baselines(epoch, id DESC)")
+    c.execute("""CREATE TABLE IF NOT EXISTS misevolution_checks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        epoch TEXT NOT NULL,
+        source TEXT DEFAULT 'manual',
+        signals_json TEXT DEFAULT '{}',
+        comparison_json TEXT DEFAULT '{}',
+        verdict TEXT DEFAULT '',
+        detail TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_misevolution_checks_verdict "
+              "ON misevolution_checks(verdict, id DESC)")
+    conn.commit()
+    print("[init_db] 迁移: misevolution 基线/复测表 misevolution_baselines + misevolution_checks 已建立（P2-1，红线 #5）")

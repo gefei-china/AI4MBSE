@@ -745,6 +745,17 @@ jobs:
       - name: Guard 沙箱 A/B 与门禁晋升（影子层四态 + 双臂顺序隔离 + 指纹防变异 + 差分中性判定 + 晋升过人 + 零生产副作用）
         run: python tools/verify/verify_sandbox.py
 
+      # ── P2-1（2026-10-19 自进化调研路线图 P2 首项）：misevolution 安全回归监控 ──
+      # 红线 #5（自进化前置条件）：P1-4 之后系统可自改配置，misevolution 研究
+      #   （decrypt 2025）证实智能体会在纯内部循环里安全滑坡且无外部触发 ⇒ 五
+      #   信号（身份拒绝率/权限拒绝率/白名单越权尝试率/工具失败率/failure_kind
+      #   覆盖率）窗口化常驻监控，告警器周期评估（分母不足发布 None 不判——空
+      #   窗口不是 0%）；晋升/回滚经 HIL 落地后必复测并留痕，regression 只记录
+      #   不自动回滚（回滚过人）。诚实边界：「拒答率」是 auth_reject 代理口径，
+      #   敏感数据外泄本期无运行时信号（留白不造假）。
+      - name: Guard misevolution 安全回归监控（五信号诚实口径 + 基线比较 + 晋升复测 + 告警常驻 + 拒绝留痕）
+        run: python tools/verify/verify_misevolution.py
+
       - name: Guard 向量二进制缓存保真
         run: python tools/verify/verify_vector_binary_cache.py
 

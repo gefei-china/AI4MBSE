@@ -32,6 +32,17 @@ GLOBAL_METRICS = (
     "audit_blocked_1h",        # 近 1h 被权限门拦下的操作次数
     "audit_chain_ok",          # 审计链完整性：1=完好，0=有损（P0-b 的 verify_chain 结果）
     "badcase_open_count",      # 未处理 Bad Case 数（P0-3：core/badcase 台账，open 状态计）
+    # ── P2-1（2026-10-19）：misevolution 安全回归信号（红线 #5 常驻门禁）──
+    # 与上面 _1h 指标不同：这五个走 core/misevolution 的**窗口化速率**（窗口 =
+    # misevolution.window_days，默认 7 天；值是百分数 0-100，不是次数）。分母
+    # 不足 min_denominator 时发布 **None**（不是 0！空窗口不是 0%），评估器
+    # 跳过 None——「没数据」不得伪装成「没问题」。除 kind_coverage 是「越高
+    # 越好」（规则用 < 判据）外，其余四个「越低越好」（规则用 > 判据）。
+    "misev_auth_reject_rate",          # 身份拒绝率（拒答代理口径，P0-5 伪造嫌疑）
+    "misev_perm_denied_rate",          # 工具权限拒绝率（RBAC 越权尝试）
+    "misev_whitelist_denied_rate",     # 白名单越权尝试率（委派最小权限）
+    "misev_tool_fail_rate",            # 工具失败率（健康度）
+    "misev_kind_coverage",             # failure_kind 覆盖率（可监控性，红线 #4）
 )
 
 _P95_MIN_SAMPLES = 5     # 样本不足不出分位数（避免用 3 个样本算 p95 误导告警）
@@ -112,6 +123,33 @@ def collect_global_metrics(conn) -> dict:
     except Exception:
         pass
 
+    # ── P2-1 misevolution 安全回归信号（红线 #5）─────────────────────────
+    # 口径全部委托 core/misevolution（只读引擎，窗口/阈值走其配置组）；本处
+    # 只做「速率 → 百分数」的发布换算。**分母不足 ⇒ 发布 None**（评估器跳过，
+    # 见 evaluate_once）——把空窗口报成 0% 会让 kind_coverage 的 < 判据假告警。
+    try:
+        from core import misevolution as _mev
+        _mev_settings = _mev.get_settings()
+        if _mev_settings.get("enabled"):
+            _sig = _mev.collect_signals(conn, settings=_mev_settings)
+            for _name, _key in (("misev_auth_reject_rate", "auth_reject_rate"),
+                                ("misev_perm_denied_rate", "perm_denied_rate"),
+                                ("misev_whitelist_denied_rate", "whitelist_denied_rate"),
+                                ("misev_tool_fail_rate", "tool_fail_rate"),
+                                ("misev_kind_coverage", "kind_coverage")):
+                _rate = (_sig.get(_key) or {}).get("rate")
+                m[_name] = (round(_rate * 100.0, 2) if _rate is not None else None)
+        else:
+            for _name in ("misev_auth_reject_rate", "misev_perm_denied_rate",
+                          "misev_whitelist_denied_rate", "misev_tool_fail_rate",
+                          "misev_kind_coverage"):
+                m[_name] = None      # 监控关停 ⇒ 不发布数（不是 0）
+    except Exception:
+        for _name in ("misev_auth_reject_rate", "misev_perm_denied_rate",
+                      "misev_whitelist_denied_rate", "misev_tool_fail_rate",
+                      "misev_kind_coverage"):
+            m[_name] = None          # 引擎异常 ⇒ 不发布数，不制造假告警
+
     return m
 
 
@@ -166,12 +204,19 @@ def evaluate_once(conn=None, cooldown_min: int = 30, notify: bool = True) -> dic
                     "error": "alert_rules 不可用"}
         candidates = [r for r in rules if (r["metric"] or "") in GLOBAL_METRICS]
         if not candidates:
-            return {"evaluated": 0, "fired": 0, "skipped_cooldown": 0, "metrics": {}}
+            return {"evaluated": 0, "fired": 0, "skipped_cooldown": 0,
+                    "skipped_unknown": 0, "metrics": {}}
         metrics = collect_global_metrics(c)
-        fired, cooled = 0, 0
+        fired, cooled, unknown = 0, 0, 0
         for r in candidates:
             metric = r["metric"]
-            actual = float(metrics.get(metric) or 0)
+            actual = metrics.get(metric)
+            # P2-1：None = 分母不足/监控关停（「没数据」）⇒ 跳过不判。
+            # 不能回落 0：kind_coverage 用 < 判据，0 会直接假告警（空窗口不是 0%）。
+            if actual is None:
+                unknown += 1
+                continue
+            actual = float(actual)
             th = float(r["threshold"] or 0)
             op = r["operator"] or ">"
             if not {">": actual > th, ">=": actual >= th,
@@ -213,7 +258,7 @@ def evaluate_once(conn=None, cooldown_min: int = 30, notify: bool = True) -> dic
                     except Exception:
                         pass
         return {"evaluated": len(candidates), "fired": fired, "skipped_cooldown": cooled,
-                "metrics": metrics}
+                "skipped_unknown": unknown, "metrics": metrics}
 
     from database import db_conn
     if conn is not None:

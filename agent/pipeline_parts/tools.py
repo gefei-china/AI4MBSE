@@ -498,6 +498,18 @@ class ToolMixin:
             # P0-3：委派最小权限防御——白名单外的工具直接拒绝（即使 tool def 未注入，模型也可能臆造）
             _wl0 = getattr(self, "_tool_whitelist", None)
             if _wl0 and name not in _wl0:
+                # 拒绝也要留痕（与下方权限闸同哲学）：白名单拒绝此前只进 tool_call_logs，
+                #   而结果文案不含权限词表关键词 ⇒ failure_kind 分不出这是「越权尝试」
+                #   还是普通失败；misevolution 监控（P2-1 红线 #5）因此数不到这一类
+                #   「被拒绝的访问」⇒ 补审计事件。旁路写（try 包住）：审计失败不得
+                #   阻断工具拒绝本身（同 _spoof_guard 先例）。
+                try:
+                    from core.audit import audit as _audit_wl, audit_user as _au
+                    _audit_wl(_au(getattr(self, "_tool_user", None)), "tool_whitelist_denied",
+                              f"tool={name} convo={conv_ctx}", "blocked",
+                              branch=str((agent_ctx or {}).get("branch") or ""))
+                except Exception:
+                    pass
                 result = {"ok": False,
                           "result": f"工具「{name}」不在本次子任务授予的工具白名单内（最小权限，Worker ⊆ Supervisor），已拒绝执行"}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)

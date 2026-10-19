@@ -92,6 +92,7 @@ from .misc import (
     _retire_fake_conflict_check,       # 2026-10-13 conflict_check 假实现下线（置 disabled，不删行）
     _migrate_config_proposals,         # 2026-10-18 配置提案队列（P1-3，只提议不自动应用）
     _migrate_sandbox_p14,              # 2026-10-19 沙箱运行 + 配置台账（P1-4，晋升须过人）
+    _migrate_misevolution_p21,         # 2026-10-19 安全信号基线 + 晋升复测（P2-1，红线 #5）
 )
 from .permissions import (
     _migrate_agent_tool_perm,         # 2026-10-06 Agent 工具链 RBAC + HIL 批准授权（P0-6/P0-2）
@@ -162,4 +163,5 @@ __all__ = [
     "_retire_fake_conflict_check",  # 2026-10-13 conflict_check 假实现下线
     "_migrate_config_proposals",  # 2026-10-18 配置提案队列（P1-3）
     "_migrate_sandbox_p14",  # 2026-10-19 沙箱运行 + 配置台账（P1-4）
+    "_migrate_misevolution_p21",  # 2026-10-19 安全信号基线 + 晋升复测（P2-1）
 ]

@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from core.deps import db_session
+from core.deps import current_user, db_session
 from models import AlertRuleIn
 
 router = APIRouter(tags=["统一监控"])
@@ -261,6 +261,83 @@ def evaluate_alerts_now(cooldown_min: int = 30, conn=Depends(db_session)):
     from core.alert_evaluator import evaluate_once
     res = evaluate_once(conn=conn, cooldown_min=max(0, int(cooldown_min or 0)))
     return {"ok": True, **res}
+
+
+# ── P2-1（2026-10-19 自进化调研路线图 P2 首项）：misevolution 安全回归监控 ──
+# 红线 #5：拒答/越权类信号常驻门禁 + 晋升后复测。信号口径与诚实边界见
+# core/misevolution.py 模块头（「拒答率」是 auth_reject 代理口径；敏感数据
+# 外泄本期无运行时信号，留白不造假）。enabled=False 返 {"enabled": False}，
+# 不静默降级成 0（空窗口/关停都不是「没问题」）。
+@router.get("/api/monitor/misevolution")
+def monitor_misevolution(conn=Depends(db_session)):
+    from core import misevolution as _me
+    from repositories.misevolution_repo import MisevolutionRepo
+    settings = _me.get_settings()
+    if not settings.get("enabled"):
+        return {"ok": True, "enabled": False}
+    try:
+        signals = _me.collect_signals(conn, settings=settings)
+    except Exception as _e:
+        # 信号采集失败（库表缺失/损坏等）：显式 ok:False + error——
+        # 不 500（监控端点崩了看板整块瞎），也不静默返 0（空窗口不是
+        # 「没问题」）。承 config_promotion 复测钩子同一纪律：监控异常
+        # 只被容纳并可见，不拖垮调用方。
+        return {"ok": False, "enabled": True,
+                "error": "misevolution 信号采集失败: %r" % (_e,)}
+    repo = MisevolutionRepo(conn)
+    baseline = repo.latest_baseline()
+    if baseline and baseline.get("signals"):
+        comparison = _me.compare_signals(signals, baseline["signals"],
+                                         settings=settings)
+        baseline_view = {"id": baseline.get("id"), "epoch": baseline.get("epoch"),
+                         "note": baseline.get("note"),
+                         "created_at": baseline.get("created_at")}
+    else:
+        comparison = None
+        baseline_view = None
+    return {
+        "ok": True, "enabled": True,
+        "window_days": signals["meta"]["window_days"],
+        "cutoff": signals["meta"]["cutoff"],
+        "signals": {k: v for k, v in signals.items() if k != "meta"},
+        "baseline": baseline_view,
+        "comparison": comparison,
+        "checks": repo.list_checks(limit=20),
+        "check_counts": repo.count_by_verdict(),
+    }
+
+
+@router.post("/api/monitor/misevolution/baseline")
+def freeze_misevolution_baseline(epoch: str = "", note: str = "",
+                                 conn=Depends(db_session),
+                                 user=Depends(current_user)):
+    """冻结当前信号快照为基线（**人显式触发**，不自动冻结——基线是「相对谁
+    恶化」的裁定锚，自动冻结会让锚失去意义）。epoch 写冻结理由，如
+    pre_p2_promotions。晋升复测（config_promotion）只读最新基线，不写。
+    """
+    from core import misevolution as _me
+    from core.audit import audit as _audit, audit_user as _au
+    from repositories.misevolution_repo import MisevolutionRepo
+    settings = _me.get_settings()
+    if not settings.get("enabled"):
+        return {"ok": False,
+                "reason": "misevolution 监控已关停（misevolution.enabled=False）"}
+    epoch = str(epoch or "").strip() or "manual:%s" % time.strftime("%Y%m%d-%H%M%S")
+    try:
+        signals = _me.collect_signals(conn, settings=settings)
+    except Exception as _e:
+        # 同 GET 端点纪律：采集失败显式报错，不冻结「来路不明的快照」当基线
+        return {"ok": False,
+                "reason": "misevolution 信号采集失败: %r" % (_e,)}
+    row = MisevolutionRepo(conn).freeze_baseline(
+        epoch=epoch, signals=signals, note=note, frozen_by=_au(user))
+    try:
+        _audit(_au(user), "misevolution_baseline_frozen",
+               "epoch=%s note=%s baseline_id=%s" % (epoch, note, row.get("id")),
+               "success")
+    except Exception:
+        pass                     # 基线已落库；审计失败不反转已完成的冻结
+    return {"ok": True, "baseline": row}
 
 
 # ── P0-2（2026-10-03 整改）：编排运行 liveness —— 孤儿回收观测与控制 ──
