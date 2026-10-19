@@ -41,6 +41,7 @@ from .ux_metrics import router as ux_metrics_router  # 2026-10-03 UX 埋点（�
 from .orchestration import router as orchestration_router  # 2026-10-03 P0-2 编排检查点 + 断点续跑
 from .jobs import router as jobs_router  # 2026-10-04 P0-C 异步作业队列（提交即返回 job_id）
 from .proposals import router as proposals_router  # 2026-10-18 P1-3 配置提案（只提议不自动应用）
+from .curriculum import router as curriculum_router  # 2026-10-19 P2-2 失败驱动任务提案（只提议不自动执行）
 
 __all__ = [
     "dashboard_router",
@@ -77,4 +78,5 @@ __all__ = [
     "orchestration_router",  # 2026-10-03 P0-2 编排检查点 + 断点续跑
     "jobs_router",  # 2026-10-04 P0-C 异步作业队列
     "proposals_router",  # 2026-10-18 P1-3 配置提案（只提议不自动应用）
+    "curriculum_router",  # 2026-10-19 P2-2 失败驱动任务提案（只提议不自动执行）
 ]

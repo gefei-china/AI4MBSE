@@ -644,3 +644,47 @@ def _migrate_misevolution_p21(conn):
               "ON misevolution_checks(verdict, id DESC)")
     conn.commit()
     print("[init_db] 迁移: misevolution 基线/复测表 misevolution_baselines + misevolution_checks 已建立（P2-1，红线 #5）")
+
+
+def _migrate_curriculum_p22(conn):
+    """P2-2（2026-10-19 自进化调研路线图 P2 第二项）：失败驱动的任务提案队列。
+
+    ## curriculum_items —— 一条「该练什么」的任务提案 = 一行
+    行业参照 EnvBuilder / AgentGym / AgentEvolver Self-Questioning（agent 自己
+    造课程）。证据来源全部是既有失败面：P1-2 首坏步模式（attribution）、
+    P0-3 坏样本台账（bad_cases）、失败类型覆盖率（kind_coverage）。铁律同
+    P1-3：**只提议，不自动执行**——自动造任务并自动执行是内部循环自我强化
+    （misevolution 滑坡形态），任务必须经人裁决。
+
+    ## 去重/状态语义
+    - fingerprint UNIQUE：sha1(rule|task_kind|weakness)。弱点身份必须进指纹
+      （P1-3 教训：模式身份不进指纹 ⇒ 不同弱点互相当重复，证据凭空丢失）。
+    - status 三态：pending → accepted | rejected（终态不重开，与 #18 状态机
+      纪律一致）。accepted/rejected 只记录**人的裁决**；任务的创建/执行走人
+      所在链路，本链路没有任何创建任务的路径。
+    - 幂等：IF NOT EXISTS + 索引；不塞种子数据（任务只能从真实失败证据生成——
+      空窗口不是「没问题」，更不是「造点任务凑数」）。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS curriculum_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rule TEXT NOT NULL,
+        task_kind TEXT DEFAULT '',
+        title TEXT DEFAULT '',
+        weakness TEXT DEFAULT '',
+        suggestion TEXT DEFAULT '',
+        difficulty TEXT DEFAULT 'low',
+        evidence_json TEXT DEFAULT '{}',
+        fingerprint TEXT NOT NULL UNIQUE,
+        status TEXT DEFAULT 'pending',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        reviewed_by TEXT DEFAULT '',
+        reviewed_at TEXT,
+        review_note TEXT DEFAULT ''
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_curriculum_items_status "
+              "ON curriculum_items(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_curriculum_items_rule "
+              "ON curriculum_items(rule)")
+    conn.commit()
+    print("[init_db] 迁移: 任务提案队列表 curriculum_items 已建立（P2-2，只提议不自动执行）")

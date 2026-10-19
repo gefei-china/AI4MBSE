@@ -50,6 +50,7 @@ from routers import (
     orchestration_router,  # 2026-10-03 P0-2 编排检查点 + 断点续跑
     jobs_router,           # 2026-10-04 P0-C 异步作业队列（长任务提交即返回 job_id）
     proposals_router,      # 2026-10-18 P1-3 配置提案（失败轨迹→修订提议，只提议不自动应用）
+    curriculum_router,     # 2026-10-19 P2-2 失败驱动任务提案（EnvBuilder 式自造课程，只提议不自动执行）
 )
 
 @asynccontextmanager
@@ -270,6 +271,7 @@ for _router in (
     orchestration_router,  # 2026-10-03 P0-2 编排检查点 + 断点续跑（LangGraph checkpointer 等价物）
     jobs_router,  # 2026-10-04 P0-C 异步作业队列（长任务提交即返回 job_id）
     proposals_router,  # 2026-10-18 P1-3 配置提案（失败轨迹→修订提议，只提议不自动应用）
+    curriculum_router,  # 2026-10-19 P2-2 失败驱动任务提案（失败证据→该练什么，只提议不自动执行）
 ):
     app.include_router(_router)
 

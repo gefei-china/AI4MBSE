@@ -74,6 +74,7 @@ from .migrations import (
     _migrate_config_proposals,  # 2026-10-18 配置提案队列（P1-3，只提议不自动应用）
     _migrate_sandbox_p14,  # 2026-10-19 沙箱运行 + 配置台账（P1-4，晋升须过人）
     _migrate_misevolution_p21,  # 2026-10-19 安全信号基线 + 晋升复测（P2-1，红线 #5）
+    _migrate_curriculum_p22,  # 2026-10-19 失败驱动任务提案队列（P2-2，只提议不自动执行）
 )
 from .seeds import (
     _seed,
@@ -1597,6 +1598,9 @@ def init_db():
     # ── P2-1（2026-10-19 自进化调研路线图 P2 首项）：安全信号基线 + 晋升复测 ──
     #    misevolution 红线 #5：拒答/越权类信号常驻监控，晋升后复测留痕
     _migrate_misevolution_p21(conn)
+    # ── P2-2（2026-10-19 自进化调研路线图 P2 第二项）：失败驱动任务提案队列 ──
+    #    EnvBuilder/AgentGym 式自造课程：只提议不自动执行，人裁决后走人的链路
+    _migrate_curriculum_p22(conn)
     # ── P0-④（2026-09-11）时态管理：双时态列 + 索引 + 视图 + W3C Time 对齐表 ──
     _migrate_entity_temporal(conn)
     # ── P1-①（2026-09-11）SWRL 规则管理表：swrl_rules + inferred_facts（推理产出暂存）──

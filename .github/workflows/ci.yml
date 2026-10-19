@@ -756,6 +756,18 @@ jobs:
       - name: Guard misevolution 安全回归监控（五信号诚实口径 + 基线比较 + 晋升复测 + 告警常驻 + 拒绝留痕）
         run: python tools/verify/verify_misevolution.py
 
+      # ── P2-2（2026-10-19 自进化调研路线图 P2 第二项）：失败驱动的任务自生成 ──
+      # 行业参照 EnvBuilder / AgentGym / AgentEvolver Self-Questioning（agent 自己
+      #   造课程）：从失败证据（P1-2 首坏步模式 + P0-3 坏样本台账 + failure_kind
+      #   覆盖率）长出「该练什么任务」的提议。铁律同 P1-3：**只提议不自动执行**——
+      #   自动造任务并自动跑 = 内部循环自我强化（misevolution 滑坡形态），人裁决
+      #   accepted/rejected 留痕，任务创建走人的链路。口径纪律：空窗口不凑任务
+      #   （诚实分母）、弱点身份进指纹（P1-3 教训：不同弱点互相当重复 ⇒ 证据
+      #   凭空丢失）、全表快照零副作用（行为级证明不自动创建任务）、端点失败
+      #   显式 ok:False（P2-1 冷库 500 教训的沿用）。
+      - name: Guard 失败驱动任务自生成（四规则证据口径 + 弱点身份指纹 + 只提议不自动执行 + 零副作用）
+        run: python tools/verify/verify_curriculum.py
+
       - name: Guard 向量二进制缓存保真
         run: python tools/verify/verify_vector_binary_cache.py
 

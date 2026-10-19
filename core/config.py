@@ -1105,6 +1105,19 @@ DEFAULT_CONFIG = {
         "kind_coverage_warn": 0.50,  # failure_kind 覆盖率（可监控性，红线 #4；低于下沿分级）
         "kind_coverage_alert": 0.20,
     },
+    # ── P2-2（2026-10-19 自进化调研路线图 P2 第二项）：失败驱动的任务自生成 ──
+    # 背景：EnvBuilder / AgentGym / AgentEvolver Self-Questioning 式自造课程——
+    #   从失败证据（P1-2 首坏步模式 + P0-3 坏样本台账 + 类型覆盖率）长出「该练
+    #   什么任务」的提议。铁律同 P1-3：只提议不自动执行（自动造任务并自动跑 =
+    #   内部循环自我强化，misevolution 滑坡形态），人裁决后走人的链路。
+    "curriculum": {
+        "enabled": True,                # 总开关（False 时 generate 返 enabled=False）
+        "min_pattern_count": 2,         # 首坏步模式复发下限（<此值不值得单独立任务）
+        "min_badcase_occurrences": 3,   # 坏样本复发下限（bad_cases.occurrences）
+        "kind_coverage_min": 0.5,       # 失败类型覆盖率下沿（红线 #4 可监控性）
+        "unattributed_min": 1,          # 结局坏零坏步会话数下限
+        "max_proposals": 20,            # 单批提案上限（防长尾淹掉看板）
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1691,6 +1704,17 @@ CONFIG_SCHEMA = {
         "tool_fail_alert":        {"type": "float", "desc": "工具失败率 alert 阈值"},
         "kind_coverage_warn":     {"type": "float", "desc": "failure_kind 覆盖率 warn（低于即 warn）"},
         "kind_coverage_alert":    {"type": "float", "desc": "failure_kind 覆盖率 alert（低于即 alert）"},
+    },
+    # ── P2-2（2026-10-19 自进化调研路线图 P2 第二项）：失败驱动的任务自生成 ──
+    # 铁律同 P1-3：只提议不自动执行（人裁决 accepted/rejected 留痕，任务的创建/
+    # 执行走人所在链路）。口径与证据边界见 core/curriculum.py。
+    "curriculum": {
+        "enabled":                  {"type": "bool",  "desc": "任务自生成总开关（False 时 generate 返 enabled=False）"},
+        "min_pattern_count":        {"type": "int",   "desc": "首坏步模式复发下限（<此值不值得单独立任务）"},
+        "min_badcase_occurrences":  {"type": "int",   "desc": "坏样本复发下限（bad_cases.occurrences）"},
+        "kind_coverage_min":        {"type": "float", "desc": "失败类型覆盖率下沿（红线 #4 可监控性）"},
+        "unattributed_min":         {"type": "int",   "desc": "结局坏零坏步会话数下限"},
+        "max_proposals":            {"type": "int",   "desc": "单批提案上限（防长尾淹掉看板）"},
     },
 }
 
