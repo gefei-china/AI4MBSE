@@ -1118,6 +1118,17 @@ DEFAULT_CONFIG = {
         "unattributed_min": 1,          # 结局坏零坏步会话数下限
         "max_proposals": 20,            # 单批提案上限（防长尾淹掉看板）
     },
+    # ── P2-3 Agent 档案库/种群（DGM 式 archive）：变体台账 + 死路记忆 ──────
+    # 铁律：**只记录，不切换生效 agent、不回滚配置**（回滚过人的铁律同 P1-4
+    # ——档案库是记忆，不是手）。死路判定门槛设在 2 次而非 1 次：一次回归
+    # 可能是噪声（并发/环境/偶发），反复才是模式。
+    "agent_archive": {
+        "enabled": True,                # 总开关（False 时 scan/refresh 返 enabled=False）
+        "window_days": 90,              # 进化历史回看窗口（天）
+        "min_denominator": 2,           # 各维度分母下限：不足即 unknown（空窗口不是 0 分）
+        "dead_end_repeat": 2,           # 同一变体判回归几次记死路
+        "max_variants": 200,            # 单次扫描入册上限（防长尾注水）
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1715,6 +1726,14 @@ CONFIG_SCHEMA = {
         "kind_coverage_min":        {"type": "float", "desc": "失败类型覆盖率下沿（红线 #4 可监控性）"},
         "unattributed_min":         {"type": "int",   "desc": "结局坏零坏步会话数下限"},
         "max_proposals":            {"type": "int",   "desc": "单批提案上限（防长尾淹掉看板）"},
+    },
+    # ── P2-3 Agent 档案库/种群（DGM 式 archive）：只记录不切换生效版本 ──────
+    "agent_archive": {
+        "enabled":         {"type": "bool", "desc": "Agent 档案库总开关（False 时 scan/refresh 返 enabled=False）"},
+        "window_days":     {"type": "int",  "desc": "进化历史回看窗口（天）"},
+        "min_denominator": {"type": "int",  "desc": "各维度分母下限：不足即 unknown（空窗口不是 0 分）"},
+        "dead_end_repeat": {"type": "int",  "desc": "同一变体判回归几次记死路（1 次可能是噪声，反复才是模式）"},
+        "max_variants":    {"type": "int",  "desc": "单次扫描入册上限（防长尾注水）"},
     },
 }
 

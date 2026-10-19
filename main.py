@@ -51,6 +51,7 @@ from routers import (
     jobs_router,           # 2026-10-04 P0-C 异步作业队列（长任务提交即返回 job_id）
     proposals_router,      # 2026-10-18 P1-3 配置提案（失败轨迹→修订提议，只提议不自动应用）
     curriculum_router,     # 2026-10-19 P2-2 失败驱动任务提案（EnvBuilder 式自造课程，只提议不自动执行）
+    agent_archive_router,  # 2026-10-19 P2-3 Agent 档案库/种群（变体台账 + 死路记忆，只记录不切换生效版本）
 )
 
 @asynccontextmanager
@@ -272,6 +273,7 @@ for _router in (
     jobs_router,  # 2026-10-04 P0-C 异步作业队列（长任务提交即返回 job_id）
     proposals_router,  # 2026-10-18 P1-3 配置提案（失败轨迹→修订提议，只提议不自动应用）
     curriculum_router,  # 2026-10-19 P2-2 失败驱动任务提案（失败证据→该练什么，只提议不自动执行）
+    agent_archive_router,  # 2026-10-19 P2-3 Agent 档案库/种群（记住死路，避免重走；只记录不切换生效版本）
 ):
     app.include_router(_router)
 

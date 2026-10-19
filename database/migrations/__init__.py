@@ -94,6 +94,7 @@ from .misc import (
     _migrate_sandbox_p14,              # 2026-10-19 沙箱运行 + 配置台账（P1-4，晋升须过人）
     _migrate_misevolution_p21,         # 2026-10-19 安全信号基线 + 晋升复测（P2-1，红线 #5）
     _migrate_curriculum_p22,           # 2026-10-19 失败驱动任务提案队列（P2-2，只提议不自动执行）
+    _migrate_agent_archive_p23,        # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3，只记录不切换生效版本）
 )
 from .permissions import (
     _migrate_agent_tool_perm,         # 2026-10-06 Agent 工具链 RBAC + HIL 批准授权（P0-6/P0-2）
@@ -166,4 +167,5 @@ __all__ = [
     "_migrate_sandbox_p14",  # 2026-10-19 沙箱运行 + 配置台账（P1-4）
     "_migrate_misevolution_p21",  # 2026-10-19 安全信号基线 + 晋升复测（P2-1）
     "_migrate_curriculum_p22",  # 2026-10-19 失败驱动任务提案队列（P2-2）
+    "_migrate_agent_archive_p23",  # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3）
 ]

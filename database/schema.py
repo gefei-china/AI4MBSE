@@ -75,6 +75,7 @@ from .migrations import (
     _migrate_sandbox_p14,  # 2026-10-19 沙箱运行 + 配置台账（P1-4，晋升须过人）
     _migrate_misevolution_p21,  # 2026-10-19 安全信号基线 + 晋升复测（P2-1，红线 #5）
     _migrate_curriculum_p22,  # 2026-10-19 失败驱动任务提案队列（P2-2，只提议不自动执行）
+    _migrate_agent_archive_p23,  # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3，只记录不切换生效版本）
 )
 from .seeds import (
     _seed,
@@ -1601,6 +1602,10 @@ def init_db():
     # ── P2-2（2026-10-19 自进化调研路线图 P2 第二项）：失败驱动任务提案队列 ──
     #    EnvBuilder/AgentGym 式自造课程：只提议不自动执行，人裁决后走人的链路
     _migrate_curriculum_p22(conn)
+    # ── P2-3（2026-10-19 自进化调研路线图 P2 第三项）：Agent 档案库/种群 ──
+    #    DGM/AlphaZero 式：把散落的进化历史收敛成变体台账 + 记住死路。
+    #    只记录，不切换生效 agent、不回滚配置（过人的铁律同 P1-4）。
+    _migrate_agent_archive_p23(conn)
     # ── P0-④（2026-09-11）时态管理：双时态列 + 索引 + 视图 + W3C Time 对齐表 ──
     _migrate_entity_temporal(conn)
     # ── P1-①（2026-09-11）SWRL 规则管理表：swrl_rules + inferred_facts（推理产出暂存）──

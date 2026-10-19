@@ -688,3 +688,75 @@ def _migrate_curriculum_p22(conn):
               "ON curriculum_items(rule)")
     conn.commit()
     print("[init_db] 迁移: 任务提案队列表 curriculum_items 已建立（P2-2，只提议不自动执行）")
+
+
+def _migrate_agent_archive_p23(conn):
+    """P2-3（2026-10-19 自进化调研路线图 P2 第三项）：Agent 档案库两张表。
+
+    DGM/AlphaZero 式种群的关键不是「保留最优」，而是**记住死掉的个体**——
+    否则系统会反复重走已知死路。本迁移提供两个落点：
+
+    ## agent_variants —— 变体台账（一行 = 一个 (agent, version) 变体）
+    把散在 asset_change_logs（字段级 diff + version_from/version_to）、
+    agents.version 自动递升、config_history（配置晋升台账）里的进化历史
+    **收敛成一份种群台账**：谁、从哪个版本改来、当前是否在役、画像如何。
+    - fingerprint UNIQUE：sha1(agent_id|version)。**不能用字段 diff 内容进指纹**
+      ——同一版本号在不同时间被显式改动是真实语义，指纹含内容会让每次扫描
+      造出「新变体」，台账注水。
+    - status 三态：active（在役现行）| retired（血缘里的历史版本）|
+      dead_end（判过回归且达重复阈值 ⇒ 死路记忆，终态）。
+    - profile_json 存 fitness_profile（五维画像 + summary.verdict）；
+      **逐维独立判 unknown**：分母不足即 null，不回落 0（空窗口不是 0 分）。
+    - 本表**只记录，不切换生效 agent**——档案库是记忆，不是手（回滚过人的
+      铁律同 P1-4）。
+
+    ## variant_outcomes —— 结局记录（一行 = 一次外部评估结论）
+    谁把结论挂到变体上是显式的（record_outcome 入户口）：真实库里
+    sandbox_runs / misevolution_checks 都是提案级、没有 agent_id+version 列，
+    档案库**不猜**这次评估针对哪个变体——猜出来的血缘比没有血缘更危险。
+    - outcome ∈ pass|clean|regression|error|insufficient_data；
+      **error 与 insufficient_data 不算负向**（环境坏/样本不足 ≠ 这条路不行，
+      与 P1-4 verdict:error 同语义）。
+    - 死路判定只看本表的负向计数 ≥dead_end_repeat。
+
+    幂等：IF NOT EXISTS + 索引；**不塞种子**（台账只能由真实进化历史收敛出
+    来——凭空塞变体等于伪造历史）。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS agent_variants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id INTEGER NOT NULL,
+        agent_name TEXT DEFAULT '',
+        version TEXT NOT NULL,
+        parent_version TEXT DEFAULT '',
+        origin TEXT DEFAULT '',
+        status TEXT DEFAULT 'active',
+        fingerprint TEXT NOT NULL UNIQUE,
+        profile_json TEXT DEFAULT '{}',
+        dead_end_reason TEXT DEFAULT '',
+        dead_end_at TEXT,
+        first_seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        last_seen_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_av_agent "
+              "ON agent_variants(agent_id, id ASC)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_av_status "
+              "ON agent_variants(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_av_version "
+              "ON agent_variants(agent_id, version)")
+    c.execute("""CREATE TABLE IF NOT EXISTS variant_outcomes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        variant_id INTEGER NOT NULL REFERENCES agent_variants(id) ON DELETE CASCADE,
+        outcome TEXT NOT NULL,
+        source TEXT DEFAULT 'manual',
+        detail TEXT DEFAULT '',
+        recorded_by TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_vo_variant "
+              "ON variant_outcomes(variant_id, id DESC)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_vo_outcome "
+              "ON variant_outcomes(outcome)")
+    conn.commit()
+    print("[init_db] 迁移: Agent 变体台账 agent_variants + 结局表 variant_outcomes "
+          "已建立（P2-3，死路记忆；只记录不切换生效版本）")
