@@ -12,6 +12,7 @@ import re
 import sys
 import json
 import types
+import ast
 import importlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -126,9 +127,35 @@ chk("1.8 含糊短句仍返回规则兜底澄清题（行为未变）",
 
 _exe_src = read(os.path.join("agent", "pipeline_parts", "execute.py"))
 _str_src = read(os.path.join("agent", "pipeline_parts", "stream.py"))
-_pat = re.compile(r"_clarify_detect\(\s*user_input,\s*intent,\s*effective_provider,\s*forced_intent=forced_intent,\s*skill_name=skill_name\)")
-chk("1.9 execute.py 调用点已补传 forced_intent/skill_name", bool(_pat.search(_exe_src)))
-chk("1.10 stream.py 调用点已补传 forced_intent/skill_name", bool(_pat.search(_str_src)))
+# 2026-10-19 改判：7bd3199（澄清门控回归修复）起，两处调用点改传
+#   `forced_intent=_clarify_gate_intent`——**用户入口原值**的早期捕获
+#   （team/R1 覆写 forced_intent 之前取的值）。覆写后的 forced_intent
+#   恒非空 ⇒ quick_pick 判据恒命中 ⇒ 内容级澄清在 UI 路径恒被跳过
+#   （2026-10-16 R1 引入的回归，由 7bd3199 修复）。旧模式锚的是修复前
+#   的字面形态 ⇒ 改断言新形态；并补一条**不变式**：别名捕获必须早于
+#   任何 forced_intent 覆写、且早于调用点——有人把捕获挪到覆写之后
+#   （或改回传覆写后的值），行号序断言照样转红（比纯字面量更防回归）。
+_pat = re.compile(
+    r"_clarify_detect\(\s*user_input,\s*intent,\s*effective_provider,\s*"
+    r"forced_intent=_clarify_gate_intent,\s*skill_name=skill_name\)")
+_OW = re.compile(r"^[ \t]*forced_intent[ \t]*=[ \t]*(?:None|team_intent|intent)[ \t]*$", re.M)
+_ALIAS = re.compile(r"^[ \t]*_clarify_gate_intent[ \t]*=[ \t]*forced_intent[ \t]*$", re.M)
+
+
+def _gate_intent_captured_early(src):
+    """别名定义行 < 调用点行，且 < 首个 forced_intent 覆写行（防晚捕获回归）。"""
+    m_alias, m_call = _ALIAS.search(src), _pat.search(src)
+    if not (m_alias and m_call):
+        return False
+    ln_alias = src[:m_alias.start()].count("\n") + 1
+    ln_call = src[:m_call.start()].count("\n") + 1
+    ow = [src[:m.start()].count("\n") + 1 for m in _OW.finditer(src)]
+    return ln_alias < ln_call and (not ow or ln_alias < min(ow))
+
+
+for _nm, _src in (("1.9 execute.py", _exe_src), ("1.10 stream.py", _str_src)):
+    chk(_nm + " 调用点补传 forced_intent/skill_name（入口原值别名形态）", bool(_pat.search(_src)))
+    chk(_nm + "b 入口原值捕获早于 team/R1 覆写（澄清门控不变式）", _gate_intent_captured_early(_src))
 chk("1.11 _clarify_detect 签名含 forced_intent/skill_name 形参",
     "def _clarify_detect(self, user_input, intent, provider_id=None, forced_intent=None, skill_name=None)" in _sess_src)
 
@@ -180,6 +207,51 @@ chk("2.4b inject_k 兜底默认仍为 3（配置缺失时不放大注入量）",
         os.path.join("agent", "pipeline_parts", "context.py")))
 chk("2.4c fallback_top_k 为正（混合检索异常时的兜底条数）", _fb > 0, "fallback_top_k=%s" % _fb)
 
+# 2026-10-19 改判：原实现用正则文本扫全部 .py——**注释/docstring 里的
+#   `hybrid_search(top_k=4)`（rag.py:530 corrective-retry 的实测记录）被当成
+#   调用点**；且同一文件两次 `from knowledge_engine import hybrid_search as
+#   _hybrid` 时别名列表重复 ⇒ 每个真实调用点被数两遍（rag.py 2 个真实调用点
+#   报出 5 个，2.6 因 docstring 里的 top_k=4 误红）。文本级判据在「注释描述
+#   旧写法」面前必然误报 ⇒ 改为 **ast 级**提取：只认真 Call 节点（注释/字符串
+#   免疫、无重复计数），并可分辨 top_k 是关键字实参还是第 3 位置实参、
+#   实参值是常量（硬编码）还是变量/表达式。
+_HY_ALIAS = re.compile(r"from\s+knowledge_engine\s+import\s+hybrid_search\s+as\s+(\w+)")
+
+
+def _hybrid_call_sites(rel):
+    """[(rel, 行号, top_k 实参源码, 是否硬编码常量)]；读取/解析失败返回 []。"""
+    try:
+        txt = io.open(os.path.join(ROOT, rel), encoding="utf-8", errors="replace").read()
+    except Exception:
+        return []
+    if "hybrid_search" not in txt:
+        return []
+    try:
+        tree = ast.parse(txt)
+    except SyntaxError:
+        return []
+    names = {"hybrid_search"} | set(_HY_ALIAS.findall(txt))
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        nm = fn.id if isinstance(fn, ast.Name) else (
+            fn.attr if isinstance(fn, ast.Attribute) else None)
+        if nm not in names:
+            continue
+        kw = next((k.value for k in node.keywords if k.arg == "top_k"), None)
+        pos = node.args[2] if len(node.args) >= 3 else None
+        expr = kw if kw is not None else pos
+        if expr is None:
+            out.append((rel, node.lineno, "<缺省,用默认值>", False))
+            continue
+        seg = ast.get_source_segment(txt, expr)
+        hard = isinstance(expr, ast.Constant) and isinstance(expr.value, int)
+        out.append((rel, node.lineno, (seg or "<表达式>").strip(), hard))
+    return out
+
+
 _SITES = []
 for dirpath, dirnames, filenames in os.walk(ROOT):
     dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
@@ -190,35 +262,25 @@ for dirpath, dirnames, filenames in os.walk(ROOT):
         rel = os.path.relpath(p, ROOT).replace("\\", "/")
         if rel.startswith("tools/verify/"):
             continue
-        try:
-            txt = io.open(p, encoding="utf-8", errors="replace").read()
-        except Exception:
-            continue
-        if "hybrid_search" not in txt:
-            continue
-        names = ["hybrid_search"] + re.findall(r"from knowledge_engine import hybrid_search as (\w+)", txt)
-        for nm in names:
-            for m in re.finditer(re.escape(nm) + r"\(([^)]{0,300})", txt):
-                if "def " in txt[max(0, m.start() - 30):m.start()]:
-                    continue
-                _SITES.append((rel, txt[:m.start()].count("\n") + 1, m.group(1).strip()))
+        _SITES.extend(_hybrid_call_sites(rel))
 
 _log("  调用点共 " + str(len(_SITES)) + " 处：")
-for rel, ln, arg in _SITES:
-    _tk = re.search(r"top_k=([^,]+)", arg)
-    _log("    " + rel + ":" + str(ln) + "  top_k=" + (_tk.group(1) if _tk else "<缺省,用默认值>"))
+for rel, ln, expr, hard in _SITES:
+    _log("    " + rel + ":" + str(ln) + "  top_k=" + expr + ("（硬编码常量）" if hard else ""))
 
-chk("2.5 全部调用点均显式传 top_k（默认值变更对现有调用零影响）",
-    all("top_k" in a for _, _, a in _SITES),
-    "缺省调用点数=" + str(sum(1 for _, _, a in _SITES if "top_k" not in a)))
+chk("2.5 全部调用点均显式传 top_k（关键字或第 3 位置实参；默认值变更对现有调用零影响）",
+    all("<缺省" not in e for _, _, e, _ in _SITES),
+    "缺省调用点数=" + str(sum(1 for _, _, e, _ in _SITES if "<缺省" in e)))
 _rag_sites = [x for x in _SITES if x[0] == "agent/rag.py"]
 # 2026-10-04 改判：原断言是"消费链路只允许有 **1 个**调用点，且其参数是字面量 top_k=4"。
 #   这类"白名单 + 字面量"断言在四层旋钮重构后必然失效（现在实参是 `top_k=_rag_top_k`）。
 #   改为断言**真正要守的东西**：混合检索的调用点存在、且实参是配置变量（不是硬编码）。
-chk("2.6 混合检索在 agent/rag.py 有调用点且实参走配置变量（不硬编码）",
-    len(_rag_sites) >= 1 and all("top_k=" in a for _, _, a in _rag_sites)
-    and not any(re.search(r"top_k=\d", a) for _, _, a in _rag_sites),
-    "rag 调用点=%d，参数=%s" % (len(_rag_sites), [a for _, _, a in _rag_sites]))
+# 2026-10-19 再改判：判据从「文本无 top_k=数字」升级为「ast 实参非常量整数」——
+#   `top_k=max(POOL, 50)` 这类表达式实参合法（非硬编码），docstring 里的旧写法
+#   记录不再误报（提取改判说明见上方 _hybrid_call_sites 注释）。
+chk("2.6 混合检索在 agent/rag.py 有调用点且实参走配置变量（ast 级：无硬编码常量实参）",
+    len(_rag_sites) >= 1 and all(not h for _, _, _, h in _rag_sites),
+    "rag 调用点=%d，top_k 实参=%s" % (len(_rag_sites), [e for _, _, e, _ in _rag_sites]))
 
 # ===================================================================
 # [3] 改动 3：plan_summary / plan_refine 输出上限 —— 现状与阻断项
