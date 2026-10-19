@@ -1062,14 +1062,20 @@ class ToolMixin:
                 _task_key = str(getattr(self, "_tool_task_key", "") or "")
                 # failure_kind：复用 B1-6 的分类器（不另造第二份词表——两份必然漂移）。
                 # 只在失败时写，成功留空（避免"成功"也带一个无意义的分类）。
+                # ★ 2026-10-18 修（P1-2 步骤级归因器真库取证时发现）：原写法
+                #   `_fc(classify(text, ok=False))` 把分类器**嵌套调用两次**——
+                #   内层返回 kind 串（如 'timeout'），外层 `classify(kind)` 的 ok
+                #   默认 True 直接返 '' ⇒ 失败行的 failure_kind **恒为空**（真库
+                #   273 条 ok=0 全空，归因器的 kind 维度对工具步整体失效）。
+                #   修为单次调用并显式传 ok=False。
                 _fkind = ""
                 if not result.get("ok"):
                     try:
                         from services.failure_class import classify as _fc
-                        _fkind = _fc(classify(
+                        _fkind = _fc(
                             _res_txt if _res_txt and not _res_txt.startswith("[redact-failed]")
                             else str(result.get("error") or _res_txt or ""),
-                            ok=False))
+                            ok=False)
                     except Exception:
                         _fkind = ""
                 conn.execute(

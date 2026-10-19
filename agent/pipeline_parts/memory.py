@@ -353,14 +353,24 @@ class MemoryMixin:
                 # 可观测：技能调用日志（call_kind='skill'，与工具日志统一落库，失败不阻断）
                 _agent = getattr(self, "_tool_agent_ctx", None) or {}
                 _summary = str(output_content or "")[:2000] if ok else (note or "执行失败")
+                # P1-2：与工具日志统一带 failure_kind（此前本 INSERT 无该列 ⇒ 技能
+                # 失败步在步骤级归因里只能落 unknown）。分类器复用 B1-6 的
+                # services.failure_class（不另造第二份词表）；只在失败时写。
+                _skind = ""
+                if not ok:
+                    try:
+                        from services.failure_class import classify as _sfc
+                        _skind = _sfc(note or _summary or "skill failed", ok=False)
+                    except Exception:
+                        _skind = ""
                 for name in hits[:10]:
                     try:
                         conn.execute(
                             "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-                            "arguments, result, ok, latency_ms, conversation_id) "
-                            "VALUES (?,?,?,?,?,?,?,?,0,?)",
+                            "arguments, result, ok, latency_ms, conversation_id, failure_kind) "
+                            "VALUES (?,?,?,?,?,?,?,?,0,?,?)",
                             (intent or "", _agent.get("agent", ""), name, "skill", "skill",
-                             "{}", _summary, 1 if ok else 0, int(run_id or 0)))
+                             "{}", _summary, 1 if ok else 0, int(run_id or 0), _skind))
                     except Exception:
                         pass
                 for name in hits[:10]:

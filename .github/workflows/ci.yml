@@ -712,6 +712,17 @@ jobs:
       - name: Guard Trace2Dataset（8 抽取器注册表 + 七键配置变异自证 + 三档标注 + 指纹漂移拒绝 + 只读 smoke）
         run: python tools/verify/verify_trace2dataset.py
 
+      # ── P1-2（2026-10-18 自进化调研路线图）：步骤级归因器 ───────────────
+      # AgentEvolver Self-Attributing 最小版：3 个步骤源注册表（llm_call/
+      # tool_call/flow_step，统一九列）把会话打成步骤序列，标 GOOD/BAD、首坏步
+      # 与级联分开（聚合只聚首坏步——否则一次根因被级联放大成 N 个高频问题）；
+      # 三态 verdict 不掩饰证据缺口（结局坏但零坏步 = unattributed_failure）；
+      # kind 覆盖率诚实统计（tool 历史空 kind 记 unknown，不伪装有类型）；顺手
+      # 修掉 tool_call_logs 写入点把 classify 嵌套调两次导致 failure_kind 恒空
+      # 的 bug（真库 273 条 ok=0 全空的成因），门禁 D6 子进程行为级证明。
+      - name: Guard 步骤级归因（3 源注册表 + 首坏/级联 + 三态 verdict + 六键变异自证 + 真库对账 + 写入点行为级证明）
+        run: python tools/verify/verify_attribution.py
+
       - name: Guard 向量二进制缓存保真
         run: python tools/verify/verify_vector_binary_cache.py
 

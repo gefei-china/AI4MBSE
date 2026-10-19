@@ -566,7 +566,35 @@ def monitor_session_detail(conversation_id: int, conn=Depends(db_session)):
                          + profile["failed_runs"] * 4 + profile["llm_trunc"] * 2
                          + profile["llm_fallback"] * 2 + profile["llm_retries"] + profile["hil"])
     out["error_profile"] = profile
+    # ── P1-2 步骤级归因（AgentEvolver self-attributing 最小版）──
+    # error_profile 回答「坏了几次」（计数），attribution 回答「哪一步开始
+    # 坏的、坏在哪、之后哪些是级联」（归因）。单段降级：归因失败不影响会话
+    # 详情其余部分（既有哲学：看板不能因单段失败整体 500）。
+    try:
+        from core import attribution as _attr
+        out["attribution"] = _attr.attribute_session(conn, cid)
+    except Exception as e:
+        out["attribution"] = {"ok": False, "error": "%s: %s" % (type(e).__name__, e)}
     return out
+
+
+@router.get("/api/monitor/attribution/patterns")
+def monitor_attribution_patterns(days: int = 0, conn=Depends(db_session)):
+    """步骤级归因模式聚合（P1-2）：跨会话首坏步按 (来源,意图,失败类型,执行体)
+    聚类 + kind 覆盖率 + unattributed 会话清单。
+
+    这是 P1-3 配置提案器的读取面：提案器只读**首坏步模式**（级联是症状），
+    并依据 kind 覆盖率判断哪些模式有类型证据、哪些只有位置证据。
+    days>0 时覆盖配置窗口（core.config attribution.window_days）；只读。
+    """
+    from core import attribution as _attr
+    try:
+        st = _attr.get_settings()
+        if days and days > 0:
+            st["window_days"] = int(days)
+        return _attr.collect_patterns(conn, settings=st)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": "%s: %s" % (type(e).__name__, e)}, 500)
 
 
 @router.get("/api/monitor/lifecycle")

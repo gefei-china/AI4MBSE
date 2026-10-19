@@ -1047,6 +1047,19 @@ DEFAULT_CONFIG = {
         "min_query_chars": 4,        # query 最短长度（"嗯"/"好"不构成评测样本）
         "max_response_chars": 600,   # response 截断上限（回归集只需可读开头）
     },
+    # ── P1-2（2026-10-18 自进化调研路线图）：步骤级归因器 ──────────────
+    # 背景：AgentEvolver self-attributing 的最小版——error_profile 只到会话级
+    #   计数，回答不了「哪一步开始坏的」。步骤原料（llm_usage_stats/
+    #   tool_call_logs/flow_run_steps 的失败信号）早已落库，缺的是归因器。
+    # 本组控制 core/attribution.py 的取材/聚合口径；只读取材，绝不写库。
+    "attribution": {
+        "enabled": True,             # 总开关（False 时 patterns 返空不报错）
+        "window_days": 90,           # patterns 聚合窗口：只归因最近 N 天的首坏步
+        "min_occurrences": 2,        # 模式入榜下限：出现次数 ≥N 才算模式（防一次性噪声）
+        "max_patterns": 50,          # 模式条数上限（防看板被长尾淹掉）
+        "max_steps": 500,            # 单会话步骤上限（真库实测最大 324；超限保留最早的）
+        "session_scan_limit": 200,   # patterns 扫描会话数上限（最近活跃优先）
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1541,6 +1554,15 @@ CONFIG_SCHEMA = {
         "mock_markers":       {"type": "str",   "desc": "Mock 标记（逗号分隔，query/response 命中即排除）"},
         "min_query_chars":    {"type": "int",   "desc": "query 最短长度（短于则不构成评测样本）"},
         "max_response_chars": {"type": "int",   "desc": "response 截断上限（字符）"},
+    },
+    # P1-2（2026-10-18）：步骤级归因器（core/attribution.py 消费）
+    "attribution": {
+        "enabled":            {"type": "bool",  "desc": "归因总开关（False 时模式聚合返空）"},
+        "window_days":        {"type": "int",   "desc": "模式聚合窗口：只归因最近 N 天的首坏步"},
+        "min_occurrences":    {"type": "int",   "desc": "模式入榜下限（出现次数，防一次性噪声上榜）"},
+        "max_patterns":       {"type": "int",   "desc": "模式条数上限（防看板被长尾淹掉）"},
+        "max_steps":          {"type": "int",   "desc": "单会话步骤上限（超限保留最早的，首坏步在头部）"},
+        "session_scan_limit": {"type": "int",   "desc": "模式聚合扫描会话数上限（最近活跃优先）"},
     },
 }
 
