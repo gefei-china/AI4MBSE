@@ -782,6 +782,21 @@ jobs:
         #      rollback 路径——档案库是记忆，不是手（回滚过人的铁律同 P1-4）。
         run: python tools/verify/verify_agent_archive.py
 
+      - name: Guard 画布拓扑台账（结构体检 + 同构去重 + 只读不改拓扑）
+        # 路线图 P2 第四项原文「多画布流拓扑实验」，但真库agent_flows 62 幅
+        # vs flow_runs 仅 11 条（9 条还是同日同构画布的秒级重复）⇒ 在这个
+        # 分母上比较两种拓扑得到的是噪声；而红线 #6 明写「不碰架构拓扑」。
+        # 故口径定为**台账 + 体检**：只读画布、只记缺陷、只报同构。本门禁守：
+        #   ① 口径不漂回自动改拓扑——引擎/repo/router 三层零写 agent_flows
+        #      语句（静态断言 + agent_flows 字节级零变化的行为级断言）；
+        #   ② 诚实 unknown 且判据顺序正确——空库(0 幅)判 insufficient_data
+        #      不是 clean；blocker>0 判 defective 不是 unknown（把「明确有
+        #      缺陷」显示成「数据不足」方向完全反了）；
+        #   ③ 指纹不含 name/version/label——改个名不该造出新拓扑、也不该让
+        #      同构分组漏检（P2-3 变体指纹同型坑）；
+        #   ④ 同构只报结构同构不报相似（相似度要阈值，阈值是拍出来的）。
+        run: python tools/verify/verify_flow_topology.py
+
       - name: Guard 向量二进制缓存保真
         run: python tools/verify/verify_vector_binary_cache.py
 

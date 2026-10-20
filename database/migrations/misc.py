@@ -760,3 +760,63 @@ def _migrate_agent_archive_p23(conn):
     conn.commit()
     print("[init_db] 迁移: Agent 变体台账 agent_variants + 结局表 variant_outcomes "
           "已建立（P2-3，死路记忆；只记录不切换生效版本）")
+
+
+def _migrate_flow_topology_p24(conn):
+    """P2-4（2026-10-19 自进化调研路线图 P2 第四项）：画布拓扑台账。
+
+    路线图原文「多画布流拓扑实验」。落地前勘察真实库，两个事实改写了口径：
+
+    ① **运行证据不足以支撑拓扑实验**：agent_flows 62 条定义 vs
+       flow_runs 仅 11 条 / flow_run_steps 33 条，其中 9 条是同日三个同构
+       画布各跑 3 次（49–82ms，秒级），只有 run 198 是真实长时运行
+       （94.8s / 6 步 / 1 个 error）。在 11 条记录上比较两种拓扑的优劣
+       得到的是噪声。**实验的前提是先有可比较的台账**，故本期落台账与体检。
+
+    ② **同一条路线图的安全红线 #6 写着「不碰权重、不碰架构拓扑」**：
+       自动生成新拓扑并自动切换生效画布直接违反这条自己定的红线。
+
+    ## flow_topology_variants —— 画布拓扑台账（一行 = 一幅画布）
+    把「画布数量」这个看不出问题的指标，换成「结构是否健康、是否重复」：
+    - flow_id UNIQUE：一幅画布一行，扫描反复跑只刷新不新增（台账不注水）。
+    - fingerprint = sha1(节点 id + 有向边 + 节点类型计数)，**不含 name /
+      version / label / 时间戳**——改个名字不该造出新拓扑（P2-3 变体指纹
+      同型坑：指纹含易变字段会让台账注水）。
+    - defects_json 存结构缺陷明细 + 按类别计数（blocker/warn 两档，
+      不做可配阈值打分：没有先验支撑「3 warn 比 2 blocker+1 warn 更糟」）。
+    - evidence_state = covered（至少跑过一次）| uncovered（**从未跑过**），
+      逐画布独立判，**不回落 0**：没跑过不是跑了零次。
+    - 本表**只记录，绝不写 agent_flows**——拓扑台账是体检镜不是手
+      （门禁 E 段静态断言 repo 里没有 UPDATE/DELETE agent_flows）。
+
+    幂等：IF NOT EXISTS + 索引；**不塞种子**（台账只能由真实画布体检
+    收敛出来——凭空塞行等于伪造健康度）。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS flow_topology_variants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        flow_id INTEGER NOT NULL UNIQUE,
+        flow_name TEXT DEFAULT '',
+        fingerprint TEXT DEFAULT '',
+        node_count INTEGER DEFAULT 0,
+        edge_count INTEGER DEFAULT 0,
+        status TEXT DEFAULT '',
+        source TEXT DEFAULT '',
+        blocker_count INTEGER DEFAULT 0,
+        warn_count INTEGER DEFAULT 0,
+        defects_json TEXT DEFAULT '{}',
+        runs INTEGER DEFAULT 0,
+        failed_runs INTEGER DEFAULT 0,
+        evidence_state TEXT DEFAULT 'uncovered',
+        first_seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        last_seen_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ftv_fingerprint "
+              "ON flow_topology_variants(fingerprint)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ftv_evidence "
+              "ON flow_topology_variants(evidence_state)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ftv_blocker "
+              "ON flow_topology_variants(blocker_count)")
+    conn.commit()
+    print("[init_db] 迁移: 画布拓扑台账 flow_topology_variants 已建立"
+          "（P2-4，结构体检 + 同构去重；只记录不改拓扑，红线 #6）")

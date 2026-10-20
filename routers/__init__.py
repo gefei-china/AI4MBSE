@@ -43,6 +43,7 @@ from .jobs import router as jobs_router  # 2026-10-04 P0-C 异步作业队列（
 from .proposals import router as proposals_router  # 2026-10-18 P1-3 配置提案（只提议不自动应用）
 from .curriculum import router as curriculum_router  # 2026-10-19 P2-2 失败驱动任务提案（只提议不自动执行）
 from .agent_archive import router as agent_archive_router  # 2026-10-19 P2-3 Agent 档案库（只记录不切换生效版本）
+from .flow_topology import router as flow_topology_router  # 2026-10-20 P2-4 画布拓扑台账（只读画布不改拓扑，红线 #6）
 
 __all__ = [
     "dashboard_router",
@@ -81,4 +82,5 @@ __all__ = [
     "proposals_router",  # 2026-10-18 P1-3 配置提案（只提议不自动应用）
     "curriculum_router",  # 2026-10-19 P2-2 失败驱动任务提案（只提议不自动执行）
     "agent_archive_router",  # 2026-10-19 P2-3 Agent 档案库（只记录不切换生效版本）
+    "flow_topology_router",  # 2026-10-20 P2-4 画布拓扑台账（只读画布不改拓扑）
 ]

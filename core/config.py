@@ -1129,6 +1129,17 @@ DEFAULT_CONFIG = {
         "dead_end_repeat": 2,           # 同一变体判回归几次记死路
         "max_variants": 200,            # 单次扫描入册上限（防长尾注水）
     },
+    # ── P2-4（2026-10-19 自进化调研路线图 P2 第四项）：画布拓扑台账与体检 ────
+    # 口径裁决：路线图原文「多画布流拓扑实验」，但真库 agent_flows 62 条
+    #   vs flow_runs 仅 11 条（且 9 条是同日同构画布的秒级重复），在 11 条
+    #   运行记录上比较两种拓扑得到的是噪声；且红线 #6 明写「不碰架构拓扑」。
+    #   故本期落**台账 + 体检**：只读画布、只记缺陷、只报同构，绝不写拓扑。
+    "flow_topology": {
+        "enabled": True,                # 总开关（False 时 scan/overview 返 enabled=False）
+        "min_denominator": 2,           # 运行证据分母下限：不足即 unknown（没跑过≠跑零次）
+        "linear_degenerate_min": 4,     # 达到几个节点才算「纯链无并行」可疑
+        "max_canvases": 2000,           # 单次扫描画布上限（防长尾注水）
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1734,6 +1745,15 @@ CONFIG_SCHEMA = {
         "min_denominator": {"type": "int",  "desc": "各维度分母下限：不足即 unknown（空窗口不是 0 分）"},
         "dead_end_repeat": {"type": "int",  "desc": "同一变体判回归几次记死路（1 次可能是噪声，反复才是模式）"},
         "max_variants":    {"type": "int",  "desc": "单次扫描入册上限（防长尾注水）"},
+    },
+    # ── P2-4（2026-10-19 自进化调研路线图 P2 第四项）：画布拓扑台账与体检 ────
+    # 铁律：只读 agent_flows、只记录缺陷、只报同构，**绝不写生效拓扑**
+    # （红线 #6「不碰架构拓扑」；体检镜不是手，同 P2-3 档案库纪律）。
+    "flow_topology": {
+        "enabled":              {"type": "bool", "desc": "画布拓扑体检总开关（False 时 scan/overview 返 enabled=False）"},
+        "min_denominator":      {"type": "int",  "desc": "运行证据分母下限：有运行证据的画布不足此数 ⇒ failed_runs 记 unknown"},
+        "linear_degenerate_min":{"type": "int",  "desc": "达到几个节点才算「纯链无并行」可疑"},
+        "max_canvases":         {"type": "int",  "desc": "单次扫描画布上限（防长尾注水）"},
     },
 }
 
