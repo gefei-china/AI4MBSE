@@ -50,26 +50,34 @@
   }
 
   function _actionItem(it) {
-    const head = `<div style="display:flex;align-items:center;gap:8px;">
+    /* ★模板必须逐标签配平：head 做成「自闭合」的小函数——曾经让 head 的
+       <div> 悬空、由调用处补 </div>，12 个条目各漏一个，浏览器解析时把
+       后续的体检/可信度 panel 全部嵌进最后一个条目 div 内部（面板查询
+       panelCount=1 才暴露）。innerHTML 不报错、console 干净，只有
+       「数一数渲染出几个 panel」和静态配平哨兵能抓到它。
+       自闭合还有个好处：模板文本上 open/close 严格相等，门禁 E8 的
+       静态配平断言才成立（共享半个模板会让文本计数天然失配）。 */
+    const head = (extra) => `<div style="display:flex;align-items:center;gap:8px;">
       <span class="badge">${esc(it.source_label)}</span>
-      <span style="font-size:13px;font-weight:500;flex:1;">${esc(it.title)}</span>`;
+      <span style="font-size:13px;font-weight:500;flex:1;">${esc(it.title)}</span>${extra || ''}</div>`;
     // ★真闭环：引擎给了 action 才渲染按钮
     if (it.action) {
       const alts = (it.action.alt || []).map(a =>
         `<button class="btn sm" data-ev-act="${esc(a.payload.decision)}" data-ev-path="${esc(it.action.path)}">${esc(a.label)}</button>`).join('');
       return `<div style="padding:8px 0;border-bottom:1px solid var(--line);">
-        ${head}
-        <button class="btn sm pri" data-ev-act="${esc(it.action.payload.decision)}" data-ev-path="${esc(it.action.path)}">${esc(it.action.label)}</button>
-        ${alts}
-      </div>
-      ${it.detail ? `<div style="font-size:11.5px;color:var(--mut);padding:0 0 8px;">${esc(it.detail)}</div>` : ''}`;
+        ${head('')}
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button class="btn sm pri" data-ev-act="${esc(it.action.payload.decision)}" data-ev-path="${esc(it.action.path)}">${esc(it.action.label)}</button>
+          ${alts}
+        </div>
+        ${it.detail ? `<div style="font-size:11.5px;color:var(--mut);padding:0 0 8px;">${esc(it.detail)}</div>` : ''}
+      </div>`;
     }
     // ★不能点：渲染成说明条而不是死按钮
     const why = it.not_actionable_reason || '暂无处理入口';
     return `<div style="padding:8px 0;border-bottom:1px solid var(--line);">
-      ${head}
-      <span class="badge">只能看</span>
-      <div style="font-size:11.5px;color:var(--mut);margin-top:3px;">
+      ${head('<span class="badge">只能看</span>')}
+      <div style="font-size:11.5px;color:var(--mut);">
         ${it.detail ? esc(it.detail) + ' ' : ''}（${esc(why)}）
       </div>
     </div>`;

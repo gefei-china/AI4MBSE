@@ -799,7 +799,9 @@ def _E():
     js = io.open(os.path.join(ROOT, "static", "js", "mods",
                               "47-evolution-report.js"),
                  encoding="utf-8").read()
-    jcode = re.sub(r"//.*", "", js)
+    jcode = re.sub(r"/\*[\s\S]*?\*/", "", js)   # 先剥块注释（注释文本里的
+    #   "</div>" 字样会污染配平计数——实测 E8 首跑就栽在这）
+    jcode = re.sub(r"//.*", "", jcode)
     check("E5 前端按 it.action 决定是否渲染按钮",
           "if (it.action)" in jcode and "not_actionable_reason" in jcode)
     check("E5b 前端有「只能看」分支", "只能看" in jcode)
@@ -809,6 +811,31 @@ def _E():
     # E6 前端 delta 仅在 state==='ok' 时渲染
     check("E6 前端 delta 有 state 守卫",
           "m.state !== 'ok'" in jcode and "m.delta === null" in jcode)
+
+    # E8 ★div 配平哨兵：innerHTML 模板里 <div 与 </div> 必须逐函数配平。
+    #   实测真 bug：_actionItem 的 head 模板漏一个 </div>，12 个条目各漏一个，
+    #   浏览器解析时把体检/可信度 panel 全部嵌进最后一个条目 div 内部——
+    #   不报错、console 干净、内容"看起来都在"，只有数 panel 数量才能发现。
+    #   （静态配平做不了完整 HTML 校验，但对这种单文件手写模板是有效下限。）
+    fn_m = re.search(r"function _actionItem\(it\) \{([\s\S]*?)\n  \}", jcode)
+    if fn_m:
+        body_txt = fn_m.group(1)
+        opens = len(re.findall(r"<div\b", body_txt))
+        closes = len(re.findall(r"</div>", body_txt))
+        check("E8 _actionItem 模板 div 配平", opens == closes,
+              "<div=%d </div>=%d" % (opens, closes))
+    else:
+        check("E8 _actionItem 模板 div 配平", False, "函数体未匹配到")
+    # E9 同样配平整页三大段拼装函数（loadEvolutionReport 主体）
+    lr_m = re.search(r"async function loadEvolutionReport\(\) \{([\s\S]*?)\n  \}", jcode)
+    if lr_m:
+        body_txt = lr_m.group(1)
+        opens = len(re.findall(r"<div\b", body_txt))
+        closes = len(re.findall(r"</div>", body_txt))
+        check("E9 loadEvolutionReport 模板 div 配平", opens == closes,
+              "<div=%d </div>=%d" % (opens, closes))
+    else:
+        check("E9 loadEvolutionReport 模板 div 配平", False, "函数体未匹配到")
     # E7 端点纪律：失败显式化而非裸 500
     rsrc = io.open(os.path.join(ROOT, "routers", "evolution_report.py"),
                    encoding="utf-8").read()
