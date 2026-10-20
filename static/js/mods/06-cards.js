@@ -29,7 +29,19 @@ function procBlocksHtml(ex, mid){
           + (s.agent?'<span style="color:var(--mut);font-size:10px;">'+esc(s.agent)+'</span>':'')
           + lat + dep + '</div>';
       }).join('') + '</div>';
-    const body = planList + subs.map(s=>subtaskCardHtml(s)).join('');
+    /* ★ 2026-10-20（单点重跑）：run_id 存在时提供入口——默认预填失败/部分完成的
+       第一个子任务，可改。rerun 只清状态，执行自动接既有 resume（其余任务复用）。 */
+    let rerunHtml = '';
+    const _runId = ex.run_id || (window._lastOrchRunId || 0);
+    if(_runId){
+      const _bad = subs.find(s=>s.status && s.status!=='done' && s.status!=='run');
+      rerunHtml = `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
+        <button class="btn sm ghost" onclick="orchRerunPrompt(${_runId})">↻ 重跑子任务</button>
+        <span style="font-size:10px;color:var(--mut);">重跑会连同依赖它的下游一起重跑，其余任务复用结果</span>
+      </div>`;
+      window._orchRerunDefault = _bad ? (_bad.key || '') : '';
+    }
+    const body = planList + subs.map(s=>subtaskCardHtml(s)).join('') + rerunHtml;
     steps.push({icon:'📋', title:`计划清单（${subs.length} 任务：${doneN} 完成${failN?` / ${failN} 失败`:''}）`, status:'done', sub:`${doneN}/${subs.length}`, body, cls:'orchestrate'});
   }
   (ex.tools||[]).forEach((t, i)=>{

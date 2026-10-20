@@ -9,7 +9,8 @@ from .tools import ToolExecutor
 
 
 def build_subtask_context(tk: dict, goal: str, done_items: list = None,
-                          artifact_digest: str = "") -> str:
+                          artifact_digest: str = "",
+                          offload_map: dict = None) -> str:
     """T7 子任务上下文快照：任务定义 + 前置结果摘要 + 会话既有产物 + 交付规范（最小充分上下文）。
 
     供 _run_task 与 _stream_orchestrated_flow 复用，保证会话编排/画布路径行为一致。
@@ -44,6 +45,21 @@ def build_subtask_context(tk: dict, goal: str, done_items: list = None,
         parts.append("- 上游交付物摘要：")
         for it in pre:
             parts.append(f"  · {it.get('task_key')}（{it.get('title') or '-'}）：{str(it.get('result'))[:400]}")
+        # ★ 2026-10-20（共享产物工作区·方案1）：摘要只有 400 字，下游曾因只看到片段
+        #   把上游交付物误判为"缺失/失败"（会话 9565 t1—t5 全部误报）。完整交付物
+        #   已由 worker 落 offload 共享区 —— 这里给**按需取全文的引用**（id + 字符数 +
+        #   工具调用指引），下游自行决定要不要读全文。offload_map={task_key: (id, len)}。
+        _om = offload_map or {}
+        for it in pre:
+            _oid = _om.get(str(it.get("task_key")))
+            if _oid:
+                _oid_v, _oid_len = _oid if isinstance(_oid, tuple) else (_oid, 0)
+                if _oid_v:
+                    parts.append(
+                        f"  · 引用：{it.get('task_key')} 完整交付物（约 {_oid_len} 字符）"
+                        f"已存档为 offload #{_oid_v} —— 摘要不够判断时，"
+                        f"调用工具 tool_result_fetch（参数 {{\"id\": {_oid_v}}}）取全文，"
+                        f"不要凭摘要猜测上游结论。")
     parts.append("- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注")
     if artifact_digest:
         parts.append(str(artifact_digest))

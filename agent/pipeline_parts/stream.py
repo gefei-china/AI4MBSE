@@ -470,7 +470,9 @@ class StreamMixin:
                 # T7：任务上下文快照（任务定义 + 前置依赖结果摘要 + 交付规范）
                 try:
                     from workflows.planner import build_subtask_context
-                    _tctx = build_subtask_context(tk, goal, list(done_items), artifact_digest=_digest)
+                    _tctx = build_subtask_context(tk, goal, list(done_items),
+                                              artifact_digest=_digest,
+                                              offload_map=dict(_orch_offloads))
                     if _tctx:
                         query = f"[任务上下文快照]\n{_tctx}\n\n[任务]\n{query}"
                 except Exception:
@@ -565,6 +567,10 @@ class StreamMixin:
                     if isinstance(cfg.get("kb_scope"), dict) and cfg.get("kb_scope"):
                         sub._ns_kb_scope = dict(cfg["kb_scope"])
                     try:
+                        # 共享产物工作区：把上游交付物引用挂到子任务实例上——
+                        # tools.py 构建 tools_def 定稿时据此注入 tool_result_fetch（供下游取全文）
+                        if _orch_offloads:
+                            sub._orch_result_offloads = dict(_orch_offloads)
                         for ev in sub.execute_stream(query, 0, branch, provider_id, _sub_att,
                                                      forced_intent=tk.get("agent_id") or None,
                                                      skill_name=skill_name2, user=user, dry_run=True):
@@ -750,13 +756,24 @@ class StreamMixin:
                                         _c10.close()
                             except Exception:
                                 pass
-                        return tkey, ttitle, ok, sub_res, evs, "", int((_t.time() - _t0) * 1000), tok_used, _summary_proto
+                        # ★ 2026-10-20（共享产物工作区·方案1）：完整交付物落 offload 共享区，
+                        #   供下游子任务按 id 取全文（替代"只传 400 字摘要"的口径）。
+                        #   阈值 800：太短的交付物直接内联进摘要即可，不值得一条引用。
+                        _off_id = 0
+                        if ok and sub_res and len(sub_res) > 800:
+                            try:
+                                from agent.pipeline_parts import tool_offload as _toff
+                                _off_id = _toff.save_offload(
+                                    "task_result:%s" % tkey, sub_res, int(conversation_id or 0))
+                            except Exception:
+                                _off_id = 0      # 落库失败不阻断编排（退化为纯摘要口径）
+                        return tkey, ttitle, ok, sub_res, evs, "", int((_t.time() - _t0) * 1000), tok_used, _summary_proto, _off_id
                     except Exception as e:
-                        return tkey, ttitle, False, "", [], str(e)[:150], int((_t.time() - _t0) * 1000), 0, None
+                        return tkey, ttitle, False, "", [], str(e)[:150], int((_t.time() - _t0) * 1000), 0, None, 0
                     finally:
                         sub._orch_subtask = False
                 except Exception as e:
-                    return tkey, ttitle, False, "", [], str(e)[:150], int((_t.time() - _t0) * 1000), 0, None
+                    return tkey, ttitle, False, "", [], str(e)[:150], int((_t.time() - _t0) * 1000), 0, None, 0
 
             def _worker(tk, task_pool):
                 """Task 7 执行包装：per-agent 信号量限流 + 子任务超时 + 自动重试。
@@ -933,6 +950,7 @@ class StreamMixin:
                 #  事件自身的 `key`/`name` 前缀（`tkey:`）保证前端把它们归到**对应子任务的卡片**下。
                 _evq = _queue.Queue()
                 _hb = {}   # P0-7：子任务活性心跳表 {task_key: 最近产出时刻}（_worker 停滞超时用）
+                _orch_offloads = {}   # 共享产物工作区：{task_key: (offload_id, 字符数)}（下游按 id 取全文）
 
                 def _drain():
                     """取出队列里**已到达**的子任务事件；把**连续的 token 合并成一条**再吐。
@@ -984,7 +1002,11 @@ class StreamMixin:
                         for _fut in _done_now:
                             _pending.discard(_fut)
                             tk = _futs[_fut]
-                            tkey, ttitle, tk_ok, sub_res, evs, _t_err, _t_lat, _tok, _summary = _fut.result()
+                            tkey, ttitle, tk_ok, sub_res, evs, _t_err, _t_lat, _tok, _summary, _off_id = _fut.result()
+                            if _off_id:
+                                # 共享产物工作区：run 级 {task_key: (offload_id, 字符数)}，
+                                # 后续派发的下游子任务在上下文快照里拿到引用（见 build_subtask_context）
+                                _orch_offloads[tkey] = (_off_id, len(str(sub_res or "")))
                             # ⚠️ 这里**不再** `for ev in evs: yield ev`（那些事件已由 ① 实时吐出；
                             #    再吐一遍会重复渲染）。`evs` 仍随返回值带出，仅供调试/兼容。
                             if tk_ok:
@@ -996,6 +1018,7 @@ class StreamMixin:
                                                    "agent_id": tk.get("agent_id"), "result": sub_res,
                                                    "status": "done",
                                                    "summary": _summary,
+                                                   "result_offload_id": _off_id or 0,
                                                    "proto_status": (_summary or {}).get("status")})
                             else:
                                 TaskQueue.fail(conn, tk["id"], _t_err or "子任务未产生输出")
@@ -1470,6 +1493,7 @@ class StreamMixin:
             "orchestrated": True, "degraded": degraded,
             "team": (agent_def.intent_name or agent_def.name) if team_forced else None,  # 团队模式：主 Agent 团队负责人
             "orchestrated_status": _agg_status,   # Task 10：编排汇总三态（full/partial/failed）
+            "run_id": run_id,   # ★ 2026-10-20：单点重跑入口依赖（前端编排卡「↻ 重跑子任务」）
             "quality_gate_gaps": _gate_gaps,      # P0-3：质量门禁缺口说明（与 orchestration.py 同键）
             "run_budget": {"used_tokens": run_tokens, "budget": run_token_budget,
                            "hit": budget_hit, "executed": executed_count, "max_tasks": _max_tasks},

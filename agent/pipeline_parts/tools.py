@@ -437,6 +437,13 @@ class ToolMixin:
             _ask_on = True
         if _ask_on and not any(t.get("function", {}).get("name") == "ask_user" for t in tools):
             tools.append(_ASK_USER_TOOL)
+        # ★ 2026-10-20（共享产物工作区·方案1）：编排子任务消费上游交付物引用
+        #   （query 里的「offload #N」块）⇒ 必须能看到 tool_result_fetch。
+        #   子任务实例带 _orch_result_offloads（worker 在派发前挂上）即注入；
+        #   非编排场景不受影响。注入 = tools_def + 白名单双放行（ensure_fetch_tool 幂等）。
+        if getattr(self, "_orch_result_offloads", None):
+            from agent.pipeline_parts import tool_offload as _toff2
+            _toff2.ensure_fetch_tool(tools, getattr(self, "_tool_whitelist", None))
         return tools
 
     def _tool_side_effect(self, name: str) -> str:

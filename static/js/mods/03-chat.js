@@ -843,6 +843,39 @@ async function checkResumableRuns(convId){
   }catch(e){ /* 检查点查询失败静默：不应影响会话正常加载 */ }
 }
 
+/* 单点重跑入口：预填失败/部分完成的第一个 task_key，可改。 */
+function orchRerunPrompt(runId){
+  const def = (window._orchRerunDefault || '');
+  const inp = prompt('要重跑的子任务 task_key（多个用逗号分隔；其下游会联动重跑，其余复用）：', def);
+  if(inp === null) return;
+  const keys = inp.split(/[,，]/).map(x=>x.trim()).filter(Boolean);
+  if(!keys.length){ toast('未输入 task_key'); return; }
+  orchRerunAndResume(runId, keys);
+}
+
+/* ★ 2026-10-20（单点重跑）：rerun 清指定任务（+传递下游）的状态 → 自动走既有 resume。
+   runId 来自编排卡 card_data.run_id；taskKeys 为要重跑的 task_key 数组。 */
+async function orchRerunAndResume(runId, taskKeys){
+  try{
+    const resp = await fetch(`/api/orchestration/runs/${runId}/rerun`, {
+      method:'POST', headers: streamHeaders(),
+      body: JSON.stringify({task_keys: taskKeys, include_downstream: true})
+    });
+    const j = await resp.json().catch(()=>({}));
+    if(!resp.ok || j.ok === false){
+      toast((j && j.error) || ('重跑预备失败（HTTP ' + resp.status + '）'), 'error');
+      return false;
+    }
+    const keys = (j.rerun_keys || []).join('、');
+    toast(`已标记重跑：${keys}${(j.downstream_added||[]).length ? '（含下游联动）' : ''}，开始执行…`);
+    await startResumeRun(runId, null);
+    return true;
+  }catch(e){
+    toast('重跑时出错：' + (e && e.message || e), 'error');
+    return false;
+  }
+}
+
 async function startResumeRun(runId, bar, includeFailed){
   if(bar){ bar.querySelector('.rb-btn').disabled = true; bar.querySelector('.rb-txt').textContent = '正在恢复编排…'; }
   try{

@@ -5,6 +5,7 @@
     GET  /api/orchestration/resumable                 可恢复的编排批次清单
     GET  /api/orchestration/runs/{run_id}             单个批次的检查点 + 任务快照
     POST /api/orchestration/runs/{run_id}/resume      断点续跑（SSE，事件协议同 /chat/stream）
+    POST /api/orchestration/runs/{run_id}/rerun       单点重跑（指定 task_key + 传递下游清结果，再走 resume）
 
 ## 为什么 resume 必须走**直达通道**而不是重发消息
 「再发一遍用户描述」看着等价，实际不是同一件事：
@@ -121,6 +122,93 @@ def get_run(run_id: int, conn=Depends(db_session), user=Depends(current_user)):
 
 # NOTE: 写端点为何要权限门 —— 与 ux_metrics 相反：resume 会真实触发 LLM 调用与**写库/写图谱**，
 #       匿名可调用等于把编排的重跑能力对外开放。故走 `config:write` 同档 discriminator。
+@router.post("/api/orchestration/runs/{run_id}/rerun")
+def rerun_tasks(run_id: int, body: dict = None, conn=Depends(db_session),
+                user=Depends(current_user)):
+    """单点重跑（2026-10-20，对标 LangGraph 局部重放的最小版）。
+
+    语义：指定 task_key（如 t3）⇒ 该任务**连同其全部传递下游**（deps 依赖闭包）
+    清除结果与状态，随后调用方走既有 resume——resume 会把非 done 的任务重排队、
+    done 的幂等复用，从而实现「只重跑出问题的那一段，其余复用」。
+
+    为什么下游必须联动：下游交付物基于**旧上游结果**生成；只清单点会让下游
+    复用一份基于过期输入的结果——那不是重跑，是数据造假。
+
+    终态检查点（phase=done/failed）会被回退为 executing 并重置 attempt——
+    重跑是用户显式动作，应当获得全新的恢复额度。
+
+    ⚠️ 本端点**只清状态不触发执行**——执行统一走 resume 的直达通道
+    （重发消息会重新规划，task_key 对不上，见文件头「为什么 resume 必须走直达通道」）。
+    """
+    import json as _json
+    from agent.orch_checkpoint import load as _ck_load, PHASE_EXECUTING, TERMINAL_PHASES
+    _own_run(conn, run_id, user)
+    require_permission("ai_chat", "generate")(user=user)
+
+    body = body or {}
+    wanted = [str(k).strip() for k in (body.get("task_keys") or []) if str(k).strip()]
+    if not wanted:
+        return JSONResponse({"error": "task_keys 不能为空（指定要重跑的 task_key，如 [\"t3\"]）"}, 400)
+    include_downstream = bool(body.get("include_downstream", True))
+
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, task_key, deps, status FROM agent_tasks WHERE run_id=? ORDER BY seq, id",
+        (int(run_id),)).fetchall()]
+    if not rows:
+        return JSONResponse({"error": "该批次没有任务记录"}, 404)
+    by_key = {str(r["task_key"]): r for r in rows}
+
+    missing = [k for k in wanted if k not in by_key]
+    if missing:
+        return JSONResponse({"error": f"task_key 不存在：{','.join(missing)}"}, 404)
+
+    # 传递下游闭包：deps 里引用了重跑集合成员的任务，一并重跑（BFS）
+    rerun_keys = set(wanted)
+    if include_downstream:
+        changed = True
+        while changed:
+            changed = False
+            for r in rows:
+                k = str(r["task_key"])
+                if k in rerun_keys:
+                    continue
+                try:
+                    deps = _json.loads(r.get("deps") or "[]")
+                except Exception:
+                    deps = []
+                if any(str(d) in rerun_keys for d in deps):
+                    rerun_keys.add(k)
+                    changed = True
+
+    # 清结果与状态（status='ready' ∈ REQUEUE_STATUSES ⇒ resume 必然重排队）
+    cleared = 0
+    for r in rows:
+        if str(r["task_key"]) in rerun_keys:
+            conn.execute(
+                "UPDATE agent_tasks SET status='ready', result='', summary_json=NULL, "
+                "error='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (r["id"],))
+            cleared += 1
+    # 终态检查点回退：done/failed ⇒ executing，attempt 清零（用户显式动作给全新额度）
+    ck_reset = False
+    ck = _ck_load(conn, int(run_id))
+    if ck and (ck.get("phase") or "") in TERMINAL_PHASES:
+        conn.execute(
+            "UPDATE orch_checkpoints SET phase=?, attempt_count=0, updated_at=CURRENT_TIMESTAMP "
+            "WHERE run_id=?", (PHASE_EXECUTING, int(run_id)))
+        ck_reset = True
+    conn.commit()
+    from core.audit import audit, audit_user
+    audit(audit_user(user), "orchestration_rerun",
+          "批次 #%s 单点重跑：%s（含下游联动=%s，清 %d 个任务）"
+          % (run_id, ",".join(sorted(rerun_keys)), include_downstream, cleared), conn=conn)
+    return {"ok": True, "run_id": run_id,
+            "rerun_keys": sorted(rerun_keys),
+            "cleared": cleared,
+            "downstream_added": sorted(rerun_keys - set(wanted)),
+            "checkpoint_reset": ck_reset,
+            "next": "调用 POST /api/orchestration/runs/{run_id}/resume 执行重跑"}
+
+
 @router.post("/api/orchestration/runs/{run_id}/resume")
 def resume_run(run_id: int, conn=Depends(db_session),
                include_failed: bool = False, user=Depends(current_user)):
