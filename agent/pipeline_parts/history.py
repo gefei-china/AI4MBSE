@@ -62,6 +62,13 @@ class HistoryMixin:
         取**已入库的 chunk** 而不再解一遍文件：① 省一次解析；
         ② 与知识库检索口径一致（同一份内容不会"库里一份、附件里另一份"）。
 
+        ★ 2026-11-12（米爸反馈2）补章节上下文：chunk 的 `content` 常以
+        「a) ★[FR-KG-2]…」直接开头，**条款号/章节名只在 `section` 列**
+        （如「11.4 扩展性要求」）⇒ 原实现只 SELECT content，注入后 AI
+        看不到片段归属，用户问「第 5 章有什么要求」时连章节都对不上。
+        改为 section 非空时以「section\ncontent」拼入（doc 847：54/55
+         chunk 有 section）。
+
         返回拼接文本；取不到返回空串（调用方据此回落到 url 分支/ 记 skipped）。
         ⚠️ 只读、失败即返回空串 —— 附件取不到绝不能让整轮对话失败。
         """
@@ -73,7 +80,7 @@ class HistoryMixin:
             #   ⇒ 附件又变成"取不到" ⇒ 静默退��原路径，**症状与改动前完全一样**。
             #   （判据纪律：这类"查表"必须先 PRAGMA 看列名，不凭直觉写。）
             rows = conn.execute(
-                "SELECT content FROM document_chunks WHERE document_id=? "
+                "SELECT content, section FROM document_chunks WHERE document_id=? "
                 "ORDER BY chunk_index",
                 (int(doc_id),)).fetchall()
             if not rows:
@@ -81,8 +88,11 @@ class HistoryMixin:
             parts = []
             for r in rows:
                 c = r[0] if not isinstance(r, dict) else (r.get("content") or "")
+                sec = r[1] if not isinstance(r, dict) else (r.get("section") or "")
                 if c:
-                    parts.append(str(c))
+                    c = str(c)
+                    # 章节上下文（见上方 docstring）：条款号只在 section 列
+                    parts.append(f"{sec}\n{c}" if sec else c)
             return "\n".join(parts).strip()
         except Exception:
             return ""
@@ -121,7 +131,22 @@ class HistoryMixin:
             if doc_id:
                 _txt = self._load_doc_chunks(int(doc_id), fname)
                 if _txt:
-                    blocks.append(f"【{fname}】\n{_txt[:2500]}")
+                    # ★ 2026-11-12（米爸反馈2：「从产物文档选文件发会话，只能识别封面和
+                    #   章节，具体内容无法识别到」）：原实现整篇截断 `_txt[:2500]`
+                    #   ⇒ 两条消费通道都只剩文档头部：
+                    #     · att_text（前 4 块进 prompt）= 封面+目录；
+                    #     · retrieval_att（全文召回候选池）同样只有 2500 字符
+                    #       ⇒ 第 4~8 章条款**语义/词力召回根本捞不到**。
+                    #   改为与 /static/ 路径**同口径**：2500 字/块、≤40 块、
+                    #   块头带序号（【文件名#2】）——retrieval_att 因此覆盖全文，
+                    #   中后段条款能进 attachment_hits；att_text 覆盖也扩大 4 倍。
+                    for i, seg in enumerate(_txt[j:j + 2500] for j in range(0, len(_txt), 2500)):
+                        # 2026-09-17 S3：解析上限维持 40（曾试降到 8，但该值决定附件语义召回候选池 retrieval_att，
+                        #                 降它只省解析耗时、不省 token，故回退；token 侧改由 _ATT_INJECT_CAP 在注入点封顶）
+                        if len(blocks) >= 40:
+                            break
+                        head = f"【{fname}】" if i == 0 else f"【{fname}#{i + 1}】"
+                        blocks.append(f"{head}\n{seg}")
                     parsed += 1
                     continue
             if not url:
@@ -149,9 +174,15 @@ class HistoryMixin:
                         except Exception:
                             continue
                 elif ext == ".pdf":
-                    import pdfplumber
-                    with pdfplumber.open(path) as pdf:
-                        text = "\n".join((p.extract_text() or "") for p in pdf.pages[:20])
+                    # ★ 2026-11-12（米爸反馈1/2）：原实现内联 pdfplumber **裸抽**——
+                    #   ① 绕过 knowledge_pipeline.extract 的水印过滤（星网受控 PDF 的
+                    #      STSong-Light 水印字符照样混进附件文本，doc 847 实证每页 432 个）；
+                    #   ② 与知识库入库口径不一致（同一文件「库里一份、附件里另一份」）。
+                    #   改走 extract.pdf_text_layer：复用四合一判据剔水印，但仍**只抽
+                    #   文本层**（不触发 OCR——聊天轮里跑 1.4~4.7s/页 会把轮次拖死，
+                    #   扫描件由入库路径兜底）。
+                    from knowledge_pipeline.extract import pdf_text_layer as _pTL
+                    text = _pTL(open(path, "rb").read(), max_pages=20)
                 elif ext == ".docx":
                     import docx
                     d = docx.Document(path)

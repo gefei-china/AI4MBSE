@@ -329,6 +329,35 @@ def _pdf_text_layer(pages):
                    "chars_total": sum(dist.values())}
 
 
+def pdf_text_layer(content: bytes, max_pages: int = 20) -> str:
+    """PDF **文本层**抽取（水印过滤后；**不触发 OCR**）——会话附件路径专用。
+
+    为什么单独开这个口子（2026-11-12，米爸反馈1/2）：
+    `agent/pipeline_parts/history.py` 的 /static/ 附件分支原先**内联**
+    `pdfplumber.open().extract_text()` 裸抽 ⇒ ① 绕过 `_pdf_text_layer` 的水印
+    过滤（星网受控 PDF 的水印字符照样混进附件文本）；② 与知识库入库口径
+    不一致（同一份文件「库里一份、附件里另一份」）。
+    本函数复用 `_pdf_text_layer`（四合一判据剔水印），但**只抽文本层**——
+    会话内联路径不付 OCR 的时间成本（扫描件由知识库入库路径兜底，
+    那里有分段/续跑/预算；聊天轮里跑 1.4~4.7s/页 的 OCR 会直接把轮次拖死）。
+
+    失败返回空串（调用方记 skipped，绝不让一轮对话失败）。
+    """
+    try:
+        import pdfplumber
+    except ImportError as e:
+        logger.warning("PDF 解析不可用（缺 pdfplumber）：%s", e)
+        return ""
+    try:
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            pages = pdf.pages[:max_pages] if max_pages else pdf.pages
+            layer, _wm_meta = _pdf_text_layer(pages)
+        return "\n".join(t for t in layer if t).strip()
+    except Exception as e:
+        logger.warning("PDF 文本层抽取失败: %s: %s", type(e).__name__, e)
+        return ""
+
+
 def _extract_pdf_ex(content: bytes, state: dict = None):
     info = _ocr_meta()
     try:
