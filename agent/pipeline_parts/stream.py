@@ -2895,6 +2895,21 @@ class StreamMixin:
                             #   （不再喂 tool_result、不再继续探测：等用户回答后续跑）
                             if isinstance(result, dict) and result.get("clarify_required"):
                                 _clarify_req = result.get("clarify") or {}
+                                # ★ 2026-11-12（米爸反馈3 复发，conv 9571 实证 7 连问 /
+                                #   conv 9553 实证 24 连问）：**必须补 done 事件**。
+                                #   此前 break 发生在 yield "tool done" **之前** ⇒ 前端
+                                #   ask_user 节点永远停在"执行中"（用户截图 8 个节点各卡
+                                #   ~750s「调用中...」）。澄清不是失败，节点必须正常收口——
+                                #   否则"看起来有 8 个没跑完的工具"比"1 个已完成的确认"
+                                #   更让人怀疑系统状态。
+                                yield {"type": "tool", "status": "done", "name": tname,
+                                       "ok": True, "result": str(result.get("result") or ""),
+                                       "error": "", "truncated": False,
+                                       "latency_ms": int((time.time() - _t0) * 1000),
+                                       "call_id": _call_id, "skipped": False,
+                                       "skip_reason": "", "agent": _ctx_agent,
+                                       "skill": _ctx_skill, "depth": 2 if _ctx_skill else 1,
+                                       "mcp": _mcp_of(tname)}
                                 break
                             _r0 = str(result.get("result") or "")
                             if result.get("ok") and (result.get("weak")
@@ -2980,6 +2995,16 @@ class StreamMixin:
                     # 第 4 笔起永久悬空 ⇒ 下一轮 HTTP 400（protocol 硬约束）。
                     # ⚠️ 必须**在 `if results:` 之前**追加：全被截断时 results 也要非空，
                     #    否则整轮 tool_calls 一个结果都没有，配对同样缺失。
+                    # ★ 2026-11-12（米爸反馈3，conv 9571 实证 7 连问 / conv 9553 实证 24 连问）：
+                    #   clarify 已记录 ⇒ **立即退出轮次循环，不再补 skip、不再回填 pmsg**。
+                    #   两个原因缺一不可：
+                    #   ① 协议：ask_user 的 tool_call 没有配对 tool_result，回填 pmsg 即悬空
+                    #      ⇒ 下一轮探测 HTTP 400；
+                    #   ② 防重问：results 为空时 `if results:` 整块跳过 ⇒ messages 不更新
+                    #      ⇒ 下一轮 LLM 看到**同一份上下文** ⇒ 换措辞再问一遍（真库实测
+                    #      3s/次、最多烧到 max_tool_rounds=100 轮，每轮还多一条工具留痕）。
+                    if _clarify_req:
+                        break
                     if _skip_calls:
                         _skip_res = _lproto.skipped_results(_skip_calls)
                         for _sr in _skip_res:

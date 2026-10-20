@@ -641,6 +641,13 @@ class ExecuteMixin:
                     # msg 带的是**全部** tool_calls，不补尾部 ⇒ 第 4 笔起悬空 ⇒ 下一轮 400。
                     # ⚠️ 必须在 `if not tool_results:` **之前**：
                     #    全被截断/跳过时 tool_results 也要非空，否则一个结果都没有。
+                    # ★ 2026-11-12（与 stream.py 同源；conv 9571 实证 7 连问 / conv 9553 实证 24 连问）：
+                    #   clarify 已记录 ⇒ 立即退出轮次循环。下方 `if not tool_results: break`
+                    #   只覆盖「ask_user 是本轮唯一调用」；**并行调用**时 tool_results 非空
+                    #   ⇒ 会走到 messages.append(msg) ⇒ ask_user 的 tool_call 悬空
+                    #   ⇒ 下一轮探测 HTTP 400（协议硬约束）。
+                    if _clarify_req:
+                        break
                     if _skip_calls:
                         tool_results.extend(_lproto.skipped_results(_skip_calls))
                     if not tool_results:
