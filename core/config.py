@@ -671,6 +671,16 @@ DEFAULT_CONFIG = {
         "ocr_dense_min_avg": 0.65,        # 密集文本低质放行：均分下限（低于常规 0.70；真乱码 0.595 类仍挡）
         "ocr_max_low_score_ratio": 50.0,  # 低置信行（<0.7）占比上限（%），超过判"不可用"
         "ocr_grayscale": True,            # 识别前转灰度：实测均分 +0.08 且更快（放大反而更差，别做）
+        # ── PDF 水印字符层过滤（2026-11-12，doc 847 实证）────────────────────
+        # 背景：星网受控类 PDF 文本层混有每页恒定的水印字符（doc 847：STSong-Light
+        # 20.4~26.3pt、每页 432 字符、14 个符号各重复 567 次）⇒ 裸抽全进 chunk
+        # ⇒ 163 个 chunk 全污染 ⇒ 检索/引用乱码。判据四合一（宁漏勿误）：
+        # A 字体基名≠主体 / B 字号≥主体×1.5 / C 文档级高重复 / D 跨页出现。
+        # 实测：4 份干净规范 0 字符误删；doc 847 删 9072/27099（33.5%）正文完整。
+        "watermark_filter_enabled": True,       # False=回到裸抽文本层（A/B 与故障回退用）
+        "watermark_min_size_ratio": 1.5,        # 判据 B：字号 ≥ 主体字号 × 此比例才算候选
+        "watermark_max_distinct_ratio": 0.1,    # 判据 C：distinct/total ≤ 此比例判高重复
+        "watermark_min_pages": 3,               # 判据 D：至少跨这么多页出现（局部表格/封面不误伤）
     },
     "vision": {
         # 2026-09-21：会话图片附件的**视觉通道**（AI 建模传架构图/连线图的主路径）。
@@ -1555,6 +1565,10 @@ CONFIG_SCHEMA = {
         "ocr_dense_min_avg":      {"type": "float", "desc": "OCR 密集文本放行：均分下限（默认 0.65，低于常规 0.70；放行打 degraded 标，质量分落 quality_score）"},
         "ocr_max_low_score_ratio": {"type": "float", "desc": "OCR 低置信行（<0.7）占比上限 %（默认 50；超过判质量不合格，不入库）"},
         "ocr_grayscale":          {"type": "bool",  "desc": "OCR 前转灰度（默认开；实测均分 +0.08 且更快）"},
+        "watermark_filter_enabled": {"type": "bool", "desc": "PDF 水印字符层过滤总开关（默认开；doc 847 实证水印占 33.5% 字符，不滤则 chunk 全污染）"},
+        "watermark_min_size_ratio": {"type": "float", "desc": "水印判据 B：字号 ≥ 主体字号 × 此比例（默认 1.5）"},
+        "watermark_max_distinct_ratio": {"type": "float", "desc": "水印判据 C：文档级 distinct/total ≤ 此比例判高重复（默认 0.1）"},
+        "watermark_min_pages":     {"type": "int",   "desc": "水印判据 D：至少跨这么多页出现（默认 3；局部表格/封面大标题不误伤）"},
     },
     "vision": {
         "enabled":      {"type": "bool", "desc": "会话图片附件视觉通道总开关（需所选模型标 vision 能力；默认关=回到改动前行为）"},

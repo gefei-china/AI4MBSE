@@ -20,6 +20,15 @@
 - 文本层充足页（1650~2632 字）OCR 仅 80%~100%（**反而丢信息**：多栏顺序 / 连字符 / 上标）。
 → 策略：**文本层优先，仅对稀疏页补 OCR**（阈值 `extract.ocr_min_chars_per_page`，默认 100）。
 
+**2026-11-12 修复——PDF 水印字符层污染（doc 847 实证）**：
+带水印的 PDF（星网受控类文档）文本层里混有**每页恒定的水印字符**——doc 847
+实测：STSong-Light 20.4~26.3pt、每页 432 字符、字符集仅 14 个符号各重复 567 次。
+原实现裸抽文本层 ⇒ 水印字符混入正文 ⇒ 163 个 chunk 全污染（每 chunk 仅 53~114
+字符）⇒ 检索召回与 AI 引用全是乱码。→ `_pdf_text_layer` 按四合一判据
+（A 异字体 / B 字号≥主体×1.5 / C 文档级高重复 / D 跨页出现）剔除水印字符层，
+**宁漏勿误**；实测 4 份干净规范 0 字符误删，doc 847 删 33.5% 后正文条款完整。
+开关与阈值：`extract.watermark_*`（见 core/config.py）。
+
 **向后兼容**：`extract_text(filename, content) -> str` 签名与返回类型不变
 （`ingest.py` / `search.py` / `tools/publish_release.py` 三处调用点无需改动）；
 新增 `extract_text_ex(filename, content) -> (text, meta)` 供入库状态机读取诊断信息。
@@ -29,6 +38,7 @@ import io
 import logging
 import os
 import time
+from collections import Counter, defaultdict
 
 from . import ocr
 
@@ -224,6 +234,101 @@ def _extract_image_ex(content: bytes, ext: str):
 
 # ── PDF：文本层优先 + 稀疏页补 OCR ──
 
+def _font_base(fontname) -> str:
+    """去掉字体子集前缀：'FAAADB+SimSun' -> 'SimSun'（pdfplumber 对嵌入子集字体
+    统一带 6 位随机前缀，不去掉没法跨页比较同一字体）。"""
+    return (fontname or "").split("+")[-1]
+
+
+def _cluster_key(ch: dict):
+    """字符的 (字体基名, 字号) 簇键；字号保留 1 位小数（同字体微差 0.1pt 无意义）。"""
+    return (_font_base(ch.get("fontname")), round(float(ch.get("size") or 0), 1))
+
+
+def _pdf_watermark_clusters(pages, ratio: float, max_distinct: float, min_pages: int):
+    """识别水印字符簇（2026-11-12，doc 847 实证）。返回 ({cluster: 字符数}, 文档级分布)。
+
+    四合一判据——**全部满足才删，宁漏勿误**（误删正文条款比漏删水印更糟）：
+      A 字体基名 ≠ 主体字体基名（同字体的标题/表格放大不误伤）；
+      B 字号 ≥ 主体字号 × ratio（默认 1.5；正文 12pt 文档的 16pt 章节横幅不误伤）；
+      C 文档级高重复：distinct/total ≤ max_distinct 且 total ≥ 20
+        （水印字符集极小——doc 847 仅 14 个符号各重复 567 次；封面大标题/
+         表格数字 distinct 比高，不误伤）；
+      D 跨页出现 ≥ max(3, 20% 页数)（局部页面的大字段/表格不误伤）。
+
+    实测（tools/verify/verify_pdf_watermark_filter.py）：
+      · 4 份干净规范（KerML 454p / SysMLv2 691p / ISO29148 95p / IREB 140p）
+        **0 字符被删**；
+      · doc 847（星网受控件，每页恒定 432 个 STSong-Light 20.4~26.3pt 水印字符）
+        删 8 簇共 9072/27099 字符（33.5%），正文条款完整保留。
+    """
+    dist = Counter()                    # 文档级 cluster -> 字符数
+    per_page = []                       # 每页 cluster -> 字符数
+    chars_of = defaultdict(Counter)     # cluster -> 字符频次（判 C 的重复度）
+    for page in pages:
+        pc = Counter()
+        for ch in page.chars:
+            key = _cluster_key(ch)
+            pc[key] += 1
+            chars_of[key][ch.get("text") or ""] += 1
+        per_page.append(pc)
+        dist.update(pc)
+    if not dist:
+        return {}, dist
+    (body_font, body_size), _body_n = dist.most_common(1)[0]
+    need_pages = max(min_pages, int(len(pages) * 0.2))
+    wm = {}
+    for key, n in dist.items():
+        f, s = key
+        if f == body_font:                                  # A 同字体不动
+            continue
+        if s < body_size * ratio:                           # B 字号不够大
+            continue
+        if sum(1 for pc in per_page if pc.get(key)) < need_pages:   # D 不跨页
+            continue
+        cc = chars_of[key]
+        total = sum(cc.values())
+        if total < 20:                                      # C 规模下限
+            continue
+        if len(cc) / total > max_distinct:                  # C 不够重复
+            continue
+        wm[key] = n
+    return wm, dist
+
+
+def _pdf_text_layer(pages):
+    """逐页抽文本层；开启水印过滤时先剔除水印字符层再抽（doc 847：不滤则
+    每页 432 个水印字符混进正文 ⇒ chunk 全污染 ⇒ 检索/引用乱码）。
+
+    返回 (texts, meta)。meta 为空 dict = 未开过滤或未识别到水印（零额外成本）。
+    """
+    def _plain():
+        return [(p.extract_text() or "").strip() for p in pages]
+
+    try:
+        from core import config as _c
+        _on = _c.as_bool("extract", "watermark_filter_enabled", True)
+    except Exception:
+        _on = True
+    if not _on:
+        return _plain(), {}
+    wm, dist = _pdf_watermark_clusters(
+        pages,
+        _safe_float(_cfg("watermark_min_size_ratio", 1.5), 1.5),
+        _safe_float(_cfg("watermark_max_distinct_ratio", 0.1), 0.1),
+        _safe_int(_cfg("watermark_min_pages", 3), 3))
+    if not wm:
+        return _plain(), {}
+    layer, removed = [], 0
+    for page in pages:
+        fp = page.filter(lambda ch: _cluster_key(ch) not in wm)
+        layer.append((fp.extract_text() or "").strip())
+        removed += sum(1 for ch in page.chars if _cluster_key(ch) in wm)
+    return layer, {"clusters": ["%s@%.1fpt" % (f, s) for (f, s) in sorted(wm)],
+                   "chars_removed": removed,
+                   "chars_total": sum(dist.values())}
+
+
 def _extract_pdf_ex(content: bytes, state: dict = None):
     info = _ocr_meta()
     try:
@@ -240,7 +345,7 @@ def _extract_pdf_ex(content: bytes, state: dict = None):
     try:
         with pdfplumber.open(io.BytesIO(content)) as pdf:
             pages = pdf.pages[:limit] if limit else pdf.pages
-            layer = [(p.extract_text() or "").strip() for p in pages]
+            layer, wm_meta = _pdf_text_layer(pages)
     except Exception as e:
         # 留痕：原实现 `except: return ""` 会把"文件损坏/加密/库异常"伪装成"空文件"
         logger.warning("PDF 文本层抽取失败: %s: %s", type(e).__name__, e)
@@ -251,6 +356,8 @@ def _extract_pdf_ex(content: bytes, state: dict = None):
         }
 
     info["pages_total"] = len(layer)
+    if wm_meta:
+        info["watermark"] = wm_meta      # 入库侧写进 pipeline_detail 留痕（删了哪些簇/多少字符）
     threshold = _safe_int(_cfg("ocr_min_chars_per_page", 100), 100)
     sparse = [i for i, t in enumerate(layer) if len(t) < threshold]
 
