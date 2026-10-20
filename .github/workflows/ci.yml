@@ -797,6 +797,21 @@ jobs:
         #   ④ 同构只报结构同构不报相似（相似度要阈值，阈值是拍出来的）。
         run: python tools/verify/verify_flow_topology.py
 
+      - name: Guard 自进化周报（价值感知层：三段架构 + 诚实分母 + 只读）
+        # P0-P2 六环全部交付后，能力都在但用户只能逐个端点查JSON——没有
+        # 任何一个地方能回答「这周系统替我做了什么、我该做什么」。本门禁守
+        # 那一页的**口径**：
+        #   ① 信息架构是用户视角不是模块视角——三段（要你决策的 / 本周体检 /
+        #      环比 / 数据可信度）齐备，且旧的「省/抓/守/欠」域式标题已移除；
+        #   ② ★不能点的事不许装成能点——全库只有 curriculum 有 decide 端点，
+        #      所以 HIL/拓扑/安全信号一律 action:null + not_actionable_reason，
+        #      引擎、路由、前端三层都静态断言（把不能点渲染成按钮是欺骗）；
+        #   ③ 诚实分母——两期均无事件判「本周无」且 delta 必须为 None；
+        #      上期无台账不出 delta；只有 state=='ok' 才允许出现环比；
+        #   ④ 只读铁律——周报是镜子不是手：引擎零写语句、无任何
+        #      decide/approve 调用，干净库与真库双份全表快照零副作用。
+        run: python tools/verify/verify_evolution_report.py
+
       - name: Guard 向量二进制缓存保真
         run: python tools/verify/verify_vector_binary_cache.py
 

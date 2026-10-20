@@ -1140,6 +1140,17 @@ DEFAULT_CONFIG = {
         "linear_degenerate_min": 4,     # 达到几个节点才算「纯链无并行」可疑
         "max_canvases": 2000,           # 单次扫描画布上限（防长尾注水）
     },
+    # ── 自进化周报（价值感知层）：只读汇总，不新增判据、不发明数字 ──────────
+    # 定位：把archive / curriculum / sandbox / HIL / 安全信号 / 拓扑六个域的
+    #   既有台账汇成**一页可行动摘要**，回答"这周系统替我做了什么、我该做什么"。
+    #铁律：周报是镜子不是手——只SELECT，且**不能一键处理的事必须显式标注**，
+    #   不许渲染成看起来能点的按钮。
+    "evolution_report": {
+        "enabled": True,                # 总开关（False 时 build 返 enabled=False）
+        "window_days": 7,               # 本周窗口（天）；环比对照 = 上一个等长窗口
+        "max_actions": 50,              # 待决策条目上限（防长尾注水）
+        "max_detail": 8,                # 每源明细条目上限
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1754,6 +1765,15 @@ CONFIG_SCHEMA = {
         "min_denominator":      {"type": "int",  "desc": "运行证据分母下限：有运行证据的画布不足此数 ⇒ failed_runs 记 unknown"},
         "linear_degenerate_min":{"type": "int",  "desc": "达到几个节点才算「纯链无并行」可疑"},
         "max_canvases":         {"type": "int",  "desc": "单次扫描画布上限（防长尾注水）"},
+    },
+    # ── 自进化周报（价值感知层）────────────────────────────────────────────
+    # 铁律：只读汇总层。窗口内的环比只在本期与上期**都有数据**时才出delta，
+    #   上期无台账 ⇒ unknown，绝不回落 0（空窗口不是 0 分）。
+    "evolution_report": {
+        "enabled":      {"type": "bool", "desc": "自进化周报总开关（False 时 build 返 enabled=False）"},
+        "window_days":  {"type": "int",  "desc": "本周窗口（天）；环比对照窗口为上一个等长窗口"},
+        "max_actions":  {"type": "int",  "desc": "待决策条目上限（防长尾注水）"},
+        "max_detail":   {"type": "int",  "desc": "每源明细条目上限"},
     },
 }
 

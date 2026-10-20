@@ -53,13 +53,14 @@
       <!-- <a data-page="kb" data-tab="kb-b" id="nav-workbench" data-page-node-id="5Kh9MQjipqVEO9HPdgteW3"><span class="ic" data-page-node-id="JySMa5V1pFVbpidwp0r0cZ">🧬</span><span class="lbl" data-page-node-id="rgt2fwxbDhNo2x8SIcqEsq">数据整理</span></a> -->
       <a data-page="studio" data-tab="st-agent" data-page-node-id="wz8utkQVAVPe1DDAlHF4WH"><span class="ic" data-page-node-id="iGFPctyf2zUfxXyEMSvXVg">🤖</span><span class="lbl" data-page-node-id="YOC121PYmThCjHFnF5eYUJ">能力中心</span></a>
       <!-- 2026-09-14：「用户与权限」入口从账号抽屉迁入「更多」——管理类入口统一收口（审计日志/运行监控/用户与权限） -->
-      <a class="more-link" id="more-link" title="更多入口：审计日志 / 运行监控 / 用户与权限 / 审批管理" data-page-node-id="DkgVkyCEpKLy9SwUwgBs7O"><span class="ic" data-page-node-id="6Q5ntCmMM0DoOE7BQ0AetY">⋯</span><span class="lbl" data-page-node-id="jkwzrXYe5429f0laj4usEj">更多</span>&nbsp;<span class="more-caret" data-page-node-id="muxZ1H9wBxLM7ChNUL4eTr">›</span></a>
+      <a class="more-link" id="more-link" title="更多入口：审计日志 / 运行监控 / 用户与权限 / 审批管理 / 自进化周报" data-page-node-id="DkgVkyCEpKLy9SwUwgBs7O"><span class="ic" data-page-node-id="6Q5ntCmMM0DoOE7BQ0AetY">⋯</span><span class="lbl" data-page-node-id="jkwzrXYe5429f0laj4usEj">更多</span>&nbsp;<span class="more-caret" data-page-node-id="muxZ1H9wBxLM7ChNUL4eTr">›</span></a>
       <div class="more-flyout" id="more-flyout" data-page-node-id="9NG6OiguQroVdRBOF28aUG">
         <div class="mf-item" onclick="hideMoreFlyout();go('audit')" data-page-node-id="cfrD4EBHcQGKdI4YABYHku">🛡 <span data-page-node-id="5iGWwkJyC6v6z4tQ6gAc2o">审计日志</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;" data-page-node-id="yWReV03xzZiKiPcVanx99j">操作追溯</span></div>
         <div class="mf-item" onclick="hideMoreFlyout();go('ops')" data-page-node-id="azJY2GCDl73FDbe1eQDEvf">📈 <span data-page-node-id="bcGbW9DCuZ8GzMYYvAHbOy">运行监控</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;" data-page-node-id="ZEOAdzwFxE3x7xo9vjxsUo">LLM/HIL 用量</span></div>
         <div class="mf-item" onclick="hideMoreFlyout();go('users')" data-page-node-id="mf-users-entry">👥 <span>用户与权限</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">角色/权限配置</span></div>
         <!-- 2026-09-17 R7：审批管理（pg-approval）此前全库无任何入口（孤立页），按「管理类入口统一收口」原则补进「更多」 -->
         <div class="mf-item" onclick="hideMoreFlyout();go('approval')" data-page-node-id="mf-approval-entry">✅ <span>审批管理</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">审批流配置</span></div>
+        <div class="mf-item" onclick="hideMoreFlyout();go('evolution')" data-page-node-id="mf-evolution-entry" title="自进化周报：要你决策的 / 本周体检（环比上周）/ 数据可信度">🧬 <span>自进化周报</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">这周该做什么</span></div>
       </div>
     </nav>
     <!-- 2026-09-24 v2：项目组（项目 = 任务的容器）——每个项目声明数据来源（本地工作空间 / 远端 SSH）；
@@ -1590,6 +1591,15 @@
       </div>
     </div>
   </div>
+
+<!-- ===== 自进化周报（2026-10-20 价值感知收官）：要你决策的 / 本周体检 / 数据可信度 ===== -->
+  <div class="page" id="pg-evolution" data-page-node-id="evr-page-20261020">
+    <h3 class="pt" data-page-node-id="evr-h3">自进化周报</h3>
+    <div class="pd" data-page-node-id="evr-pd">这一周，系统替我做了什么？我该做什么？ <span class="badge" data-page-node-id="evr-bd">P0-P2 收官</span>
+      <span id="evr-head" style="float:right" data-page-node-id="evr-head"></span>
+    </div>
+    <div id="evr-body" data-page-node-id="evr-body"><div class="loading" data-page-node-id="evr-load">加载中…</div></div>
+  </div>
 </div>
 
 <!-- 滑出面板 -->
@@ -1818,5 +1828,6 @@
 <script src="/static/js/mods/43-ux-metrics.js" defer></script>
 <script src="/static/js/mods/43-doccat.js" defer></script>
 <script src="/static/js/mods/44-memory.js" defer></script>
+<script src="/static/js/mods/47-evolution-report.js" defer></script>
 </body>
 </html>
