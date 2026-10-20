@@ -553,6 +553,14 @@ class StreamMixin:
                             if _et == "token":
                                 sub_has_token = True
                                 sub_res += ev.get("delta") or ""
+                                # ★ 2026-10-20（用户报"过程性内容全堆在最下面"）：token 必须
+                                #   带 key 才会被前端归到对应子任务卡（11-pipeline.js 的
+                                #   handleSSE：ev.key 有值 → subOutput[tkey] 实时输出区；
+                                #   无值 → 最终正文区）。reasoning/tool 两支早已注入归属
+                                #   （V2.6 / name 前缀），唯独 token 漏了 ⇒ 所有子任务的
+                                #   实时产出都流进底部正文，"过程与结果糊成一片"——正是
+                                #   2026-09-26 注释里声称已解决的旧问题在 token 支上的残留。
+                                ev = dict(ev); ev["key"] = tkey
                                 evs.append(ev)
                                 _evq.put(ev)          # 实时转发（就地输出）
                             elif _et in ("reasoning", "progress"):
@@ -1286,12 +1294,31 @@ class StreamMixin:
             if budget_hit:
                 orch_content += "\n\n（因预算限制部分子任务未执行）"
             # Task 10：agg_status != full → 显式标注「编排部分完成」+ reasoning 事件（状态同时写入 card_data）
+            # ★ 2026-10-20（用户报"编排大量失败"，实查会话 9565）：**partial ≠ 缺失/失败**。
+            #   旧文案把 `_missing_keys`（= 自报 partial + failed 的并集）一律写成
+            #   「N 个交付物缺失/失败」——真库实测 t1—t5 全部自报 partial
+            #   （交付物**已产出**：artifacts 齐全、正文完整存库，只是存在未验证环节：
+            #   乱码未挂接 / 未调校验器 / 知识库未命中），质量评审 LLM 照抄头部文案，
+            #   写出"编排显示 t1—t5 五个交付物缺失/失败"的缺口报告——交付物明明都在，
+            #   用户看到的就是"编排大量失败"。措辞必须区分三态：failed 才叫失败，
+            #   partial 是"部分完成（存在未验证环节）"，文案与 card_data 同口径。
             if _agg_status != "full" and done_items:
-                _gap_txt = f"，缺口：{','.join(_missing_keys)}" if _missing_keys else ""
-                orch_content = f"（编排部分完成：{len(_missing_keys)} 个交付物缺失/失败{_gap_txt}）\n\n" + orch_content
+                _failed_keys = [str(t.get("task_key") or "") for t in orch_tasks
+                                if str(t.get("status") or "") == "failed"]
+                _partial_keys = [k for k in _missing_keys if k not in _failed_keys]
+                _parts = []
+                if _failed_keys:
+                    _parts.append("%d 个子任务失败（无交付物）：%s"
+                                  % (len(_failed_keys), ",".join(_failed_keys)))
+                if _partial_keys:
+                    _parts.append("%d 个子任务自报部分完成（交付物已产出，存在未验证环节）：%s"
+                                  % (len(_partial_keys), ",".join(_partial_keys)))
+                _gap_txt = ("，".join(_parts)) if _parts \
+                    else "聚合状态 %s，但无失败/部分完成子任务明细" % _agg_status
+                orch_content = ("（编排状态：%s——%s）\n\n"
+                                % (_agg_status, _gap_txt)) + orch_content
                 yield {"type": "progress", "kind": "progress",
-                       "delta": f"（自动编排）编排部分完成（{_agg_status}）：{len(_missing_keys)} 个交付物缺失/失败"
-                                + _gap_txt}
+                       "delta": f"（自动编排）编排状态 {_agg_status}：{_gap_txt}"}
             # P0-1（T3）：反思闭环——汇总后质量评审 → 未达标修订（复用画布 reflection 公共评审）
             reflection_meta = None
             if done_items:
