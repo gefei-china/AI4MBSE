@@ -65,7 +65,8 @@ async function handleChatInput(){
     const f = hit.filter.toLowerCase();
     items = [{ key:'工程数据', icon:'📊', name:'工程数据', desc:'引用全部工程数据（控制标签）', tag:'快捷' },
              { key:'知识库', icon:'🧬', name:'知识库', desc:'引用全部已发布知识库（控制标签）', tag:'快捷' }]
-      .concat(tags.map(t => ({ key:t.name, icon:'📄', name:t.name, desc:(t.status||''), tag:'文档' })))
+      /* ★ 2026-10-20：透传 doc_id/status——pickMention 的 attachKbDocToBar 靠它挂附件栏 */
+      .concat(tags.map(t => ({ key:t.name, icon:'📄', name:t.name, desc:(t.status||''), tag:'文档', doc_id:t.doc_id||0, status:t.status||'' })))
       .filter(t => !f || t.name.toLowerCase().includes(f));
   }
   _mention.items = items.slice(0, 12);
@@ -110,6 +111,10 @@ async function pickMention(i){
     ta.value = ta.value.slice(0, _mention.start) + tag + ta.value.slice(_mention.start);
     const p = _mention.start + tag.length;
     ta.focus(); ta.setSelectionRange(p, p);
+    // ★ 2026-10-20：引用同时挂附件（doc_id ⇒ 后端注入文档全文）。#文本保留触发检索。
+    if(typeof attachKbDocToBar === 'function' && attachKbDocToBar(it)){
+      toast('已引用：' + it.name + '（已挂附件栏，模型将直接读取）');
+    }
   }
   closeMentionPop();
 }

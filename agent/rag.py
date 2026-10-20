@@ -583,6 +583,16 @@ class GraphRAG:
         try:
             if not chunk_hits:
                 return False
+            # ★ 2026-10-20（会话 9565 实测）：**强 BM25 命中豁免抑制**。
+            #   embedding 服务不稳（降级 bigram / 熔断）时 vec_score 全面走低，
+            #   旧判据"全批低 ⇒ 整批丢弃"会把 BM25 高分（稀疏精确匹配，不依赖
+            #   embedding）的真命中一起丢掉——实测广汽方法论 chunk bm25=105
+            #   仍被整批抑制，工具侧只剩"词重叠 0/5"。豁免阈值 40：bm25 归一
+            #   （/50 封顶）达 0.8 的强命中，任一条存在即不抑制（宁多给不误杀，
+            #   下游 graph_retrieve 自带词重叠弱相关判定兜底）。
+            _strong_bm25 = any(float(h.get("bm25_score") or 0) >= 40.0 for h in chunk_hits)
+            if _strong_bm25:
+                return False
             return all(str(h.get("confidence_level") or "") == "低" for h in chunk_hits)
         except Exception:
             return False

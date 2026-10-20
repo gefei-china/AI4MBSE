@@ -524,7 +524,17 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     for final, r, vs, bs, boost, hs in scored[:top_k]:
         # P2-F 可解释性：置信度等级（基于真向量相似度 vs，0-1 区间区分度高；无向量用 bm25 归一）
         # P1-4：等级分界配置化（rag.confidence_high / rag.confidence_mid）
-        _ref = vs if vs > 0 else (min(bs / 50.0, 1.0) if bs > 0 else 0.0)
+        # ★ 2026-10-20（用户报"知识库有文件但检索不到"，会话 9565 实测）：
+        #   旧式 `_ref = vs if vs > 0 else bm25归一` —— **向量分>0 时 BM25 被完全无视**。
+        #   实测：广汽方法论 chunk 的 bm25=105.4（强稀疏命中，归一后应为"高"），
+        #   但 vs=0.331 < 中位线 0.45 ⇒ 连坐标"低"；embedding 服务不稳（降级 bigram，
+        #   vec_score 全面走低）时**全批"低"** ⇒ rag._low_conf_suppressed 整批抑制
+        #   ⇒ chunk_hits=[] ⇒ 工具报"词重叠 0/5"。BM25 是**稀疏精确匹配**，不依赖
+        #   embedding 服务，高分是强证据，不该被弱向量连坐。
+        #   改为**取两路较强者**：任一路达到阈值即按该路定级。标定数据不受影响：
+        #   69 例评测里金标命中原本就靠 vs 或 bs 之一支撑，neg 例两路皆低仍标"低"。
+        _ref_bm25 = min(bs / 50.0, 1.0) if bs > 0 else 0.0
+        _ref = max(vs, _ref_bm25)
         conf_level = "高" if _ref >= _conf_high else ("中" if _ref >= _conf_mid else "低")
         hit = {
             "score": round(final, 3),

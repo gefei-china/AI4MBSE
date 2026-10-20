@@ -119,6 +119,9 @@ async function loadAttachKbList(){
   ].concat((tags || []).map(t=>({
     key:t.name, icon:'📄', name:t.name,
     desc:(t.branch||'') + (t.status ? ' · ' + t.status : ''), tag:'文档',
+    /* ★ 2026-10-20：必须透传 doc_id/status——attachKbDocToBar 靠它挂附件栏；
+       旧 map 丢掉这两个字段 ⇒ 永远走"只拼 #文本"分支（实测 toast 一直显示旧文案）。 */
+    doc_id:t.doc_id || 0, status:t.status || '',
   })));
   renderAttachKbList();
 }
@@ -135,6 +138,19 @@ function renderAttachKbList(){
     </div>`).join('')
     : '<div style="color:var(--mut);font-size:12px;padding:8px;">无匹配项</div>';
 }
+/* ★ 2026-10-20（用户报"知识库引用后 AI 检索不到"）：知识库引用统一走这里——
+   #文本（触发后端知识检索路由）**加上**挂附件（doc_id ⇒ 后端把文档全文注入
+   上下文 + 编排子任务按白名单拿到）。旧实现各入口只拼 #文本，发送时
+   attachments=[]（消息 4683 实测），AI 只能答"检索不到"。 */
+function attachKbDocToBar(it){
+  if(!it || !it.doc_id) return false;
+  if(pendingAttachments.some(a=>a.doc_id===it.doc_id)) return false;
+  pendingAttachments.push({url:'', filename:it.name, size:0, is_image:false,
+                           doc_id:it.doc_id, parse_status:it.status || 'completed',
+                           from_kb:true});
+  renderAttachBar();
+  return true;
+}
 function attachKbPick(i){
   const it = _attachKbShown[i];
   if(!it) return;
@@ -148,8 +164,15 @@ function attachKbPick(i){
     const p = pos + tag.length;
     ta.focus(); ta.setSelectionRange(p, p);
   }
+  // ★ 2026-10-20（用户报"知识库引用后 AI 检索不到"）：引用必须**同时进附件列表**。
+  //   旧实现只拼 #文本（toast 却说"已引用"）——pendingAttachments 纹丝不动，
+  //   发送时 attachments=[]（消息 4683 实测）⇒ 后端拿不到文档，AI 只能说检索不到。
+  //   tags 接口现带 doc_id ⇒ 挂附件后：①附件栏可见（用户知道自己引用了什么）；
+  //   ②后端 _load_attachment_text 能加载文档全文注入（上传资料首要依据）；
+  //   ③编排子任务也按白名单拿到附件。#文本保留（继续触发知识检索路由）。
+  const attached = attachKbDocToBar(it);
   closeAttachMenu();
-  toast('已插入引用：' + it.name + '（补充问题后发送）');
+  toast('已引用：' + it.name + (attached ? '（已挂附件栏，模型将直接读取）' : '（补充问题后发送）'));
 }
 // 二级面板统一定位：一级菜单右侧弹出，放不下翻左侧，垂直不超视口
 function positionSubPop(menu, pop){

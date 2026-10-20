@@ -91,12 +91,20 @@ def list_kb_tags(branch: Optional[str] = "", published_only: int = 0, conn=Depen
     文档全局化：文件管理从分支体系抽离为全局资产，标签/文件面板不再按分支或
     published_only 过滤（参数保留接收兼容旧前端，忽略过滤）。
     """
-    sql = "SELECT filename, file_type, parse_status, branch FROM documents"
+    sql = ("SELECT id, filename, file_type, parse_status, branch, chunk_count "
+           "FROM documents")
     sql += " ORDER BY parse_status='completed' DESC, created_at DESC LIMIT 200"
     rows = conn.execute(sql).fetchall()
+    # ★ 2026-10-20（用户报"知识库引用后 AI 检索不到"）：补 **doc_id** 字段——
+    #   前端知识库引用（＋菜单 / # 弹层）确认后要把它写进**附件列表**
+    #   （attachments 带 doc_id ⇒ 后端 _load_attachment_text 能加载文档文本
+    #   作为「上传资料」首要依据注入）。旧返回只有文件名，前端只能拼 #文本，
+    #   附件列表纹丝不动 ⇒ 用户以为引用了，AI 那边 attachments=[]。
+    #   doc_id 是既有主键，纯增量字段，旧前端零影响。
     return [
         {"name": r["filename"], "type": r["file_type"] or "", "status": r["parse_status"] or "pending",
-         "branch": r["branch"] or ""}
+         "branch": r["branch"] or "", "doc_id": r["id"],
+         "chunk_count": r["chunk_count"] or 0}
         for r in rows
     ]
 
