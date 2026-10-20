@@ -5,6 +5,13 @@
 本脚本用**真实 AgentPipeline 的 router**（含 DB 关键词/语义索引/规则表）跑断言：
   正例（说明类 → knowledge_qa）：不能被 design 的泛词「建模」劫持
   反例（动作类 → design/impact/report）：不能被新加的"说明类优先"抢走
+
+★ 2026-11-12（米爸反馈1，conv 9571/msg 4698）：第 5 段新增——
+  附件任务句「…请基于如上需求分析的框架、流程与规则，帮我梳理出清晰的条目话需求清单」
+  （带附件 doc 847）因「流程」命中 _EXPLAIN_SIGNALS 被抢去 knowledge_qa，
+  附件交给知识问答 Agent 空转（"上传附件无法正常解析识别消费"的用户观感）。
+  修法：_ACTION_SIGNALS 补「梳理/条目/清单」三个交付物动作词。
+  第 5 段同时锁 A/B 零回退（确定性层逐条比对）与 explain 正例防误伤。
 用法：.venv/Scripts/python.exe -X utf8 tests/manual_verify/verify_intent_explain.py
 """
 import os
@@ -96,6 +103,76 @@ finally:
     c.close()
 chk("连跑两次结果一致且均为 knowledge_qa", a == "knowledge_qa" and b == "knowledge_qa",
     f"1st={a} 2nd={b} (2nd route={m2['route']})")
+
+print("── 5. #52 附件任务句：动作信号兜底 + explain 正例防误伤 + 确定性层 A/B ──")
+MSG4698 = ("基于上传的附件文档，这是一份客户的需求文档，请基于如上需求分析的框架、"
+           "流程与规则，帮我梳理出清晰的条目话需求清单")
+c = get_db()
+try:
+    got = rt.detect(MSG4698, conn=c)
+    meta = rt.get_last_meta()
+finally:
+    c.close()
+chk("5a 症状1 实证（msg 4698 原话，带 doc 847 附件）→ requirement_analysis",
+    got == "requirement_analysis",
+    f"实得 intent={got} route={meta['route']} conf={meta['confidence']}")
+chk("5a2 且不是 explain 抢占（route 不得为 explain）", meta["route"] != "explain",
+    f"route={meta['route']}")
+
+EXPLAIN52 = [
+    "介绍一下需求分析的流程",
+    "这份附件里讲的流程是什么",   # 带附件的**概念问**：仍须走知识问答（附件此时是阅读对象）
+    "什么是MBSE",
+    "需求分析的原理是什么",
+]
+for s in EXPLAIN52:
+    c = get_db()
+    try:
+        got = rt.detect(s, conn=c)
+        meta = rt.get_last_meta()
+    finally:
+        c.close()
+    chk(f"5b explain 正例防误伤「{s[:18]}…」→ knowledge_qa/explain",
+        got == "knowledge_qa" and meta["route"] == "explain",
+        f"实得 intent={got} route={meta['route']}")
+
+r0 = IntentRouter()
+chk("5c 单元：梳理+条目+流程（无其他动作词）→ False（不再判说明类）",
+    r0._is_explain_ask("基于需求分析的流程帮我梳理条目化需求清单") is False)
+chk("5c2 单元：流程+是什么（纯概念问）→ True（说明类判定不受损）",
+    r0._is_explain_ask("需求分析的流程是什么") is True)
+
+# 5d 确定性层 A/B：主评测集 confirmed 样本中，基线走**确定性路由**（rule/rule_scored/
+#   explain/fused）的那些，加动作信号后必须逐条不变。LLM 兜底路线（llm*/semantic*）
+#   本身带非确定性（mock/真实服务波动），不纳入比对——本改动只可能经 explain 门与
+#   _db_kw_priority 影响确定性层，故该子集即为"零回退"的严格判据。
+c = get_db()
+try:
+    rows = c.execute("SELECT text,intent FROM intent_samples "
+                     "WHERE status='confirmed' AND text IS NOT NULL").fetchall()
+finally:
+    c.close()
+SAMPLES = [(r["text"], r["intent"]) for r in rows]
+det = []
+for text, want in SAMPLES:
+    got = rt.detect(text, conn=c)
+    meta = rt.get_last_meta()
+    if meta["route"] in ("rule", "rule_scored", "explain", "fused", "fused_conflict"):
+        det.append((text, want, got))
+ORIG_ACT = IntentRouter._ACTION_SIGNALS
+try:
+    IntentRouter._ACTION_SIGNALS = ORIG_ACT + ("梳理", "条目", "清单")
+    changed = []
+    for text, want, base_got in det:
+        got = rt.detect(text, conn=c)
+        if got != base_got:
+            changed.append((text[:36], base_got, got))
+finally:
+    IntentRouter._ACTION_SIGNALS = ORIG_ACT
+chk(f"5d 确定性层 A/B 零回退（n={len(det)}，加动作信号后逐条不变）",
+    not changed, f"变化项：{changed}" if changed else "")
+chk("5e 动作信号已入生产 _ACTION_SIGNALS（梳理/条目/清单）",
+    all(k in IntentRouter._ACTION_SIGNALS for k in ("梳理", "条目", "清单")))
 
 print(f"\n结果：{len(OK)} 通过 / {len(FAIL)} 失败")
 if FAIL:

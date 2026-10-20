@@ -47,6 +47,19 @@ class IntentRouter:
         # 不加它们时「这份需求的模糊词有哪些」会被 explain（"有哪些"）抢到 knowledge_qa，
         # 而正确意图是 requirement_quality（评测集错例 #1，见 eval_intent_routing.py）。
         "模糊词", "不可验证",
+        # ★ 2026-11-12（米爸反馈1，conv 9571/msg 4698 实证）：附件任务句被 explain 抢占。
+        #   原话「…请基于如上需求分析的框架、**流程**与规则，帮我**梳理**出清晰的**条目话需求清单**」
+        #   （带附件 doc 847）——「流程」命中 _EXPLAIN_SIGNALS 且无动作信号 ⇒ 判 knowledge_qa
+        #   ⇒ 附件交给知识问答 Agent，「没有实际文档」式空转（用户看到的就是"附件没被消费"）。
+        #   「梳理/条目/清单」是**交付物动作词**（产出条目化清单），不是概念询问；
+        #   补入后该句绕过 explain 前置，经 _db_kw_priority 命中 requirement_analysis@0.95。
+        #   A/B（intent_samples.status='confirmed' n=44，内存猴补丁+finally 还原，
+        #   见 tmp/probe_52_ab.py）：acc 0.9091→0.9091 **零回退**，且基线错例
+        #   「把任务书里的需求提取出来」（chat）被顺带修好；5 条 explain 正例
+        #   （含「这份附件里讲的流程是什么」这种**带附件的概念问**）全部仍判 knowledge_qa。
+        #   ⚠️ 不改「流程」本身：它是真 explain 正例（「介绍一下需求分析的流程」）的信号，
+        #     误路由的根因是缺动作信号，不是流程词多余。
+        "梳理", "条目", "清单",
     )
 
     def _is_explain_ask(self, t: str) -> bool:
