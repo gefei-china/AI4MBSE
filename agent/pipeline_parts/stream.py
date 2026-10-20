@@ -18,6 +18,38 @@ from . import tool_offload as _tool_offload  # P1-4：大工具结果 offload（
 import queue as _queue  # 编排子任务事件的**实时**转发通道（见 _stream_orchestrated_flow 的 _evq）
 
 
+def _gen_stage_name(intent, agent_def) -> str:
+    """「生成」环节的 stage 名（2026-10-20 用户反馈：纯问答轮也显示「生成与校验」）。
+
+    ★口径：环节名必须忠实反映该轮实际发生的事。「校验」指 SysML v2 校验器
+    闭环（sysml_v2_validate），只有产码轮才真会跑；knowledge_qa / chat 等纯问答轮
+    也叫「生成与校验」就是名不副实——用户由此合理怀疑环节是写死的（同批反馈里
+    「知识库检索节点是不是写死的」是同一类困惑：环节名与实际内容对不上）。
+
+    判定（与产码判定同一事实来源）：
+      1) intent 在产码白名单（编排多阶段合成 intent 时的兜底）；
+      2) 或 agent_def 绑定了 sysml_v2_validate（PromptMixin._is_v2_code_agent，
+         单一事实来源 = agent_tools 绑定，新建产码 Agent 自动纳入）。
+    任一命中 -> 「生成与校验」；否则 -> 「生成汇总」。
+    """
+    try:
+        if str(intent or "") in _CODE_STAGE_INTENTS:
+            return "生成与校验"
+        from agent.pipeline_parts.prompt import PromptMixin as _PM
+        if agent_def is not None and _PM._is_v2_code_agent(agent_def):
+            return "生成与校验"
+    except Exception:
+        return "生成与校验"     # 判定失败回旧行为（宁可保守，不改名）
+    return "生成汇总"
+
+
+#: 产码意图白名单（编排多阶段合成 intent 时的兜底；细则以 2) 的绑定判据为准）
+_CODE_STAGE_INTENTS = {
+    "design", "architecture_skeleton", "view_expansion",
+    "model_validation_repair", "multi_design", "sysml_view_generation",
+}
+
+
 class StreamMixin:
     """流式执行：编排流 SSE / 直接流式 execute_stream。"""
 
@@ -70,7 +102,7 @@ class StreamMixin:
         # 与真实检索无关（编排模式下子任务的 stage 事件不外传，见子任务事件转发只收
         # token/reasoning/tool/done），会让用户看到一个从未真正执行过的「知识库检索·未引用」环节。
         # 现不再预发该阶段：检索真实性由各子任务按其 Agent 的 kb_required 决定。
-        yield {"type": "stage", "name": "生成与校验", "status": "run"}
+        yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "run"}
         yield {"type": "progress", "kind": "progress",
                "delta": "（自动编排）检测到多 Agent 协作需求，正在规划子任务…"}
         conn = get_db()
@@ -332,7 +364,7 @@ class StreamMixin:
                             conn.commit()
                         except Exception:
                             pass
-                        yield {"type": "stage", "name": "生成与校验", "status": "done"}
+                        yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "done"}
                         yield {"type": "error",
                                "data": "计划依赖图存在环或结构非法，本次编排已中止：%s" % _vde}
                         return
@@ -1400,7 +1432,7 @@ class StreamMixin:
                "delta": f"（自动编排）{_done_wording if not degraded else '单 Agent 直行完成'}，汇总最终结论…"}
         for _chunk in iter_stream_chunks(orch_content):
             yield {"type": "token", "delta": _chunk}
-        yield {"type": "stage", "name": "生成与校验", "status": "done"}
+        yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "done"}
         # 6) SysML 视图（自动编排 LLM 摘要可能丢弃子任务交付的 SysML v2 代码 → 先补回再投影）
         _pre_sysml_len = len(orch_content)
         orch_content = self._ensure_sysml_blocks(orch_content, done_items)
@@ -1538,7 +1570,7 @@ class StreamMixin:
         # 与真实检索无关（编排模式下子任务的 stage 事件不外传，见子任务事件转发只收
         # token/reasoning/tool/done），会让用户看到一个从未真正执行过的「知识库检索·未引用」环节。
         # 现不再预发该阶段：检索真实性由各子任务按其 Agent 的 kb_required 决定。
-        yield {"type": "stage", "name": "生成与校验", "status": "run"}
+        yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "run"}
         orch_tasks = ((orch.get("data") or {}).get("tasks")) or []
         # ★ B5-6（A-1）：复用路径**也要产出 subtasks 轨迹**。
         #   根因：`_stream_orchestrated`（复用）与 `_stream_orchestrated_flow`（真实执行）
@@ -1590,7 +1622,7 @@ class StreamMixin:
         # P0-3（2026-09-17）：无节流切片 → 类人节奏产出（本路径不做事后补块，保持原行为）
         for _chunk in iter_stream_chunks(orch_content):
             yield {"type": "token", "delta": _chunk}
-        yield {"type": "stage", "name": "生成与校验", "status": "done"}
+        yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "done"}
         # SP-R/视图联动：编排汇总内容含 SysML → 投影视图（需求图/BDD 等会话内预览）
         sysml_views = self._gen_sysml_views(orch_content, intent, user_input)
         llm_info = {"provider": (orch.get("llm") or {}).get("provider", "自动编排"), "model": "-",
@@ -2307,7 +2339,7 @@ class StreamMixin:
             yield {"type": "reasoning", "delta": _r_delta}
 
             # ── 阶段 3：LLM 流式生成 ──
-            yield {"type": "stage", "name": "生成与校验", "status": "run"}
+            yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "run"}
             # 快捷指定 Skill：强制注入该技能完整指令
             skill_block = ""
             # 通用报告服务：report_generation 意图 → 分节模板结构化生成
@@ -3069,7 +3101,7 @@ class StreamMixin:
                 llm_content = _full_content
             # SysML v2 视图联动：LLM 输出含 SysML 代码 → 解析并投影各视图 ViewModel（会话内即时预览，不落库）
             sysml_views = self._gen_sysml_views(llm_content, intent, user_input)
-            yield {"type": "stage", "name": "生成与校验", "status": "done"}
+            yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "done"}
             # 子智能体执行完成（携带 intent/hil_level，供前端状态面板一致展示）
             yield {"type": "agent", "status": "done", "name": agent_def.name,
                    "display_name": agent_def.name, "intent": intent, "hil_level": hil_level}

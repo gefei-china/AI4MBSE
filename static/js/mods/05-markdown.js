@@ -280,7 +280,7 @@ function renderMessage(m) {
         //   white-space:normal（同 app.css:294 .nr-inline / chat.css:245 .art-card 先例）。
         html += `<div style="margin-top:8px;border:1px solid var(--line,#e5e8ee);border-radius:8px;overflow:hidden;white-space:normal;">
           <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:#fafbfc;font-size:11px;color:var(--mut);cursor:pointer;user-select:none;" onclick="citeSrcToggle(this)">
-          <span class="chev" style="font-size:9px;">▸</span>📚 引用内容（${cites.length} 条 chunk，点击条目查看详情）</div>
+          <span class="chev" style="font-size:9px;">▸</span>📚 检索引用（${cites.length} 条 chunk，回答中标注的来源；点击条目查看详情）</div>
           <div class="cite-src-body" style="display:none;max-height:280px;overflow:auto;background:#fff;">${items}</div></div>`;
       }
       if(cd.intent) {

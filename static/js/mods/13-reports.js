@@ -334,7 +334,11 @@ function finishStream(r, aiBox) {
   let extra = '';
   if(r.attachments_info && r.attachments_info.parsed > 0){
     let atag = `📎 已解析 ${r.attachments_info.parsed} 份上传资料并注入分析`;
-    if(r.retrieval && r.retrieval.attachment_used) atag += `，本次消费 ${r.attachments_info.consumed||0} 条资料片段`;
+    /* ★ 2026-10-20（用户报两处片段数不一致）：口径必须分开写清——
+       consumed = 附件全文按提问匹配出的片段（top5），与正文引用区的
+       「检索引用 N 条 chunk」（RAG chunk_hits 中被回答标注引用的）是两个数。
+       旧文案「本次消费 N 条资料片段」与引用区并排显示，用户以为是同一口径。 */
+    if(r.retrieval && r.retrieval.attachment_used) atag += `，附件匹配片段 ${r.attachments_info.consumed||0} 条（按提问相关度选取）`;
     atag += (r.attachments_info.skipped||[]).length ? `（${r.attachments_info.skipped.length} 份无法解析）` : '';
     extra += `<div style="margin:2px 0 6px 44px;font-size:11px;color:var(--grn);">${atag}</div>`;
   }
