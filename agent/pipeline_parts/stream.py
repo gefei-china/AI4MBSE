@@ -53,10 +53,52 @@ _CODE_STAGE_INTENTS = {
 class StreamMixin:
     """流式执行：编排流 SSE / 直接流式 execute_stream。"""
 
+    def _stream_orchestrated_traced(self, user_input, conversation_id, branch, intent, agent_def,
+                                    hil_level, kb_tags, attachments, slots, user, provider_id,
+                                    team_forced: bool = False, stage_hint=None,
+                                    resume_run_id: int = 0, team_def: dict | None = None) -> iter:
+        """观测性 trace 包装层（2026-10-20，Task #43；与 _stream_orchestrated_flow 同签名）。
+
+        为什么包一层而不把 flush 写进 body：body 有**三类出口**（正常 done /
+        非法计划早退 / 异常上抛）且内部 20+ 处 yield —— 逐个补 finally 必然漏。
+        wrapper 用 `yield from` + finally 把「span 落库」收敛成**一处**，
+        且对三个调用点只是换个方法名。
+
+        ⚠️ body 的方法名**不能改**（必须留在 `_stream_orchestrated_flow`）：
+        三个门禁按名做 AST/源码断言 —— verify_orch_run_id_scope 的 C1 要求
+        `run_id` 的局部赋值在其函数体内；verify_orch_reliability /
+        verify_multiturn_context 对它做 src_of + 变异孪生驱动。改名 = 一次
+        打破三道门禁（实测过它们的判据后才选此结构）。
+
+        span 生命周期：body 内开/关（内存收集器）→ 本层流尾 flush（独立连接、
+        一次事务）。flush 失败只丢观测数据，绝不影响用户拿结果（观测旁路铁律）；
+        开关 orch_span.enabled=False 时全链路零开销。
+        """
+        from services.orch_span import SpanCollector
+        _spans = SpanCollector()
+        try:
+            yield from self._stream_orchestrated_flow(
+                user_input, conversation_id, branch, intent, agent_def,
+                hil_level, kb_tags, attachments, slots, user, provider_id,
+                team_forced=team_forced, stage_hint=stage_hint,
+                resume_run_id=resume_run_id, team_def=team_def, _spans=_spans)
+        finally:
+            try:
+                from database import get_db as _span_gdb
+                _sc = _span_gdb()
+                try:
+                    _spans.flush(_sc)
+                    _sc.commit()
+                finally:
+                    _sc.close()
+            except Exception:
+                pass
+
     def _stream_orchestrated_flow(self, user_input, conversation_id, branch, intent, agent_def,
                                   hil_level, kb_tags, attachments, slots, user, provider_id,
                                   team_forced: bool = False, stage_hint=None,
-                                  resume_run_id: int = 0, team_def: dict | None = None) -> iter:
+                                  resume_run_id: int = 0, team_def: dict | None = None,
+                                  _spans=None) -> iter:
         """P0-1 真流式编排：计划生成 → 子任务逐个串行流式执行（实时推送思考/工具/文本增量）
         → LLM 汇总 → 落库 → done。
 
@@ -76,6 +118,10 @@ class StreamMixin:
         team_def: C2（2026-10-07）—— 完整团队定义。team_forced 时把主 Agent system_prompt
           （拆解规则 + 八视图依赖顺序）与成员名册（capabilities + 触发词）注入 planner prompt。
           此前只注入「可用 Agent 池」的意图名，8 个「XX视图生成」近义成员无法区分。
+        _spans: Task #43（2026-10-20）观测性 trace 的内存 span 收集器 —— 由
+          `_stream_orchestrated_traced` 包装层创建、并在流尾负责 flush；本方法只负责
+          开/关。**None 时全部插桩退化为 no-op**（门禁孪生驱动/直调本方法的路径
+          不受影响；这也是插桩全部写成 `if _spans` 守卫的原因）。
         """
         from llm import llm_client
         from task_queue import TaskQueue
@@ -87,6 +133,10 @@ class StreamMixin:
         # 整批删掉**（实测会话 514：run=514 的 5 行被新一轮 6 行覆盖）→ 计划无历史、不可审计。
         # 现改为独立的编排批次号（下面落计划时就地分配），归属会话记在 agent_tasks.conversation_id。
         run_id = 0
+        # Task #43（2026-10-20）观测性 trace：span 内存 id（0=未开/收集器关闭）。
+        # 在函数顶部初始化 ⇒ 任何提前出口（含降级直行）引用都不会 NameError。
+        _run_sid = 0
+        _plan_sid = 0
         reflection_meta = None   # P0-1（T3）：反思闭环评审轨迹（降级分支默认 None）
         goal = user_input or "执行该团队任务并汇总结果"
         # Task 10：汇总消费结构化摘要——编排三态（full/partial/failed），降级/单 Agent 直行恒 full
@@ -222,6 +272,10 @@ class StreamMixin:
                 + " → ".join(str(x) for x in stage_hint)
             )
         plan = []
+        # ★ 2026-10-20（Task #43 观测性 trace）：plan span —— 覆盖「检查点恢复 /
+        #   planner 调用 / 负载感知分派」整段。在恢复分支**之前**开：两条路径
+        #   （resume 复用计划 vs 新规划）走同一 span，source 在 meta 里区分。
+        _plan_sid = _spans.open("plan", "任务规划") if _spans else 0
         # ── P0-2 持久执行：恢复分支（resume_run_id 非 0 时**不调用 planner**）─────────────
         # 为什么必须绕开 planner：resume 的核心是"按原计划继续"。若再问一次 LLM，
         # 得到的拆分几乎必然不同（temperature + 会话摘要已变），于是旧 run 里已 done 的
@@ -288,6 +342,12 @@ class StreamMixin:
             except Exception:
                 # 分派增强失败**不得影响编排**（它只是择优与留痕，不是门禁）
                 pass
+        # plan span 收口（幂等：非法计划早退路径的 error 收口先到则以那次为准）。
+        # status 语义 = 步骤是否正常完成：拿到非空计划 ok，空计划 error（规划失败）。
+        if _spans and _plan_sid:
+            _spans.close(_plan_sid, "ok" if plan else "error",
+                         {"source": "checkpoint" if _resume_ck else "planner",
+                          "tasks": len(plan)})
 
         # 2) 降级：计划失败 → 单 Agent 流式直行
         if not plan:
@@ -333,6 +393,11 @@ class StreamMixin:
                     # P0-2 resume：**不重建计划**。任务行（含已 done 的结果）已在库里，
                     # 直接沿用原批次号；此时 `ready_tasks` 只会挑出未完成任务 → 天然幂等。
                     run_id = int(resume_run_id)
+                    # ★ Task #43：run span（根）—— run_id 落定后才能开（span 按批次号归档）。
+                    if _spans:
+                        _spans.bind(run_id, int(conversation_id or 0))
+                        _run_sid = _spans.open("run", "run #%d" % run_id,
+                                               meta={"resume": True})
                     try:
                         from agent.orch_checkpoint import touch as _ck_touch, bump_attempt as _ck_bump
                         _ck_bump(conn, run_id)
@@ -342,6 +407,11 @@ class StreamMixin:
                 else:
                     # P0-7：分配独立批次号（新号无残留，故不再 clear_run —— 那正是覆盖历史的原因）
                     run_id = TaskQueue.new_run_id(conn)
+                    # ★ Task #43：run span（根）—— 新批次在此开根 span，其余五类
+                    #   （plan/task/summary/reflection/views）全部挂在它下面。
+                    if _spans:
+                        _spans.bind(run_id, int(conversation_id or 0))
+                        _run_sid = _spans.open("run", "run #%d" % run_id)
                     # ★ 2026-10-13（B1-8）：落计划前检依赖环。
                     #   `create_plan(strict=True)` 会对非法图抛 ValueError（环 / 自环 / 空 key / 重复 key）。
                     #   此处**不吞异常**：非法计划继续往下跑就是"静默全阻塞"（ready_tasks 恒空 →
@@ -364,6 +434,14 @@ class StreamMixin:
                             conn.commit()
                         except Exception:
                             pass
+                        # ★ Task #43：非法计划早退 —— plan/run 两个 span 以 error 收口
+                        #   （不依赖 flush 的未闭合兜底：那条路径 status 虽也是 error，
+                        #    但带不上具体原因，排障时"为什么错"仍要翻事件流）。
+                        if _spans:
+                            if _plan_sid:
+                                _spans.close(_plan_sid, "error", {"reason": "plan_invalid"})
+                            if _run_sid:
+                                _spans.close(_run_sid, "error", {"reason": "plan_invalid"})
                         yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "done"}
                         yield {"type": "error",
                                "data": "计划依赖图存在环或结构非法，本次编排已中止：%s" % _vde}
@@ -792,6 +870,13 @@ class StreamMixin:
                 tkey = tk.get("task_key") or "t"
                 ttitle = tk.get("title") or tkey
                 _t0 = _t.time()
+                # ★ Task #43：task span —— 覆盖「claim + 信号量等待 + 全部重试」。
+                #   挂在 run span 下（闭包读 _run_sid，主循环派发时早已开好）。
+                #   worker 跑在 _exec_pool 线程里 ⇒ 收集器必须线程安全（内部有锁）。
+                _tsid = (_spans.open("task", tkey, parent=_run_sid,
+                                     meta={"agent": tk.get("agent_id"),
+                                           "title": str(ttitle)[:80]})
+                         if _spans else 0)
                 # ★ 2026-10-13（B1-3）：写入 `running` 态。
                 #   为什么在**worker 内**而不是主循环批量写：主循环拿到的是 `ready` 全量
                 #   （可能 6 个而只有 3 个并发槽），批量标 running 会把**尚未开始**的任务
@@ -879,6 +964,23 @@ class StreamMixin:
                 finally:
                     if sem is not None:
                         sem.release()   # 仅本 worker 线程自然结束时释放
+                    # ★ Task #43：task span 收口。放在 semaphore 的 finally 里 ——
+                    #   worker 的**全部出口**（成功 / 重试耗尽 / 不可重试失败 /
+                    #   异常上抛）都经过这里，不会漏；异常时 last_res 为 None ⇒
+                    #   记 error（与 flush 的未闭合兜底同口径，但这里能带上 attempts）。
+                    if _spans and _tsid:
+                        _w_meta = {}
+                        try:
+                            _w_meta = {"tokens": int(last_res[7] or 0) if last_res else 0,
+                                       "latency_ms": int(last_res[6] or 0) if last_res else 0,
+                                       "retry_count": int(tk.get("retry_count") or 0),
+                                       "attempts": max(1, _max_retries - retry_left + 1)}
+                            if last_res and last_res[5]:
+                                _w_meta["error"] = str(last_res[5])[:120]
+                        except Exception:
+                            pass
+                        _spans.close(_tsid, "ok" if (last_res and last_res[2]) else "error",
+                                     _w_meta)
 
             while TaskQueue.pending_count(conn, run_id) > 0 and guard < 200:
                 guard += 1
@@ -1315,6 +1417,14 @@ class StreamMixin:
                 for _tk in orch_tasks:
                     if _tk.get("status") != "done" and _tk.get("key") not in _missing_keys:
                         _missing_keys.append(_tk.get("key"))
+            # ★ Task #43：summary span —— 覆盖「三态聚合构造 + LLM 汇总 + 预算标注」。
+            #   这是单次 LLM 调用里输入最大的一段（_summarize_plan 吃全部交付物），
+            #   慢/贵主要都在这里，没有 span 就只能从事件流秒表反推。
+            #   parent=_run_sid：后段（summary/reflection/views）在时间上被 run span
+            #   覆盖（run 收口于最末 done yield 前）⇒ 挂 run 下，total_ms=plan+run
+            #   才等于端到端墙钟；与 run 并列成根会把后段双算一遍（e2e 实测 777.8s
+            #   vs 实际 648.3s）。
+            _sum_sid = _spans.open("summary", "汇总", parent=_run_sid) if _spans else 0
             try:
                 from workflows import FlowExecutor as _FE
                 if len(done_items) >= 2:
@@ -1348,6 +1458,9 @@ class StreamMixin:
             # Task 7：预算受限 → 汇总内容标注 partial（前端可识别「部分子任务未执行」）
             if budget_hit:
                 orch_content += "\n\n（因预算限制部分子任务未执行）"
+            if _spans and _sum_sid:
+                _spans.close(_sum_sid, "ok", {"items": len(done_items),
+                                              "agg_status": _agg_status})
             # Task 10：agg_status != full → 显式标注「编排部分完成」+ reasoning 事件（状态同时写入 card_data）
             # ★ 2026-10-20（用户报"编排大量失败"，实查会话 9565）：**partial ≠ 缺失/失败**。
             #   旧文案把 `_missing_keys`（= 自报 partial + failed 的并集）一律写成
@@ -1381,6 +1494,10 @@ class StreamMixin:
                        "delta": "（自动编排）对汇总结果进行质量评审…"}
                 from workflows.refine import RefineGate
                 # Task 10：agg_status 传入 RefineGate——partial 时不自动重派（避免循环），仅评审 + 追加人工复核建议
+                # ★ Task #43：reflection span —— 质量评审是一次独立 LLM 调用（评分 +
+                #   冲突检测 + 可能的修订轮），成本与耗时都要能单独归因。
+                #   parent=_run_sid 同 summary：run 的时间窗覆盖后段，挂 run 下防双算。
+                _ref_sid = _spans.open("reflection", "质量评审", parent=_run_sid) if _spans else 0
                 _ref = RefineGate.run(orch_content, goal, done_items, plan, provider_id, agg_status=_agg_status)
                 reflection_meta = {
                     "enabled": True,
@@ -1421,6 +1538,16 @@ class StreamMixin:
                     yield {"type": "progress", "kind": "progress",
                            "delta": "（自动编排）" + _cftxt}
                 orch_content = _ref.get("content") or orch_content
+                # reflection span 收口：status = 评审步骤是否正常完成（ok）；
+                #   通过与否是**业务结论**，进 meta（score/passed/rounds/conflicts）。
+                if _spans and _ref_sid:
+                    _spans.close(_ref_sid, "ok",
+                                 {"score": reflection_meta.get("score"),
+                                  "passed": reflection_meta.get("passed"),
+                                  "rounds": reflection_meta.get("rounds"),
+                                  "degraded": reflection_meta.get("degraded"),
+                                  "conflicts": int(((reflection_meta.get("conflicts") or {})
+                                                    .get("count") or 0))})
             # P0-3（2026-09-19）：质量门禁回接状态聚合——reflection 未通过必须**降级可见**。
             # 取证：会话 351 的 reflection 已判 passed=false / score=62，子任务交付物里也明确写着
             # 「未产出代码、请先确认缺口」，但 orchestrated_status 仍是 full、前端徽章显示
@@ -1457,6 +1584,10 @@ class StreamMixin:
             yield {"type": "token", "delta": _chunk}
         yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "done"}
         # 6) SysML 视图（自动编排 LLM 摘要可能丢弃子任务交付的 SysML v2 代码 → 先补回再投影）
+        # ★ Task #43：views span —— SysML 代码补回 + 视图投影（后者含解析与布局，实测是
+        #   编排尾段不可忽略的一段；没有 span 时"视图生成等了多久"无可归因）。
+        #   parent=_run_sid 同 summary/reflection：尾段在 run 时间窗内，挂 run 下。
+        _views_sid = _spans.open("views", "SysML 视图", parent=_run_sid) if _spans else 0
         _pre_sysml_len = len(orch_content)
         orch_content = self._ensure_sysml_blocks(orch_content, done_items)
         # 6.1) P0-3：补回的内容是「事后拼接」的，必须增量补吐，否则前端只看到摘要，
@@ -1465,6 +1596,12 @@ class StreamMixin:
             for _chunk in iter_stream_chunks(orch_content[_pre_sysml_len:]):
                 yield {"type": "token", "delta": _chunk}
         sysml_views = self._gen_sysml_views(orch_content, intent, user_input)
+        if _spans and _views_sid:
+            try:
+                _v_n = len((sysml_views or {}).get("views") or {}) if isinstance(sysml_views, dict) else 0
+            except Exception:
+                _v_n = 0
+            _spans.close(_views_sid, "ok", {"views": _v_n})
         # 7) 落库 + done
         llm_info = {"provider": "自动编排", "model": "-", "used_mock": False,
                     "latency_ms": int((_t.time() - t0) * 1000)}
@@ -1555,6 +1692,14 @@ class StreamMixin:
         # V2.5：主 Agent（团队负责人）收尾事件——修前缺失致前端「子智能体：团队」停留"执行中"
         yield {"type": "agent", "status": "done", "name": agent_def.name,
                "display_name": agent_def.name, "intent": intent, "hil_level": hil_level}
+        # ★ Task #43：run span（根）收口。status=ok 表示**流程正常走完**（步骤口径）；
+        #   业务三态（full/partial/failed）与降级进 meta —— 与 card_data.
+        #   orchestrated_status 同源，排障时一眼对上是"编排本身失败"还是"部分子任务没成"。
+        if _spans and _run_sid:
+            _spans.close(_run_sid, "ok",
+                         {"agg_status": _agg_status, "degraded": bool(degraded),
+                          "tasks": len(orch_tasks), "tokens": run_tokens,
+                          "budget_hit": bool(budget_hit), "executed": executed_count})
         yield {"type": "done", "data": {
             "message_id": msg_id, "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
@@ -2062,7 +2207,7 @@ class StreamMixin:
                 except Exception:
                     _r_agent = agent_def
                 _r_text = (_ckr.get("user_input") or user_input or "")
-                yield from _yield_collect(self._stream_orchestrated_flow(
+                yield from _yield_collect(self._stream_orchestrated_traced(
                     _r_text, conversation_id, (_ckr.get("branch") or branch), _r_intent,
                     _r_agent, getattr(_r_agent, "hil_level", hil_level),
                     IntentRouter.extract_kb_tags(_r_text), attachments, None, user,
@@ -2199,7 +2344,7 @@ class StreamMixin:
                 # 团队模式：主 Agent（团队负责人）编排——意图识别/拆解/计划/分派/汇总
                 # （走到这里说明 `_team_route_decision` 判为 orchestrate，不再是无条件编排）
                 self._save_conversation_dst(conversation_id, intent, slots)
-                yield from _yield_collect(self._stream_orchestrated_flow(
+                yield from _yield_collect(self._stream_orchestrated_traced(
                     user_input, conversation_id, branch, intent, agent_def, hil_level,
                     kb_tags, attachments, slots, user, effective_provider, team_forced=True,
                     stage_hint=_stage_hint, team_def=team_def), _orch_acc)
@@ -2228,7 +2373,7 @@ class StreamMixin:
                     # P0-2 DST：编排流式前落会话意图状态（子管道不写主会话状态）
                     if not dry_run:
                         self._save_conversation_dst(conversation_id, intent, slots)
-                    yield from _yield_collect(self._stream_orchestrated_flow(
+                    yield from _yield_collect(self._stream_orchestrated_traced(
                         user_input, conversation_id, branch, intent, agent_def, hil_level,
                         kb_tags, attachments, slots, user, effective_provider,
                         stage_hint=_stage_hint), _orch_acc)

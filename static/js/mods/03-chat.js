@@ -853,6 +853,74 @@ function orchRerunPrompt(runId){
   orchRerunAndResume(runId, keys);
 }
 
+/* ★ 2026-10-20（Task #43 观测性 trace）：拉取 run 的 span 树，在按钮所在步骤体内联渲染。
+   数据来自 GET /api/orchestration/runs/{run_id}/trace（归属门与 rerun 同档）。
+   再点一次按钮 = 收起（toggle）；老批次无 span 时后端给 note，明说"上线前的批次"，
+   不渲染一个空面板让人以为"轨迹为空 = 没执行"。 */
+async function orchTracePanel(runId, btn){
+  const host = btn && btn.closest('.proc-body');
+  if(!host) return;
+  const old = host.querySelector('.orch-trace');
+  if(old){ old.remove(); return; }
+  const box = document.createElement('div');
+  box.className = 'orch-trace';
+  box.style.cssText = 'margin-top:8px;border:1px solid var(--line,#e5e8ee);border-radius:8px;padding:8px 10px;font-size:11px;background:var(--bg,#fff);';
+  box.innerHTML = '<div style="color:var(--mut);">⏳ 正在加载执行轨迹…</div>';
+  host.appendChild(box);
+  try{
+    const r = await fetch(`/api/orchestration/runs/${runId}/trace`, {headers: streamHeaders()});
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok){
+      box.innerHTML = '<div style="color:var(--red,#d93636);">加载失败：' + esc((j && j.error) || ('HTTP ' + r.status)) + '</div>';
+      return;
+    }
+    box.innerHTML = orchTraceHtml(j);
+  }catch(e){
+    box.innerHTML = '<div style="color:var(--red,#d93636);">加载失败：' + esc((e && e.message) || e) + '</div>';
+  }
+}
+
+/* span 树渲染：根列表递归展开；每行 = 状态点 + 类型 + 名称 + 耗时 + 关键 meta。
+   meta 只挑成本/排障相关的键（tokens/attempts/retry/score/views/source/tasks/error），
+   不整块 dump JSON —— 面板是给人一眼看懂的，不是给排障链接逐字读的。 */
+function orchTraceHtml(j){
+  const st = j.stats || {};
+  if(!(j.spans || []).length){
+    return '<div style="color:var(--mut);">' + esc(st.note || '该批次暂无轨迹数据') + '</div>';
+  }
+  const kindMeta = {run:'🕸 整轮', plan:'🧭 规划', task:'🤖 子任务', summary:'📝 汇总', reflection:'🔍 评审', views:'🧩 视图'};
+  const head = '<div style="display:flex;gap:10px;flex-wrap:wrap;color:var(--mut);margin-bottom:6px;">'
+    + '<span>⏱ 合计 <b style="color:var(--ink,#223);">' + ((st.total_ms || 0)/1000).toFixed(1) + 's</b></span>'
+    + '<span>🌳 ' + (j.span_count || 0) + ' 个节点</span>'
+    + Object.entries(st.by_kind || {}).map(([k, v]) =>
+        '<span title="' + esc(k) + ' 累计耗时">' + esc(kindMeta[k] || k) + ' ' + (v.ms/1000).toFixed(1) + 's'
+        + (v.tokens ? ' · ' + Number(v.tokens).toLocaleString() + ' tok' : '') + '</span>').join('')
+    + '</div>';
+  const row = (s, depth) => {
+    const m = s.meta || {};
+    const ok = s.status === 'ok';
+    const dot = ok ? '<span style="color:var(--grn,#3b6d11);">●</span>' : '<span style="color:var(--red,#d93636);">●</span>';
+    const lat = s.latency_ms ? ' · ' + (s.latency_ms/1000).toFixed(1) + 's' : '';
+    const bits = [];
+    if(m.tokens) bits.push(Number(m.tokens).toLocaleString() + ' tok');
+    if(m.attempts && m.attempts > 1) bits.push(m.attempts + ' 次尝试');
+    if(m.retry_count) bits.push('重试 ' + m.retry_count);
+    if(m.score !== undefined && m.score !== null) bits.push('评分 ' + m.score);
+    if(m.views) bits.push(m.views + ' 个视图');
+    if(m.source) bits.push('来源:' + m.source);
+    if(m.tasks !== undefined) bits.push(m.tasks + ' 个任务');
+    if(m.error) bits.push('<span style="color:var(--red,#d93636);">' + esc(String(m.error).slice(0, 80)) + '</span>');
+    return '<div style="display:flex;gap:6px;align-items:baseline;padding:1px 0;padding-left:' + (depth*14) + 'px;flex-wrap:wrap;">'
+      + dot
+      + '<span style="color:var(--mut);min-width:56px;">' + esc(kindMeta[s.kind] || s.kind || '?') + '</span>'
+      + '<b>' + esc(s.name || '') + '</b>' + lat
+      + (bits.length ? '<span style="color:var(--mut);"> · ' + bits.join(' · ') + '</span>' : '')
+      + '</div>'
+      + (s.children || []).map(c => row(c, depth + 1)).join('');
+  };
+  return head + (j.spans || []).map(s => row(s, 0)).join('');
+}
+
 /* ★ 2026-10-20（单点重跑）：rerun 清指定任务（+传递下游）的状态 → 自动走既有 resume。
    runId 来自编排卡 card_data.run_id；taskKeys 为要重跑的 task_key 数组。 */
 async function orchRerunAndResume(runId, taskKeys){

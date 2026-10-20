@@ -30,13 +30,17 @@ function procBlocksHtml(ex, mid){
           + lat + dep + '</div>';
       }).join('') + '</div>';
     /* ★ 2026-10-20（单点重跑）：run_id 存在时提供入口——默认预填失败/部分完成的
-       第一个子任务，可改。rerun 只清状态，执行自动接既有 resume（其余任务复用）。 */
+       第一个子任务，可改。rerun 只清状态，执行自动接既有 resume（其余任务复用）。
+       ★ 2026-10-20（Task #43 观测性 trace）：「⏱ 执行轨迹」与重跑并排 ——
+       回答"这次编排的时间花在哪、每个节点多少 token"（span 树，见 03-chat.js
+       的 orchTracePanel；老批次无 span 时明说"上线前的批次"，不装空面板）。 */
     let rerunHtml = '';
     const _runId = ex.run_id || (window._lastOrchRunId || 0);
     if(_runId){
       const _bad = subs.find(s=>s.status && s.status!=='done' && s.status!=='run');
-      rerunHtml = `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
+      rerunHtml = `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
         <button class="btn sm ghost" onclick="orchRerunPrompt(${_runId})">↻ 重跑子任务</button>
+        <button class="btn sm ghost" onclick="orchTracePanel(${_runId}, this)" title="查看本次编排各阶段耗时与 token 成本">⏱ 执行轨迹</button>
         <span style="font-size:10px;color:var(--mut);">重跑会连同依赖它的下游一起重跑，其余任务复用结果</span>
       </div>`;
       window._orchRerunDefault = _bad ? (_bad.key || '') : '';

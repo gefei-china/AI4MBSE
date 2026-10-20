@@ -4,6 +4,7 @@
 ## 端点
     GET  /api/orchestration/resumable                 可恢复的编排批次清单
     GET  /api/orchestration/runs/{run_id}             单个批次的检查点 + 任务快照
+    GET  /api/orchestration/runs/{run_id}/trace       观测性 trace：span 树 + per-node 成本聚合
     POST /api/orchestration/runs/{run_id}/resume      断点续跑（SSE，事件协议同 /chat/stream）
     POST /api/orchestration/runs/{run_id}/rerun       单点重跑（指定 task_key + 传递下游清结果，再走 resume）
 
@@ -122,6 +123,23 @@ def get_run(run_id: int, conn=Depends(db_session), user=Depends(current_user)):
 
 # NOTE: 写端点为何要权限门 —— 与 ux_metrics 相反：resume 会真实触发 LLM 调用与**写库/写图谱**，
 #       匿名可调用等于把编排的重跑能力对外开放。故走 `config:write` 同档 discriminator。
+#
+# ── 2026-10-20（Task #43）：观测性 trace ──────────────────────────────────────────
+# 为什么单独一个 GET：编排排障的核心问题是「55s 花在哪、每个节点成本多少」——
+#   orch_stream_events 是事件流（无父子结构、无起止对，算不出 latency），
+#   agent_tasks 只有子任务维度（没有 plan/summary/reflection/views）。
+#   span 树（services/orch_span.py 落库）正是补这一格的：开/关时刻对 + meta 成本。
+# 读端点与 get_run 同档：**归属门必须先过**（span 的 name/meta 含 task_key 与错误详情，
+#   等同批次内容的一部分）；无 span 的老批次返回 200 + 空树 + note（不是错误——
+#   "没有 trace"只说明该批次产生于本功能上线之前）。
+@router.get("/api/orchestration/runs/{run_id}/trace")
+def get_run_trace(run_id: int, conn=Depends(db_session), user=Depends(current_user)):
+    """单个编排批次的 span 树 + per-node 成本聚合（只读）。"""
+    _own_run(conn, run_id, user)   # ★ B5-5：归属校验（与 get_run/resume/rerun 同档）
+    from services.orch_span import run_trace
+    return run_trace(conn, run_id)
+
+
 @router.post("/api/orchestration/runs/{run_id}/rerun")
 def rerun_tasks(run_id: int, body: dict = None, conn=Depends(db_session),
                 user=Depends(current_user)):

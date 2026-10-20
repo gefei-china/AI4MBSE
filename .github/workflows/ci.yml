@@ -871,6 +871,14 @@ jobs:
       - name: Guard run_id 作用域正确（真实建模验证抓出的崩溃，AST 级 + 9 处误报豁免）
         run: python tools/verify/verify_orch_run_id_scope.py
 
+      # ── Task #43（2026-10-20）：编排观测性 trace（span 树）──────────────────
+      # 锁的是"建好没人用"这一失效模式：orch_run_spans 表 + SpanCollector 服务 +
+      # 六类插桩 + 查询端点 + 前端入口五层缺一层即无数据可看。含 3 个变异自证
+      # （丢 parent / 未闭合不标 error / 删 task 插桩）。零 LLM、不起服务、
+      # 不写生产库（U1 跑真 init_db 时 monkeypatch 两处模块级 DB_PATH 指临时库）。
+      - name: Guard 编排观测性 trace（span 树六类插桩 + 端点归属门，54 项）
+        run: python tools/verify/verify_orch_span.py
+
       - name: Guard reasoning 事件区分模型 CoT 与系统提示（36 条，派生判据非硬编码快照）
         run: python tools/verify/verify_reasoning_kind.py
 

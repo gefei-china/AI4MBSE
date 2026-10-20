@@ -1220,6 +1220,36 @@ def init_db():
               "ON orch_stream_events(conversation_id, run_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_ose_time ON orch_stream_events(created_at)")
 
+    # ── 2026-10-20：编排 run 级 span 树（观测性 trace）─────────────────────────
+    # 对标 Manus/LangGraph trace：回答"这次编排的**时间花在哪、每个节点成本多少**"。
+    # 与 orch_stream_events 的分工（不重复）：
+    #   · orch_stream_events 是**事件流**（stage/tool 帧）——回放"发生了什么"，
+    #     但没有父子结构、没有起止对 ⇒ 算不出每段 latency；
+    #   · 本表是 **span 树**（开/关时刻对）——聚合"每段花了多久、烧了多少 token"，
+    #     正是排障时"55s 的编排慢在哪"要的回答。
+    # kind 六类：run（根，整轮）/ plan / task / summary / reflection / views。
+    # 写入方 services/orch_span.py：**内存收集 → 流尾一次性 flush**（旁路失败绝不
+    # 阻断主链路，与本仓观测层原则一致）；未闭合 span 在 flush 时按 error 收口。
+    # 注意：本表索引只引用自家 CREATE TABLE 的列 ⇒ 不存在 verify_schema_index_order
+    # 守的"索引先于补列"问题（同 orch_stream_events 范式）。
+    c.execute("""CREATE TABLE IF NOT EXISTS orch_run_spans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER DEFAULT 0,
+        run_id INTEGER DEFAULT 0,
+        kind TEXT DEFAULT '',               -- run | plan | task | summary | reflection | views
+        name TEXT DEFAULT '',               -- span 名（task 时为 task_key）
+        parent_id INTEGER DEFAULT 0,        -- 父 span 的 orch_run_spans.id（0=根）
+        status TEXT DEFAULT 'running',      -- running | ok | error
+        started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        ended_at TEXT,
+        latency_ms INTEGER DEFAULT 0,       -- 闭 span 时 Python 侧 monotonic 差值
+        meta_json TEXT DEFAULT '{}',        -- 节点成本（tokens/attempts/offload_id/score…）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ors_conv_run "
+              "ON orch_run_spans(conversation_id, run_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ors_time ON orch_run_spans(created_at)")
+
     # ── P1 知识引擎双引擎：查询路由统计（图/向量/混合消费观测）──
     c.execute("""CREATE TABLE IF NOT EXISTS query_routing_stats (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
