@@ -31,6 +31,7 @@ H3 变异自证（函数级内存孪生，不写生产文件）：
 """
 import inspect
 import io
+import os
 import sys
 import tempfile
 import textwrap
@@ -119,6 +120,83 @@ def main() -> int:
     chk("H1g 章节上下文在文本里（5.3.3 模型问答）", "5.3.3 模型问答" in joined)
     chk("H1h 水印网格残留=0（#50 修复后 chunk 干净）", joined.count("- - -") == 0)
     chk("H1i 总覆盖规模 ≥ 10000 字符（旧实现仅 2542）", len(joined) >= 10000, f"len={len(joined)}")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # ★ 2026-11-13 新增 H4 段：**注入层**（上一版门禁的漏口）。
+    #   H1~H3 只证明了「全文被解析出来」，但米爸实反馈（截图）说模型**读到的只有
+    #   第 1~3 章 + 4.1**，第 5/6/7 章条款整段不在上下文里。
+    #   真因：注入侧 `stream.py` 只取 `att_blocks[:4]` 再砍到 `_ATT_INJECT_CAP=4000`
+    #   字符；完整全文 `retrieval_att` **只喂 RAG 召回**，而附件默认不触发检索
+    #   （`should_retrieve` 门控）⇒ 后半段从未进过 prompt。
+    #   ⇒ 这一段守的是「提纲层真的被拼进 att_text（最终 prompt 输入）」，
+    #     而不只是「提纲函数能抽出来」。
+    section("H4 · 注入层（提纲常驻）：模型必须知道全文有哪些章节")
+    from agent.pipeline_parts.common import _ATT_INJECT_CAP, _ATT_OUTLINE_CAP
+    outline = pipe._attachment_outline(blocks)
+    chk("H4a 提纲层非空（doc 847 有章节结构）", bool(outline), f"len={len(outline)}")
+    chk("H4b 提纲覆盖后段章节（第 5/6/7 章 —— 截图里「读不到」的那几章）",
+        all(t in outline for t in ("5.3", "6.4", "7.1")),
+        f"outline={outline[:200]}")
+    chk("H4c 提纲长度受 _ATT_OUTLINE_CAP 封顶", len(outline) <= _ATT_OUTLINE_CAP,
+        f"len={len(outline)} cap={_ATT_OUTLINE_CAP}")
+    chk("H4d 提纲未误判封面日期行（2026 年 4 月 不是章节）",
+        "2026 年" not in outline, f"outline={outline[:120]}")
+    chk("H4e 提纲未混入括号列表项（1) 轻量级查询…）",
+        "轻量级查询" not in outline, f"outline={outline[:200]}")
+
+    # H4f：按 stream.py 的真实拼装口径复现 att_text，验证**提纲真的进了 prompt 输入**
+    _body = ("\n\n".join(blocks[:4]))[:_ATT_INJECT_CAP]
+    _injected = _body + (
+        "\n\n【上传资料·章节提纲（全文共 %d 字，以下为已识别的章节标题——"
+        "**你只看到了上面那份正文的前段**，后续章节的条款正文尚未注入，"
+        "如需某章的具体条款请明确索取，不要因为正文里没有就认为文档不含该章）】\n%s"
+        % (len(joined), outline))
+    chk("H4f 提纲进入最终注入文本（不再只注入前 4 块）", "章节提纲" in _injected)
+    chk("H4g 注入文本同时含正文首部与提纲（分层都在）",
+        _body[:200] in _injected and "5.3" in _injected)
+    # H4h 变异自证：去掉提纲层 ⇒ H4f/H4g 必须 FAIL（证明守的靶子是真的）
+    _mut_stream = open(
+        os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"),
+        encoding="utf-8").read()
+    chk("H4h 变异锚点命中（注入点仍在拼接提纲层）",
+        "_att_outline" in _mut_stream and "章节提纲" in _mut_stream)
+    # 反证：只取前 4 块的旧行为下，后段章节在注入文本里**不存在**
+    chk("H4i 反证：仅取前 4 块时后段章节不在注入文本（这正是原 bug）",
+        "5.3" not in _body and "7.1" not in _body,
+        "旧行为确实丢失后段章节")
+    # H4j 变异自证：把注入点换回「只有前 4 块、没有提纲层」的旧写法，
+    #     H4f/H4g 必须 FAIL（否则本段全是假绿）。内存替换，不写生产文件。
+    _mut_no_outline = _mut_stream
+    _i0 = _mut_no_outline.find("            _att_outline = self._attachment_outline(att_blocks) if att_blocks else \"\"")
+    if _i0 >= 0:
+        _i1 = _mut_no_outline.find("matched_flows =", _i0)
+        if _i1 > _i0:
+            _mut_no_outline = _mut_no_outline[:_i0] + \
+                "            pass  # MUT: 去掉提纲层\n            " + _mut_no_outline[_i1:]
+    chk("H4j 变异锚点命中（注入点含提纲拼接段）", _mut_no_outline != _mut_stream)
+    if _mut_no_outline != _mut_stream:
+        _body_only = ("\n\n".join(blocks[:4]))[:_ATT_INJECT_CAP]
+        _mut_injected = _body_only          # 旧写法：没有任何提纲层
+        chk("H4k 换回旧写法（无提纲层）⇒ H4f 失效（提纲确实不在注入文本）",
+            "章节提纲" not in _mut_injected)
+        chk("H4l 换回旧写法 ⇒ 后段章节在注入文本里彻底缺失（原 bug 复现）",
+            "5.3" not in _mut_injected and "7.1" not in _mut_injected)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    section("H5 · 提纲函数纯函数边界（合成数据，不依赖真库）")
+    from agent.pipeline_parts.history import build_attachment_outline, _is_att_heading
+    _s = ["【d.pdf】\n第1章 概述\n第2章 功能要求\n第3章 接口要求\n第4章 验收交付"]
+    chk("H5a 合成文档提纲可抽出", len(build_attachment_outline(_s)) >= 3,
+        build_attachment_outline(_s))
+    chk("H5b 无章节结构 → 返回空串（不塞占位噪声）",
+        build_attachment_outline(["【x】\n一段没有标题的普通正文"]) == "")
+    chk("H5c 空输入不抛异常", build_attachment_outline([]) == ""
+        and build_attachment_outline(None) == "" and build_attachment_outline([""]) == "")
+    chk("H5d 日期行不算章节", not _is_att_heading("2026 年 4 月") and not _is_att_heading("2026年"))
+    chk("H5e 括号列表项不算章节", not _is_att_heading("1) 轻量级查询：平均响应时间"))
+    chk("H5f 真章节标题仍命中",
+        _is_att_heading("第7章 验收交付") and _is_att_heading("7.2 可靠性要求")
+        and _is_att_heading("4.1 业务需求"))
 
     # ─────────────────────────────────────────────────────────────────────────
     section("H2 · /static/ PDF 路径（合成水印 PDF）：走过滤抽取")

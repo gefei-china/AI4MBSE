@@ -107,6 +107,17 @@ def _lg_limit_of(lg, rounds_limit: int) -> int:
 _TOOL_MODEL_CAP = 3000
 # 2026-09-17 S3：上传资料注入 prompt 的字符上限（att_text 不在 _apply_context_budget 裁剪范围内）
 _ATT_INJECT_CAP = 4000
+# ★ 2026-11-13（米爸反馈「上传附件做需求分析，仍未完整读取」）：**章节提纲注入上限**。
+#   背景（截图实证）：注入侧只取 att_blocks[:4] 再砍到 4000 字符 ⇒ 一份 8 章文档
+#   模型只读到第 1~3 章和 4.1，**第 5/6/7 章条款整段不在上下文里**
+#   （同一症状还表现为「20 条 ERROR 只核实了 3 条」——后 15 条同样不在上下文）。
+#   ⇒ 全文解析已在 #51 修好（2500 字/块 ×≤40 块），但**注入侧这一道闸才是真凶**。
+#   分层注入方案（正文仍受 _ATT_INJECT_CAP 封顶，控制 token）：
+#     ① 正文首部   ≤ _ATT_INJECT_CAP 字符（原有行为，保证开篇细节不丢）
+#     ② **章节提纲** ≤ _ATT_OUTLINE_CAP 字符（新增：让模型知道全文有哪些章、每章讲什么，
+#        从而能"知道第 5 章存在"并据此定向索取，而不是误以为文档到 4.1 就结束了）
+#     ③ 全文       进工具/召回通道（retrieval_att，供语义召回与按需读取）
+_ATT_OUTLINE_CAP = 2000
 
 # 2026-09-17 S4（C3=按意图只注入命中 Agent）：流式路径注入「命中 Agent 角色块」的字符上限。
 # 背景：SSE 路径此前**完全不消费** agents.system_prompt（硬编码一句通用角色），
@@ -753,7 +764,7 @@ __all__ = [
     'AgentDefinition', 'AgentRegistry', 'IntentRouter', 'GraphRAG', 'ConflictDetector',
     '_citations_payload', '_extract_code_blocks', '_archive_impact_analysis',
     '_archive_sysml_version', '_archive_artifacts', '_TOOL_RESULT_CAP',
-    '_TOOL_MODEL_CAP', '_ATT_INJECT_CAP', '_AGENT_ROLE_CAP',
+    '_TOOL_MODEL_CAP', '_ATT_INJECT_CAP', '_ATT_OUTLINE_CAP', '_AGENT_ROLE_CAP',
     '_STREAM_CHARS_PER_SEC', '_STREAM_MAX_CPS', '_STREAM_CHUNK', '_STREAM_MAX_DRAIN_SEC',
     'iter_stream_chunks',
     # P1-26：system_prompt 分层拼装（顺序单一真源，两条路径共用）

@@ -2410,6 +2410,23 @@ class StreamMixin:
             # 2026-09-17 S3：注入上限收到 _ATT_INJECT_CAP（att_text 排在检索段之前，不受 _apply_context_budget 裁剪）
             att_text = ("\n\n".join(att_blocks[:4]))[:_ATT_INJECT_CAP] if att_blocks else ""   # 注入 prompt（限量）
             retrieval_att = "\n\n".join(att_blocks) if att_blocks else "" # 完整全文（供附件召回）
+            # ★ 2026-11-13（米爸反馈「上传附件做需求分析，仍未完整读取」，截图实证只读到
+            #   第 4.1、第 5/6/7 章条款整段不在上下文）：上方 att_text 注入侧只取前 4 块再
+            #   砍到 4000 字符，而 retrieval_att（完整全文）**只喂 RAG 召回**、且附件默认
+            #   不触发检索（should_retrieve 门控）⇒ 后半段章节**从来没进过 prompt**。
+            #   这不是解析问题（#51 已把全文解析出来），是**注入问题**。
+            #   分层注入（用户选定方案）：正文首部（保 token） + **章节提纲**（补完整性认知）
+            #   + 全文留在召回/工具通道。提纲的价值不是"多给字"，而是让模型**知道全文有哪些
+            #   章**，从而不会把"我只看到前 4 章"当成文档全貌（这正是截图里模型自述的误判）。
+            _att_outline = self._attachment_outline(att_blocks) if att_blocks else ""
+            if _att_outline:
+                att_text = (
+                    att_text +
+                    "\n\n【上传资料·章节提纲（全文共 %d 字，以下为已识别的章节标题——"
+                    "**你只看到了上面那份正文的前段**，后续章节的条款正文尚未注入，"
+                    "如需某章的具体条款请明确索取，不要因为正文里没有就认为文档不含该章）】\n%s"
+                    % (len(retrieval_att), _att_outline)
+                )
             att_parsed_info = {"parsed": att_parsed, "skipped": att_skipped[:5]}
             if att_vision.get("images"):
                 att_parsed_info["vision"] = att_vision   # 留痕：图片到底进没进模型、为什么

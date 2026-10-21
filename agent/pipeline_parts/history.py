@@ -7,6 +7,93 @@ from .common import *
 # P2 视觉通道（2026-09-21）：图片附件扩展名（与 routers/conversations.py 的 IMAGE_EXTS 保持同一集合）
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
+# ★ 2026-11-13（米爸反馈「上传附件做需求分析，仍未完整读取」）：**章节标题识别**。
+#   用于分层注入的「提纲层」——注入侧只取正文前 4 块/4000 字符，模型看不到后续章节，
+#   于是会误以为文档到第 4 章就结束（截图实证：只读到 4.1，说「第 5/6/7 章未读到」）。
+#   提纲让模型**知道全文有哪些章节**，从而能定向索取、并在答复里如实交代章节边界。
+#   ⚠️ 只认**行首**标题（可选 Markdown # 前缀 + 编号 + 标题文字），避免把正文里
+#      "3.2.1 某某" 这类行内编号、表格里的数字行误判成章节 —— 宁可漏提纲不可提错。
+#   ⚠️ 2026-11-13 首版实测抓到两类误判（doc 847）：「2026 年 4 月」被当章节、
+#      「1) 轻量级查询：…」这类列表项混进提纲。故加两条硬约束：
+#      ① 编号前后**不得被非数字字符黏连**（`2026 年` 前有数字+空格+中文 ⇒ 判为日期行）；
+#      ② 括号列表项 `1) / (1) / ①` 不算章节；
+#      ③ **中文时间/日期行不算章节**：「2026 年 4 月」「2026 年」这类会被 `[0-9]+` 编号分支
+#         命中（实测 doc 847 封面日期误判），显式排除。
+_ATT_DATE_LINE_RE = re.compile(
+    r"^\s*\d{2,4}\s*(?:年|月份|月|日|/\-|\.)"
+)
+
+
+def _is_att_heading(line: str) -> bool:
+    """行是否为章节标题：正则命中 + 排除日期行（纯函数，可门禁单测）。"""
+    if _ATT_DATE_LINE_RE.match(line):
+        return False
+    return bool(_ATT_HEADING_RE.match(line))
+_ATT_HEADING_RE = re.compile(
+    r"^\s{0,3}#{0,6}\s*"
+    r"(?:第\s*[0-9一二三四五六七八九十百]+\s*[章节部分篇]\s*"
+    r"|[0-9]+(?:\.[0-9]+){0,3}[\s\.、．]+"
+    r"|[一二三四五六七八九十]+\s*[、.．]\s*)"
+    r"\s*[^\d\s].{0,60}$"
+)
+
+
+def build_attachment_outline(blocks, cap: int = 2000) -> str:
+    """从附件分块里抽**章节提纲**（≤cap 字符），供注入 prompt 补全"全文有哪些章"。
+
+    ★ 2026-11-13：这是「附件全文消费闭环」的**提纲层**。与正文首部（`_ATT_INJECT_CAP`）
+    并列注入，解决"后半段章节整段不在上下文里、模型却以为文档到此结束"的问题。
+
+    实测口径（doc 847，8 章需求文档）：正文首部只覆盖第 1~3 章 + 4.1，
+    提纲层把「第 5 章 功能要求 / 第 6 章 接口与服务质量 / 第 7 章 验收交付」等
+    章节标题显式列出 ⇒ 模型能据此判断"第 5 章的条款我还没拿到，需要索取"。
+
+    纯函数（无 I/O、不碰 self）⇒ 可被门禁直接单测。
+    抽不到任何标题（纯表格/无结构文档）时返回 ""，调用方据此跳过提纲层 —— 不塞占位噪声。
+    """
+    if not blocks or cap <= 0:
+        return ""
+    seen, out = set(), []
+    for b in blocks:
+        # 块头形如【文件名#3】/【图片附件】…，跳过块头行（它不是章节标题）
+        _in_block = 0
+        for raw in str(b or "").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("【"):
+                continue
+            if not _is_att_heading(line):
+                continue
+            # 归一化后去重（同名章节在长文档里可能重复出现，如各章下的"概述"）
+            key = re.sub(r"[\s#\.．、]+", "", line)[:60]
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(line)
+            _in_block += 1
+            # 单块内最多取 3 个标题（防「全是短标题行」的文档把提纲刷爆）。
+            # 不取 1 个是因为 2500 字/块的切分常把「第 N 章 + 其下若干小节」放在同一块里，
+            # 只取首个会漏掉小节标题 —— 而「第 5 章有哪几条」正是本次修复要交给模型的信息。
+            if _in_block >= 3:
+                break
+    if not out:
+        return ""
+    text = "\n".join("- " + x for x in out)
+    if len(text) > cap:
+        # 超预算时**保留头部若干条**并显式说明被截断（让模型知道"还有章节没列出"，
+        # 而不是以为提纲就是全部 —— 这正是本次修复要消灭的那类误导）
+        kept, used = [], 0
+        for x in out:
+            piece = "- " + x + "\n"
+            if used + len(piece) > cap - 60:
+                break
+            kept.append(x)
+            used += len(piece)
+        if not kept:                      # cap 极小：至少留 1 条，别把提纲整体丢掉
+            kept = out[:1]
+        tail = f"- …（提纲已截断，仍有 {len(out) - len(kept)} 个章节标题未列出）"
+        text = "\n".join("- " + x for x in kept) + "\n" + tail
+    return text
+
 
 def ctx_budget_tokens(kind: str, fallback_char_key: str, fallback: int) -> int:
     """P1-4b（2026-09-21）上下文预算取值：**占比制优先 → 绝对值 → 字符版兜底**。
@@ -94,6 +181,16 @@ class HistoryMixin:
                     # 章节上下文（见上方 docstring）：条款号只在 section 列
                     parts.append(f"{sec}\n{c}" if sec else c)
             return "\n".join(parts).strip()
+        except Exception:
+            return ""
+
+    # ★ 2026-11-13：提纲层取用入口（薄封装）。
+    #   做成方法而非让 stream.py 直接 import 模块函数 —— 各 Mixin 之间靠 `self.` 协作
+    #   （`pipeline.py` 只把 Mixin 拼成类，**模块级函数不跨文件可见**，直接 import 会踩坑）。
+    def _attachment_outline(self, blocks, cap: int = 0) -> str:
+        """返回附件章节提纲；cap<=0 时取默认 `_ATT_OUTLINE_CAP`。抽不到标题返回 ""。"""
+        try:
+            return build_attachment_outline(blocks, cap or _ATT_OUTLINE_CAP)
         except Exception:
             return ""
 
