@@ -437,6 +437,13 @@ class FusekiWriter(GraphDBWriter):
             raise RuntimeError("FusekiWriter 需要 endpoint 配置（graph_db.endpoint）")
 
     # ── HTTP 传输 ──────────────────────────────────────────────
+    #: 端点级故障判据（2026-10-21）：这些 HTTP 码说明**端点本身不对**（数据集不存在、
+    #: 方法不被支持），而不是"查询写错了"。必须与 SPARQL 语法错（400）区分开：
+    #:   - 400 = 查询本身的问题 ⇒ 不该熔断（否则一条错查询放大成全图谱不可用）
+    #:   - 404/405/501 = 端点配置错 ⇒ **同样不该按"服务不可用"熔断 60s**
+    #:     （服务是活的，只是打错了门），但也**绝不该每轮白等满 timeout**。
+    _ENDPOINT_MISCONFIG_CODES = (404, 405, 501)
+
     def _post(self, url: str, body: str, ctype: str) -> str:
         import urllib.request
         import urllib.error
@@ -449,8 +456,24 @@ class FusekiWriter(GraphDBWriter):
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
-            msg = e.read().decode("utf-8", "ignore")[:300]
-            raise RuntimeError(f"Fuseki HTTP {e.code}: {msg}")
+            # ★★ 先把 HTML 错误页剥掉（2026-10-21 修）：
+            #   Fuseki 的 404/405 回的是一整页 HTML，原实现 `[:300]` 截出来是
+            #   `<html><head><meta http-equiv=...` 这种噪声，把真正的根因
+            #   （端点 404 / 方法不支持）完全淹掉 —— 排查时只能看到一堆标签。
+            raw = e.read().decode("utf-8", "ignore")
+            body_txt = re.sub(r"<[^>]+>", " ", raw)
+            body_txt = re.sub(r"\s+", " ", body_txt).strip()
+            if e.code in self._ENDPOINT_MISCONFIG_CODES:
+                # 端点配置错：把「可能原因 + 正确口径」直接写进异常文本，
+                # 让 LAST_UNAVAIL_ERROR / 日志**一眼可诊断**，不必再手工拼 URL。
+                raise RuntimeError(
+                    f"Fuseki HTTP {e.code}（端点配置错，服务本身是活的）: {url} | "
+                    f"SPARQL={ctype.split(';')[-1].strip()} | "
+                    f"排查：① 用 GET http://<host>:<port>/$/datasets 核对数据集实名；"
+                    f"② graph_db.endpoint 须指向该数据集（如 http://localhost:3030/mbse），"
+                    f"末尾不要带 /query|update；③ 若要 update 端点，服务须以 --update 启动。"
+                    + (f" | 服务端: {body_txt[:160]}" if body_txt else ""))
+            raise RuntimeError(f"Fuseki HTTP {e.code}: {body_txt[:300] or raw[:300]}")
 
     @staticmethod
     def _parse_json_results(text: str) -> list:
@@ -818,7 +841,15 @@ def get_writer(enabled: bool = True, backend: str = "pyoxigraph",
         return MockWriter()
     if backend == "fuseki":
         try:
-            return FusekiWriter(endpoint=endpoint or "http://localhost:3030/ds",
+            # ★★ 默认端点必须与 fuseki_start.py 注册的数据集名一致（2026-10-21 修）：
+            #   原默认是 `http://localhost:3030/ds`，而本仓 fuseki_start.py 注册的是
+            #   **`/mbse`**（DS="mbse"，且注释明确写了数据集名必须是纯 ASCII 无斜杠）。
+            #   ⇒ endpoint 留空时打到不存在的 `/ds` ⇒ HTTP 405/404，
+            #   而 405/404 **不在** _note_unavail 的熔断判据里（那是"基础设施类"错误）
+            #   ⇒ 不熔断 ⇒ **每一轮对话的每一次 SPARQL 都白等满 timeout**，
+            #   症状= 图谱检索恒空 + 首 token 延迟被拖到几十秒（实测 45~61s）。
+            #   这才是"graph_db.fuseki.query_sparql 失败: HTTP 405"的真实成因。
+            return FusekiWriter(endpoint=endpoint or "http://localhost:3030/mbse",
                                 username=username, password=password)
         except Exception as e:
             logger.warning("graph_db.get_writer 降级 Mock（fuseki）: %s", e)

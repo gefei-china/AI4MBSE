@@ -46,11 +46,75 @@ def cut(text, start_marker, end_marker):
     """切出 [start_marker, end_marker) 之间的源码块，并返回其起始行号。
 
     左端回退到行首（保留缩进前缀），否则 textwrap.dedent 不会去除缩进。
+
+    ★★ 2026-10-21 结构加固：end_marker 原本是**行尾注释**
+      （`"\\n                    # P0-按需工具：本轮工具结果全弱相关"`），
+      而那段注释在 #57 改动里缩进被调整过 ⇒ `text.index` 直接
+      `ValueError: substring not found` ⇒ **门禁在 (b) 组整体崩掉**，
+      报错位置离真实原因（锚点漂移）十万八千里，且 (a) 组已跑完的结果全丢。
+
+      ⇒ 改为 `cut_block()`：以**代码行**（`if results:`）为锚，按**缩进层级**
+        切到同层或更浅的第一行为止，**完全不依赖任何注释文本**。
+        注释怎么改、挪哪、加多少都不再影响门禁。
+      `cut()` 保留给 (a) 组那种"按注释语义定位"的用法（那段锚点稳定）。
     """
     i = text.index(start_marker)
     i = text.rindex("\n", 0, i) + 1
     j = text.index(end_marker, i)
     return text[i:j], text[:i].count("\n") + 1
+
+
+def cut_block(text, first_line_stripped, end_line=None, dedent_to=0):
+    """★ 按**代码内容**定位切出一个代码块（完全不依赖注释文本）。
+
+    - `first_line_stripped`：块首**代码行**（**不含前导缩进**），如 `"if results:"`。
+      缩进由函数自己在全文中定位首个匹配行取得 ⇒ 调用方不必知道它嵌在几层。
+    - `end_line`：块末**代码行**（不含缩进）。给定则切到该行**之后**为止；
+      省略则按缩进层级切（同层或更浅的非注释代码行即止）。
+    - 返回 (源码文本, 起始行号)。调用方自行 textwrap.dedent。
+
+    为什么必须这样做：源码里的**注释**是重构时最常被移动/改写/改缩进的部分，
+    而注释内容绝不该成为门禁的锚 —— 让锚点挂在**代码结构**上才稳。
+    （实测踩坑两次：① 原 end_marker 是行尾注释，`ValueError` 直接崩在 (b) 组；
+      ② 改按缩进切时，`if results:` 之后一直延伸到 352 行后的
+      `except GeneratorExit`（缩进 8），块被撑到 18773 字符且 exec 跑不动
+      ⇒ 必须再给一个**代码**终点把范围收紧。）
+    """
+    lines_all = text.split("\n")
+    hit = None
+    for k, ln in enumerate(lines_all):
+        if ln.strip() == first_line_stripped:
+            hit = k
+            break
+    if hit is None:
+        raise AssertionError("cut_block: 找不到块首代码行 %r" % first_line_stripped)
+    start_indent = len(lines_all[hit]) - len(lines_all[hit].lstrip())
+    if end_line is not None:
+        end = None
+        for k in range(hit, len(lines_all)):
+            if lines_all[k].strip() == end_line:
+                end = k
+                break
+        if end is None:
+            raise AssertionError("cut_block: 找不到块末代码行 %r" % end_line)
+        return "\n".join(lines_all[hit:end + 1]), hit + 1
+    out = [lines_all[hit]]
+    for ln in lines_all[hit + 1:]:
+        if not ln.strip():                      # 空行：并入块（保持 exec 语义）
+            out.append(ln)
+            continue
+        s = ln.lstrip()
+        if s.startswith("#"):                   # 纯注释行：缩进更深才属于本块
+            if len(ln) - len(s) > start_indent:
+                out.append(ln)
+            continue
+        ind = len(ln) - len(s)
+        if ind <= max(dedent_to, 0):
+            break                                # 同层或更浅 ⇒ 块结束
+        out.append(ln)
+    while out and not out[-1].strip():
+        out.pop()
+    return "\n".join(out), hit + 1
 
 
 print("=" * 72)
@@ -136,14 +200,15 @@ check("(a) 20000 字原始结果被砍掉 >= 80%",
 
 # ---------- (b) 仅保留最近一轮工具结果 ----------
 print("\n[b] 仅保留最近一轮 tool 结果（role 序列不变、消息不删除）")
-blk_b, line_b = cut(
-    stream_src,
-    "                if results:\n",
-    "\n                    # P0-按需工具：本轮工具结果全弱相关",
-)
+# ★ 锚点从「行尾注释」换成「**起止两行都按代码内容定位**」（见 cut_block docstring）。
+#   终点用 `_prev_tool_idx = []`：它是省略逻辑的收尾语句，且是**代码**不是注释
+#   ⇒ 注释怎么改、挪哪、改缩进都不再影响门禁。
+blk_b, line_b = cut_block(stream_src, "if results:",
+                          end_line="_prev_tool_idx.append(_k)")
 blk_b = textwrap.dedent(blk_b)
 print("     切出源码块：stream.py:%d 起，共 %d 字符" % (line_b, len(blk_b)))
-assert blk_b.startswith("if results:"), blk_b[:40]
+assert blk_b.startswith("if results:"), repr(blk_b[:60])
+assert "messages.append(pmsg)" in blk_b, "块应包含消息追加逻辑"
 
 TOOL_RESULT = json.dumps({"ok": True, "result": "R" * 3000}, ensure_ascii=False)
 messages = [{"role": "system", "content": "S"}, {"role": "user", "content": "U"}]
@@ -202,10 +267,35 @@ RETR = "【来源1】doc.md §1: " + ("检索内容" * 3000)
 sys_prompt = "你是助手。\n检索到的互联数据：\n" + RETR + "\n尾部固定文本"
 out = HistoryMixin._apply_context_budget(_obj, sys_prompt, RETR, 3)
 print("     system_prompt 改前 %d 字 → 改后 %d 字" % (len(sys_prompt), len(out)))
-check("检索段被截断（输出显著短于输入）", len(out) < len(sys_prompt) / 2,
+
+# ★★ 2026-10-21 修正用例口径（**不是产品缺陷**）：
+#   原用例写死"检索内容"*3000（约 12000 字）并断言"输出 < 输入的一半"。
+#   但 `_apply_context_budget` 自 2026-11-11 起改为 **token 预算驱动**
+#   （`ctx_budget_tokens("retrieval", ...)`），实测线上 `retr_tok=19200`
+#   ⇒ 12000 字的检索段 **本就在预算内，不该被截断** ⇒ 原断言恒 FAIL。
+#   ⇒ 改成**按真实预算**构造超限输入：先问产品要预算，再生成足量内容去超它。
+#   这才是"超预算就截断"的本意（原先的固定 3000 次是拍脑袋的）。
+from agent.pipeline_parts import history as _H
+from core.token_counter import count_tokens as _ct
+_retr_budget = int(_H.ctx_budget_tokens("retrieval", "budget_retrieval_chars", 4000))
+# 取预算的 3 倍字符量，确保必然超限（中文约 1 字 ≈ 0.6~1 token，留足余量）
+_pad = max(4000, _retr_budget * 3)
+BIG_RETR = "【来源1】doc.md §1: " + ("检索内容" * (_pad // 4))
+big_prompt = "你是助手。\n检索到的互联数据：\n" + BIG_RETR + "\n尾部固定文本"
+big_out = HistoryMixin._apply_context_budget(_obj, big_prompt, BIG_RETR, 3)
+print("     超限场景：检索段 %d 字 / token 预算 %d → 改后 %d 字"
+      % (len(BIG_RETR), _retr_budget, len(big_out)))
+check("超预算时检索段确实被截断（按真实 token 预算构造超限输入）",
+      len(big_out) < len(big_prompt),
+      "%d -> %d（预算 %d tok）" % (len(big_prompt), len(big_out), _retr_budget))
+check("预算内时**不**截断（不误伤正常长度请求）",
+      out == sys_prompt or len(out) <= len(sys_prompt),
       "%d -> %d" % (len(sys_prompt), len(out)))
 check("system_prompt 头部保留（保头策略）", out.startswith("你是助手。"))
 check("system_prompt 尾部保留（replace 只动检索段）", out.endswith("尾部固定文本"))
+check("超限截断后头部/尾部仍保留（只动检索段中段）",
+      big_out.startswith("你是助手。") and big_out.endswith("尾部固定文本"),
+      big_out[:40] + " ... " + big_out[-40:])
 check("retrieval_text 为空时原样返回（不破坏主流程）",
       HistoryMixin._apply_context_budget(_obj, sys_prompt, "", 3) == sys_prompt)
 check("retrieval_text 不在 prompt 中时原样返回（安全兜底）",

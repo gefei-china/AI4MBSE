@@ -55,9 +55,17 @@ def llm_rerank(query: str, hits: list, top_k: int = 5, max_candidates: int = 8,
             # ★★ 失败必须留痕（2026-10-10）：原先 `except: return hits[:top_k]`
             #   把"provider 整体不可用"这类**系统性故障**完全静默，
             #   表现为"开关开了但顺序一字未变"，排查花了 4 轮。
+            # ★★ 2026-10-21 修 logging 格式化 bug：原格式串只有 3 个占位符
+            #   （provider_id / 异常类型 / content）却传了 **4 个**实参
+            #   （多传了一个 str(e)）⇒ logging 内部抛
+            #   `TypeError: not all arguments converted during string formatting`
+            #   ⇒ **这条唯一的诊断线索被 logging 自己吞掉**（只往 stderr 打
+            #   一段 traceback），warning 记录为空 ⇒ 等于"留痕"失效。
+            #   症状：重排失败时日志里既没有 provider 也没有 content。
+            #   实参个数必须与占位符严格一致（下方 verify_rerank_logging_fmt 门禁守）。
             import logging
             logging.getLogger(__name__).warning(
-                "llm_rerank 解析失败（provider_id=%s）: %s | content 前 80=%r",
+                "llm_rerank 解析失败（provider_id=%s）: %s: %s | content 前 80=%r",
                 _pid or "(默认)", type(e).__name__, str(e)[:80],
                 str(msg.get("content") or "")[:80])
             return hits[:top_k]

@@ -116,6 +116,34 @@ jobs:
       - name: Guard 请求级状态清零（AST 差集，清零早于首个赋值，13 项 + 4 变异）
         run: python tools/verify/verify_request_state_reset.py
 
+      # ── 2026-10-21：附件正文消费闭环（#55/#56/#57 的守门）────────────────────
+      # 这道锁的是"模型到底有没有真读到附件正文"。#55~#57 修的正是这条链上
+      # 四个断点（专用回填上限 / fetch 前移权限闸 / offload 自循环熔断 / 取章风暴），
+      # 任一退化都会让用户重见"上传了附件却说读不到正文"。
+      # 84 项里含大量**变异自证**（把修复逐个反向改回去，必须判红）。
+      - name: Guard 附件正文消费闭环（章节继承/提纲/按需取章/回填上限，84 项）
+        run: python tools/verify/verify_attachment_fulltext.py
+
+      # 锁 PDF 水印字符层不进正文（它是"解析出的正文是脏的"的源头之一）
+      - name: Guard PDF 水印字符层过滤（38 项）
+        run: python tools/verify/verify_pdf_watermark_filter.py
+
+      # ── 2026-10-21：诊断线索不许被自己吞掉（logging 占位符/实参错配）──────────
+      # 真实事故：rag_rerank 的"解析失败"告警有 3 个占位符却传了 4 个实参 ⇒
+      # logging 抛 TypeError ⇒ **那条唯一的诊断线索一条字符都写不出去**。
+      # A 组静态扫全仓 135 个调用点，B 组动态验三条告警真能写出 content/provider。
+      - name: Guard logging 占位符与实参一致（全仓 135 点 + 3 条真实告警，24 项）
+        run: python tools/verify/verify_rerank_logging_fmt.py
+
+      # ── 2026-10-21：图谱后端端点契约 ────────────────────────────────────────
+      # 真实事故：get_writer 的兜底默认端点是 `…/ds`，而本仓 fuseki_start 注册的
+      # 数据集实名是 `mbse` ⇒ endpoint 留空时打到不存在的路径 ⇒ 405/404，
+      # 而 405/404 既不算语法错(400)、又没落进熔断判据 ⇒ **既不熔断也不快失败**
+      # ⇒ 每轮每次图谱查询白等满 15s，且日志被 HTML 错误页淹没。
+      # 本门禁的 A3/A4 从 fuseki_start.py **解析** DS 常量，不抄字符串。
+      - name: Guard 图谱端点契约（默认端点/端点错可诊断/不误熔断，16 项）
+        run: python tools/verify/verify_fuseki_endpoint.py
+
       # ★ A4 是**双向**断言：共享单例**必须**观测到覆盖，否则说明风险不成立、
       #   门禁该撤 —— 不让基于错误前提的门禁长期存在。
       - name: Guard 多用户并发隔离（每请求新建 Pipeline，双向实测 9 项 + 3 变异）
@@ -888,6 +916,12 @@ jobs:
       # 含 4 个变异自证（S3' 收窄被抹/无进展防护被删/失败点接线被删/reason 丢失）。
       - name: Guard P1 重规划信号与决策记录（59 项 + 4 变异）
         run: python tools/verify/verify_replan_p1.py
+
+      # ★ P2（2026-10-21）：差量重画（规则版）—— 失效传播/轻量重两级/五道质量门/
+      # 无进展检测。含 5 项变异自证（关 done 复用/关无进展检测/删 deps 重映射/
+      # 质量门恒放行/轻量级改追行）。放在 P1 之后：P2 依赖 P1 的信号与决策记录。
+      - name: Guard P2 重规划差量重画与质量门（60 项 + 5 变异）
+        run: python tools/verify/verify_replan_p2.py
 
       - name: Guard reasoning 事件区分模型 CoT 与系统提示（36 条，派生判据非硬编码快照）
         run: python tools/verify/verify_reasoning_kind.py

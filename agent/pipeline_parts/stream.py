@@ -512,6 +512,30 @@ class StreamMixin:
                 _FC_MAIN_OK = True
             except Exception:
                 _FC_MAIN_OK = False
+            # ★ P2 replanning（2026-10-21，v2 §4.10）：差量重画的模块与开关。
+            #   `_redraw_rounds` 记录**本次编排已重画过几轮**（进程内，与 _t1_retried
+            #   同口径：谱系级判定活在单次编排内；resume 语义下 failed 是终态不再派发）。
+            #   读取失败一律取**保守值**（enabled=False / no_progress_stop=True）：
+            #   配置不可用时行为退化为 P1 原逻辑，绝不"因读不到配置就开重画"。
+            try:
+                from services import replan_redraw as _rr
+                _RR_OK = True
+            except Exception:
+                _RR_OK = False
+            _redraw_rounds = 0
+            try:
+                _rp_enabled = bool(_rcfg.get("replanning", "enabled", False))
+                _rp_on_stall = bool(_rcfg.get("replanning", "redraw_on_stall", True))
+                _rp_light = bool(_rcfg.get("replanning", "redraw_light", True))
+                _rp_heavy = bool(_rcfg.get("replanning", "heavy_redraw", False))
+                _rp_skip = bool(_rcfg.get("replanning", "skip_leaf", False))
+                _rp_noprog = bool(_rcfg.get("replanning", "no_progress_stop", True))
+                _rp_rounds = int(_rcfg.get("replanning", "max_redraw_rounds", 1) or 1)
+                _rp_ratio = float(_rcfg.get("replanning", "redraw_expand_ratio", 1.5) or 1.5)
+            except Exception:
+                _rp_enabled = _rp_heavy = _rp_skip = False
+                _rp_light = _rp_on_stall = _rp_noprog = True
+                _rp_rounds, _rp_ratio = 1, 1.5
             # per-agent 信号量：按 registry.discover 的 max_concurrency 建（缺省 2；无 discover 数据 → 不限流）
             agent_sems = {}
             try:
@@ -1055,6 +1079,179 @@ class StreamMixin:
                                     _spans.close(_rsid, "ok",
                                                  _rs.decision_meta(_stall_dec,
                                                                    latency_ms=_dec_ms))
+                        except Exception:
+                            pass
+                    # ── P2 replanning（2026-10-21，v2 §4.10）：差量重画 ──
+                    #   放在 P1 留痕之后、P0-3 全量 block 之前：**先试着局部修图，
+                    #   修不了才走原来的"全部 block + break"**（原逻辑一行未改，
+                    #   是本段 return/continue 之后的 fallback）。
+                    #   ⚠️ 三条纪律：
+                    #   ① 总闸 `replanning.enabled` 默认 False ⇒ `_redraw_dec` 恒 none，
+                    #      本段整体是 no-op ⇒ **零行为变更**（P1 的默认行为逐字保持）；
+                    #   ② 观测/救援旁路铁律：整段 try/except，异常只丢记录不阻断编排；
+                    #   ③ 重画成功 ⇒ `continue`（下一轮 ready_tasks 自然出现新任务），
+                    #      **不改循环结构**（v1 §4.3 纪律）。
+                    _redraw_dec = None
+                    if _RR_OK and _rp_enabled and _rp_on_stall:
+                        try:
+                            _rd_tasks = TaskQueue.tasks(conn, run_id)
+                            _failed_rows = [t for t in _rd_tasks
+                                            if str(t.get("status") or "") == "failed"]
+                            if _failed_rows:
+                                _t_rd0 = _t.time()
+                                # 失败指纹历史（无进展检测用）。
+                                #   ⚠️ **必须排除正在被判定的那一行**：历史表来自
+                                #   当前 agent_tasks 快照，而失败任务本身就在快照里 ——
+                                #   若把它算进历史，首次失败就会"自己匹配自己"
+                                #   ⇒ 每次都误判无进展 ⇒ T2 永不生效（2026-10-21
+                                #   行为探针 B/C 场景实测抓到的真 bug）。
+                                #   正确口径：历史 = **别的**失败行（含同 key 的上一次
+                                #   失败痕迹，由 T1 补跑写回的 retry_count 区分）。
+                                _fp_hist = {}
+                                for _t3 in _rd_tasks:
+                                    _k3 = str(_t3.get("task_key") or "")
+                                    if str(_t3.get("status") or "") == "failed" and _k3:
+                                        try:
+                                            _fp = "%s|%s" % (
+                                                str(_t3.get("error_class") or ""),
+                                                _rs.norm_error_text(
+                                                    _t3.get("error") or ""))
+                                            _fp_hist.setdefault(_k3, []).append(_fp)
+                                        except Exception:
+                                            pass
+                                _cur_fail = None
+                                if _rp_noprog and _failed_rows:
+                                    _f0 = _failed_rows[0]
+                                    _ck = str(_f0.get("task_key") or "")
+                                    _cfp = "%s|%s" % (
+                                        str(_f0.get("error_class") or ""),
+                                        _rs.norm_error_text(_f0.get("error") or "")
+                                        if _RS_OK else str(_f0.get("error") or ""))
+                                    # 剔除自身这一次（末位同值项）
+                                    _hist = list(_fp_hist.get(_ck) or [])
+                                    if _hist and _hist[-1] == _cfp:
+                                        _hist.pop()
+                                    _fp_hist[_ck] = _hist
+                                    _cur_fail = (_ck, str(_f0.get("error_class") or ""),
+                                                 str(_f0.get("error") or ""))
+                                _redraw_dec = _rr.plan_redraw(
+                                    _rd_tasks,
+                                    [str(t.get("task_key") or "") for t in _failed_rows],
+                                    reason_by_key={str(t.get("task_key") or ""):
+                                                   str(t.get("error") or "")[:200]
+                                                   for t in _failed_rows},
+                                    round_no=_redraw_rounds + 1,
+                                    enabled=True,
+                                    light=_rp_light and not _rp_heavy,
+                                    skip_leaf=_rp_skip,
+                                    max_rounds=_rp_rounds,
+                                    expand_ratio=_rp_ratio,
+                                    failed_history=_fp_hist,
+                                    current_fail=_cur_fail,
+                                    validate=TaskQueue.validate_plan)
+                                _rd_ms = int((_t.time() - _t_rd0) * 1000)
+                                # 决策记录（含 action=none 的"为什么不重画"）
+                                if _spans:
+                                    _rd_sid = _spans.open("replan", "redraw-decide",
+                                                          parent=_run_sid,
+                                                          meta={"failed": len(_failed_rows),
+                                                                "round": _redraw_rounds + 1})
+                                    if _rd_sid:
+                                        _rd_meta = _rs.decision_meta(_redraw_dec,
+                                                                    round_no=_redraw_rounds + 1,
+                                                                    latency_ms=_rd_ms) \
+                                            if _RS_OK else {"action": _redraw_dec.get("action"),
+                                                            "level": _redraw_dec.get("level"),
+                                                            "reason": _redraw_dec.get("reason"),
+                                                            "signals": [], "round": _redraw_rounds + 1,
+                                                            "tokens": 0, "latency_ms": _rd_ms}
+                                        try:
+                                            _rd_meta["gates"] = {g: ("pass" if v else "fail")
+                                                                 for g, v in
+                                                                 (_redraw_dec.get("gates") or {}).items()
+                                                                 if g in ("Q1", "Q2", "Q3", "Q4", "Q5")}
+                                        except Exception:
+                                            pass
+                                        _spans.close(_rd_sid, "ok", _rd_meta)
+
+                                _rd_act = str(_redraw_dec.get("action") or "none")
+                                if _rd_act == "replan":
+                                    _applied = 0
+                                    if _rp_light and not _rp_heavy:
+                                        # T2-轻：**原地重派**（UPDATE，不追行 ——
+                                        #   agent_tasks 对 (run_id, task_key) 无唯一约束，
+                                        #   同 key 追行会让 ready_tasks 派发两次）。
+                                        for _u in (_redraw_dec.get("updates") or []):
+                                            try:
+                                                TaskQueue.retry(conn, int(_u.get("id")))
+                                                conn.execute(
+                                                    "UPDATE agent_tasks SET context=?, "
+                                                    "retry_count=COALESCE(retry_count,0)+1, "
+                                                    "error='' WHERE id=?",
+                                                    (str(_u.get("context") or "")[:1000],
+                                                     int(_u.get("id"))))
+                                                _t1_retried.add(str(_u.get("key") or ""))
+                                                _applied += 1
+                                            except Exception:
+                                                pass
+                                        conn.commit()
+                                    else:
+                                        # T2-重：新 key 追行 + 下游 deps 重映射。
+                                        #   顺序**先改 deps 再 create_plan**：deps 指向的
+                                        #   新 key 此刻还不存在，但 `UPDATE` 不校验外键，
+                                        #   而 `create_plan` 会过滤"计划外 key" —— 反序
+                                        #   会把刚写的 t2_r1 依赖当场丢掉。
+                                        try:
+                                            for _kt in (_redraw_dec.get("kept") or []):
+                                                _kk = str(_kt.get("key")
+                                                          or _kt.get("task_key") or "")
+                                                _nd = [str(d) for d in (_kt.get("deps") or [])]
+                                                if not _kk:
+                                                    continue
+                                                conn.execute(
+                                                    "UPDATE agent_tasks SET deps=? "
+                                                    "WHERE run_id=? AND task_key=? "
+                                                    "AND status IN ('planned','ready')",
+                                                    (json.dumps(_nd, ensure_ascii=False),
+                                                     run_id, _kk))
+                                            conn.commit()
+                                            TaskQueue.create_plan(
+                                                conn, run_id,
+                                                _redraw_dec.get("new_tasks") or [],
+                                                assigned_by="replanner",
+                                                conversation_id=conversation_id)
+                                            _applied = len(_redraw_dec.get("new_tasks") or [])
+                                        except Exception:
+                                            _applied = 0
+                                    if _applied:
+                                        _redraw_rounds += 1
+                                        # 用户可见：reasoning 进度 + subtask 重派轨迹
+                                        yield {"type": "reasoning", "kind": "progress",
+                                               "delta": "（自动编排）执行中重规划 %s：%s"
+                                                        % (_redraw_dec.get("level"),
+                                                           _redraw_dec.get("reason"))}
+                                        for _k5 in (_redraw_dec.get("retry_keys") or []):
+                                            yield {"type": "subtask", "key": _k5,
+                                                   "status": "run",
+                                                   "title": "重规划后重派", "agent": "",
+                                                   "deps": [], "retry_count": 1}
+                                        if _RS_OK:
+                                            _pe = _rs.plan_revised_payload(_redraw_dec,
+                                                                          run_id=run_id)
+                                            if _pe:
+                                                _pe["updates"] = [str(u.get("key") or "")
+                                                          for u in (_redraw_dec.get("updates") or [])]
+                                                _pe["new_tasks"] = [str(t.get("key") or "")
+                                                                   for t in (_redraw_dec.get("new_tasks") or [])]
+                                                _pe["dropped"] = [str(k) for k in
+                                                                  (_redraw_dec.get("dropped") or [])]
+                                                yield _pe
+                                        continue        # 下一轮 ready_tasks 自然派发
+                                elif _rd_act == "skip":
+                                    # T1.5：叶子失效任务主动跳过（决策留痕，不改终态 ——
+                                    #   failed 是终态，skip 只是"明确标记"而非状态变更）
+                                    yield {"type": "reasoning", "kind": "progress",
+                                           "delta": "（自动编排）%s" % (_redraw_dec.get("reason") or "")}
                         except Exception:
                             pass
                     # P0-3 补（2026-09-19，端到端取证）：被阻塞的子任务**必须进入轨迹**。

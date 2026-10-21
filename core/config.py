@@ -1173,6 +1173,12 @@ DEFAULT_CONFIG = {
         "max_redraw_rounds": 1,         # T2 轮次上限（防无限重画；与无进展检测互为兜底）
         "redraw_expand_ratio": 1.5,     # 新图规模上限（新任务数 ≤ 原图剩余 × 此值；防 LLM 重画膨胀）
         "llm_redraw": False,            # T3：LLM 整图重画（默认关；规则重画确定性优先）
+        # ── P2（2026-10-21）新增五键 ──
+        "redraw_light": True,           # T2 轻量级优先：同 key 原地重派（不动图拓扑）；关=走重量级新 key
+        "skip_leaf": False,             # T1.5：叶子失效任务主动跳过（省一次重画判定；默认关=v2 建议值）
+        "no_progress_stop": True,       # 无进展检测：同 key 同因失败第 2 次 ⇒ T4 停手（**主判据**，默认开）
+        "redraw_on_stall": True,        # 收敛点触发重画（False=只留痕不重画；总闸之外的第二道闸）
+        "heavy_redraw": False,          # 重量级（新 key + lineage）：默认关，轻量级够用则不动图
     },
 }
 
@@ -1809,8 +1815,13 @@ CONFIG_SCHEMA = {
         "enabled":             {"type": "bool", "desc": "重规划总闸（差量重画/LLM 重画；默认关=零行为变更，T1 补跑不受此闸约束——由 retry_once 单独控制）"},
         "retry_once":          {"type": "bool", "desc": "T1 补跑：可重试类失败（timeout/transient/internal，排除 interrupted）同 key 自动补跑一次"},
         "max_redraw_rounds":   {"type": "int",  "desc": "差量重画轮次上限（与无进展检测互为兜底，防无限重画烧钱）"},
-        "redraw_expand_ratio": {"type": "float", "desc": "重画规模上限：新任务数 ≤ 原图剩余任务数 × 此值（防 LLM 重画膨胀）"},
-        "llm_redraw":          {"type": "bool", "desc": "LLM 整图重画（默认关；规则重画确定性优先，Mock 环境行为不漂移）"},
+        "redraw_expand_ratio": {"type": "float", "desc": "重画规模上限：新任务数 ≤ 原图剩余任务数 × 此值（Q4 质量门，防重画膨胀）"},
+        "llm_redraw":          {"type": "bool", "desc": "LLM 整图重画（T3，默认关；规则重画确定性优先，Mock 环境行为不漂移）"},
+        "redraw_light":        {"type": "bool", "desc": "T2 优先轻量级：同 key 原地重派（context 注入失败原因，不动图拓扑）；关=直接走重量级"},
+        "skip_leaf":           {"type": "bool", "desc": "T1.5：叶子失效任务（无下游）标记为主动跳过，省一次重画判定（默认关）"},
+        "no_progress_stop":    {"type": "bool", "desc": "无进展检测：同 key 同因失败第 2 次即停手升级人工 T4（终止主判据，默认开）"},
+        "redraw_on_stall":     {"type": "bool", "desc": "收敛点（有 pending 无 ready）是否触发差量重画（关=只留决策痕迹不改图）"},
+        "heavy_redraw":        {"type": "bool", "desc": "T2 重量级：新 key（key_rN）+ config.lineage 替代失效任务，下游依赖边重映射（默认关）"},
     },
 }
 
