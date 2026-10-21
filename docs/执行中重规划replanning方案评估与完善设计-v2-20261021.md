@@ -519,7 +519,7 @@ replanning.confirm_ttl_sec     = 60      # 【新】确认卡 TTL（超时维持
 | 阶段 | 内容 | 交付物 | 回滚方式 |
 |---|---|---|---|
 | P1 观测与信号结构化（不动执行） | S3~S7 汇成观测结构 + **replan span/decision record（含 action=none）+ plan_revised 事件**；T1 补跑（S3'，排除 interrupted） | 信号探针 + G1/G6 门禁 + **真库基线已跑完**（《replanning真库基线统计报告-20261021》：T1 收益面 100% 可重试类、排除 interrupted 后活场景 13.8%）+ R11 门禁同步 | 配置关 retry_once |
-| P2 差量重画（规则版） | §4.10 算法（轻/重两级 + skip 叶子）+ 质量门 Q1~Q5 + 无进展检测；T2 默认关 | G2/G3/G7 门禁 + G4 真库回放 | replanning.enabled=False |
+| P2 差量重画（规则版）✅ | §4.10 算法（轻/重两级 + skip 叶子）+ 质量门 Q1~Q5 + 无进展检测；T2 默认关 | G2/G3/G7 门禁（66 项 + 5 变异）+ 行为探针 26/26 | replanning.enabled=False |
 | P3 用户指令触发 + 可视化 | S1/S2 挂点与影响评估（§4.7）+ T3（llm_redraw 默认关）+ 修订卡/确认卡（§4.8） | G8/G10 门禁 + 评测集 A/B 零回退证明 | 配置关 |
 | P4 巡检与早停（新增） | health_probe（规则版优先）+ early_stop；真库标定 M1~M4 阈值 | G9 门禁 + 阈值标定报告（同冲突检测阈值标定的既有手法） | 配置关 |
 
@@ -551,6 +551,49 @@ span action=none「已补跑过一次」，stall-decide 留痕，下游 blocked 
 变量重名（均 2026-10-13 B1-6 引入，CI 自那时起红）。修法：导入成功标志位
 （`_FC_OK`/`_RS_OK`/`_FC_MAIN_OK`）+ 唯一别名（`_sysml_meta`/`_fc_classify`），
 不弱化门禁判据。G0 复跑 1/1。
+
+### 7.2 P2 实施记录（2026-10-21）
+
+**代码落点**（HEAD `df01e4f` + `99621c0`）：
+
+| 设计项 | 落地 | 验证 |
+|---|---|---|
+| §4.10 差量重画算法 | `services/replan_redraw.py`（纯函数零 IO）：`propagation_set`（失效传播）/ `skip_candidates`（T1.5 叶子边界）/ `build_redraw_plan`（轻/重两级）/ `quality_gates`（Q1~Q5）/ `no_progress` / `plan_redraw` | G2 逐格（U1a~U1p） |
+| §4.5 五道质量门 | Q1 结构（过 `validate_plan`）/ Q2 职责（不撞既有 key）/ Q3 针对性（lineage 必属失效集）/ Q4 规模（≤ 剩余×1.5）/ Q5 依赖闭合（无悬空边）——任一不过 ⇒ 整个方案作废 ⇒ T4 | G7 逐门反例（U2a~U2i）+ 变异 M4 |
+| §3.2 T2-轻 / T2-重 | **轻** = 同 key 原地重派（UPDATE context + status 回 ready，**不追行**）；**重** = 新 key `t2_r1` + `config.lineage` + 下游 deps 重映射 + `assigned_by='replanner'` | 行为探针 B/C（26/26） |
+| §4.3 无进展检测 | 同 key 同因失败第 2 次 ⇒ T4 停手（**主判据**，先于规模/质量门）；配进程内 `_redraw_hist` 台账 | U3a/U3b + 行为探针 D |
+| §3.2 T1.5 skip | 叶子失效任务（无下游）标记主动跳过，**不改终态**（failed 是终态，skip 只是"明确标记"） | U1e/U1f/U3d/U3e |
+| §4.3 决策记录 | 收敛点新增 `redraw-decide` span（parent=_run_sid，meta 带 signals/level/action/reason/round + **Q1~Q5 pass/fail**） | 行为探针 B6/B7 |
+| §4.3 plan_revised | P2 **真发**（P1 只建路径）：payload 带 level/action/reason + updates/new_tasks/dropped 三类 key | 行为探针 B5 |
+| §4.8 计划修订卡 | `11-pipeline.js` 新增 `plan_revised` SSE 分支 + `procAddPlanRevised`（徽章按级别 / 原因全文 / 三类清单分列 / 默认折叠） | 前端探针 12/12 |
+| §4.11 配置 +5 键 | `replanning` 段双登记扩至 10 键：新增 `redraw_light=True` / `skip_leaf=False` / `no_progress_stop=True` / `redraw_on_stall=True` / `heavy_redraw=False` | S3a~S3d |
+| G2/G3/G7 门禁 | `tools/verify/verify_replan_p2.py` 66 项 + 5 变异；CI 注册于 P1 门禁之后 | 66/66 |
+
+**行为验证**（`tools/_probe_replan_p2_behavior.py`，Mock + 注入计划/失败，临时库，26/26）：
+A **默认关零行为变更**（t2 failed / t3 blocked / 零新任务行 / 零 plan_revised /
+零 redraw-decide span —— P2 的头号纪律）；B **T2-轻 partial→full 转化**（t2 失败后
+被原地重派救回、t3 跑完、**零新任务行**、context 注入"换一条实现路径"、plan_revised
+真的发出）；C **T2-重**（出现 `t2_r1` 新行带 lineage + `assigned_by=replanner`、
+下游 t3 的 deps 重映射到 `t2_r1`、旧行 t2 保留可审计）；D **无进展停手**（第 1 次判定
+合法重画 → 第 2 次判定 none/T4、不追新行、plan_revised 只发一次、retry_count=3 可审计）。
+
+**实施中修正的三处设计误解**（均被行为探针抓出，非事后诸葛）：
+
+1. **轻量级不能追行**（`agent_tasks` 对 `(run_id, task_key)` **无唯一约束**）——
+   同 key 追一行会让 `ready_tasks` 派发两次 ⇒ 任务重复执行、产物双写。
+   设计文档 §4.10 原写"同 key 精修 context 重派"，实现时明确为 **UPDATE 原地**，
+   并在门禁加 X-a 断言（追行即红）。这是 P2 最隐蔽的坑。
+2. **质量门 Q5 的合法依赖集合必须含 done key** —— 依赖"已完成任务"是本仓最常见的
+   合法边，漏掉会让 Q5 误杀所有依赖 done 的重画（实测第一版就误杀）。
+   同时 Q1/Q5 必须按**重画后的完整图**判，不能只看新增行。
+3. **无进展检测的历史不能来自库快照** —— T2-轻是同 key 原地重派，库里永远只有
+   一行 ⇒ 快照读到的永远是"当前这一次" ⇒ 同因第 2 次判不出来。改为进程内
+   `_redraw_hist` 台账（口径同 `_t1_retried`）。
+
+**P2 的默认关纪律**：`replanning.enabled=False` 总闸关时，重画段整体是 no-op ——
+`_redraw_dec` 恒 none、零新任务行、零 plan_revised、连 `redraw-decide` span 都不产生
+（行为探针 A2/A3/A4 逐条钉住）。回滚方式：置 `replanning.enabled=False`（或
+`redraw_on_stall=False` 只留决策痕迹不改图）。
 
 ---
 
@@ -596,3 +639,4 @@ span action=none「已补跑过一次」，stall-decide 留痕，下游 blocked 
 | agent_tasks 表结构 | `database/schema.py` L883-912 | ✅ 无 version/lineage 列 ⇒ v2 走 assigned_by + config JSON（§4.3） |
 | orch_run_spans 表 | Task #43 建（2026-10-20 日志） | ✅ replan span 零 DDL 载体 |
 | **P1 replanning 落地**（2026-10-21，HEAD `743c948`） | `services/replan_signal.py`（信号+判定纯函数）/ `agent/pipeline_parts/stream.py` 失败点+收敛点接线（`_rs.decide_*` + `_spans.open("replan"`）/ `core/config.py` replanning 五键 / `tools/verify/verify_replan_p1.py` 60 项门禁 / `tools/_probe_replan_p1_behavior.py` 行为探针 | ✅ 已实施并验证（§7.1）；T1 计数走 SQL 原子自增（`COALESCE(retry_count,0)+1`）；e2e G0 同批修复（`_FC_OK`/`_RS_OK` 标志位、`tools.py` `_sysml_meta`/`_fc_classify` 唯一别名） |
+| **P2 replanning 落地**（2026-10-21，HEAD `df01e4f`+`99621c0`） | `services/replan_redraw.py`（重画算法+Q1~Q5 质量门纯函数）/ `agent/pipeline_parts/stream.py` 收敛点重画接线（`_rr.plan_redraw` + `redraw-decide` span + `_redraw_hist` 台账）/ `static/js/mods/11-pipeline.js` `procAddPlanRevised` 计划修订卡 / `core/config.py` replanning 扩至 10 键 / `tools/verify/verify_replan_p2.py` 66 项门禁 / `tools/_probe_replan_p2_behavior.py` 26 项 / `tools/_probe_replan_p2_frontend.py` 12 项 | ✅ 已实施并验证（§7.2）；**轻量级走 UPDATE 不追行**（`agent_tasks` 对 `(run_id,task_key)` 无唯一约束，追行会重复派发）；Q5 合法依赖集合须含 done key；无进展历史来自进程内台账而非库快照 |
