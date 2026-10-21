@@ -2556,11 +2556,14 @@ class StreamMixin:
                     att_text = (
                         att_text +
                         "\n【**你尚未读到正文的章节（必须自行取回）**：第 %s 章】\n"
-                        "以上章节的**条款正文不在你的上下文里**（只有标题/目录条目）。"
-                        "你**必须**用 read_attachment_section 工具逐个取回"
-                        "（如 read_attachment_section(section=\"5\")），"
-                        "拿到正文后再完成任务；**不要**因为上下文里没有就回答"
-                        "「该章正文缺失」，也**不要**要求用户重新上传或粘贴原文。"
+                        "以上章节的**条款正文不在你的上下文里**（只有标题/目录条目）。\n"
+                        "取法：对每一章调用**一次** read_attachment_section，"
+                        "section 传**该章的章号**（如 section=\"5\"）——"
+                        "**一次就会返回该章的全部子节正文**（如 5.1~5.5 全部），"
+                        "**不要逐个小节重复调用**（那会撑爆上下文且拿不到整章）。\n"
+                        "你**必须**把上面列出的章都取回后再完成任务；"
+                        "**不要**因为上下文里没有就回答「该章正文缺失」，"
+                        "也**不要**要求用户重新上传或粘贴原文。"
                         % "、".join(_att_pending)
                     )
             # ★ 2026-11-13（#55）：建章节索引 + 缓存全文，供 read_attachment_section 取章。
@@ -3134,8 +3137,18 @@ class StreamMixin:
                         # 2026-09-17 S3：回填给模型的结果单独封顶（此前用未截断的原始结果，长结果被后续每轮重发）
                         # P1-4（2026-10-02）：封顶升级为 offload——全文落库，模型侧换引用块（可寻址召回）
                         _t_model = str(result.get("result") or "")
+                        # ★ 2026-11-13（#56 端到端实证）：`read_attachment_section` 用**专用上限**。
+                        #   通用上限 `_TOOL_MODEL_CAP=3000` 对它**天然不适用**：
+                        #   整章正文动辄 5000~7000 字符（第 5 章实测 6024）⇒ 每次取章都被
+                        #   offload 成引用块 ⇒ 模型只拿到一个 id ⇒ 它再去调 tool_result_fetch
+                        #   要全文（而那又被 RBAC 拦）⇒ 最终**看到的是空**
+                        #   ⇒ 得出"第 5/6/7 章正文读不到"的错误结论（实测原话：
+                        #   「全部返回空内容」——其实工具已返回全文，是回填环节丢的）。
+                        #   本工具的语义就是"把这一章的正文给模型" ⇒ 断章取义地截断
+                        #   会直接毁掉它的用途 ⇒ 给足整章上限，且**不 offload**。
+                        _t_cap = _ATT_SECTION_MODEL_CAP if tname == "read_attachment_section" else _TOOL_MODEL_CAP
                         _t_content, _offloaded = _tool_offload.model_side_content(
-                            tname, result, getattr(self, "_tool_conv_ctx", 0), cap=_TOOL_MODEL_CAP)
+                            tname, result, getattr(self, "_tool_conv_ctx", 0), cap=_t_cap)
                         if _offloaded:
                             _tool_offload.ensure_fetch_tool(tools_def, getattr(self, "_tool_whitelist", None))
                         if _weak:
@@ -3177,8 +3190,17 @@ class StreamMixin:
                     if results:
                         # 2026-09-17 S3：上一轮 tool 内容换为省略标记
                         # 不可删除该消息——OpenAI 兼容协议要求 tool 与 assistant.tool_calls 成对出现
+                        # ★ 2026-11-13（#57）：**取回的章节正文不可省略**。
+                        #   原实现把上一轮所有 tool 结果清空 ⇒ 模型下一轮看到"上下文里没有
+                        #   第 5/6/7 章正文" ⇒ 又去调 read_attachment_section 取一遍
+                        #   ⇒ 实测同一轮内取章 40+ 次（5→6→7→5.3→6.1→7.1→… 循环），
+                        #   每次都把整章正文再灌一遍上下文 ⇒ 上下文爆炸 + 60s+ 耗时。
+                        #   判据：章节正文是模型**唯一**的正文来源、且**不可再生**
+                        #   （清掉就只能重取）⇒ 保留；其他工具结果照旧省略（它们可再生）。
                         for _pi in _prev_tool_idx:
                             if 0 <= _pi < len(messages) and messages[_pi].get("role") == "tool":
+                                if messages[_pi].get("name") == "read_attachment_section":
+                                    continue      # ← 章节正文：保留，不省略
                                 messages[_pi]["content"] = json.dumps(
                                     {"ok": True, "result": "",
                                      "note": "前序工具结果已省略——其结论已体现在后续推理中"},

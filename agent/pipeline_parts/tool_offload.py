@@ -108,6 +108,19 @@ def model_side_content(tool_name: str, result: dict, conversation_id: int = 0,
     if len(full) <= cap:
         content["result"] = full
         return content, False
+    # ★ 2026-11-13（#56 端到端实证）：**offload 自循环熔断**。
+    #   `tool_result_fetch` 是"把已 offload 的全文取回来"的通道，它的返回值**本身**
+    #   常常超 cap（实测取回 20000 字符）⇒ 若对它再做一次 offload：
+    #       fetch → 结果超 cap → 再次 offload 成新 id → 提示模型再 fetch → …
+    #   ⇒ **自我喂养的无限循环**。实测一轮里 fetch 被调 30 次、offload 表连涨 30 行，
+    #   每轮耗时 1 秒、token 与落库双爆。
+    #   熔断：`tool_result_fetch` 的结果**永不 offload**（它已是终态全文）。
+    #   代价：一次最多给模型 20000 字符（调用侧已按 20000 截断），可接受。
+    if tool_name == "tool_result_fetch":
+        content["result"] = full
+        content["truncated"] = False
+        content["note"] = "（offload 重读通道：已返回完整内容，不再二次 offload）"
+        return content, False
     try:
         oid = save_offload(tool_name, full, conversation_id)
         content["result"] = build_reference_block(oid, tool_name, len(full), full)

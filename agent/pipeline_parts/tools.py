@@ -58,8 +58,10 @@ _READ_ATTACHMENT_TOOL = {
         "name": "read_attachment_section",
         "description": (
             "读取**本轮上传附件**的指定章节正文（按需取全文，不是一次性全塞给你）。"
-            "当 prompt 里给出了「上传资料·章节提纲」而你缺少某几章的**条款正文**时，"
-            "用本工具按章节号取回原文（可多次调用取不同章），然后再继续任务。"
+            "当 prompt 里给出了「上传资料·章节提纲」或「尚未读到正文的章节」时，"
+            "用本工具按章节号取回原文，然后��继续任务。"
+            "⚠️ **传章号即可拿到该章的全部子节**（如 section=\"5\" 会一次返回 5.1~5.5 全部正文，"
+            "结果末尾会注明）⇒ **不要逐个小节重复调用**（5、5.1、5.2… 全取一遍会撑爆上下文）。"
             "⚠️ 不要因为正文没出现在上下文里就向用户索要原文——你手上有本工具，"
             "自己取；只有取不到（章节号写错/附件无该章）才向用户说明。"
         ),
@@ -533,6 +535,25 @@ class ToolMixin:
                 result = self._read_attachment_section(_sec, _di)
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
+            # ★ 2026-11-13（#56 端到端实证）：`tool_result_fetch` 同样移到**权限闸之前**。
+            #   背景：本轮取第 5 章正文 6024 字符 > `_TOOL_MODEL_CAP`(3000) ⇒ 被 offload
+            #   成引用块 ⇒ 模型只拿到一个 id，它去调 tool_result_fetch 想取全文，
+            #   却因用户角色没有 `agent_tool:read` 权限被**RBAC 闸拦下**
+            #   （实测原话：「权限不足：当前用户没有 agent_tool:read 权限」）
+            #   ⇒ 模型最终看到"空" ⇒ 得出"第 5/6/7 章正文读不到"的错误结论。
+            #   判据：tool_result_fetch 读的是**本次对话里刚由本框架产生的工具结果**
+            #   （offload 落库在 tool_result_offloads 表、已随会话隔离），
+            #   它是**框架内建的重读通道**，不是外部数据源 ⇒ 不该受用户角色权限约束。
+            #   ⚠️ 仍然只读、仍限本会话（fetch_offload 按 conversation_id 校验）。
+            if name == "tool_result_fetch":
+                _oid = int((arguments or {}).get("id") or 0)
+                from agent.pipeline_parts import tool_offload as _to
+                _off = _to.fetch_offload(_oid)
+                result = ({"ok": True, "result": _off[:20000]}
+                          if _off else
+                          {"ok": False, "result": f"offload #{_oid} 不存在（可能 id 无效——以工具结果提示中的编号为准）"})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
             if name == "ask_user":
                 _a = arguments or {}
                 _q = str(_a.get("question") or "").strip()
@@ -613,16 +634,9 @@ class ToolMixin:
             # P1-4（2026-10-02）：工具结果 offload 重读——读类、无副作用、进程内直通。
             # 放行保障：offload 发生时 ensure_fetch_tool 已把本工具追加进 _tool_whitelist
             # 与本轮 tools_def；白名单未启用时自然放行。
-            if name == "tool_result_fetch":
-                _oid = int((arguments or {}).get("id") or 0)
-                from agent.pipeline_parts import tool_offload as _to
-                _off = _to.fetch_offload(_oid)
-                result = ({"ok": True, "result": _off[:20000]}
-                          if _off else
-                          {"ok": False, "result": f"offload #{_oid} 不存在（可能 id 无效——以工具结果提示中的编号为准）"})
-                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
-                return result
-            # 确定性 Hooks：PreToolUse 强制校验（对齐 Claude Code，不依赖 LLM 概率；故障静默放行）
+            # ★ 2026-11-13（#56）：执行分支已上移到**权限闸之前**（见上方注释）——
+            #   留在原位会被 RBAC 拦下，模型取不到 offload 全文 ⇒ 误判"章节读不到"。
+            #   确定性 Hooks：PreToolUse 强制校验（对齐 Claude Code，不依赖 LLM 概率；故障静默放行）
             # 优先级：白名单拒绝（最小权限）→ 本钩子（block/require_confirm/warn）→ HIL L2 → destructive → 执行
             self._hook_warn = ""
             # V2.6：进程内工具（避免 HTTP 自环死锁）——mbse_pull_ingest 直通入库

@@ -119,6 +119,15 @@ _ATT_INJECT_CAP = 4000
 #     ③ 全文       进工具/召回通道（retrieval_att，供语义召回与按需读取）
 _ATT_OUTLINE_CAP = 2000
 
+# ★ 2026-11-13（#56）：`read_attachment_section` 回填给模型的**专用字符上限**。
+#   通用上限 `_TOOL_MODEL_CAP=3000` 对「取整章正文」天然不适用：整章动辄 5000~7000
+#   字符（doc 848 第 5 章实测 6024）⇒ 每次取章都被 offload 成引用块 ⇒ 模型只拿到
+#   一个 id（再去调 tool_result_fetch 要全文还会被 RBAC 拦）⇒ **模型看到的是空**
+#   ⇒ 误判"第 5/6/7 章正文读不到"（实测原话「全部返回空内容」）。
+#   本工具的语义就是"把这一章的正文交给模型"⇒ 截断会直接毁掉用途 ⇒ 给足整章上限。
+#   取值 20000 = 约 1.2 万 token，覆盖超长章节（一个 20 字符的章号可能带几十页条款）。
+_ATT_SECTION_MODEL_CAP = 20000
+
 # 2026-09-17 S4（C3=按意图只注入命中 Agent）：流式路径注入「命中 Agent 角色块」的字符上限。
 # 背景：SSE 路径此前**完全不消费** agents.system_prompt（硬编码一句通用角色），
 #   导致库里 20 个 Agent 的定制（合计 44,762 字）在主流式链路上不生效 —— 用户配了 Agent 却看不到效果。
@@ -582,6 +591,9 @@ def reset_request_state(pipe) -> None:
     #   本轮用户读到**上一轮别的用户上传的附件内容**（跨用户数据泄漏）。
     pipe._att_sections = []
     pipe._att_full_text = ""
+    # ★ 2026-11-13（#57）：已取回章节记忆（{章号: 正文}）——请求级瞬态。
+    #   不清 ⇒ 下一轮会拿到**上一轮别的用户**的章节正文 = 跨用户数据泄漏（安全红线）。
+    pipe._att_fetched = {}
 
 
 def reset_skill_state(pipe, skill_name) -> None:
@@ -770,7 +782,7 @@ __all__ = [
     'AgentDefinition', 'AgentRegistry', 'IntentRouter', 'GraphRAG', 'ConflictDetector',
     '_citations_payload', '_extract_code_blocks', '_archive_impact_analysis',
     '_archive_sysml_version', '_archive_artifacts', '_TOOL_RESULT_CAP',
-    '_TOOL_MODEL_CAP', '_ATT_INJECT_CAP', '_ATT_OUTLINE_CAP', '_AGENT_ROLE_CAP',
+    '_TOOL_MODEL_CAP', '_ATT_INJECT_CAP', '_ATT_OUTLINE_CAP', '_ATT_SECTION_MODEL_CAP', '_AGENT_ROLE_CAP',
     '_STREAM_CHARS_PER_SEC', '_STREAM_MAX_CPS', '_STREAM_CHUNK', '_STREAM_MAX_DRAIN_SEC',
     'iter_stream_chunks',
     # P1-26：system_prompt 分层拼装（顺序单一真源，两条路径共用）

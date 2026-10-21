@@ -284,11 +284,14 @@ class ExecuteMixin:
                 att_text = (
                     att_text +
                     "\n【**你尚未读到正文的章节（必须自行取回）**：第 %s 章】\n"
-                    "以上章节的**条款正文不在你的上下文里**（只有标题/目录条目）。"
-                    "你**必须**用 read_attachment_section 工具逐个取回"
-                    "（如 read_attachment_section(section=\"5\")），"
-                    "拿到正文后再完成任务；**不要**因为上下文里没有就回答"
-                    "「该章正文缺失」，也**不要**要求用户重新上传或粘贴原文。"
+                    "以上章节的**条款正文不在你的上下文里**（只有标题/目录条目）。\n"
+                    "取法：对每一章调用**一次** read_attachment_section，"
+                    "section 传**该章的章号**（如 section=\"5\"）——"
+                    "**一次就会返回该章的全部子节正文**（如 5.1~5.5 全部），"
+                    "**不要逐个小节重复调用**（那会撑爆上下文且拿不到整章）。\n"
+                    "你**必须**把上面列出的章都取回后再完成任务；"
+                    "**不要**因为上下文里没有就回答「该章正文缺失」，"
+                    "也**不要**要求用户重新上传或粘贴原文。"
                     % "、".join(_att_pending_c)
                 )
         att_parsed_info = {"parsed": att_parsed, "skipped": att_skipped[:5]}
@@ -661,8 +664,12 @@ class ExecuteMixin:
                         else:
                             # P1-4（2026-10-02）：补上模型侧封顶——此前此处**全量回填**（无 _TOOL_MODEL_CAP），
                             # 长结果被后续每轮重发；现与 stream 同一 helper：>cap 自动 offload + 引用块
+                            # ★ 2026-11-13（#56）：与 stream.py 同构——取整章正文用**专用上限**，
+                            #   否则整章（5000~7000 字符）被 offload 成引用块 ⇒ 模型看到的是空
+                            #   ⇒ 误判"该章正文读不到"。详见 common._ATT_SECTION_MODEL_CAP。
+                            _t_cap_c = _ATT_SECTION_MODEL_CAP if tname == "read_attachment_section" else _TOOL_MODEL_CAP
                             _t_content, _offloaded = _tool_offload.model_side_content(
-                                tname, result, getattr(self, "_tool_conv_ctx", 0), cap=_TOOL_MODEL_CAP)
+                                tname, result, getattr(self, "_tool_conv_ctx", 0), cap=_t_cap_c)
                             if _offloaded:
                                 _tool_offload.ensure_fetch_tool(tools_def, getattr(self, "_tool_whitelist", None))
                         tool_results.append({

@@ -461,6 +461,29 @@ class HistoryMixin:
             for k, title, _st, _en in secs:
                 lines.append("- %s%s" % (k + " " if k else "(开篇) ", title))
             return {"ok": True, "result": "\n".join(lines)}
+        # ★ 2026-11-13（#57）：**已取章节记忆** —— 取过整章后再取其子节，直接回同一份，
+        #   不重跑切片。实测模型会「取整章 → 又逐个小节取一遍」（5、5.1、5.2…），
+        #   每次都把整章正文再灌一遍上下文 ⇒ 上下文爆炸 + 40+ 次工具调用。
+        #   记在 `self._att_fetched`（请求级，由 reset_request_state 清零）。
+        _fetched = getattr(self, "_att_fetched", None)
+        if not isinstance(_fetched, dict):
+            _fetched = {}
+            self._att_fetched = _fetched
+        if want in _fetched:
+            return {"ok": True,
+                    "result": ("【%s 已取回】\n%s\n\n（该章正文上一轮已取回，"
+                               "此处为同一份内容，**不要**再逐个小节重复调用。）"
+                               % (want, _fetched[want]))}
+        # ★ #57：取**子节**时，若其**父章已取回** ⇒ 直接回父章那份（子节内容已包含在内）。
+        #   治"取整章 → 又逐个小节取一遍"的重复灌上下文。
+        #   ⚠️ 也要覆盖「先取子节、后取父章」的反向：取过 5.1 后再取 5 ⇒ 5 的正文
+        #   仍要真取（父章内容多于单个子节），但取过后不应再逐个子节重复取。
+        _parent = want.split(".")[0] if "." in want else ""
+        if _parent and _parent in _fetched and _parent != want:
+            return {"ok": True,
+                    "result": ("【%s 已取回】\n%s\n\n（父章 %s 上一轮已取回，"
+                               "本小节内容已包含其中，**不要**重复调用。）"
+                               % (want, _fetched[_parent], _parent))}
         # 同一章号可能有多个候选（doc 847 实测：**术语表区**的「5/6/7/8」条目与正文
         #   「5.1…5.4」共存，术语表那条会抢占顶层章号，span只有 ~100 字符）。
         #   ⇒ 顶层精确命中优先；同key 多个候选取**跨度最大**者（正文节远长于术语表条目）。
@@ -515,8 +538,16 @@ class HistoryMixin:
             return {"ok": False,
                     "result": "章节「%s」在附件里没有正文内容（可能是目录页条目）。"
                               "现有章节：%s。请换一个章节号再试。" % (section, avail)}
+        # ★ #57：记录**顶层章**已取回（子节取回则归到其父章）⇒ 后续取同一章/其子节
+        #   直接复用，不再重复灌上下文。
+        _memo_key = _parent if (_parent and subs_all) else want
+        if _memo_key:
+            _fetched[_memo_key] = body
         return {"ok": True,
-                "result": "【%s %s】\n%s" % (pick[0], _disp_title, body)}
+                "result": "【%s %s】\n%s%s" % (
+                    pick[0], _disp_title, body,
+                    ("\n\n（本条已包含该章**全部**子节正文，无需再逐个小节重复调用。）"
+                     if subs_all else ""))}
 
     def _load_attachment_text(self, attachments):
         """返回 (parsed_blocks, parsed_count, skipped_names)。parsed_blocks 为 ["[文件名]\n内容…"] 列表。

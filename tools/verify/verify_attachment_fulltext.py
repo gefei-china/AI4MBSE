@@ -343,6 +343,53 @@ def main() -> int:
     chk("H8s 继承的附件不落库进本轮 user 消息（防历史膨胀）",
         "_att_explicit" in _ssrc and "_att_explicit" in _esrc)
 
+    # ── H9 组（#57）：工具结果回填链路的三道闸 ─────────────────────────────
+    # 端到端实证（会话 9571 追问轮）：工具**确实返回了正文**（探针可见 6024 字符），
+    # 但模型看到的是**空** ⇒ 三处断链：
+    #   ① 整章正文 6024 字符 > `_TOOL_MODEL_CAP`(3000) ⇒ 被 offload 成引用块
+    #      ⇒ 模型只拿到一个 id（再去 fetch 全文还被 RBAC 拦）⇒ "全部返回空内容"。
+    #   ② `tool_result_fetch` 在**权限闸之后** ⇒ 用户角色没有 agent_tool:read 就被拦。
+    #   ③ offload **自循环**：fetch 返回 20000 字符 → 又超 cap → 再次 offload
+    #      ⇒ 模型再 fetch ⇒ 无限循环（实测一轮 fetch 30 次、offload 表连涨 30 行）。
+    from agent.pipeline_parts import tool_offload as _to
+    _c1, _o1 = _to.model_side_content("read_attachment_section",
+                                      {"ok": True, "result": "X" * 6024}, 0, cap=20000)
+    chk("H9a 取整章正文（6024 字符）不再被 offload", _o1 is False and len(_c1.get("result") or "") == 6024,
+        f"offloaded={_o1} len={len(_c1.get('result') or '')}")
+    _c2, _o2 = _to.model_side_content("tool_result_fetch",
+                                      {"ok": True, "result": "Y" * 20000}, 0, cap=3000)
+    chk("H9b offload 自循环熔断：tool_result_fetch 的结果不再二次 offload",
+        _o2 is False and len(_c2.get("result") or "") == 20000,
+        f"offloaded={_o2} len={len(_c2.get('result') or '')}")
+    _tsrc = open(os.path.join(ROOT, "agent", "pipeline_parts", "tools.py"), encoding="utf-8").read()
+    _fetch_at = _tsrc.find('if name == "tool_result_fetch":')
+    _perm_at = _tsrc.find("check_tool_perm as _check_perm")
+    chk("H9c tool_result_fetch 的执行分支在权限闸**之前**（否则被 RBAC 拦 ⇒ 模型拿不到全文）",
+        _fetch_at != -1 and _perm_at != -1 and _fetch_at < _perm_at,
+        f"fetch@{_fetch_at} perm@{_perm_at}")
+    _csrc = open(os.path.join(ROOT, "agent", "pipeline_parts", "common.py"), encoding="utf-8").read()
+    chk("H9d 专用上限常量存在且已导出", "_ATT_SECTION_MODEL_CAP" in _csrc)
+    chk("H9e 专用上限在 stream/execute 两路径都生效",
+        "_ATT_SECTION_MODEL_CAP" in _ssrc and "_ATT_SECTION_MODEL_CAP" in _esrc)
+    # H9f~H9h：已取章节记忆（治"取整章→又逐个小节取一遍"）+ 安全清零
+    _p2 = AgentPipeline()
+    _p2._att_sections = list(pipe._att_sections)
+    _p2._att_full_text = pipe._att_full_text
+    _r = _p2._read_attachment_section("5", 1)
+    _r2 = _p2._read_attachment_section("5.1", 1)
+    chk("H9f 取整章后，取其子节直接复用（不重复灌上下文）",
+        "已取回" in str(_r2.get("result") or ""), str(_r2.get("result") or "")[:60])
+    chk("H9g 已取章节记忆是请求级字段（须登记进 reset_request_state）",
+        "pipe._att_fetched" in _csrc)
+    _p2._att_fetched = {"5": "上一轮别的用户的正文"}
+    reset_request_state(_p2)
+    chk("H9h reset 后已取章节记忆清空（不跨用户泄漏）",
+        not getattr(_p2, "_att_fetched", None), repr(getattr(_p2, "_att_fetched", "MISSING")))
+    chk("H9i 工具描述说明「传章号即含全部子节」（治逐小节穷举）",
+        "全部子节" in _tsrc)
+    chk("H9j 注入提示语说明一次调用即取整章（两路径都有）",
+        "不要逐个小节重复调用" in _ssrc and "不要逐个小节重复调用" in _esrc)
+
 
     # ─────────────────────────────────────────────────────────────────────────
     section("H2 · /static/ PDF 路径（合成水印 PDF）：走过滤抽取")
