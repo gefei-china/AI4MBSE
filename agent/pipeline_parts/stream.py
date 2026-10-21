@@ -502,6 +502,14 @@ class StreamMixin:
             except Exception:
                 _retry_once = True
             _t1_retried = set()          # 本次编排已 DAG 级补跑过的 task_key
+            # ★ P2：重画尝试台账 `{key: [失败指纹, ...]}`（进程内）。
+            #   为什么必须有它：T2-轻是**同 key 原地重派**（UPDATE 而非追行），
+            #   所以一个 key 在库里**永远只有一行** —— 从 `agent_tasks` 快照读
+            #   失败历史，读到的永远是"当前这一次"，无进展检测（同因第 2 次）
+            #   形同虚设。台账记的是"本次编排 we've 试过几遍、每次的失败原因"。
+            #   口径同 `_t1_retried`：谱系级判定活在单次编排内（resume 下
+            #   failed 是终态不再派发，进程重启后不会重复触发）。
+            _redraw_hist = {}
             try:
                 from services import replan_signal as _rs
                 _RS_OK = True
@@ -1127,10 +1135,13 @@ class StreamMixin:
                                         str(_f0.get("error_class") or ""),
                                         _rs.norm_error_text(_f0.get("error") or "")
                                         if _RS_OK else str(_f0.get("error") or ""))
-                                    # 剔除自身这一次（末位同值项）
+                                    # 剔除自身这一次（末位同值项），再并入
+                                    # **进程内重画台账**（同 key 原地重派 ⇒ 库快照
+                                    # 只有一个 key 一行，历史必须来自台账）。
                                     _hist = list(_fp_hist.get(_ck) or [])
                                     if _hist and _hist[-1] == _cfp:
                                         _hist.pop()
+                                    _hist.extend(list(_redraw_hist.get(_ck) or []))
                                     _fp_hist[_ck] = _hist
                                     _cur_fail = (_ck, str(_f0.get("error_class") or ""),
                                                  str(_f0.get("error") or ""))
@@ -1191,6 +1202,19 @@ class StreamMixin:
                                                     (str(_u.get("context") or "")[:1000],
                                                      int(_u.get("id"))))
                                                 _t1_retried.add(str(_u.get("key") or ""))
+                                                # 台账记账：把这次失败指纹存下来，
+                                                # 使"同因第 2 次 ⇒ T4"在同 key 重派下真正可判
+                                                _uk = str(_u.get("key") or "")
+                                                try:
+                                                    _redraw_hist.setdefault(_uk, []).append(
+                                                        "%s|%s" % (
+                                                            str(_failed_rows[0].get("error_class") or "")
+                                                            if _failed_rows else "",
+                                                            _rs.norm_error_text(
+                                                                str(_failed_rows[0].get("error") or ""))
+                                                            if _RS_OK else ""))
+                                                except Exception:
+                                                    pass
                                                 _applied += 1
                                             except Exception:
                                                 pass

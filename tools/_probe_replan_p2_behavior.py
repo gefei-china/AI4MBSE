@@ -193,8 +193,8 @@ ok &= _rec("A2 ★ 零新任务行（总闸关 ⇒ 图未被改）",
 ok &= _rec("A3 ★ 零 plan_revised 事件", not any(e.get("type") == "plan_revised" for e in evA))
 ok &= _rec("A4 ★ 零 redraw-decide span（连决策都不产生）",
            not _redraw_decisions(runA), "n=%d" % len(_redraw_decisions(runA)))
-ok &= _rec("A5 t2 只补跑过一次（T1 行为未被 P2 改变）",
-           _trc(runA).get("t2") == 2, str(_tasks(runA)))
+ok &= _rec("A5 t2 的 retry_count 与 P1 基线一致（worker×2 + T1×1 = 3，P2 未改变）",
+           _trc(runA).get("t2") == 3, str(_tasks(runA)))
 
 # ══════════════════════════════════════════════════════════════════════════
 print("\n=== B. T2 轻量级：原地重派 ⇒ partial → full ===")
@@ -264,19 +264,32 @@ _INJECT["fail"] = {"t2": 99}      # 同因反复失败
 evD, runD = _run_flow()
 rdD = _redraw_decisions(runD)
 tD = _tasks(runD)
-ok &= _rec("D1 ★ redraw-decide 判为 none / level=T4（无进展停手）",
-           bool(rdD) and rdD[0]["meta"].get("action") == "none"
-           and rdD[0]["meta"].get("level") == "T4",
-           json.dumps(rdD[0]["meta"], ensure_ascii=False)[:130] if rdD else "无 span")
+# ★ 口径：同因失败会先重画一次（合法），**第二次**才判无进展停手 ——
+#   "同因第 2 次"指的是第 2 次**判定**，不是第 2 次执行。所以看**末条**决策。
+lastD = rdD[-1] if rdD else None
+ok &= _rec("D0 确实经历了两次重画判定（第 1 次合法重画，第 2 次停手）",
+           len(rdD) == 2, "n=%d" % len(rdD))
+ok &= _rec("D0b 第 1 次判定为 replan/T2-light（合法重画，不该一开始就停手）",
+           bool(rdD) and rdD[0]["meta"].get("action") == "replan"
+           and rdD[0]["meta"].get("level") == "T2-light",
+           json.dumps(rdD[0]["meta"], ensure_ascii=False)[:110] if rdD else "无 span")
+ok &= _rec("D1 ★ 末次 redraw-decide 判为 none / level=T4（同因第 2 次停手）",
+           bool(lastD) and lastD["meta"].get("action") == "none"
+           and lastD["meta"].get("level") == "T4",
+           json.dumps(lastD["meta"], ensure_ascii=False)[:130] if lastD else "无 span")
 ok &= _rec('D2 decision reason 写明"无进展"（可解释，不是黑箱）',
-           bool(rdD) and "无进展" in str(rdD[0]["meta"].get("reason") or ""),
-           str(rdD[0]["meta"].get("reason"))[:80] if rdD else "")
-ok &= _rec("D3 ★ T4 后不追新行（停手 = 图不再变）",
+           bool(lastD) and "无进展" in str(lastD["meta"].get("reason") or ""),
+           str(lastD["meta"].get("reason"))[:80] if lastD else "")
+ok &= _rec("D3 ★ 轻量级始终不追新行（同 key 原地重派，图不膨胀）",
            len(tD) == 3, str([t[0] for t in tD]))
-ok &= _rec("D4 剩余任务落到 blocked/blocked 态（人工介入），非静默消失",
-           _tmap(runD).get("t2") == "failed" and _tmap(runD).get("t3") == "blocked", str(tD))
-ok &= _rec("D5 无 plan_revised（没重画就不发修订事件）",
-           not any(e.get("type") == "plan_revised" for e in evD))
+ok &= _rec("D4 剩余任务落到 failed/blocked（人工介入），非静默消失",
+           _tmap(runD).get("t2") == "failed" and _tmap(runD).get("t3") == "blocked",
+           str(tD))
+ok &= _rec("D5 plan_revised 只发一次（第二次没重画 ⇒ 不发修订事件）",
+           sum(1 for e in evD if e.get("type") == "plan_revised") == 1,
+           str(sum(1 for e in evD if e.get("type") == "plan_revised")))
+ok &= _rec("D6 ★ 停手后可审计：t2 retry_count 记录了重画尝试（3 = worker×2 + 重画×1）",
+           _trc(runD).get("t2") == 3, str(tD))
 
 _reset_cfg()
 

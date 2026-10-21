@@ -920,6 +920,45 @@ function procAddSubtask(ev){
   procUpsert(_stId, _stPatch);
 }
 
+/** ★ P2 replanning（2026-10-21）：计划修订卡 —— 执行中重画的用户可见面。
+ *
+ *  事件 payload（后端 services/replan_signal.py::plan_revised_payload + stream.py 补字段）：
+ *    {type:'plan_revised', run_id, level, action, reason, signals[],
+ *     updates:[key...], new_tasks:[key...], dropped:[key...], retry_keys:[key...]}
+ *
+ *  展示口径：
+ *    · 级别徽章（T2-light / T2-heavy）—— 用户一眼知道"图被改了"还是"原地重派"；
+ *    · 原因全文（不截断）—— 计划为何变更是关键信息，藏在 tooltip 里等于没有；
+ *    · 三类 key 清单分列：重派(updates) / 新增(new_tasks) / 移除(dropped)；
+ *    · **默认折叠**：修订是低频事件，不该在执行过程里持续占屏。
+ */
+function procAddPlanRevised(ev){
+  try{
+    const lvl = ev.level || 'T2';
+    const lvTxt = {'T2-light':'局部重派（不改图结构）', 'T2-heavy':'局部重画（换任务+重映射依赖）',
+                   'T1.5':'跳过（叶子任务）'}[lvl] || lvl;
+    const ups = (ev.updates||ev.retry_keys||[]);
+    const adds = (ev.new_tasks||[]);
+    const drops = (ev.dropped||[]);
+    const sec = (title, arr, color) => {
+      if(!arr || !arr.length) return '';
+      return '<div style="display:flex;gap:6px;font-size:11px;line-height:1.7;">'
+        + '<span style="color:var(--mut);min-width:52px;">'+title+'</span>'
+        + '<span style="color:'+color+';">'+arr.map(k=>esc(k)).join('、')+'</span></div>';
+    };
+    const detail = '<div style="display:flex;flex-direction:column;gap:3px;padding:2px 0;">'
+      + '<div style="font-size:11px;line-height:1.7;">' + esc(ev.reason||'（未提供原因）') + '</div>'
+      + sec('重派', ups, 'var(--ok,#2e7d32)')
+      + sec('新增', adds, 'var(--ok,#2e7d32)')
+      + sec('移除', drops, 'var(--err,#c62828)')
+      + '</div>';
+    procUpsert('plan_revised_'+(ev.run_id||0)+'_'+(ev.level||'')+'_'+(ups.concat(adds).join(',')),
+      {type:'plan_revised', icon:'🧭', title:'计划修订 · '+lvTxt,
+       status:'done', statusText:'计划已修订', sub: (ev.reason||'').slice(0,80),
+       detail, collapsed:true});
+  }catch(e){ /* 渲染失败不阻断执行轨迹 */ }
+}
+
 // V2.3.2 流式输出：解析 SSE 事件行（event:/data:）
 // ── P0-3 流式渲染合帧（2026-09-17）──
 // 原实现每个 token 事件都 `bodyEl.textContent += delta` 后立刻读 `scrollHeight`，
@@ -1017,6 +1056,14 @@ function handleSSE(raw) {
     procAddCompact(ev);    // UX规范 D1：上下文压缩系统标记（详情/用量/追问恢复）
   } else if(evType === 'subtask') {
     procAddSubtask(ev);    // P0-2：编排子任务轨迹（实时 DAG 状态）
+  } else if(evType === 'plan_revised') {
+    /* ★ P2 replanning（2026-10-21，v2 §4.3/§4.8）：执行中重规划的**计划修订卡**。
+     *   为什么必须有：重画是"静默改图"——用户只看到某个子任务又跑了一遍，
+     *   不知道计划被改过、为什么改、改了哪几条（R4 风险：用户体感"莫名等待"）。
+     *   这里把「级别 / 原因 / 重派了谁 / 新增了谁 / 移除了谁」摊开成一张卡，
+     *   与 P1 的 trace 面板 replan 节点（审计视角）形成"用户视角 + 审计视角"双通道。
+     *   ⚠️ 老服务端不发这个事件 ⇒ 分支不命中，行为与从前完全一致。 */
+    procAddPlanRevised(ev);
   } else if(evType === 'skill') {
     procAddSkill(ev);      // V2.5：技能执行环节（命中技能/指令注入可见）
   } else if(evType === 'multi_intent') {
