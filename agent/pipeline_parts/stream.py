@@ -2043,6 +2043,17 @@ class StreamMixin:
         意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
         """
         attachments = attachments or []
+        # ★ 2026-11-13（#56）：**会话级附件继承** —— 附件是会话资源，不必每轮重传。
+        #   实测根因（会话 9571）：用户 02:49 上传 doc 848，04:26/04:41 两轮追问
+        #   「再次分析上传附件的内容」时请求里 **attachments=[]**
+        #   ⇒ `_att_sections` 为空 ⇒ `read_attachment_section` 工具压根没进 tools_def
+        #   ⇒ 模型既没正文也没取正文的工具 ⇒ 只能重复「读不到第 5/6/7 章」。
+        #   继承必须在**入口**做（不能等到附件解析点）：编排分支在附件解析**之前**
+        #   就 return 了，只在解析点继承 ⇒ 编排路径永远继承不到。
+        #   ⚠️ 落库仍用**显式附件**（`_att_explicit`）——继承的附件不写进本轮 user 消息，
+        #   否则每次追问都堆一份相同附件（历史膨胀 + 前端附件栏重复显示）。
+        _att_explicit = list(attachments)
+        attachments = self._inherit_session_attachments(conversation_id, attachments)
         # P1-30（2026-10-09）：**请求级瞬态状态统一清零**（与 execute.py 同源同处）。
         # ★ 位置纪律：**必须早于本方法内任何 `self.X =` 赋值**（`self._mem_ctx = ...`），
         #   否则清零会抹掉本次请求刚设好的上下文。
@@ -2063,7 +2074,7 @@ class StreamMixin:
                 with db_conn() as _conn0:
                     _conn0.execute(
                         "INSERT INTO messages (conversation_id, role, content, msg_type, card_data, attachments) VALUES (?,?,?,?,NULL,?)",
-                        (conversation_id, "user", user_input, "text", json.dumps(attachments, ensure_ascii=False))
+                        (conversation_id, "user", user_input, "text", json.dumps(_att_explicit, ensure_ascii=False))
                     )
                     _conn0.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
                                    (conversation_id,))
@@ -2091,7 +2102,7 @@ class StreamMixin:
                     with db_conn() as _conn0:
                         _conn0.execute(
                             "INSERT INTO messages (conversation_id, role, content, msg_type, card_data, attachments) VALUES (?,?,?,?,NULL,?)",
-                            (conversation_id, "user", user_input, "text", json.dumps(attachments, ensure_ascii=False))
+                            (conversation_id, "user", user_input, "text", json.dumps(_att_explicit, ensure_ascii=False))
                         )
                 except Exception:
                     pass
@@ -2526,6 +2537,12 @@ class StreamMixin:
             #   + 全文留在召回/工具通道。提纲的价值不是"多给字"，而是让模型**知道全文有哪些
             #   章**，从而不会把"我只看到前 4 章"当成文档全貌（这正是截图里模型自述的误判）。
             _att_outline = self._attachment_outline(att_blocks) if att_blocks else ""
+            # ★ 2026-11-13（#56）：**待取回章节清单** —— 把"哪几章正文没读到"变成**确定性事实**
+            #   交给模型，而不是让它自己猜。只给提纲时，模型分不清"哪些章已在上下文里"、
+            #   哪些还没读 ⇒ 它会保守地说"第 5/6/7 章正文缺失"却**不确定该不该调工具**
+            #   ⇒ 回头找用户要原文（实测截图原话）。
+            #   判据见 `_attachment_pending_sections`（章节区间 vs 注入边界，确定性）。
+            _att_pending = self._attachment_pending_sections(att_blocks) if att_blocks else []
             if _att_outline:
                 att_text = (
                     att_text +
@@ -2535,6 +2552,17 @@ class StreamMixin:
                     "不要因为正文里没有就认为文档不含该章、更不要向用户索要原文）】\n%s"
                     % (len(retrieval_att), _att_outline)
                 )
+                if _att_pending:
+                    att_text = (
+                        att_text +
+                        "\n【**你尚未读到正文的章节（必须自行取回）**：第 %s 章】\n"
+                        "以上章节的**条款正文不在你的上下文里**（只有标题/目录条目）。"
+                        "你**必须**用 read_attachment_section 工具逐个取回"
+                        "（如 read_attachment_section(section=\"5\")），"
+                        "拿到正文后再完成任务；**不要**因为上下文里没有就回答"
+                        "「该章正文缺失」，也**不要**要求用户重新上传或粘贴原文。"
+                        % "、".join(_att_pending)
+                    )
             # ★ 2026-11-13（#55）：建章节索引 + 缓存全文，供 read_attachment_section 取章。
             #   上一版提纲只解决「模型知道有第5/6/7 章」，没解决「它拿不到」⇒ 实测模型
             #   只能反问用户「请把第5、6、7 章正文贴进来」。此处把「按需取回」的能力接上。

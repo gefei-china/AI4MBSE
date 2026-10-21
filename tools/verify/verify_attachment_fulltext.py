@@ -276,6 +276,75 @@ def main() -> int:
         "pipe._att_full_text" in _rst)
 
     # ─────────────────────────────────────────────────────────────────────────
+    section("H8 · 会话级附件继承 + 提纲章号净化 + 待取回清单（#56）")
+    # 根因（会话 9571 实测）：追问轮请求里 attachments=[] ⇒ 章节索引为空
+    # ⇒ read_attachment_section 工具压根没进 tools_def ⇒ 模型只能重复「读不到 5/6/7 章」。
+    DOC848_ATT = {
+        "doc_id": 848,
+        "filename": "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+        "url": "/api/documents/848/download",
+    }
+    b848, p848, s848 = pipe._load_attachment_text([dict(DOC848_ATT)])
+    chk("H8a doc 848 解析成功", p848 == 1 and not s848, f"parsed={p848} skipped={s848}")
+    outline848 = pipe._attachment_outline(b848)
+    chk("H8b 提纲非空", bool(outline848), f"len={len(outline848)}")
+    chk("H8c 提纲含干净顶层章号（第 5/6/7 章）",
+        all(x in outline848 for x in ("第 5 章", "第 6 章", "第 7 章")),
+        outline848[:200])
+    chk("H8d 提纲顶层章**不呈现目录区噪音章名**（PDF 解析丢失章名 ⇒ 只给章号）",
+        "文协议" not in outline848 and "互联数据" not in outline848,
+        outline848[:200])
+    chk("H8e 提纲含子章节（5.1 系统架构要求）", "5.1 系统架构要求" in outline848)
+    chk("H8f 提纲长度受 cap 约束", len(outline848) <= 2000, f"len={len(outline848)}")
+
+    pending848 = pipe._attachment_pending_sections(b848)
+    chk("H8g 待取回清单含第 5/6/7 章（正文确实不在注入的 4000 字符里）",
+        all(x in pending848 for x in ("5", "6", "7")), f"pending={pending848}")
+    chk("H8h 待取回清单不含第 1/2/3 章（这些正文在注入范围内）",
+        not any(x in pending848 for x in ("1", "2", "3")), f"pending={pending848}")
+    chk("H8i 待取回章号可被 read_attachment_section 命中（闭环）",
+        all(pipe._read_attachment_section(x, 1).get("ok") for x in pending848),
+        f"pending={pending848}")
+    r5 = pipe._read_attachment_section("5", 1)
+    chk("H8j 取回的第 5 章含实质条款（系统架构要求）",
+        "系统架构要求" in str(r5.get("result") or ""),
+        str(r5.get("result") or "")[:120])
+    r7 = pipe._read_attachment_section("7", 1)
+    chk("H8k 取回的第 7 章含性能指标（不大于 3 秒）",
+        "不大于 3 秒" in str(r7.get("result") or ""),
+        str(r7.get("result") or "")[:120])
+    chk("H8t 取回章节不带目录/术语表区噪音章名（否则模型被误导：以为第 5 章讲协议）",
+        "文协议" not in str(r5.get("result") or "")[:400],
+        str(r5.get("result") or "")[:80])
+    chk("H8u 取回章节开头是真实子节标题（5.1 系统架构要求）",
+        "系统架构要求" in str(r5.get("result") or "")[:200],
+        str(r5.get("result") or "")[:80])
+
+    # H8l~H8o：会话级附件继承（纯函数级，不连库）
+    inh = pipe._inherit_session_attachments(0, [])
+    chk("H8l 无会话号时不继承（返回空）", inh == [], repr(inh))
+    inh2 = pipe._inherit_session_attachments(0, [dict(DOC848_ATT)])
+    chk("H8m 本轮显式附件优先（不叠加继承）", len(inh2) == 1 and inh2[0].get("doc_id") == 848)
+    _hsrc = open(os.path.join(ROOT, "agent", "pipeline_parts", "history.py"),
+                 encoding="utf-8").read()
+    chk("H8n 继承方法只按 conversation_id 查（同会话约束，防跨用户取附件）",
+        "WHERE conversation_id=?" in _hsrc)
+    _ssrc = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"),
+                 encoding="utf-8").read()
+    chk("H8o stream 入口已接继承（编排分支在附件解析前 return ⇒ 必须入口接）",
+        "_inherit_session_attachments" in _ssrc)
+    _esrc = open(os.path.join(ROOT, "agent", "pipeline_parts", "execute.py"),
+                 encoding="utf-8").read()
+    chk("H8p execute 冷路径已接继承", "_inherit_session_attachments" in _esrc)
+    chk("H8q execute 冷路径也有提纲层（此前只有 stream 有 ⇒ 冷路径模型不知有 5/6/7 章）",
+        "_attachment_outline" in _esrc and "_attachment_pending_sections" in _esrc)
+    chk("H8r 继承上限常量存在（防一个会话挂几十个文件撑爆 prompt）",
+        "_ATT_INHERIT_MAX" in _hsrc)
+    chk("H8s 继承的附件不落库进本轮 user 消息（防历史膨胀）",
+        "_att_explicit" in _ssrc and "_att_explicit" in _esrc)
+
+
+    # ─────────────────────────────────────────────────────────────────────────
     section("H2 · /static/ PDF 路径（合成水印 PDF）：走过滤抽取")
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)

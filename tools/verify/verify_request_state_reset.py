@@ -68,6 +68,17 @@ ALLOWED_UNRESET = {
     #   `_CONTINUATION_RE` —— history.py 里的**类级**正则缓存（`cls._CONTINUATION_RE = ...`），
     #   不是实例字段，且正则编译一次复用是**有意为之**（避免每请求重编译）。
     "_CONTINUATION_RE",
+    # ↓ 以下三字段**不是单例 Pipeline 的请求级残留**（2026-11-13 逐个取证）：
+    #   `_tool_sysml_docs` / `_tool_sysml_docs_seen`
+    #       —— execute.py:537-538 与 stream.py:2807-2808 在**每次请求的执行路径上
+    #          无条件重新初始化**（`= []` / `= set()`），且赋值点在 LLM 探测轮**之前**；
+    #          execute.py:897 / stream.py:3503 另有一次"清空后重新归档"的局部重置。
+    #          ⇒ 单例 Pipeline 上一轮的 SysML 文档**不会**残留到下一轮。
+    #   `_orch_result_offloads`
+    #       —— 唯一的赋值点是 stream.py:675 `sub._orch_result_offloads = dict(...)`，
+    #          `sub` 是**编排子任务新建的短生命周期子 Pipeline**（同 `_ns_ctx` 一类）
+    #          ⇒ 不跨请求、不跨子任务；读取侧一律 `getattr(self, ..., None)`。
+    "_tool_sysml_docs", "_tool_sysml_docs_seen", "_orch_result_offloads",
 }
 
 _fails: list[str] = []

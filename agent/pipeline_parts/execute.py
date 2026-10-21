@@ -60,6 +60,12 @@ class ExecuteMixin:
         意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
         """
         attachments = attachments or []
+        # ★ 2026-11-13（#56）：**会话级附件继承**（与 stream.py 同源同口径，见那里的根因说明）。
+        #   追问轮请求里 attachments=[] ⇒ 章节索引为空 ⇒ read_attachment_section 工具
+        #   压根没进 tools_def ⇒ 模型既无正文也无取正文的通道。
+        #   落库用 `_att_explicit`（显式附件），继承的不写进本轮 user 消息。
+        _att_explicit = list(attachments)
+        attachments = self._inherit_session_attachments(conversation_id, attachments)
         # P1-30（2026-10-09）：**请求级瞬态状态统一清零** —— 本行是 N3 产出雷同的根因修复。
         # 对话走模块级单例 Pipeline（`routers/conversations.py: from agent import agent`），
         # 此前只有 `_skill_allowed_tools` 一个字段被清；`tools.py` 写的
@@ -260,6 +266,31 @@ class ExecuteMixin:
         # ★ 2026-11-13（#55）：与 stream.py 同构——建章节索引，供 read_attachment_section
         #   按需取回缺失章节正文（模型知道有第 5/6/7 章却取不到 ⇒ 只能反问用户要原文）。
         self._index_attachment_sections(att_blocks)
+        # ★ 2026-11-13（#56）：与 stream.py 同构——**提纲层 + 待取回章节清单**。
+        #   ⚠️ 此前 execute.py 冷路径**只有正文首部、连提纲都没有** ⇒ 走冷路径的调用方
+        #   （/api/conversations/{id}/chat 等非流式入口）模型连"文档有第 5/6/7 章"都不知道。
+        _att_outline_c = self._attachment_outline(att_blocks) if att_blocks else ""
+        if _att_outline_c:
+            att_text = (
+                att_text +
+                "\n\n【上传资料·章节提纲（全文共 %d 字，以下为已识别的章节标题——"
+                "**你只看到了上面那份正文的前段**，后续章节的条款正文尚未注入，"
+                "**请用 read_attachment_section 工具按章节号自行取回**，"
+                "不要因为正文里没有就认为文档不含该章、更不要向用户索要原文）】\n%s"
+                % (len(retrieval_att), _att_outline_c)
+            )
+            _att_pending_c = self._attachment_pending_sections(att_blocks) if att_blocks else []
+            if _att_pending_c:
+                att_text = (
+                    att_text +
+                    "\n【**你尚未读到正文的章节（必须自行取回）**：第 %s 章】\n"
+                    "以上章节的**条款正文不在你的上下文里**（只有标题/目录条目）。"
+                    "你**必须**用 read_attachment_section 工具逐个取回"
+                    "（如 read_attachment_section(section=\"5\")），"
+                    "拿到正文后再完成任务；**不要**因为上下文里没有就回答"
+                    "「该章正文缺失」，也**不要**要求用户重新上传或粘贴原文。"
+                    % "、".join(_att_pending_c)
+                )
         att_parsed_info = {"parsed": att_parsed, "skipped": att_skipped[:5]}
         if att_vision.get("images"):
             att_parsed_info["vision"] = att_vision   # 留痕：这次图片到底进没进模型、为什么
@@ -833,7 +864,7 @@ class ExecuteMixin:
                 # User message（V2.3: 附件随 user 消息落库 attachments JSON）
                 conn.execute(
                     "INSERT INTO messages (conversation_id, role, content, msg_type, card_data, attachments) VALUES (?,?,?,?,NULL,?)",
-                    (conversation_id, "user", user_input, "text", json.dumps(attachments, ensure_ascii=False))
+                    (conversation_id, "user", user_input, "text", json.dumps(_att_explicit, ensure_ascii=False))
                 )
                 # Assistant message
                 card_data = json.dumps({

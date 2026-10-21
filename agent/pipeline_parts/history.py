@@ -23,6 +23,9 @@ _ATT_DATE_LINE_RE = re.compile(
     r"^\s*\d{2,4}\s*(?:年|月份|月|日|/\-|\.)"
 )
 
+# ★ 2026-11-13（#56）：会话级附件继承的**数量上限**（防一个会话挂几十个文件把 prompt 撑爆）。
+_ATT_INHERIT_MAX = 5
+
 
 def _is_att_heading(line: str) -> bool:
     """行是否为章节标题：正则命中 + 排除日期行（纯函数，可门禁单测）。"""
@@ -69,10 +72,32 @@ def build_attachment_outline(blocks, cap: int = 2000) -> str:
 
     纯函数（无 I/O、不碰 self）⇒ 可被门禁直接单测。
     抽不到任何标题（纯表格/无结构文档）时返回 ""，调用方据此跳过提纲层 —— 不塞占位噪声。
+
+    ★ 2026-11-13（#56）：**顶层章优先 + 章号净化**。原实现按「每块取前 3 个标题」抽取，
+      实测 doc 848 的提纲里**顶层「第 5/6/7 章」被同块的小节挤掉**（只剩 5.3.1/6.4/7.1）
+      ⇒ 模型看到的是一串碎片小节，**不知道有「第 5 章」这个整章**
+      ⇒ 自然也不知道该按 "5" 去取整章正文。
+      现改为：**先收集全部标题 → 顶层章（无点号）优先入纲 → 再补小节**。
+
+    ★ #56 再深一层（doc 848 实测）：PDF 解析把**顶层章标题切成了裸数字行**
+      （"5" 独占一行、**章名丢失**），而文档**目录区**里才有 "5 文协议 向 LLM 提供上下文的方式"
+      这类「章号 + 术语表词条」形态的行 —— 直接把目录行当章标题会得到**语义完全错误的章名**
+      （模型按提纲判断"第 5 章叫『文协议』"⇒ 误以为文档讲的是协议，不是功能要求）。
+      故顶层章在提纲里**只呈现章号**（"第 5 章"），不呈现标题文本：
+      章名不可靠时，章号才是模型的**取回入口**（`read_attachment_section("5")`）。
+      同时从**裸数字行**（"5" 独占一行）补齐章号，覆盖目录区根本没列出的章。
     """
     if not blocks or cap <= 0:
         return ""
-    seen, out = set(), []
+    seen, out, top = set(), [], []
+    # 裸数字行（"5"）单独收集：它是 PDF 解析丢失章名后的**真实顶层章号**。
+    bare_keys, bare_seen = [], set()
+    for b in blocks:
+        for raw in str(b or "").splitlines():
+            s = raw.strip()
+            if re.fullmatch(r"[0-9]{1,2}", s) and s not in bare_seen:
+                bare_seen.add(s)
+                bare_keys.append(s)
     for b in blocks:
         # 块头形如【文件名#3】/【图片附件】…，跳过块头行（它不是章节标题）
         _in_block = 0
@@ -87,15 +112,47 @@ def build_attachment_outline(blocks, cap: int = 2000) -> str:
             if not key or key in seen:
                 continue
             seen.add(key)
-            out.append(line)
+            _k = _att_section_key(line)
+            # ★ #56：顶层章（章号无点号，如 "5"）单独收集，优先入纲。
+            #   判据用**归一化章号**而非原文有无点号（"5.3.1 设计数据管理" 的章号是 "5.3.1"）。
+            if _k and "." not in _k:
+                top.append(_k)
+            else:
+                out.append(line)
             _in_block += 1
-            # 单块内最多取 3 个标题（防「全是短标题行」的文档把提纲刷爆）。
-            # 不取 1 个是因为 2500 字/块的切分常把「第 N 章 + 其下若干小节」放在同一块里，
-            # 只取首个会漏掉小节标题 —— 而「第 5 章有哪几条」正是本次修复要交给模型的信息。
-            if _in_block >= 3:
+            # ★ #56：收集阶段**不再早退**（原 `if _in_block >= 3: break`）。
+            #   实测 doc 848：顶层「第 5 章」标题落在第 5 块内的第 4+ 个标题位
+            #   ⇒ 早退把它整个丢掉 ⇒ 提纲里既无 "5" 也无 "6"/"7"
+            #   ⇒ 模型不知道存在「第 5 章」这个整章，自然不会按 "5" 去取。
+            #   现在全量收集，排序 + 截断交给后面的 cap 逻辑（cap 是真正的预算闸）。
+            #   单块上限放宽到 12（防「全是短标题行」的文档收集量失控）。
+            if _in_block >= 12:
                 break
-    if not out:
+    # ★ #56：顶层章集合 = 标题行里归一化出的顶层章 ∪ **裸数字行**（补齐目录区未列出的章）
+    #   ∪ **小节号的父章**（如 3.1/3.2 ⇒ 第 3 章；doc 848 的第 3 章既无标题行也无裸数字行）。
+    parent_keys = []
+    for x in out:
+        _pk = _att_section_key(x)
+        if _pk and "." in _pk:
+            _p = _pk.split(".")[0]
+            if _p and _p not in parent_keys:
+                parent_keys.append(_p)
+    top_keys, top_seen = [], set()
+    for k in top + bare_keys + parent_keys:
+        if k and k not in top_seen:
+            top_seen.add(k)
+            top_keys.append(k)
+    def _top_sort(k):
+        try:
+            return (0, int(k))
+        except Exception:
+            return (1, 0)
+    top_keys.sort(key=_top_sort)
+    # ★ #56：顶层章**只呈现章号**（章名在 PDF 解析里不可靠，见上方 docstring）。
+    ordered = [("第 %s 章" % k) for k in top_keys] + out
+    if not ordered:
         return ""
+    out = ordered
     text = "\n".join("- " + x for x in out)
     if len(text) > cap:
         # 超预算时**保留头部若干条**并显式说明被截断（让模型知道"还有章节没列出"，
@@ -213,6 +270,133 @@ class HistoryMixin:
         except Exception:
             return ""
 
+    # ★ 2026-11-13（#56）：**待取回章节清单** —— 明确告诉模型"哪几章的正文你没拿到"。
+    #   为什么必须有它（行业方案「locate-then-read」的关键在 locate 这一步）：
+    #   只给「章节提纲」时，模型看到的是"文档有这些章"，但**分不清哪些章的正文已在上下文里**、
+    #   哪些还没读到 ⇒ 它会保守地说"第 5/6/7 章正文缺失"（实测截图原话），
+    #   却**不确定该不该调工具** ⇒ 于是回头找用户要原文。
+    #   本方法用**注入边界**做确定性判据：注入的是 `att_blocks[:4]`（正文首部），
+    #   落在第 4 块**之后**的顶层章 ⇒ 正文肯定没进上下文 ⇒ 必须取回。
+    #   返回章号列表（如 ["5","6","7"]）；没有缺失章时返回 []。
+    def _attachment_pending_sections(self, blocks, cap: int = 0) -> list:
+        """返回「正文未进入注入部分」的顶层章号列表（升序，字符串形式）。
+
+        判据（确定性，不猜）：**章节区间 vs 注入边界**。
+        用 `_index_attachment_sections` 建的字符区间：某顶层章的**区间终点**超出注入
+        覆盖的字符数 ⇒ 这一章的条款正文没进上下文 ⇒ 必须取回。
+
+        ⚠️ 不能用「顶层标题行是否在注入里」判：doc 848 的**目录区**（在注入范围内）
+          就列着 "5 文协议 …" ⇒ 会把第 5 章误判为「已读」⇒ 模型以为不用取（实测踩过）。
+        ⚠️ 也不能用「章号是否在注入里」判：同上，章号在目录区出现过。
+        ⚠️ 更不能用「子标题是否在注入里」判：doc 848 的 5.1 起点 5919 已超边界，
+          但若某章的**首个小节**恰好落在边界内（如 4.2.1 在 4075、4.2.7 在 5519），
+          单看首个小节会漏判 ⇒ 必须看**整章区间终点**。
+        """
+        if not blocks:
+            return []
+        from .common import _ATT_INJECT_CAP
+        limit = int(cap or _ATT_INJECT_CAP)
+        # 注入侧的字符口径：att_text = ("\n\n".join(att_blocks[:4]))[:cap]
+        # 而索引侧的 full 口径是 "\n".join（每块去块头）⇒ 两者有微小偏差，
+        # 这里用**块数**换算成保守下界：注入只覆盖前 4 块。
+        # ⇒ 落在第 5 块及之后的章号一定没读到；第 4 块内再按字符细判。
+        injected_blocks = 4
+        # 每块在 full 口径下的累计长度
+        texts = []
+        for b in blocks:
+            t = str(b or "")
+            if t.startswith("【") and "\n" in t:
+                t = t.split("\n", 1)[1]
+            texts.append(t)
+        bounds, acc = [], 0
+        for t in texts:
+            acc += len(t) + 1
+            bounds.append(acc)
+        # 注入覆盖到第几块：att_text 取前 4 块再截 cap ⇒ 覆盖 blocks[:4]，
+        # 但若 4 块总长 > cap，实际只到 cap 字符处 ⇒ 用字符边界细判。
+        covered_chars = min(limit, sum(len(t) + 2 for t in texts[:injected_blocks]))
+        secs = self._index_attachment_sections(blocks) or []
+        # 收集每章的最大区间终点
+        end_of, keys = {}, []
+        for k, _t, st, en in secs:
+            if not k:
+                continue
+            top = k.split(".")[0]
+            if top not in end_of:
+                keys.append(top)
+                end_of[top] = en
+            else:
+                end_of[top] = max(end_of[top], en)
+        # 顶层章也可能没有子标题（只有裸数字行）⇒ 顶层条目自身的终点也计入
+        missing = [k for k in keys if end_of[k] > covered_chars]
+        def _sk(x):
+            try:
+                return (0, int(x))
+            except Exception:
+                return (1, 0)
+        return sorted(missing, key=_sk)
+
+
+
+    # ★ 2026-11-13（#56）：**会话级附件继承** —— 附件是会话资源，不该每轮重传。
+    #   实测根因（会话 9571，DB 存 UTC）：
+    #     · 02:49 那轮 user 消息带 attachments=[doc 848] ⇒ 提纲生效、模型知道有 5/6/7 章；
+    #     · 04:26、04:41 两轮追问「再次分析上传附件的内容」时 **attachments=[]**
+    #       ⇒ `_load_attachment_text` 返回空 ⇒ `_att_sections` 为空
+    #       ⇒ `read_attachment_section` **工具压根没进 tools_def**（注入判据是
+    #         `if getattr(self, "_att_sections", None)`）
+    #       ⇒ 模型手里没有正文、也没有取正文的工具 ⇒ 只能重复「读不到第 5/6/7 章」。
+    #   ⇒ 修法：追问轮**自动继承本会话历史消息上的附件**（行业通行做法：
+    #     Claude/ChatGPT 的文件在会话内持续可用，不必每轮重传）。
+    #   安全边界（跨用户数据泄漏是本仓红线，务必守住）：
+    #     · 只从**本 conversation_id** 的 user 消息取附件 ⇒ 跨会话/跨用户取不到；
+    #     · 只取**附件元数据**（url/filename/doc_id），不复制文件本体；
+    #     · 本轮**显式传入**的附件优先，不与继承的合并（用户可能想换文件）；
+    #     · 继承上限 `_ATT_INHERIT_MAX`（防一个会话挂几十个文件把 prompt 撑爆）；
+    #     · 继承到的附件**不落库**到本轮 user 消息（避免每次追问都堆一份）。
+    def _inherit_session_attachments(self, conversation_id, attachments=None) -> list:
+        """返回本轮**实际生效**的附件列表：本轮显式附件优先，否则继承本会话历史附件。"""
+        explicit = list(attachments or [])
+        if explicit or not conversation_id:
+            return explicit
+        try:
+            from database import get_db
+            conn = get_db()
+            try:
+                rows = conn.execute(
+                    "SELECT attachments FROM messages "
+                    "WHERE conversation_id=? AND role='user' AND attachments IS NOT NULL "
+                    "AND attachments NOT IN ('', '[]') "
+                    "ORDER BY id DESC LIMIT 20",
+                    (int(conversation_id),)).fetchall()
+            finally:
+                conn.close()
+        except Exception:
+            return []
+        merged, seen = [], set()
+        for r in (rows or []):
+            raw = r[0] if not isinstance(r, dict) else (r.get("attachments") or "")
+            if isinstance(raw, list):
+                items = raw
+            else:
+                try:
+                    items = json.loads(raw or "[]")
+                except Exception:
+                    items = []
+            if not isinstance(items, list):
+                continue
+            for a in items:
+                if not isinstance(a, dict):
+                    continue
+                key = a.get("doc_id") or a.get("url") or a.get("filename")
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                merged.append(a)
+                if len(merged) >= _ATT_INHERIT_MAX:
+                    return merged
+        return merged
+
     # ★ 2026-11-13（#55）：本轮附件的**章节索引**（供 read_attachment_section 按需取正文）。
     #   为什么必须建索引而不是让模型现查：章节号 → 字符区间要在**解析时**算好，
     #   工具调用时才做是纯正则全文扫描（长文档每次调用都扫一遍，纯浪费）。
@@ -298,11 +482,27 @@ class HistoryMixin:
         #   条目），真正的正文是「5.1…5.5」这些子节 ⇒ 按 key 精确命中会取到术语表碎片。
         #   判据：**顶层命中的内容偏短 ⇒ 回落到"其子节的合并区间"**（子节才是本章正文）。
         subs_all = [s for s in secs if s[0].startswith(want + ".")] if want else []
+        # ★ #56：展示用标题 —— 顶层命中若来自**目录/术语表区**（标题是术语词条，
+        #   如「5 文协议 向 LLM 提供上下文的方式」），拿它当章名会**误导模型**
+        #   （以为第 5 章讲协议）。此时改用**首个真实子节标题**（如「5.1 系统架构要求」）。
+        _disp_title = pick[1]
+        if subs_all and (en - st) < 2000:
+            _sub_titles = [s[1] for s in sorted(subs_all, key=lambda s: s[2]) if s[1]]
+            if _sub_titles:
+                _disp_title = "、".join(_sub_titles[:2])
         if subs_all and (en - st) < 2000:
             s0 = min(s[2] for s in subs_all)
             e0 = max(s[3] for s in subs_all)
             if (e0 - s0) > (en - st):
                 st, en = s0, e0
+                # ★ #56：回落子节区间时，**丢弃目录区的顶层标题行**。
+                #   doc 848 实测：顶层 "5" 命中的是术语表条目「5 文协议 向 LLM 提供上下文的方式」
+                #   （span 仅 76 字符）⇒ 取回正文开头挂着这句**语义完全错误**的章名
+                #   ⇒ 模型据此以为"第 5 章讲协议"，而非功能要求。
+                #   修法：区间起点对齐到**第一个子节的起点**（子节标题才是正文的真实起点）。
+                _subs_sorted = sorted(subs_all, key=lambda s: s[2])
+                if _subs_sorted and _subs_sorted[0][2] > st:
+                    st = _subs_sorted[0][2]
         elif pick[0] == want:
             # 顶层本身有实质内容 ⇒ 并入落在其区间内的子节
             subs = [s for s in subs_all if s[2] >= st and s[3] <= en + 1]
@@ -316,7 +516,7 @@ class HistoryMixin:
                     "result": "章节「%s」在附件里没有正文内容（可能是目录页条目）。"
                               "现有章节：%s。请换一个章节号再试。" % (section, avail)}
         return {"ok": True,
-                "result": "【%s %s】\n%s" % (pick[0], pick[1], body)}
+                "result": "【%s %s】\n%s" % (pick[0], _disp_title, body)}
 
     def _load_attachment_text(self, attachments):
         """返回 (parsed_blocks, parsed_count, skipped_names)。parsed_blocks 为 ["[文件名]\n内容…"] 列表。
