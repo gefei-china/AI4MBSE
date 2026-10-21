@@ -1236,7 +1236,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER DEFAULT 0,
         run_id INTEGER DEFAULT 0,
-        kind TEXT DEFAULT '',               -- run | plan | task | summary | reflection | views
+        kind TEXT DEFAULT '',               -- run | plan | task | summary | reflection | views | replan（P1 重规划决策记录，2026-10-21）
         name TEXT DEFAULT '',               -- span 名（task 时为 task_key）
         parent_id INTEGER DEFAULT 0,        -- 父 span 的 orch_run_spans.id（0=根）
         status TEXT DEFAULT 'running',      -- running | ok | error

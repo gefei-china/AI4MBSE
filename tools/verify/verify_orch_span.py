@@ -9,11 +9,13 @@ span 树（orch_run_spans + services/orch_span.py）补这一格；本门禁钉�
 锁定的不变式：
     S1  建表契约：orch_run_spans DDL + 两索引在 schema.py（新老库都走
         CREATE TABLE IF NOT EXISTS，无需补列迁移）
-    S2  服务契约：SpanCollector 开/关/落库三件套 + run_trace 装配 + 六类 kind 常量
+    S2  服务契约：SpanCollector 开/关/落库三件套 + run_trace 装配 + 七类 kind 常量
+        （P1 起第七类 replan = 重规划决策记录，含 action=none；其插桩与消费
+         由 tools/verify/verify_replan_p1.py 单独断言，本门禁只钉常量与 DDL 注释）
     S3  ★ 插桩接线（本功能真正的失效模式是"建好没人用"）：
         · 包装层 _stream_orchestrated_traced 存在，且 body **仍叫**
           _stream_orchestrated_flow（三门禁按名断言它，见 S3d 反向证明）
-        · 六类 span 的 open/close 都在 body 里（按 kind 逐一断言，不用计数阈值——
+        · 六类执行 span 的 open/close 都在 body 里（按 kind 逐一断言，不用计数阈值——
           删一个 open 计数可能仍≥6，按 kind 断言才抓得住，M3 自证）
         · task 与后三段（summary/reflection/views）都挂 run 下（parent=_run_sid）——
           后段与 run 并列成根会把 total_ms 双算（e2e 实测 777.8s vs 墙钟 648.3s）
@@ -85,8 +87,8 @@ def t_static():
     schema = _read(SCHEMA_SRC)
     ok = _rec("S1a schema 含 orch_run_spans 建表",
               "CREATE TABLE IF NOT EXISTS orch_run_spans" in schema)
-    ok &= _rec("S1b 六类 kind 注释在 DDL 里（口径可查）",
-              "run | plan | task | summary | reflection | views" in schema)
+    ok &= _rec("S1b kind 注释在 DDL 里（口径可查；P1 起含 replan 第七类）",
+               "run | plan | task | summary | reflection | views | replan" in schema)
     ok &= _rec("S1c 两个索引齐备",
                schema.count("idx_ors_") >= 2)
     ok &= _rec("S1d 新表无需补列迁移（CREATE TABLE IF NOT EXISTS 覆盖老库）",
@@ -97,9 +99,10 @@ def t_static():
     ok &= _rec("S2a SpanCollector 三件套（open/close/flush）",
                all(("def " + m) in span for m in ("open", "close", "flush")))
     ok &= _rec("S2b run_trace 装配函数存在", "def run_trace" in span)
-    ok &= _rec("S2c 六类 kind 常量齐备",
+    ok &= _rec("S2c 七类 kind 常量齐备（P1 起 + replan 重规划决策记录）",
                all(('KIND_%s = "%s"' % (k.upper(), k)) in span
-                   for k in ("run", "plan", "task", "summary", "reflection", "views")))
+                   for k in ("run", "plan", "task", "summary", "reflection",
+                             "views", "replan")))
     ok &= _rec("S2d 配置总开关 orch_span.enabled（可降级）",
                '"orch_span", "enabled"' in span)
     ok &= _rec("S2e 线程锁（task span 在 worker 线程开闭）",

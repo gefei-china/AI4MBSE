@@ -37,6 +37,13 @@ KIND_TASK = "task"
 KIND_SUMMARY = "summary"
 KIND_REFLECTION = "reflection"
 KIND_VIEWS = "views"
+# P1 replanning（2026-10-21，执行中重规划）：**每一次**重规划判定都落一条
+# replan span（含 action="none" —— "为什么不重画"与"为什么重画"同等重要，
+# 对标 OpenAI Deep Research 停止原因显式 log）。parent=run span，meta_json 带
+# signals/level/action/quality_gates/round/added/dropped/tokens/latency_ms。
+# ⚠️ 新 kind 必须同步 tools/verify/verify_orch_span.py 的 S1b/S2c 断言与
+# database/schema.py DDL 注释（Task #43 门禁 R11），否则 CI 红。
+KIND_REPLAN = "replan"
 
 
 def _enabled() -> bool:
