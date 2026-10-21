@@ -199,6 +199,83 @@ def main() -> int:
         and _is_att_heading("4.1 业务需求"))
 
     # ─────────────────────────────────────────────────────────────────────────
+    # ★ 2026-11-13 新增 H6 段：`read_attachment_section`（按需取回缺失章节正文）
+    #   背景（米爸二次实测截图）：上一版只补了「章节提纲」层，模型知道了第 5/6/7 章
+    #   存在，却**没有任何工具能取到它** ⇒ 只能反过来向用户索要正文，原话：
+    #   「请把第 5、6、7 章的正文贴进来」。**提纲没有通道就是空头承诺。**
+    section("H6 · read_attachment_section：模型能自己把附件读全")
+    from agent.pipeline_parts.common import reset_request_state
+    from agent.pipeline_parts.history import _att_section_key
+    reset_request_state(pipe)          # 门禁自身也走清零，防跨用例残留
+    pipe._index_attachment_sections(blocks)
+    chk("H6a 章节索引非空", bool(pipe._att_sections), f"n={len(pipe._att_sections)}")
+    chk("H6b 索引覆盖到后段章节（7.x）",
+        any(k.startswith("7") for k, _, _, _ in pipe._att_sections))
+    # 取章：doc 847 的顶层「5/6/7」只出现在术语表区，正文是5.1~5.5/6.1~/7.1~
+    # ⇒ 必须回落到子节合并区间，否则取到的是术语表碎片（本段核心断言）。
+    r5 = pipe._read_attachment_section("5", 1)
+    chk("H6c 取第 5 章成功且拿到实质正文（>2000 字符，非术语表碎片）",
+        bool(r5.get("ok")) and len(str(r5.get("result", ""))) > 2000,
+        f"ok={r5.get('ok')} len={len(str(r5.get('result','')))}")
+    chk("H6d 第 5 章内容是正文条款（含 5.1 系统架构要求，且不是术语表碎片）",
+        "5.1 系统架构要求" in str(r5.get("result", "")),
+        str(r5.get("result", ""))[:100])
+    r7 = pipe._read_attachment_section("7", 1)
+    chk("H6e 取第 7 章拿到性能指标（7.1 性能要求 + RT 3 秒）",
+        "7.1 性能要求" in str(r7.get("result", "")) and "不大于 3 秒" in str(r7.get("result", "")),
+        str(r7.get("result", ""))[:100])
+    # 章号归一化：模型可能传'第6章' / '6.4' / '6'
+    chk("H6f 章号归一化（第6章 → 6，与 '6' 等价）",
+        _att_section_key("第 6 章 接口要求") == "6"
+        and _att_section_key("6") == "6"
+        and _att_section_key("6.4") == "6.4")
+    r_named = pipe._read_attachment_section("第6章", 1)
+    chk("H6g 模型传'第6章'也能取到接口要求正文",
+        "6.1 大语言模型调用接口要求" in str(r_named.get("result", "")),
+        str(r_named.get("result", ""))[:100])
+    # 取不到必须**明说**并列出可用章节（绝不静默空串 —— 那会被模型当成"这章是空的"）
+    r_bad = pipe._read_attachment_section("99", 1)
+    chk("H6h 取不到时ok=False 且明确说明+列出现有章节",
+        not r_bad.get("ok") and "现有章节" in str(r_bad.get("result", ""))
+        and len(str(r_bad.get("result", ""))) > 50,
+        str(r_bad.get("result", ""))[:80])
+    r_list = pipe._read_attachment_section("", 1)
+    chk("H6i 不指定章节时返回清单而非全文（防一次塞爆 token）",
+        bool(r_list.get("ok")) and "章节清单" in str(r_list.get("result", ""))
+        and len(str(r_list.get("result", ""))) < 3000,
+        f"len={len(str(r_list.get('result','')))}")
+    # 工具必须真的进了 tools_def（有附件时）
+    td = pipe._build_tools_def("design", "基于附件做需求分析", None)
+    names = [t.get("function", {}).get("name") for t in td]
+    chk("H6j 有附件时 read_attachment_section 已注入 tools_def",
+        "read_attachment_section" in names, f"tools={len(names)}")
+    # 执行侧分发在位
+    t_src = open(os.path.join(ROOT, "agent", "pipeline_parts", "tools.py"),
+                 encoding="utf-8").read()
+    chk("H6k 执行侧分发分支在位", 'if name == "read_attachment_section":' in t_src)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    section("H7 · 安全红线：附件全文/索引必须按请求清零（防跨用户泄漏）")
+    # 断言纪律：先**故意写脏**再reset，然后断言被清掉 ——
+    # 只在干净状态下 getattrs 拿到的本来就是空值，断言就是假绿。
+    pipe._att_sections = [("9", "上一轮残留", 0, 10)]
+    pipe._att_full_text = "上一轮别的用户的附件正文"
+    reset_request_state(pipe)
+    chk("H7a reset 后 _att_sections 清空", getattr(pipe, "_att_sections", None) == [],
+        repr(getattr(pipe, "_att_sections", "MISSING")))
+    chk("H7b reset 后 _att_full_text 清空（不留上一轮附件正文）",
+        not getattr(pipe, "_att_full_text", None),
+        repr(getattr(pipe, "_att_full_text", "MISSING")))
+    chk("H7c 清空后再取章返回明确失败（拿不到别人的附件）",
+        pipe._read_attachment_section("5", 1).get("ok") is False)
+    _rst = open(os.path.join(ROOT, "agent", "pipeline_parts", "common.py"),
+                encoding="utf-8").read()
+    chk("H7d _att_sections 已登记进 reset_request_state",
+        "pipe._att_sections" in _rst)
+    chk("H7e _att_full_text 也在登记清单里（正文更敏感，漏清即跨用户泄漏）",
+        "pipe._att_full_text" in _rst)
+
+    # ─────────────────────────────────────────────────────────────────────────
     section("H2 · /static/ PDF 路径（合成水印 PDF）：走过滤抽取")
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)

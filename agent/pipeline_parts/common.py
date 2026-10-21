@@ -576,6 +576,12 @@ def reset_request_state(pipe) -> None:
     pipe._slot_merge_stats = {}
     pipe._last_compaction = None
     pipe._hook_warn = ""
+    # ★ 2026-11-13（#55）：本轮上传附件的**全文与章节索引**，供
+    #   `read_attachment_section` 工具按需取回缺失章节正文。
+    #   ⚠️ **必须清零**（安全红线）：AgentPipeline 是全局单例，不清就会让
+    #   本轮用户读到**上一轮别的用户上传的附件内容**（跨用户数据泄漏）。
+    pipe._att_sections = []
+    pipe._att_full_text = ""
 
 
 def reset_skill_state(pipe, skill_name) -> None:

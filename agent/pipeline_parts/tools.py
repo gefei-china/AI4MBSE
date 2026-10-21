@@ -52,6 +52,33 @@ _ASK_USER_TOOL = {
 }
 
 
+_READ_ATTACHMENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "read_attachment_section",
+        "description": (
+            "读取**本轮上传附件**的指定章节正文（按需取全文，不是一次性全塞给你）。"
+            "当 prompt 里给出了「上传资料·章节提纲」而你缺少某几章的**条款正文**时，"
+            "用本工具按章节号取回原文（可多次调用取不同章），然后再继续任务。"
+            "⚠️ 不要因为正文没出现在上下文里就向用户索要原文——你手上有本工具，"
+            "自己取；只有取不到（章节号写错/附件无该章）才向用户说明。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "section": {"type": "string",
+                            "description": "要读取的章节号，如 '5'、'5.3'、'第6章'、'7.1'。"
+                                           "省略或传空则返回附件的章节清单（提纲）。"},
+                "doc_index": {"type": "integer",
+                              "description": "（可选）本轮第几个附件，从 1 开始；"
+                                             "只有一个附件时省略即可。"},
+            },
+            "required": [],
+        },
+    },
+}
+
+
 class ToolMixin:
     """工具定义、执行、重试策略与调用留痕。"""
 
@@ -437,6 +464,15 @@ class ToolMixin:
             _ask_on = True
         if _ask_on and not any(t.get("function", {}).get("name") == "ask_user" for t in tools):
             tools.append(_ASK_USER_TOOL)
+        # ★ 2026-11-13（#55）：`read_attachment_section` 与 ask_user 同理**无条件**注入 ——
+        #   它是「把本轮已上传的附件读全」的对话级能力。若被白名单/写意图闸挡掉，
+        #   模型就只能看着提纲干瞪眼、回头找用户要原文（实测原话：「请把第 5、6、7 章的
+        #   正文贴进来」）。只读、无副作用，不该受任何闸约束。
+        #   ⚠️ 仅当本轮**确有附件**时注入：没有附件还给模型这个工具 = 诱导它反复空调。
+        if getattr(self, "_att_sections", None):
+            if not any(t.get("function", {}).get("name") == "read_attachment_section"
+                       for t in tools):
+                tools.append(_READ_ATTACHMENT_TOOL)
         # ★ 2026-10-20（共享产物工作区·方案1）：编排子任务消费上游交付物引用
         #   （query 里的「offload #N」块）⇒ 必须能看到 tool_result_fetch。
         #   子任务实例带 _orch_result_offloads（worker 在派发前挂上）即注入；
@@ -479,6 +515,24 @@ class ToolMixin:
             #   不真正"执行"任何副作用，只把 LLM 的提问结构化成 clarify_required
             #   信号上交：ReAct 循环（execute.py / stream.py 两处同构）见到它即
             #   中断本轮，由外层发射 clarify_ask 事件 + 落挂起等用户回答。
+            # ★ 2026-11-13（米爸实测截图）：ask_user 同款对话级能力的第二例——
+            #   `read_attachment_section`：让模型**自己**取回附件缺失章节的正文。
+            #   背景：注入侧只喂正文前 4 块 + 章节提纲，模型知道「第 5/6/7 章存在」却
+            #   **没有任何工具能取到它** ⇒ 只能反过来向用户索要正文（实测原话：
+            #   「请把第 5、6、7 章的正文贴进来」）。提纲若不给通道就是空头承诺。
+            #   本工具把「本轮已解析的附件全文」按章节号切片返回 —— 只读、限本轮、
+            #   不越权（读不到就说读不到，不会静默返回空串）。
+            if name == "read_attachment_section":
+                _a = arguments or {}
+                _sec = str(_a.get("section") or "").strip()
+                _di = _a.get("doc_index")
+                try:
+                    _di = int(_di) if _di not in (None, "") else 1
+                except Exception:
+                    _di = 1
+                result = self._read_attachment_section(_sec, _di)
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
             if name == "ask_user":
                 _a = arguments or {}
                 _q = str(_a.get("question") or "").strip()

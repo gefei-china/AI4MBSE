@@ -29,6 +29,25 @@ def _is_att_heading(line: str) -> bool:
     if _ATT_DATE_LINE_RE.match(line):
         return False
     return bool(_ATT_HEADING_RE.match(line))
+
+
+def _att_section_key(title: str) -> str:
+    """章节标题 → 归一化章号（'第 7 章 验收交付'→'7'、'5.3.1 建模'→'5.3.1'、非章节→''）。
+
+    用于 `read_attachment_section` 的参数匹配：让模型传 '5' / '第5章' / '5.3' 都能命中。
+    纯函数，可门禁单测。
+    """
+    s = str(title or "").strip().lstrip("#").strip()
+    m = re.match(r"^第\s*([0-9]+(?:\.[0-9]+)*)\s*[章节部分篇]", s)
+    if m:
+        return m.group(1)
+    m = re.match(r"^([0-9]+(?:\.[0-9]+)*)(?:[\s、．]+|$)", s)
+    if m:
+        return m.group(1)
+    m = re.match(r"^([一二三四五六七八九十]+)\s*[、.．]", s)
+    if m:
+        return m.group(1)
+    return ""
 _ATT_HEADING_RE = re.compile(
     r"^\s{0,3}#{0,6}\s*"
     r"(?:第\s*[0-9一二三四五六七八九十百]+\s*[章节部分篇]\s*"
@@ -193,6 +212,111 @@ class HistoryMixin:
             return build_attachment_outline(blocks, cap or _ATT_OUTLINE_CAP)
         except Exception:
             return ""
+
+    # ★ 2026-11-13（#55）：本轮附件的**章节索引**（供 read_attachment_section 按需取正文）。
+    #   为什么必须建索引而不是让模型现查：章节号 → 字符区间要在**解析时**算好，
+    #   工具调用时才做是纯正则全文扫描（长文档每次调用都扫一遍，纯浪费）。
+    def _index_attachment_sections(self, blocks):
+        """从附件分块建章节索引 → [(章号, 标题, 起, 止)]，并缓存全文到 `_att_full_text`。
+
+        ⚠️ 索引的字符偏移必须与 `_att_full_text` 的拼接方式**逐字一致**，否则取章会错位。
+        ⇒ 两者都走同一个 `"\n".join(...)` 拼接（不额外加分隔符）。
+        只认行首标题（复用 `_is_att_heading`）；首个标题之前的内容归入开篇（键 ""）。
+        """
+        texts = []
+        for b in blocks or []:
+            t = str(b or "")
+            if t.startswith("【") and "\n" in t:
+                t = t.split("\n", 1)[1]
+            texts.append(t)
+        full = "\n".join(texts)
+        self._att_full_text = full
+        index, base = [], 0
+        for t in texts:
+            # ⚠️ 必须收**块内全部**标题（与 `build_attachment_outline` 的「每块≤3 个」不同）：
+            #   索引是**取章的定位依据**，漏一个标题 ⇒ 该标题到下一标题之间的内容会被
+            #   并进上一节 ⇒ 要第 7 章却拿到第 6 章内容。宁可索引全收（几十条量级）。
+            off = 0
+            for line in t.splitlines():
+                s = line.strip()
+                if s and _is_att_heading(s):
+                    index.append((_att_section_key(s), s, base + off))
+                off += len(line) + 1     # +1 = 换行符，与 join 口径一致
+            base += len(t) + 1
+        out = []
+        for i, (k, title, st) in enumerate(index):
+            en = index[i + 1][2] if i + 1 < len(index) else len(full)
+            out.append((k, title, st, en))
+        self._att_sections = out
+        return out
+
+    def _read_attachment_section(self, section: str = "", doc_index: int = 1) -> dict:
+        """`read_attachment_section` 工具的实现：取本轮附件某章节正文。
+
+        ★ 2026-11-13（#55，米爸实测截图）：上一版只补了「章节提纲」层，模型知道了
+          第 5/6/7 章存在，却**没有任何工具能取到它** ⇒ 只能反过来向用户索要正文
+          （原话「请把第 5、6、7 章的正文贴进来」）。提纲没有通道就是空头承诺，
+          本方法补上这个通道。
+
+        口径：
+        · section 为空 ⇒ 返回章节清单（提纲），不返回全文（避免一次塞爆 token）；
+        · 命中不到 ⇒ **明确说清"没有该章 + 现有章列表"**，绝不静默返回空串
+          （静默空串会被模型当成"这章是空的"继续编造）；
+        · 只读本轮 `self._att_sections`（由 `reset_request_state` 清零）⇒
+          既不越权读别人的附件，也不额外读库。
+        """
+        secs = list(getattr(self, "_att_sections", None) or [])
+        if not secs:
+            return {"ok": False,
+                    "result": "本轮没有可读取的附件正文（可能是本轮未上传附件，"
+                              "或附件未被解析）。不要凭空猜测附件内容。"}
+        # 章号归一化：'第6章' / '6' / '6.4' / '第 7 章 验收交付' → '6' / '6.4' / '7'
+        want = _att_section_key(section) if section else ""
+        if not want:
+            lines = ["本轮附件的章节清单（用 section 参数指定要读的章节号）："]
+            for k, title, _st, _en in secs:
+                lines.append("- %s%s" % (k + " " if k else "(开篇) ", title))
+            return {"ok": True, "result": "\n".join(lines)}
+        # 同一章号可能有多个候选（doc 847 实测：**术语表区**的「5/6/7/8」条目与正文
+        #   「5.1…5.4」共存，术语表那条会抢占顶层章号，span只有 ~100 字符）。
+        #   ⇒ 顶层精确命中优先；同key 多个候选取**跨度最大**者（正文节远长于术语表条目）。
+        #   ⇒ 顶层章号还要**并入其子节**（要第 5 章不能只拿到 5.1 那一小段）。
+        cands = [s for s in secs if s[0] == want]
+        if not cands:
+            cands = [s for s in secs
+                     if s[0].startswith(want + ".") or want.startswith(s[0] + ".")]
+        if not cands:
+            avail = "、".join(sorted({s[0] for s in secs if s[0]}) or ["(无章节结构)"])
+            return {"ok": False,
+                    "result": "附件里没有找到章节「%s」。现有章节：%s。"
+                              "请从现有章节中选一个再试；确实需要该章内容时，"
+                              "才向用户说明并索要。" % (section, avail)}
+        cands.sort(key=lambda s: (0 if s[0] == want else 1, -(s[3] - s[2])))
+        pick = cands[0]
+        st, en = pick[2], pick[3]
+        # ⚠️ doc 847 实证的硬骨头：顶层「5/6/7」**只出现在术语表区**（span ~100 字符的
+        #   条目），真正的正文是「5.1…5.5」这些子节 ⇒ 按 key 精确命中会取到术语表碎片。
+        #   判据：**顶层命中的内容偏短 ⇒ 回落到"其子节的合并区间"**（子节才是本章正文）。
+        subs_all = [s for s in secs if s[0].startswith(want + ".")] if want else []
+        if subs_all and (en - st) < 2000:
+            s0 = min(s[2] for s in subs_all)
+            e0 = max(s[3] for s in subs_all)
+            if (e0 - s0) > (en - st):
+                st, en = s0, e0
+        elif pick[0] == want:
+            # 顶层本身有实质内容 ⇒ 并入落在其区间内的子节
+            subs = [s for s in subs_all if s[2] >= st and s[3] <= en + 1]
+            if subs:
+                en = max(s[3] for s in subs)
+        full = str(getattr(self, "_att_full_text", "") or "")
+        body = full[st:en].strip()
+        if not body:
+            avail = "、".join(sorted({s[0] for s in secs if s[0]}) or ["(无章节结构)"])
+            return {"ok": False,
+                    "result": "章节「%s」在附件里没有正文内容（可能是目录页条目）。"
+                              "现有章节：%s。请换一个章节号再试。" % (section, avail)}
+        return {"ok": True,
+                "result": "【%s %s】\n%s" % (pick[0], pick[1], body)}
 
     def _load_attachment_text(self, attachments):
         """返回 (parsed_blocks, parsed_count, skipped_names)。parsed_blocks 为 ["[文件名]\n内容…"] 列表。

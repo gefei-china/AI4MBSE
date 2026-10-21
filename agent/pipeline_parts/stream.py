@@ -2531,9 +2531,14 @@ class StreamMixin:
                     att_text +
                     "\n\n【上传资料·章节提纲（全文共 %d 字，以下为已识别的章节标题——"
                     "**你只看到了上面那份正文的前段**，后续章节的条款正文尚未注入，"
-                    "如需某章的具体条款请明确索取，不要因为正文里没有就认为文档不含该章）】\n%s"
+                    "**请用 read_attachment_section 工具按章节号自行取回**，"
+                    "不要因为正文里没有就认为文档不含该章、更不要向用户索要原文）】\n%s"
                     % (len(retrieval_att), _att_outline)
                 )
+            # ★ 2026-11-13（#55）：建章节索引 + 缓存全文，供 read_attachment_section 取章。
+            #   上一版提纲只解决「模型知道有第5/6/7 章」，没解决「它拿不到」⇒ 实测模型
+            #   只能反问用户「请把第5、6、7 章正文贴进来」。此处把「按需取回」的能力接上。
+            self._index_attachment_sections(att_blocks)
             att_parsed_info = {"parsed": att_parsed, "skipped": att_skipped[:5]}
             if att_vision.get("images"):
                 att_parsed_info["vision"] = att_vision   # 留痕：图片到底进没进模型、为什么

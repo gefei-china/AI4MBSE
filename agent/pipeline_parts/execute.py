@@ -257,6 +257,9 @@ class ExecuteMixin:
                           "（图像内容已随本条消息一并提供，请直接查看）"] + att_blocks
         att_text = "\n\n".join(att_blocks[:4]) if att_blocks else ""   # 注入 prompt（限量，避免超长）
         retrieval_att = "\n\n".join(att_blocks) if att_blocks else "" # 完整全文（供附件语义/词法召回）
+        # ★ 2026-11-13（#55）：与 stream.py 同构——建章节索引，供 read_attachment_section
+        #   按需取回缺失章节正文（模型知道有第 5/6/7 章却取不到 ⇒ 只能反问用户要原文）。
+        self._index_attachment_sections(att_blocks)
         att_parsed_info = {"parsed": att_parsed, "skipped": att_skipped[:5]}
         if att_vision.get("images"):
             att_parsed_info["vision"] = att_vision   # 留痕：这次图片到底进没进模型、为什么
