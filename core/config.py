@@ -1179,6 +1179,11 @@ DEFAULT_CONFIG = {
         "no_progress_stop": True,       # 无进展检测：同 key 同因失败第 2 次 ⇒ T4 停手（**主判据**，默认开）
         "redraw_on_stall": True,        # 收敛点触发重画（False=只留痕不重画；总闸之外的第二道闸）
         "heavy_redraw": False,          # 重量级（新 key + lineage）：默认关，轻量级够用则不动图
+        # ── P3（2026-10-21）新增四键 ──
+        "user_directive": False,        # DAG 级用户指令消费：迭代边界检查 pending 指令并做影响评估（默认关）
+        "user_confirm_redraw": False,   # 重画确认卡：T2/T3 前暂停等用户批准（默认关；超时=维持原计划，不得成新阻塞点）
+        "confirm_ttl_sec": 60,          # 确认卡 TTL（秒）：超时一律维持原计划继续（v1 R10）
+        "directive_max_touch": 3,       # 影响评估：指令点名任务数 > 此值 ⇒ 判"推翻任务划分"走 T3（宁可少判 T3）
     },
 }
 
@@ -1822,6 +1827,11 @@ CONFIG_SCHEMA = {
         "no_progress_stop":    {"type": "bool", "desc": "无进展检测：同 key 同因失败第 2 次即停手升级人工 T4（终止主判据，默认开）"},
         "redraw_on_stall":     {"type": "bool", "desc": "收敛点（有 pending 无 ready）是否触发差量重画（关=只留决策痕迹不改图）"},
         "heavy_redraw":        {"type": "bool", "desc": "T2 重量级：新 key（key_rN）+ config.lineage 替代失效任务，下游依赖边重映射（默认关）"},
+        # ── P3（2026-10-21）新增四键 ──
+        "user_directive":      {"type": "bool", "desc": "DAG 级用户指令消费：主循环迭代边界检查待处理指令并做影响评估（S1/S2 挂点，默认关）"},
+        "user_confirm_redraw": {"type": "bool", "desc": "重画确认卡：T2/T3 执行前出卡片等用户批准/否决（默认关；超时=维持原计划，不得成为新阻塞点）"},
+        "confirm_ttl_sec":     {"type": "int",  "desc": "确认卡 TTL（秒）：超时一律维持原计划继续（v1 R10：确认卡不得成为新阻塞点）"},
+        "directive_max_touch": {"type": "int",  "desc": "影响评估：指令点名任务数超过此值即判「推翻任务划分」走 T3（宁可少判 T3，判重的代价是烧 planner + 可能改坏用户已接受的图）"},
     },
 }
 

@@ -148,3 +148,37 @@ def stats() -> dict:
             "max_queue_len": MAX_QUEUE_LEN,
             "ttl_sec": TTL_SEC,
         }
+
+
+def peek_text(conv_id: int) -> str:
+    """**只读**快照：返回该会话待处理指令的合并文本（与 `pop` 同款合并格式），
+    但**不清空队列**。
+
+    ★ 为什么需要它（2026-10-21，P3 replanning / v2 §4.7 C1 分工）：
+      `pop` 的语义是"消费"—— 取出即清空，那是**单 Agent ReAct 循环**要的
+      语义（把补充并入新一轮 tool 轮次）。而 DAG 级用户指令（S1/S2）需要的
+      是"看一眼、评估影响、决定要不要重画"，**不能消费**：
+
+      · 若 DAG 侧调 `pop`，单 Agent 的 follow-up 就永远拿不到这条指令 ⇒
+        用户中途补的指令在两条通道里只会被一边看到（谁先跑谁抢到），
+        表现为"有时生效有时不生效"的竞态；
+      · 若不读只看 `pending_count`，DAG 侧拿不到指令内容，无法做影响评估。
+
+      ⇒ 两条通道**共用队列、但一个只读一个消费**。这是 v2 §4.7「DAG 级消费
+      只是多一个消费方」建议的落地形态。
+
+      ⚠️ TTL 过滤与 `pop` 同口径：过期的补充不该影响任何一条通道。
+    """
+    try:
+        cid = int(conv_id)
+    except (TypeError, ValueError):
+        return ""
+    with _LOCK:
+        q = _QUEUES.get(cid) or []
+        cutoff = _now() - TTL_SEC
+        fresh = [s for t, s in q if t >= cutoff]
+    if not fresh:
+        return ""
+    if len(fresh) == 1:
+        return fresh[0]
+    return "\n".join("【补充 %d】%s" % (i + 1, s) for i, s in enumerate(fresh))

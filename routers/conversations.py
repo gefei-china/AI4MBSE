@@ -789,6 +789,48 @@ def post_followup(conv_id: int, body: dict = None, conn=Depends(db_session),
     return {"ok": True, "pending": pending}
 
 
+@router.post("/api/conversations/{conv_id}/redraw-confirm")
+def redraw_confirm(conv_id: int, body: dict = None, conn=Depends(db_session),
+                   user=Depends(current_user)):
+    """P3 replanning：应答「重画确认卡」（v2 §4.8，默认关 ⇒ 平时无此卡）。
+
+    body: {confirm_id?: str, action: "approve"|"keep"|"supplement"}
+
+    ⚠️ **归属校验是必须的**（同 followup 端点 B1-9）：确认卡按 conv_id 分槽，
+    未校验归属则任何登录用户都能替别人"批准重画" —— 而那会**真的改动
+    别人的执行计划**（越权写操作，比注入指令更严重）。
+
+    失败一律返回"维持原计划"语义（`ok=false` + `action=keep`）：
+    用户点了按钮但没生效时，若后端沉默或报错，前端无从判断该不该重试；
+    而重画是可选能力，误重试的代价远大于漏重试。
+    """
+    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验（越权写操作防线）
+    body = body or {}
+    action = str(body.get("action") or "keep")
+    cid = str(body.get("confirm_id") or "")
+    try:
+        from services import replan_confirm as _rcfm
+    except Exception:
+        return JSONResponse({"ok": False, "error": "确认卡能力不可用", "action": "keep"}, 503)
+    try:
+        r = _rcfm.resolve(conv_id, cid or None, action)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:120], "action": "keep"}, 200)
+    # ⚠️ 失败时 `action` 必须**归一为 keep**，不能回显请求里的值：
+    #   前端 `procMarkRedrawConfirmed(confirmId, action)` 拿它决定卡片终态文案。
+    #   若这里回显 "approve"，用户点了批准但后端没受理，卡片却显示
+    #   "✓ 已批准重画" —— 与实际"维持原计划"相反，且完全静默。
+    _eff = ((r or {}).get("action") or "keep")
+    if not (r or {}).get("ok"):
+        _eff = "keep"
+    audit(audit_user(user), "conversation_redraw_confirm",
+          "会话#%d 重画确认卡应答（%s→%s，expired=%s）"
+          % (conv_id, action, _eff, bool((r or {}).get("expired"))), conn=conn)
+    return {"ok": bool((r or {}).get("ok")), "action": _eff,
+            "reason": (r or {}).get("reason") or "",
+            "expired": bool((r or {}).get("expired"))}
+
+
 @router.post("/api/messages/{msg_id}/feedback")
 def message_feedback(msg_id: int, body: dict, conn=Depends(db_session),
                      user=Depends(current_user)):

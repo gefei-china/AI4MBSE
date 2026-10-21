@@ -59,6 +59,7 @@ LEVEL_LIGHT = "T2-light"    # 轻量级：同 key 原地重派，拓扑不动
 LEVEL_HEAVY = "T2-heavy"    # 重量级：新 key + lineage，下游依赖边重映射
 LEVEL_NONE = "T0"
 LEVEL_ESCALATE = "T4"       # 升级人工
+LEVEL_LLM = "T3"            # ★ P3 新增：LLM 整图重画（动作仅 replace，skip/insert 留 P4）
 
 #: 逆向可达的防御性跳数上限（环由 Q1 兜底，但本函数不能因此死循环）。
 _MAX_HOPS = 64
@@ -487,3 +488,129 @@ def _none(reason, *, level=LEVEL_ESCALATE, dropped=None, skip=None, kept=None,
             "updates": [], "new_tasks": [], "kept": kept or [],
             "dropped": dropped or [], "skip": skip or [],
             "gates": gates or {}, "retry_keys": []}
+
+
+# ── P3：T3 LLM 整图重画（默认关，动作范围锁定 replace）───────────────────
+def plan_llm_redraw(tasks, failed_keys, *, llm_raw="", parse=None, enabled=False,
+                    round_no=1, max_rounds=1, expand_ratio=1.5,
+                    directive="", goal="", done_summaries=None, validate=None,
+                    parse_error=""):
+    """T3：把 LLM 产出的整图接进**与规则版同一套质量门**（P3 新增）。
+
+    **为什么单独一个入口而不是给 `plan_redraw` 加 `llm_raw` 参数**：
+    两者的前置条件差得远 —— 规则版的输入是"库里已有的失败任务"，LLM 版的
+    输入是"用户指令（S1/S2）经影响评估后判定需推翻任务划分"。混进一个函数
+    会让「LLM 版到底受不受 Q1~Q5 约束」这件事在代码里不可见 —— 而这正是
+    本仓最容易被后续改动悄悄拆掉的防线（P2 的 Q2/Q5 就是这么保住"撞车/悬空
+    依赖"两类事故的）。**同一个 `quality_gates` 调用点**是这条防线唯一的
+    保证方式。
+
+    **范围锁定 replace**（拍板⑤，v2 §6 决策表）：LLM 版只允许产出失效子图的
+    替代任务；`skip`（删任务）与 `insert`（凭空加任务）留 P4 后评估。
+    实现方式是**解析层即拒**（`parse` 注入 `replan_directive.parse_llm_plan`，
+    由它保证只返回替换任务）**+ Q3 兜底**（每个新任务必须有
+    `lineage.from ∈ failed`）。两道都在，才叫"锁定"—— 只靠提示词约束
+    等于没有约束（v1 §4.10 反复出现的同一条纪律）。
+
+    **默认关 ⇒ 零行为变更**：`enabled=False` 时本函数恒返回 none，
+    且不调用 `parse`（LLM 调用已在编排层按开关前置拦截）。
+
+    返回与 `plan_redraw` **同款** decision dict（含 `gates`），便于
+    stream.py 走同一套应用分支与 span 装配。
+    """
+    failed = set(str(k) for k in (failed_keys or []) if str(k))
+
+    if not enabled:
+        return _none("replanning.llm_redraw 关 ⇒ 不做 LLM 整图重画", level=LEVEL_NONE)
+    if not llm_raw and not parse_error:
+        return _none("LLM 未产出可用结果 ⇒ 不重画（T4）", level=LEVEL_ESCALATE)
+    if int(round_no or 1) > int(max_rounds or 1):
+        return _none("重画轮次 %d > 上限 %d ⇒ T4" % (int(round_no or 1),
+                                                  int(max_rounds or 1)),
+                     level=LEVEL_ESCALATE)
+    # 解析失败 ⇒ 直接 T4（绝不"尽力而为落库"，同不变量 3）
+    if parse_error:
+        return _none("LLM 输出不可用：%s ⇒ T4" % parse_error, level=LEVEL_ESCALATE)
+
+    parse_fn = parse
+    if parse_fn is None:
+        try:
+            from services.replan_directive import parse_llm_plan as parse_fn
+        except Exception:
+            return _none("replan_directive 不可用 ⇒ 无法校验 LLM 输出，T4",
+                         level=LEVEL_ESCALATE)
+
+    try:
+        new_tasks, perr = parse_fn(llm_raw, sorted(failed), round_no=round_no)
+    except Exception as e:
+        return _none("LLM 输出解析异常：%s ⇒ T4" % e, level=LEVEL_ESCALATE)
+    if perr or not new_tasks:
+        return _none("LLM 输出无有效任务：%s ⇒ T4" % (perr or "空"), level=LEVEL_ESCALATE)
+
+    # ★ 不变量 1 的第二道本地兜底：解析层已保证 `from ∈ failed`，这里再剔一次
+    #   —— Q3 会查它，但 Q3 的语义是"新任务有 lineage"，而不是"lineage 指向
+    #   合法失效集"。差别在于：若有人把 Q3 改成宽松版，这条兜底仍在。
+    def _lin_from(t):
+        lin = _cfg(t).get("lineage")
+        return str((lin or {}).get("from") or "") if isinstance(lin, dict) else ""
+
+    bad = [t for t in new_tasks if _lin_from(t) not in failed]
+    if bad:
+        return _none("LLM 产出了 %d 个非替代任务（lineage.from ∉ 失效集）⇒ "
+                     "超出 replace 范围，T4" % len(bad), level=LEVEL_ESCALATE)
+
+    # 保留集：与规则版重量级同口径 —— 全图 - failed 本身；未执行任务的 deps
+    #   指向 failed 的改指**替代它的新 key**。
+    #   ⚠️ 映射方向：`{old_key: new_key}`（下游 deps 里存的是**旧** key）。
+    #     规则版由 `build_redraw_plan` 在生成新 key 时同时维护 remap；LLM 版的
+    #     new key 由模型命名，只能在这里按 `lineage.from` 反查建立映射 ——
+    #     若建成 `{new: new}` 恒等映射，下游 deps 会继续指向**已被删除的旧
+    #     key**，Q5 因"旧 key 既不在保留集也不在 done 集"而拦下，整次重画必然
+    #     失败（表现为"LLM 开了但永远 T4"）。这是 LLM 接线最容易错的一处。
+    remap = {}
+    for t in new_tasks:
+        frm = _lin_from(t)
+        if frm and frm not in remap:
+            remap[frm] = str(t.get("key") or "")
+    kept = []
+    for t in (tasks or []):
+        if not isinstance(t, dict):
+            continue
+        k = _key(t)
+        if not k or k in failed or _terminal(t.get("status")):
+            continue
+        nt = dict(t)
+        nt["deps"] = [remap.get(d, d) for d in _deps(t)]
+        nt["key"] = k
+        nt["deps_json"] = json.dumps(nt["deps"], ensure_ascii=False)
+        kept.append(nt)
+
+    remaining = sum(1 for t in (tasks or [])
+                    if isinstance(t, dict) and not _terminal(t.get("status")))
+    done_keys = set(_key(t) for t in (tasks or [])
+                    if isinstance(t, dict) and str(t.get("status") or "") == "done")
+    full_plan = ([{"key": str(t.get("key") or ""), "deps": t.get("deps") or [],
+                   "agent": t.get("agent") or "", "title": t.get("title") or ""}
+                  for t in new_tasks]
+                 + [{"key": str(t.get("key") or t.get("task_key") or ""),
+                     "deps": _deps(t), "agent": t.get("agent_id") or "",
+                     "title": t.get("title") or ""} for t in kept]
+                 + [{"key": k, "deps": _deps(t), "agent": t.get("agent_id") or "",
+                     "title": t.get("title") or ""}
+                    for t in (tasks or []) if isinstance(t, dict)
+                    for k in [_key(t)] if k and k in done_keys])
+    gates = quality_gates([], new_tasks, kept, failed_keys=failed,
+                          expand_ratio=expand_ratio, remaining_count=remaining,
+                          validate=validate, done_keys=done_keys,
+                          full_plan=full_plan)
+    if not gates.get("ok"):
+        return _none(gates.get("reason"), level=LEVEL_ESCALATE,
+                     dropped=sorted(failed), gates=gates)
+
+    return {"action": ACTION_REPLAN, "level": LEVEL_LLM, "signals": [],
+            "reason": "T3 LLM 整图重画：替代 %d 个失效任务（保留 %d 个，过 Q1~Q5）"
+                      % (len(new_tasks), len(kept)),
+            "updates": [], "new_tasks": new_tasks, "kept": kept,
+            "dropped": sorted(failed), "skip": [], "remap": remap,
+            "gates": gates,
+            "retry_keys": [str(t.get("key") or "") for t in new_tasks]}

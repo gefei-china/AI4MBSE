@@ -509,6 +509,11 @@ replanning.confirm_ttl_sec     = 60      # 【新】确认卡 TTL（超时维持
 
 ## 7. 实施顺序（v2 修订，四阶段）
 
+> **P3 已实施（2026-10-21）**：交付 S1/S2 的 DAG 级挂点与影响评估、确认卡、T3 LLM
+> 整图重画（默认关，范围锁定 replace）。门禁 119 项 + 7 变异、行为探针 29/29、
+> 前端探针 17/17 全绿；实施期抓到 5 个"看起来对、实际不生效"的真 bug
+> （最典型的是确认卡跨线程竞态 ⇒ 用户点批准却静默不重画）—— 见 §7.3。
+>
 > **P1 已实施（2026-10-21，提交 `3dcb628` R11 + `743c948` P1 主体 + `2a5ce80` 基线脚本）**。
 > 交付超出原表一项：`plan_revised` 事件发送路径随 P1 就位（`replan_signal.plan_revised_payload`
 > 纯函数 + 门禁 U4），但按 v1 §3.2 口径 **T1 补跑不发 plan_revised**（它是同 key 补跑、
@@ -520,7 +525,7 @@ replanning.confirm_ttl_sec     = 60      # 【新】确认卡 TTL（超时维持
 |---|---|---|---|
 | P1 观测与信号结构化（不动执行） | S3~S7 汇成观测结构 + **replan span/decision record（含 action=none）+ plan_revised 事件**；T1 补跑（S3'，排除 interrupted） | 信号探针 + G1/G6 门禁 + **真库基线已跑完**（《replanning真库基线统计报告-20261021》：T1 收益面 100% 可重试类、排除 interrupted 后活场景 13.8%）+ R11 门禁同步 | 配置关 retry_once |
 | P2 差量重画（规则版）✅ | §4.10 算法（轻/重两级 + skip 叶子）+ 质量门 Q1~Q5 + 无进展检测；T2 默认关 | G2/G3/G7 门禁（66 项 + 5 变异）+ 行为探针 26/26 | replanning.enabled=False |
-| P3 用户指令触发 + 可视化 | S1/S2 挂点与影响评估（§4.7）+ T3（llm_redraw 默认关）+ 修订卡/确认卡（§4.8） | G8/G10 门禁 + 评测集 A/B 零回退证明 | 配置关 |
+| P3 用户指令触发 + 可视化 ✅ | S1/S2 挂点与影响评估（§4.7）+ T3（llm_redraw 默认关）+ 修订卡/确认卡（§4.8） | G8/G10 门禁（124 项 + 7 变异）+ 行为探针 40/40 + 前端探针 17/17 | 配置关（两闸任一 False 即回 P2） |
 | P4 巡检与早停（新增） | health_probe（规则版优先）+ early_stop；真库标定 M1~M4 阈值 | G9 门禁 + 阈值标定报告（同冲突检测阈值标定的既有手法） | 配置关 |
 
 每阶段独立提交、独立门禁（与 #49~#53 批次纪律一致）。**P1 的第一个提交必须是
@@ -595,6 +600,84 @@ A **默认关零行为变更**（t2 failed / t3 blocked / 零新任务行 / 零 
 （行为探针 A2/A3/A4 逐条钉住）。回滚方式：置 `replanning.enabled=False`（或
 `redraw_on_stall=False` 只留决策痕迹不改图）。
 
+### 7.3 P3 实施记录（2026-10-21）
+
+**交付**：S1/S2 的 DAG 级挂点与影响评估（§4.7）+ 确认卡（§4.8）+ T3 LLM 整图重画
+（`llm_redraw`，默认关，动作范围锁定 replace）。修订卡随 P2 已落地，本阶段不再重做。
+
+**代码落点**：
+
+| 设计项 | 落地 | 验证 |
+|---|---|---|
+| §4.7 影响评估 | `services/replan_directive.py`（纯函数：`should_evaluate` / `assess_impact` / `pending_tasks` / `retask_context` / `directive_meta` / `llm_redraw_prompt` / `parse_llm_plan`） | G8 门禁 U1/U2 逐格 |
+| §4.7 C1 分工 | `agent/followup.py` 新增 `peek_text()`：**只读快照不清队列**（DAG 级一个只读消费方、单 Agent 一个写消费方，共用队列） | 门禁 X2a~X2c + 探针 C1/C2 |
+| §4.7 挂点 | `stream.py` 主循环**迭代边界**（预算护栏后、`ready_tasks` 前）读 pending 指令 → 评估 → T2-light/heavy 原地 UPDATE 重派 | 探针 B1~B11 |
+| §4.8 确认卡 | `services/replan_confirm.py`（`build_payload` / `open_` / `resolve` / `wait_for`）+ `POST /api/conversations/{id}/redraw-confirm`（**带归属校验**） | 门禁 U5a~U5n + 探针 D/E |
+| §4.8 前端 | `11-pipeline.js` 新增 `procAddRedrawConfirm` + SSE 分支；计划修订卡补 T3 标签 | 前端探针 17/17 |
+| §4.10 T3 | `replan_redraw.plan_llm_redraw()`（**共用同一套 Q1~Q5**，单独入口而非加参数）+ `stream.py` **主链路真实接线**（LLM 通道产替代子图 → 质量门 → 落库 `assigned_by=replanner` + `config.lineage`） | 门禁 U6 + X6b~X6d + 探针 G1~G3 |
+| §6.2 配置 | 新增四键 `user_directive` / `user_confirm_redraw` / `confirm_ttl_sec` / `directive_max_touch`（**默认全关**） | 门禁 S2a~S2f |
+| G8/G10 门禁 | `tools/verify/verify_replan_p3.py` **124 项 + 7 变异**，CI 注册于 P2 之后 | 124/124 |
+
+**实施期抓到的 5 个真 bug（都是"看起来对、实际不生效"那一类）**：
+
+1. ★ **`wait_for` 跨线程竞态**：应答线程在 `wait_for` 取到卡 id **之前**就完成时，
+   入口只查队列 → 报"无待确认决策" ⇒ **用户点批准却静默不重画**。修法：
+   `resolve` 成功时把结果写 `_DECIDED[(cid, confirm_id)]` 留痕，`wait_for`
+   的入口/循环/收尾三处都先查留痕再报"无决策"。**单线程假时钟测不出来**
+   （应答与进入循环不在同一竞争窗口），由跨线程实测抓到。
+2. ★ **`plan_llm_redraw` 的 remap 方向**：LLM 版的 new key 由模型命名，只能按
+   `lineage.from` 反查建 `{旧key: 新key}` 映射。早先写成 `{新: 新}` 恒等映射 ⇒
+   下游 deps 继续指向**已删除的旧 key** ⇒ Q5 拦下 ⇒ "LLM 开了但永远 T4"。
+3. ★ **replace 范围锁定被顺序兜底破掉**：解析层原有一段"第 i 个新任务配第 i 个
+   失效任务"的兜底，看起来无害，实际把 LLM 凭空新增的任务也认成替代品 ——
+   `insert` 从后门溜进来且 **Q1~Q5 全绿、日志无异常**。改为**只认命名证据**
+   （`<旧key>_rN` 前缀），无法证明是替代就判 T4。
+4. ★ **点名未命中误判 T0**：用户说"第三部分改成表格"、任务标题是"撰写第三部分分析"
+   ⇒ 前缀匹配不上 ⇒ 落"无法判断指向"路径被**静默忽略**（用户以为改了、实际没改，
+   卡片上不留痕迹）。修正为"有产出要求信号 + 点名未命中 ⇒ 按影响全部未执行任务处理"。
+5. ★ **`parse_llm_plan` 的 `lineage.from` 填错**：原填新 key 自己 ⇒ `from ∈ failed`
+   恒不成立 ⇒ LLM 产出的任务全部被判越界而 T4。改为 `<旧key>_rN` 前缀反推 + 配对不到
+   就**不填**（宁可让 Q3 拦，也不给质量门开后门）。
+6. ★ **T3 只落"判定 + 留痕"、主链路从不执行**（第二轮实施期抓）：P3 首版把 T3 挂点
+   写成"本段只负责判定与留痕，实际重画由调用侧回灌"——**没有任何调用侧**。结果：
+   `llm_redraw` 开关打开、`plan_llm_redraw` 单元测试全绿、门禁 U6 全绿，但**真实编排
+   里 T3 永远不落库**（"看起来实现了、实际没接线"是最贵的一类 bug）。补齐主链路：
+   走 LLM 通道真实生成替代子图 → 过 Q1~Q5 → 落库（`assigned_by=replanner` +
+   `config.lineage`）+ 走 `plan_revised` 通道出修订卡。**新增探针 G1~G3 段**用注入式
+   假 LLM 端到端验证（默认关零新增 / 开启后真落库 / 越界被拦）。
+7. ★ **T3 的 replace 范围基准给窄了**（同上）：编排侧把 `failed` 传成"影响评估猜出的
+   目标集"，而 T3 的语义是"推翻划分重做整图"——**被替代对象由 LLM 自己决定**。
+   基准给窄 ⇒ LLM 的合法替代被判"越界"（`lineage.from ∉ failed`）⇒ 恒 T4，
+   表现为"llm_redraw 开了但永远失败"。修正为**全部非终态任务**（done 仍排除，
+   守住不变量 1「done 永不重跑」）。
+8. ★ **子任务嵌套编排写主会话消息 ⇒ FOREIGN KEY 失败**（既存缺陷，2026-10-21 顺带修）：
+   编排子任务以 `conversation_id=0` 嵌套调用 `execute_stream`（`stream.py:358`/`:734`），
+   若子任务内部也走编排路径，就会用 0 去插 `messages`——而该列有指向
+   `conversations(id)` 的外键 ⇒ 必然失败，表现为"编排流式失败，回落单 Agent 直行"，
+   且**子任务的编排产出整段丢失**（不落 messages、不写 `summary_written`）。修法：
+   会话号无效 ⇒ 不写主会话消息（子任务本就不该污染主会话历史），但**仍写
+   `summary_written`**（否则 resume 误判"可只重做汇总"⇒ 同一份汇总出现两次），
+   且**不得 `return`**（会丢掉 stage/agent/done 事件，前端停在"执行中"）。
+
+另修：中文序数指代（「第三部分」按**整张图**数而非未执行任务数，否则前两个任务
+完成后永远点名失败）；T0 也补 `basis`（"忽略"是四种结论里最需要解释的一种，
+否则用户以为系统漏了指令而重发）。
+
+**验证结果**：门禁 124/124（含变异自证）、P1 60/60、P2 66/66、orch_span
+55/55、pytest 34 passed + 1 skipped、前端探针 17/17、行为探针 **40/40**
+（A 默认关零行为变更 / B 指令真生效 / C 只读不抢队列 / D 否决不重画 /
+E 批准真重画 / **G T3 端到端（默认关零新增 → 开启后真落库 → 越界被拦 → done 不被替代）**/
+F 回归）。live 服务端到端：`redraw-confirm` 端点在"无卡/非法 action/缺字段/伪造
+confirm_id"四种情形下均返回 `ok=false` + `action=keep`（不 500、不误显"已批准"）。
+
+**默认关纪律**：`user_directive` / `user_confirm_redraw` 默认 False ⇒ 挂点段与
+确认卡段整体 no-op（行为探针 A2/A4/F1 钉住）；T3 另需 `llm_redraw=True` 才生效。
+回滚：两闸任一置 False 即恢复 P2 原行为。
+
+**P4 入口**：健康巡检 `health_probe`（S10）+ `early_stop` + 真库标定 M1~M4 阈值；
+LLM 版 `skip`/`insert` 动作（当前锁在 replace，见拍板⑤）；`replan_decisions` 表
+（真库 SQL 聚合 decision record）。
+
 ---
 
 ## 8. 开放问题决策记录（2026-10-21 米爸拍板，全部已决）
@@ -640,3 +723,5 @@ A **默认关零行为变更**（t2 failed / t3 blocked / 零新任务行 / 零 
 | orch_run_spans 表 | Task #43 建（2026-10-20 日志） | ✅ replan span 零 DDL 载体 |
 | **P1 replanning 落地**（2026-10-21，HEAD `743c948`） | `services/replan_signal.py`（信号+判定纯函数）/ `agent/pipeline_parts/stream.py` 失败点+收敛点接线（`_rs.decide_*` + `_spans.open("replan"`）/ `core/config.py` replanning 五键 / `tools/verify/verify_replan_p1.py` 60 项门禁 / `tools/_probe_replan_p1_behavior.py` 行为探针 | ✅ 已实施并验证（§7.1）；T1 计数走 SQL 原子自增（`COALESCE(retry_count,0)+1`）；e2e G0 同批修复（`_FC_OK`/`_RS_OK` 标志位、`tools.py` `_sysml_meta`/`_fc_classify` 唯一别名） |
 | **P2 replanning 落地**（2026-10-21，HEAD `df01e4f`+`99621c0`） | `services/replan_redraw.py`（重画算法+Q1~Q5 质量门纯函数）/ `agent/pipeline_parts/stream.py` 收敛点重画接线（`_rr.plan_redraw` + `redraw-decide` span + `_redraw_hist` 台账）/ `static/js/mods/11-pipeline.js` `procAddPlanRevised` 计划修订卡 / `core/config.py` replanning 扩至 10 键 / `tools/verify/verify_replan_p2.py` 66 项门禁 / `tools/_probe_replan_p2_behavior.py` 26 项 / `tools/_probe_replan_p2_frontend.py` 12 项 | ✅ 已实施并验证（§7.2）；**轻量级走 UPDATE 不追行**（`agent_tasks` 对 `(run_id,task_key)` 无唯一约束，追行会重复派发）；Q5 合法依赖集合须含 done key；无进展历史来自进程内台账而非库快照 |
+
+| **P3 replanning 落地**（2026-10-21） | `services/replan_directive.py`（影响评估纯函数 + LLM 输出解析）/ `services/replan_confirm.py`（确认卡状态机）/ `agent/followup.py` `peek_text` 只读快照（C1 分工）/ `agent/pipeline_parts/stream.py` 迭代边界指令挂点 + 确认卡拦截/`routers/conversations.py` `POST /{id}/redraw-confirm`（带归属校验）/ `static/js/mods/11-pipeline.js` `procAddRedrawConfirm` + T3 标签 / `core/config.py` replanning 扩至 14 键 / `tools/verify/verify_replan_p3.py` 124 项门禁 / `tools/_probe_replan_p3_behavior.py` 40 项 / `tools/_probe_replan_p3_frontend.py` 17 项 | ✅ 已实施并验证（§7.3）；**DAG 级只读不消费 followup 队列**；确认卡 TTL 超时维持原计划（v1 R10）；LLM 版 replace 范围锁定（无法证明是替代⇒T4），skip/insert 留 P4 |

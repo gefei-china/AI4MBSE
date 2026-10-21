@@ -923,6 +923,16 @@ jobs:
       - name: Guard P2 重规划差量重画与质量门（60 项 + 5 变异）
         run: python tools/verify/verify_replan_p2.py
 
+      # ── P3（2026-10-21）：用户指令触发（S1/S2）+ 确认卡 + T3 LLM 重画 ─────
+      # DAG 级指令挂点（迭代边界，与 followup 共队列但一个只读一个消费）+
+      # 影响评估（v2 §4.7「没有影响评估的 S1/S2 不得直接进 T3」）+ 确认卡
+      # （默认关；TTL 超时维持原计划，不得成为新阻塞点）+ T3 LLM 整图重画
+      # （默认关，范围锁定 replace，skip/insert 留 P4）。
+      # 含 7 项变异自证（删 T3 判据/去终态过滤/点名未命中即 T0/TTL 沿用请求
+      # 动作/放开 replace 锁定/质量门恒放行/删挂点闸）。
+      - name: Guard P3 重规划用户指令与确认卡（124 项 + 7 变异）
+        run: python tools/verify/verify_replan_p3.py
+
       - name: Guard reasoning 事件区分模型 CoT 与系统提示（36 条，派生判据非硬编码快照）
         run: python tools/verify/verify_reasoning_kind.py
 

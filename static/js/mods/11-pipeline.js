@@ -936,6 +936,7 @@ function procAddPlanRevised(ev){
   try{
     const lvl = ev.level || 'T2';
     const lvTxt = {'T2-light':'局部重派（不改图结构）', 'T2-heavy':'局部重画（换任务+重映射依赖）',
+                   'T3':'LLM 整图重画（换任务+重映射依赖）',
                    'T1.5':'跳过（叶子任务）'}[lvl] || lvl;
     const ups = (ev.updates||ev.retry_keys||[]);
     const adds = (ev.new_tasks||[]);
@@ -957,6 +958,71 @@ function procAddPlanRevised(ev){
        status:'done', statusText:'计划已修订', sub: (ev.reason||'').slice(0,80),
        detail, collapsed:true});
   }catch(e){ /* 渲染失败不阻断执行轨迹 */ }
+}
+
+// ── P3 replanning（2026-10-21，v2 §4.8）：重画确认卡 ──
+// 与 procAddPlanRevised 的分工：修订卡是**事后可见**（重画已发生），
+//   确认卡是**事前否决权**（重画尚未发生，用户可批可拒）。
+// ⚠️ 为什么默认不出现：`user_confirm_redraw` 默认关 ⇒ 后端从不发这个事件
+//   ⇒ 本函数不命中，行为与从前完全一致（零行为变更纪律）。
+// ⚠️ 超时文案必须来自后端 `timeout_behavior`（keep_original），**不许前端硬编码**
+//   "超时自动批准"之类 —— 那是把"沉默行使否决权"写进 UI，用户会误以为
+//   不点也会被重画（真实语义是超时维持原计划，v1 R10）。
+function procAddRedrawConfirm(ev){
+  try{
+    const id = 'redraw_confirm_' + (ev.confirm_id || (ev.run_id||0));
+    if(_procS.timeline.some(x=>x.id === id)) return;
+    const sec = (title, arr, color) => {
+      if(!arr || !arr.length) return '';
+      return '<div style="display:flex;gap:6px;font-size:11px;line-height:1.7;">'
+        + '<span style="color:var(--mut);min-width:52px;">'+title+'</span>'
+        + '<span style="color:'+color+';">'+arr.map(k=>esc(k)).join('、')+'</span></div>';
+    };
+    const secs = sec('重派', (ev.retask||[]), 'var(--ok,#2e7d32)')
+               + sec('新增', (ev.added||[]), 'var(--ok,#2e7d32)')
+               + sec('移除', (ev.dropped||[]), 'var(--err,#c62828)');
+    const ttl = (ev.ttl_sec || 60);
+    const keepOnTimeout = (ev.timeout_behavior === 'keep_original');
+    const actions = (ev.actions||[]).map(a=>
+      '<button class="btn sm '+(a.primary?'grn':'ghost')+'" onclick="redrawConfirmDecide(\''
+      + esc(ev.confirm_id||'') + '\',\'' + esc(a.id) + '\')">' + esc(a.label||a.id)
+      + '</button>').join(' ');
+    const detail = '<div style="font-size:11.5px;line-height:1.7;">'
+      + '<div>' + esc(ev.reason||'（未提供原因）') + '</div>'
+      + secs
+      + '<div style="color:var(--mut);margin-top:6px;">'
+      + '本卡将在 <b>' + ttl + ' 秒</b>后自动失效，'
+      + (keepOnTimeout ? '失效后<strong>维持原计划</strong>继续执行（不会自动重画）。'
+                       : '失效后按后端策略处理。')
+      + '</div>'
+      + '<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+      + (actions || '<span style="color:var(--mut);">（无可用动作，将按超时处理）</span>')
+      + '</div></div>';
+    procUpsert(id, {type:'redraw_confirm', icon:'🧭', title:'计划将被重画 · 待你确认',
+                    status:'run', statusText:'⏸ 待确认', detail, collapsed:false});
+  }catch(e){ /* 渲染失败不阻断执行轨迹 */ }
+}
+
+/* P3：用户对重画确认卡的应答（approve / keep / supplement）。
+ *   ⚠️ 老服务端无此端点 ⇒ 失败时把卡片落终态并提示，不卡住流程。 */
+async function redrawConfirmDecide(confirmId, action){
+  try{
+    const r = await fetch('/api/conversations/' + (_convId||0) + '/redraw-confirm',
+      {method:'POST', headers:{'Content-Type':'application/json'},
+       body: JSON.stringify({confirm_id: confirmId, action: action})});
+    const j = await r.json().catch(()=>({}));
+    procMarkRedrawConfirmed(confirmId, action, !j.ok);
+  }catch(e){
+    procMarkRedrawConfirmed(confirmId, action, true);
+  }
+}
+function procMarkRedrawConfirmed(confirmId, action, failed){
+  const id = 'redraw_confirm_' + (confirmId||'');
+  if(!_procS.timeline.some(x=>x.id === id)) return;
+  const txt = failed ? '（应答失败，已按维持原计划处理）'
+    : ({approve:'✓ 已批准重画', keep:'✓ 已维持原计划',
+        supplement:'✓ 已转为补充指令'}[action] || '✓ 已处理');
+  procUpsert(id, {status: failed ? 'error' : 'done', statusText: txt});
 }
 
 // V2.3.2 流式输出：解析 SSE 事件行（event:/data:）
@@ -1064,6 +1130,12 @@ function handleSSE(raw) {
      *   与 P1 的 trace 面板 replan 节点（审计视角）形成"用户视角 + 审计视角"双通道。
      *   ⚠️ 老服务端不发这个事件 ⇒ 分支不命中，行为与从前完全一致。 */
     procAddPlanRevised(ev);
+  } else if(evType === 'redraw_confirm') {
+    /* ★ P3 replanning（2026-10-21，v2 §4.8）：重画**确认卡**（事前否决权）。
+     *   与上面的计划修订卡是一对：修订卡事后展示"图被改成什么样"，
+     *   确认卡事前给用户"批不批这次重画"。默认关（`user_confirm_redraw`）
+     *   ⇒ 后端从不发这个事件 ⇒ 分支不命中，行为与从前完全一致。 */
+    procAddRedrawConfirm(ev);
   } else if(evType === 'skill') {
     procAddSkill(ev);      // V2.5：技能执行环节（命中技能/指令注入可见）
   } else if(evType === 'multi_intent') {

@@ -544,6 +544,32 @@ class StreamMixin:
                 _rp_enabled = _rp_heavy = _rp_skip = False
                 _rp_light = _rp_on_stall = _rp_noprog = True
                 _rp_rounds, _rp_ratio = 1, 1.5
+            # ★ P3 replanning（2026-10-21，v2 §4.7/§4.8）：DAG 级用户指令 + 确认卡。
+            #   可选依赖同样走「导入成功标志位」（同 P1/P2 的 _RS_OK/_RR_OK 纪律）。
+            #   `_directive_seen` = 本次编排已评估过的指令指纹（进程内）：
+            #   同一条指令在多个迭代边界被反复看到时**只评估一次** ——
+            #   否则「补一句『改成表格』」会在每个迭代都重派一遍所有目标任务。
+            #   口径同 `_t1_retried`/`_redraw_hist`：谱系级判定活在单次编排内。
+            try:
+                from services import replan_directive as _rdir
+                _RDIR_OK = True
+            except Exception:
+                _RDIR_OK = False
+            try:
+                from services import replan_confirm as _rcfm
+                _RCFM_OK = True
+            except Exception:
+                _RCFM_OK = False
+            _directive_seen = set()
+            try:
+                _rp_uidir = bool(_rcfg.get("replanning", "user_directive", False))
+                _rp_confirm = bool(_rcfg.get("replanning", "user_confirm_redraw", False))
+                _rp_cttl = int(_rcfg.get("replanning", "confirm_ttl_sec", 60) or 60)
+                _rp_touch = int(_rcfg.get("replanning", "directive_max_touch", 3) or 3)
+                _rp_llm = bool(_rcfg.get("replanning", "llm_redraw", False))
+            except Exception:
+                _rp_uidir = _rp_confirm = _rp_llm = False
+                _rp_cttl, _rp_touch = 60, 3
             # per-agent 信号量：按 registry.discover 的 max_concurrency 建（缺省 2；无 discover 数据 → 不限流）
             agent_sems = {}
             try:
@@ -1065,6 +1091,229 @@ class StreamMixin:
                     yield {"type": "progress", "kind": "progress",
                            "delta": "（自动编排）达到运行预算限制（任务数或 token），未派发子任务已标记，提前进入汇总…"}
                     break
+                # ── P3 replanning（2026-10-21，v2 §4.7）：DAG 级用户指令消费 ──
+                #   **挂在主循环迭代边界**（预算护栏之后、`ready_tasks` 之前）——
+                #   与 followup.py 同款纪律：只在轮次边界消费，不打断正在执行的
+                #   tool_call/子任务（DecodingAI 的教训：即时注入会 corrupt 配对）。
+                #   ⚠️ 为什么用 `peek` 语义而非 `pop`：**不能抢**单 Agent 的
+                #   follow-up 队列（那是"重启一轮 tool 循环"的语义）；DAG 级指令
+                #   只**读取**（`_fup_dag_peek`），让两条通道各司其职（v2 §4.7 C1）。
+                #   纪律：① `user_directive` 默认关 ⇒ 整段 no-op（零行为变更）；
+                #        ② 观测旁路铁律：整段 try/except，异常只丢记录不阻断编排；
+                #        ③ 评估不重画：T0 忽略、T2-light/heavy 走原地重派（UPDATE），
+                #           T3 才交 LLM 整图重画（`llm_redraw` 默认关）。
+                if _RDIR_OK and _rp_uidir and _rp_enabled and conversation_id:
+                    try:
+                        from agent import followup as _fup_dag
+                        # ★ 只取**未被单 Agent 消费过**的条目：`pop` 会清空队列，
+                        #   这里不能调；用 stats 判存在性 + pop 会在无指令时误清。
+                        #   口径：只在"队列非空"时读，读完**不消费**（C1 分工）。
+                        if _fup_dag.pending_count(conversation_id):
+                            _d_tasks = TaskQueue.tasks(conn, run_id)
+                            _d_pend = _rdir.pending_tasks(_d_tasks)
+                            # ★ 只取**未被单 Agent 消费过**的条目：`pop` 会清空队列，
+                            #   这里不能调；`peek_text` 是只读快照（见 followup.py）。
+                            #   口径：只在"队列非空"时读，读完**不消费**（C1 分工）。
+                            _d_text = _fup_dag.peek_text(conversation_id) or ""
+                            # 影响评估（C1/C2/C3 判据内建于 should_evaluate）
+                            _d_gate = _rdir.should_evaluate(
+                                _d_text, enabled=True,
+                                is_resume=bool(resume_run_id),
+                                has_pending_tasks=bool(_d_pend))
+                            if _d_gate.get("evaluate"):
+                                _d_fp = "%s|%d" % (_d_text[:120], len(_d_tasks))
+                                if _d_fp in _directive_seen:
+                                    pass                      # 同指令已评估过 ⇒ 不重复评估
+                                else:
+                                    _directive_seen.add(_d_fp)
+                                    _t_dd0 = _t.time()
+                                    _d_as = _rdir.assess_impact(
+                                        _d_text, _d_tasks,
+                                        goal="",
+                                        max_touch=_rp_touch)
+                                    _d_ms = int((_t.time() - _t_dd0) * 1000)
+                                    # 决策留痕：每次评估（含 T0）都落 span
+                                    if _spans:
+                                        _dd_sid = _spans.open(
+                                            "replan", "directive-decide",
+                                            parent=_run_sid,
+                                            meta={"pending": len(_d_pend)})
+                                        if _dd_sid:
+                                            _spans.close(_dd_sid, "ok",
+                                                         _rdir.directive_meta(
+                                                             _d_as, latency_ms=_d_ms))
+                                    _d_lvl = str(_d_as.get("level") or "")
+                                    if _d_lvl in (_rdir.LEVEL_LIGHT,
+                                                  _rdir.LEVEL_HEAVY):
+                                        # T2-light/heavy：原地重派（UPDATE，**不追行** ——
+                                        #   同 key 追行会让 ready_tasks 派发两次，
+                                        #   理由同 P2 的 X-a 断言）。
+                                        _d_applied = 0
+                                        for _tk2 in _d_pend:
+                                            _kk2 = str(_tk2.get("task_key") or "")
+                                            if _kk2 not in (_d_as.get("target_keys") or []):
+                                                continue
+                                            try:
+                                                _nd_ctx = _rdir.retask_context(
+                                                    _tk2.get("context") or "",
+                                                    _d_text, level=_d_lvl)
+                                                TaskQueue.retry(conn,
+                                                                int(_tk2["id"]))
+                                                conn.execute(
+                                                    "UPDATE agent_tasks SET context=?, "
+                                                    "retry_count=COALESCE(retry_count,0)+1, "
+                                                    "error='' WHERE id=?",
+                                                    (_nd_ctx, int(_tk2["id"])))
+                                                _t1_retried.add(_kk2)
+                                                _d_applied += 1
+                                            except Exception:
+                                                pass
+                                        if _d_applied:
+                                            conn.commit()
+                                            yield {"type": "reasoning",
+                                                   "kind": "progress",
+                                                   "delta": "（自动编排）按用户中途指令"
+                                                            "重派 %d 个任务：%s"
+                                                            % (_d_applied, _d_text[:60])}
+                                            for _k6 in (_d_as.get("target_keys") or []):
+                                                yield {"type": "subtask", "key": _k6,
+                                                       "status": "run",
+                                                       "title": "按用户指令重派",
+                                                       "agent": "", "deps": [],
+                                                       "retry_count": 1}
+                                            if _RS_OK:
+                                                _pd = _rs.plan_revised_payload(
+                                                    {"action": "replan",
+                                                     "level": _d_lvl,
+                                                     "reason": _d_as.get("reason") or ""},
+                                                    run_id=run_id)
+                                                if _pd:
+                                                    _pd["updates"] = list(
+                                                        _d_as.get("target_keys") or [])
+                                                    yield _pd
+                                    elif (_d_lvl == _rdir.LEVEL_REDRAW and _rp_llm
+                                          and _RR_OK):
+                                        # T3：交 LLM 整图重画（**默认关**）。
+                                        #   走 LLM 通道真实生成替代子图，再交给
+                                        #   `plan_llm_redraw` 过**同一套 Q1~Q5 质量门** ——
+                                        #   门禁不通过 ⇒ T4 停手，绝不"尽力而为落库"。
+                                        #   ⚠️ 范围锁定 replace：只允许替代失效子图，
+                                        #   凭空加任务/删任务（skip/insert）留 P4。
+                                        # ★ T3 的 replace 范围基准 = **全部非终态任务**
+                                        #   （不只是 `target_keys`，也不只是
+                                        #   `pending_tasks`）。
+                                        #   理由：T3 的语义是"推翻任务划分重做
+                                        #   整图"（v2 §4.10），**被替代的对象由
+                                        #   LLM 自行决定**（它产出哪些替代任务，
+                                        #   就替代哪些）。若这里传一个"编排侧猜
+                                        #   出来的"窄集合（如只传 target_keys），
+                                        #   范围锁定（`lineage.from ∈ failed`）
+                                        #   就会把 LLM 的合法替代判成"越界" ——
+                                        #   表现为"llm_redraw 开了但永远 T4，
+                                        #   且日志里看不出是范围基准给窄了"。
+                                        #   ⚠️ done 任务**不在**范围内：不变量 1
+                                        #   （done 永不重跑）。
+                                        _d_fail = []
+                                        for _t3f in (_d_tasks or []):
+                                            _k3f = str(_t3f.get("task_key") or "")
+                                            _s3f = str(_t3f.get("status") or "")
+                                            if _k3f and _s3f not in ("done", "failed",
+                                                                   "cancelled",
+                                                                   "canceled"):
+                                                _d_fail.append(_k3f)
+                                        if not _d_fail:
+                                            _d_fail = list(_d_as.get("target_keys") or [])
+                                        _d_raw = ""
+                                        _d_perr = ""
+                                        try:
+                                            _d_tpl, _d_hint = _rdir.llm_redraw_prompt(
+                                                goal or "", _d_tasks,
+                                                directive=_d_text)
+                                            _d_resp = llm_client.chat(
+                                                [{"role": "user", "content": _d_tpl}],
+                                                provider_id=provider_id,
+                                                _intent="planner")
+                                            _d_raw = ((_d_resp.get("choices") or [{}])[0]
+                                      .get("message", {}) or {}).get("content", "")
+                                            _d_data = (_AP._parse_json_block(_d_raw)
+                                                       if _d_raw else None)
+                                            _d_raw = (json.dumps(_d_data, ensure_ascii=False)
+                                                      if isinstance(_d_data, dict)
+                                                      else (_d_raw or ""))
+                                        except Exception as e:
+                                            _d_perr = ("LLM 调用失败：%s" % e)[:120]
+                                        _d_dec = _rr.plan_llm_redraw(
+                                            _d_tasks, _d_fail, llm_raw=_d_raw,
+                                            parse=_rdir.parse_llm_plan,
+                                            enabled=True, round_no=1,
+                                            directive=_d_text, goal=goal or "",
+                                            parse_error=_d_perr,
+                                            validate=TaskQueue.validate_plan)
+                                        if _d_dec.get("action") == "replan":
+                                            # ★ 落库顺序**先改下游 deps 再 create_plan**
+                                            #   （同 P2 重量级）：deps 指向的新 key 此刻
+                                            #   还不存在，但 `UPDATE` 不校验外键，而
+                                            #   `create_plan` 会过滤"计划外 key" ——
+                                            #   反序会把刚写的 t2_r1 依赖当场丢掉。
+                                            _d_ins = 0
+                                            try:
+                                                for _kt3 in (_d_dec.get("kept") or []):
+                                                    _kk3 = str(_kt3.get("key")
+                                                              or _kt3.get("task_key")
+                                                              or "")
+                                                    if not _kk3:
+                                                        continue
+                                                    conn.execute(
+                                                        "UPDATE agent_tasks SET deps=? "
+                                                        "WHERE run_id=? AND task_key=? "
+                                                        "AND status IN ('planned','ready')",
+                                                        (json.dumps([str(d) for d in
+                                                                     (_kt3.get("deps") or [])],
+                                                                    ensure_ascii=False),
+                                                         run_id, _kk3))
+                                                conn.commit()
+                                                TaskQueue.create_plan(
+                                                    conn, run_id,
+                                                    _d_dec.get("new_tasks") or [],
+                                                    assigned_by="replanner",
+                                                    conversation_id=conversation_id)
+                                                _d_ins = len(_d_dec.get("new_tasks") or [])
+                                            except Exception as _d_ex:
+                                                # ⚠️ 不静默吞：观测旁路铁律允许"不阻断编排"，
+                                                #   但**必须留痕** —— 否则"T3 开了却没落库"
+                                                #   这类故障在日志里完全不可见（排障时
+                                                #   只能靠猜）。
+                                                _d_ins = 0
+                                                try:
+                                                    print("[replan] T3 落库失败：%s"
+                                                          % str(_d_ex)[:160], flush=True)
+                                                except Exception:
+                                                    pass
+                                            if _RS_OK:
+                                                _pd3 = _rs.plan_revised_payload(
+                                                    {"action": "replan",
+                                                     "level": _rdir.LEVEL_REDRAW,
+                                                     "reason": _d_dec.get("reason") or ""},
+                                                    run_id=run_id)
+                                                if _pd3:
+                                                    _pd3["updates"] = list(_d_fail)
+                                                    _pd3["added"] = [
+                                                        str(x.get("key") or "")
+                                                        for x in (_d_dec.get("new_tasks")
+                                                                  or [])]
+                                                    yield _pd3
+                                            yield {"type": "reasoning", "kind": "progress",
+                                                   "delta": "（自动编排）T3 整图重画："
+                                                            "新增 %d 个替代任务（%s）"
+                                                            % (_d_ins, _d_dec.get("reason")
+                                                               or "")[:50]}
+                                        else:
+                                            # 质量门不过 ⇒ T4 停手（保持原计划，不落库）
+                                            yield {"type": "reasoning", "kind": "progress",
+                                                   "delta": "（自动编排）T3 重画被拦：%s"
+                                                            % (_d_dec.get("reason") or "")[:80]}
+                    except Exception:
+                        pass
                 ready = TaskQueue.ready_tasks(conn, run_id)
                 if not ready:
                     # ★ P1 replanning（2026-10-21，v2 §4.6）：收敛点决策记录。
@@ -1186,6 +1435,39 @@ class StreamMixin:
                                         _spans.close(_rd_sid, "ok", _rd_meta)
 
                                 _rd_act = str(_redraw_dec.get("action") or "none")
+                                if _rd_act == "replan":
+                                    # ── P3 确认卡（v2 §4.8，默认关）──
+                                    #   开启 `user_confirm_redraw` 时，重画**执行前**
+                                    #   暂停并等用户应答；超时/非法 ⇒ 维持原计划继续。
+                                    #   ⚠️ 默认关 ⇒ 本段整体 no-op（P2 行为逐字不变）。
+                                    if _RCFM_OK and _rp_confirm and conversation_id:
+                                        try:
+                                            _cp = _rcfm.build_payload(
+                                                _redraw_dec, run_id=run_id,
+                                                round_no=_redraw_rounds + 1,
+                                                ttl_sec=_rp_cttl)
+                                            _cid6 = _rcfm.open_(conversation_id, _cp,
+                                                                  ttl_sec=_rp_cttl)
+                                            if _cid6:
+                                                yield dict(_cp, confirm_id=_cid6)
+                                                _rs6 = _rcfm.wait_for(
+                                                    conversation_id, poll_s=1.0)
+                                                if str(_rs6.get("action") or "") \
+                                                        != _rcfm.ACTION_APPROVE:
+                                                    # 维持原计划：不改图、不推进轮次，
+                                                    #   只把"曾有一次重画被否决/超时"落留痕。
+                                                    yield {"type": "reasoning",
+                                                           "kind": "progress",
+                                                           "delta": "（自动编排）重画未执行：%s"
+                                                                    % (_rs6.get("reason") or "")}
+                                                    _rd_act = "none"
+                                                    _redraw_dec = None
+                                                else:
+                                                    yield {"type": "reasoning",
+                                                           "kind": "progress",
+                                                           "delta": "（自动编排）用户已批准重画"}
+                                        except Exception:
+                                            pass
                                 if _rd_act == "replan":
                                     _applied = 0
                                     if _rp_light and not _rp_heavy:
@@ -1989,29 +2271,50 @@ class StreamMixin:
         self._record_skill_feedback(run_id=int(conversation_id or 0), intent=intent, output_content=orch_content)
         with db_conn() as conn2:
             # 2026-09-29：user 消息已在 execute_stream 入口落库，此处只插 assistant（防重复）
-            cur = conn2.execute(
-                "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
-                (conversation_id, "assistant", orch_content, "text", card_data)
-            )
-            msg_id = cur.lastrowid
-            _archive_artifacts(conn2, conversation_id, msg_id, card_data, orch_content, intent)
-            conn2.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
-                          (intent, conversation_id))
-            # C-1（2026-10-04）：「汇总产物已落库」标记**必须与消息 INSERT 同事务**。
-            #   分两次提交的话，中途崩溃会留下「消息在、标记 0」→ resume 误判"可只重做汇总"
-            #   → 同一份汇总在会话里出现两次。故写在同一个 with 块内，由 db_conn 统一提交。
-            if run_id:
-                try:
-                    from agent.orch_checkpoint import mark_summary_written as _ck_msw
-                    _ck_msw(conn2, run_id)
-                except Exception:
-                    pass
-            # Audit log
+            # ⚠️ 2026-10-21：编排**子任务**是以 `conversation_id=0` 嵌套调用本方法的
+            #   （见 `execute_stream(query, 0, ...)` 两处调用）。若子任务内部也走了
+            #   编排路径，这里会用 0 去插 `messages` —— 而 `messages.conversation_id`
+            #   有指向 `conversations(id)` 的外键 ⇒ **必然 FOREIGN KEY 失败**，
+            #   表现为"编排流式失败，回落单 Agent 直行"，且**子任务的编排产出
+            #   整段丢失**（不落 messages、不写 summary_written）。
+            #   口径：会话号无效 ⇒ 不写主会话消息（子任务本就不该污染主会话历史）。
+            #   这与"子任务不重开 trace、沿用外层"（同处注释）是同一条纪律。
+            if not conversation_id:
+                # 无效会话号：跳过消息落库，但**仍要**标记 summary_written ——
+                #   否则 resume 会误判"可只重做汇总"⇒ 同一份汇总出现两次。
+                #   ⚠️ **不能 return**：本方法后续还要 yield stage/agent/done 事件，
+                #   提前 return 会让子任务的编排事件整段消失（前端停在"执行中"）。
+                if run_id:
+                    try:
+                        from agent.orch_checkpoint import mark_summary_written as _ck_msw
+                        _ck_msw(conn2, run_id)
+                    except Exception:
+                        pass
+                msg_id = 0
+            else:
+                cur = conn2.execute(
+                    "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
+                    (conversation_id, "assistant", orch_content, "text", card_data)
+                )
+                msg_id = cur.lastrowid
+                _archive_artifacts(conn2, conversation_id, msg_id, card_data, orch_content, intent)
+                conn2.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
+                              (intent, conversation_id))
+                # C-1（2026-10-04）：「汇总产物已落库」标记**必须与消息 INSERT 同事务**。
+                #   分两次提交的话，中途崩溃会留下「消息在、标记 0」→ resume 误判"可只重做汇总"
+                #   → 同一份汇总在会话里出现两次。故写在同一个 with 块内，由 db_conn 统一提交。
+                if run_id:
+                    try:
+                        from agent.orch_checkpoint import mark_summary_written as _ck_msw
+                        _ck_msw(conn2, run_id)
+                    except Exception:
+                        pass
+                # Audit log
 # P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——
 #   此前此处直插 audit_logs 只有 5 列，绕过溯源上下文（IP/UA/request_id）与哈希链，
 #   且归属写死「王工」（不可信）。改由统一入口写入，与其余 200+ 条审计同一口径。
-            audit(audit_user(user), "llm_chat",
-                  f"会话#{conversation_id} · 自动编排（{len(orch_tasks)}子任务）· 意图:{intent}", conn=conn2)
+                audit(audit_user(user), "llm_chat",
+                      f"会话#{conversation_id} · 自动编排（{len(orch_tasks)}子任务）· 意图:{intent}", conn=conn2)
         try:
             conn.close()
         except Exception:
