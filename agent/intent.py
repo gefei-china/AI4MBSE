@@ -178,12 +178,33 @@ class IntentRouter:
     def _db_kw_priority(self, t: str):
         """P1-13：DB 自定义 Agent 的**强特异关键词**优先命中 → 意图名，否则 None。
 
-        只认 ≥ `_DB_KW_PRIORITY_MIN_SCORE`（默认 1.0 = 至少一个 ≥4 字非泛词）——
-        单泛词（如"视图"）不构成信号，不误抢。纯函数（依赖 _db_intents 与 _scored_keyword_pick），
-        供 detect 前置调用 + 负对照直接测（不经意图缓存）。
+        只认「**至少一个 ≥4 字非泛词命中**」（对应 `_kw_score` 里 `min(1.0, len/4)` 给满分的
+        特异词）——单泛词（如"视图"）不构成信号，不误抢。纯函数（依赖 _db_intents 与
+        _scored_keyword_pick），供 detect 前置调用 + 负对照直接测（不经意图缓存）。
+
+        ★ 2026-11-12（#53 门禁重构实证，tools/verify/verify_intent_db_kw.py F1/M1）：
+        判据从「**总得分** ≥ 1.0」改为「**单个最强特异词的得分** ≥ 阈值」。原判据有真实
+        漏洞 —— `_kw_score` 的**泛词共现**规则是 `0.5/词`，于是「泛词代理」Agent 只要配了
+        两个泛词（如 视图+生成），命中「生成视图」就恰好拿到 0.5×2 = **1.0** 分，
+        与阈值齐平而被判成"强特异命中" ⇒ **纯泛词的 Agent 能抢走本该走 builtin 建模
+        强信号的路由**（实测：合成层里「生成视图」被判给泛词代理而非 design）。
+        总分还会把「一堆泛词 + 一个 2 字特异词」累加到阈值以上，同样不该抢。
+        注释里写的语义一直是"至少一个 ≥4 字非泛词"，此处把代码补齐到该语义 ——
+        单个特异词按 `min(1.0, len/4)` 计权（≥4 字即满分 1.0、2 字 0.5），只看**它的**分
+        是否达阈值；命中里没有任何特异词（纯泛词）则最强分为 0，永远不够 1.0。
+        ⚠️ 保留"阈值可 monkeypatch"的能力（负对照 M1b 把阈值降到 0 即"完全去掉守卫"，
+        2 字弱信号也能抢）⇒ 用同一个阈值比单个最强特异词分，而不是硬编码 4 字长度。
+        A/B（intent_samples.status='confirmed'，确定性层 rule/rule_scored/explain/fused，
+        n=33，见 tmp/probe_53_ab.py）：修复前后**逐条零差异** —— 真库现网没有"只配泛词
+        却恰好吃到 2 个泛词"的 Agent，故为纯防御性收紧。
         """
         _pick = self._scored_keyword_pick(t, [("db", self._db_intents)])
-        if _pick[0] and _pick[1] >= self._DB_KW_PRIORITY_MIN_SCORE:
+        if not _pick[0]:
+            return None
+        # 单个最强特异词得分（纯泛词命中 → 0.0，绝不构成 db 强特异信号）
+        _strong = max([min(1.0, len(k) / 4.0) for k in _pick[2]
+                       if k not in self._GENERIC_KW] or [0.0])
+        if _strong >= self._DB_KW_PRIORITY_MIN_SCORE:
             return _pick[0]
         return None
 
