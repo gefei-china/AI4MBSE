@@ -509,6 +509,13 @@ replanning.confirm_ttl_sec     = 60      # 【新】确认卡 TTL（超时维持
 
 ## 7. 实施顺序（v2 修订，四阶段）
 
+> **P1 已实施（2026-10-21，提交 `3dcb628` R11 + `743c948` P1 主体 + `2a5ce80` 基线脚本）**。
+> 交付超出原表一项：`plan_revised` 事件发送路径随 P1 就位（`replan_signal.plan_revised_payload`
+> 纯函数 + 门禁 U4），但按 v1 §3.2 口径 **T1 补跑不发 plan_revised**（它是同 key 补跑、
+> 不改图；用户可见性 = subtask 事件 retry_count+1）⇒ 该事件的实际触发在 P2（重画）。
+> 另同批修掉 e2e G0 三处既存别名遮蔽 hit（2026-10-13 B1-6 遗留，CI 自那时起红）——
+> 见 §7.1。
+
 | 阶段 | 内容 | 交付物 | 回滚方式 |
 |---|---|---|---|
 | P1 观测与信号结构化（不动执行） | S3~S7 汇成观测结构 + **replan span/decision record（含 action=none）+ plan_revised 事件**；T1 补跑（S3'，排除 interrupted） | 信号探针 + G1/G6 门禁 + **真库基线已跑完**（《replanning真库基线统计报告-20261021》：T1 收益面 100% 可重试类、排除 interrupted 后活场景 13.8%）+ R11 门禁同步 | 配置关 retry_once |
@@ -518,6 +525,32 @@ replanning.confirm_ttl_sec     = 60      # 【新】确认卡 TTL（超时维持
 
 每阶段独立提交、独立门禁（与 #49~#53 批次纪律一致）。**P1 的第一个提交必须是
 R11（orch_span 门禁同步）**，否则后续全红。
+
+### 7.1 P1 实施记录（2026-10-21）
+
+**代码落点**（HEAD `743c948`）：
+
+| 设计项 | 落地 | 验证 |
+|---|---|---|
+| §4.2 信号 S3~S7 | `services/replan_signal.py`（纯函数零 IO：collect_delivery_signals / decide_on_failure / decide_on_stall） | G1 矩阵逐格单测（U1） |
+| §4.6 决策记录 | 失败点 + 收敛点各落 kind=replan span（`_rs.decision_meta` 保 signals/level/action/reason/round/tokens/latency_ms 全字段）；action=none 同样落 | G6（U3 + U5f span 往返） |
+| §3.2 T1 补跑（S3'） | 主循环失败点判定 → `TaskQueue.retry` 同 key 一次 + **SQL 原子 retry_count 自增** + progress 事件 + `_t1_retried` 每 key 只补一次 | 行为探针 B/C 场景（22/22） |
+| §4.3 plan_revised | `plan_revised_payload()` 纯函数就位；**T1 不发**（v1 §3.2 口径：同 key 补跑不改图，可见性靠 subtask retry_count） | U4（none→None / retry→payload） |
+| §6.2 配置五键 | `core/config.py` DEFAULT_CONFIG + CONFIG_SCHEMA 双登记（enabled=False 总闸 / retry_once=True / rounds=1 / ratio=1.5 / llm_redraw=False） | S3a~c |
+| §4.6 前端渲染 | `03-chat.js` kindMeta + replan 决策行（level/action + reason 截断/title 全文） | 前端探针（真函数体 Node 执行） |
+| G1/G6 门禁 | `tools/verify/verify_replan_p1.py` 60 项 + 4 变异；CI 注册于 orch_span 门禁之后 | 60/60（--live 62） |
+
+**行为验证**（`tools/_probe_replan_p1_behavior.py`，Mock + 注入计划/失败，临时库）：
+A 干净 run 零 replan span / 零 plan_revised（零行为变更）；B T1 补跑成功
+（retry_count=2、span action=retry、trace 装配出 replan 节点）；C 三连败收敛
+（执行 4 次 = 首 Worker 2 + T1 派发后 Worker 2，retry_count=3，第二条决策
+span action=none「已补跑过一次」，stall-decide 留痕，下游 blocked 原样）。
+
+**同批修复（非 P1 范围但挡路）**：e2e G0 别名遮蔽三处既存 hit ——
+`stream.py::_worker` 的 `_fc = None` 兜底、`tools.py` 的 `_st`/`_fc` 与局部
+变量重名（均 2026-10-13 B1-6 引入，CI 自那时起红）。修法：导入成功标志位
+（`_FC_OK`/`_RS_OK`/`_FC_MAIN_OK`）+ 唯一别名（`_sysml_meta`/`_fc_classify`），
+不弱化门禁判据。G0 复跑 1/1。
 
 ---
 
@@ -545,7 +578,7 @@ R11（orch_span 门禁同步）**，否则后续全红。
 | A-6 | Dify / Coze（docs.dify.ai error-handling；ones.com.cn / wiz.cn 工具测评） | 节点级重试次数/间隔可配；错误类型（超时/鉴权/参数校验）分支走不同处理路径；连续失败达阈值暂停并保存状态等人介入，paused=success-with-pending 非失败，凭 token 恢复且可再次暂停；effect 标签 read/write/destructive 约束自动重试——写操作绝不盲目重发、每次重试决策记日志；节点级输入输出追踪 |
 | A-7 | Google ADK Codelab（codelabs.developers.google.com/next26/scale-agents） | 控制室检出工具失败→动态创建 replanning 子 Agent 用更宽目标重试→2 次尝试后明确 FAILED（"明确失败"优于无限循环的对照样例） |
 
-## 附 B：v1 代码索引（沿用，HEAD=20e24b0 复核状态：全部仍有效）
+## 附 B：v1 代码索引（沿用；HEAD=20e24b0 复核时全部有效。P1 实施后新增落点见表末行，HEAD `743c948`）
 
 | 机制 | 位置 | 复核 |
 |---|---|---|
@@ -562,3 +595,4 @@ R11（orch_span 门禁同步）**，否则后续全红。
 | 画布检查点（对比用） | `workflows/persistence.py` L29 / L48 | ✅ |
 | agent_tasks 表结构 | `database/schema.py` L883-912 | ✅ 无 version/lineage 列 ⇒ v2 走 assigned_by + config JSON（§4.3） |
 | orch_run_spans 表 | Task #43 建（2026-10-20 日志） | ✅ replan span 零 DDL 载体 |
+| **P1 replanning 落地**（2026-10-21，HEAD `743c948`） | `services/replan_signal.py`（信号+判定纯函数）/ `agent/pipeline_parts/stream.py` 失败点+收敛点接线（`_rs.decide_*` + `_spans.open("replan"`）/ `core/config.py` replanning 五键 / `tools/verify/verify_replan_p1.py` 60 项门禁 / `tools/_probe_replan_p1_behavior.py` 行为探针 | ✅ 已实施并验证（§7.1）；T1 计数走 SQL 原子自增（`COALESCE(retry_count,0)+1`）；e2e G0 同批修复（`_FC_OK`/`_RS_OK` 标志位、`tools.py` `_sysml_meta`/`_fc_classify` 唯一别名） |
