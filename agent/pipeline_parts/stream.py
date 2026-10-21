@@ -488,6 +488,30 @@ class StreamMixin:
                 _idle_timeout, _hard_timeout = 150, int(_timeout or 120)
             _max_retries = getattr(self, "_ORCH_MAX_RETRIES", 1)        # 自动重试次数上限
             _backoff = getattr(self, "_ORCH_RETRY_BACKOFF", 1)          # 重试退避基数（秒）
+            # ★ P1 replanning（2026-10-21，v2 §7 P1）：T1 补跑开关 + 每 key 补跑记账。
+            #   `_t1_retried` 是**进程内**集合（防"补跑→再失败→再补跑"）：
+            #   resume 语义下 failed 是终态、不再派发，进程重启后无需跨进程持久
+            #   （与无进展检测同口径：谱系级判定活在单次编排内）。
+            #   读取失败按默认 True（配置不可用时不改变 P1 默认行为）。
+            #   ⚠️ 可选依赖一律走「导入成功标志位」而非 `X = None` 兜底 ——
+            #   后者踩 e2e G0 别名遮蔽判据（import 绑定后被赋值覆盖仍当模块用）；
+            #   2026-10-21 同批修掉 _worker 的 _fc 同型历史 hit（B1-6 遗留）。
+            try:
+                from core import config as _rcfg
+                _retry_once = bool(_rcfg.get("replanning", "retry_once", True))
+            except Exception:
+                _retry_once = True
+            _t1_retried = set()          # 本次编排已 DAG 级补跑过的 task_key
+            try:
+                from services import replan_signal as _rs
+                _RS_OK = True
+            except Exception:
+                _RS_OK = False           # 信号模块不可用 ⇒ T1 退化为旧行为（不补跑）
+            try:
+                from services import failure_class as _fc_main
+                _FC_MAIN_OK = True
+            except Exception:
+                _FC_MAIN_OK = False
             # per-agent 信号量：按 registry.discover 的 max_concurrency 建（缺省 2；无 discover 数据 → 不限流）
             agent_sems = {}
             try:
@@ -863,10 +887,15 @@ class StreamMixin:
                 """
                 # ★ 2026-10-13（B1-6）：失败分类器（局部 import，与本文件既有惯例一致）。
                 #   包在 try 里：分类器不可用时**必须退回旧行为**（照重试），不能因此中断编排。
+                #   ⚠️ 2026-10-21（P1）改写法：原 `_fc = None` 兜底踩了 e2e G0 的
+                #   「别名遮蔽」判据（import 绑定后被同作用域赋值覆盖 + 仍当模块用）——
+                #   改为**导入成功标志位** `_FC_OK`：`_fc` 全程只有 import 一个绑定，
+                #   兜底走标志位，G0 判据（顺序敏感的最近绑定）自然通过。
                 try:
                     from services import failure_class as _fc
+                    _FC_OK = True
                 except Exception:
-                    _fc = None
+                    _FC_OK = False
                 tkey = tk.get("task_key") or "t"
                 ttitle = tk.get("title") or tkey
                 _t0 = _t.time()
@@ -933,7 +962,7 @@ class StreamMixin:
                         #   （不另造第二份 —— 两份词表必然漂移）。
                         #   ⚠️ `_fc` 为 None（分类器不可用）时**按旧行为照重试**：
                         #   拿不到分类能力时保守多试一次，优于直接放弃任务。
-                        if _fc is not None:
+                        if _FC_OK:
                             _ecls = _fc.classify(last_res[5], ok=bool(last_res[2]))
                             _retry_ok = _fc.is_retryable_class(_ecls)
                         else:
@@ -1006,6 +1035,28 @@ class StreamMixin:
                     break
                 ready = TaskQueue.ready_tasks(conn, run_id)
                 if not ready:
+                    # ★ P1 replanning（2026-10-21，v2 §4.6）：收敛点决策记录。
+                    #   有 pending 但无 ready ⇒ 剩余任务被 failed 的失效传播堵死。
+                    #   P1 无重画能力（T2 差量重画属 P2，v2 §7），此处**恒 action=none**，
+                    #   但 S5/S6/S7 信号与"为什么不重画"必须留痕（G6）。
+                    if _RS_OK:
+                        try:
+                            _t_dec0 = _t.time()
+                            _stall_tasks = TaskQueue.tasks(conn, run_id)
+                            _stall_dec = _rs.decide_on_stall(done_items, _stall_tasks)
+                            _dec_ms = int((_t.time() - _t_dec0) * 1000)
+                            if _spans:
+                                _pend = sum(1 for _t2 in _stall_tasks
+                                            if _t2["status"] in ("planned", "ready"))
+                                _rsid = _spans.open("replan", "stall-decide",
+                                                    parent=_run_sid,
+                                                    meta={"pending": _pend})
+                                if _rsid:
+                                    _spans.close(_rsid, "ok",
+                                                 _rs.decision_meta(_stall_dec,
+                                                                   latency_ms=_dec_ms))
+                        except Exception:
+                            pass
                     # P0-3 补（2026-09-19，端到端取证）：被阻塞的子任务**必须进入轨迹**。
                     # 此前只 `block()` 不记账 → 「t2 失败 ⇒ t3/t4 阻塞」在卡片上完全不可见
                     # （plan 只剩已执行的 2 条，状态仍报 full）。此处与 budget_hit 分支同口径
@@ -1040,7 +1091,10 @@ class StreamMixin:
                             _deps = []
                     _deps_map[tkey] = [str(d) for d in _deps]
                     yield {"type": "subtask", "key": tkey, "status": "run", "title": ttitle,
-                           "agent": tk.get("agent_id") or "", "deps": _deps_map[tkey]}
+                           "agent": tk.get("agent_id") or "", "deps": _deps_map[tkey],
+                           # P1：补跑重派时该值 >0 ⇒ 前端 run 态即可见重试徽章
+                           # （v1 §3.2「T1 用户可见性 = subtask 事件 retry_count+1」）
+                           "retry_count": int(tk.get("retry_count") or 0)}
                     yield {"type": "agent", "status": "run", "name": tkey, "display_name": ttitle,
                            "intent": intent, "hil_level": hil_level}
                 _exec_pool = _TPE(max_workers=min(len(ready), _max_workers))
@@ -1124,6 +1178,59 @@ class StreamMixin:
                                                    "proto_status": (_summary or {}).get("status")})
                             else:
                                 TaskQueue.fail(conn, tk["id"], _t_err or "子任务未产生输出")
+                                # ★ P1 replanning（2026-10-21，v2 §4.6）：任务失败点
+                                #   判定 + 决策记录。每次失败落一条 kind=replan span
+                                #   （**含 action=none** —— "为什么不补跑"与"为什么补跑"
+                                #   同等重要，对标 OpenAI DR 停止原因显式 log）；T1 命中
+                                #   则同 key 补跑一次（S3'：timeout/transient/internal，
+                                #   排除 interrupted —— 真库 50/58 失败是 reap_stuck_runs
+                                #   孤儿标记、run 已终止归 resume，补跑无意义）。
+                                #   观测旁路铁律：整段 try/except，失败只丢记录不阻断。
+                                if _RS_OK:
+                                    try:
+                                        _t_dec0 = _t.time()
+                                        _ecls_m = (_fc_main.classify(_t_err, ok=False)
+                                                   if _FC_MAIN_OK else "internal")
+                                        _dec = _rs.decide_on_failure(
+                                            tkey, _t_err, _ecls_m,
+                                            retry_once=_retry_once,
+                                            already_t1=(tkey in _t1_retried))
+                                        if (_dec.get("action") == "retry"
+                                                and _dec.get("retry_keys")):
+                                            # 同 key 补跑一次：failed→ready + retry_count+1。
+                                            # release_deps **不调**（任务未完成）；下轮迭代
+                                            # ready_tasks 自然重新派发（done/failed 事件带
+                                            # 新 retry_count ⇒ 前端徽章可见，v1 §3.2 口径）。
+                                            TaskQueue.retry(conn, tk["id"])
+                                            try:
+                                                # ★ 原子自增而非读-改-写：worker 与主循环
+                                                #   共享同一 tk dict（ready_tasks 返 dict、
+                                                #   按引用进 future），读到的值通常已同步，
+                                                #   但该共享是**隐式**契约 —— 原子 SQL 让
+                                                #   计数不依赖它（实测：3 连败场景
+                                                #   worker 重试×2 + T1×1 = retry_count 3）。
+                                                conn.execute(
+                                                    "UPDATE agent_tasks SET retry_count="
+                                                    "COALESCE(retry_count,0)+1 WHERE id=?",
+                                                    (tk["id"],))
+                                                conn.commit()
+                                            except Exception:
+                                                pass
+                                            _t1_retried.add(tkey)
+                                            yield {"type": "progress", "kind": "progress",
+                                                   "delta": "（自动编排）%s 失败为可重试类（%s），自动补跑一次"
+                                                   % (ttitle, _ecls_m)}
+                                        _dec_ms = int((_t.time() - _t_dec0) * 1000)
+                                        if _spans:
+                                            _rsid = _spans.open(
+                                                "replan", "t1-decide:%s" % tkey,
+                                                parent=_run_sid, meta={"task": tkey})
+                                            if _rsid:
+                                                _spans.close(
+                                                    _rsid, "ok",
+                                                    _rs.decision_meta(_dec, latency_ms=_dec_ms))
+                                    except Exception:
+                                        pass
                             # Task 7：子任务 token 记账写回 agent_tasks.token_count + run 累计
                             if _tok:
                                 try:

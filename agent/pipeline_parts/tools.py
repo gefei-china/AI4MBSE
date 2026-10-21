@@ -911,8 +911,10 @@ class ToolMixin:
                 return result
             if name == "sysml_stdlib_meta":
                 try:
-                    import sysml_stdlib_tools as _st
-                    result = _st.exec_tool(name, arguments or {})
+                    # ⚠️ 2026-10-21：别名 `_st` 与上方 stats 字典局部变量重名，
+                    #   踩 e2e G0 文件级危险名集合（跨/同函数重名均报）⇒ 改唯一名。
+                    import sysml_stdlib_tools as _sysml_meta
+                    result = _sysml_meta.exec_tool(name, arguments or {})
                 except Exception as exc:    # noqa: BLE001
                     result = {"ok": False,
                               "result": f"标准库模块不可用：{type(exc).__name__}: {exc}。"
@@ -1090,8 +1092,10 @@ class ToolMixin:
                 _fkind = ""
                 if not result.get("ok"):
                     try:
-                        from services.failure_class import classify as _fc
-                        _fkind = _fc(
+                        # ⚠️ 2026-10-21：别名 `_fc` 与 _build_tools_def 的 DB 连接
+                        #   局部变量重名，踩 e2e G0 文件级危险名集合 ⇒ 改唯一名。
+                        from services.failure_class import classify as _fc_classify
+                        _fkind = _fc_classify(
                             _res_txt if _res_txt and not _res_txt.startswith("[redact-failed]")
                             else str(result.get("error") or _res_txt or ""),
                             ok=False)

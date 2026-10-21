@@ -1161,6 +1161,19 @@ DEFAULT_CONFIG = {
         "max_actions": 50,              # 待决策条目上限（防长尾注水）
         "max_detail": 8,                # 每源明细条目上限
     },
+    # ── P1 replanning（2026-10-21，执行中重规划；设计见 docs/执行中重规划
+    #   replanning方案评估与完善设计-v2-20261021.md §4/§6）──────────────────
+    # 口径：**除 T1 补跑外全部默认关**（零行为变更纪律，与 intent.rule_llm_confirm
+    #   同款）；每次判定（含 action=none）落 kind=replan span 决策记录，观测先行。
+    #   基线依据：真库 58 失败 100% 可重试类，但 50/58 是 interrupted 孤儿标记
+    #   （run 已终止归 resume）⇒ T1 规则排除 interrupted（S3'），活场景收益 13.8%。
+    "replanning": {
+        "enabled": False,               # 总闸：T2 差量重画/LLM 重画总开关（P2 起消费；False=零行为变更）
+        "retry_once": True,             # T1：可重试类失败自动补跑一次（S3'：timeout/transient/internal，排除 interrupted）
+        "max_redraw_rounds": 1,         # T2 轮次上限（防无限重画；与无进展检测互为兜底）
+        "redraw_expand_ratio": 1.5,     # 新图规模上限（新任务数 ≤ 原图剩余 × 此值；防 LLM 重画膨胀）
+        "llm_redraw": False,            # T3：LLM 整图重画（默认关；规则重画确定性优先）
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1788,6 +1801,16 @@ CONFIG_SCHEMA = {
         "window_days":  {"type": "int",  "desc": "本周窗口（天）；环比对照窗口为上一个等长窗口"},
         "max_actions":  {"type": "int",  "desc": "待决策条目上限（防长尾注水）"},
         "max_detail":   {"type": "int",  "desc": "每源明细条目上限"},
+    },
+    # ── P1 replanning（2026-10-21）：执行中重规划 ──────────────────────────
+    # 白名单纪律（B4-5 教训）：配置存在 ≠ 可被配置 —— 不登记进 SCHEMA 的键
+    #   连设置页/REST 都改不了。五个键全部登记；默认值见 DEFAULT_CONFIG 注释。
+    "replanning": {
+        "enabled":             {"type": "bool", "desc": "重规划总闸（差量重画/LLM 重画；默认关=零行为变更，T1 补跑不受此闸约束——由 retry_once 单独控制）"},
+        "retry_once":          {"type": "bool", "desc": "T1 补跑：可重试类失败（timeout/transient/internal，排除 interrupted）同 key 自动补跑一次"},
+        "max_redraw_rounds":   {"type": "int",  "desc": "差量重画轮次上限（与无进展检测互为兜底，防无限重画烧钱）"},
+        "redraw_expand_ratio": {"type": "float", "desc": "重画规模上限：新任务数 ≤ 原图剩余任务数 × 此值（防 LLM 重画膨胀）"},
+        "llm_redraw":          {"type": "bool", "desc": "LLM 整图重画（默认关；规则重画确定性优先，Mock 环境行为不漂移）"},
     },
 }
 

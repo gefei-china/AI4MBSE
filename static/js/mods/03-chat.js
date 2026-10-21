@@ -888,7 +888,9 @@ function orchTraceHtml(j){
   if(!(j.spans || []).length){
     return '<div style="color:var(--mut);">' + esc(st.note || '该批次暂无轨迹数据') + '</div>';
   }
-  const kindMeta = {run:'🕸 整轮', plan:'🧭 规划', task:'🤖 子任务', summary:'📝 汇总', reflection:'🔍 评审', views:'🧩 视图'};
+  // P1 replanning（2026-10-21）：replan = 重规划决策记录节点（含 action=none 的
+  // "为什么不重画"；level/action/reason 在行内 meta 区展示，见下方 row 的通用渲染）
+  const kindMeta = {run:'🕸 整轮', plan:'🧭 规划', task:'🤖 子任务', summary:'📝 汇总', reflection:'🔍 评审', views:'🧩 视图', replan:'🔁 重规划'};
   const head = '<div style="display:flex;gap:10px;flex-wrap:wrap;color:var(--mut);margin-bottom:6px;">'
     + '<span>⏱ 合计 <b style="color:var(--ink,#223);">' + ((st.total_ms || 0)/1000).toFixed(1) + 's</b></span>'
     + '<span>🌳 ' + (j.span_count || 0) + ' 个节点</span>'
@@ -909,6 +911,10 @@ function orchTraceHtml(j){
     if(m.views) bits.push(m.views + ' 个视图');
     if(m.source) bits.push('来源:' + m.source);
     if(m.tasks !== undefined) bits.push(m.tasks + ' 个任务');
+    // P1 replanning：重规划决策行 —— level/action/reason（action=none 也展示：
+    // "为什么不重画"与"为什么重画"同等重要；reason 截断展示，全文在 title）
+    if(m.level) bits.push('<b>' + esc(m.level) + '/' + esc(m.action || 'none') + '</b>');
+    if(m.reason) bits.push('<span title="' + esc(m.reason) + '">' + esc(String(m.reason).slice(0, 50)) + (String(m.reason).length > 50 ? '…' : '') + '</span>');
     if(m.error) bits.push('<span style="color:var(--red,#d93636);">' + esc(String(m.error).slice(0, 80)) + '</span>');
     return '<div style="display:flex;gap:6px;align-items:baseline;padding:1px 0;padding-left:' + (depth*14) + 'px;flex-wrap:wrap;">'
       + dot

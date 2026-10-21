@@ -879,6 +879,16 @@ jobs:
       - name: Guard 编排观测性 trace（span 树六类插桩 + 端点归属门，54 项）
         run: python tools/verify/verify_orch_span.py
 
+      # ── P1 replanning（2026-10-21）：执行中重规划第一阶段 ─────────────────
+      # 观测与信号结构化：S3~S7 信号纯函数 + 每次判定落 kind=replan span 决策
+      # 记录（含 action=none，"为什么不重画"与"为什么重画"同等重要）+ T1 补跑
+      # （S3'：timeout/transient/internal，排除 interrupted —— 真库 50/58 失败
+      # 是 reap_stuck_runs 孤儿标记、run 已终止归 resume）。默认纪律：总闸
+      # replanning.enabled=False 零行为变更，retry_once=True 可回滚。
+      # 含 4 个变异自证（S3' 收窄被抹/无进展防护被删/失败点接线被删/reason 丢失）。
+      - name: Guard P1 重规划信号与决策记录（59 项 + 4 变异）
+        run: python tools/verify/verify_replan_p1.py
+
       - name: Guard reasoning 事件区分模型 CoT 与系统提示（36 条，派生判据非硬编码快照）
         run: python tools/verify/verify_reasoning_kind.py
 
