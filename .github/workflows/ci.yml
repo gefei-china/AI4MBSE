@@ -933,6 +933,17 @@ jobs:
       - name: Guard P3 重规划用户指令与确认卡（124 项 + 7 变异）
         run: python tools/verify/verify_replan_p3.py
 
+      # ── P4（2026-10-21）：健康巡检（S10）+ 提前收敛 + LLM 三动作 ──────────
+      # 缓慢漂移型失败的前置信号（M1 partial 密度 / M2 冲突密度 / M4 预算偏离，
+      # 阈值按真库标定：M1=50%=基线 5 倍、M4=120%；M3 停用无基线）+ 提前收敛
+      # （required 产出全 done 且零 failed ⇒ cancel 剩余非必需，汇总记 full 非
+      # partial）+ LLM 版放开 skip/insert（默认仍锁 replace，三道防线：解析层
+      # 即拒 + 计划层兜底 + Q3 双轨）+ replan_decisions 表（真库 SQL 聚合）。
+      # 含 6 项变异自证（去 M4 优先/删零 failed 判据/放开 allow 外动作/
+      # Q3 insert 去 directive 校验/skip 不从 kept 排除/节奏双闸失效）。
+      - name: Guard P4 重规划巡检早停与三动作（含 6 变异）
+        run: python tools/verify/verify_replan_p4.py
+
       - name: Guard reasoning 事件区分模型 CoT 与系统提示（36 条，派生判据非硬编码快照）
         run: python tools/verify/verify_reasoning_kind.py
 

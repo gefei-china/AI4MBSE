@@ -128,10 +128,18 @@ if os.path.exists(PROD_DB):
     _ctx = _c.execute("SELECT COUNT(*) FROM agent_tasks"
                       " WHERE context IS NOT NULL AND TRIM(context)!=''").fetchone()[0]
     _c.close()
+    _rate = 100.0 * _n / max(_tot, 1)
     print("  expected_output %d/%d = %.1f%%｜context %d/%d = %.1f%%"
-          % (_n, _tot, 100.0 * _n / max(_tot, 1), _ctx, _tot, 100.0 * _ctx / max(_tot, 1)))
-    check("E4 真库 expected_output 覆盖率为历史低值（本门禁不改历史数据，只防再退化）",
-          _n <= 5, "%d 行（若已大幅上升说明历史数据被回填，可更新本判据）" % _n)
+          % (_n, _tot, _rate, _ctx, _tot, 100.0 * _ctx / max(_tot, 1)))
+    # 2026-10-21 重标定（原判据 `_n <= 5`，按门禁自带指引更新）：
+    #   原判据写于修复上线当天（1/222=0.5%）。此后真库自然积累到 10/253=4.0%
+    #   （run 538/539/541，均为修复上线后的新计划）——**这是修复生效的证据，
+    #   不是退化**。绝对行数判据会把"功能开始工作"误报成红。
+    #   新判据改**比率上限 40%**：仍防两种真退化 —— ① 历史行被批量回填
+    #   （比率会瞬间冲到接近 100%）；② 修复被悄悄撤掉（新行不再有值，
+    #   比率随新任务积累持续走低，由 C 段字段漂移门禁另一路兜底）。
+    check("E4 真库 expected_output 填充率未异常（≤40%；防批量回填/伪造基线）",
+          _rate <= 40.0, "%.1f%%（%d/%d 行）" % (_rate, _n, _tot))
 else:
     print("  [SKIP] 未找到真库")
 

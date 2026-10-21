@@ -547,10 +547,21 @@ def t_i15():
     """C-1 顺带修掉的缺陷：resume 不得插空 user 消息。"""
     print("\n=== C-1b resume 不得产生新一轮 user 消息 ===")
     src = open(STREAM_SRC, encoding="utf-8").read()
-    idx = src.find('if not dry_run and not resume_run_id:')
-    ok = _rec("C-1b1 入口 user 消息落库已排除 resume 路径", idx > 0, f"idx={idx}")
+    # ⚠️ 2026-10-21 更新（2026-10-17「澄清续答 DB 层收口」起的形态变更）：
+    #   入口条件新增 `and not resume_of_user_msg_id` —— 澄清续答也不新起 user
+    #   轮次，改为追加到触发澄清的那条 user 消息上。原断言钉的精确串
+    #   `if not dry_run and not resume_run_id:` 已不存在 ⇒ 自 10-17 起恒红。
+    #   新断言：① 仍找得到"排除 resume 的入口分支"；② dry_run 与
+    #   resume_run_id 两个排除都在；③ 澄清续答路径同样被排除（elif 分支带归属）。
+    idx = src.find('if not dry_run and not resume_run_id')
+    ok = _rec("C-1b1 入口 user 消息落库已排除 resume 路径（resume_run_id）",
+              idx > 0, f"idx={idx}")
     ok &= _rec("C-1b2 条件里同时含 dry_run 与 resume_run_id",
-               idx > 0 and "dry_run and not resume_run_id" in src[idx:idx + 60])
+               idx > 0 and "dry_run and not resume_run_id" in src[idx:idx + 80])
+    idx_c = src.find("elif not dry_run and not resume_run_id and resume_of_user_msg_id")
+    ok &= _rec("C-1b2' 澄清续答（resume_of_user_msg_id）同样不新起 user 轮次",
+               idx_c > 0 and "conversation_id" in src[idx_c:idx_c + 120],
+               f"idx={idx_c}")
     # 同事务判据：_ck_msw 调用必须落在 `with db_conn() as conn2:` 块内（块尾 = conn.close() 之前）
     i_msw = src.find("_ck_msw(conn2, run_id)")
     i_open = src.find("with db_conn() as conn2:")

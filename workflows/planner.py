@@ -240,19 +240,26 @@ class FlowPlannerMixin:
         # 1) LLM 计划生成
         plan = []
         # 注意：JSON 示例花括号须转义（{{ }}），否则被下方 .format(n=...) 当作占位符 → KeyError
+        # ★ P4 replanning（2026-10-21）：每个任务标注 `config.required` —— 该任务
+        #   产出是否为**达成目标所必需**。这是 early_stop（提前收敛）的唯一判据来源：
+        #   required 全 done 且零 failed ⇒ 可放弃剩余非必需任务提前收尾。
+        #   ⚠️ 不标注就没有判据 —— early_stop 对无标注图恒不动作（保守：不猜目标边界）。
         prompt = (
             "你是任务规划器。把目标分解为可并行/串行执行的子任务清单，只输出 JSON：\n"
             '{{"tasks": [{{"key": "t1", "title": "子任务描述", "agent": "Agent 名",'
             ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent",'
             ' "context": "子任务必需上下文(精简事实，不复制用户全文，可空)",'
             ' "expected_output": "完成标准/期望输出格式(可空)",'
+            ' "config": {{"required": true}},'
             ' "tools": ["允许的工具白名单(可空，空=继承该 Agent 默认绑定)"],'
             ' "skills": ["指定技能(可空)"]}}]}}\n'
             f"可用 Agent 池：{pool_txt}\n"
             "task_type 可选 agent（走 Agent 完整管线）或 react（多步思考-工具求解）或 llm（纯生成）。\n"
             f"{skill_pool_txt}"
             "要求：任务数 1~{n} 个；每个任务只交付一个明确成果；有依赖关系的用 deps 表达；"
-            "context 只写该任务必需的事实与输入引用（上下文隔离，避免膨胀）；不要输出其他文字。\n"
+            "context 只写该任务必需的事实与输入引用（上下文隔离，避免膨胀）；"
+            "config.required 标注该任务产出是否为达成目标所必需（true=必需，false=可选/增强）；"
+            "不要输出其他文字。\n"
             f"目标：{goal}"
         ).format(n=max_tasks)
         # P0-6：摘要追加在 `.format()` **之后** —— 摘要里可能含 { }（元素名/JSON 片段），

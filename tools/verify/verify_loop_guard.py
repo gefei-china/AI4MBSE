@@ -131,9 +131,23 @@ def t_g4():
     ok &= _rec("G4d 明确不谎称已取消（线程仍在跑）",
                "已停止等待" in str(r.get("result")) and "已取消" not in str(r.get("result")))
     # 超时被计入 guard 统计
-    g = _fresh(tool_timeout_s=0.2)
+    # ⚠️ 2026-10-21 修正（3ef01a1「超时也重试」起的语义变更）：
+    #   超时纳入自动重试后，`timeouts` 只在**最终一次尝试仍超时**时才 +1。
+    #   原判据 `_fresh(tool_timeout_s=0.2)` 的重试窗口默认 30s > 慢工具 3s
+    #   ⇒ 重试成功 ⇒ timeouts=0 ⇒ 本断言自 2026-10-17 起恒红。
+    #   修正：重试窗口一并收紧到 0.2s ⇒ 1+3 次尝试全部超时 ⇒ 终局超时 ⇒ 计数 1。
+    g = _fresh(tool_timeout_s=0.2, retry_timeout_s=0.2)
     g.call(slow, "slow_tool", {})
-    ok &= _rec("G4e guard 统计到1 次超时", g.timeouts == 1, "timeouts=%d" % g.timeouts)
+    ok &= _rec("G4e guard 统计到1 次超时（终局仍超时才计数）",
+               g.timeouts == 1, "timeouts=%d" % g.timeouts)
+    # 新语义钉住（2026-10-17 米爸反馈「超时也需要重试」）：慢工具在重试窗口内
+    # 完成 ⇒ 终局是真实结果、不计超时 —— 防"重试成功却被重复记超时"
+    g1 = _fresh(tool_timeout_s=0.2, retry_timeout_s=30.0)
+    r_g1 = g1.call(slow, "slow_tool", {})
+    ok &= _rec("G4e' 超时后重试成功 ⇒ 终局真实结果且 timeouts=0（防重复记账）",
+               r_g1.get("ok") is True and g1.timeouts == 0
+               and r_g1.get("result") == "太晚了",
+               "ok=%s timeouts=%d" % (r_g1.get("ok"), g1.timeouts))
     # 正常工具不受影响
     g2 = _fresh(tool_timeout_s=5)
     r2 = g2.call(lambda n, a: {"ok": True, "result": "OK"}, "fast", {})

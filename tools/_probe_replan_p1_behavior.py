@@ -260,7 +260,21 @@ for kind, name, detail in fails:
 # 清理注入
 llm_client.chat = _orig_chat
 AgentPipeline.execute_stream = _orig_exec
+# Windows 下 sqlite 连接未显式 close 时文件被占用（WinError 32）⇒ 先强制 GC
+# 回收悬空连接再重试；仍删不掉也只警告不撒谎（退出码必须只反映断言结果）。
+import gc
+import time
 for _suf in ("", "-wal", "-shm"):
-    if os.path.exists(_TMP_DB + _suf):
-        os.remove(_TMP_DB + _suf)
+    for _try in range(5):
+        if not os.path.exists(_TMP_DB + _suf):
+            break
+        try:
+            gc.collect()
+            os.remove(_TMP_DB + _suf)
+            break
+        except PermissionError:
+            if _try == 4:
+                print("  [warn] 临时库清理失败（文件被占用）：%s" % (_TMP_DB + _suf))
+            else:
+                time.sleep(0.2)
 sys.exit(0 if not fails else 1)

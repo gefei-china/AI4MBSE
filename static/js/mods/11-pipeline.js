@@ -660,12 +660,16 @@ function _procSumText(t){
 function subtaskCardHtml(s){
   const run = s.status==='run';
   const stopped = s.status==='stopped';   // 五轮反馈5：用户终止 → 不再算"执行中"，也不误标失败
+  // ★ P4（2026-10-21）：skipped = 提前收敛主动放弃（early_stop cancel 的非必需任务）。
+  //   语义上**不是失败**（是"没必要做"而非"没做成"）⇒ 用灰徽章 .st.g，绝不用红。
+  const skipSt = s.status==='skipped';
   const ok = s.status==='done' && !s.error;   // 2026-09-29：done 但带 error → 不算干净完成，避免"✓完成 + 红字失败"自相矛盾
   const part = s.status==='partial' || (s.status==='done' && !!s.error);
   const badge = ok ? '<span class="st ok">done</span>'
     : part ? '<span class="st w">partial</span>'
     : run ? '<span class="st w">run</span>'
     : stopped ? '<span class="st w">stopped</span>'
+    : skipSt ? '<span class="st g">skipped</span>'
     : '<span class="st r">failed</span>';
   const caps = capTagsFor(s.agent);
   // Task 14：自动重试标记（retry_count>0 标黄显示重试次数）
@@ -736,7 +740,7 @@ function subtaskCardHtml(s){
     }
   }
   return `<div class="proc-line" style="border:1px solid var(--line);border-radius:8px;padding:5px 8px;margin:3px 0;background:#fff;">
-    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${ok?'✓':part?'◐':run?'⟳':stopped?'⏹':'✗'}${badge}${s.agent?` <span class="tag" style="font-size:10px;">${esc(s.agent)}</span>`:''}${caps}${retry}${sumBadge}${s.latency_ms?` <span style="color:var(--mut);font-size:10.5px;">⏱ ${(s.latency_ms/1000).toFixed(1)}s</span>`:''}${tk}${run?' <span class="st w">执行中…</span>':''}${stopped?' <span class="st w">已终止</span>':''}</div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${ok?'✓':part?'◐':run?'⟳':stopped?'⏹':skipSt?'⊘':'✗'}${badge}${s.agent?` <span class="tag" style="font-size:10px;">${esc(s.agent)}</span>`:''}${caps}${retry}${sumBadge}${s.latency_ms?` <span style="color:var(--mut);font-size:10.5px;">⏱ ${(s.latency_ms/1000).toFixed(1)}s</span>`:''}${tk}${run?' <span class="st w">执行中…</span>':''}${stopped?' <span class="st w">已终止</span>':''}${skipSt?' <span class="st g">主动放弃</span>':''}</div>
     ${sum}${outHtml}${detailHtml}${s.error?`<div style="color:var(--red);font-size:10.5px;margin-top:2px;">${esc(s.error)}</div>`:''}${failNote}</div>`;
 }
 // ★ F-2：子任务「详情」的展开-收起（摘要与结果是**默认展示**的，不在这里折叠）。
@@ -786,12 +790,14 @@ function procMarkStopped(){
         const doneN = all.filter(n=>n && n.status==='done').length;
         const stopN = all.filter(n=>n && n.status==='stopped').length;
         const failN = all.filter(n=>n && n.status==='failed').length;
+        const skipN = all.filter(n=>n && n.status==='skipped').length;   // P4：主动放弃
         const planList = '<div style="display:flex;flex-direction:column;gap:5px;padding:2px 0;">' +
           _procS.dag.order.map((k,i)=>{
             const n = _procS.dag.nodes[k]||{};
             const isStop = n.status==='stopped';
-            const stTxt = isStop ? '已终止' : (n.status==='failed' ? '失败' : (n.status==='partial' ? '部分完成' : '完成'));
-            const stCls = isStop ? 'w' : (n.status==='failed' ? 'r' : 'ok');
+            const skipSt = n.status==='skipped';   // P4：提前收敛主动放弃（灰，非失败）
+            const stTxt = isStop ? '已终止' : (n.status==='failed' ? '失败' : (n.status==='partial' ? '部分完成' : (skipSt ? '主动放弃' : '完成')));
+            const stCls = isStop ? 'w' : (n.status==='failed' ? 'r' : (skipSt ? 'g' : 'ok'));
             const dep = (n.deps&&n.deps.length) ? '<span style="color:var(--mut);font-size:10px;">依赖: '+esc(n.deps.join('、'))+'</span>' : '';
             const lat = n.latency_ms ? '<span style="color:var(--mut);font-size:10px;">⏱ '+(n.latency_ms/1000).toFixed(1)+'s</span>' : '';
             return '<div style="display:flex;align-items:center;gap:6px;font-size:11px;flex-wrap:wrap;">'
@@ -802,7 +808,7 @@ function procMarkStopped(){
               + lat + dep + '</div>';
           }).join('') + '</div>';
         procUpsert('plan', {type:'plan', icon:'📋', title:`计划清单（${all.length} 任务）`, status:'stopped',
-          statusText:`⏹ 已终止${stopN?` · ${stopN} 项未完成`:''}${doneN?` · ${doneN} 完成`:''}${failN?` · ${failN} 失败`:''}`,
+          statusText:`⏹ 已终止${stopN?` · ${stopN} 项未完成`:''}${doneN?` · ${doneN} 完成`:''}${skipN?` · ${skipN} 主动放弃`:''}${failN?` · ${failN} 失败`:''}`,
           detail: planList, collapsed: true});
       }
       flipped++;
@@ -829,7 +835,9 @@ function dagBuild(containerId, data){
     const nodes = [], edges = [];
     (data.order || Object.keys(data.nodes||{})).forEach(k=>{
       const n = (data.nodes||{})[k]; if(!n) return;
-      nodes.push({data:{id:k, label:(n.title||k).slice(0,18)}, classes:(n.status==='done'?'d-ok':n.status==='failed'?'d-err':n.status==='partial'?'d-warn':'d-run')});
+      // ★ P4：skipped（提前收敛主动放弃）= 灰色虚线框——与 d-warn（partial，真出了岔）
+      //   视觉上区分开：一个是"没必要做"，一个是"没做完"。
+      nodes.push({data:{id:k, label:(n.title||k).slice(0,18)}, classes:(n.status==='done'?'d-ok':n.status==='failed'?'d-err':n.status==='partial'?'d-warn':(n.status==='skipped'?'d-skip':'d-run'))});
       (n.deps||[]).forEach(d=>{ if((data.nodes||{})[d]) edges.push({data:{id:'e_'+d+'_'+k, source:d, target:k}}); });
     });
     if(!nodes.length) return null;
@@ -842,6 +850,7 @@ function dagBuild(containerId, data){
         {selector:'.d-ok', style:{'background-color':'#EAF3DE','border-color':'#3B6D11'}},
         {selector:'.d-err', style:{'background-color':'#FDF0F0','border-color':'#A32D2D'}},
         {selector:'.d-warn', style:{'background-color':'#FFF7E0','border-color':'#BA7517'}},
+        {selector:'.d-skip', style:{'background-color':'#EEF1F6','border-color':'#9aa7b5','border-width':1.5,'line-style':'dashed','color':'#5a6b7d'}},
         {selector:'edge', style:{'curve-style':'bezier','width':1.4,'line-color':'#9aa7b5','target-arrow-shape':'triangle','target-arrow-color':'#9aa7b5'}}
       ]
     });
@@ -880,13 +889,16 @@ function procAddSubtask(ev){
   const runN = all.filter(n=>n.status==='run').length;
   const doneN = all.filter(n=>n.status==='done').length;
   const failN = all.filter(n=>n.status==='failed').length;
+  // ★ P4：主动放弃的任务单独计数——混进"完成"会谎报交付，混进"失败"会误报出错
+  const skipN = all.filter(n=>n.status==='skipped').length;
   // V2.7 文本计划清单：每行 状态 + 任务标题 + Agent + 耗时 + 依赖
   const planList = '<div style="display:flex;flex-direction:column;gap:5px;padding:2px 0;">' +
     _procS.dag.order.map((k,i)=>{
       const n = _procS.dag.nodes[k]||{};
       const run = n.status==='run';
-      const stTxt = run ? '执行中' : (n.status==='failed' ? '失败' : (n.status==='partial' ? '部分完成' : '完成'));
-      const stCls = run ? 'w' : (n.status==='failed' ? 'r' : 'ok');
+      const skipSt = n.status==='skipped';   // P4：提前收敛主动放弃（灰，非失败）
+      const stTxt = run ? '执行中' : (n.status==='failed' ? '失败' : (n.status==='partial' ? '部分完成' : (skipSt ? '主动放弃' : '完成')));
+      const stCls = run ? 'w' : (n.status==='failed' ? 'r' : (skipSt ? 'g' : 'ok'));
       const spin = run ? '<span class="proc-spin"></span>' : '';
       const dep = (n.deps&&n.deps.length) ? '<span style="color:var(--mut);font-size:10px;">依赖: '+esc(n.deps.join('、'))+'</span>' : '';
       const lat = n.latency_ms ? '<span style="color:var(--mut);font-size:10px;">⏱ '+(n.latency_ms/1000).toFixed(1)+'s</span>' : '';
@@ -898,13 +910,14 @@ function procAddSubtask(ev){
         + lat + dep + '</div>';
     }).join('') + '</div>';
   procUpsert('plan', {type:'plan', icon:'📋', title:`计划清单（${all.length} 任务）`, status: runN?'run':'done',
-    statusText: runN?`执行中 ${runN}/${all.length}`:`${doneN} 完成${failN?` / ${failN} 失败`:''}`, detail: planList});
+    statusText: runN?`执行中 ${runN}/${all.length}`:`${doneN} 完成${skipN?` / ${skipN} 主动放弃`:''}${failN?` / ${failN} 失败`:''}`, detail: planList});
   const run = s.status==='run';
   // 2026-09-29：done 但带 error → "◐ 完成（有异常）"，不再标"✓ 完成"（与卡内红字失败自相矛盾）
   const statusText = run ? '执行中…'
     : (s.status==='failed' ? '✗ 失败'
+    : (s.status==='skipped' ? '⊘ 主动放弃'      // P4：目标已达成提前收敛，不是失败
     : (s.status==='partial' ? '◐ 部分完成'
-    : (s.status==='done' && s.error ? '◐ 完成（有异常）' : '✓ 完成')));
+    : (s.status==='done' && s.error ? '◐ 完成（有异常）' : '✓ 完成'))));
   // V2.6：子任务卡 = 汇总信息 + 内部执行明细（工具参数/结果，嵌套层级查看）
   // 2026-09-26（用户反馈"占用太多区域"）：**默认折叠成一行**，点开才看明细。
   //  摘要句同时上提到 head 的 `sub` 位（`.proc-title` 已具备单行省略）→ 折叠态仍能看到
@@ -924,23 +937,37 @@ function procAddSubtask(ev){
  *
  *  事件 payload（后端 services/replan_signal.py::plan_revised_payload + stream.py 补字段）：
  *    {type:'plan_revised', run_id, level, action, reason, signals[],
- *     updates:[key...], new_tasks:[key...], dropped:[key...], retry_keys:[key...]}
+ *     updates:[key...], new_tasks:[key...], added:[key...](T3), dropped:[key...],
+ *     inserted:[key...](P4), skipped:[key...](P4), retry_keys:[key...]}
  *
  *  展示口径：
- *    · 级别徽章（T2-light / T2-heavy）—— 用户一眼知道"图被改了"还是"原地重派"；
+ *    · 级别徽章（T2-light / T2-heavy / T3 / T0-early_stop）—— 用户一眼知道"图被改了"还是"原地重派"；
  *    · 原因全文（不截断）—— 计划为何变更是关键信息，藏在 tooltip 里等于没有；
- *    · 三类 key 清单分列：重派(updates) / 新增(new_tasks) / 移除(dropped)；
+ *    · 五类 key 清单分列：重派(updates) / 新增(new_tasks|added) / 插入(inserted)
+ *      / 跳过(skipped) / 移除(dropped)；
  *    · **默认折叠**：修订是低频事件，不该在执行过程里持续占屏。
+ *
+ * ★ P4（2026-10-21）：新增「插入 inserted」「跳过 skipped」两类清单。
+ *   颜色语义（与 Q3 双轨的质量口径对齐）：插入/新增=绿（建设性，每个新任务都须
+ *   证明自己为什么存在）；跳过=灰 `.st.g`（主动战略放弃，**不是失败**——红色会把
+ *   "没必要做"误读成"没做成"，early_stop 的设计核心就是这两者的区分）；
+ *   移除=红（计划被削）。early_stop 的 level 是内部号 "T0"，直接展示是黑话 ⇒ 按
+ *   `action==='early_stop'` 单独映射为人话徽章。
  */
 function procAddPlanRevised(ev){
   try{
     const lvl = ev.level || 'T2';
-    const lvTxt = {'T2-light':'局部重派（不改图结构）', 'T2-heavy':'局部重画（换任务+重映射依赖）',
-                   'T3':'LLM 整图重画（换任务+重映射依赖）',
-                   'T1.5':'跳过（叶子任务）'}[lvl] || lvl;
+    const lvTxt = (ev.action === 'early_stop') ? '提前收敛（目标已达成）'
+      : {'T2-light':'局部重派（不改图结构）', 'T2-heavy':'局部重画（换任务+重映射依赖）',
+         'T3':'LLM 整图重画（换任务+重映射依赖）',
+         'T1.5':'跳过（叶子任务）'}[lvl] || lvl;
     const ups = (ev.updates||ev.retry_keys||[]);
-    const adds = (ev.new_tasks||[]);
+    // T2/P2 路径发 new_tasks，T3 路径发 added（stream.py _pd3）—— 两个都接，
+    // 否则 LLM 三动作重画的"新增"清单在前端是空的。
+    const adds = (ev.new_tasks||ev.added||[]);
     const drops = (ev.dropped||[]);
+    const skips = (ev.skipped||[]);
+    const ins = (ev.inserted||[]);
     const sec = (title, arr, color) => {
       if(!arr || !arr.length) return '';
       return '<div style="display:flex;gap:6px;font-size:11px;line-height:1.7;">'
@@ -951,9 +978,12 @@ function procAddPlanRevised(ev){
       + '<div style="font-size:11px;line-height:1.7;">' + esc(ev.reason||'（未提供原因）') + '</div>'
       + sec('重派', ups, 'var(--ok,#2e7d32)')
       + sec('新增', adds, 'var(--ok,#2e7d32)')
+      + sec('插入', ins, 'var(--ok,#2e7d32)')
+      + sec('跳过', skips, 'var(--mut)')
       + sec('移除', drops, 'var(--err,#c62828)')
       + '</div>';
-    procUpsert('plan_revised_'+(ev.run_id||0)+'_'+(ev.level||'')+'_'+(ups.concat(adds).join(',')),
+    // id 并入 skips/ins：同一 run 连续多次修订（如早停后再精修）不能互相覆盖
+    procUpsert('plan_revised_'+(ev.run_id||0)+'_'+(lvl||'')+'_'+(ups.concat(adds, skips, ins).join(',')),
       {type:'plan_revised', icon:'🧭', title:'计划修订 · '+lvTxt,
        status:'done', statusText:'计划已修订', sub: (ev.reason||'').slice(0,80),
        detail, collapsed:true});

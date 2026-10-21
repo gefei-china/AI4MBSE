@@ -514,6 +514,13 @@ replanning.confirm_ttl_sec     = 60      # 【新】确认卡 TTL（超时维持
 > 前端探针 17/17 全绿；实施期抓到 5 个"看起来对、实际不生效"的真 bug
 > （最典型的是确认卡跨线程竞态 ⇒ 用户点批准却静默不重画）—— 见 §7.3。
 >
+> **P4 已实施（2026-10-21）**：交付 S10 健康巡检（M1/M2/M4，M3 停用无基线）+
+> 提前收敛 early_stop + LLM 三动作（skip/insert，默认仍锁 replace）+
+> replan_decisions 决策记录表。门禁 135 项 + 6 变异、行为探针 39/39、
+> 前端探针 21/21 全绿；阈值全部经真库标定（M1 50% = 基线 5.1 倍）；另顺带修掉
+> 三个既存红闸（layering 基线漂移 / loop_guard G4e / orch_resume C-1b）——
+> 见 §7.4。
+>
 > **P1 已实施（2026-10-21，提交 `3dcb628` R11 + `743c948` P1 主体 + `2a5ce80` 基线脚本）**。
 > 交付超出原表一项：`plan_revised` 事件发送路径随 P1 就位（`replan_signal.plan_revised_payload`
 > 纯函数 + 门禁 U4），但按 v1 §3.2 口径 **T1 补跑不发 plan_revised**（它是同 key 补跑、
@@ -526,7 +533,7 @@ replanning.confirm_ttl_sec     = 60      # 【新】确认卡 TTL（超时维持
 | P1 观测与信号结构化（不动执行） | S3~S7 汇成观测结构 + **replan span/decision record（含 action=none）+ plan_revised 事件**；T1 补跑（S3'，排除 interrupted） | 信号探针 + G1/G6 门禁 + **真库基线已跑完**（《replanning真库基线统计报告-20261021》：T1 收益面 100% 可重试类、排除 interrupted 后活场景 13.8%）+ R11 门禁同步 | 配置关 retry_once |
 | P2 差量重画（规则版）✅ | §4.10 算法（轻/重两级 + skip 叶子）+ 质量门 Q1~Q5 + 无进展检测；T2 默认关 | G2/G3/G7 门禁（66 项 + 5 变异）+ 行为探针 26/26 | replanning.enabled=False |
 | P3 用户指令触发 + 可视化 ✅ | S1/S2 挂点与影响评估（§4.7）+ T3（llm_redraw 默认关）+ 修订卡/确认卡（§4.8） | G8/G10 门禁（124 项 + 7 变异）+ 行为探针 40/40 + 前端探针 17/17 | 配置关（两闸任一 False 即回 P2） |
-| P4 巡检与早停（新增） | health_probe（规则版优先）+ early_stop；真库标定 M1~M4 阈值 | G9 门禁 + 阈值标定报告（同冲突检测阈值标定的既有手法） | 配置关 |
+| P4 巡检与早停（新增）✅ | health_probe（规则版优先）+ early_stop；真库标定 M1~M4 阈值；LLM 三动作（锁 replace）+ replan_decisions | G9 门禁（135 项 + 6 变异）+ 行为探针 39/39 + 前端探针 21/21 + 阈值标定报告 | 配置关（三闸任一回默认即回 P3） |
 
 每阶段独立提交、独立门禁（与 #49~#53 批次纪律一致）。**P1 的第一个提交必须是
 R11（orch_span 门禁同步）**，否则后续全红。
@@ -677,6 +684,76 @@ confirm_id"四种情形下均返回 `ok=false` + `action=keep`（不 500、不�
 **P4 入口**：健康巡检 `health_probe`（S10）+ `early_stop` + 真库标定 M1~M4 阈值；
 LLM 版 `skip`/`insert` 动作（当前锁在 replace，见拍板⑤）；`replan_decisions` 表
 （真库 SQL 聚合 decision record）。
+
+### 7.4 P4 实施记录（2026-10-21）
+
+**交付**：健康巡检 `health_probe`（S10，M1 partial 密度 / M2 冲突密度 / M4 预算偏离；
+M3 停用无基线）+ 提前收敛 `early_stop`（§4.4 B）+ LLM 版三动作 `skip`/`insert`
+（默认仍锁 `replace`，§拍板⑤）+ `replan_decisions` 决策记录表（§4.6）。
+**三闸（health_probe / early_stop / llm_actions）默认全关 ⇒ 零行为变更**，
+观测旁路纪律不变（异常不阻断编排）。
+
+**代码落点**：
+
+| 设计项 | 落地 | 验证 |
+|---|---|---|
+| §4.4 巡检主体 | `services/replan_health.py`（纯函数零 IO：`probe_due` / `partial_density` / `conflict_density` / `budget_deviation` / `health_probe` / `early_stop_plan` / `llm_health_prompt` / `parse_llm_health` / `health_meta`） | 门禁 U1~U8 逐格 |
+| §4.4 巡检节奏 | 每 `probe_every_tasks`(3) 或 `probe_every_sec`(60) 先到者；M1 窗口 = `probe_every_tasks`（一配置两用途，杜绝漂移）；双 ≤0 ⇒ 永不到期 | 门禁 U1a~U1g |
+| §4.4 M4 优先 | M4 超预算 ⇒ S9 语义"停手不重画"：block 剩余任务 + 提前进汇总，**优先于**精修动作 | 门禁 U4 + 探针 |
+| §4.4 B 提前收敛 | `early_stop_plan`：`config.required` 全 done + 零 failed + 有非必需剩余 ⇒ cancel；汇总记 **full 非 partial**（"主动战略放弃"≠"没做成"）；无 required 标注不猜 | 门禁 U6 九格 + 变异 M2 |
+| §4.4 LLM 巡检 | `health_probe_llm`（默认关，CrewAI observer 同款）：轻量模型判"剩余计划是否仍匹配 goal"，+1 次调用计入 run_tokens | 门禁 U8 |
+| 拍板⑤ 三动作 | `replan_directive.parse_llm_plan_actions`（解析层即拒 allow 外整份）+ 提示词按白名单生成约束 + 计划层兜底（skip ⊆ 失效传播集、insert 必须挂 `lineage.directive`）+ Q3 双轨 | 门禁 U9~U11 + 探针 D/E |
+| §4.6 决策记录 | `database/schema.py` 新增 `replan_decisions`（12 字段 + 2 索引，`CREATE TABLE IF NOT EXISTS` 老库自建）；`stream.py` `_write_decision` **7 个决策点**（t1_fail/stall/redraw/directive/health/early_stop/…）与 span 同源同点即时写，整体 try/except 旁路 | 门禁 U12（内存库真执行 DDL + 12 字段 INSERT） |
+| §4.4 挂点 | `stream.py` 主循环**迭代边界**（预算护栏后、`ready_tasks` 前）：巡检 → M4 停手 / 精修触发 / early_stop 取消；反思（reflection）后**幂等重追加**执行事实标注 | 门禁 S4i + 探针 C |
+| §6.2 配置 | 新增七键 `health_probe` / `health_probe_llm` / `early_stop` / `probe_every_tasks` / `probe_every_sec` / `probe_time_budget_sec` / `llm_actions`（双登记，默认全关/锁 replace） | 门禁 S2 |
+| §4.8 前端 | `11-pipeline.js` 修订卡补 `skipped`/`inserted` 两节清单 + 「提前收敛（目标已达成）」徽章；skipped 子任务灰徽章（非红）+ DAG 虚线样式 | 前端探针 21/21 |
+| 标定 | `tools/_replan_decisions_stats.py`（真库只读）+ `docs/replanning巡检与早停阈值标定报告-20261021.md` | 见报告 §结论速览 |
+
+**标定结论（真库数据，详见标定报告）**：M1 阈值 **≥50% 且窗口 N≥3**——全库基线
+10.0%（21/209，本次复跑 19/194=9.8%），50% = 基线 **5.1 倍**，远离噪声；
+M2 **≥1 即超阈**（无解决状态机 ⇒ 检出一律按未解决，保守口径）；
+M4 **>120% 严格大于**（任务耗时中位 76s / p90 149s / max 347s，留 20% 余量吸收
+长尾抖动），时间预算 **1800s/run** 对齐 `reap_stuck_runs` 30min 孤儿阈值；
+M3 **停用**（`to_verify=0` 无基线——无基线不开阈值）；early_stop 判据保守到苛刻
+（无 required 标注不猜目标边界）。
+
+**实施期抓到的 3 个真 bug / 2 个既存红闸（都是"看起来对、实际不生效"那一类）**：
+
+1. ★ **reflection 整体重写把执行事实标注揉掉**（真 bug，探针 C7/C8 抓出）：
+   RefineGate 重写 `orch_content` 后，早停 / M4 / 预算三类"部分未派发"标注
+   被抹 ⇒ 汇总谎报 full。修法：反思后**幂等重追加**（`if _early_stopped and
+   "目标已达成提前收敛" not in orch_content`），门禁 S4i 钉住。
+2. ★ **T3 路径 plan_revised 的 added 不接**（真缺口）：`ev.new_tasks||ev.added||[]`
+   才使 LLM 重画新增任务进修订卡；id 一并并入 skips/ins 清单。
+3. **前端探针自证两连修**：CRLF 行尾使 `\n}` 正则失配（改 `\r?\n`）；多 key
+   断言不能用 `>k<`（改用「、」拼接）。
+4. **layering 门禁基线漂移（既存红）**：基线 292（2026-10-05 上门禁时实测）→
+   实测 323，+31 全部来自其后 8 个**已提交**特性（含 P3 redraw-confirm 端点）——
+   用 `git archive` 快照对 72e1a8b/HEAD/工作树三点复测归因，P4 工作树与 HEAD
+   相同（零贡献）⇒ 按"卡增量不卡存量"设计重测基线为 323 并登记漂移来源。
+5. **loop_guard G4e / orch_resume C-1b 两个既存红闸**（均自 2026-10-17
+   3ef01a1「超时也重试 + 澄清续答收口」起恒红，与 P4 无关）：G4e 改为"终局
+   仍超时才计数"并新增 G4e' 钉住"重试成功不重复记账"；C-1b 改为前缀匹配 +
+   新增 C-1b2' 钉住澄清续答路径同样不新起 user 轮次。
+
+**验证结果**：门禁 **135/135**（含 6 变异：去 M4 优先 / 删零 failed 判据 /
+放开 allow 外动作 / Q3 insert 去 directive / skip 不从 kept 排除 / 节奏双闸失效
+——全部被抓）；行为探针 **39/39**（A 默认关零变更 / B M1 超阈真精修 /
+C early_stop 端到端 / D 三动作 / E 越界被拦 / F 决策聚合 / G 回归）；
+前端探针 **21/21**；回归全绿：P1 60/0、P2 66/0、P3 124/0、orch_planning
+25/25、layering 7+3 变异、loop_guard 41/41、orch_resume 83/83、
+e2e static 1/1、pytest 34 passed + 1 skipped。另修 p1 行为探针 Windows
+临时库清理竞态（GC + 重试，退出码不再谎报）。
+
+**默认关纪律**：`health_probe` / `early_stop` / `health_probe_llm` 默认 False、
+`llm_actions` 默认 `replace` ⇒ 巡检段 / 早停段 / LLM 巡检整体 no-op，三动作
+语义与 P3 逐字一致（探针 A + 门禁 S2 + U13 零行为变更组钉住）。
+回滚：三闸任一置回默认即恢复 P3 原行为。
+
+**数据缺口（进真库后复标）**：G1 `replan_decisions` 表本次实施时才建（老库
+无数据，下次 `init_db` 自建后由 `_replan_decisions_stats.py` 持续聚合）；
+G2 M3 `to_verify=0` 无基线（停用待复标）；G3 大 DAG 失效传播无样本；
+G4 span 仅覆盖 3 个 run。
 
 ---
 

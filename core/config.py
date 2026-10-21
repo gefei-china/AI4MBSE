@@ -1184,6 +1184,16 @@ DEFAULT_CONFIG = {
         "user_confirm_redraw": False,   # 重画确认卡：T2/T3 前暂停等用户批准（默认关；超时=维持原计划，不得成新阻塞点）
         "confirm_ttl_sec": 60,          # 确认卡 TTL（秒）：超时一律维持原计划继续（v1 R10）
         "directive_max_touch": 3,       # 影响评估：指令点名任务数 > 此值 ⇒ 判"推翻任务划分"走 T3（宁可少判 T3）
+        # ── P4（2026-10-21）新增七键：健康巡检 + 提前收敛 + 三动作 ──
+        # 阈值依据见《replanning巡检与早停阈值标定报告-20261021》：M1 50% = 真库
+        # 基线 partial 率 10.0% 的 5 倍；M4 120% 与 1800s 预算对齐孤儿收割阈值。
+        "health_probe": False,          # 计划健康度巡检（S10）：缓慢漂移型失败的前置信号（默认关=零行为变更）
+        "health_probe_llm": False,      # 巡检升级 LLM 评估（轻量调用判"剩余计划是否仍匹配 goal"；默认关）
+        "early_stop": False,            # 提前收敛：required 产出全 done 且零 failed ⇒ 放弃剩余非必需任务，汇总记 full（默认关）
+        "probe_every_tasks": 3,         # 巡检节奏：每 N 个完成任务（兼作 M1 窗口；N≥3 才有统计意义）
+        "probe_every_sec": 60,          # 巡检节奏：或每 N 秒（与上面取先到者；两者≤0=永不到期）
+        "probe_time_budget_sec": 1800,  # run 级时间预算（秒，M4 用）：对齐 reap_stuck_runs 30min 孤儿阈值；≤0=M4 不判
+        "llm_actions": "replace",       # LLM 版动作白名单（逗号分隔）：replace|skip|insert；默认锁 replace（P3 行为）
     },
 }
 
@@ -1832,6 +1842,14 @@ CONFIG_SCHEMA = {
         "user_confirm_redraw": {"type": "bool", "desc": "重画确认卡：T2/T3 执行前出卡片等用户批准/否决（默认关；超时=维持原计划，不得成为新阻塞点）"},
         "confirm_ttl_sec":     {"type": "int",  "desc": "确认卡 TTL（秒）：超时一律维持原计划继续（v1 R10：确认卡不得成为新阻塞点）"},
         "directive_max_touch": {"type": "int",  "desc": "影响评估：指令点名任务数超过此值即判「推翻任务划分」走 T3（宁可少判 T3，判重的代价是烧 planner + 可能改坏用户已接受的图）"},
+        # ── P4（2026-10-21）新增七键 ──
+        "health_probe":        {"type": "bool", "desc": "计划健康度巡检（S10 信号）：partial 密度/冲突密度/预算偏离超阈时前置触发 T2-light 精修（默认关=零行为变更；阈值见标定报告）"},
+        "health_probe_llm":    {"type": "bool", "desc": "巡检升级 LLM 评估：轻量模型判断「剩余计划是否仍匹配 goal」，成本 +1 次轻量调用/巡检计入 run_tokens（默认关）"},
+        "early_stop":          {"type": "bool", "desc": "提前收敛：planner 标注 required:true 的产出任务全部 done 且零 failed ⇒ 取消剩余非必需任务，汇总状态记 full（非 partial；默认关）"},
+        "probe_every_tasks":   {"type": "int",  "desc": "巡检节奏：每 N 个完成任务触发一次巡检（兼作 M1 partial 密度窗口；与 probe_every_sec 取先到者）"},
+        "probe_every_sec":     {"type": "int",  "desc": "巡检节奏：或每 N 秒触发一次（与 probe_every_tasks 取先到者；两者同时 ≤0 表示永不到期）"},
+        "probe_time_budget_sec": {"type": "int", "desc": "run 级时间预算（秒，M4 预算偏离用）：剩余任务数×滑动窗口平均耗时 > 剩余预算×120% 即停手（S9 语义；≤0=不判；默认 1800s 对齐 30min 孤儿收割阈值）"},
+        "llm_actions":         {"type": "str",  "desc": "LLM 重画动作白名单（逗号分隔，如 replace,skip,insert）：默认锁 replace（P3 行为）；skip 目标限失效传播集，insert 必须挂指令原文 lineage.directive"},
     },
 }
 

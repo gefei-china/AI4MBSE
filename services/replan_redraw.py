@@ -28,7 +28,9 @@
 **为什么第一版是"规则版"而非 LLM 版**（v1 §4.2 末尾的设计选择，v2 沿用）：
     LLM 重画的不确定性会直接冲击本仓"确定性保持"铁律（Mock 环境行为漂移）。
     规则版靠拼装（把失败原因注入 context 重派）拿到主要收益，零 LLM 调用。
-    LLM 版（`llm_redraw`）归 T3，默认关。
+    LLM 版（`llm_redraw`）归 T3，默认关；**P4 起 LLM 版动作可从 replace
+    放开到 skip/insert**（`plan_llm_redraw(allow_actions=...)`，默认仍锁
+    replace —— P3 行为逐字不变）。
 
 **上下文口径（G10）**：被替换 key 的 offload（共享产物工作区引用）**不**传给新任务
     —— 其产物前提已被推翻；done key 的 offload 照常传。"曾尝试方向"来自失败任务
@@ -59,7 +61,8 @@ LEVEL_LIGHT = "T2-light"    # 轻量级：同 key 原地重派，拓扑不动
 LEVEL_HEAVY = "T2-heavy"    # 重量级：新 key + lineage，下游依赖边重映射
 LEVEL_NONE = "T0"
 LEVEL_ESCALATE = "T4"       # 升级人工
-LEVEL_LLM = "T3"            # ★ P3 新增：LLM 整图重画（动作仅 replace，skip/insert 留 P4）
+LEVEL_LLM = "T3"            # ★ P3 新增：LLM 整图重画（P4 起动作可放开 skip/insert，
+                            #   默认仍锁 replace —— 见 plan_llm_redraw 的 allow_actions）
 
 #: 逆向可达的防御性跳数上限（环由 Q1 兜底，但本函数不能因此死循环）。
 _MAX_HOPS = 64
@@ -275,7 +278,8 @@ def build_redraw_plan(tasks, failed_keys, *, reason_by_key=None, round_no=1,
 
 # ── 步骤 5：质量门 Q1~Q5（v2 §4.5；任一不过 ⇒ 整个方案作废 ⇒ T4）──────────
 def quality_gates(updates, new_tasks, kept, *, failed_keys=None, expand_ratio=1.5,
-                  remaining_count=0, validate=None, done_keys=None, full_plan=None):
+                  remaining_count=0, validate=None, done_keys=None, full_plan=None,
+                  insert_ok=False):
     """五门质量门。返回 `{"Q1".."Q5": bool, "failed": [...], "ok": bool, "reason": str}`。
 
     `validate` 注入 `TaskQueue.validate_plan`（纯函数纪律：不 import task_queue；
@@ -286,6 +290,13 @@ def quality_gates(updates, new_tasks, kept, *, failed_keys=None, expand_ratio=1.
     · 轻量级下图不变，依赖指向 done 任务完全合法（done 仍在图上，是被依赖的**结果**）；
     · 重量级下 done 任务同样留在图里当被依赖方。
     把 done key 漏出合法集合 ⇒ Q5 误杀所有"依赖已完成任务"的重画（本仓常见图）。
+
+    `insert_ok`（P4 新增，默认 False ⇒ **P3 行为逐字不变**）：LLM 版放开
+    insert 动作时，Q3 针对性门从"必须替代失效任务"扩展为双轨 ——
+    · replace：`lineage.from ∈ 失效集`（原判据）；
+    · insert：`lineage.action=insert` 且 `lineage.directive` 非空
+      （新任务必须挂在与用户指令的关联上，否则就是"借机塞私货/扩地盘"，
+      与 Q3 原意同源：**每一个新任务都要证明自己为什么存在**）。
     """
     res = {}
     failed = set(str(k) for k in (failed_keys or []) if str(k))
@@ -321,12 +332,20 @@ def quality_gates(updates, new_tasks, kept, *, failed_keys=None, expand_ratio=1.
     new_keys = [str(t.get("key") or "") for t in new_tasks]
     res["Q2"] = all(k and k not in existing for k in new_keys)
 
-    # Q3 针对性门：每个新任务必须有 lineage 且 `from` ∈ 失效集
-    #   （防"借机塞私货/扩地盘" —— 规则版的等价风险是"重画顺手多建任务"）
+    # Q3 针对性门：每个新任务必须证明"自己为什么存在"。
+    #   replace ⇒ lineage.from ∈ 失效集（防"借机塞私货/扩地盘"）；
+    #   insert（仅 insert_ok 开）⇒ lineage.action=insert 且 directive 非空
+    #   （没有指令依据的新任务同样是塞私货，换一种形式而已）。
     ok3 = True
     for t in new_tasks:
         lin = _cfg(t).get("lineage")
-        if not isinstance(lin, dict) or not lin.get("from") or str(lin["from"]) not in failed:
+        lin = lin if isinstance(lin, dict) else {}
+        is_insert = str(lin.get("action") or "") == "insert"
+        if is_insert and insert_ok:
+            if not str(lin.get("directive") or "").strip():
+                ok3 = False
+                break
+        elif not lin.get("from") or str(lin["from"]) not in failed:
             ok3 = False
             break
     res["Q3"] = ok3
@@ -494,7 +513,7 @@ def _none(reason, *, level=LEVEL_ESCALATE, dropped=None, skip=None, kept=None,
 def plan_llm_redraw(tasks, failed_keys, *, llm_raw="", parse=None, enabled=False,
                     round_no=1, max_rounds=1, expand_ratio=1.5,
                     directive="", goal="", done_summaries=None, validate=None,
-                    parse_error=""):
+                    parse_error="", allow_actions=("replace",)):
     """T3：把 LLM 产出的整图接进**与规则版同一套质量门**（P3 新增）。
 
     **为什么单独一个入口而不是给 `plan_redraw` 加 `llm_raw` 参数**：
@@ -505,20 +524,26 @@ def plan_llm_redraw(tasks, failed_keys, *, llm_raw="", parse=None, enabled=False
     依赖"两类事故的）。**同一个 `quality_gates` 调用点**是这条防线唯一的
     保证方式。
 
-    **范围锁定 replace**（拍板⑤，v2 §6 决策表）：LLM 版只允许产出失效子图的
-    替代任务；`skip`（删任务）与 `insert`（凭空加任务）留 P4 后评估。
-    实现方式是**解析层即拒**（`parse` 注入 `replan_directive.parse_llm_plan`，
-    由它保证只返回替换任务）**+ Q3 兜底**（每个新任务必须有
-    `lineage.from ∈ failed`）。两道都在，才叫"锁定"—— 只靠提示词约束
-    等于没有约束（v1 §4.10 反复出现的同一条纪律）。
+    **范围锁定**（拍板⑤，v2 §6 决策表）：`allow_actions` 默认 `("replace",)`
+    —— LLM 版只允许产出失效子图的替代任务，与 P3 逐字一致。P4 放开
+    `skip`/`insert` 后：
+    · skip（删任务）：目标限**失效传播集**（failed ∪ 全部下游）—— LLM 不得
+      skip 无失效上游的健康任务；每个 skip 必须带理由（解析层强制）；
+    · insert（加任务）：必须挂 `lineage.directive`（指令原文）——Q3 双轨
+      判据（见 `quality_gates` 的 insert_ok 分支）。
+    实现方式是**解析层即拒**（不允许的动作整份 T4）**+ 计划层兜底**（skip
+    越界 / insert 无 directive）**+ Q3 兜底**。三道都在，才叫"放开"——
+    只靠提示词约束等于没有约束（v1 §4.10 反复出现的同一条纪律）。
 
     **默认关 ⇒ 零行为变更**：`enabled=False` 时本函数恒返回 none，
     且不调用 `parse`（LLM 调用已在编排层按开关前置拦截）。
 
-    返回与 `plan_redraw` **同款** decision dict（含 `gates`），便于
-    stream.py 走同一套应用分支与 span 装配。
+    返回与 `plan_redraw` **同款** decision dict（含 `gates`），另加
+    `skipped`（T1.5/LLM skip 清单），便于 stream.py 走同一套应用分支与
+    span 装配。
     """
     failed = set(str(k) for k in (failed_keys or []) if str(k))
+    allow = {str(a) for a in (allow_actions or ("replace",))}
 
     if not enabled:
         return _none("replanning.llm_redraw 关 ⇒ 不做 LLM 整图重画", level=LEVEL_NONE)
@@ -532,20 +557,38 @@ def plan_llm_redraw(tasks, failed_keys, *, llm_raw="", parse=None, enabled=False
     if parse_error:
         return _none("LLM 输出不可用：%s ⇒ T4" % parse_error, level=LEVEL_ESCALATE)
 
-    parse_fn = parse
-    if parse_fn is None:
+    # ── 解析：P3 通道（仅 replace，旧函数）vs P4 通道（三动作，新函数）──
+    skips = []
+    if allow <= {"replace"}:
+        parse_fn = parse
+        if parse_fn is None:
+            try:
+                from services.replan_directive import parse_llm_plan as parse_fn
+            except Exception:
+                return _none("replan_directive 不可用 ⇒ 无法校验 LLM 输出，T4",
+                             level=LEVEL_ESCALATE)
         try:
-            from services.replan_directive import parse_llm_plan as parse_fn
+            new_tasks, perr = parse_fn(llm_raw, sorted(failed), round_no=round_no)
+        except Exception as e:
+            return _none("LLM 输出解析异常：%s ⇒ T4" % e, level=LEVEL_ESCALATE)
+        if perr or not new_tasks:
+            return _none("LLM 输出无有效任务：%s ⇒ T4" % (perr or "空"),
+                         level=LEVEL_ESCALATE)
+    else:
+        try:
+            from services.replan_directive import parse_llm_plan_actions as _pa
         except Exception:
             return _none("replan_directive 不可用 ⇒ 无法校验 LLM 输出，T4",
                          level=LEVEL_ESCALATE)
-
-    try:
-        new_tasks, perr = parse_fn(llm_raw, sorted(failed), round_no=round_no)
-    except Exception as e:
-        return _none("LLM 输出解析异常：%s ⇒ T4" % e, level=LEVEL_ESCALATE)
-    if perr or not new_tasks:
-        return _none("LLM 输出无有效任务：%s ⇒ T4" % (perr or "空"), level=LEVEL_ESCALATE)
+        try:
+            new_tasks, skips, perr = _pa(llm_raw, sorted(failed),
+                                         round_no=round_no,
+                                         allow=tuple(sorted(allow)))
+        except Exception as e:
+            return _none("LLM 输出解析异常：%s ⇒ T4" % e, level=LEVEL_ESCALATE)
+        if perr or (not new_tasks and not skips):
+            return _none("LLM 输出无有效任务：%s ⇒ T4" % (perr or "空"),
+                         level=LEVEL_ESCALATE)
 
     # ★ 不变量 1 的第二道本地兜底：解析层已保证 `from ∈ failed`，这里再剔一次
     #   —— Q3 会查它，但 Q3 的语义是"新任务有 lineage"，而不是"lineage 指向
@@ -554,13 +597,49 @@ def plan_llm_redraw(tasks, failed_keys, *, llm_raw="", parse=None, enabled=False
         lin = _cfg(t).get("lineage")
         return str((lin or {}).get("from") or "") if isinstance(lin, dict) else ""
 
-    bad = [t for t in new_tasks if _lin_from(t) not in failed]
+    bad = [t for t in new_tasks if _lin_from(t) and _lin_from(t) not in failed]
     if bad:
         return _none("LLM 产出了 %d 个非替代任务（lineage.from ∉ 失效集）⇒ "
                      "超出 replace 范围，T4" % len(bad), level=LEVEL_ESCALATE)
 
-    # 保留集：与规则版重量级同口径 —— 全图 - failed 本身；未执行任务的 deps
-    #   指向 failed 的改指**替代它的新 key**。
+    # ★ insert 的 directive 补齐：解析层拿不到指令原文（它只看到 JSON），
+    #   在这里从 `directive` 参数填。填不上 ⇒ 拒收 —— 没有指令依据的
+    #   新任务就是"借机塞私货"（Q3 原意），与 from 越界同罪。
+    if "insert" in allow:
+        d_txt = str(directive or "").strip()
+        inserts = [t for t in new_tasks
+                   if str((_cfg(t).get("lineage") or {}).get("action") or "") == "insert"]
+        if inserts and not d_txt:
+            return _none("LLM 产出 insert 任务但无指令原文 ⇒ 无法证明相关性，T4",
+                         level=LEVEL_ESCALATE)
+        for t in inserts:
+            lin = dict(_cfg(t).get("lineage") or {})
+            lin["directive"] = d_txt[:300]
+            t["config"] = dict(_cfg(t), lineage=lin)
+
+    # ★ skip 目标校验：⊆ 失效传播集（failed ∪ 全部下游）。
+    #   为什么不许 skip 任意健康任务：跳过一个无人失败的上游 = 把下游的
+    #   输入前提静默抽掉，比 block 更危险（v2 §4.2 skip 的规则版边界同款
+    #   逻辑，LLM 版只是把判据从"叶子"换成"输入非关键"，范围不变）。
+    prop = propagation_set(tasks, failed)
+    skip_keys, bad_skips = [], []
+    for s in (skips or []):
+        k = str((s or {}).get("key") or "")
+        if k and k not in skip_keys:
+            (skip_keys if k in prop else bad_skips).append(k)
+    if bad_skips:
+        return _none("LLM 试图 skip 失效传播集之外的任务（%s）⇒ 越界，T4"
+                     % ",".join(bad_skips[:5]), level=LEVEL_ESCALATE)
+    skip_by_key = {str(s.get("key") or ""): str(s.get("reason") or "")[:200]
+                   for s in (skips or []) if isinstance(s, dict)}
+
+    # 保留集：与规则版重量级同口径 —— 全图 - failed 本身 - **被 skip 的任务**；
+    #   未执行任务的 deps 指向 failed 的改指**替代它的新 key**；指向**被 skip**
+    #   的 key 直接移除该边（skip 的语义就是"这个输入不重要，下游继续"）。
+    #   ⚠️ skip 目标必须从保留集排除：它将被 cancel（终态），留在 kept 里会让
+    #      Q5 看到"保留任务的 deps 指向一个既不在新任务也不在 done 的 key"
+    #      ⇒ 整个方案被误杀（且 cancelled 行还会被 create_plan 之外的路径
+    #      重复派发 —— 与轻量级追行同族事故）。
     #   ⚠️ 映射方向：`{old_key: new_key}`（下游 deps 里存的是**旧** key）。
     #     规则版由 `build_redraw_plan` 在生成新 key 时同时维护 remap；LLM 版的
     #     new key 由模型命名，只能在这里按 `lineage.from` 反查建立映射 ——
@@ -577,10 +656,11 @@ def plan_llm_redraw(tasks, failed_keys, *, llm_raw="", parse=None, enabled=False
         if not isinstance(t, dict):
             continue
         k = _key(t)
-        if not k or k in failed or _terminal(t.get("status")):
+        if not k or k in failed or k in skip_keys or _terminal(t.get("status")):
             continue
         nt = dict(t)
-        nt["deps"] = [remap.get(d, d) for d in _deps(t)]
+        nt["deps"] = [remap.get(d, d) for d in _deps(t)
+                      if d not in skip_keys]
         nt["key"] = k
         nt["deps_json"] = json.dumps(nt["deps"], ensure_ascii=False)
         kept.append(nt)
@@ -602,15 +682,16 @@ def plan_llm_redraw(tasks, failed_keys, *, llm_raw="", parse=None, enabled=False
     gates = quality_gates([], new_tasks, kept, failed_keys=failed,
                           expand_ratio=expand_ratio, remaining_count=remaining,
                           validate=validate, done_keys=done_keys,
-                          full_plan=full_plan)
+                          full_plan=full_plan, insert_ok=("insert" in allow))
     if not gates.get("ok"):
         return _none(gates.get("reason"), level=LEVEL_ESCALATE,
-                     dropped=sorted(failed), gates=gates)
+                     dropped=sorted(failed), skip=skip_keys, gates=gates)
 
     return {"action": ACTION_REPLAN, "level": LEVEL_LLM, "signals": [],
-            "reason": "T3 LLM 整图重画：替代 %d 个失效任务（保留 %d 个，过 Q1~Q5）"
-                      % (len(new_tasks), len(kept)),
+            "reason": "T3 LLM 整图重画：替代 %d 个失效任务（保留 %d 个，"
+                      "跳过 %d 个，过 Q1~Q5）"
+                      % (len(new_tasks), len(kept), len(skip_keys)),
             "updates": [], "new_tasks": new_tasks, "kept": kept,
-            "dropped": sorted(failed), "skip": [], "remap": remap,
-            "gates": gates,
+            "dropped": sorted(failed), "skip": skip_keys, "remap": remap,
+            "skip_reason": skip_by_key, "gates": gates,
             "retry_keys": [str(t.get("key") or "") for t in new_tasks]}

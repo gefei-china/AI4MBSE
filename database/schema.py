@@ -1250,6 +1250,37 @@ def init_db():
               "ON orch_run_spans(conversation_id, run_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_ors_time ON orch_run_spans(created_at)")
 
+    # ── P4 replanning（2026-10-21）：重规划决策记录表 ─────────────────────
+    # 为什么在 span 之外再建一张表（v2 §4.6）：span 的 meta_json 是**单次判定**
+    #   的明细，回答"这次为什么重画/为什么不重画"；而产品化问题（partial→full
+    #   转化率、误重画率、T 级分布、巡检命中率）需要 **SQL 聚合** —— 从 span
+    #   JSON 里扒字段做统计是字符串解析，脆弱且无法加 WHERE。
+    #   零 DDL 纪律同款：CREATE TABLE IF NOT EXISTS，老库启动即建，无补列迁移。
+    # 写入纪律：与 replan span **同源同点**（六类决策点各写一行），span 是内存
+    #   收集流尾 flush，本表即时写（行数极少，每 run 个位数；旁路失败不阻断）。
+    # 与 span 的分工：span 管时序/成本（latency/tokens），本表管**可聚合的
+    #   决策语义**（level/action/signals/source/gates）。
+    c.execute("""CREATE TABLE IF NOT EXISTS replan_decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER DEFAULT 0,
+        run_id INTEGER DEFAULT 0,
+        source TEXT DEFAULT '',             -- t1_fail | stall | redraw | directive | health | early_stop
+        round INTEGER DEFAULT 0,            -- 重画轮次（0=非重画类决策）
+        signals TEXT DEFAULT '[]',          -- JSON: 信号列表（S3:t4:timeout / S10:M1 ...）
+        level TEXT DEFAULT '',              -- T0 | T1 | T1.5 | T2-light | T2-heavy | T3 | T4
+        action TEXT DEFAULT '',             -- none | retry | replan | skip | refine | stop | early_stop
+        reason TEXT DEFAULT '',             -- 判定理由（为什么不动图/为什么动）
+        gates TEXT DEFAULT '{}',            -- JSON: 质量门 Q1~Q5 pass/fail（重画类）
+        metrics TEXT DEFAULT '{}',          -- JSON: 巡检指标原始值（M1/M2/M4，健康类决策；阈值调参排障用）
+        tokens INTEGER DEFAULT 0,           -- 本次判定消耗（LLM 调用；规则版为 0）
+        latency_ms INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rpd_conv_run "
+              "ON replan_decisions(conversation_id, run_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rpd_action "
+              "ON replan_decisions(action, created_at)")
+
     # ── P1 知识引擎双引擎：查询路由统计（图/向量/混合消费观测）──
     c.execute("""CREATE TABLE IF NOT EXISTS query_routing_stats (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

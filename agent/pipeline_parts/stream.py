@@ -195,6 +195,7 @@ class StreamMixin:
             ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent",'
             ' "context": "该任务必需的上下文/输入引用(精简事实，可空)",'
             ' "expected_output": "该子任务的完成标准（可验证的交付物描述，50字内）",'
+            ' "config": {"required": true},'
             ' "tools": ["允许的工具白名单(可空，空=继承该 Agent 默认绑定)"],'
             ' "skills": ["指定技能(可空)"]}]}\n'
             f"可用 Agent 池：\n" + "\n".join(pool_lines) + "\n"
@@ -203,6 +204,8 @@ class StreamMixin:
             f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；"
             "有依赖关系的用 deps 表达；context 只写该任务必需的事实与输入引用（上下文隔离，避免膨胀）；"
             "**每个任务都要写 expected_output**（下游据此把完成标准注入子任务，缺失即失去验收依据）；"
+            "config.required 标注该任务产出是否为达成目标所必需（true=必需，false=可选/增强，"
+            "required 全完成即可提前收敛收尾）；"
             "不要输出其他文字。\n"
             f"目标：{goal}"
         )
@@ -233,7 +236,8 @@ class StreamMixin:
                 "现在开始：只输出 JSON 计划，格式如下：\n"
                 '{"tasks": [{"key": "t1", "title": "子任务描述", "agent": "Agent 名",'
                 ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent",'
-                ' "context": "该任务必需的上下文/输入引用(精简事实，可空)"}]}\n'
+                ' "context": "该任务必需的上下文/输入引用(精简事实，可空)",'
+                ' "config": {"required": true}}]}\n'
                 f"可用 Agent 池：\n" + "\n".join(pool_lines) + "\n"
                 + ((f"团队成员名册（agent 字段必须**逐字取自**下列 name）：\n{_team_roster}\n")
                    if _team_roster else "") +
@@ -468,6 +472,12 @@ class StreamMixin:
             done_items, orch_tasks = [], []
             subtasks = []   # P0-2：子任务轨迹（实时事件 + card_data.exec 持久化）
             guard = 0
+            # ★ P4：提前收敛标记（汇总段据此显式标注"主动放弃"≠ partial；
+            #   初值 False ⇒ 默认路径逐字不变）。
+            _early_stopped = False
+            _es_cancel_keys = []
+            # ★ P4：M4 巡检停手标记（S9 语义：预计耗时超时间预算 ⇒ 停，不重画）。
+            _m4_stopped = False
             # ── Task 7：执行层并发与可靠性（per-agent 信号量 / 子任务超时 / 自动重试 / run 预算护栏）──
             import threading as _th
             from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac, wait as _wait
@@ -570,6 +580,75 @@ class StreamMixin:
             except Exception:
                 _rp_uidir = _rp_confirm = _rp_llm = False
                 _rp_cttl, _rp_touch = 60, 3
+            # ★ P4 replanning（2026-10-21，v2 §4.4）：健康巡检 + 提前收敛 + 三动作。
+            #   可选依赖同款「导入成功标志位」纪律；配置读取失败一律取**保守值**
+            #   （health_probe/early_stop/llm_actions 全关或锁 replace）——
+            #   绝不"因读不到配置就开巡检/放开动作"（与 P2 的 enabled=False 兜底同族）。
+            #   `_hp_*` 是巡检节奏的进程内水位（done 计数 + 上次巡检时刻 +
+            #   滑动耗时窗口），口径同 `_t1_retried`/`_redraw_hist`：谱系级判定
+            #   活在单次编排内（resume 语义下新 run 重新起算）。
+            try:
+                from services import replan_health as _rh
+                _RH_OK = True
+            except Exception:
+                _RH_OK = False           # 巡检模块不可用 ⇒ 整体退化为 P3 行为
+            try:
+                _rp_hp = bool(_rcfg.get("replanning", "health_probe", False))
+                _rp_hpllm = bool(_rcfg.get("replanning", "health_probe_llm", False))
+                _rp_early = bool(_rcfg.get("replanning", "early_stop", False))
+                _rp_pe_tasks = int(_rcfg.get("replanning", "probe_every_tasks", 3) or 3)
+                _rp_pe_sec = int(_rcfg.get("replanning", "probe_every_sec", 60) or 60)
+                _rp_pe_budget = int(_rcfg.get("replanning", "probe_time_budget_sec", 1800) or 0)
+                _rp_llm_acts = tuple(
+                    x.strip().lower() for x in
+                    str(_rcfg.get("replanning", "llm_actions", "replace") or "replace")
+                    .split(",") if x.strip()) or ("replace",)
+            except Exception:
+                _rp_hp = _rp_hpllm = _rp_early = False
+                _rp_pe_tasks, _rp_pe_sec, _rp_pe_budget = 3, 60, 1800
+                _rp_llm_acts = ("replace",)
+            _hp_done_mark = 0              # 上次巡检时的 done_items 水位
+            _hp_last_ts = _t.time()        # 上次巡检时刻（M4/节奏用）
+            _hp_t0 = _t.time()             # 编排主循环起点（M4 的 run 耗时基准）
+            _done_lats = []                # done 任务实际耗时（ms，M4 滑动窗口）
+
+            def _write_decision(source, decision, *, round_no=0, gates=None,
+                                tokens=0, latency_ms=0):
+                """P4：重规划决策记录落 `replan_decisions`（v2 §4.6，真库 SQL 聚合用）。
+
+                与 replan span **同源同点**（span 管时序/成本，本表管可聚合的决策
+                语义）。旁路铁律：写失败只丢记录不阻断编排； signals 归一化各类
+                decision 的形状（failure/stall/redraw 是信号 dict 列表，
+                directive 是 basis 列表，health 是 S10 信号列表）。
+                """
+                try:
+                    _sigs = decision.get("signals")
+                    if isinstance(_sigs, list) and _sigs and isinstance(_sigs[0], dict):
+                        _sig_txt = ["%s:%s%s" % (s.get("id"), s.get("key"),
+                                                 (":" + str(s.get("detail") or "")[:40])
+                                                 if s.get("detail") else "")
+                                    for s in _sigs]
+                    elif isinstance(_sigs, list):
+                        _sig_txt = [str(s)[:60] for s in _sigs]
+                    else:
+                        _sig_txt = [str(x)[:60] for x in (decision.get("basis") or [])]
+                    conn.execute(
+                        "INSERT INTO replan_decisions (conversation_id, run_id, "
+                        "source, round, signals, level, action, reason, gates, "
+                        "metrics, tokens, latency_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (int(conversation_id or 0), int(run_id or 0),
+                         str(source or "")[:40], int(round_no or 0),
+                         json.dumps(_sig_txt, ensure_ascii=False),
+                         str(decision.get("level") or "")[:20],
+                         str(decision.get("action") or "")[:20],
+                         str(decision.get("reason") or "")[:500],
+                         json.dumps(gates or {}, ensure_ascii=False),
+                         json.dumps(decision.get("metrics") or {},
+                                    ensure_ascii=False)[:2000],
+                         int(tokens or 0), int(latency_ms or 0)))
+                    conn.commit()
+                except Exception:
+                    pass
             # per-agent 信号量：按 registry.discover 的 max_concurrency 建（缺省 2；无 discover 数据 → 不限流）
             agent_sems = {}
             try:
@@ -1142,6 +1221,9 @@ class StreamMixin:
                                             _spans.close(_dd_sid, "ok",
                                                          _rdir.directive_meta(
                                                              _d_as, latency_ms=_d_ms))
+                                    # ★ P4：决策记录落 replan_decisions（与 span 同点）
+                                    _write_decision("directive", _d_as,
+                                                    latency_ms=_d_ms)
                                     _d_lvl = str(_d_as.get("level") or "")
                                     if _d_lvl in (_rdir.LEVEL_LIGHT,
                                                   _rdir.LEVEL_HEAVY):
@@ -1197,8 +1279,10 @@ class StreamMixin:
                                         #   走 LLM 通道真实生成替代子图，再交给
                                         #   `plan_llm_redraw` 过**同一套 Q1~Q5 质量门** ——
                                         #   门禁不通过 ⇒ T4 停手，绝不"尽力而为落库"。
-                                        #   ⚠️ 范围锁定 replace：只允许替代失效子图，
-                                        #   凭空加任务/删任务（skip/insert）留 P4。
+                                        #   ⚠️ 动作范围由 `llm_actions` 配置说了算
+                                        #   （P4）：默认 "replace"（P3 行为逐字不变）；
+                                        #   放开 skip/insert 后由解析层 + 计划层 +
+                                        #   Q3 三道兜底（见 plan_llm_redraw docstring）。
                                         # ★ T3 的 replace 范围基准 = **全部非终态任务**
                                         #   （不只是 `target_keys`，也不只是
                                         #   `pending_tasks`）。
@@ -1228,7 +1312,8 @@ class StreamMixin:
                                         try:
                                             _d_tpl, _d_hint = _rdir.llm_redraw_prompt(
                                                 goal or "", _d_tasks,
-                                                directive=_d_text)
+                                                directive=_d_text,
+                                                allow_actions=_rp_llm_acts)
                                             _d_resp = llm_client.chat(
                                                 [{"role": "user", "content": _d_tpl}],
                                                 provider_id=provider_id,
@@ -1248,7 +1333,44 @@ class StreamMixin:
                                             enabled=True, round_no=1,
                                             directive=_d_text, goal=goal or "",
                                             parse_error=_d_perr,
+                                            allow_actions=_rp_llm_acts,
                                             validate=TaskQueue.validate_plan)
+                                        # ★ P4：T3 决策记录（span + replan_decisions）。
+                                        #   P3 期 T3 只有应用没有决策 span（评估的
+                                        #   directive-decide 覆盖不到"画了什么"）——
+                                        #   G6 纪律下 action≠none 的决策必须留痕。
+                                        _d3_ms = 0
+                                        if _spans:
+                                            try:
+                                                _d3_sid = _spans.open(
+                                                    "replan", "t3-decide",
+                                                    parent=_run_sid,
+                                                    meta={"failed": len(_d_fail)})
+                                                if _d3_sid:
+                                                    _d3_meta = _rs.decision_meta(
+                                                        _d_dec, round_no=1) \
+                                                        if _RS_OK else {
+                                                            "action": _d_dec.get("action"),
+                                                            "level": _d_dec.get("level"),
+                                                            "reason": _d_dec.get("reason"),
+                                                            "signals": [],
+                                                            "round": 1, "tokens": 0,
+                                                            "latency_ms": 0}
+                                                    try:
+                                                        _d3_meta["gates"] = {
+                                                            g: ("pass" if v else "fail")
+                                                            for g, v in
+                                                            (_d_dec.get("gates") or {}).items()
+                                                            if g in ("Q1", "Q2", "Q3",
+                                                                     "Q4", "Q5")}
+                                                    except Exception:
+                                                        pass
+                                                    _spans.close(_d3_sid, "ok", _d3_meta)
+                                                    _write_decision(
+                                                        "t3_redraw", _d_dec,
+                                                        gates=_d3_meta.get("gates") or {})
+                                            except Exception:
+                                                pass
                                         if _d_dec.get("action") == "replan":
                                             # ★ 落库顺序**先改下游 deps 再 create_plan**
                                             #   （同 P2 重量级）：deps 指向的新 key 此刻
@@ -1257,6 +1379,23 @@ class StreamMixin:
                                             #   反序会把刚写的 t2_r1 依赖当场丢掉。
                                             _d_ins = 0
                                             try:
+                                                # ★ P4：先 cancel 被 skip 的任务
+                                                #   （LLM 判"其产出对下游非关键"）——
+                                                #   顺序在 deps 更新**之前**：cancel
+                                                #   不校验外键，而 kept 的 deps 已由
+                                                #   计划层移除被跳 key，无悬空边。
+                                                for _sk3 in (_d_dec.get("skip") or []):
+                                                    for _t3s in (_d_tasks or []):
+                                                        if (str(_t3s.get("task_key") or "")
+                                                                == str(_sk3)):
+                                                            TaskQueue.cancel(
+                                                                conn, int(_t3s["id"]),
+                                                                "计划修订：%s"
+                                                                % str((_d_dec.get(
+                                                                    "skip_reason") or {}
+                                                                ).get(_sk3)
+                                                                    or "输入非关键")[:200])
+                                                            break
                                                 for _kt3 in (_d_dec.get("kept") or []):
                                                     _kk3 = str(_kt3.get("key")
                                                               or _kt3.get("task_key")
@@ -1290,6 +1429,27 @@ class StreamMixin:
                                                 except Exception:
                                                     pass
                                             if _RS_OK:
+                                                # ★ P4：插入（insert）任务单列 ——
+                                                #   修订卡要能回答"多了什么"。
+                                                #   ⚠️ config 可能是 dict（解析层
+                                                #   产出）或 JSON 串（库行形状），
+                                                #   两种都要认。
+                                                _d_ins_keys = []
+                                                for _x3 in (_d_dec.get("new_tasks")
+                                                            or []):
+                                                    _c3 = _x3.get("config")
+                                                    if isinstance(_c3, str):
+                                                        try:
+                                                            _c3 = json.loads(_c3 or "{}")
+                                                        except Exception:
+                                                            _c3 = {}
+                                                    _lin3 = (_c3 or {}).get("lineage") \
+                                                        if isinstance(_c3, dict) else None
+                                                    if (isinstance(_lin3, dict)
+                                                            and str(_lin3.get("action")
+                                                                    or "") == "insert"):
+                                                        _d_ins_keys.append(
+                                                            str(_x3.get("key") or ""))
                                                 _pd3 = _rs.plan_revised_payload(
                                                     {"action": "replan",
                                                      "level": _rdir.LEVEL_REDRAW,
@@ -1301,6 +1461,10 @@ class StreamMixin:
                                                         str(x.get("key") or "")
                                                         for x in (_d_dec.get("new_tasks")
                                                                   or [])]
+                                                    _pd3["inserted"] = _d_ins_keys
+                                                    _pd3["skipped"] = [
+                                                        str(k) for k in
+                                                        (_d_dec.get("skip") or [])]
                                                     yield _pd3
                                             yield {"type": "reasoning", "kind": "progress",
                                                    "delta": "（自动编排）T3 整图重画："
@@ -1312,6 +1476,208 @@ class StreamMixin:
                                             yield {"type": "reasoning", "kind": "progress",
                                                    "delta": "（自动编排）T3 重画被拦：%s"
                                                             % (_d_dec.get("reason") or "")[:80]}
+                    except Exception:
+                        pass
+                # ── P4 replanning（2026-10-21，v2 §4.4）：健康巡检 + 提前收敛 ──
+                #   挂点与 P3 指令消费同款：**主循环迭代边界**（ready_tasks 之前）——
+                #   本批任务的产出刚全部落库，是"计划还健康吗/目标达成了吗"的
+                #   天然检查点；不打断任何执行中的东西（本段运行时无 in-flight）。
+                #   ⚠️ 三条纪律：
+                #   ① 总闸 `replanning.enabled` + `health_probe`/`early_stop`
+                #      分闸，默认全关 ⇒ 本段整体 no-op（**零行为变更**，P3 行为逐字保持）；
+                #   ② 巡检只产信号不直接动作（S10 ⇒ T2-light 精修，仍走原地 UPDATE）；
+                #   ③ 观测旁路铁律：整段 try/except，异常只丢记录不阻断编排。
+                if _RH_OK and _rp_enabled and (_rp_hp or _rp_early):
+                    try:
+                        _hp_now = _t.time()
+                        _hp_tasks = TaskQueue.tasks(conn, run_id)
+                        # ── A. 提前收敛（先于巡检：它可能直接终结循环）──
+                        if _rp_early:
+                            _es_dec = _rh.early_stop_plan(_hp_tasks, enabled=True)
+                            if _es_dec.get("action") == "early_stop":
+                                # 决策留痕（span + replan_decisions，与 P1~P3 同点）
+                                _es_rec = {"action": "early_stop", "level": "T0",
+                                           "reason": _es_dec.get("reason") or "",
+                                           "signals": []}
+                                if _spans:
+                                    try:
+                                        _es_sid = _spans.open(
+                                            "replan", "early-stop",
+                                            parent=_run_sid,
+                                            meta={"cancel": len(
+                                                _es_dec.get("cancel_keys") or [])})
+                                        if _es_sid:
+                                            _spans.close(
+                                                _es_sid, "ok",
+                                                _rh.health_meta(_es_rec))
+                                    except Exception:
+                                        pass
+                                _write_decision("early_stop", _es_rec)
+                                # 取消剩余非 required 任务 + 轨迹记账（前端可见）
+                                _es_cancel = [str(k) for k in
+                                              (_es_dec.get("cancel_keys") or [])]
+                                _early_stopped = True
+                                _es_cancel_keys = list(_es_cancel)
+                                for _tk4 in _hp_tasks:
+                                    if (str(_tk4.get("task_key") or "") in _es_cancel
+                                            and str(_tk4.get("status") or "")
+                                            in ("planned", "ready")):
+                                        TaskQueue.cancel(
+                                            conn, int(_tk4["id"]),
+                                            "目标已达成提前收敛（主动放弃非必需任务）")
+                                        orch_tasks.append({
+                                            "key": _tk4.get("task_key"),
+                                            "title": _tk4.get("title"),
+                                            "agent": _tk4.get("agent_id"),
+                                            "status": "skipped", "latency_ms": 0,
+                                            "retry_count": int(
+                                                _tk4.get("retry_count") or 0),
+                                            "summary_status": ""})
+                                        subtasks.append({
+                                            "key": _tk4.get("task_key"),
+                                            "title": _tk4.get("title"),
+                                            "agent": _tk4.get("agent_id") or "",
+                                            "deps": [], "status": "skipped",
+                                            "latency_ms": 0,
+                                            "error": "目标已达成提前收敛（主动放弃）",
+                                            "output": None,
+                                            "retry_count": int(
+                                                _tk4.get("retry_count") or 0),
+                                            "summary_status": ""})
+                                yield {"type": "reasoning", "kind": "progress",
+                                       "delta": "（自动编排）目标已达成提前收敛："
+                                                "必需产出全部完成，主动放弃 %d 个"
+                                                "非必需任务（%s）"
+                                                % (len(_es_cancel),
+                                                   ",".join(_es_cancel[:5]))}
+                                for _k7 in _es_cancel:
+                                    yield {"type": "subtask", "key": _k7,
+                                           "status": "skipped",
+                                           "title": "主动放弃（目标已达成）",
+                                           "agent": "", "deps": [],
+                                           "retry_count": 0}
+                                if _RS_OK:
+                                    _pe4 = _rs.plan_revised_payload(
+                                        {"action": "early_stop", "level": "T0",
+                                         "reason": _es_dec.get("reason") or ""},
+                                        run_id=run_id)
+                                    if _pe4:
+                                        _pe4["skipped"] = _es_cancel
+                                        yield _pe4
+                                break
+                        # ── B. 健康巡检（S10；M4 停手优先于精修）──
+                        if _rp_hp and _rh.probe_due(
+                                len(done_items) - _hp_done_mark,
+                                _hp_now - _hp_last_ts,
+                                every_tasks=_rp_pe_tasks, every_sec=_rp_pe_sec):
+                            _hp_done_mark = len(done_items)
+                            _hp_last_ts = _hp_now
+                            _hp_remain = sum(
+                                1 for _t5 in _hp_tasks
+                                if str(_t5.get("status") or "") in ("planned", "ready"))
+                            _hp_left = (_rp_pe_budget - (_hp_now - _hp_t0)) \
+                                if _rp_pe_budget > 0 else 0
+                            # LLM 版巡检（health_probe_llm，默认关；+1 次轻量调用）
+                            _hp_verdict = None
+                            if _rp_hpllm:
+                                try:
+                                    _hp_tpl, _ = _rh.llm_health_prompt(
+                                        goal or "", _hp_tasks,
+                                        done_summaries=[
+                                            str((it.get("summary") or {}).get(
+                                                "summary") or "")[:120]
+                                            for it in done_items[-5:]])
+                                    _hp_resp = llm_client.chat(
+                                        [{"role": "user", "content": _hp_tpl}],
+                                        provider_id=provider_id, _intent="planner")
+                                    _hp_raw = ((_hp_resp.get("choices") or [{}])[0]
+                                               .get("message", {}) or {}).get(
+                                                   "content", "")
+                                    _hp_verdict, _hp_perr = _rh.parse_llm_health(
+                                        _hp_raw)
+                                    if _hp_perr:
+                                        _hp_verdict = None   # 不可解释 ⇒ 不用
+                                except Exception:
+                                    _hp_verdict = None
+                            _hp_dec = _rh.health_probe(
+                                done_items, _hp_tasks, enabled=True,
+                                window=_rp_pe_tasks,
+                                latencies_ms=list(_done_lats[-max(3, _rp_pe_tasks):]),
+                                remaining_tasks=_hp_remain,
+                                budget_left_sec=_hp_left,
+                                llm_verdict=_hp_verdict)
+                            # 决策留痕（含 none —— "为什么不动图"同等重要）
+                            #   ⚠️ replan_decisions 的写入**不依赖** span 开关 ——
+                            #   span 可关（观测降级），决策记录是 SQL 聚合的数据源，
+                            #   两者生命周期不同（G6 完整性 vs 观测成本）。
+                            if _spans:
+                                try:
+                                    _hp_sid = _spans.open(
+                                        "replan", "health-decide",
+                                        parent=_run_sid,
+                                        meta={"remaining": _hp_remain})
+                                    if _hp_sid:
+                                        _spans.close(_hp_sid, "ok",
+                                                     _rh.health_meta(_hp_dec))
+                                except Exception:
+                                    pass
+                            _write_decision("health", _hp_dec)
+                            _hp_act = str(_hp_dec.get("action") or "none")
+                            if _hp_act == "stop":
+                                # M4 ⇒ S9 语义：该停，不重画。block 剩余任务后
+                                # break（与预算护栏同口径，汇总如实记 partial）。
+                                _m4_stopped = True
+                                for _tk5 in _hp_tasks:
+                                    if str(_tk5.get("status") or "") in ("planned",
+                                                                         "ready"):
+                                        TaskQueue.block(
+                                            conn, int(_tk5["id"]),
+                                            "预计耗时超时间预算（M4 巡检）")
+                                yield {"type": "reasoning", "kind": "progress",
+                                       "delta": "（自动编排）健康巡检 M4：%s"
+                                                % (_hp_dec.get("reason") or "")[:100]}
+                                break
+                            elif _hp_act == "refine":
+                                # S10 ⇒ T2-light 原地精修：把健康发现注入**剩余**
+                                # 任务的 context（UPDATE，不追行、不改拓扑）。
+                                _hp_applied = 0
+                                for _tk6 in _hp_tasks:
+                                    if str(_tk6.get("status") or "") not in ("planned",
+                                                                             "ready"):
+                                        continue
+                                    try:
+                                        _hp_ctx = str(_tk6.get("context") or "")
+                                        _hp_note = (
+                                            "\n【重规划 r1·巡检精修】%s。请按此调整"
+                                            "后续执行重点。" %
+                                            (_hp_dec.get("reason") or "")[:300])
+                                        conn.execute(
+                                            "UPDATE agent_tasks SET context=? "
+                                            "WHERE id=?",
+                                            ((_hp_ctx + _hp_note)[:1000],
+                                             int(_tk6["id"])))
+                                        _hp_applied += 1
+                                    except Exception:
+                                        pass
+                                if _hp_applied:
+                                    conn.commit()
+                                    yield {"type": "reasoning", "kind": "progress",
+                                           "delta": "（自动编排）健康巡检 S10：%s"
+                                                    % (_hp_dec.get("reason") or "")[:100]}
+                                    if _RS_OK:
+                                        _pe5 = _rs.plan_revised_payload(
+                                            {"action": "replan",
+                                             "level": _rh.LEVEL_LIGHT,
+                                             "reason": _hp_dec.get("reason") or ""},
+                                            run_id=run_id)
+                                        if _pe5:
+                                            _pe5["updates"] = [
+                                                str(t.get("task_key") or "")
+                                                for t in _hp_tasks
+                                                if str(t.get("status") or "")
+                                                in ("planned", "ready")]
+                                            yield _pe5
+                                    continue
                     except Exception:
                         pass
                 ready = TaskQueue.ready_tasks(conn, run_id)
@@ -1336,6 +1702,9 @@ class StreamMixin:
                                     _spans.close(_rsid, "ok",
                                                  _rs.decision_meta(_stall_dec,
                                                                    latency_ms=_dec_ms))
+                            # ★ P4：决策记录落 replan_decisions（与 span 同点）
+                            _write_decision("stall", _stall_dec,
+                                            latency_ms=_dec_ms)
                         except Exception:
                             pass
                     # ── P2 replanning（2026-10-21，v2 §4.10）：差量重画 ──
@@ -1411,6 +1780,7 @@ class StreamMixin:
                                     validate=TaskQueue.validate_plan)
                                 _rd_ms = int((_t.time() - _t_rd0) * 1000)
                                 # 决策记录（含 action=none 的"为什么不重画"）
+                                _rd_gates = {}
                                 if _spans:
                                     _rd_sid = _spans.open("replan", "redraw-decide",
                                                           parent=_run_sid,
@@ -1433,6 +1803,11 @@ class StreamMixin:
                                         except Exception:
                                             pass
                                         _spans.close(_rd_sid, "ok", _rd_meta)
+                                        _rd_gates = _rd_meta.get("gates") or {}
+                                # ★ P4：决策记录落 replan_decisions（与 span 同点）
+                                _write_decision("redraw", _redraw_dec,
+                                                round_no=_redraw_rounds + 1,
+                                                gates=_rd_gates, latency_ms=_rd_ms)
 
                                 _rd_act = str(_redraw_dec.get("action") or "none")
                                 if _rd_act == "replan":
@@ -1679,6 +2054,13 @@ class StreamMixin:
                                                    "summary": _summary,
                                                    "result_offload_id": _off_id or 0,
                                                    "proto_status": (_summary or {}).get("status")})
+                                # ★ P4：M4 滑动窗口的耗时样本（只收 done 的 ——
+                                #   失败任务的耗时长尾含超时，会把"平均耗时"抬成
+                                #   噪声；口径同基线报告的 latency 统计）。
+                                try:
+                                    _done_lats.append(int(_t_lat or 0))
+                                except Exception:
+                                    pass
                             else:
                                 TaskQueue.fail(conn, tk["id"], _t_err or "子任务未产生输出")
                                 # ★ P1 replanning（2026-10-21，v2 §4.6）：任务失败点
@@ -1732,6 +2114,9 @@ class StreamMixin:
                                                 _spans.close(
                                                     _rsid, "ok",
                                                     _rs.decision_meta(_dec, latency_ms=_dec_ms))
+                                        # ★ P4：决策记录落 replan_decisions（与 span 同点）
+                                        _write_decision("t1_fail", _dec,
+                                                        latency_ms=_dec_ms)
                                     except Exception:
                                         pass
                             # Task 7：子任务 token 记账写回 agent_tasks.token_count + run 累计
@@ -2024,8 +2409,11 @@ class StreamMixin:
                 # → 被外层 except 兜住静默回落单 Agent（编排跑了 543s 却落单 Agent 卡片）。
                 # 实测 2026-09-19（会话 362）；静态守卫 = tools/verify/verify_orchestration_e2e.py 的 G0
                 # （`--static-only`，live/check-only 每次自动先跑）。
+                # ★ P4：`skipped`（提前收敛主动放弃）**不算缺失** —— 它是
+                # "没必要做"，不是"没做成"（early_stop 的设计核心，见上）。
                 for _tk in orch_tasks:
-                    if _tk.get("status") != "done" and _tk.get("key") not in _missing_keys:
+                    if (_tk.get("status") not in ("done", "skipped")
+                            and _tk.get("key") not in _missing_keys):
                         _missing_keys.append(_tk.get("key"))
             # ★ Task #43：summary span —— 覆盖「三态聚合构造 + LLM 汇总 + 预算标注」。
             #   这是单次 LLM 调用里输入最大的一段（_summarize_plan 吃全部交付物），
@@ -2068,6 +2456,17 @@ class StreamMixin:
             # Task 7：预算受限 → 汇总内容标注 partial（前端可识别「部分子任务未执行」）
             if budget_hit:
                 orch_content += "\n\n（因预算限制部分子任务未执行）"
+            # ★ P4：提前收敛 ⇒ 汇总内容显式标注（"主动战略放弃"≠"没做完"——
+            #   与 partial 的区分是 early_stop 的设计核心：用户要知道剩下的
+            #   任务是**没必要做**，不是**没做成**）。
+            if _early_stopped:
+                orch_content += ("\n\n（目标已达成提前收敛：必需产出全部完成，"
+                                 "剩余 %d 个非必需任务主动放弃）"
+                                 % len(_es_cancel_keys))
+            # ★ P4：M4 巡检停手 ⇒ 与预算护栏同口径标注（S9 语义）。
+            if _m4_stopped:
+                orch_content += ("\n\n（健康巡检：预计剩余耗时超时间预算，"
+                                 "未派发子任务已标记，提前进入汇总）")
             if _spans and _sum_sid:
                 _spans.close(_sum_sid, "ok", {"items": len(done_items),
                                               "agg_status": _agg_status})
@@ -2148,6 +2547,23 @@ class StreamMixin:
                     yield {"type": "progress", "kind": "progress",
                            "delta": "（自动编排）" + _cftxt}
                 orch_content = _ref.get("content") or orch_content
+                # ★ P4（2026-10-21 探针 C7 实测修复）：反思修订会**整体重写**
+                #   orch_content ⇒ 上面在汇总后追加的**执行事实类标注**
+                #   （提前收敛 / M4 停手 / 预算受限）会被揉掉。这些标注描述的是
+                #   "执行发生了什么"，不是"报告怎么写" —— 被修订轮抹掉等于把
+                #   early_stop 的用户可见性弄丢（用户看不到"剩余任务是主动放弃
+                #   而非没做成"，正是本设计要防的误读）。
+                #   ⇒ 在 reflection 之后**幂等重追加**（先判重，防反思未修订时
+                #   出现两份同样的标注）。
+                if budget_hit and "因预算限制部分子任务未执行" not in orch_content:
+                    orch_content += "\n\n（因预算限制部分子任务未执行）"
+                if _early_stopped and "目标已达成提前收敛" not in orch_content:
+                    orch_content += ("\n\n（目标已达成提前收敛：必需产出全部完成，"
+                                     "剩余 %d 个非必需任务主动放弃）"
+                                     % len(_es_cancel_keys))
+                if _m4_stopped and "健康巡检" not in orch_content:
+                    orch_content += ("\n\n（健康巡检：预计剩余耗时超时间预算，"
+                                     "未派发子任务已标记，提前进入汇总）")
                 # reflection span 收口：status = 评审步骤是否正常完成（ok）；
                 #   通过与否是**业务结论**，进 meta（score/passed/rounds/conflicts）。
                 if _spans and _ref_sid:

@@ -465,7 +465,7 @@ def retask_context(base_context, directive, *, level=LEVEL_LIGHT):
 
 
 def llm_redraw_prompt(goal, tasks, *, directive="", done_summaries=None,
-                      max_tasks=MAX_TOUCH_TASKS):
+                      max_tasks=MAX_TOUCH_TASKS, allow_actions=("replace",)):
     """T3 LLM 整图重画的提示词骨架（纯函数，返回字符串）。
 
     **为什么提示词也进纯函数模块**：P3 范围锁定 replace 动作
@@ -473,6 +473,10 @@ def llm_redraw_prompt(goal, tasks, *, directive="", done_summaries=None,
     必须**同时**出现在提示词和质量门里 —— 两处分头维护必然漂移
     （P2 已经吃过一次亏：`build_redraw_plan` 的新 key 与 Q2 的 existing 集
     口径若不一致，"撞车"就会以别的形式漏出来）。
+
+    `allow_actions`（P4 新增，默认 `("replace",)` —— **与 P3 逐字一致**）：
+    放开到 skip/insert 时提示词才写对应约束；默认值下本函数的输出与 P3
+    完全相同（门禁 U6g 按默认值断言，防提示词漂移）。
 
     返回 `(prompt, schema_hint)`。`schema_hint` 是要求 LLM 输出的 JSON 形状，
     调用方用 `json.loads` 解析后仍须过 Q1~Q5（**LLM 输出不豁免质量门**）。
@@ -491,6 +495,22 @@ def llm_redraw_prompt(goal, tasks, *, directive="", done_summaries=None,
                        "\n".join("  %s" % str(x)[:120] for x in list(done_summaries)[:10])
         except Exception:
             done_txt = ""
+    allow = {str(a) for a in (allow_actions or ("replace",))}
+    # 动作约束段：默认（仅 replace）与 P3 原文逐字一致；skip/insert 各自追加。
+    action_rules = [
+        "1. 只允许 replace：对失效/被点名任务给出替代实现，"
+        "**不得凭空新增与指令无关的任务**；",
+    ]
+    if "skip" in allow:
+        action_rules.append(
+            "2. 允许 skip：对「其产出对剩余任务非关键」的任务输出 "
+            '{"action":"skip","key":"<旧key>","reason":"..."} —— '
+            "**不得 skip 无失效上游的健康任务**，每个 skip 必须给理由；")
+    if "insert" in allow:
+        action_rules.append(
+            "3. 允许 insert：可新增与用户指令**直接相关**的任务（key 自取，"
+            "不得与既有 key 重复），insert 必须能说清「为达成指令还缺什么」；")
+    action_txt = "\n".join("        " + r for r in action_rules)
     prompt = (
         "你是执行中重规划器。用户中途下达了新的指令，需要据此调整执行计划。\n"
         "\n# 原始目标\n%s\n"
@@ -499,19 +519,19 @@ def llm_redraw_prompt(goal, tasks, *, directive="", done_summaries=None,
         "\n# 用户中途指令\n%s\n"
         "\n# 你的任务\n"
         "给出调整后的**完整任务图**（JSON）。约束：\n"
-        "1. 只允许 replace：对失效/被点名任务给出替代实现，"
-        "**不得凭空新增与指令无关的任务**；\n"
-        "2. 已完成（done）任务**不得重跑**，其结论只能作为新任务的输入引用；\n"
-        "3. 新任务的 key 必须带 `_rN` 后缀且与既有 key 不重复；\n"
-        "4. deps 只能引用本图内存在的 key（含 done 的）；\n"
-        "5. 总任务数不得超过原图任务数的 1.5 倍。\n"
+        "%s\n"
+        "4. 已完成（done）任务**不得重跑**，其结论只能作为新任务的输入引用；\n"
+        "5. 新任务的 key 必须带 `_rN` 后缀且与既有 key 不重复；\n"
+        "6. deps 只能引用本图内存在的 key（含 done 的）；\n"
+        "7. 总任务数不得超过原图任务数的 1.5 倍。\n"
         "\n# 输出格式（严格 JSON，不要 markdown 代码块）\n"
-        '{"tasks": [{"key":"", "title":"", "agent":"", "deps":[], "context":"", '
-        '"expected_output":""}]}'
+        '{"tasks": [{"action":"replace", "key":"", "title":"", "agent":"", '
+        '"deps":[], "context":"", "expected_output":""}]}'
         % (str(goal or "")[:500],
            "\n".join(lines[:40]) or "（空）",
            done_txt,
-           str(directive or "")[:500])
+           str(directive or "")[:500],
+           action_txt)
     )
     schema_hint = {"tasks": "list[dict]"}
     return prompt, schema_hint
@@ -596,3 +616,128 @@ def parse_llm_plan(raw, failed_keys, *, round_no=1):
     if not out:
         return [], err or "LLM 输出无有效任务"
     return out, ""
+
+
+# ── P4：三动作解析（replace + skip + insert；默认仍锁 replace）─────────────
+#: LLM 版动作全集（拍板⑤：P3 只做 replace，skip/insert 在 P4 评估后放开）
+ACTION_REPLACE = "replace"
+ACTION_SKIP = "skip"
+ACTION_INSERT = "insert"
+ALL_LLM_ACTIONS = (ACTION_REPLACE, ACTION_SKIP, ACTION_INSERT)
+
+
+def parse_llm_plan_actions(raw, failed_keys, *, round_no=1,
+                           allow=(ACTION_REPLACE,)):
+    """P4 三动作版解析：replace / skip / insert ⇒
+    `(new_tasks, skip_entries, parse_error)`。
+
+    **为什么不改 `parse_llm_plan` 而是新开一个函数**：P3 门禁（124 项）按
+    "insert 无 lineage ⇒ Q3 拦"的口径断言旧函数，且旧函数的返回元数是 2。
+    改签名/改口径会让 P3 的回归一夜之间全红 —— 而 P3 的行为**本身不需要变**
+    （`allow=("replace",)` 时语义与旧函数一致，只多返回一个空 skip 列表）。
+
+    输出形状（LLM JSON）：
+        {"tasks": [
+            {"action": "replace", "key": "t3_r1", "title": ..., "deps": [...]},
+            {"action": "insert",  "key": "t9",    "title": ..., "deps": [...]},
+            {"action": "skip",    "key": "t4", "reason": "产出对下游非关键"}
+        ]}
+    `action` 缺省按 replace（P3 时代的输出没有这个字段，向后兼容）。
+
+    严格五条（**解析层就拒，不给质量门背锅**）：
+      1. 非 JSON / 非 dict / `tasks` 非 list ⇒ error；
+      2. replace：key 必须 `<旧key>_rN` 且旧 key ∈ 失效集（只认命名证据，
+         不做顺序兜底 —— 顺序兜底会把 insert 从后门放进来，P3 真 bug 同款）；
+      3. insert：key/title 必填，lineage 留到计划层补（`directive` 由
+         `plan_llm_redraw` 填，解析层拿不到指令原文）；
+      4. skip：key 必填、reason 必填（没有理由的 skip 不可解释 ⇒ 拒）；
+         跳过了谁由计划层校验（⊆ 失效传播集）；
+      5. `allow` 之外的动作 ⇒ **整份拒收**（T4）—— 看到不允许的动作说明
+         提示词约束失效，此时"尽力而为落库"比不落库更危险。
+
+    返回 `skip_entries` = `[{"key", "reason"}]`（计划层消费）。
+    """
+    import json as _j
+    allow_set = {str(a) for a in (allow or (ACTION_REPLACE,))}
+    err = ""
+    try:
+        obj = _j.loads(str(raw or "").strip())
+    except Exception as e:
+        return [], [], "LLM 输出非 JSON：%s" % e
+    if not isinstance(obj, dict):
+        return [], [], "LLM 输出非对象"
+    tl = obj.get("tasks")
+    if not isinstance(tl, list):
+        return [], [], "LLM 输出缺 tasks 数组"
+    failed_ord = [str(x) for x in (failed_keys or []) if str(x)]
+    out, skips = [], []
+    for it in tl:
+        if not isinstance(it, dict):
+            err = err or "tasks 含非对象元素"
+            continue
+        act = str(it.get("action") or ACTION_REPLACE).strip().lower()
+        if act not in allow_set:
+            return [], [], ("LLM 产出 %s 动作，不在允许集 %s 内 ⇒ 整份拒收"
+                            % (act or "空", ",".join(sorted(allow_set))))
+        k = str(it.get("key") or "").strip()
+        ti = str(it.get("title") or "").strip()
+        if act == ACTION_SKIP:
+            if not k:
+                err = err or "skip 条目缺 key"
+                continue
+            rsn = str(it.get("reason") or "").strip()
+            if not rsn:
+                err = err or "skip 条目缺理由（key=%s）" % k
+                continue
+            skips.append({"key": k, "reason": rsn[:200]})
+            continue
+        if not k or not ti:
+            err = err or "tasks 元素缺 key/title"
+            continue
+        dp = it.get("deps") or []
+        if not isinstance(dp, (list, tuple)):
+            err = err or "deps 非数组（key=%s）" % k
+            continue
+        if act == ACTION_REPLACE:
+            # 前缀反推：t2_r1 → t2（剥 _rN 后缀后须命中失效集）。
+            #   配对不上 ⇒ **不填 lineage**，让计划层兜底 + Q3 拦下（T4）——
+            #   填假 from 等于给质量门开后门（P3 真 bug 同款纪律）。
+            frm = ""
+            m = re.match(r"^(.*)_r\d+$", k)
+            if m and str(m.group(1)) in failed_ord:
+                frm = str(m.group(1))
+            out.append({
+                "key": k,
+                "title": ti[:120],
+                "agent": str(it.get("agent") or "")[:60],
+                "task_type": str(it.get("task_type") or "agent"),
+                "deps": [str(x) for x in dp],
+                "seq": int(it.get("seq") or 0),
+                "context": str(it.get("context") or "")[:1000],
+                "expected_output": str(it.get("expected_output") or "")[:500],
+                "config": ({"lineage": {"from": frm, "round": int(round_no or 1),
+                                        "reason": "llm_redraw",
+                                        "level": LEVEL_REDRAW}}
+                           if frm else {}),
+            })
+        else:  # insert
+            out.append({
+                "key": k,
+                "title": ti[:120],
+                "agent": str(it.get("agent") or "")[:60],
+                "task_type": str(it.get("task_type") or "agent"),
+                "deps": [str(x) for x in dp],
+                "seq": int(it.get("seq") or 0),
+                "context": str(it.get("context") or "")[:1000],
+                "expected_output": str(it.get("expected_output") or "")[:500],
+                # ⚠️ lineage.action=insert 且 directive 留空 —— 计划层
+                #    （plan_llm_redraw）负责填指令原文；填不上 ⇒ 拒收
+                #    （没有指令依据的新任务 = 借机塞私货，Q3 变体拦）。
+                "config": {"lineage": {"from": "", "action": ACTION_INSERT,
+                                       "round": int(round_no or 1),
+                                       "reason": "llm_insert",
+                                       "level": LEVEL_REDRAW}},
+            })
+    if not out and not skips:
+        return [], [], err or "LLM 输出无有效任务"
+    return out, skips, ""
