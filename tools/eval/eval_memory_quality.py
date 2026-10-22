@@ -297,17 +297,29 @@ def _write_report(conn, n_pass, n_fail, n_skip, rate, results):
     cand = {
         "doc_id": 0,                                  # NOT NULL；与既有 RAG 评测口径一致
         "doc_name": "记忆质量评测 5能力 %d项" % len(results),
+        # ⚠️ 2026-10-22（P0-5）：原先把同一个 rate 写进 **6 个** P/R/F1 字段。
+        #   后果不是"冗余"，而是**语义覆写** —— 与 RAG 检索评测（entity_recall/
+        #   relation_recall 有真实检索语义）共用同两列后，entity_f1=1.0 既可能是
+        #   "检索全对"，也可能是"记忆 15/15"，**在库里不可区分**。
+        #   现在：entity_f1 存命中率（该表仅有的汇总位，保持向后兼容），
+        #   relation_* **留空**（记忆评测没有"关系召回"这个概念，
+        #   填 0 会被误读成"关系召回 0 分"）。真正的区分靠 eval_kind。
         "entity_precision": round(rate, 4),
         "entity_recall": round(rate, 4),
         "entity_f1": round(rate, 4),
-        "relation_precision": round(rate, 4),
-        "relation_recall": round(rate, 4),
-        "relation_f1": round(rate, 4),
+        "relation_precision": None,      # 记忆评测无关系召回语义 ⇒ 留空而非填 rate
+        "relation_recall": None,
+        "relation_f1": None,
         "detail": detail,
         "created_by": "tools/eval/eval_memory_quality",
         "model_version": "memory-recall",
         "is_golden": 0,
         "golden_set_id": 0,
+        "eval_kind": "memory_quality",   # 2026-10-22：类型列，不再靠 created_by 反推
+        # doc 域检索指标对本评测无意义 ⇒ 显式留空（不是 0）
+        "doc_recall_at_5": None, "doc_mrr_at_10": None, "doc_ndcg_at_10": None,
+        "doc_pool_recall": None, "doc_rerank_drop_rate": None,
+        "doc_recall_miss_rate": None,
     }
     use = {k: v for k, v in cand.items() if k in cols}
     if "doc_id" in cols and use.get("doc_id") is None:

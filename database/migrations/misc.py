@@ -61,7 +61,14 @@ def _migrate_eval_tables(conn):
         relation_f1 REAL DEFAULT 0,
         detail TEXT DEFAULT '{}',              -- JSON: {extracted, golden, hits, misses, metric}
         created_by TEXT DEFAULT '',
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        eval_kind TEXT DEFAULT '',                -- 2026-10-22：评测类型 rag_retrieval|memory_quality|…
+        doc_recall_at_5 REAL DEFAULT 0,            -- doc 域主指标（此前只在 JSON 里）
+        doc_mrr_at_10 REAL DEFAULT 0,
+        doc_ndcg_at_10 REAL DEFAULT 0,
+        doc_pool_recall REAL DEFAULT 0,
+        doc_rerank_drop_rate REAL DEFAULT 0,
+        doc_recall_miss_rate REAL DEFAULT 0
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_eval_reports_doc ON eval_reports(doc_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_eval_reports_time ON eval_reports(created_at)")
@@ -92,6 +99,26 @@ def _migrate_kb_v2_enhance(conn):
     _add("eval_reports", "model_version", "TEXT DEFAULT ''")
     _add("eval_reports", "is_golden", "INTEGER DEFAULT 0")
     _add("eval_reports", "golden_set_id", "INTEGER DEFAULT 0")
+    # ── 2026-10-22（评估 P0-5）：eval_kind —— 评测**类型**列 ──────────
+    # 背景：`eval_reports` 此前**没有任何类型列**，而两类完全不同的评测往同一张表写：
+    #   RAG 检索评测（entity_recall/relation_recall 有真实语义）
+    #   记忆质量评测（把同一个 rate **写进 6 个 P/R/F1 字段**）
+    # ⇒ 同一张表里entity_f1=1.0 既可能是"检索全对"，也可能是"记忆 15/15"，
+    #   **只能靠 created_by 字段名反推**（而这正是脚本自己警告过的脆弱口径）。
+    # 语义：rag_retrieval | memory_quality | intent_routing | doc_extract | ''
+    # 旧行为：默认 ''（不回填历史行—— 历史行的类型不可靠地推断出来，
+    #   猜错比空着更坏；需要区分时按 created_by 查）。
+    _add("eval_reports", "eval_kind", "TEXT DEFAULT ''")
+    # doc 域检索主指标（recall@5 / mrr / ndcg / pool_recall / rerank_drop_rate /
+    # recall_miss_rate）—— 此前**只存在于 JSON 文件里**，库里查不到。
+    # 评估指出：doc 域是检索质量的主指标，却因表只有 entity/relation 两列而无法
+    # 落库 ⇒ 看板与趋势分析只能靠 docs/评测/ 下的单份 JSON 快照。
+    _add("eval_reports", "doc_recall_at_5", "REAL DEFAULT 0")
+    _add("eval_reports", "doc_mrr_at_10", "REAL DEFAULT 0")
+    _add("eval_reports", "doc_ndcg_at_10", "REAL DEFAULT 0")
+    _add("eval_reports", "doc_pool_recall", "REAL DEFAULT 0")
+    _add("eval_reports", "doc_rerank_drop_rate", "REAL DEFAULT 0")
+    _add("eval_reports", "doc_recall_miss_rate", "REAL DEFAULT 0")
     # P2-1 整合：本体蓝图统一 Profile 导入（profile 草案透传溯源列）
     _add("ontology_drafts", "profile_source", "TEXT DEFAULT ''")
     _add("ontology_drafts", "profile_ref", "TEXT DEFAULT ''")
