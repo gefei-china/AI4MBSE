@@ -1,0 +1,38 @@
+{
+ "updated_at": "2026-10-22T15:32:36",
+ "gates": [
+  {
+   "gate": "verify_generation_quality_gate.py",
+   "exit": 0,
+   "secs": 1.3
+  },
+  {
+   "gate": "verify_trace_quality_gate.py",
+   "exit": 0,
+   "secs": 1.5
+  },
+  {
+   "gate": "verify_rag_eval_gate.py",
+   "exit": 0,
+   "secs": 2.4
+  }
+ ],
+ "steps": [
+  {
+   "step": "生成质量评测",
+   "exit": 0
+  },
+  {
+   "step": "Trace 一致性评测",
+   "exit": 0
+  },
+  {
+   "step": "RAG 检索评测",
+   "exit": 0
+  },
+  {
+   "step": "意图路由评测",
+   "exit": 0
+  }
+ ]
+}

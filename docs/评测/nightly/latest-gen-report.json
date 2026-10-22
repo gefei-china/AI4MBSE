@@ -1,0 +1,526 @@
+{
+ "kind": "generation_quality",
+ "generated_at": "2026-10-22T15:32:37",
+ "db": "mbse.db",
+ "db_fingerprint": {
+  "messages_text_n": 193,
+  "id_range": [
+   2649,
+   4776
+  ]
+ },
+ "population": {
+  "assistant_text_total": 193,
+  "sampled": 193,
+  "mock_excluded": 23,
+  "attachment_conv_excluded": 19,
+  "card_types_excluded": 0,
+  "unparsable_card_data": 0
+ },
+ "summary": {
+  "n_answers": 151,
+  "n_with_citations": 32,
+  "n_without_citations": 119,
+  "citation_valid_rate": 1.0,
+  "citation_usage_rate": 0.34375,
+  "grounded_entity_rate": 0.0,
+  "no_citation_factual_rate": 0.16806722689075632,
+  "total_markers": 45,
+  "valid_markers": 45,
+  "answers_using_citations": 11,
+  "citations_without_content": 0,
+  "n_entities": 2,
+  "n_grounded_entities": 0,
+  "control": {
+   "pooled_grounded_rate": 0.0,
+   "discriminates": false
+  }
+ },
+ "fixture_self_check": {
+  "ok": true,
+  "cases": [
+   {
+    "case": "F1a",
+    "metric": "citation_valid_rate",
+    "expect": 1.0,
+    "got": 1.0,
+    "ok": true
+   },
+   {
+    "case": "F1b",
+    "metric": "citation_valid_rate",
+    "expect": 0.5,
+    "got": 0.5,
+    "ok": true
+   },
+   {
+    "case": "F2",
+    "metric": "grounded_entity_rate",
+    "expect": 0.5,
+    "got": 0.5,
+    "ok": true
+   },
+   {
+    "case": "F3",
+    "metric": "no_citation_factual_rate",
+    "expect": 0.5,
+    "got": 0.5,
+    "ok": true
+   },
+   {
+    "case": "F4",
+    "metric": "grounded_entity_rate",
+    "expect": 1.0,
+    "got": 1.0,
+    "ok": true
+   },
+   {
+    "case": "F5",
+    "metric": "grounded_entity_rate",
+    "expect": 1.0,
+    "got": 1.0,
+    "ok": true
+   },
+   {
+    "case": "F4F5",
+    "metric": "control.discriminates",
+    "expect": true,
+    "got": true,
+    "ok": true
+   },
+   {
+    "case": "F4F5",
+    "metric": "citation_usage_rate",
+    "expect": 0.0,
+    "got": 0.0,
+    "ok": true
+   }
+  ]
+ },
+ "ungrounded_examples": [
+  {
+   "message_id": 3903,
+   "entity": "NM-002",
+   "kind": "with_citations"
+  },
+  {
+   "message_id": 3903,
+   "entity": "NM-003",
+   "kind": "with_citations"
+  },
+  {
+   "message_id": 4774,
+   "entity": "IR-1",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4774,
+   "entity": "IR-2",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4774,
+   "entity": "IR-3",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4774,
+   "entity": "IR-4",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4772,
+   "entity": "IR-1",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4772,
+   "entity": "IR-2",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4772,
+   "entity": "IR-3",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4772,
+   "entity": "IR-4",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4697,
+   "entity": "RPT-2026",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4680,
+   "entity": "IR-1",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4680,
+   "entity": "IR-2",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4680,
+   "entity": "IR-3",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4680,
+   "entity": "IR-4",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4653,
+   "entity": "UTF-8",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4628,
+   "entity": "UTF-8",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4605,
+   "entity": "UTF-8",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4601,
+   "entity": "UTF-8",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4588,
+   "entity": "UTF-8",
+   "kind": "no_citations"
+  }
+ ],
+ "per_answer": [
+  {
+   "id": 4762,
+   "kind": "with_citations",
+   "n_entities": 0,
+   "n_grounded": 0,
+   "ungrounded": [],
+   "n_markers": 1
+  },
+  {
+   "id": 4760,
+   "kind": "with_citations",
+   "n_entities": 0,
+   "n_grounded": 0,
+   "ungrounded": [],
+   "n_markers": 6
+  },
+  {
+   "id": 4757,
+   "kind": "with_citations",
+   "n_entities": 0,
+   "n_grounded": 0,
+   "ungrounded": [],
+   "n_markers": 4
+  },
+  {
+   "id": 4013,
+   "kind": "with_citations",
+   "n_entities": 0,
+   "n_grounded": 0,
+   "ungrounded": [],
+   "n_markers": 4
+  },
+  {
+   "id": 4011,
+   "kind": "with_citations",
+   "n_entities": 0,
+   "n_grounded": 0,
+   "ungrounded": [],
+   "n_markers": 4
+  },
+  {
+   "id": 3903,
+   "kind": "with_citations",
+   "n_entities": 2,
+   "n_grounded": 0,
+   "ungrounded": [
+    "NM-002",
+    "NM-003"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 3173,
+   "kind": "with_citations",
+   "n_entities": 0,
+   "n_grounded": 0,
+   "ungrounded": [],
+   "n_markers": 1
+  },
+  {
+   "id": 3120,
+   "kind": "with_citations",
+   "n_entities": 0,
+   "n_grounded": 0,
+   "ungrounded": [],
+   "n_markers": 2
+  },
+  {
+   "id": 3017,
+   "kind": "with_citations",
+   "n_entities": 0,
+   "n_grounded": 0,
+   "ungrounded": [],
+   "n_markers": 3
+  },
+  {
+   "id": 2742,
+   "kind": "with_citations",
+   "n_entities": 0,
+   "n_grounded": 0,
+   "ungrounded": [],
+   "n_markers": 6
+  },
+  {
+   "id": 2740,
+   "kind": "with_citations",
+   "n_entities": 0,
+   "n_grounded": 0,
+   "ungrounded": [],
+   "n_markers": 8
+  },
+  {
+   "id": 2731,
+   "kind": "with_citations",
+   "n_entities": 0,
+   "n_grounded": 0,
+   "ungrounded": [],
+   "n_markers": 6
+  },
+  {
+   "id": 4774,
+   "kind": "no_citations",
+   "n_entities": 4,
+   "n_grounded": 0,
+   "ungrounded": [
+    "IR-1",
+    "IR-2",
+    "IR-3",
+    "IR-4"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4772,
+   "kind": "no_citations",
+   "n_entities": 4,
+   "n_grounded": 0,
+   "ungrounded": [
+    "IR-1",
+    "IR-2",
+    "IR-3",
+    "IR-4"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4697,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "RPT-2026"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4680,
+   "kind": "no_citations",
+   "n_entities": 4,
+   "n_grounded": 0,
+   "ungrounded": [
+    "IR-1",
+    "IR-2",
+    "IR-3",
+    "IR-4"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4653,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "UTF-8"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4628,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "UTF-8"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4605,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "UTF-8"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4601,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "UTF-8"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4588,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "UTF-8"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4586,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "UTF-8"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4584,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "UTF-8"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4560,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "UTF-8"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4041,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "UTF-8"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 4037,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "200ms"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 3970,
+   "kind": "no_citations",
+   "n_entities": 4,
+   "n_grounded": 0,
+   "ungrounded": [
+    "IR-1",
+    "IR-2",
+    "IR-3",
+    "IR-4"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 3885,
+   "kind": "no_citations",
+   "n_entities": 4,
+   "n_grounded": 0,
+   "ungrounded": [
+    "IR-1",
+    "IR-2",
+    "IR-3",
+    "IR-4"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 3013,
+   "kind": "no_citations",
+   "n_entities": 3,
+   "n_grounded": 0,
+   "ungrounded": [
+    "CHG-001",
+    "TBD-1",
+    "TBD-2"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 3004,
+   "kind": "no_citations",
+   "n_entities": 1,
+   "n_grounded": 0,
+   "ungrounded": [
+    "500ms"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 2974,
+   "kind": "no_citations",
+   "n_entities": 4,
+   "n_grounded": 0,
+   "ungrounded": [
+    "IR-1",
+    "IR-2",
+    "IR-3",
+    "IR-4"
+   ],
+   "n_markers": 0
+  },
+  {
+   "id": 2780,
+   "kind": "no_citations",
+   "n_entities": 4,
+   "n_grounded": 0,
+   "ungrounded": [
+    "2 Gbps",
+    "2GHz",
+    "BC-003",
+    "BR-4"
+   ],
+   "n_markers": 0
+  }
+ ]
+}

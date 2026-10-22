@@ -1,0 +1,969 @@
+{
+ "kind": "trace_consistency",
+ "generated_at": "2026-10-22T15:32:42",
+ "db": "mbse.db",
+ "trace_file": "tmp/p21/trace_evalset.json",
+ "trace_built_at": "2026-10-22 12:00:27",
+ "llm_fallback": "disabled",
+ "semantic_backend": "bigram",
+ "population": {
+  "trace_total": 228,
+  "strong": 55,
+  "positive": 42,
+  "negative_total": 13,
+  "negative_routing_error": 0,
+  "negative_pool_invalid": 13,
+  "weak_total": 173,
+  "weak_sampled": 50,
+  "gold_stale": 0,
+  "gold_stale_ratio": 0.0,
+  "route_errors": 0,
+  "strong_route_dist": {
+   "chat": 8,
+   "explain": 10,
+   "rule": 23,
+   "rule_scored": 10,
+   "semantic_weak": 1,
+   "semantic": 1,
+   "fused": 2
+  },
+  "llm_route_count": 0
+ },
+ "positive": {
+  "n": 42,
+  "agreement": 0.881,
+  "macro_f1": 0.7947,
+  "per_class": [
+   {
+    "intent": "chat",
+    "precision": 0.429,
+    "recall": 1.0,
+    "f1": 0.6,
+    "n": 3
+   },
+   {
+    "intent": "design",
+    "precision": 1.0,
+    "recall": 0.7,
+    "f1": 0.824,
+    "n": 10
+   },
+   {
+    "intent": "impact",
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "n": 4
+   },
+   {
+    "intent": "knowledge_qa",
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "n": 11
+   },
+   {
+    "intent": "report_generation",
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "n": 4
+   },
+   {
+    "intent": "requirement_analysis",
+    "precision": 1.0,
+    "recall": 0.5,
+    "f1": 0.667,
+    "n": 2
+   },
+   {
+    "intent": "requirement_quality",
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "n": 2
+   },
+   {
+    "intent": "review",
+    "precision": 1.0,
+    "recall": 0.75,
+    "f1": 0.857,
+    "n": 4
+   },
+   {
+    "intent": "system_mgmt",
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "n": 2
+   },
+   {
+    "intent": "trace_verification",
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "n": 0
+   }
+  ],
+  "confusion": {
+   "chat": {
+    "chat": 3
+   },
+   "design": {
+    "chat": 3,
+    "design": 7
+   },
+   "impact": {
+    "impact": 4
+   },
+   "knowledge_qa": {
+    "knowledge_qa": 11
+   },
+   "report_generation": {
+    "report_generation": 4
+   },
+   "requirement_analysis": {
+    "chat": 1,
+    "requirement_analysis": 1
+   },
+   "requirement_quality": {
+    "requirement_quality": 2
+   },
+   "review": {
+    "review": 3,
+    "trace_verification": 1
+   },
+   "system_mgmt": {
+    "system_mgmt": 2
+   },
+   "trace_verification": {}
+  },
+  "wrong": [
+   {
+    "id": "intent_confirmed-001",
+    "query": "帮我看看这个系统大概是怎么设计的",
+    "gold": "design",
+    "pred": "chat",
+    "route": "chat",
+    "conf": 0.0,
+    "match": false
+   },
+   {
+    "id": "intent_confirmed-002",
+    "query": "帮我看看这个系统的接口设计是否合理",
+    "gold": "design",
+    "pred": "chat",
+    "route": "chat",
+    "conf": 0.0,
+    "match": false
+   },
+   {
+    "id": "intent_confirmed-018",
+    "query": "把任务书里的需求提取出来",
+    "gold": "requirement_analysis",
+    "pred": "chat",
+    "route": "chat",
+    "conf": 0.0,
+    "match": false
+   },
+   {
+    "id": "intent_confirmed-022",
+    "query": "追溯矩阵检查一下",
+    "gold": "review",
+    "pred": "trace_verification",
+    "route": "rule_scored",
+    "conf": 0.95,
+    "match": false
+   },
+   {
+    "id": "intent_confirmed-031",
+    "query": "对这个系统做总体设计",
+    "gold": "design",
+    "pred": "chat",
+    "route": "chat",
+    "conf": 0.0,
+    "match": false
+   }
+  ]
+ },
+ "negative": {
+  "n": 0,
+  "repeat_mistake_rate": null,
+  "repeats": [],
+  "detail": [],
+  "pool_invalid_detail": [
+   {
+    "id": "intent_rejected-001",
+    "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=需求分析：拆解目标需求，明确系统边界、涉众、功能/非功能需求与约束，输出需求分析成果\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n需求分析：拆解目标需求，明确系统边界、涉众、功能/非功能需求与约束，输出需求分析成果\n团队目标：先做需求分析，再进行方案设计，最后生成 sysml 代码",
+    "gold": "design",
+    "pred": "design",
+    "route": "rule",
+    "conf": 0.95,
+    "reject_kind": "pool_invalid",
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   },
+   {
+    "id": "intent_rejected-002",
+    "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=需求分析：拆解目标需求、梳理涉众与约束、输出需求清单与系统边界\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n需求分析：拆解目标需求、梳理涉众与约束、输出需求清单与系统边界\n团队目标：先做需求分析，再进行方案设计，最后生成 sysml 代码",
+    "gold": "design",
+    "pred": "design",
+    "route": "rule",
+    "conf": 0.95,
+    "reject_kind": "pool_invalid",
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   },
+   {
+    "id": "intent_rejected-003",
+    "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析电动汽车热管理系统需求，输出需求分析结果\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析电动汽车热管理系统需求，输出需求分析结果\n团队目标：先分析电动汽车热管理系统需求，再生成 SysML V2 模型代码并进行校验",
+    "gold": "design",
+    "pred": "design",
+    "route": "rule",
+    "conf": 0.95,
+    "reject_kind": "pool_invalid",
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   },
+   {
+    "id": "intent_rejected-004",
+    "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析电动汽车热管理系统需求，输出需求分析成果\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析电动汽车热管理系统需求，输出需求分析成果\n团队目标：先分析电动汽车热管理系统需求，再生成 SysML V2 模型代码并进行校验",
+    "gold": "design",
+    "pred": "design",
+    "route": "rule",
+    "conf": 0.95,
+    "reject_kind": "pool_invalid",
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   },
+   {
+    "id": "intent_rejected-005",
+    "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，明确系统边界、涉众、约束与结构视图建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，明确系统边界、涉众、约束与结构视图建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+    "gold": "design",
+    "pred": "design",
+    "route": "rule",
+    "conf": 0.95,
+    "reject_kind": "pool_invalid",
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   },
+   {
+    "id": "intent_rejected-006",
+    "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，明确系统边界、涉众、约束与结构建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，明确系统边界、涉众、约束与结构建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+    "gold": "design",
+    "pred": "design",
+    "route": "rule",
+    "conf": 0.95,
+    "reject_kind": "pool_invalid",
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   },
+   {
+    "id": "intent_rejected-007",
+    "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，梳理系统边界、涉众与结构建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，梳理系统边界、涉众与结构建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+    "gold": "design",
+    "pred": "design",
+    "route": "rule",
+    "conf": 0.95,
+    "reject_kind": "pool_invalid",
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   },
+   {
+    "id": "intent_rejected-008",
+    "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，明确系统边界、涉众与结构建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，明确系统边界、涉众与结构建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+    "gold": "design",
+    "pred": "design",
+    "route": "rule",
+    "conf": 0.95,
+    "reject_kind": "pool_invalid",
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   },
+   {
+    "id": "intent_rejected-009",
+    "query": "(续跑)",
+    "gold": "chat",
+    "pred": "chat",
+    "route": "chat",
+    "conf": 0.0,
+    "reject_kind": "pool_invalid",
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   },
+   {
+    "id": "intent_rejected-010",
+    "query": "提供一段需求，进行需求分析、方案设计、代码校验",
+    "gold": "design",
+    "pred": "design",
+    "route": "rule_scored",
+    "conf": 0.9,
+    "reject_kind": "pool_invalid",
+    "reject_note": "多意图句（一句话三个阶段），不属于单标签评测集；已有多意图专项用例覆盖，放这里只会制造假错例"
+   },
+   {
+    "id": "intent_rejected-011",
+    "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「您希望围绕“流式输出”开展哪类 MBSE 工作？」→ 回答：需求分析与用例建模\n问题「需要建模的流式输出系统边界或对象是什么？」→ 回答：AI/LLM 推理服务\n问题「本分析最关注哪些指标或质量属性？」→ 回答：延迟与首字节时间\n\n原请求：流式输出",
+    "gold": "requirement_analysis",
+    "pred": "requirement_analysis",
+    "route": "rule_scored",
+    "conf": 0.9,
+    "reject_kind": "pool_invalid",
+    "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+   },
+   {
+    "id": "intent_rejected-012",
+    "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「本次参数变更要建模/分析的对象与范围是什么？」→ 回答：巡飞弹参数变更：推进剂加注量与巡飞速度调整\n\n原请求：巡飞弹参数变更：推进剂加注量与巡飞速度调整",
+    "gold": "knowledge_qa",
+    "pred": "knowledge_qa",
+    "route": "explain",
+    "conf": 0.8,
+    "reject_kind": "pool_invalid",
+    "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+   },
+   {
+    "id": "intent_rejected-013",
+    "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「本次建模对象是哪种巡飞弹层级？」→ 回答：概念级/通用巡飞弹\n问题「需要覆盖的设计原理范围是？」→ 回答：气动/结构/动力/控制/制导/战斗部全链路\n问题「关系图谱希望表达哪类关系？」→ 回答：需求-功能-逻辑-物理架构\n\n原请求：巡飞弹的设计原理，以及关系图谱",
+    "gold": "design",
+    "pred": "design",
+    "route": "rule_scored",
+    "conf": 0.9,
+    "reject_kind": "pool_invalid",
+    "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+   }
+  ]
+ },
+ "weak": {
+  "n": 50,
+  "intent_dist": {
+   "design": 9,
+   "view_expansion": 3,
+   "review": 2,
+   "chat": 22,
+   "report_generation": 1,
+   "requirement_analysis": 2,
+   "knowledge_qa": 11
+  },
+  "route_dist": {
+   "rule": 11,
+   "rule_scored": 6,
+   "chat": 22,
+   "explain": 11
+  },
+  "llm_route_count": 0,
+  "chat_share": 0.44
+ },
+ "negative_control": {
+  "enabled": true,
+  "recall": 0.1667,
+  "gap": 0.7143,
+  "discriminates": true,
+  "distinct_gold": 9,
+  "note": ""
+ },
+ "fingerprint_drift": [],
+ "fixture_self_check": {
+  "ok": true,
+  "cases": [
+   {
+    "case": "F1",
+    "metric": "agreement",
+    "expect": 1.0,
+    "got": 1.0,
+    "ok": true
+   },
+   {
+    "case": "F2",
+    "metric": "agreement",
+    "expect": 0.0,
+    "got": 0.0,
+    "ok": true
+   },
+   {
+    "case": "F3",
+    "metric": "repeat_mistake_rate",
+    "expect": 0.6,
+    "got": 0.6,
+    "ok": true
+   },
+   {
+    "case": "F3b",
+    "metric": "repeats",
+    "expect": 3,
+    "got": 3,
+    "ok": true
+   },
+   {
+    "case": "F4",
+    "metric": "rotated_agreement",
+    "expect": 0.1667,
+    "got": 0.1667,
+    "ok": true
+   },
+   {
+    "case": "F4b",
+    "metric": "rotated_agreement",
+    "expect": null,
+    "got": null,
+    "ok": true
+   },
+   {
+    "case": "F4c",
+    "metric": "control_discriminates_when_clustered",
+    "expect": "gap>=0.25",
+    "got": 0.6667,
+    "ok": true
+   },
+   {
+    "case": "F5a",
+    "metric": "gold_unchanged_is_valid",
+    "expect": 1,
+    "got": 1,
+    "ok": true
+   },
+   {
+    "case": "F5b",
+    "metric": "gold_changed_is_stale",
+    "expect": 1,
+    "got": 1,
+    "ok": true
+   },
+   {
+    "case": "F5c",
+    "metric": "row_deleted_is_stale",
+    "expect": 1,
+    "got": 1,
+    "ok": true
+   },
+   {
+    "case": "F7a",
+    "metric": "classify_pool_invalid",
+    "expect": "pool_invalid",
+    "got": "pool_invalid",
+    "ok": true
+   },
+   {
+    "case": "F7b",
+    "metric": "classify_routing_error",
+    "expect": "routing_error",
+    "got": "routing_error",
+    "ok": true
+   },
+   {
+    "case": "F7c",
+    "metric": "classify_empty_note",
+    "expect": "routing_error",
+    "got": "routing_error",
+    "ok": true
+   },
+   {
+    "case": "F6",
+    "metric": "shared_metrics_delegation",
+    "expect": 0.6667,
+    "got": 0.6667,
+    "ok": true
+   }
+  ]
+ },
+ "decisions": [
+  {
+   "id": "intent_confirmed-001",
+   "query": "帮我看看这个系统大概是怎么设计的",
+   "gold": "design",
+   "pred": "chat",
+   "route": "chat",
+   "conf": 0.0,
+   "match": false
+  },
+  {
+   "id": "intent_confirmed-002",
+   "query": "帮我看看这个系统的接口设计是否合理",
+   "gold": "design",
+   "pred": "chat",
+   "route": "chat",
+   "conf": 0.0,
+   "match": false
+  },
+  {
+   "id": "intent_confirmed-003",
+   "query": "帮我看看这个项目的预算",
+   "gold": "chat",
+   "pred": "chat",
+   "route": "chat",
+   "conf": 0.0,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-004",
+   "query": "帮我测算一下这个项目的成本",
+   "gold": "chat",
+   "pred": "chat",
+   "route": "chat",
+   "conf": 0.0,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-005",
+   "query": "#知识库 知识库里关于需求工程的方法有哪些？",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "explain",
+   "conf": 0.8,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-006",
+   "query": "satisfy X by Y` 这个语法正确嘛，用语法校验工具校验一下",
+   "gold": "review",
+   "pred": "review",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-007",
+   "query": "帮我生成电动汽车热管理系统的sysml V2代码并进行校验",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-008",
+   "query": "帮我进行电动汽车热管理系统的工程建模，生成结构视图（BDD），并生成对应的sysyml V2代码，并进行词法、语法的校验，确保代码合格",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-009",
+   "query": "帮我写一首诗",
+   "gold": "chat",
+   "pred": "chat",
+   "route": "chat",
+   "conf": 0.0,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-010",
+   "query": "用一句话介绍热管理系统",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "explain",
+   "conf": 0.8,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-011",
+   "query": "请对巡飞弹做一次参数变更影响分析：推进剂加注量与巡飞速度调整，影响深度 3 层，输出影响报告",
+   "gold": "report_generation",
+   "pred": "report_generation",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-012",
+   "query": "查询#宽带通信 知识库资料",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "rule_scored",
+   "conf": 0.9,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-013",
+   "query": "请生成一份关于宽带通信系统的分析报告",
+   "gold": "report_generation",
+   "pred": "report_generation",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-014",
+   "query": "对巡飞弹做参数变更影响分析：推进剂加注量与巡飞速度调整，影响深度3层",
+   "gold": "impact",
+   "pred": "impact",
+   "route": "rule_scored",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-015",
+   "query": "对当前模型进行预评审校验",
+   "gold": "review",
+   "pred": "review",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-016",
+   "query": "查看一下审计日志",
+   "gold": "system_mgmt",
+   "pred": "system_mgmt",
+   "route": "semantic_weak",
+   "conf": 0.6761234037828131,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-017",
+   "query": "系统里有几个用户",
+   "gold": "system_mgmt",
+   "pred": "system_mgmt",
+   "route": "semantic",
+   "conf": 0.9999999999999999,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-018",
+   "query": "把任务书里的需求提取出来",
+   "gold": "requirement_analysis",
+   "pred": "chat",
+   "route": "chat",
+   "conf": 0.0,
+   "match": false
+  },
+  {
+   "id": "intent_confirmed-019",
+   "query": "帮我解析这份需求文档的条目",
+   "gold": "requirement_analysis",
+   "pred": "requirement_analysis",
+   "route": "fused",
+   "conf": 0.92,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-020",
+   "query": "输出这次评审的报告",
+   "gold": "report_generation",
+   "pred": "report_generation",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-021",
+   "query": "生成一份需求分析报告",
+   "gold": "report_generation",
+   "pred": "report_generation",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-022",
+   "query": "追溯矩阵检查一下",
+   "gold": "review",
+   "pred": "trace_verification",
+   "route": "rule_scored",
+   "conf": 0.95,
+   "match": false
+  },
+  {
+   "id": "intent_confirmed-023",
+   "query": "帮我校验一下这段sysml代码",
+   "gold": "review",
+   "pred": "review",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-024",
+   "query": "这份需求的模糊词有哪些",
+   "gold": "requirement_quality",
+   "pred": "requirement_quality",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-025",
+   "query": "做一次需求质量评审",
+   "gold": "requirement_quality",
+   "pred": "requirement_quality",
+   "route": "rule_scored",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-026",
+   "query": "接口变更会波及哪些模块",
+   "gold": "impact",
+   "pred": "impact",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-027",
+   "query": "对巡飞弹做变更影响分析",
+   "gold": "impact",
+   "pred": "impact",
+   "route": "rule_scored",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-028",
+   "query": "分析一下这个需求的变更影响",
+   "gold": "impact",
+   "pred": "impact",
+   "route": "rule_scored",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-029",
+   "query": "画一张参数图",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-030",
+   "query": "生成结构树",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-031",
+   "query": "对这个系统做总体设计",
+   "gold": "design",
+   "pred": "chat",
+   "route": "chat",
+   "conf": 0.0,
+   "match": false
+  },
+  {
+   "id": "intent_confirmed-032",
+   "query": "输出一份 BDD 视图",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-033",
+   "query": "帮我生成这个系统的SysML v2模型代码",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-034",
+   "query": "请设计星网宽带通信系统的架构方案",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule_scored",
+   "conf": 0.9,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-035",
+   "query": "知识库里有没有关于链路预算的资料",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "fused",
+   "conf": 0.92,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-036",
+   "query": "变更影响分析的用途",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "explain",
+   "conf": 0.8,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-037",
+   "query": "需求追溯的原理是什么",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "explain",
+   "conf": 0.8,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-038",
+   "query": "MBSE方法论包含哪些建模活动",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "explain",
+   "conf": 0.8,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-039",
+   "query": "MBSE建模方法论与传统方法的区别",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "explain",
+   "conf": 0.8,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-040",
+   "query": "介绍一下SysML v2的作用",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "explain",
+   "conf": 0.8,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-041",
+   "query": "什么是MBSE建模方法论",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "explain",
+   "conf": 0.8,
+   "match": true
+  },
+  {
+   "id": "intent_confirmed-042",
+   "query": "MBSE建模方法论介绍",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "explain",
+   "conf": 0.8,
+   "match": true
+  },
+  {
+   "id": "intent_rejected-001",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=需求分析：拆解目标需求，明确系统边界、涉众、功能/非功能需求与约束，输出需求分析成果\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n需求分析：拆解目标需求，明确系统边界、涉众、功能/非功能需求与约束，输出需求分析成果\n团队目标：先做需求分析，再进行方案设计，最后生成 sysml 代码",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "reject_kind": "pool_invalid",
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+  },
+  {
+   "id": "intent_rejected-002",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=需求分析：拆解目标需求、梳理涉众与约束、输出需求清单与系统边界\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n需求分析：拆解目标需求、梳理涉众与约束、输出需求清单与系统边界\n团队目标：先做需求分析，再进行方案设计，最后生成 sysml 代码",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "reject_kind": "pool_invalid",
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+  },
+  {
+   "id": "intent_rejected-003",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析电动汽车热管理系统需求，输出需求分析结果\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析电动汽车热管理系统需求，输出需求分析结果\n团队目标：先分析电动汽车热管理系统需求，再生成 SysML V2 模型代码并进行校验",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "reject_kind": "pool_invalid",
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+  },
+  {
+   "id": "intent_rejected-004",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析电动汽车热管理系统需求，输出需求分析成果\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析电动汽车热管理系统需求，输出需求分析成果\n团队目标：先分析电动汽车热管理系统需求，再生成 SysML V2 模型代码并进行校验",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "reject_kind": "pool_invalid",
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+  },
+  {
+   "id": "intent_rejected-005",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，明确系统边界、涉众、约束与结构视图建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，明确系统边界、涉众、约束与结构视图建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "reject_kind": "pool_invalid",
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+  },
+  {
+   "id": "intent_rejected-006",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，明确系统边界、涉众、约束与结构建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，明确系统边界、涉众、约束与结构建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "reject_kind": "pool_invalid",
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+  },
+  {
+   "id": "intent_rejected-007",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，梳理系统边界、涉众与结构建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，梳理系统边界、涉众与结构建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "reject_kind": "pool_invalid",
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+  },
+  {
+   "id": "intent_rejected-008",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，明确系统边界、涉众与结构建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，明确系统边界、涉众与结构建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule",
+   "conf": 0.95,
+   "reject_kind": "pool_invalid",
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+  },
+  {
+   "id": "intent_rejected-009",
+   "query": "(续跑)",
+   "gold": "chat",
+   "pred": "chat",
+   "route": "chat",
+   "conf": 0.0,
+   "reject_kind": "pool_invalid",
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+  },
+  {
+   "id": "intent_rejected-010",
+   "query": "提供一段需求，进行需求分析、方案设计、代码校验",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule_scored",
+   "conf": 0.9,
+   "reject_kind": "pool_invalid",
+   "reject_note": "多意图句（一句话三个阶段），不属于单标签评测集；已有多意图专项用例覆盖，放这里只会制造假错例"
+  },
+  {
+   "id": "intent_rejected-011",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「您希望围绕“流式输出”开展哪类 MBSE 工作？」→ 回答：需求分析与用例建模\n问题「需要建模的流式输出系统边界或对象是什么？」→ 回答：AI/LLM 推理服务\n问题「本分析最关注哪些指标或质量属性？」→ 回答：延迟与首字节时间\n\n原请求：流式输出",
+   "gold": "requirement_analysis",
+   "pred": "requirement_analysis",
+   "route": "rule_scored",
+   "conf": 0.9,
+   "reject_kind": "pool_invalid",
+   "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+  },
+  {
+   "id": "intent_rejected-012",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「本次参数变更要建模/分析的对象与范围是什么？」→ 回答：巡飞弹参数变更：推进剂加注量与巡飞速度调整\n\n原请求：巡飞弹参数变更：推进剂加注量与巡飞速度调整",
+   "gold": "knowledge_qa",
+   "pred": "knowledge_qa",
+   "route": "explain",
+   "conf": 0.8,
+   "reject_kind": "pool_invalid",
+   "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+  },
+  {
+   "id": "intent_rejected-013",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「本次建模对象是哪种巡飞弹层级？」→ 回答：概念级/通用巡飞弹\n问题「需要覆盖的设计原理范围是？」→ 回答：气动/结构/动力/控制/制导/战斗部全链路\n问题「关系图谱希望表达哪类关系？」→ 回答：需求-功能-逻辑-物理架构\n\n原请求：巡飞弹的设计原理，以及关系图谱",
+   "gold": "design",
+   "pred": "design",
+   "route": "rule_scored",
+   "conf": 0.9,
+   "reject_kind": "pool_invalid",
+   "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+  }
+ ]
+}

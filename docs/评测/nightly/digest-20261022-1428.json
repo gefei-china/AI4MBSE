@@ -1,0 +1,39 @@
+{
+ "started_at": "2026-10-22T14:28:17",
+ "host": "LAPTOP-U7N54VBI",
+ "steps": [
+  {
+   "step": "生成质量评测",
+   "cmd": "-X utf8 tools/eval/eval_generation_quality.py",
+   "exit": 0,
+   "secs": 2.3,
+   "tail": "==========================================================================\n生成质量评测（citation 完整性 + 使用率 + 接地信号）\n==========================================================================\n\n=== 黄金样本自证（F1~F5）===\n  [PASS] F1a citation_valid_rate expect=1.0 got=1.0\n  [PASS] F1b citation_valid_rate expect=0.5 got=0.5\n  [PASS] F2 grounded_entity_rate expect=0.5 got=0.5\n  [PASS] F3 no_citation_factual_rate expect=0.5 got=0.5\n  [PASS] F4 grounded_entity_rate expect=1.0 got=1.0\n  [PASS] F5 grounded_entity_rate expect=1.0 got=1.0\n  [PASS] F4F5 control.discriminates expect=True got=True\n  [PASS] F4F5 citation_usage_rate expect=0.0 got=0.0\n自证结论：通过\n\n=== 取材记账（排除了什么、为什么，全部可见）===\n  assistant_text_total       192\n  sampled                    192\n  mock_excluded              23\n  attachment_conv_excluded   19\n  card_types_excluded        0\n  unparsable_card_data       0\n\n=== 指标（n=150 条 RAG 问答）===\n  citation_valid_rate        1.000\n  citation_usage_rate        0.344\n  grounded_entity_rate       0.000\n  no_citation_factual_rate   0.169\n  markers                    45 / 45（有效标记/总标记）\n  entities                   0 / 2（接地实体/可核查实体）\n  citations_without_content  0（schema 探针：无正文引用块）\n  负对照（池化它答案引用）   0.000 ⇒ 不具判别力（见文件头说明）\n\n报告: tmp/p21/eval_generation_quality.json\neval_reports 落库成功: id=12 [eval_kind=generation_quality]\n"
+  },
+  {
+   "step": "RAG 检索评测",
+   "cmd": "-X utf8 tools/eval/run_eval.py",
+   "exit": 0,
+   "secs": 411.3,
+   "tail": "seek-v4-flash stream=False tools=0 异常=ProxyError: 502 Bad Gateway\nllm_rerank 排序段异常（provider_id=71）: LLMUnavailableError: LLM 调用失败，本次未生成任何内容。原因：ProxyError: 502 Bad Gateway\nembedding 服务不可用，短熔断 60s：RemoteProtocolError\nembedding API 调用失败，降级 bigram: Server disconnected without sending a response.\nLLM 调用失败，第 1/2 次重试：provider=deepseek-v4-flash model=deepseek-v4-flash 异常=ProxyError: 502 Bad Gateway\nLLM 调用失败，第 2/2 次重试：provider=deepseek-v4-flash model=deepseek-v4-flash 异常=ProxyError: 502 Bad Gateway\nLLM 真实调用失败 → 已终止（不再回落 Mock）：调用点=rag_rerank.py:44 intent=rag_rerank provider_id=71 provider=deepseek-v4-flash model=deepseek-v4-flash stream=False tools=0 异常=ProxyError: 502 Bad Gateway\nllm_rerank 排序段异常（provider_id=71）: LLMUnavailableError: LLM 调用失败，本次未生成任何内容。原因：ProxyError: 502 Bad Gateway\nLLM 调用失败，第 1/2 次重试：provider=deepseek-v4-flash model=deepseek-v4-flash 异常=ProxyError: 502 Bad Gateway\nLLM 调用失败，第 2/2 次重试：provider=deepseek-v4-flash model=deepseek-v4-flash 异常=ProxyError: 502 Bad Gateway\nLLM 真实调用失败 → 已终止（不再回落 Mock）：调用点=rag_rerank.py:44 intent=rag_rerank provider_id=71 provider=deepseek-v4-flash model=deepseek-v4-flash stream=False tools=0 异常=ProxyError: 502 Bad Gateway\nllm_rerank 排序段异常（provider_id=71）: LLMUnavailableError: LLM 调用失败，本次未生成任何内容。原因：ProxyError: 502 Bad Gateway\nLLM 调用失败，第 1/2 次重试：provider=deepseek-v4-flash model=deepseek-v4-flash 异常=ProxyError: 502 Bad Gateway\nembedding 服务不可用，短熔断 60s：RemoteProtocolError\nembedding API 调用失败，降级 bigram: Server disconnected without sending a response.\n"
+  },
+  {
+   "step": "意图路由评测",
+   "cmd": "-X utf8 tools/eval/run_ci_eval.py",
+   "exit": 0,
+   "secs": 5.6,
+   "tail": "盖）\n[seed] 人工介入策略：文件 9 条，本次新增 9 条（已存在不覆盖，跳过非法 0 条）\n干净库: C:\\Users\\gefei\\AppData\\Local\\Temp\\_ci_eval_164344.db\n\n=== E1 指标函数自身正确（纯函数，零依赖）===\n  PASS  E1a accuracy 精确等于 0.75（手算期望，不用被测代码算期望）\n  PASS  E1b n 正确\n  PASS  E1c macro_f1 在 [0,1]\n  PASS  E1d 全对时 accuracy == 1.0\n  PASS  E1e 全错时 accuracy == 0.0\n  PASS  E1f 空集不抛异常（门禁在空数据上要给出信息而非崩红）\n\n=== E2 黄金集健康度（防'删样本式假绿'）===\n  PASS  E2a 黄金集可载入\n  PASS  E2b 条数 ≥ 20（当前 29）\n  PASS  E2c 无空文本样本\n  PASS  E2d 无重复文本\n  PASS  E2e 期望意图 ≥3 类\n  PASS  E2f 期望意图均在合法集合内（允许清单外的必须为空）\n  PASS  E2g 允许清单本身不过期（每条都要仍被代码引用）\n  PASS  E2h 意图规则集已入库（干净库必须有规则，否则 CI 复现不了生产路由）\n\n=== E3 准确率下限 + 两次运行一致性（干净库 + 无 LLM 口径）===\n[semantic] 候选缓存未命中 fp=9a882c7e texts=39（已缓存 0 个 key：[]）首='通用问答Agent 纯问答直出，不打断用户（HIL L0）' 尾='账号角色管理'\n[semantic-prewarm] 预热未生效（缓存未命中，可能降级 bigram）\n  PASS  E3a 准确率 ≥ 0.85（实测 0.931，n=29）\n  PASS  E3b 两次运行结果完全一致（无隐藏随机性）\n      macro_f1=0.9158 错例 2 条（已知基线 acc=0.931）\n        - 对这个系统做总体设计                       want=design               got=chat                 route=chat conf=0.0\n        - 把任务书里的需求提取出来                     want=requirement_analysis got=chat                 route=chat conf=0.0\n\n=== E4 缓存绕过与口径一致（AGENTS.md 坑 26）===\n  PASS  E4a 评测前把 _cache_get 置空\n  PASS  E4b finally 恢复原方法（不留全局污染）\n  PASS  E4c 与线上端点同一 metrics 封装（不各写一份算法）\n  PASS  E4d 评测前自建干净库（保证跨环境口径等价）\n\n========================================================================\n断言总数 20  PASS 20  FAIL 0\n干净库+无LLM 口径准确率 0.931（下限 0.85），错例 2 条\n提示：本门禁测的是「规则层+语义层不许塌」。模型质量需另跑带 LLM 的夜间评测（CI 无 secret，且模型输出有温度，不是确定性断言）。\n结论：门禁通过\n"
+  }
+ ],
+ "gates": [
+  {
+   "gate": "verify_generation_quality_gate.py",
+   "exit": 0,
+   "secs": 2.1
+  },
+  {
+   "gate": "verify_rag_eval_gate.py",
+   "exit": 0,
+   "secs": 1.9
+  }
+ ]
+}

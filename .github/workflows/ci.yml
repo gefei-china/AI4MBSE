@@ -127,25 +127,34 @@ jobs:
       # 评估发现：检索评测的度量比决策质量更完备（双层漏斗分解 + 负对照 +
       # 指纹漂移拒绝），却**完全不在 CI 里** —— 分数全是"有人手动跑了一次"。
       #
-      # ⚠ 本门禁在 PR 上**允许缺失**（--allow-missing），这不是纵容而是分工：
-      #   mbse.db 约 378MB 不入 git ⇒ 干净 checkout 上没有语料库，检索评测
-      #   在 PR 上跑不出真实分数（recall≈0 是"没数据"不是"质量差"）。
-      #   ⇒ 真正执行评测的是 nightly-evals 作业（自带语料 + 模型 secret），
-      #   它跑完产出报告后跑同一门禁，**那里的结论才是有效信号**。
-      #   PR 这一道的作用：若有人把报告 checked-in（本地跑过一次），
-      #   则指标退化立刻在 PR 上可见 —— 白拿的收益，不要白不要。
-      #   而它**不会**因为"PR 上没报告"而恒红（那会让人加豁免，比没门禁更糟）。
-      - name: Guard RAG 检索评测指标不塌陷（13 项 + 4 变异；报告缺失则跳过）
-        run: python tools/verify/verify_rag_eval_gate.py --allow-missing
+      # ⚠ 报告来源是**本地跑批器 checked-in 的快照**（docs/评测/nightly/
+      #   latest-rag-report.json），不是本 job 现跑 —— 语料库 378MB 不入
+      #   git，PR 上跑不出真实分数（recall≈0 是"没数据"不是"质量差"）。
+      #   现跑由 tools/eval/run_nightly_local.py（本机定时）或本仓库
+      #   nightly-evals 作业（需先接语料，见该作业注释里的方案决策）承担。
+      #   快照缺失时 --allow-missing 判 SKIP 而非恒红（恒红门禁会被豁免，
+      #   比没门禁更糟）；快照在 ⇒ 指标退化立刻在 PR 上可见。
+      - name: Guard RAG 检索评测指标不塌陷（13 项 + 4 变异；消费 checked-in 快照，缺失则跳过）
+        run: python tools/verify/verify_rag_eval_gate.py --allow-missing \
+          --report docs/评测/nightly/latest-rag-report.json
 
       # ── P0-3（2026-10-22）：生成质量评测接入门禁（补断链③）──────────────
       # 评估发现：faithfulness/groundedness **全仓零命中** —— 检索、路由、
       # 记忆都有门禁，唯独生成质量（答案有没有依据、引用编号对不对）是黑的。
-      # 与 RAG 门禁同构：本门禁只消费报告不重跑评测；报告缺失时 --allow-missing
-      #   ⇒ PR 上不会因为"没人跑过"而恒红（恒红门禁会被豁免，比没门禁更糟）。
-      # 真正执行评测的是 nightly-evals（读生产库，只读连接）与本地手动跑。
-      - name: Guard 生成质量评测指标不塌陷（引用完整性/使用率/无据声称密度；报告缺失则跳过）
-        run: python tools/verify/verify_generation_quality_gate.py --allow-missing
+      # 报告来源同为本地跑批器快照（docs/评测/nightly/latest-gen-report.json）。
+      - name: Guard 生成质量评测指标不塌陷（7 项 + 6 变异；消费 checked-in 快照，缺失则跳过）
+        run: python tools/verify/verify_generation_quality_gate.py --allow-missing \
+          --report docs/评测/nightly/latest-gen-report.json
+
+      # ── P0-1b（2026-10-22）：Trace 一致性评测接入门禁（补断链②）────────────
+      # 评估发现：trace2dataset 产出的 228 条生产人工裁决样本**无消费方**
+      #   ——「生产轨迹→评测集→优化→再部署」断在第二环，llm_usage_stats
+      #   10593 条躺表无人消费正是"数据坟墓"形态。本门禁消费一致性报告，
+      #   回答"人对过的题还在丢分吗"（实测一致率 0.881，负对照洗牌 0.167）。
+      # 报告来源同为本地跑批器快照（docs/评测/nightly/latest-trace-report.json）。
+      - name: Guard Trace 一致性评测指标不塌陷（7 项 + 10 变异；消费 checked-in 快照，缺失则跳过）
+        run: python tools/verify/verify_trace_quality_gate.py --allow-missing \
+          --report docs/评测/nightly/latest-trace-report.json
 
       # ── P0-2 批次 2/3（2026-10-03/04）：编排 checkpoint + 断点续跑 ──────────────
       - name: Guard 编排 checkpoint / resume（79 项 + 6 变异）
@@ -1148,6 +1157,17 @@ jobs:
           python -m pip install --quiet --upgrade pip
           pip install --quiet -r requirements.txt
 
+      # ── 不依赖语料的一段：意图路由评测（每日 03:17 真正在跑的语义监控）──
+      # 评估指出的"模型语义层漂移零监控"，缺口最大的一块其实**不需要语料**：
+      # run_ci_eval 自建干净库跑 builtin 集，verify_eval_routing 同理。
+      # ⇒ 这一段现在每天真跑（LLM 意图分类行为漂移次日可见）。
+      - name: 跑意图路由评测（干净库，不需要语料）
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -X utf8 tools/eval/run_ci_eval.py --report
+          python -X utf8 tools/verify/verify_eval_routing.py
+
       - name: 判定语料是否可用（检索评测的前置条件）
         id: corpus
         run: |
@@ -1156,26 +1176,37 @@ jobs:
           #   （跑出来是 recall≈0，那是"没数据"不是"质量差"）。
           #   而 doc 域的 gold 标注（章节 → 其下 chunk）**只能从真实语料推导**
           #   —— 空库建出来的评测集没有意义。
-          #   ⇒ 需要把语料库作为 nightly 的外部输入（artifact / 对象存储 /
-          #   加密快照）。这一步尚未接线，故下面显式失败并说明，
-          #   **不用任何方式让它变绿** —— 一个恒绿的占位作业比没有作业更糟。
+          #
+          # 方案决策（2026-10-22 逐一评估后记录在此，免得后来人重新调研）：
+          #   ③ 语料 md 入库重建 —— **证伪**：实测 14 份语料全是用户上传
+          #      （origin='upload'，含 14MB 的 OMG SysML v2 PDF），不在 git。
+          #   ① artifact 导出库 —— 可行但笨重：VACUUM 后仍 345MB（数据本身
+          #      就这么大），且**生产库含用户会话/附件，出网即敏感数据外流**。
+          #   ② 对象存储 + 加密快照 —— 最稳健，待用户提供 COS 桶与 secrets。
+          #   ④ 本地跑批器（**当前主路径**）：tools/eval/run_nightly_local.py
+          #      在本机定时跑同一套评测，报告 checked-in 到
+          #      docs/评测/nightly/latest-*.json，PR 门禁消费快照。
+          #      库不出机器、零新基础设施；代价是机器关机则当日不跑。
+          # ⇒ 在 ①② 落地前，本作业的检索段保持"显式失败并说明"，不静默绿。
           if [ -f mbse.db ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: ⚠ 语料缺失 —— 显式失败并说明接线方式（不静默绿）
+      # 语料缺失时的处理：**显式警告，不再 exit 1**。
+      # 原设计是"失败并不静默绿"（防恒绿占位作业）—— 那是在本作业**什么都不跑**
+      # 的前提下成立的。现在意图段每天真跑，作业不再是占位；检索段每日失败
+      # 只会制造告警疲劳（结论永远是"未接线"，没有新信息）。
+      # 不静默的保证换成三样：①本步骤名与 ::warning:: 明说未接线及原因；
+      # ②注释里留全四方案决策矩阵；③ PR 门禁消费本地跑批器的 checked-in
+      # 快照（docs/评测/nightly/），检索指标的退化不会因为这里跳过而看不见。
+      - name: ⚠ 检索段未接线（语料库不入 git；方案决策见上方注释）
         if: steps.corpus.outputs.found != 'true'
         run: |
-          echo "::error::nightly 检索评测缺少语料库 mbse.db（约 378MB，不入 git）"
-          echo "::error::检索评测的 gold 标注只能从真实语料推导，空库跑出的分数无意义。"
-          echo "::error::接线方式（三选一）："
-          echo "::error::  ① 用 actions/upload-artifact 从主分支导出库，nightly 下载"
-          echo "::error::  ② 挂对象存储 + 加密快照（AK/SK 走 secrets）"
-          echo "::error::  ③ 语料 md 入库后跑 ingest 重建（体积最小，需评估）"
-          echo "::error::在此之前，检索质量只能靠本地跑 run_eval 后人工看报告。"
-          exit 1
+          echo "::warning title=nightly 检索段未接线::mbse.db（约378MB，含用户会话/附件）不入 git，干净 checkout 无语料。"
+          echo "::warning::检索/生成质量评测的主路径是本机跑批器 tools/eval/run_nightly_local.py（报告 checked-in 后 PR 门禁消费）。"
+          echo "::warning::本作业的意图路由段（上方）不受影响，每日真跑。"
 
       - name: 构建评测集（从真实语料派生 gold）
         if: steps.corpus.outputs.found == 'true'
@@ -1214,6 +1245,24 @@ jobs:
           python -X utf8 tools/verify/verify_generation_quality_gate.py \
             --report tmp/p21/eval_generation_quality.json
 
+      # ── P0-1b（2026-10-22）：Trace 一致性评测（补断链②）────────────────────
+      # 消费 trace2dataset 产出的生产人工裁决样本（228 条），度量"当前
+      # 路由 ↔ 人工裁决"一致率。与生成质量同库同条件（mbse.db 在才跑）；
+      # --no-llm 保确定性（含 LLM 口径随服务波动，不适合进门禁）。
+      # ⚠ 前置依赖 build_evalset.py（上面已跑）—— 它默认附带构建
+      #   tmp/p21/trace_evalset.json；缺了它本步会显式失败并说明。
+      - name: 跑 Trace 一致性评测（生产人工裁决 ↔ 当前路由）
+        if: steps.corpus.outputs.found == 'true'
+        run: |
+          python -X utf8 tools/eval/eval_trace_consistency.py --no-llm \
+            --db mbse.db --out tmp/p21/eval_trace_consistency.json --save
+
+      - name: Guard Trace 一致性评测指标不塌陷（报告即产即验）
+        if: steps.corpus.outputs.found == 'true'
+        run: |
+          python -X utf8 tools/verify/verify_trace_quality_gate.py \
+            --report tmp/p21/eval_trace_consistency.json
+
       - name: 上传评测报告为 artifact（供人工查看与趋势对比）
         if: steps.corpus.outputs.found == 'true'
         uses: actions/upload-artifact@v4
@@ -1227,7 +1276,7 @@ jobs:
       - name: 夜间失败通知（continue-on-error 不能等于"没人看见"）
         if: failure()
         run: |
-          echo "::warning title=nightly 评测失败::检索评测/意图评测夜间运行失败。"
-          echo "::warning::本作业不阻断 PR，但**语义层漂移会持续静默**。"
+          echo "::warning title=nightly 评测失败::意图路由评测（不需要语料的那段）夜间运行失败。"
+          echo "::warning::检索段未接线是已知状态（见上方警告），**不是**本通知的原因。"
           echo "::warning::请查看 Actions 日志定位，修好后重跑 workflow_dispatch。"
-          echo "::notice::见 docs/评测/ 与 tools/eval/run_eval.py 文件头的口径说明。"
+          echo "::notice::检索/生成质量的主路径：tools/eval/run_nightly_local.py（本机跑批）。"
