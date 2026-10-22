@@ -61,6 +61,10 @@
         <!-- 2026-09-17 R7：审批管理（pg-approval）此前全库无任何入口（孤立页），按「管理类入口统一收口」原则补进「更多」 -->
         <div class="mf-item" onclick="hideMoreFlyout();go('approval')" data-page-node-id="mf-approval-entry">✅ <span>审批管理</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">审批流配置</span></div>
         <div class="mf-item" onclick="hideMoreFlyout();go('evolution')" data-page-node-id="mf-evolution-entry" title="自进化周报：要你决策的 / 本周体检（环比上周）/ 数据可信度">🧬 <span>自进化周报</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">这周该做什么</span></div>
+        <!-- 2026-10-22：评测管理（pg-eval）—— 评测历史 / 趋势 / 可信度 / 门禁接线。
+             按「管理类入口统一收口」原则（2026-09-14 用户与权限、2026-09-17 审批管理
+             均按此原则补进「更多」），与「自进化周报」同构。 -->
+        <div class="mf-item" onclick="hideMoreFlyout();go('eval')" data-page-node-id="mf-eval-entry" title="评测管理：各能力最新分 / 历史趋势 / 这个分数能不能信 / 多少门禁在拦回归">🧪 <span>评测管理</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">分数 · 趋势 · 可信度</span></div>
       </div>
     </nav>
     <!-- 2026-09-24 v2：项目组（项目 = 任务的容器）——每个项目声明数据来源（本地工作空间 / 远端 SSH）；
@@ -1601,6 +1605,19 @@
         </div>
         <div id="evr-body" data-page-node-id="evr-body"><div class="loading" data-page-node-id="evr-load">加载中…</div></div>
       </div>
+
+      <!-- 评测管理（2026-10-22）：三段信息架构，按用户的三个问题排 ——
+           ① 现在什么状态（各能力最新分 + 这个分数能不能信）
+           ② 历史怎么变（按类型分组的趋势）
+           ③ 什么在拦着我（门禁接线状态）
+           ⚠ 与 #pg-evolution 一样必须是 #pages 的直接子级（否则布局脱离主区容器）。 -->
+      <div class="page" id="pg-eval" data-page-node-id="evm-page-20261022">
+        <h3 class="pt" data-page-node-id="evm-h3">评测管理</h3>
+        <div class="pd" data-page-node-id="evm-pd">系统现在答得好不好？这些数字能不能信？ <span class="badge" data-page-node-id="evm-bd">质量可见性</span>
+          <span id="evm-head" style="float:right" data-page-node-id="evm-head"></span>
+        </div>
+        <div id="evm-body" data-page-node-id="evm-body"><div class="loading" data-page-node-id="evm-load">加载中…</div></div>
+      </div>
     </div>
   </div>
 
@@ -1832,5 +1849,7 @@
 <script src="/static/js/mods/43-doccat.js" defer></script>
 <script src="/static/js/mods/44-memory.js" defer></script>
 <script src="/static/js/mods/47-evolution-report.js" defer></script>
+<!-- 2026-10-22 评测管理页（第二批：依赖 #pg-eval 的 DOM） -->
+<script src="/static/js/mods/48-eval.js" defer></script>
 </body>
 </html>

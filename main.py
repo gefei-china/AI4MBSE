@@ -54,6 +54,7 @@ from routers import (
     agent_archive_router,  # 2026-10-19 P2-3 Agent 档案库/种群（变体台账 + 死路记忆，只记录不切换生效版本）
     flow_topology_router,  # 2026-10-20 P2-4 画布拓扑台账（结构体检 + 同构去重，只读不改拓扑）
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
+    evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
 )
 
 @asynccontextmanager
@@ -278,6 +279,7 @@ for _router in (
     agent_archive_router,  # 2026-10-19 P2-3 Agent 档案库/种群（记住死路，避免重走；只记录不切换生效版本）
     flow_topology_router,  # 2026-10-20 P2-4 画布拓扑台账（记住结构缺陷与同构冗余；只读不改拓扑）
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
+    evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
 ):
     app.include_router(_router)
 
