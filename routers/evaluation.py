@@ -84,11 +84,13 @@ def eval_overview(conn=Depends(db_session)):
         "coverage": {
             "covered": covered,
             "missing": missing,
-            # 生成质量（忠实度/答案正确性）目前**完全没有**度量 —— 评估确认的最大空白。
-            # 这里显式列出，避免"跑绿了就等于系统好"的误读。
-            "generation_quality": False,
-            "note": ("当前无生成质量评测（答案忠实度/正确性）——"
-                     "检索与决策分数高不代表答案对"),
+            # 生成质量（忠实度/接地度）2026-10-22 起有确定性指标
+            # （citation 完整性/使用率/无据声称密度/接地信号，见
+            # tools/eval/eval_generation_quality.py）。动态推导而非写死：
+            # 没有 generation_quality 行时这里就是 False，缺口重新可见。
+            "generation_quality": "generation_quality" in covered,
+            "note": ("生成质量评测已接入（引用完整性/使用率/无据声称密度）；"
+                     "检索与决策分数高不代表答案对——两者都要看"),
         },
         "note": hist.get("note") or "",
     }

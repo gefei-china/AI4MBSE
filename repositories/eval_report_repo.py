@@ -38,6 +38,7 @@ EVAL_KIND_LABELS = {
     "memory_quality": "记忆质量评测",
     "intent_routing": "意图路由评测",
     "doc_extract": "文档抽取评测",
+    "generation_quality": "生成质量评测",
     "": "历史记录（未标注类型）",
 }
 
@@ -64,6 +65,15 @@ KIND_METRIC_COLUMNS = {
     "doc_extract": [
         ("entity_f1", "F1", "high", None),
     ],
+    "generation_quality": [
+        ("gen_citation_valid_rate", "引用编号有效率", "high", "generation_min_citation_valid"),
+        ("gen_citation_usage_rate", "引用使用率", "high", "generation_min_citation_usage"),
+        ("gen_no_citation_factual_rate", "无据声称密度", "low", "generation_max_no_citation_factual"),
+        # gen_grounded_entity_rate 刻意**不配阈值**：当前样本仅 2 个可核查实体，
+        # 负对照拉不开差距 ⇒ 不具判别力（详见 eval_generation_quality.py 文件头）。
+        # 进趋势线供观察，等 claim 密度上来再升级为门禁指标。
+        ("gen_grounded_entity_rate", "实体接地率", "high", None),
+    ],
 }
 
 #: 未设门禁阈值的指标给"参考线"（仅用于三色提示，不参与门禁判定）
@@ -80,6 +90,12 @@ _DOC_COLUMNS = (
     "doc_pool_recall", "doc_rerank_drop_rate", "doc_recall_miss_rate",
 )
 
+#: 生成质量指标列（2026-10-22 断链③；NULL=未测，与 doc_* 的 DEFAULT 0 语义不同）
+_GEN_COLUMNS = (
+    "gen_citation_valid_rate", "gen_citation_usage_rate",
+    "gen_grounded_entity_rate", "gen_no_citation_factual_rate",
+)
+
 
 def _gate_thresholds():
     """从 core.config.eval_gates 读门禁阈值（唯一真源）。
@@ -94,7 +110,9 @@ def _gate_thresholds():
         for k in ("retrieval_min_recall_at_5", "retrieval_min_route_acc",
                   "retrieval_min_route_ok", "retrieval_max_rerank_drop",
                   "intent_min_accuracy", "routing_threshold_acc",
-                  "routing_threshold_f1"):
+                  "routing_threshold_f1", "generation_min_citation_valid",
+                  "generation_min_citation_usage",
+                  "generation_max_no_citation_factual"):
             v = _g("eval_gates", k, None)
             if v is not None:
                 out[k] = float(v)
@@ -198,6 +216,7 @@ def fetch_history(conn, eval_kind="", limit=20):
     sel = ["id", "eval_kind", "doc_name", "entity_f1", "relation_f1",
            "created_by", "model_version", "created_at"]
     sel += [c for c in _DOC_COLUMNS if c in cols]
+    sel += [c for c in _GEN_COLUMNS if c in cols]
     if "detail" in cols:
         sel.append("detail")
 
@@ -222,6 +241,9 @@ def fetch_history(conn, eval_kind="", limit=20):
             "created_at": r["created_at"],
         }
         for c in _DOC_COLUMNS:
+            if c in cols:
+                item[c] = r[c]
+        for c in _GEN_COLUMNS:
             if c in cols:
                 item[c] = r[c]
         # 逐指标三色状态（阈值来自 eval_gates 唯一真源）

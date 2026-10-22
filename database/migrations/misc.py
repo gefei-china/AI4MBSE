@@ -68,7 +68,11 @@ def _migrate_eval_tables(conn):
         doc_ndcg_at_10 REAL DEFAULT 0,
         doc_pool_recall REAL DEFAULT 0,
         doc_rerank_drop_rate REAL DEFAULT 0,
-        doc_recall_miss_rate REAL DEFAULT 0
+        doc_recall_miss_rate REAL DEFAULT 0,
+        gen_citation_valid_rate REAL,              -- 2026-10-22 断链③：生成质量主指标（NULL=未测，区别于 0 分）
+        gen_citation_usage_rate REAL,
+        gen_grounded_entity_rate REAL,
+        gen_no_citation_factual_rate REAL
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_eval_reports_doc ON eval_reports(doc_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_eval_reports_time ON eval_reports(created_at)")
@@ -119,6 +123,16 @@ def _migrate_kb_v2_enhance(conn):
     _add("eval_reports", "doc_pool_recall", "REAL DEFAULT 0")
     _add("eval_reports", "doc_rerank_drop_rate", "REAL DEFAULT 0")
     _add("eval_reports", "doc_recall_miss_rate", "REAL DEFAULT 0")
+    # ── 2026-10-22（断链③）：生成质量主指标列 ────────────────
+    # 背景：faithfulness/groundedness 全仓零命中 —— 系统评测检索/路由/记忆，
+    #   唯独不评测生成质量。gen_* 四列让生成质量报告进同一张表、同一套
+    #   历史/趋势/看板（见 tools/eval/eval_generation_quality.py）。
+    # ⚠ DEFAULT NULL 而非 0：doc_* 列的 DEFAULT 0 是历史包袱（"没测到"会被
+    #   看板渲染成 0 分 = 假绿），新列不继承这个坑。
+    _add("eval_reports", "gen_citation_valid_rate", "REAL")
+    _add("eval_reports", "gen_citation_usage_rate", "REAL")
+    _add("eval_reports", "gen_grounded_entity_rate", "REAL")
+    _add("eval_reports", "gen_no_citation_factual_rate", "REAL")
     # P2-1 整合：本体蓝图统一 Profile 导入（profile 草案透传溯源列）
     _add("ontology_drafts", "profile_source", "TEXT DEFAULT ''")
     _add("ontology_drafts", "profile_ref", "TEXT DEFAULT ''")

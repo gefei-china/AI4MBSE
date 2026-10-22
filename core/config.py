@@ -1082,6 +1082,17 @@ DEFAULT_CONFIG = {
         "retrieval_min_route_ok": 0.75,      # neg 域 route_ok 下限（实测 0.875）
         "retrieval_max_rerank_drop": 0.15,  # rerank_drop_rate 上限（实测 0.0，重排不该挤掉对的）
         "require_negative_control": 1,      # 是否强制负对照非零（0=轮转后分数仍高 → 假绿）
+        # ── 生成质量门禁（2026-10-22 补断链③：faithfulness 全仓零命中）──────
+        # 实测基线（mbse.db 生产库 150 条 RAG 问答）：valid=1.000 / usage=0.344 /
+        #   grounded=0/2 实体 / no_cit_factual=0.169。grounded 暂不设阈值——
+        #   2 个实体的样本上没有判别力（负对照也拉不开），设了要么恒绿要么
+        #   恒红；等 claim 密度上来（generation_min_entities）再升级为门禁。
+        "generation_min_citation_valid": 1.0,   # 正文 [n] 编号有效率（编号错位即判红）
+        "generation_min_citation_usage": 0.25,  # 带引用答案里真用 [n] 的下限（实测 0.344，留 ~3 条余量）
+        "generation_max_no_citation_factual": 0.30,  # 无引用答案含可核查实体占比上限（实测 0.169）
+        "generation_min_answers": 20,       # 样本量下限（低于此判"样本池被删"，不判通过）
+        "generation_min_entities": 30,      # 接地率升级为门禁指标所需的最少可核查实体数
+        "generation_min_grounded_rate": 0.70,  # 接地率下限（**未标定**：当前样本 2 实体无判别力，此值等首次具判别力实测后校准）
     },
     # ── P1-2（2026-10-18 自进化调研路线图）：步骤级归因器 ──────────────
     # 背景：AgentEvolver self-attributing 的最小版——error_profile 只到会话级
@@ -1773,6 +1784,12 @@ CONFIG_SCHEMA = {
         "retrieval_min_route_ok":    {"type": "float", "desc": "RAG neg 域路由正确率下限（实测 0.875）"},
         "retrieval_max_rerank_drop": {"type": "float", "desc": "重排丢对率上限（实测 0.0；重排把对的挤下去才算问题）"},
         "require_negative_control":  {"type": "int",   "desc": "是否强制负对照非零（1=轮转后分数仍高即判假绿）"},
+        "generation_min_citation_valid": {"type": "float", "desc": "生成质量：正文 [n] 编号有效率下限（实测 1.000，错位即判红）"},
+        "generation_min_citation_usage": {"type": "float", "desc": "生成质量：带引用答案实际使用 [n] 比例下限（实测 0.344，软约束塌陷即判红）"},
+        "generation_max_no_citation_factual": {"type": "float", "desc": "生成质量：无引用答案含可核查实体占比上限（实测 0.169，无据声称密度）"},
+        "generation_min_answers":     {"type": "int",   "desc": "生成质量：样本量下限（低于此判样本池被删）"},
+        "generation_min_entities":    {"type": "int",   "desc": "生成质量：接地率升级为门禁指标所需最少可核查实体数（当前样本 2 个，不具判别力）"},
+        "generation_min_grounded_rate": {"type": "float", "desc": "生成质量：实体接地率下限（未标定，等首次具判别力实测后校准；仅在实体量达标且负对照可判别时生效）"},
     },
     # P1-2（2026-10-18）：Trace2Dataset（tools/eval/trace2dataset.py 消费）
     "trace2dataset": {

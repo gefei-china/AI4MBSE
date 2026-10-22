@@ -138,6 +138,15 @@ jobs:
       - name: Guard RAG 检索评测指标不塌陷（13 项 + 4 变异；报告缺失则跳过）
         run: python tools/verify/verify_rag_eval_gate.py --allow-missing
 
+      # ── P0-3（2026-10-22）：生成质量评测接入门禁（补断链③）──────────────
+      # 评估发现：faithfulness/groundedness **全仓零命中** —— 检索、路由、
+      # 记忆都有门禁，唯独生成质量（答案有没有依据、引用编号对不对）是黑的。
+      # 与 RAG 门禁同构：本门禁只消费报告不重跑评测；报告缺失时 --allow-missing
+      #   ⇒ PR 上不会因为"没人跑过"而恒红（恒红门禁会被豁免，比没门禁更糟）。
+      # 真正执行评测的是 nightly-evals（读生产库，只读连接）与本地手动跑。
+      - name: Guard 生成质量评测指标不塌陷（引用完整性/使用率/无据声称密度；报告缺失则跳过）
+        run: python tools/verify/verify_generation_quality_gate.py --allow-missing
+
       # ── P0-2 批次 2/3（2026-10-03/04）：编排 checkpoint + 断点续跑 ──────────────
       - name: Guard 编排 checkpoint / resume（79 项 + 6 变异）
         run: python tools/verify/verify_orch_resume.py
@@ -1189,12 +1198,30 @@ jobs:
           python -X utf8 tools/verify/verify_rag_eval_gate.py \
             --report tmp/p21/eval_report_ci.json
 
+      # ── P0-3（2026-10-22）：生成质量评测（补断链③）────────────────────
+      # 读的是**生产 messages**（答案 + citations 全在库里），与检索评测
+      # 共用同一个 mbse.db（nightly 的库就是它的来源）。只读连接 + 零外部
+      # 依赖（不调 embedding/LLM）⇒ 比检索评测更轻，先跑它更有诊断价值。
+      - name: 跑生成质量评测（引用完整性/使用率/无据声称密度/接地信号）
+        if: steps.corpus.outputs.found == 'true'
+        run: |
+          python -X utf8 tools/eval/eval_generation_quality.py \
+            --db mbse.db --out tmp/p21/eval_generation_quality.json --save
+
+      - name: Guard 生成质量评测指标不塌陷（报告即产即验）
+        if: steps.corpus.outputs.found == 'true'
+        run: |
+          python -X utf8 tools/verify/verify_generation_quality_gate.py \
+            --report tmp/p21/eval_generation_quality.json
+
       - name: 上传评测报告为 artifact（供人工查看与趋势对比）
         if: steps.corpus.outputs.found == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: rag-eval-report-${{ github.run_number }}
-          path: tmp/p21/eval_report_ci.json
+          path: |
+            tmp/p21/eval_report_ci.json
+            tmp/p21/eval_generation_quality.json
           retention-days: 30
 
       - name: 夜间失败通知（continue-on-error 不能等于"没人看见"）
