@@ -85,10 +85,14 @@ STEPS = [
     # 进门禁的必须可复现），nightly 要的是确定性结论；LLM 层波动由
     # run_ci_eval（nightly CI 段）另行监控。耗时约 12s（55 strong +
     # 50 weak 抽样），排在轻量的生成质量之后、重量的检索评测之前。
+    # --baseline 指向**上一轮**的 latest 快照（本步在快照覆盖之前跑，
+    # 顺序即正确性）：weak 回归稳定率 = 同一批生产查询本轮与上轮路由
+    # 是否一致（诊断用不判定；口径不符自动跳过并写明原因）。
     ("Trace 一致性评测",
      [sys.executable, "-X", "utf8", "tools/eval/eval_trace_consistency.py",
-      "--no-llm", "--save", "--out", os.path.join(TMP_P21,
-                                                  "eval_trace_consistency.json")],
+      "--no-llm", "--baseline",
+      os.path.join(NIGHTLY_DIR, "latest-trace-report.json"),
+      "--save", "--out", os.path.join(TMP_P21, "eval_trace_consistency.json")],
      os.path.join(TMP_P21, "eval_trace_consistency.json"),
      [sys.executable, "-X", "utf8", "tools/verify/verify_trace_quality_gate.py",
       "--report", os.path.join(TMP_P21, "eval_trace_consistency.json")]),

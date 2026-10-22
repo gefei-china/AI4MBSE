@@ -54,6 +54,8 @@ llm_usage_stats 10593 条躺在表里无人消费，正是"数据坟墓"的形�
     .venv/Scripts/python.exe -X utf8 tools/eval/eval_trace_consistency.py
     .venv/Scripts/python.exe -X utf8 tools/eval/eval_trace_consistency.py --save
     .venv/Scripts/python.exe -X utf8 tools/eval/eval_trace_consistency.py --no-llm
+    .venv/Scripts/python.exe -X utf8 tools/eval/eval_trace_consistency.py --no-llm \
+        --baseline docs/评测/nightly/latest-trace-report.json --save
 """
 from __future__ import annotations
 
@@ -131,6 +133,46 @@ def repeat_mistake_rate(negatives):
         return None, []
     repeats = [n for n in negatives if n["gold"] and n["pred"] == n["gold"]]
     return round(len(repeats) / len(negatives), 4), repeats
+
+
+def weak_stability(baseline_detail, current_detail, min_compared=10):
+    """weak 回归快照对比：同一批生产查询，本轮路由与上轮是否一致。
+
+    baseline_detail / current_detail = [{"query", "pred", "route"}, ...]
+    （各自报告 weak.weak_detail；旧格式报告没有该字段 ⇒ 调用方传 None）。
+
+    为什么按 query 精确匹配取交集：weak 切片是"最近的 N 条"，trace 集
+    重建后组成会变（新会话挤掉最旧的）⇒ 直接逐位比对会把"池子组成
+    变化"误读成"路由变化"。交集内比对才是同一问题的重问。
+
+    返回 {n_compared, stability, shifts, note}：
+    - 无基线 / 交集 < min_compared ⇒ stability=None + note（不具判别力
+      不比，与 grounded 的条件判定同构——小样本上算出来的稳定率是噪声）；
+    - stability = 交集内 pred 相同的比例；shifts 列出变化项（ capped ）。
+    """
+    if not baseline_detail or not current_detail:
+        return {"n_compared": 0, "stability": None, "shifts": [],
+                "note": "无基线明细（首轮或旧格式报告）—— 不判定"}
+    base = {}
+    for d in baseline_detail:
+        base.setdefault(d.get("query") or "", d.get("pred") or "")
+    shifts, same, compared = [], 0, 0
+    for d in current_detail:
+        q = d.get("query") or ""
+        if q not in base:
+            continue
+        compared += 1
+        if (d.get("pred") or "") == base[q]:
+            same += 1
+        else:
+            shifts.append({"query": q, "from": base[q], "to": d.get("pred") or ""})
+    if compared < min_compared:
+        return {"n_compared": compared, "stability": None, "shifts": shifts[:20],
+                "note": "交集仅 %d 条（< %d）—— 不具判别力，不判定"
+                        % (compared, min_compared)}
+    return {"n_compared": compared,
+            "stability": round(same / compared, 4),
+            "shifts": shifts[:20], "note": ""}
 
 
 def rotated_control(golds, preds):
@@ -280,7 +322,7 @@ def semantic_backend(rt):
 
 
 # ══════════════════════════════════════════════════════════════════
-# 夹具自证（F1~F6）：指标算错 ⇒ 生产数字一律不可信
+# 夹具自证（F1~F8）：指标算错 ⇒ 生产数字一律不可信
 # ══════════════════════════════════════════════════════════════════
 def _fixture_cases():
     """黄金样本：手算期望，不用被测代码算期望。"""
@@ -295,7 +337,7 @@ def _fixture_cases():
 
 
 def run_fixture():
-    """F1~F6 全部纯函数/内存库，零外部依赖。"""
+    """F1~F8 全部纯函数/内存库，零外部依赖。"""
     pos_ok, pos_miss, negs = _fixture_cases()
     cases = []
 
@@ -372,6 +414,35 @@ def run_fixture():
                   "expect": "routing_error",
                   "got": classify_rejection(""),
                   "ok": classify_rejection("") == "routing_error"})
+    # F8：weak 回归快照对比（纯函数，零依赖）
+    # ⚠ 夹具规模必须 ≥ min_compared（默认 10）—— 交集过小函数本就返回
+    #   None（不具判别力不比），拿 3 条夹具测默认路径会恒 None（第一版
+    #   就这么踩了：F8a/F8b 假红，是夹具规模错不是判据错）。
+    _b = [{"query": "q%d" % i, "pred": p} for i, p in enumerate(
+        ["chat", "chat", "design", "chat", "chat", "chat", "review",
+         "chat", "chat", "chat", "impact", "chat"], start=1)]
+    _c_same = [{"query": d["query"], "pred": d["pred"]} for d in _b]
+    _c_shift = [dict(d) for d in _c_same]
+    _c_shift[2]["pred"] = "requirement_analysis"      # q3: design → req_analysis
+    _c("F8a", "weak_stability", 1.0, weak_stability(_b, _c_same)["stability"])
+    r8b = weak_stability(_b, _c_shift)
+    _c("F8b", "weak_stability", 0.9167, r8b["stability"])
+    cases.append({"case": "F8c", "metric": "shift_recorded",
+                  "expect": 1, "got": len(r8b["shifts"]),
+                  "ok": len(r8b["shifts"]) == 1
+                  and r8b["shifts"][0] == {"query": "q3", "from": "design",
+                                           "to": "requirement_analysis"}})
+    # F8d：交集过小 ⇒ None（不具判别力不比，与 grounded 条件判定同构）
+    r8d = weak_stability(_b[:2], _c_shift[:2] + [{"query": "q9", "pred": "chat"}],
+                         min_compared=3)
+    cases.append({"case": "F8d", "metric": "small_intersection_no_verdict",
+                  "expect": None, "got": r8d["stability"],
+                  "ok": r8d["stability"] is None and r8d["n_compared"] == 2})
+    # F8e：无基线/旧格式 ⇒ None + note（首轮不判定）
+    r8e = weak_stability(None, _c_same)
+    cases.append({"case": "F8e", "metric": "no_baseline_no_verdict",
+                  "expect": None, "got": r8e["stability"],
+                  "ok": r8e["stability"] is None and bool(r8e["note"])})
     # F6：与共享指标封装一致（防"自己另写一套算法"漂移）。
     # ⚠ 期望值必须按共享封装的**输出精度**（round 4 位）手算，
     #   拿 2/3 原值比会因舍入恒假红 —— 夹具错，不是判据的错。
@@ -415,6 +486,8 @@ def main():
                     help="停用 LLM 兜底（确定性口径：规则+语义层）")
     ap.add_argument("--weak-limit", type=int, default=50,
                     help="weak 回归集抽样条数（只出分布观测，不判定；0=不跑）")
+    ap.add_argument("--baseline", default="",
+                    help="上一轮 trace 报告 JSON（weak 回归快照对比用；缺省不对比）")
     ap.add_argument("--no-control", action="store_true", help="关闭负对照（不推荐）")
     ap.add_argument("--no-fixture", action="store_true", help="跳过黄金样本自证")
     ap.add_argument("--allow-stale-gold", action="store_true",
@@ -428,7 +501,7 @@ def main():
     # ── 0. 夹具自证（先跑：指标算错 ⇒ 后面数字不可信）──────────────
     fixture_ok, fixture_cases = (True, [])
     if not args.no_fixture:
-        print("\n=== 黄金样本自证（F1~F7）===")
+        print("\n=== 黄金样本自证（F1~F8）===")
         fixture_ok, fixture_cases = run_fixture()
         for c in fixture_cases:
             print("  [%s] %s %s expect=%s got=%s"
@@ -480,6 +553,13 @@ def main():
     if not pos:
         print("\n✗ 无有效 positive 样本 —— 一致率没有分母，不出分（没测到≠质量差）。")
         return 2
+
+    # ── 1b. 载入基线报告（weak 回归快照对比用；口径不符则不对比）──────
+    baseline = None
+    if args.baseline:
+        baseline = _load_baseline(args.baseline,
+                                  llm_fallback="disabled" if args.no_llm else "enabled",
+                                  backend=None)  # backend 在路由后才知道，先记口径无关部分
 
     # ── 2. 跑路由（生产库口径）────────────────────────────────────
     rt, IntentRouter = build_router(no_llm=args.no_llm)
@@ -542,9 +622,11 @@ def main():
             control["gap"] = gap
             control["discriminates"] = gap >= _ctl_gap()
 
-    # weak 分布（观测）
+    # weak 分布（观测）+ 逐条明细（供下轮回归快照对比）
     weak_dist = {"n": len(weak_dec), "intent_dist": {}, "route_dist": {},
-                 "llm_route_count": 0, "chat_share": None}
+                 "llm_route_count": 0, "chat_share": None,
+                 "weak_detail": [{"query": d["query"], "pred": d["pred"],
+                                  "route": d["route"]} for d in weak_dec]}
     for d in weak_dec:
         weak_dist["intent_dist"][d["pred"] or "(空)"] = \
             weak_dist["intent_dist"].get(d["pred"] or "(空)", 0) + 1
@@ -556,6 +638,20 @@ def main():
     if weak_dist["n"]:
         weak_dist["chat_share"] = round(
             weak_dist["intent_dist"].get("chat", 0) / weak_dist["n"], 4)
+
+    # weak 回归快照对比（口径不符 ⇒ 不判定，见 _load_baseline）
+    stab = {"n_compared": 0, "stability": None, "shifts": [], "note": ""}
+    if baseline is not None:
+        if baseline.get("_incompatible"):
+            stab["note"] = baseline["_incompatible"]
+        else:
+            stab = weak_stability((baseline.get("weak") or {}).get("weak_detail"),
+                                  weak_dist["weak_detail"])
+            if baseline.get("semantic_backend") not in (None, backend):
+                stab = {"n_compared": 0, "stability": None, "shifts": [],
+                        "note": "基线的语义后端是 %s、本轮是 %s —— 两路余弦量纲"
+                                "不同，稳定率不可比，不判定"
+                                % (baseline.get("semantic_backend"), backend)}
 
     strong_route_dist = {}
     llm_route_count = 0
@@ -589,6 +685,12 @@ def main():
               % ("负对照", pos_m["agreement"], control["rotated_agreement"],
                  "可判别" if control["discriminates"] else
                  ("不具判别力（见 note）" if control["discriminates"] is False else "未判定")))
+    if baseline is not None:
+        print("  %-26s %s（交集 %d 条，变化 %d 条）%s"
+              % ("weak 回归稳定率", stab["stability"], stab["n_compared"],
+                 len(stab["shifts"]), stab["note"]))
+        for s in stab["shifts"][:5]:
+            print("    - %-30s %s → %s" % (s["query"][:30], s["from"], s["to"]))
 
     # ── 4. 报告 ──────────────────────────────────────────────────
     report = {
@@ -623,6 +725,15 @@ def main():
             "pool_invalid_detail": neg_pool_detail,
         },
         "weak": weak_dist,
+        # weak 回归快照对比（诊断用，**不进门禁**：它是跑批间差值，
+        # 有意的路由改动会让它动 —— 那种场景走使用指南 §4.3 的
+        # before/after A/B 节奏，不靠 nightly 自动红）
+        "weak_regression": {
+            "baseline": os.path.relpath(args.baseline, ROOT).replace("\\", "/")
+            if args.baseline else "",
+            "n_compared": stab["n_compared"], "stability": stab["stability"],
+            "shifts": stab["shifts"], "note": stab["note"],
+        },
         # ↓ 这两个字段名与 eval_report_repo 的 trustworthy 判定契约一致
         #   （negative_control.recall 非空 且 fingerprint_drift 为空 ⇒ 可信）
         "negative_control": {
@@ -659,6 +770,35 @@ def _ctl_gap():
         return float(v) if v is not None else 0.30
     except Exception:
         return 0.30
+
+
+def _load_baseline(path, llm_fallback, backend):
+    """载入上一轮 trace 报告作 weak 回归基线。口径不符 ⇒ 返回带
+    `_incompatible` 标记的 dict（调用方据此不判定，而不是硬算）。
+
+    为什么卡口径：含 LLM 与无 LLM 是两条链路（实测一致率差 ~5pp），
+    语义后端 bigram/dense 余弦量纲不同 —— 跨口径比"稳定率"会把
+    链路差异读成路由变化。旧格式报告（无 weak_detail）由
+    weak_stability 的 note 兜底，不在这里卡。
+    """
+    if not os.path.exists(path):
+        print("⚠ 基线报告不存在（%s）—— weak 回归对比跳过" % path)
+        return None
+    try:
+        with io.open(path, encoding="utf-8") as f:
+            rep = json.load(f)
+    except Exception as e:
+        print("⚠ 基线报告读取失败（%s）—— weak 回归对比跳过" % e)
+        return None
+    if rep.get("kind") != "trace_consistency":
+        print("⚠ 基线报告不是 trace_consistency（kind=%r）—— 对比跳过"
+              % rep.get("kind"))
+        return None
+    base_llm = rep.get("llm_fallback")
+    if base_llm and base_llm != llm_fallback:
+        return {"_incompatible": "基线的 LLM 口径是 %s、本轮是 %s —— 两条链路，"
+                                 "稳定率不可比，不判定" % (base_llm, llm_fallback)}
+    return rep
 
 
 def _save(report):
