@@ -94,9 +94,12 @@ M_CASES = [
 # 而是"**同 topic 多条是否污染排序**"——即冲突检测的输入面。
 C_CASES = [
     dict(id="C01", q="需求追溯链有几个环节", intent="requirement_analysis",
-         expect=[133, 134, 135], want_min=1,
-         why="三条同源表述；期望只出最相关的一条，需要 D1 仲裁——"
-             "D1 未上线时本组必然 FAIL，这正是它的价值：作为 D1 的前后对比基线"),
+         expect=[133, 134, 135], want_min=1, max_hits=1,
+         why="三条同源表述；期望**只出最相关的一条**。max_hits=1 使它真正在测"
+             "「同 topic 污染」——此前只有 want_min=1，实测三条全召回也判 PASS，"
+             "等于 D1 上线与否它都绿、基线失效。"
+             "⚠️ D1 冲突仲裁未上线时本组**必然 FAIL**，这正是它的价值："
+             "作为 D1 的前后对比基线（D1 上线后应转绿）"),
 ]
 
 # ── N 组：拒答（噪音必须被挡，0 命中为过） ──
@@ -149,9 +152,18 @@ def run_case(conn, case, kind):
     # 命中组：期望 id 至少出现 want_min 条
     want_min = case.get("want_min", 1)
     hit = got_ids & set(case["expect"])
-    return (len(hit) >= want_min), {
+    # ★ 2026-10-22 新增：可选的**污染上限** max_hits（同 topic 最多召回几条）。
+    #   为什么需要它：C01 声明测"同 topic 多条是否污染排序"，但只有 want_min=1
+    #   ⇒ 实测 matched=[133,134,135]（三条同源**全部**召回）也判 PASS。
+    #   **D1 冲突仲裁上线与否，这个用例都绿** ⇒ 判据失效、基线无意义。
+    #   加上 max_hits 后它才真正在测"污染"：命中≥1 且同源召回≤上限。
+    max_hits = case.get("max_hits")
+    ok = (len(hit) >= want_min)
+    if ok and max_hits is not None:
+        ok = (len(hit) <= max_hits)
+    return ok, {
         "q": case["q"], "top1": top1, "hits": len(hits),
-        "matched": sorted(hit), "want_min": want_min,
+        "matched": sorted(hit), "want_min": want_min, "max_hits": max_hits,
         "want": case["expect"], "why": case["why"], "top1_text": snippet}
 
 
@@ -190,6 +202,12 @@ def main():
             if kind != "N" and not (set(cs["expect"]) & alive):
                 print("  SKIP %s （锚定记忆已不在库中）" % cs["id"])
                 n_skip += 1
+                # 也要落进 results：否则汇总处的 SKIP 明细取不到，
+                # 且 JSON 报告里看不到"哪条失效了"（静默缩水）。
+                results.append({"id": cs["id"], "kind": kind, "status": "skip",
+                                "passed": None, "why": cs.get("why", ""),
+                                "want": cs.get("expect", []),
+                                "matched": sorted(set(cs["expect"]) & alive)})
                 continue
             ok, d = run_case(conn, cs, kind)
             results.append(dict(case=cs["id"], kind=kind, passed=ok, **d))
@@ -210,12 +228,30 @@ def main():
           % (n_pass, n_fail, n_skip, rate * 100))
     print("=" * 74)
 
+    # ⚠️ SKIP 不得静默（2026-10-22 补）。SKIP = 评测集锚定的记忆已不在库中。
+    #   它的危险在于：**命中率把 SKIP 排除在分母外**，于是"用例失效"表现为
+    #   "覆盖率下降"而非"失败"——数字看着正常，实际上这条用例已经不测任何东西了。
+    #   实测 T06 已 SKIP（锚定记忆被删），而汇总行此前不给出任何提示。
+    if n_skip:
+        print("⚠ SKIP %d 条：评测集锚定的记忆已不在库中（本组已不产生判别力）。"
+              % n_skip)
+        print("  SKIP 不计入命中率分母，故上面那个百分数**不代表全部用例有效**。")
+        print("  处理：重锚（换 expect id）或删除该用例，别让基线静默缩水。")
+        print("  SKIP 明细：%s"
+              % ", ".join(r["id"] for r in results if r.get("status") == "skip")
+              if any(r.get("status") == "skip" for r in results)
+              else "  SKIP 明细：（见上方逐行输出）")
+
     # 分类小计（哪类能力拖后腿，一眼可见）
     for g, kind in (("T", "T"), ("M", "M"), ("C", "C"), ("N", "N")):
-        sub = [r for r in results if r["kind"] == kind]
+        # SKIP 不算"未通过"（它是"不测了"而非"测了没过"），
+        # 但要在小计里显出来，否则组内通过率会被稀释得不明不白。
+        sub = [r for r in results if r["kind"] == kind and r.get("status") != "skip"]
         if sub:
             p = sum(1 for r in sub if r["passed"])
-            print("  %s 组: %d/%d" % (g, p, len(sub)))
+            ns = sum(1 for r in results if r["kind"] == kind and r.get("status") == "skip")
+            print("  %s 组: %d/%d%s" % (g, p, len(sub),
+                                        ("（另有 %d 条 SKIP 不计）" % ns) if ns else ""))
 
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as f:
