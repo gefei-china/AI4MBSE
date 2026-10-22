@@ -96,6 +96,13 @@ jobs:
       - name: Guard 意图路由评测（19 项，准确率下限见 core/config.py eval_gates）
         run: python tools/eval/run_ci_eval.py
 
+      # ── 评测基础设施自检（2026-10-22）────────────────────────────────────
+      # 这道门禁保护的是**上面那些门禁本身**：ci.yml 注释里的数字若与脚本实值
+      # 漂移，CI 照样全绿，而人读到一个错误的事实（评估实测三处：阈值 0.70/0.85/0.86、
+      # 基线 292/323）。静默失真比缺陷更危险 —— 它不报错，只误导人调错地方。
+      - name: Guard CI 注释 ↔ 代码实值一致（10 项 + 4 变异）
+        run: python tools/verify/verify_ci_comment_consistency.py
+
       # ── P0-2 批次 2/3（2026-10-03/04）：编排 checkpoint + 断点续跑 ──────────────
       - name: Guard 编排 checkpoint / resume（79 项 + 6 变异）
         run: python tools/verify/verify_orch_resume.py
