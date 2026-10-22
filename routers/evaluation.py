@@ -132,3 +132,16 @@ def eval_gates():
     g = _repo.fetch_gate_wiring(_ROOT)
     g["kind_labels"] = _repo.EVAL_KIND_LABELS
     return g
+
+
+@router.get("/api/eval/report")
+def eval_report(id: int = 0, conn=Depends(db_session)):
+    """单行评测报告下钻：总览/历史 → 证据明细（wrong 案例、混淆矩阵、
+    负对照、judge 明细、取材记账……全在 detail JSON 里）。
+
+    回答行业标杆评测平台的标配问题——"这条分数背后是哪几条案例"。
+    不返回空报告伪装成功：行不存在/解析失败都是显式 error。
+    """
+    if not id:
+        return {"ok": False, "error": "缺少 id 参数（评测报告行 id）"}
+    return _repo.fetch_report_by_id(conn, id)

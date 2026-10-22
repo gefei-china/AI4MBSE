@@ -126,6 +126,16 @@ def t_A():
     magic = re.findall(r"[<>]=?\s*0\.\d+", code_nc)
     ck("A8 前端不硬编码阈值（三色必须由后端给 status）", not magic, str(magic))
     ck("A8b 前端确实消费后端 status", "metric_status" in js)
+
+    # ★ 下钻能力（2026-10-22 晚新增）：行业标杆评测页都能从"总览"点进
+    #   "是哪几条案例"。本门禁把这条通路钉住，防止静默退化成纯展示。
+    ck("A9 下钻入口已导出（openEvalReport）",
+       "window.openEvalReport" in js and "function openEvalReport" in js)
+    ck("A10 指标卡/历史行可点下钻",
+       js.count("openEvalReport(") >= 2,
+       "openEvalReport( 出现 %d 次" % js.count("openEvalReport("))
+    ck("A11 前端调用下钻端点 /api/eval/report",
+       "/api/eval/report" in js)
     return True
 
 
@@ -159,7 +169,25 @@ def _fetch_payload():
         ov = c.get("/api/eval/overview").json()
         hist = c.get("/api/eval/history?limit=20").json()
         gates = c.get("/api/eval/gates").json()
-        return {"overview": ov, "history": hist, "gates": gates}, None
+        # ★ 下钻端点：取一条真实记录（优先 trace_consistency——它的证据段
+        #   最丰富：wrong 案例/混淆矩阵/负对照/weak 回归）
+        report, report_err = None, ""
+        rows_all = (hist.get("history") or {})
+        cand = []
+        for _k, _rows in rows_all.items():
+            for _r in _rows:
+                cand.append(_r)
+        cand.sort(key=lambda r: (0 if (r.get("eval_kind") == "trace_consistency")
+                                 else 1, -(r.get("id") or 0)))
+        for _r in cand:
+            _res = c.get("/api/eval/report?id=%s" % _r.get("id")).json()
+            if _res.get("ok"):
+                report = _res
+                break
+        if not report:
+            report_err = "没有可下钻的评测记录"
+        return {"overview": ov, "history": hist, "gates": gates,
+                "report": report, "report_err": report_err}, None
     finally:
         for suf in ("", "-wal", "-shm"):
             if os.path.exists(tmpdb + suf):
@@ -202,6 +230,17 @@ def t_B(payload):
         miss = [k for k in need if k not in sample]
         ck("B9 记录字段齐备", not miss, "缺：%s" % miss)
         ck("B10 trustworthy 是布尔", isinstance(sample.get("trustworthy"), bool))
+    # ── 下钻端点（2026-10-22 晚）────────────────────────────────
+    rep = payload.get("report")
+    if not rep:
+        ck("B11 下钻端点可取到真实报告", False,
+           payload.get("report_err") or "无可下钻记录")
+    else:
+        ck("B11 下钻端点可取到真实报告", rep.get("ok") is True)
+        ck("B11b 下钻报告含 detail 与类型",
+           isinstance(rep.get("detail"), dict) and bool(rep.get("eval_kind") is not None))
+        ck("B11c 下钻报告带 id（可回溯到具体那次评测）",
+           rep.get("id") is not None)
     return True
 
 
@@ -291,6 +330,36 @@ try {
   const h3 = boxes['evm-body'].innerHTML;
   ck('C12 payload 含 undefined 时不泄漏到 HTML', h3.indexOf('undefined') < 0);
 
+  // ── 下钻面板渲染冒烟（2026-10-22 晚）──────────────────────────
+  // 真实 detail 载荷渲染一遍，检查：无 undefined/[object Object] 泄漏、
+  // 证据段标题在、div 配平（页面级哨兵之外，单独守下钻面板）。
+  if (P.report) {
+    boxes['modal-body'] = elStub();
+    boxes['modal'] = elStub();
+    sandbox.api = async (url) => {
+      if (url.indexOf('/api/eval/report') >= 0) return P.report;
+      return {};
+    };
+    if (typeof sandbox.openEvalReport === 'function') {
+      await sandbox.openEvalReport(P.report.id);
+      const h4 = boxes['modal-body'].innerHTML;
+      ck('C13 下钻面板已渲染', h4.length > 0, '长度=' + h4.length);
+      ck('C14 下钻面板无 undefined 泄漏', h4.indexOf('undefined') < 0);
+      ck('C15 下钻面板无 [object Object] 泄漏', h4.indexOf('[object Object]') < 0);
+      ck('C16 下钻面板无 NaN 泄漏', h4.indexOf('NaN') < 0);
+      const opens = (h4.match(/<div\b/g) || []).length;
+      const closes = (h4.match(/<\/div>/g) || []).length;
+      ck('C17 下钻面板 div 配平', opens === closes, '<div=' + opens + ' </div>=' + closes);
+      ck('C18 下钻面板含证据段标题',
+         h4.indexOf('取材记账') >= 0 || h4.indexOf('报告字段') >= 0
+         || h4.indexOf('检索三域指标') >= 0);
+    } else {
+      ck('C13 下钻入口已导出（openEvalReport）', false, 'sandbox 未导出');
+    }
+  } else {
+    ck('C13 下钻渲染冒烟（无可下钻记录，跳过）', true, '库中暂无评测记录');
+  }
+
   console.log(out.join('\n'));
 })().catch(e => console.log('HARNESS_ERR|' + e.message));
 """
@@ -328,7 +397,10 @@ def t_div_balance():
     js = _read(os.path.join(ROOT, "static", "js", "mods", "48-eval.js"))
     code = re.sub(r"/\*[\s\S]*?\*/", "", js)
     code = re.sub(r"//.*", "", code)
-    for fn in ("_renderLatest", "_renderTrends", "_renderGates", "_mount"):
+    for fn in ("_renderLatest", "_renderTrends", "_renderGates", "_mount",
+               "_sparkline", "_dval", "_dtable", "_dsection", "_dtrace",
+               "_dgen", "_drag", "_dgeneric", "_renderReportDetail",
+               "openEvalReport"):
         m = re.search(r"function %s\([^)]*\)\s*\{([\s\S]*?)\n  \}" % fn, code)
         if not m:
             ck("D %s 模板 div 配平" % fn, False, "函数体未匹配到")

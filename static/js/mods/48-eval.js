@@ -4,6 +4,15 @@
  * 却完全没被使用"，以及"评测跑得怎么样只能问开发看 JSON 文件"——后者等于
  * 没有可见性。本页是那个可见性的落点。
  *
+ * ★2026-10-22 晚：下钻能力（drill-down）。行业标杆（LangSmith/Langfuse/
+ *   Braintrust）的评测页都是"总览 → 数据集 → 单条证据"的可下钻结构：
+ *   纯展示只能回答"好不好"，回答不了"哪条坏了、为什么"——而后者才是
+ *   本工程评测的既定用途（使用指南 §4.2 快速定位）。数据一直都在
+ *   （detail JSON 里有 wrong 案例/混淆矩阵/负对照/judge 明细），缺的
+ *   只是通路：指标卡与历史行可点击 → GET /api/eval/report?id= → 右侧
+ *   滑出面板按类型渲染证据段。聚合层保持只读（不在这页发起动作），
+ *   证据层全下钻。
+ *
  * ★为什么放在「更多」浮层而不是知识中心页内：
  *   评测的对象不是"知识"，而是"这套系统现在答得好不好"——它横跨检索/决策/
  *   记忆三类能力，也横跨开发（门禁）与产品（趋势）两个视角。按工程既有的
@@ -99,7 +108,7 @@
       const drift = (it.fingerprint_drift && it.fingerprint_drift.length)
         ? `<div style="font-size:10.5px;color:var(--red);margin-top:4px;">⚠ 语料漂移：${esc(it.fingerprint_drift[0])}</div>`
         : '';
-      return `<div class="asset" style="text-align:left;">
+      return `<div class="asset" style="text-align:left;cursor:pointer;" title="点击查看该评测的证据明细（错例/混淆矩阵/负对照）" onclick="openEvalReport(${it.id})">
         <div class="l" style="display:flex;justify-content:space-between;gap:6px;align-items:center;">
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(it.kind_label || _kindLabel(k))}</span>
           ${_trustBadge(it)}</div>
@@ -153,13 +162,22 @@
           <div style="font-size:11.5px;color:var(--mut);">无数据点</div></div>`;
       }
       // 逐指标一行：最近 N 次的取值序列（null 断点，不补 0）
+      // ★2026-10-22 晚：每个取值可点 → 打开那一次评测的证据明细
+      //   （"历史怎么变"必须能下钻到"那一次到底发生了什么"，否则趋势线
+      //   只是一串数字）；右端附内联 SVG 迷你趋势线（零外部依赖）。
       const rows = cols.map(c => {
         const vals = seq.map(p => p[c.key]);
         const hasData = vals.some(v => v !== null && v !== undefined);
-        const line = vals.map(v => (v === null || v === undefined)
-          ? '<span style="color:var(--mut);">—</span>'
-          : `<span style="color:var(--color-text);">${Number(v).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}</span>`)
-          .join(' <span style="color:var(--mut);">→</span> ');
+        const line = vals.map((v, i) => {
+          if (v === null || v === undefined) {
+            return '<span style="color:var(--mut);">—</span>';
+          }
+          const pt = seq[i] || {};
+          const tip = pt.at ? ('查看 ' + String(pt.at) + ' 那次评测的证据') : '查看证据';
+          return `<span style="cursor:pointer;text-decoration:underline dotted;"
+            onclick="openEvalReport(${pt.id})" title="${esc(tip)}">${
+              Number(v).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}</span>`;
+        }).join(' <span style="color:var(--mut);">→</span> ');
         const tpl = seq.map(p => p.trustworthy
           ? '<span class="st ok" style="font-size:9px;">可</span>'
           : '<span class="st r" style="font-size:9px;">疑</span>').join(' ');
@@ -167,17 +185,18 @@
           <td style="padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--mut);">${esc(c.label)}</td>
           <td style="padding:4px 8px;border-bottom:1px solid var(--line);font-size:11.5px;">${hasData ? line : '<span style="color:var(--mut);">该类型无此指标</span>'}</td>
           <td style="padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;font-size:10px;">${tpl}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;">${_sparkline(vals)}</td>
         </tr>`;
       }).join('');
 
       return `<div style="margin-bottom:14px;">
         <div style="font-size:11.5px;color:var(--mut);margin-bottom:5px;">
           ${_kindBadge(k)} <span style="font-size:10.5px;">共 ${seq.length} 次</span>
-          <span style="font-size:10.5px;color:var(--mut);">（旧 → 新）</span></div>
+          <span style="font-size:10.5px;color:var(--mut);">（旧 → 新，取值可点下钻）</span></div>
         <table class="t" style="width:100%;font-size:11.5px;">
           <tr><th style="padding:4px 8px;">指标</th><th style="padding:4px 8px;">取值序列</th>
-            <th style="padding:4px 8px;">可信度</th></tr>
-          ${rows || '<tr><td colspan="3" style="color:var(--mut);font-size:11px;">该类型无可展示指标</td></tr>'}
+            <th style="padding:4px 8px;">可信度</th><th style="padding:4px 8px;">趋势</th></tr>
+          ${rows || '<tr><td colspan="4" style="color:var(--mut);font-size:11px;">该类型无可展示指标</td></tr>'}
         </table>
       </div>`;
     }).join('');
@@ -236,6 +255,238 @@
     </div>`;
   }
 
+  /* ══ 下钻：证据面板（2026-10-22 晚新增）══════════════════════════
+   *
+   * 行业标杆（LangSmith/Langfuse/Braintrust）的评测页都能从"总览"
+   * 点进"是哪几条案例"。本页的证据一直存在 detail JSON 里（wrong
+   * 案例、混淆矩阵、负对照、judge 明细、取材记账），此前只缺通路。
+   *
+   * 三条纪律：
+   *   1. **只渲染不计算** —— 状态/阈值全部来自后端（eval_gates 唯一
+   *      真源），前端不重写判定口径。
+   *   2. **缺失即「—」** —— detail 里没有的字段渲染成「—」，不渲染
+   *      undefined/[object Object]（门禁 C4 专门守这条）。
+   *   3. **聚合层只读、证据层下钻** —— 不在本页发起任何"改参数/重跑"
+   *      动作：动作属于产品页，评测页是观察台。
+   * ================================================================= */
+  function _sparkline(vals) {
+    const nums = (vals || []).filter(v => typeof v === 'number' && isFinite(v));
+    if (nums.length < 2) {
+      return '<span style="color:var(--mut);font-size:10px;">—</span>';
+    }
+    const W = 110, H = 16, P = 2;
+    const min = Math.min.apply(null, nums);
+    const max = Math.max.apply(null, nums);
+    const span = (max - min) || 1;
+    const segs = [];
+    let cur = [];
+    (vals || []).forEach((v, i) => {
+      if (typeof v === 'number' && isFinite(v)) {
+        const x = P + (i * (W - 2 * P)) / Math.max(1, (vals || []).length - 1);
+        const y = H - P - ((v - min) / span) * (H - 2 * P);
+        cur.push(x.toFixed(1) + ',' + y.toFixed(1));
+      } else if (cur.length) {
+        segs.push(cur.join(' '));
+        cur = [];
+      }
+    });
+    if (cur.length) segs.push(cur.join(' '));
+    const paths = segs.map(s =>
+      '<polyline points="' + s + '" fill="none" stroke="var(--color-text)" stroke-width="1.2"/>'
+    ).join('');
+    return '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' + paths + '</svg>';
+  }
+
+  function _dval(v) {
+    if (v === null || v === undefined || v === '') {
+      return '<span style="color:var(--mut);">—</span>';
+    }
+    if (typeof v === 'number') return '<b>' + v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '') + '</b>';
+    return esc(String(v));
+  }
+
+  function _dtable(head, rows) {
+    if (!rows || !rows.length) {
+      return '<div style="color:var(--mut);font-size:11.5px;">无数据</div>';
+    }
+    const th = head.map(h => '<th style="padding:4px 8px;white-space:nowrap;">' + esc(h) + '</th>').join('');
+    const tr = rows.map(r => '<tr>' + r.map(c =>
+      '<td style="padding:4px 8px;border-bottom:1px solid var(--line);font-size:11.5px;vertical-align:top;">' + c + '</td>'
+    ).join('') + '</tr>').join('');
+    return '<table class="t" style="width:100%;"><tr>' + th + '</tr>' + tr + '</table>';
+  }
+
+  function _dsection(title, body, note) {
+    return '<div class="panel" style="margin-bottom:12px;">'
+      + '<div class="ph">' + esc(title)
+      + (note ? ' <span class="tag">' + esc(note) + '</span>' : '') + '</div>'
+      + '<div class="pb">' + body + '</div></div>';
+  }
+
+  function _dtrace(d) {
+    const p = d.population || {}, pos = d.positive || {}, neg = d.negative || {};
+    const ctl = d.negative_control || {}, wr = d.weak_regression || {};
+    const pop = [
+      ['trace_total', p.trace_total], ['strong', p.strong],
+      ['positive', p.positive], ['negative(纠错/池有效性)',
+        (p.negative_routing_error || 0) + ' / ' + (p.negative_pool_invalid || 0)],
+      ['weak 抽样', p.weak_sampled], ['gold 失效', p.gold_stale],
+      ['路由异常', p.route_errors], ['LLM 口径', d.llm_fallback],
+      ['语义后端', d.semantic_backend],
+    ];
+    let h = _dsection('取材记账（排除了什么、为什么）',
+      _dtable(['项', '值'], pop.map(r => [esc(r[0]), _dval(r[1])])), 'visible');
+    h += _dsection('裁决一致率',
+      _dtable(['项', '值'], [
+        ['一致率 agreement', _dval(pos.agreement)],
+        ['macro-F1', _dval(pos.macro_f1)],
+        ['样本数 n', _dval(pos.n)],
+        ['负对照（gold 洗牌）', _dval(ctl.recall)],
+        ['差距', _dval(ctl.gap)],
+        ['可判别', ctl.discriminates === true ? '是' : (ctl.discriminates === false ? '否' : '—')],
+        ['gold 意图类别数', _dval(ctl.distinct_gold)],
+      ]) + (ctl.note ? '<div style="font-size:11px;color:var(--amb);margin-top:6px;">' + esc(ctl.note) + '</div>' : ''));
+    const pc = pos.per_class || [];
+    if (pc.length) {
+      h += _dsection('逐意图表现（precision / recall / F1）',
+        _dtable(['意图', 'P', 'R', 'F1', 'n'], pc.map(x => [
+          esc(x.intent), _dval(x.precision), _dval(x.recall), _dval(x.f1), _dval(x.n)
+        ])));
+    }
+    const wrong = pos.wrong || [];
+    h += _dsection('不一致样本（当前路由 ≠ 人工裁决）',
+      _dtable(['问句', '人工裁决', '当前路由', '层', '置信'], wrong.slice(0, 20).map(w => [
+        esc(String(w.query || '').slice(0, 60)),
+        esc(w.gold || '—'), esc(w.pred || '—'),
+        esc(w.route || '—'), _dval(w.conf)
+      ])), wrong.length + ' 条');
+    const rep = neg.repeats || [];
+    h += _dsection('仍犯旧错（人工纠正过的路由又错了）',
+      _dtable(['问句', '仍判成', '层'], rep.slice(0, 20).map(r => [
+        esc(String(r.query || '').slice(0, 60)), esc(r.gold || '—'), esc(r.route || '—')
+      ])), (neg.n || 0) + ' 条负样本');
+    const wd = d.weak || {};
+    const dist = wd.intent_dist || {};
+    const distRows = Object.keys(dist).map(k => [esc(k), _dval(dist[k])]);
+    h += _dsection('weak 回归集路由分布（只观测，不判定）',
+      _dtable(['意图', '条数'], distRows)
+      + (wr && wr.n_compared ? '<div style="font-size:11px;color:var(--mut);margin-top:6px;">'
+        + '跑批间稳定率 ' + _dval(wr.stability) + '（交集 ' + _dval(wr.n_compared) + ' 条）'
+        + (wr.note ? '　' + esc(wr.note) : '') + '</div>' : ''));
+    return h;
+  }
+
+  function _dgen(d) {
+    const s = d.summary || {}, p = d.population || {};
+    const pop = Object.keys(p || {}).map(k => [esc(k), _dval(p[k])]);
+    let h = _dsection('取材记账（排除了什么、为什么）',
+      _dtable(['项', '值'], pop), 'visible');
+    h += _dsection('确定性指标',
+      _dtable(['指标', '值'], [
+        ['引用编号有效率', _dval(s.citation_valid_rate)],
+        ['引用使用率', _dval(s.citation_usage_rate)],
+        ['无据声称密度', _dval(s.no_citation_factual_rate)],
+        ['实体接地率', _dval(s.grounded_entity_rate)],
+        ['样本数 n', _dval(s.n_answers)],
+        ['负对照（池化）', _dval((s.control || {}).pooled_grounded_rate)],
+        ['负对照可判别', (s.control || {}).discriminates ? '是' : '否'],
+      ]));
+    const ug = d.ungrounded_examples || [];
+    h += _dsection('未接地实体样例（确定性信号，供人工复核）',
+      _dtable(['消息', '实体', '类型'], ug.slice(0, 15).map(u => [
+        esc(String(u.message_id)), esc((u.entity || '')), esc(u.kind || '')
+      ])), ug.length + ' 条');
+    const j = d.llm_judge || {};
+    if (j.enabled) {
+      const c = j.control || {};
+      h += _dsection('LLM 忠实度评判（语义层）',
+        _dtable(['项', '值'], [
+          ['忠实率 faithful_rate', _dval(j.faithful_rate)],
+          ['faithful / unfaithful / 判不了', _dval(j.n_faithful) + ' / ' + _dval(j.n_unfaithful) + ' / ' + _dval(j.n_failed)],
+          ['评判成功条数', _dval(j.n_judged)],
+          ['judge 自证', c.ok === true ? '通过' : (c.ran ? '失败：' + (c.note || '') : '未跑：' + (c.note || ''))],
+          ['模型', _dval(j.model)],
+        ]));
+      const ue = j.unfaithful_examples || [];
+      h += _dsection('无据声称明细（judge 判定，需人工复核）',
+        _dtable(['消息', '无据声称', '理由'], ue.slice(0, 15).map(e => [
+          esc(String(e.id)),
+          esc(((e.unsupported || [])[0] || '').slice(0, 80)),
+          esc(String(e.reason || '').slice(0, 80))
+        ])), ue.length + ' 条');
+    }
+    return h;
+  }
+
+  function _drag(d) {
+    const s = d.summary || {};
+    const doc = s.doc || {}, graph = s.graph || {}, neg = s.neg || {};
+    const ctl = s.doc_control || {};
+    return _dsection('检索三域指标',
+      _dtable(['域', '指标', '值'], [
+        ['doc', 'n', _dval(doc.n)], ['doc', 'recall@5', _dval(doc['recall@5'])],
+        ['doc', 'mrr@10', _dval(doc['mrr@10'])], ['doc', 'ndcg@10', _dval(doc['ndcg@10'])],
+        ['doc', 'pool_recall@20', _dval(doc['pool_recall@20'])],
+        ['doc', '重排丢对率', _dval(doc.rerank_drop_rate)],
+        ['graph', 'n', _dval(graph.n)], ['graph', 'route_acc', _dval(graph.route_acc)],
+        ['graph', 'entity_recall', _dval(graph.entity_recall)],
+        ['neg', 'n', _dval(neg.n)], ['neg', 'route_ok', _dval(neg.route_ok)],
+        ['neg', 'empty_hit_rate', _dval(neg.empty_hit_rate)],
+        ['负对照', 'recall@5', _dval(ctl['recall@5'])],
+        ['负对照', 'mrr@10', _dval(ctl['mrr@10'])],
+      ]));
+  }
+
+  function _dgeneric(d) {
+    const keys = Object.keys(d || {}).filter(k => k !== 'per_answer' && k !== 'decisions');
+    const rows = keys.map(k => {
+      const v = d[k];
+      if (v && typeof v === 'object') {
+        const n = Array.isArray(v) ? v.length : Object.keys(v).length;
+        return [esc(k), '<span style="color:var(--mut);">对象（' + n + ' 项，见类型专用面板或原始 JSON）</span>'];
+      }
+      return [esc(k), _dval(v)];
+    });
+    return _dsection('报告字段（原始明细）', _dtable(['字段', '值'], rows));
+  }
+
+  function _renderReportDetail(r) {
+    const d = r.detail || {};
+    const head = '<h3 style="margin:0 0 2px;">' + esc(r.kind_label || r.eval_kind || '评测报告') + '</h3>'
+      + '<div class="mut" style="font-size:11.5px;margin-bottom:12px;">'
+      + esc(r.doc_name || '') + '　·　' + esc(String(r.created_at || ''))
+      + '　·　报告 id=' + esc(String(r.id || '')) + '</div>';
+    let body;
+    if (r.eval_kind === 'trace_consistency') body = _dtrace(d);
+    else if (r.eval_kind === 'generation_quality') body = _dgen(d);
+    else if (r.eval_kind === 'rag_retrieval') body = _drag(d);
+    else body = _dgeneric(d);
+    return head + body;
+  }
+
+  async function openEvalReport(id) {
+    const m = document.getElementById('modal');
+    const b = document.getElementById('modal-body');
+    if (!m || !b) return;
+    b.innerHTML = '<div class="loading">加载评测证据明细…</div>';
+    m.classList.add('show');
+    m.onclick = e => { if (e.target === m) closeModal(); };
+    let r;
+    try {
+      r = await api('/api/eval/report?id=' + encodeURIComponent(id));
+    } catch (e) {
+      b.innerHTML = '<div class="panel"><div class="pb"><div style="color:var(--red);font-size:12px;">'
+        + esc('加载失败：' + (e && e.message || e)) + '</div></div></div>';
+      return;
+    }
+    if (!r || r.ok === false) {
+      b.innerHTML = '<div class="panel"><div class="pb"><div style="color:var(--red);font-size:12px;">'
+        + esc((r && r.error) || '报告不可用') + '</div></div></div>';
+      return;
+    }
+    b.innerHTML = _renderReportDetail(r);
+  }
+
   /* ══ 装配 ══ */
   function _mount(html) {
     const box = document.getElementById('evm-body');
@@ -289,4 +540,5 @@
   }
 
   window.loadEvalManagement = loadEvalManagement;
+  window.openEvalReport = openEvalReport;
 })();
