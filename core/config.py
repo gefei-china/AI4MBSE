@@ -1094,6 +1094,19 @@ DEFAULT_CONFIG = {
         "generation_min_answers": 20,       # 样本量下限（低于此判"样本池被删"，不判通过）
         "generation_min_entities": 30,      # 接地率升级为门禁指标所需的最少可核查实体数
         "generation_min_grounded_rate": 0.70,  # 接地率下限（**未标定**：当前样本 2 实体无判别力，此值等首次具判别力实测后校准）
+        # ── 生成质量语义层门禁（2026-10-22 晚：LLM 忠实度评判）──────
+        # faithful_rate 只在 --llm-judge 启用且样本足量时判定（否则 SKIP：
+        # LLM 服务不可用是环境问题不是质量差）。阈值标定方式同 trace：
+        # 首次实测留余量。判不了的（调用/解析失败）**不计入分母**——
+        # 把环境故障读成质量差是红线。
+        # 标定实测（2026-10-22 晚，mbse.db，15 条带引用答案，
+        #   deepseek-v4-flash）：两轮 0.60 / 0.533（1 条边界案例翻转，
+        #   波动 ≈ ±1/15）。judge 合成对照两轮均过（pos faithful /
+        #   neg unfaithful）。口径含两项豁免（工具执行结果/会话上下文
+        #   不算无支撑——评判员只看得到引用块，这两类声称有合法来源）。
+        "generation_min_judged": 10,        # LLM 评判最少成功条数（不足 ⇒ SKIP 不判通过）
+        "generation_min_faithful": 0.40,    # 忠实率下限（实测 0.53~0.60；0.40 ≈ 容 2 条边界翻转 + 塌陷余量）
+        "generation_judge_limit": 15,       # LLM 评判采样上限（只评带引用的答案）
         # ── Trace 一致性门禁（2026-10-22 补断链②：trace_evalset 无消费方）──────
         # 实测基线（mbse.db 生产库，42 条人工确认样本）：无LLM口径 0.881
         #   （两次运行逐条一致）；含LLM口径 0.881~0.929（随 LLM 服务可用性
@@ -1814,6 +1827,9 @@ CONFIG_SCHEMA = {
         "generation_min_answers":     {"type": "int",   "desc": "生成质量：样本量下限（低于此判样本池被删）"},
         "generation_min_entities":    {"type": "int",   "desc": "生成质量：接地率升级为门禁指标所需最少可核查实体数（当前样本 2 个，不具判别力）"},
         "generation_min_grounded_rate": {"type": "float", "desc": "生成质量：实体接地率下限（未标定，等首次具判别力实测后校准；仅在实体量达标且负对照可判别时生效）"},
+        "generation_min_judged":        {"type": "int",   "desc": "生成质量：LLM 评判最少成功条数（不足判 SKIP——服务不可用是环境问题不是质量差）"},
+        "generation_min_faithful":      {"type": "float", "desc": "生成质量：LLM 忠实率下限（仅样本足量时判定；判失败不计入分母）"},
+        "generation_judge_limit":       {"type": "int",   "desc": "生成质量：LLM 评判采样上限（只评带引用的答案，控成本）"},
         "trace_min_agreement":     {"type": "float", "desc": "Trace 一致性：裁决一致率下限（实测 0.881~0.929，含 LLM 全失败最坏 ~0.79；规则层塌陷会掉到 0.3~0.5）"},
         "trace_max_repeat_mistake": {"type": "float", "desc": "Trace 一致性：重错率上限（常驻 SKIP——当前无路由纠错类负样本；出现后自动生效）"},
         "trace_min_positive":      {"type": "int",   "desc": "Trace 一致性：positive 样本量下限（低于此判样本池被删，不判通过）"},

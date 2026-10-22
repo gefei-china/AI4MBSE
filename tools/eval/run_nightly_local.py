@@ -72,9 +72,14 @@ TMP_P21 = os.path.join(ROOT, "tmp", "p21")
 
 #: (步骤名, 命令, 产出报告路径[None=不产出报告], 对应门禁[None=无])
 STEPS = [
+    # ── 断链③ 语义层（2026-10-22 晚）：生成质量 + LLM 忠实度评判 ──────────
+    # --llm-judge 让语义层只在 nightly 跑（模型输出有温度、依赖服务可用性，
+    #   不是确定性断言——与"确定性进 PR 阻断、模型相关 nightly 跑"同构）。
+    #   实测基线：忠实率 0.53~0.67（15 条，deepseek-v4-flash，边界案例
+    #   ±1/15 波动）；服务不可用时三态记账全记"判不了"，门禁判 SKIP 不红。
     ("生成质量评测",
      [sys.executable, "-X", "utf8", "tools/eval/eval_generation_quality.py",
-      "--save", "--out", os.path.join(TMP_P21, "eval_generation_quality.json")],
+      "--llm-judge", "--save", "--out", os.path.join(TMP_P21, "eval_generation_quality.json")],
      os.path.join(TMP_P21, "eval_generation_quality.json"),
      [sys.executable, "-X", "utf8", "tools/verify/verify_generation_quality_gate.py",
       "--report", os.path.join(TMP_P21, "eval_generation_quality.json")]),

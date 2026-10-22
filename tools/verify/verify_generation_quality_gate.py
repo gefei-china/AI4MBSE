@@ -22,11 +22,15 @@
 | G4 | 样本量 ≥ 下限（不足 ⇒ SKIP 不判通过） | generation_min_answers | 硬性 |
 | G5 | schema 探针：无正文引用块 = 0（否则接地抽取静默失效=假绿路径） | — | 硬性 |
 | G6 | 接地率：**仅当**实体量 ≥ 下限**且**负对照可判别才判定 | generation_min_grounded_rate | 条件 |
+| G7 | 忠实率：judge 自证须过 + 样本足量才判定（LLM 语义层，2026-10-22 晚新增） | generation_min_faithful | 条件 |
 
-G6 的条件判定是本门禁最重要的设计：当前生产样本只有 2 个可核查实体、
+G6/G7 的条件判定是本门禁最重要的设计：当前生产样本只有 2 个可核查实体、
 池化负对照 0.000 拉不开差距 ⇒ 接地率**不具判别力**，此时判 SKIP 并说明
 原因，绝不"设个宽松阈值混过去"（那正是评估报告点名的"假绿比没门禁更糟"）。
 等 claim 密度上来（≥30 实体且对照可判别），同一份代码自动升级为硬门禁。
+G7 同构：judge 合成对照（逐字引用⇒faithful / 追加无据声称⇒unfaithful）
+不过 ⇒ judge 本身坏了，**判红**；LLM 服务不可用导致样本不足 ⇒ SKIP
+（环境问题不是质量差）；判不了的（调用/解析失败）不计入分母。
 
 ## 变异自证（M1~M5）
 
@@ -101,6 +105,8 @@ def judge(report, thr=None):
     t_min_n = thr.get("min_n", _gate("generation_min_answers", 20))
     t_min_ent = thr.get("min_ent", _gate("generation_min_entities", 30))
     t_ground = thr.get("ground", _gate("generation_min_grounded_rate", 0.70))
+    t_min_judged = thr.get("min_judged", _gate("generation_min_judged", 10))
+    t_faith = thr.get("faith", _gate("generation_min_faithful", 0.40))
 
     ok = True
     s = report.get("summary") or {}
@@ -177,6 +183,44 @@ def judge(report, thr=None):
     else:
         ok &= _rec("G6 实体接地率 %.3f ≥ %.2f" % (g, t_ground), g >= t_ground,
                    "答案实体在引用证据中的比例过低")
+
+    # G7：LLM 忠实率（语义层；三态记账 + judge 自证，见文件头设计说明）
+    j = report.get("llm_judge") or {}
+    if not j.get("enabled"):
+        ok &= _rec("G7 忠实率判定（未启用 LLM 评判）", False,
+                   "报告无 llm_judge 段或 enabled=false —— 本轮未跑语义层"
+                   "（--llm-judge 才启用）", status=SKIP)
+    else:
+        n_judged = j.get("n_judged") or 0
+        ctl = j.get("control") or {}
+        # G7a：judge 自证（合成对照）—— 不过 ⇒ judge 坏了，分数不可信，判红
+        if ctl.get("ran") and not ctl.get("ok"):
+            ok &= _rec("G7a judge 自证通过（合成对照）", False,
+                       "%s —— prompt/解析/模型可疑，先修评测器再信分数"
+                       % (ctl.get("note") or "对照失败"), status=FAIL)
+        elif not ctl.get("ran"):
+            ok &= _rec("G7a judge 自证已跑（无带正文引用的答案可构造对照）",
+                       False, ctl.get("note") or "对照未建", status=SKIP)
+        else:
+            _rec("G7a judge 自证通过（pos=faithful / neg=unfaithful）", True)
+        # G7b：样本足量（LLM 服务不可用 ⇒ 没测到，不是质量差）
+        if n_judged < t_min_judged:
+            ok &= _rec("G7b 评判成功条数 ≥%d" % t_min_judged, False,
+                       "n_judged=%s（判不了 %s 条：LLM 服务不可用或响应不可"
+                       "解析——环境问题，不判通过也不判红）"
+                       % (n_judged, j.get("n_failed")), status=SKIP)
+        else:
+            _rec("G7b 评判成功条数 %d ≥%d" % (n_judged, t_min_judged), True)
+        # G7c：忠实率下限（仅前两关都过才判）
+        fr = j.get("faithful_rate")
+        if fr is None:
+            ok &= _rec("G7c 忠实率（无成功评判，无法判定）", False,
+                       "faithful_rate=None", status=SKIP)
+        elif n_judged >= t_min_judged and ctl.get("ok"):
+            ok &= _rec("G7c LLM 忠实率 %.3f ≥ %.2f" % (fr, t_faith),
+                       fr >= t_faith,
+                       "答案存在引用证据不支撑的具体声称（明细见报告 "
+                       "llm_judge.unfaithful_examples）")
     # 本调用的结论 = 新增行里没有 FAIL（SKIP 不是失败，理由见函数 docstring）
     return not any(r[0] == FAIL for r in _results[mark:])
 
@@ -216,6 +260,16 @@ def run_mutations(base_report):
         {"n_answers": 5}), SKIP)
     ok &= _expect("6 零样本 ⇒ 判红（没测到≠质量差）", lambda r: r["summary"].update(
         {"n_answers": 0}), FAIL)
+    # ── M7~M10：LLM 语义层（G7）判据自证 ────────────────────────
+    ok &= _expect("7 忠实率塌陷", lambda r: r["llm_judge"].update(
+        {"faithful_rate": 0.1}), FAIL)
+    ok &= _expect("8 评判样本不足 ⇒ SKIP（服务不可用不是质量差）",
+                  lambda r: r["llm_judge"].update({"n_judged": 3}), SKIP)
+    ok &= _expect("9 judge 自证失败 ⇒ 判红（judge 坏了分数不可信）",
+                  lambda r: r["llm_judge"]["control"].update(
+                      {"ok": False, "neg_ok": False, "note": "变异"}), FAIL)
+    ok &= _expect("10 语义层未启用 ⇒ SKIP", lambda r: r.update(
+        {"llm_judge": {"enabled": False}}), SKIP)
     return ok
 
 

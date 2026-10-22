@@ -73,6 +73,7 @@ def _migrate_eval_tables(conn):
         gen_citation_usage_rate REAL,
         gen_grounded_entity_rate REAL,
         gen_no_citation_factual_rate REAL,
+        gen_faithful_rate REAL,                    -- 2026-10-22 晚 断链③语义层：LLM 忠实率（未启用评判时 NULL）
         trace_agreement_rate REAL,                -- 2026-10-22 断链②：Trace 裁决一致率（NULL=未测）
         trace_repeat_mistake_rate REAL            -- 2026-10-22 断链②：Trace 重错率（无路由纠错类负样本时为 NULL）
     )""")
@@ -135,6 +136,12 @@ def _migrate_kb_v2_enhance(conn):
     _add("eval_reports", "gen_citation_usage_rate", "REAL")
     _add("eval_reports", "gen_grounded_entity_rate", "REAL")
     _add("eval_reports", "gen_no_citation_factual_rate", "REAL")
+    # ── 2026-10-22 晚（断链③语义层）：LLM 忠实率列 ────────────────
+    # 背景：确定性指标回答不了"答案有没有曲解证据"。gen_faithful_rate
+    #   让 LLM 评判结果进同一张表、同一套趋势/看板。
+    # ⚠ DEFAULT NULL：未启用 --llm-judge 时**没有这个数**，填 0 会被
+    #   读成"忠实率 0 分"（假红），与 gen_* 既有列语义一致。
+    _add("eval_reports", "gen_faithful_rate", "REAL")
     # ── 2026-10-22（断链②）：Trace 一致性主指标列 ────────────────
     # 背景：trace2dataset 产出的生产裁决样本（intent_confirmed/
     #   intent_rejected）此前无消费方 —— 供料环通了、度量环没接。

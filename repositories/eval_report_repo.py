@@ -74,6 +74,9 @@ KIND_METRIC_COLUMNS = {
         # 负对照拉不开差距 ⇒ 不具判别力（详见 eval_generation_quality.py 文件头）。
         # 进趋势线供观察，等 claim 密度上来再升级为门禁指标。
         ("gen_grounded_entity_rate", "实体接地率", "high", None),
+        # LLM 忠实率（2026-10-22 晚 断链③语义层）：judge 自证 + 样本足量
+        # 才判定；未启用 --llm-judge 时该列为 NULL ⇒ 前端显示「不适用」。
+        ("gen_faithful_rate", "LLM 忠实率", "high", "generation_min_faithful"),
     ],
     # Trace 一致性（2026-10-22 断链②）：strong 样本 = 生产人工裁决，
     # 指标 = 当前路由与裁决的一致率 / 旧错重犯率。n=42 实测 0.881。
@@ -104,6 +107,7 @@ _DOC_COLUMNS = (
 _GEN_COLUMNS = (
     "gen_citation_valid_rate", "gen_citation_usage_rate",
     "gen_grounded_entity_rate", "gen_no_citation_factual_rate",
+    "gen_faithful_rate",
 )
 
 #: Trace 一致性指标列（2026-10-22 断链②；NULL=未测/无分母，语义同 gen_*）
@@ -128,7 +132,8 @@ def _gate_thresholds():
                   "routing_threshold_f1", "generation_min_citation_valid",
                   "generation_min_citation_usage",
                   "generation_max_no_citation_factual",
-                  "trace_min_agreement", "trace_max_repeat_mistake"):
+                  "trace_min_agreement", "trace_max_repeat_mistake",
+                  "generation_min_faithful"):
             v = _g("eval_gates", k, None)
             if v is not None:
                 out[k] = float(v)
@@ -301,6 +306,46 @@ def fetch_history(conn, eval_kind="", limit=20):
                  "tools/eval/build_evalset.py → tools/eval/run_eval.py --control "
                  "→ tools/eval/save_report.py"),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 单行报告下钻（2026-10-22 晚）：总览 → 证据明细的通路
+# ══════════════════════════════════════════════════════════════════════
+def fetch_report_by_id(conn, row_id):
+    """按行 id 取全量报告（detail JSON 解析后返回）。
+
+    为什么单独一个函数而不是把 detail 塞进 fetch_history：history 是列表
+    聚合（一次 20 行 × 每行 detail 可达 200KB），下钻是单行按需——列表
+    接口背着全量 JSON 会把首页响应撑爆。分工即性能。
+
+    返回 {ok, id, eval_kind, kind_label, doc_name, created_at, detail}；
+    行不存在 / detail 非合法 JSON ⇒ ok=False + error（**不伪造空报告**——
+    空报告会被前端渲染成"这条没问题"，比读不到更坏）。
+    """
+    try:
+        rid = int(row_id)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "id 参数非法: %r" % (row_id,)}
+    cols = _columns(conn)
+    if not cols or "detail" not in cols:
+        return {"ok": False, "error": "eval_reports 表不可用（请先跑 init_db）"}
+    row = conn.execute(
+        "SELECT id, eval_kind, doc_name, created_at, detail FROM eval_reports "
+        "WHERE id=?", (rid,)).fetchone()
+    if not row:
+        return {"ok": False, "error": "评测报告不存在: id=%s" % rid}
+    try:
+        detail = json.loads(row["detail"] or "{}")
+        if not isinstance(detail, dict):
+            raise ValueError("detail 不是对象")
+    except Exception as e:
+        return {"ok": False, "error": "detail 解析失败: %s" % e,
+                "id": rid, "eval_kind": row["eval_kind"]}
+    kind = (row["eval_kind"] or "") or ""
+    return {"ok": True, "id": row["id"], "eval_kind": kind,
+            "kind_label": EVAL_KIND_LABELS.get(kind, kind or "未标注类型"),
+            "doc_name": row["doc_name"], "created_at": row["created_at"],
+            "detail": detail}
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -1240,10 +1240,15 @@ jobs:
       # 读的是**生产 messages**（答案 + citations 全在库里），与检索评测
       # 共用同一个 mbse.db（nightly 的库就是它的来源）。只读连接 + 零外部
       # 依赖（不调 embedding/LLM）⇒ 比检索评测更轻，先跑它更有诊断价值。
-      - name: 跑生成质量评测（引用完整性/使用率/无据声称密度/接地信号）
+      # --llm-judge（2026-10-22 晚）：faithfulness 语义层只在本作业跑
+      #   （模型相关、有温度，不进 PR 阻断）；服务不可用 ⇒ 三态记账 +
+      #   门禁 SKIP，不把环境故障读成质量差。
+      - name: 跑生成质量评测（引用完整性/使用率/无据声称密度/接地信号 + LLM 忠实度）
         if: steps.corpus.outputs.found == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python -X utf8 tools/eval/eval_generation_quality.py \
+          python -X utf8 tools/eval/eval_generation_quality.py --llm-judge \
             --db mbse.db --out tmp/p21/eval_generation_quality.json --save
 
       - name: Guard 生成质量评测指标不塌陷（报告即产即验）
