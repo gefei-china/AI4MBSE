@@ -166,6 +166,13 @@ jobs:
       - name: Guard 编排自动重投守护（23 项 + 4 变异，含 dry_run 零副作用）
         run: python tools/verify/verify_orch_supervisor.py
 
+      # ── 2026-10-22 晚：补接线 verify_partial_policy（提交 098780e 遗漏）──────
+      # 背景：同日 20:53 的「编排 partial 病因分类 + 自动补齐」提交带了门禁文件
+      #   但没进 CI ⇒ 门禁元门禁（verify_gate_wiring）判红：写了不接等于没写。
+      #   本行补上接线；门禁自身 71 项 + 变异已实测全绿（真实样本取自会话 9587）。
+      - name: Guard 编排 partial 补齐决策（71 项 + 变异，判错方向双向烧钱/毁交付）
+        run: python tools/verify/verify_partial_policy.py
+
       # ── Agent loop 护栏（2026-10-04）：token 预算 / 重复调用短路 / 工具超时 ────
       # 关键断言是 G6c/G6d：两条 ReAct 路径都不得出现裸的 self._exec_tool_call(，
       # 即"不可能绕过护栏" —— 这是防止新加的路径又落回无闸状态。
