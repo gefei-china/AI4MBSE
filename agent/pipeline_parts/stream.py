@@ -767,7 +767,22 @@ class StreamMixin:
                         "risks 用 level/title/desc/advice 四字段"
                         "（level 取 high|mid|low，title 是一句话风险名，desc 是描述，"
                         "advice 是缓解建议）——**字段名必须是这四个**，写错会被校验器丢弃；"
-                        "status=partial 时在 missing 里标注缺什么。"
+                        # ★ 2026-10-22：missing[] 从"顺带一提"升为**硬约束**。
+                        # 它是补齐判定器的**第一判据**（agent/partial_policy.py 的 classify_partial
+                        # 优先读它，而不是从正文里正则猜"有没有说没校验"）。
+                        # 真库实测：写了的 missing 如「模型校验结果（未执行 sysml_v2_validate）」
+                        # 能直接判成"客观缺口、可自动补"；没写就只能靠猜，猜错方向就是
+                        # 该补的不补 / 不该补的白补 token。
+                        "**status=partial 或 failed 时必须写 missing[]**，逐条列出缺什么"
+                        "（缺的产物 / 数据 / 步骤 / 结论）；"
+                        "missing 与 risks 的分工：**missing=缺什么，risks=已有什么风险及缓解建议**，"
+                        "两者都要写、不要互相替代。"
+                        # ★ 关键区分：缺"自己能补的"与缺"要外部给的"处置完全不同
+                        # （前者自动补跑，后者补跑一百次也一样，转人工）。所以要求模型
+                        # 把两类都如实写进 missing —— 判定器会按条目里的主语分流。
+                        "特别注意：缺**自己就能补的**（如某一步校验没跑、某个产物没落盘）"
+                        "与缺**需要客户/用户/外部提供的**（如名单、口径、指标区间、基线数据）"
+                        "都必须如实写进 missing，不要因为「怕显得没做完」而省略。"
                     )
                 skill_name2 = cfg.get("skill") or None
                 evs, sub_res, sub_has_token = [], "", False
@@ -2479,6 +2494,327 @@ class StreamMixin:
             #   写出"编排显示 t1—t5 五个交付物缺失/失败"的缺口报告——交付物明明都在，
             #   用户看到的就是"编排大量失败"。措辞必须区分三态：failed 才叫失败，
             #   partial 是"部分完成（存在未验证环节）"，文案与 card_data 同口径。
+            # ═══════════════════════════════════════════════════════════════════
+            # ★ 2026-10-22（米爸「是否重跑需要一个健全的机制」）：
+            #   partial **病因分类 + 自动补齐**（默认开）。
+            #
+            # 为什么不能"partial 就重跑"（真数据取证，会话 9587 的 6 个子任务）：
+            #   · t1/t2 自报 partial，但 risks.advice 是「请用户明确方法论 / 补充规格书」
+            #     ⇒ 缺的是**用户输入**，重跑必然得到同一份结果（blocked，不补）；
+            #   · t3/t5 自报 partial，真实原因是「工具轮次耗尽，sysml_v2_validate 一次未调用」
+            #     ⇒ 执行中断 + **有靶子**（补跑只需跑一次校验），能改变结果（transient，补）。
+            #   ⇒ 判准不是"partial 多严重"，而是**"有没有靶子"**。6 个里只需补 2 个，
+            #     省掉 4 个无效重跑的 token。
+            #
+            # 标杆：Claude Code「stop_reason 七值 → 五种处置」（先分类再动作）+ Stop hook 否决权；
+            #       LangGraph pending writes（已完成一律复用）；AutoGPT boundedness（每维有天花板）。
+            # 四道闸：子任务 ≤2 次（D3）/ run ≤5 次 / token 预算 / 墙钟 + 空转。
+            # 整段 try 兜住：补齐失败只丢补齐，**绝不阻断汇总**。
+            # ═══════════════════════════════════════════════════════════════════
+            _fill_verdicts, _fill_filled, _fill_patch = [], [], {}
+            try:
+                from core.config import get as _cfg_fl
+                from agent import partial_policy as _pp
+                _fl_on = True
+                try:
+                    _fl_on = bool(_cfg_fl("agent", "fill_enabled", True))
+                except Exception:
+                    _fl_on = True
+                if _agg_status != "full" and _fl_on:
+                    # ① 收集未完成子任务：done_items 里自报非 full 的 ＋ orch_tasks 里没跑完的
+                    _inc, _seen_k = [], set()
+                    for _it in done_items:
+                        _sm_f = _it.get("summary")
+                        _st_f = (_sm_f.get("status") if isinstance(_sm_f, dict) else None) \
+                                or _it.get("proto_status")
+                        if _st_f in ("partial", "failed"):
+                            _inc.append(_it)
+                            _seen_k.add(str(_it.get("task_key") or ""))
+                    for _t_f in orch_tasks:
+                        _k_f = str(_t_f.get("key") or "")
+                        if str(_t_f.get("status") or "") not in ("done", "skipped") and _k_f not in _seen_k:
+                            _inc.append({"key": _k_f, "title": _t_f.get("title"),
+                                         "status": _t_f.get("status")})
+                    # ② 分类（判据优先级：外部锚 > 自报）
+                    _fill_verdicts = [_pp.classify_partial(x) for x in _inc
+                                      if (x.get("key") or x.get("task_key"))]
+                    if _fill_verdicts:
+                        _fc = _pp.summarize_causes(_fill_verdicts)
+                        # ★ evidence_thin：无 missing 也无 risks 的项，其分类是**保守兜底**
+                        #   而非确有证据。必须显式说出来 —— 否则用户会以为"系统查过了，
+                        #   确实只是质量不足"，实际是"判据不够，只能按最安全的口径判"。
+                        _thin = sum(1 for _v_t in _fill_verdicts
+                                    if _v_t.get("evidence_thin"))
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": ("（自动编排）未完成子任务病因分类：执行中断 %d / 客观缺口 %d / "
+                                         "待用户输入 %d / 质量不足 %d%s"
+                                         % (_fc["transient"], _fc["gap"],
+                                            _fc["blocked"], _fc["quality"],
+                                            ("（其中 %d 项无 missing/risks，按最保守口径判定）"
+                                             % _thin) if _thin else ""))}
+                    # ③ 决策（四道闸 + 下游覆盖闸）
+                    try:
+                        _mp_t = int(_cfg_fl("agent", "fill_max_per_task", 2))
+                    except Exception:
+                        _mp_t = 2
+                    try:
+                        _mx_t = int(_cfg_fl("agent", "fill_max_tasks", 2))
+                    except Exception:
+                        _mx_t = 2
+                    # 先取任务行：既供决策算"下游覆盖"，也供后面补跑复用（只查一次）
+                    _rows_f = {}
+                    try:
+                        for _t_r in TaskQueue.tasks(conn, run_id):
+                            _rows_f[str(_t_r.get("task_key") or "")] = _t_r
+                    except Exception:
+                        _rows_f = {}
+                    # ★ 下游覆盖闸（真机实测 2026-10-22）：t2「生成 BDD 骨架」自报 partial
+                    #   「本轮未调用校验器」，而 t3 的任务定义就是「运行 sysml_v2_validate 并修复」——
+                    #   t2 的"未校验"是**编排设计上交给下游的一步**，补跑 t2 = 重复劳动
+                    #   （实测单次 250s + 全量 token，产出还与 t3 重复）。
+                    #   只对 gap 生效：transient（中断）即使有下游也要补，否则下游仍拿不到产出。
+                    _covered_f = set()
+                    try:
+                        for _k_c, _t_c in _rows_f.items():
+                            if str(_t_c.get("status") or "") != "done":
+                                continue
+                            try:
+                                _deps_c = json.loads(_t_c.get("deps") or "[]")
+                            except Exception:
+                                _deps_c = []
+                            for _d_c in (_deps_c or []):
+                                _covered_f.add(str(_d_c))
+                    except Exception:
+                        _covered_f = set()
+                    # ★ 子任务级 attempt 记账（2026-10-22，D5 落地，**零表结构改动**）：
+                    #   直接复用既有 `agent_tasks.retry_count` —— 该字段已存在且 replanning(T1)
+                    #   就在用它。语义统一为「这个子任务总共被重试过几次」：
+                    #     · 好处：补齐与 replanning 共享同一个天花板，不会出现
+                    #       「replanning 补 1 次 + 补齐再补 2 次」的合计超限；
+                    #     · 代价：若 replanning 已补过，本轮的补齐次数会相应减少 —— 这正是收敛的本意。
+                    _used_per_task = {}
+                    for _k_u, _t_u in _rows_f.items():
+                        try:
+                            _used_per_task[_k_u] = int(_t_u.get("retry_count") or 0)
+                        except Exception:
+                            _used_per_task[_k_u] = 0
+                    _dec_f = _pp.decide_fill(_fill_verdicts, used_run=0,
+                                             max_per_task=_mp_t, max_tasks=_mx_t,
+                                             used_per_task=_used_per_task,
+                                             covered=_covered_f)
+                    _fill_stop = _dec_f.get("stop") or ""
+                    _plan_f = _dec_f.get("fill") or []
+                    # 被下游覆盖/闸门挡下的，也要在进度里说清（P5：不许静默）
+                    for _s_f in (_dec_f.get("skip") or []):
+                        if "下游" in str(_s_f.get("reason") or ""):
+                            yield {"type": "progress", "kind": "progress",
+                                   "delta": "（自动编排）%s 不补：%s"
+                                            % (_s_f.get("key"), _s_f.get("reason"))}
+                    if _fill_stop:
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": "（自动编排）不执行自动补齐：%s" % _fill_stop}
+                    if _plan_f:
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": "（自动编排）自动补齐 %d 项：%s"
+                                        % (len(_plan_f), "、".join(str(v.get("key")) for v in _plan_f))}
+                        # ④ 执行（复用 _run_subtask —— 唯一保证"补跑与首跑同构"的路径：
+                        #    同样的上下文快照/协议注入/token 记账/DB 写回）
+                        try:
+                            _dl_f = _t.time() + float(_cfg_fl("agent", "fill_deadline_s", 300))
+                        except Exception:
+                            _dl_f = _t.time() + 300.0
+                        _pool_f = None
+                        try:
+                            from concurrent.futures import ThreadPoolExecutor as _TPE2
+                            _pool_f = _TPE2(max_workers=1)
+                        except Exception:
+                            _pool_f = None
+                        for _v_f in _plan_f:
+                            _k_f2 = str(_v_f.get("key") or "")
+                            _tk_f = _rows_f.get(_k_f2)
+                            if not _tk_f or _pool_f is None:
+                                continue
+                            _rem = _dl_f - _t.time()
+                            if _rem <= 8:
+                                yield {"type": "progress", "kind": "progress",
+                                       "delta": "（自动编排）补齐墙钟已到，剩余 %s 转人工"
+                                                % _k_f2}
+                                break
+                            # escalate 升级序列（对齐 Claude Code 的
+                            #   escalate → inject continue → give up，上限 3 次）：
+                            #   第 1 次原参补跑；第 2 次起在指令里**明确要求更换策略**。
+                            #   为什么需要：同一参数重跑第 2 次，成功率不会更高 ——
+                            #   真机实测 t2 连续两轮都因「工具轮次耗尽」中断，第二次若不换策略
+                            #   （比如先把 validate 提前到第一步），结果还是一样。
+                            _rc_f = 0
+                            try:
+                                _rc_f = int(_tk_f.get("retry_count") or 0)
+                            except Exception:
+                                _rc_f = 0
+                            _rnd_f = _rc_f + 1
+                            _esc_f = _rnd_f >= 2
+                            try:
+                                _c_f = _tk_f.get("config")
+                                if isinstance(_c_f, str):
+                                    _c_f = json.loads(_c_f or "{}")
+                                _c_f = dict(_c_f or {})
+                                _bq = str(_c_f.get("query") or "")
+                                _c_f["query"] = ((_bq + "\n\n") if _bq else "") + \
+                                    _pp.fill_prompt(_v_f, _rnd_f, escalate=_esc_f)
+                                _tk_f["config"] = _c_f
+                            except Exception:
+                                pass
+                            # ★ 补跑记账**前置**（fail-safe 向停）：先 +1 再跑。
+                            #   若放在成功后，一旦补跑异常/超时就不计数 ⇒ 同一任务可被无限重试。
+                            #   与 replanning(T1) 的 retry_count 同源，共享 2 次天花板。
+                            try:
+                                conn.execute(
+                                    "UPDATE agent_tasks SET retry_count=COALESCE(retry_count,0)+1, "
+                                    "updated_at=CURRENT_TIMESTAMP WHERE id=?", (_tk_f["id"],))
+                                conn.commit()
+                            except Exception:
+                                pass
+                            _r_f = None
+                            try:
+                                _fut_f = _pool_f.submit(_run_subtask, _tk_f)
+                                _r_f = _fut_f.result(timeout=_rem)
+                            except Exception as _fe:
+                                # 超时/异常 ⇒ 协作式取消（子任务在下个事件点 break，
+                                # 正解见 _cancel_probe；硬杀线程不安全）
+                                try:
+                                    TaskQueue.cancel(conn, _tk_f["id"],
+                                                     "自动补齐超时或异常")
+                                except Exception:
+                                    pass
+                                yield {"type": "progress", "kind": "progress",
+                                       "delta": "（自动编排）补齐 %s 未完成（%s），已取消"
+                                                % (_k_f2, type(_fe).__name__)}
+                                continue
+                            # 解包：**实际 10 元组**（函数 docstring 写的 9 元已过时，
+                            # 末尾 off_id 是后加的）——按实现解包，别信注释
+                            try:
+                                (_rk, _rt, _rok, _rres, _revs, _rerr,
+                                 _rlat, _rtok, _rsum, _roff) = _r_f
+                            except Exception:
+                                continue
+                            if not _rok:
+                                yield {"type": "progress", "kind": "progress",
+                                       "delta": "（自动编排）补齐 %s 仍未成功：%s"
+                                                % (_k_f2, str(_rerr or "")[:90])}
+                                continue
+                            # ui_summary 与首跑同源（services.subtask_protocol.ui_summary），
+                            # 否则卡片文案仍是旧的中断自述（实测踩到，见 _fill_patch 注释）
+                            try:
+                                from services.subtask_protocol import ui_summary as _ui_sum2
+                                _ui_f = _ui_sum2(_rres)
+                            except Exception:
+                                _ui_f = ""
+                            try:
+                                TaskQueue.complete(conn, _tk_f["id"],
+                                                   _rres or "（自动补齐产出）",
+                                                   {"summary": str(_rres)[:300],
+                                                    "score": len(str(_rres or ""))},
+                                                   latency_ms=_rlat)
+                            except Exception:
+                                pass
+                            _fill_patch[_k_f2] = {
+                                "task_key": _k_f2, "title": _rt,
+                                "agent_id": _tk_f.get("agent_id"),
+                                "result": _rres, "status": "done",
+                                "summary": _rsum,
+                                "result_offload_id": _roff or 0,
+                                "proto_status": ((_rsum or {}).get("status")
+                                                 if isinstance(_rsum, dict) else None),
+                                # ★ 2026-10-22 端到端实测发现的展示不一致：
+                                #   前端徽章读 `summary_status`、文案读 `ui_summary`。
+                                #   只更新前者 ⇒ 出现「徽章 full + 文案还写着『本轮只完成了一部分』」
+                                #   （实测消息 4780 的 t2 正是如此）。三处必须同源更新。
+                                "ui_summary": _ui_f,
+                            }
+                            _fill_filled.append(_k_f2)
+                            # 实时更正那张子任务卡（否则补齐期间卡片仍显示旧的 partial 徽章/文案，
+                            # 要等最终 done 重渲染才变 —— 用户会以为"补了个寂寞"）。
+                            # ⚠️ yield 不放进 try（吞掉 GeneratorExit 会让流无法正常关闭）。
+                            yield {"type": "subtask", "key": _k_f2, "status": "done",
+                                   "title": _rt, "agent": _tk_f.get("agent_id"),
+                                   "latency_ms": _rlat,
+                                   "token_count": _rtok,
+                                   "retry_count": int(_tk_f.get("retry_count") or 0) + 1,
+                                   "summary_status": ((_rsum or {}).get("status")
+                                                      if isinstance(_rsum, dict) else ""),
+                                   "ui_summary": _ui_f}
+                            yield {"type": "progress", "kind": "progress",
+                                   "delta": "（自动编排）补齐 %s 完成（第 %d 次补跑%s，%d 字）"
+                                            % (_k_f2, _rnd_f,
+                                               "，已升级策略" if _esc_f else "",
+                                               len(str(_rres or "")))}
+                        if _pool_f is not None:
+                            try:
+                                _pool_f.shutdown(wait=False)
+                            except Exception:
+                                pass
+                    # ⑤ 并回 + 重算三态（**只升不降**：补齐是改善，补坏了不背锅）
+                    if _fill_patch:
+                        for _i_p, _it_p in enumerate(done_items):
+                            _hit_p = _fill_patch.get(str(_it_p.get("task_key") or ""))
+                            if _hit_p:
+                                done_items[_i_p] = _hit_p
+                        for _t_p in orch_tasks:
+                            _hit_p = _fill_patch.get(str(_t_p.get("key") or ""))
+                            if _hit_p:
+                                _t_p["status"] = "done"
+                                _t_p["proto_status"] = _hit_p.get("proto_status")
+                                # ★ 三处同源更新（端到端实测 2026-10-22）：
+                                #   summary（协议原文）/ ui_summary（卡片文案）/ summary_status（徽章）
+                                #   —— 少更任何一个都会出现「徽章说完成、文案说没走完」的自相矛盾。
+                                if isinstance(_hit_p.get("summary"), dict):
+                                    _t_p["summary"] = _hit_p["summary"]
+                                    _t_p["summary_status"] = _hit_p.get("proto_status")
+                                if _hit_p.get("ui_summary"):
+                                    _t_p["ui_summary"] = _hit_p["ui_summary"]
+                        # 硬约束（P5：命中上限/仍有缺口**不许静默**）：
+                        #   只要 orch_tasks 里还有没跑完的、或 done_items 里还有非 full 的，
+                        #   聚合就不能是 full —— 否则就是"失败被记录成成功"的翻版。
+                        try:
+                            from services import subtask_protocol as _sp_p
+                            _sm_p = []
+                            for _it_q in done_items:
+                                _s_q = _it_q.get("summary")
+                                if isinstance(_s_q, dict) and _s_q.get("status") in _sp_p.STATUS_VALUES:
+                                    _sm_p.append(_s_q)
+                                else:
+                                    _sm_p.append(_sp_p.normalize_text(
+                                        _it_q.get("result"), task_status=_it_q.get("status")))
+                            _agg_new = _sp_p.summarize_status(_sm_p) if _sm_p else _agg_status
+                            _st_p = [str(t.get("status") or "") for t in orch_tasks]
+                            _has_unfin = any(s not in ("done", "skipped") for s in _st_p)
+                            _has_sum_unfull = any(
+                                (str(((t.get("summary_status") or "") if t.get("summary_status")
+                                      else "")) in ("partial", "failed"))
+                                for t in orch_tasks)
+                            if _agg_new == "full" and (_has_unfin or _has_sum_unfull):
+                                _agg_new = "partial"
+                            _rk_p = {"full": 2, "partial": 1, "failed": 0}
+                            if _rk_p.get(_agg_new, 2) > _rk_p.get(_agg_status, 2):
+                                _agg_status = _agg_new
+                            _missing_keys = [k for k in _missing_keys
+                                             if k not in set(_fill_filled)]
+                            if _agg_status == "full":
+                                _missing_keys = []
+                        except Exception:
+                            pass
+                # ⑥ 清空队列里补齐期间堆积的子任务事件（无消费者时会积压；不清理
+                #    会让后续 _drain 把补齐过程当"首跑实时输出"重放一遍）
+                try:
+                    while True:
+                        _evq.get_nowait()
+                except Exception:
+                    pass
+            except Exception as _fe2:
+                yield {"type": "progress", "kind": "progress",
+                       "delta": "（自动编排）自动补齐未执行（%s），按原状态汇总"
+                                % type(_fe2).__name__}
+
             if _agg_status != "full" and done_items:
                 _failed_keys = [str(t.get("task_key") or "") for t in orch_tasks
                                 if str(t.get("status") or "") == "failed"]
@@ -2492,10 +2828,43 @@ class StreamMixin:
                                   % (len(_partial_keys), ",".join(_partial_keys)))
                 _gap_txt = ("，".join(_parts)) if _parts \
                     else "聚合状态 %s，但无失败/部分完成子任务明细" % _agg_status
-                orch_content = ("（编排状态：%s——%s）\n\n"
-                                % (_agg_status, _gap_txt)) + orch_content
+                # ★ 2026-10-22（P0-b/P5）：把**病因分类前置到汇总开头**。
+                #   为什么必须前置：现状是缺口散落在卡片 bullet 里，正文却读起来像"全部完成"——
+                #   这是「失败被记录成成功」的**文案版**。用户会按 full 的理解去用这份汇总。
+                #   对齐 OpenAI「命中上限不许静默」+ Claude Code 的 Stop hook 否决权。
+                _cause_txt = ""
+                try:
+                    from agent import partial_policy as _pp2
+                    if _fill_verdicts:
+                        _cause_txt = _pp2.gate_summary(_fill_verdicts,
+                                                       filled=_fill_filled)
+                except Exception:
+                    _cause_txt = ""
+                if _cause_txt:
+                    orch_content = ("（编排状态：%s——%s）\n%s\n\n"
+                                    % (_agg_status, _gap_txt, _cause_txt)) + orch_content
+                else:
+                    orch_content = ("（编排状态：%s——%s）\n\n"
+                                    % (_agg_status, _gap_txt)) + orch_content
+                # ★ D4（2026-10-22）：blocked 类**自动生成澄清清单**，但不打断汇总
+                #   （打断会让用户看不到已完成的部分）。清单只列"需要用户提供什么"，
+                #   重跑无法解决 —— 对齐 Claude Code 对 `refusal` 的处置：不重试，直接说明。
+                _ask_txt = ""
+                try:
+                    _filled_set = set(_fill_filled)
+                    _blk = [v for v in _fill_verdicts
+                            if str(v.get("cause")) == "blocked"
+                            and str(v.get("key")) not in _filled_set]
+                    if _blk:
+                        _ask_txt = "；".join(
+                            "%s：%s" % (v.get("key"),
+                                        str(v.get("evidence") or v.get("hint") or "")[:70])
+                            for v in _blk[:4])
+                except Exception:
+                    _ask_txt = ""
                 yield {"type": "progress", "kind": "progress",
-                       "delta": f"（自动编排）编排状态 {_agg_status}：{_gap_txt}"}
+                       "delta": (f"（自动编排）编排状态 {_agg_status}：{_gap_txt}"
+                                 + (f"；待你补充：{_ask_txt}" if _ask_txt else ""))}
             # P0-1（T3）：反思闭环——汇总后质量评审 → 未达标修订（复用画布 reflection 公共评审）
             reflection_meta = None
             if done_items:
@@ -2658,6 +3027,18 @@ class StreamMixin:
             "orchestrated_status": _agg_status,   # Task 10：编排汇总三态（full/partial/failed）
             "run_id": run_id,   # ★ 2026-10-20：单点重跑入口依赖（前端编排卡「↻ 重跑子任务」）
             "quality_gate_gaps": _gate_gaps,      # P0-3：质量门禁缺口说明（与 orchestration.py 同键）
+            # ★ 2026-10-22：病因分类 + 补齐结果。与 orchestration.py 同名同义。
+            #   `fill_causes`：四类病因与证据（failed 徽章只说明"没成"，这里说明"为什么没成、
+            #   能不能补"）；`fill_filled`：本轮真实补齐成功的 task_key（前端可打「已自动补齐」标）。
+            "fill_causes": [{"key": v.get("key"), "cause": v.get("cause"),
+                             "evidence": v.get("evidence"),
+                             "fillable": bool(v.get("fillable")),
+                             # 证据是否充分：False 表示"无 missing 无 risks，按保守口径判的"，
+                             # 前端可据此显示"待复核"而不是当成确定结论。
+                             "evidence_thin": bool(v.get("evidence_thin")),
+                             "missing": v.get("missing") or []}
+                            for v in (_fill_verdicts or [])],
+            "fill_filled": list(_fill_filled or []),
             "run_budget": {"used_tokens": run_tokens, "budget": run_token_budget,
                            "hit": budget_hit, "executed": executed_count, "max_tasks": _max_tasks},
             "plan": orch_tasks, "sysml_views": sysml_views,
@@ -4362,7 +4743,18 @@ class StreamMixin:
                 #   （exec_tools 非空——纯问答轮没有「剩余步骤」可言，且省评估器成本）；
                 #   ③ 续跑次数未满。评估器本身绝不抛异常（_evaluate_completion 内部吞），
                 #   判据解析失败 ⇒ verdict=None ⇒ decide 返不续跑（fail-safe 向停）。
-                if (_ac_cfg["enabled"] and not dry_run and exec_tools
+                # ★ 2026-10-22（米爸反馈3「不要遇到点问题就终止」）：
+                #   闸② 补一个**续跑意图**例外 —— 用户明确说「继续/接着/go on」时，
+                #   "要不要继续"恰恰是唯一值得评估的问题，却因这一轮没调工具而被整条跳过
+                #   （实测会话 9587：4777「继续」→ 4778 只走了 chat_probe，
+                #     llm_usage_stats 里**没有任何 CHAT_TASK_EVAL 调用** ⇒ 续跑机制等于没启动）。
+                #   ⇒ 续跑意图轮强制评估一次（成本：+1 次小调用），其余纯问答轮维持原样不评估。
+                _cont_input = False
+                try:
+                    _cont_input = bool(self._is_continuation_input(user_input))
+                except Exception:
+                    _cont_input = False
+                if (_ac_cfg["enabled"] and not dry_run and (exec_tools or _cont_input)
                         and _auto_continues < _ac_cfg["max"]):
                     # 本轮产出并进全量（落库/done/前端历史用全量；评估器只看本轮+工具史）
                     if llm_content:

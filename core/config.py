@@ -1081,6 +1081,7 @@ DEFAULT_CONFIG = {
         "retrieval_min_route_acc": 0.95,    # graph 域 route_acc 下限（实测 1.0）
         "retrieval_min_route_ok": 0.75,      # neg 域 route_ok 下限（实测 0.875）
         "retrieval_max_rerank_drop": 0.15,  # rerank_drop_rate 上限（实测 0.0，重排不该挤掉对的）
+        "retrieval_control_max_recall": 0.05,  # RAG 负对照轮转后 recall 上限（原判据恒零 ⇒ 机遇撞中 0.02 随机红；0.05 与真实 0.90 拉开 18 倍，真假绿态仍红）
         "require_negative_control": 1,      # 是否强制负对照非零（0=轮转后分数仍高 → 假绿）
         # ── 生成质量门禁（2026-10-22 补断链③：faithfulness 全仓零命中）──────
         # 实测基线（mbse.db 生产库 150 条 RAG 问答）：valid=1.000 / usage=0.344 /
@@ -1093,6 +1094,18 @@ DEFAULT_CONFIG = {
         "generation_min_answers": 20,       # 样本量下限（低于此判"样本池被删"，不判通过）
         "generation_min_entities": 30,      # 接地率升级为门禁指标所需的最少可核查实体数
         "generation_min_grounded_rate": 0.70,  # 接地率下限（**未标定**：当前样本 2 实体无判别力，此值等首次具判别力实测后校准）
+        # ── Trace 一致性门禁（2026-10-22 补断链②：trace_evalset 无消费方）──────
+        # 实测基线（mbse.db 生产库，42 条人工确认样本）：无LLM口径 0.881
+        #   （两次运行逐条一致）；含LLM口径 0.881~0.929（随 LLM 服务可用性
+        #   波动，LLM 全失败时回落到无LLM水平）。负对照（gold 洗牌）0.167。
+        # 下限取 0.75：距最坏观测 ~13pp，且覆盖"LLM 全失败且全判错"的
+        #   理论最坏 ~0.79；规则层真塌陷会把一致率打到 0.3~0.5（负对照
+        #   量级），0.75 拦得住那种塌陷，不会在正常波动上随机红。
+        "trace_min_agreement": 0.75,       # 裁决一致率下限（当前路由 vs 生产人工裁决）
+        "trace_max_repeat_mistake": 0.50,  # 重错率上限（**常驻 SKIP**：当前无路由纠错类负样本，n=0 无分母；出现真负样本后自动生效）
+        "trace_min_positive": 20,          # positive 样本量下限（低于此判"样本池被删"，不判通过）
+        "trace_control_min_gap": 0.30,     # 负对照可判别的最小差距（真实一致率 − 洗牌后一致率；实测 0.714）
+        "trace_max_stale_ratio": 0.20,     # gold 失效样本占比上限（超过即判"样本池被删/被改"）
     },
     # ── P1-2（2026-10-18 自进化调研路线图）：步骤级归因器 ──────────────
     # 背景：AgentEvolver self-attributing 的最小版——error_profile 只到会话级
@@ -1519,6 +1532,16 @@ CONFIG_SCHEMA = {
         "auto_continue_enabled": {"type": "bool", "desc": "★ 自主续跑总开关（默认开）：AI 完成度评估判定「任务未完成」时自动继续工作，无需用户逐条下达指令；关闭则维持一问一答形态"},
         "auto_continue_max":     {"type": "int", "desc": "★ 自主续跑次数上限（默认 3）：单轮请求内最多自动续跑几次（AutoGPT「无完成任务生成」对策；每次续跑重置 ReAct 轮次预算，但仍共享 token 预算）"},
         "auto_continue_deadline_s": {"type": "int", "desc": "★ 自主续跑墙钟上限（秒，默认 600；0=不设）：从本轮请求开始累计，超时不再续跑（仍受次数/token 闸约束）"},
+        # ── 编排 partial 补齐（2026-10-22 米爸「是否重跑需要一个健全的机制」）──
+        # 对齐标杆：Claude Code「stop_reason 七值 → 五种处置」（先分类病因再决定动作）
+        # + Stop hook 否决权 + LangGraph pending writes（已完成一律复用）。
+        # 核心判准（真数据取证，会话 9587）：**是否重跑不看 partial 多严重，看有没有靶子**。
+        #   t1/t2 缺用户输入（blocked）⇒ 补了必得同一结果；t3/t5 轮次耗尽未校验
+        #   （transient/gap）⇒ 补跑能改变结果。故只有 transient/gap 会触发重跑。
+        "fill_enabled":      {"type": "bool", "desc": "★ 编排 partial 自动补齐总开关（默认开）：收尾时按病因分类，只对「执行中断/客观缺口」两类自动补跑；「待用户输入/质量不足」不补，只在前置缺口说明里列出（关了则仅出分类与缺口说明，不重跑）"},
+        "fill_max_per_task": {"type": "int", "desc": "单个子任务的补齐次数上限（默认 2，对标 Claude Code 的 3 次恢复上限；第 3 次转人工）"},
+        "fill_max_tasks":    {"type": "int", "desc": "单轮补救最多补几个子任务（默认 2，控墙钟与成本；按「无外部门槛优先」排序）"},
+        "fill_deadline_s":   {"type": "int", "desc": "自动补齐的墙钟上限（秒，默认 300）：超时未完成的子任务协作式取消并转人工，绝不阻塞汇总"},
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},
@@ -1783,6 +1806,7 @@ CONFIG_SCHEMA = {
         "retrieval_min_route_acc":   {"type": "float", "desc": "RAG graph 域路由准确率下限（实测 1.0）"},
         "retrieval_min_route_ok":    {"type": "float", "desc": "RAG neg 域路由正确率下限（实测 0.875）"},
         "retrieval_max_rerank_drop": {"type": "float", "desc": "重排丢对率上限（实测 0.0；重排把对的挤下去才算问题）"},
+        "retrieval_control_max_recall": {"type": "float", "desc": "RAG 负对照轮转后 recall 上限（量级判定，非恒零：机遇撞中 0.02 不应判红；真假绿态轮转 ~0.9 仍判红）"},
         "require_negative_control":  {"type": "int",   "desc": "是否强制负对照非零（1=轮转后分数仍高即判假绿）"},
         "generation_min_citation_valid": {"type": "float", "desc": "生成质量：正文 [n] 编号有效率下限（实测 1.000，错位即判红）"},
         "generation_min_citation_usage": {"type": "float", "desc": "生成质量：带引用答案实际使用 [n] 比例下限（实测 0.344，软约束塌陷即判红）"},
@@ -1790,6 +1814,11 @@ CONFIG_SCHEMA = {
         "generation_min_answers":     {"type": "int",   "desc": "生成质量：样本量下限（低于此判样本池被删）"},
         "generation_min_entities":    {"type": "int",   "desc": "生成质量：接地率升级为门禁指标所需最少可核查实体数（当前样本 2 个，不具判别力）"},
         "generation_min_grounded_rate": {"type": "float", "desc": "生成质量：实体接地率下限（未标定，等首次具判别力实测后校准；仅在实体量达标且负对照可判别时生效）"},
+        "trace_min_agreement":     {"type": "float", "desc": "Trace 一致性：裁决一致率下限（实测 0.881~0.929，含 LLM 全失败最坏 ~0.79；规则层塌陷会掉到 0.3~0.5）"},
+        "trace_max_repeat_mistake": {"type": "float", "desc": "Trace 一致性：重错率上限（常驻 SKIP——当前无路由纠错类负样本；出现后自动生效）"},
+        "trace_min_positive":      {"type": "int",   "desc": "Trace 一致性：positive 样本量下限（低于此判样本池被删，不判通过）"},
+        "trace_control_min_gap":   {"type": "float", "desc": "Trace 一致性：负对照可判别的最小差距（真实一致率 − gold 洗牌后一致率；实测 0.714）"},
+        "trace_max_stale_ratio":   {"type": "float", "desc": "Trace 一致性：gold 失效样本占比上限（超过判样本池被删/被改）"},
     },
     # P1-2（2026-10-18）：Trace2Dataset（tools/eval/trace2dataset.py 消费）
     "trace2dataset": {

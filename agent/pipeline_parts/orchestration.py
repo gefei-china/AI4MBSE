@@ -407,12 +407,38 @@ class OrchestrMixin:
             _agg_status, _gate_gaps = _sp.apply_quality_gate(_agg_status, _orch_reflection)
         except Exception:
             _gate_gaps = []
+        # ★ 2026-10-22（P0-b/P5）：非流式路径的 partial **病因分类 + 缺口前置说明**。
+        #   为什么这里**不自动重跑**：本路径没有 `_run_subtask` 的上下文快照与事件通道，
+        #   重跑只能另起一次完整编排（成本翻倍且会重复汇总）——不值得。
+        #   流式路径（米爸实际使用的 SSE 通道）已实现自动补齐（见 stream.py 收尾段）；
+        #   此处保持**同口径地把缺口说清楚**，绝不让 partial 读起来像 full。
+        _fill_verdicts = []
+        try:
+            from agent import partial_policy as _pp_o
+            if _agg_status != "full":
+                # 非流式 tasks 只带 key/title/status（无 summary）⇒ 证据弱。
+                # classify 在无客观证据时判 quality（不补），正是 fail-safe 的方向。
+                _fill_verdicts = [_pp_o.classify_partial(
+                    {"key": m.get("key"), "title": m.get("title"),
+                     "status": m.get("status")})
+                    for m in plan_meta if str(m.get("status") or "") != "done"]
+                _cause_txt = _pp_o.gate_summary(_fill_verdicts)
+                if _cause_txt and llm_content:
+                    llm_content = ("（编排状态：%s）\n%s\n\n"
+                                   % (_agg_status, _cause_txt)) + llm_content
+        except Exception:
+            _fill_verdicts = []
         card_data = json.dumps({
             "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
             "orchestrated": True, "degraded": bool(orch.get("degraded")),
             "orchestrated_status": _agg_status,   # P0-3：三态与流式路径对齐
             "quality_gate_gaps": _gate_gaps,      # P0-3：质量门禁缺口说明（前端可选用）
+            # ★ 2026-10-22：病因分类（四类）+ 补跑结果，供前端/排障判断"为什么没补"。
+            #   与流式路径 card_data 同名同义 —— 两条路径同口径，别再让前端按路径分支。
+            "fill_causes": [{"key": v.get("key"), "cause": v.get("cause"),
+                             "evidence": v.get("evidence")} for v in _fill_verdicts],
+            "fill_filled": [],   # 非流式路径不做自动重跑（理由见上方注释）
             "team": team or None,   # 团队模式：主 Agent 团队负责人
             "plan": plan_meta,
             "reflection": (orch.get("data") or {}).get("reflection"),   # P0-1（T4）：反思闭环评审轨迹
