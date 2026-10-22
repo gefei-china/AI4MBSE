@@ -34,6 +34,8 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 PASS, FAIL = "PASS", "FAIL"
 _results = []
@@ -46,10 +48,29 @@ _results = []
 #     追溯矩阵检查一下→review；**新引入 0 条**。
 # 下限取 0.85：距基线 8 个百分点（够吸收种子数据小幅变动），又足够高到能挡住
 # "规则集丢失 / 规则层被改坏"这类量级的塌陷 —— 那正是入库前 0.828 的水平。
-MIN_CASES = 20
-MIN_ACCURACY = 0.85
-# 已知基线（仅用于 --report 时打印对照，不参与判定；判定只看 MIN_ACCURACY）
-KNOWN_BASELINE = {"accuracy": 0.931, "macro_f1": 0.9158, "n": 29}
+#
+# ★ 2026-10-22：阈值改为从 `core.config` 的 `eval_gates` 组读取（单一真源）。
+#   评估发现同一意图路由评测有**三个阈值在流通**（本文件 0.85 / verify_eval_routing
+#   0.86 / ci.yml 注释 0.70）⇒ "改哪个"成了不确定问题。收敛后改阈值只改 core/config.py。
+#   数值本身不变，语义与上面的基线推导保持一致。
+#
+# ⚠️ 惰性读取，**不可提到模块顶层**：`core.config` 及其依赖链在 import 期就会把
+#   DB_PATH 绑进各模块作用域，而本脚本要求"先设 MBSE_DB_PATH 再 import 业务模块"
+#   （见 _fresh_db 的注释，批次 2 已踩过一次）。实测提到顶层 ⇒ 门禁从 0.931 掉到 0.897、
+#   E2f/E2h/E3b 三项翻转（干净库口径被污染）。故此处只留函数，用时再取。
+def _gate(key, fallback):
+    """从 core.config.eval_gates 读阈值；未取到则回退到脚本内记录的历史值。"""
+    try:
+        from core.config import get as _g
+        v = _g("eval_gates", key, None)
+        return fallback if v is None else v
+    except Exception:
+        return fallback
+
+
+MIN_CASES = None            # 在 main() 里由 _gate() 赋值（见下方注释所述的惰性理由）
+MIN_ACCURACY = None
+KNOWN_BASELINE = None
 
 
 def _rec(name, ok, detail=""):
@@ -233,6 +254,16 @@ def main():
     print("P1-8 意图路由评测 CI 门禁（确定性部分，自建干净库口径）")
     print("=" * 72)
     db = _fresh_db()
+    # 阈值在 _fresh_db() 之后读：此时 MBSE_DB_PATH 已设好，业务模块也已按干净库初始化。
+    # （历史值作为 fallback：config 不可用时门禁仍能跑，且不会静默改判据）
+    global MIN_CASES, MIN_ACCURACY, KNOWN_BASELINE
+    MIN_CASES = _gate("intent_min_cases", 20)
+    MIN_ACCURACY = _gate("intent_min_accuracy", 0.85)
+    KNOWN_BASELINE = {
+        "accuracy": _gate("intent_baseline_acc", 0.931),
+        "macro_f1": _gate("intent_baseline_f1", 0.9158),
+        "n": _gate("intent_baseline_n", 29),
+    }
     print("干净库: %s" % db)
     ok = e1_metrics()
     ok &= e2_dataset(db)

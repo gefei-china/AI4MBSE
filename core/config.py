@@ -1059,6 +1059,30 @@ DEFAULT_CONFIG = {
         "min_query_chars": 4,        # query 最短长度（"嗯"/"好"不构成评测样本）
         "max_response_chars": 600,   # response 截断上限（回归集只需可读开头）
     },
+    # ── 评测门禁阈值单一真源（2026-10-22）────────────────────────────
+    # 背景：评估发现同一意图路由评测有**三个阈值在流通** —— ci.yml 注释 0.70、
+    #   tools/eval/run_ci_eval.py 的 MIN_ACCURACY=0.85、tools/verify/
+    #   verify_eval_routing.py 的 THRESHOLD_ACC=0.86。注释漂移让"改哪个"
+    #   成为不确定问题（评估报告 P0-1）。
+    # 本组是**唯一真源**：门禁脚本一律 `from core.config import ...` 读阈值，
+    #   CI 注释只写变量名不写数字。改阈值 = 只改这里。
+    # 阈值本身不变（沿用各自实测基线与余量），只把"两处硬编码"收敛为"一处配置"。
+    "eval_gates": {
+        "intent_min_cases": 20,      # 意图黄金集条数下限（低于此值判"样本池被删"假绿）
+        "intent_min_accuracy": 0.85,  # run_ci_eval.py 准确率下限（距干净库基线 0.931 约 8pp）
+        "intent_baseline_acc": 0.931,  # 干净库 builtin(29) 实测基线（仅 --report 打印对照）
+        "intent_baseline_f1": 0.9158,
+        "intent_baseline_n": 29,
+        "routing_baseline_acc": 0.9310,  # verify_eval_routing.py 的干净库基线
+        "routing_baseline_f1": 0.9158,
+        "routing_threshold_acc": 0.86,   # 只挡塌陷（余量 0.07 ≈ 2/29）
+        "routing_threshold_f1": 0.84,
+        "retrieval_min_recall_at_5": 0.85,  # RAG doc 域 recall@5 下限（实测 0.90，留 5pp）
+        "retrieval_min_route_acc": 0.95,    # graph 域 route_acc 下限（实测 1.0）
+        "retrieval_min_route_ok": 0.75,      # neg 域 route_ok 下限（实测 0.875）
+        "retrieval_max_rerank_drop": 0.15,  # rerank_drop_rate 上限（实测 0.0，重排不该挤掉对的）
+        "require_negative_control": 1,      # 是否强制负对照非零（0=轮转后分数仍高 → 假绿）
+    },
     # ── P1-2（2026-10-18 自进化调研路线图）：步骤级归因器 ──────────────
     # 背景：AgentEvolver self-attributing 的最小版——error_profile 只到会话级
     #   计数，回答不了「哪一步开始坏的」。步骤原料（llm_usage_stats/
@@ -1733,7 +1757,24 @@ CONFIG_SCHEMA = {
         "reopen_on_recur":    {"type": "bool",  "desc": "已 triage 的主题复现时重开为 open"},
         "alert_threshold":    {"type": "int",   "desc": "默认告警线：open 数达到即值得关注"},
     },
-    # P1-1（2026-10-18）：Trace2Dataset（tools/eval/trace2dataset.py 消费）
+    # 评测门禁阈值单一真源（2026-10-22）：门禁脚本一律读本组，CI 注释只写变量名不写数字
+    "eval_gates": {
+        "intent_min_cases":       {"type": "int",   "desc": "意图黄金集条数下限（低于此值判样本池被删，评测会假绿）"},
+        "intent_min_accuracy":     {"type": "float", "desc": "意图路由准确率下限（距干净库基线 0.931 约 8pp，只挡塌陷）"},
+        "intent_baseline_acc":    {"type": "float", "desc": "意图路由干净库实测基线 accuracy（仅报告打印，不参与判定）"},
+        "intent_baseline_f1":     {"type": "float", "desc": "意图路由干净库实测基线 macro-F1（仅报告打印）"},
+        "intent_baseline_n":      {"type": "int",   "desc": "基线对应的样本条数（clean库 builtin 集）"},
+        "routing_baseline_acc":   {"type": "float", "desc": "路由门禁基线 accuracy（干净库 builtin 29 条实测）"},
+        "routing_baseline_f1":    {"type": "float", "desc": "路由门禁基线 macro-F1（干净库 builtin 29 条实测）"},
+        "routing_threshold_acc":  {"type": "float", "desc": "路由门禁准确率下限（余量 0.07 ≈ 2/29，再大就什么都拦不住）"},
+        "routing_threshold_f1":   {"type": "float", "desc": "路由门禁 macro-F1 下限"},
+        "retrieval_min_recall_at_5": {"type": "float", "desc": "RAG 检索 doc 域 recall@5 下限（实测 0.90）"},
+        "retrieval_min_route_acc":   {"type": "float", "desc": "RAG graph 域路由准确率下限（实测 1.0）"},
+        "retrieval_min_route_ok":    {"type": "float", "desc": "RAG neg 域路由正确率下限（实测 0.875）"},
+        "retrieval_max_rerank_drop": {"type": "float", "desc": "重排丢对率上限（实测 0.0；重排把对的挤下去才算问题）"},
+        "require_negative_control":  {"type": "int",   "desc": "是否强制负对照非零（1=轮转后分数仍高即判假绿）"},
+    },
+    # P1-2（2026-10-18）：Trace2Dataset（tools/eval/trace2dataset.py 消费）
     "trace2dataset": {
         "enabled":            {"type": "bool",  "desc": "Trace2Dataset 取材总开关（False 时构建返空）"},
         "window_days":        {"type": "int",   "desc": "取材窗口：只取最近 N 天的生产证据"},

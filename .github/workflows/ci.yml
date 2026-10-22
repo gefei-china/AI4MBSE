@@ -87,9 +87,13 @@ jobs:
       # 为什么单独一个 job 而不是塞进上面：它**自建干净库**（MBSE_DB_PATH 指向临时文件
       # 并 init_db），口径与开发机生产库**故意不同** —— 因为准确率门禁只有在输入等价时
       # 才有意义（详见 tools/eval/run_ci_eval.py 文件头的踩坑记录）。
-      # 锁的是「规则层+语义层不许塌」，阈值 0.70（干净库+无LLM 实测基线 0.828）。
+      # 锁的是「规则层+语义层不许塌」。阈值不再写死在这里 —— 唯一真源是
+      # core/config.py 的 eval_gates.intent_min_accuracy（当前 0.85）。
+      # ★ 2026-10-22 修正：本行原写「阈值 0.70（干净库+无LLM 实测基线 0.828）」，
+      #   与 run_ci_eval.py 实值 0.85 已漂移。改为引用变量名，杜绝同类漂移；
+      #   verify_ci_comment_consistency.py 会把「注释里出现的阈值数字」判红。
       # 模型质量评测另跑带 LLM 的夜间任务（CI 无 secret，且模型输出有温度）。
-      - name: Guard 意图路由评测（19 项，含准确率下限 0.70）
+      - name: Guard 意图路由评测（19 项，准确率下限见 core/config.py eval_gates）
         run: python tools/eval/run_ci_eval.py
 
       # ── P0-2 批次 2/3（2026-10-03/04）：编排 checkpoint + 断点续跑 ──────────────
@@ -215,10 +219,10 @@ jobs:
       # 实测 292 处直连读 SQL 高度分散（glossary.py 49 / pipeline 27 / ontology 25…），
       # 每一处都带着权限 / 分支 / 生命周期过滤（多租户隔离边界）⇒
       # 全量搬迁的收益是「架构整洁」（用户不可感知），风险是漏掉过滤条件。
-      # ⇒ 本门禁只做两件事：① 断言不超过基线 292；② 新增须登记豁免且**带理由**。
-      # 基线 292 由门禁自己的 scan_direct_sql() 实测得出 —— 第一版填了
-      # 另一套口径的 425（把三引号/f-string SQL 也算进去）⇒ 门禁一上线就虚设。
-      - name: Guard 分层绕过不增长（P1-10 · 基线 292）
+      # ⇒ 本门禁只做两件事：① 断言不超过基线；② 新增须登记豁免且**带理由**。
+      # 基线值由 tools/verify/verify_layering.py 的 BASELINE_DIRECT_SQL 持有
+      # （2026-10-21 重测为 323；历史 292 是过期值，2026-10-22 修正本注释）。
+      - name: Guard 分层绕过不增长（P1-10 · 基线见 verify_layering.BASELINE_DIRECT_SQL）
         run: python tools/verify/verify_layering.py
 
       # ── P2-1（2026-10-04）：列表 limit 边界语义统一 ───────────────────────

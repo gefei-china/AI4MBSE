@@ -61,11 +61,49 @@ EVAL = os.path.join(ROOT, "tests", "manual_verify", "eval_intent_routing.py")
 SCHEMA = os.path.join(ROOT, "database", "schema.py")
 
 # ── 阈值（锚定干净库实测基线 0.9310，余量 0.07）──────────────────────────
+# ★ 2026-10-22：改为从 `core.config` 的 `eval_gates` 组读取（单一真源）。
+#   评估发现同一意图路由评测有三个阈值在流通（本文件 0.86 / run_ci_eval 0.85 /
+#   ci.yml 注释 0.70）⇒ 改阈值要改三处、且注释与实值已漂移。收敛后只改 core/config.py。
+#   数值本身不变：基线 0.9310 锚干净库 builtin(29)，余量 0.07 ≈ 2/29 个样例。
+#
+# ⚠️ 用函数惰性读，不在模块顶层 import：本脚本以 `python tools/verify/xxx.py` 直接起，
+#   此时仓库根**未必**在 sys.path 上（实测顶层 `from core.config import` 会
+#   ModuleNotFoundError）。而本脚本的干净库是靠**子进程**注入 MBSE_DB_PATH 实现的，
+#   父进程读不读 config 都不影响子进程口径 —— 故惰性读是安全且无副作用的做法。
+def _gate(key, fallback):
+    try:
+        if ROOT not in sys.path:
+            sys.path.insert(0, ROOT)
+        from core.config import get as _g
+        v = _g("eval_gates", key, None)
+        return fallback if v is None else v
+    except Exception:
+        return fallback
+
+
+def _baseline_acc():
+    return _gate("routing_baseline_acc", 0.9310)
+
+
+def _baseline_f1():
+    return _gate("routing_baseline_f1", 0.9158)
+
+
+def _threshold_acc():
+    return _gate("routing_threshold_acc", 0.86)     # 只挡塌陷
+
+
+def _threshold_f1():
+    return _gate("routing_threshold_f1", 0.84)
+
+
+RUNS = 2                                        # 跑两遍验一致性
+
+# 模块级常量保留（兼容既有调用方），值取默认；判定路径一律走上面的函数读真源
 BASELINE_ACC = 0.9310
 BASELINE_F1 = 0.9158
-THRESHOLD_ACC = 0.86# 只挡塌陷
+THRESHOLD_ACC = 0.86                              # 只挡塌陷
 THRESHOLD_F1 = 0.84
-RUNS = 2                                        # 跑两遍验一致性
 
 PASS, FAIL = "PASS", "FAIL"
 _results = []
@@ -134,8 +172,15 @@ def _run_on_clean_db(runs=RUNS):
 
 
 # ── 判据（可注入变异体）：把"跑出来的结果"变成断言 ────────────────────────
-def judge(results, paths=None, baseline_acc=BASELINE_ACC, baseline_f1=BASELINE_F1,
-          thr_acc=THRESHOLD_ACC, thr_f1=THRESHOLD_F1, require_identical=True):
+# ★ 2026-10-22：默认值改为 None → 用时从 eval_gates 真源取，保证"改阈值只改一处"。
+#   （传值仍优先，便于变异自证注入非法阈值）
+def judge(results, paths=None, baseline_acc=None, baseline_f1=None,
+          thr_acc=None, thr_f1=None, require_identical=True):
+    # 未显式传入 ⇒ 取 eval_gates 真源（config 不可用时回退脚本内历史值）
+    baseline_acc = baseline_acc if baseline_acc is not None else _baseline_acc()
+    baseline_f1 = baseline_f1 if baseline_f1 is not None else _baseline_f1()
+    thr_acc = thr_acc if thr_acc is not None else _threshold_acc()
+    thr_f1 = thr_f1 if thr_f1 is not None else _threshold_f1()
     ok = True
     if paths:
         ok &= _rec("E0 每次都在**各自的干净临时库**里跑（库路径已自证）",
@@ -182,9 +227,13 @@ def main():
     # 前置：评测集与库自举脚本必须存在（否则门禁"通过"是因为没跑）
     ok = _rec("N1评测脚本存在", os.path.exists(EVAL), EVAL)
     ok &= _rec("N2 schema 存在（自建干净库要用）", os.path.exists(SCHEMA))
+    # N3 读真源（不用模块常量）：否则改了 eval_gates 后这道自检会拿旧常量比，
+    #     出现"配置已生效但自检仍绿"的假绿。
+    _ta, _ba = _threshold_acc(), _baseline_acc()
+    _tf, _bf = _threshold_f1(), _baseline_f1()
     ok &= _rec("N3 阈值低于基线（否则等于要求超越历史最优）",
-               THRESHOLD_ACC < BASELINE_ACC and THRESHOLD_F1 < BASELINE_F1,
-               "thr_acc=%s base=%s" % (THRESHOLD_ACC, BASELINE_ACC))
+               _ta < _ba and _tf < _bf,
+               "thr_acc=%s base=%s" % (_ta, _ba))
     if not ok:
         print("前置检查未过，终止")
         return 1
