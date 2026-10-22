@@ -47,6 +47,10 @@ embedding 服务依赖 + 分钟级耗时 + 网络抖动导致的红绿假阳，�
 三项判据自证（防"指标算错却全绿"）：
 - **D1 负对照必须非零**：负对照是把 gold 标签轮转后重算，真分数与轮转分数
   都高 ⇒ 指标没在测对齐关系 ⇒ **假绿**。实测真实 recall@10=0.9、轮转 0.0。
+  ⚠ 判据是"拉开量级"不是"恒等于 0"（2026-10-22 15:21 修正）：轮转后
+  recall@10 有 ~2% 机遇撞中（实测 0.02），恒零判据会随机红；现判
+  "轮转后全部 ≤ retrieval_control_max_recall（0.05）"，与真实 0.90
+  拉开 18 倍即健康，真假绿态（轮转也 ~0.9）仍判红。
 - **D2 样本量下限**：n 过小则比例类指标分辨率不足（neg 域 8 条时 FPR
   分辨率仅 1/8）。低于下限报"样本不足"而非"通过"。
 - **D3 无语料漂移**：报告带 `fingerprint_drift` 非空 ⇒ 该分数不可作依据
@@ -165,14 +169,23 @@ def judge(report, thr=None):
     if need_ctrl:
         ctrl = report.get("negative_control") or {}
         crec = ctrl.get("recall") or {}
-        # 取轮转后的 recall@k；全部为 0 才是健康的
+        # 取轮转后的 recall@k；接近 0 才是健康的
         vals = [v for v in crec.values() if isinstance(v, (int, float))]
         if not vals:
             ok &= _rec("D1 负对照已跑（缺对照无法排除假绿）", False,
                        "报告无 negative_control；建议加跑 --control", status=SKIP)
         else:
-            ok &= _rec("D1 负对照塌到 0（真分数与轮转分数须拉开量级）",
-                       max(vals) == 0.0,
+            # ★ 2026-10-22 15:21 实测修正：原判据是 max(vals) == 0.0（恒零），
+            #   但轮转是确定性重排、50 例里 recall@10 有 ~2% 概率撞上一个
+            #   机遇命中（本次 0.02）⇒ 门禁随机红。判据的**意图**是
+            #   "真分数与轮转分数拉开量级"（文件头原话），不是"恒等于 0"：
+            #   实现严于意图 = 拿机遇噪声当假绿 = 每 ~7 周红一次的红灯。
+            #   红灯狼来了的下场是被人加豁免（本工程自己的纪律），故改为
+            #   量级判定：轮转后全部 ≤ retrieval_control_max_recall（0.05）
+            #   ⇒ 与真实 0.90 拉开 18 倍；真假绿态（轮转也 ~0.9）仍判红。
+            t_ctrl = thr.get("ctrl_max", _gate("retrieval_control_max_recall", 0.05))
+            ok &= _rec("D1 负对照塌到 ≤%.2f（真分数与轮转分数须拉开量级）" % t_ctrl,
+                       max(vals) <= t_ctrl,
                        "轮转后 recall=%s，与真实分数相近 ⇒ 假绿" % crec)
     return ok
 
