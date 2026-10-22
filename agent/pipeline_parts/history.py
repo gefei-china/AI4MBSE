@@ -213,6 +213,70 @@ def ctx_budget_tokens(kind: str, fallback_char_key: str, fallback: int) -> int:
         return fallback
 
 
+#: 历史裁剪标记的**唯一前缀**（2026-10-22）。
+#: 为什么单独提出来做常量：标记文本本身会占 token，
+#: 门禁 `verify_multiturn_context` 的 E11/M23 用「最新一条原文 token 数 > 均分份额」
+#: 判断"余量回填是否生效"——若不把标记剔除，标记会把度量稀释掉，
+#: 变异自证就抓不到"去掉回填"（实测：加上标记后 M23 由 PASS 转 FAIL）。
+#: ⇒ 度量原文的地方一律 `content.split(HIST_CUT_MARK)[0]`。
+HIST_CUT_MARK = "…（系统注："
+
+
+def clip_hist_msg(content: str, max_chars: int) -> str:
+    """历史消息超长时的**显式**裁剪（2026-10-22，米爸反馈「输出会被截断」）。
+
+    真因不是 LLM 截断，是**我们自己静默硬切**（原实现 `content[:msg_max]`，msg_max=1500）：
+      会话 9587 消息 4776 在库里 21628 字、章节 1.1~5 全在、结尾是完整代码块，
+      `finish_reason` 近 3 天 length = 0 条；但装配历史时被切到 1500 字，
+      **切点正好落在「1.2 需求条目化分析」的 `- 【m` 半个词上**。
+      ⇒ 第 2 轮用户只发「继续」，模型看到一份"在需求阶段中途断掉"的报告，
+        于是如实汇报「上一轮汇总报告在「需求阶段」处被截断，本轮从断点继续」，
+        并把 1.2 之后**重写了一遍**（消息 4778），既费钱又让用户以为系统会截断输出。
+
+    这与本仓既有铁律同族（「降级本身不是 bug，静默降级才是 bug」），也与
+    `build_attachment_outline` 的既有处置同构：附件注入超预算时会给**章节提纲**
+    + 明说"提纲已截断"，而不是让模型以为文档到那儿就结束了。
+
+    处置：
+      ① 保留头部 `max_chars` 字（预留标记位，保证标记**不会被后续 token 预算再裁掉**）；
+      ② 追加**明确标记**：原文共 N 字、这是系统省略、原文并未被截断、请勿重复补写；
+      ③ 追加**未显示部分的章节提纲**（≤300 字）：模型据此知道后续还有哪些章节，
+         既不会把"没显示"当"缺失"，也不会重复生产已有章节。
+    """
+    t = content or ""
+    try:
+        cap = int(max_chars)
+    except Exception:
+        cap = 1500
+    if cap <= 0 or len(t) <= cap:
+        return t
+    total = len(t)
+    # ① 先按"未显示部分"抽章节提纲（只用省掉的那段，避免把已显示章节又列一遍）
+    tail_from = max(0, cap - 200)          # 略往前取，容忍切点落在标题行中间
+    heads = re.findall(r"^#{1,4}\s+\S.*$", t[tail_from:], re.M)
+    outline = ""
+    if heads:
+        names = []
+        for h in heads:
+            name = h.lstrip("#").strip()
+            if name and name not in names:
+                names.append(name)
+            if len(names) >= 12:
+                break
+        if names:
+            outline = "\n【原文后续章节（已有内容，不是缺失）】" + " / ".join(names)
+
+    # ② 标记写成定长短语，便于预留预算
+    note = (f"\n\n{HIST_CUT_MARK}本条历史因上下文预算仅展示前 {cap} 字，**原文共 {total} 字且是完整的**，"
+            f"并非被截断。请勿把未展示部分当成缺失内容去重写或补写；"
+            f"若用户要求延续，请先确认要延续的具体章节。）")
+    if len(outline) > 420:
+        outline = outline[:420] + " …"
+
+    head_len = max(120, cap - len(note))
+    return t[:head_len] + note + outline
+
+
 class HistoryMixin:
     """附件加载、历史检索、话题标注与上下文预算。"""
 
@@ -845,7 +909,10 @@ class HistoryMixin:
             return []
         if not rows:
             return _digest
-        msgs = [{"id": r["id"], "role": r["role"], "content": (r["content"] or "")[:msg_max],
+        # ★ 2026-10-22：原 `(r["content"] or "")[:msg_max]` 是**静默硬切** ——
+        #   切点落在标题/词中间时，模型会以为上一轮输出就到那儿结束了，
+        #   于是「继续」被它演成"从断点补写"，把后半篇重写一遍。改用显式裁剪。
+        msgs = [{"id": r["id"], "role": r["role"], "content": clip_hist_msg(r["content"], msg_max),
                  "topic": topics.get(r["id"], "")} for r in rows]
         if not any(m["topic"] for m in msgs):  # 打标失败 → 回退旧三层窗口
             return _digest + self._load_history_legacy(conversation_id, limit)
@@ -898,6 +965,14 @@ class HistoryMixin:
         raw_cap = int(budget_tok * 0.5)
         pull_cap = int(budget_tok * 0.75)
 
+        def _mark_budget_cut(text, full_len):
+            """token 预算裁剪后补标记 —— 同一病灶的第二道：这一层**也在静默切**。
+            实测：msg_max=1500 先切一刀，`_clip(share)` 可能再切到几百字，
+            若不带标记，模型同样会把"被预算切掉"当成"上一轮输出就到这儿结束"。"""
+            if not text or len(text) >= full_len:
+                return text
+            return text + f"\n{HIST_CUT_MARK}此处因上下文预算省略原文 {full_len - len(text)} 字，原文完整、并非截断）"
+
         def _clip(text, cap_tokens):
             """按 token 上限裁剪文本（字符比例逼近，中英混排近似）。"""
             if not text or _ct(text) <= cap_tokens:
@@ -906,9 +981,9 @@ class HistoryMixin:
             cut = text[:int(max(cap_tokens, 16) * ratio)]
             for _ in range(2):
                 if _ct(cut) <= cap_tokens:
-                    return cut
+                    return _mark_budget_cut(cut, len(text))
                 cut = cut[:int(len(cut) * cap_tokens / max(_ct(cut), 1))]
-            return cut
+            return _mark_budget_cut(cut, len(text))
 
         def push_raw(m, share):
             nonlocal used
@@ -1323,7 +1398,8 @@ class HistoryMixin:
             return []
         msgs = []
         for r in rows:
-            c = (r["content"] or "")[:msg_max]
+            # ★ 2026-10-22：同 _load_history —— 显式裁剪，不做静默硬切（理由见 clip_hist_msg）
+            c = clip_hist_msg(r["content"], msg_max)
             msgs.append({"id": r["id"], "role": r["role"], "content": c})
         immediate = msgs[-(limit * 2):] if limit else msgs
         older = msgs[:-(limit * 2)] if (limit and len(msgs) > limit * 2) else []

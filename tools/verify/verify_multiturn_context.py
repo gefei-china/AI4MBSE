@@ -956,11 +956,29 @@ finally:
     CFG.get = _orig_cap
 _h16_low = _h_run(16, cfg_over={"budget_history_tokens": _LOW_HIST_TOKENS})
 _raw16_low = _raws(_h16_low)
+# 「回填是否生效」的判据容差（2026-10-22）：
+#   `_clip` 按 char/token 比例估算裁剪，落点会有 1~2 token 的舍入超出 ⇒
+#   拿「> 均分份额」做严格比较时，"没回填"也可能因这 1 token 被判成"回填了"，
+#   于是 M23 变异自证抓不到（实测：126 vs 125）。判据语义是"**明显**多于均分"，
+#   故改为 `> share + 20`（真回填实测 629 vs 125，余量充足；未回填 126 vs 145 判否）。
+_SHARE_TOL = 20
+
+def _strip_hist_mark(t):
+    """度量**原文** token 时剔除系统裁剪标记（2026-10-22）。
+
+    `clip_hist_msg` / `_mark_budget_cut` 会在被裁的历史消息尾部追加
+    「…（系统注：…省略 N 字…）」—— 这是**说明性文本，不是原文**。
+    若不剔除，E11/M23 的「最新一条原文 token > 均分份额」判据会被这几十个 token
+    稀释 ⇒ 去掉回填的变异体也能"达标" ⇒ 变异自证失效（实测：加标记后 M23 由 PASS 转 FAIL）。
+    """
+    return (t or "").split(getattr(H, "HIST_CUT_MARK", "\u2026\uff08\u7cfb\u7edf\u6ce8\uff1a"))[0]
+
+
 _share16 = max(96, _raw_cap18 // max(len(_raw16_low), 1))
 _newest16 = [m for m in _raw16_low if m.get("id") == _tail16[-1]]
-_ntok16 = count_tokens_fn(_newest16[0]["content"]) if _newest16 else 0
-check("E11 超预算会话：余量回填生效（最新一条原文 > 均分份额 %d tok）" % _share16,
-      bool(_newest16) and _ntok16 > _share16,
+_ntok16 = count_tokens_fn(_strip_hist_mark(_newest16[0]["content"])) if _newest16 else 0
+check("E11 超预算会话：余量回填生效（最新一条原文 > 均分份额 %d tok）" % (_share16 + _SHARE_TOL),
+      bool(_newest16) and _ntok16 > _share16 + _SHARE_TOL,
       "最新一条 %d tok（均分上限 %d）；raw_cap=%d" % (_ntok16, _share16, _raw_cap18))
 
 
@@ -1081,12 +1099,12 @@ try:
     _n23 = [m for m in _raws(f23(_epipe, 16, cur_input=P18_CUR)) if m.get("id") == _tail16[-1]]
 finally:
     CFG.get = _orig23
-_n23tok = count_tokens_fn(_n23[0]["content"]) if _n23 else 0
+_n23tok = count_tokens_fn(_strip_hist_mark(_n23[0]["content"])) if _n23 else 0
 check("M23 去掉回填 → E10 目标断言失败（短会话长回复被白切，被抓住）",
       (bool(_a23) and _a23[0]["content"] == _SHORT18) is False,
       "len=%s / 原文 %d" % (len(_a23[0]["content"]) if _a23 else None, len(_SHORT18)))
 check("M23 去掉回填 → E11 目标断言失败（最新一条卡在均分份额，被抓住）",
-      (_n23tok > _share16) is False, "最新一条 %d tok（均分上限 %d）" % (_n23tok, _share16))
+      (_n23tok > _share16 + _SHARE_TOL) is False, "最新一条 %d tok（均分上限 %d）" % (_n23tok, _share16))
 
 H.get_db = _orig_h_get_db
 

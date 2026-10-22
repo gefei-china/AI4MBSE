@@ -793,7 +793,14 @@ class ExecuteMixin:
                 #   纯问答轮没有「剩余步骤」可言，还省评估器成本）；③ clarify 未触发——
                 #   澄清优先，等用户回答，绝不自动续；④ 续跑次数未满。评估器绝不抛异常，
                 #   判据解析失败 ⇒ verdict=None ⇒ decide 返不续跑（fail-safe 向停）。
-                if (_ac_cfg["enabled"] and not dry_run and _ac_tool_n > 0
+                # ★ 2026-10-22（米爸反馈3）：与 stream.py 同步 —— 「继续/接着」这类续跑意图轮
+                #   即使没调工具也评估一次（否则续跑机制在这些轮次上从未启动过）。
+                _cont_input = False
+                try:
+                    _cont_input = bool(self._is_continuation_input(user_input))
+                except Exception:
+                    _cont_input = False
+                if (_ac_cfg["enabled"] and not dry_run and (_ac_tool_n > 0 or _cont_input)
                         and not _clarify_req and _auto_continues < _ac_cfg["max"]):
                     # 本轮产出并进全量（收口/落库用全量；评估器只看本轮+工具史）
                     if llm_content:

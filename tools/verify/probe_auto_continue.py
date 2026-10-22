@@ -176,10 +176,13 @@ _e = _read("agent/pipeline_parts/execute.py")
 _m = _read("agent/pipeline_parts/common.py")
 _f = _read("static/js/mods/11-pipeline.js")
 
-chk("C1 stream：外层 while + 评估门 + continue/break + 全量并回 + done 计数",
+chk("C1 stream：外层 while + 评估门（含续跑意图例外）+ continue/break + 全量并回 + done 计数",
     all(k in _s for k in (
         "while True:",
-        'not dry_run and exec_tools',
+        # 2026-10-22：闸② 由「仅工具轮」放宽为「工具轮 or 续跑意图轮」
+        #   （米爸反馈3：纯「继续」轮此前整条跳过评估 ⇒ 续跑机制从未启动，实测会话 9587）
+        'not dry_run and (exec_tools or _cont_input)',
+        'self._is_continuation_input(user_input)',
         "continue   # ← 外层循环顶",
         "break               # ← 外层循环出口",
         '"auto_continues": _auto_continues,',
@@ -192,7 +195,9 @@ chk("C2 stream：autopilot 系统提示走 progress 事件 + kind 兼容层（#1
 chk("C3 execute：外层 while + 评估门（工具计数/clarify 优先）+ clarify 跳过收尾 + 返回计数",
     all(k in _e for k in (
         "while True:",
-        "not dry_run and _ac_tool_n > 0",
+        # 同 C1：续跑意图轮也评估（与 stream.py 同构）
+        "not dry_run and (_ac_tool_n > 0 or _cont_input)",
+        "self._is_continuation_input(user_input)",
         "not _clarify_req and _auto_continues < _ac_cfg",
         "if not _clarify_req and _lproto.should_finalize(",
         '"auto_continues": _auto_continues,',
@@ -244,11 +249,12 @@ finally:
 _s_path = ROOT / "agent" / "pipeline_parts" / "stream.py"
 _S_ORIG = _s_path.read_text(encoding="utf-8")
 try:
-    _GATE = 'if (_ac_cfg["enabled"] and not dry_run and exec_tools'
+    _GATE = 'if (_ac_cfg["enabled"] and not dry_run and (exec_tools or _cont_input)'
     assert _GATE in _S_ORIG
     _s_path.write_text(_S_ORIG.replace(_GATE, "if (False", 1), encoding="utf-8")
     _s2 = _s_path.read_text(encoding="utf-8")
-    chk("D-M2 stream 评估门删除 ⇒ C1 接线判据红", 'not dry_run and exec_tools' not in _s2)
+    chk("D-M2 stream 评估门删除 ⇒ C1 接线判据红",
+        'not dry_run and (exec_tools or _cont_input)' not in _s2)
 finally:
     _s_path.write_text(_S_ORIG, encoding="utf-8")
 
