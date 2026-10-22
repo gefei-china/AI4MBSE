@@ -1,6 +1,6 @@
 {
  "kind": "trace_consistency",
- "generated_at": "2026-10-22T21:43:03",
+ "generated_at": "2026-10-22T23:17:24",
  "db": "mbse.db",
  "trace_file": "tmp/p21/trace_evalset.json",
  "trace_built_at": "2026-10-22 12:00:27",

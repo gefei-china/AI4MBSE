@@ -1,30 +1,30 @@
 {
  "kind": "generation_quality",
- "generated_at": "2026-10-22T15:32:37",
+ "generated_at": "2026-10-22T23:17:20",
  "db": "mbse.db",
  "db_fingerprint": {
-  "messages_text_n": 193,
+  "messages_text_n": 196,
   "id_range": [
    2649,
-   4776
+   4782
   ]
  },
  "population": {
-  "assistant_text_total": 193,
-  "sampled": 193,
+  "assistant_text_total": 196,
+  "sampled": 196,
   "mock_excluded": 23,
   "attachment_conv_excluded": 19,
   "card_types_excluded": 0,
   "unparsable_card_data": 0
  },
  "summary": {
-  "n_answers": 151,
+  "n_answers": 154,
   "n_with_citations": 32,
-  "n_without_citations": 119,
+  "n_without_citations": 122,
   "citation_valid_rate": 1.0,
   "citation_usage_rate": 0.34375,
   "grounded_entity_rate": 0.0,
-  "no_citation_factual_rate": 0.16806722689075632,
+  "no_citation_factual_rate": 0.1721311475409836,
   "total_markers": 45,
   "valid_markers": 45,
   "answers_using_citations": 11,
@@ -94,6 +94,97 @@
     "expect": 0.0,
     "got": 0.0,
     "ok": true
+   },
+   {
+    "case": "F6a",
+    "metric": "parse.ok",
+    "expect": true,
+    "got": true,
+    "ok": true
+   },
+   {
+    "case": "F6b",
+    "metric": "parse.faithful",
+    "expect": true,
+    "got": true,
+    "ok": true
+   },
+   {
+    "case": "F6c",
+    "metric": "parse.string_bool",
+    "expect": false,
+    "got": false,
+    "ok": true
+   },
+   {
+    "case": "F6d",
+    "metric": "parse.malformed_is_third_state",
+    "expect": false,
+    "got": false,
+    "ok": true
+   },
+   {
+    "case": "F6e",
+    "metric": "parse.bad_bool_is_third_state",
+    "expect": false,
+    "got": false,
+    "ok": true
+   },
+   {
+    "case": "F7a",
+    "metric": "faithful_rate",
+    "expect": 0.5,
+    "got": 0.5,
+    "ok": true
+   },
+   {
+    "case": "F7b",
+    "metric": "three_state_counts",
+    "expect": "1/1/1",
+    "got": "1/1/1",
+    "ok": true
+   },
+   {
+    "case": "F7c",
+    "metric": "failed_not_in_rate",
+    "expect": 2,
+    "got": 2,
+    "ok": true
+   },
+   {
+    "case": "F7d",
+    "metric": "unfaithful_examples",
+    "expect": 1,
+    "got": 1,
+    "ok": true
+   },
+   {
+    "case": "F8a",
+    "metric": "control.ok",
+    "expect": true,
+    "got": true,
+    "ok": true
+   },
+   {
+    "case": "F8b",
+    "metric": "control_contaminated_detected",
+    "expect": false,
+    "got": false,
+    "ok": true
+   },
+   {
+    "case": "F9a",
+    "metric": "call_failed_counted",
+    "expect": 3,
+    "got": 3,
+    "ok": true
+   },
+   {
+    "case": "F9b",
+    "metric": "all_failed_control_skipped",
+    "expect": false,
+    "got": false,
+    "ok": true
    }
   ]
  },
@@ -109,6 +200,71 @@
    "kind": "with_citations"
   },
   {
+   "message_id": 4782,
+   "entity": "10 ms",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "CON-01",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "CON-02",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "CON-03",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "CON-04",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "FUN-01",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "FUN-02",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "FUN-03",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "FUN-04",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "PER-01",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "PER-02",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "PER-03",
+   "kind": "no_citations"
+  },
+  {
+   "message_id": 4782,
+   "entity": "PER-04",
+   "kind": "no_citations"
+  },
+  {
    "message_id": 4774,
    "entity": "IR-1",
    "kind": "no_citations"
@@ -131,71 +287,6 @@
   {
    "message_id": 4772,
    "entity": "IR-1",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4772,
-   "entity": "IR-2",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4772,
-   "entity": "IR-3",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4772,
-   "entity": "IR-4",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4697,
-   "entity": "RPT-2026",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4680,
-   "entity": "IR-1",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4680,
-   "entity": "IR-2",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4680,
-   "entity": "IR-3",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4680,
-   "entity": "IR-4",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4653,
-   "entity": "UTF-8",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4628,
-   "entity": "UTF-8",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4605,
-   "entity": "UTF-8",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4601,
-   "entity": "UTF-8",
-   "kind": "no_citations"
-  },
-  {
-   "message_id": 4588,
-   "entity": "UTF-8",
    "kind": "no_citations"
   }
  ],
@@ -298,6 +389,28 @@
    "n_grounded": 0,
    "ungrounded": [],
    "n_markers": 6
+  },
+  {
+   "id": 4782,
+   "kind": "no_citations",
+   "n_entities": 13,
+   "n_grounded": 0,
+   "ungrounded": [
+    "10 ms",
+    "CON-01",
+    "CON-02",
+    "CON-03",
+    "CON-04",
+    "FUN-01",
+    "FUN-02",
+    "FUN-03",
+    "FUN-04",
+    "PER-01",
+    "PER-02",
+    "PER-03",
+    "PER-04"
+   ],
+   "n_markers": 0
   },
   {
    "id": 4774,
@@ -522,5 +635,220 @@
    ],
    "n_markers": 0
   }
- ]
+ ],
+ "llm_judge": {
+  "enabled": true,
+  "model": "deepseek-v4-flash",
+  "n_pool": 32,
+  "n_sampled": 15,
+  "n_judged": 15,
+  "n_faithful": 10,
+  "n_unfaithful": 5,
+  "n_failed": 0,
+  "faithful_rate": 0.6667,
+  "control": {
+   "ran": true,
+   "pos_ok": true,
+   "neg_ok": true,
+   "ok": true,
+   "note": "",
+   "pos_detail": {
+    "verdict": "faithful",
+    "reason": "答案内容与证据块[1]的代码完全一致，无虚构事实。"
+   },
+   "neg_detail": {
+    "verdict": "unfaithful",
+    "reason": "SysML 代码块与证据[1]一致，但“ZQ-0000 的指标为 000Gbps”这一具体实体与数值在证据中不存在，属于无支撑事实声称。"
+   }
+  },
+  "unfaithful_examples": [
+   {
+    "id": 4767,
+    "unsupported": [
+     "根因是把类型定义与实例用法混写了。`part def` 声明的是类型，类型不能再指定自己的类型",
+     "这一处是总根因：该 `part def` 解析失败后，其内部的 `attribute`、`exhibit state` 全部失去宿主，状态机里的状态与迁移随之解析不到，于是产生后面成片的语义错。修好这一行，语义错会大幅收敛",
+     "根因 1：包路径多了一层不存在的命名空间（约 20 条）。",
+     "代码里顶层包名就是 `'整车动力管理功能分析'`，其下并没有同名子包；实际子包是 `'整车动力管理功能分析_活动'`、`'整车动力管理功能分析_结构'`、`'整车动力管理_状态机'`",
+     "根因 2：`perform` 与 `exhibit` 的目标指向了用法而非定义（约 40 条）。",
+     "`expose` 要求目标是已声明的具名元素，内联的匿名状态机没有独立可引用的名字，因此解析失败",
+     "状态机里有一条重复迁移。`'初始转换'` 与 `'关机状态-启动中'` 的源、目标完全相同，都是关机状态到启动中",
+     "所有迁移都没有触发事件与守护条件。十四条迁移目前是纯时序跳转",
+     "对象流方向与属性声明不匹配。`succession flow '对象流22' from '检测点火信号'.'点火状态' to '检查电池状态'.'电池状态'` 这类语句，源端 `'点火状态'` 在动作里声明为普通 `attribute` 而非 `out` 端口，目标端 `'电池状态'` 也不是 `in` 端口"
+    ],
+    "reason": "证据仅为通用 SysML 语法示例，未覆盖答案中具体项目代码、包路径、重复迁移、迁移触发条件与对象流属性等结论；词法/语法/语义计数、诊断和行号属工具执行结果，确认单属会话上下文，均不据此计为无支撑。"
+   },
+   {
+    "id": 4762,
+    "unsupported": [
+     "真正需要你动手的只有 2 类根因，其余 60 多条都是它们的级联产物",
+     "part def 声明的是类型，类型不能再用 `: 某类型` 去指定它的类型；要表达“这个部件是中央控制系统的一个实例”，应当用 `part` 用法",
+     "因为该 `part def` 解析失败，其内部声明的 `port`、`attribute`、`action`、`exhibit state` 全部失去宿主，状态机里的 `accept ... via '点火端口'`、`do '执行高压上电'`、`if '电池状态' == true` 等引用随之全部解析不到。修好这一行，语义错会大幅收敛",
+     "代码里实际声明的顶层包名是 `'整车动力管理功能分析_活动'`，并没有一个叫 `'整车动力管理功能分析'` 的外层包",
+     "`'检测点火信号'` 是活动流程里的一个 action usage，而 `perform` 的类型位要求填 action def",
+     "你已经有 `action def '功能步骤'` 这个基类，可以据此派生具体动作定义",
+     "源端 `'点火状态'` 在动作里声明为普通 `attribute`"
+    ],
+    "reason": "答案含工具执行结果（计数、行号、诊断）与会话上下文，但多处具体 SysML 语法规则、包结构与工程实体结论在证据块中无支撑，无法核实。"
+   },
+   {
+    "id": 4760,
+    "unsupported": [
+     "写法固定为 `perform action '别名' ::> '顶层动作';`"
+    ],
+    "reason": "大部分维度（关键字、元类、Reference Subsetting、被引用动作定义在别处）有证据 [1][2][3] 支撑，但“写法固定为 perform action '别名' ::> '顶层动作';”与证据 [3] 所示 `perform action0.action1;` 形式不符，属无支撑的绝对化表述。"
+   },
+   {
+    "id": 4757,
+    "unsupported": [
+     "`perform action '别名' ::> '被执行动作';`",
+     "其中 `::>` 是引用子集（Reference Subsetting）关系，把 perform action 用法与被执行的动作用法绑定起来",
+     "拥有者通常是某个 `part`（部件/系统元素），因此它是把行为挂到结构上的主要手段",
+     "例如在功能分解包中定义一次，然后在多个部件上下文中分别 perform，实现行为复用而不复制定义",
+     "它既参与动作流（可被控制流/信息流连接）",
+     "在活动视图中用 `part` 表示泳道归属方，泳道内的动作以 `perform action '别名' ::> '顶层动作';` 关联到顶层活动中已声明的同名动作。此时 `::>` 仅用于这种“泳道内动作 → 顶层已声明动作”的关联，不可当作 `redefines` / `:>>` 的替代写法使用。",
+     "把功能分解中定义的动作，分配到具体部件上执行，形成“结构执行行为”的分配关系。",
+     "同一动作定义被多个执行者 perform，避免行为定义重复。",
+     "把 `::>` 当 `redefines` 用 | `::>` 是引用子集，语义是“引用/绑定”，不是重定义；重定义应使用 `:>>`",
+     "在 perform action 上重复定义行为体 | perform action 是引用式的，行为应在被引用的动作用法上定义",
+     "泳道 `part` 用法与 `part def` 同名 | 会导致名字先解析到用法自身，类型引用失败；同一作用域内所有具名成员（含 `in`/`out` 端口）必须互不相同",
+     "用 perform action 代替普通 `action` 做流程节点 | 普通活动流中的动作节点仍用 `action`；`perform action` 专用于“由拥有者执行”的引用场景"
+    ],
+    "reason": "核心定义有证据支撑，但具体 `::>` 语法、泳道建模和误用等具体事实在证据中缺失，故不忠实。"
+   },
+   {
+    "id": 3985,
+    "unsupported": [
+     "「交互视图」在 SysML v2 中对应 IBD（InterconnectionView），而「ACT 活动图」对应 ActionFlowView"
+    ],
+    "reason": "代码主体（action 使用、succession/then 顺序关系、part def、doc 等）与证据[1][4][5]的 SysML v2 关键字说明一致，五阶段固定顺序来自任务描述（会话上下文）；但答案对「交互视图=IBD/InterconnectionView、ACT 活动图=ActionFlowView」这一术语对应关系的具体断言在证据块中不存在，属无支撑的具体事实。"
+   }
+  ],
+  "per_answer": [
+   {
+    "id": 4767,
+    "verdict": "unfaithful",
+    "unsupported": [
+     "根因是把类型定义与实例用法混写了。`part def` 声明的是类型，类型不能再指定自己的类型",
+     "这一处是总根因：该 `part def` 解析失败后，其内部的 `attribute`、`exhibit state` 全部失去宿主，状态机里的状态与迁移随之解析不到，于是产生后面成片的语义错。修好这一行，语义错会大幅收敛",
+     "根因 1：包路径多了一层不存在的命名空间（约 20 条）。",
+     "代码里顶层包名就是 `'整车动力管理功能分析'`，其下并没有同名子包；实际子包是 `'整车动力管理功能分析_活动'`、`'整车动力管理功能分析_结构'`、`'整车动力管理_状态机'`",
+     "根因 2：`perform` 与 `exhibit` 的目标指向了用法而非定义（约 40 条）。",
+     "`expose` 要求目标是已声明的具名元素，内联的匿名状态机没有独立可引用的名字，因此解析失败",
+     "状态机里有一条重复迁移。`'初始转换'` 与 `'关机状态-启动中'` 的源、目标完全相同，都是关机状态到启动中",
+     "所有迁移都没有触发事件与守护条件。十四条迁移目前是纯时序跳转",
+     "对象流方向与属性声明不匹配。`succession flow '对象流22' from '检测点火信号'.'点火状态' to '检查电池状态'.'电池状态'` 这类语句，源端 `'点火状态'` 在动作里声明为普通 `attribute` 而非 `out` 端口，目标端 `'电池状态'` 也不是 `in` 端口"
+    ],
+    "reason": "证据仅为通用 SysML 语法示例，未覆盖答案中具体项目代码、包路径、重复迁移、迁移触发条件与对象流属性等结论；词法/语法/语义计数、诊断和行号属工具执行结果，确认单属会话上下文，均不据此计为无支撑。"
+   },
+   {
+    "id": 4762,
+    "verdict": "unfaithful",
+    "unsupported": [
+     "真正需要你动手的只有 2 类根因，其余 60 多条都是它们的级联产物",
+     "part def 声明的是类型，类型不能再用 `: 某类型` 去指定它的类型；要表达“这个部件是中央控制系统的一个实例”，应当用 `part` 用法",
+     "因为该 `part def` 解析失败，其内部声明的 `port`、`attribute`、`action`、`exhibit state` 全部失去宿主，状态机里的 `accept ... via '点火端口'`、`do '执行高压上电'`、`if '电池状态' == true` 等引用随之全部解析不到。修好这一行，语义错会大幅收敛",
+     "代码里实际声明的顶层包名是 `'整车动力管理功能分析_活动'`，并没有一个叫 `'整车动力管理功能分析'` 的外层包",
+     "`'检测点火信号'` 是活动流程里的一个 action usage，而 `perform` 的类型位要求填 action def",
+     "你已经有 `action def '功能步骤'` 这个基类，可以据此派生具体动作定义",
+     "源端 `'点火状态'` 在动作里声明为普通 `attribute`"
+    ],
+    "reason": "答案含工具执行结果（计数、行号、诊断）与会话上下文，但多处具体 SysML 语法规则、包结构与工程实体结论在证据块中无支撑，无法核实。"
+   },
+   {
+    "id": 4760,
+    "verdict": "unfaithful",
+    "unsupported": [
+     "写法固定为 `perform action '别名' ::> '顶层动作';`"
+    ],
+    "reason": "大部分维度（关键字、元类、Reference Subsetting、被引用动作定义在别处）有证据 [1][2][3] 支撑，但“写法固定为 perform action '别名' ::> '顶层动作';”与证据 [3] 所示 `perform action0.action1;` 形式不符，属无支撑的绝对化表述。"
+   },
+   {
+    "id": 4757,
+    "verdict": "unfaithful",
+    "unsupported": [
+     "`perform action '别名' ::> '被执行动作';`",
+     "其中 `::>` 是引用子集（Reference Subsetting）关系，把 perform action 用法与被执行的动作用法绑定起来",
+     "拥有者通常是某个 `part`（部件/系统元素），因此它是把行为挂到结构上的主要手段",
+     "例如在功能分解包中定义一次，然后在多个部件上下文中分别 perform，实现行为复用而不复制定义",
+     "它既参与动作流（可被控制流/信息流连接）",
+     "在活动视图中用 `part` 表示泳道归属方，泳道内的动作以 `perform action '别名' ::> '顶层动作';` 关联到顶层活动中已声明的同名动作。此时 `::>` 仅用于这种“泳道内动作 → 顶层已声明动作”的关联，不可当作 `redefines` / `:>>` 的替代写法使用。",
+     "把功能分解中定义的动作，分配到具体部件上执行，形成“结构执行行为”的分配关系。",
+     "同一动作定义被多个执行者 perform，避免行为定义重复。",
+     "把 `::>` 当 `redefines` 用 | `::>` 是引用子集，语义是“引用/绑定”，不是重定义；重定义应使用 `:>>`",
+     "在 perform action 上重复定义行为体 | perform action 是引用式的，行为应在被引用的动作用法上定义",
+     "泳道 `part` 用法与 `part def` 同名 | 会导致名字先解析到用法自身，类型引用失败；同一作用域内所有具名成员（含 `in`/`out` 端口）必须互不相同",
+     "用 perform action 代替普通 `action` 做流程节点 | 普通活动流中的动作节点仍用 `action`；`perform action` 专用于“由拥有者执行”的引用场景"
+    ],
+    "reason": "核心定义有证据支撑，但具体 `::>` 语法、泳道建模和误用等具体事实在证据中缺失，故不忠实。"
+   },
+   {
+    "id": 4690,
+    "verdict": "faithful",
+    "unsupported": [],
+    "reason": "答案为助手能力边界、回答格式与使用建议的自述，属一般性/会话上下文表述（含称呼“米巴”），未提出需证据支撑的具体事实，与证据块无矛盾。"
+   },
+   {
+    "id": 4013,
+    "verdict": "faithful",
+    "unsupported": [],
+    "reason": "答案的语法结论（四种写法合法性、if守卫位置限制、else不能作兜底、§8.2.2.17.8/§8.2.2.18产生式）均与证据[1][2][3]一致，含工具实测结果属正常"
+   },
+   {
+    "id": 4011,
+    "verdict": "faithful",
+    "unsupported": [],
+    "reason": "答案中的四种写法、if 守卫位置、else 不可用作兜底、§8.2.2.17.8/§8.2.2.18 产生式引用均与证据块[1][2][3]一致，建模建议属一般性方法论，无需证据。"
+   },
+   {
+    "id": 3993,
+    "verdict": "faithful",
+    "unsupported": [],
+    "reason": "答案描述的是本会话状态与各轮校验结果（输入缺失、TBD、未产出），属会话上下文与工具执行结果，证据块不覆盖属正常，无与证据矛盾的具体事实声称。"
+   },
+   {
+    "id": 3991,
+    "verdict": "faithful",
+    "unsupported": [],
+    "reason": "答案主要是会话上下文说明与一般性建模方案，关键 SysML 元素有证据块支撑，未发现与证据矛盾或无支撑的具体事实性声称。"
+   },
+   {
+    "id": 3985,
+    "verdict": "unfaithful",
+    "unsupported": [
+     "「交互视图」在 SysML v2 中对应 IBD（InterconnectionView），而「ACT 活动图」对应 ActionFlowView"
+    ],
+    "reason": "代码主体（action 使用、succession/then 顺序关系、part def、doc 等）与证据[1][4][5]的 SysML v2 关键字说明一致，五阶段固定顺序来自任务描述（会话上下文）；但答案对「交互视图=IBD/InterconnectionView、ACT 活动图=ActionFlowView」这一术语对应关系的具体断言在证据块中不存在，属无支撑的具体事实。"
+   },
+   {
+    "id": 3949,
+    "verdict": "faithful",
+    "unsupported": [],
+    "reason": "答案均为会话上下文（用户称呼「米巴」、产品代号「智源」、本次会话内的记忆边界自述），有合法来源，证据块不覆盖属正常，无需证据支撑。"
+   },
+   {
+    "id": 3947,
+    "verdict": "faithful",
+    "unsupported": [],
+    "reason": "答案内容均为会话上下文（用户称呼「米巴」、偏好「智源」）与记忆边界自述及一般性任务邀请，证据块未覆盖属正常，无与证据矛盾的具体事实声称。"
+   },
+   {
+    "id": 3945,
+    "verdict": "faithful",
+    "unsupported": [],
+    "reason": "答案均为会话上下文性声称（用户称呼、偏好代号及记忆边界自述），有合法来源，证据块不覆盖属正常"
+   },
+   {
+    "id": 3941,
+    "verdict": "faithful",
+    "unsupported": [],
+    "reason": "答案仅为会话上下文性内容（用户称呼「米巴」、产品代号「智源」及记忆边界自述），有合法来源，证据块不覆盖属正常；未包含与证据矛盾的具体事实。"
+   },
+   {
+    "id": 3939,
+    "verdict": "faithful",
+    "unsupported": [],
+    "reason": "答案主体是会话上下文（用户称呼、偏好代号、记忆边界自述）与一般性记忆流程说明，无需证据支撑；「智源」平台名及能力属产品/会话上下文，证据块未覆盖属正常且无与之矛盾之处。"
+   }
+  ]
+ }
 }
