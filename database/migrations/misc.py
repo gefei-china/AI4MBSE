@@ -72,7 +72,9 @@ def _migrate_eval_tables(conn):
         gen_citation_valid_rate REAL,              -- 2026-10-22 断链③：生成质量主指标（NULL=未测，区别于 0 分）
         gen_citation_usage_rate REAL,
         gen_grounded_entity_rate REAL,
-        gen_no_citation_factual_rate REAL
+        gen_no_citation_factual_rate REAL,
+        trace_agreement_rate REAL,                -- 2026-10-22 断链②：Trace 裁决一致率（NULL=未测）
+        trace_repeat_mistake_rate REAL            -- 2026-10-22 断链②：Trace 重错率（无路由纠错类负样本时为 NULL）
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_eval_reports_doc ON eval_reports(doc_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_eval_reports_time ON eval_reports(created_at)")
@@ -133,6 +135,15 @@ def _migrate_kb_v2_enhance(conn):
     _add("eval_reports", "gen_citation_usage_rate", "REAL")
     _add("eval_reports", "gen_grounded_entity_rate", "REAL")
     _add("eval_reports", "gen_no_citation_factual_rate", "REAL")
+    # ── 2026-10-22（断链②）：Trace 一致性主指标列 ────────────────
+    # 背景：trace2dataset 产出的生产裁决样本（intent_confirmed/
+    #   intent_rejected）此前无消费方 —— 供料环通了、度量环没接。
+    #   trace_* 两列让"当前路由 ↔ 人工裁决"的一致率/重错率进同一张
+    #   表、同一套历史/趋势/看板（见 tools/eval/eval_trace_consistency.py）。
+    # ⚠ DEFAULT NULL 而非 0：重错率在"无路由纠错类负样本"时**没有分母**，
+    #   填 0 会被读成"一条旧错都没再犯"（那是假绿，与"没测到"是两件事）。
+    _add("eval_reports", "trace_agreement_rate", "REAL")
+    _add("eval_reports", "trace_repeat_mistake_rate", "REAL")
     # P2-1 整合：本体蓝图统一 Profile 导入（profile 草案透传溯源列）
     _add("ontology_drafts", "profile_source", "TEXT DEFAULT ''")
     _add("ontology_drafts", "profile_ref", "TEXT DEFAULT ''")

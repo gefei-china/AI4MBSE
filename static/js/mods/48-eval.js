@@ -19,11 +19,12 @@
  *      一律渲染成说明文字，不给点了没反应的按钮。
  */
 (function () {
-  const _KIND_ORDER = ['rag_retrieval', 'memory_quality', 'intent_routing', 'doc_extract', 'generation_quality', ''];
+  const _KIND_ORDER = ['rag_retrieval', 'memory_quality', 'intent_routing', 'trace_consistency', 'doc_extract', 'generation_quality', ''];
 
   function _kindLabel(k) {
     const m = { rag_retrieval: 'RAG 检索评测', memory_quality: '记忆质量评测',
-                intent_routing: '意图路由评测', doc_extract: '文档抽取评测',
+                intent_routing: '意图路由评测', trace_consistency: 'Trace 一致性评测',
+                doc_extract: '文档抽取评测',
                 generation_quality: '生成质量评测',
                 '': '历史记录（未标注类型）' };
     return m[k] || (k || '未标注类型');

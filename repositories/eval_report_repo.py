@@ -39,6 +39,7 @@ EVAL_KIND_LABELS = {
     "intent_routing": "意图路由评测",
     "doc_extract": "文档抽取评测",
     "generation_quality": "生成质量评测",
+    "trace_consistency": "Trace 一致性评测",
     "": "历史记录（未标注类型）",
 }
 
@@ -74,6 +75,15 @@ KIND_METRIC_COLUMNS = {
         # 进趋势线供观察，等 claim 密度上来再升级为门禁指标。
         ("gen_grounded_entity_rate", "实体接地率", "high", None),
     ],
+    # Trace 一致性（2026-10-22 断链②）：strong 样本 = 生产人工裁决，
+    # 指标 = 当前路由与裁决的一致率 / 旧错重犯率。n=42 实测 0.881。
+    "trace_consistency": [
+        ("trace_agreement_rate", "裁决一致率", "high", "trace_min_agreement"),
+        # 重错率**配阈值但常驻 SKIP**：当前生产 13 条驳回全是"非用户原话
+        # 不应入集"的池有效性裁决，路由纠错类 n=0 ⇒ 无分母。阈值留着，
+        # 等出现真负样本同一份代码自动生效（与 grounded 的条件升级同构）。
+        ("trace_repeat_mistake_rate", "重错率", "low", "trace_max_repeat_mistake"),
+    ],
 }
 
 #: 未设门禁阈值的指标给"参考线"（仅用于三色提示，不参与门禁判定）
@@ -96,6 +106,11 @@ _GEN_COLUMNS = (
     "gen_grounded_entity_rate", "gen_no_citation_factual_rate",
 )
 
+#: Trace 一致性指标列（2026-10-22 断链②；NULL=未测/无分母，语义同 gen_*）
+_TRACE_COLUMNS = (
+    "trace_agreement_rate", "trace_repeat_mistake_rate",
+)
+
 
 def _gate_thresholds():
     """从 core.config.eval_gates 读门禁阈值（唯一真源）。
@@ -112,7 +127,8 @@ def _gate_thresholds():
                   "intent_min_accuracy", "routing_threshold_acc",
                   "routing_threshold_f1", "generation_min_citation_valid",
                   "generation_min_citation_usage",
-                  "generation_max_no_citation_factual"):
+                  "generation_max_no_citation_factual",
+                  "trace_min_agreement", "trace_max_repeat_mistake"):
             v = _g("eval_gates", k, None)
             if v is not None:
                 out[k] = float(v)
@@ -217,6 +233,7 @@ def fetch_history(conn, eval_kind="", limit=20):
            "created_by", "model_version", "created_at"]
     sel += [c for c in _DOC_COLUMNS if c in cols]
     sel += [c for c in _GEN_COLUMNS if c in cols]
+    sel += [c for c in _TRACE_COLUMNS if c in cols]
     if "detail" in cols:
         sel.append("detail")
 
@@ -244,6 +261,9 @@ def fetch_history(conn, eval_kind="", limit=20):
             if c in cols:
                 item[c] = r[c]
         for c in _GEN_COLUMNS:
+            if c in cols:
+                item[c] = r[c]
+        for c in _TRACE_COLUMNS:
             if c in cols:
                 item[c] = r[c]
         # 逐指标三色状态（阈值来自 eval_gates 唯一真源）
