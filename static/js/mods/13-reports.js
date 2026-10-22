@@ -389,6 +389,18 @@ function finishStream(r, aiBox) {
   // ★ 2026-10-17（米爸反馈2）：收口替换（outerHTML 重渲染 + 卡片/报告附加块）之后
   //   布局仍会异步长高（mermaid/图片/代码高亮），再钉一次底，保证视口停在最新内容区。
   requestAnimationFrame(function(){ stickBottom(); });
+  // ★ 2026-10-22（米爸反馈「会话输出完成后总是定位在最上面」）：
+  //   `aiBox.outerHTML = renderMessage(aiMsg)` 是**整块替换**，而 `.msg` 带
+  //   `content-visibility:auto`（屏外按 132px 估算）⇒ 新节点先以估算高度占位，
+  //   真实高度随后冲高（实测同一会话估算 3680px / 真实 28170px）。
+  //   单次 rAF 追不上这种异步长高：实测钉底之后最后一条消息仍在视口下方 3190px
+  //   （视口仅 659px）= 用户看到的是「上面」，正是本条反馈的现场。
+  //   ⇒ 跟读态下开一个**短窗口**持续锚定（150ms 步进，内置 wheel/touchmove 让位，
+  //     用户一旦上滑立刻停止，不打扰阅读）。
+  try{
+    const _pa = document.getElementById('chat-area');
+    if(_pa && (typeof _stickFollow === 'undefined' || _stickFollow)) pinChatBottom(_pa, 3000);
+  }catch(e){}
 }
 // V2.6 需求质量参考：折叠明细切换
 function qrToggle(sumEl){

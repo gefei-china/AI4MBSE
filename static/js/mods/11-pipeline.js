@@ -704,10 +704,12 @@ function subtaskCardHtml(s){
   const _LIM = 'max-height:300px;overflow:auto;';
   // ── 结果块（默认展示，限高内滚）──
   const outRaw = s.output || s.liveOutput || '';
+  // ★ 2026-10-22：输出框加 class `proc-out-box` —— 滚动条样式在 chat.css 里定制
+  //   （默认 webkit 滚动条在高密度小字区太细，300px 高的框里 12k 字抓不住 ⇒ 用户观感「拖不动」）。
   const outHtml = outRaw ? `
     <div style="margin-top:4px;">
       <div style="font-size:10px;color:var(--mut);font-weight:600;margin-bottom:2px;">📤 执行结果（${String(outRaw).length} 字）</div>
-      <div style="padding:5px 7px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;${_LIM}font-size:10.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;color:var(--fg);">${esc(String(outRaw))}</div>
+      <div class="proc-out-box" style="padding:5px 7px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;${_LIM}font-size:10.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;color:var(--fg);">${esc(String(outRaw))}</div>
     </div>` : '';
   // ── 详情块（默认折叠，点开再看）──
   //   来源：协议摘要 summary（artifacts/claims/risks/missing/evidence/confidence）。
@@ -739,7 +741,22 @@ function subtaskCardHtml(s){
     </div>`;
     }
   }
-  return `<div class="proc-line" style="border:1px solid var(--line);border-radius:8px;padding:5px 8px;margin:3px 0;background:#fff;">
+  // ★ 2026-10-22（米爸反馈「阶段卡上方空白太多 / 输出内容看不完又拖不动滚动条」）——
+  //   根因（真实浏览器量取，勿凭印象改）：
+  //   ① `.proc-line` 在 app.css:402 / chat.css:196 是 **display:flex;align-items:center**
+  //      的**横向行容器**（原本给「质量评审：62/100」这类**单行**摘要用的）。
+  //      本函数返回的是**纵向多块**结构（状态行 / 摘要 / 执行结果 / 详情），
+  //      塞进行容器 ⇒ 三个子块**横向并排**（实测 left=477/667/1083），
+  //      执行结果块被挤到 **228px 宽**、详情块被挤到右侧 ⇒ 「上方空白」正是
+  //      align-items:center 把矮块（摘要 34px）与高块（结果 432px）**垂直居中**留下的。
+  //      ⇒ 这里**不能复用 .proc-line 的 flex 语义**，必须显式改回块级纵向流。
+  //   ② 模板字符串里的换行 + 缩进（"\n    "）在 `white-space:pre-wrap`（.proc-body 继承）
+  //      下会渲染成**可见空行** ⇒ 每个子块上方多出一段空白。
+  //      ⇒ 显式 `white-space:normal` 复位（与 .rc / .art-card / 引用卡同款处置）。
+  //   ③ 执行结果框 `max-height:300px;overflow:auto` 自身**能滚**（实测 scrollTop 可写），
+  //      但它被塞进 228px 宽的格子里 ⇒ 滚动条细到抓不住，用户观感是「拖不动」。
+  //      ⇒ 宽度恢复正常后即可正常拖动。
+  return `<div class="proc-subtask" style="border:1px solid var(--line);border-radius:8px;padding:5px 8px;margin:3px 0;background:#fff;display:block;white-space:normal;align-items:stretch;">
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${ok?'✓':part?'◐':run?'⟳':stopped?'⏹':skipSt?'⊘':'✗'}${badge}${s.agent?` <span class="tag" style="font-size:10px;">${esc(s.agent)}</span>`:''}${caps}${retry}${sumBadge}${s.latency_ms?` <span style="color:var(--mut);font-size:10.5px;">⏱ ${(s.latency_ms/1000).toFixed(1)}s</span>`:''}${tk}${run?' <span class="st w">执行中…</span>':''}${stopped?' <span class="st w">已终止</span>':''}${skipSt?' <span class="st g">主动放弃</span>':''}</div>
     ${sum}${outHtml}${detailHtml}${s.error?`<div style="color:var(--red);font-size:10.5px;margin-top:2px;">${esc(s.error)}</div>`:''}${failNote}</div>`;
 }

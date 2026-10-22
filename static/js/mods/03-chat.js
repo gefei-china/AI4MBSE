@@ -483,9 +483,52 @@ function _stickBtnShow(){
 function _chatAreaEl(){
   return document.getElementById('chat-area');
 }
+// ★ 2026-10-22（米爸反馈「打开会话/输出完成后总定位在最上面，要拖很久」）——
+//   **锚定式贴底**：以「最后一条 .msg 的真实底边」为基准，而不是 `scrollHeight`。
+//   根因（真实浏览器实测，勿凭印象改）：
+//     `.msg` 带 `content-visibility:auto; contain-intrinsic-size:auto 132px`（P0 性能优化，
+//     防长会话上万 DOM 节点同步布局）。副作用是**屏外消息只按 132px 估算**，于是
+//     `scrollHeight` 严重失真 —— 实测同一会话：估算 3680px / 真实 28170px（**差 6.6 倍**）。
+//     ⇒ `scrollTop = scrollHeight` 这种「钉底」钉到的是**估算出来的假底部**：
+//       实测钉完之后最后一条消息仍在视口下方 3190px（视口仅 659px）= 用户完全看不见最新内容，
+//       体感就是「停在了最上面 / 中间，得手动拖很久」。
+//     ⇒ 锚定法实测 1 轮迭代即收敛（最后一条消息底边精确贴齐视口底）。
+//   ⚠️ 保留「先粗跳到 scrollHeight」这一步：它会把底部内容**逼进视口**触发真实布局，
+//      再由锚定做微校正；纯锚定在极端情况下（最后一条尚未实现、rect 高 0）会无从下手。
+function _latestChatMsg(area){
+  try{
+    const msgs = area && area.querySelectorAll ? area.querySelectorAll('.msg') : null;
+    return (msgs && msgs.length) ? msgs[msgs.length - 1] : null;
+  }catch(e){ return null; }
+}
+// 返回 true=本次做了校正（还需再迭代一轮）；false=已贴底或无法锚定
+function _anchorChatToLatest(area){
+  const last = _latestChatMsg(area);
+  if(!last || !last.getBoundingClientRect || !area.getBoundingClientRect) return false;
+  const r = last.getBoundingClientRect();
+  if(!(r.height > 0)) return false;              // 未实现（屏外被 content-visibility 跳过）→ 交给粗跳
+  const box = area.getBoundingClientRect();
+  const d = r.bottom - box.bottom;               // >0 底边在视口下方（看不见最新）／<0 已过底
+  if(Math.abs(d) <= 0.5) return false;
+  area.scrollTop += d;
+  return true;
+}
 function _isNearBottom(area){
   if(!area) return true;
-  return (area.scrollHeight - area.scrollTop - area.clientHeight) <= _STICK_EPS;
+  if((area.scrollHeight - area.scrollTop - area.clientHeight) <= _STICK_EPS) return true;
+  // scrollHeight 是估算值时的补判据：最后一条消息本身已在视口底附近 ⇒ 视为在底部。
+  // （否则内容每长高一帧，距底就变大一次 ⇒ 被 scroll 监听误判成"用户上滑"⇒ 中途脱离跟读。）
+  try{
+    const last = _latestChatMsg(area);
+    if(last && last.getBoundingClientRect && area.getBoundingClientRect){
+      const r = last.getBoundingClientRect();
+      if(r.height > 0){
+        const box = area.getBoundingClientRect();
+        return (r.bottom - box.bottom) >= -_STICK_EPS;
+      }
+    }
+  }catch(e){}
+  return false;
 }
 // 用户交互 → 脱离跟读。一次绑定，常驻监听（只读判断，成本可忽略）。
 function _bindStickDetach(){
@@ -518,6 +561,7 @@ function stickBottom(force){
     const a = _chatAreaEl();
     if(!a || !_stickFollow) return;
     a.scrollTop = a.scrollHeight;
+    _anchorChatToLatest(a);      // 2026-10-22：估算高度失真 ⇒ 粗跳之后再按真实元素校正一次
   });
 }
 // 强制滚动（用户显式动作：发送消息、切换会话、点"回到最新"）——绕过跟读态判断
@@ -529,9 +573,11 @@ function scrollChatToBottom(){
   _stickUnread = 0;      // UX规范§8.4：显式回底 = 已读到最新，清零并隐藏浮钮
   _stickBtnShow();
   area.scrollTop = area.scrollHeight;
+  _anchorChatToLatest(area);
 }
 // 2026-09-16：打开会话后持续钉底——懒加载内容（mermaid 库首载/图片/缩略图挂载）会在
 // 数秒内持续长高，固定时间补偿追不上。策略：150ms 步进钉底至超时；用户滚轮/触摸上滑立即让位。
+// 2026-10-22：每步在粗跳之后补一次锚定校正（同 stickBottom 的理由：估算高度失真）。
 function pinChatBottom(area, ms){
   let userInterrupted = false;
   const stop = ()=>{ userInterrupted = true; };
@@ -541,6 +587,7 @@ function pinChatBottom(area, ms){
   (function tick(){
     if(userInterrupted || Date.now() - start > (ms||8000)) return;
     area.scrollTop = area.scrollHeight;
+    _anchorChatToLatest(area);
     setTimeout(tick, 150);
   })();
 }
