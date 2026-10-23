@@ -312,8 +312,10 @@ def plan(conn, cats, purge_audit: bool):
                                    f"WHERE created_by IN ({','.join('?' * len(FAKE_NAMES))})",
                                    FAKE_NAMES, n))
         # 孤儿 artifacts：会话早已被删，产物还挂着（既有残留，非本次清理造成）
-        # ⚠️ **不删行** —— 抽查发现其中含真实业务产物（如 2026-10-17 的建模澄清文档），
-        #    删掉等于销毁真实内容。只修 created_by 归属标注（上面已覆盖）。
+        # ★ 2026-10-23 米爸拍板：**方案 B，删除**（此前默认保留只改归属标注）。
+        #   抽查确认其中含 2026-10-17 的建模澄清文档等真实内容，但会话主体已不存在，
+        #   产物无法从会话上下文打开，属"孤儿数据"；用户明确选择删除。
+        #   执行前脚本会自动整库备份，内容可从备份恢复。
         try:
             n_orphan = conn.execute(
                 "SELECT COUNT(*) FROM artifacts WHERE conversation_id IS NOT NULL "
@@ -321,7 +323,9 @@ def plan(conn, cats, purge_audit: bool):
         except sqlite3.Error:
             n_orphan = 0
         if n_orphan:
-            print(f"ℹ️  另有孤儿 artifacts {n_orphan} 条（会话已不存在）—— 保留内容，仅中性化归属标注")
+            plan_items.append(("E", f"孤儿 artifacts {n_orphan} 条（会话已不存在，米爸拍板删）→ 删除",
+                               "DELETE FROM artifacts WHERE conversation_id IS NOT NULL "
+                               "AND conversation_id NOT IN (SELECT id FROM conversations)", (), n_orphan))
 
     return plan_items
 
