@@ -75,6 +75,14 @@ function toggleProc(headEl){
   const blk = headEl.closest('.proc-block');
   if(!blk) return;
   blk.classList.toggle('collapsed');
+  // 2026-10-23：记住用户的手动折叠意图 —— procUpsert 不再对 run 态强制展开
+  //（否则流式期间用户收起一个吵闹环节，下一条 delta 又把它弹开）。
+  const pid = blk.getAttribute('data-pid');
+  const it = pid && _procS.timeline.find(x=>x.id===pid);
+  if(it){
+    it._userCollapsed = blk.classList.contains('collapsed');
+    if(!it._userCollapsed) it._userExpanded = true;   // 手动展开过的完成后也不自动收
+  }
   // P0-1 展开时补渲染 DAG（收起时容器隐藏不可布局；展开后重建并 fit）
   if(!blk.classList.contains('collapsed')){
     const viz = blk.querySelector('.dag-viz');
@@ -97,9 +105,18 @@ function procUpsert(id, patch){
   let s = _procS.timeline.find(x=>x.id===id);
   if(!s){ s = Object.assign({id, type:'', icon:'•', title:'', sub:'', status:'run', statusText:'执行中…', detail:'', collapsed:false}, patch); _procS.timeline.push(s); }
   else { Object.assign(s, patch); }
-  // P0-1：进行中步骤保持展开；完成/失败自动收起（编排 DAG 块新任务启动时重新展开）
-  if(s.status !== 'run') s.collapsed = true;
-  else s.collapsed = false;
+  // ★ 2026-10-23（米爸参照 WorkBuddy 输出形态）：环节卡片三件套补齐 ——
+  //   ① 完成/失败自动收起（既有）+ **头部摘要**：收起后 head 不能只有一行
+  //     泛化的"✓ 完成"——把 detail 首句提炼到 sub（WorkBuddy 式"总结文案"）；
+  //   ② **用户手动展开/收起被记住**：此前每次 delta 都强制 run=展开 ⇒ 用户在
+  //     流式过程中手动收起一个吵闹的环节，下一条 delta 又把它弹开。
+  //     toggleProc 现在记录 _userCollapsed / _userExpanded，这里不再无脑覆盖。
+  if(s.status !== 'run'){
+    if(!s._userCollapsed && !s._userExpanded) s.collapsed = true;
+    if(!s.sub && !s.subHtml && s.detail) s.sub = _procSumText(String(s.detail));
+  } else {
+    s.collapsed = !!s._userCollapsed;   // 用户收起的运行中环节不再被弹开
+  }
   procRender();
 }
 // V2.6 统一收口条：执行中显示 spinner+动态耗时；完成后「✓ 已完成 · N 环节 · 耗时」；点击展开/收起时间线
@@ -163,13 +180,21 @@ function procRender(){
       const parentId = s.parent ? ` data-parent="${esc(s.parent)}"` : '';
       const lvlCls = dp>0 ? ` proc-lv${Math.min(dp,2)}` : '';
       const guide = dp>0 ? `<span class="proc-guide" aria-hidden="true"></span>` : '';
-      h += `<div class="proc-block ${s.type}${run?' running':''}${s.collapsed?' collapsed':''}${lvlCls}" data-depth="${dp}"${parentId}>
+      h += `<div class="proc-block ${s.type}${run?' running':''}${s.collapsed?' collapsed':''}${lvlCls}" data-depth="${dp}"${parentId} data-pid="${esc(s.id)}">
         <div class="proc-head" onclick="toggleProc(this)" title="点击${s.collapsed?'展开':'收起'}详情">${guide}<span>${s.icon}</span><span class="proc-title">${esc(s.title)}${sub}${subHtml}</span>${elapsed}<span class="st ${statusCls}" style="margin-left:auto;">${spin}${esc(s.statusText)}</span><span class="chev">▾</span></div>
         ${s.detail?`<div class="proc-body">${s.detail}</div>`:''}
       </div>`;
     });
   }
   b.innerHTML = h;
+  // 2026-10-23（WorkBuddy 式"进行中环节收敛在卡片中"）：running 卡片的内滚区
+  //   自动跟随到底 —— proc-body 有 340px max-height（内容确实被收敛在卡片内），
+  //   但流式追加时视口停在顶部，用户看到的永远是旧内容。用户在卡片内上滑查看
+  //   上文时不强拽（与外层 stickBottom 同策略：判断是否已近底部）。
+  b.querySelectorAll('.proc-block.running .proc-body').forEach(body=>{
+    const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 48;
+    if(nearBottom) body.scrollTop = body.scrollHeight;
+  });
   // P0-1：编排 DAG 重建——数据更新（dagDirty）或展开态画布被时间线重绘清除（无 canvas）时重建
   if(!hideBody && _procS.dag && _procS.dag.order.length){
     const dagEl = document.getElementById('proc-dag-live');
