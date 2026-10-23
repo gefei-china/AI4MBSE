@@ -697,14 +697,18 @@ function closeModal() { _mmCreate = null; document.getElementById('modal').class
 function confirmDialog(msg, opts={}) {
   const lbx = document.getElementById('lbx');
   const b = document.getElementById('lbx-body');
+  // hideCancel（2026-10-23）：告警型单按钮（没有"取消"语义的提示）
+  const cancelBtn = opts.hideCancel ? ''
+    : '<button class="btn ghost" id="cd-cancel">取消</button>';
   b.innerHTML = `<h3>${opts.title||'操作确认'}</h3>
     <div style="font-size:13px;color:var(--txt);line-height:1.7;margin:4px 0 6px;max-height:200px;overflow:auto;white-space:pre-wrap;">${esc(msg)}</div>
-    <div class="lbx-actions"><button class="btn ghost" id="cd-cancel">取消</button><button class="btn red" id="cd-ok">${opts.okText||'确认'}</button></div>`;
+    <div class="lbx-actions">${cancelBtn}<button class="btn ${opts.danger?'red':''}" id="cd-ok">${opts.okText||'确认'}</button></div>`;
   lbx.classList.add('show');
   return new Promise(resolve => {
     const done = v => { lbx.classList.remove('show'); document.removeEventListener('keydown', _kd); resolve(v); };
     document.getElementById('cd-ok').onclick = () => done(true);
-    document.getElementById('cd-cancel').onclick = () => done(false);
+    const cbtn = document.getElementById('cd-cancel');
+    if (cbtn) cbtn.onclick = () => done(false);
     // G4 键盘可达：Enter 确认 / Esc 取消
     const _kd = e => {
       if(e.key === 'Enter') done(true);

@@ -82,7 +82,12 @@
   /* ══ 段 ⓪：人工操作（T1：立即跑批，走 jobs 队列）══
      为什么走 /api/jobs 而不是直接 POST"跑评测"：评测 15s~8 分钟，同步
      HTTP 必超时；jobs 自带进度/幂等（在途去重）/失败重试/权限校验。
-     手动 nightly 刻意不带 --commit：要不要把快照推上远端由人 review 后定。 */
+     手动 nightly 刻意不带 --commit：要不要把快照推上远端由人 review 后定。
+     ★2026-10-23（米爸反馈）：① 确认/输入一律走系统 #lbx 弹窗（原生
+       confirm/prompt 不是系统风格）；② 触发入口与进度展示**一体化**——
+       按钮下方就是作业卡片（进度条 + 阶段 + 终态），页面打开即显示
+       最近评测作业并在非终态时自动轮询；③ 提交带 job_key=kind：
+       空键不去重，实测手抖双击会排出两个 nightly（#17/#18 双跑）。 */
   const _EVAL_JOBS = [
     ['eval_trace', 'Trace 一致性', '~15s'],
     ['eval_gen', '生成质量+LLM 忠实度', '~80s'],
@@ -90,6 +95,7 @@
     ['build_evalset', '重建评测集', '~40s'],
     ['eval_nightly', 'nightly 全批', '4~8min'],
   ];
+  const _EVKIND_LABEL = Object.fromEntries(_EVAL_JOBS.map(j => [j[0], j[1]]));
   let _evmPollTimer = null;
 
   function _renderActions() {
@@ -98,75 +104,184 @@
         onclick="submitEvalJob('${kind}')">${esc(label)}
         <span style="color:var(--mut);font-size:9.5px;">${eta}</span></button>`).join(' ');
     return `<div class="panel" style="margin-bottom:14px;">
-      <div class="ph">⓪ 人工操作 <span class="tag">走作业队列，可关页续跑</span></div>
+      <div class="ph">⓪ 人工操作 <span class="tag">走作业队列 · 进度在此卡片实时刷新 · 可关页续跑</span></div>
       <div class="pb">
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">${btns}</div>
-        <div id="evm-job-status" style="font-size:11px;color:var(--mut);margin-top:8px;min-height:16px;"></div>
+        <div id="evm-job-card" style="margin-top:10px;">
+          <div class="loading" style="font-size:11px;color:var(--mut);">加载最近作业…</div>
+        </div>
       </div>
     </div>`;
   }
 
+  /* 作业卡片：把最近的评测作业渲染成进度条 + 阶段。数据来自
+     /api/jobs?limit=8（列表口径，不含 payload/result 全量——失败详情
+     终态后单查 /api/jobs/{id} 再补）。 */
+  function _jobChip(st) {
+    if (st === 'done') return '<span class="st ok">完成</span>';
+    if (st === 'failed') return '<span class="st r">失败</span>';
+    if (st === 'dead') return '<span class="st r">已终止</span>';
+    if (st === 'running') return '<span class="st w">运行中</span>';
+    return '<span class="st g">排队中</span>';
+  }
+
+  function _jobCardHTML(items) {
+    const ev = (items || []).filter(j => _EVKIND_LABEL[j.kind]);
+    if (!ev.length) {
+      return '<div style="font-size:11px;color:var(--mut);">暂无评测作业记录 —— 点上方按钮发起第一次跑批。</div>';
+    }
+    const rows = ev.slice(0, 3).map(j => {
+      const pct = Math.max(0, Math.min(100, Number(j.progress) || 0));
+      const bar = j.status === 'done'
+        ? '<div style="height:6px;background:var(--ok);border-radius:3px;width:100%;"></div>'
+        : j.status === 'failed' || j.status === 'dead'
+          ? '<div style="height:6px;background:var(--red);border-radius:3px;width:100%;"></div>'
+          : `<div style="height:6px;background:var(--line);border-radius:3px;overflow:hidden;">
+               <div style="height:100%;width:${pct}%;background:var(--acc, #3b82c4);transition:width .6s;"></div></div>`;
+      const stage = j.status === 'running' && j.stage
+        ? '<div style="font-size:10.5px;color:var(--mut);margin-top:3px;">' + esc(j.stage) + '</div>' : '';
+      const queued = j.status === 'queued'
+        ? '<div style="font-size:10.5px;color:var(--mut);margin-top:3px;">排队中（worker 串行，前序作业结束后开始）</div>' : '';
+      return `<div style="padding:7px 0;border-bottom:1px solid var(--line);">
+        <div style="display:flex;gap:8px;align-items:center;font-size:11.5px;">
+          <b style="font-weight:600;">作业 #${j.id}</b>
+          <span>${esc(_EVKIND_LABEL[j.kind] || j.kind)}</span>
+          ${_jobChip(j.status)}
+          <span style="flex:1"></span>
+          <span style="font-size:10px;color:var(--mut);">${esc(String(j.updated_at || j.created_at || '').slice(5, 16))}</span>
+        </div>
+        <div style="margin-top:5px;">${bar}</div>
+        ${stage}${queued}
+      </div>`;
+    }).join('');
+    const anyActive = ev.some(j => j.status === 'queued' || j.status === 'running');
+    return rows + (anyActive
+      ? '<div style="font-size:10px;color:var(--mut);margin-top:4px;">每 2.5s 自动刷新；完成后本页数据自动更新，可放心关页，作业继续跑。</div>'
+      : '<div style="font-size:10px;color:var(--mut);margin-top:4px;">无在途作业。终态失败的详情见作业面板（更多 → 运行监控）。</div>');
+  }
+
+  async function _refreshJobCard() {
+    const box = document.getElementById('evm-job-card');
+    if (!box) { _stopPoll(); return; }
+    let items = [];
+    try {
+      const r = await api('/api/jobs?limit=8');
+      items = (r && r.items) || [];
+    } catch (e) { /* 网络抖动：保 last 渲染，下轮再试 */ }
+    box.innerHTML = _jobCardHTML(items);
+    const active = items.some(j => _EVKIND_LABEL[j.kind]
+      && (j.status === 'queued' || j.status === 'running'));
+    if (active && !_evmPollTimer) {
+      _evmPollTimer = setInterval(_refreshJobCard, 2500);
+    } else if (!active && _evmPollTimer) {
+      _stopPoll();
+      // 有终态完成 ⇒ 页面数据可能已变（新评测行）——自动刷新一次
+      loadEvalManagement();
+    }
+  }
+
+  function _stopPoll() {
+    if (_evmPollTimer) { clearInterval(_evmPollTimer); _evmPollTimer = null; }
+  }
+
   async function submitEvalJob(kind) {
     const meta = _EVAL_JOBS.find(j => j[0] === kind) || [kind, kind, ''];
-    if (!confirm('提交「' + meta[1] + '」作业？（' + meta[2] + '，完成后本页自动刷新）')) return;
-    const st = document.getElementById('evm-job-status');
-    const r = await api('/api/jobs', { method: 'POST', body: JSON.stringify({ kind: kind }) });
+    const ok = await confirmDialog(
+      '提交「' + meta[1] + '」作业？\n预计耗时 ' + meta[2]
+      + '，进度在下方卡片实时刷新；可关页，作业继续跑。',
+      { title: '提交评测作业', okText: '提交' });
+    if (!ok) return;
+    const r = await api('/api/jobs', {
+      method: 'POST',
+      // job_key=kind：同 kind 在途（queued/running）去重 —— 空键不去重，
+      // 实测手抖双击排出两个 nightly（#17/#18）；终态一律新建（重跑不受限）。
+      body: JSON.stringify({ kind: kind, job_key: kind })
+    });
     if (!r || r.error) {
-      if (st) st.innerHTML = '<span style="color:var(--red);">提交失败：' + esc((r && r.error) || '未知错误') + (r && r.available ? '（可用：' + esc(r.available.join(', ')) + '）' : '') + '</span>';
+      await confirmDialog('提交失败：' + ((r && r.error) || '未知错误')
+        + (r && r.available ? '\n可用类型：' + r.available.join(', ') : ''),
+        { title: '提交失败', hideCancel: true, okText: '知道了' });
       return;
     }
-    const jobId = r.job_id;
-    if (st) st.innerHTML = '作业 #' + jobId + ' 已' + (r.deduped ? '去重（同在途作业）' : '入队') + '，排队中…';
-    if (_evmPollTimer) clearInterval(_evmPollTimer);
-    _evmPollTimer = setInterval(async () => {
-      const j = await api('/api/jobs/' + jobId);
-      if (!j || j.error) { clearInterval(_evmPollTimer); _evmPollTimer = null; return; }
-      if (st) st.innerHTML = '作业 #' + jobId + ' ' + esc(j.status || '')
-        + (j.stage ? ' · ' + esc(j.stage) : '')
-        + (j.progress != null ? ' (' + Number(j.progress).toFixed(0) + '%)' : '');
-      if (j.terminal) {
-        clearInterval(_evmPollTimer); _evmPollTimer = null;
-        if (j.status === 'done') {
-          if (st) st.innerHTML = '<span style="color:var(--ok);">作业 #' + jobId + ' 完成</span>，正在刷新数据…';
-          await loadEvalManagement();
-        } else {
-          const err = (j.result && (j.result.error || j.result.tail)) || '';
-          if (st) st.innerHTML = '<span style="color:var(--red);">作业 #' + jobId + ' ' + esc(j.status)
-            + '</span><span style="color:var(--mut);"> ' + esc(String(err).slice(-260)) + '</span>';
-        }
-      }
-    }, 3000);
+    await _refreshJobCard();
+  }
+
+  /* 系统风格输入对话框（#lbx 单输入框，Promise）—— 替代原生 prompt。 */
+  function evalPromptDialog({ title, html, placeholder = '', value = '' }) {
+    const lbx = document.getElementById('lbx');
+    const b = document.getElementById('lbx-body');
+    b.innerHTML = `<h3>${esc(title || '输入')}</h3>
+      <div style="font-size:12.5px;color:var(--txt);line-height:1.7;margin:4px 0 8px;">${html}</div>
+      <input id="evm-prompt-input" class="ipt" style="width:100%;" placeholder="${esc(placeholder)}"
+             value="${esc(value)}" />
+      <div class="lbx-actions" style="margin-top:10px;">
+        <button class="btn ghost" id="evm-prompt-cancel">取消</button>
+        <button class="btn" id="evm-prompt-ok">确定</button></div>`;
+    lbx.classList.add('show');
+    return new Promise(resolve => {
+      const done = v => { lbx.classList.remove('show'); document.removeEventListener('keydown', _kd); resolve(v); };
+      const inp = document.getElementById('evm-prompt-input');
+      const submit = () => done(String(inp.value || '').trim());
+      document.getElementById('evm-prompt-ok').onclick = submit;
+      document.getElementById('evm-prompt-cancel').onclick = () => done(null);
+      const _kd = e => {
+        if (e.key === 'Enter') submit();
+        else if (e.key === 'Escape') done(null);
+      };
+      document.addEventListener('keydown', _kd);
+      lbx.onclick = e => { if (e.target === lbx) done(null); };
+      const cb = document.querySelector('#lbx .lbx-close');
+      if (cb) cb.onclick = () => done(null);
+      setTimeout(() => { if (inp) inp.focus(); }, 30);
+    });
   }
 
   /* T2：门禁阈值就地编辑（唯一真源 core.config eval_gates；端点
      PUT /api/system/config/static 自带 schema 校验 + 落盘 + 即时 reload；
      历史三色不受影响 —— O3 快照表已把旧阈值冻结在行里）。 */
   async function editEvalGate(gateKey, label, cur, direction) {
-    const v = prompt(
-      '调整门禁阈值【' + label + '】\n键：eval_gates.' + gateKey
-      + '\n判定方向：' + (direction === 'low' ? '≤ 阈值为绿（越小越好）' : '≥ 阈值为绿（越大越好）')
-      + (cur != null ? '\n当前值：' + cur : ''),
-      cur != null ? cur : '');
+    const v = await evalPromptDialog({
+      title: '调整门禁阈值',
+      html: '【' + esc(label) + '】<br><span style="color:var(--mut);font-size:11px;">'
+        + '键：eval_gates.' + esc(gateKey) + ' · 判定方向：'
+        + (direction === 'low' ? '≤ 阈值为绿（越小越好）' : '≥ 阈值为绿（越大越好）')
+        + '</span>',
+      placeholder: '新阈值（数字）', value: cur != null ? String(cur) : ''
+    });
     if (v === null) return;
     const num = Number(v);
-    if (v === '' || isNaN(num)) { alert('阈值必须是数字'); return; }
+    if (v === '' || isNaN(num)) {
+      await confirmDialog('阈值必须是数字', { title: '输入无效', hideCancel: true, okText: '知道了' });
+      return;
+    }
     const r = await api('/api/system/config/static', {
       method: 'PUT', body: JSON.stringify({ updates: { ['eval_gates.' + gateKey]: num } })
     });
-    if (!r || r.error) { alert('修改失败：' + ((r && r.error) || '未知错误')); return; }
+    if (!r || r.error) {
+      await confirmDialog('修改失败：' + ((r && r.error) || '未知错误'),
+        { title: '修改失败', hideCancel: true, okText: '知道了' });
+      return;
+    }
     await loadEvalManagement();
   }
 
   /* T3：错例改判 —— 改源头标注（intent_samples），改完可一键重建评测集。
      确认语义与 42 页同源：status='confirmed' 必须有标签（后端校验兜底）。 */
   async function rejudgeIntentSample(sourceId, queryExcerpt, sysJudge) {
-    const v = prompt(
-      '改判样本 #' + sourceId + '\n问句：' + queryExcerpt + '…'
-      + '\n系统当前判：' + (sysJudge || '—')
-      + '\n请输入**正确**意图（人工裁决口径）：', '');
+    const v = await evalPromptDialog({
+      title: '改判样本 #' + sourceId,
+      html: '问句：' + esc(queryExcerpt) + '…<br>'
+        + '<span style="color:var(--mut);font-size:11px;">系统当前判：'
+        + esc(sysJudge || '—') + '</span>',
+      placeholder: '正确意图（人工裁决口径）'
+    });
     if (v === null) return;
     const intent = String(v || '').trim();
-    if (!intent) { alert('意图不能为空（确认态必须有标签，否则污染评测集）'); return; }
+    if (!intent) {
+      await confirmDialog('意图不能为空（确认态必须有标签，否则污染评测集）',
+        { title: '输入无效', hideCancel: true, okText: '知道了' });
+      return;
+    }
     const r = await api('/api/intent-samples/' + sourceId, {
       method: 'PUT',
       body: JSON.stringify({
@@ -176,12 +291,15 @@
       })
     });
     if (!r || r.error || r.ok === false) {
-      alert('改判失败：' + ((r && (r.error || r.message)) || '未知错误')); return;
+      await confirmDialog('改判失败：' + ((r && (r.error || r.message)) || '未知错误'),
+        { title: '改判失败', hideCancel: true, okText: '知道了' });
+      return;
     }
-    if (confirm('已改判为「' + intent + '」。现在重建评测集吗？\n'
-      + '（build_evalset 作业 ~40s；dataset_id 随内容更新，下轮 Trace 评测生效）')) {
-      submitEvalJob('build_evalset');
-    }
+    const go = await confirmDialog(
+      '已改判为「' + intent + '」。\n现在重建评测集吗？（build_evalset ~40s；'
+      + 'dataset_id 随内容更新，下轮 Trace 评测生效）',
+      { title: '改判成功', okText: '重建评测集' });
+    if (go) submitEvalJob('build_evalset');
   }
 
   /* ══ 段 ①：现在什么状态 ══ */
@@ -697,6 +815,8 @@
         + '带 schema 校验与台账；历史三色不受影响）。触发走作业队列（jobs），'
         + '手动 nightly 不自动提交快照。详细用法见 <code>docs/评测工具使用指南-20261022.md</code>。</div>'
       );
+      // 作业卡片：最近评测作业 + 非终态自动轮询（_refreshJobCard 内部管理定时器）
+      _refreshJobCard();
     } catch (e) {
       _mount('<div class="panel"><div class="ph">评测管理</div><div class="pb">'
         + '<div style="color:var(--red);font-size:12px;">加载失败：'
