@@ -115,12 +115,13 @@ def t_A():
     code_nc0 = re.sub(r"//.*", "", re.sub(r"/\*[\s\S]*?\*/", "", js))
     paths = re.findall(r"api\(\s*['\"](/api/[a-z\-]+/[^'\"]*)['\"]", code_nc0)
     # A7 契约：评测数据一律走评测 API（/api/eval/*、/api/knowledge/*）。
-    # 白名单扩展（2026-10-23 T1/T2）：/api/jobs*（立即跑批走作业队列，禁止
-    #   裸 subprocess 端点）与 /api/system/config/static（阈值就地编辑走
-    #   正规配置通道，自带 schema 校验+台账）——两个都是各域的正规门户，
-    #   白名单只收这两个前缀，防的是"图省事绕开契约另开野端点"。
+    # 白名单扩展（2026-10-23 T1/T2/T3）：/api/jobs*（立即跑批走作业队列，禁止
+    #   裸 subprocess 端点）、/api/system/config/static（阈值就地编辑走
+    #   正规配置通道，自带 schema 校验+台账）、/api/intent-samples（T3 错例
+    #   改判**只走源头标注端点**——改派生物 trace_evalset 是禁止项，此白名单
+    #   条目即设计意图的机器化表达）——防的是"图省事绕开契约另开野端点"。
     _ALLOWED_API = ("/api/eval/", "/api/knowledge/", "/api/jobs",
-                    "/api/system/config/static")
+                    "/api/system/config/static", "/api/intent-samples")
     ck("A7 前端 API 路径均为评测 API 或白名单门户（jobs/config）",
        paths and all(p.startswith(_ALLOWED_API) for p in paths),
        str(paths))

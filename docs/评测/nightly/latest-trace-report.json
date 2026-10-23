@@ -1,9 +1,10 @@
 {
  "kind": "trace_consistency",
- "generated_at": "2026-10-23T08:17:17",
+ "generated_at": "2026-10-23T10:21:57",
  "db": "mbse.db",
- "trace_file": "tmp/p21/trace_evalset.json",
- "trace_built_at": "2026-10-23 08:15:28",
+ "trace_file": "docs/评测/datasets/trace_evalset.json",
+ "trace_built_at": "2026-10-23 09:38:20",
+ "dataset_id": "7d454031cc7d",
  "llm_fallback": "disabled",
  "semantic_backend": "bigram",
  "population": {
@@ -14,7 +15,7 @@
   "negative_routing_error": 0,
   "negative_pool_invalid": 13,
   "weak_total": 176,
-  "weak_sampled": 50,
+  "weak_sampled": 0,
   "gold_stale": 0,
   "gold_stale_ratio": 0.0,
   "route_errors": 0,
@@ -146,7 +147,9 @@
     "pred": "chat",
     "route": "chat",
     "conf": 0.0,
-    "match": false
+    "match": false,
+    "source_id": 37,
+    "extractor": "intent_confirmed"
    },
    {
     "id": "intent_confirmed-002",
@@ -155,7 +158,9 @@
     "pred": "chat",
     "route": "chat",
     "conf": 0.0,
-    "match": false
+    "match": false,
+    "source_id": 47,
+    "extractor": "intent_confirmed"
    },
    {
     "id": "intent_confirmed-018",
@@ -164,7 +169,9 @@
     "pred": "chat",
     "route": "chat",
     "conf": 0.0,
-    "match": false
+    "match": false,
+    "source_id": 25,
+    "extractor": "intent_confirmed"
    },
    {
     "id": "intent_confirmed-022",
@@ -173,7 +180,9 @@
     "pred": "trace_verification",
     "route": "rule_scored",
     "conf": 0.95,
-    "match": false
+    "match": false,
+    "source_id": 21,
+    "extractor": "intent_confirmed"
    },
    {
     "id": "intent_confirmed-031",
@@ -182,7 +191,9 @@
     "pred": "chat",
     "route": "chat",
     "conf": 0.0,
-    "match": false
+    "match": false,
+    "source_id": 12,
+    "extractor": "intent_confirmed"
    }
   ]
  },
@@ -200,7 +211,9 @@
     "route": "rule",
     "conf": 0.95,
     "reject_kind": "pool_invalid",
-    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+    "source_id": 61,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-002",
@@ -210,7 +223,9 @@
     "route": "rule",
     "conf": 0.95,
     "reject_kind": "pool_invalid",
-    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+    "source_id": 60,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-003",
@@ -220,7 +235,9 @@
     "route": "rule",
     "conf": 0.95,
     "reject_kind": "pool_invalid",
-    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+    "source_id": 58,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-004",
@@ -230,7 +247,9 @@
     "route": "rule",
     "conf": 0.95,
     "reject_kind": "pool_invalid",
-    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+    "source_id": 56,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-005",
@@ -240,7 +259,9 @@
     "route": "rule",
     "conf": 0.95,
     "reject_kind": "pool_invalid",
-    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+    "source_id": 54,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-006",
@@ -250,7 +271,9 @@
     "route": "rule",
     "conf": 0.95,
     "reject_kind": "pool_invalid",
-    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+    "source_id": 53,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-007",
@@ -260,7 +283,9 @@
     "route": "rule",
     "conf": 0.95,
     "reject_kind": "pool_invalid",
-    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+    "source_id": 52,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-008",
@@ -270,7 +295,9 @@
     "route": "rule",
     "conf": 0.95,
     "reject_kind": "pool_invalid",
-    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+    "source_id": 51,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-009",
@@ -280,7 +307,9 @@
     "route": "chat",
     "conf": 0.0,
     "reject_kind": "pool_invalid",
-    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+    "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+    "source_id": 49,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-010",
@@ -290,7 +319,9 @@
     "route": "rule_scored",
     "conf": 0.9,
     "reject_kind": "pool_invalid",
-    "reject_note": "多意图句（一句话三个阶段），不属于单标签评测集；已有多意图专项用例覆盖，放这里只会制造假错例"
+    "reject_note": "多意图句（一句话三个阶段），不属于单标签评测集；已有多意图专项用例覆盖，放这里只会制造假错例",
+    "source_id": 48,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-011",
@@ -300,7 +331,9 @@
     "route": "rule_scored",
     "conf": 0.9,
     "reject_kind": "pool_invalid",
-    "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+    "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤",
+    "source_id": 44,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-012",
@@ -310,7 +343,9 @@
     "route": "explain",
     "conf": 0.8,
     "reject_kind": "pool_invalid",
-    "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+    "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤",
+    "source_id": 43,
+    "extractor": "intent_rejected"
    },
    {
     "id": "intent_rejected-013",
@@ -320,286 +355,24 @@
     "route": "rule_scored",
     "conf": 0.9,
     "reject_kind": "pool_invalid",
-    "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+    "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤",
+    "source_id": 42,
+    "extractor": "intent_rejected"
    }
   ]
  },
  "weak": {
-  "n": 50,
-  "intent_dist": {
-   "design": 12,
-   "view_expansion": 3,
-   "review": 2,
-   "chat": 21,
-   "report_generation": 1,
-   "requirement_analysis": 2,
-   "knowledge_qa": 9
-  },
-  "route_dist": {
-   "rule": 14,
-   "rule_scored": 6,
-   "chat": 21,
-   "explain": 9
-  },
+  "n": 0,
+  "intent_dist": {},
+  "route_dist": {},
   "llm_route_count": 0,
-  "chat_share": 0.42,
-  "weak_detail": [
-   {
-    "query": "请为一个小型无人机飞控系统做需求条目化（功能/性能/约束各若干条），并生成 SysML v2 BDD 结构骨架，最后用 sysml_v2_validate 校验通过。子任务控制在 3 个以内。",
-    "pred": "design",
-    "route": "rule"
-   },
-   {
-    "query": "请为一个小型无人机飞控系统做需求条目化（功能/性能/约束各若干条），并生成 SysML v2 BDD 结构骨架，最后用 sysml_v2_validate 校验通过。子任务控制在 3 个以内。",
-    "pred": "design",
-    "route": "rule"
-   },
-   {
-    "query": "帮我分析并生成雷达领域的完整BDD视图，需要提供多方案设计，架构不变，但是需要从性能指标、参数维度进行多方案创成",
-    "pred": "design",
-    "route": "rule"
-   },
-   {
-    "query": "继续生成整车的IBD视图",
-    "pred": "design",
-    "route": "rule"
-   },
-   {
-    "query": "帮我生成如下汽车需求的整车多逻辑架构方案\n<IR-3>车辆动力管理：\n车辆应根据驾驶需求和车辆运行状态，对车辆动力输出进行\n管理，以满足车辆运行需求。\n<IR-1>车辆动力输出：\n车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需\n求的动力输出。\n<IR-2>动力模式管理\n车辆应根据车辆状态和运行条件选择适合的动力运行模式，\n以满足车辆运行需求。\n<IR-4>能源状态适应\n车辆应根据能源状态调整动力输出策略，保证车辆持续运行\n能力。",
-    "pred": "design",
-    "route": "rule_scored"
-   },
-   {
-    "query": "我的目标是生成状态机视图",
-    "pred": "view_expansion",
-    "route": "rule_scored"
-   },
-   {
-    "query": "继续校验并修复这份代码，直至没有错误：\npackage '整车动力管理功能分析' {\n    doc /* 整车动力管理功能分析模型（累积：活动图 + 结构图 + 状态机 + 视图） */\n\n    package '整车动力管理功能分析_活动' {\n        doc /* 整车动力管理功能流程活动图 */\n        action def '功能步骤';\n\n        action def '整车动力管理功能流程' {\n            doc /* 覆盖启动、正常运行、特殊工况、关机驻车4个阶段 */\n            action '检测点火信号' : '功能步骤' { attribute '点火状态' : ScalarValues::Boolean; }\n            action '检查电池状态' : '功能步骤' { attribute '电池状态' : ScalarValues::Boolean; out attribute '电池就绪' : ScalarValues::Boolean; }\n            action '高压上电' : '功能步骤' { attribute '高压状态' : ScalarValues::Boolean; }\n            action '系统自检' : '功能步骤' { attribute '系统健康状态' : ScalarValues::Boolean; out attribute '自检通过' : ScalarValues::Boolean; }\n            action '确认就绪状态' : '功能步骤' { attribute '车辆就绪' : ScalarValues::Boolean; }\n            action '解析驾驶意图' : '功能步骤' { attribute '驾驶意图' : ScalarValues::String; }\n            action '计算扭矩分配' : '功能步骤' { attribute '驾驶意图' : ScalarValues::String; attribute '扭矩指令' : ScalarValues::Real; }\n            action '管理动力输出' : '功能步骤' { attribute '扭矩指令' : ScalarValues::Real; attribute '电机功率' : ScalarValues::Real; }\n            action '监控能量消耗' : '功能步骤' { attribute '电机功率' : ScalarValues::Real; attribute '能量状态' : ScalarValues::Real; }\n            action '控制热管理' : '功能步骤' { attribute '能量状态' : ScalarValues::Real; attribute '热管理状态' : ScalarValues::Boolean; }\n            action '执行再生制动' : '功能步骤' { attribute '制动信号' : ScalarValues::Boolean; attribute '回收能量' : ScalarValues::Real; }\n            action '检测特殊工况' : '功能步骤' { attribute '车辆状态' : ScalarValues::String; out attribute '特殊工况标志' : ScalarValues::Boolean; }\n            action '激活雪地模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n            action '激活运动模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n            action '激活经济模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n            action '调整动力策略' : '功能步骤' { attribute '模式指令' : ScalarValues::String; attribute '调整后功率' : ScalarValues::Real; }\n            action '检测关机请求' : '功能步骤' { attribute '关机信号' : ScalarValues::Boolean; }\n            action '保存车辆状态' : '功能步骤' { attribute '车辆状态数据' : ScalarValues::String; }\n            action '高压下电' : '功能步骤' { attribute '高压状态' : ScalarValues::Boolean; }\n            action '进入驻车模式' : '功能步骤' { attribute '驻车状态' : ScalarValues::Boolean; }\n            action '确认关机完成' : '功能步骤' { attribute '关机完成' : ScalarValues::Boolean; }\n            succession '控制流63' first start then '检测点火信号';\n            succession '控制流64' first '检测点火信号' then '检查电池状态';\n            succession '控制流65' first '检查电池状态' then '高压上电';\n            succession '控制流66' first '高压上电' then '系统自检';\n            succession '控制流67' first '系统自检' then '确认就绪状态';\n            succession '控制流68' first '确认就绪状态' then '解析驾驶意图';\n            succession '控制流69' first '解析驾驶意图' then '计算扭矩分配';\n            succession '控制流70' first '计算扭矩分配' then '管理动力输出';\n            fork '正常驾驶分叉';\n            succession '控制流71' first '管理动力输出' then '正常驾驶分叉';\n            succession '控制流72' first '正常驾驶分叉' then '监控能量消耗';\n            succession '控制流73' first '正常驾驶分叉' then '控制热管理';\n            succession '控制流74' first '正常驾驶分叉' then '执行再生制动';\n            join '正常驾驶汇合';\n            succession '控制流75' first '监控能量消耗' then '正常驾驶汇合';\n            succession '控制流76' first '控制热管理' then '正常驾驶汇合';\n            succession '控制流77' first '执行再生制动' then '正常驾驶汇合';\n            succession '控制流78' first '正常驾驶汇合' then '检测特殊工况';\n            succession '控制流79' first '检测特殊工况' then '调整动力策略';\n            succession '控制流80' first '调整动力策略' then '检测关机请求';\n            succession '控制流81' first '检测关机请求' then '保存车辆状态';\n            succession '控制流82' first '保存车辆状态' then '高压下电';\n            succession '控制流83' first '高压下电' then '进入驻车模式';\n            succession '控制流84' first '进入驻车模式' then '确认关机完成';\n            succession '控制流85' first '确认关机完成' then done;\n            succession flow '对象流22' from '检测点火信号'.'点火状态' to '检查电池状态'.'电池状态';\n            succession flow '对象流23' from '检查电池状态'.'电池状态' to '高压上电'.'高压状态';\n            succession flow '对象流24' from '高压上电'.'高压状态' to '系统自检'.'系统健康状态';\n            succession flow '对象流25' from '系统自检'.'系统健康状态' to '确认就绪状态'.'车辆就绪';\n            succession flow '对象流26' from '确认就绪状态'.'车辆就绪' to '解析驾驶意图'.'驾驶意图';\n            succession flow '对象流27' from '解析驾驶意图'.'驾驶意图' to '计算扭矩分配'.'驾驶意图';\n            succession flow '对象流28' from '计算扭矩分配'.'扭矩指令' to '管理动力输出'.'扭矩指令';\n            succession flow '对象流29' from '管理动力输出'.'电机功率' to '监控能量消耗'.'电机功率';\n            succession flow '对象流30' from '监控能量消耗'.'能量状态' to '控制热管理'.'能量状态';\n            succession flow '对象流31' from '执行再生制动'.'回收能量' to '监控能量消耗'.'能量状态';\n            succession flow '对象流32' from '调整动力策略'.'调整后功率' to '检测关机请求'.'关机信号';\n            succession flow '对象流33' from '检测关机请求'.'关机信号' to '保存车辆状态'.'车辆状态数据';\n            succession flow '对象流34' from '保存车辆状态'.'车辆状态数据' to '高压下电'.'高压状态';\n            succession flow '对象流35' from '高压下电'.'高压状态' to '进入驻车模式'.'驻车状态';\n            succession flow '对象流36' from '进入驻车模式'.'驻车状态' to '确认关机完成'.'关机完成';\n        }\n    }\n\n    package '整车动力管理功能分析_结构' {\n        doc /* 整车动力管理功能分析结构定义 */\n        part def '中央控制系统';\n        part def '整车控制器';\n        part def '电气系统';\n        part def '电池';\n        part def '电机';\n        part def '动力总成';\n        part def '热管理';\n        part def '电驱电池系统';\n        part def '计算模块';\n        part def '附件';\n        part def '其它系统';\n        part def '车辆模型';\n    }\n\n    package '整车动力管理_状态机' {\n        doc /* 整车动力管理系统状态机行为分析视图 */\n        private import ScalarValues::*;\n        private import '整车动力管理功能分析'::'整车动力管理功能分析_结构'::*;\n        private import '整车动力管理功能分析'::'整车动力管理功能分析_活动'::*;\n\n        attribute def '点火信号';\n        attribute def '自检结果';\n        attribute def '驾驶意图';\n        attribute def '特殊工况标志';\n        attribute def '车辆状态';\n        attribute def '关机信号';\n        attribute def '关机完成';\n        attribute def '确认关机完成';\n\n        port def '点火端口' { in item '点火信号输入' : '点火信号'; }\n        port def '自检端口' { in item '自检结果输入' : '自检结果'; }\n        port def '驾驶意图端口' { in item '驾驶意图输入' : '驾驶意图'; }\n        port def '模式控制端口' { in item '特殊工况标志输入' : '特殊工况标志'; in item '车辆状态输入' : '车辆状态'; }\n        port def '关机端口' { in item '关机信号输入' : '关机信号'; in item '关机完成输入' : '关机完成'; in item '确认关机完成输入' : '确认关机完成'; }\n\n        part def '中央控制系统实例' : '中央控制系统' {\n            attribute '电池状态' : Boolean;\n            attribute '电池就绪' : Boolean;\n            attribute '车辆就绪' : Boolean;\n            attribute '高压状态' : Boolean;\n\n            exhibit state '整车动力管理状态机' {\n                doc /* 整车动力管理状态机：描述车辆从关机到运行再到关机的完整生命周期状态转换 */\n\n                state '关机状态' { doc /* 关机状态：车辆完全断电，高压系统下电，处于驻车状态 */ }\n                state '启动中' { doc /* 启动中：正在执行点火检测、电池检查、高压上电、系统自检流程 */ }\n                state '就绪' { doc /* 就绪：系统自检通过，车辆就绪，等待驾驶意图输入 */ }\n                state '运行中' { doc /* 运行中：正常行驶状态，执行扭矩分配、动力输出、能量监控 */ }\n                state '雪地模式' { doc /* 雪地模式：特殊工况下的低附着力驾驶模式，动力输出受限 */ }\n                state '运动模式' { doc /* 运动模式：特殊工况下的高性能驾驶模式，动力输出增强 */ }\n                state '经济模式' { doc /* 经济模式：特殊工况下的节能驾驶模式，优先回收能量 */ }\n                state '关机中' { doc /* 关机中：正在执行保存状态、高压下电、进入驻车流程 */ }\n                state '驻车' { doc /* 驻车：已完成关机流程，车辆处于安全驻车状态 */ }\n\n                transition '初始转换' first '关机状态' then '启动中';\n                transition '关机状态-启动中' first '关机状态' then '启动中';\n                transition '启动中-就绪' first '启动中' then '就绪';\n                transition '启动中-关机状态' first '启动中' then '关机状态';\n                transition '就绪-运行中' first '就绪' then '运行中';\n                transition '运行中-雪地模式' first '运行中' then '雪地模式';\n                transition '运行中-运动模式' first '运行中' then '运动模式';\n                transition '运行中-经济模式' first '运行中' then '经济模式';\n                transition '雪地模式-运行中' first '雪地模式' then '运行中';\n                transition '运动模式-运行中' first '运动模式' then '运行中';\n                transition '经济模式-运行中' first '经济模式' then '运行中';\n                transition '运行中-关机中' first '运行中' then '关机中';\n                transition '关机中-驻车' first '关机中' then '驻车';\n                transition '驻车-关机状态' first '驻车' then '关机状态';\n            }\n        }\n    }\n\n    package '整车动力管理_状态机_视图' {\n        doc /* 视图包：组织整车动力管理状态机视图 */\n        private import StandardViewDefinitions::*;\n        private import Views::*;\n        private import '整车动力管理功能分析'::'整车动力管理_状态机'::*;\n\n        view '整车动力管理状态机视图' : StandardViewDefinitions::StateTransitionView {\n            doc /* 系统状态机行为分析视图：描述中央控制系统承载的整车动力管理状态转换行为 */\n            expose '中央控制系统实例';\n            render StateTransitionView;\n        }\n    }\n}",
-    "pred": "view_expansion",
-    "route": "rule_scored"
-   },
-   {
-    "query": "修复并校验",
-    "pred": "review",
-    "route": "rule"
-   },
-   {
-    "query": "帮我校验如下V2代码是否有问题：\npackage '整车动力管理功能分析_活动' {\n    doc /* 整车动力管理功能流程活动图 */\n    action def '整车动力管理功能流程' {\n        doc /* 覆盖启动、正常运行、特殊工况、关机驻车 4 个阶段 */\n        action def '功能步骤';\n        action '检测点火信号' : '功能步骤' { attribute '点火状态' : ScalarValues::Boolean; }\n        action '检查电池状态' : '功能步骤' { attribute '电池状态' : ScalarValues::Boolean; out attribute '电池就绪' : ScalarValues::Boolean; }\n        action '高压上电' : '功能步骤' { attribute '高压状态' : ScalarValues::Boolean; }\n        action '系统自检' : '功能步骤' { attribute '系统健康状态' : ScalarValues::Boolean; out attribute '自检通过' : ScalarValues::Boolean; }\n        action '确认就绪状态' : '功能步骤' { attribute '车辆就绪' : ScalarValues::Boolean; }\n        action '解析驾驶意图' : '功能步骤' { attribute '驾驶意图' : ScalarValues::String; }\n        action '计算扭矩分配' : '功能步骤' { attribute '驾驶意图' : ScalarValues::String; attribute '扭矩指令' : ScalarValues::Real; }\n        action '管理动力输出' : '功能步骤' { attribute '扭矩指令' : ScalarValues::Real; attribute '电机功率' : ScalarValues::Real; }\n        action '监控能量消耗' : '功能步骤' { attribute '电机功率' : ScalarValues::Real; attribute '能量状态' : ScalarValues::Real; }\n        action '控制热管理' : '功能步骤' { attribute '能量状态' : ScalarValues::Real; attribute '热管理状态' : ScalarValues::Boolean; }\n        action '执行再生制动' : '功能步骤' { attribute '制动信号' : ScalarValues::Boolean; attribute '回收能量' : ScalarValues::Real; }\n        action '检测特殊工况' : '功能步骤' { attribute '车辆状态' : ScalarValues::String; out attribute '特殊工况标志' : ScalarValues::Boolean; }\n        action '激活雪地模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n        action '激活运动模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n        action '激活经济模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n        action '调整动力策略' : '功能步骤' { attribute '模式指令' : ScalarValues::String; attribute '调整后功率' : ScalarValues::Real; }\n        action '检测关机请求' : '功能步骤' { attribute '关机信号' : ScalarValues::Boolean; }\n        action '保存车辆状态' : '功能步骤' { attribute '车辆状态数据' : ScalarValues::String; }\n        action '高压下电' : '功能步骤' { attribute '高压状态' : ScalarValues::Boolean; }\n        action '进入驻车模式' : '功能步骤' { attribute '驻车状态' : ScalarValues::Boolean; }\n        action '确认关机完成' : '功能步骤' { attribute '关机完成' : ScalarValues::Boolean; }\n        succession '控制流 63' first '整车动力管理功能流程'::start then '整车动力管理功能流程'::'检测点火信号';\n        succession '控制流 64' first '整车动力管理功能流程'::'检测点火信号' then '整车动力管理功能流程'::'检查电池状态';\n        succession '控制流 65' first '整车动力管理功能流程'::'检查电池状态' then '整车动力管理功能流程'::'高压上电';\n        succession '控制流 66' first '整车动力管理功能流程'::'高压上电' then '整车动力管理功能流程'::'系统自检';\n        succession '控制流 67' first '整车动力管理功能流程'::'系统自检' then '整车动力管理功能流程'::'确认就绪状态';\n        succession '控制流 68' first '整车动力管理功能流程'::'确认就绪状态' then '整车动力管理功能流程'::'解析驾驶意图';\n        succession '控制流 69' first '整车动力管理功能流程'::'解析驾驶意图' then '整车动力管理功能流程'::'计算扭矩分配';\n        succession '控制流 70' first '整车动力管理功能流程'::'计算扭矩分配' then '整车动力管理功能流程'::'管理动力输出';\n        fork '正常驾驶分叉';\n        succession '控制流 71' first '整车动力管理功能流程'::'管理动力输出' then '整车动力管理功能流程'::'正常驾驶分叉';\n        succession '控制流 72' first '整车动力管理功能流程'::'正常驾驶分叉' then '整车动力管理功能流程'::'监控能量消耗';\n        succession '控制流 73' first '整车动力管理功能流程'::'正常驾驶分叉' then '整车动力管理功能流程'::'控制热管理';\n        succession '控制流 74' first '整车动力管理功能流程'::'正常驾驶分叉' then '整车动力管理功能流程'::'执行再生制动';\n        join '正常驾驶汇合';\n        succession '控制流 75' first '整车动力管理功能流程'::'监控能量消耗' then '整车动力管理功能流程'::'正常驾驶汇合';\n        succession '控制流 76' first '整车动力管理功能流程'::'控制热管理' then '整车动力管理功能流程'::'正常驾驶汇合';\n        succession '控制流 77' first '整车动力管理功能流程'::'执行再生制动' then '整车动力管理功能流程'::'正常驾驶汇合';\n        succession '控制流 78' first '整车动力管理功能流程'::'正常驾驶汇合' then '整车动力管理功能流程'::'检测特殊工况';\n        succession '控制流 79' first '整车动力管理功能流程'::'检测特殊工况' then '整车动力管理功能流程'::'调整动力策略';\n        succession '控制流 80' first '整车动力管理功能流程'::'调整动力策略' then '整车动力管理功能流程'::'检测关机请求';\n        succession '控制流 81' first '整车动力管理功能流程'::'检测关机请求' then '整车动力管理功能流程'::'保存车辆状态';\n        succession '控制流 82' first '整车动力管理功能流程'::'保存车辆状态' then '整车动力管理功能流程'::'高压下电';\n        succession '控制流 83' first '整车动力管理功能流程'::'高压下电' then '整车动力管理功能流程'::'进入驻车模式';\n        succession '控制流 84' first '整车动力管理功能流程'::'进入驻车模式' then '整车动力管理功能流程'::'确认关机完成';\n        succession '控制流 85' first '整车动力管理功能流程'::'确认关机完成' then '整车动力管理功能流程'::done;\n        succession flow '对象流 22' from '整车动力管理功能流程'::'检测点火信号'.'点火状态' to '整车动力管理功能流程'::'检查电池状态'.'电池状态';\n        succession flow '对象流 23' from '整车动力管理功能流程'::'检查电池状态'.'电池状态' to '整车动力管理功能流程'::'高压上电'.'高压状态';\n        succession flow '对象流 24' from '整车动力管理功能流程'::'高压上电'.'高压状态' to '整车动力管理功能流程'::'系统自检'.'系统健康状态';\n        succession flow '对象流 25' from '整车动力管理功能流程'::'系统自检'.'系统健康状态' to '整车动力管理功能流程'::'确认就绪状态'.'车辆就绪';\n        succession flow '对象流 26' from '整车动力管理功能流程'::'确认就绪状态'.'车辆就绪' to '整车动力管理功能流程'::'解析驾驶意图'.'驾驶意图';\n        succession flow '对象流 27' from '整车动力管理功能流程'::'解析驾驶意图'.'驾驶意图' to '整车动力管理功能流程'::'计算扭矩分配'.'驾驶意图';\n        succession flow '对象流 28' from '整车动力管理功能流程'::'计算扭矩分配'.'扭矩指令' to '整车动力管理功能流程'::'管理动力输出'.'扭矩指令';\n        succession flow '对象流 29' from '整车动力管理功能流程'::'管理动力输出'.'电机功率' to '整车动力管理功能流程'::'监控能量消耗'.'电机功率';\n        succession flow '对象流 30' from '整车动力管理功能流程'::'监控能量消耗'.'能量状态' to '整车动力管理功能流程'::'控制热管理'.'能量状态';\n        succession flow '对象流 31' from '整车动力管理功能流程'::'执行再生制动'.'回收能量' to '整车动力管理功能流程'::'监控能量消耗'.'能量状态';\n        succession flow '对象流 32' from '整车动力管理功能流程'::'调整动力策略'.'调整后功率' to '整车动力管理功能流程'::'检测关机请求'.'关机信号';\n        succession flow '对象流 33' from '整车动力管理功能流程'::'检测关机请求'.'关机信号' to '整车动力管理功能流程'::'保存车辆状态'.'车辆状态数据';\n        succession flow '对象流 34' from '整车动力管理功能流程'::'保存车辆状态'.'车辆状态数据' to '整车动力管理功能流程'::'高压下电'.'高压状态';\n        succession flow '对象流 35' from '整车动力管理功能流程'::'高压下电'.'高压状态' to '整车动力管理功能流程'::'进入驻车模式'.'驻车状态';\n        succession flow '对象流 36' from '整车动力管理功能流程'::'进入驻车模式'.'驻车状态' to '整车动力管理功能流程'::'确认关机完成'.'关机完成';\n    }\n}\n\npackage '整车动力管理功能分析_结构' {\n    doc /* 整车动力管理功能分析结构定义 */\n    private import '整车动力管理功能分析'::'整车动力管理功能分析_活动'::*;\n    part def '中央控制系统' {\n        perform action '检测点火信号' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'检测点火信号';\n        perform action '解析驾驶意图' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'解析驾驶意图';\n        perform action '确认就绪状态' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'确认就绪状态';\n        perform action '保存车辆状态' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'保存车辆状态';\n        perform action '确认关机完成' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'确认关机完成';\n    }\n    part def '整车控制器' {\n        perform action '系统自检' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'系统自检';\n        perform action '计算扭矩分配' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'计算扭矩分配';\n        perform action '激活雪地模式' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'激活雪地模式';\n        perform action '激活运动模式' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'激活运动模式';\n        perform action '激活经济模式' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'激活经济模式';\n        perform action '进入驻车模式' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'进入驻车模式';\n    }\n    part def '电气系统' { perform action '检测关机请求' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'检测关机请求'; }\n    part def '电池' {\n        perform action '检查电池状态' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'检查电池状态';\n        perform action '监控能量消耗' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'监控能量消耗';\n    }\n    part def '电机' { perform action '管理动力输出' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'管理动力输出'; }\n    part def '动力总成' { perform action '调整动力策略' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'调整动力策略'; }\n    part def '热管理' { perform action '控制热管理' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'控制热管理'; }\n    part def '电驱电池系统' {\n        perform action '高压上电' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'高压上电';\n        perform action '执行再生制动' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'执行再生制动';\n        perform action '高压下电' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'高压下电';\n    }\n    part def '计算模块' { perform action '检测特殊工况' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'检测特殊工况'; }\n    part def '附件';\n    part def '其它系统';\n    part def '车辆模型';\n}\n\npackage '整车动力管理_状态机' {\n    doc /* 整车动力管理系统状态机行为分析视图 */\n    private import ScalarValues::*;\n    private import '整车动力管理功能分析'::'整车动力管理功能分析_结构'::*;\n\n    attribute def '点火信号';\n    attribute def '自检结果';\n    attribute def '驾驶意图';\n    attribute def '特殊工况标志';\n    attribute def '车辆状态';\n    attribute def '关机信号';\n    attribute def '关机完成';\n    attribute def '确认关机完成';\n\n    port def '点火端口' { in '点火信号输入' : '点火信号'; }\n    port def '自检端口' { in '自检结果输入' : '自检结果'; }\n    port def '驾驶意图端口' { in '驾驶意图输入' : '驾驶意图'; }\n    port def '模式控制端口' { in '特殊工况标志输入' : '特殊工况标志'; in '车辆状态输入' : '车辆状态'; }\n    port def '关机端口' { in '关机信号输入' : '关机信号'; in '关机完成输入' : '关机完成'; in '确认关机完成输入' : '确认关机完成'; }\n\n    part def '中央控制系统实例' : '中央控制系统' {\n        port '点火端口' : '整车动力管理功能分析'::'整车动力管理_状态机'::'点火端口';\n        port '自检端口' : '整车动力管理功能分析'::'整车动力管理_状态机'::'自检端口';\n        port '驾驶意图端口' : '整车动力管理功能分析'::'整车动力管理_状态机'::'驾驶意图端口';\n        port '模式控制端口' : '整车动力管理功能分析'::'整车动力管理_状态机'::'模式控制端口';\n        port '关机端口' : '整车动力管理功能分析'::'整车动力管理_状态机'::'关机端口';\n\n        attribute '电池状态' : Boolean;\n        attribute '电池就绪' : Boolean;\n        attribute '车辆就绪' : Boolean;\n        attribute '高压状态' : Boolean;\n\n        action '执行高压上电';\n        action '确认就绪状态';\n        action '执行高压下电';\n        action '记录故障';\n        action '解析驾驶意图';\n        action '计算扭矩分配';\n        action '激活雪地模式';\n        action '激活运动模式';\n        action '激活经济模式';\n        action '恢复正常动力策略';\n        action '保存车辆状态数据';\n        action '进入驻车模式';\n        action '完成系统断电';\n\n        exhibit state '整车动力管理状态机' {\n            doc /* 整车动力管理状态机：描述车辆从关机到运行再到关机的完整生命周期状态转换 */\n\n            state '关机状态' { doc /* 关机状态：车辆完全断电，高压系统下电，处于驻车状态 */ }\n            state '启动中' { doc /* 启动中：正在执行点火检测、电池检查、高压上电、系统自检流程 */ }\n            state '就绪' { doc /* 就绪：系统自检通过，车辆就绪，等待驾驶意图输入 */ }\n            state '运行中' { doc /* 运行中：正常行驶状态，执行扭矩分配、动力输出、能量监控 */ }\n            state '雪地模式' { doc /* 雪地模式：特殊工况下的低附着力驾驶模式，动力输出受限 */ }\n            state '运动模式' { doc /* 运动模式：特殊工况下的高性能驾驶模式，动力输出增强 */ }\n            state '经济模式' { doc /* 经济模式：特殊工况下的节能驾驶模式，优先回收能量 */ }\n            state '关机中' { doc /* 关机中：正在执行保存状态、高压下电、进入驻车流程 */ }\n            state '驻车' { doc /* 驻车：已完成关机流程，车辆处于安全驻车状态 */ }\n\n            transition '初始转换' first '关机状态' then '启动中';\n            transition '关机状态 - 启动中' first '关机状态' accept '点火信号输入' : '点火信号' via '点火端口' if '电池状态' == true do '执行高压上电' then '启动中';\n            transition '启动中 - 就绪' first '启动中' accept '自检结果输入' : '自检结果' via '自检端口' if '自检结果输入' == true and '电池就绪' == true do '确认就绪状态' then '就绪';\n            transition '启动中 - 关机状态' first '启动中' accept '自检结果输入' : '自检结果' via '自检端口' if '自检结果输入' == false do '执行高压下电' then '关机状态';\n            transition '就绪 - 运行中' first '就绪' accept '驾驶意图输入' : '驾驶意图' via '驾驶意图端口' if '驾驶意图输入' != null and '车辆就绪' == true do '解析驾驶意图' then '运行中';\n            transition '运行中 - 雪地模式' first '运行中' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == true and '车辆状态' == snow do '激活雪地模式' then '雪地模式';\n            transition '运行中 - 运动模式' first '运行中' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == true and '车辆状态' == sport do '激活运动模式' then '运动模式';\n            transition '运行中 - 经济模式' first '运行中' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == true and '车辆状态' == eco do '激活经济模式' then '经济模式';\n            transition '雪地模式 - 运行中' first '雪地模式' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == false do '恢复正常动力策略' then '运行中';\n            transition '运动模式 - 运行中' first '运动模式' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == false do '恢复正常动力策略' then '运行中';\n            transition '经济模式 - 运行中' first '经济模式' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == false do '恢复正常动力策略' then '运行中';\n            transition '运行中 - 关机中' first '运行中' accept '关机信号输入' : '关机信号' via '关机端口' if '关机信号输入' == true do '保存车辆状态数据' then '关机中';\n            transition '关机中 - 驻车' first '关机中' accept '关机完成输入' : '关机完成' via '关机端口' if '关机完成输入' == true and '高压状态' == false do '进入驻车模式' then '驻车';\n            transition '驻车 - 关机状态' first '驻车' accept '确认关机完成输入' : '确认关机完成' via '关机端口' if '确认关机完成输入' == true do '完成系统断电' then '关机状态';\n        }\n    }\n}\n\npackage '整车动力管理_状态机_视图' {\n    doc /* 视图包：组织整车动力管理状态机视图 */\n    private import StandardViewDefinitions::*;\n    private import Views::*;\n    private import '整车动力管理功能分析'::'整车动力管理_状态机'::*;\n\n    view '整车动力管理状态机视图' : StandardViewDefinitions::StateTransitionView {\n        doc /* 系统状态机行为分析视图：描述中央控制系统承载的整车动力管理状态转换行为 */\n        expose '中央控制系统实例';\n        expose '中央控制系统实例'::'整车动力管理状态机';\n        expose '中央控制系统实例'::'整车动力管理状态机'::*;\n        render StateTransitionView;\n    }\n}",
-    "pred": "view_expansion",
-    "route": "rule_scored"
-   },
-   {
-    "query": "perform action 的使用方式解读",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "继续分析文档内容输出报告",
-    "pred": "report_generation",
-    "route": "rule"
-   },
-   {
-    "query": "再次分析附件第 5、6、7 章的条款正文",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "基于这份附件梳理需求内容",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "：第 8、9 章为啥没取回，有尝试其他方案码",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "重新分析附件文档，完整解读",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "再次分析上传附件的完整内容，第 5、6、7 章的条款正文都要",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "基于这份附件，梳理需求内容",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "再次分析上传附件的完整内容，第 5、6、7 章的条款正文都要",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "基于这份附件，梳理需求内容",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "再次分析上传附件的完整内容，第 5、6、7 章的条款正文都要",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "基于这份附件，梳理需求内容",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "再次分析上传附件的完整内容，第5/6/7章的条款正文都要",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "再次分析上传附件的完整内容，第5/6/7章的条款正文都要",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "再次分析上传附件的完整内容，第5/6/7章的条款正文都要",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "重新分析附件文档，完整解读",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "再次分析上传附件的内容",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "V2代码有经过词法 语法校验码",
-    "pred": "review",
-    "route": "rule"
-   },
-   {
-    "query": "基于需求分析的方法论，帮我梳理附件文档需求内容",
-    "pred": "requirement_analysis",
-    "route": "rule_scored"
-   },
-   {
-    "query": "基于这份附件 继续如上任务",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "基于上传的附件文档，这是一份客户的需求文档，请基于如上需求分析的框架、流程与规则，帮我梳理出清晰的条目话需求清单",
-    "pred": "requirement_analysis",
-    "route": "rule_scored"
-   },
-   {
-    "query": "先分析电动汽车热管理系统的利益相关方与整车组成关系，再生成利益相关方 BDD 视图的 SysML V2 模型代码并进行校验",
-    "pred": "design",
-    "route": "rule"
-   },
-   {
-    "query": "需求分析的实现路径：\n设计师上传需求来源相关的文档或输入需求描述，明确需求分\n析要求，根据需要指定参考的互联数据，调用大语言模型对非结构化的需求进行\n智能化需求分析，输出结构化的需求条目及需求来源追溯，对已有的需求条目进\n行分解细化、规范化等，并生成相应的 SysML 模型（视图、元素等），主要包括\n需求图、用例图及相关模型元素和关系。大语言模型对需求进行打分、评估规范\n性，给出优化建议，由设计师决策是否采纳或修改",
-    "pred": "design",
-    "route": "rule"
-   },
-   {
-    "query": "先分析电动汽车热管理系统的利益相关方与整车组成关系，再生成利益相关方 BDD 视图的 SysML V2 模型代码并进行校验",
-    "pred": "design",
-    "route": "rule"
-   },
-   {
-    "query": "先分析电动汽车热管理系统的利益相关方与整车组成关系，再生成利益相关方 BDD 视图的 SysML V2 模型代码并进行校验",
-    "pred": "design",
-    "route": "rule"
-   },
-   {
-    "query": "你好  介绍下你的能力边界",
-    "pred": "knowledge_qa",
-    "route": "explain"
-   },
-   {
-    "query": "#广汽方法论-260813.docx 方法论文档",
-    "pred": "knowledge_qa",
-    "route": "explain"
-   },
-   {
-    "query": "#广汽方法论-260813.docx 方法论文档在知识库中存在，为啥没检索到",
-    "pred": "knowledge_qa",
-    "route": "explain"
-   },
-   {
-    "query": "【建模目的】建立产品相关利益相关方结构模型，明确产品与外部参与对象之间的关系，为后续用户需求分析和场景上下文定义提供输入，生成l利益相关方的BDD视图\n【输入】\n1， 用户需求信息\n2，生命周期信息\n【建模活动】\n1. 分析场景的利益相关方信息. 建立整车与利益相关方之间的组成关系\n【输出】\n1. 利益相关方BDD视图\n2. 产品外部参与对象定义\n【建模约束】\n1， 当前阶段仅定义利益相关方对象及结构关系，不建立需求关联矩阵\n3.，不基于利益相关方信息提前推导功能和系统设计",
-    "pred": "design",
-    "route": "rule"
-   },
-   {
-    "query": "【建模目的】将客户提供的整车需求数据导入模型，形成整车需求分析初始输入，生成整车的需求视图\n【输入】客户提供的整车需求，如下：\n<IR-3>车辆动力管理：\n车辆应根据驾驶需求和车辆运行状态，对车辆动力输出进行\n管理，以满足车辆运行需求。\n<IR-1>车辆动力输出：\n车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需\n求的动力输出。\n<IR-2>动力模式管理\n车辆应根据车辆状态和运行条件选择适合的动力运行模式，\n以满足车辆运行需求。\n<IR-4>能源状态适应\n车辆应根据能源状态调整动力输出策略，保证车辆持续运行\n能力。\n\n【建模活动】\n1.读取需求内容（名称、描述）\n2.解析需求编号、名称、描述等信息\n3.将需求条目导入模型工程\n【输出】IR需求图\n【建模约束】\n1.保持客户需求原文，不修改需求语义\n2.需求编号保持原始编号规则",
-    "pred": "design",
-    "route": "rule"
-   },
-   {
-    "query": "建模目的】建立产品生命周期上下文，为后续用户使用阶段分析提供基础\n【输入】广汽定义的五个生命周期阶段：\n1. 产品开发阶段\n2. 生产制造阶段\n3. 销售服务阶段\n4. 用户使用阶段\n5. 产品报废阶段\n【建模活动】\n1. 创建产品生命周期模型（交互视图（ACT活动图））\n2. 按照固定顺序建立五个生命周期阶段\n3. 建立阶段之间的顺序关系\n【输出】产品全生命周期模型（交互视图（ACT活动图））\n【建模约束】\n1. 生命周期阶段固定，不新增、不删除、不调整\n2. 当前节点只定义生命周期框架\n3. 不展开阶段内部活动",
-    "pred": "design",
-    "route": "rule"
-   },
-   {
-    "query": "你好，我是MBSE建模人员，请介绍下你的能力",
-    "pred": "knowledge_qa",
-    "route": "explain"
-   },
-   {
-    "query": "你好，我是MBSE建模人员，请介绍下你的能力",
-    "pred": "knowledge_qa",
-    "route": "explain"
-   },
-   {
-    "query": "介绍下你自己的能力边界",
-    "pred": "knowledge_qa",
-    "route": "explain"
-   },
-   {
-    "query": "query again",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "query project list",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "你好，请介绍下你的能力",
-    "pred": "knowledge_qa",
-    "route": "explain"
-   },
-   {
-    "query": "帮我查询工程列表",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "你好，请介绍下你的能力",
-    "pred": "knowledge_qa",
-    "route": "explain"
-   },
-   {
-    "query": "你好，我是MBSE建模人员，请介绍下你的能力",
-    "pred": "knowledge_qa",
-    "route": "explain"
-   },
-   {
-    "query": "query again",
-    "pred": "chat",
-    "route": "chat"
-   }
-  ]
+  "chat_share": null,
+  "weak_detail": []
  },
  "weak_regression": {
-  "baseline": "docs/评测/nightly/latest-trace-report.json",
-  "n_compared": 47,
-  "stability": 1.0,
+  "baseline": "",
+  "n_compared": 0,
+  "stability": null,
   "shifts": [],
   "note": ""
  },
@@ -758,7 +531,9 @@
    "pred": "chat",
    "route": "chat",
    "conf": 0.0,
-   "match": false
+   "match": false,
+   "source_id": 37,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-002",
@@ -767,7 +542,9 @@
    "pred": "chat",
    "route": "chat",
    "conf": 0.0,
-   "match": false
+   "match": false,
+   "source_id": 47,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-003",
@@ -776,7 +553,9 @@
    "pred": "chat",
    "route": "chat",
    "conf": 0.0,
-   "match": true
+   "match": true,
+   "source_id": 36,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-004",
@@ -785,7 +564,9 @@
    "pred": "chat",
    "route": "chat",
    "conf": 0.0,
-   "match": true
+   "match": true,
+   "source_id": 38,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-005",
@@ -794,7 +575,9 @@
    "pred": "knowledge_qa",
    "route": "explain",
    "conf": 0.8,
-   "match": true
+   "match": true,
+   "source_id": 46,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-006",
@@ -803,7 +586,9 @@
    "pred": "review",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 45,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-007",
@@ -812,7 +597,9 @@
    "pred": "design",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 41,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-008",
@@ -821,7 +608,9 @@
    "pred": "design",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 40,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-009",
@@ -830,7 +619,9 @@
    "pred": "chat",
    "route": "chat",
    "conf": 0.0,
-   "match": true
+   "match": true,
+   "source_id": 39,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-010",
@@ -839,7 +630,9 @@
    "pred": "knowledge_qa",
    "route": "explain",
    "conf": 0.8,
-   "match": true
+   "match": true,
+   "source_id": 35,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-011",
@@ -848,7 +641,9 @@
    "pred": "report_generation",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 34,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-012",
@@ -857,7 +652,9 @@
    "pred": "knowledge_qa",
    "route": "rule_scored",
    "conf": 0.9,
-   "match": true
+   "match": true,
+   "source_id": 33,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-013",
@@ -866,7 +663,9 @@
    "pred": "report_generation",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 32,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-014",
@@ -875,7 +674,9 @@
    "pred": "impact",
    "route": "rule_scored",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 31,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-015",
@@ -884,7 +685,9 @@
    "pred": "review",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 30,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-016",
@@ -893,7 +696,9 @@
    "pred": "system_mgmt",
    "route": "semantic_weak",
    "conf": 0.6761234037828131,
-   "match": true
+   "match": true,
+   "source_id": 27,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-017",
@@ -902,7 +707,9 @@
    "pred": "system_mgmt",
    "route": "semantic",
    "conf": 0.9999999999999999,
-   "match": true
+   "match": true,
+   "source_id": 26,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-018",
@@ -911,7 +718,9 @@
    "pred": "chat",
    "route": "chat",
    "conf": 0.0,
-   "match": false
+   "match": false,
+   "source_id": 25,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-019",
@@ -920,7 +729,9 @@
    "pred": "requirement_analysis",
    "route": "fused",
    "conf": 0.92,
-   "match": true
+   "match": true,
+   "source_id": 24,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-020",
@@ -929,7 +740,9 @@
    "pred": "report_generation",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 23,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-021",
@@ -938,7 +751,9 @@
    "pred": "report_generation",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 22,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-022",
@@ -947,7 +762,9 @@
    "pred": "trace_verification",
    "route": "rule_scored",
    "conf": 0.95,
-   "match": false
+   "match": false,
+   "source_id": 21,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-023",
@@ -956,7 +773,9 @@
    "pred": "review",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 20,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-024",
@@ -965,7 +784,9 @@
    "pred": "requirement_quality",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 19,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-025",
@@ -974,7 +795,9 @@
    "pred": "requirement_quality",
    "route": "rule_scored",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 18,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-026",
@@ -983,7 +806,9 @@
    "pred": "impact",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 17,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-027",
@@ -992,7 +817,9 @@
    "pred": "impact",
    "route": "rule_scored",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 16,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-028",
@@ -1001,7 +828,9 @@
    "pred": "impact",
    "route": "rule_scored",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 15,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-029",
@@ -1010,7 +839,9 @@
    "pred": "design",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 14,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-030",
@@ -1019,7 +850,9 @@
    "pred": "design",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 13,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-031",
@@ -1028,7 +861,9 @@
    "pred": "chat",
    "route": "chat",
    "conf": 0.0,
-   "match": false
+   "match": false,
+   "source_id": 12,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-032",
@@ -1037,7 +872,9 @@
    "pred": "design",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 11,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-033",
@@ -1046,7 +883,9 @@
    "pred": "design",
    "route": "rule",
    "conf": 0.95,
-   "match": true
+   "match": true,
+   "source_id": 10,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-034",
@@ -1055,7 +894,9 @@
    "pred": "design",
    "route": "rule_scored",
    "conf": 0.9,
-   "match": true
+   "match": true,
+   "source_id": 9,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-035",
@@ -1064,7 +905,9 @@
    "pred": "knowledge_qa",
    "route": "fused",
    "conf": 0.92,
-   "match": true
+   "match": true,
+   "source_id": 8,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-036",
@@ -1073,7 +916,9 @@
    "pred": "knowledge_qa",
    "route": "explain",
    "conf": 0.8,
-   "match": true
+   "match": true,
+   "source_id": 7,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-037",
@@ -1082,7 +927,9 @@
    "pred": "knowledge_qa",
    "route": "explain",
    "conf": 0.8,
-   "match": true
+   "match": true,
+   "source_id": 6,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-038",
@@ -1091,7 +938,9 @@
    "pred": "knowledge_qa",
    "route": "explain",
    "conf": 0.8,
-   "match": true
+   "match": true,
+   "source_id": 5,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-039",
@@ -1100,7 +949,9 @@
    "pred": "knowledge_qa",
    "route": "explain",
    "conf": 0.8,
-   "match": true
+   "match": true,
+   "source_id": 4,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-040",
@@ -1109,7 +960,9 @@
    "pred": "knowledge_qa",
    "route": "explain",
    "conf": 0.8,
-   "match": true
+   "match": true,
+   "source_id": 3,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-041",
@@ -1118,7 +971,9 @@
    "pred": "knowledge_qa",
    "route": "explain",
    "conf": 0.8,
-   "match": true
+   "match": true,
+   "source_id": 2,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_confirmed-042",
@@ -1127,7 +982,9 @@
    "pred": "knowledge_qa",
    "route": "explain",
    "conf": 0.8,
-   "match": true
+   "match": true,
+   "source_id": 1,
+   "extractor": "intent_confirmed"
   },
   {
    "id": "intent_rejected-001",
@@ -1137,7 +994,9 @@
    "route": "rule",
    "conf": 0.95,
    "reject_kind": "pool_invalid",
-   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+   "source_id": 61,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-002",
@@ -1147,7 +1006,9 @@
    "route": "rule",
    "conf": 0.95,
    "reject_kind": "pool_invalid",
-   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+   "source_id": 60,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-003",
@@ -1157,7 +1018,9 @@
    "route": "rule",
    "conf": 0.95,
    "reject_kind": "pool_invalid",
-   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+   "source_id": 58,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-004",
@@ -1167,7 +1030,9 @@
    "route": "rule",
    "conf": 0.95,
    "reject_kind": "pool_invalid",
-   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+   "source_id": 56,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-005",
@@ -1177,7 +1042,9 @@
    "route": "rule",
    "conf": 0.95,
    "reject_kind": "pool_invalid",
-   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+   "source_id": 54,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-006",
@@ -1187,7 +1054,9 @@
    "route": "rule",
    "conf": 0.95,
    "reject_kind": "pool_invalid",
-   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+   "source_id": 53,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-007",
@@ -1197,7 +1066,9 @@
    "route": "rule",
    "conf": 0.95,
    "reject_kind": "pool_invalid",
-   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+   "source_id": 52,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-008",
@@ -1207,7 +1078,9 @@
    "route": "rule",
    "conf": 0.95,
    "reject_kind": "pool_invalid",
-   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+   "source_id": 51,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-009",
@@ -1217,7 +1090,9 @@
    "route": "chat",
    "conf": 0.0,
    "reject_kind": "pool_invalid",
-   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   "reject_note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤",
+   "source_id": 49,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-010",
@@ -1227,7 +1102,9 @@
    "route": "rule_scored",
    "conf": 0.9,
    "reject_kind": "pool_invalid",
-   "reject_note": "多意图句（一句话三个阶段），不属于单标签评测集；已有多意图专项用例覆盖，放这里只会制造假错例"
+   "reject_note": "多意图句（一句话三个阶段），不属于单标签评测集；已有多意图专项用例覆盖，放这里只会制造假错例",
+   "source_id": 48,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-011",
@@ -1237,7 +1114,9 @@
    "route": "rule_scored",
    "conf": 0.9,
    "reject_kind": "pool_invalid",
-   "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+   "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤",
+   "source_id": 44,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-012",
@@ -1247,7 +1126,9 @@
    "route": "explain",
    "conf": 0.8,
    "reject_kind": "pool_invalid",
-   "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+   "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤",
+   "source_id": 43,
+   "extractor": "intent_rejected"
   },
   {
    "id": "intent_rejected-013",
@@ -1257,7 +1138,9 @@
    "route": "rule_scored",
    "conf": 0.9,
    "reject_kind": "pool_invalid",
-   "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+   "reject_note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤",
+   "source_id": 42,
+   "extractor": "intent_rejected"
   }
  ]
 }

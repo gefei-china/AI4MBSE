@@ -602,7 +602,11 @@ def main():
         pos_pairs.append((c["gold"], d.get("pred", "")))
         pos_detail.append({"id": c["id"], "query": c["query"], "gold": c["gold"],
                            "pred": d.get("pred", ""), "route": d.get("route", ""),
-                           "conf": d.get("conf"), "match": d.get("pred") == c["gold"]})
+                           "conf": d.get("conf"), "match": d.get("pred") == c["gold"],
+                           # T3（错例改判）：source_id → intent_samples 源行，
+                           # 前端"改判"经 PUT /api/intent-samples/{source_id} 落源头
+                           "source_id": c.get("source_id"),
+                           "extractor": c.get("extractor")})
     pos_m = positive_agreement(pos_pairs)
     wrong = [d for d in pos_detail if not d["match"]]
 
@@ -613,7 +617,9 @@ def main():
         item = {"id": c["id"], "query": c["query"], "gold": c["gold"],
                 "pred": d.get("pred", ""), "route": d.get("route", ""),
                 "conf": d.get("conf"), "reject_kind": c.get("reject_kind"),
-                "reject_note": c.get("reject_note", "")}
+                "reject_note": c.get("reject_note", ""),
+                "source_id": c.get("source_id"),
+                "extractor": c.get("extractor")}
         (neg_detail if c.get("reject_kind") == "routing_error"
          else neg_pool_detail).append(item)
     rep_rate, repeats = repeat_mistake_rate(neg_detail)

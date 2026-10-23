@@ -157,6 +157,33 @@
     await loadEvalManagement();
   }
 
+  /* T3：错例改判 —— 改源头标注（intent_samples），改完可一键重建评测集。
+     确认语义与 42 页同源：status='confirmed' 必须有标签（后端校验兜底）。 */
+  async function rejudgeIntentSample(sourceId, queryExcerpt, sysJudge) {
+    const v = prompt(
+      '改判样本 #' + sourceId + '\n问句：' + queryExcerpt + '…'
+      + '\n系统当前判：' + (sysJudge || '—')
+      + '\n请输入**正确**意图（人工裁决口径）：', '');
+    if (v === null) return;
+    const intent = String(v || '').trim();
+    if (!intent) { alert('意图不能为空（确认态必须有标签，否则污染评测集）'); return; }
+    const r = await api('/api/intent-samples/' + sourceId, {
+      method: 'PUT',
+      body: JSON.stringify({
+        intent: intent, status: 'confirmed',
+        note: '评测页改判 ' + new Date().toISOString().slice(0, 10)
+          + '（系统曾判 ' + (sysJudge || '—') + '）'
+      })
+    });
+    if (!r || r.error || r.ok === false) {
+      alert('改判失败：' + ((r && (r.error || r.message)) || '未知错误')); return;
+    }
+    if (confirm('已改判为「' + intent + '」。现在重建评测集吗？\n'
+      + '（build_evalset 作业 ~40s；dataset_id 随内容更新，下轮 Trace 评测生效）')) {
+      submitEvalJob('build_evalset');
+    }
+  }
+
   /* ══ 段 ①：现在什么状态 ══ */
   function _renderLatest(d) {
     const latest = d.latest || {};
@@ -446,12 +473,28 @@
         ])));
     }
     const wrong = pos.wrong || [];
+    // T3（2026-10-23）：错例"改判"入口 —— 改**源头**（intent_samples，
+    // PUT /api/intent-samples/{source_id}），不改派生物 trace_evalset
+    // （dataset_id 内容寻址，手改派生物会让"分数↔题库版本"对应关系撒谎）。
+    // 改完一键重建评测集，下轮 Trace 评测自动反映。
+    const editable = wrong.filter(w => w.source_id);
+    const editHint = editable.length
+      ? '<div style="font-size:10.5px;color:var(--mut);margin-top:5px;">'
+        + '改判 = 修正源头标注（intent_samples #' + esc(editable.map(w => w.source_id).join(', #').slice(0, 60))
+        + '），不会立即改变本报告 —— 重建评测集后下轮生效。</div>'
+      : '';
     h += _dsection('不一致样本（当前路由 ≠ 人工裁决）',
-      _dtable(['问句', '人工裁决', '当前路由', '层', '置信'], wrong.slice(0, 20).map(w => [
-        esc(String(w.query || '').slice(0, 60)),
-        esc(w.gold || '—'), esc(w.pred || '—'),
-        esc(w.route || '—'), _dval(w.conf)
-      ])), wrong.length + ' 条');
+      _dtable(['问句', '人工裁决', '当前路由', '层', '置信', '操作'],
+        wrong.slice(0, 20).map(w => [
+          esc(String(w.query || '').slice(0, 60)),
+          esc(w.gold || '—'), esc(w.pred || '—'),
+          esc(w.route || '—'), _dval(w.conf),
+          w.source_id
+            ? `<a href="javascript:void(0)" title="修正源头标注（intent_samples #${w.source_id}）"
+                onclick="rejudgeIntentSample(${Number(w.source_id)},'${esc(String(w.query || '')).slice(0, 30)}','${esc(w.pred || '')}')">✎ 改判</a>`
+            : '<span style="color:var(--mut);">—</span>'
+        ])), wrong.length + ' 条' + (editable.length ? '（' + editable.length + ' 条可改判）' : '')
+      + editHint);
     const rep = neg.repeats || [];
     h += _dsection('仍犯旧错（人工纠正过的路由又错了）',
       _dtable(['问句', '仍判成', '层'], rep.slice(0, 20).map(r => [
@@ -514,7 +557,7 @@
     const s = d.summary || {};
     const doc = s.doc || {}, graph = s.graph || {}, neg = s.neg || {};
     const ctl = s.doc_control || {};
-    return _dsection('检索三域指标',
+    let h = _dsection('检索三域指标',
       _dtable(['域', '指标', '值'], [
         ['doc', 'n', _dval(doc.n)], ['doc', 'recall@5', _dval(doc['recall@5'])],
         ['doc', 'mrr@10', _dval(doc['mrr@10'])], ['doc', 'ndcg@10', _dval(doc['ndcg@10'])],
@@ -527,6 +570,34 @@
         ['负对照', 'recall@5', _dval(ctl['recall@5'])],
         ['负对照', 'mrr@10', _dval(ctl['mrr@10'])],
       ]));
+    // T4（2026-10-23）：负样本有效性复核辅助（只读）——负样本的前提是
+    // "语料里确实答不了"，这里把每条的 top-1 命中证据摆出来供人判断。
+    // suspect_answerable = 重叠 ≥0.5 且命中含数字 ⇒ 疑似语料其实答得了
+    // （该负样本可能写错）。只标记不剔除（硬剔除会因检索噪声误杀真负样本）。
+    const rows = d.rows || {};
+    const negs = (Array.isArray(rows) ? rows.filter(x => x.kind === 'neg')
+                  : (rows.neg || []));
+    const suspects = negs.filter(x => x.suspect_answerable);
+    const hitRows = negs.filter(x => x.n_hits > 0).slice(0, 10).map(x => {
+      const t1 = x.top1 || {};
+      return [esc(String(x.query || '').slice(0, 40)), esc(x.tag || ''),
+              _dval(x.n_hits), esc(String(t1.source_doc || '—').slice(0, 30)),
+              _dval(t1.overlap),
+              x.suspect_answerable
+                ? '<span class="st r" title="重叠≥0.5 且命中含数字：疑似语料答得了，该负样本可能写错">疑似</span>'
+                : '<span class="st ok" title="语义邻近但无答案：高质量负样本">邻近</span>'];
+    });
+    if (hitRows.length) {
+      h += _dsection('负样本有效性证据（有命中的负样本，top-1）',
+        _dtable(['问句', '类别', '命中数', 'top-1 来源', '重叠度', '判读'], hitRows)
+        + '<div style="font-size:10.5px;color:var(--mut);margin-top:5px;">'
+        + '完全无命中 ' + (negs.length - negs.filter(x => x.n_hits > 0).length)
+        + '/' + negs.length + ' 条（语料里真的什么都没有）；'
+        + '疑似答得了 ' + suspects.length + ' 条。复核/换问句走 gold 修订（改'
+        + ' <code>tools/eval/build_evalset.py</code> 的 NEG 常量后重建评测集），'
+        + '不在此在线改写。</div>');
+    }
+    return h;
   }
 
   function _dgeneric(d) {
@@ -637,4 +708,5 @@
   window.openEvalReport = openEvalReport;
   window.submitEvalJob = submitEvalJob;
   window.editEvalGate = editEvalGate;
+  window.rejudgeIntentSample = rejudgeIntentSample;
 })();
