@@ -194,11 +194,34 @@ def metric_status_for(kind, column, value, thresholds=None):
         _CURRENT_COLUMN[0] = None
 
 
-def metric_columns_for(kind):
-    """某类型要展示的指标列（供后端组装给前端）。"""
+def metric_columns_for(kind, conn=None):
+    """某类型要展示的指标列（供后端组装给前端）。
+
+    静态列来自 KIND_METRIC_COLUMNS（单一真源）；给 conn 时**并上快照表里
+    该类型实际观测到的键**（O3 扩展通道）—— 新增指标只评测器侧写一行，
+    前端即自动透出，零迁移零改映射。观测键缺静态列信息时：label=键名、
+    direction/gate 取该键最近一行的落库快照。
+    """
     cols = KIND_METRIC_COLUMNS.get(kind, KIND_METRIC_COLUMNS.get("", []))
-    return [{"key": c, "label": l, "direction": d, "gate_key": g}
-            for c, l, d, g in cols]
+    out = [{"key": c, "label": l, "direction": d, "gate_key": g}
+           for c, l, d, g in cols]
+    if conn is not None:
+        seen = {c["key"] for c in out}
+        try:
+            rows = conn.execute(
+                "SELECT metric_key, direction, gate_key FROM eval_metrics "
+                "WHERE eval_kind=? AND metric_key NOT IN (%s) "
+                "GROUP BY metric_key" % ",".join("?" * len(seen)) if seen else
+                "SELECT metric_key, direction, gate_key FROM eval_metrics "
+                "WHERE eval_kind=? GROUP BY metric_key",
+                ([kind] + sorted(seen)) if seen else [kind]).fetchall()
+            for r in rows:
+                out.append({"key": r["metric_key"], "label": r["metric_key"],
+                            "direction": r["direction"] or "high",
+                            "gate_key": r["gate_key"] or ""})
+        except Exception:
+            pass  # 快照表不可用 ⇒ 退回静态列（主键路不连坐）
+    return out
 
 
 def _columns(conn, table="eval_reports"):
@@ -293,6 +316,14 @@ def fetch_history(conn, eval_kind="", limit=20):
         # ★ trustworthy = 有负对照 且 无漂移。没有负对照就没有
         #   "指标在测真实对齐关系"的证据（那是本工程评测体系的核心纪律）。
         item["trustworthy"] = bool(ctrl) and not drift
+        # O3：快照表里的键值并入 item（静态列没有的键在此透出 —— 扩展通道）。
+        # 一次一查（每报告 ≤10 行），避免跨报告大 JOIN 的复杂度。
+        for m in fetch_metrics(conn, r["id"]):
+            mk = m["metric_key"]
+            if mk not in item or item.get(mk) is None:
+                item[mk] = m["value"]
+            item.setdefault("metric_status", {})[mk] = m["status"] or \
+                item["metric_status"].get(mk, "")
         bucket.append(item)
 
     return {
@@ -306,6 +337,53 @@ def fetch_history(conn, eval_kind="", limit=20):
                  "tools/eval/build_evalset.py → tools/eval/run_eval.py --control "
                  "→ tools/eval/save_report.py"),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 指标快照表（2026-10-23 评估 O3 / P0-3）：指标的扩展通道
+# ══════════════════════════════════════════════════════════════════════
+def write_metric_rows(conn, report_id, kind, values):
+    """把一次评测的指标写进 eval_metrics 快照表（每指标一行）。
+
+    values: {metric_key: value}（None 的键跳过 —— NULL=未测，区别于 0 分）。
+    direction / gate_key 来自 metric_columns_for(kind)（单一真源）；threshold
+    与 status 在**落库时**算好存快照（阈值后来改了不影响历史三色）。
+
+    表不存在（老库未迁移）⇒ 静默跳过并返回 0 —— 快照表是扩展通道不是主键路，
+    固定列照常写；不能因为辅助通道失败让整个评测落库失败。
+    """
+    try:
+        conn.execute("SELECT 1 FROM eval_metrics LIMIT 1")
+    except Exception:
+        return 0
+    spec = {c["key"]: c for c in metric_columns_for(kind)}
+    thr_map = _gate_thresholds()
+    n = 0
+    for key, val in (values or {}).items():
+        if val is None:
+            continue
+        s = spec.get(key, {"direction": "high", "gate_key": ""})
+        gate_key = s.get("gate_key") or ""
+        threshold = thr_map.get(gate_key) if gate_key else None
+        status = metric_status_for(kind, key, val, thr_map)
+        conn.execute(
+            "INSERT INTO eval_metrics (report_id, eval_kind, metric_key, value, "
+            "direction, gate_key, threshold, status) VALUES (?,?,?,?,?,?,?,?)",
+            (report_id, kind or "", key, val,
+             s.get("direction") or "high", gate_key, threshold, status))
+        n += 1
+    return n
+
+
+def fetch_metrics(conn, report_id):
+    """单份报告的指标快照行（下钻端点用；表不存在返回空列表）。"""
+    try:
+        rows = conn.execute(
+            "SELECT metric_key, value, direction, gate_key, threshold, status "
+            "FROM eval_metrics WHERE report_id=? ORDER BY id", (report_id,)).fetchall()
+    except Exception:
+        return []
+    return [dict(r) for r in rows]
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -345,6 +423,7 @@ def fetch_report_by_id(conn, row_id):
     return {"ok": True, "id": row["id"], "eval_kind": kind,
             "kind_label": EVAL_KIND_LABELS.get(kind, kind or "未标注类型"),
             "doc_name": row["doc_name"], "created_at": row["created_at"],
+            "metrics": fetch_metrics(conn, rid),
             "detail": detail}
 
 

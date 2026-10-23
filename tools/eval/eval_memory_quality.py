@@ -326,6 +326,13 @@ def _write_report(conn, n_pass, n_fail, n_skip, rate, results):
         raise RuntimeError("doc_id 为 NOT NULL，必须显式给值")
     conn.execute("INSERT INTO eval_reports (%s) VALUES (%s)"
                  % (",".join(use), ",".join("?" * len(use))), list(use.values()))
+    # O3：指标快照表（entity_f1=命中率；快照行带三色，不再依赖固定列语义）
+    try:
+        from repositories.eval_report_repo import write_metric_rows
+        write_metric_rows(conn, conn.execute("SELECT last_insert_rowid()").fetchone()[0],
+                          "memory_quality", {"entity_f1": cand.get("entity_f1")})
+    except Exception:
+        pass  # 快照表是扩展通道，不连坐主落库
     conn.commit()
     return 1
 

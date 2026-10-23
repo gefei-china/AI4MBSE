@@ -907,6 +907,15 @@ def _save(report):
              s["citation_valid_rate"], s["citation_usage_rate"],
              s["grounded_entity_rate"], s["no_citation_factual_rate"],
              j.get("faithful_rate") if j.get("enabled") else None))
+        # O3：指标快照表（每指标一行，三色落库时算好；固定列照旧保留）
+        from repositories.eval_report_repo import write_metric_rows
+        write_metric_rows(conn, cur.lastrowid, "generation_quality", {
+            "gen_citation_valid_rate": s["citation_valid_rate"],
+            "gen_citation_usage_rate": s["citation_usage_rate"],
+            "gen_grounded_entity_rate": s["grounded_entity_rate"],
+            "gen_no_citation_factual_rate": s["no_citation_factual_rate"],
+            "gen_faithful_rate": j.get("faithful_rate") if j.get("enabled") else None,
+        })
         conn.commit()
         print("eval_reports 落库成功: id=%d [eval_kind=generation_quality]%s"
               % (cur.lastrowid,

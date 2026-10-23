@@ -62,7 +62,7 @@ def eval_overview(conn=Depends(db_session)):
         item["kind_label"] = _repo.EVAL_KIND_LABELS.get(k, k or "未标注类型")
         # 指标列含 (key, label, direction, gate_key)；**阈值判定在后端完成**，
         # 前端只渲染 status（"只渲染不计算"纪律）。
-        item["metric_columns"] = _repo.metric_columns_for(k)
+        item["metric_columns"] = _repo.metric_columns_for(k, conn)
         item["metric_status"] = item.get("metric_status") or {}
         latest[k] = item
 
@@ -105,7 +105,7 @@ def eval_history(eval_kind: str = "", limit: int = 20, conn=Depends(db_session))
 
     trends = {}
     for k, rows in (hist.get("history") or {}).items():
-        cols = _repo.metric_columns_for(k)
+        cols = _repo.metric_columns_for(k, conn)
         # 时间序列：按时间正序（画线要正序），null 断点（不画 0）
         seq = []
         for r in reversed(rows):
@@ -120,7 +120,7 @@ def eval_history(eval_kind: str = "", limit: int = 20, conn=Depends(db_session))
             "counts": hist.get("counts") or {},
             "history": hist.get("history") or {},
             "trends": trends,
-            "metric_columns": {k: _repo.metric_columns_for(k)
+            "metric_columns": {k: _repo.metric_columns_for(k, conn)
                                for k in (hist.get("kinds") or [])},
             "kind_labels": _repo.EVAL_KIND_LABELS,
             "note": hist.get("note") or ""}

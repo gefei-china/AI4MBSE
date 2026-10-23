@@ -79,6 +79,64 @@ def _migrate_eval_tables(conn):
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_eval_reports_doc ON eval_reports(doc_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_eval_reports_time ON eval_reports(created_at)")
+    # ── 2026-10-23（评估 O3 / P0-3）：指标快照表 ─────────────────────
+    # 背景：指标写死成 eval_reports 的固定列（doc_*/gen_*/trace_*），新增一个
+    #   指标实测要改 8 个文件 14 处；漏改前端 = 静默不显示（无报错）。
+    # 语义：一行 = 一个指标快照，三色 status **落库时由后端算好**（前端只渲染，
+    #   纪律 A8 不破）。固定列保留（历史兼容 + 主指标快查），快照表是扩展通道：
+    #   新增指标只需在评测器侧写入一行，repo/前端自动透出，零迁移。
+    c.execute("""CREATE TABLE IF NOT EXISTS eval_metrics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        report_id INTEGER NOT NULL,            -- → eval_reports.id
+        eval_kind TEXT DEFAULT '',
+        metric_key TEXT NOT NULL,              -- 与固定列同名（如 gen_faithful_rate）或新键
+        value REAL,                            -- NULL=本轮未测（区别于 0 分）
+        direction TEXT DEFAULT 'high',         -- high=越大越好 | low=越小越好
+        gate_key TEXT DEFAULT '',              -- → core.config.eval_gates 键（空=不门禁）
+        threshold REAL,                        -- 落库时的阈值快照（阈值后来改了不影响历史）
+        status TEXT DEFAULT '',                -- ok|alert|warn|''（后端算好）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_eval_metrics_report ON eval_metrics(report_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_eval_metrics_kind ON eval_metrics(eval_kind, metric_key)")
+    # 历史行回填（幂等）：已有报告若还没有任何快照行，从固定列补写。
+    # 三色沿用 metric_status_for（repo 层同一份实现，避免迁移里另写判定）。
+    try:
+        from repositories.eval_report_repo import write_metric_rows
+        have = {r[0] for r in c.execute(
+            "SELECT DISTINCT report_id FROM eval_metrics").fetchall()}
+        rows = c.execute(
+            "SELECT id, eval_kind, doc_recall_at_5, doc_mrr_at_10, doc_ndcg_at_10, "
+            "doc_pool_recall, doc_rerank_drop_rate, doc_recall_miss_rate, "
+            "gen_citation_valid_rate, gen_citation_usage_rate, "
+            "gen_grounded_entity_rate, gen_no_citation_factual_rate, gen_faithful_rate, "
+            "trace_agreement_rate, trace_repeat_mistake_rate, entity_f1 "
+            "FROM eval_reports ORDER BY id").fetchall()
+        n_back = 0
+        for r in rows:
+            rid, kind = r[0], r[1] or ""
+            if rid in have or not kind:
+                continue
+            vals = {}
+            if kind == "rag_retrieval":
+                vals = dict(zip(("doc_recall_at_5", "doc_mrr_at_10", "doc_ndcg_at_10",
+                                 "doc_pool_recall", "doc_rerank_drop_rate",
+                                 "doc_recall_miss_rate"), r[2:8]))
+            elif kind == "generation_quality":
+                vals = dict(zip(("gen_citation_valid_rate", "gen_citation_usage_rate",
+                                 "gen_grounded_entity_rate",
+                                 "gen_no_citation_factual_rate", "gen_faithful_rate"),
+                                r[8:13]))
+            elif kind == "trace_consistency":
+                vals = dict(zip(("trace_agreement_rate", "trace_repeat_mistake_rate"),
+                                r[13:15]))
+            elif kind == "memory_quality":
+                vals = {"entity_f1": r[15]}
+            n_back += write_metric_rows(c, rid, kind, vals)
+        if n_back:
+            print(f"[init_db] eval_metrics 历史回填: {n_back} 行（固定列 → 快照表）")
+    except Exception as _e:
+        print(f"[init_db] eval_metrics 历史回填跳过: {_e}")
     conn.commit()
 
 def _migrate_kb_v2_enhance(conn):

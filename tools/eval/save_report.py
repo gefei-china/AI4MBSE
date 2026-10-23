@@ -50,6 +50,17 @@ def save(report_path: str, tag: str = "") -> int:
              doc.get("recall_miss_rate")))
         conn.commit()
         rid = cur.lastrowid
+        # O3（2026-10-23）：同步写指标快照表（每指标一行，三色落库时算好）
+        from repositories.eval_report_repo import write_metric_rows
+        n_m = write_metric_rows(conn, rid, "rag_retrieval", {
+            "doc_recall_at_5": doc.get("recall@5"),
+            "doc_mrr_at_10": doc.get("mrr@10"),
+            "doc_ndcg_at_10": doc.get("ndcg@10"),
+            "doc_pool_recall": doc.get("pool_recall@20"),
+            "doc_rerank_drop_rate": doc.get("rerank_drop_rate"),
+            "doc_recall_miss_rate": doc.get("recall_miss_rate"),
+        })
+        print(f"  eval_metrics 快照 {n_m} 行")
         print(f"eval_reports 落库成功: id={rid}")
         print(f"  {doc_name}")
         print(f"  [eval_kind=rag_retrieval] doc recall@5={doc.get('recall@5')} "
