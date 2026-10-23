@@ -248,6 +248,67 @@ def e4_discipline():
     return ok
 
 
+def e4_production_voice():
+    """E4（2026-10-23，回应"29 例片面"）：生产 confirmed 池真实说法一致性。
+
+    为什么：29 例黄金集是**人工整理的说法**，与生产真实 phrasing 分布不同
+    （米爸实测截图："帮我看看这个系统大概是怎么设计的"这类口语说法不在
+    黄金集里）。本段从**真库** intent_samples（status=confirmed）取真实
+    用户话逐条路由，报告一致率。
+
+    ⚠️ **观测不门禁**：一致率门槛属 trace_consistency 门禁（0.75）——这里
+    判红会与它重复且口径打架；样本 <20 时判 SKIP（不具判别力不比）。
+    """
+    print("\n=== E4 生产样本一致性（confirmed 池真实说法，观测不门禁）===")
+    real_db = os.path.join(ROOT, "mbse.db")
+    if not os.path.exists(real_db):
+        _rec("E4 真库存在（无则 SKIP）", True, "mbse.db 不存在 → SKIP")
+        return True
+    try:
+        con = sqlite3.connect(f"file:{real_db}?mode=ro", uri=True)
+        rows = con.execute(
+            "SELECT text, intent FROM intent_samples "
+            "WHERE status='confirmed' AND intent IS NOT NULL AND intent != '' "
+            "AND text IS NOT NULL ORDER BY id DESC LIMIT 100").fetchall()
+        con.close()
+    except Exception as e:
+        _rec("E4 样本池可读", True, f"读取失败 → SKIP（{e}）")
+        return True
+    if len(rows) < 20:
+        _rec("E4 样本 ≥20（不足不比，无判别力）", True, f"n={len(rows)} → SKIP")
+        return True
+    from agent.pipeline import AgentPipeline
+    from agent.intent import IntentRouter
+    pipe = AgentPipeline()
+    pipe._load_db_agents()
+    rt = pipe.router
+    og, os_ = IntentRouter._cache_get, IntentRouter._cache_set
+    IntentRouter._cache_get = lambda self, *a, **k: None
+    IntentRouter._cache_set = lambda self, *a, **k: None
+    n_ok, detail = 0, []
+    try:
+        for text, want in rows:
+            got = rt.detect(str(text))
+            meta = rt.get_last_meta() or {}
+            if got == want:
+                n_ok += 1
+            else:
+                detail.append({"text": str(text)[:40], "want": want, "got": got,
+                               "route": meta.get("route", ""),
+                               "verdict": meta.get("verdict", "")})
+    finally:
+        IntentRouter._cache_get, IntentRouter._cache_set = og, os_
+    acc = round(n_ok / len(rows), 4)
+    _rec(f"E4a 生产一致率（n={len(rows)}）＝ {acc:.3f}（观测值，门禁在 trace 一致率）",
+         True, f"不一致 {len(detail)} 条")
+    unsure = sum(1 for d in detail if d.get("verdict") == "unsure")
+    _rec("E4b 不一致中 verdict=unsure 占比（错得诚实 vs 错得自信）", True,
+         f"unsure {unsure}/{len(detail)}")
+    for d in detail[:8]:
+        print(f"      - [{d['want']}→{d['got']}|{d['route']}|{d['verdict']}] {d['text']}")
+    return True
+
+
 def main():
     show = "--report" in sys.argv
     print("=" * 72)
@@ -270,6 +331,7 @@ def main():
     r3, acc, wrong = e3_accuracy(show=show)
     ok &= r3
     ok &= e4_discipline()
+    e4_production_voice()  # E4 观测不门禁（返回恒 True）
 
     bad = [r for r in _results if r[0] != PASS]
     print("\n" + "=" * 72)

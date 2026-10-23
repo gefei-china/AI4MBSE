@@ -241,6 +241,8 @@ class IntentRouter:
         # P2 逻辑规则配置化：intent_rules 规则缓存 [(trigger, intent, weight)]（None=未加载，首次 detect 自动加载）
         self._rules = None
         self._rules_epoch = -1  # P0-3：-1 ≠ 任何 epoch → 首次 detect 必加载
+        # llm_first（2026-10-23）：每意图 few-shot 示例（confirmed 池），随 load_rules 刷新
+        self._fewshot: dict = {}
         # ★ B5-7（B-2）：本次判定"是否只靠泛词牵出意图 / 是否多意图"的留痕。
         #   ⚠️ **必须在 `__init__` 里给默认值**：`_done`/`_rule_done` 会在
         #   关键词层从未被调用的情况下被走到（如 explain 前置短路），
@@ -305,7 +307,47 @@ class IntentRouter:
         except Exception:
             self._rules = []
         self._rules_epoch = IntentRouter._RULES_EPOCH
+        # llm_first：few-shot 随规则一起刷新（同 conn；失败静默——few-shot 是增益不是依赖）
+        self._load_fewshot(conn)
         return self._rules
+
+    def _load_fewshot(self, conn=None) -> dict:
+        """llm_first（2026-10-23）：每意图取最多 2 条 **confirmed** 真实说法作 few-shot。
+
+        为什么从样本池取而不是手工清单：生产说法（"帮我看看这个系统大概是怎么
+        设计的"）与手工标注（"请设计星网宽带通信系统的架构方案"）分布不同，
+        Coze/结构化路由实践共识是"误判样本变成下一批 few-shot"——confirmed 池
+        （含 T3 改判入口写入的）就是那个飞轮的现成数据源。
+        失败静默为空 dict：few-shot 是增益不是依赖（评测干净库无表也能跑）。
+        """
+        self._fewshot = {}
+        try:
+            sql = ("SELECT intent, text FROM (SELECT intent, text, "
+                   "ROW_NUMBER() OVER (PARTITION BY intent ORDER BY id DESC) AS rn "
+                   "FROM intent_samples WHERE status='confirmed' "
+                   "AND intent IS NOT NULL AND intent != '' AND text IS NOT NULL) "
+                   "WHERE rn <= 2")
+            if conn is not None:
+                rows = conn.execute(sql).fetchall()
+            else:
+                from database import get_db
+                c = get_db()
+                try:
+                    rows = c.execute(sql).fetchall()
+                finally:
+                    c.close()
+            for r in rows:
+                self._fewshot.setdefault(str(r["intent"]), []).append(str(r["text"])[:80])
+            # 只留已知意图（DB Agent 关键词意图集），防候选外意图混进提示词
+            known = set(self._db_intents or {}) | {"knowledge_qa", "design", "impact",
+                                                   "review", "report_generation",
+                                                   "requirement_quality",
+                                                   "requirement_analysis",
+                                                   "system_mgmt", "chat"}
+            self._fewshot = {k: v for k, v in self._fewshot.items() if k in known}
+        except Exception:
+            self._fewshot = {}
+        return self._fewshot
 
     # ── 2026-09-25 语义层「接住弱信号句」的底座：给每个**粗粒度意图**补示例 utterance ──
     #  实测根因（tests/manual_verify/calibrate_intent_semantic.py 采样）：
@@ -696,6 +738,38 @@ class IntentRouter:
             if llm_intent == "requirement_quality" and not any(
                     k in t for k in ("需求质量", "质量评审", "需求质量评审", "质量分析", "模糊词", "不可验证", "验收标准")):
                 llm_intent, llm_conf = "chat", min(llm_conf, 0.5)
+            # ── llm_first（2026-10-23 米爸拍板，默认开）：LLM 主裁判 ──────────
+            # 规则无信号时 LLM 为主识别。门槛 0.75（保守起点，待 confirmed 池标定）；
+            # 弱采纳（0.50~0.75）不静默执行 → 澄清卡；低于弱线或 unsure ⇒ 落回旧路。
+            # ⚠️ 语义互证门保留（与既有 llm_conflict 同判据）：语义达阈且互斥 ⇒ 澄清。
+            # ⚠️ 上下文纪律不变（v2 只确认不改判）——收益来自 few-shot 与 unsure，
+            #   不来自放松历史（那是被三轮实测否决的路）。
+            _llm_verdict = None
+            if (llm_intent and llm_intent not in ("chat", "unsure")
+                    and self._cfg_get("llm_first", True)):
+                _tmin = float(self._cfg_get("llm_first_min_conf", 0.75))
+                _tweak = float(self._cfg_get("llm_first_weak_conf", 0.50))
+                if float(llm_conf) >= _tmin:
+                    _altf = getattr(self, "_last_sem_alt", None)
+                    if (_altf and _altf.get("intent") and _altf["intent"] != llm_intent
+                            and float(_altf.get("score") or 0) >= float(
+                                self._cfg_get("llm_sem_conflict_min", 0.49))):
+                        return self._done(llm_intent, "llm_conflict", min(llm_conf, 0.6),
+                                          text, fp, cacheable=not _hist_ctx,
+                                          used_history=bool(_hist_ctx))
+                    return self._done(llm_intent, "llm_first", llm_conf, text, fp,
+                                      cacheable=not _hist_ctx,
+                                      used_history=bool(_hist_ctx))
+                if float(llm_conf) >= _tweak:
+                    # 弱采纳不硬选：needs_clarify 由 _done 的低置信白名单之外 —— 这里显式声明
+                    return self._done(llm_intent, "llm_first_weak", llm_conf, text, fp,
+                                      cacheable=False, used_history=bool(_hist_ctx))
+                # conf < 弱线：落回旧路（确认/继承/chat），verdict=unsure
+            elif llm_intent == "chat" and float(llm_conf) >= 0.5:
+                # LLM 有依据地判闲聊（非"没判出"）—— verdict 观测区分双语义
+                _llm_verdict = "chat_real"
+            else:
+                _llm_verdict = "unsure"
             # P0-2：弱 LLM 猜测（<0.85）≠ 强信号——有会话意图时优先会话继承（追问/续写不被 LLM 弱猜测截胡）
             if llm_conf < 0.85:
                 # ── P0-5 v2（2026-09-30 **二次标定后重定稿**）：带历史 → **只做"确认继承"** ──
@@ -733,7 +807,8 @@ class IntentRouter:
                     return self._done(llm_intent, "llm_history", llm_conf, text, fp,
                                       cacheable=False, used_history=True, confirmed=True)
                 if prev_intent and prev_intent in self._db_intents:
-                    return self._done(prev_intent, "inherit", 0.55, text, fp)
+                    return self._done(prev_intent, "inherit", 0.55, text, fp,
+                                      verdict=_llm_verdict)
                 # 2026-09-26（**扩集后评测抓出并修**）：无会话上下文可继承时，低置信猜测也**不得硬选**。
                 #  实测两条生产真实说法：「帮我看看这个项目的预算」「帮我测算一下这个项目的成本」
                 #  被 LLM 以 **0.60** 猜成 report_generation（大概由"预算/成本"联想到"报告"）→
@@ -743,7 +818,8 @@ class IntentRouter:
                 #  （`_cache_set` 只缓存 ≥0.7 → 弱结论不入意图缓存，不会被后续请求复用）。
                 #  代价（明说）：确实属于某意图、但 LLM 只给到 0.6~0.8 的句子，会落到 chat 而非澄清；
                 #  若日后出现这类真实损失，就把 route='llm_weak' 也接进澄清条（本处只管"不硬选"）。
-                return self._done("chat", "llm_weak", min(llm_conf, 0.5), text, fp)
+                return self._done("chat", "llm_weak", min(llm_conf, 0.5), text, fp,
+                                  verdict=_llm_verdict or "unsure")
             # P0-1（2026-09-30）：**语义 ↔ LLM 互证** —— 补上融合矩阵缺的那一格（断链 1）。
             #   机制根因（实测）：走到本段的语义结果**必然已被丢弃** —— 上方
             #   `sem = self.detect_semantic(text); if sem: return ...` 已把"语义有结论"的分支
@@ -790,7 +866,7 @@ class IntentRouter:
         # P0-2：会话级意图保持——无任何信号命中时继承上轮意图（追问/续写不被误判 chat）
         if prev_intent and prev_intent in self._db_intents:
             return self._done(prev_intent, "inherit", 0.55, text, fp)
-        return self._done("chat", "chat", 0.0, text, fp)
+        return self._done("chat", "chat", 0.0, text, fp, verdict="unsure")
 
     # ══════════════════════════════════════════════════════════════════════
     # B4-5（2026-10-14）：规则命中 → LLM 复核（回应"意图识别应由 LLM 分析后匹配能力"）
@@ -937,7 +1013,7 @@ class IntentRouter:
                     "reason": "复核异常：%r" % (e,)[:120]}
 
     def _done(self, intent, route, confidence, text, fp, cacheable=True, used_history=False,
-              confirmed=False, llm_review=None):
+              confirmed=False, llm_review=None, verdict=None):
         """统一出口：填充 _last_meta + 高置信写意图缓存。
 
         澄清判定：中置信（弱语义/继承/fused_conflict/llm_conflict/**llm_history**）或
@@ -992,7 +1068,9 @@ class IntentRouter:
         _multi = bool(self._cfg_get("multi_intent_clarify", True)) and _nseg >= 2
         needs_clarify = (not _silent_ok) and (
             route in ("semantic_weak", "inherit", "fused_conflict", "llm_conflict",
-                      "llm_history", "rule_llm_vetoed")
+                      "llm_history", "rule_llm_vetoed",
+                      # llm_first（2026-10-23）：弱采纳不硬选 → 澄清卡
+                      "llm_first_weak")
             or (route == "llm" and confidence < 0.85)
             # ★ B5-7 新增：泛词牵出的意图 / 多意图输入 ⇒ 也要让用户确认
             or _gen_only or _multi)
@@ -1011,6 +1089,9 @@ class IntentRouter:
                            "llm_review": (_rc or {}).get("llm_review"),
                            "rule_candidate": (_rc or {}).get("rule_candidate"),
                            "rule_review_reason": (_rc or {}).get("reason", "")}
+        # P0 观测（2026-10-23）：verdict 拆开 chat 的双语义 —— chat_real（LLM 有依据判闲聊）
+        # vs unsure（没判出来落兜底）。显式传入优先；缺省按意图非 chat 即 ok。
+        self._last_meta["verdict"] = verdict or ("ok" if intent != "chat" else "unsure")
         # P1-31（2026-10-02）：写入侧同受开关约束（开关在 `_cache_set` 内部把关）。
         if cacheable:
             self._cache_set(text, fp, intent, route, confidence)
@@ -1073,11 +1154,22 @@ class IntentRouter:
                          + "用户在本会话中的上文（用于理解指代与省略成分）："
                          + str(context)[:300] + chr(10)
                          + "请判断**当前问题**的意图（上文只用来补全省略与指代）。")
+            # llm_first（2026-10-23）：每意图注入 confirmed 真实说法 few-shot ——
+            #   把"作文题变成选择题"（行业共识）。这是与旧提示词的实质差异：
+            #   旧版只有意图名列表，模型对没见过的说法只能按字面猜（预算→report@0.60
+            #   那类误判的土壤）；few-shot 给的是"这个意图的用户真这么说"。
+            fs = getattr(self, "_fewshot", {}) or {}
+            fs_txt = "\n".join("意图 %s 的真实用户说法：%s" % (k, "；".join(v))
+                               for k, v in sorted(fs.items()) if v)
             resp = llm_client.chat(
                 [{"role": "system", "content": (
                     f"你是 MBSE 助手意图分类器。根据用户输入判断其意图，只输出一个 JSON 对象，"
                     f'格式：{{"intent": "意图名", "confidence": 0到1之间的小数}}，不要任何其他文字。'
-                    f"可选意图：{known_list}。无法判断或置信度低于 0.5 时 intent 用 chat、confidence 给低值。")},
+                    f"可选意图：{known_list}。"
+                    + (("\n各意图的真实用户说法示例（供语义对照，不要只做逐字匹配）：\n" + fs_txt)
+                       if fs_txt else "")
+                    + "\n判断要点：与某个意图的示例语义相合才选它；所有意图都不匹配时才用 chat；"
+                      "不确定时给低 confidence，宁可低分也不要硬猜。")},
                  {"role": "user", "content": _user}],
                 _intent="intent_detect",
             )
@@ -1093,6 +1185,10 @@ class IntentRouter:
                 intent, conf = m.group(1), float(m.group(2))
             if intent in known:
                 return (intent, conf)
+            if intent == "unsure":
+                # llm_first 的 unsure 一等出口：模型明确"都不匹配"⇒ 原样上交，
+                # 上层按低置信弱路径走（继承/澄清），绝不硬选一个意图。
+                return ("unsure", min(conf, 0.5))
             return ("", 0.0)
         except Exception:
             return ("", 0.0)

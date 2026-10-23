@@ -3534,10 +3534,15 @@ class StreamMixin:
             # 取舍：显式选择优先（用户选了团队就该按团队走），但差异必须可见——否则
             # 「识别到 A、实际跑 B」用户永远发现不了（会话 351 卡片的 confidence=0 即此形态：
             # 既无置信度、也无任何"为何是该意图"的说明）。
+            # P0 和解（2026-10-23 米爸反馈"意图识别与推荐不一致，感觉很不好"）：
+            # 不再把系统内部的两裁判分歧用技术措辞推给用户（"两者不一致，
+            # 如非所愿请去掉团队/Agent 指定后重发"——读起来像在怪用户）。
+            # 显式选择本就优先（行为不变），识别意见降级为一句中性备注，
+            # 分歧细节照常进 meta/日志（可观测不减）。
             if forced_intent and _detected and forced_intent != _detected:
                 yield {"type": "reasoning", "delta": (
-                    f"（意图定向）已按显式选择执行：{forced_intent}；语义识别结果为 {_detected}，"
-                    "两者不一致，如非所愿请去掉团队/Agent 指定后重发")}
+                    f"已按你选择的「{forced_intent}」执行"
+                    + (f"（识别意见：{_detected}，仅供编排参考）" if _detected != "chat" else ""))}
             # Task 11 多意图增强（可选项）：多阶段指令 → 附加 multi_intent 序列事件（供前端展示/编排衔接）
             _multi_intent = self.router.detect_multi(user_input)
             # 2026-09-25：阶段序约束**带上每个阶段在说什么**（`{意图}（原句）`）。

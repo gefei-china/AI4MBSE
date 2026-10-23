@@ -391,6 +391,20 @@ DEFAULT_CONFIG = {
         # 触发面刻意收窄到"系统自己没把握"：llm_weak / fused_conflict / semantic_weak / llm<0.85 /
         # 完全无信号但像在求助；有把握的（规则命中/两路互证/高置信语义/会话继承）一律不打断。
         "confirm_when_unsure": True,
+        # ── 2026-10-23（米爸拍板）：LLM 主裁判（llm_first，默认开）──────────
+        # 行业共识（Coze 意图节点 / LangGraph 生态）：LLM 是主裁判而非高门槛兜底，
+        # 配套 = 每意图 few-shot 示例 + unsure 一等出口 + 澄清卡（"router without
+        # unsure is a misrouting machine"）。规则强信号快路径保留不动（0.92/0.95）。
+        # ⚠️ 吸收三轮实测教训（预算→report@0.60 误判 / 噪声上文 7/9 误判 /
+        #   "不存在安全阈值"）：**收益来自 few-shot 与 unsure→澄清，不是放宽门槛
+        #   或放松上下文** —— 上下文纪律（v2 只确认不改判）原样保留。
+        "llm_first": True,
+        # LLM 主裁判直接采纳门槛（规则无信号时）。0.75 = 旧 0.85 与被实测否决的
+        # 0.60 之间的保守起点；上线后用 confirmed 样本池标定（P2）。
+        "llm_first_min_conf": 0.75,
+        # 弱采纳下限：0.50~0.75 的非 chat 猜测 ⇒ 不静默执行，转**澄清卡**
+        # （"确定不了就别硬选"既有机制）；低于 0.50 或 unsure ⇒ 回退旧路（继承/chat）。
+        "llm_first_weak_conf": 0.50,
         # 2026-10-17（米爸反馈"澄清卡每次都是固定 4 项"）：意图确认卡的候选选项数上限。
         # 候选主序 = 本次输入的语义意图级排名（动态），不足才按 Agent 注册序兜底填满。
         # 10 = 一屏滚动内可览尽；前端选项区限高滚动，卡片不会被撑长。
@@ -1432,6 +1446,9 @@ CONFIG_SCHEMA = {
         "history_llm_min":        {"type": "float", "desc": "带历史采纳（route=llm_history）的地板值（非分离阈）"},
         "history_confirm_silent": {"type": "bool", "desc": "两路一致（确认）时不弹「可改选」澄清细条"},
         "rule_llm_confirm":       {"type": "bool", "desc": "B4-5：规则命中后先经 LLM 独立复核（确认/否决/不可用三态）。默认关=零回归；开启前请用 tools/calib/eval_intent_baseline.py 做 A/B"},
+        "llm_first":              {"type": "bool", "desc": "LLM 主裁判：规则无信号时 LLM 为主识别（配 few-shot 与 unsure 出口）。规则强信号快路径不受影响"},
+        "llm_first_min_conf":     {"type": "float", "desc": "LLM 主裁判直接采纳门槛（默认 0.75 保守起点，待 confirmed 池标定）"},
+        "llm_first_weak_conf":    {"type": "float", "desc": "LLM 主裁判弱采纳下限：0.50~门槛的猜测转澄清卡不静默执行"},
     },
     "database": {
         "path":           {"type": "str", "desc": "SQLite 数据文件路径（需重启生效）"},
