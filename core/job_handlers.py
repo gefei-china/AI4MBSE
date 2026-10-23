@@ -357,6 +357,97 @@ def handler_config_sandbox(payload: dict, job: dict) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════
+# handler：评测域（2026-10-23 评估批 2 / T1：前端"立即跑批"的通道）
+# ══════════════════════════════════════════════════════════════════
+def _run_eval_script(script, args, job, timeout_s, lease_s, label):
+    """评测 CLI 的统一子进程封装。
+
+    为什么子进程而不是 import 调用：评测脚本自己 chdir/插 sys.path/开
+    只读连接（约束 ③ handler 不复用 worker 连接的极端版），且 eval_nightly
+    会再起子评测进程 —— 进程隔离最不容易把 worker 拖死。timeout 兜底防
+    僵尸（子进程卡死 → 超时 → 作业判失败可见，而不是永远 running）。
+    """
+    import subprocess
+    import sys as _sys
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cmd = [_sys.executable, "-X", "utf8",
+           os.path.join(repo, "tools", "eval", script)] + list(args)
+    with LeaseKeeper(int(job["id"]), lease_s=lease_s):
+        _report(job, 5, "%s：启动 %s…" % (label, script))
+        try:
+            proc = subprocess.run(cmd, cwd=repo, timeout=timeout_s,
+                                  capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("%s 超时（>%ds）—— 已终止" % (label, timeout_s))
+        tail = ((proc.stdout or "") + "\n" + (proc.stderr or ""))[-1500:].strip()
+        if proc.returncode != 0:
+            raise RuntimeError("%s 失败（exit=%d）：%s"
+                               % (label, proc.returncode, tail[-600:]))
+        _report(job, 100, "%s 完成" % label)
+        return {"exit": 0, "script": script, "tail": tail}
+
+
+def handler_eval_trace(payload: dict, job: dict) -> dict:
+    """Trace 一致性评测（确定性口径，~15s）。结果经 --save 落库，前端立即可见。"""
+    return _run_eval_script(
+        "eval_trace_consistency.py",
+        ["--no-llm", "--save", "--baseline",
+         os.path.join("docs", "评测", "nightly", "latest-trace-report.json"),
+         "--out", os.path.join("tmp", "p21", "eval_trace_consistency.json")],
+        job, timeout_s=300, lease_s=600, label="Trace 一致性评测")
+
+
+def handler_eval_gen(payload: dict, job: dict) -> dict:
+    """生成质量评测 + LLM 忠实度评判（~80s，调 LLM）。结果落库。"""
+    return _run_eval_script(
+        "eval_generation_quality.py",
+        ["--llm-judge", "--save",
+         "--out", os.path.join("tmp", "p21", "eval_generation_quality.json")],
+        job, timeout_s=600, lease_s=900, label="生成质量评测")
+
+
+def handler_eval_rag(payload: dict, job: dict) -> dict:
+    """RAG 检索评测（三域 + 负对照，分钟级）→ save_report 落库。"""
+    out = os.path.join("tmp", "p21", "eval_report_manual.json")
+    r = _run_eval_script(
+        "run_eval.py", ["--tag", "manual", "--control", "--out", out],
+        job, timeout_s=1200, lease_s=1500, label="RAG 检索评测")
+    # 落库（run_eval 本身只出 JSON；save_report 是唯一的 rag 落库口）
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    import subprocess
+    import sys as _sys
+    proc = subprocess.run(
+        [_sys.executable, "-X", "utf8",
+         os.path.join(repo, "tools", "eval", "save_report.py"), out],
+        cwd=repo, timeout=120, capture_output=True, text=True,
+        encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise RuntimeError("评测完成但落库失败（exit=%d）：%s"
+                           % (proc.returncode, (proc.stderr or "")[-400:]))
+    r["tail"] += "\n" + (proc.stdout or "")[-300:]
+    return r
+
+
+def handler_build_evalset(payload: dict, job: dict) -> dict:
+    """重建评测集（语料/证据变更后）+ 发布 datasets/（dataset_id 随内容更新）。"""
+    return _run_eval_script(
+        "build_evalset.py", [], job, timeout_s=600, lease_s=900, label="重建评测集")
+
+
+def handler_eval_nightly(payload: dict, job: dict) -> dict:
+    """本地 nightly 全批（5 步 + 3 门禁，4~8 分钟）。
+
+    刻意**不带 --commit**：手动触发与定时跑批的提交语义分离——手动结果
+    进 latest 快照供人 review，要不要提交由人决定（jobs 面板看到绿了
+    再说），避免"网页点一下就往远端推提交"。
+    """
+    return _run_eval_script(
+        "run_nightly_local.py", [], job, timeout_s=1800, lease_s=1800,
+        label="nightly 全批")
+
+
+# ══════════════════════════════════════════════════════════════════
 # 注册表
 # ══════════════════════════════════════════════════════════════════
 KINDS = {
@@ -367,6 +458,11 @@ KINDS = {
     "v2g_extract": handler_v2g_extract,
     "knowledge_reconcile": handler_knowledge_reconcile,
     "config_sandbox": handler_config_sandbox,
+    "eval_trace": handler_eval_trace,
+    "eval_gen": handler_eval_gen,
+    "eval_rag": handler_eval_rag,
+    "build_evalset": handler_build_evalset,
+    "eval_nightly": handler_eval_nightly,
 }
 
 
@@ -388,4 +484,10 @@ def describe() -> dict:
         "v2g_extract": {"label": "向量转图谱抽取", "required": ["query"]},
         "knowledge_reconcile": {"label": "写后调和", "required": []},
         "config_sandbox": {"label": "配置沙箱 A/B 评估", "required": ["run_id"]},
+        # 评测域（T1：前端"立即跑批"；payload 无必填项）
+        "eval_trace": {"label": "Trace 一致性评测（~15s）", "required": []},
+        "eval_gen": {"label": "生成质量评测 + LLM 忠实度（~80s）", "required": []},
+        "eval_rag": {"label": "RAG 检索评测（三域+负对照，分钟级）", "required": []},
+        "build_evalset": {"label": "重建评测集（语料变更后，~40s）", "required": []},
+        "eval_nightly": {"label": "nightly 全批（5 步 + 3 门禁，4~8 分钟）", "required": []},
     }

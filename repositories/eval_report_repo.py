@@ -203,8 +203,14 @@ def metric_columns_for(kind, conn=None):
     direction/gate 取该键最近一行的落库快照。
     """
     cols = KIND_METRIC_COLUMNS.get(kind, KIND_METRIC_COLUMNS.get("", []))
-    out = [{"key": c, "label": l, "direction": d, "gate_key": g}
-           for c, l, d, g in cols]
+    thr_map = _gate_thresholds()
+    out = []
+    for c, l, d, g in cols:
+        item = {"key": c, "label": l, "direction": d, "gate_key": g}
+        # T2（前端就地编辑）：当前阈值随列下发（阈值唯一真源 eval_gates）
+        if g:
+            item["threshold"] = thr_map.get(g)
+        out.append(item)
     if conn is not None:
         seen = {c["key"] for c in out}
         try:
