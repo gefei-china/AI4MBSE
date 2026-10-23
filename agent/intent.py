@@ -1161,6 +1161,21 @@ class IntentRouter:
             fs = getattr(self, "_fewshot", {}) or {}
             fs_txt = "\n".join("意图 %s 的真实用户说法：%s" % (k, "；".join(v))
                                for k, v in sorted(fs.items()) if v)
+            # 粒度提示（2026-10-23 标定发现的主导错误模式）：建模流水线阶段意图
+            #   （architecture_skeleton/view_expansion/trace_verification 等）与
+            #   粗类 design/review 语义相邻，模型常选"更精确"的阶段意图 —— 实测
+            #   5 条不一致里 4 条是这种跨粒度冲突（"输出一份 BDD 视图"→
+            #   view_expansion 而非 design）。判词：阶段意图**语义上更准**，但
+            #   编排按粗类分派执行主体 ⇒ 粒度必须对齐：阶段不明选粗类，明确点名
+            #   阶段才选阶段意图。
+            _stage_note = (
+                "\n粒度规则：methodology_resolver/requirement_structuring/"
+                "architecture_skeleton/view_expansion/model_validation_repair/"
+                "trace_verification/change_safety_gate/model_release 是 MBSE 建模"
+                "流水线的**阶段**意图。用户的建模任务没有明确点名某个阶段时，"
+                "选粗类（design / requirement_analysis / review）；只有明确说出"
+                "该阶段要做的事（如\"生成结构树→架构骨架\"\"追溯矩阵→追溯核验\"）"
+                "才选阶段意图。")
             resp = llm_client.chat(
                 [{"role": "system", "content": (
                     f"你是 MBSE 助手意图分类器。根据用户输入判断其意图，只输出一个 JSON 对象，"
@@ -1168,6 +1183,7 @@ class IntentRouter:
                     f"可选意图：{known_list}。"
                     + (("\n各意图的真实用户说法示例（供语义对照，不要只做逐字匹配）：\n" + fs_txt)
                        if fs_txt else "")
+                    + _stage_note
                     + "\n判断要点：与某个意图的示例语义相合才选它；所有意图都不匹配时才用 chat；"
                       "不确定时给低 confidence，宁可低分也不要硬猜。")},
                  {"role": "user", "content": _user}],
