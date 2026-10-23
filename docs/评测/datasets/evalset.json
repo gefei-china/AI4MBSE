@@ -1,0 +1,4029 @@
+{
+ "schema": "p1-6/evalset@1",
+ "built_at": "2026-10-23 09:38:20",
+ "seed": 20260921,
+ "fingerprint": {
+  "db_bytes": 378826752,
+  "documents": 14,
+  "chunks": 7177,
+  "entities_total": 189,
+  "entities_release": 61,
+  "relations_release": 83,
+  "ontology_active": "v25.2.0",
+  "chunk_branches": [
+   {
+    "branch": "global",
+    "n": 7177
+   }
+  ],
+  "entity_branches": [
+   {
+    "branch": "dev",
+    "n": 65
+   },
+   {
+    "branch": "personal",
+    "n": 63
+   },
+   {
+    "branch": "release",
+    "n": 61
+   }
+  ],
+  "release_entity_names_sha1": "04c1ac33e06813fe"
+ },
+ "counts": {
+  "doc": 50,
+  "graph": 18,
+  "neg": 30
+ },
+ "doc_cases": [
+  {
+   "id": "doc-01",
+   "kind": "doc",
+   "query": "4.1 说明性对象配置",
+   "gold": [
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 111
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 112
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 113
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 114
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 115
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 116
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 117
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 118
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 119
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 120
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 121
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 122
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 123
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 124
+    }
+   ],
+   "gold_keys": [
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     111
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     112
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     113
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     114
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     115
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     116
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     117
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     118
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     119
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     120
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     121
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     122
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     123
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     124
+    ]
+   ],
+   "meta": {
+    "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+    "section": "### 4.1 说明性对象配置",
+    "n_gold": 14
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-02",
+   "kind": "doc",
+   "query": "2.4 关系定义与组成要求",
+   "gold": [
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 53
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 54
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 55
+    }
+   ],
+   "gold_keys": [
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     53
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     54
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     55
+    ]
+   ],
+   "meta": {
+    "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+    "section": "### 2.4 关系定义与组成要求",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-03",
+   "kind": "doc",
+   "query": "4.2 实例之间的关系",
+   "gold": [
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 125
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 126
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 127
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 128
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 129
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 130
+    }
+   ],
+   "gold_keys": [
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     125
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     126
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     127
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     128
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     129
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     130
+    ]
+   ],
+   "meta": {
+    "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+    "section": "### 4.2 实例之间的关系",
+    "n_gold": 6
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-04",
+   "kind": "doc",
+   "query": "4.3 设计流程实例",
+   "gold": [
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 131
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 132
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 133
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 134
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 135
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 136
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 137
+    },
+    {
+     "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+     "chunk_index": 138
+    }
+   ],
+   "gold_keys": [
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     131
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     132
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     133
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     134
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     135
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     136
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     137
+    ],
+    [
+     "1 纯电汽车热管理建模场景专业知识库.md",
+     138
+    ]
+   ],
+   "meta": {
+    "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
+    "section": "### 4.3 设计流程实例",
+    "n_gold": 8
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-05",
+   "kind": "doc",
+   "query": "2.4 关系定义与组成要求",
+   "gold": [
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 53
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 54
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 55
+    }
+   ],
+   "gold_keys": [
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     53
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     54
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     55
+    ]
+   ],
+   "meta": {
+    "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+    "section": "### 2.4 关系定义与组成要求",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-06",
+   "kind": "doc",
+   "query": "4.2 实例之间的关系",
+   "gold": [
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 124
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 125
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 126
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 127
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 128
+    }
+   ],
+   "gold_keys": [
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     124
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     125
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     126
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     127
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     128
+    ]
+   ],
+   "meta": {
+    "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+    "section": "### 4.2 实例之间的关系",
+    "n_gold": 5
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-07",
+   "kind": "doc",
+   "query": "4.3 设计流程实例",
+   "gold": [
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 129
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 130
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 131
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 132
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 133
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 134
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 135
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 136
+    }
+   ],
+   "gold_keys": [
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     129
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     130
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     131
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     132
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     133
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     134
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     135
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     136
+    ]
+   ],
+   "meta": {
+    "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+    "section": "### 4.3 设计流程实例",
+    "n_gold": 8
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-08",
+   "kind": "doc",
+   "query": "4.1 说明性对象配置",
+   "gold": [
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 110
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 111
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 112
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 113
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 114
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 115
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 116
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 117
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 118
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 119
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 120
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 121
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 122
+    },
+    {
+     "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     "chunk_index": 123
+    }
+   ],
+   "gold_keys": [
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     110
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     111
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     112
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     113
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     114
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     115
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     116
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     117
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     118
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     119
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     120
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     121
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     122
+    ],
+    [
+     "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+     123
+    ]
+   ],
+   "meta": {
+    "source_doc": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+    "section": "### 4.1 说明性对象配置",
+    "n_gold": 14
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-09",
+   "kind": "doc",
+   "query": "4.2 实例之间的关系",
+   "gold": [
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 85
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 86
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 87
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 88
+    }
+   ],
+   "gold_keys": [
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     85
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     86
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     87
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     88
+    ]
+   ],
+   "meta": {
+    "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+    "section": "### 4.2 实例之间的关系",
+    "n_gold": 4
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-10",
+   "kind": "doc",
+   "query": "2.4 关系定义与组成要求",
+   "gold": [
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 36
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 37
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 38
+    }
+   ],
+   "gold_keys": [
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     36
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     37
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     38
+    ]
+   ],
+   "meta": {
+    "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+    "section": "### 2.4 关系定义与组成要求",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-11",
+   "kind": "doc",
+   "query": "4.1 说明性对象配置",
+   "gold": [
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 76
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 77
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 78
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 79
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 80
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 81
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 82
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 83
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 84
+    }
+   ],
+   "gold_keys": [
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     76
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     77
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     78
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     79
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     80
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     81
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     82
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     83
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     84
+    ]
+   ],
+   "meta": {
+    "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+    "section": "### 4.1 说明性对象配置",
+    "n_gold": 9
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-12",
+   "kind": "doc",
+   "query": "4.3 设计流程实例",
+   "gold": [
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 89
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 90
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 91
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 92
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 93
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 94
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 95
+    },
+    {
+     "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+     "chunk_index": 96
+    }
+   ],
+   "gold_keys": [
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     89
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     90
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     91
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     92
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     93
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     94
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     95
+    ],
+    [
+     "3 座舱空气调节仿真场景专业知识库.md",
+     96
+    ]
+   ],
+   "meta": {
+    "source_doc": "3 座舱空气调节仿真场景专业知识库.md",
+    "section": "### 4.3 设计流程实例",
+    "n_gold": 8
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-13",
+   "kind": "doc",
+   "query": "5.3.1 设计数据管理",
+   "gold": [
+    {
+     "source_doc": "847_Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     "chunk_index": 26
+    },
+    {
+     "source_doc": "847_Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     "chunk_index": 27
+    },
+    {
+     "source_doc": "847_Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     "chunk_index": 28
+    }
+   ],
+   "gold_keys": [
+    [
+     "847_Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     26
+    ],
+    [
+     "847_Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     27
+    ],
+    [
+     "847_Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     28
+    ]
+   ],
+   "meta": {
+    "source_doc": "847_Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+    "section": "5.3.1 设计数据管理",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-14",
+   "kind": "doc",
+   "query": "4.1.2 R2 – ACTIVE VOICE",
+   "gold": [
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 429
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 430
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 431
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 432
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 433
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 434
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 435
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 436
+    }
+   ],
+   "gold_keys": [
+    [
+     "Guide to writing Requirements.pdf",
+     429
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     430
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     431
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     432
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     433
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     434
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     435
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     436
+    ]
+   ],
+   "meta": {
+    "source_doc": "Guide to writing Requirements.pdf",
+    "section": "4.1.2 R2 – ACTIVE VOICE",
+    "n_gold": 8
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-15",
+   "kind": "doc",
+   "query": "3. Identify which design input requirement(s) or need(s) the",
+   "gold": [
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 657
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 658
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 659
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 660
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 661
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 662
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 663
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 664
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 665
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 666
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 667
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 668
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 669
+    }
+   ],
+   "gold_keys": [
+    [
+     "Guide to writing Requirements.pdf",
+     657
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     658
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     659
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     660
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     661
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     662
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     663
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     664
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     665
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     666
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     667
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     668
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     669
+    ]
+   ],
+   "meta": {
+    "source_doc": "Guide to writing Requirements.pdf",
+    "section": "3. Identify which design input requirement(s) or need(s) the",
+    "n_gold": 13
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-16",
+   "kind": "doc",
+   "query": "1.5 Why use the Textual Form of Communication?",
+   "gold": [
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 43
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 44
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 45
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 46
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 47
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 48
+    }
+   ],
+   "gold_keys": [
+    [
+     "Guide to writing Requirements.pdf",
+     43
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     44
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     45
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     46
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     47
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     48
+    ]
+   ],
+   "meta": {
+    "source_doc": "Guide to writing Requirements.pdf",
+    "section": "1.5 Why use the Textual Form of Communication?",
+    "n_gold": 6
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-17",
+   "kind": "doc",
+   "query": "4.1.8 R8 – ESCAPE CLAUSES",
+   "gold": [
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 493
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 494
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 495
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 496
+    }
+   ],
+   "gold_keys": [
+    [
+     "Guide to writing Requirements.pdf",
+     493
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     494
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     495
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     496
+    ]
+   ],
+   "meta": {
+    "source_doc": "Guide to writing Requirements.pdf",
+    "section": "4.1.8 R8 – ESCAPE CLAUSES",
+    "n_gold": 4
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-18",
+   "kind": "doc",
+   "query": "4.4.4 R21 – PARENTHESES",
+   "gold": [
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 590
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 591
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 592
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 593
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 594
+    },
+    {
+     "source_doc": "Guide to writing Requirements.pdf",
+     "chunk_index": 595
+    }
+   ],
+   "gold_keys": [
+    [
+     "Guide to writing Requirements.pdf",
+     590
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     591
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     592
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     593
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     594
+    ],
+    [
+     "Guide to writing Requirements.pdf",
+     595
+    ]
+   ],
+   "meta": {
+    "source_doc": "Guide to writing Requirements.pdf",
+    "section": "4.4.4 R21 – PARENTHESES",
+    "n_gold": 6
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-19",
+   "kind": "doc",
+   "query": "5.3.2 Iteration and recursion in requirements engineering",
+   "gold": [
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 140
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 141
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 142
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 143
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 144
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 145
+    }
+   ],
+   "gold_keys": [
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     140
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     141
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     142
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     143
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     144
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     145
+    ]
+   ],
+   "meta": {
+    "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+    "section": "5.3.2 Iteration and recursion in requirements engineering",
+    "n_gold": 6
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-20",
+   "kind": "doc",
+   "query": "445 Hoes Lane",
+   "gold": [
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 1
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 2
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 3
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 4
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 5
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 6
+    }
+   ],
+   "gold_keys": [
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     1
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     2
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     3
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     4
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     5
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     6
+    ]
+   ],
+   "meta": {
+    "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+    "section": "445 Hoes Lane",
+    "n_gold": 6
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-21",
+   "kind": "doc",
+   "query": "9.5.19 Supporting information ..............................",
+   "gold": [
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 9
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 10
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 11
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 12
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 13
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 14
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 15
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 16
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 17
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 18
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 19
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 20
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 21
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 22
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 23
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 24
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 25
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 26
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 27
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 28
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 29
+    }
+   ],
+   "gold_keys": [
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     9
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     10
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     11
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     12
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     13
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     14
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     15
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     16
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     17
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     18
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     19
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     20
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     21
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     22
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     23
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     24
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     25
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     26
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     27
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     28
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     29
+    ]
+   ],
+   "meta": {
+    "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+    "section": "9.5.19 Supporting information ..............................",
+    "n_gold": 21
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-22",
+   "kind": "doc",
+   "query": "7 Information items",
+   "gold": [
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 328
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 329
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 330
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 331
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 332
+    }
+   ],
+   "gold_keys": [
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     328
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     329
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     330
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     331
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     332
+    ]
+   ],
+   "meta": {
+    "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+    "section": "7 Information items",
+    "n_gold": 5
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-23",
+   "kind": "doc",
+   "query": "6.4.3.2 Perform validation",
+   "gold": [
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 294
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 295
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 296
+    },
+    {
+     "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+     "chunk_index": 297
+    }
+   ],
+   "gold_keys": [
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     294
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     295
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     296
+    ],
+    [
+     "ISO 29148-2011 Requirements Engineering.pdf",
+     297
+    ]
+   ],
+   "meta": {
+    "source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+    "section": "6.4.3.2 Perform validation",
+    "n_gold": 4
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-24",
+   "kind": "doc",
+   "query": "9.2.11.1State Performances Overview",
+   "gold": [
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 1680
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 1681
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 1682
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 1683
+    }
+   ],
+   "gold_keys": [
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     1680
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     1681
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     1682
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     1683
+    ]
+   ],
+   "meta": {
+    "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+    "section": "9.2.11.1State Performances Overview",
+    "n_gold": 4
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-25",
+   "kind": "doc",
+   "query": "252.227-7013 or in subparagraph (c)(1) and (2) of the Commer",
+   "gold": [
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 16
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 17
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 18
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 19
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 20
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 21
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 22
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 23
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 24
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 25
+    }
+   ],
+   "gold_keys": [
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     16
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     17
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     18
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     19
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     20
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     21
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     22
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     23
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     24
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     25
+    ]
+   ],
+   "meta": {
+    "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+    "section": "252.227-7013 or in subparagraph (c)(1) and (2) of the Commer",
+    "n_gold": 10
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-26",
+   "kind": "doc",
+   "query": "396 Kernel Modeling Language v1.0",
+   "gold": [
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 1857
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 1858
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 1859
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 1860
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 1861
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 1862
+    }
+   ],
+   "gold_keys": [
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     1857
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     1858
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     1859
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     1860
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     1861
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     1862
+    ]
+   ],
+   "meta": {
+    "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+    "section": "396 Kernel Modeling Language v1.0",
+    "n_gold": 6
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-27",
+   "kind": "doc",
+   "query": "426 Kernel Modeling Language v1.0",
+   "gold": [
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 2002
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 2003
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 2004
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 2005
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 2006
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 2007
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 2008
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 2009
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 2010
+    }
+   ],
+   "gold_keys": [
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     2002
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     2003
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     2004
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     2005
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     2006
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     2007
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     2008
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     2009
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     2010
+    ]
+   ],
+   "meta": {
+    "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+    "section": "426 Kernel Modeling Language v1.0",
+    "n_gold": 9
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-28",
+   "kind": "doc",
+   "query": "8.2.3.5.2Local and Global Namespaces",
+   "gold": [
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 522
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 523
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 524
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 525
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 526
+    },
+    {
+     "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+     "chunk_index": 527
+    }
+   ],
+   "gold_keys": [
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     522
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     523
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     524
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     525
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     526
+    ],
+    [
+     "Kernel Modeling Language™ (KerML™).pdf",
+     527
+    ]
+   ],
+   "meta": {
+    "source_doc": "Kernel Modeling Language™ (KerML™).pdf",
+    "section": "8.2.3.5.2Local and Global Namespaces",
+    "n_gold": 6
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-29",
+   "kind": "doc",
+   "query": "7.6.8 Implicit Specialization",
+   "gold": [
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 232
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 233
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 234
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 235
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 236
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 237
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 238
+    }
+   ],
+   "gold_keys": [
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     232
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     233
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     234
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     235
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     236
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     237
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     238
+    ]
+   ],
+   "meta": {
+    "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+    "section": "7.6.8 Implicit Specialization",
+    "n_gold": 7
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-30",
+   "kind": "doc",
+   "query": "7.25.1 Use Cases Overview",
+   "gold": [
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 681
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 682
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 683
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 684
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 685
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 686
+    }
+   ],
+   "gold_keys": [
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     681
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     682
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     683
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     684
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     685
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     686
+    ]
+   ],
+   "meta": {
+    "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+    "section": "7.25.1 Use Cases Overview",
+    "n_gold": 6
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-31",
+   "kind": "doc",
+   "query": "8.4.13.2) also apply to anAcceptActionUsage, as well as the",
+   "gold": [
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1796
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1797
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1798
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1799
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1800
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1801
+    }
+   ],
+   "gold_keys": [
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1796
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1797
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1798
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1799
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1800
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1801
+    ]
+   ],
+   "meta": {
+    "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+    "section": "8.4.13.2) also apply to anAcceptActionUsage, as well as the ",
+    "n_gold": 6
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-32",
+   "kind": "doc",
+   "query": "284 Systems Modeling Language v2.0, Part 1",
+   "gold": [
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1125
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1126
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1127
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1128
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1129
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 1130
+    }
+   ],
+   "gold_keys": [
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1125
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1126
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1127
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1128
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1129
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     1130
+    ]
+   ],
+   "meta": {
+    "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+    "section": "284 Systems Modeling Language v2.0, Part 1",
+    "n_gold": 6
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-33",
+   "kind": "doc",
+   "query": "168 Systems Modeling Language v2.0, Part 1",
+   "gold": [
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 778
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 779
+    },
+    {
+     "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+     "chunk_index": 780
+    }
+   ],
+   "gold_keys": [
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     778
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     779
+    ],
+    [
+     "OMG Systems Modeling Language™ V2 (1).pdf",
+     780
+    ]
+   ],
+   "meta": {
+    "source_doc": "OMG Systems Modeling Language™ V2 (1).pdf",
+    "section": "168 Systems Modeling Language v2.0, Part 1",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-34",
+   "kind": "doc",
+   "query": "5.3.1 设计数据管理",
+   "gold": [
+    {
+     "source_doc": "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     "chunk_index": 26
+    },
+    {
+     "source_doc": "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     "chunk_index": 27
+    },
+    {
+     "source_doc": "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     "chunk_index": 28
+    }
+   ],
+   "gold_keys": [
+    [
+     "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     26
+    ],
+    [
+     "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     27
+    ],
+    [
+     "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+     28
+    ]
+   ],
+   "meta": {
+    "source_doc": "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+    "section": "5.3.1 设计数据管理",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-35",
+   "kind": "doc",
+   "query": "7. 端到端示例：纯电热管理系统（EV TMS）完整模型",
+   "gold": [
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 206
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 207
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 208
+    }
+   ],
+   "gold_keys": [
+    [
+     "SysML-v2-AI建模知识文档.md",
+     206
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     207
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     208
+    ]
+   ],
+   "meta": {
+    "source_doc": "SysML-v2-AI建模知识文档.md",
+    "section": "## 7. 端到端示例：纯电热管理系统（EV TMS）完整模型",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-36",
+   "kind": "doc",
+   "query": "2.5 特征声明的完整结构",
+   "gold": [
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 65
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 66
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 67
+    }
+   ],
+   "gold_keys": [
+    [
+     "SysML-v2-AI建模知识文档.md",
+     65
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     66
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     67
+    ]
+   ],
+   "meta": {
+    "source_doc": "SysML-v2-AI建模知识文档.md",
+    "section": "### 2.5 特征声明的完整结构",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-37",
+   "kind": "doc",
+   "query": "1.8 保留字",
+   "gold": [
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 38
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 39
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 40
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 41
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 42
+    }
+   ],
+   "gold_keys": [
+    [
+     "SysML-v2-AI建模知识文档.md",
+     38
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     39
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     40
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     41
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     42
+    ]
+   ],
+   "meta": {
+    "source_doc": "SysML-v2-AI建模知识文档.md",
+    "section": "### 1.8 保留字",
+    "n_gold": 5
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-38",
+   "kind": "doc",
+   "query": "6.3 部件 + 端口 + 连接模板",
+   "gold": [
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 196
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 197
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 198
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 199
+    }
+   ],
+   "gold_keys": [
+    [
+     "SysML-v2-AI建模知识文档.md",
+     196
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     197
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     198
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     199
+    ]
+   ],
+   "meta": {
+    "source_doc": "SysML-v2-AI建模知识文档.md",
+    "section": "### 6.3 部件 + 端口 + 连接模板",
+    "n_gold": 4
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-39",
+   "kind": "doc",
+   "query": "4.14 元数据",
+   "gold": [
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 153
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 154
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 155
+    },
+    {
+     "source_doc": "SysML-v2-AI建模知识文档.md",
+     "chunk_index": 156
+    }
+   ],
+   "gold_keys": [
+    [
+     "SysML-v2-AI建模知识文档.md",
+     153
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     154
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     155
+    ],
+    [
+     "SysML-v2-AI建模知识文档.md",
+     156
+    ]
+   ],
+   "meta": {
+    "source_doc": "SysML-v2-AI建模知识文档.md",
+    "section": "### 4.14 元数据",
+    "n_gold": 4
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-40",
+   "kind": "doc",
+   "query": "错误 9.1：接口端点映射错误",
+   "gold": [
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 51
+    },
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 52
+    },
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 53
+    }
+   ],
+   "gold_keys": [
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     51
+    ],
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     52
+    ],
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     53
+    ]
+   ],
+   "meta": {
+    "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+    "section": "### 错误 9.1：接口端点映射错误",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-41",
+   "kind": "doc",
+   "query": "错误 4.1：混淆属性和部件",
+   "gold": [
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 20
+    },
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 21
+    },
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 22
+    }
+   ],
+   "gold_keys": [
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     20
+    ],
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     21
+    ],
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     22
+    ]
+   ],
+   "meta": {
+    "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+    "section": "### 错误 4.1：混淆属性和部件",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-42",
+   "kind": "doc",
+   "query": "错误 5.1：混淆 specializes 和 subsets",
+   "gold": [
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 27
+    },
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 28
+    },
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 29
+    }
+   ],
+   "gold_keys": [
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     27
+    ],
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     28
+    ],
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     29
+    ]
+   ],
+   "meta": {
+    "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+    "section": "### 错误 5.1：混淆 `specializes` 和 `subsets`",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-43",
+   "kind": "doc",
+   "query": "错误 3.3：修饰符顺序错误",
+   "gold": [
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 17
+    },
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 18
+    },
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 19
+    }
+   ],
+   "gold_keys": [
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     17
+    ],
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     18
+    ],
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     19
+    ]
+   ],
+   "meta": {
+    "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+    "section": "### 错误 3.3：修饰符顺序错误",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-44",
+   "kind": "doc",
+   "query": "错误 12.3：状态转移语法错误",
+   "gold": [
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 75
+    },
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 76
+    },
+    {
+     "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+     "chunk_index": 77
+    }
+   ],
+   "gold_keys": [
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     75
+    ],
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     76
+    ],
+    [
+     "SysML_v2_常见语法错误与修正(1).md",
+     77
+    ]
+   ],
+   "meta": {
+    "source_doc": "SysML_v2_常见语法错误与修正(1).md",
+    "section": "### 错误 12.3：状态转移语法错误",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-45",
+   "kind": "doc",
+   "query": "7.2 包图/浏览视图 92",
+   "gold": [
+    {
+     "source_doc": "广汽方法论-260813.docx",
+     "chunk_index": 0
+    },
+    {
+     "source_doc": "广汽方法论-260813.docx",
+     "chunk_index": 1
+    },
+    {
+     "source_doc": "广汽方法论-260813.docx",
+     "chunk_index": 2
+    },
+    {
+     "source_doc": "广汽方法论-260813.docx",
+     "chunk_index": 3
+    },
+    {
+     "source_doc": "广汽方法论-260813.docx",
+     "chunk_index": 4
+    },
+    {
+     "source_doc": "广汽方法论-260813.docx",
+     "chunk_index": 5
+    },
+    {
+     "source_doc": "广汽方法论-260813.docx",
+     "chunk_index": 6
+    }
+   ],
+   "gold_keys": [
+    [
+     "广汽方法论-260813.docx",
+     0
+    ],
+    [
+     "广汽方法论-260813.docx",
+     1
+    ],
+    [
+     "广汽方法论-260813.docx",
+     2
+    ],
+    [
+     "广汽方法论-260813.docx",
+     3
+    ],
+    [
+     "广汽方法论-260813.docx",
+     4
+    ],
+    [
+     "广汽方法论-260813.docx",
+     5
+    ],
+    [
+     "广汽方法论-260813.docx",
+     6
+    ]
+   ],
+   "meta": {
+    "source_doc": "广汽方法论-260813.docx",
+    "section": "7.2 包图/浏览视图\t92",
+    "n_gold": 7
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-46",
+   "kind": "doc",
+   "query": "用户用例视图",
+   "gold": [
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 12
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 13
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 14
+    }
+   ],
+   "gold_keys": [
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     12
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     13
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     14
+    ]
+   ],
+   "meta": {
+    "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+    "section": "### 用户用例视图",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-47",
+   "kind": "doc",
+   "query": "系统运行交互视图",
+   "gold": [
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 9
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 10
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 11
+    }
+   ],
+   "gold_keys": [
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     9
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     10
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     11
+    ]
+   ],
+   "meta": {
+    "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+    "section": "### 系统运行交互视图",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-48",
+   "kind": "doc",
+   "query": "场景组成结构视图",
+   "gold": [
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 5
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 6
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 7
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 8
+    }
+   ],
+   "gold_keys": [
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     5
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     6
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     7
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     8
+    ]
+   ],
+   "meta": {
+    "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+    "section": "### 场景组成结构视图",
+    "n_gold": 4
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-49",
+   "kind": "doc",
+   "query": "利益相关方需求视图",
+   "gold": [
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 2
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 3
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 4
+    }
+   ],
+   "gold_keys": [
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     2
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     3
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     4
+    ]
+   ],
+   "meta": {
+    "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+    "section": "### 利益相关方需求视图",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-50",
+   "kind": "doc",
+   "query": "定义运行分析用例",
+   "gold": [
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 20
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 21
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 22
+    }
+   ],
+   "gold_keys": [
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     20
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     21
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     22
+    ]
+   ],
+   "meta": {
+    "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+    "section": "### 定义运行分析用例",
+    "n_gold": 3
+   },
+   "label": "derived"
+  }
+ ],
+ "graph_cases": [
+  {
+   "id": "graph-01",
+   "kind": "graph",
+   "query": "系统支持 Ka 频段双向通信 被分配到哪个 数据转发功能",
+   "gold": {
+    "pair": [
+     "系统支持 Ka 频段双向通信",
+     "数据转发功能"
+    ],
+    "relation_type": "ALLOCATED_TO",
+    "src_id": "S-33b693a5",
+    "tgt_id": "S-1f57692f"
+   },
+   "gold_entities": [
+    "系统支持 Ka 频段双向通信",
+    "数据转发功能"
+   ],
+   "meta": {
+    "relation_id": 505,
+    "verb": "分配"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-02",
+   "kind": "graph",
+   "query": "电源分系统 由哪些 太阳翼 组成",
+   "gold": {
+    "pair": [
+     "电源分系统",
+     "太阳翼"
+    ],
+    "relation_type": "COMPOSED_OF",
+    "src_id": "S-9615619f",
+    "tgt_id": "S-e026784a"
+   },
+   "gold_entities": [
+    "电源分系统",
+    "太阳翼"
+   ],
+   "meta": {
+    "relation_id": 543,
+    "verb": "组成"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-03",
+   "kind": "graph",
+   "query": "宽带通信地面段 包含哪些 宽带用户终端",
+   "gold": {
+    "pair": [
+     "宽带通信地面段",
+     "宽带用户终端"
+    ],
+    "relation_type": "CONTAINS",
+    "src_id": "S-52e1eccf",
+    "tgt_id": "S-c6d125dd"
+   },
+   "gold_entities": [
+    "宽带通信地面段",
+    "宽带用户终端"
+   ],
+   "meta": {
+    "relation_id": 540,
+    "verb": "包含"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-04",
+   "kind": "graph",
+   "query": "由 提供全球宽带互联网接入服务 派生出的 星地链路可用度不低于 99.9% 有哪些",
+   "gold": {
+    "pair": [
+     "提供全球宽带互联网接入服务",
+     "星地链路可用度不低于 99.9%"
+    ],
+    "relation_type": "DERIVES",
+    "src_id": "S-b48b1f0a",
+    "tgt_id": "S-b00186d4"
+   },
+   "gold_entities": [
+    "提供全球宽带互联网接入服务",
+    "星地链路可用度不低于 99.9%"
+   ],
+   "meta": {
+    "relation_id": 468,
+    "verb": "派生"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-05",
+   "kind": "graph",
+   "query": "宽带通信星座 满足哪些 系统总容量不低于 1 Tbps",
+   "gold": {
+    "pair": [
+     "宽带通信星座",
+     "系统总容量不低于 1 Tbps"
+    ],
+    "relation_type": "SATISFIES",
+    "src_id": "S-08276525",
+    "tgt_id": "S-8dd40723"
+   },
+   "gold_entities": [
+    "宽带通信星座",
+    "系统总容量不低于 1 Tbps"
+   ],
+   "meta": {
+    "relation_id": 499,
+    "verb": "满足"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-06",
+   "kind": "graph",
+   "query": "波束覆盖测试用例 与 波束调度功能 的追溯关系",
+   "gold": {
+    "pair": [
+     "波束覆盖测试用例",
+     "波束调度功能"
+    ],
+    "relation_type": "TRACE",
+    "src_id": "S-04313c63",
+    "tgt_id": "S-06b14780"
+   },
+   "gold_entities": [
+    "波束覆盖测试用例",
+    "波束调度功能"
+   ],
+   "meta": {
+    "relation_id": 545,
+    "verb": "追溯"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-07",
+   "kind": "graph",
+   "query": "测控链路可用度不低于 99.5% 由哪些 测控链路测试用例 验证",
+   "gold": {
+    "pair": [
+     "测控链路可用度不低于 99.5%",
+     "测控链路测试用例"
+    ],
+    "relation_type": "VERIFIED_BY",
+    "src_id": "S-f4b9b8c8",
+    "tgt_id": "S-63ed1a64"
+   },
+   "gold_entities": [
+    "测控链路可用度不低于 99.5%",
+    "测控链路测试用例"
+   ],
+   "meta": {
+    "relation_id": 516,
+    "verb": "验证"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-08",
+   "kind": "graph",
+   "query": "系统支持 Ka 频段双向通信 被分配到哪个 宽带载荷",
+   "gold": {
+    "pair": [
+     "系统支持 Ka 频段双向通信",
+     "宽带载荷"
+    ],
+    "relation_type": "ALLOCATED_TO",
+    "src_id": "S-33b693a5",
+    "tgt_id": "S-f6499a05"
+   },
+   "gold_entities": [
+    "系统支持 Ka 频段双向通信",
+    "宽带载荷"
+   ],
+   "meta": {
+    "relation_id": 508,
+    "verb": "分配"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-09",
+   "kind": "graph",
+   "query": "电源分系统 由哪些 蓄电池组 组成",
+   "gold": {
+    "pair": [
+     "电源分系统",
+     "蓄电池组"
+    ],
+    "relation_type": "COMPOSED_OF",
+    "src_id": "S-9615619f",
+    "tgt_id": "S-a10ed6c6"
+   },
+   "gold_entities": [
+    "电源分系统",
+    "蓄电池组"
+   ],
+   "meta": {
+    "relation_id": 544,
+    "verb": "组成"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-10",
+   "kind": "graph",
+   "query": "宽带通信地面段 包含哪些 信关站",
+   "gold": {
+    "pair": [
+     "宽带通信地面段",
+     "信关站"
+    ],
+    "relation_type": "CONTAINS",
+    "src_id": "S-52e1eccf",
+    "tgt_id": "S-6293a508"
+   },
+   "gold_entities": [
+    "宽带通信地面段",
+    "信关站"
+   ],
+   "meta": {
+    "relation_id": 538,
+    "verb": "包含"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-11",
+   "kind": "graph",
+   "query": "由 星地链路可用度不低于 99.9% 派生出的 平台供电功率不低于 12 kW 有哪些",
+   "gold": {
+    "pair": [
+     "星地链路可用度不低于 99.9%",
+     "平台供电功率不低于 12 kW"
+    ],
+    "relation_type": "DERIVES",
+    "src_id": "S-b00186d4",
+    "tgt_id": "S-33a548cc"
+   },
+   "gold_entities": [
+    "星地链路可用度不低于 99.9%",
+    "平台供电功率不低于 12 kW"
+   ],
+   "meta": {
+    "relation_id": 480,
+    "verb": "派生"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-12",
+   "kind": "graph",
+   "query": "行波管放大器 满足哪些 功放输出功率不低于 120 W",
+   "gold": {
+    "pair": [
+     "行波管放大器",
+     "功放输出功率不低于 120 W"
+    ],
+    "relation_type": "SATISFIES",
+    "src_id": "S-97afc1dd",
+    "tgt_id": "S-d712dd29"
+   },
+   "gold_entities": [
+    "行波管放大器",
+    "功放输出功率不低于 120 W"
+   ],
+   "meta": {
+    "relation_id": 490,
+    "verb": "满足"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-13",
+   "kind": "graph",
+   "query": "转发器 EIRP 测试用例 与 数据转发功能 的追溯关系",
+   "gold": {
+    "pair": [
+     "转发器 EIRP 测试用例",
+     "数据转发功能"
+    ],
+    "relation_type": "TRACE",
+    "src_id": "S-f519ac97",
+    "tgt_id": "S-1f57692f"
+   },
+   "gold_entities": [
+    "转发器 EIRP 测试用例",
+    "数据转发功能"
+   ],
+   "meta": {
+    "relation_id": 546,
+    "verb": "追溯"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-14",
+   "kind": "graph",
+   "query": "系统总容量不低于 1 Tbps 由哪些 系统容量测试用例 验证",
+   "gold": {
+    "pair": [
+     "系统总容量不低于 1 Tbps",
+     "系统容量测试用例"
+    ],
+    "relation_type": "VERIFIED_BY",
+    "src_id": "S-8dd40723",
+    "tgt_id": "S-8ab1a022"
+   },
+   "gold_entities": [
+    "系统总容量不低于 1 Tbps",
+    "系统容量测试用例"
+   ],
+   "meta": {
+    "relation_id": 514,
+    "verb": "验证"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-15",
+   "kind": "graph",
+   "query": "支持星间链路组网 被分配到哪个 链路建立功能",
+   "gold": {
+    "pair": [
+     "支持星间链路组网",
+     "链路建立功能"
+    ],
+    "relation_type": "ALLOCATED_TO",
+    "src_id": "S-34ea00b4",
+    "tgt_id": "S-eee77018"
+   },
+   "gold_entities": [
+    "支持星间链路组网",
+    "链路建立功能"
+   ],
+   "meta": {
+    "relation_id": 507,
+    "verb": "分配"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-16",
+   "kind": "graph",
+   "query": "转发器 由哪些 接收机 组成",
+   "gold": {
+    "pair": [
+     "转发器",
+     "接收机"
+    ],
+    "relation_type": "COMPOSED_OF",
+    "src_id": "S-4782d01d",
+    "tgt_id": "S-dc57ad05"
+   },
+   "gold_entities": [
+    "转发器",
+    "接收机"
+   ],
+   "meta": {
+    "relation_id": 542,
+    "verb": "组成"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-17",
+   "kind": "graph",
+   "query": "宽带载荷 包含哪些 转发器",
+   "gold": {
+    "pair": [
+     "宽带载荷",
+     "转发器"
+    ],
+    "relation_type": "CONTAINS",
+    "src_id": "S-f6499a05",
+    "tgt_id": "S-4782d01d"
+   },
+   "gold_entities": [
+    "宽带载荷",
+    "转发器"
+   ],
+   "meta": {
+    "relation_id": 534,
+    "verb": "包含"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  },
+  {
+   "id": "graph-18",
+   "kind": "graph",
+   "query": "由 系统支持 Ka 频段双向通信 派生出的 天线增益不低于 40 dBi 有哪些",
+   "gold": {
+    "pair": [
+     "系统支持 Ka 频段双向通信",
+     "天线增益不低于 40 dBi"
+    ],
+    "relation_type": "DERIVES",
+    "src_id": "S-33b693a5",
+    "tgt_id": "S-9a6138cf"
+   },
+   "gold_entities": [
+    "系统支持 Ka 频段双向通信",
+    "天线增益不低于 40 dBi"
+   ],
+   "meta": {
+    "relation_id": 474,
+    "verb": "派生"
+   },
+   "label": "derived",
+   "expect_route_in": [
+    "graph",
+    "mixed"
+   ]
+  }
+ ],
+ "neg_cases": [
+  {
+   "id": "neg-01",
+   "kind": "neg",
+   "query": "帮我写一首关于春天的诗",
+   "gold": [],
+   "meta": {
+    "tag": "域外闲聊"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-02",
+   "kind": "neg",
+   "query": "推荐几部好看的科幻电影",
+   "gold": [],
+   "meta": {
+    "tag": "域外闲聊"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-03",
+   "kind": "neg",
+   "query": "帮我起一个猫咪的名字",
+   "gold": [],
+   "meta": {
+    "tag": "域外闲聊"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-04",
+   "kind": "neg",
+   "query": "红烧肉怎么做才不腻",
+   "gold": [],
+   "meta": {
+    "tag": "域外闲聊"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-05",
+   "kind": "neg",
+   "query": "明天中午吃什么比较好",
+   "gold": [],
+   "meta": {
+    "tag": "域外闲聊"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-06",
+   "kind": "neg",
+   "query": "今天北京的天气怎么样",
+   "gold": [],
+   "meta": {
+    "tag": "域外常识"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-07",
+   "kind": "neg",
+   "query": "现在美元兑人民币汇率多少",
+   "gold": [],
+   "meta": {
+    "tag": "域外常识"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-08",
+   "kind": "neg",
+   "query": "本周A股大盘收盘点位是多少",
+   "gold": [],
+   "meta": {
+    "tag": "域外常识"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-09",
+   "kind": "neg",
+   "query": "我现在账户余额还有多少",
+   "gold": [],
+   "meta": {
+    "tag": "域外实时"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-10",
+   "kind": "neg",
+   "query": "空间站机械臂的抓取力是多少",
+   "gold": [],
+   "meta": {
+    "tag": "域内但不存在"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-11",
+   "kind": "neg",
+   "query": "巡飞待机弹的推进剂加注量是多少",
+   "gold": [],
+   "meta": {
+    "tag": "域内但不存在"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-12",
+   "kind": "neg",
+   "query": "热管理系统冷却回路的流量是多少",
+   "gold": [],
+   "meta": {
+    "tag": "域内但不存在"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-13",
+   "kind": "neg",
+   "query": "宽带通信卫星的太阳能板清洗周期",
+   "gold": [],
+   "meta": {
+    "tag": "域内但不存在"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-14",
+   "kind": "neg",
+   "query": "雷达天线阵面的驻波比是多少",
+   "gold": [],
+   "meta": {
+    "tag": "域内但不存在"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-15",
+   "kind": "neg",
+   "query": "导弹测试靶场的年度经费预算是多少",
+   "gold": [],
+   "meta": {
+    "tag": "域内但不存在"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-16",
+   "kind": "neg",
+   "query": "某型号电源模块的开关频率上限是多少",
+   "gold": [],
+   "meta": {
+    "tag": "域内但不存在"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-17",
+   "kind": "neg",
+   "query": "专利号CN123456789A 的权利要求有哪些",
+   "gold": [],
+   "meta": {
+    "tag": "域内但不存在"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-18",
+   "kind": "neg",
+   "query": "如何用 Python 做网页爬虫",
+   "gold": [],
+   "meta": {
+    "tag": "术语邻域但不相关"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-19",
+   "kind": "neg",
+   "query": "用 Docker 部署一个 Postgres 主从集群",
+   "gold": [],
+   "meta": {
+    "tag": "术语邻域但不相关"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-20",
+   "kind": "neg",
+   "query": "Rust 怎么实现零拷贝解析",
+   "gold": [],
+   "meta": {
+    "tag": "术语邻域但不相关"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-21",
+   "kind": "neg",
+   "query": "帮我配置一下 Nginx 的反向代理",
+   "gold": [],
+   "meta": {
+    "tag": "术语邻域但不相关"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-22",
+   "kind": "neg",
+   "query": "我们这周的排产计划是什么",
+   "gold": [],
+   "meta": {
+    "tag": "需外部数据"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-23",
+   "kind": "neg",
+   "query": "当前项目里还剩多少未关闭的缺陷",
+   "gold": [],
+   "meta": {
+    "tag": "需外部数据"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-24",
+   "kind": "neg",
+   "query": "帮我查一下我上周提交的审批单批了没",
+   "gold": [],
+   "meta": {
+    "tag": "需外部数据"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-25",
+   "kind": "neg",
+   "query": "现在的备件库存里还有几套动力电池",
+   "gold": [],
+   "meta": {
+    "tag": "需外部数据"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-26",
+   "kind": "neg",
+   "query": "智源平台 v3.0 的需求规格说明有哪些",
+   "gold": [],
+   "meta": {
+    "tag": "时间外"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-27",
+   "kind": "neg",
+   "query": "GB/T 标准 2027 修订版对接口一致性的要求是什么",
+   "gold": [],
+   "meta": {
+    "tag": "时间外"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-28",
+   "kind": "neg",
+   "query": "下一版本计划新增哪些建模节点",
+   "gold": [],
+   "meta": {
+    "tag": "时间外"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-29",
+   "kind": "neg",
+   "query": "把巡飞弹的推进剂参数和汽车热管理器的冷却回路画成一张图",
+   "gold": [],
+   "meta": {
+    "tag": "跨域拼接"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  },
+  {
+   "id": "neg-30",
+   "kind": "neg",
+   "query": "用 SysML v2 建模一颗卫星的太阳能板清洗流程并给需求追溯矩阵",
+   "gold": [],
+   "meta": {
+    "tag": "跨域拼接"
+   },
+   "label": "manual",
+   "expect_route_in": [
+    "vector",
+    "mixed"
+   ]
+  }
+ ],
+ "notes": [
+  "doc/graph 域的 gold 由语料结构派生（可重复、可审计），非人工标注。",
+  "graph_cases 的 expect_route_in 为弱标注：entity 名可链接 ≠ 用户意图就该走图谱，用于 route_threshold 关键调参前需人工复核。",
+  "语料指纹必须比对：图谱改写会使 graph_cases 的 gold 实体消失、路由标签失效。",
+  "⚠️ doc_cases 的 gold 是**位置键**(source_doc, chunk_index)。语料一重切，同一 index 指向的内容就换了 ⇒ 实测旧集 292 条 gold 中 288 条（99%）失效，而当时只打了「建议重建」的 warning 就继续打分。",
+  "⚠️ gold 已按**section 全量块**聚合（不是只取第一块）：一个 section 常跨 5~9 块，只认第一块会把「命中兄弟块」误判为失败（实测块级 38.6% vs section 级 54.5%，15.9pp 是判据吃掉的）。"
+ ]
+}

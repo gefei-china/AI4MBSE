@@ -45,7 +45,12 @@ sys.path.insert(0, REPO)
 os.chdir(REPO)
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--set", default=os.path.join(REPO, "tmp", "p21", "evalset.json"))
+# O2（2026-10-23）：默认优先读版本化评测集（docs/评测/datasets/，随 git 可
+# review）；不存在时退回 tmp/p21/ 旧路径（老环境兼容）。
+_DATASETS_DEFAULT = os.path.join(REPO, "docs", "评测", "datasets", "evalset.json")
+_DEFAULT_SET = _DATASETS_DEFAULT if os.path.exists(_DATASETS_DEFAULT) else \
+    os.path.join(REPO, "tmp", "p21", "evalset.json")
+ap.add_argument("--set", default=_DEFAULT_SET)
 ap.add_argument("--tag", default="run")
 ap.add_argument("--subset", default="all", choices=["all", "doc", "graph", "neg"])
 ap.add_argument("--limit", type=int, default=0, help="每域取前 N 条（调试用）")
@@ -104,6 +109,19 @@ _orig_record = QueryRouter.record
 QueryRouter.record = lambda *a, **k: None
 
 evalset = json.load(open(ARGS.set, encoding="utf-8"))
+
+
+def _dataset_id_for(set_path):
+    """O2：从评测集同目录 manifest.json 取 dataset_id（内容寻址题库版本）。
+
+    取不到（旧 tmp 集、manifest 缺失）返回 None —— **不编造**：报告里
+    dataset_id=null 就是"这轮跑在未版本化的旧集上"，比错标更诚实。
+    """
+    mf = os.path.join(os.path.dirname(os.path.abspath(set_path)), "manifest.json")
+    try:
+        return json.load(open(mf, encoding="utf-8")).get("dataset_id")
+    except Exception:
+        return None
 print("=" * 78)
 print("P1-6 检索评测  tag=%s" % ARGS.tag)
 print("=" * 78)
@@ -496,6 +514,7 @@ report = {
     "when": time.strftime("%Y-%m-%d %H:%M:%S"),
     "evalset": os.path.basename(ARGS.set),
     "evalset_built_at": evalset["built_at"],
+    "dataset_id": _dataset_id_for(ARGS.set),
     "fingerprint_evalset": old,
     "fingerprint_now": now_finger,
     "fingerprint_drift": drift,

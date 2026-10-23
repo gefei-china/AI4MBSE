@@ -369,3 +369,59 @@ else:
           % (trace["fingerprint"].get("messages"),
              trace["fingerprint"].get("intent_samples"),
              trace["fingerprint"].get("hil_confirmations")))
+
+# ── O2（2026-10-23）：评测集版本化 ─────────────────────────────────────────
+# 此前产物只在 tmp/p21/（gitignore + 会被清理）⇒ 历史分数不可比、评测集
+# 不可 review。规范落点改为 docs/评测/datasets/（随 git，PR 可评审），tmp
+# 保留一份副本兼容旧路径；manifest 记 dataset_id。
+#
+# dataset_id 是**内容寻址**：由"语料指纹 + 证据源指纹 + 样本量"派生 ——
+# 同一语料/证据状态重建 ⇒ 同 id（built_at 不参与，重建不改 id）；
+# 语料或证据源一变 ⇒ id 变 ⇒ 历史分数自然分段可比。评测报告记 dataset_id
+# 后，"这份分数是哪一版题库上跑的"第一次有了机器可查的答案。
+DATASETS_DIR = os.path.join(REPO, "docs", "评测", "datasets")
+
+
+def _dataset_id(finger, trace_finger, n_doc, n_graph, n_neg, trace_total):
+    h = hashlib.sha1()
+    h.update(str(sorted((finger or {}).items())).encode("utf-8"))
+    h.update(str(sorted((trace_finger or {}).items())).encode("utf-8"))
+    h.update(("%s|%s|%s|%s" % (n_doc, n_graph, n_neg, trace_total)).encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
+def _publish_datasets(trace):
+    """把评测集发布到规范落点 + 写 manifest。返回 dataset_id。"""
+    os.makedirs(DATASETS_DIR, exist_ok=True)
+    # 副本（字节级一致；tmp 为兼容旧读者的过渡路径）
+    import shutil as _shutil
+    _shutil.copyfile(OUT, os.path.join(DATASETS_DIR, "evalset.json"))
+    d_id = _dataset_id(finger, (trace or {}).get("fingerprint"),
+                       len(doc_cases), len(graph_cases), len(neg_cases),
+                       ((trace or {}).get("counts") or {}).get("total", 0))
+    manifest = {
+        "schema": "dataset-manifest@1",
+        "dataset_id": d_id,
+        "built_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "generator": {"build_evalset": "1", "trace2dataset": "p1-1/trace-evalset@1"},
+        "evalset": {"file": "evalset.json", "n_doc": len(doc_cases),
+                    "n_graph": len(graph_cases), "n_neg": len(neg_cases),
+                    "fingerprint": finger},
+        "trace": ({"file": "trace_evalset.json",
+                   "counts": (trace or {}).get("counts"),
+                   "fingerprint": (trace or {}).get("fingerprint")}
+                  if trace else None),
+        "note": "dataset_id 内容寻址（语料/证据指纹 + 样本量）；built_at 不参与",
+    }
+    with open(os.path.join(DATASETS_DIR, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=1)
+    if trace:
+        _shutil.copyfile(trace_out, os.path.join(DATASETS_DIR, "trace_evalset.json"))
+    print()
+    print("→ %s（dataset_id=%s）"
+          % (os.path.relpath(DATASETS_DIR, REPO).replace("\\", "/"), d_id))
+    print("   评测集已版本化：随 git 可 review；报告消费 manifest.json 取 dataset_id")
+    return d_id
+
+
+_publish_datasets(trace if "--no-trace" not in sys.argv else None)

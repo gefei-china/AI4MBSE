@@ -1,0 +1,3767 @@
+{
+ "schema": "p1-1/trace-evalset@1",
+ "built_at": "2026-10-23 09:38:20",
+ "fingerprint": {
+  "conversations": 78,
+  "messages": 513,
+  "feedback": 3,
+  "llm_usage_stats": 12889,
+  "hil_confirmations": 10,
+  "flow_runs": 11,
+  "intent_samples": 372,
+  "bad_cases": 0,
+  "tool_call_logs": 2157,
+  "messages_content_sha1": "134cd66dbbeb5160",
+  "confirmed_intent_texts_sha1": "e9b4e9157a8b9a8e",
+  "hil_previews_sha1": "0de82ac232ac4f1a",
+  "flow_runs_sha1": "50d152607182717a",
+  "badcase_subjects_sha1": "da39a3ee5e6b4b0d",
+  "schema_version": 1
+ },
+ "settings": {
+  "enabled": true,
+  "window_days": 90,
+  "max_per_extractor": 300,
+  "exclude_mock": true,
+  "mock_markers": "（Mock 回答）,Mock 降级模式",
+  "min_query_chars": 4,
+  "max_response_chars": 600
+ },
+ "counts": {
+  "total": 231,
+  "by_extractor": {
+   "intent_confirmed": 42,
+   "intent_rejected": 13,
+   "hil_approved": 0,
+   "hil_rejected": 0,
+   "conv_clean": 166,
+   "conv_badcase": 0,
+   "flow_completed": 10,
+   "flow_failed": 0
+  },
+  "by_kind": {
+   "positive": 42,
+   "negative": 13,
+   "regression": 176
+  },
+  "by_label": {
+   "strong": 55,
+   "weak": 176
+  }
+ },
+ "summary": {
+  "window_cutoff": "2026-07-25 09:38:20",
+  "by_extractor": {
+   "intent_confirmed": 42,
+   "intent_rejected": 13,
+   "hil_approved": 0,
+   "hil_rejected": 0,
+   "conv_clean": 166,
+   "conv_badcase": 0,
+   "flow_completed": 10,
+   "flow_failed": 0
+  },
+  "by_kind": {
+   "positive": 42,
+   "negative": 13,
+   "regression": 176
+  },
+  "by_label": {
+   "strong": 55,
+   "weak": 176
+  },
+  "total": 231,
+  "skipped_mock": 15,
+  "skipped_window": 0,
+  "skipped_short": 11,
+  "skipped_dup": 33,
+  "skipped_extractors": {}
+ },
+ "cases": [
+  {
+   "id": "intent_confirmed-001",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "帮我看看这个系统大概是怎么设计的",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 37,
+   "seen_at": "2026-09-26 08:57:21",
+   "meta": {
+    "intent": "design",
+    "hit_intent": "design",
+    "hit_route": "semantic",
+    "source": "prod",
+    "seen_count": 3
+   }
+  },
+  {
+   "id": "intent_confirmed-002",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "帮我看看这个系统的接口设计是否合理",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 47,
+   "seen_at": "2026-09-26 08:33:59",
+   "meta": {
+    "intent": "design",
+    "hit_intent": "design",
+    "hit_route": "semantic_weak",
+    "source": "prod",
+    "seen_count": 2
+   }
+  },
+  {
+   "id": "intent_confirmed-003",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "帮我看看这个项目的预算",
+   "response": "",
+   "gold": "chat",
+   "source_table": "intent",
+   "source_id": 36,
+   "seen_at": "2026-09-26 02:21:53",
+   "meta": {
+    "intent": "chat",
+    "hit_intent": "chat",
+    "hit_route": "llm",
+    "source": "prod",
+    "seen_count": 8
+   }
+  },
+  {
+   "id": "intent_confirmed-004",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "帮我测算一下这个项目的成本",
+   "response": "",
+   "gold": "chat",
+   "source_table": "intent",
+   "source_id": 38,
+   "seen_at": "2026-09-26 02:05:43",
+   "meta": {
+    "intent": "chat",
+    "hit_intent": "report_generation",
+    "hit_route": "llm",
+    "source": "prod",
+    "seen_count": 2
+   }
+  },
+  {
+   "id": "intent_confirmed-005",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "#知识库 知识库里关于需求工程的方法有哪些？",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 46,
+   "seen_at": "2026-09-26 02:00:56",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "knowledge_qa",
+    "hit_route": "explain",
+    "source": "prod",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-006",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "satisfy X by Y` 这个语法正确嘛，用语法校验工具校验一下",
+   "response": "",
+   "gold": "review",
+   "source_table": "intent",
+   "source_id": 45,
+   "seen_at": "2026-09-26 02:00:56",
+   "meta": {
+    "intent": "review",
+    "hit_intent": "review",
+    "hit_route": "rule",
+    "source": "prod",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-007",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "帮我生成电动汽车热管理系统的sysml V2代码并进行校验",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 41,
+   "seen_at": "2026-09-26 02:00:56",
+   "meta": {
+    "intent": "design",
+    "hit_intent": "design",
+    "hit_route": "rule",
+    "source": "prod",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-008",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "帮我进行电动汽车热管理系统的工程建模，生成结构视图（BDD），并生成对应的sysyml V2代码，并进行词法、语法的校验，确保代码合格",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 40,
+   "seen_at": "2026-09-26 02:00:56",
+   "meta": {
+    "intent": "design",
+    "hit_intent": "design",
+    "hit_route": "rule",
+    "source": "prod",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-009",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "帮我写一首诗",
+   "response": "",
+   "gold": "chat",
+   "source_table": "intent",
+   "source_id": 39,
+   "seen_at": "2026-09-26 02:00:56",
+   "meta": {
+    "intent": "chat",
+    "hit_intent": "chat",
+    "hit_route": "llm",
+    "source": "prod",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-010",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "用一句话介绍热管理系统",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 35,
+   "seen_at": "2026-09-26 02:00:56",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "knowledge_qa",
+    "hit_route": "explain",
+    "source": "prod",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-011",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "请对巡飞弹做一次参数变更影响分析：推进剂加注量与巡飞速度调整，影响深度 3 层，输出影响报告",
+   "response": "",
+   "gold": "report_generation",
+   "source_table": "intent",
+   "source_id": 34,
+   "seen_at": "2026-09-26 02:00:56",
+   "meta": {
+    "intent": "report_generation",
+    "hit_intent": "report_generation",
+    "hit_route": "rule",
+    "source": "prod",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-012",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "查询#宽带通信 知识库资料",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 33,
+   "seen_at": "2026-09-26 02:00:56",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "knowledge_qa",
+    "hit_route": "fused",
+    "source": "prod",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-013",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "请生成一份关于宽带通信系统的分析报告",
+   "response": "",
+   "gold": "report_generation",
+   "source_table": "intent",
+   "source_id": 32,
+   "seen_at": "2026-09-26 02:00:56",
+   "meta": {
+    "intent": "report_generation",
+    "hit_intent": "report_generation",
+    "hit_route": "rule",
+    "source": "prod",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-014",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "对巡飞弹做参数变更影响分析：推进剂加注量与巡飞速度调整，影响深度3层",
+   "response": "",
+   "gold": "impact",
+   "source_table": "intent",
+   "source_id": 31,
+   "seen_at": "2026-09-26 02:00:56",
+   "meta": {
+    "intent": "impact",
+    "hit_intent": "impact",
+    "hit_route": "rule",
+    "source": "prod",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-015",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "对当前模型进行预评审校验",
+   "response": "",
+   "gold": "review",
+   "source_table": "intent",
+   "source_id": 30,
+   "seen_at": "2026-09-26 02:00:56",
+   "meta": {
+    "intent": "review",
+    "hit_intent": "review",
+    "hit_route": "rule",
+    "source": "prod",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-016",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "查看一下审计日志",
+   "response": "",
+   "gold": "system_mgmt",
+   "source_table": "intent",
+   "source_id": 27,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "system_mgmt",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-017",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "系统里有几个用户",
+   "response": "",
+   "gold": "system_mgmt",
+   "source_table": "intent",
+   "source_id": 26,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "system_mgmt",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-018",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "把任务书里的需求提取出来",
+   "response": "",
+   "gold": "requirement_analysis",
+   "source_table": "intent",
+   "source_id": 25,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "requirement_analysis",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-019",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "帮我解析这份需求文档的条目",
+   "response": "",
+   "gold": "requirement_analysis",
+   "source_table": "intent",
+   "source_id": 24,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "requirement_analysis",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-020",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "输出这次评审的报告",
+   "response": "",
+   "gold": "report_generation",
+   "source_table": "intent",
+   "source_id": 23,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "report_generation",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-021",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "生成一份需求分析报告",
+   "response": "",
+   "gold": "report_generation",
+   "source_table": "intent",
+   "source_id": 22,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "report_generation",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-022",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "追溯矩阵检查一下",
+   "response": "",
+   "gold": "review",
+   "source_table": "intent",
+   "source_id": 21,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "review",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-023",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "帮我校验一下这段sysml代码",
+   "response": "",
+   "gold": "review",
+   "source_table": "intent",
+   "source_id": 20,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "review",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-024",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "这份需求的模糊词有哪些",
+   "response": "",
+   "gold": "requirement_quality",
+   "source_table": "intent",
+   "source_id": 19,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "requirement_quality",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-025",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "做一次需求质量评审",
+   "response": "",
+   "gold": "requirement_quality",
+   "source_table": "intent",
+   "source_id": 18,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "requirement_quality",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-026",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "接口变更会波及哪些模块",
+   "response": "",
+   "gold": "impact",
+   "source_table": "intent",
+   "source_id": 17,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "impact",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-027",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "对巡飞弹做变更影响分析",
+   "response": "",
+   "gold": "impact",
+   "source_table": "intent",
+   "source_id": 16,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "impact",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-028",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "分析一下这个需求的变更影响",
+   "response": "",
+   "gold": "impact",
+   "source_table": "intent",
+   "source_id": 15,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "impact",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-029",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "画一张参数图",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 14,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "design",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-030",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "生成结构树",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 13,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "design",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-031",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "对这个系统做总体设计",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 12,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "design",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 2
+   }
+  },
+  {
+   "id": "intent_confirmed-032",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "输出一份 BDD 视图",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 11,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "design",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-033",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "帮我生成这个系统的SysML v2模型代码",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 10,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "design",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-034",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "请设计星网宽带通信系统的架构方案",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 9,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "design",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-035",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "知识库里有没有关于链路预算的资料",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 8,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-036",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "变更影响分析的用途",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 7,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-037",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "需求追溯的原理是什么",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 6,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-038",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "MBSE方法论包含哪些建模活动",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 5,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-039",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "MBSE建模方法论与传统方法的区别",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 4,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-040",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "介绍一下SysML v2的作用",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 3,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-041",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "什么是MBSE建模方法论",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 2,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 1
+   }
+  },
+  {
+   "id": "intent_confirmed-042",
+   "extractor": "intent_confirmed",
+   "kind": "positive",
+   "label": "strong",
+   "query": "MBSE建模方法论介绍",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 1,
+   "seen_at": "2026-09-26 01:05:52",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "",
+    "hit_route": "",
+    "source": "seed",
+    "seen_count": 2
+   }
+  },
+  {
+   "id": "intent_rejected-001",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=需求分析：拆解目标需求，明确系统边界、涉众、功能/非功能需求与约束，输出需求分析成果\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n需求分析：拆解目标需求，明确系统边界、涉众、功能/非功能需求与约束，输出需求分析成果\n团队目标：先做需求分析，再进行方案设计，最后生成 sysml 代码",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 61,
+   "seen_at": "2026-09-26 08:34:00",
+   "meta": {
+    "intent": "",
+    "hit_intent": "design",
+    "note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   }
+  },
+  {
+   "id": "intent_rejected-002",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=需求分析：拆解目标需求、梳理涉众与约束、输出需求清单与系统边界\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n需求分析：拆解目标需求、梳理涉众与约束、输出需求清单与系统边界\n团队目标：先做需求分析，再进行方案设计，最后生成 sysml 代码",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 60,
+   "seen_at": "2026-09-26 08:34:00",
+   "meta": {
+    "intent": "",
+    "hit_intent": "design",
+    "note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   }
+  },
+  {
+   "id": "intent_rejected-003",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析电动汽车热管理系统需求，输出需求分析结果\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析电动汽车热管理系统需求，输出需求分析结果\n团队目标：先分析电动汽车热管理系统需求，再生成 SysML V2 模型代码并进行校验",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 58,
+   "seen_at": "2026-09-26 08:34:00",
+   "meta": {
+    "intent": "",
+    "hit_intent": "design",
+    "note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   }
+  },
+  {
+   "id": "intent_rejected-004",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析电动汽车热管理系统需求，输出需求分析成果\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析电动汽车热管理系统需求，输出需求分析成果\n团队目标：先分析电动汽车热管理系统需求，再生成 SysML V2 模型代码并进行校验",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 56,
+   "seen_at": "2026-09-26 08:34:00",
+   "meta": {
+    "intent": "",
+    "hit_intent": "design",
+    "note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   }
+  },
+  {
+   "id": "intent_rejected-005",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，明确系统边界、涉众、约束与结构视图建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，明确系统边界、涉众、约束与结构视图建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 54,
+   "seen_at": "2026-09-26 08:34:00",
+   "meta": {
+    "intent": "",
+    "hit_intent": "design",
+    "note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   }
+  },
+  {
+   "id": "intent_rejected-006",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，明确系统边界、涉众、约束与结构建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，明确系统边界、涉众、约束与结构建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 53,
+   "seen_at": "2026-09-26 08:34:00",
+   "meta": {
+    "intent": "",
+    "hit_intent": "design",
+    "note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   }
+  },
+  {
+   "id": "intent_rejected-007",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，梳理系统边界、涉众与结构建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，梳理系统边界、涉众与结构建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 52,
+   "seen_at": "2026-09-26 08:34:00",
+   "meta": {
+    "intent": "",
+    "hit_intent": "design",
+    "note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   }
+  },
+  {
+   "id": "intent_rejected-008",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "[任务上下文快照]\n- 任务定义：key=t1 / title=分析建模需求，明确系统边界、涉众与结构建模范围\n- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注\n\n[任务]\n分析建模需求，明确系统边界、涉众与结构建模范围\n团队目标：帮我进行工程建模，生成结构视图（BDD），并生成对应的 sysml 代码",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 51,
+   "seen_at": "2026-09-26 08:34:00",
+   "meta": {
+    "intent": "",
+    "hit_intent": "design",
+    "note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   }
+  },
+  {
+   "id": "intent_rejected-009",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "(续跑)",
+   "response": "",
+   "gold": "chat",
+   "source_table": "intent",
+   "source_id": 49,
+   "seen_at": "2026-09-26 08:34:00",
+   "meta": {
+    "intent": "",
+    "hit_intent": "chat",
+    "note": "编排子任务的内部上下文/测试残留文本（非用户原话）；已在采集钩子与回填两处过滤"
+   }
+  },
+  {
+   "id": "intent_rejected-010",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "提供一段需求，进行需求分析、方案设计、代码校验",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 48,
+   "seen_at": "2026-09-26 05:58:35",
+   "meta": {
+    "intent": "",
+    "hit_intent": "design",
+    "note": "多意图句（一句话三个阶段），不属于单标签评测集；已有多意图专项用例覆盖，放这里只会制造假错例"
+   }
+  },
+  {
+   "id": "intent_rejected-011",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「您希望围绕“流式输出”开展哪类 MBSE 工作？」→ 回答：需求分析与用例建模\n问题「需要建模的流式输出系统边界或对象是什么？」→ 回答：AI/LLM 推理服务\n问题「本分析最关注哪些指标或质量属性？」→ 回答：延迟与首字节时间\n\n原请求：流式输出",
+   "response": "",
+   "gold": "requirement_analysis",
+   "source_table": "intent",
+   "source_id": 44,
+   "seen_at": "2026-09-26 01:54:14",
+   "meta": {
+    "intent": "requirement_analysis",
+    "hit_intent": "requirement_analysis",
+    "note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+   }
+  },
+  {
+   "id": "intent_rejected-012",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「本次参数变更要建模/分析的对象与范围是什么？」→ 回答：巡飞弹参数变更：推进剂加注量与巡飞速度调整\n\n原请求：巡飞弹参数变更：推进剂加注量与巡飞速度调整",
+   "response": "",
+   "gold": "knowledge_qa",
+   "source_table": "intent",
+   "source_id": 43,
+   "seen_at": "2026-09-26 01:54:14",
+   "meta": {
+    "intent": "knowledge_qa",
+    "hit_intent": "knowledge_qa",
+    "note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+   }
+  },
+  {
+   "id": "intent_rejected-013",
+   "extractor": "intent_rejected",
+   "kind": "negative",
+   "label": "strong",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「本次建模对象是哪种巡飞弹层级？」→ 回答：概念级/通用巡飞弹\n问题「需要覆盖的设计原理范围是？」→ 回答：气动/结构/动力/控制/制导/战斗部全链路\n问题「关系图谱希望表达哪类关系？」→ 回答：需求-功能-逻辑-物理架构\n\n原请求：巡飞弹的设计原理，以及关系图谱",
+   "response": "",
+   "gold": "design",
+   "source_table": "intent",
+   "source_id": 42,
+   "seen_at": "2026-09-26 01:54:14",
+   "meta": {
+    "intent": "design",
+    "hit_intent": "design",
+    "note": "系统生成的澄清续跑包装文本（非用户原话）；已在采集/回填两处过滤"
+   }
+  },
+  {
+   "id": "conv_clean-001",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请为一个小型无人机飞控系统做需求条目化（功能/性能/约束各若干条），并生成 SysML v2 BDD 结构骨架，最后用 sysml_v2_validate 校验通过。子任务控制在 3 个以内。",
+   "response": "# 小型无人机飞控系统 MBSE 子任务整合报告\n\n## 0. 报告说明与整合范围\n\n本报告仅整合给定子任务交付物 [t1]、[t2]、[t3]，并以既有需求模型 v0.6 为基线背景进行结构化汇总。报告不补充外部事实；对交付物中标注为待确认、风险、缺失或未经校验的内容，均在对应小节显式保留，不视为已确认事实。\n\n整合顺序为：**需求 → 设计 → 分析/校验 → 总体结论与后续建议**。\n\n---\n\n## 1. 需求分析与需求模型增量（[t1] requirement_analysis）\n\n### 1.1 交付内容\n\n据 [t1]，在既有需求模型 v0.6 上增量补充小型无人机飞控系统需求条目，具体包括：\n\n- 增量补充 **12 条飞控需求**：功能 4 条、性能 4 条、约束 4 条。\n- 每条需求包含：`reqId`、分类、来源关注点、可验证判据与验证用例。\n- 复用 v0.6 的关注点层与系统需求层命名规范，未重建需求层。\n- 模型骨架可导入并投影：\n  - BDD（飞控系统组成）；\n  - REQ（12 条需求 + 4 条关注点 + 细化关系）；\n  - 追溯视图（需求→关注点、需求→验证用例）。\n\n### 1.2 校验状态\n\n据 [t1]：\n\n- 判据：pass；\n- 词法：0；\n- 语法：0；\n- 语义：0；\n- ERROR：0 条；\n- WARN：24 条。\n\n[…[11544 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4781,
+   "seen_at": "2026-10-22 11:34:19",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-002",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请为一个小型无人机飞控系统做需求条目化（功能/性能/约束各若干条），并生成 SysML v2 BDD 结构骨架，最后用 sysml_v2_validate 校验通过。子任务控制在 3 个以内。",
+   "response": "# 小型无人机飞控系统 MBSE 任务汇总报告（v0.5 增量）\n\n> **报告依据与限制**：本报告仅整合 t1、t2、t3 交付物内容，不补充未给出的事实。交付物中存在“中间省略/截断”的部分，凡未在可见内容中展示者，均不作为已确认事实；涉及风险、待确认、缺失的信息在对应小节显式标注。\n\n---\n\n## 1. 需求：需求条目化成果（t1）\n\n### 1.1 增量范围与基线\n\nt1 在既有 v0.5 需求模型上做**增量补充**：\n\n- 既有 v0.5 基线：**49 个元素、56 条关系**，包含 `sys1Req`、`sys2Req`、`ir1`、`ir2` 等。\n- 本次新增一个**独立的需求视图包**，将无人机飞控自然语言需求切分为 **16 条可独立验证条目**。\n- 条目按**功能、性能、接口、约束**四类归档，每条带唯一 `reqId`、类别与来源标注。\n- 既有 `sys1Req` / `sys2Req` / `ir1` / `ir2` 等元素**未改动、未重建**。\n- **风险已明示**：本次新增条目与既有 v0.5 元素之间**暂未建立追溯关系**。\n\n### 1.2 可核验的需求条目摘要\n\nt1 声明共 16 条需求，但交付物可见片段中仅以下条目可完整核验或部分核验；其余条目因省略/截断无法确认。\n\n| reqId | 类别 | 条目内容（仅按可见文本） …[12690 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4779,
+   "seen_at": "2026-10-22 11:10:15",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-003",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我分析并生成雷达领域的完整BDD视图，需要提供多方案设计，架构不变，但是需要从性能指标、参数维度进行多方案创成",
+   "response": "（编排状态：partial——4 个子任务自报部分完成（交付物已产出，存在未验证环节）：t1,t2,t3,t5）\n\n# 雷达领域 BDD 建模最终汇总报告（基于 t1–t6 交付物）\n\n> **报告说明**：本报告仅整合给定子任务交付物 t1–t6，不新增事实。  \n> **状态标识**：  \n> - 【已核实】交付物中标注为 verified/fact 的内容；  \n> - 【推断】交付物中标注为 inference 的内容；  \n> - 【待验证/待确认】交付物中标注为 to_verify 或风险项；  \n> - 【缺失】交付物明确未提供、未完整呈现或无法确认的信息。  \n> 所有风险、待确认与缺失信息均不得视为已确认事实。\n\n---\n\n## 1. 需求阶段\n\n### 1.1 方法论与建模规约（来源：t1）\n\n- 【已核实】当前 N2 阶段建模规约卡未绑定客户方法论，按 OMG SysML v2 通用口径处理，加载的是 fallback 通用规约卡，规则型载体为空，本次只能按通用规则处理。\n- 【已核实】雷达领域图谱检索命中 0 条，仅有向量召回的方法论文本片段；领域本体中未定义雷达类实体，建议的 7 类雷达分系统中仅电源分系统有对应类型。\n- 【已核实】需求追溯关系写法：`satisfy` 与 `verify` 须引用 `requirement usage` 而非 `defi…[21628 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4775,
+   "seen_at": "2026-10-22 07:07:22",
+   "meta": {
+    "conversation_id": 9587
+   }
+  },
+  {
+   "id": "conv_clean-004",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "继续生成整车的IBD视图",
+   "response": "# 整车 IBD 视图已生成，校验通过\n\n**判据：pass** —— 词法 0 / 语法 0 / 语义 0，ERROR 0 条、WARN 0 条。按 IBD 视图硬约束生成：连接一律用 `connect A to B;`，端点用点号访问，未使用 `connector ... from ... to` 旧记法，未引入 `port def`、`interface`、`flow`、`bind` 等禁用语法。\n\n## 一、部件与端口\n\n顶层 `part '整车动力系统'` 下含四个逻辑单元，与需求阶段识别的动力管理职责一一对应：\n\n**整车控制器**——对外五个端口：点火指令输入、驾驶意图输入、车辆状态输入、动力模式指令输出、扭矩指令输出。它是动力管理的决策中枢，承接 IR-3 的“根据驾驶需求和运行状态管理动力输出”。\n\n**动力电池系统**——四个端口：高压直流输出、高压直流输入、电池状态输出、热管理接口。电池状态输出直接支撑 IR-4 的能源状态适应。\n\n**电机驱动系统**——四个端口：高压直流输入、扭矩指令输入、电机功率输出、热管理接口。\n\n**热管理系统**——三个端口：电池热管理、电机热管理、热管理控制输入。\n\n## 二、连接关系\n\n共九条 `connect`，覆盖动力流、信息流、热流三条链路：\n\n**动力流**——电池高压直流输出接电机驱动高压直流输入；电机功率输出接整车…[3730 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4773,
+   "seen_at": "2026-10-22 03:42:05",
+   "meta": {
+    "conversation_id": 9586
+   }
+  },
+  {
+   "id": "conv_clean-005",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我生成如下汽车需求的整车多逻辑架构方案\n<IR-3>车辆动力管理：\n车辆应根据驾驶需求和车辆运行状态，对车辆动力输出进行\n管理，以满足车辆运行需求。\n<IR-1>车辆动力输出：\n车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需\n求的动力输出。\n<IR-2>动力模式管理\n车辆应根据车辆状态和运行条件选择适合的动力运行模式，\n以满足车辆运行需求。\n<IR-4>能源状态适应\n车辆应根据能源状态调整动力输出策略，保证车辆持续运行\n能力。",
+   "response": "（编排状态：partial——4 个子任务自报部分完成（交付物已产出，存在未验证环节）：t1,t2,t3,t5）\n\n# 整车动力 MBSE 任务汇总最终报告\n\n> 说明：本报告仅整合给定子任务交付物 t1–t6，不补充交付物之外的事实。报告中的“已核实/推断/待验证/缺失/未完成”均按交付物原口径标注；风险、待确认与缺失信息不得视为已确认事实。\n\n## 1. 任务状态总览\n\n| 子任务 | 阶段 | 可确认状态 | 关键产出/结果 | 主要缺口 |\n|---|---|---|---|---|\n| t1 | 需求结构化 | 已完成结构化条目产出，待 L1 澄清 | 基于 SysML v0.4 基线增量产出 16 条可追溯需求条目：功能 6、接口 4、性能 3、约束 3；识别 9 项必须由 L1 人工澄清的歧义与缺项 | 四条 IR 原文均不满足可验证性判据；阈值缺失；本阶段不产出 SysML 代码 |\n| t2 | 架构骨架 | 已生成草案，未校验 | 纯增量产出 4 条需求定义与条目、6 个端口定义、4 个逻辑单元与 1 个整车域、4 条 satisfy 分配；既有 9 元素零改动 | 骨架未执行校验；标准库未见标量值包与实数类型；既有元素名乱码 |\n| t3 | 八视图展开 | 方案与冲突分析完成，未产出视图代码 | 明确八视图展开方案口径与既有资产冲突分析；八视图全部未生成、未…[9298 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4771,
+   "seen_at": "2026-10-22 03:13:31",
+   "meta": {
+    "conversation_id": 9586
+   }
+  },
+  {
+   "id": "conv_clean-006",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "我的目标是生成状态机视图",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4768,
+   "seen_at": "2026-10-22 02:45:06",
+   "meta": {
+    "conversation_id": 9586
+   }
+  },
+  {
+   "id": "conv_clean-007",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "继续校验并修复这份代码，直至没有错误：\npackage '整车动力管理功能分析' {\n    doc /* 整车动力管理功能分析模型（累积：活动图 + 结构图 + 状态机 + 视图） */\n\n    package '整车动力管理功能分析_活动' {\n        doc /* 整车动力管理功能流程活动图 */\n        action def '功能步骤';\n\n        action def '整车动力管理功能流程' {\n            doc /* 覆盖启动、正常运行、特殊工况、关机驻车4个阶段 */\n            action '检测点火信号' : '功能步骤' { attribute '点火状态' : ScalarValues::Boolean; }\n            action '检查电池状态' : '功能步骤' { attribute '电池状态' : ScalarValues::Boolean; out attribute '电池就绪' : ScalarValues::Boolean; }\n            action '高压上电' : '功能步骤' { attribute '高压状态' : ScalarValues::Boolean; }\n            action '系统自检' : '功能步骤' { attribute '系统健康状态' : ScalarValues::Boolean; out attribute '自检通过' : ScalarValues::Boolean; }\n            action '确认就绪状态' : '功能步骤' { attribute '车辆就绪' : ScalarValues::Boolean; }\n            action '解析驾驶意图' : '功能步骤' { attribute '驾驶意图' : ScalarValues::String; }\n            action '计算扭矩分配' : '功能步骤' { attribute '驾驶意图' : ScalarValues::String; attribute '扭矩指令' : ScalarValues::Real; }\n            action '管理动力输出' : '功能步骤' { attribute '扭矩指令' : ScalarValues::Real; attribute '电机功率' : ScalarValues::Real; }\n            action '监控能量消耗' : '功能步骤' { attribute '电机功率' : ScalarValues::Real; attribute '能量状态' : ScalarValues::Real; }\n            action '控制热管理' : '功能步骤' { attribute '能量状态' : ScalarValues::Real; attribute '热管理状态' : ScalarValues::Boolean; }\n            action '执行再生制动' : '功能步骤' { attribute '制动信号' : ScalarValues::Boolean; attribute '回收能量' : ScalarValues::Real; }\n            action '检测特殊工况' : '功能步骤' { attribute '车辆状态' : ScalarValues::String; out attribute '特殊工况标志' : ScalarValues::Boolean; }\n            action '激活雪地模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n            action '激活运动模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n            action '激活经济模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n            action '调整动力策略' : '功能步骤' { attribute '模式指令' : ScalarValues::String; attribute '调整后功率' : ScalarValues::Real; }\n            action '检测关机请求' : '功能步骤' { attribute '关机信号' : ScalarValues::Boolean; }\n            action '保存车辆状态' : '功能步骤' { attribute '车辆状态数据' : ScalarValues::String; }\n            action '高压下电' : '功能步骤' { attribute '高压状态' : ScalarValues::Boolean; }\n            action '进入驻车模式' : '功能步骤' { attribute '驻车状态' : ScalarValues::Boolean; }\n            action '确认关机完成' : '功能步骤' { attribute '关机完成' : ScalarValues::Boolean; }\n            succession '控制流63' first start then '检测点火信号';\n            succession '控制流64' first '检测点火信号' then '检查电池状态';\n            succession '控制流65' first '检查电池状态' then '高压上电';\n            succession '控制流66' first '高压上电' then '系统自检';\n            succession '控制流67' first '系统自检' then '确认就绪状态';\n            succession '控制流68' first '确认就绪状态' then '解析驾驶意图';\n            succession '控制流69' first '解析驾驶意图' then '计算扭矩分配';\n            succession '控制流70' first '计算扭矩分配' then '管理动力输出';\n            fork '正常驾驶分叉';\n            succession '控制流71' first '管理动力输出' then '正常驾驶分叉';\n            succession '控制流72' first '正常驾驶分叉' then '监控能量消耗';\n            succession '控制流73' first '正常驾驶分叉' then '控制热管理';\n            succession '控制流74' first '正常驾驶分叉' then '执行再生制动';\n            join '正常驾驶汇合';\n            succession '控制流75' first '监控能量消耗' then '正常驾驶汇合';\n            succession '控制流76' first '控制热管理' then '正常驾驶汇合';\n            succession '控制流77' first '执行再生制动' then '正常驾驶汇合';\n            succession '控制流78' first '正常驾驶汇合' then '检测特殊工况';\n            succession '控制流79' first '检测特殊工况' then '调整动力策略';\n            succession '控制流80' first '调整动力策略' then '检测关机请求';\n            succession '控制流81' first '检测关机请求' then '保存车辆状态';\n            succession '控制流82' first '保存车辆状态' then '高压下电';\n            succession '控制流83' first '高压下电' then '进入驻车模式';\n            succession '控制流84' first '进入驻车模式' then '确认关机完成';\n            succession '控制流85' first '确认关机完成' then done;\n            succession flow '对象流22' from '检测点火信号'.'点火状态' to '检查电池状态'.'电池状态';\n            succession flow '对象流23' from '检查电池状态'.'电池状态' to '高压上电'.'高压状态';\n            succession flow '对象流24' from '高压上电'.'高压状态' to '系统自检'.'系统健康状态';\n            succession flow '对象流25' from '系统自检'.'系统健康状态' to '确认就绪状态'.'车辆就绪';\n            succession flow '对象流26' from '确认就绪状态'.'车辆就绪' to '解析驾驶意图'.'驾驶意图';\n            succession flow '对象流27' from '解析驾驶意图'.'驾驶意图' to '计算扭矩分配'.'驾驶意图';\n            succession flow '对象流28' from '计算扭矩分配'.'扭矩指令' to '管理动力输出'.'扭矩指令';\n            succession flow '对象流29' from '管理动力输出'.'电机功率' to '监控能量消耗'.'电机功率';\n            succession flow '对象流30' from '监控能量消耗'.'能量状态' to '控制热管理'.'能量状态';\n            succession flow '对象流31' from '执行再生制动'.'回收能量' to '监控能量消耗'.'能量状态';\n            succession flow '对象流32' from '调整动力策略'.'调整后功率' to '检测关机请求'.'关机信号';\n            succession flow '对象流33' from '检测关机请求'.'关机信号' to '保存车辆状态'.'车辆状态数据';\n            succession flow '对象流34' from '保存车辆状态'.'车辆状态数据' to '高压下电'.'高压状态';\n            succession flow '对象流35' from '高压下电'.'高压状态' to '进入驻车模式'.'驻车状态';\n            succession flow '对象流36' from '进入驻车模式'.'驻车状态' to '确认关机完成'.'关机完成';\n        }\n    }\n\n    package '整车动力管理功能分析_结构' {\n        doc /* 整车动力管理功能分析结构定义 */\n        part def '中央控制系统';\n        part def '整车控制器';\n        part def '电气系统';\n        part def '电池';\n        part def '电机';\n        part def '动力总成';\n        part def '热管理';\n        part def '电驱电池系统';\n        part def '计算模块';\n        part def '附件';\n        part def '其它系统';\n        part def '车辆模型';\n    }\n\n    package '整车动力管理_状态机' {\n        doc /* 整车动力管理系统状态机行为分析视图 */\n        private import ScalarValues::*;\n        private import '整车动力管理功能分析'::'整车动力管理功能分析_结构'::*;\n        private import '整车动力管理功能分析'::'整车动力管理功能分析_活动'::*;\n\n        attribute def '点火信号';\n        attribute def '自检结果';\n        attribute def '驾驶意图';\n        attribute def '特殊工况标志';\n        attribute def '车辆状态';\n        attribute def '关机信号';\n        attribute def '关机完成';\n        attribute def '确认关机完成';\n\n        port def '点火端口' { in item '点火信号输入' : '点火信号'; }\n        port def '自检端口' { in item '自检结果输入' : '自检结果'; }\n        port def '驾驶意图端口' { in item '驾驶意图输入' : '驾驶意图'; }\n        port def '模式控制端口' { in item '特殊工况标志输入' : '特殊工况标志'; in item '车辆状态输入' : '车辆状态'; }\n        port def '关机端口' { in item '关机信号输入' : '关机信号'; in item '关机完成输入' : '关机完成'; in item '确认关机完成输入' : '确认关机完成'; }\n\n        part def '中央控制系统实例' : '中央控制系统' {\n            attribute '电池状态' : Boolean;\n            attribute '电池就绪' : Boolean;\n            attribute '车辆就绪' : Boolean;\n            attribute '高压状态' : Boolean;\n\n            exhibit state '整车动力管理状态机' {\n                doc /* 整车动力管理状态机：描述车辆从关机到运行再到关机的完整生命周期状态转换 */\n\n                state '关机状态' { doc /* 关机状态：车辆完全断电，高压系统下电，处于驻车状态 */ }\n                state '启动中' { doc /* 启动中：正在执行点火检测、电池检查、高压上电、系统自检流程 */ }\n                state '就绪' { doc /* 就绪：系统自检通过，车辆就绪，等待驾驶意图输入 */ }\n                state '运行中' { doc /* 运行中：正常行驶状态，执行扭矩分配、动力输出、能量监控 */ }\n                state '雪地模式' { doc /* 雪地模式：特殊工况下的低附着力驾驶模式，动力输出受限 */ }\n                state '运动模式' { doc /* 运动模式：特殊工况下的高性能驾驶模式，动力输出增强 */ }\n                state '经济模式' { doc /* 经济模式：特殊工况下的节能驾驶模式，优先回收能量 */ }\n                state '关机中' { doc /* 关机中：正在执行保存状态、高压下电、进入驻车流程 */ }\n                state '驻车' { doc /* 驻车：已完成关机流程，车辆处于安全驻车状态 */ }\n\n                transition '初始转换' first '关机状态' then '启动中';\n                transition '关机状态-启动中' first '关机状态' then '启动中';\n                transition '启动中-就绪' first '启动中' then '就绪';\n                transition '启动中-关机状态' first '启动中' then '关机状态';\n                transition '就绪-运行中' first '就绪' then '运行中';\n                transition '运行中-雪地模式' first '运行中' then '雪地模式';\n                transition '运行中-运动模式' first '运行中' then '运动模式';\n                transition '运行中-经济模式' first '运行中' then '经济模式';\n                transition '雪地模式-运行中' first '雪地模式' then '运行中';\n                transition '运动模式-运行中' first '运动模式' then '运行中';\n                transition '经济模式-运行中' first '经济模式' then '运行中';\n                transition '运行中-关机中' first '运行中' then '关机中';\n                transition '关机中-驻车' first '关机中' then '驻车';\n                transition '驻车-关机状态' first '驻车' then '关机状态';\n            }\n        }\n    }\n\n    package '整车动力管理_状态机_视图' {\n        doc /* 视图包：组织整车动力管理状态机视图 */\n        private import StandardViewDefinitions::*;\n        private import Views::*;\n        private import '整车动力管理功能分析'::'整车动力管理_状态机'::*;\n\n        view '整车动力管理状态机视图' : StandardViewDefinitions::StateTransitionView {\n            doc /* 系统状态机行为分析视图：描述中央控制系统承载的整车动力管理状态转换行为 */\n            expose '中央控制系统实例';\n            render StateTransitionView;\n        }\n    }\n}",
+   "response": "# 校验结论：这份代码仍有硬错，未通过\n\n**判据：block**。词法 0 / 语法 1 / 语义 67，ERROR 68 条、WARN 3 条。修复动作已提交人工确认队列（确认单 #25），批准后会自动执行并回写结果。\n\n## 一、硬错（语法，1 条，必须修）\n\n**第 127 行 `part def '中央控制系统实例' : '中央控制系统' {`，诊断 `no viable alternative at input ':'`。**\n\n根因是把**类型定义**与**实例用法**混写了。`part def` 声明的是类型，类型不能再指定自己的类型；要表达“这个部件是中央控制系统的一个实例”，应写成 `part` 用法 `part '中央控制系统实例' : '中央控制系统' { ... }`。\n\n这一处是**总根因**：该 `part def` 解析失败后，其内部的 `attribute`、`exhibit state` 全部失去宿主，状态机里的状态与迁移随之解析不到，于是产生后面成片的语义错。**修好这一行，语义错会大幅收敛**，不要逐条去改语义错。\n\n## 二、语义错（67 条，两个根因）\n\n**根因 1：包路径多了一层不存在的命名空间（约 20 条）。**\n`private import '整车动力管理功能分析'::'整车动力管理功能分析_活动'::*;` 等引用解析失败。…[18291 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4766,
+   "seen_at": "2026-10-22 02:31:36",
+   "meta": {
+    "conversation_id": 9586
+   }
+  },
+  {
+   "id": "conv_clean-008",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "修复并校验",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4763,
+   "seen_at": "2026-10-22 01:49:55",
+   "meta": {
+    "conversation_id": 9586
+   }
+  },
+  {
+   "id": "conv_clean-009",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我校验如下V2代码是否有问题：\npackage '整车动力管理功能分析_活动' {\n    doc /* 整车动力管理功能流程活动图 */\n    action def '整车动力管理功能流程' {\n        doc /* 覆盖启动、正常运行、特殊工况、关机驻车 4 个阶段 */\n        action def '功能步骤';\n        action '检测点火信号' : '功能步骤' { attribute '点火状态' : ScalarValues::Boolean; }\n        action '检查电池状态' : '功能步骤' { attribute '电池状态' : ScalarValues::Boolean; out attribute '电池就绪' : ScalarValues::Boolean; }\n        action '高压上电' : '功能步骤' { attribute '高压状态' : ScalarValues::Boolean; }\n        action '系统自检' : '功能步骤' { attribute '系统健康状态' : ScalarValues::Boolean; out attribute '自检通过' : ScalarValues::Boolean; }\n        action '确认就绪状态' : '功能步骤' { attribute '车辆就绪' : ScalarValues::Boolean; }\n        action '解析驾驶意图' : '功能步骤' { attribute '驾驶意图' : ScalarValues::String; }\n        action '计算扭矩分配' : '功能步骤' { attribute '驾驶意图' : ScalarValues::String; attribute '扭矩指令' : ScalarValues::Real; }\n        action '管理动力输出' : '功能步骤' { attribute '扭矩指令' : ScalarValues::Real; attribute '电机功率' : ScalarValues::Real; }\n        action '监控能量消耗' : '功能步骤' { attribute '电机功率' : ScalarValues::Real; attribute '能量状态' : ScalarValues::Real; }\n        action '控制热管理' : '功能步骤' { attribute '能量状态' : ScalarValues::Real; attribute '热管理状态' : ScalarValues::Boolean; }\n        action '执行再生制动' : '功能步骤' { attribute '制动信号' : ScalarValues::Boolean; attribute '回收能量' : ScalarValues::Real; }\n        action '检测特殊工况' : '功能步骤' { attribute '车辆状态' : ScalarValues::String; out attribute '特殊工况标志' : ScalarValues::Boolean; }\n        action '激活雪地模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n        action '激活运动模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n        action '激活经济模式' : '功能步骤' { attribute '模式指令' : ScalarValues::String; }\n        action '调整动力策略' : '功能步骤' { attribute '模式指令' : ScalarValues::String; attribute '调整后功率' : ScalarValues::Real; }\n        action '检测关机请求' : '功能步骤' { attribute '关机信号' : ScalarValues::Boolean; }\n        action '保存车辆状态' : '功能步骤' { attribute '车辆状态数据' : ScalarValues::String; }\n        action '高压下电' : '功能步骤' { attribute '高压状态' : ScalarValues::Boolean; }\n        action '进入驻车模式' : '功能步骤' { attribute '驻车状态' : ScalarValues::Boolean; }\n        action '确认关机完成' : '功能步骤' { attribute '关机完成' : ScalarValues::Boolean; }\n        succession '控制流 63' first '整车动力管理功能流程'::start then '整车动力管理功能流程'::'检测点火信号';\n        succession '控制流 64' first '整车动力管理功能流程'::'检测点火信号' then '整车动力管理功能流程'::'检查电池状态';\n        succession '控制流 65' first '整车动力管理功能流程'::'检查电池状态' then '整车动力管理功能流程'::'高压上电';\n        succession '控制流 66' first '整车动力管理功能流程'::'高压上电' then '整车动力管理功能流程'::'系统自检';\n        succession '控制流 67' first '整车动力管理功能流程'::'系统自检' then '整车动力管理功能流程'::'确认就绪状态';\n        succession '控制流 68' first '整车动力管理功能流程'::'确认就绪状态' then '整车动力管理功能流程'::'解析驾驶意图';\n        succession '控制流 69' first '整车动力管理功能流程'::'解析驾驶意图' then '整车动力管理功能流程'::'计算扭矩分配';\n        succession '控制流 70' first '整车动力管理功能流程'::'计算扭矩分配' then '整车动力管理功能流程'::'管理动力输出';\n        fork '正常驾驶分叉';\n        succession '控制流 71' first '整车动力管理功能流程'::'管理动力输出' then '整车动力管理功能流程'::'正常驾驶分叉';\n        succession '控制流 72' first '整车动力管理功能流程'::'正常驾驶分叉' then '整车动力管理功能流程'::'监控能量消耗';\n        succession '控制流 73' first '整车动力管理功能流程'::'正常驾驶分叉' then '整车动力管理功能流程'::'控制热管理';\n        succession '控制流 74' first '整车动力管理功能流程'::'正常驾驶分叉' then '整车动力管理功能流程'::'执行再生制动';\n        join '正常驾驶汇合';\n        succession '控制流 75' first '整车动力管理功能流程'::'监控能量消耗' then '整车动力管理功能流程'::'正常驾驶汇合';\n        succession '控制流 76' first '整车动力管理功能流程'::'控制热管理' then '整车动力管理功能流程'::'正常驾驶汇合';\n        succession '控制流 77' first '整车动力管理功能流程'::'执行再生制动' then '整车动力管理功能流程'::'正常驾驶汇合';\n        succession '控制流 78' first '整车动力管理功能流程'::'正常驾驶汇合' then '整车动力管理功能流程'::'检测特殊工况';\n        succession '控制流 79' first '整车动力管理功能流程'::'检测特殊工况' then '整车动力管理功能流程'::'调整动力策略';\n        succession '控制流 80' first '整车动力管理功能流程'::'调整动力策略' then '整车动力管理功能流程'::'检测关机请求';\n        succession '控制流 81' first '整车动力管理功能流程'::'检测关机请求' then '整车动力管理功能流程'::'保存车辆状态';\n        succession '控制流 82' first '整车动力管理功能流程'::'保存车辆状态' then '整车动力管理功能流程'::'高压下电';\n        succession '控制流 83' first '整车动力管理功能流程'::'高压下电' then '整车动力管理功能流程'::'进入驻车模式';\n        succession '控制流 84' first '整车动力管理功能流程'::'进入驻车模式' then '整车动力管理功能流程'::'确认关机完成';\n        succession '控制流 85' first '整车动力管理功能流程'::'确认关机完成' then '整车动力管理功能流程'::done;\n        succession flow '对象流 22' from '整车动力管理功能流程'::'检测点火信号'.'点火状态' to '整车动力管理功能流程'::'检查电池状态'.'电池状态';\n        succession flow '对象流 23' from '整车动力管理功能流程'::'检查电池状态'.'电池状态' to '整车动力管理功能流程'::'高压上电'.'高压状态';\n        succession flow '对象流 24' from '整车动力管理功能流程'::'高压上电'.'高压状态' to '整车动力管理功能流程'::'系统自检'.'系统健康状态';\n        succession flow '对象流 25' from '整车动力管理功能流程'::'系统自检'.'系统健康状态' to '整车动力管理功能流程'::'确认就绪状态'.'车辆就绪';\n        succession flow '对象流 26' from '整车动力管理功能流程'::'确认就绪状态'.'车辆就绪' to '整车动力管理功能流程'::'解析驾驶意图'.'驾驶意图';\n        succession flow '对象流 27' from '整车动力管理功能流程'::'解析驾驶意图'.'驾驶意图' to '整车动力管理功能流程'::'计算扭矩分配'.'驾驶意图';\n        succession flow '对象流 28' from '整车动力管理功能流程'::'计算扭矩分配'.'扭矩指令' to '整车动力管理功能流程'::'管理动力输出'.'扭矩指令';\n        succession flow '对象流 29' from '整车动力管理功能流程'::'管理动力输出'.'电机功率' to '整车动力管理功能流程'::'监控能量消耗'.'电机功率';\n        succession flow '对象流 30' from '整车动力管理功能流程'::'监控能量消耗'.'能量状态' to '整车动力管理功能流程'::'控制热管理'.'能量状态';\n        succession flow '对象流 31' from '整车动力管理功能流程'::'执行再生制动'.'回收能量' to '整车动力管理功能流程'::'监控能量消耗'.'能量状态';\n        succession flow '对象流 32' from '整车动力管理功能流程'::'调整动力策略'.'调整后功率' to '整车动力管理功能流程'::'检测关机请求'.'关机信号';\n        succession flow '对象流 33' from '整车动力管理功能流程'::'检测关机请求'.'关机信号' to '整车动力管理功能流程'::'保存车辆状态'.'车辆状态数据';\n        succession flow '对象流 34' from '整车动力管理功能流程'::'保存车辆状态'.'车辆状态数据' to '整车动力管理功能流程'::'高压下电'.'高压状态';\n        succession flow '对象流 35' from '整车动力管理功能流程'::'高压下电'.'高压状态' to '整车动力管理功能流程'::'进入驻车模式'.'驻车状态';\n        succession flow '对象流 36' from '整车动力管理功能流程'::'进入驻车模式'.'驻车状态' to '整车动力管理功能流程'::'确认关机完成'.'关机完成';\n    }\n}\n\npackage '整车动力管理功能分析_结构' {\n    doc /* 整车动力管理功能分析结构定义 */\n    private import '整车动力管理功能分析'::'整车动力管理功能分析_活动'::*;\n    part def '中央控制系统' {\n        perform action '检测点火信号' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'检测点火信号';\n        perform action '解析驾驶意图' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'解析驾驶意图';\n        perform action '确认就绪状态' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'确认就绪状态';\n        perform action '保存车辆状态' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'保存车辆状态';\n        perform action '确认关机完成' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'确认关机完成';\n    }\n    part def '整车控制器' {\n        perform action '系统自检' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'系统自检';\n        perform action '计算扭矩分配' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'计算扭矩分配';\n        perform action '激活雪地模式' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'激活雪地模式';\n        perform action '激活运动模式' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'激活运动模式';\n        perform action '激活经济模式' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'激活经济模式';\n        perform action '进入驻车模式' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'进入驻车模式';\n    }\n    part def '电气系统' { perform action '检测关机请求' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'检测关机请求'; }\n    part def '电池' {\n        perform action '检查电池状态' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'检查电池状态';\n        perform action '监控能量消耗' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'监控能量消耗';\n    }\n    part def '电机' { perform action '管理动力输出' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'管理动力输出'; }\n    part def '动力总成' { perform action '调整动力策略' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'调整动力策略'; }\n    part def '热管理' { perform action '控制热管理' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'控制热管理'; }\n    part def '电驱电池系统' {\n        perform action '高压上电' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'高压上电';\n        perform action '执行再生制动' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'执行再生制动';\n        perform action '高压下电' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'高压下电';\n    }\n    part def '计算模块' { perform action '检测特殊工况' : '整车动力管理功能分析'::'整车动力管理功能分析_活动'::'整车动力管理功能流程'::'检测特殊工况'; }\n    part def '附件';\n    part def '其它系统';\n    part def '车辆模型';\n}\n\npackage '整车动力管理_状态机' {\n    doc /* 整车动力管理系统状态机行为分析视图 */\n    private import ScalarValues::*;\n    private import '整车动力管理功能分析'::'整车动力管理功能分析_结构'::*;\n\n    attribute def '点火信号';\n    attribute def '自检结果';\n    attribute def '驾驶意图';\n    attribute def '特殊工况标志';\n    attribute def '车辆状态';\n    attribute def '关机信号';\n    attribute def '关机完成';\n    attribute def '确认关机完成';\n\n    port def '点火端口' { in '点火信号输入' : '点火信号'; }\n    port def '自检端口' { in '自检结果输入' : '自检结果'; }\n    port def '驾驶意图端口' { in '驾驶意图输入' : '驾驶意图'; }\n    port def '模式控制端口' { in '特殊工况标志输入' : '特殊工况标志'; in '车辆状态输入' : '车辆状态'; }\n    port def '关机端口' { in '关机信号输入' : '关机信号'; in '关机完成输入' : '关机完成'; in '确认关机完成输入' : '确认关机完成'; }\n\n    part def '中央控制系统实例' : '中央控制系统' {\n        port '点火端口' : '整车动力管理功能分析'::'整车动力管理_状态机'::'点火端口';\n        port '自检端口' : '整车动力管理功能分析'::'整车动力管理_状态机'::'自检端口';\n        port '驾驶意图端口' : '整车动力管理功能分析'::'整车动力管理_状态机'::'驾驶意图端口';\n        port '模式控制端口' : '整车动力管理功能分析'::'整车动力管理_状态机'::'模式控制端口';\n        port '关机端口' : '整车动力管理功能分析'::'整车动力管理_状态机'::'关机端口';\n\n        attribute '电池状态' : Boolean;\n        attribute '电池就绪' : Boolean;\n        attribute '车辆就绪' : Boolean;\n        attribute '高压状态' : Boolean;\n\n        action '执行高压上电';\n        action '确认就绪状态';\n        action '执行高压下电';\n        action '记录故障';\n        action '解析驾驶意图';\n        action '计算扭矩分配';\n        action '激活雪地模式';\n        action '激活运动模式';\n        action '激活经济模式';\n        action '恢复正常动力策略';\n        action '保存车辆状态数据';\n        action '进入驻车模式';\n        action '完成系统断电';\n\n        exhibit state '整车动力管理状态机' {\n            doc /* 整车动力管理状态机：描述车辆从关机到运行再到关机的完整生命周期状态转换 */\n\n            state '关机状态' { doc /* 关机状态：车辆完全断电，高压系统下电，处于驻车状态 */ }\n            state '启动中' { doc /* 启动中：正在执行点火检测、电池检查、高压上电、系统自检流程 */ }\n            state '就绪' { doc /* 就绪：系统自检通过，车辆就绪，等待驾驶意图输入 */ }\n            state '运行中' { doc /* 运行中：正常行驶状态，执行扭矩分配、动力输出、能量监控 */ }\n            state '雪地模式' { doc /* 雪地模式：特殊工况下的低附着力驾驶模式，动力输出受限 */ }\n            state '运动模式' { doc /* 运动模式：特殊工况下的高性能驾驶模式，动力输出增强 */ }\n            state '经济模式' { doc /* 经济模式：特殊工况下的节能驾驶模式，优先回收能量 */ }\n            state '关机中' { doc /* 关机中：正在执行保存状态、高压下电、进入驻车流程 */ }\n            state '驻车' { doc /* 驻车：已完成关机流程，车辆处于安全驻车状态 */ }\n\n            transition '初始转换' first '关机状态' then '启动中';\n            transition '关机状态 - 启动中' first '关机状态' accept '点火信号输入' : '点火信号' via '点火端口' if '电池状态' == true do '执行高压上电' then '启动中';\n            transition '启动中 - 就绪' first '启动中' accept '自检结果输入' : '自检结果' via '自检端口' if '自检结果输入' == true and '电池就绪' == true do '确认就绪状态' then '就绪';\n            transition '启动中 - 关机状态' first '启动中' accept '自检结果输入' : '自检结果' via '自检端口' if '自检结果输入' == false do '执行高压下电' then '关机状态';\n            transition '就绪 - 运行中' first '就绪' accept '驾驶意图输入' : '驾驶意图' via '驾驶意图端口' if '驾驶意图输入' != null and '车辆就绪' == true do '解析驾驶意图' then '运行中';\n            transition '运行中 - 雪地模式' first '运行中' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == true and '车辆状态' == snow do '激活雪地模式' then '雪地模式';\n            transition '运行中 - 运动模式' first '运行中' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == true and '车辆状态' == sport do '激活运动模式' then '运动模式';\n            transition '运行中 - 经济模式' first '运行中' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == true and '车辆状态' == eco do '激活经济模式' then '经济模式';\n            transition '雪地模式 - 运行中' first '雪地模式' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == false do '恢复正常动力策略' then '运行中';\n            transition '运动模式 - 运行中' first '运动模式' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == false do '恢复正常动力策略' then '运行中';\n            transition '经济模式 - 运行中' first '经济模式' accept '特殊工况标志输入' : '特殊工况标志' via '模式控制端口' if '特殊工况标志输入' == false do '恢复正常动力策略' then '运行中';\n            transition '运行中 - 关机中' first '运行中' accept '关机信号输入' : '关机信号' via '关机端口' if '关机信号输入' == true do '保存车辆状态数据' then '关机中';\n            transition '关机中 - 驻车' first '关机中' accept '关机完成输入' : '关机完成' via '关机端口' if '关机完成输入' == true and '高压状态' == false do '进入驻车模式' then '驻车';\n            transition '驻车 - 关机状态' first '驻车' accept '确认关机完成输入' : '确认关机完成' via '关机端口' if '确认关机完成输入' == true do '完成系统断电' then '关机状态';\n        }\n    }\n}\n\npackage '整车动力管理_状态机_视图' {\n    doc /* 视图包：组织整车动力管理状态机视图 */\n    private import StandardViewDefinitions::*;\n    private import Views::*;\n    private import '整车动力管理功能分析'::'整车动力管理_状态机'::*;\n\n    view '整车动力管理状态机视图' : StandardViewDefinitions::StateTransitionView {\n        doc /* 系统状态机行为分析视图：描述中央控制系统承载的整车动力管理状态转换行为 */\n        expose '中央控制系统实例';\n        expose '中央控制系统实例'::'整车动力管理状态机';\n        expose '中央控制系统实例'::'整车动力管理状态机'::*;\n        render StateTransitionView;\n    }\n}",
+   "response": "# 校验结论\n\n**判据：block（存在硬错，未通过）**。计数：词法 0 / 语法 1 / 语义 67，ERROR 共 68 条，WARN 3 条。\n\n先说关键判断：**这 68 条里真正需要你动手的只有 2 类根因**，其余 60 多条都是它们的级联产物。按“词法→语法→语义”顺序，语法硬错必须先清零，否则语义错会成片出现。\n\n---\n\n## 一、硬错（语法，1 条，必须修）\n\n**位置：第 127 行 `part def '中央控制系统实例' : '中央控制系统' {`，诊断 `no viable alternative at input ':'`。**\n\n根因是把**类型定义**和**实例用法**混用了：`part def` 声明的是类型，类型不能再用 `: 某类型` 去指定它的类型；要表达“这个部件是中央控制系统的一个实例”，应当用 `part` 用法（`part '中央控制系统实例' : '中央控制系统' { ... }`），而不是 `part def`。\n\n这一处同时解释了后面一大批语义错：因为该 `part def` 解析失败，其内部声明的 `port`、`attribute`、`action`、`exhibit state` 全部失去宿主，状态机里的 `accept ... via '点火端口'`、`do '执行高压上电'`、`if '电池状态' == true…[15632 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4761,
+   "seen_at": "2026-10-22 01:44:36",
+   "meta": {
+    "conversation_id": 9586
+   }
+  },
+  {
+   "id": "conv_clean-010",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "perform action 的使用方式解读",
+   "response": "**结论先行**：`perform action` 是 SysML v2 中一种**引用式（referential）的动作用法**，它表示“某个动作由该 perform action 的拥有者来执行”，但被执行的动作行为本身可以在**另一个上下文**中定义。它既是 `ActionUsage`，又是 `EventOccurrenceUsage`，因此兼具“动作”与“事件发生”两重语义 [1,2,3]。\n\n---\n\n### 一、语法形态\n\n声明时用 `perform action` 关键字替代普通的 `action` 关键字，其余部分与普通动作用法一致：\n\n```\nperform action '别名' ::> '被执行动作';\n```\n\n其中 `::>` 是引用子集（Reference Subsetting）关系，把 perform action 用法与被执行的动作用法绑定起来 [2]。也就是说，perform action 本身**不承载行为定义**，它只是“指向”别处定义好的动作。\n\n### 二、语义要点\n\n1. **归属语义**：perform action 表示“该动作由 perform action 用法的拥有者执行”。拥有者通常是某个 `part`（部件/系统元素），因此它是把行为挂到结构上的主要手段 [3]。\n2. **引用语义**：被执行的动作可以在与执行者不同的上下…[1875 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4756,
+   "seen_at": "2026-10-21 08:53:04",
+   "meta": {
+    "conversation_id": 9585
+   }
+  },
+  {
+   "id": "conv_clean-011",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "继续分析文档内容输出报告",
+   "response": "# 继续分析文档内容输出报告\n\n### 报告信息\n\n| 项目 | 内容 |\n|---|---|\n| 文档编号 | RPT-AIMBSE-REQ-2026-001 |\n| 报告名称 | 《面向网络总体的 AI 赋能 MBSE 系统设计技术研究项目技术要求》需求分析报告 |\n| 版本 | V1.0 |\n| 日期 | 2026-04-02（依据源文件签署日期） |\n| 编制 | 报告生成 Agent（基于上传附件与既有模型资产） |\n| 审核 | 待甲方/项目组评审（本报告未经人工审核，标注为草案） |\n| 密级 | 受控（源文件为中国星网受控信息，文件编号 XW-W-1AJB003，版本 V01.01.01，工程阶段：方案阶段） |\n| 数据来源 | 上传附件《Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf》（21 页，全文约 29930 字）；本会话既有 SysML 模型 v0.2（17 元素/8 关系/3 视图）与 v0.1（98 元素/131 关系/2 视图） |\n\n### 摘要\n\n本报告以甲方《面向网络总体的 AI 赋能 MBSE 系统设计技术研究项目技术要求》为唯一需求来源，采用「章节取回—条款条目化—分类归集—可验证性判定—风险分级」的方法，对全文 16 章（含 1.1～11.4 各子节）逐条解析。全文共识别出**强制需求条目 96 条**（…[25892 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4754,
+   "seen_at": "2026-10-21 06:42:28",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-012",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "再次分析附件第 5、6、7 章的条款正文",
+   "response": "# 第 5、6、7 章条款正文分析\n\n已取回三章全部子节正文（5.1～5.5、6.1～6.4、7.1～7.4）。以下按条款逐条梳理，并给出需求工程视角的判读。\n\n---\n\n## 一、第 5 章 系统要求（架构 + 功能 + 运行环境 + 实施约束）\n\n### 5.1 系统架构要求（6 条，全部 ★）\n\n架构的物理构成在正文中已明确：人机交互接口、互联数据接口、大模型调用接口、建模软件接口、AI 应用模块，以及设计数据库（向量库 + 图库）。各接口的适配对象也写死了——互联数据接口要适配技术文件管理等信息系统，大模型接口要兼容 OpenAI API 格式，建模软件接口要适配 MagicDraw 与国产建模工具。\n\n六条架构要求里，真正有约束力的是三条：\n\n- **AI 应用架构能力集**：知识图谱集成、RAG（含 GraphRAG）、Agent、MCP、Skill、提示词管理、上下文管理、记忆管理。这是一份\"能力清单式\"要求，验收时容易逐项打勾，但\"支持到什么程度\"没有判据，属于需要在方案评审阶段细化的模糊项。\n- **数据底座的演进路径**：以设计知识库为最终目标数据底座，初期允许向量库作为临时存储与快速检索层，二者动态协同。配套要求了数据生命周期状态管理（原始文档切片、候选模型元素、已入库图谱元素）和**智能查询路由**——优先查图谱，图谱无答案或置信度低时降级到向量库，并向用户…[17997 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4752,
+   "seen_at": "2026-10-21 06:35:36",
+   "meta": {
+    "conversation_id": 9584
+   }
+  },
+  {
+   "id": "conv_clean-013",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "基于这份附件梳理需求内容",
+   "response": "# 《面向网络总体的 AI 赋能 MBSE 系统设计技术研究项目技术要求》需求梳理\n\n以下基于附件全文（第 1～11 章条款正文）梳理。附件共 21 页、方案阶段受控文件，需求条目按原文标识体系归集，**原文未给出量化判据或标注 [TBD] 的，一律保留 TBD，不做补写**。\n\n---\n\n## 一、文档性质与需求体系框架\n\n这份文件是**项目招采/技术要求类文件**，不是系统研制规格书，因此它的需求层次是「业务需求 → 架构要求 → 功能要求 → 接口要求 → 非功能要求（性能/可靠性/可用性/信息安全）→ 约束与交付要求」。原文用 `★` 标记必须满足项（不允许负偏离），用 `[TBD]` 标记待定项，用「应/宜/可」区分强制/建议/许可。\n\n需求条目总量（按原文标识统计）：业务需求 10 条、架构要求 6 条、功能要求 8 大类共 51 条、接口要求 9 条、运行环境 3 条、设计与实施约束 8 条、性能 7 条、可靠性 2 条、可用性 1 条、信息安全 5 条、自主可控 4 条、易用性 2 条、运行维护 5 条、扩展性 2 条、验收交付 4 项。\n\n---\n\n## 二、业务需求（第 4.1 节，10 条，全部为 ★）\n\n业务需求刻画的是「工具要支撑哪些系统工程活动」，可归为五组能力：\n\n1. **历史资产快速模型化**：在大模型赋能下，把甲方已有历史互联数据（文档、模型等）…[6171 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4750,
+   "seen_at": "2026-10-21 06:33:55",
+   "meta": {
+    "conversation_id": 9584
+   }
+  },
+  {
+   "id": "conv_clean-014",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "：第 8、9 章为啥没取回，有尝试其他方案码",
+   "response": "## 一、直接回答：第 8、9 章本轮确实没取回，且我并未尝试其他方案\n\n先如实交代事实，不做修饰。\n\n本轮我的取回动作只有两次：以章号「5」和「6」调用附件章节读取工具。这两次调用一次返回了第 5 章全部子节正文，一次返回了第 6 章全部子节正文，并连带带出了第 7 章、第 10 章、第 11 章的内容。**第 8、9 章不在我这两次调用的返回范围内，我也没有对它们发起过任何一次调用。**\n\n所以您问的「为啥没取回」，准确答案是：**不是取回失败，是我根本没去取。** 这属于我的执行疏漏，不是工具限制。上一轮我在回答里写「第 5、6、7 章正文已取回」并顺势展开了第 5 章的解读，把注意力放在了已经到手的内容上，没有回头核对「提纲里列出的章是否都已覆盖」，于是第 8、9 章被漏掉了。这个漏项我应该自己发现，不该等您指出。\n\n至于「有没有尝试其他方案」——**没有**。我没有对第 8、9 章换过章号口径（如「第8章」「8.1」），没有用过其他读取路径，也没有在发现遗漏后立即补取。所以这个问题我只能给出否定回答，不能包装成「尝试了但失败」。\n\n## 二、这个疏漏的性质\n\n需要区分两种情形，避免混淆：\n\n- **工具通道问题**：此前第 5、6、7 章曾多次返回空内容，那是解析通道的问题，我反复换口径调用属于合理应对。\n- **本轮的问题**：通道是通的（第 5、6 章一次就取到了整章…[972 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4748,
+   "seen_at": "2026-10-21 05:57:46",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-015",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "重新分析附件文档，完整解读",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4745,
+   "seen_at": "2026-10-21 05:49:12",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-016",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "再次分析上传附件的完整内容，第 5、6、7 章的条款正文都要",
+   "response": "# 需求梳理（完整版）：面向网络总体的 AI 赋能 MBSE 系统设计工具\n\n第 5、6、7 章正文已全部取回并纳入。附件共 **96 条带编号强制条款**（全部标★，不允许负偏离），另有约 30 条未编号但同样强制的条款。以下按「可独立验证」口径重排：每条 = 主语 + 动作 + 可测量判据；不可量化的条目单列缺口。\n\n---\n\n## 一、业务需求（利益相关方层，10 条）\n\n1. **历史资产快速模型化**：对甲方已有历史互联数据（文档、模型等）在 LLM 赋能下构建 MBSE 模型。\n2. **人在回路问答辅助建模**：以人在回路方式通过问答（须支持附件上传）识别用户意图，辅助完成问答、SysML 模型生成/修改/补全/校验/变更影响分析。\n3. **需求分析阶段能力**：对自然语言需求解析与多源融合，自动生成条目化、结构化、可追溯的需求模型元素，自动生成 SysML 需求图、用例图，建立追溯关系，并对已有需求给出规范化建议（冲突检测、歧义修正、可验证性优化）。\n4. **系统设计阶段能力**：以条目化需求及用户指定输入为初始输入，自动生成 SysML v1.x 用例图/活动图/模块定义图/内部模块图/参数图/状态机图/序列图及 v2 视图，以及模型元素与元素间关系。\n5. **模型转知识库（演进式合并）**：将已评审 SysML 模型按规则转化为设计知识库，支持逐步合并到同…[26384 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4742,
+   "seen_at": "2026-10-21 05:34:08",
+   "meta": {
+    "conversation_id": 9583
+   }
+  },
+  {
+   "id": "conv_clean-017",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "基于这份附件，梳理需求内容",
+   "response": "# 需求梳理结果：面向网络总体的 AI 赋能 MBSE 系统设计工具\n\n我已通读附件全部条款正文（第 4～11 章，含 4.1 业务需求、4.2.1～4.2.7 七个业务场景、5.1～5.5 架构与功能、6.1～6.4 接口、7.1～7.4 性能与品质、8 甲方职责、9～10 交付与验收、11.1～11.4 自主可控/易用性/运维/扩展性）。附件本身已按 `[BR-x] / [ArcR-x] / [FR-xx-x] / [ExtInfR-xx-x] / [OpEnvR-x] / [DC-x]` 编号，共 **96 条带编号的强制条款**（全部标★，不允许负偏离），另有约 30 条未编号但同样属于强制要求的条款（性能、可靠性、信息安全、自主可控、运维、交付等）。\n\n说明：本次条目化工具未配置执行器，无法自动生成条目与需求视图骨架，以下为人工结构化结果，口径与工具一致（主语＋动作＋可测量判据），可直接作为后续需求视图建模的输入。\n\n---\n\n## 一、需求分层总览\n\n| 层次 | 条款来源 | 条数 | 性质 |\n|---|---|---|---|\n| 业务需求（利益相关方层） | 4.1 BR-1～BR-10 | 10 | 用户要什么能力 |\n| 架构约束 | 5.1 ArcR-1～ArcR-6 | 6 | 架构形态与数据底座 |\n| 功能需求 | 5.3.1～5.3.8（FR-KG…[5860 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4740,
+   "seen_at": "2026-10-21 05:32:14",
+   "meta": {
+    "conversation_id": 9583
+   }
+  },
+  {
+   "id": "conv_clean-018",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "再次分析上传附件的完整内容，第 5、6、7 章的条款正文都要",
+   "response": "## 一、本轮执行情况：已取到哪些、没取到哪些\n\n| 章节 | 取回尝试 | 结果 |\n|---|---|---|\n| 第 7 章 服务品质要求 | 章级取回成功 | **已取得 7.1～7.4 全部条款正文**（性能、可靠性、可用性、信息安全） |\n| 第 5 章 系统架构/功能/运行环境/实施约束 | 章级（section=5）＋子节级（5.1、5.2、5.3）多次尝试 | **全部返回空**，条款正文未取回 |\n| 第 6 章 接口要求 | 章级（section=6）＋子节级（6.1）多次尝试 | **全部返回空**，条款正文未取回 |\n| 第 4 章 业务需求 | 前段已随附件注入 | 已取得 4.1 节的 a)～g) 完整条款；h) 一项**正文在文档处被硬切断**（原文止于“应支持智能化的”），无法判定内容 |\n\n需要说清楚的是：第 5、6 章的**目录条目和子节标题都在**（5.1 系统架构要求、5.2 功能清单、5.3.1 设计数据管理～5.3.8 人在回路、5.4 运行环境要求、5.5 设计与实施约束；6.1 大语言模型调用接口、6.2 文档与外部知识库接口、6.3 建模软件接口、6.4 其他外部接口），且按 1.3.1 的约定，这两章标注★的条目均为必须满足、不允许负偏离。但**标题不能反推条款内容**——我不会用标题去“补写”条款，否则会造出原文里并不存在的伪…[5081 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4738,
+   "seen_at": "2026-10-21 05:28:23",
+   "meta": {
+    "conversation_id": 9582
+   }
+  },
+  {
+   "id": "conv_clean-019",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "基于这份附件，梳理需求内容",
+   "response": "## 一、本轮实际做了什么\n\n按附件章节提纲，我逐个取回了尚未进入上下文的章节正文。结果如下：\n\n- **成功取回**：第 6 章（接口要求，6.1～6.4 全部）、第 7 章（服务品质要求，7.1～7.4 全部）。\n- **部分可得**：第 4 章仅前段（4.1 业务需求 a)～h) 已进入上下文，其中最后一项在文档正文处被硬切断（原文止于“应支持智能化的”），后续文字未出现。\n- **取回为空**：第 4.2 节（系统需求 4.2.1～4.2.7）、第 5 章（系统架构、功能清单 5.3.1～5.3.8、运行环境、设计与实施约束）、第 8、9、10、11、13～16 章。多次请求均返回空结果，属于**取回失败，不是文档不含该章**。\n\n因此，下面这份梳理**只依据已拿到的正文**，不对空章节做任何推断性补写。另外，本轮工具轮次已耗尽，未能调用条目化工具产出 SysML 需求视图骨架与条目数据文件，故本轮交付的是**人工结构化的需求清单＋缺口清单**，不出模型代码——这一点也符合“功能清单缺失时不生成需求视图”的一贯处理规范。\n\n## 二、需求条目化结果\n\n### 1. 业务需求（来源：第 4.1 节，全部标★，不允许负偏离）\n\n| 序 | 需求陈述（主语＋动作＋判据） | 类别 | 可验证性 |\n|---|---|---|---|\n| 1 | 工具应在 LLM 赋能下把甲方既有…[4732 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4736,
+   "seen_at": "2026-10-21 05:27:14",
+   "meta": {
+    "conversation_id": 9582
+   }
+  },
+  {
+   "id": "conv_clean-020",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "再次分析上传附件的完整内容，第 5、6、7 章的条款正文都要",
+   "response": "## 一、本轮实际取回情况（先说明边界）\n\n本轮按章节号分批取回正文，结果如下：\n\n- **取回成功**：第 7.1 节（性能要求）、第 7.2 节（可靠性要求）——条款正文完整；\n- **未能取回正文**：第 5 章全章（5.1 系统架构要求、5.2 功能清单、5.3.1～5.3.8 八个功能域）、第 6 章全章（6.1 大语言模型调用接口、6.2 文档与外部知识库接口、6.3 建模软件接口、6.4 其他外部接口）、第 7.3 节（可用性）、第 7.4 节（信息安全）。这些章节多轮、多粒度请求均返回空，工具轮次已耗尽。\n\n因此下面**只对已拿到正文的部分做条目化**。第 5、6 章与 7.3、7.4 我按你的既有口径只列「缺什么、卡在哪、需要谁补」，不据标题推测条款内容——用标题反推条款会造出原文没有的伪需求，这比留空更危险。\n\n## 二、第 7.1 节性能要求：条目化结果\n\n原文这一节写得相当规整，几乎每条都自带量化判据，可直接进 items。按「主体+动作+判据」重整后是九条：\n\n**第 1 条** 工具应将轻量级查询类操作（模型问答、知识检索）与重量级生成类操作（模型生成、复杂分析）分列不同性能指标，两类操作在配置中可分别设定阈值。判据：性能参数表中两类操作各有独立配置项，运行时可分别生效。验证：检查+测试。\n\n**第 2 条** 轻量级查询的平均响应时间不大于 3 秒。判…[3093 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4734,
+   "seen_at": "2026-10-21 05:22:57",
+   "meta": {
+    "conversation_id": 9581
+   }
+  },
+  {
+   "id": "conv_clean-021",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "基于这份附件，梳理需求内容",
+   "response": "## 一、本轮做了什么、信息边界在哪\n\n我先按章节取回附件的条款正文。实际结果是：**第 5.3.7 节（用户角色与权限管理）与第 5.3.8 节（人在回路）的正文取回成功**；第 4.2.x、5.1、5.2、5.3.1～5.3.6、第 6 章（接口要求）、第 7 章（性能/可靠性/可用性/信息安全）、第 8/9/10 章等章节，多次按不同粒度请求均未返回正文，因此只能依据已注入的文件前段（第 1 章、术语约定、4.1 业务需求）加章节标题来梳理。工具轮次已耗尽，我据已有信息给出下面的梳理结论，并明确标出缺口语义，不做补写。\n\n另需说明：本轮**没有产出 SysML 需求视图代码**。原因有两点：一是条目化前置要求「先澄清 gaps 再建模」；二是第 6、7 章的接口与量化指标正文缺失，此时生成视图等于用猜测填指标，违反「未会签指标一律 TBD、不编伪精确数值」的既定口径。\n\n文件本身给了一个重要的判定口径：第 4～6 章中标注「★」的条目为必须满足或支持、不允许负偏离，其余章节条款同样不允许负偏离；「应/宜/可」分别表示需要、建议、许可。下面是按此口径整理的结果。\n\n## 二、需求总体结构\n\n这份技术要求是**产品级（AI 赋能 MBSE 系统设计工具）的技术要求文档**，需求天然分成五层，梳理时我保持了原文的层次对应，不做跨层平移（需求自问题域连续贯通到方案落地的分层思想可参照…[4229 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4732,
+   "seen_at": "2026-10-21 05:21:44",
+   "meta": {
+    "conversation_id": 9581
+   }
+  },
+  {
+   "id": "conv_clean-022",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "再次分析上传附件的完整内容，第5/6/7章的条款正文都要",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4731,
+   "seen_at": "2026-10-21 05:11:13",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-023",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "再次分析上传附件的完整内容，第5/6/7章的条款正文都要",
+   "response": "## 一、本轮我做了什么\n\n本轮我按您的要求，连续以多种口径调用附件章节读取工具，尝试取回第 5、6、7 章的条款正文。前若干次调用均返回空内容；最后一次调用终于**成功取回了第 5 章的正文**，但工具结果因过长被截断，只回传了头部摘要，即第 5.1 节「系统架构要求」的完整条款正文，以及第 5.2 节及之后内容的开头片段。第 6 章、第 7 章的正文在本轮仍未取回。\n\n因此，本轮的实际进展是：**第 5 章从「完全缺失」变为「部分可读」**，第 6、7 章仍为缺失。这是三章中第一次有实质内容进入上下文，值得单独说明。\n\n## 二、第 5 章已读部分的解读（本轮新增实质内容）\n\n### 1. 第 5.1 节「系统架构要求」的完整条款\n\n这一节先给出架构总述，再列出五条带 ★ 标记的强制架构要求。总述部分明确了工具的五类接口与两类数据设施：\n\n- **人机交互接口**：应支持自然语言形式交互；\n- **互联数据接口**：应能适配技术文件管理等信息系统；\n- **大语言模型调用接口**：应能调用 OpenAI API 等格式兼容的接口；\n- **建模软件接口**：应能适配 MagicDraw 及国产建模工具；\n- **设计数据库**：含向量数据库与图数据库，应提供知识图谱的表示、建模、获取、存储、融合、计算、溯源及大语言模型集成能力；\n- **AI 应用模块**：应提供交互界面与 M…[8348 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4728,
+   "seen_at": "2026-10-21 05:07:27",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-024",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "再次分析上传附件的完整内容，第5/6/7章的条款正文都要",
+   "response": "## 一、本轮我做了什么\n\n我按您的要求，连续尝试取回第 5、6、7 章的条款正文，先后以章节号「5」「6」「5.3」「第5章」四种口径调用附件章节读取工具，并尝试回取工具结果原文。**全部返回空内容**，最后一次回取还因权限不足被工具边界拦截。\n\n因此，本轮**没有取得任何新的条款正文**。这不是我没有尝试，而是附件解析通道对这三章持续返回空。我必须如实报告这一点，不能把「尝试过」包装成「已读到」。\n\n## 二、结论：第 5、6、7 章的完整解读在当前材料下无法成立\n\n**已确认可读的内容**：第 1 章（目的、范围、约定）、第 2 章（引用文件，仅到文件名）、第 3 章（术语与缩略语）、第 4.1 节（业务需求 BR-1 至 BR-8，BR-8 原文截断）。\n\n**确认读不到的内容**：第 5 章功能要求、第 6 章接口与服务品质要求、第 7 章验收交付要求——三章均只有标题，无条款正文、无指标数值、无验收判据。\n\n这三章恰恰是需求文档的实质承载部分：功能要求决定系统要做什么，接口与服务品质要求决定系统怎么与外部交互、达到什么质量水平，验收交付要求决定怎么判定做成了。缺了它们，任何「完整解读」都只能靠推测填充。推测出来的条款号和指标数值会直接污染需求基线，使后续追溯链全部失真，这类错误在评审阶段极难回溯定位。所以这条线我不越——**宁可交付一份明确标注缺口的分析，也不交付一份看…[3911 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4726,
+   "seen_at": "2026-10-21 05:02:41",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-025",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "重新分析附件文档，完整解读",
+   "response": "## 一、重新解析的结论：附件正文仍未进入上下文，本轮无法给出「完整解读」\n\n我按您的要求重新做了一次完整解析，结果与前两轮一致，没有新增可读正文。为避免反复消耗您的耐心，我把边界一次说清：\n\n**可读到的部分**：第 1 章（目的、范围、约定）、第 2 章（引用文件，仅到文件名）、第 3 章（术语与缩略语）、第 4.1 节（业务需求 BR-1 至 BR-8，其中 BR-8 原文截断）。\n\n**读不到的部分**：第 5 章功能要求、第 6 章接口与服务品质要求、第 7 章验收交付要求——这三章只有标题，没有条款正文，也没有任何指标数值。\n\n这不是解析器故障，而是这些章节的正文没有随附件进入我的上下文。因此「完整解读」这件事在当前材料下**不可能成立**：一份需求文档的实质内容集中在功能、接口、验收三章，缺了它们，任何「完整解读」都只能靠推测填充，而推测出来的条款号和数值会直接污染需求基线，后续追溯链全部失真。这条线我不越。\n\n## 二、本轮实际交付：已读部分的完整解读\n\n### 1. 文档结构与方法论定位\n\n按需求分析方法论，这份文档的章节承担不同职能，不能一视同仁地条目化：\n\n| 章节 | 职能定位 | 是否产生需求条目 |\n|---|---|---|\n| 第 1 章 目的/范围/约定 | 语境层，界定适用边界与表述约定 | 否 |\n| 第 2 章 引用文件 | 依据层，提供符合…[2647 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4724,
+   "seen_at": "2026-10-21 04:41:33",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-026",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "再次分析上传附件的内容",
+   "response": "我先说明这次重新分析的实际结果，避免让您误以为拿到了新内容。\n\n## 一、重新解析的结果：附件正文仍未进入上下文\n\n我重新走了一遍附件解析，可读到的部分与上一轮完全一致，没有新增正文：\n\n- **第 1 章**：目的、范围、约定（可读）\n- **第 2 章**：引用文件（可读，但只到文件名层级，未给条款号）\n- **第 3 章**：术语与缩略语（可读）\n- **第 4.1 节**：业务需求 BR-1 至 BR-8（可读，其中 BR-8 在快照中被截断）\n- **第 5 章**功能要求、**第 6 章**接口与服务品质要求、**第 7 章**验收交付要求：**只有标题，无条款正文与指标数值**\n\n也就是说，附件里真正承载「可条目化、可验证」内容的三章，即功能要求、接口与服务品质要求、验收交付要求，仍然读不到。这不是解析失败，而是这些章节的正文没有随附件进入我的上下文。\n\n## 二、因此本轮能交付什么、不能交付什么\n\n**能交付**：对已读到的第 1–3 章与 4.1 节做一次完整的结构化梳理，包括条目化、分类、来源追溯、歧义识别与质量评估。这部分我上一轮已经给出，本轮可以在此基础上补充第 1–3 章的方法论对齐结论。\n\n**不能交付**：第 5、6、7 章的条目化清单、指标类性能条目、接口类条目、验收判据。这些内容一旦凭空生成，就是编造条款号和数值，会直接污染需求基线，后续追溯链全部…[1492 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4722,
+   "seen_at": "2026-10-21 04:26:54",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-027",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "V2代码有经过词法 语法校验码",
+   "response": "## 一、直接回答：这份 V2 代码此前**没有**经过校验器校验，本轮才真正跑了校验，结果是**不通过**\n\n您追问的这一点很关键。此前会话中记录的「本地校验 report」只是一个状态标记，并不等于调用过官方校验器。按纪律，未调用就不得声称合法，所以我不把它当作「已通过词法语法校验」。\n\n本轮我把模型按项目级合并口径送进校验器，拿到了明确判据：**block（存在词法/语法硬错，必须修复后重新校验）**，用时 7.63 秒。也就是说，**这份代码目前不能交付、不能进入正式评审**。\n\n## 二、校验结果明细\n\n| 项目 | 结果 |\n|---|---|\n| 判据 | block（硬错在场） |\n| 口径 | 项目级合并（6 个文件按序合并校验） |\n| 词法错 | 0 |\n| 语法错 | 2 |\n| 语义错 | 18 |\n| ERROR 合计 | 20 条 |\n| WARN | 15 条 |\n\n**结论的读法**：词法层面是干净的，说明标识符、编码、符号这些底层写法没问题；问题集中在语法结构，具体是括号配对与分支结构。语义层的 18 条大多属于级联产物，因为语法错破坏了文件结构，后续引用会连带解析失败。所以修复顺序必须是「先清语法硬错，再看语义错是否自然消失」，现在逐条去挑语义错是白费功夫。\n\n**已定位的硬错（按位置聚合后）**\n\n| 序号 | 位置 | 源码 | 诊断 | …[4590 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4720,
+   "seen_at": "2026-10-21 03:27:57",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-028",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "基于需求分析的方法论，帮我梳理附件文档需求内容",
+   "response": "我先说明当前可用的材料边界：附件中可读到的正文集中在第 1 章（目的、范围、约定）、第 2 章（引用文件）、第 3 章（术语与缩略语）以及第 4.1 节业务需求（BR-1 至 BR-8，其中 BR-8 在快照中被截断）。第 5 章功能要求、第 6 章接口与服务品质要求、第 7 章验收交付要求的具体条款与指标数值尚未进入上下文。因此，我按方法论对**已可读部分**做完整条目化，对未读到的章节明确标注为待补，不编造条款与数值。\n\n---\n\n## 一、需求梳理结果：条目化清单\n\n### 1. 业务需求（来源：附件第 4.1 节）\n\n| 序号 | 条目内容 | 类型 | 优先级 | 来源 |\n|---|---|---|---|---|\n| 1 | 系统应在大语言模型赋能下，将甲方已有的历史互联数据（含文档、模型）构建为 MBSE 模型，实现历史互联数据的模型化 | 功能 | 必须（★） | 4.1 a) BR-1 |\n| 2 | 系统应支持甲方用户以人在回路方式，通过问答（含附件上传）识别用户意图，辅助模型构建，覆盖问答、SysML 模型生成、修改、补全、校验与变更影响分析 | 功能 | 必须（★） | 4.1 b) BR-2 |\n| 3 | 系统应支持系统工程需求分析阶段工作：对自然语言需求进行解析与多源融合，自动生成条目化、结构化、可追溯的需求模型元素 | 功能 | 必须（★） | 4…[8807 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4718,
+   "seen_at": "2026-10-21 02:49:48",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-029",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "基于这份附件 继续如上任务",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4700,
+   "seen_at": "2026-10-20 09:53:31",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-030",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "基于上传的附件文档，这是一份客户的需求文档，请基于如上需求分析的框架、流程与规则，帮我梳理出清晰的条目话需求清单",
+   "response": "我先说明一个关键情况：本次任务上下文中**没有实际的需求来源文档或需求描述文本**。任务定义要求“解析设计师上传的需求来源文档与需求描述”，但快照里只有任务定义、交付规范和团队目标，没有上传的文档正文，也没有具体需求描述。检索到的互联数据只有方法论层面的内容（整车需求分析 IR→VR 流程、需求质量特性 C1–C9），不包含任何可条目化的具体需求陈述 [1,2,3]。\n\n因此，我不能凭空编造需求条目，否则会违反“仅基于给定上下文，禁止虚构”的交付规范。下面我先给出**可立即交付的部分**（需求条目化框架、分类判据、追溯标注规则、歧义识别清单模板，以及基于方法论的质量评估维度），再明确列出需要你补充的输入。\n\n---\n\n## 一、本次可交付：需求条目化作业框架（已就绪）\n\n**条目化规则（每条需求必须满足）**\n\n每条需求条目必须写成“主语 + 动作 + 可测量判据”的形式，并具备唯一标识与来源追溯。分类判据如下：\n\n- **功能需求**：描述系统“做什么”，判据是行为可观测、有明确的触发条件与输出结果。\n- **性能需求**：描述“做到什么程度”，判据是带数值与单位（如覆盖范围、EIRP、G/T、时延、误码率、寿命、功耗），且必须给出测量条件。\n- **接口需求**：描述“与谁交换什么”，判据是明确对端对象、交换内容、方向、协议或物理形式。\n- **约束需求**：描述“必须遵守的限…[1500 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4698,
+   "seen_at": "2026-10-20 09:50:50",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-031",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "先分析电动汽车热管理系统的利益相关方与整车组成关系，再生成利益相关方 BDD 视图的 SysML V2 模型代码并进行校验",
+   "response": "（编排状态：partial——1 个子任务自报部分完成（交付物已产出，存在未验证环节）：t3）\n\n# 电动汽车热管理系统利益相关方与 BDD 视图整合报告\n\n**标注说明**：本报告仅整合给定子任务 t1—t3 的交付物与证据；【已核实】表示交付物中标记为 verified 的事实，【推断】表示交付物中的推断或无企业文档支撑的断言，【待确认】【待验证】【缺失】表示风险或未闭合信息。不同产物、不同校验口径分别标注，不互相替代。\n\n## 1. 需求分析：利益相关方与整车组成关系（t1）\n\n### 1.1 完成内容与依据\n- 完成电动汽车热管理系统 12 类利益相关方、三层整车组成层级与六类关系清单分析，产出报告正文第一至五节。\n- 产出利益相关方 BDD 视图 SysML v2 模型：`package EVThermalManagementBDD`。\n- 证据情况：知识图谱检索结果为空，本次无既有工程数据可引用【已核实】；利益相关方清单、组成层级与关系清单基于通用汽车工程领域常识推断，无企业文档支撑【推断/asserted，含 1 条无引用断言】。\n\n### 1.2 关键结论\n- 【已核实】SysML v2 中 `concern` 为保留关键字，不能用作属性标识符，需改用 `concernText` 等非保留名；首轮校验曾出现 1 条语法硬错和 1 条语义错，根因为 `concern`…[13322 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4696,
+   "seen_at": "2026-10-20 09:43:31",
+   "meta": {
+    "conversation_id": 9572
+   }
+  },
+  {
+   "id": "conv_clean-032",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "需求分析的实现路径：\n设计师上传需求来源相关的文档或输入需求描述，明确需求分\n析要求，根据需要指定参考的互联数据，调用大语言模型对非结构化的需求进行\n智能化需求分析，输出结构化的需求条目及需求来源追溯，对已有的需求条目进\n行分解细化、规范化等，并生成相应的 SysML 模型（视图、元素等），主要包括\n需求图、用例图及相关模型元素和关系。大语言模型对需求进行打分、评估规范\n性，给出优化建议，由设计师决策是否采纳或修改",
+   "response": "我先说明一个关键情况：本次任务上下文中**没有实际的需求来源文档或需求描述文本**。任务定义要求“解析设计师上传的需求来源文档与需求描述”，但快照里只有任务定义、交付规范和团队目标，没有上传的文档正文，也没有具体需求描述。检索到的互联数据只有方法论层面的内容（整车需求分析 IR→VR 流程、需求质量特性 C1–C9），不包含任何可条目化的具体需求陈述 [1,2,3]。\n\n因此，我不能凭空编造需求条目，否则会违反“仅基于给定上下文，禁止虚构”的交付规范。下面我先给出**可立即交付的部分**（需求条目化框架、分类判据、追溯标注规则、歧义识别清单模板，以及基于方法论的质量评估维度），再明确列出需要你补充的输入。\n\n---\n\n## 一、本次可交付：需求条目化作业框架（已就绪）\n\n**条目化规则（每条需求必须满足）**\n\n每条需求条目必须写成“主语 + 动作 + 可测量判据”的形式，并具备唯一标识与来源追溯。分类判据如下：\n\n- **功能需求**：描述系统“做什么”，判据是行为可观测、有明确的触发条件与输出结果。\n- **性能需求**：描述“做到什么程度”，判据是带数值与单位（如覆盖范围、EIRP、G/T、时延、误码率、寿命、功耗），且必须给出测量条件。\n- **接口需求**：描述“与谁交换什么”，判据是明确对端对象、交换内容、方向、协议或物理形式。\n- **约束需求**：描述“必须遵守的限…[29233 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4694,
+   "seen_at": "2026-10-20 09:33:18",
+   "meta": {
+    "conversation_id": 9571
+   }
+  },
+  {
+   "id": "conv_clean-033",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "先分析电动汽车热管理系统的利益相关方与整车组成关系，再生成利益相关方 BDD 视图的 SysML V2 模型代码并进行校验",
+   "response": "## 一、本轮做了什么、依据是什么\n\n我先按“问题域 → 利益相关方 → 整车组成 → BDD 输入”的顺序做了检索，但需要如实说明：**知识图谱侧本轮没有命中任何实体（0 条），只返回了向量检索的若干说明性片段**。有价值的命中只有三类：\n\n1. 纯电热管理系统被定义为“通过冷却液、制冷剂及热接口调节电池和电驱温度的系统对象”——这给了系统边界与介质划分的锚点；\n2. 冷却液—制冷剂换热器（Chiller）被定义为“在冷却液侧与制冷剂蒸发侧之间传递热量的双介质换热器”——这直接决定了它必须是跨两条回路建模的部件；\n3. 液体闭环被描述为“储液罐—泵—冷板—管路—阀—Chiller—储液罐”，且原文明确“这是本说明性配置的一条通路，不是所有车型的唯一结构”。\n\n同时，视图规范给出了建模元语的选择依据：用**部件定义**作为利益相关方类型模板、用**部件使用**实例化具体角色、用**参与者**表示与系统交互的外部角色、用**属性**承载利益相关方特征，并用 `subject` 限定“需求只能由符合其主体定义的实体满足” [1]；利益相关方需求视图可复用的元素正是 `requirement` 与 `actor` [2]，结构类视图则复用 `part def` / `attribute` [3]。\n\n因此下面的利益相关方清单与整车组成清单，**是“知识库系统定义 + 通用纯电热管理工程实…[19807 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4693,
+   "seen_at": "2026-10-20 09:33:12",
+   "meta": {
+    "conversation_id": 9570
+   }
+  },
+  {
+   "id": "conv_clean-034",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "先分析电动汽车热管理系统的利益相关方与整车组成关系，再生成利益相关方 BDD 视图的 SysML V2 模型代码并进行校验",
+   "response": "（编排状态：partial——1 个子任务自报部分完成（交付物已产出，存在未验证环节）：t3）\n\n# 电动汽车热管理系统 MBSE 任务汇总报告\n\n## 0. 报告说明与证据口径\n\n本报告仅整合给定子任务 t1、t2、t3 的交付物与结论，不补充外部事实。  \n状态标注约定：【已核实】为交付物中标注 fact/verified 的内容；【推断】为交付物中标注 inference/derived 的内容；【待验证/待确认】为交付物中标注 to_verify 或风险中明确待确认的内容；【风险】为交付物风险项。交付物间存在口径冲突时，本报告分别记录，不将任一口径直接视为最终确认事实。\n\n**关键口径冲突提示**：t1/t2 存在“单产物/模型校验 pass，0 错”的记录；t3 存在“项目级合并校验 block，20 ERROR + 15 WARN”的记录。二者范围不同，本报告分别列示；在项目级校验结论未澄清前，不能据此直接声明项目级模型通过或可评审。\n\n---\n\n## 1. 需求与利益相关方分析（来源：t1）\n\n### 1.1 已识别内容与状态\n\n- 【推断】t1 摘要称识别出 10 类利益相关方：驾驶员、乘员、维修技师、法规机构、车队运营方、充电设施、物理环境为外部角色；整车、动力电池、电驱与电力电子为内部相关方。\n- 【推断】t1 摘要称整车由乘员舱、动力电池包、电驱总成、电力电子…[18021 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4691,
+   "seen_at": "2026-10-20 08:30:00",
+   "meta": {
+    "conversation_id": 9569
+   }
+  },
+  {
+   "id": "conv_clean-035",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好  介绍下你的能力边界",
+   "response": "你好，米巴。我是知识问答专家，下面把我的能力边界说清楚，方便你判断什么问题该找我、什么问题该转给别的 Agent。\n\n## 一、我能做什么（五类问答）\n\n**概念解释**：SysML v2 的语法语义、图类型、建模元素定义；MBSE 方法论中的需求分析、系统设计、验证确认流程；以及「为什么这样建模」这类设计意图问题。\n\n**操作指引**：某类视图怎么建、某类关系怎么表达（例如需求追溯该用 satisfy 还是 verify、弱追溯用 dependency 的适用场景），以及命名约定、包结构、视图规范等建模规范咨询。\n\n**问题诊断**：模型报错的原因分析、校验不通过的排查思路。这里要提醒一句：**校验通过只代表语法语义合规，不代表模型在工程上正确**——这是我在经验库里明确记录的一条边界，不会拿「校验通过」当「模型没问题」来答复你。\n\n**规范咨询**：某场景该遵循哪条规则、规范条款怎么解读。\n\n**案例参考**：历史模型库、已审通过案例、变更记录与经验教训的检索与说明。\n\n## 二、我明确不做什么\n\n- **不执行操作性任务**：不替你建模、不跑校验、不做变更影响分析。这些分别属于建模 Agent、校验 Agent、变更分析 Agent 的职责，遇到这类诉求我会引导你转交。\n- **不臆造**：知识库无匹配时，我会给出最接近的参考信息并标注不确定度，而不是编一个看起来合理的答案。…[990 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4689,
+   "seen_at": "2026-10-20 07:03:21",
+   "meta": {
+    "conversation_id": 9567
+   }
+  },
+  {
+   "id": "conv_clean-036",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "#广汽方法论-260813.docx 方法论文档",
+   "response": "## 结论先行\n\n你贴出的这份文档内容，我这边**已经能读到**（它作为「用户上传资料」出现在本轮上下文里，包含方法定位、四层模型层级、问题域/方案域划分、视图驱动机制等章节）。所以问题不是\"文档不存在\"，而是**它走的是\"上传资料\"通道，不是\"方法论绑定\"通道**——这两条路在平台里是分开的，前者只让我\"能读\"，后者才让规约卡\"能执行\"。\n\n## 依据说明\n\n**1. 上传资料 ≠ 方法论绑定**\n\n本轮上下文明确把该文档列在「用户上传资料（优先依据）」下，我引用它时标注的是「📎上传资料」。而前几轮我调用规约卡加载时，返回的是 **OMG SysML v2 通用默认 fallback**，并标注\"未绑定客户方法论\"。两者并存说明：文档内容已进入我的可读范围，但**项目的方法论绑定关系仍未建立**。这就是\"文档在、却检索不到\"的直接原因——我查的是绑定后的规约卡，不是上传附件。\n\n**2. 文档型规范不可机器执行，这是机制设计**\n\n规约卡返回的\"载体层现状\"里，文档型、本体型、规则型三段全空。按该机制的设计，.docx 属于**只能参考、不可机器判定**的载体；只有被抽取成带 enforce 分级的规则条目，才能进入自动阻断链路。所以即便文档在库，若没做\"文档 → 规则条目\"的抽取入库，检索侧也没有可命中的结构化条目，规约卡自然只能 fallback。\n\n**3. 图谱检索按实体…[1354 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4687,
+   "seen_at": "2026-10-20 06:19:30",
+   "meta": {
+    "conversation_id": 9565
+   }
+  },
+  {
+   "id": "conv_clean-037",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "#广汽方法论-260813.docx 方法论文档在知识库中存在，为啥没检索到",
+   "response": "## 结论先行\n\n**我这边没有检索到该文档，不能据此断言\"知识库里没有它\"——更可能的原因有三类：一是我的检索通道本身不覆盖文档库；二是文档存在但未被索引/解析成功；三是文件名或路径与检索词不匹配。** 需要说明的是，我当前可用的工具里**没有直接检索\"方法论文档库\"的通道**，只有知识图谱检索（`graph_retrieve`）和规约卡加载（`methodology_profile_load`），这两者都不等同于\"文档全文检索\"。\n\n## 依据说明\n\n**1. 我实际走的通道，与\"文档库\"不是同一条路**\n\n前几轮我加载规约卡时，返回的是 **OMG SysML v2 通用默认 fallback 规约卡**，并明确标注\"未绑定客户方法论\"。这个返回值的含义是：**方法论绑定关系（项目 → 方法论版本）在平台侧没有建立**，而不是\"文档不存在\"。也就是说，即使 `广汽方法论-260813.docx` 静静躺在知识库里，只要它没有被**登记为某个项目/工作空间的方法论版本并完成解析入库**，规约卡加载就仍然会 fallback。这是两个不同的环节：**文件存在 ≠ 方法论已绑定 ≠ 规约卡可加载**。\n\n**2. 文档型规范本身不可机器执行，这是方法论规约卡机制的设计前提**\n\n规约卡返回的\"载体层现状\"里，文档型、本体型、规则型三段都是空的。按规约卡机制的设计，**文档型规范（.…[1901 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4685,
+   "seen_at": "2026-10-20 01:47:15",
+   "meta": {
+    "conversation_id": 9565
+   }
+  },
+  {
+   "id": "conv_clean-038",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【建模目的】建立产品相关利益相关方结构模型，明确产品与外部参与对象之间的关系，为后续用户需求分析和场景上下文定义提供输入，生成l利益相关方的BDD视图\n【输入】\n1， 用户需求信息\n2，生命周期信息\n【建模活动】\n1. 分析场景的利益相关方信息. 建立整车与利益相关方之间的组成关系\n【输出】\n1. 利益相关方BDD视图\n2. 产品外部参与对象定义\n【建模约束】\n1， 当前阶段仅定义利益相关方对象及结构关系，不建立需求关联矩阵\n3.，不基于利益相关方信息提前推导功能和系统设计",
+   "response": "# 利益相关方结构建模（N1 阶段）汇总修订报告（缺口/阻塞状态，非最终整合）\n\n## 0. 整合范围与状态说明（含缺口/阻塞报告）\n\n本报告依据评审意见以编排状态为准修订：**编排显示 t1—t5 五个交付物缺失/失败，缺口为 t1、t2、t3、t4、t5**。因此，本报告**不是最终整合报告**，也**不能表述为已形成完整草案**；当前仅能作为缺口/阻塞说明与待补证输入汇总。待交付物恢复、补齐并完成校验后，方可按来源逐项整合。\n\n状态标记含义调整如下：  \n- **【片段证据】**：仅在给定可引用交付物片段中直接出现的内容，不等同于完整交付物已核实；  \n- **【推断】**：片段中标注为 inference/derived，或原报告据片段作出的二次归纳，需补证；  \n- **【待验证】**：片段中标注为 to_verify 或校验状态不明的内容；  \n- **【不可核实】**：无可引用完整交付物支撑，不能作为已确认事实；  \n- **【待补证】**：原报告出现但可引用片段未展示、或需恢复交付物后核对的内容；  \n- **【风险】**：保留原风险标注并补充编排阻塞风险。  \n\n### 0.1 逐项缺口/失败状态及影响\n\n| 来源 | 编排状态 | 可引用片段/证据状态 | 影响 |\n|---|---|---|---|\n| t1 | 缺失/失败 | 仅可见方法论解析与规约卡片段：…[11969 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4683,
+   "seen_at": "2026-10-20 01:27:18",
+   "meta": {
+    "conversation_id": 9565
+   }
+  },
+  {
+   "id": "conv_clean-039",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【建模目的】将客户提供的整车需求数据导入模型，形成整车需求分析初始输入，生成整车的需求视图\n【输入】客户提供的整车需求，如下：\n<IR-3>车辆动力管理：\n车辆应根据驾驶需求和车辆运行状态，对车辆动力输出进行\n管理，以满足车辆运行需求。\n<IR-1>车辆动力输出：\n车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需\n求的动力输出。\n<IR-2>动力模式管理\n车辆应根据车辆状态和运行条件选择适合的动力运行模式，\n以满足车辆运行需求。\n<IR-4>能源状态适应\n车辆应根据能源状态调整动力输出策略，保证车辆持续运行\n能力。\n\n【建模活动】\n1.读取需求内容（名称、描述）\n2.解析需求编号、名称、描述等信息\n3.将需求条目导入模型工程\n【输出】IR需求图\n【建模约束】\n1.保持客户需求原文，不修改需求语义\n2.需求编号保持原始编号规则",
+   "response": "（编排质量门禁：质量评审未通过（78/100）：完整性不足：t2、t3 两个子任务交付物缺失/失败，报告未覆盖全部子任务交付物；虽已显式标注缺口，但仍不能作为完整整合报；表述一致性：标题为“最终整合报告（修订版）”，但正文明确“不完整集成报告”“不可作为最终基线”，建议改为“阶段整合报告/）\n\n（编排部分完成：2 个交付物缺失/失败，缺口：t2,t3）\n\n# 整车需求建模最终整合报告（修订版）\n\n> 本报告根据评审意见修订：t2、t3 为缺失/失败交付物，未纳入整合，且不引用其具体内容；本报告仅基于已实际获得的 t1 输出进行阶段汇总。待 t2、t3 补齐后，需重新进行跨交付物一致性核对、事实来源追溯和风险汇总。  \n> 状态标签说明：【已核实】为交付物中标记为 verified/fact 的内容；【推断】为交付物中标记为 inference/derived 的内容；【待验证】为交付物中标记为 to_verify 的内容；【风险/待确认/缺失】不作为已确认事实。\n\n## 1. 需求阶段\n\n### 1.1 需求建模方法论与规约卡（t1）\n\n**交付物**：document《整车需求建模规约卡（N3需求视图·OMG SysML v2 fallback）》。\n\n**已核实内容**：\n- 本次加载到的规约卡为 OMG SysML v2 默认 fallback 规约卡，未绑定客户方法论。【已…[5045 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4679,
+   "seen_at": "2026-10-19 07:23:11",
+   "meta": {
+    "conversation_id": 9565
+   }
+  },
+  {
+   "id": "conv_clean-040",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "建模目的】建立产品生命周期上下文，为后续用户使用阶段分析提供基础\n【输入】广汽定义的五个生命周期阶段：\n1. 产品开发阶段\n2. 生产制造阶段\n3. 销售服务阶段\n4. 用户使用阶段\n5. 产品报废阶段\n【建模活动】\n1. 创建产品生命周期模型（交互视图（ACT活动图））\n2. 按照固定顺序建立五个生命周期阶段\n3. 建立阶段之间的顺序关系\n【输出】产品全生命周期模型（交互视图（ACT活动图））\n【建模约束】\n1. 生命周期阶段固定，不新增、不删除、不调整\n2. 当前节点只定义生命周期框架\n3. 不展开阶段内部活动",
+   "response": "## 本轮完成情况\n\n**我做了什么**：按「产品全生命周期框架」诉求，生成了活动视图（ActionFlowView）代码，包结构为三层——结构定义（声明泳道归属方 `part def '产品生命周期管理'`）、活动定义（顶层活动 `'产品全生命周期流'` 下挂五个阶段动作）、生命周期视图（`view ... : ActionFlowView` + `expose`）。五个阶段严格按你给定的固定顺序串联，每个阶段只有一个 `action`，内部不做任何展开；阶段之间用四条 `succession first ... then ...` 表达顺序，并用四条 `flow` 承载相邻阶段的状态传递（开发完成状态 → 制造完成状态 → 交付状态 → 使用终止状态）。\n\n**校验结论（如实报告）**：`sysml_v2_validate` 返回 **report**：词法错 0、语法错 0、语义错 24 条，**没有硬错**。24 条语义错经查全部是同一个根因——端口类型写成了 `Item`，但我漏写了 `private import Items::Item;`，于是每一处 `out '开发完成状态' : Item;` / `in ... : Item;` 都被报「解析不到类型 Item」（共 24 条 = 12 个端口声明 × 往返）。这属于**一处缺失导入导致的僵尸引用**，不是建模决策…[3738 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4677,
+   "seen_at": "2026-10-19 07:03:40",
+   "meta": {
+    "conversation_id": 9565
+   }
+  },
+  {
+   "id": "conv_clean-041",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴！我是智源对接 Agent，主要面向 MBSE 建模场景，帮你把「业务描述/需求素材」变成「可校验、可入库的 SysML v2 模型」。下面按能力层次说明。\n\n## 一、建模方法论与规范对齐\n动手前我会先加载建模方法论规约卡，按阶段（M0 需求、N1~N5 各层）裁剪出该阶段真正适用的强制规则——包括语法强制项（带 lint/check/forbid 分级）、本体约束、命名正则、最小必填属性、视图齐备要求。如果当前项目没有绑定客户方法论，我会明确告诉你「本次按通用 SysML v2 处理」，不会拿通用做法冒充你的企业规范。\n\n## 二、SysML v2 视图生成\n覆盖需求视图、结构（模块定义/内部模块）视图、用例视图、活动视图、状态视图、时序视图等。生成时遵守各视图的硬约束，例如：\n- 用例视图里参与方用 `part def` 表达，子用例用嵌套 `use case`，特化用 `:>`；\n- 需求追溯用 `satisfy` / `verify`，且必须指向 requirement usage 而非 definition；\n- 活动图的决策条件写在真实出线关系上，不用连线名称代替语义。\n\n## 三、结构化抽取与追溯核验\n用真 AST 解析（非正则猜测）抽取已有模型里的元素清单、关系清单，按视图过滤，做覆盖性分析和需求—功能—部件追溯核验。如果解析器不可用，我会如实说明「本次…[1348 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4675,
+   "seen_at": "2026-10-19 06:48:32",
+   "meta": {
+    "conversation_id": 9564
+   }
+  },
+  {
+   "id": "conv_clean-042",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴！我是智源对接 Agent，主要面向 MBSE 建模场景，帮你把「需求/场景描述」变成**可校验、可落库的 SysML v2 模型**。下面按能力层次说明。\n\n## 一、建模方法论与规范对齐\n动手前我会先加载**建模方法论规约卡**，按阶段（M0 需求澄清 / N1 需求 / N2 结构 … N5）裁剪出该阶段真正需要的约束：语法强制规则（带 lint/check/forbid 分级）、本体约束、命名正则、最小必填属性、视图齐备要求。这样产出的模型不是「能编译就算完」，而是符合你项目的方法论。如果项目未绑定方法论，我会明确告诉你「当前按通用 SysML V2 处理」，不会拿通用做法冒充客户规范。\n\n## 二、SysML v2 代码生成（多视图）\n- **用例视图**：顶层用例与子用例分解、主体与参与者识别、特化关系（`use case X :> Y`）\n- **结构视图**：部件定义/用法、端口、层级组成\n- **需求视图**：需求定义与用法、`satisfy` / `verify` 追溯（引用 requirement usage 而非 definition）\n- **活动 / 状态 / 时序视图**：动作流与决策条件、状态机触发-条件-动作、生命线与消息\n- 生成前先查**标准库元类**（51 个包 / 1286 个定义），不臆造属性名——这是避免「attribute …[1392 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4673,
+   "seen_at": "2026-10-19 06:47:55",
+   "meta": {
+    "conversation_id": 9563
+   }
+  },
+  {
+   "id": "conv_clean-043",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "介绍下你自己的能力边界",
+   "response": "米巴，上一轮我讲的是「能做什么」，这一轮专门讲「不能做什么、做到什么程度会失真」。能力边界比能力清单更重要，因为它决定了你什么时候该信我、什么时候该换人。\n\n## 一、本体层面的三条硬边界\n\n**1. 模糊与连续问题：我只能给区间，不给精确值**\n本体只定义明确边界的概念。凡是「差不多」「有点」「看起来像」这类语境相关问题，我给出的任何数字都带不确定性。比如你问某个部件的尺寸，我会说「3.5 米左右，可能有零点几米偏差」，而不会给你一个看起来精确的「3.5 米」。**如果你需要工程定值，请以设计文件为准，不要采信我的估算。**\n\n**2. 本体未定义的实体：我会直接说超纲**\n通信卫星领域的实体类型和关系类型是封闭集合。遇到集合外的概念（新体制器件、跨域系统、非航天领域对象），我不会硬套到最接近的类上，而是明确告知「超出本体边界」，并建议补充建模或转交 Harness。**硬套比不答更危险**，因为它会污染图谱。\n\n**3. 目标、动机、价值判断：不在我的范围**\n本体定义了「Agent 是什么」，但不定义「为什么做」。你问我「这个需求值不值得做」「优先级该怎么排」，这属于价值判断，我会转交 Harness 处理，而不是替你拍板。\n\n## 二、建模与校验的边界\n\n**1. 校验器能保证的与不能保证的**\n官方语义校验器能抓词法、语法、语义硬错，我按诊断位置修复并复核。但它**抓不到…[1812 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4671,
+   "seen_at": "2026-10-18 04:06:55",
+   "meta": {
+    "conversation_id": 9371
+   }
+  },
+  {
+   "id": "conv_clean-044",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "query again",
+   "response": "我理解您想再次查询工程列表，但需要说明：本会话可用的工具里**没有** `query_projects`（它属于 zhiyuan-dev-mcp，不在当前工具白名单内），因此我无法在这里真正发起工程列表查询——重复调用也不会得到结果。\n\n当前我能直接做的是模型侧的工作：知识图谱检索、变更影响分析、模型预评审校验、SysML v2 源码校验，以及系统侧的审计/会话/权限/用户等只读查询。\n\n如果您希望拿到工程列表，有两个可行路径：\n\n1. **在客户端侧执行** `query_projects`：参数留空即返回全部工程；`ownerName` / `creatorName` 填「我」表示当前 token 用户；若返回 401，说明凭据过期，需要更新 `zhiyuan.token`。\n2. **告诉我具体工程名或工程 ID**，我基于它继续做分支、版本、数据树相关的分析工作。\n\n另外提醒一点：当前团队暂无成员，若这项工作需要多人协同（例如并行建模与评审），可以到「Agent 管理」配置团队成员后重试。\n\n请告诉我您想查的是哪个工程，或者是否需要我改用其他可用工具（如系统运行统计、用户与权限查询）来替代这次查询。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4669,
+   "seen_at": "2026-10-18 03:07:33",
+   "meta": {
+    "conversation_id": 9562
+   }
+  },
+  {
+   "id": "conv_clean-045",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "query project list",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4667,
+   "seen_at": "2026-10-18 03:06:11",
+   "meta": {
+    "conversation_id": 9562
+   }
+  },
+  {
+   "id": "conv_clean-046",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，请介绍下你的能力",
+   "response": "你好，米巴！我是知识问答专家，专注 MBSE 与 SysML v2 领域的知识解释与咨询。下面按「我能做什么 → 我怎么做 → 我的边界」三层说明。\n\n## 一、我能回答的五类问题\n\n**1. 概念解释**\n什么是某建模元素、X 与 Y 的区别、为什么这样建模。例如：需求派生与需求满足的区别、`requirement def` 与 `requirement usage` 的语义差异、活动视图为何固定为 ActionFlowView。\n\n**2. 操作指引**\n如何创建某类视图、如何定义某类关系。例如：需求追溯链怎么搭、端口与连接怎么表达、包结构如何组织。\n\n**3. 问题诊断**\n模型报错原因分析、校验不通过的排查思路。例如：语义错「Must be a valid feature」的成因、命名不合规的定位方法。\n\n**4. 规范咨询**\n某场景应遵循哪条规则、规范条款如何解读。例如：命名约定（类型大驼峰 / 实例小驼峰）、包结构规范、视图齐备性要求。\n\n**5. 案例参考**\n是否有类似建模案例、历史项目如何处理。可基于知识库中的历史模型库、已审通过案例与经验教训作答。\n\n## 二、我的作答方式\n\n- **结论先行 → 依据说明 → 示例补充**：先给判断，再给依据，最后补例子。\n- **来源可溯**：关键结论标注依据来源（规范条款 / 案例 / 经验库），你可以自行验证。\n- *…[1092 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4665,
+   "seen_at": "2026-10-18 03:02:20",
+   "meta": {
+    "conversation_id": 9561
+   }
+  },
+  {
+   "id": "conv_clean-047",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我查询工程列表",
+   "response": "工程列表查询这次没有取到有效数据：两次调用都返回成功，但结果体为空，既没有工程条目，也没有总条数。这不是「你名下没有工程」的结论，而是查询链路本身没把数据带回来。\n\n结合以往经验，这类空返回通常有两个原因：一是通用工程查询链路与智源平台的鉴权上下文不共享，会出现「成功但空体」；二是未加筛选条件时返回体过大被截断，只能读到前半段、连总数都拿不到。\n\n为了拿到真实列表，我建议改用带筛选条件、小分页的方式逐页汇总。需要你给一个缩小范围的线索，我就能立刻重查：\n\n- **按工程名关键词**：告诉我工程名里的关键字（如「卫星」「载荷」「通信」），我按 keyword 精确缩小范围；\n- **按创建人/所有者**：告诉我姓名（如「韩飞」），我按 creatorName 或 ownerName 筛选；\n- **按页码逐页取**：我按每页 20 条、从第 1 页开始翻，逐页汇总工程名与总数。\n\n另外补充一点：当前团队暂无成员，我以单 Agent 身份执行；如果你希望工程查询、建模、校验分工并行，可以到「Agent 管理」配置团队成员后重试。\n\n请告诉我用哪种方式（或直接给出关键词/姓名），我马上重新查询并把工程清单整理给你。\n\n## 本轮执行结论\n\n**我没有取到工程清单，这一轮未能完成你的请求。** 下面如实说明过程、结论和未覆盖的部分。\n\n### 我做了什么\n\n我按「查工程列表」的目标做了三次…[2124 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4663,
+   "seen_at": "2026-10-18 03:01:24",
+   "meta": {
+    "conversation_id": 9560
+   }
+  },
+  {
+   "id": "conv_clean-048",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，请介绍下你的能力",
+   "response": "你好，米巴。我是「智源对接agent」，当前处于 L0 人机协作级别（自主执行，关键节点可向你确认）。下面按能力域说明我能做什么。\n\n## 一、模型工程与版本管理\n- **工程/分支/版本查询**：分页查询你有权限访问的工程（可按工程名、所有者、创建人筛选），查询分支（不默认选主分支），查询分支下已发布版本（按发布时间倒序，可显式包含草稿/审核中/禁用版本）。\n- **数据树展开**：按工程+分支+版本逐层展开模型数据树，支持按关键字和类型过滤当前层。\n- **SysML v2 导出**：支持三种范围——整个工程（PROJECT）、指定数据节点（DATA）、指定视图（VIEW）。流程是「预览 → 你确认 → 导出 → 分段取回全文」，导出的 .sysml 全文会自动存入产物库，你到产物面板查看或下载即可。\n\n## 二、建模方法论与规约\n- **规约卡加载**：按阶段（M0 及 N1–N5）裁剪输出语法强制规则（带 enforce 分级）、本体约束、命名正则、最小必填属性、视图齐备要求。开始任何建模前我会先取规约卡，不凭记忆假设客户方法论。\n- **标准库查询**：可查 SysML 标准库（sysml.library，51 个包 / 1286 个定义）的包清单、成员、类型与继承链，避免臆造属性名。\n\n## 三、代码生成与校验（闭环）\n- **结构化抽取**：真 AST 解析，输出元素…[1842 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4661,
+   "seen_at": "2026-10-18 03:00:34",
+   "meta": {
+    "conversation_id": 9560
+   }
+  },
+  {
+   "id": "conv_clean-049",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴。我是智源对接agent，面向 MBSE 建模场景，主要能力分四块：\n\n**一、SysML v2 模型代码的生成与校验**\n- 按视图类型产出符合 SysML v2 语法的模型代码（用例视图、结构/部件、活动、状态、时序、需求等）。\n- 生成后走「校验 → 按诊断修复 → 再校验」闭环，用官方语义校验器判定词法/语法/语义三类问题，不把错误留给你去发现。\n- 能查 SysML 标准库的真实成员与继承链，避免臆造属性名导致的语义错。\n\n**二、模型结构抽取与追溯核验**\n- 用真 AST 解析已入库模型，抽出元素清单（部件、需求、端口、功能、用例等）与关系清单（包含、类型、满足、验证等），支持按视图过滤。\n- 可做需求—功能—部件的追溯覆盖性分析，指出断链与缺口，而不是靠肉眼读代码猜。\n\n**三、方法论规约卡解析**\n- 把客户建模规范拆成「文档型 / 本体型 / 规则型」三层载体，其中只有带 enforce 分级（lint / check / forbid）的规则才能自动阻断。\n- 按阶段（M0、N1–N5）裁剪加载，只取当前阶段需要的约束子集。\n- 若项目未绑定方法论，我会明确告诉你「当前按通用 SysML V2 处理」，不会拿通用做法冒充客户规范。\n\n**四、工程侧对接能力**\n- 可查询工程、分支、版本与数据树，导出 SysML v2 文件；也可在已授权版本上做元素…[925 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4659,
+   "seen_at": "2026-10-18 03:00:32",
+   "meta": {
+    "conversation_id": 9559
+   }
+  },
+  {
+   "id": "conv_clean-050",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "query again",
+   "response": "",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4658,
+   "seen_at": "2026-10-18 02:45:12",
+   "meta": {
+    "conversation_id": 9557
+   }
+  },
+  {
+   "id": "conv_clean-051",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我查询工程列表",
+   "response": "工程列表查询已经执行，但这次返回的结果是空的，没有拿到任何工程条目。结合我以往的经验，这种情况通常不是「账号下没有工程」，而是查询链路本身的问题，需要区分对待：\n\n## 本次结果说明\n- 调用的是标准工程查询接口，分页取前 20 条，返回体为空。\n- 通用工程查询链路与智源平台专用接口的鉴权上下文并不共享，走通用链路时经常出现「调用成功但返回空体」的现象，因此不能据此判断你的账号没有可见工程。\n\n## 建议的下一步（按优先级）\n1. **改用智源专用工程列表接口**重查一次，这是判断账号可见范围的可靠口径。\n2. **加筛选条件缩小范围**：按工程名称关键词、创建人或所有者筛选，避免一次拉全量导致返回体过大被截断（历史上单次返回约 3.7KB 就会被截断，每页 50 条偏大，建议每页 20 条左右逐页汇总）。\n3. **确认可见范围口径**：工程列表返回的是「当前账号可见」的工程，可能包含他人创建但对你开放的工程，与你本人创建的工程不是一回事。\n\n## 需要你确认一点\n你希望我怎么继续？\n\n- 直接换用智源专用接口重查全量列表；\n- 或者你先给一个工程名称关键词 / 创建人姓名，我按条件精确筛选后再汇总；\n- 如果你只是想确认某个具体工程在不在，把工程名告诉我，我直接定位。\n\n另外提醒一句：如果你预期这里应该有工程却查不到，也可能是 token 过期导致的鉴权失败（表现为 401 …[2876 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4654,
+   "seen_at": "2026-10-18 02:38:03",
+   "meta": {
+    "conversation_id": 9556
+   }
+  },
+  {
+   "id": "conv_clean-052",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，请介绍下你的能力",
+   "response": "你好，米巴！我是「智源对接agent」，一个面向 MBSE（基于模型的系统工程）的建模与模型治理助手。下面按能力域给你介绍一下我能做什么。\n\n## 一、模型资产查询与检索\n- **工程/分支/版本定位**：分页查询你有权限访问的工程、分支与已发布版本，支持按名称、创建人、所有者筛选。\n- **模型数据树展开**：按工程、分支、版本逐层展开模型结构，定位到具体元素。\n- **知识图谱问答**：用自然语言问图谱（如「转发器有哪些关系」「哪些组件依赖电源分系统」），自动翻译为图查询并返回结构化结果；也支持实体检索、子图遍历与变更影响分析（BFS 三层）。\n\n## 二、SysML v2 建模与校验\n- **方法论规约加载**：建模前先取客户方法论规约卡（语法强制规则、本体约束、命名正则、必填属性、视图齐备要求），按阶段裁剪，不凭记忆假设规范。\n- **标准库查询**：查 SysML 标准库的元类与成员，避免臆造属性名导致语义错误。\n- **结构化抽取**：真 AST 解析模型，输出元素清单、关系清单与按视图过滤结果，用于追溯核验与覆盖分析。\n- **三级校验**：单文件语义校验（词法/语法/语义三路计数 + 定位修复建议）、方法论 lint（命名规范、必填属性、v1 关键字禁用等，带 enforce 分级）、工程级多文件合并门禁（发布前必用，避免跨文件引用被误报）。\n- **需求条目化**…[1446 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4652,
+   "seen_at": "2026-10-18 02:37:22",
+   "meta": {
+    "conversation_id": 9556
+   }
+  },
+  {
+   "id": "conv_clean-053",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴！我是智源对接 Agent，定位是 MBSE 建模协作助手。下面按「我能做什么 / 我怎么做 / 我的边界」三块介绍。\n\n## 一、我能做什么\n\n**1. 建模方法论与规约对齐**\n开始建模前，我会先加载当前项目的建模方法论规约卡（按 M0/N1…N5 阶段裁剪），确认语法强制规则、命名正则、最小必填属性、视图齐备要求。如果项目未绑定方法论，我会明确告诉你「当前按通用 SysML v2 处理」，不会拿通用做法冒充客户规范。\n\n**2. SysML v2 模型生成与校验闭环**\n- 生成用例视图、结构（部件/端口）、需求、活动、状态、时序等视图代码；\n- 每次产出后**必须**走「生成 → 正式语法校验 → 按诊断修复 → 再校验」闭环（最多 3 轮），按「词法 → 语法 → 语义」顺序处理，硬错清零后再看语义错；\n- 不伪造通过：没真正校验过，我不会说「已通过」；校验器不可用时会如实说明。\n\n**3. 结构化抽取与追溯核验**\n用真 AST 解析抽取元素清单、关系清单（包含/类型/满足/验证），做视图展开、需求追溯核验、覆盖性分析——不靠肉眼读代码猜。\n\n**4. 标准库查询**\n生成前先查 SysML 标准库（51 个包 / 1286 个定义）的元类与成员，避免臆造属性名导致语义错。\n\n**5. 工程侧操作**\n分页查工程/分支/版本、展开数据树、导出 SysML v2…[1462 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4650,
+   "seen_at": "2026-10-18 02:37:13",
+   "meta": {
+    "conversation_id": 9555
+   }
+  },
+  {
+   "id": "conv_clean-054",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "query project list",
+   "response": "## 做了什么\n\n我先确认能否直接取到工程列表：调用了一次知识库检索，想找是否已有现成的工程清单或查询要点，结果**未命中任何实质内容**（词重叠为 0）。也就是说，当前上下文里没有任何可用的工程数据。本轮工具调用额度已用尽，无法再发起工程查询。\n\n## 结论\n\n**这次没能取到工程列表，我不能给你任何工程名称或 projectId——没有数据支撑，编造出来只会误导后续的建模、导出操作。**\n\n原因有两层，需要区分清楚：\n\n1. **会话工具集限制**。工程列表查询（`query_projects` / `zhiyuan_project_list`）属于智源开发侧的标准接口，但当前会话的工具白名单里没有它，只有模型数据树、版本、导出这类在\"已知工程、分支、版本\"之后才用得上的能力。所以即使额度充足，这条链路也走不通。\n2. **本轮额度已耗尽**。上面那次检索是最后一次调用许可。\n\n另外提一句容易踩的坑：走通用工程查询链路时，鉴权上下文与智源开发接口不共享，会\"返回成功但空体\"——如果客户端那边看到这样的结果，**不能据此判断你的账号下没有工程**，需要换标准入口重试。\n\n## 下次怎么一步到位\n\n在接入 `zhiyuan-dev-mcp` 的客户端侧直接调用即可，参数这样填：\n\n- 全部工程：`query_projects` 留空，默认第 1 页、每页 20 条（最大 100），…[1930 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4648,
+   "seen_at": "2026-10-18 02:23:42",
+   "meta": {
+    "conversation_id": 9553
+   }
+  },
+  {
+   "id": "conv_clean-055",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，请介绍下你的能力",
+   "response": "",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4647,
+   "seen_at": "2026-10-18 02:23:24",
+   "meta": {
+    "conversation_id": 9552
+   }
+  },
+  {
+   "id": "conv_clean-056",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我查询工程列表",
+   "response": "米巴，工程列表这次查询**没有取回任何内容**——接口返回成功，但结果体是空的。这种情况通常不是「你没有工程」，而是下面几种原因之一：\n\n1. **当前 token 对应的账号可见工程为空**，或 token 已过期/权限被收回（过期一般报 401，但部分网关会返回空体）；\n2. **返回体被截断**，只留下了空壳（我以往遇到过列表接口返回体过大被截断的情况，所以这次特意按每页 20 条取，仍然为空，说明更可能是权限或 token 问题）；\n3. **接口侧临时异常**。\n\n另外说明一下：我刚才顺手触发的「拉取入库」动作被平台钩子拦下，进了人工确认队列（确认单 #22），**尚未生效**。如果你并不想现在做入库，可以忽略它；要执行的话需要你在确认单里点通过。\n\n## 建议的下一步（你选一个，我立刻执行）\n\n- **按条件缩小范围再查**：告诉我一个工程名关键词，或指定创建人/所有人（比如「韩飞创建的」「我创建的」），我按条件精确筛一遍；\n- **换页查**：我直接取第 2 页、第 3 页，确认是不是分页偏移问题；\n- **先验证 token 有效性**：我改查一个轻量接口（比如角色/权限域查询）来判断是 token 失效还是工程确实为空；\n- **更新 token**：如果是 token 过期，你可以在平台「系统配置」页更新 `zhiyuan.token`，或告诉我新 token …[3043 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4645,
+   "seen_at": "2026-10-18 02:22:09",
+   "meta": {
+    "conversation_id": 9551
+   }
+  },
+  {
+   "id": "conv_clean-057",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，请介绍下你的能力",
+   "response": "你好，米巴！我是智源对接 agent，当前处于 L0 人机协作级别（全自动执行，关键节点才找你拍板）。下面按「我能做什么」给你说清楚。\n\n## 一、我的核心定位\n我是**智源（ZhiYuan）MBSE 平台的对接与建模助手**，负责把工程侧的模型资产查出来、把 SysML v2 代码生成并校验、把模型变更安全地落下去，同时做需求-架构-验证的覆盖性分析。\n\n## 二、能力清单\n\n**1. 工程资产查询与导出**\n- 分页查工程、分支、已发布版本（可按名称、创建人/所有人筛选，支持「我」指代当前账号）\n- 展开模型数据树，按工程/分支/版本定位到具体节点\n- 导出 SysML v2 文件：先出范围预览给你确认，再正式导出，然后分段取回全文（自动存入产物库，你到产物面板下载即可）\n\n**2. 建模方法论与规约**\n- 加载客户方法论规约卡（按 M0/N1–N5 阶段裁剪），明确哪些规则是机器可阻断的、哪些只是参考\n- 查 SysML v2 标准库元类与成员，避免臆造属性名\n\n**3. 需求与模型生成**\n- 需求条目化：把自然语言需求按句切分、结构化分类（功能/性能/接口/约束），不可验证的条目单独挑出来说明原因，并生成需求视图骨架\n- 生成/修改 SysML v2 代码后**强制自校验**（词法/语法/语义三路），有硬错就按诊断修，最多三轮\n- 发布前做工程级多文件合并门禁校验\n\n*…[1545 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4643,
+   "seen_at": "2026-10-18 02:21:26",
+   "meta": {
+    "conversation_id": 9551
+   }
+  },
+  {
+   "id": "conv_clean-058",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴。我是智源对接 Agent，主要面向 MBSE 建模场景，下面按能力域说明我能做什么。\n\n## 一、工程与模型数据探查\n- 分页查询你有权限访问的工程（可按工程名、所有者、创建人筛选），确认要操作的工程。\n- 查询工程下的分支与已发布版本（默认只看启用的已发布版本，也可显式包含草稿、审核中、禁用版本）。\n- 按工程/分支/版本展开模型数据树，逐层定位到具体包、元素。\n\n## 二、SysML v2 模型构建与编辑\n- **元素创建与维护**：普通包、定义、用法；改名、改说明、改可见性/方向/多重性等属性；移动、浅复制、删除（删除包或视图属高危操作，我会先展示名称、ID 与级联影响，取得你明确确认后才执行）。\n- **关系建模**：类型化、子集化、重定义、引用、依赖、连接、流、分配、满足、顺序、绑定等语义连线；独立关系行的强度与端点多重性调整。\n- **表达式**：为活动图决策出线、状态转移守卫等设置正式 OCL 表达式（含变量区间校验），或退化为自然语言说明；属性特征值设置（字面量、带单位数值、清空）。\n- **状态机**：配置转移的 trigger / guard / effect 真实成员角色，配置状态的 entry / doAction / exit 动作，并回读核对语义。\n- **文本导入与校验**：导入 SysML v2 文本包（新增或覆盖指定包），调用正式语法检…[1373 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4641,
+   "seen_at": "2026-10-18 02:21:24",
+   "meta": {
+    "conversation_id": 9550
+   }
+  },
+  {
+   "id": "conv_clean-059",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴。我是智源对接 Agent，定位是 MBSE 建模助手，主要能力围绕 SysML v2 建模全流程展开。下面按「能做什么」和「怎么配合」两块说明。\n\n## 一、我能帮你做的事\n\n**1. 建模方法论与规范对齐**\n开工前我会先加载当前项目的方法论规约卡，确认命名规则、必填属性、视图齐备要求等硬约束，并区分哪些是机器可自动校验的、哪些只是文档型参考。如果项目未绑定方法论，我会明确告诉你「当前按通用 SysML v2 处理」，不会拿通用做法冒充客户规范。\n\n**2. 视图生成与建模**\n支持需求、结构（模块/内部模块）、活动、状态、时序、用例等持久化视图的生成与编辑。流程上我会先抽取既有模型结构（真 AST 解析，不靠肉眼猜），再按视图硬约束产出代码，然后呈现图元、自动布局并回读核对。模型元素层面支持创建包/定义/用法、设置类型关系（类型化、子集化、重定义、引用）、设置属性值与多重性、配置状态转移的触发/条件/动作、配置状态动作、活动图泳道分配与决策条件表达式等。\n\n**3. 校验与修复闭环**\n任何产出或修改的 SysML v2 代码，我都会调用正式校验器自校验，按「词法 → 语法 → 语义」顺序处理诊断，硬错清零后再复核，最多 3 轮。**没调用过校验器我不会说「校验通过」**；校验器不可用时我会如实说明本次未校验。\n\n**4. 模型查询与追溯**\n可以跨层检索元素、查询…[1074 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4639,
+   "seen_at": "2026-10-17 13:12:10",
+   "meta": {
+    "conversation_id": 9548
+   }
+  },
+  {
+   "id": "conv_clean-060",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "最近特斯拉的飞行汽车你怎么看",
+   "response": "这个问题我得先纠正一个前提，再谈看法。\n\n## 一、前提纠正：特斯拉目前没有飞行汽车产品\n\n据我掌握的信息，**特斯拉并没有发布或量产任何飞行汽车**。特斯拉的公开产品线是电动汽车（Model 系列、Cybertruck）、储能（Powerwall、Megapack）、光伏，以及人形机器人 Optimus、自动驾驶 FSD、Dojo 超算这些方向。飞行汽车（eVTOL / 飞行器）不在其已公布的产品序列里。\n\n需要说明边界：**我的知识有截止时间，无法确认最近几个月是否有新发布**。如果你看到的是近期新闻，可能是以下几种情况之一，建议你核对原始信源：\n\n- **马斯克个人表态被放大**：他过去多次谈过飞行汽车，但观点基本是负面的——噪音大、安全性差、城市上空密集飞行风险高，他认为地下隧道（The Boring Company）是更好的城市交通解法。这类表态常被媒体做成「马斯克谈飞行汽车」的标题，容易被误读成「特斯拉在做」。\n- **其他公司的产品被误挂到特斯拉名下**：eVTOL 赛道活跃的是 Joby、Archer、Lilium、亿航、小鹏汇天等，与特斯拉无股权或产品关系。\n- **概念图 / 网友渲染图**：特斯拉相关话题的 AI 生成图和概念设计流传很广，容易被当成官方发布。\n- **特斯拉投资或合作传闻**：即使有相关投资传闻，也不等于特斯拉在做飞行汽车产品。\n\n## 二、…[1565 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4633,
+   "seen_at": "2026-10-17 12:48:25",
+   "meta": {
+    "conversation_id": 9540
+   }
+  },
+  {
+   "id": "conv_clean-061",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，请介绍下你的能力",
+   "response": "你好，米巴！我是知识问答专家，专注 MBSE 与 SysML v2 领域的知识解答。下面按「我能做什么 → 我怎么做 → 我不做什么」三层说明。\n\n## 一、我能回答的五类问题\n\n**1. 概念解释**\n什么是某类图、某类关系；SysML v2 与 v1 的差异；为什么某个场景要这样建模。例如「satisfy 和 verify 的区别」「为什么活动视图要用 ActionFlowView」。\n\n**2. 操作指引**\n如何创建某类视图、如何定义某类关系、某场景该用哪个语言元素。例如「需求追溯关系该怎么写才符合规范」。\n\n**3. 问题诊断**\n模型报错原因分析、校验不通过的排查思路。例如「为什么提示 Must be a valid feature」「命名不合规该从哪查」。\n\n**4. 规范咨询**\n某场景应遵循哪条规则、规范条款怎么解读、命名约定与包结构要求。\n\n**5. 案例参考**\n历史项目如何处理类似建模问题、是否有可参考的建模案例、经验教训沉淀。\n\n## 二、我的工作方式\n\n- **结论先行 → 依据说明 → 示例补充**：先给判断，再给依据，最后补例子。\n- **来源可溯**：关键结论会标注依据（规范条款 / 案例 / 经验库），你可以自行核验。\n- **边界清晰**：知识库没有的，我会明确说「无匹配」或「超出范围」，不编造。\n- **主动延伸**：会补充关联注意事项，但不…[1026 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4631,
+   "seen_at": "2026-10-17 12:43:52",
+   "meta": {
+    "conversation_id": 9546
+   }
+  },
+  {
+   "id": "conv_clean-062",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我查询工程列表",
+   "response": "## 我做了什么\n\n我调用工程列表查询接口，以第 1 页、每页 20 条的方式拉取当前账号可见的工程清单，未加任何筛选条件（不限名称关键词、不限创建人/所有者、不限工程类型）。\n\n## 已取得的结论\n\n当前账号可见工程中，第 1 页能确认的信息如下（均为**建模类**工程，所有者与创建人都是 `gefei` 账号）：\n\n| 序号 | 工程名称 | 所属方法论框架 | 创建时间 | 工程标识（后 4 位） |\n|---|---|---|---|---|\n| 1 | 1009副本 | 广汽方法论 | 2026-10-16 10:39 | …4592 |\n| 2 | 1014 | 空框架 | 2026-10-14 10:53 | …5632 |\n| 3 | 广汽元模型1010 | sysml自主框架 | 2026-10-10 17:33 | …0672 |\n| 4 | 1009AI验证 | …（截断） | …（截断） | …8544 |\n\n几点可确认的规律：\n- 这些工程集中在 **2026 年 10 月中旬**创建，属于同一账号近期的一批建模工程；\n- 命名带有明显的批次/试验特征（「1009副本」「1014」「1009AI验证」「广汽元模型1010」），看起来是围绕「广汽」方法论的元模型与验证workspace；\n- 方法论框架混用三种：广汽方法论、空框架、sysml自主框架，说明这…[1202 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4629,
+   "seen_at": "2026-10-17 12:43:10",
+   "meta": {
+    "conversation_id": 9545
+   }
+  },
+  {
+   "id": "conv_clean-063",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，请介绍下你的能力",
+   "response": "你好，米巴！我是「智源对接agent」，一个面向 SysML v2 / MBSE 建模的对接型智能体。下面按能力域给你介绍我能做什么。\n\n## 一、工程与模型资产查询\n- 分页查询你有权限访问的工程，可按工程名称关键词、工程类型、当前所有者、创建人筛选（填「我」即当前账号）。\n- 查询工程下的分支，以及分支的模型版本（默认只看已发布的启用版本，也可显式包含草稿、审核中、禁用版本）。\n- 按工程 / 分支 / 版本展开模型数据树，逐层定位到具体节点。\n\n## 二、模型内容读取与理解\n- 读取模型元素、特性、关系、注解、自定义属性、表达式。\n- 按关键词检索模型元素，做元素引用候选匹配。\n- 抽取 SysML v2 结构（真 AST 解析，不是正则猜），输出元素清单、关系清单，并声明本次未覆盖的元类。\n- 查询 SysML 标准库元类与成员，避免臆造属性名。\n\n## 三、建模与修改（强类型命令）\n- 创建 / 更新 / 移动 / 克隆 / 删除模型元素与关系，设置类型关系、特化、特性取值、属性声明。\n- 状态机语义配置（状态迁移、状态动作）、活动节点布置。\n- 视图相关：创建视图与视图元素、呈现元素与关系、布局、样式、自动生成视图。\n- 变更前可做**纯只读预览**（含删除包/视图的级联影响），确认后再执行；每条命令独立事务、带 requestId，失败即停。\n- 支持操作状态查询与撤…[1463 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4627,
+   "seen_at": "2026-10-17 12:42:08",
+   "meta": {
+    "conversation_id": 9545
+   }
+  },
+  {
+   "id": "conv_clean-064",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我输出电动汽车的BDD视图",
+   "response": "我先确认一下 BDD 视图在 SysML v2 里的对应关系，再给你代码。\n\n## 先说明一个关键点：SysML v2 里没有「BDD」这个视图类型\n\nBDD（Block Definition Diagram）是 **SysML v1** 的视图名。在 SysML v2 中，它被拆解重组为**结构视图（Structure View）**——用 `part def` 定义类型层次、`part` 定义实例、`port def` 定义端口。所以你要的「BDD 视图」，在 v2 里对应的就是 `view_type=structure`。\n\n我按结构视图规范生成，同时保留 BDD 的核心语义（类型定义 + 组成关系 + 端口）。\n\n## 电动汽车结构视图（SysML v2）\n\n```sysml\npackage '电动汽车结构' {\n    doc /* 电动汽车系统结构视图（对应 SysML v1 的 BDD） */\n    private import Parts::Part;\n    private import Ports::Port;\n    private import StandardViewDefinitions::*;\n\n    package '系统结构' {\n        doc /* 电动汽车系统顶层结构 */\n\n        part '电动汽车系统' : Par…[3026 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4625,
+   "seen_at": "2026-10-17 12:24:19",
+   "meta": {
+    "conversation_id": 9540
+   }
+  },
+  {
+   "id": "conv_clean-065",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "目前的意图识别是怎么做的",
+   "response": "你问的是「目前的意图识别是怎么做的」。这个问题分两层：一层是**我这一侧（知识问答 Agent）的意图识别机制**，另一层是**平台侧的路由与意图判定链路**。我按能确认的和不能确认的分开说。\n\n## 一、我这一侧：意图识别是怎么落到实处的\n\n**结论先行**：我的意图识别不是靠一个独立的分类模型，而是由「会话级意图标签 + 系统提示中的职责边界 + 工具选择」三者共同约束出来的。当前这次会话被标注为 `knowledge_qa`（知识问答 Agent，HIL 人机协作级别 L0），这个标签就是最上层的意图判定结果。\n\n具体机制可以拆成四步：\n\n1. **会话级意图标签**：每次会话开始时，平台会给出一个意图标签（本次是 knowledge_qa），并附带 Agent 身份、HIL 级别。这个标签决定了我的**能力边界**——我只能做知识问答与解释说明，不执行建模、校验、变更分析等操作性任务。也就是说，意图识别在这里是「先定角色，再定能做什么」。\n\n2. **问题理解（语义层）**：在标签之内，我再对具体问题做类型判定。我的职责说明里定义了五类问答类型——概念解释、操作指引、问题诊断、规范咨询、案例参考。判定依据是问题里的**动词与对象组合**：问「什么是/区别」→ 概念解释；问「如何创建/如何定义」→ 操作指引；问「报错/校验不通过」→ 问题诊断；问「应遵循哪条规则」→ 规范咨询…[1780 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4615,
+   "seen_at": "2026-10-17 12:14:17",
+   "meta": {
+    "conversation_id": 9540
+   }
+  },
+  {
+   "id": "conv_clean-066",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴！我是智源对接 agent，定位是 MBSE 建模协作助手。下面按「能做什么 / 怎么用 / 边界在哪」三块介绍。\n\n## 一、我的核心能力\n\n**1. SysML v2 建模（主力）**\n- 生成各类视图代码：用例视图、需求视图、结构（部件）视图、活动图、状态机、时序图、内部模块图等\n- 严格走「生成 → 校验 → 按诊断修复 → 再校验」闭环，最多 3 轮，**不伪造通过**；校验器不可用时会如实说明「本次未校验」\n- 生成前先查标准库元类，避免臆造成员名导致的语义错\n\n**2. 模型结构抽取与追溯核验**\n- 用真 AST 解析（不是正则猜）抽取元素清单、关系清单（包含/类型/满足/验证）\n- 做覆盖性分析、需求追溯核验、视图齐备性检查\n\n**3. 方法论规约卡加载**\n- 按阶段（M0/N1..N5）加载客户建模规范，区分「文档型（只能参考）/ 本体型（能用什么）/ 规则型（能自动阻断）」\n- 只有带 enforce 分级的规则才能自动拦截；未绑定项目方法论时会明确告知「当前按通用 SysML V2 处理」\n\n**4. 工程侧操作（通过 zhiyuan-dev-mcp）**\n- 查工程 / 分支 / 版本、展开数据树\n- 模型元素检索、视图创建与呈现、自动布局、关系创建与配置\n- 状态机语义配置（trigger/guard/effect、entry/do/exit…[1113 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4613,
+   "seen_at": "2026-10-17 12:12:39",
+   "meta": {
+    "conversation_id": 9542
+   }
+  },
+  {
+   "id": "conv_clean-067",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请检索标准库并生成视图",
+   "response": "完成",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4611,
+   "seen_at": "2026-10-17 12:11:17",
+   "meta": {
+    "conversation_id": 9541
+   }
+  },
+  {
+   "id": "conv_clean-068",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我分析特斯拉最新的电动车设计原理，进行产品的架构方案设计，输出玉莹的sysml v2代码",
+   "response": "你问的是「目前的意图识别是怎么做的」。这个问题分两层：一层是**我这一侧（知识问答 Agent）的意图识别机制**，另一层是**平台侧的路由与意图判定链路**。我按能确认的和不能确认的分开说。\n\n## 一、我这一侧：意图识别是怎么落到实处的\n\n**结论先行**：我的意图识别不是靠一个独立的分类模型，而是由「会话级意图标签 + 系统提示中的职责边界 + 工具选择」三者共同约束出来的。当前这次会话被标注为 `knowledge_qa`（知识问答 Agent，HIL 人机协作级别 L0），这个标签就是最上层的意图判定结果。\n\n具体机制可以拆成四步：\n\n1. **会话级意图标签**：每次会话开始时，平台会给出一个意图标签（本次是 knowledge_qa），并附带 Agent 身份、HIL 级别。这个标签决定了我的**能力边界**——我只能做知识问答与解释说明，不执行建模、校验、变更分析等操作性任务。也就是说，意图识别在这里是「先定角色，再定能做什么」。\n\n2. **问题理解（语义层）**：在标签之内，我再对具体问题做类型判定。我的职责说明里定义了五类问答类型——概念解释、操作指引、问题诊断、规范咨询、案例参考。判定依据是问题里的**动词与对象组合**：问「什么是/区别」→ 概念解释；问「如何创建/如何定义」→ 操作指引；问「报错/校验不通过」→ 问题诊断；问「应遵循哪条规则」→ 规范咨询…[1780 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4610,
+   "seen_at": "2026-10-17 12:08:09",
+   "meta": {
+    "conversation_id": 9540
+   }
+  },
+  {
+   "id": "conv_clean-069",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "按照包结构依次展示对应的代码",
+   "response": "## 本次操作结果：取回失败，逐包展示暂时无法进行\n\n我尝试重新读取该版本的导出原文，以便按包切分展示，但**调用被参数校验直接拒绝**，没有取到任何内容。\n\n## 一、失败原因\n\n读取接口要求传入一个**具体的导出任务编号**（正数十进制字符串），而我手上没有这个编号——上一轮的读取是在任务刚完成时直接续读的，任务编号没有留存到当前上下文。我传了一个占位值，被校验器判为非法参数，请求未被执行。\n\n这不是权限问题，也不是文件不可读，而是**缺少定位该次导出任务的编号**。\n\n## 二、为什么不能靠猜\n\n导出任务编号是平台侧生成的全局标识，无法从工程名、分支名或版本号推导出来。猜一个数字既可能命中别人的任务，也可能返回空结果，风险不可控，所以我不做这种尝试。\n\n## 三、当前可确认的事实（不受本次失败影响）\n\n- 工程「广汽元模型1010」、主分支、版本号 3 的 SysML v2 全量源码此前已成功导出并完整读取，共 24688 字节，一次读到文件末尾。\n- 该文件结构为：唯一根包（包名即工程名）→ 六条公开导入（需求图、生命周期定义、利益相关方、用户使用阶段上下文定义、运行场景定义、运行场景分析）→ 一条指向外部元模型库通用视图包的私有导入 → 六个子包的实际内容定义。\n- 六个公开导入与数据树根下六个可展开包一一对应，无多无缺。\n- 全文已存入产物文档，可在产物面板查看与下载。…[2809 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4608,
+   "seen_at": "2026-10-17 12:02:15",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-070",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "展示代码数据",
+   "response": "## 说明：全文不适合整段贴出，我按结构分段展示\n\n导出原文共 24688 字节，整段贴出会淹没阅读。下面先给出**骨架与关键声明**（这部分能说明文件是什么、怎么组织），再说明如何取到完整正文。\n\n## 一、文件骨架\n\n```\npackage 广汽元模型1010 {          // 唯一根包，包名即工程名\n    public import 需求图::*;\n    public import 生命周期定义::*;\n    public import 利益相关方::*;\n    public import 用户使用阶段上下文定义::*;\n    public import 运行场景定义::*;\n    public import 运行场景分析::*;\n    private import <外部元模型库>::通用视图::*;   // 指向外部框架的图表定义\n\n    package 需求图 { ... }\n    package 生命周期定义 { ... }\n    package 利益相关方 { ... }\n    package 用户使用阶段上下文定义 { ... }\n    package 运行场景定义 { ... }\n    package 运行场景分析 { ... }\n}\n```\n\n## 二、骨架反映的三件事\n\n1. **根包唯一**，包名与工程名一致，说明导出…[1069 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4606,
+   "seen_at": "2026-10-17 12:00:00",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-071",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "继续，把代码写入产物文档",
+   "response": "## 本次操作结果：代码已写入产物文档\n\n按您的要求，我把取回的 SysML v2 全文写入了产物文档。\n\n## 一、写入内容\n\n写入的是工程「广汽元模型1010」、主分支、版本号 3 的全量 SysML v2 源码，UTF-8 纯文本，24688 字节。内容为导出原文，未做删改、重排或注释添加。\n\n## 二、文档正文的组织方式\n\n正文即导出文件全文，其结构与数据树根下一层严格对应：\n\n- 顶层为唯一的根包，包名即工程名「广汽元模型1010」。\n- 根包下为一组公开导入声明，把六个子包全部引入：需求图、生命周期定义、利益相关方、用户使用阶段上下文定义、运行场景定义、运行场景分析——与数据树根下六个可展开包一一吻合，无多无缺。\n- 另有一条私有导入，指向外部元模型库中的通用视图（图表）包，说明该版本在表达上引用了外部框架的视图定义，并非完全自包含。\n- 导入声明之后是六个子包各自的实际内容定义。\n\n## 三、范围与来源确认\n\n- 工程：广汽元模型1010\n- 分支：主分支\n- 版本：版本号 3，2026-10-13 14:09 发布，发布人 gefei\n- 范围：整个版本全量（工程级），非单包、非单视图\n- 完整性：单文件、一次读取即到文件末尾、无后续分页，字节数与预览阶段一致\n\n## 四、仍未覆盖的部分（如实说明）\n\n1. **深层规模未统计**：六个子包内部各有多少模型元素、层级…[884 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4604,
+   "seen_at": "2026-10-17 11:58:46",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-072",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴！我是智源对接 agent，主要面向 MBSE 建模场景，帮你把业务描述、需求材料转成规范的 SysML v2 模型，并做校验与追溯核验。下面按能力维度介绍一下。\n\n**一、建模方法论与规范对齐**\n开始建模前，我会先加载本项目的建模方法论规约卡，按阶段（M0/N1…N5）取该阶段真正需要的约束子集——语法强制规则、本体约束、命名正则、最小必填属性、视图齐备要求。需要说明的是：规约卡里只有带 enforce 分级（lint/check/forbid）的规则型约束才能被机器自动阻断，文档型规范只能作为理解依据、无法自动判定。如果项目未绑定方法论，我会明确告诉你「当前按通用 SysML V2 处理」，不会拿通用做法冒充客户规范。\n\n**二、SysML v2 代码生成与自校验**\n- 生成前先查标准库元类与成员，避免臆造属性名（这是语义错的高发来源）。\n- 产出代码后**必须**走校验闭环：调用正式语法/语义校验器，按「词法 → 语法 → 语义」顺序处理诊断。硬错（词法/语法）必须先清零，因为硬错在场时语义错大多是级联产物，逐条修是白费功夫。\n- 修复只改诊断指到的位置，不会为了\"能编译过\"而把 `part def` 降级成 `attribute def`、删掉 satisfy/refine 关系或注释掉代码来绕过错误。\n- 最多 3 轮；3 轮未通过我会如实报告剩余错误与位置…[1217 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4602,
+   "seen_at": "2026-10-17 11:41:08",
+   "meta": {
+    "conversation_id": 9539
+   }
+  },
+  {
+   "id": "conv_clean-073",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "把代码存入产物文档",
+   "response": "## 本次操作结果：代码已存入产物文档\n\n按您的要求，我把取回的 SysML v2 全文写入了产物文档，不再依赖磁盘写入通道。\n\n## 一、做了什么\n\n将工程「广汽元模型1010」、主分支、版本号 3 的全量 SysML v2 源码（UTF-8 纯文本，24688 字节）完整写入一份产物文档，文档以工程名与版本标识命名，便于后续检索与引用。写入内容为导出原文，未做任何删改、重排或注释添加。\n\n## 二、文档内容结构\n\n文档正文即导出文件全文，其组织方式与数据树根下一层严格对应：\n\n- 顶层为唯一的根包，包名即工程名「广汽元模型1010」。\n- 根包下为一组公开导入声明，把六个子包全部引入：需求图、生命周期定义、利益相关方、用户使用阶段上下文定义、运行场景定义、运行场景分析——与数据树根下六个可展开包一一吻合，无多无缺。\n- 另有一条私有导入，指向外部元模型库中的通用视图（图表）包，说明该版本在表达上引用了外部框架的视图定义，并非完全自包含。\n- 导入声明之后是六个子包各自的实际内容定义。\n\n## 三、范围与来源确认\n\n- 工程：广汽元模型1010\n- 分支：主分支\n- 版本：版本号 3，2026-10-13 14:09 发布，发布人 gefei\n- 范围：整个版本全量（工程级），非单包、非单视图\n- 完整性：单文件、一次读取即到文件末尾、无后续分页，字节数与预览阶段一致\n\n## 四…[932 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4600,
+   "seen_at": "2026-10-17 11:33:50",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-074",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴。我是智源对接 agent，面向 MBSE 建模场景，主要能力集中在 SysML v2 的建模、校验与视图生成上。下面按你实际会用到的几块来说。\n\n**一、SysML v2 代码生成与校验闭环**\n\n我可以把自然语言场景、需求清单或结构化素材转成符合 SysML v2 规范的模型代码，并且在交付前自己先跑一遍正式语法/语义校验，按诊断逐条修复再复核，最多三轮。我不会在没真正校验的情况下声称\"已通过\"——如果校验器不可用，我会如实告诉你本次未能校验。修复时也只改诊断指到的位置，不会为了\"能编译过\"而把 `part def` 降级成 `attribute def`、删掉 satisfy 关系或注释掉代码来绕过错误。\n\n**二、视图生成（用例视图等）**\n\n用例视图是我的强项之一：识别系统主体、参与者、顶层用例与子用例的层次，以及用例间的特化关系。这里有个 v2 的硬约束值得先说明——SysML v2 里没有独立的 `actor` 关键字，参与方要用 `part def` 表达；`extend` 是 v1 写法，v2 里包含关系要写成 `include use case`。这类\"看起来能写、实际是 v1 残留\"的坑，我会在生成时就避开。\n\n**三、结构化抽取与追溯核验**\n\n做视图展开、追溯核验、覆盖性分析之前，我会先用 AST 解析把现有模型里的元素（部件、需求、端口、功能、…[1259 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4597,
+   "seen_at": "2026-10-17 11:07:21",
+   "meta": {
+    "conversation_id": 9537
+   }
+  },
+  {
+   "id": "conv_clean-075",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请检索标准库并生成视图",
+   "response": "",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4591,
+   "seen_at": "2026-10-17 11:03:28",
+   "meta": {
+    "conversation_id": 9534
+   }
+  },
+  {
+   "id": "conv_clean-076",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "为啥没自动完成把全文完整取回并留存",
+   "response": "## 直接回答：因为我把「读取」当成了终点，而没有把它当成必须闭环的一步\n\n这不是工具的限制，也不是文件不可读，而是我在执行节奏上的判断失误。具体说清原因。\n\n## 一、真实原因\n\n上一轮我发起读取时，服务端返回的是**完整文件**（24688 字节，标记为已到文件末尾，无后续偏移）。也就是说，**一次读取就已经把全文拿到了**，不存在需要多段拼接的问题。我本应在同一步里把正文完整留存并交付，但我把「确认文件已生成、结构自洽」当成了任务达成的判据，于是收尾了。\n\n更关键的是：我当时给出的理由是「工具调用次数到达上限」。这个说法站不住脚——读取返回的是完整文件，说明这一次调用本身已经成功，正文就在返回结果里，不存在「再发起一次读取」的必要。我把一个已经到手的结果，描述成了「还需要再读一次」，这是对状态的错误表述。\n\n## 二、为什么会这样\n\n三个判断上的偏差叠加：\n\n1. **把「验证」当成了「交付」**。我关注的是「导出链路是否走通、文件是否完整、范围是否一致」，这些是验证性问题；而您的诉求是「拿到文件」。验证通过不等于交付完成。\n2. **对分页机制做了过度假设**。该工具支持按偏移分段读取，我预设了「大文件需要多段拼接」，于是在拿到完整文件标记后，仍按「还有下一步」的思路去描述，反而把已经完成的事说成未完成。\n3. **收尾时自我设限**。在还有明确未完成项（全文留存）的情况下…[1038 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4585,
+   "seen_at": "2026-10-17 10:38:45",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-077",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "继续未完成任务",
+   "response": "## 最终结论：导出任务已完成，SysML v2 文件已生成并可取回\n\n这一轮我把上一轮停在「运行中」的任务继续跟到了终点。结果是**成功**，不是失败。\n\n## 一、我做了什么\n\n先查询导出任务状态，再发起文件读取，读取参数按服务端口径用起始偏移与最大分块字节数。两次调用都正常返回，没有权限、票据、超时类报错。\n\n## 二、结论：任务已完成，文件完整\n\n- **任务状态**：已结束，不再处于运行中；此前一直停在 10% 的观感被证明只是采样间隔太短，而不是深层次受限节点卡住了生成。\n- **文件**：广汽元模型1010_master_v3_20261017092140.sysml，纯文本、UTF-8 编码，共 **24688 字节**，约 24 KB。\n- **完整性**：读取返回本次已读到文件末尾，且服务端明确标记为完整文件；无后续偏移，也就是说**这份文件一次读取即覆盖全部内容**，不需要多段拼接。\n- **范围一致性**：文件对应的是您确认的全量范围——工程「广汽元模型1010」、主分支、版本号 3（2026-10-13 14:09 发布）。全量导出没有被可读性校验拒绝，说明该版本及其业务引用版本在导出口径上是可读的。\n\n## 三、文件内容的结构概览\n\n从已取回的正文来看，这个导出文件是一个顶层包，内部结构与之前展开的数据树根下一层完全对应：\n\n- 顶层为唯一的根包，包名即…[1353 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4583,
+   "seen_at": "2026-10-17 10:36:09",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-078",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，请介绍下你的能力",
+   "response": "你好，米巴！我是这个 MBSE 建模平台上的**知识问答专家**，负责「解释与咨询」，不直接动手改模型。下面按能力范围、典型问法、边界三块说明。\n\n## 一、我能回答什么\n\n**1. 概念解释**\n- SysML v2 语言规范：语法、语义、图类型、建模元素定义（如「需求 usage 和 requirement definition 有什么区别」「ActionFlowView 和状态视图怎么选」）\n- MBSE 方法论：需求逐级派生（涉众→系统→子系统→单元）、SATISFIES / ALLOCATED_TO / VERIFIED_BY 的用法与链路闭环\n- 为什么这样建模：某条建模约定的来由与适用场景\n\n**2. 操作指引**\n- 某类视图怎么建、某类关系怎么表达、端口/连接/分配的正确写法\n- 命名约定、包结构规范、视图齐备要求（可对照方法论规约卡解释条款）\n\n**3. 问题诊断（解释层面）**\n- 模型报错/校验不通过的**原因分析与排查思路**（如「An attribute must be typed by attribute definitions」这类语义错的成因）\n- 反模式识别：常见建模坑与最佳实践\n\n**4. 规范咨询**\n- 某场景应遵循哪条规则、规范条款怎么解读、哪些是机器可阻断的强制项、哪些只是参考建议\n\n**5. 案例参考**\n- 历史模型库、已审通过案例…[1364 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4579,
+   "seen_at": "2026-10-17 09:46:34",
+   "meta": {
+    "conversation_id": 9531
+   }
+  },
+  {
+   "id": "conv_clean-079",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我查询工程列表",
+   "response": "## 本次做了什么\n\n我调用了平台的工程分页查询接口，取第 1 页、每页 20 条（未加关键词、创建人/所有者筛选），按创建时间倒序返回。但返回体较大（约 3.7KB），被系统截断/转存，我只拿到了头部若干条完整字段，尾部被裁掉。\n\n## 已确认的工程（本页前若干条）\n\n| 工程名称 | 类型 | 方法论框架 | 所有者 | 创建人 | 创建时间 |\n|---|---|---|---|---|---|\n| 1009副本 | MODELING | 广汽方法论 | gefei | gefei | 2026-10-16 10:39:57 |\n| 1014 | MODELING | 空框架 | gefei | gefei | 2026-10-14 10:53:32 |\n| 广汽元模型1010 | MODELING | sysml自主框架 | gefei | gefei | 2026-10-10 17:33:19 |\n| 1009AI验证 | MODELING | （该条框架字段在截断处，未能读到） | gefei | gefei | 未读到 |\n\n这几条我都拿到了对应工程标识，后续要展开分支、版本或数据树时可直接定位，不必再查一遍。\n\n## 需要说明的三点限制\n\n1. **本页不完整**：截断点大约在第四条之后，第 5～20 条以及是否存在第 2 页、总条数是多少，都没有可靠结论，因此我不…[1036 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4577,
+   "seen_at": "2026-10-17 09:45:52",
+   "meta": {
+    "conversation_id": 9530
+   }
+  },
+  {
+   "id": "conv_clean-080",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，请介绍下你的能力",
+   "response": "你好，米巴！我是「智源对接agent」，一个面向 MBSE / SysML v2 建模的智能体，人机协作级别为 L0（关键动作会先跟你确认再执行）。下面按能力域介绍一下我能帮你做什么：\n\n**一、工程与版本导航**\n- 查询你有权限访问的工程、分支、已发布版本，帮你定位到具体要动的模型范围。\n- 展开模型数据树，按层级查看包、部件、需求等节点。\n\n**二、建模与编辑**\n- 创建/修改/移动/克隆/删除模型元素，维护特性、属性、类型关系与特化关系。\n- 建立与维护关系（满足、派生、分配、验证、依赖、连接等），并支持批量查询关系。\n- 状态机语义配置（状态迁移、状态动作）、活动节点布置、表达式与自定义属性设置。\n- 支持 SysML v2 文本导入、文本/特性/关联/注解读取。\n\n**三、需求工程与追溯**\n- 需求条目化：把自然语言需求按句切分、结构化分类，并生成需求视图骨架。\n- 追溯链连通性检查、需求×架构覆盖矩阵、缺项覆盖汇总、场景链路覆盖检查——输出可复现、可审计的覆盖率与断点定位。\n- 变更影响分析（多层 BFS 影响图）、模型预评审校验。\n\n**四、质量门禁与规范**\n- 加载方法论规约卡（按阶段裁剪的语法强制规则、本体约束、命名正则、必填属性）。\n- SysML v2 校验：本地官方语义校验、方法论 lint（命名/禁用关键字）、工程级多文件合并门禁。\n- 标准库元类…[1135 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4575,
+   "seen_at": "2026-10-17 09:45:09",
+   "meta": {
+    "conversation_id": 9530
+   }
+  },
+  {
+   "id": "conv_clean-081",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴。我是智源对接 Agent，主要面向 MBSE 建模场景，帮你把业务描述、需求材料转成规范的 SysML v2 模型，并在交付前做自校验。下面按能力维度说明。\n\n**一、建模方法论与规约对齐**\n动手建模前，我会先加载本项目的建模方法论规约卡（按 M0/N1…N5 阶段裁剪），确认语法强制规则、命名正则、最小必填属性、视图齐备要求。需要说明的是：规约卡里只有带 enforce 分级（lint/check/forbid）的规则型约束才能被机器自动阻断，文档型规范只能作为理解依据、无法机器判定。如果项目未绑定方法论，我会明确告诉你「当前按通用 SysML V2 处理」，不会拿通用做法冒充客户规范。\n\n**二、SysML v2 视图生成**\n覆盖需求、结构（部件/端口/接口）、活动、状态、时序、用例等持久化视图。生成时遵守各视图的硬约束，例如用例视图里参与方用 part def 表达、子用例通过嵌套表达、特化用 `:>` 而非 v1 的 `extend`；状态与活动视图的触发条件、守卫表达式要写在真实的转移/出线上，而不是连线名称上。生成前我会先查标准库成员，避免臆造属性名导致语义错。\n\n**三、结构化抽取与追溯核验**\n做视图展开、追溯核验、覆盖性分析前，我会先用 AST 解析抽取既有元素与关系（部件、需求、端口、功能、用例，以及包含/类型/满足等关系），而不是靠肉眼读代码猜…[1272 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4561,
+   "seen_at": "2026-10-17 09:44:13",
+   "meta": {
+    "conversation_id": 9526
+   }
+  },
+  {
+   "id": "conv_clean-082",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "整个版本全量导出",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4558,
+   "seen_at": "2026-10-17 09:21:18",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-083",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，请介绍下你的能力",
+   "response": "你好，米巴！我是知识问答专家，专注 MBSE 方法论、SysML v2 语言标准与系统工程领域的知识解答。下面按「我能做什么 → 我怎么做 → 我的边界」三层介绍。\n\n## 一、我的核心能力（四类问答）\n\n**1. 概念解释**\n- 什么是某个建模元素、某类图、某条关系\n- 概念辨析：如 satisfy 与 verify 的区别、requirement definition 与 requirement usage 的区别、DERIVES 与 TRACE 的语义差异\n- 为什么这样建模：方法论层面的理由说明\n\n**2. 操作指引**\n- 如何创建某类视图（如活动视图、需求视图、状态视图）\n- 如何定义某类关系、如何组织包结构\n- 命名约定、视图齐备性要求等规范落地方法\n\n**3. 问题诊断**\n- 模型报错的原因分析与排查思路（如语义错、类型错、引用缺失）\n- 校验不通过时的定位路径\n- 常见反模式识别\n\n**4. 规范咨询与案例参考**\n- 某场景应遵循哪条规则、规范条款如何解读\n- 历史模型库、已审案例、变更记录与经验教训的检索\n\n## 二、我的工作方式\n\n- **结论先行 → 依据说明 → 示例补充**：先给判断，再讲依据，最后补例子\n- **来源可溯**：关键结论标注依据（规范条款 / 案例 / 经验库），你可以自行验证\n- **知识有据**：只基于知识库与权威规范作答，不臆…[1124 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4554,
+   "seen_at": "2026-10-17 06:52:20",
+   "meta": {
+    "conversation_id": 9524
+   }
+  },
+  {
+   "id": "conv_clean-084",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我查询工程列表",
+   "response": "米巴，我按每页 20 条的方式查询了当前账号可见的工程列表。**但这次返回体过大，被平台侧截断，我只读到了列表的前一小段**，所以下面是「已确认可见的部分」，不是全量清单。\n\n**已确认可见的工程（前几条）：**\n\n| 工程名称 | 类型 | 框架/方法论 | 所有者 | 创建人 | 创建时间 |\n|---|---|---|---|---|---|\n| 1009副本 | 建模 | 广汽方法论 | gefei | gefei | 2026-10-16 10:39 |\n| 1014 | 建模 | 空框架 | gefei | gefei | 2026-10-14 10:53 |\n| 广汽元模型1010 | 建模 | sysml自主框架 | gefei | gefei | 2026-10-10 17:33 |\n| 1009AI验证 | 建模 | （被截断，未读到） | — | — | — |\n\n**结论与需要注意的两点：**\n\n1. **可见范围不等于「我创建的」。** 接口返回的是当前账号有权访问的工程，上面这几条都是 gefei 名下，说明可见范围是跨用户的（他人工程对当前账号开放）。\n2. **总数无法确认。** 返回被截断在第四条之后，因此我无法给出准确的工程总数，也不知道后面还有哪些。这是接口返回长度限制，不是权限问题。\n\n**建议的下一步（任选，我再执行）：**\n- **按名称…[840 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4552,
+   "seen_at": "2026-10-17 06:52:05",
+   "meta": {
+    "conversation_id": 9523
+   }
+  },
+  {
+   "id": "conv_clean-085",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，请介绍下你的能力",
+   "response": "你好，米巴！我是「智源对接agent」，一个面向 MBSE / SysML v2 建模的对接型智能体，人机协作级别为 L0（关键动作会先跟你确认）。下面按能力域给你介绍一下：\n\n**一、工程与版本对接**\n- 查询你有权限访问的工程、分支、模型版本（可按工程名、创建人/所有人筛选）\n- 展开模型数据树，定位到具体节点\n- 导出 SysML v2 文件（支持整工程 / 指定数据节点 / 指定视图三种范围，导出前会先给你看范围摘要并确认，导出后可直接读取文件原文）\n\n**二、建模与编辑**\n- 创建/修改/移动/克隆/删除模型元素与关系\n- 设置类型关系、特化关系、特征值、属性声明、自定义属性\n- 状态机语义配置（状态迁移、状态动作）、活动节点布置\n- 所有写操作走「预览 → 确认 → 执行」流程，逐条事务、可查操作状态、可撤销\n\n**三、校验与质量门禁**\n- SysML v2 源码三路校验（词法/语法/语义，官方 checker 口径）\n- 方法论规约卡加载 + 命名/必填属性/禁用关键字 lint\n- 工程级多文件合并门禁（发布前必跑）\n- 模型预评审、AST 结构化抽取、标准库元类查询\n\n**四、需求工程与追溯分析**\n- 自然语言需求条目化 + 需求视图骨架生成\n- 需求-架构覆盖矩阵、缺项覆盖汇总、端到端追溯链连通性检查、场景链路覆盖检查\n- 变更影响分析（BFS 三层影响…[968 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4550,
+   "seen_at": "2026-10-17 06:51:16",
+   "meta": {
+    "conversation_id": 9523
+   }
+  },
+  {
+   "id": "conv_clean-086",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴！我是智源对接 agent，主要面向 MBSE 建模场景，帮你把业务描述、需求材料转成规范可校验的 SysML v2 模型，并在既有工程上做增量维护。下面按能力维度说明。\n\n## 一、建模方法论与规约对齐\n动手建模前，我会先加载当前项目绑定的建模方法论规约卡，按阶段（M0 到 N5）裁剪出该阶段真正需要的约束子集，包括语法强制规则（带 lint/check/forbid 分级）、本体约束、命名正则、最小必填属性和视图齐备要求。这样做的意义是：客户规范里只有带 enforce 分级的规则才能被机器自动阻断，文档型规范只能作为理解依据。如果项目还没绑定方法论，我会明确告诉你「当前按通用 SysML V2 处理」，不会拿通用做法冒充你的客户规范。\n\n## 二、SysML v2 代码生成与自校验闭环\n这是我最核心的能力。任何产出或修改 SysML v2 代码的回合，我都会走完「生成 → 校验 → 按诊断修复 → 再校验」的闭环，最多三轮：\n- 校验调用本地官方语义检查器，返回词法、语法、语义三路计数和按位置聚合的错误清单（含出错行原文与修复方向）；\n- 修复严格按「词法 → 语法 → 语义」顺序，硬错未清零前不逐条修语义错，因为那多半是语法错破坏包结构后的级联产物；\n- 只改诊断指到的位置，不会为了让代码「能编译过」而把 `part def` 降级成 `attribute def…[1476 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4514,
+   "seen_at": "2026-10-17 06:40:55",
+   "meta": {
+    "conversation_id": 9512
+   }
+  },
+  {
+   "id": "conv_clean-087",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "按照你的思路继续下一步",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4511,
+   "seen_at": "2026-10-17 05:17:45",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-088",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "按照你的思路继续后续的尝试",
+   "response": "## 本次操作结果：链路打通了，主分支最新版本已定位\n\n按上一轮列出的诊断思路，我实际做了两件事：**换对象验证工具链**、**重试原工程的分支查询**。结果证明问题不在权限、也不在「工程无数据」，而是**调用方式**。\n\n## 一、关键突破：分支查询这次返回了数据\n\n对「广汽元模型1010」重新查询分支，**返回了两条分支**，不再是空集。这说明上一轮的空集是**查询条件/调用形态**造成的，而非账号无权限或工程无分支。这一点很重要——之前我列出的四种假设里，「权限以空集返回」和「工程确实无分支」这两条**已被排除**。\n\n## 二、版本清单已取到\n\n在分支下查询版本，返回**三个已发布版本**，按发布时间倒序：\n\n| 序号 | 版本号 | 版本名称 | 状态 | 发布时间 | 发布人 |\n|---|---|---|---|---|---|\n| 第 1 条（最新） | 3 | 3 | 已发布 | 2026-10-13 14:09 | gefei |\n| 第 2 条 | 2 | 3 | 已发布 | 2026-10-13 09:33 | gefei |\n| 第 3 条 | 1 | 2 | 已发布 | 2026-10-12 16:42 | gefei |\n\n三条均为启用状态、均已发布，无草稿、无审核中、无禁用。**最新版本是版本号 3、发布于 2026-10-13 14:09 的那一条…[1288 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4509,
+   "seen_at": "2026-10-17 05:16:19",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-089",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "分支查询工具为啥不通，用过哪些方法，还可以怎么做",
+   "response": "## 一、先厘清一个前提：工具本身没有报错\n\n需要先纠正一个可能的误解：分支查询工具**并没有报「不通」**。它每次都正常返回了响应，没有超时、没有权限拒绝、没有 token 过期、没有参数类型错误。返回的是**空集**——即「查询成功，但没有条目」。\n\n这两件事在排查上完全不同：报错说明链路断了，空集说明链路通了但**没有匹配到数据**。所以问题不在「工具坏了」，而在「查询条件与数据/权限之间对不上」。上一轮那个真正的报错（`version` 字段要求对象却传了字符串）是参数构造问题，已经不复现，与本次空集无关。\n\n## 二、已经用过的方法\n\n1. **按工程标识查分支**：以工程ID 2108853372221980672 直接查询分支列表，返回空。\n2. **按工程名称重新定位后再查**：您第二次给出名称「广汽元模型1010」，我重新做了名称到标识的映射（唯一命中，无重名歧义），再查分支，仍为空。\n3. **分支为空时继续查版本**：试图跳过分支直接取版本清单，返回同样为空。\n4. **尝试进入数据树**：数据树查询要求工程、分支、版本三者齐备，因前两步无值，未发起——这一步是**主动不发**，不是失败。\n5. **导出预览**：上一轮试过整工程范围预览，一次扁平传参被拒、一次对象传参报类型不符，属于参数格式问题，与分支空集是两条独立的故障线。\n\n也就是说，方法上我已经覆盖了…[1747 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4507,
+   "seen_at": "2026-10-17 05:11:53",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-090",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "工程名称：广汽元模型1010",
+   "response": "## 本次操作结果：工程名称已收到，但链路仍卡在同一处\n\n您把工程名称「广汽元模型1010」又给了一遍。我按这个名称重新定位并再走了一次「分支 → 版本」查询，结果与上一轮一致，如实说明如下。\n\n## 一、执行过程\n\n1. **按名称定位工程**：名称「广汽元模型1010」对应工程ID 2108853372221980672，框架为「sysml自主框架」，所有者 gefei。这一步是确定的，名称与标识的对应关系没有歧义。\n2. **查分支**：以该工程查询分支列表，**返回为空**，没有任何分支条目。\n3. **查版本**：在分支未取到的情况下查询版本，**同样为空**。\n\n## 二、结论\n\n- **工程名称这一环已经不再是缺口**——您给的名称能唯一落到一个工程标识上，不存在重名需要确认的问题。\n- 真正的断点仍在**下游**：该工程的分支清单为空、版本清单为空，因此「主分支最新版本」这个对象在接口层面**始终没有落到可用的标识上**，数据树查询也就没有合法入参，无法发起。\n- 需要强调：**空集不等于「该工程没有数据」**。可能是工程本身尚无分支/版本，也可能是当前账号对该工程的分支与版本没有查阅权限，接口以空集形式返回。仅凭返回内容无法区分这两种情况，我不会替您下判断。\n\n## 三、未覆盖的部分\n\n1. 分支是否存在、主分支叫什么名字——未知。\n2. 「最新版本」对应的真实版…[1027 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4505,
+   "seen_at": "2026-10-17 05:08:55",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-091",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "取主分支",
+   "response": "",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4323,
+   "seen_at": "2026-10-17 04:44:02",
+   "meta": {
+    "conversation_id": 9454
+   }
+  },
+  {
+   "id": "conv_clean-092",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "换个话题：今天天气如何",
+   "response": "晴天",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4319,
+   "seen_at": "2026-10-17 04:44:02",
+   "meta": {
+    "conversation_id": 9453
+   }
+  },
+  {
+   "id": "conv_clean-093",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "取主分支最新版本数据",
+   "response": "",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4314,
+   "seen_at": "2026-10-17 04:44:02",
+   "meta": {
+    "conversation_id": 9451
+   }
+  },
+  {
+   "id": "conv_clean-094",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "导出广汽元模型1010的sysml v2源码",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4311,
+   "seen_at": "2026-10-17 04:44:02",
+   "meta": {
+    "conversation_id": 9451
+   }
+  },
+  {
+   "id": "conv_clean-095",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "取主分支最新版本数据",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4296,
+   "seen_at": "2026-10-17 04:30:52",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-096",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "基于绑定的mcp获取工程列表",
+   "response": "## 本次操作\n\n我调用了智源开发接口中的工程列表查询（第 1 页、每页 50 条）。接口正常返回，没有出现权限或 token 过期之类的报错，说明连接和凭证都是有效的。\n\n## 结论：查询成功，账号可见工程已返回\n\n返回的是**当前账号有访问权限的工程**，也就是「可见范围」，不一定是我本人创建的工程；这一点和之前碰到的现象一致：可见范围可以跨用户。就已有结果看，这批工程的创建者和所有者都显示为 gefei，框架分别是「广汽方法论」「空框架」「sysml自主框架」这类建模框架。\n\n以下是我已确认取到的工程（按返回顺序）：\n\n| 工程名称 | 工程 ID | 框架 | 所有者/创建人 | 创建时间 |\n|---|---|---|---|---|\n| 1009副本 | 2110923673301614592 | 广汽方法论 | gefei | 2026-10-16 |\n| 1014 | 2110202314315845632 | 空框架 | gefei | 2026-10-14 |\n| 广汽元模型1010 | 2108853372221980672 | sysml自主框架 | gefei | 2026-10-10 |\n| 1009AI验证 | 2108485015095148544 | （结果截断，未取到） | gefei | — |\n\n## 未覆盖的部分（需要说明）\n\n这次返回的整…[1048 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4291,
+   "seen_at": "2026-10-17 04:27:22",
+   "meta": {
+    "conversation_id": 9446
+   }
+  },
+  {
+   "id": "conv_clean-097",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "按照你的建议执行",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4288,
+   "seen_at": "2026-10-17 04:23:49",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-098",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "先获取该工程的分支与版本清单信息",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4233,
+   "seen_at": "2026-10-17 02:52:53",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-099",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "工程sysml V2代码",
+   "response": "## 本轮做了什么\n\n按您的要求，我尝试获取「广汽元模型1010」的 SysML v2 代码，走的是导出链路：先做范围预览（整工程范围），再执行导出、分片读取。\n\n## 结论：本次没有拿到代码\n\n**导出链路在预览阶段就中断了**，没有进入实际导出与文件读取环节。因此我手上没有任何该工程的 SysML v2 源码内容，也不会凭工程名或框架名去拼凑一段\"看起来像\"的代码——那会是伪造产物。\n\n中断的原因有两层，需要分开说：\n\n1. **前置条件未满足。** 导出要求明确到「工程 + 分支 + 版本」这一粒度，而上一轮我并未成功取得该工程的分支清单与版本标识（数据树展开时还因 `version` 参数格式传错被校验拒绝）。没有 versionId，导出范围无法成立。\n2. **权限存在不确定性。** 该工程的所有人与创建人是 gefei，当前 token 用户是「测试」，属他人工程对本账号开放可见。导出规则要求**整个所选版本及其业务引用版本全部可读**，只要存在受限节点就会被拒绝导出和读取。这一点在预览前无法排除。\n\n## 未覆盖的部分（如实列出）\n\n- 分支清单、版本号、versionId：均未取得；\n- 包结构层级与各层 dataId：未取得，而 dataId 是按包导出时的唯一定位依据；\n- 模型规模、元素数量：未知；\n- 是否存在受限节点：未验证。\n\n## 建议的下一步\n\n要…[974 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4197,
+   "seen_at": "2026-10-17 02:38:42",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-100",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "获取广汽元模型1010的工程数据",
+   "response": "## 本轮做了什么\n\n按您的要求，我对「广汽元模型1010」执行了标准的工程数据定位链路，调用顺序如下：\n\n1. 先按工程名定位该工程，取得工程标识；\n2. 查询该工程下的分支列表；\n3. 指定分支后查询该分支的模型版本（默认只看已启用的已发布版本）；\n4. 用已取得的版本标识展开数据树的根下一层，查看有哪些包/元素。\n\n此外还有一次调用被参数校验直接拒绝：我在展开数据树时把 `version` 按字符串传入，而工具要求它是 JSON 对象。这是我的参数失误，与工程数据本身无关，已记录下来，下一轮可修正后重试。\n\n## 结论\n\n**可以确认的事实**（来自上一轮已核实返回的工程列表）：\n\n- 「广汽元模型1010」确实存在，属**建模**类工程，创建时间 2026-10-10 17:33，所用框架为 **sysml自主框架**；\n- 该工程的所有人和创建人都是 gefei，而当前 token 用户是「测试」——即这是**他人工程对本账号开放可见**，不是您自己创建的工程。这一点会影响后续能否导出：导出要求所选版本及业务引用版本全部可读，若存在受限节点会被拒绝。\n\n**无法确认的部分**：本轮链路各步的返回内容体在我这边没有落地为可用内容（返回为空/不可读），因此我拿不到该工程的分支名称、版本号、包树层级与元素清单。我不会用推测去填补这些空缺——那等于编造模型结构。\n\n## 未覆盖的…[1161 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4195,
+   "seen_at": "2026-10-17 02:36:50",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-101",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "继续查询工程列表",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4191,
+   "seen_at": "2026-10-17 02:21:27",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-102",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「我不确定你想让我做哪件事 —— 请选一项，或直接在下方补充你的说法（选完我再执行）」→ 回答：查询智源的工程列表\n\n原请求：查询工程与结构查询：query_projects（工程列表",
+   "response": "您已明确：**查询智源的工程列表**。\n\n我尝试执行，但必须如实告知：**本会话我无法完成这次查询。**\n\n`query_projects` 属于 `zhiyuan-dev-mcp`，不在本会话的工具白名单内（白名单仅 5 项：SysML v2 源码校验、知识图谱检索、变更影响分析、模型预评审校验、拉取入库）。我这边没有调用它的通道，强行尝试只会得到「工具不可用」，而不是工程列表——所以我不做这种无效尝试来假装完成。同时当前团队暂无成员，也无法把这次查询分派出去。\n\n**要真正拿到智源的工程列表，请在客户端侧执行：**\n\n- 调用 `query_projects`，参数留空即返回当前 token 账号有权访问的全部工程（分页默认第 1 页、每页 20 条）；\n- 如需筛选：`keyword` 按工程名称匹配；`ownerName` / `creatorName` 按所有人/创建人精确匹配，**填「我」表示当前 token 所属用户**；\n- 若返回 401，说明凭据过期，请更新 `zhiyuan.token`（平台系统配置页，或改 `~/.workbuddy/mbse_config.json` 后重载配置）再重试；\n- 若返回为空，优先排查凭据过期或未授权（典型表现是静默返回空而非报错），其次确认是否被限定到某个具体工程。\n\n**我这边可执行的替代路径：**\n\n如果您实际关心的是「…[762 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4074,
+   "seen_at": "2026-10-16 15:29:41",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-103",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "查询工程与结构查询：query_projects（工程列表",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4072,
+   "seen_at": "2026-10-16 15:29:09",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-104",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「我不确定你想让我做哪件事 —— 请选一项，或直接在下方补充你的说法（选完我再执行）」→ 回答：获取当前账号的工程列表\n\n原请求：工程与结构查询：query_projects（工程列表）",
+   "response": "您已明确：**获取当前账号的工程列表**。\n\n我尝试执行，但必须如实告知结果：**本会话我无法完成这次查询。**\n\n原因不变——`query_projects` 属于 `zhiyuan-dev-mcp`，不在本会话的工具白名单内（白名单仅 5 项：SysML v2 源码校验、知识图谱检索、变更影响分析、模型预评审校验、拉取入库）。我这边没有调用它的通道，强行尝试只会得到「工具不可用」，而不是工程列表，所以我不做这种无效尝试来假装完成。同时当前团队暂无成员，也无法分派。\n\n**要真正拿到「当前账号的工程列表」，请在客户端侧执行：**\n\n- 调用 `query_projects`，参数留空即返回当前 token 账号有权访问的全部工程（分页默认第 1 页、每页 20 条）；\n- 如需筛选：`keyword` 按工程名称匹配；`ownerName` / `creatorName` 按所有人/创建人精确匹配，**填「我」表示当前 token 所属用户**；\n- 若返回 401，说明凭据过期，请更新 `zhiyuan.token`（平台系统配置页，或改 `~/.workbuddy/mbse_config.json` 后重载配置）再重试；\n- 若返回为空，优先排查凭据过期或未授权（典型表现是静默返回空而非报错），其次确认是否被限定到某个具体工程。\n\n**我这边可以做的替代路径：**\n\n如果您实…[767 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4070,
+   "seen_at": "2026-10-16 14:57:11",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-105",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "工程与结构查询：query_projects（工程列表）",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4068,
+   "seen_at": "2026-10-16 14:56:32",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-106",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "拉取mcp的工具清单：zhiyuan-dev-mcp",
+   "response": "您要求拉取 `zhiyuan-dev-mcp` 的工具清单。我如实说明一下当前情况：\n\n**我无法执行「拉取 MCP 工具清单」这个动作。** 原因有两点：\n\n1. **没有对应的工具**。本会话的工具白名单只有 5 项——SysML v2 源码校验、知识图谱检索、变更影响分析、模型预评审校验、拉取入库。其中没有「列出 MCP 工具」这类元查询工具，我无法通过调用去枚举某个 MCP 的工具清单。\n2. **工具清单本身不在我的可查询范围内**。`zhiyuan-dev-mcp` 挂载了哪些工具，是由客户端侧的 MCP 配置决定的，属于客户端/平台配置信息，不在我当前可访问的数据里。\n\n**我能提供的参考信息**（来自本会话已知的上下文，非实时拉取，请以客户端实际配置为准）：\n\n`zhiyuan-dev-mcp` 端点指向 `http://xuanyi-dev.huilingyun.com/mcp`，已知涉及的工具大致包括：\n\n- **工程与结构查询**：`query_projects`（工程列表）、`query_branches`（分支）、`query_model_versions`（版本）、`query_data_tree`（数据树）\n- **模型读写**：`get_model_text`、`get_model_view`、`query_model_table`、`set_fea…[1088 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4066,
+   "seen_at": "2026-10-16 14:55:35",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-107",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "query_projects",
+   "response": "您直接点名了 `query_projects`，我理解您希望我调用它。但需要如实告知：**这个工具不在我当前会话的可调用范围内**，我无法真正发起这次调用。\n\n本会话的工具白名单只有 5 项——SysML v2 源码校验、知识图谱检索、变更影响分析、模型预评审校验、拉取入库。`query_projects` 属于 `zhiyuan-dev-mcp`，需要在**接入该 MCP 的客户端侧**调用，我这边没有这个通道。即便我尝试调用，也只会得到「工具不存在/不可用」的结果，而不是工程列表——所以我不做这种无效尝试来假装完成。\n\n另外，当前团队暂无成员，我也无法把这次查询分派出去。\n\n**建议按以下方式解决：**\n\n1. **在客户端侧直接调用**：由接入 `zhiyuan-dev-mcp` 的客户端发起 `query_projects`。常用参数：`keyword`（按工程名称模糊匹配）、`ownerName` / `creatorName`（按所有人/创建人精确匹配，填「我」表示当前 token 所属用户）、`pageNum`（从 1 开始）、`pageSize`（默认 20，最大 100）。若返回 401，请更新 `zhiyuan.token` 后重载配置。\n2. **配置团队成员**：到「Agent 管理」添加具备工程查询能力的成员，由该成员执行。\n3. **走我能做的替代路径*…[698 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4064,
+   "seen_at": "2026-10-16 14:54:53",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-108",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "查群工程",
+   "response": "您说的「查群工程」我理解为**查询工程列表**（可能有个笔误）。\n\n但结论和上一条一致，需要如实说明：\n\n**当前会话我无法执行工程列表查询。** 原因是本会话的工具白名单只有 5 项——SysML v2 源码校验、知识图谱检索、变更影响分析、模型预评审校验、拉取入库——其中**没有工程列表查询工具**。工程列表查询需要 `zhiyuan-dev-mcp` 的 `query_projects` / `zhiyuan_project_list`，它不在我当前可调用的范围内。\n\n同时，当前团队暂无成员，我也无法把这项查询分派给其他 Agent 执行。\n\n**可行的三条路径：**\n\n1. **补齐工具接入**：确认客户端已挂载 `zhiyuan-dev-mcp` 并配置有效智源 token（若报 401，可在平台系统配置页更新 `zhiyuan.token`，或改 `~/.workbuddy/mbse_config.json` 后重载配置），然后重试。\n2. **配置团队成员**：到「Agent 管理」添加具备工程查询能力的成员，由该成员执行查询。\n3. **走我能做的替代路径**：如果您实际关心的是「当前工程里有哪些建模数据」，我可以直接执行**拉取入库**——把当前工程的建模数据转成三元组写入个人分支图库，并汇报入库统计（候选数 / 三元组数 / 实体数 / 关系数）。若数据此前已入…[654 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4062,
+   "seen_at": "2026-10-16 14:53:36",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-109",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "查询工程列表",
+   "response": "抱歉，刚才那次调用查的是平台用户，不是工程列表——我需要用工程查询工具重新查。\n\n不过这里有个限制需要先说明：**当前会话里我可用的工具白名单只有 5 项**（SysML v2 源码校验、知识图谱检索、变更影响分析、模型预评审校验、拉取入库），其中**不包含工程列表查询**。工程列表查询（query_projects / zhiyuan_project_list）需要在接入 `zhiyuan-dev-mcp` 的客户端侧调用。\n\n另外，当前团队暂无成员，我作为负责人无法把这项查询分派出去。\n\n建议按以下方式处理：\n\n1. **确认工具接入**：请确认当前客户端已挂载 `zhiyuan-dev-mcp`，并已配置有效的智源 token（若返回 401，可在平台系统配置页更新 `zhiyuan.token`，或修改 `~/.workbuddy/mbse_config.json` 后重载配置）。\n2. **配置团队成员**：到「Agent 管理」中添加具备工程查询能力的成员后重试，由该成员执行工程列表查询。\n3. **替代路径**：如果您只是想看当前工程已有哪些建模数据，我可以直接执行「拉取入库」，把当前工程的建模数据转成三元组写入个人分支图库，并汇报入库统计（候选/三元组/实体/关系数量）。\n\n请告诉我您希望走哪条路径；若选择第 3 条，我立即执行。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4060,
+   "seen_at": "2026-10-16 14:39:55",
+   "meta": {
+    "conversation_id": 9376
+   }
+  },
+  {
+   "id": "conv_clean-110",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。",
+   "response": "我这边接入的是「智源」开发 MCP（zhiyuan-dev-mcp），工程列表查询确实由它提供。但需要向您如实说明一个关键点：\n\n**我当前实际可调用的工具集里，没有工程列表查询这一项。** 我能调用的只有 5 个：缺项覆盖汇总、SysML v2 源码校验、知识图谱检索、变更影响分析、模型预评审校验。所以无论跳过多少次澄清，我都无法真正发起这次查询——**硬给一份列表只能是编造**，这会污染您的建模上下文，我不能这么做。\n\n**要拿到工程列表，请走这两条路之一：**\n1. 在接入 zhiyuan-dev-mcp 的客户端侧直接调用「查询工程列表」工具，参数可留空以取默认分页结果；也可按名称、类型、创建人、负责人筛选。\n2. 若调用报失败、超时或权限拒绝，按失败模式转 **Harness** 处理重试、降级或权限申请。\n\n**同时提醒一个团队配置问题**：我是团队负责人角色，但当前团队暂无成员。如果您希望把「工程查询 → 模型浏览 → 导出」这类链路分派给专门成员 Agent 执行，需要先到「Agent 管理」里配置团队成员，之后我才能调度。\n\n**现在就能给您的替代信息**（无需任何工具调用）：\n- 您当前工作空间：`ws-local-测试`，角色：设计师\n- 当前分支 `personal` 既有建模实体 **61 个**\n- 最近三次变更：软件模块变更分析（2026-10-02）…[744 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4058,
+   "seen_at": "2026-10-16 14:35:44",
+   "meta": {
+    "conversation_id": 9372
+   }
+  },
+  {
+   "id": "conv_clean-111",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。",
+   "response": "我理解您希望我直接给出结果，但这里必须如实说明：**我无法执行工程列表查询**，这不是澄清与否的问题，而是能力边界问题。\n\n**结论**\n- 工程列表查询由「智源」开发 MCP（zhiyuan-dev-mcp）提供，**该 MCP 不在我当前可调用的工具集内**。\n- 我可调用的工具仅 5 个：缺项覆盖汇总、SysML v2 源码校验、知识图谱检索、变更影响分析、模型预评审校验。\n- 因此无论是否跳过澄清，我都**没有通道**去拉取工程清单。若强行输出一份列表，只能是编造，会污染您的建模上下文。\n\n**能立刻为您做的（无需再确认，直接给）**\n您当前工作空间 `ws-local-测试`、分支 `personal` 的既有资产现状：\n- 建模实体共 **61 个**\n- 最近三次变更：\n  1. 软件模块变更分析（2026-10-02）\n  2. 动力分系统（2026-09-16）\n  3. 动力分系统（2026-09-16）\n- 本会话已有产物 2 项文档\n\n**要拿到真正的工程列表，只有两条路**\n1. 在接入 zhiyuan-dev-mcp 的客户端侧直接调用「查询工程列表」工具（参数可留空取默认分页）。\n2. 若该工具调用报失败/超时/权限拒绝，按失败模式转 **Harness** 处理重试、降级或权限申请。\n\n如果您愿意，我可以把「查询工程列表」整理成一份规范的调用参数说明…[643 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4046,
+   "seen_at": "2026-10-16 11:11:33",
+   "meta": {
+    "conversation_id": 9372
+   }
+  },
+  {
+   "id": "conv_clean-112",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。",
+   "response": "我这边无法直接执行工程列表查询——原因如下：\n\n**当前工具边界**\n我（通用问答 Agent）可调用的工具只有：缺项覆盖汇总、SysML v2 源码校验、知识图谱检索、变更影响分析、模型预评审校验。**工程列表查询属于「智源」开发 MCP（zhiyuan-dev-mcp）的能力**，不在我当前可调用的工具集内。\n\n**为什么刚才提示「需要确认建模信息」**\n工程列表查询需要至少一个筛选条件才能发起（按名称 / 类型 / 创建人 / 负责人，配合分页）。您选择跳过澄清后，我这边没有可用的查询参数，也没有 MCP 通道，因此无法凭空返回一份工程清单——**编造工程列表会污染您的建模上下文**，这违反我的质量准则。\n\n**可行的推进方式（三选一）**\n1. **在 MCP 客户端侧直接发起**：由接入 zhiyuan-dev-mcp 的客户端调用「查询工程列表」工具，参数可留空以拉取默认分页结果。\n2. **给我一个筛选条件**：例如「查我作为负责人的工程」「查名称含 XX 的工程」，我把它整理成规范的调用参数，交给具备 MCP 通道的执行方。\n3. **转交 Harness**：如果 MCP 工具调用出现失败、超时或权限拒绝，按失败模式应转 Harness 处理重试/降级/权限申请。\n\n**顺带提示**：您当前工作空间是 `ws-local-测试`，角色为设计师。若您本意是查看**本…[682 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4044,
+   "seen_at": "2026-10-16 11:09:49",
+   "meta": {
+    "conversation_id": 9372
+   }
+  },
+  {
+   "id": "conv_clean-113",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "帮我查询工程列表",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4042,
+   "seen_at": "2026-10-16 11:09:09",
+   "meta": {
+    "conversation_id": 9372
+   }
+  },
+  {
+   "id": "conv_clean-114",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你的mcp有哪些工具",
+   "response": "我这边接入的是「智源」开发 MCP（zhiyuan-dev-mcp），可用的工具大致分四类：\n\n**一、工程与数据浏览**\n- 查询工程列表（按名称、类型、创建人/负责人筛选，分页）\n- 查询工程下的分支（有查阅权限的）\n- 查询分支的模型版本（默认只列已启用的已发布版本，可按需包含草稿、审核中、禁用版本）\n- 查询数据树（按工程、分支、版本逐层展开，可按名称或类型过滤当前层）\n\n**二、模型导出与读取**\n- 导出 SysML v2 文件：先预览范围（整工程 / 指定数据节点 / 指定视图），确认后正式导出，再按任务号读取 UTF-8 原文，支持分页续读直到文件结束\n\n**三、模型变更**\n- 变更预览（只读）：展示命令与依赖关系，删除包或视图时会给出级联影响，需对话确认\n- 变更执行：按顺序逐条执行强类型命令，每条独立事务；失败即停止，不承诺跨命令原子回滚\n- 操作状态查询与撤销：查询自己提交的操作状态，可对已执行操作做撤销\n\n**四、建模能力与校验**\n- 查询建模能力清单（当前支持哪些建模动作、参数要求）\n- 模型元素展示\n- 设置特征值\n- SysML v2 源码校验（本地 checker，按词法/语法/语义三路计数并给出定位与修复方向）\n\n**另外还有几个知识侧能力**（不属于 MCP 工具，但可配合使用）：知识图谱检索、变更影响分析（三层 BFS 影响图）、模型预评审…[791 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4040,
+   "seen_at": "2026-10-16 11:08:02",
+   "meta": {
+    "conversation_id": 9372
+   }
+  },
+  {
+   "id": "conv_clean-115",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请介绍下你的能力",
+   "response": "你好，米巴。我是「智源对接agent」，当前处于 L0（人机协作级别最低档，即我只做分析与建议，不擅自执行模型写入）。下面按「能做什么、怎么用、边界在哪」三块介绍。\n\n## 一、我的核心能力\n\n**1. 建模与代码生成**\n- 生成、修改 SysML v2 源码，并在交付前用官方语义校验器自校验（词法/语法/语义三路计数 + 按行定位的错误清单）。若出现硬错，我会按诊断位置修复并复核，最多 3 轮。\n- 支持 succession 的四种合法写法（匿名、具名、带守卫、具名加守卫），守卫只能夹在 `first` 与 `then` 之间。\n\n**2. 知识图谱检索与影响分析**\n- 图谱检索：按实体名/关系/属性值做实体链接 + 子图遍历，向量兜底。\n- 变更影响分析：以某个实体为源做三层 BFS 遍历，产出影响图。\n- 模型预评审：从规范性、一致性、合理性三个维度校验指定对象或范围。\n\n**3. 工程数据对接**\n- 可分页查询工程、分支、工程分支版本、数据树，并据此导出 SysML v2 文件（预览 → 确认 → 导出 → 读取原文）。\n- 可预览模型变更命令及其依赖（含删除包/视图时的级联影响），确认后再执行；执行按条独立事务，失败即停。\n\n**4. 需求工程方法**\n- 整车需求分析：以 IR 为输入、VR 为输出，分问题域与方案域两层，走「识别利益相关方 → 定义上下文 → …[1726 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4038,
+   "seen_at": "2026-10-16 11:05:37",
+   "meta": {
+    "conversation_id": 9371
+   }
+  },
+  {
+   "id": "conv_clean-116",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请介绍下你的能力",
+   "response": "你好，米巴。下面把我的能力按「能做什么 / 怎么工作 / 边界在哪」讲清楚，方便你判断在哪个环节把我用起来。\n\n## 一、我能做什么\n\n**1. 需求澄清**\n你给一句模糊诉求（比如\"转发器要更可靠\"），我不会直接编需求，而是先复述我的理解，再列出信息缺口逐条问你：范围边界、输入依据、涉众、约束、优先级评判者。缺信息就追问，不替你假设。\n\n**2. 利益相关方分析**\n识别角色（卫星总体、载荷分系统、地面段、用户终端等）、各自关注点，以及谁有权判定优先级。\n\n**3. 需求建模**\n- 用例视图：从涉众目标提取用例；\n- 领域模型：梳理系统元素与关系；\n- 区分功能性需求与非功能性需求（性能、可靠性、接口、安全等）。\n\n**4. 规格化输出**\n每条需求带唯一标识、优先级、来源、验收标准（Given-When-Then 形式），做到可验证、可追溯。\n\n**5. 审查与迭代**\n检查完整性、一致性、可验证性，主动标注风险与待确认项；发现需求冲突（同名实体、属性矛盾、约束违反）会报出来，而不是默默忽略。\n\n**6. 建模产出**\n在系统建模任务中，输出可直接导入建模工具的 SysML v2 模型代码（包、块定义、接口、需求定义与满足关系等），并做自校验后再交付。\n\n## 二、我怎么工作\n\n- **先确认再展开**：先复述理解、列缺口，你确认后我才往下走；\n- **分步推进**：一次聚焦…[1248 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4036,
+   "seen_at": "2026-10-16 10:39:51",
+   "meta": {
+    "conversation_id": 9367
+   }
+  },
+  {
+   "id": "conv_clean-117",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "你好 ，我是MBSE建模人员，请介绍下你的能力",
+   "response": "你好，米巴。我是需求分析方向的建模助手，下面按「我能做什么 / 我怎么做 / 我不做什么」三块介绍，方便你判断在哪个环节把我用起来。\n\n## 一、我的核心能力\n\n**1. 需求澄清（把模糊诉求变成可确认的问题清单）**\n你给一句模糊的话（比如\"转发器要更可靠\"），我不会直接编需求，而是先复述我的理解，再列出信息缺口逐条问你：范围边界、输入依据、涉众、约束、优先级评判者。缺信息就追问，不替你假设。\n\n**2. 利益相关方分析**\n识别角色（如卫星总体、载荷分系统、地面段、用户终端等）、各自关注点、以及谁有权判定优先级。\n\n**3. 需求建模**\n- 用例视图：从涉众目标提取用例；\n- 领域模型：梳理系统元素与关系；\n- 区分功能性需求与非功能性需求（性能、可靠性、接口、安全等）。\n\n**4. 规格化输出**\n每条需求带唯一标识、优先级（MoSCoW）、来源、验收标准（Given-When-Then 形式），做到可验证、可追溯。\n\n**5. 审查与迭代**\n检查完整性、一致性、可验证性，主动标注风险与待确认项；发现需求冲突（同名实体、属性矛盾、约束违反）会报出来，而不是默默忽略。\n\n**6. 建模产出**\n在系统建模任务中，我会输出可直接导入建模工具的 SysML v2 模型代码（包、块定义、接口、需求定义与满足关系等），并做自校验后再交付。\n\n## 二、我的工作方式\n\n- **先确认…[1203 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4028,
+   "seen_at": "2026-10-16 10:13:26",
+   "meta": {
+    "conversation_id": 9367
+   }
+  },
+  {
+   "id": "conv_clean-118",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请解析宽带通信任务书的需求",
+   "response": "我先复述理解，再说明阻塞点——在您确认之前，我不会编造任何需求条目。\n\n## 一、我对本次诉求的理解\n\n您希望我**解析「宽带通信任务书」这份输入文档**，从中提取并结构化出需求条目（涉众需求 → 系统需求 → 子系统/单元需求），标注来源追溯与优先级，并建立需求与用例/架构元素的追溯关系。\n\n这是本会话第 3 次收到同一诉求。前两次我已说明：**当前会话中并未提供该任务书的正文内容，也没有可读取的文件路径或附件**，知识库检索结果同样为空。因此这属于「输入材料缺失」状态，无法直接进入需求提取。\n\n## 二、需求分析前必须确认的信息缺口\n\n| 序号 | 待确认项 | 说明与示例 | 当前状态 |\n|---|---|---|---|\n| 1 | 任务书正文 | 文本内容、文件路径或附件三者之一 | **缺失（硬阻塞）** |\n| 2 | 系统范围 | 是整星、通信载荷分系统，还是含地面段/用户终端的端到端系统 | 待确认 |\n| 3 | 利益相关方 | 任务方、运营方、用户、监管方分别是谁，谁是优先级评判者 | 待确认 |\n| 4 | 关键指标口径 | 带宽、速率、覆盖、可靠性的定义与量纲（如 Gbps、EIRP、可用度%） | 待确认 |\n| 5 | 约束条件 | 轨道、频段、发射窗口、寿命、成本上限 | 待确认 |\n| 6 | 交付形式 | 需求清单、追溯矩阵、SysML 需求视…[1229 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4024,
+   "seen_at": "2026-10-16 05:51:28",
+   "meta": {
+    "conversation_id": 1
+   }
+  },
+  {
+   "id": "conv_clean-119",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "succession 使用的语法介绍",
+   "response": "# SysML v2 中 succession 的语法介绍\n\n## 一、结论先行\n\n`succession` 是 SysML v2 中用于表达**动作/行为之间时序先后关系**的语法结构。它有两种基本写法：**匿名写法**（直接 `first ... then ...`）和**具名写法**（`succession 名称 first ... then ...`）。此外还支持**带守卫条件**的写法，但守卫的位置有严格限制 [1,2]。\n\n---\n\n## 二、四种合法写法（实测结论）\n\n| 写法 | 是否合法 | 说明 |\n|---|---|---|\n| `first a1 then a2;` | ✅ 合法 | 最常用的匿名写法 |\n| `succession s1 first a1 then a2;` | ✅ 合法 | 具名 succession，便于后续引用 |\n| `first a1 if cond then a2;` | ✅ 合法 | 带守卫条件（guard） |\n| `succession s1 first a1 if cond then a2;` | ✅ 合法 | 具名 + 守卫 |\n\n以上四种写法均通过实测校验 [1]。\n\n---\n\n## 三、关键语法约束（重点）\n\n### 1. `if` 守卫的位置限制\n\n`if` 守卫**合法，但只能出现在 `first X` 与 `…[1874 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4012,
+   "seen_at": "2026-10-16 03:18:13",
+   "meta": {
+    "conversation_id": 9361
+   }
+  },
+  {
+   "id": "conv_clean-120",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "succession 使用的语法介绍",
+   "response": "# SysML v2 中 succession 的语法介绍\n\n## 一、结论先行\n\n`succession` 是 SysML v2 中用于表达**动作/行为之间时序先后关系**的语法结构。它有两种基本写法：**匿名写法**（直接 `first ... then ...`）和**具名写法**（`succession 名称 first ... then ...`）。此外还支持**带守卫条件**的写法，但守卫的位置有严格限制 [1,2]。\n\n---\n\n## 二、四种合法写法（实测结论）\n\n| 写法 | 是否合法 | 说明 |\n|---|---|---|\n| `first a1 then a2;` | ✅ 合法 | 最常用的匿名写法 |\n| `succession s1 first a1 then a2;` | ✅ 合法 | 具名 succession，便于后续引用 |\n| `first a1 if cond then a2;` | ✅ 合法 | 带守卫条件（guard） |\n| `succession s1 first a1 if cond then a2;` | ✅ 合法 | 具名 + 守卫 |\n\n以上四种写法均通过实测校验 [1]。\n\n---\n\n## 三、关键语法约束（重点）\n\n### 1. `if` 守卫的位置限制\n\n`if` 守卫**合法，但只能出现在 `first X` 与 `…[1891 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4010,
+   "seen_at": "2026-10-16 02:49:52",
+   "meta": {
+    "conversation_id": 9361
+   }
+  },
+  {
+   "id": "conv_clean-121",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "只回复一个字：好",
+   "response": "好",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3964,
+   "seen_at": "2026-10-12 08:23:26",
+   "meta": {
+    "conversation_id": 9350
+   }
+  },
+  {
+   "id": "conv_clean-122",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "只回复两个字：好",
+   "response": "好",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3954,
+   "seen_at": "2026-10-12 08:22:21",
+   "meta": {
+    "conversation_id": 9350
+   }
+  },
+  {
+   "id": "conv_clean-123",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "我叫什么？我最喜欢的产品代号是什么？",
+   "response": "你叫**米巴**，你最喜欢的产品代号是**「智源」**。\n\n再提醒一下记忆边界：这两条目前只在**本次会话内**有效。如果你希望下次开新会话时我还能记得，需要你明确说一句「授权登记」，我才会把它们写入跨会话长期记忆。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3948,
+   "seen_at": "2026-10-11 02:18:34",
+   "meta": {
+    "conversation_id": 9347
+   }
+  },
+  {
+   "id": "conv_clean-124",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "我最喜欢的产品代号是「智源」，也请记住。",
+   "response": "好的，米巴，我记下了：你最喜欢的产品代号是「智源」。\n\n不过要跟你说明一下当前的记忆边界：\n\n- **本次会话内**：你的名字「米巴」和偏好「最喜欢的产品代号是智源」，我都会在对话中保持记住。\n- **跨会话长期记忆**：这两条目前都还只存在于本次会话。如果你希望它们在你下次打开会话时依然生效，需要你**明确授权**，我才能登记为跨会话长期记忆。\n\n如果你愿意，可以直接回一句「授权登记」，我就把「米巴」和「智源」这两条写入长期记忆。\n\n另外，如果你现在有具体的建模或平台任务（比如查工程、看包结构、生成/校验 SysML v2 源码、拉取入库等），也可以直接告诉我，我来帮你处理。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3946,
+   "seen_at": "2026-10-11 02:18:21",
+   "meta": {
+    "conversation_id": 9347
+   }
+  },
+  {
+   "id": "conv_clean-125",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "我刚才说我叫什么？",
+   "response": "你刚才说你叫**米巴**。\n\n另外你还提到过，你最喜欢的产品代号是「智源」。不过要说明一下：这条偏好目前只存在于本次会话里，如果你希望我跨会话长期记住，需要你明确授权登记一下。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3944,
+   "seen_at": "2026-10-11 02:18:09",
+   "meta": {
+    "conversation_id": 9347
+   }
+  },
+  {
+   "id": "conv_clean-126",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "我叫米巴，请记住我的名字。",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3942,
+   "seen_at": "2026-10-11 02:17:57",
+   "meta": {
+    "conversation_id": 9347
+   }
+  },
+  {
+   "id": "conv_clean-127",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "我叫什么？我最喜欢的产品代号是什么？",
+   "response": "您叫**米巴**，最喜欢的产品代号是**「智源」**。\n\n这两条我记着，本次会话内随时可以问我。\n\n再如实提醒一次边界：它们目前只存在于**本次对话**中，没有写入用户档案或长期记忆库，所以换一个会话、或换一个 Agent 来问，是答不出来的。如果您希望跨会话也生效，需要明确授权我做正式登记（涉及写操作），我再发起。\n\n需要的话，接下来我可以帮您：\n- 发起「米巴 / 智源」偏好的正式登记（需您授权）\n- 或直接进入正题——查智源平台工程、看包结构、拉取建模数据等\n\n您说方向就行。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3940,
+   "seen_at": "2026-10-11 02:17:03",
+   "meta": {
+    "conversation_id": 9346
+   }
+  },
+  {
+   "id": "conv_clean-128",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "我最喜欢的产品代号是「智源」，也请记住。",
+   "response": "好的，我记下了：您叫**米巴**，最喜欢的产品代号是**「智源」**。\n\n同样要如实说明边界：这两条目前都只存在于**本次会话的对话记录**里，并没有写入您的用户档案或长期记忆库。原因是——「记住」这件事在本平台有两条不同路径：\n\n1. **会话内记忆**：本次对话中我会一直记得，您随时可以问我「我叫什么/我喜欢什么代号」，我都能答上。会话结束即失效。\n2. **跨会话长期记忆**：需要正式登记（用户档案字段或偏好配置），才会在下次会话、其他 Agent 那里也生效。这一步涉及写操作，需要您明确授权，我才能发起。\n\n顺带一提，「智源」在本平台语境里恰好也是**智源 MBSE 平台**的名字（工程/包结构查询、SysML v2 源码生成与写回、token 管理等能力都挂在它下面）。所以想跟您确认一下：您说的「最喜欢的产品代号是智源」，是指——\n\n- **A. 个人偏好**：只是您喜欢这个代号，作为个人标签记着即可；\n- **B. 平台指向**：您想让我后续默认对接智源平台（比如查工程列表、拉取建模数据、生成/写回 SysML v2 源码）。\n\n如果是 B，我可以直接帮您做几件事，比如列出智源上的工程、查看包结构树、或把工程数据拉取入库转成三元组。您选哪个方向，或者有别的诉求，直接说。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3938,
+   "seen_at": "2026-10-11 02:16:42",
+   "meta": {
+    "conversation_id": 9346
+   }
+  },
+  {
+   "id": "conv_clean-129",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "我刚才说我叫什么？",
+   "response": "您刚才说自己叫**米巴**。\n\n不过要说明一下：我这边目前没有把「米巴」这个名字正式登记到您的用户档案里——上一条回复里我提到「需要您确认建模信息后继续」，所以这个名字还只是本次对话中的自称，没有落库保存。如果您希望它被长期记住（跨会话生效），需要走用户信息登记/权限域绑定流程，我可以帮您发起。\n\n另外提醒一句：您上一条消息里同时出现了「我叫米巴，请记住我的名字」和「我刚才说我叫什么？」两段内容，如果这是误粘贴，可以忽略后半段。\n\n请问接下来您想做什么？比如：\n- 继续之前的建模任务（本分支最近有「软件模块变更」「动力分系统」相关改动）\n- 查询平台信息（用户、角色、权限、运行统计等）\n- 其他通用问题\n\n告诉我具体诉求，我来判断是直接处理还是转交对应专家。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3936,
+   "seen_at": "2026-10-11 02:16:17",
+   "meta": {
+    "conversation_id": 9346
+   }
+  },
+  {
+   "id": "conv_clean-130",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "我叫什么？我最喜欢的产品代号是什么？",
+   "response": "根据本次对话中您告诉我的信息：\n\n- 您的名字：**米巴**\n- 您最喜欢的产品代号：**智源**\n\n需要再次如实提醒：这两条信息目前**仅存在于本次对话的上下文里**，我并没有把它们写入长期记忆库。因此：\n\n- 在**本次会话内**，我可以稳定地按「米巴」称呼您、按「智源」理解您指的产品代号；\n- 但**跨会话**（新开会话或上下文被清理后）我无法保证还记得，届时需要您重新告知，或先明确让我走长期记忆登记流程。\n\n如果您希望它们被长期记住，请回复「请写入长期记忆」，我再帮您处理。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3932,
+   "seen_at": "2026-10-11 02:11:28",
+   "meta": {
+    "conversation_id": 9345
+   }
+  },
+  {
+   "id": "conv_clean-131",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "我最喜欢的产品代号是「智源」，也请记住。",
+   "response": "好的，我记下了这两条信息：\n\n- 您的名字：**米巴**\n- 您最喜欢的产品代号：**智源**\n\n同样需要如实说明：这两条目前只存在于本次对话的上下文中，我并没有把它们写入长期记忆库。如果会话结束或上下文被清理，这些信息可能会丢失。\n\n如果您希望它们被**稳定、跨会话地记住**，请明确告诉我「请写入长期记忆」，我再帮您走登记流程（这类写入通常需要您确认，避免把临时信息误存为长期事实）。\n\n另外提醒一句：「智源」在本平台语境下也是 MBSE 平台本身的名称，所以当您后续说「智源」时，我会结合上下文判断您指的是**平台**还是**您偏好的产品代号**，如有歧义我会先跟您确认。\n\n接下来您想做什么？比如查询工程、生成/校验 SysML v2 模型，或其他任务，我都可以帮您安排。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3930,
+   "seen_at": "2026-10-11 02:10:34",
+   "meta": {
+    "conversation_id": 9345
+   }
+  },
+  {
+   "id": "conv_clean-132",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "我刚才说我叫什么？",
+   "response": "您刚才说您叫**米巴**。\n\n不过要说明一下：我这边并没有把「米巴」这个名字真正写入长期记忆——上一轮我给出的回复是「需要您确认建模信息后继续」，并没有实际执行记忆写入。所以严格来说，这个名字目前只存在于本次对话的上下文里，一旦会话结束就可能丢失。\n\n如果您希望它被稳定记住，可以告诉我，我帮您走一下记忆登记流程；或者您也可以直接说明接下来要做的建模任务，我在处理时会沿用「米巴」这个称呼。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3928,
+   "seen_at": "2026-10-11 02:09:26",
+   "meta": {
+    "conversation_id": 9345
+   }
+  },
+  {
+   "id": "conv_clean-133",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "按上述方案落地：在既有需求模型上补充涉众与参与者追溯关系的定义，生成 v0.5 模型代码并同步更新追溯视图",
+   "response": "ok",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3924,
+   "seen_at": "2026-10-11 01:39:17",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-134",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请解析宽带通信任务书的需求",
+   "response": "ok",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3910,
+   "seen_at": "2026-10-10 16:16:38",
+   "meta": {
+    "conversation_id": 1
+   }
+  },
+  {
+   "id": "conv_clean-135",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【建模目的】将客户提供的整车需求数据导入模型，形成整车需求分析初始输入\n【输入】客户提供的整车需求，如下：\n<IR-3>车辆动力管理：\n车辆应根据驾驶需求和车辆运行状态，对车辆动力输出进行\n管理，以满足车辆运行需求。\n<IR-1>车辆动力输出：\n车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需\n求的动力输出。\n<IR-2>动力模式管理\n车辆应根据车辆状态和运行条件选择适合的动力运行模式，\n以满足车辆运行需求。\n<IR-4>能源状态适应\n车辆应根据能源状态调整动力输出策略，保证车辆持续运行\n能力。\n\n【建模活动】\n1.读取需求内容（名称、描述）\n2.解析需求编号、名称、描述等信息\n3.将需求条目导入模型工程\n4.建立需求条目与模型对象关联\n【输出】IR需求图\n【建模约束】\n1.保持客户需求原文，不修改需求语义\n2.需求编号保持原始编号规则\n3.不进行需求分析和功能推导",
+   "response": "本轮工具调用已达上限，我基于已获得的信息给出最终结论。\n\n## 建模结论\n\n### 一、需求条目化结果（保持原文，未改语义）\n\n依据建模约束「保持客户需求原文、编号保持原始规则、不做功能推导」，我将客户提供的 4 条整车需求条目化如下：\n\n| 编号 | 名称 | 需求描述（原文） |\n|------|------|------------------|\n| IR-3 | 车辆动力管理 | 车辆应根据驾驶需求和车辆运行状态，对车辆动力输出进行管理，以满足车辆运行需求。 |\n| IR-1 | 车辆动力输出 | 车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需求的动力输出。 |\n| IR-2 | 动力模式管理 | 车辆应根据车辆状态和运行条件选择适合的动力运行模式，以满足车辆运行需求。 |\n| IR-4 | 能源状态适应 | 车辆应根据能源状态调整动力输出策略，保证车辆持续运行能力。 |\n\n以上 4 条需求全部保留客户原文，未做任何语义改写、编号变更或功能推导。\n\n### 二、SysML v2 模型代码（已生成，待最终校验）\n\n我生成了 `VehicleRequirements` 包，包含：\n- 需求定义（requirement def）：`VehicleRequirement` 基类，以及 IR-1~IR-4 四个需求定义，均特化自基类；\n- 需求用法（requirement us…[2824 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3883,
+   "seen_at": "2026-10-10 02:54:31",
+   "meta": {
+    "conversation_id": 9335
+   }
+  },
+  {
+   "id": "conv_clean-136",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请基于已生成的 SysML v2 架构骨架，生成 **activity** 视图。只引用骨架中已存在的元素，不要凭空引入部件或端口。生成后必须调用 sysml_v2_validate 校验，verdict=block 时按诊断位置修复后重试（最多 3 轮）。",
+   "response": "我先查标准库确认可用的动作/条目成员，再写活动视图代码。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3335,
+   "seen_at": "2026-10-08 09:08:49",
+   "meta": {
+    "conversation_id": 9053
+   }
+  },
+  {
+   "id": "conv_clean-137",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "查询当前工程的需求包结构树，列出顶层包",
+   "response": "## 一、查询结论：本轮依然未取得有效结果，我无法列出顶层包\n\n先说结论，再说怎么解。\n\n对当前工程的需求包结构树，累计已发起多轮查询（平台侧工程/包层级信息 + 本地知识检索），**全部返回空**。因此我**不能列出当前工程的顶层包**——包名与层级属于工程事实性数据，编一串看起来合理的包名会被下游当成真实结构使用，甚至被回写进模型，风险远大于「查不到」。这条明确标记为**查询未完成**，不是「无此类包」。\n\n需要说明的是：本轮我**没有再重发同一条查询**。在原因未定位前重复同一调用，只会得到同一个空结果，属于无效循环；正确的做法是先排除访问与定位问题。\n\n另外，本轮的本地检索命中的是 SysML V2 方法论素材（方法论分层、需求分级、结构元模型等）[1,2,3]，**方法论不等于工程现有结构**，不能用来反推当前工程有哪些需求包。\n\n## 二、为什么「有资产」不等于「有包结构」\n\n当前可确认的环境现状是：分支为 `dev`，该分支既有建模实体约 61 项（只报规模），本会话已产出 SysML 模型版本与若干视图、报告。但这些只说明**图库里有实体**，不说明**工程里有需求包层级**。二者来源不同：前者来自个人分支图库，后者来自工程建模库的包树接口。前者查得到，不能替代后者。\n\n按可能性排序的三个原因与对应动作：\n\n1. **访问凭据过期或未授权**——最常见，典型表现就是…[5318 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3172,
+   "seen_at": "2026-10-07 11:20:30",
+   "meta": {
+    "conversation_id": 325
+   }
+  },
+  {
+   "id": "conv_clean-138",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "查询当前工程的需求包结构树，列出顶层包",
+   "response": "## 一、需求包结构树查询：本轮未取得有效结果\n\n对当前工程执行了两次平台侧查询——工程清单与包结构树——两次调用均未返回任何有效内容（空响应）；随后又做了一次本地知识检索，同样未命中与「需求包 / 包结构树 / 顶层包」实质相关的内容。\n\n因此，**我无法列出当前工程的顶层需求包**。包结构与包名属于工程事实，凭空给出一串包名会被误当作真实结构使用，所以这一条我不做推测性填充，明确标记为「查询未完成」。\n\n可确认的只有环境层面的现状（来自当前工作上下文，非包树内容）：\n\n- 当前分支为 `dev`，该分支既有建模实体约 61 项（只报规模，不具备包层级信息）；\n- 本会话已产出 2 个 SysML 模型版本、2 类视图（追溯视图、需求图）、若干报告与代码文件；\n- 最近变更记录集中在「动力分系统」与「巡飞弹参数变更影响分析」相关条目上。\n\n也就是说，**有资产、但没有拿到底层包的组织信息**，二者不能互相替代。\n\n## 二、查询失败的可能原因与建议动作\n\n按可能性排序：\n\n1. **平台访问凭据（token）过期或未授权**——最常见，表现为接口静默返回空；\n2. **未指定具体工程**——多工程环境下不指定工程时，包树查询可能返回空集；\n3. **目标工程本身尚无需求包（包树为空或仅有根）**——此时「顶层包」确实不存在，需要先建包；\n4. **接口临时异常**——需重试或降级…[1493 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3167,
+   "seen_at": "2026-10-07 11:17:07",
+   "meta": {
+    "conversation_id": 325
+   }
+  },
+  {
+   "id": "conv_clean-139",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "用两句话介绍MBSE 的五元素追溯链",
+   "response": "MBSE 的五元素追溯链，是把「利益相关方需求 → 系统需求（含子系统/单元需求）→ 功能 → 架构元素（分系统/部件）→ 验证用例」这五类建模元素首尾相接：需求之间用 DERIVES 派生、需求与功能/架构元素之间用 SATISFIES 与 ALLOCATED_TO 建立满足与分配、需求与验证用例之间用 VERIFIED_BY 闭环，从而让每一环都能双向查询到它的来处与去处。\n\n这样一条链的价值在于：任一环节发生变更时，都可沿链快速定位受影响的下游需求、架构与验证用例，同时任一断点（如某条需求无架构承接或无验证用例）都会被覆盖度审计直接暴露出来——需要说明的是，若贵方规范中的「五元素」另有定义（例如把接口或追溯关系本身计入），应以正式规范文档为准。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3121,
+   "seen_at": "2026-10-04 06:03:22",
+   "meta": {
+    "conversation_id": 9016
+   }
+  },
+  {
+   "id": "conv_clean-140",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "用一句话介绍MBSE建模方法论",
+   "response": "MBSE 建模方法论是以结构化模型取代文档、围绕「需求→架构→验证」主线构建可追溯闭环的系统工程方法——即通过需求分层派生、需求与架构元素的满足/分配、验证用例闭环以及全链路追溯这四类关系，把「要解决什么问题」与「如何形成方案」分开管理并串成可审计的链路 [3]。\n\n简言之：它以模型为唯一事实来源，用 DERIVES、SATISFIES/ALLOCATED_TO、VERIFIED_BY 等关系把需求、架构与验证逐层贯通，从而支撑变更影响评估与覆盖度审计；在实施上通常划分为问题域（需求分析）与方案域（逐层架构设计）两大阶段 [3]。\n\n如需针对某一环节（如需求派生规则、视图规范）进一步展开，可继续提问。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3119,
+   "seen_at": "2026-10-04 05:33:30",
+   "meta": {
+    "conversation_id": 9016
+   }
+  },
+  {
+   "id": "conv_clean-141",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "调用工具查一下当前知识图谱里有多少个实体，然后一句话回答",
+   "response": "当前知识图谱中共有 189 个知识实体（另有 52 个本体类型、249 条关系）[工具返回]。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3115,
+   "seen_at": "2026-10-02 14:12:14",
+   "meta": {
+    "conversation_id": 9016
+   }
+  },
+  {
+   "id": "conv_clean-142",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "建模目的】将客户提供的整车需求数据导入模型，形成整车需求分析初始输入\n【输入】客户提供的整车需求，如下：\n车辆动力管理：\n车辆应根据驾驶需求和车辆运行状态，对车辆动力输出进行\n管理，以满足车辆运行需求。\n车辆动力输出：\n车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需\n求的动力输出。\n动力模式管理\n车辆应根据车辆状态和运行条件选择适合的动力运行模式，\n以满足车辆运行需求。\n能源状态适应\n车辆应根据能源状态调整动力输出策略，保证车辆持续运行\n能力。\n\n【建模活动】\n1.读取需求内容（名称、描述）\n2.解析需求编号、名称、描述等信息\n3.将需求条目导入模型工程\n4.建立需求条目与模型对象关联\n【输出】IR需求图\n【建模约束】\n1.保持客户需求原文，不修改需求语义\n2.需求编号保持原始编号规则\n3.不进行需求分析和功能推导",
+   "response": "（编排质量门禁：质量评审未通过（25/100）：完整性严重不足：报告仅到1.2表格第1条即截断，未列出声称的4条需求，也未覆盖第0节承诺的设计、分析、结论等全部子任务交；未体现对[t1]、[t3]等子任务交付物的整合内容，无法确认全部交付物已被覆盖。）\n\n# 整车需求导入模型工程整合最终报告\n\n## 0. 报告范围与整合原则\n\n本报告仅整合给定子任务交付物 `[t1]`、`[t2]`、`[t3]`、`[t4]` 的内容，不补充未给出的事实。报告按“需求 → 设计 → 分析 → 结论”组织。各小节中涉及的未确认、风险、缺失信息均显式标注，不作为已确认事实处理。\n\n---\n\n## 1. 需求：原始需求导入与解析\n\n### 1.1 需求来源与解析范围\n\n根据 `[t2]`、`[t4]`，本轮需求来源于客户提供的整车需求原文。处理口径为：\n\n- 不改语义：需求描述与原文逐字一致，不改写、不精简、不合并同义表述，不补齐原文未写的条件与指标。\n- 不拆分、不归并：需求条目按原文逐条搬运。\n- 不做需求分析与功能推导：不识别功能、不生成验证用例、不建立需求之间的派生或分解关系。\n- 不发明编号：原文未出现编号时，编号字段保留为待确认占位，不以自造编号替代。\n- 本轮解析出 **4 条**需求条目，四条为平行原始输入。\n\n### 1.2 结构化需求条目清单\n\n| 序号 | 原始编号 | 需求名称 …[3633 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3054,
+   "seen_at": "2026-10-01 17:37:55",
+   "meta": {
+    "conversation_id": 9004
+   }
+  },
+  {
+   "id": "conv_clean-143",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "按上述方案落地：在既有需求模型上补充涉众与参与者追溯关系的定义，生成 v0.5 模型代码并同步更新追溯视图",
+   "response": "（编排质量门禁：质量评审未通过（15/100）：输出严重不完整：声明要覆盖 t1–t6 并补齐 t3–t6、最终结论、交付物覆盖表、风险汇总、缺口清单与后续验证计划，但；完整性不足：未覆盖全部子任务交付物，t2–t6 的整合内容完全缺失，无法评估对全部交付物的覆盖情况。）\n\n# MBSE v0.4→v0.5 涉众—参与者追溯增量整合报告（修订版）\n\n> 标注约定：[给定事实] 来自 t1–t6 可引用交付物；[设计意图/推断] 为子任务解释性表述，未获需求方/评审确认；[待确认] 未闭环；[缺失] 交付物未提供；[声明] 为子任务自述，尚未经独立复核。本次修订仅按评审 issues/advice 补齐 t3–t6、最终结论、交付物覆盖表、风险汇总、缺口清单与后续验证计划，不新增给定交付物之外的模型事实。\n\n## 0. 整合范围与完整性声明\n\n本报告仅基于给定子任务交付物 t1–t6 进行整合，不补充任何未给出的模型事实、量化结论或业务假设。\n\n**完整性限制需显式说明：**\n- t1、t2、t4、t6 的给定文本存在省略或截断，部分清单、代码、满足关系、报告表格未完整展开。\n- t3、t5 的交付物仅见 `file_list` 调用，未包含诊断结果、修复记录或覆盖性分析结论。\n- t6 明确说明：前序分析交付物 t1–t5 的结构化结果与 v0.5 模型实际产物未传入其上下文；检索…[4843 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3018,
+   "seen_at": "2026-10-01 13:10:22",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-144",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "在既有需求模型基础上，补充涉众与参与者信息的追溯关系定义",
+   "response": "## 结论先行\n\n在既有需求模型（当前 v0.4：已含四类涉众关注点、参与者信息需求、分配需求、系统需求与涉众实例）之上，涉众与参与者信息的追溯**不需要新增专用语法**，而是把已有关系类型按三层各归其位：\n\n- **涉众层**：涉众实体 → 关注点（concern）的承载关系，用 `dependency`/refine 这类弱语义追溯表达「谁关注什么」；\n- **参与者层**：外部角色（`actor`/`part`）→ 系统元素/用例的参与与接口关系，以及对「谁提出、谁评审、谁定优先级」等字段的**满足关系**（`satisfy`）；\n- **需求层**：涉众需求 `derive` 出下层需求、系统元素 `satisfy` 需求、验证用例 `verify` 需求，结构职责用 `allocate` 落到分系统。\n\n也就是说：**涉众与参与者的追溯，应当挂在「关注点需求」和「参与者信息需求」这两类需求定义上，而不是挂在涉众实例自身**——实例只承载「是谁」，需求承载「要什么」与「如何被满足」。\n\n---\n\n## 一、依据与规则\n\n**关系分工（来源支撑）**：需求定义/需求使用的下游投影，规范上落在用户用例视图、运行验证用例与追溯视图；利益相关方角色（`part`/`actor`）则关联到用户用例视图与场景组成结构视图 [1]。因此涉众与参与者的追溯链天然是「角色 → 用例/场景 →…[3206 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3016,
+   "seen_at": "2026-10-01 13:04:31",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-145",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "继续优化需求数据，补充参与者与涉众信息",
+   "response": "3 条语义错属同一根因：特化子需求的体内出现 stakeholder 时，`subject` 必须是体内第一个参数，而特化后 subject 不再位于首位。按安全写法修复——把三个涉众关注点定义为独立需求定义（各自首行声明 subject），不再走特化，语义等价且消除该约束冲突。\n\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"sysml_v2_validate\">\n<｜｜DSML｜｜ parameter name=\"code\" string=\"true\">package VehicleStakeholderRequirementModel {\n\n    private import ScalarValues::*;\n\n    /* ================= 1. 接口与结构骨架 ================= */\n\n    port def CommandPort {\n        attribute command : String;\n    }\n\n    port def StatusPort {\n        attribute status : String;\n    }\n\n    part def Cockpit {\n        doc /* 座舱：参与者下达指令与接收状态反馈的载体 */\n        por…[10281 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3014,
+   "seen_at": "2026-10-01 02:37:47",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-146",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「我不确定你想让我做哪件事 —— 请选一项，或直接在下方补充你的说法（选完我再执行）」→ 回答：设计/建模：理解用户意图，SysML v2建模与视图代码\n\n原请求：优化需求数据，需要支持参与者信息\n",
+   "response": "（编排质量门禁：质量评审未通过（0/100）：解析失败）\n\n# v0.3 增量变更与交付报告\n\n## 〇、报告信息\n\n| 项目 | 内容 |\n|---|---|\n| 文档编号 | REP-v0.3-CHG-001 |\n| 报告名称 | v0.3 增量变更与交付报告 |\n| 文档版本 | v1.1（结构修订版，仅按“解析失败”评审意见修订） |\n| 报告日期 | 2026-09-16 |\n| 对应任务 | 生成 v0.3 增量变更与交付报告 |\n| 编制 | 报告生成 Agent |\n| 审核 | 待指定（建议由模型负责人 / 评审主持复核） |\n| 输入基线 | 上游预评审报告（v0.3 参与者信息建模及视图更新）、本会话 v0.1 / v0.2 模型产物 |\n| 数据口径 | 仅基于给定上下文；评审平台与图谱检索接口返回空处以上游声明口径复核，缺口如实标注 |\n| 评审问题 | 解析失败 |\n| 修订说明 | 本次修订仅按 issues/advice 处理“解析失败”。advice 为空，未新增实质建议。处理方式为：将原先可能拼接的交付物片段收束为单一报告，闭合表格结构，补齐分节编号，避免嵌入未闭合代码块或工具调用片段，并在不改变原结论的前提下引用 t1、t2、t3、t6 作为证据。原有风险与待确认标注全部保留。 |\n| 交付通道 | Markdown 正文已落盘 `output…[12074 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3012,
+   "seen_at": "2026-09-30 10:01:54",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-147",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「我不确定你想让我做哪件事 —— 请选一项，或直接在下方补充你的说法（选完我再执行）」→ 回答：设计/建模：理解用户意图，SysML v2建模与视图代码\n\n原请求：优化需求数据，需要支持参与者信息\n",
+   "response": "（计划已执行，但无成功交付物）",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3010,
+   "seen_at": "2026-09-30 09:41:05",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-148",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "优化需求数据，需要支持参与者信息",
+   "response": "## 一、意图复述与本轮定位\n\n您的诉求是：**在既有整车需求模型（v0.1，含 4 条涉众需求及需求图、活动图）之上做增量修改，让需求数据能够承载\"参与者（利益相关方）\"信息**，并同步产出可投影的模型代码。\n\n本轮定位：**v0.1 → v0.2**，不重建、不改动原有 4 条需求的文字语义与命名，只做\"结构增量\"——新增参与者类型体系，并把参与者挂接到每条需求上。\n\n## 二、先澄清一件事：「参与者」在您语境里指哪一类？\n\n这一点不定，\"优化\"就会做偏。需求生命周期上至少有三类\"参与者\"，落点完全不同：\n\n| 类别 | 语义 | 应落在模型哪个位置 |\n|---|---|---|\n| A 关注方 / 提出方 | 谁提出、谁关注、谁受影响（驾驶员、车队运营方、维保工程师） | 需求本体上的 `stakeholder` 参数 |\n| B 验证执行方 | 谁来执行验证、扮演什么角色 | 验证用例的 `actor` |\n| C 责任 / 审批方 | 谁批准、谁负责关闭该需求 | 属需求的管理属性，非需求内容 |\n\n从您两轮重复的表述看，最可能是 **A**；但我不能替您决定。本轮代码按 A 落地；若 B、C 也在范围内，请回一句，我在下一轮补，不覆盖已确认部分。\n\n## 三、信息缺口（逐项待您确认，我不代为假设）\n\n1. 参与者的**取值范围**是谁？我暂按四类占位：驾驶员、车队运营…[4326 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3008,
+   "seen_at": "2026-09-30 09:36:40",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-149",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "只是基于历史会话内容重新优化设计，为啥要读写智源工具",
+   "response": "（计划已执行，但无成功交付物）",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3005,
+   "seen_at": "2026-09-30 09:09:10",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-150",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "优化需求数据，需要支持参与者信息",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 3000,
+   "seen_at": "2026-09-30 08:51:17",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-151",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "继续优化",
+   "response": "（编排质量门禁：质量评审未通过（0/100）：解析失败；编排部分完成，建议人工复核缺失交付物）\n\n（评审处理说明：评审意见 issues 为“解析失败”，advice 为空，未形成可执行的修订条款。因此本轮仅做保留性修订：不新增、不推断 [t1] requirement_analysis 之外事实；保留原报告分节结构、风险/待确认标注。编排状态：t2、t3、t4、t5 缺失/失败；正文仅以 [t1] requirement_analysis 作为可引用证据基础。）\n\n# 复审当前需求规格，输出优化点与待确认项清单\n\n## 一、复审范围与我的理解\n\n你的诉求是：对**当前的需求规格**做一次复审，输出「优化点清单」与「待确认项清单」，团队目标是继续优化。\n\n我需要先说明本次复审的实际可审边界，因为这直接决定了结论的可信度：我做了一次确定性的覆盖与追溯体检（规则版本 cov-v1.0，只读、可复现）。体检结果显示——**当前建模工作区里没有一个被识别为\"需求\"的条目，也没有一个被识别为\"架构元素\"的对象**，成规模的只有追溯关系边。因此本次复审我不能给出（也不应给出）任何覆盖率数字，只能给出结构性诊断与确认清单。\n\n## 二、体检发现（客观事实，非推断）\n\n**第一，受审对象为空，覆盖率无法计算。** 需求总数与架构元素总数均为零，覆盖需求数、覆盖率、仅靠分解关系支撑的需求数都无法计算…[3875 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2997,
+   "seen_at": "2026-09-30 02:06:21",
+   "meta": {
+    "conversation_id": 326
+   }
+  },
+  {
+   "id": "conv_clean-152",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【建模目的】将客户提供的整车需求数据导入模型，形成整车需求分析初始输入\n【输入】客户提供的整车需求，如下：\n<IR-3>车辆动力管理：\n车辆应根据驾驶需求和车辆运行状态，对车辆动力输出进行\n管理，以满足车辆运行需求。\n<IR-1>车辆动力输出：\n车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需\n求的动力输出。\n<IR-2>动力模式管理\n车辆应根据车辆状态和运行条件选择适合的动力运行模式，\n以满足车辆运行需求。\n<IR-4>能源状态适应\n车辆应根据能源状态调整动力输出策略，保证车辆持续运行\n能力。\n\n【建模活动】\n1.读取需求内容（名称、描述）\n2.解析需求编号、名称、描述等信息\n3.将需求条目导入模型工程\n4.建立需求条目与模型对象关联\n【输出】IR需求图\n【建模约束】\n1.保持客户需求原文，不修改需求语义\n2.需求编号保持原始编号规则\n3.不进行需求分析和功能推导",
+   "response": "# 整车需求数据导入（IR 需求图）最终报告\n\n> 本报告基于三份已完成子任务交付物（t1 建模方案、t2 需求初始输入清单、t3 汇总校验答复）整合而成，仅复述与组织其中已有内容，不补充任何新事实。所有交付物中标注的风险、待确认项与缺失信息，均在对应小节显式保留，未作为已确认事实处理。\n\n---\n\n## 一、任务目标与边界\n\n本批任务的目标是：**把客户提供的 4 条整车需求原文导入模型工程，形成整车需求分析的初始输入，并输出一张 IR 需求图**（t3）。\n\n任务约束（三条红线，t1、t2 一致确认）：\n\n1. 不修改需求语义——描述文字保持客户原文；\n2. 不改动编号规则——沿用客户原始编号；\n3. 不做需求分析与功能推导——不派生下层需求、不推导功能、不建立满足/分配关系。\n\n范围：本批 4 条需求（IR-1 至 IR-4）；产出物为需求初始输入清单与 IR 需求图。\n\n---\n\n## 二、需求（需求条目与初始输入清单）\n\n### 2.1 需求条目汇总（4 条，原文保持）\n\n以下条目严格沿用客户原始编号与原文描述，未做语义修改、未做编号重排、未做功能推导（t3）：\n\n- **第 1 条（IR-1）车辆动力输出**：车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需求的动力输出。\n- **第 2 条（IR-2）动力模式管理**：车辆应根据车辆状态和运行条件选择适合的动力运行…[6659 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2973,
+   "seen_at": "2026-09-29 06:09:48",
+   "meta": {
+    "conversation_id": 514
+   }
+  },
+  {
+   "id": "conv_clean-153",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请解析宽带通信任务书的需求",
+   "response": "您连续两次提出同一诉求，我理解您希望我**直接开始解析**。但这里有一个硬性阻塞点必须先讲清楚，否则我产出的内容会是编造的。\n\n## 一、阻塞点：任务书正文不在我可访问的范围内\n\n我尝试确认输入材料，但当前会话中：\n\n- **没有**任务书正文文本；\n- **没有**文件路径或附件；\n- 知识库检索结果为「未引用知识库」，即**没有检索到任何可用的任务书内容**。\n\n在这种状态下，如果我输出「宽带通信任务书需求清单」，那只能是凭领域常识虚构的条目，而不是对您这份任务书的解析。这违反需求分析的基本准则，我不会这样做。\n\n## 二、请您二选一，我立刻开工\n\n**方式 A：提供文件路径**\n把任务书放到工作目录下，告诉我路径（例如 `docs/宽带通信任务书.docx`），我先列目录确认文件存在，再读取正文解析。\n\n**方式 B：直接粘贴正文**\n把任务书内容粘贴到对话中，我按「涉众需求 → 系统需求 → 子系统需求」逐层提取。\n\n## 三、拿到材料后我的解析流程（供您预判产出）\n\n1. **提取涉众与目标**：识别任务书中的提出方、使用方、约束方，建立用例视图。\n2. **条目化分解**：将每条目标拆为可验证需求，标注来源（对应任务书章节/条款）、优先级（MoSCoW）。\n3. **冲突检测**：检查同名实体、属性矛盾、约束违反。\n4. **追溯矩阵**：建立需求—用例—架构元素的追溯…[1092 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2963,
+   "seen_at": "2026-09-26 15:32:56",
+   "meta": {
+    "conversation_id": 1
+   }
+  },
+  {
+   "id": "conv_clean-154",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请解析宽带通信任务书的需求",
+   "response": "我先复述一下我的理解，再列出必须确认的信息缺口——在您确认之前，我不会编造任何需求条目。\n\n## 一、我对本次诉求的理解\n\n您希望我**解析「宽带通信任务书」这份输入文档**，从中提取并结构化出需求条目（涉众需求 → 系统需求 → 子系统/单元需求），标注来源追溯与优先级，并建立需求与用例/架构元素的追溯关系。\n\n需要说明的是：当前会话中**并未提供该任务书的正文内容**，我也没有可读取的文件路径。因此这属于「输入材料缺失」状态，无法直接进入需求提取。\n\n## 二、需求分析前必须确认的信息缺口\n\n| 序号 | 待确认项 | 说明与示例 | 当前状态 |\n|---|---|---|---|\n| 1 | **系统范围** | 分析对象是整星、通信载荷分系统，还是含地面段的端到端系统？边界外系统（如运载、发射场）是否纳入？ | [TBD] |\n| 2 | **输入材料** | 任务书正文在哪里？请提供文件路径（我可读取）或直接粘贴文本；是否有配套的指标表、接口文件、glossary？ | [TBD] |\n| 3 | **涉众与目标** | 谁是需求提出方（用户/总体/上级机关）？核心目标是什么（容量、覆盖、可用度、寿命）？ | [TBD] |\n| 4 | **约束条件** | 轨道、频段、功率、质量、体积、研制周期、成本、标准规范（如 GJB/CCSDS）等硬约束有哪些？ | [TBD]…[1308 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2961,
+   "seen_at": "2026-09-26 15:32:35",
+   "meta": {
+    "conversation_id": 1
+   }
+  },
+  {
+   "id": "conv_clean-155",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「您希望围绕“流式输出”开展哪类 MBSE 工作？」→ 回答：需求分析与用例建模\n问题「需要建模的流式输出系统边界或对象是什么？」→ 回答：AI/LLM 推理服务\n问题「本分析最关注哪些指标或质量属性？」→ 回答：延迟与首字节时间\n\n原请求：流式输出",
+   "response": "# AI/LLM 推理服务流式输出需求分析与用例建模整合报告（修订版）\n\n**编制说明（按评审意见修订）**：本报告仅整合 t1–t5 给定交付物，不补充交付物之外的事实。用户澄清补充信息为：围绕“流式输出”开展需求分析与用例建模；系统边界或对象为 AI/LLM 推理服务；重点关注指标或质量属性为延迟与首字节时间。针对评审意见，本修订版做如下调整：补齐原报告缺失的 1.3、1.4、1.5、2、3、4 等章节，使交付物覆盖映射表仅引用实际存在的章节；对 t1–t3 交付物本体缺失、t4 评审意见截断、t5 汇总正文未呈现等情况统一标注来源、影响范围与待确认项；将报告状态明确为“本体不完整，不能作为完整整合报告验收”；并按“需求→用例建模→评审→汇总结论”组织正文。t1–t3 的任务描述分别指向需求预检、需求规格说明、用例视图生成；但给定片段中均出现相同的“已识别意图：系统方案设计（BR-4）”方案对比与截断的 SysML v2 代码，且未呈现其声称的预检确认清单、需求规格说明、用例视图/用例说明本体。t4 片段提供评审结论、评审范围与依据、边界问题，但末尾截断。t5 给定片段仅提供报告标题“# AI/LLM 推理服务流式输出需求分析与用例建模报告”，除此之外的汇总正文未在给定交付物中呈现。\n\n## 交付物覆盖映射\n\n| 子任务 | 子任务目标 | 给定交付物证据 | 本体状态 | 映…[14598 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2779,
+   "seen_at": "2026-09-17 05:53:52",
+   "meta": {
+    "conversation_id": 326
+   }
+  },
+  {
+   "id": "conv_clean-156",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「本次建模对象是哪种巡飞弹层级？」→ 回答：概念级/通用巡飞弹\n问题「需要覆盖的设计原理范围是？」→ 回答：气动/结构/动力/控制/制导/战斗部全链路\n问题「关系图谱希望表达哪类关系？」→ 回答：需求-功能-逻辑-物理架构\n\n原请求：巡飞弹的设计原理，以及关系图谱",
+   "response": "# 概念级通用巡飞弹 MBSE 任务汇总最终报告\n\n> **整合说明与输入完整性声明**：本报告仅基于所提供的 t1、t2 交付物可见内容整合。t1 在“涉众与建模目标（用例视图）”表格处截断；t2 在“这属于本体覆盖不完全”处截断。未提供的部分不作推断，不作为已确认事实纳入。\n\n---\n\n## 一、需求：建模范围、涉众与关系表达要求（t1 / requirement_analysis）\n\n### 1.1 建模对象与层级\n- 建模对象为**概念级/通用巡飞弹**：不绑定具体型号，不锁定具体战术技术指标量值，只对巡飞弹这一类系统的组成、行为、约束和设计原理做通用概念级抽象。\n- 凡涉及具体数值指标的条目，本次一律标注为 `[TBD]`，待型号化阶段由指标论证输入后填充。\n\n### 1.2 覆盖的设计原理链路与下游支撑\n- 覆盖链路为：**气动 → 结构 → 动力 → 控制 → 制导 → 战斗部**，六条链路贯通。\n- 下游延伸至**数据链、地面装备与外部系统**的支撑关系。\n\n### 1.3 关系图谱表达要求\n需表达四层及其关系：\n- 需求层：利益相关方需求 → 系统需求 → 子系统需求 → 单元需求；\n- 功能层：任务功能 → 子功能；\n- 逻辑架构层：分系统及其接口；\n- 物理架构层：部件及其装配。\n\n四层之间需表达：**派生、满足、分配、验证、流、连接关系**。\n\n### 1.…[3614 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2756,
+   "seen_at": "2026-09-16 08:46:24",
+   "meta": {
+    "conversation_id": 326
+   }
+  },
+  {
+   "id": "conv_clean-157",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「燃油消耗率从 0.85 调整到 0.92 的单位和参数口径是什么？」→ 回答：kg/(kW·h)\n问题「本次影响分析基于哪个巡飞弹模型基线与变更单？」→ 回答：当前最新基线\n问题「“影响深度 3 层”按哪类关系计算？」→ 回答：SysML 追溯/依赖关系跳数\n\n原请求：对巡飞弹做参数变更影响分析：把动力分系统的燃油消耗率从 0.85 调整到 0.92，影响深度 3 层",
+   "response": "",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2753,
+   "seen_at": "2026-09-16 03:50:03",
+   "meta": {
+    "conversation_id": 325
+   }
+  },
+  {
+   "id": "conv_clean-158",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「燃油消耗率从 0.85 调整到 0.92，其单位与参数路径是什么？」→ 回答：g/(kW·h)\n问题「本次影响分析基于哪个基线模型？」→ 回答：已有 SysML 系统模型\n问题「影响分析重点评估哪些顶层指标？」→ 回答：航程/续航时间\n\n原请求：对巡飞弹做参数变更影响分析：把动力分系统的燃油消耗率从 0.85 调整到 0.92，影响深度 3 层",
+   "response": "# 巡飞弹参数变更影响分析报告\n\n**变更对象：动力分系统 · 燃油消耗率 0.85 → 0.92 g/(kW·h)｜影响深度 3 层**\n\n> 本报告为变更影响**评估意见**，供决策参考，不替代变更审批流程；本环节不执行任何变更操作。\n\n---\n\n## 一、变更摘要\n\n| 项目 | 内容 |\n|---|---|\n| 变更对象 | 巡飞弹 → 动力分系统（参数承载元素：燃油消耗率） |\n| 变更类型 | 修改（modify，参数取值调整） |\n| 变更前值 / 变更后值 | 0.85 → 0.92 g/(kW·h)，**上调约 8.2%** |\n| 变更原因（申报） | 油耗指标优化 |\n| 影响深度 | 3 层（含变更源共 4 个传播层级） |\n| 分析基线 | 已有 SysML 系统模型（分支 dev，活跃实体 110 项） |\n| 重点评估指标 | 航程 / 续航时间 |\n\n**参数路径确认**：燃油消耗率是**动力分系统**的能量消耗强度参数，单位为克每千瓦时，其物理含义是「每输出一千瓦功率、每小时消耗的燃油质量」。因此本次变更**不改变产品构型、不改动物理接口形式**，但直接改变「燃油质量 → 可用能量 → 留空时间 → 航程」的换算关系，属于典型的**性能指标链传导型变更**。\n\n**⚠ 前置风险标注（不阻塞分析，但必须由业务方裁定）**：燃油消耗率数值越大代表耗油越…[4571 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2750,
+   "seen_at": "2026-09-16 03:08:33",
+   "meta": {
+    "conversation_id": 325
+   }
+  },
+  {
+   "id": "conv_clean-159",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「燃油消耗率 0.85 调整到 0.92 的单位和基准定义是什么？」→ 回答：燃油消耗率由 0.85 调整为 0.92（技术必要性：油耗指标优化）\n问题「本次影响分析依据的巡飞弹模型或基线是哪一类？」→ 回答：按建议口径执行\n问题「希望重点评估哪些受影响指标或维度？」→ 回答：按建议口径执行\n\n原请求：对巡飞弹做参数变更影响分析：把动力分系统的燃油消耗率从 0.85 调整到 0.92，影响深度 3 层",
+   "response": "# 巡飞弹参数变更影响分析报告\n## 变更对象：动力分系统燃油消耗率（0.85 → 0.92）· 影响深度 3 层\n\n> 本报告为**变更影响评估意见**，供决策参考，不替代变更审批流程；分析结论不执行任何变更操作。\n\n---\n\n## 一、变更摘要\n\n| 项目 | 内容 |\n|---|---|\n| 变更对象 | 巡飞弹→动力分系统（参数承载元素：燃油消耗率） |\n| 变更类型 | 修改（modify，参数取值调整） |\n| 变更前值 / 变更后值 | 0.85 → 0.92（**上调，幅度约 +8.2%**） |\n| 变更原因（申报） | 油耗指标优化 |\n| 分析深度 | 3 层（含变更源共 4 个传播层级） |\n| 分析依据 | 领域本体关系类型（组合、依赖、满足、分配、连接、执行）、项目规范基线、既有影响分析基线素材 |\n\n**变更性质判定**：燃油消耗率属**动力分系统的性能参数类变更**，不改变系统构型与物理接口形式，但直接改变能量—功率—航时的换算关系，因此其影响表现为**性能指标链传导**，而非构型重构。这一点决定了影响面比\"换件式变更\"更分散、更难用单一指标收口。\n\n---\n\n## 二、前置预警：三处必须先澄清的问题（未澄清前不建议推进审批）\n\n**预警 1｜参数方向与申报原因矛盾（高风险）**\n\"燃油消耗率\"是耗油强度指标，**数值越大代表单位功率/单位时间耗油越…[10139 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2746,
+   "seen_at": "2026-09-16 02:46:58",
+   "meta": {
+    "conversation_id": 325
+   }
+  },
+  {
+   "id": "conv_clean-160",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "对巡飞弹做参数变更影响分析：推进剂加注量与巡飞速度调整，影响深度3层",
+   "response": "# 巡飞弹参数变更影响分析报告（推进剂加注量 + 巡飞速度 · 3 层深度）\n\n> 本报告为**参考性技术分析**，基于领域本体关系结构、项目规范基线与既有影响分析素材推演得出；正式变更须经变更分析流程与人工确认（人在回路）后方可生效。\n\n---\n\n## 一、结论先行\n\n推进剂加注量与巡飞速度属于**同一能量—运动链上的两个耦合参数**，二者联动调整不是两个单点变更的叠加，而是沿两条主线向外扩散的复合影响：\n\n- **质量/能量线**：加注量改变 → 起飞质量与重心变化 → 配平、结构载荷、发射能量、航时航程同步变化；\n- **速度/气动线**：巡飞速度改变 → 螺旋桨与发动机工作点、气动升阻、控制律增益、载荷成像质量、链路时序同步变化。\n\n按 3 层传播口径，影响面**不仅限于动力分系统**，将依次触及飞控、结构、导航、任务载荷、数据链，并沿接口关系外延至地面装备与外部系统。参照既有基线（深度 2 层时直接 11 项、间接 29 项，覆盖全域约 74.1%，高/中/低影响为 9/30/1）[1][2]，本次深度提升至 3 层且变更参数收窄为两项，节点集合会与基线**部分偏离**：动力链节点被上提，与本次参数无关的分支则被排除。\n\n**影响度量化提示**：本次语义检索对\"推进剂加注量、巡飞速度\"未命中实质内容（词重叠度极低），因此**参数级影响度数值在知识库中暂无直接依据**。下述…[3471 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2741,
+   "seen_at": "2026-09-15 23:52:34",
+   "meta": {
+    "conversation_id": 325
+   }
+  },
+  {
+   "id": "conv_clean-161",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "对巡飞弹做参数变更影响分析：推进剂加注量与巡飞速度调整，影响深度3层",
+   "response": "# 巡飞弹参数变更影响分析报告\n## 变更对象：推进剂加注量、巡飞速度调整 · 影响深度 3 层\n\n---\n\n## 一、结论摘要\n\n本次为**两项参数级修改**，落点集中在能量—推进链路，属\"高耦合、中广度\"型变更。按 3 层依赖传播推算，影响不会停留在动力环节，而会沿 **质量/重心线**（→结构、飞控配平）与 **速度/气动线**（→螺旋桨匹配、载荷成像、通信时序）两条主线向外溢出，最终触及任务载荷、数据链、导航及地面装备。\n\n需要先行明确三点判断前提：\n\n1. **变更性质**：仅改推进剂加注量与巡飞速度两个参数，不触发其他设计基线调整；推进剂加注量的物理承载对象是燃油箱，能量转换落在活塞发动机，速度执行端落在螺旋桨。\n2. **判定依据**：图谱语义检索本次对\"两项参数\"未命中实质内容（词重叠为 0），因此具体的参数级影响度数值在知识库中**暂无直接依据**；下述分层结构依据本体的关系类型（组合、依赖、满足、分配、连接等）与既有《变更影响分析报告 · 巡飞弹》的清单基线推演得出，属**推断性结论**，非既有事实记录。\n3. **人在回路**：按项目基线，正式变更须经人工确认后方可生效，本次分析仅为技术参考，不构成变更批准 [1]。\n\n---\n\n## 二、变更口径与传播规则\n\n| 项目 | 内容 |\n|---|---|\n| 变更源 | 巡飞弹（承载平台，参数实际落在动力链） …[3514 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2739,
+   "seen_at": "2026-09-15 23:43:49",
+   "meta": {
+    "conversation_id": 325
+   }
+  },
+  {
+   "id": "conv_clean-162",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：\n问题「本次参数变更要建模/分析的对象与范围是什么？」→ 回答：巡飞弹参数变更：推进剂加注量与巡飞速度调整\n\n原请求：巡飞弹参数变更：推进剂加注量与巡飞速度调整",
+   "response": "# 巡飞弹参数变更影响分析报告\n## 变更对象：推进剂加注量、巡飞速度调整（影响深度 3 层）\n\n---\n\n## 一、变更摘要\n\n| 项目 | 内容 |\n|---|---|\n| 变更对象 | 巡飞弹（本体为承载平台，参数落在动力链上） |\n| 变更类型 | 修改（modify） |\n| 变更内容 | ① 推进剂加注量调整；② 巡飞速度调整 |\n| 变更来源 | 用户提出，范围限定为上述两项参数，不扩展至其他设计基线 |\n| 分析口径 | 依赖图 BFS 遍历，3 层传播，关系类型覆盖组合（CONTAINS / COMPOSED_OF）、引用（DEPENDS_ON / TRACE）、约束（SATISFIES / ALLOCATED_TO） |\n| 本次遍历结果 | 直接影响 4 条，间接影响 17 条，风险判定：高 21 / 中 0 / 低 0 |\n\n需要说明两点前提，避免误用：\n\n1. **本次图谱语义检索未命中实质相关内容**（工具返回词重叠为 0），因此下文的影响链路判定以领域本体中已定义的关系类型、项目规范基线，以及既有《变更影响分析报告 · 巡飞弹》的清单基线为依据；**知识库中无匹配规则的部分已如实标注，未编造依据**。\n2. 既有基线是一次**深度 2 层**的分析，其口径为直接影响 11 个元素、间接影响 29 个元素、影响范围覆盖率约 74.1% [1]。本次因深度…[7597 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2737,
+   "seen_at": "2026-09-15 23:37:36",
+   "meta": {
+    "conversation_id": 325
+   }
+  },
+  {
+   "id": "conv_clean-163",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "对巡飞弹做参数变更影响分析：推进剂加注量与巡飞速度调整，影响深度3层",
+   "response": "已识别意图：变更影响分析（BR-6）\n\n变更源：REQ-BC-002（并发接入 ≥ 100 万）→ 沿关系链 BFS 遍历，影响范围如下：\n\n直接受影响（3）：\n1. 载荷容量设计（derive 派生）→ 需扩容\n2. 星地链路预算（satisfy 满足）→ 需重算\n3. 地面网关集群（allocate 分配）→ 需扩容\n\n间接受影响（5）：\n1. 电源系统（依赖载荷扩容）→ 功耗上升\n2. 热控系统（依赖电源）→ 散热需求增加\n3. 卫星平台重量（依赖载荷）→ 发射成本\n4. 地面信关站数量（依赖网关集群）→ 建设成本\n5. 运维体系（依赖集群规模）→ 运营成本\n\n风险等级：高 —— 变更将传导至电源/热控等物理层，建议评估周期 2 周。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2733,
+   "seen_at": "2026-09-15 23:33:23",
+   "meta": {
+    "conversation_id": 325
+   }
+  },
+  {
+   "id": "conv_clean-164",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "对巡飞弹做参数变更影响分析：推进剂加注量与巡飞速度调整，影响深度3层",
+   "response": "# 巡飞弹参数变更影响分析报告（推进剂加注量 + 巡飞速度 · 3 层深度）\n\n> 说明：本报告由知识问答 Agent 基于领域本体、项目规范基线与历史影响分析素材整理，属**参考性分析**；正式变更判定须经变更分析流程与人工确认（人在回路）。\n\n## 一、结论先行\n\n对巡飞弹的**推进剂加注量**与**巡飞速度**做调整，属于同时牵动「供给—推进—气动—控制—载荷」多条链路的**复合参数变更**，其影响面不是单点，而是沿动力链向外扩散的**3 层传播**：\n\n- **第 1 层（直接受影响）**：动力分系统及其燃油/推进剂存储与推进部件（燃油箱、活塞发动机、螺旋桨）——变更参数本身落在这里，影响度最高。\n- **第 2 层（间接受影响）**：巡飞弹本体的质量与重心、飞控分系统、结构分系统、导航分系统、发射装置——由动力状态变化引发的配平、承载与弹射条件变化。\n- **第 3 层（传导受影响）**：任务载荷分系统、数据链分系统、地面控制站与任务规划终端、外部系统（卫星导航星座等）——速度与航时变化改变任务剖面与信息交互节奏。\n\n整体影响度的计算口径为「关系类型权重 × 层衰减系数 α=0.6」，并以图谱依赖网络做 3 层、双向传播 [1]；按此口径，第 1 层可判为高影响（约 1.0），第 2 层约衰减至 0.6，第 3 层约 0.36（后两档为按 α 推算值，属估算，需以实际关系…[2616 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2730,
+   "seen_at": "2026-09-15 23:31:02",
+   "meta": {
+    "conversation_id": 325
+   }
+  },
+  {
+   "id": "conv_clean-165",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "请对巡飞弹做一次参数变更影响分析：推进剂加注量与巡飞速度调整，影响深度 3 层，输出影响报告",
+   "response": "I'll first gather the relevant knowledge from the graph and workspace before organizing the report.",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2728,
+   "seen_at": "2026-09-15 23:27:56",
+   "meta": {
+    "conversation_id": 325
+   }
+  },
+  {
+   "id": "conv_clean-166",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "对当前模型进行预评审校验",
+   "response": "已识别意图：预评审校验（BR-7）\n\n对当前模型执行规范性/一致性/合理性校验，结论：有条件通过（78/100）\n\n问题清单（4）：\n1. [错误] REQ-BC-003「在轨可重构」缺量化验收标准 → 建议补充指标\n2. [警告] 载荷块未定义端口类型 → 建议补齐标准端口\n3. [警告] 存在 2 个孤立元素未连接 → 建议挂接关系\n4. [提示] 术语「信关站」与 glossary 未归一 → 建议统一\n\n修复建议：按上述问题清单逐项修订后复评。",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 2677,
+   "seen_at": "2026-09-10 09:31:44",
+   "meta": {
+    "conversation_id": 1
+   }
+  },
+  {
+   "id": "flow_completed-001",
+   "extractor": "flow_completed",
+   "kind": "regression",
+   "label": "weak",
+   "query": "【AI验证】需求冲突影响分析流程",
+   "response": "latency_ms=94881, errors=0",
+   "gold": "completed",
+   "source_table": "flow",
+   "source_id": 198,
+   "seen_at": "2026-10-19 10:44:40",
+   "meta": {
+    "flow_id": 239,
+    "conversation_id": 0,
+    "order_head": "[\"n1\", \"n2\", \"n3\", \"n4\", \"n5\", \"n6\"]"
+   }
+  },
+  {
+   "id": "flow_completed-002",
+   "extractor": "flow_completed",
+   "kind": "regression",
+   "label": "weak",
+   "query": "需求分析流水线1789032688623",
+   "response": "latency_ms=55, errors=0",
+   "gold": "completed",
+   "source_table": "flow",
+   "source_id": 195,
+   "seen_at": "2026-09-10 09:31:49",
+   "meta": {
+    "flow_id": 175,
+    "conversation_id": 0,
+    "order_head": "[\"n1\", \"n2\", \"n3\"]"
+   }
+  },
+  {
+   "id": "flow_completed-003",
+   "extractor": "flow_completed",
+   "kind": "regression",
+   "label": "weak",
+   "query": "需求分析流水线1789032688623",
+   "response": "latency_ms=52, errors=0",
+   "gold": "completed",
+   "source_table": "flow",
+   "source_id": 194,
+   "seen_at": "2026-09-10 09:31:49",
+   "meta": {
+    "flow_id": 175,
+    "conversation_id": 0,
+    "order_head": "[\"n1\", \"n2\", \"n3\"]"
+   }
+  },
+  {
+   "id": "flow_completed-004",
+   "extractor": "flow_completed",
+   "kind": "regression",
+   "label": "weak",
+   "query": "需求分析流水线1789032688623",
+   "response": "latency_ms=69, errors=0",
+   "gold": "completed",
+   "source_table": "flow",
+   "source_id": 193,
+   "seen_at": "2026-09-10 09:31:49",
+   "meta": {
+    "flow_id": 175,
+    "conversation_id": 0,
+    "order_head": "[\"n1\", \"n2\", \"n3\"]"
+   }
+  },
+  {
+   "id": "flow_completed-005",
+   "extractor": "flow_completed",
+   "kind": "regression",
+   "label": "weak",
+   "query": "需求分析流水线1789032200574",
+   "response": "latency_ms=57, errors=0",
+   "gold": "completed",
+   "source_table": "flow",
+   "source_id": 192,
+   "seen_at": "2026-09-10 09:23:39",
+   "meta": {
+    "flow_id": 174,
+    "conversation_id": 0,
+    "order_head": "[\"n1\", \"n2\", \"n3\"]"
+   }
+  },
+  {
+   "id": "flow_completed-006",
+   "extractor": "flow_completed",
+   "kind": "regression",
+   "label": "weak",
+   "query": "需求分析流水线1789032200574",
+   "response": "latency_ms=60, errors=0",
+   "gold": "completed",
+   "source_table": "flow",
+   "source_id": 191,
+   "seen_at": "2026-09-10 09:23:39",
+   "meta": {
+    "flow_id": 174,
+    "conversation_id": 0,
+    "order_head": "[\"n1\", \"n2\", \"n3\"]"
+   }
+  },
+  {
+   "id": "flow_completed-007",
+   "extractor": "flow_completed",
+   "kind": "regression",
+   "label": "weak",
+   "query": "需求分析流水线1789032200574",
+   "response": "latency_ms=77, errors=0",
+   "gold": "completed",
+   "source_table": "flow",
+   "source_id": 190,
+   "seen_at": "2026-09-10 09:23:39",
+   "meta": {
+    "flow_id": 174,
+    "conversation_id": 0,
+    "order_head": "[\"n1\", \"n2\", \"n3\"]"
+   }
+  },
+  {
+   "id": "flow_completed-008",
+   "extractor": "flow_completed",
+   "kind": "regression",
+   "label": "weak",
+   "query": "需求分析流水线1789032149207",
+   "response": "latency_ms=56, errors=0",
+   "gold": "completed",
+   "source_table": "flow",
+   "source_id": 189,
+   "seen_at": "2026-09-10 09:22:45",
+   "meta": {
+    "flow_id": 173,
+    "conversation_id": 0,
+    "order_head": "[\"n1\", \"n2\", \"n3\"]"
+   }
+  },
+  {
+   "id": "flow_completed-009",
+   "extractor": "flow_completed",
+   "kind": "regression",
+   "label": "weak",
+   "query": "需求分析流水线1789032149207",
+   "response": "latency_ms=49, errors=0",
+   "gold": "completed",
+   "source_table": "flow",
+   "source_id": 188,
+   "seen_at": "2026-09-10 09:22:45",
+   "meta": {
+    "flow_id": 173,
+    "conversation_id": 0,
+    "order_head": "[\"n1\", \"n2\", \"n3\"]"
+   }
+  },
+  {
+   "id": "flow_completed-010",
+   "extractor": "flow_completed",
+   "kind": "regression",
+   "label": "weak",
+   "query": "需求分析流水线1789032149207",
+   "response": "latency_ms=82, errors=0",
+   "gold": "completed",
+   "source_table": "flow",
+   "source_id": 187,
+   "seen_at": "2026-09-10 09:22:45",
+   "meta": {
+    "flow_id": 173,
+    "conversation_id": 0,
+    "order_head": "[\"n1\", \"n2\", \"n3\"]"
+   }
+  }
+ ],
+ "notes": [
+  "gold/label 由生产证据派生：strong=人工裁决（intent 标注 / HIL 决定），weak=机器派生（无坏证据 ≠ 正确），negative=已知失败（P0-3 台账 / 失败终态）。",
+  "conv_clean 是回归集：只能回答「改动有没有把原来能用的场景改坏」，不能用来证明系统质量——把弱标注当强标注用就是自己骗自己。",
+  "Mock 降级回答已按 trace2dataset.mock_markers 排除：Mock 不是系统能力证据。",
+  "trace 指纹必须比对（check_drift）：生产数据持续在变，旧集打分等于失效 gold 自欺。"
+ ]
+}

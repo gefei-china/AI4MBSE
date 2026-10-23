@@ -73,7 +73,11 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-DEFAULT_TRACE = os.path.join(ROOT, "tmp", "p21", "trace_evalset.json")
+# O2（2026-10-23）：优先读版本化评测集（docs/评测/datasets/，随 git），
+# 缺失时退回 tmp/p21/ 旧路径。
+_DEFAULT_DS_TRACE = os.path.join(ROOT, "docs", "评测", "datasets", "trace_evalset.json")
+DEFAULT_TRACE = _DEFAULT_DS_TRACE if os.path.exists(_DEFAULT_DS_TRACE) else \
+    os.path.join(ROOT, "tmp", "p21", "trace_evalset.json")
 DEFAULT_OUT = os.path.join(ROOT, "tmp", "p21", "eval_trace_consistency.json")
 DEFAULT_DB = os.path.join(ROOT, "mbse.db")
 TRACE_SCHEMA = "p1-1/trace-evalset@1"
@@ -454,6 +458,17 @@ def run_fixture():
 # ══════════════════════════════════════════════════════════════════
 # 主流程
 # ══════════════════════════════════════════════════════════════════
+def _dataset_id_for(set_path):
+    """O2：从评测集同目录 manifest.json 取 dataset_id；取不到返回 None
+    （不编造 —— null = 跑在未版本化旧集上）。"""
+    mf = os.path.join(os.path.dirname(os.path.abspath(set_path)), "manifest.json")
+    try:
+        with open(mf, encoding="utf-8") as f:
+            return json.load(f).get("dataset_id")
+    except Exception:
+        return None
+
+
 def _load_trace(path):
     if not os.path.exists(path):
         print("⛔ 找不到 trace 评测集: %s" % path)
@@ -699,6 +714,7 @@ def main():
         "db": os.path.basename(args.db),
         "trace_file": os.path.relpath(args.trace, ROOT).replace("\\", "/"),
         "trace_built_at": trace.get("built_at"),
+        "dataset_id": _dataset_id_for(args.trace),
         "llm_fallback": "disabled" if args.no_llm else "enabled",
         "semantic_backend": backend,
         "population": {
@@ -825,6 +841,12 @@ def _save(report):
              "trace-eval %s" % report["db"],
              "trace_consistency",
              p["agreement"], n["repeat_mistake_rate"]))
+        # O3：指标快照表（每指标一行，三色落库时算好；固定列照旧保留）
+        from repositories.eval_report_repo import write_metric_rows
+        write_metric_rows(conn, cur.lastrowid, "trace_consistency", {
+            "trace_agreement_rate": p["agreement"],
+            "trace_repeat_mistake_rate": n["repeat_mistake_rate"],
+        })
         conn.commit()
         print("eval_reports 落库成功: id=%d [eval_kind=trace_consistency] "
               "agreement=%s repeat_mistake=%s"

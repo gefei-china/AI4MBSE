@@ -1,0 +1,88 @@
+{
+ "schema": "dataset-manifest@1",
+ "dataset_id": "7d454031cc7d",
+ "built_at": "2026-10-23T09:38:20",
+ "generator": {
+  "build_evalset": "1",
+  "trace2dataset": "p1-1/trace-evalset@1"
+ },
+ "evalset": {
+  "file": "evalset.json",
+  "n_doc": 50,
+  "n_graph": 18,
+  "n_neg": 30,
+  "fingerprint": {
+   "db_bytes": 378826752,
+   "documents": 14,
+   "chunks": 7177,
+   "entities_total": 189,
+   "entities_release": 61,
+   "relations_release": 83,
+   "ontology_active": "v25.2.0",
+   "chunk_branches": [
+    {
+     "branch": "global",
+     "n": 7177
+    }
+   ],
+   "entity_branches": [
+    {
+     "branch": "dev",
+     "n": 65
+    },
+    {
+     "branch": "personal",
+     "n": 63
+    },
+    {
+     "branch": "release",
+     "n": 61
+    }
+   ],
+   "release_entity_names_sha1": "04c1ac33e06813fe"
+  }
+ },
+ "trace": {
+  "file": "trace_evalset.json",
+  "counts": {
+   "total": 231,
+   "by_extractor": {
+    "intent_confirmed": 42,
+    "intent_rejected": 13,
+    "hil_approved": 0,
+    "hil_rejected": 0,
+    "conv_clean": 166,
+    "conv_badcase": 0,
+    "flow_completed": 10,
+    "flow_failed": 0
+   },
+   "by_kind": {
+    "positive": 42,
+    "negative": 13,
+    "regression": 176
+   },
+   "by_label": {
+    "strong": 55,
+    "weak": 176
+   }
+  },
+  "fingerprint": {
+   "conversations": 78,
+   "messages": 513,
+   "feedback": 3,
+   "llm_usage_stats": 12889,
+   "hil_confirmations": 10,
+   "flow_runs": 11,
+   "intent_samples": 372,
+   "bad_cases": 0,
+   "tool_call_logs": 2157,
+   "messages_content_sha1": "134cd66dbbeb5160",
+   "confirmed_intent_texts_sha1": "e9b4e9157a8b9a8e",
+   "hil_previews_sha1": "0de82ac232ac4f1a",
+   "flow_runs_sha1": "50d152607182717a",
+   "badcase_subjects_sha1": "da39a3ee5e6b4b0d",
+   "schema_version": 1
+  }
+ },
+ "note": "dataset_id 内容寻址（语料/证据指纹 + 样本量）；built_at 不参与"
+}
