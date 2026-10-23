@@ -269,6 +269,20 @@ def eval_graph(case):
     }
 
 
+def _bigrams(s):
+    """字符二元组集合（与 semantic.py 的 bigram 路同构，零外部依赖）。"""
+    t = "".join((s or "").split())
+    return set(t[i:i + 2] for i in range(len(t) - 1)) or set()
+
+
+def _overlap_ratio(a, b):
+    """两段文本的字符二元组重叠率（0~1）。用于"问句与 top-1 命中有多像"。"""
+    ga, gb = _bigrams(a), _bigrams(b)
+    if not ga or not gb:
+        return 0.0
+    return len(ga & gb) / float(len(ga | gb))
+
+
 def eval_neg(case):
     q = case["query"]
     t0 = time.time()
@@ -279,6 +293,27 @@ def eval_neg(case):
     hits = r.get("chunk_hits") or []
     conf = float(r.get("confidence") or 0)
     thr = float(cfg_rag.get("route_threshold") or 0.75)
+    # ── 负样本有效性证据（2026-10-23）─────────────────────────────
+    # 负样本的前提是"语料里确实答不了"。手写常量无法自证这一点 ⇒
+    # 把 top-1 命中（来源 + 正文片段 + 与问句的重叠度）记进报告，
+    # 人可一眼复核"这条负样本的语料里到底有什么"；重叠度高且
+    # 命中里含数字的，标 suspect（可能不该是负样本）——**只标记不剔除**：
+    # 硬剔除会因检索噪声误杀真负样本（那是另一种假绿）。
+    top1 = None
+    if hits:
+        h = hits[0]
+        snippet = (h.get("content") or "")[:180]
+        top1 = {
+            "source_doc": h.get("source_doc"),
+            "chunk_index": h.get("chunk_index"),
+            "score": round(float(h.get("score") or 0), 4),
+            "snippet": snippet,
+            "overlap": round(_overlap_ratio(q, snippet), 4),
+        }
+    suspect = bool(
+        top1 and top1["overlap"] >= 0.5
+        and any(ch.isdigit() for ch in top1["snippet"])
+    )
     return {
         "id": case["id"], "kind": "neg", "query": q, "tag": case["meta"]["tag"],
         "route": r.get("route"),
@@ -287,6 +322,8 @@ def eval_neg(case):
         "confidence": round(conf, 3),
         # 负样本的"危险动作"：在图谱上高置信命中（等于用无关实体硬答）
         "false_graph_confident": bool(r.get("route") == "graph" and conf >= thr),
+        "top1": top1,
+        "suspect_answerable": suspect,
         "latency_ms": lat,
     }
 
@@ -402,6 +439,11 @@ if "neg" in results:
             # 比率口径混排，实测被误读成"全部负例都高置信走图谱"——实际 8 例中 1 例）
             "false_graph_confident": round(
                 sum(1 for r in ok if r["false_graph_confident"]) / len(ok), 3),
+            # 负样本有效性：疑似"语料里其实答得了"的条数（top-1 命中与问句
+            # 字符二元组重叠 ≥0.5 且命中含数字）。**只标记不剔除**——硬剔除
+            # 会因检索噪声误杀真负样本；这条计数的作用是让人复核时知道
+            # 先看哪几条。
+            "suspect_answerable": sum(1 for r in ok if r.get("suspect_answerable")),
             "latency_p50_ms": int(statistics.median(r["latency_ms"] for r in ok)),
         }
 
@@ -416,7 +458,8 @@ pretty = {
             "latency_p50_ms", "latency_pool_p50_ms"],
     "doc_control": ["n", "recall@1", "recall@5", "recall@10", "mrr@10"],
     "graph": ["n", "route_acc", "entity_recall", "relation_hit", "latency_p50_ms"],
-    "neg": ["n", "route_ok", "empty_hit_rate", "false_graph_confident", "latency_p50_ms"],
+    "neg": ["n", "route_ok", "empty_hit_rate", "false_graph_confident",
+            "suspect_answerable", "latency_p50_ms"],
 }
 for kind in ("doc", "doc_control", "graph", "neg"):
     if kind not in summary:

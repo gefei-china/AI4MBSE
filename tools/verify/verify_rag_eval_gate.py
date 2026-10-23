@@ -110,11 +110,12 @@ def _gate(key, fallback):
         return fallback
 
 
-# 样本量下限：doc/graph 各 ≥5，neg ≥5（neg 域实际 8 条；低于 5 时
-# FPR 分辨率 <0.2，报 SKIP 而非"通过"）
+# 样本量下限：doc/graph 各 ≥5，neg ≥20（2026-10-23 扩样 8→30 后把 neg
+# 下限从 5 提到 20：FPR 分辨率 1/8=0.125 → 1/30=0.033，比例类指标才有
+# 判别力。阈值真源在 core/config.eval_gates，本处仅兜底值。）
 MIN_N_DOC = 5
 MIN_N_GRAPH = 5
-MIN_N_NEG = 5
+MIN_N_NEG = 20
 
 
 def judge(report, thr=None):
@@ -125,6 +126,10 @@ def judge(report, thr=None):
     t_rok = thr.get("rok", _gate("retrieval_min_route_ok", 0.75))
     t_drop = thr.get("drop", _gate("retrieval_max_rerank_drop", 0.15))
     need_ctrl = bool(_gate("require_negative_control", 1))
+    # 样本量下限同样走 config（单一真源）
+    min_n_doc = thr.get("n_doc", _gate("retrieval_min_doc_cases", MIN_N_DOC))
+    min_n_graph = thr.get("n_graph", _gate("retrieval_min_graph_cases", MIN_N_GRAPH))
+    min_n_neg = thr.get("n_neg", _gate("retrieval_min_neg_cases", MIN_N_NEG))
 
     ok = True
     # D3 语料漂移（先判：漂移下所有分数都不可作依据）
@@ -138,8 +143,8 @@ def judge(report, thr=None):
     neg = s.get("neg") or {}
 
     # D2 样本量下限
-    for label, blk, lim in (("doc", doc, MIN_N_DOC), ("graph", graph, MIN_N_GRAPH),
-                            ("neg", neg, MIN_N_NEG)):
+    for label, blk, lim in (("doc", doc, min_n_doc), ("graph", graph, min_n_graph),
+                            ("neg", neg, min_n_neg)):
         n = blk.get("n", 0)
         if n < lim:
             ok &= _rec("D2 %s 域样本量 ≥%d" % (label, lim), False,

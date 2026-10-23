@@ -1082,6 +1082,11 @@ DEFAULT_CONFIG = {
         "retrieval_min_route_ok": 0.75,      # neg 域 route_ok 下限（实测 0.875）
         "retrieval_max_rerank_drop": 0.15,  # rerank_drop_rate 上限（实测 0.0，重排不该挤掉对的）
         "retrieval_control_max_recall": 0.05,  # RAG 负对照轮转后 recall 上限（原判据恒零 ⇒ 机遇撞中 0.02 随机红；0.05 与真实 0.90 拉开 18 倍，真假绿态仍红）
+        # 各域样本量下限（比例类指标的分辨率下限；neg 域 2026-10-23 扩样
+        # 8→30 后把下限从 5 提到 20 ⇒ FPR 分辨率 0.125 → 0.033）
+        "retrieval_min_doc_cases": 5,
+        "retrieval_min_graph_cases": 5,
+        "retrieval_min_neg_cases": 20,
         "require_negative_control": 1,      # 是否强制负对照非零（0=轮转后分数仍高 → 假绿）
         # ── 生成质量门禁（2026-10-22 补断链③：faithfulness 全仓零命中）──────
         # 实测基线（mbse.db 生产库 150 条 RAG 问答）：valid=1.000 / usage=0.344 /
@@ -1820,6 +1825,9 @@ CONFIG_SCHEMA = {
         "retrieval_min_route_ok":    {"type": "float", "desc": "RAG neg 域路由正确率下限（实测 0.875）"},
         "retrieval_max_rerank_drop": {"type": "float", "desc": "重排丢对率上限（实测 0.0；重排把对的挤下去才算问题）"},
         "retrieval_control_max_recall": {"type": "float", "desc": "RAG 负对照轮转后 recall 上限（量级判定，非恒零：机遇撞中 0.02 不应判红；真假绿态轮转 ~0.9 仍判红）"},
+        "retrieval_min_doc_cases":  {"type": "int",   "desc": "RAG doc 域样本量下限（低于此比例类指标无判别力，判 SKIP）"},
+        "retrieval_min_graph_cases": {"type": "int",   "desc": "RAG graph 域样本量下限（低于此判 SKIP）"},
+        "retrieval_min_neg_cases":  {"type": "int",   "desc": "RAG neg 域样本量下限（2026-10-23 扩样 8→30 ⇒ FPR 分辨率 0.033）"},
         "require_negative_control":  {"type": "int",   "desc": "是否强制负对照非零（1=轮转后分数仍高即判假绿）"},
         "generation_min_citation_valid": {"type": "float", "desc": "生成质量：正文 [n] 编号有效率下限（实测 1.000，错位即判红）"},
         "generation_min_citation_usage": {"type": "float", "desc": "生成质量：带引用答案实际使用 [n] 比例下限（实测 0.344，软约束塌陷即判红）"},
