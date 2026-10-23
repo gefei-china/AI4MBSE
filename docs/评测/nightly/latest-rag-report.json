@@ -1,11 +1,12 @@
 {
  "schema": "p1-6/eval-report@1",
  "tag": "nightly",
- "when": "2026-10-23 08:21:03",
+ "when": "2026-10-23 10:39:38",
  "evalset": "evalset.json",
- "evalset_built_at": "2026-10-23 08:15:28",
+ "evalset_built_at": "2026-10-23 10:32:09",
+ "dataset_id": "f71364f2904a",
  "fingerprint_evalset": {
-  "db_bytes": 378667008,
+  "db_bytes": 379105280,
   "documents": 14,
   "chunks": 7177,
   "entities_total": 189,
@@ -60,10 +61,10 @@
    "recall@3": 0.88,
    "recall@5": 0.9,
    "recall@10": 0.92,
-   "mrr@10": 0.754,
-   "ndcg@10": 0.682,
-   "latency_p50_ms": 1942,
-   "latency_pool_p50_ms": 447,
+   "mrr@10": 0.755,
+   "ndcg@10": 0.689,
+   "latency_p50_ms": 3373,
+   "latency_pool_p50_ms": 547,
    "pool_recall@20": 1.0,
    "rerank_drop_rate": 0.08,
    "recall_miss_rate": 0.0
@@ -73,15 +74,15 @@
    "recall@1": 0.0,
    "recall@3": 0.0,
    "recall@5": 0.0,
-   "recall@10": 0.02,
-   "mrr@10": 0.002
+   "recall@10": 0.0,
+   "mrr@10": 0.0
   },
   "graph": {
    "n": 18,
    "route_acc": 1.0,
    "entity_recall": 1.0,
    "relation_hit": 1.0,
-   "latency_p50_ms": 33
+   "latency_p50_ms": 58
   },
   "neg": {
    "n": 30,
@@ -89,7 +90,7 @@
    "empty_hit_rate": 0.833,
    "false_graph_confident": 0.0,
    "suspect_answerable": 0,
-   "latency_p50_ms": 1607
+   "latency_p50_ms": 2090
   }
  },
  "negative_control": {
@@ -97,9 +98,9 @@
    "recall@1": 0.0,
    "recall@3": 0.0,
    "recall@5": 0.0,
-   "recall@10": 0.02
+   "recall@10": 0.0
   },
-  "mrr@10": 0.002,
+  "mrr@10": 0.0,
   "note": "gold 轮转一例后的分数；应与真实分数差出量级"
  },
  "rows": {
@@ -121,8 +122,8 @@
     "n_final": 20,
     "n_pool": 40,
     "route": "vector",
-    "latency_final_ms": 15260,
-    "latency_pool_ms": 413,
+    "latency_final_ms": 16704,
+    "latency_pool_ms": 518,
     "gold_in_pool_rank": 3,
     "final_keys": [
      [
@@ -301,13 +302,13 @@
      "recall@10": 1.0
     },
     "mrr@10": 0.5,
-    "ndcg@10": 0.618890676363047,
+    "ndcg@10": 0.6256646589861505,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 36,
     "route": "vector",
-    "latency_final_ms": 5590,
-    "latency_pool_ms": 427,
+    "latency_final_ms": 3899,
+    "latency_pool_ms": 419,
     "gold_in_pool_rank": 2,
     "final_keys": [
      [
@@ -317,6 +318,18 @@
      [
       "1 纯电汽车热管理建模场景专业知识库.md",
       55
+     ],
+     [
+      "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+      53
+     ],
+     [
+      "3 座舱空气调节仿真场景专业知识库.md",
+      36
+     ],
+     [
+      "1 纯电汽车热管理建模场景专业知识库.md",
+      53
      ],
      [
       "2 混合动力汽车动力经济性仿真场景专业知识库.md",
@@ -332,31 +345,11 @@
      ],
      [
       "2 混合动力汽车动力经济性仿真场景专业知识库.md",
-      53
-     ],
-     [
-      "2 混合动力汽车动力经济性仿真场景专业知识库.md",
       55
-     ],
-     [
-      "3 座舱空气调节仿真场景专业知识库.md",
-      36
-     ],
-     [
-      "1 纯电汽车热管理建模场景专业知识库.md",
-      53
      ],
      [
       "广汽方法论-260813.docx",
       19
-     ],
-     [
-      "知识库_运行视角_视图规范元素要求(1).md",
-      8
-     ],
-     [
-      "广汽方法论-260813.docx",
-      109
      ],
      [
       "广汽方法论-260813.docx",
@@ -371,12 +364,20 @@
       142
      ],
      [
-      "知识库_运行视角_视图间关联关系(1).md",
-      21
+      "知识库_运行视角_视图规范元素要求(1).md",
+      8
      ],
      [
       "广汽方法论-260813.docx",
       179
+     ],
+     [
+      "广汽方法论-260813.docx",
+      109
+     ],
+     [
+      "知识库_运行视角_视图间关联关系(1).md",
+      21
      ],
      [
       "知识库_运行视角_视图规范元素要求(1).md",
@@ -486,27 +487,15 @@
      "recall@10": 1.0
     },
     "mrr@10": 1.0,
-    "ndcg@10": 0.7069507298235177,
+    "ndcg@10": 0.7060182784861543,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 35,
     "route": "vector",
-    "latency_final_ms": 1374,
-    "latency_pool_ms": 389,
+    "latency_final_ms": 1595,
+    "latency_pool_ms": 391,
     "gold_in_pool_rank": 1,
     "final_keys": [
-     [
-      "1 纯电汽车热管理建模场景专业知识库.md",
-      125
-     ],
-     [
-      "2 混合动力汽车动力经济性仿真场景专业知识库.md",
-      124
-     ],
-     [
-      "3 座舱空气调节仿真场景专业知识库.md",
-      85
-     ],
      [
       "1 纯电汽车热管理建模场景专业知识库.md",
       130
@@ -526,6 +515,18 @@
      [
       "1 纯电汽车热管理建模场景专业知识库.md",
       127
+     ],
+     [
+      "1 纯电汽车热管理建模场景专业知识库.md",
+      125
+     ],
+     [
+      "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+      124
+     ],
+     [
+      "3 座舱空气调节仿真场景专业知识库.md",
+      85
      ],
      [
       "1 纯电汽车热管理建模场景专业知识库.md",
@@ -552,12 +553,12 @@
       126
      ],
      [
-      "SysML-v2-AI建模知识文档.md",
-      35
-     ],
-     [
       "知识库_运行视角_视图规范元素要求(1).md",
       10
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      35
      ],
      [
       "广汽方法论-260813.docx",
@@ -676,8 +677,8 @@
     "n_final": 20,
     "n_pool": 37,
     "route": "vector",
-    "latency_final_ms": 1298,
-    "latency_pool_ms": 373,
+    "latency_final_ms": 1643,
+    "latency_pool_ms": 387,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -861,8 +862,8 @@
     "n_final": 20,
     "n_pool": 36,
     "route": "vector",
-    "latency_final_ms": 1302,
-    "latency_pool_ms": 422,
+    "latency_final_ms": 1858,
+    "latency_pool_ms": 493,
     "gold_in_pool_rank": 3,
     "final_keys": [
      [
@@ -1046,8 +1047,8 @@
     "n_final": 20,
     "n_pool": 35,
     "route": "vector",
-    "latency_final_ms": 3952,
-    "latency_pool_ms": 405,
+    "latency_final_ms": 4262,
+    "latency_pool_ms": 427,
     "gold_in_pool_rank": 2,
     "final_keys": [
      [
@@ -1111,16 +1112,16 @@
       10
      ],
      [
-      "广汽方法论-260813.docx",
-      163
-     ],
-     [
       "SysML-v2-AI建模知识文档.md",
       35
      ],
      [
       "广汽方法论-260813.docx",
       100
+     ],
+     [
+      "广汽方法论-260813.docx",
+      163
      ],
      [
       "广汽方法论-260813.docx",
@@ -1231,8 +1232,8 @@
     "n_final": 20,
     "n_pool": 37,
     "route": "vector",
-    "latency_final_ms": 1195,
-    "latency_pool_ms": 387,
+    "latency_final_ms": 1702,
+    "latency_pool_ms": 408,
     "gold_in_pool_rank": 3,
     "final_keys": [
      [
@@ -1416,8 +1417,8 @@
     "n_final": 20,
     "n_pool": 40,
     "route": "vector",
-    "latency_final_ms": 1342,
-    "latency_pool_ms": 483,
+    "latency_final_ms": 1862,
+    "latency_pool_ms": 419,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -1596,15 +1597,27 @@
      "recall@10": 1.0
     },
     "mrr@10": 0.3333333333333333,
-    "ndcg@10": 0.31834121936641585,
+    "ndcg@10": 0.33424620450682646,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 35,
     "route": "vector",
-    "latency_final_ms": 1535,
-    "latency_pool_ms": 381,
+    "latency_final_ms": 1532,
+    "latency_pool_ms": 558,
     "gold_in_pool_rank": 3,
     "final_keys": [
+     [
+      "1 纯电汽车热管理建模场景专业知识库.md",
+      125
+     ],
+     [
+      "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+      124
+     ],
+     [
+      "3 座舱空气调节仿真场景专业知识库.md",
+      85
+     ],
      [
       "1 纯电汽车热管理建模场景专业知识库.md",
       130
@@ -1624,18 +1637,6 @@
      [
       "1 纯电汽车热管理建模场景专业知识库.md",
       127
-     ],
-     [
-      "1 纯电汽车热管理建模场景专业知识库.md",
-      125
-     ],
-     [
-      "2 混合动力汽车动力经济性仿真场景专业知识库.md",
-      124
-     ],
-     [
-      "3 座舱空气调节仿真场景专业知识库.md",
-      85
      ],
      [
       "1 纯电汽车热管理建模场景专业知识库.md",
@@ -1662,12 +1663,12 @@
       126
      ],
      [
-      "SysML-v2-AI建模知识文档.md",
-      35
-     ],
-     [
       "知识库_运行视角_视图规范元素要求(1).md",
       10
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      35
      ],
      [
       "广汽方法论-260813.docx",
@@ -1786,8 +1787,8 @@
     "n_final": 20,
     "n_pool": 36,
     "route": "vector",
-    "latency_final_ms": 1514,
-    "latency_pool_ms": 395,
+    "latency_final_ms": 4240,
+    "latency_pool_ms": 444,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -1855,12 +1856,12 @@
       179
      ],
      [
-      "知识库_运行视角_视图规范元素要求(1).md",
-      4
-     ],
-     [
       "知识库_运行视角_视图间关联关系(1).md",
       21
+     ],
+     [
+      "知识库_运行视角_视图规范元素要求(1).md",
+      4
      ],
      [
       "知识库_运行视角_视图规范元素要求(1).md",
@@ -1971,8 +1972,8 @@
     "n_final": 20,
     "n_pool": 40,
     "route": "vector",
-    "latency_final_ms": 3755,
-    "latency_pool_ms": 398,
+    "latency_final_ms": 1860,
+    "latency_pool_ms": 418,
     "gold_in_pool_rank": 2,
     "final_keys": [
      [
@@ -2156,8 +2157,8 @@
     "n_final": 20,
     "n_pool": 37,
     "route": "vector",
-    "latency_final_ms": 1806,
-    "latency_pool_ms": 368,
+    "latency_final_ms": 1705,
+    "latency_pool_ms": 372,
     "gold_in_pool_rank": 2,
     "final_keys": [
      [
@@ -2341,8 +2342,8 @@
     "n_final": 0,
     "n_pool": 32,
     "route": "vector",
-    "latency_final_ms": 1561,
-    "latency_pool_ms": 409,
+    "latency_final_ms": 1668,
+    "latency_pool_ms": 385,
     "gold_in_pool_rank": 1,
     "final_keys": [],
     "pool_keys": [
@@ -2445,8 +2446,8 @@
     "n_final": 20,
     "n_pool": 40,
     "route": "vector",
-    "latency_final_ms": 1850,
-    "latency_pool_ms": 845,
+    "latency_final_ms": 6112,
+    "latency_pool_ms": 1901,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -2463,15 +2464,15 @@
      ],
      [
       "Guide to writing Requirements.pdf",
+      430
+     ],
+     [
+      "Guide to writing Requirements.pdf",
       431
      ],
      [
       "Guide to writing Requirements.pdf",
       435
-     ],
-     [
-      "Guide to writing Requirements.pdf",
-      430
      ],
      [
       "Guide to writing Requirements.pdf",
@@ -2625,22 +2626,18 @@
      "recall@10": 1.0
     },
     "mrr@10": 1.0,
-    "ndcg@10": 0.8318477135310891,
+    "ndcg@10": 0.8115558478722845,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 39,
     "route": "vector",
-    "latency_final_ms": 4329,
-    "latency_pool_ms": 941,
+    "latency_final_ms": 3623,
+    "latency_pool_ms": 1903,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
       "Guide to writing Requirements.pdf",
       657
-     ],
-     [
-      "Guide to writing Requirements.pdf",
-      658
      ],
      [
       "Guide to writing Requirements.pdf",
@@ -2652,15 +2649,19 @@
      ],
      [
       "Guide to writing Requirements.pdf",
+      658
+     ],
+     [
+      "Guide to writing Requirements.pdf",
       662
      ],
      [
       "Guide to writing Requirements.pdf",
-      659
+      148
      ],
      [
       "Guide to writing Requirements.pdf",
-      148
+      659
      ],
      [
       "Guide to writing Requirements.pdf",
@@ -2688,31 +2689,31 @@
      ],
      [
       "Guide to writing Requirements.pdf",
-      663
-     ],
-     [
-      "Guide to writing Requirements.pdf",
       664
-     ],
-     [
-      "Guide to writing Requirements.pdf",
-      665
      ],
      [
       "Guide to writing Requirements.pdf",
       667
      ],
      [
+      "Guide to writing Requirements.pdf",
+      663
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      665
+     ],
+     [
       "ISO 29148-2011 Requirements Engineering.pdf",
       117
      ],
      [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
-      1438
-     ],
-     [
       "ISO 29148-2011 Requirements Engineering.pdf",
       122
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1438
      ]
     ],
     "pool_keys": [
@@ -2815,8 +2816,8 @@
     "n_final": 20,
     "n_pool": 39,
     "route": "vector",
-    "latency_final_ms": 2349,
-    "latency_pool_ms": 980,
+    "latency_final_ms": 5682,
+    "latency_pool_ms": 2223,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -2837,7 +2838,7 @@
      ],
      [
       "Guide to writing Requirements.pdf",
-      44
+      46
      ],
      [
       "Guide to writing Requirements.pdf",
@@ -2845,7 +2846,7 @@
      ],
      [
       "Guide to writing Requirements.pdf",
-      46
+      44
      ],
      [
       "Guide to writing Requirements.pdf",
@@ -2872,16 +2873,16 @@
       889
      ],
      [
+      "Guide to writing Requirements.pdf",
+      638
+     ],
+     [
       "OMG Systems Modeling Language™ V2 (1).pdf",
       761
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
       871
-     ],
-     [
-      "Guide to writing Requirements.pdf",
-      638
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
@@ -3000,8 +3001,8 @@
     "n_final": 20,
     "n_pool": 39,
     "route": "vector",
-    "latency_final_ms": 1729,
-    "latency_pool_ms": 948,
+    "latency_final_ms": 3380,
+    "latency_pool_ms": 1354,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -3180,13 +3181,13 @@
      "recall@10": 1.0
     },
     "mrr@10": 1.0,
-    "ndcg@10": 0.9099466049873366,
+    "ndcg@10": 0.9705437052559006,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 40,
     "route": "vector",
-    "latency_final_ms": 4055,
-    "latency_pool_ms": 888,
+    "latency_final_ms": 5180,
+    "latency_pool_ms": 1835,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -3195,19 +3196,19 @@
      ],
      [
       "Guide to writing Requirements.pdf",
-      547
-     ],
-     [
-      "Guide to writing Requirements.pdf",
       595
      ],
      [
       "Guide to writing Requirements.pdf",
-      592
+      591
      ],
      [
       "Guide to writing Requirements.pdf",
-      591
+      547
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      592
      ],
      [
       "Guide to writing Requirements.pdf",
@@ -3216,10 +3217,6 @@
      [
       "Guide to writing Requirements.pdf",
       593
-     ],
-     [
-      "Guide to writing Requirements.pdf",
-      156
      ],
      [
       "Guide to writing Requirements.pdf",
@@ -3240,6 +3237,10 @@
      [
       "Kernel Modeling Language™ (KerML™).pdf",
       483
+     ],
+     [
+      "Guide to writing Requirements.pdf",
+      156
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
@@ -3365,13 +3366,13 @@
      "recall@10": 1.0
     },
     "mrr@10": 1.0,
-    "ndcg@10": 1.0,
+    "ndcg@10": 0.9445735153413951,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 40,
     "route": "vector",
-    "latency_final_ms": 2122,
-    "latency_pool_ms": 934,
+    "latency_final_ms": 3960,
+    "latency_pool_ms": 2328,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -3384,6 +3385,18 @@
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
+      141
+     ],
+     [
+      "ISO 29148-2011 Requirements Engineering.pdf",
+      133
+     ],
+     [
+      "ISO 29148-2011 Requirements Engineering.pdf",
+      138
+     ],
+     [
+      "ISO 29148-2011 Requirements Engineering.pdf",
       140
      ],
      [
@@ -3392,7 +3405,7 @@
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
-      141
+      134
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
@@ -3400,19 +3413,7 @@
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
-      133
-     ],
-     [
-      "ISO 29148-2011 Requirements Engineering.pdf",
       139
-     ],
-     [
-      "ISO 29148-2011 Requirements Engineering.pdf",
-      138
-     ],
-     [
-      "ISO 29148-2011 Requirements Engineering.pdf",
-      134
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
@@ -3429,10 +3430,6 @@
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
       88
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
-      2242
      ],
      [
       "Guide to writing Requirements.pdf",
@@ -3453,6 +3450,10 @@
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
       323
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      2242
      ]
     ],
     "pool_keys": [
@@ -3555,8 +3556,8 @@
     "n_final": 20,
     "n_pool": 39,
     "route": "vector",
-    "latency_final_ms": 2111,
-    "latency_pool_ms": 834,
+    "latency_final_ms": 5856,
+    "latency_pool_ms": 1876,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -3569,11 +3570,11 @@
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
-      5
+      6
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
-      6
+      5
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
@@ -3740,8 +3741,8 @@
     "n_final": 20,
     "n_pool": 39,
     "route": "vector",
-    "latency_final_ms": 4604,
-    "latency_pool_ms": 885,
+    "latency_final_ms": 3141,
+    "latency_pool_ms": 2006,
     "gold_in_pool_rank": 2,
     "final_keys": [
      [
@@ -3920,22 +3921,18 @@
      "recall@10": 1.0
     },
     "mrr@10": 1.0,
-    "ndcg@10": 0.7678620595110026,
+    "ndcg@10": 0.8539316501572937,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 35,
     "route": "vector",
-    "latency_final_ms": 2079,
-    "latency_pool_ms": 900,
+    "latency_final_ms": 5691,
+    "latency_pool_ms": 1933,
     "gold_in_pool_rank": 3,
     "final_keys": [
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
       328
-     ],
-     [
-      "ISO 29148-2011 Requirements Engineering.pdf",
-      38
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
@@ -3947,11 +3944,7 @@
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
-      150
-     ],
-     [
-      "ISO 29148-2011 Requirements Engineering.pdf",
-      37
+      38
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
@@ -3959,7 +3952,7 @@
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
-      39
+      150
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
@@ -3967,11 +3960,15 @@
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
+      37
+     ],
+     [
+      "ISO 29148-2011 Requirements Engineering.pdf",
       42
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
-      319
+      39
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
@@ -3979,11 +3976,15 @@
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
-      151
+      319
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
       152
+     ],
+     [
+      "ISO 29148-2011 Requirements Engineering.pdf",
+      151
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
@@ -4110,8 +4111,8 @@
     "n_final": 20,
     "n_pool": 40,
     "route": "vector",
-    "latency_final_ms": 3220,
-    "latency_pool_ms": 885,
+    "latency_final_ms": 3464,
+    "latency_pool_ms": 1839,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -4140,11 +4141,11 @@
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
-      291
+      293
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
-      293
+      291
      ],
      [
       "ISO 29148-2011 Requirements Engineering.pdf",
@@ -4295,8 +4296,8 @@
     "n_final": 20,
     "n_pool": 36,
     "route": "vector",
-    "latency_final_ms": 4047,
-    "latency_pool_ms": 873,
+    "latency_final_ms": 7127,
+    "latency_pool_ms": 1864,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -4480,8 +4481,8 @@
     "n_final": 20,
     "n_pool": 38,
     "route": "mixed",
-    "latency_final_ms": 1978,
-    "latency_pool_ms": 1000,
+    "latency_final_ms": 3496,
+    "latency_pool_ms": 1976,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -4665,8 +4666,8 @@
     "n_final": 20,
     "n_pool": 39,
     "route": "vector",
-    "latency_final_ms": 1855,
-    "latency_pool_ms": 986,
+    "latency_final_ms": 6051,
+    "latency_pool_ms": 2163,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -4679,19 +4680,19 @@
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
-      32
-     ],
-     [
-      "Kernel Modeling Language™ (KerML™).pdf",
       814
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
-      621
+      32
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
       984
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      621
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
@@ -4700,10 +4701,6 @@
      [
       "Kernel Modeling Language™ (KerML™).pdf",
       738
-     ],
-     [
-      "Kernel Modeling Language™ (KerML™).pdf",
-      2007
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
@@ -4736,6 +4733,10 @@
      [
       "Kernel Modeling Language™ (KerML™).pdf",
       1708
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      2007
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
@@ -4850,8 +4851,8 @@
     "n_final": 20,
     "n_pool": 39,
     "route": "vector",
-    "latency_final_ms": 4329,
-    "latency_pool_ms": 914,
+    "latency_final_ms": 3461,
+    "latency_pool_ms": 1941,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -4872,10 +4873,6 @@
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
-      621
-     ],
-     [
-      "Kernel Modeling Language™ (KerML™).pdf",
       984
      ],
      [
@@ -4884,7 +4881,15 @@
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
+      621
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
       1860
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      980
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
@@ -4904,10 +4909,6 @@
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
-      980
-     ],
-     [
-      "Kernel Modeling Language™ (KerML™).pdf",
       738
      ],
      [
@@ -4924,15 +4925,15 @@
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
+      1708
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
       1048
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
       909
-     ],
-     [
-      "Kernel Modeling Language™ (KerML™).pdf",
-      1708
      ]
     ],
     "pool_keys": [
@@ -5030,13 +5031,13 @@
      "recall@10": 1.0
     },
     "mrr@10": 1.0,
-    "ndcg@10": 0.8684153012583529,
+    "ndcg@10": 0.8969391446650888,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 36,
     "route": "vector",
-    "latency_final_ms": 1967,
-    "latency_pool_ms": 861,
+    "latency_final_ms": 5955,
+    "latency_pool_ms": 2059,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -5053,15 +5054,7 @@
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
-      531
-     ],
-     [
-      "Kernel Modeling Language™ (KerML™).pdf",
       515
-     ],
-     [
-      "Kernel Modeling Language™ (KerML™).pdf",
-      516
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
@@ -5070,6 +5063,14 @@
      [
       "Kernel Modeling Language™ (KerML™).pdf",
       524
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      531
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      516
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
@@ -5096,12 +5097,12 @@
       136
      ],
      [
-      "Kernel Modeling Language™ (KerML™).pdf",
-      117
-     ],
-     [
       "OMG Systems Modeling Language™ V2 (1).pdf",
       127
+     ],
+     [
+      "Kernel Modeling Language™ (KerML™).pdf",
+      117
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
@@ -5215,13 +5216,13 @@
      "recall@10": 1.0
     },
     "mrr@10": 1.0,
-    "ndcg@10": 1.0,
+    "ndcg@10": 0.9950883841893561,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 40,
     "route": "vector",
-    "latency_final_ms": 2067,
-    "latency_pool_ms": 899,
+    "latency_final_ms": 3366,
+    "latency_pool_ms": 1653,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -5238,10 +5239,6 @@
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
-      232
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
       233
      ],
      [
@@ -5250,7 +5247,7 @@
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
-      237
+      232
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
@@ -5258,11 +5255,7 @@
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
-      1602
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
-      1603
+      237
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
@@ -5271,6 +5264,14 @@
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
       1599
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1602
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1603
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
@@ -5405,8 +5406,8 @@
     "n_final": 20,
     "n_pool": 39,
     "route": "vector",
-    "latency_final_ms": 4147,
-    "latency_pool_ms": 900,
+    "latency_final_ms": 5194,
+    "latency_pool_ms": 1377,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -5443,10 +5444,6 @@
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
-      1518
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
       1530
      ],
      [
@@ -5464,6 +5461,10 @@
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
       2117
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1518
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
@@ -5585,26 +5586,18 @@
      "recall@10": 1.0
     },
     "mrr@10": 1.0,
-    "ndcg@10": 0.854105831327397,
+    "ndcg@10": 1.0,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 33,
     "route": "vector",
-    "latency_final_ms": 1802,
-    "latency_pool_ms": 966,
+    "latency_final_ms": 2879,
+    "latency_pool_ms": 1495,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
       1796
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
-      1795
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
-      1238
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
@@ -5628,15 +5621,23 @@
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
+      1795
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1238
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1748
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
       499
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
       511
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
-      1748
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
@@ -5775,8 +5776,8 @@
     "n_final": 20,
     "n_pool": 36,
     "route": "vector",
-    "latency_final_ms": 1918,
-    "latency_pool_ms": 921,
+    "latency_final_ms": 4370,
+    "latency_pool_ms": 923,
     "gold_in_pool_rank": 2,
     "final_keys": [
      [
@@ -5793,15 +5794,23 @@
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
-      0
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
       939
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
+      0
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
       52
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      33
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      34
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
@@ -5833,10 +5842,6 @@
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
-      1852
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
       1740
      ],
      [
@@ -5845,19 +5850,15 @@
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
+      60
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
       2518
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
-      33
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
-      34
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
-      60
+      1852
      ]
     ],
     "pool_keys": [
@@ -5960,8 +5961,8 @@
     "n_final": 20,
     "n_pool": 37,
     "route": "vector",
-    "latency_final_ms": 4127,
-    "latency_pool_ms": 886,
+    "latency_final_ms": 2279,
+    "latency_pool_ms": 954,
     "gold_in_pool_rank": 2,
     "final_keys": [
      [
@@ -5978,10 +5979,6 @@
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
-      38
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
       52
      ],
      [
@@ -5990,19 +5987,19 @@
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
-      1396
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
       1740
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
-      1364
+      38
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
-      1566
+      1396
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1364
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
@@ -6026,6 +6023,14 @@
      ],
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
+      1566
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
+      1852
+     ],
+     [
+      "OMG Systems Modeling Language™ V2 (1).pdf",
       898
      ],
      [
@@ -6039,10 +6044,6 @@
      [
       "OMG Systems Modeling Language™ V2 (1).pdf",
       2418
-     ],
-     [
-      "OMG Systems Modeling Language™ V2 (1).pdf",
-      1852
      ]
     ],
     "pool_keys": [
@@ -6145,8 +6146,8 @@
     "n_final": 0,
     "n_pool": 32,
     "route": "vector",
-    "latency_final_ms": 1580,
-    "latency_pool_ms": 385,
+    "latency_final_ms": 2252,
+    "latency_pool_ms": 413,
     "gold_in_pool_rank": 2,
     "final_keys": [],
     "pool_keys": [
@@ -6249,8 +6250,8 @@
     "n_final": 20,
     "n_pool": 34,
     "route": "vector",
-    "latency_final_ms": 1123,
-    "latency_pool_ms": 680,
+    "latency_final_ms": 3466,
+    "latency_pool_ms": 843,
     "gold_in_pool_rank": 2,
     "final_keys": [
      [
@@ -6298,6 +6299,10 @@
       7
      ],
      [
+      "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+      54
+     ],
+     [
       "1 纯电汽车热管理建模场景专业知识库.md",
       15
      ],
@@ -6316,10 +6321,6 @@
      [
       "3 座舱空气调节仿真场景专业知识库.md",
       5
-     ],
-     [
-      "2 混合动力汽车动力经济性仿真场景专业知识库.md",
-      54
      ],
      [
       "1 纯电汽车热管理建模场景专业知识库.md",
@@ -6434,8 +6435,8 @@
     "n_final": 20,
     "n_pool": 31,
     "route": "vector",
-    "latency_final_ms": 1576,
-    "latency_pool_ms": 380,
+    "latency_final_ms": 3107,
+    "latency_pool_ms": 426,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -6444,11 +6445,11 @@
      ],
      [
       "SysML-v2-AI建模知识文档.md",
-      66
+      67
      ],
      [
       "SysML-v2-AI建模知识文档.md",
-      67
+      66
      ],
      [
       "SysML-v2-AI建模知识文档.md",
@@ -6457,6 +6458,10 @@
      [
       "SysML-v2-AI建模知识文档.md",
       190
+     ],
+     [
+      "SysML-v2-AI建模知识文档.md",
+      214
      ],
      [
       "知识库_运行视角_视图规范元素要求(1).md",
@@ -6469,10 +6474,6 @@
      [
       "广汽方法论-260813.docx",
       87
-     ],
-     [
-      "SysML-v2-AI建模知识文档.md",
-      214
      ],
      [
       "广汽方法论-260813.docx",
@@ -6619,8 +6620,8 @@
     "n_final": 20,
     "n_pool": 38,
     "route": "vector",
-    "latency_final_ms": 3688,
-    "latency_pool_ms": 388,
+    "latency_final_ms": 1914,
+    "latency_pool_ms": 386,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -6652,12 +6653,12 @@
       250
      ],
      [
-      "2 混合动力汽车动力经济性仿真场景专业知识库.md",
-      4
-     ],
-     [
       "SysML-v2-AI建模知识文档.md",
       236
+     ],
+     [
+      "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+      4
      ],
      [
       "SysML-v2-AI建模知识文档.md",
@@ -6804,8 +6805,8 @@
     "n_final": 20,
     "n_pool": 28,
     "route": "vector",
-    "latency_final_ms": 1362,
-    "latency_pool_ms": 389,
+    "latency_final_ms": 4239,
+    "latency_pool_ms": 424,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -6818,19 +6819,19 @@
      ],
      [
       "SysML-v2-AI建模知识文档.md",
-      198
-     ],
-     [
-      "SysML-v2-AI建模知识文档.md",
       199
      ],
      [
       "SysML-v2-AI建模知识文档.md",
-      206
+      198
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
       48
+     ],
+     [
+      "知识库_运行视角_视图规范元素要求(1).md",
+      19
      ],
      [
       "广汽方法论-260813.docx",
@@ -6841,28 +6842,12 @@
       10
      ],
      [
-      "知识库_运行视角_视图规范元素要求(1).md",
-      19
-     ],
-     [
-      "广汽方法论-260813.docx",
-      162
-     ],
-     [
       "广汽方法论-260813.docx",
       161
      ],
      [
       "广汽方法论-260813.docx",
-      138
-     ],
-     [
-      "广汽方法论-260813.docx",
       118
-     ],
-     [
-      "广汽方法论-260813.docx",
-      97
      ],
      [
       "广汽方法论-260813.docx",
@@ -6873,12 +6858,28 @@
       71
      ],
      [
+      "SysML-v2-AI建模知识文档.md",
+      206
+     ],
+     [
+      "广汽方法论-260813.docx",
+      162
+     ],
+     [
       "广汽方法论-260813.docx",
       70
      ],
      [
       "广汽方法论-260813.docx",
+      138
+     ],
+     [
+      "广汽方法论-260813.docx",
       164
+     ],
+     [
+      "广汽方法论-260813.docx",
+      97
      ],
      [
       "广汽方法论-260813.docx",
@@ -6989,8 +6990,8 @@
     "n_final": 20,
     "n_pool": 38,
     "route": "vector",
-    "latency_final_ms": 1653,
-    "latency_pool_ms": 444,
+    "latency_final_ms": 1791,
+    "latency_pool_ms": 473,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -7015,11 +7016,11 @@
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      84
+      81
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      81
+      84
      ],
      [
       "SysML-v2-AI建模知识文档.md",
@@ -7174,8 +7175,8 @@
     "n_final": 20,
     "n_pool": 38,
     "route": "vector",
-    "latency_final_ms": 1363,
-    "latency_pool_ms": 396,
+    "latency_final_ms": 2075,
+    "latency_pool_ms": 460,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -7184,11 +7185,11 @@
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      52
+      51
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      51
+      52
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
@@ -7204,19 +7205,19 @@
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      55
-     ],
-     [
-      "SysML_v2_常见语法错误与修正(1).md",
-      54
-     ],
-     [
-      "SysML_v2_常见语法错误与修正(1).md",
       40
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
       41
+     ],
+     [
+      "SysML_v2_常见语法错误与修正(1).md",
+      55
+     ],
+     [
+      "SysML_v2_常见语法错误与修正(1).md",
+      54
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
@@ -7359,8 +7360,8 @@
     "n_final": 20,
     "n_pool": 36,
     "route": "vector",
-    "latency_final_ms": 1508,
-    "latency_pool_ms": 441,
+    "latency_final_ms": 1749,
+    "latency_pool_ms": 536,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -7369,23 +7370,15 @@
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      22
-     ],
-     [
-      "SysML_v2_常见语法错误与修正(1).md",
       21
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      23
+      22
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
       14
-     ],
-     [
-      "SysML_v2_常见语法错误与修正(1).md",
-      49
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
@@ -7397,19 +7390,27 @@
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      24
-     ],
-     [
-      "SysML_v2_常见语法错误与修正(1).md",
-      17
-     ],
-     [
-      "SysML_v2_常见语法错误与修正(1).md",
       12
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
       13
+     ],
+     [
+      "SysML_v2_常见语法错误与修正(1).md",
+      23
+     ],
+     [
+      "SysML_v2_常见语法错误与修正(1).md",
+      49
+     ],
+     [
+      "SysML_v2_常见语法错误与修正(1).md",
+      24
+     ],
+     [
+      "SysML_v2_常见语法错误与修正(1).md",
+      17
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
@@ -7544,8 +7545,8 @@
     "n_final": 20,
     "n_pool": 39,
     "route": "vector",
-    "latency_final_ms": 4161,
-    "latency_pool_ms": 915,
+    "latency_final_ms": 4599,
+    "latency_pool_ms": 1247,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -7570,11 +7571,11 @@
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
-      163
+      552
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
-      552
+      163
      ],
      [
       "Kernel Modeling Language™ (KerML™).pdf",
@@ -7729,8 +7730,8 @@
     "n_final": 20,
     "n_pool": 35,
     "route": "vector",
-    "latency_final_ms": 2832,
-    "latency_pool_ms": 370,
+    "latency_final_ms": 1831,
+    "latency_pool_ms": 592,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -7751,11 +7752,11 @@
      ],
      [
       "SysML-v2-AI建模知识文档.md",
-      63
+      61
      ],
      [
       "SysML-v2-AI建模知识文档.md",
-      61
+      63
      ],
      [
       "SysML-v2-AI建模知识文档.md",
@@ -7914,8 +7915,8 @@
     "n_final": 20,
     "n_pool": 34,
     "route": "vector",
-    "latency_final_ms": 1454,
-    "latency_pool_ms": 450,
+    "latency_final_ms": 1580,
+    "latency_pool_ms": 491,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -7924,11 +7925,11 @@
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      75
+      76
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      76
+      75
      ],
      [
       "广汽方法论-260813.docx",
@@ -7940,19 +7941,11 @@
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      78
-     ],
-     [
-      "SysML_v2_常见语法错误与修正(1).md",
       79
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
-      70
-     ],
-     [
-      "SysML_v2_常见语法错误与修正(1).md",
-      71
+      78
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
@@ -7972,7 +7965,15 @@
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
+      70
+     ],
+     [
+      "SysML_v2_常见语法错误与修正(1).md",
       67
+     ],
+     [
+      "SysML_v2_常见语法错误与修正(1).md",
+      71
      ],
      [
       "SysML_v2_常见语法错误与修正(1).md",
@@ -8093,14 +8094,14 @@
      "recall@5": 1.0,
      "recall@10": 1.0
     },
-    "mrr@10": 0.2,
-    "ndcg@10": 0.5447919799171685,
+    "mrr@10": 0.25,
+    "ndcg@10": 0.6631747728725315,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 36,
     "route": "vector",
-    "latency_final_ms": 3594,
-    "latency_pool_ms": 404,
+    "latency_final_ms": 3896,
+    "latency_pool_ms": 467,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -8109,15 +8110,11 @@
      ],
      [
       "广汽方法论-260813.docx",
-      177
-     ],
-     [
-      "广汽方法论-260813.docx",
       179
      ],
      [
       "广汽方法论-260813.docx",
-      78
+      177
      ],
      [
       "广汽方法论-260813.docx",
@@ -8146,6 +8143,10 @@
      [
       "广汽方法论-260813.docx",
       3
+     ],
+     [
+      "广汽方法论-260813.docx",
+      78
      ],
      [
       "知识库_运行视角_视图间关联关系(1).md",
@@ -8284,8 +8285,8 @@
     "n_final": 20,
     "n_pool": 33,
     "route": "vector",
-    "latency_final_ms": 1293,
-    "latency_pool_ms": 396,
+    "latency_final_ms": 1927,
+    "latency_pool_ms": 387,
     "gold_in_pool_rank": 2,
     "final_keys": [
      [
@@ -8309,12 +8310,12 @@
       14
      ],
      [
-      "知识库_运行视角_视图间关联关系(1).md",
-      3
-     ],
-     [
       "广汽方法论-260813.docx",
       88
+     ],
+     [
+      "知识库_运行视角_视图间关联关系(1).md",
+      3
      ],
      [
       "广汽方法论-260813.docx",
@@ -8341,6 +8342,10 @@
       38
      ],
      [
+      "知识库_运行视角_视图间关联关系(1).md",
+      21
+     ],
+     [
       "广汽方法论-260813.docx",
       62
      ],
@@ -8349,16 +8354,12 @@
       76
      ],
      [
-      "知识库_运行视角_视图间关联关系(1).md",
-      21
+      "广汽方法论-260813.docx",
+      177
      ],
      [
       "广汽方法论-260813.docx",
       43
-     ],
-     [
-      "广汽方法论-260813.docx",
-      177
      ],
      [
       "847_Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
@@ -8469,8 +8470,8 @@
     "n_final": 20,
     "n_pool": 25,
     "route": "vector",
-    "latency_final_ms": 1682,
-    "latency_pool_ms": 400,
+    "latency_final_ms": 1826,
+    "latency_pool_ms": 409,
     "gold_in_pool_rank": 1,
     "final_keys": [
      [
@@ -8511,11 +8512,23 @@
      ],
      [
       "广汽方法论-260813.docx",
+      48
+     ],
+     [
+      "广汽方法论-260813.docx",
+      57
+     ],
+     [
+      "广汽方法论-260813.docx",
       137
      ],
      [
       "广汽方法论-260813.docx",
       58
+     ],
+     [
+      "广汽方法论-260813.docx",
+      117
      ],
      [
       "广汽方法论-260813.docx",
@@ -8527,27 +8540,15 @@
      ],
      [
       "广汽方法论-260813.docx",
-      56
-     ],
-     [
-      "广汽方法论-260813.docx",
-      48
-     ],
-     [
-      "广汽方法论-260813.docx",
-      57
-     ],
-     [
-      "广汽方法论-260813.docx",
-      117
-     ],
-     [
-      "广汽方法论-260813.docx",
       54
      ],
      [
       "广汽方法论-260813.docx",
       116
+     ],
+     [
+      "广汽方法论-260813.docx",
+      56
      ],
      [
       "广汽方法论-260813.docx",
@@ -8654,8 +8655,8 @@
     "n_final": 20,
     "n_pool": 26,
     "route": "vector",
-    "latency_final_ms": 2147,
-    "latency_pool_ms": 474,
+    "latency_final_ms": 1481,
+    "latency_pool_ms": 388,
     "gold_in_pool_rank": 2,
     "final_keys": [
      [
@@ -8696,23 +8697,11 @@
      ],
      [
       "知识库_运行视角_视图间关联关系(1).md",
-      10
-     ],
-     [
-      "知识库_运行视角_视图间关联关系(1).md",
-      6
-     ],
-     [
-      "知识库_运行视角_视图间关联关系(1).md",
-      14
-     ],
-     [
-      "知识库_运行视角_视图间关联关系(1).md",
-      17
-     ],
-     [
-      "知识库_运行视角_视图间关联关系(1).md",
       11
+     ],
+     [
+      "知识库_运行视角_视图间关联关系(1).md",
+      10
      ],
      [
       "知识库_运行视角_视图间关联关系(1).md",
@@ -8729,6 +8718,18 @@
      [
       "知识库_运行视角_视图间关联关系(1).md",
       13
+     ],
+     [
+      "知识库_运行视角_视图间关联关系(1).md",
+      6
+     ],
+     [
+      "知识库_运行视角_视图间关联关系(1).md",
+      14
+     ],
+     [
+      "知识库_运行视角_视图间关联关系(1).md",
+      17
      ],
      [
       "知识库_运行视角_视图间关联关系(1).md",
@@ -8839,8 +8840,8 @@
     "n_final": 0,
     "n_pool": 25,
     "route": "vector",
-    "latency_final_ms": 3493,
-    "latency_pool_ms": 363,
+    "latency_final_ms": 3785,
+    "latency_pool_ms": 449,
     "gold_in_pool_rank": 2,
     "final_keys": [],
     "pool_keys": [
@@ -8938,13 +8939,13 @@
      "recall@10": 1.0
     },
     "mrr@10": 1.0,
-    "ndcg@10": 0.9217868789962071,
+    "ndcg@10": 0.8710785440003369,
     "pool_recall": 1.0,
     "n_final": 20,
     "n_pool": 26,
     "route": "vector",
-    "latency_final_ms": 1618,
-    "latency_pool_ms": 380,
+    "latency_final_ms": 1875,
+    "latency_pool_ms": 786,
     "gold_in_pool_rank": 2,
     "final_keys": [
      [
@@ -8952,16 +8953,12 @@
       21
      ],
      [
-      "知识库_运行视角_视图规范元素要求(1).md",
-      20
-     ],
-     [
       "知识库_运行视角_视图间关联关系(1).md",
       15
      ],
      [
-      "广汽方法论-260813.docx",
-      59
+      "知识库_运行视角_视图规范元素要求(1).md",
+      20
      ],
      [
       "知识库_运行视角_视图间关联关系(1).md",
@@ -8969,11 +8966,15 @@
      ],
      [
       "广汽方法论-260813.docx",
-      139
+      59
      ],
      [
       "知识库_运行视角_视图规范元素要求(1).md",
       22
+     ],
+     [
+      "广汽方法论-260813.docx",
+      139
      ],
      [
       "广汽方法论-260813.docx",
@@ -8989,10 +8990,6 @@
      ],
      [
       "知识库_运行视角_视图间关联关系(1).md",
-      9
-     ],
-     [
-      "知识库_运行视角_视图间关联关系(1).md",
       5
      ],
      [
@@ -9005,11 +9002,7 @@
      ],
      [
       "知识库_运行视角_视图间关联关系(1).md",
-      3
-     ],
-     [
-      "广汽方法论-260813.docx",
-      7
+      9
      ],
      [
       "知识库_运行视角_视图间关联关系(1).md",
@@ -9021,7 +9014,15 @@
      ],
      [
       "知识库_运行视角_视图间关联关系(1).md",
+      3
+     ],
+     [
+      "知识库_运行视角_视图间关联关系(1).md",
       19
+     ],
+     [
+      "广汽方法论-260813.docx",
+      7
      ],
      [
       "知识库_运行视角_视图间关联关系(1).md",
@@ -9133,7 +9134,7 @@
     "relation_hit": true,
     "confidence": 0.7,
     "graph_count": 2,
-    "latency_ms": 36
+    "latency_ms": 50
    },
    {
     "id": "graph-02",
@@ -9155,7 +9156,7 @@
     "relation_hit": true,
     "confidence": 0.914,
     "graph_count": 7,
-    "latency_ms": 38
+    "latency_ms": 71
    },
    {
     "id": "graph-03",
@@ -9177,7 +9178,7 @@
     "relation_hit": true,
     "confidence": 1.0,
     "graph_count": 5,
-    "latency_ms": 39
+    "latency_ms": 58
    },
    {
     "id": "graph-04",
@@ -9199,7 +9200,7 @@
     "relation_hit": true,
     "confidence": 0.7,
     "graph_count": 2,
-    "latency_ms": 38
+    "latency_ms": 57
    },
    {
     "id": "graph-05",
@@ -9221,7 +9222,7 @@
     "relation_hit": true,
     "confidence": 1.0,
     "graph_count": 5,
-    "latency_ms": 32
+    "latency_ms": 64
    },
    {
     "id": "graph-06",
@@ -9243,7 +9244,7 @@
     "relation_hit": true,
     "confidence": 0.7,
     "graph_count": 2,
-    "latency_ms": 33
+    "latency_ms": 57
    },
    {
     "id": "graph-07",
@@ -9265,7 +9266,7 @@
     "relation_hit": true,
     "confidence": 0.8,
     "graph_count": 3,
-    "latency_ms": 33
+    "latency_ms": 60
    },
    {
     "id": "graph-08",
@@ -9287,7 +9288,7 @@
     "relation_hit": true,
     "confidence": 0.7,
     "graph_count": 2,
-    "latency_ms": 30
+    "latency_ms": 62
    },
    {
     "id": "graph-09",
@@ -9309,7 +9310,7 @@
     "relation_hit": true,
     "confidence": 0.9,
     "graph_count": 6,
-    "latency_ms": 35
+    "latency_ms": 58
    },
    {
     "id": "graph-10",
@@ -9331,7 +9332,7 @@
     "relation_hit": true,
     "confidence": 1.0,
     "graph_count": 5,
-    "latency_ms": 34
+    "latency_ms": 58
    },
    {
     "id": "graph-11",
@@ -9353,7 +9354,7 @@
     "relation_hit": true,
     "confidence": 0.8,
     "graph_count": 3,
-    "latency_ms": 43
+    "latency_ms": 56
    },
    {
     "id": "graph-12",
@@ -9375,7 +9376,7 @@
     "relation_hit": true,
     "confidence": 0.9,
     "graph_count": 4,
-    "latency_ms": 32
+    "latency_ms": 57
    },
    {
     "id": "graph-13",
@@ -9397,7 +9398,7 @@
     "relation_hit": true,
     "confidence": 0.98,
     "graph_count": 10,
-    "latency_ms": 34
+    "latency_ms": 62
    },
    {
     "id": "graph-14",
@@ -9419,7 +9420,7 @@
     "relation_hit": true,
     "confidence": 0.7,
     "graph_count": 2,
-    "latency_ms": 32
+    "latency_ms": 56
    },
    {
     "id": "graph-15",
@@ -9441,7 +9442,7 @@
     "relation_hit": true,
     "confidence": 0.7,
     "graph_count": 2,
-    "latency_ms": 31
+    "latency_ms": 58
    },
    {
     "id": "graph-16",
@@ -9463,7 +9464,7 @@
     "relation_hit": true,
     "confidence": 0.967,
     "graph_count": 6,
-    "latency_ms": 26
+    "latency_ms": 45
    },
    {
     "id": "graph-17",
@@ -9485,7 +9486,7 @@
     "relation_hit": true,
     "confidence": 0.967,
     "graph_count": 6,
-    "latency_ms": 31
+    "latency_ms": 50
    },
    {
     "id": "graph-18",
@@ -9507,7 +9508,7 @@
     "relation_hit": true,
     "confidence": 0.7,
     "graph_count": 2,
-    "latency_ms": 33
+    "latency_ms": 58
    }
   ],
   "neg": [
@@ -9523,7 +9524,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1155
+    "latency_ms": 1954
    },
    {
     "id": "neg-02",
@@ -9537,7 +9538,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1364
+    "latency_ms": 2233
    },
    {
     "id": "neg-03",
@@ -9551,7 +9552,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1352
+    "latency_ms": 4425
    },
    {
     "id": "neg-04",
@@ -9565,7 +9566,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 3311
+    "latency_ms": 1491
    },
    {
     "id": "neg-05",
@@ -9579,7 +9580,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1435
+    "latency_ms": 2231
    },
    {
     "id": "neg-06",
@@ -9593,7 +9594,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 2181
+    "latency_ms": 1730
    },
    {
     "id": "neg-07",
@@ -9607,7 +9608,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 887
+    "latency_ms": 1593
    },
    {
     "id": "neg-08",
@@ -9621,7 +9622,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1212
+    "latency_ms": 5785
    },
    {
     "id": "neg-09",
@@ -9635,7 +9636,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1034
+    "latency_ms": 1434
    },
    {
     "id": "neg-10",
@@ -9649,7 +9650,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 3544
+    "latency_ms": 1932
    },
    {
     "id": "neg-11",
@@ -9663,7 +9664,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1317
+    "latency_ms": 2483
    },
    {
     "id": "neg-12",
@@ -9683,7 +9684,7 @@
      "overlap": 0.0296
     },
     "suspect_answerable": false,
-    "latency_ms": 1600
+    "latency_ms": 3738
    },
    {
     "id": "neg-13",
@@ -9697,7 +9698,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1535
+    "latency_ms": 1785
    },
    {
     "id": "neg-14",
@@ -9711,7 +9712,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1614
+    "latency_ms": 1502
    },
    {
     "id": "neg-15",
@@ -9725,7 +9726,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1655
+    "latency_ms": 1912
    },
    {
     "id": "neg-16",
@@ -9739,7 +9740,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 3808
+    "latency_ms": 1799
    },
    {
     "id": "neg-17",
@@ -9753,7 +9754,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1520
+    "latency_ms": 3848
    },
    {
     "id": "neg-18",
@@ -9767,7 +9768,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1757
+    "latency_ms": 2227
    },
    {
     "id": "neg-19",
@@ -9781,7 +9782,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1716
+    "latency_ms": 2947
    },
    {
     "id": "neg-20",
@@ -9791,17 +9792,17 @@
     "route": "vector",
     "route_ok": true,
     "n_hits": 20,
-    "confidence": 0.155,
+    "confidence": 0.112,
     "false_graph_confident": false,
     "top1": {
      "source_doc": "SysML-v2-AI建模知识文档.md",
-     "chunk_index": 254,
-     "score": 0.03,
-     "snippet": "| `SubjectMember : SubjectMembership = MemberPrefix ownedRelatedElement += SubjectUsage` | §8.2.2.21.1 | 位置约束由**实现**施加，产生式未写 |\n| `StakeholderUsage : PartUsage = 'stakeholder' Usage",
-     "overlap": 0.0174
+     "chunk_index": 223,
+     "score": 0.016,
+     "snippet": "§8.1–§8.5 讲的是「怎么调、怎么判读」。这里给一份**可以直接放进工程的实现**——\n零新依赖（只用 `subprocess` + `re`），落在工程根 `sysml_v2_check.py`，与 `model_quality.py` 同级。**每个设计点都对应前面的一条实测教训**：",
+     "overlap": 0.0146
     },
     "suspect_answerable": false,
-    "latency_ms": 1720
+    "latency_ms": 2542
    },
    {
     "id": "neg-21",
@@ -9815,7 +9816,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 4251
+    "latency_ms": 4936
    },
    {
     "id": "neg-22",
@@ -9829,7 +9830,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 2746
+    "latency_ms": 1814
    },
    {
     "id": "neg-23",
@@ -9843,7 +9844,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1219
+    "latency_ms": 1827
    },
    {
     "id": "neg-24",
@@ -9857,7 +9858,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1114
+    "latency_ms": 1816
    },
    {
     "id": "neg-25",
@@ -9871,7 +9872,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1509
+    "latency_ms": 3897
    },
    {
     "id": "neg-26",
@@ -9885,7 +9886,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 3844
+    "latency_ms": 1898
    },
    {
     "id": "neg-27",
@@ -9905,7 +9906,7 @@
      "overlap": 0.0227
     },
     "suspect_answerable": false,
-    "latency_ms": 1842
+    "latency_ms": 2406
    },
    {
     "id": "neg-28",
@@ -9919,7 +9920,7 @@
     "false_graph_confident": false,
     "top1": null,
     "suspect_answerable": false,
-    "latency_ms": 1284
+    "latency_ms": 1892
    },
    {
     "id": "neg-29",
@@ -9929,17 +9930,17 @@
     "route": "vector",
     "route_ok": true,
     "n_hits": 20,
-    "confidence": 0.032,
+    "confidence": 0.086,
     "false_graph_confident": false,
     "top1": {
      "source_doc": "1 纯电汽车热管理建模场景专业知识库.md",
-     "chunk_index": 104,
-     "score": 0.022,
-     "snippet": "液体闭环按“储液罐—泵—冷板—管路—阀—Chiller—储液罐”描述；这是本说明性配置的一条通路，不是所有车型的唯一结构。独立电驱回路使用另一台泵，经电机水套/逆变器冷板与散热器后返回。需要旁通时须给出新端口及关系，不能只增加一个阀名而不定义通路。制冷剂闭环按“压缩机—冷凝器—膨胀阀—Chiller—压缩机”描述。Chiller液体侧和制冷剂侧只交换热量，不",
-     "overlap": 0.0058
+     "chunk_index": 10,
+     "score": 0.046,
+     "snippet": "**定义与上位类型**：电驱冷却回路是一种物理系统。冷却驱动电机与逆变器的液体循环子系统，兼容原MotorCoolingLoop。**工作机理与边界**：电机水套和逆变器冷板可串联或并联，必须声明具体连接与流量分配。散热器用于冷却液向环境换热；冷凝器用于制冷剂排热，二者不可当同一部件。**输入、输出与接口**：冷却液进出口、发热输入和温度反馈。**内容依据*",
+     "overlap": 0.0225
     },
     "suspect_answerable": false,
-    "latency_ms": 1649
+    "latency_ms": 4493
    },
    {
     "id": "neg-30",
@@ -9959,9 +9960,9 @@
      "overlap": 0.0597
     },
     "suspect_answerable": false,
-    "latency_ms": 2123
+    "latency_ms": 2596
    }
   ]
  },
- "elapsed_s": 223.4
+ "elapsed_s": 306.9
 }

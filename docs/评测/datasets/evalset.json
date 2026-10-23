@@ -1,9 +1,9 @@
 {
  "schema": "p1-6/evalset@1",
- "built_at": "2026-10-23 09:38:20",
+ "built_at": "2026-10-23 10:42:15",
  "seed": 20260921,
  "fingerprint": {
-  "db_bytes": 378826752,
+  "db_bytes": 379412480,
   "documents": 14,
   "chunks": 7177,
   "entities_total": 189,
