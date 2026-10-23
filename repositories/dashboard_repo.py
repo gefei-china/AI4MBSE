@@ -47,7 +47,11 @@ class DashboardRepo(BaseRepo):
             "pending_confirm": pending_confirm,
             "active_conversations": active_convs,
             "conflicts": conflicts,
-            "review_score": 82,
+            # ★ 2026-10-23：删除写死的 "review_score": 82。
+            #   它是**常量假分数**（无论库里真实数据如何都返回 82），且前端从不消费
+            #   （全库 grep review_score 仅命中本行）⇒ 纯误导性字段。
+            #   若将来要展示"预评审评分"，须先定义**可计算口径**（如已评审比例 +
+            #   冲突数折算），并从真实数据算出——不能凭空给一个好看的数字。
             "kb_stats": {
                 "reviewed": reviewed,
                 "candidate": candidates,

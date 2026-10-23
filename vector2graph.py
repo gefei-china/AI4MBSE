@@ -103,7 +103,11 @@ def _mock_extract_v2(text: str, entity_types: list, relation_types: list) -> dic
       同指称去重；修饰词/上下文保留在 properties.source_frag 供溯源。
     - 关系（RE）：正则匹配 `实体词 关系词 实体词` 三元组（头尾必须是已识别
       实体指称，关联对象明确），按关系词长度优先（长词如 SATISFIES 先匹配）。
-    - 置信度：规则确定性打分——实体 0.8，关系 0.85（Mock 模式为确定性抽取）。
+    - 置信度：**实体 0.45、关系 0.5**（★ 2026-10-23 由 0.8/0.85 下调）。
+      原值 0.8/0.85 看起来与真 LLM 抽取无异 ⇒ 用户分不清哪些候选是规则凑的；
+      且高于系统确认阈值（ingest.confidence_threshold 0.75 附近）⇒ 有被误判为"高置信"的路径。
+      规则抽取（把本体类型词当实体指称）精度本就低，**必须落在阈值之下强制人工复核**。
+    - 每条候选带 `extractor: "rule"` 标记，落进 properties ⇒ 前端可显式区分来源。
     """
     nodes, edges = [], []
     seen_names = set()
@@ -118,8 +122,8 @@ def _mock_extract_v2(text: str, entity_types: list, relation_types: list) -> dic
             nodes.append({
                 "name": name,
                 "entity_type": w,
-                "confidence": 0.8,
-                "properties": {"matched_word": w,
+                "confidence": 0.45,
+                "properties": {"extractor": "rule", "matched_word": w,
                                "source_frag": text[max(0, m.start() - 20):m.end() + 20].strip()[:120]},
             })
             break
@@ -145,8 +149,9 @@ def _mock_extract_v2(text: str, entity_types: list, relation_types: list) -> dic
                     "source_name": s,          # 头实体（关联候选实体）
                     "target_name": t,          # 尾实体（关联候选实体）
                     "relation_type": rel,
-                    "confidence": 0.85,
-                    "props": {"auto": True, "source_frag": m.group(0)[:120]},
+                    "confidence": 0.5,
+                    "props": {"auto": True, "extractor": "rule",
+                              "source_frag": m.group(0)[:120]},
                 })
     return {"nodes": nodes, "edges": edges}
 
@@ -768,7 +773,15 @@ def extract_candidates(conn, query: str, chunk_ids: list | None = None,
         except Exception:
             extracted = None
         if not extracted:
+            # ★ 2026-10-23：规则降级抽取 —— 显式标注 extractor="rule" 并降置信度（见 _mock_extract_v2）。
+            #   降级本身保留（无 LLM 时仍能给出可复核的候选），但**不得冒充 LLM 抽取结果**：
+            #   ① 每条候选 properties 带 extractor="rule"（前端可区分来源）；
+            #   ② 置信度 0.45/0.5，落在确认阈值之下 ⇒ 强制人工复核。
             extracted = _mock_extract_v2("\n".join(texts), entity_types, relation_types)
+            for _n in (extracted.get("nodes") or []):
+                (_n.setdefault("properties", {}) or {}).setdefault("extractor", "rule")
+            for _e in (extracted.get("edges") or []):
+                (_e.setdefault("props", {}) or {}).setdefault("extractor", "rule")
 
     nodes = extracted.get("nodes", [])[:20]
     edges = extracted.get("edges", [])[:20]

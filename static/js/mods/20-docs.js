@@ -21,12 +21,19 @@ function uploadDocWithMeta(input) {
     bl.style.display = 'block';
     bl.innerHTML = files.map(f=>`<div style="font-size:11px;padding:2px 4px;">📄 ${esc(f.name)} <small style="color:var(--mut);">${(f.size/1024).toFixed(1)}KB</small></div>`).join('');
   } else { bl.style.display = 'none'; bl.innerHTML = ''; }
-  // 默认预填：标题=文件名（去扩展名）、作者=王工
+  // 默认预填：标题=文件名（去扩展名）、作者=**当前登录用户**
+  // ★ 2026-10-23：作者不再硬编码「王工」——那是虚构人名，会随文档入库
+  //   污染 documents.author 与来源追溯。改为取 /api/users/me 的真实身份；
+  //   取不到（未登录/接口失败）时**留空**，由用户自行填写（后端 author or ""）。
   if(!document.getElementById('dm-title').value) {
     document.getElementById('dm-title').value = f0.name.replace(/\.[^.]+$/, '');
   }
   if(!document.getElementById('dm-author').value) {
-    document.getElementById('dm-author').value = '王工';
+    const _a = document.getElementById('dm-author');
+    api('/api/users/me').then(m=>{
+      const nm = (m && (m.display_name || m.username)) || '';
+      if(nm && !_a.value) _a.value = nm;
+    }).catch(()=>{ /* 未登录则留空，不编造 */ });
   }
 }
 function clearDocFile() {
@@ -142,7 +149,9 @@ async function doUploadDoc() {
   const bar = document.getElementById('up-bar');
   prog.style.display = 'block';
   document.getElementById('doc-file-card').style.display = 'none';
-  const author = document.getElementById('dm-author').value.trim() || '王工';
+  // ★ 2026-10-23：不再用 '王工' 兜底 —— 无作者就存空（后端 author or ""），
+  //   绝不编造人名。
+  const author = document.getElementById('dm-author').value.trim();
   const version = document.getElementById('dm-version').value.trim() || 'v1.0';
   const tags = document.getElementById('dm-tags').value.trim();
   const totalN = files.length;

@@ -542,7 +542,8 @@ def update_document_meta(doc_id: int, body: DocMetaIn, conn=Depends(db_session),
 
 
 @router.put("/api/documents/{doc_id}/category")
-def update_document_category(doc_id: int, body: dict, conn=Depends(db_session)):
+def update_document_category(doc_id: int, body: dict, conn=Depends(db_session),
+                             user=Depends(current_user)):
     """P0-3：给文档打知识类别标签（设计方法知识/设计资产子类）。空串=清除分类。"""
     category = (body.get("category") or "").strip()
     if category:
@@ -553,7 +554,7 @@ def update_document_category(doc_id: int, body: dict, conn=Depends(db_session)):
         return JSONResponse({"error": f"文档不存在: {doc_id}"}, 404)
     conn.execute("UPDATE documents SET knowledge_category=? WHERE id=?", (category, doc_id))
     conn.commit()
-    audit("李工", "doc_category", f"文档打知识类别标签: #{doc_id} → {category or '未分类'}", conn=conn)
+    audit(audit_user(user), "doc_category", f"文档打知识类别标签: #{doc_id} → {category or '未分类'}", conn=conn)
     return {"ok": True, "doc_id": doc_id, "category": category}
 
 

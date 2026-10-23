@@ -4845,8 +4845,7 @@ class StreamMixin:
                         "tools": exec_tools,
                     },
                     "sysml_views": sysml_views,
-                    "submitted_by": ((user or {}).get("display_name") or (user or {}).get("name") or "会话发起人")
-                                     if isinstance(user, dict) else "会话发起人",
+                    "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",
                     **self._build_rich_card(intent, retrieval, branch, user_input, provider_id),
                 }, ensure_ascii=False)
                 with db_conn() as conn:

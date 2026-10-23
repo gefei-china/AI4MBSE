@@ -81,7 +81,7 @@ def _extract_code_blocks(content: str, limit: int = 5) -> list:
 
 
 def _archive_impact_analysis(conn, conversation_id: int, message_id: int,
-                             card_data, user_input: str, created_by: str = "王工") -> None:
+                             card_data, user_input: str, created_by: str = "未登录") -> None:
     """CIA（FR-CIA-3）：变更影响分析结果快照落库（含失败引导记录，可追溯）。
 
     在 execute / execute_stream 两条落库链路统一调用；失败静默（不影响会话主流程）。
@@ -104,7 +104,7 @@ def _archive_impact_analysis(conn, conversation_id: int, message_id: int,
 
 
 def _archive_sysml_version(conn, conversation_id: int, message_id: int,
-                           sysml_views: dict, created_by: str = "王工",
+                           sysml_views: dict, created_by: str = "未登录",
                            code_text: str = "") -> int | None:
     """AI 建模 SysML 版本建档：每次 AI 生成/修订 SysML → sysml_versions 新版本（v0.n 递增）。
 
@@ -228,7 +228,7 @@ def extract_sysml_doc_from_result(tool_name: str, result_text: str) -> dict | No
 
 
 def _archive_artifacts(conn, conversation_id: int, message_id: int,
-                       card_data, content: str, intent: str, created_by: str = "王工",
+                       card_data, content: str, intent: str, created_by: str = "未登录",
                        tool_docs=None) -> None:
     """把 AI 生成内容登记为会话产物（幂等：同 (会话,消息,类型,标题) 不重复）。
 

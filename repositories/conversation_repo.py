@@ -260,7 +260,7 @@ class ConversationRepo(BaseRepo):
     def update_message_feedback(self, msg_id: int, fb_type: str) -> None:
         self.execute("UPDATE messages SET feedback=? WHERE id=?", (fb_type, msg_id))
 
-    def create_feedback(self, msg_id: int, fb_type: str, context: str, created_by: str = "王工") -> None:
+    def create_feedback(self, msg_id: int, fb_type: str, context: str, created_by: str = "未登录") -> None:
         self.execute(
             "INSERT INTO feedback (message_id, feedback_type, context, created_by) VALUES (?,?,?,?)",
             (msg_id, fb_type, context, created_by),

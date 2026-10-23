@@ -206,7 +206,16 @@ async function loadMCPServers() {
     const toolN = (()=>{ try{return JSON.parse(s.tools||'[]').length;}catch(e){return 0;} })();
     const proto = s.protocol_version?`<span class="st b">${s.protocol_version}</span>`:'';
     const err = s.last_error?`<div style="font-size:11px;color:var(--red);margin-top:4px;" title="${esc(s.last_error)}">⚠ ${esc(s.last_error).slice(0,80)}</div>`:'';
-    const statusBadge = s.status==='online' ? '<span class="st ok">online</span>' : '';
+    // ★ 2026-10-23：状态徽章如实反映**探测结果**，不美化未知态。
+    //   原：只有 online 显示徽章，offline/unknown 一律什么都不显示（用户看不出
+    //   "是没检测"还是"检测失败"）。且延迟为 NULL 时会渲染成 "nullms"。
+    //   现在：online→绿 / offline→红 / unknown（未检测）→灰「未检测」/ 其它→灰「未知」，
+    //   延迟无值时显示「-」而不是 nullms。
+    const _st = s.status || 'unknown';
+    const statusBadge = _st==='online' ? '<span class="st ok">online</span>'
+                      : _st==='offline' ? '<span class="st r">offline</span>'
+                      : _st==='unknown' ? '<span class="st b">未检测</span>'
+                      : `<span class="st b">${esc(_st)}</span>`;
     // ★ B5-3：内置 MCP 必须说清「它是什么」——
     //   此前卡片只有名字 +「内置不可删」，用户看不出这个条目指向哪、为什么删不掉。
     //   事实（据 audit_logs.event_type='mcp_tool_call' 审计）：它**被真实调用过 22 次**
@@ -226,7 +235,7 @@ async function loadMCPServers() {
     <div class="pb"><div class="kv"><span>端点</span><b>${s.endpoint}</b></div>
     <div class="kv"><span>传输</span><b>${s.transport||'sse'}</b></div>
     <div class="kv"><span>清单</span><b>${toolN} 工具 / ${resN} 资源 / ${prmN} 提示词</b></div>
-    <div class="kv"><span>延迟</span><b>${s.latency_ms}ms</b> <span style="font-size:11px;color:var(--mut);">巡检 ${(s.last_check||'').slice(5,19)||'-'}</span></div>
+    <div class="kv"><span>延迟</span><b>${(s.latency_ms==null||s.latency_ms==='')?'-':esc(String(s.latency_ms))+'ms'}</b> <span style="font-size:11px;color:var(--mut);">巡检 ${(s.last_check||'').slice(5,19)||'未检测'}</span></div>
     ${builtinNote}
     ${err}
     <div style="margin-top:6px;display:flex;gap:6px;">

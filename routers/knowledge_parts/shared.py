@@ -15,7 +15,7 @@ from core import ontology_rules
 from knowledge_engine import QueryRouter  # P1: 双引擎路由统计
 from repositories.knowledge_repo import KnowledgeRepo
 from repositories.commit_repo import CommitRepo
-from core.audit import audit
+from core.audit import audit, audit_user
 from core.branch_rules import check_writable, is_release_family
 from models import (
     EntityIn,
@@ -76,8 +76,8 @@ _FALLBACK_STOP_WORDS = {
 # ---- 模块级私有 helper（拆分自原文件中部，供各分片共用）----
 
 def _actor(user) -> str:
-    """审计操作人：优先取当前登录用户显示名；匿名请求兜底保留原默认名「王工」。"""
-    return (user or {}).get("display_name") or "王工"
+    """审计操作人：取已认证用户显示名；取不到标注「未登录」（不再编造人名）。"""
+    return audit_user(user)
 
 
 def _is_release_branch(conn, branch: str | None) -> bool:

@@ -896,8 +896,7 @@ class ExecuteMixin:
                     "provider": llm_info["provider"],
                     "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
                     "sysml_views": sysml_views,
-                    "submitted_by": ((user or {}).get("display_name") or (user or {}).get("name") or "会话发起人")
-                                     if isinstance(user, dict) else "会话发起人",
+                    "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",
                     **self._build_rich_card(intent, retrieval, branch, user_input, provider_id),
                 }, ensure_ascii=False)
                 cursor = conn.execute(
@@ -922,7 +921,7 @@ class ExecuteMixin:
                             status="ok" if _cd.get("ok") is not False else "error",
                             error_code=_cd.get("code", ""),
                             conversation_id=conversation_id, message_id=msg_id,
-                            created_by="王工")
+                            created_by=audit_user(user))
                     except Exception:
                         pass
 

@@ -186,11 +186,13 @@ def delete_conversation(conv_id: int, conn=Depends(db_session),
 
 
 @router.post("/api/upload")
-def upload_file(file: UploadFile = File(...), conn=Depends(db_session)):
+def upload_file(file: UploadFile = File(...), conn=Depends(db_session),
+                u=Depends(current_user)):
     """通用附件/图片上传（V2.3 优化：会话窗口富输入）。落盘 static/uploads/,返回可访问 URL。
     AI 建模：文档类附件自动进入文档管理（解析→分块→向量化→落库），逻辑同文件管理上传；
     响应携带 doc_id/parse_status/chunk_count/kb，前端据此展示入库状态。
-    注意：必须为同步 def —— db_session 连接在线程池创建,async 端点跨线程使用会抛 sqlite3.ProgrammingError。"""
+    注意：必须为同步 def —— db_session 连接在线程池创建,async 端点跨线程使用会抛 sqlite3.ProgrammingError。
+    ★ 2026-10-23：补 current_user 依赖 —— 此前上传归属恒为「未登录」，审计不可追责。"""
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_EXTS:
         return JSONResponse({"error": f"不支持的文件类型: {ext or 'unknown'}"}, 400)
@@ -222,18 +224,18 @@ def upload_file(file: UploadFile = File(...), conn=Depends(db_session)):
             from knowledge_pipeline import ingest_upload_document
             file_type = file.filename.split(".")[-1] if "." in file.filename else ""
             kb = ingest_upload_document(conn, file.filename, file_type, content,
-                                        uploaded_by="王工", branch="global")
+                                        uploaded_by=audit_user(u), branch="global")
             resp["doc_id"] = kb.get("doc_id")
             resp["parse_status"] = kb.get("parse_status")
             resp["chunk_count"] = kb.get("chunk_count", 0)
             resp["kb"] = kb
             if kb.get("parse_status") == "failed":
-                audit("王工", "file_upload",
+                audit(audit_user(u), "file_upload",
                       f"附件入库文档管理失败: {file.filename} → {kb.get('error', '')[:120]}", conn=conn)
         except Exception as e:
-            audit("王工", "file_upload",
+            audit(audit_user(u), "file_upload",
                   f"附件入库文档管理异常(不阻断附件): {file.filename} → {str(e)[:120]}", conn=conn)
-    audit("王工", "file_upload", f"上传附件: {file.filename} ({len(content)}B)", conn=conn)
+    audit(audit_user(u), "file_upload", f"上传附件: {file.filename} ({len(content)}B)", conn=conn)
     return resp
 
 
@@ -683,7 +685,7 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
     _n = len((body.get("answers") or []))
     _tail = '跳过' if body.get("skip") else (
         '自由文本' if free_text else (f"{_n} 条选项" + (f" + 补充说明" if (body.get("note") or "").strip() else "")))
-    audit("王工", "clarify_answer", f"会话#{conv_id} 澄清回答（{_tail}）", conn=conn)
+    audit(audit_user(user), "clarify_answer", f"会话#{conv_id} 澄清回答（{_tail}）", conn=conn)
     return {"ok": True, "resume_text": resume_text, "append_text": append_text,
             "resume_of_user_msg_id": _resume_of_uid, "free_text": bool(free_text)}
 
@@ -743,7 +745,7 @@ def commit_partial_message(conv_id: int, body: dict = None, conn=Depends(db_sess
         # 静默 pass 会让"去重失效"这类缺陷完全不可见（2026-10-10 就是这么漏了一整天）。
         print(f"[commit_partial] 去重判据异常，会退化为写入一条：{_dedup_err!r}")
     mid = repo.add_assistant_message(conv_id, content + suffix, msg_type="text")
-    audit("王工", "conversation_partial_commit", f"会话#{conv_id} 固化已生成内容（{len(content)} 字）", conn=conn)
+    audit(audit_user(user), "conversation_partial_commit", f"会话#{conv_id} 固化已生成内容（{len(content)} 字）", conn=conn)
     return {"ok": True, "id": mid}
 
 
@@ -836,7 +838,7 @@ def message_feedback(msg_id: int, body: dict, conn=Depends(db_session),
                      user=Depends(current_user)):
     fb_type = body.get("type", "")
     context = body.get("context", "") or ""
-    actor = (user or {}).get("display_name") or "王工"
+    actor = audit_user(user)
     repo = ConversationRepo(conn)
     repo.update_message_feedback(msg_id, fb_type)
     repo.create_feedback(msg_id, fb_type, context, actor)
@@ -951,7 +953,7 @@ def list_scopes(conn=Depends(db_session), user=Depends(current_user)):
 def add_scope(body: dict, conn=Depends(db_session), user=Depends(current_user)):
     """保存建模范围：body {name, mode, doc_names, fragment_text, chunk_ids}。同名幂等覆盖。"""
     from services.scope_service import save_scope
-    actor = (user or {}).get('display_name') or '王工'
+    actor = audit_user(user)
     b = body or {}
     r = save_scope(conn, b.get('name') or '', b.get('mode') or 'doc',
                     doc_names=b.get('doc_names'), fragment_text=b.get('fragment_text') or '',
@@ -963,7 +965,7 @@ def add_scope(body: dict, conn=Depends(db_session), user=Depends(current_user)):
 def remove_scope(scope_id: int, conn=Depends(db_session), user=Depends(current_user)):
     from services.scope_service import delete_scope
     delete_scope(conn, scope_id)
-    audit((user or {}).get('display_name') or '王工', 'modeling_scope', f"删除建模范围#{scope_id}", conn=conn)
+    audit(audit_user(user), 'modeling_scope', f"删除建模范围#{scope_id}", conn=conn)
     return {"ok": True}
 
 @router.post("/api/scopes/preview")

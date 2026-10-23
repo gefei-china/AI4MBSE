@@ -28,7 +28,7 @@ class StudioRepo(BaseRepo):
     def list_prompts(self) -> list:
         return self.rows("SELECT * FROM prompts ORDER BY updated_at DESC")
 
-    def create_prompt(self, name: str, scenario: str, content: str, variables: str, version: str, created_by: str = "王工") -> int:
+    def create_prompt(self, name: str, scenario: str, content: str, variables: str, version: str, created_by: str = "未登录") -> int:
         rid = self.execute(
             "INSERT INTO prompts (name, scenario, content, variables, version, created_by) VALUES (?,?,?,?,?,?)",
             (name, scenario, content, variables, version, created_by),
@@ -536,7 +536,7 @@ class StudioRepo(BaseRepo):
             "INSERT INTO plugin_review_log (kind, item_id, item_name, action, comment, operator) VALUES (?,?,?,?,?,?)",
             (kind, item_id, item_name, action, comment, operator))
 
-    def share_submit(self, kind: str, item_id: int) -> str | None:
+    def share_submit(self, kind: str, item_id: int, operator: str = "未登录") -> str | None:
         """个人插件提交分享（待管理员审核）。仅限私人空间自建条目（非内置、非市场副本）。
 
         返回 None=成功；否则返回错误文案。
@@ -555,10 +555,11 @@ class StudioRepo(BaseRepo):
         if st == "approved":
             return "该插件已在市场中"
         self.execute(f"UPDATE {table} SET share_status='submitted' WHERE id=?", (item_id,))
-        self._share_log(kind, item_id, str(item["name"]), "submit", "提交分享申请", "王工")
+        self._share_log(kind, item_id, str(item["name"]), "submit", "提交分享申请", operator)
         return None
 
-    def share_review(self, kind: str, item_id: int, action: str, comment: str = "") -> str | None:
+    def share_review(self, kind: str, item_id: int, action: str, comment: str = "",
+                    operator: str = "未登录") -> str | None:
         """管理员审核：approve 通过入市 / reject 驳回。返回 None=成功，否则错误文案。"""
         table, _ = self._MARKET_TABLES[kind]
         item = self.one(f"SELECT * FROM {table} WHERE id=?", (item_id,))
@@ -574,10 +575,10 @@ class StudioRepo(BaseRepo):
             if exists:
                 return f"公共市场已存在同名条目「{item['name']}」，无法通过审核（请先在个人空间重命名）"
             self.execute(f"UPDATE {table} SET scope='public', source_ref='', share_status='approved', origin='share' WHERE id=?", (item_id,))
-            self._share_log(kind, item_id, str(item["name"]), "approve", comment or "审核通过，上架市场", "王工")
+            self._share_log(kind, item_id, str(item["name"]), "approve", comment or "审核通过，上架市场", operator)
         else:  # reject
             self.execute(f"UPDATE {table} SET share_status='rejected' WHERE id=?", (item_id,))
-            self._share_log(kind, item_id, str(item["name"]), "reject", comment or "审核驳回", "王工")
+            self._share_log(kind, item_id, str(item["name"]), "reject", comment or "审核驳回", operator)
         return None
 
     def share_items(self, kind: str = "all", share_status: str = "") -> list:

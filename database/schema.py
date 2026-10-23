@@ -1344,7 +1344,7 @@ def init_db():
         title TEXT NOT NULL,
         content TEXT DEFAULT '',
         enabled INTEGER DEFAULT 1,
-        created_by TEXT DEFAULT '王工',
+        created_by TEXT DEFAULT '未登录',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")

@@ -31,109 +31,14 @@ NODE_SCHEMA = {
     "debate":   {"label": "协商节点", "fields": ["mode", "proposal", "sources", "options", "threshold"]},
 }
 
-# ── Mock 确定性模板（无 LLM 时的兜底生成，关键词匹配）──
-_MOCK_TEMPLATES = [
-    {
-        "keywords": ["需求", "条目", "requirement", "抽取"],
-        "name": "需求分析流程",
-        "description": "检索知识库 → 需求分析 Agent 抽取条目 → LLM 总结",
-        "nodes": [
-            {"id": "n1", "type": "tool", "label": "知识检索",
-             "config": {"tool": "graph_retrieve", "arguments": {"query": "需求分析"}}},
-            {"id": "n2", "type": "agent", "label": "需求分析",
-             "config": {"agent": "requirement_analysis", "query": "根据检索结果 {{n1.content}} 分析并抽取需求条目"}},
-            {"id": "n3", "type": "llm", "label": "总结",
-             "config": {"prompt": "上游 Agent 结论：{{n2.content}}。请总结关键需求要点。"}},
-        ],
-        "edges": [{"source": "n1", "target": "n2"}, {"source": "n2", "target": "n3"}],
-    },
-    {
-        "keywords": ["影响", "变更", "impact", "change"],
-        "name": "变更影响分析流程",
-        "description": "检索 → 变更影响分析工具 → 条件判断 → 汇总",
-        "nodes": [
-            {"id": "n1", "type": "tool", "label": "知识检索",
-             "config": {"tool": "graph_retrieve", "arguments": {"query": "变更影响"}}},
-            {"id": "n2", "type": "tool", "label": "影响分析",
-             "config": {"tool": "impact_analyze", "arguments": {"query": "{{n1.content}} 的影响范围"}}},
-            {"id": "n3", "type": "if", "label": "是否高风险",
-             "config": {"expression": "{{n2.data.result}} contains 直接影响"}},
-            {"id": "n4", "type": "agent", "label": "变更影响Agent",
-             "config": {"agent": "impact", "query": "高风险变更，分析：{{n2.content}}"}},
-            {"id": "n5", "type": "llm", "label": "总结",
-             "config": {"prompt": "最终结论：{{n4.content}}{{n2.content}}"}},
-        ],
-        "edges": [
-            {"source": "n1", "target": "n2"},
-            {"source": "n2", "target": "n3"},
-            {"source": "n3", "target": "n4", "when": "true"},
-            {"source": "n3", "target": "n5", "when": "false"},
-            {"source": "n4", "target": "n5"},
-        ],
-    },
-    {
-        "keywords": ["评审", "校验", "检查", "review", "validate", "质量"],
-        "name": "模型预评审流程",
-        "description": "检索 → 预评审工具 → Agent 出具报告",
-        "nodes": [
-            {"id": "n1", "type": "tool", "label": "知识检索",
-             "config": {"tool": "graph_retrieve", "arguments": {"query": "模型评审"}}},
-            {"id": "n2", "type": "tool", "label": "预评审",
-             "config": {"tool": "validate", "arguments": {"query": "{{n1.content}}"}}},
-            {"id": "n3", "type": "agent", "label": "预评审Agent",
-             "config": {"agent": "review", "query": "基于评审结果 {{n2.content}} 出具预评审报告"}},
-        ],
-        "edges": [{"source": "n1", "target": "n2"}, {"source": "n2", "target": "n3"}],
-    },
-    {
-        "keywords": ["问答", "知识", "检索", "qa", "查一下"],
-        "name": "知识问答流程",
-        "description": "检索 → 知识问答 Agent 直接回答",
-        "nodes": [
-            {"id": "n1", "type": "tool", "label": "知识检索",
-             "config": {"tool": "graph_retrieve", "arguments": {"query": ""}}},
-            {"id": "n2", "type": "agent", "label": "知识问答",
-             "config": {"agent": "knowledge_qa", "query": "根据检索结果 {{n1.content}} 回答问题"}},
-        ],
-        "edges": [{"source": "n1", "target": "n2"}],
-    },
-    # 端到端多阶段模板：任务同时覆盖多个建模阶段时，一次性生成完整链路（关键词命中数最多者优先，见 _mock_generate）
-    {
-        "keywords": ["建模", "mbse", "方案", "设计", "生成", "代码", "sysml", "校验", "规则", "输出", "流程", "链路", "端到端"],
-        "name": "MBSE 建模全流程",
-        "description": "需求分析 → 方案设计 → SysML V2 代码生成 → 规则校验（失败回环修正）→ 报告输出",
-        "nodes": [
-            {"id": "n1", "type": "tool", "label": "知识检索",
-             "config": {"tool": "graph_retrieve", "arguments": {"query": "MBSE 建模需求"}}},
-            {"id": "n2", "type": "agent", "label": "需求分析",
-             "config": {"agent": "requirement_analysis", "query": "根据检索结果 {{n1.content}} 抽取并结构化建模需求条目（含来源追溯）"}},
-            {"id": "n3", "type": "agent", "label": "方案设计",
-             "config": {"agent": "design", "query": "基于需求 {{n2.content}} 进行总体方案设计（架构 / 接口 / 约束）"}},
-            {"id": "n4", "type": "llm", "label": "SysML V2 代码生成",
-             "config": {"prompt": "依据方案 {{n3.content}} 生成 SysML V2 模型代码（requirements / BDD / UC / ACT 视图），要求通过词法、语法、语义校验"}},
-            {"id": "n5", "type": "tool", "label": "规则校验",
-             "config": {"tool": "validate", "arguments": {"query": "对生成的 SysML V2 代码 {{n4.content}} 做规范性 / 一致性 / 合理性校验"}}},
-            {"id": "n6", "type": "if", "label": "校验是否通过",
-             "config": {"expression": "{{n5.data.result}} contains 通过"}},
-            {"id": "n7", "type": "agent", "label": "问题修正",
-             "config": {"agent": "design", "query": "校验未通过，依据问题清单 {{n5.content}} 修正方案与 SysML V2 代码"}},
-            {"id": "n8", "type": "tool", "label": "报告输出",
-             "config": {"tool": "report_export", "arguments": {"path": "outputs/MBSE建模全流程产出.md", "title": "MBSE 建模全流程产出", "content": "{{n4.content}}", "fmt": "md"}}},
-        ],
-        "edges": [
-            {"source": "n1", "target": "n2"},
-            {"source": "n2", "target": "n3"},
-            {"source": "n3", "target": "n4"},
-            {"source": "n4", "target": "n5"},
-            {"source": "n5", "target": "n6"},
-            {"source": "n6", "target": "n7", "when": "false"},
-            {"source": "n7", "target": "n4"},
-            {"source": "n6", "target": "n8", "when": "true"},
-        ],
-    },
-]
+# ── 2026-10-23（米爸决策：删除 Mock 模板，失败即报错）────────────────────────
+# 为什么删：本文件原先在 LLM 不可用时回退到 4 套**写死的流程模板**（需求分析流程 /
+# 变更影响分析 / 模型预评审 / 知识问答），并标注"（Mock 兜底）"——但内容仍会被前端
+# 当作真实 AI 产出导入流程。这与 llm 层的既有原则冲突（llm/__init__.py 三处降级
+# 点一律 raise LLMUnavailableError，门禁 verify_no_mock_fallback.py 守住）：
+# **用户拿到的是编造的内容**。演示模板应属于 docs / 离线演示，不属于生产链路。
+# 现在：LLM 不可用 → 返回 {"ok": False, "error": ...}，前端如实展示失败原因。
 
-_DEFAULT_TEMPLATE = _MOCK_TEMPLATES[0]
 
 
 class FlowCopilot:
@@ -180,13 +85,20 @@ class FlowCopilot:
         if not prompt:
             return {"ok": False, "error": "任务描述必填"}
         example = self._retrieve_example(prompt, conn)
-        # 1) LLM 结构化生成（失败/无 key → 回退 Mock 模板，保证稳定性）
+        # 1) LLM 结构化生成。★ 2026-10-23：**不再回退 Mock 模板** ——
+        #    LLM 不可用（无 Key / 调用失败 / 返回非 JSON）→ 直接返回明确错误，
+        #    绝不产出写死的流程定义（那会被前端当真实 AI 产出导入生产）。
         generated = self._llm_generate(prompt, example, conn, deep_thinking=deep_thinking)
         if not generated:
-            generated = self._mock_generate(prompt)
-            if deep_thinking and not generated.get("_reasoning"):
-                generated["_reasoning"] = ("（Mock 兜底）未配置 LLM Key 或 LLM 调用失败，采用确定性模板生成。"
-                                           "配置 LLM Key 后开启深度思考，可获得真实的分析过程。")
+            return {
+                "ok": False,
+                "error": ("AI 流程生成不可用：未配置 LLM Key 或 LLM 调用失败，本次未生成任何流程定义。"
+                          "请在「设置 → 大模型」中配置可用的 LLM Provider 后重试。"),
+                "name": "", "description": "", "nodes": [], "edges": [],
+                "validations": [], "has_error": True,
+                "source": "unavailable", "prompt": prompt,
+                "reasoning": "", "deep_thinking": deep_thinking,
+            }
         # 2) 规范化 + 校验
         generated["nodes"] = self._normalize_nodes(generated.get("nodes", []))
         generated["edges"] = self._normalize_edges(generated.get("edges", []))
@@ -218,23 +130,15 @@ class FlowCopilot:
         refined = self._llm_generate(prompt, None, conn, base_definition=base,
                                      deep_thinking=deep_thinking, conversation=conversation)
         if not refined:
-            # Mock 兜底：综合「历史用户指令 + 本次指令」重新匹配模板——
-            # 多轮场景（如"当前方案只有需求分析，后续环节没包括"）能补全缺失阶段而非原样保留
-            combined = " ".join(
-                str(m.get("content") or "") for m in (conversation or []) if m.get("role") == "user"
-            ) + " " + prompt
-            mock = self._mock_generate(combined)
-            if (mock.get("nodes") or []) != (definition.get("nodes") or []):
-                refined = dict(mock)
-                refined["_source"] = "mock"
-                refined["note"] = ("（Mock 模式，未配置 LLM Key）已按对话整体意图重新匹配完整流程模板，"
-                                   "覆盖了此前缺失的环节；配置 LLM Key 后可获得更贴合的多轮修改。")
-        if not refined:
-            return {"ok": True, "note": "AI 未给出修改（Mock 模式建议手动调整），已保留原定义",
+            # ★ 2026-10-23：**不再回退 Mock 模板** —— LLM 不可用时如实报失败，
+            #   保留原定义交由用户手动调整。绝不用写死模板冒充"AI 已完成修改"。
+            return {"ok": False,
+                    "error": ("AI 迭代修改不可用：未配置 LLM Key 或 LLM 调用失败，本次未做任何修改。"
+                              "已保留原定义，请手动调整或配置 LLM Provider 后重试。"),
                     "name": definition.get("name") or "未命名流程",
                     "description": definition.get("description") or "",
                     "nodes": definition.get("nodes", []), "edges": definition.get("edges", []),
-                    "validations": [], "has_error": False, "source": "unchanged"}
+                    "validations": [], "has_error": True, "source": "unavailable"}
         refined["nodes"] = self._normalize_nodes(refined.get("nodes", []))
         refined["edges"] = self._normalize_edges(refined.get("edges", []))
         # LLM 未返回 name/description 时继承原定义（迭代不丢关键信息）
@@ -430,23 +334,11 @@ class FlowCopilot:
         except Exception:
             return None
 
-    # ── Mock 确定性兜底（关键词匹配模板，保证无 LLM 也可稳定生成）──
-    def _mock_generate(self, prompt: str) -> dict:
-        """按「命中关键词最多」选模板（多阶段任务命中端到端模板），而非首个命中。
-
-        得分 = 命中关键词数 + 0.1×关键词长度（长关键词更特异，避免泛词如「流程」
-        与专词如「sysml」等价），0 命中回退默认模板。
-        """
-        low = (prompt or "").lower()
-        best, best_score = None, 0.0
-        for tpl in _MOCK_TEMPLATES:
-            score = 0.0
-            for k in tpl["keywords"]:
-                if k.lower() in low:
-                    score += 1 + len(k) * 0.1
-            if score > best_score:
-                best, best_score = tpl, score
-        return json.loads(json.dumps(best or _DEFAULT_TEMPLATE, ensure_ascii=False))  # 深拷贝
+    # ── 2026-10-23：_mock_generate 已删除（米爸决策：删除 Mock 模板，失败即报错）──
+    # 保留一个显式的"能力边界"标记，供调用方区分"没生成"与"生成失败"：
+    # 无 LLM Key / LLM 调用失败 / 返回非 JSON → 一律 **不产出任何流程定义**。
+    # 绝不用写死模板冒充 AI 产出（那会让用户把虚构流程导入生产）。
+    _MOCK_REMOVED = True
 
     # ── 规范化（id 重排 / label 兜底 / config 类型安全）──
     @staticmethod

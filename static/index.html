@@ -58,8 +58,13 @@
         <div class="mf-item" onclick="hideMoreFlyout();go('audit')" data-page-node-id="cfrD4EBHcQGKdI4YABYHku">🛡 <span data-page-node-id="5iGWwkJyC6v6z4tQ6gAc2o">审计日志</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;" data-page-node-id="yWReV03xzZiKiPcVanx99j">操作追溯</span></div>
         <div class="mf-item" onclick="hideMoreFlyout();go('ops')" data-page-node-id="azJY2GCDl73FDbe1eQDEvf">📈 <span data-page-node-id="bcGbW9DCuZ8GzMYYvAHbOy">运行监控</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;" data-page-node-id="ZEOAdzwFxE3x7xo9vjxsUo">LLM/HIL 用量</span></div>
         <div class="mf-item" onclick="hideMoreFlyout();go('users')" data-page-node-id="mf-users-entry">👥 <span>用户与权限</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">角色/权限配置</span></div>
-        <!-- 2026-09-17 R7：审批管理（pg-approval）此前全库无任何入口（孤立页），按「管理类入口统一收口」原则补进「更多」 -->
-        <div class="mf-item" onclick="hideMoreFlyout();go('approval')" data-page-node-id="mf-approval-entry">✅ <span>审批管理</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">审批流配置</span></div>
+        <!-- 2026-10-23：审批管理（pg-approval）入口已下线 ——
+             该模块是**纯前端原型**：5 个审批类型 / 4 套流程模板 / 5 条编造审批流水
+             （含虚构人名与审批意见）全部硬编码在 32-approval.js 并存 localStorage，
+             后端**无任何审批 API**，权限判定也是写死的「角色→人名」映射。
+             在「真正生产可用」标准下，用户看到的是**假业务记录**。
+             米爸决策（2026-10-23）：仅移除入口，后端另立需求重做（届时建表 + 路由
+             + 前端接真源）。深链 go('approval') 亦已失效（页面 DOM 一并移除）。 -->
         <div class="mf-item" onclick="hideMoreFlyout();go('evolution')" data-page-node-id="mf-evolution-entry" title="自进化周报：要你决策的 / 本周体检（环比上周）/ 数据可信度">🧬 <span>自进化周报</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">这周该做什么</span></div>
         <!-- 2026-10-22：评测管理（pg-eval）—— 评测历史 / 趋势 / 可信度 / 门禁接线。
              按「管理类入口统一收口」原则（2026-09-14 用户与权限、2026-09-17 审批管理
@@ -454,7 +459,7 @@
                   <div id="doc-batch-list" style="display:none;margin-top:8px;max-height:120px;overflow-y:auto;border:1px dashed var(--blue);border-radius:6px;padding:6px;" data-page-node-id="MDrIervAZ1Uo38lGII3t6O"></div>
                   <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;" data-page-node-id="x1MbCe29lGiV1iaTzgGVnj">
                     <input id="dm-title" placeholder="标题（默认=文件名）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:180px;" data-page-node-id="PkHie0DEWdqwF5X67LMiUu">
-                    <input id="dm-author" placeholder="作者（默认=王工）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:110px;" data-page-node-id="c448FV2DEs7pQHaGFyuPOg">
+                    <input id="dm-author" placeholder="作者（默认=当前用户）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:110px;" data-page-node-id="c448FV2DEs7pQHaGFyuPOg">
                     <input id="dm-version" placeholder="版本" value="v1.0" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:80px;" data-page-node-id="tkGhyAP9ZSfwaDNjjrpqfC">
                     <input id="dm-tags" placeholder="标签（逗号分隔）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:180px;" data-page-node-id="KRyqmA57xyTE0V3pSe5BDp">
                     <button class="btn grn" onclick="doUploadDoc()" data-page-node-id="TrSkDMrdlD1BTIuyqxtqHS">🚀 开始上传</button>
@@ -1541,64 +1546,13 @@
         </div>
       </div>
 
-      <!-- ===== 审批管理（前端原型：审批类型 / 流程模板 / 节点 / 审批人） ===== -->
-      <div class="page" id="pg-approval" data-page-node-id="DhkfthnES7mZEKv1bO3j0t">
-        <h3 class="pt" data-page-node-id="eQCGG7ekibUlo3vRZPCMhw">审批管理</h3>
-        <div class="pd" data-page-node-id="DgonmgLHWyKZlAifOEhchO">自定义流程模板 · 节点 · 审批人 · 审批类型（适用场景） <span class="badge" data-page-node-id="OQV2uqsTrEdHt8WBaP1ENP">原型</span></div>
-        <div class="subtab" data-page-node-id="P2eaoYw68NNdpVHeBCLlki">
-          <span class="on" data-tabgrp="ap" onclick="tab(this,'ap','ap-type')" data-page-node-id="n7AzinTGWxqYcy3oPFxOXL">📋 审批类型</span>
-          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-tpl')" data-page-node-id="6ZmA49K6PtCxrHZND9QZOQ">🧾 流程模板</span>
-          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-new')" data-page-node-id="SP9X2NUsNIgQ9uO2Ax747J">🚀 发起审批</span>
-          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-todo')" data-page-node-id="ZBkLjN6XRCO4XXvaXNtW72">⏳ 我的待办</span>
-          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-rec')" data-page-node-id="fqVZ8yPAClDK72xESL8DEa">📚 审批记录</span>
-        </div>
-        <!-- 审批类型（用于哪些场景） -->
-        <div class="subpage on" id="ap-type" data-tabpanel="ap" data-page-node-id="4AW9C1EZvZwrFsDC46oH7M">
-          <div class="note" style="margin-bottom:12px;" data-page-node-id="l10ZyAf8EyiWavTDkIDFJM">审批类型定义「用于哪些场景」。系统预置通用类型（发布 / 变更 / 资产入库 / 分支合并 / 自定义），可直接使用，也可新增自定义类型；停用后发起审批时不可选。</div>
-          <div class="panel" data-page-node-id="l4uKMDNfEtXKvjN2PYzuzy"><div class="ph" data-page-node-id="knokTEpCz16iNnSDBDM39h">审批类型 <span class="badge" data-page-node-id="YBnf2gY3IpKPdBzzy91xFA">通用业务</span><span style="flex:1" data-page-node-id="3LIioEK8CwkHaCkKk3oFbK"></span>
-            <input id="ap-type-search" placeholder="搜索名称/场景" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:160px;" oninput="renderApprovalTypes()" data-page-node-id="pEaT6okOLhXnRhOw5mxuoZ">
-            <button class="btn sm" onclick="editApprovalType()" data-page-node-id="KG2pryW7mfSgo3QCvZWx6H">＋ 新增类型</button></div>
-            <div class="pb" style="padding:0;" id="ap-type-table" data-page-node-id="Z9lXD7TfHxUDQzrZ7x4auf"><div class="loading" data-page-node-id="NVJPNGOwHQsgPdQTB7FEVN">加载中…</div></div>
-          </div>
-        </div>
-        <!-- 流程模板 -->
-        <div class="subpage" id="ap-tpl" data-tabpanel="ap" data-page-node-id="HqjaPAy0RWj9b8Ft0oDvQv">
-          <div class="note" style="margin-bottom:12px;" data-page-node-id="cN5hCND0NeOmZT5g7cnrBf">流程模板定义「审批怎么走」：模板归属于某个审批类型，节点按顺序执行；每个节点可配置审批人（指定人员 / 指定角色 / 发起人自选）与通过规则（全部 / 任一）。</div>
-          <div class="panel" data-page-node-id="MLb4Zjw5juiyCmX627PVql"><div class="ph" data-page-node-id="BkEQF9KdFdp4RRj3wMIrLW">流程模板 <span class="badge" data-page-node-id="GcKF6p2tJJaFpl0MuhKhRW">节点可编排</span><span style="flex:1" data-page-node-id="tQtyyEubkWzUrP6x2AKJz1"></span>
-            <button class="btn sm" onclick="editApprovalTpl()" data-page-node-id="dtdzcgGlAZRS3xCMAiAxIV">＋ 新建模板</button></div>
-            <div class="pb" style="padding:0;" id="ap-tpl-table" data-page-node-id="2KX5ToiiGAtDb4smogaRVy"><div class="loading" data-page-node-id="qiZFMBwzR2PIOaFu2OaVu4">加载中…</div></div>
-          </div>
-        </div>
-        <!-- 发起审批 -->
-        <div class="subpage" id="ap-new" data-tabpanel="ap" data-page-node-id="Hg2bobkkufQIyM8oxjQuk0">
-          <div class="panel" data-page-node-id="AoC2ibpW0jZvc4RgyF9257"><div class="ph" data-page-node-id="7YGZ7XauMDQy9g7U7wOCQV">发起审批 <span class="badge" data-page-node-id="daWhA6kCaUcHmbHCVE7A1M">选择类型与模板</span></div>
-            <div class="pb" id="ap-new-form" data-page-node-id="kocn98na4U0BRtiu9XXXeT"><div class="loading" data-page-node-id="GliMACwh6X7BYdCBnx1vzR">加载中…</div></div>
-          </div>
-        </div>
-        <!-- 我的待办 -->
-        <div class="subpage" id="ap-todo" data-tabpanel="ap" data-page-node-id="HAZF2b85gsLorAtj7kngsG">
-          <div class="panel" data-page-node-id="pZ0ocMbDRbfxbFWAAm4xBF"><div class="ph" data-page-node-id="fayyvw1lkcVvxPjSKtvLx1">⏳ 我的待办 <span class="badge r" id="ap-todo-badge" data-page-node-id="8rw332dvislARxeFb18ThF">0</span><span style="flex:1" data-page-node-id="6KLlSJ6ZVdJ4duKJqgf7GD"></span>
-            <button class="btn sm ghost" onclick="renderApprovalTodo()" data-page-node-id="0x6B5bnbDKp25BT9gAxuo1">🔄 刷新</button></div>
-            <div class="pb" style="padding:0;" id="ap-todo-table" data-page-node-id="FYncLaJ8z6ZIZlg8P4PivJ"><div class="loading" data-page-node-id="xGBosCq3bexv89fBaxnwMV">加载中…</div></div>
-          </div>
-        </div>
-        <!-- 审批记录 -->
-        <div class="subpage" id="ap-rec" data-tabpanel="ap" data-page-node-id="CPpD7LblHARHuXfspeXDIF">
-          <div class="panel" data-page-node-id="2K8jDOZPzSV1dffooPY9fy"><div class="ph" data-page-node-id="MmY0A0GApzrc4NEy8qG1Sn">审批记录 <span style="flex:1" data-page-node-id="P5TYb6vP8H4Le6GpDElZnP"></span>
-            <select id="ap-rec-status" onchange="renderApprovalRecs()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="cF9gUz2lIIPzfDonboeaJU">
-              <option value="" data-page-node-id="9nghMDFJ2VviJm1Z4idkje">全部状态</option><option value="running" data-page-node-id="lvRUyQt0hk1QosdSYCwNJD">审批中</option><option value="approved" data-page-node-id="HeGlHH2V48TTB3s8ZfvfbY">已通过</option><option value="rejected" data-page-node-id="HtpbJuHu7cvLHLy0FRlc5M">已驳回</option><option value="withdrawn" data-page-node-id="NWog3CYtumF0DfQd3LgPU8">已撤销</option>
-            </select>
-            <button class="btn sm ghost" onclick="renderApprovalRecs()" data-page-node-id="QOdXVlz68HmBNoZe5fA6Nt">🔄 刷新</button></div>
-            <div class="pb" style="padding:0;" id="ap-rec-table" data-page-node-id="xWCymt4NfSSUE6y7CXMRqO"><div class="loading" data-page-node-id="m7utEJi2j3ZBPwjGWt18Bk">加载中…</div></div>
-          </div>
-        </div>
-      </div>
+            <!-- 2026-10-23：审批管理页（pg-approval）已移除 ——
+           该页是**纯前端原型**：审批类型 / 流程模板 / 节点 / 审批人 全部硬编码在
+           32-approval.js（5 个类型 + 4 套模板 + 5 条编造审批流水，含虚构人名与
+           审批意见），后端无任何审批 API，权限判定靠写死的「角色→人名」映射。
+           米爸决策：仅移除入口与页面，后端另立需求重做（建表 + 路由 + 前端接真源）。 -->
 
-      <!-- ===== 自进化周报（2026-10-20 价值感知收官）：要你决策的 / 本周体检 / 数据可信度 ===== -->
-      <!-- ★必须是 #pages 的直接子级：曾插到 #pages 闭合之后成为游离节点，
-           .page.on 高亮靠 class 全局匹配仍能亮，但布局脱离主区容器被挤成右侧窄条
-           （用户报"页面展示异常"）。放置位置以 div 栈追踪核实。 -->
-      <div class="page" id="pg-evolution" data-page-node-id="evr-page-20261020">
+<div class="page" id="pg-evolution" data-page-node-id="evr-page-20261020">
         <h3 class="pt" data-page-node-id="evr-h3">自进化周报</h3>
         <div class="pd" data-page-node-id="evr-pd">这一周，系统替我做了什么？我该做什么？ <span class="badge" data-page-node-id="evr-bd">P0-P2 收官</span>
           <span id="evr-head" style="float:right" data-page-node-id="evr-head"></span>
@@ -1799,7 +1753,7 @@
     <script src="/static/js/mods/28-studio.js" defer></script>
     <script src="/static/js/mods/30-agents.js" defer></script>
     <script src="/static/js/mods/31-admin.js" defer></script>
-    <script src="/static/js/mods/32-approval.js" defer></script>
+    <!-- 2026-10-23：32-approval.js 已随审批管理模块下线而移除（纯前端原型、假业务数据） -->
     <script src="/static/js/mods/33-search.js" defer></script>
     <script src="/static/js/mods/34-graphtabs.js" defer></script>
     <script src="/static/js/mods/35-ctxconfig.js" defer></script>

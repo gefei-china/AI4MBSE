@@ -264,7 +264,7 @@ def _gen_llm_summary(text: str, filename: str, max_chars: int = 4000) -> str:
 
 
 def ingest_document(conn, filename: str, file_type: str, content: bytes,
-                    uploaded_by: str = "王工", metadata: dict | None = None,
+                    uploaded_by: str = "未登录", metadata: dict | None = None,
                     doc_id: int | None = None, branch: str = "global") -> dict:
     """上传文档 → 状态机入库：解析 → 结构感知分块 → 向量化 → document_chunks + 元数据。
 
@@ -692,7 +692,7 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
 
 
 def stage_upload_document(conn, filename: str, file_type: str, content: bytes,
-                          uploaded_by: str = "王工", metadata: dict | None = None,
+                          uploaded_by: str = "未登录", metadata: dict | None = None,
                           branch: str = "global") -> dict:
     """【P0-C异步】上传轻量登记：建 documents 行 + 落源文件副本，**不跑管道**。
 
@@ -820,7 +820,7 @@ def run_staged_ingest(conn, doc_id: int, metadata: dict | None = None) -> dict:
 
 
 def ingest_upload_document(conn, filename: str, file_type: str, content: bytes,
-                           uploaded_by: str = "王工", metadata: dict | None = None,
+                           uploaded_by: str = "未登录", metadata: dict | None = None,
                            branch: str = "global") -> dict:
     """文档上传统一入口：ingest_document 全管道（解析→分块→向量化→落库）+ 上传即抽取。
 

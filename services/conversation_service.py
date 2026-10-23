@@ -67,8 +67,8 @@ class ConversationService(BaseService):
         msg_id = cur.lastrowid
         c.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (conv_id,))
         c.commit()
-        from core.audit import audit
-        audit("王工", "flow_run_chat",
+        from core.audit import audit, audit_user
+        audit(audit_user(None), "flow_run_chat",
               f"会话#{conv_id} 运行流程#{fid}: {flow['name']} → {status}", conn=c)
         return {"ok": True, "message_id": msg_id, "summary": summary, "status": status,
                 "steps": steps, "latency_ms": latency, "run_id": result.get("run_id"),

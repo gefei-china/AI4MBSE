@@ -305,7 +305,7 @@ def regenerate_v2_with_llm(conn, code_text: str, rename: dict, intent: str = "")
 
 # ────────────────────────────── 主流程：应用归一 ──────────────────────────────
 def apply_normalization(conn, conv_id: int, msg_id: int, decisions: dict,
-                        write_glossary: bool = False, actor: str = "王工",
+                        write_glossary: bool = False, actor: str = "未登录",
                         use_ai: bool = True, inplace: bool = True) -> dict:
     """应用人工归一决策：改写 V2 代码与视图 → 写回 → 可选写词库。
 
@@ -474,7 +474,7 @@ def apply_normalization(conn, conv_id: int, msg_id: int, decisions: dict,
 # ────────────────────────────── 闸口②：写入智源建模软件 ──────────────────────────────
 def push_version_to_zhiyuan(conn, version_id: int, vc: str = "",
                             target_package_data_id: int | None = None,
-                            actor: str = "王工") -> dict:
+                            actor: str = "未登录") -> dict:
     """把某版本的 V2 源码写入智源：先 check（只读）后 import（写）。
 
     check 不通过 → 返回问题清单且**不执行写入**。

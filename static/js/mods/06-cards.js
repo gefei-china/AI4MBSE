@@ -359,67 +359,14 @@ function svmTabSwitch(tabEl) {
     card.querySelectorAll('.sv-thumb').forEach(th=>{ svmThumbMount(th); });
   }
 }
-function wbModalHtml(vCount) {
-  return `<div style="font-size:12px;line-height:1.9;color:var(--mut);margin-bottom:8px;">
-    通过<b>标准写回接口</b>将本消息的 <b>${vCount||0} 个 SysML 视图</b> 写回外部建模软件（MagicDraw / Cameo 等）。<br>
-    写回流程内置两道校验：<b>① 归一校验</b>（术语词典对齐 + 同名消歧，确保元素符合本体规范）→ <b>② 一致性检查</b>（重名 / 悬空引用 / 循环）→ 校验通过才写入目标。</div>
-  <div style="font-size:10.5px;color:var(--mut);margin-top:6px;line-height:1.7;">写回方式：仅通过接口（无手工导入通道）。校验未通过时接口返回问题清单，不执行写入。此处为前端交互演示，未连接真实工具。</div>
-  <div id="wb-progress" style="margin-top:10px;font-size:12px;line-height:2;min-height:24px;"></div>
-  <div style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px;">
-    <button class="btn ghost" onclick="closePanel()">取消</button>
-    <button class="btn" id="wb-start" onclick="wbStart()">🚀 通过接口写回</button>
-  </div>`;
-}
-function wbStart() {
-  const box = document.getElementById('wb-progress'); if(!box) return;
-  const start = document.getElementById('wb-start'); if(start) start.disabled = true;
-  const vN = (window._wb && window._wb.vCount) || 0;
-  const steps = [
-    '① 调用写回接口（POST /api/model/writeback）',
-    '② 归一校验：术语词典对齐 '+vN+' 个元素 · 同名消歧合并',
-    '③ 一致性检查：重名 0 · 悬空引用 0 · 循环 0',
-    '④ 校验通过，写入目标工具…',
-    '✅ 写回完成'
-  ];
-  box.innerHTML = '<div style="color:var(--blue-d);">⏳ 执行中…</div>';
-  let i = 0;
-  if(window._wbTimer) clearInterval(window._wbTimer);
-  window._wbTimer = setInterval(()=>{
-    if(i >= steps.length){ clearInterval(window._wbTimer); wbDone(); return; }
-    box.innerHTML = steps.slice(0, i+1).map((s,k)=>
-      `<div style="color:${k<i?'var(--grn,#2f855a)':'var(--ink,#223)'};">${k<i?'✅':(k===i?'⏳':'')} ${s}</div>`).join('');
-    i++;
-  }, 620);
-}
-function wbDone() {
-  const box = document.getElementById('wb-progress'); if(!box) return;
-  box.innerHTML = `<div style="margin-top:6px;border:1px solid #C0DD97;background:#f7fbee;border-radius:8px;padding:12px;font-size:12px;">
-    <b style="color:var(--grn,#2f855a);">✅ 写回完成（前端演示）</b>
-    <div style="margin-top:6px;line-height:1.9;">
-      <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0;"><span style="color:var(--mut);">写回接口</span><span>/api/model/writeback</span></div>
-      <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0;"><span style="color:var(--mut);">归一校验</span><span style="color:var(--grn,#2f855a);">通过（对齐 5 · 消歧 2）</span></div>
-      <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0;"><span style="color:var(--mut);">一致性检查</span><span style="color:var(--grn,#2f855a);">通过（重名 0 · 悬空 0）</span></div>
-      <div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="color:var(--mut);">写入目标</span><span>MagicDraw / Cameo（SysML v2）</span></div>
-    </div>
-    <div style="margin-top:8px;display:flex;gap:6px;">
-      <button class="btn sm ghost" onclick="wbSimulateFail()">⚠️ 模拟校验失败分支</button>
-    </div>
-  </div>`;
-  const start = document.getElementById('wb-start'); if(start){ start.disabled=false; start.textContent='↻ 重新写回'; }
-}
-function wbSimulateFail() {
-  if(window._wbTimer) clearInterval(window._wbTimer);   // 失败分支先停定时器，防被 wbDone 覆盖
-  const box = document.getElementById('wb-progress'); if(!box) return;
-  box.innerHTML = `<div style="margin-top:6px;border:1px solid #F3C1C1;background:#fff5f5;border-radius:8px;padding:12px;font-size:12px;">
-    <b style="color:var(--red);">✕ 校验未通过，接口拒绝写回</b>
-    <div style="margin-top:6px;line-height:1.9;">
-      <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0;"><span style="color:var(--mut);">归一校验</span><span style="color:var(--red);">2 个元素未命中词典</span></div>
-      <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0;"><span style="color:var(--mut);">一致性检查</span><span style="color:var(--red);">1 处悬空引用（TWTA → ?）</span></div>
-      <div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="color:var(--mut);">写入</span><span style="color:var(--red);">未执行（校验阻断）</span></div>
-    </div>
-    <div style="color:var(--mut);margin-top:6px;">请先修正问题（可在「本体模型维护」补齐类型 / 术语词典添加词条），再重新发起写回。</div>
-  </div>`;
-}
+// ★ 2026-10-23：删除「写回建模软件」前端演示（wbModalHtml / wbStart / wbDone /
+//   wbSimulateFail）——它对外宣称「POST /api/model/writeback」，但**后端该端点不存在**
+//   （全库 grep model/writeback 零命中），整个流程是 setInterval 逐行播放的**动画**，
+//   校验结果（"对齐 5 · 消歧 2"、"1 处悬空引用（TWTA → ?）"）全是写死的。
+//   性质：对外宣称的能力其实是假的 ⇒ 生产可用性谎言。
+//   这 4 个函数此前无任何调用方（死代码），故删除不影响现有功能。
+//   ⚠️ 真正的写回链路是 14-sysml.js 的「写回智源」（sysmlPushModal → push-zhiyuan），
+//      那是真接口 —— 不要误删。
 // ── 🧹 归一校验报告（2026-09-08 P0-1/P0-2 真实后端版）：
 //    归一/消歧报告 → 人在回路确认 → 应用回 V2 代码与视图（新版本，不覆盖）→ 闸口② 写入建模软件
 // 行匹配状态 → 色块（与后端 sysml_importer.build_normalize_report 输出对齐）

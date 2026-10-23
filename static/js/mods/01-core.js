@@ -592,34 +592,6 @@ const MODAL_FORMS = {
       </div>
       <div id="merge-preview" style="font-size:11.5px;color:var(--mut);background:var(--blue-l);padding:8px 10px;border-radius:6px;display:none;">选择分支后显示合并预览</div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveMerge()">创建</button></div>`,
-  approval_type: `<h3 id="apt-form-title">＋ 新增审批类型</h3>
-      <input type="hidden" id="apt-id" value="">
-      <div class="form-section">
-        <div class="form-section-head"><span class="fs-icon">📋</span><span class="fs-title">类型信息</span></div>
-        <div class="form-row"><label>类型名称 <span class="req">*</span></label><input id="apt-name" placeholder="如：报销审批"></div>
-        <div class="form-row"><label>图标 <span class="info-tip" title="emoji 图标；用于列表与卡片展示">ⓘ</span></label><input id="apt-icon" placeholder="如：📦" style="width:90px;"></div>
-        <div class="form-row"><label>适用场景 <span class="info-tip" title="该审批类型适用的业务场景（如 报销/采购/发布等）">ⓘ</span></label><textarea id="apt-scenario" placeholder="描述该审批类型适用的业务场景…"></textarea></div>
-        <div class="form-row"><label>说明</label><input id="apt-desc" placeholder="补充说明（可空）"></div>
-      </div>
-      <div class="form-section">
-        <div class="form-section-head"><span class="fs-icon">⚙️</span><span class="fs-title">状态</span></div>
-        <div class="form-row"><label>启用 <span class="info-tip" title="启用：流程模板可关联；停用：保留但不可选用">ⓘ</span></label><select id="apt-enabled"><option value="1">启用</option><option value="0">停用</option></select></div>
-      </div>
-      <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveApprovalType()">保存</button></div>`,
-  approval_tpl: `<h3 id="aptpl-form-title">＋ 新建流程模板</h3>
-      <input type="hidden" id="aptpl-id" value="">
-      <div class="form-section">
-        <div class="form-section-head"><span class="fs-icon">📜</span><span class="fs-title">模板信息</span></div>
-        <div class="form-row"><label>模板名称 <span class="req">*</span></label><input id="aptpl-name" placeholder="如：发布审批·两级"></div>
-        <div class="form-row"><label>关联审批类型 <span class="req">*</span> <span class="info-tip" title="该模板对应的审批类型（来自审批类型列表）">ⓘ</span></label><select id="aptpl-type"></select></div>
-        <div class="form-row"><label>描述</label><input id="aptpl-desc" placeholder="模板用途说明（可空）"></div>
-        <div class="form-row"><label>启用 <span class="info-tip" title="启用：可被发起审批；停用：保留但不可选用">ⓘ</span></label><select id="aptpl-enabled"><option value="1">启用</option><option value="0">停用</option></select></div>
-      </div>
-      <div class="form-section">
-        <div class="form-section-head"><span class="fs-icon">🛤</span><span class="fs-title">流程节点 <span class="fs-hint">（按顺序执行，首节点自动进入审批流）</span></span><span style="flex:1;"></span><button class="btn sm" style="padding:1px 8px;font-size:11px;" onclick="apTplAddNode()">＋ 添加节点</button></div>
-        <div id="aptpl-nodes" style="display:flex;flex-direction:column;gap:6px;"></div>
-      </div>
-      <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveApprovalTpl()">保存</button></div>`,
   owlImport: `<h3 id="oi-title">⬆ 导入 OWL · RDF/XML</h3>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">📥</span><span class="fs-title">导入内容</span></div>

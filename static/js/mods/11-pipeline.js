@@ -516,8 +516,13 @@ async function hilInlineDecide(cid, approve){
   if(okBtn) okBtn.disabled = true;
   if(noBtn) noBtn.disabled = true;
   try{
+    // ★ 2026-10-23：**不再传 decided_by**。
+    //   原代码硬编码 decided_by:'王工'，会把虚构人名写进审计流水（"谁批准的"不可追责）。
+    //   后端 P0-6（2026-10-06）已改为**以已认证用户身份为准**（display_name → username），
+    //   body 的 decided_by 只在匿名兼容期兜底 ⇒ 前端再传只会污染兜底路径。
+    //   前端不该自报身份：谁点的按钮由服务端从会话解析。
     await api('/api/studio/hil-confirmations/' + cid + '/decide',
-              {method:'POST', body:JSON.stringify({approve:!!approve, decided_by:'王工'})});
+              {method:'POST', body:JSON.stringify({approve:!!approve})});
     procUpsert('hil_' + cid, approve ? {status:'done', statusText:'✓ 已批准 · 自动执行中'}
                                      : {status:'failed', statusText:'✗ 已拒绝 · 动作不生效'});
     uxTrack('confirm_decided', {cid, approve: !!approve});   // §11 埋点：闸门处置（分子）
