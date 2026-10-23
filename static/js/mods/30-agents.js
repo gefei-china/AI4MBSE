@@ -825,7 +825,7 @@ async function loadAgentBindOptions(selected){
     const [skills, mcps, tools] = await Promise.all([
       api('/api/studio/skills'), api('/api/studio/mcp-servers'), api('/api/studio/agent-tools'),
     ]);
-    _agentBindCands.skill = (skills||[]).filter(s=>s.enabled!==0).map(s=>({value:s.name, note:'', on:1}));
+    _agentBindCands.skill = (skills||[]).filter(s=>s.enabled!==0).map(s=>({value:s.name, disp:s.name, note:'', on:1}));
     // ★ B5-3：MCP 候选不再「不满足条件就悄悄消失」。
     //   修复前：`filter(m => m.status==='online' && m.enabled!==0)`
     //   ⇒ 新增的 MCP 只要还没测通（status=offline）或被停用（enabled=0），
@@ -835,13 +835,26 @@ async function loadAgentBindOptions(selected){
     //   现在：**全部列出**，用 note 标明状态（离线/已停用），并把原因挂在 title 上。
     //   ⚠️ 仍允许勾选离线项 —— 绑定的是"这个 MCP 服务器"，
     //     不是"此刻它通不通"（测试连通是 `/test` 的职责，不是绑定的门槛）。
+    // ★ 2026-10-23（米爸截图报障）：折叠摘要此前"优先用 title"，而插件事代
+    //   title=中文名的假设对 MCP 不成立 —— 本行把 title 拼成
+    //   endpoint+状态+**完整 last_error**（含 Mozilla 文档链接的
+    //   HTTPStatusError 长串）⇒ 编辑页"绑定 MCP 服务器"折叠摘要直接显示
+    //   一长串 URL + 报错，名称反而看不见。修法：
+    //   · disp = 名称（+短状态）—— 摘要与行内显示一律用它；
+    //   · title 只做 hover 提示，last_error 截断 120 字符（全文去作业日志/
+    //     运行监控看，不属于选择器的可见信息）。
     _agentBindCands.mcp = (mcps||[]).map(m=>{
       const dis = (m.enabled===0 || String(m.enabled)==='0');
       const off = m.status !== 'online';
       const note = dis ? '已停用（不参与发现）'
                 : off ? '离线（尚未测通 / 上次探测失败）' : '';
-      return {value:m.name, note,
-              title:[m.endpoint, note, m.last_error ? ('上次错误：'+m.last_error) : ''].filter(Boolean).join(' · '),
+      const err = m.last_error ? String(m.last_error) : '';
+      return {value:m.name,
+              disp:m.name + (dis ? '（已停用）' : off ? '（离线）' : ''),
+              note,
+              title:[m.name, m.endpoint, note,
+                     err ? ('上次错误：' + err.slice(0, 120) + (err.length > 120 ? '…' : '')) : ''
+                    ].filter(Boolean).join(' · '),
               on:m.status};
     });
     // ⚠️「工具」候选口径（2026-09-30 更正 —— 上一版在这里过度收紧了，必须写清为什么）：
@@ -856,7 +869,7 @@ async function loadAgentBindOptions(selected){
     //   即**返回给前端的每一条都已经满足 status='active'**，前端不必也不能再按 source 二次过滤 ——
     //   过滤的唯一结果是：用户误删了某条内置绑定（如 system_mgmt 的 sys_query_*）就再也补不回来。
     _agentBindCands.tool = (tools||[]).filter(t=>t.type==='tool')
-                                      .map(t=>({value:t.name, note:(t.source==='builtin'?'内置':''), on:1}));
+                                      .map(t=>({value:t.name, disp:t.name + (t.source==='builtin'?'（内置）':''), note:(t.source==='builtin'?'内置':''), on:1}));
     // 2026-09-30（用户第 10 轮）：此处原有 `_agentBindCands.plugin` 候选构建（第 9 轮曾收窄为
     //   type∈{skill,mcp} && (installed||平台内置)，命中 5 条）。现随「绑定插件」面板整体移除而删除。
     //   `/api/plugins` 的拉取也已从上面的 Promise.all 去掉 —— 该面板不再有任何数据源依赖。
@@ -876,10 +889,10 @@ function _bindSumRefresh(kind){
   if(!set.size){ sum.textContent = '选择' + (_BIND_LABEL[kind]||'') + '…'; sum.style.color = 'var(--mut)'; return; }
   const names = [...set].map(v=>{
     const c = (_agentBindCands[kind]||[]).find(x=>x.value===v);
-    // 摘要优先用 title（插件的**中文显示名**，如"文件操作"），比 note（类型标签"技能"/"MCP"）可读；
-    // 无 title 时退回原 id —— 避免摘要只显示一长串 com.zhiyuan.legacy.* 让用户认不出。
-    if(c && c.title) return c.title;
-    return (c && c.note) ? `${v}（${c.note}）` : v;
+    // 2026-10-23：摘要一律用 disp（名称优先）。此前"优先用 title"是插件事代
+    // 的假设（title=中文名），MCP 候选的 title 是 endpoint+错误串 ⇒ 折叠摘要
+    // 显示一长串 URL + HTTPStatusError（米爸截图报障）。title 现在只做 hover。
+    return (c && c.disp) || v;
   });
   sum.textContent = names.length<=2 ? names.join('、') : `${names.slice(0,2).join('、')} 等 ${names.length} 个`;
   sum.style.color = 'var(--ink)';
