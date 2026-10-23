@@ -199,7 +199,74 @@ def run_batch(do_commit=False):
 
     ok = n_fail == 0 and n_gfail == 0
     print("结论：%s" % ("全部通过" if ok else "存在失败项，见 digest"))
+    _record_failure_marker(digest, ok, digest_path)
+    _notify(digest, ok)
     return 0 if ok else 1
+
+
+def _record_failure_marker(digest, ok, digest_path):
+    """失败可见化（O1 主通道）：失败时写红旗标记，成功时清掉。
+
+    ⚠ 刻意写进 docs/评测/nightly/（--commit 时随 git 推走）而不是 tmp/：
+    这个目录是 PR 门禁与人共同消费的地方，失败红旗出现在这里 = 打开目录
+    就看见，不依赖任何人想起来看日志或退出码。
+    """
+    marker = os.path.join(NIGHTLY_DIR, "last-failure.json")
+    if ok:
+        if os.path.exists(marker):
+            os.remove(marker)
+            print("  已清除上次失败标记（last-failure.json）")
+        return
+    bad_steps = [s for s in digest["steps"] if s["exit"] != 0]
+    bad_gates = [g for g in digest["gates"] if g["exit"] != 0]
+    payload = {
+        "failed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "host": digest.get("host", ""),
+        "failed_steps": [{"step": s["step"], "exit": s["exit"],
+                          "tail": s.get("tail", "")[-600:]} for s in bad_steps],
+        "failed_gates": bad_gates,
+        "digest": os.path.relpath(digest_path, ROOT).replace("\\", "/"),
+    }
+    with io.open(marker, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=1)
+    print("  ⚠ 失败标记已写：%s（成功跑批时自动清除）"
+          % os.path.relpath(marker, ROOT).replace("\\", "/"))
+
+
+def _notify(digest, ok):
+    """可选 webhook 副通道（O1）：设了 EVAL_NIGHTLY_NOTIFY_URL 才发。
+
+    复用 core.alert_evaluator.notify_alert_webhook（A2A 事件结构 + 可选
+    HMAC 签名共用同一份实现，不另写）。默认不配 = 零外部依赖，失败信息
+    由 last-failure.json + digest + 退出码三条确定性通道承载。
+    """
+    if ok:
+        return
+    url = os.environ.get("EVAL_NIGHTLY_NOTIFY_URL", "").strip()
+    if not url:
+        return
+    try:
+        sys.path.insert(0, ROOT)
+        from core.alert_evaluator import notify_alert_webhook
+        bad = [s["step"] for s in digest["steps"] if s["exit"] != 0] + \
+              [g["gate"] for g in digest["gates"] if g["exit"] != 0]
+        # 借用同一份 A2A 信封实现；失败项清单放不进固定结构，写进规则名。
+        rule = {"id": 0, "name": ("nightly 评测跑批失败: %s"
+                                  % ", ".join(bad))[:120],
+                "level": "warning", "secret": "", "notify_url": url}
+        sent = notify_alert_webhook(rule, "nightly_failed", len(bad), 0, ">")
+        print("  webhook 通知：%s" % ("已送达" if sent else "投递失败（不影响退出码）"))
+    except Exception as e:
+        print("  webhook 通知异常（忽略）：%s" % e)
+
+
+def _marker_in_git():
+    """失败标记是否已被 git 跟踪（成功后工作区消失，但历史里还在，要显式
+    `git add` 删除才能让远端也变绿 —— git rm 语义由 add -A 类提交自然完成，
+    这里只需保证路径进 git add 清单以记录删除）。"""
+    rc, out, _ = _run(["git", "ls-files", "--error-unmatch",
+                       "docs/评测/nightly/last-failure.json"], timeout=30)
+    return rc == 0
 
 
 def _commit(latest):
@@ -208,6 +275,15 @@ def _commit(latest):
              "docs/评测/nightly/latest-gen-report.json",
              "docs/评测/nightly/latest-trace-report.json",
              "docs/评测/nightly/latest-rag-report.json"]
+    # O2：版本化评测集（datasets/ 随 git 可 review；缺失则跳过）
+    for rel in ("docs/评测/datasets/evalset.json",
+                "docs/评测/datasets/trace_evalset.json",
+                "docs/评测/datasets/manifest.json"):
+        if os.path.exists(os.path.join(ROOT, rel)):
+            paths.append(rel)
+    marker = os.path.join(ROOT, "docs/评测/nightly/last-failure.json")
+    if os.path.exists(marker) or _marker_in_git():
+        paths.append("docs/评测/nightly/last-failure.json")
     existing = [p for p in paths if os.path.exists(os.path.join(ROOT, p))]
     if not existing:
         print("  （无可提交的 latest 报告，跳过 commit）")
