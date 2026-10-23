@@ -1,19 +1,19 @@
 {
  "kind": "trace_consistency",
- "generated_at": "2026-10-22T23:17:24",
+ "generated_at": "2026-10-23T08:17:17",
  "db": "mbse.db",
  "trace_file": "tmp/p21/trace_evalset.json",
- "trace_built_at": "2026-10-22 12:00:27",
+ "trace_built_at": "2026-10-23 08:15:28",
  "llm_fallback": "disabled",
  "semantic_backend": "bigram",
  "population": {
-  "trace_total": 228,
+  "trace_total": 231,
   "strong": 55,
   "positive": 42,
   "negative_total": 13,
   "negative_routing_error": 0,
   "negative_pool_invalid": 13,
-  "weak_total": 173,
+  "weak_total": 176,
   "weak_sampled": 50,
   "gold_stale": 0,
   "gold_stale_ratio": 0.0,
@@ -327,23 +327,38 @@
  "weak": {
   "n": 50,
   "intent_dist": {
-   "design": 9,
+   "design": 12,
    "view_expansion": 3,
    "review": 2,
-   "chat": 22,
+   "chat": 21,
    "report_generation": 1,
    "requirement_analysis": 2,
-   "knowledge_qa": 11
+   "knowledge_qa": 9
   },
   "route_dist": {
-   "rule": 11,
+   "rule": 14,
    "rule_scored": 6,
-   "chat": 22,
-   "explain": 11
+   "chat": 21,
+   "explain": 9
   },
   "llm_route_count": 0,
-  "chat_share": 0.44,
+  "chat_share": 0.42,
   "weak_detail": [
+   {
+    "query": "请为一个小型无人机飞控系统做需求条目化（功能/性能/约束各若干条），并生成 SysML v2 BDD 结构骨架，最后用 sysml_v2_validate 校验通过。子任务控制在 3 个以内。",
+    "pred": "design",
+    "route": "rule"
+   },
+   {
+    "query": "请为一个小型无人机飞控系统做需求条目化（功能/性能/约束各若干条），并生成 SysML v2 BDD 结构骨架，最后用 sysml_v2_validate 校验通过。子任务控制在 3 个以内。",
+    "pred": "design",
+    "route": "rule"
+   },
+   {
+    "query": "帮我分析并生成雷达领域的完整BDD视图，需要提供多方案设计，架构不变，但是需要从性能指标、参数维度进行多方案创成",
+    "pred": "design",
+    "route": "rule"
+   },
    {
     "query": "继续生成整车的IBD视图",
     "pred": "design",
@@ -578,27 +593,12 @@
     "query": "query again",
     "pred": "chat",
     "route": "chat"
-   },
-   {
-    "query": "帮我查询工程列表",
-    "pred": "chat",
-    "route": "chat"
-   },
-   {
-    "query": "你好，请介绍下你的能力",
-    "pred": "knowledge_qa",
-    "route": "explain"
-   },
-   {
-    "query": "你好，我是MBSE建模人员，请介绍下你的能力",
-    "pred": "knowledge_qa",
-    "route": "explain"
    }
   ]
  },
  "weak_regression": {
   "baseline": "docs/评测/nightly/latest-trace-report.json",
-  "n_compared": 50,
+  "n_compared": 47,
   "stability": 1.0,
   "shifts": [],
   "note": ""

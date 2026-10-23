@@ -1,5 +1,5 @@
 {
- "updated_at": "2026-10-22T23:16:02",
+ "updated_at": "2026-10-23T08:15:18",
  "gates": [
   {
    "gate": "verify_generation_quality_gate.py",
@@ -9,7 +9,7 @@
   {
    "gate": "verify_trace_quality_gate.py",
    "exit": 0,
-   "secs": 1.1
+   "secs": 1.0
   },
   {
    "gate": "verify_rag_eval_gate.py",
@@ -18,6 +18,10 @@
   }
  ],
  "steps": [
+  {
+   "step": "构建评测集",
+   "exit": 0
+  },
   {
    "step": "生成质量评测",
    "exit": 0
