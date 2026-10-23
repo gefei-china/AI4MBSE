@@ -114,9 +114,15 @@ def t_A():
     # 这类比较用的字符串（它们是同一批路径，重复匹配无意义且会误报）。
     code_nc0 = re.sub(r"//.*", "", re.sub(r"/\*[\s\S]*?\*/", "", js))
     paths = re.findall(r"api\(\s*['\"](/api/[a-z\-]+/[^'\"]*)['\"]", code_nc0)
-    ck("A7 前端 API 路径均为 /api/eval/* 或 /api/knowledge/*",
-       paths and all(p.startswith("/api/eval/") or p.startswith("/api/knowledge/")
-                     for p in paths),
+    # A7 契约：评测数据一律走评测 API（/api/eval/*、/api/knowledge/*）。
+    # 白名单扩展（2026-10-23 T1/T2）：/api/jobs*（立即跑批走作业队列，禁止
+    #   裸 subprocess 端点）与 /api/system/config/static（阈值就地编辑走
+    #   正规配置通道，自带 schema 校验+台账）——两个都是各域的正规门户，
+    #   白名单只收这两个前缀，防的是"图省事绕开契约另开野端点"。
+    _ALLOWED_API = ("/api/eval/", "/api/knowledge/", "/api/jobs",
+                    "/api/system/config/static")
+    ck("A7 前端 API 路径均为评测 API 或白名单门户（jobs/config）",
+       paths and all(p.startswith(_ALLOWED_API) for p in paths),
        str(paths))
 
     # ★前端不得自己算阈值（只渲染不计算）：三色判定必须由后端给 status。
@@ -329,6 +335,26 @@ try {
   await sandbox.loadEvalManagement();
   const h3 = boxes['evm-body'].innerHTML;
   ck('C12 payload 含 undefined 时不泄漏到 HTML', h3.indexOf('undefined') < 0);
+
+  // C19（2026-10-23 可信度徽章网格 bug 的回归锁）：可信度是"每次评测"
+  //   一个信号。此前徽章在指标行内渲染，同一序列 × 指标数 = 几十个徽章
+  //   换行成网格（米爸截图报障）。锁死：正常路径渲染后，整页可信度徽章
+  //   总数必须等于各类型序列长度之和（每类型渲染一次），不能乘上指标数。
+  boxes['evm-body'] = elStub();
+  sandbox.api = async (url) => {
+    if (url.indexOf('/api/eval/overview') >= 0) return P.overview;
+    return P.history;
+  };
+  await sandbox.loadEvalManagement();
+  const h5 = boxes['evm-body'].innerHTML;
+  const badgeAll = (h5.match(/>可<\/span>/g) || []).length
+    + (h5.match(/>疑<\/span>/g) || []).length;
+  let expectAll = 0;
+  const tr = (P.history && P.history.trends) || {};
+  for (const k of Object.keys(tr)) expectAll += (tr[k] || []).length;
+  ck('C19 可信度徽章总数=序列长（不随指标数翻倍）',
+     expectAll === 0 || badgeAll === expectAll,
+     '徽章=' + badgeAll + ' 期望=' + expectAll);
 
   // ── 下钻面板渲染冒烟（2026-10-22 晚）──────────────────────────
   // 真实 detail 载荷渲染一遍，检查：无 undefined/[object Object] 泄漏、

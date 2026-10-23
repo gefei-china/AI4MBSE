@@ -79,6 +79,84 @@
     return `<span class="st r" title="${esc(why.join('；') || '未知原因')}">不可信</span>`;
   }
 
+  /* ══ 段 ⓪：人工操作（T1：立即跑批，走 jobs 队列）══
+     为什么走 /api/jobs 而不是直接 POST"跑评测"：评测 15s~8 分钟，同步
+     HTTP 必超时；jobs 自带进度/幂等（在途去重）/失败重试/权限校验。
+     手动 nightly 刻意不带 --commit：要不要把快照推上远端由人 review 后定。 */
+  const _EVAL_JOBS = [
+    ['eval_trace', 'Trace 一致性', '~15s'],
+    ['eval_gen', '生成质量+LLM 忠实度', '~80s'],
+    ['eval_rag', 'RAG 检索（三域）', '2~4min'],
+    ['build_evalset', '重建评测集', '~40s'],
+    ['eval_nightly', 'nightly 全批', '4~8min'],
+  ];
+  let _evmPollTimer = null;
+
+  function _renderActions() {
+    const btns = _EVAL_JOBS.map(([kind, label, eta]) =>
+      `<button class="btn" style="font-size:11px;padding:4px 10px;"
+        onclick="submitEvalJob('${kind}')">${esc(label)}
+        <span style="color:var(--mut);font-size:9.5px;">${eta}</span></button>`).join(' ');
+    return `<div class="panel" style="margin-bottom:14px;">
+      <div class="ph">⓪ 人工操作 <span class="tag">走作业队列，可关页续跑</span></div>
+      <div class="pb">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">${btns}</div>
+        <div id="evm-job-status" style="font-size:11px;color:var(--mut);margin-top:8px;min-height:16px;"></div>
+      </div>
+    </div>`;
+  }
+
+  async function submitEvalJob(kind) {
+    const meta = _EVAL_JOBS.find(j => j[0] === kind) || [kind, kind, ''];
+    if (!confirm('提交「' + meta[1] + '」作业？（' + meta[2] + '，完成后本页自动刷新）')) return;
+    const st = document.getElementById('evm-job-status');
+    const r = await api('/api/jobs', { method: 'POST', body: JSON.stringify({ kind: kind }) });
+    if (!r || r.error) {
+      if (st) st.innerHTML = '<span style="color:var(--red);">提交失败：' + esc((r && r.error) || '未知错误') + (r && r.available ? '（可用：' + esc(r.available.join(', ')) + '）' : '') + '</span>';
+      return;
+    }
+    const jobId = r.job_id;
+    if (st) st.innerHTML = '作业 #' + jobId + ' 已' + (r.deduped ? '去重（同在途作业）' : '入队') + '，排队中…';
+    if (_evmPollTimer) clearInterval(_evmPollTimer);
+    _evmPollTimer = setInterval(async () => {
+      const j = await api('/api/jobs/' + jobId);
+      if (!j || j.error) { clearInterval(_evmPollTimer); _evmPollTimer = null; return; }
+      if (st) st.innerHTML = '作业 #' + jobId + ' ' + esc(j.status || '')
+        + (j.stage ? ' · ' + esc(j.stage) : '')
+        + (j.progress != null ? ' (' + Number(j.progress).toFixed(0) + '%)' : '');
+      if (j.terminal) {
+        clearInterval(_evmPollTimer); _evmPollTimer = null;
+        if (j.status === 'done') {
+          if (st) st.innerHTML = '<span style="color:var(--ok);">作业 #' + jobId + ' 完成</span>，正在刷新数据…';
+          await loadEvalManagement();
+        } else {
+          const err = (j.result && (j.result.error || j.result.tail)) || '';
+          if (st) st.innerHTML = '<span style="color:var(--red);">作业 #' + jobId + ' ' + esc(j.status)
+            + '</span><span style="color:var(--mut);"> ' + esc(String(err).slice(-260)) + '</span>';
+        }
+      }
+    }, 3000);
+  }
+
+  /* T2：门禁阈值就地编辑（唯一真源 core.config eval_gates；端点
+     PUT /api/system/config/static 自带 schema 校验 + 落盘 + 即时 reload；
+     历史三色不受影响 —— O3 快照表已把旧阈值冻结在行里）。 */
+  async function editEvalGate(gateKey, label, cur, direction) {
+    const v = prompt(
+      '调整门禁阈值【' + label + '】\n键：eval_gates.' + gateKey
+      + '\n判定方向：' + (direction === 'low' ? '≤ 阈值为绿（越小越好）' : '≥ 阈值为绿（越大越好）')
+      + (cur != null ? '\n当前值：' + cur : ''),
+      cur != null ? cur : '');
+    if (v === null) return;
+    const num = Number(v);
+    if (v === '' || isNaN(num)) { alert('阈值必须是数字'); return; }
+    const r = await api('/api/system/config/static', {
+      method: 'PUT', body: JSON.stringify({ updates: { ['eval_gates.' + gateKey]: num } })
+    });
+    if (!r || r.error) { alert('修改失败：' + ((r && r.error) || '未知错误')); return; }
+    await loadEvalManagement();
+  }
+
   /* ══ 段 ①：现在什么状态 ══ */
   function _renderLatest(d) {
     const latest = d.latest || {};
@@ -102,7 +180,12 @@
       const st = it.metric_status || {};
       const metrics = cols.length ? cols.map(c =>
         `<div style="display:flex;align-items:baseline;gap:6px;padding:3px 0;">
-          <span style="font-size:11.5px;color:var(--mut);flex:1;">${esc(c.label)}</span>
+          <span style="font-size:11.5px;color:var(--mut);flex:1;">${esc(c.label)}${
+            c.gate_key ? `<span style="color:var(--mut);font-size:9.5px;">${
+              c.direction === 'low' ? '≤' : '≥'}${c.threshold != null ? c.threshold : '?'
+              } <a href="javascript:void(0)" title="调整阈值（eval_gates.${esc(c.gate_key)}）"
+                onclick="event.stopPropagation();editEvalGate('${esc(c.gate_key)}','${esc(c.label)}',${c.threshold != null ? c.threshold : 'null'},'${c.direction === 'low' ? 'low' : 'high'}')">✎</a></span>` : ''
+          }</span>
           ${_metricVal(it[c.key], st[c.key], c.direction)}</div>`).join('')
         : '<div style="font-size:11.5px;color:var(--mut);">该类型无可展示指标</div>';
       const drift = (it.fingerprint_drift && it.fingerprint_drift.length)
@@ -165,6 +248,18 @@
       // ★2026-10-22 晚：每个取值可点 → 打开那一次评测的证据明细
       //   （"历史怎么变"必须能下钻到"那一次到底发生了什么"，否则趋势线
       //   只是一串数字）；右端附内联 SVG 迷你趋势线（零外部依赖）。
+      // 可信度是"每次评测"一个信号，不是"每个指标"一个 —— 此前放在指标
+      // 行内渲染，同一序列 × 指标数 = 几十个徽章换行成网格（2026-10-23 米爸
+      // 截图报障）。修为每类型只渲染一次：紧凑计数 + 单行点标（悬停看含义）。
+      const nOk = seq.filter(p => p.trustworthy).length;
+      const nSus = seq.length - nOk;
+      const dots = seq.map(p => p.trustworthy
+        ? '<span class="st ok" style="font-size:9px;padding:0 3px;" title="可信：有负对照且无语料漂移">可</span>'
+        : '<span class="st r" style="font-size:9px;padding:0 3px;" title="存疑：缺负对照或有漂移，该次分数不可当依据">疑</span>').join('');
+      const trustLine = `<div style="font-size:10.5px;color:var(--mut);margin:2px 0 6px;">
+          可信度：可信×${nOk} · 存疑×${nSus}
+          <span style="margin-left:6px;">${dots}</span>
+          <span style="margin-left:4px;">（旧 → 新）</span></div>`;
       const rows = cols.map(c => {
         const vals = seq.map(p => p[c.key]);
         const hasData = vals.some(v => v !== null && v !== undefined);
@@ -178,13 +273,9 @@
             onclick="openEvalReport(${pt.id})" title="${esc(tip)}">${
               Number(v).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}</span>`;
         }).join(' <span style="color:var(--mut);">→</span> ');
-        const tpl = seq.map(p => p.trustworthy
-          ? '<span class="st ok" style="font-size:9px;">可</span>'
-          : '<span class="st r" style="font-size:9px;">疑</span>').join(' ');
         return `<tr>
           <td style="padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--mut);">${esc(c.label)}</td>
           <td style="padding:4px 8px;border-bottom:1px solid var(--line);font-size:11.5px;">${hasData ? line : '<span style="color:var(--mut);">该类型无此指标</span>'}</td>
-          <td style="padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;font-size:10px;">${tpl}</td>
           <td style="padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;">${_sparkline(vals)}</td>
         </tr>`;
       }).join('');
@@ -193,10 +284,11 @@
         <div style="font-size:11.5px;color:var(--mut);margin-bottom:5px;">
           ${_kindBadge(k)} <span style="font-size:10.5px;">共 ${seq.length} 次</span>
           <span style="font-size:10.5px;color:var(--mut);">（旧 → 新，取值可点下钻）</span></div>
+        ${trustLine}
         <table class="t" style="width:100%;font-size:11.5px;">
           <tr><th style="padding:4px 8px;">指标</th><th style="padding:4px 8px;">取值序列</th>
-            <th style="padding:4px 8px;">可信度</th><th style="padding:4px 8px;">趋势</th></tr>
-          ${rows || '<tr><td colspan="4" style="color:var(--mut);font-size:11px;">该类型无可展示指标</td></tr>'}
+            <th style="padding:4px 8px;">趋势</th></tr>
+          ${rows || '<tr><td colspan="3" style="color:var(--mut);font-size:11px;">该类型无可展示指标</td></tr>'}
         </table>
       </div>`;
     }).join('');
@@ -525,12 +617,14 @@
       }
       const g = ov && ov.gates ? ov.gates : null;
       _mount(
+        _renderActions() +
         _renderLatest(ov || {}) +
         _renderTrends(hist || {}) +
         _renderGates(g) +
         '<div style="font-size:10.5px;color:var(--mut);padding:2px 2px 12px;line-height:1.7;">'
-        + '本页全部只读。指标阈值唯一真源：<code>core/config.py → eval_gates</code>；'
-        + '详细用法见 <code>docs/评测工具使用指南-20261022.md</code>。</div>'
+        + '指标与阈值唯一真源：<code>core/config.py → eval_gates</code>（✎ 可就地调整，'
+        + '带 schema 校验与台账；历史三色不受影响）。触发走作业队列（jobs），'
+        + '手动 nightly 不自动提交快照。详细用法见 <code>docs/评测工具使用指南-20261022.md</code>。</div>'
       );
     } catch (e) {
       _mount('<div class="panel"><div class="ph">评测管理</div><div class="pb">'
@@ -541,4 +635,6 @@
 
   window.loadEvalManagement = loadEvalManagement;
   window.openEvalReport = openEvalReport;
+  window.submitEvalJob = submitEvalJob;
+  window.editEvalGate = editEvalGate;
 })();
