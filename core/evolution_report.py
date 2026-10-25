@@ -283,6 +283,84 @@ def _act_badcase(conn: sqlite3.Connection, s: dict) -> list:
     }]
 
 
+def _act_online_eval(conn: sqlite3.Connection, s: dict) -> list:
+    """P0-b 在线评测回流：待标注积压 + 7 日零转正 + 候选分布。
+
+    R13 组合判据的落地处（alert_rules 无组合条件列，见 seed_registry 注释）：
+    promoted_7d=0 **且** backlog>0 ⇒ 回流停滞，一条 warn 行动项。
+    confirmed 未转正 > 0 ⇒ 真按钮 POST /promote（apply=true 由人确认）。
+    纯 pending 积压 ⇒ 显式 not_actionable（标注必须逐条人看，没有一键）。
+    """
+    if not _tbl_exists(conn, "online_eval_queue"):
+        return []
+    from core import online_eval as oe
+    try:
+        met = oe.online_eval_metrics(conn)
+        summ = oe.queue_summary(conn)
+    except Exception as e:                                        # noqa: BLE001
+        return [{
+            "source": "online_eval", "source_label": "在线评测回流", "id": None,
+            "title": "在线评测指标读取失败",
+            "detail": "%s: %s" % (type(e).__name__, e),
+            "meta": {}, "action": None, "not_actionable_reason": "指标未读到",
+        }]
+    backlog = int(met.get("eval_backlog_pending") or 0)
+    promoted = int(met.get("eval_promoted_7d") or 0)
+    confirmed = int((summ.get("by_status") or {}).get("labeled_confirmed") or 0)
+    by_type = summ.get("by_type") or {}
+    out = []
+
+    # ① confirmed 未转正 ⇒ 真按钮（promote 是唯一真写点，dry-run 默认）
+    if confirmed > 0:
+        dist = "；".join("%s %d" % (k, v) for k, v in by_type.items()) or "（无明细）"
+        out.append({
+            "source": "online_eval",
+            "source_label": "在线评测回流",
+            "id": "online_eval:promote",
+            "title": "%d 条人工 confirmed 样本待转正进 dataset" % confirmed,
+            "detail": ("已人工标注确认的样本分布：%s。点「一键转正」按 sample_type "
+                       "三分流（intent→intent_samples / retrieval→qrels.jsonl / "
+                       "generation→eval_gen_labels，幂等）。转正端点默认 dry-run，"
+                       "此按钮显式带 apply=true。自动打分永不自动转正（B1）。" % dist),
+            "meta": {"confirmed": confirmed, "by_type": by_type,
+                     "promoted_7d": promoted},
+            "action": {"method": "POST",
+                       "path": "/api/monitor/online-eval/promote",
+                       "label": "一键转正",
+                       "payload": {"apply": True}},
+        })
+
+    # ② R13 组合判据：7 日零转正且仍有积压 ⇒ 回流停滞
+    if promoted == 0 and backlog > 0:
+        out.append({
+            "source": "online_eval",
+            "source_label": "在线评测回流",
+            "id": "online_eval:stalled",
+            "title": "回流停滞：7 日零转正且待标注积压 %d 条" % backlog,
+            "detail": ("采样在进队、标注/转正没人动 ⇒ 生产回流管道空转。"
+                       "去 监控 → 在线评测回流 面板逐条标注（评分 1-5 + 原因，"
+                       "走 HIL 确认卡），确认后的样本才能被「一键转正」送进 dataset。"),
+            "meta": {"backlog": backlog, "promoted_7d": promoted},
+            "action": None,
+            "not_actionable_reason": "标注必须逐条人工判断（无一键）；"
+                                     "管道入口在监控页「在线评测回流」面板",
+        })
+
+    # ③ 纯积压（有转正但积压增长）⇒ 一条提示，不制造噪音
+    elif backlog > 0 and not out:
+        out.append({
+            "source": "online_eval",
+            "source_label": "在线评测回流",
+            "id": "online_eval:backlog",
+            "title": "待标注积压 %d 条" % backlog,
+            "detail": "采样持续进队，标注节奏待跟进（面板：监控 → 在线评测回流）。",
+            "meta": {"backlog": backlog, "promoted_7d": promoted},
+            "action": None,
+            "not_actionable_reason": "逐条人工标注，无一键动作",
+        })
+    return out
+
+
 def _act_curriculum(conn: sqlite3.Connection, s: dict) -> list:
     """任务提案：有 decide 端点 ⇒ 真可一键裁决。"""
     if not _tbl_exists(conn, "curriculum_items"):
@@ -435,6 +513,7 @@ ACTION_SOURCES = (
     ("safety", "安全信号", _act_safety),
     ("capability", "能力长尾", _act_capability),
     ("badcase", "BadCase 入库", _act_badcase),
+    ("online_eval", "在线评测回流", _act_online_eval),
 )
 
 

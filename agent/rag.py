@@ -136,6 +136,20 @@ class GraphRAG:
         """
         conn = get_db()
         t0 = time.time()
+        # P0-b M4：rag span（会话级 trace）。开在入口——AST 验证本函数体
+        # （L126-428）只有 L398 一个 return ⇒ 单点闭即全覆盖；异常路径不闭
+        # 也不留假象：SpanCollector.flush 对未闭 span 按 error 收口并带
+        # note=unclosed_at_flush（services/orch_span.py 文件头失败语义）。
+        # 无 tracer（编排子任务/非 chat/stream 路径）⇒ sid=0，闭点 no-op。
+        _rag_sid = 0
+        _rag_tracer = None
+        try:
+            from services.orch_span import current_tracer as _ct
+            _rag_tracer = _ct()
+            if _rag_tracer is not None:
+                _rag_sid = _rag_tracer.open_rag(t0=t0)
+        except Exception:
+            _rag_sid = 0   # 观测装配失败绝不阻断检索主链路
         scope = kb_scope or {}
         # P0-4：租户上下文只解一次（下面实体/关系/词典桥接三处共用）
         _ts = tenant_scope(scope)
@@ -395,6 +409,18 @@ class GraphRAG:
         # P0-3 知识分类分组：设计方法知识（规范约束源）/ 设计资产（增量设计源）
         knowledge = self._group_by_category(conn, graph_results)
         conn.close()
+        # P0-b M4：闭 rag span。hit/top_score/latency 口径同 query_routing_stats
+        # （L297-298 同源计算，不造第二份数）；rag span 无栈（单次调用顺序执行），
+        # 异常路径由 flush 的 unclosed_at_flush 收口。
+        if _rag_sid:
+            try:
+                _hit_n = (len(graph_results) + len(vector_results)
+                          + len(chunk_hits) + len(attachment_hits))
+                _top = chunk_hits[0]["score"] if chunk_hits else 0
+                _rag_tracer.close_rag(_rag_sid, hit_count=_hit_n,
+                                      top_score=_top, latency_ms=latency_ms)
+            except Exception:
+                pass   # 观测收口失败绝不阻断检索主链路
         return {
             "source": route,  # 兼容旧字段：graph | mixed | vector
             "route": route,   # P1: 双引擎路由决策

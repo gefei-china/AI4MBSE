@@ -1009,6 +1009,18 @@ jobs:
       - name: Guard 编排观测性 trace（span 树六类插桩 + 端点归属门，54 项）
         run: python tools/verify/verify_orch_span.py
 
+      # ── P0-b（2026-10-25）：生产回流五段闭环 ─────────────────────────────
+      # 采样（负反馈>低置信>随机5%）→ 自动评（确定性层只写建议）→ 人工标注
+      # （HIL 确认卡 eval_label）→ 转正三分流（intent_samples/qrels.jsonl/
+      # eval_gen_labels，幂等）→ 告警/周报可见（R12-R14 + 第七行动源）。
+      # 锁定的失效模式：auto 分自动转正（LLM 自循环）/ dry-run 不默认 /
+      # rejected 进 dataset / 转正不幂等 / 指标白名单外假实现。含 span 五类
+      # 闭环与挂载点静态扫描；变异自证走空输入（不摸产品文件——ENOSPC 下
+      # 原地变异还原失败会留残，2026-10-24/25 两次事故的教训）。阳性对照
+      # 失效 ⇒ exit 2。
+      - name: Guard 生产回流五段闭环（采样/自动评/标注/转正三分流/告警可见，34 项）
+        run: python tools/verify/verify_online_eval_loop.py
+
       # ── P1 replanning（2026-10-21）：执行中重规划第一阶段 ─────────────────
       # 观测与信号结构化：S3~S7 信号纯函数 + 每次判定落 kind=replan span 决策
       # 记录（含 action=none，"为什么不重画"与"为什么重画"同等重要）+ T1 补跑

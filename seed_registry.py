@@ -161,6 +161,20 @@ _ALERT_RULES = [
     # 代理口径尚未校准（confirmed 集误判率≈68%），建而 paused——在位不造噪音，
     # P0-b 意图评测落库后校准阈值再激活。
     ("意图误判上升（误判率>50%，代理口径，待校准）", "intent_mismatch_rate", ">", 50, "warning", "paused"),
+    # ── P0-b（2026-10-25）生产回流 R12-R14 ──
+    # R12 积压：pending≥20 告警。阈值与 online_eval 模块默认 backlog_alert=20
+    #   同源（单源采样 batch=20/窗口 30 天，真库低置信单源 ~819 行 ⇒ 20 条
+    #   积压即说明人工标注节奏跟不上采样节奏，回流管道堵了）。
+    ("在线评测积压（待标注≥20）", "eval_backlog_pending", ">=", 20, "warning", "active"),
+    # R13 回流停滞：7 日零转正。**规则行无法表达「且 backlog>0」组合条件** ⇒
+    #   阈值设 0 + 算子 <（promoted_7d<0 永不成立）⇒ 恒不触发；实际判据由
+    #   evolution_report 的 _act_online_eval 行动源承担（组合条件在代码里判），
+    #   规则行在位只为「指标有人看、面板有显示」。这是 alert_rules  schema 的
+    #   已知边界（无组合条件列），不硬造：宁可规则恒静默，也不制造假告警。
+    ("在线评测回流停滞（7日零转正，组合判据见 evolution_report）", "eval_promoted_7d", "<", 0, "info", "active"),
+    # R14 自动评覆盖率：可评样本中 auto_score 非 NULL 占比 <50% 告警。
+    #   分母为 0 时供数发 None ⇒ 评估器跳过（空队列不是 0% 覆盖，不误报）。
+    ("在线评测自动评覆盖不足（<50%）", "eval_auto_coverage", "<", 50, "warning", "active"),
 ]
 
 # 存量规则修正（一次性，幂等按旧 name 匹配）：原"登录失败突增（1h≥3次）"
@@ -175,7 +189,7 @@ _ALERT_RULE_LEGACY_FIX = (
 
 
 def seed_alert_rules(conn: sqlite3.Connection) -> dict:
-    """P0-a：预置 11 条告警规则（10 条体系化 + 1 条存量口径修正）。幂等。"""
+    """P0-a：预置告警规则（10 条体系化 + 1 条存量口径修正；P0-b 起 +3 条回流）。幂等。"""
     try:
         old_name, new_name, new_th = _ALERT_RULE_LEGACY_FIX
         cur = conn.execute(

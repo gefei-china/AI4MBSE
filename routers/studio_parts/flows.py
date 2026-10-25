@@ -414,6 +414,23 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                     r["executed"] = True
                     r["exec_result"] = {"ok": _er.get("ok"), "result": str(_er.get("result", ""))[:2000]}
                     exec_note = f" · 已自动执行: {'成功' if _er.get('ok') else '失败'}"
+                elif action == "eval_label":
+                    # P0-b：在线评测人工标注——批准 ⇒ labeled_confirmed（后续
+                    #   promote 才转正）；驳回 ⇒ labeled_rejected（B3 不进 dataset）。
+                    #   执行体在 core.online_eval.apply_human_label（与 monitor
+                    #   的 label 端点双入口共用，单一事实源）。
+                    from core import online_eval as _oe
+                    _lr = _oe.apply_human_label(
+                        conn, int(payload.get("queue_id") or 0),
+                        approve=True,
+                        score=int(payload.get("score") or 0),
+                        reason=str(payload.get("reason") or ""),
+                        actor=_decider)
+                    r["executed"] = bool(_lr.get("ok"))
+                    r["exec_result"] = _lr
+                    exec_note = (" · 标注已生效（%s）" % _lr.get("status", "")
+                                 if _lr.get("ok") else
+                                 " · 标注执行失败: %s" % _lr.get("error", ""))
                 else:
                     r["executed"] = False
                     r["exec_result"] = {"ok": False, "result": f"工具「{action}」非 HTTP 集成类型，不支持批准后自动执行，请手动操作"}
@@ -435,9 +452,26 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                      1 if _er.get("ok") else 0, 0, _run_id, _task_key, "tool:%s" % action))
             except Exception:
                 pass
+    # P0-b：eval_label 的**驳回**同样要落状态（labeled_rejected，B3：永不进
+    # dataset，但留痕可复查"哪条被谁驳回"）。approved 的执行分支在上面。
+    if r.get("status") == "rejected":
+        _row_r = HILService.get(conn, cid) or {}
+        if str(_row_r.get("action") or "") == "eval_label":
+            try:
+                _pl_r = _row_r.get("payload")
+                if not isinstance(_pl_r, dict):
+                    _pl_r = json.loads(_row_r or "{}")
+            except Exception:
+                _pl_r = {}
+            from core import online_eval as _oe_r
+            _lr = _oe_r.apply_human_label(
+                conn, int(_pl_r.get("queue_id") or 0), approve=False,
+                score=int(_pl_r.get("score") or 0),
+                reason=str(_pl_r.get("reason") or ""), actor=_decider)
+            r["executed"] = bool(_lr.get("ok"))
+            r["exec_result"] = _lr
     audit(audit_user(user), "hil_decide", f"HIL确认单#{cid} → {r['status']}{exec_note}", conn=conn)
     return r
-
 
 @router.get("/api/studio/planner/{rid}/tasks")
 def planner_tasks(rid: int, conn=Depends(db_session)):

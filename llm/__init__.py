@@ -467,6 +467,23 @@ class LLMClient:
                         raise
         except Exception:
             pass
+        finally:
+            # P0-b M5：闭 llm span——放 **finally** 而非 try 尾：记账成败
+            # （DB 插入被上面 except 吞掉）与 span 生命周期解耦，否则 flush
+            # 只能按 unclosed_at_flush 收口、token 归属丢失。pt/ct/_tid 可能
+            # 因早期异常未绑定 ⇒ locals() 兜底（不伪造：拿不到就记 0）。
+            try:
+                from services.orch_span import current_tracer as _ct
+                _tracer = _ct()
+                if _tracer is not None:
+                    _tracer.close_llm(
+                        trace_id=str(locals().get("_tid") or ""),
+                        tokens_in=int(locals().get("pt") or 0),
+                        tokens_out=int(locals().get("ct") or 0),
+                        latency_ms=int(latency_ms or 0),
+                        ok=not call_failed)
+            except Exception:
+                pass   # 观测收口失败绝不阻断记账/主链路
 
     def get_default_provider(self):
         from database import get_db
@@ -507,6 +524,19 @@ class LLMClient:
         provider_name = provider.get("name", "未配置") if provider else "未配置"
         model_name = provider.get("model_name", "-") if provider else "-"
         t0 = time.time()
+        # P0-b M5：llm span（会话级 trace）。开在 chat() 入口——mock / no-key /
+        # 真实非流式 / 真实流式 / 异常五类出口的**唯一公共前躯**；闭点在
+        # _record_usage 的 finally（流式与非流式唯一记账点，8 个调用全覆盖）。
+        # 无 tracer（编排子任务线程持空 Context / 非 chat/stream 路径）⇒ no-op。
+        # ⚠️ 不在此处存 sid：嵌套 chat（工具执行中再发起）由 llms 栈 LIFO 保证
+        #    内外层各自闭对（见 close_llm docstring）。
+        try:
+            from services.orch_span import current_tracer as _ct
+            _tracer = _ct()
+            if _tracer is not None:
+                _tracer.open_llm(model_name, kwargs.get("_intent", ""), t0=t0)
+        except Exception:
+            pass   # 观测装配失败绝不阻断 LLM 调用
 
         # 测试确定性：llm.force_mock 强制 Mock（回归测试不依赖外部网络；兼容 MBSE_LLM_FORCE_MOCK）
         from core import config as _cfg

@@ -513,6 +513,8 @@ async function loadOps() {
   try{ loadOpsLifecycle(); }catch(e){}
   // Bad Case 台账（2026-10-18 P0-3）：LLM 失败/截断 + 负向反馈，独立端点独立降级
   try{ loadOpsBadCases(); }catch(e){}
+  // P0-b 在线评测回流（2026-10-25）：待标注队列 + 三段 dry-run 操作，独立端点独立降级
+  try{ loadOpsOnlineEval(); }catch(e){}
   // 系统信息（进程 PID / 运行时长 / DB 大小）挂到趋势面板右上角
   const sys = d.system || {};
   document.getElementById('ops-trend').insertAdjacentHTML('beforeend',
@@ -1147,4 +1149,131 @@ async function triageBadcase(id, status){
     toast(status==='open' ? '已重开' : (status==='resolved' ? '已标记解决' : '已忽略'));
     loadOpsBadCases();
   }catch(e){ toast('处理失败：' + (e.message||e)); }
+}
+
+// ── P0-b 在线评测回流（core/online_eval.py；采样/自动评/转正全 dry-run 默认）──
+async function loadOpsOnlineEval(){
+  const box = document.getElementById('ops-online-eval');
+  if(!box) return;
+  try{
+    const d = await api('/api/monitor/online-eval/queue?status=pending&limit=50');
+    const badge = document.getElementById('ops-oe-pending');
+    const nP = (d.summary && d.summary.by_status && d.summary.by_status.pending) || 0;
+    if(badge){ badge.style.display = nP>0 ? '' : 'none'; badge.textContent = nP+' 待标注'; }
+    if(!d.items || !d.items.length){
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">'+
+        (d.note ? escMd(d.note) : '暂无待标注样本（先「试运行采样」→「确认入队」）')+'</div>'; return;
+    }
+    box.innerHTML = renderOpsOnlineEval(d);
+  }catch(e){
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">加载失败：'+escMd(String(e).slice(0,80))+'</div>';
+  }
+}
+function _oeTypeSt(t){
+  const m = { intent:['b','意图'], retrieval:['w','检索'], generation:['g','生成'] };
+  return `<span class="st ${m[t]?m[t][0]:'g'}">${m[t]?m[t][1]:escMd(t||'?')}</span>`;
+}
+function _oeReasonSt(r){
+  const m = { neg_feedback:['r','负反馈'], low_conf:['w','低置信'], random_5pct:['b','随机5%'] };
+  return `<span class="st ${m[r]?m[r][0]:'g'}">${m[r]?m[r][1]:escMd(r||'?')}</span>`;
+}
+function renderOpsOnlineEval(d){
+  const s = d.summary || {};
+  const chips = Object.keys(s.by_status||{}).map(k=>
+    `<span class="st b" style="margin-right:6px;">${escMd(k)} ${s.by_status[k]}</span>`).join('');
+  const cov = s.auto_coverage==null ? '—' : Math.round(s.auto_coverage*100)+'%';
+  const rows = (d.items||[]).map(it=>`
+    <tr>
+      <td style="font-size:11px;white-space:nowrap;">#${it.id} ${_oeTypeSt(it.sample_type)}<br>${_oeReasonSt(it.sample_reason)}</td>
+      <td style="font-size:11px;color:var(--mut);">conv ${it.conversation_id||'-'} · msg ${it.message_id||'-'} · qt ${it.query_trace_id||'-'}</td>
+      <td style="font-size:11px;">${it.auto_score==null?'<span class="mut">未评</span>':escMd(String(it.auto_score))}</td>
+      <td style="white-space:nowrap;">
+        <select id="oe-score-${it.id}" style="width:56px;font-size:11px;">
+          <option value="">评分</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option>
+        </select>
+        <input id="oe-reason-${it.id}" placeholder="原因（可选）" style="width:90px;font-size:11px;">
+        <button class="btn sm grn" onclick="submitEvalLabel(${it.id},true)">✓ 提交并批准</button>
+        <button class="btn sm ghost" onclick="submitEvalLabel(${it.id},false)">✕ 驳回</button>
+      </td>
+    </tr>`).join('');
+  return `<div style="margin-bottom:6px;font-size:11px;">${chips}<span class="mut">共 ${s.total||0} 条 · 自动评覆盖率 ${cov}（分母=可评样本）</span></div>` +
+    `<table class="t"><tr><th>队列/类型/理由</th><th>溯源</th><th>auto</th><th>人工标注（HIL 确认卡）</th></tr>${rows}</table>`;
+}
+// 标注提交：label 端点建 HIL 确认单（幂等）→ 同卡片按钮直接 decide（批准/驳回）。
+async function submitEvalLabel(qid, approve){
+  const sc = (document.getElementById('oe-score-'+qid)||{}).value || '';
+  const rs = (document.getElementById('oe-reason-'+qid)||{}).value || '';
+  if(approve && !sc){ toast('批准需选评分 1-5'); return; }
+  try{
+    const lr = await api('/api/monitor/online-eval/label',
+      {method:'POST', body: JSON.stringify({queue_id: qid, score: parseInt(sc||'0',10)||0, reason: rs})});
+    if(lr.error){ toast(lr.error); return; }
+    if(lr.idempotent_hit){ toast('该样本已有待确认标注单（幂等命中 #'+lr.confirmation_id+'），请在 HIL 页面处理'); return; }
+    const dr = await api(`/api/studio/hil-confirmations/${lr.confirmation_id}/decide`,
+      {method:'POST', body: JSON.stringify({approve: !!approve})});
+    toast(approve ? ('标注已生效（'+((dr.exec_result||{}).status||'')+'）') : '已驳回（labeled_rejected，不进 dataset）');
+    loadOpsOnlineEval();
+  }catch(e){ toast('标注失败：' + (e.message||e)); }
+}
+function _oeDryBox(html){ const d = document.getElementById('ops-oe-dryrun'); if(d){ d.style.display=''; d.innerHTML = html; } }
+async function runOnlineEvalSample(apply){
+  try{
+    const r = await api('/api/monitor/online-eval/sample', {method:'POST', body: JSON.stringify({apply: !!apply})});
+    if(r.error){ toast(r.error); return; }
+    const btn = document.getElementById('ops-oe-sample-btn');
+    if(!apply){
+      const n = (r.candidates||[]).length;
+      const byReason = {};
+      (r.candidates||[]).forEach(c=>{ byReason[c.sample_reason]=(byReason[c.sample_reason]||0)+1; });
+      _oeDryBox(`<div class="mut" style="font-size:11.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
+        试运行采样（未写库）：候选 ${n} 条
+        ${Object.keys(byReason).map(k=>'<span class="st b" style="margin-left:6px;">'+escMd(k)+' '+byReason[k]+'</span>').join('')}
+        <div style="margin-top:4px;">${n>0?'确认后入队（同键去重）。':'窗口内无候选。'}</div></div>`);
+      if(btn) btn.style.display = n>0 ? '' : 'none';
+    } else {
+      const ar = r.apply_result || {};
+      toast(ar.skipped ? '试运行未入队' : '已入队');
+      _oeDryBox(''); const d=document.getElementById('ops-oe-dryrun'); if(d) d.style.display='none';
+      if(btn) btn.style.display='none';
+      loadOpsOnlineEval();
+    }
+  }catch(e){ toast('采样失败：' + (e.message||e)); }
+}
+async function runOnlineEvalAuto(apply){
+  try{
+    const r = await api('/api/monitor/online-eval/auto-eval', {method:'POST', body: JSON.stringify({apply: !!apply})});
+    if(r.error){ toast(r.error); return; }
+    const btn = document.getElementById('ops-oe-auto-btn');
+    if(!apply){
+      _oeDryBox(`<div class="mut" style="font-size:11.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
+        试运行自动评（未写库）：扫到 ${r.scanned||0} 条，可评分 ${(r.items||[]).length} 条
+        ${(r.items||[]).slice(0,5).map(x=>'<div>#'+x.queue_id+' → '+escMd(String(x.auto_score))+'</div>').join('')}
+        ${(r.failures||[]).length?'<div style="color:var(--orange,#B96A00);">失败 '+r.failures.length+' 条（记入 failures 不补零）</div>':''}</div>`);
+      if(btn) btn.style.display = (r.items||[]).length>0 ? '' : 'none';
+    } else {
+      toast('已写分');
+      const d=document.getElementById('ops-oe-dryrun'); if(d) d.style.display='none';
+      if(btn) btn.style.display='none';
+      loadOpsOnlineEval();
+    }
+  }catch(e){ toast('自动评失败：' + (e.message||e)); }
+}
+async function runOnlineEvalPromote(apply){
+  try{
+    const r = await api('/api/monitor/online-eval/promote', {method:'POST', body: JSON.stringify({apply: !!apply})});
+    if(r.error){ toast(r.error); return; }
+    const btn = document.getElementById('ops-oe-promote-btn');
+    if(!apply){
+      const n = (r.items||[]).length;
+      _oeDryBox(`<div class="mut" style="font-size:11.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
+        试运行转正（未写库）：待转正 ${n} 条（仅 labeled_confirmed；auto 分永不自动转正）
+        <div style="margin-top:4px;">${n>0?'确认后三分流：intent→intent_samples · retrieval→qrels.jsonl · generation→eval_gen_labels（幂等）。':'暂无 confirmed 样本。'}</div></div>`);
+      if(btn) btn.style.display = n>0 ? '' : 'none';
+    } else {
+      toast(`已转正：intent ${r.intent_samples||0} · qrels ${r.qrels||0} · gen ${r.eval_gen_labels||0}`);
+      const d=document.getElementById('ops-oe-dryrun'); if(d) d.style.display='none';
+      if(btn) btn.style.display='none';
+      loadOpsOnlineEval();
+    }
+  }catch(e){ toast('转正失败：' + (e.message||e)); }
 }

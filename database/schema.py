@@ -36,6 +36,7 @@ from .migrations import (
     _dedupe_ontology_types,
     _migrate_ontology_iri,
     _migrate_eval_tables,
+    _migrate_online_eval_tables,  # P0-b 生产回流两表（2026-10-25）
     _migrate_kb_v2_enhance,
     _migrate_entity_temporal,  # P0-④ 时态管理（2026-09-11）
     _migrate_triple_optimization,
@@ -1256,7 +1257,9 @@ def init_db():
     #     但没有父子结构、没有起止对 ⇒ 算不出每段 latency；
     #   · 本表是 **span 树**（开/关时刻对）——聚合"每段花了多久、烧了多少 token"，
     #     正是排障时"55s 的编排慢在哪"要的回答。
-    # kind 六类：run（根，整轮）/ plan / task / summary / reflection / views。
+    # kind 两类来源共 12 类：编排七类 run/plan/task/summary/reflection/views/replan
+    # （Task #43 + P1）；会话五类 conversation/turn/tool/rag/llm（P0-b 生产回流，
+    # 设计 docs/P0-b-生产回流详细设计-2026-10-25.md §3.2，conversation 的 run_id=0）。
     # 写入方 services/orch_span.py：**内存收集 → 流尾一次性 flush**（旁路失败绝不
     # 阻断主链路，与本仓观测层原则一致）；未闭合 span 在 flush 时按 error 收口。
     # 注意：本表索引只引用自家 CREATE TABLE 的列 ⇒ 不存在 verify_schema_index_order
@@ -1265,7 +1268,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER DEFAULT 0,
         run_id INTEGER DEFAULT 0,
-        kind TEXT DEFAULT '',               -- run | plan | task | summary | reflection | views | replan（P1 重规划决策记录，2026-10-21）
+        kind TEXT DEFAULT '',               -- run | plan | task | summary | reflection | views | replan（P1 重规划决策记录，2026-10-21）| conversation | turn | tool | rag | llm（P0-b 会话级 trace，2026-10-25）
         name TEXT DEFAULT '',               -- span 名（task 时为 task_key）
         parent_id INTEGER DEFAULT 0,        -- 父 span 的 orch_run_spans.id（0=根）
         status TEXT DEFAULT 'running',      -- running | ok | error
@@ -1278,6 +1281,13 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_ors_conv_run "
               "ON orch_run_spans(conversation_id, run_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_ors_time ON orch_run_spans(created_at)")
+    # P0-b（2026-10-25）会话级 span 索引：kind+created_at。
+    # 为什么安全（verify_schema_index_order O2）：kind 与 created_at 均为本表
+    # CREATE TABLE 自有列，不引用 _migrate_columns 补的列 ⇒ 建在建表段无
+    # "no such column" 风险（同 orch_stream_events 范式，见上方注释）。
+    # 查询场景：monitor 页会话下钻按 kind 过滤 + 时间倒序（conversation 根定位）。
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ors_kind_time "
+              "ON orch_run_spans(kind, created_at)")
 
     # ── P4 replanning（2026-10-21）：重规划决策记录表 ─────────────────────
     # 为什么在 span 之外再建一张表（v2 §4.6）：span 的 meta_json 是**单次判定**
@@ -1738,6 +1748,10 @@ def init_db():
     _seed_intent_rules(conn)
     # 2026-10-16 P0-8：人工介入治理策略种子（hil_policies，不改现有链路行为）
     _seed_hil_policies(conn)
+    # ── P0-b（2026-10-25）生产回流：online_eval_queue + eval_gen_labels 两表 ──
+    # 放在 _migrate_columns 之后（纯新表 CREATE IF NOT EXISTS，无补列依赖，
+    # 位置仅在语义上归入"表结构迁移"族）；真写端点 S4 才接，本步只建结构。
+    _migrate_online_eval_tables(conn)
     conn.close()
 
 

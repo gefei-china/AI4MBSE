@@ -79,6 +79,7 @@ from .misc import (
     _migrate_mr_status,
     _apply_env_keys,
     _migrate_eval_tables,
+    _migrate_online_eval_tables,      # 2026-10-25 P0-b 生产回流两表（采样队列 + 生成标签）
     _migrate_kb_v2_enhance,
     _backfill_commit_baseline,
     _migrate_mr_comments,
@@ -154,6 +155,7 @@ __all__ = [
     "_migrate_mr_status",
     "_apply_env_keys",
     "_migrate_eval_tables",
+    "_migrate_online_eval_tables",
     "_migrate_kb_v2_enhance",
     "_backfill_commit_baseline",
     "_migrate_mr_comments",

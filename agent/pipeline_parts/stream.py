@@ -16,6 +16,7 @@ from .common import *
 from core.audit import audit, audit_user
 from . import tool_offload as _tool_offload  # P1-4：大工具结果 offload（引用块+按需重读）
 import queue as _queue  # 编排子任务事件的**实时**转发通道（见 _stream_orchestrated_flow 的 _evq）
+from contextlib import nullcontext  # P0-b：_turn_cm 无 tracer 时的零开销占位
 
 
 def _gen_stage_name(intent, agent_def) -> str:
@@ -48,6 +49,20 @@ _CODE_STAGE_INTENTS = {
     "design", "architecture_skeleton", "view_expansion",
     "model_validation_repair", "multi_design", "sysml_view_generation",
 }
+
+
+def _turn_cm(tracer, turn_no):
+    """P0-b（2026-10-25）M2：ReAct 轮的 turn span 上下文管理器。
+
+    为什么用 with 包整轮而不是开闭配对：循环体有 10+ 个出口（break×6 /
+    continue×2 / 异常上抛），逐个补 close 必然漏（同 _stream_orchestrated_traced
+    "三类出口逐个补 finally 必然漏"的判据）；with 的 __exit__ 在
+    break/continue/GeneratorExit（生成器被关闭）三条路径上都保证闭 span。
+    无 tracer（编排子任务流/关闭开关）⇒ nullcontext，零开销。
+    """
+    if tracer is None:
+        return nullcontext()
+    return tracer.turn(turn_no)
 
 
 class StreamMixin:
@@ -3348,7 +3363,7 @@ class StreamMixin:
     def execute_stream(self, user_input, conversation_id, branch="dev", provider_id=None,
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
                        team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0,
-                       resume_of_user_msg_id: int = 0, resume_append: str = ""):
+                       resume_of_user_msg_id: int = 0, resume_append: str = "", _tracer=None):
         """流式执行（V2.3.2 优化：AI 输出流式 + 执行过程可观测）。生成器逐段产出 SSE 事件：
 
         {"type":"stage","name":..., "status":"run|done"}   右侧智能体执行状态
@@ -3362,6 +3377,11 @@ class StreamMixin:
         dry_run: 编排子任务流式执行时置 True（不落库，仅产出事件）。
         team: 团队模式（AI 会话页「工作流」下拉）——主 Agent 团队负责人统一调度：
         意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
+        _tracer: P0-b 会话级 ConversationTracer（/chat/stream 入口创建）。**显式传参**
+        而非全局查找：execute_stream 的同步生成器整体跑在 SSE 心跳 daemon 线程
+        （core/sse.iter_with_heartbeat_async），ContextVar 不跨线程继承，深层挂载点
+        （tool/rag/llm）经 set_current_tracer 在本线程落地后才能被 current_tracer() 拿到。
+        编排子任务流不传（_tracer=None）⇒ 全部打点退化为 no-op。
         """
         attachments = attachments or []
         # ★ 2026-11-13（#56）：**会话级附件继承** —— 附件是会话资源，不必每轮重传。
@@ -3380,6 +3400,15 @@ class StreamMixin:
         #   否则清零会抹掉本次请求刚设好的上下文。
         #   根因与实测证据见 `common.reset_request_state` 的 docstring。
         reset_request_state(self)
+        # P0-b（M2）：把会话 tracer 落入**本线程** ContextVar —— 执行流跑在 SSE 心跳
+        # daemon 线程，入口线程 set 的值不继承；深层挂载点（M3 tool / M4 rag / M5 llm）
+        # 全部经 current_tracer() 取，取不到即 no-op（降级安全）。
+        if _tracer is not None:
+            try:
+                from services.orch_span import set_current_tracer as _set_ct
+                _set_ct(_tracer)
+            except Exception:
+                pass   # 观测装配失败绝不阻断主流程（不静默：span 缺失在 monitor 页可见）
         # 2026-09-29：user 消息在流开始即落库（原在流收尾与 assistant 一并 INSERT）。
         # 修「流式进行中库中 0 条消息 → 切页再切回，selectConv 渲染空态覆盖 #stream-ai 现场」；
         # 也顺带修复澄清路径（clarify_ask 提前 return）user 消息从未落库的缺口。
@@ -4292,261 +4321,262 @@ class StreamMixin:
                                "status": "done", "detail": _lg.stats()}
                         tools_def = None
                         break
-                    probe = llm_client.chat(messages, provider_id=effective_provider, stream=False,
-                                           tools=tools_def, _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
-                    _lg.add_tokens(_tok_of(probe))
-                    pmsg = probe["choices"][0]["message"]
-                    ptool_calls = pmsg.get("tool_calls") or []
-                    # V2.5：探测轮思考透传（模型决定是否调用工具的推理过程，非流式 message.reasoning_content）
-                    _p_think = str(pmsg.get("reasoning_content") or "").strip()
-                    if _p_think:
-                        exec_reasoning.append(_p_think)
-                        yield {"type": "reasoning", "delta": _p_think, "round": _rnd + 1, "phase": "probe"}
-                    if not ptool_calls:
-                        p_content = pmsg.get("content") or ""
-                        if p_content:
-                            tool_injected = True
-                            # P0-3（2026-09-17）：探测轮是非流式拿到的完整回复，此处按类人节奏补吐
-                            for _chunk in iter_stream_chunks(p_content):
-                                yield {"type": "token", "delta": _chunk}
-                            llm_content = p_content
-                        break
-                    tool_injected = True
-                    results = []
-                    # 思考过程：Agent 决策需要调用哪些工具（规划）
-                    plan = "、".join((tc.get("function") or {}).get("name", "") for tc in ptool_calls[:3])
-                    _p_delta = f"（{agent_def.name}）判断需要调用工具补充上下文，计划调用：{plan}。开始执行工具…（第 {_rnd + 1} 轮）"
-                    exec_reasoning.append(_p_delta)
-                    yield {"type": "reasoning", "delta": _p_delta, "round": _rnd + 1, "phase": "plan"}
-                    weak_count = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
-                    _round_had_ok = False   # 本轮是否有可用工具结果（失败轮预算判据）
-                    #── P0-①（2026-10-07）并行调用配对：切成「执行队列 / 未执行队列」────
-                    # ⚠️ 不能删掉上限（那是失控护栏），必须为未执行的尾部补结果，
-                    #    否则 pmsg 带全部 tool_calls 而 results 只有 3 笔 ⇒ 第 4 笔起悬空
-                    #    ⇒ 下一轮 HTTP 400（tool_use ids without tool_result blocks）。
-                    #    详见 agent/loop_protocol.py 模块 docstring 缺陷①。
-                    _exec_calls, _skip_calls = _lproto.split_calls(ptool_calls)
-                    for _ti, tc in enumerate(_exec_calls):
-                        fn = tc.get("function") or {}
-                        tname = fn.get("name", "")
-                        # UX规范·硬规则1（2026-10-02）：一动作一节点 —— 每笔调用携带稳定 call_id
-                        # （协议 tool_call id；缺失时用 名称#轮次-序号 兜底），前端以它为键复用节点，
-                        # 同名并发两笔调用各自成卡、不再互相覆盖。
-                        _call_id = str(tc.get("id") or f"{tname}#{_rnd + 1}-{_ti}")
-                        # ── P0-②（2026-10-07）截断参数：拒绝执行 + 明确告知重发 ──
-                        # ⚠️ 必须先判别再解析：`except: targs={}` 会让**空参数照常执行**，
-                        #    既可能误用工具默认行为，又掩盖了"模型输出被截断"这个真因。
-                        #    `is_truncated_args` 区分「非法 JSON=截断」与「合法空=正常请求」，避免误杀。
-                        if _lproto.is_truncated_args(fn):
-                            _tr = _lproto.truncated_result(tname)
-                            yield {"type": "tool", "status": "done", "name": tname,
-                                   "ok": False, "result": _tr["result"],
-                                   "error": "args_truncated", "call_id": _call_id,
-                                   "truncated": True,
+                    with _turn_cm(_tracer, _rnd + 1):   # P0-b：ReAct 轮 span（M2 挂载）
+                        probe = llm_client.chat(messages, provider_id=effective_provider, stream=False,
+                                               tools=tools_def, _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
+                        _lg.add_tokens(_tok_of(probe))
+                        pmsg = probe["choices"][0]["message"]
+                        ptool_calls = pmsg.get("tool_calls") or []
+                        # V2.5：探测轮思考透传（模型决定是否调用工具的推理过程，非流式 message.reasoning_content）
+                        _p_think = str(pmsg.get("reasoning_content") or "").strip()
+                        if _p_think:
+                            exec_reasoning.append(_p_think)
+                            yield {"type": "reasoning", "delta": _p_think, "round": _rnd + 1, "phase": "probe"}
+                        if not ptool_calls:
+                            p_content = pmsg.get("content") or ""
+                            if p_content:
+                                tool_injected = True
+                                # P0-3（2026-09-17）：探测轮是非流式拿到的完整回复，此处按类人节奏补吐
+                                for _chunk in iter_stream_chunks(p_content):
+                                    yield {"type": "token", "delta": _chunk}
+                                llm_content = p_content
+                            break
+                        tool_injected = True
+                        results = []
+                        # 思考过程：Agent 决策需要调用哪些工具（规划）
+                        plan = "、".join((tc.get("function") or {}).get("name", "") for tc in ptool_calls[:3])
+                        _p_delta = f"（{agent_def.name}）判断需要调用工具补充上下文，计划调用：{plan}。开始执行工具…（第 {_rnd + 1} 轮）"
+                        exec_reasoning.append(_p_delta)
+                        yield {"type": "reasoning", "delta": _p_delta, "round": _rnd + 1, "phase": "plan"}
+                        weak_count = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
+                        _round_had_ok = False   # 本轮是否有可用工具结果（失败轮预算判据）
+                        #── P0-①（2026-10-07）并行调用配对：切成「执行队列 / 未执行队列」────
+                        # ⚠️ 不能删掉上限（那是失控护栏），必须为未执行的尾部补结果，
+                        #    否则 pmsg 带全部 tool_calls 而 results 只有 3 笔 ⇒ 第 4 笔起悬空
+                        #    ⇒ 下一轮 HTTP 400（tool_use ids without tool_result blocks）。
+                        #    详见 agent/loop_protocol.py 模块 docstring 缺陷①。
+                        _exec_calls, _skip_calls = _lproto.split_calls(ptool_calls)
+                        for _ti, tc in enumerate(_exec_calls):
+                            fn = tc.get("function") or {}
+                            tname = fn.get("name", "")
+                            # UX规范·硬规则1（2026-10-02）：一动作一节点 —— 每笔调用携带稳定 call_id
+                            # （协议 tool_call id；缺失时用 名称#轮次-序号 兜底），前端以它为键复用节点，
+                            # 同名并发两笔调用各自成卡、不再互相覆盖。
+                            _call_id = str(tc.get("id") or f"{tname}#{_rnd + 1}-{_ti}")
+                            # ── P0-②（2026-10-07）截断参数：拒绝执行 + 明确告知重发 ──
+                            # ⚠️ 必须先判别再解析：`except: targs={}` 会让**空参数照常执行**，
+                            #    既可能误用工具默认行为，又掩盖了"模型输出被截断"这个真因。
+                            #    `is_truncated_args` 区分「非法 JSON=截断」与「合法空=正常请求」，避免误杀。
+                            if _lproto.is_truncated_args(fn):
+                                _tr = _lproto.truncated_result(tname)
+                                yield {"type": "tool", "status": "done", "name": tname,
+                                       "ok": False, "result": _tr["result"],
+                                       "error": "args_truncated", "call_id": _call_id,
+                                       "truncated": True,
+                                       "agent": _ctx_agent, "skill": _ctx_skill,
+                                       "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
+                                results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
+                                                "name": tname,
+                                                "content": json.dumps(_tr, ensure_ascii=False)})
+                                continue
+                            try:
+                                targs = json.loads(fn.get("arguments") or "{}")
+                            except Exception:
+                                # 走到这里说明 `is_truncated_args` 判错了（非截断但仍解析失败）
+                                # ⇒ 保守当截断处理，**不**以空参数执行。
+                                _tr = _lproto.truncated_result(tname)
+                                results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
+                                                "name": tname,
+                                                "content": json.dumps(_tr, ensure_ascii=False)})
+                                continue
+                            # 工具调用结果：执行前 → 执行后（流式透传；结果全量返回，前端可展开/复制）
+                            yield {"type": "tool", "status": "run", "name": tname, "arguments": targs,
+                                   "call_id": _call_id,
+                                   # ★ 2026-11-11 三级展示层级（详见 _ctx_agent 处注释）
                                    "agent": _ctx_agent, "skill": _ctx_skill,
                                    "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
-                            results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
-                                            "name": tname,
-                                            "content": json.dumps(_tr, ensure_ascii=False)})
-                            continue
-                        try:
-                            targs = json.loads(fn.get("arguments") or "{}")
-                        except Exception:
-                            # 走到这里说明 `is_truncated_args` 判错了（非截断但仍解析失败）
-                            # ⇒ 保守当截断处理，**不**以空参数执行。
-                            _tr = _lproto.truncated_result(tname)
-                            results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
-                                            "name": tname,
-                                            "content": json.dumps(_tr, ensure_ascii=False)})
-                            continue
-                        # 工具调用结果：执行前 → 执行后（流式透传；结果全量返回，前端可展开/复制）
-                        yield {"type": "tool", "status": "run", "name": tname, "arguments": targs,
-                               "call_id": _call_id,
-                               # ★ 2026-11-11 三级展示层级（详见 _ctx_agent 处注释）
-                               "agent": _ctx_agent, "skill": _ctx_skill,
-                               "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
-                        _t0 = time.time()   # P0-1 工具耗时：run→done 计时
-                        # 2026-10-04：重复调用短路（同工具同参数已成功跑过 ⇒ 回喂既有结果）。
-                        # ⚠️ 必须发生在 yield "run" **之前**：否则前端会先亮起一个节点，
-                        #    然后既没有真实执行也没有 done 事件 ⇒ 节点永久停在"执行中"。
-                        _dup = _lg.probe_dup(tname, targs)
-                        if _dup:
-                            _lg.dup_short_circuits += 1
-                            result = {"ok": True,
-                                      "result": _lg.last_result_for(tname, targs),
-                                      "_dup": _dup}
-                        else:
-                            result = _lg.call(self._exec_tool_call, tname, targs)
-                            # ★ 2026-10-17：ask_user 人在回路澄清 —— 记录信号并中断 ReAct 循环
-                            #   （不再喂 tool_result、不再继续探测：等用户回答后续跑）
-                            if isinstance(result, dict) and result.get("clarify_required"):
-                                _clarify_req = result.get("clarify") or {}
-                                # ★ 2026-11-12（米爸反馈3 复发，conv 9571 实证 7 连问 /
-                                #   conv 9553 实证 24 连问）：**必须补 done 事件**。
-                                #   此前 break 发生在 yield "tool done" **之前** ⇒ 前端
-                                #   ask_user 节点永远停在"执行中"（用户截图 8 个节点各卡
-                                #   ~750s「调用中...」）。澄清不是失败，节点必须正常收口——
-                                #   否则"看起来有 8 个没跑完的工具"比"1 个已完成的确认"
-                                #   更让人怀疑系统状态。
-                                yield {"type": "tool", "status": "done", "name": tname,
-                                       "ok": True, "result": str(result.get("result") or ""),
-                                       "error": "", "truncated": False,
-                                       "latency_ms": int((time.time() - _t0) * 1000),
-                                       "call_id": _call_id, "skipped": False,
-                                       "skip_reason": "", "agent": _ctx_agent,
-                                       "skill": _ctx_skill, "depth": 2 if _ctx_skill else 1,
-                                       "mcp": _mcp_of(tname)}
-                                break
-                            _r0 = str(result.get("result") or "")
-                            if result.get("ok") and (result.get("weak")
-                                                     or ("未检索到" in _r0)
-                                                     or ("无新冲突" in _r0)):
-                                _lg.undo_dup_count(tname, targs)
-                        _t_ok = bool(result.get("ok"))
-                        _r_full = str(result.get("result") or "")
-                        # ★ 2026-10-17（米爸反馈4）：识别工具结果里的完整 SysML 文档
-                        #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
-                        _doc_hit = None
-                        try:
-                            from agent.utils import extract_sysml_doc_from_result as _esd
-                            _doc = _esd(tname, _r_full)
-                            if _doc:
-                                _dk = _doc["text"][:200]
-                                if _dk not in self._tool_sysml_docs_seen:
-                                    self._tool_sysml_docs_seen.add(_dk)
-                                    self._tool_sysml_docs.append(_doc)
-                                    _doc_hit = _doc
-                        except Exception:
-                            pass
-                        # ★ 会话流环节块（米爸方案A1）：取回即告知——「已自动存入产物」，
-                        #   点击产物面板可看全文。yield 必须在 try/except 之外。
-                        if _doc_hit:
-                            _dsz = len(_doc_hit.get("text") or "")
-                            yield {"type": "stage", "name": "取回模型文件",
-                                   "status": "done",
-                                   "detail": "{}（{}）已自动存入产物".format(
-                                       _doc_hit.get("title") or "模型文件",
-                                       "{:.1f}KB".format(_dsz / 1024) if _dsz >= 1024
-                                       else "{}B".format(_dsz))}
-                        # ★ 失败轮预算判据（与 execute.py 同源）：本轮是否有可用结果
-                        if _t_ok and not (result.get("weak")
-                                          or ("未检索到" in _r_full)
-                                          or ("无新冲突" in _r_full)):
-                            _round_had_ok = True
-                        _t_trunc = len(_r_full) > _TOOL_RESULT_CAP
-                        _t_result = _r_full[:_TOOL_RESULT_CAP]
-                        _e_full = str(result.get("error") or "")
-                        _t_error = _e_full[:_TOOL_RESULT_CAP]
-                        _t_ms = int((time.time() - _t0) * 1000)   # P0-1：毫秒耗时
-                        # 2026-10-04：把护栏判定回显到事件里 —— 用户看到的必须是
-                        # "这一步因重复调用被跳过"，而不是一个看起来正常执行成功的节点
-                        # （否则重复调用在界面上完全不可见，用户以为模型白跑了几次）。
-                        _skipped = bool(result.get("_dup")) or bool(result.get("_t_timeout"))
-                        _skip_why = ("dup_short_circuit" if result.get("_dup")
-                                     else "tool_timeout" if result.get("_t_timeout") else "")
-                        exec_tools.append({"name": tname, "ok": _t_ok,
-                                           "arguments": targs, "result": _t_result,
-                                           "error": _t_error, "truncated": _t_trunc,
-                                           "elapsed_ms": _t_ms,
-                                           "skipped": _skipped, "skip_reason": _skip_why})
-                        yield {"type": "tool", "status": "done", "name": tname,
-                               "ok": _t_ok, "result": _t_result, "error": _t_error,
-                               "truncated": _t_trunc, "latency_ms": _t_ms,
-                               "call_id": _call_id,
-                               "skipped": _skipped, "skip_reason": _skip_why,
-                               # ★ 2026-11-11 三级展示层级（与上方 run 事件同源）
-                               "agent": _ctx_agent, "skill": _ctx_skill,
-                               "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
-                        _weak = bool(result.get("weak")) or ("未检索到" in _t_result) or ("无新冲突" in _t_result)
-                        if _weak:
-                            weak_count += 1
-                        # 2026-09-17 S3：回填给模型的结果单独封顶（此前用未截断的原始结果，长结果被后续每轮重发）
-                        # P1-4（2026-10-02）：封顶升级为 offload——全文落库，模型侧换引用块（可寻址召回）
-                        _t_model = str(result.get("result") or "")
-                        # ★ 2026-11-13（#56 端到端实证）：`read_attachment_section` 用**专用上限**。
-                        #   通用上限 `_TOOL_MODEL_CAP=3000` 对它**天然不适用**：
-                        #   整章正文动辄 5000~7000 字符（第 5 章实测 6024）⇒ 每次取章都被
-                        #   offload 成引用块 ⇒ 模型只拿到一个 id ⇒ 它再去调 tool_result_fetch
-                        #   要全文（而那又被 RBAC 拦）⇒ 最终**看到的是空**
-                        #   ⇒ 得出"第 5/6/7 章正文读不到"的错误结论（实测原话：
-                        #   「全部返回空内容」——其实工具已返回全文，是回填环节丢的）。
-                        #   本工具的语义就是"把这一章的正文给模型" ⇒ 断章取义地截断
-                        #   会直接毁掉它的用途 ⇒ 给足整章上限，且**不 offload**。
-                        _t_cap = _ATT_SECTION_MODEL_CAP if tname == "read_attachment_section" else _TOOL_MODEL_CAP
-                        _t_content, _offloaded = _tool_offload.model_side_content(
-                            tname, result, getattr(self, "_tool_conv_ctx", 0), cap=_t_cap)
-                        if _offloaded:
-                            _tool_offload.ensure_fetch_tool(tools_def, getattr(self, "_tool_whitelist", None))
-                        if _weak:
-                            # 弱相关引导：明确告知 LLM 结果不可用，禁止继续调用工具连环试探
-                            _t_content["hint"] = "该工具结果与当前任务弱相关（或未命中实质内容），请直接基于已有信息回答，不要再调用其他工具。"
-                        results.append({
-                            "tool_call_id": tc.get("id", ""),
-                            "role": "tool",
-                            "name": tname,
-                            "content": json.dumps(_t_content, ensure_ascii=False),
-                        })
-                    # ── P0-①（2026-10-07）为**未执行**的尾部调用补结果 ──
-                    # pmsg 带的是**全部** ptool_calls，若不给尾部补 tool_result，
-                    # 第 4 笔起永久悬空 ⇒ 下一轮 HTTP 400（protocol 硬约束）。
-                    # ⚠️ 必须**在 `if results:` 之前**追加：全被截断时 results 也要非空，
-                    #    否则整轮 tool_calls 一个结果都没有，配对同样缺失。
-                    # ★ 2026-11-12（米爸反馈3，conv 9571 实证 7 连问 / conv 9553 实证 24 连问）：
-                    #   clarify 已记录 ⇒ **立即退出轮次循环，不再补 skip、不再回填 pmsg**。
-                    #   两个原因缺一不可：
-                    #   ① 协议：ask_user 的 tool_call 没有配对 tool_result，回填 pmsg 即悬空
-                    #      ⇒ 下一轮探测 HTTP 400；
-                    #   ② 防重问：results 为空时 `if results:` 整块跳过 ⇒ messages 不更新
-                    #      ⇒ 下一轮 LLM 看到**同一份上下文** ⇒ 换措辞再问一遍（真库实测
-                    #      3s/次、最多烧到 max_tool_rounds=100 轮，每轮还多一条工具留痕）。
-                    if _clarify_req:
-                        break
-                    if _skip_calls:
-                        _skip_res = _lproto.skipped_results(_skip_calls)
-                        for _sr in _skip_res:
-                            _sfn = _sr.get("name") or "-"
-                            yield {"type": "tool", "status": "done", "name": _sfn,
-                                   "ok": False, "result": "本轮并发已达上限，未执行",
-                                   "error": "round_tool_limit", "call_id": _sr.get("tool_call_id"),
-                                   "skipped": True, "skip_reason": "round_tool_limit",
+                            _t0 = time.time()   # P0-1 工具耗时：run→done 计时
+                            # 2026-10-04：重复调用短路（同工具同参数已成功跑过 ⇒ 回喂既有结果）。
+                            # ⚠️ 必须发生在 yield "run" **之前**：否则前端会先亮起一个节点，
+                            #    然后既没有真实执行也没有 done 事件 ⇒ 节点永久停在"执行中"。
+                            _dup = _lg.probe_dup(tname, targs)
+                            if _dup:
+                                _lg.dup_short_circuits += 1
+                                result = {"ok": True,
+                                          "result": _lg.last_result_for(tname, targs),
+                                          "_dup": _dup}
+                            else:
+                                result = _lg.call(self._exec_tool_call, tname, targs)
+                                # ★ 2026-10-17：ask_user 人在回路澄清 —— 记录信号并中断 ReAct 循环
+                                #   （不再喂 tool_result、不再继续探测：等用户回答后续跑）
+                                if isinstance(result, dict) and result.get("clarify_required"):
+                                    _clarify_req = result.get("clarify") or {}
+                                    # ★ 2026-11-12（米爸反馈3 复发，conv 9571 实证 7 连问 /
+                                    #   conv 9553 实证 24 连问）：**必须补 done 事件**。
+                                    #   此前 break 发生在 yield "tool done" **之前** ⇒ 前端
+                                    #   ask_user 节点永远停在"执行中"（用户截图 8 个节点各卡
+                                    #   ~750s「调用中...」）。澄清不是失败，节点必须正常收口——
+                                    #   否则"看起来有 8 个没跑完的工具"比"1 个已完成的确认"
+                                    #   更让人怀疑系统状态。
+                                    yield {"type": "tool", "status": "done", "name": tname,
+                                           "ok": True, "result": str(result.get("result") or ""),
+                                           "error": "", "truncated": False,
+                                           "latency_ms": int((time.time() - _t0) * 1000),
+                                           "call_id": _call_id, "skipped": False,
+                                           "skip_reason": "", "agent": _ctx_agent,
+                                           "skill": _ctx_skill, "depth": 2 if _ctx_skill else 1,
+                                           "mcp": _mcp_of(tname)}
+                                    break
+                                _r0 = str(result.get("result") or "")
+                                if result.get("ok") and (result.get("weak")
+                                                         or ("未检索到" in _r0)
+                                                         or ("无新冲突" in _r0)):
+                                    _lg.undo_dup_count(tname, targs)
+                            _t_ok = bool(result.get("ok"))
+                            _r_full = str(result.get("result") or "")
+                            # ★ 2026-10-17（米爸反馈4）：识别工具结果里的完整 SysML 文档
+                            #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
+                            _doc_hit = None
+                            try:
+                                from agent.utils import extract_sysml_doc_from_result as _esd
+                                _doc = _esd(tname, _r_full)
+                                if _doc:
+                                    _dk = _doc["text"][:200]
+                                    if _dk not in self._tool_sysml_docs_seen:
+                                        self._tool_sysml_docs_seen.add(_dk)
+                                        self._tool_sysml_docs.append(_doc)
+                                        _doc_hit = _doc
+                            except Exception:
+                                pass
+                            # ★ 会话流环节块（米爸方案A1）：取回即告知——「已自动存入产物」，
+                            #   点击产物面板可看全文。yield 必须在 try/except 之外。
+                            if _doc_hit:
+                                _dsz = len(_doc_hit.get("text") or "")
+                                yield {"type": "stage", "name": "取回模型文件",
+                                       "status": "done",
+                                       "detail": "{}（{}）已自动存入产物".format(
+                                           _doc_hit.get("title") or "模型文件",
+                                           "{:.1f}KB".format(_dsz / 1024) if _dsz >= 1024
+                                           else "{}B".format(_dsz))}
+                            # ★ 失败轮预算判据（与 execute.py 同源）：本轮是否有可用结果
+                            if _t_ok and not (result.get("weak")
+                                              or ("未检索到" in _r_full)
+                                              or ("无新冲突" in _r_full)):
+                                _round_had_ok = True
+                            _t_trunc = len(_r_full) > _TOOL_RESULT_CAP
+                            _t_result = _r_full[:_TOOL_RESULT_CAP]
+                            _e_full = str(result.get("error") or "")
+                            _t_error = _e_full[:_TOOL_RESULT_CAP]
+                            _t_ms = int((time.time() - _t0) * 1000)   # P0-1：毫秒耗时
+                            # 2026-10-04：把护栏判定回显到事件里 —— 用户看到的必须是
+                            # "这一步因重复调用被跳过"，而不是一个看起来正常执行成功的节点
+                            # （否则重复调用在界面上完全不可见，用户以为模型白跑了几次）。
+                            _skipped = bool(result.get("_dup")) or bool(result.get("_t_timeout"))
+                            _skip_why = ("dup_short_circuit" if result.get("_dup")
+                                         else "tool_timeout" if result.get("_t_timeout") else "")
+                            exec_tools.append({"name": tname, "ok": _t_ok,
+                                               "arguments": targs, "result": _t_result,
+                                               "error": _t_error, "truncated": _t_trunc,
+                                               "elapsed_ms": _t_ms,
+                                               "skipped": _skipped, "skip_reason": _skip_why})
+                            yield {"type": "tool", "status": "done", "name": tname,
+                                   "ok": _t_ok, "result": _t_result, "error": _t_error,
+                                   "truncated": _t_trunc, "latency_ms": _t_ms,
+                                   "call_id": _call_id,
+                                   "skipped": _skipped, "skip_reason": _skip_why,
+                                   # ★ 2026-11-11 三级展示层级（与上方 run 事件同源）
                                    "agent": _ctx_agent, "skill": _ctx_skill,
-                                   "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(_sfn)}
-                        results.extend(_skip_res)
-                    # 工具结果回填后进入下一轮（观察 → 再思考）
-                    if results:
-                        # 2026-09-17 S3：上一轮 tool 内容换为省略标记
-                        # 不可删除该消息——OpenAI 兼容协议要求 tool 与 assistant.tool_calls 成对出现
-                        # ★ 2026-11-13（#57）：**取回的章节正文不可省略**。
-                        #   原实现把上一轮所有 tool 结果清空 ⇒ 模型下一轮看到"上下文里没有
-                        #   第 5/6/7 章正文" ⇒ 又去调 read_attachment_section 取一遍
-                        #   ⇒ 实测同一轮内取章 40+ 次（5→6→7→5.3→6.1→7.1→… 循环），
-                        #   每次都把整章正文再灌一遍上下文 ⇒ 上下文爆炸 + 60s+ 耗时。
-                        #   判据：章节正文是模型**唯一**的正文来源、且**不可再生**
-                        #   （清掉就只能重取）⇒ 保留；其他工具结果照旧省略（它们可再生）。
-                        for _pi in _prev_tool_idx:
-                            if 0 <= _pi < len(messages) and messages[_pi].get("role") == "tool":
-                                if messages[_pi].get("name") == "read_attachment_section":
-                                    continue      # ← 章节正文：保留，不省略
-                                messages[_pi]["content"] = json.dumps(
-                                    {"ok": True, "result": "",
-                                     "note": "前序工具结果已省略——其结论已体现在后续推理中"},
-                                    ensure_ascii=False)
-                        _prev_tool_idx = []
-                        messages.append(pmsg)
-                        messages.extend(results)
-                        for _k in range(len(messages) - len(results), len(messages)):
-                            _prev_tool_idx.append(_k)
-    # P0-按需工具：本轮工具结果全弱相关 → 收敛（跳出循环走兜底流式生成，避免连环调用）
-                        # ⚠️ 分母用**执行数**（`_exec_calls`）而非 `len(results)`：
-                        #    P0-① 为未执行尾部补了 skipped 结果，计入分母会让本该收敛的场景
-                        #    变成"不收敛"，也可能让本该继续的场景误收敛。
-                        # ★ 只有**失败轮**才扣失败预算（成功推进不限制，米爸 2026-10-09）
-                        _lg.charge_failed_round(_round_had_ok)
-                        if weak_count == len(_exec_calls) and weak_count > 0:
-                            _w_delta = f"（{agent_def.name}）本轮工具结果均与任务弱相关，不再继续调用工具，直接基于已有信息组织回答。"
-                            exec_reasoning.append(_w_delta)
-                            yield {"type": "reasoning", "delta": _w_delta, "round": _rnd + 1, "phase": "plan"}
+                                   "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
+                            _weak = bool(result.get("weak")) or ("未检索到" in _t_result) or ("无新冲突" in _t_result)
+                            if _weak:
+                                weak_count += 1
+                            # 2026-09-17 S3：回填给模型的结果单独封顶（此前用未截断的原始结果，长结果被后续每轮重发）
+                            # P1-4（2026-10-02）：封顶升级为 offload——全文落库，模型侧换引用块（可寻址召回）
+                            _t_model = str(result.get("result") or "")
+                            # ★ 2026-11-13（#56 端到端实证）：`read_attachment_section` 用**专用上限**。
+                            #   通用上限 `_TOOL_MODEL_CAP=3000` 对它**天然不适用**：
+                            #   整章正文动辄 5000~7000 字符（第 5 章实测 6024）⇒ 每次取章都被
+                            #   offload 成引用块 ⇒ 模型只拿到一个 id ⇒ 它再去调 tool_result_fetch
+                            #   要全文（而那又被 RBAC 拦）⇒ 最终**看到的是空**
+                            #   ⇒ 得出"第 5/6/7 章正文读不到"的错误结论（实测原话：
+                            #   「全部返回空内容」——其实工具已返回全文，是回填环节丢的）。
+                            #   本工具的语义就是"把这一章的正文给模型" ⇒ 断章取义地截断
+                            #   会直接毁掉它的用途 ⇒ 给足整章上限，且**不 offload**。
+                            _t_cap = _ATT_SECTION_MODEL_CAP if tname == "read_attachment_section" else _TOOL_MODEL_CAP
+                            _t_content, _offloaded = _tool_offload.model_side_content(
+                                tname, result, getattr(self, "_tool_conv_ctx", 0), cap=_t_cap)
+                            if _offloaded:
+                                _tool_offload.ensure_fetch_tool(tools_def, getattr(self, "_tool_whitelist", None))
+                            if _weak:
+                                # 弱相关引导：明确告知 LLM 结果不可用，禁止继续调用工具连环试探
+                                _t_content["hint"] = "该工具结果与当前任务弱相关（或未命中实质内容），请直接基于已有信息回答，不要再调用其他工具。"
+                            results.append({
+                                "tool_call_id": tc.get("id", ""),
+                                "role": "tool",
+                                "name": tname,
+                                "content": json.dumps(_t_content, ensure_ascii=False),
+                            })
+                        # ── P0-①（2026-10-07）为**未执行**的尾部调用补结果 ──
+                        # pmsg 带的是**全部** ptool_calls，若不给尾部补 tool_result，
+                        # 第 4 笔起永久悬空 ⇒ 下一轮 HTTP 400（protocol 硬约束）。
+                        # ⚠️ 必须**在 `if results:` 之前**追加：全被截断时 results 也要非空，
+                        #    否则整轮 tool_calls 一个结果都没有，配对同样缺失。
+                        # ★ 2026-11-12（米爸反馈3，conv 9571 实证 7 连问 / conv 9553 实证 24 连问）：
+                        #   clarify 已记录 ⇒ **立即退出轮次循环，不再补 skip、不再回填 pmsg**。
+                        #   两个原因缺一不可：
+                        #   ① 协议：ask_user 的 tool_call 没有配对 tool_result，回填 pmsg 即悬空
+                        #      ⇒ 下一轮探测 HTTP 400；
+                        #   ② 防重问：results 为空时 `if results:` 整块跳过 ⇒ messages 不更新
+                        #      ⇒ 下一轮 LLM 看到**同一份上下文** ⇒ 换措辞再问一遍（真库实测
+                        #      3s/次、最多烧到 max_tool_rounds=100 轮，每轮还多一条工具留痕）。
+                        if _clarify_req:
                             break
+                        if _skip_calls:
+                            _skip_res = _lproto.skipped_results(_skip_calls)
+                            for _sr in _skip_res:
+                                _sfn = _sr.get("name") or "-"
+                                yield {"type": "tool", "status": "done", "name": _sfn,
+                                       "ok": False, "result": "本轮并发已达上限，未执行",
+                                       "error": "round_tool_limit", "call_id": _sr.get("tool_call_id"),
+                                       "skipped": True, "skip_reason": "round_tool_limit",
+                                       "agent": _ctx_agent, "skill": _ctx_skill,
+                                       "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(_sfn)}
+                            results.extend(_skip_res)
+                        # 工具结果回填后进入下一轮（观察 → 再思考）
+                        if results:
+                            # 2026-09-17 S3：上一轮 tool 内容换为省略标记
+                            # 不可删除该消息——OpenAI 兼容协议要求 tool 与 assistant.tool_calls 成对出现
+                            # ★ 2026-11-13（#57）：**取回的章节正文不可省略**。
+                            #   原实现把上一轮所有 tool 结果清空 ⇒ 模型下一轮看到"上下文里没有
+                            #   第 5/6/7 章正文" ⇒ 又去调 read_attachment_section 取一遍
+                            #   ⇒ 实测同一轮内取章 40+ 次（5→6→7→5.3→6.1→7.1→… 循环），
+                            #   每次都把整章正文再灌一遍上下文 ⇒ 上下文爆炸 + 60s+ 耗时。
+                            #   判据：章节正文是模型**唯一**的正文来源、且**不可再生**
+                            #   （清掉就只能重取）⇒ 保留；其他工具结果照旧省略（它们可再生）。
+                            for _pi in _prev_tool_idx:
+                                if 0 <= _pi < len(messages) and messages[_pi].get("role") == "tool":
+                                    if messages[_pi].get("name") == "read_attachment_section":
+                                        continue      # ← 章节正文：保留，不省略
+                                    messages[_pi]["content"] = json.dumps(
+                                        {"ok": True, "result": "",
+                                         "note": "前序工具结果已省略——其结论已体现在后续推理中"},
+                                        ensure_ascii=False)
+                            _prev_tool_idx = []
+                            messages.append(pmsg)
+                            messages.extend(results)
+                            for _k in range(len(messages) - len(results), len(messages)):
+                                _prev_tool_idx.append(_k)
+        # P0-按需工具：本轮工具结果全弱相关 → 收敛（跳出循环走兜底流式生成，避免连环调用）
+                            # ⚠️ 分母用**执行数**（`_exec_calls`）而非 `len(results)`：
+                            #    P0-① 为未执行尾部补了 skipped 结果，计入分母会让本该收敛的场景
+                            #    变成"不收敛"，也可能让本该继续的场景误收敛。
+                            # ★ 只有**失败轮**才扣失败预算（成功推进不限制，米爸 2026-10-09）
+                            _lg.charge_failed_round(_round_had_ok)
+                            if weak_count == len(_exec_calls) and weak_count > 0:
+                                _w_delta = f"（{agent_def.name}）本轮工具结果均与任务弱相关，不再继续调用工具，直接基于已有信息组织回答。"
+                                exec_reasoning.append(_w_delta)
+                                yield {"type": "reasoning", "delta": _w_delta, "round": _rnd + 1, "phase": "plan"}
+                                break
                 # ★ 2026-10-17（米爸反馈3）：ask_user 澄清收口 —— 落挂起 + 发射卡片 + 结束本次流。
                 #   位置选在「最终生成之前」：此时 ReAct 循环已中断，继续生成只会空转。
                 #   与 1.4/1.5 共用 _persist_clarify + clarify_ask 协议（前端同一套卡片/续跑机制）。

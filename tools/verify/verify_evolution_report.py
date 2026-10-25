@@ -274,10 +274,12 @@ def _A():
     # 只提议不自动执行）；S5 再增 badcase 行动源（BadCase 候选未入库，
     # 一键 apply 走真实收集端点）⇒ 判据从「四源/三段」经「五源/四段」
     # 同步为「六源/四段」——需求变更时判据必须跟着改，否则旧判据持续假红。
+    # P0-b（2026-10-25）：再增 online_eval 行动源（待标注积压/回流停滞，
+    # 一键 promote 走真实端点）⇒「六源」同步为「七源」（本次留注释）。
     keys = [k for k, _l, _f in er.ACTION_SOURCES]
-    check("A6a 行动源注册表六源（P0-a 增 capability/badcase）",
+    check("A6a 行动源注册表七源（P0-a 增 capability/badcase，P0-b 增 online_eval）",
           keys == ["curriculum", "hil", "topology", "safety", "capability",
-                   "badcase"], str(keys))
+                   "badcase", "online_eval"], str(keys))
     scopes = [k for k, _t, _s in er.DIGEST_SECTIONS]
     check("A6b 体检分区四段（P0-a 增 capability）",
           scopes == ["evolve", "guard", "structure", "capability"], str(scopes))

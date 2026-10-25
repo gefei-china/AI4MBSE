@@ -758,4 +758,108 @@ def monitor_badcase_triage(case_id: int, body: dict, conn=Depends(db_session)):
     return res
 
 
+# ── P0-b：在线评测生产回流（采样 → 自动评 → 人工标注 → 转正）──────────────
+# 设计 docs/P0-b-生产回流详细设计-2026-10-25.md §4.3：4 端点全部 dry-run
+# 默认 + apply 显式；标注交互不建新端点（走 hil_confirmations 确认卡，
+# action='eval_label'，online_eval_queue.status 随之更新）。
+@router.get("/api/monitor/online-eval/queue")
+def monitor_online_eval_queue(status: str = "pending", limit: int = 50,
+                              conn=Depends(db_session)):
+    """待标注队列（前端「待标注」卡片数据源）。老库无表返空列表不 500。"""
+    from core import online_eval as oe
+    items, total = oe.queue_rows(conn, status, limit)
+    return {"ok": True, "items": items, "total": total,
+            "summary": oe.queue_summary(conn)}
+
+
+@router.post("/api/monitor/online-eval/sample")
+def monitor_online_eval_sample(body: dict = None, apply: bool = False,
+                               conn=Depends(db_session)):
+    """采样入队（负反馈优先 > 低置信优先 > 随机 5%）。默认 dry-run。"""
+    from core import online_eval as oe
+    do_apply = bool(apply or (body or {}).get("apply"))
+    try:
+        res = oe.sample_candidates(conn, apply=do_apply)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"采样失败: {e}"}, 500)
+    if not do_apply:
+        res["apply_result"] = {"skipped": True,
+                               "reason": "dry-run（人工确认后带 apply=true 入队）"}
+    return res
+
+
+@router.post("/api/monitor/online-eval/auto-eval")
+def monitor_online_eval_auto(body: dict = None, apply: bool = False,
+                             conn=Depends(db_session)):
+    """跑自动评（确定性层，只写 auto_score 建议）。默认 dry-run。"""
+    from core import online_eval as oe
+    do_apply = bool(apply or (body or {}).get("apply"))
+    limit = int((body or {}).get("limit") or 50)
+    try:
+        res = oe.auto_evaluate_pending(conn, limit=limit, apply=do_apply)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"自动评失败: {e}"}, 500)
+    if not do_apply:
+        res["apply_result"] = {"skipped": True,
+                               "reason": "dry-run（人工确认后带 apply=true 写分）"}
+    return res
+
+
+@router.post("/api/monitor/online-eval/promote")
+def monitor_online_eval_promote(body: dict = None, apply: bool = False,
+                                conn=Depends(db_session)):
+    """转正 labeled_confirmed 样本进 dataset（三分流，幂等）。默认 dry-run。
+
+    唯一真写点：只认人工 labeled_confirmed——自动打分永不自动转正
+    （B1 纪律，防 LLM 自循环）；labeled_rejected 不进任何 dataset（B3）。
+    """
+    from core import online_eval as oe
+    do_apply = bool(apply or (body or {}).get("apply"))
+    try:
+        res = oe.promote_confirmed(conn, apply=do_apply)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"转正失败: {e}"}, 500)
+    if not do_apply:
+        res["apply_result"] = {"skipped": True,
+                               "reason": "dry-run（人工确认后带 apply=true 转正）"}
+    return res
+
+
+@router.post("/api/monitor/online-eval/label")
+def monitor_online_eval_label(body: dict = None, conn=Depends(db_session),
+                              user=Depends(current_user)):
+    """人工标注入队（HIL 确认单 action='eval_label'，幂等键防重复标注）。
+
+    前端「待标注」卡片：评分 1-5 + 原因 → 本端点建确认单 → 同一张卡片的
+    「✓ 提交并批准 / ✕ 驳回」走既有 /api/studio/hil-confirmations/{id}/decide
+    （decide 的 eval_label 分支执行状态流转）——**不建第二套交互**（设计纪律）。
+    """
+    from hil_service import HILService
+    from core import online_eval as oe
+    body = body or {}
+    qid = int(body.get("queue_id") or 0)
+    if not qid:
+        return JSONResponse({"ok": False, "error": "queue_id 必填"}, 400)
+    row = oe.get_queue_row(conn, qid)
+    if not row:
+        return JSONResponse({"ok": False, "error": "queue_id=%d 不存在" % qid}, 404)
+    payload = {"queue_id": qid, "score": int(body.get("score") or 0),
+               "reason": str(body.get("reason") or "")[:500]}
+    actor = ""
+    if user:
+        actor = (user.get("display_name") or user.get("username") or "").strip()
+    preview = "在线评测标注 #%d（%s/%s）：评分 %s %s" % (
+        qid, row.get("sample_type") or "", row.get("sample_reason") or "",
+        payload["score"] or "-", payload["reason"][:60])
+    conf = HILService.queue_confirmation(
+        conn, "online-eval", "eval_label", payload, preview=preview,
+        conversation_id=int(row.get("conversation_id") or 0))
+    if not conf:
+        return JSONResponse({"ok": False, "error": "确认单创建失败"}, 500)
+    return {"ok": True, "confirmation_id": conf.get("id"),
+            "idempotent_hit": bool(conf.get("idempotent_hit")),
+            "queue": row, "hint": "批准/驳回走 /api/studio/hil-confirmations/%d/decide"
+                                   % conf.get("id")}
+
+
 _PROC_START = time.time()

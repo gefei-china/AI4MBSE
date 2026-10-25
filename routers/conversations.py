@@ -344,6 +344,19 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
 
     _degrade_base = _degrade_snapshot()
 
+    # ── P0-b（2026-10-25）会话级 trace：M1 挂载点 ──────────────────────
+    # 为什么建在这里（execute_stream 体内之前）：conversation span 要覆盖
+    # **用户感知的端到端**（含 SSE 心跳包装/降级告知），且 flush 需在流尾
+    # finally 用独立连接做（请求级 conn 在流式循环里抢写锁 —— 同 _evbuf 刷库）。
+    # tracer 经 _tracer= 显式传进 execute_stream（跨线程边界不能靠 ContextVar
+    # 继承：pipeline 生成器跑在 sse worker 线程，与事件循环不同上下文）；
+    # execute_stream 入口再 set 进 ContextVar 供 M3/M4/M5 同线程可见。
+    # 开关 services.orch_span._enabled()（orch_span.enabled）→ 全链路零开销。
+    from services.orch_span import ConversationTracer as _ConvTracer
+    _tracer = _ConvTracer(conv_id)
+    _tracer.begin_conversation()
+    _conv_meta = {}   # done 帧里回填 intent/route（闭 span 时写入 meta）
+
     async def event_stream():
         # P1-2：首帧声明重连间隔（SSE 协议字段），并立刻产一帧心跳，
         # 让 nginx/网关在本轮第一个 LLM 请求发出前就看到"连接活跃"。
@@ -386,6 +399,8 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                                      # ★ 2026-10-17：澄清续答单轮化 —— 追加到原 user 消息，不新起一轮
                                      resume_of_user_msg_id=int(body.resume_of_user_msg_id or 0),
                                      resume_append=body.resume_append or "",
+                                     # P0-b：会话级 tracer（M1→M2 显式传参，跨线程边界）
+                                     _tracer=_tracer,
                                      user=user),
                 # P1-2：15 s —— 链路上最小 idle timeout 通常是 nginx 默认 60 s，取 1/4 留余量
                 interval_s=15.0,
@@ -428,6 +443,16 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                                 _orch_run_id[0] = int((_pl.get("data") or {}).get("orch_run_id") or 0)
                             except Exception:
                                 _orch_run_id[0] = 0
+                            # P0-b：done 帧回带 intent/route ⇒ 闭 conversation span 时
+                            # 写进 meta（monitor 页按 key 取；取不到留空，不编造）
+                            try:
+                                _d = _pl.get("data") or {}
+                                for _k in ("intent", "route"):
+                                    _v = str(_d.get(_k) or "").strip()
+                                    if _v:
+                                        _conv_meta[_k] = _v[:60]
+                            except Exception:
+                                pass
                         elif _et in _SER_TYPES:
                             _evbuf.append(raw)
                             if len(_evbuf) > _evbuf_max:
@@ -469,6 +494,17 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             _terminal = True
             yield f"event: error\ndata: {_json.dumps({'message': str(_e)[:200]}, ensure_ascii=False)}\n\n"
         finally:
+            # ── P0-b：会话 span 收口 + 落库（必须早于 _client_gone 早退）──
+            # 客户端断开时本轮 span 同样有归因价值（"用户等到哪一步走的"）；
+            # 且 GeneratorExit 期间禁止 yield，但**不禁止** DB 写（无 yield）。
+            # 判据 _terminal：从未发过 done/error 的流（内部吞异常正常 return）⇒
+            # conversation span 记 error（"哪一步开始错"的归因入口，P0-b 病灶②）。
+            try:
+                _tracer.end_conversation("ok" if _terminal else "error",
+                                         meta=dict(_conv_meta))
+                _tracer.flush()
+            except Exception:
+                pass   # 观测落库失败绝不阻断已完成的主流程
             if _client_gone:
                 return
             # P1-32：终态兜底 —— 流结束却从未发过 done/error ⇒ 必须补一条 error，

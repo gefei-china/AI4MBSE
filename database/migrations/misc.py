@@ -937,3 +937,62 @@ def _migrate_flow_topology_p24(conn):
     conn.commit()
     print("[init_db] 迁移: 画布拓扑台账 flow_topology_variants 已建立"
           "（P2-4，结构体检 + 同构去重；只记录不改拓扑，红线 #6）")
+
+def _migrate_online_eval_tables(conn):
+    """P0-b（2026-10-25）生产回流两表：online_eval_queue + eval_gen_labels。幂等建表。
+
+    设计文档 docs/P0-b-生产回流详细设计-2026-10-25.md §3。五段闭环
+    （采样→自动评→人工转正→三分流→门禁可见）的落点：
+      · online_eval_queue：候选样本队列。三态 pending/labeled_confirmed/
+        labeled_rejected 与 intent_samples 的 suggested/confirmed/rejected
+        同构（防"自动打分自动转正"的自我循环——B1 纪律）。
+      · eval_gen_labels：生成质量转正标签。为什么不起 qrels.jsonl：
+        qrels 是 (query, doc, idx) 三元组，装不下"答案-引用-评分"结构。
+    不走 columns.py：两表均为**新表**（非补列），且 init_db 每次启动都执行
+    CREATE TABLE IF NOT EXISTS ⇒ 老库启动即建，无补列迁移路径。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS online_eval_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sample_type TEXT DEFAULT '',        -- intent | retrieval | generation（转正分流依据）
+        -- 完整 trace 引用（转正时回查原文，不留孤儿标签）：
+        conversation_id INTEGER DEFAULT 0,
+        message_id INTEGER DEFAULT 0,      -- messages.id（生成质量样本的答案体）
+        query_trace_id INTEGER DEFAULT 0,  -- query_trace.id（检索/意图样本）
+        trace_id TEXT DEFAULT '',          -- llm_usage_stats.trace_id（LLM 侧关联，P0-c 已有）
+        -- 采样原因（可解释：为什么这条进了队列）：
+        sample_reason TEXT DEFAULT '',     -- neg_feedback | low_conf | random_5pct
+        reason_detail TEXT DEFAULT '',     -- 具体信号（ux event 名 / top_score 值 / 随机种子序号）
+        -- 自动评估（reference-free，只进"建议"）：
+        auto_score REAL,                   -- 0-1 综合分；NULL=自动评失败（不补零）
+        auto_detail TEXT DEFAULT '{}',     -- JSON：citation_use/grounding/unsupported/latency 分项
+        auto_eval_at TEXT,
+        -- 人工标注（复用 hil 确认卡语义）：
+        status TEXT DEFAULT 'pending',     -- pending | labeled_confirmed | labeled_rejected
+        human_score INTEGER,               -- 1-5 人工评分（NULL=未评）
+        human_reason TEXT DEFAULT '',
+        labeled_by TEXT DEFAULT '',
+        labeled_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_oeq_status ON online_eval_queue(status, sample_type)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_oeq_conv ON online_eval_queue(conversation_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_oeq_trace ON online_eval_queue(trace_id)")
+    # 生成质量转正标签（message_id 关联即可被 eval_generation_quality.evaluate_answers join）
+    c.execute("""CREATE TABLE IF NOT EXISTS eval_gen_labels (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        queue_id INTEGER DEFAULT 0,        -- online_eval_queue.id（外键溯源）
+        message_id INTEGER DEFAULT 0,      -- messages.id（答案体）
+        conversation_id INTEGER DEFAULT 0,
+        human_score INTEGER,               -- 1-5
+        faithfulness INTEGER,              -- 忠实度 1-5（LLM judge 同维度，人工版）
+        citation_ok INTEGER,               -- 引用编号是否与 citations 对齐 0/1
+        reason TEXT DEFAULT '',
+        created_by TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_egl_msg ON eval_gen_labels(message_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_egl_queue ON eval_gen_labels(queue_id)")
+    conn.commit()
+    print("[init_db] 迁移: P0-b 生产回流两表已建立"
+          "（online_eval_queue + eval_gen_labels，五段闭环落点；只记录不自动转正）")

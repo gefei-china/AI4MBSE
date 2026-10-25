@@ -509,6 +509,19 @@ class ToolMixin:
         agent_ctx = getattr(self, "_tool_agent_ctx", None) or {}
         conv_ctx = getattr(self, "_tool_conv_ctx", 0)
         t0 = _time.time()
+        # ── P0-b（2026-10-25）M3：tool span 开点 ───────────────────────
+        # 为什么开在这里而不是 with 包方法体：_exec_tool_call 有 10+ 个出口
+        # （ask_user/权限闸/异常各自 return），逐个补 close 必然漏；而**所有**
+        # 出口都汇入 _log_tool_call（8 个调用点）⇒ 开在此、闭在 _log_tool_call，
+        # 一条不错。t0 传入让 span 窗口覆盖真实执行时长（backdate 校正时钟）。
+        # 无 tracer（编排子任务/开关关）⇒ open 返回 0，闭点 no-op，零开销。
+        try:
+            from services.orch_span import current_tracer as _ct
+            _tracer = _ct()
+            if _tracer is not None:
+                _tracer.open_tool(name, t0=t0)
+        except Exception:
+            pass   # 观测装配失败绝不阻断工具执行
         tool_type = "builtin"
         try:
             # ── ★ 2026-10-17（米爸反馈3）：ask_user 拦截（人在回路澄清）─────────
@@ -1203,6 +1216,19 @@ class ToolMixin:
                 )
         except Exception:
             pass  # 观测落库失败不影响工具执行
+        # P0-b：闭 tool span（sid=0 ⇒ LIFO 弹线程栈顶，即本次工具）。
+        # 放在**方法级**而非 DB try 内：落库失败/异常出口也必须闭 span，否则
+        # 线程栈泄漏 ⇒ 后续工具的 parent 挂到已闭节点上、end 时悬挂。
+        # latency 用真实执行时长（t0 起算），与 tool_call_logs.latency_ms 同源。
+        try:
+            import time as _t2
+            from services.orch_span import current_tracer as _ct
+            _tracer = _ct()
+            if _tracer is not None:
+                _tracer.close_tool(0, ok=bool(result.get("ok")),
+                                   latency_ms=int((_t2.time() - t0) * 1000))
+        except Exception:
+            pass   # 观测收口失败绝不阻断工具执行
 
     def _resolve_req_scope(self, scope_ids, scope_id, scope, agent_def):
         """解析建模范围（文件管理=全局数据，不分分支）。

@@ -65,6 +65,17 @@ GLOBAL_METRICS = (
     "auth_login_failed_1h",
     "rag_low_quality_rate_1h",
     "intent_mismatch_rate",
+    # ── P0-b（2026-10-25）生产回流三指标（R12/R13/R14 告警供数）──
+    # 口径与 core/online_eval.online_eval_metrics 同源（该函数是唯一计算处，
+    # 这里只做发布——不造第二套口径）；缺表 ⇒ 0/None，评估器按规则判。
+    # - eval_backlog_pending：pending 样本数（R12 积压，阈值见 alert_rules 行）。
+    # - eval_promoted_7d：近 7 天 labeled_confirmed 数（R13 回流停滞：=0 且
+    #   backlog>0 才告警——零样本期不误报，规则行带组合条件）。
+    # - eval_auto_coverage：自动评覆盖率（可评样本中 auto_score 非 NULL 占比，
+    #   R14）。**分母为 0 时发布 None 不是 0**（空队列不是 0% 覆盖率）。
+    "eval_backlog_pending",
+    "eval_promoted_7d",
+    "eval_auto_coverage",
 )
 
 _P95_MIN_SAMPLES = 5     # 样本不足不出分位数（避免用 3 个样本算 p95 误导告警）
@@ -203,6 +214,21 @@ def collect_global_metrics(conn) -> dict:
             m["intent_mismatch_rate"] = round((r["mm"] or 0) * 100.0 / c, 1)
     except Exception:
         pass
+
+    # ── P0-b（2026-10-25）生产回流三指标：委托 core/online_eval 唯一计算处 ──
+    try:
+        from core.online_eval import online_eval_metrics as _oe_metrics
+        _oem = _oe_metrics(conn)
+        m["eval_backlog_pending"] = float(_oem.get("eval_backlog_pending") or 0)
+        m["eval_promoted_7d"] = float(_oem.get("eval_promoted_7d") or 0)
+        _cov = _oem.get("eval_auto_coverage")
+        # 分母为 0 ⇒ None（空队列 ≠ 0% 覆盖；评估器跳过 None，见 evaluate_once）
+        m["eval_auto_coverage"] = (None if _cov is None
+                                   else round(float(_cov) * 100.0, 1))
+    except Exception:
+        # 缺表/供数失败 ⇒ 覆盖率同样发布 None（0% 会让 R14「< 阈值」假告警；
+        # 两个计数指标回落 0 是安全的：R12 是 > 判据、R13 需 backlog>0 组合）
+        m["eval_auto_coverage"] = None
 
     # ── P2-1 misevolution 安全回归信号（红线 #5）─────────────────────────
     # 口径全部委托 core/misevolution（只读引擎，窗口/阈值走其配置组）；本处

@@ -7,11 +7,13 @@ latency），agent_tasks 只有子任务维度（没有 plan/summary/reflection/
 span 树（orch_run_spans + services/orch_span.py）补这一格；本门禁钉住它不退化。
 
 锁定的不变式：
-    S1  建表契约：orch_run_spans DDL + 两索引在 schema.py（新老库都走
+    S1  建表契约：orch_run_spans DDL + 索引在 schema.py（新老库都走
         CREATE TABLE IF NOT EXISTS，无需补列迁移）
-    S2  服务契约：SpanCollector 开/关/落库三件套 + run_trace 装配 + 七类 kind 常量
-        （P1 起第七类 replan = 重规划决策记录，含 action=none；其插桩与消费
-         由 tools/verify/verify_replan_p1.py 单独断言，本门禁只钉常量与 DDL 注释）
+    S2  服务契约：SpanCollector 开/关/落库三件套 + run_trace 装配 + 十二类 kind 常量
+        （编排七类 run/plan/task/summary/reflection/views/replan：P1 起第七类
+         replan = 重规划决策记录，含 action=none，其插桩与消费由
+         tools/verify/verify_replan_p1.py 单独断言，本门禁只钉常量与 DDL 注释；
+         会话五类 conversation/turn/tool/rag/llm：P0-b 生产回流，见下方 P 段）
     S3  ★ 插桩接线（本功能真正的失效模式是"建好没人用"）：
         · 包装层 _stream_orchestrated_traced 存在，且 body **仍叫**
           _stream_orchestrated_flow（三门禁按名断言它，见 S3d 反向证明）
@@ -20,6 +22,16 @@ span 树（orch_run_spans + services/orch_span.py）补这一格；本门禁钉�
         · task 与后三段（summary/reflection/views）都挂 run 下（parent=_run_sid）——
           后段与 run 并列成根会把 total_ms 双算（e2e 实测 777.8s vs 墙钟 648.3s）
         · 三个编排调用点全部走包装层（漏一个 = 那条路径的编排没有 trace）
+    P   ★ P0-b 会话级 trace 插桩（M1-M5 五个挂载点，2026-10-25）：
+        会话直答主路径（/chat/stream 端到端）此前的盲区：只有编排流量有 span。
+        判据按**真实调用链**定（不是按设计想象）：M1 路由器建 tracer + 流尾 finally
+        flush；M2 execute_stream 收 _tracer 参数 set 进 ContextVar + ReAct 轮 with
+        _turn_cm；M3 tool 开在 _exec_tool_call 入口（10+ 出口的公共前躯）、闭在
+        _log_tool_call（8 个出口的公共尾，LIFO 弹栈）；M4 rag 开在 retrieve 入口
+        （AST 验证单 return）、闭在 return 前；M5 llm 开在 chat() 入口（五类出口
+        公共前躯）、闭在 _record_usage 的 finally（流式/非流式唯一记账点）。
+        每个挂载点断言"开点与闭点成对存在"——只开不闭 = flush 只能按 unclosed
+        收口（token/latency 归属丢失），只闭不开 = 永远 no-op。
     S4  查询端点：GET /runs/{id}/trace 存在且过 _own_run 归属门（span 含
         task_key/错误详情，属批次内容的一部分，不能裸奔）
     S5  前端接线：编排卡有「⏱ 执行轨迹」入口 + 拉取渲染函数（只改后端不改编
@@ -31,7 +43,7 @@ span 树（orch_run_spans + services/orch_span.py）补这一格；本门禁钉�
     U4  ★ run_trace 树形装配：根/子归属、by_kind 聚合、tasks 成本聚合
     U5  无 span 的老批次：空树 + note（200 语义，不是错误）
     U6  线程安全：并发开/关不丢不重（task span 跑在 worker 线程）
-    U7  总开关 enabled=False：open 恒 0、flush 零行（可降级）
+    U7 总开关 enabled=False：open 恒 0、flush 零行（可降级）
     M1  变异自证：flush 丢 parent ⇒ 树形断言必须抓住（否则 S3/U4 形同虚设）
     M2  变异自证：未闭合不标 error ⇒ U3a 断言必须抓住
     M3  变异自证：删 task 插桩行 ⇒ S3e 按 kind 断言必须抓住（否则 S3 形同虚设）
@@ -61,6 +73,11 @@ SCHEMA_SRC = os.path.join(ROOT, "database", "schema.py")
 SPAN_SRC = os.path.join(ROOT, "services", "orch_span.py")
 STREAM_SRC = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
 ROUTER_SRC = os.path.join(ROOT, "routers", "orchestration.py")
+# P0-b（2026-10-25）会话级 trace 的四个新插桩文件（M1 在 conversations.py）
+CONV_SRC = os.path.join(ROOT, "routers", "conversations.py")
+TOOLS_SRC = os.path.join(ROOT, "agent", "pipeline_parts", "tools.py")
+RAG_SRC = os.path.join(ROOT, "agent", "rag.py")
+LLM_SRC = os.path.join(ROOT, "llm", "__init__.py")
 CARDS_JS = os.path.join(ROOT, "static", "js", "mods", "06-cards.js")
 CHAT_JS = os.path.join(ROOT, "static", "js", "mods", "03-chat.js")
 
@@ -87,10 +104,11 @@ def t_static():
     schema = _read(SCHEMA_SRC)
     ok = _rec("S1a schema 含 orch_run_spans 建表",
               "CREATE TABLE IF NOT EXISTS orch_run_spans" in schema)
-    ok &= _rec("S1b kind 注释在 DDL 里（口径可查；P1 起含 replan 第七类）",
-               "run | plan | task | summary | reflection | views | replan" in schema)
-    ok &= _rec("S1c 两个索引齐备",
-               schema.count("idx_ors_") >= 2)
+    ok &= _rec("S1b kind 注释在 DDL 里（口径可查；编排七类 + P0-b 会话五类）",
+               "run | plan | task | summary | reflection | views | replan" in schema
+               and "conversation | turn | tool | rag | llm" in schema)
+    ok &= _rec("S1c 三个索引齐备（conv_run/time + P0-b kind_time）",
+               schema.count("idx_ors_") >= 3 and "idx_ors_kind_time" in schema)
     ok &= _rec("S1d 新表无需补列迁移（CREATE TABLE IF NOT EXISTS 覆盖老库）",
                "orch_run_spans" not in
                _read(os.path.join(ROOT, "database", "migrations", "columns.py")))
@@ -99,14 +117,22 @@ def t_static():
     ok &= _rec("S2a SpanCollector 三件套（open/close/flush）",
                all(("def " + m) in span for m in ("open", "close", "flush")))
     ok &= _rec("S2b run_trace 装配函数存在", "def run_trace" in span)
-    ok &= _rec("S2c 七类 kind 常量齐备（P1 起 + replan 重规划决策记录）",
+    ok &= _rec("S2c 编排七类 kind 常量齐备（P1 起 + replan 重规划决策记录）",
                all(('KIND_%s = "%s"' % (k.upper(), k)) in span
                    for k in ("run", "plan", "task", "summary", "reflection",
                              "views", "replan")))
+    ok &= _rec("S2c2 P0-b 会话五类 kind 常量齐备（生产回流 §3.2）",
+               all(('KIND_%s = "%s"' % (k.upper(), k)) in span
+                   for k in ("conversation", "turn", "tool", "rag", "llm")))
     ok &= _rec("S2d 配置总开关 orch_span.enabled（可降级）",
                '"orch_span", "enabled"' in span)
     ok &= _rec("S2e 线程锁（task span 在 worker 线程开闭）",
                "threading.Lock" in span)
+    ok &= _rec("S2f ConversationTracer + ContextVar 跨层通道（M3/M4/M5 经此拿 tracer）",
+               "class ConversationTracer" in span
+               and 'ContextVar("conv_tracer"' in span
+               and all(("def " + m) in span for m in
+                       ("current_tracer", "set_current_tracer", "reset_current_tracer")))
 
     stream = _read(STREAM_SRC)
     ok &= _rec("S3a 包装层 _stream_orchestrated_traced 存在",
@@ -171,6 +197,41 @@ def t_static():
                        (r.stderr or "")[:200])
     else:
         _rec("S6 JS 语法（无 node 环境，按惯例 SKIP）", True, kind=VACUOUS)
+
+    # ── P. P0-b 会话级 trace 插桩（M1-M5）─────────────────────────────
+    # 判据口径见文件头 P 段：按**真实调用链的公共前躯/公共尾**断言开闭成对，
+    # 不按设计想象。挂载点被删/被挪 = 会话路径重新变瞎（编排有 trace、直答没有）。
+    print("\n=== P. P0-b 会话级 trace 插桩 ===")
+    conv = _read(CONV_SRC)
+    ok &= _rec("P1a M1 路由器建 ConversationTracer（会话根 span）",
+               "ConversationTracer as _ConvTracer" in conv
+               and "_ConvTracer(conv_id)" in conv)
+    ok &= _rec("P1b M1 begin_conversation + 流尾 finally flush（旁路不阻断）",
+               "_tracer.begin_conversation()" in conv
+               and "_tracer.flush()" in conv)
+    ok &= _rec("P1c M1 done 帧回填 intent/route 后闭 conversation span",
+               "_tracer.end_conversation(" in conv)
+    ok &= _rec("P2a M2 execute_stream 收 _tracer 参数（跨线程显式传参）",
+               "_tracer=None):" in stream)
+    ok &= _rec("P2b M2 worker 线程里 set_current_tracer（ContextVar 不跨线程继承）",
+               "set_current_tracer as _set_ct" in stream and "_set_ct(_tracer)" in stream)
+    ok &= _rec("P2c M2 ReAct 轮包 with _turn_cm（_turn_cm 定义 + 调用点）",
+               "def _turn_cm(" in stream and "with _turn_cm(_tracer," in stream)
+    tools = _read(TOOLS_SRC)
+    ok &= _rec("P3a M3 tool span 开在 _exec_tool_call 入口（10+ 出口公共前躯）",
+               "_tracer.open_tool(name, t0=t0)" in tools)
+    ok &= _rec("P3b M3 tool span 闭在 _log_tool_call（8 出口公共尾，LIFO 弹栈）",
+               "_tracer.close_tool(0," in tools)
+    rag = _read(RAG_SRC)
+    ok &= _rec("P4a M4 rag span 开在 retrieve 入口",
+               "_rag_tracer.open_rag(t0=t0)" in rag)
+    ok &= _rec("P4b M4 rag span 闭在唯一 return 前（AST 验证单出口）",
+               "_rag_tracer.close_rag(_rag_sid," in rag)
+    llm = _read(LLM_SRC)
+    ok &= _rec("P5a M5 llm span 开在 chat() 入口（五类出口公共前躯）",
+               "_tracer.open_llm(model_name, kwargs.get(\"_intent\", \"\"), t0=t0)" in llm)
+    ok &= _rec("P5b M5 llm span 闭在 _record_usage 的 finally（记账成败解耦）",
+               "_tracer.close_llm(" in llm and "finally:" in llm)
     return ok
 
 
@@ -222,11 +283,11 @@ def t_unit():
                            " AND name='orch_run_spans'").fetchone()
             idx = c0.execute(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
-                " AND name IN ('idx_ors_conv_run','idx_ors_time')").fetchone()[0]
+                " AND name IN ('idx_ors_conv_run','idx_ors_time','idx_ors_kind_time')").fetchone()[0]
         finally:
             c0.close()
         ok = _rec("U1a init_db 新库建出 orch_run_spans 表", t is not None)
-        ok &= _rec("U1b 两索引随表创建", idx == 2, "idx=%d" % idx)
+        ok &= _rec("U1b 三索引随表创建（+P0-b idx_ors_kind_time）", idx == 3, "idx=%d" % idx)
     except Exception as e:
         ok = _rec("U1 init_db 临时库执行（含二次幂等）", False, str(e)[:150])
     finally:
@@ -332,6 +393,78 @@ def t_unit():
         c4 = OS.SpanCollector(enabled=False)
         ok &= _rec("U7a 关闭时 open 恒 0", c4.open("run", "x") == 0)
         ok &= _rec("U7b 关闭时 flush 零行", c4.flush(conn) == 0)
+
+        # U8 P0-b ConversationTracer 往返（会话五类 + 跨层通道 + LIFO + backdate）
+        # 为什么必须单测而不只靠静态 P 段：P 段只证明"代码在"，U8 证明
+        # "开→闭→落库"这条路真的通（父子映射/latency/兜底语义与编排侧同构）。
+        t8 = OS.ConversationTracer(777, enabled=True)
+        ok &= _rec("U8a 无 tracer 线程 current_tracer()=None（编排线程不误继承）",
+                   OS.current_tracer() is None)
+        t8.begin_conversation({"intent": "kb_qa"})
+        _t_before = time.time() - 2.0
+        with t8.turn(1):
+            rsid = t8.open_rag(t0=_t_before)
+            t8.close_rag(rsid, hit_count=5, top_score=0.82, latency_ms=320)
+            t8.open_llm("m1", "kb_qa", t0=time.time() - 0.5)
+            t8.close_llm(trace_id="tr-1", tokens_in=1200, tokens_out=80,
+                         latency_ms=510)
+            t8.open_tool("kb_search", t0=time.time() - 0.15)
+            # 嵌套：工具执行中再发起 LLM（内层先开后闭，LIFO）
+            t8.open_llm("m1", "tool_summary", t0=time.time() - 0.05)
+            t8.close_llm(trace_id="tr-1", tokens_in=300, tokens_out=40,
+                         latency_ms=60)
+            t8.close_tool(0, ok=True, latency_ms=170)
+        t8.end_conversation("ok")
+        n8 = t8.flush(conn)
+        conn.commit()
+        rows8 = [dict(r) for r in conn.execute(
+            "SELECT * FROM orch_run_spans WHERE conversation_id=777 ORDER BY id")]
+        ok &= _rec("U8b flush 写入 6 行（conv+turn+rag+2llm+tool）", n8 == 6, "n=%d" % n8)
+        _kinds8 = [r["kind"] for r in rows8]
+        ok &= _rec("U8c 会话五类齐全",
+                   set(_kinds8) == {"conversation", "turn", "tool", "rag", "llm"},
+                   str(sorted(set(_kinds8))))
+        _by8 = {r["kind"] + str(i): r for i, r in enumerate(rows8)}
+        ok &= _rec("U8d 扁平树：tool/rag/llm 均挂 turn 下（设计 §3.2）",
+                   rows8[1]["kind"] == "turn"
+                   and all(r["parent_id"] == rows8[1]["id"]
+                           for r in rows8 if r["kind"] in ("tool", "rag", "llm")))
+        ok &= _rec("U8e conversation 根 parent_id=0",
+                   rows8[0]["parent_id"] == 0)
+        ok &= _rec("U8f backdate 生效：rag started_at 回填到 t0（-2s）",
+                   rows8[2]["started_at"] ==
+                   time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(_t_before)),
+                   rows8[2]["started_at"])
+        _llm_rows = [r for r in rows8 if r["kind"] == "llm"]
+        # 按 intent 查找而非行序：表按 open 排序（外层先开在前），而行序脆弱
+        _llm_meta = {json.loads(r["meta_json"]).get("intent"): json.loads(r["meta_json"])
+                     for r in _llm_rows}
+        ok &= _rec("U8g LIFO 闭对：内层 tool_summary tokens=300、外层 kb_qa 1200 各自归位",
+                   _llm_meta.get("tool_summary", {}).get("tokens_in") == 300
+                   and _llm_meta.get("kb_qa", {}).get("tokens_in") == 1200,
+                   str({k: v.get("tokens_in") for k, v in _llm_meta.items()}))
+        ok &= _rec("U8h tool latency=170 / rag latency=320（真实执行时长）",
+                   json.loads([r for r in rows8 if r["kind"] == "tool"][0]["meta_json"]).get("latency_ms") == 170
+                   and json.loads(rows8[2]["meta_json"]).get("latency_ms") == 320)
+        ok &= _rec("U8i failures 为空（全链路无静默失败）", not t8.failures,
+                   ";".join(t8.failures[:2]))
+
+        # U8j 未闭 rag（retrieve 中途异常）→ flush 按 error 收口不静默
+        t8b = OS.ConversationTracer(778, enabled=True)
+        t8b.begin_conversation()
+        t8b.open_rag()
+        t8b.flush(conn)
+        conn.commit()
+        _leak = conn.execute("SELECT status, meta_json FROM orch_run_spans "
+                             "WHERE conversation_id=778 AND kind='rag'").fetchone()
+        ok &= _rec("U8j 漏闭 rag 按 error + unclosed_at_flush 收口",
+                   _leak["status"] == "error"
+                   and json.loads(_leak["meta_json"]).get("note") == "unclosed_at_flush")
+
+        # U8k 关闭态 ConversationTracer 全 no-op（总开关降级路径）
+        t8c = OS.ConversationTracer(0, enabled=False)
+        ok &= _rec("U8k 关闭态：begin=0 / flush=0（零开销降级）",
+                   t8c.begin_conversation() == 0 and t8c.flush(conn) == 0)
         conn.commit()
     finally:
         try:
