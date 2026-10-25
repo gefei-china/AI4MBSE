@@ -53,6 +53,7 @@ _SETTINGS_DEFAULTS = {
     "window_days": 7,       # 本周窗口（天）；环比对照窗口为上一个等长窗口
     "max_actions": 50,      # 单次返回的待决策条目上限（防长尾注水）
     "max_detail": 8,        # 每段明细条目上限
+    "longtail_days": 90,    # P0-a：能力长尾判定天数（active 且零调用超过该天数）
 }
 
 VERDICT_CLEAN = "clean"
@@ -81,7 +82,7 @@ def get_settings(overrides: Optional[dict] = None) -> dict:
     try:
         if not _c.as_bool("evolution_report", "enabled", True):
             s["enabled"] = False
-        for k in ("window_days", "max_actions", "max_detail"):
+        for k in ("window_days", "max_actions", "max_detail", "longtail_days"):
             v = _c.get("evolution_report", k)
             if v is None:
                 continue
@@ -170,6 +171,118 @@ def _delta(cur: Optional[int], prev: Optional[int]) -> Optional[int]:
 # ══════════════════════════════════════════════════════════════
 # ① actions —— 要你决策的（唯一需要人动手的一段）
 # ══════════════════════════════════════════════════════════════
+def _act_capability(conn: sqlite3.Connection, s: dict) -> list:
+    """P0-a 能力长尾与零调度：长尾能力（>90 天零调用）+ 零调度 Agent。
+
+    **只提议不自动执行**（延续本产品自进化纪律）：清单由人决定停用/下架，
+    系统不碰任何 status。无端点 ⇒ 显式 not_actionable_reason，不假装能点。
+    """
+    if not _tbl_exists(conn, "capability_registry"):
+        return []
+    from core import capability_registry as cr
+    out = []
+    for it in cr.longtail_capabilities(conn, days=int(s.get("longtail_days", 90))):
+        out.append({
+            "source": "capability",
+            "source_label": "能力长尾",
+            "id": it["capability_id"],
+            "title": "%s（%s）" % (it.get("display_name") or it["capability_id"],
+                                 it.get("kind") or ""),
+            "detail": "自 %s 创建后零调用。建议人工决定：停用 / 下架 / 保留观察。"
+                      % (it.get("created_at") or "（时间未知）"),
+            "meta": {"capability_id": it["capability_id"], "kind": it.get("kind"),
+                     "version": it.get("version"), "publisher": it.get("publisher"),
+                     "created_at": it.get("created_at")},
+            "action": None,
+            "not_actionable_reason": "停用/下架能力会改动 Agent 可用面，需人工决定；"
+                                     "系统只列清单，不自动执行（自进化纪律）",
+        })
+    for ag in cr.zero_dispatch_agents(conn):
+        out.append({
+            "source": "capability",
+            "source_label": "零调度 Agent",
+            "id": "agent:%s" % ag.get("name"),
+            "title": "%s（%s）" % (ag.get("name"), ag.get("status") or ""),
+            "detail": "从未被调度过（agent_tasks 零记录）。建议人工决定：启用 / 退役 / 保留观察。",
+            "meta": {"agent_id": ag.get("id"), "name": ag.get("name"),
+                     "status": ag.get("status")},
+            "action": None,
+            "not_actionable_reason": "Agent 退役是组织决策，需人工决定；系统只列清单",
+        })
+    return out
+
+
+def _act_badcase(conn: sqlite3.Connection, s: dict) -> list:
+    """P0-a BadCase 候选未入库：dry-run 计数 + 一键 apply（真端点）。
+
+    与 `_act_capability`（只列清单、显式不能点）的区别：收集端点**真实存在**
+    （`POST /api/monitor/badcases/collect`，body `{"apply": true}`，
+    见 routers/monitor.py:728-744）⇒ 这里给真按钮。端点默认 dry-run，
+    必须显式带 apply=true 才写库——不是系统自动执行，是人点一下
+    （人工关口纪律，与自进化「只建议不自动执行」同源）。
+
+    ★本函数只调 apply=False 的 dry-run 做计数，**不写任何库**
+      （周报只读铁律，A2 静态断言对此锁定）。
+    """
+    from core import badcase as bc
+    try:
+        res = bc.collect_bad_cases(conn, apply=False)
+    except Exception as e:                                        # noqa: BLE001
+        return [{
+            "source": "badcase", "source_label": "BadCase 入库", "id": None,
+            "title": "BadCase 采集失败", "detail": "%s: %s" % (type(e).__name__, e),
+            "meta": {}, "action": None, "not_actionable_reason": "采集未完成",
+        }]
+    if not res.get("enabled"):
+        return []
+    plan = res.get("plan") or {}
+    new, recur, reopen = (int(plan.get(k, 0) or 0)
+                          for k in ("new", "recur", "reopen"))
+    pending = new + recur + reopen
+    if pending <= 0:
+        return []
+    open_cnt = bc.open_badcase_count(conn)
+    by_kind = (res.get("summary") or {}).get("by_kind") or {}
+    kinds = "；".join("%s %d 个主题" % (v.get("label") or k, int(v.get("subjects", 0)))
+                     for k, v in by_kind.items()) or "（无明细）"
+    detail = ("%s；%d 天窗口内共 %d 起事件；当前 open %d 条。"
+              "点「一键入库」写入 bad_cases（收集端点默认 dry-run，"
+              "此按钮显式带 apply=true，人工确认后才落库）。"
+              % (kinds, int(res.get("window_days") or 0),
+                 int((res.get("summary") or {}).get("total_events", 0) or 0),
+                 open_cnt))
+    if not _tbl_exists(conn, "bad_cases"):
+        # 有候选但台账表不在 ⇒ 按钮点了也写不进去，必须显式说清堵在哪
+        return [{
+            "source": "badcase", "source_label": "BadCase 入库",
+            "id": "badcase:collect",
+            "title": "%d 条 BadCase 候选未入库，但 bad_cases 表尚未建立"
+                     % pending,
+            "detail": detail,
+            "meta": {"plan": plan, "open_count": open_cnt,
+                     "window_days": res.get("window_days")},
+            "action": None,
+            "not_actionable_reason": "bad_cases 表不存在（迁移未执行），"
+                                     "无法写入；先执行数据库迁移",
+        }]
+    return [{
+        "source": "badcase",
+        "source_label": "BadCase 入库",
+        "id": "badcase:collect",
+        "title": "%d 条 BadCase 候选未入库（新 %d / 复现 %d / 重开 %d）"
+                 % (pending, new, recur, reopen),
+        "detail": detail,
+        "meta": {"plan": plan, "open_count": open_cnt,
+                 "window_days": res.get("window_days"),
+                 "total_events": (res.get("summary") or {}).get("total_events", 0)},
+        # ★真闭环：收集端点已存在，一键 apply 由人确认后落库
+        "action": {"method": "POST",
+                   "path": "/api/monitor/badcases/collect",
+                   "label": "一键入库",
+                   "payload": {"apply": True}},
+    }]
+
+
 def _act_curriculum(conn: sqlite3.Connection, s: dict) -> list:
     """任务提案：有 decide 端点 ⇒ 真可一键裁决。"""
     if not _tbl_exists(conn, "curriculum_items"):
@@ -320,6 +433,8 @@ ACTION_SOURCES = (
     ("hil", "人工确认点", _act_hil),
     ("topology", "画布结构", _act_topology),
     ("safety", "安全信号", _act_safety),
+    ("capability", "能力长尾", _act_capability),
+    ("badcase", "BadCase 入库", _act_badcase),
 )
 
 
@@ -467,6 +582,35 @@ def _metrics_for(conn: sqlite3.Connection, s: dict, scope: str) -> list:
                                 "拓扑体检未产出结果")))
         out.append(("blocker 缺陷", _stock(_dim(ov, "blocker_defects"),
                                    "拓扑体检未产出结果")))
+    elif scope == "capability":
+        # P0-a 能力度量（capability_registry 统一注册处）：
+        # 调用总量走环比（流式），长尾/零调度走存量（_stock——环比无意义：
+        # 上周不存在的能力这周出现了，不是"新增 7 个长尾"）。
+        if _tbl_exists(conn, "capability_registry"):
+            out.append(("能力调用（本周）", _pair(
+                conn,
+                "SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=?",
+                "SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=? AND created_at<?",
+                int(s["window_days"]))))
+            out.append(("零调用能力", _stock(_count(
+                conn,
+                "SELECT COUNT(*) FROM capability_registry "
+                "WHERE status='active' AND call_count=0"),
+                "注册处尚未建立")))
+            out.append(("零调度 Agent", _stock(_count(
+                conn,
+                "SELECT COUNT(*) FROM (SELECT a.id FROM agents a "
+                "LEFT JOIN agent_tasks t ON t.agent_id=a.name "
+                "GROUP BY a.id HAVING COUNT(t.id)=0)"),
+                "agents 表不可用")))
+            out.append(("长尾能力（>%d天）" % int(s.get("longtail_days", 90)), _stock(_count(
+                conn,
+                "SELECT COUNT(*) FROM capability_registry WHERE status='active' "
+                "AND call_count=0 AND julianday('now')-julianday(created_at)>?",
+                (int(s.get("longtail_days", 90)),)),
+                "注册处尚未建立")))
+        else:
+            out.append(("能力注册处", _stock(None, "capability_registry 表尚未建立")))
     return [{"name": n, **d} for n, d in out]
 
 
@@ -475,6 +619,7 @@ DIGEST_SECTIONS = (
     ("evolve", "进化留痕", "系统改了哪些东西、记住了哪些死路"),
     ("guard", "变更守卫", "改动之前有没有被拦下来、有没有等你点头"),
     ("structure", "结构欠账", "画布层面的重复与缺陷"),
+    ("capability", "能力度量", "五类能力的调用、长尾与零调度（P0-a 统一注册处）"),
 )
 
 

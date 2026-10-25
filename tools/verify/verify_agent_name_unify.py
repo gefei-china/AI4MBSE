@@ -51,7 +51,15 @@ from repositories.agent_repo import AgentRepo  # noqa: E402
 from routers.studio_parts.agents import _rename_warnings  # noqa: E402
 
 API = os.environ.get("MBSE_API", "http://127.0.0.1:8000")
-NODE = os.environ.get("MBSE_NODE", r"C:\Users\gefei\.workbuddy\binaries\node\versions\22.22.2-3\node.exe")
+# ★2026-10-24：硬编码的 node 版本目录会随 WorkBuddy 升级漂移（22.22.2-3 →
+#   22.22.2-6 实测 FileNotFoundError，门禁整体 exit 1）⇒ 三级解析：
+#   环境变量 > 硬编码路径（存在才用）> PATH 上的 node。没有 node 时该段
+#   子进程断言自然失败并说清原因，而不是以一个不存在的路径崩掉。
+_NODE_HINT = r"C:\Users\gefei\.workbuddy\binaries\node\versions\22.22.2-3\node.exe"
+NODE = os.environ.get("MBSE_NODE") or (_NODE_HINT if os.path.exists(_NODE_HINT) else "")
+if not NODE:
+    import shutil as _sh
+    NODE = _sh.which("node") or _sh.which("node.exe") or ""
 PASS, FAIL = [], []
 CUR = FAIL
 MF = []

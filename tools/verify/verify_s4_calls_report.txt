@@ -26,7 +26,7 @@ PASS 1.11 _clarify_detect 签名含 forced_intent/skill_name 形参
 PASS 2.1 knowledge_engine.hybrid_search 默认 top_k == 4
 PASS 2.2 hybrid_search 旧默认 top_k=5 已不存在
 PASS 2.2b 同文件其它检索函数（向量 _vector.search / BM25Engine.search）未被改动
-PASS 2.3 四层旋钮齐备且分层约束成立：recall_k >= top_k >= rerank_max_candidates >= inject_k  | recall_k=20 top_k=20 rerank_max_candidates=20 inject_k=3
+PASS 2.3 四层旋钮齐备且分层约束成立：recall_k >= top_k >= rerank_max_candidates >= inject_k  | recall_k=20 top_k=20 rerank_max_candidates=10 inject_k=3
 PASS 2.3b 消费侧走配置读取（不硬编码 top_k）
 PASS 2.4 最终注入条数由 inject_k 控制（消费侧 chunk_hits[:inject_k]）
 PASS 2.4b inject_k 兜底默认仍为 3（配置缺失时不放大注入量）

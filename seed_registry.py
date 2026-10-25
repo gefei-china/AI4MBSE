@@ -112,7 +112,7 @@ def seed_sysml_check_tools(conn: sqlite3.Connection) -> dict:
 
 def seed_all(conn: sqlite3.Connection) -> dict:
     """统一种子编排：内置工具 → 系统管理 → HTTP 集成 → 技能包 → 智源旧注册 → 图数据库工具
-    → SysML 校验工具+技能。
+    → SysML 校验工具+技能 → **能力统一注册处全量对齐（P0-a）**。
 
     main.py lifespan 只调用本函数（替代原先分散的 sysadmin_tools.seed 调用）。
     单项失败不阻断其余（容错），返回各源结果字典供日志审计。
@@ -125,11 +125,76 @@ def seed_all(conn: sqlite3.Connection) -> dict:
     results.update(seed_zhiyuan_legacy(conn))
     results.update(seed_graph_db_tools(conn))
     results.update(seed_sysml_check_tools(conn))
+    # ── P0-a（2026-10-24）：capability_registry 全量对齐放在所有能力注册之后 ──
+    # 顺序约束：必须先有源表行、后投影。reconcile 幂等，每次启动重跑无副作用。
+    try:
+        from core import capability_registry as _cr
+        results.update({"capability_registry": _cr.reconcile_capability_registry(conn)})
+        results.update({"capability_backfill": _cr.backfill_capability_ids(conn)})
+    except Exception as e:
+        results.update({"capability_registry": f"skip({e})"})
+    # ── P0-a：告警规则预置（10+1 条，metric 白名单制，幂等按 name 判存在）──
+    results.update({"alert_rules": seed_alert_rules(conn)})
     try:
         conn.commit()
     except Exception:
         pass
     return results
+
+
+# ── P0-a 告警规则预置（2026-10-24，设计见 docs/P0-a-度量收口详细设计 §3.4）──
+# 引擎是 metric 白名单制：规则行只是数据，metric 必须在
+# core/alert_evaluator.GLOBAL_METRICS 且有供数，否则永不触发也永不报错
+# （"假实现"同型缺陷）。门禁 verify_capability_registry 断言这条不变式。
+_ALERT_RULES = [
+    # (name, metric, operator, threshold, level, status)
+    ("登录失败突增（1h≥5次）", "auth_login_failed_1h", ">=", 5, "warning", "active"),
+    ("成本突增（今日超昨日同期3倍）", "cost_today_vs_yday", ">=", 3, "warning", "active"),
+    ("LLM 延迟劣化（1h P95>30s）", "llm_p95_latency_1h", ">", 30000, "warning", "active"),
+    ("审计链破损", "audit_chain_ok", "<", 1, "critical", "active"),
+    ("BadCase 积压（open≥5）", "badcase_open_count", ">=", 5, "warning", "active"),
+    ("身份拒绝/认证异常突增（1h≥20次）", "auth_failed_1h", ">=", 20, "warning", "active"),
+    ("LLM 失败率突增（1h>5%）", "llm_fail_rate_1h", ">", 5, "warning", "active"),
+    ("编排批次停滞（非终态>30min）", "orch_stale_runs", ">=", 1, "warning", "active"),
+    ("HIL 确认队列积压（超24h>3）", "hil_pending_old24h", ">", 3, "warning", "active"),
+    ("检索质量下滑（低质占比>40%/h，代理口径）", "rag_low_quality_rate_1h", ">", 40, "warning", "active"),
+    # 代理口径尚未校准（confirmed 集误判率≈68%），建而 paused——在位不造噪音，
+    # P0-b 意图评测落库后校准阈值再激活。
+    ("意图误判上升（误判率>50%，代理口径，待校准）", "intent_mismatch_rate", ">", 50, "warning", "paused"),
+]
+
+# 存量规则修正（一次性，幂等按旧 name 匹配）：原"登录失败突增（1h≥3次）"
+# 的 metric=auth_failed_1h 实际 99.8% 统计的是身份拒绝（auth_identity_reject
+# 491 条 vs auth_login failed 1 条）⇒ 更名+调阈值，语义归位给新的
+# auth_login_failed_1h（真·登录失败，R1）。
+_ALERT_RULE_LEGACY_FIX = (
+    "登录失败突增（1h≥3次）",           # 旧 name（匹配用）
+    "身份拒绝/认证异常突增（1h≥20次）",  # 新 name
+    20,                                  # 新阈值（原 3 太灵：38 条告警全它）
+)
+
+
+def seed_alert_rules(conn: sqlite3.Connection) -> dict:
+    """P0-a：预置 11 条告警规则（10 条体系化 + 1 条存量口径修正）。幂等。"""
+    try:
+        old_name, new_name, new_th = _ALERT_RULE_LEGACY_FIX
+        cur = conn.execute(
+            "UPDATE alert_rules SET name=?, threshold=?, updated_at=CURRENT_TIMESTAMP "
+            "WHERE name=?", (new_name, new_th, old_name))
+        fixed = cur.rowcount or 0
+        added = 0
+        for name, metric, op, th, level, status in _ALERT_RULES:
+            exists = conn.execute("SELECT 1 FROM alert_rules WHERE name=?",
+                                  (name,)).fetchone()
+            if exists:
+                continue
+            conn.execute(
+                "INSERT INTO alert_rules (name, metric, operator, threshold, level, status) "
+                "VALUES (?,?,?,?,?,?)", (name, metric, op, th, level, status))
+            added += 1
+        return {"fixed_legacy": fixed, "added": added, "total_defined": len(_ALERT_RULES)}
+    except Exception as e:
+        return {"error": str(e)[:200]}
 
 
 if __name__ == "__main__":

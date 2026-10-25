@@ -38,6 +38,7 @@ class FlowNodesMixin:
                                  "confirmation_id": conf_id},
                     }
         executor = ToolExecutor(conn)
+        executor._flow_run_id = int(getattr(self, 'run_id', 0) or 0)  # P0-a：工具调用日志编排归属
         r = executor.execute(tool_name, arguments, branch)
         return {
             "type": "tool", "node": label, "tool": tool_name, "status": r.get("ok") and "done" or "error",
@@ -869,6 +870,7 @@ class FlowNodesMixin:
         steps = []
         obs = ""
         executor = ToolExecutor(conn)
+        executor._flow_run_id = int(getattr(self, 'run_id', 0) or 0)  # P0-a：工具调用日志编排归属
         t0 = time.time()
         final_answer = ""
         resp = {}

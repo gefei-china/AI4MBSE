@@ -173,12 +173,12 @@ def _seed(conn):
     #   且 seed 写入的不参与哈希链 ⇒ verify_chain 会报"未入链"。现已移除。
 
     # 预置设置
+    # ★ 2026-10-23 审计：原此处另预置 5 个键（query_route / graph_confidence_threshold /
+    #   max_conversation_context / system_name）经全库消费点扫描确认**零读取表达式**
+    #   （仅存于 docstring/注释），属"改了不生效"的错觉配置，已移除（DB 行同步删除，
+    #   见 tools/verify/verify_settings_data_audit.py 与 docs/设置模块数据审计报告-2026-10-23.md）。
     settings = [
-        ("system_name", "AI赋能MBSE系统设计工具", "系统名称"),
         ("default_branch", "dev", "默认工作分支"),
-        ("query_route", "graph_first", "查询路由策略"),
-        ("graph_confidence_threshold", "0.75", "图谱置信度降级阈值"),
-        ("max_conversation_context", "20", "对话上下文最大轮数"),
     ]
     for k, v, d in settings:
         c.execute("INSERT OR IGNORE INTO settings (key, value, description) VALUES (?,?,?)", (k, v, d))

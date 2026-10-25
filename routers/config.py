@@ -94,6 +94,9 @@ def update_runtime_config(body: RuntimeConfigIn, conn=Depends(db_session)):
     try:
         result = config.update_runtime_settings(body.updates, conn)
         return {"ok": True, **result, "runtime": config.runtime_settings(conn)}
+    except ValueError as e:
+        # 白名单拒绝（未知/无消费点键）—— 不是"更新失败"，是"不允许写"
+        return JSONResponse({"ok": False, "error": str(e)}, 400)
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"更新动态配置失败: {str(e)[:200]}"}, 400)
 

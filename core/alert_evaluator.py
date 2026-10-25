@@ -43,6 +43,28 @@ GLOBAL_METRICS = (
     "misev_whitelist_denied_rate",     # 白名单越权尝试率（委派最小权限）
     "misev_tool_fail_rate",            # 工具失败率（健康度）
     "misev_kind_coverage",             # failure_kind 覆盖率（可监控性，红线 #4）
+    # ── P0-a（2026-10-24）度量收口：6 个新指标（告警规则体系化）──
+    # 口径说明：
+    # - llm_fail_rate_1h / llm_fail_1h：近 1h LLM 失败率/次数。**含探测调用**
+    #   （conversation_id=0 AND run_id=0，真库 278 条失败中 261 条是探测）——
+    #   与 badcase 检测器的 include_probes=False 不同：告警要看全部失败，
+    #   探测失败同样是 provider 故障信号。绝对次数 llm_fail_1h 防小样本失真。
+    # - orch_stale_runs：非终态 orch_checkpoints 心跳超 30min 的编排数。
+    #   口径与 core/orch_supervisor resume_stale_s=1800 对齐（同源不造第二口径）。
+    # - hil_pending_old24h：pending 且超 24h 的 HIL 确认单数（真库实测 10/10 全超）。
+    # - auth_login_failed_1h：**真·登录失败**（event_type='auth_login' AND failed）。
+    #   与既有 auth_failed_1h（auth_% 宽口径，99.8% 是身份拒绝）拆分，规则语义归位。
+    # - rag_low_quality_rate_1h：检索低质占比（**代理口径**：top_score<0.1 或 0 命中）。
+    #   P1 的 query_trace.rag_quality 列落地后只换取数 SQL，规则行不动。
+    # - intent_mismatch_rate：意图误判率（**代理口径**：有命中结论样本中
+    #   intent<>hit_intent，近 1 天）。意图评测落库（P0-b）后校准阈值。
+    "llm_fail_rate_1h",
+    "llm_fail_1h",
+    "orch_stale_runs",
+    "hil_pending_old24h",
+    "auth_login_failed_1h",
+    "rag_low_quality_rate_1h",
+    "intent_mismatch_rate",
 )
 
 _P95_MIN_SAMPLES = 5     # 样本不足不出分位数（避免用 3 个样本算 p95 误导告警）
@@ -120,6 +142,65 @@ def collect_global_metrics(conn) -> dict:
     try:
         from core.badcase import open_badcase_count
         m["badcase_open_count"] = float(open_badcase_count(conn))
+    except Exception:
+        pass
+
+    # ── P0-a（2026-10-24）度量收口：6 个新指标取数 ──
+    # LLM 失败率/次数（近 1h，含探测——探测失败同样是 provider 故障信号）
+    try:
+        r = conn.execute(
+            "SELECT COUNT(*) c, COALESCE(SUM(call_failed),0) f FROM llm_usage_stats "
+            "WHERE created_at >= datetime('now','-1 hour')").fetchone()
+        c = int(r["c"] or 0)
+        m["llm_fail_1h"] = float(r["f"] or 0)
+        if c:
+            m["llm_fail_rate_1h"] = round((r["f"] or 0) * 100.0 / c, 1)
+    except Exception:
+        pass
+    # 编排停滞：非终态 checkpoint 心跳超 30min（口径同 orch_supervisor.resume_stale_s）
+    try:
+        m["orch_stale_runs"] = float(_one(
+            "SELECT COUNT(*) FROM orch_checkpoints "
+            "WHERE phase NOT IN ('done','failed') "
+            "AND (julianday('now') - julianday(updated_at))*24*60 > 30") or 0)
+    except Exception:
+        pass
+    # HIL 确认队列积压：pending 且超 24h
+    try:
+        m["hil_pending_old24h"] = float(_one(
+            "SELECT COUNT(*) FROM hil_confirmations "
+            "WHERE status='pending' AND (julianday('now') - julianday(created_at))*24 > 24") or 0)
+    except Exception:
+        pass
+    # 真·登录失败（与 auth_failed_1h 的身份拒绝宽口径拆分）
+    try:
+        m["auth_login_failed_1h"] = float(_one(
+            "SELECT COUNT(*) FROM audit_logs "
+            "WHERE event_type='auth_login' AND result='failed' "
+            "AND created_at >= datetime('now','-1 hour')") or 0)
+    except Exception:
+        pass
+    # 检索低质占比（代理口径，待 rag_quality 列替换）
+    try:
+        r = conn.execute(
+            "SELECT COUNT(*) c, COALESCE(SUM(CASE WHEN top_score < 0.1 OR hit_count = 0 "
+            "THEN 1 ELSE 0 END),0) low FROM query_trace "
+            "WHERE created_at >= datetime('now','-1 hour')").fetchone()
+        c = int(r["c"] or 0)
+        if c:
+            m["rag_low_quality_rate_1h"] = round((r["low"] or 0) * 100.0 / c, 1)
+    except Exception:
+        pass
+    # 意图误判率（代理口径，近 1 天有命中结论样本）
+    try:
+        r = conn.execute(
+            "SELECT COUNT(*) c, COALESCE(SUM(CASE WHEN intent <> hit_intent THEN 1 ELSE 0 END),0) mm "
+            "FROM intent_samples "
+            "WHERE COALESCE(NULLIF(TRIM(hit_intent),''),'') <> '' "
+            "AND created_at >= datetime('now','-1 day')").fetchone()
+        c = int(r["c"] or 0)
+        if c:
+            m["intent_mismatch_rate"] = round((r["mm"] or 0) * 100.0 / c, 1)
     except Exception:
         pass
 
@@ -287,6 +368,15 @@ def start_alert_loop(interval_sec: float = 300, cooldown_min: int = 30) -> bool:
                                             if v}), flush=True)
             except Exception as e:
                 print("[alert-loop] 评估异常（不中断）: %s" % str(e)[:160], flush=True)
+            # P0-a：能力度量聚合搭车本周期（零新线程）。从 tool_call_logs 只读
+            # 聚合到 capability_registry；异常不中断告警循环。
+            try:
+                from database import db_conn as _dbc
+                from core import capability_registry as _cr
+                with _dbc() as _c:
+                    _cr.aggregate_capability_metrics(_c)
+            except Exception as e:
+                print("[alert-loop] 能力度量聚合异常（不中断）: %s" % str(e)[:160], flush=True)
 
     _loop_stop.clear()
     _loop_thread = threading.Thread(target=_run, daemon=True, name="alert-evaluator")

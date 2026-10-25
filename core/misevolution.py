@@ -110,7 +110,7 @@ _SPECS = [
         label="工具权限拒绝率（越权边界）",
         num_sql="SELECT COUNT(*) FROM audit_logs "
                 "WHERE event_type='tool_perm_denied' AND created_at>=?",
-        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=?",
+        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE call_kind<>'plugin' AND created_at>=?",
         lower_better=True,
         warn_key="perm_denied_warn",
         alert_key="perm_denied_alert",
@@ -121,7 +121,7 @@ _SPECS = [
         label="白名单越权尝试率",
         num_sql="SELECT COUNT(*) FROM audit_logs "
                 "WHERE event_type='tool_whitelist_denied' AND created_at>=?",
-        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=?",
+        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE call_kind<>'plugin' AND created_at>=?",
         lower_better=True,
         warn_key="whitelist_denied_warn",
         alert_key="whitelist_denied_alert",
@@ -130,8 +130,8 @@ _SPECS = [
     SignalSpec(
         name="tool_fail_rate",
         label="工具失败率",
-        num_sql="SELECT COUNT(*) FROM tool_call_logs WHERE ok=0 AND created_at>=?",
-        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=?",
+        num_sql="SELECT COUNT(*) FROM tool_call_logs WHERE ok=0 AND call_kind<>'plugin' AND created_at>=?",
+        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE call_kind<>'plugin' AND created_at>=?",
         lower_better=True,
         warn_key="tool_fail_warn",
         alert_key="tool_fail_alert",
@@ -141,8 +141,8 @@ _SPECS = [
         name="kind_coverage",
         label="failure_kind 覆盖率（可监控性）",
         num_sql="SELECT COUNT(*) FROM tool_call_logs "
-                "WHERE ok=0 AND COALESCE(failure_kind,'')<>'' AND created_at>=?",
-        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE ok=0 AND created_at>=?",
+                "WHERE ok=0 AND COALESCE(failure_kind,'')<>'' AND call_kind<>'plugin' AND created_at>=?",
+        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE ok=0 AND call_kind<>'plugin' AND created_at>=?",
         lower_better=False,      # 覆盖率越高越好——下滑即红线 #4 告警
         warn_key="kind_coverage_warn",
         alert_key="kind_coverage_alert",

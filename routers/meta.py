@@ -217,6 +217,16 @@ def get_settings(conn=Depends(db_session)):
 
 @router.put("/api/settings/{key}")
 def update_setting(key: str, body: dict, conn=Depends(db_session)):
+    # 白名单准入（2026-10-23）：本入口此前无任何校验，曾把 5 个"零消费点"无效键
+    # （query_route 等）写进 settings 表 —— 界面能改、改了不生效。
+    # 合法键唯一权威 = core/setting_keys.py（审计脚本 --strict 反向防腐烂）。
+    from core.setting_keys import is_valid_setting_key, valid_keys_hint
+    if not is_valid_setting_key(key):
+        return JSONResponse(
+            {"ok": False,
+             "error": "未知配置键 %r（无消费点，写了也不会生效）。合法键：%s"
+                      % (key, "、".join(valid_keys_hint()))},
+            400)
     MetaRepo(conn).upsert_setting(key, body["value"])
     return {"ok": True}
 

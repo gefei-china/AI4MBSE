@@ -12,7 +12,7 @@ class StudioRepo(BaseRepo):
 
     # ── legacy ↔ plugins 同步桥（2026-09-16）──
     def _sync(self, table: str, row_id) -> None:
-        """旧表行 → plugins 同步（管理视图随之更新）。
+        """旧表行 → plugins 同步（管理视图随之更新）+ capability_registry 单行刷新（P0-a）。
 
         失败绝不阻断主流程：能力中心的可见性不应影响业务写入。
         """
@@ -21,6 +21,12 @@ class StudioRepo(BaseRepo):
         try:
             from plugin_system import legacy_sync
             legacy_sync.sync_from_legacy_safe(self.conn, table, row_id)
+        except Exception:
+            pass
+        try:
+            # P0-a（2026-10-24）：能力统一注册处运行时增量。行已删时刷新即删投影。
+            from core import capability_registry as _cr
+            _cr.refresh_registry_row(self.conn, table, row_id)
         except Exception:
             pass
 

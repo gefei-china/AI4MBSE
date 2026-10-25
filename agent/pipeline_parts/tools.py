@@ -845,7 +845,9 @@ class ToolMixin:
                     self._retry_policy_for(name))
                 if retried:
                     result = {**result, "retried": retried}
-                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                # P0-a：source_ref=mcp_servers.name ⇒ capability_id=mcp:{server}:{tool}
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0,
+                                    source_ref=row["name"])
                 return result
             # 通用 HTTP 集成工具（tools.kind='http'，配置驱动执行器——适配建模软件等外部系统，零代码接入）
             try:
@@ -1111,7 +1113,8 @@ class ToolMixin:
         self._retry_policy_cache[name] = policy
         return policy
 
-    def _log_tool_call(self, name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0):
+    def _log_tool_call(self, name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0,
+                       source_ref=""):
         """优化1：工具调用可观测——落库 tool_call_logs（失败不阻断主流程）。
 
         P0-2（2026-10-06）两处补强：
@@ -1120,6 +1123,12 @@ class ToolMixin:
         - **参数脱敏**：`arguments` 此前**原样入库**，而 http 集成工具的入参可能含
           鉴权头、MCP 配置含 token ⇒ 审计日志会变成新的泄露源（core/redact.py 文件头）。
           脱敏在**序列化之后**做（对最终落库文本生效），键名保留、只遮值。
+
+        P0-a（2026-10-24）：补 capability_id（capability_registry 统一注册处关联列）。
+        口径同 core/capability_registry：mcp → mcp:{server}:{tool}（server 名由 MCP 分支
+        经 source_ref 传入，该分支已反查出 mcp_servers 行）；skill → skill:{id}（反查，
+        skills.name 无 UNIQUE 不能用 name 当键）；其余分支 → tool:{name}（这些分支的
+        前提就是 tools 表有该行）。反查失败留空——不造假映射。
         """
         try:
             import time as _time
@@ -1169,13 +1178,28 @@ class ToolMixin:
                             ok=False)
                     except Exception:
                         _fkind = ""
+                # P0-a：capability_id（统一注册处关联）。skill 反查一次（name 不唯一）；
+                # 反查不到留空（不造假映射）。
+                _cid = ""
+                try:
+                    if tool_type == "mcp" and source_ref:
+                        _cid = "mcp:%s:%s" % (source_ref, name)
+                    elif tool_type == "skill":
+                        _sid = conn.execute(
+                            "SELECT id FROM skills WHERE name=? ORDER BY id LIMIT 1",
+                            (name,)).fetchone()
+                        _cid = ("skill:%s" % _sid[0]) if _sid else ""
+                    else:
+                        _cid = "tool:%s" % name
+                except Exception:
+                    _cid = ""
                 conn.execute(
-                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name, run_id, task_key, failure_kind) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name, run_id, task_key, failure_kind, capability_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (intent_ctx.get("intent", ""), agent_ctx.get("agent", ""),
                      name, tool_type, _args_txt, _res_txt,
                      1 if result.get("ok") else 0,
-                     latency, conv_ctx or 0, _uname, _run_id, _task_key, _fkind),
+                     latency, conv_ctx or 0, _uname, _run_id, _task_key, _fkind, _cid),
                 )
         except Exception:
             pass  # 观测落库失败不影响工具执行

@@ -455,6 +455,17 @@ jobs:
       - name: Guard 编排触发白名单动态化（10 项）
         run: python tools/verify/verify_orch_whitelist.py
 
+      # ── settings 白名单收口（2026-10-23）：两个通用写入入口的准入 + 存量数据审计 ──
+      # 前者锁行为：合法键放行 / 无效键拒绝且不落库 / 含无效键整批原子不落 /
+      # 专用入口（project_repo 直写）不受误伤；后者锁数据：每个 settings 键必须
+      # 有真实消费点（只出现在 seeds/注释的 = 孤儿数据），指针类键必须指向真实
+      # 行。--strict 模式下发现无效键 exit 1（CI 门禁口径）。
+      - name: Guard settings 白名单收口（入口准入行为，非实现）
+        run: python tools/verify/verify_setting_keys_guard.py
+
+      - name: Guard settings 数据审计（每键有消费点 + 指针指向真实行）
+        run: python tools/verify/verify_settings_data_audit.py --strict
+
       - name: Guard Agent 绑定插件机制已移除（21 项）
         run: python tools/verify/verify_plugin_bind_removed.py
 
@@ -545,6 +556,12 @@ jobs:
 
       - name: Guard Agent 名称统一与级联改名（71 项 + 变异自证）
         run: python tools/verify/verify_agent_name_unify.py
+
+      # 防「虚构人名写进生产数据」回归（2026-10-23 米爸决策：mock 数据排查并
+      # 移除）。王工/李工/赵管类兜底人名曾作为审计/创建人默认值，看起来像
+      # "系统里有这三个同事"实际查无此人——门禁扫默认值/兜底值/种子数据。
+      - name: Guard 无虚构人名（审计/创建人兜底值不得写生产数据）
+        run: python tools/verify/verify_no_fake_actor.py
 
       - name: Guard 多工程作用域与新建任务归属（40 项）
         run: python tools/verify/verify_multi_project_scope.py
@@ -790,6 +807,20 @@ jobs:
       # dry-run 取证（CI 无库按惯例 SKIP）。
       - name: Guard Bad Case 闭环（dry-run 人工关口 + 去重累加 + 告警指标/规则/冷却）
         run: python tools/verify/verify_badcase.py
+
+      # ── P0-a（2026-10-24 产品优化方案）：能力度量收口 ─────────────────
+      # capability_registry 统一注册处：五源表（tools/skills/plugins/mcp_servers/
+      # prompts）权威数据不动，本表只做物化投影（一个 capability_id 口径 + 一套
+      # 启停/发布态/版本语义 + 一张调用度量入口）。门禁八条判据：A 投影完整性
+      # （五源同构 LEFT JOIN 孤儿=0）/ B 无幽灵投影（删源行/插幽灵 reconcile 后
+      # 随之消失）/ C 度量五类齐（六种 tool_type 可落库 + 聚合口径精确）/ D 六处
+      # 挂载点 capability_id 赋值在位（行边界法抽取，抽取器自带完整性守卫）/
+      # E 版本非空（空版本归一 1.0.0）/ F 告警防假（metric 白名单，引用不存在
+      # 指标的规则=永不触发的假告警）/ G BadCase 闭环（apply 后 open>0 且 R5
+      # fired≥1）/ H 阳性对照（构造能力必有投影且 call_count=1）。退出码 0/1/2
+      # （2=守卫失效，禁止据此下任何结论）。真库段只读（CI 无库按惯例 SKIP）。
+      - name: Guard 能力度量收口（投影五源同构 + 无幽灵 + 六处收口 + 告警防假 + 闭环）
+        run: python tools/verify/verify_capability_registry.py
 
       # ── #18（2026-10-18 自进化调研路线图）：统一状态机 ─────────────────
       # 一个纯函数引擎 + 一张声明式注册表收口全仓状态字面量（MR/bad_case/V2G 双

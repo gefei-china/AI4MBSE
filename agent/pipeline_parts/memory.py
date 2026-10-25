@@ -365,12 +365,18 @@ class MemoryMixin:
                         _skind = ""
                 for name in hits[:10]:
                     try:
+                        # P0-a：capability_id=skill:{id}（skills.name 无 UNIQUE 约束，
+                        # 重名取最小 id，与 core/capability_registry 投影口径一致）。
+                        _sid_row = conn.execute(
+                            "SELECT id FROM skills WHERE name=? ORDER BY id LIMIT 1",
+                            (name,)).fetchone()
                         conn.execute(
                             "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-                            "arguments, result, ok, latency_ms, conversation_id, failure_kind) "
-                            "VALUES (?,?,?,?,?,?,?,?,0,?,?)",
+                            "arguments, result, ok, latency_ms, conversation_id, failure_kind, capability_id) "
+                            "VALUES (?,?,?,?,?,?,?,?,0,?,?,?)",
                             (intent or "", _agent.get("agent", ""), name, "skill", "skill",
-                             "{}", _summary, 1 if ok else 0, int(run_id or 0), _skind))
+                             "{}", _summary, 1 if ok else 0, int(run_id or 0), _skind,
+                             ("skill:%s" % _sid_row[0]) if _sid_row else ""))
                     except Exception:
                         pass
                 for name in hits[:10]:

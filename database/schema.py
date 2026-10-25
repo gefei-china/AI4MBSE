@@ -1198,6 +1198,35 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_time ON tool_call_logs(created_at)")
+
+    # ── P0-a（2026-10-24）能力统一注册处：capability_registry 逻辑投影层 ──
+    # 五类能力（tools/skills/plugins/mcp_servers/prompts）权威数据不动，本表只做
+    # 统一投影：一个 capability_id 口径、一套启停/发布态/版本语义、一张调用度量入口。
+    # 刷新机制见 core/capability_registry.py（启动全量 reconcile + 运行时增量）。
+    # 幂等：CREATE TABLE IF NOT EXISTS，老库 init_db 时自动补建，零迁移风险。
+    c.execute("""CREATE TABLE IF NOT EXISTS capability_registry (
+        capability_id   TEXT PRIMARY KEY,        -- tool:{name} | skill:{id} | plugin:{plugin_id} | mcp:{name} | mcp:{name}:{tool} | prompt:{id}
+        kind            TEXT NOT NULL,           -- tool | skill | plugin | mcp_server | mcp_tool | prompt
+        display_name    TEXT DEFAULT '',
+        source_table    TEXT NOT NULL,           -- 权威数据所在源表
+        source_id       TEXT NOT NULL,           -- 源表业务键
+        status          TEXT DEFAULT 'active',   -- active | disabled（启停态）
+        lifecycle       TEXT DEFAULT 'published',-- draft | published | deprecated（发布态）
+        version         TEXT DEFAULT '1.0.0',
+        publisher       TEXT DEFAULT '',
+        visibility      TEXT DEFAULT 'private',  -- private | team | public
+        risk_level      TEXT DEFAULT 'read',     -- read | write | destructive（驱动 HIL 审批强度）
+        builtin         INTEGER DEFAULT 0,
+        call_count      INTEGER DEFAULT 0,       -- 度量投影（聚合而来，非双写）
+        fail_count      INTEGER DEFAULT 0,
+        last_used_at    TEXT DEFAULT '',
+        created_at      TEXT DEFAULT CURRENT_TIMESTAMP,  -- 首次投影时间（≈能力存在时间，upsert 不覆盖）
+        updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_cr_kind ON capability_registry(kind)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_cr_source ON capability_registry(source_table, source_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_cr_last ON capability_registry(last_used_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_cr_longtail ON capability_registry(status, call_count, updated_at)")
     # ⚠️ idx_tool_logs_user（user_name）**不在这里建** —— 本段是 CREATE TABLE IF NOT EXISTS，
     # 老库走该分支时表已存在、**不会加列**，索引建在缺列的表上会直接
     # `no such column: user_name` 让 init_db 整体失败（2026-10-06 实测踩到）。

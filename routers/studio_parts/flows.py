@@ -394,8 +394,10 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                     r["exec_result"] = {"ok": False, "error": str(e)[:300]}
                     exec_note = " · 配置执行失败: %s" % str(e)[:80]
             else:
+                _hil_is_http = False
                 trow = conn.execute("SELECT kind FROM tools WHERE name=? AND status='active'", (action,)).fetchone()
                 if trow and trow["kind"] == "http":
+                    _hil_is_http = True
                     from http_tool_executor import exec_http_tool
                     _er = exec_http_tool(action, payload if isinstance(payload, dict) else {})
                     r["executed"] = True
@@ -416,6 +418,23 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                     r["executed"] = False
                     r["exec_result"] = {"ok": False, "result": f"工具「{action}」非 HTTP 集成类型，不支持批准后自动执行，请手动操作"}
                     exec_note = " · 非 HTTP 工具未自动执行"
+        # P0-a：HIL 批准即执行落 tool_call_logs。此前该路径**只写 audit_logs**
+        # ⇒「经人批准才发生的工具执行」在能力度量里完全不可见（exec_note 只在
+        # 审计文本里）。capability_id=tool:{action}（两个可执行分支的前提都是
+        # tools 表有该行；配置晋升类动作不是能力调用，不落）。
+        if r.get("executed") and not _is_cfg_action:
+            try:
+                _er = r.get("exec_result") or {}
+                conn.execute(
+                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
+                    "arguments, result, ok, latency_ms, run_id, task_key, capability_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ("hil_approve", "", action,
+                     "builtin" if action == "save_artifact" else ("http" if _hil_is_http else ""),
+                     "tool", "{}", str(_er.get("result", ""))[:2000],
+                     1 if _er.get("ok") else 0, 0, _run_id, _task_key, "tool:%s" % action))
+            except Exception:
+                pass
     audit(audit_user(user), "hil_decide", f"HIL确认单#{cid} → {r['status']}{exec_note}", conn=conn)
     return r
 

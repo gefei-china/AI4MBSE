@@ -13,9 +13,13 @@
 
 职责边界：
 - 本模块只管「静态/部署配置」（启动时确定，不随界面变化）。
-- 「动态配置」（运行时可通过界面调整，如 query_route / graph_confidence_threshold /
-  default_project_id 等）走 settings 表，由 routers/meta.py 提供 REST 管理，
+- 「动态配置」（运行时可通过界面调整，如 default_project_id / file_auto_extract_enabled /
+  entity_candidate_source 等）走 settings 表，由 routers/meta.py 提供 REST 管理，
   读取入口见 database.meta_repo（get_settings）。
+  ⚠️ 2026-10-23 审计：原举例的 query_route / graph_confidence_threshold 经全库消费点
+  扫描确认零读取表达式（仅存于本 docstring 与 seeds），已从 settings 表与种子中移除 ——
+  "可在界面调整"的旧描述不成立，勿再据本行把键写回（验证：
+  tools/verify/verify_settings_data_audit.py --strict）。
 
 典型用法：
     from core import config
@@ -1240,6 +1244,7 @@ DEFAULT_CONFIG = {
         "window_days": 7,               # 本周窗口（天）；环比对照 = 上一个等长窗口
         "max_actions": 50,              # 待决策条目上限（防长尾注水）
         "max_detail": 8,                # 每源明细条目上限
+        "longtail_days": 90,            # P0-a：能力长尾判定天数（只提议不自动执行）
     },
     # ── P1 replanning（2026-10-21，执行中重规划；设计见 docs/执行中重规划
     #   replanning方案评估与完善设计-v2-20261021.md §4/§6）──────────────────
@@ -1950,6 +1955,7 @@ CONFIG_SCHEMA = {
         "window_days":  {"type": "int",  "desc": "本周窗口（天）；环比对照窗口为上一个等长窗口"},
         "max_actions":  {"type": "int",  "desc": "待决策条目上限（防长尾注水）"},
         "max_detail":   {"type": "int",  "desc": "每源明细条目上限"},
+        "longtail_days": {"type": "int", "desc": "P0-a：能力长尾判定天数（active 且零调用超过该天数进周报清单；只提议不自动执行）"},
     },
     # ── P1 replanning（2026-10-21）：执行中重规划 ──────────────────────────
     # 白名单纪律（B4-5 教训）：配置存在 ≠ 可被配置 —— 不登记进 SCHEMA 的键
@@ -2096,8 +2102,21 @@ def runtime_settings(conn=None) -> dict:
 
 
 def update_runtime_settings(updates: dict, conn=None) -> dict:
-    """批量 upsert settings 动态配置（key → value）。"""
+    """批量 upsert settings 动态配置（key → value）。
+
+    ⚠️ 白名单准入（2026-10-23）：本函数与 PUT /api/settings/{key} 是两个通用写入入口，
+       此前均无校验 —— 5 个"零消费点"无效键（query_route 等）正是从这类入口写进库的
+       （界面能改、改了不生效）。合法键唯一权威 = core/setting_keys.py；
+       专用入口（staging_fuse.set_fuse_config / project_repo 的 default_project_id）
+       走直接 SQL，不经本函数，不受此限。
+    """
+    from core.setting_keys import is_valid_setting_key, valid_keys_hint
     updates = updates or {}
+    bad = [k for k in updates if not is_valid_setting_key(str(k))]
+    if bad:
+        raise ValueError(
+            "未知配置键 %s（无消费点，写了也不会生效）。合法键：%s"
+            % (bad, "、".join(valid_keys_hint())))
     own = conn is None
     if own:
         from database import get_db

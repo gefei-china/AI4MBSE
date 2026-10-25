@@ -23,6 +23,11 @@ flow_run_steps.status + 结局证据 agent_tasks/orch_checkpoints/flow_runs）�
 
 双环境口径：干净库自建 MBSE_DB_PATH 临时空库（import 前切库）；真库段只读；
 D6 子进程另用独立库（database 的 DB_PATH import 期绑定，同进程改不了）。
+★D6 夹具建表 DDL 必须覆盖 `_log_tool_call` INSERT 的**全部列**——P0-a S2
+给 INSERT 加了 capability_id，夹具漏列即 INSERT 失败、行空、D6 假红
+（2026-10-24 实测）。另注意引号双层解析：门禁源码双引号串里的 \'\' 到子进程
+只剩 ''，会把子进程的单引号字符串提前截断（SQL 变 `DEFAULT ,`）⇒ 夹具列
+一律不写 DEFAULT，值由被测代码显式给。
 """
 import os
 import shutil
@@ -498,7 +503,7 @@ def main():
         "os.environ['MBSE_DB_PATH'] = db\n"
         "sys.path.insert(0, sys.argv[2])\n"
         "c = sqlite3.connect(db)\n"
-        "c.execute('CREATE TABLE tool_call_logs (id INTEGER PRIMARY KEY, intent TEXT, agent_name TEXT, tool_name TEXT NOT NULL, tool_type TEXT, arguments TEXT, result TEXT, ok INTEGER, latency_ms INTEGER, conversation_id INTEGER, user_name TEXT, run_id INTEGER, task_key TEXT, failure_kind TEXT, call_kind TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)')\n"
+        "c.execute('CREATE TABLE tool_call_logs (id INTEGER PRIMARY KEY, intent TEXT, agent_name TEXT, tool_name TEXT NOT NULL, tool_type TEXT, arguments TEXT, result TEXT, ok INTEGER, latency_ms INTEGER, conversation_id INTEGER, user_name TEXT, run_id INTEGER, task_key TEXT, failure_kind TEXT, call_kind TEXT, capability_id TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)')\n"
         "c.commit(); c.close()\n"
         "from agent.pipeline_parts.tools import ToolMixin\n"
         "class Dummy: pass\n"
@@ -560,13 +565,18 @@ def main():
     _mm = open(os.path.join(ROOT, "agent", "pipeline_parts", "memory.py"),
                encoding="utf-8").read()
     # 剥注释再查：修复说明注释里引用旧写法 `_fc(classify(...))` 是文档，不是代码
+    # ★2026-10-24 判据同步：产品 2026-10-21 已把别名 `_fc` 改为 `_fc_classify`
+    #   （原别名与 _build_tools_def 的 DB 连接局部变量重名，踩 e2e G0 危险名集合，
+    #   代码里有注释为证）——门禁字符串停在旧别名 ⇒ HEAD 起就假红。意图不变：
+    #   无嵌套调用 + 单次调用显式 ok=False + 导入在位。
     _tl_code = "\n".join(l for l in _tl.splitlines()
                          if not l.strip().startswith("#"))
     check("E5 ★tools.py 写入点无嵌套 classify（双重调用 bug 不复发）且显式 ok=False",
-          "_fc(classify(" not in _tl_code and "_fkind = _fc(" in _tl_code
+          "_fc_classify(classify(" not in _tl_code
+          and "_fkind = _fc_classify(" in _tl_code
           and "ok=False)" in _tl_code
-          and "from services.failure_class import classify as _fc" in _tl_code,
-          f"code 中仍残留嵌套调用: {[l.strip() for l in _tl_code.splitlines() if '_fc(classify(' in l][:2]}")
+          and "from services.failure_class import classify as _fc_classify" in _tl_code,
+          f"code 中仍残留嵌套调用: {[l.strip() for l in _tl_code.splitlines() if '_fc_classify(classify(' in l][:2]}")
     check("E6 memory.py 技能日志写入点补 failure_kind 列（第二个写入点不漏）",
           "failure_kind" in _mm)
 

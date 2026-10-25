@@ -205,13 +205,36 @@ def verify_chain(limit: int = 0, conn=None) -> dict:
     - tampered：内容与摘要不符（行被改过）
     - head_next_mismatch：prev_hash 与上一行 hash 不符（行被插入或删除）
     - unchained：hash 为空（未经 audit() 写入 / 迁移未覆盖到）
+
+    ★ P0-a 修（2026-10-24）：窗口边界假阳性。原实现把**窗口第一行**的
+    prev_hash 期望为 genesis（_GENESIS），但它实际指向窗口外的前一行
+    ⇒ 链完好也报 broken。真库实测：limit=0 全表 ok=true（4623 行全衔接），
+    limit=3000 却假报 1 条（id=9685，expected=000… actual=4778…）。
+    若不修，audit_chain_ok 指标恒为 0 ⇒ critical 级告警永远假触——
+    「假告警比没告警更糟」正是本模块 notify 校验状态码那条纪律的同型问题。
+    修法：窗口**多取一行作衔接种子**（只提供 prev 上下文，不校验它），
+    从第二行起校验；genesis 只对真正的链头生效。
     """
     def _check(c):
-        where = "" if not limit else f"WHERE id > (SELECT MAX(id)-{int(limit)} FROM audit_logs)"
-        rows = c.execute(
-            f"SELECT id, user_name, event_type, detail, result, branch, ip_address, "
-            f"user_agent, request_id, prev_hash, hash FROM audit_logs {where} ORDER BY id").fetchall()
-        total, chained, broken, prev = len(rows), 0, [], _GENESIS
+        seed = None
+        if limit:
+            rows = c.execute(
+                "SELECT id, user_name, event_type, detail, result, branch, ip_address, "
+                "user_agent, request_id, prev_hash, hash FROM audit_logs "
+                "WHERE id > (SELECT MAX(id)-? FROM audit_logs) ORDER BY id",
+                (int(limit) + 1,)).fetchall()
+            if len(rows) > 1:
+                seed, rows = rows[0], rows[1:]
+            prev = (seed["hash"] or "") if seed is not None else _GENESIS
+            seeded = 1 if seed is not None else 0
+        else:
+            rows = c.execute(
+                "SELECT id, user_name, event_type, detail, result, branch, ip_address, "
+                "user_agent, request_id, prev_hash, hash FROM audit_logs ORDER BY id").fetchall()
+            prev, seeded = _GENESIS, 0
+        total, chained, broken = len(rows) + seeded, 0, []
+        if seed is not None and (seed["hash"] or ""):
+            chained += 1          # 种子行确实在链上，计入但不校验
         for r in rows:
             h, ph = r["hash"] or "", r["prev_hash"] or ""
             if not h:

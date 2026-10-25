@@ -91,6 +91,12 @@ def _migrate_columns(conn):
     _add("tool_call_logs", "failure_kind", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "sub_task_key", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "prompt_cache_miss_tokens", "INTEGER DEFAULT 0")
+    # ── P0-a（2026-10-24）能力统一注册处关联列 ──
+    # tool_call_logs 已是准统一调用日志（tool/skill × builtin/mcp/http/zhiyuan），
+    # 本列把它与 capability_registry 的 capability_id 口径接上，使「哪条调用属于
+    # 哪个统一能力」可查。存量行由 core/capability_registry.backfill_capability_ids
+    # 一次性回填（按 tool_type/tool_name 反查，查不到保留空——不造假映射）。
+    _add("tool_call_logs", "capability_id", "TEXT DEFAULT ''")
     # P1-27 截断诊断（思考模型 reasoning 与正文共享 max_tokens 配额）
     _add("llm_usage_stats", "finish_reason", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "reasoning_tokens", "INTEGER DEFAULT 0")
