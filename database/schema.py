@@ -162,8 +162,22 @@ def backup_db(dest_dir: str | None = None, tag: str = "pre-migrate") -> str:
     :param tag:       文件名标签
     """
     import time as _t
-    d = dest_dir or os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backups")
+    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    d = dest_dir or os.path.join(_repo, "backups")
+    # ★ 2026-10-26：源库**不是生产库**时，备份不许混进生产备份目录。
+    #   起因（实测）：门禁/迁移脚本常把 `MBSE_DB_PATH` 指到临时库（自己 init_db 出来的
+    #   空库），此时 backup_db 产出一份 40KB 的"合法空壳备份"（表集合一致 ⇒ 过校验），
+    #   却写进了 `backups/` 的**平铺目录**——而按 mtime 保留备份的清理逻辑会优先留它
+    #   （mtime 最新）、把真正的 362MB 生产备份删掉 ⇒ 恢复时会炸。
+    #   ⇒ 非生产库的备份隔离到 `backups/nonprod-<源库名>/`，生产目录只放真备份。
+    _src_abs = os.path.abspath(DB_PATH)
+    _prod_abs = os.path.abspath(os.path.join(_repo, "mbse.db"))
+    if dest_dir is None and _src_abs != _prod_abs:
+        _stem = os.path.splitext(os.path.basename(_src_abs))[0] or "db"
+        d = os.path.join(_repo, "backups", "nonprod-%s" % _stem)
+        print("[backup] 源库不是生产库（%s）⇒ 备份隔离到 %s，"
+              "不污染生产备份目录" % (os.path.basename(_src_abs),
+                                    os.path.relpath(d, _repo)))
     os.makedirs(d, exist_ok=True)
     dst = os.path.join(d, "%s-%s.db" % (tag, _t.strftime("%Y%m%d-%H%M%S")))
     src = sqlite3.connect(DB_PATH)
