@@ -432,6 +432,12 @@ jobs:
       - name: Guard 工程归属 · 变异自证版
         run: python tools/verify/verify_p1_project_attribution_mutate.py
 
+      # ★ 2026-10-26：变异门禁**原地改写产品源文件**，运行窗口内产品文件是坏的
+      #   （实测：回归在跑时 git add -A，把 routers/sysml_versions.py 的变异体提交了）。
+      #   ⇒ 放在变异门禁**之后**做残留检查：变异体没还原干净就判红。
+      - name: Guard 变异残留（产品文件不得停留在变异体状态）
+        run: python tools/verify/verify_no_mutation_residue.py
+
       - name: Guard 重试与降级统计（三列契约 + 幂等）
         run: python tools/verify/verify_retry_fallback_stats.py
 

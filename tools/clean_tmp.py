@@ -13,6 +13,17 @@
 只删一次会复发（本项目一天就堆出 6.8 GB）。本脚本按"mtime + 后缀 + 大小"
 三个条件清理，可挂 pre-commit / CI / 手工定期跑。
 
+## ★ 2026-10-26 新增：`--temp` 扫系统临时目录（门禁夹具库泄漏）
+
+40+ 个门禁用 `tempfile.mkdtemp(prefix="wb_p07_")` 这类写法建夹具库，
+但**只删库文件、不删临时目录** ⇒ 每跑一次门禁就在 `%TEMP%` 留一个目录
+（实测 `wb_mtctx_*` 76 个 ≈ **1.2 GB**、`wb_p07_*` 单个 363 MB）⇒
+C 盘被反复吃满（2026-10-25 的 ENOSPC 事故即与此有关）。
+⇒ `--temp` 扫 `%TEMP%` 下**门禁夹具目录**，判定条件**两条同时满足**才删：
+   ① 目录名命中门禁前缀白名单（`wb_` / `verify_` / `eval_gate_` / …）
+   ② 目录里**含 .db 文件**（门禁夹具库的强特征）
+   —— 两条都满足才删 ⇒ 不会误伤同名的普通临时目录。
+
 ## 三条安全约束（每条都对应一次真实踩坑）
 
 1. **绝不碰生产库**。生产库是**仓库根目录的 `mbse.db`**（`core.config.DB_PATH`），
@@ -40,6 +51,10 @@
 
 # 连 tmp 下的子目录一起删（如 bak_p01/）
 .venv/Scripts/python.exe tools/clean_tmp.py --apply --dirs
+
+# 扫系统临时目录里的**门禁夹具目录**（每次跑完门禁都建议顺手做一次）
+.venv/Scripts/python.exe tools/clean_tmp.py --temp
+.venv/Scripts/python.exe tools/clean_tmp.py --temp --apply
 ```
 
 ## 退出码
@@ -68,6 +83,22 @@ NEVER_DIRS = ("data", "static", "database", "knowledge_pipeline", "agents",
 
 # 永不删除的具体文件（相对 ROOT）—— 生产库与今天的热备
 NEVER_FILES = ("mbse.db", "mbse.db-shm", "mbse.db-wal", "mbse.db.bak-p1-3")
+
+# ── 2026-10-26：`--temp` 通道的门禁夹具目录名前缀白名单 ──────────────────
+# 来源：全仓 grep `tempfile.mkdtemp(` 的 prefix 实参。
+# ⚠️ 目录名白名单**只是第一道闸**：还必须"目录里有 .db 文件"才删（见 scan_temp_dirs）。
+TEMP_DIR_PREFIXES = (
+    "wb_",            # wb_mtctx_ / wb_p07_ / wb_p14_（大件，363MB 级）
+    "verify_",        # verify_*（绝大多数门禁夹具）
+    "eval_gate_",     # verify_eval_routing
+    "dedup_probe_",   # verify_dedup_and_finalize_hint
+    "docf_",          # verify_doc_folders
+    "rf_drift_",      # verify_ragflow_adapter
+    "memtier_",       # verify_memory_tier
+    "cancel_",        # verify_cancel_and_reap
+    "iso_",           # verify_evolution_report
+    "tmp",            # tempfile.mkdtemp() 无 prefix 时的默认名
+)
 
 
 def _protected_abs_paths() -> set:
@@ -154,6 +185,48 @@ def _dir_size(root: str) -> tuple:
     return n, tot
 
 
+def scan_temp_dirs(temp_root: str):
+    """扫系统临时目录里的**门禁夹具目录**（2026-10-26 新增，供 --temp 通道用）。
+
+    判定**两条同时满足**才纳入（任一不满足即跳过并记录原因）：
+      ① 目录名命中门禁前缀白名单（TEMP_DIR_PREFIXES）
+      ② 目录里**含 .db 文件**（门禁夹具库的强特征）**或该目录是空的**
+         —— 空目录是门禁的另一种典型泄漏形态：脚本 `os.remove(夹具库)` 删了文件，
+         却把 `mkdtemp` 建的目录留下（实测 `wb_mtctx_*` 76 个空壳）。
+         既非空又无 .db 的同名目录（别的应用的临时目录）一律不动。
+
+    :return: (命中列表[(path, 文件数, 字节)], 跳过原因列表)
+    """
+    hits, skips = [], []
+    if not os.path.isdir(temp_root):
+        return hits, [(temp_root, "目录不存在")]
+    try:
+        entries = sorted(os.listdir(temp_root))
+    except OSError as e:
+        return hits, [(temp_root, "listdir 失败 %s" % e)]
+    for name in entries:
+        full = os.path.join(temp_root, name)
+        if not os.path.isdir(full):
+            continue
+        if not name.startswith(TEMP_DIR_PREFIXES):
+            continue
+        n, tot = _dir_size(full)
+        has_db = False
+        try:
+            for fn in os.listdir(full):
+                if fn.lower().endswith((".db", ".db-wal", ".db-shm")):
+                    has_db = True
+                    break
+        except OSError:
+            pass
+        if not has_db and n > 0:
+            skips.append((full, "无 .db 文件且非空（非门禁夹具特征，不动）"))
+            continue
+        hits.append((full, n, tot))
+    hits.sort(key=lambda x: -x[2])
+    return hits, skips
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="清理开发期磁盘垃圾（dry-run 默认）")
     ap.add_argument("--apply", action="store_true", help="真删除（默认只打印）")
@@ -166,7 +239,39 @@ def main() -> int:
                     help="backups/ 里保留最近几份真备份")
     ap.add_argument("--dirs", action="store_true",
                     help="同时删除 tmp/ 下的子目录（如 bak_p01/）")
+    ap.add_argument("--temp", action="store_true",
+                    help="同时扫系统临时目录里的门禁夹具目录（wb_*/verify_* 等，"
+                         "判定：名字命中白名单 **且** 目录里有 .db 文件）")
     args = ap.parse_args()
+
+    if args.temp:
+        temp_root = os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp"
+        print("\n=== 系统临时目录 %s（门禁夹具）===" % temp_root)
+        thits, tskips = scan_temp_dirs(temp_root)
+        for p, why in tskips[:20]:
+            print("  [skip] %s  <- %s" % (p, why))
+        if len(tskips) > 20:
+            print("  ... 另有 %d 个跳过项" % (len(tskips) - 20))
+        if not thits:
+            print("  无命中")
+        tbytes = sum(h[2] for h in thits)
+        for p, n, sz in thits:
+            print("  %-11s %7.1f MB  %d 文件  %s"
+                  % ("[DELETE]" if args.apply else "[would]", sz / 1048576.0, n, p))
+        if args.apply:
+            import shutil
+            ok = 0
+            for p, _n, _sz in thits:
+                try:
+                    shutil.rmtree(p, ignore_errors=True)
+                    ok += 1
+                except OSError as e:
+                    print("  [FAIL] %s: %s" % (p, e), file=sys.stderr)
+            print("  已删除目录 %d/%d（回收 %.2f GB）"
+                  % (ok, len(thits), tbytes / 1073741824.0))
+        else:
+            print("  合计将删 %d 个目录 / %.2f GB（dry-run，加 --apply 才真删）"
+                  % (len(thits), tbytes / 1073741824.0))
 
     roots = [os.path.join(ROOT, "tmp")]
     if args.backups:

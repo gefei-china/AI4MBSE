@@ -24,6 +24,14 @@
     断言含**两处真实踩过的坑**：F3（左右剥除字符集**必须不对称**，否则标题括号被削成不成对）、
     F4（派生结果若仍是兜底名必须返回空，否则把 bug 从写入侧搬到读取侧）。
     变异 M24~M27。
+  · **2026-10-26 判据反转**：F9/F10 原先断言「长 markdown 正文自动建 document 产物」，
+    但该行为已于 2026-10-17（commit 3ef01a1，米爸反馈2「产物库只收交付物」）**整节删除**
+    （当时真库 document 产物 23/23 全是此类误创建）⇒ 判据跟着需求反转
+    （把「存在」改成「不存在」），**不是删掉那条判据** —— 删掉即"这个维度不再受保护"，
+    下次有人把 document 自动登记加回来没人拦。
+    同时补 **F13/F13b 正例**（报告类回答**仍要**归档 report 产物 + reports 行），
+    防止判据退化成单边否定（"什么都不建"也能过）。
+    M27 变异同步重锚：把 10-17 删掉的那段**原样注入回来** ⇒ F9 必须翻（证明判据非空转）。
 """
 
 # ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
@@ -64,6 +72,10 @@ def check(name, cond, detail=""):
 # ══════════════════════════════════════════════════════════════════════════
 TABLES = ("messages", "artifacts", "sysml_versions", "reports", "conversations", "agent_tasks")
 FIXTURE_PATH = os.path.join(tempfile.mkdtemp(prefix="wb_mtctx_"), "fixture.db")
+#: 所有指向夹具库的连接（用于退出前统一关闭）
+#: ⚠️ Windows 上文件被打开时**删不掉** ⇒ 夹具库/临时目录会残留（实测 %TEMP% 里堆了
+#:    76 个 wb_mtctx_*，每个带一个 1MB 的 fixture.db）⇒ 必须登记并统一 close。
+_OPEN_CONNS = []
 
 
 def build_fixture():
@@ -102,6 +114,7 @@ def new_conn():
     """每次 get_db() 返回一条新连接（与生产 get_db 用法一致：调用方负责 close）。"""
     c = sqlite3.connect(FIXTURE_PATH)
     c.row_factory = sqlite3.Row
+    _OPEN_CONNS.append(c)
     return c
 
 
@@ -1169,26 +1182,55 @@ check("F8 extract_text_from_content：dict 抽正文 / str 原样 / 取不到空
 _F9_CID = 19
 FIX.execute("DELETE FROM artifacts WHERE conversation_id=?", (_F9_CID,))
 FIX.commit()
-_F9_BODY = "# 巡飞弹参数变更影响分析报告\n\n正文…" + "x" * 400      # >=200 才走 document 分支
+# ★ 2026-10-26 判据反转（理由见文件头）：F9/F10 原先断言「长 markdown 正文自动建 document
+#   产物」，而该行为 2026-10-17（commit 3ef01a1）已按米爸口径「产物库只收交付物」整节删除
+#   ⇒ 判据必须跟着需求反转（存在 → 不存在），否则门禁对着**已废弃的行为**要绿。
+_F9_BODY = "# 巡飞弹参数变更影响分析报告\n\n正文…" + "x" * 400      # ≥200 字，10-17 前会走 document 分支
 _archive_artifacts(FIX, _F9_CID, 9001, {}, _F9_BODY, "chat", "王工")
 _row = FIX.execute("SELECT title FROM artifacts WHERE conversation_id=? AND message_id=? "
                    "AND kind='document'", (_F9_CID, 9001)).fetchone()
-check("F9 落库路径：cd 无 title → document 产物标题 = 内容首标题（**不是**「AI 生成文档」）",
-      _row is not None and _row[0] == "巡飞弹参数变更影响分析报告",
-      "title=%r（None=产物根本没建出来，说明落库路径没走通）" % (_row[0] if _row else None))
-# F9b 幂等：幂等键是 (conv,msg,kind,title)，派生标题由内容决定 ⇒ 同输入必然同名 ⇒ 仍去重
+check("F9 落库路径：≥200 字长回答**不建** document 产物（10-17 口径：产物库只收交付物）",
+      _row is None,
+      "title=%r（≠None ⇒ document 自动登记复活：每次 AI 回答都变产物）"
+      % (_row[0] if _row else None))
+# F9b 重跑不新增：长回答压根不进产物库 ⇒ 重跑自然不新增行
+#   （幂等的**真正**承载体在 F13b 报告路径上——那里确实会建产物）
 _n_before = FIX.execute("SELECT COUNT(*) FROM artifacts WHERE conversation_id=?", (_F9_CID,)).fetchone()[0]
 _archive_artifacts(FIX, _F9_CID, 9001, {}, _F9_BODY, "chat", "王工")
 _n_after = FIX.execute("SELECT COUNT(*) FROM artifacts WHERE conversation_id=?", (_F9_CID,)).fetchone()[0]
-check("F9b 派生标题**不破坏幂等**：同消息同内容重跑不新增产物行",
+check("F9b 重跑同消息**不新增**任何产物行（长回答不进产物库）",
       _n_before == _n_after, "before=%d after=%d" % (_n_before, _n_after))
 
 _archive_artifacts(FIX, _F9_CID, 9002, {"title": "模型自己给的标题"}, "# 别的标题\n" + "y" * 400, "chat", "王工")
 _row2 = FIX.execute("SELECT title FROM artifacts WHERE conversation_id=? AND message_id=? "
                     "AND kind='document'", (_F9_CID, 9002)).fetchone()
-check("F10 上游**给了** title 时必须优先用它（派生不得抢掉模型自己的命名）",
-      _row2 is not None and _row2[0] == "模型自己给的标题",
-      "title=%r" % (_row2[0] if _row2 else None))
+check("F10 上游**给了** title 也**不**建 document 产物（模型回答不是交付物）",
+      _row2 is None,
+      "title=%r（≠None ⇒ 又开始按 title 建产物）" % (_row2[0] if _row2 else None))
+
+# ── F13/F13b 交付物**仍要**进产物库（正例：F9/F10 是单边否定，必须有反向保护）──
+#   10-17 的口径是「只收**交付物**」，不是「不收产物」：报告类回答仍要归档。
+#   没有这条，F9 会退化成「什么都不建也算过」。
+_F13_BODY = "# 巡飞弹参数变更影响分析报告\n\n" + "结论与正文…" * 30
+_F13_TITLE = derive_title_from_content(_F13_BODY)
+_archive_artifacts(FIX, _F9_CID, 9004, {}, _F13_BODY, "report_generation", "王工")
+_r13 = FIX.execute("SELECT title FROM artifacts WHERE conversation_id=? AND message_id=? "
+                   "AND kind='report'", (_F9_CID, 9004)).fetchone()
+check("F13 报告类回答**仍**归档 report 产物（交付物不受 F9/F10 波及）",
+      _r13 is not None and _r13[0] == _F13_TITLE,
+      "title=%r 期望=%r" % (_r13[0] if _r13 else None, _F13_TITLE))
+_rep13 = FIX.execute("SELECT COUNT(*) FROM reports WHERE conversation_id=? AND title=?",
+                     (_F9_CID, _F13_TITLE)).fetchone()[0]
+check("F13b 报告**同时**进报告中心 reports 表（归档链路未断）",
+      _rep13 == 1, "reports 行数=%d" % _rep13)
+# F13c 报告路径的幂等：同消息重跑不新增 report 行（派生标题由内容决定 ⇒ 同名 ⇒ 去重）
+_n13_before = FIX.execute("SELECT COUNT(*) FROM artifacts WHERE conversation_id=? AND message_id=? "
+                           "AND kind='report'", (_F9_CID, 9004)).fetchone()[0]
+_archive_artifacts(FIX, _F9_CID, 9004, {}, _F13_BODY, "report_generation", "王工")
+_n13_after = FIX.execute("SELECT COUNT(*) FROM artifacts WHERE conversation_id=? AND message_id=? "
+                          "AND kind='report'", (_F9_CID, 9004)).fetchone()[0]
+check("F13c 报告产物**幂等**：同消息同内容重跑不新增行",
+      _n13_before == _n13_after, "before=%d after=%d" % (_n13_before, _n13_after))
 
 # F11/F12 二次物化路径（content 是 json.loads(content_json) 的结果，**可能是 dict**）
 # ⚠️ 这条路径是**冷路径**：全仓 grep 显示 `materialize_to_conversation` **当前无生产调用方**
@@ -1266,11 +1308,29 @@ _r26 = _ns26["derive_title_from_content"]("导语第一行\n\n## 真正的标题
 check("M26 取消标题行优先 → F1 目标断言失败（取到导语，被抓住）",
       (_r26 == "真正的标题") is False, repr(_r26))
 
-# M27：把写入侧接线撤回纯兜底名（`_archive_artifacts` 的 exec 孪生体）→ F9 必须翻
+# M27：把 2026-10-17（commit 3ef01a1）**删掉的那段**「长 markdown → document 自动登记」
+#      原样注入回 `_archive_artifacts` ⇒ F9（"不建 document"）必须翻 ⇒ 证明 F9 不是空转断言。
+#   ⚠️ 2026-10-26 重锚：原版锚在 `or derive_title_from_content(content)` 出现 **2 次**
+#      （删除前 = 报告分支 + document 分支各一次）⇒ 10-17 删掉 document 分支后只剩 1 次，
+#      锚点失效、M27 连同它的目标断言一起静默失效（症状：门禁报"锚点未命中"，看不出原因）。
+#      现在锚在**当前源码里那段"已删除"注释**上，注入的是 git 里 3ef01a1 的原始代码块。
+_M27_ANCHOR = "        # ★ 2026-10-17（米爸反馈2）：**删除「长 markdown → document 产物」自动登记**。"
+_M27_OLD_BLOCK = '''        # 4) 长 markdown 文档产物（重演 2026-10-17 删除前的行为）
+        if not cd.get("sysml_views") and not is_report and content and len(content) >= 200:
+            title = (str(cd.get("title") or "").strip()
+                     or derive_title_from_content(content)
+                     or FALLBACK_DOCUMENT_TITLE)[:120]
+            if not repo.exists(conversation_id, message_id, "document", title):
+                repo.create_artifact(
+                    conversation_id, message_id, "document", title, "markdown", content,
+                    {"source_msg_type": cd.get("msg_type", "text")}, source="conversation",
+                    created_by=created_by)
+'''
 _u_src = textwrap.dedent(inspect.getsource(U._archive_artifacts)).replace("\r\n", "\n")
-_u_mut = _u_src.replace("or derive_title_from_content(content)", 'or ""')
-check("M27 变异锚点命中（_archive_artifacts 派生调用）",
-      _u_mut != _u_src and _u_src.count("or derive_title_from_content(content)") == 2)
+_u_mut = _u_src.replace(_M27_ANCHOR, _M27_OLD_BLOCK)
+check("M27 变异锚点命中（把 10-17 删掉的 document 自动登记注入回来）",
+      _u_mut != _u_src and _u_src.count(_M27_ANCHOR) == 1,
+      "锚点出现 %d 次" % _u_src.count(_M27_ANCHOR))
 _ns27 = dict(vars(U))
 exec(compile(_u_mut, "<arch_twin>", "exec"), _ns27)
 FIX.execute("DELETE FROM artifacts WHERE conversation_id=?", (_F9_CID,))
@@ -1278,8 +1338,8 @@ FIX.commit()
 _ns27["_archive_artifacts"](FIX, _F9_CID, 9001, {}, _F9_BODY, "chat", "王工")
 _r27 = FIX.execute("SELECT title FROM artifacts WHERE conversation_id=? AND message_id=? "
                    "AND kind='document'", (_F9_CID, 9001)).fetchone()
-check("M27 撤回派生（回到纯兜底名）→ F9 目标断言失败（被抓住）",
-      (_r27 is not None and _r27[0] == "巡飞弹参数变更影响分析报告") is False,
+check("M27 恢复 document 自动登记 → F9 目标断言失败（被抓住）",
+      (_r27 is None) is False,
       "变异后 title=%r" % (_r27[0] if _r27 else None))
 FIX.execute("DELETE FROM artifacts WHERE conversation_id=?", (_F9_CID,))
 FIX.execute("DELETE FROM subtask_artifacts WHERE run_id=?", (77,))
@@ -1293,6 +1353,23 @@ for f in FAIL:
     print("  FAIL:", f)
 try:
     os.remove(FIXTURE_PATH)
+except Exception:
+    pass
+# ★ 2026-10-26：连**临时目录**一起删 —— 原实现只删 fixture.db，`mkdtemp` 建的目录留着
+#   ⇒ 每跑一次门禁就在 %TEMP% 留一个空壳目录（实测积了 76 个 wb_mtctx_*）。
+#   目录本身不占空间，但它是"门禁没管干净自己的临时库"的信号，且清空 %TEMP% 的
+#   工具（tools/clean_tmp.py --temp）正是按这些目录名识别的 ⇒ 留着就等于一直要人工扫。
+#   ⚠️ Windows 上文件被打开时删不掉 ⇒ 必须**先关连接**再删目录，
+#   否则 rmtree 会静默失败（ignore_errors=True 吞掉异常）→ 目录照样残留。
+for _c in (locals().get("FIX"), locals().get("_FIXR")) + tuple(_OPEN_CONNS):
+    try:
+        if _c is not None:
+            _c.close()
+    except Exception:
+        pass
+try:
+    import shutil as _shutil
+    _shutil.rmtree(os.path.dirname(FIXTURE_PATH), ignore_errors=True)
 except Exception:
     pass
 sys.exit(1 if FAIL else 0)
