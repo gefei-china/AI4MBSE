@@ -23,6 +23,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_plan_cycle_guard.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import sys
@@ -105,7 +106,7 @@ check("C3 报出的环节点只含环内（不含独立链 ok1/ok2）",
 check("C4 空计划被拒", (not TaskQueue.validate_plan([])["ok"]))
 
 print("\n=== D. create_plan 对非法图抛错且不落行 ===")
-TMP = tempfile.mkdtemp(prefix="verify_cycle_")
+TMP = mkdtemp(prefix="verify_cycle_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _c = sqlite3.connect(TMP_DB)

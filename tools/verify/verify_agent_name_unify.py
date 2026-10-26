@@ -33,6 +33,7 @@ H   真库端到端：拿既有「测试agent」改名 → 级联 → 改回（�
 - 变异自证：把级联换成 no-op / 换成 lastrowid 写法，关键判据必须翻转。
 """
 import json
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import shutil
@@ -86,7 +87,7 @@ REF_COLS = (("agent_tasks", "agent_id"), ("agent_memory", "agent_id"), ("tool_ca
 
 
 def new_db():
-    d = tempfile.mkdtemp()
+    d = mkdtemp()
     c = sqlite3.connect(os.path.join(d, "t.db"))
     c.row_factory = sqlite3.Row
     for s in DDL:
@@ -311,7 +312,7 @@ def g_frontend():
                        "suggestAgentName('需求视图生成')",
                        "suggestAgentName('')",
                        "suggestAgentName('ab-c_9')"]) + "]));")
-    td = tempfile.mkdtemp()
+    td = mkdtemp()
     tmpjs = os.path.join(td, "s.js")
     open(tmpjs, "w", encoding="utf-8").write(src)
     r = subprocess.run([NODE, tmpjs], capture_output=True, text=True, timeout=40)

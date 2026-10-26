@@ -11,6 +11,7 @@
     .venv/Scripts/python.exe -X utf8 tools/verify/verify_doc_folders.py
 """
 import contextlib
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import io
 import os
 import re
@@ -489,7 +490,7 @@ import tempfile                                                     # noqa: E402
 import knowledge_pipeline.ingest as _ing                            # noqa: E402
 from repositories.meta_repo import MetaRepo as _MR                  # noqa: E402
 
-_fake_dir = tempfile.mkdtemp(prefix="docf_orphan_")
+_fake_dir = mkdtemp(prefix="docf_orphan_")
 _orig_dir = _ing.source_copy_dir
 _ing.source_copy_dir = lambda: _fake_dir
 try:

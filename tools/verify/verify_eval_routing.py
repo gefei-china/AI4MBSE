@@ -45,6 +45,7 @@ M3：篡改 accuracy 字段（-0.05）⇒ 阈值断言必须判红
   .venv/Scripts/python.exe tools/verify/verify_eval_routing.py --runs 1# 快速自测（不跑一致性）
 """
 from __future__ import annotations
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 
 import argparse
 import io
@@ -136,7 +137,7 @@ def _run_on_clean_db(runs=RUNS):
     results, actual_paths = [], []
 
     for i in range(runs):
-        tmpdir = tempfile.mkdtemp(prefix="eval_gate_%d_" % i)
+        tmpdir = mkdtemp(prefix="eval_gate_%d_" % i)
         db = os.path.join(tmpdir, "clean.db")
         env = dict(env_base)
         env["MBSE_DB_PATH"] = db

@@ -15,6 +15,7 @@
 - **不动真库**：全部在同一个 tmp fixture 库里跑，真库由服务重启时的 init_db 自然迁移。
 """
 import os
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import re
 import shutil
 import sqlite3
@@ -118,7 +119,7 @@ def battery(mig) -> bool:
     ok = 0
 
     # ── A. 主路径：删列 + 保行 ──
-    tmp = os.path.join(tempfile.mkdtemp(), "t.db")
+    tmp = os.path.join(mkdtemp(), "t.db")
     conn = new_fixture(tmp)
     before = fingerprint(conn)
     before_cols = cols_of(conn)
@@ -166,7 +167,7 @@ def battery(mig) -> bool:
     shutil.rmtree(os.path.dirname(tmp), ignore_errors=True)
 
     # ── D. 降级：SQLite < 3.35 不删列、不抛异常 ──
-    tmp2 = os.path.join(tempfile.mkdtemp(), "t2.db")
+    tmp2 = os.path.join(mkdtemp(), "t2.db")
     c2 = new_fixture(tmp2)
     try:
         MIG(_LowVersionConn(c2, "3.34.0"))
@@ -180,7 +181,7 @@ def battery(mig) -> bool:
     shutil.rmtree(os.path.dirname(tmp2), ignore_errors=True)
 
     # ── E. 新库路径：agent_tools 表尚不存在 ──
-    tmp3 = os.path.join(tempfile.mkdtemp(), "t3.db")
+    tmp3 = os.path.join(mkdtemp(), "t3.db")
     c3 = sqlite3.connect(tmp3)
     c3.row_factory = sqlite3.Row
     try:

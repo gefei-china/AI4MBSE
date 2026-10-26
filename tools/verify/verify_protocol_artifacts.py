@@ -31,6 +31,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_protocol_artifacts.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import sys
@@ -147,7 +148,7 @@ check("C5 非 dict 的 JSON（数组）不误认成协议对象",
       extract_protocol_json("[1,2,3]") is None)
 
 print("\n=== D. 物化真落库（临时库）===")
-TMP = tempfile.mkdtemp(prefix="verify_proto_art_")
+TMP = mkdtemp(prefix="verify_proto_art_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _c = sqlite3.connect(TMP_DB)

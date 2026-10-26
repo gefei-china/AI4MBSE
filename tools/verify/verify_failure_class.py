@@ -21,6 +21,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_failure_class.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import sys
@@ -171,7 +172,7 @@ else:
     print("  [SKIP] 未找到真库")
 
 print("\n=== G. 行为层：fail() 真落库（临时库）===")
-TMP = tempfile.mkdtemp(prefix="verify_fcls_")
+TMP = mkdtemp(prefix="verify_fcls_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _tc = sqlite3.connect(TMP_DB)

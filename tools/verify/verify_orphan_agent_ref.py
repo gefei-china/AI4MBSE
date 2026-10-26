@@ -28,6 +28,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_orphan_agent_ref.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import sys
@@ -94,7 +95,7 @@ check("C3 解析失败返回空串而非抛错（不阻断落库）",
       'return ""' in _rn or 'return str(' in _rn)
 
 print("\n=== D. 行为层：快照真落库（临时库）===")
-TMP = tempfile.mkdtemp(prefix="verify_orphan_")
+TMP = mkdtemp(prefix="verify_orphan_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _tc = sqlite3.connect(TMP_DB)

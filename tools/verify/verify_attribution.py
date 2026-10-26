@@ -30,6 +30,7 @@ D6 子进程另用独立库（database 的 DB_PATH import 期绑定，同进程�
 一律不写 DEFAULT，值由被测代码显式给。
 """
 import os
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import shutil
 import sqlite3
 import sys
@@ -495,7 +496,7 @@ def main():
     import json as _json
     import subprocess
     import tempfile
-    _d6dir = tempfile.mkdtemp(prefix="verify_attr_d6_")
+    _d6dir = mkdtemp(prefix="verify_attr_d6_")
     _d6db = os.path.join(_d6dir, "d6.db")
     _child = (
         "import os, sys, sqlite3, json\n"

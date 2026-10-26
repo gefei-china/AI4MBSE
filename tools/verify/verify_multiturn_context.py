@@ -40,6 +40,7 @@
 # 双环境实测：生产库 + 全新干净库 均 rc=0。
 
 import inspect
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import json
 import os
 import sqlite3
@@ -71,7 +72,7 @@ def check(name, cond, detail=""):
 # 夹具：真实 DDL（从生产库读建表语句）+ 最小数据
 # ══════════════════════════════════════════════════════════════════════════
 TABLES = ("messages", "artifacts", "sysml_versions", "reports", "conversations", "agent_tasks")
-FIXTURE_PATH = os.path.join(tempfile.mkdtemp(prefix="wb_mtctx_"), "fixture.db")
+FIXTURE_PATH = os.path.join(mkdtemp(prefix="wb_mtctx_"), "fixture.db")
 #: 所有指向夹具库的连接（用于退出前统一关闭）
 #: ⚠️ Windows 上文件被打开时**删不掉** ⇒ 夹具库/临时目录会残留（实测 %TEMP% 里堆了
 #:    76 个 wb_mtctx_*，每个带一个 1MB 的 fixture.db）⇒ 必须登记并统一 close。

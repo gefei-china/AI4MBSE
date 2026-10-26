@@ -23,6 +23,7 @@
 #   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
 #   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 import inspect
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import sqlite3
 import sys
@@ -37,7 +38,7 @@ os.chdir(ROOT)
 LIVE_DB = os.path.join(ROOT, "mbse.db")
 
 # ── 隔离：整库复制 + 重定向（必须在 import core.config 之前）──
-_TMP = tempfile.mkdtemp(prefix="wb_p14_")
+_TMP = mkdtemp(prefix="wb_p14_")
 COPY_DB = os.path.join(_TMP, "copy.db")
 _src = sqlite3.connect("file:%s?mode=ro" % LIVE_DB, uri=True)
 _dst = sqlite3.connect(COPY_DB)

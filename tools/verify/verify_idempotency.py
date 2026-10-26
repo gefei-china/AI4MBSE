@@ -37,6 +37,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_idempotency.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import sys
@@ -101,7 +102,7 @@ check("B7 排序规范化已用 sort_keys", 'sort_keys=True' in h_src)
 
 print("\n=== C. 行为层：临时库真跑 ===")
 _cur_src = io.open(os.path.abspath(__file__), encoding="utf-8").read()
-TMP = tempfile.mkdtemp(prefix="verify_idem_")
+TMP = mkdtemp(prefix="verify_idem_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _c = sqlite3.connect(TMP_DB)
@@ -225,7 +226,7 @@ else:
     _mod.__file__ = "<mutant>"
     try:
         exec(compile(_mut, "<mutant>", "exec"), _mod.__dict__)
-        _T2 = tempfile.mkdtemp(prefix="verify_idem_mut_")
+        _T2 = mkdtemp(prefix="verify_idem_mut_")
         _D2 = os.path.join(_T2, "m.db")
         _mc = sqlite3.connect(_D2)
         _mc.row_factory = sqlite3.Row

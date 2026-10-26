@@ -15,10 +15,11 @@
 用法：直接跑（MBSE_DB_PATH 指向临时库，零网络——LLM 用 monkeypatch 假客户端）。
 """
 import os
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import sys
 import tempfile
 
-_TMP = tempfile.mkdtemp(prefix="verify_tiered_comp_")
+_TMP = mkdtemp(prefix="verify_tiered_comp_")
 os.environ["MBSE_DB_PATH"] = os.path.join(_TMP, "verify.db")
 
 sys.path.insert(0, r"C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system")
