@@ -1,8 +1,18 @@
-"""verify_tool_round_budget_consistency —门禁：ReAct **工具轮次预算**两侧同源同值。
+"""verify_tool_round_budget_consistency —门禁：ReAct **工具轮次预算**各实现同源同值。
 
 ## 为什么需要这道门禁（2026-10-09 实测）
 
-`execute.py`（非流式）与 `stream.py`（流式）是**同一套 ReAct 语义的两处实现**。
+`execute.py`（非流式）、`stream.py`（流式）是**同一套 ReAct 语义的两处实现**，
+二者之外还有 `skills.py` 的**技能子循环**——它把「运行时工具轮次预算」作为提示注入给模型，
+模型据此规划轮次。三处必须读同一个配置键、取同一个默认值，否则：
+
+- 模型被告知「6 轮」却在 100 轮的 harness 上自我停手，
+  把未真正触发的上限当成终止理由（会话 9629 实测：取 V2 代码时提前收尾）。
+
+2026-10-09 初版只扫 execute/stream；2026-10-27 补 `skills.py`（否则第三处漂移无人锁）。
+
+## 2026-10-09 实测背景
+
 实测发现两处都硬编码 `max_tool_rounds = 3`，而模型的典型序列是
 
     查标准库(2 轮) → 取回技能正文(1 轮) → 生成(1 轮)
@@ -11,7 +21,7 @@
 ⇒ 模型手里只有「未找到包 X」这类失败信息 ⇒ 只能凭记忆写
 ⇒ 实测 **N3 视图展开 6/8 产出雷同**（内容全是上一轮的用例视图）。
 
-修法：两侧都改为 `config.get("agent","max_tool_rounds", 6)`。
+修法：三处都改为 `config.get("agent","max_tool_rounds", 100)`（与 config schema 默认对齐）。
 
 ## ⚠️ 这道门禁防的是**下一个**同类缺陷
 
@@ -24,7 +34,7 @@
 ## 判据（缺一即 FAIL）
 
 ① `execute.py` 与 `stream.py` 都从 `config` 读 `agent.max_tool_rounds`
-② 两侧**默认值相同**（用 `ast` 抽字面量比对，不靠正则猜）
+② 各实现**默认值相同**（用 `ast` 抽字面量比对，不靠正则猜）
 ③ 都不再有裸的 `max_tool_rounds = <数字>` 硬编码
 ④ `loop_protocol` 自测通过（收尾判据本身没被改坏）
 
@@ -39,7 +49,11 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-TARGETS = ("agent/pipeline_parts/execute.py", "agent/pipeline_parts/stream.py")
+# ★ 2026-10-27：补第三处 `skills.py`（技能子循环注入给模型的预算）。
+#   此前只扫 execute/stream，漏掉 skills.py 的 fallback=6，
+#   导致「同一配置键三处默认漂移」无人锁（会话 9629 模型被告知 6 轮却跑在 100 轮 harness 上）。
+TARGETS = ("agent/pipeline_parts/execute.py", "agent/pipeline_parts/stream.py",
+           "agent/pipeline_parts/skills.py")
 
 
 def _literal(cfg_get_call):
@@ -119,14 +133,15 @@ def main() -> int:
                   f"不够「查资料 → 取正文 → 生成」这条典型序列")
 
     print()
-    if len(vals) == 2:
-        a, b = (vals[p]["default"] for p in TARGETS)
-        same = a == b
+    if len(vals) >= 2:
+        defaults = [vals[p]["default"] for p in TARGETS]
+        same = all(d == defaults[0] for d in defaults)
         ok = ok and same
-        print(f"  [{'OK  ' if same else 'FAIL'}] 两侧默认值一致："
-              f"execute={a} stream={b}")
+        _map = " ".join(f"{os.path.basename(p)}={vals[p]['default']}" for p in TARGETS)
+        print(f"  [{'OK  ' if same else 'FAIL'}] 各实现默认值一致： {_map}")
         if not same:
-            print("         ⇒ 流式与非流式工具预算不同 ⇒ 行为会不一致")
+            print("         ⇒ 同一配置键「agent.max_tool_rounds」各路默认不同 "
+                  "⇒ 模型被告知的预算与 harness 实际上限不一致")
 
     print("\n" + "=" * 72)
     print("收尾判据自测（确认没被改坏）")

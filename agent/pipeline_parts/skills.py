@@ -207,10 +207,19 @@ class SkillMixin:
             #   非产码 Agent 或读配置失败 ⇒ 不注入（保持原样，零回归面）。
             try:
                 from core import config as _cfg
-                _rounds = int(_cfg.get("agent", "max_tool_rounds", 6))
-                snippet += (f"工具轮次预算（运行时真值，共 {_rounds} 轮）："
-                            f"请在**前 2 轮内产出代码**，"
-                            f"剩余轮次用于 validate 与按诊断修复。\n")
+                # ★ 单一真源：与 execute.py / stream.py 同读 config「agent.max_tool_rounds」，
+                #   默认值对齐 100（2026-10-17 米爸反馈提高的「防死循环绝对天花板」）。
+                #   旧 fallback 6 与两侧不一致 ⇒ 模型被告知「6 轮」却在 100 轮的 harness 上
+                #   自我停手，把未真正触发的上限当成终止理由（会话 9629 实测）。
+                _rounds = int(_cfg.get("agent", "max_tool_rounds", 100))
+                # 预算只作「天花板提示」，不规定「第几轮必须产出」——
+                # 规定轮次会让长任务（定位→分支→版本→导出→读取，草稿态还要换通道）
+                # 在额到来前仓促收尾或同参数重试。给模型「按链路调用、遇空结果换通道
+                # 而非同参重试」的**通用指引**（不写死任何工程/状态分支）。
+                snippet += (f"工具轮次预算（运行时真值，共 {_rounds} 轮，防死循环绝对天花板）："
+                            f"按任务链路需要调用工具即可，成功推进不受此限；"
+                            f"若某步返回空（例如版本列表为空，常意味着草稿态工程），"
+                            f"优先换通道（草稿态用 branchId=0 / draft 通道）而非同参数重试。\n")
             except Exception:
                 pass
             snippet += f"正文摘要：{at_body}"
