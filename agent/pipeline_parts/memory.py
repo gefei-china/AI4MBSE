@@ -408,6 +408,15 @@ class MemoryMixin:
 
         对齐 Hermes「技能在使用中自我改进」：反馈数据供 SkillImprover 周期修订触发。
         规则判定（不依赖 LLM），异常静默。
+
+        ★ 2026-10-27（会话 9633/9629 实测）：**这里记的是「命中/注入」，不是「执行」**。
+          旧实现把 `result` 填成**本轮最终答案** ⇒ 实测 conv 9633 里
+          file-ops / sysml_view_generation_activity / 文件操作 三行 `result` 完全相同、
+          都等于最终答案（1923 字符）⇒ 看板读成"调用了 3 个技能、各产出一份结果"，
+          技能效果归因彻底失真（用户因此误以为"触发了别的 agent"）。
+          技能没有独立返回值：它是被注入的指导正文，真正干活的是主循环的工具调用。
+          ⇒ `result` 改填**事实描述**（命中并注入、未独立执行），`ok` 仍表示"命中成功"，
+          需要判断真实效果的按 `tool_call_logs` 里 `call_kind='tool'` 的行看。
         """
         hits = self._last_skill_hits or []
         if not hits:
@@ -422,7 +431,10 @@ class MemoryMixin:
             with db_conn() as conn:
                 # 可观测：技能调用日志（call_kind='skill'，与工具日志统一落库，失败不阻断）
                 _agent = getattr(self, "_tool_agent_ctx", None) or {}
-                _summary = str(output_content or "")[:2000] if ok else (note or "执行失败")
+                # 事实描述：技能是"注入"不是"执行"，不拿本轮最终答案冒充技能产出。
+                _summary = ("（技能注入：本轮命中并注入正文指导，未独立执行；"
+                            "实际动作见同轮 call_kind=tool 的行）"
+                            if ok else (note or "注入失败"))
                 # P1-2：与工具日志统一带 failure_kind（此前本 INSERT 无该列 ⇒ 技能
                 # 失败步在步骤级归因里只能落 unknown）。分类器复用 B1-6 的
                 # services.failure_class（不另造第二份词表）；只在失败时写。

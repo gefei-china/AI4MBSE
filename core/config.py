@@ -1630,6 +1630,14 @@ CONFIG_SCHEMA = {
         "fill_max_per_task": {"type": "int", "desc": "单个子任务的补齐次数上限（默认 2，对标 Claude Code 的 3 次恢复上限；第 3 次转人工）"},
         "fill_max_tasks":    {"type": "int", "desc": "单轮补救最多补几个子任务（默认 2，控墙钟与成本；按「无外部门槛优先」排序）"},
         "fill_deadline_s":   {"type": "int", "desc": "自动补齐的墙钟上限（秒，默认 300）：超时未完成的子任务协作式取消并转人工，绝不阻塞汇总"},
+        # ── 技能池范围（2026-10-27 对标 Anthropic Agent Skills / OpenAI Agents SDK 后的口径收口）──
+        # 行业里「绑定」有两种语义，必须显式选定，不能含糊：
+        #   · bound_first（默认，Anthropic 做法）：绑定=优先候选；未绑定的已发布技能
+        #     仍可被自动匹配命中（"装进环境即可用"）。代价：可能命中无关技能。
+        #   · bound_only（OpenAI Agents SDK / Bedrock Agents 做法）：只认绑定，最可控，
+        #     代价是每个 Agent 必须手工挂全。
+        # 切换用配置、不改代码；两档都有门禁断言，可随时回滚。
+        "skill_pool_scope":  {"type": "str", "desc": "★ 技能池范围：bound_first=绑定优先但全池可命中（默认，对齐 Anthropic Agent Skills）；bound_only=只认绑定的技能（对齐 OpenAI Agents SDK / Bedrock Agents 显式装配）"},
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},

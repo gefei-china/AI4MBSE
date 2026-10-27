@@ -661,6 +661,11 @@ def reset_request_state(pipe) -> None:
     #   一旦入口那行被删，上一轮的分片会与本轮同名文件拼在一起（跨轮串味、拼出错文件）。
     #   与 `_tool_sysml_docs` 同生命周期：persist 后清零。
     pipe._tool_doc_pages = {}
+    # ★ 2026-10-27：异步任务续跑的「系统现场」陈述（注入 system prompt 用）。
+    #   不清 ⇒ 上一轮的"任务仍在跑"会被写进本轮，模型据此拒干活（跨轮串味）。
+    pipe._async_notes = []
+    # ★ 2026-10-27：本轮清理掉的泄漏工具标记处数（协议自愈留痕，供观测统计）。
+    pipe._leaked_tool_markup = 0
 
 
 def reset_skill_state(pipe, skill_name) -> None:

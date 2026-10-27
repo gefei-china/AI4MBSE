@@ -131,8 +131,28 @@ class SkillMixin:
         """
         bound = self.registry.get_bound_skills(intent)
         bound_names = {s.get("name") for s in bound}
-        extra = [s for s in self._global_skill_pool(user) if s["name"] not in bound_names]
-        candidates = list(bound) + extra
+        # ★ 2026-10-27（对标 Anthropic Agent Skills 后的口径收口）：
+        #   「绑定」在行业里有两种截然不同的语义，必须由产品显式选定，不能含糊：
+        #     · bound_first（默认，= Anthropic 的做法）：绑定只是**优先候选**，
+        #       未绑定的已发布技能仍可被自动匹配命中。好处是"装进环境即可用"，
+        #       代价是可能命中与当前任务无关的技能（实测 conv 9633 里只绑了
+        #       「文件操作」，却还注入了 sysml_view_generation_activity）。
+        #     · bound_only（= OpenAI Agents SDK / Bedrock Agents 的显式装配）：
+        #       绑了技能就只认绑定的，未绑定的一律不参与。可控性最强，
+        #       代价是每个 Agent 必须手工挂全。
+        #   两种都合理，取决于"这个 Agent 是不是面向最终用户的收敛入口"。
+        #   ⇒ 做成配置开关而非删改代码：切换不用改代码、可回归、可按 Agent 灰度。
+        _scope = "bound_first"
+        try:
+            from core import config as _cfg
+            _scope = str(_cfg.get("agent", "skill_pool_scope", "bound_first") or "bound_first").strip().lower()
+        except Exception:
+            _scope = "bound_first"
+        if _scope == "bound_only":
+            candidates = list(bound)
+        else:
+            extra = [s for s in self._global_skill_pool(user) if s["name"] not in bound_names]
+            candidates = list(bound) + extra
         if not candidates:
             self._last_skill_hits = []
             return ""

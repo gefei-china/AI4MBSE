@@ -4091,6 +4091,27 @@ class StreamMixin:
             #   后果：长 skill 正文的 offload 挂错会话，`skill_body_fetch` 取回时 id 对不上
             #   ⇒ 多轮/多会话连续调用时产出互相串扰（实测两个视图产出 md5 完全相同）。
             self._tool_conv_ctx = conversation_id
+            # ★ 2026-10-27（会话 9629）：**异步任务跨轮续跑必须发生在 prompt 组装之前**。
+            #   ⚠️ 踩过的坑（本轮实测）：最初把它写在 ReAct 循环起点（messages 组装之后），
+            #   结果 `_async_notes` 要么还没算出来、要么被下一轮的初始化清空，
+            #   注入到 system prompt 的永远是空列表 ⇒ 模型完全不知道"上次的导出已经跑完"，
+            #   于是照样从零 PREVIEW/EXPORT（探针实测：仍重新提交了一次导出）。
+            #   顺序铁律：先跑续跑 → 再拼 prompt → 再进循环。
+            self._tool_sysml_docs = []
+            self._tool_sysml_docs_seen = set()
+            self._tool_doc_pages = {}
+            self._async_notes = []
+            try:
+                from agent import async_jobs as _aj0
+                _ajr0 = _aj0.resume_jobs(self, conversation_id)
+                self._async_notes = list(_ajr0.get("notes") or [])
+                for _d0 in (_ajr0.get("docs") or []):
+                    _dk0 = _d0["text"][:200]
+                    if _dk0 not in self._tool_sysml_docs_seen:
+                        self._tool_sysml_docs_seen.add(_dk0)
+                        self._tool_sysml_docs.append(_d0)
+            except Exception:
+                self._async_notes = []
             # P1-29（2026-10-02）：状态起点统一 —— 此前本路径**不设** `_skill_forced`，
             # 导致「显式指定技能」的白名单授权在对话主路径上不生效（`skills.py:153/163`
             # 会按"未强制"重置并只并集*自动命中*技能的白名单）；且 `_skill_allowed_tools`
@@ -4142,6 +4163,18 @@ class StreamMixin:
                 hist = self._load_history(conversation_id, cur_input=user_input)
                 if hist:
                     messages = [messages[0]] + hist + messages[1:]
+            # ★ 2026-10-27（会话 9629）：把「系统托管的异步任务」事实注入 system prompt。
+            #   为什么必须注入而不是靠历史对话：实测模型**每轮都从零重来**
+            #   （重查工程→分支→版本→PREVIEW→EXPORT），把整轮预算耗在重复劳动上，
+            #   而它真正该做的是"接着上次那个 taskId 往下走"。历史里虽有 taskId，
+            #   但模型不会主动把它当现场；系统陈述一句话，就等于给了它确定的现场。
+            #   注意：这些是**系统实测事实**（DB + 真 STATUS 调用），不是模型推断。
+            if getattr(self, "_async_notes", None):
+                messages[0]["content"] += (
+                    "\n\n【系统·异步任务现场（实测，非推断）】\n"
+                    + "\n".join("- " + str(n) for n in self._async_notes)
+                    + "\n以上结论来自系统对任务状态的真实查询，请以此为准；"
+                      "不要凭记忆或推断宣称「已归档/已存入产物库」。")
             # 2026-09-29（用户五轮反馈1）：续作短语（重试/继续）→ 显式续作指令。
             #  此前 AI 表现为"不知道之前的内容"：carry 词表没有"重试"→ 话题切新段，
             #  当前话题原文只剩两字；且被终止那轮的产出未落库（尾部 except 现已固化）。
@@ -4202,15 +4235,8 @@ class StreamMixin:
             _ac_cfg = self._auto_continue_cfg()
             _ac_seen_steps = []
             # ★ 2026-10-17（米爸反馈4）：工具结果里取回的完整 SysML 文档暂存。
-            #   智源导出→读取链路的全文在工具结果 JSON 信封里、AI 正文只有分析，
-            #   persist 时由 _archive_artifacts 第 5 节登记进产物库（实测 24688 字节
-            #   导出全文漏归档、AI 又无写入通道的根因修复）。
-            self._tool_sysml_docs = []
-            self._tool_sysml_docs_seen = set()
-            # ★ 2026-10-27（会话 9629）：分页读取的累积状态（键=文件名）。
-            #   一次只回 maxBytes 的分页协议（offset/bytesRead/nextOffset/eof）必须
-            #   跨调用累积，读齐了才归档；每轮起点清零，避免跨轮串台。
-            self._tool_doc_pages = {}
+            #   ⚠️ 2026-10-27 起**初始化已前移到 prompt 组装之前**（与异步续跑一起），
+            #   这里不再重复置空 —— 否则会把刚续跑取回的文档清掉（本轮实测踩过）。
             _ac_deadline = ((time.time() + _ac_cfg["deadline_s"])
                             if (_ac_cfg["enabled"] and _ac_cfg["deadline_s"] > 0) else None)
             _tools_def_full = tools_def   # 每轮续跑恢复完整工具集（offload 注入/预算闸会改它）
@@ -4536,6 +4562,22 @@ class StreamMixin:
                                     _lg.undo_dup_count(tname, targs)
                             _t_ok = bool(result.get("ok"))
                             _r_full = str(result.get("result") or "")
+                            # ★ 2026-10-27（会话 9629）：**提交即托管**。
+                            #   工具一旦返回"异步任务已受理/运行中"（结果里带 taskId + status），
+                            #   立刻把任务登记进 async_external_jobs —— 责任从 LLM 转到系统：
+                            #   下一轮开头自动查状态、完成则自动分页读取并归档。
+                            #   为什么必须由系统记：实测模型从不跨轮复用 taskId，
+                            #   每轮重查工程/分支/版本并重新提交导出（白烧整轮预算）。
+                            try:
+                                from agent import async_jobs as _aj
+                                _ajob = _aj.detect_job(_r_full)
+                                if _ajob:
+                                    from database import db_conn as _adb
+                                    with _adb() as _ac:
+                                        _aj.record(_ac, conversation_id,
+                                                   _mcp_of(tname) or "", tname, _ajob)
+                            except Exception:
+                                pass
                             # ★ 2026-10-17（米爸反馈4）：识别工具结果里的完整 SysML 文档
                             #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
                             _doc_hit = None
@@ -4686,6 +4728,26 @@ class StreamMixin:
                     _iqs = [dict(_clarify_req)]
                     _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
                                                  forced_intent, skill_name, team, _iqs)
+                    # ★ 2026-10-27（本轮实测）：澄清收尾会 `return`，**走不到**下面的
+                    #   `_archive_artifacts` ⇒ 本轮已取回的交付物（含异步续跑拼出的全文）
+                    #   会丢在 `_tool_sysml_docs` 里没入库 —— 探针实测：续跑明明读到了
+                    #   80543 字节，但模型随后 ask_user，产物库仍是 0 条。
+                    #   澄清不是失败：已经拿到的文件必须先落库，再等用户回答。
+                    try:
+                        if getattr(self, "_tool_sysml_docs", None):
+                            with db_conn() as _c_ar:
+                                _archive_artifacts(_c_ar, conversation_id, _mid or 0,
+                                                   "{}", "", intent,
+                                                   tool_docs=self._tool_sysml_docs)
+                                try:
+                                    from agent import async_jobs as _aj3
+                                    _aj3.link_archived(_c_ar, conversation_id,
+                                                       self._tool_sysml_docs)
+                                except Exception:
+                                    pass
+                            self._tool_sysml_docs = []
+                    except Exception:
+                        pass
                     yield {"type": "clarify_ask", "questions": _iqs, "intent": intent,
                            "title": "❓ AI 执行中需要你确认后才能继续",
                            "message": str(user_input)[:200], "source": "ask_user"}
@@ -4978,6 +5040,26 @@ class StreamMixin:
             # 落库/done 用跨轮全量产出（续跑轮内容已在评估点并进 _full_content）
             if _full_content:
                 llm_content = _full_content
+            # ★ 2026-10-27（会话 9629 msg 4892 实测）：**工具调用标记泄漏清洗**。
+            #   那一轮正文末尾出现 `<｜｜DSML｜｜ invoke name="export_sysml_v2">` +
+            #   一串参数残骸（`STATUS` / `2114956963811217410` / `1` / `100`）。
+            #   成因：模型把工具调用写成了正文，协议层没解析到 tool_calls ⇒
+            #   ① 那些调用**根本没执行**（随后模型自述"工具额度已用尽"）；
+            #   ② 机器标记原样呈现给用户。
+            #   这里从不漏给用户看；同时留痕，便于统计"模型不走标准 tool_calls"的比例。
+            try:
+                from agent.utils import strip_leaked_tool_markup as _slm
+                llm_content, _leak_n = _slm(llm_content)
+                if _leak_n:
+                    self._leaked_tool_markup = _leak_n
+                    try:
+                        yield {"type": "stage", "name": "协议自愈",
+                               "status": "done",
+                               "detail": "清理了 %d 处泄漏的工具调用标记（未被执行）" % _leak_n}
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             # SysML v2 视图联动：LLM 输出含 SysML 代码 → 解析并投影各视图 ViewModel（会话内即时预览，不落库）
             sysml_views = self._gen_sysml_views(llm_content, intent, user_input)
             yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "done"}
@@ -5027,6 +5109,15 @@ class StreamMixin:
                     # ★ 2026-10-17（米爸反馈4）：工具结果取回的 SysML 文档一并归档
                     _archive_artifacts(conn, conversation_id, msg_id, card_data, llm_content, intent,
                                        tool_docs=getattr(self, "_tool_sysml_docs", None))
+                    # ★ 2026-10-27：归档完成后**回填任务行的 artifact_id**，否则
+                    #   `open_jobs`（判据 artifact_id=0）下一轮会把同一任务再读一遍并
+                    #   生成重复产物（每轮 message_id 不同，幂等键挡不住）。
+                    try:
+                        from agent import async_jobs as _aj2
+                        _aj2.link_archived(conn, conversation_id,
+                                           getattr(self, "_tool_sysml_docs", None))
+                    except Exception:
+                        pass
                     self._tool_sysml_docs = []      # 已登记，防重复归档
                     self._tool_doc_pages = {}       # 分页累积状态同步清零
                     # CIA：变更影响分析记录（FR-CIA-3 每次分析结果快照落库，可追溯）

@@ -306,6 +306,7 @@ def accumulate_paged_doc(pages: dict, tool_name: str, result_text: str) -> dict 
 
 
 def collect_tool_sysml_doc(pages: dict, tool_name: str, result_text: str) -> dict | None:
+
     """工具结果 → 完整 SysML 文档的唯一入口（单次全文 + 分页累积两条路）。
 
     调用方（stream / execute 同构）只调本函数，不再各自拼判据——避免两条路径判据漂移。
@@ -317,6 +318,45 @@ def collect_tool_sysml_doc(pages: dict, tool_name: str, result_text: str) -> dic
         return accumulate_paged_doc(pages, tool_name, result_text)
     except Exception:
         return None
+
+
+#: 工具调用标记泄漏的识别（实测 conv 9629 msg 4892：模型把 tool call 写成了正文，
+#: 形如 `<｜｜DSML｜｜ invoke name="export_sysml_v2">`，全角 `｜`(U+FF5C) 与半角 `|` 都会出现）。
+#: 后果有两层：① 用户直接看到一串机器标记；② 那些调用**根本没执行**，
+#: 模型却按"已发出"继续叙事（随后自述"工具额度已用尽"）。
+_LEAK_MARK = re.compile(r"(?:DSML|dsml|antml|ANTML)")
+#: 标记外层的定界符（全角/半角竖线，允许 1~2 个）
+_LEAK_SEP = "｜|"
+#: 清理后可能残留的碎片行（整行只有 `xxx>` 这种残骸）
+_LEAK_RESIDUE = re.compile(r"(?m)^\s*(?:invoke|parameter|calls|function_calls|"
+                           r"function|parameters|function_results)\s*>?\s*$")
+
+
+def strip_leaked_tool_markup(text: str) -> tuple:
+    """清掉正文里泄漏的工具调用标记，返回 ``(clean_text, removed_count)``。
+
+    为什么用"扫描"而不是一条正则：泄漏标记的闭合形态不稳定（`</｜｜DSML｜｜ invoke>`
+    / `<｜｜DSML｜｜ parameter ...>` / 只留 `<... calls>`），单条正则非贪婪会把
+    开标签和闭标签拆开、留下 `parameter>` 这类碎片。这里按"标记出现处向左扩到最近的
+    `<`、向右扩到最近的 `>`"整段切除，循环到没有标记为止，再清残骸行。
+
+    只做**可见性**处理；**不**把泄漏内容还原成真实工具调用——参数未经协议校验，
+    贸然执行可能带错 taskId 重复提交，比不执行更危险。
+    """
+    s = text or ""
+    if not s:
+        return s, 0
+    marks = list(_LEAK_MARK.finditer(s))
+    if not marks:
+        return s, 0
+    first = marks[0]
+    # 从"第一个标记所属的 `<`"起**整段截断**：标记之后全是参数值等机器残骸
+    # （实测残留 `STATUS` / `2114956963811217410` / `1` / `100` 这类裸值），
+    # 逐段删会留下这类碎片，比原样更难看。正文 prose 在标记之前，截断即干净。
+    cut = s.rfind("<", max(0, first.start() - 64), first.start() + 1)
+    if cut < 0:
+        cut = first.start()
+    return s[:cut].rstrip(), len(marks)
 
 
 def _archive_artifacts(conn, conversation_id: int, message_id: int,
