@@ -23,7 +23,7 @@ sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 BASE = "http://127.0.0.1:8000"
 PID = "2114907195813986304"      # 「通信子系统用例」
-GUIDE = "在工程“广汽方法论建模1022”的“通信子系统用例”包中新增一个“{name}”包"
+GUIDE = "在“通信子系统用例”包中新增一个“{name}”包"
 
 
 def call(path, body=None, method=None, headers=None):
@@ -71,6 +71,26 @@ def main():
                 headers=hdr)
     cid = conv.get("id") or conv.get("conversation", {}).get("id")
     print("[会话] id=%s" % cid)
+
+    # ★ 模拟真实多轮：第一轮先"确定工程"（用户原话 4869 的形态），
+    #   第二轮再问建包（**不带工程名**）。验证退出"最近 8 条窗口"后锚点是否仍生效。
+    if "--prime" in sys.argv:
+        prime = "基于这个工程“广汽方法论建模1022”查询一下有哪些分支"
+        print("[预热轮] %s" % prime)
+        req0 = urllib.request.Request(
+            "%s/api/conversations/%d/chat/stream" % (BASE, cid),
+            data=json.dumps({"message": prime, "branch": "dev", "team": "智源对接agent"},
+                            ensure_ascii=False).encode(),
+            headers={"Content-Type": "application/json", **hdr}, method="POST")
+        with urllib.request.urlopen(req0, timeout=600) as r0:
+            for _raw in r0:
+                pass
+        cc = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+        cc.row_factory = sqlite3.Row
+        anc = list(cc.execute("SELECT slot,value,label FROM conversation_anchors "
+                              "WHERE conversation_id=? ORDER BY id", (cid,)))
+        cc.close()
+        print("[预热后锚点] %s" % [(a["slot"], a["label"]) for a in anc])
 
     tools = []
     body = {"message": msg, "branch": "dev", "team": "智源对接agent"}

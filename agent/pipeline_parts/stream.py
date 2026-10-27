@@ -4175,6 +4175,22 @@ class StreamMixin:
                     + "\n".join("- " + str(n) for n in self._async_notes)
                     + "\n以上结论来自系统对任务状态的真实查询，请以此为准；"
                       "不要凭记忆或推断宣称「已归档/已存入产物库」。")
+            # ★ 2026-10-27（用户质疑"前面已确定工程，是不是上下文遗漏了"——实测确认会丢）：
+            #   把**会话级坐标**（工程/分支/版本/目标元素）作为独立块注入，与历史消息解耦。
+            #   为什么不能靠历史：`_load_history` 只取当前话题最近 8 条 + 3000 字符预算，
+            #   用户"基于这个工程 XXX"这类**锚点句**一旦滑出窗口就永久丢失（只能靠语义回捞，
+            #   而当前 embedding 404 降级 bigram，召回不可靠）。conv 9629 就是实例：
+            #   msg 4869 定工程 → msg 4899 提问，相隔 17 条，锚点已在窗口外。
+            try:
+                from agent import conv_anchors as _ca2
+                from database import db_conn as _cadb2
+                with _cadb2() as _cac2:
+                    _anc = _ca2.load_anchors(_cac2, conversation_id)
+                _ab = _ca2.render_block(_anc)
+                if _ab:
+                    messages[0]["content"] += _ab
+            except Exception:
+                pass
             # 2026-09-29（用户五轮反馈1）：续作短语（重试/继续）→ 显式续作指令。
             #  此前 AI 表现为"不知道之前的内容"：carry 词表没有"重试"→ 话题切新段，
             #  当前话题原文只剩两字；且被终止那轮的产出未落库（尾部 except 现已固化）。
@@ -4562,6 +4578,20 @@ class StreamMixin:
                                     _lg.undo_dup_count(tname, targs)
                             _t_ok = bool(result.get("ok"))
                             _r_full = str(result.get("result") or "")
+                            # ★ 2026-10-27（用户质疑"前面已确定工程，是不是上下文遗漏了"——
+                            #   实测确认**会丢**）：把本轮工具回执里出现的
+                            #   工程/分支/版本/元素**落成会话锚点**，下一轮不依赖历史窗口。
+                            #   机制缺口：历史只取当前话题最近 8 条 + 3000 字符预算，
+                            #   更早的靠语义回捞（现 bigram 降级）⇒ conv 9629 里用户
+                            #   msg 4869「基于这个工程广汽方法论建模1022」落在窗口外，
+                            #   当时没丢只是因助手回复里反复复述了工程名（运气）。
+                            try:
+                                from agent import conv_anchors as _ca
+                                from database import db_conn as _cadb
+                                with _cadb() as _cac:
+                                    _ca.record_from_tool(_cac, conversation_id, _r_full, targs)
+                            except Exception:
+                                pass
                             # ★ 2026-10-27（会话 9629）：**提交即托管**。
                             #   工具一旦返回"异步任务已受理/运行中"（结果里带 taskId + status），
                             #   立刻把任务登记进 async_external_jobs —— 责任从 LLM 转到系统：
