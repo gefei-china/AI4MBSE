@@ -214,7 +214,19 @@ def extract_sysml_doc_from_result(tool_name: str, result_text: str) -> dict | No
         if isinstance(d, dict):
             fn = str(d.get("fileName") or "").strip()
             body = d.get("content")
-            if isinstance(body, str) and len(body) >= 500:
+            # ★ 2026-10-27（会话 9629 实测）：**分页读取的尾段不是全文**。
+            #   该轮 export_sysml_v2 按 offset 0/32767/65534 三段读（maxBytes=32768），
+            #   只有第三段带 eof=true，但它的 content 只是 65534 之后的**尾部 15KB**。
+            #   旧判据只看 `eof is True` ⇒ 会把半截尾巴当全文归档（比不归档更坏：
+            #   产物库里出现一个"看起来完整"的残缺文件）。
+            #   ⇒ 带非零 offset 的段一律交给 accumulate_paged_doc 累积，单段不单独归档。
+            _off = d.get("offset")
+            try:
+                _off_n = int(_off) if _off is not None else 0
+            except Exception:
+                _off_n = 0
+            _paged = (_off_n > 0) or ("nextOffset" in d)
+            if isinstance(body, str) and len(body) >= 500 and not _paged:
                 _complete = (d.get("eof") is True) or (d.get("completeFile") is True) \
                     or ("eof" not in d and "completeFile" not in d)
                 _is_sysml = fn.lower().endswith((".sysml", ".kerml")) or \
@@ -225,6 +237,86 @@ def extract_sysml_doc_from_result(tool_name: str, result_text: str) -> dict | No
     if t.lower().startswith("package"):
         return {"title": "SysML 源码（工具取回）", "text": t}
     return None
+
+
+def accumulate_paged_doc(pages: dict, tool_name: str, result_text: str) -> dict | None:
+    """**分页读取**的通用累积器：按字节偏移把多个分片拼成全文，只在「齐了」时返回。
+
+    为什么需要（会话 9629 实测，产物库为空的真因之二）：
+      智源 `export_sysml_v2` 的 READ 是**分页协议**——一次只回 maxBytes 字节，
+      带 ``offset`` / ``bytesRead`` / ``nextOffset`` / ``eof``。80KB 的导出要读 3 段。
+      旧链路对每段独立判断「是否完整」⇒ 尾段(eof=true)被当成整份文件，
+      而前面两段被丢弃 ⇒ 要么归档半截、要么（配合响应截断）干脆一段都不命中。
+
+    判据（**协议通用，不针对任何具体平台/工具**）：
+      · 信封可解析，且有 ``content``；
+      · 分片按 ``offset`` 落位，用 ``bytesRead``（缺省则按 UTF-8 字节数）串成**无缝链**；
+      · 链首必须从 0 开始，末段 ``eof``/``completeFile`` 为真，且**每一段都在**；
+      ⇒ 齐全才返回 ``{"title": 文件名, "text": 拼接全文}``，否则返回 None（半截不入库）。
+
+    :param pages: 调用方持有的累积状态 dict（每请求生命周期内复用；键=文件名/taskId）；
+                  本函数**就地**写入，便于跨轮跨工具累积。
+    """
+    t = (result_text or "").strip()
+    if not t.startswith("{"):
+        return None
+    try:
+        d = json.loads(t)
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    body = d.get("content")
+    if not isinstance(body, str) or not body:
+        return None
+    fn = str(d.get("fileName") or "").strip()
+    key = fn or str(d.get("taskId") or "") or str(tool_name or "")
+    try:
+        off = int(d.get("offset")) if d.get("offset") is not None else 0
+    except Exception:
+        off = 0
+    try:
+        nbytes = int(d.get("bytesRead")) if d.get("bytesRead") is not None \
+            else len(body.encode("utf-8"))
+    except Exception:
+        nbytes = len(body.encode("utf-8"))
+    eof = (d.get("eof") is True) or (d.get("completeFile") is True) \
+        or ("eof" not in d and "completeFile" not in d and "nextOffset" not in d)
+    st = pages.setdefault(key, {"segs": {}, "title": fn, "tool": str(tool_name or "")})
+    st["segs"][off] = {"text": body, "nbytes": nbytes}
+    if not eof:
+        return None      # 还没读到末段 ⇒ 不归档（防半截）
+    # 串链：从 0 起，每段的 [offset, offset+bytesRead) 必须与下一段首尾相接
+    pos = 0
+    parts = []
+    for o in sorted(st["segs"]):
+        seg = st["segs"][o]
+        if o != pos:
+            return None  # 有缺口（中间段缺失/被截断）⇒ 不归档
+        parts.append(seg["text"])
+        pos = o + seg["nbytes"]
+    text = "".join(parts)
+    if len(text) < 500:
+        return None
+    _is_sysml = key.lower().endswith((".sysml", ".kerml")) \
+        or text.lstrip().lower().startswith("package")
+    if not _is_sysml:
+        return None
+    return {"title": st.get("title") or "SysML 源码（分页取回）", "text": text}
+
+
+def collect_tool_sysml_doc(pages: dict, tool_name: str, result_text: str) -> dict | None:
+    """工具结果 → 完整 SysML 文档的唯一入口（单次全文 + 分页累积两条路）。
+
+    调用方（stream / execute 同构）只调本函数，不再各自拼判据——避免两条路径判据漂移。
+    """
+    doc = extract_sysml_doc_from_result(tool_name, result_text)
+    if doc:
+        return doc
+    try:
+        return accumulate_paged_doc(pages, tool_name, result_text)
+    except Exception:
+        return None
 
 
 def _archive_artifacts(conn, conversation_id: int, message_id: int,

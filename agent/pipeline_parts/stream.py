@@ -4207,6 +4207,10 @@ class StreamMixin:
             #   导出全文漏归档、AI 又无写入通道的根因修复）。
             self._tool_sysml_docs = []
             self._tool_sysml_docs_seen = set()
+            # ★ 2026-10-27（会话 9629）：分页读取的累积状态（键=文件名）。
+            #   一次只回 maxBytes 的分页协议（offset/bytesRead/nextOffset/eof）必须
+            #   跨调用累积，读齐了才归档；每轮起点清零，避免跨轮串台。
+            self._tool_doc_pages = {}
             _ac_deadline = ((time.time() + _ac_cfg["deadline_s"])
                             if (_ac_cfg["enabled"] and _ac_cfg["deadline_s"] > 0) else None)
             _tools_def_full = tools_def   # 每轮续跑恢复完整工具集（offload 注入/预算闸会改它）
@@ -4536,8 +4540,8 @@ class StreamMixin:
                             #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
                             _doc_hit = None
                             try:
-                                from agent.utils import extract_sysml_doc_from_result as _esd
-                                _doc = _esd(tname, _r_full)
+                                from agent.utils import collect_tool_sysml_doc as _ctd
+                                _doc = _ctd(getattr(self, "_tool_doc_pages", {}), tname, _r_full)
                                 if _doc:
                                     _dk = _doc["text"][:200]
                                     if _dk not in self._tool_sysml_docs_seen:
@@ -5024,6 +5028,7 @@ class StreamMixin:
                     _archive_artifacts(conn, conversation_id, msg_id, card_data, llm_content, intent,
                                        tool_docs=getattr(self, "_tool_sysml_docs", None))
                     self._tool_sysml_docs = []      # 已登记，防重复归档
+                    self._tool_doc_pages = {}       # 分页累积状态同步清零
                     # CIA：变更影响分析记录（FR-CIA-3 每次分析结果快照落库，可追溯）
                     _archive_impact_analysis(conn, conversation_id, msg_id, card_data, user_input)
                     conn.execute(

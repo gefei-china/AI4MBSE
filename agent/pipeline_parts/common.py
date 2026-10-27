@@ -656,6 +656,11 @@ def reset_request_state(pipe) -> None:
     # ★ 2026-11-13（#57）：已取回章节记忆（{章号: 正文}）——请求级瞬态。
     #   不清 ⇒ 下一轮会拿到**上一轮别的用户**的章节正文 = 跨用户数据泄漏（安全红线）。
     pipe._att_fetched = {}
+    # ★ 2026-10-27（会话 9629）：工具结果分页读取的累积状态（键=文件名/taskId）。
+    #   run()/execute() 入口都会重新置 {}，但**必须在此登记**——单例复用下若无登记，
+    #   一旦入口那行被删，上一轮的分片会与本轮同名文件拼在一起（跨轮串味、拼出错文件）。
+    #   与 `_tool_sysml_docs` 同生命周期：persist 后清零。
+    pipe._tool_doc_pages = {}
 
 
 def reset_skill_state(pipe, skill_name) -> None:

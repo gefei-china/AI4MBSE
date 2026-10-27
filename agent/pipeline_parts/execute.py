@@ -559,6 +559,8 @@ class ExecuteMixin:
             # ★ 2026-10-17（米爸反馈4）：工具结果取回的 SysML 文档暂存（persist 时归档）
             self._tool_sysml_docs = []
             self._tool_sysml_docs_seen = set()
+            # ★ 2026-10-27（会话 9629）：分页读取累积状态（与 stream 同源同语义）
+            self._tool_doc_pages = {}
             _ac_tools_hist = []       # 全程工具调用史（评估器输入，tools_brief 内截断）
             _ac_tool_n = 0            # 本轮实际执行的工具调用数（评估触发门）
             _ac_deadline = ((time.time() + _ac_cfg["deadline_s"])
@@ -659,8 +661,8 @@ class ExecuteMixin:
                         # ★ 2026-10-17（米爸反馈4）：识别工具结果里的完整 SysML 文档
                         #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
                         try:
-                            from agent.utils import extract_sysml_doc_from_result as _esd
-                            _doc = _esd(tname, _t_res)
+                            from agent.utils import collect_tool_sysml_doc as _ctd
+                            _doc = _ctd(getattr(self, "_tool_doc_pages", {}), tname, _t_res)
                             if _doc:
                                 _dk = _doc["text"][:200]
                                 if _dk not in self._tool_sysml_docs_seen:
@@ -928,6 +930,7 @@ class ExecuteMixin:
                 _archive_artifacts(conn, conversation_id, msg_id, card_data, llm_content, intent,
                                    tool_docs=getattr(self, "_tool_sysml_docs", None))
                 self._tool_sysml_docs = []      # 已登记，防重复归档
+                self._tool_doc_pages = {}       # 分页累积状态同步清零
                 # CIA：变更影响分析记录（FR-CIA-3 每次分析结果快照落库，可追溯）
                 if intent == "impact":
                     try:

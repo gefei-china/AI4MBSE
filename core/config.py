@@ -161,7 +161,13 @@ DEFAULT_CONFIG = {
     },
     "mcp": {
         "timeout": 15,           # MCP JSON-RPC 调用超时（秒）
-        "max_response": 4000,    # MCP 响应截断上限（字符）
+        # ★ 2026-10-27（会话 9629 实测）：4000 太小，会把**结构化信封切成非法 JSON**。
+        #   智源 export READ 一段就 32KB（{fileName,content,eof,sizeBytes}），
+        #   截到 4000 后 json.loads 直接失败 ⇒ 交付物归档判据全部落空（产物库空）。
+        #   这里只作**内存安全上限**（防单次响应打爆进程），不是「给模型看的长度」——
+        #   给模型看的长度由 agent 侧 _TOOL_MODEL_CAP=3000 + offload 引用块统一收口。
+        #   两个上限职责分离后，服务端才拿得到完整载荷去归档，模型侧也不会膨胀。
+        "max_response": 200000,  # MCP 响应安全上限（字符）；模型可见长度另由 agent 侧收口
     },
     "zhiyuan": {
         "base_url": "",          # MBSE 平台地址，如 http://mbse-platform:8080
@@ -1554,7 +1560,7 @@ CONFIG_SCHEMA = {
     },
     "mcp": {
         "timeout":      {"type": "int", "desc": "MCP JSON-RPC 调用超时（秒）"},
-        "max_response": {"type": "int", "desc": "MCP 响应截断上限（字符）"},
+        "max_response": {"type": "int", "desc": "MCP 响应安全上限（字符，防单次响应打爆内存；模型可见长度另由 agent 侧收口，勿与展示上限混用）"},
     },
     "zhiyuan": {
         "base_url":     {"type": "url",   "desc": "智源平台地址（MBSE 平台网关）"},
