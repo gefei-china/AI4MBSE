@@ -16,7 +16,24 @@ function onStageEvent(ev){
       if(_cont){ procAddStage('意图识别','run','按你的确认继续…'); }
       else { resetPipeline(); procAddStage('意图识别','run','正在识别意图…'); }
     }
-    else { procAddStage('意图识别','done', ev.intent ? `→ ${ev.agent||ev.intent}（HIL ${ev.hil_level||'-'}）` : ''); }
+    else {
+      // ★ 2026-10-27（用户反馈）：「意图识别环节总是匹配到具体的 agent，不能提供更好理解的内容吗，
+      //   比如对于用户意图的分析与总结 —— 用户到底想要什么」。
+      //   原实现只显示 `→ 智源对接agent（HIL 2）` —— 那是**内部路由目标**，用户读不出"我要的东西对不对"。
+      //   现在折叠态显示「理解：<goal>」（后端 brief.goal，建模意图取自 slots.goal，
+      //   其余为忠实复述用户原话首句），展开可看「归类 / 判据 / 待确认 / 执行主体」。
+      //   后端不下发 brief（老版本 / 配置关闭）⇒ 自动回退到旧的 agent 行，行为不变。
+      const _b = ev.brief;
+      if(_b && (_b.goal || _b.followup)){
+        // goal 为空 + followup=true = 本轮是「回答澄清卡」，没有重新分析目标。
+        //   这种情况下**不能**拿澄清壳当"理解"（实测出现过「理解：【澄清补充】用户在待澄清…」），
+        //   如实说明这一轮的性质，比编一句理解更可信。
+        const _line = _b.goal ? ('理解：' + _b.goal) : '按你的确认继续（本轮不重新分析目标）';
+        procAddStage('意图识别','done', _line, '', _intentBriefBody(_b, ev));
+      } else {
+        procAddStage('意图识别','done', ev.intent ? `→ ${ev.agent||ev.intent}（HIL ${ev.hil_level||'-'}）` : '');
+      }
+    }
   } else if(name === '知识库检索'){
     if(st === 'run'){ procAddStage('知识库检索','run', ev.retrieved===false ? '按需检索未触发（纯问答）' : '图谱 / 向量检索中…'); }
     else {
@@ -195,6 +212,13 @@ function procRender(){
     const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 48;
     if(nearBottom) body.scrollTop = body.scrollHeight;
   });
+  // ★ 2026-10-27：执行过程区已**整区限高**（CSS `.proc{max-height:44vh;overflow-y:auto}`）
+  //   ⇒ 新环节追加后，若用户本来就停在底部，必须把**外层容器**也钉到底，
+  //   否则会被看成"内容卡住不动"。与外层会话的 stickBottom 同策略：用户上滑查看后不强拽。
+  try {
+    const nearBottomBox = b.scrollHeight - b.scrollTop - b.clientHeight < 48;
+    if(nearBottomBox) b.scrollTop = b.scrollHeight;
+  } catch(e) {}
   // P0-1：编排 DAG 重建——数据更新（dagDirty）或展开态画布被时间线重绘清除（无 canvas）时重建
   if(!hideBody && _procS.dag && _procS.dag.order.length){
     const dagEl = document.getElementById('proc-dag-live');
@@ -218,23 +242,55 @@ function procAddSystemNotice(text){
   procUpsert(id, {type:'notice', icon:'ℹ️', title:'系统提示', status:'done',
     statusText:'提示', sub: t, detail: t});
 }
-function procAddStage(name, status, detail, detailHtml){
+// ★ 2026-10-27：意图理解明细（展开体）。**白名单构造** —— 所有动态文本逐个 esc()，
+//   因为 procUpsert 的 detail 是直接 innerHTML 的（与 subHtml 同一纪律）。
+//   后端 agent/intent_brief.py 保证字段齐全且已截断，这里只做展示与兜底。
+function _intentBriefBody(b, ev){
+  if(!b) return '';
+  const row = (k, v, cls) => (v === undefined || v === null || v === '')
+    ? '' : `<div class="ib-row${cls?' '+cls:''}"><span class="ib-k">${esc(k)}</span><span class="ib-v">${esc(String(v))}</span></div>`;
+  const basis = Array.isArray(b.basis) ? b.basis.filter(Boolean).join(' · ') : '';
+  const miss = Array.isArray(b.missing) ? b.missing.filter(Boolean) : [];
+  const who = [b.agent || ev.agent || '', ev.hil_level ? ('HIL ' + ev.hil_level) : '']
+    .filter(Boolean).join(' ｜ ');
+  let h = '<div class="ib-brief">';
+  h += row('我理解你要的', b.goal || (b.followup ? '（本轮是在回答你的确认，没有重新分析目标）' : ''));
+  h += row('归类', b.need);
+  h += row('判断依据', basis);
+  miss.forEach(m => { h += row('可能要补充', m, 'warn'); });
+  h += row('执行主体', who, 'muted');
+  // 「理解不对怎么办」必须给出**可操作的下一步**，否则用户只能干看着（本仓 UX 硬规则）
+  h += '<div class="ib-tip">如果我理解偏了：直接在输入框补一句更具体的，或在下方澄清卡里改选——不用重开会话。</div>';
+  h += '</div>';
+  return h;
+}
+
+function procAddStage(name, status, detail, detailHtml, body){
   const iconMap = {'意图识别':'🔍','知识库检索':'📚','生成与校验':'✍️','写入会话':'💾',
                    '任务完成度评估':'⚖️','自主续跑':'🔄','取回模型文件':'📄'};
   procUpsert('stage_'+name, {type:'stage', icon: iconMap[name]||'🔍', title: name,
     status, statusText: status==='run'?'执行中…':'✓ 完成',
-    sub: detail||'', subHtml: detailHtml||''});
+    sub: detail||'', subHtml: detailHtml||'',
+    // body：展开区的可信 HTML（当前仅「意图识别」的意图理解明细使用）。
+    //   与 subHtml 同为白名单构造，**不经过 esc** ⇒ 调用方必须自己转义所有动态文本。
+    ...(body !== undefined ? {detail: body} : {})});
   // 生成与校验完成 → 自动收起思考过程（思考没有单独的事件"完成"）
+  // ★ 2026-10-27：思考已按轮次拆成多个块（thinking / thinking_rN），这里必须**逐个收口**——
+  //   只处理 id==='thinking' 会让第 2 轮之后的思考块永远停在「思考中…」的转圈态。
   if(name === '生成与校验' && status === 'done' && _procS.thinking) {
-    const s = _procS.timeline.find(x=>x.id==='thinking');
-    if(s && s.status === 'run') {
+    const _nodes = _procS.timeline.filter(x=>x.type==='thinking' && x.status==='run');
+    const _rounds = (_procS.thinkingOrder || []).length;
+    if(_nodes.length) {
       // 2026-09-29（WorkBuddy 式环节总结）：完成时头部切为**首句总结**（浅色），
       //   状态文案带轮数；点击仍可展开完整思考流（轮次分隔保留）。
-      const _head = _procSumText(String(_procS.thinking || '').replace(/\s+/g, ' ').trim());
-      s.status = 'done';
-      s.statusText = '✓ 已深度思考' + (_procS.thinkingOrder.length > 1 ? ` ${_procS.thinkingOrder.length} 轮` : '');
-      s.sub = _head;
-      s.collapsed = true; procRender();
+      _nodes.forEach(s=>{
+        const _head = _procSumText(String(s.raw || '').replace(/\s+/g, ' ').trim());
+        s.status = 'done';
+        s.statusText = '✓ 已深度思考' + (_rounds > 1 ? ` ${_rounds} 轮` : '');
+        if(_head) s.sub = _head;
+        s.collapsed = true;
+      });
+      procRender();
     }
   }
 }
@@ -249,18 +305,28 @@ function procAddThinking(delta, round, key){
   if(key && !_procS.keyMarked[key]){ _procS.thinkingRounds[round] += '【'+key+'】'; _procS.keyMarked[key] = true; }
   _procS.thinkingRounds[round] += delta;
   _procS.thinking = _procS.thinkingOrder.map(r=>_procS.thinkingRounds[r]).join(' ');
-  // P1-3：按轮次分组渲染（round>0 显示「第 N 轮」分隔，LLM 无轮次思考归入 round 0）
-  const detail = _procS.thinkingOrder.map(r=>{
-    const head = r>0 ? `<div class="proc-round">第 ${r} 轮</div>` : '';
-    return head + esc(_procS.thinkingRounds[r]);
-  }).join('');
-  // 2026-09-29（WorkBuddy 式环节总结）：头部一行**浅色实时摘要** —— 显示思考流的末句，
-  //   用户不展开也能看到"AI 此刻在想什么"。原实现头部只有静态标题"思考过程"，
-  //   内容全部埋在展开体里，运行期间等于黑盒（用户反馈"AI 思考内容无法查看"）。
-  const _tail = String(_procS.thinking || '').replace(/\s+/g, ' ').trim();
+  /* ★ 2026-10-27（用户反馈）：「这里的内容之前提到过分散在具体环节输出，为撒总是在这一个位置输出」。
+   *
+   * 原实现：**所有轮次的思考全部 join 成一个 `thinking` 块** —— 第 1 轮 ReAct、第 2 轮、
+   *   子任务的思考，全堆在时间线的同一个节点里。流式跑久了，那一个块就是"最下面一大坨文本"，
+   *   而且看不出哪段思考属于哪个环节（用户原话"不清楚哪些内容是在什么情况下触发输出"）。
+   *
+   * 现在：**一轮思考 = 一个块**（round 0 是模型未分轮的首段 CoT）。
+   *   · 块 id 按轮次稳定（`thinking` / `thinking_r2`…），跨 delta 原地增长、不新建；
+   *   · 位置即语义：它出现在**该轮工具调用之前**，用户能顺着时间线看出"想 → 做 → 再想 → 再做"；
+   *   · 每块仍受 `.proc-body` 的 max-height 约束（限高可滚，不把页面拉长）。
+   */
+  const _txt = _procS.thinkingRounds[round];
+  const _tail = String(_txt || '').replace(/\s+/g, ' ').trim();
   const _liveSum = _tail ? _toolSumm(_tail.slice(-90), 56) : '';
-  procUpsert('thinking', {type:'thinking', icon:'💭', title:'思考过程', status:'run',
-    statusText:'思考中…', sub: _liveSum ? ('…' + _liveSum) : '', detail});
+  const _id = round > 0 ? ('thinking_r' + round) : 'thinking';
+  const _title = round > 0 ? ('思考 · 第 ' + round + ' 轮') : '思考过程';
+  // detail 只放**本块自己的**文本（原来放的是全部轮次的拼接 —— 这正是"总在一个位置"的根源）
+  procUpsert(_id, {type:'thinking', icon:'💭', title:_title, status:'run',
+    statusText:'思考中…', sub: _liveSum ? ('…' + _liveSum) : '', detail: esc(_txt),
+    // raw = 本块**未转义**原文，供收口时提炼首句摘要（从 detail 反解 HTML 不可靠：
+    //   esc 后是 &lt; 实体，任何标签剥离都会误伤正文）
+    raw: _txt});
 }
 function procAddAgent(ev){
   const name = ev.display_name||ev.name||'-';
@@ -1327,16 +1393,26 @@ function renderClarify(ev){
   if(!inner) return;
   const pct = Math.round((ev.confidence||0) * 100);
   const _det = ev.detected ? `<b>识别为「${esc(ev.detected)}」</b>，` : '';
+  // ★ 2026-10-27：澄清条上先摊开「我的理解」，用户才能判断"要不要改"。
+  //   原来只写"已按「intent_key」继续执行" —— 给的是内部 key，用户无法据此判断对错。
+  //   brief 缺失（老服务端/配置关闭）时本行不出现，行为与从前一致。
+  const _b = ev.brief;
+  const _und = (_b && _b.goal)
+    ? `<div style="margin-bottom:3px;color:var(--fg);">我的理解：<b>${esc(_b.goal)}</b>`
+      + (_b.need ? `<span style="color:var(--mut);font-weight:400;">（归类：${esc(_b.need)}）</span>` : '') + '</div>'
+    : '';
   const btns = (ev.candidates||[]).slice(0,4).map(c =>
     `<button onclick="pickIntent(this.dataset.m, this.dataset.i)" data-m="${esc(ev.message)}" data-i="${esc(c)}"
       style="border:1px solid var(--line);background:#fff;color:var(--pri,#3478f6);border-radius:4px;padding:1px 6px;font-size:11px;cursor:pointer;margin:2px 4px 0 0;">改选：${esc(c)}</button>`).join('');
   const bar = document.createElement('div');
   bar.id = 'clarify-bar';
   bar.style.cssText = 'border:1px dashed var(--line);background:#f7f8fa;border-radius:6px;padding:6px 8px;font-size:11px;color:var(--mut);margin-bottom:6px;';
-  bar.innerHTML = `⚠ 意图置信度较低（${pct}%），${_det}已按「${esc(ev.intent)}」继续执行。理解有误？${btns}`;
+  bar.innerHTML = `${_und}⚠ 把握不大（${pct}%），${_det}已按「${esc(ev.intent)}」继续执行。理解有误？${btns}`;
   inner.insertBefore(bar, inner.firstChild);
   const st = document.getElementById('chat-status');
-  if(st) st.textContent = `意图置信度 ${pct}% · 已按「${ev.intent}」继续（可点选改选重发）`;
+  if(st) st.textContent = _b && _b.goal
+    ? `理解：${String(_b.goal).slice(0,30)} · 把握 ${pct}%（可点选改选重发）`
+    : `意图置信度 ${pct}% · 已按「${ev.intent}」继续（可点选改选重发）`;
 }
 // 澄清改选：改判本轮意图 → **在原输出流内**重跑（不新起一轮）
 // ★ 2026-10-16（米爸决策 R1）：改判意图只影响"谁理解"，不改"谁执行"（执行主体永远是 quick-team）。

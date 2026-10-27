@@ -3850,15 +3850,36 @@ class StreamMixin:
                 pass
             if _multi_intent:
                 _intent_meta["multi_intent"] = _multi_intent["sequence"]
+            # ★ 2026-10-27（用户："意图识别环节总是匹配到具体的 agent，不能提供更好理解的内容吗"）：
+            #   stage 事件里原本只带 `agent`（内部实现名），用户看到的是 `→ 智源对接agent（HIL 2）`——
+            #   那是"我们把它路由给了谁"，不是"我们理解成什么"。这里补一份**人能读懂的意图理解**
+            #   （goal/need/basis/missing），前端折叠态显示「理解：…」，展开可看判据与待确认点。
+            #   ⚠️ 位置纪律：必须在 `slots` 算完之后（goal 直接复用 task_decompose 的结果，零额外调用）。
+            _brief = None
+            try:
+                from core import config as _cfg_brief
+                if bool(_cfg_brief.get("intent", "brief_enabled", True)):
+                    from agent import intent_brief as _ib
+                    _brief = _ib.build(
+                        user_input, intent=intent, agent_name=agent_def.name,
+                        slots=slots, meta=_intent_meta,
+                        label=getattr(self, "_INTENT_LABEL", {}).get(intent, ""))
+            except Exception:
+                _brief = None      # 摘要只是可读性增强，任何异常都不得影响主流程
+            # 挂到实例上：落库（阶段 4 的 card_data.exec）与后续卡片组装都要用，
+            #   而那段代码离这里 1500 行 —— 用实例属性比依赖局部变量跨段存活更可靠。
+            self._last_intent_brief = _brief
             yield {"type": "stage", "name": "意图识别", "status": "done", "intent": intent,
                    "agent": agent_def.name, "hil_level": hil_level,
-                   "route": _intent_meta["route"], "confidence": _intent_meta["confidence"]}
+                   "route": _intent_meta["route"], "confidence": _intent_meta["confidence"],
+                   "brief": _brief}
             # P0-1 置信度三级决策：中置信（弱语义/继承/LLM<0.85）→ 澄清提示（不阻塞执行，供前端改选重发）
             # V2.7：指定智能体时同样给出提示（识别结果与执行 Agent 不一致时如实说明）
             if _intent_meta["needs_clarification"]:
                 yield {"type": "clarify", "intent": intent, "confidence": _intent_meta["confidence"],
                        "route": _intent_meta["route"], "message": str(user_input),
                        "detected": _detected if forced_intent and _detected != intent else None,
+                       "brief": _brief,
                        "candidates": self._clarify_candidates(intent)}
             # ── 承接轮判定（2026-10-17 米爸反馈，实证会话 9446）──
             #  上一轮走过 澄清→作答（answered 卡存在）且本轮是短输入 ⇒ 用户在回应
@@ -5321,6 +5342,11 @@ class StreamMixin:
                         "reasoning": "".join(exec_reasoning)[:8000] or None,
                         "agent": agent_def.name,
                         "tools": exec_tools,
+                        # ★ 2026-10-27：意图理解摘要随消息持久化 —— 刷新后历史还原路径
+                        #   （06-cards.procBlocksHtml）据此重建「我理解你要的…」那一行。
+                        #   不存的话：刷新前看得到、刷新后消失，同一份数据两套呈现
+                        #   （本仓已因此被反馈过多次）。
+                        "brief": getattr(self, "_last_intent_brief", None) or None,
                     },
                     "sysml_views": sysml_views,
                     "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",

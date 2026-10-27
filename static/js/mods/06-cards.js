@@ -7,6 +7,16 @@ function procBlocksHtml(ex, mid){
   const now = new Date().toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const uid = (mid || 'h' + Math.random().toString(36).slice(2,8));
   let steps = [];
+  /* ★ 2026-10-27（用户："意图识别环节总是匹配到具体的 agent，不能提供更好理解的内容吗"）：
+     历史消息也要有「意图理解」这一行 —— 否则**刷新前看得到、刷新后消失**，
+     同一份数据两套呈现（本仓已因这类前后端不一致被反馈过多次）。
+     数据源 = card_data.exec.brief（stream.py 阶段 4 随消息落库）；
+     老消息没有这个键 ⇒ 不产生该行，行为与从前一致。 */
+  if(ex.brief && (ex.brief.goal || ex.brief.followup)){
+    steps.push({icon:'🔍', title:'意图识别', status:'done', cls:'stage',
+      sub: ex.brief.goal ? ('理解：' + String(ex.brief.goal)) : '按你的确认继续（本轮不重新分析目标）',
+      body: (typeof _intentBriefBody === 'function') ? _intentBriefBody(ex.brief, {}) : esc(ex.brief.goal || '')});
+  }
   if(ex.reasoning) steps.push({icon:'💭', title:'思考过程', status:'done', body: esc(ex.reasoning), cls:'thinking'});
   if(ex.agent) steps.push({icon:'🤖', title:`子智能体：${esc(ex.agent)}`, status:'done', sub:'✓ 已完成', cls:'agent', noBody: true});
   const subs = ex.subtasks||[];

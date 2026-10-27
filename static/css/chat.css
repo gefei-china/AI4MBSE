@@ -134,6 +134,27 @@
 .msg.ai .body.streaming{position:relative;}
 
 /* ── 5. 会话内执行过程（Trae 式 + 视觉升级 V3；V2.7 紧凑化：单行聚焦/间距收紧） ── */
+/* ★ 2026-10-27（用户反馈：「AI 在执行环节，最下面总是输出大量的文本内容，且页面会被拉得很长，
+   要求此区域限制高度，可以滑动查看完整内容」）：
+   执行过程区**整区限高 + 内滚**。
+   此前每个 .proc-body 各自 max-height:340px（单块不失控），但多个环节
+   （意图 / 技能 / 每个工具 / 子任务 / 每轮思考）叠起来实测能到 1500px+，
+   整条消息把会话流顶得很长。限高后**内容一条不丢**（可滑动查看完整），
+   只是盒子不再无限长高。
+   ⚠️ 只作用于「执行过程」容器；**正文 .body 不设任何高度限制** ——
+      按 B5-8（米爸原话「最终输出结果不要收起来，也不允许收起来」），正文必须完整展开。
+   反查：本机 1600x900 视口下 44vh ≈ 396px，正好容纳一个满高思考块 + 2~3 个阶段行。 */
+.proc{max-height:44vh;overflow-y:auto;overscroll-behavior:contain;padding-right:2px;}
+.proc::-webkit-scrollbar{width:6px;}
+.proc::-webkit-scrollbar-thumb{background:var(--line,#dde3ec);border-radius:3px;}
+/* 意图理解明细（procAddStage 的 body；2026-10-27）：回答"你到底把我理解成什么" */
+.ib-brief{display:flex;flex-direction:column;gap:3px;white-space:normal;font-size:11px;line-height:1.6;}
+.ib-brief .ib-row{display:flex;gap:6px;align-items:flex-start;min-width:0;}
+.ib-brief .ib-k{flex:none;color:var(--mut);font-weight:600;min-width:64px;}
+.ib-brief .ib-v{flex:1;min-width:0;color:var(--fg);word-break:break-word;}
+.ib-brief .ib-row.warn .ib-v{color:#b26a00;}
+.ib-brief .ib-row.muted{opacity:.75;}
+.ib-brief .ib-tip{margin-top:3px;color:var(--mut);font-size:10.5px;border-top:1px dashed var(--line,#e5e8ee);padding-top:4px;}
 .proc{display:flex;flex-direction:column;gap:4px;width:100%;max-width:1040px;font-size:11px;}
 /* 加载更早消息入口（消息区顶部；长会话分页渲染配套） */
 .load-earlier{margin:6px auto 14px;padding:6px 18px;border:1px dashed var(--blue-bd);border-radius:16px;
@@ -206,7 +227,12 @@
 .proc-summary .proc-time{margin-left:0;}
 /* 历史消息执行过程：收口条 + 默认收起的时间线容器 */
 .hist-proc .proc-timeline{display:none;}
-.hist-proc.open .proc-timeline{display:flex;flex-direction:column;gap:6px;margin-top:6px;}
+/* ★ 2026-10-27：**历史回看**的执行过程区也必须限高。
+   实测 conv 9686 的历史消息 exec.reasoning 8000 字，展开后单条消息高达 2966px。
+   历史容器是 .hist-proc（不是 .proc）—— 只给 .proc 加限高，只能治「正在跑的那条」，
+   回看旧消息照旧被拉长（前端两条渲染路径必须成对改，本仓已多次踩到）。 */
+.hist-proc.open .proc-timeline{display:flex;flex-direction:column;gap:6px;margin-top:6px;
+  max-height:44vh;overflow-y:auto;overscroll-behavior:contain;padding-right:2px;}
 /* 步骤头部副标题（折叠后仍可见的阶段详情，Trae 式时间线） */
 .proc-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .proc-sub{color:var(--mut);font-weight:400;font-size:10.5px;margin-left:4px;}

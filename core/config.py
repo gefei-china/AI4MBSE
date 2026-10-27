@@ -465,6 +465,16 @@ DEFAULT_CONFIG = {
         #      ⇒ 默认关 = **线上行为与改造前逐字节一致**（零回归）；
         #      开关打开前请先用 tools/calib/eval_intent_baseline.py 做 A/B 对比。
         "rule_llm_confirm": False,
+        # ── 2026-10-27：意图理解摘要（agent/intent_brief.py）──────────────────
+        #   用户反馈：「意图识别环节总是匹配到具体的 agent，不能提供更好理解的内容吗？
+        #   比如对于用户意图的分析与总结 —— 用户到底想要什么」。
+        #   stage 事件因此新增 `brief` 字段（goal/need/basis/missing），零额外 LLM 调用：
+        #   goal 复用 task_decompose 的 slots.goal，没有就**忠实复述用户原话首句**。
+        "brief_enabled": True,        # 是否下发 brief（False = 回到只显示 agent 名的旧行为）
+        # 判"输入过短、可能没说清"的阈值（字符数）。只影响 brief 里那句**提示**，
+        #   不触发任何打断（弹卡仍由 needs_clarification / 内容级澄清决定）。
+        "brief_short_chars": 8,
+        "brief_missing_check": True,  # 是否做上述"过短输入"提示（关掉则 missing 恒空）
     },
     # P1-4（2026-10-01）会话槽位（DST slots）治理：合并口径 + 入参净化。
     #   三层根因与实测见 agent/pipeline_parts/common.py 顶部注释。
@@ -1527,6 +1537,9 @@ CONFIG_SCHEMA = {
         "history_llm_min":        {"type": "float", "desc": "带历史采纳（route=llm_history）的地板值（非分离阈）"},
         "history_confirm_silent": {"type": "bool", "desc": "两路一致（确认）时不弹「可改选」澄清细条"},
         "rule_llm_confirm":       {"type": "bool", "desc": "B4-5：规则命中后先经 LLM 独立复核（确认/否决/不可用三态）。默认关=零回归；开启前请用 tools/calib/eval_intent_baseline.py 做 A/B"},
+        "brief_enabled":          {"type": "bool", "desc": "意图识别环节下发「意图理解摘要」（goal/need/basis/missing）。关=回到只显示 Agent 名的旧行为"},
+        "brief_short_chars":      {"type": "int",  "desc": "输入短于此字符数时，在摘要里提示「要求可能没说清」（仅提示，不打断执行）"},
+        "brief_missing_check":    {"type": "bool", "desc": "是否做「输入过短」提示判定"},
         "llm_first":              {"type": "bool", "desc": "LLM 主裁判：规则无信号时 LLM 为主识别（配 few-shot 与 unsure 出口）。规则强信号快路径不受影响"},
         "llm_first_min_conf":     {"type": "float", "desc": "LLM 主裁判直接采纳门槛（默认 0.75 保守起点，待 confirmed 池标定）"},
         "llm_first_weak_conf":    {"type": "float", "desc": "LLM 主裁判弱采纳下限：0.50~门槛的猜测转澄清卡不静默执行"},

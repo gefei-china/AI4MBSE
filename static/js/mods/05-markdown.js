@@ -55,7 +55,7 @@ function renderTable(rows){
 }
 function renderMarkdown(text, cites){
   if(!text) return '';
-  // V2.6 代码块折叠卡：默认收起（头部=语言+行数+复制），点击展开，避免长代码霸屏
+  // V2.6 代码块折叠卡：默认展开（2026-10-27 用户要求；头部=语言+行数+复制，点击可收起）
   function _codeFold(lines){
     const lang = (lines[0]||'').match(/^```(\w+)/);
     const body = lines.slice(1, lines.length && /^```\s*$/.test(lines[lines.length-1]) ? -1 : undefined);
@@ -73,11 +73,19 @@ function renderMarkdown(text, cites){
         + `<div class="mermaid-view" id="${mid}"><div style="padding:10px;font-size:11px;color:var(--mut);">Mermaid 视图渲染中…</div></div>`
         + `<pre class="md-code" style="display:none;"><code>${escMd(body.join('\n'))}</code></pre></div>`;
     }
-    return `<div class="code-fold">`
-      + `<div class="cf-head" onclick="codeFoldToggle(this)"><span class="cf-lang">${escMd(langName)}</span>`
+    // ★ 2026-10-27（用户："输出的代码块需要支持展开/收起能力，默认展开"）：
+    //   原实现**默认收起**（`.code-fold` 不带 open ⇒ `.md-code{display:none}`），
+    //   用户要复制/阅读得先点一下，7 个代码块就是 7 次点击；且收起态只剩 29px 的头部，
+    //   长代码完全看不见。
+    //   现在默认 `open`：代码**默认完整可见**，点头部可收起 ——
+    //   与 B5-8 的「最终输出不许收起来」同向（默认可见是底线，收起是用户主动选择）。
+    //   高度仍受 `.md-code{max-height:340px;overflow:auto}` 约束 ⇒ 超长代码内滚，
+    //   不会把页面拉长（这正是"可滑动查看完整内容"）。
+    return `<div class="code-fold open">`
+      + `<div class="cf-head" onclick="codeFoldToggle(this)" title="点击收起 / 展开"><span class="cf-lang">${escMd(langName)}</span>`
       + `<span class="cf-meta">${n} 行</span>`
       + `<span class="cf-act" onclick="event.stopPropagation();codeFoldCopy(this)">📋 复制</span>`
-      + `<span class="chev">▸</span></div>`
+      + `<span class="chev">▾</span></div>`
       + `<pre class="md-code"><code>${escMd(body.join('\n'))}</code></pre></div>`;
   }
   /*★ B5-8（2026-10-14 米爸明确要求，撤销 B5-6/A-2）：**正文一律不折叠**。
@@ -88,6 +96,8 @@ function renderMarkdown(text, cites){
    *
    * 保留原样、**不动**的部分：
    *   · `_codeFold`（代码块折叠）—— 那是 2026-09-16 就有的既有行为，与本次无关；
+   *     **2026-10-27 变更**：用户要求「代码块支持展开/收起，默认展开」⇒ 默认态由收起改为展开，
+   *     与上面"正文不折叠"的纪律同向（默认可见是底线，收起只由用户主动触发）。
    *   · 引用来源折叠区（`cite-src-body`，`static/js/mods/05-markdown.js` 内）——
    *     它是**用户主动点开的抽屉**，不是"默认收起的正文"。
    *
