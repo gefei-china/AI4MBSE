@@ -265,6 +265,16 @@ class ToolMixin:
                                 _sch["properties"] = {}
                             if not _sch.get("type"):
                                 _sch["type"] = "object"
+                            # ★ 2026-10-27（conv 9637 实测）：**参数契约必须瘦身**再注入。
+                            #   21 个 MCP 工具的完整 schema 共 47KB（≈16k tokens/轮），
+                            #   13 轮就烧穿 300k token 预算 ⇒ 模型在第 12 轮被判"预算耗尽"、
+                            #   离建包只差最后一步。压掉参数级长描述（保留 type/required/enum
+                            #   这些结构性信息），体量降一半而可用性不降。
+                            try:
+                                from agent.mcp_tool_meta import slim_schema as _slim
+                                _sch = _slim(_sch)
+                            except Exception:
+                                pass
                             _schema_by_name[t] = _sch
                         except Exception:
                             pass
