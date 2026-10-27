@@ -39,8 +39,10 @@ const CTX_CFG_CLUSTERS = [
   },
   {
     id: 'split', title: '📜 历史注入内分配（瓜分历史区预算）', viz: 'split', checks: [],
-    hint: '🔗 这六项<b>共同瓜分历史区预算</b>，注入顺序与占比是固定结构：当前话题原文（约 50%）→ 语义拉回片段（用至 75%）'
-      + '→ 其他话题摘要（剩余）。单条消息截断与建模工作记忆是前置硬上限。',
+    hint: '🔗 这七项<b>共同瓜分历史区预算</b>，注入顺序与占比是固定结构：当前话题原文（约 50%）→ 语义拉回片段（用至 75%）'
+      + '→ 其他话题摘要（剩余）。<b>2026-10-27 起「单条消息上限」默认 0 = 不限</b> —— '
+      + '原因是原 1500 字固定上限把 21.7% 的历史消息裁掉（含用户贴的代码），'
+      + '而历史预算实测只用了 18.5%；现在改由「预算 + 用户/助手分级份额」决定长度，裁剪必带标记。',
   },
   {
     id: 'dual', title: '🔍 语义判定双路阈值（同量纲对照）', viz: 'dual', checks: ['dual'],
@@ -135,19 +137,24 @@ const CTX_CFG_FIELDS = [
     desc:'知识库检索结果注入 prompt 的 token 上限（超限从尾部裁剪，保留最相关头部）。占比为 0 时生效。',
     impact:'调大：检索依据更全；调小：只保留最相关头部。实测检索段实际用量约 458 token，当前值留有余量。' },
   { cluster:'budget', sec:'context', key:'context.budget_retrieval_ratio', type:'float', label:'检索区占比',
-    desc:'检索区预算 = 窗口基准 × 本比例。<b>>0 时覆盖左侧绝对值</b>；0 = 关闭占比制。',
-    impact:'换成大窗口模型时不用手改绝对值（行业做法：Codex 按窗口 50% 设压缩阈值）。建议 0.05~0.10。' },
+    desc:'检索区预算 = 窗口基准 × 本比例。<b>>0 时覆盖左侧绝对值</b>；0 = 关闭占比制。<b>默认 0.15</b>。',
+    impact:'换成大窗口模型时不用手改绝对值（行业做法：Codex 按窗口 50% 设压缩阈值）。'
+      + '实测检索段实际只用约 458 token ⇒ 0.10~0.20 都够；<b>不建议 <0.05</b>（长文档多来源时会被压掉）。' },
   { cluster:'budget', sec:'context', key:'context.budget_history_tokens', type:'int', label:'历史区预算 (绝对值)',
     desc:'会话历史注入总预算：当前话题原文占 50%，语义拉回片段用至 75%，剩余给其他话题摘要。占比为 0 时生效。',
     impact:'调大：长对话更连贯、旧话题细节更多；调小：更省 token，旧话题靠摘要兜底。' },
   { cluster:'budget', sec:'context', key:'context.budget_history_ratio', type:'float', label:'历史区占比',
-    desc:'历史区预算 = 窗口基准 × 本比例。<b>>0 时覆盖左侧绝对值</b>；0 = 关闭占比制。',
-    impact:'同上，适配换模型场景。建议 0.03~0.08。' },
+    desc:'历史区预算 = 窗口基准 × 本比例。<b>>0 时覆盖左侧绝对值</b>；0 = 关闭占比制。<b>默认 0.35</b>（2026-10-27 由 0.25 上调）。',
+    impact:'上调依据（真库实测）：取消「单条 1500 字硬截」后历史区真的用满了 —— 会话里用户两次贴代码共 14,810 token，'
+      + '0.25 时老那条仍被裁、0.35 时两条完整进入。窗口 128k 下 0.15(检索)+0.35(历史) = 50%，'
+      + '距总闸（total_budget_window_ratio 0.75）仍有余量。<b>换小窗口模型时请下调</b>（如 256k→保持，8k→0.2 以下）。' },
 
   // ── 簇 6：历史注入内分配 ──
   { cluster:'split', sec:'context', key:'context.topic_current_max_msgs', type:'int', label:'当前话题原文条数',
-    desc:'当前话题逐字注入的最大消息数（倒序填充至历史预算的 50%）。',
-    impact:'调大：当前讨论原文更完整、指代（"刚才那个"）更可靠；调小：省预算给语义拉回与摘要。' },
+    desc:'当前话题逐字注入的最大消息数（倒序填充至历史预算的 50%）。<b>默认 20</b>（2026-10-27 由 8 上调）：'
+      + '实测 8 条窗口下，用户 17 条之前定下的工程名已滑出窗口 ⇒ 模型重新乱选工程。',
+    impact:'调大：当前讨论原文更完整、指代（"刚才那个"）更可靠；调小：省预算给语义拉回与摘要。'
+      + '注意：工程/分支/版本这类<b>会话级事实</b>已另由「会话坐标锚点」持久化（agent/conv_anchors.py），与窗口解耦，本项是第二道。' },
   { cluster:'split', sec:'context', key:'context.topic_boundary_keep', type:'int', label:'话题切换边界保留',
     desc:'刚切话题且新话题很短时，补注入上一话题末尾 N 条原文，保证切换语义连续。',
     impact:'调大：切换更自然；调小：更"干净"，但可能丢上一话题的关键收尾。' },
@@ -157,12 +164,21 @@ const CTX_CFG_FIELDS = [
   { cluster:'split', sec:'context', key:'context.history_summary_chars', type:'int', label:'分话题摘要上限 (字符)',
     desc:'其他话题由 LLM 压缩生成的摘要长度上限（保留决策/实体/约束/待办，丢客套话）。',
     impact:'调大：摘要细节更全；调小：更精炼但可能丢细节。摘要按话题缓存、段变化才重算，不影响响应速度。' },
-  { cluster:'split', sec:'context', key:'context.history_msg_max_chars', type:'int', label:'单条消息截断 (字符)',
-    desc:'参与注入/摘要的单条历史消息截断上限；超长消息（如粘贴整篇文档）只取前缀。',
-    impact:'调大：粘贴长文时上下文更完整；调小：防单条长消息挤占整个历史预算。' },
+  { cluster:'split', sec:'context', key:'context.history_msg_max_chars', type:'int', label:'单条消息上限 (字符)',
+    desc:'参与注入/摘要的单条历史消息<b>固定</b>上限。<b>0 = 不限（默认）</b> —— 长度改由「历史预算 + 份额」决定。'
+      + '填 &gt;0 才恢复固定字符上限（仅调试用）。',
+    impact:'<b>保留 0（推荐）</b>：原 1500 实测裁掉 21.7% 的消息、累计丢 46.9 万字，用户贴 V2 代码（12,476 字）只剩 12%；'
+      + '而放开后总长度仍受历史预算约束，且裁剪必带「因预算省略 N 字」标记，不会静默。'
+      + '调小：相当于人为压紧，只在"刻意做小上下文"的对照实验里用。' },
+  { cluster:'split', sec:'context', key:'context.topic_retrieve_per_role_cap', type:'int', label:'语义拉回·分角色配额',
+    desc:'语义拉回的块数配额：user / assistant 各最多 N 条（0 = 不限制）。<b>默认 5</b>（2026-10-27 由 3 上调）。',
+    impact:'为什么要分：短文本余弦系统性偏高（实测 13 字的「继续」得 0.988），不分配额时混合 top-k 会被用户侧通吃、'
+      + '助手此前产出的结论一条都进不来。调大：单一角色不易被卡；调小：另一角色更容易进榜。' },
   { cluster:'split', sec:'context', key:'context.model_context_chars', type:'int', label:'建模工作记忆 (字符)',
-    desc:'MBSE 特有：注入当前模型状态（活跃实体/视图/最近变更/会话产物）的字符上限，来自模型库实时查询。',
-    impact:'调大：AI 对模型现状感知更全；调小：省预算但可能漏掉已建元素导致重复建模。' },
+    desc:'MBSE 特有：注入当前模型状态（活跃实体/视图/最近变更/会话产物）的字符上限，来自模型库实时查询。'
+      + '<b>默认 1500</b>（2026-10-27 由 800 上调）。',
+    impact:'调大：AI 对模型现状感知更全（原 800 常把"最近变更"腰斩 ⇒ 重复建模已存在元素）；'
+      + '调小：省预算但可能漏掉已建元素导致重复建模。' },
 
   // ── 簇 7：语义判定双路阈值 ──
   { cluster:'dual', sec:'embedding', key:'embedding.enabled', type:'bool', label:'语义出口总开关',
@@ -216,7 +232,8 @@ const CTX_CFG_FIELDS = [
       + '调大：更多页走 OCR（更慢、可能引入识别误差）；调小：省时间，但图内文字可能漏掉。默认 100。' },
   { cluster:'ocr', sec:'extract', key:'extract.ocr_max_pages', type:'int', label:'③ 单次入库 OCR 页数上限',
     desc:'稀疏页超过此数时，只 OCR 前 N 页（在解析详情里留痕说明丢弃了哪些页）。0 = 不限。',
-    impact:'防超大扫描件拖垮入库（实测 691 页规范全量 OCR 要 30~50 分钟）。默认 50。' },
+    impact:'防超大扫描件拖垮入库（实测 691 页规范全量 OCR 要 30~50 分钟）。<b>默认 0 = 不限</b>'
+      + '（2026-10-27 与后端对齐：此前此处标的是 50，而后端 DEFAULT_CONFIG 实际为 0 —— 标错会让人以为已设硬上限）。' },
   { cluster:'ocr', sec:'extract', key:'extract.ocr_render_scale', type:'float', label:'④ PDF 渲染倍率',
     desc:'PDF 页渲染成位图的放大倍率（2.0 ≈ 1224×1584 px）。<b>仅影响 PDF</b>，图片走原图。',
     impact:'★ 实测：放大<b>并不能</b>提升质量（2x/3x 反而从 0.595 降到 0.645/0.623，且耗时翻倍）—— '
@@ -460,7 +477,10 @@ function ctxViz(c, v) {
   if (c.viz === 'split') {
     const msgs = +v['context.topic_current_max_msgs'] || 0, keep = +v['context.topic_boundary_keep'] || 0,
           topk = +v['context.topic_retrieve_topk'] || 0, sum = +v['context.history_summary_chars'] || 0,
-          msgc = +v['context.history_msg_max_chars'] || 0, modc = +v['context.model_context_chars'] || 0;
+          msgc = +v['context.history_msg_max_chars'] || 0, modc = +v['context.model_context_chars'] || 0,
+          prc = +v['context.topic_retrieve_per_role_cap'] || 0;
+    // 0 = 不限：不能在界面上显示成 "0 字符"（那会被理解成"什么都不给"）
+    const msgcTxt = msgc > 0 ? `${msgc} 字符` : '不限（由预算与份额决定）';
     return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--bg2,#fafbfc);margin-bottom:10px;">`
       + `<div style="font-size:11px;color:var(--mut);margin-bottom:6px;">历史区预算的固定分配结构</div>`
       + `<div style="display:flex;height:16px;border-radius:5px;overflow:hidden;margin-bottom:5px;">`
@@ -469,8 +489,13 @@ function ctxViz(c, v) {
       + `<div style="flex:1;background:#c9a227;color:#fff;font-size:9.5px;text-align:center;line-height:16px;">其他话题摘要</div></div>`
       + `<div style="font-size:11px;color:var(--mut);line-height:1.7;">`
       + `当前话题原文 ≤ <b>${msgs}</b> 条（+切换边界保留 <b>${keep}</b> 条）`
-      + ` ｜ 语义拉回 <b>${topk}</b> 条 ｜ 摘要上限 <b>${sum}</b> 字符<br>`
-      + `前置硬上限：单条消息 <b>${msgc}</b> 字符 ｜ 建模工作记忆 <b>${modc}</b> 字符（独立来源、同样占预算）</div></div>`;
+      + ` ｜ 语义拉回 <b>${topk}</b> 条（每角色 ≤ <b>${prc > 0 ? prc : '不限'}</b>）`
+      + ` ｜ 摘要上限 <b>${sum}</b> 字符<br>`
+      + `前置上限：单条消息 <b>${msgcTxt}</b> ｜ 建模工作记忆 <b>${modc}</b> 字符（独立来源、同样占预算）`
+      + (msgc > 0
+          ? `<br><span style="color:#8a6d1f;">⚠️ 单条消息上限 >0 会按字符数硬裁（用户贴长文时丢细节）；建议保持 0</span>`
+          : '')
+      + `</div></div>`;
   }
   if (c.viz === 'dual') {
     const on = v['embedding.enabled'];

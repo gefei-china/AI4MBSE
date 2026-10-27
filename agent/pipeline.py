@@ -16,7 +16,8 @@ from .intent import IntentRouter
 from .rag import GraphRAG, ConflictDetector
 
 # P0-2：工具结果展示上限（SSE 事件与落库共用；超出截断并标记 truncated，前端可展开全文/复制）
-_TOOL_RESULT_CAP = 6000
+# 2026-10-27：6000 → 8000，与 `pipeline_parts/common.py::_TOOL_RESULT_CAP` 保持一致
+_TOOL_RESULT_CAP = 8000
 
 from .utils import (  # noqa: F401  （P1-5 拆分：纯函数移至 agent/utils.py，re-export 兼容旧引用）
     _citations_payload,

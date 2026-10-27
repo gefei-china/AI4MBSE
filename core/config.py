@@ -485,11 +485,25 @@ DEFAULT_CONFIG = {
     "context": {
         "history_immediate_turns": 6,   # 即时窗口轮数（原文逐字注入）
         "history_mid_turns": 20,        # 中期窗口轮数（LLM 摘要压缩）
-        "history_msg_max_chars": 1500,  # 单条消息截断上限（字符）
+        # ★ 2026-10-27（截断清单 P0-A1/A3）：单条消息**固定字符上限**默认**取消（0=不限）**。
+        #   为什么必须取消（实测）：原 1500 把 456 条消息里 **99 条（21.7%）** 裁掉，
+        #   累计丢 **468,727 字符**；其中 2 条是**用户输入**（msg 4761 贴 V2 代码
+        #   12,476→1,500，丢 88%）⇒ 模型只看到代码前 12%，"校验代码"类任务必然失败。
+        #   更关键的是**位置错了**：窗口 128k、历史预算 32k token（ratio 0.25），
+        #   实测只用 5,922（**18.5%**）—— 先按 1500 砍再谈 32k 预算，等于预算形同虚设。
+        #   现在口径：**先按预算装**，装不下由 `push_raw` 的份额 / `_clip` 的预算裁剪
+        #   负责（且必带"此处因上下文预算省略 N 字"标记，不静默）。
+        #   填 >0 = 恢复固定上限（仅用于"刻意压小块"的调试场景）。
+        "history_msg_max_chars": 0,     # 单条消息截断上限（字符）；0=不限，交给预算与份额机制
         "history_summary_chars": 800,   # 中期摘要上限（字符）
         "topic_sim_threshold": 0.15,    # 话题切换相似度阈值（相邻用户消息 bigram 余弦，低于则开新话题）
         "topic_label_chars": 14,        # 话题标签长度（取段首用户消息前 N 字符）
-        "topic_current_max_msgs": 8,    # 当前话题原文注入最大消息数
+        # ★ 2026-10-27（截断清单 P1-A2）：8 → 20。
+        #   实测（conv 9629）：用户 msg 4869 定下工程名，17 条之后 msg 4899 提问时
+        #   4869 **已滑出 8 条窗口**（同窗口内恰好有 4 条助手回复复述了工程名才没丢）
+        #   ⇒ 工程/分支/版本这类会话级事实随时可能丢。20 = 与 history_mid_turns 对齐。
+        #   （另有 agent/conv_anchors.py 把这类事实落成锚点、彻底与窗口解耦，本项是第二道。）
+        "topic_current_max_msgs": 20,   # 当前话题原文注入最大消息数
         "topic_boundary_keep": 2,       # 话题切换边界保留上一话题原文条数（保证切换语义连续）
         "topic_retrieve_topk": 6,       # 会话内语义拉回的历史片段条数
         "topic_retrieve_threshold": 0.15,  # 语义拉回最低相似度（低于不注入；对齐 intent 语义兜底经验值）
@@ -500,7 +514,9 @@ DEFAULT_CONFIG = {
         #      助手此前产出的结论/版本一条都进不来（实测 conv=1 的 top-6 全是 user）；
         #   ③ 丢弃与当前输入逐字重复的拉回块（高相似度 ≠ 有信息量）。
         "history_raw_min_share_tokens": 96,   # 原文段每条的最小 token 份额（均分的下限）
-        "topic_retrieve_per_role_cap": 3,     # 拉回分角色配额（user/assistant 各 ≤N，0=不限制）
+        # 2026-10-27（截断清单 P1-A5）：3 → 5。拉回条数 topk=6 时，3 的配额会让
+        #   「每角色各 3」永远先占满、把名额吃光（两角色即 6）；5 给单角色留出补齐空间。
+        "topic_retrieve_per_role_cap": 5,     # 拉回分角色配额（user/assistant 各 ≤N，0=不限制）
         "topic_retrieve_drop_echo": True,     # 拉回块与当前输入逐字重复时丢弃
         # P1-4b（2026-09-21）标定修订：原 0.35 为经验值。标定脚本 tools/_topic_threshold_calibrate.py
         # （分位等价映射，真 embedding dim=1024，153 条真实 query）实测：**0.35 的判定通过率高达 99.3%**
@@ -514,7 +530,9 @@ DEFAULT_CONFIG = {
         #   bigram top1 p90=0.4267 / max=0.6092；0.5 的等价 dense 分位 = 0.7855（正例率 8.4%）。
         #   标定法同 embedding 组（分位等价映射）；脚本：calibrate_dense_thresholds.py
         "semantic_fallback_gate_dense": 0.79,
-        "model_context_chars": 800,     # 建模上下文注入上限（字符，当前模型状态工作记忆）
+        # 2026-10-27（截断清单 P2-C8）：800 → 1500。实测摘要块里"最近变更/活跃视图"
+        #   常在 800 处被腰斩，模型据此重复建模（建了已有元素）。1500 ≈ 750 token，成本可忽略。
+        "model_context_chars": 1500,    # 建模上下文注入上限（字符，当前模型状态工作记忆）
         # P0（2026-09-19）：建模上下文的**既有实体**注入形态（实现在 memory.py::_build_model_context）。
         # 实况：实体原先按 branch 无条件「列名字」注入 → 把上一任务的领域素材带进本轮（会话 351 实测：
         # 电动汽车 TMS 任务被注入「巡飞弹/动力分系统」，子 Agent 因此拒绝产出代码 → 全链断裂）。
@@ -551,7 +569,15 @@ DEFAULT_CONFIG = {
         #   占比键 > 0 → 用「窗口 × ratio」；否则回退绝对值键（保持向后兼容）。
         #   默认占比：检索 15% / 历史 25%（合计 40%，给system 本体与工具留 60%）。
         "budget_retrieval_ratio": 0.15,  # 检索区占窗口比例（>0 覆盖绝对值键；0=用绝对值）
-        "budget_history_ratio": 0.25,    # 历史区占窗口比例（>0 覆盖绝对值键；0=用绝对值）
+        # ★ 2026-10-27（截断清单 A4 落地时实测修正）：0.25 → 0.35。
+        #   为什么改（不是拍脑袋）：取消单条硬截后，历史区**真的用满了** ——
+        #   真库 conv 9586（用户两次贴代码：12,476 + 8,411 字 = 14,810 token）实测：
+        #     · ratio 0.25（raw_cap 16,000 token）⇒ 老那条仍被裁到 9,229 字；
+        #     · ratio 0.35（raw_cap 22,400 token）⇒ **两条完整进入**，助手各轮也基本不裁。
+        #   这与「能不加的限制先不加，不要为省 token 让流程走不通」一致；
+        #   窗口 128k × (检索 0.15 + 历史 0.35) = 50%，距总闸 0.75 仍有余量。
+        #   ⚠️ 该值在「设置 → AI 上下文管理」可调（budget_history_ratio）；换小窗口模型时下调。
+        "budget_history_ratio": 0.35,    # 历史区占窗口比例（>0 覆盖绝对值键；0=用绝对值）
         # 绝对值兜底（占比键为 0 时才用；保留以支持"刻意压小块"的调试场景）
         "budget_retrieval_tokens": 2600, # T6 token 驱动预算：检索区上限（保头，保留最相关）
         "budget_history_tokens": 2000,  # T6 token 驱动预算：历史区上限（当前话题原文50%/语义拉回75%/分话题摘要剩余）
@@ -577,7 +603,9 @@ DEFAULT_CONFIG = {
         # ⚠️ **无产物会话 → 空串 → 各处完全不加段落**（提示词逐字节不变）—— 这是零回归的保证，
         #    也是验收断言 D1 的对象。三键都可回退（enabled=false 即回到改动前行为）。
         "artifact_digest_enabled": True,   # 会话产物摘要开关（false = 回退到改动前行为）
-        "artifact_digest_max_chars": 900,  # 摘要字符上限（<=0 不限）
+        # 2026-10-27（截断清单 P2-C7）：900 → 1500。摘要里"最近 N 个版本 + 产物标题"
+        #   在 900 处常被砍到只剩前两条 ⇒ 模型看不到上一轮刚建的那份，重复产出。
+        "artifact_digest_max_chars": 1500, # 摘要字符上限（<=0 不限）
         "artifact_digest_versions": 3,     # 摘要中列出最近 N 个 SysML 模型版本
         # P1-7（2026-10-01）：标题恰为系统性兜底名（AI 生成文档/报告、{kind}产物）的产物行整行不列。
         # 判据单一真源 = core/artifact_titles.py；实测占位名占真库 artifacts 的 35.7%，
@@ -1668,11 +1696,12 @@ CONFIG_SCHEMA = {
     "context": {
         "history_immediate_turns": {"type": "int", "desc": "即时窗口轮数（原文逐字）"},
         "history_mid_turns":       {"type": "int", "desc": "中期窗口轮数（LLM 摘要压缩）"},
-        "history_msg_max_chars":   {"type": "int", "desc": "单条消息截断上限（字符）"},
+        # 0 = 不限（默认）：交由「预算 + 份额」机制裁剪，且裁剪必带标记；>0 = 固定字符上限（调试用）
+        "history_msg_max_chars":   {"type": "int", "desc": "单条历史消息固定截断上限（字符）；0=不限（默认，交由预算与份额机制）"},
         "history_summary_chars":   {"type": "int", "desc": "中期摘要上限（字符）"},
         "topic_sim_threshold":     {"type": "float", "desc": "话题切换相似度阈值（相邻用户消息 bigram 余弦）"},
         "topic_label_chars":       {"type": "int", "desc": "话题标签长度（段首消息前 N 字符）"},
-        "topic_current_max_msgs":  {"type": "int", "desc": "当前话题原文注入最大消息数"},
+        "topic_current_max_msgs":  {"type": "int", "desc": "当前话题原文注入最大消息数（默认 20；会话级事实已另由 conv_anchors 锚点固化）"},
         "topic_boundary_keep":     {"type": "int", "desc": "话题切换边界保留上一话题原文条数"},
         "topic_retrieve_topk":     {"type": "int", "desc": "会话内语义拉回片段条数"},
         "topic_retrieve_threshold": {"type": "float", "desc": "语义拉回最低相似度"},
@@ -1682,7 +1711,7 @@ CONFIG_SCHEMA = {
         "topic_retrieve_threshold_dense": {"type": "float", "desc": "语义拉回阈值（真 embedding 路；已按分位等价映射标定修订为 0.5）"},
         "topic_group_match_dense": {"type": "float", "desc": "当前话题组匹配阈值（真 embedding 路；已标定修订为 0.5）"},
         "semantic_fallback_gate_dense": {"type": "float", "desc": "工作流语义补召门（dense 路；bigram 路固定 0.5，实测等价 0.79）"},
-        "model_context_chars":     {"type": "int", "desc": "建模上下文注入上限（字符，当前模型状态工作记忆）"},
+        "model_context_chars":     {"type": "int", "desc": "建模上下文注入上限（字符，当前模型状态工作记忆；默认 1500）"},
         "model_context_entities":  {"type": "str", "desc": "建模上下文既有实体注入形态：count(只报数量,默认)/names(列名字)/none"},
         "rerank":                  {"type": "bool", "desc": "知识库检索后 LLM 重排开关"},
         "rerank_top_n":            {"type": "int", "desc": "重排候选数"},
@@ -1694,8 +1723,8 @@ CONFIG_SCHEMA = {
         "budget_history_tokens":   {"type": "int", "desc": "T6 历史区 token 预算（话题原文/语义拉回/摘要分区复用，0=回退字符版）"},
         "budget_window_tokens":    {"type": "int", "desc": "占比制分母：上下文窗口基准 token（换模型时同步）"},
         "total_budget_window_ratio": {"type": "float", "desc": "总闸上限=provider窗口×该比例（默认0.75；总闸只防撞硬上限，不用于省token）"},
-        "budget_retrieval_ratio":  {"type": "float", "desc": "检索区占窗口比例（>0 覆盖绝对值键；0=关闭占比制）"},
-        "budget_history_ratio":    {"type": "float", "desc": "历史区占窗口比例（>0 覆盖绝对值键；0=关闭占比制）"},
+        "budget_retrieval_ratio":  {"type": "float", "desc": "检索区占窗口比例（>0 覆盖绝对值键；0=关闭占比制；默认 0.15）"},
+        "budget_history_ratio":    {"type": "float", "desc": "历史区占窗口比例（>0 覆盖绝对值键；0=关闭占比制；默认 0.35）"},
         "artifact_digest_enabled": {"type": "bool", "desc": "会话产物摘要注入开关（多轮：让后续轮次知道本会话已产出什么）"},
         "artifact_digest_max_chars": {"type": "int", "desc": "会话产物摘要字符上限（<=0 不限）"},
         "artifact_digest_versions": {"type": "int", "desc": "摘要中列出的最近 SysML 模型版本数"},
@@ -1759,7 +1788,7 @@ CONFIG_SCHEMA = {
         "pdf_max_pages":          {"type": "int",   "desc": "PDF 抽取页数上限（<=0 不限制，默认 1200）"},
         "ocr_enabled":            {"type": "bool",  "desc": "扫描件/图片 OCR 兜底总开关（关=回到改动前行为）"},
         "ocr_min_chars_per_page": {"type": "int",   "desc": "页文本层字数低于此值视为稀疏页并补 OCR（默认 100）"},
-        "ocr_max_pages":          {"type": "int",   "desc": "单次入库允许 OCR 的页数上限（默认 50）"},
+        "ocr_max_pages":          {"type": "int",   "desc": "单次入库允许 OCR 的页数上限（0=不限，默认；>0 才启用硬上限并显式告警）"},
         "ocr_render_scale":       {"type": "float", "desc": "PDF 渲染倍率（默认 2.0 ≈ 1224x1584 px）"},
         "ocr_min_avg_score":      {"type": "float", "desc": "OCR 结果平均置信度下限（默认 0.70；低于此值判质量不合格，不入库）"},
         "ocr_dense_min_lines":    {"type": "float", "desc": "OCR 密集文本放行：行数下限（默认 30；行数多=真实内容结构，达线即低质放行并打标）"},

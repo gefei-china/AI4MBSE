@@ -875,15 +875,15 @@ class HistoryMixin:
     #     · ② 分角色配额（user/assistant 各有名额）+ 块头带轮次/角色 + 丢弃与当前输入逐字重复的块。
     def _load_history(self, conversation_id, limit=None, cur_input=None):
         from core import config as _cfg
-        msg_max = int(_cfg.get("context", "history_msg_max_chars", 1500))
+        msg_max = int(_cfg.get("context", "history_msg_max_chars", 0))
         summary_chars = int(_cfg.get("context", "history_summary_chars", 800))
-        cur_max = int(_cfg.get("context", "topic_current_max_msgs", 8))
+        cur_max = int(_cfg.get("context", "topic_current_max_msgs", 20))
         boundary = int(_cfg.get("context", "topic_boundary_keep", 2))
         pull_topk = int(_cfg.get("context", "topic_retrieve_topk", 6))
         pull_th = float(_cfg.get("context", "topic_retrieve_threshold", 0.18))
         budget = int(_cfg.get("context", "budget_history_chars", 3000))
         # P1-8（2026-10-01）历史（输入/输出）相关性召回收口 —— 三个新旋钮
-        pull_per_role = int(_cfg.get("context", "topic_retrieve_per_role_cap", 3))
+        pull_per_role = int(_cfg.get("context", "topic_retrieve_per_role_cap", 5))
         raw_min_share = int(_cfg.get("context", "history_raw_min_share_tokens", 96))
         drop_echo = _cfg.as_bool("context", "topic_retrieve_drop_echo", True)
         # P0-6（2026-09-30）：会话产物摘要块。多轮上下文此前只有「消息」一种载体 ——
@@ -985,11 +985,15 @@ class HistoryMixin:
                 cut = cut[:int(len(cut) * cap_tokens / max(_ct(cut), 1))]
             return _mark_budget_cut(cut, len(text))
 
-        def push_raw(m, share):
+        def push_raw(m, share, abs_cap=None):
+            """把一条消息按额度压进 raw_list。
+
+            `abs_cap`：本条可用的**绝对上限**（用于按角色预分预算），None = 全预算 raw_cap。
+            """
             nonlocal used
             if not m["content"]:
                 return
-            room = raw_cap - used
+            room = (raw_cap if abs_cap is None else min(raw_cap, abs_cap)) - used
             if room <= 0:
                 return
             # 每条**最多** share：这才是「装几条」与「装多长」的分离点（见下方均分说明）
@@ -1037,9 +1041,23 @@ class HistoryMixin:
         #   （见下方第二轮）。只做 ① 会把短会话里唯一那条长回复白切一半；只做「吃满为止」
         #   就是本批要修的病灶。两者组合才同时满足「条数覆盖」与「不浪费」。
         _share = max(raw_min_share, raw_cap // max(len(_rcands), 1))
-        for m in reversed(_rcands):                 # newest-first：预算真不够时优先保最新
+        # ★ 2026-10-27（截断清单 P0-A3）：**user / assistant 分级 + 角色优先两轮**。
+        #   ① 分级：用户输入是「意图与约束」的唯一载体，且天然短文本；助手回复可达数万字。
+        #      共用份额时，一条 12,476 字的「贴 V2 代码要求校验」会被切到 1,500（丢 88%），
+        #      模型只看到代码前 12% ⇒ 校验类任务必然失败（真库 msg 4761 实测）。
+        #   ② 优先：原先单纯 newest-first 交错分配，老的大段用户输入只能捡剩余额度
+        #      （实测该条仍只进 4,815 字）—— 助手刚写的几段叙述反而先占掉预算。
+        #      现在先给 user 一轮（封顶 raw_cap 的 75%，给 assistant 留 25% 防"助手结论全消失"），
+        #      再给 assistant 一轮（按人均份额）。两轮内部仍 newest-first（预算真不够时优先保最新）。
+        #   ③ 顺序：两轮 append 会打乱时间序 ⇒ 结束后按消息 id 重排（不改内容、只还原顺序）。
+        #   所有裁剪都走 `_clip` ⇒ 必带「此处因上下文预算省略 N 字」标记，不静默。
+        _user_share = max(_share, int(raw_cap * 0.6))
+        _user_cap = int(raw_cap * 0.75)
+        for m in reversed([x for x in _rcands if x["role"] == "user"]):
+            push_raw(m, _user_share, abs_cap=_user_cap)
+        for m in reversed([x for x in _rcands if x["role"] != "user"]):
             push_raw(m, _share)
-        raw_list.reverse()  # 还原时间顺序（最近的在最后）
+        raw_list.sort(key=lambda x: x.get("id") or 0)   # 还原时间顺序（后文回填按"倒序=最新优先"）
         # 第二轮：把**没用完**的额度回填给被截断的条目（newest-first，上不封顶至原文全长）。
         # 理由：① 的额度就是 50%（`raw_cap`），不用满等于把预算白扔；② 的额度是**另外**的 25%
         #   （`pull_cap = 75%`），① 用满后 ② 仍有 500 tok（约 3 条 300 字符片段），不是被 ① 抢走。
@@ -1384,7 +1402,7 @@ class HistoryMixin:
         from core import config as _cfg
         limit = limit or int(_cfg.get("context", "history_immediate_turns", 6))
         mid_turns = int(_cfg.get("context", "history_mid_turns", 20))
-        msg_max = int(_cfg.get("context", "history_msg_max_chars", 1500))
+        msg_max = int(_cfg.get("context", "history_msg_max_chars", 0))
         summary_chars = int(_cfg.get("context", "history_summary_chars", 800))
         try:
             conn = get_db()
@@ -1402,6 +1420,15 @@ class HistoryMixin:
             c = clip_hist_msg(r["content"], msg_max)
             msgs.append({"id": r["id"], "role": r["role"], "content": c})
         immediate = msgs[-(limit * 2):] if limit else msgs
+        # ★ 2026-10-27（截断清单 P0-A1）：`msg_max=0`（不限）时，本兜底路径**必须自己按预算兜底**。
+        #   原因：本路径把最近 `limit*2` 条消息**全量**塞进 out（无 push_raw 的份额机制），
+        #   而单条可达数万字 ⇒ 12 条全长消息能到几十万字符，直接撞总闸被整段砍掉。
+        #   口径：历史预算（token）× 2.2（中英混排 char/token 近似）→ 均分给这些消息，
+        #   下限 2000 字符（不至于把正常回复切碎）；裁剪仍走 clip_hist_msg（带标记 + 章节提纲）。
+        if msg_max <= 0 and immediate:
+            _bud_tok = ctx_budget_tokens("history", "budget_history_chars", 3000)
+            _per = max(2000, int(_bud_tok * 2.2) // max(len(immediate), 1))
+            immediate = [dict(m, content=clip_hist_msg(m["content"], _per)) for m in immediate]
         older = msgs[:-(limit * 2)] if (limit and len(msgs) > limit * 2) else []
         out = []
         if older:

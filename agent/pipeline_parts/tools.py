@@ -1371,13 +1371,23 @@ class ToolMixin:
             import json as _json
             latency = int((_time.time() - t0) * 1000)
             # P0-3：脱敏。失败不阻断（旁路原则），但要留痕让人知道没脱敏成功。
+            # ★ 2026-10-27（截断清单 P0-B3）：结果落库上限 2000 → 8000，且**截断可观测**。
+            #   原 2000 是**静默**截断：我据此统计"工具结果都在 2000 以内"，把
+            #   `mcp.max_response=4000` 造成的丢失误判成"没有大结果"，直接诊断跑偏一次。
+            #   现口径：`result` 仍存文本（保持既有解析口径不变），另落 `result_len`
+            #   （原始长度）与 `result_truncated`（是否被裁）两列 ⇒ 任何"看到的是不是全部"
+            #   都能用 SQL 直接回答，不靠猜。
+            _LOG_RES_CAP = 8000
+            _raw_res = str(result.get("result", ""))
+            _res_len = len(_raw_res)
+            _res_trunc = 1 if _res_len > _LOG_RES_CAP else 0
             try:
                 from core.redact import redact_text as _redact
                 _args_txt = _redact(_json.dumps(arguments or {}, ensure_ascii=False)[:2000])
-                _res_txt = _redact(str(result.get("result", ""))[:2000])
+                _res_txt = _redact(_raw_res[:_LOG_RES_CAP])
             except Exception:
                 _args_txt = _json.dumps(arguments or {}, ensure_ascii=False)[:2000]
-                _res_txt = "[redact-failed] " + str(result.get("result", ""))[:1900]
+                _res_txt = "[redact-failed] " + _raw_res[:_LOG_RES_CAP]
             # P0-2：操作者。口径同 audit_logs.user_name（display_name，回落 username）。
             _uname = ""
             try:
@@ -1441,12 +1451,13 @@ class ToolMixin:
                 except Exception:
                     _cid = ""
                 conn.execute(
-                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name, run_id, task_key, failure_kind, capability_id, trace_id) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name, run_id, task_key, failure_kind, capability_id, trace_id, result_len, result_truncated) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (intent_ctx.get("intent", ""), agent_ctx.get("agent", ""),
                      name, tool_type, _args_txt, _res_txt,
                      1 if result.get("ok") else 0,
-                     latency, conv_ctx or 0, _uname, _run_id, _task_key, _fkind, _cid, _trace_id),
+                     latency, conv_ctx or 0, _uname, _run_id, _task_key, _fkind, _cid, _trace_id,
+                     _res_len, _res_trunc),
                 )
         except Exception:
             pass  # 观测落库失败不影响工具执行

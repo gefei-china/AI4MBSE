@@ -470,12 +470,15 @@ class MemoryMixin:
                         #   `self._tool_run_ctx`（顶层轮次就地分配、嵌套沿用父编排 run，与 _log_tool_call 同源）。
                         _rid = int(getattr(self, "_tool_run_ctx", 0) or 0)
                         conn.execute(
+                            # 2026-10-27（截断清单 P0-B3）：技能行也写 result_len，
+                            #   与工具行口径一致（否则 0 既表示"未知"又表示"空"，无法区分）。
                             "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-                            "arguments, result, ok, latency_ms, conversation_id, run_id, failure_kind, capability_id, trace_id) "
-                            "VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?,?)",
+                            "arguments, result, ok, latency_ms, conversation_id, run_id, failure_kind, capability_id, trace_id, result_len) "
+                            "VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)",
                             (intent or "", _agent.get("agent", ""), name, "skill", "skill",
                              "{}", _summary, 1 if ok else 0, int(conversation_id or 0), _rid,
-                             _skind, ("skill:%s" % _sid_row[0]) if _sid_row else "", _tid))
+                             _skind, ("skill:%s" % _sid_row[0]) if _sid_row else "", _tid,
+                             len(_summary or "")))
                     except Exception:
                         pass
                 for name in hits[:10]:

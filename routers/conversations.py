@@ -642,12 +642,14 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
         resume_text = "【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。"
         append_text = "\n\n———\n\n【澄清补充】用户选择跳过澄清，按现有信息继续执行"
     elif free_text:
+        # 2026-10-27（截断清单 P2-D2）：4000 → 8000。澄清补充常是用户把整段约束/代码贴进来，
+        #   4000 处腰斩后模型"接着半截话"执行（且无标记）。8000 覆盖绝大多数补充说明。
         resume_text = (
             "【澄清补充】用户在待澄清状态下直接补充了以下信息（请据此继续，无需再确认）：\n"
-            + free_text[:4000]
+            + free_text[:8000]
             + f"\n\n原请求：{(context.get('input') or '')[:2000]}"
         )
-        append_text = "\n\n———\n\n【澄清补充】" + free_text[:4000]
+        append_text = "\n\n———\n\n【澄清补充】" + free_text[:8000]
     else:
         qmap = {str(q.get("id")): q for q in questions}
         lines = []

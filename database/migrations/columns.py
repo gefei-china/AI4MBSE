@@ -103,6 +103,12 @@ def _migrate_columns(conn):
     # 回答不了"这一轮对话调了哪些能力、花了多少钱"。本列补上同一个 trace_id。
     # 存量行无法回溯（历史未记录）⇒ 留空，**不编造**。
     _add("tool_call_logs", "trace_id", "TEXT DEFAULT ''")
+    # ── 2026-10-27（截断清单 P0-B3）：落库截断可观测 ──
+    # `result` 上限 2000 → 8000，并补这两列。原 2000 是**静默**截断：
+    #   我据此统计"工具结果都 ≤2000"，把 MCP 侧的数据丢失误判成"没有大结果"⇒ 诊断跑偏。
+    # 存量行无法回溯（当时没记长度）⇒ 留 0（= 未知），**不编造**。
+    _add("tool_call_logs", "result_len", "INTEGER DEFAULT 0")        # 原始结果字符数
+    _add("tool_call_logs", "result_truncated", "INTEGER DEFAULT 0")  # 1 = result 被裁
     # 索引**必须**建在列补齐之后：老库这张表已存在且无 trace_id 列时，
     # 提前建索引会抛 `no such column: trace_id` 让 init_db 整段崩掉（实测踩过）。
     try:

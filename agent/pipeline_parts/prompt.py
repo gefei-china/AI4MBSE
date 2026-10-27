@@ -214,7 +214,12 @@ class PromptMixin:
             return ""
         content = best["content"]
         content = content.replace("{{ontology_profile}}", self._build_ontology_hint())
-        content = content.replace("{{user_input}}", str(user_input)[:2000])
+        # ★ 2026-10-27（截断清单 P0-C1）：**取消** `str(user_input)[:2000]`。
+        #   原实现把用户请求静默砍到 2000 字再注入模板 —— 而 user_input 本身已在
+        #   messages 里、也在总预算之内，这里再切一刀纯属"凭固定字符数砍高信号内容"。
+        #   实测：用户贴 V2 代码要求校验（12,476 字）时，模板段只剩前 16%，且**无任何标记**，
+        #   模型以为用户只给了这么点东西。现按原文注入，总闸（total_budget_*）兜底。
+        content = content.replace("{{user_input}}", str(user_input))
         content = content.replace("{{intent}}", intent)
         # 2026-09-17 S4：补齐模板声明过但此前未替换的占位符——种子模板
         # （database/seeds.py:170）声明的 variables 是 ["ontology_profile","linked_data_scope","output_schema"]，

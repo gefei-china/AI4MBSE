@@ -230,8 +230,9 @@ class StreamMixin:
             # 此前是 `agent_def.system_prompt[:300]` —— 主 Agent 的 prompt 补齐后长1354B，
             # 300 字截断恰好切在「拆解规则」中间（规则 1-2 保留、3-6 与输出格式全丢），
             # 而规则 3（生成≠校验）、5（不虚构能力）正是编排最需要的那几条。
-            # 仍保留 4000B 上限防御异常超长 prompt。
-            _lead_sp = ((team_def or {}).get("system_prompt") or agent_def.system_prompt or "").strip()[:4000]
+            # 仍保留 8000B 上限防御异常超长 prompt（2026-10-27 截断清单 P2-C2：4000 → 8000；
+            #   真库最大 agents.system_prompt = 7,981 字符 ⇒ 8000 对现有资产实际不裁）。
+            _lead_sp = ((team_def or {}).get("system_prompt") or agent_def.system_prompt or "").strip()[:8000]
             # 成员名册（capabilities + 触发词）——近义成员（结构视图 vs 需求视图）的唯一区分依据
             _team_roster = ""
             if team_def:
@@ -5121,7 +5122,9 @@ class StreamMixin:
                     "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
                     # V2.4 会话内执行过程持久化（前端历史消息按序还原思考/子智能体/工具调用）
                     "exec": {
-                        "reasoning": "".join(exec_reasoning)[:4000] or None,
+                        # 2026-10-27（截断清单 P2-D1）：4000 → 8000。exec.reasoning 是历史消息
+                        #   还原"当时怎么想的"的唯一载体，4000 处腰斩后回看只剩开头。
+                        "reasoning": "".join(exec_reasoning)[:8000] or None,
                         "agent": agent_def.name,
                         "tools": exec_tools,
                     },

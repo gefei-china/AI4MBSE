@@ -973,7 +973,9 @@ class IntentRouter:
                     f"只输出一个 JSON 对象，格式："
                     f'{{"agree": true或false, "intent": "意图名", "confidence": 0到1}}。'
                     f"若不同意，intent 填你认为正确的意图名。无法判断时 agree 给 true、confidence 给低值。")},
-                 {"role": "user", "content": str(text)[:500]}],
+                 # 2026-10-27（截断清单 P2-C6）：500 → 1000。长请求（贴代码/贴清单）只取前
+                 #   500 字时，真正的诉求常在后面（先铺陈背景再提要求）⇒ 复核员看到的是半截话。
+                 {"role": "user", "content": str(text)[:1000]}],
                 _intent="intent_confirm",
             )
             content = (resp.get("choices") or [{}])[0].get("message", {}).get("content") or ""
@@ -1148,11 +1150,13 @@ class IntentRouter:
             from llm import llm_client
             known = set(self._db_intents.keys()) - {"chat"}
             known_list = "、".join(sorted(known))
-            _user = str(text)[:500]
+            # 2026-10-27（截断清单 P2-C6）：500/300 → 1000/600。原「当前问题 300 + 上文 300」
+            #   信息量过低，指代（"那个工程""按上面的方案"）根本无从解析 ⇒ 判意图靠猜。
+            _user = str(text)[:1000]
             if context:
-                _user = ("用户当前问题：" + str(text)[:300] + chr(10)
+                _user = ("用户当前问题：" + str(text)[:1000] + chr(10)
                          + "用户在本会话中的上文（用于理解指代与省略成分）："
-                         + str(context)[:300] + chr(10)
+                         + str(context)[:600] + chr(10)
                          + "请判断**当前问题**的意图（上文只用来补全省略与指代）。")
             # llm_first（2026-10-23）：每意图注入 confirmed 真实说法 few-shot ——
             #   把"作文题变成选择题"（行业共识）。这是与旧提示词的实质差异：

@@ -402,16 +402,18 @@ class ExecuteMixin:
         # P1-28（2026-10-02）：**块内容**收敛到 `common.build_prompt_blocks`（唯一真源）。
         # 本路径（execute：Studio Agent 试跑 / 工作流 LLM 节点 / 非流式 API）与流式对话的
         # 差异一律**显式参数化**，不抹平：
-        #   · role_cap=0                不截断（本路径原行为；流式用 `_AGENT_ROLE_CAP`）
+        #   · role_cap=_AGENT_ROLE_CAP  与流式**取同一值**（2026-10-27 统一）
         #   · include_tool_rules=False  本路径原本**没有** tool_rules 块（流式有）
-        # ⚠️ 不要"顺手"把这两项改成与流式一致 —— 那会改变本路径产出，是需质量 A/B 的独立决策
-        #   （差异清单与后果见 docs §29.9）。
+        # ★ 2026-10-27（截断清单 P1-C3）：role_cap 由 0（不截断）改为 `_AGENT_ROLE_CAP`，
+        #   与流式路径统一。原因：同一 Agent 在两条路径上行为不同是隐性缺陷
+        #   （试跑正常、对话里效果差）。该值 8000 ≥ 真库最大 prompt（7,981）⇒ 对现有
+        #   资产**实际不裁**，只保留对异常超长 prompt 的段级护栏（不腰斩，只折可裁段）。
         system_prompt = assemble_system_prompt(build_prompt_blocks(self, PromptBlocksCtx(
             agent_def=agent_def, intent=intent, hil_level=hil_level,
             user_input=user_input, user=user, branch=branch,
             conversation_id=conversation_id, slots=slots, user_ctx=user_ctx,
             att_text=att_text, context_text=context_text, report_prompt=report_prompt,
-            skill_block=skill_block, role_cap=0, include_tool_rules=False,
+            skill_block=skill_block, role_cap=_AGENT_ROLE_CAP, include_tool_rules=False,
         )))
         # ── P0-2（2026-10-26）：上下文分块归因落库 ──
         # 非流式路径是**一次性调用**（无 SSE finally 可挂），故在装配后立即 flush。

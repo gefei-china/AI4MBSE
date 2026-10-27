@@ -1264,6 +1264,12 @@ def init_db():
         --   编排子任务沿用外层 trace（不新开，否则整轮成本拆散）。
         -- 存量行无法回溯（历史未记录）⇒ 留空，**不编造**。
         trace_id TEXT DEFAULT '',
+        -- 2026-10-27（截断清单 P0-B3）：**落库截断可观测**。
+        --   `result` 从 2000 提到 8000 并另记原始长度与是否被裁 —— 原 2000 是静默截断，
+        --   导致"工具结果都很短"的错误结论（据此误判过 mcp.max_response 造成的数据丢失）。
+        --   `result` 文本口径不变（仍是脱敏后的前缀），解析方不受影响。
+        result_len INTEGER DEFAULT 0,        -- 原始结果字符数（未截断时 = length(result)）
+        result_truncated INTEGER DEFAULT 0,  -- 1 = result 被截（result_len > 落库上限）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_time ON tool_call_logs(created_at)")
