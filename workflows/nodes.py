@@ -112,7 +112,7 @@ class FlowNodesMixin:
         # P0-5：技能使用反馈采集（画布 agent 节点路径；execute 非流式不自动采集，此处补采）
         try:
             if getattr(pipe, "_last_skill_hits", None):
-                pipe._record_skill_feedback(run_id=int(getattr(self, "run_id", 0) or 0),
+                pipe._record_skill_feedback(conversation_id=int(getattr(self, "run_id", 0) or 0),
                                             intent=intent or out.get("intent", ""),
                                             output_content=out.get("content") or "")
         except Exception:

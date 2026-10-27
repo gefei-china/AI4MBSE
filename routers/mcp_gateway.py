@@ -291,15 +291,23 @@ def _audit_call(tool: str, is_error: bool, latency_ms: int, detail: str = "") ->
         traceback.print_exc()
     try:
         from database import db_conn
+        # ★ P0-3（2026-10-27）：外部 harness 的入站调用**没有对话轮次**
+        #   ⇒ 用 request_id 作 trace（一次外部请求 = 一条链），这是如实口径。
+        #   这样"MCP 供给出去的调用"也能和它自己的其它日志串起来。
+        try:
+            from core.audit import current_trace_id as _ctid_gw
+            _tid_gw = _ctid_gw(fallback_request=True)
+        except Exception:
+            _tid_gw = ""
         with db_conn() as _c:
             _hit = _c.execute("SELECT 1 FROM tools WHERE name=?", (tool,)).fetchone()
             _c.execute(
                 "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-                "arguments, result, ok, latency_ms, capability_id) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "arguments, result, ok, latency_ms, capability_id, trace_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 ("mcp_gateway", "", tool, "mcp", "tool", "{}",
                  detail[:2000], 0 if is_error else 1, latency_ms,
-                 ("tool:%s" % tool) if _hit else ""))
+                 ("tool:%s" % tool) if _hit else "", _tid_gw))
     except Exception:  # noqa: BLE001
         pass  # 度量落库失败不影响审计与工具返回
 

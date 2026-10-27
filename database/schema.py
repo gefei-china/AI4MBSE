@@ -1254,9 +1254,23 @@ def init_db():
         run_id INTEGER DEFAULT 0,
         task_key TEXT DEFAULT '',
         failure_kind TEXT DEFAULT '',
+        -- P0-3（2026-10-27）：**任务级追溯的 JOIN 键**。
+        -- 背景（走查实测）：`run_id` 在 83.2% 的工具调用上为 0 —— 因为主对话路径
+        --   （`stream.execute_stream` 单 Agent 直行）**根本没有编排批次**，
+        --   只有编排子任务才挂 `_tool_run_ctx`。而 `llm_usage_stats` 早就有
+        --   `trace_id`（每个请求一个，`core.audit.begin_trace` 生成）——
+        --   两套 id 体系不可 JOIN ⇒ 回答不了「这一轮对话花了多少钱、调了哪些能力」。
+        -- 取值口径：与 `llm_usage_stats.trace_id` **同源同值**（都取 `core.audit.trace_context()`），
+        --   编排子任务沿用外层 trace（不新开，否则整轮成本拆散）。
+        -- 存量行无法回溯（历史未记录）⇒ 留空，**不编造**。
+        trace_id TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_time ON tool_call_logs(created_at)")
+    # ⚠️ P0-3 的 `idx_tool_logs_trace` **刻意放在列迁移之后**（database/migrations/columns.py）：
+    #   老库这张表已存在且没有 trace_id 列，若在此处建索引会直接抛
+    #   `no such column: trace_id` 让 init_db 崩掉（本轮实测踩过）。
+    #   建表语句里带 trace_id 只解决"新库"，"老库"必须靠 _add + 其后建索引。
 
     # ── P0-a（2026-10-24）能力统一注册处：capability_registry 逻辑投影层 ──
     # 五类能力（tools/skills/plugins/mcp_servers/prompts）权威数据不动，本表只做

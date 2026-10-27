@@ -1066,6 +1066,7 @@ function switchStLibTab(el, pane){
   if(pane==='st-market') loadMarketManage();  // 2026-09-17 定稿：插件市场单页直出（消费视图在类型页 cap-zone）
   if(pane==='st-model') loadLLMProviders();
   if(pane==='st-changelog') loadStChangelog();  // P0-2 资产变更审计（字段级 diff 历史）
+  if(pane==='st-registry') loadCapRegistry();   // 2026-10-27 能力账本（统一注册处 + 声明/调用 2×2）
   // 2026-09-04 v4：能力中心内部子 tab 切换 → 同步顶栏面包屑 cur
   const _bc = document.getElementById('br-cur');
   if(_bc) _bc.textContent = ST_TAB_TITLES[pane] || '能力中心';

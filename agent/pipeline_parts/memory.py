@@ -403,7 +403,7 @@ class MemoryMixin:
         except Exception:
             pass
 
-    def _record_skill_feedback(self, run_id=0, intent="", output_content="", error=None) -> None:
+    def _record_skill_feedback(self, conversation_id=0, intent="", output_content="", error=None) -> None:
         """P0-5 技能使用反馈采集：本次命中技能按输出成功/失败更新 use_stats，失败滚动备注。
 
         对齐 Hermes「技能在使用中自我改进」：反馈数据供 SkillImprover 周期修订触发。
@@ -440,13 +440,30 @@ class MemoryMixin:
                         _sid_row = conn.execute(
                             "SELECT id FROM skills WHERE name=? ORDER BY id LIMIT 1",
                             (name,)).fetchone()
+                        # ★ P0-3（2026-10-27）：技能调用同样要带 trace_id ——
+                        #   实测（会话 9623）本写入点 3 行 trace_id 全空，而同一轮的工具行有值
+                        #   ⇒ 同一轮的能力调用**一半能 JOIN、一半不能**，追溯链从中间断开。
+                        #   取值与工具侧**同一实现**（实例属性 → ContextVar），不另造 id。
+                        _tid = str(getattr(self, "_tool_trace_id", "") or "")
+                        if not _tid:
+                            try:
+                                from core.audit import current_trace_id as _ctid_m
+                                _tid = _ctid_m()
+                            except Exception:
+                                _tid = ""
+                        # ★ 请求 3（2026-10-27）：技能调用同样要带 run_id，与工具调用同源归批。
+                        #   此前本 INSERT 列清单**无 run_id 列**（落库取列默认值 0），且 `run_id` 形参
+                        #   被错位绑到 conversation_id —— 故技能调用 run_id 恒 0，主路径归批仍漏掉最大的
+                        #   一块（技能触发）。现：conversation_id 取形参真值；run_id 取本实例
+                        #   `self._tool_run_ctx`（顶层轮次就地分配、嵌套沿用父编排 run，与 _log_tool_call 同源）。
+                        _rid = int(getattr(self, "_tool_run_ctx", 0) or 0)
                         conn.execute(
                             "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-                            "arguments, result, ok, latency_ms, conversation_id, failure_kind, capability_id) "
-                            "VALUES (?,?,?,?,?,?,?,?,0,?,?,?)",
+                            "arguments, result, ok, latency_ms, conversation_id, run_id, failure_kind, capability_id, trace_id) "
+                            "VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?,?)",
                             (intent or "", _agent.get("agent", ""), name, "skill", "skill",
-                             "{}", _summary, 1 if ok else 0, int(run_id or 0), _skind,
-                             ("skill:%s" % _sid_row[0]) if _sid_row else ""))
+                             "{}", _summary, 1 if ok else 0, int(conversation_id or 0), _rid,
+                             _skind, ("skill:%s" % _sid_row[0]) if _sid_row else "", _tid))
                     except Exception:
                         pass
                 for name in hits[:10]:

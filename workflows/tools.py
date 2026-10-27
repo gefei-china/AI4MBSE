@@ -248,16 +248,23 @@ class ToolExecutor:
             else:
                 _tt = "builtin"
             _cid = "" if _tt == "mcp" else "tool:%s" % name
+            # ★ P0-3（2026-10-27）：工作流节点跑在对话链路内 ⇒ 沿用该轮 trace
+            #   （**不**用 request_id 兜底出新 id —— 那会把一轮拆成两条链）。
+            try:
+                from core.audit import current_trace_id as _ctid_wf
+                _tid = _ctid_wf()
+            except Exception:
+                _tid = ""
             from database import db_conn
             with db_conn() as conn:
                 conn.execute(
                     "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-                    "arguments, result, ok, latency_ms, run_id, capability_id) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    "arguments, result, ok, latency_ms, run_id, capability_id, trace_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     ("workflow", "", name, _tt, "tool", "{}",
                      str(result.get("result", ""))[:2000], 1 if result.get("ok") else 0,
                      int((time.time() - t0) * 1000),
-                     int(getattr(self, "_flow_run_id", 0) or 0), _cid))
+                     int(getattr(self, "_flow_run_id", 0) or 0), _cid, _tid))
         except Exception:
             pass  # 观测落库失败不影响工具执行（同主链路 _log_tool_call 旁路原则）
 

@@ -124,12 +124,39 @@ def frontmatter_author(fm) -> str:
     return m.group(1).strip().strip('"').strip("'")
 
 
-def extract_mcp_tool_names(capabilities, server_info):
-    """从 mcp_servers.capabilities / server_info 解析工具名清单。
-    实测 capabilities={"tools":{"listChanged":false}}——**无工具名** ⇒ 返回 []，
-    调用方据此跳过 mcp_tool 投影（不造假占位行）。
-    兼容结构：{"tools": {"name": {...}}} / {"tools": [{"name": ...}]}。"""
+def extract_mcp_tool_names(capabilities, server_info, tool_meta=None):
+    """解析一个 MCP server 的**工具名清单**（三个来源依次尝试，**不造假占位行**）。
+
+    来源优先级（实测决定，不是想当然）：
+      1. `mcp_servers.tool_meta` —— 结构化 `[{name, description, inputSchema}]`，
+         由 `mcp_health.discover_server()` 落库。**这是唯一"设计上就该有名字"的来源**。
+      2. `mcp_servers.capabilities` —— 实测 `{"tools":{"listChanged":false}}`，
+         **只有能力声明、没有工具名** ⇒ 通常解析出 0 个（不是缺陷，是 MCP 规范允许）。
+      3. `mcp_servers.server_info` —— 同 2，一般不含工具名。
+
+    ★ 2026-10-27（P1-1）：本函数此前**只读 2/3**，所以 `capability_registry` 里
+      `mcp:{server}:{tool}` 恒为 **0 行**，71 个 MCP 工具在统一注册处完全不可见。
+      注释当时写的是"capabilities 无工具名清单 ⇒ 不展开、不造假"，这条成立；
+      但**真正的数据源 `tool_meta` 当时是空的**（回填是死代码，见 P0-0）——
+      于是"不造假"演化成了"永远没有"。**回填修好后必须把 1 号来源接上**，
+      否则 MCP 工具级投影永远不会出现，且同样不会有任何报错。
+
+    兼容结构：`{"tools": {"name": {...}}}` / `{"tools": [{"name": ...}]}` / `[{name: ...}]`。
+    """
     names = []
+    # ① tool_meta（结构化列表，权威来源）
+    if tool_meta:
+        try:
+            data = json.loads(tool_meta) if isinstance(tool_meta, str) else tool_meta
+        except Exception:
+            data = None
+        if isinstance(data, list):
+            for it in data:
+                if isinstance(it, dict) and str(it.get("name") or "").strip():
+                    names.append(str(it["name"]).strip())
+                elif isinstance(it, str) and it.strip():
+                    names.append(it.strip())
+    # ②③ capabilities / server_info（历史上就有的兜底，保留以免回归）
     for doc in (capabilities, server_info):
         if not doc:
             continue
@@ -159,6 +186,42 @@ def extract_mcp_tool_names(capabilities, server_info):
             seen.add(n)
             out.append(n)
     return out
+
+
+def _delete_mcp_tool_rows(conn, server_id):
+    """删掉某 server 的工具级投影（**按 source_id 删**，不靠 id 猜测）。
+
+    ⚠️ 2026-10-27 修正：`refresh_registry_row` 里原写法 `WHERE source_id=?`，
+    而 mcp_tool 行的 `source_id` 存的是 **server 名**（`INSERT ... srv[0]`），
+    `row_id` 传的却是 **数字 id** ⇒ 换名/重展时删不掉旧行，会留下幽灵工具。
+    本函数统一按 `name` 删，调用方负责先取到 server 名。
+    """
+    if not server_id:
+        return 0
+    cur = conn.execute(
+        "DELETE FROM capability_registry WHERE kind='mcp_tool' AND source_id=?", (server_id,))
+    return cur.rowcount or 0
+
+
+def expand_mcp_tools(conn, server_name, capabilities=None, server_info=None,
+                     tool_meta=None) -> list:
+    """（重）展开一个 MCP server 的工具级投影 —— `reconcile` 与 `refresh` 的**唯一实现**。
+
+    两处各写一份必然漂移（本仓老问题）；这里收口成一处：
+      先删该 server 的旧工具行 → 再按最新名字清单重插。
+    无名字清单 ⇒ 删完就结束（0 行 = "确实不知道有什么工具"，不是造假占位）。
+    """
+    _delete_mcp_tool_rows(conn, server_name)
+    names = extract_mcp_tool_names(capabilities, server_info, tool_meta)
+    for tname in names:
+        conn.execute(
+            "INSERT INTO capability_registry (capability_id, kind, display_name, "
+            "source_table, source_id, status, lifecycle, version, publisher, "
+            "visibility, risk_level, builtin, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
+            (mcp_tool_cid(server_name, tname), "mcp_tool", tname, "mcp_servers",
+             server_name, "active", "published", "1.0.0", "", "private", "read", 0))
+    return names
 
 
 # ── 投影 SQL 骨架 ─────────────────────────────────────────────────────────
@@ -313,19 +376,14 @@ def reconcile_capability_registry(conn) -> dict:
         except Exception as e:
             errors.append("mcp_version:%s" % str(e)[:80])
 
-        # ⑤ mcp_tool 展开（仅当探测数据真带工具名清单——实测当前两行都不带，跳过）
+        # ⑤ mcp_tool 展开（数据源优先级：tool_meta → capabilities → server_info）
+        #    ★ 2026-10-27：此前只读 capabilities/server_info（实测都无工具名）
+        #    ⇒ mcp_tool 恒 0 行。现在把 tool_meta 接上（P0-0 修好回填后才会有数据）。
         try:
             for row in conn.execute(
-                    "SELECT name, capabilities, server_info FROM mcp_servers").fetchall():
-                for tname in extract_mcp_tool_names(row[1], row[2]):
-                    conn.execute(
-                        "INSERT INTO capability_registry (capability_id, kind, display_name, "
-                        "source_table, source_id, status, lifecycle, version, publisher, "
-                        "visibility, risk_level, builtin, updated_at) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                        (mcp_tool_cid(row[0], tname), "mcp_tool", tname, "mcp_servers",
-                         row[0], "active", "published", "1.0.0", "", "private",
-                         "read", 0))
+                    "SELECT name, capabilities, server_info, tool_meta "
+                    "FROM mcp_servers").fetchall():
+                expand_mcp_tools(conn, row[0], row[1], row[2], row[3])
         except Exception as e:
             errors.append("mcp_tools:%s" % str(e)[:80])
 
@@ -357,10 +415,15 @@ def refresh_registry_row(conn, table: str, row_id) -> dict:
             row = conn.execute("SELECT id FROM %s WHERE id=?" % table, (row_id,)).fetchone()
         if not row:
             # 源行已不存在 ⇒ 删投影（含其 mcp_tool 子行）
+            # ★ 2026-10-27：mcp 侧改为**按孤儿删**。原因：mcp_tool 行的 `source_id` 存的是
+            #   **server 名**，而这里拿到的是**数字 id**，`source_id=?` 永远不命中 ⇒
+            #   删掉 server 后工具级投影会变成永不消失的幽灵行。
+            #   孤儿判据（source_id 已不在 mcp_servers.name 里）与 id/name 混用无关，幂等。
             if table == "mcp_servers":
+                conn.execute("DELETE FROM capability_registry WHERE kind='mcp_tool' "
+                             "AND source_id NOT IN (SELECT name FROM mcp_servers)")
                 conn.execute("DELETE FROM capability_registry WHERE source_table='mcp_servers' "
-                             "AND (source_id=? OR capability_id LIKE 'mcp:' || ? || ':%')",
-                             (row_id, row_id))
+                             "AND source_id NOT IN (SELECT name FROM mcp_servers)")
             elif table == "plugins":
                 conn.execute("DELETE FROM capability_registry WHERE source_table='plugins' "
                              "AND source_id=?", (row_id,))
@@ -384,21 +447,12 @@ def refresh_registry_row(conn, table: str, row_id) -> dict:
             "visibility, risk_level, builtin, created_at, updated_at) "
             + select_sql + " " + where + " " + _UPSERT_TAIL,
             (row_id,))
-        # mcp server 变动 ⇒ 重展其 tool 级（先删后展）
+        # mcp server 变动 ⇒ 重展其 tool 级（先删后展，唯一实现见 expand_mcp_tools）
         if table == "mcp_servers":
-            conn.execute("DELETE FROM capability_registry WHERE kind='mcp_tool' "
-                         "AND source_id=?", (row_id,))
-            srv = conn.execute("SELECT name, capabilities, server_info FROM mcp_servers "
-                               "WHERE id=?", (row_id,)).fetchone()
+            srv = conn.execute("SELECT name, capabilities, server_info, tool_meta "
+                               "FROM mcp_servers WHERE id=?", (row_id,)).fetchone()
             if srv:
-                for tname in extract_mcp_tool_names(srv[1], srv[2]):
-                    conn.execute(
-                        "INSERT INTO capability_registry (capability_id, kind, display_name, "
-                        "source_table, source_id, status, lifecycle, version, publisher, "
-                        "visibility, risk_level, builtin, updated_at) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                        (mcp_tool_cid(srv[0], tname), "mcp_tool", tname, "mcp_servers",
-                         srv[0], "active", "published", "1.0.0", "", "private", "read", 0))
+                expand_mcp_tools(conn, srv[0], srv[1], srv[2], srv[3])
         # skills publisher 单行补充
         if table == "skills":
             fm = conn.execute("SELECT frontmatter FROM skills WHERE id=?", (row_id,)).fetchone()

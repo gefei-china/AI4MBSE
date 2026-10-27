@@ -442,14 +442,22 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
         if r.get("executed") and not _is_cfg_action:
             try:
                 _er = r.get("exec_result") or {}
+                # ★ P0-3（2026-10-27）：HIL 批准后的执行是**独立的 HTTP 请求**
+                #   （用户点"批准"那一刻），本身没有对话轮次 ⇒ 用 request_id 作 trace。
+                #   它仍保留 run_id/task_key 指向原编排批次，两条线互补而非互相替代。
+                try:
+                    from core.audit import current_trace_id as _ctid_hil
+                    _tid_hil = _ctid_hil(fallback_request=True)
+                except Exception:
+                    _tid_hil = ""
                 conn.execute(
                     "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-                    "arguments, result, ok, latency_ms, run_id, task_key, capability_id) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "arguments, result, ok, latency_ms, run_id, task_key, capability_id, trace_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     ("hil_approve", "", action,
                      "builtin" if action == "save_artifact" else ("http" if _hil_is_http else ""),
                      "tool", "{}", str(_er.get("result", ""))[:2000],
-                     1 if _er.get("ok") else 0, 0, _run_id, _task_key, "tool:%s" % action))
+                     1 if _er.get("ok") else 0, 0, _run_id, _task_key, "tool:%s" % action, _tid_hil))
             except Exception:
                 pass
     # P0-b：eval_label 的**驳回**同样要落状态（labeled_rejected，B3：永不进

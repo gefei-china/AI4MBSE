@@ -56,6 +56,7 @@ from routers import (
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
     evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
     diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断（让 token 构成可见）
+    capabilities_router,      # 2026-10-27 P0-2 能力账本（统一注册处 + 声明/调用 2×2 + 任务级追溯）
 )
 
 @asynccontextmanager
@@ -282,6 +283,7 @@ for _router in (
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
     evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
     diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断
+    capabilities_router,      # 2026-10-27 P0-2 能力账本（all read-only）
 ):
     app.include_router(_router)
 

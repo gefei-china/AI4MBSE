@@ -206,14 +206,20 @@ def execute(conn, plugin, tool, params=None, user=None):
     store.log_audit(conn, user, plugin.get("plugin_id"), "run",
                     {"tool": tool or ptype, "ok": result.get("ok")})
     try:
+        # ★ P0-3（2026-10-27）：沙箱试跑是**独立请求**（无对话轮次）⇒ request_id 作 trace。
+        try:
+            from core.audit import current_trace_id as _ctid_pl
+            _tid_pl = _ctid_pl(fallback_request=True)
+        except Exception:
+            _tid_pl = ""
         conn.execute(
             "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-            "arguments, result, ok, latency_ms, capability_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "arguments, result, ok, latency_ms, capability_id, trace_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             ("plugin_sandbox", "", str(tool or ptype), "plugin", "plugin", "{}",
              str(result.get("result") or result.get("error") or "")[:2000],
              1 if result.get("ok") else 0, latency,
-             "plugin:%s" % (plugin.get("plugin_id") or "")))
+             "plugin:%s" % (plugin.get("plugin_id") or ""), _tid_pl))
     except Exception:
         pass  # 统一度量落库失败不影响沙箱执行与既有审计
     conn.commit()

@@ -463,7 +463,7 @@ class OrchestrMixin:
         # P0-3：编排产出记忆沉淀（LLM 提炼 or 规则降级，每会话限 2 次）
         self._deposit_session_memory(user_input, llm_content, intent)
         # P0-5：技能使用反馈采集（非流式编排路径）
-        self._record_skill_feedback(run_id=int(conversation_id or 0), intent=intent, output_content=llm_content)
+        self._record_skill_feedback(conversation_id=int(conversation_id or 0), intent=intent, output_content=llm_content)
         msg_id = 0
         with db_conn() as conn:
             conn.execute(

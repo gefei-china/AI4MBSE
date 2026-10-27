@@ -619,6 +619,11 @@ def reset_request_state(pipe) -> None:
     pipe._tool_user = None               # 工具审计归属用户（跨用户泄漏审计链）
     pipe._tool_intent_ctx = None         # 工具审计归属意图
     pipe._tool_agent_ctx = None          # 工具审计归属 Agent
+    # ★ P0-3（2026-10-27）：本轮 trace_id —— 与 `llm_usage_stats.trace_id` **同源同值**，
+    #   是"这一轮对话调了哪些能力、花了多少钱"的唯一 JOIN 键。
+    #   ⚠️ **必须清零**：Pipeline 是全局单例，不清 ⇒ 上一轮的 trace 会被写进本轮的
+    #   工具调用日志，追溯结果指向**别人的那一轮**（比留空更糟：看起来有值、但是错的）。
+    pipe._tool_trace_id = ""
     pipe._skill_allowed_tools = None     # 显式技能授权（见 reset_skill_state 的历史注释）
     pipe._skill_forced = False
     pipe._hil_level = None               # HIL 分级（人工确认队列的判定依据）
@@ -628,6 +633,11 @@ def reset_request_state(pipe) -> None:
     # ── 记忆作用域：mem0 式读写的作用域 ──
     pipe._mem_ctx = None
     pipe._mem_project_id_cache = None    # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
+    # ★ 2026-10-27：补登记 `_rag_memory_hits`（P0-4 引入、当轮漏登记）。
+    #   它虽在 stream.execute_stream 入口会被置 `[]`，但**登记缺失是门禁能发现的唯一信号** ——
+    #   一旦有人把入口那行删掉，跨轮串味（消费到上一轮的 memory_hits）将无人拦。
+    #   `verify_request_state_reset` 的 A2 扫全部 `self.X =` 赋值点与本清单的差集，正是为此。
+    pipe._rag_memory_hits = []
     # ── ★ SysML 交付兜底缓存（本条即"产出雷同"的根因字段）──
     pipe._sysml_last_checked_code = None
     pipe._sysml_last_pass_code = None

@@ -830,6 +830,15 @@ class StreamMixin:
                     sub._orch_subtask = True
                     sub._tool_run_ctx = int(run_id or 0)
                     sub._tool_task_key = tkey
+                    # ★ P0-3（2026-10-27）：子任务**沿用外层 trace**（不新开 ——
+                    #   否则一次编排会碎成 N 个 trace，整轮成本无法聚合）。
+                    #   两级取值：外层实例 → 当前 ContextVar（子任务线程可能拿不到实例属性）。
+                    try:
+                        from core.audit import trace_context as _tc3
+                        sub._tool_trace_id = (getattr(self, "_tool_trace_id", "")
+                                              or str((_tc3() or {}).get("trace_id") or ""))
+                    except Exception:
+                        sub._tool_trace_id = getattr(self, "_tool_trace_id", "") or ""
                     # Task 9：隔离命名空间 run:tkey + kb_scope 预留
                     # （execute_stream 无 kb_scope 参数 → 跳过透传；存属性供后续检索/记忆过滤消费）
                     sub._ns_ctx = f"{run_id}:{tkey}"
@@ -3080,7 +3089,7 @@ class StreamMixin:
         # P0-3：编排产出记忆沉淀（LLM 提炼 or 规则降级，每会话限 2 次）
         self._deposit_session_memory(user_input, orch_content, intent)
         # P0-5：技能使用反馈采集（流式编排路径）
-        self._record_skill_feedback(run_id=int(conversation_id or 0), intent=intent, output_content=orch_content)
+        self._record_skill_feedback(conversation_id=int(conversation_id or 0), intent=intent, output_content=orch_content)
         with db_conn() as conn2:
             # 2026-09-29：user 消息已在 execute_stream 入口落库，此处只插 assistant（防重复）
             # ⚠️ 2026-10-21：编排**子任务**是以 `conversation_id=0` 嵌套调用本方法的
@@ -3463,12 +3472,39 @@ class StreamMixin:
         # 编排子任务会以 conversation_id=0 嵌套调用本方法 —— 此时**不重开** trace，沿用外层
         # （否则每颗子任务都会生成新 trace_id，整轮成本无法聚合）。
         try:
-            from core.audit import begin_trace, trace_context as _tctx_ex
+            from core.audit import begin_trace, bind_trace, trace_context as _tctx_ex
             _exist = _tctx_ex()
             _trace = begin_trace(conversation_id=int(conversation_id or 0)) \
                 if (conversation_id or not _exist.get("trace_id")) else _exist
         except Exception:
             _trace = {}
+        # ★ P0-3（2026-10-27）：把本轮 trace_id 落到实例上，供 `_log_tool_call` 写进
+        #   `tool_call_logs.trace_id`。**这是任务级追溯的 JOIN 键** ——
+        #   `llm_usage_stats` 早就按 trace_id 聚合，而工具调用日志此前只有
+        #   `run_id`（主对话路径恒 0，因为单 Agent 直行没有编排批次）⇒ 两套 id 不可 JOIN，
+        #   回答不了「这一轮对话调了哪些能力、花了多少钱」。
+        #   取值与 LLM 侧**同源**（同一个 `begin_trace` 产物，不是另造一个 id）。
+        self._tool_trace_id = str((_trace or {}).get("trace_id") or "")
+        # ★ 请求 3（2026-10-27）：单 Agent 直行路径的 run_id 归正。
+        #   此前 run_id 只由 `_stream_orchestrated_flow`（line 482）赋值 —— 那是编排批次号；
+        #   主对话（单 Agent 直行）从不赋值 `self._tool_run_ctx` ⇒ `_log_tool_call` 读到的恒 0
+        #   （走查 P0-3 记为"设计如此"）。但"设计如此"埋两雷：
+        #     ① 直行路径的工具调用无法按 run 归批（只能靠 trace_id，而 run_id / trace_id 是两套体系）；
+        #     ② 任何按 run_id 做统计/分组的看板都会把绝大部分流量（单 Agent 直行）漏掉 ⇒ 误导性空图。
+        #   彻底修法：把"一轮对话"明确定义为一个 run。编排路径已有 run（批次号），直行路径在此
+        #   就地分配一个 run_id（与编排同源的 TaskQueue.new_run_id），供 `_log_tool_call` 收口写入。
+        #   ⚠️ 仅顶层轮次分配：嵌套子 Agent（conversation_id=0，复用外层 trace）**不重分配**，
+        #   以免覆盖父编排已设的 run_id（见 _stream_orchestrated_flow:831 给 sub._tool_run_ctx 赋值）。
+        if conversation_id:
+            try:
+                from task_queue import TaskQueue
+                from database import db_conn as _dbc
+                with _dbc() as _c:
+                    self._tool_run_ctx = int(TaskQueue.new_run_id(_c) or 0)
+            except Exception:
+                self._tool_run_ctx = 0
+        else:
+            self._tool_run_ctx = 0
 
         self._mem_project_id_cache = None   # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
         # ★ P0-4（2026-10-26）：RAG 侧记忆召回结果（单一真源用）。**每轮必须重置** ——
@@ -4952,7 +4988,7 @@ class StreamMixin:
                 # P0-3：主会话产出记忆沉淀（LLM 提炼 or 规则降级，每会话限 2 次）
                 self._deposit_session_memory(user_input, llm_content, intent)
                 # P0-5：技能使用反馈采集（主会话直行路径）
-                self._record_skill_feedback(run_id=int(conversation_id or 0), intent=intent, output_content=llm_content)
+                self._record_skill_feedback(conversation_id=int(conversation_id or 0), intent=intent, output_content=llm_content)
                 card_data = json.dumps({
                     "intent": intent,
                     "agent": agent_def.name,

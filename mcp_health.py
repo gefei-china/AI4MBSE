@@ -34,6 +34,47 @@ def _save_tool_meta(tools: list) -> str:
             return ""
 
 
+def _meta_tool_count(raw) -> int:
+    """`mcp_servers.tool_meta` 里的**工具条数**（0 = 无可用元数据）。
+
+    ★ 2026-10-27（P0-0）：这里必须"解析后数工具"，**不能判字符串非空**。
+
+    事故复盘（本仓"看起来生效实际空转"的教科书案例）：
+      列的实际存储值是 `"[]"`（2 字符，不是空串 —— `save_tool_meta([])` 的产物），
+      而旧判据写的是 `not (srv.get("tool_meta") or "").strip()`：
+
+        | tool_meta 实值      | `not (...).strip()` | 结果       |
+        |---------------------|---------------------|-----------|
+        | `''` / `None` / `'  '` | `True`   | 触发（但真实库里没有这种行） |
+        | **`'[]'`**          | **`False`** | **永不触发** ← 全部存量 server |
+        | `'[{"name":"x"}]'`  | `False`     | 正确（已有数据） |
+
+      ⇒ 该条件在"无工具"与"有工具"两种真实取值上**都为假**，回填分支从未执行过。
+      铁证：`last_discover` 停在 2026-09-24（AI4MBSE）/ 2026-10-16（zhiyuan），
+      37 天内零次 discover，而服务日志**无任何报错**（分支根本没进）。
+
+    判据选择：**结构化语义（工具数）**而不是**字符串形态**。
+    后者对不同序列化写法（`'[]'` / `'null'` / `' '`）表现不一，是这类 bug 的通用温床。
+
+    非法 JSON / 非数组 ⇒ 0（视为不可用，允许回填覆盖 —— 脏数据不该永久阻断自愈）。
+    """
+    if not raw:
+        return 0
+    try:
+        arr = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return 0
+    if not isinstance(arr, list):
+        return 0
+    n = 0
+    for it in arr:
+        if isinstance(it, dict) and str(it.get("name") or "").strip():
+            n += 1
+        elif isinstance(it, str) and it.strip():
+            n += 1
+    return n
+
+
 def _norm_transport(t: str | None) -> str:
     """传输方式归一（★ B5-4：前端 `streamable_http` vs 后端 `http` 三方枚举不一致）。
 
@@ -179,17 +220,41 @@ def check_all(repo):
         #     （默认 5 分钟一次，对一个持续 tools/list 报错的 server 是长期噪声）⇒
         #     加 1 小时冷却窗口，既保证"最终会补上"，又不放大故障。
         _sid = srv["id"]
-        if (ok and not (srv.get("tool_meta") or "").strip()
+        # ★ P0-0（2026-10-27）：判据改为**解析后数工具**。旧写法判字符串，而列实值是 `'[]'`
+        #   ⇒ 回填分支永不进入（复盘表见 `_meta_tool_count` 的 docstring）。
+        _meta_n = _meta_tool_count(srv.get("tool_meta"))
+        detail["tool_meta_tools"] = _meta_n
+        if (ok and _meta_n == 0
                 and (time.time() - _BACKFILL_TRY.get(_sid, 0.0) >= _BACKFILL_COOLDOWN)):
             _BACKFILL_TRY[_sid] = time.time()
             try:
                 _dr = discover_server(srv, repo=repo)
                 if _dr.get("ok"):
-                    results["backfilled"] += 1
-                    detail["tool_meta_backfilled"] = True
-                    print(f"[mcp-health] 已回填 {srv.get('name','')} 的工具元数据"
-                          f"（{len(_dr.get('tools') or [])} 个工具：description + inputSchema）",
-                          flush=True)
+                    # ★「产出物必须变化」——回填成功的判据是**库里那一列真的从 0 变成 N**，
+                    #   而不是 discover 返回了 ok。`discover_server` 只在 `repo is not None`
+                    #   时才落库；若落库没发生（连接不同/提交失败），返回照样是 ok，
+                    #   此时报 "已回填" 就是又一次静默空转（本仓反复吃亏的形态）。
+                    _after = 0
+                    try:
+                        _r = repo.rows("SELECT tool_meta FROM mcp_servers WHERE id=?", (_sid,))
+                        _after = _meta_tool_count((_r[0] if _r else {}).get("tool_meta"))
+                    except Exception:
+                        _after = -1   # 读不回来 ⇒ 明确标"未知"，不谎报成功
+                    detail["tool_meta_tools_after"] = _after
+                    if _after > 0:
+                        results["backfilled"] += 1
+                        detail["tool_meta_backfilled"] = True
+                        print(f"[mcp-health] 已回填 {srv.get('name','')} 的工具元数据"
+                              f"（{_after} 个工具：description + inputSchema）", flush=True)
+                    else:
+                        # discover 成功但工具数为 0：服务端确实没暴露工具（或落库没生效）。
+                        # **不静默**：留痕，且不计入 backfilled —— 否则周报会虚报覆盖。
+                        detail["tool_meta_backfilled"] = False
+                        detail["backfill_error"] = (
+                            f"discover ok 但 tool_meta 工具数={_after}"
+                            f"（返回 {len(_dr.get('tools') or [])} 个名字）——未落库或服务端无工具")
+                        print(f"[mcp-health] {srv.get('name','')} 回填未产生数据：{detail['backfill_error']}",
+                              flush=True)
                 else:
                     detail["tool_meta_backfilled"] = False
                     detail["backfill_error"] = str(_dr.get("error") or _dr.get("note") or "")[:150]
@@ -199,6 +264,25 @@ def check_all(repo):
                 detail["backfill_error"] = f"{type(e).__name__}: {str(e)[:120]}"
                 print(f"[mcp-health] 回填工具元数据失败 {srv.get('name','')}："
                       f"{type(e).__name__}: {str(e)[:120]}", flush=True)
+        # ★ P1-2（2026-10-27）：**巡检后刷统一注册处单行投影**。
+        #   此前 `mcp_health` 里对 `capability_registry` 的引用为 0（全仓 grep 实证）
+        #   ⇒ MCP 上下线只改源表，统一注册处停在启动时 reconcile 的快照：
+        #     实测 registry.updated_at = 02:20:20，而源表 last_check = 02:20:27
+        #     （开机巡检随后把 AI4MBSE 置为 online）⇒ **registry 停在 disabled，
+        #     直到下一次重启才纠正**。治理视图显示"已停用"而事实是"在线可用"。
+        #   刷新本身幂等且只碰单行；失败只留痕不阻断巡检（旁路原则）。
+        try:
+            _conn_r = getattr(repo, "conn", None)
+            if _conn_r is not None:
+                from core import capability_registry as _cr
+                _rr = _cr.refresh_registry_row(_conn_r, "mcp_servers", _sid)
+                detail["registry_refreshed"] = bool(_rr.get("ok"))
+                if not _rr.get("ok"):
+                    detail["registry_error"] = str(_rr.get("error") or "")[:120]
+        except Exception as e:
+            # 不阻断巡检，但必须可见——否则又是一次"看起来刷新了其实没有"
+            detail["registry_refreshed"] = False
+            detail["registry_error"] = f"{type(e).__name__}: {str(e)[:110]}"
         detail["id"] = srv["id"]
         detail["name"] = srv.get("name", "")
         results["details"].append(detail)

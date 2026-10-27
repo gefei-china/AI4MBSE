@@ -153,7 +153,7 @@ const TITLES = {home:'总览',ai:'AI 建模',kb:'知识中心',reports:'报告',
 const KB_TAB_TITLES = {'kb-a':'数据看板','kb-e':'文档库','kb-b':'治理中心','kb-c':'本体模型','kb-d':'知识图谱',};
 // 2026-09-17 R7：补 'st-prompt'（提示词模板，真实 subpage，`09-impact.js:1134` / `36-capability.js:72` 会 go 过来），
 // 缺它会让面包屑退化成「能力中心」、且 loadPage 走不到子 Tab 直达分支
-const ST_TAB_TITLES = {'st-agent':'Agent','st-skill':'技能','st-mcp':'工具与 MCP','st-market':'插件市场','st-model':'模型配置','st-prompt':'提示词模板','st-changelog':'变更记录'};
+const ST_TAB_TITLES = {'st-agent':'Agent','st-skill':'技能','st-mcp':'工具与 MCP','st-market':'插件市场','st-model':'模型配置','st-prompt':'提示词模板','st-changelog':'变更记录','st-registry':'能力账本'};
 // ⚠️ 2026-10-27：本表**原只登记 3 项**（项目记忆/工具钩子/文件抽取），而 HTML 里
 //   `data-tabgrp="stg"` 实际有 7 个 tab。`go(p,tabId)` 的分支条件正是
 //   `if(p==='settings' && STG_TAB_TITLES[tabId])` ⇒ 深链到未登记的 tab

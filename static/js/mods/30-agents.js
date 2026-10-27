@@ -89,6 +89,7 @@ async function toggleSkillStatus(id, enabled) {
 }
 let skillEditId = null;
 let skillPrevEnabled = 1;
+let skillEditObj = null;   // P2-4：编辑时缓存原始技能对象，保存时合并，避免清空未展示字段
 function editSkill(id) {
   skillEditId = id;
   showModal('skill');
@@ -96,6 +97,7 @@ function editSkill(id) {
   api('/api/studio/skills').then(items=>{
     const s = items.find(x=>x.id===id);
     if(!s) return;
+    skillEditObj = s;   // P2-4：保留原始（含 triggers/frontmatter/references/examples/scripts…）
     document.getElementById('f-name').value = s.name;
     document.getElementById('f-desc').value = s.description||'';
     document.getElementById('f-content').value = s.content||'';
@@ -114,11 +116,23 @@ function openSkillForm() {
 async function saveSkill() {
   const name = document.getElementById('f-name').value.trim();
   if(!name) { toast('名称必填'); return; }
-  const body = {
-    name,
-    description: document.getElementById('f-desc').value,
-    content: document.getElementById('f-content').value,
-  };
+  // P2-4（2026-10-27）：编辑时以原始技能对象为底，只覆盖界面展示的 3 个字段，
+  //   保留 triggers / frontmatter / references / examples / scripts / allowed_tools /
+  //   dependencies / skill_type / category 等未展示字段 —— 否则后端把这些字段按 None 清空。
+  let body;
+  if(skillEditId && skillEditObj) {
+    body = Object.assign({}, skillEditObj, {
+      name,
+      description: document.getElementById('f-desc').value,
+      content: document.getElementById('f-content').value,
+    });
+  } else {
+    body = {
+      name,
+      description: document.getElementById('f-desc').value,
+      content: document.getElementById('f-content').value,
+    };
+  }
   const enEl = document.getElementById('f-enabled');
   const wantEnabled = !enEl || enEl.checked ? 1 : 0;
   let sid = null;
@@ -128,7 +142,7 @@ async function saveSkill() {
   if(sid && wantEnabled !== skillPrevEnabled) {
     await api('/api/studio/skills/'+sid+'/'+(wantEnabled?'enable':'disable'), {method:'POST'});
   }
-  closeModal(); skillEditId = null; skillPrevEnabled = 1; loadSkills(); loadMinePlugins(); loadMarket(); loadMarketManage();
+  closeModal(); skillEditId = null; skillPrevEnabled = 1; skillEditObj = null; loadSkills(); loadMinePlugins(); loadMarket(); loadMarketManage();
 }
 async function deleteSkill(id) {
   if(!(await confirmDialog('确认删除该 Skill？'))) return;

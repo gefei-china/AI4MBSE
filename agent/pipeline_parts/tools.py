@@ -1383,6 +1383,18 @@ class ToolMixin:
                 # 不改签名：8 处调用点各自加参数风险远大于收益，直接从 self 读。
                 _run_id = int(getattr(self, "_tool_run_ctx", 0) or 0)
                 _task_key = str(getattr(self, "_tool_task_key", "") or "")
+                # ★ P0-3（2026-10-27）：本轮 trace_id（与 llm_usage_stats.trace_id **同源**）。
+                #   此前本表只有 run_id/task_key，而主对话路径**没有编排批次**
+                #   ⇒ 83.2% 的行 run_id=0，且与 LLM 使用量统计是两套 id、无法 JOIN
+                #   ⇒ 回答不了「这一轮对话调了哪些能力、花了多少钱」。
+                #   两级取值：实例属性（stream.py 入口落的）→ ContextVar（线程/子任务兜底）。
+                _trace_id = str(getattr(self, "_tool_trace_id", "") or "")
+                if not _trace_id:
+                    try:
+                        from core.audit import current_trace_id as _ctid
+                        _trace_id = _ctid()
+                    except Exception:
+                        _trace_id = ""
                 # failure_kind：复用 B1-6 的分类器（不另造第二份词表——两份必然漂移）。
                 # 只在失败时写，成功留空（避免"成功"也带一个无意义的分类）。
                 # ★ 2026-10-18 修（P1-2 步骤级归因器真库取证时发现）：原写法
@@ -1419,12 +1431,12 @@ class ToolMixin:
                 except Exception:
                     _cid = ""
                 conn.execute(
-                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name, run_id, task_key, failure_kind, capability_id) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name, run_id, task_key, failure_kind, capability_id, trace_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (intent_ctx.get("intent", ""), agent_ctx.get("agent", ""),
                      name, tool_type, _args_txt, _res_txt,
                      1 if result.get("ok") else 0,
-                     latency, conv_ctx or 0, _uname, _run_id, _task_key, _fkind, _cid),
+                     latency, conv_ctx or 0, _uname, _run_id, _task_key, _fkind, _cid, _trace_id),
                 )
         except Exception:
             pass  # 观测落库失败不影响工具执行

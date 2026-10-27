@@ -504,11 +504,14 @@ def main():
         "os.environ['MBSE_DB_PATH'] = db\n"
         "sys.path.insert(0, sys.argv[2])\n"
         "c = sqlite3.connect(db)\n"
-        "c.execute('CREATE TABLE tool_call_logs (id INTEGER PRIMARY KEY, intent TEXT, agent_name TEXT, tool_name TEXT NOT NULL, tool_type TEXT, arguments TEXT, result TEXT, ok INTEGER, latency_ms INTEGER, conversation_id INTEGER, user_name TEXT, run_id INTEGER, task_key TEXT, failure_kind TEXT, call_kind TEXT, capability_id TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)')\n"
+        "c.execute('CREATE TABLE tool_call_logs (id INTEGER PRIMARY KEY, intent TEXT, agent_name TEXT, tool_name TEXT NOT NULL, tool_type TEXT, arguments TEXT, result TEXT, ok INTEGER, latency_ms INTEGER, conversation_id INTEGER, user_name TEXT, run_id INTEGER, task_key TEXT, failure_kind TEXT, call_kind TEXT, capability_id TEXT, trace_id TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)')\n"
         "c.commit(); c.close()\n"
         "from agent.pipeline_parts.tools import ToolMixin\n"
         "class Dummy: pass\n"
         "d = Dummy(); d._tool_user = None; d._tool_run_ctx = 7; d._tool_task_key = 'tk1'\n"
+        # ★ P0-3（2026-10-27）：夹具必须同时给出 trace 来源 —— `_log_tool_call` 会读\n"
+        #   `self._tool_trace_id`，不设就是空串（与"没补 trace"不可区分，无法证明）。\n"
+        "d._tool_trace_id = 'attr-gate-trace-1'\n"
         "ToolMixin._log_tool_call(d, 'zhiyuan_project_list', 'mcp', {'q': 1},\n"
         "    {'ok': False, 'error': 'HTTP 503 Service Unavailable'}, {'intent': 'knowledge_qa'},\n"
         "    {'agent': '知识工程师'}, 9336, 0.0)\n"
@@ -518,7 +521,7 @@ def main():
         "ToolMixin._log_tool_call(d, 'ok_tool', 'builtin', {},\n"
         "    {'ok': True, 'result': 'done'}, {'intent': 'chat'}, {'agent': 'a'}, 100, 0.0)\n"
         "c = sqlite3.connect(db); c.row_factory = sqlite3.Row\n"
-        "print(json.dumps([dict(r) for r in c.execute('SELECT tool_name, ok, failure_kind, run_id, task_key FROM tool_call_logs')], ensure_ascii=False))\n")
+        "print(json.dumps([dict(r) for r in c.execute('SELECT tool_name, ok, failure_kind, run_id, task_key, trace_id FROM tool_call_logs')], ensure_ascii=False))\n")
     _cp = subprocess.run([sys.executable, "-c", _child, _d6db, ROOT],
                          capture_output=True, text=True, encoding="utf-8", timeout=180)
     try:
@@ -532,7 +535,9 @@ def main():
           and bool(by.get("sysml_check", {}).get("failure_kind"))
           and by.get("ok_tool", {}).get("failure_kind") == ""
           and by.get("zhiyuan_project_list", {}).get("run_id") == 7
-          and by.get("zhiyuan_project_list", {}).get("task_key") == "tk1",
+          and by.get("zhiyuan_project_list", {}).get("task_key") == "tk1"
+          # ★ 2026-10-27 追加：trace_id 也必须跟着落库（P0-3 的写入点级证据）
+          and by.get("zhiyuan_project_list", {}).get("trace_id") == "attr-gate-trace-1",
           f"rc={_cp.returncode} rows={_rows} err={_cp.stderr[-300:]}")
     shutil.rmtree(_d6dir, ignore_errors=True)
 

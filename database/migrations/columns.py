@@ -97,6 +97,18 @@ def _migrate_columns(conn):
     # 哪个统一能力」可查。存量行由 core/capability_registry.backfill_capability_ids
     # 一次性回填（按 tool_type/tool_name 反查，查不到保留空——不造假映射）。
     _add("tool_call_logs", "capability_id", "TEXT DEFAULT ''")
+    # ── P0-3（2026-10-27）任务级追溯：与 llm_usage_stats.trace_id 同源的 JOIN 键 ──
+    # 走查实测：run_id 在 83.2% 的工具调用上为 0（主对话路径没有编排批次），
+    # 而 llm_usage_stats 有 trace_id、tool_call_logs 没有 ⇒ 两套 id 不可 JOIN，
+    # 回答不了"这一轮对话调了哪些能力、花了多少钱"。本列补上同一个 trace_id。
+    # 存量行无法回溯（历史未记录）⇒ 留空，**不编造**。
+    _add("tool_call_logs", "trace_id", "TEXT DEFAULT ''")
+    # 索引**必须**建在列补齐之后：老库这张表已存在且无 trace_id 列时，
+    # 提前建索引会抛 `no such column: trace_id` 让 init_db 整段崩掉（实测踩过）。
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_trace ON tool_call_logs(trace_id)")
+    except Exception as e:
+        print(f"[init_db] 迁移: tool_call_logs(trace_id) 索引创建失败：{e}")
     # P1-27 截断诊断（思考模型 reasoning 与正文共享 max_tokens 配额）
     _add("llm_usage_stats", "finish_reason", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "reasoning_tokens", "INTEGER DEFAULT 0")

@@ -94,6 +94,30 @@ def trace_context() -> dict:
     return _trace_ctx.get() or {}
 
 
+def current_trace_id(fallback_request: bool = False) -> str:
+    """当前链路 trace_id（**唯一取值口径**，所有"给日志补 trace"的地方都用它）。
+
+    ★ 2026-10-27（P0-3）：此前 `tool_call_logs` 没有 trace 列，而 `llm_usage_stats`
+      有 —— 两套 id 不可 JOIN ⇒ 回答不了「这一轮对话调了哪些能力、花了多少钱」。
+      补列之后，**每个写入点各自去猜 trace 来源**会成为新的漂移源
+      （实测：同一轮里工具行有 trace、技能行没有，追溯链从中间断掉）。
+      故把取值收口到本函数。
+
+    `fallback_request=True` 用于**没有经过 `begin_trace` 的入口**（MCP 网关的外部
+    请求、HIL 批准后执行、插件沙箱试跑 …）：这类入口本身没有"对话轮次"，
+    用 `request_id` 作为 trace 才是如实的（一次外部请求 = 一条链）。
+    ⚠️ 不要用它给"属于某轮对话"的调用兜底出**新** id —— 那会把一条链拆成两条，
+      这正是本函数要防的反面。对话内的调用走默认分支（读已设的 trace）。
+    """
+    tid = str((_trace_ctx.get() or {}).get("trace_id") or "")
+    if not tid and fallback_request:
+        try:
+            tid = str(request_context().get("request_id") or "")
+        except Exception:
+            tid = ""
+    return tid
+
+
 def clear_trace() -> None:
     _trace_ctx.set({})
 

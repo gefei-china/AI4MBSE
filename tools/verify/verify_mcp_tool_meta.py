@@ -264,9 +264,13 @@ class _FakeClient:
 _c2 = get_db()
 _c2.execute("DELETE FROM mcp_servers WHERE name='gate-backfill-mcp'")
 _c2.execute(
+    # ★ 2026-10-27 修正夹具取值：此前这里写的是 `''`（空串），而**生产库真实取值是 `'[]'`**
+    #   （`save_tool_meta([])` 的产物）—— 旧判据 `not (v or "").strip()` 在空串上为 True、
+    #   在 `'[]'` 上为 False ⇒ 本门禁**用空串通过了、生产却从未执行过**。
+    #   这是"夹具与真实取值不一致 ⇒ 门禁假绿"的教科书案例（复盘见 docs/能力中心四环节…§3.1b）。
     "INSERT INTO mcp_servers (name, endpoint, transport, status, enabled, tools, tool_meta) "
     "VALUES ('gate-backfill-mcp','http://127.0.0.1:2/mcp','http','offline',1,"
-    "?,'')", (json.dumps(["query_projects", "export_sysml_v2"]),))
+    "?,'[]')", (json.dumps(["query_projects", "export_sysml_v2"]),))
 _c2.commit()
 _c2.close()
 
@@ -275,12 +279,21 @@ try:
     MH._make_client = lambda srv: _FakeClient()
     _repo = StudioRepo(get_db())
     _r1 = MH.check_all(_repo)
-    check("[12] 巡检自动回填存量 server 的 tool_meta", _r1.get("backfilled") == 1,
-          f"backfilled={_r1.get('backfilled')}（0 ⇒ 改动空转）")
     _con3 = get_db()
     _tm = _con3.execute("SELECT tool_meta FROM mcp_servers WHERE name='gate-backfill-mcp'"
                         ).fetchone()["tool_meta"]
     _con3.close()
+    # ★ 2026-10-27：判据从 `backfilled == 1` 改为**看这一行的产出物**。
+    #   原写法把"库里有几台 server"耦合进断言：本库由 init_db 种了 2 台 sse server，
+    #   修好判空后它们也会被回填 ⇒ 计数变 3，与"回填有没有生效"无关（是夹具口径问题）。
+    #   「产出物必须变化」才是真判据：这一行从 0 个工具 → 2 个。
+    check("[12] 巡检自动回填存量 server 的 tool_meta（该行 0→2 个工具）",
+          len(MT.load_tool_meta({"tool_meta": _tm or ""})) == 2,
+          f"backfilled={_r1.get('backfilled')}，回填后工具数="
+          f"{len(MT.load_tool_meta({'tool_meta': _tm or ''}))}（0 ⇒ 改动空转）")
+    check("[12] 该行出现在本轮 backfilled 明细里",
+          any(d.get("tool_meta_backfilled") and d.get("name") == "gate-backfill-mcp"
+              for d in _r1["details"]), f"backfilled={_r1.get('backfilled')}")
     _parsed = MT.load_tool_meta({"tool_meta": _tm or ""})
     check("[12] 回填内容含真实 description（非空、非模板串）",
           _parsed.get("query_projects", {}).get("description", "").startswith("查询智源"),
