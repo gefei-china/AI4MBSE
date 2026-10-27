@@ -60,12 +60,19 @@ def _load_sse(mutate=None):
     为什么不用常规的 `from core.sse import ...`：那样会拿到 site 缓存的字节码，
     无法做源码级变异；而"手写一份等价实现来测"会与被测代码脱钩（工程教训 2026-09-30，
     曾导致变异测试假绿）。这里必须 exec 真实源码文本。
+
+    `mutate` 支持单个三元组或**三元组列表**（2026-10-27 加）：
+    有些旧行为需要同时抽掉两处才等价（如异步包装器的两处 close，
+    只抽一处会被另一处兜住 ⇒ 变异翻不过来 ⇒ 断言变 VACUOUS 空转）。
     """
     src = open(SSE_SRC, encoding="utf-8").read()
     if mutate:
-        old, new, anchor = mutate
-        assert anchor in src, f"变异锚点丢失：{anchor}"
-        src = src.replace(old, new, 1)
+        _ms = [mutate] if (isinstance(mutate, tuple) and len(mutate) == 3
+                           and isinstance(mutate[0], str)) else list(mutate)
+        for old, new, anchor in _ms:
+            assert anchor in src, f"变异锚点丢失：{anchor}"
+            assert old in src, f"变异待替换文本丢失：{old[:60]!r}"
+            src = src.replace(old, new, 1)
     ns = {"__name__": "core.sse"}
     exec(compile(src, "core/sse.py", "exec"), ns)
     return ns
@@ -212,6 +219,175 @@ def m_i4():
     time.sleep(0.25)
     caught = (closed["v"] is False)   # 旧写法：源没被收尾
     return _rec("M4 旧写法复现（源未被收尾）→ 证明 I4b 非空转", caught, "", VACUOUS)
+
+
+# ══════════════════ I4b（2026-10-27）：**异步**包装器断连也必须收尾事件源 ══════════════════
+def t_i4b_async_close():
+    """同步版有 I4 守着，异步版一直是**空白** —— 这正是本轮缺陷漏网的原因。
+
+    真因（conv 9660 实证）：`iter_with_heartbeat_async` 的 worker 里少了同步版那句
+    「在 worker 线程内 close 源」，断连后只有主线程 `aclose()` 去关，
+    而那一刻 worker 正阻塞在 `iterator.__next__()` ⇒ 抛
+    `ValueError: generator already executing` ⇒ 被 `except: pass` 吞掉
+    ⇒ **源从未真正关闭** ⇒ 它停在 yield 处悬着（GC 也不跑）
+    ⇒ `execute_stream` 的 `except GeneratorExit`（断点固化）**永不执行**
+    ⇒ 用户看到的内容一条都没落库（LLM 已生成 872 tokens，库里 0 条 assistant）。
+
+    本断言要求的正是："断开之后，源的 finally 必须真的跑到"。
+    """
+    import asyncio
+    print("\n=== I4b 异步包装器断连 ⇒ 事件源同样必须被收尾 ===")
+    ns = _load_sse()
+    closed = {"v": False, "thread": ""}
+
+    def gen():
+        try:
+            for i in range(100000):
+                yield f"event: t\ndata: {{\"i\":{i}}}\n\n"
+                time.sleep(0.005)
+        finally:
+            # 记录**收尾发生在哪个线程** —— 这是本修复的真正判据（见下方断言说明）：
+            # 必须在 worker 线程里（`sse-source-async`），而不是靠 GC 在任意线程补刀。
+            import threading as _t
+            closed["v"] = True
+            closed["thread"] = _t.current_thread().name
+
+    async def _drive():
+        agen = ns["iter_with_heartbeat_async"](gen(), interval_s=0.05)
+        got = 0
+        async for _frame in agen:
+            got += 1
+            if got >= 2:
+                break
+        await agen.aclose()        # 等价于 Starlette 在客户端断开后关闭响应生成器
+        return got
+
+    got = asyncio.run(_drive())
+    # worker 需要走到下一个帧边界才止损并 close 源 ⇒ 给足时间（不多，避免拖慢门禁）
+    for _ in range(40):
+        if closed["v"]:
+            break
+        time.sleep(0.05)
+    ok = _rec("I4b-a 断开前确实收到过帧（夹具自证）", got >= 2, f"got={got}")
+    ok &= _rec("I4b-b 异步断连后事件源被收尾（GeneratorExit 生效）",
+               closed["v"] is True,
+               "源未被收尾 ⇒ 断点固化/span 收尾全都不会执行（内容蒸发）")
+    # ★ I4b-c 用**源码不变式**而非运行时观测，理由必须记住：
+    #   进程内测不出"差别在哪"—— 因为 worker 函数一返回，`iterator` 这个局部变量被
+    #   解引用 ⇒ CPython 引用计数在**同一个 worker 线程**里顺手把源 close 掉，
+    #   于是"旧写法"也能观测到 `closed=True / thread=sse-source-async`（变异必 VACUOUS）。
+    #   而生产里的差别是**时机**：worker 往往长时间阻塞在 `next()`（LLM 正在生成），
+    #   根本走不到"函数返回"那一步 ⇒ 收尾被推迟到整段生成结束之后，
+    #   用户看到的内容就在这段窗口里"没了"（conv 9660：LLM 已出 872 tokens、库里 0 条）。
+    #   所以这里锁"worker 的 finally 内**主动** close"这条结构性事实。
+    ok &= _rec("I4b-c worker 的 finally 内主动关闭事件源（不依赖 GC/引用计数）",
+               _worker_closes_source(), "旧写法只在消费侧 finally 里 close（会被 'already executing' 吞掉）")
+    return ok
+
+
+def _worker_closes_source(src=None) -> bool:
+    """静态判据：**异步**包装器的 `_worker` 里是否调用了 `iterator.close()`。
+
+    ⚠️ 必须锚定 `async def iter_with_heartbeat_async` 之后的那个 `_worker`
+    —— 本文件里有**两个** `def _worker():`（同步版在前），从文件头找第一个
+    会一直检查到同步版（它本来就有 close）⇒ 判据恒真、变异恒不翻转（踩过）。
+    只认 worker 函数体内那处：消费侧 finally 那处是"尽力而为"
+    （worker 正跑时会抛 `already executing` 被吞），不能算数。
+    """
+    s = src if src is not None else open(SSE_SRC, encoding="utf-8").read()
+    a = s.find("async def iter_with_heartbeat_async")
+    if a < 0:
+        return False
+    i = s.find("def _worker():", a)
+    if i < 0:
+        return False
+    j = s.find("_th.Thread(target=_worker", i)
+    body = s[i:(j if j > i else len(s))]
+    return ('getattr(iterator, "close", None)' in body) and ("close()" in body)
+
+
+# 异步 worker 内"主动 close"那段的原文（变异与被挑选都以此为准，避免缩进猜错）
+_ASYNC_WORKER_CLOSE_BLOCK = (
+    "            try:\n"
+    "                close = getattr(iterator, \"close\", None)\n"
+    "                if callable(close):\n"
+    "                    close()\n"
+    "            except Exception:\n"
+    "                pass\n"
+)
+
+
+def m_i4b():
+    """变异：抽掉**异步 worker** 里"主动 close 源"那段 ⇒ I4b-c 必须变红。
+
+    ⚠️ 这条变异只能验**静态不变式**，运行时验不出来（实测踩过）：
+    worker 函数一返回，局部变量 `iterator` 被解引用 ⇒ CPython 引用计数
+    会在**同一个 worker 线程**里顺手把源 close 掉 ⇒ 旧写法也能观测到
+    `closed=True / thread='sse-source-async'` ⇒ 变异恒不翻转（VACUOUS）。
+    而生产里的差别是**时机**：worker 长时间阻塞在 `next()`（LLM 正在生成）时
+    根本走不到"函数返回" ⇒ 收尾被推迟，用户看到的内容在这段窗口里丢失。
+    """
+    print("\n=== 变异 M4b：异步包装器两处都不关闭事件源（旧行为等价物）===")
+    import asyncio
+    src_mut = _load_sse(mutate=[
+        # ① worker 内那处
+        ("            try:\n"
+         "                close = getattr(iterator, \"close\", None)\n"
+         "                if callable(close):\n"
+         "                    close()\n"
+         "            except Exception:\n"
+         "                pass\n"
+         "            try:\n"
+         "                loop.call_soon_threadsafe(q.put_nowait, (True, _DONE))",
+         "            try:\n"
+         "                loop.call_soon_threadsafe(q.put_nowait, (True, _DONE))",
+         "            try:\n"
+         "                close = getattr(iterator, \"close\", None)"),
+        # ② async finally 那处
+        ("        try:\n"
+         "            close = getattr(iterator, \"close\", None)\n"
+         "            if callable(close):\n"
+         "                close()\n"
+         "        except Exception:\n"
+         "            pass",
+         "        pass  # 变异：不关源",
+         "            close = getattr(iterator, \"close\", None)"),
+    ])
+    closed = {"v": False, "thread": ""}
+
+    def gen():
+        try:
+            for i in range(100000):
+                yield f"event: t\ndata: {i}\n\n"
+                time.sleep(0.005)
+        finally:
+            import threading as _t
+            closed["v"] = True
+            closed["thread"] = _t.current_thread().name
+
+    async def _drive():
+        agen = src_mut["iter_with_heartbeat_async"](gen(), interval_s=0.05)
+        got = 0
+        async for _f in agen:
+            got += 1
+            if got >= 2:
+                break
+        await agen.aclose()
+
+    try:
+        asyncio.run(_drive())
+    except Exception:
+        pass
+    for _ in range(40):
+        if closed["v"]:
+            break
+        time.sleep(0.05)
+    # 判据用**静态不变式**（见 I4b-c 注释：运行时被 CPython 引用计数兜住，测不出差异）
+    _src = open(SSE_SRC, encoding="utf-8").read()
+    mutated_src = _src.replace(_ASYNC_WORKER_CLOSE_BLOCK, "", 1)
+    caught = (mutated_src != _src) and (not _worker_closes_source(mutated_src))
+    return _rec("M4b 旧写法复现（worker 内不再 close）→ 证明 I4b-c 非空转",
+                caught, "变异未生效或判据未翻转", VACUOUS)
 
 
 # ══════════════════ I5：心跳必须是合规注释帧 ══════════════════
@@ -649,6 +825,8 @@ def main():
     m_i3()
     t_i4()
     m_i4()
+    t_i4b_async_close()
+    m_i4b()
     t_i5()
     t_i6_i7()
     t_i6_runtime()

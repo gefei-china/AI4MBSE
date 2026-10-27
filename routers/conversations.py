@@ -382,6 +382,35 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         _maxr = 0
         _SER_TYPES = ("stage", "tool")
         _terminal = False   # P1-32：本流是否已发过 done/error（终态哨兵）
+
+        def _flush_evbuf():
+            """把缓冲的 stage/tool 帧落库（幂等：刷完即清空）。
+
+            ★ 2026-10-27（用户反馈「中途失败后之前输出的内容没有任何展示」）：
+            **必须在断连路径也调用**。原实现只在收到 done/error 帧时刷，
+            而客户端断开（切页/关标签/网络 reset → GeneratorExit）时：
+              · 源生成器被 close，不再产出任何帧 ⇒ 永远等不到 done/error；
+              · `finally` 又在 `if _client_gone: return` 处早退 ⇒ 缓冲**永久留在内存**。
+            ⇒ 该轮 `orch_stream_events` **0 条**（真库 conv 9629 07:34:39 那轮实证），
+              事后根本看不出"跑到哪一步、哪一步开始错" —— 断点保护丢的不只是正文，
+              连归因线索一起丢了。
+            """
+            nonlocal _ev_flushing, _et
+            if not _evbuf or _ev_flushing:
+                return
+            _ev_flushing = True
+            try:
+                from services.stream_event_recorder import record as _ser_record2
+                with db_conn() as _evc:
+                    for _f in _evbuf:
+                        _ser_record2(_evc, conv_id, _f,
+                                     run_id=int(_orch_run_id[0]),
+                                     task_key="", max_per_run=_maxr)
+                    _evc.commit()
+            except Exception:
+                pass          # 观测落库失败绝不影响主流程
+            _evbuf[:] = []
+            _ev_flushing = False
         # P1-1 停止生成：客户端断开（AbortController）→ Starlette 关闭生成器 → GeneratorExit
         # 在 yield 点抛出，这里放行让连接干净关闭；其余异常转为 error 事件（不中断会话）
         try:
@@ -463,18 +492,7 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 #   放在 yield **之前**：yield 之后代码要等下一次 __anext__ 才继续跑，
                 #   而客户端断连（GeneratorExit）会让生成器停在 yield 处 ⇒ 缓冲永不清空。
                 if _evbuf and _et in ("done", "error"):
-                    _ev_flushing = True
-                    try:
-                        with db_conn() as _evc:
-                            for _f in _evbuf:
-                                _ser_record(_evc, conv_id, _f,
-                                            run_id=int(_orch_run_id[0]),
-                                            task_key="", max_per_run=_maxr)
-                            _evc.commit()
-                    except Exception:
-                        pass
-                    _evbuf[:] = []
-                    _ev_flushing = False
+                    _flush_evbuf()
                 yield raw
         except GeneratorExit:
             _client_gone = True
@@ -513,6 +531,14 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 _ctx_flush()
             except Exception:
                 pass
+            # ★★ 2026-10-27（用户反馈「中途失败后之前输出的内容没有任何展示」）：
+            #   **必须早于 `_client_gone` 早退**。断连时源生成器已 close、永远等不到
+            #   done/error 帧 ⇒ 上面的"收到终态才刷"永远不会发生 ⇒ 该轮
+            #   `orch_stream_events` 一条都没有（真库 conv 9629 07:34:39 那轮实证：
+            #   正文 0 条 + 事件 0 条，事后无法回答"跑到哪一步、哪步开始错"）。
+            #   与 `_tracer.flush()` / `_ctx_flush()` 同一位置、同一理由：
+            #   GeneratorExit 期间禁止 yield，但**不禁止** DB 写。
+            _flush_evbuf()
             if _client_gone:
                 return
             # P1-32：终态兜底 —— 流结束却从未发过 done/error ⇒ 必须补一条 error，

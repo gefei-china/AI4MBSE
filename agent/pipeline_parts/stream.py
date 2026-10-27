@@ -65,6 +65,29 @@ def _turn_cm(tracer, turn_no):
     return tracer.turn(turn_no)
 
 
+def _best_partial(full_content, llm_content, orch_acc, streamed_acc) -> str:
+    """中断时**该固化哪段**：返回"能最完整代表用户已看到内容"的那一份。
+
+    ★ 2026-10-27（用户反馈「中途执行失败后之前输出的内容没有任何展示」）：
+    判据不是"最新一轮写了什么"，而是**"用户屏幕上到底出现过什么"**。三个来源各有盲区：
+
+    | 来源 | 覆盖 | 盲区 |
+    |---|---|---|
+    | `_full_content + llm_content` | 跨续跑轮的完整产出 | 续跑复位/补充指令重置时，**前一段**已流出的内容不在其中 |
+    | `_orch_acc`（编排路径 token） | 编排流的逐字产出 | 直行路径为空 |
+    | `_streamed_acc`（本轮所有 token） | **真的发给过用户的每一个字** | 含被重置掉的过程性叙述（但那正是用户看到的东西）|
+
+    所以取**长度更大者**（而非固定优先级）：短的那个必然是被清空/被截断的记录，
+    长的是更完整的现场。实测病灶（conv 9629 15:34:39「写入工程」轮）：前两源皆空
+    （旧代码 llm_content 在流循环结束后才赋值 ⇒ 中途异常时为空），只有固化 0 条。
+    """
+    _norm = (((full_content + "\n\n" + llm_content) if full_content else llm_content)
+             or "".join(orch_acc or [])
+             or "")
+    _streamed = (streamed_acc[0] if streamed_acc else "") or ""
+    return _streamed if len(_streamed) > len(_norm) else _norm
+
+
 class StreamMixin:
     """流式执行：编排流 SSE / 直接流式 execute_stream。"""
 
@@ -3329,7 +3352,19 @@ class StreamMixin:
         if dry_run or not conversation_id:
             return
         text = (content or "").strip()
+        # ★ 2026-10-27（用户反馈「中途失败后之前输出的内容没有任何展示」）：
+        #   断点固化是**低频且关键**的事件（一轮最多一次），必须留痕。
+        #   原实现只有"写库失败"才 print —— 于是"**跳过**固化"（内容为空/去重命中）
+        #   完全不可见，排查时只能靠猜（本轮为此多花了数轮才定位到 GeneratorExit 未注入）。
+        #   一行日志换"为什么没存下来"这句话能被直接回答，值得。
+        #   ⚠️ 必须 `flush=True`：服务以 `main.py > logs/xxx.log` 运行时 stdout 是**块缓冲**，
+        #   不加 flush 这些行会一直躺在缓冲区里（本轮排查为此白跑两轮：以为"没走到固化"，
+        #   其实只是没刷出来）。真正需要被看见的告警一律 flush。
+        print(f"[_persist_partial_stream] reason={reason} conv={conversation_id} "
+              f"候选字符={len(text)}", flush=True)
         if len(text) < 4:
+            print("[_persist_partial_stream] 跳过：内容过短（<4 字），不生成空消息",
+                  flush=True)
             return
         suffix = {
             "stop": "\n\n> ⏹ 已停止生成（以上为已生成内容）",
@@ -3368,7 +3403,8 @@ class StreamMixin:
         except Exception as _persist_err:
             # 固化失败不掩盖原始异常，但**必须留痕**（原来 `pass` 静默：
             # 去重/写入这类缺陷会完全不可见，2026-10-10 的重复落库就是这样漏掉的）。
-            print(f"[_persist_partial_stream] 固化失败（reason={reason}）：{_persist_err!r}")
+            print(f"[_persist_partial_stream] 固化失败（reason={reason}）：{_persist_err!r}",
+                  flush=True)
 
     def execute_stream(self, user_input, conversation_id, branch="dev", provider_id=None,
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
@@ -3519,6 +3555,15 @@ class StreamMixin:
             # 2026-09-29（用户五轮反馈4）：流式部分内容固化 —— llm_content 提前初始化（异常路径引用），
             # _orch_acc 收集编排路径的 token（直行路径已由 llm_content 承担）。
             llm_content = ""
+            # ★★ 2026-10-27（用户反馈「中途执行失败后之前输出的内容没有任何展示」）：
+            #   `_streamed_acc` = **本轮真的发给过用户的正文**，只增不减、跨自主续跑轮不复位。
+            #   为什么不复用 llm_content：`llm_content` 在半途会被两处**清空**
+            #     · 每轮续跑起点（`llm_content = ""`，续跑要干净起步）；
+            #     · 最终生成前收到补充指令时（`llm_content = ""`，强制按新指令重答）。
+            #   而这两处清空**之前**用户已经在屏幕上看到过内容；若失败只按 llm_content 固化，
+            #   那些内容照样蒸发（"第 2 轮失败"就是这种形态）。
+            #   ⚠️ 用单槽 list 是为了可变：except / GeneratorExit 分支在**闭包外**也要读到它。
+            _streamed_acc = [""]
             # ★ 2026-10-17（米爸「harness 持续工作」）：跨自主续跑轮的完整产出。早初始化是为了异常/断开路径（下方 except）引用不炸。
             _full_content = ""
             _orch_acc = []
@@ -4347,9 +4392,14 @@ class StreamMixin:
                         _cache_answer = None      # 缓存不可用 ⇒ 如实走真实生成
                 if _cache_answer:
                     # 按类人节奏"假装流式"（前端体验与真实流一致，不是啪一下一大段）
+                    # ★ 2026-10-27（断点保护）：**先赋值、后吐字**。
+                    #   原写法是「先 for 吐完 → 再 llm_content = ...」，中途被 close
+                    #   （客户端断开）时 llm_content 还是空 ⇒ 固化拿到 0 字符 ⇒ 用户看到的
+                    #   内容一条都不落库（真库 conv 9663 实证：reason=stop 候选字符=0）。
+                    llm_content = _cache_answer
+                    _streamed_acc[0] += _cache_answer
                     for _ck in iter_stream_chunks(_cache_answer):
                         yield {"type": "token", "delta": _ck}
-                    llm_content = _cache_answer
                     tool_injected = True       # 让下方生成段跳过（答案已就绪）
                     tools_def = None           # 让 ReAct 立即 break（不再调工具）
                     try:
@@ -4482,9 +4532,15 @@ class StreamMixin:
                             if p_content:
                                 tool_injected = True
                                 # P0-3（2026-09-17）：探测轮是非流式拿到的完整回复，此处按类人节奏补吐
+                                # ★ 2026-10-27（断点保护）：**先赋值、后吐字**（同 4391 处）。
+                                #   这是本轮最常命中的路径：模型"直接作答"（不调工具）时，
+                                #   内容已完整在手，却先按 45 字/秒慢慢吐 ⇒ 用户随时可能在这
+                                #   几秒里断开/关页 ⇒ 原写法此时 llm_content 仍为空
+                                #   ⇒ 断点固化判 `len<4` 跳过 ⇒ 屏幕上明明有字，刷新全没。
+                                llm_content = p_content
+                                _streamed_acc[0] += p_content
                                 for _chunk in iter_stream_chunks(p_content):
                                     yield {"type": "token", "delta": _chunk}
-                                llm_content = p_content
                             break
                         tool_injected = True
                         results = []
@@ -4934,12 +4990,40 @@ class StreamMixin:
                                        "round": _rnd + 1, "phase": "llm"}
                             if delta.get("content"):
                                 llm_content += delta["content"]
+                                _streamed_acc[0] += delta["content"]
                                 yield {"type": "token", "delta": delta["content"]}
                 # llm_client.chat(stream=True) 返回生成器；FORCE_MOCK 下 MockLLM 也走 _stream
                 if not tool_injected:
                     chunks = llm_client.chat(messages, provider_id=effective_provider, stream=True,
                                             _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
-                    full = []
+                    # ★★ 2026-10-27（用户反馈「中途执行失败后之前输出的内容没有任何展示」）
+                    #   ——**断点保护的真实缺口就在这里**，必须逐字看完本注释再改。
+                    #
+                    #   旧实现：
+                    #       full = []
+                    #       for chunk in chunks:
+                    #           ... full.append(delta["content"])
+                    #               yield {"type":"token", "delta": ...}   ← 已经发给用户了
+                    #       llm_content = "".join(full)                    ← **循环结束后**才赋值
+                    #   ⇒ 流**中途**抛异常（Provider 断流 / 网关 reset / 解析异常）时：
+                    #       · 用户屏幕上已有 N 个 token（真实可见）；
+                    #       · 但 `llm_content` 仍是 ""；
+                    #       · except 分支算出的 `_partial` 因此为空；
+                    #       · `_persist_partial_stream` 的 `len(text) < 4` 直接跳过 ⇒ **库里 0 条**
+                    #     ⇒ 刷新/切回会话= 一个字都不剩。真库实证（conv 9629 15:34:39「写入工程」）：
+                    #       `llm_usage_stats` 有 4 次调用（末次 22,707 prompt / 929 completion，
+                    #       内容确实生成过），而 `messages` **0 条 assistant**、
+                    #       `orch_stream_events` **0 条** —— 用户看到的东西全部蒸发。
+                    #
+                    #   为什么另一条分支（工具轮后的生成）没这个毛病：它写的是
+                    #       `llm_content += delta["content"]`（**增量赋值**，异常前已累积）。
+                    #   ⇒ 两条分支累积方式不一致，本身就是缺陷。现统一为增量累积。
+                    #
+                    #   额外引入 `_streamed_acc`：**只增不减**地记录"本轮真的发给过用户的正文字符"。
+                    #   为什么不直接用 llm_content：续跑（auto-continue）每轮开头会把
+                    #   `llm_content = ""` 复位，而用户此前**已经看到过**上一轮的内容；
+                    #   失败时若只看 llm_content，那些内容照样会丢（尤其是"第 2 轮失败"这种形态）。
+                    #   `_streamed_acc` 不复位、只做失败兜底，与正常落库的 `_full_content` 互不干扰。
                     for chunk in chunks:
                         for delta in self._extract_stream_deltas(chunk):
                             # 思考过程（reasoning_content）与正文（content）分流推送
@@ -4948,9 +5032,9 @@ class StreamMixin:
                                 yield {"type": "reasoning", "delta": delta["reasoning"],
                                        "round": _rnd + 1, "phase": "llm"}
                             if delta.get("content"):
-                                full.append(delta["content"])
+                                llm_content += delta["content"]
+                                _streamed_acc[0] += delta["content"]
                                 yield {"type": "token", "delta": delta["content"]}
-                    llm_content = "".join(full)
                 st = getattr(llm_client, "stats", {})
                 if _cache_answer:
                     # 缓存命中：**不谎报**成真实 provider 调用（含 0 延迟、0 token）
@@ -5238,9 +5322,12 @@ class StreamMixin:
             # ★ 2026-10-17（harness 持续工作）：部分固化带**跨续跑轮全量**——
             #   自主续跑轮的内容已并进 _full_content，只固化 llm_content（末轮）
             #   会把前几轮的产出丢掉（用户在停止前明明看得到）。
-            _partial = (((_full_content + "\n\n" + llm_content) if _full_content else llm_content)
-                        or "".join(_orch_acc))
-            self._persist_partial_stream(conversation_id, _partial,
+            # ★ 2026-10-27：再与 `_streamed_acc` 取**更长者** —— 它是"用户真的看到过"的下界。
+            #   只看 llm_content/_full_content 会漏掉「被续跑复位/被补充指令重置掉的上一段」
+            #   （用户已经看到了，却被当成"没生成过"）。
+            self._persist_partial_stream(conversation_id,
+                                         _best_partial(_full_content, llm_content,
+                                                       _orch_acc, _streamed_acc),
                                          "stop", dry_run=dry_run)
             # P1-②：断连同样要清 follow-up 队列（否则下次接着这个会话时
             #  会消费到"上一轮被中断时没处理完的补充指令"）。
@@ -5254,8 +5341,15 @@ class StreamMixin:
             # 2026-09-29（用户五轮反馈4）：网络错误等异常 → 已生成内容同样固化（带中断说明后缀），
             #  刷新后"之前输出的内容"仍在，不再整体蒸发。
             # ★ 2026-10-17：同 GeneratorExit 分支——带跨续跑轮全量（见上方注释）。
-            _partial = (((_full_content + "\n\n" + llm_content) if _full_content else llm_content)
-                        or "".join(_orch_acc))
-            self._persist_partial_stream(conversation_id, _partial,
+            # ★★ 2026-10-27（用户反馈「中途失败后之前输出的内容没有任何展示」）：
+            #   **这里就是那个 bug 的落点**。旧实现只取 llm_content/_full_content/_orch_acc，
+            #   而 llm_content 在旧代码里是「流循环结束后才赋值」⇒ 中途抛异常时它是空串
+            #   ⇒ 固化判据 `len(text) < 4` 直接跳过 ⇒ 库里 0 条 ⇒ 刷新全丢。
+            #   （真库 conv 9629「写入工程」轮：llm_usage 4 次调用、messages 0 条 assistant。）
+            #   现在三件事一起兜：① 流循环内**增量**累积 llm_content（根治）；
+            #   ② `_streamed_acc` 记录"真的流出去过什么"；③ 取两者更长者固化。
+            self._persist_partial_stream(conversation_id,
+                                         _best_partial(_full_content, llm_content,
+                                                       _orch_acc, _streamed_acc),
                                          "error", dry_run=dry_run)
             yield {"type": "error", "message": str(e)}
