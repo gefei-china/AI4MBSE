@@ -18,7 +18,7 @@ function loadSettingsTab(id) {
   if(id==='st-projmem') { loadPMProjects(); loadProjectMemories(); }
   if(id==='st-hooks') loadToolHooks();
   if(id==='st-fextract') renderFileExtractSettings();
-  if(id==='st-ctx') loadCtxConfig();
+  if(id==='st-ctx') { loadCtxConfig(); loadCtxAudit(); }   // 2026-10-27：配置 + 归因观测（观测区在上）
   // 2026-10-10：任务级思考控制面（thinking 的 per-task 维度），照 st-ctx 的懒加载约定
   if(id==='st-think') loadThinkCfg();
   // 2026-09-26：意图样本池（采样→标注→评测闭环），照 st-ctx 的懒加载约定

@@ -192,11 +192,82 @@ class ToolMixin:
         #   根因：JIT 的本意是防「无关工具被顺手调用」，但**绑定动作本身就是用户的显式授权**，
         #   把绑定工具和偶然候选一起语义裁剪 ⇒ 绑了 71 个只露 6 个，绑定形同虚设。
         _bound_mcp_names = set()
+        # ★ P0-6（2026-10-26）：MCP 工具**真实元数据** + **按需暴露**。
+        #   背景（实测，生产库快照）：
+        #     · MCP 工具的 description 此前是**同一个模板串**、parameters 是宽松空壳
+        #       ⇒ 71 个工具 description 去重后仅 1 种 ⇒ **JIT 语义打分零区分度**
+        #       ⇒ 只能"全量注入"（5,467 token/轮，占整包 71~80%）；
+        #     · 模型看到 71 个工具，但**没有用途说明、没有参数契约** ⇒ 只能靠名字猜。
+        #   根因：`mcp_health.discover_server` 落库时只存了 name，
+        #   把 `list_tools()` 返回的 description / inputSchema **主动丢弃**了。
+        #   本次：① 真实 description + 真实 inputSchema（有 tool_meta 时）；
+        #        ② 每个 server **保底 min_keep 个**（保"显式契约"语义）+ 语义命中者额外入选。
+        #   兼容：tool_meta 为空（存量/未重新发现）⇒ **逐字节退回改动前行为**。
+        _mcp_meta_enabled = True
+        _mcp_min_keep = 8
+        _mcp_top_n = 0
+        try:
+            from core import config as _cfg_mcp
+            _mcp_meta_enabled = bool(_cfg_mcp.get("context_audit", "mcp_meta_enabled", True))
+            _mcp_min_keep = int(_cfg_mcp.get("context_audit", "mcp_min_keep", 8) or 0)
+            _mcp_top_n = int(_cfg_mcp.get("context_audit", "mcp_top_n", 0) or 0)
+        except Exception:
+            pass
+        _mcp_stats = {"servers": 0, "total": 0, "selected": 0, "meta_servers": 0}
+        _mcp_semantic_names = set()   # ★ 语义命中的 MCP 工具（供 core_keep 保底）
         for m in bound:
-            for t in (m.get("tools") or []):
+            _srv_name = m.get("name", "")
+            _tools = list(m.get("tools") or [])
+            # ── 读该 server 的工具元数据（description + inputSchema）──
+            _meta = {}
+            if _mcp_meta_enabled:
+                try:
+                    from agent.mcp_tool_meta import load_tool_meta
+                    _meta = load_tool_meta({"tool_meta": m.get("tool_meta") or ""})
+                except Exception:
+                    _meta = {}
+            if _meta:
+                _mcp_stats["meta_servers"] += 1
+                # 按需暴露：保底 min_keep + 语义命中补充
+                try:
+                    from agent.mcp_tool_meta import pick_for_injection
+                    _picked, _pst = pick_for_injection(
+                        _meta, user_input or "", min_keep=_mcp_min_keep, top_n=_mcp_top_n)
+                except Exception:
+                    _picked, _pst = list(_meta.keys()), {"selected": len(_meta), "keep": 0,
+                                                        "semantic": 0, "semantic_names": []}
+                _tools = _picked or _tools
+                _mcp_semantic_names |= set(_pst.get("semantic_names") or [])
+                _mcp_stats["servers"] += 1
+                _mcp_stats["total"] += _pst.get("total", len(_meta))
+                _mcp_stats["selected"] += _pst.get("selected", len(_picked))
+            else:
+                # 存量 server（无 tool_meta）⇒ 全量（改动前行为，逐字节一致）
+                _mcp_stats["servers"] += 1
+                _mcp_stats["total"] += len(_tools)
+                _mcp_stats["selected"] += len(_tools)
+            for t in _tools:
                 _bound_mcp_names.add(t)
-                candidates.append((t, f"MCP 工具（{m.get('name','')}），端点 {m.get('endpoint','')}",
-                                   "mcp", m.get("name", "")))
+                # description：有真实元数据就用真实的（模型才知道这工具干什么）；
+                # 无元数据 ⇒ 保持改动前的模板串（逐字节一致）
+                _info = _meta.get(t) if _meta else None
+                if _info and _info.get("description"):
+                    _desc = _info["description"]
+                else:
+                    _desc = f"MCP 工具（{_srv_name}），端点 {m.get('endpoint','')}"
+                candidates.append((t, _desc, "mcp", _srv_name))
+                # 真实参数契约（有则用；无则保持宽松空壳）
+                if _info:
+                    _sch = _info.get("inputSchema")
+                    if isinstance(_sch, dict) and _sch:
+                        try:
+                            if not isinstance(_sch.get("properties"), dict):
+                                _sch["properties"] = {}
+                            if not _sch.get("type"):
+                                _sch["type"] = "object"
+                            _schema_by_name[t] = _sch
+                        except Exception:
+                            pass
         # 内置工具（仅 Agent 声明过的）
         agent_def = self.registry.get(intent)
         for name in agent_def.tools:
@@ -318,7 +389,60 @@ class ToolMixin:
         _wl = getattr(self, "_tool_whitelist", None)
         if _wl:
             _wlset = set(_wl)
-            candidates = [c for c in candidates if c[0] in _wlset]
+            # ★ P0-9（2026-10-26）：**MCP 显式绑定工具豁免技能白名单**。
+            #
+            # 问题（实测，生产库快照 + 真实 _build_tools_def）：
+            #   `智源对接agent` 同时绑定了 MCP server（71 工具）与技能「智源平台管理」
+            #   （allowed_tools 6 项）。技能一命中就被写成 `_tool_whitelist`
+            #   （execute.py:460-466）⇒ 白名单**把绑定的 MCP 工具全部裁掉**：
+            #     问「查询智源工程列表」：无白名单 15 工具/8 MCP → 有白名单 **2 工具/0 MCP**
+            #     问「读取文件内容」    ：无白名单 21 工具/8 MCP → 有白名单 **8 工具/0 MCP**
+            #   更糟的是：该技能白名单里 5 个 `zhiyuan_*` 工具虽在 tools 表且 active，
+            #   却**没有以 type='tool' 绑定到本 agent** ⇒ 进不了候选集
+            #   ⇒ 白名单「授了什么也拿不到、却把已有的全撤销」。
+            #   ⚠️ 这正是 2026-10-16「绑了 71 个只露 6 个、工程列表查不到」事故的
+            #     **真正根因之一**（当时归因为 JIT），至今仍在。
+            #
+            # 判断（为什么 MCP 该豁免）：
+            #   「绑定 MCP」与「绑定技能」是**同一管理员、同一面板**的两次显式授权。
+            #   技能的 `allowed_tools` 语义是「本技能干活只需要这几个工具」，
+            #   不是「撤销本 agent 已获授权的其它工具」。用它反向撤销 MCP 授权属于越权，
+            #   且失败是**静默**的（工具凭空消失，无日志、无提示）。
+            #
+            # 开关：`context_audit.mcp_exempt_skill_whitelist`（默认 True）。
+            #   置 False ⇒ 逐字节退回改动前（白名单连 MCP 一起裁）。
+            # ⚠️ 只豁免 **MCP**；内置工具 / DB 工具仍受白名单约束（最小权限不放松）。
+            _mcp_exempt = True
+            try:
+                from core import config as _cfg_wl
+                _mcp_exempt = bool(_cfg_wl.get("context_audit",
+                                               "mcp_exempt_skill_whitelist", True))
+            except Exception:
+                _mcp_exempt = True
+            if _mcp_exempt:
+                _mcp_cand_names = {c[0] for c in candidates if c[2] == "mcp"}
+                _rescue = [c for c in candidates if c[2] == "mcp" and c[0] not in _wlset]
+                candidates = [c for c in candidates if c[0] in _wlset] + _rescue
+                if _rescue:
+                    try:
+                        from agent.context_audit import record_blocks
+                        record_blocks({}, phase="tools", extra={
+                            "whitelist_exempted_mcp": len(_rescue),
+                            "whitelist_size": len(_wlset),
+                        })
+                    except Exception:
+                        pass
+                    try:
+                        logger.warning(
+                            "技能白名单（%d 项）会裁掉 %d 个已显式绑定的 MCP 工具（如 %s），"
+                            "已按 `mcp_exempt_skill_whitelist=True` 豁免。"
+                            "若要恢复严格最小权限，请把该开关置 False。",
+                            len(_wlset), len(_rescue),
+                            ", ".join(sorted(c[0] for c in _rescue)[:3]))
+                    except Exception:
+                        pass
+            else:
+                candidates = [c for c in candidates if c[0] in _wlset]
         # P0-按需工具：写类工具默认不注入（side_effect=write/destructive）——
         # 仅当输入含明确写意图关键词（创建/入库/保存/修改/删除…）时注入，
         # 防「无关写工具被注入 / LLM 顺手调用」；白名单（委派最小权限）模式下跳过
@@ -394,6 +518,17 @@ class ToolMixin:
         # ★ 2026-10-16：Agent 显式绑定的 MCP 工具同样是显式契约 —— 用户在「绑定 MCP 服务器」
         #   面板里逐个绑上去的，JIT 无权以"语义不相关"为由把它们裁掉。
         #   （不设这一步 ⇒ 绑 71 个只露 6 个，工程列表查询类工具必被裁，见上方事故依据。）
+        # ★ P0-6（2026-10-26）**保底粒度细化**：
+        #   改动前：绑定的**全部** MCP 工具进 core_keep ⇒ 恒不裁剪（71 个全量注入，
+        #     实测 5,467 token/轮、占整包 71~80%）。根因是 MCP 工具的 description
+        #     全是同一句模板 ⇒ JIT 打分零区分度 ⇒ 只能"要么全给要么全裁"。
+        #   现在：**筛选前移** —— `pick_for_injection` 已按「min_keep 保底 + 语义命中补充」
+        #     把 71 个压到 N 个，故 `_bound_mcp_names`（= 已选出的集合）就是**新的显式契约粒度**，
+        #     整集进 core_keep ⇒ JIT **不得二次裁剪**。
+        #   ⚠️ 为什么不是"只保底语义命中者"：那会让 JIT 再把 min_keep 保底项裁掉
+        #     ⇒ `mcp_min_keep` 的"至少露 N 个"保证失效（弱相关场景可能只剩 1~2 个），
+        #     且同一 server 两次请求暴露的工具集不稳定。筛选只做一次，位置前移到 pick 阶段。
+        #   无 tool_meta（存量 server）⇒ `_bound_mcp_names` 即全量 ⇒ **逐字节退回改动前行为**。
         if _bound_mcp_names:
             core_keep = core_keep | _bound_mcp_names
         if len(candidates) >= jit_threshold and user_input:
@@ -405,24 +540,80 @@ class ToolMixin:
                 # 2026-09-19：阈值按**本次实际走的路**选（两路余弦量纲不同，一套阈值必有一路失准）：
                 #   dense（真 embedding）→ tool_threshold_dense（0.53，分位等价标定）
                 #   bigram（降级）      → tool_threshold（0.12，原经验值）
-                # 弱相关 → 不预筛，维持全量注入（保底可靠）
+                # ★ 2026-10-26（P0-5）：**空回退语义已变更** —— 原"弱相关 → 维持全量注入"
+                #   改为"弱相关 → 取语义 top-N"（`context_audit.jit_fallback_top_n`，0 退回全量）。
+                #   理由：阈值是**质量线**不是**开关**；弱相关时排序仍有信息量，
+                #   全量注入实测把 5 个工具的任务膨胀到 24 个（7,487 字符 / 4,162 token）。
                 _ss = SemanticSearch()
                 _th_b = float(_cfg.get("embedding", "tool_threshold", 0.12) or 0.12)
                 _th_d = float(_cfg.get("embedding", "tool_threshold_dense", 0.53) or 0.53)
+                # ★ P0-5（2026-10-26）：空回退改 top-N。**rank 的 top_k 必须 ≥ 回退 N**，
+                #   否则 `scored` 会被提前截断（semantic.rank 返回 `scored[:top_k]`），
+                #   取 top-N 只能拿到 ≤top_k 条 ⇒ 回退 N 形同虚设。
+                _fb_n = 0
+                try:
+                    from core import config as _cfg_fb
+                    _fb_n = int(_cfg_fb.get("context_audit", "jit_fallback_top_n", 8) or 0)
+                except Exception:
+                    _fb_n = 8
+                _rank_k = max(jit_top_n, _fb_n) if _fb_n > 0 else jit_top_n
                 scored = _ss.rank(user_input, idx,
-                                  top_k=int(_cfg.get("embedding", "tool_top_k", jit_top_n)),
+                                  top_k=int(_cfg.get("embedding", "tool_top_k", _rank_k)) or _rank_k,
                                   threshold=0, key="text")
                 _th = _th_d if getattr(_ss, "last_backend", "bigram") == "dense" else _th_b
                 chosen = {s[1]["name"] for s in scored if s[0] >= _th}
+                # ★ P0-5（2026-10-26）：空回退改为「取语义 top-N」而非「全量注入」。
+                #   改动前：全部候选都低于阈值 ⇒ chosen 为空 ⇒ **全量注入**
+                #   （实测「帮我把活动图生成出来」⇒ 24 个工具 / 7,487 字符 / 4,162 token，
+                #    而该任务实际只需 sysml 视图类工具；同族意图载荷波动 5→24 个）。
+                #   根因：把「阈值」当成了「开关」—— 阈值是**质量线**，不是**开关**。
+                #   弱相关时排序**仍有信息量**（最不相关的排在后面），故 top-N 是无损的收紧。
+                #   ⚠️ core_keep 保底**不受影响**：无论走哪条分支都要并入（否则
+                #   graph_retrieve/validate/impact_analyze 会在弱相关场景丢失）。
+                #   开关：`context_audit.jit_fallback_top_n`（0 = 退回改动前的全量行为）。
                 if not chosen:
-                    # 空回退：全弱相关时维持全量（不瘦身，保底可靠）——
-                    # core_keep 保底只能在「语义确有命中」时叠加，否则 chosen 永非空、空回退失效
-                    candidates = [c for c in candidates]
-                else:
-                    for c in candidates:
-                        if c[0] in core_keep:
-                            chosen.add(c[0])
-                    candidates = [c for c in candidates if c[0] in chosen]
+                    if _fb_n > 0:
+                        # 排序降序 ⇒ 取前 N 个（scored 已按 score 降序）
+                        # ⚠️ `scored` 可能**为空**：bigram 降级 + 全部零相关时，
+                        #   `semantic.rank(threshold=0)` 会把 0 分条目全过滤掉 ⇒ 返回 []。
+                        #   此时不能退化为全量（那正是本次要修的膨胀源），
+                        #   改用**候选集原始顺序**取前 N 个（顺序本身携带一定优先级：
+                        #   内置工具 → 技能白名单 → 显式绑定，详见本函数上游构建顺序）。
+                        if scored:
+                            _top = {s[1]["name"] for s in scored[:_fb_n]}
+                        else:
+                            _top = {c[0] for c in candidates[:_fb_n]}
+                        chosen |= _top
+                        try:
+                            from agent.context_audit import record_blocks
+                            record_blocks({}, phase="tools", extra={
+                                "jit_fallback_full": 0,
+                                "jit_fallback_top_n": len(_top),
+                                "jit_fallback_no_scores": 0 if scored else 1,
+                                "tool_candidates": len(candidates),
+                            })
+                        except Exception:
+                            pass
+                    else:
+                        # 退回改动前行为（全量注入）。
+                        # ⚠️ 必须把 chosen 置为**全部候选名** —— 否则后面的
+                        #    `candidates = [c for c in candidates if c[0] in chosen]`
+                        #    会把候选**全部清空**（chosen 为空 ⇒ 过滤结果为空），
+                        #    这是"全量"与"清空"的区别，务必显式写全。
+                        chosen = {c[0] for c in candidates}
+                        try:
+                            from agent.context_audit import record_blocks
+                            record_blocks({}, phase="tools", extra={
+                                "jit_fallback_full": 1,
+                                "tool_candidates": len(candidates),
+                            })
+                        except Exception:
+                            pass
+                # core_keep 保底：两条分支都要并入（读类核心工具 + 显式绑定的 MCP）
+                for c in candidates:
+                    if c[0] in core_keep:
+                        chosen.add(c[0])
+                candidates = [c for c in candidates if c[0] in chosen]
             except Exception:
                 pass  # 预筛失败则维持全量
         # 2026-09-17 S4：工具名合法性护栏 —— OpenAI 兼容协议要求 function.name 匹配 ^[a-zA-Z0-9_-]+$。
@@ -482,6 +673,27 @@ class ToolMixin:
         if getattr(self, "_orch_result_offloads", None):
             from agent.pipeline_parts import tool_offload as _toff2
             _toff2.ensure_fetch_tool(tools, getattr(self, "_tool_whitelist", None))
+        # ★ P0-6（2026-10-26）：MCP 暴露情况归因 ⇒ "暴露了多少 / 裁掉了多少"可观测。
+        #   这三个数字是判断 `mcp_min_keep` 该设多少的唯一依据（靠猜会重演
+        #   "JIT 裁太狠 ⇒ 工程列表查不到"的事故）。
+        #   ⚠️ `mcp_injected` 必须按**工具名集合**判定，不能按 description 前缀 ——
+        #   有 tool_meta 时 description 是真实描述（不以"MCP "开头）。
+        try:
+            from agent.context_audit import record_blocks
+            if _mcp_stats.get("servers"):
+                _mcp_names = {c[0] for c in candidates if c[2] == "mcp"}
+                record_blocks({}, phase="tools", extra={
+                    "mcp_servers": _mcp_stats["servers"],
+                    "mcp_meta_servers": _mcp_stats["meta_servers"],
+                    "mcp_total": _mcp_stats["total"],
+                    "mcp_selected": _mcp_stats["selected"],
+                    "mcp_semantic": len(_mcp_semantic_names),
+                    "mcp_injected": len([t for t in tools
+                                        if t.get("function", {}).get("name") in _mcp_names]),
+                    "tool_payload_total": len(tools),
+                })
+        except Exception:
+            pass
         return tools
 
     def _tool_side_effect(self, name: str) -> str:

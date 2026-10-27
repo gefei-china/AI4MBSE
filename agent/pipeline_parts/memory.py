@@ -19,6 +19,34 @@ class MemoryMixin:
         recall 层按 query 语义召回（排除 core 已注入 + archival 归档层）。
         仅返回命中内容；异常/无命中返回空串（不阻断主流程）。记忆只作参考对齐，
         Prompt 硬约束「不得虚构扩展」，防止把记忆当事实检索结果引用。
+
+        ★ P0-4（2026-10-26）**噪音闸门 + 单一真源**（实测修正）：
+          本路径此前**自己查一次库**（`MemoryService.search`），与 RAG 侧
+          `rag.py → recall_memories()` 是**两条独立召回路径**，产生两个真实问题：
+
+          ① **注入噪音**（实测，生产库 8 个 query）：
+             本路径**没有** `_is_noise` 噪音闸门，而 RAG 侧有。
+             实测「生成建模视图」：本路径注入 id=170（395 字平台寒暄话术，
+             经 `_is_noise` 判定为 **True**），而 RAG 侧正确排除了它。
+             ⇒ 用户看到的是一段"你好，我是 MBSE 平台的通用助手…"占了 160 字 prompt。
+
+          ② **同一张表查两遍**（两次独立向量/BM25 计算 + 两套不同 query 构造）。
+
+          实测**两条路径的召回 id 重叠率 = 0%**（query 构造不同 + RAG 侧有噪音闸门
+          与跨域兜底所致）⇒ 原报告"同一条记忆注入两次"的判断在当前生产数据上**不成立**，
+          真正的缺陷是 ①（注入噪音）与 ②（重复查询开销）。
+
+          改法（**保持 core 常驻语义不变**）：
+          · core 层仍由本路径独立查（它的语义是"无条件常驻"，RAG 侧不提供这一层），
+            但**加噪音闸门**（core 内容同样可能是寒暄）；
+          · recall 层改为**消费 RAG 侧已召回的 `memory_hits`**（不重复查库）——
+            该列表带 score / source_type / recall_reason，信息更完整；
+          · 两条路径**跨路去重**（按 id），避免同一 id 出现在两个块里；
+          · 截断口径统一为 `context_audit.memory_max_chars`（默认 200，与 RAG 侧一致）。
+            ⚠️ 改动前本路径截 160 字、RAG 侧截 200 字 —— 同一记忆两种长度并存，
+            短的被长的完全覆盖 ⇒ 160 字截断是纯冗余。
+
+          开关：`context_audit.memory_single_source`（默认 True）；置 False 退回旧行为。
         """
         try:
             from memory_backend import get_memory_backend
@@ -30,22 +58,64 @@ class MemoryMixin:
                 if scopes is None:
                     scopes = self._memory_scopes(intent, user) if getattr(self, "_mem_ctx", None) else []
                 _be = get_memory_backend()
+                _single = True
+                try:
+                    from core import config as _cfg
+                    _single = bool(_cfg.get("context_audit", "memory_single_source", True))
+                except Exception:
+                    _single = True
+                _max_chars = 200
+                try:
+                    from core import config as _cfg2
+                    _max_chars = int(_cfg2.get("context_audit", "memory_max_chars", 200) or 200)
+                except Exception:
+                    _max_chars = 200
                 # P1-18：core 常驻（无条件）+ recall 按需（query 相关，排除 core 已注入）
                 core_rows = _be.search_core(conn, agent_id, top_k=2, scopes=scopes)
-                recall_rows = _be.search(conn, agent_id, query, top_k=4, scopes=scopes)
-                _core_ids = {r.get("id") for r in core_rows if r.get("id")}
-                recall_rows = [r for r in recall_rows if r.get("id") not in _core_ids]
+                # ★ 噪音闸门：core 层同样可能是寒暄/平台话术（实测 id=170 即属此类）
+                try:
+                    from agent.memory_recall import _is_noise as _noise_gate
+                except Exception:
+                    def _noise_gate(_t):
+                        return False
+                core_rows = [r for r in (core_rows or [])
+                             if not _noise_gate(str(r.get("content") or ""))]
+                recall_rows = []
+                if _single:
+                    # ── 单一真源：消费 RAG 侧已召回的 memory_hits（不重复查库）──
+                    try:
+                        _hits = getattr(self, "_rag_memory_hits", None) or []
+                        _core_ids = {r.get("id") for r in core_rows if r.get("id")}
+                        for r in _hits:
+                            _mid = (r.get("meta") or {}).get("id")
+                            if _mid is not None and _mid in _core_ids:
+                                continue      # 跨路去重：core 已注入的不再重复
+                            recall_rows.append({
+                                "id": _mid,
+                                "mem_type": r.get("mem_type") or "fact",
+                                "content": r.get("content") or "",
+                                "score": r.get("score") or 0.0,
+                            })
+                    except Exception:
+                        recall_rows = []
+                else:
+                    # 旧行为（回滚开关）：自己查一次 recall 层
+                    recall_rows = _be.search(conn, agent_id, query, top_k=4, scopes=scopes)
+                    _core_ids = {r.get("id") for r in core_rows if r.get("id")}
+                    recall_rows = [r for r in recall_rows if r.get("id") not in _core_ids]
                 if not core_rows and not recall_rows:
                     return ""
                 lines = []
                 if core_rows:
                     lines.append("【核心偏好（跨会话稳定，请遵守）】")
                     for r in core_rows:
-                        lines.append(f"- [{r.get('mem_type', 'fact')}] {str(r.get('content') or '')[:160]}")
+                        lines.append(f"- [{r.get('mem_type', 'fact')}] "
+                                     f"{str(r.get('content') or '')[:_max_chars]}")
                 if recall_rows:
                     lines.append("【长期记忆（跨会话经验，仅供对齐，不得虚构扩展或作为事实来源引用）】")
                     for r in recall_rows:
-                        lines.append(f"- [{r.get('mem_type', 'fact')} | 相关度 {r.get('score', 0):.2f}] {str(r.get('content') or '')[:160]}")
+                        lines.append(f"- [{r.get('mem_type', 'fact')} | 相关度 {r.get('score', 0):.2f}] "
+                                     f"{str(r.get('content') or '')[:_max_chars]}")
                 return "\n".join(lines) + "\n"
             finally:
                 conn.close()

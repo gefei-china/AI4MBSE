@@ -505,6 +505,14 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 _tracer.flush()
             except Exception:
                 pass   # 观测落库失败绝不阻断已完成的主流程
+            # ── P0-2（2026-10-26）：上下文分块归因落库 ──
+            # 与上面的 tracer.flush() 同理：观测在请求收口处统一落库（一次请求 = 一次装配），
+            # 失败不阻断。`context_audit.trace_id` 与 `llm_usage_stats.trace_id` 同源 ⇒ 可 JOIN。
+            try:
+                from agent.context_audit import flush as _ctx_flush
+                _ctx_flush()
+            except Exception:
+                pass
             if _client_gone:
                 return
             # P1-32：终态兜底 —— 流结束却从未发过 done/error ⇒ 必须补一条 error，

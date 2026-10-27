@@ -581,6 +581,48 @@ DEFAULT_CONFIG = {
     "reasoning": {
         "direct_merge": True,        # 推理结果直接并入图库（跳过审核队列）；false=恢复「提交审核→审核队列」门禁
     },
+    "context_audit": {
+        # ── P0-2（2026-10-26）：上下文分块 token 归因 ──
+        # 背景：`llm_usage_stats` 只记**整包** prompt_tokens（生产实测 chat_probe 均值
+        #   12,511 / 峰值 64,552 token），**无分块归因** ⇒ 无法回答"这轮 token 花在哪"。
+        #   历史上两次真实损失（总闸静默空转 / 流式路径腰斩 82% prompt）都因"看不见"而延迟发现。
+        # 归因点在 `assemble_system_prompt`（块边界本就已知 ⇒ 零额外切分成本）。
+        # 落库：context_audit（块级）+ context_audit_summary（每 trace 聚合 + 去重后指标）。
+        "enabled": True,          # 总开关；关闭时零开销（record_blocks 直接 return）
+        # 以下为**下游修复项**的阈值开关（本次一并落地，默认值即修复后行为）：
+        "retrieval_per_doc_max": 2,   # 检索注入：同一 source_doc 最多占几个槽（3 槽时 ≤2）
+        "retrieval_merge_neighbor": True,  # 检索注入：同文档近邻 chunk（|Δindex|≤2）合并为一条
+        "memory_single_source": True, # 记忆注入：以 rag.memory_hits 为唯一真源，消除双路重复
+        "memory_max_chars": 200,      # 记忆注入正文截断（两条路径统一口径）
+        "jit_fallback_top_n": 8,      # JIT 语义预筛空回退时取 top-N（替代全量注入）
+        # ── P0-6（2026-10-26）：MCP 工具元数据与按需暴露 ──
+        # 背景：MCP 工具此前 description 全是同一句模板、parameters 全是宽松空壳
+        #   （实测 71 个工具 description 去重后仅 1 种）⇒ JIT 零区分度 + 模型无从下手。
+        "mcp_meta_enabled": True,     # 是否使用 mcp_servers.tool_meta（真实描述+参数契约）
+        "mcp_min_keep": 8,           # 每个 MCP server 至少暴露几个工具（0=不保底；兼容旧行为）
+        "mcp_top_n": 0,               # 每个 MCP server 暴露总量上限（0=不限）
+        # ── P0-7（2026-10-26）：role 块内「工具手册段」按需裁剪 ──
+        # 背景（实测，生产快照 + 真实 execute 链路）：
+        #   `智源对接agent` 的 system_prompt = 14,538 字符 / 8,995 tok，
+        #   其中 14,531 字符（**100%**）是 58 个 MCP 工具的手册，非工具叙述仅 7 字符；
+        #   其余 16 个 active Agent 手册占比**全为 0%**（本开关对它们零影响）。
+        #   上一轮已把 MCP 工具按需暴露到 8 个 ⇒ 手册里 50 个工具的说明对应工具
+        #   本轮根本没进 payload ⇒ 纯噪音；MCP server 离线时更是 100% 死重。
+        # ⚠️ **默认关闭**：这是改「模型可见内容」，风险高于纯注入量优化。
+        #   先在 diagnostics 看 `role_manual_dropped_chars`，确认任务正确率不掉再开。
+        #   兜底完备：无手册段 / 暴露集为空 / 切分不自洽 ⇒ 逐字节原样返回。
+        "role_manual_filter": False,
+        # ── P0-9（2026-10-26）：MCP 显式绑定工具豁免技能白名单 ──
+        # 实测：`智源对接agent` 绑了 MCP(71) + 技能「智源平台管理」(allowed_tools 6 项)，
+        #   技能命中后白名单把绑定的 MCP 工具**全部裁掉**：查询工程列表 8 MCP → **0**，
+        #   而白名单里 5 个 `zhiyuan_*` 未以 type='tool' 绑定 ⇒ 进不了候选
+        #   ⇒ 「授了拿不到、却把已有的全撤销」，且静默无日志。
+        #   这是 2026-10-16「绑 71 个只露 6 个」事故的真正根因之一（当时归因为 JIT）。
+        # 语义依据：绑定 MCP 与绑定技能是同一管理员的两次显式授权；
+        #   技能 allowed_tools 表示「本技能只需这些」，不表示「撤销其它已授权工具」。
+        # 置 False ⇒ 逐字节退回改动前（白名单连 MCP 一起裁）。只豁免 MCP，内置/DB 工具仍受限。
+        "mcp_exempt_skill_whitelist": True,
+    },
     "memory": {
         "forget_enabled": True,      # 遗忘引擎开关
         "forget_threshold": 0.2,     # 遗忘激活度阈值（仅 forget_by_activation=true 时生效，见下）
@@ -1647,6 +1689,19 @@ CONFIG_SCHEMA = {
     },
     "reasoning": {
         "direct_merge":            {"type": "bool", "desc": "推理结果直接并入图库（跳过审核队列）；false=恢复提交审核门禁"},
+    },
+    "context_audit": {
+        "enabled":                {"type": "bool", "desc": "上下文分块 token 归因落库总开关"},
+        "retrieval_per_doc_max":  {"type": "int",  "desc": "检索注入：同一 source_doc 最多占几个槽"},
+        "retrieval_merge_neighbor": {"type": "bool", "desc": "检索注入：同文档近邻 chunk 是否合并"},
+        "memory_single_source":  {"type": "bool", "desc": "记忆注入：是否以 rag.memory_hits 为唯一真源"},
+        "memory_max_chars":      {"type": "int",  "desc": "记忆注入正文截断字符数"},
+        "jit_fallback_top_n":    {"type": "int",  "desc": "JIT 语义预筛空回退时的 top-N（0=退回全量）"},
+        "mcp_meta_enabled":      {"type": "bool", "desc": "MCP 工具是否使用真实描述+参数契约（tool_meta）"},
+        "mcp_min_keep":          {"type": "int",  "desc": "每个 MCP server 至少暴露的工具数（0=不保底）"},
+        "mcp_top_n":             {"type": "int",  "desc": "每个 MCP server 暴露总量上限（0=不限）"},
+        "role_manual_filter":    {"type": "bool", "desc": "role 块内工具手册段按本轮暴露工具裁剪（默认关）"},
+        "mcp_exempt_skill_whitelist": {"type": "bool", "desc": "MCP 显式绑定工具豁免技能白名单（默认开）"},
     },
     "memory": {
         "forget_enabled":       {"type": "bool", "desc": "遗忘引擎开关"},

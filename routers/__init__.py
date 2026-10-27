@@ -46,6 +46,7 @@ from .agent_archive import router as agent_archive_router  # 2026-10-19 P2-3 Age
 from .flow_topology import router as flow_topology_router  # 2026-10-20 P2-4 画布拓扑台账（只读画布不改拓扑，红线 #6）
 from .evolution_report import router as evolution_report_router  # 2026-10-20 自进化周报（价值感知层，只读六域汇总）
 from .evaluation import router as evaluation_router  # 2026-10-22 评测管理（历史/趋势/可信度/门禁接线）
+from .diagnostics import router as diagnostics_router  # 2026-10-26 P0-8 上下文归因只读诊断（让 token 构成可见）
 
 __all__ = [
     "dashboard_router",
@@ -87,4 +88,5 @@ __all__ = [
     "flow_topology_router",  # 2026-10-20 P2-4 画布拓扑台账（只读画布不改拓扑）
     "evolution_report_router",  # 2026-10-20 自进化周报（要你决策 / 本周体检 / 数据可信度）
     "evaluation_router",        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
+    "diagnostics_router",       # 2026-10-26 P0-8 上下文归因只读诊断
 ]

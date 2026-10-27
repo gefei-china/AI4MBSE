@@ -227,20 +227,40 @@ PROMPT_CACHEABLE_KEYS = (
 
 #: 分界线**以下**的块 key（动态区）。元组顺序 = 实际拼装顺序（层内按「依赖的易变度」升序，
 #: 让相对稳定的块尽量靠前）。
+#:
+#: ★ P4（2026-10-26）**让实现符合本注释声明的原则**。
+#:   此前 `skill_prompt` 依赖 `user_input`（每轮可能变）却排在第 3 位，把它之后的
+#:   `memory` / `model_context` / `project_memory` / `slots` / `user_ctx` 一起拖成缓存 miss
+#:   —— 与本段声明的「按易变度升序」直接矛盾。
+#:
+#:   实测依据（生产库 conv=9571，8 个不同 query，逐块 md5）：
+#:     · 静态区 8 块 **全部恒定**
+#:     · 动态区**只有 `skill_prompt` 会变**（6/8 唯一值，均 1,016 tok）
+#:     · `memory` 80 tok / `model_context` 226 tok / `retrieval` 11 tok 逐个恒定
+#:   ⇒ `skill_prompt` 是**唯一真实缓存断点**，它前面的恒定量才是可救回的部分。
+#:
+#:   DeepSeek / Anthropic 的 prompt cache 都是**前缀完整匹配**：断点之后一律不计命中
+#:   ⇒ 把 `skill_prompt` 押后，「memory(80) + model_context(226) ≈ 306 tok」由"每轮白扔"
+#:   变为"可命中"。收益有限（system 约 6.7%）但**零语义代价**：只换顺序，不删内容。
+#:
+#:   ⚠️ 顺序契约由 tools/verify/verify_prompt_cache_order.py 锁定（含变异自证）：
+#:     「易变块必须排在稳定块之后」。新增块时按同一原则归位，否则该门禁翻红。
 PROMPT_DYNAMIC_KEYS = (
+    # ── 相对稳定（同会话内基本不变）──
     "intent_line",     # L3 当前意图（依赖 intent）
     "model_code_req",  # L3 建模输出要求 + L0 硬约束卡（依赖 intent；建模/非建模差异巨大）
-    "skill_prompt",    # L4 技能渐进式披露（依赖 user_input ⇒ 每轮可能变）
-    "skill_block",     # L4 显式指定技能正文（依赖本轮 skill_name）
-    "template",        # L4 提示词实验室模板（依赖 intent + user_input）
-    "memory",          # L4 长期记忆（依赖 user_input）
-    "model_context",   # L4 建模上下文（依赖 branch + conversation + user_input）
+    "memory",          # L4 长期记忆（依赖 user_input，但 core 层无条件常驻 ⇒ 实测恒定）
+    "model_context",   # L4 建模上下文（依赖 branch + conversation ⇒ 同会话稳定）
     "project_memory",  # L4 项目级记忆（依赖 user_input + conversation）
-    "slots",           # L4 任务拆解（本轮 LLM 产出）
     "user_ctx",        # L4 用户上下文
+    # ── 每轮可能变（必须押后：断点之后的内容一律无法命中缓存）──
+    "template",        # L4 提示词实验室模板（依赖 intent + user_input）
+    "slots",           # L4 任务拆解（本轮 LLM 产出）
+    "skill_prompt",    # L4 技能渐进式披露（依赖 user_input ⇒ **实测唯一断点**，均 1,016 tok）
+    "skill_block",     # L4 显式指定技能正文（依赖本轮 skill_name）
+    "report",          # L4 报告模板（本轮）
     "attachment",      # L4 用户上传资料（本轮附件）
     "retrieval",       # L4 检索到的互联数据（本轮检索）
-    "report",          # L4 报告模板（本轮）
 )
 
 #: 拼装顺序（**唯一真源**）：可缓存静态区 → 动态区。
@@ -252,7 +272,7 @@ PROMPT_BLOCK_ORDER = PROMPT_CACHEABLE_KEYS + PROMPT_DYNAMIC_KEYS
 PROMPT_LAYER_BOUNDARY = "── SYSTEM_PROMPT_DYNAMIC_BOUNDARY ──"
 
 
-def assemble_system_prompt(blocks: dict) -> str:
+def assemble_system_prompt(blocks: dict, audit: bool = True) -> str:
     """按 `PROMPT_BLOCK_ORDER` 拼装 system_prompt —— **顺序的唯一真源**。
 
     两条路径（非流式 `execute.py` / 流式 `stream.py`）都调用本函数，只负责收集各自的块
@@ -260,12 +280,30 @@ def assemble_system_prompt(blocks: dict) -> str:
 
     空块（`None` / `""`）跳过，不留多余空行。未登记在 `PROMPT_BLOCK_ORDER` 的 key 会被
     **忽略** —— 该情形（新增块忘了分层归类）由 tools/verify/verify_prompt_layering.py 抓。
+
+    ★ P0-2（2026-10-26）**分块 token 归因**：
+    本函数**本来就按块遍历** `PROMPT_BLOCK_ORDER`，块边界是已知量 ⇒ 在此记录每块 token
+    **零额外切分成本**（不需要重新分词、不需要二次分块）。归因落 `context_audit` 表，
+    `trace_id` 与 `llm_usage_stats.trace_id` 同源 ⇒ 可按 trace 聚合「这轮 token 花在哪」。
+
+    动机：`llm_usage_stats` 只记整包 prompt_tokens（生产 chat_probe 均值 12,511 / 峰值
+    64,552 token），**无分块归因** ⇒ 历史上两次真实损失（总闸静默空转、流式路径腰斩
+    82% prompt）都因"看不见"而延迟发现。本模块是后续所有上下文调优的**前提**。
+
+    `audit=False` 可关闭单次记录（配置 `context_audit.enabled=False` 亦全局关闭）。
+    归因**异常一律吞掉** —— 观测绝不阻断主流程。
     """
     out = []
     for key in PROMPT_BLOCK_ORDER:
         val = blocks.get(key) or ""
         if val:
             out.append(val)
+    if audit:
+        try:
+            from agent.context_audit import record_blocks
+            record_blocks(blocks, phase="system")
+        except Exception:
+            pass
     return "".join(out)
 
 
@@ -463,9 +501,23 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
     #    （execute 原为 `_build_role_block(agent_def)`、stream 原为 `(agent_def, cap=_AGENT_ROLE_CAP)`）。
     #    这样"零行为变动"不依赖"我知道默认值是 0"这个隐含前提 —— 等价性可被逐字节证明。
     _role_kw = {"cap": ctx.role_cap} if ctx.role_cap else {}
+    _role_text = pipe._build_role_block(ctx.agent_def, **_role_kw)
+    # ★ P0-7（2026-10-26）：role 块内「工具手册段」按需裁剪。
+    #   实测（生产快照 + 真实链路）：`智源对接agent` 的 system_prompt 是
+    #   **14,538 字符 / 8,995 tok，其中 14,531 字符（100%）是 58 个 MCP 工具的手册**，
+    #   非工具叙述仅 7 字符；其余 16 个 Agent 手册占比全为 0%。
+    #   而上轮已把 MCP 工具按需暴露到 8 个 ⇒ role 里 50 个工具的手册对模型不可用，纯噪音；
+    #   MCP server 离线时更是 100% 死重（生产当前 state）。
+    #   默认**关闭**（改模型可见内容，风险高于纯注入量优化，需生产验证后再开）。
+    #   兜底完备：开关关 / 无手册段 / 暴露集为空 / 切分不自洽 ⇒ 逐字节原样返回。
+    try:
+        blocks_role_text = pipe._apply_role_manual_filter(_role_text, ctx) \
+            if hasattr(pipe, "_apply_role_manual_filter") else _role_text
+    except Exception:
+        blocks_role_text = _role_text
     blocks = {
         # ── L2 身份层 ──
-        "role": "%s\n" % pipe._build_role_block(ctx.agent_def, **_role_kw),
+        "role": "%s\n" % blocks_role_text,
         "tools": "可用工具：%s。\n" % (", ".join(ctx.agent_def.tools) or "无（纯问答直出）"),
         "roster": pipe._team_roster_block(ctx.agent_def),
         # ── L1 全局静态 ──

@@ -566,6 +566,14 @@ def init_db():
         headers TEXT DEFAULT '{}',
         -- ★ B5-4：MCP 描述（此前只在前端表单里，保存即丢弃 ⇒ 再次编辑必为空）
         description TEXT DEFAULT '',
+        -- ★ P0-6（2026-10-26）：MCP 工具元数据（JSON: [{name, description, inputSchema}]）
+        --   此前 `tools` 列只存**名字数组**（发现流程主动丢弃了 description 与 schema），
+        --   注入时每个 MCP 工具的 description 退化成同一句模板、parameters 退化成宽松空壳
+        --   （实测 71 个工具 description 去重后仅 1 种）⇒
+        --     ① JIT 语义预筛零区分度（不得不把 MCP 工具列入 core_keep 禁裁剪）
+        --     ② 模型不知道工具能做什么、参数怎么传
+        --   本列把丢掉的东西存回来（存量 server 需"重新发现"补齐；空 ⇒ 完全退回旧行为）。
+        tool_meta TEXT DEFAULT '[]',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
@@ -1021,6 +1029,42 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ux_lus_time ON llm_usage_stats(created_at)")
+
+    # ── 上下文分块归因（P0-2 · 2026-10-26）──
+    # 背景：`llm_usage_stats` 只记**整包** prompt_tokens，无分块归因 ⇒ 无法回答
+    #   "这一轮 12.5k token 花在哪"（生产实测 chat_probe 均值 12,511 / 峰值 64,552）。
+    #   历史上两次真实损失（总闸静默空转、流式路径腰斩 82% prompt）都因"看不见"而延迟发现。
+    # 归因点在 `assemble_system_prompt`（块边界本就已知，零额外切分成本）。
+    # `trace_id` 与 `llm_usage_stats.trace_id` 同源（core.audit.begin_trace）⇒ 可直接 JOIN。
+    c.execute("""CREATE TABLE IF NOT EXISTS context_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trace_id TEXT DEFAULT '',             -- 链路号（与 llm_usage_stats.trace_id 同源）
+        conversation_id INTEGER DEFAULT 0,    -- 所属会话（0=会话外调用）
+        block_name TEXT DEFAULT '',           -- 块 key（role/retrieval/memory/…）
+        layer TEXT DEFAULT 'dynamic',         -- static（可缓存区）/ dynamic（动态区）
+        tokens INTEGER DEFAULT 0,             -- 该块 token 估算
+        chars INTEGER DEFAULT 0,              -- 该块字符数（token/字符比诊断用）
+        phase TEXT DEFAULT 'system',          -- 装配阶段
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ux_ctxaudit_trace ON context_audit(trace_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ux_ctxaudit_time ON context_audit(created_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS ux_ctxaudit_block ON context_audit(block_name)")
+    # 聚合表：一行 = 一个 (trace, phase)，存总量与**去重后**指标。
+    # `metrics` 存 JSON，键如 retrieval_effective / memory_unique / tool_count /
+    # jit_fallback_full —— 直接量化"名义条数 vs 有效条数"这类 P0 缺陷。
+    c.execute("""CREATE TABLE IF NOT EXISTS context_audit_summary (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trace_id TEXT DEFAULT '',
+        conversation_id INTEGER DEFAULT 0,
+        phase TEXT DEFAULT 'system',
+        total_tokens INTEGER DEFAULT 0,
+        total_chars INTEGER DEFAULT 0,
+        block_count INTEGER DEFAULT 0,
+        metrics TEXT DEFAULT '{}',             -- JSON：去重后指标
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ux_ctxsum_trace ON context_audit_summary(trace_id)")
 
     # ── 生成历史与反馈 ──
     c.execute("""CREATE TABLE IF NOT EXISTS generation_history (

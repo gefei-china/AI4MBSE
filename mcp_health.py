@@ -10,6 +10,29 @@ import json
 import threading
 import time
 
+#: 机会式 tool_meta 回填的冷却窗口（秒）。`check_all` 对「online 但 tool_meta 为空」的
+#: server 补跑一次 discover；失败后 1 小时内不再重试 ⇒ 不放大故障、又保证最终会补上。
+#: 成功回填后 `tool_meta` 非空 ⇒ 触发条件自然失效（数据自驱，无需额外状态）。
+_BACKFILL_COOLDOWN = 3600.0
+_BACKFILL_TRY: dict = {}      # {server_id: 上次尝试的 time.time()}
+
+
+def _save_tool_meta(tools: list) -> str:
+    """把 `list_tools()` 的 description/inputSchema 序列化（延迟导入，避免循环依赖）。"""
+    try:
+        from agent.mcp_tool_meta import save_tool_meta
+        return save_tool_meta(tools)
+    except Exception:
+        try:
+            return json.dumps([
+                {"name": str(t.get("name") or ""),
+                 "description": str(t.get("description") or "")[:600],
+                 "inputSchema": t.get("inputSchema") or {}}
+                for t in (tools or []) if isinstance(t, dict) and t.get("name")
+            ], ensure_ascii=False)
+        except Exception:
+            return ""
+
 
 def _norm_transport(t: str | None) -> str:
     """传输方式归一（★ B5-4：前端 `streamable_http` vs 后端 `http` 三方枚举不一致）。
@@ -101,6 +124,15 @@ def discover_server(srv: dict, repo=None):
                 json.dumps(handshake.get("serverInfo", {}), ensure_ascii=False),
                 json.dumps(resources, ensure_ascii=False),
                 json.dumps(prompts, ensure_ascii=False),
+                # ★ P0-6（2026-10-26）：**同时存下 description 与 inputSchema**。
+                #   此前只存 name（上面那行）⇒ 落库即丢 schema ⇒ 注入时每个 MCP 工具的
+                #   description 退化成同一句模板、parameters 退化成宽松空壳
+                #   （实测 71 个工具 description 去重后仅 1 种）⇒
+                #     ① JIT 语义预筛零区分度（不得不把 MCP 工具列入 core_keep 禁裁剪）
+                #     ② 模型不知道工具能做什么、参数怎么传
+                #   `mcp_client.list_tools()` 本就返回 [{name, description, inputSchema}]，
+                #   这次把丢掉的东西存回来。`tools` 字段保持原样（既有消费点不受影响）。
+                tool_meta=_save_tool_meta(tools),
             )
         return {
             "ok": True, "status": "online", "latency_ms": latency,
@@ -125,14 +157,48 @@ def check_all(repo):
     两个调用方提交时机不同（后台线程 / Depends(db_session)），漏一层就白跑 ——
     实测现象：巡检跑通、日志无异常，但库里 status/last_check 永远停在旧值。
     `db_session` 路径的 commit 是幂等空操作，不会重复提交。
+
+    ★ P0-6（2026-10-26）：额外做**机会式 tool_meta 回填**（见下方 inline 注释）。
+      返回值新增 `backfilled`（本轮成功回填的 server 数）与 `details[*].tool_meta_backfilled`。
     """
-    results = {"checked": 0, "online": 0, "offline": 0, "details": []}
+    results = {"checked": 0, "online": 0, "offline": 0, "backfilled": 0, "details": []}
     for srv in repo.rows("SELECT * FROM mcp_servers"):
         if _norm_transport(srv.get("transport")) not in ("sse", "http"):
             continue
         ok, detail = check_server(srv, repo=repo)
         results["checked"] += 1
         results["online" if ok else "offline"] += 1
+        # ★ P0-6（2026-10-26）：**机会式回填 tool_meta**。
+        #   背景：`check_server` 只做 initialize 握手，**不调 tools/list**
+        #   ⇒ 本列新增后，存量 server 的 tool_meta 恒为空 ⇒ 注入侧
+        #     永远走"无元数据"分支（全量 71 个 + 模板描述）⇒ 本次改动**表面生效实际空转**。
+        #   这正是本仓反复吃亏的形态（"看起来绿但没干活"，见 MEMORY.md）。
+        #   策略：**仅当** ①本次探测 online ②tool_meta 为空 ③传输可自动拉起 时，
+        #   补跑一次完整 discover。成功 ⇒ tool_meta 非空 ⇒ 后续不再触发（数据自驱、无状态）。
+        #   ⚠️ 失败时 tool_meta 仍为空 ⇒ 若不加冷却会**每轮巡检都打一次 server**
+        #     （默认 5 分钟一次，对一个持续 tools/list 报错的 server 是长期噪声）⇒
+        #     加 1 小时冷却窗口，既保证"最终会补上"，又不放大故障。
+        _sid = srv["id"]
+        if (ok and not (srv.get("tool_meta") or "").strip()
+                and (time.time() - _BACKFILL_TRY.get(_sid, 0.0) >= _BACKFILL_COOLDOWN)):
+            _BACKFILL_TRY[_sid] = time.time()
+            try:
+                _dr = discover_server(srv, repo=repo)
+                if _dr.get("ok"):
+                    results["backfilled"] += 1
+                    detail["tool_meta_backfilled"] = True
+                    print(f"[mcp-health] 已回填 {srv.get('name','')} 的工具元数据"
+                          f"（{len(_dr.get('tools') or [])} 个工具：description + inputSchema）",
+                          flush=True)
+                else:
+                    detail["tool_meta_backfilled"] = False
+                    detail["backfill_error"] = str(_dr.get("error") or _dr.get("note") or "")[:150]
+            except Exception as e:
+                # 回填失败**不阻断巡检**，但必须留痕（否则又是一次静默空转）
+                detail["tool_meta_backfilled"] = False
+                detail["backfill_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+                print(f"[mcp-health] 回填工具元数据失败 {srv.get('name','')}："
+                      f"{type(e).__name__}: {str(e)[:120]}", flush=True)
         detail["id"] = srv["id"]
         detail["name"] = srv.get("name", "")
         results["details"].append(detail)

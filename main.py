@@ -55,6 +55,7 @@ from routers import (
     flow_topology_router,  # 2026-10-20 P2-4 画布拓扑台账（结构体检 + 同构去重，只读不改拓扑）
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
     evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
+    diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断（让 token 构成可见）
 )
 
 @asynccontextmanager
@@ -280,6 +281,7 @@ for _router in (
     flow_topology_router,  # 2026-10-20 P2-4 画布拓扑台账（记住结构缺陷与同构冗余；只读不改拓扑）
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
     evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
+    diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断
 ):
     app.include_router(_router)
 

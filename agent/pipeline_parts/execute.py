@@ -85,6 +85,9 @@ class ExecuteMixin:
             _trace = {}
 
         self._mem_project_id_cache = None   # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
+        # ★ P0-4（2026-10-26）：RAG 侧记忆召回结果（单一真源用）。**每轮必须重置** ——
+        #   否则本轮未走检索时，会消费到**上一轮**的 memory_hits（跨轮串味）。
+        self._rag_memory_hits = []
         self._tool_whitelist = tools_whitelist or None
         self._load_db_agents(user)  # P0 平台化：DB 驱动 Agent 注册表（P1-8：按用户隔离）
         self._last_skill_hits = []
@@ -334,6 +337,9 @@ class ExecuteMixin:
                          "chunk_hits": [], "attachment_hits": [], "attachment_used": False,
                          "graph_count": 0, "vector_count": 0,
                          "memory_hits": [], "memory_count": 0}
+        # ★ P0-4（2026-10-26）：把 RAG 侧已召回的 memory_hits 挂到 pipeline 实例，
+        #   供 `_build_memory_hint` 消费（**单一真源**：记忆 recall 层不再二次查库）。
+        self._rag_memory_hits = retrieval.get("memory_hits") or []
         if should_retrieve:
             context_text = self._build_context(retrieval, retrieve_query)
         elif att_text:
@@ -407,6 +413,14 @@ class ExecuteMixin:
             att_text=att_text, context_text=context_text, report_prompt=report_prompt,
             skill_block=skill_block, role_cap=0, include_tool_rules=False,
         )))
+        # ── P0-2（2026-10-26）：上下文分块归因落库 ──
+        # 非流式路径是**一次性调用**（无 SSE finally 可挂），故在装配后立即 flush。
+        # 流式路径由 routers/conversations.py 的 event_stream finally 统一 flush（一次请求 = 一次装配）。
+        try:
+            from agent.context_audit import flush as _ctx_flush
+            _ctx_flush()
+        except Exception:
+            pass   # 观测不阻断主流程
         # P2 视觉通道：图片以多模态 content 块随 user 消息下发
         # （openai_compat 对 messages 原样透传，故 provider 层无需改动）
         _user_content = user_input
@@ -457,7 +471,13 @@ class ExecuteMixin:
         _cache_hit = None
         # P2：att_images 非空时强制不命中缓存 —— 语义缓存的键只有 user_input，它看不见图片，
         # 若命中会把「带图的提问」当成纯文本问题直接返回旧答案（图等于白传）。
-        if intent in ("chat", "knowledge_qa") and not att_blocks and not att_images and not tools_def:
+        # ★ 2026-10-26 修正：**去掉 `not tools_def`**（原闸门是死代码）。
+        #   实测 `chat` intent 恒注入 8 个工具（core_keep 的 graph_retrieve /
+        #   impact_analyze / validate + 无条件注入的 ask_user）⇒ `not tools_def`
+        #   **恒为 False** ⇒ 语义缓存从未命中过一次（stream 侧同一闸门同病）。
+        #   安全性由**写入侧**保证：只有「本轮没调任何工具、无附件、无澄清」的
+        #   纯问答答案才入库 ⇒ 命中天然是"无需工具"的结论。
+        if intent in ("chat", "knowledge_qa") and not att_blocks and not att_images:
             try:
                 from core import config as _cfg
                 if _cfg.as_bool("semantic_cache", "enabled", False):

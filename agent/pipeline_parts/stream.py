@@ -3471,6 +3471,9 @@ class StreamMixin:
             _trace = {}
 
         self._mem_project_id_cache = None   # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
+        # ★ P0-4（2026-10-26）：RAG 侧记忆召回结果（单一真源用）。**每轮必须重置** ——
+        #   否则本轮未走检索时，会消费到**上一轮**的 memory_hits（跨轮串味）。
+        self._rag_memory_hits = []
         try:
             # V2.4 会话内执行过程持久化：累计思考/工具调用 → 写入 card_data.exec（前端历史消息还原）
             exec_reasoning = []
@@ -3961,6 +3964,10 @@ class StreamMixin:
                              "chunk_hits": [], "attachment_hits": [], "attachment_used": False,
                              "graph_count": 0, "vector_count": 0,
                              "memory_hits": [], "memory_count": 0}
+            # ★ P0-4（2026-10-26）：把 RAG 侧已召回的 memory_hits 挂到 pipeline 实例，
+            #   供 `_build_memory_hint` 消费（**单一真源**：记忆 recall 层不再二次查库）。
+            #   必须在 `_build_context` 之前赋值 —— 两者消费同一份召回结果。
+            self._rag_memory_hits = retrieval.get("memory_hits") or []
             if should_retrieve:
                 context_text = self._build_context(retrieval, retrieve_query)
                 if req_scope and req_scope.get('ok'):
@@ -4219,6 +4226,61 @@ class StreamMixin:
                 _fu_budget = 3              # 续跑轮同样限 3 次补充（与首轮同口径）
                 _fu_used = 0
                 tools_def = _tools_def_full  # 恢复完整工具集（offload 注入/预算闸会改它）
+                # ★ P1-1（2026-10-26）：**语义缓存（流式路径）**。
+                #
+                # 问题（实测）：`semantic_cache` 只在 execute.py:477/795 使用，stream.py **0 处引用**；
+                #   而生产 SSE 入口（routers/conversations.py:391）走 execute_stream
+                #   ⇒ **主对话完全不享受语义缓存**（chat_probe 占真实 token 的 51%）。
+                #   而且原闸门 `not tools_def` **恒为 False**（chat 恒注入 core_keep + ask_user）
+                #   ⇒ 该特性在两条路径上**从未命中过一次**，是彻底的死代码。
+                #
+                # 位置纪律（踩过两次坑）：必须在 **ReAct 之前**、且**不能**依赖 `not tool_injected`——
+                #   实测 `tool_injected` 在 ReAct 探测轮无 tool_calls 时也会被置 True
+                #   （stream.py 探测轮分支 `tool_injected = True`）⇒ 放在生成段前的判定恒为假。
+                #   故：命中直接**短路整轮 ReAct**（tools_def=None + tool_injected=True），
+                #   让后续落库/done/审计/citations 全部沿用原路径（零分叉，不做早期 return）。
+                #
+                # 闸门：intent ∈ {chat, knowledge_qa} · 无附件 · 无澄清 · 非 dry_run/resume。
+                #   ⚠️ 不再要求 `not tools_def`：安全性由**写入侧**保证（只有「本轮没调任何工具、
+                #   无附件、无澄清」的纯问答答案才入库）⇒ 命中天然是"无需工具"的结论。
+                _cache_answer = None
+                try:
+                    from core import config as _cfg_sc
+                    _sc_on = _cfg_sc.as_bool("semantic_cache", "enabled", False)
+                except Exception:
+                    _sc_on = False
+                if (bool(_sc_on) and intent in ("chat", "knowledge_qa")
+                        and not att_blocks and not _clarify_req
+                        and not dry_run and not resume_run_id and not resume_of_user_msg_id):
+                    try:
+                        from semantic_cache import SemanticCache
+                        from database import get_db
+                        _cc = get_db()
+                        try:
+                            _cache_answer = SemanticCache.get(_cc, user_input)
+                        finally:
+                            _cc.close()
+                    except Exception:
+                        _cache_answer = None      # 缓存不可用 ⇒ 如实走真实生成
+                if _cache_answer:
+                    # 按类人节奏"假装流式"（前端体验与真实流一致，不是啪一下一大段）
+                    for _ck in iter_stream_chunks(_cache_answer):
+                        yield {"type": "token", "delta": _ck}
+                    llm_content = _cache_answer
+                    tool_injected = True       # 让下方生成段跳过（答案已就绪）
+                    tools_def = None           # 让 ReAct 立即 break（不再调工具）
+                    try:
+                        yield {"type": "reasoning", "delta": "（语义缓存命中）",
+                               "round": _rnd + 1, "phase": "llm"}
+                    except Exception:
+                        pass
+                    try:
+                        from agent.context_audit import record_blocks
+                        record_blocks({}, phase="semantic_cache",
+                                      extra={"cache_hit": 1,
+                                             "cache_answer_chars": len(_cache_answer)})
+                    except Exception:
+                        pass
                 if _auto_continues:
                     # 续跑轮清掉上轮 SysML 校验缓存：否则本轮 prose 答复会把**同一份代码**
                     #   再次拼进全量产出（_ensure_sysml_from_tools 的兜底追加是非幂等跨轮的）。
@@ -4757,15 +4819,26 @@ class StreamMixin:
                                 yield {"type": "token", "delta": delta["content"]}
                     llm_content = "".join(full)
                 st = getattr(llm_client, "stats", {})
-                llm_info = {
-                    "provider": st.get("last_provider", "未配置"),
-                    "model": "-",
-                    "used_mock": bool(st.get("last_used_mock", True)),
-                    "latency_ms": st.get("last_latency_ms", 0),
-                    # V2.6：token 统计透传（前端执行收口条展示）
-                    "tokens": {"prompt": st.get("last_prompt_tokens", 0),
-                               "completion": st.get("last_completion_tokens", 0)},
-                }
+                if _cache_answer:
+                    # 缓存命中：**不谎报**成真实 provider 调用（含 0 延迟、0 token）
+                    llm_info = {
+                        "provider": "semantic-cache",
+                        "model": "-",
+                        "used_mock": False,
+                        "latency_ms": 0,
+                        "tokens": {"prompt": 0, "completion": 0},
+                        "cache_hit": True,
+                    }
+                else:
+                    llm_info = {
+                        "provider": st.get("last_provider", "未配置"),
+                        "model": "-",
+                        "used_mock": bool(st.get("last_used_mock", True)),
+                        "latency_ms": st.get("last_latency_ms", 0),
+                        # V2.6：token 统计透传（前端执行收口条展示）
+                        "tokens": {"prompt": st.get("last_prompt_tokens", 0),
+                                   "completion": st.get("last_completion_tokens", 0)},
+                    }
                 # 2026-09-20：正文无代码时用工具层缓存补回，并**增量补吐**（补回内容是事后拼接的，
                 # 不补吐则前端只看到结论、代码要等 done 重渲染才出现）。
                 _pre_sysml_len = len(llm_content)
@@ -4773,6 +4846,32 @@ class StreamMixin:
                 if len(llm_content) > _pre_sysml_len:
                     for _chunk in iter_stream_chunks(llm_content[_pre_sysml_len:]):
                         yield {"type": "token", "delta": _chunk}
+                # ★ P1-1（2026-10-26）：**纯问答写入语义缓存**（与 execute.py:790 同口径）。
+                #   此前 stream **从不写缓存** ⇒ 即便开了开关，主对话也永远建不起缓存。
+                #   闸门与读取侧一致，另加两条：
+                #     · `not exec_tools` —— 本轮真调过工具 ⇒ 答案含**实时数据**，
+                #       不能当"可复用结论"缓存（否则下次返回过期事实，比慢更糟）。
+                #     · `not _cache_answer` —— 本身来自缓存的不回写（否则 hit_count /
+                #       时间戳被反复刷新，LRU 淘汰失真）。
+                #   ⚠️ 位置在 `_ensure_sysml_from_tools` **之后**：缓存必须与用户最终看到的
+                #     正文逐字节一致，否则命中时少一段代码。
+                if (not _cache_answer and llm_content
+                        and intent in ("chat", "knowledge_qa")
+                        and not att_blocks and not _clarify_req
+                        and not exec_tools
+                        and not dry_run):
+                    try:
+                        from core import config as _cfg_scw
+                        if _cfg_scw.as_bool("semantic_cache", "enabled", False):
+                            from semantic_cache import SemanticCache
+                            from database import get_db
+                            _ccw = get_db()
+                            try:
+                                SemanticCache.put(_ccw, user_input, llm_content)
+                            finally:
+                                _ccw.close()
+                    except Exception:
+                        pass      # 缓存写入失败绝不能影响已生成的回答
                 # ★ 2026-10-17（米爸「harness 持续工作」）：完成度评估 + 续跑决策。
                 #   触发门三重（全满足才评估）：① 配置开且非 dry_run；② 本轮**实际调用过工具**
                 #   （exec_tools 非空——纯问答轮没有「剩余步骤」可言，且省评估器成本）；

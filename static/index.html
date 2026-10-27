@@ -1319,6 +1319,24 @@
         </div>
         <!-- AI 会话上下文管理（T6 token 预算 + 历史压缩 + 语义拉回；静态配置即时生效） -->
         <div class="subpage" id="st-ctx" data-tabpanel="stg">
+          <!-- ★ 2026-10-27 上下文构成观测：**放在配置区之上** —— 先看现状、再改配置。
+               数据源 context_audit（只读聚合），与下方配置表单互不影响。 -->
+          <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span style="font-size:11px;color:var(--mut);">上下文构成观测：分块 token 归因 /
+              优化项实际触发 / 按日趋势（只读，数据来自每轮真实装配）</span>
+            <span style="flex:1"></span>
+            <select id="ctx-audit-days" onchange="ctxAuditDays(this)"
+                    title="统计窗口"
+                    style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+              <option value="1">近 1 天</option>
+              <option value="7" selected>近 7 天</option>
+              <option value="14">近 14 天</option>
+              <option value="30">近 30 天</option>
+            </select>
+            <button class="btn" onclick="loadCtxAudit()" title="重新拉取">🔄 刷新</button>
+          </div>
+          <div id="ctx-audit-body" style="margin-bottom:16px;"><div class="loading">加载归因数据…</div></div>
+
           <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <span style="font-size:11px;color:var(--mut);">AI 会话上下文管理：历史压缩 / Token 预算 / 语义拉回（每项附解读与调整影响；保存后<b style="color:var(--txt);">即时生效</b>，落盘系统级配置文件）</span>
             <span style="flex:1"></span>
@@ -1775,6 +1793,7 @@
     <script src="/static/js/mods/33-search.js" defer></script>
     <script src="/static/js/mods/34-graphtabs.js" defer></script>
     <script src="/static/js/mods/35-ctxconfig.js" defer></script>
+    <script src="/static/js/mods/35-ctxaudit.js" defer></script>
     <script src="/static/js/mods/36-thinking.js" defer></script>
     <script src="/static/js/mods/36-capability.js" defer></script>
 <div id="gnav-tip" data-page-node-id="0BjF8bZHUY5ifs1giLFsmS"></div>

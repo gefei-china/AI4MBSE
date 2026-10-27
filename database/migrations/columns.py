@@ -183,6 +183,11 @@ def _migrate_columns(conn):
     #   ⚠️ 这是「**写 A 表、读 B 表**」的另一个形态：不是读不到，是**根本没存**。
     #   与 tools/args/env/headers 同形态（TEXT 存标量），出参直出（描述非敏感）。
     _add("mcp_servers", "description", "TEXT DEFAULT ''")
+    # ── P0-6（2026-10-26）：MCP 工具元数据（description + inputSchema）──
+    #   `tools` 列只存名字数组（发现流程主动丢弃了 schema）⇒ 注入时 71 个工具的
+    #   description 全是同一句模板、parameters 全是宽松空壳 ⇒ JIT 零区分度 + 模型无从下手。
+    #   本列把丢掉的东西存回来；存量 server 需"重新发现"补齐，空值 ⇒ 完全退回旧行为。
+    _add("mcp_servers", "tool_meta", "TEXT DEFAULT '[]'")
     # ── P0 语义升级：长期记忆真向量版本标记（同 document_chunks.embed_version 语义）──
     _add("agent_memory", "embed_version", "TEXT DEFAULT ''")             # 真 embedding 版本（''=bigram/未向量化）
     # ── P2 记忆认知化：遗忘引擎（激活度）+ 合并引擎（反思）──

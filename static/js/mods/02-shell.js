@@ -154,7 +154,17 @@ const KB_TAB_TITLES = {'kb-a':'数据看板','kb-e':'文档库','kb-b':'治理�
 // 2026-09-17 R7：补 'st-prompt'（提示词模板，真实 subpage，`09-impact.js:1134` / `36-capability.js:72` 会 go 过来），
 // 缺它会让面包屑退化成「能力中心」、且 loadPage 走不到子 Tab 直达分支
 const ST_TAB_TITLES = {'st-agent':'Agent','st-skill':'技能','st-mcp':'工具与 MCP','st-market':'插件市场','st-model':'模型配置','st-prompt':'提示词模板','st-changelog':'变更记录'};
-const STG_TAB_TITLES = {'st-projmem':'项目记忆','st-hooks':'工具钩子','st-fextract':'文件抽取'};
+// ⚠️ 2026-10-27：本表**原只登记 3 项**（项目记忆/工具钩子/文件抽取），而 HTML 里
+//   `data-tabgrp="stg"` 实际有 7 个 tab。`go(p,tabId)` 的分支条件正是
+//   `if(p==='settings' && STG_TAB_TITLES[tabId])` ⇒ 深链到未登记的 tab
+//   （如 st-ctx / st-think / st-intent-samples / st-mem）会被**静默忽略**，
+//   停在默认的「项目记忆」上，既不报错也不提示 —— 典型的"看着没反应"。
+//   补齐后深链可用，面包屑也能取到正确的子页名。
+const STG_TAB_TITLES = {
+  'st-projmem': '项目记忆', 'st-hooks': '工具钩子', 'st-fextract': '文件抽取',
+  'st-ctx': 'AI 上下文', 'st-think': '任务级思考',
+  'st-intent-samples': '意图样本', 'st-mem': 'AI 记忆',
+};
 // 2026-09-17 D2：面包屑取名唯一入口。知识中心域（kb-a 数据看板 / kb-d 图谱工作区 / kb-e 资料库）只显示一级名「知识中心」，
 // 不再下钻到子域 —— 明确「主导航=域，面包屑=域」的口径（其余页面仍取子 Tab 名）。
 // 2026-09-18：kb-a 由**隐藏入口**升为知识中心默认落点，故一并纳入「只显示一级名」的范畴。

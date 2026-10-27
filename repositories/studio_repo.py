@@ -222,7 +222,16 @@ class StudioRepo(BaseRepo):
     # ── MCP-D1：动态发现与健康巡检落库 ──
     def update_mcp_discovery(self, sid: int, status: str, latency_ms: int,
                              tools: str, capabilities: str, protocol_version: str,
-                             server_info: str, resources: str, prompts: str) -> None:
+                             server_info: str, resources: str, prompts: str,
+                             tool_meta: str = "") -> None:
+        """落库动态发现结果。
+
+        ★ P0-6（2026-10-26）：新增 `tool_meta` 参数（默认 "" ⇒ 旧调用方不受影响）。
+          它存 `[{name, description, inputSchema}]` —— 此前只存 name，
+          导致注入时每个 MCP 工具的 description 退化成同一句模板、parameters 退化成
+          宽松空壳（实测 71 个工具 description 去重后仅 1 种）⇒ JIT 零区分度 + 模型无从下手。
+          `tool_meta=""` 时**不覆盖**已有值（避免旧调用方把已发现的 schema 抹掉）。
+        """
         self.execute(
             """UPDATE mcp_servers SET status=?, latency_ms=?, tools=?, capabilities=?,
                protocol_version=?, server_info=?, resources=?, prompts=?,
@@ -231,6 +240,8 @@ class StudioRepo(BaseRepo):
             (status, latency_ms, tools, capabilities, protocol_version,
              server_info, resources, prompts, sid),
         )
+        if tool_meta:
+            self.execute("UPDATE mcp_servers SET tool_meta=? WHERE id=?", (tool_meta, sid))
 
     def update_mcp_error(self, sid: int, error: str) -> None:
         self.execute(
