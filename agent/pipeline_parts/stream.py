@@ -3406,6 +3406,47 @@ class StreamMixin:
             print(f"[_persist_partial_stream] 固化失败（reason={reason}）：{_persist_err!r}",
                   flush=True)
 
+    def _clarify_finish_events(self, conversation_id, user_input, intent, branch, attachments,
+                               forced_intent, skill_name, team, clarify_req,
+                               source="ask_user", title="❓ AI 执行中需要你确认后才能继续"):
+        """澄清收口（生成器）：落挂起 + 归档已取回文档 + 发 clarify_ask 卡 + 发 done。
+
+        ★ 2026-10-27：抽出来的唯一理由是**第二处调用点**——评估器判定
+        `needs_user` 时也要走同一条收口（否则"需要你拍板"只能留在正文里，
+        用户得自己另起一轮，正是米爸反馈的现象）。
+        抽方法而不是复制粘贴：这段含"先归档再等回答"这条**踩过坑的**纪律
+        （澄清会 `return`，走不到 persist 的 `_archive_artifacts` ⇒ 已取回文件丢失），
+        复制一份必然在下一次修改时漂移。
+
+        调用方约定：`yield from` 之后必须 `return`（本方法已发 done，主流程收尾）。
+        """
+        _iqs = [dict(clarify_req)]
+        _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
+                                     forced_intent, skill_name, team, _iqs)
+        # 澄清不是失败：已经拿到的文件必须先落库，再等用户回答。
+        try:
+            if getattr(self, "_tool_sysml_docs", None):
+                with db_conn() as _c_ar:
+                    _archive_artifacts(_c_ar, conversation_id, _mid or 0,
+                                       "{}", "", intent,
+                                       tool_docs=self._tool_sysml_docs)
+                    try:
+                        from agent import async_jobs as _aj3
+                        _aj3.link_archived(_c_ar, conversation_id, self._tool_sysml_docs)
+                    except Exception:
+                        pass
+                self._tool_sysml_docs = []
+        except Exception:
+            pass
+        yield {"type": "clarify_ask", "questions": _iqs, "intent": intent,
+               "title": title,
+               "message": str(user_input)[:200], "source": source}
+        yield {"type": "done", "data": {
+            "ok": True, "clarify_asked": True, "intent": intent,
+            "content": "AI 执行中需要你确认（详见澄清卡片，回答后将继续）",
+            "msg_type": "clarify", "usage": {}, "questions": _iqs,
+            "message_id": _mid or 0, "clarify_source": source}}
+
     def execute_stream(self, user_input, conversation_id, branch="dev", provider_id=None,
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
                        team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0,
@@ -4304,6 +4345,10 @@ class StreamMixin:
             _tools_def_full = tools_def   # 每轮续跑恢复完整工具集（offload 注入/预算闸会改它）
             tool_injected = False
             llm_content = ""
+            # ★ 2026-10-27：**连续重复调用**计数（跨 ReAct 轮累计、真执行即归零）。
+            #   用于"重复调用收敛闸"，见 round 末尾 `_dup_streak >= 2` 处注释。
+            #   初值必须在**外层循环之外**：跨轮累计才有意义（每轮归零就永远打不到 2）。
+            _dup_streak = 0
             # P0-2：多轮 ReAct——探测→执行工具→观察回填→再探测，直到无 tool_calls 或达上限（防死循环）
             # ★ 2026-10-09：3 → 6 且可配置，**与 execute.py 同源同值**。
             #   实测依据见 execute.py 同位置注释：3 轮预算在
@@ -4603,10 +4648,12 @@ class StreamMixin:
                             _dup = _lg.probe_dup(tname, targs)
                             if _dup:
                                 _lg.dup_short_circuits += 1
+                                _dup_streak += 1      # ★ 2026-10-27：连续重复计数（见 round 末收敛闸）
                                 result = {"ok": True,
                                           "result": _lg.last_result_for(tname, targs),
                                           "_dup": _dup}
                             else:
+                                _dup_streak = 0       # ★ 真执行 ⇒ 有新进展，连续计数归零
                                 result = _lg.call(self._exec_tool_call, tname, targs)
                                 # ★ 2026-10-17：ask_user 人在回路澄清 —— 记录信号并中断 ReAct 循环
                                 #   （不再喂 tool_result、不再继续探测：等用户回答后续跑）
@@ -4660,8 +4707,16 @@ class StreamMixin:
                                 _ajob = _aj.detect_job(_r_full)
                                 if _ajob:
                                     from database import db_conn as _adb
-                                    with _adb() as _ac:
-                                        _aj.record(_ac, conversation_id,
+                                    # ★ 2026-10-27：变量名**必须**不能叫 `_ac` ——
+                                    #   本函数里 `_ac` 是 `agent.auto_continue` 的模块别名
+                                    #   （4295 行 `from agent import auto_continue as _ac`），
+                                    #   而 `with ... as _ac` 会把它在**整个函数作用域**里覆盖成
+                                    #   数据库连接 ⇒ 之后 8 处 `_ac.decide/AUTO_EVAL_STAGE/
+                                    #   continuation_prompt/...` 全部 AttributeError。
+                                    #   潜伏条件：同一轮里既检测到异步任务、又走到自主续跑评估
+                                    #   （智源导出任务 + 长任务，正是本项目的常见组合）。
+                                    with _adb() as _ac_conn:
+                                        _aj.record(_ac_conn, conversation_id,
                                                    _mcp_of(tname) or "", tname, _ajob)
                             except Exception:
                                 pass
@@ -4803,6 +4858,36 @@ class StreamMixin:
                             #    变成"不收敛"，也可能让本该继续的场景误收敛。
                             # ★ 只有**失败轮**才扣失败预算（成功推进不限制，米爸 2026-10-09）
                             _lg.charge_failed_round(_round_had_ok)
+                            # ★★ 2026-10-27（用户「为啥不能自己持续运行完成任务」的第二根因）：
+                            #   **连续重复调用的收敛闸**。
+                            #
+                            #   实测（conv 9629 16:50 那轮）：5 次真调用后，模型又**连续 5 次**
+                            #   发出**完全相同**的 `query_data_tree`；`probe_dup` 每次短路回喂
+                            #   同一结果（`ok=True`），于是：
+                            #     · `charge_failed_round(_round_had_ok=True)` ⇒ **不计失败轮**
+                            #       ⇒ `max_failed_rounds` 这道闸完全不响；
+                            #     · 轮次预算 100 也远未到；
+                            #     · 每轮 prompt 约 28k ⇒ **5 轮烧掉约 14 万 token**（近半个预算）
+                            #   ⇒ 最终以「工具预算耗尽（307,505 / 300,000）」收场，
+                            #     而它其实只做了 5 件不同的事。
+                            #
+                            #   判据：**同一调用被连续短路 2 次**（= 第 3 次仍是它）就注入硬提示，
+                            #   连续 3 次直接收敛（交给下方兜底流式生成，基于已有信息作答）。
+                            #   为什么用"连续"而不是"累计"：多步任务里合法地回头重查同一个工具
+                            #   是常见的；只有**中间没有任何新进展**的连续重复才是空转。
+                            if _dup_streak >= 2:
+                                _d_delta = (
+                                    f"（{agent_def.name}）已连续 {_dup_streak} 次发出**完全相同**的"
+                                    f"工具调用，结果不会变化，不再重复执行；"
+                                    f"改为基于已有信息组织回答（如需换参数请换工具或改参数）。")
+                                exec_reasoning.append(_d_delta)
+                                yield {"type": "reasoning", "delta": _d_delta,
+                                       "round": _rnd + 1, "phase": "plan"}
+                                yield {"type": "stage", "name": "重复调用收敛",
+                                       "status": "done",
+                                       "detail": f"连续 {_dup_streak} 次相同调用已被短路，"
+                                                 f"停止空转（避免烧穿 token 预算）"}
+                                break
                             if weak_count == len(_exec_calls) and weak_count > 0:
                                 _w_delta = f"（{agent_def.name}）本轮工具结果均与任务弱相关，不再继续调用工具，直接基于已有信息组织回答。"
                                 exec_reasoning.append(_w_delta)
@@ -4812,37 +4897,10 @@ class StreamMixin:
                 #   位置选在「最终生成之前」：此时 ReAct 循环已中断，继续生成只会空转。
                 #   与 1.4/1.5 共用 _persist_clarify + clarify_ask 协议（前端同一套卡片/续跑机制）。
                 if _clarify_req:
-                    _iqs = [dict(_clarify_req)]
-                    _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
-                                                 forced_intent, skill_name, team, _iqs)
-                    # ★ 2026-10-27（本轮实测）：澄清收尾会 `return`，**走不到**下面的
-                    #   `_archive_artifacts` ⇒ 本轮已取回的交付物（含异步续跑拼出的全文）
-                    #   会丢在 `_tool_sysml_docs` 里没入库 —— 探针实测：续跑明明读到了
-                    #   80543 字节，但模型随后 ask_user，产物库仍是 0 条。
-                    #   澄清不是失败：已经拿到的文件必须先落库，再等用户回答。
-                    try:
-                        if getattr(self, "_tool_sysml_docs", None):
-                            with db_conn() as _c_ar:
-                                _archive_artifacts(_c_ar, conversation_id, _mid or 0,
-                                                   "{}", "", intent,
-                                                   tool_docs=self._tool_sysml_docs)
-                                try:
-                                    from agent import async_jobs as _aj3
-                                    _aj3.link_archived(_c_ar, conversation_id,
-                                                       self._tool_sysml_docs)
-                                except Exception:
-                                    pass
-                            self._tool_sysml_docs = []
-                    except Exception:
-                        pass
-                    yield {"type": "clarify_ask", "questions": _iqs, "intent": intent,
-                           "title": "❓ AI 执行中需要你确认后才能继续",
-                           "message": str(user_input)[:200], "source": "ask_user"}
-                    yield {"type": "done", "data": {
-                        "ok": True, "clarify_asked": True, "intent": intent,
-                        "content": "AI 执行中需要你确认（详见澄清卡片，回答后将继续）",
-                        "msg_type": "clarify", "usage": {}, "questions": _iqs,
-                        "message_id": _mid or 0, "clarify_source": "ask_user"}}
+                    # ★ 2026-10-27：收口逻辑抽到 `_clarify_finish_events`（两处共用，见该方法注释）
+                    yield from self._clarify_finish_events(
+                        conversation_id, user_input, intent, branch, attachments,
+                        forced_intent, skill_name, team, _clarify_req)
                     return
                 # P1-② 补救点（2026-10-07）：循环已 break、**最终生成之前**再消费一次 follow-up。
                 # ★ 为什么循环头不够（实测踩到）：循环头只覆盖「工具执行中 / 探测轮等待中」
@@ -5105,7 +5163,31 @@ class StreamMixin:
                     _cont_input = bool(self._is_continuation_input(user_input))
                 except Exception:
                     _cont_input = False
-                if (_ac_cfg["enabled"] and not dry_run and (exec_tools or _cont_input)
+                # ★★ 2026-10-27（用户两问）：「为啥不自己跑完」+「要澄清为啥不弹卡片」
+                #
+                #   实测现场（conv 9629，用户「继续写入工程」）：该轮 `tool_call_logs`
+                #   **零条 tool**（模型只写了一大段说明就收尾），而
+                #   `_is_continuation_input("继续写入工程")` = **False**（它要求整句是裸续作短语）
+                #   ⇒ 旧闸门 `(exec_tools or _cont_input)` **两个都不满足** ⇒ 评估器没跑
+                #   ⇒ 模型那句"下一轮我先用名称检索「测试D」"没人执行，用户只能自己再发一句。
+                #
+                #   ⇒ 补两个**更宽**的触发信号（都只用于"要不要评估"，不改主路径行为）：
+                #     · `_cont_cue`：用户这轮在说"接着干"（继续/接着/往下/按上面…开头即可）；
+                #     · `_awaiting`：**答复以征求许可/等拍板结束** —— 这是最该评估的一类：
+                #       任务明明没做完，只是模型停下来问了一句。旧闸门把它整类排除了。
+                #   为什么要包含"没调工具"的轮次：本仓旧注释的前提是"纯问答轮没有剩余步骤"，
+                #   但实测最常见的失败恰恰是「模型把剩余步骤写进了正文、却没执行」。
+                try:
+                    _cont_cue = bool(_ac.has_continue_cue(user_input))
+                except Exception:
+                    _cont_cue = False
+                _awaiting = False
+                try:
+                    _awaiting = bool(llm_content) and bool(_ac.looks_awaiting_permission(llm_content))
+                except Exception:
+                    _awaiting = False
+                if (_ac_cfg["enabled"] and not dry_run
+                        and (exec_tools or _cont_input or _cont_cue or _awaiting)
                         and _auto_continues < _ac_cfg["max"]):
                     # 本轮产出并进全量（落库/done/前端历史用全量；评估器只看本轮+工具史）
                     if llm_content:
@@ -5115,6 +5197,34 @@ class StreamMixin:
                         user_input=user_input, exec_tools=exec_tools, answer=llm_content,
                         provider_id=effective_provider, agent_name=agent_def.name,
                         model_params=_agent_mp, guard=_lg)
+                    # ★ 2026-10-27：评估器判「必须用户拍板」⇒ **直接变成澄清卡片**。
+                    #   这就是「需要澄清为啥不弹卡片、非要终止后让我另起一轮」的机制答案：
+                    #   以前只有"模型主动调用 ask_user 工具"才弹卡，而模型习惯把问题写在正文里
+                    #   （提示词写了"不要用纯文本请确认"，实测遵循率不稳）。
+                    #   现在由**评估器**兜住：它读到"先删掉再重来，还是留着？"这类问题，
+                    #   给出 needs_user + question + options ⇒ 这里复用 ask_user 的收口
+                    #   （落 pending_clarify + 发 clarify_ask 卡），用户在卡片上点一下就续跑。
+                    try:
+                        _cq = _ac.clarify_from_verdict(_verdict)
+                    except Exception:
+                        _cq = None
+                    if _cq:
+                        try:
+                            yield {"type": "stage", "name": _ac.AUTO_EVAL_STAGE,
+                                   "status": "done",
+                                   "detail": "需要用户拍板后才能继续 —— 已转为澄清卡片"}
+                        except Exception:
+                            pass
+                        # ⚠️ 不能用 `break` 交给下方 `if _clarify_req:`：那块在
+                        #   **最终生成之前**（4822 行），而本处是生成之后 ⇒ break 会跳过它、
+                        #   直接进 persist，卡片永远发不出去（本轮实测踩到的位置陷阱）。
+                        #   故这里直接复用同一收口方法（生成器），发完 done 即 return。
+                        yield from self._clarify_finish_events(
+                            conversation_id, user_input, intent, branch, attachments,
+                            forced_intent, skill_name, team, _cq,
+                            source="auto_continue",
+                            title="❓ AI 需要你在两个方案间拍板（评估器判定）")
+                        return
                     _deadline_left = (_ac_deadline - time.time()) if _ac_deadline else None
                     _cont, _why = _ac.decide(
                         _verdict, used=_auto_continues, max_used=_ac_cfg["max"],
