@@ -572,7 +572,7 @@ class ExecuteMixin:
             #   与 stream.py 同构：计数必须在 while 外，否则每轮从 0 数 ⇒ 永不触顶。
             _harness_blocks = 0
             # ★ 无进展检测（真机实测驱动）：记录上轮 remaining 与连续无变化次数。
-            #   只靠次数上限 8 会原地打转 ≈2.3 分钟且结果相同 —— 必须提前放行。
+            #   只靠次数上限 8 会连续拦截 8 次且待办毫无变化，耗时 ≈2.3 分钟而结果相同 —— 必须提前放行。
             _harness_prev_rem = []
             _harness_stall = 0
             while True:

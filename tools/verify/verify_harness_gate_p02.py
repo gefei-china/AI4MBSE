@@ -366,7 +366,7 @@ def group_e():
           and c_notice(hg.build_force_release_notice))
 
     # E5 ★ 变异自证：去掉无进展检测（只靠次数上限）⇒ A9 判据翻红
-    #    这正是真机暴露的问题：只靠 8 次上限会原地打转 ≈2.3 分钟。
+    #    这正是真机暴露的问题：只靠 8 次上限会连续拦截 8 次且待办毫无变化，耗时 ≈2.3 分钟。
     gate_pending2 = {"done": False, "fallback": False,
                      "remaining": ["x"], "reason": "未完成"}
 
