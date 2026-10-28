@@ -3663,6 +3663,15 @@ class StreamMixin:
         try:
             # V2.4 会话内执行过程持久化：累计思考/工具调用 → 写入 card_data.exec（前端历史消息还原）
             exec_reasoning = []
+            # ★ 2026-10-28（用户反馈「不用给出统一的思考过程的输出」）：
+            #   **系统进度提示与模型 CoT 分两条通道**。
+            #   此前 7 处系统提示（收到补充指令/判断需要调工具/工具结果弱相关/
+            #   重复调用收敛/写操作已记入/harness 持续工作）都 append 进 exec_reasoning
+            #   ⇒ 落库后前端统一渲染成一个大块「💭 思考过程」（06-cards.js:20），
+            #   用户看到的就是"一堆统一思考过程"，而不是归到对应执行环节。
+            #   现在：真 CoT 进 exec_reasoning（心智链），系统提示进 exec_notices（带 kind），
+            #   前端按 kind 收编到对应环节。
+            exec_notices = []
             exec_tools = []
             card_data = "{}"  # dry_run=True（编排子任务流式）不落库，done 事件仍引用 → 兜底空卡
             # 2026-09-29（用户五轮反馈4）：流式部分内容固化 —— llm_content 提前初始化（异常路径引用），
@@ -3719,9 +3728,13 @@ class StreamMixin:
                 #   （workflows/nodes.py:88、planner.py:278、stream.py:267/536 分派子 Agent）
                 #   仍靠它直连指定 Agent；此处只改"用户入口"这条路径的优先级。
                 if forced_intent and forced_intent != team_intent:
-                    yield {"type": "reasoning", "delta": (
-                        f"（执行主体）已按你选择的主 Agent「{team_intent}」执行；"
-                        f"忽略外部传入的定向值 {forced_intent}")}
+                    # ★ 2026-10-28：补 kind=progress —— 这是**系统告知**不是模型思考。
+                    #   不带 kind 时前端走 procAddThinking（"AI 思考"框），
+                    #   用户根本看不到"为什么是这个执行主体"（用户反馈③的成因之一）。
+                    _subj_note = (f"（执行主体）已按你选择的主 Agent「{team_intent}」执行；"
+                                  f"忽略外部传入的定向值 {forced_intent}")
+                    exec_notices.append({"kind": "progress", "text": _subj_note})
+                    yield {"type": "reasoning", "delta": _subj_note, "kind": "progress"}
                     forced_intent = None
                 else:
                     forced_intent = team_intent
@@ -3735,9 +3748,17 @@ class StreamMixin:
                 if _bound:
                     team_intent = _bound
                     forced_intent = forced_intent or _bound
-                    yield {"type": "reasoning", "delta": (
-                        f"（执行主体）本次未指定主 Agent，已按本会话绑定的「{_bound}」继续执行；"
-                        "如需更换，请在输入框上方重新选择主 Agent")}
+                    # ★ 2026-10-28（用户反馈③「我只是输入一段V2代码让AI校验，
+                    #   他自动读取了智源的工程数据」）：用户看到的"自动用智源"，
+                    #   真因是**本会话绑定的主 Agent 覆盖了意图**，而这条说明
+                    #   原来以纯 reasoning 形式发出去 ⇒ 落进"AI 思考"框，用户看不到。
+                    #   现在：① 走 progress 通道（界面可见）；② 进 exec_notices 落库；
+                    #   ③ 结构化写进意图识别 stage 的 exec_subject 字段（下一段代码）。
+                    _subj_note = (f"（执行主体）本次未指定主 Agent，已按本会话绑定的"
+                                  f"「{_bound}」继续执行；如需更换，请在输入框上方重新选择主 Agent")
+                    exec_notices.append({"kind": "progress", "text": _subj_note})
+                    self._exec_subject_note = _subj_note
+                    yield {"type": "reasoning", "delta": _subj_note, "kind": "progress"}
             # ── 阶段 1：意图识别（V2.7：无论是否指定智能体，一律执行识别——
             # 指定智能体只作"执行 Agent 定向"，不再跳过识别；目标/槽位/澄清/多意图都依赖识别结果）──
             yield {"type": "stage", "name": "意图识别", "status": "run"}
@@ -3949,10 +3970,21 @@ class StreamMixin:
             # 挂到实例上：落库（阶段 4 的 card_data.exec）与后续卡片组装都要用，
             #   而那段代码离这里 1500 行 —— 用实例属性比依赖局部变量跨段存活更可靠。
             self._last_intent_brief = _brief
+            # ★ 2026-10-28（用户反馈③）：把「执行主体从哪来」**结构化**下发。
+            #   背景：会话若绑定过主 Agent，它会覆盖意图路由（R1 决策），
+            #   但此前只在 reasoning 里说一句（还掉进"AI 思考"框看不见）⇒
+            #   用户看到"我只是让校验代码，怎么用上智源了"。
+            #   现在前端可在「意图识别」这一行直接显示：本轮主体 + 来源（路由/会话绑定/手动选择）。
+            _exec_subject = {
+                "name": agent_def.name,
+                "source": ("manual" if team else ("bound" if getattr(self, "_exec_subject_note", "") else "route")),
+                "note": getattr(self, "_exec_subject_note", "") or "",
+            }
             yield {"type": "stage", "name": "意图识别", "status": "done", "intent": intent,
                    "agent": agent_def.name, "hil_level": hil_level,
                    "route": _intent_meta["route"], "confidence": _intent_meta["confidence"],
-                   "brief": _brief}
+                   "brief": _brief,
+                   "exec_subject": _exec_subject}
             # P0-1 置信度三级决策：中置信（弱语义/继承/LLM<0.85）→ 澄清提示（不阻塞执行，供前端改选重发）
             # V2.7：指定智能体时同样给出提示（识别结果与执行 Agent 不一致时如实说明）
             if _intent_meta["needs_clarification"]:
@@ -4685,8 +4717,8 @@ class StreamMixin:
                         messages.append({"role": "user",
                                          "content": _FOLLOWUP_PREFIX + _fu})
                         _fu_delta = f"（{agent_def.name}）收到生成期间的补充指令，重新规划：{_fu[:60]}"
-                        exec_reasoning.append(_fu_delta)
-                        yield {"type": "reasoning", "delta": _fu_delta,
+                        exec_notices.append(({"kind": "progress", "text": _fu_delta}))
+                        yield {"type": "reasoning", "delta": _fu_delta, "kind": "progress",
                                "round": _rnd + 2, "phase": "followup"}
                         # ★ 重置轮次：新指令值得完整的工具轮次预算（否则它只能拿到剩 1~2 轮）
                         _rnd = -1
@@ -4738,8 +4770,8 @@ class StreamMixin:
                         # 思考过程：Agent 决策需要调用哪些工具（规划）
                         plan = "、".join((tc.get("function") or {}).get("name", "") for tc in ptool_calls[:3])
                         _p_delta = f"（{agent_def.name}）判断需要调用工具补充上下文，计划调用：{plan}。开始执行工具…（第 {_rnd + 1} 轮）"
-                        exec_reasoning.append(_p_delta)
-                        yield {"type": "reasoning", "delta": _p_delta, "round": _rnd + 1, "phase": "plan"}
+                        exec_notices.append(({"kind": "progress", "text": _p_delta}))
+                        yield {"type": "reasoning", "delta": _p_delta, "kind": "progress", "round": _rnd + 1, "phase": "plan"}
                         weak_count = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
                         _round_had_ok = False   # 本轮是否有可用工具结果（失败轮预算判据）
                         #── P0-①（2026-10-07）并行调用配对：切成「执行队列 / 未执行队列」────
@@ -5055,8 +5087,8 @@ class StreamMixin:
                                     f"（{agent_def.name}）已连续 {_dup_streak} 次发出**完全相同**的"
                                     f"工具调用，结果不会变化，不再重复执行；"
                                     f"改为基于已有信息组织回答（如需换参数请换工具或改参数）。")
-                                exec_reasoning.append(_d_delta)
-                                yield {"type": "reasoning", "delta": _d_delta,
+                                exec_notices.append(({"kind": "progress", "text": _d_delta}))
+                                yield {"type": "reasoning", "delta": _d_delta, "kind": "progress",
                                        "round": _rnd + 1, "phase": "plan"}
                                 yield {"type": "stage", "name": "重复调用收敛",
                                        "status": "done",
@@ -5065,8 +5097,8 @@ class StreamMixin:
                                 break
                             if weak_count == len(_exec_calls) and weak_count > 0:
                                 _w_delta = f"（{agent_def.name}）本轮工具结果均与任务弱相关，不再继续调用工具，直接基于已有信息组织回答。"
-                                exec_reasoning.append(_w_delta)
-                                yield {"type": "reasoning", "delta": _w_delta, "round": _rnd + 1, "phase": "plan"}
+                                exec_notices.append(({"kind": "progress", "text": _w_delta}))
+                                yield {"type": "reasoning", "delta": _w_delta, "kind": "progress", "kind": "progress", "round": _rnd + 1, "phase": "plan"}
                                 break
                 # ★ 2026-10-28（写前确认 HITL）写前确认收口 —— 落痕迹 + 发确认卡 + 结束本次流。
                 #   位置同样选在「最终生成之前」：ReAct 循环已因 confirm_required 中断，
@@ -5100,8 +5132,8 @@ class StreamMixin:
                                          "content": _FOLLOWUP_PREFIX + _fu2})
                         _fu2_delta = (f"（{agent_def.name}）生成最终回答前收到补充指令，"
                                       f"已并入本轮：{_fu2[:60]}")
-                        exec_reasoning.append(_fu2_delta)
-                        yield {"type": "reasoning", "delta": _fu2_delta,
+                        exec_notices.append(({"kind": "progress", "text": _fu2_delta}))
+                        yield {"type": "reasoning", "delta": _fu2_delta, "kind": "progress",
                                "round": _rnd + 1, "phase": "followup"}
                         # ★ 有正文也照样重来一次最终生成：补充必须真正影响答案，
                         #   否则用户看到的是"完全没理会我的补充"。
@@ -5256,8 +5288,8 @@ class StreamMixin:
                     try:
                         _w_delta = ("（已成功执行的写操作已记入上下文）"
                                     + "、".join(str(o.get("name") or "") for o in _write_ops))
-                        exec_reasoning.append(_w_delta)
-                        yield {"type": "reasoning", "delta": _w_delta,
+                        exec_notices.append(({"kind": "progress", "text": _w_delta}))
+                        yield {"type": "reasoning", "delta": _w_delta, "kind": "progress",
                                "round": _rnd + 1, "phase": "plan"}
                     except Exception:
                         pass
@@ -5518,7 +5550,7 @@ class StreamMixin:
                                          "content": _ac.continuation_prompt(
                                              user_input, _verdict, _auto_continues)})
                         _ac_delta = f"（harness 持续工作）{_why}"
-                        exec_reasoning.append(_ac_delta)
+                        exec_notices.append(({"kind": "progress", "text": _ac_delta}))
                         # ★ type=progress（#10 拆型：系统提示独立事件类型，不再混入 reasoning）
                         #   + kind=progress（B2-10 兼容层：老消费方按 kind 分流仍生效）。
                         #   这是**系统进度提示**不是模型 CoT，必须走 procAddSystemNotice
@@ -5651,6 +5683,11 @@ class StreamMixin:
                         # 2026-10-27（截断清单 P2-D1）：4000 → 8000。exec.reasoning 是历史消息
                         #   还原"当时怎么想的"的唯一载体，4000 处腰斩后回看只剩开头。
                         "reasoning": "".join(exec_reasoning)[:8000] or None,
+                        # ★ 2026-10-28：系统进度提示单独落库（带 kind），
+                        #   前端据此**收编到对应执行环节**，而不是堆成一个
+                        #   统一的「💭 思考过程」大块（用户明确反馈过这点）。
+                        #   与 reasoning 分开存 = 心智链与系统告知不混。
+                        "notices": (exec_notices[:60] or None),
                         "agent": agent_def.name,
                         "tools": exec_tools,
                         # ★ 2026-10-27：意图理解摘要随消息持久化 —— 刷新后历史还原路径

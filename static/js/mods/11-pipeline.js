@@ -31,7 +31,27 @@ function onStageEvent(ev){
         const _line = _b.goal ? ('理解：' + _b.goal) : '按你的确认继续（本轮不重新分析目标）';
         procAddStage('意图识别','done', _line, '', _intentBriefBody(_b, ev));
       } else {
-        procAddStage('意图识别','done', ev.intent ? `→ ${ev.agent||ev.intent}（HIL ${ev.hil_level||'-'}）` : '');
+        // ★ 2026-10-28（用户反馈③「我只是输入一段V2代码让AI校验，他自动读取了智源的工程数据」）：
+        //   真因是**会话绑定过主 Agent ⇒ 覆盖了意图路由**（R1 决策），
+        //   而此前只在 reasoning 里说明一句（还落进"AI 思考"框看不见）
+        //   ⇒ 用户以为系统自己跑去做智源对接了。
+        //   现在把「执行主体 + 来源」直接显示在这一行，让"为什么是它"一眼可见。
+        const _es = ev.exec_subject || null;
+        let _subjLine = '';
+        if(_es && _es.name){
+          const _srcMap = {manual:'你手动选择', bound:'本会话已绑定', route:'按意图路由'};
+          const _src = _srcMap[_es.source] || '';
+          if(_es.source === 'route'){
+            _subjLine = `→ ${_es.name}（${_src}，HIL ${ev.hil_level||'-'}）`;
+          } else {
+            // 非路由来的，必须显式说明"不是识别出来的"
+            _subjLine = `→ ${_es.name}（${_src}${_src?'，':' '}非本轮识别结果，HIL ${ev.hil_level||'-'}）`;
+          }
+        } else {
+          _subjLine = ev.intent ? `→ ${ev.agent||ev.intent}（HIL ${ev.hil_level||'-'}）` : '';
+        }
+        procAddStage('意图识别','done', _subjLine,
+                     '', _es && _es.note ? `<div style="font-size:11px;color:var(--mut);margin-top:4px;">${esc(_es.note)}</div>` : '');
       }
     }
   } else if(name === '知识库检索'){

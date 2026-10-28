@@ -202,6 +202,27 @@ function codeFoldCopy(actEl){
   navigator.clipboard.writeText(code.textContent||'').then(()=>toast('代码已复制')).catch(()=>toast('复制失败'));
 }
 
+// ── 用户输入折叠（2026-10-28，用户反馈「输入内容多导致页面很长」）──────────────
+// ★ 只折「用户输入」，**绝不折 AI 输出正文** —— 见 renderMessage 内的区分说明。
+// 行数阈值：约 8 行（≈ 屏幕上一屏的 1/4，足够看出这轮问了什么）。
+const USER_FOLD_LINES = 8;
+// 折叠条上的字数提示（用户据此判断要不要展开）
+function _raw_len_hint(s){
+  const n = String(s||'').length;
+  return n >= 1000 ? (n/1000).toFixed(1) + 'k' : String(n);
+}
+// 展开/收起用户输入
+function toggleUserFold(btn){
+  const bar = btn && btn.closest ? btn.closest('.uf-bar') : null;
+  const box = bar ? bar.previousElementSibling : null;
+  if(!box) return;
+  const collapsed = box.classList.toggle('collapsed');
+  const n = box.getAttribute('data-lines') || '';
+  btn.textContent = collapsed
+    ? `展开全部（共约 ${n} 行，${_raw_len_hint(box.textContent)} 字）`
+    : '收起';
+}
+
 function renderMessage(m) {
   const cls = m.role==='user' ? 'u' : 'ai';
   const who = m.role==='user' ? '王' : 'AI';
@@ -221,6 +242,42 @@ function renderMessage(m) {
   const bodySrc = codeFound ? stripFencedCode(m.content||'') : (m.content||'');
   const contentHtml = m.role==='assistant' ? renderMarkdown(bodySrc, cites) : bodySrc;
   let html = `<div class="msg ${cls}"${m.id?` id="msg-${m.id}" data-mid="${m.id}"`:''}><span class="who">${who}</span><div class="msg-inner">`;
+
+  /* ★ 2026-10-28（用户反馈「用户输入内容较多，直接都展示出来，导致页面拉的很长，
+        应该默认展示几行上下的收起来，支持展开查看」）：
+     **只对「用户输入」折叠，绝不折 AI 输出正文。**
+     这个区分是刻意的、有先例的 —— 本仓用户此前明确要求
+     「最终输出结果不要收起来，也不允许收起来」，所以此处折叠范围严格限定
+     `m.role==='user'`。若将来要给 AI 输出加折叠，那是**另一条需求**，须先经确认。
+
+     判据：按**估算行数**而非字符数决定是否折叠 —— 同样 300 字，
+     有换行会占 20 行、无换行只占 4 行，按字符数会误折短消息。
+     估算口径：显式换行数 + 每个「按容器宽度折行」的折算行数，取较大者。 */
+  let _userFold = null;
+  // ⚠️ `_raw` 必须在**块外**声明：折叠条拼接在 if 块之外引用它。
+  //   第一版写在 if 块内 ⇒ ReferenceError: _raw is not defined
+  //   ⇒ 所有用户消息渲染直接抛异常（门禁 verify_ux_four_fixes.js 抓到）。
+  const _raw = String(bodySrc || '');
+  if(m.role === 'user' && !m.__noFold){
+    const _nl = (_raw.match(/\n/g) || []).length;
+    // 用户气泡宽度有限（约 60 字符/行），按 60 折算软换行
+    const _soft = Math.ceil(_raw.replace(/\n/g, '').length / 60);
+    const _lines = Math.max(_nl + 1, _soft);
+    if(_lines > USER_FOLD_LINES){
+      _userFold = { lines: _lines };
+    }
+  }
+
+  html += `<div class="body" style="min-width:0;">`;
+  if(_userFold){
+    // 折叠容器：默认只显示 USER_FOLD_LINES 行高度，点「展开」看全文
+    html += `<div class="user-fold collapsed" id="uf-${esc(String(m.id||Math.random().toString(36).slice(2,8)))}"`
+          + ` data-lines="${_userFold.lines}">${contentHtml}</div>`
+          + `<div class="uf-bar"><button class="uf-btn" onclick="toggleUserFold(this)">`
+          + `展开全部（共约 ${_userFold.lines} 行，${_raw_len_hint(_raw)} 字）</button></div>`;
+  } else {
+    html += contentHtml;
+  }
   // V2.4 会话内执行过程：思考 → 子智能体 → 工具调用（流式当时传入 process_html；历史消息从 card_data.exec 还原）
   // 2026-09-25：同时把 card_data 按消息 id 缓存 —— 「🔍 执行详情」面板据此读**落库的原始执行数据**
   //  （intent/agent/skill_hits/source/confidence/provider/used_mock/tools/reasoning），
@@ -257,7 +314,7 @@ function renderMessage(m) {
       <div class="proc-body"><div style="font-size:11.5px;line-height:1.7;">${_qHtml}${_ansHtml}<div style="color:var(--mut);margin-top:6px;">已在原输出流程内继续执行（本卡为流程中的一个确认环节）</div></div></div>
     </div>`;
   }
-  html += `<div class="body" style="min-width:0;">${contentHtml}`;
+  // body 容器已在上方按「是否折叠」分别拼接（含折叠条），此处不再重复开标签
   // V2.3 富输入：user 消息附件渲染（图片内联 / 文件链接）
   if(m.attachments) {
     let atts = [];
@@ -351,15 +408,10 @@ function renderMessage(m) {
 
 // ── 消息时间格式化：当日的 HH:MM，之前的 MM-DD HH:MM ──
 function formatMsgTime(ts){
-  if(!ts) return '';
-  const d = new Date(ts);
-  const now = new Date();
-  const isToday = d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
-  const hh = String(d.getHours()).padStart(2,'0');
-  const mm = String(d.getMinutes()).padStart(2,'0');
-  const MM = String(d.getMonth()+1).padStart(2,'0');
-  const DD = String(d.getDate()).padStart(2,'0');
-  return isToday ? `${hh}:${mm}` : `${MM}-${DD} ${hh}:${mm}`;
+  // ★ 2026-10-28（用户反馈「系统的时间不是北京时间」）：统一走 fmtServerTime，
+  //   原实现 `new Date(ts)` 对 `2026-10-28 05:44:52` 会按**本地时间**解析
+  //   （V8 宽松解析）或直接 Invalid Date（严格内核）⇒ 早 8 小时或空白。
+  return fmtServerTime(ts);
 }
 // ── 复制消息内容（按钮默认仅 icon，hover 展开文字；成功反馈显示 ✓ 已复制）──
 function copyMsg(btn){

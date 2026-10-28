@@ -17,6 +17,53 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 // 属性安全转义（data-* 用于会话信息卡）
 function escA(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;');}
 
+// ── 服务端时间戳解析（2026-10-28 用户反馈「系统的时间不是北京时间」）──
+/* ★ 为什么必须收敛成**一个**函数：
+   后端所有 `created_at/updated_at` 来自 SQLite `CURRENT_TIMESTAMP`，它是 **UTC**；
+   而前端此前有 5 处各自 `new Date(ts.replace(' ','T'))` —— 无时区后缀的
+   `YYYY-MM-DDTHH:mm:ss` 会被 **当作本地时间**解析 ⇒ 显示比真实时间早 8 小时。
+   更糟的是其中 1 处（21-ontology.js）自己加了 'Z' 是**对的**，其余 4 处没加
+   ⇒ 同一份数据在不同页面显示成不同时间。这正是本仓反复记录的
+   「同一语义在多处各写一份，最后必然对不上」。
+   ⇒ 收敛为单点：凡解析服务端时间戳，一律调本函数。
+
+   ⚠️ 兼容三种入参，返回 Date（解析失败返回 null，调用方自行降级）：
+     ① 无时区 `2026-10-28 05:44:52`（SQLite UTC）→ 补 'Z' 按 UTC 解析
+     ② 已带时区 `2026-10-28T05:44:52Z` / `+08:00` → 原样解析
+     ③ Date / 毫秒数 → 直接构造
+   注意：**不要**用它解析用户本地输入的时间字符串（那本来就该按本地解释）。 */
+function parseServerTime(ts){
+  if(ts == null || ts === '') return null;
+  if(ts instanceof Date) return isNaN(ts.getTime()) ? null : ts;
+  if(typeof ts === 'number'){ const d = new Date(ts); return isNaN(d.getTime()) ? null : d; }
+  let s = String(ts).trim();
+  if(!s) return null;
+  // 纯数字字符串 → 毫秒时间戳
+  if(/^\d{10,}$/.test(s)){ const d = new Date(Number(s)); return isNaN(d.getTime()) ? null : d; }
+  s = s.replace(' ', 'T');
+  // 已带时区标记（Z 或 ±HH:MM / ±HHMM）⇒ 原样交给 Date
+  const hasTZ = /(Z|[+-]\d{2}:?\d{2})$/i.test(s);
+  let d = new Date(hasTZ ? s : s + 'Z');
+  if(isNaN(d.getTime()) && !hasTZ){
+    // 极端兜底：补 Z 仍失败 ⇒ 退回原始字符串（让浏览器尽力解析），仍失败则 null
+    d = new Date(String(ts));
+  }
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// 服务端时间戳 → 本地 `MM-DD HH:mm` / `HH:mm`（当天）。等价于原 formatMsgTime 的展示口径。
+function fmtServerTime(ts, opts){
+  const d = parseServerTime(ts);
+  if(!d) return '';
+  const now = new Date();
+  const sameDay = d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
+  const p = n => String(n).padStart(2,'0');
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  if(opts && opts.dateOnly) return `${p(d.getMonth()+1)}-${p(d.getDate())}`;
+  if(opts && opts.withSeconds) return sameDay ? `${hm}:${p(d.getSeconds())}` : `${p(d.getMonth()+1)}-${p(d.getDate())} ${hm}:${p(d.getSeconds())}`;
+  return sameDay ? hm : `${p(d.getMonth()+1)}-${p(d.getDate())} ${hm}`;
+}
+
 // ── 能力绑定下拉多选面板（2026-09-30 用户反馈 3）──
 // 绑定区原先是「下拉单选 + ＋添加按钮 + chips 标签」，与「主 Agent 关联子 Agent」的下拉多选
 // 长得不一样，用户要在两种交互之间来回切。这里生成与 f-team-dd **同构**的骨架：

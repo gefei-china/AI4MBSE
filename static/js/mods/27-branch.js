@@ -110,7 +110,7 @@ function wsTab(t) {
 // 历史 Tab：当前分支提交时间线（行内展开快照明细，复用 toggleCommitDetail / 回滚逻辑）
 // 2026-09-12 完善：历史时间线按日期分组 + 相对时间 + 变更内容摘要（实体/关系/文档）
 function wsHistDayLabel(ts){
-  const d = ts ? new Date((ts||'').replace(' ','T')) : null;
+  const d = parseServerTime(ts);   // ★ 统一 UTC 解析（2026-10-28）
   if(!d || isNaN(d)) return '';
   const now = new Date();
   const y = new Date(now); y.setDate(now.getDate()-1);
@@ -120,7 +120,7 @@ function wsHistDayLabel(ts){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 function wsHistRelTime(ts){
-  const t = ts ? new Date((ts||'').replace(' ','T')) : null;
+  const t = parseServerTime(ts);   // ★ 统一 UTC 解析（2026-10-28）
   if(!t || isNaN(t)) return ts||'';
   const sec = Math.floor((Date.now()-t.getTime())/1000);
   if(sec<60) return '刚刚';

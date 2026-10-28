@@ -92,8 +92,10 @@ function _nowISO(){
 }
 function _convTimeBucket(iso){
   if(!iso) return 'earlier';
-  const d = new Date(String(iso).replace(' ','T'));
-  if(isNaN(d.getTime())) return 'earlier';
+  // ★ 2026-10-28：改用 parseServerTime（统一按 UTC 解析服务端时间戳）。
+  //   原 `new Date(String(iso).replace(' ','T'))` 会把 UTC 当本地 ⇒ 分桶/时间早 8 小时。
+  const d = parseServerTime(iso);
+  if(!d) return 'earlier';
   const now = new Date();
   const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const y0 = new Date(t0); y0.setDate(y0.getDate()-1);

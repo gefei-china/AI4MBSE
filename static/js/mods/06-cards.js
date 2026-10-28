@@ -17,7 +17,28 @@ function procBlocksHtml(ex, mid){
       sub: ex.brief.goal ? ('理解：' + String(ex.brief.goal)) : '按你的确认继续（本轮不重新分析目标）',
       body: (typeof _intentBriefBody === 'function') ? _intentBriefBody(ex.brief, {}) : esc(ex.brief.goal || '')});
   }
-  if(ex.reasoning) steps.push({icon:'💭', title:'思考过程', status:'done', body: esc(ex.reasoning), cls:'thinking'});
+  /* ★ 2026-10-28（用户反馈「执行过程的秩序输出，不是强调收编到对应的执行环节吗，
+        不用给出统一的思考过程的输出」）：
+     原来这里无条件把 `ex.reasoning` 渲染成一个**大块「💭 思考过程」**，
+     而 reasoning 里混着两类东西：模型真 CoT + 7 类系统进度提示
+     （收到补充指令/判断要调工具/工具结果弱相关/重复调用收敛/写操作已记入/harness 持续工作）。
+     ⇒ 用户看到的就是"一堆统一思考过程"，而不是各归各位。
+     现在拆成两条通道（落库侧已分开：exec.reasoning / exec.notices）：
+       · reasoning ⇒ 只在**确实是模型心智链**时渲染，且标题改为「模型思考」以示区分
+       · notices   ⇒ 按 kind 收编到对应环节的展开区（不独立成大块） */
+  const _notices = Array.isArray(ex.notices) ? ex.notices : [];
+  if(ex.reasoning) steps.push({icon:'💭', title:'模型思考', status:'done', sub:'（模型推理过程）', body: esc(ex.reasoning), cls:'thinking'});
+  // 系统进度提示：收编为**独立的小行「执行说明」**，与模型思考分开、不抢主线
+  if(_notices.length){
+    const _ntBody = _notices.map(n => {
+      const t = (n && typeof n === 'object') ? (n.text || '') : String(n || '');
+      return t ? `<div style="padding:2px 0;font-size:11px;color:var(--mut);">· ${esc(t)}</div>` : '';
+    }).join('');
+    if(_ntBody){
+      steps.push({icon:'📌', title:`执行说明（${_notices.length}）`, status:'done',
+                  sub:'系统进度提示（非模型思考）', body:_ntBody, cls:'notice'});
+    }
+  }
   if(ex.agent) steps.push({icon:'🤖', title:`子智能体：${esc(ex.agent)}`, status:'done', sub:'✓ 已完成', cls:'agent', noBody: true});
   const subs = ex.subtasks||[];
   if(subs.length){
