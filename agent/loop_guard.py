@@ -230,6 +230,22 @@ class LoopGuard:
             return False
         return True
 
+    def budget_ratio(self) -> float:
+        """已用预算占比（0.0~1.0+）。无预算（None/0）⇒ 返回 0.0。
+
+        ★ P1-1（2026-10-28）：给"预算降级收尾"提供触发依据。
+        为什么要这个数：实测 89 次评估里 **11 次（12%）是 token 耗尽硬停** ——
+        用户感知是"突然断了"。有了占比就能在 70% 处**主动**降级收尾
+        （写待续清单 + 告知还差什么），把"断"变成"分段推进"。
+        """
+        try:
+            b = int(self.token_budget or 0)
+            if b <= 0:
+                return 0.0
+            return float(self.tokens_used or 0) / float(b)
+        except Exception:
+            return 0.0
+
     # ── 失败轮预算（2026-10-09）────────────────────────────
     #★ 语义（米爸 2026-10-09 纠正）：
     #   「工具调用上限」要管的是**失败重试**，不是**正常推进**。

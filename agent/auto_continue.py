@@ -33,7 +33,8 @@ import re
 __all__ = ["EVAL_SYS", "AUTO_CONTINUE_STAGE", "AUTO_EVAL_STAGE",
            "build_eval_messages", "parse_verdict", "normalize_step",
            "is_spinning", "decide", "continuation_prompt", "tools_brief",
-           "looks_awaiting_permission", "has_continue_cue", "clarify_from_verdict"]
+           "looks_awaiting_permission", "has_continue_cue", "clarify_from_verdict",
+           "default_progress_verdict", "build_degrade_notice"]
 
 #: 前端 proc 时间线环节名（11-pipeline.js onStageEvent 按此渲染 🔄 块）
 AUTO_CONTINUE_STAGE = "自主续跑"
@@ -50,9 +51,14 @@ EVAL_SYS = (
     "删除对象、提交变更）—— 那属于规则 2，必须判 done=false。\n"
     "2. 存在用户请求范围内、明确尚未执行的下一步 ⇒ done=false，"
     '并给出具体的一句话 next_step 与 remaining 待办列表；\n'
-    "3. **必须由用户拍板才能继续**（有多个合理方案需二选一、动作影响面大需授权、"
-    "缺少只有用户才知道的关键信息）⇒ done=false 且 needs_user=true，"
-    "并给出 question（一句话问清要选什么）与 options（2-6 个候选，取自答复里的方案原文）；\n"
+    "3. **必须由用户拍板才能继续** ⇒ done=false 且 needs_user=true，"
+    "并给出 question（一句话问清要选什么）与 options（2-6 个候选，取自答复里的方案原文），"
+    "**同时必须给 needs_kind 二选一**：\n"
+    "   · ``\"user_only\"`` —— 这条信息**只有用户有**（如工况口径、业务规则、"
+    "用户偏好、外部系统的取值），不问就一定做错；\n"
+    "   · ``\"has_default\"`` —— 有**合理默认值**（按上下文/惯例/最常见选择即可推进），"
+    "问了只是让用户多点一次；此时必须给 default（你打算按什么默认值做）。\n"
+    "   ⚠️ 拿不准选哪个时倾向 ``has_default`` —— 做了再让用户改，比停下来等更好。\n"
     "4. 信息不足、无法判断，或请求本身是一次性问答/闲聊 ⇒ done=true"
     "（宁可把决定权交还用户，也不擅自续跑）。\n"
     "⚠️ 判「needs_user」的门槛要严：只有**继续做下去会做错事/做无用功**时才算。"
@@ -71,7 +77,10 @@ EVAL_SYS = (
     '{"done": true}\n'
     '或 {"done": false, "next_step": "下一步做什么（一句话，具体到对象）", '
     '"remaining": ["待办1", "待办2"]}\n'
-    '或 {"done": false, "needs_user": true, "question": "要用户选什么？", '
+    '或 {"done": false, "needs_user": true, "needs_kind": "user_only", '
+    '"question": "要用户选什么？", "options": ["方案A", "方案B"]}\n'
+    '或 {"done": false, "needs_user": true, "needs_kind": "has_default", '
+    '"question": "按哪个口径做？", "default": "按最常见的 X 口径", '
     '"options": ["方案A", "方案B"]}'
 )
 
@@ -134,9 +143,23 @@ def parse_verdict(text) -> dict | None:
         opts = obj.get("options")
         opts = ([str(x).strip()[:60] for x in opts if str(x).strip()]
                 if isinstance(opts, list) else [])
+        # ★ P1-2（2026-10-28）needs_user 二分：区分「只有用户有」与「有默认值可推进」。
+        #   背景（实测）：6/89 次评估落在 needs_user ⇒ 全转澄清卡 ⇒ 用户感知"停"。
+        #   其中相当一部分其实有合理默认值（如"两个口径"，任选一个都能推进）。
+        #   对齐 CISA「审批决策由设计者定」与 D-6 纪律「可独立判断时直接给结论」。
+        #
+        #   ⚠️ 缺失 needs_kind 时**保守按 user_only**（转卡）——
+        #      默认"多问一次"比默认"猜着做"安全；这个方向不为了少弹卡而猜。
+        kind = str(obj.get("needs_kind") or "").strip().lower()
+        if kind not in ("user_only", "has_default"):
+            kind = "user_only"
+        dflt = str(obj.get("default") or "").strip()[:200]
+        # has_default 但没说默认值 ⇒ 无法"按默认推进" ⇒ 退回 user_only（转卡）
+        if kind == "has_default" and not dflt:
+            kind = "user_only"
         # 少于 2 个候选做不成"选择题"，卡片会退化成纯输入框 —— 仍可接受（前端有自定义输入）
-        return {"done": False, "needs_user": True, "question": q[:200],
-                "options": opts[:6]}
+        return {"done": False, "needs_user": True, "needs_kind": kind,
+                "default": dflt, "question": q[:200], "options": opts[:6]}
     ns = str(obj.get("next_step") or "").strip()
     if not ns:
         return None
@@ -171,13 +194,20 @@ def is_spinning(next_step: str, seen_steps) -> bool:
 
 
 def decide(verdict, *, used: int, max_used: int, seen_steps,
-           deadline_left_s=None, budget_left: bool = True):
+           deadline_left_s=None, budget_left: bool = True,
+           budget_ratio: float = 0.0, degrade_ratio: float = 0.7):
     """纯决策：这一轮工作结束后，要不要自主续跑。
 
     :returns: ``(continue: bool, reason: str)`` —— reason 供 stage/reasoning 透传。
     四道闸（全部对齐 AutoGPT boundedness 教训）：
       ① 次数闸 ``max_used``；② 墙钟闸 ``deadline_left_s``；
       ③ token 预算闸 ``budget_left``；④ 空转闸 ``is_spinning``。
+    ★ P1-1（2026-10-28）第五道闸：**预算降级** ——
+      ``budget_ratio >= degrade_ratio`` 时**不再新开续跑轮**，
+      改为"降级收尾"（写待续清单、告知还差什么）。措辞见 `build_degrade_notice()`。
+      依据：实测 89 次评估里 11 次（12%）是 token 耗尽**硬停**；
+      硬停会让用户觉得"突然断了"，主动降级则能"分段推进"。
+      ⚠️ 降级优先级**低于**"任务已完成"（已完成就说完成，不必提预算）。
     任何输入异常/缺失都走 fail-safe ⇒ ``(False, ...)``。
     """
     if not verdict:
@@ -190,12 +220,49 @@ def decide(verdict, *, used: int, max_used: int, seen_steps,
         return False, "自主续跑墙钟时限已到"
     if not budget_left:
         return False, "token 预算已耗尽，停止续跑"
+    # ★ P1-1：预算接近上限 ⇒ 主动降级收尾（而不是等耗尽了硬停）
+    try:
+        _dr = float(degrade_ratio or 0.0)
+        _br = float(budget_ratio or 0.0)
+    except Exception:
+        _dr, _br = 0.0, 0.0
+    if _dr > 0 and _br >= _dr:
+        return False, ("token 预算已用 %.0f%%（阈值 %.0f%%）⇒ 降级收尾："
+                       "不再新开续跑轮，如实列出待续事项"
+                       % (_br * 100, _dr * 100))
     ns = str(verdict.get("next_step") or "").strip()
     if not ns:
         return False, "评估结论缺少下一步描述，按不续跑处理"
     if is_spinning(ns, seen_steps):
         return False, "剩余工作与此前步骤相同，判定空转，停止续跑"
     return True, f"任务未完成，自动继续：{ns}"
+
+
+def build_degrade_notice(remaining, ratio: float, threshold: float = 0.7) -> str:
+    """构造"预算降级收尾"的告知（用户可见，附在答复末尾）。
+
+    ★ P1-1（2026-10-28）：把"突然断了"变成"分段推进"。
+    必须含三件事（缺一即退化成"又一次硬停"）：
+      ① 说明为什么停（预算，不是任务完成）
+      ② 列出**还差什么**（用户能据此决定要不要继续）
+      ③ 说明**怎么继续**（下一条消息即可）—— 不能只留一个死胡同
+    """
+    items = [str(x) for x in (remaining or []) if str(x).strip()]
+    lines = [
+        "",
+        "---",
+        "⚠️ **本轮已分段收尾**（token 预算已用 %.0f%%，达降级阈值 %.0f%%）。"
+        % (ratio * 100, threshold * 100),
+        "任务**尚未全部完成**，为保证输出质量先停在这里。",
+    ]
+    if items:
+        lines.append("")
+        lines.append("**待续事项**：")
+        for i, it in enumerate(items, 1):
+            lines.append(f"{i}. {it}")
+    lines.append("")
+    lines.append("回复「继续」我接着做（上下文已保留，不必重述需求）。")
+    return "\n".join(lines)
 
 
 def continuation_prompt(user_input: str, verdict: dict, round_no: int) -> str:
@@ -327,8 +394,14 @@ def clarify_from_verdict(verdict, qid: str = "auto_continue") -> dict | None:
 
     返回 `{id, question, options, allow_custom}`（前端 `clarifyCardInnerHtml` 认的形状）；
     非 needs_user 结论 ⇒ None（调用方按原逻辑处理）。
+
+    ★ P1-2（2026-10-28）：`needs_kind == "has_default"` ⇒ **不转卡**，返回 None。
+      那种情况有合理默认值，应该「按默认推进 + 在答复里标注假设」，
+      而不是让用户多点一次。转换逻辑见 `default_progress_verdict()`。
     """
     if not isinstance(verdict, dict) or not verdict.get("needs_user"):
+        return None
+    if str(verdict.get("needs_kind") or "") == "has_default":
         return None
     q = str(verdict.get("question") or "").strip()
     if not q:
@@ -336,3 +409,36 @@ def clarify_from_verdict(verdict, qid: str = "auto_continue") -> dict | None:
     opts = [str(x).strip()[:60] for x in (verdict.get("options") or []) if str(x).strip()]
     return {"id": qid, "question": q[:200],
             "options": opts[:6], "allow_custom": True}
+
+
+def default_progress_verdict(verdict) -> dict | None:
+    """`has_default` 类 needs_user ⇒ 转成**按默认推进**的续跑 verdict。
+
+    ★ P1-2（2026-10-28）核心：把"停下来问"换成"带假设往下做"。
+
+    :returns: 续跑 verdict（done=False + next_step），或 None（不是 has_default ⇒ 调用方走原逻辑）
+
+    语义（三件事缺一不可）：
+      1. **按默认值推进**（next_step 里写明用什么默认）
+      2. **在答复里显式标注假设**（"按 X 默认处理，如需改请说"）—— 用户有知情权
+      3. 保留原问题与候选，便于用户事后纠正
+    """
+    if not isinstance(verdict, dict) or not verdict.get("needs_user"):
+        return None
+    if str(verdict.get("needs_kind") or "") != "has_default":
+        return None
+    dflt = str(verdict.get("default") or "").strip()
+    if not dflt:
+        return None                       # 无默认值 ⇒ 无法推进（上游已退回 user_only）
+    q = str(verdict.get("question") or "").strip()
+    return {
+        "done": False,
+        "next_step": ("按默认值继续：%s（原待定问题：%s）。"
+                      "请在答复中明确写出「按「%s」处理，如需更改请告知」"
+                      % (dflt[:120], q[:80] or "未说明", dflt[:60])),
+        "remaining": [("按默认值 %s 推进（原问题：%s）" % (dflt[:80], q[:80]))],
+        "_from_has_default": True,
+        "_question": q[:200],
+        "_options": [str(x).strip()[:60] for x in (verdict.get("options") or [])
+                     if str(x).strip()][:6],
+    }

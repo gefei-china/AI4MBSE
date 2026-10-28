@@ -837,6 +837,14 @@ class ExecuteMixin:
                         provider_id=effective_provider, agent_name=agent_def.name,
                         model_params=_agent_mp, guard=_guard)
                     _deadline_left = (_ac_deadline - time.time()) if _ac_deadline else None
+                    # ★ P1-1（2026-10-28）预算降级阈值（配置化，默认 0.7）。
+                    #   到阈值就主动收尾并列出待续事项，而不是等耗尽后硬停。
+                    try:
+                        from core import config as _cfg_dr
+                        _degrade_ratio = float(_cfg_dr.get(
+                            "agent", "budget_degrade_ratio", 0.7) or 0.0)
+                    except Exception:
+                        _degrade_ratio = 0.0
                     # ★ P0-1（2026-10-28）验收驱动：与 stream.py **同构**接线。
                     #   语义只在 autopilot._apply_todo_gate 写一份 —— 两处共用，
                     #   绝不各写一份（各写一份必然错位）。
@@ -845,7 +853,19 @@ class ExecuteMixin:
                     _cont, _why = _ac.decide(
                         _verdict, used=_auto_continues, max_used=_ac_cfg["max"],
                         seen_steps=_ac_seen_steps, deadline_left_s=_deadline_left,
-                        budget_left=_guard.budget_left())
+                        budget_left=_guard.budget_left(),
+                        budget_ratio=_guard.budget_ratio(),
+                        degrade_ratio=_degrade_ratio)
+                    # ★ P1-1（2026-10-28）降级收尾：与 stream.py 同构
+                    if (not _cont) and ("降级收尾" in str(_why)):
+                        try:
+                            _rem = (_verdict or {}).get("remaining") or []
+                            _nt = _ac.build_degrade_notice(
+                                _rem, _guard.budget_ratio(), _degrade_ratio)
+                            if _nt:
+                                llm_content = ((llm_content + _nt) if llm_content else _nt)
+                        except Exception:
+                            pass
                     if _cont:
                         _auto_continues += 1
                         _ac_seen_steps.append(str(_verdict.get("next_step") or ""))

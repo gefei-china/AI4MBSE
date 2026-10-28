@@ -5411,6 +5411,28 @@ class StreamMixin:
                     #   现在由**评估器**兜住：它读到"先删掉再重来，还是留着？"这类问题，
                     #   给出 needs_user + question + options ⇒ 这里复用 ask_user 的收口
                     #   （落 pending_clarify + 发 clarify_ask 卡），用户在卡片上点一下就续跑。
+                    # ★ P1-2（2026-10-28）`has_default` ⇒ **不转卡**，转"按默认推进"。
+                    #   区分两种 needs_user：
+                    #     · user_only  —— 信息只有用户有（问就一定做错）⇒ 转卡（现状）
+                    #     · has_default—— 有合理默认值 ⇒ 按默认推进 + 答复里标注假设
+                    #   实测背景：6/89 次评估落在 needs_user，全转卡 ⇒ 用户感知"停"；
+                    #   其中一部分（如"两个口径"）任选一个都能推进。
+                    #   ⚠️ 必须在 clarify_from_verdict **之前**转换 ——
+                    #      clarify_from_verdict 对 has_default 返回 None，若不先转，
+                    #      这条结论会被完全丢弃（既不打回卡也不续跑 = 静默结束）。
+                    try:
+                        _dp = _ac.default_progress_verdict(_verdict)
+                    except Exception:
+                        _dp = None
+                    if _dp:
+                        _verdict = _dp
+                        try:
+                            yield {"type": "stage", "name": _ac.AUTO_EVAL_STAGE,
+                                   "status": "done",
+                                   "detail": "该问题有合理默认值 —— 按默认推进，"
+                                             "并在答复中标注假设（不打断你）"}
+                        except Exception:
+                            pass
                     try:
                         _cq = _ac.clarify_from_verdict(_verdict)
                     except Exception:
@@ -5433,6 +5455,14 @@ class StreamMixin:
                             title="❓ AI 需要你在两个方案间拍板（评估器判定）")
                         return
                     _deadline_left = (_ac_deadline - time.time()) if _ac_deadline else None
+                    # ★ P1-1（2026-10-28）预算降级阈值（配置化，默认 0.7）。
+                    #   到阈值就主动收尾并列出待续事项，而不是等耗尽后硬停。
+                    try:
+                        from core import config as _cfg_dr
+                        _degrade_ratio = float(_cfg_dr.get(
+                            "agent", "budget_degrade_ratio", 0.7) or 0.0)
+                    except Exception:
+                        _degrade_ratio = 0.0
                     # ★ P0-1（2026-10-28）验收驱动：待办闸是评估器的**上位约束**。
                     #   语义（fallback / done / next_step 怎么算）**只在 autopilot
                     #   的 _apply_todo_gate 写一份** —— 两处同构接线共用它，
@@ -5452,7 +5482,22 @@ class StreamMixin:
                     _cont, _why = _ac.decide(
                         _verdict, used=_auto_continues, max_used=_ac_cfg["max"],
                         seen_steps=_ac_seen_steps, deadline_left_s=_deadline_left,
-                        budget_left=_lg.budget_left())
+                        budget_left=_lg.budget_left(),
+                        budget_ratio=_lg.budget_ratio(),
+                        degrade_ratio=_degrade_ratio)
+                    # ★ P1-1（2026-10-28）降级收尾：把「待续清单」**写进答复**。
+                    #   为什么必须写：budget 闸本来就会停，但停得"无声" ⇒
+                    #   用户看到的是"突然断了"（实测 11/89 次）。
+                    #   写清单后变成"分段推进"，用户知道还差什么、怎么继续。
+                    if (not _cont) and ("降级收尾" in str(_why)):
+                        try:
+                            _rem = (_verdict or {}).get("remaining") or []
+                            _nt = _ac.build_degrade_notice(
+                                _rem, _lg.budget_ratio(), _degrade_ratio)
+                            if _nt:
+                                llm_content = ((llm_content + _nt) if llm_content else _nt)
+                        except Exception:
+                            pass
                     # 评估发生过就透传（无论结论）——用户看得到「为什么停 / 为什么继续」
                     try:
                         yield {"type": "stage", "name": _ac.AUTO_EVAL_STAGE,
