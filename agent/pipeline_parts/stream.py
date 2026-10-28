@@ -4521,6 +4521,11 @@ class StreamMixin:
             #   形状刻意对齐 `clarify_required`（`_clarify_req`）⇒ ReAct 循环与外层收口
             #   用**同一套**中断协议（检出即 break → 发事件 → 落挂起 → 等人 → 新一轮）。
             _hil_confirm_req = None
+            # ★ P0-2（2026-10-28）harness 强制闸的**连续阻断计数**。
+            #   放在 while **外**（跨轮累积）—— 闸的语义是"连续 N 次没通过验收
+            #   就强制放行"，计数必须跨轮连续，否则每轮都从 0 数 ⇒ 永不触顶
+            #   ⇒ 会变成 FM-1.5「该停不停」12.4% 的温床。
+            _harness_blocks = 0
             # ★ 2026-10-17（米爸「harness 持续工作」）：自主续跑外层循环。
             #   round 1 = 原始请求；round 2+ = 评估器判定「未完成」放行的续跑。
             #   _lg（LoopGuard）**故意在循环外创建**：token 预算跨轮共享（config 既定语义），
@@ -5479,6 +5484,62 @@ class StreamMixin:
                         except Exception:
                             pass
                         continue   # ← 外层循环顶：状态复位后开启下一轮 ReAct
+                # ★ P0-2（2026-10-28）harness 级强制闸：**最终生成之后、persist 之前**。
+                #   对齐官方 Stop hook："the turn doesn't end until the typecheck passes"
+                #   —— 由 harness 执行，**不依赖模型配合**。
+                #
+                #   ⚠️ 位置很关键（第一版插错了，py_compile 直接报
+                #      "'continue' not properly in loop"）：
+                #      本闸必须在 `break` **之前**（即仍在 while@4533 体内）——
+                #      break 之后就已经跳出循环，continue 会变成语法错误。
+                #      而 break 之前 = 尚未收口 = 正是"拦住不让结束"的时机。
+                #
+                #   语义（唯一一份，IO 在 autopilot._harness_gate）：
+                #     ① 有未通过验收的待办 ⇒ **不结束本轮**，把失败明细回灌、继续 ReAct
+                #     ② 连续阻断达上限（默认 8）⇒ 强制放行，且**如实告知「未完成」**
+                #     ③ 无待办 / 开关关 ⇒ 完全不介入（逐字节兼容 D-3）
+                try:
+                    _hgate = self._harness_gate(conversation_id, _harness_blocks)
+                except Exception:
+                    _hgate = {"block": False, "feedback": "", "force_release": False,
+                              "notice": "", "remaining": [], "blocks_used": _harness_blocks,
+                              "reason": "harness 闸异常 ⇒ 不介入", "failures": []}
+                if _hgate.get("block"):
+                    _harness_blocks = int(_hgate.get("blocks_used") or 0)
+                    # 本轮产出并进全量（被拦下的这轮内容也要保留）
+                    if llm_content:
+                        _full_content = ((_full_content + "\n\n" + llm_content)
+                                         if _full_content else llm_content)
+                    try:
+                        yield {"type": "stage", "name": "验收未通过 · 继续工作",
+                               "status": "done",
+                               "detail": _hgate.get("reason") or ""}
+                    except Exception:
+                        pass
+                    # 回灌失败明细 ⇒ 驱动下一轮 ReAct（相当于官方 Stop hook 的 exit code 2）
+                    messages.append({"role": "assistant", "content": llm_content})
+                    messages.append({"role": "user", "content": _hgate.get("feedback") or ""})
+                    try:
+                        yield {"type": "progress",
+                               "delta": "（harness 验收闸）%s" % (_hgate.get("reason") or ""),
+                               "kind": "progress", "round": _harness_blocks,
+                               "phase": "harness"}
+                    except Exception:
+                        pass
+                    continue   # ← 回外层循环顶：状态复位后开启下一轮 ReAct
+                if _hgate.get("force_release"):
+                    # ★ 强制放行：**必须如实告知「未完成」**，不得伪装成完成
+                    _harness_blocks = int(_hgate.get("blocks_used") or 0)
+                    _notice = _hgate.get("notice") or ""
+                    if _notice:
+                        llm_content = ((llm_content + "\n\n" + _notice)
+                                       if llm_content else _notice)
+                    try:
+                        yield {"type": "stage", "name": "验收闸强制放行",
+                               "status": "done",
+                               "detail": _hgate.get("reason") or ""}
+                    except Exception:
+                        pass
                 break               # ← 外层循环出口：收口（落库/done 只走一次）
             # 落库/done 用跨轮全量产出（续跑轮内容已在评估点并进 _full_content）
             if _full_content:

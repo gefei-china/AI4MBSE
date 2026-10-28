@@ -136,3 +136,115 @@ class AutoPilotMixin:
         return {"done": False,
                 "next_step": gate.get("next_step") or "继续完成未结待办",
                 "remaining": gate.get("remaining") or []}, gate
+
+    # ── P0-2（2026-10-28）harness 级强制闸 ───────────────────────
+    # 方案：docs/持续自主执行能力-最终方案设计-20261028.md §4.3.2 / §6 第 2 步。
+    # 对齐官方 Stop hook："the turn doesn't end until the typecheck passes" ——
+    # 由 **harness** 执行，**不依赖模型配合**。
+    #
+    # 判据只有一处、IO 只有一处 —— 与 P0-1 同样的纪律（不各写一份）。
+
+    def _harness_cfg(self) -> dict:
+        """读 harness 闸配置（全部默认关/兼容值 ⇒ 不改变现有行为）。"""
+        try:
+            from core import config as _cfg
+            return {
+                "enabled": _cfg.as_bool("agent", "harness_enabled", False),
+                "max_blocks": max(0, int(_cfg.get("agent", "harness_max_blocks", 8) or 0)),
+            }
+        except Exception:
+            return {"enabled": False, "max_blocks": 0}
+
+    def _run_verify(self, verify: str) -> dict:
+        """执行一条待办的验收。
+
+        :returns: ``{"ok": bool, "detail": str, "kind": str}``
+          · kind="manual" ⇒ 人工验收，**不自动执行**（ok=True，但标注需人工确认）
+          · kind="tool"  ⇒ 调该工具，按返回判成败
+        ⚠️ 绝不抛异常 —— 验收失败**只是不通过**，不是崩溃。
+        """
+        from agent import harness_gate as _hg
+        spec = _hg.parse_verify_spec(verify)
+        if spec["kind"] != "tool":
+            return {"ok": True, "kind": "manual",
+                    "detail": "人工验收（不可自动执行，视为已确认）"}
+        try:
+            res = self._exec_tool_call(spec["tool"], spec["args"])
+        except Exception as e:
+            return {"ok": False, "kind": "tool",
+                    "detail": "验收工具「%s」执行异常：%r" % (spec["tool"], e)}
+        ok = bool((res or {}).get("ok"))
+        detail = str((res or {}).get("result") or "")[:200]
+        return {"ok": ok, "kind": "tool",
+                "detail": ("验收工具「%s」通过：%s" % (spec["tool"], detail)
+                           if ok else
+                           "验收工具「%s」未通过：%s" % (spec["tool"], detail))}
+
+    def _harness_gate(self, conversation_id: int, blocks_used: int) -> dict:
+        """跑一次 harness 强制闸判定 + 实际执行 verify。
+
+        :returns: ``{"block": bool, "feedback": str, "force_release": bool,
+                     "notice": str, "remaining": [...], "blocks_used": int,
+                     "reason": str, "failures": [...]}``
+        """
+        from agent import harness_gate as _hg
+        cfg = self._harness_cfg()
+        gate = self._todo_gate(conversation_id)
+        decision = _hg.harness_decide(gate, blocks_used, cfg["max_blocks"],
+                                      harness_enabled=cfg["enabled"])
+        if not decision["block"]:
+            notice = ""
+            if decision.get("force_release"):
+                notice = _hg.build_force_release_notice(
+                    decision["remaining"], decision["blocks_used"],
+                    decision["max_blocks"])
+            # ⚠️ force_release 必须**透传** decision 的值 ——
+            #   写死 False 会让"已达上限"这种情况被当成普通放行
+            #   （真机 E2E 实测抓到：notice 里有「达到上限 8」但 force_release=False）。
+            return {"block": False, "feedback": "",
+                    "force_release": bool(decision.get("force_release")),
+                    "notice": notice, "remaining": decision["remaining"],
+                    "blocks_used": decision["blocks_used"],
+                    "reason": decision["reason"], "failures": []}
+
+        # ★ 该拦 ⇒ 实际跑一遍未完成待办的 verify（判据是**执行结果**，不是 LLM 判断）
+        failures = []
+        try:
+            from agent.todo_store import list_todos
+            from database import db_conn
+            with db_conn() as conn:
+                rows = list_todos(conn, conversation_id)
+        except Exception as e:
+            rows = []
+            failures.append("读待办失败：%r" % (e,))
+        for r in rows:
+            if r.get("status") != "pending":
+                continue
+            vr = self._run_verify(r.get("verify") or "")
+            if not vr.get("ok"):
+                failures.append("%s —— %s" % (r.get("subject") or "?", vr.get("detail") or ""))
+        if not failures:
+            # ★ 所有 verify 都过了 ⇒ 待办其实已完成（可能是刚被模型置完成）
+            #   ⇒ 不该拦，重新判一次。
+            gate2 = self._todo_gate(conversation_id)
+            decision2 = _hg.harness_decide(gate2, blocks_used, cfg["max_blocks"],
+                                           harness_enabled=cfg["enabled"])
+            if not decision2["block"]:
+                notice = ""
+                if decision2.get("force_release"):
+                    notice = _hg.build_force_release_notice(
+                        decision2["remaining"], decision2["blocks_used"],
+                        decision2["max_blocks"])
+                return {"block": False, "feedback": "",
+                        "force_release": bool(decision2.get("force_release")),
+                        "notice": notice, "remaining": decision2["remaining"],
+                        "blocks_used": decision2["blocks_used"],
+                        "reason": "重判后已通过验收：" + decision2["reason"],
+                        "failures": []}
+        feedback = _hg.build_block_feedback(
+            decision["remaining"], decision["blocks_used"] + 1,
+            decision["max_blocks"], failures)
+        return {"block": True, "feedback": feedback, "force_release": False,
+                "notice": "", "remaining": decision["remaining"],
+                "blocks_used": decision["blocks_used"] + 1,
+                "reason": decision["reason"], "failures": failures}

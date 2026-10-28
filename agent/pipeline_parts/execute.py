@@ -568,6 +568,9 @@ class ExecuteMixin:
             _ac_deadline = ((time.time() + _ac_cfg["deadline_s"])
                             if (_ac_cfg["enabled"] and _ac_cfg["deadline_s"] > 0) else None)
             _ac_full = ""             # 跨轮全量产出（非流式路径，收口并回 llm_content）
+            # ★ P0-2（2026-10-28）harness 强制闸的连续阻断计数（循环外，跨轮累积）。
+            #   与 stream.py 同构：计数必须在 while 外，否则每轮从 0 数 ⇒ 永不触顶。
+            _harness_blocks = 0
             while True:
                 # ── 每轮状态复位（续跑轮必须干净起步）──
                 _clarify_req = None
@@ -859,6 +862,39 @@ class ExecuteMixin:
                         msg = llm_response["choices"][0]["message"]
                         llm_content = msg.get("content") or ""
                         continue     # ← 外层循环顶：复位后开启下一轮 ReAct
+                # ★ P0-2（2026-10-28）harness 级强制闸：与 stream.py **同构**接线。
+                #   ⚠️ 位置：必须在 break **之前**（仍在 while@574 体内）——
+                #      break 之后已跳出循环，就不是"拦住不让结束"了。
+                #   语义唯一一份（IO 在 autopilot._harness_gate），两处不各写一份。
+                #   ① 有未通过验收的待办 ⇒ 不结束本轮，回灌失败明细、继续 ReAct
+                #   ② 连续阻断达上限 ⇒ 强制放行，且如实告知「未完成」
+                #   ③ 无待办 / 开关关 ⇒ 完全不介入（逐字节兼容 D-3）
+                try:
+                    _hgate = self._harness_gate(conversation_id, _harness_blocks)
+                except Exception:
+                    _hgate = {"block": False, "feedback": "", "force_release": False,
+                              "notice": "", "remaining": [], "blocks_used": _harness_blocks,
+                              "reason": "harness 闸异常 ⇒ 不介入", "failures": []}
+                if _hgate.get("block"):
+                    _harness_blocks = int(_hgate.get("blocks_used") or 0)
+                    if llm_content:
+                        _ac_full = ((_ac_full + "\n\n" + llm_content)
+                                    if _ac_full else llm_content)
+                    messages.append({"role": "assistant", "content": llm_content})
+                    messages.append({"role": "user", "content": _hgate.get("feedback") or ""})
+                    llm_response = llm_client.chat(messages, provider_id=effective_provider,
+                                                   tools=tools_def or None,
+                                                   _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
+                    _guard.add_tokens(_tokof(llm_response))
+                    msg = llm_response["choices"][0]["message"]
+                    llm_content = msg.get("content") or ""
+                    continue     # ← 外层循环顶：复位后开启下一轮 ReAct
+                if _hgate.get("force_release"):
+                    _harness_blocks = int(_hgate.get("blocks_used") or 0)
+                    _notice = _hgate.get("notice") or ""
+                    if _notice:
+                        llm_content = ((llm_content + "\n\n" + _notice)
+                                       if llm_content else _notice)
                 break                # ← 外层循环出口：收口只走一次
             # 收口：跨轮全量产出并回 llm_content（落库/返回/dry_run 校验用全量）
             if _ac_full:
