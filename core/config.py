@@ -1666,13 +1666,13 @@ CONFIG_SCHEMA = {
         # ⚠️ 全部**默认关**：任一项上线都不改变现有行为，可灰度、可独立回滚。
         #   默认关的代价：不开则该能力不生效（用户看不到变化）；收益：不冒未验证的风险。
         #   灰度建议：先在测试会话开启，观察 stage 事件与 todo 表，再全量。
-        "todo_enabled": {"type": "bool", "desc": "★ 计划外化总开关（默认关）：开启后模型可调 todo_write 建待办清单，完成判定改为『所有待办已通过验收』；关闭则无待办、走原有评估器路径（逐字节兼容）"},
-        "todo_require_verify": {"type": "bool", "desc": "★ 待办置 completed 是否强制要有验收回执（默认开，2026-10-28）：依据官方『Only mark as passing after careful testing』；关闭则允许无回执置完成（削弱约束力，仅供排障）"},
-        "harness_enabled": {"type": "bool", "desc": "★ harness 级强制闸总开关（默认关）：对齐官方 Stop hook —— 存在未完成待办且验收未过时**不允许结束本轮**，把失败输出回灌让 AI 继续；关闭则只做判定不强制"},
-        "harness_max_blocks": {"type": "int", "desc": "★ harness 强制闸连续阻断上限（默认 8，对齐官方）：达到上限后强制放行并如实说明『未完成，卡在 X』——上限是必需的（FM-1.5 该停不停 12.4% > 过早终止 6.20%，双向都要管）；0=不阻断"},
-        "harness_max_stall": {"type": "int", "desc": "★ harness 闸**无进展检测**阈值（默认 2）：同一批未完成待办连续 N 次阻断后**完全没变化** ⇒ 判定模型卡死，提前强制放行并如实告知卡在哪（真机实测：只靠次数上限 8 会连续拦截 8 次且待办毫无变化，耗时 ≈2.3 分钟，结果与立刻放行相同 —— MAST「该停不停」的活样本）；0/1=不启用"},
-        "budget_degrade_ratio": {"type": "float", "desc": "★ 预算降级收尾触发点（默认 0.7）：token 预算用达到此比例时停止新开子任务、写待续清单并告知用户『已做到哪、还差哪』（替代现在的硬停；实测 89 次评估中 11 次因 token 耗尽硬停）"},
-        "obstacle_recovery_enabled": {"type": "bool", "desc": "★ 障碍恢复矩阵总开关（默认关）：工具失败时按错误特征分类（auth/not_found/precondition/capability/transient），其中前四类**自动换路径重试而非问人**；关闭则沿用现有行为（失败即问人）"},
+        "todo_enabled": {"type": "bool", "default": False, "desc": "★ 计划外化总开关（默认关）：开启后模型可调 todo_write 建待办清单，完成判定改为『所有待办已通过验收』；关闭则无待办、走原有评估器路径（逐字节兼容）"},
+        "todo_require_verify": {"type": "bool", "default": True, "desc": "★ 待办置 completed 是否强制要有验收回执（默认开，2026-10-28）：依据官方『Only mark as passing after careful testing』；关闭则允许无回执置完成（削弱约束力，仅供排障）"},
+        "harness_enabled": {"type": "bool", "default": False, "desc": "★ harness 级强制闸总开关（默认关）：对齐官方 Stop hook —— 存在未完成待办且验收未过时**不允许结束本轮**，把失败输出回灌让 AI 继续；关闭则只做判定不强制"},
+        "harness_max_blocks": {"type": "int", "default": 8, "desc": "★ harness 强制闸连续阻断上限（默认 8，对齐官方）：达到上限后强制放行并如实说明『未完成，卡在 X』——上限是必需的（FM-1.5 该停不停 12.4% > 过早终止 6.20%，双向都要管）；0=不阻断"},
+        "harness_max_stall": {"type": "int", "default": 2, "desc": "★ harness 闸**无进展检测**阈值（默认 2）：同一批未完成待办连续 N 次阻断后**完全没变化** ⇒ 判定模型卡死，提前强制放行并如实告知卡在哪（真机实测：只靠次数上限 8 会连续拦截 8 次且待办毫无变化，耗时 ≈2.3 分钟，结果与立刻放行相同 —— MAST「该停不停」的活样本）；0/1=不启用"},
+        "budget_degrade_ratio": {"type": "float", "default": 0.7, "desc": "★ 预算降级收尾触发点（默认 0.7）：token 预算用达到此比例时停止新开子任务、写待续清单并告知用户『已做到哪、还差哪』（替代现在的硬停；实测 89 次评估中 11 次因 token 耗尽硬停）"},
+        "obstacle_recovery_enabled": {"type": "bool", "default": False, "desc": "★ 障碍恢复矩阵总开关（默认关）：工具失败时按错误特征分类（auth/not_found/precondition/capability/transient），其中前四类**自动换路径重试而非问人**；关闭则沿用现有行为（失败即问人）"},
         # ── 编排 partial 补齐（2026-10-22 米爸「是否重跑需要一个健全的机制」）──
         # 对齐标杆：Claude Code「stop_reason 七值 → 五种处置」（先分类病因再决定动作）
         # + Stop hook 否决权 + LangGraph pending writes（已完成一律复用）。
@@ -2201,7 +2201,14 @@ def schema() -> dict:
             out[section][key] = {
                 **meta,
                 "current": shown,
-                "default": DEFAULT_CONFIG.get(section, {}).get(key),
+                # ★ 2026-10-28：允许在 CONFIG_SCHEMA 的 meta 里直接声明 default。
+                #   为什么需要：`agent` 段原本没有 DEFAULT_CONFIG 条目 ⇒ 该段**所有**
+                #   配置项在界面上"默认 —"，而像 todo_enabled 这种"默认关"
+                #   恰恰是最关键的信息（用户要一眼看出"现在没开"）。
+                #   向后兼容：既有键的 meta 里没有 default ⇒ 仍回落 DEFAULT_CONFIG。
+                "default": (meta.get("default")
+                            if "default" in meta
+                            else DEFAULT_CONFIG.get(section, {}).get(key)),
             }
     return out
 
