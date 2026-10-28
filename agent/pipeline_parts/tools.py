@@ -1787,6 +1787,53 @@ class ToolMixin:
                                    latency_ms=int((_t2.time() - t0) * 1000))
         except Exception:
             pass   # 观测收口失败绝不阻断工具执行
+        # ★ P0-5（2026-10-28）障碍恢复：给**失败结果**追加「这属于什么障碍 / 该怎么恢复」。
+        #
+        # 为什么加在这里（而不是各失败出口）：
+        #   `_exec_tool_call` 有 10+ 个失败出口（白名单/RBAC/HIL/超时/异常…），
+        #   逐个补必然漏；而**所有出口都汇入本方法** ⇒ 改这一处，一条不错。
+        #   （本仓已用同一理由把 tool span 的开闭点放在这里。）
+        #
+        # 为什么追加到 result["result"]（而不是只写日志）：
+        #   模型看到的是 result["result"]。失败原因若只说「失败」，
+        #   模型只能选择"问用户"；给出障碍类型 + 恢复动作，它才能自己换路径。
+        #   实测依据（真实样本 #3173）：模型的 next_step 是「刷新凭据后重新调用」——
+        #   说明它**知道**该自恢复，只是系统没给它这个信号，它只能绕回问人。
+        #
+        # ⚠️ 不动 result["ok"]：失败仍是失败，只是**附带恢复建议**。
+        # ⚠️ 权限类失败（permission_denied/permission_error）不追加 —— 那确实该找人。
+        try:
+            _ob_on = False
+            try:
+                from core.config import as_bool as _as_bool
+                _ob_on = bool(_as_bool("agent", "obstacle_recovery_enabled", False))
+            except Exception:
+                _ob_on = False
+            if (_ob_on and isinstance(result, dict) and not result.get("ok")
+                    and not result.get("permission_denied")
+                    and not result.get("permission_error")):
+                from agent import agent_todo as _at
+                _etxt = str(result.get("result") or result.get("error") or "")
+                _cls = _at.classify_obstacle(_etxt)
+                _ACTION_TXT = {
+                    "retry": "重试（可能是瞬时故障）",
+                    "refresh_retry": "刷新凭据后重试一次",
+                    "repath": "换路径：先用 list/search 定位到正确对象再重试",
+                    "refetch_replay": "重新获取最新坐标/版本后重放",
+                    "downgrade": "换等价工具或缩小范围后重试",
+                    "ask_user": "向用户澄清",
+                }
+                _hint = ("\n\n【障碍恢复建议】本失败被判定为「%s」类：%s。"
+                         % (_cls["kind"], _ACTION_TXT.get(_cls["action"], _cls["action"])))
+                if not _cls["ask_user_allowed"]:
+                    _hint += ("\n该类问题**用现有工具可以自行解决** —— "
+                              "请按上面的恢复动作再试一次，**不要**直接问用户。")
+                else:
+                    _hint += "\n该类信息只有用户能提供，可以调用 ask_user 澄清。"
+                result["result"] = _etxt + _hint
+                result["obstacle"] = _cls
+        except Exception:
+            pass   # 障碍提示失败绝不阻断工具结果返回
 
     def _resolve_req_scope(self, scope_ids, scope_id, scope, agent_def):
         """解析建模范围（文件管理=全局数据，不分分支）。
