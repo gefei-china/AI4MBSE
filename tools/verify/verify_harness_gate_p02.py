@@ -145,6 +145,38 @@ def group_c():
     s = hg.parse_verify_spec("")
     check("C", "空 verify ⇒ manual（不抛异常）", s["kind"] == "manual", str(s))
 
+    # ★★ 真机实测缺陷回归（2026-10-28 全链路 A/B 抓出）：
+    #    verify 字段由 LLM 自由书写，它写自然语言。
+    #    旧实现"按空白切分第一段当工具名" ⇒ 把中文句子当工具名去调用，
+    #    实际产生了这些假工具调用（tool_call_logs 实录）：
+    #      「定位分支与版本（含草稿）后调用」 / 「人工确认：总结仅引用…」
+    #    ⇒ 这些用例必须全部降级为 manual，**绝不拿自然语言去调工具**。
+    NATURAL = [
+        "定位分支与版本（含草稿）后调用 query_data_tree",
+        "调用 query_projects 返回至少一个工程",
+        "人工确认：总结仅引用本次实际查到的工程与包树内容，字数≤200",
+        "第 5 章也要看",
+        "跑一下校验",
+    ]
+    bad = []
+    for v in NATURAL:
+        sp_ = hg.parse_verify_spec(v)
+        if sp_["kind"] != "manual":
+            bad.append((v[:24], sp_["tool"]))
+    check("C", "★★自然语言 verify 一律降级 manual（不当工具名调用）",
+          not bad, f"被误当工具名：{bad}")
+
+    # 反向：真工具名仍必须是 tool（防矫枉过正把真工具也降级）
+    REAL_TOOLS = ["query_data_tree", "sysmlv2_check", "gen_pkg",
+                  "mcp:zhiyuan:query_projects",
+                  'query_data_tree {"branch": "dev"}']
+    bad2 = []
+    for v in REAL_TOOLS:
+        sp_ = hg.parse_verify_spec(v)
+        if sp_["kind"] != "tool":
+            bad2.append(v)
+    check("C", "★真工具名仍识别为 tool（未矫枉过正）", not bad2, str(bad2))
+
 
 # ══════════════ D. 接线（两处同构 + 位置正确）══════════════
 
@@ -397,6 +429,23 @@ def group_e():
     check("E", "★变异自证：去掉无进展检测 ⇒ A9 判据翻红",
           c_stall(hg.harness_decide) and not c_stall(bad_no_stall),
           f"真实现={c_stall(hg.harness_decide)} 变异={c_stall(bad_no_stall)}")
+
+    # E6 ★★ 变异自证：去掉工具名形态校验（复原旧 bug）⇒ C 组新判据必须翻红
+    def c_natural(parse) -> bool:
+        return parse("定位分支与版本（含草稿）后调用 query_data_tree")["kind"] == "manual"
+
+    def bad_parse(verify):
+        raw = str(verify or "").strip()
+        if raw in ("人工确认", "manual", "人工"):
+            return {"kind": "manual", "tool": "", "args": {}, "raw": raw, "parse_error": ""}
+        parts = raw.split(None, 1)
+        # 变异：不校验工具名形态（旧行为）
+        return {"kind": "tool", "tool": parts[0].strip(),
+                "args": {}, "raw": raw, "parse_error": ""}
+
+    check("E", "★★变异自证：去掉工具名形态校验 ⇒ 自然语言判据翻红",
+          c_natural(hg.parse_verify_spec) and not c_natural(bad_parse),
+          f"真实现={c_natural(hg.parse_verify_spec)} 变异={c_natural(bad_parse)}")
 
 
 def main():

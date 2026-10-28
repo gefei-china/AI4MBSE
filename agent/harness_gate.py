@@ -19,6 +19,8 @@
 
 from __future__ import annotations
 
+import re
+
 __all__ = [
     "HARNESS_MAX_BLOCKS",
     "HARNESS_FORCE_NOTICE_MARK",
@@ -37,13 +39,28 @@ HARNESS_MAX_BLOCKS = 8
 HARNESS_FORCE_NOTICE_MARK = "未完成"
 
 
+#: 合法工具名形态：ASCII 字母/数字/下划线/点/冒号，且以字母开头。
+#: ★ 为什么必须有这个校验（2026-10-28 真机实测暴露的核心缺陷）：
+#:   全链路 A/B 跑出 B2 轮的实际工具调用记录里有这两条「工具」：
+#:     · 「定位分支与版本（含草稿）后调用」 → 未知工具
+#:     · 「人工确认：总结仅引用本次实际查到的工程与包树内容，字数≤200」 → 未知工具
+#:   成因：verify 字段由 **LLM 自由书写**，它写的是自然语言描述，
+#:   而 parse_verify_spec 原来"按空白切分、第一段当工具名" ⇒ 把中文句子当工具名去调。
+#:   后果链：verify 必然失败 → 待办永远过不了验收 → 拦 2 次 → 无进展检测放行，
+#:   且这些假调用污染 tool_call_logs（看起来像"工具坏了"）。
+#:   ⇒ 契约不能只写在提示词里（遵循率不稳），**必须在解析层兜住**：
+#:     不像工具名 ⇒ 按人工验收处理，绝不拿自然语言去调用。
+_TOOL_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:]*$")
+
+
 def parse_verify_spec(verify: str) -> dict:
     """解析 `verify` 字段为可执行规格。
 
-    格式（容错解析，**不因格式问题抛异常** —— 解析不了就当"不可自动验收"）：
+    格式（容错解析，**不因格式问题抛异常**）：
       · `人工确认` ⇒ 人工验收（不可自动执行）
       · `工具名` ⇒ 调用该工具，参数为空
       · `工具名 {json}` / `工具名 参数` ⇒ 调用该工具并带参数
+      · **其他任何自然语言描述** ⇒ 人工验收（见下方 _TOOL_NAME_RE 说明）
 
     :returns: ``{"kind": "manual"|"tool", "tool": str, "args": dict,
                  "raw": str, "parse_error": str}``
@@ -62,6 +79,11 @@ def parse_verify_spec(verify: str) -> dict:
     if not tool:
         return {"kind": "manual", "tool": "", "args": {}, "raw": raw,
                 "parse_error": "解析不出工具名"}
+    # ★ 关键：工具名形态校验。不像工具名 ⇒ 人工验收，**不拿自然语言去调工具**。
+    if not _TOOL_NAME_RE.match(tool):
+        return {"kind": "manual", "tool": "", "args": {}, "raw": raw,
+                "parse_error": ("首段 %r 不像工具名（含中文/空格/标点或过长）"
+                                "⇒ 按人工验收处理" % (tool[:30],))}
     args = {}
     perr = ""
     if rest:
