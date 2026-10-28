@@ -11,6 +11,35 @@ from agent.pipeline_parts import skill_body_on_demand as _sbody
 class SkillMixin:
     """技能池加载、语义匹配与技能提示词构建。"""
 
+    @staticmethod
+    def _trigger_hit(triggers, low: str) -> bool:
+        """触发词命中判定（支持**合取**写法，向后兼容）。
+
+        两种写法：
+          · 普通词      —— 子串包含（**原有语义，逐字节不变**）
+          · `A+B`       —— **合取**：A、B 都出现才算命中（新增）
+
+        为什么需要合取（2026-10-27 实测）：中文里「新增包」「新增测试包」「新建一个包」
+        表达的是同一个意图，但**没有任何一个单一子串能同时覆盖且不过匹配**——
+        用「新增包」会漏掉「新增测试包」；用「包」又会把「生成需求视图」这类
+        完全无关的请求也拉进来（实测「智源平台管理」因 trigger 含「包」「元素」
+        「建模」「校验」「视图」而**一次输入命中 3 个技能**）。
+        合取让触发词既精确又不漏：写 `新增+包` ⇒ 「新增测试包」命中、
+        「生成需求视图」不命中。
+
+        ⚠️ 现有触发词里**没有** `+` ⇒ 对存量技能的行为**逐字节不变**。
+        """
+        for t in triggers:
+            if not t:
+                continue
+            if "+" in t:
+                parts = [p.strip() for p in t.split("+") if p.strip()]
+                if parts and all(p in low for p in parts):
+                    return True
+            elif t in low:
+                return True
+        return False
+
     def _global_skill_pool(self, user=None) -> list:
         """全局技能池（不含绑定技能，供跨 Agent 自动匹配）。
 
@@ -128,7 +157,31 @@ class SkillMixin:
         - 三级匹配：triggers 关键词 → bigram 语义（双条件防误路由）→ LLM 批量兜底
         - 角色权限：skill.allowed_roles 非空且当前用户角色不在其中 → 跳过（P2）
         - 命中 → 注入元数据 + 正文摘要（全局命中标注建议绑定）；结果写入 self._last_skill_hits
+
+        ★ 2026-10-27（真机 E2E 暴露）：**本轮缓存**（同 intent+input 只算一次）。
+          起因：`stream.py` 曾在**技能匹配之前**就 yield `skill` 事件与 reasoning 文本
+          （旧 4165~4172 vs `build_prompt_blocks` 旧 4254）⇒ `_last_skill_hits` 恒为空
+          ⇒ 前端「🧩 技能执行」卡永远空白、真机 E2E 的 E2 判据恒 FAIL。
+          修法不是挪事件（那会让事件晚于 reasoning 到达），而是**提前预匹配 + 复用**：
+          调用方（stream）先调一次本方法拿到命中集，随后 `build_prompt_blocks`
+          命中缓存 ⇒ **不重复匹配、不重复 offload**（offload 是有副作用的：
+          会写 `skill_body_offloads` 表并分配 id，重复做会留垃圾行）。
+          ⇒ 缓存键必须含 intent + user_input + user 角色 + skill_name 语义。
         """
+        _ck = (str(intent or ""), str(user_input or ""),
+               str((user or {}).get("role_name") or ""),
+               bool(getattr(self, "_skill_forced", False)))
+        _cached = getattr(self, "_skill_prompt_cache", None)
+        if isinstance(_cached, dict) and _cached.get("key") == _ck:
+            self._last_skill_hits = list(_cached.get("hits") or [])
+            return _cached.get("prompt") or ""
+        _out = self._build_skill_prompt_uncached(intent, user_input, user)
+        self._skill_prompt_cache = {"key": _ck, "prompt": _out,
+                                    "hits": list(self._last_skill_hits or [])}
+        return _out
+
+    def _build_skill_prompt_uncached(self, intent: str, user_input: str, user=None) -> str:
+        """`_build_skill_prompt` 的实际实现（无缓存层）—— 见上方法的说明。"""
         bound = self.registry.get_bound_skills(intent)
         bound_names = {s.get("name") for s in bound}
         # ★ 2026-10-27（对标 Anthropic Agent Skills 后的口径收口）：
@@ -166,7 +219,7 @@ class SkillMixin:
         low = str(user_input or "").lower()
         for s in candidates:
             trg = [str(t).lower() for t in (s.get("triggers") or [])]
-            if any(t and t in low for t in trg):
+            if self._trigger_hit(trg, low):
                 hits.add(s["name"])
         if len(hits) < 3:
             rest = [s for s in candidates if s["name"] not in hits]

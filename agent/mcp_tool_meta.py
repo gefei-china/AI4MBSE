@@ -122,6 +122,368 @@ def save_tool_meta(tools: list) -> str:
     return json.dumps(out, ensure_ascii=False)
 
 
+def _nested_address_fields(info: dict) -> set:
+    """只取**嵌套寻址对象内部**的 id 字段（不含顶层 required 标量）。
+
+    与 `_address_set` 的差别正是"服务端下发的坐标"与"客户端自造键"的差别：
+    坐标总是打包在寻址对象里（`workspace` / `version`）成组出现，
+    而 `requestId` 这类幂等键是顶层标量。
+    """
+    sch = (info or {}).get("inputSchema") or {}
+    if not isinstance(sch, dict):
+        return set()
+    props = sch.get("properties") or {}
+    out = set()
+    if isinstance(props, dict):
+        for _k, v in props.items():
+            if not isinstance(v, dict):
+                continue
+            sub = v.get("properties")
+            if not isinstance(sub, dict):
+                continue
+            for pk in sub:
+                if str(pk).lower().endswith("id"):
+                    out.add(str(pk))
+    return out
+
+
+def _lookup_prefix_ok(name: str) -> bool:
+    """该工具是否是「查询类」（能产出标识符）——只有查询类才可能是坐标的生产者。
+
+    通用规则：**按名字前缀**判定读/写语义，不针对任何具体工具名。
+    """
+    n = str(name or "").lower()
+    return n.startswith(("query_", "list_", "search_", "get_", "find_", "browse_"))
+
+
+def _address_set(info: dict) -> set:
+    """一个工具「需要哪些坐标标识符」。
+
+    取两部分的并集：
+      ① 顶层 `required` 里形如 `<x>Id` 的标量字段；
+      ② 嵌套对象属性（`properties` 里的子对象）里形如 `<x>Id` 的字段
+         —— 平台把「工程/分支/版本」打包成一个寻址对象（`version` / `workspace`），
+         这个对象**整体必填**，其内部字段就是该工具要的坐标。
+
+    ⚠️ 只看顶层 `required` 会漏掉一半工具：`export_sysml_v2` 顶层只 required `action`，
+    坐标在它的 `version` 属性里（PREVIEW 时可省，EXPORT 时必填）。
+    """
+    sch = (info or {}).get("inputSchema") or {}
+    if not isinstance(sch, dict):
+        return set()
+    out = set()
+    for r in (sch.get("required") or []):
+        rs = str(r)
+        if rs.lower().endswith("id"):
+            out.add(rs)
+    props = sch.get("properties") or {}
+    if isinstance(props, dict):
+        for _k, v in props.items():
+            if not isinstance(v, dict):
+                continue
+            sub = v.get("properties")
+            if not isinstance(sub, dict):
+                continue
+            for pk in sub:
+                if str(pk).lower().endswith("id"):
+                    out.add(str(pk))
+    return out
+
+
+def _stem(field: str) -> str:
+    """`projectId` → `project`；`branchId` → `branch`（大小写不敏感的词干）。"""
+    f = str(field or "").strip()
+    return (f[:-2] if f.lower().endswith("id") and len(f) > 2 else f).lower()
+
+
+def address_chain(meta: dict, chosen, max_rounds: int = 2) -> list:
+    """**寻址前置链闭包**：把「能产出坐标的查询工具」补进来（通用规则，不含任何硬编码工具名）。
+
+    ## 为什么需要（2026-10-27 实测）
+
+    平台有一组**坐标三元组**：`projectId` / `branchId` / `versionId`。
+    实测 71 个 MCP 工具里 **65 个**都要这组坐标（以寻址对象 `workspace` / `version` 传入）。
+    而产出它们的是三个「查询类」工具：查工程 → 查分支 → 查版本（**逐级依赖**：
+    查分支要知道工程，查版本要知道分支）。
+
+    **裁剪会把这条链剪断**：对中文写类请求（如「在通信子系统用例包中新增测试包」），
+    工具名是英文、分词打分对中文几乎无区分度 ⇒ 实测这三个坐标工具**一个都没被选中**，
+    而 skill 正文第一句恰恰是「核心坐标系（一切请求都从这三项开始）」——
+    **提示词让模型先调的工具不在清单里** ⇒ 模型只能瞎猜坐标（必然 INVALID_ARGUMENTS /
+    PERMISSION_DENIED）或反复盲试。
+
+    ## 规则（结构推导，与平台无关）
+
+    1. **坐标轴**：被 ≥ `axis_min` 个工具需要的 `<x>Id` 字段（共享寻址轴，不是 `requestId`
+       这类客户端自造幂等键——后者没有查询类生产者，会自然落选）。
+    2. **生产者**：对轴上的字段 F，工具 P 是其生产者，当且仅当
+       ① `F` 不在 P 自己的坐标集里；② P 的名字/描述含 F 的**词干**（`versionId`→`version`）；
+       ③ P 是**查询类**（名字前缀 `query_/list_/search_/get_/find_/browse_`）；
+       ④ 在满足以上条件的 P 中取**坐标集最小**者（最上游的那一级）。
+    3. **闭包**：对每个被选中的工具，把它要的坐标轴字段的生产者补进来，
+       并对生产者递归（查版本要工程与分支 ⇒ 再补查工程、查分支）。
+
+    实测（zhiyuan-dev-mcp，71 工具）：坐标轴 = `projectId`(68) / `branchId`(67) / `versionId`(66)；
+    生产者唯一确定 = 查工程(坐标集 ∅) / 查分支({projectId}) / 查版本({projectId,branchId})；
+    ⇒ 任何需要寻址的请求都会**恒定补齐这 3 个**（体量 +3 个工具，约 +1k token）。
+
+    ⚠️ 不设「工具名白名单」：换一个平台（同样有工程/分支/版本坐标系）同样成立；
+    没有坐标结构的 server（如内置 3 工具 MCP）**一条都不会补** ⇒ 逐字节不变。
+    """
+    if not meta or not chosen:
+        return []
+    names = list(meta.keys())
+    order = {nm: i for i, nm in enumerate(names)}
+    chosen_set = set(p for p in chosen if p in meta)
+    if not chosen_set:
+        return []
+
+    # ── ① 坐标轴：被 ≥ axis_min 个工具需要、且**成组出现在寻址对象里**的 id 字段 ──
+    #    为什么要「成组出现在寻址对象里」这条：它把**客户端自造键**排除掉。
+    #    实测 `requestId`（幂等键）被 42 个工具需要（也达到轴阈值），
+    #    但它**从不**出现在寻址对象里（寻址对象恒为 {projectId,branchId,versionId}）
+    #    ⇒ 不是服务端下发的坐标 ⇒ 不算轴 ⇒ 不会给"生产 requestId"这种伪需求补工具。
+    axis_min = max(5, len(names) // 3)
+    usage = {}
+    nested = set()
+    for nm in names:
+        info = meta.get(nm) or {}
+        for f in _address_set(info):
+            usage[f] = usage.get(f, 0) + 1
+        for f in _nested_address_fields(info):
+            nested.add(f)
+    axes = {f for f, c in usage.items() if c >= axis_min and f in nested}
+    if not axes:
+        return []
+
+    # ── ② 生产者：坐标集是「坐标轴全集」的**真子集**的查询类工具 ──
+    #    为什么要「真子集」这条：它把**客户端自造键**（如 `requestId` 幂等键）排除掉。
+    #    实测 `requestId` 也被 42 个工具需要（达到轴阈值），但它的"生产者"候选
+    #    （如 get_model_operation）的坐标集 **等于** 轴全集 ⇒ 不满足真子集 ⇒ 落选。
+    #    而真正的三级解析器坐标集分别是 ∅ / {projectId} / {projectId,branchId} ⇒ 真子集成立。
+    producers = {}
+    for f in axes:
+        st = _stem(f)
+        if not st:
+            continue
+        cands = []
+        for nm in names:
+            info = meta.get(nm) or {}
+            p_aset = _address_set(info)
+            if not p_aset < axes:          # 真子集：排除轴全集本身与含非轴字段者
+                continue
+            if f in p_aset:
+                continue
+            if not _lookup_prefix_ok(nm):
+                continue
+            blob = ("%s %s" % (nm, info.get("description") or "")).lower()
+            if st not in blob:
+                continue
+            cands.append(nm)
+        if not cands:
+            continue
+        producers[f] = min(cands, key=lambda nm: (len(_address_set(meta.get(nm) or {})), order[nm]))
+
+    if not producers:
+        return []
+
+    # ── ③ 闭包：逐级向上游补齐 ──
+    added = []
+    frontier = set(chosen_set)
+    for _ in range(max(1, max_rounds)):
+        grew = False
+        need = set()
+        for nm in frontier:
+            for f in _address_set(meta.get(nm) or {}):
+                if f in axes:
+                    need.add(f)
+        for f in need:
+            p = producers.get(f)
+            if p and p not in chosen_set:
+                chosen_set.add(p)
+                added.append(p)
+                grew = True
+        if not grew:
+            break
+        frontier = set(added)
+    return [nm for nm in names if nm in set(added)]
+
+
+#: MCP 工具的**动词族 → 触发词**（写类工具的"该不该出现在本轮"的判据）。
+#:
+#: 为什么要有：MCP 工具**不在 `tools` 表**里 ⇒ 后端那道"写意图闸"（按 `side_effect`
+#: 过滤）**根本管不到它们** ⇒ 实测（2026-10-27）：
+#:   · 「把当前模型导出为 SysML v2 源码」→ 工具清单里出现了 `delete_model_elements`
+#:   · 「校验这段 SysML v2 代码的语法」  → 出现了 `apply_model_changes` / `import_sysml_text`
+#:   · 「在通信子系统用例包中新增测试包」→ 出现了 `apply_model_changes`
+#: 读类任务被塞进破坏性/覆盖写工具 ⇒ 模型"顺手调用"就是事故。
+#:
+#: 规则：**按工具名里的动词族判定**（不是按工具名硬编码）——
+#:   用户输入里没出现该动词族的任何触发词 ⇒ 该工具本轮不注入。
+#:   触发词表**尽量宽**（宁多不少）⇒ 召回不降；精度提升来自"动词族对不上就不给"。
+#:   例：`delete_model_elements` 需要"删除/移除/删掉/清理"，"新增测试包"不含 ⇒ 正确挡掉。
+_MCP_WRITE_VERB_TABLE = {
+    "delete":   ("删除", "移除", "删掉", "删了", "清理", "清除", "删除掉", "delete", "remove", "drop", "purge"),
+    "import":   ("导入", "写回", "回写", "覆盖导入", "导入源码", "导入模型", "import", "upload", "push"),
+    "apply":    ("应用", "下发", "批量变更", "应用变更", "变更集", "apply", "apply_changes", "change set"),
+    "undo":     ("撤销", "回退", "还原", "回滚", "undo", "revert", "rollback"),
+    "overwrite": ("覆盖", "覆写", "替换", "overwrite", "replace"),
+    "create":   ("新增", "新建", "创建", "添加", "加一个", "建一个", "增加", "补充", "生成", "产出",
+                 "create", "add", "new", "insert", "make"),
+    "update":   ("修改", "更新", "改名", "重命名", "调整", "改成", "改为", "换成", "改一下", "优化",
+                 "update", "modify", "rename", "set", "patch", "edit"),
+    "move":     ("移动", "挪", "移到", "move", "relocate"),
+    "clone":    ("克隆", "复制", "副本", "拷贝", "clone", "copy", "duplicate"),
+    "annotate": ("标注", "注释", "批注", "说明文字", "annotate", "annotation"),
+    "layout":   ("布局", "排版", "排布", "摆放位置", "整理位置", "layout"),
+    "present":  ("呈现", "展示", "显示", "出示", "present"),
+    "place":    ("放置", "摆放", "布置", "place", "position"),
+    "configure": ("配置", "设定", "设定为", "configure"),
+    "manage":   ("管理", "变体", "变型", "导入管理", "manage"),
+    # ★ 2026-10-28（写前确认 HITL）补齐的 4 个族 —— **追加在表尾**是刻意的：
+    #   `mcp_write_group` 按**插入顺序**取首个命中，追加 ⇒ 对已有名词的命中结果**不变**
+    #   （如 `remove_view_presentations` 仍命中先出现的 "move"）⇒ **注入侧零回归**；
+    #   而执行侧的 `mcp_effect_level` 按**长度降序**匹配 ⇒ "remove" 正确压过 "move"。
+    #   补齐理由（真实 71 工具目录实测）：
+    #     set_*      —— 6 个工具全是写（"设置/清空/替换/保存真实 OCL AST"），旧表**全漏判**
+    #     remove_*   —— remove_view_presentations 是删除
+    #     generate_* —— generate_model_view 把元素生成到视图
+    #     run_*      —— run_modeling_automation 执行 GENERATE/COPY
+    "set":      ("设置", "设定", "赋值", "置为", "清空", "替换", "set_", "assign", "unset"),
+    "remove":   ("移除", "去除", "摘除", "remove", "detach", "unlink"),
+    "generate": ("生成", "产出", "generate", "produce", "render"),
+    "run":      ("运行", "执行", "触发", "run", "execute", "trigger", "automation"),
+}
+
+
+#: **受动词闸约束的族**（破坏性 / 覆盖写）。
+#:
+#: 为什么只管这几族：实测「查工程列表」这类读请求下，MCP 的语义选集会挑中一批**写类**工具
+#: （英文名按字典序排前 ⇒ create/configure/clone 等），若把**所有**写族都按动词闸掉，
+#: 会出现「读请求里一个 MCP 工具都不剩」⇒ 反而把能力掐死。
+#: ⇒ 只闸**破坏性/覆盖写**这几族：它们误暴露的代价最高（模型"顺手调用"就是事故），
+#:   而 create/update 这类**常规建模动作**保留（漏了会让建模流程做不下去）。
+_MCP_GATED_GROUPS = ("delete", "import", "apply", "undo", "overwrite")
+
+
+#: ★ 2026-10-28（写前确认 HITL）执行侧**专用**的族表与判据。
+#:
+#: ## 为什么不能直接复用 `mcp_write_group`
+#: `mcp_write_group` 是**注入侧**判据（问「这一轮该不该把这个工具递到模型眼前」），
+#: 按子串匹配、且**故意不挡** create/update（挡了建模做不下去）。
+#: 执行侧问的是「**这个操作要不要人点头**」⇒ 口径必须不同、且**更严**。
+#: ⇒ 两者**刻意分开**，改一个不影响另一个。
+#:
+#: ## 实测（2026-10-28，真实 71 工具目录）暴露的两个真实问题
+#: ① **漏判（更危险）**：6 个 `set_*` 工具 —— `set_model_expression` /
+#:    `set_specializations` / `set_model_type_relations` / `set_state_diagram_labels` /
+#:    `set_model_attribute_declaration` / `set_model_expression_visibility` ——
+#:    平台描述明确写「设置或清空」「替换」「**保存真实 OCL AST**」⇒ **全是写操作**，
+#:    但名字里没有 create/update 等动词 ⇒ 旧动词族判成 read ⇒ **闸门直接放行**。
+#: ② **误判**：`get_model_delete_impact` 名字含 "delete" ⇒ 旧动词族判 destructive，
+#:    而它其实是**只读**的删除影响分析（平台描述：「删除前校验…取得 DELETE_ELEMENTS 用途票据」）。
+#:
+#: ## 判据（三条，纯结构、零描述解析）
+#: ① **读前缀优先** —— 命中 `get_/query_/list_/search_/…` 即判 read。
+#:    这条同时修掉 ② 的误判（`get_model_delete_impact`）与
+#:    `preview_model_changes`（描述里出现「删除」但它是纯只读预览 —— **描述关键词法不可靠**，
+#:    真目录实测：其描述含「删除」「写入」「执行」三个词却是只读 ⇒ 故描述一律不参与判定）。
+#: ② **长动词优先** —— "remove" 含 "move" 子串 ⇒ 必须 remove 先匹配。
+#: ③ **补齐动词族** —— set / remove / generate / run（真目录实测得出）。
+#:
+#: ⚠️ 本表**只影响执行侧的写前确认闸**（写前确认 §4.2），
+#:    注入侧的 `_MCP_GATED_GROUPS` 与 `filter_mcp_by_intent` **逐字节不变** ⇒ 零回归。
+
+#: 读动词前缀（结构判据，命中即判 read）。
+_MCP_READ_PREFIXES = (
+    "get_", "query_", "list_", "search_", "find_", "export_", "preview_",
+    "read_", "fetch_", "check_", "describe_", "count_",
+)
+
+#: 执行侧：**不可逆 / 覆盖写**的动词族（需最高档确认）。
+MCP_DESTRUCTIVE_GROUPS = ("delete", "remove", "import", "apply", "undo", "overwrite")
+
+#: 执行侧：**可逆写**的动词族（需普通确认）。
+MCP_WRITE_GROUPS = (
+    "create", "update", "move", "clone", "annotate", "layout", "present",
+    "place", "configure", "manage", "set", "generate", "run",
+)
+
+
+def mcp_write_group(name: str) -> str:
+    """判断一个 MCP 工具属于哪个写动词族；读类工具返回空串。
+
+    **按工具名里的动词词匹配**，不硬编码任何具体工具名。
+    读类动词（query/get/list/search/find/export/validate/preview…）不在表里 ⇒ 返回 ""。
+    """
+    n = str(name or "").lower()
+    for grp in _MCP_WRITE_VERB_TABLE:
+        if grp in n:
+            return grp
+    return ""
+
+
+def mcp_effect_level(name: str) -> str:
+    """★ 执行侧写类判定：返回 `"read"` / `"write"` / `"destructive"`。
+
+    与注入侧 `mcp_write_group` 的区别（**刻意不同口径**）：
+      · 注入侧 = 恰当性（该不该递到模型眼前）⇒ 窄口径、只闸 5 族；
+      · 执行侧 = 授权（要不要人点头）⇒ **宽口径**、覆盖全部写族。
+
+    判据（纯结构，不解析描述 —— 真实目录实测：描述关键词法误判率高）：
+      ① 读前缀优先 ⇒ read；
+      ② 否则按动词族匹配（**长词优先**："remove" 含 "move" 子串）；
+      ③ 匹配不到 ⇒ read。
+
+    真实目录实测结果（71 个工具）：read 30 / write 34 / destructive 7。
+    """
+    n = str(name or "").lower()
+    if not n:
+        return "read"
+    if n.startswith(_MCP_READ_PREFIXES):
+        return "read"
+    # ⚠️ **破坏族必须整族先判**，不能按"最长动词优先"统一排 ——
+    #   实测反例：`remove_view_presentations` 里 "present"(7) 是 "presentations" 的子串，
+    #   若统一按长度排，present(7) 会压过 remove(6) ⇒ **删除被判成"可逆写"**。
+    #   ⇒ 破坏族整族先匹配（族内再按长度降序），其次才是写族。
+    for grp in sorted(MCP_DESTRUCTIVE_GROUPS, key=len, reverse=True):
+        if grp in n:
+            return "destructive"
+    for grp in sorted(MCP_WRITE_GROUPS, key=len, reverse=True):
+        if grp in n:
+            return "write"
+    return "read"
+
+
+def filter_mcp_by_intent(names, user_input: str, groups: dict) -> tuple:
+    """按**动词族**过滤 MCP 的**破坏性/覆盖写**工具。
+
+    `groups` = {工具名: 动词族}（由 `mcp_write_group` 批量算出）。
+    返回 `(保留列表, 被挡列表)`。
+
+    ⚠️ 读类工具**永不被挡**；`create/update/move/clone/...` 等常规建模动作**也不挡**
+    （见 `_MCP_GATED_GROUPS` 的理由）。
+    ⚠️ 挡的是"**用户压根没提这个动作**"的工具，不是"用户禁止这个动作"。
+    """
+    if not groups:
+        return list(names), []
+    q = str(user_input or "").lower()
+    if not q:
+        return list(names), []
+    kept, dropped = [], []
+    for nm in names:
+        grp = groups.get(nm)
+        if not grp or grp not in _MCP_GATED_GROUPS:
+            kept.append(nm)
+            continue
+        words = _MCP_WRITE_VERB_TABLE.get(grp) or ()
+        if any(w.lower() in q for w in words):
+            kept.append(nm)
+        else:
+            dropped.append(nm)
+    return kept, dropped
+
+
 def pick_for_injection(meta: dict, user_input: str, min_keep: int = 8, top_n: int = 0):
     """从 server 的工具集里选出本轮要暴露的工具。
 
@@ -154,14 +516,14 @@ def pick_for_injection(meta: dict, user_input: str, min_keep: int = 8, top_n: in
       ⇒ 加闭包：引用必带、意图动词命中必带。
     """
     empty = {"total": 0, "selected": 0, "keep": 0, "semantic": 0, "semantic_names": [],
-             "expanded": []}
+             "expanded": [], "chain": []}
     if not meta:
         return [], dict(empty)
     names = list(meta.keys())
     total = len(names)
     if min_keep <= 0 and top_n <= 0:
         return names, {"total": total, "selected": total, "keep": 0, "semantic": 0,
-                       "semantic_names": [], "expanded": []}
+                       "semantic_names": [], "expanded": [], "chain": []}
 
     want = top_n if top_n and top_n > 0 else min_keep
     want = max(1, min(want, total))
@@ -194,6 +556,15 @@ def pick_for_injection(meta: dict, user_input: str, min_keep: int = 8, top_n: in
     except Exception:
         expanded = []
 
+    # ── ★ 坐标系前置链闭包（寻址三元组）──
+    #   见 `address_chain` docstring。**不占 N 的名额**（与 expand_with_deps 同级）。
+    chain = []
+    try:
+        chain = address_chain(meta, chosen_set)
+        chosen_set |= set(chain)
+    except Exception:
+        chain = []
+
     # ── 输出按原始顺序（可复现）──
     chosen = [nm for nm in names if nm in chosen_set]
     return chosen, {
@@ -203,6 +574,7 @@ def pick_for_injection(meta: dict, user_input: str, min_keep: int = 8, top_n: in
         "semantic": len([nm for nm in chosen if nm in scores]),
         "semantic_names": [nm for nm in semantic_hits if nm in chosen_set],
         "expanded": [nm for nm in names if nm in set(expanded)],
+        "chain": [nm for nm in names if nm in set(chain)],
     }
 
 

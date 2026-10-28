@@ -600,6 +600,34 @@ class SessionMixin:
                 return "action_kw:" + str(k)
         return ""
 
+    def _persist_hil_confirm(self, conversation_id, intent, confirm_req) -> int:
+        """★ 2026-10-28（写前确认 HITL）：落一条"等待人工确认"的消息（时间线痕迹）。
+
+        ## 为什么状态源仍然是 `hil_confirmations` 而不是 `conversations.pending_clarify`
+        - 澄清只有**一个**待答状态 ⇒ 放 `conversations.pending_clarify` 够用；
+        - 写前确认是**多张单**（不同工具、不同批次可同时在等）⇒ 必须有独立的表
+          ⇒ `hil_confirmations` 才是状态源（`status` / `payload` / `decided_by` / `result_json`）。
+        ⇒ 本方法只负责"会话时间线上有一条可见的等待卡片"，**不承担状态**。
+          （刷新页面后前端可从 `GET /api/studio/hil-confirmations` 重建卡片。）
+
+        返回消息 id（供 done 事件携带，前端据此定位消息容器）。失败返回 0。
+        """
+        _msg_id = 0
+        try:
+            from database import db_conn
+            with db_conn() as _cc:
+                cur = _cc.execute(
+                    "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) "
+                    "VALUES (?,?,?,?,?)",
+                    (conversation_id, "assistant",
+                     "⏸ 写操作需要人工确认后才能执行",
+                     "hil_confirm", json.dumps({"confirm": confirm_req or {}},
+                                               ensure_ascii=False)))
+                _msg_id = cur.lastrowid or 0
+        except Exception:
+            pass
+        return _msg_id
+
     def _persist_clarify(self, conversation_id, user_input, intent, branch, attachments,
                          forced_intent, skill_name, team, questions) -> int:
         """落库澄清挂起状态（conversations.pending_clarify）+ 澄清卡消息（msg_type='clarify'）。

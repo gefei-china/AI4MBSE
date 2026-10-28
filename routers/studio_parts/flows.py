@@ -359,8 +359,18 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
         _decider = (user.get("display_name") or user.get("username") or "").strip()
     if not _decider:
         _decider = str(body.get("decided_by") or "")
-    r = HILService.decide(conn, cid, bool(body.get("approve")), _decider)
+    # ★ 2026-10-28（写前确认 HITL）：乐观锁 `expected_version` ——
+    #   确认单挂起期间平台坐标可能已变（versionId 变了 / 父容器被删），
+    #   批准时必须比对，不一致则**不执行**、要求模型重新定位（否则会写到错的地方）。
+    r = HILService.decide(conn, cid, bool(body.get("approve")), _decider,
+                           expected_version=str(body.get("expected_version") or ""))
     exec_note = ""
+    if r.get("status") == "version_mismatch":
+        return JSONResponse({
+            "error": "确认单已过期：平台坐标与批准时的期望不一致（期望 %s，实际 %s）。"
+                     "请重新定位后再试，本次**未执行**。"
+                     % (r.get("expected_version"), r.get("payload_version")),
+            "status": "version_mismatch", "executed": False}, 409)
     if r.get("status") == "approved":
         row = HILService.get(conn, cid) or {}
         _run_id = int(row.get("run_id") or 0)
@@ -432,9 +442,21 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                                  if _lr.get("ok") else
                                  " · 标注执行失败: %s" % _lr.get("error", ""))
                 else:
-                    r["executed"] = False
-                    r["exec_result"] = {"ok": False, "result": f"工具「{action}」非 HTTP 集成类型，不支持批准后自动执行，请手动操作"}
-                    exec_note = " · 非 HTTP 工具未自动执行"
+                    # ★ 2026-10-28（写前确认 HITL）：**统一执行器** ——
+                    #   旧逻辑在此直接放弃："非 HTTP 集成类型，不支持批准后自动执行"，
+                    #   ⇒ **MCP 写操作（智源的全部建模写动作）批准了也不执行**（实测断链）。
+                    #   现在统一走 `AgentPipeline._exec_tool_call` —— 与模型调用工具**同一份代码**
+                    #   ⇒ MCP / HTTP / local 三类天然全覆盖，权限闸/Hook/寻址链全部复用。
+                    try:
+                        from hil_service import execute_confirmation as _exec_conf
+                        _er = _exec_conf(conn, row, user=user)
+                        r["executed"] = bool(_er.get("executed"))
+                        r["exec_result"] = _er
+                        exec_note = (" · 已自动执行: %s" % ("成功" if _er.get("ok") else "失败"))
+                    except Exception as e:  # noqa: BLE001
+                        r["executed"] = False
+                        r["exec_result"] = {"ok": False, "error": str(e)[:300]}
+                        exec_note = " · 执行失败: %s" % str(e)[:80]
         # P0-a：HIL 批准即执行落 tool_call_logs。此前该路径**只写 audit_logs**
         # ⇒「经人批准才发生的工具执行」在能力度量里完全不可见（exec_note 只在
         # 审计文本里）。capability_id=tool:{action}（两个可执行分支的前提都是
@@ -479,6 +501,44 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
             r["executed"] = bool(_lr.get("ok"))
             r["exec_result"] = _lr
     audit(audit_user(user), "hil_decide", f"HIL确认单#{cid} → {r['status']}{exec_note}", conn=conn)
+    # ★ 2026-10-28（写前确认 HITL·D-2）：生成**回灌文案** ——
+    #   批准执行发生在**原 ReAct 循环之外**（一次独立 HTTP 请求）⇒
+    #   **LLM 永远收不到"工具已执行"的回执** ⇒ 它会重发同一操作、或宣称"尚未执行"。
+    #   （真机实测 E8：回执 `SUCCEEDED`、平台独立回读证实已建成，
+    #     模型却断言「尚未写入平台……因轮次用尽，写操作没有执行」—— **与事实相反**。）
+    #   ⇒ 把真实执行结果显式回灌，模型才有事实依据。
+    #   前端拿到 `resume_text` 后**重新起一轮** stream（与 `clarify-answer` 同构）。
+    try:
+        _row_final = HILService.get(conn, cid) or {}
+        _act_final = str(_row_final.get("action") or "")
+        _conv_final = int(_row_final.get("conversation_id") or 0)
+        _orig_input = ""
+        if _conv_final:
+            try:
+                # ⚠️ `fetchone()` 返回的是 **sqlite3.Row**（或 tuple），**没有 `.get()`** ——
+                #   2026-10-28 真机 E2E 踩到：写成 `(_u or {}).get("content")` 会抛
+                #   `AttributeError`，被下面的 `except` **静默吞掉** ⇒
+                #   回灌文案里"原请求复述"**永远为空**（症状：模型丢失上下文，但看不出原因）。
+                #   ⇒ 用**位置索引**（本 SELECT 只有 content 一列），两种行类型都支持。
+                _u = conn.execute(
+                    "SELECT content FROM messages WHERE conversation_id=? AND role='user' "
+                    "ORDER BY id DESC LIMIT 1", (_conv_final,)).fetchone()
+                _orig_input = str(_u[0] or "") if _u else ""
+            except Exception as _oe:
+                _orig_input = ""
+                print("[hil] ⚠️ 取原请求失败（回灌文案将缺上下文）: %s: %s"
+                      % (type(_oe).__name__, str(_oe)[:150]))
+        from hil_service import build_resume_text as _brt
+        if r.get("status") == "approved":
+            r["resume_text"] = _brt(_act_final, r.get("exec_result") or {}, True,
+                                    original_input=_orig_input)
+        elif r.get("status") == "rejected":
+            r["resume_text"] = _brt(_act_final, {}, False,
+                                    reason=str(body.get("note") or body.get("reason") or ""),
+                                    original_input=_orig_input)
+        r["conversation_id"] = _conv_final
+    except Exception:
+        pass
     return r
 
 @router.get("/api/studio/planner/{rid}/tasks")

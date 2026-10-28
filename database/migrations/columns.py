@@ -349,6 +349,22 @@ def _migrate_columns(conn):
     # 而它描述的常量并不存在、queue_confirmation 是无条件 INSERT ⇒ 重复提交产出重复确认单。
     # 真库实证：6 行里 id 13/14 完全重复（agent/action/payload 全同）。
     _add("hil_confirmations", "idem_key", "TEXT DEFAULT ''")   # sha1 前 24 位；去重在代码层按窗口判定
+    # ── 写前确认 HITL（2026-10-28）：统一闸 + 批准即执行所需的 8 列 ──
+    # 真库实证的三个断链（缺这些列就补不上）：
+    #   ① 批准后不知道走哪个执行器 ⇒ MCP 写操作全部落 else 分支「不支持自动执行」；
+    #   ② 没有 result_json ⇒ 无法区分「批了但没跑」与「跑成了」，审计里看不出真相；
+    #   ③ 没有 exec_idem_key ⇒ 用户点两下「批准」就执行两次写操作（重复包）。
+    _add("hil_confirmations", "tool_type", "TEXT DEFAULT ''")      # local / mcp / http
+    _add("hil_confirmations", "tool_call_id", "TEXT DEFAULT ''")   # 对齐前端 SSE 工具节点
+    _add("hil_confirmations", "level", "TEXT DEFAULT ''")          # confirm / approve
+    _add("hil_confirmations", "batch_id", "TEXT DEFAULT ''")       # 批次合并键
+    _add("hil_confirmations", "batch_count", "INTEGER DEFAULT 1")  # 批次内操作数
+    _add("hil_confirmations", "timeout_at", "TEXT DEFAULT ''")     # 超时时刻
+    _add("hil_confirmations", "result_json", "TEXT DEFAULT ''")    # 执行回执（同时是执行幂等依据）
+    _add("hil_confirmations", "exec_idem_key", "TEXT DEFAULT ''")  # 执行幂等键 sha1(conf_id+payload)
+    # 批次对象清单（计划级确认卡）：实证显示计划级审批拒绝率 39% vs 逐条 3%（差 13 倍）
+    # ⇒ 确认卡必须展示"这轮要动哪些东西"的摘要，而不是单条参数 JSON。
+    _add("hil_confirmations", "batch_items", "TEXT DEFAULT '[]'")   # JSON 数组，合并时追加
     # ── 分支管理 GitHub 对标（P0-1/P0-2/P1-1/P1-2）：冲突重算时间戳 / MR 标题 / 驳回意见 ──
     _add("merge_requests", "conflict_updated_at", "TEXT DEFAULT ''")  # 冲突清单最近重算时间（P0-1）
     _add("merge_requests", "title", "TEXT DEFAULT ''")                 # MR 标题（缺省 source → target）

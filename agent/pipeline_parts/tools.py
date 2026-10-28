@@ -81,6 +81,76 @@ _READ_ATTACHMENT_TOOL = {
 }
 
 
+def _impact_preview(name: str, arguments: dict) -> str:
+    """★ 2026-10-28（写前确认 HITL）：生成**影响面摘要**（给人看的），而不是裸参数 JSON。
+
+    ## 为什么不能只给 JSON
+    "只给 JSON 让人批 = 没让人批" —— 人看不懂参数就不会认真看，
+    于是审批退化成闭眼点通过（行业反模式：approval fatigue）。
+    ⇒ 摘要必须回答三个问题：**做什么 / 对谁做 / 影响多大**。
+
+    ## 口径（纯结构推导，零硬编码工具名）
+    - **目标名**：取常见命名键（name / title / label / elementName / ...）
+    - **容器**：取常见容器键（parentId / ownerId / containerId / viewId / projectId ...）
+    - **规模**：取列表型参数的条数（elements / items / elementIds / operations ...）
+    - **动作**：从工具名的动词族反推（create→新增 / update→修改 / delete→删除 ...）
+    """
+    args = arguments or {}
+    # 目标名
+    _target = ""
+    # ① 语义名（最易识别）
+    for _k in ("name", "title", "label", "elementName", "packageName", "viewName",
+               "newName", "targetName"):
+        _v = args.get(_k)
+        if isinstance(_v, (str, int)) and str(_v).strip():
+            _target = str(_v).strip()
+            break
+    # ② ★ ID 类键（2026-10-28 真机清库实测补：删除/移动类参数里**只有 ID 没有 name**
+    #   ⇒ 初版摘要渲染成「删除「（未命名对象）」× N」，用户等于盲批。
+    #   与 `hil_service._batch_target` 保持同一口径。)
+    if not _target:
+        for _k in ("dataId", "dataID", "data_id", "elementId", "elementID", "viewId",
+                   "presentingId", "packageId", "targetId", "id", "uuid"):
+            _v = args.get(_k)
+            if isinstance(_v, (str, int)) and str(_v).strip():
+                _s = str(_v).strip()
+                _target = "#" + (_s[-12:] if len(_s) > 12 else _s)
+                break
+    # 容器
+    _container = ""
+    for _k in ("parentId", "parentElementId", "ownerId", "containerId", "viewId",
+               "packageId", "versionId", "projectId", "branchId"):
+        _v = args.get(_k)
+        if isinstance(_v, (str, int)) and str(_v).strip():
+            _container = "%s=%s" % (_k, str(_v).strip())
+            break
+    # 规模
+    _count = 0
+    for _k in ("elements", "items", "elementIds", "operations", "changes",
+               "presentingIds", "targets", "relationships"):
+        _v = args.get(_k)
+        if isinstance(_v, (list, tuple)) and len(_v) > _count:
+            _count = len(_v)
+    # 动作
+    _n = str(name or "").lower()
+    _verb = "执行"
+    for _pat, _w in (("delete", "删除"), ("remove", "移除"), ("import", "导入"),
+                     ("apply", "应用变更"), ("undo", "撤销"), ("overwrite", "覆盖"),
+                     ("create", "新增"), ("update", "修改"), ("set", "设置"),
+                     ("move", "移动"), ("clone", "克隆"), ("layout", "布局"),
+                     ("present", "呈现"), ("configure", "配置"), ("generate", "生成"),
+                     ("run", "运行"), ("annotate", "标注")):
+        if _pat in _n:
+            _verb = _w
+            break
+    _parts = ["%s「%s」" % (_verb, _target or "（未命名对象）")]
+    if _container:
+        _parts.append("容器 %s" % _container)
+    if _count:
+        _parts.append("影响 %d 项" % _count)
+    return "；".join(_parts)
+
+
 class ToolMixin:
     """工具定义、执行、重试策略与调用留痕。"""
 
@@ -215,6 +285,7 @@ class ToolMixin:
             pass
         _mcp_stats = {"servers": 0, "total": 0, "selected": 0, "meta_servers": 0}
         _mcp_semantic_names = set()   # ★ 语义命中的 MCP 工具（供 core_keep 保底）
+        _mcp_write_groups = {}        # ★ MCP 写类工具 → 动词族（供"动词级意图闸"使用）
         for m in bound:
             _srv_name = m.get("name", "")
             _tools = list(m.get("tools") or [])
@@ -248,6 +319,14 @@ class ToolMixin:
                 _mcp_stats["selected"] += len(_tools)
             for t in _tools:
                 _bound_mcp_names.add(t)
+                # ★ 写类动词归类（MCP 工具不在 tools 表 ⇒ 后面的 side_effect 闸管不到它们）
+                try:
+                    from agent.mcp_tool_meta import mcp_write_group as _mwg
+                    _g = _mwg(t)
+                    if _g:
+                        _mcp_write_groups[t] = _g
+                except Exception:
+                    pass
                 # description：有真实元数据就用真实的（模型才知道这工具干什么）；
                 # 无元数据 ⇒ 保持改动前的模板串（逐字节一致）
                 _info = _meta.get(t) if _meta else None
@@ -505,6 +584,33 @@ class ToolMixin:
                     candidates = [c for c in candidates
                                   if _se_map.get(c[0], "read") not in ("write", "destructive")
                                   or (_sk_wl and c[0] in _sk_wl)]
+        # ── ★ MCP 写类工具的「动词级」意图闸（2026-10-27）──
+        #   上面那道闸按 `tools.side_effect` 过滤，**MCP 工具不在 tools 表 ⇒ 管不到**。
+        #   实测后果：「导出 SysML v2 源码」的清单里出现 `delete_model_elements`，
+        #   「校验语法」的清单里出现 `apply_model_changes` / `import_sysml_text`
+        #   —— 读类任务被塞进破坏性工具，模型"顺手调用"就是事故。
+        #   这里按**工具名里的动词族**判定：用户输入没提这个动作 ⇒ 本轮不注入。
+        #   ⚠️ 与技能白名单 `_sk_wl` 的关系：白名单是**权限**（能不能用），
+        #      本闸是**恰当性**（这一轮该不该递到模型眼前）——两者不是一回事。
+        #      白名单模式（`_wl` 非空，即 execute 冷路径把技能白名单独占成 `_tool_whitelist`）
+        #      下**整闸跳过** —— 与上面那道 side_effect 闸保持同一口径，
+        #      且避免「白名单声明了 delete ⇒ 恒常暴露」的副作用。
+        if _mcp_write_groups and not _wl:
+            try:
+                from agent.mcp_tool_meta import filter_mcp_by_intent as _fmbi
+                _keep_names, _drop_names = _fmbi(
+                    [c[0] for c in candidates if c[0] in _mcp_write_groups],
+                    user_input or "", _mcp_write_groups)
+                if _drop_names:
+                    _drop_set = set(_drop_names)
+                    candidates = [c for c in candidates if c[0] not in _drop_set]
+                    try:
+                        logger.info("[tool_gate] MCP 写类工具按动词闸挡掉 %d 个: %s",
+                                    len(_drop_names), ", ".join(sorted(_drop_names)[:6]))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         # TR-P3a：JIT 语义预筛——候选 ≥2（多工具可挑）即按输入语义裁剪，防「无关工具也被注入/LLM 顺手调用」
         # 保底：读类核心工具（graph_retrieve/validate/impact_analyze）不因预筛丢失；全弱相关时空回退维持全量
         jit_threshold = 2
@@ -720,6 +826,197 @@ class ToolMixin:
                 conn.close()
         except Exception:
             return "read"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # ★ 2026-10-28（写前确认 HITL）统一人工确认闸
+    # ══════════════════════════════════════════════════════════════════════
+    def _hil_gate(self, name: str, arguments: dict, agent_ctx: dict,
+                  conv_ctx: int, tool_type: str = "") -> dict | None:
+        """写前确认闸。返回 **None ⇒ 放行**；返回 dict ⇒ **拦截**（该 dict 即工具结果）。
+
+        ## 位置（全链最靠后的确定性边界）
+        `白名单(852) → RBAC(877) → mbse_pull_ingest(915) → Hook(985) → 本闸 → 执行(1114+)`
+        - **RBAC 之后**：无权限的人不该让工具走到"要不要人工确认"这一步
+          （`tools.py:870-876` 的既定不变量：把"他本来没资格"伪装成"他够格但需要审批"更糟）。
+        - **Hook 之后**：Hook 是管理员配的**确定性细粒度**规则（`tool_hooks`，可带参数条件），
+          比策略层的粗分档更具体 ⇒ 它先判；本闸只兜"Hook 没覆盖到"的。
+        - **执行之前**：这是唯一能保证"**没有副作用发生**"的位置。
+
+        ## 判据：双源写类判定 + 策略表取档位（策略即数据）
+        - 写类：`hil_service.classify_action`（`tools.side_effect` ∪ MCP 动词族）
+          ⇒ 修掉"**MCP 工具不在 tools 表 ⇒ side_effect 恒判 read ⇒ 三道闸全失效**"这个实测断链。
+        - 档位：`services/hil_policy.evaluate`（**灰度 = 改表不改代码**）
+
+        ## 行业依据（详见 services/hil_policy.py 模块头的「行业依据」段）
+        AWS AGENTREL02-BP05「按**影响 × 可逆性**分档」；
+        Suntec「不要给 agent 整体分等级，要给**每个动作**分等级」；
+        agentpatternscatalog 反模式「**approval fatigue** — 闸门太多会让人闭眼点通过」
+        ⇒ ⇒ ① 按动作分档 ② 策略外置为数据 ③ **必须批次合并**（否则逐条确认 ⇒ 退化）。
+
+        ## 返回的拦截信号形状（**刻意对齐 clarify_required**）
+        `{"ok": True, "confirm_required": True, "confirm": {...}}`
+        ⇒ ReAct 循环（stream.py / execute.py）与 `ask_user` 澄清**同构处理**
+        （检出即 break，由外层发事件 + 落挂起）。
+        """
+        # ── 批准旁路：确认单被批准后，执行它时不能再进本闸（否则无限循环）──
+        _auth = getattr(self, "_hil_authorized_conf_id", None)
+        if _auth:
+            return None
+        try:
+            from hil_service import classify_action as _ca
+            _cls = _ca(name, self._tool_side_effect(name))
+        except Exception:
+            return None
+        if _cls.get("kind") == "read":
+            return None
+
+        # ── 取档位（策略即数据；策略不可读 ⇒ fail-closed 按 confirm）──
+        _level, _reason, _pol = "confirm", "", {}
+        try:
+            from services.hil_policy import load_policies as _lp, evaluate as _ev
+            from database import get_db as _gdb
+            _c = _gdb()
+            try:
+                _pols = _lp(_c)
+            finally:
+                _c.close()
+            _d = _ev(_pols, decision_point="tool_write",
+                     match_key=_cls.get("match_key") or "read",
+                     context={"side_effect": _cls.get("kind"),
+                              "tool": name,
+                              "tool_family": _cls.get("match_key") or "",
+                              "tool_type": tool_type or _cls.get("source")})
+            _level = _d.get("level") or "confirm"
+            _reason = _d.get("reason") or ""
+            _pol = _d
+        except Exception as _pe:
+            # fail-closed：策略层异常 ⇒ 按 confirm（**绝不静默放行写操作**）
+            _level = "confirm"
+            _reason = "策略层不可读（fail-closed）：%s" % (str(_pe)[:120])
+
+        # ── auto：放行 ──
+        if _level == "auto":
+            return None
+        # ── agent 级 hil_level 作为**下限**（只收紧、不放宽）──
+        #   为什么只当"地板"：行业依据（Suntec 治理框架）明确说
+        #   「**不要给 agent 整体分等级，要给每个动作分等级**」——
+        #   agent 级若能独立决定，会退化成"整个 agent 一刀切"。
+        #   而 `hil_policy.escalate` 的不变式正是「策略层只能收紧、不能放宽」。
+        #   ⚠️ 目标档位**只用 confirm / notify**，不用 approve ——
+        #   approve 与 confirm 不是严格程度关系（approve 要更高权限角色批，
+        #   confirm 是用户本人点一下），混进同一条 rank 会产生"approve 被 confirm 覆盖"的歧义。
+        #   破坏族要不要 approve，由**策略表**按 match_key 决定（动作级分档）。
+        try:
+            _agent_lvl = str(getattr(self, "_hil_level", "") or "")
+            if _agent_lvl in ("L1", "L2"):
+                from services.hil_policy import escalate as _esc
+                _floor = "notify" if _agent_lvl == "L1" else "confirm"
+                _level = _esc(_level, _floor)
+        except Exception:
+            pass
+        # ── notify：放行 + 留痕（**灰度第一档的采集点**：不拦但记全量数据）──
+        if _level == "notify":
+            try:
+                from core.audit import audit as _au, audit_user as _auu
+                _au(_auu(getattr(self, "_tool_user", None)), "hil_notify",
+                    f"tool={name} match_key={_cls.get('match_key')} kind={_cls.get('kind')} "
+                    f"convo={conv_ctx}", "notify",
+                    branch=str((agent_ctx or {}).get("branch") or ""))
+            except Exception:
+                pass
+            return None
+
+        # ── confirm / approve：入队并挂起 ──
+        _agent = str((agent_ctx or {}).get("agent") or "")
+        _run_id = int((agent_ctx or {}).get("run_id") or 0)
+        # ★ 2026-10-28（真机 E2E 暴露）：`tool_type` **必须在闸内自己判**。
+        #   外面传进来的 `tool_type` 在闸这个位置还是初值 `"builtin"`
+        #   （真正的类型分派在后面的 MCP / HTTP / local 分支里才发生）
+        #   ⇒ 直接用它会把 MCP 写操作记成 builtin ⇒ 批准后走错执行器、审计也看不出类型。
+        #   判据：`classify_action` 的 `source` 已经告诉我们它是从哪个源判出来的。
+        _ttype = tool_type or ""
+        if _cls.get("source") == "mcp_verb" or _ttype in ("", "builtin"):
+            _src = _cls.get("source") or ""
+            if _src == "mcp_verb":
+                _ttype = "mcp"
+            elif _src == "tools.side_effect":
+                # 本地工具：按 tools 表 kind 细分（http 集成 vs 内置）
+                try:
+                    from database import get_db as _gdb2
+                    _c2 = _gdb2()
+                    try:
+                        _kr = _c2.execute(
+                            "SELECT kind FROM tools WHERE name=? AND status='active'",
+                            (name,)).fetchone()
+                        _k = str((_kr["kind"] if _kr else "") or "")
+                        _ttype = "http" if _k == "http" else (_k or "builtin")
+                    finally:
+                        _c2.close()
+                except Exception:
+                    _ttype = "local"
+            elif not _ttype:
+                _ttype = "local"
+        # 批次合并键：同一轮 + 同族 + 同会话 ⇒ 合并成一张卡（approval fatigue 防线）
+        _trace = str(getattr(self, "_tool_trace_id", "") or "") or "no-trace"
+        _batch = ""
+        try:
+            import hashlib as _h
+            _batch = _h.sha1(("|".join([str(conv_ctx or 0), _agent,
+                                        str(_cls.get("match_key")), _trace,
+                                        str(_run_id)])).encode("utf-8")).hexdigest()[:20]
+        except Exception:
+            _batch = ""
+        _prev = _impact_preview(name, arguments or {})
+        _conf = None
+        try:
+            from hil_service import HILService as _HS
+            from database import db_conn as _dbc
+            with _dbc() as _c:
+                _conf = _HS.queue_confirmation(
+                    _c, _agent, name, arguments or {},
+                    preview=_prev,
+                    conversation_id=conv_ctx or 0,
+                    run_id=_run_id,
+                    tool_type=_ttype,
+                    level=_level,
+                    batch_id=_batch,
+                    timeout_min=int(_pol.get("timeout_min") or 0))
+        except Exception as _qe:
+            # 入队失败 ⇒ **fail-closed**：宁可不做，也不能在没确认的情况下写下去
+            return {"ok": False, "confirm_required": False,
+                    "result": f"写操作「{name}」无法进入人工确认流程（{str(_qe)[:120]}），已拒绝执行"}
+
+        if not _conf:
+            return {"ok": False, "confirm_required": False,
+                    "result": f"写操作「{name}」需人工确认，但确认单创建失败，已拒绝执行"}
+
+        _cid = int(_conf.get("id") or 0)
+        _bn = int(_conf.get("batch_count") or 1)
+        _merged = bool(_conf.get("batch_merged"))
+        return {
+            "ok": True,
+            "confirm_required": True,
+            "confirm": {
+                "id": _cid,
+                "tool": name,
+                "tool_type": _ttype,
+                "level": _level,
+                "match_key": _cls.get("match_key"),
+                "kind": _cls.get("kind"),
+                "reason": _reason,
+                "preview": _prev,
+                "arguments": arguments or {},
+                "batch_count": _bn,
+                "batch_merged": _merged,
+                "conversation_id": conv_ctx or 0,
+                "timeout_at": _conf.get("timeout_at") or "",
+            },
+            "result": ("⏸ 写操作「%s」已进入人工确认队列（确认单 #%d%s）：%s"
+                       % (name, _cid,
+                          ("，同批共 %d 项" % _bn) if _bn > 1 else "",
+                          "等待人工批准后才会真正执行；**在此之前不会产生任何副作用**。"
+                          "不要重复发起该操作。")),
+        }
 
     def _exec_tool_call(self, name: str, arguments: dict) -> dict:
         """缺口B：执行单个工具调用（内置 handler / MCP tools/call），返回标准化结果。
@@ -998,54 +1295,38 @@ class ToolMixin:
                                   "result": f"写操作「{name}」暂存失败（已阻止直接执行）: {str(_we)[:100]}"}
                     self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                     return result
-            # M5：HIL 强制——L2 Agent 的写工具操作进入人工确认队列（不直接执行）
-            if getattr(self, "_hil_level", "L0") == "L2":
-                from hil_service import HILService
-                if HILService.is_write_tool(name):
-                    from database import db_conn
-                    with db_conn() as conn:
-                        conf = HILService.queue_confirmation(
-                            conn, agent_ctx.get("agent", ""), name, arguments or {},
-                            preview=f"Agent 请求执行写操作 {name}，参数：{str(arguments or {})[:200]}",
-                            conversation_id=conv_ctx or 0)
-                        if conf:
-                            result = {"ok": True,
-                                      "result": f"写操作「{name}」已进入人工确认队列（确认单 #{conf['id']}），确认后生效"}
-                            self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
-                            return result
-            # TR-P2b：副作用门控——destructive 工具必须人工确认（行业标准：模型只推荐不授权）
-            if self._tool_side_effect(name) == "destructive":
-                from hil_service import HILService
-                from database import db_conn
-                with db_conn() as conn:
-                    conf = HILService.queue_confirmation(
-                        conn, agent_ctx.get("agent", ""), name, arguments or {},
-                        preview=f"高风险工具「{name}」需人工确认后执行，参数：{str(arguments or {})[:200]}",
-                        conversation_id=conv_ctx or 0)
-                if conf:
-                    result = {"ok": True,
-                              "result": f"高风险工具「{name}」已进入人工确认队列（确认单 #{conf['id']}），确认后执行"}
-                else:
-                    result = {"ok": False, "requires_confirm": True,
-                              "result": f"「{name}」为 destructive 高风险工具，已拒绝直接执行，请通过人工确认流程操作"}
-                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+            # ══════════════════════════════════════════════════════════════
+            # ★ 2026-10-28（写前确认 HITL）**统一人工确认闸** —— 替换此前分散的三道闸
+            #   （M5 L2 分级闸 / TR-P2b destructive 闸 / 2026-09-11 write 闸）
+            #
+            # ## 为什么合并成一道
+            # ① 旧三道闸**判定依据互不相同**（`hil_level` / `side_effect` / `side_effect`）
+            #    ⇒ 同一类操作在不同闸得到不同结论，且**彼此不覆盖**；
+            # ② 实测三处断链（全部真机验证）：
+            #    · `self._hil_level` 在 stream 路径**从不赋值** ⇒ L2 闸永不触发；
+            #    · `_tool_side_effect` 查不到返回 "read"，而 **MCP 工具不在 tools 表**
+            #      ⇒ destructive/write 闸对 `create_model_elements` 等**全部失效**；
+            #    · `HILService.WRITE_TOOLS` 是硬编码 5 个名字，其中 **4 个在 tools 表里
+            #      根本不存在**（真库实证）⇒ 永远匹配不到。
+            # ⇒ 现在统一为：**双源写类判定**（tools.side_effect ∪ MCP 动词族）
+            #    + **策略表取档位**（`services/hil_policy.evaluate`，策略即数据，
+            #    灰度 = 改表不改代码）。
+            #
+            # ## 判据与档位的分工（口径刻意不同，不可照抄）
+            # · **注入侧**（该不该递到模型眼前）＝ 恰当性 ⇒ 窄口径，只闸破坏族；
+            # · **执行侧**（要不要人点头）       ＝ 授权   ⇒ 宽口径，覆盖全部写族。
+            #
+            # ## 位置
+            # RBAC 之后（`tools.py:870-876` 既定不变量：无权限的人不该走到"要不要审批"）
+            # → Hook 之后（Hook 是管理员配的**细粒度确定性**规则，比策略粗分档更具体）
+            # → 执行之前（唯一能保证"没有副作用发生"的位置）。
+            _hil_res = self._hil_gate(name, arguments or {}, agent_ctx, conv_ctx, tool_type)
+            if _hil_res is not None:
+                result = _hil_res
+                self._log_tool_call(name, tool_type, arguments, result,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
-            # 人在回路（2026-09-11）：外部集成写工具（tools.side_effect='write'，如智源覆盖导入）
-            # 一律不直接执行——进入人工确认队列，批准后由确认处理端自动执行并回写结果
-            if self._tool_side_effect(name) == "write" and not getattr(self, "_orch_subtask", False):
-                from hil_service import HILService
-                from database import db_conn
-                with db_conn() as conn:
-                    conf = HILService.queue_confirmation(
-                        conn, agent_ctx.get("agent", ""), name, arguments or {},
-                        preview=f"写操作「{name}」需人工确认（模型只推荐不授权），参数：{str(arguments or {})[:200]}",
-                        conversation_id=conv_ctx or 0)
-                if conf:
-                    result = {"ok": True,
-                              "result": f"⏸ 写操作「{name}」已进入人工确认队列（确认单 #{conf['id']}）："
-                                        f"执行前需要你在「工作流 → 执行监控 → HIL 人工确认队列」中批准，批准后自动执行并回写结果。"}
-                    self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
-                    return result
+
             # MCP 工具：从 DB 找所属服务器端点（真实 JSON-RPC 调用）
             try:
                 from database import get_db

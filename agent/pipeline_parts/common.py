@@ -642,6 +642,9 @@ def reset_request_state(pipe) -> None:
     pipe._skill_allowed_tools = None     # 显式技能授权（见 reset_skill_state 的历史注释）
     pipe._skill_forced = False
     pipe._hil_level = None               # HIL 分级（人工确认队列的判定依据）
+    #   ★ 2026-10-28：此处**每请求清零**（防跨轮残留）是正确的；
+    #   但 stream 路径此前**从不重新赋值** ⇒ 恒为 None ⇒ L2 闸永不触发（断链①）。
+    #   现已修：stream.py 在拿到 agent_def 后赋 `self._hil_level = agent_def.hil_level`。
     # ── 技能注入：本次绑了哪些技能、正文被 offload 到哪里 ──
     pipe._last_skill_hits = []           # 本次命中的技能（门禁与前端展示都读它）
     pipe._skill_body_offloads = []       # ★ 本次 offload 的正文 id（不清 ⇒ 收尾注入上一轮的正文）
@@ -686,14 +689,23 @@ def reset_request_state(pipe) -> None:
 def reset_skill_state(pipe, skill_name) -> None:
     """显式技能注入的**状态起点**（两路径统一调用，且必须在任何分支之前）。
 
-    每轮无条件重置两项：`_skill_forced = bool(skill_name)`、`_skill_allowed_tools = None`。
+    每轮无条件重置三项：`_skill_forced = bool(skill_name)`、`_skill_allowed_tools = None`、
+    `_skill_prompt_cache = None`。
 
     ⚠️ 为什么必须**无条件清零**而不是"有技能时才设"：`_skill_allowed_tools` 是**实例属性**，
     而对话走的是**全局单例**。只在"有白名单时赋值"会让上一轮的值**残留到本轮**
     （表现为"这轮明明没指定技能，却拿到了上一个技能的授权"），且极难复现。
+
+    ★ 2026-10-27：新增清 `_skill_prompt_cache` —— 它是**本轮**技能匹配结果的缓存
+      （见 `skills.py::_build_skill_prompt`），若跨轮残留：
+      ① 同一 intent+input 的第二轮会复用第一轮的 offload id（`_sbody.offload_body`
+         写 `skill_body_offloads` 表并分配 id）⇒ 第二轮拿到的是**上一轮的正文引用**；
+      ② 匹配结果与本轮真实触发条件脱钩（用户改了角色/技能，命中集却不变）。
+      ⇒ 缓存的生命周期必须**严格等于一轮**。
     """
     pipe._skill_forced = bool(skill_name)
     pipe._skill_allowed_tools = None
+    pipe._skill_prompt_cache = None
 
 
 def load_forced_skill(skill_name, *, content_cap: int = 0, include_resources: bool = True,

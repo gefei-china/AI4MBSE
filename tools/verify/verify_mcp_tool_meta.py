@@ -191,8 +191,17 @@ try:
     _sec["mcp_min_keep"] = 0
     _td_old = _pipeline = _pipe._build_tools_def(_AGENT, "查询智源工程列表", _USER)
     _mcp_old = [t for t in _td_old if t["function"]["name"] in _REAL_SET]
-    check("[9a] 关开关 ⇒ 71 个 MCP 工具全量注入（改动前行为）", len(_mcp_old) == 71,
-          f"实得 {len(_mcp_old)}")
+    # ★ 2026-10-27：新增「MCP 破坏性/覆盖写工具的动词级意图闸」（agent/mcp_tool_meta.py
+    #   ::filter_mcp_by_intent）。关掉 `mcp_meta_enabled` 只回退「description / schema 的
+    #   **丰富度**」，**不回退动词闸**（两者正交：一个是"模型知不知道这工具干什么"，
+    #   一个是"这一轮该不该把破坏性工具递到模型眼前"）。
+    #   ⇒ 本条判据必须**扣除**动词闸挡掉的工具，且期望值**算出来**而不是写死
+    #   （写死会在闸的策略调整后静默假红）。
+    _grp = {n: MT.mcp_write_group(n) for n in _REAL_SET}
+    _keep, _drop = MT.filter_mcp_by_intent(sorted(_REAL_SET), "查询智源工程列表", _grp)
+    check("[9a] 关开关 ⇒ MCP 全量注入（扣除动词闸挡掉的破坏性工具）",
+          sorted(t["function"]["name"] for t in _mcp_old) == sorted(_keep),
+          f"实得 {len(_mcp_old)}，期望 {len(_keep)}（闸挡掉 {len(_drop)}：{_drop[:3]}）")
     check("[9a] 关开关 ⇒ description 为模板串（改动前行为）",
           all(t["function"]["description"].startswith("MCP 工具（") for t in _mcp_old))
     check("[9a] 关开关 ⇒ parameters 为宽松空壳（改动前行为）",

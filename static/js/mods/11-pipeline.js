@@ -557,6 +557,86 @@ function procMarkClarifyAnswered(answerText){
 // ── UX规范 B3（2026-10-03）内联确认闸门 ──
 // 同一确认单在时间线上只允许一个节点（硬规则1）；确认卡 = 需要用户行动的单元，
 // 保持 run 态常驻展开，直至批准/拒绝落终态。
+/* ★ 2026-10-28（写前确认 HITL）：确认卡（计划级摘要，不是单条参数 JSON）
+ *
+ * ## 为什么必须"摘要"而不是"参数 JSON"（有实证，不是审美）
+ * Anthropic 生产遥测：**计划级审批拒绝率 39%**，而**逐条权限请求拒绝率仅 3%**（差 13 倍）。
+ * 受控实验（n=1,053）：人工拦下危险命令仅 **13.6%**，且会话越长越差（17% → 5%）。
+ * ⇒ 逐条参数弹窗**几乎无筛选力**（approval fatigue）。
+ * OWASP ASI09 原文：**"A human in the loop is not a control if the UI conceals the exact
+ * effect or trains users to approve automatically."** —— 只给 JSON 就是"conceal the exact effect"。
+ *
+ * ## 所以这张卡必须回答四个问题（都是**系统算出来的事实**，不是模型的自述理由）
+ *   ① 做什么（动作 + 目标对象）
+ *   ② 影响多大（批次内 N 项 + 受影响对象清单）
+ *   ③ 可逆吗（破坏性 vs 可逆写 —— 决定要不要看得更仔细）
+ *   ④ 坐标/容器（写到哪儿）
+ * 参数 JSON 折叠在「查看原始参数」里（要能查，但不该是默认视图）。
+ */
+/* ★ 2026-10-28（写前确认 HITL）：按**确认单号**取卡片 DOM 元素。
+ *
+ * ## 为什么不能用 getElementById('hil_' + cid)
+ * `procRender()` 渲染的卡片是 `<div class="proc-block" data-pid="hil_<cid>">` ——
+ * 元素**没有 id 属性**，只有 `data-pid`。
+ * ⇒ `getElementById('hil_123')` **恒返回 null** ⇒ 依赖它的两处静默失效：
+ *   ① `hil_confirm` 事件的「滚到可见」不执行（用户看不到卡已弹出）
+ *   ② 批准后的回灌续跑拿到 `null` 卡片
+ * 这个缺陷**只在真实浏览器里才暴露**：DOM 状态断言若写成 getElementById 会全红，
+ * 而若只断言 `_procS.timeline` 会全绿 —— 两边都不指向真因。
+ */
+function _hilCardEl(cid){
+  const n = parseInt(cid || 0, 10);
+  if(!n) return null;
+  return document.querySelector('[data-pid="hil_' + n + '"]');
+}
+
+function procAddHilConfirm(ev){
+  const cid = parseInt(ev.confirmation_id || 0, 10);
+  if(!cid) return;
+  // 乐观锁基线：记下"用户看到这张卡时的版本坐标"，批准时回传比对（防坐标已过期）
+  try{
+    window._hilVerMap = window._hilVerMap || {};
+    const _a = ev.arguments || {};
+    const _v = (a => a && (a.versionId || a.version_id ||
+                          (a.version && (a.version.versionId || a.version.id)) ||
+                          (a.workspace && (a.workspace.versionId || a.workspace.id))))(_a);
+    if(_v) window._hilVerMap[cid] = String(_v);
+  }catch(e){}
+  const id = 'hil_' + cid;
+  if(_procS.timeline.some(x=>x.id === id)) return;   // 同一确认单不重复建卡
+  const tool = ev.tool || '';
+  const prev = ev.preview || '';
+  const kind = ev.kind || '';
+  const bn = parseInt(ev.batch_count || 1, 10);
+  const merged = !!ev.batch_merged;
+  // 可逆性是**独立算出**的判定（kind 来自后端双源分类），不采信模型自述
+  const irreversible = (kind === 'destructive');
+  const _kindTxt = irreversible
+    ? '<strong style="color:var(--red,#C0392B);">不可逆</strong>（删除/覆盖/导入类，出错无法回滚）'
+    : '<strong style="color:var(--orange,#B96A00);">可逆写</strong>（创建/修改类，通常可撤销）';
+  const _batchTxt = bn > 1
+    ? `<div style="margin-top:4px;"><b>本批共 ${bn} 项</b>（同类动作已合并，一次批准覆盖整批）</div>`
+    : '';
+  const args = ev.arguments ? (typeof ev.arguments === 'string' ? ev.arguments : JSON.stringify(ev.arguments, null, 1)) : '';
+  const detail = `<div style="font-size:11.5px;line-height:1.7;">`
+    + `<div><b>动作：</b>${esc(_toolActivity(tool) || tool)}</div>`
+    + (prev ? `<div><b>影响面：</b>${esc(prev)}</div>` : '')
+    + `<div><b>性质：</b>${_kindTxt}</div>`
+    + _batchTxt
+    + `<div style="color:var(--mut);margin-top:6px;">批准后才会真正执行；<b>在此之前不会产生任何副作用</b>。拒绝则该动作不生效。</div>`
+    + (args ? `<details style="margin-top:6px;"><summary style="cursor:pointer;color:var(--mut);font-size:11px;">查看原始参数</summary>`
+        + `<div style="max-height:120px;overflow:auto;white-space:pre-wrap;background:var(--bg,#f6f7f9);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:4px;font-size:10.5px;">${esc(args)}</div></details>` : '')
+    + `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">`
+      + `<button class="btn sm ${irreversible ? '' : 'grn'}" id="hil-ok-${cid}" onclick="hilInlineDecide(${cid}, true)">✓ 批准并执行</button>`
+      + `<button class="btn sm ghost" id="hil-no-${cid}" onclick="hilInlineDecide(${cid}, false)">✕ 拒绝</button>`
+    + `<span style="font-size:10px;color:var(--mut);">确认单 #${cid}${ev.timeout_at ? ' · 超时 ' + esc(String(ev.timeout_at).slice(5,16)) : ''}</span></div></div>`;
+  procUpsert(id, {type:'confirm', icon: irreversible ? '⛔' : '🔐',
+                  title: (irreversible ? '待确认（不可逆）：' : '待确认：') + (prev || _toolActivity(tool) || tool),
+                  status:'run', statusText: merged ? `⏸ 待人工确认 · 同批 ${bn} 项` : '⏸ 待人工确认',
+                  detail});
+  uxTrack('confirm_shown', {cid, kind, batch: bn});
+}
+
 function procAddConfirmGate(cid, ev){
   const id = 'hil_' + cid;
   if(_procS.timeline.some(x=>x.id === id)) return;   // 同一确认单不重复建卡
@@ -587,12 +667,45 @@ async function hilInlineDecide(cid, approve){
     //   后端 P0-6（2026-10-06）已改为**以已认证用户身份为准**（display_name → username），
     //   body 的 decided_by 只在匿名兼容期兜底 ⇒ 前端再传只会污染兜底路径。
     //   前端不该自报身份：谁点的按钮由服务端从会话解析。
-    await api('/api/studio/hil-confirmations/' + cid + '/decide',
-              {method:'POST', body:JSON.stringify({approve:!!approve})});
-    procUpsert('hil_' + cid, approve ? {status:'done', statusText:'✓ 已批准 · 自动执行中'}
-                                     : {status:'failed', statusText:'✗ 已拒绝 · 动作不生效'});
-    uxTrack('confirm_decided', {cid, approve: !!approve});   // §11 埋点：闸门处置（分子）
-    if(window.toast && toast.success) toast.success(approve ? '已批准，确认单 #' + cid + ' 将自动执行' : '已拒绝确认单 #' + cid);
+    //
+    // ★ 2026-10-28（写前确认 HITL）：乐观锁 `expected_version` ——
+    //   把"用户看到这张卡时的版本坐标"回传，后端比对确认单 payload 里的坐标；
+    //   不一致 ⇒ 409 ⇒ **不执行**（防"确认单挂起期间版本已变、批准后写到错的地方"）。
+    const _ev = (window._hilVerMap || {})[cid] || '';
+    const _body = {approve: !!approve};
+    if(_ev) _body.expected_version = _ev;
+    const r = await api('/api/studio/hil-confirmations/' + cid + '/decide',
+                        {method:'POST', body:JSON.stringify(_body)});
+    // 409 版本不一致：不执行，恢复按钮可重试（用户需重新定位）
+    if(r && r.status === 'version_mismatch'){
+      if(okBtn) okBtn.disabled = false;
+      if(noBtn) noBtn.disabled = false;
+      procUpsert('hil_' + cid, {status:'failed', statusText:'⚠ 确认单已过期 · 未执行'});
+      if(window.toast && toast.error) toast.error(r.error || '确认单已过期，未执行');
+      return;
+    }
+    const _execOk = !!(r && (r.executed ? (r.exec_result && r.exec_result.ok) : true));
+    procUpsert('hil_' + cid, approve
+      ? {status: _execOk ? 'done' : 'failed',
+         statusText: _execOk ? '✓ 已批准 · 已执行' : '✗ 已批准 · 执行失败'}
+      : {status:'failed', statusText:'✗ 已拒绝 · 动作不生效'});
+    uxTrack('confirm_decided', {cid, approve: !!approve, exec: _execOk});   // §11 埋点：闸门处置（分子）
+    if(window.toast && toast.success){
+      if(!approve) toast.success('已拒绝确认单 #' + cid + '，该动作不生效');
+      else if(_execOk) toast.success('已批准并执行（确认单 #' + cid + '）');
+      else toast.error('已批准但执行失败（确认单 #' + cid + '），详见执行回执');
+    }
+    // ★ 2026-10-28（D-2 回灌）：把**真实执行结果**送回给模型。
+    //   为什么必须做：批准执行发生在**原 ReAct 循环之外**（一次独立 HTTP 请求）⇒
+    //   **LLM 永远收不到"工具已执行"的回执** ⇒ 它会重发同一操作、或宣称"尚未执行"
+    //   （真机实测 E8：回执 SUCCEEDED、平台回读证实已建成，模型却断言「尚未写入平台」）。
+    //   后端 `resume_text` 已含"原请求复述"+"不要重复发起"两条必需内容。
+    if(r && r.resume_text && r.conversation_id &&
+       parseInt(r.conversation_id, 10) === parseInt(window.currentConvId || 0, 10)){
+      const _card = _hilCardEl(cid);
+      _continueInSameBox(_card, r.resume_text, null,
+                         approve ? '✓ 已批准' : '✗ 已拒绝');
+    }
   }catch(e){
     if(okBtn) okBtn.disabled = false;
     if(noBtn) noBtn.disabled = false;
@@ -1349,6 +1462,15 @@ function handleSSE(raw) {
     setPendingClarify(ev);   // 2026-09-25：登记挂起 → 输入框上方出现「AI 正在等待确认」提示（可在此直接作答）
     renderClarifyAsk(ev);   // 内容级澄清：信息不清晰 → 选择题确认（回答后续答）
     procAddClarifyGate(ev); // ★ 2026-10-17（米爸反馈1）：澄清 = 原输出流程时间线上的一个环节（不再是独立气泡）
+  } else if(evType === 'hil_confirm') {
+    /* ★ 2026-10-28（写前确认 HITL）：**一等公民事件**，不再靠正则从工具结果文本抠单号。
+       老前端无此分支 ⇒ `handleSSE` 是 if/else-if 链且**末尾无 else 兜底** ⇒ 静默忽略，
+       行为与从前完全一致（与 `redraw_confirm` / `clarify_ask` 同一种兼容策略）。 */
+    _forceFlushTokens();
+    procAddHilConfirm(ev);
+    uxTrack('scroll_force', {reason: 'hil_confirm'});
+    const _hc = _hilCardEl(ev.confirmation_id);
+    if(_hc && _hc.scrollIntoView){ try{ _hc.scrollIntoView({block:'center'}); }catch(e){ _hc.scrollIntoView(); } }
   } else if(evType === 'done') {
     _forceFlushTokens();
     _forceFlushSubOutput();   // ★ F-1：子任务实时输出末帧刷齐（防 rAF 未触发丢尾巴）

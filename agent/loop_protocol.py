@@ -210,9 +210,56 @@ _FETCH_HINT = (
     "优先于你的记忆；若与你的印象冲突，以它为准）：\n"
 )
 
+#: 收尾时若本轮**已执行过写操作**，把执行清单附上。
+#:
+#: ★ 为什么需要它（2026-10-27 真机 E2E 实测，conv 9698）：
+#:   模型在第 11 轮触发「连续重复调用收敛闸」后被强制退出 ReAct 循环，
+#:   随后进入最终生成。此时 `messages` 里**确实有** `create_model_elements`
+#:   的成功回执（`status: SUCCEEDED` / `semanticStatus: APPLIED` / 新 dataId），
+#:   但 ReAct 循环已累积 11 轮、messages 极长 ⇒ **模型在收尾时「看漏」了这条回执**，
+#:   于是在最终回复里断言「**尚未写入平台**……写操作没有执行」——
+#:   **与事实完全相反**（平台侧直连回读证实新包已建成、total 由 1 变 2）。
+#:
+#: ⚠️ 这与「不得虚构已完成」是**同一条纪律的两个方向**：
+#:   虚构已完成（声称写了但没写）与**虚构未完成**（声称没写但写了）都是失实。
+#:   后者更隐蔽 —— 它看起来「诚实」，实际会让用户以为操作没生效而重复操作。
+#:
+#: ⇒ 修法：收尾时把**本轮已成功执行的写操作**显式列出来（工具名 + 成功标识），
+#:   让模型据实陈述。**只列成功的**，失败的由各自的错误回执承载。
+#:   ⚠️ 判据必须**只认成功回执**（`ok=True`）—— 列失败的会误导成「做过但失败」，
+#:   而失败回执本身已在 messages 里。
+_WRITE_DONE_HINT = (
+    "\n\n【本轮已成功执行的写操作（系统实测回执，权威）】\n"
+    "以下操作**已经执行成功**，请据实陈述，**不要**说成「尚未执行」或「因轮次用尽未执行」：\n"
+)
+
+
+def write_ops_digest(ops: list) -> str:
+    """把本轮已成功执行的写操作整理成收尾提示（无则返回空串）。
+
+    `ops` 是调用方累积的 `[{"name": 工具名, "detail": 回执摘要}, ...]`。
+
+    ⚠️ **只列成功回执**（见 `_WRITE_DONE_HINT` 的说明）。
+    ⚠️ **不是安全判据**：它只防止「虚构未完成」，不阻止「虚构已完成」——
+       后者由各工具自己的成功/失败回执 + 技能纪律承担。
+    """
+    if not ops:
+        return ""
+    lines = []
+    for _o in ops:
+        _nm = str(_o.get("name") or "").strip()
+        if not _nm:
+            continue
+        _d = str(_o.get("detail") or "").strip()
+        lines.append("- %s：已执行成功%s" % (_nm, ("（%s）" % _d) if _d else ""))
+    if not lines:
+        return ""
+    return _WRITE_DONE_HINT + "\n".join(lines) + "\n"
+
 
 def finalize_messages(messages: list, extra_context: str = "",
-                      reason: str = "", used: int = 0, limit: int = 0) -> list:
+                      reason: str = "", used: int = 0, limit: int = 0,
+                      write_ops: list | None = None) -> list:
     """构造收尾请求的消息序列（**追加一条 user 提示**，不改原messages）。
 
     - 用 `messages + [...]` 而非原地 append：调用方的 messages 后续还要复用
@@ -224,11 +271,19 @@ def finalize_messages(messages: list, extra_context: str = "",
     - ★ `reason/used/limit`（2026-10-10）：传了就用**精确版**提示，
       说明到底是"轮次上限"还是"失败轮上限"还是"token 预算"——
       不传则沿用通用 `FINALIZE_HINT`（**逐字兼容改动前行为**）。
+    - ★ `write_ops`（2026-10-27）：本轮**已成功执行的写操作**清单（见 `write_ops_digest`）。
+      为空/未传 ⇒ **逐字不变**（零回归面）。
     """
     out = list(messages)
     hint = finalize_hint_ex(reason=reason, used=used, limit=limit) if reason else FINALIZE_HINT
     if extra_context:
         hint += _FETCH_HINT + extra_context
+    # ★ 2026-10-27（真机 E2E，conv 9698）：**已成功执行的写操作**必须进入收尾提示。
+    #   本次 `create_model_elements` 回执 SUCCEEDED，模型却断言「尚未写入平台」——
+    #   因为收尾时 messages 极长（11 轮）而模型看漏了那条回执。
+    #   ⇒ 把清单显式列进收尾提示（只在有成功写操作时追加 ⇒ 无写操作逐字节不变）。
+    if write_ops:
+        hint += write_ops_digest(write_ops)
     out.append({"role": "user", "content": hint})
     return out
 

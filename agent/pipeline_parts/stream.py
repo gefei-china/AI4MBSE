@@ -88,6 +88,39 @@ def _best_partial(full_content, llm_content, orch_acc, streamed_acc) -> str:
     return _streamed if len(_streamed) > len(_norm) else _norm
 
 
+def _write_op_detail(result_text: str) -> str:
+    """从写操作回执里抽一句人可读摘要（供收尾提示）。
+
+    ⚠️ 刻意**不抽业务字段**（dataId / status 等）：不同 MCP 后端的字段名不统一
+    （`operationId` / `semanticStatus` / `status` …），硬抽字段名必然漏或错。
+    ⇒ 只取**有界长度的原文片段**，让模型自己读出成功标识。
+    """
+    _t = str(result_text or "").strip()
+    if not _t:
+        return ""
+    return (_t[:180] + "…") if len(_t) > 180 else _t
+
+
+def _is_write_tool(pipe, name: str) -> bool:
+    """判断一个工具是否是**写类**（含 MCP 工具）。
+
+    - 本地工具：查 `tools.side_effect`（write / destructive）。
+    - MCP 工具：**不在 tools 表** ⇒ `_tool_side_effect` 恒返回 "read" ⇒ 必须另行判定；
+      用 `agent.mcp_tool_meta.mcp_write_group`（按工具名动词族识别，零硬编码）。
+    """
+    try:
+        _se = pipe._tool_side_effect(name)
+    except Exception:
+        _se = "read"
+    if _se in ("write", "destructive"):
+        return True
+    try:
+        from agent.mcp_tool_meta import mcp_write_group
+        return bool(mcp_write_group(name))
+    except Exception:
+        return False
+
+
 class StreamMixin:
     """流式执行：编排流 SSE / 直接流式 execute_stream。"""
 
@@ -3447,6 +3480,45 @@ class StreamMixin:
             "msg_type": "clarify", "usage": {}, "questions": _iqs,
             "message_id": _mid or 0, "clarify_source": source}}
 
+    def _hil_confirm_finish_events(self, conversation_id, intent, confirm_req):
+        """★ 2026-10-28（写前确认 HITL）收口：发确认卡事件 + done，结束本次流。
+
+        ## 与 `clarify_required` 的关系：**同构但不同源**
+        - 同构：都中断本轮 → 发一个"等你"的事件 → 落痕迹 → done → 用户处理完**另起一轮**；
+        - 不同源：澄清的状态在 `conversations.pending_clarify`（单张），
+          写前确认的状态在 `hil_confirmations`（**多张单**，每张一个确认单）。
+
+        ## 为什么发**独立事件类型**而不是塞进工具结果文本
+        现状前端是从工具结果文本里**正则抠**确认单号（`/确认单\\s*#(\\d+)/`，
+        `static/js/mods/11-pipeline.js:465`）⇒ 后端改一个字就失效。
+        ⇒ 新事件 `hil_confirm` 自带 `confirmation_id` / `tool` / `arguments` / `preview`，
+        前端直接消费（老前端无此分支 ⇒ 静默忽略，**不破坏现有消费方**）。
+
+        ⚠️ 此刻**尚未发生任何副作用**（统一闸在执行之前拦截）⇒ 事件文案必须让人敢批。
+        """
+        _mid = self._persist_hil_confirm(conversation_id, intent, confirm_req)
+        yield {"type": "hil_confirm",
+               "confirmation_id": int((confirm_req or {}).get("id") or 0),
+               "tool": (confirm_req or {}).get("tool") or "",
+               "tool_type": (confirm_req or {}).get("tool_type") or "",
+               "level": (confirm_req or {}).get("level") or "confirm",
+               "match_key": (confirm_req or {}).get("match_key") or "",
+               "kind": (confirm_req or {}).get("kind") or "",
+               "preview": (confirm_req or {}).get("preview") or "",
+               "arguments": (confirm_req or {}).get("arguments") or {},
+               "batch_count": int((confirm_req or {}).get("batch_count") or 1),
+               "batch_merged": bool((confirm_req or {}).get("batch_merged")),
+               "conversation_id": int(conversation_id or 0),
+               "timeout_at": (confirm_req or {}).get("timeout_at") or "",
+               "title": "⏸ 写操作待人工确认",
+               "message": "批准后才会真正执行；在此之前不会产生任何副作用。"}
+        yield {"type": "done", "data": {
+            "ok": True, "hil_confirm": True, "intent": intent,
+            "content": "写操作已进入人工确认队列（批准后才会执行）",
+            "msg_type": "hil_confirm", "usage": {},
+            "confirmation_id": int((confirm_req or {}).get("id") or 0),
+            "message_id": _mid or 0}}
+
     def execute_stream(self, user_input, conversation_id, branch="dev", provider_id=None,
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
                        team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0,
@@ -3767,6 +3839,14 @@ class StreamMixin:
             else:
                 agent_def = self.registry.get(intent)
             hil_level = agent_def.hil_level
+            # ★ 2026-10-28（写前确认 HITL）修断链①：**stream 路径从不把 hil_level 赋给 self**
+            #   ⇒ `common.py:644` 每请求清成 None 后无人再写 ⇒
+            #   `getattr(self,"_hil_level","L0") == "L2"` **恒 False** ⇒ L2 闸永不触发。
+            #   （真库实证：agents 表里唯一 L2 的 model_release 从未被强制过。）
+            #   现在赋上：统一闸用它作**下限**（只收紧不放宽，见 hil_policy.escalate），
+            #   动作级档位仍由策略表决定（行业依据 Suntec：不要给 agent 整体分等级，
+            #   要给每个动作分等级 —— agent 级只能当"地板"，不能当唯一判据）。
+            self._hil_level = hil_level
             effective_provider = provider_id or self.registry.get_provider_id(intent)  # 优化2
             # ★ P1-b（2026-10-10）Agent 级模型参数（含 thinking_mode）——
             #   `agents.model_params` 此前是**死配置**（有列、有前端表单，无消费点）。
@@ -4155,6 +4235,25 @@ class StreamMixin:
                     f"{len(_kbw.get('missing') or [])} 篇不存在，已自动剔除"
                     + ("；因全部失效，本次已暂放宽为不限文档" if _kbw.get("unfiltered") else "")
                     + "。建议到「能力中心 → Agent 管理」核对该 Agent 的知识库范围配置")}
+            # ★ 2026-10-27（真机 E2E 暴露）：**技能预匹配**必须发生在此处（reasoning/skill 事件之前）。
+            #   旧顺序：skill 事件 yield（旧 4165~4172）→ `build_prompt_blocks`（旧 4254）才调
+            #   `_build_skill_prompt` ⇒ `_last_skill_hits` 恒为空 ⇒ 前端「🧩 技能执行」卡永远空白。
+            #   修法：**提前算一次 + 缓存复用**（`_build_skill_prompt` 内置本轮缓存）——
+            #   随后 `build_prompt_blocks` 命中同一缓存 ⇒ 不重复匹配、不重复 offload
+            #   （offload 会写 `skill_body_offloads` 表，重复做会留垃圾行）。
+            #   ⚠️ 只算一次是硬要求：匹配里含 LLM 兜底（`_llm_pick_skills`），算两次 = 多烧一次 LLM。
+            #
+            # ★ 状态起点（`reset_skill_state`）**同步前移到此处**：
+            #   它必须早于预匹配，否则 `_skill_forced` 还是上一轮的值 ⇒
+            #   ① 缓存键错（`_skill_forced` 参与键）⇒ 复用失效 ⇒ 匹配算两次；
+            #   ② `_skill_allowed_tools` 被 reset 清零 ⇒ 预匹配并出的白名单丢失。
+            #   前移安全性：它只重置两个实例属性（`_skill_forced` / `_skill_allowed_tools`），
+            #   且本函数内 3619~4165 之间无任何依赖这两个属性的逻辑（已核）。
+            reset_skill_state(self, skill_name)
+            try:
+                self._build_skill_prompt(intent, user_input, user)
+            except Exception:
+                pass
             # 思考过程：检索决策 + 自动触发技能（真实执行信息，普通模型不流 reasoning 时也可见）
             if should_retrieve:
                 route = retrieval.get("route", "none")
@@ -4166,8 +4265,14 @@ class StreamMixin:
                 _r_delta += f" 自动触发技能：{'、'.join(self._last_skill_hits)}。"
                 # V2.5：技能执行环节独立事件（前端「🧩 技能执行」卡，命中技能与触发说明可见）
                 # ★ 2026-11-11 补层级字段（depth/agent/mcp），供前端三级展示归组。
+                # ⚠️ 2026-10-27 真机 E2E 暴露：此处**不能**引用 `_ctx_agent` ——
+                #   它在后面的工具循环段才定义（同一文件另一处 skill 事件已注明此坑）。
+                #   本分支此前**从未被执行过**（`_last_skill_hits` 恒空 ⇒ 整块跳过），
+                #   所以这个前向引用一直潜伏着；预匹配修好后才暴露 ⇒
+                #   直接报 `cannot access local variable '_ctx_agent'`。
+                #   与同文件另一处保持一致：直接取 `agent_def.name`（值等价，无耦合）。
                 yield {"type": "skill", "status": "done", "names": list(self._last_skill_hits),
-                       "agent": _ctx_agent, "depth": 1,
+                       "agent": (agent_def.name or "-"), "depth": 1,
                        "mcp": None,
                        "note": "技能指令已注入生成阶段（触发词命中，指导本回答的组织方式与工具白名单）"}
             exec_reasoning.append(_r_delta)
@@ -4224,7 +4329,10 @@ class StreamMixin:
             # 导致「显式指定技能」的白名单授权在对话主路径上不生效（`skills.py:153/163`
             # 会按"未强制"重置并只并集*自动命中*技能的白名单）；且 `_skill_allowed_tools`
             # 无每轮清零，全局单例下会跨轮残留。
-            reset_skill_state(self, skill_name)
+            # ★ 2026-10-27：`reset_skill_state(self, skill_name)` 已**前移**到本文件
+            #   「技能预匹配」处（reasoning 之前）—— 若在此再调一次，会把预匹配并出的
+            #   `_skill_allowed_tools` 清零 ⇒ 白名单丢失 ⇒ 命中技能的独占式白名单失效。
+            #   （`reset_skill_state` 的语义是"每轮状态起点"，前移后位置更正确。）
             if skill_name:
                 # P1-29：读取入口统一为 `load_forced_skill`（StudioRepo `SELECT *` 含
                 # references/examples/scripts/allowed_tools）。此前本处用只查 3 列的裸 SQL
@@ -4405,6 +4513,14 @@ class StreamMixin:
             _lg = _LoopGuard(token_budget=_lg_budget, tool_timeout_s=120.0,
                              max_failed_rounds=max_failed_rounds, tool_retries=_lg_retries,
                              retry_timeout_s=_lg_retry_wait)
+            # ★ 2026-10-27（真机 E2E，conv 9698）：本轮**已成功执行的写操作**清单。
+            #   放在 while **外**（跨自主续跑轮累积）—— 写操作一旦执行成功就**一直成立**，
+            #   不该因为进入下一续跑轮而被"忘掉"（那正是模型误判「尚未写入」的成因之一）。
+            _write_ops = []
+            # ★ 2026-10-28（写前确认 HITL）：本轮是否命中"写前确认闸"。
+            #   形状刻意对齐 `clarify_required`（`_clarify_req`）⇒ ReAct 循环与外层收口
+            #   用**同一套**中断协议（检出即 break → 发事件 → 落挂起 → 等人 → 新一轮）。
+            _hil_confirm_req = None
             # ★ 2026-10-17（米爸「harness 持续工作」）：自主续跑外层循环。
             #   round 1 = 原始请求；round 2+ = 评估器判定「未完成」放行的续跑。
             #   _lg（LoopGuard）**故意在循环外创建**：token 预算跨轮共享（config 既定语义），
@@ -4696,6 +4812,22 @@ class StreamMixin:
                                            "skill": _ctx_skill, "depth": 2 if _ctx_skill else 1,
                                            "mcp": _mcp_of(tname)}
                                     break
+                                # ★ 2026-10-28（写前确认 HITL）：写操作被确认闸拦下 ⇒ 中断本轮。
+                                #   与 `clarify_required` **同构**：不喂 tool_result、不继续探测
+                                #   （否则模型会继续发写请求 ⇒ 弹出一堆确认单）。
+                                #   ⚠️ 必须先补 done 事件：否则前端该工具节点永远停在"执行中"
+                                #   （与 2026-11-12 澄清 7 连问那次同源的问题）。
+                                if isinstance(result, dict) and result.get("confirm_required"):
+                                    _hil_confirm_req = result.get("confirm") or {}
+                                    yield {"type": "tool", "status": "done", "name": tname,
+                                           "ok": True, "result": str(result.get("result") or ""),
+                                           "error": "", "truncated": False,
+                                           "latency_ms": int((time.time() - _t0) * 1000),
+                                           "call_id": _call_id, "skipped": False,
+                                           "skip_reason": "", "agent": _ctx_agent,
+                                           "skill": _ctx_skill, "depth": 2 if _ctx_skill else 1,
+                                           "mcp": _mcp_of(tname)}
+                                    break
                                 _r0 = str(result.get("result") or "")
                                 if result.get("ok") and (result.get("weak")
                                                          or ("未检索到" in _r0)
@@ -4703,6 +4835,19 @@ class StreamMixin:
                                     _lg.undo_dup_count(tname, targs)
                             _t_ok = bool(result.get("ok"))
                             _r_full = str(result.get("result") or "")
+                            # ★ 2026-10-27（真机 E2E 实测，conv 9698）：**记录已成功执行的写操作**。
+                            #   现象：模型在第 11 轮触发「连续重复调用收敛闸」被强制退出循环，
+                            #   进入最终生成时**看漏**了 messages 里 `create_model_elements`
+                            #   的成功回执（status=SUCCEEDED），于是在最终回复里断言
+                            #   「尚未写入平台」——**与事实相反**（平台直连回读证实已建成）。
+                            #   ⇒ 收尾时把成功写操作**显式列出**（见 `loop_protocol.write_ops_digest`）。
+                            #   判据：① `ok=True`（只列成功的，失败由各自错误回执承载）；
+                            #        ② 该工具确实是写类（本地 `side_effect` + MCP 动词族）。
+                            if _t_ok and _is_write_tool(self, tname):
+                                _write_ops.append({
+                                    "name": tname,
+                                    "detail": _write_op_detail(_r_full),
+                                })
                             # ★ 2026-10-27（用户质疑"前面已确定工程，是不是上下文遗漏了"——
                             #   实测确认**会丢**）：把本轮工具回执里出现的
                             #   工程/分支/版本/元素**落成会话锚点**，下一轮不依赖历史窗口。
@@ -4914,6 +5059,13 @@ class StreamMixin:
                                 exec_reasoning.append(_w_delta)
                                 yield {"type": "reasoning", "delta": _w_delta, "round": _rnd + 1, "phase": "plan"}
                                 break
+                # ★ 2026-10-28（写前确认 HITL）写前确认收口 —— 落痕迹 + 发确认卡 + 结束本次流。
+                #   位置同样选在「最终生成之前」：ReAct 循环已因 confirm_required 中断，
+                #   继续生成只会空转（而且会让模型在"没拿到批准"的情况下编造"已执行"）。
+                if _hil_confirm_req:
+                    yield from self._hil_confirm_finish_events(
+                        conversation_id, intent, _hil_confirm_req)
+                    return
                 # ★ 2026-10-17（米爸反馈3）：ask_user 澄清收口 —— 落挂起 + 发射卡片 + 结束本次流。
                 #   位置选在「最终生成之前」：此时 ReAct 循环已中断，继续生成只会空转。
                 #   与 1.4/1.5 共用 _persist_clarify + clarify_ask 协议（前端同一套卡片/续跑机制）。
@@ -4982,7 +5134,8 @@ class StreamMixin:
                     _fin_msgs = _lproto.finalize_messages(
                         messages, extra_context=_extra,
                         reason=_lg_stop_reason(_lg), used=_lg_failed_rounds(_lg),
-                        limit=_lg_limit_of(_lg, max_tool_rounds))
+                        limit=_lg_limit_of(_lg, max_tool_rounds),
+                        write_ops=_write_ops)
 
                     # ★★ 2026-10-09（与 execute.py 同源，米爸纠正后补齐）：
                     #   收尾轮原来一律 `stream=True` 且**不传 tools**
@@ -5057,7 +5210,8 @@ class StreamMixin:
                         _repair_msgs = None
                     if _repair_msgs:
                         _fin_msgs = _lproto.finalize_messages(_repair_msgs,
-                                                               extra_context=_extra)
+                                                               extra_context=_extra,
+                                                               write_ops=_write_ops)
                     chunks = llm_client.chat(_fin_msgs, provider_id=effective_provider, stream=True,
                                             _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
                     for chunk in chunks:
@@ -5071,6 +5225,33 @@ class StreamMixin:
                                 llm_content += delta["content"]
                                 _streamed_acc[0] += delta["content"]
                                 yield {"type": "token", "delta": delta["content"]}
+                # ★★★ 2026-10-27（真机 E2E 实测，conv 9698）：**已成功写操作的事实注入**。
+                #   现象：`create_model_elements` 回执 `status=SUCCEEDED`（平台侧直连回读证实
+                #   新包确实建成、total 1→2），但模型最终回复断言「**尚未写入平台**……
+                #   因轮次用尽，写操作没有执行」——**与事实相反**。
+                #   机制：ReAct 已累积 11 轮、messages 极长 ⇒ 模型在收尾时**看漏**了那条回执；
+                #   而收尾提示（`finalize_messages`）只在 `lacks_deliverable` 为真时才走，
+                #   本次模型**产出了长回复** ⇒ 收尾提示**根本没触发** ⇒ 无任何机制纠正它。
+                #   ⇒ 修法：**在最终生成之前**把已成功写操作作为一条 user 消息追加进 messages
+                #      （不依赖收尾分支 ⇒ 两条路径都覆盖）。
+                #   ⚠️ 只在**确有成功写操作**时追加 ⇒ 无写操作的场景**逐字节不变**（零回归面）。
+                #   ⚠️ 这只纠正「虚构未完成」；「虚构已完成」由工具自身回执 + 技能纪律承担。
+                _wdigest = ""
+                try:
+                    _wdigest = _lproto.write_ops_digest(_write_ops)
+                except Exception:
+                    _wdigest = ""
+                if _wdigest:
+                    messages = list(messages) + [
+                        {"role": "user", "content": _wdigest}]
+                    try:
+                        _w_delta = ("（已成功执行的写操作已记入上下文）"
+                                    + "、".join(str(o.get("name") or "") for o in _write_ops))
+                        exec_reasoning.append(_w_delta)
+                        yield {"type": "reasoning", "delta": _w_delta,
+                               "round": _rnd + 1, "phase": "plan"}
+                    except Exception:
+                        pass
                 # llm_client.chat(stream=True) 返回生成器；FORCE_MOCK 下 MockLLM 也走 _stream
                 if not tool_injected:
                     chunks = llm_client.chat(messages, provider_id=effective_provider, stream=True,

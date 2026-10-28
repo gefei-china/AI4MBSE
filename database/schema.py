@@ -984,7 +984,33 @@ def init_db():
         -- ⚠️ **不设 UNIQUE 约束**：确认单是"待办"，人工可能隔很久才处理；永久唯一会让
         --   "上次被拒、今天想重来"被静默吞掉（返回那条已拒绝的旧记录）—— 那比重复确认更糟。
         --   去重在**代码层**按 (idem_key, status='pending', 24h 窗口) 判定，可回退、可调参。
-        idem_key TEXT DEFAULT ''
+        idem_key TEXT DEFAULT '',
+        -- ★ 2026-10-28（写前确认 HITL）：统一闸 + 批准即执行所需的 8 列。
+        --   为什么必须扩列（实测缺陷）：
+        --     · tool_type   —— 批准后要走哪个执行器（local / mcp / http）；
+        --       此前 decide 端点只真执行 kind='http' + save_artifact + eval_label，
+        --       **MCP 写操作全部落 else 分支「不支持批准后自动执行」**。
+        --     · level       —— confirm / approve（决定审批权限门）。
+        --     · batch_id    —— 批次合并键（实测一次建包 19 次调用 ⇒ 不合并则 HITL 退化）。
+        --     · batch_count —— 批次内操作数（用户要知道要批多少条）。
+        --     · timeout_at  —— 超时时刻（超时 ≠ 默许，必须显式 expired）。
+        --     · result_json —— 执行回执；**同时是执行幂等的依据**（非空 ⇒ 已执行过）。
+        --     · exec_idem_key —— 执行幂等键（缺它 ⇒ 用户点两下就写两次 ⇒ 重复包）。
+        --     · tool_call_id —— 对齐前端 SSE 节点（确认卡挂到对应工具节点上）。
+        tool_type TEXT DEFAULT '',
+        tool_call_id TEXT DEFAULT '',
+        level TEXT DEFAULT '',
+        batch_id TEXT DEFAULT '',
+        batch_count INTEGER DEFAULT 1,
+        timeout_at TEXT DEFAULT '',
+        result_json TEXT DEFAULT '',
+        exec_idem_key TEXT DEFAULT '',
+        -- ★ 2026-10-28（写前确认 HITL·第二版）：批次对象清单（计划级确认卡要展示"这轮要动哪些东西"）
+        --   为什么必须有：实证（Anthropic 生产遥测）显示 **计划级审批拒绝率 39%**，
+        --   而 **逐条权限请求拒绝率仅 3%**（差 13 倍）⇒ 逐条弹窗几乎无筛选力（approval fatigue）。
+        --   ⇒ 确认卡必须以"**摘要**"呈现本批要做的 N 件事 + 受影响对象清单，而不是只给一条参数 JSON。
+        --   本列存 JSON 数组，批次合并时**追加**（不是覆盖）⇒ 摘要随批次增长而完整。
+        batch_items TEXT DEFAULT '[]'
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ux_hc_status ON hil_confirmations(status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_hc_run ON hil_confirmations(run_id)")
