@@ -571,6 +571,10 @@ class ExecuteMixin:
             # ★ P0-2（2026-10-28）harness 强制闸的连续阻断计数（循环外，跨轮累积）。
             #   与 stream.py 同构：计数必须在 while 外，否则每轮从 0 数 ⇒ 永不触顶。
             _harness_blocks = 0
+            # ★ 无进展检测（真机实测驱动）：记录上轮 remaining 与连续无变化次数。
+            #   只靠次数上限 8 会原地打转 ≈2.3 分钟且结果相同 —— 必须提前放行。
+            _harness_prev_rem = []
+            _harness_stall = 0
             while True:
                 # ── 每轮状态复位（续跑轮必须干净起步）──
                 _clarify_req = None
@@ -890,13 +894,17 @@ class ExecuteMixin:
                 #   ② 连续阻断达上限 ⇒ 强制放行，且如实告知「未完成」
                 #   ③ 无待办 / 开关关 ⇒ 完全不介入（逐字节兼容 D-3）
                 try:
-                    _hgate = self._harness_gate(conversation_id, _harness_blocks)
+                    _hgate = self._harness_gate(conversation_id, _harness_blocks,
+                                             prev_remaining=_harness_prev_rem,
+                                             stall_streak=_harness_stall)
                 except Exception:
                     _hgate = {"block": False, "feedback": "", "force_release": False,
                               "notice": "", "remaining": [], "blocks_used": _harness_blocks,
                               "reason": "harness 闸异常 ⇒ 不介入", "failures": []}
                 if _hgate.get("block"):
                     _harness_blocks = int(_hgate.get("blocks_used") or 0)
+                    _harness_prev_rem = list(_hgate.get("remaining") or [])
+                    _harness_stall = int(_hgate.get("stall_streak") or 0)
                     if llm_content:
                         _ac_full = ((_ac_full + "\n\n" + llm_content)
                                     if _ac_full else llm_content)

@@ -83,6 +83,24 @@ def group_a():
     check("A", "★默认上限 = 8（对齐官方）", hg.HARNESS_MAX_BLOCKS == 8,
           str(hg.HARNESS_MAX_BLOCKS))
 
+    # A9 ★ 无进展检测（真机实测驱动）：连续 N 次 remaining 无变化 ⇒ 提前放行
+    d = hg.harness_decide(gate_pending, 1, 8, harness_enabled=True,
+                          stall_streak=2, max_stall=2)
+    check("A", "★无进展达阈值 ⇒ 提前强制放行（不等次数上限）",
+          d["block"] is False and d["force_release"] is True, str(d))
+    check("A", "★无进展放行标 stalled=True", d.get("stalled") is True, str(d))
+    check("A", "★无进展放行理由说明「待办无任何变化」",
+          "无任何变化" in d["reason"] or "卡死" in d["reason"], d["reason"])
+    # 未达阈值仍拦
+    d = hg.harness_decide(gate_pending, 1, 8, harness_enabled=True,
+                          stall_streak=1, max_stall=2)
+    check("A", "无进展 1 次（阈值 2）⇒ 仍拦", d["block"] is True, str(d))
+    # 无进展检测优先于次数上限（不该等 8 次）
+    d = hg.harness_decide(gate_pending, 2, 8, harness_enabled=True,
+                          stall_streak=2, max_stall=2)
+    check("A", "★无进展检测优先于次数上限（第 3 次就放行，不等 8 次）",
+          d["block"] is False and d["force_release"] is True, str(d))
+
 
 # ══════════════ B. 回灌内容 ══════════════
 
@@ -346,6 +364,39 @@ def group_e():
     check("E", "反向自证：真实现拒绝无回执置完成（防判据恒红）",
           c_block(hg.harness_decide) and c_max(hg.harness_decide)
           and c_notice(hg.build_force_release_notice))
+
+    # E5 ★ 变异自证：去掉无进展检测（只靠次数上限）⇒ A9 判据翻红
+    #    这正是真机暴露的问题：只靠 8 次上限会原地打转 ≈2.3 分钟。
+    gate_pending2 = {"done": False, "fallback": False,
+                     "remaining": ["x"], "reason": "未完成"}
+
+    def c_stall(decide) -> bool:
+        d = decide(gate_pending2, 2, 8, harness_enabled=True,
+                   stall_streak=2, max_stall=2)
+        return (d["block"] is False) and bool(d.get("force_release"))
+
+    def bad_no_stall(gate, blocks_used, max_blocks=8, *, harness_enabled=True,
+                     stall_streak=0, max_stall=2):
+        # 变异：完全忽略 stall_streak（只按次数上限判）
+        if not harness_enabled or max_blocks == 0:
+            return {"block": False, "reason": "x", "force_release": False,
+                    "remaining": [], "blocks_used": blocks_used,
+                    "max_blocks": max_blocks, "stalled": False}
+        if gate.get("fallback") or gate.get("done"):
+            return {"block": False, "reason": "x", "force_release": False,
+                    "remaining": [], "blocks_used": blocks_used,
+                    "max_blocks": max_blocks, "stalled": False}
+        if blocks_used >= max_blocks:
+            return {"block": False, "reason": "上限", "force_release": True,
+                    "remaining": [], "blocks_used": blocks_used,
+                    "max_blocks": max_blocks, "stalled": False}
+        return {"block": True, "reason": "拦", "force_release": False,
+                "remaining": [], "blocks_used": blocks_used,
+                "max_blocks": max_blocks, "stalled": False}
+
+    check("E", "★变异自证：去掉无进展检测 ⇒ A9 判据翻红",
+          c_stall(hg.harness_decide) and not c_stall(bad_no_stall),
+          f"真实现={c_stall(hg.harness_decide)} 变异={c_stall(bad_no_stall)}")
 
 
 def main():

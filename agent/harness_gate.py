@@ -82,47 +82,79 @@ def parse_verify_spec(verify: str) -> dict:
 
 
 def harness_decide(gate: dict, blocks_used: int, max_blocks: int = HARNESS_MAX_BLOCKS,
-                   *, harness_enabled: bool = True) -> dict:
+                   *, harness_enabled: bool = True, stall_streak: int = 0,
+                   max_stall: int = 2) -> dict:
     """决定这一轮**要不要拦住不让结束**。
 
     :param gate: `todo_gate()` 的结果（来自 agent_todo.todo_gate）
     :param blocks_used: 已经连续阻断过几次
     :param max_blocks: 连续阻断上限（0 = 不阻断）
     :param harness_enabled: 闸总开关（默认关 ⇒ 永不拦）
+    :param stall_streak: **连续无进展**的阻断次数（remaining 与上轮完全相同）
+    :param max_stall: 无进展多少次就提前放行（默认 2）
     :returns: ``{"block": bool, "reason": str, "force_release": bool,
-                 "remaining": [...], "blocks_used": int, "max_blocks": int}``
+                 "remaining": [...], "blocks_used": int, "max_blocks": int,
+                 "stalled": bool}``
+
+    ★ stall_streak 是**真机实测驱动**加的参数（2026-10-28）：
+      首版只有"次数上限 8"，真机跑出来是这样 ——
+        轮1 评估器：任务未完成 → 续跑
+        轮1 harness：待办未过 → 拦
+        轮2 评估器：空转（next_step 与上轮相同）→ 停续跑
+        轮2 harness：待办仍未过 → 拦
+        …重复 8 次，每次≈17 秒（重新生成），共≈2.3 分钟，最后强制放行
+      ⇒ **结果和"一开始就放行"一样，只是慢了 2 分钟**。
+      这是 MAST FM-1.5「该停不停」的活样本：光有次数上限不够，
+      还要有**无进展检测**——同一批 remaining 连续 N 次没变，说明模型卡住了，
+      提前放行并如实告知"卡在 X"，比空转到上限更有用。
     """
     blocks_used = max(0, int(blocks_used or 0))
     max_blocks = max(0, int(max_blocks or 0))
+    stall_streak = max(0, int(stall_streak or 0))
+    max_stall = max(1, int(max_stall or 2))
     remaining = list((gate or {}).get("remaining") or [])
     if not harness_enabled:
         return {"block": False, "reason": "harness 闸关闭", "force_release": False,
                 "remaining": remaining, "blocks_used": blocks_used,
-                "max_blocks": max_blocks}
+                "max_blocks": max_blocks, "stalled": False}
     if max_blocks == 0:
         return {"block": False, "reason": "阻断上限为 0 ⇒ 不阻断",
                 "force_release": False, "remaining": remaining,
-                "blocks_used": blocks_used, "max_blocks": max_blocks}
+                "blocks_used": blocks_used, "max_blocks": max_blocks,
+                "stalled": False}
     # 无待办 ⇒ 无从验收 ⇒ 不拦（D-3 兼容）
     if (gate or {}).get("fallback"):
         return {"block": False, "reason": "无待办 ⇒ 无验收条件，不拦",
                 "force_release": False, "remaining": remaining,
-                "blocks_used": blocks_used, "max_blocks": max_blocks}
+                "blocks_used": blocks_used, "max_blocks": max_blocks,
+                "stalled": False}
     # 全部完成 ⇒ 放行
     if (gate or {}).get("done"):
         return {"block": False, "reason": "待办全部通过验收 ⇒ 放行",
                 "force_release": False, "remaining": [],
-                "blocks_used": blocks_used, "max_blocks": max_blocks}
+                "blocks_used": blocks_used, "max_blocks": max_blocks,
+                "stalled": False}
+    # ★ 无进展检测：同一批 remaining 连续 max_stall 次没变 ⇒ 提前放行
+    #   这条**优先于**次数上限判定（先判放行，少走 6 次空转）
+    if stall_streak >= max_stall:
+        return {"block": False,
+                "reason": (f"连续 {stall_streak} 次阻断后待办无任何变化 ⇒ 判定卡死，"
+                           f"提前放行（未到次数上限 {max_blocks}）"),
+                "force_release": True, "remaining": remaining,
+                "blocks_used": blocks_used, "max_blocks": max_blocks,
+                "stalled": True}
     # 有未完成 ⇒ 该拦 —— 但先看上上限
     if blocks_used >= max_blocks:
         return {"block": False,
                 "reason": f"已连续阻断 {blocks_used} 次（上限 {max_blocks}）⇒ 强制放行",
                 "force_release": True, "remaining": remaining,
-                "blocks_used": blocks_used, "max_blocks": max_blocks}
+                "blocks_used": blocks_used, "max_blocks": max_blocks,
+                "stalled": False}
     return {"block": True,
             "reason": f"有 {len(remaining)} 项待办未通过验收（第 {blocks_used + 1}/{max_blocks} 次阻断）",
             "force_release": False, "remaining": remaining,
-            "blocks_used": blocks_used, "max_blocks": max_blocks}
+            "blocks_used": blocks_used, "max_blocks": max_blocks,
+            "stalled": False}
 
 
 def build_block_feedback(remaining, blocks_used: int, max_blocks: int,

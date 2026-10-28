@@ -4526,6 +4526,10 @@ class StreamMixin:
             #   就强制放行"，计数必须跨轮连续，否则每轮都从 0 数 ⇒ 永不触顶
             #   ⇒ 会变成 FM-1.5「该停不停」12.4% 的温床。
             _harness_blocks = 0
+            # ★ 无进展检测（真机实测驱动）：记录上轮 remaining 与连续无变化次数。
+            #   只靠次数上限 8 会原地打转 ≈2.3 分钟且结果相同 —— 必须提前放行。
+            _harness_prev_rem = []
+            _harness_stall = 0
             # ★ 2026-10-17（米爸「harness 持续工作」）：自主续跑外层循环。
             #   round 1 = 原始请求；round 2+ = 评估器判定「未完成」放行的续跑。
             #   _lg（LoopGuard）**故意在循环外创建**：token 预算跨轮共享（config 既定语义），
@@ -5544,13 +5548,17 @@ class StreamMixin:
                 #     ② 连续阻断达上限（默认 8）⇒ 强制放行，且**如实告知「未完成」**
                 #     ③ 无待办 / 开关关 ⇒ 完全不介入（逐字节兼容 D-3）
                 try:
-                    _hgate = self._harness_gate(conversation_id, _harness_blocks)
+                    _hgate = self._harness_gate(conversation_id, _harness_blocks,
+                                             prev_remaining=_harness_prev_rem,
+                                             stall_streak=_harness_stall)
                 except Exception:
                     _hgate = {"block": False, "feedback": "", "force_release": False,
                               "notice": "", "remaining": [], "blocks_used": _harness_blocks,
                               "reason": "harness 闸异常 ⇒ 不介入", "failures": []}
                 if _hgate.get("block"):
                     _harness_blocks = int(_hgate.get("blocks_used") or 0)
+                    _harness_prev_rem = list(_hgate.get("remaining") or [])
+                    _harness_stall = int(_hgate.get("stall_streak") or 0)
                     # 本轮产出并进全量（被拦下的这轮内容也要保留）
                     if llm_content:
                         _full_content = ((_full_content + "\n\n" + llm_content)

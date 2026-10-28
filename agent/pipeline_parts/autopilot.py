@@ -151,9 +151,11 @@ class AutoPilotMixin:
             return {
                 "enabled": _cfg.as_bool("agent", "harness_enabled", False),
                 "max_blocks": max(0, int(_cfg.get("agent", "harness_max_blocks", 8) or 0)),
+                # 无进展检测：同一批 remaining 连续几次没变 ⇒ 提前放行（默认 2）
+                "max_stall": max(1, int(_cfg.get("agent", "harness_max_stall", 2) or 2)),
             }
         except Exception:
-            return {"enabled": False, "max_blocks": 0}
+            return {"enabled": False, "max_blocks": 0, "max_stall": 2}
 
     def _run_verify(self, verify: str) -> dict:
         """执行一条待办的验收。
@@ -180,18 +182,39 @@ class AutoPilotMixin:
                            if ok else
                            "验收工具「%s」未通过：%s" % (spec["tool"], detail))}
 
-    def _harness_gate(self, conversation_id: int, blocks_used: int) -> dict:
+    def _harness_gate(self, conversation_id: int, blocks_used: int,
+                      prev_remaining=None, stall_streak: int = 0) -> dict:
         """跑一次 harness 强制闸判定 + 实际执行 verify。
 
+        :param blocks_used: 已连续阻断次数
+        :param prev_remaining: **上一轮**的 remaining（用于无进展检测）
+        :param stall_streak: 已连续"无进展"次数
         :returns: ``{"block": bool, "feedback": str, "force_release": bool,
                      "notice": str, "remaining": [...], "blocks_used": int,
-                     "reason": str, "failures": [...]}``
+                     "reason": str, "failures": [...], "stall_streak": int,
+                     "stalled": bool}``
+
+        ★ 无进展检测（真机实测驱动，2026-10-28）：
+          首版只有次数上限 8，真机跑出「原地打转 8 次 × 17 秒 ≈ 2.3 分钟，
+          结果与立刻放行相同」—— 那是 MAST FM-1.5 的活样本。
+          现在比对「本轮 remaining 与上轮是否完全相同」：
+          连续 max_stall（默认 2）次没变 ⇒ **提前强制放行**并如实说卡在哪。
         """
         from agent import harness_gate as _hg
         cfg = self._harness_cfg()
         gate = self._todo_gate(conversation_id)
+        # ★ 无进展：本轮 remaining 与上轮完全相同 ⇒ stall_streak + 1
+        cur_rem = list((gate or {}).get("remaining") or [])
+        try:
+            prev = list(prev_remaining or [])
+        except Exception:
+            prev = []
+        cur_streak = (int(stall_streak or 0) + 1) if (prev and prev == cur_rem) else 0
+
         decision = _hg.harness_decide(gate, blocks_used, cfg["max_blocks"],
-                                      harness_enabled=cfg["enabled"])
+                                      harness_enabled=cfg["enabled"],
+                                      stall_streak=cur_streak,
+                                      max_stall=cfg.get("max_stall", 2))
         if not decision["block"]:
             notice = ""
             if decision.get("force_release"):
@@ -205,7 +228,9 @@ class AutoPilotMixin:
                     "force_release": bool(decision.get("force_release")),
                     "notice": notice, "remaining": decision["remaining"],
                     "blocks_used": decision["blocks_used"],
-                    "reason": decision["reason"], "failures": []}
+                    "reason": decision["reason"], "failures": [],
+                    "stall_streak": cur_streak,
+                    "stalled": bool(decision.get("stalled"))}
 
         # ★ 该拦 ⇒ 实际跑一遍未完成待办的 verify（判据是**执行结果**，不是 LLM 判断）
         failures = []
@@ -228,7 +253,9 @@ class AutoPilotMixin:
             #   ⇒ 不该拦，重新判一次。
             gate2 = self._todo_gate(conversation_id)
             decision2 = _hg.harness_decide(gate2, blocks_used, cfg["max_blocks"],
-                                           harness_enabled=cfg["enabled"])
+                                           harness_enabled=cfg["enabled"],
+                                           stall_streak=cur_streak,
+                                           max_stall=cfg.get("max_stall", 2))
             if not decision2["block"]:
                 notice = ""
                 if decision2.get("force_release"):
@@ -240,11 +267,13 @@ class AutoPilotMixin:
                         "notice": notice, "remaining": decision2["remaining"],
                         "blocks_used": decision2["blocks_used"],
                         "reason": "重判后已通过验收：" + decision2["reason"],
-                        "failures": []}
+                        "failures": [], "stall_streak": 0,
+                        "stalled": bool(decision2.get("stalled"))}
         feedback = _hg.build_block_feedback(
             decision["remaining"], decision["blocks_used"] + 1,
             decision["max_blocks"], failures)
         return {"block": True, "feedback": feedback, "force_release": False,
                 "notice": "", "remaining": decision["remaining"],
                 "blocks_used": decision["blocks_used"] + 1,
-                "reason": decision["reason"], "failures": failures}
+                "reason": decision["reason"], "failures": failures,
+                "stall_streak": cur_streak, "stalled": False}
