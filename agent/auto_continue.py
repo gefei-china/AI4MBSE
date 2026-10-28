@@ -218,9 +218,14 @@ def decide(verdict, *, used: int, max_used: int, seen_steps,
         return False, f"自主续跑次数已达上限（{max_used} 次）"
     if deadline_left_s is not None and deadline_left_s <= 0:
         return False, "自主续跑墙钟时限已到"
-    if not budget_left:
-        return False, "token 预算已耗尽，停止续跑"
-    # ★ P1-1：预算接近上限 ⇒ 主动降级收尾（而不是等耗尽了硬停）
+    # ★★ P1-1 顺序修正（2026-10-28，conv 9726 实证）：
+    #   降级闸**必须排在"预算硬停"之前**。原顺序是先 `if not budget_left: return`
+    #   ⇒ 预算一旦耗尽就直接返回"token 预算已耗尽，停止续跑"，
+    #   而"降级收尾"分支**永远进不去**（它的触发条件恰恰是"预算快用完/已用完"）。
+    #   真机后果（conv 9726 的 stage 原文）：`detail = "token 预算已耗尽，停止续跑"`
+    #   ⇒ `build_degrade_notice()` 一次没被调用 ⇒ 回答里**没有待续清单**
+    #   ⇒ 用户看到的正是"做到一半突然断了"（P1-1 要治的就是这个症状）。
+    #   判据：预算耗尽时给出的原因必须带「降级收尾」字样（门禁已覆盖该顺序）。
     try:
         _dr = float(degrade_ratio or 0.0)
         _br = float(budget_ratio or 0.0)
@@ -230,6 +235,8 @@ def decide(verdict, *, used: int, max_used: int, seen_steps,
         return False, ("token 预算已用 %.0f%%（阈值 %.0f%%）⇒ 降级收尾："
                        "不再新开续跑轮，如实列出待续事项"
                        % (_br * 100, _dr * 100))
+    if not budget_left:
+        return False, "token 预算已耗尽，停止续跑"
     ns = str(verdict.get("next_step") or "").strip()
     if not ns:
         return False, "评估结论缺少下一步描述，按不续跑处理"

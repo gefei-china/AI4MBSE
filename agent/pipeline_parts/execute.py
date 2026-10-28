@@ -646,14 +646,12 @@ class ExecuteMixin:
                         _dup = _guard.probe_dup(tname, targs)
                         if _dup:
                             _guard.dup_short_circuits += 1
-                            _prev = _guard.last_result_for(tname, targs)
+                            # ★ 2026-10-28：回喂体统一由 LoopGuard 生成（与 stream.py 同源）
                             tool_results.append({
                                 "tool_call_id": tc.get("id", ""),
                                 "role": "tool", "name": tname,
                                 "content": json.dumps(
-                                    {"ok": True, "result": _prev,
-                                     "hint": "该工具的相同参数已执行过（这是第 %d 次），直接采用既有结果，"
-                                             "不要再重复调用同一工具同一参数。" % _dup},
+                                    _guard.replay_payload(tname, targs, _dup),
                                     ensure_ascii=False)})
                             continue
                         result = _guard.call(self._exec_tool_call, tname, targs)

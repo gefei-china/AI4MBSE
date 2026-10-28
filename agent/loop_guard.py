@@ -53,6 +53,12 @@ DEFAULT_TOOL_RETRIES = 3
 #: 重试一律收紧到这个值——120s × 3 次的全额等待会把一轮拖到 8 分钟，不可接受。
 DEFAULT_RETRY_TIMEOUT_S = 30.0
 
+#: ★ 2026-10-28：短路回喂给模型的**既有结果上限**（字符）。
+#: 原为 4000，与模型可见上限 `_TOOL_MODEL_CAP`(8000) 不同源 —— 意味着
+#: "第一次看到的是 6000 字、第二次短路只回喂 4000 字"，同一份结果两种口径。
+#: 目标包名恰好落在 4000 之后时，短路反而把命中切掉了 ⇒ 统一到 8000。
+_TOOL_REPLAY_CAP = 8000
+
 
 def normalize_args(args) -> str:
     """把参数规范化成**与 key 顺序无关**的稳定字符串。
@@ -67,8 +73,41 @@ def normalize_args(args) -> str:
         return str(args)
 
 
+#: ★ 2026-10-28（conv 9726 实证）：**语义等价键**——只影响"分页/票据"的参数。
+#:
+#: 为什么必须剔除：那次会话里同一棵子树被查了两遍，
+#:   ① `query_data_tree(parentId=3 系统架构设计)`（无 pageSize）
+#:   ② `query_data_tree(parentId=3 系统架构设计, pageSize=100)`
+#: 参数串不同 ⇒ 旧 `call_key` 判定"这是两次不同的调用" ⇒ 短路没触发
+#: ⇒ 模型拿到的是**第二次的空白记忆**（它没意识到自己十分钟前刚查过，
+#:   而那次回执里就写着目标包）⇒ 最终答出"该包不存在"。
+#:   这类"同义不同参"的重复调用是**纯烧预算**：`dup_short_circuits` 当时是 0。
+#:
+#: 边界（诚实说明）：剔除后若上一次**没取全**（hasMore/total 未覆盖），
+#: 重跑是**有意义**的 ⇒ `probe_dup` 会放行（见 `paging_complete` 守卫）。
+DEDUP_IGNORE_KEYS = frozenset({
+    "pageSize", "pagesize", "pageNum", "pagenum", "page", "limit", "offset",
+    "includeReadToken", "include_read_token", "readToken", "read_token", "token",
+})
+
+
+def semantic_args(args):
+    """剔除"只影响分页/票据"的参数后的参数副本（去重键专用）。"""
+    out = {}
+    for k, v in (args or {}).items():
+        if str(k) in DEDUP_IGNORE_KEYS:
+            continue
+        out[k] = v
+    return out
+
+
 def call_key(name: str, args) -> str:
-    """一次调用的去重键：`工具名|规范化参数`。"""
+    """一次调用的去重键：`工具名|规范化参数`（**语义键**，忽略分页/票据参数）。"""
+    return "%s|%s" % (name or "", normalize_args(semantic_args(args)))
+
+
+def strict_call_key(name: str, args) -> str:
+    """**严格键**（含分页参数）。用于"我到底调了几次不同参数"这类统计与排障。"""
     return "%s|%s" % (name or "", normalize_args(args))
 
 
@@ -170,6 +209,9 @@ class LoopGuard:
         self.calls: list = []              # [(name, args, ok, elapsed_ms)]
         self._seen: dict = {}              # call_key -> 次数（**仅非弱结果计入**）
         self._results: dict = {}# call_key -> 最近一次结果文本（短路时回喂）
+        #: ★ 2026-10-28：call_key -> 上次回执是否取全。没取全时**不允许短路**
+        #:   （用不完整的结果冒充答案，比多跑一次更糟）。
+        self._complete: dict = {}
         self.dup_short_circuits = 0
         self.timeouts = 0
         self.stop_reason = ""
@@ -181,8 +223,18 @@ class LoopGuard:
 
     # ── 重复检测 ──
     def probe_dup(self, name: str, args) -> int:
-        """执行前问一次：这个 (工具,参数) 是不是已经在跑过？0 = 允许执行。"""
-        return dedup_hit(self._seen, call_key(name, args), self.dup_threshold)
+        """执行前问一次：这个 (工具,参数) 是不是已经在跑过？0 = 允许执行。
+
+        ★ 2026-10-28：两道收紧（均为 conv 9726 真机数据驱动）
+          ① 键用**语义键**（忽略 pageSize/pageNum/includeReadToken 等）——
+             只差翻页参数的重复查询，实质是同一个问题；
+          ② 只有**上次取全了**才短路 —— 上次 `hasMore=True` 说明还有数据，
+             此时重跑是正当的（不许用半截结果冒充答案）。
+        """
+        k = call_key(name, args)
+        if not self._complete.get(k, True):
+            return 0
+        return dedup_hit(self._seen, k, self.dup_threshold)
 
     def mark_done(self, name: str, args, ok: bool, weak: bool = False,
                   elapsed_ms: int = 0) -> None:
@@ -202,6 +254,24 @@ class LoopGuard:
             if call_key(nm, ar) == k and ok:
                 return self._results.get(k, default) or default
         return default
+
+    def replay_payload(self, name: str, args, n: int) -> dict:
+        """短路时回喂给模型的**完整结果体**（既有结果 + 一句"这是重放"的说明）。
+
+        ★ 2026-10-28（conv 9726）：此前 stream.py 的短路只回喂结果原文、
+          不带任何说明 ⇒ 模型把重放当成了"一次新的查询"，于是**再查一遍**，
+          而且始终没意识到"目标包早在第 7 轮的回执里就出现了"。
+          说明句必须写死三件事：① 这是重放不是新结果；② 直接引用既有结论；
+          ③ **不要再把"没查到"当结论**（空/0 命中不等于不存在）。
+        """
+        prev = self.last_result_for(name, args)
+        hint = ("\n\n【重复调用已短路】你刚刚（本轮第 %d 次）发出了与之前**等价**的调用"
+                "（忽略 pageSize/pageNum/includeReadToken 等翻页与票据参数），"
+                "系统**没有重新执行**，直接回放上次的结果（见上）。"
+                "请直接引用这份结果作答；**不要**据此再判「该元素不存在」——"
+                "若上面出现过目标名，它就是存在的；若上面是空包，空 ≠ 不存在。"
+                % int(n or 2))
+        return {"ok": True, "result": (prev or "") + hint, "_dup": int(n or 2)}
 
     def undo_dup_count(self, name: str, args) -> None:
         """撤回一次去重计数（用于"执行后才发现结果是弱结果"的场景）。
@@ -311,7 +381,13 @@ class LoopGuard:
         if _ok:
             # 记结果文本：短路时要把既有结果回喂给模型（否则它无从作答）
             k = call_key(name, args)
-            self._results[k] = str(r.get("result") or "")[:4000]
+            self._results[k] = str(r.get("result") or "")[:_TOOL_REPLAY_CAP]
+            # ★ 2026-10-28：记"是否取全"——决定下次同键查询还能不能短路
+            try:
+                from agent.tool_result_notes import paging_complete as _pc
+                self._complete[k] = bool(_pc(r.get("result")))
+            except Exception:
+                self._complete[k] = True
             # **只有非弱结果才计入去重计数**：弱结果另有一道收敛逻辑，
             # 若这里也计入，"工具本来就查不到东西"会被误判成重复调用而掩盖问题。
             if not weak:

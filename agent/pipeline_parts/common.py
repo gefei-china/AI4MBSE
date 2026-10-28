@@ -874,6 +874,38 @@ def is_topic_switch(sim, shared, is_carry, threshold, use_shared=True):
         return False
 
 
+def gates_snapshot() -> dict:
+    """本轮**真正生效**的执行闸状态（供消息卡片回显）。
+
+    ★ 2026-10-28（conv 9726 实证）：用户明确说「两个开关都开了」，但服务端
+      读到的是 `todo_enabled=False` / `harness_enabled=False`
+      （`~/.workbuddy/mbse_config.json` 六项、两值皆 false，且 mtime 早于该会话）。
+      用户看的是界面下拉框（改完没点「保存配置」/ 被后续保存覆盖），
+      服务端读的是配置文件 —— 双方各信一半，根因判断必然跑偏。
+
+    ⇒ 把**生效值 + 来源文件**一起落进卡片：任何"我记得我开了"都能一眼证伪。
+    只读配置，不做任何写入；取不到就如实给 None（不猜）。
+    """
+    out = {"config_path": None}
+    try:
+        from core import config as _cfg
+        out["config_path"] = str(getattr(_cfg, "CONFIG_PATH", "") or "")
+        for k in ("todo_enabled", "harness_enabled", "obstacle_recovery_enabled"):
+            try:
+                out[k] = bool(_cfg.as_bool("agent", k, False))
+            except Exception:
+                out[k] = None
+        for k, dft in (("harness_max_blocks", 8), ("harness_max_stall", 2),
+                       ("budget_degrade_ratio", 0.7), ("loop_token_budget", 300000)):
+            try:
+                out[k] = _cfg.get("agent", k) if _cfg.get("agent", k) is not None else dft
+            except Exception:
+                out[k] = dft
+    except Exception:
+        pass
+    return out
+
+
 __all__ = [
     'os', 're', 'json', 'time', 'uuid', 'logging', 'logger',
     'get_db', 'db_conn', 'VectorEngine', 'QueryRouter', 'llm_client', 'STATIC_DIR',
@@ -907,4 +939,6 @@ __all__ = [
     #   但守卫 [1] import * 语义判红）—— 同族漏网第二次，正说明守卫不能只靠"记得"。
     'CHAT_TASK_PROBE', 'CHAT_TASK_REPAIR', 'CHAT_TASK_ANSWER', 'CHAT_TASK_EVAL',
     '_lg_failed_rounds', '_lg_limit_of', '_lg_stop_reason',
+    # 2026-10-28：执行闸生效值回显（卡片可证伪"我以为开了"）
+    'gates_snapshot',
 ]

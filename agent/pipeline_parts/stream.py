@@ -19,6 +19,21 @@ import queue as _queue  # 编排子任务事件的**实时**转发通道（见 _
 from contextlib import nullcontext  # P0-b：_turn_cm 无 tracer 时的零开销占位
 
 
+def _gates_safe():
+    """执行闸生效值快照（**诊断用，永不抛**）。
+
+    ★ 2026-10-28：本函数存在的唯一理由是"诊断信息不得带崩主流程"。
+      第一次实现直接在卡片字典里写 `_gates_snapshot()`（函数名还写错了），
+      实测 conv 9728：落库阶段 `NameError` ⇒ 整条消息的卡片装配中断，
+      只能走 `_persist_partial_stream` 兜底存正文、卡片退化成 `[]`。
+      ⇒ 诊断数据必须包在 try 里，取不到就给 None。
+    """
+    try:
+        return gates_snapshot()
+    except Exception:
+        return None
+
+
 def _gen_stage_name(intent, agent_def) -> str:
     """「生成」环节的 stage 名（2026-10-20 用户反馈：纯问答轮也显示「生成与校验」）。
 
@@ -4864,9 +4879,9 @@ class StreamMixin:
                             if _dup:
                                 _lg.dup_short_circuits += 1
                                 _dup_streak += 1      # ★ 2026-10-27：连续重复计数（见 round 末收敛闸）
-                                result = {"ok": True,
-                                          "result": _lg.last_result_for(tname, targs),
-                                          "_dup": _dup}
+                                # ★ 2026-10-28：回喂体统一由 LoopGuard 生成
+                                #   （含"这是重放、不要据此判不存在"的说明；与 execute.py 同源）
+                                result = _lg.replay_payload(tname, targs, _dup)
                             else:
                                 _dup_streak = 0       # ★ 真执行 ⇒ 有新进展，连续计数归零
                                 result = _lg.call(self._exec_tool_call, tname, targs)
@@ -5732,6 +5747,19 @@ class StreamMixin:
                         #   不存的话：刷新前看得到、刷新后消失，同一份数据两套呈现
                         #   （本仓已因此被反馈过多次）。
                         "brief": getattr(self, "_last_intent_brief", None) or None,
+                        # ★ 2026-10-28（用户报「我明明把两个开关都开了」但跑起来当关的用）：
+                        #   把**本轮真正读到的闸门值**随消息落库。
+                        #   此前"开没开"只存在于配置文件里，用户无法在会话中核对 ⇒
+                        #   界面下拉框看起来是"开启"（改完没点保存 / 被别的保存覆盖）
+                        #   而服务端读到的是 False，双方各信一半，排障必然跑偏。
+                        #   现在只要看这条卡片就知道"这一轮是按开还是按关跑的"。
+                        #   ⚠️ 必须 fail-safe：这是诊断信息，取不到就给 None，
+                        #   **绝不能**因为它抛异常而把整条消息的落库带崩
+                        #   （本行第一版写成未定义的 `_gates_snapshot()`，
+                        #     实测 conv 9728 直接 `name is not defined` ⇒
+                        #     落库中断、只能走 _persist_partial_stream 兜底存正文，
+                        #     卡片退化成 `[]`）。
+                        "gates": _gates_safe(),
                     },
                     "sysml_views": sysml_views,
                     "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",

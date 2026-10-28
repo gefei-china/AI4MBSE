@@ -615,7 +615,15 @@ async function loadCtxConfig() {
           let input;
           if (f.type === 'bool') {
             const on = (cur === true || cur === 'true' || cur === 1);
-            input = `<select id="ctx-${f.key}" onchange="ctxRecheck()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:100px;">
+            // ★ 2026-10-28（conv 9726 实证）：布尔开关**改完立即落盘**。
+            //   此前 onchange 只做联动预览（ctxRecheck），真正落盘要另外点「💾 保存配置」
+            //   ⇒ 用户把下拉改成「开启」就以为生效了，服务端读到的仍是 false
+            //   ⇒ 「计划外化 / harness 强制闸」这两个安全闸**静默失效**，
+            //     而用户坚信自己开了（排障时双方各信一半）。
+            //   `data-prev` 用于保存失败时**回退到改之前的值**，绝不让界面显示一个
+            //   没生效的状态。
+            input = `<select id="ctx-${f.key}" data-prev="${on ? '1' : '0'}"
+              onchange="ctxAutoSaveBool(this)" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:100px;">
               <option value="1"${on ? ' selected' : ''}>开启</option><option value="0"${on ? '' : ' selected'}>关闭</option></select>`;
           } else if (f.type === 'str') {
             input = `<input id="ctx-${f.key}" type="text" value="${cur ?? ''}"
@@ -672,6 +680,42 @@ function ctxValidate() {
   return true;
 }
 
+/** 单个布尔开关**改完立刻落盘 + 回读校验**（2026-10-28，conv 9726 实证）。
+
+ * 为什么不能再依赖「💾 保存配置」按钮：那是全局提交，用户改了一个安全闸的开关
+ * 却忘了点按钮（或点了但被别簇的 err 约束拦下），界面显示"开启"、服务端仍是 false。
+ * 后果不是"配置没保存"，而是**强制闸静默失效**——有未完成的活也不会拦。
+ *
+ * 三道自证（缺一就会重犯）：
+ *   ① 写后**回读** `/api/system/config`，值不一致就报错（不信 PUT 的 200）；
+ *   ② 失败**回退界面**到改之前的值（绝不显示一个没生效的状态）；
+ *   ③ 成功 toast 里写明"已即时生效"，与"保存成功"区分开。
+ */
+async function ctxAutoSaveBool(el) {
+  const key = String(el.id || '').replace(/^ctx-/, '');
+  if (!key) return;
+  const want = el.value === '1';
+  const prev = el.getAttribute('data-prev') === '1';
+  const norm = v => (v === true || v === 'true' || v === 1 || v === '1');
+  try {
+    const r = await api('/api/system/config/static', {
+      method: 'PUT', body: JSON.stringify({ updates: { [key]: want } }) });
+    if (r && r.ok === false) throw new Error(r.error || '保存失败');
+    const cfg = await api('/api/system/config');
+    const [sec, k2] = key.split('.');
+    const actual = (((cfg || {}).static || {})[sec] || {})[k2];
+    if (norm(actual) !== want) {
+      throw new Error('回读不一致（服务端实际=' + JSON.stringify(actual) + '）');
+    }
+    el.setAttribute('data-prev', want ? '1' : '0');
+    toast((want ? '✅ 已开启 ' : '✅ 已关闭 ') + k2 + '（已即时生效，下一轮对话起按此执行）');
+  } catch (e) {
+    el.value = prev ? '1' : '0';
+    toast('⛔ 未生效，已回退：' + (e.message || e));
+  }
+  ctxRecheck();
+}
+
 async function saveCtxConfig() {
   if (!ctxValidate()) return;
   const updates = {};
@@ -687,7 +731,22 @@ async function saveCtxConfig() {
   try {
     const r = await api('/api/system/config/static', { method: 'PUT', body: JSON.stringify({ updates }) });
     if (r && r.ok === false) throw new Error(r.error || '保存失败');
-    toast('✅ AI 上下文配置已保存并即时生效（' + Object.keys(updates).length + ' 项）');
+    // ★ 2026-10-28：**回读校验**——PUT 返回 200 不等于值真落盘。
+    //   "声称已生效"必须有回读证据（否则又是一个"我以为开了"）。
+    const cfg = await api('/api/system/config');
+    const st = (cfg || {}).static || {};
+    const norm = v => (v === true || v === 'true' || v === 1 || v === '1');
+    const bad = [];
+    for (const k of Object.keys(updates)) {
+      const [sec, k2] = k.split('.');
+      const actual = (st[sec] || {})[k2];
+      const want = updates[k];
+      const same = (typeof want === 'boolean') ? (norm(actual) === want)
+                                              : (String(actual) === String(want));
+      if (!same) bad.push(k + '（实际=' + JSON.stringify(actual) + '）');
+    }
+    if (bad.length) throw new Error('回读不一致：' + bad.join('；'));
+    toast('✅ AI 上下文配置已保存并即时生效（' + Object.keys(updates).length + ' 项，已回读核对）');
     loadCtxConfig();
   } catch (e) {
     toast('保存失败：' + (e.message || e));

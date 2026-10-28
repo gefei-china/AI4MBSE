@@ -1037,6 +1037,23 @@ class ToolMixin:
         }
 
     def _exec_tool_call(self, name: str, arguments: dict) -> dict:
+        """工具调用**唯一出口**：跑一遍真实执行，再补一句确定性判读。
+
+        ★ 2026-10-28（conv 9726 实证）：为什么判读要挂在**这里**而不是各工具里
+          ── 执行体有 10+ 个 return（白名单/权限/确认/超时/异常/MCP/内置…），
+             逐个补注解必然漏；而 stream.py 与 execute.py **两条 ReAct 路径**
+             最终都只经这一个方法 ⇒ 挂在出口即两路同源（本仓"同一语义只写一份"纪律）。
+          ── 注解**不改 result 原文**，只在末尾追加判读句（原文仍是审计口径）。
+          ── 判读失败绝不阻断执行（旁路原则，见 agent/tool_result_notes.py）。
+        """
+        res = self._exec_tool_call_impl(name, arguments)
+        try:
+            from agent import tool_result_notes as _notes
+            return _notes.annotate(name, arguments, res)
+        except Exception:
+            return res
+
+    def _exec_tool_call_impl(self, name: str, arguments: dict) -> dict:
         """缺口B：执行单个工具调用（内置 handler / MCP tools/call），返回标准化结果。
 
         优化1：每次调用落库 tool_call_logs（可观测），异常同样记录。
