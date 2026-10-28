@@ -108,6 +108,12 @@ def group_a():
         _os.chdir(_ROOT)
         from agent.pipeline import AgentPipeline
         _p = AgentPipeline()
+        # ★ 2026-10-28：必须加载 DB 绑定，否则 `get_bound_mcp()` 返回空 ⇒
+        #   71 个 MCP 工具一个都不会进候选，判据就成了"验了个空环境"
+        #   （本门禁第一版正是如此：只注入 11 个、还全是内置/DB 工具，
+        #     于是"import 在不在清单里"这条断言**验的根本不是生产形态**）。
+        from database import get_db as _gdb0
+        _p.registry.load_from_db(_gdb0())
         _td = _p._build_tools_def(
             "智源对接agent",
             "获取工程数据，设计通信子系统时序图，校验后写入包 SD_通信子系统时序图",
@@ -116,9 +122,25 @@ def group_a():
     except Exception as e:
         _names = []
         print("   （实调 _build_tools_def 失败：%r，A6 按失败处理）" % (e,))
-    check("A6", "★ 实调 _build_tools_def：import 真的进了注入清单（绑了≠能看到）",
-          "zhiyuan_sysmlv2_import" in _names,
-          f"注入 {len(_names)} 个，含 import？{'zhiyuan_sysmlv2_import' in _names}")
+    # A6：注入清单里真的出现**可用的**写入通道（不只"绑了"）
+    #   ★ 2026-10-28 语义更新（**不是放宽**）：本判据原先断言
+    #     `zhiyuan_sysmlv2_import` 必须在清单里。后来查出该工具是死工具 ——
+    #     它的 url 依赖 `{cfg:zhiyuan.base_url}`，而运行配置该值为空，
+    #     历史调用 **16 次成功 0 次**；恰恰因为它总在清单里，模型优先用了它
+    #     而不是真正能落库的 MCP `import_sysml_text`。
+    #   ⇒ 正确的要求变成两条，缺一不可：
+    #     ① 能落库的写入通道必须在清单里（MCP `import_sysml_text`）；
+    #     ② 未就绪的死工具**必须不在**清单里，且跳过原因要留痕（不得静默）。
+    #   只把断言语义换掉，判据强度不变（原来查 1 个名字，现在查 2 个条件）。
+    check("A6", "★ 实调 _build_tools_def：可落库的写入通道在清单（MCP import_sysml_text）",
+          "import_sysml_text" in _names,
+          f"注入 {len(_names)} 个")
+    check("A6b", "未就绪的死工具不得注入（zhiyuan_sysmlv2_* 缺 base_url）",
+          not any(n.startswith("zhiyuan_sysmlv2_") for n in _names),
+          [n for n in _names if n.startswith("zhiyuan_sysmlv2_")])
+    check("A6c", "跳过未就绪工具必须留痕（_dropped_unready，不得静默）",
+          bool(getattr(_p, "_dropped_unready", None)),
+          getattr(_p, "_dropped_unready", None))
     # A7：剔除必须可见（不得再静默）
     _t2 = open(os.path.join(_ROOT, "agent", "pipeline_parts", "tools.py"),
                encoding="utf-8").read()

@@ -309,6 +309,98 @@ def address_chain(meta: dict, chosen, max_rounds: int = 2) -> list:
     return [nm for nm in names if nm in set(added)]
 
 
+def name_hits_group(name: str, group: str) -> bool:
+    """工具名是否属于某个动词族 —— **按词元边界匹配**，不是子串匹配。
+
+    ★ 2026-10-28（实测误判）：旧写法是 `grp in nm.lower()`，于是
+      「pre**view**_model_changes」（预览命令批）被当成 **view 族**（出图）成员
+      ⇒ 「设计时序图」这一轮把它当成"用户要出图"的证据拉进候选，
+        白占 8,369 字符（占整轮工具载荷 20%），而它属**与主用协议互斥**的
+        命令批协议 —— 模型看到两套写入方式只会更犹豫。
+      同族误判还有：pre**sent**_ation vs sent? 等潜在情形。
+    ⇒ 改为"按 `_` 切分后的词元等价匹配"：`create_model_view` → {create, model, view}
+      命中 view ✅；`preview_model_changes` → {preview, model, changes} 不含 view ✅。
+    兼容：允许词元以该组名开头（`imports`/`validators` 这类复数/派生写法）。
+    """
+    if not name or not group:
+        return False
+    g = group.lower()
+    for tok in str(name).lower().split("_"):
+        if tok == g or (tok.startswith(g) and len(tok) <= len(g) + 3):
+            return True
+    return False
+
+
+#: 单个 MCP 工具的参数契约超过此字符数即视为「重协议工具」：
+#: **只在它属本轮命中动词族/语义 top-N/寻址链时才注入**，否则由闭包补入的一律回退。
+#: 标定依据（2026-10-28 真机，71 工具目录 + 「设计时序图并写入」这一轮）：
+#:   36 个工具载荷 41,265 字符（≈13.7k tokens/轮），其中
+#:   `preview_model_changes` 单占 8,369 字符（20%）且与主用协议互斥。
+#: 4000 的取法：把 8k 级"命令批/批量变更"类协议挡在外面，而正路写入工具
+#: （`import_sysml_text` ≈1.1k、`create_model_view` ≈1.1k、`validate_sysml_text` ≈0.3k）
+#: 全部远低于此线 ⇒ 不会误杀。
+MCP_HEAVY_SCHEMA_CHARS = 4000
+
+
+#: ★★ 2026-10-28（conv 9740 实证）**动词同义词的单一事实源**。
+#:
+#: 为什么必须收敛成一份：本模块原本有**两份**同语义词表 ——
+#:   · `_INTENT_VERBS`（闭包用，**加**工具：命中就把该族工具拉进候选）
+#:   · `_MCP_WRITE_VERB_TABLE`（闸门用，**减**工具：没命中就把该族工具剔出候选）
+#: 两份各写一份 ⇒ 同一句话在两处结论相反，而中间没有任何东西会报错。
+#: 真机后果：用户说「…**写入**对应的包…」
+#:   · 闭包侧当时也只收「导入/写回/回写/import/upload/push」⇒ 一个都不命中；
+#:   · 闸门侧同样不含「写入」⇒ 即便闭包把它拉进来，闸门也会再剔掉。
+#:   ⇒ `import_sysml_text`（MCP 里唯一真正能落库的工具）**在两侧同时隐形**，
+#:     模型手里只剩 `create_model_elements`（逐元素建），于是连猜 3 次类型名
+#:     ⇒ INVALID_ARGUMENTS×3 ⇒ 当失败轮打满 ⇒ 整轮判死。
+#: 这类"同一语义多处各写一份必然错位"的教训本仓已记过多次，这次直接把
+#: 词表**收成一份**，两份表都从它派生 ⇒ 结构上不可能再彼此矛盾。
+#:
+#: 维护约定：新增一种说法只改这里；`_INTENT_VERBS` / `_MCP_WRITE_VERB_TABLE`
+#: 只声明"取哪些族"，**不得再内联词条**（门禁会检查两者皆为本表的引用）。
+_VERB_SYNONYMS = {
+    "create": ("新增", "新建", "创建", "添加", "加一个", "建一个", "增加", "补充",
+               "生成", "产出", "create", "add", "new", "insert", "make"),
+    "update": ("修改", "更新", "改名", "重命名", "调整", "改成", "改为", "换成",
+               "改一下", "优化", "update", "modify", "rename", "set", "patch", "edit"),
+    "delete": ("删除", "移除", "删掉", "删了", "清理", "清除", "删除掉",
+               "delete", "remove", "drop", "purge"),
+    "move":   ("移动", "挪", "移到", "move", "relocate"),
+    # 「落库」这一族：中英文说法一次收全（漏一个词就等于该族工具永不出现）
+    "import": ("导入", "写入", "写入到", "写进", "写到", "落库", "入库", "存到", "存入",
+               "落地", "回写", "写回", "灌入", "持久化", "覆盖导入", "导入源码", "导入模型",
+               "import", "upload", "push", "save", "persist"),
+    "overwrite": ("覆盖", "覆写", "替换", "overwrite", "replace"),
+    "export": ("导出", "下载", "拉取", "export", "download", "pull"),
+    "apply":  ("应用", "下发", "批量变更", "应用变更", "变更集",
+               "apply", "apply_changes", "change set"),
+    "undo":   ("撤销", "回退", "还原", "回滚", "undo", "revert", "rollback"),
+    "clone":  ("克隆", "复制", "副本", "拷贝", "clone", "copy", "duplicate"),
+    "annotate": ("标注", "注释", "批注", "说明文字", "annotate", "annotation"),
+    "layout": ("布局", "排版", "排布", "摆放位置", "整理位置", "layout"),
+    "present": ("呈现", "展示", "显示", "出示", "present"),
+    "place":  ("放置", "摆放", "布置", "place", "position"),
+    "configure": ("配置", "设定", "设定为", "configure"),
+    "manage": ("管理", "变体", "变型", "导入管理", "manage"),
+    # 「校验」族：写入前必经一步。缺席时模型会拿本地校验器当平台校验，结论不可迁移。
+    "validate": ("校验", "验证", "检查", "语法检查", "查错", "纠错",
+                 "validate", "verify", "lint", "check"),
+    # 「出图」族：⚠️ 刻意不收单字「图」（会误伤"地图/意图"），且 view 族工具共 15 个。
+    "view": ("视图", "时序图", "顺序图", "序列图", "状态机", "状态图", "活动图", "用例图",
+             "需求图", "参数图", "块定义图", "内部块图", "部署图", "分配图", "控制流图",
+             "功能分解图", "画图", "出图", "绘图", "创建视图", "新建视图"),
+    # ── 以下 4 族只给**执行侧**（HITL 写判定）用，**不进** `_INTENT_VERBS` ──
+    #   `mcp_write_group(name)` 的语义是「这个名字是不是写工具」，
+    #   把 validate/view 塞进来会让 `get_model_view` / `validate_sysml_text`
+    #   被当成写操作 ⇒ 读操作也弹人工确认（stream.py:134 正是这种用法）。
+    "set":      ("设置", "设定", "赋值", "置为", "清空", "替换", "set_", "assign", "unset"),
+    "remove":   ("移除", "去除", "摘除", "remove", "detach", "unlink"),
+    "generate": ("生成", "产出", "generate", "produce", "render"),
+    "run":      ("运行", "执行", "触发", "run", "execute", "trigger", "automation"),
+}
+
+
 #: MCP 工具的**动词族 → 触发词**（写类工具的"该不该出现在本轮"的判据）。
 #:
 #: 为什么要有：MCP 工具**不在 `tools` 表**里 ⇒ 后端那道"写意图闸"（按 `side_effect`
@@ -322,38 +414,24 @@ def address_chain(meta: dict, chosen, max_rounds: int = 2) -> list:
 #:   用户输入里没出现该动词族的任何触发词 ⇒ 该工具本轮不注入。
 #:   触发词表**尽量宽**（宁多不少）⇒ 召回不降；精度提升来自"动词族对不上就不给"。
 #:   例：`delete_model_elements` 需要"删除/移除/删掉/清理"，"新增测试包"不含 ⇒ 正确挡掉。
-_MCP_WRITE_VERB_TABLE = {
-    "delete":   ("删除", "移除", "删掉", "删了", "清理", "清除", "删除掉", "delete", "remove", "drop", "purge"),
-    "import":   ("导入", "写回", "回写", "覆盖导入", "导入源码", "导入模型", "import", "upload", "push"),
-    "apply":    ("应用", "下发", "批量变更", "应用变更", "变更集", "apply", "apply_changes", "change set"),
-    "undo":     ("撤销", "回退", "还原", "回滚", "undo", "revert", "rollback"),
-    "overwrite": ("覆盖", "覆写", "替换", "overwrite", "replace"),
-    "create":   ("新增", "新建", "创建", "添加", "加一个", "建一个", "增加", "补充", "生成", "产出",
-                 "create", "add", "new", "insert", "make"),
-    "update":   ("修改", "更新", "改名", "重命名", "调整", "改成", "改为", "换成", "改一下", "优化",
-                 "update", "modify", "rename", "set", "patch", "edit"),
-    "move":     ("移动", "挪", "移到", "move", "relocate"),
-    "clone":    ("克隆", "复制", "副本", "拷贝", "clone", "copy", "duplicate"),
-    "annotate": ("标注", "注释", "批注", "说明文字", "annotate", "annotation"),
-    "layout":   ("布局", "排版", "排布", "摆放位置", "整理位置", "layout"),
-    "present":  ("呈现", "展示", "显示", "出示", "present"),
-    "place":    ("放置", "摆放", "布置", "place", "position"),
-    "configure": ("配置", "设定", "设定为", "configure"),
-    "manage":   ("管理", "变体", "变型", "导入管理", "manage"),
-    # ★ 2026-10-28（写前确认 HITL）补齐的 4 个族 —— **追加在表尾**是刻意的：
-    #   `mcp_write_group` 按**插入顺序**取首个命中，追加 ⇒ 对已有名词的命中结果**不变**
-    #   （如 `remove_view_presentations` 仍命中先出现的 "move"）⇒ **注入侧零回归**；
-    #   而执行侧的 `mcp_effect_level` 按**长度降序**匹配 ⇒ "remove" 正确压过 "move"。
-    #   补齐理由（真实 71 工具目录实测）：
-    #     set_*      —— 6 个工具全是写（"设置/清空/替换/保存真实 OCL AST"），旧表**全漏判**
-    #     remove_*   —— remove_view_presentations 是删除
-    #     generate_* —— generate_model_view 把元素生成到视图
-    #     run_*      —— run_modeling_automation 执行 GENERATE/COPY
-    "set":      ("设置", "设定", "赋值", "置为", "清空", "替换", "set_", "assign", "unset"),
-    "remove":   ("移除", "去除", "摘除", "remove", "detach", "unlink"),
-    "generate": ("生成", "产出", "generate", "produce", "render"),
-    "run":      ("运行", "执行", "触发", "run", "execute", "trigger", "automation"),
-}
+#:
+#: ★ 2026-10-28：词条**全部来自 `_VERB_SYNONYMS`**（不再内联第二份）。
+#:
+#: ⚠️ 键的**顺序必须固定**（下表的字面顺序 = 历史顺序）：
+#:   `mcp_write_group` 按插入顺序取**首个**命中，调序会让同一工具换族
+#:   （如 `remove_view_presentations` 历史上命中 "move"，调序后会变成 "remove"）
+#:   ⇒ 注入侧与 HITL 判定同时漂移。所以这里不写成 `= _VERB_SYNONYMS`，
+#:   而是**只挑写族、按历史顺序**取引用。
+#: ⚠️ 也**不能**把 `validate` / `view` 纳入：本表兼任「这个名字是不是写工具」的判据
+#:   （`stream.py` 的写前确认用它），纳入后 `get_model_view` / `validate_sysml_text`
+#:   会被当成写操作 ⇒ 读操作也弹人工确认。
+_MCP_WRITE_GROUP_ORDER = (
+    "delete", "import", "apply", "undo", "overwrite",
+    "create", "update", "move", "clone", "annotate", "layout",
+    "present", "place", "configure", "manage",
+    "set", "remove", "generate", "run",
+)
+_MCP_WRITE_VERB_TABLE = {g: _VERB_SYNONYMS[g] for g in _MCP_WRITE_GROUP_ORDER}
 
 
 #: **受动词闸约束的族**（破坏性 / 覆盖写）。
@@ -567,6 +645,50 @@ def pick_for_injection(meta: dict, user_input: str, min_keep: int = 8, top_n: in
 
     # ── 输出按原始顺序（可复现）──
     chosen = [nm for nm in names if nm in chosen_set]
+
+    # ── ★ 2026-10-28：「闭包补进来的重契约工具」按体积回退 ──
+    #   为什么需要：闭包（依赖/动词族/寻址链）是**启发式**，它会把"描述里被提到"
+    #   但本轮根本用不上的重型协议工具一并拉进来。实测「设计时序图并写入」这一轮：
+    #     36 个工具载荷 41,265 字符（≈13.7k tokens/轮），而
+    #     `preview_model_changes` **一个就占 8,369 字符（20%）**——
+    #     它是"强类型命令批预览"协议，与本任务用的文本包协议（import_sysml_text）
+    #     互斥；模型看到两套写入协议只会更犹豫（真机里它正是先选了 create 系工具）。
+    #   规则（**只看体积，不点名任何工具**）：
+    #     · 语义 top-N 命中者（`ranked[:want]`）与动词族/寻址链命中的**保留** ——
+    #       那是"用户真的提了这个动作"，体积再大也得给；
+    #     · 仅由**描述互引**补进来的（`expanded` 里非动词族部分的近似），
+    #       若其契约超过 `MCP_HEAVY_SCHEMA_CHARS`，则**不补**（省下的预算给正路工具）。
+    #   代价与取舍：省 token 优先；若将来某个重工具真成为正路，用户话里会带它的动词族，
+    #   届时由上面第一条保住（不会误杀）。
+    heavy_skipped = []
+    try:
+        # 本轮**真正命中动词族**的组（用户话里出现了该族任一触发词）
+        _q_low = str(user_input or "").lower()
+        _trig = set()
+        for _g, _ws in _INTENT_VERBS.items():
+            if any(str(w).lower() in _q_low for w in _ws):
+                _trig.add(_g)
+        # 保底集：语义 top-N ∪ 寻址链 ∪ 动词族命中者（三者都是"用户真的要这个动作"）
+        _keep_seed = set(ranked[:want]) | set(chain) | {
+            nm for nm in names if any(name_hits_group(nm, g) for g in _trig)}
+        _kept = []
+        for nm in chosen:
+            if nm in _keep_seed:
+                _kept.append(nm)
+                continue
+            _sch = (meta.get(nm) or {}).get("inputSchema") or {}
+            try:
+                _ln = len(json.dumps(slim_schema(_sch), ensure_ascii=False))
+            except Exception:
+                _ln = 0
+            if _ln > MCP_HEAVY_SCHEMA_CHARS:
+                heavy_skipped.append(nm)
+                continue
+            _kept.append(nm)
+        chosen = _kept
+    except Exception:
+        pass
+
     return chosen, {
         "total": total,
         "selected": len(chosen),
@@ -575,6 +697,7 @@ def pick_for_injection(meta: dict, user_input: str, min_keep: int = 8, top_n: in
         "semantic_names": [nm for nm in semantic_hits if nm in chosen_set],
         "expanded": [nm for nm in names if nm in set(expanded)],
         "chain": [nm for nm in names if nm in set(chain)],
+        "heavy_skipped": heavy_skipped,
     }
 
 
@@ -583,14 +706,21 @@ def pick_for_injection(meta: dict, user_input: str, min_keep: int = 8, top_n: in
 #: 而工具名是英文（create_model_elements）⇒ 中文与英文名不相交 ⇒ 打分全 0
 #: ⇒ 只能按"原始顺序前 N 个"保底，与任务毫无关系（实测就是这种情形）。
 #: 这里做的是**动词族映射**，不是把某个具体工具写死：任何名字含这些动词的工具都受益。
-_INTENT_VERBS = {
-    "create": ("新增", "新建", "创建", "创建", "添加", "加一个", "建一个", "create", "add", "new", "insert"),
-    "update": ("修改", "更新", "改名", "重命名", "调整", "update", "modify", "rename", "set", "patch"),
-    "delete": ("删除", "移除", "删掉", "清理", "delete", "remove", "drop"),
-    "move": ("移动", "挪", "move"),
-    "import": ("导入", "写回", "回写", "import", "upload", "push"),
-    "export": ("导出", "下载", "拉取", "export", "download", "pull"),
-}
+#:
+#: ★★ 2026-10-28（conv 9740 实证）：本表原本**自带一份词条**，与闸门用的
+#: `_MCP_WRITE_VERB_TABLE` 各写一份 ⇒ 同一句话在两侧结论相反且无人报错。
+#: 真机：用户原话「…并完成校验后，**写入**对应的包…」
+#:   · 本表（闭包，加工具）只收「导入/写回/回写/import/upload/push」⇒ 不命中；
+#:   · 闸门（减工具）同样不含「写入」⇒ 即便拉进来也会被剔掉。
+#:   ⇒ `import_sysml_text`（MCP 里唯一能真正落库的工具）在两侧同时隐形，
+#:     模型手里只剩 `create_model_elements` ⇒ 连猜 3 次类型名 ⇒ INVALID_ARGUMENTS×3
+#:     ⇒ 当失败轮打满 ⇒ 整轮判死。
+#: ⇒ 现在词条**全部引用 `_VERB_SYNONYMS`**，本表只声明"取哪几族"。
+#:   顺带补齐 `validate` / `view` 两族：校验是写入前必经一步（缺席时模型会拿本地
+#:   校验器当平台校验，结论不可迁移），出图族缺席时模型会拿 create 工具去"建视图"
+#:   （工具选错，参数必然错 —— 正是 SEQUENCE_VIEW 那 3 次失败）。
+_INTENT_VERBS = {g: _VERB_SYNONYMS[g] for g in (
+    "create", "update", "delete", "move", "import", "export", "validate", "view")}
 
 
 #: 结构定位词：请求涉及「包/父子/层级/树」⇒ 需要导航类工具去定位父容器。
@@ -638,7 +768,7 @@ def expand_with_deps(meta: dict, chosen, user_input: str = "", max_rounds: int =
         for grp, words in _INTENT_VERBS.items():
             if any(w.lower() in q for w in words):
                 for nm in names:
-                    if nm not in picked and grp in nm.lower():
+                    if nm not in picked and name_hits_group(nm, grp):
                         picked.add(nm)
                         verb_add.append(nm)
 

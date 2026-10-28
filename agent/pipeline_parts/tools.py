@@ -4,6 +4,16 @@
 由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
 
+# ★ 2026-10-28：补模块级 `logger`。
+#   此前本文件有 **5 处** `logger.warning/info`（可消费过滤剔除、技能白名单裁剪、
+#   MCP 动词闸挡掉、可消费过滤失败、未就绪工具跳过），但模块里**从未定义 logger**
+#   ⇒ 每处都抛 NameError，而它们又统统被 `except Exception: pass` 包住
+#   ⇒ **一行日志都没打出来，也没有任何报错**。
+#   这正是"静默兜底把错误变成不可见"的典型：留痕代码写了等于没写。
+import logging as _logging
+
+logger = _logging.getLogger(__name__)
+
 #: ★2026-10-10：确定性**本地**修复类工具，豁免「写意图闸」（仅对产码类 Agent）。
 #: 为什么需要：它们的 side_effect=write（确实改代码），而八视图输入是
 #: 「生成 X 视图并校验」—— 不含修复词 ⇒ 被整类过滤 ⇒ 模型看不到它们
@@ -369,7 +379,8 @@ class ToolMixin:
             conn = get_db()
             try:
                 for row in conn.execute(
-                    "SELECT t.name, t.description, t.input_schema, t.side_effect FROM tools t "
+                    "SELECT t.name, t.description, t.input_schema, t.side_effect, "
+                    "       t.kind, t.config FROM tools t "
                     "JOIN agent_tools at ON at.tool_name=t.name JOIN agents a ON at.agent_id=a.id "
                     "WHERE a.name=? AND at.tool_type='tool' AND at.enabled=1 AND t.status='active' "
                     "AND t.source!='builtin'", (intent,)).fetchall():
@@ -378,6 +389,34 @@ class ToolMixin:
                         desc += "（写操作，需人工确认）"
                     elif row["side_effect"] == "destructive":
                         desc += "（高风险操作，必须人工确认）"
+                    # ★★ 2026-10-28（conv 9736~9740 实证）：**配置未就绪的工具不注入**。
+                    #   真机：`zhiyuan_sysmlv2_gen/check/import` 的 url 是
+                    #   `{cfg:zhiyuan.base_url}/...`，而运行配置里 base_url 与 token
+                    #   都是空串 ⇒ 这 5 个工具历史调用 **16 次、成功 0 次**
+                    #   （timed out / WinError 10054），却因列在
+                    #   `tool_jit.core_keep_extra` 里被**常驻注入**，每轮白占名额。
+                    #   更糟的是模型会优先用它们（"看起来是同平台的官方工具"），
+                    #   而不是真正能落库的 MCP `import_sysml_text`；
+                    #   失败又长成"网络超时"，把排障方向引到"平台连不上"，
+                    #   而真相是"配置是空串"。⇒ 未就绪即不注入，并留痕。
+                    try:
+                        from agent.tool_readiness import readiness as _ready
+                        _ok, _why = _ready(row["config"])
+                    except Exception:
+                        _ok, _why = True, ""
+                    if not _ok:
+                        try:
+                            self._dropped_unready = list(
+                                getattr(self, "_dropped_unready", []) or []) + [
+                                "%s（%s）" % (row["name"], _why)]
+                        except Exception:
+                            pass
+                        try:
+                            logger.warning("[tool_gate] 跳过未就绪工具 %s：%s",
+                                           row["name"], _why)
+                        except Exception:
+                            pass
+                        continue
                     if not any(c[0] == row["name"] for c in candidates):
                         candidates.append((row["name"], desc, "db_tool", ""))
                     _absorb_schema(row["name"], row["input_schema"])
@@ -767,6 +806,42 @@ class ToolMixin:
                     _bad_names)
             except Exception:
                 pass
+        # ★★ 2026-10-28：**就绪度单点闸**（放在所有过滤之后、装配之前）。
+        #   为什么必须放这里而不是只放在"DB 工具分支"：
+        #   `tool_jit.core_keep_extra` 会在 JIT 之后把名字**再塞回** chosen
+        #   ⇒ 分支处的跳过会被复活（实测：分支处已打印"跳过未就绪工具
+        #   zhiyuan_sysmlv2_check/gen/import"，最终清单里三个仍在）。
+        #   ⇒ 只在"最终候选集"上判一次，才不依赖任何后续链路是否又加回来。
+        #   判据与理由见 `agent/tool_readiness`（必需配置为空 ⇒ 必然失败 ⇒ 不注入）。
+        try:
+            from agent.tool_readiness import missing_required as _miss_req
+            from database import get_db as _rdb
+            _rc = _rdb()
+            try:
+                _cfgmap = {r["name"]: r["config"] for r in _rc.execute(
+                    "SELECT name, config FROM tools WHERE kind='http'").fetchall()}
+            finally:
+                _rc.close()
+            _unready = []
+            _kept = []
+            for _c in candidates:
+                _cfgj = _cfgmap.get(_c[0])
+                if _cfgj:
+                    _miss = _miss_req(_cfgj)
+                    if _miss:
+                        _unready.append("%s（缺 %s）" % (_c[0], "/".join(_miss)))
+                        continue
+                _kept.append(_c)
+            if _unready:
+                candidates = _kept
+                self._dropped_unready = _unready
+                try:
+                    logger.warning("[tool_gate] 未就绪工具不注入（必需配置为空 ⇒ 必然失败）: %s",
+                                   ", ".join(_unready))
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # ★ 2026-10-13：按工具名注入真实参数契约（此前**两个分支都硬编码 properties:{}**，
         #   等于把 DB 里 39/41 条已存在的 input_schema 全部丢弃 ⇒ 模型以为"任意参数"）。
         #   _LOOSE 是回落形态，与改动前**逐字节一致**，保证关开关/无 schema 时行为不变。
@@ -1083,6 +1158,107 @@ class ToolMixin:
             return _notes.annotate(name, arguments, res)
         except Exception:
             return res
+
+    #: 写入类工具里承载"目标元素标识"的参数名（不同平台叫法不同，全部覆盖）。
+    #: MCP `import_sysml_text` → `targetPackageId`；自建 REST `sysmlv2/import` →
+    #: `targetPackageDataId`；命令批/视图类 → `ownerId`。新增平台只加一行，不改逻辑。
+    _TARGET_ID_KEYS = ("targetPackageId", "targetPackageDataId",
+                       "targetPackageID", "packageId", "ownerId")
+
+    def _import_target_gate(self, name, arguments, intent_ctx, conv_ctx):
+        """**统一写入目标网关**（MCP 与 HTTP 两条通道共用，执行前唯一一处）。
+
+        返回 `None`（放行）或一个 `{ok:False, code:...}` 的拦截结果。
+
+        ## 为什么它是"网关"而不是"校验补丁"（2026-10-28 米爸追问后的定型）
+        旧实现是"拿到模型给的 id，判它是不是父包"。那默认了**目标 id 由模型提供**，
+        于是无论判得多准，最好的结果也只是"拦住"，差的形态是"拦住却不给正确 id"
+        ⇒ 模型下一轮还是得猜。
+
+        现在改为：**先解析、再判定**——
+          ① `write_target_resolver.resolve()` 从"用户点名的名字 + 本会话回执"
+             解出**唯一确定的目标 id**（不是校验，是求解）；
+          ② 模型给对了 ⇒ 放行（正常路径）；
+          ③ 模型给错了 ⇒ **拒绝并直接把正确 id 写进回执**，让它在同一轮内自我修正
+             （回执里带上"父包会冲掉子树"的后果说明，避免它换个写法继续错）；
+          ④ 解析不出唯一目标 ⇒ 不猜；退回"父包检测"这一保守口径，
+             判不出就放行交给人工确认（绝不因为"解析失败"把正常写入堵死）。
+
+        ## 覆盖范围为什么扩大到所有 import 类
+        真机（conv 9740）暴露的正是这个缺口：闸只挂在 `zhiyuan_sysmlv2_import`
+        上，而**真正能落库**的是 MCP 的 `import_sysml_text`（走 MCP 分支，
+        在本闸原来的位置之前就 return 了）⇒ 等于没拦。
+        ⇒ 判据改为"名字里是否含 import"（词元匹配），两条通道一次覆盖。
+        """
+        try:
+            nm = str(name or "")
+            try:
+                from agent.mcp_tool_meta import name_hits_group as _nhg
+                _is_import = _nhg(nm, "import") or "import" in nm.lower()
+            except Exception:
+                _is_import = "import" in nm.lower()
+            if not _is_import:
+                return None
+            args = arguments or {}
+            did = ""
+            for k in self._TARGET_ID_KEYS:
+                if args.get(k) not in (None, ""):
+                    did = str(args.get(k))
+                    break
+            if not did:
+                # 没给目标 id：ADD_PACKAGE 可能按包名新建，不拦（交给平台与人工确认）
+                return None
+            uinput = str((intent_ctx or {}).get("user_input") or "")
+            from database import get_db as _gdb3
+            from agent import write_target_resolver as _wtr
+            _c3 = _gdb3()
+            try:
+                _rv = _wtr.resolve(_c3, int(conv_ctx or 0), uinput)
+                _verdict, _why = _wtr.check(did, _rv)
+                # 解析不出唯一目标时，退回旧的"父包检测"（保守兜底，不改变既有语义）
+                if _verdict == "unknown":
+                    try:
+                        from agent import import_target_guard as _itg
+                        _par, _child = _itg.is_parent_of_target(
+                            _c3, int(conv_ctx or 0), did, uinput)
+                    except Exception:
+                        _par, _child = False, ""
+                    if _par:
+                        return {
+                            "ok": False,
+                            "code": "WRONG_TARGET_PACKAGE",
+                            "result": (
+                                "⛔ 已拒绝执行：`%s` 是**父包**，不是你要写的那一个 ——"
+                                "它的子级里就含「%s」。本工具是**覆盖导入**，"
+                                "写到父包会冲掉它下面既有的全部子树。"
+                                "请改用**目标包自身**的 id（取回执里的 elementId，"
+                                "不要用 parentId），确认后再导入。" % (did, _child)),
+                        }
+                    return None
+            finally:
+                _c3.close()
+            if _verdict == "ok":
+                return None
+            # verdict == wrong：拒绝 + 把正确 id 一并回喂（自我修正，不靠下一轮猜）
+            return {
+                "ok": False,
+                "code": "WRONG_TARGET_PACKAGE",
+                "result": (
+                    "⛔ 已拒绝执行：写入目标不对。\n"
+                    "· 本次调用给的目标：%s\n"
+                    "· 用户点名的元素：%s%s ⇒ 正确 id = **%s**%s\n"
+                    "· 原因：%s\n"
+                    "⇒ 请用正确的 id 重新调用（本工具是覆盖语义，写到父包/别的元素会破坏其既有内容）。"
+                    "若你判断用户其实要写的是另一个元素，请先用 ask_user 让用户确认。"
+                    % (did,
+                       _rv.get("name") or "?",
+                       ("（%s）" % _rv["type"]) if _rv.get("type") else "",
+                       _rv.get("target_id") or "?",
+                       ("，父级：%s" % _rv["parent_name"]) if _rv.get("parent_name") else "",
+                       _why)),
+            }
+        except Exception:
+            return None  # 网关自身异常绝不阻断执行（旁路原则）
 
     def _exec_tool_call_impl(self, name: str, arguments: dict) -> dict:
         """缺口B：执行单个工具调用（内置 handler / MCP tools/call），返回标准化结果。
@@ -1407,6 +1583,17 @@ class ToolMixin:
                                     intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
 
+            # ★★ 2026-10-28：**统一写入目标网关** —— 必须位于 MCP/HTTP 两条分派**之前**。
+            #   位置理由（真机 conv 9740 的教训）：真正能落库的是 MCP `import_sysml_text`，
+            #   它走下面 MCP 分支、在那里 return；旧闸只挂在 HTTP 分支
+            #   （`zhiyuan_sysmlv2_import`）上 ⇒ 真写入路径**完全绕过**了检查。
+            #   语义见 `_import_target_gate`（先解析目标、再判定，给错时回喂正确 id）。
+            _itg_res = self._import_target_gate(name, arguments or {},
+                                                intent_ctx, conv_ctx)
+            if _itg_res is not None:
+                self._log_tool_call(name, tool_type, arguments, _itg_res,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
+                return _itg_res
             # MCP 工具：从 DB 找所属服务器端点（真实 JSON-RPC 调用）
             try:
                 from database import get_db
@@ -1461,41 +1648,10 @@ class ToolMixin:
                 from http_tool_executor import exec_http_tool
                 from tool_resilience import retry_exec
                 tool_type = "http"
-                # ★ 2026-10-28（conv 9740 实证）：**覆盖导入的目标包一致性闸**。
-                #   那一轮澄清卡要写进 `2114902516325482496`，而同会话回执一致显示
-                #   该 id 是「通信子系统」**父包**（目标包应是 2115359040604536832）；
-                #   `sysmlv2_import` 是覆盖语义 ⇒ 点了确认就会冲掉父包下既有 5 个子包。
-                #   判据（零网络、只看本会话回执）：目标 id 是否**曾是 parentId** 且
-                #   其子项里含用户点名的包名 ⇒ 它是父包而非目标包 ⇒ 拒绝。
-                if str(name) == "zhiyuan_sysmlv2_import":
-                    try:
-                        from agent import import_target_guard as _itg
-                        _pid = (arguments or {}).get("targetPackageDataId")
-                        _uinput = str((intent_ctx or {}).get("user_input") or "")
-                        _gdb2 = __import__("database").get_db()
-                        try:
-                            _is_par, _child = _itg.is_parent_of_target(
-                                _gdb2, int(conv_ctx or 0), _pid, _uinput)
-                        finally:
-                            _gdb2.close()
-                        if _is_par:
-                            _blk = {
-                                "ok": False,
-                                "code": "WRONG_TARGET_PACKAGE",
-                                "result": (
-                                    "⛔ 已拒绝执行：`targetPackageDataId=%s` 是**父包**，"
-                                    "不是你要写的那一个 —— 它的子级里就含「%s」。"
-                                    "本工具是**覆盖导入**，写到父包会冲掉它下面既有的全部子树。"
-                                    "请改用**目标包自身**的 dataId（从 `query_data_tree` / "
-                                    "`search_model_elements` 的 elementId 字段取，"
-                                    "别用 parentId），确认后再导入。"
-                                    % (str(_pid), _child)),
-                            }
-                            self._log_tool_call(name, tool_type, arguments, _blk,
-                                                intent_ctx, agent_ctx, conv_ctx, t0)
-                            return _blk
-                    except Exception:
-                        pass
+                # ★ 2026-10-28（conv 9740 实证）：**覆盖导入的目标一致性闸**。
+                #   ⚠️ 已上移为**统一网关**（`_import_target_gate`），位于 MCP/HTTP
+                #   两条分派之前 —— 因为真正能落库的是 MCP 的 `import_sysml_text`，
+                #   而它走的是 MCP 分支（在本段之前就 return 了），只在这里拦等于漏拦。
                 # D2：HTTP 集成工具重试（仅瞬态失败）
                 result, retried, _did = retry_exec(
                     lambda: exec_http_tool(name, arguments or {}),
