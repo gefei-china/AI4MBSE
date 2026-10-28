@@ -149,7 +149,7 @@
    ⚠️ 只作用于「执行过程」容器；**正文 .body 不设任何高度限制** ——
       按 B5-8（米爸原话「最终输出结果不要收起来，也不允许收起来」），正文必须完整展开。
    反查：本机 1600x900 视口下 44vh ≈ 396px，正好容纳一个满高思考块 + 2~3 个阶段行。 */
-.proc{max-height:44vh;overflow-y:auto;overscroll-behavior:contain;padding-right:2px;}
+.proc{max-height:44vh;overflow-y:auto;overscroll-behavior:auto;padding-right:2px;}
 .proc::-webkit-scrollbar{width:6px;}
 .proc::-webkit-scrollbar-thumb{background:var(--line,#dde3ec);border-radius:3px;}
 /* 意图理解明细（procAddStage 的 body；2026-10-27）：回答"你到底把我理解成什么" */
@@ -237,7 +237,32 @@
    历史容器是 .hist-proc（不是 .proc）—— 只给 .proc 加限高，只能治「正在跑的那条」，
    回看旧消息照旧被拉长（前端两条渲染路径必须成对改，本仓已多次踩到）。 */
 .hist-proc.open .proc-timeline{display:flex;flex-direction:column;gap:6px;margin-top:6px;
-  max-height:44vh;overflow-y:auto;overscroll-behavior:contain;padding-right:2px;}
+  max-height:44vh;overflow-y:auto;overscroll-behavior:auto;padding-right:2px;}
+/* ★★ 2026-10-28（用户反馈「工具调用次数很多，导致截断卡片重叠在一起，相互挤压」
+   以及「输出过程中也不允许我滑动页面，或者展开具体的环节查看内容」）
+   真实浏览器实测（conv 9726，22 个工具卡片，1600x900）：
+
+     .proc-timeline  display:flex / flex-direction:column / max-height:396px(44vh)
+     .proc-block     flex-shrink:1（默认值）→ 被 flex 压缩
+     实测：卡片真实需要 34px（head padding 7+7 + 行高），被压到 **12px**
+           22 × 12 = 264px < 容器 396px
+     ⇒ ① 卡片内部 overflow:hidden，标题被裁掉 ⇒ 视觉上"重叠挤压"
+        ② 压缩后总高反而**小于**容器 ⇒ scrollHeight == clientHeight
+           ⇒ **连滚动条都不出现**：用户既看不到内容，也无法滚动查看
+           这就是「展开具体的环节查看内容」做不到的直接原因
+     ⇒ ③ innerScroll 时 outer #chat-area 的 scrollTop 一动不动
+           （overscroll-behavior:contain）⇒ 「不允许我滑动页面」
+
+   决定性实验（同一页面注入覆盖样式，只改一条）：
+     `.proc-block{flex:0 0 auto}` ⇒ 卡片恢复 34px、总高 748px、
+     出现滚动条（可滚 487px）、内滚 scrollTop 0→300 生效。
+   ⇒ 修法：**子项一律不许被压缩**（flex:0 0 auto），
+     并把 overscroll-behavior 从 contain 改为 auto ——
+     限高的目的是「别把页面拉得很长」（2026-10-27 的需求，保留 44vh 不动），
+     但**不能连带把「翻页」和「看内容」一起禁掉**。
+     滚到内区边界后继续滚会带动页面，这是多数人的预期。 */
+.proc > .proc-block,
+.proc-timeline > .proc-block{flex:0 0 auto;}
 /* 步骤头部副标题（折叠后仍可见的阶段详情，Trae 式时间线） */
 .proc-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .proc-sub{color:var(--mut);font-weight:400;font-size:10.5px;margin-left:4px;}

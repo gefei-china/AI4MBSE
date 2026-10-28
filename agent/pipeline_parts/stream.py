@@ -4729,12 +4729,49 @@ class StreamMixin:
                         break
                     # 预算耗尽 ⇒ 停止继续调工具，让模型基于已有信息直出（护栏三闸之一）
                     if not _lg.budget_left():
+                        # ★★ 2026-10-28（用户反馈「提示工具调用已达上限，为啥调用这么多次」）：
+                        #   实测 conv 9726：真实停机原因是 **token 预算耗尽**
+                        #   （stop_reason='token_budget'，316,885 / 300,000），
+                        #   但模型在最终回答里写成「本轮工具调用已达上限」——**归因错误**。
+                        #   根因链（真机数据）：
+                        #     · 本分支只 yield 一条 stage（发给前端），**不进 messages**
+                        #       ⇒ 模型不知道停机原因，只看到"工具没了" ⇒ 自己猜
+                        #     · 本文件又没有调用 `loop_protocol.finalize_messages`，
+                        #       所以已经有精确文案的 `finalize_hint_ex(reason='budget')`
+                        #       在主路径上**一次都没生效**
+                        #   后果：用户拿着"调用次数上限"去调配置也调不动
+                        #   （真正该看的是 loop_token_budget / 上下文膨胀）。
+                        #   修法：把**真实原因**同时给两端 ——
+                        #     ① `exec_notices`（界面可见，带具体数字）
+                        #     ② `messages`（模型可见，明确禁止它再归因为"次数上限"）
+                        _budget_note = (
+                            f"（工具预算耗尽）本轮 token 预算已用尽"
+                            f"（已用 {_lg.tokens_used} / 上限 {_lg.token_budget or '不限'}），"
+                            f"不是工具调用次数上限。请基于已有信息给出最终结论，"
+                            f"并在结论中如实说明「因 token 预算耗尽而停止」，"
+                            f"不要写成「工具调用次数已达上限」。")
+                        exec_notices.append(({"kind": "progress", "text": _budget_note}))
+                        try:
+                            messages.append({"role": "user", "content": _budget_note})
+                        except Exception:
+                            pass
                         yield {"type": "stage", "name": "工具预算耗尽，停止继续调用",
                                "status": "done", "detail": _lg.stats()}
                         tools_def = None
                         break
                     # ★ 失败轮预算：**只有失败轮才扣**（成功的正常推进不限制）
                     if not _lg.failed_rounds_left():
+                        # 同上：失败轮上限 ≠ 调用总数上限，必须把真实原因说清
+                        _fail_note = (
+                            f"（工具失败轮耗尽）连续工具失败轮已达上限"
+                            f"（{_lg.failed_rounds} / {_lg.max_failed_rounds} 次；成功轮不计数），"
+                            f"不是工具调用次数上限。请基于已有信息给出最终结论，"
+                            f"并如实说明是「失败次数达上限」而不是「调用次数达上限」。")
+                        exec_notices.append(({"kind": "progress", "text": _fail_note}))
+                        try:
+                            messages.append({"role": "user", "content": _fail_note})
+                        except Exception:
+                            pass
                         yield {"type": "stage", "name": "失败轮预算耗尽，停止继续调用",
                                "status": "done", "detail": _lg.stats()}
                         tools_def = None
