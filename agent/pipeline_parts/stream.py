@@ -5428,6 +5428,22 @@ class StreamMixin:
                             title="❓ AI 需要你在两个方案间拍板（评估器判定）")
                         return
                     _deadline_left = (_ac_deadline - time.time()) if _ac_deadline else None
+                    # ★ P0-1（2026-10-28）验收驱动：待办闸是评估器的**上位约束**。
+                    #   语义（fallback / done / next_step 怎么算）**只在 autopilot
+                    #   的 _apply_todo_gate 写一份** —— 两处同构接线共用它，
+                    #   绝不各写一份（各写一份必然错位）。
+                    #   fallback（无待办 / 开关关）⇒ 原样沿用评估器结论
+                    #     （逐字节兼容 D-3，不影响 98.4% 只读问答）。
+                    #   实测依据：msg 3985「建议下一步执行校验」被评估器判 done=true，
+                    #   且只改提示词纠正不了（1/2）⇒ 必须有客观清单可查。
+                    _verdict, _tg = self._apply_todo_gate(_verdict, conversation_id)
+                    if not _tg.get("fallback"):
+                        try:
+                            yield {"type": "stage", "name": "待办验收闸",
+                                   "status": "done",
+                                   "detail": _tg.get("reason") or ""}
+                        except Exception:
+                            pass
                     _cont, _why = _ac.decide(
                         _verdict, used=_auto_continues, max_used=_ac_cfg["max"],
                         seen_steps=_ac_seen_steps, deadline_left_s=_deadline_left,

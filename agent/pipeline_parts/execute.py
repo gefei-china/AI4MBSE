@@ -834,6 +834,11 @@ class ExecuteMixin:
                         provider_id=effective_provider, agent_name=agent_def.name,
                         model_params=_agent_mp, guard=_guard)
                     _deadline_left = (_ac_deadline - time.time()) if _ac_deadline else None
+                    # ★ P0-1（2026-10-28）验收驱动：与 stream.py **同构**接线。
+                    #   语义只在 autopilot._apply_todo_gate 写一份 —— 两处共用，
+                    #   绝不各写一份（各写一份必然错位）。
+                    #   fallback（无待办 / 开关关）⇒ 原样沿用评估器结论（逐字节兼容）。
+                    _verdict, _tg = self._apply_todo_gate(_verdict, conversation_id)
                     _cont, _why = _ac.decide(
                         _verdict, used=_auto_continues, max_used=_ac_cfg["max"],
                         seen_steps=_ac_seen_steps, deadline_left_s=_deadline_left,

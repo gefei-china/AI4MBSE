@@ -1661,6 +1661,17 @@ CONFIG_SCHEMA = {
         "auto_continue_enabled": {"type": "bool", "desc": "★ 自主续跑总开关（默认开）：AI 完成度评估判定「任务未完成」时自动继续工作，无需用户逐条下达指令；关闭则维持一问一答形态"},
         "auto_continue_max":     {"type": "int", "desc": "★ 自主续跑次数上限（默认 3）：单轮请求内最多自动续跑几次（AutoGPT「无完成任务生成」对策；每次续跑重置 ReAct 轮次预算，但仍共享 token 预算）"},
         "auto_continue_deadline_s": {"type": "int", "desc": "★ 自主续跑墙钟上限（秒，默认 600；0=不设）：从本轮请求开始累计，超时不再续跑（仍受次数/token 闸约束）"},
+        # ── 持续自主执行（2026-10-28「Agent 遇到问题就终止」方案）──
+        # 依据 docs/持续自主执行能力-最终方案设计-20261028.md。
+        # ⚠️ 全部**默认关**：任一项上线都不改变现有行为，可灰度、可独立回滚。
+        #   默认关的代价：不开则该能力不生效（用户看不到变化）；收益：不冒未验证的风险。
+        #   灰度建议：先在测试会话开启，观察 stage 事件与 todo 表，再全量。
+        "todo_enabled": {"type": "bool", "desc": "★ 计划外化总开关（默认关）：开启后模型可调 todo_write 建待办清单，完成判定改为『所有待办已通过验收』；关闭则无待办、走原有评估器路径（逐字节兼容）"},
+        "todo_require_verify": {"type": "bool", "desc": "★ 待办置 completed 是否强制要有验收回执（默认开，2026-10-28）：依据官方『Only mark as passing after careful testing』；关闭则允许无回执置完成（削弱约束力，仅供排障）"},
+        "harness_enabled": {"type": "bool", "desc": "★ harness 级强制闸总开关（默认关）：对齐官方 Stop hook —— 存在未完成待办且验收未过时**不允许结束本轮**，把失败输出回灌让 AI 继续；关闭则只做判定不强制"},
+        "harness_max_blocks": {"type": "int", "desc": "★ harness 强制闸连续阻断上限（默认 8，对齐官方）：达到上限后强制放行并如实说明『未完成，卡在 X』——上限是必需的（FM-1.5 该停不停 12.4% > 过早终止 6.20%，双向都要管）；0=不阻断"},
+        "budget_degrade_ratio": {"type": "float", "desc": "★ 预算降级收尾触发点（默认 0.7）：token 预算用达到此比例时停止新开子任务、写待续清单并告知用户『已做到哪、还差哪』（替代现在的硬停；实测 89 次评估中 11 次因 token 耗尽硬停）"},
+        "obstacle_recovery_enabled": {"type": "bool", "desc": "★ 障碍恢复矩阵总开关（默认关）：工具失败时按错误特征分类（auth/not_found/precondition/capability/transient），其中前四类**自动换路径重试而非问人**；关闭则沿用现有行为（失败即问人）"},
         # ── 编排 partial 补齐（2026-10-22 米爸「是否重跑需要一个健全的机制」）──
         # 对齐标杆：Claude Code「stop_reason 七值 → 五种处置」（先分类病因再决定动作）
         # + Stop hook 否决权 + LangGraph pending writes（已完成一律复用）。

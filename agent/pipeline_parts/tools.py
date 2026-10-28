@@ -773,6 +773,24 @@ class ToolMixin:
             _ask_on = True
         if _ask_on and not any(t.get("function", {}).get("name") == "ask_user" for t in tools):
             tools.append(_ASK_USER_TOOL)
+        # ★ P0-3（2026-10-28）计划外化：`todo_write` —— 与 ask_user 同理**无条件**注入。
+        #   理由同 ask_user：它是**对话级能力**（管理本会话待办清单），不属于任何
+        #   Agent 绑定 ⇒ 白名单（委派最小权限）/ JIT 预筛 / 写意图闸都不该挡它。
+        #   ⚠️ 挡掉它的后果不是"少个功能"，而是**"完成"的定义权退回模型手里**
+        #     （实测：评估器把「建议下一步执行校验」判成 done=true，msg 3985）。
+        #   开关：config `agent.todo_enabled`（**默认关** ⇒ 不改变现有行为）。
+        #   默认关的代价是"不开则该能力不生效"；收益是"不冒未验证的风险"。
+        try:
+            from core.config import get as _cfg_todo
+            _todo_on = bool(_cfg_todo("agent", "todo_enabled", False))
+        except Exception:
+            _todo_on = False
+        if _todo_on and not any(t.get("function", {}).get("name") == "todo_write" for t in tools):
+            try:
+                from agent.todo_store import todo_tool_def as _todo_def
+                tools.append(_todo_def())
+            except Exception:
+                pass
         # ★ 2026-11-13（#55）：`read_attachment_section` 与 ask_user 同理**无条件**注入 ——
         #   它是「把本轮已上传的附件读全」的对话级能力。若被白名单/写意图闸挡掉，
         #   模型就只能看着提纲干瞪眼、回头找用户要原文（实测原话：「请把第 5、6、7 章的
@@ -1084,6 +1102,20 @@ class ToolMixin:
                 result = ({"ok": True, "result": _off[:20000]}
                           if _off else
                           {"ok": False, "result": f"offload #{_oid} 不存在（可能 id 无效——以工具结果提示中的编号为准）"})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            if name == "todo_write":
+                # ★ P0-3（2026-10-28）计划外化：管理本会话待办清单。
+                #   与 ask_user 同属**对话级能力** ⇒ 放在白名单/RBAC 之前
+                #   （它不碰任何外部数据源，只写本会话自己的 agent_todos 表）。
+                #   状态迁移一律走 agent_todo.transition() ⇒ 非法迁移如实报错不静默。
+                _a = arguments or {}
+                _conv = int(getattr(self, "_tool_conv_ctx", 0) or 0)
+                try:
+                    from agent.todo_store import handle_todo_write as _tw
+                    result = _tw(_a, _conv)
+                except Exception as e:
+                    result = {"ok": False, "result": "todo_write 执行异常：%r" % (e,)}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
             if name == "ask_user":

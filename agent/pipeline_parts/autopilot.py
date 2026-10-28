@@ -62,3 +62,77 @@ class AutoPilotMixin:
             return _ac.parse_verdict(text)
         except Exception:
             return None
+
+    # ── P0-1（2026-10-28）验收驱动的完成判定接线 ──────────────────
+    # 方案：docs/持续自主执行能力-最终方案设计-20261028.md §6 第 1 步。
+    #
+    # 为什么必须是**上位约束**而不是又一个评估器：
+    #   实测（msg 3985）评估器把「建议下一步执行校验」判成 done=true，
+    #   且**只改提示词纠正不了**（实测纠正率 1/2，3985 仍误判）——
+    #   因为评估器没有对照清单可查，只能凭语义猜"校验算不算用户的原始要求"。
+    #   ⇒ 必须由 todo_gate() 提供**客观依据**：待办里有「校验」且未通过验收
+    #     ⇒ 直接强制 done=False，完全不需要评估器理解语义。
+    #
+    # ⚠️ 复用纪律：判定逻辑只写这一份，stream.py / execute.py 两处同构调用
+    #   **都调这里** —— 绝不各写一份（两处各写一份必然错位）。
+
+    def _todo_gate_enabled(self) -> bool:
+        """计划外化是否启用（config `agent.todo_enabled`，**默认关**）。"""
+        try:
+            from core import config as _cfg
+            return bool(_cfg.as_bool("agent", "todo_enabled", False))
+        except Exception:
+            return False
+
+    def _todo_gate(self, conversation_id: int, conn=None) -> dict:
+        """跑待办完成判定。返回 gate 字典（含 fallback 标记）。
+
+        :param conn: 可选数据库连接。**默认 None ⇒ 用生产 `db_conn()`**。
+                     显式传入 ⇒ 用给定连接（门禁脚本用独立测试库，不碰生产库）。
+        :returns: ``{"done": bool, "next_step": str, "remaining": [...],
+                     "fallback": bool, "reason": str}``
+                 `fallback=True` ⇒ 无待办 ⇒ 调用方应**原样沿用**评估器结论
+                 （逐字节兼容 D-3：不改变现有 98.4% 只读问答的行为）。
+        """
+        if not self._todo_gate_enabled():
+            return {"done": False, "next_step": "", "remaining": [],
+                    "fallback": True, "reason": "todo_enabled 关闭 ⇒ 走原评估器路径"}
+        try:
+            from agent.todo_store import todo_gate_for_conv as _g
+            if conn is not None:
+                return _g(conn, conversation_id)
+            with db_conn() as c:
+                return _g(c, conversation_id)
+        except Exception as e:
+            # ⚠️ 读待办失败**绝不能**把主流程带崩，也**绝不能**误判成"已完成"
+            #   ⇒ 退回评估器路径（fail-safe 向"按原样处理"）。
+            logger.warning("[autopilot] todo_gate 读取失败，退回评估器路径：%r", e)
+            return {"done": False, "next_step": "", "remaining": [],
+                    "fallback": True, "reason": "读待办失败 ⇒ 退回评估器路径"}
+
+    def _apply_todo_gate(self, verdict: dict, conversation_id: int,
+                          conn=None) -> tuple:
+        """把待办闸的结论**应用到**评估器 verdict 上。返回 ``(verdict, gate)``。
+
+        ★ 这个方法存在的唯一理由：**消除重复**。
+          stream.py 与 execute.py 两处同构接线，若各写一份「怎么把 gate 结果
+          覆盖到 verdict 上」的分支，就是"同一个语义在两处各写一份"——
+          必然错位（这与本仓已记录的「四个环节各写一个数字，最后对不上」同族）。
+
+        语义（唯一一份，两处共用）：
+          · fallback（无待办 / 开关关）⇒ **原样返回 verdict**（逐字节兼容 D-3）
+          · gate.done=True  ⇒ 全部通过验收 ⇒ verdict 改为 done=True（不许续跑）
+          · gate.done=False ⇒ 有未完成   ⇒ 强制 done=False + next_step 指向第一个 pending
+        """
+        try:
+            gate = self._todo_gate(conversation_id, conn=conn)
+        except Exception:
+            gate = {"done": False, "next_step": "", "remaining": [],
+                    "fallback": True, "reason": "gate 异常 ⇒ 退回评估器"}
+        if gate.get("fallback"):
+            return verdict, gate
+        if gate.get("done"):
+            return {"done": True}, gate
+        return {"done": False,
+                "next_step": gate.get("next_step") or "继续完成未结待办",
+                "remaining": gate.get("remaining") or []}, gate

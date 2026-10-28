@@ -996,3 +996,46 @@ def _migrate_online_eval_tables(conn):
     conn.commit()
     print("[init_db] 迁移: P0-b 生产回流两表已建立"
           "（online_eval_queue + eval_gen_labels，五段闭环落点；只记录不自动转正）")
+
+
+def _migrate_agent_todos(conn):
+    """P0-3（2026-10-28）计划外化：agent_todos 表（幂等建表）。
+
+    方案：docs/持续自主执行能力-最终方案设计-20261028.md §4.2 / §6 第 3 步。
+
+    为什么要有这张表（诊断依据，真实数据）：
+      本工程**没有任何**会话内待办载体（grep 无 todo_write/TodoWrite、DB 无对应表）
+      ⇒ 完成度评估器只能"读答复猜还剩什么"
+      ⇒ 实测 4 条真实样本里，评估器把「建议下一步执行校验」判成 done=true
+      （msg 3985）、把「请转交对应 Agent」也判成 done=true（msg 2731）。
+      ⇒ "完成"的定义权事实上在模型手里。
+
+    关键字段（与官方四态生命周期 + 本工程必需项对齐）：
+      · verify       —— 验收方式。**置 completed 的前置条件**（必填）
+      · verify_result—— 验收回执。**置 completed 的前置条件**（必填）
+        依据官方 "Only mark as passing after careful testing"
+      · blocked_by   —— 依赖/阻塞说明。置 blocked 的前置条件
+      · 至多一个 in_progress ⇒ 由 agent/agent_todo.py 的状态机保证
+
+    不走 columns.py：本表是**新表**（非补列），init_db 每次启动执行
+    CREATE TABLE IF NOT EXISTS ⇒ 老库启动即建，无补列迁移路径。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS agent_todos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER NOT NULL,      -- 会话（待办是会话内状态）
+        run_id INTEGER DEFAULT 0,             -- 本轮请求标识（同会话多次请求可区分）
+        seq INTEGER,                          -- 顺序（显示与"第一个 pending"用）
+        subject TEXT NOT NULL,                -- 待办标题（具体到对象，如"校验包 P-001 的 SysML v2 语法"）
+        status TEXT DEFAULT 'pending',         -- pending|in_progress|completed|blocked|deleted
+        verify TEXT DEFAULT '',               -- ★ 验收方式（可执行描述）；completed 必填
+        verify_result TEXT DEFAULT '',        -- ★ 验收回执；completed 必填且表示通过
+        blocked_by TEXT DEFAULT '',           -- 依赖/阻塞原因；blocked 必填
+        note TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_atodo_conv ON agent_todos(conversation_id, status)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_atodo_run ON agent_todos(conversation_id, run_id)")
+    conn.commit()
+    print("[init_db] 迁移: agent_todos 已建立（计划外化；verify/verify_result 为 completed 前置条件）")

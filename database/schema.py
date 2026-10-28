@@ -37,6 +37,7 @@ from .migrations import (
     _migrate_ontology_iri,
     _migrate_eval_tables,
     _migrate_online_eval_tables,  # P0-b 生产回流两表（2026-10-25）
+    _migrate_agent_todos,  # P0-3 计划外化：agent_todos 表（2026-10-28）
     _migrate_kb_v2_enhance,
     _migrate_entity_temporal,  # P0-④ 时态管理（2026-09-11）
     _migrate_triple_optimization,
@@ -1856,6 +1857,9 @@ def init_db():
     # 放在 _migrate_columns 之后（纯新表 CREATE IF NOT EXISTS，无补列依赖，
     # 位置仅在语义上归入"表结构迁移"族）；真写端点 S4 才接，本步只建结构。
     _migrate_online_eval_tables(conn)
+    # ── P0-3（2026-10-28）计划外化：agent_todos 表（幂等，纯新表无补列依赖）──
+    # 放在 _migrate_columns 之后无依赖（纯新表），位置按"表结构迁移"族归类。
+    _migrate_agent_todos(conn)
     conn.close()
 
 
