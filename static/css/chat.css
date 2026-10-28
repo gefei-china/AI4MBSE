@@ -107,9 +107,14 @@
 
 /* ── 4. AI 消息气泡（用户 / AI / 复制按钮 / 流式输出） ── */
 .msg{display:flex;gap:10px;max-width:94%;min-width:0;
-  /* P0 性能修复：屏外消息跳过布局/绘制（长会话 1500+ 条曾致整页 reflow 每帧上百 ms，展开预览面板时鼠标冻结）。
-     contain-intrinsic-size 提供占位高度估算，避免滚动条大幅跳动 */
-  content-visibility:auto;contain-intrinsic-size:auto 132px;}
+  /* ★ 2026-10-28 移除 `content-visibility:auto`（滚动错位根因）。
+     详见 static/css/app.css 同名规则的实测数据：65 条消息时 scrollHeight 真实 41777px
+     被低估成 4049px（差 10.3 倍），滚动中跳变 7 次、scrollTop 被锚定推走 3 次。
+     ⚠️ 本文件与 app.css 各有一份 `.msg` 定义（index.html 中 app.css 后加载 ⇒ 当前生效的是
+        app.css 那份）。**两处必须同步改**，否则调整加载顺序就会让缺陷复活。 */
+}
+/* 超长会话兜底（消息数 > 300 时由 03-chat.js syncChatHeavy() 挂 .chat-heavy） */
+#chat-area.chat-heavy .msg{content-visibility:auto;contain-intrinsic-size:auto 240px;}
 .msg-inner{display:flex;flex-direction:column;gap:8px;min-width:0;flex:1;align-items:stretch;}
 .msg .who{width:30px;height:30px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;}
 .msg.u .who{background:var(--blue);color:#fff;}

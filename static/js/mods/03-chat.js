@@ -628,8 +628,25 @@ function renderMessagesChunked(area, msgs, done){
     }
     area.appendChild(frag);
     if(i < msgs.length) requestAnimationFrame(step);
-    else if(done) done();
+    else { syncChatHeavy(area); if(done) done(); }
   })();
+}
+// ★ 2026-10-28（用户报「AI 输出完成后滚动页面内容错位，刷新才正常」）：
+//   `content-visibility:auto` 让屏外消息按 132px 估算高度（真实均值 ≈640px）
+//   ⇒ `scrollHeight` 严重低估 + 滚动中反复跳变 ⇒ 浏览器滚动锚定把视口推走 = 错位。
+//   实测（conv 9629 / 65 条 / 7.3 万字）：真实 41777px → 估算 4049px（**差 10.3 倍**），
+//   滚动中高度跳变 7 次、scrollTop 被推走 3 次（最严重 −1146px）。
+//   故默认关闭；只在**超长会话**（>300 条，此时 DOM 规模才真正影响性能）恢复启用兜底。
+//   两种状态各自是"对的那一边"：常规会话要**高度准确**，超长会话要**能滚得动**。
+const CHAT_HEAVY_THRESHOLD = 300;
+function syncChatHeavy(area){
+  const a = area || _chatAreaEl();
+  if(!a || !a.classList) return;
+  const n = a.querySelectorAll('.msg').length;
+  const want = n > CHAT_HEAVY_THRESHOLD;
+  if(want !== a.classList.contains('chat-heavy')){
+    a.classList.toggle('chat-heavy', want);
+  }
 }
 // 加载更早消息（向上翻页）：prepend 到消息区，保持视口停留位置不跳动
 async function loadEarlierMessages(){
@@ -652,6 +669,9 @@ async function loadEarlierMessages(){
       });
       area.insertBefore(frag, area.firstChild);
       area.scrollTop += area.scrollHeight - prevHeight;   // 视口锚定：读完仍在原位置
+      // ⚠️ 必须在锚定**之后**同步：切换 .chat-heavy 会改变高度估算 ⇒ 若在锚定前切，
+      //    上面这句用到的 scrollHeight 就变了，视口锚定会失准（又变回"错位"）。
+      syncChatHeavy(area);
     }
     const btn2 = document.getElementById('load-earlier-btn');
     if(btn2){

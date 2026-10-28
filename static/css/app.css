@@ -283,9 +283,25 @@ body.preview-dragging *{cursor:col-resize !important;}
 .side2 .foot{border-top:1px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;gap:6px;}
 .side2 .foot a{color:var(--mut);font-size:12.5px;text-decoration:none;display:flex;gap:8px;align-items:center;cursor:pointer;}
 .msg{display:flex;gap:10px;max-width:94%;min-width:0;
-  /* P0 性能修复：屏外消息跳过布局/绘制（长会话 1500+ 条曾致整页 reflow 每帧上百 ms，展开预览面板时鼠标冻结）。
-     contain-intrinsic-size 提供占位高度估算，避免滚动条大幅跳动 */
-  content-visibility:auto;contain-intrinsic-size:auto 132px;}
+  /* ★ 2026-10-28 移除 `content-visibility:auto`（用户报「AI 输出完成后滚动页面内容错位，
+     需要刷新页面才正常」）。真实浏览器实测（conv 9629，65 条消息 / 7.3 万字，viewport 1600x900）：
+
+       · 有 content-visibility：`scrollHeight` 从真实 **41777px** 被低估成 **4049px（差 10.3 倍）**；
+         滚动过程中高度跳变 **7 次**（单次最大 1146px）；
+         `scrollTop` 被浏览器**滚动锚定**推走 **3 次**（最严重：设 2720 实际变 1574，偏移 −1146px）
+         ⇒ 用户感知就是「内容错位」。
+       · 禁用后：`scrollHeight` 恒为 41777px，**零跳变、零错位**。
+       · 性能代价实测为零：65 条 / 5744 DOM 节点时同步布局 median **0ms**。
+
+     ⇒ 聊天场景用户**本来就要从底部向上翻历史**，而屏外消息按 132px 估算（真实均值 ≈640px）
+       与「高度必须准确」这个硬需求直接冲突。性能改由**分页渲染（80 条/批 + rAF 分片）**
+       承担（见 `03-chat.js` 的 `MSG_PAGE_SIZE` / `MSG_RENDER_CHUNK`）。
+     超长会话兜底：消息数 > 300 时由 JS 给 `#chat-area` 加 `.chat-heavy`（规则见下）。 */
+}
+/* 超长会话（消息数 > 300）兜底：只在极端规模下恢复"跳过屏外绘制"，
+   并把估算高度从 132px 提到 240px（132px 远低于真实均值，是错位幅度大的直接原因之一）。
+   该类的挂载/摘除见 03-chat.js `syncChatHeavy()`。 */
+#chat-area.chat-heavy .msg{content-visibility:auto;contain-intrinsic-size:auto 240px;}
 .msg-inner{display:flex;flex-direction:column;gap:8px;min-width:0;flex:1;align-items:stretch;}
 .msg .who{width:30px;height:30px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;}
 .msg.u .who{background:var(--blue);color:#fff;}

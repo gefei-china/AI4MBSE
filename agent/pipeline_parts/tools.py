@@ -1564,23 +1564,55 @@ class ToolMixin:
             if name == "graph_retrieve":
                 q = (arguments or {}).get("query", "")
                 r = self.rag.retrieve(q)
-                hits = r.get("chunk_hits") or r.get("entities") or []
-                # Q2-修复：实质相关判断——查询词中文 token 与命中内容的重叠率 < 20% 视为弱相关，
-                # 引导以用户上下文/上传资料为准，避免 LLM 拿历史无关实体硬凑分析
-                q_tokens = set(re.findall(r"[\u4e00-\u9fa5]{2,4}", q or ""))
-                hit_text = " ".join([(h.get("content") or "")[:500] for h in (r.get("chunk_hits") or [])])
-                hit_tokens = set(re.findall(r"[\u4e00-\u9fa5]{2,4}", hit_text))
-                overlap = q_tokens & hit_tokens
-                ratio = len(overlap) / max(len(q_tokens), 1)
-                max_score = max([h.get("score") or 0 for h in (r.get("chunk_hits") or [])], default=0)
-                weak = (not hits) or (not q_tokens) or (ratio < 0.2 and max_score < 0.5)
-                if weak:
-                    detail = f"知识库未检索到与查询实质相关的内容（词重叠 {len(overlap)}/{len(q_tokens)}），请基于用户上下文与上传资料回答"
-                    result = {"ok": True, "result": detail, "weak": True}  # P0-按需工具：弱相关标记 → 上层收敛工具循环
+                _chunk_hits = r.get("chunk_hits") or []
+                hits = _chunk_hits or r.get("entities") or []
+                # ★ 2026-10-28（用户报「知识库明明有 OMG 规范讲 perform action，
+                #   检索却说未检索到」）：判定逻辑整体移到纯函数模块。
+                #
+                #   旧实现三条独立缺陷（任一条都足以让检索"看起来失效"）：
+                #   ① `q_tokens` 只抽中文 ⇒ 英文术语查询 `not q_tokens` 恒真 ⇒ 必判弱
+                #   ② 命中的是英文规范 ⇒ overlap 恒 0 ⇒ 中文查英文文档必判弱
+                #   ③ `max_score < 0.5`：score 是 RRF 融合分 1/(60+rank)，
+                #      理论最大 ≈2/61=0.033 ⇒ 该条件**恒真**，等于没写
+                #   实测：vec_score 0.57~0.72（置信度中/高）的正确命中被判成
+                #   「未检索到实质相关内容（词重叠 0/0）」= 用户看到的原话。
+                from agent.retrieval_relevance import assess_relevance as _assess
+                try:
+                    from core import config as _cfg_rr
+                    _conf_mid = float(_cfg_rr.get("rag", "confidence_mid", 0.45))
+                except Exception:
+                    _conf_mid = 0.45
+                _rel = _assess(q, _chunk_hits, conf_mid=_conf_mid)
+                _ev = _rel["evidence"]
+                if _rel["weak"]:
+                    detail = ("知识库未检索到与查询实质相关的内容"
+                              f"（{_rel['reason']}），请基于用户上下文与上传资料回答")
+                    result = {"ok": True, "result": detail, "weak": True,
+                              "relevance": _rel}  # P0-按需工具：弱相关标记 → 上层收敛工具循环
                 else:
-                    detail = f"图谱 {r['graph_count']} 条 / 向量 {r['vector_count']} 条（词重叠 {len(overlap)}/{len(q_tokens)}）：" \
-                             f"{[h.get('name') or h.get('content','')[:60] for h in hits[:3]]}"
-                    result = {"ok": True, "result": detail}
+                    # ★ 同时修「检索到了但答不出」：旧实现只给 hits[:3] 各 60 字符
+                    #   （共 180 字），LLM 拿不到条文全文 ⇒ 只能答"信息不足"。
+                    #   现改为给 top 4 条的**完整切片内容**（每条约 300 字）并标注来源，
+                    #   让模型能真正引用规范原文。
+                    _top = [h for h in _chunk_hits[:4] if isinstance(h, dict)]
+                    _lines = [
+                        f"知识库检索到 {len(_chunk_hits)} 条相关片段"
+                        f"（最高向量相似度 {_ev['max_vec']:.3f}，"
+                        f"最高 BM25 {_ev['max_bm25']:.1f}）。"
+                        f"以下为原文摘录，回答时请引用具体条文："
+                    ]
+                    for _i, _h in enumerate(_top, 1):
+                        _src = _h.get("source_doc") or "（未知来源）"
+                        _sec = str(_h.get("section") or "").strip()
+                        _sec = f" · {_sec}" if _sec else ""
+                        _conf = _h.get("confidence_level") or "-"
+                        _lines.append(
+                            f"\n【来源 {_i}】{_src}{_sec}"
+                            f"（相似度 {float(_h.get('vec_score') or 0):.3f}，置信度 {_conf}）\n"
+                            f"{str(_h.get('content') or '').strip()}"
+                        )
+                    result = {"ok": True, "result": "\n".join(_lines),
+                              "relevance": _rel, "hit_count": len(_chunk_hits)}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
             if name == "impact_analyze":
