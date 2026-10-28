@@ -223,6 +223,39 @@ check("F8", "tools.py 补上了模块级 logger（此前 5 处留痕全抛 NameE
 
 print()
 print("=" * 78)
+print("H. 参数闸：畸形调用不得进入写前确认队列（conv 9741 实证）")
+print("=" * 78)
+
+from agent.tool_readiness import missing_args as _MA              # noqa: E402
+
+_sch = {"required": ["mode", "requestId", "targetPackageId", "text", "workspace"]}
+check("H1", "按 inputSchema.required 判缺失（真机那条畸形入参应全部缺失）",
+      set(_MA(_sch, {"value": "回执成功 + query_data_tree 能看到新元素"})) ==
+      set(_sch["required"]), _MA(_sch, {"value": "x"}))
+check("H2", "空串等价于没给", "text" in _MA(_sch, {"mode": "a", "requestId": "b",
+      "targetPackageId": "c", "text": "  ", "workspace": {}}), "")
+check("H3", "无 required 契约 ⇒ 不判缺失（不误伤）", _MA({}, {"x": 1}) == [], "")
+
+_full = {"mode": "ADD_PACKAGE", "targetPackageId": "2115359040604536832",
+         "packageName": "P", "requestId": "r", "text": "package P {}",
+         "workspace": {"projectId": "1", "branchId": "2", "versionId": "3"}}
+_r1 = _p._exec_tool_call("import_sysml_text", _full)
+check("H4", "参数完整 ⇒ 照常进入写前确认（不被参数闸误挡）",
+      bool(_r1.get("confirm_required")), _r1)
+_r2 = _p._exec_tool_call("import_sysml_text",
+                        {"value": "回执成功 + query_data_tree 能看到新元素"})
+check("H5", "★真机畸形入参 ⇒ 被参数闸挡在入队之前（MISSING_ARGUMENTS）",
+      (_r2.get("ok") is False) and _r2.get("code") == "MISSING_ARGUMENTS", _r2)
+check("H6", "挡回时明确点名缺哪些参数（模型才能自我修正）",
+      "mode" in str(_r2.get("result")) and "targetPackageId" in str(_r2.get("result")), "")
+_t3 = open(os.path.join(_ROOT, "agent", "pipeline_parts", "tools.py"), encoding="utf-8").read()
+check("H7", "参数闸位于 HIL 闸**之前**（否则畸形调用先入队）",
+      _t3.find("_miss_args") < _t3.find("_hil_res = self._hil_gate") > 0, "")
+check("H8", "参数闸里用局部 `_json_arg` 而非模块级 json（tools.py 无模块级 json）",
+      "import json as _json_arg" in _t3, "")
+
+print()
+print("=" * 78)
 print("G. 变异自证：把修复拆掉，判据必须翻红")
 print("=" * 78)
 

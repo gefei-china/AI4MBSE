@@ -1576,6 +1576,62 @@ class ToolMixin:
             # RBAC 之后（`tools.py:870-876` 既定不变量：无权限的人不该走到"要不要审批"）
             # → Hook 之后（Hook 是管理员配的**细粒度确定性**规则，比策略粗分档更具体）
             # → 执行之前（唯一能保证"没有副作用发生"的位置）。
+            # ★★ 2026-10-28（conv 9741 实证）：**参数不全的调用不得进入确认队列**。
+            #   真机：模型把待办的验收文案当成入参发了出去 ——
+            #     import_sysml_text  {"value": "回执成功 + query_data_tree 能看到新元素"}
+            #   （同一轮 query_projects / query_data_tree / validate 各带一条待办 verify 文案）
+            #   MCP 工具此前**没有必填参数校验**（校验只写在 http_tool_executor，仅 HTTP 工具），
+            #   于是这笔畸形调用入了队（确认单 #38，预览「导入（未命名对象）」）。
+            #   用户若批准，执行的是一笔没有包名、没有正文的导入 ⇒ 必然不生效
+            #   ⇒ 用户看到的就是"我确认了却没写进去"。⇒ 在"要不要人点头"之前先挡回。
+            _mreq = None
+            try:
+                # ⚠️ 本模块**没有模块级 `json`**（文件内已有注释警告过这一点），
+                #   直接写 `json.loads` 会抛 NameError 并被下面的 except 吞掉
+                #   ⇒ 闸永远不生效、且没有任何日志。必须显式局部导入。
+                import json as _json_arg
+                from agent.tool_readiness import missing_args as _miss_args
+                from database import get_db as _argdb
+                _ac = _argdb()
+                try:
+                    _mrow = _ac.execute(
+                        "SELECT tool_meta FROM mcp_servers WHERE tools LIKE ? AND status='online' "
+                        "ORDER BY id LIMIT 1", ("%" + str(name) + "%",)).fetchone()
+                    _sch = None
+                    if _mrow and _mrow[0]:
+                        try:
+                            _mmeta = (_json_arg.loads(_mrow[0])
+                                      if isinstance(_mrow[0], str) else _mrow[0])
+                            for _mi in (_mmeta or []):
+                                if isinstance(_mi, dict) and _mi.get("name") == name:
+                                    _sch = _mi.get("inputSchema") or _mi.get("input_schema")
+                                    break
+                        except Exception:
+                            _sch = None
+                    if _sch:
+                        _mreq = _miss_args(_sch, arguments or {})
+                finally:
+                    _ac.close()
+            except Exception:
+                _mreq = None
+            if _mreq:
+                _mres = {
+                    "ok": False,
+                    "code": "MISSING_ARGUMENTS",
+                    "result": (
+                        "\u26d4 未执行：调用 `%s` 缺少必需参数 %s。\n"
+                        "\u00b7 本次给的参数键：%s\n"
+                        "\u00b7 该工具的参数契约要求：%s\n"
+                        "\u21d2 请按契约补齐后重新调用。"
+                        "\u26a0\ufe0f 不要把**待办条目的验收说明**（如「回执成功」「返回 verdict=pass」）"
+                        "当成工具参数 —— 那些是给人看的验收标准，不是入参。"
+                        % (name, "\u3001".join(_mreq),
+                           "\u3001".join(sorted((arguments or {}).keys())) or "\uff08\u65e0\uff09",
+                           "\u3001".join(_mreq)))
+                }
+                self._log_tool_call(name, tool_type, arguments, _mres,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
+                return _mres
             _hil_res = self._hil_gate(name, arguments or {}, agent_ctx, conv_ctx, tool_type)
             if _hil_res is not None:
                 result = _hil_res

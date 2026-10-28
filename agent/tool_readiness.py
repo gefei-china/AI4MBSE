@@ -82,3 +82,47 @@ def readiness(config):
 
 def is_ready(config) -> bool:
     return not missing_required(config)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 调用**参数**就绪度：必需参数缺失 ⇒ 不该进入"人工确认队列"
+# ══════════════════════════════════════════════════════════════════════
+
+def missing_args(schema, arguments) -> list:
+    """按工具的真实参数契约（`inputSchema.required`）列出**缺失的必需参数**。
+
+    ## 为什么必须有（2026-10-28 conv 9741 实证）
+    模型把**待办的验收文案**当成工具入参发了出去：
+        import_sysml_text  {"value": "回执成功 + query_data_tree 能看到新元素"}
+    （同一轮还有 query_projects/query_data_tree/validate 各带一条待办 verify 文案）
+    而 MCP 工具**没有必填参数校验** —— 校验只写在 `http_tool_executor.py:216`
+    （仅 HTTP 集成工具）。后果有两层：
+      ① 这笔畸形调用**进了写前确认队列**（确认单 #38，预览「导入（未命名对象）」）；
+      ② 用户若点了「批准」，执行的是一笔**没有包名、没有正文**的导入
+         ⇒ 必然不生效，用户看到的就是"我确认了却没写进去"。
+    ⇒ 参数不全时**根本不该入队**：要在"要不要人点头"之前就退回给模型，
+      并明确告诉它缺哪些参数（它才有机会自我修正）。
+
+    ## 口径
+    只认 `schema.required`（平台自己声明的必需项），不额外发明必填规则；
+    `arguments` 里键存在但值为空串也算缺（空串等价于没给）。
+    """
+    try:
+        if isinstance(schema, str):
+            import json as _json
+            schema = _json.loads(schema or "{}")
+        if not isinstance(schema, dict):
+            return []
+        req = schema.get("required") or []
+        if not isinstance(req, (list, tuple)):
+            return []
+        args = arguments if isinstance(arguments, dict) else {}
+        out = []
+        for k in req:
+            k = str(k)
+            v = args.get(k, None)
+            if v is None or (isinstance(v, str) and not v.strip()):
+                out.append(k)
+        return out
+    except Exception:
+        return []
