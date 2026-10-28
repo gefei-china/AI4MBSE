@@ -273,6 +273,69 @@ def build_degrade_notice(remaining, ratio: float, threshold: float = 0.7) -> str
     return "\n".join(lines)
 
 
+def _code_blocks(text: str) -> list:
+    """取出文本里的围栏代码块（去掉语言标签），用于判"是否同一份产物"。"""
+    out, buf, inside = [], [], False
+    for line in str(text or "").split("\n"):
+        if line.strip().startswith("```"):
+            if inside:
+                out.append("\n".join(buf).strip())
+                buf = []
+                inside = False
+            else:
+                inside = True
+            continue
+        if inside:
+            buf.append(line)
+    return out
+
+
+def merge_round_content(prev: str, cur: str) -> str:
+    """把**同一任务的续跑轮正文**并进已有正文，但**不许堆出多份相同内容**。
+
+    ★ 2026-10-28（conv 9736 实证）：用户报「生成代码中还是存在多份相同的内容」。
+      真机核查：那条消息 **37,620 字符**，含 **7 个代码块，md5 完全相同（af683702）**
+      —— 是 7 轮"结论先行 + 逐条对账 + 同一份完整代码"被 `\\n\\n` 直接累加。
+      拼接策略的错在于：**续跑轮的正文本意是"接着做"**，而模型每轮都会重写一份
+      完整报告；把每轮都追加 ⇒ 用户看到 7 份重复，重点被稀释。
+
+    判据（纯函数，可单测）：
+      ① `cur` 空 ⇒ 保留 `prev`；
+      ② `cur` 包含 `prev`（cur 是更完整版）⇒ **取 cur**；
+      ③ `prev` 包含 `cur`（cur 只是片段）⇒ **保留 prev**；
+      ④ 两边的代码块集合相同（同一份产物重述）⇒ **取 cur**（最新措辞/结论）；
+      ⑤ 其余（确实是新增的不同内容）⇒ 追加，保信息。
+    """
+    p, c = str(prev or "").strip(), str(cur or "").strip()
+    if not c:
+        return p
+    if not p:
+        return c
+    if c == p:
+        return c
+    # ② / ③ 包含关系（用规整化后的文本比，避免空白差异误判）
+    _np = " ".join(p.split())
+    _nc = " ".join(c.split())
+    if _nc in _np:
+        return p
+    if _np in _nc:
+        return c
+    # ④ 代码块集合相同 ⇒ 同一产物的又一次重述
+    try:
+        bp, bc = _code_blocks(p), _code_blocks(c)
+        if bp and bc:
+            sp = {b for b in bp if b}
+            sc = {b for b in bc if b}
+            if sp and sc and sp == sc:
+                return c
+            # 新内容是旧内容的超集（多了代码块）⇒ 取新
+            if sc and sc > sp:
+                return c
+    except Exception:
+        pass
+    return p + "\n\n" + c
+
+
 def continuation_prompt(user_input: str, verdict: dict, round_no: int) -> str:
     """续跑指令（注入 messages 的下一条 user 消息，驱动 ReAct 再转）。"""
     rem = verdict.get("remaining") or []

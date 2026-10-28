@@ -443,7 +443,27 @@ class ToolMixin:
                 _keep_t = _pstore_t2.consumable_filter(_fc, user)
                 _name2id = {r["name"]: r["id"]
                             for r in _fc.execute("SELECT id, name FROM tools").fetchall()}
+                _before = [c[0] for c in candidates]
                 candidates = [c for c in candidates if _keep_t("tools", _name2id.get(c[0], -1))]
+                # ★ 2026-10-28（conv 9737 实证）：**剔除必须可见**。
+                #   真机：我把 zhiyuan_sysmlv2_import/gen/check 绑给本 Agent，
+                #   但 `_build_tools_def` 实调仍只有 12 个工具、三者全部 MISSING ——
+                #   绑定动作"看起来成功"，运行时被本闸静默剔除，模型只能走次优路径。
+                #   根因：这三个插件 author_name='平台内置' 且**从未有过安装记录**，
+                #   被判成"被管理员全局卸载"（见 visibility.py 的 2026-09-29 收窄），
+                #   而"从未装过"与"被卸载"在该判据下不可区分（数据侧已用
+                #   tools/migrate_seed_builtin_installs.py 补齐系统级可用标记）。
+                #   ⇒ 这里把剔除清单留痕，杜绝同类问题再次静默。
+                _gone = [n for n in _before if n not in {c[0] for c in candidates}]
+                if _gone:
+                    self._dropped_by_visibility = list(_gone)
+                    try:
+                        logger.warning(
+                            "[tools] 以下**已绑定**工具被「可消费过滤」剔除（插件未安装/被停用）：%s"
+                            "；若是平台内置能力，多半是缺 user_id=0 的 plugin_installs 行"
+                            "（见 tools/migrate_seed_builtin_installs.py）", _gone)
+                    except Exception:
+                        pass
             finally:
                 _fc.close()
         except Exception:
@@ -1441,6 +1461,41 @@ class ToolMixin:
                 from http_tool_executor import exec_http_tool
                 from tool_resilience import retry_exec
                 tool_type = "http"
+                # ★ 2026-10-28（conv 9740 实证）：**覆盖导入的目标包一致性闸**。
+                #   那一轮澄清卡要写进 `2114902516325482496`，而同会话回执一致显示
+                #   该 id 是「通信子系统」**父包**（目标包应是 2115359040604536832）；
+                #   `sysmlv2_import` 是覆盖语义 ⇒ 点了确认就会冲掉父包下既有 5 个子包。
+                #   判据（零网络、只看本会话回执）：目标 id 是否**曾是 parentId** 且
+                #   其子项里含用户点名的包名 ⇒ 它是父包而非目标包 ⇒ 拒绝。
+                if str(name) == "zhiyuan_sysmlv2_import":
+                    try:
+                        from agent import import_target_guard as _itg
+                        _pid = (arguments or {}).get("targetPackageDataId")
+                        _uinput = str((intent_ctx or {}).get("user_input") or "")
+                        _gdb2 = __import__("database").get_db()
+                        try:
+                            _is_par, _child = _itg.is_parent_of_target(
+                                _gdb2, int(conv_ctx or 0), _pid, _uinput)
+                        finally:
+                            _gdb2.close()
+                        if _is_par:
+                            _blk = {
+                                "ok": False,
+                                "code": "WRONG_TARGET_PACKAGE",
+                                "result": (
+                                    "⛔ 已拒绝执行：`targetPackageDataId=%s` 是**父包**，"
+                                    "不是你要写的那一个 —— 它的子级里就含「%s」。"
+                                    "本工具是**覆盖导入**，写到父包会冲掉它下面既有的全部子树。"
+                                    "请改用**目标包自身**的 dataId（从 `query_data_tree` / "
+                                    "`search_model_elements` 的 elementId 字段取，"
+                                    "别用 parentId），确认后再导入。"
+                                    % (str(_pid), _child)),
+                            }
+                            self._log_tool_call(name, tool_type, arguments, _blk,
+                                                intent_ctx, agent_ctx, conv_ctx, t0)
+                            return _blk
+                    except Exception:
+                        pass
                 # D2：HTTP 集成工具重试（仅瞬态失败）
                 result, retried, _did = retry_exec(
                     lambda: exec_http_tool(name, arguments or {}),

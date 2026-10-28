@@ -36,9 +36,10 @@ import json
 
 __all__ = ["annotate", "ANNOTATED_TOOLS", "build_note"]
 
-#: 需要判读的工具（收窄到"实测踩过坑"的四个；其余工具原样透传）
+#: 需要判读的工具（收窄到"实测踩过坑"的几个；其余工具原样透传）
 ANNOTATED_TOOLS = ("query_data_tree", "search_model_elements",
-                   "query_projects", "query_model_versions")
+                   "query_projects", "query_model_versions",
+                   "get_modeling_capabilities", "create_model_elements")
 
 #: 清单里最多列几个名字（再多模型也不比对了，只报总数）
 _MAX_NAMES = 40
@@ -169,6 +170,79 @@ def _note_projects(args, d):
             "不要直接回复「找不到工程」。" % kw)
 
 
+def _note_capabilities(args, d):
+    """`get_modeling_capabilities`：47KB 清单压成**合法取值索引**（这才是它该被读的部分）。
+
+    ★ 2026-10-28（conv 9736 实证）：该工具回执 **47,229 字符**、`hasMore=true`、
+      `creatable` 50 种、`relationships` 241 条。模型可见上限 8000 ⇒ 被 offload 成
+      引用块 ⇒ **它看不到合法类型清单**，只能猜 `SEQUENCE_VIEW`
+      （而清单里根本没有这个类型）⇒ 3 次 INVALID_ARGUMENTS ⇒ 整轮判死。
+      ⇒ 判读句必须把「能用哪几个（且能建）」「哪些不在清单里」「写入正路是什么」
+        一句话讲清；细节仍可 fetch 原文。
+    """
+    cr = d.get("creatable") or []
+    if not isinstance(cr, list) or not cr:
+        return ""
+    types, ok_types, no_impl = [], [], []
+    for x in cr:
+        if not isinstance(x, dict):
+            continue
+        t = str(x.get("type") or "").strip()
+        if not t:
+            continue
+        types.append(t)
+        if x.get("enabledCreate") and x.get("implementedCreate") and x.get("creationTool"):
+            ok_types.append(t)
+        elif not x.get("implementedCreate") or not x.get("creationTool"):
+            no_impl.append(t)
+    kw = str((args or {}).get("elementTypes") or "").strip()
+    parts = [
+        "【判读】本容器可创建 **%d 种**类型（`elementTypes` 只能用下面这些字符串，"
+        "照抄即可，不要自造）：" % len(ok_types),
+        "、".join(ok_types[:40]) + ("…" if len(ok_types) > 40 else ""),
+    ]
+    if no_impl:
+        parts.append("⚠️ 这些**当前不支持创建**（列出来但不可建，别试）：%s"
+                     % "、".join(no_impl[:20]))
+    if kw:
+        parts.append("本次过滤条件 elementTypes=%s；若报「未知类型」，说明该值不在上面清单里。"
+                     % kw[:80])
+    others = [k for k in ("fields", "relationships") if d.get(k)]
+    if d.get("hasMore") or others:
+        parts.append("（回执共 %d 字符、%s；`fields`/`relationships` 等细节按需取，"
+                     "**创建元素只需要上面这几个 type 名**）"
+                     % (len(json.dumps(d, ensure_ascii=False)),
+                        "hasMore=true, nextOffset=%s" % d.get("nextOffset")
+                        if d.get("hasMore") else "未分页"))
+    parts.append("💡 若目标是「把一整段 SysML v2 源码写进某包」，**不要**逐元素 create —— "
+                 "用 `zhiyuan_sysmlv2_import(vc=\"<branchId>,0\", text=<源码>, "
+                 "targetPackageDataId=<包 id>)` **一次调用**完成（平台自行解析建元素）。")
+    return "".join(parts)
+
+
+def _note_create(args, d):
+    """`create_model_elements`：成功要把"新建了什么 id"点名，失败要指回能力清单。"""
+    ok = str(d.get("status") or "").upper() in ("SUCCEEDED", "SUCCESS", "OK")
+    items = d.get("items") or d.get("elements") or []
+    ids = []
+    for it in items[:10]:
+        if isinstance(it, dict):
+            eid = str(it.get("elementId") or it.get("dataId") or "").strip()
+            nm = str(it.get("name") or "").strip()
+            if eid:
+                ids.append("%s=%s" % (nm or "?", eid))
+    if ok or ids:
+        return ("【判读】创建成功%s。⚠️ **必须回读确认**（`query_data_tree(parentId=父包)` 或 "
+                "`search_model_elements`）再向用户报「已写入」，不要只凭这次回执。"
+                % ("：" + "、".join(ids) if ids else ""))
+    code = str(d.get("code") or "")
+    if code:
+        return ("【判读】创建**失败**（%s）。先看回执里的 `recovery`/`message` 更正参数，"
+                "**不要**重复发同一份参数；若反复失败，改用 `zhiyuan_sysmlv2_import` "
+                "整段导入。" % code)
+    return ""
+
+
 def _note_versions(args, d):
     """query_model_versions：把"草稿/已发布"讲清，避免写错版本。"""
     items = d.get("items") or []
@@ -191,6 +265,8 @@ _NOTES = {
     "search_model_elements": _note_search,
     "query_projects": _note_projects,
     "query_model_versions": _note_versions,
+    "get_modeling_capabilities": _note_capabilities,
+    "create_model_elements": _note_create,
 }
 
 

@@ -728,6 +728,21 @@ def reset_request_state(pipe) -> None:
     pipe._async_notes = []
     # ★ 2026-10-27：本轮清理掉的泄漏工具标记处数（协议自愈留痕，供观测统计）。
     pipe._leaked_tool_markup = 0
+    # ★ 2026-10-28：重复调用收敛的「强指令」已发次数（stream 的收敛闸用）。
+    #   ⚠️ **必须清零**：Pipeline 是全局单例，不清 ⇒ 下一个会话一进来就已用满 2 次
+    #   ⇒ 收敛闸对它**直接终止而不给强指令**（新会话被上一会话的状态连坐）。
+    pipe._dup_redirect_n = 0
+    # ★ 2026-10-28：被「可消费过滤」剔除的已绑定工具名（tools.py 留痕，供排障）。
+    #   不清 ⇒ 本轮会把**上一个会话**的剔除清单当成自己的，排障直接跑偏。
+    pipe._dropped_by_visibility = []
+    # ★ 2026-10-28（门禁 A2 检出）：以下三项此前未登记，跨请求会残留。
+    #   · `_last_intent_brief` —— 本轮被写进**消息卡片**（exec.brief）。不清 ⇒
+    #     新会话首轮可能带着上一个会话的「我理解你要的…」，用户看到的是别人的意图。
+    #   · `_exec_subject_note` / `_skill_prompt_cache` —— 前者是执行主体说明（会进正文），
+    #     后者虽有 key 比对兜底，但"靠 key 恰好不同"不是不变量 ⇒ 一并清零。
+    pipe._last_intent_brief = None
+    pipe._exec_subject_note = ""
+    pipe._skill_prompt_cache = None
 
 
 def reset_skill_state(pipe, skill_name) -> None:

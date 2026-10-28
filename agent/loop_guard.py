@@ -37,7 +37,8 @@ __all__ = ["DEFAULT_TOKEN_BUDGET", "DEFAULT_TOOL_TIMEOUT_S",
            "normalize_args", "call_key", "strict_call_key", "semantic_args",
            "DEDUP_IGNORE_KEYS",
            "budget_exhausted", "dedup_hit", "call_tool_guarded", "LoopGuard",
-           "tokens_of", "tokens_total_of", "charged_tokens", "CACHE_HIT_WEIGHT"]
+           "tokens_of", "tokens_total_of", "charged_tokens", "CACHE_HIT_WEIGHT",
+           "is_correctable_failure"]
 
 # ── 默认阈值（与编排侧口径对齐，取"能挡住失控、又不误伤正常"）──
 # token：编排侧 _ORCH_TOKEN_BUDGET=200000 是**整个 run**（6 个任务）；
@@ -173,6 +174,45 @@ def call_tool_guarded(exec_fn, name: str, args: dict, *,
                 "error": type(e).__name__}
     r = box.get("r")
     return r if isinstance(r, dict) else {"ok": True, "result": str(r)}
+
+
+def is_correctable_failure(res) -> bool:
+    """这次失败是不是**参数类、可自修正**的（⇒ 不该扣失败轮预算）。
+
+    ★ 2026-10-28（conv 9736 实证）：那一轮模型连续 3 次把 `elementTypes`
+      传成平台不认的 `SEQUENCE_VIEW`，平台回的是
+      `{"code":"INVALID_ARGUMENTS","retryable":false,"recovery":{"action":"CORRECT_ARGUMENTS"}}`
+      —— 这是**信息性结果**（告诉它"这个值不合法，请按清单改"），
+      而失败轮预算把它当"工具坏了"，3 次就整轮判死 ⇒ 建包与写入一次都没尝试。
+      ⇒ 参数类错误必须**不扣**失败轮：它恰恰是"再试一次就会对"的那类。
+
+    判据（只认回执里明写的信号，不猜）：
+      · `code in {INVALID_ARGUMENTS, ARGUMENT_*, ...}`（平台/MCP 参数错误族）
+      · `error in {args_truncated}`（我方截断）
+      · `recovery.action == CORRECT_ARGUMENTS`
+      · 文本里出现 `INVALID_ARGUMENTS` / `未知elementTypes` / `参数非法` 等
+    """
+    try:
+        d = res if isinstance(res, dict) else {}
+        code = str(d.get("code") or "").upper()
+        err = str(d.get("error") or "").upper()
+        rec = d.get("recovery") or {}
+        action = str((rec or {}).get("action") or "").upper()
+        if code.startswith("INVALID_ARGUMENTS") or code in (
+                "ARGUMENT_INVALID", "INVALID_PARAMS", "BAD_REQUEST"):
+            return True
+        if err in ("ARGS_TRUNCATED", "INVALID_ARGUMENTS"):
+            return True
+        if action == "CORRECT_ARGUMENTS":
+            return True
+        txt = str(d.get("result") or "")[:2000]
+        for k in ("INVALID_ARGUMENTS", "未知elementTypes", "参数非法",
+                  "CORRECT_ARGUMENTS", "参数不合法", "invalid arguments"):
+            if k in txt:
+                return True
+        return False
+    except Exception:
+        return False
 
 
 def tokens_total_of(resp) -> int:

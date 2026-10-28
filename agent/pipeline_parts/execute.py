@@ -684,6 +684,12 @@ class ExecuteMixin:
                         if result.get("ok") and not _weak:
                             # ★ 真实拿到可用结果 ⇒ 本轮是**成功推进**，不扣失败预算
                             _round_had_ok = True
+                        elif _guard.is_correctable_failure(result):
+                            # ★ 2026-10-28（与 stream.py 同源）：参数类错误（INVALID_ARGUMENTS /
+                            #   args_truncated / recovery.action=CORRECT_ARGUMENTS）是**可自修正**的
+                            #   信息性结果，不该扣失败轮 —— 否则"再改一次参数就会对"的场景
+                            #   被最早判死（conv 9736 建包/写入一次都没尝试）。
+                            _round_had_ok = True
                         if _weak and result.get("ok"):
                             _guard.undo_dup_count(tname, targs)
                         if _weak:

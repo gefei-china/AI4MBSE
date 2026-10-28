@@ -5013,10 +5013,28 @@ class StreamMixin:
                                            "{:.1f}KB".format(_dsz / 1024) if _dsz >= 1024
                                            else "{}B".format(_dsz))}
                             # ★ 失败轮预算判据（与 execute.py 同源）：本轮是否有可用结果
+                            # ★ 2026-10-28（conv 9736 实证）：**参数类错误不算失败轮**。
+                            #   那一轮 3 次把 elementTypes 传成不存在的类型名，平台回
+                            #   INVALID_ARGUMENTS + recovery.action=CORRECT_ARGUMENTS
+                            #   ⇒ 这是"按清单改就能对"的信息性结果，却被当工具坏了扣满
+                            #   失败轮 ⇒ 整轮判死，建包/写入一次都没尝试。
+                            #   ⇒ 判据抽成纯函数 `is_correctable_failure`（两路共用）。
                             if _t_ok and not (result.get("weak")
                                               or ("未检索到" in _r_full)
                                               or ("无新冲突" in _r_full)):
                                 _round_had_ok = True
+                            elif _lg.is_correctable_failure(result):
+                                # 可修正的参数错误：本轮不算失败（给模型改参数的机会）
+                                _round_had_ok = True
+                                _fix_hint = (
+                                    "⚠️ 上一次调用是**参数不合法**（不是工具坏了）："
+                                    "请按回执里给出的字段/取值清单改正后重试，"
+                                    "**不要**因为这一次失败就放弃该步骤。")
+                                exec_notices.append(({"kind": "progress", "text": _fix_hint}))
+                                try:
+                                    messages.append({"role": "user", "content": _fix_hint})
+                                except Exception:
+                                    pass
                             _t_trunc = len(_r_full) > _TOOL_RESULT_CAP
                             _t_result = _r_full[:_TOOL_RESULT_CAP]
                             _e_full = str(result.get("error") or "")
@@ -5144,17 +5162,53 @@ class StreamMixin:
                             #   为什么用"连续"而不是"累计"：多步任务里合法地回头重查同一个工具
                             #   是常见的；只有**中间没有任何新进展**的连续重复才是空转。
                             if _dup_streak >= 2:
+                                # ★ 2026-10-28（conv 9738 实证）：**不再直接终止循环**。
+                                #   真机现场：模型已经定位到目标包（2115385083629469696）、
+                                #   也用对了导入通道的措辞，但把**同一个 parentId 查了 3 次**
+                                #   （纯勘查、无新信息）⇒ 旧逻辑 break ⇒ 直接进最终生成
+                                #   ⇒ 交付里写着"下一步我会执行校验+导入"，本轮一次没做。
+                                #   判"空转"是对的，**处置错了**：空转时应把模型
+                                #   **强行切换执行模式**（禁止再查、立即做剩余关键动作），
+                                #   只有连续两次强指令仍不动才收敛终止。
+                                _dup_redirect = getattr(self, "_dup_redirect_n", 0)
+                                if _dup_redirect < 2:
+                                    self._dup_redirect_n = _dup_redirect + 1
+                                    _dup_streak = 0        # 归零：给它机会按新指令推进
+                                    _d_delta = (
+                                        f"（{agent_def.name}）已连续发出**完全相同**的工具调用"
+                                        f"（同一节点查了多次，结果不会变化）⇒ **停止勘查，"
+                                        f"立即切换到执行模式**。")
+                                    _dup_cmd = (
+                                        "【禁止重复勘查】你刚刚把同一个查询重复了多次，信息已经足够。\n"
+                                        "现在**不要再查任何已查过的节点**，直接按剩余待办执行：\n"
+                                        "· 有代码未校验 ⇒ 立即 `sysml_v2_validate`（硬错必须清零）；\n"
+                                        "· 需要把整段 SysML v2 写进某个包 ⇒ 立即 `zhiyuan_sysmlv2_import`"
+                                        "（`vc=\"<branchId>,0\"`、`text=<源码>`、"
+                                        "`targetPackageDataId=<包 id>`），**一次调用**完成；\n"
+                                        "· 写完立刻 `query_data_tree(parentId=目标包)` **回读确认**，"
+                                        "再向用户报结果。\n"
+                                        "若确实缺一项信息才能继续，只允许**换工具/换参数问一次**，"
+                                        "并在答复里写明缺什么。")
+                                    messages.append({"role": "user", "content": _dup_cmd})
+                                    exec_notices.append(({"kind": "progress", "text": _d_delta}))
+                                    yield {"type": "reasoning", "delta": _d_delta,
+                                           "kind": "progress", "round": _rnd + 1, "phase": "plan"}
+                                    yield {"type": "stage", "name": "重复调用收敛",
+                                           "status": "done",
+                                           "detail": f"连续 {_dup_streak or 2} 次相同调用："
+                                                     f"已注入「停止勘查、立即执行」强指令"
+                                                     f"（第 {_dup_redirect + 1}/2 次）"}
+                                    continue      # ← 回循环顶，让它按强指令继续做
                                 _d_delta = (
-                                    f"（{agent_def.name}）已连续 {_dup_streak} 次发出**完全相同**的"
-                                    f"工具调用，结果不会变化，不再重复执行；"
-                                    f"改为基于已有信息组织回答（如需换参数请换工具或改参数）。")
+                                    f"（{agent_def.name}）已多次被要求停止重复勘查仍未推进，"
+                                    f"本轮收敛：改为基于已有信息组织回答。")
                                 exec_notices.append(({"kind": "progress", "text": _d_delta}))
                                 yield {"type": "reasoning", "delta": _d_delta, "kind": "progress",
                                        "round": _rnd + 1, "phase": "plan"}
                                 yield {"type": "stage", "name": "重复调用收敛",
                                        "status": "done",
                                        "detail": f"连续 {_dup_streak} 次相同调用已被短路，"
-                                                 f"停止空转（避免烧穿 token 预算）"}
+                                                 f"强指令后仍无推进，停止空转（避免烧穿 token 预算）"}
                                 break
                             if weak_count == len(_exec_calls) and weak_count > 0:
                                 _w_delta = f"（{agent_def.name}）本轮工具结果均与任务弱相关，不再继续调用工具，直接基于已有信息组织回答。"
@@ -5164,6 +5218,51 @@ class StreamMixin:
                 # ★ 2026-10-28（写前确认 HITL）写前确认收口 —— 落痕迹 + 发确认卡 + 结束本次流。
                 #   位置同样选在「最终生成之前」：ReAct 循环已因 confirm_required 中断，
                 #   继续生成只会空转（而且会让模型在"没拿到批准"的情况下编造"已执行"）。
+
+                def _interim_exec_card():
+                    """**生成前**收口用的执行卡片（确认/澄清共用，唯一一份）。
+
+                    ★ 2026-10-28（conv 9739 实证）：第一版在两处各写了一份同构字典，
+                      而且都直接索引了 llm_info 的 used_mock —— 但 llm_info 是在
+                      **最终生成之后**（5525 行附近）才有值的。本收口发生在它之前
+                      ⇒ 抛 `cannot access local variable 'llm_info'` ⇒
+                      **整轮流中断**，用户连澄清卡都拿不到（比不修更糟）。
+                      ⇒ 抽成一个函数、所有可选字段用 `.get`/局部兜底；
+                        两处调用（hil / clarify）共用同一份，杜绝再次错位。
+                    """
+                    # ⚠️ 闭包读外层 `llm_info` 必须 try/except NameError：
+                    #   它在本收口点**可能尚未赋值**（那是本函数存在的全部理由）。
+                    #   `locals().get(...)` 在这里是错的 —— 函数内 locals() 只含**本函数**
+                    #   的局部变量，永远拿不到外层未赋值的名字（第一版就写错了）。
+                    try:
+                        _li = llm_info if isinstance(llm_info, dict) else {}
+                    except NameError:
+                        _li = {}
+                    _ret = retrieval if isinstance(retrieval, dict) else {}
+                    try:
+                        _cit = _citations_payload(_ret.get("chunk_hits"))
+                    except Exception:
+                        _cit = []
+                    return {
+                        "intent": intent, "agent": agent_def.name,
+                        "hil_level": hil_level, "kb_tags": kb_tags,
+                        "skill_hits": self._last_skill_hits, "slots": slots,
+                        "source": _ret.get("source"), "confidence": _ret.get("confidence"),
+                        "graph_count": _ret.get("graph_count"),
+                        "vector_count": _ret.get("vector_count"),
+                        "used_mock": _li.get("used_mock"),
+                        "provider": _li.get("provider"),
+                        "citations": _cit,
+                        "exec": {
+                            "reasoning": "".join(exec_reasoning)[:8000] or None,
+                            "notices": (exec_notices[:60] or None),
+                            "agent": agent_def.name,
+                            "tools": exec_tools,
+                            "brief": getattr(self, "_last_intent_brief", None) or None,
+                            "gates": _gates_safe(),
+                        },
+                    }
+
                 if _hil_confirm_req:
                     # ★ 2026-10-28：把**本轮已产出/已做过什么**一并落库，别只留一句占位语。
                     #   真机 9733：校验跑完、时序图代码已生成，但历史里只剩
@@ -5176,24 +5275,7 @@ class StreamMixin:
                         % (str((_hil_confirm_req or {}).get("title") or "需人工批准后执行"),
                            str((_hil_confirm_req or {}).get("tool") or "?"),
                            str((_hil_confirm_req or {}).get("id") or "?")))
-                    _hil_card = {
-                        "intent": intent, "agent": agent_def.name,
-                        "hil_level": hil_level, "kb_tags": kb_tags,
-                        "skill_hits": self._last_skill_hits, "slots": slots,
-                        "source": retrieval["source"], "confidence": retrieval["confidence"],
-                        "graph_count": retrieval["graph_count"],
-                        "vector_count": retrieval["vector_count"],
-                        "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
-                        "citations": _citations_payload(retrieval.get("chunk_hits")),
-                        "exec": {
-                            "reasoning": "".join(exec_reasoning)[:8000] or None,
-                            "notices": (exec_notices[:60] or None),
-                            "agent": agent_def.name,
-                            "tools": exec_tools,
-                            "brief": getattr(self, "_last_intent_brief", None) or None,
-                            "gates": _gates_safe(),
-                        },
-                    }
+                    _hil_card = _interim_exec_card()
                     yield from self._hil_confirm_finish_events(
                         conversation_id, intent, _hil_confirm_req,
                         content=_hil_content, exec_card=_hil_card)
@@ -5227,24 +5309,7 @@ class StreamMixin:
                     _clr_lines.append("")
                     _clr_lines.append("> 生成的设计代码与全部工具回执见下方「执行过程」；"
                                       "回答后我会继续。")
-                    _clr_card = {
-                        "intent": intent, "agent": agent_def.name,
-                        "hil_level": hil_level, "kb_tags": kb_tags,
-                        "skill_hits": self._last_skill_hits, "slots": slots,
-                        "source": retrieval["source"], "confidence": retrieval["confidence"],
-                        "graph_count": retrieval["graph_count"],
-                        "vector_count": retrieval["vector_count"],
-                        "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
-                        "citations": _citations_payload(retrieval.get("chunk_hits")),
-                        "exec": {
-                            "reasoning": "".join(exec_reasoning)[:8000] or None,
-                            "notices": (exec_notices[:60] or None),
-                            "agent": agent_def.name,
-                            "tools": exec_tools,
-                            "brief": getattr(self, "_last_intent_brief", None) or None,
-                            "gates": _gates_safe(),
-                        },
-                    }
+                    _clr_card = _interim_exec_card()
                     yield from self._clarify_finish_events(
                         conversation_id, user_input, intent, branch, attachments,
                         forced_intent, skill_name, team, _clarify_req,
@@ -5568,8 +5633,11 @@ class StreamMixin:
                         and _auto_continues < _ac_cfg["max"]):
                     # 本轮产出并进全量（落库/done/前端历史用全量；评估器只看本轮+工具史）
                     if llm_content:
-                        _full_content = ((_full_content + "\n\n" + llm_content)
-                                         if _full_content else llm_content)
+                        # ★ 2026-10-28（conv 9736 实证）：**去重式合并**，不再无脑累加。
+                        #   真机：一条消息 37,620 字符、7 个代码块 md5 全同 —— 用户报
+                        #   「生成代码中还是存在多份相同的内容」。同一任务的续跑轮
+                        #   模型每轮都重写完整报告，逐轮追加就堆成 7 份。
+                        _full_content = _ac.merge_round_content(_full_content, llm_content)
                     _verdict = self._evaluate_completion(
                         user_input=user_input, exec_tools=exec_tools, answer=llm_content,
                         provider_id=effective_provider, agent_name=agent_def.name,
@@ -5655,24 +5723,7 @@ class StreamMixin:
                             source="auto_continue",
                             title="❓ AI 需要你在两个方案间拍板（评估器判定）",
                             content=(llm_content or ""),
-                            exec_card={
-                                "intent": intent, "agent": agent_def.name,
-                                "hil_level": hil_level, "kb_tags": kb_tags,
-                                "skill_hits": self._last_skill_hits, "slots": slots,
-                                "source": retrieval["source"], "confidence": retrieval["confidence"],
-                                "graph_count": retrieval["graph_count"],
-                                "vector_count": retrieval["vector_count"],
-                                "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
-                                "citations": _citations_payload(retrieval.get("chunk_hits")),
-                                "exec": {
-                                    "reasoning": "".join(exec_reasoning)[:8000] or None,
-                                    "notices": (exec_notices[:60] or None),
-                                    "agent": agent_def.name,
-                                    "tools": exec_tools,
-                                    "brief": getattr(self, "_last_intent_brief", None) or None,
-                                    "gates": _gates_safe(),
-                                },
-                            })
+                            exec_card=_interim_exec_card())
                         return
                     _deadline_left = (_ac_deadline - time.time()) if _ac_deadline else None
                     # ★ P1-1（2026-10-28）预算降级阈值（配置化，默认 0.7）+ 硬停线（0.95）。
@@ -5723,6 +5774,8 @@ class StreamMixin:
                                 _rem, _lg.budget_ratio(), _hard_stop_ratio or _degrade_ratio)
                             if _nt:
                                 llm_content = ((llm_content + _nt) if llm_content else _nt)
+                                # 告知类文本（待续清单）**必须追加**，不能走产物去重
+                                # （它不是"同一份产物的重述"，合并会被判成重复而吞掉）
                                 _full_content = ((_full_content + _nt)
                                                  if _full_content else _nt)
                         except Exception:
@@ -5796,8 +5849,7 @@ class StreamMixin:
                     _harness_stall = int(_hgate.get("stall_streak") or 0)
                     # 本轮产出并进全量（被拦下的这轮内容也要保留）
                     if llm_content:
-                        _full_content = ((_full_content + "\n\n" + llm_content)
-                                         if _full_content else llm_content)
+                        _full_content = _ac.merge_round_content(_full_content, llm_content)
                     try:
                         yield {"type": "stage", "name": "验收未通过 · 继续工作",
                                "status": "done",

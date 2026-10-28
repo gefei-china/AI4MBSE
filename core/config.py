@@ -845,7 +845,7 @@ DEFAULT_CONFIG = {
         #     与 L0 卡里「有硬错就调 autofix」都**没有前提**：
         #     模型压根看不到这个工具 ⇒ 实测 autofix 调用 **0 次**。
         #   ⇒ 修复的**第一前提**是"它得在清单里"，这才是根因。
-        "core_keep_extra": "sysml_v2_validate,sysml_v2_autofix",
+        "core_keep_extra": "sysml_v2_validate,sysml_v2_autofix,zhiyuan_sysmlv2_gen,zhiyuan_sysmlv2_check,zhiyuan_sysmlv2_import",
         # ★ 2026-10-13：把 `tools.input_schema` 真值注入 function-calling payload（开关，可回退）。
         # 背景（对标取证）：`_build_tools_def` 的 SQL **已经 SELECT 了 t.input_schema**，
         # 但 candidates 是 4 元组、没有 schema 位，`:94` 直接丢弃；随后 `:280/:290` **两个分支**

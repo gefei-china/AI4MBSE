@@ -268,7 +268,22 @@ function renderMessage(m) {
     }
   }
 
-  html += `<div class="body" style="min-width:0;">`;
+  // ★ 2026-10-28（用户报「已完成环节卡片被移动到代码块上方了，之前是在最上方的」）：
+  //   **顺序必须与流式一致** —— 直播时 DOM 是
+  //     `<div class="proc"></div><div class="body streaming">`
+  //   即「执行过程在上、正文在下」；而历史渲染此前是「正文先、proc 后」⇒ 同一份消息
+  //   在"收口那一瞬"卡片会从上跳到下（或反之），刷新后又一种顺序。
+  //   现在统一为 **先 proc（收口条 + 时间线）、后正文**：
+  //     · 与直播同构 ⇒ 收口不跳位；
+  //     · 也符合用户预期「最上方」。
+  //   `procHtmlNow` 在正文之前先算出来（历史路径与流式快照都用它）。
+  const _procHtmlNow = m.process_html
+    ? `<div class="proc">${m.process_html}</div>`
+    : ((cd && cd.exec) ? `<div class="proc">${procBlocksHtml(cd.exec, m.id)}</div>` : '');
+  // card_data 按消息 id 缓存（「🔍 执行详情」面板据此读落库原始数据，与渲染顺序无关）
+  if(m.id && cd) { (window._msgCardCache = window._msgCardCache || {})[m.id] = cd; }
+  html += _procHtmlNow;              // ① 执行过程（最上方）
+  html += `<div class="body" style="min-width:0;">`;   // ② 正文
   if(_userFold){
     // 折叠容器：默认只显示 USER_FOLD_LINES 行高度，点「展开」看全文
     html += `<div class="user-fold collapsed" id="uf-${esc(String(m.id||Math.random().toString(36).slice(2,8)))}"`
@@ -278,13 +293,11 @@ function renderMessage(m) {
   } else {
     html += contentHtml;
   }
-  // V2.4 会话内执行过程：思考 → 子智能体 → 工具调用（流式当时传入 process_html；历史消息从 card_data.exec 还原）
-  // 2026-09-25：同时把 card_data 按消息 id 缓存 —— 「🔍 执行详情」面板据此读**落库的原始执行数据**
-  //  （intent/agent/skill_hits/source/confidence/provider/used_mock/tools/reasoning），
-  //   而不是只从 DOM 过程块里刮（DOM 只有 exec 的子集，会漏掉技能/意图/模型等字段）。
-  if(m.id && cd) { (window._msgCardCache = window._msgCardCache || {})[m.id] = cd; }
-  if(m.process_html) html += `<div class="proc">${m.process_html}</div>`;
-  else if(cd && cd.exec) html += procBlocksHtml(cd.exec, m.id);
+  // V2.4 会话内执行过程：思考 → 子智能体 → 工具调用
+  // ⚠️ 2026-10-28：**已上移到正文之前**（见 `_procHtmlNow`），此处**不得**再渲染一次
+  //   —— 否则同一份执行过程会出现两遍（第一版改顺序时漏删，正是这种"两处各写一份"的坑）。
+  if(m.process_html) { /* 已前置渲染 */ }
+  else if(cd && cd.exec) { /* 已前置渲染 */ }
   // ★ 2026-10-17（米爸反馈1）：同轮澄清卡合并渲染 —— 由 03-chat.js 预处理挂到
   //   续答消息的 _clarify_prev 上（clarify 消息本身不再独立成气泡）。渲染为
   //   本消息流程时间线上的「确认环节」：问题清单 + 用户实际回答（card_data.answered，
