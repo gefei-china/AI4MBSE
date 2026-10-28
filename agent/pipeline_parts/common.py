@@ -371,6 +371,32 @@ AUTOPILOT_RULES_TEXT = (
     "· 每步产出后自检是否已覆盖用户请求的全部要求，未覆盖就继续，不要分批交付；\n"
     "· 仅当真正被阻塞（缺关键信息、需用户授权/拍板、遇不可解错误）时才 ask_user 或收尾说明阻塞原因。\n")
 
+#: ★ 2026-10-28（conv 9726 / 9730 两次真机实证）：**待办清单的使用指引**。
+#:
+#: 为什么必须有这段字：`todo_write` 早就被无条件注入工具集（tools.py），
+#: 但**系统提示词里一次都没提过它** ⇒ 模型不会主动建清单
+#: ⇒ `_todo_gate` 恒走 fallback ⇒ 「完成」的定义权仍然只在模型/评估器手里。
+#: 真实数据：两次同题会话（9726 / 9730）`tool_call_logs` 里 `todo_write` **0 次**，
+#: `agent_todos` 表 0 行 —— P0-1 机制在真机上**从未被激活过**，
+#: 于是「有未完成的活也不许结束」这条约束形同不存在。
+#: ⇒ 光有工具与闸不够，必须显式告诉模型"什么时候建、建成什么样"。
+TODO_RULES_TEXT = (
+    "待办清单（多步骤任务的唯一进度依据）：\n"
+    "· 接到**需要 3 步以上**的任务（定位资源 → 设计/生成 → 校验 → 写入/交付）时，"
+    "**第一步就调 `todo_write`** 把全部步骤列出来（含用户明确要求的每个环节），"
+    "每条都要写 `verify`＝怎么证明这步真的做成了（可执行断言优先，例如"
+    "「sysml_v2_validate 返回无 ERROR」「query_data_tree 能看到该元素」）；\n"
+    "· 一条做完就 `todo_write(action=update)` 标记，**必须带验收回执**"
+    "（工具返回的关键字段/计数），没有回执不许置 completed；\n"
+    "· 被某个环节卡住（缺权限/缺信息/要用户确认）⇒ 置 blocked 并写明原因，"
+    "**不要**把整张清单丢掉或跳过；\n"
+    "· 收尾前逐条核对清单：还有未完成项就继续做，不要交付半成品；"
+    "确实必须停下（等用户拍板）时，在答复里**列出已完成/未完成各是哪几条**。\n"
+    "· **只读步骤不要等确认**：校验、检索、读结构这类无副作用的动作，"
+    "即使后面要用户拍板才能写入，也**先把它们做完再问**。"
+    "（用户原话『完成校验后写入，写入前确认』＝ 确认是写入门，不该把校验也挡在门外。）\n")
+
+
 #: ★ 2026-10-17（米爸方案A1）：产物自动归档说明——**纯追加进 tool_rules**（与
 #: AUTOPILOT_RULES_TEXT 同模式，所有 agent 生效）。作用：
 #: 1) 告知模型「工具取回的完整模型文件平台会自动存入产物」，杜绝 9446 那种
@@ -576,8 +602,26 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
         #   旧值（TOOL_RULES + ASK_USER）保持为前缀，verify_prompt_blocks 的 B 组
         #   等价判据（除 tool_rules 外逐字节 + tool_rules 旧值纯追加）因此不被破坏。
         blocks["tool_rules"] = (TOOL_RULES_TEXT + ASK_USER_RULES_TEXT
-                                + AUTOPILOT_RULES_TEXT + ARTIFACT_AUTO_RULES_TEXT)
+                                + AUTOPILOT_RULES_TEXT + ARTIFACT_AUTO_RULES_TEXT
+                                + _todo_rules_suffix())
     return blocks
+
+
+def _todo_rules_suffix() -> str:
+    """`todo_enabled` 开启时追加待办指引（关 ⇒ 空串，**逐字节零回归**）。
+
+    ★ 2026-10-28：为什么要"开关控制"而不是常开 —— 关闸是设计意图（未验证的机制
+      不上默认路径），但**开了就必须配套提示词**，否则工具在、模型不知道用，
+      闸永远走 fallback（9726/9730 的实测结论）。
+      判据：开 ⇒ 提示词含 `todo_write`；关 ⇒ 与旧值逐字节相同。
+    """
+    try:
+        from core import config as _cfg
+        if not bool(_cfg.as_bool("agent", "todo_enabled", False)):
+            return ""
+    except Exception:
+        return ""
+    return TODO_RULES_TEXT
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -921,6 +965,7 @@ __all__ = [
     'PROMPT_LAYER_BOUNDARY', 'assemble_system_prompt',
     # P1-28：system_prompt 块内容单一真源（两条路径共用；差异显式参数化）
     'TOOL_RULES_TEXT', 'ASK_USER_RULES_TEXT', 'AUTOPILOT_RULES_TEXT',
+    'TODO_RULES_TEXT', '_todo_rules_suffix',
     'ARTIFACT_AUTO_RULES_TEXT', '_SKILL_CONTENT_CAP', 'PromptBlocksCtx',
     'build_slots_block', 'build_skill_block', 'build_prompt_blocks',
     # P1-29：显式指定技能的注入（两路径统一入口 + 每轮状态起点）

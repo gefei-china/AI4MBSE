@@ -3456,7 +3456,8 @@ class StreamMixin:
 
     def _clarify_finish_events(self, conversation_id, user_input, intent, branch, attachments,
                                forced_intent, skill_name, team, clarify_req,
-                               source="ask_user", title="❓ AI 执行中需要你确认后才能继续"):
+                               source="ask_user", title="❓ AI 执行中需要你确认后才能继续",
+                               content="", exec_card=None):
         """澄清收口（生成器）：落挂起 + 归档已取回文档 + 发 clarify_ask 卡 + 发 done。
 
         ★ 2026-10-27：抽出来的唯一理由是**第二处调用点**——评估器判定
@@ -3470,7 +3471,8 @@ class StreamMixin:
         """
         _iqs = [dict(clarify_req)]
         _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
-                                     forced_intent, skill_name, team, _iqs)
+                                     forced_intent, skill_name, team, _iqs,
+                                     content=content, card_data=exec_card)
         # 澄清不是失败：已经拿到的文件必须先落库，再等用户回答。
         try:
             if getattr(self, "_tool_sysml_docs", None):
@@ -3495,7 +3497,8 @@ class StreamMixin:
             "msg_type": "clarify", "usage": {}, "questions": _iqs,
             "message_id": _mid or 0, "clarify_source": source}}
 
-    def _hil_confirm_finish_events(self, conversation_id, intent, confirm_req):
+    def _hil_confirm_finish_events(self, conversation_id, intent, confirm_req,
+                                   content="", exec_card=None):
         """★ 2026-10-28（写前确认 HITL）收口：发确认卡事件 + done，结束本次流。
 
         ## 与 `clarify_required` 的关系：**同构但不同源**
@@ -3511,7 +3514,8 @@ class StreamMixin:
 
         ⚠️ 此刻**尚未发生任何副作用**（统一闸在执行之前拦截）⇒ 事件文案必须让人敢批。
         """
-        _mid = self._persist_hil_confirm(conversation_id, intent, confirm_req)
+        _mid = self._persist_hil_confirm(conversation_id, intent, confirm_req,
+                                         content=content, card_data=exec_card)
         yield {"type": "hil_confirm",
                "confirmation_id": int((confirm_req or {}).get("id") or 0),
                "tool": (confirm_req or {}).get("tool") or "",
@@ -4513,6 +4517,11 @@ class StreamMixin:
             _auto_continues = 0
             _ac_cfg = self._auto_continue_cfg()
             _ac_seen_steps = []
+            # ★ 2026-10-28：澄清延后计数（见评估点"待办未做完时先别问人"）。
+            #   `_clarify_defer_n` 上限 2 次、`_clarify_defer_rem` 记上次剩余项数
+            #   （要求确实在减少才允许继续延后，否则照常转卡）。
+            _clarify_defer_n = 0
+            _clarify_defer_rem = None
             # ★ 2026-10-17（米爸反馈4）：工具结果里取回的完整 SysML 文档暂存。
             #   ⚠️ 2026-10-27 起**初始化已前移到 prompt 组装之前**（与异步续跑一起），
             #   这里不再重复置空 —— 否则会把刚续跑取回的文档清掉（本轮实测踩过）。
@@ -4552,7 +4561,7 @@ class StreamMixin:
             # 2026-10-04：接入统一护栏（与 execute.py 的非流式 loop **同源**）。
             # 为什么必须同源：这两段是同一套 ReAct 语义的两种实现，此前只有编排路径
             # 有 token 预算，重复检测与工具超时两边都没有 ⇒ 补一边就会留下新的不对称。
-            from agent.loop_guard import LoopGuard as _LoopGuard, tokens_of as _tok_of
+            from agent.loop_guard import LoopGuard as _LoopGuard
             # P0-①/P0-②（2026-10-07）协议护栏：并行 tool_calls 配对 + 截断参数拒绝。
             # 与 execute.py **同源**（同一模块）—— 两条路径是同一套 ReAct 语义的两种实现，
             # 协议层缺陷漏一条路径就是线上 HTTP 400（同 loop_guard 立规时的判断）。
@@ -4794,7 +4803,7 @@ class StreamMixin:
                     with _turn_cm(_tracer, _rnd + 1):   # P0-b：ReAct 轮 span（M2 挂载）
                         probe = llm_client.chat(messages, provider_id=effective_provider, stream=False,
                                                tools=tools_def, _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
-                        _lg.add_tokens(_tok_of(probe))
+                        _lg.add_llm(probe)
                         pmsg = probe["choices"][0]["message"]
                         ptool_calls = pmsg.get("tool_calls") or []
                         # V2.5：探测轮思考透传（模型决定是否调用工具的推理过程，非流式 message.reasoning_content）
@@ -5156,17 +5165,90 @@ class StreamMixin:
                 #   位置同样选在「最终生成之前」：ReAct 循环已因 confirm_required 中断，
                 #   继续生成只会空转（而且会让模型在"没拿到批准"的情况下编造"已执行"）。
                 if _hil_confirm_req:
+                    # ★ 2026-10-28：把**本轮已产出/已做过什么**一并落库，别只留一句占位语。
+                    #   真机 9733：校验跑完、时序图代码已生成，但历史里只剩
+                    #   「⏸ 写操作需要人工确认」⇒ 用户无从判断该不该批准（见 session.py 注释）。
+                    _hil_content = (
+                        "⏸ **写操作待你确认**：%s\n\n"
+                        "本轮已完成：见下方执行过程（工具回执/思考）；"
+                        "批准后我会立即执行该写入并**回读确认**，再向你汇报结果。\n\n"
+                        "> 待确认动作：`%s`（确认单 #%s）"
+                        % (str((_hil_confirm_req or {}).get("title") or "需人工批准后执行"),
+                           str((_hil_confirm_req or {}).get("tool") or "?"),
+                           str((_hil_confirm_req or {}).get("id") or "?")))
+                    _hil_card = {
+                        "intent": intent, "agent": agent_def.name,
+                        "hil_level": hil_level, "kb_tags": kb_tags,
+                        "skill_hits": self._last_skill_hits, "slots": slots,
+                        "source": retrieval["source"], "confidence": retrieval["confidence"],
+                        "graph_count": retrieval["graph_count"],
+                        "vector_count": retrieval["vector_count"],
+                        "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
+                        "citations": _citations_payload(retrieval.get("chunk_hits")),
+                        "exec": {
+                            "reasoning": "".join(exec_reasoning)[:8000] or None,
+                            "notices": (exec_notices[:60] or None),
+                            "agent": agent_def.name,
+                            "tools": exec_tools,
+                            "brief": getattr(self, "_last_intent_brief", None) or None,
+                            "gates": _gates_safe(),
+                        },
+                    }
                     yield from self._hil_confirm_finish_events(
-                        conversation_id, intent, _hil_confirm_req)
+                        conversation_id, intent, _hil_confirm_req,
+                        content=_hil_content, exec_card=_hil_card)
                     return
                 # ★ 2026-10-17（米爸反馈3）：ask_user 澄清收口 —— 落挂起 + 发射卡片 + 结束本次流。
                 #   位置选在「最终生成之前」：此时 ReAct 循环已中断，继续生成只会空转。
                 #   与 1.4/1.5 共用 _persist_clarify + clarify_ask 协议（前端同一套卡片/续跑机制）。
                 if _clarify_req:
                     # ★ 2026-10-27：收口逻辑抽到 `_clarify_finish_events`（两处共用，见该方法注释）
+                    # ★ 2026-10-28（conv 9735 实测）：**把本轮做过什么一起落库**。
+                    #   那轮已经跑完定位、生成时序图代码、`sysml_v2_validate` 返回 0 错误，
+                    #   却只留一句「需要您确认建模信息后继续」（12 字）⇒ 用户盲确认。
+                    #   ⇒ content 列出工具脉络 + 校验回执；card 带完整 exec（含代码与参数）。
+                    _clr_names = [str(t.get("name") or "") for t in (exec_tools or [])]
+                    _clr_pass = [t for t in (exec_tools or [])
+                                 if str(t.get("name") or "") in ("sysml_v2_validate", "sysml_v2_lint")
+                                 and bool(t.get("ok"))]
+                    _clr_lines = [
+                        "⏸ **暂停等你确认**：%s" % (
+                            str((_clarify_req or {}).get("question") or "需要你拍板后才能继续")),
+                        "",
+                        "本轮已完成：共 %d 次工具调用（%s）。"
+                        % (len(_clr_names),
+                           "、".join(dict.fromkeys(_clr_names))[:200] or "无"),
+                    ]
+                    if _clr_pass:
+                        _clr_lines.append(
+                            "校验回执：`%s` 已跑通（%s）"
+                            % (_clr_pass[-1].get("name"),
+                               str(_clr_pass[-1].get("result") or "")[:120].replace("\n", " ")))
+                    _clr_lines.append("")
+                    _clr_lines.append("> 生成的设计代码与全部工具回执见下方「执行过程」；"
+                                      "回答后我会继续。")
+                    _clr_card = {
+                        "intent": intent, "agent": agent_def.name,
+                        "hil_level": hil_level, "kb_tags": kb_tags,
+                        "skill_hits": self._last_skill_hits, "slots": slots,
+                        "source": retrieval["source"], "confidence": retrieval["confidence"],
+                        "graph_count": retrieval["graph_count"],
+                        "vector_count": retrieval["vector_count"],
+                        "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
+                        "citations": _citations_payload(retrieval.get("chunk_hits")),
+                        "exec": {
+                            "reasoning": "".join(exec_reasoning)[:8000] or None,
+                            "notices": (exec_notices[:60] or None),
+                            "agent": agent_def.name,
+                            "tools": exec_tools,
+                            "brief": getattr(self, "_last_intent_brief", None) or None,
+                            "gates": _gates_safe(),
+                        },
+                    }
                     yield from self._clarify_finish_events(
                         conversation_id, user_input, intent, branch, attachments,
-                        forced_intent, skill_name, team, _clarify_req)
+                        forced_intent, skill_name, team, _clarify_req,
+                        content="\n".join(_clr_lines), exec_card=_clr_card)
                     return
                 # P1-② 补救点（2026-10-07）：循环已 break、**最终生成之前**再消费一次 follow-up。
                 # ★ 为什么循环头不够（实测踩到）：循环头只覆盖「工具执行中 / 探测轮等待中」
@@ -5508,6 +5590,37 @@ class StreamMixin:
                     #   ⚠️ 必须在 clarify_from_verdict **之前**转换 ——
                     #      clarify_from_verdict 对 has_default 返回 None，若不先转，
                     #      这条结论会被完全丢弃（既不打回卡也不续跑 = 静默结束）。
+                    # ★ 2026-10-28（conv 9732 实测）：**待办未做完时，先别问人**。
+                    #   真机现象：评估器给出 needs_user（"是否按当前方案校验后写入"），
+                    #   系统立刻打回澄清卡片 ⇒ 用户被问一次，而**只读的校验一步都没做**。
+                    #   违反用户原话「完成校验后写入，写入前确认」：确认是写入门，
+                    #   不该把校验也挡在门外。
+                    #   ⚠️ 判定一律走 `_ac.defer_clarify`（纯函数，**唯一实现**）——
+                    #     本处只接收结果，不自己写"怎么覆盖 verdict"的分支
+                    #     （否则又成了"同一语义两处各写一份"，本仓已被门禁判红过一次）。
+                    #   ⚠️ 顺序（2026-10-28 修）：**先过待办闸，再判要不要问人**。
+                    #     待办闸是评估器结论的上位约束，"done 与否"必须先定；
+                    #     此前待办闸排在澄清块之后 ⇒ 本处引用未赋值的 `_tg` ⇒
+                    #     真机 conv 9734 抛 `cannot access local variable '_tg'`、
+                    #     整轮流中断（连评估环节都没跑到）。
+                    _verdict, _tg = self._apply_todo_gate(_verdict, conversation_id)
+                    if not _tg.get("fallback"):
+                        try:
+                            yield {"type": "stage", "name": "待办验收闸",
+                                   "status": "done",
+                                   "detail": _tg.get("reason") or ""}
+                        except Exception:
+                            pass
+                    _verdict, _defer_note, _clarify_defer_n, _clarify_defer_rem = \
+                        _ac.defer_clarify(_verdict, _tg,
+                                          n=_clarify_defer_n,
+                                          last_rem=_clarify_defer_rem)
+                    if _defer_note:
+                        try:
+                            yield {"type": "stage", "name": _ac.AUTO_EVAL_STAGE,
+                                   "status": "done", "detail": _defer_note}
+                        except Exception:
+                            pass
                     try:
                         _dp = _ac.default_progress_verdict(_verdict)
                     except Exception:
@@ -5540,17 +5653,41 @@ class StreamMixin:
                             conversation_id, user_input, intent, branch, attachments,
                             forced_intent, skill_name, team, _cq,
                             source="auto_continue",
-                            title="❓ AI 需要你在两个方案间拍板（评估器判定）")
+                            title="❓ AI 需要你在两个方案间拍板（评估器判定）",
+                            content=(llm_content or ""),
+                            exec_card={
+                                "intent": intent, "agent": agent_def.name,
+                                "hil_level": hil_level, "kb_tags": kb_tags,
+                                "skill_hits": self._last_skill_hits, "slots": slots,
+                                "source": retrieval["source"], "confidence": retrieval["confidence"],
+                                "graph_count": retrieval["graph_count"],
+                                "vector_count": retrieval["vector_count"],
+                                "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
+                                "citations": _citations_payload(retrieval.get("chunk_hits")),
+                                "exec": {
+                                    "reasoning": "".join(exec_reasoning)[:8000] or None,
+                                    "notices": (exec_notices[:60] or None),
+                                    "agent": agent_def.name,
+                                    "tools": exec_tools,
+                                    "brief": getattr(self, "_last_intent_brief", None) or None,
+                                    "gates": _gates_safe(),
+                                },
+                            })
                         return
                     _deadline_left = (_ac_deadline - time.time()) if _ac_deadline else None
-                    # ★ P1-1（2026-10-28）预算降级阈值（配置化，默认 0.7）。
-                    #   到阈值就主动收尾并列出待续事项，而不是等耗尽后硬停。
+                    # ★ P1-1（2026-10-28）预算降级阈值（配置化，默认 0.7）+ 硬停线（0.95）。
+                    #   ★ 2026-10-28 二次修正（conv 9730 实证）：到 degrade 阈值**不再停**，
+                    #   而是「收紧续跑」—— 只做剩余关键步骤；只有到硬停线或真耗尽才停。
+                    #   原语义在 86% 就停，而当时还剩 14% ≈ 2~3 轮，任务差一步没做完。
                     try:
                         from core import config as _cfg_dr
                         _degrade_ratio = float(_cfg_dr.get(
                             "agent", "budget_degrade_ratio", 0.7) or 0.0)
+                        _hard_stop_ratio = float(_cfg_dr.get(
+                            "agent", "budget_hard_stop_ratio", 0.95) or 0.0)
                     except Exception:
                         _degrade_ratio = 0.0
+                        _hard_stop_ratio = 0.0
                     # ★ P0-1（2026-10-28）验收驱动：待办闸是评估器的**上位约束**。
                     #   语义（fallback / done / next_step 怎么算）**只在 autopilot
                     #   的 _apply_todo_gate 写一份** —— 两处同构接线共用它，
@@ -5559,31 +5696,35 @@ class StreamMixin:
                     #     （逐字节兼容 D-3，不影响 98.4% 只读问答）。
                     #   实测依据：msg 3985「建议下一步执行校验」被评估器判 done=true，
                     #   且只改提示词纠正不了（1/2）⇒ 必须有客观清单可查。
-                    _verdict, _tg = self._apply_todo_gate(_verdict, conversation_id)
-                    if not _tg.get("fallback"):
-                        try:
-                            yield {"type": "stage", "name": "待办验收闸",
-                                   "status": "done",
-                                   "detail": _tg.get("reason") or ""}
-                        except Exception:
-                            pass
+                    #   ⚠️ 2026-10-28：待办闸已**前移**到澄清转换之前（见上方同段注释）——
+                    #     那里已应用过一次，此处**不得再应用一遍**（重复应用会把
+                    #     澄清延后已经算好的 next_step 又覆盖回原值，语义互相打架）。
+                    #     下方 `_cont/_why` 直接用前面那份 `_verdict` / `_tg`。
+                    # ★ 2026-10-28（conv 9732）：**待办未做完时先别问人**已在前方处理。
                     _cont, _why = _ac.decide(
                         _verdict, used=_auto_continues, max_used=_ac_cfg["max"],
                         seen_steps=_ac_seen_steps, deadline_left_s=_deadline_left,
                         budget_left=_lg.budget_left(),
                         budget_ratio=_lg.budget_ratio(),
-                        degrade_ratio=_degrade_ratio)
+                        degrade_ratio=_degrade_ratio,
+                        hard_stop_ratio=_hard_stop_ratio)
                     # ★ P1-1（2026-10-28）降级收尾：把「待续清单」**写进答复**。
                     #   为什么必须写：budget 闸本来就会停，但停得"无声" ⇒
                     #   用户看到的是"突然断了"（实测 11/89 次）。
                     #   写清单后变成"分段推进"，用户知道还差什么、怎么继续。
+                    #   ⚠️ 2026-10-28 二次修正（conv 9730 实证）：**必须同时写进
+                    #      `_full_content`** —— 本轮末尾有 `if _full_content: llm_content =
+                    #      _full_content`，只往 `llm_content` 追加会被静默覆盖掉。
+                    #      那次真机：清单确实生成了，用户一个字也没看到（含"回复继续"指引）。
                     if (not _cont) and ("降级收尾" in str(_why)):
                         try:
                             _rem = (_verdict or {}).get("remaining") or []
                             _nt = _ac.build_degrade_notice(
-                                _rem, _lg.budget_ratio(), _degrade_ratio)
+                                _rem, _lg.budget_ratio(), _hard_stop_ratio or _degrade_ratio)
                             if _nt:
                                 llm_content = ((llm_content + _nt) if llm_content else _nt)
+                                _full_content = ((_full_content + _nt)
+                                                 if _full_content else _nt)
                         except Exception:
                             pass
                     # 评估发生过就透传（无论结论）——用户看得到「为什么停 / 为什么继续」
@@ -5598,9 +5739,19 @@ class StreamMixin:
                         # 续跑 = 崭新的一轮 ReAct：本轮答复 + 续跑指令并进 messages。
                         # ⚠️ assistant 消息必须带 content（部分 provider 拒绝空 content）。
                         messages.append({"role": "assistant", "content": llm_content})
-                        messages.append({"role": "user",
-                                         "content": _ac.continuation_prompt(
-                                             user_input, _verdict, _auto_continues)})
+                        _next_instr = _ac.continuation_prompt(
+                            user_input, _verdict, _auto_continues)
+                        # ★ 2026-10-28：预算吃紧时**追加收紧指令**（"收紧续跑"）。
+                        #   只说"继续"会让模型又去开新检索 ⇒ 一轮就把最后额度烧完；
+                        #   必须明确"只做剩余关键步骤、禁止新开查询"。
+                        if "收紧续跑" in str(_why):
+                            _next_instr += (
+                                "\n\n【预算吃紧】token 预算已用 %.0f%%，"
+                                "只做上面这一步（以及它的直接后继），"
+                                "**不要再新开工程检索/包树遍历/大范围查询**；"
+                                "若该步需要用户确认，就把确认点讲清楚并停下。"
+                                % (_lg.budget_ratio() * 100))
+                        messages.append({"role": "user", "content": _next_instr})
                         _ac_delta = f"（harness 持续工作）{_why}"
                         exec_notices.append(({"kind": "progress", "text": _ac_delta}))
                         # ★ type=progress（#10 拆型：系统提示独立事件类型，不再混入 reasoning）
@@ -5669,8 +5820,13 @@ class StreamMixin:
                     _harness_blocks = int(_hgate.get("blocks_used") or 0)
                     _notice = _hgate.get("notice") or ""
                     if _notice:
+                        # ⚠️ 2026-10-28：与降级清单同源的坑 —— 只写 `llm_content`
+                        #   会被下面的 `llm_content = _full_content` 覆盖掉。
+                        #   凡"收尾告知"必须两处都写（用户可见的那一份才是有效的那一份）。
                         llm_content = ((llm_content + "\n\n" + _notice)
                                        if llm_content else _notice)
+                        _full_content = ((_full_content + "\n\n" + _notice)
+                                         if _full_content else _notice)
                     try:
                         yield {"type": "stage", "name": "验收闸强制放行",
                                "status": "done",

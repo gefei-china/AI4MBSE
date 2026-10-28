@@ -195,18 +195,22 @@ def is_spinning(next_step: str, seen_steps) -> bool:
 
 def decide(verdict, *, used: int, max_used: int, seen_steps,
            deadline_left_s=None, budget_left: bool = True,
-           budget_ratio: float = 0.0, degrade_ratio: float = 0.7):
+           budget_ratio: float = 0.0, degrade_ratio: float = 0.7,
+           hard_stop_ratio: float = 0.95):
     """纯决策：这一轮工作结束后，要不要自主续跑。
 
     :returns: ``(continue: bool, reason: str)`` —— reason 供 stage/reasoning 透传。
     四道闸（全部对齐 AutoGPT boundedness 教训）：
       ① 次数闸 ``max_used``；② 墙钟闸 ``deadline_left_s``；
       ③ token 预算闸 ``budget_left``；④ 空转闸 ``is_spinning``。
-    ★ P1-1（2026-10-28）第五道闸：**预算降级** ——
-      ``budget_ratio >= degrade_ratio`` 时**不再新开续跑轮**，
-      改为"降级收尾"（写待续清单、告知还差什么）。措辞见 `build_degrade_notice()`。
-      依据：实测 89 次评估里 11 次（12%）是 token 耗尽**硬停**；
-      硬停会让用户觉得"突然断了"，主动降级则能"分段推进"。
+    ★ P1-1（2026-10-28）第五道闸：**预算收紧 / 降级收尾**——
+      · ``budget_ratio >= degrade_ratio`` 但预算**尚未耗尽** ⇒ **继续跑**，
+        但降级为"收尾模式"（只做剩余关键步骤，禁开新检索）；理由串含「收紧续跑」。
+      · ``budget_ratio >= hard_stop_ratio`` 或预算已耗尽 ⇒ 停，并写待续清单。
+      ⚠️ 第一版在 ``degrade_ratio`` 处**直接停**，真机（conv 9730）后果：
+        预算用到 86%（阈值 70%）就停，而当时**还剩 14% ≈ 2~3 轮**，
+        任务差一步（跑校验器）没做完 ⇒ 用户看到的就是"还是没有持续走下去"。
+        停 vs 续的分界应当是"还有没有额度"，而不是"用掉多少比例"。
       ⚠️ 降级优先级**低于**"任务已完成"（已完成就说完成，不必提预算）。
     任何输入异常/缺失都走 fail-safe ⇒ ``(False, ...)``。
     """
@@ -218,30 +222,27 @@ def decide(verdict, *, used: int, max_used: int, seen_steps,
         return False, f"自主续跑次数已达上限（{max_used} 次）"
     if deadline_left_s is not None and deadline_left_s <= 0:
         return False, "自主续跑墙钟时限已到"
-    # ★★ P1-1 顺序修正（2026-10-28，conv 9726 实证）：
-    #   降级闸**必须排在"预算硬停"之前**。原顺序是先 `if not budget_left: return`
-    #   ⇒ 预算一旦耗尽就直接返回"token 预算已耗尽，停止续跑"，
-    #   而"降级收尾"分支**永远进不去**（它的触发条件恰恰是"预算快用完/已用完"）。
-    #   真机后果（conv 9726 的 stage 原文）：`detail = "token 预算已耗尽，停止续跑"`
-    #   ⇒ `build_degrade_notice()` 一次没被调用 ⇒ 回答里**没有待续清单**
-    #   ⇒ 用户看到的正是"做到一半突然断了"（P1-1 要治的就是这个症状）。
-    #   判据：预算耗尽时给出的原因必须带「降级收尾」字样（门禁已覆盖该顺序）。
     try:
         _dr = float(degrade_ratio or 0.0)
+        _hr = float(hard_stop_ratio or 0.0)
         _br = float(budget_ratio or 0.0)
     except Exception:
-        _dr, _br = 0.0, 0.0
-    if _dr > 0 and _br >= _dr:
-        return False, ("token 预算已用 %.0f%%（阈值 %.0f%%）⇒ 降级收尾："
+        _dr, _hr, _br = 0.0, 0.0, 0.0
+    # ① 真·耗尽 / 触及硬停线 ⇒ 停（并写待续清单）
+    if (not budget_left) or (_hr > 0 and _br >= _hr):
+        return False, ("token 预算已用 %.0f%%（硬停线 %.0f%%）⇒ 降级收尾："
                        "不再新开续跑轮，如实列出待续事项"
-                       % (_br * 100, _dr * 100))
-    if not budget_left:
-        return False, "token 预算已耗尽，停止续跑"
+                       % (_br * 100, _hr * 100))
     ns = str(verdict.get("next_step") or "").strip()
     if not ns:
         return False, "评估结论缺少下一步描述，按不续跑处理"
     if is_spinning(ns, seen_steps):
         return False, "剩余工作与此前步骤相同，判定空转，停止续跑"
+    # ② 预算吃紧但还有额度 ⇒ **续跑**，只是收紧动作面
+    if _dr > 0 and _br >= _dr:
+        return True, ("token 预算已用 %.0f%%（阈值 %.0f%%）⇒ 收紧续跑："
+                      "只做剩余关键步骤，不再新开检索/大查询；下一步：%s"
+                      % (_br * 100, _dr * 100, ns[:120]))
     return True, f"任务未完成，自动继续：{ns}"
 
 
@@ -276,6 +277,22 @@ def continuation_prompt(user_input: str, verdict: dict, round_no: int) -> str:
     """续跑指令（注入 messages 的下一条 user 消息，驱动 ReAct 再转）。"""
     rem = verdict.get("remaining") or []
     rem_txt = "\n".join(f"- {x}" for x in rem) if rem else "（评估器未列明）"
+    # ★ 2026-10-28（conv 9733 实测）：**必须提醒结项**。
+    #   真机现场：清单建了 7 条全部对，校验也真跑了，但模型**一条都没标完成**
+    #   ⇒ 待办闸始终 7/7 未完成 ⇒ 闸门只能反复判"未完成"，
+    #   它并不知道模型其实已经在推进 —— 账实不符比不做清单更糟。
+    #   ⇒ 每次续跑都带一句"把刚做完的那条标掉"，把记账成本降到一次工具调用。
+    _todo_hint = ""
+    try:
+        from core import config as _cfg
+        if bool(_cfg.as_bool("agent", "todo_enabled", False)) and (rem or verdict.get("next_step")):
+            _todo_hint = (
+                "\n【结项提醒】如果你**刚完成了**清单里的某一条（有工具回执为证），"
+                "立刻调 `todo_write(action=update, id=…, status=\"completed\", "
+                "verify_result=\"<回执关键字段>\")` 把它标掉；开工的那条标 `in_progress`。"
+                "账实不符（做了没标）会让完成判定一直卡在「未完成」。")
+    except Exception:
+        _todo_hint = ""
     return (
         f"【自主续跑 · 第 {round_no} 次】系统完成度评估：你的请求尚未完成，现自动继续，无需用户确认。\n"
         f"【用户原始请求】{user_input or '（空）'}\n"
@@ -285,7 +302,48 @@ def continuation_prompt(user_input: str, verdict: dict, round_no: int) -> str:
         f"不要重复已完成的工作，不要复述上文，不要询问用户是否继续。"
         f"若确实遇到无法独自解决的问题（缺关键信息/需用户拍板/不可解错误），"
         f"调用 ask_user 工具向用户澄清，或说明阻塞原因后收尾。"
+        + _todo_hint
     )
+
+
+def defer_clarify(verdict, gate, *, n: int = 0, last_rem=None, max_defer: int = 2):
+    """**待办未做完时，先别问人** —— 把 needs_user 的提问延后到无可做项。
+
+    ★ 2026-10-28（conv 9732 实测）：评估器判 `needs_user`（"是否按当前方案校验后写入"），
+      系统立刻打回澄清卡片 ⇒ 用户被问一次，而**只读的校验一步都没做**。
+      这违反用户原话「完成校验后写入，写入前确认」：确认是**写入门**，
+      不该把校验也挡在门外。
+
+    :param gate: `todo_gate()` 的返回（含 done / remaining / next_step / fallback）
+    :param n:    已经延后过的次数
+    :param last_rem: 上次延后时的剩余项数（要求"确实在减少"才允许继续延后）
+    :returns: ``(verdict, note, n, last_rem)``
+              · 不延后 ⇒ 原样返回 `verdict`、note 为空、计数不变
+              · 延后   ⇒ 返回一个"未完成 + 用待办 next_step"的 verdict，note 说明原因
+    有界（否则会一直不问）：最多 `max_defer` 次，且剩余项数必须较上次减少。
+    """
+    try:
+        if not isinstance(gate, dict) or gate.get("fallback"):
+            return verdict, "", n, last_rem
+        if gate.get("done"):
+            return verdict, "", n, last_rem
+        rem = list(gate.get("remaining") or [])
+        if not (rem or gate.get("next_step")):
+            return verdict, "", n, last_rem
+        if int(n or 0) >= int(max_defer or 0):
+            return verdict, "", n, last_rem
+        cur = len(rem)
+        moving = (last_rem is None) or (cur < int(last_rem))
+        if not moving:
+            return verdict, "", n, last_rem
+        new_v = {"done": False,
+                 "next_step": str(gate.get("next_step") or ""),
+                 "remaining": rem}
+        note = ("待办未完成（%d 项）⇒ 先做完可做项，把需要用户拍板的问题"
+                "留到无可做项时再问" % cur)
+        return new_v, note, int(n or 0) + 1, cur
+    except Exception:
+        return verdict, "", n, last_rem
 
 
 def tools_brief(exec_tools, per_tool_cap: int = _EVAL_TOOL_RESULT_CAP,

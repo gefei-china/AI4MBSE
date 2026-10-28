@@ -44,17 +44,25 @@ def main():
                        budget_left=True, budget_ratio=0.5, degrade_ratio=0.7)
     check("A", "预算 50% < 阈值 70% ⇒ 正常续跑", c is True, why)
 
-    # A2 ★ 达阈值 ⇒ 不续跑 + reason 说明降级
+    # A2 ★ 达阈值但**预算未耗尽** ⇒ 收紧续跑
+    #   ⚠️ 2026-10-28 判据**反转**（原判据是"达 70% ⇒ 停止续跑"）：
+    #      真机 conv 9730 证明旧语义有害 —— 预算用到 86%（阈值 70%）就停，
+    #      而当时还剩 14% ≈ 2~3 轮，任务差一步（跑校验器）没做完，
+    #      用户原话「还是没有持续走下去」。停 vs 续的分界应是"还有没有额度"，
+    #      不是"用掉多少比例" ⇒ 改为收紧续跑，只有硬停线/真耗尽才停。
+    #      按纪律：判据**反转而非删除**（删掉即该维度不再受保护）。
     c, why = ac.decide(verdict_todo, used=0, max_used=3, seen_steps=[],
                        budget_left=True, budget_ratio=0.7, degrade_ratio=0.7)
-    check("A", "★预算达 70% ⇒ 停止续跑", c is False, why)
-    check("A", "★reason 含「降级收尾」", "降级收尾" in why, why)
+    check("A", "★预算达 70%（未耗尽）⇒ 收紧续跑", c is True, why)
+    check("A", "★reason 含「收紧续跑」", "收紧续跑" in why, why)
     check("A", "★reason 含实际占比", "70%" in why, why)
 
-    # A3 超过阈值同样停止
+    # A3 ★ 到硬停线 ⇒ 停 + 降级收尾（这才是"停"的位置）
     c, why = ac.decide(verdict_todo, used=0, max_used=3, seen_steps=[],
-                       budget_left=True, budget_ratio=0.95, degrade_ratio=0.7)
-    check("A", "预算 95% ⇒ 停止续跑", c is False, why)
+                       budget_left=True, budget_ratio=0.96, degrade_ratio=0.7,
+                       hard_stop_ratio=0.95)
+    check("A", "★预算到硬停线 96% ⇒ 停止续跑", c is False, why)
+    check("A", "★硬停时 reason 含「降级收尾」", "降级收尾" in why, why)
 
     # A4 ★ 优先级：任务已完成时先说完成，不提预算
     c, why = ac.decide({"done": True}, used=0, max_used=3, seen_steps=[],
@@ -67,10 +75,18 @@ def main():
                        budget_left=True)
     check("A", "★不传 budget_ratio ⇒ 行为不变（逐字节兼容）", c is True, why)
 
-    # A6 degrade_ratio=0 ⇒ 关闭降级
+    # A6 degrade_ratio=0 ⇒ 关闭**收紧**（但仍受硬停线约束）
+    #   ★ 2026-10-28 语义更新：degrade_ratio 现在只控制"收紧"，不控制"停"。
+    #     关闭收紧 ⇒ 0.99 时仍应普通续跑（因为硬停线 0.95 也必须显式传入才生效？
+    #     不 —— 硬停线默认 0.95，0.99 已越线）。故此处显式把硬停线抬到 1.01 以隔离变量，
+    #     证明"关掉收紧 = 不再提前收工"这一条独立成立。
+    c, why = ac.decide(verdict_todo, used=0, max_used=3, seen_steps=[],
+                       budget_left=True, budget_ratio=0.99, degrade_ratio=0.0,
+                       hard_stop_ratio=1.01)
+    check("A", "degrade_ratio=0 ⇒ 关闭收紧（可配置关闭）", c is True, why)
     c, why = ac.decide(verdict_todo, used=0, max_used=3, seen_steps=[],
                        budget_left=True, budget_ratio=0.99, degrade_ratio=0.0)
-    check("A", "degrade_ratio=0 ⇒ 关闭降级（可配置关闭）", c is True, why)
+    check("A", "★关掉收紧也挡不住硬停线（安全网仍在）", c is False, why)
 
     # A7 待续清单内容
     nt = ac.build_degrade_notice(["校验包 P-001", "导出报告"], 0.72, 0.7)
@@ -187,15 +203,23 @@ def main():
              '"budget_degrade_ratio", 0.7)' in ex))
 
     # ══════════════ D. 变异自证 ══════════════
-    # D1 去掉预算降级 ⇒ A2 判据翻红
+    # D1 去掉预算收紧/硬停 ⇒ A2/B3 判据翻红
+    #   ★ 2026-10-28：判据随语义一起更新。现在要证的是**两条**：
+    #     ① 0.75（未到硬停线）⇒ 收紧续跑；
+    #     ② 0.96（到硬停线）⇒ 降级收尾。
+    #   一个"完全不看预算"的变异实现应该两条都做不到。
     def c_degrade(dec) -> bool:
-        c2, w = dec(verdict_todo, used=0, max_used=3, seen_steps=[],
-                    budget_left=True, budget_ratio=0.75, degrade_ratio=0.7)
-        return (c2 is False) and ("降级收尾" in w)
+        c2, w2 = dec(verdict_todo, used=0, max_used=3, seen_steps=[],
+                     budget_left=True, budget_ratio=0.75,
+                     degrade_ratio=0.7, hard_stop_ratio=0.95)
+        c3, w3 = dec(verdict_todo, used=0, max_used=3, seen_steps=[],
+                     budget_left=True, budget_ratio=0.96,
+                     degrade_ratio=0.7, hard_stop_ratio=0.95)
+        return (c2 is True and "收紧续跑" in w2) and (c3 is False and "降级收尾" in w3)
 
     def bad_decide(verdict, *, used, max_used, seen_steps,
                    deadline_left_s=None, budget_left=True,
-                   budget_ratio=0.0, degrade_ratio=0.7):
+                   budget_ratio=0.0, degrade_ratio=0.7, hard_stop_ratio=0.95):
         if not verdict or verdict.get("done"):
             return False, "done"
         if used >= max_used:
@@ -204,7 +228,7 @@ def main():
             return False, "耗尽"
         return True, "继续"
 
-    check("D", "★变异自证：去掉预算降级 ⇒ A2 判据翻红",
+    check("D", "★变异自证：去掉预算收紧与硬停 ⇒ 判据翻红",
           c_degrade(ac.decide) and not c_degrade(bad_decide),
           f"真实现={c_degrade(ac.decide)} 变异={c_degrade(bad_decide)}")
 

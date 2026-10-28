@@ -880,6 +880,17 @@ class ToolMixin:
         _auth = getattr(self, "_hil_authorized_conf_id", None)
         if _auth:
             return None
+        # ★ 2026-10-28（conv 9733 实测）：**确定性本地修复工具豁免写前确认**。
+        #   真机现场：validate 报 12 条 ERROR（block）⇒ 模型调 `sysml_v2_autofix` 修 ⇒
+        #   被判"写操作" ⇒ 弹确认单 ⇒ ReAct 中断 ⇒ 这一轮以
+        #   「⏸ 写操作需要人工确认后才能执行」收尾 —— **修复闭环被一次人工点击卡死**，
+        #   而该工具 `sysml_autofix_tools.py` 里 `INSERT/UPDATE/commit` 出现次数为 **0**，
+        #   只对传入的 code 字符串做规则级改写（无任何持久化/外部副作用）。
+        #   ⇒ 与「入库/删改平台数据」的写操作不是一类，不该共用同一道确认闸。
+        #   ⚠️ 豁免范围严格等于 `_REPAIR_WRITE_EXEMPT`（当前仅 sysml_v2_autofix），
+        #      绝不扩大：真正的平台写入（create/import/delete）仍必须人工确认。
+        if str(name) in _REPAIR_WRITE_EXEMPT:
+            return None
         try:
             from hil_service import classify_action as _ca
             _cls = _ca(name, self._tool_side_effect(name))

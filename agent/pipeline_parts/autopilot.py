@@ -53,8 +53,7 @@ class AutoPilotMixin:
                                    _intent=CHAT_TASK_EVAL, _model_params=model_params)
             if guard is not None:
                 try:
-                    from agent.loop_guard import tokens_of as _tok_of
-                    guard.add_tokens(_tok_of(resp))
+                    guard.add_llm(resp)
                 except Exception:
                     pass
             text = (((resp or {}).get("choices") or [{}])[0]

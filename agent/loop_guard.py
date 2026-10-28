@@ -34,8 +34,10 @@ import threading
 import time
 
 __all__ = ["DEFAULT_TOKEN_BUDGET", "DEFAULT_TOOL_TIMEOUT_S",
-           "normalize_args", "call_key", "budget_exhausted", "dedup_hit",
-           "call_tool_guarded", "LoopGuard"]
+           "normalize_args", "call_key", "strict_call_key", "semantic_args",
+           "DEDUP_IGNORE_KEYS",
+           "budget_exhausted", "dedup_hit", "call_tool_guarded", "LoopGuard",
+           "tokens_of", "tokens_total_of", "charged_tokens", "CACHE_HIT_WEIGHT"]
 
 # ── 默认阈值（与编排侧口径对齐，取"能挡住失控、又不误伤正常"）──
 # token：编排侧 _ORCH_TOKEN_BUDGET=200000 是**整个 run**（6 个任务）；
@@ -173,19 +175,61 @@ def call_tool_guarded(exec_fn, name: str, args: dict, *,
     return r if isinstance(r, dict) else {"ok": True, "result": str(r)}
 
 
-def tokens_of(resp) -> int:
-    """从一个 `llm_client.chat()` 响应里取 token 数（**唯一真源是 `_meta.token_count`**）。
+def tokens_total_of(resp) -> int:
+    """取**原始** token 总数（`_meta.token_count` = prompt + completion）。
 
-    为什么不用 `usage.prompt_tokens` 直接相加：
-    - Mock / 无 usage 时 `_record_usage` 会按 `len(输出)//2` **估算**并回填 `_meta.token_count`，
-      直接读 usage 会得到 0 ⇒ 预算闸在降级路径上完全失效（而降级恰恰是最该省钱的场景）；
-    - `_meta.token_count` 是 Task7 记账的同一口径，编排侧 `run_tokens` 也用它 ⇒ 两侧同源。
+    仅供报表/排障展示"这轮吞吐了多少 token"。**不要**拿它判预算 —— 见下。
     """
     try:
         meta = (resp or {}).get("_meta") or {}
         return int(meta.get("token_count") or 0)
     except Exception:
         return 0
+
+
+#: ★ 2026-10-28：**缓存命中的计费权重**（默认 0.1，对齐 DeepSeek 命中价 ≈ 1/10）。
+#: 为什么预算要按"计费等效 token"而不是原始 token：
+#:   conv 9730 实测 —— 270,433 prompt 中 **249,344（92%）是缓存命中**，
+#:   真实新增只有 21,089 miss + 10,600 输出。而预算闸把每轮重发的 16.7k 固定前缀
+#:   按全价累计 ⇒ 判"已用 86%" ⇒ 在离终点两轮处降级收尾。
+#:   ⇒ 预算本意是**控成本**，那就必须按成本计价的口径记，而不是按"重复读了几遍前缀"。
+#: 该权重可配（`agent.cache_hit_weight`），置 1.0 即退回"按原始 token 计"的旧口径。
+CACHE_HIT_WEIGHT = 0.1
+
+
+def charged_tokens(resp, cache_hit_weight: float | None = None) -> int:
+    """一次 LLM 调用**应计入预算**的 token 数（计费等效口径）。
+
+    组成：`cache_miss + completion + cache_hit × 权重`（未标注部分按全价兜底，绝不丢）。
+    无缓存字段（Mock / provider 不返回）⇒ 退回原始 `token_count`，零行为漂移。
+    """
+    try:
+        meta = (resp or {}).get("_meta") or {}
+        total = int(meta.get("token_count") or 0)
+        hit = int(meta.get("cache_hit_tokens") or 0)
+        miss = int(meta.get("cache_miss_tokens") or 0)
+        if not (hit or miss):
+            return total
+        ct = int(meta.get("completion_tokens") or 0)
+        w = CACHE_HIT_WEIGHT if cache_hit_weight is None else float(cache_hit_weight)
+        rest = max(total - hit - miss - ct, 0)     # 未标注部分按全价
+        return int(miss + rest + ct + hit * max(w, 0.0))
+    except Exception:
+        return 0
+
+
+def tokens_of(resp) -> int:
+    """**预算记账唯一入口**：返回应计入预算的 token（= `charged_tokens`）。
+
+    ★ 2026-10-28 语义变更（保留函数名，避免 7 处调用点各改一遍 → 必然漏一处）：
+      原实现直接返 `_meta.token_count`（含 92% 的缓存命中），导致"重复读前缀"
+      被按全价累计、任务在预算看似耗尽时仍有大量剩余额度。
+      现在改为**计费等效 token**；要原始吞吐请看 `tokens_total_of`。
+    为什么沿用同一个函数名而不是新增：`tokens_of` 在全仓**只**服务于
+    `LoopGuard.add_tokens`（预算闸），语义唯一，改这里即全路径生效。
+    """
+    return charged_tokens(resp)
+
 
 
 class LoopGuard:
@@ -206,6 +250,8 @@ class LoopGuard:
         self.retry_timeout_s = (float(retry_timeout_s) or None) if retry_timeout_s else None
         self.tool_retry_count = 0        # 实际发生的重试总次数（可观测）
         self.tokens_used = 0
+        #: ★ 2026-10-28：**原始吞吐**（含缓存命中，仅供展示/排障，不参与预算判定）。
+        self.tokens_total_raw = 0
         self.calls: list = []              # [(name, args, ok, elapsed_ms)]
         self._seen: dict = {}              # call_key -> 次数（**仅非弱结果计入**）
         self._results: dict = {}# call_key -> 最近一次结果文本（短路时回喂）
@@ -286,11 +332,37 @@ class LoopGuard:
             self._seen[k] = int(self._seen[k]) - 1
 
     # ── 预算 ──
-    def add_tokens(self, n: int) -> None:
+    def add_tokens(self, n: int, *, raw: int | None = None) -> None:
+        """累计预算消耗（`n` = 计费等效 token，见 `tokens_of`）。
+
+        `raw` 可选传入**原始吞吐**（含缓存命中），只用于展示与"两条口径对拍"。
+        """
         try:
             self.tokens_used += int(n or 0)
         except Exception:
             pass
+        if raw is not None:
+            try:
+                self.tokens_total_raw += int(raw or 0)
+            except Exception:
+                pass
+
+    def add_llm(self, resp) -> None:
+        """记录一次 LLM 调用：预算口径 + 原始吞吐**一次算清**。
+
+        ★ 单一入口，替代 7 处 `add_tokens(tokens_of(resp))` 的手工拼装：
+          两笔账（计费等效 / 原始吞吐）若各写一份，迟早只有一笔被更新
+          （本仓"同一语义多处各写一份必然错位"的既有教训）。
+        """
+        w = CACHE_HIT_WEIGHT
+        try:
+            from core import config as _cfg
+            _w = _cfg.get("agent", "cache_hit_weight", None)
+            if _w is not None and str(_w).strip() != "":
+                w = float(_w)
+        except Exception:
+            pass
+        self.add_tokens(charged_tokens(resp, w), raw=tokens_total_of(resp))
 
     def budget_left(self) -> bool:
         """预算是否仍可用。`stop_reason` 会被置为 `token_budget`（供回显与测试）。"""
@@ -399,6 +471,10 @@ class LoopGuard:
         return {"calls": len(self.calls),
                 "distinct": len({call_key(n, a) for n, a, _, _ in self.calls}),
                 "tokens_used": self.tokens_used, "token_budget": self.token_budget,
+                # ★ 2026-10-28：同时给出**原始吞吐**（用户看"花了多少"）与
+                #   `tokens_used`（预算口径 = 计费等效）。两者差一个数量级时，
+                #   说明绝大部分是缓存命中的固定前缀 —— 这正是"预算误判"的证据。
+                "tokens_total_raw": self.tokens_total_raw,
                 "dup_short_circuits": self.dup_short_circuits, "timeouts": self.timeouts,
                 "tool_retries": self.tool_retries, "tool_retry_count": self.tool_retry_count,
                 "stop_reason": self.stop_reason}

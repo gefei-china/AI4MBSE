@@ -40,16 +40,21 @@ _TODO_WRITE_TOOL = {
         "name": "todo_write",
         "description": (
             "管理本会话的**待办清单**（计划外化）。当任务是**多步**（≥3 步）时，"
-            "先用它建清单，再逐步推进并结项。\n"
+            "先用它**一次性列全清单**，再逐步推进并结项。\n"
             "action 三选一：\n"
-            "· create —— 建一条待办（subject 必填；verify 写**怎么验收**，如"
-            "『调 sysmlv2_check 校验包 P-001』；不可自动验收的写『人工确认』）\n"
+            "· create —— 建待办。**优先用 `items` 批量传**"
+            "（[{subject, verify}, …]，一次把 4~8 条全列出来）；"
+            "只有补建单条时才用 subject+verify。"
+            "verify 写**怎么验收**，如『调 sysmlv2_check 校验包 P-001』；不可自动验收的写『人工确认』\n"
             "· update —— 更新状态。**置 completed 必须同时给 verify_result（验收回执）**"
             "（如『PASS: 0 errors』），否则会被拒绝；置 blocked 必须给 blocked_by 说明卡在哪\n"
             "· list —— 读当前清单（含每条的状态与验收回执）\n"
             "⚠️ 清单不是可选的：完成判定以**待办全部通过验收**为准，"
             "「建议下一步做 X」不算完成 —— 那就建一条 todo 并把它做完。\n"
-            "⚠️ 同时至多一条 in_progress。"
+            "⚠️ 同时至多一条 in_progress。\n"
+            "⚠️ 2026-10-28 实测教训：只建**一条**（只列第一步）等于没建 —— "
+            "闸门看不到后续步骤，收尾时无法判断「还差什么」。"
+            "**收到多步任务的第一件事就是 items 批量建全表**。"
         ),
         "parameters": {
             "type": "object",
@@ -59,17 +64,34 @@ _TODO_WRITE_TOOL = {
                     "enum": ["create", "update", "list"],
                     "description": "操作类型：create 建待办 / update 改状态 / list 读清单",
                 },
+                "items": {
+                    "type": "array",
+                    "description": "（create 推荐）批量建待办，一次列全所有步骤。每项 {subject, verify}",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "subject": {"type": "string",
+                                        "description": "待办标题，具体到对象与动作"},
+                            "verify": {"type": "string",
+                                       "description": "验收方式（可执行描述），必填"},
+                            "seq": {"type": "integer",
+                                    "description": "（可选）顺序号，从 1 开始"},
+                            "note": {"type": "string", "description": "（可选）备注"},
+                        },
+                        "required": ["subject", "verify"],
+                    },
+                },
                 "id": {
                     "type": "integer",
                     "description": "（update 必填）要更新的待办 id（list 的返回里有）",
                 },
                 "subject": {
                     "type": "string",
-                    "description": "（create 必填）待办标题，具体到对象（如『校验包 P-001 的 SysML v2 语法』）",
+                    "description": "（create 单条时必填）待办标题，具体到对象（如『校验包 P-001 的 SysML v2 语法』）",
                 },
                 "verify": {
                     "type": "string",
-                    "description": "（create 必填）验收方式（可执行描述）。例：『调 sysmlv2_check 校验 P-001』；不可自动验收写『人工确认』",
+                    "description": "（create 单条时必填）验收方式（可执行描述）。例：『调 sysmlv2_check 校验 P-001』；不可自动验收写『人工确认』",
                 },
                 "status": {
                     "type": "string",
@@ -239,6 +261,40 @@ def handle_todo_write(arguments: dict, conversation_id: int, conn=None) -> dict:
                     "todos": rows}
 
         if action == "create":
+            # ★ 2026-10-28（conv 9732 实测）：支持 `items` **批量建**。
+            #   真机现象：模型只建了 1 条（"定位工程三元组"）就继续干活，
+            #   清单里永远没有"校验""写入"两条 ⇒ 收尾时闸门看不出还差什么。
+            #   根因是旧 schema 只能逐条 create —— 建全表要调 4~8 次工具，
+            #   模型自然偷懒。批量形态把这一步降到 1 次调用。
+            _items = a.get("items")
+            if isinstance(_items, list) and _items:
+                _made, _errs = [], []
+                for _i, _it in enumerate(_items, 1):
+                    if not isinstance(_it, dict):
+                        _errs.append("第 %d 项不是对象" % _i)
+                        continue
+                    _r = upsert_todo(c, conversation_id,
+                                     subject=_it.get("subject"),
+                                     verify=_it.get("verify"),
+                                     seq=_it.get("seq") or _i,
+                                     note=_it.get("note"))
+                    if _r.get("ok"):
+                        _made.append(_r)
+                    else:
+                        _errs.append("第 %d 项：%s" % (_i, _r.get("result")))
+                if not _made:
+                    return {"ok": False,
+                            "result": "todo_write create（批量）全部失败：" + "；".join(_errs)}
+                _lines = ["已建 %d 条待办（清单如下，后续用 update 逐条结项）：" % len(_made)]
+                for _r in _made:
+                    _lines.append("  #%d %s" % (_r["id"], _r["result"]))
+                if _errs:
+                    _lines.append("⚠️ 有 %d 项未建成：%s" % (len(_errs), "；".join(_errs)))
+                _lines.append("下一步：挑第一条置 in_progress 并开始做；"
+                              "**每条完成后必须带 verify_result 才能置 completed**。")
+                return {"ok": True, "result": "\n".join(_lines),
+                        "ids": [_r["id"] for _r in _made],
+                        "todos": list_todos(c, conversation_id)}
             return upsert_todo(c, conversation_id,
                                subject=a.get("subject"), verify=a.get("verify"),
                                seq=a.get("seq"), note=a.get("note"))

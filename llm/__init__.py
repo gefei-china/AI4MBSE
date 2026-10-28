@@ -369,6 +369,16 @@ class LLMClient:
             _meta = resp.get("_meta")
             if isinstance(_meta, dict):
                 _meta["token_count"] = pt + ct
+                # ★ 2026-10-28（conv 9730 实证）：把**缓存命中/未命中/输出**三笔分开回填。
+                #   为什么必须分开：预算闸原先只拿到 `token_count = pt + ct`，
+                #   于是"每轮重发那 16.7k 固定前缀"被**按全价重复计入**。
+                #   实测该会话 270,433 prompt 里 **249,344（92%）是缓存命中**
+                #   （真实新增只有 21,089 miss + 10,600 输出）⇒ 预算看到 280,049 撞 300k
+                #   而"实际花掉的新信息量"只有 3.2 万 ⇒ 一个 15 步任务在 86% 处被判超预算、
+                #   停在离终点两轮的地方。记账口径错，判定就必然错。
+                _meta["cache_hit_tokens"] = pch
+                _meta["cache_miss_tokens"] = pcm
+                _meta["completion_tokens"] = ct
             # P1-1c：重试/回退观测（值由各调用路径写入 _meta；Mock/旧路径缺失 → 全 0，零行为漂移）
             try:
                 _rc = int((_meta or {}).get("retry_count") or 0)

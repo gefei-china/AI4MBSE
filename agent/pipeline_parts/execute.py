@@ -539,7 +539,7 @@ class ExecuteMixin:
             # 2026-10-04：接入统一护栏（与编排路径同源，见 agent/loop_guard.py）。
             # 原先这条路径只有轮次上限/token 上限/重复检测/工具超时，
             # 而编排路径有前三者 —— 同一套 ReAct 语义的两处实现护栏不对称。
-            from agent.loop_guard import LoopGuard, tokens_of as _tokof
+            from agent.loop_guard import LoopGuard
             # P0-①/P0-②（2026-10-07）协议护栏，与 stream.py **同源**。
             from agent import loop_protocol as _lproto
             _guard = LoopGuard(
@@ -740,11 +740,11 @@ class ExecuteMixin:
                                                       tools=None, _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
                         msg = llm_response["choices"][0]["message"]
                         llm_content = msg.get("content") or ""
-                        _guard.add_tokens(_tokof(llm_response))
+                        _guard.add_llm(llm_response)
                         break
                     llm_response = llm_client.chat(messages, provider_id=effective_provider,
                                                    tools=tools_def or None, _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
-                    _guard.add_tokens(_tokof(llm_response))   # 2026-10-04：按累计量判预算（见 loop_guard 注释）
+                    _guard.add_llm(llm_response)   # 2026-10-04：按累计量判预算（见 loop_guard 注释）
                     msg = llm_response["choices"][0]["message"]
                     if msg.get("content"):
                         llm_content = msg["content"]
@@ -797,7 +797,7 @@ class ExecuteMixin:
                             _repair_tools = None
                         _resp = llm_client.chat(_fm, provider_id=effective_provider,
                                                 tools=_repair_tools, _intent=CHAT_TASK_REPAIR, _model_params=_agent_mp)
-                        _guard.add_tokens(_tokof(_resp))
+                        _guard.add_llm(_resp)
                         llm_content = _resp["choices"][0]["message"].get("content") or llm_content
                     except Exception:
                         # 收尾失败不得让整个请求失败（至少已有工具结果可展示）
@@ -839,14 +839,18 @@ class ExecuteMixin:
                         provider_id=effective_provider, agent_name=agent_def.name,
                         model_params=_agent_mp, guard=_guard)
                     _deadline_left = (_ac_deadline - time.time()) if _ac_deadline else None
-                    # ★ P1-1（2026-10-28）预算降级阈值（配置化，默认 0.7）。
-                    #   到阈值就主动收尾并列出待续事项，而不是等耗尽后硬停。
+                    # ★ P1-1（2026-10-28）预算降级阈值（配置化，默认 0.7）+ 硬停线（0.95）。
+                    #   ★ 二次修正（conv 9730）：到 degrade 阈值**不再停** ⇒ 收紧续跑；
+                    #   只有到硬停线或真耗尽才停。语义与 stream.py **完全同构**。
                     try:
                         from core import config as _cfg_dr
                         _degrade_ratio = float(_cfg_dr.get(
                             "agent", "budget_degrade_ratio", 0.7) or 0.0)
+                        _hard_stop_ratio = float(_cfg_dr.get(
+                            "agent", "budget_hard_stop_ratio", 0.95) or 0.0)
                     except Exception:
                         _degrade_ratio = 0.0
+                        _hard_stop_ratio = 0.0
                     # ★ P0-1（2026-10-28）验收驱动：与 stream.py **同构**接线。
                     #   语义只在 autopilot._apply_todo_gate 写一份 —— 两处共用，
                     #   绝不各写一份（各写一份必然错位）。
@@ -857,13 +861,15 @@ class ExecuteMixin:
                         seen_steps=_ac_seen_steps, deadline_left_s=_deadline_left,
                         budget_left=_guard.budget_left(),
                         budget_ratio=_guard.budget_ratio(),
-                        degrade_ratio=_degrade_ratio)
+                        degrade_ratio=_degrade_ratio,
+                        hard_stop_ratio=_hard_stop_ratio)
                     # ★ P1-1（2026-10-28）降级收尾：与 stream.py 同构
                     if (not _cont) and ("降级收尾" in str(_why)):
                         try:
                             _rem = (_verdict or {}).get("remaining") or []
                             _nt = _ac.build_degrade_notice(
-                                _rem, _guard.budget_ratio(), _degrade_ratio)
+                                _rem, _guard.budget_ratio(),
+                                _hard_stop_ratio or _degrade_ratio)
                             if _nt:
                                 llm_content = ((llm_content + _nt) if llm_content else _nt)
                         except Exception:
@@ -874,13 +880,20 @@ class ExecuteMixin:
                         # 续跑 = 崭新一轮 ReAct：本轮答复 + 续跑指令并进 messages。
                         # ⚠️ assistant 消息必须带 content（部分 provider 拒绝空 content）。
                         messages.append({"role": "assistant", "content": llm_content})
-                        messages.append({"role": "user",
-                                         "content": _ac.continuation_prompt(
-                                             user_input, _verdict, _auto_continues)})
+                        _next_instr = _ac.continuation_prompt(
+                            user_input, _verdict, _auto_continues)
+                        if "收紧续跑" in str(_why):
+                            _next_instr += (
+                                "\n\n【预算吃紧】token 预算已用 %.0f%%，"
+                                "只做上面这一步（以及它的直接后继），"
+                                "**不要再新开工程检索/包树遍历/大范围查询**；"
+                                "若该步需要用户确认，就把确认点讲清楚并停下。"
+                                % (_guard.budget_ratio() * 100))
+                        messages.append({"role": "user", "content": _next_instr})
                         llm_response = llm_client.chat(messages, provider_id=effective_provider,
                                                        tools=tools_def or None,
                                                        _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
-                        _guard.add_tokens(_tokof(llm_response))
+                        _guard.add_llm(llm_response)
                         msg = llm_response["choices"][0]["message"]
                         llm_content = msg.get("content") or ""
                         continue     # ← 外层循环顶：复位后开启下一轮 ReAct
@@ -911,7 +924,7 @@ class ExecuteMixin:
                     llm_response = llm_client.chat(messages, provider_id=effective_provider,
                                                    tools=tools_def or None,
                                                    _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
-                    _guard.add_tokens(_tokof(llm_response))
+                    _guard.add_llm(llm_response)
                     msg = llm_response["choices"][0]["message"]
                     llm_content = msg.get("content") or ""
                     continue     # ← 外层循环顶：复位后开启下一轮 ReAct

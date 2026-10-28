@@ -600,7 +600,8 @@ class SessionMixin:
                 return "action_kw:" + str(k)
         return ""
 
-    def _persist_hil_confirm(self, conversation_id, intent, confirm_req) -> int:
+    def _persist_hil_confirm(self, conversation_id, intent, confirm_req,
+                             content="", card_data=None) -> int:
         """★ 2026-10-28（写前确认 HITL）：落一条"等待人工确认"的消息（时间线痕迹）。
 
         ## 为什么状态源仍然是 `hil_confirmations` 而不是 `conversations.pending_clarify`
@@ -611,27 +612,49 @@ class SessionMixin:
           （刷新页面后前端可从 `GET /api/studio/hil-confirmations` 重建卡片。）
 
         返回消息 id（供 done 事件携带，前端据此定位消息容器）。失败返回 0。
+
+        ★ 2026-10-28（conv 9733 实测）：**不能再只存一句占位语**。
+          那次真机：模型已经跑完校验、生成了完整时序图代码，最后一步写入被判"待确认"，
+          而这里把整轮内容压成 16 个字的「⏸ 写操作需要人工确认后才能执行」，
+          `exec`（工具回执/思考/进度）直接为空 ⇒ 刷新后**这一轮做过什么全丢了**，
+          用户只看到一句"待确认"，无从判断该不该批准。
+          ⇒ 新增 `content` / `card_data` 两个可选入参：
+            · `content` 为空时才回落到占位语（向后兼容既有调用）；
+            · `card_data` 带上本轮 `exec`（工具/思考/进度）+ `confirm`，供历史还原。
         """
         _msg_id = 0
         try:
             from database import db_conn
+            _card = {"confirm": confirm_req or {}}
+            if isinstance(card_data, dict):
+                _card.update(card_data)
+            _content = str(content or "").strip() or "⏸ 写操作需要人工确认后才能执行"
             with db_conn() as _cc:
                 cur = _cc.execute(
                     "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) "
                     "VALUES (?,?,?,?,?)",
-                    (conversation_id, "assistant",
-                     "⏸ 写操作需要人工确认后才能执行",
-                     "hil_confirm", json.dumps({"confirm": confirm_req or {}},
-                                               ensure_ascii=False)))
+                    (conversation_id, "assistant", _content, "hil_confirm",
+                     json.dumps(_card, ensure_ascii=False)))
                 _msg_id = cur.lastrowid or 0
         except Exception:
             pass
         return _msg_id
 
     def _persist_clarify(self, conversation_id, user_input, intent, branch, attachments,
-                         forced_intent, skill_name, team, questions) -> int:
+                         forced_intent, skill_name, team, questions,
+                         content="", card_data=None) -> int:
         """落库澄清挂起状态（conversations.pending_clarify）+ 澄清卡消息（msg_type='clarify'）。
-        返回澄清消息 id（供 done 事件携带，前端据此定位重建后的消息容器）。失败返回 0。"""
+        返回消息 id（供 done 事件携带，前端据此定位重建后的消息容器）。失败返回 0。
+
+        ★ 2026-10-28（conv 9735 实测）：与 `_persist_hil_confirm` **同一个坑** ——
+          此前只写死「需要您确认建模信息后继续」（12 个字），
+          而那一轮已经跑完定位、生成了时序图代码、`sysml_v2_validate` 返回 **0 错误**。
+          结果：用户看到的是一条"请确认"，**没有代码、没有校验回执**，
+          却要在 4 个写入选项里挑一个 —— 等于盲确认。
+          用户原话是「写入前需要我确认」，确认的前提是**能看到要写什么**。
+          ⇒ 新增 `content` / `card_data`：调用方把本轮正文与 `exec`（工具回执/
+          思考/闸门）传进来，历史里就能还原"做了什么、要确认什么"。
+        """
         _msg_id = 0
         try:
             _pending = {
@@ -641,6 +664,10 @@ class SessionMixin:
                             "skill_name": skill_name or "", "team": team or ""},
             }
             from database import db_conn
+            _card = {"questions": questions}
+            if isinstance(card_data, dict):
+                _card.update(card_data)
+            _content = str(content or "").strip() or "需要您确认建模信息后继续"
             with db_conn() as _cc:
                 _cc.execute(
                     "UPDATE conversations SET pending_clarify=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -648,8 +675,8 @@ class SessionMixin:
                 cur = _cc.execute(
                     "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) "
                     "VALUES (?,?,?,?,?)",
-                    (conversation_id, "assistant", "需要您确认建模信息后继续",
-                     "clarify", json.dumps({"questions": questions}, ensure_ascii=False)))
+                    (conversation_id, "assistant", _content,
+                     "clarify", json.dumps(_card, ensure_ascii=False)))
                 _msg_id = cur.lastrowid or 0
         except Exception:
             pass
