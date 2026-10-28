@@ -55,6 +55,13 @@ class MemoryMixin:
             try:
                 agent_id = intent or "chat"
                 query = f"{user_input} {intent}"
+                # P0#1 显式读触发：寒暄/噪音类 query 跳过整块记忆注入（省检索开销 + 避免噪音入 prompt）
+                try:
+                    from agent.memory_recall import should_recall_memory as _should_recall
+                    if not _should_recall(intent or "chat", query):
+                        return ""
+                except Exception:
+                    pass
                 if scopes is None:
                     scopes = self._memory_scopes(intent, user) if getattr(self, "_mem_ctx", None) else []
                 _be = get_memory_backend()
@@ -379,6 +386,13 @@ class MemoryMixin:
         try:
             if not content or not content.strip():
                 return
+            # P0#1 显式写触发：被显式排除的 intent 不沉淀（避免污染记忆库；内容级判定仍归 maybe_deposit 三重门）
+            try:
+                from agent.memory_recall import should_deposit_memory as _should_deposit
+                if not _should_deposit(intent or "chat", content):
+                    return
+            except Exception:
+                pass
             if getattr(self, "_mem_deposit_count", 0) >= 2:
                 return
             from memory_backend import get_memory_backend

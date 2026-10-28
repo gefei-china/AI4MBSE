@@ -703,6 +703,27 @@ DEFAULT_CONFIG = {
         #  真实阈值需等生产出现第一个真实互斥对后再标定（届时开开关并观察）。
         #  现在取 0.5 的理由：宁可多报候选（互斥词已是很强的过滤器）也不漏。
         "conflict_detect_sim_high": 0.5,  # 同键候选的相似度下限（**未在真向量口径下标定**，见上）
+        # ── P0#1 显式记忆触发器（2026-10-28 落地）──
+        # 把"是否查/写记忆"从隐式（intent 标签 + 提取门限）升级为任务级显式判断。
+        # 全部默认**放行**（零行为漂移）；仅对明确该跳过的才跳（寒暄跳过召回、排除 intent 跳过写回）。
+        "recall_trigger_enabled": True,   # 读触发总开关（关=每轮都召回，回退旧行为）
+        "deposit_trigger_enabled": True,  # 写触发总开关（关=每会话照常尝试沉淀）
+        "recall_skip_intents": "",        # 永不召回记忆的 intent 列表（逗号分隔，默认空）
+        "deposit_skip_intents": "",       # 永不沉淀记忆的 intent 列表（逗号分隔，默认空）
+        # ── P0#2 融合排序五维（2026-10-28）──
+        # ⚠️ 生产库实测（mbse.db，agent_memory 252 行）后**如实标注**，勿再凭直觉填：
+        #   ① `relevance` 是**死列**：252/252 全为默认值 1.0，`deposit` 的
+        #      `extra.get('relevance',1.0)` **从未有调用方传过非默认值**。
+        #      ⇒ 它现在只是中性因子（乘 1.0），不构成真实维度；待有真实赋值来源后自然生效。
+        #   ② `source` 的真实取值**只有 3 种**（不是猜测的 agent/push/flow）：
+        #      llm_agent=186 / reflow=56 / rule_agent=10。
+        #   ③ 为何**默认空（不配 credibility）**：试过用 access_count 反推来源可信度，
+        #      结果被数据否掉 —— rule_agent 平均访问 239 次最高，但抽查发现它装着
+        #      「# MBSE 任务汇总最终报告」这类长报告壳（正是文档主体污染）。
+        #      **访问高 ≠ 可信，反而可能是长文本 bigram 更容易撞 query 在吸流量**。
+        #      ⇒ 无可靠依据时不配，避免引入未标定偏差。
+        #   若要配，形如 "llm_agent=1.0,reflow=0.95,rule_agent=0.85"（**须先有标定依据**）。
+        "source_credibility": "",
     },
     # ── 实体归一消歧（P1-1，2026-10-11）──
     # ⚠️ 此前 entity_resolver.py 把 0.92 / 0.62 写成函数体内的**裸字面量**，既不可配也**无法关闭自动合并**；
@@ -1786,6 +1807,11 @@ CONFIG_SCHEMA = {
         "forget_by_activation": {"type": "bool", "desc": "启用按 activation 衰减阈值遗忘（遗留通道，本工程实测恒定不触发，默认关）"},
         "conflict_detect_enabled": {"type": "bool", "desc": "冲突消解总开关：检出同键互斥记忆后打 superseded_by 标记（仅标记不删；默认关）"},
         "conflict_detect_sim_high": {"type": "float", "desc": "冲突检测的同键候选相似度下限（互斥事实字面高度重叠，实测 0.73）"},
+        "recall_trigger_enabled": {"type": "bool", "desc": "记忆读触发总开关：关=每轮无条件召回（回退旧行为）；开=寒暄/噪音类 query 跳过召回（省检索开销，零行为漂移）"},
+        "deposit_trigger_enabled": {"type": "bool", "desc": "记忆写触发总开关：关=每会话照常尝试沉淀；开=被显式排除的 intent 不沉淀"},
+        "recall_skip_intents": {"type": "str", "desc": "永不召回记忆的 intent 列表（逗号分隔，默认空）"},
+        "deposit_skip_intents": {"type": "str", "desc": "永不沉淀记忆的 intent 列表（逗号分隔，默认空）"},
+        "source_credibility": {"type": "str", "desc": "融合排序五维之『可信度』：按来源给定权重（真实取值仅 llm_agent/reflow/rule_agent）。默认空=全部中性 1.0；无标定依据前不建议配"},
     },
     "entity_merge": {
         "auto_threshold": {"type": "float", "desc": "实体消歧自动合并分阈值（≥ 该分自动合并；>1.0 等价关闭。DB settings 的 auto_threshold 优先）"},
