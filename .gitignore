@@ -28,6 +28,11 @@ mbse.db-wal
 *.db
 *.db-shm
 *.db-wal
+# 2026-10-29：测试运行时配置（conftest 每会话重置为空），是**运行时产物**不是源码。
+# 曾误提交一次（c8795fe）——它是被测试写脏的残留，纳入版本库会让
+# 「配置被污染」变成所有人共享的既有状态，掩盖隔离问题。
+tests/_test_config.json
+tests/_test_config.json.*
 static/uploads/
 static/skill_packages/
 
