@@ -93,13 +93,38 @@ def reap_orphans(conn, ttl_s: int | None = None, dry_run: bool = False, audit=Tr
         return out
 
     reason = _ORPHAN_REASON % (ttl / 60.0)
+    # ── S5（2026-10-29）：孤儿回收**必须同时写 error_class** ────────────────
+    # 实测缺口（真库）：全量 65 条 failed 里 **57 条（87.7%）** 是本函数写的孤儿回收，
+    #   而 `error_class` 填充率只有 **2/65 = 3%** ——
+    #   于是"编排子任务失败率 20.6%"这个数字无法按类别拆解，看起来像"编排逻辑不可靠"，
+    #   实际绝大多数是**进程重启导致的失活**（`failure_class` 早已把它单列为
+    #   `interrupted` 并与 `timeout` 区分：一个宿主挂了、一个逻辑停滞）。
+    #   ⇒ 分类能力**早就在**（`services/failure_class.py` 且对存量 100% 覆盖），
+    #     缺的只是这条 UPDATE 没把结果写进列里 —— 典型的「能力在、没接线」。
+    # ⚠️ 不改变任何行为：状态仍是 failed、error 文本不变，只是补一列归因。
+    # ⚠️ 分类失败不得阻断回收（归因是旁路）；分类器不可用时留空，**不编造**类别。
+    try:
+        from services.failure_class import classify as _cls
+        _ek = str(_cls(reason, ok=False) or "")
+    except Exception:
+        _ek = ""
     try:
         for r in rows:
-            conn.execute(
-                "UPDATE agent_tasks SET status='failed', error=?, updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=?", (reason, r["id"]))
+            # ⚠️ 必须**先试带 error_class，失败则退不带**：
+            #   极老库可能尚无 `error_class` 列（同 task_queue.fail() 的处理）。
+            #   若不带降级，一处 `no such column` 就会让**整批孤儿收不掉**
+            #   —— 那比"少一列归因"严重得多（僵尸任务永久堆积）。
+            try:
+                conn.execute(
+                    "UPDATE agent_tasks SET status='failed', error=?, error_class=?,"
+                    " updated_at=CURRENT_TIMESTAMP WHERE id=?", (reason, _ek, r["id"]))
+            except Exception:
+                conn.execute(
+                    "UPDATE agent_tasks SET status='failed', error=?,"
+                    " updated_at=CURRENT_TIMESTAMP WHERE id=?", (reason, r["id"]))
         conn.commit()
         out["reaped"] = len(rows)
+        out["error_class"] = _ek
     except Exception as e:      # noqa: BLE001
         # 回收失败不得阻断启动 —— 但必须留痕，否则"孤儿永远收不掉"会变成又一个静默失败
         try:

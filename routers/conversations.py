@@ -382,6 +382,16 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         _maxr = 0
         _SER_TYPES = ("stage", "tool")
         _terminal = False   # P1-32：本流是否已发过 done/error（终态哨兵）
+        # ── S1（2026-10-29）失败归因：把"为什么失败"变成可查的事实 ────────────
+        # 背景（实测 @75eca26）：近 7 天 conversation span 有 73 条 error，
+        #   `meta_json` 全为 `{}` —— 一条都说不出原因。这里补三个**可观测**的维度：
+        #   · `_fail_reason`：失败类别（枚举，非自由文本，便于按列聚合）
+        #   · `_last_event`：最后一个已转发的帧类型（`event: xxx`），回答"死在哪一步"
+        #   · `_sent_any`：是否已向前端输出过任何正文帧（区分"一个字没出"与"说到一半断"）
+        #   ⚠️ 只记观测到的事实，**不推测根因**（根因要靠日志/异常，不能在这里编）。
+        _fail_reason = ""
+        _last_event = ""
+        _sent_any = False
 
         def _flush_evbuf():
             """把缓冲的 stage/tool 帧落库（幂等：刷完即清空）。
@@ -447,6 +457,15 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 # （本哨兵只认帧前缀，不解析 JSON —— 解析失败也不能影响转发。）
                 if isinstance(raw, str) and raw.startswith(("event: done", "event: error")):
                     _terminal = True
+                # S1：记录最后一个已转发帧的类型（失败时回答"死在哪一步"）。
+                # 只取前缀，不解析 JSON —— 与上面的终态哨兵同一纪律（解析失败不能影响转发）。
+                if isinstance(raw, str) and raw.startswith("event: "):
+                    try:
+                        _last_event = raw[7:raw.index("\n", 7)].strip()[:32]
+                    except Exception:
+                        _last_event = ""
+                    if _last_event not in ("done", "error", "heartbeat", "retry", "connected"):
+                        _sent_any = True
                 # ── B2-11（2026-10-13）：编排关键事件落库 ──
                 # 落点选这里，因为 `async for raw in _frames` 是**真正唯一的收口**：
                 # 生成器内部 88 处 yield 分散、无收口（编排子任务的 _evq 队列只带子任务事件，
@@ -510,6 +529,12 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             # 同一条流里出现**两条互相矛盾的错误提示**（门禁 I11e 实证抓到：
             # 除错分支那条 + 兜底那条）。兜底只在"从未发过终态"时才该出现。
             _terminal = True
+            # ── S1（2026-10-29）：**真异常必须留下原因** ──────────────────
+            # 这里补一个此前存在的语义错误：`_terminal` 的语义是"发过终态帧"，
+            #   而 finally 用它决定 span 的 ok/error ⇒ **真抛出异常的一轮被记成 ok**
+            #   （因为本分支把 _terminal 置了 True）。结果是"看起来成功、实际报错"。
+            # ⇒ 用 `_fail_reason` 单独表达"这轮失败了"，与"是否已通知前端"解耦。
+            _fail_reason = "exception:%s" % type(_e).__name__
             yield f"event: error\ndata: {_json.dumps({'message': str(_e)[:200]}, ensure_ascii=False)}\n\n"
         finally:
             # ── P0-b：会话 span 收口 + 落库（必须早于 _client_gone 早退）──
@@ -517,9 +542,33 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             # 且 GeneratorExit 期间禁止 yield，但**不禁止** DB 写（无 yield）。
             # 判据 _terminal：从未发过 done/error 的流（内部吞异常正常 return）⇒
             # conversation span 记 error（"哪一步开始错"的归因入口，P0-b 病灶②）。
+            #
+            # ── S1（2026-10-29）状态判定改为"多重事实"，不再用单一哨兵 ──────
+            # 旧逻辑 `"ok" if _terminal else "error"` 有两个错误：
+            #   ① 真异常被记成 ok（except 分支把 _terminal 置了 True）；
+            #   ② 内部吞异常后正常 return 时记 error，但 meta 为空 ⇒ 无法归因
+            #      （实测 73 条 error 的 meta_json 全是 `{}`）。
+            # 新逻辑（优先级从上到下，**只表达观测到的事实，不推测根因**）：
+            #   client_gone       → 用户/网络主动断开（须与"服务端故障"分开统计）
+            #   _fail_reason 非空 → 真异常，带异常类型
+            #   已发 done 帧      → ok
+            #   其余              → no_terminal_frame：流悄悄结束，前端会一直转圈
             try:
-                _tracer.end_conversation("ok" if _terminal else "error",
-                                         meta=dict(_conv_meta))
+                _m = dict(_conv_meta)
+                if _client_gone:
+                    _status, _reason = "error", "client_gone"
+                elif _fail_reason:
+                    _status, _reason = "error", _fail_reason
+                elif _last_event == "done":
+                    _status, _reason = "ok", "ok"
+                else:
+                    _status, _reason = "error", "no_terminal_frame"
+                _m["reason"] = _reason
+                # 三个归因维度：死在哪一步 / 有没有输出过内容 / 是否已通知前端
+                _m["last_event"] = _last_event or ""
+                _m["sent_any"] = 1 if _sent_any else 0
+                _m["terminal_sent"] = 1 if _terminal else 0
+                _tracer.end_conversation(_status, meta=_m)
                 _tracer.flush()
             except Exception:
                 pass   # 观测落库失败绝不阻断已完成的主流程

@@ -337,10 +337,32 @@ class ConversationTracer:
             return 0
 
     def end_conversation(self, status: str = "ok", meta: dict | None = None) -> None:
+        """闭合 conversation 根 span。
+
+        ── S1（2026-10-29）失败必须带原因，否则这条 span 没有诊断价值 ──
+        实测（@75eca26）：近 7 天 `conversation` span 有 **73 条 status='error'**，
+        而 `meta_json` **全为 `{}`** —— 一条都回答不了"为什么失败"。
+        根因有二：
+          · 调用侧 `meta=dict(_conv_meta)`，而 `_conv_meta` 只在 **done 帧**里回填
+            intent/route；失败的流根本没有 done 帧 ⇒ 传进来的就是空 dict；
+          · 本方法对 `status != ok` 且 meta 为空的情形**不做任何补充**，
+            于是"未闭合/无终态"这条唯一线索只在 `flush()` 里以
+            `note='unclosed_at_flush'` 出现，而实测 73 条连这个 note 都没有
+            （因为它们被**显式** close 成 error，走不到 flush 的兜底）。
+
+        修法：`status != 'ok'` 且 meta 里没有 `reason` 时，**补一条可观测的事实**
+        （`no_reason_recorded`）。**不编造**具体原因——原因由调用侧负责提供；
+        这里只保证"读的人知道原因缺失"，而不是面对一个空对象猜测。
+        """
         if not self._enabled or not self._conv_sid:
             return
+        _m = dict(meta or {})
+        if str(status or "") != "ok" and not str(_m.get("reason") or "").strip():
+            # 兜底：让"没有原因"这件事本身可见，而不是留一个空 meta 让人无从下手。
+            _m.setdefault("reason", "no_reason_recorded")
+            _m.setdefault("note", "调用侧未提供失败原因（S1 兜底标记）")
         try:
-            self._spans.close(self._conv_sid, status, meta)
+            self._spans.close(self._conv_sid, status, _m)
         except Exception as e:      # noqa: BLE001
             self._fail("end_conversation", e)
 

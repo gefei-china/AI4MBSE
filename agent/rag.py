@@ -297,25 +297,12 @@ class GraphRAG:
                         conn, query, boost, scope_docs, _rag_top_k, _inc_dep)
                     if _retry:
                         chunk_hits = _retry
-                # P2-2：查询 Trace（含归一化/域/命中文档/召回原因）
-                if conn is not None:
-                    try:
-                        from glossary import trace_query
-                        trace_query(conn, _glossary_res.get("original") or query, {
-                            "normalized": query,
-                            "intent": "knowledge_qa",
-                            "route": "vector",
-                            "domain": force_domain or "all",
-                            "hit_docs": [h.get("source_doc", "") for h in chunk_hits[:5]],
-                            "hit_count": len(chunk_hits),
-                            "top_score": chunk_hits[0]["score"] if chunk_hits else 0,
-                            "latency_ms": int((time.time() - t0) * 1000),
-                            "detail": {"glossary": [h.get("user_term") for h in _glossary_res.get("hits", [])],
-                                       "glossary_recall": glossary_recall.get("concepts", []),
-                                       "recall_reasons": [h.get("recall_reason", "") for h in chunk_hits[:3]]},
-                        })
-                    except Exception:
-                        pass
+                # ⚠️ S4（2026-10-29）：原此处有一段 `trace_query(...)`，`"route": "vector"`
+                #   **硬编码**且**只在本（向量兜底）分支内**调用 ⇒
+                #   `query_trace` 表实测 3,484 条**全部是 vector**，图/混合路由零 trace。
+                #   后果：我曾据此判"图路由零命中"，查 `query_routing_stats` 才发现
+                #   图路由占 264/1867 —— **观测口径错误导演了一个不存在的结论**。
+                #   已移到 Step 4 路由决策之后统一写（用真实 route），见下方 trace 块。
             except Exception:
                 try:
                     from knowledge_pipeline import search_chunks
@@ -368,6 +355,52 @@ class GraphRAG:
         # Step 4: 路由决策（graph | mixed | vector）+ 统计落库
         route, reason = self.router.decide(graph_results, graph_confidence, vector_results)
         latency_ms = int((time.time() - t0) * 1000)
+        # ── S4（2026-10-29）查询 Trace：**改到路由决策之后，用真实 route** ──────
+        # 修的是什么（实测证据）：
+        #   原实现把 `trace_query(...)` 放在**向量兜底分支内部**，且 `"route": "vector"`
+        #   是**硬编码** ⇒ `query_trace` 表 3,484 条**全部 route=vector**，
+        #   图/混合路由**一条 trace 都没有**。
+        #   危害不是"少记几行"，而是**观测口径错了会导演出不存在的结论**：
+        #   我据该表判过"图路由零命中"，查 `query_routing_stats` 才发现
+        #   图路由实际占 264/1,867（14%）—— 结论完全相反。
+        # 现在：
+        #   · 三种路由**都写** trace（graph / mixed / vector）；
+        #   · `route` 用决策结果真值，另附 `reason`（graph_no_hit / no_hit_fallback …）
+        #     与 `graph_count`/`vector_count`，使"为什么走这条路"可直接按列聚合；
+        #   · `hit_docs` 取**该路由实际参与结果的来源**，不再是向量分支的局部变量。
+        try:
+            if conn is not None:
+                from glossary import trace_query as _tq
+                _hit_src = (graph_results if route in ("graph", "mixed")
+                            else (chunk_hits or vector_results)) or []
+                # 命中档位只在"真的命中"时才有意义；空结果恒 0（不编造 0.0 以外的值）
+                _top = 0
+                if _hit_src:
+                    _f0 = _hit_src[0]
+                    _top = (_f0.get("score") or _f0.get("conf") or 0) if isinstance(_f0, dict) else 0
+                _tq(conn, query, {
+                    "normalized": query,
+                    "intent": "knowledge_qa",
+                    "route": route,                    # ← 真实路由（本次修复的核心）
+                    "domain": force_domain or "all",
+                    "hit_docs": [str((h or {}).get("source_doc") or
+                                     (h or {}).get("name") or "")[:200]
+                                 for h in _hit_src[:5]],
+                    "hit_count": len(_hit_src),
+                    "top_score": _top,
+                    "latency_ms": latency_ms,
+                    "detail": {
+                        "reason": reason,              # 路由理由（graph_no_hit 等）
+                        "graph_count": len(graph_results or []),
+                        "vector_count": len(vector_results or []),
+                        "glossary": [h.get("user_term") for h in (_glossary_res.get("hits") or [])],
+                        "glossary_recall": glossary_recall.get("concepts", []),
+                        "recall_reasons": [(h or {}).get("recall_reason", "")
+                                           for h in (chunk_hits or [])[:3] if isinstance(h, dict)],
+                    },
+                })
+        except Exception:
+            pass   # 观测失败绝不阻断检索主链路
         # P1-4 修（2026-10-06）：`confidence` 此前**恒等于 graph_confidence**，而
         #   `QueryRouter.decide` 在图谱未命中时给出 route='vector'/'mixed' 且 graph 置信度=0
         #   ⇒ **vector 路由下 confidence 恒为 0**。实测（embedding 恢复后）：
@@ -383,7 +416,19 @@ class GraphRAG:
         retrieval_confidence = self._retrieval_confidence(
             route, graph_confidence, chunk_hits or vector_results)
         try:
-            self.router.record(conn, query, route, reason, retrieval_confidence,
+            # ── S4（2026-10-29）：零命中先细分成因再落统计 ────────────────────
+            # 实测构成（近 7 天 59 条 no_hit_fallback）：指令性文本 40% + 业务数据查询 15%
+            #   ⇒ ≥55% 属于"检索被用在不该用的地方"，不是召回质量问题。
+            #   混在一起统计会让"召回失败率"长期虚高、并把人引向错误的优化方向
+            #   （去调向量阈值，而真正该改的是调用侧语义错配）。
+            # 本步**只细分 reason，不改变任何检索行为**（零风险、可回退）。
+            _reason_stat = reason
+            try:
+                from agent.retrieval_reason import refine_reason as _refine
+                _reason_stat = _refine(query, route, reason)
+            except Exception:
+                _reason_stat = reason
+            self.router.record(conn, query, route, _reason_stat, retrieval_confidence,
                                len(graph_results), len(vector_results), latency_ms, branch)
         except Exception:
             pass  # 统计落库失败不影响主流程
