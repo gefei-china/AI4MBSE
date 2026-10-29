@@ -457,11 +457,47 @@ class ExecuteMixin:
         # 为什么必须透：`execute()` 签名里就有 user（current_user 依赖产物），
         # 但此前从未传到工具执行层 ⇒ 权限判定拿不到身份。
         self._tool_user = user
-        # D4：skill 工具白名单最小权限合并——命中 skill 声明了 allowed_tools 时，
-        # 与委派白名单求交集（双限制取更严），未委派时直接用 skill 白名单
+        # ★ 2026-10-29（P0-3 修正）：技能 `allowed_tools` **不再参与工具集缩减**。
+        #
+        #   【原实现（本段被替换的代码）】把技能白名单赋给 `_tool_whitelist`，
+        #   于是技能一命中就**裁掉 Agent 已绑定的工具**。实测后果（代码里原有的记录）：
+        #     `智源对接agent` 绑 MCP 71 工具 + 技能「智源平台管理」(6 项)
+        #     → 无白名单 15 工具/8 MCP，命中技能后变成 **2 工具/0 MCP**
+        #   ⇒ 这就是 2026-10-16「绑了 71 个只露 6 个、工程列表查不到」事故的根因之一。
+        #   更糟的是裁减**静默**：工具凭空消失，无日志、无提示。
+        #
+        #   【语义澄清（对照 Claude Code，2026-10-29 调研）】
+        #     · Claude Code 的 subagent `tools` 字段是**独立实体**的工具集
+        #       （省略 = 继承全部工具），subagent 有自己的 context window，
+        #       工具集就是它的世界 —— 所以"限制"是自然的。
+        #     · 本平台的 skill 是**注入既有 Agent 的 prompt 片段**，没有独立 context；
+        #       Agent 的可用工具由 `agent_tools` 绑定 + 无条件注入决定。
+        #       技能里的 `allowed_tools` 表达的是「**本技能干活需要这几个工具**」（需求），
+        #       不是「只能这几个」（上限）。
+        #   ⇒ 拿"需求清单"去反向撤销 Agent 已获授权的工具，属越权，且必然误伤。
+        #
+        #   【现行做法】只保留 `tools.py::_build_tools_def` 里的**授权补充**
+        #     （把技能声明的 file_*/save_artifact **补进**候选，见 tools.py:519-534）。
+        #     真正的工具上限**只来自委派显式传入的 `tools_whitelist`**（工作流/子任务
+        #     最小权限，见上面第 91 行），那条链保持不变。
+        #
+        #   【两条路径现在语义一致】stream（对话主路径）与 execute（试跑/工作流）
+        #     都不再用技能白名单做裁减 —— 此前 stream 不设 `_tool_whitelist`、
+        #     execute 却设，是"同一能力两套语义"，正是本轮要消除的分歧。
+        #
+        #   回退开关：`agent.skill_whitelist_enforce`（默认 False）。
+        #     置 True ⇒ 按旧行为把技能白名单当硬上限（**仅建议在排查最小权限问题时临时用**，
+        #     它会重现上面的裁减问题）。
         try:
             _skill_wl = getattr(self, "_skill_allowed_tools", None)
+            _enforce = False
             if _skill_wl:
+                try:
+                    from core import config as _cfg_sw
+                    _enforce = bool(_cfg_sw.get("agent", "skill_whitelist_enforce", False))
+                except Exception:
+                    _enforce = False
+            if _skill_wl and _enforce:
                 if self._tool_whitelist:
                     self._tool_whitelist = list(set(self._tool_whitelist) & _skill_wl)
                 else:

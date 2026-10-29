@@ -503,33 +503,55 @@ class MemoryMixin:
                              _is_probe_skill))
                     except Exception:
                         pass
+                # ★ 2026-10-29（P0-2）：**本循环的 run_id 必须在这里独立计算**。
+                #
+                #   此前第 528 行直接引用裸 `run_id`，而本函数签名只有
+                #   `conversation_id`（`run_id` 形参早在 2026-10-27 的改造里被改名/移除）
+                #   ⇒ 失败分支必然抛 `NameError`，被函数末尾的 `except: pass` 吞掉。
+                #   实测（构造一次失败调用）：uses / fail / feedback_notes **三个计数全不变**，
+                #   而成功分支正常 +1 ⇒ 技能的失败统计与失败备注**长期只写成功那一半**。
+                #   后果直指自进化闭环：SkillImprover 读的正是 feedback_notes，
+                #   它拿不到"哪里不聪明"，只能凭"无输出"三字盲改（上一轮产出的坏草稿即源于此）。
+                #
+                #   取值口径与工具侧一致：实例属性 `_tool_run_ctx`（顶层轮次就地分配、
+                #   嵌套沿用父编排 run），不另造 id。
+                _rid_note = int(getattr(self, "_tool_run_ctx", 0) or 0)
                 for name in hits[:10]:
-                    row = conn.execute(
-                        "SELECT use_stats, feedback_notes FROM skills WHERE name=? AND status='published'",
-                        (name,)).fetchone()
-                    if not row:
-                        continue
+                    # ★ 每条技能**独立** try：原实现整块 try 包住循环，
+                    #   一条失败（如改名后 name 查不到）会让**后续技能全部跳过**，
+                    #   且失败本身不可见。现在单条失败只影响单条，并打印前 120 字原因。
                     try:
-                        st = json.loads(row["use_stats"] or "{}")
-                    except Exception:
-                        st = {}
-                    uses = int(st.get("uses", 0)) + 1
-                    succ = int(st.get("success", 0)) + (1 if ok else 0)
-                    st.update({"uses": uses, "success": succ, "fail": uses - succ,
-                               "last_used": time.strftime("%Y-%m-%d %H:%M:%S")})
-                    if ok:
-                        conn.execute("UPDATE skills SET use_stats=?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
-                                     (json.dumps(st, ensure_ascii=False), name))
-                    else:
+                        row = conn.execute(
+                            "SELECT use_stats, feedback_notes FROM skills WHERE name=? AND status='published'",
+                            (name,)).fetchone()
+                        if not row:
+                            continue
                         try:
-                            notes = json.loads(row["feedback_notes"] or "[]")
+                            st = json.loads(row["use_stats"] or "{}")
                         except Exception:
-                            notes = []
-                        notes.append({"ts": st["last_used"], "run_id": int(run_id or 0),
-                                      "intent": intent or "", "note": note})
-                        conn.execute(
-                            "UPDATE skills SET use_stats=?, feedback_notes=?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
-                            (json.dumps(st, ensure_ascii=False), json.dumps(notes[-5:], ensure_ascii=False), name))
+                            st = {}
+                        uses = int(st.get("uses", 0)) + 1
+                        succ = int(st.get("success", 0)) + (1 if ok else 0)
+                        st.update({"uses": uses, "success": succ, "fail": uses - succ,
+                                   "last_used": time.strftime("%Y-%m-%d %H:%M:%S")})
+                        if ok:
+                            conn.execute("UPDATE skills SET use_stats=?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
+                                         (json.dumps(st, ensure_ascii=False), name))
+                        else:
+                            try:
+                                notes = json.loads(row["feedback_notes"] or "[]")
+                            except Exception:
+                                notes = []
+                            notes.append({"ts": st["last_used"], "run_id": _rid_note,
+                                          "intent": intent or "", "note": note})
+                            conn.execute(
+                                "UPDATE skills SET use_stats=?, feedback_notes=?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
+                                (json.dumps(st, ensure_ascii=False), json.dumps(notes[-5:], ensure_ascii=False), name))
+                    except Exception as _one:
+                        # 单条失败不静默：技能统计是自进化的输入，悄悄丢等于让它瞎猜。
+                        print("[skill-feedback] 技能「%s」统计写入失败（已跳过，不影响其余）: %s: %s"
+                              % (name, type(_one).__name__, str(_one)[:120]), flush=True)
+                        continue
         except Exception:
             pass
 

@@ -285,6 +285,15 @@ class StreamMixin:
             ' "tools": ["允许的工具白名单(可空，空=继承该 Agent 默认绑定)"],'
             ' "skills": ["指定技能(可空)"]}]}\n'
             f"可用 Agent 池：\n" + "\n".join(pool_lines) + "\n"
+            # ★ 2026-10-29（P0-1 配套，两处 prompt 同改）：**禁止自创 Agent 名**。
+            #   实测 24% 的 agent_tasks 指向解析不到的名字（已停用的旧名、被改名的旧名、
+            #   planner 凭印象编出的中文名）。此前 prompt 只给池、无硬约束；而下游
+            #   `registry.get()` 对未知名字是**静默回落**（通用问答Agent，无工具）
+            #   ⇒ 任务"跑完"但什么都没做。这里把约束显式化。
+            #   ⚠️ 与团队模式那处 prompt 逐字一致，避免两套措辞再漂（本仓已有先例）。
+            "⚠️ agent 字段**必须从上面「可用 Agent 池」里原样复制**（区分大小写，不要翻译成中文，"
+            "不要使用你记忆里的旧名字）。池中没有合适的就**留空字符串**（系统会自动选），"
+            "**严禁自创或拼写近似的名字** —— 无法解析的名字会让该子任务直接失败。\n"
             "task_type 可选 agent（走 Agent 完整管线）或 react（多步思考-工具求解）或 llm（纯生成）。\n"
             f"{skill_pool_txt}"
             f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；"
@@ -1792,6 +1801,49 @@ class StreamMixin:
                     except Exception:
                         pass
                 ready = TaskQueue.ready_tasks(conn, run_id)
+                # ★ 2026-10-29（P0-1）：**派发前剔除 Agent 不可解析的任务**（第三道防线）。
+                #
+                #   为什么必须在派发处拦：`create_plan` 已在校验（第二道），但历史计划、
+                #   `strict=False` 路径、以及"计划生成后被停用/改名"的时序竞争仍会漏进来。
+                #   漏进来之后 `sub.execute_stream(forced_intent=tk['agent_id'])` 会让
+                #   `registry.get()` 回落「通用问答Agent」（tools=0）—— 任务照跑照标 done，
+                #   但一个工具都没调。实测 287 任务里 69 个（24%）如此，指标层面看不出来。
+                #
+                #   处置：**不执行，直接标 failed 并写明原因**。宁可明确失败也不静默降质
+                #   （对齐 Claude Code：subagent 的 tools 全无法解析时明确报错，不空跑）。
+                #   空 agent 名不拦 —— 执行期 `forced_intent=None` 走意图识别，是合法用法。
+                _blocked_agents = []
+                if ready:
+                    _kept = []
+                    for _tk in ready:
+                        _aid = str(_tk.get("agent_id") or "").strip()
+                        if not _aid:
+                            _kept.append(_tk)
+                            continue
+                        try:
+                            _adef, _aok, _ahint = self.registry.resolve(_aid)
+                        except Exception:
+                            _adef, _aok, _ahint = None, True, ""   # 解析器异常时不拦（保持旧行为）
+                        if _aok:
+                            _kept.append(_tk)
+                            continue
+                        _why = "Agent 无法解析，任务未执行：" + (_ahint or _aid)
+                        try:
+                            TaskQueue.fail(conn, _tk["id"], _why[:500])
+                        except Exception:
+                            pass
+                        _blocked_agents.append({"key": _tk.get("task_key") or "",
+                                                "agent": _aid, "reason": _ahint or ""})
+                    if _blocked_agents:
+                        # 让用户在编排卡片里**看得见**，而不是只写在库里
+                        try:
+                            yield {"type": "progress", "kind": "progress", "delta": (
+                                "（编排）%d 个子任务因 Agent 无法解析而未能执行：%s"
+                                % (len(_blocked_agents),
+                                   "、".join(sorted({b["agent"] for b in _blocked_agents}))))}
+                        except Exception:
+                            pass
+                        ready = _kept
                 if not ready:
                     # ★ P1 replanning（2026-10-21，v2 §4.6）：收敛点决策记录。
                     #   有 pending 但无 ready ⇒ 剩余任务被 failed 的失效传播堵死。

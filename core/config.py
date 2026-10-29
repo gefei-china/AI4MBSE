@@ -1761,6 +1761,17 @@ CONFIG_SCHEMA = {
         #   「一行描述 + offload 引用块」，模型可经 `skill_body_fetch(id)` 取回全文
         #   （复用既有的 skill_body_on_demand 通道，不新造机制）。
         "skill_prompt_max_chars": {"type": "int", "desc": "★ 技能提示词总量预算（字符，默认 12000；<=0 不限）。超限的技能正文降级为一行描述+按需取回，不改变技能命中结果"},
+        # ── 技能白名单语义（2026-10-29，P0-3）──────────────────────────────
+        # `allowed_tools` 的语义已统一为「授权补充」（把技能需要的工具**补进**候选），
+        # **不再**当工具集上限使用。原因（代码内原有事故记录 + Claude Code 对照）：
+        #   · Claude Code 的 subagent `tools` 是**独立实体**的工具集（省略=继承全部），
+        #     subagent 有自己的 context，限制是自然的；
+        #   · 本平台的 skill 是**注入既有 Agent 的 prompt 片段**，Agent 的工具由
+        #     agent_tools 绑定决定；技能白名单表达的是「干活需要什么」（需求）而非
+        #     「只能用什么」（上限）；
+        #   · 旧实现拿它当上限 ⇒ 实测把 `智源对接agent` 的 71 个 MCP 工具裁到 0
+        #     （15 工具/8 MCP → 2 工具/0 MCP），即 2026-10-16「绑了只露几个」事故根因。
+        "skill_whitelist_enforce": {"type": "bool", "desc": "★ 是否把技能 allowed_tools 当工具集硬上限（默认 False=只做授权补充）。置 True 会重现「技能命中后 Agent 已绑定工具被裁掉」问题，仅供排查最小权限时临时使用"},
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},

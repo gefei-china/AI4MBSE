@@ -15,6 +15,24 @@ def _bump_version(v):
     return v + ".1"
 
 
+def _normalize_trg(triggers):
+    """triggers 规范化 → `(列表, 警告列表, 是否变化)`。
+
+    ★ 2026-10-29（P1-4）：接 `core/skill_triggers`。
+    取 `strict=False`（自动拆分 + 告警，不阻断）：历史数据与第三方导入可能已是此形态，
+    硬拦会让既有流程挂掉；从源头自动修掉更实际。
+    ⚠️ 校验器不可用时**退回原值**（不因辅助模块异常挡住技能保存）。
+    """
+    try:
+        from core.skill_triggers import normalize_triggers as _nt
+        return _nt(triggers, strict=False)
+    except Exception:
+        try:
+            return list(triggers or []), [], False
+        except Exception:
+            return [], [], False
+
+
 @router.get("/api/studio/skills")
 def list_skills(status: str = "", conn=Depends(db_session)):
     """技能列表（P1-3 草稿箱：status=draft|draft_revision 筛选 AI 沉淀/自改进草稿）。"""
@@ -29,9 +47,20 @@ def create_skill(body: SkillIn, conn=Depends(db_session), user=Depends(current_u
     repo = StudioRepo(conn)
     if repo.get_skill_by_name(body.name):
         return JSONResponse({"error": f"Skill 名称已存在: {body.name}"}, 400)
+    # ★ 2026-10-29（P1-4）：triggers 入库前规范化。
+    #   匹配是**逐元素子串**，把「变更、调整、更新、影响」当**一个元素**会让该技能
+    #   几乎永不命中（实测技能 id=47 因此长期未触发）。此处自动拆分并返回告警，
+    #   让问题在写入时就被看见，而不是事后靠巡检发现"这个技能好像没用"。
+    _trg, _trg_warn, _trg_changed = _normalize_trg(body.triggers)
+    if _trg_changed:
+        try:
+            audit(audit_user(user), "skill_triggers_normalized",
+                  f"创建Skill: {body.name}；triggers 已自动拆分（原含分隔符清单）", conn=conn)
+        except Exception:
+            pass
     sid = repo.create_skill(
         body.name, body.description, body.skill_type,
-        json.dumps(body.triggers, ensure_ascii=False), body.category,
+        json.dumps(_trg, ensure_ascii=False), body.category,
         body.content, body.frontmatter, "",
         dependencies=json.dumps(body.dependencies or [], ensure_ascii=False),
         allowed_roles=json.dumps(body.allowed_roles or [], ensure_ascii=False),
@@ -41,7 +70,7 @@ def create_skill(body: SkillIn, conn=Depends(db_session), user=Depends(current_u
         scripts=json.dumps(body.scripts or [], ensure_ascii=False),
     )
     audit(audit_user(user), "skill_create", f"创建Skill: {body.name}", conn=conn)
-    return {"ok": True, "id": sid}
+    return {"ok": True, "id": sid, "trigger_warnings": _trg_warn}
 
 
 @router.put("/api/studio/skills/{sid}")
@@ -49,9 +78,11 @@ def update_skill(sid: int, body: SkillIn, conn=Depends(db_session), user=Depends
     repo = StudioRepo(conn)
     if not repo.get_skill(sid):
         return JSONResponse({"error": "Skill not found"}, 404)
+    # ★ 2026-10-29（P1-4）：同 create，编辑时也规范化（老脏数据经一次编辑即被修好）
+    _trg, _trg_warn, _trg_changed = _normalize_trg(body.triggers)
     repo.update_skill(
         sid, body.name, body.description, body.skill_type,
-        json.dumps(body.triggers, ensure_ascii=False), body.category,
+        json.dumps(_trg, ensure_ascii=False), body.category,
         body.content, body.frontmatter,
         dependencies=json.dumps(body.dependencies or [], ensure_ascii=False),
         allowed_roles=json.dumps(body.allowed_roles or [], ensure_ascii=False),
