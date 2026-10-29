@@ -201,6 +201,34 @@ def _migrate_columns(conn):
     _add("conversations", "last_slots", "TEXT DEFAULT '{}'")            # 最近一轮 task_decompose 槽位 JSON（跨轮合并）
     # ── 上下文组装 v2（话题感知）：消息话题标签（惰性打标回写，供分话题摘要/相关历史拉回）──
     _add("messages", "topic", "TEXT DEFAULT ''")                         # 话题标签（段首用户消息前 N 字符）
+    # ── 2026-10-29：反馈语义分列（quality 与 review 分离）──
+    # 背景：`feedback_type` 一个字段混装了两件事 —— ①**评审动作**（approve/reject/modify，
+    #   表达流程裁决）②**质量信号**（这条回答好不好）。前端曾只认 approve/reject，
+    #   而 badcase/online_eval 只认 modify/wrong/corrected ⇒ 四份取值域互不相同，
+    #   结果**显式负反馈 0 条**、采样队列 0 行 ⇒ 进化系统没有方向信号。
+    #   （`reject` 是"评审拒绝"，不是"用户差评"，混用会让进化去修没坏的东西。）
+    # 修法：质量信号单列一列，取值域见单一真源 `core/feedback_types.py`（up/down）。
+    _add("messages", "quality", "TEXT DEFAULT ''")                       # 用户质量信号：up | down（空=未评价）
+    _add("feedback", "quality", "TEXT DEFAULT ''")                       # 同上（历史留痕，供采样回查）
+    _add("feedback", "signal_kind", "TEXT DEFAULT ''")                   # 信号类型：review | quality（显式标注语义来源）
+    # ── 2026-10-29：告警可处置化（alert_events）──
+    # 背景（生产库实证）：328 条告警 **status 全是 'open'**，一条都没被处理；
+    #   同一批规则每 30 分钟一条，累积 81 次 ⇒ 看板被同因告警淹没（告警疲劳）。
+    #   根因有二：① 没有折叠（每次命中都 INSERT 新行）；② 只有 ack、**没有后续流转**
+    #   （没人知道"这条到底修了没"）⇒ 告警只是"响"，不是"待办"。
+    # 修法：hit_count + last_seen_at（折叠），handled_by/handled_at/note（处置留痕）。
+    _add("alert_events", "hit_count", "INTEGER DEFAULT 1")               # 同因折叠计数（重复命中累加，不新增行）
+    _add("alert_events", "last_seen_at", "TEXT DEFAULT ''")              # 最近一次命中时间（created_at 保留首次）
+    _add("alert_events", "handled_by", "TEXT DEFAULT ''")                # 处置人
+    _add("alert_events", "handled_at", "TEXT DEFAULT ''")                # 处置时间
+    _add("alert_events", "note", "TEXT DEFAULT ''")                      # 处置备注（归因结论）
+    # ── 2026-10-29：配置变更「改后效果」判定（config_history）──
+    # 背景：P1-4 已保证"改前沙箱 A/B 证明不改坏"，但**改完有没有真的变好**没有任何回流。
+    #   ⇒ 无法回答"上次那个改动到底有没有用"，改坏了也发现不了（沙箱只覆盖门禁集）。
+    #   判据见 core/config_effect.py（eval_metrics 前后等长窗口对比，方向敏感）。
+    _add("config_history", "effect_verdict", "TEXT DEFAULT ''")          # effective | ineffective | mixed | no_data | inconclusive
+    _add("config_history", "effect_detail", "TEXT DEFAULT ''")           # 判定理由（人可读）
+    _add("config_history", "effect_checked_at", "TEXT DEFAULT ''")       # 判定时间
     _add("skills", "frontmatter", "TEXT DEFAULT '{}'")                   # SKILL.md frontmatter 原文（含 triggers/category/author）
     _add("skills", "content", "TEXT DEFAULT ''")                         # SKILL.md 指令正文
     _add("skills", "triggers", "TEXT DEFAULT '[]'")                      # 触发关键词 JSON

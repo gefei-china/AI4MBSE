@@ -98,6 +98,43 @@
   const _EVKIND_LABEL = Object.fromEntries(_EVAL_JOBS.map(j => [j[0], j[1]]));
   let _evmPollTimer = null;
 
+  /* ══ 自进化域作业（2026-10-29）══
+     ★ 此前前端**硬编码**了 kind 列表（_EVAL_JOBS），后端新增 kind 时前端看不见
+       ——"同一枚举写两份必然漂移"。现改为从 /api/jobs/kinds **动态取**
+       （后端 describe() 的 group='evolution'），后端注册即前端可见。
+     这三个作业的共同点：**只提议、不自动应用**（技能草稿 / 提案队列 / 待标注队列），
+     真改动一律等人工裁决。 */
+  let _EVO_KINDS = null;          // [[kind, label], ...]
+  const _JOB_LABEL = Object.assign({}, _EVKIND_LABEL);   // kind → 中文名（含动态装载的自进化作业）
+
+  async function _loadEvoKinds(){
+    if(_EVO_KINDS) return _EVO_KINDS;
+    try{
+      const r = await api('/api/jobs/kinds');
+      const items = (r && r.items) || {};
+      _EVO_KINDS = Object.keys(items)
+        .filter(k => items[k] && items[k].group === 'evolution')
+        .map(k => { _JOB_LABEL[k] = items[k].label || k; return [k, items[k].label || k]; });
+    }catch(e){
+      _EVO_KINDS = [];
+    }
+    return _EVO_KINDS;
+  }
+
+  async function _renderEvoButtons(){
+    const box = document.getElementById('evo-jobs');
+    if(!box) return;
+    const kinds = await _loadEvoKinds();
+    if(!kinds.length){
+      box.innerHTML = '<span style="font-size:11px;color:var(--mut);">（后端未注册自进化作业）</span>';
+      return;
+    }
+    box.innerHTML = kinds.map(([kind, label]) =>
+      `<button class="btn" style="font-size:11px;padding:4px 10px;"
+        onclick="submitEvalJob('${kind}')">${esc(label)}</button>`).join(' ')
+      + '<span style="font-size:10px;color:var(--mut);margin-left:6px;">只提议不自动应用 · 产出待人工裁决</span>';
+  }
+
   function _renderActions() {
     const btns = _EVAL_JOBS.map(([kind, label, eta]) =>
       `<button class="btn" style="font-size:11px;padding:4px 10px;"
@@ -107,6 +144,10 @@
       <div class="ph">⓪ 人工操作 <span class="tag">走作业队列 · 进度在此卡片实时刷新 · 可关页续跑</span></div>
       <div class="pb">
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">${btns}</div>
+        <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+          <span style="font-size:11px;color:var(--mut);">自进化：</span>
+          <span id="evo-jobs"><span style="font-size:11px;color:var(--mut);">加载中…</span></span>
+        </div>
         <div id="evm-job-card" style="margin-top:10px;">
           <div class="loading" style="font-size:11px;color:var(--mut);">加载最近作业…</div>
         </div>
@@ -185,7 +226,7 @@
   }
 
   async function submitEvalJob(kind) {
-    const meta = _EVAL_JOBS.find(j => j[0] === kind) || [kind, kind, ''];
+    const meta = _EVAL_JOBS.find(j => j[0] === kind) || [kind, (_JOB_LABEL[kind] || kind), '~1min'];
     const ok = await confirmDialog(
       '提交「' + meta[1] + '」作业？\n预计耗时 ' + meta[2]
       + '，进度在下方卡片实时刷新；可关页，作业继续跑。',
@@ -815,6 +856,8 @@
         + '带 schema 校验与台账；历史三色不受影响）。触发走作业队列（jobs），'
         + '手动 nightly 不自动提交快照。详细用法见 <code>docs/评测工具使用指南-20261022.md</code>。</div>'
       );
+      // 自进化作业按钮组（动态取后端注册项，见 _loadEvoKinds）
+      _renderEvoButtons();
       // 作业卡片：最近评测作业 + 非终态自动轮询（_refreshJobCard 内部管理定时器）
       _refreshJobCard();
     } catch (e) {

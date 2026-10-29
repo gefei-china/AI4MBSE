@@ -516,6 +516,8 @@ async function loadOps() {
   try{ loadOpsBadCases(); }catch(e){}
   // P0-b 在线评测回流（2026-10-25）：待标注队列 + 三段 dry-run 操作，独立端点独立降级
   try{ loadOpsOnlineEval(); }catch(e){}
+  // 配置变更台账 + 改后效果判定（2026-10-29）：P1-4 台账此前无前端入口
+  try{ loadConfigHistory(); }catch(e){}
   // 系统信息（进程 PID / 运行时长 / DB 大小）挂到趋势面板右上角
   const sys = d.system || {};
   document.getElementById('ops-trend').insertAdjacentHTML('beforeend',
@@ -700,28 +702,72 @@ function renderOpsNodeStats(stats){
 function levelBadge(l){
   return l==='critical'?'<span class="st r">critical</span>':l==='warning'?'<span class="st w">warning</span>':'<span class="st g">info</span>';
 }
+// ── 告警状态（与后端 core/alert_state.py 单一真源对齐）──
+// ⚠️ 2026-10-29：此前前端只有 open/acked 两态、非 open 一律显示 'acked'
+//   （328 条真实状态全 open，掩盖了"从未处置"这一事实）。现按后端五态渲染。
+const ALERT_STATUS_LABEL = {open:'未阅', acked:'已阅', triaged:'已归因', fixed:'已修', verified:'已验证'};
+const ALERT_STATUS_CLS   = {open:'w', acked:'g', triaged:'b', fixed:'ok', verified:'ok'};
+function alertStatusBadge(s){
+  const k = (s||'open');
+  return `<span class="st ${ALERT_STATUS_CLS[k]||'g'}">${ALERT_STATUS_LABEL[k]||k}</span>`;
+}
 function renderOpsAlerts(alerts){
   const box = document.getElementById('ops-alerts');
   if(!alerts || !alerts.length){ box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">暂无告警事件</div>'; return; }
-  box.innerHTML = `<table class="t"><tr><th>时间</th><th>规则</th><th>条件</th><th>触发值</th><th>等级</th><th>状态</th><th></th></tr>` +
-    alerts.map(a=>`<tr>
-      <td style="font-size:11px;">${escMd((a.created_at||'').slice(5,16))}</td>
-      <td><b>${escMd(a.rule_name)}</b><div style="font-size:10px;color:var(--mut);">run#${a.run_id}${(a.conversation_id>0)?` · 会话#${a.conversation_id}`:''} ${escMd(a.flow_name||'')}</div></td>
+  box.innerHTML = `<table class="t"><tr><th>时间</th><th>规则</th><th>条件</th><th>触发值</th><th>命中</th><th>等级</th><th>状态</th><th></th></tr>` +
+    alerts.map(a=>{
+      const hit = Number(a.hit_count||1);
+      // 折叠计数：同一告警被反复命中时不再新增行，而是累加计数 ⇒ 看板不被同因刷屏
+      const hitCell = hit>1
+        ? `<span title="同因告警已折叠为一行，累计命中 ${hit} 次">×${hit}</span>`
+        : `<span style="color:var(--mut);">1</span>`;
+      const seen = a.last_seen_at ? `<div style="font-size:10px;color:var(--mut);">最近 ${escMd(String(a.last_seen_at).slice(5,16))}</div>` : '';
+      const note = a.note ? `<div style="font-size:10px;color:var(--mut);">备注：${escMd(a.note)}</div>` : '';
+      const st = a.status||'open';
+      let actions = '';
+      if((a.conversation_id>0)) actions += `<button class="btn sm ghost" title="查看该告警所属会话的完整执行证据链" onclick="openSessionDrill(${a.conversation_id})">🔎 跳会话</button>`;
+      if(st==='open') actions += `<button class="btn sm ghost" onclick="ackAlert(${a.id})">✅ 已知悉</button>`;
+      if(st==='open'||st==='acked') actions += `<button class="btn sm ghost" onclick="advanceAlert(${a.id},'triaged')">🔬 归因</button>`;
+      if(st==='open'||st==='acked'||st==='triaged') actions += `<button class="btn sm ghost" onclick="advanceAlert(${a.id},'fixed')">🔧 已修</button>`;
+      if(st==='fixed') actions += `<button class="btn sm ghost" onclick="advanceAlert(${a.id},'verified')">✔️ 已验证</button>`;
+      return `<tr>
+      <td style="font-size:11px;">${escMd((a.created_at||'').slice(5,16))}${seen}</td>
+      <td><b>${escMd(a.rule_name)}</b><div style="font-size:10px;color:var(--mut);">run#${a.run_id}${(a.conversation_id>0)?` · 会话#${a.conversation_id}`:''} ${escMd(a.flow_name||'')}</div>${note}</td>
       <td>${escMd(a.metric)} ${escMd(a.operator)} ${a.threshold}</td>
       <td style="color:${a.actual>=a.threshold?'var(--red)':'var(--amb)'};font-weight:600;">${a.actual}</td>
+      <td style="font-size:11px;">${hitCell}</td>
       <td>${levelBadge(a.level)}</td>
-      <td>${a.status==='open'?'<span class="st w">open</span>':'<span class="st ok">acked</span>'}</td>
-      <td style="white-space:nowrap;">${(a.conversation_id>0)?`<button class="btn sm ghost" title="查看该告警所属会话的完整执行证据链" onclick="openSessionDrill(${a.conversation_id})">🔎 跳会话</button>`:''}${a.status==='open'?`<button class="btn sm ghost" onclick="ackAlert(${a.id})">✅ 确认</button>`:''}</td>
-    </tr>`).join('') + '</table>';
+      <td>${alertStatusBadge(st)}</td>
+      <td style="white-space:nowrap;">${actions}</td>
+    </tr>`;}).join('') + '</table>';
 }
 async function loadOpsAlerts(){
   const d = await api('/api/monitor/alerts');
-  document.getElementById('ops-alert-badge').textContent = `${d.total_open} 开放`;
+  // 按状态汇总（后端 core/alert_state.py）："未处置数"比"总数"更能暴露
+  // 「告警响了但没人管」——此前看板只给总数，328 条全 open 反而看不出来。
+  let sum = null;
+  try{ sum = await api('/api/monitor/alerts/summary'); }catch(e){}
+  const badge = document.getElementById('ops-alert-badge');
+  if(badge){
+    if(sum) badge.textContent = `${sum.unhandled} 未处置 / ${sum.total} 事件`;
+    else badge.textContent = `${d.total_open} 开放`;
+  }
   renderOpsAlerts(d.alerts);
 }
 async function ackAlert(id){
   await api(`/api/monitor/alerts/${id}/ack`, {method:'POST'});
   toast('告警已确认');
+  loadOpsAlerts();
+}
+// 状态流转（2026-10-29）：open → acked → triaged → fixed → verified
+async function advanceAlert(id, to){
+  let note = '';
+  try{
+    note = (prompt('处置备注（可留空）', '') || '').trim();
+  }catch(e){ note=''; }
+  const r = await api(`/api/monitor/alerts/${id}/status`, {method:'POST', body: JSON.stringify({status:to, note})});
+  if(r && r.ok===false){ toast(`流转失败：${r.reason||'未知'}`); return; }
+  toast(`告警已置为「${ALERT_STATUS_LABEL[to]||to}」`);
   loadOpsAlerts();
 }
 async function loadOpsLogs(){
@@ -1306,4 +1352,63 @@ async function runOnlineEvalPromote(apply){
       loadOpsOnlineEval();
     }
   }catch(e){ toast('转正失败：' + (e.message||e)); }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   配置变更台账 + 改后效果判定（2026-10-29）
+   ══════════════════════════════════════════════════════════════════
+   为什么加：P1-4 的晋升台账（config_history）**后端有、前端无入口**；
+   而"改完有没有真的变好"此前无人回答 —— 沙箱只证明"改前没改坏"，
+   覆盖不到长尾。判定口径见 core/config_effect.py（前后等长窗口、
+   方向敏感：direction=low 越低越好 / high 越高越好）。
+   四态：effective 有效 / ineffective 劣化(建议回滚) / mixed 各半需权衡 /
+        no_data 无数据 / inconclusive 样本不足。 */
+const CFG_EFFECT_LABEL = {
+  effective:'有效', ineffective:'劣化·建议回滚', mixed:'有得有失',
+  no_data:'无数据', inconclusive:'样本不足', '':'未判定'
+};
+const CFG_EFFECT_CLS = {
+  effective:'ok', ineffective:'r', mixed:'w', no_data:'g', inconclusive:'w', '':'g'
+};
+async function loadConfigHistory(){
+  const box = document.getElementById('ops-config-history');
+  const badge = document.getElementById('ops-cfg-badge');
+  if(!box) return;
+  try{
+    const d = await api('/api/config/history?limit=20');
+    const rows = (d && d.history) || [];
+    if(badge) badge.textContent = `${rows.length} 条`;
+    if(!rows.length){
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">暂无配置变更（变更须经 HIL 批准，见 core/config_promotion.py）</div>';
+      return;
+    }
+    box.innerHTML = `<table class="t"><tr><th>时间</th><th>配置项</th><th>旧值 → 新值</th><th>来源</th><th>效果</th></tr>` +
+      rows.map(h=>{
+        const v = h.effect_verdict || '';
+        const cls = CFG_EFFECT_CLS[v] || 'g';
+        const lbl = CFG_EFFECT_LABEL[v] || v;
+        const tip = h.effect_detail ? ` title="${escMd(h.effect_detail)}"` : '';
+        return `<tr>
+          <td style="font-size:11px;">${escMd(String(h.applied_at||'').slice(5,16))}</td>
+          <td><b>${escMd(h.section||'')}.${escMd(h.key||'')}</b></td>
+          <td style="font-size:11px;">${escMd(String(h.old_value||'').slice(0,18))} → <b>${escMd(String(h.new_value||'').slice(0,18))}</b></td>
+          <td style="font-size:10.5px;color:var(--mut);">${escMd(h.source||'')}${h.applied_by?'·'+escMd(h.applied_by):''}</td>
+          <td><span class="st ${cls}"${tip}>${escMd(lbl)}</span></td>
+        </tr>`;
+      }).join('') + '</table>';
+  }catch(e){
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">台账加载失败</div>';
+  }
+}
+async function runConfigEffectCheck(){
+  try{
+    const d = await api('/api/config/effect-check', {method:'POST', body: JSON.stringify({apply:true})});
+    if(!d || d.ok===false){ toast('判定失败：'+((d&&d.reason)||'未知')); return; }
+    const c = d.counts || {};
+    const summary = Object.keys(c).map(k=>`${CFG_EFFECT_LABEL[k]||k} ${c[k]}`).join(' / ') || '无可判定的变更';
+    toast(`判定完成：${summary}`);
+    loadConfigHistory();
+  }catch(e){
+    toast('判定失败，请重试');
+  }
 }

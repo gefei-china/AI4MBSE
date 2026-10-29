@@ -1117,7 +1117,14 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER REFERENCES conversations(id),
         message_id INTEGER REFERENCES messages(id),
-        feedback_type TEXT NOT NULL,  -- approve | reject | modify
+        -- ⚠️ 2026-10-29：取值域**不在此写死**，单一真源见 core/feedback_types.py
+        --   feedback_type = 评审动作：approve | reject | modify（流程裁决）
+        --   quality      = 用户质量信号：up | down（"这条回答好不好"）—— 由 _migrate_columns 补列
+        --   signal_kind  = review | quality（显式标注本行语义来源）
+        -- 之所以分列：'reject' 是评审拒绝而非用户差评，混用会让 badcase 去修没坏的东西。
+        feedback_type TEXT NOT NULL,
+        quality TEXT DEFAULT '',
+        signal_kind TEXT DEFAULT '',
         context TEXT DEFAULT '',
         created_by TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP

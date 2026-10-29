@@ -126,6 +126,38 @@ def config_history(section: str = "", limit: int = 100,
                                                      _promo.SRC_MANUAL]}
 
 
+@router.post("/api/config/effect-check")
+def config_effect_check(body: dict = Body(default={}),
+                        conn=Depends(db_session), user=Depends(current_user)):
+    """配置变更「改后效果」判定（2026-10-29）。
+
+    补的是 P1-4 之后的空档：沙箱只证明"改前没改坏"，改完**有没有真的变好**
+    此前无人回答。本端点用 `eval_metrics` 做前后等长窗口对比（方向敏感），
+    给出 effective / ineffective / mixed / no_data / inconclusive。
+
+    · 单条：`{history_id: 12}` → 判定该行（默认 dry-run，`apply=true` 才落库）
+    · 批量：不传 history_id → 判定全部"已应用但未判定"的行
+    """
+    from core import config_effect as _ce
+    apply = bool(body.get("apply"))
+    hid = int(body.get("history_id") or 0)
+    if hid:
+        res = _ce.evaluate_effect(conn, hid,
+                                  window_days=int(body.get("window_days") or
+                                                  _ce.DEFAULT_WINDOW_DAYS))
+        if apply and res.get("ok"):
+            conn.execute(
+                "UPDATE config_history SET effect_verdict=?, effect_detail=?, "
+                "effect_checked_at=? WHERE id=?",
+                (res["verdict"], res["reason"], res["checked_at"], hid))
+            conn.commit()
+        return res
+    return _ce.evaluate_pending(conn, apply=apply,
+                                limit=int(body.get("limit") or 20),
+                                window_days=int(body.get("window_days") or
+                                                _ce.DEFAULT_WINDOW_DAYS))
+
+
 @router.post("/api/config/rollback")
 def config_rollback(body: dict = Body(default={}),
                     conn=Depends(db_session), user=Depends(current_user)):

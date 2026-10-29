@@ -19,6 +19,10 @@ import threading
 import time
 from datetime import datetime
 
+# 告警状态机单一真源（2026-10-29）：未终结状态的取值域不在本模块另写一份
+#（此前 'acked' 字面量在本模块与 routers/monitor.py 各写一次，必然漂移）。
+from core.alert_state import open_statuses_sql
+
 # 全局专有指标（与 run 级四个 metric 零重叠 —— 保证两套评估器互不重复告警）
 GLOBAL_METRICS = (
     "llm_mock_rate_1h",        # 近 1h Mock 降级率（%）：provider 不可用/未配置的直接信号
@@ -345,11 +349,29 @@ def evaluate_once(conn=None, cooldown_min: int = 30, notify: bool = True) -> dic
             except Exception:
                 pass
             try:
-                c.execute(
-                    "INSERT INTO alert_events (rule_id, rule_name, run_id, flow_name, metric, actual, "
-                    "threshold, operator, level, status) VALUES (?,?,?,?,?,?,?,?,?,'open')",
-                    (r["id"], r["name"], 0, "(periodic)", metric, actual, th, op,
-                     r["level"] or "warning"))
+                # ★ 2026-10-29 折叠：同一规则的**未终结**告警累加计数，而非新增行。
+                #   此前每次命中都 INSERT ⇒ 同因告警累积 81 次（实测），看板被淹没
+                #   ⇒ 告警疲劳（"BadCase 积压"响了 81 次，而那 6 条坏例一条没动）。
+                #   折叠后：首次 INSERT（hit_count=1，created_at 保留首次触发时刻），
+                #   后续命中 UPDATE（hit_count+1 / last_seen_at / actual 刷新）。
+                #   「已终结(fixed/verified)」不参与折叠 ⇒ 问题复发会开**新事件**，
+                #   不会被算成旧事件的又一次命中。
+                _open_sql = open_statuses_sql()
+                _row = c.execute(
+                    "SELECT id FROM alert_events WHERE rule_id=? AND status IN (%s) "
+                    "ORDER BY id DESC LIMIT 1" % _open_sql, (r["id"],)).fetchone()
+                if _row:
+                    c.execute(
+                        "UPDATE alert_events SET hit_count=COALESCE(hit_count,1)+1, actual=?, "
+                        "last_seen_at=datetime('now') WHERE id=?",
+                        (actual, int(_row[0])))
+                else:
+                    c.execute(
+                        "INSERT INTO alert_events (rule_id, rule_name, run_id, flow_name, metric, actual, "
+                        "threshold, operator, level, status, hit_count, last_seen_at) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,'open',1,datetime('now'))",
+                        (r["id"], r["name"], 0, "(periodic)", metric, actual, th, op,
+                         r["level"] or "warning"))
                 c.execute("UPDATE alert_rules SET last_fired_at=datetime('now') WHERE id=?", (r["id"],))
                 c.commit()
                 fired += 1

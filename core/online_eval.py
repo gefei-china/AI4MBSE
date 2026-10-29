@@ -34,6 +34,14 @@ import random
 import sqlite3
 from datetime import datetime
 
+# 反馈词表单一真源（2026-10-29）：负反馈类型**不在本模块另存一份**
+#（原先本模块与 core/badcase.py 各存一份 NEGATIVE 词表，两份必然漂移）。
+from core.feedback_types import (
+    NEGATIVE_BEHAVIOR_EVENTS,
+    NEGATIVE_QUALITY,
+    NEGATIVE_REVIEW_TYPES,
+)
+
 # ── 配置（core.config eval_online 组；禁模块内常量旁路，默认值仅兜底）──
 _SETTING_DEFAULTS = {
     "enabled": True,               # 总开关（False 时采样返空而非 500）
@@ -47,10 +55,13 @@ _SETTING_DEFAULTS = {
 }
 
 #: 负反馈信号源一：ux_metrics 事件白名单中的负向事件（repositories/ux_metrics_repo.EVENTS）
-_UX_NEG_EVENTS = ("task_error", "interrupt")
+_UX_NEG_EVENTS = NEGATIVE_BEHAVIOR_EVENTS
 #: 负反馈信号源二：feedback 表负向类型（与 core/badcase._SQL_FEEDBACK 同口径，
 #: 不造第二份词表——两份必然漂移）
-_FB_NEG_TYPES = ("modify", "wrong", "corrected")
+#: ⚠️ 2026-10-29：改为从单一真源 `core/feedback_types.py` 取，并**新增质量通道**
+#:   （quality='down'，用户点踩）。此前只有评审侧负反馈，而前端根本没有能产生
+#:   `modify/wrong/corrected` 的入口 ⇒ 这条路常年采不到东西（队列 0 行）。
+_FB_NEG_TYPES = NEGATIVE_REVIEW_TYPES
 
 
 def get_settings() -> dict:
@@ -124,11 +135,11 @@ def _cand_neg_feedback(conn, window_arg, failures: list) -> list:
     if _tbl_exists(conn, "feedback"):
         try:
             rows = conn.execute(
-                "SELECT id, message_id, conversation_id, feedback_type, context "
-                "FROM feedback WHERE feedback_type IN (%s) "
+                "SELECT id, message_id, conversation_id, feedback_type, quality, context "
+                "FROM feedback WHERE (feedback_type IN (%s) OR COALESCE(quality,'') IN (%s)) "
                 "AND created_at >= datetime('now', ?) ORDER BY id DESC"
-                % ",".join("?" * len(_FB_NEG_TYPES)),
-                (*_FB_NEG_TYPES, window_arg[0])).fetchall()
+                % (",".join("?" * len(_FB_NEG_TYPES)), ",".join("?" * len(NEGATIVE_QUALITY))),
+                (*_FB_NEG_TYPES, *NEGATIVE_QUALITY, window_arg[0])).fetchall()
             for r in rows:
                 r = dict(r)
                 out.append({
@@ -139,7 +150,7 @@ def _cand_neg_feedback(conn, window_arg, failures: list) -> list:
                     "trace_id": "",
                     "sample_reason": "neg_feedback",
                     "reason_detail": "feedback#%d %s" % (
-                        int(r["id"]), r.get("feedback_type") or ""),
+                        int(r["id"]), r.get("quality") or r.get("feedback_type") or ""),
                 })
         except Exception as e:                                 # noqa: BLE001
             failures.append("neg_feedback(feedback): %s: %s"

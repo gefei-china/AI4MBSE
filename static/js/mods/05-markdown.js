@@ -402,6 +402,19 @@ function renderMessage(m) {
     const fbCls = m.feedback==='approve'?'ok':m.feedback==='reject'?'r':'w';
     html += `<div style="margin-top:6px;"><span class="st ${fbCls} hil-fb">${fbMap[m.feedback]||m.feedback}</span></div>`;
   }
+  // ── 消息质量信号（👍/👎）2026-10-29 新增 ──
+  // 与上面 `m.feedback`（**评审动作**：采纳/拒绝/修订）**语义不同**，分列显示：
+  //   feedback = 流程裁决（这份产物我批不批）
+  //   quality  = 质量评价（这条回答好不好）← 后者才是驱动进化的方向信号
+  // ⚠️ 合并成一套会让"评审拒绝"被当成"用户差评"，进化系统会去修没坏的东西。
+  // 取值集合从后端单一真源下发（GET /api/feedback-types），此处仅做兜底默认。
+  if(m.role==='assistant' && m.id){
+    const _q = String(m.quality||'');
+    html += `<div class="msg-qc" data-mid="${m.id}">
+      <button class="msg-qc-btn${_q==='up'?' on':''}" data-q="up" title="这条回答有帮助（用于优化检索与回答质量）">👍 有帮助</button>
+      <button class="msg-qc-btn${_q==='down'?' on is-down':''}" data-q="down" title="这条回答有问题（会成为改进信号）">👎 有问题</button>
+    </div>`;
+  }
   // V3.0 去消息级采纳/拒绝按钮：确认动作收敛到关键环节（确认写入/审核通过）。
   // 2026-09-17 移除「⚠ 需要确认 · SysML 产物入库」审批卡（用户确认移除）：
   //   该卡早已与架构脱节——14-sysml.js 顶部即注明「旧单版本入库入口已移除，AI 建模代码不再直接入库，
@@ -461,3 +474,71 @@ function copyMsg(btn){
 }
 
 // ── V3 会话内执行过程：持久化数据（card_data.exec）→ 时间线顺序 HTML ──
+
+// ══════════════════════════════════════════════════════════════════════
+// 消息质量信号（👍/👎）—— 交互与取值目录（2026-10-29）
+// ══════════════════════════════════════════════════════════════════════
+// 为什么单独一个文件段落：质量信号是**显式负反馈的唯一入口**，
+// 在此之前前端没有任何可点的反馈入口，而后端 badcase / online_eval
+// 只认 modify/wrong/corrected ⇒ 显式负反馈常年 0 条、采样队列 0 行。
+//
+// ★ 取值集合**从后端单一真源下发**（GET /api/feedback-types），
+//   这里的数组只是**兜底默认**（API 不可用时不至于按钮全废）。
+//   两端集合相等由 tests/test_feedback_type_consistency.py 断言。
+const FB_QUALITY_TYPES_DEFAULT = ['up', 'down'];
+let FB_TYPES_CATALOG = null;   // {review_types:[], quality_types:[], ...}
+
+function fbQualityTypes(){
+  if(FB_TYPES_CATALOG && Array.isArray(FB_TYPES_CATALOG.quality_types) && FB_TYPES_CATALOG.quality_types.length){
+    return FB_TYPES_CATALOG.quality_types;
+  }
+  return FB_QUALITY_TYPES_DEFAULT;
+}
+
+// 拉一次取值目录（失败静默：走兜底默认，不阻断聊天）
+(function loadFbTypes(){
+  if(typeof api!=='function') return;
+  try{
+    api('/api/feedback-types').then(function(r){
+      if(r && Array.isArray(r.quality_types)) FB_TYPES_CATALOG = r;
+    }).catch(function(){});
+  }catch(e){ /* 兜底默认 */ }
+})();
+
+// ── 点击处理：事件委托（消息流是动态插入的，不能逐条绑定）──
+document.addEventListener('click', function(e){
+  const btn = e.target && e.target.closest ? e.target.closest('.msg-qc-btn') : null;
+  if(!btn) return;
+  const wrap = btn.closest('.msg-qc');
+  if(!wrap) return;
+  const mid = parseInt(wrap.getAttribute('data-mid')||'0', 10);
+  const q = btn.getAttribute('data-q')||'';
+  if(!mid || fbQualityTypes().indexOf(q)<0) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  const isDown = btn.classList.contains('is-down');
+  const cur = btn.classList.contains('on') ? (isDown ? 'down' : 'up') : '';
+  const next = (cur===q) ? '' : q;          // 再次点击同一项 = 取消评价
+
+  btn.disabled = true;
+  api(`/api/messages/${mid}/quality`, {method:'POST', body: JSON.stringify({quality: next})})
+    .then(function(r){
+      const got = (r && r.quality!=null) ? String(r.quality) : next;
+      wrap.querySelectorAll('.msg-qc-btn').forEach(function(b){
+        b.classList.remove('on','is-down');
+        const bq = b.getAttribute('data-q');
+        if(bq===got){
+          b.classList.add('on');
+          if(bq==='down') b.classList.add('is-down');
+        }
+      });
+      if(typeof toast==='function'){
+        toast(got ? (got==='down' ? '已记录：这条回答有问题，将用于改进' : '已记录：这条回答有帮助') : '已取消评价');
+      }
+    })
+    .catch(function(err){
+      if(typeof toast==='function') toast('反馈提交失败，请重试');
+    })
+    .finally(function(){ btn.disabled = false; });
+});

@@ -111,11 +111,28 @@ class SkillImprover:
             row = conn.execute(
                 "SELECT version FROM skills WHERE name=? AND status='published'", (skill["name"],)).fetchone()
             old_ver = str(row["version"] if row else "v1")
+            # ★ 2026-10-29 修复版本号解析（真跑暴露：产出两条同名同版本的 v11 草稿）：
+            #   原实现 `int(re.sub(r"\D", "", old_ver) or 1) + 1`
+            #   ⇒ `"v1.0"` 的非数字**全部**删掉（连小数点一起）得 `"10"` ⇒ v11，
+            #     而语义上 v1.0 的主版本是 **1**，下一版应是 v2。
+            #   后果：① 版本号跳号，审核面板出现"从 v1.0 直接跳到 v11"；
+            #        ② 同一技能重复执行都算成 v11 ⇒ **多条同名同版本草稿**，
+            #           人工无法区分哪条是新的（实测：一次手动 + 一次 handler 真跑
+            #           各产一条 v11，内容还不一样）。
+            #   现：取主版本号（v1.0 → 1），并**跳过已占用的版本号**保证唯一。
+            _m = re.match(r"\s*[vV]?\s*(\d+)", old_ver)
             try:
-                vn = int(re.sub(r"\D", "", old_ver) or 1) + 1
+                vn = (int(_m.group(1)) if _m else 1) + 1
             except Exception:
                 vn = 2
-            new_ver = f"v{vn}"
+            for _ in range(20):                       # 上限防死循环（既有版本号被打乱时）
+                new_ver = f"v{vn}"
+                _dup = conn.execute(
+                    "SELECT 1 FROM skills WHERE name=? AND version=? LIMIT 1",
+                    (skill["name"], new_ver)).fetchone()
+                if not _dup:
+                    break
+                vn += 1
             cur = conn.execute(
                 "INSERT OR IGNORE INTO skills (name, skill_type, description, content, triggers, "
                 "version, status, source, use_stats, feedback_notes, dependencies, allowed_tools) "

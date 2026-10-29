@@ -235,6 +235,21 @@ def _act_badcase(conn: sqlite3.Connection, s: dict) -> list:
         }]
     if not res.get("enabled"):
         return []
+    # ★ 2026-10-29：判据面级失败也要变成"人看得见的动作项"。
+    #   badcase 此前对 detector SQL 异常是 `except: continue` 静默跳过 ⇒
+    #   某个判据面瘫了，坏例数凭空变少，周报会把它当成"最近没有坏例、变好了"。
+    #   现在 badcase 把失败记进 res['failures']，此处显式转成 action。
+    _bc_failures = list(res.get("failures") or [])
+    if _bc_failures:
+        return [{
+            "source": "badcase", "source_label": "BadCase 入库", "id": None,
+            "title": "BadCase 判据面失效（坏例数不可信）",
+            "detail": "以下判据面执行失败，本轮坏例统计**不完整**，不可据此判断「变好了」："
+                      + "；".join(_bc_failures[:5]),
+            "meta": {"failures": _bc_failures},
+            "action": None,
+            "not_actionable_reason": "判据面执行失败，需先修 SQL/表结构",
+        }]
     plan = res.get("plan") or {}
     new, recur, reopen = (int(plan.get(k, 0) or 0)
                           for k in ("new", "recur", "reopen"))

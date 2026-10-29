@@ -957,7 +957,19 @@ def redraw_confirm(conv_id: int, body: dict = None, conn=Depends(db_session),
 @router.post("/api/messages/{msg_id}/feedback")
 def message_feedback(msg_id: int, body: dict, conn=Depends(db_session),
                      user=Depends(current_user)):
-    fb_type = body.get("type", "")
+    """评审动作反馈（approve/reject/modify + 兼容历史 wrong/corrected）。
+
+    ⚠️ 2026-10-29：新增**白名单校验**（原先零校验，脏值可落库 ⇒ 污染统计口径）。
+       取值域单一真源：`core/feedback_types.py`。
+       ⚠️ 本端点记录的是**评审动作**（流程裁决），**不是**用户质量差评 ——
+       质量信号走 `/api/messages/{msg_id}/quality`（up/down），两者分列存储。
+    """
+    from core.feedback_types import REVIEW_TYPES, NEGATIVE_REVIEW_TYPES
+    fb_type = str(body.get("type", "") or "").strip().lower()
+    _allowed = tuple(REVIEW_TYPES) + tuple(NEGATIVE_REVIEW_TYPES)
+    if fb_type not in _allowed:
+        raise HTTPException(status_code=400,
+                            detail=f"type 取值非法：{fb_type!r}，允许 {list(_allowed)}")
     context = body.get("context", "") or ""
     actor = audit_user(user)
     repo = ConversationRepo(conn)
@@ -976,6 +988,53 @@ def message_feedback(msg_id: int, body: dict, conn=Depends(db_session),
         except Exception:
             pass
     return {"ok": True}
+
+
+@router.post("/api/messages/{msg_id}/quality")
+def message_quality(msg_id: int, body: dict, conn=Depends(db_session),
+                    user=Depends(current_user)):
+    """用户质量信号（up/down）："这条回答好不好"。
+
+    ★ 2026-10-29 新增。这是**显式负反馈的唯一入口** —— 在此之前
+      前端没有任何可点击的反馈按钮（`05-markdown.js` 的按钮已被 V3.0 移除），
+      后端 badcase/online_eval 又只认 `modify/wrong/corrected` ⇒
+      **显式负反馈常年 0 条**，采样队列 0 行，进化系统没有方向信号。
+
+    与评审动作**分列**的原因：`reject` 是"评审拒绝"（流程否决），
+    若当成"用户差评"会让进化去修根本没坏的东西（misevolution）。
+    """
+    from core.feedback_types import QUALITY_TYPES
+    q = str(body.get("quality") or body.get("type") or "").strip().lower()
+    # ⚠️ 空串 = **取消评价**（前端 toggle），是合法操作 ⇒ 不进白名单校验。
+    #    但**绝不能写 feedback 历史**：取消动作若留痕，会被采样器当成负反馈采走
+    #    ⇒ 用户"先踩后撤"被记成两次差评，信号被放大。
+    if q and q not in QUALITY_TYPES:
+        raise HTTPException(status_code=400,
+                            detail=f"quality 取值非法：{q!r}，允许 {list(QUALITY_TYPES)}")
+    context = body.get("context", "") or ""
+    actor = audit_user(user)
+    repo = ConversationRepo(conn)
+    row = conn.execute("SELECT conversation_id FROM messages WHERE id=?", (msg_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="消息不存在")
+    conv_id = int(row[0] or 0)
+    repo.update_message_quality(msg_id, q)
+    if q:
+        repo.create_quality_feedback(msg_id, q, context, actor, conversation_id=conv_id)
+        audit(actor, "quality", f"消息#{msg_id} 质量信号:{q}", conn=conn)
+    else:
+        audit(actor, "quality", f"消息#{msg_id} 质量信号:清除", conn=conn)
+    return {"ok": True, "quality": q}
+
+
+@router.get("/api/feedback-types")
+def feedback_types():
+    """反馈取值目录（单一真源下发）。
+
+    前端据此渲染与校验，**不再硬编码**取值集合 —— 跨语言一致性的根。
+    """
+    from core.feedback_types import public_catalog
+    return public_catalog()
 
 
 # ── P0：消息结论速览生成（资料库与AI建模优化 §2.2）──

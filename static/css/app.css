@@ -337,6 +337,18 @@ body.nr-full-lock{overflow:hidden;}
 /* 2026-09-04 复制按钮：默认仅 icon，hover icon 时展开「复制」文字 */
 .msg-copy-btn .cp-txt{display:none;}
 .msg-copy-btn:hover .cp-txt{display:inline;}
+/* ── 消息质量信号（👍/👎）2026-10-29 新增 ──
+   为什么加：此前前端**没有任何可点的反馈按钮**（消息级采纳/拒绝按钮已于 V3.0 移除），
+   而后端 badcase / online_eval 只认 `modify/wrong/corrected` ⇒
+   **显式负反馈常年 0 条、采样队列 0 行** ⇒ 进化系统没有方向信号（"越用越聪明"断链）。
+   交互范式沿用 .msg-copy-btn：默认低调、hover 显形，不增加常态视觉密度。 */
+.msg-qc{display:flex;gap:4px;align-items:center;margin-top:6px;opacity:.35;transition:opacity .15s;}
+.msg:hover .msg-qc,.msg-qc:focus-within{opacity:1;}
+.msg-qc-btn{font-size:10.5px;line-height:1.7;color:var(--mut);background:transparent;border:1px solid var(--line);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit;transition:all .15s;}
+.msg-qc-btn:hover{color:var(--blue-d);border-color:var(--blue-bd);background:var(--blue-l);}
+.msg-qc-btn.on{color:var(--grn);border-color:var(--grn);background:var(--grn-l);}
+.msg-qc-btn.on.is-down{color:var(--red);border-color:var(--red);background:var(--red-l);}
+.msg-qc-btn[disabled]{opacity:.5;cursor:default;}
 /* ── 会话内执行过程（V3 增强：Trae 式 + 视觉升级）── */
 /* ★ 2026-10-27（用户反馈：「AI 在执行环节，最下面总是输出大量的文本内容，且页面会被拉得很长，
    要求此区域限制高度，可以滑动查看完整内容」）：

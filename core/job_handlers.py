@@ -448,6 +448,132 @@ def handler_eval_nightly(payload: dict, job: dict) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════
+# handler：自进化三引擎（2026-10-29）
+# ══════════════════════════════════════════════════════════════════
+# ★ 为什么这三个之前不在队列里：代码都写好了，但**没有任何触发点** ⇒
+#   生产库实测：config_proposals 0 行、online_eval_queue 0 行、
+#   skills.source 无一条 'ai_improve' ⇒ 进化闭环"感知层完备、决策/行动层空转"。
+#   典型断链：SkillImprover 的候选条件是"失败次数 ≥ improve_min_fail(3)"，
+#   而生产库里 Requirement_Analysis_Pre-check 失败 17 次、智源平台管理失败 16 次，
+#   **素材一直在，引擎从未被叫醒**。
+#
+# ⚠️ 三条纪律（全守）：
+#   ① **只提议、不自动应用**：本组 handler 一律不写生产配置、不发布技能、不改线上参数。
+#      · config_proposal → 只写 pending 提案队列，等人裁决（P1-4 晋升通道另有 HIL 闸门）；
+#      · skill_improve  → 只产 status='draft_revision' 草稿，等人审核发布；
+#      · online_eval    → 只把候选入队，等人标注。
+#   ② **失败必须可见**：任一引擎报错都进 failures 并在作业结果里带回，
+#      不静默吞（"引擎坏了"长得像"没有问题"是最贵的失败）。
+#   ③ **默认 dry-run 语义**：需要落库的引擎一律显式 apply，且仅写"待人处理"的队列。
+
+
+def handler_skill_improve(payload: dict, job: dict) -> dict:
+    """技能自改进：扫描达到失败阈值的技能 → LLM 修订 → 产出 draft_revision 草稿。
+
+    产出**只是草稿**（status='draft_revision'），人工审核后才发布 —— 沿用
+    既有「人工审核发布」安全策略，自动化不得越过发布闸门。
+
+    ⚠️ 2026-10-29 实测踩到的坑：`SkillImprover.run_all()` 返回的字段是
+      **`{proposed, names, skipped}`**，不是 `{revised, ...}`。
+      初版 handler 按 `revised` 读 ⇒ 恒为 0 ⇒ 明明产出了草稿，作业结果却报 0
+      （"看起来没干活"）。真跑即复现：单独调 `improve_skill` 成功产出 v11，
+      而 handler 回报 `revised: 0`。
+      ⇒ 读第三方返回值**必须先核对字段名**，不能凭印象写。
+    """
+    limit = int(payload.get("limit") or 5)
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=600):
+            _report(job, 1, "扫描技能失败样本…")
+            from skill_improve import SkillImprover
+            cands = SkillImprover.candidates(conn)
+            _report(job, 40, "候选 %d 个，开始 LLM 修订…" % len(cands))
+            res = SkillImprover.run_all(conn, limit=limit)
+            # run_all 内部用 ProposalRepo 之外的自有 INSERT，仍需显式提交
+            try:
+                conn.commit()
+            except Exception:
+                pass
+            names = list(res.get("names") or [])
+            return {"candidates": len(cands),
+                    "proposed": int(res.get("proposed") or 0),
+                    "names": names,
+                    "skipped": bool(res.get("skipped"))}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def handler_config_proposal(payload: dict, job: dict) -> dict:
+    """配置提案生成：首坏步模式 → 规则命中 → 落 pending 提案队列。
+
+    ★ 绝不写生产配置 —— 提案只进 `config_proposals`（status='pending'），
+    由人在设置页裁决；真要应用须走 P1-4 的「沙箱 A/B + HIL 批准」通道。
+
+    ⚠️ 2026-10-29 实测踩到的坑：**必须显式 commit**。
+      `core/config_proposal.generate()` 内部经 `ProposalRepo.insert_proposal`
+      走 `BaseRepo.execute` —— 该层**只执行不提交**（事务边界由调用方定）。
+      Web 请求路径有 `db_session` 依赖兜底提交，所以 API 上一直"看起来正常"；
+      但 handler 走 `_own_conn()` 自己开连接、finally 里 close() ⇒
+      **未提交事务直接回滚** ⇒ 日志/返回值都说 `created: 5`，
+      库里却是 0 行（"看起来入队成功、实际一条没留"）。
+      首次真跑即复现：返回 created=5、`SELECT COUNT(*)` 恒为 0。
+    """
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=600):
+            _report(job, 1, "聚合首坏步模式…")
+            from core import config_proposal as _cp
+            res = _cp.generate(conn)
+            # ★ 显式提交（见 docstring）。generate 内部不 commit 是既有设计，
+            #   不能改它（Web 路径依赖请求级事务），故在 handler 侧收口。
+            try:
+                conn.commit()
+            except Exception:
+                pass
+            _report(job, 90, "提案入队 %d 条（指纹去重跳过 %d）"
+                    % (int(res.get("created") or 0), int(res.get("skipped") or 0)))
+            return {"created": int(res.get("created") or 0),
+                    "skipped": int(res.get("skipped") or 0),
+                    "llm_drafted": int(res.get("llm_drafted") or 0),
+                    "patterns_summary": res.get("patterns_summary") or {}}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def handler_online_eval_sample(payload: dict, job: dict) -> dict:
+    """在线评测采样：负反馈优先 > 低置信优先 > 随机 5% → 入队待标注。
+
+    ⚠️ 采样器默认 dry-run（不写库），本 handler **显式 apply=True** ——
+    只写 `online_eval_queue`（待人工标注队列），不动任何模型/配置。
+    """
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=600):
+            _report(job, 1, "采样候选（负反馈优先）…")
+            from core import online_eval as _oe
+            res = _oe.sample_candidates(conn, apply=True)
+            fails = list(res.get("failures") or [])
+            if fails:
+                # 采样源级失败必须可见：静默跳过会让"采样器坏了"长得像"没有负反馈"
+                _report(job, 90, "⚠ 采样源失败 %d 项" % len(fails))
+            return {"inserted": int(res.get("inserted") or 0),
+                    "candidates": len(res.get("candidates") or []),
+                    "plan": res.get("plan") or {},
+                    "failures": fails}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════
 # 注册表
 # ══════════════════════════════════════════════════════════════════
 KINDS = {
@@ -463,6 +589,10 @@ KINDS = {
     "eval_rag": handler_eval_rag,
     "build_evalset": handler_build_evalset,
     "eval_nightly": handler_eval_nightly,
+    # 自进化三引擎（2026-10-29）：此前无触发点 ⇒ 提案/采样队列常年 0 行
+    "skill_improve": handler_skill_improve,
+    "config_proposal": handler_config_proposal,
+    "online_eval_sample": handler_online_eval_sample,
 }
 
 
@@ -475,19 +605,30 @@ def register_all() -> list:
 
 
 def describe() -> dict:
-    """给 /api/jobs/kinds 用：可提交的业务作业类型 + 必填 payload 字段。"""
+    """给 /api/jobs/kinds 用：可提交的业务作业类型 + 必填 payload 字段 + 分组。
+
+    ★ 2026-10-29：新增 `group` 字段。动机：前端此前**硬编码**了一份 kind 列表
+      （static/js/mods/48-eval.js 的 _EVAL_JOBS），后端新增 kind 时前端看不见 ——
+      这正是"同一枚举写两份必然漂移"。现由前端按 group 动态渲染，
+      后端注册即前端可见。
+      group 取值：ops（数据运维域）| eval（评测域）| evolution（自进化域）。
+    """
     return {
-        "doc_ingest": {"label": "文档入库", "required": ["doc_id"]},
-        "doc_retry": {"label": "失败文档重试", "required": ["doc_id"]},
-        "doc_reindex": {"label": "文档重索引", "required": ["doc_id"]},
-        "project_ingest": {"label": "工程入库", "required": ["project_id"]},
-        "v2g_extract": {"label": "向量转图谱抽取", "required": ["query"]},
-        "knowledge_reconcile": {"label": "写后调和", "required": []},
-        "config_sandbox": {"label": "配置沙箱 A/B 评估", "required": ["run_id"]},
+        "doc_ingest": {"label": "文档入库", "required": ["doc_id"], "group": "ops"},
+        "doc_retry": {"label": "失败文档重试", "required": ["doc_id"], "group": "ops"},
+        "doc_reindex": {"label": "文档重索引", "required": ["doc_id"], "group": "ops"},
+        "project_ingest": {"label": "工程入库", "required": ["project_id"], "group": "ops"},
+        "v2g_extract": {"label": "向量转图谱抽取", "required": ["query"], "group": "ops"},
+        "knowledge_reconcile": {"label": "写后调和", "required": [], "group": "ops"},
+        "config_sandbox": {"label": "配置沙箱 A/B 评估", "required": ["run_id"], "group": "evolution"},
         # 评测域（T1：前端"立即跑批"；payload 无必填项）
-        "eval_trace": {"label": "Trace 一致性评测（~15s）", "required": []},
-        "eval_gen": {"label": "生成质量评测 + LLM 忠实度（~80s）", "required": []},
-        "eval_rag": {"label": "RAG 检索评测（三域+负对照，分钟级）", "required": []},
-        "build_evalset": {"label": "重建评测集（语料变更后，~40s）", "required": []},
-        "eval_nightly": {"label": "nightly 全批（5 步 + 3 门禁，4~8 分钟）", "required": []},
+        "eval_trace": {"label": "Trace 一致性评测（~15s）", "required": [], "group": "eval"},
+        "eval_gen": {"label": "生成质量评测 + LLM 忠实度（~80s）", "required": [], "group": "eval"},
+        "eval_rag": {"label": "RAG 检索评测（三域+负对照，分钟级）", "required": [], "group": "eval"},
+        "build_evalset": {"label": "重建评测集（语料变更后，~40s）", "required": [], "group": "eval"},
+        "eval_nightly": {"label": "nightly 全批（5 步 + 3 门禁，4~8 分钟）", "required": [], "group": "eval"},
+        # 自进化三引擎（2026-10-29）
+        "skill_improve": {"label": "技能自改进（失败样本 → LLM 修订草稿）", "required": [], "group": "evolution"},
+        "config_proposal": {"label": "配置提案生成（首坏步模式 → 提案队列）", "required": [], "group": "evolution"},
+        "online_eval_sample": {"label": "在线评测采样（负反馈优先 → 待标注队列）", "required": [], "group": "evolution"},
     }

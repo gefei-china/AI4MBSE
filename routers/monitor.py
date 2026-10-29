@@ -196,9 +196,86 @@ def monitor_alerts(status: str = "", level: str = "", limit: int = 30, conn=Depe
 
 @router.post("/api/monitor/alerts/{aid}/ack")
 def ack_alert(aid: int, conn=Depends(db_session)):
+    """已知悉（open → acked）。保留此端点向后兼容；内部走统一状态机。"""
+    from core.alert_state import can_transition
+    row = conn.execute("SELECT status FROM alert_events WHERE id=?", (aid,)).fetchone()
+    if row is None:
+        return {"ok": False, "reason": "not_found"}
+    if not can_transition(str(row[0] or ""), "acked"):
+        return {"ok": False, "reason": "illegal_transition", "from": row[0]}
     conn.execute("UPDATE alert_events SET status='acked' WHERE id=?", (aid,))
     conn.commit()
     return {"ok": True, "id": aid}
+
+
+@router.post("/api/monitor/alerts/{aid}/status")
+def set_alert_status(aid: int, body: dict, conn=Depends(db_session),
+                     user=Depends(current_user)):
+    """告警处置流转（2026-10-29 新增）。
+
+    状态机见 `core/alert_state.py`：open → acked → triaged → fixed → verified。
+    ★ 动机：生产库 328 条告警 **status 全是 'open'**，一条都没被处理过 ——
+      此前只有 ack、没有后续流转 ⇒ "这条到底修了没"无记录，
+      告警只是"响"而不是"待办"，且同因告警每 30 分钟一条、累积 81 次刷屏。
+
+    约束：
+      · **只能单步前进**（可跳过中间态，不可回退）——回退会让噪声回潮；
+      · 处置人/时间/备注落 `handled_by`/`handled_at`/`note` ⇒ 可追溯"谁在什么时候
+        把它判成已修"；
+      · 非法流转**明确报错**（不静默接受），否则看板会出现"已验证但其实没修"的假闭环。
+    """
+    from core.alert_state import can_transition, is_valid_status, ALERT_STATUSES
+    target = str(body.get("status", "") or "").strip()
+    note = str(body.get("note", "") or "").strip()
+    if not is_valid_status(target):
+        return JSONResponse({"ok": False, "reason": "invalid_status",
+                             "allowed": list(ALERT_STATUSES)}, status_code=400)
+    row = conn.execute("SELECT id, status FROM alert_events WHERE id=?", (aid,)).fetchone()
+    if row is None:
+        return JSONResponse({"ok": False, "reason": "not_found"}, status_code=404)
+    cur = str(row["status"] or "")
+    if not can_transition(cur, target):
+        return JSONResponse({"ok": False, "reason": "illegal_transition",
+                             "from": cur, "to": target}, status_code=400)
+    try:
+        from core.audit import audit_user as _au
+        actor = _au(user)
+    except Exception:
+        actor = ""
+    conn.execute(
+        "UPDATE alert_events SET status=?, handled_by=?, handled_at=datetime('now','localtime'), "
+        "note=? WHERE id=?",
+        (target, actor, note, aid))
+    conn.commit()
+    try:
+        from core.audit import audit as _audit
+        _audit(actor, "alert_status", f"告警#{aid} {cur}→{target} {note}", conn=conn)
+    except Exception:
+        pass
+    return {"ok": True, "id": aid, "status": target, "handled_by": actor}
+
+
+@router.get("/api/monitor/alerts/summary")
+def monitor_alerts_summary(conn=Depends(db_session)):
+    """告警**按状态**聚合（看板用）。
+
+    为什么要有：生产库 328 条全 'open' —— 看板只给总数，看不出"有没有人在处理"。
+    按状态拆开后，"open=328 / triaged=0 / fixed=0" 本身就是最刺眼的信号：
+    **告警从未被处置**。同时给同因折叠后的 hit_count 汇总（真实问题数远小于事件数）。
+    """
+    from core.alert_state import ALERT_STATUSES
+    by_status = {s: 0 for s in ALERT_STATUSES}
+    for r in _rows(conn, "SELECT status, COUNT(*) c FROM alert_events GROUP BY status"):
+        by_status[str(r["status"] or "")] = int(r["c"] or 0)
+    total = sum(by_status.values())
+    hit_total = 0
+    try:
+        hit_total = int(conn.execute(
+            "SELECT COALESCE(SUM(hit_count),0) FROM alert_events").fetchone()[0] or 0)
+    except Exception:
+        pass
+    return {"total": total, "by_status": by_status, "hit_total": hit_total,
+            "unhandled": by_status.get("open", 0) + by_status.get("acked", 0)}
 
 
 # ── P0-4（2026-10-04）：多租户隔离开启前的**数据体检**──

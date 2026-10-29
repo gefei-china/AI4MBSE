@@ -265,3 +265,25 @@ class ConversationRepo(BaseRepo):
             "INSERT INTO feedback (message_id, feedback_type, context, created_by) VALUES (?,?,?,?)",
             (msg_id, fb_type, context, created_by),
         )
+
+    # ── 2026-10-29：质量信号（quality）与评审动作（feedback）分列 ──
+    def update_message_quality(self, msg_id: int, quality: str) -> None:
+        """写消息级质量信号（up/down）。空串=清除评价。"""
+        self.execute("UPDATE messages SET quality=? WHERE id=?", (quality, msg_id))
+
+    def create_quality_feedback(self, msg_id: int, quality: str, context: str,
+                                created_by: str = "未登录", conversation_id: int = 0) -> None:
+        """落质量信号历史（signal_kind='quality'，与评审行可区分）。
+
+        `conversation_id` 单列入库：online_eval 采样时按会话回查助手消息
+        （ux_metrics 只有 conversation_id），质量信号自带 message_id ⇒ 采样更准。
+        """
+        self.execute(
+            "INSERT INTO feedback (message_id, conversation_id, feedback_type, quality, "
+            "signal_kind, context, created_by) VALUES (?,?,?,?,?,?,?)",
+            (msg_id, conversation_id or None, "", quality, "quality", context, created_by),
+        )
+
+    def get_message_quality(self, msg_id: int) -> str:
+        v = self.scalar("SELECT quality FROM messages WHERE id=?", (msg_id,))
+        return str(v or "")
