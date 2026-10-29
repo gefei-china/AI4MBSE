@@ -469,6 +469,48 @@ async function kbSetDocCategory(id, current) {
   toast(picked ? `✅ 文档已设置类别：${picked}` : '🗑 已清除该文档的知识类别');
   loadDocs(); loadLifecycle();
 }
+/* S4（2026-10-29）零命中成因分解。
+ *
+ * 为什么必须分开看（真库实测 59 条零命中）：指令文本 44% + 业务查询 11% + 噪声 8%
+ * 都不属于召回问题，真·召回缺口只有 35%。只报一个"零命中率"会把人引向
+ * "去调向量阈值"这条错路。
+ *
+ * ⚠️ `legacy` 必须单列：改造前的存量行 reason 不细分（一律 no_hit_fallback），
+ *   把它们归进任何一类都是编造。这里明确写"存量未细分"，宁可说不知道。
+ */
+function renderNoHitBreakdown(nh){
+  if(!nh || !nh.total) return '';
+  const seg = [
+    {k:'corpus_gap', n:nh.corpus_gap||0, nm:'真召回缺口', c:'#ff7a45',
+     tip:'语料里确实没有相关内容 —— 这一类才是召回质量问题'},
+    {k:'directive',  n:nh.directive||0,  nm:'指令文本',   c:'#7c5cff',
+     tip:'「请生成…」「澄清补充…」这类下达任务的文本，本就不该走知识库'},
+    {k:'biz_query',  n:nh.biz_query||0,  nm:'业务查询',   c:'#13a8a8',
+     tip:'「工程列表」「projectId」这类应走工具（query_projects 等），不是知识检索'},
+    {k:'tiny',       n:nh.tiny||0,       nm:'过短噪声',   c:'#a0a0a0',
+     tip:'不足 3 字符（如 q0/q1），统计价值低'},
+    {k:'legacy',     n:nh.legacy||0,     nm:'存量未细分', c:'#c0c0c0',
+     tip:'2026-10-29 归因上线前的旧记录，reason 未细分 —— 不计入任何一类'},
+  ].filter(x=>x.n>0);
+  if(!seg.length) return '';
+  const bar = seg.map(x=>`<div title="${escA(x.nm)}：${escA(x.tip)}"
+      style="flex:${x.n};min-width:6px;height:16px;background:${x.c};opacity:.85;"></div>`).join('');
+  const legend = seg.map(x=>`<span title="${escA(x.tip)}"
+      style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;">
+      <i style="width:8px;height:8px;border-radius:2px;background:${x.c};display:inline-block;"></i>
+      ${escA(x.nm)} <b>${x.n}</b></span>`).join('');
+  const realPct = nh.total ? Math.round((nh.corpus_gap||0)*100/nh.total) : 0;
+  return `<div style="margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fff;">
+    <div style="font-size:11px;color:var(--mut);margin-bottom:6px;">
+      零命中 <b>${nh.total}</b> 次（占全部检索 ${nh.pct_of_all||0}%）
+      <span style="float:right;color:${realPct>=50?'var(--amb)':'var(--grn)'};">
+        真召回缺口占比 ${realPct}%</span>
+    </div>
+    <div style="display:flex;gap:2px;border-radius:4px;overflow:hidden;margin-bottom:8px;">${bar}</div>
+    <div style="font-size:11px;color:var(--mut);line-height:1.7;">${legend}</div>
+  </div>`;
+}
+
 /* P1: 双引擎消费统计（图/向量/混合路由占比） */
 async function loadEngineStats() {
   const el = document.getElementById('engine-stats');
@@ -484,7 +526,7 @@ async function loadEngineStats() {
         <div style="font-size:11px;color:var(--mut);">平均置信 ${r.avg_confidence||0} · ${r.avg_latency_ms||0}ms</div>
       </div>`;
     }).join('');
-    const recent = (s.recent||[]).slice(0,4).map(x=>`<span class="tag">${x.route}「${x.query}」</span>`).join(' ');
+    const recent = (s.recent||[]).slice(0,4).map(x=>`<span class="tag" title="${escA(x.reason||'')}">${x.route}「${escA(String(x.query||'').slice(0,18))}」</span>`).join(' ');
     el.innerHTML = `
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <div style="flex:1;min-width:130px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--blue-l);">
@@ -494,6 +536,7 @@ async function loadEngineStats() {
         </div>
         ${bars}
       </div>
+      ${renderNoHitBreakdown(s.no_hit)}
       ${recent?`<div style="margin-top:8px;font-size:11px;color:var(--mut);">最近：${recent}</div>`:''}`;
   } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${e.message}</div>`; }
 }

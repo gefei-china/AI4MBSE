@@ -42,6 +42,16 @@ def monitor_dashboard(days: int = 7, conn=Depends(db_session)):
     mock_n = sum(1 for u in usage if u.get("used_mock"))
     total_tok = sum((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0) for u in usage)
     cost = round(sum(u.get("estimated_cost") or 0 for u in usage), 6)
+    # ── S0 补充（2026-10-29）：LLM 用量的**业务口径**汇总 ────────────────────
+    # 上面三个量是**全量**（含探针）。实测 `chat_probe` 占某窗口成本达 51%
+    #   ⇒ 只给全量会让"这台机器一天花了多少"和"业务花了多少"混成一个数。
+    # 为什么在这里加、而不让前端自己 filter：
+    #   ① `usage` 是 LIMIT 1000 的截断样本，前端再聚合会二次截断，口径不可控；
+    #   ② 探针判定必须走 `core/probe_mark`（单一真源），不能在 JS 里再写一份正则。
+    _probe_n = sum(1 for u in usage if (u.get("is_probe") or 0))
+    _biz = [u for u in usage if not (u.get("is_probe") or 0)]
+    biz_tok = sum((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0) for u in _biz)
+    biz_cost = round(sum(u.get("estimated_cost") or 0 for u in _biz), 6)
     # ── 系统级（真实进程信息 + DB 文件大小）──
     proc = {"pid": os.getpid(), "uptime_s": int(time.time() - _PROC_START), "db_size_kb": 0}
     try:
@@ -72,7 +82,12 @@ def monitor_dashboard(days: int = 7, conn=Depends(db_session)):
         "runs": {"total": total, "success": ok, "failed": err, "success_rate": round(ok * 100 / total, 1) if total else 0,
                  "avg_latency_ms": avg_ms},
         "llm": {"calls": len(usage), "mock_rate": round(mock_n * 100 / len(usage), 1) if usage else 0,
-                "total_tokens": total_tok, "estimated_cost": cost},
+                "total_tokens": total_tok, "estimated_cost": cost,
+                # S0：业务口径（已排除探针）+ 探针单列。两口径都下发，前端可并排展示，
+                # 也可让调用方判断"探针占了多少"——**不删数据、不改既有键**（零回归）。
+                "calls_biz": len(_biz), "calls_probe": _probe_n,
+                "tokens_biz": biz_tok, "cost_biz": biz_cost,
+                "probe_rate": round(_probe_n * 100.0 / len(usage), 1) if usage else 0},
         "llm_health": llm_health,
         "system": proc,
         "subs_active": active_subs, "open_alerts": open_alerts,

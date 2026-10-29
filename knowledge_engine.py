@@ -103,9 +103,38 @@ class QueryRouter:
             "SELECT query, route, reason, confidence, graph_count, vector_count, latency_ms, created_at "
             "FROM query_routing_stats ORDER BY id DESC LIMIT 10"
         ).fetchall()
+        # ── S4 补充（2026-10-29）：零命中的**成因分解** ──────────────────────
+        # 为什么必须在看板上分开（真库实测 59 条零命中）：
+        #   指令性文本 44%（请生成…/澄清补充…）本就不该走知识库；
+        #   业务数据查询 11%（工程列表/projectId）应走工具；
+        #   过短噪声 8%（q0/工程）；
+        #   真·召回缺口仅 35%。
+        # ⇒ 只报一个"零命中率"会让人以为召回质量差，从而去调向量阈值 —— **方向全错**。
+        #   `reason` 的细分由 `agent/retrieval_reason.py` 写入（只归因、不拦截）。
+        reason_rows = conn.execute(
+            "SELECT reason, COUNT(*) AS n FROM query_routing_stats"
+            " WHERE reason LIKE 'no_hit%' GROUP BY reason ORDER BY n DESC"
+        ).fetchall()
+        _nz = {r["reason"]: r["n"] for r in reason_rows}
+        _nz_total = sum(_nz.values())
+        # 真召回缺口 = corpus_gap（其余三类都说明"这次检索本不该发生或样本无意义"）。
+        # ⚠️ 兼容旧数据：改造前的存量行 reason 一律是 `no_hit_fallback`（未细分），
+        #    既不能算"真缺口"也不该丢掉 ⇒ 单列 `no_hit_legacy`，并在返回里标明。
+        _real = _nz.get("no_hit_corpus_gap", 0)
+        no_hit = {
+            "total": _nz_total,
+            "pct_of_all": round(_nz_total * 100.0 / total, 1) if total else 0.0,
+            "directive": _nz.get("no_hit_directive", 0),      # 指令文本：不该检索
+            "biz_query": _nz.get("no_hit_biz_query", 0),      # 业务查询：应走工具
+            "tiny": _nz.get("no_hit_tiny", 0),                # 过短噪声
+            "corpus_gap": _real,                              # ★ 真正的召回缺口
+            "legacy": _nz.get("no_hit_fallback", 0),          # 改造前未细分的存量
+            "real_recall_rate": (round(_real * 100.0 / total, 1) if total else 0.0),
+        }
         return {
             "total_queries": total,
             "routes": routes,
+            "no_hit": no_hit,
             "recent": [dict(r) for r in recent],
         }
 

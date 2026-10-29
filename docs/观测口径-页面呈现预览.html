@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>观测新口径 · 页面呈现预览</title>
+<style>
+  body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:#f5f6fa;margin:0;padding:24px;color:#1f2430;}
+  h2{font-size:15px;margin:22px 0 10px;color:#4b5563;}
+  .note{font-size:12px;color:#6b7280;margin-bottom:16px;line-height:1.7;background:#fff;border-left:3px solid #7c5cff;padding:10px 14px;border-radius:4px;}
+  .kpi{display:inline-block;vertical-align:top;min-width:170px;margin:0 10px 10px 0;border:1px solid #e5e7eb;border-radius:8px;padding:12px;background:#fff;}
+  .kpi .n{font-size:26px;font-weight:700;}
+  .kpi .l{font-size:12px;color:#6b7280;margin-top:2px;}
+  .kpi .l .st{font-size:11px;padding:1px 6px;border-radius:9px;background:#eef2ff;color:#4338ca;margin-left:4px;}
+  .st.w{background:#fff7ed;color:#c2410c;} .st.ok{background:#ecfdf5;color:#047857;}
+  .st.b{background:#eff6ff;color:#1d4ed8;} .st.g{background:#f3f4f6;color:#4b5563;}
+  .st.r{background:#fef2f2;color:#b91c1c;}
+  .tag{display:inline-block;font-size:11px;background:#f3f4f6;border-radius:4px;padding:2px 8px;margin:2px 4px 2px 0;color:#4b5563;}
+  #wrap{max-width:1080px;}
+</style></head>
+<body><div id="wrap">
+<div class="note">
+  <b>说明：</b>本页是把 <code>renderProbeSplit()</code>（监控页 KPI）与
+  <code>renderNoHitBreakdown()</code>（知识库引擎卡片）这两个函数
+  <b>原样抽出</b>，喂以<b>真实数据</b>后生成的渲染结果。<br>
+  <b>本次数据来源：数据库直连（服务未启动）</b>（服务可运行时优先走 HTTP API；
+  服务被外部起停时回退数据库直连，聚合逻辑与 API 完全相同）。<br>
+  用途是让「新口径在页面上长什么样」可被直接看到；它<b>不等于</b>整页浏览器截图
+  （宿主无可用 headless 浏览器），复杂排版效果未声称已验证。
+</div>
+
+<h2>① 监控页 · LLM 用量「业务 / 探针」双口径</h2>
+<div><div class="kpi" title="探针=健康巡检/自检调用（chat_probe 等），不计入业务统计。判定口径来自 core/probe_mark">
+    <div class="n" style="color:var(--amb);">53<span style="font-size:13px;">%</span></div>
+    <div class="l">探针占比 <span class="st w">528 / 1000 次</span></div>
+    <div style="font-size:11px;color:var(--mut);margin-top:3px;line-height:1.5;">
+      业务 <b>472</b> 次 · 1,243,549 Tok · $0.2247<br>
+      全量 $0.6220（含探针）
+    </div>
+  </div></div>
+<div style="font-size:11px;color:#9ca3af;margin-top:4px;">
+  全量 calls=1000 · business=472 · probe=528
+</div>
+
+<h2>② 知识库页 · 零命中成因分解</h2>
+<div><div style="margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fff;">
+    <div style="font-size:11px;color:var(--mut);margin-bottom:6px;">
+      零命中 <b>155</b> 次（占全部检索 8.3%）
+      <span style="float:right;color:var(--grn);">
+        真召回缺口占比 1%</span>
+    </div>
+    <div style="display:flex;gap:2px;border-radius:4px;overflow:hidden;margin-bottom:8px;"><div title="真召回缺口：语料里确实没有相关内容 —— 这一类才是召回质量问题"
+      style="flex:1;min-width:6px;height:16px;background:#ff7a45;opacity:.85;"></div><div title="存量未细分：2026-10-29 归因上线前的旧记录，reason 未细分 —— 不计入任何一类"
+      style="flex:154;min-width:6px;height:16px;background:#c0c0c0;opacity:.85;"></div></div>
+    <div style="font-size:11px;color:var(--mut);line-height:1.7;"><span title="语料里确实没有相关内容 —— 这一类才是召回质量问题"
+      style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;">
+      <i style="width:8px;height:8px;border-radius:2px;background:#ff7a45;display:inline-block;"></i>
+      真召回缺口 <b>1</b></span><span title="2026-10-29 归因上线前的旧记录，reason 未细分 —— 不计入任何一类"
+      style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;">
+      <i style="width:8px;height:8px;border-radius:2px;background:#c0c0c0;display:inline-block;"></i>
+      存量未细分 <b>154</b></span></div>
+  </div></div>
+<div style="font-size:11px;color:#9ca3af;margin-top:4px;">
+  total=155 · pct_of_all=8.3% · legacy=154
+</div>
+</div></body></html>

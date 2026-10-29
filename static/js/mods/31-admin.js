@@ -497,6 +497,7 @@ async function loadOps() {
     <div class="kpi"><div class="n" style="color:${d.runs.total?((d.runs.success_rate<100)?'var(--amb)':'var(--grn)'):'var(--mut)'};">${d.runs.success_rate}<span style="font-size:13px;">%</span></div><div class="l">运行成功率 <span class="st ${d.runs.total?((d.runs.failed>0)?'w':'ok'):'g'}">${d.runs.total} 次 / ${d.runs.failed} 失败</span></div></div>
     <div class="kpi"><div class="n">${d.runs.avg_latency_ms}<span style="font-size:13px;">ms</span></div><div class="l">平均耗时 <span class="st b">近 7 天</span></div></div>
     <div class="kpi"><div class="n" style="color:${d.llm.calls?((d.llm.mock_rate>50)?'var(--amb)':'var(--grn)'):'var(--mut)'};">${d.llm.mock_rate}<span style="font-size:13px;">%</span></div><div class="l">LLM Mock 率 <span class="st g">${d.llm.calls} 次调用 / ${d.llm.total_tokens} Tokens</span></div></div>
+    ${renderProbeSplit(d.llm)}
     <div class="kpi" style="cursor:pointer;" onclick="loadOpsAlerts()"><div class="n" style="color:${d.open_alerts>0?'var(--red)':'var(--grn)'};">${d.open_alerts}</div><div class="l">开放告警 <span class="st ${d.open_alerts>0?'r':'ok'}">${d.subs_active} 订阅活跃</span></div></div>`;
   document.getElementById('ops-alert-badge').textContent = `${d.open_alerts} 开放`;
   // 趋势 SVG（柱=运行数，折线=平均耗时）
@@ -624,6 +625,35 @@ function renderOpsCapability(d, orphan, sess, tenant){
     ${layers.map(l=>`<div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;">${l}</div>`).join('')}
   </div>
   <div style="font-size:9.5px;color:var(--mut);margin-top:6px;">口径：LLM 层=core/llm_health.py（唯一真源）· 编排层=/api/monitor/orphan-runs · 会话层=/api/monitor/sessions · 治理层=/api/monitor/tenant-readiness；「样本不足」= 无真实调用样本，任何质量结论均不成立。</div>`;
+}
+/**
+ * S0（2026-10-29）LLM 用量「业务 / 探针」双口径卡片。
+ *
+ * 为什么要在页面上分开（真库实测）：`chat_probe` 在近 7 天窗口里占了 LLM 成本的 51%。
+ * 只看全量一个数，「这台机器一天花了多少」和「业务实际花了多少」会混成同一个数，
+ * 既没法判断成本是否合理，也没法解释"为什么调用量很大但没产出内容"。
+ *
+ * 判据口径由后端给出（`core/probe_mark` 单一真源），前端**不自己再判**——
+ * 在前端写一份"探针名字正则"必然与后端漂移（本仓已有同类教训）。
+ *
+ * 数据缺失（老后端）时**整块不渲染**，不显示 0 误导人。
+ */
+function renderProbeSplit(llm){
+  const l = llm || {};
+  if(l.calls_biz === undefined || l.calls_probe === undefined) return '';
+  const tot = (l.calls_biz||0) + (l.calls_probe||0);
+  const pr = tot ? (l.calls_probe*100/tot) : 0;
+  // 视觉语义：探针占比高不是"错误"，而是"这个窗口的用量有水分"⇒ 用琥珀色提示，不用红色报警
+  const col = pr >= 30 ? 'var(--amb)' : 'var(--grn)';
+  const costAll = Number(l.estimated_cost||0), costBiz = Number(l.cost_biz||0);
+  return `<div class="kpi" title="探针=健康巡检/自检调用（chat_probe 等），不计入业务统计。判定口径来自 core/probe_mark">
+    <div class="n" style="color:${col};">${pr.toFixed(0)}<span style="font-size:13px;">%</span></div>
+    <div class="l">探针占比 <span class="st ${pr>=30?'w':'ok'}">${l.calls_probe||0} / ${tot} 次</span></div>
+    <div style="font-size:11px;color:var(--mut);margin-top:3px;line-height:1.5;">
+      业务 <b>${l.calls_biz||0}</b> 次 · ${(l.tokens_biz||0).toLocaleString()} Tok · $${costBiz.toFixed(4)}<br>
+      全量 $${costAll.toFixed(4)}（含探针）
+    </div>
+  </div>`;
 }
 function renderOpsTrend(trend){
   if(!trend || !trend.length) return '<div class="mut">暂无趋势数据</div>';
