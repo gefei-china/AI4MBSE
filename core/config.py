@@ -880,6 +880,15 @@ DEFAULT_CONFIG = {
         #    本开关关掉即回到改动前行为（宽松 schema），保证可回退。
         # ⚠️ 解析失败一律降级为宽松 schema，**不得因单个脏 schema 拖垮整次工具定义构建**。
         "inject_input_schema": True,
+        # ── S2（2026-10-29）把「历史被拒字段」注入工具描述 ──────────────────
+        # 背景（真库实测）：`mcp_servers.tool_meta` 里 schema **为空**
+        #   （properties=0 / required=None）⇒ 本地拿不到字段契约；
+        #   而服务端每次拒绝都在 `fields[].expected` 给出真实字段清单。
+        #   实测代价：错字段 `value` 近 7 天在 **8 个会话**里各犯 1~11 次
+        #   （conv 9629 犯 11 次），因为提示追加在长结果末尾、模型不采纳。
+        # 本开关=开 ⇒ 失败时学到"该工具认哪些字段"，下次构建工具定义时前置进描述。
+        # 关⇒ 完全回到旧行为（不注入任何 hint）。
+        "inject_arg_hints": True,
     },
     "subtask_protocol": {
         # ── 交付协议契约是否注入子任务 query（2026-10-13，批次二 P2-2）──────────
@@ -1714,6 +1723,17 @@ CONFIG_SCHEMA = {
         #     代价是每个 Agent 必须手工挂全。
         # 切换用配置、不改代码；两档都有门禁断言，可随时回滚。
         "skill_pool_scope":  {"type": "str", "desc": "★ 技能池范围：bound_first=绑定优先但全池可命中（默认，对齐 Anthropic Agent Skills）；bound_only=只认绑定的技能（对齐 OpenAI Agents SDK / Bedrock Agents 显式装配）"},
+        # ── S3（2026-10-28）技能提示词总量预算 ──────────────────────────────
+        # 背景（真库实测 @75eca26，`context_audit.block_name='skill_prompt'`，n=124）：
+        #   p50 3,669 tok / p90 7,244 / p99 30,009 / **峰值 34,761 tok（48,813 字符）**，
+        #   7% 的轮次超 8K tok。根因是**只有单条正文 cap（600 字符）没有总量上限**：
+        #   `skill_pool_scope=bound_first` 让候选＝绑定＋全局池，命中数不设限，
+        #   每命中一条就注入一段完整正文 ⇒ 多技能场景线性膨胀。
+        # 口径：字符（不引 tokenizer 依赖；实测本仓中文正文 ≈ 1.4 字符/token）。
+        # 降级方式：超出预算的技能**不掉命中、不改 bound_first 语义**，只把正文换成
+        #   「一行描述 + offload 引用块」，模型可经 `skill_body_fetch(id)` 取回全文
+        #   （复用既有的 skill_body_on_demand 通道，不新造机制）。
+        "skill_prompt_max_chars": {"type": "int", "desc": "★ 技能提示词总量预算（字符，默认 12000；<=0 不限）。超限的技能正文降级为一行描述+按需取回，不改变技能命中结果"},
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},
@@ -1874,6 +1894,7 @@ CONFIG_SCHEMA = {
     "tool_jit": {
         "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）。★ 2026-10-10 实测：修复类工具必须列进来，否则会被语义预筛裁掉（实测 view_expansion 清单 6 个里原本没有 sysml_v2_autofix，导致 autofix 一次都没被调用）"},
         "inject_input_schema": {"type": "bool", "desc": "把 tools.input_schema 注入 function-calling 的 parameters（关=回到 2026-10-13 之前的宽松空 schema）。★ 实测该列 39/41 有真值，此前被 SELECT 后丢弃、payload 恒为 properties:{}"},
+        "inject_arg_hints": {"type": "bool", "desc": "★ S2：把「历史上被服务端拒绝过的字段」前置注入工具描述（数据来自失败时学到的 fields[].expected）。关=不加任何 hint"},
     },
     "subtask_protocol": {
         "inject_contract": {"type": "bool", "desc": "把交付协议契约注入子任务 query（关=模型只返纯文本，协议三数组恒空）。★ 实测注入前 artifacts/evidence/risks 非空率 0%"},

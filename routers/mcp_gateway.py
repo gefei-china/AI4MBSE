@@ -301,13 +301,19 @@ def _audit_call(tool: str, is_error: bool, latency_ms: int, detail: str = "") ->
             _tid_gw = ""
         with db_conn() as _c:
             _hit = _c.execute("SELECT 1 FROM tools WHERE name=?", (tool,)).fetchone()
+            # S0（2026-10-28）探针标记（core/probe_mark）：外部 harness 会拿假工具探活
+            try:
+                from core.probe_mark import is_probe_tool as _ipt_gw
+                _probe_gw = _ipt_gw(tool)
+            except Exception:
+                _probe_gw = 0
             _c.execute(
                 "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-                "arguments, result, ok, latency_ms, capability_id, trace_id) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "arguments, result, ok, latency_ms, capability_id, trace_id, is_probe) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 ("mcp_gateway", "", tool, "mcp", "tool", "{}",
                  detail[:2000], 0 if is_error else 1, latency_ms,
-                 ("tool:%s" % tool) if _hit else "", _tid_gw))
+                 ("tool:%s" % tool) if _hit else "", _tid_gw, _probe_gw))
     except Exception:  # noqa: BLE001
         pass  # 度量落库失败不影响审计与工具返回
 

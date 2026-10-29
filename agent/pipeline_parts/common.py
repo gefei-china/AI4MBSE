@@ -747,6 +747,18 @@ def reset_request_state(pipe) -> None:
     pipe._last_intent_brief = None
     pipe._exec_subject_note = ""
     pipe._skill_prompt_cache = None
+    # ★ 2026-10-29（门禁 A2 检出，归属 S3 技能预算）：以下三项 S3 新增时漏登记。
+    #   均为「本轮技能注入预算」的观测字段，不清 ⇒ 跨请求残留，且**危害方向与缓存类相同**：
+    #   · `_skill_budget_used` / `_skill_budget_limit` —— 不清 ⇒ 上一个会话已用满预算
+    #     ⇒ 新会话**首个技能就被降级成"按需加载"**，本该全量注入的关键技能拿不到正文
+    #     （最坏情形：视图生成技能正文缺失 ⇒ 模型凭记忆造约束）。
+    #   · `_skill_budget_trimmed` —— 排障留痕。不清 ⇒ 把**别人会话**被裁的技能名单
+    #     当成本轮的，据此判断"预算是否偏紧"必然跑偏（同 `_dropped_by_visibility` 的坑）。
+    #   ⚠️ 注意 `_skill_budget_used` 的清零值必须是 0 而非 None：S3 的实现里
+    #     `_used += len(snippet)` 直接累加，None 会抛 TypeError。
+    pipe._skill_budget_used = 0
+    pipe._skill_budget_limit = 0
+    pipe._skill_budget_trimmed = []
 
 
 def reset_skill_state(pipe, skill_name) -> None:

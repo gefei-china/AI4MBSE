@@ -104,8 +104,15 @@ def _build_trend(conn, days: int) -> list:
         AVG(total_latency_ms) avg_ms
         FROM flow_runs WHERE created_at >= datetime('now', ?)
         GROUP BY d ORDER BY d""", (f"-{days} days",))
+    # S0（2026-10-28）口径隔离：`chat_probe` 等探针实测占 7 天成本 51%，
+    #   若与业务调用混在一列，趋势图上"业务量"会被探针削平/放大。
+    #   **不删数据**（探针健康本身要能看），改为分列返回：业务 / 探针。
+    #   探针成本仍是真实支出，故成本列两口径都给，调用方按需取。
     usage_rows = _rows(conn, """SELECT substr(created_at,1,10) d, COUNT(*) c,
-        SUM(prompt_tokens + completion_tokens) tok
+        SUM(prompt_tokens + completion_tokens) tok,
+        SUM(CASE WHEN COALESCE(is_probe,0)=0 THEN 1 ELSE 0 END) c_biz,
+        SUM(CASE WHEN COALESCE(is_probe,0)=1 THEN 1 ELSE 0 END) c_probe,
+        SUM(CASE WHEN COALESCE(is_probe,0)=0 THEN prompt_tokens + completion_tokens ELSE 0 END) tok_biz
         FROM llm_usage_stats WHERE created_at >= datetime('now', ?)
         GROUP BY d ORDER BY d""", (f"-{days} days",))
     run_by, use_by = {}, {}
@@ -125,7 +132,12 @@ def _build_trend(conn, days: int) -> list:
             "date": d,
             "runs": r.get("c") or 0, "ok": r.get("ok") or 0, "fail": r.get("fail") or 0,
             "avg_ms": int(r.get("avg_ms") or 0),
+            # 全量口径（兼容既有前端字段名，值仍是"含探针"的全部调用）
             "llm_calls": u.get("c") or 0, "llm_tokens": u.get("tok") or 0,
+            # S0：业务口径（已排除探针）+ 探针单列，两者之和 = 全量
+            "llm_calls_biz": u.get("c_biz") or 0,
+            "llm_calls_probe": u.get("c_probe") or 0,
+            "llm_tokens_biz": u.get("tok_biz") or 0,
         })
     return out
 

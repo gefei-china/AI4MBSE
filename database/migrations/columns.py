@@ -1,5 +1,57 @@
 """通用列补齐迁移（_migrate_columns）。"""
 import json
+
+
+def _backfill_probe_marks(conn) -> None:
+    """S0（2026-10-28）：把**已证实**的探针/验证噪声行标记 `is_probe=1`。
+
+    为什么必须回填而不是"新写入打标就够了"：
+        `is_probe` 默认 0 ⇒ 存量的 126 条 fake_tool、1,186 条 chat_probe 仍是 0，
+        统计口径**当场没变**，等于没修（本仓已多次栽在"改了配置≠改了生效值"）。
+
+    判据（全部来自 `core/probe_mark`，只用**确定**的假工具名与探针 intent）：
+        · `tool_name IN (...)`: fake_tool / definitely_not_a_real_tool_xyzzy /
+          no_such_tool_abc …… 这些名字只可能来自验证脚本；
+        · `intent IN (...)`: chat_probe / probe / probe_liveness_min。
+        **不按** "名字里含 test" 之类的模糊规则猜 —— 那会误伤真实工具。
+
+    幂等：只更新 `is_probe=0 OR is_probe IS NULL` 的行，重复执行无副作用。
+    """
+    try:
+        from core.probe_mark import PROBE_TOOL_NAMES, PROBE_TOOL_PREFIXES, PROBE_INTENTS
+    except Exception as e:  # 新库首次 init 时 core 尚未可导入的极端情形：跳过，不阻断启动
+        print(f"[init_db] 迁移: is_probe 回填跳过（无法导入 core.probe_mark：{e}）")
+        return
+
+    def _mark(table: str, col: str, exact: set, prefixes: tuple) -> int:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        if not exists:
+            return 0
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        if "is_probe" not in cols:
+            return 0
+        conds, args = [], []
+        if exact:
+            conds.append(f"{col} IN ({','.join('?' * len(exact))})")
+            args.extend(sorted(exact))
+        for p in prefixes:
+            conds.append(f"LOWER({col}) LIKE ?")
+            args.append(f"{p}%")
+        if not conds:
+            return 0
+        sql = (f"UPDATE {table} SET is_probe=1 "
+               f"WHERE COALESCE(is_probe,0)=0 AND ({' OR '.join(conds)})")
+        cur = conn.execute(sql, args)
+        n = cur.rowcount or 0
+        if n:
+            print(f"[init_db] 迁移: {table} 回填 is_probe=1 共 {n} 行")
+        return n
+
+    _mark("tool_call_logs", "tool_name", PROBE_TOOL_NAMES, PROBE_TOOL_PREFIXES)
+    _mark("llm_usage_stats", "intent", PROBE_INTENTS, ("probe",))
+
+
 def _migrate_columns(conn):
     """幂等列迁移：CREATE TABLE IF NOT EXISTS 不会给已有表加列，
     P0-1 引入 project_id 后需对老库补列并回填默认项目（兼容既有数据）。
@@ -115,6 +167,24 @@ def _migrate_columns(conn):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_trace ON tool_call_logs(trace_id)")
     except Exception as e:
         print(f"[init_db] 迁移: tool_call_logs(trace_id) 索引创建失败：{e}")
+    # ── S0（2026-10-28）统计口径隔离：探针标记列 + 存量确定性回填 ──────────────
+    # 为什么需要（实测 @75eca26，近 7 天）：
+    #   `tool_call_logs` 混入 fake_tool 126 次（失败 112、latency 记成 1.79e12 ms）、
+    #   `llm_usage_stats` 里 chat_probe 占**总成本 51%** ⇒ 失败率/成本/延迟三条基线同时失真。
+    # 存量回填只按**已证实的**假工具名与探针 intent（core/probe_mark 的常量）判定，
+    #   拿不准的一律留 0 —— 与 retry_count / capability_id 的存量纪律一致，**不编造**。
+    _add("tool_call_logs", "is_probe", "INTEGER DEFAULT 0")
+    _add("llm_usage_stats", "is_probe", "INTEGER DEFAULT 0")
+    _backfill_probe_marks(conn)
+    # 索引**必须**建在补列与回填之后（同 trace_id 那条的约束）。
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_probe "
+                     "ON tool_call_logs(is_probe, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_lus_probe "
+                     "ON llm_usage_stats(is_probe, created_at)")
+    except Exception as e:
+        print(f"[init_db] 迁移: is_probe 索引创建失败：{e}")
+
     # P1-27 截断诊断（思考模型 reasoning 与正文共享 max_tokens 配额）
     _add("llm_usage_stats", "finish_reason", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "reasoning_tokens", "INTEGER DEFAULT 0")

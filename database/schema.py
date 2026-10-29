@@ -1053,6 +1053,12 @@ def init_db():
         run_id INTEGER DEFAULT 0,             -- 所属编排 run（task_runs 表 id；0=非编排调用）
         trace_id TEXT DEFAULT '',             -- 一次请求轮次的链路号（同一请求的多次 LLM 调用同号）
         sub_task_key TEXT DEFAULT '',         -- 编排子任务 key（区分一次 run 内哪个子任务花的钱）
+        -- ── S0（2026-10-28）统计口径隔离：1 = 探针/自检调用，不进业务成本统计 ──
+        -- 实测（@75eca26，近 7 天）：`chat_probe` 1,186 次，prompt 19.79M token、
+        --   cost 0.9043，**占该窗口总成本 1.7716 的 51%**。不隔离则"成本优化"基线全错。
+        -- ⚠️ 只标「探针」，**不标在线评测**（chat_eval / gen_faithfulness）——
+        --   评测消费的是真实回答，属业务成本的真实组成，排除会让单轮成本偏低。
+        is_probe INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ux_lus_time ON llm_usage_stats(created_at)")
@@ -1297,6 +1303,12 @@ def init_db():
         --   `result` 文本口径不变（仍是脱敏后的前缀），解析方不受影响。
         result_len INTEGER DEFAULT 0,        -- 原始结果字符数（未截断时 = length(result)）
         result_truncated INTEGER DEFAULT 0,  -- 1 = result 被截（result_len > 落库上限）
+        -- ── S0（2026-10-28）统计口径隔离：1 = 探针/验证噪声，不进业务统计 ──
+        -- 实测（@75eca26）：本表 7 天内混入 fake_tool 126 次（失败率 89%、latency 记成
+        --   1.79e12 ms）、definitely_not_a_real_tool_xyzzy 14 次 ⇒ 全量失败率 15.0%
+        --   看起来"工具很不可靠"，剔除假工具后真实约 11.8%。
+        -- 语义：**标记而非删除**（探针自身健康也要能查）；判定集中在 core/probe_mark.py。
+        is_probe INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_time ON tool_call_logs(created_at)")

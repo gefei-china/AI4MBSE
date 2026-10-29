@@ -104,17 +104,29 @@ def capability_registry(kind: str = "", status: str = "", q: str = "",
 
 
 def _fill_rate(conn, col: str, days: int, extra_where: str = "") -> dict:
-    """某一列的填充率（**口径必须一起返回**，否则数字会被误读）。"""
+    """某一列的填充率（**口径必须一起返回**，否则数字会被误读）。
+
+    S0（2026-10-28）：默认排除探针列（`core.probe_mark`）。理由：填充率衡量的是
+    **生产链路**有没有正确写关联键，而验证脚本的假工具本就不会写 trace_id/run_id
+    ⇒ 混进来会凭空压低覆盖率（实测 fake_tool 126 行全空）。口径随结果一起返回，
+    调用方看得见"这是排除探针后的数"。
+    """
+    try:
+        from core.probe_mark import probe_where as _pw
+        probe = _pw()
+    except Exception:
+        probe = ""
     try:
         row = conn.execute(
             "SELECT COUNT(*), SUM(CASE WHEN COALESCE(%s,'')<>'' AND %s<>0 THEN 1 ELSE 0 END) "
-            "FROM tool_call_logs WHERE created_at >= datetime('now', ?) %s"
-            % (col, col, extra_where), ("-%d days" % days,)).fetchone()
+            "FROM tool_call_logs WHERE created_at >= datetime('now', ?) %s%s"
+            % (col, col, extra_where, probe), ("-%d days" % days,)).fetchone()
         total, filled = int(row[0] or 0), int(row[1] or 0)
     except Exception:
         return {"column": col, "total": 0, "filled": 0, "rate": None}
     return {"column": col, "total": total, "filled": filled,
-            "rate": (round(filled * 100.0 / total, 2) if total else None)}
+            "rate": (round(filled * 100.0 / total, 2) if total else None),
+            "excludes_probe": True}
 
 
 @router.get("/api/capabilities/trace")

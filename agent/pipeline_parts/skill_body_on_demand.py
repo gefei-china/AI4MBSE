@@ -208,6 +208,28 @@ def build_skill_reference(oid: int, skill_name: str, full_len: int, head: str) -
     )
 
 
+def build_terse_reference(oid: int, skill_name: str, full_len: int,
+                          desc: str = "") -> str:
+    """**极简**技能引用（约 100 字符），供「技能提示词总量预算」裁剪时使用。
+
+    为什么不能复用 `build_skill_reference`（S3 实测教训，2026-10-28）：
+        该函数的 head 由 `build_head` 按段落优先级装配，**实测 2,449 字符**。
+        于是"降级为引用块"和"不降级"的长度几乎一样（2,578 vs 2,578）
+        ⇒ 预算闸虽然触发了（`_skill_budget_trimmed` 非空），**注入量却一点没降**
+        ⇒ 这正是"看起来改了、实际没生效"的典型。真库证据：预算 12000 与不限
+        两种设置下注入量同为 19,616 字符。
+    ⇒ 真降级必须给出**量级更小**的表示：一行名字 + 取回指引。
+
+    语义不丢：正文仍已落库，模型可随时 `skill_body_fetch(id)` 取回全文。
+    """
+    hint = ""
+    d = (desc or "").strip().replace("\n", " ")
+    if d:
+        hint = f"（{d[:40]}）"
+    return (f"- {skill_name}{hint}：[正文 {full_len} 字符已按需加载] "
+            f"需要时调用 {FETCH_TOOL} {{\"id\": {oid}}} 取回全文。")
+
+
 def offload_body(skill_name: str, content: str, conversation_id: int = 0,
                  cap: int | None = None) -> tuple:
     """返回 (注入文本, offloaded_bool, offload_id)。

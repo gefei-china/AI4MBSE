@@ -846,13 +846,36 @@ class ToolMixin:
         #   等于把 DB 里 39/41 条已存在的 input_schema 全部丢弃 ⇒ 模型以为"任意参数"）。
         #   _LOOSE 是回落形态，与改动前**逐字节一致**，保证关开关/无 schema 时行为不变。
         _LOOSE = {"type": "object", "properties": {}, "additionalProperties": True}
+        # ★ S2（2026-10-29）「学到就用」：把历史被服务端拒绝过的字段约束前置进描述。
+        #   为什么需要：`mcp_servers.tool_meta` 里 schema **实测为空**
+        #     （properties=0 / required=None），本地拿不到字段契约；而服务端每次拒绝都会
+        #     在 `fields[].expected` 里给出真实字段清单 —— 那才是唯一权威契约。
+        #   实测价值：`value` 这个错字段在近 7 天 8 个会话里各犯 1~11 次，
+        #     若第一次失败后即写进工具描述，后续同工具调用即可避免（省一整轮空转）。
+        #   ⚠️ 只追加**远端明确断言过**的清单（tool_arg_hints 由失败时写入）；
+        #     没学过就不加，保持描述原样（零回归面）。开关：tool_jit.inject_arg_hints（默认开）。
+        try:
+            from core.config import get as _cfg_hint
+            _inject_hint = bool(_cfg_hint("tool_jit", "inject_arg_hints", True))
+        except Exception:
+            _inject_hint = True
+        _hint_suffix_by_name = {}
+        if _inject_hint:
+            try:
+                from agent.tool_arg_hint import describe_suffix as _desc_suffix
+                for _n in {c[0] for c in candidates}:
+                    _s = _desc_suffix(_n)
+                    if _s:
+                        _hint_suffix_by_name[_n] = _s
+            except Exception:
+                _hint_suffix_by_name = {}
         for name, desc, ctype, server in candidates:
             _params = _schema_by_name.get(name) or _LOOSE
             tools.append({
                 "type": "function",
                 "function": {
                     "name": name,
-                    "description": desc,
+                    "description": (desc or "") + _hint_suffix_by_name.get(name, ""),
                     "parameters": _params,
                 },
             })
@@ -2090,14 +2113,24 @@ class ToolMixin:
                         _cid = "tool:%s" % name
                 except Exception:
                     _cid = ""
+                # S0（2026-10-28）探针标记：验证脚本造的假工具（fake_tool 等）会把
+                #   `ok=0` 与天文 latency 一起写进来，实测让全量失败率虚高 3.2 个点
+                #   （15.0% → 11.8%）⇒ 写入侧就打好标记，统计侧用 probe_where() 排除。
+                try:
+                    from core.probe_mark import is_probe_tool as _is_probe_tool
+                    _is_probe = _is_probe_tool(name)
+                except Exception:
+                    _is_probe = 0
                 conn.execute(
-                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name, run_id, task_key, failure_kind, capability_id, trace_id, result_len, result_truncated) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name, run_id, task_key, failure_kind, capability_id, trace_id, result_len, result_truncated, is_probe) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (intent_ctx.get("intent", ""), agent_ctx.get("agent", ""),
                      name, tool_type, _args_txt, _res_txt,
                      1 if result.get("ok") else 0,
                      latency, conv_ctx or 0, _uname, _run_id, _task_key, _fkind, _cid, _trace_id,
-                     _res_len, _res_trunc),
+                     _res_len, _res_trunc,
+                     # S0（2026-10-28）：探针/验证噪声标记，统计侧据此排除（core/probe_mark）
+                     _is_probe),
                 )
         except Exception:
             pass  # 观测落库失败不影响工具执行
@@ -2161,6 +2194,42 @@ class ToolMixin:
                 result["obstacle"] = _cls
         except Exception:
             pass   # 障碍提示失败绝不阻断工具结果返回
+        # ★ S2（2026-10-29）远端参数错误「可执行化 + 学到就用」。
+        #
+        # 为什么单独一段、且**不挂在 obstacle_recovery_enabled 开关下**：
+        #   · P0-5 的障碍恢复是"猜类别、给建议"，默认关闭是合理的（建议可能不准）；
+        #   · 本段是**转述服务端自己给出的断言**（`fields[].expected` / `recovery`），
+        #     不存在猜测成分，且修复成本极低（一次重试 vs 一整轮空转）⇒ 默认开启。
+        #
+        # 实证依据（@2026-10-29，近 7 天真实库）：
+        #   参数类失败 46 条，其中 `field=value / KnownField` 占 18 条；
+        #   **8/12 个会话在重复犯**（conv 9629 犯 11 次、conv 9736 犯 9 次）。
+        #   ⇒ 说明"把服务端原报文追加到结果末尾"这件事模型**根本没有采纳**
+        #     （原有 `_etxt + _hint` 是追加在末尾）。故本段改为**前置**。
+        try:
+            if isinstance(result, dict) and not result.get("ok"):
+                from agent.tool_arg_hint import (
+                    parse_arg_error as _pae, format_hint_zh as _fhz,
+                    lead_with_hint as _lwh, learn as _learn,
+                )
+                _rtext = str(result.get("result") or result.get("error") or "")
+                _ah = _pae(_rtext)
+                if _ah:
+                    # 1) 学到就用：记住该工具真实接受的字段（供后续工具描述注入）
+                    _learn(name, _ah)
+                    # 2) 前置中文祈使指令（读的人先看到"下一步做什么"）
+                    _htxt = _fhz(name, _ah)
+                    result["result"] = _lwh(_rtext, _htxt)
+                    result["arg_fix"] = {
+                        "code": _ah["code"],
+                        "bad_fields": [f["field"] for f in _ah["fields"]],
+                        "allowed": _ah["allowed"][:20],
+                    }
+                    # 3) 参数错误**不该**被上层当作可重试的"瞬时故障"：
+                    #    服务端已标 retryable=false，同参重试必然再错。
+                    result["retryable"] = False
+        except Exception:
+            pass   # 参数提示失败绝不阻断错误信息本身的返回
 
     def _resolve_req_scope(self, scope_ids, scope_id, scope, agent_def):
         """解析建模范围（文件管理=全局数据，不分分支）。

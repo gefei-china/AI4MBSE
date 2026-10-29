@@ -22,6 +22,7 @@ from .rebuild import (
 from .columns import (
     _migrate_columns,
     _migrate_branch_protection,
+    _backfill_probe_marks,
 )
 from .ontology import (
     _ensure_ontology_types,

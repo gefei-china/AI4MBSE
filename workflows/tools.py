@@ -257,14 +257,20 @@ class ToolExecutor:
                 _tid = ""
             from database import db_conn
             with db_conn() as conn:
+                # S0（2026-10-28）探针标记（core/probe_mark）
+                try:
+                    from core.probe_mark import is_probe_tool as _ipt_wf
+                    _probe_wf = _ipt_wf(name)
+                except Exception:
+                    _probe_wf = 0
                 conn.execute(
                     "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-                    "arguments, result, ok, latency_ms, run_id, capability_id, trace_id) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "arguments, result, ok, latency_ms, run_id, capability_id, trace_id, is_probe) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     ("workflow", "", name, _tt, "tool", "{}",
                      str(result.get("result", ""))[:2000], 1 if result.get("ok") else 0,
                      int((time.time() - t0) * 1000),
-                     int(getattr(self, "_flow_run_id", 0) or 0), _cid, _tid))
+                     int(getattr(self, "_flow_run_id", 0) or 0), _cid, _tid, _probe_wf))
         except Exception:
             pass  # 观测落库失败不影响工具执行（同主链路 _log_tool_call 旁路原则）
 

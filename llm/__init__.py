@@ -451,6 +451,13 @@ class LLMClient:
                      pt, ct, pt + ct, pch, pcm,
                      _fr, rt, _rc, _fu, _fp, round(est, 6), latency_ms)
             with db_conn() as conn:
+                # S0（2026-10-28）探针标记：`chat_probe` 实测占 7 天 LLM 成本 51%，
+                #   不标则"成本优化"的基线全错。判定集中在 core/probe_mark（不另写正则）。
+                try:
+                    from core.probe_mark import is_probe_intent as _ipi
+                    _probe = _ipi(intent)
+                except Exception:
+                    _probe = 0
                 try:
                     conn.execute(
                         "INSERT INTO llm_usage_stats (provider_id, provider_name, model_name, intent, used_mock, "
@@ -459,10 +466,10 @@ class LLMClient:
                         "finish_reason, reasoning_tokens, retry_count, fallback_used, fallback_provider_id, "
                         "estimated_cost, latency_ms, conversation_id, run_id, trace_id, sub_task_key, "
                         # ★ P0-3新增三列
-                        "call_failed, failure_kind, failure_msg) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "call_failed, failure_kind, failure_msg, is_probe) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         _vals + (_cid, _rid, _tid, _skey,
-                                 1 if call_failed else 0, failure_kind, failure_msg),
+                                 1 if call_failed else 0, failure_kind, failure_msg, _probe),
                     )
                 except Exception as _e2:
                     # 关联列迁移未跑到 → 降级写入原有 17 列（不丢用量数据，绝不因记账失败阻断调用）

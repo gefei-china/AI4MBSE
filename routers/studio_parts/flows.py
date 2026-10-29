@@ -472,14 +472,22 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                     _tid_hil = _ctid_hil(fallback_request=True)
                 except Exception:
                     _tid_hil = ""
+                # S0（2026-10-28）探针标记（core/probe_mark）
+                try:
+                    from core.probe_mark import is_probe_tool as _ipt_hil
+                    _probe_hil = _ipt_hil(action)
+                except Exception:
+                    _probe_hil = 0
                 conn.execute(
                     "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-                    "arguments, result, ok, latency_ms, run_id, task_key, capability_id, trace_id) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "arguments, result, ok, latency_ms, run_id, task_key, capability_id, trace_id, is_probe) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     ("hil_approve", "", action,
                      "builtin" if action == "save_artifact" else ("http" if _hil_is_http else ""),
                      "tool", "{}", str(_er.get("result", ""))[:2000],
-                     1 if _er.get("ok") else 0, 0, _run_id, _task_key, "tool:%s" % action, _tid_hil))
+                     1 if _er.get("ok") else 0, 0, _run_id, _task_key, "tool:%s" % action, _tid_hil,
+                     # S0（2026-10-28）探针标记（core/probe_mark）
+                     _probe_hil))
             except Exception:
                 pass
     # P0-b：eval_label 的**驳回**同样要落状态（labeled_rejected，B3：永不进
