@@ -499,12 +499,17 @@ function renderNoHitBreakdown(nh){
       style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;">
       <i style="width:8px;height:8px;border-radius:2px;background:${x.c};display:inline-block;"></i>
       ${escA(x.nm)} <b>${x.n}</b></span>`).join('');
+  // ⚠️ 这个百分比的分母是**零命中总数**（不是全部查询）。文案必须写清"零命中中…"，
+  //   否则会和后端 `real_recall_rate`（分母=全部查询，实测 0.1%）混为一谈 ——
+  //   同一个"真召回缺口占比"两个口径并存，是最容易吵架的地方。
   const realPct = nh.total ? Math.round((nh.corpus_gap||0)*100/nh.total) : 0;
   return `<div style="margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fff;">
     <div style="font-size:11px;color:var(--mut);margin-bottom:6px;">
       零命中 <b>${nh.total}</b> 次（占全部检索 ${nh.pct_of_all||0}%）
-      <span style="float:right;color:${realPct>=50?'var(--amb)':'var(--grn)'};">
-        真召回缺口占比 ${realPct}%</span>
+      <span style="float:right;color:${realPct>=50?'var(--amb)':'var(--grn)'};"
+            title="分母=零命中总数。后端另有一个 real_recall_rate（分母=全部查询），两者不同请勿混用">
+        零命中中真缺口 ${realPct}%（${nh.corpus_gap||0} 次）
+      </span>
     </div>
     <div style="display:flex;gap:2px;border-radius:4px;overflow:hidden;margin-bottom:8px;">${bar}</div>
     <div style="font-size:11px;color:var(--mut);line-height:1.7;">${legend}</div>

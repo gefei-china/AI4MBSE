@@ -182,7 +182,9 @@ check("C5 业务次数与 API 一致（%s）" % llm.get("calls_biz"),
 
 nh = eng.get("no_hit") or {}
 check("C6 零命中区块含总数 %s" % nh.get("total"), str(nh.get("total", 0)) in html_nohit)
-check("C7 区块含「真召回缺口占比」结论", "真召回缺口占比" in html_nohit)
+check("C7 区块含「零命中中真缺口」结论（并标明分母）",
+      "零命中中真缺口" in html_nohit,
+      "分母必须是零命中总数，不能与 real_recall_rate（分母=全部查询）混用")
 if nh.get("legacy"):
     check("C8 存量未细分单列并说明（legacy=%s）" % nh["legacy"],
           "未细分" in html_nohit and str(nh["legacy"]) in html_nohit)
