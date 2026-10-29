@@ -603,6 +603,29 @@ def _migrate_columns(conn):
     conn.commit()
 
 
+def _migrate_skill_revision_rejects(conn):
+    """技能修订自检拒绝台账（2026-10-29）。
+
+    为什么要有这张表：`SkillImprover` 新增了自检闸门（见 skill_improve.py
+    的 `_verify_revision`），不合格的修订**不产出草稿**。若不落台账，
+    "因为质量不合格被拒"与"没有需要修订的技能"在界面上**完全无法区分** ——
+    这正是本仓反复吃过的亏（静默失败长得像没问题）。
+    实测背景：修复前产出过 4830 → 453 字（-90.6%）的草稿，丢掉了多条安全护栏。
+
+    幂等：CREATE TABLE IF NOT EXISTS。
+    """
+    conn.execute("""CREATE TABLE IF NOT EXISTS skill_revision_rejects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT DEFAULT '',              -- 技能名
+        reason TEXT DEFAULT '',            -- 拒绝原因（人读：破坏性压缩 / 丢失护栏 …）
+        old_len INTEGER DEFAULT 0,         -- 原文字数
+        new_len INTEGER DEFAULT 0,         -- 候选修订字数
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_srr_created ON skill_revision_rejects(created_at)")
+    conn.commit()
+
+
 def _migrate_branch_protection(conn):
     """P0-2：内置分支（release / dev / personal）保护规则默认值回填。
 

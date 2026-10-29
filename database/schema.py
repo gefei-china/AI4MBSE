@@ -11,6 +11,7 @@ from .migrations import (
     _migrate_columns,
     _migrate_agent_tool_perm,
     _migrate_branch_protection,
+    _migrate_skill_revision_rejects,
     _migrate_mr_status,
     _rebuild_entities_pk,
     _repair_relations_fk,
@@ -1710,6 +1711,10 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_user ON tool_call_logs(user_name)")
     # ── P0-2 分支保护规则：branches.protection_rules 内置分支默认值回填（幂等，仅填空）──
     _migrate_branch_protection(conn)
+    # ── 2026-10-29：技能修订自检拒绝台账（SkillImprover 的 self-verification）──
+    # 为什么不落台账就不行：自检拒绝不产出草稿，若不记录，"质量不合格被拒"
+    # 与"没有需要修订的技能"在界面上完全无法区分（静默失败长得像没问题）。
+    _migrate_skill_revision_rejects(conn)
     # ── P0-6（2026-10-06）Agent 工具链 RBAC + HIL 批准授权 ──
     # 必须**早于种子执行**：新库的角色行由 _seed_* 写入，若本迁移跑在种子之前，
     # 新角色不会被授权（老库则因已落库、种子"存在即跳过"而必须靠本迁移补）。

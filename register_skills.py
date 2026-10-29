@@ -388,28 +388,55 @@ def main() -> None:
             print(f"[skills] ⚠️ 内置工具同步失败（忽略）: {e}")
         for pkg in SKILL_PACKAGES:
             name = pkg["name"]
-            row = conn.execute("SELECT id, status FROM skills WHERE name=?", (name,)).fetchone()
+            # ★★ 2026-10-29 修复「重启即自动发布」（实测事故，危害极大）：
+            #   原实现 `SELECT id,status FROM skills WHERE name=?` + `UPDATE ... WHERE name=?`
+            #   ⇒ **命中该名字下所有行**，包括 `source='ai_improve'` 的 AI 修订草稿，然后：
+            #     ① `status='published'` —— AI 草稿被**自动发布**，彻底绕过人工审核闸门；
+            #     ② `source='manual'`  —— **溯源被篡改**，事后无法分辨哪条是 AI 改的；
+            #     ③ `content=?`（内置包正文）—— AI 修订内容被**覆盖丢失**。
+            #   实测：SkillImprover 写入 `行业调研` 的 draft_revision(v2) 在一次服务重启后
+            #   变成了 published/manual/v1.0，正文被换回内置原文。
+            #   ⇒ 这等于「SkillImprover 的人工审核闸门形同虚设」，与 core/config_proposal
+            #     反复强调的"只提议不自动应用"直接冲突。
+            #   修法：**只同步内置行**（builtin=1 且 source!='ai_improve'），
+            #        并显式排除 ai_improve / draft_revision —— 双保险，防未来新增来源漏网。
+            #   参考 Voyager（arXiv:2305.16291）：技能库「只增不改」，
+            #     "learning a new skill cannot overwrite an old one"
+            #     —— 种子数据更不该覆盖学习产出的技能。
+            row = conn.execute(
+                "SELECT id, status FROM skills WHERE name=? "
+                "AND COALESCE(builtin,0)=1 AND COALESCE(source,'')!='ai_improve' "
+                "AND COALESCE(status,'')!='draft_revision' "
+                "ORDER BY id LIMIT 1", (name,)).fetchone()
             pkg_dir = _write_package(pkg)
             refs = json.dumps(pkg.get("references") or [], ensure_ascii=False)
             scripts = json.dumps(pkg.get("scripts") or [], ensure_ascii=False)
             triggers = json.dumps(pkg.get("triggers") or [], ensure_ascii=False)
             allowed_tools = json.dumps(pkg.get("allowed_tools") or [], ensure_ascii=False)
             if row:
+                # 精确按 id 更新（不再用 name 作为写入条件 —— name 不唯一）
                 conn.execute(
                     "UPDATE skills SET description=?, skill_type=?, triggers=?, category=?, content=?, "
                     "version=?, status='published', source='manual', allowed_tools=?, `references`=?, scripts=?, "
-                    "package_path=?, builtin=1, scope='public' WHERE name=?",
+                    "package_path=?, builtin=1, scope='public' WHERE id=?",
                     (pkg["description"], pkg["skill_type"], triggers, pkg["category"], pkg["skill_md"],
-                     pkg["version"], allowed_tools, refs, scripts, pkg_dir, name))
+                     pkg["version"], allowed_tools, refs, scripts, pkg_dir, row["id"]))
                 print(f"[skills] 已更新: {name} (id={row['id']})")
             else:
-                conn.execute(
-                    "INSERT INTO skills (name, description, skill_type, triggers, category, content, "
-                    "frontmatter, package_path, status, version, source, allowed_tools, `references`, scripts, builtin, scope) "
-                    "VALUES (?,?,?,?,?,?,?,?,'published','v1.0','manual',?,?,?,1,'public')",
-                    (name, pkg["description"], pkg["skill_type"], triggers, pkg["category"], pkg["skill_md"],
-                     pkg["skill_md"], pkg_dir, allowed_tools, refs, scripts))
-                print(f"[skills] 已创建: {name}")
+                # 无内置行 ⇒ 检查是否只有 AI 草稿/同名用户技能：若有则**跳过，
+                # 不新建**（避免与草稿搅在一起）——只在完全没有任何同名行时创建。
+                _any = conn.execute(
+                    "SELECT id FROM skills WHERE name=? LIMIT 1", (name,)).fetchone()
+                if _any:
+                    print(f"[skills] 跳过 {name}：已存在非内置同名行（不覆盖 AI 草稿/用户技能）")
+                else:
+                    conn.execute(
+                        "INSERT INTO skills (name, description, skill_type, triggers, category, content, "
+                        "frontmatter, package_path, status, version, source, allowed_tools, `references`, scripts, builtin, scope) "
+                        "VALUES (?,?,?,?,?,?,?,?,'published','v1.0','manual',?,?,?,1,'public')",
+                        (name, pkg["description"], pkg["skill_type"], triggers, pkg["category"], pkg["skill_md"],
+                         pkg["skill_md"], pkg_dir, allowed_tools, refs, scripts))
+                    print(f"[skills] 已创建: {name}")
             conn.commit()
     finally:
         conn.close()
