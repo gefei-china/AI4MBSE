@@ -37,6 +37,15 @@ from __future__ import annotations
 
 import json
 
+# ★ 2026-10-29：账本的"调用集"必须排除探针/验证噪声。
+#   为什么这里是**最要紧**的一处：账本直接回答"这个能力到底有没有被用"，
+#   探针混入会让 `fake_tool`（126 次）出现在"运行时旁路"并排到第 2 位，
+#   把一个假工具当成"实际在跑的能力"。实测（过滤前）正是如此。
+#   口径真源：core/probe_mark.probe_where()（勿另写一份）。
+from core.probe_mark import probe_where as _probe_where
+
+_PROBE = _probe_where()
+
 #: 无条件注入的运行时工具（第 4 条入口）。
 #:
 #: ⚠️ 这是一份**必须与代码同步**的清单 —— 它们不由任何表声明，只由
@@ -255,12 +264,13 @@ def build_ledger(conn, days: int = 30) -> dict:
     # ── 调用集：窗口内按 capability_id / tool_name 聚合 ───────────────────
     usage_by_cid: dict = {}
     usage_by_name: dict = {}
+    usage_error = ""
     try:
         for r in conn.execute(
                 "SELECT capability_id, tool_name, COUNT(*) n, "
                 "       SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END) fails, MAX(created_at) last_at "
                 "FROM tool_call_logs "
-                "WHERE created_at >= datetime('now', ?) "
+                "WHERE created_at >= datetime('now', ?)" + _PROBE + " "
                 "GROUP BY capability_id, tool_name", ("-%d days" % days,)).fetchall():
             cid, nm, n, fails, last_at = (r["capability_id"], r["tool_name"], r["n"],
                                           r["fails"], r["last_at"]) \
@@ -278,8 +288,13 @@ def build_ledger(conn, days: int = 30) -> dict:
                 agg[1] += int(fails or 0)
                 if (last_at or "") > agg[2]:
                     agg[2] = last_at or ""
-    except Exception:
-        pass
+    except Exception as e:
+        # ★ 2026-10-29：**不静默**。
+        #   原实现是 `except: pass` —— 代价是：一旦 SQL 出错（如拼错列名），
+        #   usage 集全空 ⇒ 账本把**全部能力**判成"未使用"，而界面上
+        #   这与"真的没人用"长得一模一样（本仓已记过这个坑）。
+        #   现在把错误带进 stats，页面「口径」区可见。
+        usage_error = "%s: %s" % (type(e).__name__, str(e)[:160])
 
     # ── 注册表行（统一账本的"名前"那一半）────────────────────────────────
     rows = []
@@ -373,12 +388,17 @@ def build_ledger(conn, days: int = 30) -> dict:
             "entry_labels": [ENTRY_LABELS[k] for k in kinds] or [ENTRY_LABELS["runtime_only"]],
         })
 
+    stats = dict(declared.get("stats") or {})
+    # ★ 调用集取数失败必须可见（否则"取数坏了"会被读成"全部能力零调用"）
+    stats["probe_filtered"] = True
+    if usage_error:
+        stats["usage_error"] = usage_error
     return {
         "window_days": days,
         "rows": rows,
         "matrix": matrix,
         "orphan_calls": orphan[:50],
-        "stats": declared.get("stats") or {},
+        "stats": stats,
         "entry_labels": ENTRY_LABELS,
         "hint": ("matrix.runtime_only > 0 表示有工具在被调用但没有任何声明入口 —— "
                  "这是运行时旁路（无白名单时不拦），属**需要公示的事实**，不是可忽略的噪声。"),

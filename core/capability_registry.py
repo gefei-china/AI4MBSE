@@ -27,6 +27,14 @@ skills.use_stats 是读-改-写覆盖更新（无行级锁），聚合绕开它�
 import json
 import re
 
+# ★ 2026-10-29：call_count / fail_count / last_used_at 聚合必须排除探针。
+#   虽然当前 registry 里没有 `tool:fake_tool` 这类条目（探针工具未注册），
+#   所以今天的数值未受污染；但这条依赖**随时可能失效**——一旦有人把探针工具
+#   登记进工具表，账本立刻出现"一个假工具被调用 126 次"。
+#   与其依赖"它没注册"这个巧合，不如让聚合口径与全仓其它统计一致。
+#   口径真源：core/probe_mark.probe_where()（勿另写一份）。
+from core.probe_mark import probe_where as _probe_where
+
 # ── capability_id 构造（唯一口径，审计脚本与门禁共用）──────────────────────
 
 def tool_cid(name) -> str:
@@ -513,18 +521,24 @@ def aggregate_capability_metrics(conn) -> dict:
     last_used_at 用 COALESCE 保底——无调用的行不被清空。
     """
     try:
+        # ⚠️ 括号不能省：条件是 `A OR B`，若把探针过滤直接追加在末尾，
+        #    优先级会变成 `A OR (B AND 非探针)` ⇒ 走 A 分支的调用**仍算探针**。
+        #    （这个坑在本仓的 SQL 拼接里属于高发型，故显式括起。）
+        _pfx = _probe_where("l")
         cur = conn.execute(
             "UPDATE capability_registry SET "
             "  call_count = (SELECT COUNT(*) FROM tool_call_logs l "
-            "                 WHERE l.capability_id = capability_registry.capability_id "
-            "                    OR l.capability_id LIKE capability_registry.capability_id || ':%'), "
+            "                 WHERE (l.capability_id = capability_registry.capability_id "
+            "                    OR l.capability_id LIKE capability_registry.capability_id || ':%')"
+            + _pfx + "), "
             "  fail_count = (SELECT COUNT(*) FROM tool_call_logs l "
             "                 WHERE (l.capability_id = capability_registry.capability_id "
             "                    OR l.capability_id LIKE capability_registry.capability_id || ':%') "
-            "                 AND l.ok=0), "
+            "                 AND l.ok=0" + _pfx + "), "
             "  last_used_at = COALESCE((SELECT MAX(l.created_at) FROM tool_call_logs l "
-            "                 WHERE l.capability_id = capability_registry.capability_id "
-            "                    OR l.capability_id LIKE capability_registry.capability_id || ':%'), "
+            "                 WHERE (l.capability_id = capability_registry.capability_id "
+            "                    OR l.capability_id LIKE capability_registry.capability_id || ':%')"
+            + _pfx + "), "
             "                last_used_at), "
             "  updated_at = CURRENT_TIMESTAMP "
             "WHERE kind IN ('tool','skill','mcp_tool','mcp_server')")

@@ -23,6 +23,18 @@ from datetime import datetime
 #（此前 'acked' 字面量在本模块与 routers/monitor.py 各写一次，必然漂移）。
 from core.alert_state import open_statuses_sql
 
+# ★ 2026-10-29：本模块的指标分两族，**口径不能一刀切**：
+#   ① 「业务口径」（成本 / 延迟 / 调用量 / mock·trunc·fallback 比率）
+#      → 必须排除探针。理由：chat_probe 实测占 7 天 LLM 成本 51%，
+#        不过滤会让 `cost_1h_usd` 与成本突增告警长期虚高。
+#   ② 「provider 健康口径」（llm_fail_1h / llm_fail_rate_1h）
+#      → **刻意保留探测**（该处原有注释即如此声明）：活体探针失败
+#        正是 provider 故障的第一手信号，排除它等于把警报器捂上。
+#   ⇒ 下面只在 ① 类查询上拼 probe_where()，② 类保持原样并加说明。
+from core.probe_mark import probe_where as _probe_where, sane_latency_where as _sane_lat
+
+_PROBE = _probe_where()
+
 # 全局专有指标（与 run 级四个 metric 零重叠 —— 保证两套评估器互不重复告警）
 GLOBAL_METRICS = (
     "llm_mock_rate_1h",        # 近 1h Mock 降级率（%）：provider 不可用/未配置的直接信号
@@ -98,10 +110,12 @@ def collect_global_metrics(conn) -> dict:
             return 0
 
     # ── LLM 用量窗口（近 1h）──
+    # ⚠️ 业务口径：排除探针（chat_probe 实测占总成本 51%）
     base = ("SELECT COUNT(*) c, COALESCE(SUM(used_mock),0) mock, "
             "COALESCE(SUM(fallback_used),0) fb, "
             "COALESCE(SUM(CASE WHEN finish_reason='length' THEN 1 ELSE 0 END),0) trunc, "
-            "COALESCE(SUM(estimated_cost),0) cost FROM llm_usage_stats WHERE created_at >= datetime('now','-1 hour')")
+            "COALESCE(SUM(estimated_cost),0) cost FROM llm_usage_stats "
+            "WHERE created_at >= datetime('now','-1 hour')" + _PROBE)
     try:
         r = conn.execute(base).fetchone()
         c = int(r["c"] or 0)
@@ -115,10 +129,14 @@ def collect_global_metrics(conn) -> dict:
         pass
 
     # ── 延迟 P95（近 1h）：内存排序，1h 量级记录数可接受；样本不足不出值 ──
+    # ⚠️ 两道过滤都要：
+    #   · probe_where —— 探针延迟（fake_tool 实测记过 56 年）
+    #   · sane_latency_where —— **非探针**但计时溢出的脏行（实测 2 行 file_read
+    #     记了 ≈56.8 年）。二者正交：一条记录可以既是生产调用、又计时出错。
     try:
         rows = conn.execute(
             "SELECT latency_ms FROM llm_usage_stats WHERE created_at >= datetime('now','-1 hour') "
-            "AND latency_ms > 0 ORDER BY latency_ms").fetchall()
+            "AND latency_ms > 0" + _PROBE + _sane_lat() + " ORDER BY latency_ms").fetchall()
         vals = [int(x[0]) for x in rows]
         if len(vals) >= _P95_MIN_SAMPLES:
             idx = max(0, int(round(len(vals) * 0.95)) - 1)
@@ -127,12 +145,13 @@ def collect_global_metrics(conn) -> dict:
         pass
 
     # ── 成本突增：今日累计 vs 昨日同一时刻前（同口径比较，避免"刚过零点就暴涨"的伪阳性）──
+    # ⚠️ 业务口径：排除探针（否则成本曲线约一半来自 chat_probe）
     try:
         today = float(_one("SELECT COALESCE(SUM(estimated_cost),0) FROM llm_usage_stats "
-                           "WHERE date(created_at)=date('now','localtime')") or 0)
+                           "WHERE date(created_at)=date('now','localtime')" + _PROBE) or 0)
         yday = float(_one("SELECT COALESCE(SUM(estimated_cost),0) FROM llm_usage_stats "
                           "WHERE date(created_at)=date('now','localtime','-1 day') "
-                          "AND time(created_at) <= time('now','localtime')") or 0)
+                          "AND time(created_at) <= time('now','localtime')" + _PROBE) or 0)
         m["cost_today_vs_yday"] = round(today / yday, 2) if yday > 0.000001 else 0.0
     except Exception:
         pass
@@ -161,7 +180,11 @@ def collect_global_metrics(conn) -> dict:
         pass
 
     # ── P0-a（2026-10-24）度量收口：6 个新指标取数 ──
-    # LLM 失败率/次数（近 1h，含探测——探测失败同样是 provider 故障信号）
+    # LLM 失败率/次数（近 1h，**含探测**——探测失败同样是 provider 故障信号）
+    # ⚠️ 2026-10-29 明确：这是**刻意的例外**，不要与本模块其它指标"统一口径"。
+    #    · 成本 / 延迟 / 调用量 / mock·trunc·fallback 比率 → 业务口径（已排除探针）
+    #    · 失败率 / 失败数                              → provider 健康口径（含探针）
+    #    两者**分母不同，不可互相除算**（`llm_fail_1h / llm_calls_1h` 是错的）。
     try:
         r = conn.execute(
             "SELECT COUNT(*) c, COALESCE(SUM(call_failed),0) f FROM llm_usage_stats "

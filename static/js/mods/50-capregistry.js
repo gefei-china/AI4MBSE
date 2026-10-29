@@ -210,10 +210,11 @@ async function loadCapRegistry() {
             <th style="padding:6px 8px;text-align:right;">失败</th>
             <th style="padding:6px 8px;">最近使用</th><th style="padding:6px 8px;">判定</th>
           </tr></thead>
-          <tbody>${rows.length ? rows.map(caprRowHtml).join('') : ''}</tbody>
+          <tbody id="capr-ledger-tbody">${rows.length ? rows.map(caprRowHtml).join('') : ''}</tbody>
         </table>
-        ${rows.length ? '' : caprEmptyHtml()}
       </div>
+      <!-- 空态常驻 DOM 用 display 控制：caprSetQ 只重画 tbody，需能切换它 -->
+      <div id="capr-empty" style="display:${rows.length ? 'none' : ''};">${rows.length ? '' : caprEmptyHtml()}</div>
 
       <div style="margin-top:16px;display:flex;gap:8px;align-items:center;">
         <b style="font-size:12.5px;">未进注册表但被调用的名字</b>
@@ -234,6 +235,44 @@ async function loadCapRegistry() {
       </div>
       <div style="margin-top:8px;">${caprTraceHtml(tr)}</div>
       <div id="capr-trace-detail"></div>
+
+      <!-- 原始注册表视图：接 capabilities/registry（2026-10-29）。
+           与账本报表的分工：账本报表是"加语义判定后的视图"，只回 top500 行；
+           本端点=原始投影流水，支持 kind/status 搜索与分页。
+           此前它后端一直存在、前端引用 0 处（孤儿端点）⇒ 想看第 501 行、
+           或按名字定位一个具体能力，界面上做不到。这里把它接上。
+           ⚠️ 本段是 JS 模板字符串内部的 HTML 注释 —— **不得出现反引号**：
+              一旦出现会提前终止模板字符串，后面的裸词变成标识符，
+              node --check 仍通过（语法凑巧成立），只有运行时才 ReferenceError。
+              实测踩过：注释里给端点名加了反引号 ⇒ 页面报
+              "加载失败：xxx is not defined"。 -->
+      <details id="capr-raw" style="margin-top:18px;">
+        <summary style="cursor:pointer;font-size:12.5px;font-weight:500;padding:4px 0;">
+          原始注册表（capability_registry 投影行 · 支持搜索 / 类型 / 状态 / 分页）
+          <span id="capr-raw-meta" style="font-weight:400;font-size:11px;color:var(--mut);"></span>
+        </summary>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0;">
+          <input id="capr-raw-q" placeholder="搜 capability_id / 名称"
+                 style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:200px;">
+          <select id="capr-raw-kind" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+            <option value="">全部类型</option>
+            <option value="tool">工具 tool</option>
+            <option value="skill">技能 skill</option>
+            <option value="mcp_server">MCP 服务</option>
+            <option value="mcp_tool">MCP 工具</option>
+            <option value="plugin">插件 plugin</option>
+            <option value="prompt">提示词 prompt</option>
+          </select>
+          <select id="capr-raw-status" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+            <option value="">全部状态</option>
+            <option value="active">active</option>
+            <option value="disabled">disabled</option>
+          </select>
+          <button class="btn sm" onclick="caprRawLoad(0)">查询</button>
+        </div>
+        <div id="capr-raw-body"></div>
+      </details>
+
       <div style="margin-top:10px;font-size:11px;color:var(--mut);line-height:1.6;">
         ${caprEsc((led.hint || '') + '　' + (tr && tr.note ? '' : ''))}
       </div>`;
@@ -244,10 +283,92 @@ async function loadCapRegistry() {
 
 function caprSetQ(v) {
   CAPR_STATE.q = v || '';
-  // 只重画表格，不整页重载（输入过程中重建整页会让输入框失焦）
-  const body = document.getElementById('capr-body');
-  if (!body || !CAPR_STATE.ledger) return;
-  loadCapRegistry();
+  // ★ 2026-10-29 修：本函数注释原本就写着"只重画表格，不整页重载（输入过程中
+  //   重建整页会让输入框失焦）"，但实现直接调了 `loadCapRegistry()` ——
+  //   那会重建整个 `#capr-body`，把**输入框本体**替换掉 ⇒ 每按一个键就失焦一次，
+  //   并且并发两次 fetch（先返回的那次后渲染，可能覆盖新结果）。
+  //   改为：只重画 tbody + 切换空态。**不再发请求**（过滤在本地做）。
+  const tb = document.getElementById('capr-ledger-tbody');
+  const led = CAPR_STATE.ledger;
+  if (!tb || !led) return;
+  const q = (CAPR_STATE.q || '').toLowerCase();
+  const rows = (led.rows || []).filter(r => !q
+    || (r.capability_id || '').toLowerCase().includes(q)
+    || (r.display_name || '').toLowerCase().includes(q));
+  tb.innerHTML = rows.map(caprRowHtml).join('');
+  const empt = document.getElementById('capr-empty');
+  if (empt) {
+    empt.style.display = rows.length ? 'none' : '';
+    empt.innerHTML = rows.length ? '' : caprEmptyHtml();
+  }
+}
+
+/* ── 原始注册表视图（/api/capabilities/registry）────────────────────────
+   与 /ledger 的分工（后端注释原文）：本端点=「账本的原始流水」，
+   /ledger=「加上语义判定后的报表」。前者支持 kind/status 搜索与分页，
+   后者只回 top500 判定行。此前本页只用了后者 ⇒ 想看第 501 行、
+   或按名字定位一个具体能力，界面上做不到（端点成孤儿）。 */
+async function caprRawLoad(offset) {
+  const body = document.getElementById('capr-raw-body');
+  if (!body) return;
+  const q = (document.getElementById('capr-raw-q') || {}).value || '';
+  const kind = (document.getElementById('capr-raw-kind') || {}).value || '';
+  const status = (document.getElementById('capr-raw-status') || {}).value || '';
+  const limit = 50;
+  const qs = new URLSearchParams({ limit: String(limit), offset: String(offset || 0) });
+  if (q) qs.set('q', q);
+  if (kind) qs.set('kind', kind);
+  if (status) qs.set('status', status);
+  body.innerHTML = '<div class="loading" style="font-size:11.5px;">加载原始注册表…</div>';
+  try {
+    const r = await fetch('/api/capabilities/registry?' + qs.toString());
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    const rows = d.rows || [];
+    const total = d.total || 0;
+    const off = d.offset || 0;
+    const meta = document.getElementById('capr-raw-meta');
+    if (meta) {
+      const bk = d.by_kind || {};
+      meta.textContent = ` · 共 ${total} 行` +
+        (Object.keys(bk).length ? `（${Object.keys(bk).map(k => k + ' ' + bk[k]).join(' / ')}）` : '');
+    }
+    const trs = rows.map(x => `<tr>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:11.5px;">
+        <div>${caprEsc(x.display_name || x.capability_id)}</div>
+        <div style="font-size:10px;color:var(--mut);font-family:ui-monospace,Consolas,monospace;">${caprEsc(x.capability_id)}</div>
+      </td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:11px;color:var(--mut);">${caprEsc(x.kind)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:11px;">${caprEsc(x.status || '')}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-size:11.5px;">${caprNum(x.call_count)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-size:11.5px;">
+        ${x.fail_count > 0 ? '<span style="color:#c62828;">' + caprNum(x.fail_count) + '</span>' : '<span style="color:var(--mut);">—</span>'}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:10.5px;color:var(--mut);">${caprEsc((x.last_used_at || '').slice(0, 16) || '—')}</td>
+    </tr>`).join('');
+    const pageBtn = (label, target, disabled) =>
+      `<button class="btn sm" ${disabled ? 'disabled style="opacity:.45;cursor:default;"' : ''}
+        onclick="caprRawLoad(${target})">${label}</button>`;
+    body.innerHTML = `
+      <div style="max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr style="position:sticky;top:0;background:var(--bg2,#f7f9fc);color:var(--mut);font-size:11px;text-align:left;">
+            <th style="padding:6px 8px;">能力</th><th style="padding:6px 8px;">类型</th>
+            <th style="padding:6px 8px;">状态</th>
+            <th style="padding:6px 8px;text-align:right;">调用</th>
+            <th style="padding:6px 8px;text-align:right;">失败</th>
+            <th style="padding:6px 8px;">最近使用</th>
+          </tr></thead>
+          <tbody>${trs || '<tr><td colspan="6" style="padding:14px;color:var(--mut);font-size:11.5px;">无匹配行</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:11px;color:var(--mut);">
+        ${pageBtn('‹ 上一页', Math.max(0, off - limit), off <= 0)}
+        <span>${off + 1}–${Math.min(off + rows.length, total)} / ${total}</span>
+        ${pageBtn('下一页 ›', off + limit, off + limit >= total)}
+      </div>`;
+  } catch (e) {
+    body.innerHTML = `<div style="color:#c62828;font-size:11.5px;">原始注册表加载失败：${caprEsc(e && e.message)}</div>`;
+  }
 }
 
 function caprDays(el) {

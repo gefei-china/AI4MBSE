@@ -45,6 +45,14 @@ import sqlite3
 import time
 from typing import Any, Optional
 
+# ★ 2026-10-29：周报的「能力调用（本周）」必须排除探针。
+#   探针（fake_tool 142 次等）不是业务调用，混入会让周报的能力调用量虚高，
+#   并让"上周 vs 本周"环比在看板脚本批量跑的那一周出现假峰值。
+#   口径真源：core/probe_mark.probe_where()（勿另写一份）。
+from core.probe_mark import probe_where as _probe_where
+
+_PROBE = _probe_where()
+
 # ══════════════════════════════════════════════════════════════
 # 配置
 # ══════════════════════════════════════════════════════════════
@@ -683,8 +691,8 @@ def _metrics_for(conn: sqlite3.Connection, s: dict, scope: str) -> list:
         if _tbl_exists(conn, "capability_registry"):
             out.append(("能力调用（本周）", _pair(
                 conn,
-                "SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=?",
-                "SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=? AND created_at<?",
+                "SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=?" + _PROBE,
+                "SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=? AND created_at<?" + _PROBE,
                 int(s["window_days"]))))
             out.append(("零调用能力", _stock(_count(
                 conn,
