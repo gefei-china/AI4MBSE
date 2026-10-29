@@ -367,7 +367,21 @@ function renderMessage(m) {
         const hl = (cd.hil_level||'').toLowerCase();
         const hilBadge = cd.hil_level ? `<span class="hil ${hl.startsWith('l2')?'l2':hl.startsWith('l1')?'l1':'l0'}">HIL ${cd.hil_level}</span>` : '';
         const kb = (cd.kb_tags||[]).length ? ` ｜ 知识库：${cd.kb_tags.map(t=>'#'+t).join(' ')}` : '';
-        html += `<div style="margin-top:8px;font-size:11px;color:var(--mut);">${cd.agent?`<b>${cd.agent}</b> `:''}${hilBadge} 意图：${cd.intent} ｜ 来源：${cd.source}（图谱${cd.graph_count||0} / 向量${cd.vector_count||0}）置信度 ${(cd.confidence||0).toFixed(2)}${kb}</div>`;
+        // ★★ 2026-10-29（实测 conv 9751，排查时我自己都误读过一次）：
+        //   `cd.confidence` 是**检索置信度**（retrieval.confidence），不是意图置信度；
+        //   而意图置信度在 `cd.intent_confidence`。原实现把「置信度 x.xx」紧跟在
+        //   「意图：xxx ｜ 来源：xxx」之后，读起来就是"意图置信度" ——
+        //   实测该会话 cd.confidence=0.00 而真实意图置信度是 0.80（intent_samples 实证），
+        //   于是界面显示「意图：knowledge_qa … 置信度 0.00」，与事实相反。
+        //   修法：两个置信度**分别标注用途**，意图置信度单独渲染；检索置信度改名「检索置信度」。
+        const iconf = (cd.intent_confidence != null) ? Number(cd.intent_confidence) : null;
+        const rconf = (cd.confidence != null) ? Number(cd.confidence) : null;
+        const intentPart = iconf != null
+          ? ` 意图：${cd.intent}（意图置信 ${iconf.toFixed(2)}）`
+          : ` 意图：${cd.intent}`;
+        const retrPart = `来源：${cd.source}（图谱${cd.graph_count||0} / 向量${cd.vector_count||0}）`
+          + (rconf != null ? ` 检索置信 ${rconf.toFixed(2)}` : '');
+        html += `<div style="margin-top:8px;font-size:11px;color:var(--mut);">${cd.agent?`<b>${cd.agent}</b> `:''}${hilBadge}${intentPart} ｜ ${retrPart}${kb}</div>`;
       }
       // P0：结论速览面板（资料库与AI建模优化 §2）—— 默认展开，集中阅读最终结论
       const summaryHtml = renderSummaryPanel(cd);

@@ -64,6 +64,42 @@ class SessionMixin:
     #   为什么单独立方法而不塞进 DST：DST 管的是"这一轮在聊什么意图"（每轮都变），
     #   主 Agent 管的是"这个会话由谁执行"（用户选定后长期不变）—— 两者生命周期不同，
     #   混在一个 JSON 里会被 `_merge_slots` 的覆盖语义冲掉。
+
+    #: 标准意图标签（= agents 表 builtin=1 的那批 name，2026-10-29 实测核对）。
+    #: `conversations.intent` 只应存这些值；存主 Agent 名属**字段语义污染**。
+    _STANDARD_INTENT_LABELS = frozenset({
+        "requirement_analysis", "design", "impact", "review", "report_generation",
+        "knowledge_qa", "chat", "system_mgmt", "zhiyuan_mgmt", "requirement_quality",
+        "requirement_structuring", "view_expansion", "architecture_skeleton",
+        "trace_verification", "model_validation_repair", "change_safety_gate",
+        "model_release", "methodology_resolver",
+    })
+
+    def _intent_for_storage(self, intent: str, detected: str = "") -> str:
+        """把"本轮执行主体"规范化为**可入库的意图标签**（2026-10-29）。
+
+        ★ 为什么需要（实测污染）：`conversations.intent` 被写入过主 Agent 名 ——
+          近期 60 个会话里 25 条存成「智源对接agent」，全库 150 条里 40 条形如 Agent 名。
+          根因是 `intent = forced_intent or _detected` 之后，团队模式把
+          `forced_intent` 设成主 Agent 名，于是"执行主体"被当成"意图"落库：
+          ① 意图分布统计失真（智源对接agent 成了最大"意图"）；
+          ② 同一字段两轮之间含义跳变（这轮是 design、下轮是 Agent 名）。
+
+        口径：**`conversations.intent` 只存意图标签**，执行主体由 `main_agent` 承载（已有）。
+          传入值不在标准意图集 ⇒ 判为"执行主体" ⇒ 回落到 detected，再不行落 chat。
+
+        ⚠️ 刻意**不查库**：本方法在每轮落库路径上高频调用，查 agents 表会引入
+           额外往返；标准标签集是内置能力名（内置能力不改名），用常量足够。
+           新增内置意图时同步本常量（tests/test_intent_storage_hygiene.py 有断言守护）。
+        """
+        _i = str(intent or "").strip()
+        if _i in self._STANDARD_INTENT_LABELS:
+            return _i
+        _d = str(detected or "").strip()
+        if _d in self._STANDARD_INTENT_LABELS:
+            return _d
+        return "chat"
+
     def _load_main_agent(self, conversation_id) -> str:
         """读会话绑定的主 Agent 名（空串=未绑定/会话不存在）。绝不抛。"""
         if not conversation_id or int(conversation_id) <= 0:

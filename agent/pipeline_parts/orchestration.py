@@ -478,7 +478,8 @@ class OrchestrMixin:
             _archive_artifacts(conn, conversation_id, msg_id, card_data, llm_content, intent)
             conn.execute(
                 "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
-                (intent, conversation_id)
+                # ★ 2026-10-29：入库前规范化（同 stream.py，conversations.intent 只存意图标签）
+                (self._intent_for_storage(intent), conversation_id)
             )
             # Audit log
 # P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——

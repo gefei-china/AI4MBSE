@@ -3191,8 +3191,12 @@ class StreamMixin:
                 )
                 msg_id = cur.lastrowid
                 _archive_artifacts(conn2, conversation_id, msg_id, card_data, orch_content, intent)
+                # ★ 2026-10-29：入库前规范化（conversations.intent 只存意图标签，
+                #   执行主体由 main_agent 承载）。原实现直接写 `intent`，
+                #   而团队模式下它可能是主 Agent 名 ⇒ 字段污染（实测 25/60 会话）。
                 conn2.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
-                              (intent, conversation_id))
+                              (self._intent_for_storage(intent, locals().get("_detected", "")),
+                               conversation_id))
                 # C-1（2026-10-04）：「汇总产物已落库」标记**必须与消息 INSERT 同事务**。
                 #   分两次提交的话，中途崩溃会留下「消息在、标记 0」→ resume 误判"可只重做汇总"
                 #   → 同一份汇总在会话里出现两次。故写在同一个 with 块内，由 db_conn 统一提交。
@@ -3362,7 +3366,9 @@ class StreamMixin:
             _archive_artifacts(conn, conversation_id, msg_id, card_data, orch_content, intent)
             conn.execute(
                 "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
-                (intent, conversation_id)
+                # ★ 2026-10-29：同上，入库前规范化
+                (self._intent_for_storage(intent, locals().get("_detected", "")),
+                 conversation_id)
             )
             # Audit log
 # P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——
@@ -3853,15 +3859,24 @@ class StreamMixin:
                     intent = team_decision["target"]
                     forced_intent = intent
                     team_direct = True
+                    # ★★ 2026-10-29（实测 conv 9751：绑定与执行不一致却无任何说明）：
+                    #   该会话 `conversations.main_agent='智源对接agent'`，实际执行的是
+                    #   「知识问答Agent」（intent=knowledge_qa），而落库的
+                    #   `exec.notices` 是 **null** ⇒ 刷新后完全看不出"为什么换了 Agent"。
+                    #   根因：下面两处只 `yield reasoning`，**没有 append 到 exec_notices**，
+                    #   而 reasoning 在历史还原里是一条"AI 思考"文本，不是结构化说明。
+                    #   本仓已为此付出过一次学费（2026-10-28 同类问题：执行主体说明
+                    #   原来以纯 reasoning 发出 ⇒ 落进"AI 思考"框，用户看不到）。
+                    #   修法：同一条文案**同时**进 exec_notices（落库可见）。
                     if _detected and _detected != intent:
-                        yield {"type": "reasoning", "delta": (
-                            f"（团队路由）已定向到团队成员「{team_decision['target']}」"
-                            f"（{team_decision.get('reason') or ''}）；"
-                            f"意图识别结果为 {_detected}")}
+                        _subj_note = (f"（团队路由）已定向到团队成员「{team_decision['target']}」"
+                                      f"（{team_decision.get('reason') or ''}）；"
+                                      f"意图识别结果为 {_detected}")
                     else:
-                        yield {"type": "reasoning", "delta": (
-                            f"（团队路由）已定向到团队成员「{team_decision['target']}」"
-                            f"（{team_decision.get('reason') or ''}）")}
+                        _subj_note = (f"（团队路由）已定向到团队成员「{team_decision['target']}」"
+                                      f"（{team_decision.get('reason') or ''}）")
+                    exec_notices.append({"kind": "progress", "text": _subj_note})
+                    yield {"type": "reasoning", "delta": _subj_note, "kind": "progress"}
                 elif _act == "orchestrate":
                     team_forced = True
                 else:
@@ -4308,8 +4323,24 @@ class StreamMixin:
             # 思考过程：检索决策 + 自动触发技能（真实执行信息，普通模型不流 reasoning 时也可见）
             if should_retrieve:
                 route = retrieval.get("route", "none")
-                _r_delta = (f"（{agent_def.name}）完成知识检索：图谱 {retrieval['graph_count']} 条 / "
-                            f"向量 {retrieval['vector_count']} 条（路由 {route}），将基于检索到的互联数据组织回答。")
+                # ★★ 2026-10-29（实测 conv 9751：检索 0 条却声称"基于检索到的互联数据"）：
+                #   原实现**无条件**写"将基于检索到的互联数据组织回答"，
+                #   而实测那一轮 graph_count=0 / vector_count=0 / citations=0 ——
+                #   模型其实**没有任何检索依据**，纯靠参数知识作答。
+                #   这与本仓反复强调的「不得虚构」「没检出 ≠ 检查过且无问题」直接冲突：
+                #   用户看到这句话会以为回答有知识库支撑，实际是模型自由发挥
+                #   （citations 为空时前端也无从纠正）。
+                #   修法：按**实际命中数**分支措辞，零命中时明确说"无检索依据"。
+                _g = int(retrieval.get("graph_count") or 0)
+                _v = int(retrieval.get("vector_count") or 0)
+                if _g + _v > 0:
+                    _r_delta = (f"（{agent_def.name}）完成知识检索：图谱 {_g} 条 / "
+                                f"向量 {_v} 条（路由 {route}），将基于检索到的互联数据组织回答。")
+                else:
+                    _r_delta = (f"（{agent_def.name}）已执行知识检索，但**未命中任何条目**"
+                                f"（图谱 0 条 / 向量 0 条，路由 {route}）"
+                                f"——本轮回答**无检索依据**，由模型基于自身知识生成，"
+                                f"请以规范原文为准。")
             else:
                 _r_delta = (f"（{agent_def.name}）本次未触发知识检索（纯问答/无 # 标签），直接基于专业知识与上传资料生成回答。")
             if self._last_skill_hits:
@@ -5933,6 +5964,17 @@ class StreamMixin:
                     "slots": slots,
                     "source": retrieval["source"],
                     "confidence": retrieval["confidence"],
+                    # ★ 2026-10-29：**意图置信度与检索置信度分列**。
+                    #   实测 conv 9751：confidence(检索)=0.00，而意图识别实际是 0.80
+                    #   （intent_samples.hit_conf 实证）。前端原先把 confidence 渲染在
+                    #   「意图：xxx」旁边，界面显示「意图：knowledge_qa … 置信度 0.00」，
+                    #   与事实相反；排查时我自己也误读过一次。
+                    #   单独立字段 ⇒ 前端可分别标注用途，两个数不再混淆。
+                    #   ⚠️ 用 getattr 兜底而非直接引用 `_intent_meta`：该变量在 3955 行
+                    #     定义于外层分支，若未来某条早退路径先到此处，直接引用会 NameError
+                    #     把整轮作答打挂（本仓"前向引用潜伏"有前例）。
+                    "intent_confidence": (getattr(self.router, "_last_meta", None) or {}).get("confidence"),
+                    "intent_route": (getattr(self.router, "_last_meta", None) or {}).get("route"),
                     "graph_count": retrieval["graph_count"],
                     "vector_count": retrieval["vector_count"],
                     "used_mock": llm_info["used_mock"],
