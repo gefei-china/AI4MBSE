@@ -43,6 +43,22 @@ os.environ.setdefault("MBSE_LLM_FORCE_MOCK", "1")   # 不依赖外部 LLM，回�
 # 配置也隔离：指向不存在的路径 → 回落默认配置 + 上面的环境变量覆盖（不读用户真实配置）
 os.environ.setdefault("MBSE_CONFIG_PATH", str(ROOT / "tests" / "_test_config.json"))
 
+# ★ 2026-10-29：会话开始**强制重置**测试配置文件为空。
+#   为什么：若有测试调 `core.config.save_override()`（写 CONFIG_PATH），会把
+#   配置写进本文件（conftest 已把 MBSE_CONFIG_PATH 指向它）。一旦写脏，
+#   `config.reload()` 在**后续所有测试**里都会读到测试值 ⇒ 断言大面积假红。
+#   实测事故：某测试写入 skill.improve_fail_ratio=0.2 后，后面断言默认阈值的
+#   用例报 `assert 0.2 <= 0.15` 失败，排查了两轮才定位到这个共享文件。
+#   ⇒ 每个 pytest 会话都从干净配置开始（用 setdefault 之上再强制写空）。
+try:
+    _cfg_path = os.environ.get("MBSE_CONFIG_PATH") or ""
+    if _cfg_path:
+        with open(_cfg_path, "w", encoding="utf-8") as _f:
+            _f.write("{}")
+except Exception:
+    pass        # 重置失败不阻断测试（最坏退化为旧的脏配置行为）
+
+
 import pytest  # noqa: E402
 
 

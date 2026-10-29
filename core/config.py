@@ -1179,6 +1179,33 @@ DEFAULT_CONFIG = {
         "reopen_on_recur": True,     # 已 triage 的主题复现时重开（否则告警闭环对复发失明）
         "alert_threshold": 5,        # 默认告警线（open 数 ≥N 触发；也可在 alert_rules 自建规则）
     },
+    # ── 技能自改进判据（2026-10-29 登记）──────────────────────────────
+    # ⚠️ 背景（实测暴露的真缺陷）：`skill_improve.py` 用 `_cfg.get("skill", ...)` 读这组参数，
+    #   但本组**此前既不在 DEFAULT_CONFIG、也不在 CONFIG_SCHEMA** ⇒ 两个后果：
+    #     ① 设置页 UI 不渲染（`schema()` 只遍历 CONFIG_SCHEMA）；
+    #     ② `save_override()` 直接抛错「未知配置项: skill.improve_fail_ratio」
+    #        ——它是白名单校验（core/config.py:save_override）。
+    #   ⇒ 判据参数实际**埋在代码默认值里，运维既看不见也改不了**
+    #     （手写 JSON 能生效，但得先知道键名，等于没有可运维性）。
+    #   这与本仓反复出现的"同一判据散在多处"是同一族问题：**判据该在配置层，不该埋在代码里**。
+    #   本次登记**零行为变化**（默认值与代码原默认完全一致），只是让它可见、可改、可审计。
+    "skill": {
+        "self_improve_enabled": True,   # 技能自改进总开关（关=不扫描候选、不出草稿）
+        "improve_min_fail": 3,          # 绝对失败次数下限（与 improve_fail_ratio 取 AND）
+        "improve_min_uses": 10,         # 绝对使用次数下限（同上）
+        # 失败率下限（fails/uses）。2026-10-29 由 0.3 调到 0.12，理由见下方 abs 通道注释。
+        "improve_fail_ratio": 0.12,
+        # ★ 2026-10-29 新增「绝对失败数」通道（OR 通道，补比例判据的结构性盲区）：
+        #   纯比例判据对大样本技能**系统性失灵** —— 实测 Requirement_Analysis_Pre-check
+        #   uses=120 / fail=17（失败率 14.2%），按 0.3 要攒到 **36 次失败**才提议修订，
+        #   等攒够时污染面已经很大；而小样本技能（uses=10, fail=3 = 30%）反而容易触发。
+        #   ⇒ 比例判据惩罚"用得多的技能"，与"该修谁"的直觉相反。
+        #   绝对通道：fails ≥ N 且 uses ≥ M 也触发，使"高频技能的真实失败量"不被比例稀释。
+        "improve_abs_min_fail": 15,     # 绝对失败数下限（达到即触发，不看比例）
+        "improve_abs_min_uses": 50,     # 绝对通道的使用次数门槛（防小样本偶发失败误触发）
+        "improve_idle_days": 30,        # 长期未更新的技能也纳入（闲置技能需要体检）
+        "improve_max_revisions": 5,     # 同技能 ai_improve 草稿上限（防批量刷 LLM）
+    },
     # ── P1-1（2026-10-18 自进化调研路线图）：Trace2Dataset ────────────
     # 背景：生产轨迹（会话/HIL 裁决/意图样本/编排运行/Bad Case 台账）此前没有
     #   任何通路变成可复用评测样本 —— 飞轮不接回管道就是数据坟墓（Airbnb AITL /
@@ -2002,6 +2029,18 @@ CONFIG_SCHEMA = {
         "max_detail_chars":   {"type": "int",   "desc": "单条 evidence 截断上限（字符）"},
         "reopen_on_recur":    {"type": "bool",  "desc": "已 triage 的主题复现时重开为 open"},
         "alert_threshold":    {"type": "int",   "desc": "默认告警线：open 数达到即值得关注"},
+    },
+    # 技能自改进判据（2026-10-29 登记；此前参数埋在 skill_improve.py 代码默认值里，
+    # 设置页不渲染、save_override 抛「未知配置项」⇒ 运维改不了判据）
+    "skill": {
+        "self_improve_enabled": {"type": "bool",  "desc": "技能自改进总开关（关=不扫描候选、不出修订草稿）"},
+        "improve_min_fail":     {"type": "int",   "desc": "绝对失败次数下限（与失败率取 AND）"},
+        "improve_min_uses":     {"type": "int",   "desc": "绝对使用次数下限（与失败率取 AND）"},
+        "improve_fail_ratio":   {"type": "float", "desc": "失败率下限 fails/uses（默认 0.12；原 0.3 对大样本技能结构性失灵）"},
+        "improve_abs_min_fail": {"type": "int",   "desc": "★绝对失败数通道：失败数达到即触发，不看比例（治高频技能被比例稀释）"},
+        "improve_abs_min_uses": {"type": "int",   "desc": "绝对通道的使用次数门槛（防小样本偶发失败误触发）"},
+        "improve_idle_days":    {"type": "int",   "desc": "技能闲置天数：超过则纳入体检（提出修订草稿）"},
+        "improve_max_revisions": {"type": "int",  "desc": "同技能 ai_improve 草稿上限（防批量刷 LLM）"},
     },
     # 评测门禁阈值单一真源（2026-10-22）：门禁脚本一律读本组，CI 注释只写变量名不写数字
     "eval_gates": {

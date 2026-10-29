@@ -24,12 +24,32 @@ class SkillImprover:
 
     @classmethod
     def candidates(cls, conn) -> list:
-        """扫描已发布技能，返回满足修订触发条件的技能列表 [{id,name,use_stats,feedback_notes}]。"""
+        """扫描已发布技能，返回满足修订触发条件的技能列表 [{id,name,use_stats,feedback_notes}]。
+
+        ★ 2026-10-29 判据调整（实测驱动的修正，非拍脑袋）：
+          原判据 = 比例单通道：`uses>=min_fail and fails>=min_fail and fails/uses>=0.3`
+          实测暴露**结构性盲区**：大样本技能被比例系统性惩罚 —
+            Requirement_Analysis_Pre-check: uses=120 / fail=17 → 失败率 14.2%
+            按 0.3 需攒到 **36 次失败**才提议修订，等攒够时污染面已很大；
+            而小样本技能（uses=10/fail=3 = 30%）反而轻松触发。
+          ⇒ 比例判据惩罚"用得多的技能"，与"该修谁"的直觉相反。
+          现改为**双通道（OR）**：
+            ① 比例通道：uses>=improve_min_uses 且 fails>=improve_min_fail
+                         且 fails/uses>=improve_fail_ratio（默认已由 0.3 降到 0.12）
+            ② 绝对通道（新增）：fails>=improve_abs_min_fail 且 uses>=improve_abs_min_uses
+                         —— 高频技能的真实失败量不被比例稀释
+            ③ 闲置通道（原有）：uses>=improve_min_uses 且超过 improve_idle_days 未更新
+          三者任一命中即纳入候选；参数全部走 `skill.*` 配置（2026-10-29 已登记进
+          CONFIG_SCHEMA，可在设置页改、可经 save_override 写，此前是硬编码默认值）。
+        """
         if not cls._enabled():
             return []
         min_fail = int(cls._cfg("improve_min_fail", 3))
-        fail_ratio = float(cls._cfg("improve_fail_ratio", 0.3))
+        fail_ratio = float(cls._cfg("improve_fail_ratio", 0.12))
         min_uses = int(cls._cfg("improve_min_uses", 10))
+        # ★ 绝对失败数通道（2026-10-29）：补比例判据对大样本技能的盲区
+        abs_min_fail = int(cls._cfg("improve_abs_min_fail", 15))
+        abs_min_uses = int(cls._cfg("improve_abs_min_uses", 50))
         idle_days = int(cls._cfg("improve_idle_days", 30))
         max_rev = int(cls._cfg("improve_max_revisions", 5))
         rows = conn.execute(
@@ -51,8 +71,15 @@ class SkillImprover:
             if rev_n and int(rev_n["c"] or 0) >= max_rev:
                 continue
             hit = False
-            if uses >= min_fail and fails >= min_fail and (fails / max(uses, 1)) >= fail_ratio:
+            # ① 比例通道（2026-10-29 阈值 0.3 → 0.12）
+            if uses >= min_uses and fails >= min_fail and (fails / max(uses, 1)) >= fail_ratio:
                 hit = True
+            # ② 绝对失败数通道：高频技能的真实失败量不被比例稀释
+            #    （实测 Requirement_Analysis_Pre-check 17 次失败失败率仅 14.2%，
+            #      单靠比例永远够不到 30% ⇒ 修不掉"用得越多越难过阈值"的反直觉）
+            if fails >= abs_min_fail and uses >= abs_min_uses:
+                hit = True
+            # ③ 闲置通道：长期未更新的技能也体检
             if uses >= min_uses:
                 try:
                     ut = time.mktime(time.strptime(r["updated_at"][:19], "%Y-%m-%d %H:%M:%S"))
