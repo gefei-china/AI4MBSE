@@ -95,6 +95,11 @@ DEFAULT_CONFIG = {
         "thinking_budget": 0,            # 给思考的独立上限（token）；0=不启用
         "thinking_reserve_tokens": 0,    # 给正文的保底额度（token）；0=不启用
         # 思考超限**告警**阈值（token）；0=不启用。★ 只留痕不拦截（拦截用 thinking_budget）
+        # ★ P1-5（2026-10-30）：上下文占用告警线（prompt/context_window）。
+        #   0=关。为什么要有：既有守卫只拦 "输出上限超窗口"（mt>cw），
+        #   对"输入把窗口吃掉"完全无信号（id=71 mt=112000/cw=128000 ⇒ 输入余量 15.5k）。
+        #   它是**留痕**不是拦截（真到顶由 provider 报错，不必我们猜）。
+        "context_util_warn": 0.85,
         "thinking_warn_tokens": 0,
         # 按 intent 分流思考（L1）。★ 未命中的 intent 不发 thinking 字段（保持原行为）。
         #   数据依据见 core/config.py 的 schema desc（廉价任务思考占 58~86% 属浪费）。
@@ -1703,6 +1708,7 @@ CONFIG_SCHEMA = {
         #   ⇒ 按 20~80ms/token 线性拉长耗时 ⇒ 撞超时 ⇒ 重试 ⇒ 更慢（乘法放大）。
         "thinking_budget":         {"type": "int", "desc": "★ **给 reasoning 思考的独立上限**（token），默认 0=不启用。思考与正文共享 max_tokens，不设限时思考可吃掉 63% 输出（实测）"},
         "thinking_reserve_tokens": {"type": "int", "desc": "★ **给正文的保底额度**（token，思考不得吃光），默认 0=不启用。实际压算 max_tokens = min(max_tokens, thinking_budget + thinking_reserve_tokens)"},
+        "context_util_warn": {"type": "float", "desc": "★ **上下文占用告警线**（prompt/context_window，默认 0.85；0=关）。只留痕不拦截 —— 既有守卫只拦『输出上限超窗口』(mt>cw)，对『输入把窗口吃掉』无信号（id=71 mt=112000/cw=128000 ⇒ 输入余量仅 15.5k）"},
         "thinking_warn_tokens": {"type": "int", "desc": "★ **思考超限告警阈值**（token），默认 0=不启用。只在 `_record_usage` 打 WARNING（流式/非流式唯一共同点），**只留痕不拦截**（拦截用 thinking_budget）。实测 310/6890 次调用 reasoning>2000tok，极端例 13430/13535=99.2% 耗 4017s。按 (intent, provider) 去重防刷屏"},
         # ── 2026-10-09 thinking 按 intent 分流（L1；粒度=任务维度）──
         # 依据实测（llm_usage_stats 按 intent 聚合思考占completion 的比例）：
