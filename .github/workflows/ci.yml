@@ -134,17 +134,28 @@ jobs:
       #   nightly-evals 作业（需先接语料，见该作业注释里的方案决策）承担。
       #   快照缺失时 --allow-missing 判 SKIP 而非恒红（恒红门禁会被豁免，
       #   比没门禁更糟）；快照在 ⇒ 指标退化立刻在 PR 上可见。
+      # ★ 2026-10-30 修（三处同一个写法错，全部从未真正执行过）：
+      #   原写法是把续行反斜杠放在 YAML **plain scalar** 里：
+      #       run: python ... --allow-missing \
+      #         --report docs/...
+      #   plain scalar 的换行+缩进会被折叠成**一个空格**，反斜杠于是变成**字面 token**
+      #   传给 argparse ⇒ `error: unrecognized arguments:  --report docs/...` ⇒ exit 2。
+      #   实测（run 41002420545）就是这么挂在 step 15 的 —— 门禁一项都没跑。
+      #   ⇒ 改用 block scalar（`run: |`），反斜杠由 **shell** 解释而不是 YAML。
+      #   同类写法在本文件共 3 处（RAG / 生成质量 / Trace 三个评测门禁），一并修。
       - name: Guard RAG 检索评测指标不塌陷（13 项 + 4 变异；消费 checked-in 快照，缺失则跳过）
-        run: python tools/verify/verify_rag_eval_gate.py --allow-missing \
-          --report docs/评测/nightly/latest-rag-report.json
+        run: |
+          python -X utf8 tools/verify/verify_rag_eval_gate.py --allow-missing \
+            --report docs/评测/nightly/latest-rag-report.json
 
       # ── P0-3（2026-10-22）：生成质量评测接入门禁（补断链③）──────────────
       # 评估发现：faithfulness/groundedness **全仓零命中** —— 检索、路由、
       # 记忆都有门禁，唯独生成质量（答案有没有依据、引用编号对不对）是黑的。
       # 报告来源同为本地跑批器快照（docs/评测/nightly/latest-gen-report.json）。
       - name: Guard 生成质量评测指标不塌陷（7 项 + 6 变异；消费 checked-in 快照，缺失则跳过）
-        run: python tools/verify/verify_generation_quality_gate.py --allow-missing \
-          --report docs/评测/nightly/latest-gen-report.json
+        run: |
+          python -X utf8 tools/verify/verify_generation_quality_gate.py --allow-missing \
+            --report docs/评测/nightly/latest-gen-report.json
 
       # ── P0-1b（2026-10-22）：Trace 一致性评测接入门禁（补断链②）────────────
       # 评估发现：trace2dataset 产出的 228 条生产人工裁决样本**无消费方**
@@ -153,8 +164,9 @@ jobs:
       #   回答"人对过的题还在丢分吗"（实测一致率 0.881，负对照洗牌 0.167）。
       # 报告来源同为本地跑批器快照（docs/评测/nightly/latest-trace-report.json）。
       - name: Guard Trace 一致性评测指标不塌陷（7 项 + 10 变异；消费 checked-in 快照，缺失则跳过）
-        run: python tools/verify/verify_trace_quality_gate.py --allow-missing \
-          --report docs/评测/nightly/latest-trace-report.json
+        run: |
+          python -X utf8 tools/verify/verify_trace_quality_gate.py --allow-missing \
+            --report docs/评测/nightly/latest-trace-report.json
 
       # ── P0-2 批次 2/3（2026-10-03/04）：编排 checkpoint + 断点续跑 ──────────────
       - name: Guard 编排 checkpoint / resume（79 项 + 6 变异）
