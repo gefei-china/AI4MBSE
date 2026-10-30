@@ -192,7 +192,18 @@ function pickLocalFile(){
   closeAttachMenu();
 }
 let _attachProjectDocs = [];   // 2026-09-04 缓存当前会话文件清单，供本地搜索过滤
-// 「当前会话的文件」：从当前会话历史消息 attachments 提取（去重），与 @ 会话文件同源
+// 「当前会话的文件」：**会话附件 + 会话产物** 合并清单（去重）
+//
+// ★★ 2026-10-30（用户报「选『当前会话的文件』列表为空，但产物里明明有代码文件」）：
+//   原实现只扫 `messages[].attachments` —— 那是**用户上传的附件**。
+//   而本平台把 AI 产出的代码/文档/视图登记在 `artifacts` 表（另一个数据源），
+//   两者互不相通。实测 conv 9779：`messages.attachments` 命中 0 条，
+//   而 `artifacts` 有 9 条（3 个代码文件 + 6 个 SysML 视图）
+//   ⇒ 面板显示「当前会话还没有文件」，用户看到的是"列表空了但产物明明在"。
+//   这不只是漏一类数据：**"会话里有哪些文件"这个概念被拆成了两半**，
+//   用户无法从同一个入口引用自己刚产出的代码。
+//   现合并：上传附件（可走 doc_id/静态文件通道）+ 产物（走正文引用通道，
+//   见 attachConvFile 的说明——产物没有稳定静态地址，只有库内正文）。
 async function loadAttachProjectFiles(){
   const listEl = document.getElementById('attach-project-list');
   const emptyEl = document.getElementById('attach-project-empty');
@@ -202,10 +213,14 @@ async function loadAttachProjectFiles(){
   emptyEl.style.display = 'none';
   if(searchEl) searchEl.value = '';
   _attachProjectDocs = [];
+  // ⚠️ `seen` 必须声明在**两个数据源之外**：第一版把它留在第一个 try 里，
+  //   而产物扫描在 catch 之后 ⇒ `ReferenceError: seen is not defined` ⇒ 被外层
+  //   try/catch 吞掉 ⇒ **产物一条都不出现，且控制台之外无任何痕迹**。
+  //   这正是"加了等于没加"的典型形态：不报错、不生效。
+  const seen = {};
   if(typeof currentConvId !== 'undefined' && currentConvId){
     try{
       const mr = await api(`/api/conversations/${currentConvId}/messages?limit=50`);
-      const seen = {};
       ((mr && mr.messages) || []).forEach(mm => {
         let atts = [];
         try{ atts = mm.attachments ? (typeof mm.attachments==='string' ? JSON.parse(mm.attachments) : mm.attachments) : []; }catch(e){ atts = []; }
@@ -219,6 +234,26 @@ async function loadAttachProjectFiles(){
           //     · **B5-9 后端的 doc_id 取 chunk 通道收不到 id** ⇒ "从产物选文件"依旧异常。
           //   （与 file_type 等同放一行；两个字段都带，旧代码读 id 的不受影响。）
           _attachProjectDocs.push({id:a.doc_id||'', doc_id:a.doc_id||'', filename:key, url:a.url||'', size:a.size||0, is_image:!!a.is_image, file_type:key.split('.').pop()||'文件'});
+        });
+      });
+    }catch(e){}
+    // 会话产物（AI 产出的代码 / 文档 / 视图）—— 第二个数据源，必须合并进来
+    try{
+      const arts = await api(`/api/artifacts?conversation_id=${currentConvId}`);
+      (arts || []).forEach(a => {
+        const key = 'art:' + a.id;
+        if(!a || !a.id || seen[key]) return;
+        seen[key] = 1;
+        _attachProjectDocs.push({
+          kind: 'artifact', art_id: a.id,
+          // 产物没有静态文件地址（库里 file_url 实测为空串），
+          // 所以 url 留空 + 由 attachConvFile 走正文引用通道。
+          doc_id: '', url: '',
+          filename: a.title || ('产物#' + a.id),
+          size: a.size || 0, is_image: false,
+          file_type: (a.kind_label || a.kind || '产物'),
+          art_kind: a.kind || '',
+          from_artifact: true,
         });
       });
     }catch(e){}
@@ -249,20 +284,62 @@ function renderAttachProjectList(){
   }
   emptyEl.style.display = 'none';
   listEl.innerHTML = docs.map((d,i)=>{
-    const icon = d.is_image ? '🖼' : fileIcon(d.filename || '');
-    return `<div onclick="attachConvFile(${i})" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;transition:background .12s;">
+    // 索引必须回到**全量**数组：过滤后 i 是 docs 的下标，直接喂给
+    // attachConvFile 会取错项（搜索后点第一条，实际添加的是未过滤的第一条）。
+    const gi = _attachProjectDocs.indexOf(d);
+    const isArt = d.kind === 'artifact';
+    const icon = d.is_image ? '🖼' : (isArt ? (d.art_kind === 'sysml' ? '🧩' : d.art_kind === 'code' ? '💻' : '📦') : fileIcon(d.filename || ''));
+    const src = isArt ? ('会话产物 · ' + (d.file_type || '产物'))
+                      : ('会话附件' + (d.doc_id ? ' · 已入库' : ''));
+    return `<div onclick="attachConvFile(${gi})" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;transition:background .12s;" title="${escA(d.filename||'')}">
       <span style="font-size:18px;">${icon}</span>
       <div style="flex:1;min-width:0;">
         <div style="font-size:12.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(d.filename || '未命名')}</div>
-        <div style="font-size:10.5px;color:var(--mut);">${esc(d.file_type||'文件')} · 会话附件${d.doc_id?' · 已入库':''}</div>
+        <div style="font-size:10.5px;color:var(--mut);">${esc(src)}</div>
       </div>
+      <span onclick="event.stopPropagation();previewConvFile(${gi})" title="预览内容" style="font-size:13px;color:var(--mut);flex-shrink:0;padding:0 4px;">👁</span>
       <span style="font-size:12px;color:var(--blue-d);flex-shrink:0;">添加</span>
     </div>`;
   }).join('');
 }
+// 预览：会话文件清单里每一项都能"只看看"，不必先加入会话。
+// 为什么必须单独给（用户原话「产物文件中又代码文件，为啥无法查看」）：
+// 清单此前只有「添加」一个动作，想确认"这是不是我要的那个代码文件"必须
+// 先加进会话（会改上下文）——把只读诉求和写入动作用同一个按钮绑在一起。
+function previewConvFile(i){
+  const d = _attachProjectDocs[i];
+  if(!d) return;
+  if(d.kind === 'artifact'){
+    api('/api/artifacts/' + d.art_id).then(a => {
+      if(!a || a.error){ toast('预览失败：' + ((a && a.error) || '产物不存在')); return; }
+      if(typeof openPreviewTab === 'function') openPreviewTab(a);
+      else if(a.preview_content) window.open('/api/artifacts/' + d.art_id + '/download', '_blank');
+      else toast('该产物没有可预览内容');
+    }).catch(e => toast('预览失败：' + (e && (e.message || e))));
+    return;
+  }
+  const u = d.url || (d.doc_id ? '/api/documents/' + d.doc_id + '/download' : '');
+  if(u) window.open(u, '_blank');
+  else toast('该附件没有可预览地址（仅存在于历史消息中）');
+}
 function attachConvFile(i){
   const d = _attachProjectDocs[i];
   if(!d) return;
+  // ★★ 2026-10-30：**产物走"正文引用"通道，不进附件栏**。
+  //   理由（可验证，不是偏好）：后端 `_load_attachment_text` 只认两种附件来源 ——
+  //     · `doc_id`（文档库已解析 chunk）；
+  //     · `url` 以 `/static/` 开头（上传文件）。
+  //   而 `artifacts` 行的 `file_url` 实测**是空串**、`doc_id` 也没有
+  //   ⇒ 硬塞进附件栏会被后端判为「不支持的地址」进 skipped
+  //   ⇒ 模型说"没收到附件"（这正是 B5-9 记录过的老坑）。
+  //   产物的内容在库里（`preview_content`），所以走 `artAddToChat`：
+  //   它读详情 → 注入 chatRefs → 发送时作为正文前置，一定到得了模型。
+  if(d.kind === 'artifact'){
+    closeAttachMenu();
+    if(typeof artAddToChat === 'function'){ artAddToChat(d.art_id); }
+    else { toast('产物引用通道不可用（页面未加载完成，请刷新后重试）'); }
+    return;
+  }
   if(pendingAttachments.some(a=>a.filename===d.filename)){ toast('该文件已在附件栏'); closeAttachMenu(); return; }
   pendingAttachments.push({
     url: d.url || (d.doc_id ? '/api/documents/'+d.doc_id+'/download' : ''),

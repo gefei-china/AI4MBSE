@@ -219,6 +219,14 @@ jobs:
       - name: Guard 工具结果跨轮连续性 + 子任务会话归属（7 项 + 变异）
         run: python tools/verify/verify_tool_result_continuity.py
 
+      # ── 2026-10-30：对话入口契约（附件 / 引用 / 发送）──
+      # 三个真实故障全部"错了也不报错"：`const msg` 被重赋值（运行时 TypeError，
+      # node --check 抓不到，实测 exit 0）、会话文件清单只扫 messages 没扫 artifacts
+      # （表现是空列表，像"本来就没有"）、清单只有添加没有预览。
+      # 这条门禁把契约写成断言，并各自配一条变异自证（改回错误写法必须判红）。
+      - name: Guard 对话入口契约（发送/会话文件清单/产物预览，9 项 + 4 变异）
+        run: python tools/verify/verify_chat_entry_contract.py
+
       # ── 2026-10-09：请求级状态隔离三道（均静态/AST + 线程探针，不需真实 LLM）──
       # 这三道锁的是 2026-10-09 定位的 N3 产出雷同根因：模块级单例 Pipeline
       # 把请求级产物挂�� self 上跨请求残留（叙述是新的、代码是旧的）。
