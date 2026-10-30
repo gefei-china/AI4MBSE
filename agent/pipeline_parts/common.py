@@ -683,6 +683,20 @@ def reset_request_state(pipe) -> None:
     #   ⚠️ **必须清零**：Pipeline 是全局单例，不清 ⇒ 上一轮的 trace 会被写进本轮的
     #   工具调用日志，追溯结果指向**别人的那一轮**（比留空更糟：看起来有值、但是错的）。
     pipe._tool_trace_id = ""
+    # ★ 2026-10-30：本轮墙钟 deadline（`time.time()` 绝对时间戳；0=不限）。
+    #   必须清零：Pipeline 是全局单例（见本函数 docstring），不清 ⇒ 上一轮的长墙钟
+    #   会漏进本轮，表现为"这轮刚开口就被判超预算"（比留空更糟：看起来在跑、其实立刻收尾）。
+    #   ⚠️ 顺序约束：`stream.py` 必须在**本函数之后**才赋 `self._deadline_ts`
+    #   （清零早于赋值），该顺序由 `verify_request_state_reset` A1 守着。
+    pipe._deadline_ts = 0.0
+    # ★ 2026-10-30：写类工具幂等键的**同尝试内序号表**（见 core/idempotency.py）。
+    #   为什么必须清零：序号决定"同一次尝试内第几次同参调用"，
+    #   跨轮残留会让本轮第一次调用就拿到第 N 次的序号 ⇒ 幂等键错位 ⇒ 去重失效。
+    pipe._tool_idem_seq = {}
+    # ★ 2026-10-30：`tools.side_effect` 的**请求内缓存**（见 tools._tool_side_effect）。
+    #   必须清零：管理员把某工具从 read 改成 write 后，若缓存跨轮残留，
+    #   写前确认闸会继续按旧值放行 —— 安全闸读陈旧配置属于"静默失效"。
+    pipe._tool_se_cache = {}
     pipe._skill_allowed_tools = None     # 显式技能授权（见 reset_skill_state 的历史注释）
     pipe._skill_forced = False
     pipe._hil_level = None               # HIL 分级（人工确认队列的判定依据）
@@ -747,6 +761,13 @@ def reset_request_state(pipe) -> None:
     pipe._last_intent_brief = None
     pipe._exec_subject_note = ""
     pipe._skill_prompt_cache = None
+    # ★ 2026-10-29（同一类残留，本轮新增）：团队路由的归因字段
+    #   · `_team_routed_to` —— 本轮执行主体是否由「主 Agent 团队内定向」改写（非空 = 是）。
+    #     不清 ⇒ 下一轮**没走团队**的请求仍会被标成 source='team_route'（归因错到反方向）。
+    #   · `_team_main_agent` —— 主 Agent 名，供工具构建继承其 MCP/技能。
+    #     不清 ⇒ 下一轮普通请求会**继承上一个会话主 Agent 的平台工具**（越权风险）。
+    pipe._team_routed_to = ""
+    pipe._team_main_agent = ""
     # ★ 2026-10-29（门禁 A2 检出，归属 S3 技能预算）：以下三项 S3 新增时漏登记。
     #   均为「本轮技能注入预算」的观测字段，不清 ⇒ 跨请求残留，且**危害方向与缓存类相同**：
     #   · `_skill_budget_used` / `_skill_budget_limit` —— 不清 ⇒ 上一个会话已用满预算

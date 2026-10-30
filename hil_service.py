@@ -369,13 +369,35 @@ class HILService:
             except Exception:
                 pass
             # 旧库缺新列 ⇒ 退回不写新列的插入（**不丢确认单**）
+            # ★ 2026-10-30 修：退回分支**必须仍写 `idem_key`**（以及能写就写的 run/task）。
+            #   为什么（真缺陷，非洁癖）：幂等去重读的是 `idem_key` 列，
+            #   而本分支此前**只写 8 个旧列** ⇒ 该行 `idem_key=''`
+            #   ⇒ 下一次同样操作查不到它 ⇒ **重复确认单**（正是 §06 幂等要治的病）。
+            #   实测复现：把表建到缺 `tool_type` 的最小 schema 上，
+            #   同一操作连提交两次 → 2 行，且两行 idem_key 都是空。
+            #   ⇒ 退回的语义是"少写**增强**列"，不是"少写**控制**列"。
+            #   `idem_key` 属控制列（决定去重）；`tool_type/level/batch_id` 属增强列。
             try:
+                _cols = set()
+                try:
+                    _cols = {r[1] for r in conn.execute(
+                        "PRAGMA table_info(hil_confirmations)").fetchall()}
+                except Exception:
+                    _cols = set()
+                _names = ["agent_id", "conversation_id", "run_id", "action", "payload",
+                          "preview", "status", "task_key"]
+                _vals = [agent_id or "", conversation_id or 0, run_id or 0, action,
+                         json.dumps(payload or {}, ensure_ascii=False),
+                         (preview or "")[:_PREVIEW_LEN], "pending", task_key or ""]
+                # 控制列：有则必写（缺列只是老到没有这套机制，不是"故意不写"）
+                for _c, _v in (("idem_key", _idem), ("timeout_at", _timeout_at),
+                               ("batch_count", 1)):
+                    if _c in _cols:
+                        _names.append(_c)
+                        _vals.append(_v)
                 cur = conn.execute(
-                    "INSERT INTO hil_confirmations (agent_id, conversation_id, run_id, action, payload, preview, status, task_key) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
-                    (agent_id or "", conversation_id or 0, run_id or 0, action,
-                     json.dumps(payload or {}, ensure_ascii=False),
-                     (preview or "")[:_PREVIEW_LEN], "pending", task_key or ""))
+                    "INSERT INTO hil_confirmations (%s) VALUES (%s)"
+                    % (", ".join(_names), ",".join("?" * len(_names))), tuple(_vals))
                 conn.commit()
                 return HILService.get(conn, cur.lastrowid)
             except Exception:

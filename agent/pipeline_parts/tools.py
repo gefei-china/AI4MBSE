@@ -196,6 +196,30 @@ class ToolMixin:
 
         tools = []
         bound = self.registry.get_bound_mcp(intent)
+        # ★★ 2026-10-29（conv 9754 实测，用户问「智源 mcp 为啥没用到」）：
+        #   团队内定向（主 Agent → 成员直行）时，成员**必须继承主 Agent 的 MCP 平台能力**。
+        #   事实链：主 Agent「智源对接agent」绑 zhiyuan-dev-mcp（71 个工具）；
+        #   团队路由按意图把本轮定向给成员「工程建模方案设计Agent」（MCP 绑定数=0）；
+        #   旧实现只 `get_bound_mcp(成员)` ⇒ 71 个工具全部消失 ⇒ 模型如实回执
+        #   "当前工具清单无智源 MCP 查询工具，无法直接拉取工程实例数据" ⇒ 待办无法推进 ⇒ 中断。
+        #   语义依据：用户选主 Agent 就是选了它的**平台对接能力**；定向只该改"谁思考"，
+        #   不该把用户选中的能力一起丢掉（与 R1「改判意图不改执行主体」同源）。
+        #   取舍：**只继承 MCP**，不继承技能/知识库范围（那些是成员自身职责，混进来会污染）。
+        #   开关 `agent.team_member_inherit_mcp`（默认 True；置 False 逐字节回到改动前行为）。
+        _main_intent = getattr(self, "_team_main_agent", "") or ""
+        if _main_intent and _main_intent != intent:
+            try:
+                from core import config as _cfg_inh
+                _inherit_main_mcp = bool(_cfg_inh.get("agent", "team_member_inherit_mcp", True))
+            except Exception:
+                _inherit_main_mcp = True
+            if _inherit_main_mcp:
+                _seen_srv = {(m.get("name") or "") for m in bound}
+                for _m in (self.registry.get_bound_mcp(_main_intent) or []):
+                    _srv_nm = _m.get("name") or ""
+                    if _srv_nm and _srv_nm not in _seen_srv:
+                        bound.append(_m)
+                        _seen_srv.add(_srv_nm)
         # ★ 2026-10-13：工具参数契约注入开关（config: tool_jit.inject_input_schema，默认开）。
         #   背景见 core/config.py 同名键的注释——简言之：SQL 早就 SELECT 了 t.input_schema，
         #   但 candidates 是 4 元组装不下它，payload 恒为 `"properties": {}`（模型以为任意参数）。
@@ -949,7 +973,22 @@ class ToolMixin:
         return tools
 
     def _tool_side_effect(self, name: str) -> str:
-        """TR-P2b：查询工具副作用分类（read/write/destructive），查不到默认 read。"""
+        """TR-P2b：查询工具副作用分类（read/write/destructive），查不到默认 read。
+
+        ★ 2026-10-30：加**请求内缓存**（`_tool_se_cache`）。
+        为什么（不是过早优化）：本轮在 `_exec_tool_call` 增加了幂等闸后，
+        同一个 `(tool, args)` 的一次调用会让本函数被调用 **2~3 次**
+        （幂等判定 → 写前确认闸 → 写入目标网关），一次子任务 10~20 次工具调用
+        ⇒ 多出 20~60 次 `SELECT ... FROM tools`。SQLite 单写者下这些读虽然便宜，
+        但都在**同一条请求的串行路径**上，纯属重复劳动。
+        缓存语义：`tools.side_effect` 是管理员配置项，**请求结束即失效**
+        （`reset_request_state` 会清 `_tool_se_cache`）⇒ 不会看到陈旧值超过一轮。
+        ⚠️ 缓存**同时记忆"查不到"**（值 `""`）—— 否则每次未登记的工具（MCP 工具走另一条路）
+        仍会重查。用 `""` 而不是 `None` 表示"查过但无记录"，与"没查过"区分开。
+        """
+        _cache = getattr(self, "_tool_se_cache", None)
+        if isinstance(_cache, dict) and name in _cache:
+            return _cache[name] or "read"
         try:
             from database import get_db
             conn = get_db()
@@ -957,11 +996,19 @@ class ToolMixin:
                 row = conn.execute(
                     "SELECT side_effect FROM tools WHERE name=? AND status='active'", (name,)
                 ).fetchone()
-                return row["side_effect"] if row else "read"
+                val = (row["side_effect"] if row else "") or ""
             finally:
                 conn.close()
         except Exception:
             return "read"
+        try:
+            if not isinstance(_cache, dict):
+                _cache = {}
+                self._tool_se_cache = _cache
+            _cache[name] = val
+        except Exception:
+            pass
+        return val or "read"
 
     # ══════════════════════════════════════════════════════════════════════
     # ★ 2026-10-28（写前确认 HITL）统一人工确认闸
@@ -1174,8 +1221,43 @@ class ToolMixin:
              最终都只经这一个方法 ⇒ 挂在出口即两路同源（本仓"同一语义只写一份"纪律）。
           ── 注解**不改 result 原文**，只在末尾追加判读句（原文仍是审计口径）。
           ── 判读失败绝不阻断执行（旁路原则，见 agent/tool_result_notes.py）。
+
+        ★ 2026-10-30（P0-1 幂等键）：为什么幂等闸也挂在**这里**
+          ── 同一理由：这是唯一出口 ⇒ 两条 ReAct 路径（stream/execute）天然同源；
+          ── 且必须**先于**任何副作用：查在执行前、记在执行后；
+          ── 作用域只在**编排子任务**内生效（run+task 标识）⇒ 那里才有
+             "同一步被重试/续跑重跑"的语义；会话直答路径不纳入（见 core/idempotency.py）。
         """
-        res = self._exec_tool_call_impl(name, arguments)
+        # ── 幂等闸（P0-1）────────────────────────────────────────────────
+        _idem_ctx = None
+        try:
+            from core import idempotency as _idem
+            if _idem.enabled() and _idem.derive_scope(self):
+                # ⚠️ `_tool_side_effect` 会查一次 tools 表 ⇒ 先判作用域再查（省一次 DB 往返）
+                _idem_ctx = _idem.prepare(self, name, arguments, self._tool_side_effect(name))
+        except Exception:
+            _idem_ctx = None      # 幂等层故障**一律放行**（fail-open，见模块头）
+        _replay = None
+        if _idem_ctx:
+            try:
+                from core import idempotency as _idem
+                _prev = _idem.lookup(_idem_ctx["key"])
+                if _prev:
+                    _replay = _idem.replay(_prev)
+            except Exception:
+                _replay = None
+        if _replay is not None:
+            res = _replay          # 已执行过 ⇒ 直接重放结果（不再产生副作用）
+        else:
+            res = self._exec_tool_call_impl(name, arguments)
+            if _idem_ctx and isinstance(res, dict) and res.get("ok") is True:
+                # ⚠️ 只记**成功**的执行：被闸拦下/失败的结果不是"已产生副作用"
+                try:
+                    from core import idempotency as _idem
+                    _idem.record(_idem_ctx["key"], name, _idem_ctx["scope"],
+                                 _idem_ctx["args_hash"], _idem_ctx["ordinal"], res)
+                except Exception:
+                    pass
         try:
             from agent import tool_result_notes as _notes
             return _notes.annotate(name, arguments, res)

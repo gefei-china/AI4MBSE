@@ -213,19 +213,21 @@ DEFAULT_CONFIG = {
         "subtask_timeout_s": 600,        # P1-27：300→600（建模子任务实测 2~3 分钟，300s 余量太薄）
         # P0-7：agent_tasks 每会话保留的编排批次数（run_id 唯一化后防无界增长；只清终态旧批次）
         "keep_runs_per_conversation": 50,
-        # ── ⚠️ 2026-10-02（P0 配置审计）实测：本项是**死配置**，全仓零消费点 ──────────
-        # `grep -rn total_time_budget_s --include=*.py .` 只命中「本文件定义 + CONFIG_SCHEMA」
-        # 两处，**没有任何编排代码读它** ⇒ 原注释「超限终止剩余任务降级汇总」是**未兑现的承诺**
-        # （配置谎言：用户以为有全局兜底，实际没有）。
-        # 处置（刻意**不接线、不删除**）：
-        #   · 不接线 —— 实测真实编排耗时可达 849s（> 此处 600s），一旦接线会**中断正常长任务**，
-        #     属于"为了让配置看起来生效而破坏功能"，与"先保证功能跑通"相悖；
-        #   · 不删除 —— 键与 schema 保留，现场若确有需求可接线；删除反而会让已有配置文件里的
-        #     该键变成"静默失效的未知项"。
-        # 现状的等价兜底是逐子任务的 `subtask_timeout_s`（600s/个）+ `subtask_idle_timeout_s`
-        # （240s 无产出），它们**都在真实生效**（P0-7 实测）。
-        # 要真正启用全局预算：在编排子任务调度处加 deadline 检查，并同时把默认值改到 > 3600。
-        "total_time_budget_s": 600,  # ⚠️ 当前**未接线**（死配置），见上方说明；改它不会影响行为
+        # ── 编排批次总时间预算（2026-10-30 复活：此前是**死配置**）──────────────
+        # 历史（2026-10-02 实测）：本项是死配置，全仓零消费点 ⇒ "配置谎言"：
+        #   用户以为有全局兜底，实际改了不起任何作用。
+        # 为什么当时"刻意不接线也不删除"：实测真实编排耗时可达 849 s（> 此处 600 s），
+        #   一旦接线会**中断正常长任务** —— 属于"为了让配置看起来生效而破坏功能"。
+        # 为什么现在可以复活（2026-10-30，两个前提都变了）：
+        #   ① 整轮墙钟已落地：`runtime.chat_deadline_s`（默认 900s，覆盖实测均值 918s）
+        #      已在 ReAct 与编排两条路径上真实生效（`runtime_state.compute_deadline`）；
+        #   ② 默认值改为 **0 = 不启用** ⇒ 零行为变更，不会误杀 849s 的正常长任务。
+        # 现在的语义（**不产生第二个真源**）：
+        #   · 0（默认）→ 只受整轮墙钟约束；
+        #   · > 0        → **额外**加一道编排批次闸（更严格者先生效），
+        #                    由编排主循环检查 `_orch_deadline` 与本值共同决定。
+        #   这样"改它立即有效"（不再是说谎），又不与整轮墙钟抢优先级。
+        "total_time_budget_s": 0,      # 编排批次总预算（0=不启用，只受整轮墙钟约束）
         "max_depth": 3,          # 委派递归深度上限
         # ── 汇总环节输入预算（2026-09-20 新增；此前是 planner.py:54 硬编码 `[:500]`）──────
         # 背景（会话 368 实测）：汇总 LLM 每个子任务只看得到**前 500 字符**，而交付物实际
@@ -386,6 +388,34 @@ DEFAULT_CONFIG = {
     "intent": {
         "keyword_scored": True,    # 关键词层"竞争打分"（False = 回到"首个命中即 return"旧行为，A/B 用）
         "keyword_generic": True,   # 泛词是否参与打分（False = 泛词既不加分也不触发共现，A/B 用）
+        # ★ 2026-10-29（意图审计）：explain 前置短路是否**前置**。
+        #   改造前（True）：`_is_explain_ask` 命中即 return knowledge_qa@0.80，位置在
+        #   缓存/关键词/规则/语义/**LLM 全部之前** ⇒ 任何"含说明词"的句子都轮不到 LLM 主裁判。
+        #   实测误判（2026-10-29，conv 真实输入）：
+        #     「你好 介绍下你的能力边界」→ knowledge_qa@0.80（应为闲聊）
+        #     「用一句话介绍热管理系统」等 9 条 confirmed 正例同样走这条前置。
+        #   改造后（False）：explain **降级为末尾兜底** —— 先让规则层/语义层/LLM 主裁判裁决：
+        #     LLM 判具体意图 → 采信；LLM 判 chat → 落 chat 兜底桶（verdict=chat_real）；
+        #     LLM 判不出 → 才回落 explain 兜底 knowledge_qa@0.80。
+        #   ⚠️ 代价（实测）：explain 类输入每次多一次 LLM 调用（仓库记录约 3.6s/条）。
+        #   ⚠️ 默认 True = 改造前行为（代码层零回归，回退位明确）；生产启用请在
+        #      `~/.workbuddy/mbse_config.json` 里显式置 false。
+        "explain_preempt": True,
+        # ★ 2026-10-29（意图审计）：**言语行为层**（speech-act gate）开关。
+        #   判"问 vs 做"：名词化形态（"生成**条件**"）→ knowledge_qa；自指元问题（"你的能力边界"）→ chat 桶。
+        #   位置：review 强信号之后、建模强信号正则之前（否则「参数视图的生成条件」被"视图…生成"抢走）。
+        #   实测（confirmed 48 条）：**修正 4 条真实误判 / 误伤 0 条**。
+        #   False = 回到改造前行为（零回归回退位）。
+        "speech_act": True,
+        # ★ 2026-10-29（多意图实测）：L1 阶段连词（先…再…/然后/最后）是否允许**同意图多阶段**。
+        #   背景：「先生成结构视图，再生成参数视图」是两个不同视图、同一 intent(design)，
+        #   按意图去重 ⇒ 切成 0 段。放开后可切 2 段。
+        #   **但实测为净负，故默认 False**（`tests/manual_verify/eval_multi_intent.py` 18 条）：
+        #     关闭：accuracy 0.944 / precision 1.000 / F1 0.933 / 序列匹配 0.875
+        #     开启：accuracy 0.889 / precision 0.875 / F1 0.875 / 序列匹配 0.750
+        #   并连带把「先需求分析→方案设计→生成 sysml 代码」由 2 段拆成 3 段（末段同为 design）。
+        #   保留开关：把"粒度按意图还是按交付物"留成可 A/B 的产品口径项，而不是写死一个方向。
+        "multi_same_intent_stage": False,
         "sample_collect": True,    # 真实请求是否把用户输入采集进意图样本池（设置页「意图样本」的数据来源）
         # P1-31（2026-10-02）意图级缓存开关。**默认关**，依据是实测而非偏好：
         #   缓存收益 = 重复率 × 真实调用量，两项都极小 —— 真库 `messages` 近 7 天仅 **18 条**
@@ -638,6 +668,12 @@ DEFAULT_CONFIG = {
         "retrieval_merge_neighbor": True,  # 检索注入：同文档近邻 chunk（|Δindex|≤2）合并为一条
         "memory_single_source": True, # 记忆注入：以 rag.memory_hits 为唯一真源，消除双路重复
         "memory_max_chars": 200,      # 记忆注入正文截断（两条路径统一口径）
+        # ★ 2026-10-29：记忆中的「用户叫X」身份声明剥离。
+        #   实测：长期记忆存有「用户叫米巴…」（tier=core，无条件常驻注入），
+        #   而登录账号是 gefei ⇒ 模型优先用记忆里的自报名称呼用户（输出"你好，米巴！"）。
+        #   True = 有登录身份时把身份声明子句从记忆里剥掉（其余偏好照常注入），
+        #   且用户上下文块显式声明"称呼以当前用户为准"。置 False = 退回旧行为。
+        "memory_identity_strip": True,
         "jit_fallback_top_n": 8,      # JIT 语义预筛空回退时取 top-N（替代全量注入）
         # ── P0-6（2026-10-26）：MCP 工具元数据与按需暴露 ──
         # 背景：MCP 工具此前 description 全是同一句模板、parameters 全是宽松空壳
@@ -1097,6 +1133,23 @@ DEFAULT_CONFIG = {
         "orphan_ttl_s": 1800,
         "reap_on_startup": True,     # 启动时执行回收；排障期可置 False 临时关闭
         "reap_dry_run": False,       # True = 只报告不改写（上线灰度/排障用）
+        # ── 2026-10-30：运行时稳定性四键 ──
+        # 为什么这四个必须有默认值（不只是"补齐更规范"）：
+        #   本仓 `DEFAULT_CONFIG['agent']` 就是 None（26 个键全靠 `get(..., default)` 兜底），
+        #   那种形态的直接后果是**设置页显示空白、无法反映真实生效值**（已列入
+        #   《能力中心插件盘点与设置页参数体检》的未修项）。新键不重复这个坑。
+        "max_concurrent_streams": 8,     # 全局并发流上限（每路占 1 个 daemon 线程 + LLM 连接）
+        "queue_wait_s": 2.0,             # 并发闸排队窗口；超时快速失败而非无限排队
+        "chat_deadline_s": 900,          # 单轮墙钟（实测编排 avg 918s / max 1155s 的折中）；0=不限
+        "shutdown_drain_s": 30,          # 关闭排空（uvicorn graceful 与 lifespan 共用）
+        # ── 2026-10-30 P0-1：写类工具幂等键（durable execution 第一步）──
+        # 为什么要有：引擎（Temporal/DBOS/LangGraph）**不会**替你做幂等 ——
+        #   行业原话："pass an idempotency key to anything with side effects"。
+        #   本工程的"同一步被重跑"有两处真实路径：编排重试（同 key 原地重派）
+        #   与断点续跑（沿用原批次号）⇒ 写类工具会执行两次 ⇒ 重复写入。
+        "tool_idempotency_enabled": True,   # 写类工具幂等闸总开关（关 = 回到改动前行为）
+        "tool_idempotency_scope": "subtask",  # 作用域：subtask=只在编排子任务内生效（默认）/ off=全关
+        "tool_idempotency_ttl_s": 86400,    # 幂等记录保留时长（秒，默认 24h）
     },
     # ── P0-2 持久执行：编排检查点与断点续跑（2026-10-03）────────────────────────
     # 默认**不做自动重投**：进程起来后自动恢复所有中断批次看似美好，实则危险 ——
@@ -1110,12 +1163,19 @@ DEFAULT_CONFIG = {
         "resume_include_failed": False,  # 是否连带重跑 failed 任务（默认否：可能有副作用）
         "auto_resume_on_startup": False, # 启动自动重投（默认关，理由同上）
         # ── P0-2b（2026-10-04）：自动重投守护（core/orch_supervisor.py）──
-        # 默认**关**，与 run_registry.reap_on_startup（启动必跑）刻意不同：
-        #   孤儿回收只改状态、零副作用；**自动重投会真的调 LLM 烧额度**。
-        # 开启前建议先跑几轮 scan_once(dry 观察) 看清它会投哪些批次。
-        "auto_resume_enabled": False,      # 总开关（守护线程是否启动）
+        # ── 2026-10-30（P0-2）改为**默认开**，但加了三道成本闸 ──
+        # 为什么改：停滞自愈是 durable execution 的核心能力；本仓已有
+        #   checkpoint / resume / 租约队列全套骨架，缺的只是"没人点的自愈"。
+        #   而"默认关"意味着能力存在但**永远不会被使用**（配置即功能）。
+        # 三道成本闸（缺一即可能烧掉额度）：
+        #   ① `auto_resume_max_runs`=1  单轮最多重投 1 个批次；
+        #   ② `auto_resume_daily_budget`=5  每日自动重投总次数上限（按 UTC 日计数）；
+        #   ③ `auto_resume_include_failed`=False  不重跑已 failed 的任务（有副作用风险）。
+        # 手动点「继续编排」走的是同一条路径但**不受**②限制（那是用户的明确意图）。
+        "auto_resume_enabled": True,       # 总开关（守护线程是否启动）
         "auto_resume_interval_s": 300,     # 扫描周期（与 alert_loop 同量级）
-        "auto_resume_max_runs": 3,         # 单轮最多重投几个批次（防一次性打爆额度）
+        "auto_resume_max_runs": 1,         # 单轮最多重投几个批次（防一次性打爆额度）
+        "auto_resume_daily_budget": 5,     # 每日自动重投总次数上限（0=不限；按 UTC 日计数）
         "auto_resume_include_failed": False,  # 是否连带重跑 failed（默认否：可能有副作用）
         "checkpoint_enabled": True,      # 旁路开关：检查点写入失败永不阻断编排
     },
@@ -1582,6 +1642,9 @@ CONFIG_SCHEMA = {
     "intent": {
         "keyword_scored":         {"type": "bool", "desc": "关键词层「竞争打分」（False = 回到「首个命中即返回」旧行为，A/B 用）"},
         "keyword_generic":        {"type": "bool", "desc": "泛词是否参与打分（False = 泛词既不加分也不触发共现，A/B 用）"},
+        "explain_preempt":         {"type": "bool", "desc": "说明类前置短路是否前置（True=改造前：命中即判知识问答；False=降级为末尾兜底，先由 LLM 主裁判裁决）"},
+        "speech_act":              {"type": "bool", "desc": "言语行为层（问 vs 做）：名词化形态判知识问答、自指元问题判闲聊（False=回到改造前行为）"},
+        "multi_same_intent_stage": {"type": "bool", "desc": "L1 阶段连词（先…再…/最后）是否允许同意图多阶段｜默认 False（按意图去重）：实测开启后 accuracy 0.944→0.889、precision 1.000→0.875，且把「需求分析→方案设计→生成 sysml 代码」由 2 段拆成 3 段 ⇒ 净负。开启则「结构视图→参数视图」可切 2 段"},
         "sample_collect":         {"type": "bool", "desc": "真实请求是否把用户输入采集进意图样本池"},
         "cache_enabled":          {"type": "bool", "desc": "意图级缓存（精确文本 + 索引指纹双匹配）"},
         "confirm_when_unsure":    {"type": "bool", "desc": "低置信/冲突时是否转入澄清确认"},
@@ -1678,7 +1741,7 @@ CONFIG_SCHEMA = {
         "subtask_idle_timeout_s": {"type": "int", "desc": "流式编排：子任务无产出判超时（秒，默认 150）"},
         "subtask_timeout_s":      {"type": "int", "desc": "流式编排：子任务 wall-clock 硬上限（秒，默认 300）"},
         "keep_runs_per_conversation": {"type": "int", "desc": "agent_tasks 每会话保留批次数（默认 50）"},
-        "total_time_budget_s": {"type": "int", "desc": "⚠️ 未接线（死配置，2026-10-02 实测全仓零消费点）：当前改此值不影响任何行为；真实兜底是 subtask_timeout_s / subtask_idle_timeout_s"},
+        "total_time_budget_s": {"type": "int", "desc": "编排批次总时间预算（秒，0=不启用）：>0 时作为**整轮墙钟之外**的额外一道编排闸（更严格者先生效）；默认值 0＝不启用，避免误杀长任务（实测编排可达 849s）"},
         "max_depth":           {"type": "int", "desc": "委派递归深度上限"},
         "summary_item_max_chars":     {"type": "int", "desc": "汇总输入：单个子任务交付物上限（字符，默认 1600）"},
         "summary_total_chars":        {"type": "int", "desc": "汇总输入：本轮合计预算（字符，按子任务数均分，默认 12000）"},
@@ -1727,6 +1790,11 @@ CONFIG_SCHEMA = {
         "todo_require_verify": {"type": "bool", "default": True, "desc": "★ 待办置 completed 是否强制要有验收回执（默认开，2026-10-28）：依据官方『Only mark as passing after careful testing』；关闭则允许无回执置完成（削弱约束力，仅供排障）"},
         "harness_enabled": {"type": "bool", "default": False, "desc": "★ harness 级强制闸总开关（默认关）：对齐官方 Stop hook —— 存在未完成待办且验收未过时**不允许结束本轮**，把失败输出回灌让 AI 继续；关闭则只做判定不强制"},
         "harness_max_blocks": {"type": "int", "default": 8, "desc": "★ harness 强制闸连续阻断上限（默认 8，对齐官方）：达到上限后强制放行并如实说明『未完成，卡在 X』——上限是必需的（FM-1.5 该停不停 12.4% > 过早终止 6.20%，双向都要管）；0=不阻断"},
+        # ── 团队内定向的能力继承（2026-10-29，conv 9754 实测）──
+        # 事实：主 Agent「智源对接agent」绑 71 个智源 MCP 工具；团队路由按意图把请求
+        # 定向给成员「工程建模方案设计Agent」（MCP 绑定 0）⇒ 旧实现只取成员绑定 ⇒ 工具全丢
+        # ⇒ 模型回执"无智源 MCP 查询工具，无法拉取工程数据" ⇒ 待办推不动 ⇒ 中断。
+        "team_member_inherit_mcp": {"type": "bool", "default": True, "desc": "★ 团队内定向时成员是否继承主 Agent 的 MCP 平台能力（默认开，2026-10-29）：用户选主 Agent 即选了它的平台对接能力，定向只应改『谁思考』，不该把能力一起丢掉；关闭则回到旧行为（只取成员自身 MCP 绑定）"},
         "harness_max_stall": {"type": "int", "default": 2, "desc": "★ harness 闸**无进展检测**阈值（默认 2）：同一批未完成待办连续 N 次阻断后**完全没变化** ⇒ 判定模型卡死，提前强制放行并如实告知卡在哪（真机实测：只靠次数上限 8 会连续拦截 8 次且待办毫无变化，耗时 ≈2.3 分钟，结果与立刻放行相同 —— MAST「该停不停」的活样本）；0/1=不启用"},
         "budget_degrade_ratio": {"type": "float", "default": 0.7, "desc": "★ 预算**收紧续跑**触发点（默认 0.7，2026-10-28 语义变更）：token 预算用达到此比例时**不停**，而是切到「收紧续跑」——只做剩余关键步骤、禁开新检索；真正停由下面的硬停线或预算耗尽决定。旧语义是「到此比例就停」，真机（conv 9730）后果：86% 就停，而当时还剩 14%≈2~3 轮，任务差一步（跑校验器）没做完"},
         "budget_hard_stop_ratio": {"type": "float", "default": 0.95, "desc": "★ 预算**硬停线**（默认 0.95，2026-10-28 新增）：用到此比例即停止新开续跑轮，写待续清单并如实告知未完成。与上面『收紧续跑』配对：0.7~0.95 之间是收紧而非停止，避免「还有额度却提前收工」"},
@@ -1845,6 +1913,7 @@ CONFIG_SCHEMA = {
         "retrieval_merge_neighbor": {"type": "bool", "desc": "检索注入：同文档近邻 chunk 是否合并"},
         "memory_single_source":  {"type": "bool", "desc": "记忆注入：是否以 rag.memory_hits 为唯一真源"},
         "memory_max_chars":      {"type": "int",  "desc": "记忆注入正文截断字符数"},
+        "memory_identity_strip": {"type": "bool", "desc": "有登录身份时，是否剥离记忆中的「用户叫X」身份声明子句（称呼以账号为准）"},
         "jit_fallback_top_n":    {"type": "int",  "desc": "JIT 语义预筛空回退时的 top-N（0=退回全量）"},
         "mcp_meta_enabled":      {"type": "bool", "desc": "MCP 工具是否使用真实描述+参数契约（tool_meta）"},
         "mcp_min_keep":          {"type": "int",  "desc": "每个 MCP server 至少暴露的工具数（0=不保底）"},
@@ -2182,9 +2251,46 @@ CONFIG_SCHEMA = {
     # ── P1 replanning（2026-10-21）：执行中重规划 ──────────────────────────
     # 白名单纪律（B4-5 教训）：配置存在 ≠ 可被配置 —— 不登记进 SCHEMA 的键
     #   连设置页/REST 都改不了。五个键全部登记；默认值见 DEFAULT_CONFIG 注释。
+    # ── 运行时稳定性（2026-10-30）────────────────────────────────────────
+    # 为什么必须登记进 SCHEMA（不是"登记一下更规范"，而是**功能可用性**）：
+    #   `save_override()` 对未登记键直接 `raise ValueError("未知配置项")`
+    #   ⇒ 缺这一段时，下面四个开关**根本改不了**（实测报错：
+    #     `未知配置项: runtime.max_concurrent_streams`）。
+    #   这正是《能力中心插件盘点与设置页参数体检》记录的"B 类漂移"形态：
+    #   DEFAULT_CONFIG 有、CONFIG_SCHEMA 无 ⇒ 界面看不到、API 也写不进。
+    "runtime": {
+        "max_concurrent_streams": {"type": "int",   "desc": "全局并发流上限（每个 SSE 长连接占 1 路；单进程 + SQLite 单写者，默认 8）"},
+        "queue_wait_s":           {"type": "float", "desc": "并发闸排队窗口（秒）：超时仍拿不到名额则快速失败并提示稍后重试，避免 p99 雪崩"},
+        "chat_deadline_s":        {"type": "float", "desc": "单轮墙钟预算（秒）：到点收尾并**保留已产出**（不是掐断）；0=不限。默认 900 覆盖实测编排均值"},
+        "shutdown_drain_s":       {"type": "int",   "desc": "关闭排空预算（秒）：uvicorn 的 graceful timeout 与 lifespan 收尾共用同一值，防两处口径漂移"},
+        "orphan_ttl_s":           {"type": "int",   "desc": "非终态任务超过该秒数无进展 ⇒ 判孤儿（既有键，一并登记以便界面可调）"},
+        "reap_on_startup":        {"type": "bool",  "desc": "启动时回收孤儿编排任务（既有键）"},
+        "reap_dry_run":           {"type": "bool",  "desc": "孤儿回收只报告不改写（既有键，灰度/排障用）"},
+        "tool_idempotency_enabled": {"type": "bool", "desc": "写类工具幂等闸总开关：同一子任务的重试/续跑不会重复执行已成功的写（关 = 回到改动前行为）"},
+        "tool_idempotency_scope":  {"type": "str",   "desc": "幂等作用域：subtask=仅编排子任务（默认，有重试语义处）/ off=全关"},
+        "tool_idempotency_ttl_s":  {"type": "int",   "desc": "幂等记录保留时长（秒，默认 86400=24h）"},
+    },
+    # ── 2026-10-30（P0-2）：orchestration 段此前**未登记进 SCHEMA** ──
+    # 后果：`save_override()` 对未登记键直接 `raise ValueError("未知配置项")`
+    #   ⇒ `orchestration.*` 这 7 个键**在接口与界面上根本改不了**
+    #   （实测：`PUT /api/system/config/static` 写 orchestration.auto_resume_enabled
+    #     会报「未知配置项」）。这与 runtime 段是同一类缺陷（DEFAULT 有、SCHEMA 无），
+    #   只是这次落在**停滞自愈总开关**上 —— 一个改不了的开关等于没有开关。
+    # ⇒ 本段整体登记（键不多、语义清楚），使「默认开 + 三道成本闸」可被现场调。
+    "orchestration": {
+        "resume_stale_s":             {"type": "int",  "desc": "编排失活阈值（秒）：心跳超过该值才算死掉（单批实测上限 1155s，取 1.5 倍）"},
+        "resume_max_attempts":        {"type": "int",  "desc": "单批次最多恢复几次（超过不再自愈，防「恢复→再崩」死循环）"},
+        "resume_include_failed":      {"type": "bool", "desc": "恢复时是否连带重跑 failed 任务（默认否：可能有副作用）"},
+        "auto_resume_on_startup":     {"type": "bool", "desc": "启动时自动重投中断批次（默认否，与守护默认开的口径不同）"},
+        "auto_resume_enabled":        {"type": "bool", "desc": "编排自动重投守护总开关（默认开；关 = 崩溃批次只能人工点继续）"},
+        "auto_resume_interval_s":     {"type": "int",  "desc": "守护扫描周期（秒）"},
+        "auto_resume_max_runs":       {"type": "int",  "desc": "单轮最多重投几个批次（成本闸之一，默认 1）"},
+        "auto_resume_daily_budget":   {"type": "int",  "desc": "每日自动重投总次数上限（成本闸之二，0=不限；按 UTC 日计数）"},
+        "auto_resume_include_failed": {"type": "bool", "desc": "守护是否重跑 failed 任务（成本闸之三，默认否：有副作用风险）"},
+        "checkpoint_enabled":         {"type": "bool", "desc": "检查点写入开关（失败永不阻断编排）"},
+    },
     "replanning": {
-        "enabled":             {"type": "bool", "desc": "重规划总闸（差量重画/LLM 重画；默认关=零行为变更，T1 补跑不受此闸约束——由 retry_once 单独控制）"},
-        "retry_once":          {"type": "bool", "desc": "T1 补跑：可重试类失败（timeout/transient/internal，排除 interrupted）同 key 自动补跑一次"},
+        "enabled":             {"type": "bool", "desc": "重规划总闸（差量重画/LLM 重画；默认关=零行为变更，T1 补跑不受此闸约束——由 retry_once 单独控制）"},        "retry_once":          {"type": "bool", "desc": "T1 补跑：可重试类失败（timeout/transient/internal，排除 interrupted）同 key 自动补跑一次"},
         "max_redraw_rounds":   {"type": "int",  "desc": "差量重画轮次上限（与无进展检测互为兜底，防无限重画烧钱）"},
         "redraw_expand_ratio": {"type": "float", "desc": "重画规模上限：新任务数 ≤ 原图剩余任务数 × 此值（Q4 质量门，防重画膨胀）"},
         "llm_redraw":          {"type": "bool", "desc": "LLM 整图重画（T3，默认关；规则重画确定性优先，Mock 环境行为不漂移）"},

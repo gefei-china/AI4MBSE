@@ -189,7 +189,17 @@ def failed_subtasks(events):
 
 
 def wordings(events):
-    return "".join((e.get("delta") or "") for e in events if e.get("type") == "reasoning")
+    """收集"过程话术"正文。
+
+    ⚠️ 2026-10-30 修正：此前只收 `type=="reasoning"`。但汇总话术实际是以
+    `{"type": "progress", "kind": "progress", "delta": ...}` 发出的
+    （`stream.py` 的 `_done_wording`），于是 `wordings()` 恒返回空串
+    ⇒ G4 必红、而 **G4b 变成假绿**（"未成功"当然不在空串里）。
+    假绿比红更危险：它让"全部成功时不许出现未成功字样"这条判据从未真正生效。
+    ⇒ 两种承载过程话术的形态都收（`reasoning` 与 `progress`）。
+    """
+    return "".join((e.get("delta") or "") for e in events
+                   if e.get("type") in ("reasoning", "progress"))
 
 
 _seed()
@@ -209,11 +219,18 @@ check("G1 活跃产出不误杀（4.8s 连续出 token / idle=1s → 不得超�
       "subtask=%s" % [(e.get("key"), e.get("status"), e.get("error")) for e in _st])
 
 # G2 真停滞（1 个 token 后静默 5s）而 idle=1s → 必须判超时，且错误文案带「无产出」
+#   ★ 2026-10-30：这里**显式关掉 T1 补跑**（`replanning.retry_once=False`）。
+#     理由（本轮实测）：T1 补跑默认开，且 `timeout` 属可重试类 ⇒ 一次超时会
+#     被**同 key 重派一次** ⇒ 事件序列变成 run→failed→run→failed。
+#     那不是缺陷，是 DAG 级自愈；但它会污染"超时判据"这**一个**变量的观测。
+#     ⇒ 判据要测什么就隔离什么：本组测的是"判不判超时 / 文案对不对"，
+#       所以把重试关掉；重试行为单独由 G2c 覆盖（覆盖度反而更高）。
+_T_CFG = {("delegation", "subtask_idle_timeout_s"): 1,
+          ("delegation", "subtask_timeout_s"): 60,
+          ("replanning", "retry_once"): False}
 _t0 = time.time()
 _ev2 = drive(sub_stub=_sub_stub(tokens=1, gap=0.1, tail_sleep=5),
-             cfg_vals={("delegation", "subtask_idle_timeout_s"): 1,
-                       ("delegation", "subtask_timeout_s"): 60},
-             retries=0)
+             cfg_vals=_T_CFG, retries=0)
 _f2 = failed_subtasks(_ev2)
 check("G2 真停滞判超时（静默 5s / idle=1s → failed 且文案带「无产出」）",
       len(_f2) == 1 and "无产出" in str(_f2[0].get("error") or ""),
@@ -221,10 +238,23 @@ check("G2 真停滞判超时（静默 5s / idle=1s → failed 且文案带「无
 check("G2b 停滞超时是**快速**失败（不等挂到墙钟上限）",
       (time.time() - _t0) < 20, "%.1fs" % (time.time() - _t0))
 
+# G2c T1 补跑（默认 retry_once=True）对超时**确实重派一次** ——
+#     这条同时是"幂等键为什么必要"的行为证据：
+#     同一个子任务会跑两遍 ⇒ 里面的写类工具若不幂等就会写两次。
+_ev2b = drive(sub_stub=_sub_stub(tokens=1, gap=0.1, tail_sleep=5),
+              cfg_vals={("delegation", "subtask_idle_timeout_s"): 1,
+                        ("delegation", "subtask_timeout_s"): 60},
+              retries=0)
+_f2b = failed_subtasks(_ev2b)
+check("G2c T1 补跑对超时重派一次（同 key 两次 failed ⇒ 写类工具必须幂等）",
+      len(_f2b) == 2 and {e.get("key") for e in _f2b} == {"t1"},
+      "failed=%s" % [(e.get("key"), str(e.get("error"))[:24]) for e in _f2b])
+
 # G3 硬上限兜底：一直活跃（每 0.3s 一 token）但硬上限 2s → 必须被硬上限杀掉
 _ev3 = drive(sub_stub=_sub_stub(tokens=30, gap=0.3),
              cfg_vals={("delegation", "subtask_idle_timeout_s"): 60,
-                       ("delegation", "subtask_timeout_s"): 2},
+                       ("delegation", "subtask_timeout_s"): 2,
+                       ("replanning", "retry_once"): False},
              retries=0)
 _f3 = failed_subtasks(_ev3)
 check("G3 硬上限兜底（持续活跃但超 2s 上限 → failed 且文案带「硬上限」）",
@@ -446,9 +476,12 @@ try:
     _m1_src, _h1 = _drop_line(_flow_src, "_hb[tkey] = _t.time()   # P0-7：任何产出")
     check("M1 变异锚点命中（事件循环心跳行）", _h1 == 1, "hits=%d" % _h1)
     _ns1 = _ns_for(_m1_src)
+    # ⚠️ 必须同时关 T1 补跑：否则超时会被重派一次（2 次 failed），
+    #    与"G1 只该有 1 个失败"的判据冲突 —— 那是重试行为不是心跳行为（同 G2 的隔离原则）。
     _ev_m1 = drive(flow_fn=_ns1["_stream_orchestrated_flow"], sub_stub=_sub_stub(tokens=12, gap=0.4),
                    cfg_vals={("delegation", "subtask_idle_timeout_s"): 1,
-                             ("delegation", "subtask_timeout_s"): 60}, retries=0)
+                             ("delegation", "subtask_timeout_s"): 60,
+                             ("replanning", "retry_once"): False}, retries=0)
     check("M1 心跳失效 → 活跃任务被判超时（G1 目标断言被抓住）",
           len(failed_subtasks(_ev_m1)) == 1,
           "failed=%s" % [e.get("error") for e in failed_subtasks(_ev_m1)])
@@ -460,7 +493,8 @@ try:
     _ev_m2 = drive(flow_fn=_ns2["_stream_orchestrated_flow"],
                    sub_stub=_sub_stub(tokens=1, gap=0.1, tail_sleep=5),
                    cfg_vals={("delegation", "subtask_idle_timeout_s"): 1,
-                             ("delegation", "subtask_timeout_s"): 60}, retries=0)
+                             ("delegation", "subtask_timeout_s"): 60,
+                             ("replanning", "retry_once"): False}, retries=0)
     check("M2 计数写死 0 → G4 目标断言失败（被抓住）", "未成功" not in wordings(_ev_m2))
 
     # M3 摘要去重口径退回旧写法 → I1 必须翻

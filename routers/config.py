@@ -42,6 +42,24 @@ def get_config_schema():
     return {"ok": True, "schema": config.schema()}
 
 
+@router.get("/api/system/budget-policy")
+def get_budget_policy():
+    """预算层级审计（P0-3，2026-10-30）。
+
+    回答三个问题，每个都有机器可核的判据：
+      1. **谁是真源** —— 四层（L1 整轮 / L2 编排批次 / L3 子任务 / L4 单次调用）
+         每层的权威键、别名键、当前值、实际生效上限（同层取最严）；
+      2. **哪些是假权威** —— 同层别名比真源更严（真源形同虚设）/ 父层严于子层
+         （子层额度永远用不满）；
+      3. **哪些是配置谎言** —— 零消费点的键（改了了不起任何作用）。
+    """
+    try:
+        from core import budget_policy
+        return budget_policy.audit()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"预算层级审计失败: {str(e)[:200]}"}, 500)
+
+
 @router.put("/api/system/config/static")
 def update_static_config(body: StaticConfigIn):
     """修改静态配置：校验 → 落盘系统级配置文件 → 即时 reload。"""

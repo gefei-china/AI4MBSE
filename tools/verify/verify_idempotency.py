@@ -107,13 +107,21 @@ TMP_DB = os.path.join(TMP, "t.db")
 try:
     _c = sqlite3.connect(TMP_DB)
     _c.row_factory = sqlite3.Row
+    # ★ 2026-10-30 修：本表此前只建到 2026-10-28 之前的形态（缺 tool_type/level/
+    #   batch_id/batch_count/timeout_at/batch_items）⇒ `queue_confirmation` 的"新列插入"
+    #   必然失败 ⇒ **每次都走降级分支** ⇒ C1~C4 常年红（HEAD 上同样红，非本轮引入）。
+    #   门禁应该测**生产形态**：这里对齐真库列（真库 PRAGMA 实测 22 列，此处取写入所需子集）。
+    #   降级分支另由 C7/C8 单独覆盖 —— 两条路径都要测，不能只测一条。
     _c.execute("""CREATE TABLE hil_confirmations (
         id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT DEFAULT '',
         conversation_id INTEGER DEFAULT 0, run_id INTEGER DEFAULT 0,
         action TEXT NOT NULL, payload TEXT DEFAULT '{}', preview TEXT DEFAULT '',
         status TEXT DEFAULT 'pending', decided_by TEXT DEFAULT '', decided_at TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP, task_key TEXT DEFAULT '',
-        idem_key TEXT DEFAULT '')""")
+        idem_key TEXT DEFAULT '', tool_type TEXT DEFAULT '', tool_call_id TEXT DEFAULT '',
+        level TEXT DEFAULT '', batch_id TEXT DEFAULT '', batch_count INTEGER DEFAULT 1,
+        timeout_at TEXT DEFAULT '', result_json TEXT DEFAULT '',
+        exec_idem_key TEXT DEFAULT '', batch_items TEXT DEFAULT '[]')""")
     _c.execute("CREATE INDEX idx_hc_idem ON hil_confirmations(idem_key, status)")
     _c.commit()
 
@@ -165,6 +173,28 @@ try:
     check("C7 老库无 idem_key 列 ⇒ 仍写入确认单（不丢）",
           _r9 is not None and _n9 == 1, "ret=%r n=%s" % (_r9, _n9))
     _c2.close()
+
+    # C8 ★ 2026-10-30 新增：**缺增强列但有 idem_key** 的库 ⇒ 去重仍必须生效。
+    #    这是本轮修掉的真实缺陷：降级分支此前只写 8 个旧列、**漏写 idem_key**
+    #    ⇒ 该行 idem_key='' ⇒ 下次同操作查不到 ⇒ 重复确认单（幂等静默失效）。
+    _c3 = sqlite3.connect(":memory:")
+    _c3.row_factory = sqlite3.Row
+    _c3.execute("CREATE TABLE hil_confirmations (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "agent_id TEXT DEFAULT '', conversation_id INTEGER DEFAULT 0, run_id INTEGER DEFAULT 0, "
+                "action TEXT NOT NULL, payload TEXT DEFAULT '{}', preview TEXT DEFAULT '', "
+                "status TEXT DEFAULT 'pending', decided_by TEXT DEFAULT '', decided_at TEXT DEFAULT '', "
+                "created_at TEXT DEFAULT CURRENT_TIMESTAMP, task_key TEXT DEFAULT '', "
+                "idem_key TEXT DEFAULT '')")
+    _c3.commit()
+    _q1 = HILService.queue_confirmation(_c3, "A", "act", {"w": 1}, run_id=9, task_key="t9")
+    _q2 = HILService.queue_confirmation(_c3, "A", "act", {"w": 1}, run_id=9, task_key="t9")
+    _n3 = _c3.execute("SELECT COUNT(*) FROM hil_confirmations").fetchone()[0]
+    _kidem = _c3.execute("SELECT idem_key FROM hil_confirmations").fetchone()[0]
+    check("C8 降级分支仍写 idem_key（否则去重静默失效）",
+          bool(_kidem), "idem_key 为空 ⇒ 下次同操作查不到该行")
+    check("C8b 降级分支上的重复提交同样被挡住",
+          _n3 == 1 and _q1["id"] == _q2["id"], "行数=%d" % _n3)
+    _c3.close()
     _c.close()
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
@@ -201,17 +231,58 @@ check("E5 索引是普通索引而非唯一索引",
       and not re.search(r"CREATE UNIQUE INDEX[^\n]*idx_hc_idem", sc_src)
       and not re.search(r"CREATE UNIQUE INDEX[^\n]*hil_confirmations", sc_src))
 
-print("\n=== F. 真库重复现场（改动前基线）===")
+print("\n=== F. 真库不变量（不是「脏数据快照」）===")
+# ⚠️ 2026-10-30 改判据：原 F1 断言「真库**仍有**重复组」——
+#   那是"疾病快照"，靠**保留脏数据**才能通过：一旦有人清了历史重复，
+#   这条永远红，且它并不证明"修复有效"（只证明"当初病过"）。
+#   ⇒ 改为守**不变量**：待确认队列里不存在同一 idem_key 的重复 pending 行。
+#     这才是幂等真正要保证的东西，且**健康库恒为 0**（可长期绿灯）。
 if os.path.exists(PROD_DB):
     _pc = sqlite3.connect("file:%s?mode=ro" % PROD_DB, uri=True)
     _dups = _pc.execute(
         "SELECT agent_id, action, payload, COUNT(*) n FROM hil_confirmations "
         "GROUP BY agent_id, action, payload HAVING n > 1").fetchall()
     _tot = _pc.execute("SELECT COUNT(*) FROM hil_confirmations").fetchone()[0]
-    _pc.close()
-    print("  真库 hil_confirmations %d 行；重复组: %s" % (_tot, _dups if _dups else "无"))
-    check("F1 记录到改动前确有重复现场（本条修复的由来）", bool(_dups),
-          "真库已无重复 ⇒ 基线描述需更新")
+    # 不变量①：同一 idem_key 不得有多条 **仍在去重窗口内** 的 pending。
+    #   ⚠️ 2026-10-30 修：此前不带窗口 ⇒ 首次跑就抓到"重复"——
+    #   实测是 id 39（10-28 15:55）与 id 40（10-30 03:35），**间隔 36h > 24h 窗口**
+    #   ⇒ 产品**本就该**允许（窗口外的旧单不挡新提交，正是 C6 的语义：
+    #   否则"上次挂着没处理、这次想重来"会被永久挡住）。
+    #   ⇒ 判据必须与产品同源：只查窗口内的重复。
+    _dup_idem = _pc.execute(
+        "SELECT idem_key, COUNT(*) n FROM hil_confirmations "
+        "WHERE status='pending' AND COALESCE(idem_key,'')<>'' "
+        "AND created_at >= datetime('now', ?) "
+        "GROUP BY idem_key HAVING n > 1 LIMIT 5",
+        ("-%d hours" % IDEM_WINDOW_HOURS,)).fetchall()
+    # 不变量②：**切换点之后**的 pending 行必须带 idem_key（空值 ⇒ 去重对它无效）。
+    #   为什么不能断言"所有 pending 行都带"：切换前（2026-10-13 幂等键上线前）
+    #   的历史行永远补不上 —— 那会把"历史遗留"判成"当前缺陷"，
+    #   与 F1 原来的毛病同型（靠数据状态而非代码逻辑判定）。
+    #   切换点**自校准**：取"最早一条带 idem_key 的行"的时间 ⇒ 不写死日期，
+    #   换库/清库后仍然成立，且只会随时间变得更严（新行必须带）。
+    _pc2 = sqlite3.connect("file:%s?mode=ro" % PROD_DB, uri=True)
+    _cut = _pc2.execute(
+        "SELECT MIN(created_at) FROM hil_confirmations "
+        "WHERE COALESCE(idem_key,'')<>''").fetchone()[0]
+    _bad_after = 0
+    if _cut:
+        _bad_after = _pc2.execute(
+            "SELECT COUNT(*) FROM hil_confirmations WHERE status='pending' "
+            "AND COALESCE(idem_key,'')='' AND created_at >= ?", (_cut,)).fetchone()[0]
+    _legacy = _pc2.execute(
+        "SELECT COUNT(*) FROM hil_confirmations WHERE status='pending' "
+        "AND COALESCE(idem_key,'')=''" + (" AND created_at < ?" if _cut else ""),
+        ((_cut,) if _cut else ())).fetchone()[0]
+    _pc2.close()
+    print("  真库 hil_confirmations %d 行；历史重复组（仅记录，不判定）: %s"
+          % (_tot, _dups if _dups else "无"))
+    check("F1 不变量：同一 idem_key 无重复 pending 行", not _dup_idem,
+          "重复 idem_key：%s" % (_dup_idem,))
+    print("  幂等键切换点（自校准）: %s；切换前遗留 pending %d 行（不判定）"
+          % (_cut or "（库中无带键行）", _legacy))
+    check("F2 不变量：切换点之后的 pending 行都带 idem_key",
+          _bad_after == 0, "%d 行（切换点 %s 之后）缺 idem_key" % (_bad_after, _cut))
 else:
     print("  [SKIP] 未找到真库")
 

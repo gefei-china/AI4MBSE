@@ -1039,3 +1039,37 @@ def _migrate_agent_todos(conn):
     c.execute("CREATE INDEX IF NOT EXISTS ix_atodo_run ON agent_todos(conversation_id, run_id)")
     conn.commit()
     print("[init_db] 迁移: agent_todos 已建立（计划外化；verify/verify_result 为 completed 前置条件）")
+
+
+def _migrate_tool_idempotency(conn):
+    """P0-1（2026-10-30）写类工具幂等键记录表（幂等，纯新表）。
+
+    ## 为什么单独一张表，而不是复用 `tool_call_logs`
+    - `tool_call_logs` 是**观测**：每次调用都留痕（含失败、含只读）；
+    - 幂等表是**控制**：只记"**已成功执行**"的写类调用，且按幂等键唯一。
+    ⇒ 混在一起会出现"失败也命中"⇒ 写操作被错误吞掉（比不做更危险）。
+
+    ## 表结构要点
+    - `key` 为主键（幂等键 = sha256(scope|tool|args_hash|ordinal)[:32]）；
+    - `result_json` 存执行结果 —— 命中时**原样重放**（含模型的"成功"回执）；
+    - `hits` 记被重放命中的次数（观测：省了多少次重复写）。
+
+    不走 columns.py：本表是**新表**（非补列），init_db 每次启动执行
+    CREATE TABLE IF NOT EXISTS ⇒ 老库启动即建，无补列迁移路径。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS tool_idempotency (
+        key TEXT PRIMARY KEY,             -- 幂等键（scope|tool|args_hash|ordinal 的摘要）
+        tool TEXT DEFAULT '',             -- 工具名
+        scope TEXT DEFAULT '',            -- 执行单元（run:<批次号>:task:<task_key>）
+        args_hash TEXT DEFAULT '',        -- 规范化参数摘要
+        ordinal INTEGER DEFAULT 0,        -- 同一次尝试内该 (tool,args) 的第几次出现
+        result_json TEXT DEFAULT '',      -- 执行结果（重放时原样返回）
+        hits INTEGER DEFAULT 0,           -- 被重放命中的次数（观测：省掉多少次重复写）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_tool_idem_scope ON tool_idempotency(scope)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_tool_idem_created ON tool_idempotency(created_at)")
+    conn.commit()
+    print("[init_db] 迁移: tool_idempotency 已建立（写类工具幂等键）")
