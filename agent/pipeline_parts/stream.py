@@ -81,6 +81,56 @@ def _turn_cm(tracer, turn_no):
     return tracer.turn(turn_no)
 
 
+#: `exec` 快照里"有内容"的判定键（任一非空 ⇒ 视为有快照）
+_EXEC_MEAT_KEYS = ("reasoning", "notices", "tools", "agent")
+
+
+def _partial_exec_card(scope: dict):
+    """异常/断开/取消时随消息落库的 `exec` 快照（与成功路径**同构**）。
+
+    ★ 2026-10-30（用户反馈「刷新后这么多环节的内容都不见了」）：
+      成功轮把 `exec`（reasoning / notices / tools / brief / gates）写进 card_data，
+      前端历史还原**只认它**（`05-markdown.js` 的 `_procHtmlNow`）；
+      而固化路径的 card_data 写死 `"{}"` ⇒ 失败轮跑过的意图识别 / 工具调用 / 阶段
+      **刷新即全部蒸发**（真机 conv 9779 msg 5262：card_data=`{}`，
+      而同轮 SSE 里已有 22 次工具事件）。
+      同一份"执行过程"两条出口只存了一条 —— 这是路径不对称，不是"失败轮本来就没过程"。
+
+    ## 为什么参数是 `scope` 而不是五个形参
+    本函数服务于**三个不同位置的 except**（CancelledError / GeneratorExit / Exception），
+    它们与 `exec_*` 累加器之间存在"可能尚未执行到"的先后关系：
+    异常可能发生在 `exec_tools = []` **之前**（如意图路由阶段），此时裸引用必然 NameError
+    —— 而本函数是"保住用户已看到内容"的最后一环，**它自己绝不能成为新的失败点**
+    （同文件 `_interim_exec_card` 注释里记着这个坑：闭包读未赋值变量把整轮打挂）。
+    传 `locals()` 进来，缺键即 None，天然 fail-safe。
+
+    ⚠️ 只在 `execute_stream` 内调用（需要同一作用域的 `locals()`）；
+       `locals()` 在**嵌套函数**里只看得到自己的局部变量，别挪进闭包。
+    """
+    _g = scope.get
+    _out = {}
+
+    def _safe(fn, default=None):
+        try:
+            return fn()
+        except Exception:              # noqa: BLE001
+            return default
+
+    _rs = _g("exec_reasoning")
+    _out["reasoning"] = _safe(lambda: "".join(_rs or [])[:8000] or None)
+    _nt = _g("exec_notices")
+    _out["notices"] = _safe(lambda: (_nt or [])[:60] or None)
+    _out["tools"] = _safe(lambda: _g("exec_tools") or None)
+    _ag = _g("agent_def")
+    _out["agent"] = _safe(lambda: _ag.name)
+    _self = _g("self")
+    _out["brief"] = _safe(lambda: getattr(_self, "_last_intent_brief", None) or None)
+    _out["gates"] = _safe(lambda: _gates_safe())
+    if not any(_out.get(k) for k in _EXEC_MEAT_KEYS):
+        return None                    # 全空 ⇒ 无快照，让固化的文案如实说"未能留存"
+    return _out
+
+
 def _best_partial(full_content, llm_content, orch_acc, streamed_acc) -> str:
     """中断时**该固化哪段**：返回"能最完整代表用户已看到内容"的那一份。
 
@@ -3592,7 +3642,7 @@ class StreamMixin:
         }}
 
     def _persist_partial_stream(self, conversation_id, content, reason="error",
-                                dry_run=False, force=False, detail=""):
+                                dry_run=False, force=False, detail="", exec_card=None):
         """2026-09-29（用户五轮反馈4）：流式异常/客户端断开时，把已生成内容固化落库。
 
         此前 except 分支只 yield error 事件：浏览器里看得到的内容在库中 0 条，
@@ -3609,6 +3659,14 @@ class StreamMixin:
           ⚠️ 只在 `force=True`（异常/断连等**非用户主动停止**）时启用；
              `reason="stop"` 且用户是主动点停止时保持原行为（用户本来就不想看了）。
         ⚠️ `detail`：异常摘要（可选），写进说明正文，便于用户/排查直接看到原因。
+        ★★ 2026-10-30（用户反馈「刷新后这么多环节的内容都不见了」）：**执行过程必须一起落库**。
+          原实现 `card_data` 写死 `"{}"`，于是失败/中断的消息**只剩一句说明**：
+          前端历史还原只认 `card_data.exec`（`05-markdown.js` 的 `_procHtmlNow`），
+          空卡 ⇒ 那一轮跑过的意图识别 / 工具调用 / 阶段卡片**刷新即全部蒸发**
+          （真机 conv 9779 msg 5262：card_data=`{}`，而同轮 SSE 里已有 22 次工具事件）。
+          更糟的是说明文案写着「本轮的执行过程已记录」——**它在撒谎**。
+          ⇒ 新增 `exec_card`：调用方把当前累计的执行快照传进来，与成功路径同构落库；
+             文案按"到底存没存"分岔，不再无条件声称已记录。
         """
         if dry_run or not conversation_id:
             return
@@ -3623,6 +3681,26 @@ class StreamMixin:
         #   其实只是没刷出来）。真正需要被看见的告警一律 flush。
         print(f"[_persist_partial_stream] reason={reason} conv={conversation_id} "
               f"候选字符={len(text)} force={force}", flush=True)
+        # ★ 2026-10-30：执行快照 → card_data。**必须 fail-safe**：
+        #   固化是"保住用户已看到内容"的最后一道防线，绝不能因为序列化/取字段失败
+        #   而整条消息写不进去（那正是本次要修的形态：宁可只存正文，也不能丢消息）。
+        _card_json = "{}"
+        if exec_card:
+            try:
+                # ⚠️ 必须**嵌在 `exec` 键下**（`{"exec": {...}}`），不能把 exec 的字段摊在顶层。
+                #   前端历史还原读的是 `card_data.exec`（`05-markdown.js` 的 `_procHtmlNow`：
+                #   `(cd && cd.exec) ? ... : ''`）。第一版直接 `json.dumps(exec_card)` 写在顶层
+                #   ⇒ 库里"有数据"、页面"什么都没有"，是那种最费时间的错法
+                #   （本轮由 verify_partial_exec_persist 的 P2 断言抓出）。
+                _card = {"exec": exec_card}
+                _ag = (exec_card or {}).get("agent")
+                if _ag:
+                    _card["agent"] = _ag
+                _card_json = json.dumps(_card, ensure_ascii=False, default=str)
+            except Exception as _ce:      # noqa: BLE001
+                print("[_persist_partial_stream] exec 快照序列化失败（退化为空卡）：%r"
+                      % (_ce,), flush=True)
+                _card_json = "{}"
         if len(text) < 4:
             if not force:
                 print("[_persist_partial_stream] 跳过：内容过短（<4 字），且非强制 ⇒ 不生成空消息",
@@ -3630,11 +3708,24 @@ class StreamMixin:
                 return
             # 强制模式：没有正文也要落一条**如实说明**，否则库里只剩 user 消息。
             print("[_persist_partial_stream] 无正文但 force=True ⇒ 落一条失败说明", flush=True)
+            # 2026-10-30：文案必须与**事实**一致 —— 执行过程真的落库了才说"已记录"。
+            #   原句无条件写"已记录"，而 card_data 恒为 `{}` ⇒ 用户刷新后找不到任何环节，
+            #   只能怀疑是系统在敷衍（本轮反馈正是如此）。
+            _has_exec = bool(exec_card) and bool(
+                (exec_card or {}).get("tools") or (exec_card or {}).get("notices")
+                or (exec_card or {}).get("reasoning")
+                or (exec_card or {}).get("agent"))
+            _exec_line = (
+                "本轮的执行过程（工具调用 / 阶段）已随本条消息保存，"
+                "可在下方「执行过程」中展开回看；"
+                if _has_exec else
+                "本轮的执行过程未能留存（无可用快照）；"
+            )
             text = (
                 "> ⚠️ 本轮未产出正文内容\n\n"
                 + ("**原因**：" + str(detail).strip()[:300] + "\n\n" if detail else "")
-                + "本轮的执行过程（工具调用 / 阶段）已记录；"
-                  "若是网络或服务波动导致，直接重新发送这条消息即可。"
+                + _exec_line
+                + "若是网络或服务波动导致，直接重新发送这条消息即可。"
             )
         else:
             suffix = {
@@ -3669,7 +3760,7 @@ class StreamMixin:
                         return
                 conn.execute(
                     "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
-                    (conversation_id, "assistant", text, "text", "{}"))
+                    (conversation_id, "assistant", text, "text", _card_json))
                 conn.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
                              (conversation_id,))
         except Exception as _persist_err:
@@ -3954,6 +4045,7 @@ class StreamMixin:
             exec_notices = []
             exec_tools = []
             card_data = "{}"  # dry_run=True（编排子任务流式）不落库，done 事件仍引用 → 兜底空卡
+
             # 2026-09-29（用户五轮反馈4）：流式部分内容固化 —— llm_content 提前初始化（异常路径引用），
             # _orch_acc 收集编排路径的 token（直行路径已由 llm_content 承担）。
             llm_content = ""
@@ -6476,7 +6568,8 @@ class StreamMixin:
             self._persist_partial_stream(conversation_id,
                                          _best_partial(_full_content, llm_content,
                                                        _orch_acc, _streamed_acc),
-                                         "stop", dry_run=dry_run, force=True)
+                                         "stop", dry_run=dry_run, force=True,
+                                         exec_card=_partial_exec_card(locals()))
             if conversation_id:
                 try:
                     _fup.drop(conversation_id)
@@ -6497,7 +6590,8 @@ class StreamMixin:
             self._persist_partial_stream(conversation_id,
                                          _best_partial(_full_content, llm_content,
                                                        _orch_acc, _streamed_acc),
-                                         "stop", dry_run=dry_run)
+                                         "stop", dry_run=dry_run,
+                                         exec_card=_partial_exec_card(locals()))
             # P1-②：断连同样要清 follow-up 队列（否则下次接着这个会话时
             #  会消费到"上一轮被中断时没处理完的补充指令"）。
             if conversation_id:
@@ -6537,5 +6631,6 @@ class StreamMixin:
                                                        _orch_acc, _streamed_acc),
                                          "error", dry_run=dry_run,
                                          force=True,
-                                         detail="%s：%s" % (type(e).__name__, e))
+                                         detail="%s：%s" % (type(e).__name__, e),
+                                         exec_card=_partial_exec_card(locals()))
             yield {"type": "error", "message": str(e)}

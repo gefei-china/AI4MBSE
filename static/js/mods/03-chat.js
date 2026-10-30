@@ -644,7 +644,30 @@ function _mergeClarifyTurns(msgs){
   let pending = null;
   for(const m of msgs){
     if(m && m.role==='assistant' && m.msg_type==='clarify'){ pending = m; continue; }
-    if(pending && m && m.role==='assistant'){ m._clarify_prev = pending; pending = null; }
+    if(pending && m && m.role==='assistant'){
+      // ★★ 2026-10-30（用户反馈「刷新后之前这么多环节的内容都不见了」）：
+      //   合并时**必须带上 clarify 消息自己的正文**，否则内容静默蒸发。
+      //   真机实证（conv 9779）：msg 5254 是 `msg_type='clarify'`，正文 **5689 字**
+      //   （"针对上一轮遗留的两大阻塞项，我立即启动执行清单……"整段排查结论），
+      //   合并后页面只剩 311 字 —— 5689 字的正文被这个分支整个丢掉，
+      //   用户看到的就是"AI 的回答不见了，只剩一张确认卡"。
+      //   为什么之前没发现：这条 clarify 同时也是**实质答复**（不只是提问），
+      //   而合并只渲染 `questions`/`answered`（见 05-markdown.js `_clarify_prev` 分支）。
+      //   ⇒ 正文并入后继消息（先 clarify 正文、后本次正文），气泡数不变（仍收敛为 1 个），
+      //     但**一个字都不丢**。
+      //   ⚠️ 但"纯占位语"不能并：`_persist_clarify` 在没有正文时会写
+      //     "⏸ **暂停等你确认**：…"，它只是把问题复述一遍；并进来会在卡上方
+      //     重复一段同样的文字（真机 msg 5259 就是这种 115 字的占位语）。
+      //     判据用**首字符**而不是字数阈值 —— 占位语文案由后端固定生成，前缀稳定，
+      //     字数阈值（如 >200）会随文案改写而失效。
+      const _pc = String(pending.content || '').trim();
+      if(_pc && _pc.charAt(0) !== '⏸'){
+        const _mc = String(m.content || '').trim();
+        m.content = _mc ? (_pc + '\n\n' + _mc) : _pc;
+      }
+      m._clarify_prev = pending;
+      pending = null;
+    }
     out.push(m);
   }
   if(pending) out.push(pending);   // 末尾挂起态：保留独立渲染（等用户作答）
