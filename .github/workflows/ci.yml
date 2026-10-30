@@ -188,8 +188,17 @@ jobs:
       # ── Agent loop 护栏（2026-10-04）：token 预算 / 重复调用短路 / 工具超时 ────
       # 关键断言是 G6c/G6d：两条 ReAct 路径都不得出现裸的 self._exec_tool_call(，
       # 即"不可能绕过护栏" —— 这是防止新加的路径又落回无闸状态。
-      - name: Guard agent loop 三道护栏（40 项 + 5 变异）
+      - name: Guard agent loop 三道护栏（47 项 + 6 变异）
         run: python tools/verify/verify_loop_guard.py
+
+      # ── 2026-10-30：意图目录完整性 / 保存动作不得静默清空关键词 ─────────────
+      # 真因回顾：本工程「意图名 == Agent 标识名」，所以在工作室改个名（design →
+      #   工程建模方案设计Agent）就等于删掉意图 design；再加上 update_agent 缺省把
+      #   intent_keywords 写成 []，一天里 7 个 Agent 的关键词被保存动作清空
+      #   ⇒ 路由退化、请求全落到 chat、chat 没绑 MCP ⇒ 用户看到"老是走不通 / MCP 工具不全"。
+      # 这条门禁同时守代码形态（AST/正则）与真库目录（无 mbse.db 时自动 SKIP 数据部分）。
+      - name: Guard 意图目录完整性 + 关键词不被清空（21 项 + 变异）
+        run: python tools/verify/verify_intent_catalog.py
 
       # ── 2026-10-09：请求级状态隔离三道（均静态/AST + 线程探针，不需真实 LLM）──
       # 这三道锁的是 2026-10-09 定位的 N3 产出雷同根因：模块级单例 Pipeline

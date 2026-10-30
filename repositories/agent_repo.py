@@ -107,7 +107,10 @@ class AgentRepo(BaseRepo):
              json.dumps(data.get("model_params", {}), ensure_ascii=False),
              data.get("hil_level", "L0"), 1 if data.get("kb_required") else 0,
              json.dumps(data.get("kb_scope") or {}, ensure_ascii=False),
-             json.dumps(data.get("intent_keywords", []), ensure_ascii=False),
+             # 新建路径：`intent_keywords` 缺省现为 None（见 models/studio.py 注释），
+             # `or []` 兜底避免 json.dumps(None) 落库成字符串 "null"
+             # —— 那会让 json.loads 读出 None，下游 `for k in None` 直接崩。
+             json.dumps(data.get("intent_keywords") or [], ensure_ascii=False),
              data.get("icon", "🤖"), data.get("status", "active"), data.get("version", "v1.0.0"),
              json.dumps(data.get("capabilities", []), ensure_ascii=False),
              json.dumps(data.get("input_schema", {}) or {}, ensure_ascii=False),
@@ -145,10 +148,19 @@ class AgentRepo(BaseRepo):
             "hil_level": data.get("hil_level", "L0"),
             "kb_required": 1 if data.get("kb_required") else 0,
             "kb_scope": kb_scope_json if kb_scope is not None else None,
-            "intent_keywords": json.dumps(data.get("intent_keywords", []) or [], ensure_ascii=False),
             "icon": data.get("icon", "🤖"),
             "status": data.get("status", "active"),
         }
+        # ★★ 2026-10-30：`intent_keywords` 缺省/None ⇒ **保留既有值**（不进 diff）。
+        #   与上面 kb_scope 的写法完全同源：None 语义是"这次不改这项"，`[]` 才是"清空"。
+        #   事故（本机真库）：原写法 `data.get("intent_keywords", []) or []` 把"调用方没传"
+        #   和"调用方要清空"折叠成同一件事 ⇒ 任何未感知该字段的保存都会清空关键词。
+        #   实测今天 7 个 Agent 被清空（asset_change_logs field='intent_keywords' 可查），
+        #   后果是意图路由关键词层失效、请求全落到 chat、工具集不对
+        #   —— 用户侧感受是"老是走不通 / MCP 工具不全"，而**保存动作本身看起来是完全正常的**。
+        _ikw = data.get("intent_keywords")
+        if _ikw is not None:
+            new_values["intent_keywords"] = json.dumps(list(_ikw or []), ensure_ascii=False)
         if data.get("version") is not None:
             new_values["version"] = data.get("version")   # 调用方显式给 ⇒ 尊重（不自动递升）
         for key, empty in (("capabilities", []), ("input_schema", {}), ("output_schema", {})):

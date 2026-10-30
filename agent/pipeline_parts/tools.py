@@ -342,6 +342,26 @@ class ToolMixin:
                     _picked, _pst = list(_meta.keys()), {"selected": len(_meta), "keep": 0,
                                                         "semantic": 0, "semantic_names": []}
                 _tools = _picked or _tools
+                # ★★ 2026-10-30：**技能显式授权的 MCP 工具不得被"按需暴露"剪掉**。
+                #   事故（本轮实证）：技能「智源平台管理」的 allowed_tools 明写 19 个
+                #   （含 query_data_tree / search_model_elements / create_model_elements），
+                #   而 `pick_for_injection` 只按"用户原话的语义分"取前 `min_keep`(8) 个 ⇒
+                #   请求「生成通信子系统的IBD视图」时这 8 个里只剩 query_projects/
+                #   query_branches/query_model_versions，**浏览包树与按名检索的工具全没了**。
+                #   模型于是只能在有工具的地方硬凑（或如实说"工具不全"），而用户看到的是
+                #   "明明绑了 MCP / 明明技能命中，为啥还是走不通"。
+                #   语义依据与既有 `_tool_whitelist` 豁免同源：**技能命中本身就是用户的显式授权**，
+                #   显式契约的优先级高于"按原话猜"。占位代价可控：只并白名单内的工具，
+                #   不是把 71 个全塞进来（那会占掉整包 token，见下方 min_keep 的初衷）。
+                #   ⚠️ `_sk_wl` 在本文件 545 行才赋值（本循环在其之前执行）⇒ 直接读实例属性，
+                #     不要引用那个局部名（会 NameError，且被外层 except 吞掉 ⇒ 静默失效）。
+                _skw = getattr(self, "_skill_allowed_tools", None) or set()
+                if _skw and _meta:
+                    _grant = [t for t in _meta.keys() if t in _skw]
+                    if _grant:
+                        _before = len(_tools)
+                        _tools = list(dict.fromkeys(list(_tools) + _grant))   # 保序去重
+                        _mcp_stats["granted"] = _mcp_stats.get("granted", 0) + (len(_tools) - _before)
                 _mcp_semantic_names |= set(_pst.get("semantic_names") or [])
                 _mcp_stats["servers"] += 1
                 _mcp_stats["total"] += _pst.get("total", len(_meta))
