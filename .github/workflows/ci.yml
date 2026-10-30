@@ -1195,6 +1195,16 @@ jobs:
       - name: Guard 运行时稳定性（优雅关闭 / 并发闸 / 墙钟 / 超时保留产出，80 项 + 10 变异）
         run: python tools/verify/verify_runtime_stability.py
 
+      # ── P0-3（2026-10-30）：意图评测必须**带区间**判定 ────────────────────
+      # 为什么这一步重要：此前"accuracy=0.9792"是**点估计**，而 n=48 时
+      # Wilson 95% 区间是 [89.1%, 99.6%]（宽 10.5 点）⇒ 门禁阈值落在区间内部，
+      # 红/绿由噪声决定。本步消费 checked-in 快照（`docs/评测/nightly/latest-intent-report.json`），
+      # 断言：语料 ≥300、生产语句 ≥200、区间可复现、与基线配对比较无系统性变差。
+      # 快照缺失时 `--allow-missing` 判 SKIP（PR CI 无 mbse.db，跑不了评测）。
+      - name: Guard 意图评测带区间判定（语料≥300 / 区间可复现 / 配对无回归）
+        run: |
+          python -X utf8 tools/verify/verify_intent_eval_ci.py --allow-missing
+
       - name: Guard 工作区洁净（门禁跑完不得留下任何改动）
         run: |
           git status --porcelain
