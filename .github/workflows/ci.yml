@@ -210,6 +210,15 @@ jobs:
       - name: Guard 绑定生效判定 ↔ 运行时一致（9 项 + 变异）
         run: python tools/verify/verify_binding_graph.py
 
+      # ── 2026-10-30：工具结果**跨轮连续性**（用户「人工确认后无辜终止」的直接根因）──
+      # 旧实现每轮把上一轮所有 tool 结果整条抹空，**连 offload 编号一起抹** ⇒
+      # 多步核对任务从第 3 轮起"看不到任何明细、也没编号可重读" ⇒ 猜编号/重查 ⇒
+      # 失败轮撞 max_failed_rounds ⇒ 强制收尾。这条门禁用真 pipeline 断言
+      # 「上一轮原文仍在」「更早轮次带 offload_id 可重读」，并用变异自证判据非空转；
+      # 同时守「子任务 conversation_id=0 时会话级工具（todo_write）仍归属父会话」。
+      - name: Guard 工具结果跨轮连续性 + 子任务会话归属（7 项 + 变异）
+        run: python tools/verify/verify_tool_result_continuity.py
+
       # ── 2026-10-09：请求级状态隔离三道（均静态/AST + 线程探针，不需真实 LLM）──
       # 这三道锁的是 2026-10-09 定位的 N3 产出雷同根因：模块级单例 Pipeline
       # 把请求级产物挂�� self 上跨请求残留（叙述是新的、代码是旧的）。

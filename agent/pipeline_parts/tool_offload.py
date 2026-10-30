@@ -44,6 +44,26 @@ def fetch_offload(offload_id: int) -> str:
         conn.close()
 
 
+def offload_exists(offload_id: int) -> bool:
+    """该编号**是否有行**（与"内容是否为空"分开）。
+
+    为什么单独一个函数（2026-10-30）：`fetch_offload` 返回空串时无法区分
+    「编号不存在」与「行在但内容为空」，而这两者对模型意味着完全不同的下一步 ——
+    前者要"别再猜编号、重新调用工具"，后者要"这就是空结果、照此继续"。
+    把判据摊成两个函数，比让调用方靠 `if _off` 猜要诚实。
+    """
+    if not offload_id or int(offload_id) <= 0:
+        return False
+    from database import db_conn
+    try:
+        with db_conn() as conn:
+            return conn.execute(
+                "SELECT 1 FROM tool_result_offloads WHERE id=?", (int(offload_id),)
+            ).fetchone() is not None
+    except Exception:            # noqa: BLE001  表缺失/库异常 ⇒ 保守判"不知道有"，不阻断
+        return False
+
+
 def save_offload_by_key(tool_name: str, content: str, conversation_id: int = 0,
                         key: str = "") -> int:
     """**幂等**落库：同 (conversation_id, tool_name, key) 已存在则复用其 id。

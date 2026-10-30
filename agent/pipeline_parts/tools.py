@@ -1456,9 +1456,27 @@ class ToolMixin:
                 _oid = int((arguments or {}).get("id") or 0)
                 from agent.pipeline_parts import tool_offload as _to
                 _off = _to.fetch_offload(_oid)
-                result = ({"ok": True, "result": _off[:20000]}
-                          if _off else
-                          {"ok": False, "result": f"offload #{_oid} 不存在（可能 id 无效——以工具结果提示中的编号为准）"})
+                # ★ 2026-10-30：**把"不存在"与"内容为空"分开说**。
+                #   原实现 `if _off` 把空串当"不存在"，于是行在库里、内容为空时
+                #   也报「offload #N 不存在」⇒ 模型据此判定"编号被删了"，改为猜别的编号
+                #   （真机实测：「offload #2608 不存在」，而该行确实存在、内容 8177 字，
+                #    它猜的是**下一笔**调用的编号 ⇒ 一次误判换来两轮瞎试）。
+                #   现在：查得到行但内容空 ⇒ 如实说"该编号内容为空"；
+                #   查不到行 ⇒ 说"编号不存在"，并给出**如何拿到正确编号**的指引。
+                if _off:
+                    result = {"ok": True, "result": _off[:20000]}
+                else:
+                    _exists = _to.offload_exists(_oid) if hasattr(_to, "offload_exists") else False
+                    if _exists:
+                        result = {"ok": False,
+                                  "result": f"offload #{_oid} 存在但内容为空（该次工具调用没有产出正文）"
+                                            f"——请勿改用其他编号猜测，直接重新调用产生它的工具即可"}
+                    else:
+                        result = {"ok": False,
+                                  "result": f"offload #{_oid} 不存在。编号只能从**工具结果提示里的 "
+                                            f"「offload #N」原文**读取；被省略的结果若是引用块，"
+                                            f"其 note/offload_id 字段里也有编号。**不要按顺序猜编号**，"
+                                            f"查不到就重新调用该工具"}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
             if name == "todo_write":

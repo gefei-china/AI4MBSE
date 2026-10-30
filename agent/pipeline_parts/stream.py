@@ -84,6 +84,22 @@ def _turn_cm(tracer, turn_no):
 #: `exec` 快照里"有内容"的判定键（任一非空 ⇒ 视为有快照）
 _EXEC_MEAT_KEYS = ("reasoning", "notices", "tools", "agent")
 
+#: 保留最近 N 轮的**工具结果原文**，更早的轮次只留"可寻址摘要"（2026-10-30）。
+#: 为什么需要（真机 conv 9779 13:27 那轮）：原实现把上一轮所有工具结果整条抹空，
+#: 连 offload 编号一起抹 ⇒ 模型从第 3 轮起拿不到任何明细、也没法按编号重读，
+#: 只能猜编号/重查 ⇒ 撞 max_failed_rounds=3 ⇒ 用户看到"人工确认后无辜终止"。
+#: N=1 的含义：**上一轮的原文永远保留**（多步核对最需要的就是它），
+#: 再早的轮次换成 {工具名, offload_id, head 400 字, 重读指引}。
+#: 设为 0 即回到旧行为（逐轮抹空）—— 保留开关是为了出问题能快速回退。
+try:
+    from core import config as _cfg_kr
+    _KEEP_TOOL_ROUNDS = int(_cfg_kr.get("agent", "tool_result_keep_rounds", 1) or 0)
+except Exception:                    # noqa: BLE001
+    _KEEP_TOOL_ROUNDS = 1
+if _KEEP_TOOL_ROUNDS < 0:
+    _KEEP_TOOL_ROUNDS = 0
+
+
 
 def _partial_exec_card(scope: dict):
     """异常/断开/取消时随消息落库的 `exec` 快照（与成功路径**同构**）。
@@ -507,7 +523,8 @@ class StreamMixin:
                 sub = type(self)()  # 拆包后避免循环导入：type(self)==AgentPipeline
                 sub._load_db_agents(user)
                 _sub = sub.execute_stream(goal, 0, branch, provider_id, attachments or [],
-                                          forced_intent=direct, user=user, dry_run=True)
+                                          forced_intent=direct, user=user, dry_run=True,
+                                          session_conv_id=conversation_id)
                 _sub_content = ""
                 for ev in _sub:
                     _et = ev.get("type")
@@ -1002,9 +1019,15 @@ class StreamMixin:
                         # tools.py 构建 tools_def 定稿时据此注入 tool_result_fetch（供下游取全文）
                         if _orch_offloads:
                             sub._orch_result_offloads = dict(_orch_offloads)
+                        # ★ 2026-10-30：`session_conv_id` = 父会话。
+                        #   子任务的 messages 仍不落库（conversation_id=0 语义不变），
+                        #   但 todo_write / 工具留痕 / HIL 归属到**用户真正在看的会话**。
+                        #   修前实测：conv=0 的工具留痕 1478 条，且 todo_write 一律
+                        #   「无会话上下文」⇒ 失败轮累计 ⇒ 人工确认后必被强制收尾。
                         for ev in sub.execute_stream(query, 0, branch, provider_id, _sub_att,
                                                      forced_intent=tk.get("agent_id") or None,
-                                                     skill_name=skill_name2, user=user, dry_run=True):
+                                                     skill_name=skill_name2, user=user, dry_run=True,
+                                                     session_conv_id=conversation_id):
                             _hb[tkey] = _t.time()   # P0-7：任何产出（token/reasoning/tool）都算"活着"
                             # ★ 2026-10-30：同步刷新"活到哪儿了"的快照（超时兜底要用）。
                             #   每帧都写：超时判定的粒度是 2s 轮询，慢了就会丢最后一段。
@@ -3857,7 +3880,7 @@ class StreamMixin:
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
                        team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0,
                        resume_of_user_msg_id: int = 0, resume_append: str = "", _tracer=None,
-                       deadline_ts: float = 0.0):
+                       deadline_ts: float = 0.0, session_conv_id: int = 0):
         """流式执行（V2.3.2 优化：AI 输出流式 + 执行过程可观测）。生成器逐段产出 SSE 事件：
 
         {"type":"stage","name":..., "status":"run|done"}   右侧智能体执行状态
@@ -3871,6 +3894,18 @@ class StreamMixin:
         dry_run: 编排子任务流式执行时置 True（不落库，仅产出事件）。
         team: 团队模式（AI 会话页「工作流」下拉）——主 Agent 团队负责人统一调度：
         意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
+        session_conv_id: **会话级工具的归属会话**（★ 2026-10-30 新增）。
+        编排子任务以 `conversation_id=0` 嵌套调用本方法（约定：0 = 不落 messages），
+        但 `_tool_conv_ctx` 也取自该参数 ⇒ 子任务里所有"会话级工具"与工具留痕都成了
+        conv=0：
+          · `todo_write` 直接报「无会话上下文，无法建待办」（真机 1478 条 conv=0 留痕）；
+          · `tool_call_logs.conversation_id=0` ⇒ 用户在「执行过程」里看不到子任务的工具；
+          · HIL 确认单 / 写入闸也挂错会话。
+        而这些失败又计入失败轮 ⇒ 加速撞 `max_failed_rounds` ⇒「无辜终止」。
+        故把两者拆开：`conversation_id` 管**消息落库**（子任务仍传 0，语义不变），
+        `session_conv_id` 管**会话级能力归属**（子任务传父会话 id）。
+        缺省 0 ⇒ 回落到 conversation_id，非编排路径行为逐字节不变。
+
         _tracer: P0-b 会话级 ConversationTracer（/chat/stream 入口创建）。**显式传参**
         而非全局查找：execute_stream 的同步生成器整体跑在 SSE 心跳 daemon 线程
         （core/sse.iter_with_heartbeat_async），ContextVar 不跨线程继承，深层挂载点
@@ -4790,7 +4825,14 @@ class StreamMixin:
             #   在 1656 行就要读它取会话 id ⇒ 永远读到**上一轮**的值。
             #   后果：长 skill 正文的 offload 挂错会话，`skill_body_fetch` 取回时 id 对不上
             #   ⇒ 多轮/多会话连续调用时产出互相串扰（实测两个视图产出 md5 完全相同）。
-            self._tool_conv_ctx = conversation_id
+            # ★ 2026-10-30：会话级能力归属用 session_conv_id（子任务传父会话），
+            #   消息落库仍用 conversation_id（子任务=0，语义不变）。
+            #   ⚠️ 这个值必须**在装配前定一次**，后续（工具留痕、技能反馈、HIL、写入闸）
+            #   一律引用 `_sess_conv`，不要再各处写 `int(conversation_id or 0)` ——
+            #   本轮就是这么漏掉技能反馈的：`tool_call_logs` 已归属父会话，
+            #   而 `_record_skill_feedback` 仍用 0 ⇒ 技能行落在 conv=0（实测 2 行）。
+            _sess_conv = int(session_conv_id or conversation_id or 0)
+            self._tool_conv_ctx = _sess_conv
             # ★ 2026-10-27（会话 9629）：**异步任务跨轮续跑必须发生在 prompt 组装之前**。
             #   ⚠️ 踩过的坑（本轮实测）：最初把它写在 ReAct 循环起点（messages 组装之后），
             #   结果 `_async_notes` 要么还没算出来、要么被下一轮的初始化清空，
@@ -4935,7 +4977,7 @@ class StreamMixin:
             # `_tool_conv_ctx` 已在 prompt 装配**之前**设好（见上方注释：原在此处赋值太晚，
             # 导致技能 offload 读到上一轮会话 id）—— 此处保留一次幂等赋值以防
             # 未来有人在中间插入分支时依赖它。
-            self._tool_conv_ctx = conversation_id
+            self._tool_conv_ctx = int(session_conv_id or conversation_id or 0)
             # P0-6（2026-10-06）：透传当前用户给工具链权限闸（与 execute.py 同口径）。
             # stream 是**生产主路径**（execute 是冷路径），权限闸必须在这里也生效，
             # 否则「生产走 stream、自检走 execute」会给出虚假的安全结论。
@@ -5034,7 +5076,7 @@ class StreamMixin:
                 _ctx_skill = None           # None = 未命中技能（工具直接挂 agent 下）
                 _clarify_req = None
                 _rnd = -1
-                _prev_tool_idx = []
+                _elide_queue = []           # [(轮次, 消息下标)] —— 跨轮省略的**待办队列**
                 _fu_budget = 3              # 续跑轮同样限 3 次补充（与首轮同口径）
                 _fu_used = 0
                 tools_def = _tools_def_full  # 恢复完整工具集（offload 注入/预算闸会改它）
@@ -5147,8 +5189,8 @@ class StreamMixin:
                         return None
 
                 _rnd = 0  # 工具轮次计数（供 reasoning 事件 round/phase 标识；无工具直出时保持 0）
-                # 2026-09-17 S3：上一轮已回填的 tool 消息下标（下轮仅清空其 content，不删除消息）
-                _prev_tool_idx = []
+                # 2026-09-17 S3：已回填的 tool 消息**按下标省略 content**（不删消息——协议要求成对）
+                _elide_queue = []           # [(轮次, 消息下标)]
                 # ── P1-②（2026-10-07）follow-up 队列（第3 批阶段 1）──
                 #★ 循环头消费 follow-up，而不是循环尾：消费点在**轮次边界**，
                 #   此时上一轮 messages 已完整（含 tool_result），不会破坏 tool_call 配对。
@@ -5592,19 +5634,66 @@ class StreamMixin:
                             #   每次都把整章正文再灌一遍上下文 ⇒ 上下文爆炸 + 60s+ 耗时。
                             #   判据：章节正文是模型**唯一**的正文来源、且**不可再生**
                             #   （清掉就只能重取）⇒ 保留；其他工具结果照旧省略（它们可再生）。
-                            for _pi in _prev_tool_idx:
-                                if 0 <= _pi < len(messages) and messages[_pi].get("role") == "tool":
-                                    if messages[_pi].get("name") == "read_attachment_section":
-                                        continue      # ← 章节正文：保留，不省略
-                                    messages[_pi]["content"] = json.dumps(
-                                        {"ok": True, "result": "",
-                                         "note": "前序工具结果已省略——其结论已体现在后续推理中"},
-                                        ensure_ascii=False)
-                            _prev_tool_idx = []
+                            # ★★ 2026-10-30（用户「每次人工确认后都无辜终止」的**直接根因**）：
+                            #   原实现把上一轮所有 tool 结果替换成
+                            #     {"ok":true,"result":"","note":"前序工具结果已省略——其结论已体现在后续推理中"}
+                            #   ——**连 offload 编号和头部摘要一起抹掉**。于是从第 3 轮起：
+                            #     · 模型看不到任何明细（真机原话：「本轮所有读接口回执均为
+                            #       『前序工具结果已省略』——没有拿到任何一个可核验的元素明细」）；
+                            #     · 想按 offload 编号重读，但编号已被抹掉 ⇒ 只能**猜编号**
+                            #       （实测 tool_call_logs id=6238：「offload #2608 不存在」，
+                            #        而 #2608 是**下一笔**调用的编号，猜错一位）；
+                            #     · 猜错/重查都算失败轮 ⇒ 撞上 max_failed_rounds=3 ⇒ 强制收尾
+                            #       ⇒ 用户看到「无辜终止」。
+                            #   这是"为省 token 把可寻址性一起省掉"的典型错误：
+                            #   offload 模块的**全部价值**就是"引用块 + 按 id 重读"，抹掉编号
+                            #   等于把该模块降级成"纯丢弃"。
+                            #   修法两条，缺一不可：
+                            #     ① **保留最近 K 轮原文**（默认 1）——多步核对天然要回看上一轮；
+                            #       实测上一轮结果就是模型最需要的那份。
+                            #     ② 更早的轮次省略，但**保留可寻址摘要**：工具名 + 头部 400 字
+                            #       + offload 编号；有编号就能精确重读，不必重查、不必猜。
+                            #   为什么用"轮次"而不是"条数"：一轮里可能 1 条也可能 5 条，
+                            #   按条数切会把同一轮的证据切一半，反而更难推理。
+                            _keep_r = _KEEP_TOOL_ROUNDS
+                            _still = []
+                            for _rno, _pi in _elide_queue:
+                                if _rno > _rnd - 1 - _keep_r:
+                                    _still.append((_rno, _pi))      # 还在保留窗口内
+                                    continue
+                                if not (0 <= _pi < len(messages)) or messages[_pi].get("role") != "tool":
+                                    continue
+                                if messages[_pi].get("name") == "read_attachment_section":
+                                    _still.append((_rno, _pi))     # 章节正文：不可再生，永不省略
+                                    continue
+                                _old = messages[_pi].get("content")
+                                try:
+                                    _old_s = _old if isinstance(_old, str) else json.dumps(
+                                        _old, ensure_ascii=False)
+                                except Exception:
+                                    _old_s = str(_old)[:4000]
+                                # ★ offload 编号：从引用块里抠出来。**这是重读的唯一钥匙**，
+                                #   拿不到就降级为"请重新调用该工具"，而不是让模型猜。
+                                _m_oid = re.search(r"offload\s*#(\d+)", _old_s or "")
+                                _oid_v = int(_m_oid.group(1)) if _m_oid else 0
+                                _tnm = messages[_pi].get("name") or "-"
+                                _head = (_old_s or "")[:400]
+                                _note = ("前序工具结果已省略（工具 %s，第 %d 轮）"
+                                         % (_tnm, _rno + 1))
+                                if _oid_v:
+                                    _note += "；**全文可直接重读**：tool_result_fetch(id=%d)" % _oid_v
+                                else:
+                                    _note += "；该结果未 offload，如需请重新调用 %s" % _tnm
+                                messages[_pi]["content"] = json.dumps(
+                                    {"ok": True, "result": "", "note": _note,
+                                     "head": _head,
+                                     **({"offload_id": _oid_v} if _oid_v else {})},
+                                    ensure_ascii=False)
+                            _elide_queue = _still
                             messages.append(pmsg)
                             messages.extend(results)
                             for _k in range(len(messages) - len(results), len(messages)):
-                                _prev_tool_idx.append(_k)
+                                _elide_queue.append((_rnd, _k))
         # P0-按需工具：本轮工具结果全弱相关 → 收敛（跳出循环走兜底流式生成，避免连环调用）
                             # ⚠️ 分母用**执行数**（`_exec_calls`）而非 `len(results)`：
                             #    P0-① 为未执行尾部补了 skipped 结果，计入分母会让本该收敛的场景
@@ -6390,7 +6479,7 @@ class StreamMixin:
                 # P0-3：主会话产出记忆沉淀（LLM 提炼 or 规则降级，每会话限 2 次）
                 self._deposit_session_memory(user_input, llm_content, intent)
                 # P0-5：技能使用反馈采集（主会话直行路径）
-                self._record_skill_feedback(conversation_id=int(conversation_id or 0), intent=intent, output_content=llm_content)
+                self._record_skill_feedback(conversation_id=_sess_conv, intent=intent, output_content=llm_content)
                 card_data = json.dumps({
                     "intent": intent,
                     "agent": agent_def.name,
