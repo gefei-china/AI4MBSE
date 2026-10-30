@@ -22,6 +22,8 @@
     python tools/intent_eval_snapshot.py                    # 跑全部集合
     python tools/intent_eval_snapshot.py --sets gold,silver # 只跑指定集合
     python tools/intent_eval_snapshot.py --limit 20         # 每集合只跑前 N 条（快速体检）
+    python tools/intent_eval_snapshot.py --no-resume         # 忽略进度文件全量重算
+                                          （**改了路由器实现后必须加它**，否则续跑会复用旧预测）
 """
 import argparse
 import collections
@@ -37,6 +39,10 @@ sys.path.insert(0, ROOT)
 
 OUT_DIR = os.path.join(ROOT, "docs", "评测", "nightly")
 OUT = os.path.join(OUT_DIR, "latest-intent-report.json")
+# 断点续跑用。为什么必须有：412 条 × LLM 兜底 ≈ 10~20 分钟，
+# 而**进程被杀是常态**（会话中断/机器休眠/手动 Ctrl+C）。第一版没有它，
+# 实测被中断一次就白跑 166 次 detect 调用（每条都真花额度）。
+PROGRESS = os.path.join(ROOT, "tmp", "intent_eval_progress.jsonl")
 
 SETS = {
     # 金标：只有人能给的标签
@@ -76,7 +82,7 @@ def _macro_f1(pairs):
     return round(sum(f1s) / len(f1s), 4) if f1s else 0.0
 
 
-def run_set(name, sql, limit=0):
+def run_set(name, sql, limit=0, resume=True):
     from agent.intent import IntentRouter
     from core.stats import wilson_ci
     from database import get_db
@@ -102,22 +108,61 @@ def run_set(name, sql, limit=0):
     except Exception as _e:      # noqa: BLE001
         print("    [warn] 清缓存失败（不影响评测，但可能读到旧结论）：%s" % str(_e)[:80])
 
+    # ── 断点续跑：已完成样本直接复用结论 ──
+    # 键 = (集合名, 文本摘要)。**不含 want** —— 标签若被人改过，续跑必须用**新标签**
+    # 重新计分（预测不用重跑，那是模型行为，与标签无关）。这是"续跑不等于复用结论"的分界。
+    done = {}
+    if resume:
+        try:
+            with open(PROGRESS, encoding="utf-8") as f:
+                for ln in f:
+                    try:
+                        d = json.loads(ln)
+                    except Exception:
+                        continue          # 半行（进程在写的时候被杀）⇒ 丢弃，下次重算
+                    if d.get("set") and d.get("h"):
+                        done[(d["set"], d["h"])] = d
+        except FileNotFoundError:
+            pass
+        except Exception as _e:      # noqa: BLE001
+            print("    [warn] 进度文件读取失败（当作全新跑）：%s" % str(_e)[:80])
+
     rt = IntentRouter()
     pairs, outs, t0 = [], [], time.time()
-    for txt, want in rows:
-        try:
-            c = get_db()
-            got = rt.detect(txt, conn=c)
-            m = rt.get_last_meta() or {}
-            c.close()
-        except Exception as e:      # noqa: BLE001
-            got, m = "", {"route": "exc", "confidence": 0.0, "err": str(e)[:80]}
-        pairs.append((want, got))
-        outs.append({"h": _h(txt), "want": want, "got": got,
-                     "ok": bool(want == got), "route": m.get("route"),
-                     "conf": round(float(m.get("confidence") or 0), 3)})
-        if len(outs) % 25 == 0:
-            print("    … %s %d/%d（%.0fs）" % (name, len(outs), len(rows), time.time() - t0))
+    reused = 0
+    _pf = open(PROGRESS, "a", encoding="utf-8") if resume else None
+    try:
+        for txt, want in rows:
+            h = _h(txt)
+            hit = done.get((name, h))
+            if hit:
+                got, route, conf = hit.get("got"), hit.get("route"), hit.get("conf")
+                reused += 1
+            else:
+                try:
+                    c = get_db()
+                    got = rt.detect(txt, conn=c)
+                    m = rt.get_last_meta() or {}
+                    c.close()
+                except Exception as e:      # noqa: BLE001
+                    got, m = "", {"route": "exc", "confidence": 0.0, "err": str(e)[:80]}
+                route, conf = m.get("route"), round(float(m.get("confidence") or 0), 3)
+                if _pf is not None:
+                    _pf.write(json.dumps({"set": name, "h": h, "got": got,
+                                          "route": route, "conf": conf,
+                                          "want": want}, ensure_ascii=False) + "\n")
+                    _pf.flush()        # 逐条 flush：被杀也只丢当条，不丢整批
+            pairs.append((want, got))
+            outs.append({"h": h, "want": want, "got": got,
+                         "ok": bool(want == got), "route": route, "conf": conf})
+            if len(outs) % 25 == 0:
+                print("    … %s %d/%d（%.0fs，复用 %d）"
+                      % (name, len(outs), len(rows), time.time() - t0, reused))
+    finally:
+        if _pf is not None:
+            _pf.close()
+    if reused:
+        print("    复用已完成样本 %d 条（断点续跑）" % reused)
 
     n = len(pairs)
     k = sum(1 for w, g in pairs if w == g)
@@ -148,6 +193,8 @@ def main():
     ap.add_argument("--sets", default="gold,silver,synth")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--no-write", action="store_true")
+    ap.add_argument("--no-resume", action="store_true",
+                    help="忽略进度文件，全部重算（改了路由器实现后必须用它）")
     a = ap.parse_args()
 
     names = [x.strip() for x in a.sets.split(",") if x.strip()]
@@ -164,7 +211,7 @@ def main():
             print("跳过未知集合：%s" % nm)
             continue
         print("\n=== 集合 %s ===" % nm)
-        report["sets"][nm] = run_set(nm, SETS[nm], a.limit)
+        report["sets"][nm] = run_set(nm, SETS[nm], a.limit, resume=not a.no_resume)
         s = report["sets"][nm]
         print("  n=%d acc=%.4f CI95=[%.1f%%, %.1f%%] 宽 %.1f 点 macro-F1=%.4f  %.1fs"
               % (s["n"], s["accuracy"], s["ci95"][0] * 100, s["ci95"][1] * 100,
