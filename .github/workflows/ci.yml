@@ -1174,6 +1174,15 @@ jobs:
       # ⚠️ 刻意**不**排除 db 之外的路径：CI 跑在 checkout 出来的干净树上，
       #    门禁只读数据库（生产库不入库，见 .gitignore 的 mbse.db* 规则），
       #    因此工作区变脏**只可能**是脚本改文件。
+      # ── 2026-10-30 新增两个门禁（此前只在本机跑，未接进 CI）──
+      # 为什么必须接：`verify_gate_wiring` 的 W1a 明确要求"每个门禁要么进 CI、
+      # 要么带理由豁免"。不接 = 这两个门禁永远不会在合并前跑，
+      # 等于"写了判据但没人执行"（与配置谎言同型）。
+      - name: Guard 控制面（写类工具幂等 / 停滞自愈成本闸 / 预算层级真源，115 项 + 8 变异）
+        run: python tools/verify/verify_control_plane.py
+      - name: Guard 运行时稳定性（优雅关闭 / 并发闸 / 墙钟 / 超时保留产出，80 项 + 10 变异）
+        run: python tools/verify/verify_runtime_stability.py
+
       - name: Guard 工作区洁净（门禁跑完不得留下任何改动）
         run: |
           git status --porcelain
