@@ -86,12 +86,35 @@ def main():
     sets = rep.get("sets") or {}
 
     hr("[A] 规模闸：语料必须够支撑统计判据")
+    # 规模口径用「采集到的样本数」(n_raw)：剔除的非路由意图（如 disabled 的 system_mgmt
+    # 误标样本）仍计入"我们采集了多少生产语句"，只不计入评分——避免阈值被排除动作误伤。
     corpus = int(rep.get("corpus_n") or sum(int(v.get("n") or 0) for v in sets.values()))
-    prod = int((sets.get("gold") or {}).get("n") or 0) + int((sets.get("silver") or {}).get("n") or 0)
-    check("A1 语料合计 %d ≥ %d（生成于 %s）" % (corpus, MIN_CORPUS, rep.get("generated_at")),
-          corpus >= MIN_CORPUS, "语料不足 ⇒ 区间过宽，判据不成立")
-    check("A2 生产语句口径（gold+silver）%d ≥ %d" % (prod, MIN_PROD),
-          prod >= MIN_PROD, "生产语句才是被评判的对象；synth 属改写鲁棒性，不计入")
+    corpus_raw = sum(int((v.get("n_raw") if v.get("n_raw") is not None else v.get("n")) or 0)
+                    for v in sets.values())
+    prod_raw = int((sets.get("gold") or {}).get("n_raw")
+                   if (sets.get("gold") or {}).get("n_raw") is not None
+                   else (sets.get("gold") or {}).get("n") or 0)
+    prod_raw += int((sets.get("silver") or {}).get("n_raw")
+                    if (sets.get("silver") or {}).get("n_raw") is not None
+                    else (sets.get("silver") or {}).get("n") or 0)
+    prod_scored = int((sets.get("gold") or {}).get("n") or 0) + int((sets.get("silver") or {}).get("n") or 0)
+    check("A1 语料合计 %d ≥ %d（生成于 %s）" % (corpus_raw, MIN_CORPUS, rep.get("generated_at")),
+          corpus_raw >= MIN_CORPUS, "语料不足 ⇒ 区间过宽，判据不成立")
+    detail = ("生产语句（gold+silver）采集 %d，剔除非路由意图后评分 %d"
+              % (prod_raw, prod_scored)) if prod_raw != prod_scored else ""
+    check("A2 生产语句口径（gold+silver）采集 %d ≥ %d" % (prod_raw, MIN_PROD),
+          prod_raw >= MIN_PROD, "生产语句才是被评判的对象；synth 属改写鲁棒性，不计入")
+    # A4 环境闸：**LLM 不可用时产出的报告不得进入判定**。
+    # 本轮实测教训：qwen3.8-max 在跑批中途额度耗尽（403 Unpurchased），
+    # 路由器的 LLM 裁判静默退回启发式 ⇒ 同一 48 条 gold 从 0.8958 掉到 0.7917，
+    # 而报告里**没有任何异常字段**。若这种数字进了基线，之后所有棘轮判定都失去意义。
+    _env = rep.get("env") or {}
+    check("A4 报告产自 LLM 可用环境（llm_ok=%s, provider=%s）"
+          % (_env.get("llm_ok"), _env.get("provider") or "未记录"),
+          _env.get("llm_ok") is True,
+          "报告缺 env.llm_ok 或为 false ⇒ 这是退化层成绩，与历史基线不可比"
+          "（重跑：tools/intent_eval_snapshot.py；若确需测降级层加 --allow-llm-down）")
+
     missing = [s for s in SETS if s not in sets]
     check("A3 三个集合齐备（缺则说明跑批器被裁剪过，报告不可用于判定）",
           not missing, "缺少：%s" % missing)
@@ -235,6 +258,9 @@ def main():
         rep = {"generated_at": "selftest", "sets": {
             "gold": _set(g_n, g_k, outs_gold), "silver": _set(s_n, s_k), "synth": _set(y_n, y_k)}}
         rep["corpus_n"] = g_n + s_n + y_n
+        rep["corpus_n_raw"] = g_n + s_n + y_n
+        # 合成报告默认视为"LLM 可用环境产出"（A4 环境闸要求），否则 E1 清白报告会误红。
+        rep["env"] = {"llm_ok": True, "provider": "selftest"}
         return rep
 
     # E1 正常报告（无基线）⇒ 必须放行

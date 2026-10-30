@@ -1,0 +1,3397 @@
+{
+ "generated_at": "2026-10-30 16:45:39",
+ "commit": "d1c8ca3",
+ "db": "mbse.db",
+ "sets": {
+  "gold": {
+   "n": 48,
+   "correct": 44,
+   "dropped": 0,
+   "n_raw": 48,
+   "accuracy": 0.9167,
+   "ci95": [
+    0.8045,
+    0.9671
+   ],
+   "width_pts": 16.27,
+   "macro_f1": 0.9477,
+   "confusion": {
+    "chat": {
+     "chat": 8
+    },
+    "design": {
+     "design": 8,
+     "chat": 1,
+     "review": 1
+    },
+    "impact": {
+     "impact": 4
+    },
+    "knowledge_qa": {
+     "knowledge_qa": 10,
+     "chat": 2
+    },
+    "report_generation": {
+     "report_generation": 4
+    },
+    "requirement_analysis": {
+     "requirement_analysis": 2
+    },
+    "requirement_quality": {
+     "requirement_quality": 2
+    },
+    "review": {
+     "review": 4
+    },
+    "system_mgmt": {
+     "system_mgmt": 2
+    }
+   },
+   "elapsed_s": 0.0,
+   "routes": {
+    "explain": 9,
+    "chat": 3,
+    "semantic_weak": 1,
+    "rule": 16,
+    "semantic": 4,
+    "rule_scored": 4,
+    "fused": 1,
+    "llm": 2,
+    "llm_conflict": 4,
+    "speech_act": 4
+   },
+   "outcomes": [
+    {
+     "h": "4045dbe71f6b",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "6908d7f868ef",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "ad4ec365eede",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "5d2be562038a",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "a5b48d1f452d",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "e5a23c6ec8c0",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "17c0970a25ea",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "e4291daad9bd",
+     "want": "knowledge_qa",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "83ad5699fc2f",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "semantic_weak",
+     "conf": 0.696
+    },
+    {
+     "h": "c7c8ed3c4769",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "7aff15d0c814",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "d3b572288ab5",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.873
+    },
+    {
+     "h": "f0d992205d6a",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "fc9f4bbca365",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "b27c68964c67",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "b3b3f2fa4953",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "1e21b55aa526",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "03d90dafdca1",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "53f4399b4417",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "49c797f2cb5c",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "d59b231e6394",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "0f30ea1bf02c",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "c643043befbc",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "da4d09d41e6e",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "15a028f12698",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.976
+    },
+    {
+     "h": "1824fdf4470b",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 1.0
+    },
+    {
+     "h": "597044ace8b5",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.949
+    },
+    {
+     "h": "440ee0853ad1",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "3d43bc74a646",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "300a21e4f7ec",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "b351f63afaf8",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "2fb544a3aab4",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "269c3b7ef0b2",
+     "want": "knowledge_qa",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "054cfa43fa59",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "08124a762106",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "70dc6b49e8f4",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "2c6d5ea65ab9",
+     "want": "design",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "c7bec14eac2f",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "585ffaa0d1d9",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "e39fd5b7c9d4",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "299770507310",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "f47fa9d85447",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "b92a454bd1d5",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "e5aa52dc7a1a",
+     "want": "design",
+     "got": "review",
+     "ok": false,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "ddaa17c3314f",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "91634d7a401f",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "fcf830ec36a0",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "97dbd0fed29b",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.85
+    }
+   ]
+  },
+  "silver": {
+   "n": 148,
+   "correct": 114,
+   "dropped": 16,
+   "n_raw": 164,
+   "accuracy": 0.7703,
+   "ci95": [
+    0.6962,
+    0.8307
+   ],
+   "width_pts": 13.45,
+   "macro_f1": 0.6804,
+   "confusion": {
+    "chat": {
+     "chat": 38,
+     "design": 1,
+     "requirement_analysis": 2,
+     "knowledge_qa": 8,
+     "requirement_quality": 1
+    },
+    "design": {
+     "design": 35,
+     "knowledge_qa": 4,
+     "chat": 6
+    },
+    "impact": {
+     "impact": 1
+    },
+    "knowledge_qa": {
+     "knowledge_qa": 25,
+     "chat": 2,
+     "requirement_analysis": 2,
+     "impact": 1,
+     "design": 3
+    },
+    "report_generation": {
+     "report_generation": 4
+    },
+    "requirement_analysis": {
+     "requirement_analysis": 6,
+     "knowledge_qa": 2,
+     "review": 1
+    },
+    "review": {
+     "review": 5,
+     "chat": 1
+    }
+   },
+   "elapsed_s": 0.0,
+   "routes": {
+    "rule": 40,
+    "explain": 32,
+    "speech_act": 10,
+    "chat": 4,
+    "rule_scored": 6,
+    "fused": 3,
+    "llm_weak": 25,
+    "llm_first_weak": 13,
+    "llm": 6,
+    "semantic": 3,
+    "llm_conflict": 3,
+    "semantic_weak": 2,
+    "llm_first": 1
+   },
+   "outcomes": [
+    {
+     "h": "ec318ae9e296",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "27fb52f96aa1",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "8102de088bca",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "da9f4b85dd13",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "a05913e1de2f",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "d3291d2a5e5c",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "01399a45c94d",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "b4c07660c535",
+     "want": "design",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "905767b1e6fd",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "3330ec159654",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "abffe25899dc",
+     "want": "knowledge_qa",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "65a48c6b8a34",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "59673c91a02a",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "d49db6ee3217",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "e9fedb91f591",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "0d39cb33a58d",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.4
+    },
+    {
+     "h": "85155a19dbd5",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "64fe1367d75d",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "0c9be4a009a6",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "0c1a80a55f5d",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "3f807a201a4a",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "3a94cd1c85f7",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "697057af493b",
+     "want": "chat",
+     "got": "design",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "4cf0a3885341",
+     "want": "chat",
+     "got": "requirement_analysis",
+     "ok": false,
+     "route": "llm_first_weak",
+     "conf": 0.6
+    },
+    {
+     "h": "dca7171c3f84",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "b3f6952c65d7",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "890e591ace9f",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "b5349ef39658",
+     "want": "requirement_analysis",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "speech_act",
+     "conf": 0.85
+    },
+    {
+     "h": "baf737e2a983",
+     "want": "chat",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "74c73700adf4",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "ca87cc7272d9",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "17c0dfcb9fd0",
+     "want": "chat",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "e6b842c83265",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "8d678006f128",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "bcd58b27af58",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "1bd828dfad7e",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "2ed66e6f629a",
+     "want": "chat",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "9fb972530739",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "e0efa9f672bf",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "a401ea295da1",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "2b4261705581",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "6f30383104af",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "0298fa60535a",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "5aff44940c98",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "48cb83c9bf91",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "7adee0b4d59d",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "67e93928b62c",
+     "want": "chat",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "777064bb0bf9",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "8ad93d3c71f0",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.2
+    },
+    {
+     "h": "9ad3b581050a",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "7642666e6967",
+     "want": "chat",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "semantic",
+     "conf": 0.701
+    },
+    {
+     "h": "0af6e1415b9e",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "2c1c1b2635cb",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "0f7c96ba96da",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "ab2a889444d2",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "9489cd8dd8cd",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "38b80afce9ed",
+     "want": "chat",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "4fb02bf50182",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.35
+    },
+    {
+     "h": "4443c1eb1942",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.35
+    },
+    {
+     "h": "7bf5f4b0274c",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "semantic_weak",
+     "conf": 0.695
+    },
+    {
+     "h": "86e7ca9eb33c",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "768707578979",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "694cef0feda1",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.35
+    },
+    {
+     "h": "bb091b8999ae",
+     "want": "design",
+     "got": "chat",
+     "ok": false,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "342e7d6ab2c0",
+     "want": "design",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "3c63d765b2ce",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "9739557c4d9a",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "7af31f573b0d",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "8ad6b17d74fb",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "265bbe9139e1",
+     "want": "chat",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "116bb99b1337",
+     "want": "requirement_analysis",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "88876d08628f",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "519504fc2aec",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "10ab35ff06a9",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "4cedd04630af",
+     "want": "chat",
+     "got": "requirement_analysis",
+     "ok": false,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "1b747ed5e4d1",
+     "want": "requirement_analysis",
+     "got": "review",
+     "ok": false,
+     "route": "semantic",
+     "conf": 0.752
+    },
+    {
+     "h": "6af75e84fb94",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.5
+    },
+    {
+     "h": "c4c21a656011",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "14af05084058",
+     "want": "knowledge_qa",
+     "got": "chat",
+     "ok": false,
+     "route": "llm_weak",
+     "conf": 0.35
+    },
+    {
+     "h": "0068d8934709",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "53e586cffc10",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "de3c33d3962c",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "85b7c9c47846",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "c26525987b3c",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "f50f4a35bc4c",
+     "want": "chat",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "b71bd3312293",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "3c1ed1b7e3a6",
+     "want": "design",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "ab9a5b69d42c",
+     "want": "knowledge_qa",
+     "got": "requirement_analysis",
+     "ok": false,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "448f20e2c3cd",
+     "want": "knowledge_qa",
+     "got": "impact",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "6a10c6cdcb33",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "670653e546ff",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "22655e7ba2e1",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "fe668db9e5e2",
+     "want": "design",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "59588f0c7deb",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "6dc57008735d",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.758
+    },
+    {
+     "h": "3e226554194e",
+     "want": "design",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "09bed4fb079e",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "694f3b33bcb7",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "b63902536119",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "def934b164a4",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "f744e0b36427",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "0266adee89a3",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "1c80e1acbb56",
+     "want": "design",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "4a94c6cdb9f7",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "cb8b5f3bb676",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "b53ccbc7f274",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "d61c44def714",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "bbe39d54b6eb",
+     "want": "knowledge_qa",
+     "got": "requirement_analysis",
+     "ok": false,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "c2d054e5b379",
+     "want": "design",
+     "got": "chat",
+     "ok": false,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "d26742b153fe",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "e1636b043876",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "388fac835e25",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "b184547f5c6b",
+     "want": "design",
+     "got": "chat",
+     "ok": false,
+     "route": "llm_weak",
+     "conf": 0.35
+    },
+    {
+     "h": "ad4e0c4afa1c",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "llm_first",
+     "conf": 0.75
+    },
+    {
+     "h": "69ca864649a1",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "1676a4a9a68f",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "2c7ed04e5bcd",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "743b406ac491",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "89005107465f",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "5c2f2878be54",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "f00ddc249f59",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "8b5e371dd71b",
+     "want": "chat",
+     "got": "requirement_quality",
+     "ok": false,
+     "route": "semantic_weak",
+     "conf": 0.654
+    },
+    {
+     "h": "2fff3dcfc121",
+     "want": "review",
+     "got": "chat",
+     "ok": false,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "7371f60dc4e1",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "9e7d4e3fd158",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "bb61d0567054",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "b126b7daf267",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.35
+    },
+    {
+     "h": "3bfc9576561c",
+     "want": "design",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "40e1898ecebf",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.35
+    },
+    {
+     "h": "ab9c279ef3cf",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.35
+    },
+    {
+     "h": "7ad6793b071d",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "729dadcd2e0a",
+     "want": "knowledge_qa",
+     "got": "design",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "d3b9d3ef01d9",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "c89881695e86",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "dbc0ee233a91",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "0c3384de1c93",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "d4cfaa0004dc",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "3cc7285ed98c",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "aa8a60d54418",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "7d16138219d5",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "d7b0f4e374c3",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "d129e0573871",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "090d220df801",
+     "want": "knowledge_qa",
+     "got": "design",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "9be739561398",
+     "want": "knowledge_qa",
+     "got": "design",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "5c652215a1bc",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "0d94fb476019",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.2
+    },
+    {
+     "h": "db687c2ba460",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "8fb5f56a283c",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    }
+   ]
+  },
+  "synth": {
+   "n": 200,
+   "correct": 146,
+   "dropped": 0,
+   "n_raw": 200,
+   "accuracy": 0.73,
+   "ci95": [
+    0.6646,
+    0.7868
+   ],
+   "width_pts": 12.22,
+   "macro_f1": 0.7378,
+   "confusion": {
+    "chat": {
+     "system_mgmt": 1,
+     "chat": 19,
+     "knowledge_qa": 2
+    },
+    "design": {
+     "design": 13,
+     "chat": 3,
+     "knowledge_qa": 1,
+     "review": 1
+    },
+    "impact": {
+     "impact": 18,
+     "knowledge_qa": 1,
+     "report_generation": 2
+    },
+    "knowledge_qa": {
+     "requirement_quality": 3,
+     "review": 4,
+     "requirement_analysis": 2,
+     "knowledge_qa": 24,
+     "chat": 4,
+     "design": 1,
+     "impact": 1
+    },
+    "report_generation": {
+     "design": 2,
+     "report_generation": 10,
+     "review": 3,
+     "impact": 2,
+     "requirement_analysis": 1
+    },
+    "requirement_analysis": {
+     "requirement_analysis": 17,
+     "design": 1,
+     "knowledge_qa": 2
+    },
+    "requirement_quality": {
+     "requirement_quality": 15,
+     "chat": 5,
+     "report_generation": 1,
+     "requirement_analysis": 1,
+     "review": 2
+    },
+    "review": {
+     "review": 17,
+     "knowledge_qa": 2
+    },
+    "system_mgmt": {
+     "chat": 4,
+     "system_mgmt": 13,
+     "knowledge_qa": 2
+    }
+   },
+   "elapsed_s": 0.0,
+   "routes": {
+    "rule": 52,
+    "semantic": 33,
+    "chat": 10,
+    "llm_first_weak": 10,
+    "llm_conflict": 5,
+    "semantic_weak": 8,
+    "fused": 11,
+    "explain": 21,
+    "llm_first": 6,
+    "rule_scored": 15,
+    "llm_weak": 5,
+    "llm": 15,
+    "speech_act": 9
+   },
+   "outcomes": [
+    {
+     "h": "7ba76c8b63f3",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "26c925e1c0d1",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.79
+    },
+    {
+     "h": "7e4d2041afbe",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "368d0e13b413",
+     "want": "knowledge_qa",
+     "got": "requirement_quality",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "b020ce5be57d",
+     "want": "requirement_quality",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "cc8c72128b03",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "595d37b6a284",
+     "want": "requirement_quality",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "a85a3605b4e9",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.756
+    },
+    {
+     "h": "6d38553aaf4b",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "92469775ead0",
+     "want": "requirement_quality",
+     "got": "report_generation",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "25277ec668fe",
+     "want": "requirement_quality",
+     "got": "requirement_analysis",
+     "ok": false,
+     "route": "llm_first_weak",
+     "conf": 0.6
+    },
+    {
+     "h": "73f659566435",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "719c19d58d99",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.899
+    },
+    {
+     "h": "7e377026c4e1",
+     "want": "requirement_quality",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "4f38f83573eb",
+     "want": "knowledge_qa",
+     "got": "requirement_quality",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "4c622e089d20",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.763
+    },
+    {
+     "h": "b00d76fd88b2",
+     "want": "knowledge_qa",
+     "got": "requirement_quality",
+     "ok": false,
+     "route": "semantic",
+     "conf": 0.854
+    },
+    {
+     "h": "76307d633040",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.751
+    },
+    {
+     "h": "74bcd03bdb9e",
+     "want": "requirement_quality",
+     "got": "review",
+     "ok": false,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "953236538523",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "044d4d8b8ee9",
+     "want": "requirement_quality",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "d2790ec73340",
+     "want": "requirement_quality",
+     "got": "review",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "4963c8814587",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "33b6347e2bb7",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "1a4d97511def",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "semantic_weak",
+     "conf": 0.699
+    },
+    {
+     "h": "e5cddd8a0c79",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.784
+    },
+    {
+     "h": "b0afad0f25cd",
+     "want": "requirement_quality",
+     "got": "requirement_quality",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.755
+    },
+    {
+     "h": "1ab1753d6405",
+     "want": "requirement_quality",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "fadbc9b19afd",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "7bb4492379f6",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "540344f3454c",
+     "want": "requirement_analysis",
+     "got": "design",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "2d79962a3c71",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.898
+    },
+    {
+     "h": "b4a483faa455",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "b18f7b8efd37",
+     "want": "requirement_analysis",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "70071b8c605c",
+     "want": "knowledge_qa",
+     "got": "review",
+     "ok": false,
+     "route": "semantic_weak",
+     "conf": 0.686
+    },
+    {
+     "h": "c6ea72a33489",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "08de0163b353",
+     "want": "knowledge_qa",
+     "got": "requirement_analysis",
+     "ok": false,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "2cbaf5289bee",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.733
+    },
+    {
+     "h": "b6efdb25e7b4",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.783
+    },
+    {
+     "h": "646fabd06f30",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "418786793839",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "784328f9f58a",
+     "want": "requirement_analysis",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "b7a57714e182",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "llm_first",
+     "conf": 0.85
+    },
+    {
+     "h": "21a6736bf449",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.9
+    },
+    {
+     "h": "479f1cf4032a",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.887
+    },
+    {
+     "h": "eaa6097369f1",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "760448738e6c",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.9
+    },
+    {
+     "h": "52e0759d526a",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "6c1f944e0c89",
+     "want": "system_mgmt",
+     "got": "chat",
+     "ok": false,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "0f2db861408a",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.761
+    },
+    {
+     "h": "e3f56626cefc",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.77
+    },
+    {
+     "h": "9eb9b0794547",
+     "want": "system_mgmt",
+     "got": "chat",
+     "ok": false,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "7beb559ba4c3",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.775
+    },
+    {
+     "h": "5846c4c87fd8",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.747
+    },
+    {
+     "h": "e0064e268687",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.776
+    },
+    {
+     "h": "20083c16bce6",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.822
+    },
+    {
+     "h": "37016d89b38b",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic_weak",
+     "conf": 0.694
+    },
+    {
+     "h": "086d461284b5",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic_weak",
+     "conf": 0.685
+    },
+    {
+     "h": "1c5570f3643b",
+     "want": "system_mgmt",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "ae79788d9873",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.849
+    },
+    {
+     "h": "5ba5c790eda5",
+     "want": "system_mgmt",
+     "got": "chat",
+     "ok": false,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "c2ae68dc7508",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic_weak",
+     "conf": 0.679
+    },
+    {
+     "h": "4c4e7afb0242",
+     "want": "system_mgmt",
+     "got": "chat",
+     "ok": false,
+     "route": "llm_weak",
+     "conf": 0.3
+    },
+    {
+     "h": "013a675a1235",
+     "want": "chat",
+     "got": "system_mgmt",
+     "ok": false,
+     "route": "semantic",
+     "conf": 0.773
+    },
+    {
+     "h": "4eadb0efe186",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.881
+    },
+    {
+     "h": "cc5bf62c7a7f",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.789
+    },
+    {
+     "h": "0f763808a552",
+     "want": "system_mgmt",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "4054c1579b59",
+     "want": "system_mgmt",
+     "got": "system_mgmt",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.715
+    },
+    {
+     "h": "51c501e5609b",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "0a84fb442748",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "0dd92217ebda",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "2d5fb9ac5f85",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "b3b1fa599686",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "24efbdd8c4a6",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "dd8648432fff",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "7ad98363da5e",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "2f0f54323e82",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "a377f0d5c671",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "eceeecf5d9db",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "fused",
+     "conf": 0.92
+    },
+    {
+     "h": "9561d0395df8",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.739
+    },
+    {
+     "h": "e0931156223b",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "67281051952d",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "94d416949fc7",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "b3ca3f8e4aca",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.873
+    },
+    {
+     "h": "09bed5f79e07",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "490a5fcb079d",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "llm_first",
+     "conf": 0.95
+    },
+    {
+     "h": "e95381425a8f",
+     "want": "impact",
+     "got": "impact",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "7f37c63fa9f7",
+     "want": "impact",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "79f6a060cf4e",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "llm_first",
+     "conf": 0.85
+    },
+    {
+     "h": "4d2aec89c75d",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.758
+    },
+    {
+     "h": "78c80e37afa8",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "beb54fedd891",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "ea32b1334b8a",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "llm_first",
+     "conf": 0.85
+    },
+    {
+     "h": "7ccc649ee234",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "843bba532044",
+     "want": "knowledge_qa",
+     "got": "review",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "429fe8ad0f74",
+     "want": "knowledge_qa",
+     "got": "review",
+     "ok": false,
+     "route": "llm_first_weak",
+     "conf": 0.62
+    },
+    {
+     "h": "4bdb49251687",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.764
+    },
+    {
+     "h": "11fd3fa3ebac",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "9c0f85f7145f",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "9a2fdbd9a5f9",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "459dbcd005c5",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "5232e5cbb4f0",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "df12a8563015",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "semantic_weak",
+     "conf": 0.674
+    },
+    {
+     "h": "c8e7c725961c",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.704
+    },
+    {
+     "h": "2060ac6990eb",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "8b495f9c51e9",
+     "want": "review",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "478f7b3ab0a2",
+     "want": "review",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "1bc5f5a96e8a",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "b796c464d055",
+     "want": "report_generation",
+     "got": "design",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "15f5f13c5896",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "de2cf31aabf4",
+     "want": "report_generation",
+     "got": "review",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "995f1abca82a",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "ece5f939e5ed",
+     "want": "report_generation",
+     "got": "impact",
+     "ok": false,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "397c475e8ee8",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "7432684f3ba8",
+     "want": "report_generation",
+     "got": "review",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "5a0ef0f87080",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "semantic_weak",
+     "conf": 0.666
+    },
+    {
+     "h": "bb4323bfc60b",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "ab864969e752",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "345776cd6a35",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "01934cfb3b05",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "0cbb70095dea",
+     "want": "impact",
+     "got": "report_generation",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "0fe906c5b47a",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.711
+    },
+    {
+     "h": "8999ebe0b491",
+     "want": "impact",
+     "got": "report_generation",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "d545c3d02ae8",
+     "want": "report_generation",
+     "got": "requirement_analysis",
+     "ok": false,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "432b3ea64d0a",
+     "want": "report_generation",
+     "got": "review",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "4271325981ab",
+     "want": "report_generation",
+     "got": "design",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "704605f8a96f",
+     "want": "report_generation",
+     "got": "impact",
+     "ok": false,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "5e3415f08a57",
+     "want": "report_generation",
+     "got": "report_generation",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.8
+    },
+    {
+     "h": "258ff9dc1111",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "44fdd9b86c9a",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "e7c832378183",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "3fa748704ac6",
+     "want": "chat",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "1f028b46f32a",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "a23d1ef5a7d6",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm_weak",
+     "conf": 0.4
+    },
+    {
+     "h": "dabe695f96dc",
+     "want": "knowledge_qa",
+     "got": "review",
+     "ok": false,
+     "route": "semantic",
+     "conf": 0.718
+    },
+    {
+     "h": "a79075484b50",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "54317805212f",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "bd89dff3da5e",
+     "want": "knowledge_qa",
+     "got": "chat",
+     "ok": false,
+     "route": "llm_conflict",
+     "conf": 0.6
+    },
+    {
+     "h": "4aff1189ac04",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "411ea288457a",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "f5d23746c895",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "c585aeb9b3f4",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "c90e9c3f04ca",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "d815da801f8f",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "8ae5f71f4a0a",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "273b2b3eddd8",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "786e5c8269f6",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.85
+    },
+    {
+     "h": "b4aafc798a9f",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "llm",
+     "conf": 0.9
+    },
+    {
+     "h": "a4145d777dca",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.774
+    },
+    {
+     "h": "28034460d027",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.62
+    },
+    {
+     "h": "48a08f7fd9e2",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.6
+    },
+    {
+     "h": "833162113b82",
+     "want": "design",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "6556eef87458",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.55
+    },
+    {
+     "h": "3eace4f0a62f",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first",
+     "conf": 0.8
+    },
+    {
+     "h": "e792a1f55b77",
+     "want": "design",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "aa4dff9f7a7e",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "963d7ddea36e",
+     "want": "knowledge_qa",
+     "got": "design",
+     "ok": false,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "0e9dcc869014",
+     "want": "design",
+     "got": "review",
+     "ok": false,
+     "route": "llm_first_weak",
+     "conf": 0.7
+    },
+    {
+     "h": "b1487d174606",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first",
+     "conf": 0.9
+    },
+    {
+     "h": "e7a65c1afea8",
+     "want": "requirement_analysis",
+     "got": "requirement_analysis",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.62
+    },
+    {
+     "h": "0c5de21a2a48",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.72
+    },
+    {
+     "h": "d0d3058b7e9e",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "e90418c54bb5",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "2d2848e9d3f7",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "semantic",
+     "conf": 0.777
+    },
+    {
+     "h": "9a507655321b",
+     "want": "design",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "aa8f3e6231dc",
+     "want": "design",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "197c57f0a466",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "7cd472c76aa6",
+     "want": "design",
+     "got": "design",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "77df8f8ac8f3",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "c6a711815917",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "955fbda58266",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "4c2838868888",
+     "want": "knowledge_qa",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "4059a61a7743",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.85
+    },
+    {
+     "h": "dc7854b4ad5d",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "9c96c33870a2",
+     "want": "knowledge_qa",
+     "got": "chat",
+     "ok": false,
+     "route": "llm_weak",
+     "conf": 0.4
+    },
+    {
+     "h": "85719deb7147",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "8e10d300c4f9",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "a55df8c65aff",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "498fbc762bbd",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "2b19d5ccf9d6",
+     "want": "knowledge_qa",
+     "got": "requirement_analysis",
+     "ok": false,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "16490e654154",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "7d4e4774dbdb",
+     "want": "knowledge_qa",
+     "got": "impact",
+     "ok": false,
+     "route": "rule_scored",
+     "conf": 0.95
+    },
+    {
+     "h": "ae4f286b77f5",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "07e353ad3ad2",
+     "want": "review",
+     "got": "review",
+     "ok": true,
+     "route": "llm_first_weak",
+     "conf": 0.6
+    },
+    {
+     "h": "48d6e427da4a",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "fb05b05c4bad",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "rule",
+     "conf": 0.95
+    },
+    {
+     "h": "f38f3ee82b1a",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "semantic_weak",
+     "conf": 0.659
+    },
+    {
+     "h": "60dcf44798c3",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "a5358bba3973",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "12c58e68466f",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "aaa589902087",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "bd3a592e8352",
+     "want": "chat",
+     "got": "knowledge_qa",
+     "ok": false,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "94c3438e3619",
+     "want": "chat",
+     "got": "chat",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.6
+    },
+    {
+     "h": "ad4b55aca884",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.85
+    },
+    {
+     "h": "f77a4ce51a4a",
+     "want": "knowledge_qa",
+     "got": "chat",
+     "ok": false,
+     "route": "chat",
+     "conf": 0.0
+    },
+    {
+     "h": "07f0532dc798",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.85
+    },
+    {
+     "h": "283e1da8c90f",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "a7a2f190cc13",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.85
+    },
+    {
+     "h": "908fcf766528",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "explain",
+     "conf": 0.8
+    },
+    {
+     "h": "5d3f7fc86dae",
+     "want": "knowledge_qa",
+     "got": "knowledge_qa",
+     "ok": true,
+     "route": "speech_act",
+     "conf": 0.85
+    }
+   ]
+  }
+ },
+ "env": {
+  "llm_ok": true,
+  "provider_id": 71,
+  "provider": "deepseek-v4-flash",
+  "error": ""
+ },
+ "default_chat_provider": "deepseek-v4-flash",
+ "corpus_n": 396,
+ "corpus_n_raw": 412
+}

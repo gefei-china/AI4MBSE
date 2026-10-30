@@ -173,8 +173,32 @@ def main():
     with db_conn() as conn:
         cat = _catalog(conn)
         agents_desc = dict(cat)   # 分派视图用同一目录（Agent 名 == 意图名）
+        # ★ 标注协议修正（2026-10-30）：阶段意图（子 Agent）与已禁用 Agent 不得作为
+        #   顶层候选。直接用 active sub-agent 名当候选 ⇒ 子 Agent（view_expansion 等）
+        #   被当成顶层意图打标，造出 0 召回的"假回归"。改为：阶段意图折叠到粗类、
+        #   禁用 Agent 不入候选（与 tools/intent_eval_snapshot.py 的 INTENT_EQUIV /
+        #   NON_ROUTING_INTENTS 同源——单点真理，谁改了这里要同步）。
+        try:
+            from intent_eval_snapshot import INTENT_EQUIV, NON_ROUTING_INTENTS as _NRI
+        except Exception:
+            INTENT_EQUIV = {"architecture_skeleton": "design", "view_expansion": "design",
+                            "model_release": "design", "change_safety_gate": "impact",
+                            "model_validation_repair": "review", "trace_verification": "review",
+                            "requirement_structuring": "requirement_analysis",
+                            "methodology_resolver": "requirement_analysis", "多方案生成": "design"}
+            _NRI = {"system_mgmt"}
+        _coarse = {}
+        for k, v in cat.items():
+            if k in _NRI:
+                continue
+            _coarse[INTENT_EQUIV.get(k, k)] = v
+        cat = _coarse
+        agents_desc = dict(cat)
         # 系统管理 / 闲聊 不在 sub agent 里，但路由器会产出它们，必须进目录
-        for extra in ("system_mgmt", "chat"):
+        # （system_mgmt 仅作"可能产出"候选；其 silver 样本多为工程查询误标，
+        #  评测侧会按集合剔除，见 intent_eval_snapshot.NON_ROUTING_INTENTS）
+        for extra in ("system_mgmt", "chat", "design", "review", "requirement_analysis",
+                      "requirement_quality", "report_generation", "impact", "knowledge_qa"):
             cat.setdefault(extra, (extra, ""))
             agents_desc.setdefault(extra, (extra, ""))
 
