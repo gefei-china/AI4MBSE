@@ -58,7 +58,7 @@ function onStageEvent(ev){
           _subjLine = ev.intent ? `→ ${ev.agent||ev.intent}（HIL ${ev.hil_level||'-'}）` : '';
         }
         procAddStage('意图识别','done', _subjLine,
-                     '', _es && _es.note ? `<div style="font-size:11px;color:var(--mut);margin-top:4px;">${esc(_es.note)}</div>` : '');
+                     '', _es && _es.note ? `<div style="font-size:12.5px;color:var(--mut);margin-top:4px;">${esc(_es.note)}</div>` : '');
       }
     }
   } else if(name === '知识库检索'){
@@ -72,7 +72,7 @@ function onStageEvent(ev){
         // 2026-09-26 修复：徽章本身是 HTML —— 必须走 subHtml。原先进 sub 会被 esc() 转义，
         // 界面上直接把 `<span style=…>` 标签源码显示出来（实测截图反馈）。
         det = '';
-        detHtml = `<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;color:#fff;background:${_col};" title="${esc(ev.route_reason||'')}">${_lab}</span>`;
+        detHtml = `<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:12.5px;color:#fff;background:${_col};" title="${esc(ev.route_reason||'')}">${_lab}</span>`;
       }
       procAddStage('知识库检索','done', det, detHtml);
     }
@@ -401,8 +401,8 @@ function procAddSkill(ev){
   procUpsert('skill_'+key, {type:'skill', icon:'🧩', title:'技能执行：'+names,
     status:'done', statusText:'✓ 已注入',
     depth: 1, parent: ev.agent ? 'agent_'+ev.agent : null, agent: ev.agent||null, skillKey: key,
-    detail: `<div style="font-size:11.5px;color:var(--mut);line-height:1.6;">${esc(ev.note||'技能指令已注入生成阶段')}</div>` +
-      `<div style="font-size:10.5px;color:var(--mut);margin-top:4px;">触发方式：${ev.note&&ev.note.includes('指定')?'手动指定（/ 或 # 选择）':'触发词命中（消息含技能触发词）'}</div>`});
+    detail: `<div style="font-size:12.5px;color:var(--mut);line-height:1.6;">${esc(ev.note||'技能指令已注入生成阶段')}</div>` +
+      `<div style="font-size:12px;color:var(--mut);margin-top:4px;">触发方式：${ev.note&&ev.note.includes('指定')?'手动指定（/ 或 # 选择）':'触发词命中（消息含技能触发词）'}</div>`});
 }
 // V2.6 历史消息执行过程收口条：点击展开/收起时间线
 function histProcToggle(sumEl){
@@ -535,28 +535,28 @@ function procAddCompact(ev){
   const pct = cap ? Math.min(999, Math.round(before / cap * 100)) : 0;
   const afterPct = cap ? Math.min(100, Math.round(after / cap * 100)) : 0;
   const bar = `<div style="margin:6px 0 2px;">
-    <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--mut);margin-bottom:3px;">
+    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mut);margin-bottom:3px;">
       <span style="min-width:44px;">压缩前</span>
       <span style="flex:1;height:6px;border-radius:3px;background:var(--line);overflow:hidden;display:inline-block;">
         <i style="display:block;height:100%;width:${Math.min(100, pct)}%;${pct > 100 ? 'background:var(--red);' : 'background:var(--blue-d);'}"></i></span>
       <span style="min-width:110px;text-align:right;${pct > 100 ? 'color:var(--red);font-weight:600;' : ''}">${before} tok · ${pct}% 预算</span></div>
-    <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--mut);">
+    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mut);">
       <span style="min-width:44px;">压缩后</span>
       <span style="flex:1;height:6px;border-radius:3px;background:var(--line);overflow:hidden;display:inline-block;">
         <i style="display:block;height:100%;width:${afterPct}%;background:var(--green,#2F6F4F);"></i></span>
       <span style="min-width:110px;text-align:right;">${after} tok · ${afterPct}% 预算</span></div></div>`;
   let tiers = '';
   for(let i = 1; i <= tier; i++){
-    tiers += `<div style="font-size:11px;color:var(--mut);line-height:1.8;"><b style="color:var(--fg);">档${i}</b>　${_TIER_DESC[i] || ''}${i === tier ? '　<span style="color:var(--green,#2F6F4F);">← 实际收敛档</span>' : ''}</div>`;
+    tiers += `<div style="font-size:12.5px;color:var(--mut);line-height:1.8;"><b style="color:var(--fg);">档${i}</b>　${_TIER_DESC[i] || ''}${i === tier ? '　<span style="color:var(--green,#2F6F4F);">← 实际收敛档</span>' : ''}</div>`;
   }
   if(ev.tiers_planned && ev.tiers_planned > tier){
-    tiers += `<div style="font-size:10.5px;color:var(--mut);">（计划档${ev.tiers_planned}，档${tier} 裁完已入预算，提前收敛）</div>`;
+    tiers += `<div style="font-size:12px;color:var(--mut);">（计划档${ev.tiers_planned}，档${tier} 裁完已入预算，提前收敛）</div>`;
   }
-  const detail = `<div style="font-size:11.5px;line-height:1.7;">`
+  const detail = `<div style="font-size:12.5px;line-height:1.7;">`
     + `<div style="color:var(--mut);margin-bottom:2px;">输入估算 ${before} tok 超出总预算 ${cap} tok，自动分层压缩（system 本体/建模规则任何档不裁）：</div>`
     + bar + tiers
     + `<div style="margin-top:8px;"><span class="pr-act" style="color:var(--blue-d);" onclick="compactRecoveryAsk()">↩ 追问恢复被压缩的内容</span>`
-    + `<span style="font-size:10px;color:var(--mut);margin-left:8px;">历史原文全部在库，压缩只影响本次 prompt 组装</span></div></div>`;
+    + `<span style="font-size:12px;color:var(--mut);margin-left:8px;">历史原文全部在库，压缩只影响本次 prompt 组装</span></div></div>`;
   procUpsert('compact', {type:'compact', icon:'🗜', title:'上下文已压缩 · 档' + tier,
     sub: `省 ${ev.trimmed || Math.max(0, before - after)} tok · 压后 ${afterPct}% 预算`,
     status:'done', statusText:'✓ 已压缩', detail});
@@ -589,13 +589,13 @@ function procAddClarifyGate(ev){
   if(_procS.timeline.some(x=>x.id === id)) return;   // 同一轮只建一次（续跑可能重发）
   const qHtml = qs.map(q=>{
     const opts = (q.options||[]).map(o=>
-      `<span style="display:inline-block;border:1px solid var(--line);border-radius:4px;padding:1px 8px;margin:2px 4px 2px 0;font-size:10.5px;background:#fff;">${esc(o)}</span>`).join('');
+      `<span style="display:inline-block;border:1px solid var(--line);border-radius:4px;padding:1px 8px;margin:2px 4px 2px 0;font-size:12px;background:#fff;">${esc(o)}</span>`).join('');
     return `<div style="margin-top:6px;">
-      <div style="font-size:11.5px;"><b>${esc(q.question||'')}</b></div>
-      <div style="margin-top:3px;">${opts}${q.allow_custom!==false?'<span style="font-size:10px;color:var(--mut);">＋ 其他/自定义</span>':''}</div>
+      <div style="font-size:12.5px;"><b>${esc(q.question||'')}</b></div>
+      <div style="margin-top:3px;">${opts}${q.allow_custom!==false?'<span style="font-size:12px;color:var(--mut);">＋ 其他/自定义</span>':''}</div>
     </div>`;
   }).join('');
-  const detail = `<div style="font-size:11.5px;line-height:1.7;">`
+  const detail = `<div style="font-size:12.5px;line-height:1.7;">`
     + `<div style="color:var(--mut);">${esc(String(ev.title||'需要你确认以下内容才能继续').replace(/^❓\s*/,''))}</div>`
     + qHtml
     + `<div style="color:var(--mut);margin-top:8px;">请在<b>输入框上方</b>的确认卡中作答（或直接在输入框补充），回答后本流程继续。</div></div>`;
@@ -673,18 +673,18 @@ function procAddHilConfirm(ev){
     ? `<div style="margin-top:4px;"><b>本批共 ${bn} 项</b>（同类动作已合并，一次批准覆盖整批）</div>`
     : '';
   const args = ev.arguments ? (typeof ev.arguments === 'string' ? ev.arguments : JSON.stringify(ev.arguments, null, 1)) : '';
-  const detail = `<div style="font-size:11.5px;line-height:1.7;">`
+  const detail = `<div style="font-size:12.5px;line-height:1.7;">`
     + `<div><b>动作：</b>${esc(_toolActivity(tool) || tool)}</div>`
     + (prev ? `<div><b>影响面：</b>${esc(prev)}</div>` : '')
     + `<div><b>性质：</b>${_kindTxt}</div>`
     + _batchTxt
     + `<div style="color:var(--mut);margin-top:6px;">批准后才会真正执行；<b>在此之前不会产生任何副作用</b>。拒绝则该动作不生效。</div>`
-    + (args ? `<details style="margin-top:6px;"><summary style="cursor:pointer;color:var(--mut);font-size:11px;">查看原始参数</summary>`
-        + `<div style="max-height:120px;overflow:auto;white-space:pre-wrap;background:var(--bg,#f6f7f9);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:4px;font-size:10.5px;">${esc(args)}</div></details>` : '')
+    + (args ? `<details style="margin-top:6px;"><summary style="cursor:pointer;color:var(--mut);font-size:12.5px;">查看原始参数</summary>`
+        + `<div style="max-height:120px;overflow:auto;white-space:pre-wrap;background:var(--bg,#f6f7f9);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:4px;font-size:12px;">${esc(args)}</div></details>` : '')
     + `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">`
       + `<button class="btn sm ${irreversible ? '' : 'grn'}" id="hil-ok-${cid}" onclick="hilInlineDecide(${cid}, true)">✓ 批准并执行</button>`
       + `<button class="btn sm ghost" id="hil-no-${cid}" onclick="hilInlineDecide(${cid}, false)">✕ 拒绝</button>`
-    + `<span style="font-size:10px;color:var(--mut);">确认单 #${cid}${ev.timeout_at ? ' · 超时 ' + esc(String(ev.timeout_at).slice(5,16)) : ''}</span></div></div>`;
+    + `<span style="font-size:12px;color:var(--mut);">确认单 #${cid}${ev.timeout_at ? ' · 超时 ' + esc(String(ev.timeout_at).slice(5,16)) : ''}</span></div></div>`;
   procUpsert(id, {type:'confirm', icon: irreversible ? '⛔' : '🔐',
                   title: (irreversible ? '待确认（不可逆）：' : '待确认：') + (prev || _toolActivity(tool) || tool),
                   status:'run', statusText: merged ? `⏸ 待人工确认 · 同批 ${bn} 项` : '⏸ 待人工确认',
@@ -697,14 +697,14 @@ function procAddConfirmGate(cid, ev){
   if(_procS.timeline.some(x=>x.id === id)) return;   // 同一确认单不重复建卡
   const name = ev.name || '';
   const args = ev.arguments ? (typeof ev.arguments === 'string' ? ev.arguments : JSON.stringify(ev.arguments)) : '';
-  const detail = `<div style="font-size:11.5px;line-height:1.7;">`
+  const detail = `<div style="font-size:12.5px;line-height:1.7;">`
     + `<div><b>工具：</b>${esc(name)}</div>`
-    + (args ? `<div style="max-height:88px;overflow:auto;white-space:pre-wrap;background:var(--bg,#f6f7f9);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:4px;font-size:10.5px;">${esc(args)}</div>` : '')
+    + (args ? `<div style="max-height:88px;overflow:auto;white-space:pre-wrap;background:var(--bg,#f6f7f9);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:4px;font-size:12px;">${esc(args)}</div>` : '')
     + `<div style="color:var(--mut);margin-top:6px;">这是<strong style="color:var(--orange,#B96A00);">写操作 / 高风险动作</strong>：批准后自动执行并回写结果；拒绝则该动作不生效。</div>`
     + `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">`
       + `<button class="btn sm grn" id="hil-ok-${cid}" onclick="hilInlineDecide(${cid}, true)">✓ 批准并执行</button>`
       + `<button class="btn sm ghost" id="hil-no-${cid}" onclick="hilInlineDecide(${cid}, false)">✕ 拒绝</button>`
-    + `<span style="font-size:10px;color:var(--mut);">确认单 #${cid} · 也可在 工作流 → 执行监控 处理</span></div></div>`;
+    + `<span style="font-size:12px;color:var(--mut);">确认单 #${cid} · 也可在 工作流 → 执行监控 处理</span></div></div>`;
   procUpsert(id, {type:'confirm', icon:'🔐', title:'等待确认：' + _toolActivity(name),
                   status:'run', statusText:'⏸ 待人工确认', detail});
   uxTrack('confirm_shown', {cid});   // §11 埋点：确认闸门曝光（转化率分母）
@@ -798,7 +798,7 @@ function _subChildrenHtml(key){
   const arr = (_procS.subChildren||{})[key] || [];
   if(!arr.length) return '';
   let h = '<div style="margin-top:6px;border-top:1px dashed var(--line);padding-top:6px;">'
-    + '<div style="font-size:10px;color:var(--mut);margin-bottom:4px;font-weight:600;">内部执行（'+arr.length+'）</div>';
+    + '<div style="font-size:12px;color:var(--mut);margin-bottom:4px;font-weight:600;">内部执行（'+arr.length+'）</div>';
   arr.forEach(it=>{
     const run = it.status==='run';
     const stTxt = run ? '调用中…' : (it.ok ? '✓ 成功' : '✗ 失败');
@@ -811,9 +811,9 @@ function _subChildrenHtml(key){
     //   现对齐顶层：>200 字或 truncated 时给「展开全文」，一律给「复制」。
     const _long = trunc || String(res).length > 200;
     h += '<div style="margin-bottom:6px;">'
-      + '<div style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--blue-d,#3478f6);flex-wrap:wrap;">🛠 '+esc(it.displayName||it.name)
+      + '<div style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--blue-d,#3478f6);flex-wrap:wrap;">🛠 '+esc(it.displayName||it.name)
       + ' <span class="st '+stCls+'">'+spin+stTxt+'</span>'
-      + (it.latencyMs?'<span style="color:var(--mut);font-size:10px;">⏱ '+(it.latencyMs/1000).toFixed(1)+'s</span>':'')
+      + (it.latencyMs?'<span style="color:var(--mut);font-size:12px;">⏱ '+(it.latencyMs/1000).toFixed(1)+'s</span>':'')
       + '</div>'
       + (it.arguments?'<div class="proc-tool-param">参数：'+esc(typeof it.arguments==='string'?it.arguments:JSON.stringify(it.arguments))+'</div>':'')
       + '<div class="proc-tool-result '+(_long?'trunc':'')+'"><div class="pr-head"><span>结果</span>'
@@ -872,7 +872,7 @@ function procAddMultiIntent(ev){
   if(_procS.timeline.find(x=>x.id==='multi')) return;
   const seq = ev.sequence, raw = ev.raw_subtasks||[];
   const detail = '<div style="display:flex;flex-wrap:wrap;gap:4px;">' +
-    seq.map((s,i)=>`<span class="hil l0" style="font-size:10px;background:var(--blue-l);">${i+1}. ${esc(raw[i]||s)}<span style="color:var(--mut);"> → </span>${esc(s)}</span>`).join('') + '</div>';
+    seq.map((s,i)=>`<span class="hil l0" style="font-size:12px;background:var(--blue-l);">${i+1}. ${esc(raw[i]||s)}<span style="color:var(--mut);"> → </span>${esc(s)}</span>`).join('') + '</div>';
   _procS.timeline.push({id:'multi', type:'multi', icon:'🧩', title:`多意图分解（${seq.length} 个阶段）`,
     // 2026-09-26：由 `collapsed:true` 改为**默认展开** —— 多意图分解是"识别结果对用户可见"的关键信息，
     // 折叠状态下用户只看得到"多意图分解（3 个阶段）· 3 段"，根本不知道系统把话拆成了哪三步、
@@ -886,7 +886,7 @@ function capTagsFor(agentId){
   const a = (_agentsCache||[]).find(x=>x.name===agentId || x.display_name===agentId);
   const caps = (a && a.capabilities) || [];
   if(!caps.length) return '';
-  return caps.slice(0,3).map(c=>`<span class="hil l0" style="font-size:9.5px;margin-left:4px;">${esc(c)}</span>`).join('');
+  return caps.slice(0,3).map(c=>`<span class="hil l0" style="font-size:11.5px;margin-left:4px;">${esc(c)}</span>`).join('');
 }
 // UX规范·硬规则2（2026-10-02）：工具卡标题=「动词+宾语」完整活动短语。
 // 命中映射表 → 直接用短语；前缀族（file_* / zhiyuan_*）→ 按族生成；都未命中 → 回退「调用 工具名」。
@@ -940,19 +940,19 @@ function subtaskCardHtml(s){
   const retry = (s.retry_count||0) > 0 ? `<span class="st w" title="自动重试 ${s.retry_count} 次后完成">↻ 重试${s.retry_count}</span>` : '';
   // Task 14：协议摘要徽章（summary_status：full/partial/failed → 交付物完整性）
   const ss = s.summary_status;
-  const sumBadge = ss==='full' ? '<span class="st ok" style="font-size:9.5px;">交付 full</span>'
-    : ss==='partial' ? '<span class="st w" style="font-size:9.5px;">交付 partial</span>'
-    : ss==='failed' ? '<span class="st r" style="font-size:9.5px;">交付 failed</span>' : '';
+  const sumBadge = ss==='full' ? '<span class="st ok" style="font-size:11.5px;">交付 full</span>'
+    : ss==='partial' ? '<span class="st w" style="font-size:11.5px;">交付 partial</span>'
+    : ss==='failed' ? '<span class="st r" style="font-size:11.5px;">交付 failed</span>' : '';
   // 摘要文本：优先后端**面向用户**的 ui_summary（2026-09-26；剔除内部交接语），回退旧 summary 字段
   const sumRaw = s.ui_summary || ((s.summary && typeof s.summary === 'object') ? (s.summary.summary||'') : (s.summary||''));
   // 2026-09-29（用户三轮反馈）：不再单行省略 + hover 看全文 —— 摘要**直接展示在框内**，
   // 左对齐、限高 96px、框内滚动看完整内容（title 弹层交互废弃）。
-  const sum = sumRaw ? `<div style="color:var(--mut);font-size:10.5px;margin-top:3px;text-align:left;max-height:96px;overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-word;">${esc(String(sumRaw))}</div>` : '';
+  const sum = sumRaw ? `<div style="color:var(--mut);font-size:12px;margin-top:3px;text-align:left;max-height:96px;overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-word;">${esc(String(sumRaw))}</div>` : '';
   // 2026-09-29（用户三轮反馈"失败后系统在做什么"）：失败态补一行**系统行为说明**，
   // 语义与后端编排器一致（stream.py Task 7：自动重试 1 次 → 仍失败跳过 → 依赖任务受阻 → 已完成部分继续汇总）。
-  const failNote = (s.status==='failed' && s.error) ? `<div style="color:var(--mut);font-size:10px;margin-top:2px;line-height:1.5;">系统已自动重试 1 次仍失败 → 本步跳过，依赖它的后续步骤受阻；编排会用已完成的部分继续汇总输出，不会卡住。</div>` : '';
+  const failNote = (s.status==='failed' && s.error) ? `<div style="color:var(--mut);font-size:12px;margin-top:2px;line-height:1.5;">系统已自动重试 1 次仍失败 → 本步跳过，依赖它的后续步骤受阻；编排会用已完成的部分继续汇总输出，不会卡住。</div>` : '';
   // P1-2：子任务 token 消耗（后端 subtask 事件 token_count 透传）
-  const tk = (s.token_count||0) > 0 ? ` <span style="color:var(--mut);font-size:10.5px;" title="本子任务 token 消耗">🪙 ${Number(s.token_count).toLocaleString()}</span>` : '';
+  const tk = (s.token_count||0) > 0 ? ` <span style="color:var(--mut);font-size:12px;" title="本子任务 token 消耗">🪙 ${Number(s.token_count).toLocaleString()}</span>` : '';
   // 2026-09-29（用户三轮反馈）：外层阶段卡头部已展示标题，展开详情内**不再重复渲染名称**
   // （此前第一行 <b>title</b> 与外层 head 完全一样，用户指出冗余）。本行只保留状态符号与徽章。
 
@@ -972,8 +972,8 @@ function subtaskCardHtml(s){
   //   （默认 webkit 滚动条在高密度小字区太细，300px 高的框里 12k 字抓不住 ⇒ 用户观感「拖不动」）。
   const outHtml = outRaw ? `
     <div style="margin-top:4px;">
-      <div style="font-size:10px;color:var(--mut);font-weight:600;margin-bottom:2px;">📤 执行结果（${String(outRaw).length} 字）</div>
-      <div class="proc-out-box" style="padding:5px 7px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;${_LIM}font-size:10.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;color:var(--fg);">${esc(String(outRaw))}</div>
+      <div style="font-size:12px;color:var(--mut);font-weight:600;margin-bottom:2px;">📤 执行结果（${String(outRaw).length} 字）</div>
+      <div class="proc-out-box" style="padding:5px 7px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;${_LIM}font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;color:var(--fg);">${esc(String(outRaw))}</div>
     </div>` : '';
   // ── 详情块（默认折叠，点开再看）──
   //   来源：协议摘要 summary（artifacts/claims/risks/missing/evidence/confidence）。
@@ -987,18 +987,18 @@ function subtaskCardHtml(s){
       if(Array.isArray(v)) txt = v.map(x=>typeof x==='string'?x:JSON.stringify(x)).join('\n');
       else if(v && typeof v === 'object') txt = JSON.stringify(v, null, 1);
       else txt = (v===undefined||v===null||v==='') ? '' : String(v);
-      return txt ? `<div style="margin-top:3px;"><b style="font-size:10px;color:var(--mut);">${label}</b><div style="font-size:10.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;">${esc(txt)}</div></div>` : '';
+      return txt ? `<div style="margin-top:3px;"><b style="font-size:12px;color:var(--mut);">${label}</b><div style="font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;">${esc(txt)}</div></div>` : '';
     };
     const _inner = _row('交付物 artifacts', smObj.artifacts)
       + _row('结论 claims', smObj.claims)
       + _row('证据 evidence', smObj.evidence)
       + _row('缺失 missing', smObj.missing)
       + _row('风险 risks', smObj.risks)
-      + (smObj.confidence!==undefined ? `<div style="margin-top:3px;font-size:10px;color:var(--mut);">置信度：${esc(String(smObj.confidence))}</div>` : '');
+      + (smObj.confidence!==undefined ? `<div style="margin-top:3px;font-size:12px;color:var(--mut);">置信度：${esc(String(smObj.confidence))}</div>` : '');
     if(_inner.trim()){
       detailHtml = `
     <div class="io-fold" data-k="detail" style="margin-top:4px;">
-      <div class="io-head" onclick="ioFoldToggle(this)" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;font-size:10px;color:var(--blue-d,#3478f6);">
+      <div class="io-head" onclick="ioFoldToggle(this)" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;font-size:12px;color:var(--blue-d,#3478f6);">
         <span class="chev">▸</span><span>查看详情（交付物 / 结论 / 风险）</span>
       </div>
       <div class="io-body" style="display:none;margin-top:3px;padding:5px 7px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;${_LIM}">${_inner}</div>
@@ -1021,8 +1021,8 @@ function subtaskCardHtml(s){
   //      但它被塞进 228px 宽的格子里 ⇒ 滚动条细到抓不住，用户观感是「拖不动」。
   //      ⇒ 宽度恢复正常后即可正常拖动。
   return `<div class="proc-subtask" style="border:1px solid var(--line);border-radius:8px;padding:5px 8px;margin:3px 0;background:#fff;display:block;white-space:normal;align-items:stretch;">
-    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${ok?'✓':part?'◐':run?'⟳':stopped?'⏹':skipSt?'⊘':'✗'}${badge}${s.agent?` <span class="tag" style="font-size:10px;">${esc(s.agent)}</span>`:''}${caps}${retry}${sumBadge}${s.latency_ms?` <span style="color:var(--mut);font-size:10.5px;">⏱ ${(s.latency_ms/1000).toFixed(1)}s</span>`:''}${tk}${run?' <span class="st w">执行中…</span>':''}${stopped?' <span class="st w">已终止</span>':''}${skipSt?' <span class="st g">主动放弃</span>':''}</div>
-    ${sum}${outHtml}${detailHtml}${s.error?`<div style="color:var(--red);font-size:10.5px;margin-top:2px;">${esc(s.error)}</div>`:''}${failNote}</div>`;
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${ok?'✓':part?'◐':run?'⟳':stopped?'⏹':skipSt?'⊘':'✗'}${badge}${s.agent?` <span class="tag" style="font-size:12px;">${esc(s.agent)}</span>`:''}${caps}${retry}${sumBadge}${s.latency_ms?` <span style="color:var(--mut);font-size:12px;">⏱ ${(s.latency_ms/1000).toFixed(1)}s</span>`:''}${tk}${run?' <span class="st w">执行中…</span>':''}${stopped?' <span class="st w">已终止</span>':''}${skipSt?' <span class="st g">主动放弃</span>':''}</div>
+    ${sum}${outHtml}${detailHtml}${s.error?`<div style="color:var(--red);font-size:12px;margin-top:2px;">${esc(s.error)}</div>`:''}${failNote}</div>`;
 }
 // ★ F-2：子任务「详情」的展开-收起（摘要与结果是**默认展示**的，不在这里折叠）。
 //   ⚠️ 与 B5-8 删除的 bodyFoldToggle **不是同一个东西**：那个折的是"最终输出正文"，
@@ -1079,13 +1079,13 @@ function procMarkStopped(){
             const skipSt = n.status==='skipped';   // P4：提前收敛主动放弃（灰，非失败）
             const stTxt = isStop ? '已终止' : (n.status==='failed' ? '失败' : (n.status==='partial' ? '部分完成' : (skipSt ? '主动放弃' : '完成')));
             const stCls = isStop ? 'w' : (n.status==='failed' ? 'r' : (skipSt ? 'g' : 'ok'));
-            const dep = (n.deps&&n.deps.length) ? '<span style="color:var(--mut);font-size:10px;">依赖: '+esc(n.deps.join('、'))+'</span>' : '';
-            const lat = n.latency_ms ? '<span style="color:var(--mut);font-size:10px;">⏱ '+(n.latency_ms/1000).toFixed(1)+'s</span>' : '';
-            return '<div style="display:flex;align-items:center;gap:6px;font-size:11px;flex-wrap:wrap;">'
-              + '<span style="color:var(--mut);font-size:10px;min-width:16px;">'+(i+1)+'.</span>'
+            const dep = (n.deps&&n.deps.length) ? '<span style="color:var(--mut);font-size:12px;">依赖: '+esc(n.deps.join('、'))+'</span>' : '';
+            const lat = n.latency_ms ? '<span style="color:var(--mut);font-size:12px;">⏱ '+(n.latency_ms/1000).toFixed(1)+'s</span>' : '';
+            return '<div style="display:flex;align-items:center;gap:6px;font-size:12.5px;flex-wrap:wrap;">'
+              + '<span style="color:var(--mut);font-size:12px;min-width:16px;">'+(i+1)+'.</span>'
               + '<span class="st '+stCls+'" style="min-width:56px;text-align:center;">'+stTxt+'</span>'
               + '<b style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(n.title||k)+'</b>'
-              + (n.agent?'<span style="color:var(--mut);font-size:10px;">'+esc(n.agent)+'</span>':'')
+              + (n.agent?'<span style="color:var(--mut);font-size:12px;">'+esc(n.agent)+'</span>':'')
               + lat + dep + '</div>';
           }).join('') + '</div>';
         procUpsert('plan', {type:'plan', icon:'📋', title:`计划清单（${all.length} 任务）`, status:'stopped',
@@ -1181,13 +1181,13 @@ function procAddSubtask(ev){
       const stTxt = run ? '执行中' : (n.status==='failed' ? '失败' : (n.status==='partial' ? '部分完成' : (skipSt ? '主动放弃' : '完成')));
       const stCls = run ? 'w' : (n.status==='failed' ? 'r' : (skipSt ? 'g' : 'ok'));
       const spin = run ? '<span class="proc-spin"></span>' : '';
-      const dep = (n.deps&&n.deps.length) ? '<span style="color:var(--mut);font-size:10px;">依赖: '+esc(n.deps.join('、'))+'</span>' : '';
-      const lat = n.latency_ms ? '<span style="color:var(--mut);font-size:10px;">⏱ '+(n.latency_ms/1000).toFixed(1)+'s</span>' : '';
-      return '<div style="display:flex;align-items:center;gap:6px;font-size:11px;flex-wrap:wrap;">'
-        + '<span style="color:var(--mut);font-size:10px;min-width:16px;">'+(i+1)+'.</span>'
+      const dep = (n.deps&&n.deps.length) ? '<span style="color:var(--mut);font-size:12px;">依赖: '+esc(n.deps.join('、'))+'</span>' : '';
+      const lat = n.latency_ms ? '<span style="color:var(--mut);font-size:12px;">⏱ '+(n.latency_ms/1000).toFixed(1)+'s</span>' : '';
+      return '<div style="display:flex;align-items:center;gap:6px;font-size:12.5px;flex-wrap:wrap;">'
+        + '<span style="color:var(--mut);font-size:12px;min-width:16px;">'+(i+1)+'.</span>'
         + '<span class="st '+stCls+'" style="min-width:56px;text-align:center;">'+spin+stTxt+'</span>'
         + '<b style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(n.title||k)+'</b>'
-        + (n.agent?'<span style="color:var(--mut);font-size:10px;">'+esc(n.agent)+'</span>':'')
+        + (n.agent?'<span style="color:var(--mut);font-size:12px;">'+esc(n.agent)+'</span>':'')
         + lat + dep + '</div>';
     }).join('') + '</div>';
   procUpsert('plan', {type:'plan', icon:'📋', title:`计划清单（${all.length} 任务）`, status: runN?'run':'done',
@@ -1251,12 +1251,12 @@ function procAddPlanRevised(ev){
     const ins = (ev.inserted||[]);
     const sec = (title, arr, color) => {
       if(!arr || !arr.length) return '';
-      return '<div style="display:flex;gap:6px;font-size:11px;line-height:1.7;">'
+      return '<div style="display:flex;gap:6px;font-size:12.5px;line-height:1.7;">'
         + '<span style="color:var(--mut);min-width:52px;">'+title+'</span>'
         + '<span style="color:'+color+';">'+arr.map(k=>esc(k)).join('、')+'</span></div>';
     };
     const detail = '<div style="display:flex;flex-direction:column;gap:3px;padding:2px 0;">'
-      + '<div style="font-size:11px;line-height:1.7;">' + esc(ev.reason||'（未提供原因）') + '</div>'
+      + '<div style="font-size:12.5px;line-height:1.7;">' + esc(ev.reason||'（未提供原因）') + '</div>'
       + sec('重派', ups, 'var(--ok,#2e7d32)')
       + sec('新增', adds, 'var(--ok,#2e7d32)')
       + sec('插入', ins, 'var(--ok,#2e7d32)')
@@ -1285,7 +1285,7 @@ function procAddRedrawConfirm(ev){
     if(_procS.timeline.some(x=>x.id === id)) return;
     const sec = (title, arr, color) => {
       if(!arr || !arr.length) return '';
-      return '<div style="display:flex;gap:6px;font-size:11px;line-height:1.7;">'
+      return '<div style="display:flex;gap:6px;font-size:12.5px;line-height:1.7;">'
         + '<span style="color:var(--mut);min-width:52px;">'+title+'</span>'
         + '<span style="color:'+color+';">'+arr.map(k=>esc(k)).join('、')+'</span></div>';
     };
@@ -1298,7 +1298,7 @@ function procAddRedrawConfirm(ev){
       '<button class="btn sm '+(a.primary?'grn':'ghost')+'" onclick="redrawConfirmDecide(\''
       + esc(ev.confirm_id||'') + '\',\'' + esc(a.id) + '\')">' + esc(a.label||a.id)
       + '</button>').join(' ');
-    const detail = '<div style="font-size:11.5px;line-height:1.7;">'
+    const detail = '<div style="font-size:12.5px;line-height:1.7;">'
       + '<div>' + esc(ev.reason||'（未提供原因）') + '</div>'
       + secs
       + '<div style="color:var(--mut);margin-top:6px;">'
@@ -1475,7 +1475,7 @@ function handleSSE(raw) {
       const note = document.createElement('div');
       note.className = 'degraded-note';
       note.style.cssText = 'margin-top:8px;padding:6px 10px;border-left:3px solid #e8590c;'
-        + 'background:rgba(232,89,12,.10);color:#b23c00;font-size:12px;line-height:1.6;';
+        + 'background:rgba(232,89,12,.10);color:#b23c00;font-size:13.5px;line-height:1.6;';
       note.textContent = '⚠ ' + (ev.message || '本次回答降级由本地兜底生成，内容不可直接采信')
         + ' —— 请检查模型服务余额/密钥后重试';
       // 优先挂在正文容器之后；容器缺失时退回消息体末尾（DOM 变动是常态，两种都要能活）
@@ -1553,8 +1553,8 @@ function handleSSE(raw) {
     const errNote = document.createElement('div');
     errNote.style.cssText = 'margin-top:8px;';
     // 2026-09-29（用户三轮反馈"失败后系统在做什么"）：失败横条补齐三问 —— 发生了什么 / 系统现状 / 下一步
-    errNote.innerHTML = `<div style="color:var(--red);font-size:11.5px;">调用失败：${esc(ev.message||'未知错误')}</div>`
-      + `<div style="color:var(--mut);font-size:10.5px;margin-top:4px;line-height:1.6;">`
+    errNote.innerHTML = `<div style="color:var(--red);font-size:12.5px;">调用失败：${esc(ev.message||'未知错误')}</div>`
+      + `<div style="color:var(--mut);font-size:12px;margin-top:4px;line-height:1.6;">`
       + `本次执行已终止，不再有后台任务在跑。上方已生成内容与执行轨迹<b>已保留</b>（刷新不丢）；`
       + `确认原因（如网络波动）后，<b>直接重新发送消息</b>即可从头执行。</div>`;
     if(bodyEl) bodyEl.appendChild(errNote);
@@ -1580,10 +1580,10 @@ function renderClarify(ev){
     : '';
   const btns = (ev.candidates||[]).slice(0,4).map(c =>
     `<button onclick="pickIntent(this.dataset.m, this.dataset.i)" data-m="${esc(ev.message)}" data-i="${esc(c)}"
-      style="border:1px solid var(--line);background:#fff;color:var(--pri,#3478f6);border-radius:4px;padding:1px 6px;font-size:11px;cursor:pointer;margin:2px 4px 0 0;">改选：${esc(c)}</button>`).join('');
+      style="border:1px solid var(--line);background:#fff;color:var(--pri,#3478f6);border-radius:4px;padding:1px 6px;font-size:12.5px;cursor:pointer;margin:2px 4px 0 0;">改选：${esc(c)}</button>`).join('');
   const bar = document.createElement('div');
   bar.id = 'clarify-bar';
-  bar.style.cssText = 'border:1px dashed var(--line);background:#f7f8fa;border-radius:6px;padding:6px 8px;font-size:11px;color:var(--mut);margin-bottom:6px;';
+  bar.style.cssText = 'border:1px dashed var(--line);background:#f7f8fa;border-radius:6px;padding:6px 8px;font-size:12.5px;color:var(--mut);margin-bottom:6px;';
   bar.innerHTML = `${_und}⚠ 把握不大（${pct}%），${_det}已按「${esc(ev.intent)}」继续执行。理解有误？${btns}`;
   inner.insertBefore(bar, inner.firstChild);
   const st = document.getElementById('chat-status');
@@ -1970,8 +1970,8 @@ async function sendResume(text){
     const errNote = document.createElement('div');
     errNote.style.cssText = 'margin-top:8px;';
     // 2026-09-29（用户三轮反馈）：失败横条补"系统现状 + 下一步"
-    errNote.innerHTML = `<div style="color:var(--red);font-size:11.5px;">调用失败：${esc(e.message)}</div>`
-      + `<div style="color:var(--mut);font-size:10.5px;margin-top:4px;line-height:1.6;">`
+    errNote.innerHTML = `<div style="color:var(--red);font-size:12.5px;">调用失败：${esc(e.message)}</div>`
+      + `<div style="color:var(--mut);font-size:12px;margin-top:4px;line-height:1.6;">`
       + `本次执行已终止，不再有后台任务在跑。上方已生成内容与执行轨迹<b>已保留</b>；`
       + `确认原因（如网络波动）后，<b>直接重新发送消息</b>即可从头执行。</div>`;
     if(bodyEl) bodyEl.appendChild(errNote);

@@ -12,7 +12,7 @@ function panelCandidates(cd) {
     ${cands.map((c,i)=>`<tr><td>${i+1}</td><td>${esc(c.text)}</td><td>${esc(c.source)}</td><td>${c.score||0}</td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--mut);">暂无候选条目</td></tr>'}</table>
     <h4 style="margin:14px 0 6px;">冲突检测（${confs.length}）<span class="badge">FR-MG-3</span></h4>
     ${confs.length?`<table class="t"><tr><th>新条目</th><th>既有元素</th></tr>${confs.map(c=>`<tr><td>${esc(c.new)}</td><td>${esc(c.existing)}</td></tr>`).join('')}</table>`:'<div style="color:var(--grn);">✓ 未检测到冲突</div>'}
-    <p style="margin-top:14px;color:var(--mut);font-size:12px;">* 条目需人工逐条确认后并入模型（人在回路 BR-2 / FR-HIL-2）。</p>`;
+    <p style="margin-top:14px;color:var(--mut);font-size:13.5px;">* 条目需人工逐条确认后并入模型（人在回路 BR-2 / FR-HIL-2）。</p>`;
 }
 /* ═══ CIA 影响拓扑图谱：Cytoscape 图谱效果（FR-CIA-2 可视化影响路径）═══
    节点：变更源=红菱形 / 直接影响=橙圆角矩 / 间接影响=灰椭圆；边框按影响级别加粗。
@@ -127,7 +127,7 @@ function impactLegendHtml(){
     <span><i style="display:inline-block;width:10px;height:10px;background:#C7CFDA;border-radius:50%;margin-right:4px;"></i>间接影响</span>
     <span>— 实线=直接 / 虚线=间接，红=高影响 橙=中 灰=低</span>
     <span><i style="display:inline-block;width:10px;height:10px;background:#EDF1F6;border:1px dashed #9AA7B5;border-radius:50%;margin-right:4px;"></i>追溯提示（不计入影响）</span>
-    <span style="color:var(--mut);font-size:11px;">可缩放 / 拖拽 / 点节点查看详情</span></div>`;
+    <span style="color:var(--mut);font-size:12.5px;">可缩放 / 拖拽 / 点节点查看详情</span></div>`;
 }
 /* ═══ 2026-09-15 报告 2.0 P2：交互仪表板（三视图 tab + 清单联动高亮）═══ */
 function impactDashTab(gid, key){
@@ -197,19 +197,19 @@ function cardImpactSummary(cd){
     ((cd.trace_hint_nodes||[]).length?`另有 <b>${cd.trace_hint_nodes.length}</b> 个追溯性关联节点（仅提示，不计入影响）需人工确认。`:'');
   // 风险要点（Top 1）
   const risk = (ra.risks||[])[0];
-  const riskHtml = risk ? `<div style="margin-top:6px;font-size:12px;"><b>${risk.level==='high'?'🔴':risk.level==='mid'?'🟠':'🔵'} ${esc(risk.title)}</b>` +
-    `<div style="color:var(--mut);font-size:11.5px;margin-top:2px;">💡 ${esc(risk.advice||'')}</div></div>` : '';
+  const riskHtml = risk ? `<div style="margin-top:6px;font-size:13.5px;"><b>${risk.level==='high'?'🔴':risk.level==='mid'?'🟠':'🔵'} ${esc(risk.title)}</b>` +
+    `<div style="color:var(--mut);font-size:12.5px;margin-top:2px;">💡 ${esc(risk.advice||'')}</div></div>` : '';
   return `
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       <div class="rc-chip b">🔀 变更影响分析 · 摘要</div>
       ${chg.type_label?`<span class="tag">${esc(chg.type_label)}</span>`:''}
-      ${chg.desc?`<span style="font-size:11px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px;" title="${esc(chg.desc)}">变更：${esc(chg.desc)}</span>`:''}
+      ${chg.desc?`<span style="font-size:12.5px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px;" title="${esc(chg.desc)}">变更：${esc(chg.desc)}</span>`:''}
     </div>
-    <div style="margin:8px 0;font-size:12.5px;line-height:1.7;">📋 <b>结论：</b>${conclusion}</div>
+    <div style="margin:8px 0;font-size:13.5px;line-height:1.7;">📋 <b>结论：</b>${conclusion}</div>
     ${dec.recommendation?`<div style="border:1px solid ${decColor};background:${decBg};border-radius:8px;padding:7px 10px;margin-bottom:8px;">
-      <b style="font-size:12.5px;">⚖ 决策建议：${esc(dec.recommendation)}</b>
-      ${(dec.reasons||[]).slice(0,2).map(r=>`<div style="font-size:11.5px;margin-top:2px;">· ${esc(r)}</div>`).join('')}
-      ${(dec.conditions||[]).slice(0,2).map(c=>`<div style="font-size:11.5px;color:var(--red);margin-top:2px;">▸ 条件：${esc(c)}</div>`).join('')}
+      <b style="font-size:13.5px;">⚖ 决策建议：${esc(dec.recommendation)}</b>
+      ${(dec.reasons||[]).slice(0,2).map(r=>`<div style="font-size:12.5px;margin-top:2px;">· ${esc(r)}</div>`).join('')}
+      ${(dec.conditions||[]).slice(0,2).map(c=>`<div style="font-size:12.5px;color:var(--red);margin-top:2px;">▸ 条件：${esc(c)}</div>`).join('')}
     </div>`:''}
     <div class="rc-mini" style="margin-bottom:4px;">
       <span class="rc-chip r"><span class="n">${cd.direct_count||0}</span> 直接</span>
@@ -223,7 +223,7 @@ function cardImpactSummary(cd){
       <button class="btn sm" onclick="openImpactReport(window._lastImpactCd)">📄 查看完整报告（含影响图谱）</button>
       <button class="btn sm ghost" onclick="simStartFromImpact()">🛠 模拟预演</button>
     </div>
-    <div style="margin-top:6px;font-size:11px;color:var(--mut);">完整报告（7 章，即会话产物）：变更概述 / 模型基线分析 / 变更影响分析（路径·维度·评级）/ 影响分析图谱 / 量化评估（统计·工作量·风险）/ 实施方案建议 / 结论。</div>`;
+    <div style="margin-top:6px;font-size:12.5px;color:var(--mut);">完整报告（7 章，即会话产物）：变更概述 / 模型基线分析 / 变更影响分析（路径·维度·评级）/ 影响分析图谱 / 量化评估（统计·工作量·风险）/ 实施方案建议 / 结论。</div>`;
 }
 
 /* ═══ 2026-09-15 影响链路大屏可视化（FR-CIA-2 增强）：缩放 / 拖拽 / 自动布局 / 邻域高亮 ═══ */
@@ -242,11 +242,11 @@ function openImpactGraphViewer(){
         <button class="btn sm ghost" onclick="impactViewerRelayout()">🔀 自动布局</button>
         <button class="btn sm ghost" onclick="impactViewerReset()">↺ 复位分层视图</button>
         <span style="flex:1;"></span>
-        <span style="font-size:11px;color:var(--mut);">滚轮缩放 · 画布拖拽平移 · 节点可拖动 · 点节点高亮上下游（点空白取消）</span>
+        <span style="font-size:12.5px;color:var(--mut);">滚轮缩放 · 画布拖拽平移 · 节点可拖动 · 点节点高亮上下游（点空白取消）</span>
       </div>
       ${impactLegendHtml()}
       <div id="${_viewerGid}" style="width:100%;height:calc(100vh - 220px);min-height:520px;border:1px solid var(--line);border-radius:10px;background:#fafbfc;margin-top:6px;"></div>
-      <div id="impact-viewer-info" style="margin-top:8px;font-size:12px;color:var(--mut);min-height:20px;">点击节点查看详情并高亮其上下游影响链路</div>`,
+      <div id="impact-viewer-info" style="margin-top:8px;font-size:13.5px;color:var(--mut);min-height:20px;">点击节点查看详情并高亮其上下游影响链路</div>`,
     content:'', message_id:null, meta:{}});
   setTimeout(()=>{ renderImpactGraph(_viewerGid, cd); impactViewerEvents(_viewerGid); }, 150);
 }
@@ -513,7 +513,7 @@ let _simState = {scene: '', changes: []};
 function openSimPanel(){
   openPreviewTab({id:null, kind:'report', kind_label:'报告', title:'🛠 变更模拟（沙箱）',
     preview_type:'html',
-    preview_content:'<div id="sim-panel" style="font-size:12.5px;line-height:1.7;">加载演示场景…</div>',
+    preview_content:'<div id="sim-panel" style="font-size:13.5px;line-height:1.7;">加载演示场景…</div>',
     content:'', message_id:null, meta:{}});
   fetch('/api/impact/scenes').then(r=>r.json()).then(scenes=>{
     _simScenes = scenes || [];
@@ -531,7 +531,7 @@ function simRenderPanel(){
     <div class="note" style="margin:8px 0;">模拟原理：沙箱内复制基线子图 → 应用变更（更新/删除/新增）→ 同引擎重算影响 → 与基线 diff 输出前后对比。全程不写正式图谱。</div>
     <div class="note" style="margin:0 0 8px 0;color:var(--warn,#b8860b);">⚠️ 下方为<b>内置演示场景</b>，用的是系统自带的虚构图谱（卫星/载荷等），<b>不是你的模型</b>。演示场景的模拟结论<b>不会回流</b>为 v2g 候选，避免污染你的真实候选表。要分析自己的模型，请点上方「以真实图谱预演」。</div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-      <label style="font-size:12px;color:var(--mut);">多层级演示场景（内置虚构图谱）</label>
+      <label style="font-size:13.5px;color:var(--mut);">多层级演示场景（内置虚构图谱）</label>
       <select id="sim-scene" style="flex:1;min-width:220px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;" onchange="simSceneChange(this.value)">${opts||'<option>无场景</option>'}</select>
       <button class="btn sm grn" onclick="simRunPre()">▶ 预演变更</button>
       <button class="btn sm ghost" onclick="simExport()">📄 导出对比报告</button>
@@ -551,10 +551,10 @@ function simRenderChanges(){
   if(sc && (!_simState.changes || !_simState.changes.length)){
     _simState.changes = (sc.changes||[]).map(c=>({...c}));
   }
-  box.innerHTML = `<div style="font-size:12px;font-weight:600;margin-bottom:4px;">预演变更操作清单（可增删修改）</div>
+  box.innerHTML = `<div style="font-size:13.5px;font-weight:600;margin-bottom:4px;">预演变更操作清单（可增删修改）</div>
     <div id="sim-change-rows"></div>
     <button class="btn sm ghost" style="margin-top:6px;" onclick="simAddChangeRow()">＋ 添加变更操作</button>
-    ${sc&&sc.change_desc?`<div style="margin-top:6px;font-size:11.5px;color:var(--mut);">场景说明：${esc(sc.change_desc)}</div>`:''}`;
+    ${sc&&sc.change_desc?`<div style="margin-top:6px;font-size:12.5px;color:var(--mut);">场景说明：${esc(sc.change_desc)}</div>`:''}`;
   simRenderChangeRows();
 }
 function simRenderChangeRows(){
@@ -562,15 +562,15 @@ function simRenderChangeRows(){
   if(!rows) return;
   rows.innerHTML = (_simState.changes||[]).map((ch,i)=>`
     <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
-      <select style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:11.5px;" onchange="window.__simState.changes[${i}].op=this.value;simChangeLabel(${i})">
+      <select style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12.5px;" onchange="window.__simState.changes[${i}].op=this.value;simChangeLabel(${i})">
         <option value="modify" ${ch.op==='modify'?'selected':''}>修改</option>
         <option value="delete" ${ch.op==='delete'?'selected':''}>删除</option>
         <option value="add" ${ch.op==='add'?'selected':''}>新增</option>
       </select>
-      <input style="flex:1;border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:11.5px;" value="${esc(ch.op==='add'?(ch.node&&ch.node.name)||ch.target:ch.target||'')}" oninput="window.__simState.changes[${i}].target=this.value" placeholder="${ch.op==='add'?'新增元素名':'目标元素'}"/>
-      <input style="flex:1;border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:11.5px;" value="${esc(ch.new_value||'')}" oninput="window.__simState.changes[${i}].new_value=this.value" placeholder="新值/说明"/>
+      <input style="flex:1;border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12.5px;" value="${esc(ch.op==='add'?(ch.node&&ch.node.name)||ch.target:ch.target||'')}" oninput="window.__simState.changes[${i}].target=this.value" placeholder="${ch.op==='add'?'新增元素名':'目标元素'}"/>
+      <input style="flex:1;border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12.5px;" value="${esc(ch.new_value||'')}" oninput="window.__simState.changes[${i}].new_value=this.value" placeholder="新值/说明"/>
       <button class="btn sm red" onclick="simDelChangeRow(${i})">✕</button>
-    </div>`).join('') || '<div style="color:var(--mut);font-size:11px;">暂无变更操作</div>';
+    </div>`).join('') || '<div style="color:var(--mut);font-size:12.5px;">暂无变更操作</div>';
 }
 function simChangeLabel(i){ /* 行内选择变化后 placeholder 自适应（add 行目标为新元素名） */ simRenderChangeRows(); }
 function simAddChangeRow(){
@@ -612,10 +612,10 @@ function simRunPre(){
 }
 function simResultHtml(res){
   const b = res.before, a = res.after, c = res.comparison||{}, sum = c.summary||{};
-  const riskHtml = (c.risk||[]).map(r=>`<div class="rc-issue"><span class="lv">${r.level==='high'?'🔴':'🟠'}</span><span><b>${esc(r.title)}</b><div style="font-size:11px;color:var(--mut);margin-top:2px;">${esc(r.desc||'')}</div></span><span class="fix">${esc(r.advice||'')}</span></div>`).join('') || '<div style="color:var(--grn);">✓ 预演未发现新增风险</div>';
-  const addedHtml = (c.added||[]).map(n=>`<span class="rc-chip r"><span class="n">${n.score}</span> ${esc(n.name)} <span class="tag">${esc(n.type)}</span></span>`).join('') || '<span style="color:var(--mut);font-size:11px;">无</span>';
-  const removedHtml = (c.removed||[]).map(n=>`<span class="rc-chip g"><span class="n">${n.score}</span> ${esc(n.name)} <span class="tag">${esc(n.type)}</span></span>`).join('') || '<span style="color:var(--mut);font-size:11px;">无</span>';
-  const degHtml = (c.degree_changes||[]).map(d=>`<div style="font-size:11.5px;margin-bottom:2px;">${esc(d.name)} <span class="tag">${d.before}→${d.after}</span> <b style="color:${d.delta>0?'var(--red)':'var(--grn)'};">${d.delta>0?'+':''}${d.delta}</b></div>`).join('') || '<span style="color:var(--mut);font-size:11px;">无</span>';
+  const riskHtml = (c.risk||[]).map(r=>`<div class="rc-issue"><span class="lv">${r.level==='high'?'🔴':'🟠'}</span><span><b>${esc(r.title)}</b><div style="font-size:12.5px;color:var(--mut);margin-top:2px;">${esc(r.desc||'')}</div></span><span class="fix">${esc(r.advice||'')}</span></div>`).join('') || '<div style="color:var(--grn);">✓ 预演未发现新增风险</div>';
+  const addedHtml = (c.added||[]).map(n=>`<span class="rc-chip r"><span class="n">${n.score}</span> ${esc(n.name)} <span class="tag">${esc(n.type)}</span></span>`).join('') || '<span style="color:var(--mut);font-size:12.5px;">无</span>';
+  const removedHtml = (c.removed||[]).map(n=>`<span class="rc-chip g"><span class="n">${n.score}</span> ${esc(n.name)} <span class="tag">${esc(n.type)}</span></span>`).join('') || '<span style="color:var(--mut);font-size:12.5px;">无</span>';
+  const degHtml = (c.degree_changes||[]).map(d=>`<div style="font-size:12.5px;margin-bottom:2px;">${esc(d.name)} <span class="tag">${d.before}→${d.after}</span> <b style="color:${d.delta>0?'var(--red)':'var(--grn)'};">${d.delta>0?'+':''}${d.delta}</b></div>`).join('') || '<span style="color:var(--mut);font-size:12.5px;">无</span>';
   return `
   <h4 style="margin:14px 0 6px;">📊 预演结果对比<span class="badge">FR-CIA-4 前后对比</span></h4>
   <div class="rc-mini" style="margin-bottom:8px;">
@@ -626,25 +626,25 @@ function simResultHtml(res){
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <div style="flex:1;min-width:300px;">
-      <div style="font-size:12px;font-weight:600;margin-bottom:4px;">变更前影响拓扑（基线）</div>
+      <div style="font-size:13.5px;font-weight:600;margin-bottom:4px;">变更前影响拓扑（基线）</div>
       <div id="sim-graph-before" style="height:340px;border:1px solid var(--line);border-radius:8px;background:#fafbfc;"></div>
     </div>
     <div style="flex:1;min-width:300px;">
-      <div style="font-size:12px;font-weight:600;margin-bottom:4px;">变更后影响拓扑（预演）</div>
+      <div style="font-size:13.5px;font-weight:600;margin-bottom:4px;">变更后影响拓扑（预演）</div>
       <div id="sim-graph-after" style="height:340px;border:1px solid var(--line);border-radius:8px;background:#fafbfc;"></div>
     </div>
   </div>
   <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;">
     <div style="flex:1;min-width:240px;border:1px solid var(--line);border-radius:8px;padding:8px;">
-      <div style="font-size:12px;font-weight:600;margin-bottom:4px;">🆕 新增影响（${(c.added||[]).length}）</div>${addedHtml}
-      <div style="font-size:12px;font-weight:600;margin:8px 0 4px;">🗑 解除影响（${(c.removed||[]).length}）</div>${removedHtml}
+      <div style="font-size:13.5px;font-weight:600;margin-bottom:4px;">🆕 新增影响（${(c.added||[]).length}）</div>${addedHtml}
+      <div style="font-size:13.5px;font-weight:600;margin:8px 0 4px;">🗑 解除影响（${(c.removed||[]).length}）</div>${removedHtml}
     </div>
     <div style="flex:1;min-width:240px;border:1px solid var(--line);border-radius:8px;padding:8px;">
-      <div style="font-size:12px;font-weight:600;margin-bottom:4px;">📈 影响度变化（${(c.degree_changes||[]).length}）</div>${degHtml}
+      <div style="font-size:13.5px;font-weight:600;margin-bottom:4px;">📈 影响度变化（${(c.degree_changes||[]).length}）</div>${degHtml}
     </div>
   </div>
   <div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:8px;">
-    <div style="font-size:12px;font-weight:600;margin-bottom:4px;">⚠ 风险提示</div>${riskHtml}
+    <div style="font-size:13.5px;font-weight:600;margin-bottom:4px;">⚠ 风险提示</div>${riskHtml}
   </div>`;
 }
 function simExport(){
@@ -689,7 +689,7 @@ async function simStartFromImpact(){
   if(!cd || !(cd.impact_nodes||[]).length || !srcName){ toast('暂无可预演的影响分析数据'); return; }
   openPreviewTab({id:null, kind:'report', kind_label:'报告', title:'🛠 变更模拟（沙箱 · 真实图谱）',
     preview_type:'html',
-    preview_content:'<div id="sim-panel" style="font-size:12.5px;line-height:1.7;">⏳ 正在构建真实图谱基线…</div>',
+    preview_content:'<div id="sim-panel" style="font-size:13.5px;line-height:1.7;">⏳ 正在构建真实图谱基线…</div>',
     content:'', message_id:null, meta:{}});
   try{
     const r = await api('/api/impact/baseline', {method:'POST',
@@ -712,7 +712,7 @@ function simRenderPanelReal(){
     <div class="rc-chip b">🛠 变更模拟（沙箱 · 真实图谱基线）</div>
     <div class="note" style="margin:8px 0;">基线：<b>${esc(s.name)}</b>（${esc(s.entity_type||'')}）· ${nn} 节点 / ${ne} 边（release 已发布分支依赖网络）· 深 ${_simReal.depth} 层 · ${_simReal.direction==='up'?'向上游':_simReal.direction==='down'?'向下游':'双向'}。全程不写正式图谱。</div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-      <span style="font-size:12px;color:var(--mut);">变更源：${esc(s.name)}</span>
+      <span style="font-size:13.5px;color:var(--mut);">变更源：${esc(s.name)}</span>
       <span style="flex:1;"></span>
       <button class="btn sm grn" onclick="simRunPreReal()">▶ 预演变更</button>
       <button class="btn sm ghost" onclick="simExport()">📄 导出对比报告</button>
@@ -773,9 +773,9 @@ function panelImpact(cd, gid) {
         <span class="rc-chip r"><span class="n">${s.direct||0}</span> 直接</span>
         <span class="rc-chip a"><span class="n">${s.indirect||0}</span> 间接</span>
         <span class="rc-chip g"><span class="n">${ns.length}</span> 合计</span>
-        <span style="font-size:11px;color:var(--mut);">影响度随层衰减（α=0.6）</span>
+        <span style="font-size:12.5px;color:var(--mut);">影响度随层衰减（α=0.6）</span>
       </div>
-      <div class="depth-nodes">${nodesHtml||'<span style="color:var(--mut);font-size:11px;">无元素</span>'}</div>
+      <div class="depth-nodes">${nodesHtml||'<span style="color:var(--mut);font-size:12.5px;">无元素</span>'}</div>
     </div>`;
   }).join('');
 
@@ -783,10 +783,10 @@ function panelImpact(cd, gid) {
   const typeMax = Math.max(1, ...Object.values(ts));
   const typeHtml = Object.entries(ts).map(([t,c])=>`
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-      <span style="flex:0 0 90px;font-size:11px;color:var(--mut);text-align:right;">${esc(t)}</span>
+      <span style="flex:0 0 90px;font-size:12.5px;color:var(--mut);text-align:right;">${esc(t)}</span>
       <div style="flex:1;height:14px;background:#eef1f6;border-radius:7px;overflow:hidden;">
         <div style="width:${(c/typeMax*100).toFixed(1)}%;height:100%;background:#185FA5;border-radius:7px;"></div></div>
-      <span style="flex:0 0 24px;font-size:11px;font-weight:600;">${c}</span>
+      <span style="flex:0 0 24px;font-size:12.5px;font-weight:600;">${c}</span>
     </div>`).join('');
 
   // ── 广度分析：关系类型分布 ──
@@ -795,7 +795,7 @@ function panelImpact(cd, gid) {
   // ── 广度分析：跨领域影响（系统/需求/验证等工程领域）──
   const domRows = Object.entries(doms).map(([dom,o])=>`
     <tr><td><b>${esc(dom)}</b></td><td>${o.count}</td>
-    <td style="font-size:11px;color:var(--mut);">${esc((o.nodes||[]).slice(0,6).join('、'))}${(o.nodes||[]).length>6?' 等':''}</td></tr>`).join('');
+    <td style="font-size:12.5px;color:var(--mut);">${esc((o.nodes||[]).slice(0,6).join('、'))}${(o.nodes||[]).length>6?' 等':''}</td></tr>`).join('');
 
   // ── 影响矩阵（2026-09-15 报告 2.0：CPM 组合风险，行=变更源 列=受影响元素）──
   const rm = cd.risk_matrix||[];
@@ -812,9 +812,9 @@ function panelImpact(cd, gid) {
   const decColor = dec.recommendation==='批准' ? 'var(--grn)' : (dec.recommendation==='提交 CCB 评审' ? 'var(--blue-d)' : 'var(--amb)');
   const decBg = dec.recommendation==='批准' ? 'var(--grn-l)' : (dec.recommendation==='提交 CCB 评审' ? 'var(--blue-l)' : 'var(--amb-l)');
   const decHtml = dec.recommendation ? `<div style="margin:10px 0;border:1px solid ${decColor};background:${decBg};border-radius:8px;padding:8px 10px;">
-    <b style="font-size:13px;">⚖ 决策建议：${esc(dec.recommendation)}</b>
-    ${(dec.reasons||[]).map(r=>`<div style="font-size:11.5px;margin-top:2px;">· ${esc(r)}</div>`).join('')}
-    ${(dec.conditions||[]).map(c=>`<div style="font-size:11.5px;color:var(--red);margin-top:2px;">▸ 条件：${esc(c)}</div>`).join('')}
+    <b style="font-size:14.5px;">⚖ 决策建议：${esc(dec.recommendation)}</b>
+    ${(dec.reasons||[]).map(r=>`<div style="font-size:12.5px;margin-top:2px;">· ${esc(r)}</div>`).join('')}
+    ${(dec.conditions||[]).map(c=>`<div style="font-size:12.5px;color:var(--red);margin-top:2px;">▸ 条件：${esc(c)}</div>`).join('')}
   </div>` : '';
 
   // ── 元素关键度画像（Eckert 三分类：Absorber/Carrier/Multiplier）──
@@ -824,18 +824,18 @@ function panelImpact(cd, gid) {
   const multipliers = Object.entries(ep).filter(([,p])=>p.profile==='multiplier')
     .sort((x,y)=>y[1].out_w-x[1].out_w).slice(0,8)
     .map(([,p])=>`<span class="rc-chip r"><span class="n">${p.out_w}</span> ${esc(p.name)}</span>`).join('')
-    || '<span style="color:var(--mut);font-size:11px;">无</span>';
+    || '<span style="color:var(--mut);font-size:12.5px;">无</span>';
   const profileHtml = `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:4px;">
     <span class="rc-chip g"><span class="n">${profCount.absorber}</span> 吸收型</span>
     <span class="rc-chip b"><span class="n">${profCount.carrier}</span> 传递型</span>
     <span class="rc-chip r"><span class="n">${profCount.multiplier}</span> 放大型</span></div>
-    ${multipliers!=='<span style="color:var(--mut);font-size:11px;">无</span>'?`<div style="margin-top:4px;font-size:11.5px;">变更放大器（Multiplier，沿出边传播强）：${multipliers}</div>`:''}`;
+    ${multipliers!=='<span style="color:var(--mut);font-size:12.5px;">无</span>'?`<div style="margin-top:4px;font-size:12.5px;">变更放大器（Multiplier，沿出边传播强）：${multipliers}</div>`:''}`;
 
   // ── 传播路径明细（CPM 全路径枚举 Top 30）──
   const pl = cd.path_list||[];
-  const pathHtml = pl.map(p=>`<div style="padding:2px 0;font-size:11.5px;border-bottom:1px dashed var(--line);">
+  const pathHtml = pl.map(p=>`<div style="padding:2px 0;font-size:12.5px;border-bottom:1px dashed var(--line);">
     ${p.node_names.map(esc).join(' <b style="color:var(--mut);">→</b> ')} <b style="color:${p.likelihood>=0.5?'var(--red)':'var(--mut)'};">P=${p.likelihood}</b></div>`).join('')
-    || '<div style="color:var(--mut);font-size:11px;">无传播路径（该变更类型下所有传播通道权重为 0 或无可达元素）</div>';
+    || '<div style="color:var(--mut);font-size:12.5px;">无传播路径（该变更类型下所有传播通道权重为 0 或无可达元素）</div>';
 
   // ── P2 仪表板：受影响清单（分级分组 + 定位联动；graphKey 存全局供 tab/定位/保存用）──
   window._lastImpactGid = graphKey;
@@ -846,10 +846,10 @@ function panelImpact(cd, gid) {
       <td style="text-align:center;color:#fff;background:${heatBg(n.score||0)};font-weight:700;">${n.score!==undefined?n.score:'-'}</td>
       <td style="text-align:center;">${n.depth}</td>
       <td style="text-align:center;">${n.impact==='direct'?'<span class="st r">直接</span>':'<span class="st a">间接</span>'}</td>
-      <td style="text-align:center;"><button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="event.stopPropagation();impactFocusNode('${graphKey}','${String(n.id).replace(/'/g,'')}','${esc(n.name).replace(/'/g,'')}')">🎯</button></td></tr>`;
+      <td style="text-align:center;"><button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="event.stopPropagation();impactFocusNode('${graphKey}','${String(n.id).replace(/'/g,'')}','${esc(n.name).replace(/'/g,'')}')">🎯</button></td></tr>`;
   const listGrp = (lvl, label) => {
     const rows = affected.filter(n=>n.level===lvl).sort((a,b)=>-(a.score||0)+(b.score||0)).map(listRow).join('');
-    return rows ? `<tr><td colspan="5" style="background:#f2f5f9;font-size:11px;font-weight:700;">${label}（${rows?affected.filter(n=>n.level===lvl).length:0}）</td></tr>${rows}` : '';
+    return rows ? `<tr><td colspan="5" style="background:#f2f5f9;font-size:12.5px;font-weight:700;">${label}（${rows?affected.filter(n=>n.level===lvl).length:0}）</td></tr>${rows}` : '';
   };
   const listHtml = (listGrp('high','🔴 高影响 — 优先复核') + listGrp('mid','🟠 中影响') + listGrp('low','🔵 低影响'))
     || '<tr><td colspan="5" style="color:var(--mut);">无受影响元素</td></tr>';
@@ -859,15 +859,15 @@ function panelImpact(cd, gid) {
   const retestRows = (rp.items||[]).map((it,i)=>`<tr>
       <td><input type="checkbox" id="${graphKey}-rt-${i}" checked></td>
       <td>${esc(it.name)} <span class="tag">${esc(it.type)}</span></td>
-      <td style="font-size:11.5px;">${esc(it.reason)}${it.via?`（经由 ${esc(it.via)}）`:''}</td>
+      <td style="font-size:12.5px;">${esc(it.reason)}${it.via?`（经由 ${esc(it.via)}）`:''}</td>
       <td style="text-align:center;color:#fff;background:${heatBg(it.score||0)};font-weight:700;">${it.score!==undefined&&it.score!==null?it.score:'-'}</td>
-      <td style="text-align:center;"><button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" title="在网络图中定位该验证活动" onclick="impactFocusNode('${graphKey}','${String(it.id).replace(/'/g,'')}','${esc(it.name).replace(/'/g,'')}')">🎯</button></td></tr>`).join('');
+      <td style="text-align:center;"><button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" title="在网络图中定位该验证活动" onclick="impactFocusNode('${graphKey}','${String(it.id).replace(/'/g,'')}','${esc(it.name).replace(/'/g,'')}')">🎯</button></td></tr>`).join('');
   const ef = cd.effort_estimate||[];
   const effortRows = ef.map(r=>`<tr>
       <td>${esc(r.label)}</td>
       <td style="text-align:center;">${r.count||0}</td>
-      <td style="text-align:center;"><input type="number" min="0" step="0.5" id="${graphKey}-ef-${r.key}" value="${r.effort||''}" placeholder="人日" style="width:70px;border:1px solid var(--line);border-radius:5px;padding:2px 5px;font-size:11.5px;" onchange="impactEffortSum('${graphKey}')"></td>
-      <td><input type="text" id="${graphKey}-efn-${r.key}" placeholder="备注（可空）" style="width:100%;border:1px dashed var(--line);border-radius:5px;padding:2px 6px;font-size:11.5px;"></td></tr>`).join('');
+      <td style="text-align:center;"><input type="number" min="0" step="0.5" id="${graphKey}-ef-${r.key}" value="${r.effort||''}" placeholder="人日" style="width:70px;border:1px solid var(--line);border-radius:5px;padding:2px 5px;font-size:12.5px;" onchange="impactEffortSum('${graphKey}')"></td>
+      <td><input type="text" id="${graphKey}-efn-${r.key}" placeholder="备注（可空）" style="width:100%;border:1px dashed var(--line);border-radius:5px;padding:2px 6px;font-size:12.5px;"></td></tr>`).join('');
 
   // ── 风险与建议（FR-CIA-2 影响程度分析：描述铺开 + 建议独立提示框）──
   const riskHtml = (ra.risks||[]).map(r=>`
@@ -889,9 +889,9 @@ function panelImpact(cd, gid) {
   const evidence = cd.evidence||[];
   const evidenceHtml = evidence.map(e=>`
     <div style="border-bottom:1px dashed var(--line);padding:6px 0;">
-      <b style="font-size:12px;">${esc(e.element)}</b> <span class="tag">${esc(e.type)}</span>
-      <span style="font-size:11px;color:var(--mut);">影响度 ${e.score!==undefined?e.score:''}</span>
-      ${(e.hits||[]).map(h=>`<div style="font-size:11.5px;color:var(--mut);margin:3px 0 0 12px;">
+      <b style="font-size:13.5px;">${esc(e.element)}</b> <span class="tag">${esc(e.type)}</span>
+      <span style="font-size:12.5px;color:var(--mut);">影响度 ${e.score!==undefined?e.score:''}</span>
+      ${(e.hits||[]).map(h=>`<div style="font-size:12.5px;color:var(--mut);margin:3px 0 0 12px;">
         📄 ${esc(h.source_doc)} <span class="tag">${h.score}</span>${h.origin==='ai_generated'?' <span class="tag">🤖 AI</span>':''}<br/>
         <span style="color:#5a6678;">${esc(h.snippet||'')}…</span></div>`).join('')}
     </div>`).join('') || '';
@@ -914,7 +914,7 @@ function panelImpact(cd, gid) {
       <span class="rc-chip g"><span class="n">${lv.low||0}</span> 低影响</span>
       <span class="rc-chip b"><span class="n">${ra.max_depth||cd.depth||1}</span> 影响深度(层)</span>
     </div>
-    <div style="margin-top:4px;font-size:11.5px;color:var(--mut);">
+    <div style="margin-top:4px;font-size:12.5px;color:var(--mut);">
       影响概况：深度 ${ra.max_depth||(cd.depth||1)} 层、广度 ${affected.length} 个元素${coverageTxt}，
       跨 ${Object.keys(doms).length} 个工程领域，传播沿 ${Object.keys(rs).length} 类关系。${cd.indirect_count>0?'间接影响占主导时建议升级变更评审（CCB）。':''}</div>
 
@@ -927,9 +927,9 @@ function panelImpact(cd, gid) {
     <div style="max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:8px;">
     <table class="t" style="margin:0;"><tr><th>受影响元素</th><th style="width:80px;">组合风险</th><th style="width:80px;">传播路径</th><th style="width:130px;">直接 / 间接</th></tr>
     ${matrixRows||'<tr><td colspan="4" style="color:var(--mut);">无受影响元素</td></tr>'}
-    ${rm.length>15?`<tr><td colspan="4" style="color:var(--mut);font-size:11px;">… 其余 ${rm.length-15} 个元素省略，见下方明细表</td></tr>`:''}
+    ${rm.length>15?`<tr><td colspan="4" style="color:var(--mut);font-size:12.5px;">… 其余 ${rm.length-15} 个元素省略，见下方明细表</td></tr>`:''}
     </table></div>
-    <div style="margin-top:6px;font-size:11px;color:var(--mut);">组合风险 = 1-∏(1-路径概率)（CPM 合并）；同元素多条路径时取合并值，直接/间接为途经该元素的路径分类。</div>
+    <div style="margin-top:6px;font-size:12.5px;color:var(--mut);">组合风险 = 1-∏(1-路径概率)（CPM 合并）；同元素多条路径时取合并值，直接/间接为途经该元素的路径分类。</div>
 
     <h4 style="margin:16px 0 6px;">📏 影响深度分析<span class="badge">各层直接/间接分布</span></h4>
     ${depthHtml||'<div style="color:var(--mut);">未构建影响传播链</div>'}
@@ -937,13 +937,13 @@ function panelImpact(cd, gid) {
     <h4 style="margin:16px 0 6px;">🌐 影响广度分析<span class="badge">跨领域 / 类型 / 关系分布</span></h4>
     <div style="display:flex;gap:14px;flex-wrap:wrap;">
       <div style="flex:1;min-width:240px;border:1px solid var(--line);border-radius:8px;padding:10px;">
-        <div style="font-size:12px;font-weight:600;margin-bottom:6px;">受影响元素类型分布（${affected.length}）</div>
-        ${typeHtml||'<div style="color:var(--mut);font-size:11px;">无统计</div>'}
+        <div style="font-size:13.5px;font-weight:600;margin-bottom:6px;">受影响元素类型分布（${affected.length}）</div>
+        ${typeHtml||'<div style="color:var(--mut);font-size:12.5px;">无统计</div>'}
       </div>
       <div style="flex:1;min-width:240px;border:1px solid var(--line);border-radius:8px;padding:10px;">
-        <div style="font-size:12px;font-weight:600;margin-bottom:6px;">传播关系类型（${Object.keys(rs).length}）</div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;">${relHtml||'<span style="color:var(--mut);font-size:11px;">无统计</span>'}</div>
-        <div style="font-size:12px;font-weight:600;margin:12px 0 6px;">跨领域影响（${Object.keys(doms).length}）</div>
+        <div style="font-size:13.5px;font-weight:600;margin-bottom:6px;">传播关系类型（${Object.keys(rs).length}）</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">${relHtml||'<span style="color:var(--mut);font-size:12.5px;">无统计</span>'}</div>
+        <div style="font-size:13.5px;font-weight:600;margin:12px 0 6px;">跨领域影响（${Object.keys(doms).length}）</div>
         <table class="t" style="margin:0;"><tr><th>工程领域</th><th>数量</th><th>受影响元素</th></tr>${domRows||'<tr><td colspan="3" style="color:var(--mut);">无统计</td></tr>'}</table>
       </div>
     </div>
@@ -953,38 +953,38 @@ function panelImpact(cd, gid) {
 
     <h4 style="margin:16px 0 6px;">🧭 元素关键度画像<span class="badge">Eckert 吸收 / 传递 / 放大</span></h4>
     <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;">${profileHtml}
-      <div style="margin-top:6px;font-size:11px;color:var(--mut);">* Multiplier（放大型）元素产生的变更多于其吸收的，是变更雪崩的潜在源头，评审时优先关注。</div></div>
+      <div style="margin-top:6px;font-size:12.5px;color:var(--mut);">* Multiplier（放大型）元素产生的变更多于其吸收的，是变更雪崩的潜在源头，评审时优先关注。</div></div>
 
     <h4 style="margin:16px 0 6px;">🧪 重测与工作量<span class="badge">Wiegers 面向三 · 勾选回写报告</span></h4>
     <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;">
-      <div style="font-size:12px;font-weight:600;margin-bottom:6px;">需重测验证活动（${rp.total||0} 项，勾选项写入保存的报告）</div>
+      <div style="font-size:13.5px;font-weight:600;margin-bottom:6px;">需重测验证活动（${rp.total||0} 项，勾选项写入保存的报告）</div>
       <table class="t" style="margin:0;"><tr><th style="width:40px;">选</th><th>验证活动</th><th>受影响原因</th><th style="width:70px;">组合风险</th><th style="width:52px;">定位</th></tr>
-      ${retestRows||'<tr><td colspan="5" style="color:var(--grn);font-size:12px;">✓ 无需重测——影响范围内无验证活动，受影响需求也未挂接验证活动</td></tr>'}</table>
-      <div style="font-size:12px;font-weight:600;margin:12px 0 6px;">工作量估算表（涉及数量由影响分布预填；人日<b>人工编辑</b>，不做自动估算——Wiegers R1 结构化清单）</div>
+      ${retestRows||'<tr><td colspan="5" style="color:var(--grn);font-size:13.5px;">✓ 无需重测——影响范围内无验证活动，受影响需求也未挂接验证活动</td></tr>'}</table>
+      <div style="font-size:13.5px;font-weight:600;margin:12px 0 6px;">工作量估算表（涉及数量由影响分布预填；人日<b>人工编辑</b>，不做自动估算——Wiegers R1 结构化清单）</div>
       <table class="t" style="margin:0;"><tr><th>任务项</th><th style="width:80px;">涉及数量</th><th style="width:90px;">工作量</th><th>备注</th></tr>
       ${effortRows||''}
       <tr><td colspan="2" style="text-align:right;font-weight:700;">合计</td>
         <td style="text-align:center;font-weight:700;" id="${graphKey}-ef-total">—</td><td></td></tr></table>
-      <div style="margin-top:6px;font-size:11px;color:var(--mut);">* 数量列口径：模型修改=受影响模型类元素、需求更新=受影响需求/约束、接口调整=受影响接口类、重测执行=上方清单勾选数、评审=高影响元素数。填完人日自动合计，保存产物时一并写入。</div>
+      <div style="margin-top:6px;font-size:12.5px;color:var(--mut);">* 数量列口径：模型修改=受影响模型类元素、需求更新=受影响需求/约束、接口调整=受影响接口类、重测执行=上方清单勾选数、评审=高影响元素数。填完人日自动合计，保存产物时一并写入。</div>
     </div>
 
     <h4 style="margin:16px 0 6px;">🔀 传播路径明细<span class="badge">CPM 全路径枚举（限深 ${cd.depth||1} 层）</span></h4>
     <details style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;">
-      <summary style="cursor:pointer;font-size:12px;font-weight:600;">共 ${cd.path_count||pl.length} 条传播路径（点击展开 Top ${pl.length}，按概率降序）</summary>
+      <summary style="cursor:pointer;font-size:13.5px;font-weight:600;">共 ${cd.path_count||pl.length} 条传播路径（点击展开 Top ${pl.length}，按概率降序）</summary>
       <div style="margin-top:6px;max-height:320px;overflow:auto;">${pathHtml}</div>
     </details>
 
     <h4 style="margin:16px 0 6px;">🧾 证据补充（向量库检索）<span class="badge">混合溯源</span></h4>
     <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;">
-      ${evidenceHtml || '<div style="color:var(--mut);font-size:12px;">暂无向量库补充证据（图谱依赖网络为主要证据源；知识库覆盖不足时自动检索相关文档佐证）</div>'}
-      <div style="margin-top:6px;font-size:11px;color:var(--mut);">* 图谱依赖网络为主证据；以下为向量库（文档库分块）对高影响元素的文档佐证，用于知识库覆盖不足时的混合溯源。</div>
+      ${evidenceHtml || '<div style="color:var(--mut);font-size:13.5px;">暂无向量库补充证据（图谱依赖网络为主要证据源；知识库覆盖不足时自动检索相关文档佐证）</div>'}
+      <div style="margin-top:6px;font-size:12.5px;color:var(--mut);">* 图谱依赖网络为主证据；以下为向量库（文档库分块）对高影响元素的文档佐证，用于知识库覆盖不足时的混合溯源。</div>
     </div>
 
     <h4 style="margin:16px 0 6px;">🔗 影响关系明细（${edges.length}）<span class="badge">FR-CIA-1~4</span></h4>
     <div style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:8px;">
     <table class="t" style="margin:0;"><tr><th>来源</th><th>关系</th><th>目标</th><th>影响级别</th></tr>
     ${edgeRows||'<tr><td colspan="4" style="color:var(--mut);">无影响边</td></tr>'}</table></div>
-    <p style="margin-top:14px;color:var(--mut);font-size:12px;">* 变更结果须经人工确认后提交合并（BR-2 人在回路）；组合风险 = 1-∏(1-路径概率)，路径概率 = 沿途关系权重 × 变更类型系数之积（CPM 方法，限深 ${cd.depth||1} 层）；证据来自图谱依赖网络 + 向量库混合溯源。</p>`;
+    <p style="margin-top:14px;color:var(--mut);font-size:13.5px;">* 变更结果须经人工确认后提交合并（BR-2 人在回路）；组合风险 = 1-∏(1-路径概率)，路径概率 = 沿途关系权重 × 变更类型系数之积（CPM 方法，限深 ${cd.depth||1} 层）；证据来自图谱依赖网络 + 向量库混合溯源。</p>`;
 }
 /* 2026-09-15 报告 2.0：改名专用面板 —— 结构零传播，输出「引用更新清单」 */
 function panelImpactRename(cd) {
@@ -993,22 +993,22 @@ function panelImpactRename(cd) {
   const dec = cd.decisions||{};
   const cnt = Object.values(refs).reduce((s,a)=>s+((a&&a.length)||0),0);
   const sec = (title, items, fmt) => `<h4 style="margin:14px 0 6px;">${title}（${(items||[]).length}）</h4>` +
-    ((items&&items.length)? items.map(fmt).join('') : '<div style="color:var(--mut);font-size:12px;">未发现</div>');
+    ((items&&items.length)? items.map(fmt).join('') : '<div style="color:var(--mut);font-size:13.5px;">未发现</div>');
   return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-    <span style="font-size:11px;color:var(--mut);">改名不改结构依赖（标识不变）——本报告为引用更新清单，非影响传播链</span>
+    <span style="font-size:12.5px;color:var(--mut);">改名不改结构依赖（标识不变）——本报告为引用更新清单，非影响传播链</span>
   </div>
   <h3 style="color:var(--blue-d);margin-bottom:10px;">✏️ 改名影响分析 · 引用更新清单</h3>
   <div class="note" style="margin-bottom:8px;">变更类型：<b>改名</b> ｜ 变更源：${esc(src.name||'')}（${esc(src.entity_type||'')}）</div>
   <div class="note" style="margin-bottom:10px;">✓ <b>结构影响：0</b> —— 改名不改变元素标识与依赖关系，组合/满足/验证等结构传播为零；需要处理的只有「文本引用」：以下 ${cnt} 处硬编码了旧名，需同步更新。</div>
-  ${sec('📄 文档库文档引用', refs.docs||[], d=>`<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:12px;">📄 <b>${esc(d.source_doc)}</b><div style="font-size:11.5px;color:var(--mut);margin-left:18px;">${esc(d.snippet||'')}…</div></div>`)}
-  ${sec('📌 需求 / 元素文本引用', refs.requirements||[], r=>`<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:12px;"><b>${esc(r.name)}</b> <span class="tag">${esc(r.entity_type)}</span><div style="font-size:11.5px;color:var(--mut);margin-left:18px;">${esc(r.snippet||'')}…</div></div>`)}
-  ${sec('📖 词典词条', refs.glossary||[], g=>`<div style="padding:4px 0;font-size:12px;">📖 ${esc(g.term||'')}</div>`)}
-  ${sec('💻 代码产物引用', refs.code||[], x=>`<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:12px;">💻 <b>${esc(x.title)}</b><div style="font-size:11.5px;color:var(--mut);margin-left:18px;">${esc(x.snippet||'')}…</div></div>`)}
+  ${sec('📄 文档库文档引用', refs.docs||[], d=>`<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:13.5px;">📄 <b>${esc(d.source_doc)}</b><div style="font-size:12.5px;color:var(--mut);margin-left:18px;">${esc(d.snippet||'')}…</div></div>`)}
+  ${sec('📌 需求 / 元素文本引用', refs.requirements||[], r=>`<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:13.5px;"><b>${esc(r.name)}</b> <span class="tag">${esc(r.entity_type)}</span><div style="font-size:12.5px;color:var(--mut);margin-left:18px;">${esc(r.snippet||'')}…</div></div>`)}
+  ${sec('📖 词典词条', refs.glossary||[], g=>`<div style="padding:4px 0;font-size:13.5px;">📖 ${esc(g.term||'')}</div>`)}
+  ${sec('💻 代码产物引用', refs.code||[], x=>`<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:13.5px;">💻 <b>${esc(x.title)}</b><div style="font-size:12.5px;color:var(--mut);margin-left:18px;">${esc(x.snippet||'')}…</div></div>`)}
   ${dec.recommendation?`<div style="margin:12px 0;border:1px solid var(--amb);background:var(--amb-l);border-radius:8px;padding:8px 10px;">
-    <b style="font-size:13px;">⚖ 决策建议：${esc(dec.recommendation)}</b>
-    ${(dec.reasons||[]).map(r=>`<div style="font-size:11.5px;margin-top:2px;">· ${esc(r)}</div>`).join('')}
-    ${(dec.conditions||[]).map(c=>`<div style="font-size:11.5px;color:var(--red);margin-top:2px;">▸ 条件：${esc(c)}</div>`).join('')}</div>`:''}
-  <p style="color:var(--mut);font-size:12px;">* 提示：本体<b>类型</b>改名已在保存时自动迁移实例与关系引用；本清单处理的是实例<b>显示名</b>变更后的文本残留。</p>`;
+    <b style="font-size:14.5px;">⚖ 决策建议：${esc(dec.recommendation)}</b>
+    ${(dec.reasons||[]).map(r=>`<div style="font-size:12.5px;margin-top:2px;">· ${esc(r)}</div>`).join('')}
+    ${(dec.conditions||[]).map(c=>`<div style="font-size:12.5px;color:var(--red);margin-top:2px;">▸ 条件：${esc(c)}</div>`).join('')}</div>`:''}
+  <p style="color:var(--mut);font-size:13.5px;">* 提示：本体<b>类型</b>改名已在保存时自动迁移实例与关系引用；本清单处理的是实例<b>显示名</b>变更后的文本残留。</p>`;
 }
 function panelReview(cd) {
   const issues = cd.issues||[];
@@ -1024,7 +1024,7 @@ function panelReview(cd) {
     <table class="t"><tr><th>级别</th><th>类型</th><th>描述</th><th>建议处理</th></tr>
     ${issues.map(i=>`<tr><td>${i.level==='error'?'<span class="st r">错误</span>':i.level==='warning'?'<span class="st a">警告</span>':'<span class="st b">提示</span>'}</td><td>${esc(i.type)}</td><td>${esc(i.desc)}</td><td>${esc(i.fix||'-')}</td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--mut);">无问题</td></tr>'}</table>
     <div style="margin-top:14px;display:flex;align-items:center;gap:8px;"><b>评审结论：</b><span class="st ${cd.conclusion==='不通过'?'r':cd.conclusion==='有条件通过'?'a':'ok'}">${esc(cd.conclusion)}</span></div>
-    <p style="margin-top:10px;color:var(--mut);font-size:12px;">* 问题修复后需重新评审，通过方可进入合并流程。</p>`;
+    <p style="margin-top:10px;color:var(--mut);font-size:13.5px;">* 问题修复后需重新评审，通过方可进入合并流程。</p>`;
 }
 function dispDescr(it){
   // 2026-08-28：descr 为 URL 时显示为端点地址（工具卡片常见：descr 误存 URL），否则原样；空则占位
@@ -1038,7 +1038,7 @@ function cardMeta(it){
   if(it.version) seg.push('v'+it.version);
   if(it.category) seg.push(esc(it.category));
   if(it.install_count!=null) seg.push('安装 '+it.install_count);
-  return seg.length ? '<div style="font-size:10.5px;color:var(--mut);margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;"><span class="fpill gray">'+seg.join('</span><span class="fpill gray">')+'</span></div>' : '';
+  return seg.length ? '<div style="font-size:12px;color:var(--mut);margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;"><span class="fpill gray">'+seg.join('</span><span class="fpill gray">')+'</span></div>' : '';
 }
 // 插件库子模块 tab 切换（Agent/技能/工具/插件市场）
 function switchStLibTab(el, pane){
@@ -1079,8 +1079,8 @@ function _libCard(it, zone){
   const ops = zone==='mine'
     ? '<button class="btn sm ghost" onclick="go(\'studio\',\'st-'+ (it.kind==='prompt'?'prompt':(it.kind||'skill')) +'\')">打开</button>'
     : ((it.kind==='skill'||it.kind==='mcp') ? '<button class="btn sm" onclick="marketInstall(\''+it.kind+'\',\''+esc(String(it.name).replace(/'/g,"\\'"))+'\',this)">＋ 安装</button>' : '');
-  return '<div class="card"><div style="font-weight:600;font-size:12px;">'+esc(it.name||'')+' <span class="tag">'+esc(kindTag)+'</span> '+stBadge+'</div>'
-    + '<div style="font-size:11.5px;color:var(--mut);margin-top:4px;">'+dispDescr(it)+'</div>'+cardMeta(it)
+  return '<div class="card"><div style="font-weight:600;font-size:13.5px;">'+esc(it.name||'')+' <span class="tag">'+esc(kindTag)+'</span> '+stBadge+'</div>'
+    + '<div style="font-size:12.5px;color:var(--mut);margin-top:4px;">'+dispDescr(it)+'</div>'+cardMeta(it)
     + '<div class="bar" style="margin-top:6px;">'+ops+'</div></div>';
 }
 async function loadPluginLib(){
@@ -1126,18 +1126,18 @@ async function loadPluginLib(){
 // fail/skip 不混入四档计数（它们不是结构问题）；fail 不阻断发布（R1），仅留痕可追责。
 function oeCqHtml(cq){
   if(!cq) return '';
-  if(cq.error) return `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;font-size:11px;color:#c77700;">⚠️ 能力问题（CQ）执行降级：${esc(cq.error)}</div>`;
+  if(cq.error) return `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;font-size:12.5px;color:#c77700;">⚠️ 能力问题（CQ）执行降级：${esc(cq.error)}</div>`;
   const tone = s => s==='pass' ? {fg:'var(--grn,#2f855a)',ico:'✅'} : s==='fail' ? {fg:'var(--red)',ico:'❌'} : {fg:'#c77700',ico:'⚠️'};
   const rows = (cq.results||[]).map(x=>{ const t=tone(x.status);
     return `<div style="display:flex;align-items:flex-start;gap:8px;padding:5px 8px;border-radius:6px;margin-top:5px;background:#F7F9FB;border:1px solid ${x.status==='fail'?'#F0C4C4':'#DFE5EC'};">
-      <span style="flex:none;font-size:10px;font-weight:700;color:${t.fg};margin-top:1px;" title="pass=符合期望 / fail=不符合 / skip=执行不了（降级）">${t.ico} ${esc(x.status)}</span>
-      <div style="flex:1;min-width:0;"><div style="font-size:11.5px;">${esc(x.question)}</div>
-      ${x.message?`<div style="font-size:10.5px;color:var(--mut);margin-top:1px;">${esc(x.message)}</div>`:''}</div>
+      <span style="flex:none;font-size:12px;font-weight:700;color:${t.fg};margin-top:1px;" title="pass=符合期望 / fail=不符合 / skip=执行不了（降级）">${t.ico} ${esc(x.status)}</span>
+      <div style="flex:1;min-width:0;"><div style="font-size:12.5px;">${esc(x.question)}</div>
+      ${x.message?`<div style="font-size:12px;color:var(--mut);margin-top:1px;">${esc(x.message)}</div>`:''}</div>
     </div>`; }).join('');
   const bad = (cq.failed||0) + (cq.skipped||0);
   return `<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px;">
-    <b style="font-size:12.5px;">❓ 能力问题（CQ）· validation 层</b>
-    <span style="font-size:11px;color:var(--mut);margin-left:6px;">业务问题问答，与上方机械体检互补；${(cq.failed||0)?`<span style="color:var(--red);font-weight:600;">fail ${cq.failed}</span>`:'fail 0'} / skip ${(cq.skipped||0)} / 共 ${cq.total||0}（不阻断发布，留痕可追责）</span>
+    <b style="font-size:13.5px;">❓ 能力问题（CQ）· validation 层</b>
+    <span style="font-size:12.5px;color:var(--mut);margin-left:6px;">业务问题问答，与上方机械体检互补；${(cq.failed||0)?`<span style="color:var(--red);font-weight:600;">fail ${cq.failed}</span>`:'fail 0'} / skip ${(cq.skipped||0)} / 共 ${cq.total||0}（不阻断发布，留痕可追责）</span>
     ${rows || '<div class="hint" style="margin-top:5px;">（无启用的 CQ，到「❓ CQ」面板登记）</div>'}
   </div>`;
 }
@@ -1155,15 +1155,15 @@ async function oeDlCheck(){
     if(box) box.innerHTML = issues0(d);
     const body = d.ran
       ? (d.consistent
-        ? `<div style="display:flex;align-items:center;gap:10px;padding:18px 16px 6px;"><span style="font-size:26px;">🧠</span>
-           <div><b style="font-size:13.5px;color:var(--grn,#2f855a);">DL 语义一致（Pellet）</b>
-           <div style="font-size:11.5px;color:var(--mut);margin-top:3px;">${d.classes||'-'} 类 / ${d.properties||'-'} 属性，耗时 ${d.elapsed_ms}ms —— 无不可满足类、无互斥特性矛盾</div></div></div>`
-        : `<div style="display:flex;align-items:center;gap:10px;padding:18px 16px 6px;"><span style="font-size:26px;">💥</span>
-           <div><b style="font-size:13.5px;color:var(--red);">DL 语义不一致（Pellet）</b>
-           <div style="font-size:11.5px;color:var(--mut);margin-top:3px;">${esc(d.error||'本体存在 DL 语义矛盾（如互斥特性同声明）')}</div></div></div>`)
-      : `<div style="padding:18px 16px 6px;color:#c77700;font-size:12px;">⚠️ DL 深检未能执行：${esc(d.error||'')}</div>`;
+        ? `<div style="display:flex;align-items:center;gap:10px;padding:18px 16px 6px;"><span style="font-size:27px;">🧠</span>
+           <div><b style="font-size:14.5px;color:var(--grn,#2f855a);">DL 语义一致（Pellet）</b>
+           <div style="font-size:12.5px;color:var(--mut);margin-top:3px;">${d.classes||'-'} 类 / ${d.properties||'-'} 属性，耗时 ${d.elapsed_ms}ms —— 无不可满足类、无互斥特性矛盾</div></div></div>`
+        : `<div style="display:flex;align-items:center;gap:10px;padding:18px 16px 6px;"><span style="font-size:27px;">💥</span>
+           <div><b style="font-size:14.5px;color:var(--red);">DL 语义不一致（Pellet）</b>
+           <div style="font-size:12.5px;color:var(--mut);margin-top:3px;">${esc(d.error||'本体存在 DL 语义矛盾（如互斥特性同声明）')}</div></div></div>`)
+      : `<div style="padding:18px 16px 6px;color:#c77700;font-size:13.5px;">⚠️ DL 深检未能执行：${esc(d.error||'')}</div>`;
     openPanel('🧠 DL 语义深检（Pellet）', body +
-      `<div style="font-size:11px;color:var(--mut);padding:0 16px 4px;line-height:1.6;">DL 深检为手动低频操作（~2s），不发发布门禁；能抓结构规则抓不到的语义矛盾（P2-1 实证：reflexive+asymmetric 同声明时结构体检全绿而 Pellet 判不一致）。</div>
+      `<div style="font-size:12.5px;color:var(--mut);padding:0 16px 4px;line-height:1.6;">DL 深检为手动低频操作（~2s），不发发布门禁；能抓结构规则抓不到的语义矛盾（P2-1 实证：reflexive+asymmetric 同声明时结构体检全绿而 Pellet 判不一致）。</div>
        <div style="text-align:right;padding:8px 16px 16px;"><button class="btn ghost" onclick="closePanel()">关闭</button></div>`);
   }catch(e){ if(box) box.innerHTML = ''; toast('DL 深检失败：'+(e.message||e)); }
 }
@@ -1198,9 +1198,9 @@ async function oeConsistency(withInstances){
       : '<span style="color:var(--grn,#2f855a);">✅ 校验通过</span>';
     if(!issues.length){
       openPanel('🩺 一致性校验结果', `<div style="display:flex;align-items:center;gap:10px;padding:24px 16px;">
-        <span style="font-size:30px;">✅</span>
-        <div><b style="font-size:14px;color:var(--grn,#2f855a);">校验通过</b>
-        <div style="font-size:11.5px;color:var(--mut);margin-top:4px;">未发现本体结构/一致性高危问题</div></div></div>
+        <span style="font-size:31px;">✅</span>
+        <div><b style="font-size:15.5px;color:var(--grn,#2f855a);">校验通过</b>
+        <div style="font-size:12.5px;color:var(--mut);margin-top:4px;">未发现本体结构/一致性高危问题</div></div></div>
         ${oeCqHtml(r.cq)}
         <div style="padding:8px 16px 0;"><button class="btn sm ghost" onclick="oeDlCheck()" title="Pellet DL 语义深检（~2s，手动低频）：抓结构规则抓不到的语义矛盾">🧠 DL 深检</button></div>
         <div style="text-align:right;padding:0 16px 16px;"><button class="btn ghost" onclick="closePanel()">关闭</button></div>`);
@@ -1215,13 +1215,13 @@ async function oeConsistency(withInstances){
       ? `已发布快照 #${r.ontology_version_id||'-'}`
       : '编辑态（尚无已发布快照，回退）';
     const degradedTxt = (r.degraded && r.degraded.length)
-      ? `<div style="font-size:11px;color:#c77700;margin-top:5px;line-height:1.6;">⚠️ 本次有 ${r.degraded.length} 项扫描被降级跳过，结论不完整：${esc(r.degraded.join('；'))}</div>`
+      ? `<div style="font-size:12.5px;color:#c77700;margin-top:5px;line-height:1.6;">⚠️ 本次有 ${r.degraded.length} 项扫描被降级跳过，结论不完整：${esc(r.degraded.join('；'))}</div>`
       : '';
-    let h = `<div style="font-size:12px;color:var(--mut);margin-bottom:10px;line-height:1.7;">
+    let h = `<div style="font-size:13.5px;color:var(--mut);margin-bottom:10px;line-height:1.7;">
       共 <b>${issues.length}</b> 项问题 · ${sevKeys().filter(k=>(r[k]||0)>0).map(k=>`<span style="color:${sevTone(k).fg};font-weight:600;">${esc(SL[k])} ${r[k]}</span>`).join(' · ')}<br>
-      <span style="font-size:11px;">口径：${esc(scopeTxt)} · 类型总计 ${r.total||0} · 规则 ${r.rule_count||'?'} 条 · 规则版本 ${esc(r.rule_version||'-')} · 体检于 ${esc(r.ts||'-')}${r.instances_checked?' · 含逐实例':''}<br>
+      <span style="font-size:12.5px;">口径：${esc(scopeTxt)} · 类型总计 ${r.total||0} · 规则 ${r.rule_count||'?'} 条 · 规则版本 ${esc(r.rule_version||'-')} · 体检于 ${esc(r.ts||'-')}${r.instances_checked?' · 含逐实例':''}<br>
       点击实体名可定位到该类型（自动切到对应视图）</span>
-      <div style="margin-top:6px;"><button class="btn ghost" style="font-size:11px;padding:2px 8px;" onclick="oeConsistency(${r.instances_checked?0:1})">${r.instances_checked?'仅结构校验':'含存量实例（较慢）'}</button></div>
+      <div style="margin-top:6px;"><button class="btn ghost" style="font-size:12.5px;padding:2px 8px;" onclick="oeConsistency(${r.instances_checked?0:1})">${r.instances_checked?'仅结构校验':'含存量实例（较慢）'}</button></div>
       ${degradedTxt}</div>`;
     h += sorted.map(x=>{
       const tn = sevTone(x.severity);
@@ -1233,19 +1233,19 @@ async function oeConsistency(withInstances){
       //     （全局作用域，onclick 点击时解析，加载顺序无关）。
       const instIssue = /instance|unregistered|dangling|conflict/i.test(String(x.code||'')+' '+(x.label||''));
       const actBtns = [
-        t && t.id ? `<button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="oeImpactPreview('${ontJs(x.name)}')" title="预览「保存该类型当前声明」对存量实例的影响（只读，不写库）">🧭 影响预览</button>` : '',
-        instIssue ? `<button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="ontMigBuild()" title="扫描悬空实例/未处理留痕，生成 L2 迁移工单（幂等，不直接改数据）">🧩 生成迁移计划</button>` : ''
+        t && t.id ? `<button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="oeImpactPreview('${ontJs(x.name)}')" title="预览「保存该类型当前声明」对存量实例的影响（只读，不写库）">🧭 影响预览</button>` : '',
+        instIssue ? `<button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="ontMigBuild()" title="扫描悬空实例/未处理留痕，生成 L2 迁移工单（幂等，不直接改数据）">🧩 生成迁移计划</button>` : ''
       ].filter(Boolean).join(' ');
       return `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid ${tn.bd};border-radius:8px;margin-bottom:6px;background:${tn.bg};">
-        <span style="flex:none;font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;background:${tn.fg};color:#fff;margin-top:1px;">${esc(sevLabel(x.severity))}</span>
+        <span style="flex:none;font-size:12px;font-weight:700;padding:2px 8px;border-radius:9px;background:${tn.fg};color:#fff;margin-top:1px;">${esc(sevLabel(x.severity))}</span>
         <div style="flex:1;min-width:0;">
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-            <b style="font-size:12.5px;cursor:pointer;color:var(--blue-d);" onclick="_locateOntType('${ontJs(x.name)}')" title="点击定位到该类型">${esc(kindIcon)} ${esc(x.name)}</b>
-            <span class="tag" style="font-size:10px;">${esc(x.label||x.code||x.type||'问题')}</span>
+            <b style="font-size:13.5px;cursor:pointer;color:var(--blue-d);" onclick="_locateOntType('${ontJs(x.name)}')" title="点击定位到该类型">${esc(kindIcon)} ${esc(x.name)}</b>
+            <span class="tag" style="font-size:12px;">${esc(x.label||x.code||x.type||'问题')}</span>
           </div>
-          <div style="font-size:11.5px;color:var(--txt,#222);margin-top:3px;">${esc(x.message)}</div>
-          ${x.why?`<div style="font-size:11px;color:var(--mut);margin-top:3px;">❓ ${esc(x.why)}</div>`:''}
-          ${x.fix?`<div style="font-size:11px;color:var(--mut);margin-top:3px;">🛠 ${esc(x.fix)}</div>`:''}
+          <div style="font-size:12.5px;color:var(--txt,#222);margin-top:3px;">${esc(x.message)}</div>
+          ${x.why?`<div style="font-size:12.5px;color:var(--mut);margin-top:3px;">❓ ${esc(x.why)}</div>`:''}
+          ${x.fix?`<div style="font-size:12.5px;color:var(--mut);margin-top:3px;">🛠 ${esc(x.fix)}</div>`:''}
           ${actBtns?`<div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;">${actBtns}</div>`:''}
         </div>
       </div>`;
@@ -1283,21 +1283,21 @@ async function oeImpactPreview(typeName){
       iri: t.iri||'', status: t.status||null,
       profile_source: t.profile_source||'', profile_ref: t.profile_ref||''};
     const pv = await api('/api/knowledge/ontology/impact-preview', {method:'POST', body:JSON.stringify(body)});
-    if(pv.error){ openPanel('🧭 影响预览 — '+typeName, `<div style="color:var(--red);padding:10px;font-size:12px;">${esc(pv.error)}</div>`); return; }
+    if(pv.error){ openPanel('🧭 影响预览 — '+typeName, `<div style="color:var(--red);padding:10px;font-size:13.5px;">${esc(pv.error)}</div>`); return; }
     const tone = {red:['var(--red)','#FFF6F6','🔴 破坏性'],yellow:['#c77700','#FFFBF1','🟡 有违例需裁决'],green:['var(--grn,#2f855a)','#F4FBF6','🟢 无实例影响']}[pv.severity]||['#5a6675','#F7F9FB',pv.severity];
     const rows = (pv.violations||[]).slice(0,20).map(v=>
-      `<div style="font-size:11px;color:var(--txt,#222);padding:3px 0;border-bottom:1px dashed var(--line);">${esc(typeof v==='string'?v:JSON.stringify(v))}</div>`).join('');
+      `<div style="font-size:12.5px;color:var(--txt,#222);padding:3px 0;border-bottom:1px dashed var(--line);">${esc(typeof v==='string'?v:JSON.stringify(v))}</div>`).join('');
     openPanel('🧭 影响预览 — '+typeName, `
       <div style="border:1px solid ${tone[0]};border-radius:10px;padding:12px;background:${tone[1]};margin-bottom:10px;">
-        <b style="color:${tone[0]};font-size:13px;">${tone[2]}</b>
-        <div style="font-size:12px;margin-top:5px;line-height:1.7;">${esc(pv.summary||'')}</div>
-        ${pv.auto_fix!==undefined?`<div style="font-size:11px;color:var(--mut);margin-top:4px;">auto_fix（保存时自动内联迁移）：${pv.auto_fix?'是':'否'}</div>`:''}
+        <b style="color:${tone[0]};font-size:14.5px;">${tone[2]}</b>
+        <div style="font-size:13.5px;margin-top:5px;line-height:1.7;">${esc(pv.summary||'')}</div>
+        ${pv.auto_fix!==undefined?`<div style="font-size:12.5px;color:var(--mut);margin-top:4px;">auto_fix（保存时自动内联迁移）：${pv.auto_fix?'是':'否'}</div>`:''}
       </div>
-      ${pv.usage?`<div style="font-size:11.5px;color:var(--mut);margin-bottom:8px;">存量引用：${esc(JSON.stringify(pv.usage))}</div>`:''}
-      ${rows?`<div style="font-size:11px;color:var(--mut);margin-bottom:4px;">违例明细（≤20 条）：</div>${rows}
-        ${(pv.violations||[]).length>20?`<div style="font-size:11px;color:var(--mut);">…共 ${pv.violation_count||pv.violations.length} 条</div>`:''}`:''}
+      ${pv.usage?`<div style="font-size:12.5px;color:var(--mut);margin-bottom:8px;">存量引用：${esc(JSON.stringify(pv.usage))}</div>`:''}
+      ${rows?`<div style="font-size:12.5px;color:var(--mut);margin-bottom:4px;">违例明细（≤20 条）：</div>${rows}
+        ${(pv.violations||[]).length>20?`<div style="font-size:12.5px;color:var(--mut);">…共 ${pv.violation_count||pv.violations.length} 条</div>`:''}`:''}
       <div style="margin-top:10px;text-align:right;"><button class="btn ghost" onclick="closePanel()">关闭</button></div>`);
-  }catch(e){ openPanel('🧭 影响预览 — '+typeName, `<div style="color:var(--red);padding:10px;font-size:12px;">预览失败：${esc(e.message||e)}</div>`); }
+  }catch(e){ openPanel('🧭 影响预览 — '+typeName, `<div style="color:var(--red);padding:10px;font-size:13.5px;">预览失败：${esc(e.message||e)}</div>`); }
 }
 
 // ── Cursor 式圈定 v2（2026-08-29，按用户截图样式）：选区浮动工具条（图1）+ 输入框引用 chip（图2）──
@@ -1321,9 +1321,9 @@ function pvFloatBarEnsure(){
   const b = document.createElement('div');
   b.id = 'pv-float-bar';
   b.style.cssText = 'position:fixed;z-index:5000;display:none;align-items:center;gap:2px;background:#232833;border-radius:8px;padding:4px 6px;box-shadow:0 4px 14px rgba(0,0,0,.28);';
-  b.innerHTML = '<button style="background:none;border:none;color:#fff;font-size:12px;padding:3px 8px;cursor:pointer;border-radius:6px;" onmousedown="event.preventDefault()">💬 加入对话 <span style="opacity:.6;font-size:10px;">Ctrl J</span></button>'
+  b.innerHTML = '<button style="background:none;border:none;color:#fff;font-size:13.5px;padding:3px 8px;cursor:pointer;border-radius:6px;" onmousedown="event.preventDefault()">💬 加入对话 <span style="opacity:.6;font-size:12px;">Ctrl J</span></button>'
     + '<span style="width:1px;height:14px;background:rgba(255,255,255,.18);"></span>'
-    + '<button style="background:none;border:none;color:#fff;font-size:12px;padding:3px 8px;cursor:pointer;border-radius:6px;" onmousedown="event.preventDefault()">📄 引用整文件</button>';
+    + '<button style="background:none;border:none;color:#fff;font-size:13.5px;padding:3px 8px;cursor:pointer;border-radius:6px;" onmousedown="event.preventDefault()">📄 引用整文件</button>';
   b.querySelectorAll('button')[0].onclick = ()=>pvFloatAction('ref');
   b.querySelectorAll('button')[1].onclick = ()=>pvFloatAction('file');
   document.body.appendChild(b);
@@ -1371,7 +1371,7 @@ function artContextMenu(ev, id){
   const a = (_artList||[]).find(x=>x.id===id) || {};
   const m = document.createElement('div');
   m.id = 'doc-ctx-menu';
-  m.style.cssText = 'position:fixed;z-index:6000;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:4px;font-size:12px;';
+  m.style.cssText = 'position:fixed;z-index:6000;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:4px;font-size:13.5px;';
   const item = (label, fn, red) => '<div class="rm-item" style="padding:6px 10px;border-radius:6px;'+(red?'color:var(--red);':'')+'" onclick="'+fn+'">'+label+'</div>';
   m.innerHTML = item('📖 打开', `artPreviewV3(${id})`)
     + item('📎 加入会话', `artAddToChat(${id})`)
@@ -1502,7 +1502,7 @@ function docContextMenu(ev, id){
   const d = _docById(id);
   const m = document.createElement('div');
   m.id = 'doc-ctx-menu';
-  m.style.cssText = 'position:fixed;z-index:6000;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:4px;font-size:12px;';
+  m.style.cssText = 'position:fixed;z-index:6000;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:4px;font-size:13.5px;';
   const item = (label, fn, red) => '<div class="rm-item" style="padding:6px 10px;border-radius:6px;'+(red?'color:var(--red);':'')+'" onclick="'+fn+'">'+label+'</div>';
   m.innerHTML = item('加入会话', `docAddToChat(${id})`)
     + item('下载', `downloadDoc(${id})`)

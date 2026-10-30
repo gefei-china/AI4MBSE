@@ -107,7 +107,7 @@ async function loadAttachKbList(){
   const listEl = document.getElementById('attach-kb-list');
   const searchEl = document.getElementById('attach-kb-search');
   if(!listEl) return;
-  listEl.innerHTML = '<div style="color:var(--mut);font-size:12px;padding:8px;">加载中…</div>';
+  listEl.innerHTML = '<div style="color:var(--mut);font-size:13.5px;padding:8px;">加载中…</div>';
   if(searchEl) searchEl.value = '';
   let tags = [];
   try{ tags = (typeof ensureKbTagsCache === 'function') ? (await ensureKbTagsCache() || []) : []; }
@@ -133,10 +133,10 @@ function renderAttachKbList(){
   listEl.innerHTML = _attachKbShown.length ? _attachKbShown.map((it, i) => `
     <div onclick="attachKbPick(${i})" style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;cursor:pointer;" onmouseover="this.style.background='var(--bg-soft,#f5f5f2)'" onmouseout="this.style.background=''">
       <span style="flex:none;">${it.icon}</span>
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--txt);">${esc(it.name)}</span>
-      <span style="font-size:10.5px;color:var(--mut);flex:none;">${esc(it.tag)}</span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;color:var(--txt);">${esc(it.name)}</span>
+      <span style="font-size:12px;color:var(--mut);flex:none;">${esc(it.tag)}</span>
     </div>`).join('')
-    : '<div style="color:var(--mut);font-size:12px;padding:8px;">无匹配项</div>';
+    : '<div style="color:var(--mut);font-size:13.5px;padding:8px;">无匹配项</div>';
 }
 /* ★ 2026-10-20（用户报"知识库引用后 AI 检索不到"）：知识库引用统一走这里——
    #文本（触发后端知识检索路由）**加上**挂附件（doc_id ⇒ 后端把文档全文注入
@@ -209,7 +209,7 @@ async function loadAttachProjectFiles(){
   const emptyEl = document.getElementById('attach-project-empty');
   const searchEl = document.getElementById('attach-project-search');
   if(!listEl || !emptyEl) return;
-  listEl.innerHTML = '<div style="color:var(--mut);font-size:12px;padding:8px;">加载中…</div>';
+  listEl.innerHTML = '<div style="color:var(--mut);font-size:13.5px;padding:8px;">加载中…</div>';
   emptyEl.style.display = 'none';
   if(searchEl) searchEl.value = '';
   _attachProjectDocs = [];
@@ -292,13 +292,13 @@ function renderAttachProjectList(){
     const src = isArt ? ('会话产物 · ' + (d.file_type || '产物'))
                       : ('会话附件' + (d.doc_id ? ' · 已入库' : ''));
     return `<div onclick="attachConvFile(${gi})" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;transition:background .12s;" title="${escA(d.filename||'')}">
-      <span style="font-size:18px;">${icon}</span>
+      <span style="font-size:19.5px;">${icon}</span>
       <div style="flex:1;min-width:0;">
-        <div style="font-size:12.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(d.filename || '未命名')}</div>
-        <div style="font-size:10.5px;color:var(--mut);">${esc(src)}</div>
+        <div style="font-size:13.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(d.filename || '未命名')}</div>
+        <div style="font-size:12px;color:var(--mut);">${esc(src)}</div>
       </div>
-      <span onclick="event.stopPropagation();previewConvFile(${gi})" title="预览内容" style="font-size:13px;color:var(--mut);flex-shrink:0;padding:0 4px;">👁</span>
-      <span style="font-size:12px;color:var(--blue-d);flex-shrink:0;">添加</span>
+      <span onclick="event.stopPropagation();previewConvFile(${gi})" title="预览内容" style="font-size:14.5px;color:var(--mut);flex-shrink:0;padding:0 4px;">👁</span>
+      <span style="font-size:13.5px;color:var(--blue-d);flex-shrink:0;">添加</span>
     </div>`;
   }).join('');
 }
@@ -361,7 +361,7 @@ async function loadAttachEngTree(){
   const emptyEl = document.getElementById('attach-eng-empty');
   const searchEl = document.getElementById('attach-eng-search');
   if(!treeEl || !emptyEl) return;
-  treeEl.innerHTML = '<div style="color:var(--mut);font-size:12px;padding:8px;">加载中…</div>';
+  treeEl.innerHTML = '<div style="color:var(--mut);font-size:13.5px;padding:8px;">加载中…</div>';
   emptyEl.style.display = 'none';
   if(searchEl) searchEl.value = '';
   try{
@@ -402,15 +402,15 @@ function renderAttachEngTree(){
     const rows = byType[t].map(n=>`
       <div onclick="attachEngEntity('${esc(n.id)}','${esc(String(n.name||'').replace(/"/g,'&quot;'))}','${esc(n.entity_type||'')}')" style="display:flex;align-items:center;gap:8px;padding:6px 10px 6px 26px;border-radius:7px;cursor:pointer;" onmouseover="this.style.background='var(--bg-soft,#f5f5f2)'" onmouseout="this.style.background=''">
         <span style="width:7px;height:7px;border-radius:50%;background:${graphColor(t)};display:inline-block;flex:none;"></span>
-        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--txt);">${esc(n.name||n.id)}</span>
-        <span style="font-size:10.5px;color:var(--blue-d);flex-shrink:0;">添加</span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;color:var(--txt);">${esc(n.name||n.id)}</span>
+        <span style="font-size:12px;color:var(--blue-d);flex-shrink:0;">添加</span>
       </div>`).join('');
     return `<div style="margin-bottom:2px;">
       <div onclick="_attachEngCollapsed.has('${esc(t)}')?_attachEngCollapsed.delete('${esc(t)}'):_attachEngCollapsed.add('${esc(t)}');renderAttachEngTree()" style="display:flex;align-items:center;gap:8px;padding:6px 10px;cursor:pointer;position:sticky;top:0;background:var(--panel,#fff);">
-        <span style="color:var(--mut);font-size:9px;width:10px;flex:none;">${collapsed?'▸':'▾'}</span>
+        <span style="color:var(--mut);font-size:11.5px;width:10px;flex:none;">${collapsed?'▸':'▾'}</span>
         <span style="width:9px;height:9px;border-radius:50%;background:${graphColor(t)};display:inline-block;flex:none;"></span>
-        <span style="flex:1;font-size:12px;font-weight:600;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t)}</span>
-        <span class="tag" style="font-size:10px;">${byType[t].length}</span>
+        <span style="flex:1;font-size:13.5px;font-weight:600;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t)}</span>
+        <span class="tag" style="font-size:12px;">${byType[t].length}</span>
       </div>
       ${collapsed?'':rows}
     </div>`;
@@ -530,7 +530,7 @@ function renderAttachBar(){
   if(!pendingAttachments.length){ bar.style.display='none'; bar.innerHTML=''; return; }
   bar.style.display='flex';
   bar.innerHTML = pendingAttachments.map((a,i)=>`
-    <span class="attach-chip"${pvDataAttrs({doc_id:a.doc_id, filename:a.filename||'', url:a.url||''})} onclick="pvOpenFromEl(this)" title="点击预览源文件：${esc(a.filename||'')}" style="cursor:pointer;">${a.is_image?`<img src="${esc(a.url)}" alt="">`:'📄'}<span class="an" title="${esc(a.filename)}">${esc(a.filename)}</span>${a.doc_id?'<span style="font-size:10px;color:var(--grn,#2f855a);flex:none;">已入库</span>':''}<span class="rm" onclick="event.stopPropagation();removeAttach(${i})" title="移除附件">✕</span></span>`).join('');
+    <span class="attach-chip"${pvDataAttrs({doc_id:a.doc_id, filename:a.filename||'', url:a.url||''})} onclick="pvOpenFromEl(this)" title="点击预览源文件：${esc(a.filename||'')}" style="cursor:pointer;">${a.is_image?`<img src="${esc(a.url)}" alt="">`:'📄'}<span class="an" title="${esc(a.filename)}">${esc(a.filename)}</span>${a.doc_id?'<span style="font-size:12px;color:var(--grn,#2f855a);flex:none;">已入库</span>':''}<span class="rm" onclick="event.stopPropagation();removeAttach(${i})" title="移除附件">✕</span></span>`).join('');
 }
 function removeAttach(i){ pendingAttachments.splice(i,1); renderAttachBar(); }
 let activeScopes = [];                 // 当前选择的多个建模范围 [{id,name,mode,doc_names}]
@@ -560,15 +560,15 @@ async function scopeLoadSaved(){
   try{
     const scopes = (await api('/api/scopes')) || [];
     let h;
-    if(!scopes.length){ h = '<div style="color:var(--mut);font-size:12px;padding:10px 2px;">暂无已保存范围。切到「文本圈定」或「文档切片圈定」新建。</div>'; }
+    if(!scopes.length){ h = '<div style="color:var(--mut);font-size:13.5px;padding:10px 2px;">暂无已保存范围。切到「文本圈定」或「文档切片圈定」新建。</div>'; }
     else{
-      h = '<div style="color:var(--mut);font-size:11px;margin-bottom:6px;">全局范围（所有用户可见）· 勾选多个可叠加，点击「应用」即选中</div>';
+      h = '<div style="color:var(--mut);font-size:12.5px;margin-bottom:6px;">全局范围（所有用户可见）· 勾选多个可叠加，点击「应用」即选中</div>';
       scopes.forEach(s=>{
         const sel = scopeIsSel(s.id);
-        const meta = `<div style="font-size:10.5px;color:var(--mut);">创建 ${esc(s.created_by||'-')} · ${esc((s.created_at||'').slice(0,16))} · ${(s.doc_names||[]).length} 篇</div>`;
+        const meta = `<div style="font-size:12px;color:var(--mut);">创建 ${esc(s.created_by||'-')} · ${esc((s.created_at||'').slice(0,16))} · ${(s.doc_names||[]).length} 篇</div>`;
         h += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:6px 10px;">
 <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="scope-sel-cb" value="${s.id}" ${sel?'checked':''} onchange="scopeSavedCount()"></label>
-<div style="flex:1;min-width:0;"><b style="font-size:12.5px;">${esc(s.name)}</b><span class="st ok" style="margin-left:6px;">${esc(s.mode)}</span>${meta}</div>
+<div style="flex:1;min-width:0;"><b style="font-size:13.5px;">${esc(s.name)}</b><span class="st ok" style="margin-left:6px;">${esc(s.mode)}</span>${meta}</div>
 <button class="btn sm ghost" onclick="scopeDelete(${s.id})">删除</button></div>`;
       });
       h += `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;justify-content:flex-end;">
@@ -577,7 +577,7 @@ async function scopeLoadSaved(){
     }
     el.innerHTML = h;
     scopeSavedCount();
-  }catch(e){ el.innerHTML = '<div style="color:var(--red);font-size:12px;">加载失败：'+esc(e.message)+'</div>'; }
+  }catch(e){ el.innerHTML = '<div style="color:var(--red);font-size:13.5px;">加载失败：'+esc(e.message)+'</div>'; }
 }
 function scopeSavedCount(){
   const n = document.querySelectorAll('#scope-pane-saved .scope-sel-cb:checked').length;
@@ -595,8 +595,8 @@ async function scopeApplySaved(){
 function scopeBuildTextPane(){
   const el = document.getElementById('scope-pane-text'); if(!el) return;
   el.innerHTML = `<div style="margin-bottom:6px;"><b>范围名称</b></div>
-<input id="scope-text-name" placeholder="范围名称（默认取输入开头）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:13px;width:100%;box-sizing:border-box;margin-bottom:8px;">
-<textarea id="scope-text" style="width:100%;min-height:64px;box-sizing:border-box;border:1px solid var(--line);border-radius:6px;padding:6px;font-size:12px;" placeholder="引用文档的描述，例：《宽带载荷需求》第2节性能指标"></textarea>
+<input id="scope-text-name" placeholder="范围名称（默认取输入开头）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:14.5px;width:100%;box-sizing:border-box;margin-bottom:8px;">
+<textarea id="scope-text" style="width:100%;min-height:64px;box-sizing:border-box;border:1px solid var(--line);border-radius:6px;padding:6px;font-size:13.5px;" placeholder="引用文档的描述，例：《宽带载荷需求》第2节性能指标"></textarea>
 <div id="scope-parse-res" style="margin-top:8px;min-height:22px;"></div>`;
   const ta = document.getElementById('scope-text'); if(ta) ta.oninput = ()=>scopeParseText();
 }
@@ -614,19 +614,19 @@ async function scopeParseText(){
         const pp = await api('/api/scopes/preview',{method:'POST',body:JSON.stringify({scope:{mode:draft.mode||'doc',doc_names:draft.doc_names}})});
         const sm = (pp&&pp.samples)||[];
         hits = sm.map(x=>({doc:x.doc, section:x.section, content:x.content, on:true}));
-        pv += '<div style="margin-top:6px;max-height:150px;overflow-y:auto;border:1px dashed var(--line);border-radius:6px;padding:6px;"><div style="font-size:11px;color:var(--mut);margin-bottom:4px;">命中片段（勾选要纳入范围的，默认全选）</div>';
+        pv += '<div style="margin-top:6px;max-height:150px;overflow-y:auto;border:1px dashed var(--line);border-radius:6px;padding:6px;"><div style="font-size:12.5px;color:var(--mut);margin-bottom:4px;">命中片段（勾选要纳入范围的，默认全选）</div>';
         sm.forEach((x,i)=>{
-          pv += `<label style="display:flex;gap:6px;align-items:flex-start;font-size:11px;padding:3px 4px;cursor:pointer;">
+          pv += `<label style="display:flex;gap:6px;align-items:flex-start;font-size:12.5px;padding:3px 4px;cursor:pointer;">
 <input type="checkbox" class="scope-pick-cb" data-i="${i}" checked>
 <span style="color:var(--mut);flex:1;word-break:break-all;"><b>📄 ${esc(x.doc||'')}</b>${x.section?' <span class="tag">'+esc(x.section)+'</span>':''}<br>${esc((x.content||'').slice(0,90))}</span></label>`;
         });
         pv += '</div><div style="margin-top:4px;display:flex;gap:6px;"><button class="btn sm ghost" onclick="scopePickAll(true)">全选</button><button class="btn sm ghost" onclick="scopePickAll(false)">全不选</button></div>';
-      }catch(_e){ pv += '<div style="color:var(--mut);font-size:11px;margin-top:4px;">命中片段预览不可用</div>'; }
+      }catch(_e){ pv += '<div style="color:var(--mut);font-size:12.5px;margin-top:4px;">命中片段预览不可用</div>'; }
     } else {
-      pv += '<div style="color:var(--mut);font-size:11px;margin-top:4px;">未命中具体文档，请补充文档名</div>';
+      pv += '<div style="color:var(--mut);font-size:12.5px;margin-top:4px;">未命中具体文档，请补充文档名</div>';
     }
     _scopeHits = hits;
-    pv += '<div style="margin-top:8px;display:flex;gap:8px;align-items:center;"><button class="btn" onclick="scopeSaveThis()">保存并使用</button><span style="color:var(--mut);font-size:11px;">仅保存勾选的片段</span></div>';
+    pv += '<div style="margin-top:8px;display:flex;gap:8px;align-items:center;"><button class="btn" onclick="scopeSaveThis()">保存并使用</button><span style="color:var(--mut);font-size:12.5px;">仅保存勾选的片段</span></div>';
     res.innerHTML = pv;
   }catch(e){ res.innerHTML = '<span style="color:var(--red)">'+esc(e.message)+'</span>'; }
 }
@@ -684,10 +684,10 @@ async function scopeBuildChunkPane(){
   let _opts = '<option value="">选择文档…</option>';
   try{ const _dd = (await api('/api/documents')) || []; _scopeDocChunks = []; _opts += _dd.map(d=>`<option value="${d.id}::${esc(d.filename)}">${esc(d.filename)}</option>`).join(''); }catch(_e){}
   el.innerHTML = `<div style="margin-bottom:6px;"><b>范围名称</b></div>
-<input id="scope-chunk-name" placeholder="范围名称（默认=文档名）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:13px;width:100%;box-sizing:border-box;margin-bottom:8px;">
-<div style="margin-bottom:6px;"><b>文档切片</b><span style="color:var(--mut);font-size:11px;"> 选文档→加载分片→勾选切片（可「全选全部」）</span></div>
-<select id="scope-doc-select" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;max-width:220px;">${_opts}</select> <button class="btn sm" onclick="scopeLoadDoc()">加载切片</button>
-<div id="scope-chunk-tree" style="margin-top:6px;max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:6px;"><div style="color:var(--mut);font-size:12px;padding:6px;">选择文档并「加载切片」后，此处按章节显示切片供勾选。</div></div>`;
+<input id="scope-chunk-name" placeholder="范围名称（默认=文档名）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:14.5px;width:100%;box-sizing:border-box;margin-bottom:8px;">
+<div style="margin-bottom:6px;"><b>文档切片</b><span style="color:var(--mut);font-size:12.5px;"> 选文档→加载分片→勾选切片（可「全选全部」）</span></div>
+<select id="scope-doc-select" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;max-width:220px;">${_opts}</select> <button class="btn sm" onclick="scopeLoadDoc()">加载切片</button>
+<div id="scope-chunk-tree" style="margin-top:6px;max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:6px;"><div style="color:var(--mut);font-size:13.5px;padding:6px;">选择文档并「加载切片」后，此处按章节显示切片供勾选。</div></div>`;
 }
 async function scopeLoadDoc(){
   const sel = document.getElementById('scope-doc-select');
@@ -701,16 +701,16 @@ async function scopeLoadDoc(){
     const chunks = (await api('/api/scopes/docs/'+did+'/chunks')) || [];
     chunks.forEach(c=> c.document_id = c.document_id || did);
     _scopeDocChunks = chunks;
-    if(!chunks.length){ tree.innerHTML = '<div style="color:var(--mut);font-size:12px;">该文档暂无分片（未完成解析/分块）</div>'; return; }
+    if(!chunks.length){ tree.innerHTML = '<div style="color:var(--mut);font-size:13.5px;">该文档暂无分片（未完成解析/分块）</div>'; return; }
     const groups = {};
     chunks.forEach(c=>{ const k=c.section||'（无章节）'; (groups[k]=groups[k]||[]).push(c); });
-    let g = '<div style="margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><b>'+esc(fn)+'</b> <button class="btn sm" onclick="scopeSelectAll(true)">全选全部</button><button class="btn sm ghost" onclick="scopeSelectAll(false)">清空</button> <span id="scope-chunk-sel-n" style="color:var(--mut);font-size:11px;">已选 0 切片</span></div>';
+    let g = '<div style="margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><b>'+esc(fn)+'</b> <button class="btn sm" onclick="scopeSelectAll(true)">全选全部</button><button class="btn sm ghost" onclick="scopeSelectAll(false)">清空</button> <span id="scope-chunk-sel-n" style="color:var(--mut);font-size:12.5px;">已选 0 切片</span></div>';
     Object.entries(groups).forEach(([sec,arr])=>{
       g += '<div class="scope-sec" style="margin-bottom:4px;">';
-      g += `<div style="margin:6px 0 2px;display:flex;align-items:center;gap:6px;"><b style="font-size:11.5px;">${esc(sec)}</b><button class="btn sm ghost" onclick="scopeSelectSection(this,true)">本节约</button><button class="btn sm ghost" onclick="scopeSelectSection(this,false)">本节清空</button></div>`;
+      g += `<div style="margin:6px 0 2px;display:flex;align-items:center;gap:6px;"><b style="font-size:12.5px;">${esc(sec)}</b><button class="btn sm ghost" onclick="scopeSelectSection(this,true)">本节约</button><button class="btn sm ghost" onclick="scopeSelectSection(this,false)">本节清空</button></div>`;
       arr.forEach(c=>{
         const cc = c.content || '';
-        g += `<label style="display:flex;gap:6px;align-items:flex-start;font-size:11px;padding:2px 4px;cursor:pointer;">
+        g += `<label style="display:flex;gap:6px;align-items:flex-start;font-size:12.5px;padding:2px 4px;cursor:pointer;">
 <input type="checkbox" class="scope-chunk-cb" data-idx="${c.chunk_index}" onchange="scopeChunkCount()">
 <span style="color:var(--mut);flex:1;word-break:break-all;">${esc(cc.slice(0,60))}${cc.length>60?'…':''}</span>
 <span class="tag">§${c.chunk_index}</span></label>`;
@@ -718,9 +718,9 @@ async function scopeLoadDoc(){
       g += '</div>';
 
     });
-    g += `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;"><button class="btn" onclick="scopeSaveChunks()">保存为范围并选中</button><span style="color:var(--mut);font-size:11px;">保存后加入所选范围</span></div>`;
+    g += `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;"><button class="btn" onclick="scopeSaveChunks()">保存为范围并选中</button><span style="color:var(--mut);font-size:12.5px;">保存后加入所选范围</span></div>`;
     tree.innerHTML = g;
-  }catch(e){ tree.innerHTML = '<div style="color:var(--red);font-size:12px;">加载失败：'+esc(e.message)+'</div>'; }
+  }catch(e){ tree.innerHTML = '<div style="color:var(--red);font-size:13.5px;">加载失败：'+esc(e.message)+'</div>'; }
 }
 async function scopeSaveChunks(){
   const fn = ((document.getElementById('scope-doc-select')||{}).value||'').split('::')[1] || '';

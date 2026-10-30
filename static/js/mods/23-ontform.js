@@ -11,24 +11,24 @@ function renderOntEntProps(){
   const req = new Set(c.required||[]), uniq = new Set(c.unique||[]);
   const avMap = (!Array.isArray(c.allowed_values) && c.allowed_values) ? c.allowed_values : {};
   const legacy = t ? Object.keys(_asObj(t.properties)) : [];
-  const badge = (txt,bg,fg)=>`<span style="flex:none;font-size:10px;padding:1px 6px;border-radius:8px;background:${bg};color:${fg};white-space:nowrap;">${txt}</span>`;
+  const badge = (txt,bg,fg)=>`<span style="flex:none;font-size:12px;padding:1px 6px;border-radius:8px;background:${bg};color:${fg};white-space:nowrap;">${txt}</span>`;
   const mkRow = (a, src)=>{
     const xsd = String(_asObj(a.constraints).xsd_type || 'string').replace(/^xsd:/,'');
     const al = avMap[a.name] || [];
     const inhFrom = src==='inherit' ? (ontEntParentChain(name).find(cn=>ontAttrDomains(a).includes(cn)) || '父类') : '';
     const body = src==='legacy'
-      ? `<span style="flex:1;font-size:11px;color:var(--mut);">只读（历史自由行：定义未入「数据属性」，保存时原样保留）</span>`
+      ? `<span style="flex:1;font-size:12.5px;color:var(--mut);">只读（历史自由行：定义未入「数据属性」，保存时原样保留）</span>`
       : `<span style="flex:1;"></span>
-         <label style="display:inline-flex;align-items:center;gap:3px;font-size:11.5px;color:var(--mut);flex:none;cursor:pointer;"><input type="checkbox" class="er-req" data-name="${esc(a.name)}" ${req.has(a.name)?'checked':''}>必填</label>
-         <label style="display:inline-flex;align-items:center;gap:3px;font-size:11.5px;color:var(--mut);flex:none;cursor:pointer;"><input type="checkbox" class="er-uniq" data-name="${esc(a.name)}" ${uniq.has(a.name)?'checked':''}>唯一</label>
-         <input class="er-allowed" data-name="${esc(a.name)}" value="${esc(Array.isArray(al)?al.join(', '):'')}" placeholder="允许值，逗号分隔；留空=不约束" style="flex:2;min-width:110px;border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:11.5px;">`;
+         <label style="display:inline-flex;align-items:center;gap:3px;font-size:12.5px;color:var(--mut);flex:none;cursor:pointer;"><input type="checkbox" class="er-req" data-name="${esc(a.name)}" ${req.has(a.name)?'checked':''}>必填</label>
+         <label style="display:inline-flex;align-items:center;gap:3px;font-size:12.5px;color:var(--mut);flex:none;cursor:pointer;"><input type="checkbox" class="er-uniq" data-name="${esc(a.name)}" ${uniq.has(a.name)?'checked':''}>唯一</label>
+         <input class="er-allowed" data-name="${esc(a.name)}" value="${esc(Array.isArray(al)?al.join(', '):'')}" placeholder="允许值，逗号分隔；留空=不约束" style="flex:2;min-width:110px;border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:12.5px;">`;
     return `<div class="ent-ref-row" style="display:flex;gap:6px;align-items:center;background:#fafafa;border:1px solid var(--line);border-radius:6px;padding:5px 8px;">
-      <span style="width:100px;flex:none;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(a.name)}">${esc(a.name)}</span>
+      <span style="width:100px;flex:none;font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(a.name)}">${esc(a.name)}</span>
       ${badge(esc(xsd),'#E6F1FB','#185FA5')}
       ${src==='own' ? badge(_entBindAdd.has(a.name)?'本类·待存':'本类','#E5F6E8','#1B7A2F')
                     : (src==='inherit' ? badge('继承 · '+esc(inhFrom),'#F2EDFB','#6B46B8') : badge('存量','#FDF3E3','#8A5A10'))}
       ${body}
-      ${src==='own' ? `<button class="er-unbind" data-name="${esc(a.name)}" title="解绑：从该数据属性的 适用类型(domain) 移除本类" style="flex:none;background:transparent;border:none;color:var(--mut);cursor:pointer;font-size:13px;padding:0 2px;">✕</button>` : ''}
+      ${src==='own' ? `<button class="er-unbind" data-name="${esc(a.name)}" title="解绑：从该数据属性的 适用类型(domain) 移除本类" style="flex:none;background:transparent;border:none;color:var(--mut);cursor:pointer;font-size:14.5px;padding:0 2px;">✕</button>` : ''}
     </div>`;
   };
   const lines = [];
@@ -36,7 +36,7 @@ function renderOntEntProps(){
   inh.forEach(a=>lines.push(mkRow(a,'inherit')));
   legacy.forEach(k=>lines.push(mkRow({name:k,constraints:{}},'legacy')));
   wrap.innerHTML = lines.length ? lines.join('')
-    : '<div style="font-size:11.5px;color:var(--mut);padding:4px 2px;line-height:1.8;">暂无属性。行业标准（OWL/SHACL）：属性在「数据属性」全局定义、类只做引用——点 <b>⇄ 绑定已有</b> 挂接数据属性，或 <b>＋ 新建属性</b>（适用类型自动填本类）。</div>';
+    : '<div style="font-size:12.5px;color:var(--mut);padding:4px 2px;line-height:1.8;">暂无属性。行业标准（OWL/SHACL）：属性在「数据属性」全局定义、类只做引用——点 <b>⇄ 绑定已有</b> 挂接数据属性，或 <b>＋ 新建属性</b>（适用类型自动填本类）。</div>';
   wrap.querySelectorAll('.er-unbind').forEach(btn=>{
     btn.onclick = ()=>{
       const nm = btn.dataset.name;
@@ -56,12 +56,12 @@ function ontEntBindExisting(){
   if(!cands.length){ toast('没有可绑定的数据属性——请先切到「数据属性」维度新建属性类型'); return; }
   const lbx = document.getElementById('lbx'), body = document.getElementById('lbx-body');
   body.innerHTML = `<h3>⇄ 绑定已有数据属性</h3>
-    <div style="font-size:12px;color:var(--mut);margin:4px 0 8px;line-height:1.6;">勾选要挂到「${esc(nm)}」的数据属性；保存类型时自动写入其 适用类型（rdfs:domain）。</div>
+    <div style="font-size:13.5px;color:var(--mut);margin:4px 0 8px;line-height:1.6;">勾选要挂到「${esc(nm)}」的数据属性；保存类型时自动写入其 适用类型（rdfs:domain）。</div>
     <div style="display:flex;flex-direction:column;gap:4px;max-height:260px;overflow:auto;margin-bottom:4px;">
-      ${cands.map(a=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:12.5px;cursor:pointer;">
+      ${cands.map(a=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:13.5px;cursor:pointer;">
         <input type="checkbox" class="bd-chk" value="${esc(a.name)}">
         <b>${esc(a.name)}</b>
-        <span style="color:var(--mut);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(String(_asObj(a.constraints).xsd_type||'string').replace(/^xsd:/,''))}${a.description?' · '+esc(String(a.description).slice(0,40)):''}</span>
+        <span style="color:var(--mut);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(String(_asObj(a.constraints).xsd_type||'string').replace(/^xsd:/,''))}${a.description?' · '+esc(String(a.description).slice(0,40)):''}</span>
       </label>`).join('')}
     </div>
     <div class="lbx-actions"><button class="btn ghost" id="bd-cancel">取消</button><button class="btn" id="bd-ok">确定</button></div>`;
@@ -264,8 +264,8 @@ function refreshOntConsLinkage() {
   const prev = {}; wrap.querySelectorAll('.ot-allowed-row').forEach(r=>{ prev[r.dataset.k] = r.querySelector('input').value; });
   wrap.innerHTML = keys.map(k=>`
     <div class="ot-allowed-row" data-k="${esc(k)}" style="display:flex;gap:6px;align-items:center;">
-      <span style="width:90px;font-size:11.5px;color:var(--blue-d);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(k)}">${esc(k)}</span>
-      <input value="${esc(prev[k]||'')}" placeholder="允许值，逗号分隔；留空=不约束" style="border:1px solid var(--line);border-radius:5px;padding:4px 8px;font-size:11.5px;flex:1;">
+      <span style="width:90px;font-size:12.5px;color:var(--blue-d);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(k)}">${esc(k)}</span>
+      <input value="${esc(prev[k]||'')}" placeholder="允许值，逗号分隔；留空=不约束" style="border:1px solid var(--line);border-radius:5px;padding:4px 8px;font-size:12.5px;flex:1;">
     </div>`).join('');
 }
 // P1-10：互斥类型多选候选（排除自身）
@@ -286,7 +286,7 @@ function initEnumChips(input){
   input.parentNode.insertBefore(wrap, input);
   input.style.display='none';
   const inp = document.createElement('input'); inp.type='text'; inp.placeholder='输入后回车/逗号添加';
-  inp.style.cssText='border:none;outline:none;flex:1;min-width:70px;font-size:11.5px;background:transparent;box-sizing:border-box;';
+  inp.style.cssText='border:none;outline:none;flex:1;min-width:70px;font-size:12.5px;background:transparent;box-sizing:border-box;';
   wrap.appendChild(inp);
   const render = () => {
     wrap.querySelectorAll('.e-chip').forEach(x=>x.remove());
@@ -294,7 +294,7 @@ function initEnumChips(input){
     if(!Array.isArray(arr)) arr=[];
     arr.forEach(v=>{
       const c=document.createElement('span'); c.className='e-chip'; c.textContent=v; c.title=v;
-      c.style.cssText='display:inline-flex;align-items:center;gap:2px;background:var(--blue-l);color:var(--blue-d);border-radius:999px;padding:1px 6px;font-size:11px;';
+      c.style.cssText='display:inline-flex;align-items:center;gap:2px;background:var(--blue-l);color:var(--blue-d);border-radius:999px;padding:1px 6px;font-size:12.5px;';
       const x=document.createElement('i'); x.textContent='✕'; x.style.cssText='cursor:pointer;font-style:normal;opacity:.75;padding-left:2px;';
       x.onclick=()=>{ input.dataset.chips = JSON.stringify(arr.filter(a=>a!==v)); render(); };
       c.appendChild(x); wrap.insertBefore(c, inp);
@@ -504,16 +504,16 @@ function renderOntImpactPreview(pv) {
   const box = document.getElementById('ot-impact-box');
   if(!box) return;
   const _c = {red:['var(--red)','var(--red-l)','🔴 破坏性'],yellow:['var(--amb)','var(--amb-l)','🟡 需校验'],green:['var(--grn)','var(--grn-l)','🟢 无影响']}[pv.severity]||['var(--mut)','transparent','−'];
-  const _items = (pv.violations||[]).slice(0,8).map(v=>`<div style="font-size:11px;color:var(--mut);padding:1px 0;">· [${esc(v.kind)}] ${esc(v.detail||'')}</div>`).join('');
-  const _more = (pv.violation_count||0) > 8 ? `<div style="font-size:11px;color:var(--mut);">…共 ${pv.violation_count} 条违例</div>` : '';
-  const _rn = pv.rename ? `<div style="font-size:11.5px;">改名「${esc(pv.rename.from)}」→「${esc(pv.rename.to)}」` +
+  const _items = (pv.violations||[]).slice(0,8).map(v=>`<div style="font-size:12.5px;color:var(--mut);padding:1px 0;">· [${esc(v.kind)}] ${esc(v.detail||'')}</div>`).join('');
+  const _more = (pv.violation_count||0) > 8 ? `<div style="font-size:12.5px;color:var(--mut);">…共 ${pv.violation_count} 条违例</div>` : '';
+  const _rn = pv.rename ? `<div style="font-size:12.5px;">改名「${esc(pv.rename.from)}」→「${esc(pv.rename.to)}」` +
     (pv.auto_fix ? `：保存时<b>自动迁移</b> ${pv.rename.entities||pv.rename.relations||pv.rename.prop_keys||0} 条实例（同事务，可回滚）` : `涉及存量数据`) + `</div>` : '';
   box.innerHTML = `<div style="border:1px solid ${_c[0]};background:${_c[1]};border-radius:8px;padding:8px 10px;margin-top:8px;line-height:1.6;">
-    <div style="font-size:12px;font-weight:500;">${_c[2]} · 实例影响预览</div>
+    <div style="font-size:13.5px;font-weight:500;">${_c[2]} · 实例影响预览</div>
     ${_rn}
-    ${pv.violation_count ? `<div style="font-size:11.5px;">新约束下 <b>${pv.violation_count}</b> 条存量违例需人工裁决（保存后发布时生成迁移计划）</div>` : ''}
+    ${pv.violation_count ? `<div style="font-size:12.5px;">新约束下 <b>${pv.violation_count}</b> 条存量违例需人工裁决（保存后发布时生成迁移计划）</div>` : ''}
     ${_items}${_more}
-    <div style="font-size:10.5px;color:var(--mut);margin-top:2px;">${esc(pv.summary||'')}</div>
+    <div style="font-size:12px;color:var(--mut);margin-top:2px;">${esc(pv.summary||'')}</div>
   </div>`;
   box.style.display = '';
 }

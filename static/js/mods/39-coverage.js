@@ -35,19 +35,19 @@ function covScopeBar(sc) {
 
 function covChip(text, color) {
   const c = color || 'var(--line)';
-  return `<span style="display:inline-block;border:1px solid ${c};border-radius:20px;padding:1px 8px;font-size:11px;margin:1px 2px;">${covEsc(text)}</span>`;
+  return `<span style="display:inline-block;border:1px solid ${c};border-radius:20px;padding:1px 8px;font-size:12.5px;margin:1px 2px;">${covEsc(text)}</span>`;
 }
 
 function covRelChip(rel, name) {
   const c = COV_REL_COLOR[rel] || 'var(--line)';
-  return `<span style="display:inline-block;border:1px solid ${c};color:${c};border-radius:6px;padding:1px 7px;font-size:11px;margin:1px 2px;" title="追溯关系：${covEsc(rel)}">${covEsc(name)}</span>`;
+  return `<span style="display:inline-block;border:1px solid ${c};color:${c};border-radius:6px;padding:1px 7px;font-size:12.5px;margin:1px 2px;" title="追溯关系：${covEsc(rel)}">${covEsc(name)}</span>`;
 }
 
 function covRate(pct) {
   if (pct == null) return '<b style="color:var(--mut)">—</b>';
   const v = Math.round(pct * 1000) / 10;
   const color = v >= 80 ? '#18a058' : (v >= 50 ? '#d88c00' : '#d03050');
-  return `<b style="color:${color};font-size:20px;">${v}%</b>`;
+  return `<b style="color:${color};font-size:21px;">${v}%</b>`;
 }
 
 /* ── 组件 1：覆盖矩阵（DOORS/Polarion 追溯矩阵风格） ── */
@@ -56,15 +56,15 @@ function covRenderMatrix(o) {
   const rows = (o.matrix || []).map(m => {
     const covered = (m.covered_by || []).length > 0;
     const chips = (m.covered_by || []).map(cb => covRelChip(cb.rel, cb.arch_name)).join('')
-      || '<span style="color:#d03050;font-size:11px;">✗ 未覆盖</span>';
+      || '<span style="color:#d03050;font-size:12.5px;">✗ 未覆盖</span>';
     return `<tr>
-      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:12px;"><b>${covEsc(m.req.name)}</b><br><span style="color:var(--mut);font-size:10px;">${covEsc(m.req.type)}</span></td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:13.5px;"><b>${covEsc(m.req.name)}</b><br><span style="color:var(--mut);font-size:12px;">${covEsc(m.req.type)}</span></td>
       <td style="padding:5px 8px;border-bottom:1px solid var(--line);">${chips}</td>
       <td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:center;">${covered ? '<span style="color:#18a058;">✓</span>' : '<span style="color:#d03050;">✗</span>'}</td>
     </tr>`;
   }).join('');
   const legend = Object.entries(COV_REL_COLOR).map(([k, c]) =>
-    `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${c};margin:0 3px 0 8px;"></span><span style="font-size:10px;">${k}</span>`).join('');
+    `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${c};margin:0 3px 0 8px;"></span><span style="font-size:12px;">${k}</span>`).join('');
   const unc = (o.uncovered_requirements || []).map(u => covChip(u.name, '#d03050')).join('') || '无';
   const baseless = (o.baseless_arch_elements || []).map(u => covChip(u.name + '（' + u.entity_type + '）', '#d88c00')).join('') || '无';
   const abnormal = (o.abnormal_relations || []).map(u => covChip(u.kind + ': ' + u.detail, '#d03050')).join('') || '无';
@@ -78,10 +78,10 @@ function covRenderMatrix(o) {
   </div>
   <div class="panel"><div class="ph">需求 × 架构 覆盖矩阵 <span style="flex:1"></span>${dist}</div>
   <div class="pb" style="padding:0;max-height:380px;overflow:auto;"><table style="width:100%;border-collapse:collapse;">
-    <thead><tr style="background:rgba(127,163,204,.08);"><th style="padding:6px 8px;text-align:left;font-size:11px;">需求</th><th style="padding:6px 8px;text-align:left;font-size:11px;">覆盖关系（按架构元素）</th><th style="padding:6px 8px;font-size:11px;">状态</th></tr></thead>
+    <thead><tr style="background:rgba(127,163,204,.08);"><th style="padding:6px 8px;text-align:left;font-size:12.5px;">需求</th><th style="padding:6px 8px;text-align:left;font-size:12.5px;">覆盖关系（按架构元素）</th><th style="padding:6px 8px;font-size:12.5px;">状态</th></tr></thead>
     <tbody>${rows}</tbody></table></div>
   <div style="padding:5px 10px;border-top:1px solid var(--line);">图例：${legend}</div></div>
-  <div class="panel" style="margin-top:10px;"><div class="ph">三类异常</div><div class="pb" style="font-size:12px;line-height:2;">
+  <div class="panel" style="margin-top:10px;"><div class="ph">三类异常</div><div class="pb" style="font-size:13.5px;line-height:2;">
     <div>🔴 未覆盖需求：${unc}</div><div>🟡 无需求依据的架构元素：${baseless}</div><div>🔴 异常追溯关系：${abnormal}</div>
   </div></div>`;
 }
@@ -93,8 +93,8 @@ function covRenderChains(o) {
     const arch = (c.sample_targets || []).find(t => t.via_rel === 'SATISFIES' || t.via_rel === 'ALLOCATED_TO');
     const verify = (c.sample_targets || []).filter(t => t.via_rel === 'VERIFIED_BY');
     const okArch = (c.reachable_arch_count || 0) > 0;
-    const node = (txt, bad) => `<span style="border:1px solid ${bad ? '#d03050' : 'var(--line)'};${bad ? 'color:#d03050;border-style:dashed;' : ''}border-radius:8px;padding:3px 10px;font-size:11px;background:rgba(127,163,204,.06);">${txt}</span>`;
-    const edge = (rel, bad) => `<span style="display:inline-flex;flex-direction:column;align-items:center;line-height:1;"><span style="font-size:9px;color:${bad ? '#d03050' : (COV_REL_COLOR[rel] || 'var(--mut)')};">${covEsc(rel || (bad ? '断链' : '—'))}</span><span style="color:${bad ? '#d03050' : 'var(--mut)'};font-size:11px;">→</span></span>`;
+    const node = (txt, bad) => `<span style="border:1px solid ${bad ? '#d03050' : 'var(--line)'};${bad ? 'color:#d03050;border-style:dashed;' : ''}border-radius:8px;padding:3px 10px;font-size:12.5px;background:rgba(127,163,204,.06);">${txt}</span>`;
+    const edge = (rel, bad) => `<span style="display:inline-flex;flex-direction:column;align-items:center;line-height:1;"><span style="font-size:11.5px;color:${bad ? '#d03050' : (COV_REL_COLOR[rel] || 'var(--mut)')};">${covEsc(rel || (bad ? '断链' : '—'))}</span><span style="color:${bad ? '#d03050' : 'var(--mut)'};font-size:12.5px;">→</span></span>`;
     const chain = [
       node('📋 ' + covEsc(c.req.name), false),
       edge(arch ? arch.via_rel : '', !okArch),
@@ -104,8 +104,8 @@ function covRenderChains(o) {
     ].join(' ');
     return `<div style="border-bottom:1px solid var(--line);padding:8px 4px;">
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">${chain}
-        <span style="margin-left:auto;font-size:10px;color:var(--mut);">深度 ${c.max_hops}</span></div>
-      <div style="margin-top:4px;font-size:10px;color:var(--mut);">架构可达 ${c.reachable_arch_count} 个 ｜ 验证用例 ${verify.map(v => covEsc(v.name)).join('、') || '—'}</div>
+        <span style="margin-left:auto;font-size:12px;color:var(--mut);">深度 ${c.max_hops}</span></div>
+      <div style="margin-top:4px;font-size:12px;color:var(--mut);">架构可达 ${c.reachable_arch_count} 个 ｜ 验证用例 ${verify.map(v => covEsc(v.name)).join('、') || '—'}</div>
     </div>`;
   }).join('');
   return `
@@ -124,10 +124,10 @@ function covRenderScenes(o) {
     const linked = sc.linked_total || 0;
     const acts = (sc.activities_states || []).slice(0, 6).map(a => covChip(a.name + '（' + a.rel + '）')).join('');
     return `<div class="panel" style="padding:10px;margin-bottom:8px;">
-      <div style="display:flex;gap:8px;align-items:center;"><b style="font-size:13px;">🎬 ${covEsc(sc.scene.name)}</b>
-        <span style="font-size:10px;color:var(--mut);">${covEsc(sc.scene.type)}</span>
-        <span style="margin-left:auto;font-size:11px;color:${linked > 0 ? '#18a058' : '#d03050'};">${linked > 0 ? '关联 ' + linked + ' 项' : '⚠️ 孤立场景'}</span></div>
-      <div style="margin-top:6px;font-size:11px;line-height:1.9;">${acts || '<span style="color:#d03050;">无活动/状态关联</span>'}</div>
+      <div style="display:flex;gap:8px;align-items:center;"><b style="font-size:14.5px;">🎬 ${covEsc(sc.scene.name)}</b>
+        <span style="font-size:12px;color:var(--mut);">${covEsc(sc.scene.type)}</span>
+        <span style="margin-left:auto;font-size:12.5px;color:${linked > 0 ? '#18a058' : '#d03050'};">${linked > 0 ? '关联 ' + linked + ' 项' : '⚠️ 孤立场景'}</span></div>
+      <div style="margin-top:6px;font-size:12.5px;line-height:1.9;">${acts || '<span style="color:#d03050;">无活动/状态关联</span>'}</div>
     </div>`;
   }).join('');
   return `
@@ -148,23 +148,23 @@ function covRenderGaps(o) {
   const total = s.gap_total || (o.gaps || []).length || 1;
   const sections = Object.entries(riskMeta).map(([rk, [label, color]]) => {
     const items = (byRisk[rk] || []).map(g => `
-      <div style="border:1px solid var(--line);border-left:3px solid ${color};border-radius:8px;padding:6px 10px;margin-bottom:6px;font-size:12px;">
-        <b>${covEsc(g.name)}</b> <span style="color:var(--mut);font-size:10px;">${covEsc(g.category)}</span>
-        <div style="color:var(--mut);font-size:11px;">${covEsc(g.detail)} ｜ ${covEsc(g.locate || '')}</div>
+      <div style="border:1px solid var(--line);border-left:3px solid ${color};border-radius:8px;padding:6px 10px;margin-bottom:6px;font-size:13.5px;">
+        <b>${covEsc(g.name)}</b> <span style="color:var(--mut);font-size:12px;">${covEsc(g.category)}</span>
+        <div style="color:var(--mut);font-size:12.5px;">${covEsc(g.detail)} ｜ ${covEsc(g.locate || '')}</div>
       </div>`).join('');
     const pct = Math.round(((byRisk[rk] || []).length / total) * 100);
-    return `<div style="margin-bottom:12px;"><div style="font-size:12px;margin-bottom:6px;display:flex;align-items:center;gap:8px;">
-      <span class="tool-status ${rk === 'high' ? 'err' : (rk === 'medium' ? 'w' : '')}" style="color:${color};border:1px solid ${color};border-radius:10px;padding:0 8px;font-size:10px;">${label}</span>
-      <b>${(byRisk[rk] || []).length}</b><span style="flex:1;height:4px;background:rgba(127,163,204,.12);border-radius:2px;overflow:hidden;"><span style="display:block;width:${pct}%;height:100%;background:${color};"></span></span><span style="font-size:10px;color:var(--mut);">${pct}%</span></div>${items || '<span style="color:var(--mut);font-size:11px;">无</span>'}</div>`;
+    return `<div style="margin-bottom:12px;"><div style="font-size:13.5px;margin-bottom:6px;display:flex;align-items:center;gap:8px;">
+      <span class="tool-status ${rk === 'high' ? 'err' : (rk === 'medium' ? 'w' : '')}" style="color:${color};border:1px solid ${color};border-radius:10px;padding:0 8px;font-size:12px;">${label}</span>
+      <b>${(byRisk[rk] || []).length}</b><span style="flex:1;height:4px;background:rgba(127,163,204,.12);border-radius:2px;overflow:hidden;"><span style="display:block;width:${pct}%;height:100%;background:${color};"></span></span><span style="font-size:12px;color:var(--mut);">${pct}%</span></div>${items || '<span style="color:var(--mut);font-size:12.5px;">无</span>'}</div>`;
   }).join('');
   const cats = Object.entries(s.by_category || {}).map(([k, v]) => covChip(k + ' ×' + v)).join('');
   return `
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;">
-    <div class="panel" style="padding:10px;text-align:center;">缺项总数<div style="color:${s.gap_total ? '#d03050' : '#18a058'};font-size:20px;"><b>${s.gap_total ?? '—'}</b></div></div>
+    <div class="panel" style="padding:10px;text-align:center;">缺项总数<div style="color:${s.gap_total ? '#d03050' : '#18a058'};font-size:21px;"><b>${s.gap_total ?? '—'}</b></div></div>
     <div class="panel" style="padding:10px;text-align:center;">覆盖率<div>${covRate(s.coverage_rate)}</div></div>
     <div class="panel" style="padding:10px;text-align:center;">验证率<div>${covRate(s.verification_rate)}</div></div>
   </div>
-  <div style="font-size:11px;color:var(--mut);margin-bottom:10px;">${cats}</div>
+  <div style="font-size:12.5px;color:var(--mut);margin-bottom:10px;">${cats}</div>
   <div class="panel"><div class="ph">缺项清单（按风险分级 · 不得自动隐藏）</div><div class="pb" style="max-height:420px;overflow:auto;">${sections}</div></div>`;
 }
 
@@ -173,22 +173,22 @@ function covRenderModeling(o) {
   const b = o.batch || {}, c = o.coverage || {};
   const delta = c.coverage_rate_delta || 0;
   const bar = (label, rate) => `<div style="display:flex;align-items:center;gap:10px;margin:8px 0;">
-    <span style="width:90px;font-size:12px;color:var(--mut);">${label}</span>
+    <span style="width:90px;font-size:13.5px;color:var(--mut);">${label}</span>
     <div style="flex:1;height:14px;background:rgba(127,163,204,.12);border-radius:7px;overflow:hidden;">
       <div style="width:${Math.round((rate || 0) * 100)}%;height:100%;background:${(rate || 0) >= 0.5 ? '#18a058' : '#d88c00'};"></div></div>
-    <span style="width:64px;font-size:12px;">${rate == null ? '—' : Math.round(rate * 1000) / 10 + '%'}</span></div>`;
-  const dBadge = `<span style="border:1px solid ${delta >= 0 ? '#18a058' : '#d03050'};color:${delta >= 0 ? '#18a058' : '#d03050'};border-radius:10px;padding:0 8px;font-size:11px;">Δ ${delta >= 0 ? '+' : ''}${Math.round(delta * 1000) / 10}%</span>`;
-  const gaps = (o.modeling_gaps || []).map(g => `<div style="border:1px solid #d88c00;border-radius:8px;padding:6px 10px;margin-bottom:6px;font-size:12px;background:rgba(216,140,0,.06);">⚠️ ${covEsc(g)}</div>`).join('') || '无';
+    <span style="width:64px;font-size:13.5px;">${rate == null ? '—' : Math.round(rate * 1000) / 10 + '%'}</span></div>`;
+  const dBadge = `<span style="border:1px solid ${delta >= 0 ? '#18a058' : '#d03050'};color:${delta >= 0 ? '#18a058' : '#d03050'};border-radius:10px;padding:0 8px;font-size:12.5px;">Δ ${delta >= 0 ? '+' : ''}${Math.round(delta * 1000) / 10}%</span>`;
+  const gaps = (o.modeling_gaps || []).map(g => `<div style="border:1px solid #d88c00;border-radius:8px;padding:6px 10px;margin-bottom:6px;font-size:13.5px;background:rgba(216,140,0,.06);">⚠️ ${covEsc(g)}</div>`).join('') || '无';
   const types = (b.entity_type_distribution || []).map(d => covChip(d.entity_type + ' ×' + d.count)).join('');
   const match = Object.entries(b.matching_distribution || {}).map(([k, v]) => covChip(k + ' ×' + v)).join('');
   return `
   <div class="panel" style="margin-bottom:10px;"><div class="ph">覆盖率对比（基线 → 并入本批次） ${dBadge}</div><div class="pb">
     ${bar('基线', (c.baseline || {}).coverage_rate)}
     ${bar('合并后', (c.merged || {}).coverage_rate)}
-    <div style="font-size:11px;color:var(--mut);">需求 ${((c.baseline || {}).requirement_total ?? '—')} → ${((c.merged || {}).requirement_total ?? '—')} ｜
+    <div style="font-size:12.5px;color:var(--mut);">需求 ${((c.baseline || {}).requirement_total ?? '—')} → ${((c.merged || {}).requirement_total ?? '—')} ｜
       追溯关系 ${((c.merged || {}).trace_relation_total ?? '—')}（不变 = 本批次无追溯关系候选）</div>
   </div></div>
-  <div class="panel" style="margin-bottom:10px;"><div class="ph">批次构成</div><div class="pb" style="font-size:12px;line-height:2;">
+  <div class="panel" style="margin-bottom:10px;"><div class="ph">批次构成</div><div class="pb" style="font-size:13.5px;line-height:2;">
     候选总数 <b>${b.candidate_total ?? 0}</b>（实体 ${b.entity_candidates ?? 0} ｜ 关系 ${b.relation_candidates ?? 0} ｜ 关系形态误入实体池 ${b.relation_like_entity_candidates ?? 0}）<br>
     类型分布 ${types}<br>重复匹配 ${match}（并入基线 ${b.dup_merged_into_baseline ?? 0}）
   </div></div>
@@ -212,7 +212,7 @@ function covCardHtml(name, o, wide) {
   const uid = 'c' + (++_covUid);
   window._covLast[uid] = { name, o };
   const openBtn = wide ? '' :
-    `<span style="cursor:pointer;border:1px solid var(--blue);color:var(--blue);border-radius:10px;padding:0 9px;font-size:10.5px;white-space:nowrap;" onclick="covOpenInPreview('${uid}')" title="在右侧预览面板查看大图">🔎 预览大图</span>`;
+    `<span style="cursor:pointer;border:1px solid var(--blue);color:var(--blue);border-radius:10px;padding:0 9px;font-size:12px;white-space:nowrap;" onclick="covOpenInPreview('${uid}')" title="在右侧预览面板查看大图">🔎 预览大图</span>`;
   return `<div class="panel" style="margin:6px 0;">
     <div class="ph"><span>📊 ${covEsc(COV_TABS[name] || name)}</span>
       <span style="flex:1"></span>${covScopeBar(o.scope || {})}<span style="flex:1"></span>${openBtn}</div>
@@ -241,7 +241,7 @@ function covTryCard(name, resultStr, args) {
   } catch (e) { /* 无参 */ }
   // MutationObserver 会触发水合；setTimeout 兜底消息渲染完成前的时序
   setTimeout(covHydrateAll, 120);
-  return `<div class="cov-pending panel" data-cov-tool="${covEsc(name)}"${attrs} style="margin:6px 0;padding:14px;border:1px dashed var(--line);border-radius:10px;color:var(--mut);font-size:12px;">📊 ${covEsc(COV_TABS[name] || name)}：结构化视图加载中…</div>`;
+  return `<div class="cov-pending panel" data-cov-tool="${covEsc(name)}"${attrs} style="margin:6px 0;padding:14px;border:1px dashed var(--line);border-radius:10px;color:var(--mut);font-size:13.5px;">📊 ${covEsc(COV_TABS[name] || name)}：结构化视图加载中…</div>`;
 }
 
 /* 扫描全部未水合占位卡（含历史消息里的），从 REST 端点拉全量结果渲染 */
@@ -295,7 +295,7 @@ function covOpenInPreview(uid) {
   const { name, o } = rec;
   window._pvCurrent = { title: '覆盖性分析 · ' + (COV_TABS[name] || name) };
   if (title) title.textContent = '📊 覆盖性分析 · ' + (COV_TABS[name] || name);
-  body.innerHTML = covCardHtml(name, o, true) || '<div style="color:var(--mut);font-size:12px;">无法渲染该结果</div>';
+  body.innerHTML = covCardHtml(name, o, true) || '<div style="color:var(--mut);font-size:13.5px;">无法渲染该结果</div>';
   pp.classList.remove('collapsed');
   body.scrollTop = 0;
 }

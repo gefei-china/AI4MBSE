@@ -71,11 +71,11 @@ function fmtServerTime(ts, opts){
 // ⚠️ 只产出**骨架**：容器 id 固定为 f-bind-<kind>-dd / -head / -sum / -list，
 //    选项内容由 30-agents.js 的 renderBindChecks() 填充（与团队面板分工一致）。
 function bindDropdown(kind, label, tip){
-  const head = 'display:flex;align-items:center;justify-content:space-between;gap:6px;border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;user-select:none;background:#fff;';
+  const head = 'display:flex;align-items:center;justify-content:space-between;gap:6px;border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:13.5px;cursor:pointer;user-select:none;background:#fff;';
   return `<div class="form-row"><label>${label} <span class="info-tip" title="${escA(tip)}">ⓘ</span></label>
           <div id="f-bind-${kind}-dd">
-            <div id="f-bind-${kind}-dd-head" onclick="bindDdToggle('${kind}',event)" style="${head}"><span id="f-bind-${kind}-dd-sum" style="color:var(--mut);">选择…</span><span style="font-size:9px;color:var(--mut);">▾</span></div>
-            <div id="f-bind-${kind}-list" style="display:none;border:1px solid var(--line);border-top:none;border-radius:0 0 6px 6px;max-height:240px;overflow:auto;background:#fff;font-size:12px;"></div>
+            <div id="f-bind-${kind}-dd-head" onclick="bindDdToggle('${kind}',event)" style="${head}"><span id="f-bind-${kind}-dd-sum" style="color:var(--mut);">选择…</span><span style="font-size:11.5px;color:var(--mut);">▾</span></div>
+            <div id="f-bind-${kind}-list" style="display:none;border:1px solid var(--line);border-top:none;border-radius:0 0 6px 6px;max-height:240px;overflow:auto;background:#fff;font-size:13.5px;"></div>
           </div></div>`;
 }
 
@@ -267,8 +267,8 @@ const MODAL_FORMS = {
   onttype: `<h3 id="ont-form-title">🧬 新增本体类型</h3>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🔖</span><span class="fs-title">基础信息</span></div>
-        <div class="form-row"><label>类型名称 <span id="ot-name-dup" style="color:var(--red);font-size:11px;"></span></label><input id="ot-name" placeholder="如：需求 / 部件 / 载荷" oninput="otCheckDup()"></div>
-        <details style="margin:2px 0 6px;"><summary style="cursor:pointer;font-size:11px;color:var(--mut);user-select:none;">高级：自定义 IRI（留空=按命名空间策略自动生成）</summary>
+        <div class="form-row"><label>类型名称 <span id="ot-name-dup" style="color:var(--red);font-size:12.5px;"></span></label><input id="ot-name" placeholder="如：需求 / 部件 / 载荷" oninput="otCheckDup()"></div>
+        <details style="margin:2px 0 6px;"><summary style="cursor:pointer;font-size:12.5px;color:var(--mut);user-select:none;">高级：自定义 IRI（留空=按命名空间策略自动生成）</summary>
           <div class="form-row" style="margin-top:6px;"><input id="ot-iri" placeholder="如：http://www.xingwang.mbse/ontology#需求"></div></details>
         <div class="form-row"><label>类型种类</label>
           <select id="ot-kind" onchange="ontKindChanged()"><option value="entity">实体类型（Class）</option><option value="relation">关系类型（Object Property）</option><option value="attribute">属性类型（Data Property）</option></select></div>
@@ -277,14 +277,14 @@ const MODAL_FORMS = {
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🧬</span><span class="fs-title">类型特征</span></div>
         <div class="form-row" id="ot-parent-row" style="display:none;"><label id="ot-parent-label">父类型</label>
-          <select id="ot-parent" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;" onchange="otParentHint()"></select>
-          <div id="ot-parent-hint" style="font-size:11px;color:var(--mut);margin-top:3px;"></div></div>
+          <select id="ot-parent" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;" onchange="otParentHint()"></select>
+          <div id="ot-parent-hint" style="font-size:12.5px;color:var(--mut);margin-top:3px;"></div></div>
         <div class="form-row" id="ot-abstract-row" style="display:none;"><label>抽象类型 <span class="info-tip" title="勾选后该类型不可直接创建实例，仅作分类节点">ⓘ</span></label>
           <input type="checkbox" id="ot-abstract" style="width:16px;height:16px;"></div>
         <div class="form-row" id="ot-disjoint-row" style="display:none;"><label>互斥类型 <span class="info-tip" title="disjointWith：本类型实例与所选类型实例无交集（如 人 互斥 部件）。多选=对多互斥">ⓘ</span></label>
-          <select id="ot-disjoint" multiple size="4" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b> = 与所有选中类型互斥（disjointWith）</small></div>
+          <select id="ot-disjoint" multiple size="4" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b> = 与所有选中类型互斥（disjointWith）</small></div>
         <div class="form-row" id="ot-status-row"><label>生命周期 <span class="info-tip" title="draft=草稿（仅自用）/ review=评审中（待发布）/ released=已发布（生效）/ deprecated=已弃用（被新类型替代）">ⓘ</span></label>
-          <select id="ot-status" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;">
+          <select id="ot-status" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;">
             <option value="draft">draft（草稿）</option>
             <option value="review">review（评审中）</option>
             <option value="released">released（已发布）</option>
@@ -293,29 +293,29 @@ const MODAL_FORMS = {
       </div>
       <div class="form-section" id="ot-props-section">
         <!-- 2026-09-07 方案A（Protégé/OWL 对齐）：属性全局定义（数据属性），类视图=只读引用＋局部约束覆盖 -->
-        <div class="form-section-head"><span class="fs-icon">📋</span><span class="fs-title">属性（引用） <span class="fs-hint">（属性在「数据属性」统一定义，此处只做 绑定/继承 + 局部覆盖）</span></span><span style="flex:1;"></span><button class="btn sm" style="padding:1px 8px;font-size:11px;" onclick="ontEntBindExisting()" title="把已有的数据属性绑定到本类（写入其 适用类型/domain）">⇄ 绑定已有</button><button class="btn sm" style="padding:1px 8px;font-size:11px;" onclick="ontEntCreateAttr()" title="新建数据属性并预填 适用类型=本类">＋ 新建属性</button></div>
+        <div class="form-section-head"><span class="fs-icon">📋</span><span class="fs-title">属性（引用） <span class="fs-hint">（属性在「数据属性」统一定义，此处只做 绑定/继承 + 局部覆盖）</span></span><span style="flex:1;"></span><button class="btn sm" style="padding:1px 8px;font-size:12.5px;" onclick="ontEntBindExisting()" title="把已有的数据属性绑定到本类（写入其 适用类型/domain）">⇄ 绑定已有</button><button class="btn sm" style="padding:1px 8px;font-size:12.5px;" onclick="ontEntCreateAttr()" title="新建数据属性并预填 适用类型=本类">＋ 新建属性</button></div>
         <div id="ot-props-rows" style="display:flex;flex-direction:column;gap:4px;"></div>
       </div>
       <div class="form-section" id="ot-cons-section" style="display:none;">
         <!-- 2026-09-07 方案A：必填/唯一/白名单已内联到属性行（局部覆盖），该 section 仅保留 DOM 兼容，不再展示 -->
         <div class="form-section-head"><span class="fs-icon">⚙️</span><span class="fs-title">约束规则 <span class="fs-hint">（已内联到属性行）</span></span></div>
-        <div class="form-row"><label>必填属性 <span class="info-tip" title="勾选为创建实例时必填（缺则校验报错）">ⓘ</span></label><select id="ot-req" multiple size="3" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b>，候选与上方「属性」行联动</small></div>
-        <div class="form-row"><label>唯一属性 <span class="info-tip" title="勾选为值在所有实例中唯一（防重；OWL 导出为 sh:maxCount 1）">ⓘ</span></label><select id="ot-uniq" multiple size="3" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b>，候选与上方「属性」行联动</small></div>
+        <div class="form-row"><label>必填属性 <span class="info-tip" title="勾选为创建实例时必填（缺则校验报错）">ⓘ</span></label><select id="ot-req" multiple size="3" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b>，候选与上方「属性」行联动</small></div>
+        <div class="form-row"><label>唯一属性 <span class="info-tip" title="勾选为值在所有实例中唯一（防重；OWL 导出为 sh:maxCount 1）">ⓘ</span></label><select id="ot-uniq" multiple size="3" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b>，候选与上方「属性」行联动</small></div>
         <div class="form-row"><label>取值白名单 <span class="info-tip" title="按属性填逗号分隔值；留空=不约束；实例取值将在此白名单内校验">ⓘ</span></label><div id="ot-allowed-rows" style="display:flex;flex-direction:column;gap:4px;"></div></div>
       </div>
       <div class="form-section" id="ot-relation-section" style="display:none;">
         <div class="form-section-head"><span class="fs-icon">🔗</span><span class="fs-title">关系特性</span></div>
-        <div id="ot-relation-hint" style="font-size:11.5px;color:var(--amb);margin-bottom:8px;background:var(--amb-l);padding:6px 8px;border-radius:6px;line-height:1.7;">
+        <div id="ot-relation-hint" style="font-size:12.5px;color:var(--amb);margin-bottom:8px;background:var(--amb-l);padding:6px 8px;border-radius:6px;line-height:1.7;">
           <b>💡 多选语义</b>：FROM/TO 多选 = 多域/多值域，SHACL 按 <code>sh:or</code> 并集校验。<br>
           <b>例</b>：CONTAINS 选 FROM={部件,载荷}，TO={系统元素,功能}，表示「部件/载荷 包含 系统元素/功能」全部合法。<br>
           <b>多选操作</b>：在 select 列表内 <kbd>Ctrl</kbd>+点击 离散多选 / <kbd>Shift</kbd>+点击 范围多选 / <kbd>Ctrl+A</kbd> 全选。
         </div>
         <div class="form-row" id="ot-domain-row"><label>源类型 FROM <span class="info-tip" title="关系起点约束的多选实体类型（按住 Ctrl/Shift 多选=多域；SHACL sh:or 并集）">ⓘ</span></label>
-          <select id="ot-domain" multiple size="4" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b> = 多域（SHACL sh:or 并集）</small></div>
+          <select id="ot-domain" multiple size="4" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b> = 多域（SHACL sh:or 并集）</small></div>
         <div class="form-row" id="ot-range-row"><label>目标类型 TO <span class="info-tip" title="关系终点约束的多选实体类型（按住 Ctrl/Shift 多选=多值域；SHACL sh:or 并集）">ⓘ</span></label>
-          <select id="ot-range" multiple size="4" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b> = 多值域（SHACL sh:or 并集）</small></div>
+          <select id="ot-range" multiple size="4" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b> = 多值域（SHACL sh:or 并集）</small></div>
         <div class="form-row" id="ot-char-row"><label>关系特性 OWL 公理 <span class="info-tip" title="OWL 公理可多选：transitive=传递（含 派生）、symmetric=对称（朋友=朋友）、reflexive=自反（属于 自己属于自己）等">ⓘ</span></label>
-          <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px;">
+          <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:13.5px;">
             <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" class="ot-char" value="transitive">传递</label>
             <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" class="ot-char" value="symmetric">对称</label>
             <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" class="ot-char" value="asymmetric">反对称</label>
@@ -326,17 +326,17 @@ const MODAL_FORMS = {
         <div class="form-row" id="ot-func-row"><label>函数型关系 1:1 <span class="info-tip" title="每个源实例最多一个目标；与勾选「函数型」特性等价（保留旧 UI 入口）">ⓘ</span></label>
           <input type="checkbox" id="ot-func" style="width:16px;height:16px;"></div>
         <div class="form-row" id="ot-card-row"><label>端点基数 源 / 目标 <span class="info-tip" title="关系两端可出现实例数的允许范围（留空=0/不限）。写入后 SHACL 校验：源端出边 sh:minCount/maxCount，目标端经 sh:inversePath 基数校验。">ⓘ</span></label>
-          <div style="display:flex;gap:8px;align-items:center;font-size:12px;flex-wrap:wrap;">
-            <span style="color:var(--mut);">源 min</span><input type="number" id="ot-card-src-min" min="0" placeholder="0=不限" style="width:66px;border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:12px;">
-            <span style="color:var(--mut);">源 max</span><input type="number" id="ot-card-src-max" min="0" placeholder="0=不限" style="width:66px;border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:12px;">
-            <span style="color:var(--mut);">目标 min</span><input type="number" id="ot-card-tgt-min" min="0" placeholder="0=不限" style="width:66px;border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:12px;">
-            <span style="color:var(--mut);">目标 max</span><input type="number" id="ot-card-tgt-max" min="0" placeholder="0=不限" style="width:66px;border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:12px;">
+          <div style="display:flex;gap:8px;align-items:center;font-size:13.5px;flex-wrap:wrap;">
+            <span style="color:var(--mut);">源 min</span><input type="number" id="ot-card-src-min" min="0" placeholder="0=不限" style="width:66px;border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:13.5px;">
+            <span style="color:var(--mut);">源 max</span><input type="number" id="ot-card-src-max" min="0" placeholder="0=不限" style="width:66px;border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:13.5px;">
+            <span style="color:var(--mut);">目标 min</span><input type="number" id="ot-card-tgt-min" min="0" placeholder="0=不限" style="width:66px;border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:13.5px;">
+            <span style="color:var(--mut);">目标 max</span><input type="number" id="ot-card-tgt-max" min="0" placeholder="0=不限" style="width:66px;border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:13.5px;">
           </div></div>
       </div>
       <div class="form-section" id="ot-attr-section" style="display:none;">
         <div class="form-section-head"><span class="fs-icon">📐</span><span class="fs-title">数据属性配置</span></div>
         <div class="form-row" id="ot-dtype-row"><label>数据类型 <span class="info-tip" title="数据属性的值类型；OWL 导出 rdfs:range xsd:*；int/decimal/boolean/date/dateTime 按词表 pattern 强校验">ⓘ</span></label>
-          <select id="ot-dtype" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;">
+          <select id="ot-dtype" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;">
             <option value="string">string（字符串）</option>
             <option value="text">text（长文本）</option>
             <option value="int">int（整数）</option>
@@ -349,13 +349,13 @@ const MODAL_FORMS = {
         <div class="form-row" id="ot-attr-allowed-row"><label>允许值 <span class="info-tip" title="逗号分隔；留空=不约束；实例取值将按此白名单校验（仅适用类型命中时）">ⓘ</span></label>
           <input id="ot-attr-allowed" placeholder="如：V, Ka, Ku"></div>
         <div class="form-row" id="ot-attr-domain-row"><label>适用类型 <span class="info-tip" title="数据属性绑定的实体类型（OWL rdfs:domain，多选=合取）；留空=对所有类型生效；不命中时不参与 xsd/白名单校验">ⓘ</span></label>
-          <select id="ot-attr-domain" multiple size="4" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b> = 多个适用类型（合取语义）；留空=对所有类型生效</small></div>
+          <select id="ot-attr-domain" multiple size="4" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b> = 多个适用类型（合取语义）；留空=对所有类型生效</small></div>
         <div class="form-row" id="ot-unit-row"><label>单位 / 量纲 <span class="info-tip" title="ISO 80000/SI 标准：先选「量纲类别」（如 频率），单位下拉随之级联出 SI 一贯单位与常用倍数单位（如 Hz/kHz/MHz/GHz）；也可选「自定义…」自由输入">ⓘ</span></label>
           <div style="display:flex;gap:6px;align-items:center;">
-            <select id="ot-qkind" style="flex:1;min-width:120px;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;" onchange="otUnitSyncQkind()"></select>
+            <select id="ot-qkind" style="flex:1;min-width:120px;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;" onchange="otUnitSyncQkind()"></select>
             <input id="ot-qkind-custom" placeholder="自定义量纲类别，如 亮度" style="flex:1;display:none;"></div>
           <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
-            <select id="ot-unit" style="flex:1;min-width:120px;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;" disabled></select>
+            <select id="ot-unit" style="flex:1;min-width:120px;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;" disabled></select>
             <input id="ot-unit-custom" placeholder="自定义单位，如 nT" style="flex:1;display:none;"></div></div>
       </div>
       <div class="form-section">
@@ -369,8 +369,8 @@ const MODAL_FORMS = {
   docmeta: `<h3>📝 编辑文档元数据</h3>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">📄</span><span class="fs-title">文件信息</span></div>
-        <div class="form-row"><label>文件</label><span id="dm2-file" style="font-size:12px;color:var(--mut);"></span></div>
-        <div class="form-row"><label>上传人 / 上传时间</label><span id="dm2-uploader" style="font-size:12px;color:var(--mut);"></span></div>
+        <div class="form-row"><label>文件</label><span id="dm2-file" style="font-size:13.5px;color:var(--mut);"></span></div>
+        <div class="form-row"><label>上传人 / 上传时间</label><span id="dm2-uploader" style="font-size:13.5px;color:var(--mut);"></span></div>
       </div>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">📝</span><span class="fs-title">元数据</span></div>
@@ -389,7 +389,7 @@ const MODAL_FORMS = {
       </div>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🛡</span><span class="fs-title">权限配置</span></div>
-        <div class="form-row"><label>权限 <span class="info-tip" title="保存后自动跳转到「权限配置」页勾选操作级权限">ⓘ</span></label><span style="font-size:12px;color:var(--mut);">保存后可在「权限配置」页勾选操作级权限</span></div>
+        <div class="form-row"><label>权限 <span class="info-tip" title="保存后自动跳转到「权限配置」页勾选操作级权限">ⓘ</span></label><span style="font-size:13.5px;color:var(--mut);">保存后可在「权限配置」页勾选操作级权限</span></div>
       </div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveRole()">保存</button></div>`,
   user: `<h3 id="user-form-title">新增用户</h3>
@@ -401,7 +401,7 @@ const MODAL_FORMS = {
       </div>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🏢</span><span class="fs-title">组织归属</span></div>
-        <div class="form-row"><label>部门</label><select id="f-dept" onchange="if(this.value==='__manage__'){go('users');this.value='';toast('请到「部门设置」Tab 维护部门');}"><option value="">未分配</option></select> <a style="cursor:pointer;color:var(--blue-d);text-decoration:underline;font-size:11px;margin-left:6px;" onclick="showModal('department')">＋ 新增部门</a></div>
+        <div class="form-row"><label>部门</label><select id="f-dept" onchange="if(this.value==='__manage__'){go('users');this.value='';toast('请到「部门设置」Tab 维护部门');}"><option value="">未分配</option></select> <a style="cursor:pointer;color:var(--blue-d);text-decoration:underline;font-size:12.5px;margin-left:6px;" onclick="showModal('department')">＋ 新增部门</a></div>
         <div class="form-row"><label>角色 <span class="req">*</span></label><select id="f-role"></select></div>
       </div>
       <div class="form-section">
@@ -414,7 +414,7 @@ const MODAL_FORMS = {
         <div class="form-section-head"><span class="fs-icon">🏢</span><span class="fs-title">部门信息</span></div>
         <div class="form-row"><label>部门名称 <span class="req">*</span></label><input id="f-dname" placeholder="如：系统总体室"></div>
         <div class="form-row"><label>描述</label><input id="f-ddesc" placeholder="部门职责（可空）"></div>
-        <div class="form-row"><label>排序 <span class="info-tip" title="数字越小越靠前；同级排序生效">ⓘ</span></label><input id="f-dorder" type="number" value="0" style="width:120px;"> <span style="font-size:11px;color:var(--mut);margin-left:6px;">数字越小越靠前</span></div>
+        <div class="form-row"><label>排序 <span class="info-tip" title="数字越小越靠前；同级排序生效">ⓘ</span></label><input id="f-dorder" type="number" value="0" style="width:120px;"> <span style="font-size:12.5px;color:var(--mut);margin-left:6px;">数字越小越靠前</span></div>
       </div>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">⚙️</span><span class="fs-title">状态</span></div>
@@ -434,24 +434,24 @@ const MODAL_FORMS = {
           <option value="multimodal">多模态（Multimodal）</option>
           <option value="embedding">向量模型（Embedding）</option>
         </select></div>
-        <div id="f-embed-hint" style="display:none;font-size:11.5px;color:var(--amb);background:var(--amb-l);padding:6px 8px;border-radius:6px;margin-bottom:10px;line-height:1.7;">💡 <b>BGE-M3 接入示例</b>：先用 Xinference / TEI / Ollama / vLLM 本地部署 BGE-M3（暴露 OpenAI 兼容 /embeddings），再在此配置：<br>Base URL = 服务地址，如 <code>http://localhost:9997/v1</code><br>模型名 = BGE-M3 服务名，如 <code>text-embedding-bge-m3</code></div>
+        <div id="f-embed-hint" style="display:none;font-size:12.5px;color:var(--amb);background:var(--amb-l);padding:6px 8px;border-radius:6px;margin-bottom:10px;line-height:1.7;">💡 <b>BGE-M3 接入示例</b>：先用 Xinference / TEI / Ollama / vLLM 本地部署 BGE-M3（暴露 OpenAI 兼容 /embeddings），再在此配置：<br>Base URL = 服务地址，如 <code>http://localhost:9997/v1</code><br>模型名 = BGE-M3 服务名，如 <code>text-embedding-bge-m3</code></div>
         <div class="form-row"><label>名称 <b class="req">*</b> <span class="info-tip" title="展示用名，便于在模型列表中辨识">ⓘ</span></label><input id="f-name" placeholder="如：DeepSeek-V3 / text-embedding-v3"></div>
         <div class="form-row"><label>Base URL <b class="req">*</b> <span class="info-tip" title="OpenAI 兼容接口地址（结尾 /v1），如 https://api.deepseek.com/v1">ⓘ</span></label><input id="f-url" placeholder="https://api.deepseek.com/v1"></div>
-        <div class="form-row"><label>API Key <b class="req">*</b> <span class="info-tip" title="服务端 API Key；保存后只显示脱敏（••••），不可再次查看明文">ⓘ</span></label><input id="f-key" type="password" placeholder="sk-..." autocomplete="off"> <span id="f-key-hint" style="display:none;font-size:11px;color:var(--mut);">已配置（••••），保存后不可修改</span></div>
+        <div class="form-row"><label>API Key <b class="req">*</b> <span class="info-tip" title="服务端 API Key；保存后只显示脱敏（••••），不可再次查看明文">ⓘ</span></label><input id="f-key" type="password" placeholder="sk-..." autocomplete="off"> <span id="f-key-hint" style="display:none;font-size:12.5px;color:var(--mut);">已配置（••••），保存后不可修改</span></div>
         <div class="form-row"><label>模型名 <b class="req">*</b> <span class="info-tip" title="服务端真实模型标识，如 deepseek-chat / gpt-4o / text-embedding-v3">ⓘ</span></label><input id="f-model" placeholder="deepseek-chat / text-embedding-v3"></div>
         <div class="form-row"><label>图片理解 <span class="info-tip" title="勾选后，该模型可在「AI 建模」会话里接收上传的图片（架构图/连线图/截图），图片会作为多模态内容随消息一起送给模型。⚠️ 仅当模型确实支持图像输入时才勾选：勾错会把图片发给纯文本模型，上游直接报错。勾选写入能力标签 tags=vision（与工程 2026-09-04 起的前端能力判据同源）。">ⓘ</span></label><label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="f-vision" style="width:auto;"> 支持图片理解（多模态 / VL），如 qwen-vl-max、gpt-4o</label></div>
         <div class="form-row"><label>设为默认 <span class="info-tip" title="该类型的默认模型（对话/向量各自独立一个默认）">ⓘ</span></label><label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="f-is-default" style="width:auto;"> 该类型的默认模型（对话/向量各自独立一个默认）</label></div>
       </div>
       <div class="adv-box collapsed" id="f-adv">
-        <div class="adv-head" onclick="document.getElementById('f-adv').classList.toggle('collapsed')"><span class="chev">▾</span>高级设置<span style="font-weight:400;color:var(--mut);font-size:11px;">上下文窗口 · 温度 · TopP · TopK · 思考模式</span></div>
+        <div class="adv-head" onclick="document.getElementById('f-adv').classList.toggle('collapsed')"><span class="chev">▾</span>高级设置<span style="font-weight:400;color:var(--mut);font-size:12.5px;">上下文窗口 · 温度 · TopP · TopK · 思考模式</span></div>
         <div class="adv-body">
-          <div class="form-row"><label>上下文窗口（输入）</label><input id="f-ctx" type="number" min="512" step="512" style="width:150px;" value="8192"> <span style="font-size:11px;color:var(--mut);">tokens</span></div>
-          <div class="form-row"><label>上下文窗口（输出）</label><input id="f-maxt" type="number" min="1" step="128" style="width:150px;" value="8192"> <span style="font-size:11px;color:var(--mut);">tokens（≤ 输入）</span></div>
-          <div class="form-row"><label>温度</label><input id="f-temp" type="number" min="0" max="2" step="0.1" style="width:150px;" value="0.3"> <span style="font-size:11px;color:var(--mut);">0~2，越小越确定</span></div>
-          <div class="form-row"><label>TopP</label><input id="f-top-p" type="number" min="0" max="1" step="0.01" style="width:150px;" placeholder="留空不设置"> <span style="font-size:11px;color:var(--mut);">0~1 核采样</span></div>
-          <div class="form-row"><label>TopK</label><input id="f-top-k" type="number" min="1" max="100" step="1" style="width:150px;" placeholder="1~100 整数"> <span style="font-size:11px;color:var(--mut);">整数 1~100</span></div>
+          <div class="form-row"><label>上下文窗口（输入）</label><input id="f-ctx" type="number" min="512" step="512" style="width:150px;" value="8192"> <span style="font-size:12.5px;color:var(--mut);">tokens</span></div>
+          <div class="form-row"><label>上下文窗口（输出）</label><input id="f-maxt" type="number" min="1" step="128" style="width:150px;" value="8192"> <span style="font-size:12.5px;color:var(--mut);">tokens（≤ 输入）</span></div>
+          <div class="form-row"><label>温度</label><input id="f-temp" type="number" min="0" max="2" step="0.1" style="width:150px;" value="0.3"> <span style="font-size:12.5px;color:var(--mut);">0~2，越小越确定</span></div>
+          <div class="form-row"><label>TopP</label><input id="f-top-p" type="number" min="0" max="1" step="0.01" style="width:150px;" placeholder="留空不设置"> <span style="font-size:12.5px;color:var(--mut);">0~1 核采样</span></div>
+          <div class="form-row"><label>TopK</label><input id="f-top-k" type="number" min="1" max="100" step="1" style="width:150px;" placeholder="1~100 整数"> <span style="font-size:12.5px;color:var(--mut);">整数 1~100</span></div>
           <div class="form-row"><label>思考模式</label><div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
-            ${['模型默认','开启','关闭'].map(v=>`<label style="display:flex;align-items:center;gap:4px;font-size:12.5px;font-weight:400;margin:0;cursor:pointer;"><input type="radio" name="f-thinking" value="${v}" ${v==='模型默认'?'checked':''} style="width:auto;"> ${v}</label>`).join('')}
+            ${['模型默认','开启','关闭'].map(v=>`<label style="display:flex;align-items:center;gap:4px;font-size:13.5px;font-weight:400;margin:0;cursor:pointer;"><input type="radio" name="f-thinking" value="${v}" ${v==='模型默认'?'checked':''} style="width:auto;"> ${v}</label>`).join('')}
           </div></div>
         </div>
       </div>
@@ -482,18 +482,18 @@ const MODAL_FORMS = {
         <div class="form-section-head"><span class="fs-icon">🌐</span><span class="fs-title">HTTP 接口配置</span></div>
         <div class="form-row"><label>Method <b class="req">*</b></label><select id="f-tool-method"><option value="GET">GET</option><option value="POST">POST</option><option value="PUT">PUT</option><option value="DELETE">DELETE</option><option value="PATCH">PATCH</option></select></div>
         <div class="form-row"><label>URL <b class="req">*</b> <span class="info-tip" title="路径参数写成 /users/{id}；query 不要写成 ?q={q}，用下方 schema + 默认 query/body">ⓘ</span></label><input id="f-tool-url-http" placeholder="https://api.example.com/weather/{city}"></div>
-        <div class="form-row"><label>input_schema（JSON）<b class="req">*</b> <span class="info-tip" title="必须是 type=object；字段名给模型填，执行时再映射到 path/query/body">ⓘ</span></label><textarea id="f-tool-schema" style="min-height:120px;font-family:monospace;font-size:11.5px;resize:vertical;" placeholder='{\n  "type": "object",\n  "properties": {\n    "city": { "type": "string", "description": "城市名" }\n  },\n  "required": ["city"]\n}'></textarea></div>
-        <div class="form-row"><label>param_in（可选 JSON） <span class="info-tip" title="如 {city:path,units:query}。留空则：URL 占位符→path，GET/DELETE 其余→query，其它→body">ⓘ</span></label><textarea id="f-tool-param-in" rows="2" style="min-height:36px;font-family:monospace;font-size:11px;resize:vertical;" placeholder='{"city":"path","units":"query"}'></textarea></div>
+        <div class="form-row"><label>input_schema（JSON）<b class="req">*</b> <span class="info-tip" title="必须是 type=object；字段名给模型填，执行时再映射到 path/query/body">ⓘ</span></label><textarea id="f-tool-schema" style="min-height:120px;font-family:monospace;font-size:12.5px;resize:vertical;" placeholder='{\n  "type": "object",\n  "properties": {\n    "city": { "type": "string", "description": "城市名" }\n  },\n  "required": ["city"]\n}'></textarea></div>
+        <div class="form-row"><label>param_in（可选 JSON） <span class="info-tip" title="如 {city:path,units:query}。留空则：URL 占位符→path，GET/DELETE 其余→query，其它→body">ⓘ</span></label><textarea id="f-tool-param-in" rows="2" style="min-height:36px;font-family:monospace;font-size:12.5px;resize:vertical;" placeholder='{"city":"path","units":"query"}'></textarea></div>
         <div class="form-row"><label>超时（秒）<b class="req">*</b></label><input id="f-tool-timeout" type="number" value="15" min="1" max="300"></div>
       </div>
       <div class="form-section" id="tool-resilience-box">
         <div class="form-section-head"><span class="fs-icon">🛡</span><span class="fs-title">容错策略 <span class="fs-hint">（仅 MCP/HTTP 集成工具生效）</span></span></div>
         <div class="form-row"><label>最大重试次数 <span class="info-tip" title="0=不重试；推荐 1-3 次，避免雪崩">ⓘ</span></label><input id="f-tool-retries" type="number" min="0" max="5" value="0"></div>
-        <div class="form-row"><label>退避基数 ms / 倍数 <span class="info-tip" title="指数退避：基数 500ms × 倍数 2 → 500/1000/2000ms">ⓘ</span></label><div style="display:flex;gap:8px;"><input id="f-tool-backoff" type="number" min="100" value="500" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"> <input id="f-tool-backoff-mult" type="number" min="1" max="5" value="2" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"></div></div>
+        <div class="form-row"><label>退避基数 ms / 倍数 <span class="info-tip" title="指数退避：基数 500ms × 倍数 2 → 500/1000/2000ms">ⓘ</span></label><div style="display:flex;gap:8px;"><input id="f-tool-backoff" type="number" min="100" value="500" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"> <input id="f-tool-backoff-mult" type="number" min="1" max="5" value="2" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"></div></div>
       </div>
       <div class="form-section" id="tool-headers-box">
-        <div class="form-section-head"><span class="fs-icon">📨</span><span class="fs-title">Headers <span class="fs-hint">（可选）</span></span><span style="flex:1;"></span><button class="btn sm ghost" onclick="addToolHeader()" style="padding:1px 8px;font-size:11px;">＋ 添加</button></div>
-        <div id="tool-headers-list" style="display:flex;flex-direction:column;gap:4px;"><div style="display:flex;gap:6px;align-items:center;"><input class="tool-hdr-key" placeholder="Key" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"><input class="tool-hdr-val" placeholder="Value" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"><button class="btn sm ghost" onclick="this.parentElement.remove()" style="padding:2px 8px;font-size:11px;">✕</button></div></div>
+        <div class="form-section-head"><span class="fs-icon">📨</span><span class="fs-title">Headers <span class="fs-hint">（可选）</span></span><span style="flex:1;"></span><button class="btn sm ghost" onclick="addToolHeader()" style="padding:1px 8px;font-size:12.5px;">＋ 添加</button></div>
+        <div id="tool-headers-list" style="display:flex;flex-direction:column;gap:4px;"><div style="display:flex;gap:6px;align-items:center;"><input class="tool-hdr-key" placeholder="Key" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"><input class="tool-hdr-val" placeholder="Value" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"><button class="btn sm ghost" onclick="this.parentElement.remove()" style="padding:2px 8px;font-size:12.5px;">✕</button></div></div>
       </div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveTool()">保存</button></div>`,
   'mcp-detail': `<h3>🔌 MCP 服务器详情</h3>
@@ -501,8 +501,8 @@ const MODAL_FORMS = {
         <div id="mcp-detail-body"><div class="loading">加载中…</div></div>
       </div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">关闭</button></div>`,
-  evsub: `<h3>🔔 事件回调订阅 <span style="font-size:11px;color:var(--mut);font-weight:400;">D11 A2A 协议互通</span></h3>
-      <div id="evsub-filter" style="font-size:11px;color:var(--mut);margin-bottom:8px;background:var(--blue-l);border-radius:6px;padding:6px 8px;"></div>
+  evsub: `<h3>🔔 事件回调订阅 <span style="font-size:12.5px;color:var(--mut);font-weight:400;">D11 A2A 协议互通</span></h3>
+      <div id="evsub-filter" style="font-size:12.5px;color:var(--mut);margin-bottom:8px;background:var(--blue-l);border-radius:6px;padding:6px 8px;"></div>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">📜</span><span class="fs-title">已订阅列表</span></div>
         <div style="max-height:260px;overflow:auto;">
@@ -513,20 +513,20 @@ const MODAL_FORMS = {
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">➕</span><span class="fs-title">注册新订阅</span></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;">
-          <div style="display:flex;gap:6px;align-items:center;"><label style="min-width:64px;font-size:11.5px;">事件类型</label>
-            <select id="ev-type" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;">
+          <div style="display:flex;gap:6px;align-items:center;"><label style="min-width:64px;font-size:12.5px;">事件类型</label>
+            <select id="ev-type" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;">
               <option value="node_done">node_done 节点完成</option>
               <option value="node_error">node_error 节点出错</option>
               <option value="run_completed">run_completed 运行完成</option>
             </select></div>
-          <div style="display:flex;gap:6px;align-items:center;"><label style="min-width:64px;font-size:11.5px;">节点范围</label>
-            <input id="ev-node" placeholder="空=全部节点" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;"></div>
-          <div style="display:flex;gap:6px;align-items:center;"><label style="min-width:64px;font-size:11.5px;">Webhook URL</label>
-            <input id="ev-url" placeholder="https://your-server/callback" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;"></div>
-          <div style="display:flex;gap:6px;align-items:center;"><label style="min-width:64px;font-size:11.5px;">签名密钥</label>
-            <input id="ev-secret" placeholder="HMAC-SHA256 密钥（可空）" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;"></div>
+          <div style="display:flex;gap:6px;align-items:center;"><label style="min-width:64px;font-size:12.5px;">节点范围</label>
+            <input id="ev-node" placeholder="空=全部节点" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;"></div>
+          <div style="display:flex;gap:6px;align-items:center;"><label style="min-width:64px;font-size:12.5px;">Webhook URL</label>
+            <input id="ev-url" placeholder="https://your-server/callback" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;"></div>
+          <div style="display:flex;gap:6px;align-items:center;"><label style="min-width:64px;font-size:12.5px;">签名密钥</label>
+            <input id="ev-secret" placeholder="HMAC-SHA256 密钥（可空）" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;"></div>
         </div>
-        <div style="font-size:10.5px;color:var(--mut);margin-top:8px;">执行器在节点完成/出错、运行完成时，向匹配的 Webhook URL POST 标准化 A2A 事件（带 HMAC 签名）；回调失败标记订阅 failed，不阻断运行。</div>
+        <div style="font-size:12px;color:var(--mut);margin-top:8px;">执行器在节点完成/出错、运行完成时，向匹配的 Webhook URL POST 标准化 A2A 事件（带 HMAC 签名）；回调失败标记订阅 failed，不阻断运行。</div>
       </div>
       <div class="form-actions"><button class="btn" onclick="addEventSub()">＋ 注册订阅</button><button class="btn ghost" onclick="closeModal()">关闭</button></div>`,
   skill: `<h3>新建 Skill</h3>
@@ -538,7 +538,7 @@ const MODAL_FORMS = {
       </div>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">📄</span><span class="fs-title">指令正文 <span class="fs-hint">（SKILL.md content）</span></span></div>
-        <div class="form-row"><label>内容 <span class="info-tip" title="指令正文，注入到 Agent system prompt；支持 Markdown">ⓘ</span></label><textarea id="f-content" style="min-height:240px;font-family:monospace;font-size:11.5px;resize:vertical;" placeholder="当用户询问天气时，调用天气接口并返回结构化结果…"></textarea></div>
+        <div class="form-row"><label>内容 <span class="info-tip" title="指令正文，注入到 Agent system prompt；支持 Markdown">ⓘ</span></label><textarea id="f-content" style="min-height:240px;font-family:monospace;font-size:12.5px;resize:vertical;" placeholder="当用户询问天气时，调用天气接口并返回结构化结果…"></textarea></div>
       </div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveSkill()">保存</button></div>`,
   agent: `<h3>新建 Agent</h3>
@@ -552,8 +552,8 @@ const MODAL_FORMS = {
         </select></div>
         <div class="form-row" id="f-team-row" style="display:none;"><label>👥 团队成员（子 Agent） <span class="info-tip" title="点开下拉勾选（可多选）；主 Agent 不可作为子 Agent 添加；选择状态随编辑回填">ⓘ</span></label>
           <div id="f-team-dd">
-            <div id="f-team-dd-head" onclick="teamDdToggle(event)" style="display:flex;align-items:center;justify-content:space-between;gap:6px;border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;user-select:none;background:#fff;"><span id="f-team-dd-sum" style="color:var(--mut);">加载候选…</span><span style="font-size:9px;color:var(--mut);">▾</span></div>
-            <div id="f-team-list" style="display:none;border:1px solid var(--line);border-top:none;border-radius:0 0 6px 6px;max-height:240px;overflow:auto;background:#fff;font-size:12px;"></div>
+            <div id="f-team-dd-head" onclick="teamDdToggle(event)" style="display:flex;align-items:center;justify-content:space-between;gap:6px;border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:13.5px;cursor:pointer;user-select:none;background:#fff;"><span id="f-team-dd-sum" style="color:var(--mut);">加载候选…</span><span style="font-size:11.5px;color:var(--mut);">▾</span></div>
+            <div id="f-team-list" style="display:none;border:1px solid var(--line);border-top:none;border-radius:0 0 6px 6px;max-height:240px;overflow:auto;background:#fff;font-size:13.5px;"></div>
           </div>
         </div>
         <div class="form-row"><label>描述</label><textarea id="f-desc" rows="2" style="min-height:64px;resize:vertical;" placeholder="Agent 职责描述"></textarea></div>
@@ -586,7 +586,7 @@ const MODAL_FORMS = {
       </div>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">📄</span><span class="fs-title">内容</span></div>
-        <div class="form-row"><label>内容 <span class="info-tip" title="项目规范/基线/决策/经验内容；AI 会话每次自动注入 system prompt">ⓘ</span></label><textarea id="f-pm-content" style="min-height:120px;font-family:monospace;font-size:11px;" placeholder="项目规范/基线/决策/经验内容…（AI 会话每次自动注入 system prompt）"></textarea></div>
+        <div class="form-row"><label>内容 <span class="info-tip" title="项目规范/基线/决策/经验内容；AI 会话每次自动注入 system prompt">ⓘ</span></label><textarea id="f-pm-content" style="min-height:120px;font-family:monospace;font-size:12.5px;" placeholder="项目规范/基线/决策/经验内容…（AI 会话每次自动注入 system prompt）"></textarea></div>
       </div>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">⚙️</span><span class="fs-title">启用状态</span></div>
@@ -613,7 +613,7 @@ const MODAL_FORMS = {
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🌿</span><span class="fs-title">分支基础</span></div>
         <div class="form-row"><label>分支名 <span class="req">*</span> <span class="info-tip" title="字母/数字/_/-/.；如 dev/zhangsan-bugfix">ⓘ</span></label><input id="f-name" placeholder="如：dev/feature-x"></div>
-        <div class="form-row"><label>类型 <span class="info-tip" title="personal=个人分支（从 dev/release 拉取基线，可合并回 dev）；local=本地分支（离线/实验，不可合并）">ⓘ</span></label><select id="f-type" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;">
+        <div class="form-row"><label>类型 <span class="info-tip" title="personal=个人分支（从 dev/release 拉取基线，可合并回 dev）；local=本地分支（离线/实验，不可合并）">ⓘ</span></label><select id="f-type" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;">
           <option value="personal">个人（从 dev/release 拉取基线，可合并回 dev）</option>
           <option value="local">本地（离线/实验，不可合并）</option>
         </select></div>
@@ -621,7 +621,7 @@ const MODAL_FORMS = {
       </div>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">📥</span><span class="fs-title">基线来源 <span class="fs-hint">（拉取数据）</span></span></div>
-        <div class="form-row" id="f-parent-row"><label>基线来源 <span class="info-tip" title="dev=主开发分支；release=已发布分支">ⓘ</span></label><select id="f-parent" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;"><option value="dev">dev（主开发分支）</option><option value="release">release（发布分支）</option></select> <span style="font-size:11px;color:var(--mut);margin-left:6px;">创建时将复制基线实体/关系到个人分支</span></div>
+        <div class="form-row" id="f-parent-row"><label>基线来源 <span class="info-tip" title="dev=主开发分支；release=已发布分支">ⓘ</span></label><select id="f-parent" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;"><option value="dev">dev（主开发分支）</option><option value="release">release（发布分支）</option></select> <span style="font-size:12.5px;color:var(--mut);margin-left:6px;">创建时将复制基线实体/关系到个人分支</span></div>
       </div>
       <div class="form-section" style="display:none;">
         <div class="form-section-head"><span class="fs-icon">⚙️</span><span class="fs-title">状态</span></div>
@@ -632,23 +632,23 @@ const MODAL_FORMS = {
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🔀</span><span class="fs-title">合并请求</span></div>
         <div class="form-row"><label>标题 <span class="info-tip" title="可空；留空将使用源分支名作默认名；对标 GitHub PR title">ⓘ</span></label><input id="f-mr-title" placeholder="合并请求标题（对标 GitHub PR title）"></div>
-        <div class="form-row"><label>源分支 <span class="req">*</span> <span class="info-tip" title="数据从哪来（个人分支 → 合并到 dev/release）">ⓘ</span></label><select id="f-src" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;"></select></div>
-        <div class="form-row"><label>目标分支 <span class="req">*</span> <span class="info-tip" title="合并到哪去（dev=主开发；release=正式发布）">ⓘ</span></label><select id="f-tgt" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;"></select></div>
-        <div class="form-row"><label>发布版本号 <span class="info-tip" title="仅当目标=release 时生效；留空自动生成 v1/v2…">ⓘ</span></label><input id="f-release-version" placeholder="留空自动生成 v1/v2…"><span id="f-rv-hint" style="font-size:11px;color:var(--mut);margin-left:6px;">（仅目标=release 时生效）</span></div>
+        <div class="form-row"><label>源分支 <span class="req">*</span> <span class="info-tip" title="数据从哪来（个人分支 → 合并到 dev/release）">ⓘ</span></label><select id="f-src" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;"></select></div>
+        <div class="form-row"><label>目标分支 <span class="req">*</span> <span class="info-tip" title="合并到哪去（dev=主开发；release=正式发布）">ⓘ</span></label><select id="f-tgt" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;"></select></div>
+        <div class="form-row"><label>发布版本号 <span class="info-tip" title="仅当目标=release 时生效；留空自动生成 v1/v2…">ⓘ</span></label><input id="f-release-version" placeholder="留空自动生成 v1/v2…"><span id="f-rv-hint" style="font-size:12.5px;color:var(--mut);margin-left:6px;">（仅目标=release 时生效）</span></div>
         <div class="form-row"><label class="fs-mode"><input type="checkbox" id="f-mr-draft"> 创建为草稿 <span class="info-tip" title="draft=草稿（稍后转正式评审；不会触发合并门禁）">ⓘ</span></label></div>
       </div>
-      <div id="merge-preview" style="font-size:11.5px;color:var(--mut);background:var(--blue-l);padding:8px 10px;border-radius:6px;display:none;">选择分支后显示合并预览</div>
+      <div id="merge-preview" style="font-size:12.5px;color:var(--mut);background:var(--blue-l);padding:8px 10px;border-radius:6px;display:none;">选择分支后显示合并预览</div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveMerge()">创建</button></div>`,
   owlImport: `<h3 id="oi-title">⬆ 导入 OWL · RDF/XML</h3>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">📥</span><span class="fs-title">导入内容</span></div>
-        <div class="form-row"><label id="oi-tip" style="display:block;color:var(--mut);font-size:11.5px;margin-bottom:4px;">粘贴 OWL/RDF-XML 内容（同名类型跳过幂等），或点击下方「📤 上传文件」载入 .owl/.rdf/.xml</label>
+        <div class="form-row"><label id="oi-tip" style="display:block;color:var(--mut);font-size:12.5px;margin-bottom:4px;">粘贴 OWL/RDF-XML 内容（同名类型跳过幂等），或点击下方「📤 上传文件」载入 .owl/.rdf/.xml</label>
           <textarea id="oi-text" rows="10" placeholder="&lt;rdf:RDF xmlns:owl=&quot;http://www.w3.org/2002/07/owl#&quot; ...&gt;"></textarea>
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin:-4px 0 0;">
           <input type="file" id="oi-file" style="display:none;" onchange="oiFileChosen(this)">
           <button class="btn sm ghost" onclick="document.getElementById('oi-file').click()" title="选择 OWL/RDF 文件，内容自动载入输入框">📤 上传文件</button>
-          <span id="oi-file-name" style="font-size:11px;color:var(--mut);"></span>
+          <span id="oi-file-name" style="font-size:12.5px;color:var(--mut);"></span>
         </div>
       </div>
       <div class="form-actions">
@@ -659,12 +659,12 @@ const MODAL_FORMS = {
         <span style="display:flex;gap:6px;align-items:center;">
           <span class="st on" id="bp-src-text" onclick="bpSetSource('text')" style="cursor:pointer;background:var(--blue-l);color:var(--blue-d);padding:2px 10px;border-radius:10px;">📄 业务文本</span>
           <span class="st" id="bp-src-profile" onclick="bpSetSource('profile')" style="cursor:pointer;padding:2px 10px;border-radius:10px;">🧬 SysML Profile</span>
-          <span style="font-size:11px;color:var(--mut);">文本走 LLM 提炼（规则兜底）；Profile 走结构化解析（1.x XMI / 2.x KerML）——统一草案 → 勾选 → 应用</span>
+          <span style="font-size:12.5px;color:var(--mut);">文本走 LLM 提炼（规则兜底）；Profile 走结构化解析（1.x XMI / 2.x KerML）——统一草案 → 勾选 → 应用</span>
         </span>
       </div>
       <div id="bp-profile-fmt" style="display:none;">
         <div class="form-row"><label>Profile 格式</label>
-          <select id="bp-fmt" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+          <select id="bp-fmt" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;">
             <option value="1x">SysML 1.x（XMI .profile/.xmi/.uml）</option>
             <option value="v2">SysML 2.x（KerML .kerml）</option>
           </select>
@@ -676,20 +676,20 @@ const MODAL_FORMS = {
       <div style="display:flex;gap:8px;align-items:center;margin:-6px 0 8px;">
         <input type="file" id="bp-file" style="display:none;" onchange="bpFileChosen(this)">
         <button class="btn sm ghost" onclick="document.getElementById('bp-file').click()" title="选择文本类文件（.txt/.md/.csv/.json/.xml/.yaml/.log；Profile 模式支持 .profile/.xmi/.uml/.kerml），内容自动载入上方输入框">📤 上传文件</button>
-        <span id="bp-file-name" style="font-size:11px;color:var(--mut);"></span>
+        <span id="bp-file-name" style="font-size:12.5px;color:var(--mut);"></span>
       </div>
       <div class="form-row">
         <button class="btn" onclick="blueprintExtract()">✨ 提取草案</button>
         <button class="btn ghost" onclick="blueprintApply()">✅ 应用勾选项</button>
-        <span style="font-size:11px;color:var(--mut);margin-left:6px;">应用校验：重名类型 / 父类型不存在会被拦截</span>
+        <span style="font-size:12.5px;color:var(--mut);margin-left:6px;">应用校验：重名类型 / 父类型不存在会被拦截</span>
       </div>
       <div id="bp-drafts" style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;">
-        <div style="padding:10px;color:var(--mut);font-size:12px;">粘贴内容并「✨ 提取草案」后，在此勾选确认应用</div>
+        <div style="padding:10px;color:var(--mut);font-size:13.5px;">粘贴内容并「✨ 提取草案」后，在此勾选确认应用</div>
       </div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">关闭</button></div>`,
   unifiedPlugin: `<h3 id="up-form-title">🧩 新建统一插件</h3>
-      <div class="form-row"><label>manifest.json <span style="color:var(--mut);font-size:11px;">唯一契约：id(反向域名)/name/version(semver)/type(skill|mcp|bundle)</span></label>
-        <textarea id="up-manifest" rows="14" style="font-family:monospace;font-size:11.5px;" placeholder='{
+      <div class="form-row"><label>manifest.json <span style="color:var(--mut);font-size:12.5px;">唯一契约：id(反向域名)/name/version(semver)/type(skill|mcp|bundle)</span></label>
+        <textarea id="up-manifest" rows="14" style="font-family:monospace;font-size:12.5px;" placeholder='{
   "id": "com.yourcompany.requirement-checker",
   "name": "requirement-checker",
   "version": "0.1.0",
@@ -699,15 +699,15 @@ const MODAL_FORMS = {
   "capabilities": { "skills": [{ "path": "SKILL.md" }] },
   "permissions": { "tools": [], "network": { "domains": [] } }
 }'></textarea></div>
-      <div class="form-row"><label>分类 <span style="color:var(--mut);font-size:11px;">写回 label.category；填新分类时市场 chip 会自动出现</span></label>
+      <div class="form-row"><label>分类 <span style="color:var(--mut);font-size:12.5px;">写回 label.category；填新分类时市场 chip 会自动出现</span></label>
         <input id="up-category" list="up-category-list" placeholder="如：需求工程 / 内置工具 / 我的能力">
         <datalist id="up-category-list"></datalist></div>
-      <div class="form-row" id="up-agent-role-row" style="display:none;"><label>Agent 角色 <span style="color:var(--mut);font-size:11px;">决定市场里的「编排 Agent（主）/ 专业 Agent（子）」上下分栏</span></label>
+      <div class="form-row" id="up-agent-role-row" style="display:none;"><label>Agent 角色 <span style="color:var(--mut);font-size:12.5px;">决定市场里的「编排 Agent（主）/ 专业 Agent（子）」上下分栏</span></label>
         <select id="up-agent-role"><option value="sub">子 Agent（专业，承担具体任务）</option><option value="main">主 Agent（编排，分派子任务）</option></select></div>
       <div id="up-skill-row" class="form-row"><label>SKILL.md（skill 类型载荷，可选）</label>
-        <textarea id="up-skill-md" rows="6" style="font-family:monospace;font-size:11.5px;" placeholder="---&#10;name: requirement-checker&#10;description: 需求条目规范性检查&#10;---&#10;&#10;检查需求条目是否满足 EARS 规范…"></textarea></div>
+        <textarea id="up-skill-md" rows="6" style="font-family:monospace;font-size:12.5px;" placeholder="---&#10;name: requirement-checker&#10;description: 需求条目规范性检查&#10;---&#10;&#10;检查需求条目是否满足 EARS 规范…"></textarea></div>
       <div id="up-mcp-row" class="form-row" style="display:none;"><label>server.json（mcp 类型载荷，可选；base_url 与凭证解耦）</label>
-        <textarea id="up-mcp-server" rows="6" style="font-family:monospace;font-size:11.5px;" placeholder='{"base_url": "https://mcp.example.com", "headers": {}}'></textarea></div>
+        <textarea id="up-mcp-server" rows="6" style="font-family:monospace;font-size:12.5px;" placeholder='{"base_url": "https://mcp.example.com", "headers": {}}'></textarea></div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveUnifiedPlugin()">💾 保存</button></div>`,
 };
 function closeModal() { _mmCreate = null; document.getElementById('modal').classList.remove('show'); }
@@ -720,7 +720,7 @@ function confirmDialog(msg, opts={}) {
   const cancelBtn = opts.hideCancel ? ''
     : '<button class="btn ghost" id="cd-cancel">取消</button>';
   b.innerHTML = `<h3>${opts.title||'操作确认'}</h3>
-    <div style="font-size:13px;color:var(--txt);line-height:1.7;margin:4px 0 6px;max-height:200px;overflow:auto;white-space:pre-wrap;">${esc(msg)}</div>
+    <div style="font-size:14.5px;color:var(--txt);line-height:1.7;margin:4px 0 6px;max-height:200px;overflow:auto;white-space:pre-wrap;">${esc(msg)}</div>
     <div class="lbx-actions">${cancelBtn}<button class="btn ${opts.danger?'red':''}" id="cd-ok">${opts.okText||'确认'}</button></div>`;
   lbx.classList.add('show');
   return new Promise(resolve => {
@@ -747,13 +747,13 @@ function multiSelectDialog({title='选择', message='', options=[], selected=[],
   const lbx = document.getElementById('lbx');
   const b = document.getElementById('lbx-body');
   b.innerHTML = `<h3>${esc(title)}</h3>
-    ${message?`<div style="font-size:12.5px;color:var(--mut);line-height:1.6;margin:4px 0 10px;">${esc(message)}</div>`:''}
+    ${message?`<div style="font-size:13.5px;color:var(--mut);line-height:1.6;margin:4px 0 10px;">${esc(message)}</div>`:''}
     <div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px 12px;display:flex;flex-direction:column;gap:6px;">
-      ${options.map(o=>`<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;cursor:pointer;user-select:none;">
+      ${options.map(o=>`<label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer;user-select:none;">
         <input type="checkbox" class="msd-opt" value="${esc(o)}" ${selected.includes(o)?'checked':''} style="width:15px;height:15px;">${esc(o)}</label>`).join('')
-      || '<span style="color:var(--mut);font-size:12px;">无可选项（可取消后留空收编）</span>'}
+      || '<span style="color:var(--mut);font-size:13.5px;">无可选项（可取消后留空收编）</span>'}
     </div>
-    <div style="margin-top:6px;font-size:11px;color:var(--mut);">可多选；全部不勾选 = 未分类</div>
+    <div style="margin-top:6px;font-size:12.5px;color:var(--mut);">可多选；全部不勾选 = 未分类</div>
     <div class="lbx-actions"><button class="btn ghost" id="msd-cancel">取消</button><button class="btn" id="msd-ok">${okText}</button></div>`;
   lbx.classList.add('show');
   return new Promise(resolve => {
@@ -774,10 +774,10 @@ function promptDialog({title='输入', message='', value='', placeholder='', okT
   const b = document.getElementById('lbx-body');
   const inputId = 'pd-input';
   b.innerHTML = `<h3>${esc(title)}</h3>
-    ${message?`<div style="font-size:12.5px;color:var(--mut);line-height:1.6;margin:4px 0 10px;white-space:pre-wrap;max-height:140px;overflow:auto;">${esc(message)}</div>`:''}
+    ${message?`<div style="font-size:13.5px;color:var(--mut);line-height:1.6;margin:4px 0 10px;white-space:pre-wrap;max-height:140px;overflow:auto;">${esc(message)}</div>`:''}
     ${multiline
-      ? `<textarea id="${inputId}" placeholder="${esc(placeholder)}" style="width:100%;min-height:${rows*22}px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12.5px;font-family:inherit;box-sizing:border-box;resize:vertical;">${esc(value)}</textarea>`
-      : `<input id="${inputId}" value="${esc(value)}" placeholder="${esc(placeholder)}" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12.5px;box-sizing:border-box;">`}
+      ? `<textarea id="${inputId}" placeholder="${esc(placeholder)}" style="width:100%;min-height:${rows*22}px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13.5px;font-family:inherit;box-sizing:border-box;resize:vertical;">${esc(value)}</textarea>`
+      : `<input id="${inputId}" value="${esc(value)}" placeholder="${esc(placeholder)}" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13.5px;box-sizing:border-box;">`}
     <div class="lbx-actions"><button class="btn ghost" id="pd-cancel">取消</button><button class="btn" id="pd-ok">${okText}</button></div>`;
   lbx.classList.add('show');
   return new Promise(resolve => {

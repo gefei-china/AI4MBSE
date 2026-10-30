@@ -206,9 +206,9 @@ async function loadReports() {
       (items.length ? items.map(r=>`<tr>
         <td><b style="cursor:pointer;color:var(--blue-d);" onclick="viewReport(${r.id})">${esc(r.title)}</b></td>
         <td><span class="st ${typeCls[r.report_type]||'g'}">${esc(r.report_type_label||r.report_type)}</span></td>
-        <td style="font-size:11px;color:var(--mut);">${esc(r.source||'-')}</td>
-        <td style="font-size:11px;">${esc(r.created_by||'-')}</td>
-        <td style="font-size:11px;color:var(--mut);">${esc((r.created_at||'').slice(0,16).replace('T',' '))}</td>
+        <td style="font-size:12.5px;color:var(--mut);">${esc(r.source||'-')}</td>
+        <td style="font-size:12.5px;">${esc(r.created_by||'-')}</td>
+        <td style="font-size:12.5px;color:var(--mut);">${esc((r.created_at||'').slice(0,16).replace('T',' '))}</td>
         <td><span class="st ${r.status==='final'?'ok':'g'}">${r.status==='final'?'已定稿':'草稿'}</span></td>
         <td style="white-space:nowrap;">
           <button class="btn sm ghost" onclick="viewReport(${r.id})">查看</button>
@@ -340,15 +340,15 @@ function finishStream(r, aiBox) {
        旧文案「本次消费 N 条资料片段」与引用区并排显示，用户以为是同一口径。 */
     if(r.retrieval && r.retrieval.attachment_used) atag += `，附件匹配片段 ${r.attachments_info.consumed||0} 条（按提问相关度选取）`;
     atag += (r.attachments_info.skipped||[]).length ? `（${r.attachments_info.skipped.length} 份无法解析）` : '';
-    extra += `<div style="margin:2px 0 6px 44px;font-size:11px;color:var(--grn);">${atag}</div>`;
+    extra += `<div style="margin:2px 0 6px 44px;font-size:12.5px;color:var(--grn);">${atag}</div>`;
   }
   if(r.report && r.report.sections){
     window._lastReport = r.report;
     // 报告已由后端在落库时自动归档到报告（artifacts + reports 表），前端仅提供导出入口
     extra += `<div style="margin:2px 0 6px 44px;display:flex;gap:6px;flex-wrap:wrap;">
-      <button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="downloadReport('md')">⬇ Markdown</button>
-      <button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="downloadReport('docx')">⬇ Word</button>
-      <button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="downloadReport('pdf')">⬇ PDF</button>
+      <button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="downloadReport('md')">⬇ Markdown</button>
+      <button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="downloadReport('docx')">⬇ Word</button>
+      <button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="downloadReport('pdf')">⬇ PDF</button>
       <span class="st ok" style="align-self:center;" title="AI 建模产出报告已自动归档，可在「报告」统一检索/导出">📄 已归档</span>
     </div>`;
   }
@@ -358,14 +358,14 @@ function finishStream(r, aiBox) {
     const stats = q.stats||{};
     const sevColor = {high:'var(--red)', medium:'var(--amber)', low:'var(--grn)'};
     const qHtml = q.issues.map(it=>`<div style="padding:4px 0;border-bottom:1px solid var(--line);">
-      <div style="font-size:11.5px;"><span style="color:${sevColor[it.severity]||'var(--mut)'};font-size:10px;margin-right:4px;">[${(it.severity||'').toUpperCase()}]</span>${esc(it.problem)}</div>
-      <div style="color:var(--mut);font-size:10.5px;margin-top:2px;">📌 ${esc(it.evidence||'')}</div>
-      <div style="color:var(--blue-d);font-size:10.5px;margin-top:2px;">💡 ${esc(it.suggestion||'')}</div></div>`).join('');
+      <div style="font-size:12.5px;"><span style="color:${sevColor[it.severity]||'var(--mut)'};font-size:12px;margin-right:4px;">[${(it.severity||'').toUpperCase()}]</span>${esc(it.problem)}</div>
+      <div style="color:var(--mut);font-size:12px;margin-top:2px;">📌 ${esc(it.evidence||'')}</div>
+      <div style="color:var(--blue-d);font-size:12px;margin-top:2px;">💡 ${esc(it.suggestion||'')}</div></div>`).join('');
     const _qsum = `📋 需求质量参考：${q.issues.length} 条建议 · 评分 ${q.score||0}/100（需求 ${stats.total||0} 条 · 模糊 ${stats.fuzzy||0} · 缺量化 ${stats.no_measure||0}）`;
     extra += `<div style="margin:2px 0 6px 44px;">
-      <div class="qr-summary" onclick="qrToggle(this)" style="display:flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--line);border-radius:6px;background:#fafbfc;font-size:11px;color:var(--mut);cursor:pointer;user-select:none;">
-        <span class="chev" style="font-size:9px;transition:transform .2s;">▸</span>${_qsum}<span style="font-size:10px;color:var(--blue-d);text-decoration:underline;">明细</span></div>
-      <div class="qr-detail" style="display:none;border:1px solid var(--line);border-radius:6px;padding:6px 10px;background:#fafbfc;font-size:11px;margin-top:4px;max-height:260px;overflow:auto;">${qHtml}</div>
+      <div class="qr-summary" onclick="qrToggle(this)" style="display:flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--line);border-radius:6px;background:#fafbfc;font-size:12.5px;color:var(--mut);cursor:pointer;user-select:none;">
+        <span class="chev" style="font-size:11.5px;transition:transform .2s;">▸</span>${_qsum}<span style="font-size:12px;color:var(--blue-d);text-decoration:underline;">明细</span></div>
+      <div class="qr-detail" style="display:none;border:1px solid var(--line);border-radius:6px;padding:6px 10px;background:#fafbfc;font-size:12.5px;margin-top:4px;max-height:260px;overflow:auto;">${qHtml}</div>
     </div>`;
   }
   if(extra) document.getElementById('chat-area').insertAdjacentHTML('beforeend', extra);
@@ -380,7 +380,7 @@ function finishStream(r, aiBox) {
       ${kbHtml}
       <div class="src"><span class="dot g"></span>图谱检索：${r.retrieval.graph_count} 条</div>
       <div class="src"><span class="dot v"></span>向量补充：${r.retrieval.vector_count} 条</div>
-      <div style="font-size:11px;color:var(--mut);">置信度：${(r.retrieval.confidence||0).toFixed(2)}</div>`;
+      <div style="font-size:12.5px;color:var(--mut);">置信度：${(r.retrieval.confidence||0).toFixed(2)}</div>`;
   }
   // 会话产物分栏增量刷新（后端已归档本消息产物）
   if(currentConvId) loadArtifacts(currentConvId);
@@ -437,7 +437,7 @@ async function openCitation(sup){
   const num = i + 1;
   const confCls = c.confidence_level==='高' ? 'ok' : (c.confidence_level==='中' ? 'a' : 'w');
   let html = `
-    <div style="font-size:11px;color:var(--mut);margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+    <div style="font-size:12.5px;color:var(--mut);margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
       <span class="st b">引用 ${num}</span>
       <span class="tag">${esc(c.source_doc||'-')}</span>
       ${c.section?`<span class="tag">${esc(c.section)}</span>`:''}
@@ -448,8 +448,8 @@ async function openCitation(sup){
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
       <button class="btn sm" onclick="citeOpenInPreview()" title="打开源文件预览，自动高亮并滚动到引用片段">📖 在源文件中定位</button>
     </div>
-    <h4 style="margin:8px 0 6px;font-size:13px;">📄 命中段落</h4>
-    <div style="border:1px solid var(--line);border-radius:8px;padding:10px;background:#fffdf5;font-size:12.5px;line-height:1.7;max-height:200px;overflow:auto;white-space:pre-wrap;">${esc(c.content||'')}</div>`;
+    <h4 style="margin:8px 0 6px;font-size:14.5px;">📄 命中段落</h4>
+    <div style="border:1px solid var(--line);border-radius:8px;padding:10px;background:#fffdf5;font-size:13.5px;line-height:1.7;max-height:200px;overflow:auto;white-space:pre-wrap;">${esc(c.content||'')}</div>`;
   openPanel(`引用来源 [${num}] · ${c.source_doc||'未知文档'}`, html + '<div class="loading">正在加载来源详情…</div>');
   // 拉取文档详情：定位命中段落上下文 + 关联模型元素（chunk↔实体溯源）
   if(c.document_id){
@@ -463,23 +463,23 @@ async function openCitation(sup){
         const ctx = chunks.slice(from, to).map(x=>{
           const isCur = Number(x.chunk_index)===Number(c.chunk_index);
           return `<div style="margin-top:6px;padding:6px 9px;border-radius:6px;${isCur?'border:1px solid var(--blue-d);background:var(--blue-l);':'border:1px solid var(--line);background:#fafafa;'}" ${isCur?'id="cite-chunk"':''}>
-            <div style="font-size:10.5px;color:var(--mut);margin-bottom:3px;">§${x.chunk_index}${isCur?' · 命中引用':' · 上下文'}</div>
-            <div style="font-size:12px;line-height:1.65;color:${isCur?'var(--txt)':'var(--mut)'};">${esc((x.content||'').slice(0,260))}${(x.content||'').length>260?'…':''}</div>
+            <div style="font-size:12px;color:var(--mut);margin-bottom:3px;">§${x.chunk_index}${isCur?' · 命中引用':' · 上下文'}</div>
+            <div style="font-size:13.5px;line-height:1.65;color:${isCur?'var(--txt)':'var(--mut)'};">${esc((x.content||'').slice(0,260))}${(x.content||'').length>260?'…':''}</div>
           </div>`;
         }).join('');
-        extra += `<h4 style="margin:14px 0 6px;font-size:13px;">📍 文档原文定位（§${c.chunk_index}）</h4><div style="max-height:300px;overflow:auto;">${ctx}</div>`;
+        extra += `<h4 style="margin:14px 0 6px;font-size:14.5px;">📍 文档原文定位（§${c.chunk_index}）</h4><div style="max-height:300px;overflow:auto;">${ctx}</div>`;
       }
       // 模型元素：chunk 溯源链接的实体（查看=viewEntity 详情；定位=图谱工作台高亮定位，P1-5）
       const ents = d.linked_entities||[];
       if(ents.length){
-        extra += `<h4 style="margin:14px 0 6px;font-size:13px;">🧬 关联模型元素（${ents.length}）</h4>
+        extra += `<h4 style="margin:14px 0 6px;font-size:14.5px;">🧬 关联模型元素（${ents.length}）</h4>
           <div style="display:flex;flex-direction:column;gap:4px;">` + ents.slice(0,20).map(e=>
-          `<div style="display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+          `<div style="display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;">
             <span class="st ${e.status==='reviewed'?'ok':e.status==='candidate'?'w':'g'}">${esc(e.status||'')}</span>
             <b>${esc(e.name)}</b><span class="tag">${esc(e.entity_type||'')}</span>
             <span style="margin-left:auto;display:flex;gap:4px;">
-              <button class="btn sm ghost" style="font-size:10.5px;padding:0 8px;" onclick="locateEntityInGraph('${e.id}')" title="跳转知识图谱，高亮并居中该实体">🎯 定位</button>
-              <button class="btn sm ghost" style="font-size:10.5px;padding:0 8px;" onclick="viewEntity('${e.id}')">查看</button>
+              <button class="btn sm ghost" style="font-size:12px;padding:0 8px;" onclick="locateEntityInGraph('${e.id}')" title="跳转知识图谱，高亮并居中该实体">🎯 定位</button>
+              <button class="btn sm ghost" style="font-size:12px;padding:0 8px;" onclick="viewEntity('${e.id}')">查看</button>
             </span>
           </div>`).join('') + '</div>';
       }
@@ -489,7 +489,7 @@ async function openCitation(sup){
       if(cur) cur.scrollIntoView({block:'center'});
     }catch(e){
       const body = document.getElementById('panel-body');
-      if(body) body.innerHTML = html + `<div style="color:var(--mut);font-size:11px;margin-top:10px;">来源详情加载失败：${esc(e.message||'')}</div>`;
+      if(body) body.innerHTML = html + `<div style="color:var(--mut);font-size:12.5px;margin-top:10px;">来源详情加载失败：${esc(e.message||'')}</div>`;
     }
   }
 }

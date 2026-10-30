@@ -49,16 +49,16 @@ function caprNum(n) {
 function caprKpi(label, value, sub, tone) {
   const c = tone || '#1f2937';
   return `<div style="background:var(--bg2,#f7f9fc);border-radius:8px;padding:12px;min-width:0;">
-    <div style="font-size:11.5px;color:var(--mut);margin-bottom:6px;">${caprEsc(label)}</div>
-    <div style="font-size:22px;font-weight:600;line-height:1.15;color:${c};
+    <div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">${caprEsc(label)}</div>
+    <div style="font-size:23px;font-weight:600;line-height:1.15;color:${c};
                 overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${caprEsc(value)}</div>
-    <div style="font-size:10.5px;color:var(--mut);margin-top:4px;">${caprEsc(sub || '')}</div>
+    <div style="font-size:12px;color:var(--mut);margin-top:4px;">${caprEsc(sub || '')}</div>
   </div>`;
 }
 
 function caprChip(text, tone) {
   const t = tone || { color: '#374151', bg: '#eef1f5' };
-  return `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:10.5px;
+  return `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:12px;
     line-height:1.6;color:${t.color};background:${t.bg};margin:1px 3px 1px 0;white-space:nowrap;"
     >${caprEsc(text)}</span>`;
 }
@@ -68,9 +68,9 @@ function caprMatrixHtml(m) {
   m = m || {};
   const cell = (title, n, tone, desc) => `
     <div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-width:0;">
-      <div style="font-size:11px;color:var(--mut);">${caprEsc(title)}</div>
-      <div style="font-size:19px;font-weight:600;color:${tone};margin:2px 0 3px;">${caprNum(n)}</div>
-      <div style="font-size:10.5px;color:var(--mut);line-height:1.5;">${caprEsc(desc)}</div>
+      <div style="font-size:12.5px;color:var(--mut);">${caprEsc(title)}</div>
+      <div style="font-size:20.5px;font-weight:600;color:${tone};margin:2px 0 3px;">${caprNum(n)}</div>
+      <div style="font-size:12px;color:var(--mut);line-height:1.5;">${caprEsc(desc)}</div>
     </div>`;
   const _unk = Number(m.unknown || 0);
   return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;">
@@ -98,17 +98,17 @@ function caprRowHtml(r) {
   return `<tr>
     <td style="padding:6px 8px;border-bottom:1px solid var(--line);">
       <div style="font-weight:500;">${caprEsc(r.display_name || r.capability_id)}</div>
-      <div style="font-size:10.5px;color:var(--mut);font-family:ui-monospace,Consolas,monospace;">
+      <div style="font-size:12px;color:var(--mut);font-family:ui-monospace,Consolas,monospace;">
         ${caprEsc(r.capability_id)}</div>
     </td>
-    <td style="padding:6px 8px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--mut);">
+    <td style="padding:6px 8px;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--mut);">
       ${caprEsc(r.kind)}</td>
     <td style="padding:6px 8px;border-bottom:1px solid var(--line);">${entHtml}</td>
-    <td style="padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;font-size:11.5px;">${bound}</td>
+    <td style="padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;font-size:12.5px;">${bound}</td>
     <td style="padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;font-weight:500;">
       ${caprNum(r.call_count)}</td>
-    <td style="padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;font-size:11.5px;">${fail}</td>
-    <td style="padding:6px 8px;border-bottom:1px solid var(--line);font-size:11px;color:var(--mut);">
+    <td style="padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;font-size:12.5px;">${fail}</td>
+    <td style="padding:6px 8px;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--mut);">
       ${caprEsc((r.last_used_at || '').slice(0, 16) || '—')}</td>
     <td style="padding:6px 8px;border-bottom:1px solid var(--line);">${caprChip(v.label, v)}</td>
   </tr>`;
@@ -116,21 +116,21 @@ function caprRowHtml(r) {
 
 function caprOrphanHtml(list) {
   if (!list || !list.length) {
-    return `<div style="font-size:11.5px;color:var(--mut);padding:8px 0;">
+    return `<div style="font-size:12.5px;color:var(--mut);padding:8px 0;">
       窗口内没有"被调用但不在注册表"的名字。</div>`;
   }
   const rows = list.slice(0, 12).map(x => `<tr>
     <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Consolas,monospace;
-        font-size:11.5px;">${caprEsc(x.tool_name)}</td>
+        font-size:12.5px;">${caprEsc(x.tool_name)}</td>
     <td style="padding:5px 8px;border-bottom:1px solid var(--line);">${
       (x.entry_labels || []).map(t => caprChip(t, t === '无声明入口（运行时旁路）'
         ? { color: '#b26a00', bg: '#fff4e5' } : { color: '#1c4fc4', bg: '#eef4ff' })).join('')}</td>
     <td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;">${caprNum(x.call_count)}</td>
-    <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:11px;color:var(--mut);">
+    <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--mut);">
       ${caprEsc((x.last_used_at || '').slice(0, 16) || '—')}</td>
   </tr>`).join('');
-  return `<table style="width:100%;border-collapse:collapse;font-size:12px;">
-    <thead><tr style="color:var(--mut);font-size:11px;text-align:left;">
+  return `<table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+    <thead><tr style="color:var(--mut);font-size:12.5px;text-align:left;">
       <th style="padding:4px 8px;">名字</th><th style="padding:4px 8px;">入口</th>
       <th style="padding:4px 8px;text-align:right;">调用</th><th style="padding:4px 8px;">最近</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
@@ -141,14 +141,14 @@ function caprTraceHtml(t) {
   const tone = r => (r == null ? '#6b7280' : (r >= 80 ? '#2e7d32' : (r >= 30 ? '#b26a00' : '#c62828')));
   const cols = (t.fill || []).map(x => `
     <div style="min-width:0;">
-      <div style="font-size:11px;color:var(--mut);">${caprEsc(x.column)}</div>
-      <div style="font-size:15px;font-weight:600;color:${tone(x.rate)};">
+      <div style="font-size:12.5px;color:var(--mut);">${caprEsc(x.column)}</div>
+      <div style="font-size:16.5px;font-weight:600;color:${tone(x.rate)};">
         ${x.rate == null ? '—' : (x.rate + '%')}</div>
-      <div style="font-size:10px;color:var(--mut);">${caprNum(x.filled)}/${caprNum(x.total)}</div>
+      <div style="font-size:12px;color:var(--mut);">${caprNum(x.filled)}/${caprNum(x.total)}</div>
     </div>`).join('');
   const joinOk = (t.joinable_traces || 0) > 0;
   return `<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:8px;">${cols}</div>
-    <div style="font-size:11.5px;color:var(--mut);line-height:1.6;">
+    <div style="font-size:12.5px;color:var(--mut);line-height:1.6;">
       近 ${caprEsc(t.window_days)} 天：工具调用侧 trace <b>${caprNum(t.tool_traces)}</b> 个 ·
       LLM 使用量侧 trace <b>${caprNum(t.llm_traces)}</b> 个 ·
       两侧都能找到的 <b style="color:${joinOk ? '#2e7d32' : '#b26a00'};">${caprNum(t.joinable_traces)}</b> 个
@@ -160,7 +160,7 @@ function caprTraceHtml(t) {
 
 function caprEmptyHtml() {
   return `<div style="padding:18px;background:var(--bg2,#f7f9fc);border-radius:8px;
-      font-size:12px;color:var(--mut);line-height:1.7;">
+      font-size:13.5px;color:var(--mut);line-height:1.7;">
     当前筛选下没有能力行。常见原因（按可能性排序）：<br>
     ① 统一注册处尚未建立 —— 服务启动时会 reconcile 一次，重启后应 ≥200 行；<br>
     ② 筛选条件太窄（试试点「全部」）；<br>
@@ -192,7 +192,7 @@ async function loadCapRegistry() {
     body.innerHTML = `
       ${caprMatrixHtml(m)}
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
-        <span style="font-size:11.5px;color:var(--mut);">
+        <span style="font-size:12.5px;color:var(--mut);">
           窗口 ${caprEsc(led.window_days)} 天 · 注册 ${caprNum((led.rows || []).length)} 行 ·
           入口标注读后端 <code>entry_labels</code>（声明集共 4 条：Agent 绑定 / 全局技能池 /
           内置声明 / 技能白名单 + 无条件注入）
@@ -203,13 +203,13 @@ async function loadCapRegistry() {
           style="border:1px solid var(--line);">🔄 重新发现 MCP 工具</button>
         <input id="capr-q" placeholder="搜能力 id / 名称" value="${caprEsc(st.q)}"
                oninput="caprSetQ(this.value)"
-               style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:180px;">
+               style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;width:180px;">
       </div>
       <div id="capr-rediscover" style="margin-bottom:8px;"></div>
       <div style="max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:8px;">
-        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
           <thead><tr style="position:sticky;top:0;background:var(--bg2,#f7f9fc);color:var(--mut);
-              font-size:11px;text-align:left;z-index:1;">
+              font-size:12.5px;text-align:left;z-index:1;">
             <th style="padding:6px 8px;">能力</th><th style="padding:6px 8px;">类型</th>
             <th style="padding:6px 8px;">声明入口</th>
             <th style="padding:6px 8px;text-align:right;">绑定 Agent</th>
@@ -224,20 +224,20 @@ async function loadCapRegistry() {
       <div id="capr-empty" style="display:${rows.length ? 'none' : ''};">${rows.length ? '' : caprEmptyHtml()}</div>
 
       <div style="margin-top:16px;display:flex;gap:8px;align-items:center;">
-        <b style="font-size:12.5px;">未进注册表但被调用的名字</b>
-        <span style="font-size:11px;color:var(--mut);">
+        <b style="font-size:13.5px;">未进注册表但被调用的名字</b>
+        <span style="font-size:12.5px;color:var(--mut);">
           （运行时注入的 ask_user 等 / MCP 工具 / 已删能力 —— <b>不是</b>可忽略的噪声，
           它们是"注册表不是消费唯一来源"的证据）</span>
       </div>
       <div style="margin-top:6px;">${caprOrphanHtml(led.orphan_calls)}</div>
 
       <div style="margin-top:18px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <b style="font-size:12.5px;">任务级追溯（P0-3）</b>
-        <span style="font-size:11px;color:var(--mut);">
+        <b style="font-size:13.5px;">任务级追溯（P0-3）</b>
+        <span style="font-size:12.5px;color:var(--mut);">
           trace_id 与 LLM 使用量同源 ⇒ 可回答"这一轮调了哪些能力、花了多少钱"</span>
         <span style="flex:1"></span>
         <input id="capr-trace" placeholder="粘贴或输入 trace_id 下钻"
-               style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:220px;">
+               style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;width:220px;">
         <button class="btn sm" onclick="caprTraceDetail()">下钻</button>
       </div>
       <div style="margin-top:8px;">${caprTraceHtml(tr)}</div>
@@ -254,14 +254,14 @@ async function loadCapRegistry() {
               实测踩过：注释里给端点名加了反引号 ⇒ 页面报
               "加载失败：xxx is not defined"。 -->
       <details id="capr-raw" style="margin-top:18px;">
-        <summary style="cursor:pointer;font-size:12.5px;font-weight:500;padding:4px 0;">
+        <summary style="cursor:pointer;font-size:13.5px;font-weight:500;padding:4px 0;">
           原始注册表（capability_registry 投影行 · 支持搜索 / 类型 / 状态 / 分页）
-          <span id="capr-raw-meta" style="font-weight:400;font-size:11px;color:var(--mut);"></span>
+          <span id="capr-raw-meta" style="font-weight:400;font-size:12.5px;color:var(--mut);"></span>
         </summary>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0;">
           <input id="capr-raw-q" placeholder="搜 capability_id / 名称"
-                 style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:200px;">
-          <select id="capr-raw-kind" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+                 style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;width:200px;">
+          <select id="capr-raw-kind" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;">
             <option value="">全部类型</option>
             <option value="tool">工具 tool</option>
             <option value="skill">技能 skill</option>
@@ -270,7 +270,7 @@ async function loadCapRegistry() {
             <option value="plugin">插件 plugin</option>
             <option value="prompt">提示词 prompt</option>
           </select>
-          <select id="capr-raw-status" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+          <select id="capr-raw-status" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;">
             <option value="">全部状态</option>
             <option value="active">active</option>
             <option value="disabled">disabled</option>
@@ -280,11 +280,11 @@ async function loadCapRegistry() {
         <div id="capr-raw-body"></div>
       </details>
 
-      <div style="margin-top:10px;font-size:11px;color:var(--mut);line-height:1.6;">
+      <div style="margin-top:10px;font-size:12.5px;color:var(--mut);line-height:1.6;">
         ${caprEsc((led.hint || '') + '　' + (tr && tr.note ? '' : ''))}
       </div>`;
   } catch (e) {
-    body.innerHTML = `<div style="color:#c62828;font-size:12px;">加载失败：${caprEsc(e && e.message)}</div>`;
+    body.innerHTML = `<div style="color:#c62828;font-size:13.5px;">加载失败：${caprEsc(e && e.message)}</div>`;
   }
 }
 
@@ -326,7 +326,7 @@ async function caprRawLoad(offset) {
   if (q) qs.set('q', q);
   if (kind) qs.set('kind', kind);
   if (status) qs.set('status', status);
-  body.innerHTML = '<div class="loading" style="font-size:11.5px;">加载原始注册表…</div>';
+  body.innerHTML = '<div class="loading" style="font-size:12.5px;">加载原始注册表…</div>';
   try {
     const r = await fetch('/api/capabilities/registry?' + qs.toString());
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -341,16 +341,16 @@ async function caprRawLoad(offset) {
         (Object.keys(bk).length ? `（${Object.keys(bk).map(k => k + ' ' + bk[k]).join(' / ')}）` : '');
     }
     const trs = rows.map(x => `<tr>
-      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:11.5px;">
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:12.5px;">
         <div>${caprEsc(x.display_name || x.capability_id)}</div>
-        <div style="font-size:10px;color:var(--mut);font-family:ui-monospace,Consolas,monospace;">${caprEsc(x.capability_id)}</div>
+        <div style="font-size:12px;color:var(--mut);font-family:ui-monospace,Consolas,monospace;">${caprEsc(x.capability_id)}</div>
       </td>
-      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:11px;color:var(--mut);">${caprEsc(x.kind)}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:11px;">${caprEsc(x.status || '')}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-size:11.5px;">${caprNum(x.call_count)}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-size:11.5px;">
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--mut);">${caprEsc(x.kind)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:12.5px;">${caprEsc(x.status || '')}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-size:12.5px;">${caprNum(x.call_count)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-size:12.5px;">
         ${x.fail_count > 0 ? '<span style="color:#c62828;">' + caprNum(x.fail_count) + '</span>' : '<span style="color:var(--mut);">—</span>'}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:10.5px;color:var(--mut);">${caprEsc((x.last_used_at || '').slice(0, 16) || '—')}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--line);font-size:12px;color:var(--mut);">${caprEsc((x.last_used_at || '').slice(0, 16) || '—')}</td>
     </tr>`).join('');
     const pageBtn = (label, target, disabled) =>
       `<button class="btn sm" ${disabled ? 'disabled style="opacity:.45;cursor:default;"' : ''}
@@ -358,23 +358,23 @@ async function caprRawLoad(offset) {
     body.innerHTML = `
       <div style="max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px;">
         <table style="width:100%;border-collapse:collapse;">
-          <thead><tr style="position:sticky;top:0;background:var(--bg2,#f7f9fc);color:var(--mut);font-size:11px;text-align:left;">
+          <thead><tr style="position:sticky;top:0;background:var(--bg2,#f7f9fc);color:var(--mut);font-size:12.5px;text-align:left;">
             <th style="padding:6px 8px;">能力</th><th style="padding:6px 8px;">类型</th>
             <th style="padding:6px 8px;">状态</th>
             <th style="padding:6px 8px;text-align:right;">调用</th>
             <th style="padding:6px 8px;text-align:right;">失败</th>
             <th style="padding:6px 8px;">最近使用</th>
           </tr></thead>
-          <tbody>${trs || '<tr><td colspan="6" style="padding:14px;color:var(--mut);font-size:11.5px;">无匹配行</td></tr>'}</tbody>
+          <tbody>${trs || '<tr><td colspan="6" style="padding:14px;color:var(--mut);font-size:12.5px;">无匹配行</td></tr>'}</tbody>
         </table>
       </div>
-      <div style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:11px;color:var(--mut);">
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:12.5px;color:var(--mut);">
         ${pageBtn('‹ 上一页', Math.max(0, off - limit), off <= 0)}
         <span>${off + 1}–${Math.min(off + rows.length, total)} / ${total}</span>
         ${pageBtn('下一页 ›', off + limit, off + limit >= total)}
       </div>`;
   } catch (e) {
-    body.innerHTML = `<div style="color:#c62828;font-size:11.5px;">原始注册表加载失败：${caprEsc(e && e.message)}</div>`;
+    body.innerHTML = `<div style="color:#c62828;font-size:12.5px;">原始注册表加载失败：${caprEsc(e && e.message)}</div>`;
   }
 }
 
@@ -401,21 +401,21 @@ async function caprRediscoverMcp() {
       const tools = (d.tool_meta_tools != null ? d.tool_meta_tools : '?');
       const back = d.tool_meta_backfilled ? ' · 已回填' : '';
       const err = d.backfill_error ? ' · ⚠️' + caprEsc(d.backfill_error) : '';
-      return `<div style="font-size:11.5px;padding:2px 0;">
+      return `<div style="font-size:12.5px;padding:2px 0;">
         ${caprChip(d.name, ok ? {color:'#2e7d32',bg:'#e8f5e9'} : {color:'#c62828',bg:'#fdecea'})}
         ${ok ? '在线' : '离线'} · 工具 ${caprNum(tools)}${back}${err}</div>`;
     }).join('');
     const online = r.online != null ? r.online : '?';
     const checked = r.checked != null ? r.checked : '?';
     box.innerHTML = `<div style="padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg2,#f7f9fc);">
-      <div style="font-size:12px;margin-bottom:6px;"><b>重新发现完成</b>：${caprNum(online)}/${caprNum(checked)} 在线
+      <div style="font-size:13.5px;margin-bottom:6px;"><b>重新发现完成</b>：${caprNum(online)}/${caprNum(checked)} 在线
         ${r.backfilled ? ' · 本轮回填 ' + caprNum(r.backfilled) + ' 台' : ''}</div>
-      ${details || '<div style="font-size:11.5px;color:var(--mut);">无 MCP 服务器</div>'}
-      <div style="font-size:11px;color:var(--mut);margin-top:6px;">下方账本已刷新；mcp_tool 投影与 registry 状态同步更新。</div>
+      ${details || '<div style="font-size:12.5px;color:var(--mut);">无 MCP 服务器</div>'}
+      <div style="font-size:12.5px;color:var(--mut);margin-top:6px;">下方账本已刷新；mcp_tool 投影与 registry 状态同步更新。</div>
     </div>`;
     loadCapRegistry();
   } catch (e) {
-    box.innerHTML = `<div style="color:#c62828;font-size:12px;">重新发现失败：${caprEsc(e && e.message)}</div>`;
+    box.innerHTML = `<div style="color:#c62828;font-size:13.5px;">重新发现失败：${caprEsc(e && e.message)}</div>`;
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '🔄 重新发现 MCP 工具'; }
   }
@@ -435,32 +435,32 @@ async function caprTraceDetail() {
     const llm = d.llm || {};
     box.innerHTML = `
       <div style="margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;">
-        <div style="font-size:12px;margin-bottom:6px;">
+        <div style="font-size:13.5px;margin-bottom:6px;">
           工具调用 <b>${caprNum(d.tool_call_count)}</b> 次 ·
           LLM 调用 <b>${caprNum(llm.calls)}</b> 次 ·
           prompt <b>${caprNum(llm.prompt_tokens)}</b> tok
           （其中缓存命中 <b>${caprNum(llm.cache_hit_tokens)}</b>）·
           成本 <b>¥${(Number(llm.cost) || 0).toFixed(4)}</b>
         </div>
-        ${calls.length ? `<table style="width:100%;border-collapse:collapse;font-size:11.5px;">
-          <thead><tr style="color:var(--mut);font-size:11px;text-align:left;">
+        ${calls.length ? `<table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+          <thead><tr style="color:var(--mut);font-size:12.5px;text-align:left;">
             <th style="padding:4px 8px;">工具</th><th style="padding:4px 8px;">能力 ID</th>
             <th style="padding:4px 8px;">结果</th><th style="padding:4px 8px;text-align:right;">耗时</th>
             <th style="padding:4px 8px;">时间</th></tr></thead>
           <tbody>${calls.map(c => `<tr>
             <td style="padding:4px 8px;border-bottom:1px solid var(--line);">${caprEsc(c.tool_name)}</td>
-            <td style="padding:4px 8px;border-bottom:1px solid var(--line);font-size:10.5px;
+            <td style="padding:4px 8px;border-bottom:1px solid var(--line);font-size:12px;
                 color:var(--mut);font-family:ui-monospace,Consolas,monospace;">${caprEsc(c.capability_id || '—')}</td>
             <td style="padding:4px 8px;border-bottom:1px solid var(--line);">
               ${c.ok ? caprChip('成功', { color: '#2e7d32', bg: '#e8f5e9' })
                      : caprChip(c.failure_kind || '失败', { color: '#c62828', bg: '#fdecea' })}</td>
             <td style="padding:4px 8px;border-bottom:1px solid var(--line);text-align:right;">${caprNum(c.latency_ms)} ms</td>
-            <td style="padding:4px 8px;border-bottom:1px solid var(--line);font-size:10.5px;color:var(--mut);">
+            <td style="padding:4px 8px;border-bottom:1px solid var(--line);font-size:12px;color:var(--mut);">
               ${caprEsc((c.created_at || '').slice(0, 19))}</td>
           </tr>`).join('')}</tbody></table>`
-        : '<div style="font-size:11.5px;color:var(--mut);">该 trace 没有工具调用（纯 LLM 轮次）。</div>'}
+        : '<div style="font-size:12.5px;color:var(--mut);">该 trace 没有工具调用（纯 LLM 轮次）。</div>'}
       </div>`;
   } catch (e) {
-    box.innerHTML = `<div style="color:#c62828;font-size:12px;">查询失败：${caprEsc(e && e.message)}</div>`;
+    box.innerHTML = `<div style="color:#c62828;font-size:13.5px;">查询失败：${caprEsc(e && e.message)}</div>`;
   }
 }

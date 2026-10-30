@@ -70,7 +70,7 @@ function renderMarkdown(text, cites){
         + `<span class="cf-meta">${n} 行</span>`
         + `<span class="cf-act" onclick="event.stopPropagation();mermaidToggle(this)">🔀 视图/源码</span>`
         + `<span class="cf-act" onclick="event.stopPropagation();codeFoldCopy(this)">📋 复制</span></div>`
-        + `<div class="mermaid-view" id="${mid}"><div style="padding:10px;font-size:11px;color:var(--mut);">Mermaid 视图渲染中…</div></div>`
+        + `<div class="mermaid-view" id="${mid}"><div style="padding:10px;font-size:12.5px;color:var(--mut);">Mermaid 视图渲染中…</div></div>`
         + `<pre class="md-code" style="display:none;"><code>${escMd(body.join('\n'))}</code></pre></div>`;
     }
     // ★ 2026-10-27（用户："输出的代码块需要支持展开/收起能力，默认展开"）：
@@ -150,12 +150,12 @@ function mermaidRenderInto(container, code){
       const out = window.mermaid.render(id, code);
       if(out && typeof out.then === 'function'){          // mermaid v10：Promise<{svg}>
         out.then(r=>{ container.innerHTML = (r && r.svg) || r; })
-           .catch(e=>{ container.innerHTML = '<div style="padding:8px;font-size:11px;color:var(--red);">Mermaid 渲染失败：'+escMd(e && e.message || e)+'</div>'; });
+           .catch(e=>{ container.innerHTML = '<div style="padding:8px;font-size:12.5px;color:var(--red);">Mermaid 渲染失败：'+escMd(e && e.message || e)+'</div>'; });
       } else {                                            // mermaid v8/9：同步返回 html/svg
         container.innerHTML = (out && out.svg) || out || '';
       }
     }catch(e){
-      container.innerHTML = '<div style="padding:8px;font-size:11px;color:var(--red);">Mermaid 渲染失败：'+escMd(e && e.message || e)+'</div>';
+      container.innerHTML = '<div style="padding:8px;font-size:12.5px;color:var(--red);">Mermaid 渲染失败：'+escMd(e && e.message || e)+'</div>';
     }
   });
 }
@@ -311,20 +311,20 @@ function renderMessage(m) {
     const _ans = _ccd && _ccd.answered;
     const _qHtml = _qs.map(q=>{
       const opts = (q.options||[]).map(o=>
-        `<span style="display:inline-block;border:1px solid var(--line);border-radius:4px;padding:1px 8px;margin:2px 4px 2px 0;font-size:10.5px;background:#fff;">${esc(o)}</span>`).join('');
-      return `<div style="margin-top:6px;"><div style="font-size:11.5px;"><b>${esc(q.question||'')}</b></div><div style="margin-top:3px;">${opts}</div></div>`;
+        `<span style="display:inline-block;border:1px solid var(--line);border-radius:4px;padding:1px 8px;margin:2px 4px 2px 0;font-size:12px;background:#fff;">${esc(o)}</span>`).join('');
+      return `<div style="margin-top:6px;"><div style="font-size:12.5px;"><b>${esc(q.question||'')}</b></div><div style="margin-top:3px;">${opts}</div></div>`;
     }).join('');
     let _ansHtml = '';
     if(_ans){
       if(_ans.skipped){
-        _ansHtml = `<div style="margin-top:6px;font-size:11px;color:var(--mut);">已跳过确认，按现有信息继续执行</div>`;
+        _ansHtml = `<div style="margin-top:6px;font-size:12.5px;color:var(--mut);">已跳过确认，按现有信息继续执行</div>`;
       } else if((_ans.answers||[]).length){
-        _ansHtml = `<div style="margin-top:6px;font-size:11.5px;">✓ 已回答：<b>${esc((_ans.answers||[]).join('；'))}</b></div>`;
+        _ansHtml = `<div style="margin-top:6px;font-size:12.5px;">✓ 已回答：<b>${esc((_ans.answers||[]).join('；'))}</b></div>`;
       }
     }
     html += `<div class="proc-block clarify done collapsed" data-depth="0">
       <div class="proc-head" onclick="toggleProc(this)" title="点击展开详情"><span>❓</span><span class="proc-title">等待用户确认${_ans?'<span class="proc-sub"> · ' + (_ans.skipped?'已跳过':'已回答') + '</span>':''}</span><span class="st ok" style="margin-left:auto;">✓ 已确认</span><span class="chev">▾</span></div>
-      <div class="proc-body"><div style="font-size:11.5px;line-height:1.7;">${_qHtml}${_ansHtml}<div style="color:var(--mut);margin-top:6px;">已在原输出流程内继续执行（本卡为流程中的一个确认环节）</div></div></div>
+      <div class="proc-body"><div style="font-size:12.5px;line-height:1.7;">${_qHtml}${_ansHtml}<div style="color:var(--mut);margin-top:6px;">已在原输出流程内继续执行（本卡为流程中的一个确认环节）</div></div></div>
     </div>`;
   }
   // body 容器已在上方按「是否折叠」分别拼接（含折叠条），此处不再重复开标签
@@ -347,11 +347,11 @@ function renderMessage(m) {
   if(cd) {
       // V2.6 参考来源折叠区：citations 存在即展示（不依赖正文 [n] 标注），点击条目打开 chunk 详情
       if(m.role==='assistant' && cites.length){
-        const items = cites.map((c,i)=>`<div class="cite-row" data-i="${i+1}" onclick="openCitation(this)" style="cursor:pointer;padding:5px 8px;border-top:1px solid var(--line,#e5e8ee);font-size:11px;"
+        const items = cites.map((c,i)=>`<div class="cite-row" data-i="${i+1}" onclick="openCitation(this)" style="cursor:pointer;padding:5px 8px;border-top:1px solid var(--line,#e5e8ee);font-size:12.5px;"
           onmouseover="this.style.background='#f4f8ff'" onmouseout="this.style.background=''">
           <b style="color:var(--blue-d,#3478f6);">[${i+1}]</b> ${esc(c.source_doc||'')}${c.section?` · ${esc(c.section)}`:''}
-          <span style="color:var(--mut);font-size:10px;">· 相关度 ${c.score}${c.confidence_level?`（${esc(c.confidence_level)}）`:''}${c.reranked?' · LLM重排':''}</span>
-          <div style="color:var(--mut);font-size:10.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc((c.content||'').slice(0,120))}</div>
+          <span style="color:var(--mut);font-size:12px;">· 相关度 ${c.score}${c.confidence_level?`（${esc(c.confidence_level)}）`:''}${c.reranked?' · LLM重排':''}</span>
+          <div style="color:var(--mut);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc((c.content||'').slice(0,120))}</div>
         </div>`).join('');
         // 2026-10-16（米爸实测「引用卡上下方边距太大」·截图复现）：.msg .body 设了
         //   white-space:pre-wrap（为用户消息原样换行），该属性**可继承**——本卡容器是多行
@@ -359,8 +359,8 @@ function renderMessage(m) {
         //   （浏览器实测各 ~42px），把 30px 的卡撑到 113px。结构化卡片必须显式复位
         //   white-space:normal（同 app.css:294 .nr-inline / chat.css:245 .art-card 先例）。
         html += `<div style="margin-top:8px;border:1px solid var(--line,#e5e8ee);border-radius:8px;overflow:hidden;white-space:normal;">
-          <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:#fafbfc;font-size:11px;color:var(--mut);cursor:pointer;user-select:none;" onclick="citeSrcToggle(this)">
-          <span class="chev" style="font-size:9px;">▸</span>📚 检索引用（${cites.length} 条 chunk，回答中标注的来源；点击条目查看详情）</div>
+          <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:#fafbfc;font-size:12.5px;color:var(--mut);cursor:pointer;user-select:none;" onclick="citeSrcToggle(this)">
+          <span class="chev" style="font-size:11.5px;">▸</span>📚 检索引用（${cites.length} 条 chunk，回答中标注的来源；点击条目查看详情）</div>
           <div class="cite-src-body" style="display:none;max-height:280px;overflow:auto;background:#fff;">${items}</div></div>`;
       }
       if(cd.intent) {
@@ -381,7 +381,7 @@ function renderMessage(m) {
           : ` 意图：${cd.intent}`;
         const retrPart = `来源：${cd.source}（图谱${cd.graph_count||0} / 向量${cd.vector_count||0}）`
           + (rconf != null ? ` 检索置信 ${rconf.toFixed(2)}` : '');
-        html += `<div style="margin-top:8px;font-size:11px;color:var(--mut);">${cd.agent?`<b>${cd.agent}</b> `:''}${hilBadge}${intentPart} ｜ ${retrPart}${kb}</div>`;
+        html += `<div style="margin-top:8px;font-size:12.5px;color:var(--mut);">${cd.agent?`<b>${cd.agent}</b> `:''}${hilBadge}${intentPart} ｜ ${retrPart}${kb}</div>`;
       }
       // P0：结论速览面板（资料库与AI建模优化 §2）—— 默认展开，集中阅读最终结论
       const summaryHtml = renderSummaryPanel(cd);

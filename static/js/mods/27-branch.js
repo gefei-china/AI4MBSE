@@ -13,7 +13,7 @@ async function loadBranches() {
   const el = document.getElementById('branch-list');
   if(!el) { renderBranchKpis(); return; }   // 2026-09-04 合并队列页已移除，分支列表容器不再存在
   if(!branches || !branches.length) {
-    el.innerHTML = '<div style="padding:10px;color:var(--mut);font-size:12px;">暂无分支，点击「＋ 创建」新建个人分支</div>';
+    el.innerHTML = '<div style="padding:10px;color:var(--mut);font-size:13.5px;">暂无分支，点击「＋ 创建」新建个人分支</div>';
     renderBranchKpis();
     return;
   }
@@ -28,7 +28,7 @@ async function loadBranches() {
     g.items.push(b);
   });
   el.innerHTML = groups.filter(g=>g.items.length).map(g=>`
-    <div style="font-size:11px;color:var(--mut);font-weight:600;margin:6px 2px 6px;letter-spacing:.5px;">${g.icon} ${g.label} <span class="tag">${g.items.length}</span></div>
+    <div style="font-size:12.5px;color:var(--mut);font-weight:600;margin:6px 2px 6px;letter-spacing:.5px;">${g.icon} ${g.label} <span class="tag">${g.items.length}</span></div>
     ${g.items.map(b=>branchCardHtml(b, cur)).join('')}
   `).join('');
   renderBranchKpis();
@@ -40,31 +40,31 @@ function branchCardHtml(b, cur) {
   // P1-2 ahead/behind（对标 GitHub 分支列表）：dev 相对 release、个人分支相对 parent_branch；后端未升级时字段缺失自动隐藏
   const abN = (b.ahead||0) + (b.behind||0);
   const abBadge = abN>0
-    ? `<span style="font-size:10.5px;padding:1px 7px;border-radius:8px;background:var(--amb-l,#fdf3e3);color:#a16207;" title="相对基线分支：领先 ${b.ahead||0} 次提交 / 落后 ${b.behind||0} 次提交（含合并指针计算）">↑${b.ahead||0} ↓${b.behind||0}</span>` : '';
+    ? `<span style="font-size:12px;padding:1px 7px;border-radius:8px;background:var(--amb-l,#fdf3e3);color:#a16207;" title="相对基线分支：领先 ${b.ahead||0} 次提交 / 落后 ${b.behind||0} 次提交（含合并指针计算）">↑${b.ahead||0} ↓${b.behind||0}</span>` : '';
   const note = b.branch_type==='release'
-    ? '<span style="font-size:10.5px;color:var(--red);background:var(--red-l);padding:1px 7px;border-radius:8px;">🔒 仅通过 dev 合并更新（只读）</span>'
-    : (b.name==='dev' ? '<span style="font-size:10.5px;color:var(--blue-d);background:var(--blue-l);padding:1px 7px;border-radius:8px;">✅ 主开发分支（唯一）</span>' : '');
+    ? '<span style="font-size:12px;color:var(--red);background:var(--red-l);padding:1px 7px;border-radius:8px;">🔒 仅通过 dev 合并更新（只读）</span>'
+    : (b.name==='dev' ? '<span style="font-size:12px;color:var(--blue-d);background:var(--blue-l);padding:1px 7px;border-radius:8px;">✅ 主开发分支（唯一）</span>' : '');
   const ops = [];
-  ops.push(`<button class="btn sm ghost" style="font-size:10.5px;padding:1px 6px;" onclick="openBranchDiffDrawer('${esc(b.name)}')" title="对比该分支与基线差异">🔍</button>`);
-  ops.push(`<button class="btn sm ghost" style="font-size:10.5px;padding:1px 6px;" onclick="openBranchCommits('${esc(b.name)}','${esc(b.branch_type)}')" title="查看该分支提交历史">📜</button>`);
+  ops.push(`<button class="btn sm ghost" style="font-size:12px;padding:1px 6px;" onclick="openBranchDiffDrawer('${esc(b.name)}')" title="对比该分支与基线差异">🔍</button>`);
+  ops.push(`<button class="btn sm ghost" style="font-size:12px;padding:1px 6px;" onclick="openBranchCommits('${esc(b.name)}','${esc(b.branch_type)}')" title="查看该分支提交历史">📜</button>`);
   if(!isProtected) {
-    ops.push(`<button class="btn sm ghost" style="font-size:10.5px;padding:1px 6px;" onclick="editBranch('${esc(b.name)}')" title="编辑">✏️</button>`);
-    ops.push(`<button class="btn sm red" style="font-size:10.5px;padding:1px 6px;" onclick="deleteBranch('${esc(b.name)}')" title="删除">🗑</button>`);
+    ops.push(`<button class="btn sm ghost" style="font-size:12px;padding:1px 6px;" onclick="editBranch('${esc(b.name)}')" title="编辑">✏️</button>`);
+    ops.push(`<button class="btn sm red" style="font-size:12px;padding:1px 6px;" onclick="deleteBranch('${esc(b.name)}')" title="删除">🗑</button>`);
   }
-  if(!isCur) ops.push(`<button class="btn sm" style="font-size:10.5px;padding:1px 8px;" onclick="setCurrentBranch('${esc(b.name)}')" title="设为工作分支：数据看板/图谱/文档/实体/建模检索均按该分支加载">↗ 设为工作分支</button>`);
+  if(!isCur) ops.push(`<button class="btn sm" style="font-size:12px;padding:1px 8px;" onclick="setCurrentBranch('${esc(b.name)}')" title="设为工作分支：数据看板/图谱/文档/实体/建模检索均按该分支加载">↗ 设为工作分支</button>`);
   return `
     <div style="border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-bottom:10px;background:#fff;${isCur?'border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-l);':''}${b.status==='archived'?'opacity:.62;':''}">
       <div style="display:flex;align-items:center;gap:8px;">
         <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;flex-wrap:wrap;">
-          <b style="font-size:13px;white-space:nowrap;">${esc(b.name)}</b>
+          <b style="font-size:14.5px;white-space:nowrap;">${esc(b.name)}</b>
           ${branchTypeBadge(b.branch_type)}
           ${abBadge}
-          ${isCur?'<span style="font-size:10.5px;color:var(--blue-d);background:var(--blue-l);padding:1px 7px;border-radius:8px;">✓ 当前</span>':''}
-          ${b.status==='archived'?'<span style="font-size:10.5px;color:var(--mut);">已归档</span>':''}
+          ${isCur?'<span style="font-size:12px;color:var(--blue-d);background:var(--blue-l);padding:1px 7px;border-radius:8px;">✓ 当前</span>':''}
+          ${b.status==='archived'?'<span style="font-size:12px;color:var(--mut);">已归档</span>':''}
         </div>
         <div style="display:flex;gap:4px;flex:none;">${ops.join('')}</div>
       </div>
-      <div style="font-size:11.5px;color:var(--mut);margin-top:6px;line-height:1.6;">
+      <div style="font-size:12.5px;color:var(--mut);margin-top:6px;line-height:1.6;">
         ${esc(b.description||'无描述')} ${note?`<span style="margin-left:4px;">${note}</span>`:''}
         <div style="margin-top:2px;">基线来源：<b>${esc(b.parent_branch||'-')}</b> ｜ <span style="color:var(--grn);">${b.entity_count||0} 元素</span></div>
       </div>
@@ -154,7 +154,7 @@ function wsAuditSection(audit){
   A.forEach(function(c){ var key=wsHistDayLabel(c.created_at)||'\u66f4\u65e9'; var last=groups[groups.length-1]; if(last&&last.key===key){last.items.push(c);} else {groups.push({key:key,items:[c]});} });
   var html='';
   groups.forEach(function(g){
-    html+='<div style="display:flex;align-items:center;gap:8px;padding:5px 14px;background:#fafaf7;border-top:1px solid var(--line);"><span style="font-size:11.5px;font-weight:600;color:var(--blue-d);">'+g.key+'</span><span style="font-size:10.5px;color:var(--mut);">'+g.items.length+' \u6761</span><span style="flex:1;border-bottom:1px dashed var(--line);margin-left:4px;"></span></div>';
+    html+='<div style="display:flex;align-items:center;gap:8px;padding:5px 14px;background:#fafaf7;border-top:1px solid var(--line);"><span style="font-size:12.5px;font-weight:600;color:var(--blue-d);">'+g.key+'</span><span style="font-size:12px;color:var(--mut);">'+g.items.length+' \u6761</span><span style="flex:1;border-bottom:1px dashed var(--line);margin-left:4px;"></span></div>';
     g.items.forEach(function(c){
       var ki=wsAuditKindInfo(c.event_type);
       var kObj=wsAuditKindFromDetail(c.detail, ki.cls);
@@ -163,18 +163,18 @@ function wsAuditSection(audit){
       var pd=wsAuditParseDiff(c.detail);
       var diffRows=(pd.items||[]).map(wsAuditDiffRow).join('');
       html+='<div style="display:flex;gap:10px;align-items:flex-start;padding:8px 14px;border-top:1px dashed var(--line);background:#fff;">'
-        +'<span style="font-size:15px;flex:none;line-height:1.4;">'+ki.ic+'</span>'
+        +'<span style="font-size:16.5px;flex:none;line-height:1.4;">'+ki.ic+'</span>'
         +'<div style="flex:1;min-width:0;">'
-          +'<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;"><b style="font-size:12.5px;">'+esc(c.user_name||'-')+'</b><span style="font-size:11px;color:var(--mut);">'+wsAuditLabel(c.event_type)+'</span><span class="st" style="font-size:10px;color:'+kc+';border-color:'+kc+';">'+esc(kObj)+'</span><span class="st" style="font-size:10px;color:'+act.c+';border-color:'+act.c+';">'+esc(act.t)+'</span></div>'
-          +(pd.base?('<div style="margin-top:2px;font-size:11px;color:var(--mut);">'+esc(pd.base)+'</div>'):'')
+          +'<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;"><b style="font-size:13.5px;">'+esc(c.user_name||'-')+'</b><span style="font-size:12.5px;color:var(--mut);">'+wsAuditLabel(c.event_type)+'</span><span class="st" style="font-size:12px;color:'+kc+';border-color:'+kc+';">'+esc(kObj)+'</span><span class="st" style="font-size:12px;color:'+act.c+';border-color:'+act.c+';">'+esc(act.t)+'</span></div>'
+          +(pd.base?('<div style="margin-top:2px;font-size:12.5px;color:var(--mut);">'+esc(pd.base)+'</div>'):'')
           +(diffRows?('<div style="margin-top:4px;background:#f6f7f9;border:1px solid var(--line);border-radius:6px;padding:5px 8px;">'+diffRows+'</div>'):'')
         +'</div>'
-        +'<span style="flex:none;font-size:10.5px;color:var(--mut);white-space:nowrap;" title="'+esc((c.created_at||'').slice(0,19))+'">'+wsHistRelTime(c.created_at)+'</span>'
+        +'<span style="flex:none;font-size:12px;color:var(--mut);white-space:nowrap;" title="'+esc((c.created_at||'').slice(0,19))+'">'+wsHistRelTime(c.created_at)+'</span>'
       +'</div>';
     });
   });
   return '<div style="border-bottom:1px solid var(--line);background:#F4F7FB;">'
-    +'<div style="display:flex;align-items:center;gap:8px;padding:9px 14px;font-size:12px;color:var(--blue-d);font-weight:600;"><span>\ud83d\udd55 \u64cd\u4f5c\u5ba1\u8ba1</span><span style="flex:1;"></span><span style="font-size:10.5px;color:var(--mut);font-weight:400;">\u6700\u8fd1 '+A.length+' \u6761</span></div>'
+    +'<div style="display:flex;align-items:center;gap:8px;padding:9px 14px;font-size:13.5px;color:var(--blue-d);font-weight:600;"><span>\ud83d\udd55 \u64cd\u4f5c\u5ba1\u8ba1</span><span style="flex:1;"></span><span style="font-size:12px;color:var(--mut);font-weight:400;">\u6700\u8fd1 '+A.length+' \u6761</span></div>'
     +html+'</div>';
 }
 function wsAuditDimName(d){
@@ -214,11 +214,11 @@ function wsAuditDiffRow(it){
   var toTxt = (it.kind===2)?'\u2205':it.to;
   var fromCss = (it.kind===2)?'color:var(--red);text-decoration:line-through;':'color:var(--mut);text-decoration:line-through;';
   var toCss = (it.kind===1)?'color:var(--grn);font-weight:600;':(it.kind===2)?'color:var(--red);font-weight:600;':'color:var(--blue-d);font-weight:600;';
-  return '<div style="display:flex;align-items:center;gap:8px;font-size:11px;padding:2px 0;line-height:1.6;">'
+  return '<div style="display:flex;align-items:center;gap:8px;font-size:12.5px;padding:2px 0;line-height:1.6;">'
     +'<span style="width:104px;flex:none;text-align:right;padding-right:8px;color:var(--blue-d);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(it.dim)+'">'+esc(it.dim)+'</span>'
     +'<span style="flex:none;min-width:30px;'+fromCss+'">'+esc(fromTxt)+'</span>'
     +'<span style="flex:none;color:var(--mut);">\u2192</span>'
-    +'<span style="flex:none;'+toCss+'">'+esc(toTxt)+(act?'<span style="font-size:10px;color:'+(it.kind===1?'var(--grn)':'var(--red)')+';margin-left:4px;">'+act+'</span>':'')+'</span>'
+    +'<span style="flex:none;'+toCss+'">'+esc(toTxt)+(act?'<span style="font-size:12px;color:'+(it.kind===1?'var(--grn)':'var(--red)')+';margin-left:4px;">'+act+'</span>':'')+'</span>'
     +'</div>';
 }
 
@@ -261,7 +261,7 @@ async function loadWsHistory() {
     ]);
     _bcCtx.canMerge = ((_bcPerms['branch_release']||[]).includes('review_merge'));
     if(!hist || !hist.length) {
-      el.innerHTML = '<div style="padding:16px;color:var(--mut);font-size:12px;">该分支暂无提交记录</div>';
+      el.innerHTML = '<div style="padding:16px;color:var(--mut);font-size:13.5px;">该分支暂无提交记录</div>';
       return;
     }
     // 按日期分组（今天/昨天/具体日期），组内 id DESC 已由后端保证
@@ -273,37 +273,37 @@ async function loadWsHistory() {
     });
     const rows = groups.map(g=>`
       <div style="padding:7px 14px 5px;background:#fafaf7;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;">
-        <b style="font-size:11.5px;color:var(--blue-d);">${esc(g.key)}</b>
-        <span style="color:var(--mut);font-size:10.5px;">${g.items.length} 条提交</span>
+        <b style="font-size:12.5px;color:var(--blue-d);">${esc(g.key)}</b>
+        <span style="color:var(--mut);font-size:12px;">${g.items.length} 条提交</span>
         <span style="flex:1;border-bottom:1px dashed var(--line);"></span>
-        <span style="color:var(--mut);font-size:10px;">${esc((g.items[0]&&g.items[0].created_at||'').slice(0,10))}</span>
+        <span style="color:var(--mut);font-size:12px;">${esc((g.items[0]&&g.items[0].created_at||'').slice(0,10))}</span>
       </div>`+
       g.items.map(c=>`
       <div style="border-bottom:1px solid var(--line);padding:9px 14px;background:#fff;">
         <div style="cursor:pointer;display:flex;gap:10px;align-items:flex-start;" onclick="toggleCommitDetail(${c.id}, this)">
-          <span title="${esc(commitKindBadge(c.kind).replace(/<[^>]*>/g,''))}" style="font-size:15px;flex:none;line-height:1.3;">${wsHistKindIcon(c.kind)}</span>
+          <span title="${esc(commitKindBadge(c.kind).replace(/<[^>]*>/g,''))}" style="font-size:16.5px;flex:none;line-height:1.3;">${wsHistKindIcon(c.kind)}</span>
           <div style="flex:1;min-width:0;">
             <div style="display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;">
-              <span style="font-size:11px;">${commitKindBadge(c.kind)}</span>
-              <b style="font-size:12.5px;">${esc(c.message||'')}</b>
+              <span style="font-size:12.5px;">${commitKindBadge(c.kind)}</span>
+              <b style="font-size:13.5px;">${esc(c.message||'')}</b>
             </div>
-            <div style="color:var(--mut);font-size:11px;margin-top:4px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <div style="color:var(--mut);font-size:12.5px;margin-top:4px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
               <span>${wsHistChangeSummary(c)}</span>
               <span style="opacity:.8;" title="${esc((c.created_at||'').slice(0,19))}">🕐 <b>${wsHistRelTime(c.created_at)}</b></span>
-              <span title="提交人 / 提交 ID #${c.id}">👤 ${esc(c.created_by||'-')} <code style="font-size:9.5px;color:var(--mut);">#${c.id}</code></span>
+              <span title="提交人 / 提交 ID #${c.id}">👤 ${esc(c.created_by||'-')} <code style="font-size:11.5px;color:var(--mut);">#${c.id}</code></span>
             </div>
           </div>
-          <span style="color:var(--mut);font-size:14px;flex:none;align-self:center;">▾</span>
+          <span style="color:var(--mut);font-size:15.5px;flex:none;align-self:center;">▾</span>
         </div>
-        <div id="cd-${c.id}" style="display:none;margin-top:6px;border-top:1px dashed var(--line);padding-top:6px;font-size:12px;"></div>
+        <div id="cd-${c.id}" style="display:none;margin-top:6px;border-top:1px dashed var(--line);padding-top:6px;font-size:13.5px;"></div>
       </div>`).join('')
     ).join('');
-    el.innerHTML = `<div style="font-size:11.5px;color:var(--mut);padding:8px 14px;border-bottom:1px solid var(--line);background:#fafaf7;display:flex;align-items:center;gap:8px;">
+    el.innerHTML = `<div style="font-size:12.5px;color:var(--mut);padding:8px 14px;border-bottom:1px solid var(--line);background:#fafaf7;display:flex;align-items:center;gap:8px;">
       📜 <b style="color:var(--blue-d);">${esc(name)}</b> 提交历史 · 共 ${hist.length} 条${branchType==='release'?' · 🔒 发布分支（提交可回滚）':''}
       <span style="flex:1;"></span>
       <span style="opacity:.8;">按日期分组 · 点击行展开变更清单</span></div>${wsAuditSection(auditLogs)}${rows}`;
   } catch(e) {
-    el.innerHTML = `<div style="color:var(--red);padding:12px;font-size:12px;">加载失败：${esc(e.message)}</div>`;
+    el.innerHTML = `<div style="color:var(--red);padding:12px;font-size:13.5px;">加载失败：${esc(e.message)}</div>`;
   }
 }
 // GitHub 式分支下拉：搜索过滤 / 类型分组徽章 / 行内快捷操作（对比/历史）/ 底部新建分支
@@ -332,34 +332,34 @@ function renderBrDropdown() {
   const list = document.getElementById('ws-brList');
   if(!list) return;
   const alive = (_branches||[]).filter(b=>b.status!=='archived');
-  if(!alive.length) { list.innerHTML = '<div style="padding:10px;color:var(--mut);font-size:12px;">暂无分支</div>'; return; }
+  if(!alive.length) { list.innerHTML = '<div style="padding:10px;color:var(--mut);font-size:13.5px;">暂无分支</div>'; return; }
   const groups = [
     {label:'👤 个人 / 本地', items: alive.filter(b=>b.branch_type!=='dev' && b.branch_type!=='release')},
     {label:'🟦 开发', items: alive.filter(b=>b.branch_type==='dev')},
     {label:'🔒 发布', items: alive.filter(b=>b.branch_type==='release')},
   ];
   list.innerHTML = groups.filter(g=>g.items.length).map(g=>
-    `<div style="font-size:10.5px;color:var(--mut);font-weight:600;padding:5px 12px 2px;letter-spacing:.5px;">${g.label} <span class="tag" style="font-size:9.5px;">${g.items.length}</span></div>` +
+    `<div style="font-size:12px;color:var(--mut);font-weight:600;padding:5px 12px 2px;letter-spacing:.5px;">${g.label} <span class="tag" style="font-size:11.5px;">${g.items.length}</span></div>` +
     g.items.map(b=>{
       const isCur = b.name===cur;
       const rel = b.branch_type==='release' || isReleaseBranch(b.name);
       const ec = b.entity_count||0;
       // 2026-09-12：内置分支标「🔒 系统内置」；自定义分支数字>0 时按钮/数字说明删除需先清空
       const isBuiltIn = typeof PROTECTED_BRANCHES!=='undefined' && PROTECTED_BRANCHES.includes(b.name);
-      let badge = rel ? '<span class="st" style="font-size:9.5px;">🔒 只读</span>'
-        : (b.parent_branch?`<span style="font-size:9.5px;color:var(--mut);">← 自 ${esc(b.parent_branch)}</span>`:'');
-      if(isBuiltIn) badge += ' <span class="st" style="font-size:9.5px;">🔒 系统内置</span>';
+      let badge = rel ? '<span class="st" style="font-size:11.5px;">🔒 只读</span>'
+        : (b.parent_branch?`<span style="font-size:11.5px;color:var(--mut);">← 自 ${esc(b.parent_branch)}</span>`:'');
+      if(isBuiltIn) badge += ' <span class="st" style="font-size:11.5px;">🔒 系统内置</span>';
       const delBtn = isBuiltIn ? ''
-        : `<button class="btn sm red" style="font-size:10px;padding:0 5px;" onclick="event.stopPropagation();deleteBranch('${esc(b.name)}')" title="删除自定义分支（当前含 ${ec} 实体，需先清空或合并才能删）">🗑</button>`;
+        : `<button class="btn sm red" style="font-size:12px;padding:0 5px;" onclick="event.stopPropagation();deleteBranch('${esc(b.name)}')" title="删除自定义分支（当前含 ${ec} 实体，需先清空或合并才能删）">🗑</button>`;
       const quick = `<span style="display:inline-flex;gap:2px;">
-        <button class="btn sm ghost" style="font-size:10px;padding:0 5px;" onclick="event.stopPropagation();openBranchDiffDrawer('${esc(b.name)}')" title="对比该分支与基线差异">🔍</button>
-        <button class="btn sm ghost" style="font-size:10px;padding:0 5px;" onclick="event.stopPropagation();openBranchCommits('${esc(b.name)}','${esc(b.branch_type)}')" title="查看该分支提交历史">📜</button>
+        <button class="btn sm ghost" style="font-size:12px;padding:0 5px;" onclick="event.stopPropagation();openBranchDiffDrawer('${esc(b.name)}')" title="对比该分支与基线差异">🔍</button>
+        <button class="btn sm ghost" style="font-size:12px;padding:0 5px;" onclick="event.stopPropagation();openBranchCommits('${esc(b.name)}','${esc(b.branch_type)}')" title="查看该分支提交历史">📜</button>
         ${delBtn}
       </span>`;
-      return `<div class="ws-br-item" data-nm="${esc(b.name)}" style="display:flex;align-items:center;gap:8px;padding:5px 12px;cursor:pointer;font-size:12px;" onclick="pickWsBranch('${esc(b.name)}')" title="${isBuiltIn?'系统内置分支，不可删除':'切换到该分支'};实体数=${ec}（未废弃实体计数）">
+      return `<div class="ws-br-item" data-nm="${esc(b.name)}" style="display:flex;align-items:center;gap:8px;padding:5px 12px;cursor:pointer;font-size:13.5px;" onclick="pickWsBranch('${esc(b.name)}')" title="${isBuiltIn?'系统内置分支，不可删除':'切换到该分支'};实体数=${ec}（未废弃实体计数）">
         <span style="width:12px;color:var(--blue);flex:none;">${isCur?'✓':''}</span>
         <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(b.name)} ${badge}</span>
-        <span style="font-size:9.5px;color:${ec>0?'var(--amb,#a16207)':'var(--grn)'};flex:none;" title="${isBuiltIn?'系统内置不可删':'实体数（未废弃实体计数）'};删除需实体数为 0">${ec}</span>
+        <span style="font-size:11.5px;color:${ec>0?'var(--amb,#a16207)':'var(--grn)'};flex:none;" title="${isBuiltIn?'系统内置不可删':'实体数（未废弃实体计数）'};删除需实体数为 0">${ec}</span>
         ${quick}
       </div>`;
     }).join('')
@@ -386,25 +386,25 @@ async function openBranchCommits(name, branchType) {
     ]);
     _bcCtx.canMerge = ((_bcPerms['branch_release']||[]).includes('review_merge'));
     if(!hist || !hist.length) {
-      openPanel(`📜 提交历史：${name}`, '<div style="color:var(--mut);font-size:12px;padding:10px;">该分支暂无提交记录</div>');
+      openPanel(`📜 提交历史：${name}`, '<div style="color:var(--mut);font-size:13.5px;padding:10px;">该分支暂无提交记录</div>');
       return;
     }
     const rows = hist.map(c=>`
       <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;background:#fff;">
         <div style="cursor:pointer;" onclick="toggleCommitDetail(${c.id}, this)">
           ${commitKindBadge(c.kind)} <b>${esc(c.message||'')}</b>
-          <span style="color:var(--mut);font-size:11px;">变更 ${c.changes_count||0} 项</span>
-          <div style="color:var(--mut);font-size:11px;margin-top:2px;">${esc((c.created_at||'').slice(0,16))} · ${esc(c.created_by||'-')}</div>
+          <span style="color:var(--mut);font-size:12.5px;">变更 ${c.changes_count||0} 项</span>
+          <div style="color:var(--mut);font-size:12.5px;margin-top:2px;">${esc((c.created_at||'').slice(0,16))} · ${esc(c.created_by||'-')}</div>
         </div>
-        <div id="cd-${c.id}" style="display:none;margin-top:6px;border-top:1px dashed var(--line);padding-top:6px;font-size:12px;"></div>
+        <div id="cd-${c.id}" style="display:none;margin-top:6px;border-top:1px dashed var(--line);padding-top:6px;font-size:13.5px;"></div>
       </div>`).join('');
     const note = _bcCtx.branchType==='release'
       ? '🔒 发布分支（提交可回滚）'
       : `分支类型：${esc(branchType||'-')}`;
     openPanel(`📜 提交历史：${name}`,
-      `<div style="font-size:11.5px;color:var(--mut);margin-bottom:6px;">${note} · 共 ${hist.length} 条提交</div>${rows}`);
+      `<div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">${note} · 共 ${hist.length} 条提交</div>${rows}`);
   } catch(e) {
-    openPanel(`📜 提交历史：${name}`, `<div style="color:var(--red);padding:10px;font-size:12px;">加载失败：${esc(e.message)}</div>`);
+    openPanel(`📜 提交历史：${name}`, `<div style="color:var(--red);padding:10px;font-size:13.5px;">加载失败：${esc(e.message)}</div>`);
   }
 }
 async function toggleCommitDetail(cid, headEl) {
@@ -430,11 +430,11 @@ async function toggleCommitDetail(cid, headEl) {
       ['added','modified','removed','unchanged'].forEach(k=>{
         if(!g[k].length) return;
         const [lab,col] = relType[k];
-        html += `<div style="margin-top:6px;"><b style="color:${col};font-size:11.5px;">${lab}（${g[k].length}）</b></div>` +
+        html += `<div style="margin-top:6px;"><b style="color:${col};font-size:12.5px;">${lab}（${g[k].length}）</b></div>` +
           g[k].map(x=>`<div style="padding:2px 0 2px 12px;border-bottom:1px dashed var(--line);">
-            <b>${esc(x.name||x.id)}</b> <span style="color:var(--mut);font-size:11px;">${esc(x.entity_type||'')}</span>
-            ${x.status?`<span class="st" style="font-size:10px;color:${stColor(x.status)};">${esc(x.status)}</span>`:''}
-            ${(x.changes||[]).map(ch=>`<br>&nbsp;&nbsp;<code style="font-size:10.5px;">${esc(ch.field)}</code> <span style="color:var(--mut);">${esc(String(ch.base_value))}</span> → <b>${esc(String(ch.head_value))}</b>`).join('')}
+            <b>${esc(x.name||x.id)}</b> <span style="color:var(--mut);font-size:12.5px;">${esc(x.entity_type||'')}</span>
+            ${x.status?`<span class="st" style="font-size:12px;color:${stColor(x.status)};">${esc(x.status)}</span>`:''}
+            ${(x.changes||[]).map(ch=>`<br>&nbsp;&nbsp;<code style="font-size:12px;">${esc(ch.field)}</code> <span style="color:var(--mut);">${esc(String(ch.base_value))}</span> → <b>${esc(String(ch.head_value))}</b>`).join('')}
           </div>`).join('');
       });
     } else {
@@ -542,12 +542,12 @@ function renderBranchDiff() {
     {n:s.rel_modified||0, l:'✎ 修改关系', c:'var(--amb)'},
     {n:s.rel_removed||0,  l:'🔗 移除关系', c:'var(--blue-d)'},
   ];
-  const modeChip = (k,l,tip)=> `<span class="st ${bdMode===k?'on':''}" style="cursor:pointer;font-size:10.5px;${bdMode===k?'background:var(--blue-l);color:var(--blue-d);font-weight:600;':''}" title="${tip}" onclick="setBdMode('${k}')">${l}</span>`;
+  const modeChip = (k,l,tip)=> `<span class="st ${bdMode===k?'on':''}" style="cursor:pointer;font-size:12px;${bdMode===k?'background:var(--blue-l);color:var(--blue-d);font-weight:600;':''}" title="${tip}" onclick="setBdMode('${k}')">${l}</span>`;
   document.getElementById('bd-summary').innerHTML = `
-    <div style="font-size:12px;color:var(--mut);margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <div style="font-size:13.5px;color:var(--mut);margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       <span>基线 <b>${esc(r.base)}</b> → 对比 <b>${esc(r.head)}</b></span>
       <span style="flex:1"></span>
-      <span style="font-size:10.5px;">对比模式：</span>
+      <span style="font-size:12px;">对比模式：</span>
       ${modeChip('full','全量（双点式）','对比两分支当前全量差异（git diff branch1..branch2）')}
       ${modeChip('merge-base','增量（三点式）','只看对比分支自上次合并基线以来的增量变更（git diff branch1...branch2），后端未升级时自动回退全量')}
     </div>
@@ -581,8 +581,8 @@ function renderBdFilter() {
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:10px 0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fafaf7;">
       ${cats.map(x=>`<span class="st ${bdFilter.cat===x.k?'on':''}" style="cursor:pointer;${bdFilter.cat===x.k?'background:var(--blue-l);color:var(--blue-d);':''}" onclick="setBdCat('${x.k}')">${x.l}</span>`).join('')}
       <span style="flex:1"></span>
-      <select id="bd-type-filter" onchange="setBdType(this.value)" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;">${typeOpts}</select>
-      <input id="bd-kw" placeholder="搜索名称/ID/字段/关系…" value="${esc(bdFilter.kw)}" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;width:170px;" onkeydown="if(event.key==='Enter'){bdFilter.kw=this.value.trim();renderBdList();}">
+      <select id="bd-type-filter" onchange="setBdType(this.value)" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:13.5px;">${typeOpts}</select>
+      <input id="bd-kw" placeholder="搜索名称/ID/字段/关系…" value="${esc(bdFilter.kw)}" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:13.5px;width:170px;" onkeydown="if(event.key==='Enter'){bdFilter.kw=this.value.trim();renderBdList();}">
     </div>`;
 }
 function setBdCat(k){ bdFilter.cat=k; renderBdFilter(); renderBdList(); }
@@ -616,7 +616,7 @@ function _bdProvBadge(e) {
   if(e.source_type) bits.push(`🏷 ${esc(e.source_type)}`);
   if(e.created_by) bits.push(`👤 ${esc(e.created_by)}`);
   if(e.confidence !== undefined && e.confidence !== null && e.confidence !== '') bits.push(`📈 置信度 ${esc(String(e.confidence))}`);
-  return bits.length ? `<br>&nbsp;&nbsp;<span style="font-size:11px;color:var(--mut);">${bits.join(' · ')}</span>` : '';
+  return bits.length ? `<br>&nbsp;&nbsp;<span style="font-size:12.5px;color:var(--mut);">${bits.join(' · ')}</span>` : '';
 }
 function _bdTypeOk(e) {
   return !bdFilter.type || (e.entity_type||'')===bdFilter.type;
@@ -636,7 +636,7 @@ function renderBdList() {
   }
   if(showCat('modified')) {
     const items=(E.modified||[]).filter(e=>_bdTypeOk(e)&&_bdMatchKw(e,kws)).sort((a,b)=>_riskScore(b)-_riskScore(a));
-    if(items.length) html += `<div style="margin-top:6px;"><b style="color:var(--amb);">🟠 修改实体（${items.length}）</b><span style="font-size:11px;color:var(--mut);margin-left:6px;">风险高的在前</span></div>` +
+    if(items.length) html += `<div style="margin-top:6px;"><b style="color:var(--amb);">🟠 修改实体（${items.length}）</b><span style="font-size:12.5px;color:var(--mut);margin-left:6px;">风险高的在前</span></div>` +
       items.map(e=>`<div style="padding:4px 12px;border-bottom:1px dashed var(--line);">✎ <b>${esc(e.name)}</b> <code>${esc(e.id)}</code> <span style="color:var(--mut);">(${esc(e.entity_type)||'-'})</span> ${_riskTag(e, [])}${_bdProvBadge(e)}${_dogLocateBtn('bd', e.id)}
         ${(e.changes||[]).map(ch=>`<br>&nbsp;&nbsp;<code>${esc(ch.field)}</code>: <span style="color:var(--mut);">${esc(String(ch.base_value))}</span> → <b>${esc(String(ch.head_value))}</b>`).join('')}</div>`).join('');
   }
@@ -696,14 +696,14 @@ function renderBranchMergeList() {
 function renderBranchMergeToolbar() {
   return `<div style="padding:9px 12px;border-bottom:1px solid var(--line);background:#fff;">
     <div style="display:flex;align-items:center;gap:8px;">
-      <b style="font-size:12.5px;color:var(--blue-d);">🔀 合并请求</b>
+      <b style="font-size:13.5px;color:var(--blue-d);">🔀 合并请求</b>
       <span style="flex:1;"></span>
       <button class="btn sm ghost" onclick="loadMerges()" title="重新拉取合并请求">🔄 刷新</button>
     </div>
-    <div id="mr-list-count" style="font-size:11px;color:var(--mut);margin-top:4px;"></div>
+    <div id="mr-list-count" style="font-size:12.5px;color:var(--mut);margin-top:4px;"></div>
     <input id="mr-list-kw" placeholder="搜索 源/目标分支 · 标题 · 提交人…" value="${esc(_mrListKw)}"
       oninput="setMrListKw(this.value.trim())"
-      style="width:100%;box-sizing:border-box;margin-top:6px;border:1px solid var(--line);border-radius:6px;padding:5px 9px;font-size:12px;">
+      style="width:100%;box-sizing:border-box;margin-top:6px;border:1px solid var(--line);border-radius:6px;padding:5px 9px;font-size:13.5px;">
   </div>`;
 }
 function setMrListKw(v) { _mrListKw = v; renderBranchMergeFilterAndTable(); }
@@ -724,14 +724,14 @@ function renderBranchMergeFilterAndTable() {
   const has = !!(_mrs && _mrs.length);
   if(fEl) fEl.innerHTML = has ? renderBranchMergeFilter() : '';
   if(!has) {
-    lEl.innerHTML = `<div style="padding:20px 14px;color:var(--mut);font-size:12px;text-align:center;line-height:1.8;">
+    lEl.innerHTML = `<div style="padding:20px 14px;color:var(--mut);font-size:13.5px;text-align:center;line-height:1.8;">
       当前工作分支「${esc(getCurrentBranch()||'-')}」暂无合并请求<br>
-      <span style="font-size:11.5px;">可点右上角「＋ 发起 MR」，或切换工作分支查看其它分支的 MR</span></div>`;
+      <span style="font-size:12.5px;">可点右上角「＋ 发起 MR」，或切换工作分支查看其它分支的 MR</span></div>`;
     return;
   }
   const kw = (_mrListKw||'').toLowerCase();
   if(kw && !_mrs.some(m=>_mrMatchKw(m, kw))) {
-    lEl.innerHTML = `<div style="padding:12px 14px;font-size:11.5px;color:var(--mut);">
+    lEl.innerHTML = `<div style="padding:12px 14px;font-size:12.5px;color:var(--mut);">
       搜索「${esc(_mrListKw)}」无匹配 <span style="cursor:pointer;color:var(--blue-d);text-decoration:underline;" onclick="setMrListKw('')">清除</span></div>`;
     return;
   }
@@ -772,14 +772,14 @@ function renderBranchMergeFilter() {
   ];
   return `<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;padding:7px 12px;border-bottom:1px solid var(--line);background:#fafaf7;"
     title="待评审需冲突解决 + 人工评审后方可发布">
-    ${chips.map(x=>`<span class="st ${mergeFilter===x.k?'b':'g'}" style="cursor:pointer;font-size:10px;padding:1px 8px;${mergeFilter===x.k?'font-weight:700;':''}" onclick="setMergeFilter('${x.k}')">${x.l}</span>`).join('')}
+    ${chips.map(x=>`<span class="st ${mergeFilter===x.k?'b':'g'}" style="cursor:pointer;font-size:12px;padding:1px 8px;${mergeFilter===x.k?'font-weight:700;':''}" onclick="setMergeFilter('${x.k}')">${x.l}</span>`).join('')}
   </div>`;
 }
 // 左栏卡片列表（2026-09-23）：窄栏不塞表格、不塞按钮 —— 状态徽章 + 冲突徽章 + 源→目标 + 标题 + 时间
 // 选中态由 mrgMrId 推导（loadMerges 重刷后仍能保持高亮，不依赖 DOM 记忆）
 function renderMrListCards() {
   const rows = _mrSortedFiltered();
-  if(!rows.length) return `<div style="padding:18px 14px;color:var(--mut);font-size:12px;text-align:center;">该筛选条件下无合并请求</div>`;
+  if(!rows.length) return `<div style="padding:18px 14px;color:var(--mut);font-size:13.5px;text-align:center;">该筛选条件下无合并请求</div>`;
   return rows.map(m=>{
     const st = _mrStatusInfo(m.status);
     const unresolved = m.unresolved_conflicts || 0;
@@ -788,27 +788,27 @@ function renderMrListCards() {
     const on = (mrgMrId === m.id);
     // 冲突徽章：点击直达「⚠ 冲突处理」（stopPropagation 避免与整卡选中冲突）
     const conflictChip = conflicts.length
-      ? `<span class="st ${unresolved>0?'r':'ok'}" style="font-size:9.5px;cursor:pointer;" title="点击直达「⚠ 冲突处理」"
+      ? `<span class="st ${unresolved>0?'r':'ok'}" style="font-size:11.5px;cursor:pointer;" title="点击直达「⚠ 冲突处理」"
           onclick="event.stopPropagation();openMrDetail(${m.id},'conflicts')">⚠ ${conflicts.length-unresolved}/${conflicts.length}</span>`
       : '';
     const titleHtml = m.title
-      ? `<div style="font-size:11.5px;color:var(--mut);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.title)}</div>` : '';
+      ? `<div style="font-size:12.5px;color:var(--mut);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.title)}</div>` : '';
     const noteHtml = (m.status==='closed' && m.review_note)
-      ? `<div style="font-size:10.5px;color:var(--mut);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(m.review_note)}">💬 ${esc(m.review_note)}</div>` : '';
+      ? `<div style="font-size:12px;color:var(--mut);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(m.review_note)}">💬 ${esc(m.review_note)}</div>` : '';
     return `<div class="mr-card${on?' on':''}" data-mr-card="${m.id}" onclick="openMrDetail(${m.id})"
       title="查看详情：变更对比 / 冲突处理 / 叠加图谱 / 评审意见 / 变更记录"
       style="border-left:3px solid ${on?'var(--blue)':'transparent'};padding:9px 12px 10px;">
       <div style="display:flex;align-items:center;gap:6px;">
-        <span class="st ${st[1]}" style="font-size:10px;">${st[0]}</span>
+        <span class="st ${st[1]}" style="font-size:12px;">${st[0]}</span>
         ${conflictChip}
         <span style="flex:1;"></span>
-        <span style="font-size:10px;color:var(--mut);white-space:nowrap;">#${m.id}</span>
+        <span style="font-size:12px;color:var(--mut);white-space:nowrap;">#${m.id}</span>
       </div>
-      <div style="font-size:12.5px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+      <div style="font-size:13.5px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
         <b>${esc(m.source_branch)}</b> <span style="color:var(--mut);">→</span> <b>${esc(m.target_branch)}</b>
       </div>
       ${titleHtml}${noteHtml}
-      <div style="font-size:10.5px;color:var(--mut);margin-top:4px;">${esc(String(m.created_at||'').slice(0,16))}${m.created_by?' · '+esc(m.created_by):''}</div>
+      <div style="font-size:12px;color:var(--mut);margin-top:4px;">${esc(String(m.created_at||'').slice(0,16))}${m.created_by?' · '+esc(m.created_by):''}</div>
     </div>`;
   }).join('');
 }
@@ -816,8 +816,8 @@ function renderConflictItem(mrId, c) {
   // P0-2：每条冲突含 conflict_type（property 属性冲突 | delete_modify 删除vs修改冲突），缺省兜底 property（后端未升级时降级兼容）
   const ctype = c.conflict_type || 'property';
   const typeBadge = ctype==='delete_modify'
-    ? '<span class="st r" style="font-size:9.5px;" title="删除 vs 修改冲突：一方已软删该实体，另一方仍有修改">🗑 删除/修改</span>'
-    : '<span class="st w" style="font-size:9.5px;">属性</span>';
+    ? '<span class="st r" style="font-size:11.5px;" title="删除 vs 修改冲突：一方已软删该实体，另一方仍有修改">🗑 删除/修改</span>'
+    : '<span class="st w" style="font-size:11.5px;">属性</span>';
   if(ctype === 'delete_modify') {
     // 删除/修改冲突：二选一（keep_delete 目标分支一并下线该实体 | keep_modify 目标分支保留该实体）
     const radioName = `rc-${mrId}-${c.entity_id}-del`.replace(/[^\w-]/g,'_');
@@ -830,8 +830,8 @@ function renderConflictItem(mrId, c) {
       <span style="flex:1"></span>
       ${c.resolved?`<span class="st ok" title="${c.resolved_by?'裁决人 '+c.resolved_by+' · ':''}${c.resolved_at||''}">✓ 已解决${c.pick==='keep_delete'?'（保留删除）':'（保留修改）'}${c.resolved_by?' · '+esc(c.resolved_by):''}</span>`:'<span class="st r">⚠ 未解决</span>'}
     </div>
-    <div style="font-size:11.5px;color:var(--mut);margin-bottom:6px;">⚠ ${esc(srcDesc)}，${esc(otherDesc)} —— 需明确取舍后才能通过合并</div>
-    <div style="display:flex;align-items:center;gap:12px;font-size:12px;flex-wrap:wrap;">
+    <div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">⚠ ${esc(srcDesc)}，${esc(otherDesc)} —— 需明确取舍后才能通过合并</div>
+    <div style="display:flex;align-items:center;gap:12px;font-size:13.5px;flex-wrap:wrap;">
       <label style="display:flex;gap:4px;align-items:center;"><input type="radio" name="${radioName}" value="keep_delete" ${checked('keep_delete')}> 保留删除（目标分支一并下线）</label>
       <label style="display:flex;gap:4px;align-items:center;"><input type="radio" name="${radioName}" value="keep_modify" ${checked('keep_modify')}> 保留修改（目标分支保留该实体）</label>
       <button class="btn sm" onclick="resolveConflict(${mrId}, '${esc(c.entity_id)}', '${esc(c.field)}', '${radioName}')">💾 保存</button>
@@ -849,14 +849,14 @@ function renderConflictItem(mrId, c) {
       <span style="flex:1"></span>
       ${c.resolved?`<span class="st ok" title="${c.resolved_by?'裁决人 '+c.resolved_by+' · ':''}${c.resolved_at||''}">✓ 已解决${c.pick==='manual'?'（手动:'+esc(String(c.value||''))+'）':c.pick==='source'?'（以源为准）':'（以目标为准）'}${c.resolved_by?' · '+esc(c.resolved_by):''}</span>`:'<span class="st r">⚠ 未解决</span>'}
     </div>
-    <div style="font-size:11.5px;color:var(--mut);margin-bottom:6px;">
+    <div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">
       源分支 <code>${esc(String(c.source_value))}</code> &nbsp;≠&nbsp; 目标分支 <code>${esc(String(c.target_value))}</code>
     </div>
-    <div style="display:flex;align-items:center;gap:12px;font-size:12px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:12px;font-size:13.5px;flex-wrap:wrap;">
       <label style="display:flex;gap:4px;align-items:center;"><input type="radio" name="${radioName}" value="source" ${checked(0)}> 以源分支为准</label>
       <label style="display:flex;gap:4px;align-items:center;"><input type="radio" name="${radioName}" value="target" ${checked(1)}> 以目标分支为准</label>
       <label style="display:flex;gap:4px;align-items:center;"><input type="radio" name="${radioName}" value="manual" ${checked(2)} onchange="manualVisible('${radioName}')"> 自定义</label>
-      <input id="${radioName}-manual" placeholder="手动值" value="${esc(c.pick==='manual'?String(c.value||''):'')}" ${manualHidden} style="width:150px;border:1px solid var(--line);border-radius:5px;padding:3px 7px;font-size:11.5px;">
+      <input id="${radioName}-manual" placeholder="手动值" value="${esc(c.pick==='manual'?String(c.value||''):'')}" ${manualHidden} style="width:150px;border:1px solid var(--line);border-radius:5px;padding:3px 7px;font-size:12.5px;">
       <button class="btn sm" onclick="resolveConflict(${mrId}, '${esc(c.entity_id)}', '${esc(c.field)}', '${radioName}')">💾 保存</button>
     </div>
   </div>`;
@@ -1012,7 +1012,7 @@ function openMrDetail(mrId, tab) {
   const gd = document.getElementById('mrd-graph-detail'); if(gd) gd.innerHTML = '';
   // 差异清单骨架先建出来，避免首屏空白
   const side = document.getElementById('mrd-diff-side');
-  if(side) side.innerHTML = '<div style="padding:16px;color:var(--mut);text-align:center;font-size:12px;">对比差异中…</div>';
+  if(side) side.innerHTML = '<div style="padding:16px;color:var(--mut);text-align:center;font-size:13.5px;">对比差异中…</div>';
   const dmain = document.getElementById('mrd-diff-main');
   if(dmain) dmain.innerHTML = '<div style="padding:18px;color:var(--mut);text-align:center;">选择左侧差异实体查看字段级详情</div>';
   const tn = document.getElementById('mrd-tab-conflict-n'); if(tn) tn.textContent = '';
@@ -1208,7 +1208,7 @@ async function renderDiffOverlay(pane, diffData, conflictIds) {
   svgEl.innerHTML = `<svg width="${Math.max(W,200)}" height="${Math.max(H,80)}" viewBox="0 0 ${Math.max(W,200)} ${Math.max(H,80)}" xmlns="http://www.w3.org/2000/svg" role="img">
     <defs><marker id="dog-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/></marker></defs>
     ${edgeSvgStr}${nodeSvg}</svg>`;
-  legEl.innerHTML = `<b style="font-size:12px;">基线 ${esc(base)} → ${esc(head)}</b>
+  legEl.innerHTML = `<b style="font-size:13.5px;">基线 ${esc(base)} → ${esc(head)}</b>
     <span style="color:#3B6D11;">＋ 新增 ${added.size}</span><span style="color:#BA7517;">✎ 修改 ${modified.size}${relModifiedSet.size?`（含边 ${relModifiedSet.size}）`:''}</span>
     <span style="color:#A32D2D;">－ 移除 ${removed.size}</span>${conflict.size?`<span style="color:#534AB7;">⚠ 冲突 ${conflict.size}</span>`:''}
     <span style="color:#888780;">灰=1-hop 上下文${ctxCut?`（超出上限仅显示 ${ctxCap} 个）`:''}</span>`;
@@ -1233,7 +1233,7 @@ function dogShowDetail(pane, encId) {
   if(kind==='modified' || kind==='conflict' || kind==='added') body = propRows(h.properties);
   else body = propRows(b.properties);
   const rels = st.allRels.filter(r=>r.source_id===id || r.target_id===id).slice(0,8);
-  const relHtml = rels.length ? `<div style="margin-top:6px;font-size:11.5px;color:var(--mut);">关联关系（前 ${rels.length}）：${rels.map(r=>`<code>${esc(r.relation_type)}</code>`).join('、')}</div>` : '';
+  const relHtml = rels.length ? `<div style="margin-top:6px;font-size:12.5px;color:var(--mut);">关联关系（前 ${rels.length}）：${rels.map(r=>`<code>${esc(r.relation_type)}</code>`).join('、')}</div>` : '';
   detEl.innerHTML = `<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--blue-l);">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       <b>${esc(h.name||b.name||id)}</b><code>${esc(id)}</code>
@@ -1241,15 +1241,15 @@ function dogShowDetail(pane, encId) {
       ${h.status?`<span class="st">head: ${esc(h.status)}</span>`:''}${b.status?`<span class="st">base: ${esc(b.status)}</span>`:''}
       <span style="flex:1"></span><button class="btn sm ghost" onclick="document.getElementById('${pane}-graph-detail').innerHTML=''">✕</button>
     </div>
-    ${kind==='modified'||kind==='conflict' ? `<div style="margin-top:8px;font-size:12px;"><b>属性变更（base → head）</b>
-      <table style="width:100%;border-collapse:collapse;margin-top:4px;font-size:12px;">
+    ${kind==='modified'||kind==='conflict' ? `<div style="margin-top:8px;font-size:13.5px;"><b>属性变更（base → head）</b>
+      <table style="width:100%;border-collapse:collapse;margin-top:4px;font-size:13.5px;">
         ${(() => { const modEnt = (st.modEntries||[]).find(x=>x.id===id); const chs = modEnt ? modEnt.changes||[] : [];
           return chs.length ? chs.map(ch=>`<tr><td style="padding:3px 8px;white-space:nowrap;"><code>${esc(ch.field)}</code></td>
           <td style="padding:3px 8px;color:var(--mut);">${esc(String(ch.base_value).slice(0,60))}</td>
           <td style="padding:3px 8px;">→</td><td style="padding:3px 8px;"><b>${esc(String(ch.head_value).slice(0,60))}</b></td></tr>`).join('')
           : '<tr><td colspan="4" style="padding:3px 8px;color:var(--mut);">无字段级变更记录</td></tr>'; })()}
-      </table></div>` : `<div style="margin-top:8px;font-size:12px;"><b>${kind==='added'?'head 属性':'base 属性'}</b>
-      <table style="width:100%;border-collapse:collapse;margin-top:4px;font-size:12px;">${body}</table></div>`}
+      </table></div>` : `<div style="margin-top:8px;font-size:13.5px;"><b>${kind==='added'?'head 属性':'base 属性'}</b>
+      <table style="width:100%;border-collapse:collapse;margin-top:4px;font-size:13.5px;">${body}</table></div>`}
     ${relHtml}</div>`;
 }
 function dogFlash(pane, encId) {
@@ -1280,8 +1280,8 @@ function bdTab(t) {
   _bdTabCur = t;
   const on = 'background:var(--blue-l);color:var(--blue-d);font-weight:600;';
   const off = '';
-  document.getElementById('bd-tab-list').style.cssText = `cursor:pointer;font-size:12px;padding:6px 14px;border-radius:6px 6px 0 0;${t==='list'?on:''}`;
-  document.getElementById('bd-tab-graph').style.cssText = `cursor:pointer;font-size:12px;padding:6px 14px;border-radius:6px 6px 0 0;${t==='graph'?on:''}`;
+  document.getElementById('bd-tab-list').style.cssText = `cursor:pointer;font-size:13.5px;padding:6px 14px;border-radius:6px 6px 0 0;${t==='list'?on:''}`;
+  document.getElementById('bd-tab-graph').style.cssText = `cursor:pointer;font-size:13.5px;padding:6px 14px;border-radius:6px 6px 0 0;${t==='graph'?on:''}`;
   ['bd-summary','bd-filter','bd-body'].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display = t==='list' ? '' : 'none'; });
   const gp = document.getElementById('bd-graph-pane'); if(gp) gp.style.display = t==='graph' ? '' : 'none';
   if(t==='graph' && bdData) renderDiffOverlay('bd', bdData, []);
@@ -1400,16 +1400,16 @@ function renderMrOverview(m) {
   if(dep.length) checks.push({ok:-1, t:'风险提示', d:`${dep.length} 个实体本次被置为 deprecated（下游引用可能受影响）`, tab:'diff', btn:'去核对'});
   const ico = c => c.ok === 1 ? '✅' : (c.ok === 0 ? '⚠️' : '⛔');
   const checksHtml = `<div style="border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden;max-width:960px;">
-    <div style="padding:9px 14px;background:#fafaf7;border-bottom:1px solid var(--line);font-size:12.5px;font-weight:600;color:var(--blue-d);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <div style="padding:9px 14px;background:#fafaf7;border-bottom:1px solid var(--line);font-size:13.5px;font-weight:600;color:var(--blue-d);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       🧭 合并就绪度检查
       <span style="flex:1"></span>
-      <span style="font-weight:400;font-size:11px;color:var(--mut);">判据与服务端 diff / 冲突接口同源，与「通过合并」按钮一致</span>
+      <span style="font-weight:400;font-size:12.5px;color:var(--mut);">判据与服务端 diff / 冲突接口同源，与「通过合并」按钮一致</span>
     </div>
     ${checks.map(c=>`<div style="display:flex;gap:10px;align-items:flex-start;padding:9px 14px;border-bottom:1px dashed var(--line);">
-      <span style="flex:none;font-size:13px;line-height:1.5;">${ico(c)}</span>
+      <span style="flex:none;font-size:14.5px;line-height:1.5;">${ico(c)}</span>
       <div style="flex:1;min-width:0;">
-        <div style="font-size:12.5px;font-weight:600;">${c.t}</div>
-        <div style="font-size:11.5px;color:var(--mut);margin-top:2px;">${c.d}</div>
+        <div style="font-size:13.5px;font-weight:600;">${c.t}</div>
+        <div style="font-size:12.5px;color:var(--mut);margin-top:2px;">${c.d}</div>
       </div>
       ${c.btn ? `<button class="btn sm ghost" onclick="mrDetailTab('${c.tab}')">${c.btn}</button>` : ''}
     </div>`).join('')}
@@ -1423,20 +1423,20 @@ function renderMrOverview(m) {
     const seg = (w, color) => w ? `<div style="width:${w}%;background:${color};" title="${w}%"></div>` : '';
     const pAdd = nTotal ? Math.round(v.add / nTotal * 100) : 0, pMod = nTotal ? Math.round(v.mod / nTotal * 100) : 0, pRem = nTotal ? Math.round(v.rem / nTotal * 100) : 0;
     return {t, n, html:`<div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
-      <span style="width:150px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(t)}</span>
+      <span style="width:150px;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(t)}</span>
       <div style="flex:1;height:8px;border-radius:4px;background:var(--line);overflow:hidden;display:flex;">${seg(pAdd,'var(--blue-d)')}${seg(pMod,'var(--amb)')}${seg(pRem,'var(--red)')}</div>
-      <span style="font-size:11px;color:var(--mut);width:132px;text-align:right;white-space:nowrap;">＋${v.add} / ✎${v.mod} / －${v.rem}</span>
+      <span style="font-size:12.5px;color:var(--mut);width:132px;text-align:right;white-space:nowrap;">＋${v.add} / ✎${v.mod} / －${v.rem}</span>
     </div>`};
   }).sort((a,b)=>b.n-a.n).slice(0, 10).map(x=>x.html).join('');
   const distHtml = Object.keys(byType).length ? `<div style="border:1px solid var(--line);border-radius:10px;background:#fff;margin-top:12px;max-width:960px;overflow:hidden;">
-    <div style="padding:9px 14px;background:#fafaf7;border-bottom:1px solid var(--line);font-size:12.5px;font-weight:600;color:var(--blue-d);">📊 差异分布（按实体类型，取变更数前 10）</div>
+    <div style="padding:9px 14px;background:#fafaf7;border-bottom:1px solid var(--line);font-size:13.5px;font-weight:600;color:var(--blue-d);">📊 差异分布（按实体类型，取变更数前 10）</div>
     <div style="padding:8px 14px;">${typeRows}</div>
   </div>` : '';
   el.innerHTML = checksHtml + distHtml + `
     <div style="margin-top:12px;max-width:960px;">
       <div id="mrd-preview-box" style="display:none;border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden;"></div>
     </div>
-    <div style="margin-top:12px;max-width:960px;font-size:11.5px;color:var(--mut);">
+    <div style="margin-top:12px;max-width:960px;font-size:12.5px;color:var(--mut);">
       💡 底部「🔮 合并结果预览」可就地展开 dry-run 结果；「🔍 变更对比」看字段级差异；「⚠ 冲突处理」逐条裁决。
     </div>`;
 }
@@ -1460,11 +1460,11 @@ function renderMergeDiff() {
   if(!document.getElementById('mrd-diff-list')) {
     sideEl.innerHTML = `
       <div style="padding:8px 10px;border-bottom:1px solid var(--line);">
-        <div style="display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--mut);">差异清单<span style="flex:1;"></span><span style="font-weight:400;font-size:10.5px;">冲突/高风险置顶</span></div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--mut);">差异清单<span style="flex:1;"></span><span style="font-weight:400;font-size:12px;">冲突/高风险置顶</span></div>
         <div id="mrd-diff-filterbar" style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px;"></div>
         <input id="mrd-diff-kw" placeholder="搜索 名称 / ID / 类型 / 字段 / 来源…" value="${esc(mdFilter.kw)}"
           oninput="mdFilter.kw=this.value.trim();renderMrDiffList();"
-          style="width:100%;box-sizing:border-box;margin-top:6px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+          style="width:100%;box-sizing:border-box;margin-top:6px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;">
       </div>
       <div id="mrd-diff-list" style="flex:1;overflow-y:auto;"></div>`;
   }
@@ -1500,11 +1500,11 @@ function renderMrDiffList() {
   if(barEl) {
     const chip = (k, label) => {
       const on = mdFilter.cat === k;
-      return `<span style="cursor:pointer;padding:2px 9px;border-radius:10px;font-size:11px;${on ? 'background:var(--blue-l);color:var(--blue-d);font-weight:600;' : 'color:var(--mut);border:1px solid var(--line);'}" onclick="setMrDiffCat('${k}')">${label}</span>`;
+      return `<span style="cursor:pointer;padding:2px 9px;border-radius:10px;font-size:12.5px;${on ? 'background:var(--blue-l);color:var(--blue-d);font-weight:600;' : 'color:var(--mut);border:1px solid var(--line);'}" onclick="setMrDiffCat('${k}')">${label}</span>`;
     };
     barEl.innerHTML = chip('all', `全部 ${counts.all}`) + chip('add', `＋${counts.add}`) + chip('mod', `✎${counts.mod}`)
       + chip('rem', `－${counts.rem}`) + chip('conflict', `⚠${counts.conflict}`)
-      + `<span style="font-size:10.5px;color:var(--mut);align-self:center;margin-left:2px;">显示 ${shown.length}</span>`;
+      + `<span style="font-size:12px;color:var(--mut);align-self:center;margin-left:2px;">显示 ${shown.length}</span>`;
   }
   const row = (it) => {
     const e = it.e, conf = confOf(it);
@@ -1515,12 +1515,12 @@ function renderMrDiffList() {
       : (it.kind === 'mod' ? (_riskTag(e, _mrgConflictIds) || '<span class="st w">修改</span>') : '<span class="st r">移除</span>'));
     const nch = (e.changes||[]).length;
     return `<div onclick="mrgFocusEntity('${esc(e.id)}')" data-mrd-id="${esc(e.id)}" style="cursor:pointer;padding:7px 10px;border-bottom:1px dashed var(--line);border-left:3px solid ${color};${conf?'background:#fdf3f3;':''}" title="点击查看字段级详情">
-      <div style="display:flex;align-items:center;gap:6px;"><b style="color:${color};">${ico}</b> <b style="font-size:12px;">${esc(e.name)}</b>${nch?`<span style="font-size:10px;color:var(--mut);">${nch} 字段</span>`:''}</div>
-      <div style="font-size:10.5px;color:var(--mut);margin-top:2px;word-break:break-all;"><code>${esc(e.id)}</code> ${badge} <span>${esc(e.entity_type||'-')}</span></div>
+      <div style="display:flex;align-items:center;gap:6px;"><b style="color:${color};">${ico}</b> <b style="font-size:13.5px;">${esc(e.name)}</b>${nch?`<span style="font-size:12px;color:var(--mut);">${nch} 字段</span>`:''}</div>
+      <div style="font-size:12px;color:var(--mut);margin-top:2px;word-break:break-all;"><code>${esc(e.id)}</code> ${badge} <span>${esc(e.entity_type||'-')}</span></div>
     </div>`;
   };
   listEl.innerHTML = shown.length ? shown.map(row).join('')
-    : `<div style="padding:16px;color:var(--mut);text-align:center;font-size:12px;">${total ? '无匹配筛选条件的差异项' : '两个分支无差异'}</div>`;
+    : `<div style="padding:16px;color:var(--mut);text-align:center;font-size:13.5px;">${total ? '无匹配筛选条件的差异项' : '两个分支无差异'}</div>`;
 }
 function setMrDiffCat(c) { mdFilter.cat = c; renderMrDiffList(); }
 // 字段级详情（主区）：实体头 + 字段变更表 + 就地的冲突解决卡片
@@ -1539,30 +1539,30 @@ function mrgFocusEntity(id) {
     const color = kind==='add' ? 'var(--blue-d)' : (kind==='mod' ? 'var(--amb)' : 'var(--red)');
     const changes = ent.changes||[];
     html += `<div style="border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:10px;">
-      <div style="font-size:13px;font-weight:600;">${kindLabel} <b style="color:${color};">${esc(ent.name)}</b> <span class="st w" style="font-size:9.5px;">${esc(ent.entity_type||'-')}</span></div>
-      <div style="font-size:11px;color:var(--mut);margin-top:2px;"><code>${esc(ent.id)}</code>${_riskTag(ent,_mrgConflictIds)?' '+_riskTag(ent,_mrgConflictIds):''}${_bdProvBadge(ent)}</div>
-      ${changes.length ? '' : '<div style="font-size:11.5px;color:var(--mut);margin-top:6px;">（此次变更无字段级变化，请参考左侧清单）</div>'}
+      <div style="font-size:14.5px;font-weight:600;">${kindLabel} <b style="color:${color};">${esc(ent.name)}</b> <span class="st w" style="font-size:11.5px;">${esc(ent.entity_type||'-')}</span></div>
+      <div style="font-size:12.5px;color:var(--mut);margin-top:2px;"><code>${esc(ent.id)}</code>${_riskTag(ent,_mrgConflictIds)?' '+_riskTag(ent,_mrgConflictIds):''}${_bdProvBadge(ent)}</div>
+      ${changes.length ? '' : '<div style="font-size:12.5px;color:var(--mut);margin-top:6px;">（此次变更无字段级变化，请参考左侧清单）</div>'}
     </div>`;
     html += changes.map(ch=>`
       <div style="padding:8px 0;border-bottom:1px dashed var(--line);">
-        <div style="font-size:12px;font-weight:600;">字段 <code>${esc(ch.field)}</code></div>
-        <div style="display:flex;gap:14px;font-size:11.5px;margin-top:4px;flex-wrap:wrap;">
+        <div style="font-size:13.5px;font-weight:600;">字段 <code>${esc(ch.field)}</code></div>
+        <div style="display:flex;gap:14px;font-size:12.5px;margin-top:4px;flex-wrap:wrap;">
           <span><span class="st w">目标</span> <code>${esc(String(ch.base_value))}</code></span>
           <span><span class="st ok">源</span> <code>${esc(String(ch.head_value))}</code></span>
         </div>
       </div>`).join('');
   } else {
-    html += `<div style="border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:10px;font-size:13px;font-weight:600;">${esc(myConflicts[0].entity_name||id)}</div>`;
+    html += `<div style="border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:10px;font-size:14.5px;font-weight:600;">${esc(myConflicts[0].entity_name||id)}</div>`;
   }
   if(myConflicts.length) {
-    html += `<div style="font-size:12px;font-weight:600;color:var(--red);margin-bottom:2px;">⚠ 冲突解决（${myConflicts.length} 处）</div>`;
+    html += `<div style="font-size:13.5px;font-weight:600;color:var(--red);margin-bottom:2px;">⚠ 冲突解决（${myConflicts.length} 处）</div>`;
     html += myConflicts.map(c=>renderConflictItem(mrgMrId, c)).join('');
   } else if(ent) {
-    html += '<div style="font-size:11.5px;margin-top:6px;"><span class="st ok">✓ 该实体无属性冲突</span></div>';
+    html += '<div style="font-size:12.5px;margin-top:6px;"><span class="st ok">✓ 该实体无属性冲突</span></div>';
   }
   const title = ent ? ent.name : (myConflicts[0] && (myConflicts[0].entity_name || id)) || id;
   field.innerHTML = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
-      <span style="font-size:11px;color:var(--mut);">变更对比 › <b style="color:var(--blue-d);">${esc(title)}</b></span>
+      <span style="font-size:12.5px;color:var(--mut);">变更对比 › <b style="color:var(--blue-d);">${esc(title)}</b></span>
       <span style="flex:1;"></span>
       <button class="btn sm ghost" onclick="mrdLocateInGraph('${encodeURIComponent(id)}')" title="切到「叠加图谱」并高亮该实体">🕸 在图谱中定位</button>
       <button class="btn sm ghost" onclick="mrdSetCatConflict()" title="只看冲突项">⚠ 只看冲突</button>
@@ -1592,9 +1592,9 @@ async function loadMergeConflicts() {
     paneEl.dataset.loaded = '1';
     if(!conflicts.length) {
       paneEl.innerHTML = `<div style="padding:40px 20px;text-align:center;">
-        <div style="font-size:32px;">🎉</div>
-        <div style="font-size:14px;font-weight:600;color:var(--grn);margin-top:8px;">两个分支无属性冲突</div>
-        <div style="font-size:12px;color:var(--mut);margin-top:6px;">可直接在底部执行「✅ 通过合并」，或在「📋 概览与检查」复核就绪度</div>
+        <div style="font-size:33px;">🎉</div>
+        <div style="font-size:15.5px;font-weight:600;color:var(--grn);margin-top:8px;">两个分支无属性冲突</div>
+        <div style="font-size:13.5px;color:var(--mut);margin-top:6px;">可直接在底部执行「✅ 通过合并」，或在「📋 概览与检查」复核就绪度</div>
         <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;">
           <button class="btn sm" onclick="mrDetailTab('diff')">🔍 去看变更对比</button>
           <button class="btn sm ghost" onclick="mrDetailTab('overview')">🧭 回到就绪度检查</button>
@@ -1604,18 +1604,18 @@ async function loadMergeConflicts() {
       const pct = total ? Math.round(resolved / total * 100) : 0;
       paneEl.innerHTML = `
         <div style="position:sticky;top:0;z-index:2;background:#fafaf7;border-bottom:1px solid var(--line);padding:10px 18px;">
-          <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;">
+          <div style="display:flex;align-items:center;gap:10px;font-size:13.5px;">
             <span style="white-space:nowrap;">冲突解决 <b>${resolved}/${total}</b></span>
             <div style="flex:1;height:8px;border-radius:5px;background:var(--line);overflow:hidden;">
               <div style="height:100%;width:${pct}%;background:${mrgUnresolved>0?'var(--amb)':'var(--grn)'};transition:width .3s;"></div>
             </div>
-            <span style="white-space:nowrap;color:${mrgUnresolved>0?'var(--red)':'var(--grn)'};font-size:11px;">${mrgUnresolved>0?('⚠ '+mrgUnresolved+' 处未解决'):'✅ 已全部解决'}</span>
+            <span style="white-space:nowrap;color:${mrgUnresolved>0?'var(--red)':'var(--grn)'};font-size:12.5px;">${mrgUnresolved>0?('⚠ '+mrgUnresolved+' 处未解决'):'✅ 已全部解决'}</span>
           </div>
-          <div style="font-size:10.5px;color:var(--mut);margin-top:4px;">属性冲突：以源 / 以目标 / 自定义 三选一　·　删除-修改冲突：保留删除 / 保留修改 二选一　·　全部解决后方可通过合并</div>
+          <div style="font-size:12px;color:var(--mut);margin-top:4px;">属性冲突：以源 / 以目标 / 自定义 三选一　·　删除-修改冲突：保留删除 / 保留修改 二选一　·　全部解决后方可通过合并</div>
         </div>
         <div style="padding:10px 18px;">
           ${conflicts.map((c,i)=>`<div style="margin-bottom:8px;">
-            <div style="font-size:11px;color:var(--mut);margin-bottom:2px;">第 ${i+1} / ${total} 处</div>
+            <div style="font-size:12.5px;color:var(--mut);margin-bottom:2px;">第 ${i+1} / ${total} 处</div>
             ${renderConflictItem(mrgMrId, c)}</div>`).join('')}
         </div>`;
     }
@@ -1654,20 +1654,20 @@ async function loadMrComments() {
     const ic = _mrActionIcon(c.action);
     const color = c.action==='approve' ? 'var(--grn)' : (c.action==='reject' || c.action==='rollback') ? 'var(--red)' : 'var(--mut)';
     return `<div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px dashed var(--line);">
-      <span style="font-size:11px;font-weight:600;color:${color};white-space:nowrap;">${ic}</span>
-      <div style="flex:1;font-size:12.5px;">${esc(c.comment||'')}
-        <div style="font-size:10.5px;color:var(--mut);margin-top:2px;">${esc(c.author||'-')} · ${esc(String(c.created_at||'').slice(0,16))}</div>
+      <span style="font-size:12.5px;font-weight:600;color:${color};white-space:nowrap;">${ic}</span>
+      <div style="flex:1;font-size:13.5px;">${esc(c.comment||'')}
+        <div style="font-size:12px;color:var(--mut);margin-top:2px;">${esc(c.author||'-')} · ${esc(String(c.created_at||'').slice(0,16))}</div>
       </div></div>`;
-  }).join('') : '<div style="padding:10px 0;font-size:12px;color:var(--mut);">暂无评审记录 —— 通过 / 驳回 / 冲突裁决都会自动记入本时间线</div>';
+  }).join('') : '<div style="padding:10px 0;font-size:13.5px;color:var(--mut);">暂无评审记录 —— 通过 / 驳回 / 冲突裁决都会自动记入本时间线</div>';
   el.innerHTML = `<div style="max-width:880px;">
-    <div style="font-size:12.5px;font-weight:600;margin-bottom:8px;color:var(--blue-d);">💬 评审意见时间线（${mrgComments.length}）</div>
+    <div style="font-size:13.5px;font-weight:600;margin-bottom:8px;color:var(--blue-d);">💬 评审意见时间线（${mrgComments.length}）</div>
     ${tl}
     <div style="display:flex;gap:6px;margin-top:12px;">
       <input id="mrd-cmt-input" placeholder="追加评审意见…（回车发送）" onkeydown="if(event.key==='Enter')submitMrCommentInline()"
-        style="flex:1;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12.5px;">
+        style="flex:1;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13.5px;">
       <button class="btn sm" onclick="submitMrCommentInline()">发送</button>
     </div>
-    <div style="font-size:11px;color:var(--mut);margin-top:8px;">💡 评审人：${esc((mrgMr&&mrgMr.reviewed_by)||'尚未评审')}${(mrgMr&&mrgMr.review_note)?`　·　驳回意见：${esc(mrgMr.review_note)}`:''}</div>
+    <div style="font-size:12.5px;color:var(--mut);margin-top:8px;">💡 评审人：${esc((mrgMr&&mrgMr.reviewed_by)||'尚未评审')}${(mrgMr&&mrgMr.review_note)?`　·　驳回意见：${esc(mrgMr.review_note)}`:''}</div>
   </div>`;
 }
 async function submitMrCommentInline() {
@@ -1688,7 +1688,7 @@ async function loadMrLog() {
   el.innerHTML = '<div class="loading">加载中…</div>';
   const hist = await api(`/api/branches/${encodeURIComponent(src)}/history`).catch(()=>null);
   if(!Array.isArray(hist) || !hist.length) {
-    el.innerHTML = `<div style="padding:16px;color:var(--mut);font-size:12px;">源分支「${esc(src)}」暂无提交记录</div>`;
+    el.innerHTML = `<div style="padding:16px;color:var(--mut);font-size:13.5px;">源分支「${esc(src)}」暂无提交记录</div>`;
     return;
   }
   const groups = [];
@@ -1699,25 +1699,25 @@ async function loadMrLog() {
   });
   const rows = groups.map(g=>`
     <div style="padding:7px 14px 5px;background:#fafaf7;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;">
-      <b style="font-size:11.5px;color:var(--blue-d);">${esc(g.key)}</b>
-      <span style="color:var(--mut);font-size:10.5px;">${g.items.length} 条提交</span>
+      <b style="font-size:12.5px;color:var(--blue-d);">${esc(g.key)}</b>
+      <span style="color:var(--mut);font-size:12px;">${g.items.length} 条提交</span>
       <span style="flex:1;border-bottom:1px dashed var(--line);"></span>
-      <span style="color:var(--mut);font-size:10px;">${esc(String((g.items[0]&&g.items[0].created_at)||'').slice(0,10))}</span>
+      <span style="color:var(--mut);font-size:12px;">${esc(String((g.items[0]&&g.items[0].created_at)||'').slice(0,10))}</span>
     </div>` + g.items.map(c=>`
     <div style="border-bottom:1px solid var(--line);padding:9px 14px;background:#fff;display:flex;gap:10px;align-items:flex-start;">
-      <span style="font-size:15px;flex:none;line-height:1.3;">${(typeof wsHistKindIcon==='function'?wsHistKindIcon(c.kind):'📝')}</span>
+      <span style="font-size:16.5px;flex:none;line-height:1.3;">${(typeof wsHistKindIcon==='function'?wsHistKindIcon(c.kind):'📝')}</span>
       <div style="flex:1;min-width:0;">
         <div style="display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;">
-          <b style="font-size:12.5px;">${esc(c.message||'（无提交说明）')}</b>
+          <b style="font-size:13.5px;">${esc(c.message||'（无提交说明）')}</b>
         </div>
-        <div style="color:var(--mut);font-size:11px;margin-top:4px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <div style="color:var(--mut);font-size:12.5px;margin-top:4px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
           <span>${(typeof wsHistChangeSummary==='function'?wsHistChangeSummary(c):'')}</span>
           <span title="${esc(String(c.created_at||'').slice(0,19))}">🕐 <b>${(typeof wsHistRelTime==='function'?wsHistRelTime(c.created_at):esc(String(c.created_at||'')))}</b></span>
-          <span>👤 ${esc(c.created_by||'-')} <code style="font-size:9.5px;">#${c.id}</code></span>
+          <span>👤 ${esc(c.created_by||'-')} <code style="font-size:11.5px;">#${c.id}</code></span>
         </div>
       </div>
     </div>`).join('')).join('');
-  el.innerHTML = `<div style="font-size:11.5px;color:var(--mut);padding:8px 14px;border-bottom:1px solid var(--line);background:#fafaf7;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+  el.innerHTML = `<div style="font-size:12.5px;color:var(--mut);padding:8px 14px;border-bottom:1px solid var(--line);background:#fafaf7;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       📜 源分支 <b style="color:var(--blue-d);">${esc(src)}</b> 提交历史 · 共 ${hist.length} 条
       <span style="flex:1;"></span>
       <span>本页签为只读摘要；需要展开行内字段级快照时，请到「🕘 历史」Tab 查看当前工作分支</span>
@@ -1733,20 +1733,20 @@ async function previewMergeInline(mrId) {
   if(box.style.display !== 'none' && box.dataset.for === String(mrId)) { box.style.display = 'none'; return; }
   box.dataset.for = String(mrId);
   box.style.display = '';
-  box.innerHTML = '<div style="padding:12px 14px;color:var(--mut);font-size:12.5px;">🔮 计算合并结果中（dry-run，不落库）…</div>';
+  box.innerHTML = '<div style="padding:12px 14px;color:var(--mut);font-size:13.5px;">🔮 计算合并结果中（dry-run，不落库）…</div>';
   const r = await api(`/api/branches/merge-requests/${mrId}/preview-merge`).catch(()=>null);
-  if(!r || r.error) { box.innerHTML = `<div style="padding:12px 14px;color:var(--red);font-size:12.5px;">预览失败：${esc((r&&r.error)||'接口异常')}</div>`; return; }
+  if(!r || r.error) { box.innerHTML = `<div style="padding:12px 14px;color:var(--red);font-size:13.5px;">预览失败：${esc((r&&r.error)||'接口异常')}</div>`; return; }
   const s = r.summary || {};
-  const row = (l, n, color) => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px dashed var(--line);font-size:12.5px;">
+  const row = (l, n, color) => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px dashed var(--line);font-size:13.5px;">
     <span style="color:var(--mut);">${l}</span><b style="color:${color};">${n}</b></div>`;
   box.innerHTML = `
-    <div style="padding:9px 14px;background:#fafaf7;border-bottom:1px solid var(--line);font-size:12.5px;font-weight:600;color:var(--blue-d);display:flex;align-items:center;gap:8px;">
+    <div style="padding:9px 14px;background:#fafaf7;border-bottom:1px solid var(--line);font-size:13.5px;font-weight:600;color:var(--blue-d);display:flex;align-items:center;gap:8px;">
       🔮 合并结果预览（dry-run，不落库）
       <span style="flex:1"></span>
       <button class="btn sm ghost" onclick="document.getElementById('mrd-preview-box').style.display='none'">收起</button>
     </div>
     <div style="padding:10px 14px;">
-      <div style="font-size:11.5px;color:var(--mut);margin-bottom:8px;"><b>${esc(r.source)}</b> → ${esc(r.target)}（${esc(r.verb)}语义）· 基于当前分支差异实时计算</div>
+      <div style="font-size:12.5px;color:var(--mut);margin-bottom:8px;"><b>${esc(r.source)}</b> → ${esc(r.target)}（${esc(r.verb)}语义）· 基于当前分支差异实时计算</div>
       ${row('🟢 新增实体', s.entities_add || 0, 'var(--grn)')}
       ${row('🟠 更新实体', s.entities_update || 0, 'var(--amb)')}
       ${row('🔴 移除实体', s.entities_remove || 0, 'var(--red)')}
@@ -1755,8 +1755,8 @@ async function previewMergeInline(mrId) {
       ${row('🔗 移除关系', s.relations_remove || 0, 'var(--red)')}
       ${row('⚠ 冲突（未解决）', r.conflicts_unresolved || 0, (r.conflicts_unresolved>0) ? 'var(--red)' : 'var(--grn)')}
       ${(r.conflicts_unresolved>0)
-        ? '<div style="font-size:11.5px;color:var(--red);margin-top:8px;">⚠ 存在未解决冲突，通过前须先逐条解决（见「⚠ 冲突处理」）</div>'
-        : '<div style="font-size:11.5px;color:var(--grn);margin-top:8px;">✓ 无未解决冲突，可执行「✅ 通过合并」</div>'}
+        ? '<div style="font-size:12.5px;color:var(--red);margin-top:8px;">⚠ 存在未解决冲突，通过前须先逐条解决（见「⚠ 冲突处理」）</div>'
+        : '<div style="font-size:12.5px;color:var(--grn);margin-top:8px;">✓ 无未解决冲突，可执行「✅ 通过合并」</div>'}
     </div>`;
 }
 
@@ -1863,7 +1863,7 @@ async function mergePreview() {
       🟠 修改 <b style="color:var(--amb);">${s.ent_modified||0}</b> ·
       🔴 移除 <b style="color:var(--red);">${s.ent_removed||0}</b> ·
       🔗 关系 <b>+${s.rel_added||0}/~${s.rel_modified||0}/-${s.rel_removed||0}</b><br>
-      <span style="font-size:11px;color:var(--mut);">（发起合并时后端将检测同实体属性冲突，冲突需逐字段解决后才能通过）</span>`;
+      <span style="font-size:12.5px;color:var(--mut);">（发起合并时后端将检测同实体属性冲突，冲突需逐字段解决后才能通过）</span>`;
   } catch(e) { el.innerHTML = '预览失败：' + esc(e.message); }
 }
 

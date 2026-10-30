@@ -457,7 +457,7 @@ const _bar = (n, max, color) => {
 };
 
 function ctxViz(c, v) {
-  const g = 'display:grid;grid-template-columns:118px 1fr 62px;gap:8px;align-items:center;font-size:11px;';
+  const g = 'display:grid;grid-template-columns:118px 1fr 62px;gap:8px;align-items:center;font-size:12.5px;';
   if (c.viz === 'funnel') {
     const rk = +v['rag.recall_k'] || 0, tk = +v['rag.top_k'] || 0,
           rc = +v['rag.rerank_max_candidates'] || 0, ik = +v['rag.inject_k'] || 0,
@@ -469,11 +469,11 @@ function ctxViz(c, v) {
       ['注入 prompt', ik, '#c07a3a', `【来源1..${ik}】`],
     ];
     return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--bg2,#fafbfc);margin-bottom:10px;">`
-      + `<div style="font-size:11px;color:var(--mut);margin-bottom:7px;">漏斗容量（条）</div>`
+      + `<div style="font-size:12.5px;color:var(--mut);margin-bottom:7px;">漏斗容量（条）</div>`
       + rows.map(([n, val, col, note]) => `<div style="${g}margin-bottom:6px;">`
           + `<div style="color:var(--mut);">${n}</div>${_bar(val, base, col)}`
           + `<div style="text-align:right;font-weight:600;">${on || n !== '送重排' ? val : '—'}</div></div>`
-          + `<div style="grid-column:2 / 4;font-size:10px;color:var(--mut);margin:-3px 0 5px;">${note}</div>`).join('')
+          + `<div style="grid-column:2 / 4;font-size:12px;color:var(--mut);margin:-3px 0 5px;">${note}</div>`).join('')
       + `</div>`;
   }
   if (c.viz === 'weights') {
@@ -481,12 +481,12 @@ function ctxViz(c, v) {
     const s = a + b + cc, th = +v['rag.route_threshold'] || 0;
     const w = x => `${(x / Math.max(s, 0.01) * 100).toFixed(0)}%`;
     return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--bg2,#fafbfc);margin-bottom:10px;">`
-      + `<div style="font-size:11px;color:var(--mut);margin-bottom:6px;">置信度合成式 → 与路由阈值比较</div>`
+      + `<div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">置信度合成式 → 与路由阈值比较</div>`
       + `<div style="display:flex;height:16px;border-radius:5px;overflow:hidden;margin-bottom:6px;">`
-      + `<div style="width:${w(a)};background:#4a7ebb;color:#fff;font-size:10px;text-align:center;line-height:16px;">覆盖 ${a}</div>`
-      + `<div style="width:${w(b)};background:#3f8f6f;color:#fff;font-size:10px;text-align:center;line-height:16px;">关系 ${b}</div>`
-      + `<div style="width:${w(cc)};background:#8a6dbb;color:#fff;font-size:10px;text-align:center;line-height:16px;">类型 ${cc}</div></div>`
-      + `<div style="font-size:11px;color:var(--mut);">合计 <b style="color:var(--fg,#222);">${s.toFixed(2)}</b>`
+      + `<div style="width:${w(a)};background:#4a7ebb;color:#fff;font-size:12px;text-align:center;line-height:16px;">覆盖 ${a}</div>`
+      + `<div style="width:${w(b)};background:#3f8f6f;color:#fff;font-size:12px;text-align:center;line-height:16px;">关系 ${b}</div>`
+      + `<div style="width:${w(cc)};background:#8a6dbb;color:#fff;font-size:12px;text-align:center;line-height:16px;">类型 ${cc}</div></div>`
+      + `<div style="font-size:12.5px;color:var(--mut);">合计 <b style="color:var(--fg,#222);">${s.toFixed(2)}</b>`
       + ` ｜ 判定：置信度 ≥ <b style="color:var(--fg,#222);">${th}</b> → 纯图路由，否则向量补召</div>`
       + `</div>`;
   }
@@ -497,9 +497,9 @@ function ctxViz(c, v) {
       + `<div style="width:${Math.min(h, 1) * 100}%;background:#3f8f6f;"></div>`
       + `<div style="width:${Math.max(Math.min(h - m, 1) * 100, 0)}%;background:#c9a227;"></div>`
       + `<div style="flex:1;background:#b96a5a;"></div></div>`
-      + `<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--mut);">`
+      + `<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--mut);">`
       + `<span>0</span><span>中 ${m}</span><span>高 ${h}</span><span>1.0</span></div>`
-      + `<div style="font-size:11px;color:var(--mut);margin-top:5px;">绿=高 黄=中 红=低（仅展示口径，不影响排序）</div></div>`;
+      + `<div style="font-size:12.5px;color:var(--mut);margin-top:5px;">绿=高 黄=中 红=低（仅展示口径，不影响排序）</div></div>`;
   }
   if (c.viz === 'budget') {
     const win = +v['context.budget_window_tokens'] || 0, rt = +v['context.budget_retrieval_tokens'] || 0,
@@ -508,11 +508,11 @@ function ctxViz(c, v) {
     const eR = rr > 0 ? Math.round(win * rr) : rt, eH = hr > 0 ? Math.round(win * hr) : ht;
     const base = win || (eR + eH) || 1;
     return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--bg2,#fafbfc);margin-bottom:10px;">`
-      + `<div style="font-size:11px;color:var(--mut);margin-bottom:6px;">预算占用（窗口基准 ${win || '—'} token）</div>`
+      + `<div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">预算占用（窗口基准 ${win || '—'} token）</div>`
       + `<div style="display:flex;height:16px;border-radius:5px;overflow:hidden;background:var(--line);">`
       + `<div style="width:${(eR / base) * 100}%;background:#4a7ebb;"></div>`
       + `<div style="width:${(eH / base) * 100}%;background:#3f8f6f;"></div></div>`
-      + `<div style="font-size:11px;color:var(--mut);margin-top:5px;">`
+      + `<div style="font-size:12.5px;color:var(--mut);margin-top:5px;">`
       + `<span style="color:#4a7ebb;">■</span> 检索区 ${eR}（${rr > 0 ? '占比 ' + rr : '绝对值'}）`
       + ` ｜ <span style="color:#3f8f6f;">■</span> 历史区 ${eH}（${hr > 0 ? '占比 ' + hr : '绝对值'}）`
       + ` ｜ 合计 ${(((eR + eH) / base) * 100).toFixed(1)}%</div></div>`;
@@ -525,12 +525,12 @@ function ctxViz(c, v) {
     // 0 = 不限：不能在界面上显示成 "0 字符"（那会被理解成"什么都不给"）
     const msgcTxt = msgc > 0 ? `${msgc} 字符` : '不限（由预算与份额决定）';
     return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--bg2,#fafbfc);margin-bottom:10px;">`
-      + `<div style="font-size:11px;color:var(--mut);margin-bottom:6px;">历史区预算的固定分配结构</div>`
+      + `<div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">历史区预算的固定分配结构</div>`
       + `<div style="display:flex;height:16px;border-radius:5px;overflow:hidden;margin-bottom:5px;">`
-      + `<div style="width:50%;background:#4a7ebb;color:#fff;font-size:9.5px;text-align:center;line-height:16px;">当前话题原文 ≤50%</div>`
-      + `<div style="width:25%;background:#3f8f6f;color:#fff;font-size:9.5px;text-align:center;line-height:16px;">语义拉回→75%</div>`
-      + `<div style="flex:1;background:#c9a227;color:#fff;font-size:9.5px;text-align:center;line-height:16px;">其他话题摘要</div></div>`
-      + `<div style="font-size:11px;color:var(--mut);line-height:1.7;">`
+      + `<div style="width:50%;background:#4a7ebb;color:#fff;font-size:11.5px;text-align:center;line-height:16px;">当前话题原文 ≤50%</div>`
+      + `<div style="width:25%;background:#3f8f6f;color:#fff;font-size:11.5px;text-align:center;line-height:16px;">语义拉回→75%</div>`
+      + `<div style="flex:1;background:#c9a227;color:#fff;font-size:11.5px;text-align:center;line-height:16px;">其他话题摘要</div></div>`
+      + `<div style="font-size:12.5px;color:var(--mut);line-height:1.7;">`
       + `当前话题原文 ≤ <b>${msgs}</b> 条（+切换边界保留 <b>${keep}</b> 条）`
       + ` ｜ 语义拉回 <b>${topk}</b> 条（每角色 ≤ <b>${prc > 0 ? prc : '不限'}</b>）`
       + ` ｜ 摘要上限 <b>${sum}</b> 字符<br>`
@@ -554,18 +554,18 @@ function ctxViz(c, v) {
       + `<td style="padding:4px 8px;text-align:center;color:var(--mut);">${bTxt}</td>`
       + `<td style="padding:4px 8px;text-align:center;font-weight:600;${dim}">${+v[dk] || 0}</td></tr>`;
     return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--bg2,#fafbfc);margin-bottom:10px;">`
-      + `<div style="font-size:11px;color:var(--mut);margin-bottom:6px;">同一判定的两条路（量纲不同，数值不可互抄）</div>`
-      + `<table style="width:100%;border-collapse:collapse;font-size:11.5px;">`
-      + `<tr style="color:var(--mut);font-size:10.5px;">`
+      + `<div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">同一判定的两条路（量纲不同，数值不可互抄）</div>`
+      + `<table style="width:100%;border-collapse:collapse;font-size:12.5px;">`
+      + `<tr style="color:var(--mut);font-size:12px;">`
       + `<th style="text-align:left;padding:3px 8px;">判定</th>`
       + `<th style="padding:3px 8px;">bigram 路</th>`
       + `<th style="padding:3px 8px;">embedding 路</th></tr>`
       + hardRow('话题组匹配', '0.12（硬编码）', 'context.topic_group_match_dense')
       + row('语义拉回', 'context.topic_retrieve_threshold', 'context.topic_retrieve_threshold_dense')
       + hardRow('流程补召门', '0.5（硬编码）', 'context.semantic_fallback_gate_dense')
-      + `${on ? '' : '<tr><td colspan="3" style="padding:5px 8px;color:#8a6d1f;font-size:10.5px;">总开关已关闭 → embedding 列全部不生效，仅按 bigram 判定</td></tr>'}`
+      + `${on ? '' : '<tr><td colspan="3" style="padding:5px 8px;color:#8a6d1f;font-size:12px;">总开关已关闭 → embedding 列全部不生效，仅按 bigram 判定</td></tr>'}`
       + `</table>`
-      + `<div style="font-size:10.5px;color:var(--mut);margin-top:6px;line-height:1.6;">`
+      + `<div style="font-size:12px;color:var(--mut);margin-top:6px;line-height:1.6;">`
       + `✅ 三项 dense 阈值现已<b>全部按分位等价映射标定</b>（脚本 <code>tools/_topic_threshold_calibrate.py</code>）：`
       + `流程补召门 0.79（等价点 0.7855）｜话题组匹配 0.50（等价点 0.6023，原值 0.30 通过率 100%）｜`
       + `语义拉回 0.50（等价点 0.6022 下界，原值 0.35 通过率 99.3%）。</div></div>`;
@@ -580,7 +580,7 @@ function ctxChecksHtml(c, v) {
   }
   if (!out.length) return '';
   return `<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">`
-    + out.map(x => `<div style="font-size:11px;padding:5px 9px;border:1px solid;border-radius:6px;${CTX_LV_STYLE[x.level]}">`
+    + out.map(x => `<div style="font-size:12.5px;padding:5px 9px;border:1px solid;border-radius:6px;${CTX_LV_STYLE[x.level]}">`
         + `${x.level === 'ok' ? '✅' : x.level === 'err' ? '⛔' : x.level === 'warn' ? '⚠️' : 'ℹ️'} ${x.text}</div>`).join('')
     + `</div>`;
 }
@@ -605,9 +605,9 @@ async function loadCtxConfig() {
     return `
     <div class="panel" style="margin-bottom:12px;">
       <div class="ph">${c.title}
-        <span style="font-size:10.5px;font-weight:400;color:var(--mut);margin-left:8px;">🔗 ${n} 项耦合参数</span></div>
+        <span style="font-size:12px;font-weight:400;color:var(--mut);margin-left:8px;">🔗 ${n} 项耦合参数</span></div>
       <div class="pb">
-        ${c.hint ? `<div style="font-size:11px;color:var(--mut);margin-bottom:9px;line-height:1.65;">${c.hint}</div>` : ''}
+        ${c.hint ? `<div style="font-size:12.5px;color:var(--mut);margin-bottom:9px;line-height:1.65;">${c.hint}</div>` : ''}
         <div id="ctx-viz-${c.id}">${ctxViz(c, ctxReadVals())}</div>
         ${fields.map(f => {
           const meta = ((schema[secOf(f.key)] || {})[keyOf(f.key)]) || {};
@@ -623,23 +623,23 @@ async function loadCtxConfig() {
             //   `data-prev` 用于保存失败时**回退到改之前的值**，绝不让界面显示一个
             //   没生效的状态。
             input = `<select id="ctx-${f.key}" data-prev="${on ? '1' : '0'}"
-              onchange="ctxAutoSaveBool(this)" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:100px;">
+              onchange="ctxAutoSaveBool(this)" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;width:100px;">
               <option value="1"${on ? ' selected' : ''}>开启</option><option value="0"${on ? '' : ' selected'}>关闭</option></select>`;
           } else if (f.type === 'str') {
             input = `<input id="ctx-${f.key}" type="text" value="${cur ?? ''}"
               oninput="ctxRecheck()" placeholder="留空=不改"
-              style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:100px;">`;
+              style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;width:100px;">`;
           } else {
             input = `<input id="ctx-${f.key}" type="number" step="${f.type === 'float' ? '0.01' : '1'}" value="${cur ?? ''}"
               oninput="ctxRecheck()" placeholder="留空=不改"
-              style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:100px;">`;
+              style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;width:100px;">`;
           }
           return `<div style="display:grid;grid-template-columns:200px 110px 1fr;gap:12px;padding:8px 0;border-bottom:1px dashed var(--line);align-items:start;">
-            <div style="font-size:12px;font-weight:600;">${f.label}
-              <div style="font-weight:400;font-size:10.5px;color:var(--mut);font-family:monospace;">${f.key}</div></div>
+            <div style="font-size:13.5px;font-weight:600;">${f.label}
+              <div style="font-weight:400;font-size:12px;color:var(--mut);font-family:monospace;">${f.key}</div></div>
             <div>${input}
-              <div style="font-size:10px;color:var(--mut);margin-top:3px;">默认 ${def ?? '—'}</div></div>
-            <div style="font-size:11px;line-height:1.55;color:var(--mut);">
+              <div style="font-size:12px;color:var(--mut);margin-top:3px;">默认 ${def ?? '—'}</div></div>
+            <div style="font-size:12.5px;line-height:1.55;color:var(--mut);">
               <div>📖 ${f.desc}</div>
               <div style="color:var(--amb);margin-top:2px;">⚖️ ${f.impact}</div></div>
           </div>`;

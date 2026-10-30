@@ -32,7 +32,7 @@ function procBlocksHtml(ex, mid){
   if(_notices.length){
     const _ntBody = _notices.map(n => {
       const t = (n && typeof n === 'object') ? (n.text || '') : String(n || '');
-      return t ? `<div style="padding:2px 0;font-size:11px;color:var(--mut);">· ${esc(t)}</div>` : '';
+      return t ? `<div style="padding:2px 0;font-size:12.5px;color:var(--mut);">· ${esc(t)}</div>` : '';
     }).join('');
     if(_ntBody){
       steps.push({icon:'📌', title:`执行说明（${_notices.length}）`, status:'done',
@@ -51,13 +51,13 @@ function procBlocksHtml(ex, mid){
         const stTxt = run ? '执行中' : (s.status==='failed' ? '失败' : (s.status==='partial' ? '部分完成' : '完成'));
         const stCls = run ? 'w' : (s.status==='failed' ? 'r' : 'ok');
         const spin = run ? '<span class="proc-spin"></span>' : '';
-        const dep = (s.deps&&s.deps.length) ? '<span style="color:var(--mut);font-size:10px;">依赖: '+esc(s.deps.join('、'))+'</span>' : '';
-        const lat = s.latency_ms ? '<span style="color:var(--mut);font-size:10px;">⏱ '+(s.latency_ms/1000).toFixed(1)+'s</span>' : '';
-        return '<div style="display:flex;align-items:center;gap:6px;font-size:11px;flex-wrap:wrap;">'
-          + '<span style="color:var(--mut);font-size:10px;min-width:16px;">'+(i+1)+'.</span>'
+        const dep = (s.deps&&s.deps.length) ? '<span style="color:var(--mut);font-size:12px;">依赖: '+esc(s.deps.join('、'))+'</span>' : '';
+        const lat = s.latency_ms ? '<span style="color:var(--mut);font-size:12px;">⏱ '+(s.latency_ms/1000).toFixed(1)+'s</span>' : '';
+        return '<div style="display:flex;align-items:center;gap:6px;font-size:12.5px;flex-wrap:wrap;">'
+          + '<span style="color:var(--mut);font-size:12px;min-width:16px;">'+(i+1)+'.</span>'
           + '<span class="st '+stCls+'" style="min-width:56px;text-align:center;">'+spin+stTxt+'</span>'
           + '<b style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(s.title||s.key||('t'+(i+1)))+'</b>'
-          + (s.agent?'<span style="color:var(--mut);font-size:10px;">'+esc(s.agent)+'</span>':'')
+          + (s.agent?'<span style="color:var(--mut);font-size:12px;">'+esc(s.agent)+'</span>':'')
           + lat + dep + '</div>';
       }).join('') + '</div>';
     /* ★ 2026-10-20（单点重跑）：run_id 存在时提供入口——默认预填失败/部分完成的
@@ -72,7 +72,7 @@ function procBlocksHtml(ex, mid){
       rerunHtml = `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
         <button class="btn sm ghost" onclick="orchRerunPrompt(${_runId})">↻ 重跑子任务</button>
         <button class="btn sm ghost" onclick="orchTracePanel(${_runId}, this)" title="查看本次编排各阶段耗时与 token 成本">⏱ 执行轨迹</button>
-        <span style="font-size:10px;color:var(--mut);">重跑会连同依赖它的下游一起重跑，其余任务复用结果</span>
+        <span style="font-size:12px;color:var(--mut);">重跑会连同依赖它的下游一起重跑，其余任务复用结果</span>
       </div>`;
       window._orchRerunDefault = _bad ? (_bad.key || '') : '';
     }
@@ -144,7 +144,7 @@ function renderOrchCard(cd){
   let partialHint = '';
   if(osc === 'partial'){
     const missN = plan.filter(p=>p.status && p.status!=='done').length;
-    if(missN) partialHint = `<div style="margin-top:5px;color:var(--amb);font-size:11px;">⚠️ 编排部分完成，${missN} 个交付物缺失（建议补充缺失子任务后重跑或人工补录）</div>`;
+    if(missN) partialHint = `<div style="margin-top:5px;color:var(--amb);font-size:12.5px;">⚠️ 编排部分完成，${missN} 个交付物缺失（建议补充缺失子任务后重跑或人工补录）</div>`;
   }
   // 子任务轨迹列表（状态徽章/专长标签/摘要前 60 字/耗时/错误）
   const rows = plan.map(p=>subtaskCardHtml(p)).join('');
@@ -153,24 +153,51 @@ function renderOrchCard(cd){
   let budgetHtml = '';
   if(rb && (rb.used_tokens||0) > 0){
     const pct = Math.min(100, Math.round((rb.used_tokens||0)/(rb.budget||1)*100));
-    budgetHtml = `<div style="display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--mut);margin-top:5px;">
+    budgetHtml = `<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);margin-top:5px;">
       <span title="本运行 token 用量">🪙 ${Number(rb.used_tokens).toLocaleString()}/${Number(rb.budget||0).toLocaleString()} tokens</span>
       <span style="width:90px;height:5px;background:var(--line,#e5e8ee);border-radius:3px;overflow:hidden;display:inline-block;"><span style="display:block;height:100%;width:${pct}%;background:${pct>=100?'var(--red,#d93636)':pct>=70?'var(--amber,#c98a2e)':'var(--grn,#3b6d11)'};"></span></span>
       <span>${pct}%</span>${rb.hit?'<span class="st w">预算触顶</span>':''} · 子任务 ${rb.executed||0}/${rb.max_tasks||'-'}
     </div>`;
   }
   // P0-1（T9）：反思闭环评审展示（评分/通过/修订轮次/问题数）
+  // ★★ 2026-10-30（用户「0/100 未通过 · 评审解析失败，这个评审的依据是什么，看不出来」）：
+  //   原实现只显示「0/100 未通过 · 修订 2 轮 · 1 项问题」，**没有任何可判断的依据**：
+  //     · 按什么标准评的？（criteria 从未出过服务器）
+  //     · 多少分算过？（pass_score 默认 70，界面没写 ⇒ "72 未通过"看着像 bug）
+  //     · "解析失败"是模型没吐 JSON，还是调用直接报错？（异常被吞，连类型都没留）
+  //   现在：分数旁标出通过线；问题行始终展开；下面加一行可点的「依据 / 证据」，
+  //   展开后能看到标准原文、输入规模、以及失败时的原始回包摘要。
   const ref = cd.reflection;
   let refHtml = '';
   if(ref && ref.enabled && ref.score !== undefined && ref.score !== null){
-    const rOk = ref.passed;
-    refHtml = `<div class="proc-line" style="padding:2px 0;font-size:11px;color:var(--mut);">🔍 质量评审：<b style="color:${rOk?'var(--grn)':'var(--amb)'};">${ref.score}/100</b> ${rOk?'<span class="st ok">✓ 通过</span>':'<span class="st w">未通过</span>'}${ref.rounds>1?` · 修订 ${ref.rounds-1} 轮`:''}${(ref.issues||[]).length?` · ${ref.issues.length} 项问题`:''}${ref.degraded?' · <span class="st w">降级</span>':''}${ref.issues&&ref.issues.length?`<div style="color:var(--mut);font-size:10.5px;margin-top:2px;">${esc(ref.issues.slice(0,3).join('；'))}</div>`:''}</div>`;
+    const rOk = ref.passed;                     // true / false / null（null = 评审未完成）
+    const _unknown = (ref.passed === null || ref.passed === undefined);
+    const _ps = (ref.pass_score !== undefined && ref.pass_score !== null) ? ref.pass_score : null;
+    const _ev = ref.eval || {};
+    const _dg = _ev.diag || {};
+    const _issues = ref.issues || [];
+    // 依据与证据（默认收起）：这一段才是"凭什么给这个分"的答案
+    const _crit = String(ref.criteria || '').trim();
+    const _lines = [];
+    if(_crit) _lines.push('<b>评审标准</b>（实际传给评审模型的标准原文）：<div style="white-space:pre-wrap;color:var(--ink,#333);margin:2px 0 6px;">' + esc(_crit) + '</div>');
+    if(_ps !== null) _lines.push('通过线：<b>' + _ps + '</b> 分（' + (ref.score >= _ps ? '已达线' : '未达线') + '）');
+    if(_ev.in_chars) _lines.push('评审输入：' + Number(_ev.in_chars).toLocaleString() + ' 字符' + (_ev.max_tokens ? ' · 输出上限 ' + _ev.max_tokens + ' tokens' : ''));
+    if(_ev.rounds_used) _lines.push('评审轮次：首评 + ' + Math.max(0, _ev.rounds_used - 1) + ' 次修订');
+    if(_dg.error_type) _lines.push('<span style="color:var(--red,#c92a2a);">调用异常：' + esc(_dg.error_type) + ' · ' + esc(_dg.error_msg || '无详情') + '</span>');
+    if(_dg.raw_len !== undefined) _lines.push('<span style="color:var(--amber,#c9821a);">解析失败证据：回包 ' + _dg.raw_len + ' 字符' + (_dg.finish_reason ? ' · finish_reason=' + esc(_dg.finish_reason) : '') + '</span>');
+    if(_dg.raw_head) _lines.push('<div style="white-space:pre-wrap;color:var(--mut);background:#f7f8fa;border-radius:4px;padding:4px 6px;margin-top:2px;max-height:90px;overflow:auto;">回包开头：' + esc(String(_dg.raw_head).slice(0, 240)) + '</div>');
+    if(!_lines.length) _lines.push('本次未记录评审依据（该轮早于 2026-10-30 的依据落库改动）');
+    const _bodyId = 'refwhy-' + Math.random().toString(36).slice(2, 8);
+    refHtml = `<div class="proc-line" style="padding:2px 0;font-size:12.5px;color:var(--mut);">🔍 质量评审：${_unknown?`<b style="color:var(--mut);">未完成</b> <span class="st w">评审不可用</span>`:`<b style="color:${rOk?'var(--grn)':'var(--amb)'};">${ref.score}/100</b>${_ps!==null?`<span style="font-size:12px;">（通过线 ${_ps}）</span>`:''} ${rOk?'<span class="st ok">✓ 通过</span>':'<span class="st w">未通过</span>'}`}${ref.rounds>1?` · 修订 ${ref.rounds-1} 轮`:''}${!_unknown&&_issues.length?` · ${_issues.length} 项问题`:''}${ref.degraded?' · <span class="st w">降级</span>':''}`
+      + `<span style="cursor:pointer;color:var(--blue-d,#3478f6);margin-left:6px;" onclick="(function(el){var b=document.getElementById('${_bodyId}');if(b){b.style.display=b.style.display==='none'?'block':'none';el.textContent=b.style.display==='none'?'依据 ›':'收起 ▾';}})(this)">依据 ›</span>`
+      + (_issues.length?`<div style="color:var(--mut);font-size:12px;margin-top:2px;">${_issues.slice(0,3).map(x=>'· '+esc(x)).join('<br>')}${_issues.length>3?`<br>· 其余 ${_issues.length-3} 项…`:''}</div>`:'')
+      + `<div id="${_bodyId}" style="display:none;font-size:12px;color:var(--mut);margin-top:4px;padding:6px 8px;border-left:2px solid var(--line,#e5e8ee);line-height:1.7;">${_lines.join('<br>')}</div></div>`;
   }
   // 2026-09-29（用户反馈）：AI 输出完成后，最下方平铺的子任务卡片"那一坨"默认收起 ——
   //   只留一行汇总 chip（🕸 自动编排 · N 个子任务 · 完成 M + 状态徽章），点击展开明细。
   //   此前 rows 默认展开，与已收起的执行过程收口条（V2.6）设计不一致，完成后霸屏。
   return `<div class="rc">
-    <div class="rc-chip b" style="cursor:pointer;user-select:none;" title="点击展开/收起子任务明细" onclick="orchDetailToggle(this)">🕸 自动编排 · ${plan.length} 个子任务 · ${doneN} 完成${failN?` / ${failN} 失败`:''}${degraded}${oscBadge}<span class="chev" style="margin-left:6px;font-size:9px;">▾</span></div>
+    <div class="rc-chip b" style="cursor:pointer;user-select:none;" title="点击展开/收起子任务明细" onclick="orchDetailToggle(this)">🕸 自动编排 · ${plan.length} 个子任务 · ${doneN} 完成${failN?` / ${failN} 失败`:''}${degraded}${oscBadge}<span class="chev" style="margin-left:6px;font-size:11.5px;">▾</span></div>
     ${partialHint}
     ${budgetHtml}
     ${refHtml}
@@ -329,13 +356,13 @@ function cardSysmlTabs(cd, content) {
   const codeCnt = content ? Math.floor((String(content).match(/```/g)||[]).length / 2) : 0;
   const codePane = code
     ? `<pre class="svm-code"><code>${escMd(code)}</code></pre>`
-    : `<div style="color:var(--mut);font-size:12px;padding:14px;text-align:center;">未检测到 SysML v2 代码块</div>`;
+    : `<div style="color:var(--mut);font-size:13.5px;padding:14px;text-align:center;">未检测到 SysML v2 代码块</div>`;
   return `<div class="sv-card svm-card-wrap">
     <div class="svm-tabs">
       <span class="svm-tab active" data-tab="code" onclick="svmTabSwitch(this)" title="SysML v2 代码">代码<i class="sv-cnt">${codeCnt>0?codeCnt:''}</i></span>
       <span class="svm-tab" data-tab="view" onclick="svmTabSwitch(this)" title="按「${esc(sv.intent||'模型')}」意图即时投影">视图<i class="sv-cnt">${entries.length}</i></span>
-      <span style="flex:1;display:flex;align-items:center;justify-content:flex-end;font-size:10.5px;color:var(--mut);padding-right:6px;">按「${esc(sv.intent||'模型')}」意图投影 · ${parsed.nodes} 元素 / ${parsed.edges} 关系</span>
-      <button class="btn sm ghost" style="padding:1px 8px;font-size:10.5px;flex:none;" onclick="svmCopyCode(this)" title="复制本消息全部 SysML v2 代码">📋 复制</button>
+      <span style="flex:1;display:flex;align-items:center;justify-content:flex-end;font-size:12px;color:var(--mut);padding-right:6px;">按「${esc(sv.intent||'模型')}」意图投影 · ${parsed.nodes} 元素 / ${parsed.edges} 关系</span>
+      <button class="btn sm ghost" style="padding:1px 8px;font-size:12px;flex:none;" onclick="svmCopyCode(this)" title="复制本消息全部 SysML v2 代码">📋 复制</button>
     </div>
     <div class="svm-pane" data-pane="code">${codePane}</div>
     <div class="svm-pane" data-pane="view" style="display:none;">${svmThumbsHtml(sv)}</div>
@@ -431,7 +458,7 @@ function renderSummaryPanel(cd) {
     if (!mid) return '';
     return '<div class="summary-panel summary-empty" data-mid="' + esc(mid) + '">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-      '<span style="font-size:11.5px;color:var(--mut);">💡 暂无结论速览</span>' +
+      '<span style="font-size:12.5px;color:var(--mut);">💡 暂无结论速览</span>' +
       '<button class="btn sm ghost" onclick="generateMessageSummary(' + "'" + esc(mid) + "'" + ', this)" title="根据本次输出的子任务/工具调用规则生成结论速览">📝 生成结论</button>' +
       '</div></div>';
   }
@@ -442,7 +469,7 @@ function renderSummaryPanel(cd) {
   var stats = s.stats || {};
   var bulletsHtml = bullets.map(function(b) { return '<li>' + esc(b) + '</li>'; }).join('');
   var artifactsHtml = artifacts.length
-    ? artifacts.map(function(a) { return '<span class="tag" style="margin-right:4px;font-size:10.5px;background:var(--color-primary-bg,#e8f0fe);color:var(--color-primary,#2f6fed);" title="' + esc(a.ref || '') + '">' + esc(a.kind || '产物') + ': ' + esc(a.label || '') + '</span>'; }).join('')
+    ? artifacts.map(function(a) { return '<span class="tag" style="margin-right:4px;font-size:12px;background:var(--color-primary-bg,#e8f0fe);color:var(--color-primary,#2f6fed);" title="' + esc(a.ref || '') + '">' + esc(a.kind || '产物') + ': ' + esc(a.label || '') + '</span>'; }).join('')
     : '';
   var statsParts = [];
   if (stats.tokens) statsParts.push('🪙 ' + Number(stats.tokens).toLocaleString() + ' tokens');
@@ -460,8 +487,8 @@ function renderSummaryPanel(cd) {
     (bulletsHtml ? '<ul class="summary-bullets">' + bulletsHtml + '</ul>' : '') +
     (artifactsHtml ? '<div class="summary-artifacts" style="margin-top:6px;">' + artifactsHtml + '</div>' : '') +
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:6px;border-top:1px dashed var(--line);">' +
-    '<span style="font-size:10px;color:var(--mut);">来源：' + esc(s.source || 'rule') + ' · 生成于 ' + esc(s.generated_at || '-') + '</span>' +
-    '<span style="font-size:10.5px;color:var(--color-muted,#888);">▼ 折叠展开下方推理过程</span>' +
+    '<span style="font-size:12px;color:var(--mut);">来源：' + esc(s.source || 'rule') + ' · 生成于 ' + esc(s.generated_at || '-') + '</span>' +
+    '<span style="font-size:12px;color:var(--color-muted,#888);">▼ 折叠展开下方推理过程</span>' +
     '</div>' +
     '</div></div>';
 }

@@ -56,7 +56,7 @@
   function _metricVal(v, status, direction) {
     if (v === null || v === undefined) {
       return '<span style="color:var(--mut);">—</span>'
-        + '<span style="font-size:10px;color:var(--mut);margin-left:4px;">不适用</span>';
+        + '<span style="font-size:12px;color:var(--mut);margin-left:4px;">不适用</span>';
     }
     const num = Number(v);
     if (isNaN(num)) return `<span style="color:var(--mut);">${esc(String(v))}</span>`;
@@ -126,30 +126,30 @@
     if(!box) return;
     const kinds = await _loadEvoKinds();
     if(!kinds.length){
-      box.innerHTML = '<span style="font-size:11px;color:var(--mut);">（后端未注册自进化作业）</span>';
+      box.innerHTML = '<span style="font-size:12.5px;color:var(--mut);">（后端未注册自进化作业）</span>';
       return;
     }
     box.innerHTML = kinds.map(([kind, label]) =>
-      `<button class="btn" style="font-size:11px;padding:4px 10px;"
+      `<button class="btn" style="font-size:12.5px;padding:4px 10px;"
         onclick="submitEvalJob('${kind}')">${esc(label)}</button>`).join(' ')
-      + '<span style="font-size:10px;color:var(--mut);margin-left:6px;">只提议不自动应用 · 产出待人工裁决</span>';
+      + '<span style="font-size:12px;color:var(--mut);margin-left:6px;">只提议不自动应用 · 产出待人工裁决</span>';
   }
 
   function _renderActions() {
     const btns = _EVAL_JOBS.map(([kind, label, eta]) =>
-      `<button class="btn" style="font-size:11px;padding:4px 10px;"
+      `<button class="btn" style="font-size:12.5px;padding:4px 10px;"
         onclick="submitEvalJob('${kind}')">${esc(label)}
-        <span style="color:var(--mut);font-size:9.5px;">${eta}</span></button>`).join(' ');
+        <span style="color:var(--mut);font-size:11.5px;">${eta}</span></button>`).join(' ');
     return `<div class="panel" style="margin-bottom:14px;">
       <div class="ph">⓪ 人工操作 <span class="tag">走作业队列 · 进度在此卡片实时刷新 · 可关页续跑</span></div>
       <div class="pb">
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">${btns}</div>
         <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-          <span style="font-size:11px;color:var(--mut);">自进化：</span>
-          <span id="evo-jobs"><span style="font-size:11px;color:var(--mut);">加载中…</span></span>
+          <span style="font-size:12.5px;color:var(--mut);">自进化：</span>
+          <span id="evo-jobs"><span style="font-size:12.5px;color:var(--mut);">加载中…</span></span>
         </div>
         <div id="evm-job-card" style="margin-top:10px;">
-          <div class="loading" style="font-size:11px;color:var(--mut);">加载最近作业…</div>
+          <div class="loading" style="font-size:12.5px;color:var(--mut);">加载最近作业…</div>
         </div>
       </div>
     </div>`;
@@ -169,7 +169,7 @@
   function _jobCardHTML(items) {
     const ev = (items || []).filter(j => _EVKIND_LABEL[j.kind]);
     if (!ev.length) {
-      return '<div style="font-size:11px;color:var(--mut);">暂无评测作业记录 —— 点上方按钮发起第一次跑批。</div>';
+      return '<div style="font-size:12.5px;color:var(--mut);">暂无评测作业记录 —— 点上方按钮发起第一次跑批。</div>';
     }
     const rows = ev.slice(0, 3).map(j => {
       const pct = Math.max(0, Math.min(100, Number(j.progress) || 0));
@@ -180,16 +180,16 @@
           : `<div style="height:6px;background:var(--line);border-radius:3px;overflow:hidden;">
                <div style="height:100%;width:${pct}%;background:var(--acc, #3b82c4);transition:width .6s;"></div></div>`;
       const stage = j.status === 'running' && j.stage
-        ? '<div style="font-size:10.5px;color:var(--mut);margin-top:3px;">' + esc(j.stage) + '</div>' : '';
+        ? '<div style="font-size:12px;color:var(--mut);margin-top:3px;">' + esc(j.stage) + '</div>' : '';
       const queued = j.status === 'queued'
-        ? '<div style="font-size:10.5px;color:var(--mut);margin-top:3px;">排队中（worker 串行，前序作业结束后开始）</div>' : '';
+        ? '<div style="font-size:12px;color:var(--mut);margin-top:3px;">排队中（worker 串行，前序作业结束后开始）</div>' : '';
       return `<div style="padding:7px 0;border-bottom:1px solid var(--line);">
-        <div style="display:flex;gap:8px;align-items:center;font-size:11.5px;">
+        <div style="display:flex;gap:8px;align-items:center;font-size:12.5px;">
           <b style="font-weight:600;">作业 #${j.id}</b>
           <span>${esc(_EVKIND_LABEL[j.kind] || j.kind)}</span>
           ${_jobChip(j.status)}
           <span style="flex:1"></span>
-          <span style="font-size:10px;color:var(--mut);">${esc(String(j.updated_at || j.created_at || '').slice(5, 16))}</span>
+          <span style="font-size:12px;color:var(--mut);">${esc(String(j.updated_at || j.created_at || '').slice(5, 16))}</span>
         </div>
         <div style="margin-top:5px;">${bar}</div>
         ${stage}${queued}
@@ -197,8 +197,8 @@
     }).join('');
     const anyActive = ev.some(j => j.status === 'queued' || j.status === 'running');
     return rows + (anyActive
-      ? '<div style="font-size:10px;color:var(--mut);margin-top:4px;">每 2.5s 自动刷新；完成后本页数据自动更新，可放心关页，作业继续跑。</div>'
-      : '<div style="font-size:10px;color:var(--mut);margin-top:4px;">无在途作业。终态失败的详情见作业面板（更多 → 运行监控）。</div>');
+      ? '<div style="font-size:12px;color:var(--mut);margin-top:4px;">每 2.5s 自动刷新；完成后本页数据自动更新，可放心关页，作业继续跑。</div>'
+      : '<div style="font-size:12px;color:var(--mut);margin-top:4px;">无在途作业。终态失败的详情见作业面板（更多 → 运行监控）。</div>');
   }
 
   async function _refreshJobCard() {
@@ -252,7 +252,7 @@
     const lbx = document.getElementById('lbx');
     const b = document.getElementById('lbx-body');
     b.innerHTML = `<h3>${esc(title || '输入')}</h3>
-      <div style="font-size:12.5px;color:var(--txt);line-height:1.7;margin:4px 0 8px;">${html}</div>
+      <div style="font-size:13.5px;color:var(--txt);line-height:1.7;margin:4px 0 8px;">${html}</div>
       <input id="evm-prompt-input" class="ipt" style="width:100%;" placeholder="${esc(placeholder)}"
              value="${esc(value)}" />
       <div class="lbx-actions" style="margin-top:10px;">
@@ -283,7 +283,7 @@
   async function editEvalGate(gateKey, label, cur, direction) {
     const v = await evalPromptDialog({
       title: '调整门禁阈值',
-      html: '【' + esc(label) + '】<br><span style="color:var(--mut);font-size:11px;">'
+      html: '【' + esc(label) + '】<br><span style="color:var(--mut);font-size:12.5px;">'
         + '键：eval_gates.' + esc(gateKey) + ' · 判定方向：'
         + (direction === 'low' ? '≤ 阈值为绿（越小越好）' : '≥ 阈值为绿（越大越好）')
         + '</span>',
@@ -312,7 +312,7 @@
     const v = await evalPromptDialog({
       title: '改判样本 #' + sourceId,
       html: '问句：' + esc(queryExcerpt) + '…<br>'
-        + '<span style="color:var(--mut);font-size:11px;">系统当前判：'
+        + '<span style="color:var(--mut);font-size:12.5px;">系统当前判：'
         + esc(sysJudge || '—') + '</span>',
       placeholder: '正确意图（人工裁决口径）'
     });
@@ -354,7 +354,7 @@
 
     if (!kinds.length) {
       return '<div class="panel"><div class="ph">各能力最新分</div>'
-        + '<div class="pb" style="color:var(--mut);font-size:12px;">'
+        + '<div class="pb" style="color:var(--mut);font-size:13.5px;">'
         + '还没有任何评测记录。生成方式：<code>tools/eval/build_evalset.py</code> → '
         + '<code>tools/eval/run_eval.py --control</code> → <code>tools/eval/save_report.py</code>'
         + '</div></div>';
@@ -366,42 +366,42 @@
       const st = it.metric_status || {};
       const metrics = cols.length ? cols.map(c =>
         `<div style="display:flex;align-items:baseline;gap:6px;padding:3px 0;">
-          <span style="font-size:11.5px;color:var(--mut);flex:1;">${esc(c.label)}${
-            c.gate_key ? `<span style="color:var(--mut);font-size:9.5px;">${
+          <span style="font-size:12.5px;color:var(--mut);flex:1;">${esc(c.label)}${
+            c.gate_key ? `<span style="color:var(--mut);font-size:11.5px;">${
               c.direction === 'low' ? '≤' : '≥'}${c.threshold != null ? c.threshold : '?'
               } <a href="javascript:void(0)" title="调整阈值（eval_gates.${esc(c.gate_key)}）"
                 onclick="event.stopPropagation();editEvalGate('${esc(c.gate_key)}','${esc(c.label)}',${c.threshold != null ? c.threshold : 'null'},'${c.direction === 'low' ? 'low' : 'high'}')">✎</a></span>` : ''
           }</span>
           ${_metricVal(it[c.key], st[c.key], c.direction)}</div>`).join('')
-        : '<div style="font-size:11.5px;color:var(--mut);">该类型无可展示指标</div>';
+        : '<div style="font-size:12.5px;color:var(--mut);">该类型无可展示指标</div>';
       const drift = (it.fingerprint_drift && it.fingerprint_drift.length)
-        ? `<div style="font-size:10.5px;color:var(--red);margin-top:4px;">⚠ 语料漂移：${esc(it.fingerprint_drift[0])}</div>`
+        ? `<div style="font-size:12px;color:var(--red);margin-top:4px;">⚠ 语料漂移：${esc(it.fingerprint_drift[0])}</div>`
         : '';
       return `<div class="asset" style="text-align:left;cursor:pointer;" title="点击查看该评测的证据明细（错例/混淆矩阵/负对照）" onclick="openEvalReport(${it.id})">
         <div class="l" style="display:flex;justify-content:space-between;gap:6px;align-items:center;">
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(it.kind_label || _kindLabel(k))}</span>
           ${_trustBadge(it)}</div>
-        <div class="l" style="font-size:10.5px;color:var(--mut);">${esc(it.created_at || '')}</div>
+        <div class="l" style="font-size:12px;color:var(--mut);">${esc(it.created_at || '')}</div>
         <div style="margin-top:6px;">${metrics}</div>
         ${drift}
-        <div class="l" style="font-size:10.5px;color:var(--mut);margin-top:4px;">${esc(it.doc_name || '')}</div>
+        <div class="l" style="font-size:12px;color:var(--mut);margin-top:4px;">${esc(it.doc_name || '')}</div>
       </div>`;
     }).join('');
 
     // 能力覆盖：缺口要显式说出来
     const missing = (cov.missing || []).map(k => esc(_kindLabel(k))).join('、');
     const genWarn = cov.generation_quality === false
-      ? `<div style="font-size:11.5px;color:var(--amb);margin:0 0 10px;line-height:1.7;">
+      ? `<div style="font-size:12.5px;color:var(--amb);margin:0 0 10px;line-height:1.7;">
            ⚠ <b>当前没有生成质量评测</b>（答案忠实度 / 答得对不对）——检索与决策分数高
            <b>不代表答案对</b>。这是本体系已知最大的能力空白。</div>`
       : '';
     const missLine = missing
-      ? `<div style="font-size:11px;color:var(--mut);margin:0 0 10px;">尚无记录的评测类型：${missing}</div>`
+      ? `<div style="font-size:12.5px;color:var(--mut);margin:0 0 10px;">尚无记录的评测类型：${missing}</div>`
       : '';
 
     return `<div class="panel" style="margin-bottom:14px;">
       <div class="ph">① 现在什么状态 <span class="tag">各能力最新分</span><span style="flex:1"></span>
-        <span style="font-size:10.5px;color:var(--mut);">阈值口径见 core/config.py eval_gates</span></div>
+        <span style="font-size:12px;color:var(--mut);">阈值口径见 core/config.py eval_gates</span></div>
       <div class="pb">
         ${genWarn}${missLine}
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;">${cards}</div>
@@ -418,7 +418,7 @@
     });
     if (!kinds.length) {
       return '<div class="panel"><div class="ph">② 历史怎么变</div>'
-        + '<div class="pb" style="color:var(--mut);font-size:12px;">暂无历史序列。</div></div>';
+        + '<div class="pb" style="color:var(--mut);font-size:13.5px;">暂无历史序列。</div></div>';
     }
     const colMeta = d.metric_columns || {};
 
@@ -427,8 +427,8 @@
       const cols = colMeta[k] || [];
       if (!seq.length) {
         return `<div style="margin-bottom:12px;">
-          <div style="font-size:11.5px;color:var(--mut);margin-bottom:4px;">${_kindBadge(k)}</div>
-          <div style="font-size:11.5px;color:var(--mut);">无数据点</div></div>`;
+          <div style="font-size:12.5px;color:var(--mut);margin-bottom:4px;">${_kindBadge(k)}</div>
+          <div style="font-size:12.5px;color:var(--mut);">无数据点</div></div>`;
       }
       // 逐指标一行：最近 N 次的取值序列（null 断点，不补 0）
       // ★2026-10-22 晚：每个取值可点 → 打开那一次评测的证据明细
@@ -440,9 +440,9 @@
       const nOk = seq.filter(p => p.trustworthy).length;
       const nSus = seq.length - nOk;
       const dots = seq.map(p => p.trustworthy
-        ? '<span class="st ok" style="font-size:9px;padding:0 3px;" title="可信：有负对照且无语料漂移">可</span>'
-        : '<span class="st r" style="font-size:9px;padding:0 3px;" title="存疑：缺负对照或有漂移，该次分数不可当依据">疑</span>').join('');
-      const trustLine = `<div style="font-size:10.5px;color:var(--mut);margin:2px 0 6px;">
+        ? '<span class="st ok" style="font-size:11.5px;padding:0 3px;" title="可信：有负对照且无语料漂移">可</span>'
+        : '<span class="st r" style="font-size:11.5px;padding:0 3px;" title="存疑：缺负对照或有漂移，该次分数不可当依据">疑</span>').join('');
+      const trustLine = `<div style="font-size:12px;color:var(--mut);margin:2px 0 6px;">
           可信度：可信×${nOk} · 存疑×${nSus}
           <span style="margin-left:6px;">${dots}</span>
           <span style="margin-left:4px;">（旧 → 新）</span></div>`;
@@ -461,20 +461,20 @@
         }).join(' <span style="color:var(--mut);">→</span> ');
         return `<tr>
           <td style="padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--mut);">${esc(c.label)}</td>
-          <td style="padding:4px 8px;border-bottom:1px solid var(--line);font-size:11.5px;">${hasData ? line : '<span style="color:var(--mut);">该类型无此指标</span>'}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid var(--line);font-size:12.5px;">${hasData ? line : '<span style="color:var(--mut);">该类型无此指标</span>'}</td>
           <td style="padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;">${_sparkline(vals)}</td>
         </tr>`;
       }).join('');
 
       return `<div style="margin-bottom:14px;">
-        <div style="font-size:11.5px;color:var(--mut);margin-bottom:5px;">
-          ${_kindBadge(k)} <span style="font-size:10.5px;">共 ${seq.length} 次</span>
-          <span style="font-size:10.5px;color:var(--mut);">（旧 → 新，取值可点下钻）</span></div>
+        <div style="font-size:12.5px;color:var(--mut);margin-bottom:5px;">
+          ${_kindBadge(k)} <span style="font-size:12px;">共 ${seq.length} 次</span>
+          <span style="font-size:12px;color:var(--mut);">（旧 → 新，取值可点下钻）</span></div>
         ${trustLine}
-        <table class="t" style="width:100%;font-size:11.5px;">
+        <table class="t" style="width:100%;font-size:12.5px;">
           <tr><th style="padding:4px 8px;">指标</th><th style="padding:4px 8px;">取值序列</th>
             <th style="padding:4px 8px;">趋势</th></tr>
-          ${rows || '<tr><td colspan="3" style="color:var(--mut);font-size:11px;">该类型无可展示指标</td></tr>'}
+          ${rows || '<tr><td colspan="3" style="color:var(--mut);font-size:12.5px;">该类型无可展示指标</td></tr>'}
         </table>
       </div>`;
     }).join('');
@@ -489,7 +489,7 @@
   function _renderGates(g) {
     if (!g) {
       return '<div class="panel"><div class="ph">③ 什么在拦着我</div>'
-        + '<div class="pb" style="color:var(--mut);font-size:12px;">门禁状态不可用</div></div>';
+        + '<div class="pb" style="color:var(--mut);font-size:13.5px;">门禁状态不可用</div></div>';
     }
     const c = g.counts || {};
     const rows = (g.gates || []).filter(x => x.status !== 'wired');
@@ -498,10 +498,10 @@
     // 未接线门禁是**真问题**（元门禁会判红），要显眼
     const unwired = (g.gates || []).filter(x => x.status === 'unwired');
     const head = unwired.length
-      ? `<div style="font-size:11.5px;color:var(--red);margin:0 0 10px;">
+      ? `<div style="font-size:12.5px;color:var(--red);margin:0 0 10px;">
            ⚠ <b>${unwired.length} 个门禁未接线</b> —— 写了但没进 CI，等于没写。
            门禁元门禁（verify_gate_wiring）会因此判红。</div>`
-      : `<div style="font-size:11.5px;color:var(--grn);margin:0 0 10px;">
+      : `<div style="font-size:12.5px;color:var(--grn);margin:0 0 10px;">
            ✅ 全部门禁均已接线或带理由豁免</div>`;
 
     const exemptRows = rows.map(x => `<tr>
@@ -509,24 +509,24 @@
         ${esc(x.name)}</td>
       <td style="padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;">
         <span class="st ${x.status === 'unwired' ? 'r' : 'w'}">${x.status === 'unwired' ? '未接线' : '已豁免'}</span></td>
-      <td style="padding:4px 8px;border-bottom:1px solid var(--line);color:var(--mut);font-size:11px;">
+      <td style="padding:4px 8px;border-bottom:1px solid var(--line);color:var(--mut);font-size:12.5px;">
         ${esc(x.exemption_reason || '（无理由 —— 元门禁会判红）')}</td>
     </tr>`).join('');
 
     const detail = rows.length
-      ? `<table class="t" style="width:100%;font-size:11.5px;">
+      ? `<table class="t" style="width:100%;font-size:12.5px;">
           <tr><th style="padding:4px 8px;">门禁</th><th style="padding:4px 8px;">状态</th>
             <th style="padding:4px 8px;">豁免理由 / 缺口</th></tr>
           ${exemptRows}</table>`
-      : '<div style="font-size:11.5px;color:var(--mut);">无豁免、无未接线门禁。</div>';
+      : '<div style="font-size:12.5px;color:var(--mut);">无豁免、无未接线门禁。</div>';
 
     return `<div class="panel" style="margin-bottom:14px;">
       <div class="ph">③ 什么在拦着我 <span class="tag">门禁接线状态</span><span style="flex:1"></span>
-        <span style="font-size:10.5px;color:var(--mut);">共 ${c.total || 0} 个 · 已接线 ${c.wired || 0} · 豁免 ${c.exempted || 0}</span></div>
+        <span style="font-size:12px;color:var(--mut);">共 ${c.total || 0} 个 · 已接线 ${c.wired || 0} · 豁免 ${c.exempted || 0}</span></div>
       <div class="pb">
         ${head}
         ${detail}
-        <div style="font-size:10.5px;color:var(--mut);margin-top:10px;">
+        <div style="font-size:12px;color:var(--mut);margin-top:10px;">
           已接线的 ${wiredList.length} 个门禁不在此列出 —— 它们正在拦住回归。
           门禁清单与豁免理由的权威来源是 <code>tools/verify/verify_gate_wiring.py</code>。</div>
       </div>
@@ -550,7 +550,7 @@
   function _sparkline(vals) {
     const nums = (vals || []).filter(v => typeof v === 'number' && isFinite(v));
     if (nums.length < 2) {
-      return '<span style="color:var(--mut);font-size:10px;">—</span>';
+      return '<span style="color:var(--mut);font-size:12px;">—</span>';
     }
     const W = 110, H = 16, P = 2;
     const min = Math.min.apply(null, nums);
@@ -585,11 +585,11 @@
 
   function _dtable(head, rows) {
     if (!rows || !rows.length) {
-      return '<div style="color:var(--mut);font-size:11.5px;">无数据</div>';
+      return '<div style="color:var(--mut);font-size:12.5px;">无数据</div>';
     }
     const th = head.map(h => '<th style="padding:4px 8px;white-space:nowrap;">' + esc(h) + '</th>').join('');
     const tr = rows.map(r => '<tr>' + r.map(c =>
-      '<td style="padding:4px 8px;border-bottom:1px solid var(--line);font-size:11.5px;vertical-align:top;">' + c + '</td>'
+      '<td style="padding:4px 8px;border-bottom:1px solid var(--line);font-size:12.5px;vertical-align:top;">' + c + '</td>'
     ).join('') + '</tr>').join('');
     return '<table class="t" style="width:100%;"><tr>' + th + '</tr>' + tr + '</table>';
   }
@@ -623,7 +623,7 @@
         ['差距', _dval(ctl.gap)],
         ['可判别', ctl.discriminates === true ? '是' : (ctl.discriminates === false ? '否' : '—')],
         ['gold 意图类别数', _dval(ctl.distinct_gold)],
-      ]) + (ctl.note ? '<div style="font-size:11px;color:var(--amb);margin-top:6px;">' + esc(ctl.note) + '</div>' : ''));
+      ]) + (ctl.note ? '<div style="font-size:12.5px;color:var(--amb);margin-top:6px;">' + esc(ctl.note) + '</div>' : ''));
     const pc = pos.per_class || [];
     if (pc.length) {
       h += _dsection('逐意图表现（precision / recall / F1）',
@@ -638,7 +638,7 @@
     // 改完一键重建评测集，下轮 Trace 评测自动反映。
     const editable = wrong.filter(w => w.source_id);
     const editHint = editable.length
-      ? '<div style="font-size:10.5px;color:var(--mut);margin-top:5px;">'
+      ? '<div style="font-size:12px;color:var(--mut);margin-top:5px;">'
         + '改判 = 修正源头标注（intent_samples #' + esc(editable.map(w => w.source_id).join(', #').slice(0, 60))
         + '），不会立即改变本报告 —— 重建评测集后下轮生效。</div>'
       : '';
@@ -664,7 +664,7 @@
     const distRows = Object.keys(dist).map(k => [esc(k), _dval(dist[k])]);
     h += _dsection('weak 回归集路由分布（只观测，不判定）',
       _dtable(['意图', '条数'], distRows)
-      + (wr && wr.n_compared ? '<div style="font-size:11px;color:var(--mut);margin-top:6px;">'
+      + (wr && wr.n_compared ? '<div style="font-size:12.5px;color:var(--mut);margin-top:6px;">'
         + '跑批间稳定率 ' + _dval(wr.stability) + '（交集 ' + _dval(wr.n_compared) + ' 条）'
         + (wr.note ? '　' + esc(wr.note) : '') + '</div>' : ''));
     return h;
@@ -749,7 +749,7 @@
     if (hitRows.length) {
       h += _dsection('负样本有效性证据（有命中的负样本，top-1）',
         _dtable(['问句', '类别', '命中数', 'top-1 来源', '重叠度', '判读'], hitRows)
-        + '<div style="font-size:10.5px;color:var(--mut);margin-top:5px;">'
+        + '<div style="font-size:12px;color:var(--mut);margin-top:5px;">'
         + '完全无命中 ' + (negs.length - negs.filter(x => x.n_hits > 0).length)
         + '/' + negs.length + ' 条（语料里真的什么都没有）；'
         + '疑似答得了 ' + suspects.length + ' 条。复核/换问句走 gold 修订（改'
@@ -775,7 +775,7 @@
   function _renderReportDetail(r) {
     const d = r.detail || {};
     const head = '<h3 style="margin:0 0 2px;">' + esc(r.kind_label || r.eval_kind || '评测报告') + '</h3>'
-      + '<div class="mut" style="font-size:11.5px;margin-bottom:12px;">'
+      + '<div class="mut" style="font-size:12.5px;margin-bottom:12px;">'
       + esc(r.doc_name || '') + '　·　' + esc(String(r.created_at || ''))
       + '　·　报告 id=' + esc(String(r.id || '')) + '</div>';
     let body;
@@ -797,12 +797,12 @@
     try {
       r = await api('/api/eval/report?id=' + encodeURIComponent(id));
     } catch (e) {
-      b.innerHTML = '<div class="panel"><div class="pb"><div style="color:var(--red);font-size:12px;">'
+      b.innerHTML = '<div class="panel"><div class="pb"><div style="color:var(--red);font-size:13.5px;">'
         + esc('加载失败：' + (e && e.message || e)) + '</div></div></div>';
       return;
     }
     if (!r || r.ok === false) {
-      b.innerHTML = '<div class="panel"><div class="pb"><div style="color:var(--red);font-size:12px;">'
+      b.innerHTML = '<div class="panel"><div class="pb"><div style="color:var(--red);font-size:13.5px;">'
         + esc((r && r.error) || '报告不可用') + '</div></div></div>';
       return;
     }
@@ -833,15 +833,15 @@
       ]);
       if (ov && ov.ok === false) {
         _mount('<div class="panel"><div class="ph">评测管理</div><div class="pb">'
-          + '<div style="color:var(--red);font-size:12px;">评测数据不可用：'
+          + '<div style="color:var(--red);font-size:13.5px;">评测数据不可用：'
           + esc(ov.error || '未知原因') + '</div>'
-          + '<div style="color:var(--mut);font-size:11.5px;margin-top:6px;">'
+          + '<div style="color:var(--mut);font-size:12.5px;margin-top:6px;">'
           + '库若未迁移 eval_kind 列，请先跑一次 init_db 完成迁移。</div></div></div>');
         return;
       }
       if (hist && hist.ok === false) {
         _mount('<div class="panel"><div class="ph">评测管理</div><div class="pb">'
-          + '<div style="color:var(--red);font-size:12px;">历史数据不可用：'
+          + '<div style="color:var(--red);font-size:13.5px;">历史数据不可用：'
           + esc(hist.error || '未知原因') + '</div></div></div>');
         return;
       }
@@ -851,7 +851,7 @@
         _renderLatest(ov || {}) +
         _renderTrends(hist || {}) +
         _renderGates(g) +
-        '<div style="font-size:10.5px;color:var(--mut);padding:2px 2px 12px;line-height:1.7;">'
+        '<div style="font-size:12px;color:var(--mut);padding:2px 2px 12px;line-height:1.7;">'
         + '指标与阈值唯一真源：<code>core/config.py → eval_gates</code>（✎ 可就地调整，'
         + '带 schema 校验与台账；历史三色不受影响）。触发走作业队列（jobs），'
         + '手动 nightly 不自动提交快照。详细用法见 <code>docs/评测工具使用指南-20261022.md</code>。</div>'
@@ -862,7 +862,7 @@
       _refreshJobCard();
     } catch (e) {
       _mount('<div class="panel"><div class="ph">评测管理</div><div class="pb">'
-        + '<div style="color:var(--red);font-size:12px;">加载失败：'
+        + '<div style="color:var(--red);font-size:13.5px;">加载失败：'
         + esc(e && e.message || e) + '</div></div></div>');
     }
   }

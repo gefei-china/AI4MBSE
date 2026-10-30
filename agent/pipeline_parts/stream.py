@@ -3245,7 +3245,10 @@ class StreamMixin:
                     "enabled": True,
                     "rounds": _ref.get("rounds", 0),
                     "score": _ref.get("score"),
-                    "passed": bool(_ref.get("passed", True)),
+                    # ⚠️ 不要 `bool(...)`：`None` 表示"评审未完成（无法评定）"，
+                    #   bool(None)=False 会把它降格成"评了没过" ⇒ 前端显示红色未通过、
+                    #   质量门禁还会因此把编排降级（见 apply_quality_gate 的 degraded 分支）。
+                    "passed": _ref.get("passed", True),
                     "issues": _ref.get("issues", []),
                     "advice": _ref.get("advice", ""),
                     "provider": (_ref.get("llm") or {}).get("provider", "-"),
@@ -3254,10 +3257,30 @@ class StreamMixin:
                     #   排障不必翻日志。⚠️ 含 stats.verdict —— 它区分
                     #   「检出 0 冲突」与「压根没数据可判」，两者**不可混为一谈**。
                     "conflicts": _ref.get("conflicts") or {"count": 0, "items": []},
+                    # ★★ 2026-10-30（用户「0/100 未通过 · 评审解析失败，这个评审的依据是
+                    #   什么，看不出来」）：把**评审依据**随 card_data 落库。
+                    #   此前 reflection 只有 score/passed/rounds/issues —— 用户看到
+                    #   「0/100 未通过」却没有任何可判断的依据：
+                    #     · 按什么标准评的？（criteria 从未出过服务器）
+                    #     · 多少分算过？（pass_score=70，界面没写 ⇒ "72 也判未通过"看着像 bug）
+                    #     · "解析失败"是模型没吐 JSON，还是调用直接报错？（异常被吞）
+                    #   ⇒ 这三个都必须能被用户看到，否则等于"给了结论不给理由"。
+                    "criteria": _ref.get("criteria") or "",
+                    "pass_score": _ref.get("pass_score"),
+                    "eval": _ref.get("eval") or {},
                 }
-                if reflection_meta.get("score") is not None:
+                # ★ 2026-10-30：三态文案。`passed is None` = 评审没评成，
+                #   不能报"未通过"（那是把基础设施故障说成质量问题）。
+                if reflection_meta.get("passed") is None and reflection_meta.get("degraded"):
+                    _dg2 = ((reflection_meta.get("eval") or {}).get("diag") or {})
+                    yield {"type": "progress", "kind": "progress", "delta": (
+                        "（自动编排）质量评审未完成（%s）——这不是对报告质量结论，"
+                        "可展开「依据」看失败证据"
+                        % (_dg2.get("error_type") or "回包无法解析"))}
+                elif reflection_meta.get("score") is not None:
                     yield {"type": "progress", "kind": "progress", "delta": (
                         f"（自动编排）质量评审：{reflection_meta['score']}/100 · "
+                        f"（通过线 {reflection_meta.get('pass_score') or 70}）· "
                         f"{'通过' if reflection_meta['passed'] else '未通过，已自动修订 ' + str(reflection_meta['rounds']) + ' 轮'}")}
                 # ★ 冲突：**先于**评分事件告知用户（这是需要人来裁决的事，
                 #   埋在分数后面会被忽略）。⚠️ stats.verdict 非 checkable 时

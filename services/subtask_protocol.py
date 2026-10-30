@@ -621,6 +621,19 @@ def apply_quality_gate(agg_status, reflection):
     gaps = []
     if not isinstance(reflection, dict) or reflection.get("passed") is not False:
         return agg_status, gaps
+    # ★★ 2026-10-30：**评审自身失败不得降级编排状态**。
+    #   `degraded=True` 的语义是"这次没评成"（LLM 异常 / 解析不出分数），
+    #   与"评了，没过"是两回事。把它们混在一起会导致：
+    #     ① 一次 provider 抖动就把正常完成的编排打成 partial（假警报）；
+    #     ② 用户在卡片上看到「0/100 未通过」而误判自己的报告质量。
+    #   现在：degraded ⇒ 只追加一条**如实**的提示（不参与三态），并且明确写
+    #   "未完成评审"而不是"未通过"。
+    if reflection.get("degraded"):
+        _d = (reflection.get("eval") or {}).get("diag") or {}
+        _why = _d.get("error_type") or ("回包无法解析" if _d.get("raw_len") is not None else "评审不可用")
+        gaps.append("质量评审**未完成**（%s）——这不是对你报告的质量结论，"
+                    "可展开「依据」看失败证据" % _why)
+        return agg_status, gaps
     _iss = [str(i)[:60] for i in (reflection.get("issues") or [])[:2]]
     gaps.append(f"质量评审未通过（{reflection.get('score')}/100）"
                 + ("：" + "；".join(_iss) if _iss else ""))

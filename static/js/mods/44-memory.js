@@ -107,12 +107,12 @@ function memRenderTable(items) {
          <button class="btn sm red" onclick="memDelete(${m.id})" title="真删，不可恢复">🗑 删除</button>`;
     return `<tr>
       <td>#${m.id}</td>
-      <td style="font-size:11.5px;">${esc(m.agent_id || '-')}</td>
-      <td style="font-size:11.5px;">${esc(tl)}</td>
+      <td style="font-size:12.5px;">${esc(m.agent_id || '-')}</td>
+      <td style="font-size:12.5px;">${esc(tl)}</td>
       <td><span class="st ${tm.cls}" title="${escA(tm.hint)}">${esc(tm.label)}</span></td>
-      <td style="max-width:420px;font-size:11.5px;" title="${escA(content)}">${esc(short)}</td>
-      <td style="font-size:11px;color:var(--mut);text-align:right;">${m.access_count || 0}</td>
-      <td style="font-size:11px;color:var(--mut);white-space:nowrap;">${esc(m.created_at || '-')}</td>
+      <td style="max-width:420px;font-size:12.5px;" title="${escA(content)}">${esc(short)}</td>
+      <td style="font-size:12.5px;color:var(--mut);text-align:right;">${m.access_count || 0}</td>
+      <td style="font-size:12.5px;color:var(--mut);white-space:nowrap;">${esc(m.created_at || '-')}</td>
       <td style="white-space:nowrap;">${ops}</td>
     </tr>`;
   }).join('');

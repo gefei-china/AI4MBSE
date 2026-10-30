@@ -23,28 +23,28 @@
   function _deltaHtml(m) {
     if (m.state !== 'ok' || m.delta === null || m.delta === undefined) return '';
     const d = Number(m.delta);
-    if (!d) return '<span style="color:var(--mut);font-size:11px;">持平</span>';
+    if (!d) return '<span style="color:var(--mut);font-size:12.5px;">持平</span>';
     // 涨不一定是坏（待人工确认多了说明有活动在发生），所以不按正负表红绿，
     // 只用中性箭头 + 数字，含义由指标名决定。
     const arrow = d > 0 ? '▲' : '▼';
     const col = d > 0 ? 'var(--amb)' : 'var(--grn)';
-    return `<span style="color:${col};font-size:11px;margin-left:6px;">${arrow} ${d > 0 ? '+' : ''}${d}</span>`;
+    return `<span style="color:${col};font-size:12.5px;margin-left:6px;">${arrow} ${d > 0 ? '+' : ''}${d}</span>`;
   }
 
   function _metricRow(m) {
     if (m.state !== 'ok') {
       // 本周无：显式写清为什么，而不是渲染一个 0
       return `<div style="display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);">
-        <span style="font-size:12.5px;color:var(--mut);flex:1;">${esc(m.name)}</span>
+        <span style="font-size:13.5px;color:var(--mut);flex:1;">${esc(m.name)}</span>
         <span class="badge">本周无</span>
-        <span style="font-size:11px;color:var(--mut);">${esc(m.why || '数据不足')}</span>
+        <span style="font-size:12.5px;color:var(--mut);">${esc(m.why || '数据不足')}</span>
       </div>`;
     }
     return `<div style="display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);">
-      <span style="font-size:12.5px;flex:1;">${esc(m.name)}</span>
-      <b style="font-size:13px;">${m.current}</b>
+      <span style="font-size:13.5px;flex:1;">${esc(m.name)}</span>
+      <b style="font-size:14.5px;">${m.current}</b>
       ${m.previous !== null && m.previous !== undefined
-        ? `<span style="font-size:11px;color:var(--mut);">上周 ${m.previous}</span>` : ''}
+        ? `<span style="font-size:12.5px;color:var(--mut);">上周 ${m.previous}</span>` : ''}
       ${_deltaHtml(m)}
     </div>`;
   }
@@ -59,7 +59,7 @@
        静态配平断言才成立（共享半个模板会让文本计数天然失配）。 */
     const head = (extra) => `<div style="display:flex;align-items:center;gap:8px;">
       <span class="badge">${esc(it.source_label)}</span>
-      <span style="font-size:13px;font-weight:500;flex:1;">${esc(it.title)}</span>${extra || ''}</div>`;
+      <span style="font-size:14.5px;font-weight:500;flex:1;">${esc(it.title)}</span>${extra || ''}</div>`;
     // ★真闭环：引擎给了 action 才渲染按钮
     if (it.action) {
       const alts = (it.action.alt || []).map(a =>
@@ -70,14 +70,14 @@
           <button class="btn sm pri" data-ev-act="${esc(it.action.payload.decision)}" data-ev-path="${esc(it.action.path)}">${esc(it.action.label)}</button>
           ${alts}
         </div>
-        ${it.detail ? `<div style="font-size:11.5px;color:var(--mut);padding:0 0 8px;">${esc(it.detail)}</div>` : ''}
+        ${it.detail ? `<div style="font-size:12.5px;color:var(--mut);padding:0 0 8px;">${esc(it.detail)}</div>` : ''}
       </div>`;
     }
     // ★不能点：渲染成说明条而不是死按钮
     const why = it.not_actionable_reason || '暂无处理入口';
     return `<div style="padding:8px 0;border-bottom:1px solid var(--line);">
       ${head('<span class="badge">只能看</span>')}
-      <div style="font-size:11.5px;color:var(--mut);">
+      <div style="font-size:12.5px;color:var(--mut);">
         ${it.detail ? esc(it.detail) + ' ' : ''}（${esc(why)}）
       </div>
     </div>`;
@@ -103,7 +103,7 @@
     const head = document.getElementById('evr-head');
     if (head) {
       head.innerHTML = `${_badge(rep.overall)}
-        <span style="font-size:12px;color:var(--mut);margin-left:8px;">
+        <span style="font-size:13.5px;color:var(--mut);margin-left:8px;">
           窗口 ${rep.window_days} 天 · 生成于 ${esc(rep.generated_at)}
         </span>`;
     }
@@ -118,13 +118,13 @@
           ? `<span class="badge g">${a.actionable_count} 项可一键处理</span>`
           : `<span class="badge">暂无一键处理入口</span>`}
         <span style="flex:1"></span>
-        <span style="font-weight:400;font-size:11.5px;color:var(--mut);">${esc(a.reason || '')}</span>
+        <span style="font-weight:400;font-size:12.5px;color:var(--mut);">${esc(a.reason || '')}</span>
       </div>
       <div class="pb" id="evr-actions">`;
     if ((a.items || []).length) {
       h += a.items.map(_actionItem).join('');
     } else {
-      h += '<div style="font-size:12.5px;color:var(--mut);padding:6px 0;">本周没有需要你决策的事项。</div>';
+      h += '<div style="font-size:13.5px;color:var(--mut);padding:6px 0;">本周没有需要你决策的事项。</div>';
     }
     if ((a.collect_failures || []).length) {
       h += '<div class="note" style="color:var(--amb);margin-top:10px;">部分来源采集失败（不影响其余条目）：'
@@ -134,14 +134,14 @@
 
     /* ── 第 2 块：本周体检（环比，不是孤立快照） ── */
     h += '<div class="panel" style="margin-bottom:14px;"><div class="ph">本周体检'
-      + '<span style="font-weight:400;font-size:11.5px;color:var(--mut);">按窗口对比上周</span></div><div class="pb">';
+      + '<span style="font-weight:400;font-size:12.5px;color:var(--mut);">按窗口对比上周</span></div><div class="pb">';
     (d.sections || []).forEach(sec => {
       h += `<div style="margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
           ${_badge(sec.verdict)}
-          <b style="font-size:13px;">${esc(sec.title)}</b>
-          <span style="font-size:11.5px;color:var(--mut);flex:1;">${esc(sec.subtitle || '')}</span>
-          <span style="font-size:11px;color:var(--mut);">${sec.known}/${sec.total} 项有数据</span>
+          <b style="font-size:14.5px;">${esc(sec.title)}</b>
+          <span style="font-size:12.5px;color:var(--mut);flex:1;">${esc(sec.subtitle || '')}</span>
+          <span style="font-size:12.5px;color:var(--mut);">${sec.known}/${sec.total} 项有数据</span>
         </div>`;
       (sec.metrics || []).forEach(m => { h += _metricRow(m); });
       h += '</div>';
@@ -155,19 +155,19 @@
     /* ── 第 3 块：数据可信度（这一段的存在本身就是可信度声明） ── */
     h += `<div class="panel"><div class="ph">数据可信度
       ${_badge(c.verdict)}<span style="flex:1"></span>
-      <span style="font-weight:400;font-size:11.5px;color:var(--mut);">${esc(c.reason || '')}</span>
+      <span style="font-weight:400;font-size:12.5px;color:var(--mut);">${esc(c.reason || '')}</span>
     </div><div class="pb">`;
     if ((c.unknown_metrics || []).length) {
-      h += '<div style="font-size:12px;color:var(--mut);margin-bottom:6px;">以下指标本周无数据，'
+      h += '<div style="font-size:13.5px;color:var(--mut);margin-bottom:6px;">以下指标本周无数据，'
         + '<b>不能读作 0，也不能读作「正常」</b>：</div>';
       h += c.unknown_metrics.map(u =>
-        `<div style="font-size:11.5px;color:var(--mut);padding:2px 0;">· ${esc(u.where)} —— ${esc(u.why || '')}</div>`).join('');
+        `<div style="font-size:12.5px;color:var(--mut);padding:2px 0;">· ${esc(u.where)} —— ${esc(u.why || '')}</div>`).join('');
     }
     (c.notes || []).forEach(n => {
       h += `<div class="note" style="margin-top:8px;">${esc(n)}</div>`;
     });
     h += `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line);
-      font-size:11px;color:var(--mut);">${esc(c.disclaimer || '')}</div></div></div>`;
+      font-size:12.5px;color:var(--mut);">${esc(c.disclaimer || '')}</div></div></div>`;
 
     box.innerHTML = h;
     _bindActions();

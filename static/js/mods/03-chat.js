@@ -38,12 +38,12 @@ function renderRecentPages(){
   if(!el) return;
   let rp = [];
   try{ rp = JSON.parse(localStorage.getItem('mbse_recent_pages')||'[]'); }catch(e){}
-  if(!rp.length){ el.innerHTML = '<span style="font-size:11px;color:var(--mut);">🕘 最近访问：暂无 — 访问过的页面会出现在这里</span>'; return; }
+  if(!rp.length){ el.innerHTML = '<span style="font-size:12.5px;color:var(--mut);">🕘 最近访问：暂无 — 访问过的页面会出现在这里</span>'; return; }
   // 2026-09-17 R7 兼容：TITLES 已移除 branch/modelcfg 死条目，但旧 localStorage 里可能仍存有这两个值，
   // 保留一个只读的旧值兜底映射，避免「最近访问」出现裸英文标签
   const _legacy = {branch:'知识中心', modelcfg:'模型配置'};
-  el.innerHTML = '<span style="color:var(--mut);font-size:11px;">🕘 最近访问：</span>' +
-    rp.map(p=>`<span class="tag" style="cursor:pointer;font-size:11px;" onclick="go('${p}')">${esc(TITLES[p]||_legacy[p]||p)}</span>`).join(' ');
+  el.innerHTML = '<span style="color:var(--mut);font-size:12.5px;">🕘 最近访问：</span>' +
+    rp.map(p=>`<span class="tag" style="cursor:pointer;font-size:12.5px;" onclick="go('${p}')">${esc(TITLES[p]||_legacy[p]||p)}</span>`).join(' ');
 }
 
 // ── AI 建模 ──
@@ -475,7 +475,7 @@ function _stickBtnShow(){
     btn.type = 'button';
     btn.style.cssText = 'display:none;position:absolute;right:20px;bottom:160px;z-index:30;'
       + 'border:1px solid var(--line);background:#fff;color:var(--pri,#3478f6);border-radius:16px;'
-      + 'padding:4px 14px;font-size:12px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.10);';
+      + 'padding:4px 14px;font-size:13.5px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.10);';
     btn.onclick = function(){ _stickUnread = 0; scrollChatToBottom(); };
     col.appendChild(btn);
   }
@@ -1000,7 +1000,7 @@ async function orchTracePanel(runId, btn){
   if(old){ old.remove(); return; }
   const box = document.createElement('div');
   box.className = 'orch-trace';
-  box.style.cssText = 'margin-top:8px;border:1px solid var(--line,#e5e8ee);border-radius:8px;padding:8px 10px;font-size:11px;background:var(--bg,#fff);';
+  box.style.cssText = 'margin-top:8px;border:1px solid var(--line,#e5e8ee);border-radius:8px;padding:8px 10px;font-size:12.5px;background:var(--bg,#fff);';
   box.innerHTML = '<div style="color:var(--mut);">⏳ 正在加载执行轨迹…</div>';
   host.appendChild(box);
   try{

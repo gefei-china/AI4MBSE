@@ -25,7 +25,7 @@ async function v2gReviewLoad() {
     v2gRenderBatchPanel();
     v2gRenderFilters();
     v2gRenderTable();
-  } catch(e) { el.innerHTML = `<div style="padding:10px;color:var(--red);font-size:12px;">加载失败：${e.message}</div>`; }
+  } catch(e) { el.innerHTML = `<div style="padding:10px;color:var(--red);font-size:13.5px;">加载失败：${e.message}</div>`; }
 }
 // ── LLM 语义护栏（Semantic Guardrails）：把 LLM 抽取候选的实体/关系类型约束到本体白名单 ──
 // 白名单来源：/api/knowledge/ontology（ontology_types 表，type_kind=entity/relation/attribute）。
@@ -100,15 +100,15 @@ function v2gGuardTag(id){
   const it=gr.items.get(id);
   if(!it || it.status==='ok') return '';
   if(it.status==='corrected')
-    return `<span class="tag" style="border-color:var(--blue);color:var(--blue-d);font-size:10px;margin-left:4px;" title="LLM 候选类型「${esc(it.from)}」不在本体，已就近校正为「${esc(it.to)}」。确认前请复核或编辑修正">🛡 已校正</span>`;
-  return `<span class="tag" style="border-color:var(--red);color:var(--red);font-size:10px;margin-left:4px;" title="LLM 候选类型「${esc(it.from)}」不在本体且无近似映射，已拦截。请改用本体已有类型或驳回，避免污染图谱">🛡 已拦截</span>`;
+    return `<span class="tag" style="border-color:var(--blue);color:var(--blue-d);font-size:12px;margin-left:4px;" title="LLM 候选类型「${esc(it.from)}」不在本体，已就近校正为「${esc(it.to)}」。确认前请复核或编辑修正">🛡 已校正</span>`;
+  return `<span class="tag" style="border-color:var(--red);color:var(--red);font-size:12px;margin-left:4px;" title="LLM 候选类型「${esc(it.from)}」不在本体且无近似映射，已拦截。请改用本体已有类型或驳回，避免污染图谱">🛡 已拦截</span>`;
 }
 // 护栏汇总横幅（对齐既有候选汇总样式）
 function v2gGuardBanner(){
   const gr=_v2g.gr;
-  if(!gr || !gr.enabled) return '<div style="padding:6px 10px;font-size:11px;color:var(--mut);border-bottom:1px solid var(--line);">🛡 语义护栏未启用（本体类型列表不可用）</div>';
-  if(gr.corrected+gr.blocked===0) return '<div style="padding:6px 10px;font-size:11px;color:var(--grn);border-bottom:1px solid var(--line);">🛡 语义护栏已启用：候选类型均在本体白名单内，未发现越界类型</div>';
-  return `<div style="padding:6px 10px;font-size:11px;color:var(--mut);border-bottom:1px solid var(--line);">🛡 语义护栏：<span style="color:var(--blue-d);">已校正 ${gr.corrected}</span> · <span style="color:var(--red);">已拦截 ${gr.blocked}</span>（越界类型已就近校正或标记拦截，不下发入图）</div>`;
+  if(!gr || !gr.enabled) return '<div style="padding:6px 10px;font-size:12.5px;color:var(--mut);border-bottom:1px solid var(--line);">🛡 语义护栏未启用（本体类型列表不可用）</div>';
+  if(gr.corrected+gr.blocked===0) return '<div style="padding:6px 10px;font-size:12.5px;color:var(--grn);border-bottom:1px solid var(--line);">🛡 语义护栏已启用：候选类型均在本体白名单内，未发现越界类型</div>';
+  return `<div style="padding:6px 10px;font-size:12.5px;color:var(--mut);border-bottom:1px solid var(--line);">🛡 语义护栏：<span style="color:var(--blue-d);">已校正 ${gr.corrected}</span> · <span style="color:var(--red);">已拦截 ${gr.blocked}</span>（越界类型已就近校正或标记拦截，不下发入图）</div>`;
 }
 // 批次聚合计数（治理中心顶部摘要）
 function v2gBatchCounts() {
@@ -146,7 +146,7 @@ function v2gRenderBatchPanel() {
   const statusEl = document.getElementById('v2g-batch-status');
   if(statusEl){
     const statuses = [['all','全部'],['pending','待审'],['confirmed','已确认'],['rejected','已驳回']];
-    statusEl.innerHTML = statuses.map(([k,l])=>`<span class="st ${_v2g.batchStatus===k?'b':'g'}" style="cursor:pointer;font-size:10.5px;${_v2g.batchStatus===k?'':'opacity:.7;'}" onclick="v2gSetBatchStatus('${k}')">${l}</span>`).join('');
+    statusEl.innerHTML = statuses.map(([k,l])=>`<span class="st ${_v2g.batchStatus===k?'b':'g'}" style="cursor:pointer;font-size:12px;${_v2g.batchStatus===k?'':'opacity:.7;'}" onclick="v2gSetBatchStatus('${k}')">${l}</span>`).join('');
   }
   const el = document.getElementById('v2g-batches');
   if(!el) return;
@@ -162,18 +162,18 @@ function v2gRenderBatchPanel() {
     const canClear = b.pending_n===0;
     return card(b.batch_id, `
     <div style="display:flex;gap:6px;align-items:center;">
-      <span style="font-size:14px;">📄</span>
+      <span style="font-size:15.5px;">📄</span>
       <div style="flex:1;min-width:0;">
-        <div style="font-size:11.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc((b.source_docs||[]).join('、'))}">${esc((b.source_docs&&b.source_docs[0])||'手动抽取')}</div>
-        <div style="font-size:10px;color:var(--mut);">${esc(b.batch_id.slice(-6))} · ${esc((b.last_at||'').slice(5,16).replace('T',' '))}</div>
+        <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc((b.source_docs||[]).join('、'))}">${esc((b.source_docs&&b.source_docs[0])||'手动抽取')}</div>
+        <div style="font-size:12px;color:var(--mut);">${esc(b.batch_id.slice(-6))} · ${esc((b.last_at||'').slice(5,16).replace('T',' '))}</div>
       </div>
       ${v2gReflowTag(b)}
-      ${b.pending_n>0?`<span class="st w" style="font-size:10px;">待${b.pending_n}</span>`:''}
-      ${canClear?`<span class="st r" style="font-size:10px;cursor:pointer;" title="清理该批次候选记录（不影响已入库实体）" onclick="event.stopPropagation();v2gClearBatch('${b.batch_id}')">🗑 清理</span>`:''}
+      ${b.pending_n>0?`<span class="st w" style="font-size:12px;">待${b.pending_n}</span>`:''}
+      ${canClear?`<span class="st r" style="font-size:12px;cursor:pointer;" title="清理该批次候选记录（不影响已入库实体）" onclick="event.stopPropagation();v2gClearBatch('${b.batch_id}')">🗑 清理</span>`:''}
     </div>
-    <div style="font-size:10.5px;color:var(--mut);margin-top:4px;">实体${b.node_n}/关系${b.rel_n} · <span style="color:var(--grn);">✓${b.confirmed_n}</span> <span style="color:var(--red);">✗${b.rejected_n}</span></div>`);
+    <div style="font-size:12px;color:var(--mut);margin-top:4px;">实体${b.node_n}/关系${b.rel_n} · <span style="color:var(--grn);">✓${b.confirmed_n}</span> <span style="color:var(--red);">✗${b.rejected_n}</span></div>`);
   });
-  el.innerHTML = bs.length ? cards.join('') : '<span style="font-size:11px;color:var(--mut);padding:4px 2px;">暂无匹配批次</span>';
+  el.innerHTML = bs.length ? cards.join('') : '<span style="font-size:12.5px;color:var(--mut);padding:4px 2px;">暂无匹配批次</span>';
 }
 function v2gSetBatchStatus(s) { _v2g.batchStatus = s; v2gRenderBatchPanel(); }
 function v2gSetBatchTime() { _v2g.batchTime = document.getElementById('v2g-batch-time').value; v2gRenderBatchPanel(); }
@@ -196,8 +196,8 @@ function v2gReflowTag(b) {
   if(!isReflow) return '';
   const labelMap = [['conv-','对话'],['impact-','影响分析'],['review-','模型评审']];
   const labels = labelMap.filter(([pre])=>srcs.some(d=>d.startsWith(pre))).map(x=>x[1]);
-  const srcHtml = labels.length ? `<span style="font-size:9.5px;color:var(--mut);margin-left:2px;">${labels.join('/')}</span>` : '';
-  return `<span class="st w" style="font-size:10px;cursor:default;white-space:nowrap;" title="AI 建模/对话自动回流的知识候选">🔄 回流</span>${srcHtml}`;
+  const srcHtml = labels.length ? `<span style="font-size:11.5px;color:var(--mut);margin-left:2px;">${labels.join('/')}</span>` : '';
+  return `<span class="st w" style="font-size:12px;cursor:default;white-space:nowrap;" title="AI 建模/对话自动回流的知识候选">🔄 回流</span>${srcHtml}`;
 }
 // P3 批次清理：仅无待审批次的清理（删除候选记录，已入库实体/溯源不受影响，审计留痕）
 async function v2gClearBatch(bid) {
@@ -216,11 +216,11 @@ function v2gRenderFilters() {
   const el = document.getElementById('v2g-type-chips');
   if(el){
     const entries = Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]);
-    el.innerHTML = '<span style="font-size:11px;color:var(--mut);flex:none;align-self:center;">类型：</span>' +
+    el.innerHTML = '<span style="font-size:12.5px;color:var(--mut);flex:none;align-self:center;">类型：</span>' +
       entries.map(([t,n])=>{
         const on = _v2g.types.includes(t);
-        return `<span class="tag" style="cursor:pointer;font-size:11px;${on?'background:var(--blue-l);color:var(--blue-d);border-color:var(--blue);':''}" onclick="v2gToggleType('${esc(t)}')">${esc(t)} <small style="opacity:.7;">${n}</small></span>`;
-      }).join('') || '<span style="font-size:11px;color:var(--mut);">无类型</span>';
+        return `<span class="tag" style="cursor:pointer;font-size:12.5px;${on?'background:var(--blue-l);color:var(--blue-d);border-color:var(--blue);':''}" onclick="v2gToggleType('${esc(t)}')">${esc(t)} <small style="opacity:.7;">${n}</small></span>`;
+      }).join('') || '<span style="font-size:12.5px;color:var(--mut);">无类型</span>';
   }
 }
 function v2gToggleType(t) {
@@ -268,26 +268,26 @@ function v2gRelDisp(c) {
   const sIn = s && _v2g.entityNames.has(s);
   const tIn = t && _v2g.entityNames.has(t);
   const warn = (s && !sIn) || (t && !tIn)
-    ? `<span class="tag" style="border-color:var(--amb);color:var(--amb);font-size:10px;margin-left:4px;" title="先确认两端实体节点入库，关系建边才可用">⚠ 两端节点未入库</span>` : '';
+    ? `<span class="tag" style="border-color:var(--amb);color:var(--amb);font-size:12px;margin-left:4px;" title="先确认两端实体节点入库，关系建边才可用">⚠ 两端节点未入库</span>` : '';
   return `<span>${esc(s)} <span style="color:var(--amb);font-weight:600;">—[${esc(r)}]→</span> ${esc(t)}</span>${warn}`;
 }
 // 消歧匹配状态（P1：抽取时与已有图谱比对打标；P0-A 关系候选同样打标）
 function v2gMatchingTag(c) {
   if(c.entity_type==='关系候选'){
     const rms = c.rel_matching_status||'none';
-    if(rms==='none') return '<span style="font-size:11px;color:var(--grn);">无重复</span>';
-    return `<span class="tag" style="border-color:var(--red);color:var(--red);font-size:10px;" title="与已有关系 #${esc(c.rel_match_rel_id||'')} 同三元组，建议合并或跳过">⚠ 关系重复</span>`;
+    if(rms==='none') return '<span style="font-size:12.5px;color:var(--grn);">无重复</span>';
+    return `<span class="tag" style="border-color:var(--red);color:var(--red);font-size:12px;" title="与已有关系 #${esc(c.rel_match_rel_id||'')} 同三元组，建议合并或跳过">⚠ 关系重复</span>`;
   }
   const ms = c.matching_status||'none';
-  if(ms==='none') return '<span style="font-size:11px;color:var(--grn);">无重复</span>';
-  if(ms==='dup_suspect') return `<span class="tag" style="border-color:var(--amb);color:var(--amb);font-size:10px;" title="与 ${esc(c.match_entity_id||'')} 疑似重复，请确认是否合并">⚠ 疑似重复</span>`;
-  return `<span class="tag" style="border-color:var(--red);color:var(--red);font-size:10px;" title="与 ${esc(c.match_entity_id||'')} 高度重复，建议驳回或合并">⚠ 高度重复</span>`;
+  if(ms==='none') return '<span style="font-size:12.5px;color:var(--grn);">无重复</span>';
+  if(ms==='dup_suspect') return `<span class="tag" style="border-color:var(--amb);color:var(--amb);font-size:12px;" title="与 ${esc(c.match_entity_id||'')} 疑似重复，请确认是否合并">⚠ 疑似重复</span>`;
+  return `<span class="tag" style="border-color:var(--red);color:var(--red);font-size:12px;" title="与 ${esc(c.match_entity_id||'')} 高度重复，建议驳回或合并">⚠ 高度重复</span>`;
 }
 function v2gStatusTag(c) {
   const m = {pending:['w','待审'], confirmed:['ok','已确认'], rejected:['r','已驳回']};
   const t = m[c.status]||['w',c.status];
   const reason = (c.status==='rejected' && c.reject_reason)
-    ? `<div style="font-size:10px;color:var(--mut);" title="驳回原因：${esc(c.reject_reason)}">${esc(c.reject_reason.slice(0,20))}</div>` : '';
+    ? `<div style="font-size:12px;color:var(--mut);" title="驳回原因：${esc(c.reject_reason)}">${esc(c.reject_reason.slice(0,20))}</div>` : '';
   return `<span class="st ${t[0]}">${t[1]}</span>${reason}`;
 }
 function v2gRenderTable() {
@@ -304,10 +304,10 @@ function v2gRenderTable() {
   const sum = document.getElementById('v2g-summary');
   if(sum) sum.innerHTML = `筛选后 <b>${total}</b> 条 · <span style="color:var(--amb);">待审 ${cnt.pending}</span> / <span style="color:var(--grn);">已确认 ${cnt.confirmed}</span> / <span style="color:var(--red);">已驳回 ${cnt.rejected}</span>`;
   if(!all.length) {
-    el.innerHTML = '<div style="padding:12px;color:var(--mut);font-size:12px;">暂无匹配候选（上传文档自动抽取，或「数据看板→向量图谱转化」手动抽取）</div>';
+    el.innerHTML = '<div style="padding:12px;color:var(--mut);font-size:13.5px;">暂无匹配候选（上传文档自动抽取，或「数据看板→向量图谱转化」手动抽取）</div>';
     return;
   }
-  const batchBar = `<div style="padding:6px 8px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);font-size:11.5px;">
+  const batchBar = `<div style="padding:6px 8px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);font-size:12.5px;">
       <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="v2g-check-all" onchange="v2gToggleAll(this)"> 全选</label>
       <button class="btn sm" onclick="v2gReviewConfirm()">✅ 确认（选中）</button>
       <button class="btn sm ghost" onclick="v2gReviewReject()">🚫 批量驳回（选中）</button>
@@ -320,14 +320,14 @@ function v2gRenderTable() {
       ? '<span class="tag" style="border-color:var(--amb);color:var(--amb);">关系（建边）</span>'
       : `<span class="tag">${esc(c.entity_type)}</span>`) + v2gGuardTag(c.id);
     const conf = (c.confidence!=null && c.confidence!=='') ? parseFloat(c.confidence||0).toFixed(2) : '-';
-    const confTag = `<span style="font-size:11px;${parseFloat(conf)>=0.85?'color:var(--grn);':parseFloat(conf)>=0.7?'color:var(--blue-d);':'color:var(--amb);'}">${conf}</span>`;
+    const confTag = `<span style="font-size:12.5px;${parseFloat(conf)>=0.85?'color:var(--grn);':parseFloat(conf)>=0.7?'color:var(--blue-d);':'color:var(--amb);'}">${conf}</span>`;
     const src = c.source_doc
-      ? `<span style="cursor:pointer;color:var(--blue-d);font-size:11px;" onclick="v2gViewSource(${c.id})" title="查看来源片段">📄 ${esc((c.source_doc||'').slice(0,14))}</span>`
-      : '<span style="font-size:11px;color:var(--mut);">手动</span>';
-    const errHint = c.errors ? `<div style="font-size:10.5px;color:var(--red);">${esc(c.errors)}</div>` : '';
+      ? `<span style="cursor:pointer;color:var(--blue-d);font-size:12.5px;" onclick="v2gViewSource(${c.id})" title="查看来源片段">📄 ${esc((c.source_doc||'').slice(0,14))}</span>`
+      : '<span style="font-size:12.5px;color:var(--mut);">手动</span>';
+    const errHint = c.errors ? `<div style="font-size:12px;color:var(--red);">${esc(c.errors)}</div>` : '';
     // P0-2：候选行内联证据（命中原文片段 + 来源类别），点击可打开完整来源面板
     const mention = c.chunk_content
-      ? `<div onclick="event.stopPropagation();v2gViewSource(${c.id})" title="点击查看完整来源片段" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10.5px;color:var(--mut);background:#f8fafc;border:1px solid var(--line);border-radius:5px;padding:2px 6px;margin-top:3px;cursor:pointer;">${esc(c.chunk_content)}</div>`
+      ? `<div onclick="event.stopPropagation();v2gViewSource(${c.id})" title="点击查看完整来源片段" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--mut);background:#f8fafc;border:1px solid var(--line);border-radius:5px;padding:2px 6px;margin-top:3px;cursor:pointer;">${esc(c.chunk_content)}</div>`
       : '';
     const srcType = /^(SYSM|ai_)/i.test(String(c.batch_id||'')) ? 'AI建模' : (/(reflow|conv|impact|review)-/i.test(String(c.batch_id||'')) ? '智能回流' : '抽取');
     const ops = c.status==='pending'
@@ -338,16 +338,16 @@ function v2gRenderTable() {
       : `<button class="btn sm ghost" onclick="v2gViewSource(${c.id})">📄 来源</button>`;
     return `<tr>
       <td>${c.status==='pending'?`<input type="checkbox" class="v2g-review-check" value="${c.id}">`:'-'}</td>
-      <td style="font-size:12.5px;">${disp}${mention}${errHint}</td>
+      <td style="font-size:13.5px;">${disp}${mention}${errHint}</td>
       <td>${typeTag}</td>
       <td>${confTag}</td>
       <td>${v2gMatchingTag(c)}</td>
-      <td>${src}${srcType?`<span class="tag" style="font-size:9.5px;margin-left:4px;opacity:.85;">${srcType}</span>`:''}</td>
+      <td>${src}${srcType?`<span class="tag" style="font-size:11.5px;margin-left:4px;opacity:.85;">${srcType}</span>`:''}</td>
       <td>${v2gStatusTag(c)}</td>
       <td style="white-space:nowrap;">${ops}</td>
     </tr>`;
   }).join('');
-  const foot = `<div style="padding:8px 10px;display:flex;gap:8px;align-items:center;font-size:11px;color:var(--mut);flex-wrap:wrap;">
+  const foot = `<div style="padding:8px 10px;display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--mut);flex-wrap:wrap;">
       <span>✅ 确认后生成待审三元组（与已有实体重复时先选处理方式：对齐合并/强制新建/跳过）；经「三元组审核」通过并 commit 落图后写入图谱实体，分支发布见「发布」站。</span>
       <span style="flex:1"></span>
       <div id="v2g-pager" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"></div>
@@ -400,19 +400,19 @@ function v2gDupDialog(dups) {
       ? `已有关系 <span style="color:var(--blue-d);">#${esc(d.match_id)}</span>`
       : `已有实体 <span style="color:var(--blue-d);">${esc(_names[d.match_id] || d.match_id)}</span>`;
     return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;background:#fff;">
-      <span style="font-size:12px;color:var(--mut);">${i+1}.</span>
-      <b style="font-size:12.5px;flex:1;">${esc(d.name)}</b>
-      <span class="tag" style="font-size:10px;color:${lc}">${lv}</span>
-      <span style="font-size:11px;color:var(--mut);">${targetTxt}</span>
+      <span style="font-size:13.5px;color:var(--mut);">${i+1}.</span>
+      <b style="font-size:13.5px;flex:1;">${esc(d.name)}</b>
+      <span class="tag" style="font-size:12px;color:${lc}">${lv}</span>
+      <span style="font-size:12.5px;color:var(--mut);">${targetTxt}</span>
     </div>`;
   }).join('');
   b.innerHTML = `<h3>⚠ 候选与已有实体/关系重复（${(dups||[]).length}）</h3>
-    <div style="font-size:12px;color:var(--mut);margin:4px 0 8px;">以下候选与已有知识重复，请选择处理方式后再确认：</div>
+    <div style="font-size:13.5px;color:var(--mut);margin:4px 0 8px;">以下候选与已有知识重复，请选择处理方式后再确认：</div>
     <div style="max-height:170px;overflow:auto;">${rows}</div>
-    <div style="margin:10px 0 4px;font-size:12px;font-weight:600;">处理方式</div>
-    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;"><input type="radio" name="dup-action" value="align" checked><div><div style="font-size:12.5px;">🔗 对齐合并到已有实体/关系</div><div style="font-size:11px;color:var(--mut);">不新建节点/边，文档溯源指向已存在对象（推荐）</div></div></label>
-    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;"><input type="radio" name="dup-action" value="create"><div><div style="font-size:12.5px;">➕ 强制新建独立实体/关系</div><div style="font-size:11px;color:var(--mut);">可能造成重复，后续需消歧治理</div></div></label>
-    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;"><input type="radio" name="dup-action" value="skip"><div><div style="font-size:12.5px;">⏭ 跳过该候选</div><div style="font-size:11px;color:var(--mut);">不进入管线，标记驳回（消歧跳过）留痕</div></div></label>
+    <div style="margin:10px 0 4px;font-size:13.5px;font-weight:600;">处理方式</div>
+    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;"><input type="radio" name="dup-action" value="align" checked><div><div style="font-size:13.5px;">🔗 对齐合并到已有实体/关系</div><div style="font-size:12.5px;color:var(--mut);">不新建节点/边，文档溯源指向已存在对象（推荐）</div></div></label>
+    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;"><input type="radio" name="dup-action" value="create"><div><div style="font-size:13.5px;">➕ 强制新建独立实体/关系</div><div style="font-size:12.5px;color:var(--mut);">可能造成重复，后续需消歧治理</div></div></label>
+    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;"><input type="radio" name="dup-action" value="skip"><div><div style="font-size:13.5px;">⏭ 跳过该候选</div><div style="font-size:12.5px;color:var(--mut);">不进入管线，标记驳回（消歧跳过）留痕</div></div></label>
     <div class="lbx-actions"><button class="btn ghost" id="vd-cancel">取消</button><button class="btn" id="vd-ok">确定</button></div>`;
   lbx.classList.add('show');
   return new Promise(resolve => {
@@ -511,21 +511,21 @@ async function v2gViewSource(id) {
   if(c.chunk_id) {
     try {
       const linked = await api(`/api/knowledge/chunks/${c.chunk_id}/linked`);
-      if(linked && linked.length) linkedHtml = '<div style="font-size:11px;color:var(--grn);margin:6px 0;">🔗 已确认关联实体：' + linked.map(e=>`<span class="tag" style="font-size:10px;">${esc(e.name)}</span>`).join(' ') + '</div>';
+      if(linked && linked.length) linkedHtml = '<div style="font-size:12.5px;color:var(--grn);margin:6px 0;">🔗 已确认关联实体：' + linked.map(e=>`<span class="tag" style="font-size:12px;">${esc(e.name)}</span>`).join(' ') + '</div>';
     } catch(e) {}
     chunkHtml = c.chunk_content
-      ? `<div style="margin-top:8px;"><b style="font-size:11.5px;color:var(--blue-d);">📄 来源片段（chunk #${c.chunk_id}）</b><div style="font-size:12px;line-height:1.7;background:#f8fafc;border:1px solid var(--line);border-radius:6px;padding:8px;margin-top:4px;max-height:220px;overflow:auto;white-space:pre-wrap;">${esc(c.chunk_content)}</div></div>`
-      : '<div style="font-size:11px;color:var(--mut);margin-top:6px;">（该候选未绑定 chunk 原文）</div>';
+      ? `<div style="margin-top:8px;"><b style="font-size:12.5px;color:var(--blue-d);">📄 来源片段（chunk #${c.chunk_id}）</b><div style="font-size:13.5px;line-height:1.7;background:#f8fafc;border:1px solid var(--line);border-radius:6px;padding:8px;margin-top:4px;max-height:220px;overflow:auto;white-space:pre-wrap;">${esc(c.chunk_content)}</div></div>`
+      : '<div style="font-size:12.5px;color:var(--mut);margin-top:6px;">（该候选未绑定 chunk 原文）</div>';
   }
   const title = document.getElementById('panel-title');
   if(title) title.textContent = isRel ? '🔗 关系候选来源' : '📄 候选来源';
   document.getElementById('panel-body').innerHTML =
-    `<div style="font-size:12.5px;">${isRel
+    `<div style="font-size:13.5px;">${isRel
       ? `<b>${esc(c.rel_source||'')}</b> <span class="st b">${esc(c.rel_type||'')}</span> <b>${esc(c.rel_target||'')}</b>`
       : `<b>${esc(c.entity_name)}</b> <span class="tag">${esc(c.entity_type)}</span>`}</div>
-     <div style="font-size:11px;color:var(--mut);margin-top:5px;">批次：${esc(c.batch_id||'')} · 来源文档：${esc(c.source_doc||'手动抽取')} · 创建：${esc(c.created_at||'')}</div>
-     <div style="font-size:11px;color:var(--mut);margin:4px 0;">置信度：${(parseFloat(c.confidence||0)).toFixed(2)} · 消歧：${v2gMatchingTag(c)} · 状态：${c.status}${c.reject_reason?' · 驳回原因：'+esc(c.reject_reason):''}</div>
-     <div style="font-size:11px;color:var(--mut);margin:4px 0;">属性：${esc(c.properties||'{}')}</div>
+     <div style="font-size:12.5px;color:var(--mut);margin-top:5px;">批次：${esc(c.batch_id||'')} · 来源文档：${esc(c.source_doc||'手动抽取')} · 创建：${esc(c.created_at||'')}</div>
+     <div style="font-size:12.5px;color:var(--mut);margin:4px 0;">置信度：${(parseFloat(c.confidence||0)).toFixed(2)} · 消歧：${v2gMatchingTag(c)} · 状态：${c.status}${c.reject_reason?' · 驳回原因：'+esc(c.reject_reason):''}</div>
+     <div style="font-size:12.5px;color:var(--mut);margin:4px 0;">属性：${esc(c.properties||'{}')}</div>
      ${linkedHtml}
      ${chunkHtml}`;
   document.getElementById('panel-detail').classList.add('open');
@@ -540,8 +540,8 @@ async function v2gEditCandidate(id) {
   document.getElementById('panel-body').innerHTML = `
     <div class="form-row"><label>候选名称</label><input id="v2g-e-name" value="${esc(c.entity_name)}"></div>
     <div class="form-row"><label>实体类型（本体）</label><input id="v2g-e-type" value="${esc(c.entity_type)}"></div>
-    <div class="form-row"><label>属性 JSON</label><textarea id="v2g-e-props" style="min-height:90px;font-family:monospace;font-size:11.5px;">${esc(c.properties||'{}')}</textarea></div>
-    <div style="font-size:11px;color:var(--mut);margin-top:4px;">保存后重新本体校验与消歧打标，仍为待审状态。</div>
+    <div class="form-row"><label>属性 JSON</label><textarea id="v2g-e-props" style="min-height:90px;font-family:monospace;font-size:12.5px;">${esc(c.properties||'{}')}</textarea></div>
+    <div style="font-size:12.5px;color:var(--mut);margin-top:4px;">保存后重新本体校验与消歧打标，仍为待审状态。</div>
     <div style="margin-top:10px;text-align:right;"><button class="btn grn" onclick="v2gSaveCandidate(${c.id})">💾 保存</button>
     <button class="btn ghost" onclick="closePanel()">取消</button></div>`;
   document.getElementById('panel-detail').classList.add('open');

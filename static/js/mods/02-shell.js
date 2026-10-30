@@ -490,10 +490,10 @@ async function loadHome() {
   if(convEl) convEl.innerHTML = convs.length
     ? convs.map(c=>`<div style="display:flex;align-items:center;gap:6px;padding:5px 4px;border-bottom:1px dashed var(--line);cursor:pointer;border-radius:6px;" onclick="goToConversation(${c.id})" title="进入对话：${esc(c.title)}">
         <span class="st ${c.status==='active'?'ok':'g'}">${c.status==='active'?'进行中':'已归档'}</span>
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;">${esc(c.title)}</span>
-        <small style="color:var(--mut);font-size:10.5px;flex:none;">${esc((c.updated_at||'').slice(5,16).replace('T',' '))}</small>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;">${esc(c.title)}</span>
+        <small style="color:var(--mut);font-size:12px;flex:none;">${esc((c.updated_at||'').slice(5,16).replace('T',' '))}</small>
       </div>`).join('')
-    : '<div style="font-size:11.5px;color:var(--mut);padding:4px 0;">暂无对话 — 点击「新建建模对话」开始</div>';
+    : '<div style="font-size:12.5px;color:var(--mut);padding:4px 0;">暂无对话 — 点击「新建建模对话」开始</div>';
   // 📦 资产概览：模型资产一屏掌握
   const as = d.assets||{};
   const assetEl = document.getElementById('assets-home');
@@ -513,18 +513,18 @@ async function loadHome() {
     if(g) g.innerHTML = `你好，<b>${esc(me.display_name)}</b>（${esc(roleTxt)}${esc(deptTxt)}）｜ 专属工作空间，数据/模型/配置隔离（FR-UR-3）`;
     const prof = getRoleProfile(me);
     const reEl = document.getElementById('role-entries-home');
-    if(reEl) reEl.innerHTML = `<div style="font-size:11px;color:var(--mut);margin-bottom:6px;">当前视角：<b>${esc(prof.label)}</b> — 按角色权限推荐入口</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">` +
+    if(reEl) reEl.innerHTML = `<div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">当前视角：<b>${esc(prof.label)}</b> — 按角色权限推荐入口</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">` +
       prof.entries.map(e=>`<button class="btn ghost" onclick="go('${e[1]}'${e[2]?`,'${e[2]}'`:''})">${e[0]}</button>`).join('') + '</div>';
   } else {
     const reEl = document.getElementById('role-entries-home');
-    if(reEl) reEl.innerHTML = '<div style="font-size:11px;color:var(--mut);">未登录 — 切换账号后按角色展示专属入口</div>';
+    if(reEl) reEl.innerHTML = '<div style="font-size:12.5px;color:var(--mut);">未登录 — 切换账号后按角色展示专属入口</div>';
   }
   // 🕘 最近操作轨迹（audit_logs 当前用户）
   const acts = d.recent_activities||[];
   const actEl = document.getElementById('recent-acts-home');
   if(actEl) actEl.innerHTML = acts.length
-    ? acts.map(a=>`<span class="tag" title="${esc(a.detail||'')}" style="font-size:11px;">${esc(a.event_type||'')}：${esc((a.detail||'').slice(0,24))} <small style="opacity:.7;">${esc((a.created_at||'').slice(5,16).replace('T',' '))}</small></span>`).join('')
-    : '<span style="font-size:11px;color:var(--mut);">暂无操作记录 — 完成建模/审核等操作后会显示在这里</span>';
+    ? acts.map(a=>`<span class="tag" title="${esc(a.detail||'')}" style="font-size:12.5px;">${esc(a.event_type||'')}：${esc((a.detail||'').slice(0,24))} <small style="opacity:.7;">${esc((a.created_at||'').slice(5,16).replace('T',' '))}</small></span>`).join('')
+    : '<span style="font-size:12.5px;color:var(--mut);">暂无操作记录 — 完成建模/审核等操作后会显示在这里</span>';
   renderRecentPages();
   // 近期报告：报告前 5 条（工作台资产聚合入口）
   try{
@@ -532,15 +532,15 @@ async function loadHome() {
     const el = document.getElementById('recent-reports-home');
     const typeCls = {impact:'b', review:'w', analysis:'ok', other:'g'};
     if(!reports || !reports.length){
-      el.innerHTML = '<div style="font-size:11.5px;color:var(--mut);padding:4px 0;">暂无报告 — AI 建模产出报告后自动归档</div>';
+      el.innerHTML = '<div style="font-size:12.5px;color:var(--mut);padding:4px 0;">暂无报告 — AI 建模产出报告后自动归档</div>';
     }else{
       el.innerHTML = reports.slice(0,5).map(r=>`<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px dashed var(--line);">
         <span class="st ${typeCls[r.report_type]||'g'}" style="flex:none;">${esc(r.report_type_label||r.report_type)}</span>
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;cursor:pointer;color:var(--blue-d);" onclick="viewReport(${r.id})" title="${esc(r.title)}">${esc(r.title)}</span>
-        <span style="font-size:10.5px;color:var(--mut);flex:none;">${esc((r.created_at||'').slice(5,16).replace('T',' '))}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;cursor:pointer;color:var(--blue-d);" onclick="viewReport(${r.id})" title="${esc(r.title)}">${esc(r.title)}</span>
+        <span style="font-size:12px;color:var(--mut);flex:none;">${esc((r.created_at||'').slice(5,16).replace('T',' '))}</span>
       </div>`).join('') +
-      (reports.length>5?`<div style="font-size:11px;color:var(--mut);padding-top:4px;text-align:center;">… 共 ${reports.length} 份，<a style="cursor:pointer;color:var(--blue-d);" onclick="go('reports')">查看全部 →</a></div>`:'');
+      (reports.length>5?`<div style="font-size:12.5px;color:var(--mut);padding-top:4px;text-align:center;">… 共 ${reports.length} 份，<a style="cursor:pointer;color:var(--blue-d);" onclick="go('reports')">查看全部 →</a></div>`:'');
     }
-  }catch(e){ const el = document.getElementById('recent-reports-home'); if(el) el.innerHTML = '<div style="font-size:11.5px;color:var(--mut);">加载失败</div>'; }
+  }catch(e){ const el = document.getElementById('recent-reports-home'); if(el) el.innerHTML = '<div style="font-size:12.5px;color:var(--mut);">加载失败</div>'; }
 }
 // 工作台最近对话：进入 AI 建模并选中该对话

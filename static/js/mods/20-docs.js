@@ -19,7 +19,7 @@ function uploadDocWithMeta(input) {
   const bl = document.getElementById('doc-batch-list');
   if(files.length > 1) {
     bl.style.display = 'block';
-    bl.innerHTML = files.map(f=>`<div style="font-size:11px;padding:2px 4px;">📄 ${esc(f.name)} <small style="color:var(--mut);">${(f.size/1024).toFixed(1)}KB</small></div>`).join('');
+    bl.innerHTML = files.map(f=>`<div style="font-size:12.5px;padding:2px 4px;">📄 ${esc(f.name)} <small style="color:var(--mut);">${(f.size/1024).toFixed(1)}KB</small></div>`).join('');
   } else { bl.style.display = 'none'; bl.innerHTML = ''; }
   // 默认预填：标题=文件名（去扩展名）、作者=**当前登录用户**
   // ★ 2026-10-23：作者不再硬编码「王工」——那是虚构人名，会随文档入库
@@ -71,13 +71,13 @@ function renderExtractResult(docRef, vr, total, docId) {
   el.scrollIntoView({behavior:'smooth', block:'nearest'});
   // 开关关闭：明确提示未开启（区别于「抽取完成 0 条」）
   if(vr && vr.enabled === false) {
-    el.innerHTML = `<div style="font-size:12px;"><b>⚙ 文档库实体抽取未开启</b>
-      <div style="font-size:11px;color:var(--mut);margin-top:3px;">上传文档仅完成 解析→分块→向量化，不自动抽取实体/关系候选（系统默认）。</div></div>`;
+    el.innerHTML = `<div style="font-size:13.5px;"><b>⚙ 文档库实体抽取未开启</b>
+      <div style="font-size:12.5px;color:var(--mut);margin-top:3px;">上传文档仅完成 解析→分块→向量化，不自动抽取实体/关系候选（系统默认）。</div></div>`;
     return;
   }
   if(!total) {
-    el.innerHTML = `<div style="font-size:12px;"><b>🔍 抽取完成：0 条候选</b>
-      <div style="font-size:11px;color:var(--mut);margin-top:3px;">文档内容未匹配到本体类型词（载荷/天线/需求/部件…）。可在「数据看板」检索后手动抽取，或先在本体模型添加实体类型。
+    el.innerHTML = `<div style="font-size:13.5px;"><b>🔍 抽取完成：0 条候选</b>
+      <div style="font-size:12.5px;color:var(--mut);margin-top:3px;">文档内容未匹配到本体类型词（载荷/天线/需求/部件…）。可在「数据看板」检索后手动抽取，或先在本体模型添加实体类型。
       <button class="btn sm ghost" style="margin-left:6px;" onclick="goReviewTab()">去治理中心</button></div></div>`;
     window._lastV2GBatch = vr.batch_id;
     return;
@@ -99,8 +99,8 @@ function renderExtractResult(docRef, vr, total, docId) {
     </div>`;
   }).join('');
   // 关系候选以三元组「主体 →(关系) 客体」展示
-  const relHtml = rels.length ? `<div style="font-size:11px;color:var(--mut);margin:8px 0 2px;">🔗 关系候选</div>
-    ${rels.map(r=>`<div style="font-size:12px;display:flex;gap:6px;align-items:center;margin:3px 0;flex-wrap:wrap;">
+  const relHtml = rels.length ? `<div style="font-size:12.5px;color:var(--mut);margin:8px 0 2px;">🔗 关系候选</div>
+    ${rels.map(r=>`<div style="font-size:13.5px;display:flex;gap:6px;align-items:center;margin:3px 0;flex-wrap:wrap;">
       <b style="color:var(--ink);">${esc(r.rel_source||'-')}</b>
       <span class="st b">${esc(r.rel_type||'关联')}</span>
       <b style="color:var(--ink);">${esc(r.rel_target||'-')}</b>
@@ -108,7 +108,7 @@ function renderExtractResult(docRef, vr, total, docId) {
   const rejectInfo = (vr.rejected||[]).length
     ? `<span style="color:var(--red);">校验拒绝 ${vr.rejected.length} 条：${esc((vr.rejected||[]).slice(0,3).map(r=>r.errors||'').join('；'))}</span>`
     : '全部通过本体预校验';
-  el.innerHTML = `<div style="font-size:12.5px;">
+  el.innerHTML = `<div style="font-size:13.5px;">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
       <b>🔍 抽取完成</b>
       <span class="st ok">实体 ${nNode}</span>
@@ -119,7 +119,7 @@ function renderExtractResult(docRef, vr, total, docId) {
     </div>
     ${groupHtml}
     ${relHtml}
-    <div style="font-size:11px;color:var(--mut);margin-top:8px;">${rejectInfo} · <span style="opacity:.8">确认后进入实体/关系审核队列正式审核</span></div>
+    <div style="font-size:12.5px;color:var(--mut);margin-top:8px;">${rejectInfo} · <span style="opacity:.8">确认后进入实体/关系审核队列正式审核</span></div>
   </div>`;
   // 保存本次批次号，标注审核页可定位
   window._lastV2GBatch = vr.batch_id;
@@ -604,7 +604,7 @@ async function loadDocs() {
     }
     if(typeof renderDocCrumb === 'function') renderDocCrumb();
     renderDocs();
-  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${esc(e.message)}</div>`; }
+  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">加载失败：${esc(e.message)}</div>`; }
 }
 // ── 资料库列表「更多」下拉：切换显隐，按按钮右下角定位（fixed 避免被滚动容器裁剪）──
 // 注：原「🔌 数据源」入口已随 R1=B 数据集成移除（2026-09-01）一并删除，openDataSources 为死代码清理
@@ -639,7 +639,7 @@ function renderDocs() {
     const _dt = (document.getElementById('doc-date-to')?.value || '');
     if(_df || _dt) _conds.push('时间：' + (_df || '…') + ' ~ ' + (_dt || '…'));
     const _btnAll = '<button class="btn sm ghost" style="margin-top:8px;" onclick="clearAllDocFilters()">清除全部筛选条件</button>';
-    el.innerHTML = `<div style="padding:14px;color:var(--mut);font-size:12px;">
+    el.innerHTML = `<div style="padding:14px;color:var(--mut);font-size:13.5px;">
         ${_conds.length
           ? '<b style="color:var(--ink);">当前条件下没有文档</b><br>生效条件：' + _conds.map(esc).join(' · ') + '<br>' + _btnAll
           : (_scoped
@@ -656,15 +656,15 @@ function renderDocs() {
       // 抽取列：展示既有候选统计（真实数据）；无候选时按开关状态提示「未抽取/—」
       let extCell;
       if(ex && (ex.pending+ex.confirmed+ex.rejected) > 0) {
-        extCell = `<span style="font-size:11px;">
-            <span class="st w" style="cursor:pointer;font-size:10px;" onclick="gotoV2GBatch('${esc(ex.batch)}')" title="点击直达抽取治理中心（按批次过滤）">待审 ${ex.pending}</span>
-            <span style="color:var(--grn);font-size:10px;">✓${ex.confirmed}</span>
-            <span style="color:var(--red);font-size:10px;">✗${ex.rejected}</span></span>`;
+        extCell = `<span style="font-size:12.5px;">
+            <span class="st w" style="cursor:pointer;font-size:12px;" onclick="gotoV2GBatch('${esc(ex.batch)}')" title="点击直达抽取治理中心（按批次过滤）">待审 ${ex.pending}</span>
+            <span style="color:var(--grn);font-size:12px;">✓${ex.confirmed}</span>
+            <span style="color:var(--red);font-size:12px;">✗${ex.rejected}</span></span>`;
       } else {
         let _pd = {}; try { _pd = JSON.parse(d.pipeline_detail||'{}')||{}; } catch(e) {}
         extCell = _pd.extraction === 'disabled'
-          ? '<span style="font-size:11px;color:var(--mut);" title="资料库实体抽取开关未开启">未抽取</span>'
-          : '<span style="font-size:11px;color:var(--mut);">-</span>';
+          ? '<span style="font-size:12.5px;color:var(--mut);" title="资料库实体抽取开关未开启">未抽取</span>'
+          : '<span style="font-size:12.5px;color:var(--mut);">-</span>';
       }
       const lc = d.lifecycle_status || 'uploaded';
       const isDep = lc === 'deprecated';
@@ -672,11 +672,11 @@ function renderDocs() {
       return `<tr draggable="true" data-drag-doc="${d.id}" oncontextmenu="docContextMenu(event,${d.id})" style="cursor:context-menu;${isDep?'opacity:.55;':''}${isArc?'background:var(--color-bg-muted,#fafbfc);':''}" title="右键：加入会话 / 下载 / 追溯 / 元数据；拖到左栏目录可直接归类">
       <td><input type="checkbox" ${_docSelected.has(d.id)?'checked':''} onchange="toggleDocSelect(${d.id}, this.checked)" title="选中以批量操作"></td>
       <td><div class="dhc-trigger" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onmouseenter="docHoverEnter(event,${d.id})" onmousemove="docHoverMove(event)" onmouseleave="docHoverLeave()" title="${esc(d.title && d.title !== d.filename ? d.title + '\n' : '')}${esc(d.filename)}"><b>${esc(d.filename)}</b>${d.origin==='ai_generated'?'<span title="AI 建模产物收编（AI 建模检索默认不消费，可在建模范围中显式开启）" style="cursor:help;">🤖</span>':''}${docExtSuffix(d)}<small style="color:var(--mut);margin-left:5px;">${((d.file_size||0)/1024).toFixed(1)}KB</small></div></td>
-      <td style="font-size:12px;">${esc(d.uploaded_by||'-')}</td>
-      <td style="font-size:11px;color:var(--mut);white-space:nowrap;">${esc((d.created_at||'').slice(0,16))}</td>
+      <td style="font-size:13.5px;">${esc(d.uploaded_by||'-')}</td>
+      <td style="font-size:12.5px;color:var(--mut);white-space:nowrap;">${esc((d.created_at||'').slice(0,16))}</td>
       <td style="cursor:pointer;" onclick="kbSetDocCategory(${d.id}, '${esc(d.knowledge_category||'')}')" title="点击设置知识类别（设计方法知识/设计资产）">${kbCatLabel(d.knowledge_category)}</td>
 
-      <td style="font-size:11.5px;">${(()=>{
+      <td style="font-size:12.5px;">${(()=>{
         // 所属目录（2026-09-21）：未归类显示为可点的兜底入口——「不整理也能被发现」是既有承诺
         const fid = d.folder_id || 0;
         return fid > 0
@@ -932,7 +932,7 @@ function stageTable(detail) {
   }
   let html = `<table class="t" style="margin-top:4px;"><tr><th>管道阶段</th><th>状态</th><th style="text-align:right;">耗时</th></tr>${rows.join('')}</table>`;
   if(hasT && typeof T.total_ms === 'number') {
-    html += `<div style="font-size:11px;color:var(--mut);text-align:right;margin-top:3px;">合计 ${fmtMs(T.total_ms)}</div>`;
+    html += `<div style="font-size:12.5px;color:var(--mut);text-align:right;margin-top:3px;">合计 ${fmtMs(T.total_ms)}</div>`;
   }
   html += ocrInfoTable(d.parse_meta);
   return html;
@@ -970,7 +970,7 @@ function qualityRow(d) {
   const pct = (q*100).toFixed(1);
   const color = q >= 0.7 ? 'var(--green,#3fb950)' : q >= 0.5 ? 'var(--orange,#d29922)' : 'var(--red,#f85149)';
   return `<div class="kv"><span>解析质量分</span><b style="color:${color}">${pct}%</b></div>`
-       + `<div style="font-size:11px;color:var(--mut);margin-top:2px;">`
+       + `<div style="font-size:12.5px;color:var(--mut);margin-top:2px;">`
        + `口径：OCR 识别行平均置信度（仅走 OCR 的文档有此值；文本层抽取不计）。</div>`;
 }
 
@@ -984,10 +984,10 @@ function ocrInfoTable(parseMeta) {
   if(!parts.length) return '';          // 全零 ⇒ 没实际OCR，别显示 "共 0 页"
   let warn = '';
   if(o.pages_pending) {
-    warn = `<div style="font-size:11px;color:var(--orange,#c47f00);margin-top:3px;">
+    warn = `<div style="font-size:12.5px;color:var(--orange,#c47f00);margin-top:3px;">
       ⚠️ 还有 ${o.pages_pending} 页未识别（达到单次时间预算）。重新入库会自动<b>从断点续跑</b>，不重复已识别的页。</div>`;
   } else if(o.truncated) {
-    warn = `<div style="font-size:11px;color:var(--red);margin-top:3px;">
+    warn = `<div style="font-size:12.5px;color:var(--red);margin-top:3px;">
       ✗ 内容被截断：仅索引了前 ${o.pages_ocr||0} 页（extract.ocr_max_pages 上限）。如需完整索引请调大该配置。</div>`;
   }
   // quality 是对象（实测：{lines:84, avg_score:0.696, low_ratio:48.8, min_score:0.505}）
@@ -999,7 +999,7 @@ function ocrInfoTable(parseMeta) {
   }
   const el = (typeof o.elapsed === 'number' && o.elapsed > 0)
     ? ` · 耗时 ${o.elapsed.toFixed(1)}s` : '';   // 单位：秒
-  return `<div style="margin-top:8px;font-size:11px;color:var(--mut);">
+  return `<div style="margin-top:8px;font-size:12.5px;color:var(--mut);">
     <b>OCR</b>：${parts.join(' · ')}${q}${el}
   </div>${warn}`;
 }
@@ -1039,25 +1039,25 @@ async function viewDocSource(id) { return openFilePreview({ doc_id: id }); }
 async function viewDocTrace(id) {
   const d = await api(`/api/documents/${id}`);
   const chunks = (d.chunks||[]).map(c=>`
-    <div style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:6px;font-size:12px;">
+    <div style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:6px;font-size:13.5px;">
       <small style="color:var(--mut);">chunk#${c.chunk_index} ${c.section?'· '+esc(c.section):''} · ${c.embed_version}</small>
       <div style="margin-top:3px;">${esc(c.content)}</div>
-    </div>`).join('') || '<div style="color:var(--mut);font-size:12px;">无分块</div>';
+    </div>`).join('') || '<div style="color:var(--mut);font-size:13.5px;">无分块</div>';
   const ents = (d.linked_entities||[]).map(e=>`<span class="tag" onclick="viewEntity('${e.id}')" style="cursor:pointer;">${esc(e.name)}(${e.entity_type})</span>`).join(' ') || '-';
   openPanel(`📚 文档追溯：${d.filename}`, `
     <div class="kv"><span>标题</span><b>${esc(d.title||'-')}</b></div>
     <div class="kv"><span>作者 / 版本</span><b>${esc(d.author||'-')} / ${d.version}</b></div>
     <div class="kv"><span>上传人 / 时间</span><b>${esc(d.uploaded_by||'-')} / ${esc((d.created_at||'').slice(0,16))}</b></div>
     <div class="kv"><span>状态</span><b><span class="st ${d.parse_status==='completed'?'ok':d.parse_status==='failed'?'r':'w'}">${d.parse_status==='completed'?'已完成':d.parse_status==='failed'?'失败':(d.parse_status==='queued'?'排队中':'解析中')}</span></b></div>
-    ${d.parse_status==='failed'&&d.error_msg?`<div style="font-size:11px;color:var(--red);margin-top:4px;">✗ 失败原因：${esc(d.error_msg)}</div>`:''}
-    <div style="margin-top:8px;border-top:1px dashed var(--line);padding-top:8px;font-size:12px;color:var(--mut);">管道阶段明细：</div>
+    ${d.parse_status==='failed'&&d.error_msg?`<div style="font-size:12.5px;color:var(--red);margin-top:4px;">✗ 失败原因：${esc(d.error_msg)}</div>`:''}
+    <div style="margin-top:8px;border-top:1px dashed var(--line);padding-top:8px;font-size:13.5px;color:var(--mut);">管道阶段明细：</div>
     ${stageTable(d.pipeline_detail)}
     <div class="kv"><span>块数 / 向量</span><b>${d.chunk_count||0} / ${d.embed_version}</b></div>
     ${qualityRow(d)}
     <div style="margin-top:8px;"><button class="btn sm ghost" onclick="viewDocSource(${id})">📖 查看完整文档</button></div>
-    <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px;font-size:12px;color:var(--mut);">关联实体（图谱追溯）：</div>
+    <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px;font-size:13.5px;color:var(--mut);">关联实体（图谱追溯）：</div>
     <div style="margin-top:6px;">${ents}</div>
-    <div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;font-size:12px;color:var(--mut);">分块列表（${(d.chunks||[]).length}）：</div>
+    <div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;font-size:13.5px;color:var(--mut);">分块列表（${(d.chunks||[]).length}）：</div>
     <div style="margin-top:6px;">${chunks}</div>`);
 }
 // ── 元数据编辑：正式表单（上传人/时间只读，对齐主流工具）──
@@ -1124,15 +1124,15 @@ function dsConfigHint() {
 function openDsDrawer() {
   const html = `
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-    <span style="font-size:11px;color:var(--mut);">抽取产物：记录型文档进向量管线 + 候选实体/关系进未评审区（需人工确认后正式入图）</span>
+    <span style="font-size:12.5px;color:var(--mut);">抽取产物：记录型文档进向量管线 + 候选实体/关系进未评审区（需人工确认后正式入图）</span>
     <span style="flex:1"></span>
     <button class="btn sm ghost" onclick="dsToggleForm()" id="ds-form-toggle">➕ 注册数据源</button>
     <button class="btn sm ghost" onclick="loadDataSources()">刷新</button>
   </div>
   <div id="ds-form" style="display:none;border:1px solid var(--blue);border-radius:8px;padding:10px;margin-bottom:10px;background:var(--blue-l);">
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      <input id="ds-name" placeholder="数据源名称" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:160px;">
-      <select id="ds-type" onchange="dsConfigHint()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+      <input id="ds-name" placeholder="数据源名称" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;width:160px;">
+      <select id="ds-type" onchange="dsConfigHint()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;">
         <option value="db">数据库（db）</option>
         <option value="api">接口（api）</option>
         <option value="file">文件（file）</option>
@@ -1140,14 +1140,14 @@ function openDsDrawer() {
       <span style="flex:1"></span>
       <button class="btn sm" onclick="dsCreate()">注册</button>
     </div>
-    <textarea id="ds-config" placeholder='连接配置 JSON（凭据只填环境变量名，不明文落库）' style="width:100%;margin-top:8px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;min-height:64px;"></textarea>
-    <div id="ds-config-hint" style="font-size:11px;color:var(--mut);margin-top:4px;"></div>
+    <textarea id="ds-config" placeholder='连接配置 JSON（凭据只填环境变量名，不明文落库）' style="width:100%;margin-top:8px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13.5px;font-family:monospace;min-height:64px;"></textarea>
+    <div id="ds-config-hint" style="font-size:12.5px;color:var(--mut);margin-top:4px;"></div>
     <div style="margin-top:8px;border-top:1px dashed var(--line);padding-top:8px;">
-      <div style="font-size:11px;color:var(--mut);margin-bottom:4px;">字段映射（预留口子：后端当前仅存储不消费；对接企业库持续同步时启用 —— primary_key 供增量 upsert，field_map 声明 源列→本体类型.属性）：</div>
-      <textarea id="ds-mapping" placeholder='{"primary_key": "part_no", "field_map": {"名称": "实体名", "材料": "Part.material"}}' style="width:100%;border:1px dashed var(--line);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;min-height:48px;"></textarea>
+      <div style="font-size:12.5px;color:var(--mut);margin-bottom:4px;">字段映射（预留口子：后端当前仅存储不消费；对接企业库持续同步时启用 —— primary_key 供增量 upsert，field_map 声明 源列→本体类型.属性）：</div>
+      <textarea id="ds-mapping" placeholder='{"primary_key": "part_no", "field_map": {"名称": "实体名", "材料": "Part.material"}}' style="width:100%;border:1px dashed var(--line);border-radius:6px;padding:6px 8px;font-size:13.5px;font-family:monospace;min-height:48px;"></textarea>
     </div>
   </div>
-  <div id="ds-list" style="display:flex;flex-direction:column;gap:6px;"><span style="font-size:12px;color:var(--mut);">加载中…</span></div>
+  <div id="ds-list" style="display:flex;flex-direction:column;gap:6px;"><span style="font-size:13.5px;color:var(--mut);">加载中…</span></div>
   <div id="ds-preview" style="display:none;margin-top:10px;border:1px dashed var(--line);border-radius:8px;padding:8px;max-height:260px;overflow:auto;"></div>`;
   openPanel('🔌 外部数据源', html);
   loadDataSources();
@@ -1168,7 +1168,7 @@ async function loadDataSources() {
   try {
     const r = await api('/api/knowledge/data-sources');
     const items = r.items || [];
-    if (!items.length) { el.innerHTML = '<span style="font-size:12px;color:var(--mut);">暂无数据源，点「注册数据源」接入数据库 / 接口 / 文件。</span>'; return; }
+    if (!items.length) { el.innerHTML = '<span style="font-size:13.5px;color:var(--mut);">暂无数据源，点「注册数据源」接入数据库 / 接口 / 文件。</span>'; return; }
     el.innerHTML = items.map(d => {
       const status = esc(d.last_status || '未测试');
       let cfg = d.config || {};
@@ -1177,17 +1177,17 @@ async function loadDataSources() {
       return `
       <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;gap:8px;align-items:center;background:#fff;flex-wrap:wrap;">
         <span class="tag">${DS_TYPE_LABEL[d.type] || d.type}</span>
-        <b style="font-size:12px;">${esc(d.name)}</b>
+        <b style="font-size:13.5px;">${esc(d.name)}</b>
         ${hasMap ? '<span class="tag" title="已配置字段映射（预留口子，暂不消费）">映射</span>' : ''}
-        <span style="font-size:11px;color:${d.enabled ? 'var(--ok,green)' : 'var(--mut)'};">${d.enabled ? '● 已启用' : '○ 已停用'}</span>
-        <span style="font-size:11px;color:var(--mut);flex:1;min-width:160px;" title="${status}">${status}</span>
+        <span style="font-size:12.5px;color:${d.enabled ? 'var(--ok,green)' : 'var(--mut)'};">${d.enabled ? '● 已启用' : '○ 已停用'}</span>
+        <span style="font-size:12.5px;color:var(--mut);flex:1;min-width:160px;" title="${status}">${status}</span>
         <button class="btn sm ghost" onclick="dsAction('test',${d.id})">测试</button>
         <button class="btn sm ghost" onclick="dsAction('preview',${d.id})">预览</button>
         <button class="btn sm" onclick="dsAction('ingest',${d.id})" ${d.enabled ? '' : 'disabled'}>抽取入库</button>
         <button class="btn sm red" onclick="dsDelete(${d.id},'${esc(d.name)}')">删除</button>
       </div>`;
     }).join('');
-  } catch (e) { el.innerHTML = `<span style="font-size:12px;color:var(--red,red);">加载失败：${esc(e.message)}</span>`; }
+  } catch (e) { el.innerHTML = `<span style="font-size:13.5px;color:var(--red,red);">加载失败：${esc(e.message)}</span>`; }
 }
 
 async function dsCreate() {
@@ -1231,14 +1231,14 @@ function renderDsPreview(r) {
   const el = document.getElementById('ds-preview');
   el.style.display = '';
   if (r.kind === 'text') {
-    el.innerHTML = `<b style="font-size:12px;">文件内容头部预览</b><pre style="font-size:11px;white-space:pre-wrap;margin:6px 0 0;">${esc(r.sample)}</pre>`;
+    el.innerHTML = `<b style="font-size:13.5px;">文件内容头部预览</b><pre style="font-size:12.5px;white-space:pre-wrap;margin:6px 0 0;">${esc(r.sample)}</pre>`;
     return;
   }
   const cols = r.columns || [];
-  const head = `<tr>${cols.map(c => `<th style="text-align:left;padding:3px 8px;border-bottom:1px solid var(--line);font-size:11px;">${esc(c)}</th>`).join('')}</tr>`;
-  const rows = (r.rows || []).map(row => `<tr>${cols.map(c => `<td style="padding:3px 8px;border-bottom:1px dashed var(--line);font-size:11px;">${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`).join('');
-  el.innerHTML = `<b style="font-size:12px;">记录预览（${r.count} 条）</b>
-    <div style="font-size:11px;color:var(--mut);margin:4px 0;">${esc(r.note || '')} —— 确认无误后点「抽取入库」。</div>
+  const head = `<tr>${cols.map(c => `<th style="text-align:left;padding:3px 8px;border-bottom:1px solid var(--line);font-size:12.5px;">${esc(c)}</th>`).join('')}</tr>`;
+  const rows = (r.rows || []).map(row => `<tr>${cols.map(c => `<td style="padding:3px 8px;border-bottom:1px dashed var(--line);font-size:12.5px;">${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`).join('');
+  el.innerHTML = `<b style="font-size:13.5px;">记录预览（${r.count} 条）</b>
+    <div style="font-size:12.5px;color:var(--mut);margin:4px 0;">${esc(r.note || '')} —— 确认无误后点「抽取入库」。</div>
     <table style="border-collapse:collapse;width:100%;">${head}${rows}</table>`;
 }
 

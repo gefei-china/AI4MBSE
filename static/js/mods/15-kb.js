@@ -31,7 +31,7 @@ async function loadKBDashboard(runShacl) {
     kbTidyHeaders();         // V7：必须在**全部渲染完成后**收口（否则新渲染面板的 badge 漏掉）
     kbLoadTrends();          // sparkline 趋势（无快照则不画线）
   } catch (e) {
-    el.innerHTML = `<div style="color:var(--red);font-size:12px;">看板加载失败：${esc(e.message||e)}</div>`;
+    el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">看板加载失败：${esc(e.message||e)}</div>`;
   }
   loadEngineStats();
   loadGraphDbStats();  // P2：图数据库看板（未启用时整体收起，见 loadGraphDbStats）
@@ -80,10 +80,10 @@ function renderKBScopes(d, el) {
       ${cells.map(c => `<td style="${NM}">${c}</td>`).join('')}
       <td style="${TD}color:var(--color-text-muted);" title="${esc(tip || '')}">${note}</td></tr>`;
   el.innerHTML = `
-    <div style="color:var(--color-text-muted);font-size:11px;margin-bottom:4px;">
+    <div style="color:var(--color-text-muted);font-size:12.5px;margin-bottom:4px;">
       同一份图谱的三个作用域 —— <b style="color:var(--color-text);">AI 建模只消费「权威基线」</b>；
       另两行分别是我的作业面与去重后的总量，<u>不能直接混比</u>（悬停列头/角标看口径）。</div>
-    <table class="t" style="width:100%;font-size:12px;color:var(--color-text-muted);">
+    <table class="t" style="width:100%;font-size:13.5px;color:var(--color-text-muted);">
       <tr>${['作用域', '实体', '关系', '已评审', '已发布', '待处理 / 口径说明']
         .map(h => `<th style="${TH}">${h}</th>`).join('')}</tr>
       ${line('权威基线', 'release',
@@ -103,7 +103,7 @@ function renderKBScopes(d, el) {
         `跨分支去重（行数 ${gl.entities_rows || 0}/${gl.relations_rows || 0}）`,
         '实体按逻辑 id、关系按 (源,类型,目标) 三元组去重。行数是含 dev/release/personal 三份副本的原始行数，仅供对账')}
     </table>
-    <div style="color:var(--color-text-muted);font-size:11px;margin-top:6px;">
+    <div style="color:var(--color-text-muted);font-size:12.5px;margin-top:6px;">
       <span id="kb-graphdb-status"><span class="st g">图数据库 读取中…</span></span></div>`;
 }
 function renderKBRedlines(d) {
@@ -121,12 +121,12 @@ function renderKBRedlines(d) {
       <span><span class="st ${kbStatusSt(m.status)}">${word}</span><b style="color:var(--blue-d);">${esc(m.name)}</b>${kbInfo(m)}
         <span class="tag">目标 ${esc(m.target || '')}</span>${kbScopeTag(m.scope)}</span>
       <span style="flex:1"></span>
-      <b style="color:var(--blue-d);font-size:14px;">${m.value}${esc(m.unit || '')}</b>
+      <b style="color:var(--blue-d);font-size:15.5px;">${m.value}${esc(m.unit || '')}</b>
       ${can ? `<span class="tag">${esc(m.drill.title || '下钻')} →</span>` : ''}
     </div>`;
   }).join('');
   const s = d.summary || {};
-  el.innerHTML = rows + `<div style="margin-top:8px;font-size:11px;color:var(--mut);">
+  el.innerHTML = rows + `<div style="margin-top:8px;font-size:12.5px;color:var(--mut);">
     全局汇总：<span class="st r">alert ${s.alert || 0}</span> <span class="st w">warn ${s.warn || 0}</span>
     <span class="st ok">ok ${s.ok || 0}</span>　点击任一行可下钻到修复入口。</div>`;
 }
@@ -148,7 +148,7 @@ function renderKBGov(d) {
       <div class="l" style="display:flex;justify-content:space-between;gap:6px;align-items:center;">
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)}</span>${kbInfo(m)}
         <span class="st ${sc[m.status] || 'g'}">${esc(m.status)}</span></div>
-      <div class="n">${val}<small style="font-size:11px;color:var(--mut);"> ${esc(m.unit || '')}</small><span class="kb-spark"></span></div>
+      <div class="n">${val}<small style="font-size:12.5px;color:var(--mut);"> ${esc(m.unit || '')}</small><span class="kb-spark"></span></div>
       <div class="l">目标 ${esc(m.target || '—')}</div>
       <div class="l" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.detail || '')}</div>
     </div>`;
@@ -167,14 +167,14 @@ function renderKBGov(d) {
       const items = g.items || [];
       const alertish = items.filter(m => m.status !== 'ok');
       const okItems = items.filter(m => m.status === 'ok');
-      const head = `<div style="font-size:11px;color:var(--mut);margin:0 0 6px;">${esc(g.name)}
+      const head = `<div style="font-size:12.5px;color:var(--mut);margin:0 0 6px;">${esc(g.name)}
         <span class="tag">${items.length} 项</span>
         <span class="st ${alertish.length ? 'w' : 'ok'}">${alertish.length ? alertish.length + ' 项待关注' : '全部达标'}</span></div>`;
       const body = alertish.length
         ? `<div style="${GRID}margin-bottom:12px;">${alertish.map(cardOf).join('')}</div>`
-        : `<div style="font-size:11.5px;color:var(--grn);margin:0 0 12px;">✅ 本组无待关注项</div>`;
+        : `<div style="font-size:12.5px;color:var(--grn);margin:0 0 12px;">✅ 本组无待关注项</div>`;
       const fold = okItems.length ? `<details style="margin-bottom:12px;">
-        <summary style="font-size:11px;color:var(--grn);cursor:pointer;">✅ ${okItems.length} 项达标（点击展开：${okItems.slice(0,3).map(m=>esc(m.name)).join('、')}${okItems.length>3?'…':''}）</summary>
+        <summary style="font-size:12.5px;color:var(--grn);cursor:pointer;">✅ ${okItems.length} 项达标（点击展开：${okItems.slice(0,3).map(m=>esc(m.name)).join('、')}${okItems.length>3?'…':''}）</summary>
         <div style="${GRID}margin-top:8px;">${okItems.map(cardOf).join('')}</div></details>` : '';
       return head + body + fold;
     }).join('');
@@ -191,25 +191,25 @@ async function loadOntologyReadiness(){
   try{
     const r = await api('/api/knowledge/ontology/check');
     el.innerHTML = r && r.ready
-      ? `<span style="font-size:11px;color:var(--grn);">✅ 本体已就绪（${r.entity_types.length} 实体类型 / ${r.relation_types.length} 关系类型），AI 建模/抽取受 Schema 约束</span>`
-      : `<span style="font-size:11px;color:var(--amb);">⚠️ 本体未完整定义，请先进入「本体模型」完成建模前置（实体 / 关系类型至少各 1）</span>`;
+      ? `<span style="font-size:12.5px;color:var(--grn);">✅ 本体已就绪（${r.entity_types.length} 实体类型 / ${r.relation_types.length} 关系类型），AI 建模/抽取受 Schema 约束</span>`
+      : `<span style="font-size:12.5px;color:var(--amb);">⚠️ 本体未完整定义，请先进入「本体模型」完成建模前置（实体 / 关系类型至少各 1）</span>`;
     try{
       const ac = await api('/api/knowledge/ontology/alias-coverage');
       if(ac && ac.zero_count>0){
-        el.innerHTML += `<span style="font-size:11px;color:var(--amb);cursor:pointer;margin-left:10px;" onclick="ontAliasCoverage()" title="零别名类型=抽取归一盲区">⚠ 零别名类 ${ac.zero_count}/${ac.total}（点击查看）</span>`;
+        el.innerHTML += `<span style="font-size:12.5px;color:var(--amb);cursor:pointer;margin-left:10px;" onclick="ontAliasCoverage()" title="零别名类型=抽取归一盲区">⚠ 零别名类 ${ac.zero_count}/${ac.total}（点击查看）</span>`;
       } else if(ac && ac.total){
-        el.innerHTML += `<span style="font-size:11px;color:var(--grn);margin-left:10px;" title="词典（词法层）覆盖检查">别名覆盖 ${ac.covered}/${ac.total}</span>`;
+        el.innerHTML += `<span style="font-size:12.5px;color:var(--grn);margin-left:10px;" title="词典（词法层）覆盖检查">别名覆盖 ${ac.covered}/${ac.total}</span>`;
       }
     }catch(e){}
-  }catch(e){ el.innerHTML = '<span style="font-size:11px;color:var(--mut);">本体就绪检测失败</span>'; }
+  }catch(e){ el.innerHTML = '<span style="font-size:12.5px;color:var(--mut);">本体就绪检测失败</span>'; }
 }
 // R3：零别名类清单面板
 async function ontAliasCoverage(){
   try{
     const ac = await api('/api/knowledge/ontology/alias-coverage');
-    const list = (ac.zero_alias||[]).map(x=>`<div style="display:flex;gap:6px;align-items:center;padding:4px 0;border-bottom:1px dashed var(--line);font-size:12px;"><span class="st ${x.kind==='relation'?'b':'w'}">${x.kind==='relation'?'关系':'类'}</span><b>${esc(x.name)}</b></div>`).join('');
+    const list = (ac.zero_alias||[]).map(x=>`<div style="display:flex;gap:6px;align-items:center;padding:4px 0;border-bottom:1px dashed var(--line);font-size:13.5px;"><span class="st ${x.kind==='relation'?'b':'w'}">${x.kind==='relation'?'关系':'类'}</span><b>${esc(x.name)}</b></div>`).join('');
     openPanel('⚠ 零别名类型（抽取归一盲区 · '+ac.zero_count+'/'+ac.total+'）',
-      '<div style="font-size:11.5px;color:var(--mut);margin-bottom:8px;line-height:1.6;">以下本体类型在词典（词法层）中没有任何别名——抽取遇到这些概念的口语/缩写/错拼时将无法归一。可进入各类型的 Description 面板「＋ 添加别名」补齐。</div>' + (list || '<div style="color:var(--grn);font-size:12px;">✅ 全覆盖</div>'));
+      '<div style="font-size:12.5px;color:var(--mut);margin-bottom:8px;line-height:1.6;">以下本体类型在词典（词法层）中没有任何别名——抽取遇到这些概念的口语/缩写/错拼时将无法归一。可进入各类型的 Description 面板「＋ 添加别名」补齐。</div>' + (list || '<div style="color:var(--grn);font-size:13.5px;">✅ 全覆盖</div>'));
   }catch(e){ toast('覆盖度加载失败：'+e.message); }
 }
 /* ⑤ 三元组统一审核（S-P-O）：待审队列表 + 通过/驳回/全部通过（真实调用后端） */
@@ -232,7 +232,7 @@ async function loadTripleReviewPane(){
     if(!shown.length){
       let _ts = {}; try{ _ts = await api('/api/knowledge/triples/stats').catch(()=>({})) || {}; }catch(e){}
       const _pending = _ts.to_store||0;
-      el.innerHTML = `<div style="padding:14px;color:var(--mut);font-size:12px;">${items.length ? '当前筛选条件下无待审三元组（切换上方来源可查看其余）。' : '暂无待审三元组。'}三元组统计：已通过 ${st.approved||0} / 待审 ${st.pending||0} / 驳回 ${st.rejected||0}。<br>抽取审核确认后产生待审三元组，以 (S-P-O) 原子单元在此统一审核；实体/关系为通过后 commit 反写产物。</div>`
+      el.innerHTML = `<div style="padding:14px;color:var(--mut);font-size:13.5px;">${items.length ? '当前筛选条件下无待审三元组（切换上方来源可查看其余）。' : '暂无待审三元组。'}三元组统计：已通过 ${st.approved||0} / 待审 ${st.pending||0} / 驳回 ${st.rejected||0}。<br>抽取审核确认后产生待审三元组，以 (S-P-O) 原子单元在此统一审核；实体/关系为通过后 commit 反写产物。</div>`
         + (_pending>0 ? `<div style="padding:0 14px 14px;"><div class="fempty">📦 有 <b>${_pending}</b> 条已审核三元组待落图（角标显示的即此数量入「发布」站水位）——落图后写入图谱实体。<br><button class="btn sm grn" onclick="tripleCommit()">⚡ 立即落图（${_pending} 条）</button></div></div>` : '');
       return;
     }
@@ -242,25 +242,25 @@ async function loadTripleReviewPane(){
       if(di.kind==='suspect') return `<span class="st w" title="${esc(di.dup_with||'')}">🔀 与图谱「${esc(di.dup_with||'?')}」近似</span>`;
       return `<span class="st ok" title="图库无同指实体/三元组">✅ 新建</span>`;
     };
-    const row = t => `<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px dashed var(--line);font-size:12px;">
+    const row = t => `<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px dashed var(--line);font-size:13.5px;">
       <span class="tag">${esc(t.object_type==='entity'?'🔗 关系':'🏷 属性')}</span>
       <b style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(t.label)}">${esc(t.subject_name)}</b>
       <span style="color:var(--blue);white-space:nowrap;">${esc(t.predicate)}</span>
       <span style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.object_value||t.object_id||'')}</span>
       ${dupBadge(t)}
       <span style="margin-left:auto;display:flex;align-items:center;gap:4px;">
-        <span style="font-size:10px;color:var(--mut);">置信 ${t.confidence||0}</span>
-        <button class="btn sm grn" style="font-size:10px;padding:1px 8px;" onclick="tripleAct('${t.triple_id}','approved')">通过</button>
-        <button class="btn sm ghost" style="font-size:10px;padding:1px 8px;background:rgba(229,62,62,.1);color:var(--red);" onclick="tripleAct('${t.triple_id}','rejected')">驳回</button>
+        <span style="font-size:12px;color:var(--mut);">置信 ${t.confidence||0}</span>
+        <button class="btn sm grn" style="font-size:12px;padding:1px 8px;" onclick="tripleAct('${t.triple_id}','approved')">通过</button>
+        <button class="btn sm ghost" style="font-size:12px;padding:1px 8px;background:rgba(229,62,62,.1);color:var(--red);" onclick="tripleAct('${t.triple_id}','rejected')">驳回</button>
       </span></div>`;
-    el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);background:#f7f9fc;font-size:12px;">
-      <select id="triple-src-filter" onchange="tripleSetSrc(this.value)" style="border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:11px;max-width:180px;">${srcOpts}</select>
+    el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);background:#f7f9fc;font-size:13.5px;">
+      <select id="triple-src-filter" onchange="tripleSetSrc(this.value)" style="border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:12.5px;max-width:180px;">${srcOpts}</select>
       <b>共 ${shown.length} 条待审</b>
-      <span style="font-size:11px;color:var(--mut);">立即全部通过（慢速核对或批量放行）</span>
+      <span style="font-size:12.5px;color:var(--mut);">立即全部通过（慢速核对或批量放行）</span>
       <span style="flex:1"></span>
       <button class="btn sm grn" onclick="tripleApproveAll()">✅ 全部通过</button></div>` +
       shown.map(row).join('');
-  }catch(e){ el.innerHTML = `<div style="color:var(--red);font-size:12px;">三元组队列加载失败：${e.message}</div>`; }
+  }catch(e){ el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">三元组队列加载失败：${e.message}</div>`; }
 }
 window.tripleSetSrc = function(v){ window._tripleSrcFilter = v; loadTripleReviewPane(); };
 window.tripleAct = async function(triple_id, decision){
@@ -305,7 +305,7 @@ async function loadKBOverview() {
     const k = r.kpi || {};
     const lcAll = r.lifecycle || {}, lc = lcAll.lifecycle || {};
     const total = lcAll.total || 1;
-    const SEC = 'font-size:11px;color:var(--mut);margin:12px 0 6px;';
+    const SEC = 'font-size:12.5px;color:var(--mut);margin:12px 0 6px;';
     const ASSET = 'text-align:left;';
     const card = (l, n, style) => `<div class="asset" style="${ASSET}"><div class="n" style="${style||''}">${n}</div><div class="l">${l}</div></div>`;
 
@@ -316,7 +316,7 @@ async function loadKBOverview() {
       ${card('📄 文档（真全局）', k.documents || 0)}
       ${card('🕘 待评审', k.pending_review || 0,
              (k.pending_review || 0) ? 'color:var(--blue-d);font-weight:700;' : '')}</div>
-      <div style="font-size:10.5px;color:var(--mut);margin-top:4px;"
+      <div style="font-size:12px;color:var(--mut);margin-top:4px;"
         title="entities 主键 (id, branch)：同一逻辑对象在每个分支各存一行，故直接 COUNT(*) 会把知识量重复 3 倍。实体按 id、关系按 (源,类型,目标) 去重。">
         去重口径 · 对账：实体行数 ${k.entities_rows || 0} / 关系行数 ${k.relations_rows || 0}（含 dev/release/personal 副本）</div>`;
 
@@ -328,9 +328,9 @@ async function loadKBOverview() {
       const n = lc[kk] || 0, pct = Math.round(n * 100 / total);
       return `<div style="flex:1;min-width:70px;text-align:center;" title="${esc(label)}：${n}（${pct}%）">
         <div style="height:10px;border-radius:5px;background:${color};opacity:${n ? 1 : 0.25};"></div>
-        <div style="font-size:11px;font-weight:600;margin-top:4px;color:var(--blue-d);">${n}</div>
-        <div style="font-size:10px;color:var(--mut);">${label}</div>
-        <div style="font-size:10px;color:var(--mut);">${pct}%</div></div>`;
+        <div style="font-size:12.5px;font-weight:600;margin-top:4px;color:var(--blue-d);">${n}</div>
+        <div style="font-size:12px;color:var(--mut);">${label}</div>
+        <div style="font-size:12px;color:var(--mut);">${pct}%</div></div>`;
     }).join('');
     const lifeHtml = `<div style="${SEC}">生命周期分布 <span class="tag" title="${esc(lcAll.scope_note || '')}">跨分支行数</span>
       <span class="tag">发布记录 ${lcAll.published_records || 0} 条</span></div>
@@ -341,7 +341,7 @@ async function loadKBOverview() {
     const maxN = src.reduce((m, s) => Math.max(m, s.n || 0), 1);
     const srcHtml = src.length ? `<div style="${SEC}">来源分布 <span class="tag" title="与上方资产 KPI 同口径：按逻辑 id 跨分支去重">跨分支去重</span></div>
       <div style="display:flex;flex-wrap:wrap;gap:8px 16px;">${src.map(s =>
-        `<div style="font-size:11px;flex:1;min-width:130px;"><div style="display:flex;justify-content:space-between;">
+        `<div style="font-size:12.5px;flex:1;min-width:130px;"><div style="display:flex;justify-content:space-between;">
           <span>${esc(s.source_type)}</span><b style="color:var(--blue-d);">${s.n}</b></div>
           <div style="height:6px;border-radius:3px;background:var(--line);margin-top:2px;">
             <div style="height:6px;border-radius:3px;background:var(--blue);width:${Math.round((s.n || 0) * 100 / maxN)}%;"></div></div></div>`).join('')}</div>` : '';
@@ -355,15 +355,15 @@ async function loadKBOverview() {
     const allZero = !(qv.total || 0) && !(qe.total || 0) && !(qr.total || 0);
     const queueRow = (title, tot, items, itemFn) => `
       <div style="flex:1;min-width:210px;">
-        <div style="font-size:11px;color:var(--mut);margin-bottom:4px;">${title} <span class="st w">${tot} 条</span></div>
-        ${items.length ? items.map(itemFn).join('') : '<div style="font-size:11px;color:var(--mut);padding:5px 0;">暂无待评审</div>'}
+        <div style="font-size:12.5px;color:var(--mut);margin-bottom:4px;">${title} <span class="st w">${tot} 条</span></div>
+        ${items.length ? items.map(itemFn).join('') : '<div style="font-size:12.5px;color:var(--mut);padding:5px 0;">暂无待评审</div>'}
       </div>`;
     const v2gItem = c => `<div class="todo-item" onclick="go('kb','kb-b')" title="点击前往治理中心处理"><b>${esc(c.name)}</b><span class="tag">${esc(c.entity_type || '候选')}</span></div>`;
     const entItem = c => `<div class="todo-item" onclick="go('kb','kb-b')" title="点击前往治理中心处理"><b>${esc(c.name)}</b><span class="tag">${esc(c.entity_type)}</span></div>`;
     const relItem = c => `<div class="todo-item" onclick="go('kb','kb-b')" title="点击前往数据整理处理"><b>${esc(c.source_name)} → ${esc(c.relation_type)} → ${esc(c.target_name)}</b><span class="tag">关系</span></div>`;
     const queueHtml = allZero
       ? `<div style="${SEC}">待评审队列</div>
-         <div style="font-size:12px;color:var(--grn);">✅ 三类待评审队列均为 0（v2g 候选 / 实体候选 / 关系候选），无需处理。</div>`
+         <div style="font-size:13.5px;color:var(--grn);">✅ 三类待评审队列均为 0（v2g 候选 / 实体候选 / 关系候选），无需处理。</div>`
       : `<div style="${SEC}">待评审队列</div>
          <div style="display:flex;gap:18px;flex-wrap:wrap;">${queueRow('🕘 v2g 候选', qv.total || 0, qv.items || [], v2gItem)}${queueRow('🧬 实体候选', qe.total || 0, qe.items || [], entItem)}${queueRow('🔗 关系候选', qr.total || 0, qr.items || [], relItem)}</div>`;
 
@@ -371,7 +371,7 @@ async function loadKBOverview() {
     const gt = r.graph_thumb || {};
     const thumb = (gt.entities || []).slice(0, 14).map(e => `<span class="tag" title="${esc(e.entity_type)}">${esc(e.name)}</span>`).join(' ');
     const thumbHtml = `<div style="${SEC}">图谱缩略（已评审实体 <b>${(gt.entities || []).length}</b> / 关系 <b>${gt.relations || 0}</b>）</div>
-      <div style="line-height:1.9;">${thumb || '<span style="color:var(--mut);font-size:11px;">暂无已评审实体</span>'}</div>`;
+      <div style="line-height:1.9;">${thumb || '<span style="color:var(--mut);font-size:12.5px;">暂无已评审实体</span>'}</div>`;
 
     // ⚠️ 容器级基础色：`#kb-overview` 内所有未显式上色的文本都吃 `--mut`。
     //    不这样做则它们继承正文色（暗色翻转为浅色）而 `.panel` 恒白底 → 白底浅字不可读
@@ -379,7 +379,7 @@ async function loadKBOverview() {
     el.innerHTML = `<div style="color:var(--mut);">`
       + kpiHtml + lifeHtml + srcHtml + catHtml + queueHtml + thumbHtml + `</div>`;
   } catch (e) {
-    el.innerHTML = `<div style="color:var(--red);font-size:12px;">总览加载失败：${e.message}</div>`;
+    el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">总览加载失败：${e.message}</div>`;
   }
 }
 async function loadCoverage() {
@@ -395,12 +395,12 @@ async function loadCoverage() {
       const v = Math.min(100, Math.round((lvl.coverage_rate||0)*100));
       const st = cst(v, ok, warn);
       return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
-        <span style="font-size:11px;color:var(--mut);width:126px;flex:none;">${label}</span>
+        <span style="font-size:12.5px;color:var(--mut);width:126px;flex:none;">${label}</span>
         <div style="flex:1;height:10px;border-radius:5px;background:var(--line);"><div style="height:10px;border-radius:5px;background:${cvar(st)};width:${v}%;"></div></div>
-        <b style="font-size:15px;color:${cvar(st)};">${v}%</b>
+        <b style="font-size:16.5px;color:${cvar(st)};">${v}%</b>
         <span class="st ${st==='ok'?'ok':st==='warn'?'w':'r'}">${st}</span>
         <span class="tag">${lvl.covered_types||0}/${lvl.total_types||0}</span></div>
-        <div style="font-size:11px;color:var(--mut);margin:0 0 8px 126px;">${note}</div>`;
+        <div style="font-size:12.5px;color:var(--mut);margin:0 0 8px 126px;">${note}</div>`;
     };
     const covBar2 = covBar('SysML 元素类型', tc, 82, 50,
         '规范约束源：分母＝SysML v2 元素类型 14 类（PRD §2.2 目标 ≥82%）')
@@ -409,18 +409,18 @@ async function loadCoverage() {
     const unlink = Math.round((cl.unlinked_ratio||0)*100);
     // P0 修 C3：分块追溯覆盖率升级为告警级（0/5758＝100% 未链接 ⇒ 抽取链断裂，非"说明文字"）
     const traceSt = unlink >= 30 ? 'alert' : (unlink >= 10 ? 'warn' : 'ok');
-    const chunkHtml = `<div style="font-size:11.5px;margin-top:8px;padding:6px 10px;border-radius:6px;background:${unlink>=30?'var(--red-l)':'var(--blue-l)'};color:${unlink>=30?'var(--red)':'var(--blue-d)'};">
+    const chunkHtml = `<div style="font-size:12.5px;margin-top:8px;padding:6px 10px;border-radius:6px;background:${unlink>=30?'var(--red-l)':'var(--blue-l)'};color:${unlink>=30?'var(--red)':'var(--blue-d)'};">
       <span class="st ${traceSt==='ok'?'ok':traceSt==='warn'?'w':'r'}">${traceSt}</span>
       分块追溯覆盖率：${cl.linked_chunks||0}/${cl.total_chunks||0} 个分块已链接实体，<b>未链接 ${unlink}%</b>
       <span style="color:var(--mut);">（未链接＝抽取结果无来源，追溯链断裂；修复入口见「治理红线」）</span></div>`;
     const empties = tc.empty_types||[];
-    const emptyHtml = `<div style="margin-top:10px;font-size:11px;color:var(--mut);">SysML 级空类型（无已评审实例，建议优先抽取）：</div>
-      <div style="margin-top:4px;line-height:1.9;">${empties.length ? empties.map(t=>`<span class="tag" style="border-color:var(--amb);color:var(--amb);" title="无已评审实例">${esc(t.name)}</span>`).join(' ') : '<span style="font-size:11px;color:var(--grn);">✅ 全部 SysML 元素类型均有已评审实例</span>'}</div>`;
+    const emptyHtml = `<div style="margin-top:10px;font-size:12.5px;color:var(--mut);">SysML 级空类型（无已评审实例，建议优先抽取）：</div>
+      <div style="margin-top:4px;line-height:1.9;">${empties.length ? empties.map(t=>`<span class="tag" style="border-color:var(--amb);color:var(--amb);" title="无已评审实例">${esc(t.name)}</span>`).join(' ') : '<span style="font-size:12.5px;color:var(--grn);">✅ 全部 SysML 元素类型均有已评审实例</span>'}</div>`;
     const topics = (r.fallback_topics||[]).slice(0,10);
-    const topicHtml = `<div style="margin-top:10px;font-size:11px;color:var(--mut);">建议抽取主题（检索 fallback 高频词，点击直达 v2g 手动抽取）：</div>
-      <div style="margin-top:4px;line-height:1.9;">${topics.length ? topics.map(t=>`<span class="tag" style="border-color:var(--blue);color:var(--blue-d);cursor:pointer;" title="点击用该主题触发抽取" onclick="coverageExtractTopic('${esc(t.word).replace(/'/g,"\\'")}')">${esc(t.word)} ${t.count}</span>`).join(' ') : '<span style="font-size:11px;color:var(--mut);">暂无 fallback 检索记录</span>'}</div>`;
+    const topicHtml = `<div style="margin-top:10px;font-size:12.5px;color:var(--mut);">建议抽取主题（检索 fallback 高频词，点击直达 v2g 手动抽取）：</div>
+      <div style="margin-top:4px;line-height:1.9;">${topics.length ? topics.map(t=>`<span class="tag" style="border-color:var(--blue);color:var(--blue-d);cursor:pointer;" title="点击用该主题触发抽取" onclick="coverageExtractTopic('${esc(t.word).replace(/'/g,"\\'")}')">${esc(t.word)} ${t.count}</span>`).join(' ') : '<span style="font-size:12.5px;color:var(--mut);">暂无 fallback 检索记录</span>'}</div>`;
     el.innerHTML = covBar2 + chunkHtml + emptyHtml + topicHtml;
-  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">完整度加载失败：${e.message}</div>`; }
+  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">完整度加载失败：${e.message}</div>`; }
 }
 /* 点击完整度主题词 → 填入检索框并触发 v2g 手动抽取（最简路径，等价 impToV2G 抽取流程） */
 function coverageExtractTopic(word) {
@@ -504,7 +504,7 @@ function renderNoHitBreakdown(nh){
   //   同一个"真召回缺口占比"两个口径并存，是最容易吵架的地方。
   const realPct = nh.total ? Math.round((nh.corpus_gap||0)*100/nh.total) : 0;
   return `<div style="margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fff;">
-    <div style="font-size:11px;color:var(--mut);margin-bottom:6px;">
+    <div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">
       零命中 <b>${nh.total}</b> 次（占全部检索 ${nh.pct_of_all||0}%）
       <span style="float:right;color:${realPct>=50?'var(--amb)':'var(--grn)'};"
             title="分母=零命中总数。后端另有一个 real_recall_rate（分母=全部查询），两者不同请勿混用">
@@ -512,7 +512,7 @@ function renderNoHitBreakdown(nh){
       </span>
     </div>
     <div style="display:flex;gap:2px;border-radius:4px;overflow:hidden;margin-bottom:8px;">${bar}</div>
-    <div style="font-size:11px;color:var(--mut);line-height:1.7;">${legend}</div>
+    <div style="font-size:12.5px;color:var(--mut);line-height:1.7;">${legend}</div>
   </div>`;
 }
 
@@ -526,24 +526,24 @@ async function loadEngineStats() {
       const r = routes[k];
       const nm = {graph:'纯图检索',mixed:'图+向量混合',vector:'纯向量检索'}[k]||k;
       return `<div style="flex:1;min-width:130px;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fff;">
-        <div style="font-size:11px;color:var(--mut);">${nm} <b style="float:right;">${r.pct}%</b></div>
-        <div style="font-size:18px;font-weight:700;color:var(--blue-d);margin:4px 0;">${r.count}<small style="font-size:11px;color:var(--mut);"> 次</small></div>
-        <div style="font-size:11px;color:var(--mut);">平均置信 ${r.avg_confidence||0} · ${r.avg_latency_ms||0}ms</div>
+        <div style="font-size:12.5px;color:var(--mut);">${nm} <b style="float:right;">${r.pct}%</b></div>
+        <div style="font-size:19.5px;font-weight:700;color:var(--blue-d);margin:4px 0;">${r.count}<small style="font-size:12.5px;color:var(--mut);"> 次</small></div>
+        <div style="font-size:12.5px;color:var(--mut);">平均置信 ${r.avg_confidence||0} · ${r.avg_latency_ms||0}ms</div>
       </div>`;
     }).join('');
     const recent = (s.recent||[]).slice(0,4).map(x=>`<span class="tag" title="${escA(x.reason||'')}">${x.route}「${escA(String(x.query||'').slice(0,18))}」</span>`).join(' ');
     el.innerHTML = `
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <div style="flex:1;min-width:130px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--blue-l);">
-          <div style="font-size:11px;color:var(--blue-d);">累计查询</div>
-          <div style="font-size:18px;font-weight:700;color:var(--blue-d);margin:4px 0;">${s.total_queries}<small style="font-size:11px;"> 次</small></div>
-          <div style="font-size:11px;color:var(--blue-d);">每次检索自动落库统计</div>
+          <div style="font-size:12.5px;color:var(--blue-d);">累计查询</div>
+          <div style="font-size:19.5px;font-weight:700;color:var(--blue-d);margin:4px 0;">${s.total_queries}<small style="font-size:12.5px;"> 次</small></div>
+          <div style="font-size:12.5px;color:var(--blue-d);">每次检索自动落库统计</div>
         </div>
         ${bars}
       </div>
       ${renderNoHitBreakdown(s.no_hit)}
-      ${recent?`<div style="margin-top:8px;font-size:11px;color:var(--mut);">最近：${recent}</div>`:''}`;
-  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${e.message}</div>`; }
+      ${recent?`<div style="margin-top:8px;font-size:12.5px;color:var(--mut);">最近：${recent}</div>`:''}`;
+  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">加载失败：${e.message}</div>`; }
 }
 /* 2026-09-01 P2：图数据库看板（ArcR-5 查询镜像：stats / SPARQL 只读查询 / 同步入图 / N-Quads 导出） */
 async function loadGraphDbStats(){
@@ -568,13 +568,13 @@ async function loadGraphDbStats(){
     const graphs = (st.graphs||[]).map(g=>`<span class="tag">${esc(String(g).replace(/^(urn:mbse:graph:|http:\/\/www\.xingwang\.mbse\/graph:)/,'').replace(/%2F/gi,'/'))}</span>`).join(' ');
     el.innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;">
       <div style="flex:1;min-width:120px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--blue-l);">
-        <div style="font-size:11px;color:var(--blue-d);">后端</div><div style="font-size:18px;font-weight:700;color:var(--blue-d);margin:4px 0;">${esc(st.backend||'-')}</div></div>
+        <div style="font-size:12.5px;color:var(--blue-d);">后端</div><div style="font-size:19.5px;font-weight:700;color:var(--blue-d);margin:4px 0;">${esc(st.backend||'-')}</div></div>
       <div style="flex:1;min-width:120px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--blue-l);">
-        <div style="font-size:11px;color:var(--blue-d);">三元组</div><div style="font-size:18px;font-weight:700;color:var(--blue-d);margin:4px 0;">${st.triple_count||0}</div></div>
+        <div style="font-size:12.5px;color:var(--blue-d);">三元组</div><div style="font-size:19.5px;font-weight:700;color:var(--blue-d);margin:4px 0;">${st.triple_count||0}</div></div>
       <div style="flex:2;min-width:200px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--blue-l);">
-        <div style="font-size:11px;color:var(--blue-d);">命名图（分支）</div><div style="margin:6px 0 0;">${graphs||'<span style="color:var(--mut)">空</span>'}</div></div>
+        <div style="font-size:12.5px;color:var(--blue-d);">命名图（分支）</div><div style="margin:6px 0 0;">${graphs||'<span style="color:var(--mut)">空</span>'}</div></div>
     </div>`;
-  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${e.message}</div>`; }
+  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">加载失败：${e.message}</div>`; }
 }
 async function runGraphDbQuery(){
   const q = (document.getElementById('graphdb-q')||{}).value;
@@ -585,7 +585,7 @@ async function runGraphDbQuery(){
   if(r.error || r.ok===false){ out.innerHTML = `<span style="color:var(--red)">${esc(r.error||'查询失败')}</span>`; return; }
   if(!r.rows || !r.rows.length){ out.innerHTML = '<span style="color:var(--mut)">图谱无命中——可调整查询、切换分支命名图，或先执行「同步入图」</span>'; return; }
   const keys = Object.keys(r.rows[0]);
-  const rowsHtml = '<table class="t" style="width:100%;font-size:12px;"><tr>' +
+  const rowsHtml = '<table class="t" style="width:100%;font-size:13.5px;"><tr>' +
     keys.map(k=>`<th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--line);">${esc(k)}</th>`).join('') + '</tr>' +
     r.rows.map(row=>'<tr>'+keys.map(k=>`<td style="padding:5px 8px;border-bottom:1px solid var(--line);word-break:break-all;">${esc(String(row[k]??''))}</td>`).join('')+'</tr>').join('') + '</table>';
   out.innerHTML = `<div style="color:var(--mut);margin-bottom:6px;">命中 ${r.count} 行（显示前 ${r.rows.length}）：${r.note||''}</div>` + rowsHtml;
@@ -610,10 +610,10 @@ async function searchChunks() {
   try {
     const r = await api('/api/knowledge/chunks/search', {method:'POST', body:JSON.stringify({query:q, hybrid: mode==='hybrid'})});
     const hits = r.hits||[];
-    if(!hits.length) { el.innerHTML = '<div style="color:var(--mut);font-size:12px;">无命中分块（请先上传并解析文档）</div>'; return; }
+    if(!hits.length) { el.innerHTML = '<div style="color:var(--mut);font-size:13.5px;">无命中分块（请先上传并解析文档）</div>'; return; }
     el.innerHTML = hits.map(h=>`
       <div style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:8px;background:#fff;">
-        <div style="font-size:11px;color:var(--mut);margin-bottom:4px;">
+        <div style="font-size:12.5px;color:var(--mut);margin-bottom:4px;">
           <span class="st b">命中 ${h.score}</span>
           ${h.confidence_level?`<span class="st ${h.confidence_level==='高'?'ok':h.confidence_level==='中'?'a':'w'}">置信 ${h.confidence_level}</span>`:''}
           ${h.vec_score!==undefined?`<span class="tag">vec ${h.vec_score}</span><span class="tag">bm25 ${h.bm25_score}</span>`:''}
@@ -622,10 +622,10 @@ async function searchChunks() {
           <span class="tag">chunk#${h.chunk_index}</span>
           <span class="st g">${h.embed_version}</span>
         </div>
-        ${h.recall_reason?`<div style="font-size:11px;color:var(--blue-d);margin-bottom:4px;">🔗 ${esc(h.recall_reason)}</div>`:''}
-        <div style="font-size:12.5px;line-height:1.6;">${esc(h.content)}</div>
-      </div>`).join('') + (r.mode==='hybrid'?`<div style="font-size:11px;color:var(--mut);">混合检索：BM25 ${r.bm25_count} / 向量 ${r.vec_count}</div>`:'');
-  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">检索失败：${e.message}</div>`; }
+        ${h.recall_reason?`<div style="font-size:12.5px;color:var(--blue-d);margin-bottom:4px;">🔗 ${esc(h.recall_reason)}</div>`:''}
+        <div style="font-size:13.5px;line-height:1.6;">${esc(h.content)}</div>
+      </div>`).join('') + (r.mode==='hybrid'?`<div style="font-size:12.5px;color:var(--mut);">混合检索：BM25 ${r.bm25_count} / 向量 ${r.vec_count}</div>`:'');
+  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">检索失败：${e.message}</div>`; }
 }
 // ── O-1：向量→图谱半自动转化（抽取候选 → 勾选确认入库 → chunk 溯源）──
 let v2gBatchId = null;
@@ -639,14 +639,14 @@ async function v2gExtract() {
     v2gBatchId = r.batch_id;
     toast(`抽取完成：候选 ${r.node_count+r.edge_count}（拒绝 ${r.rejected.length}）`);
     loadV2GCandidates();
-  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">抽取失败：${e.message}</div>`; }
+  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">抽取失败：${e.message}</div>`; }
 }
 // B2：候选来源徽章（source_type：ai_model=AI建模 / doc_extract=文档抽取 / 空=旧数据）
 function v2gSrcBadge(c){
   const st = c.source_type || '';
   if(st === 'ai_model') return '<span class="tag" style="background:#eaf2ff;color:#185FA5;" title="AI 建模/SysML 通道（统一闸门暂存）">🤖 AI建模</span>';
   if(st === 'doc_extract') return '<span class="tag" style="background:#f0f7f0;color:#2f855a;" title="文档抽取通道">📄 文档抽取</span>';
-  return '<span style="font-size:11px;color:var(--mut);">' + esc(c.source_doc||'-') + '</span>';
+  return '<span style="font-size:12.5px;color:var(--mut);">' + esc(c.source_doc||'-') + '</span>';
 }
 // B2：候选面板批量驳回（勾选 .v2g-check）
 async function v2gCandReject() {
@@ -667,27 +667,27 @@ async function loadV2GCandidates() {
     try {
       const batches = await api('/api/knowledge/v2g/batches');
       if(Array.isArray(batches) && batches.length){
-        batchOpts = `<select id="v2g-batch-filter" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11.5px;" onchange="v2gBatchId=this.value||null;loadV2GCandidates();">
+        batchOpts = `<select id="v2g-batch-filter" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;" onchange="v2gBatchId=this.value||null;loadV2GCandidates();">
           <option value="">全部批次</option>` + batches.map(b=>`<option value="${esc(b.batch_id||'')}" ${(v2gBatchId&&v2gBatchId===b.batch_id)?'selected':''}>${esc(b.batch_id||'')}${String(b.batch_id||'').startsWith('SYSM-')?' ·AI建模':''}${(b.total!=null)?`（${b.total}）`:''}</option>`).join('') + `</select>`;
       }
     } catch(e) {}
     const cands = await api('/api/knowledge/v2g/candidates?limit=200' + (v2gBatchId?`&batch_id=${v2gBatchId}`:''));
-    if(!cands.length) { el.innerHTML = (batchOpts?`<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">批次：${batchOpts}<span style="font-size:11px;color:var(--mut);">（v2g_candidates.source_type 已启用来源区分）</span></div>`:'') + '<div style="color:var(--mut);font-size:12px;">暂无候选（先抽取，或刷新查看最新批次）</div>'; return; }
+    if(!cands.length) { el.innerHTML = (batchOpts?`<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">批次：${batchOpts}<span style="font-size:12.5px;color:var(--mut);">（v2g_candidates.source_type 已启用来源区分）</span></div>`:'') + '<div style="color:var(--mut);font-size:13.5px;">暂无候选（先抽取，或刷新查看最新批次）</div>'; return; }
     const pendN = cands.filter(c=>c.status==='pending').length;
-    el.innerHTML = (batchOpts?`<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">批次：${batchOpts}<span style="font-size:11px;color:var(--mut);">共 ${cands.length} 条 · 待处理 ${pendN}</span></div>`:'') +
+    el.innerHTML = (batchOpts?`<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">批次：${batchOpts}<span style="font-size:12.5px;color:var(--mut);">共 ${cands.length} 条 · 待处理 ${pendN}</span></div>`:'') +
       `<table class="t"><tr><th>选</th><th>候选</th><th>类型</th><th>来源</th><th>批次</th><th>状态</th><th>校验错误</th></tr>` +
       cands.map(c=>`<tr>
         <td>${c.status==='pending'?`<input type="checkbox" class="v2g-check" value="${c.id}">`:'-'}</td>
         <td><b>${esc(c.entity_name)}</b></td>
         <td><span class="tag">${esc(c.entity_type)}</span></td>
-        <td style="font-size:11px;">${v2gSrcBadge(c)}</td>
-        <td style="font-size:10.5px;color:var(--mut);">${esc(c.batch_id||'-')}</td>
+        <td style="font-size:12.5px;">${v2gSrcBadge(c)}</td>
+        <td style="font-size:12px;color:var(--mut);">${esc(c.batch_id||'-')}</td>
         <td><span class="st ${c.status==='confirmed'?'ok':c.status==='rejected'?'r':'w'}">${c.status}</span></td>
-        <td style="font-size:11px;color:var(--red);">${esc(c.errors||'')}</td>
+        <td style="font-size:12.5px;color:var(--red);">${esc(c.errors||'')}</td>
       </tr>`).join('') + '</table>' +
-      (pendN?`<div style="padding:8px;display:flex;gap:8px;align-items:center;"><button class="btn sm" onclick="v2gCandReject()" style="color:var(--red);">🚫 批量驳回勾选</button><span style="font-size:11px;color:var(--mut);">勾选待处理候选后驳回（留痕原因）</span></div>`:'') +
+      (pendN?`<div style="padding:8px;display:flex;gap:8px;align-items:center;"><button class="btn sm" onclick="v2gCandReject()" style="color:var(--red);">🚫 批量驳回勾选</button><span style="font-size:12.5px;color:var(--mut);">勾选待处理候选后驳回（留痕原因）</span></div>`:'') +
       (v2gBatchId ? `<div style="padding:8px;text-align:right;"><button class="btn sm" onclick="gotoV2GBatch('${v2gBatchId}')">🗂 去抽取治理中心批量确认 →</button></div>` : '');
-  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${e.message}</div>`; }
+  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">加载失败：${e.message}</div>`; }
 }
 async function v2gConfirm() {
   if(!branchWritable()) return;
@@ -747,7 +747,7 @@ async function viewEntity(id) {
   const props = e.properties ? JSON.parse(e.properties) : {};
   // 一键追溯（创建/审核人/时间/来源文档元数据）
   const trace = `
-    <h4 style="margin:12px 0 6px;font-size:13px;">📌 一键追溯</h4>
+    <h4 style="margin:12px 0 6px;font-size:14.5px;">📌 一键追溯</h4>
     <table class="t"><tr><th>元数据</th><th>值</th></tr>
       <tr><td>创建人</td><td>${esc(e.created_by||'-')}</td></tr>
       <tr><td>创建时间</td><td>${esc(e.created_at||'-')}</td></tr>
@@ -761,15 +761,15 @@ async function viewEntity(id) {
   const khRows = (e.commit_history||[]).map(c=>{
     const f = c.fields||{};
     const fsum = (f.name||f.entity_type||f.status)
-      ? ` <span style="color:var(--mut);font-size:11px;">（${esc(f.name||'')} · ${esc(f.entity_type||'')} · ${esc(f.status||'')}）</span>` : '';
-    return `<div style="padding:5px 0;border-bottom:1px dashed var(--line);font-size:12px;">
+      ? ` <span style="color:var(--mut);font-size:12.5px;">（${esc(f.name||'')} · ${esc(f.entity_type||'')} · ${esc(f.status||'')}）</span>` : '';
+    return `<div style="padding:5px 0;border-bottom:1px dashed var(--line);font-size:13.5px;">
       ${commitKindBadge(c.kind)} ${esc(c.message||'')}${fsum}
-      <div style="color:var(--mut);font-size:11px;">${esc((c.created_at||'').slice(0,16))} · ${esc(c.created_by||'-')}</div>
+      <div style="color:var(--mut);font-size:12.5px;">${esc((c.created_at||'').slice(0,16))} · ${esc(c.created_by||'-')}</div>
     </div>`;
   }).join('');
-  const hist = `<h4 style="margin:12px 0 6px;font-size:13px;">📜 修改历史</h4>` + (khRows
+  const hist = `<h4 style="margin:12px 0 6px;font-size:14.5px;">📜 修改历史</h4>` + (khRows
     ? `<div style="border:1px solid var(--line);border-radius:8px;padding:4px 10px;">${khRows}</div>`
-    : '<div style="color:var(--mut);font-size:12px;">暂无修改记录（新实体一般只有基线）</div>');
+    : '<div style="color:var(--mut);font-size:13.5px;">暂无修改记录（新实体一般只有基线）</div>');
   let html = `<h4 style="color:var(--blue-d);margin-bottom:10px;">${e.name} (${e.id})</h4>
     <div class="kv"><span>类型</span><b>${e.entity_type}</b></div>
     <div class="kv"><span>状态</span><b><span class="st ${e.status==='reviewed'?'ok':'w'}">${e.status}</span></b></div>
@@ -852,15 +852,15 @@ function renderPagerBar(o) {
   const page = Math.max(1, Math.min(o.page || 1, pages));
   const sizes = o.sizes || [15, 20, 50, 100];
   const pgBtn = (label, p, disabled) =>
-    `<button class="btn sm ghost" style="padding:2px 8px;font-size:11px;" ${disabled?'disabled':''} data-pg-page="${p}" title="第 ${p} 页">${label}</button>`;
+    `<button class="btn sm ghost" style="padding:2px 8px;font-size:12.5px;" ${disabled?'disabled':''} data-pg-page="${p}" title="第 ${p} 页">${label}</button>`;
   // 页码窗口：首尾 + 当前页±2，间隔用省略号
   const numSet = new Set([1, pages]);
   for (let p = page - 2; p <= page + 2; p++) if (p >= 1 && p <= pages) numSet.add(p);
   const nums = [...numSet].sort((a,b)=>a-b).map((p,i,arr)=>
     (i>0 && p-arr[i-1]>1 ? '<span style="color:var(--mut);padding:0 1px;">…</span>' : '') +
-    `<button class="btn sm ghost" style="padding:2px 7px;font-size:11px;${p===page?'background:var(--blue);color:#fff;border-color:var(--blue);':''}" data-pg-page="${p}">${p}</button>`
+    `<button class="btn sm ghost" style="padding:2px 7px;font-size:12.5px;${p===page?'background:var(--blue);color:#fff;border-color:var(--blue);':''}" data-pg-page="${p}">${p}</button>`
   ).join('');
-  const sel = `<select class="pg-size" title="每页条数" style="border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:11.5px;color:var(--mut);">` +
+  const sel = `<select class="pg-size" title="每页条数" style="border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:12.5px;color:var(--mut);">` +
     sizes.map(s=>`<option value="${s}" ${s===size?'selected':''}>${s}</option>`).join('') + '</select>';
   el.innerHTML =
     `<span style="color:var(--mut);">共 <b style="color:var(--blue-d);">${o.total}</b> 条</span>` +
@@ -934,14 +934,14 @@ function kbRenderClusterTabs(){
     //    而 --blue-d 是深蓝 → 暗色下对比度仅 1.84:1 不可读（2026-09-27 实测）。
     const style = on ? 'background:#fff;border-color:var(--blue);color:var(--blue-d);font-weight:600;' : '';
     return `<span class="kbhub-chip ${on?'on':''}" data-cluster="${c.key}" style="${style}"
-      title="${esc(c.desc)}" onclick="kbSetCluster('${c.key}')">${c.name} <small style="font-size:10px;">${n}</small></span>`;
+      title="${esc(c.desc)}" onclick="kbSetCluster('${c.key}')">${c.name} <small style="font-size:12px;">${n}</small></span>`;
   }).join('');
   // UX-2：冗余明细面板的展开开关（数据不丢，只是默认收起）
   const dc = kbDetailCount(_kbClusterCur);
   const detail = dc ? `<span class="kbhub-chip" data-kb-detail-toggle style="border-style:dashed;"
       title="该簇下有 ${dc} 个明细面板与上方指标重复，默认收起"
       onclick="kbToggleDetail('${_kbClusterCur}')">${_kbDetailShown[_kbClusterCur]?'▾ 收起明细':'▸ 明细面板 '+dc}</span>` : '';
-  el.innerHTML = `<span style="font-size:11px;color:var(--color-text-muted);">看板视图</span>${chips}
+  el.innerHTML = `<span style="font-size:12.5px;color:var(--color-text-muted);">看板视图</span>${chips}
     <span style="flex:1"></span>${detail}`;
 }
 function kbClusterCount(key){
@@ -977,13 +977,13 @@ function kbRenderTopbar(d){
   const el = document.getElementById('kb-dash-topbar'); if(!el) return;
   const win = _kbWin || 'all';
   el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-    <span style="font-size:11px;color:var(--color-text-muted);">时间窗</span>
+    <span style="font-size:12.5px;color:var(--color-text-muted);">时间窗</span>
     ${[['7d','近 7 天'],['30d','近 30 天'],['all','全部']].map(([k,t])=>
       `<span class="kbhub-chip ${win===k?'on':''}" data-kb-win="${k}" onclick="kbSetWindow('${k}')">${t}</span>`).join('')}
     <span style="flex:1"></span>
     <button class="btn sm ghost" onclick="loadKBDashboard(true)" title="现场跑一次 SHACL 门禁（约 1s）">刷新（含 SHACL）</button>
     <button class="btn sm ghost" onclick="kbSnapshot()" title="把当前有值的指标写入快照表（按天幂等），供 sparkline 趋势">📌 记录快照</button>
-    <span style="font-size:11px;color:var(--color-text-muted);">${esc(d.generated_at||'')}</span>
+    <span style="font-size:12.5px;color:var(--color-text-muted);">${esc(d.generated_at||'')}</span>
   </div>`;
 }
 async function kbSnapshot(){
@@ -1008,14 +1008,14 @@ function kbRenderNorthstar(d){
     const click = can ? `onclick="kbDrill('${m.drill.page}','${m.drill.kind||''}','${esc(String(m.drill.value||''))}')"` : '';
     return `<div class="asset" data-mkey="${esc(m.key)}" style="text-align:left;cursor:${can?'pointer':'default'};" ${click} title="${esc(m.threshold||'')}">
       <div class="l" style="display:flex;justify-content:space-between;gap:6px;"><span>${esc(m.name)}${kbInfo(m)}</span><span class="st ${sc[m.status]||'g'}">${esc(m.status)}</span></div>
-      <div class="n">${m.value===null?'—':m.value}<small style="font-size:11px;color:var(--mut);"> ${esc(m.unit||'')}</small><span class="kb-spark"></span></div>
+      <div class="n">${m.value===null?'—':m.value}<small style="font-size:12.5px;color:var(--mut);"> ${esc(m.unit||'')}</small><span class="kb-spark"></span></div>
       <div class="l">目标 ${esc(m.target||'—')}</div></div>`;
   }).join('');
   el.innerHTML = `<div class="panel" style="margin-bottom:14px;">
     <div class="ph">🎯 首屏北极星 <span class="badge">P1</span><span class="tag">健康分 + 3 项水位；未落地 ${ns.na||0} 项不计入健康分（不拿假 0 充数）</span><span style="flex:1"></span></div>
     <div class="pb"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
       <div class="asset" style="text-align:left;"><div class="l" style="display:flex;justify-content:space-between;"><span>知识健康分</span><span class="st ${hsSt}">${hsWord}</span></div>
-        <div class="n" style="font-size:24px;">${hs===null?'—':hs}<small style="font-size:11px;color:var(--mut);"> /100</small></div>
+        <div class="n" style="font-size:25px;">${hs===null?'—':hs}<small style="font-size:12.5px;color:var(--mut);"> /100</small></div>
         <div class="l">ok ${d.summary.ok} · warn ${d.summary.warn} · alert ${d.summary.alert}（计分 ${ns.scored||0} 项）</div></div>
       ${cards}</div></div></div>`;
 }
@@ -1034,11 +1034,11 @@ function kbRenderAcceptance(d){
     <td style="padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap;"><span class="st ${sc[a.status]||'g'}">${word(a)}</span></td>
     <td style="padding:6px 8px;border-bottom:1px solid var(--line);color:var(--mut);">${esc(a.evidence||'')}</td></tr>`).join('');
   const cnt = s => list.filter(a=>a.status===s).length;
-  el.innerHTML = `<div style="font-size:11.5px;color:var(--mut);margin-bottom:8px;line-height:1.7;">
+  el.innerHTML = `<div style="font-size:12.5px;color:var(--mut);margin-bottom:8px;line-height:1.7;">
       合计 ${list.length} 条：<span class="st ok">达标 ${cnt('ok')}</span>
       <span class="st w">未达标/无数据 ${cnt('warn')}</span> <span class="st r">不达标 ${cnt('alert')}</span>
       —— 「实测」列与上方指标<b>同源</b>（后端按 metric_key 引用，不重复计算）；无实测数据的行留空并注明，不预置假值。</div>
-    <table class="t" style="width:100%;font-size:12px;color:var(--mut);">
+    <table class="t" style="width:100%;font-size:13.5px;color:var(--mut);">
       <tr><th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--line);">条款</th>
       <th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--line);">要求</th>
       <th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--line);">目标</th>
@@ -1168,7 +1168,7 @@ function kbInfo(x, name) {
   const nm = name || (x && x.name) || (x && x.key) || '';
   if (!calc) return '';
   return `<span class="kb-i" tabindex="0" data-calc="${esc(calc)}" data-kb-name="${esc(nm)}"
-    style="cursor:help;font-size:11px;color:var(--blue);margin-left:3px;vertical-align:1px;"
+    style="cursor:help;font-size:12.5px;color:var(--blue);margin-left:3px;vertical-align:1px;"
     onclick="event.stopPropagation()" title="悬停查看计算说明">ⓘ</span>`;
 }
 let _kbTipReady = false;
@@ -1179,7 +1179,7 @@ function kbTipInit() {
   tip.id = 'kb-tip';
   tip.className = 'panel';
   tip.style.cssText = 'position:fixed;z-index:9999;display:none;max-width:440px;'
-    + 'padding:8px 10px;font-size:11.5px;line-height:1.7;color:var(--mut);'
+    + 'padding:8px 10px;font-size:12.5px;line-height:1.7;color:var(--mut);'
     + 'white-space:pre-wrap;word-break:break-word;';
   document.body.appendChild(tip);
   const show = (el) => {

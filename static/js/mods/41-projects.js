@@ -40,7 +40,7 @@ function zpProjectFormHTML(mode){
       <div class="form-row"><label>本地工作空间 <span class="req">*</span>
         <span class="info-tip" title="项目根目录：本机绝对路径，由「选择文件夹…」的原生对话框写入，也可手动填写">ⓘ</span></label>
         <div style="display:flex;gap:6px;">
-          <input id="cp-workspace" placeholder="如：D:\\Work\\StarNet" style="flex:1;font-size:11.5px;">
+          <input id="cp-workspace" placeholder="如：D:\\Work\\StarNet" style="flex:1;font-size:12.5px;">
           <button class="btn ghost sm" style="flex:none;white-space:nowrap;" onclick="pickProjectFolder()">选择文件夹…</button>
         </div>
       </div>

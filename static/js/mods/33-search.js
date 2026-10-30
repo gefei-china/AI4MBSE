@@ -11,8 +11,8 @@ function openGlobalSearch(){
     box.style.cssText = 'position:fixed;inset:0;background:rgba(15,32,52,.35);z-index:2000;display:flex;justify-content:center;align-items:flex-start;padding-top:12vh;';
     box.innerHTML = `<div style="width:560px;max-width:92vw;background:#fff;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.25);overflow:hidden;">
       <div style="padding:12px 14px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;">
-        <span style="color:var(--blue-d);font-size:14px;">⌕</span>
-        <input id="gk-input" placeholder="搜索会话 / 本体类型 / 实体（回车跳转首项，Esc 关闭）" style="flex:1;border:none;outline:none;font-size:13px;">
+        <span style="color:var(--blue-d);font-size:15.5px;">⌕</span>
+        <input id="gk-input" placeholder="搜索会话 / 本体类型 / 实体（回车跳转首项，Esc 关闭）" style="flex:1;border:none;outline:none;font-size:14.5px;">
         <span class="tag">Ctrl+K</span>
       </div>
       <div id="gk-results" style="max-height:50vh;overflow-y:auto;padding:6px;"></div>
@@ -25,14 +25,14 @@ function openGlobalSearch(){
   box.style.display = 'flex';
   const inp = document.getElementById('gk-input');
   inp.value = ''; inp.focus();
-  document.getElementById('gk-results').innerHTML = '<div style="color:var(--mut);font-size:12px;padding:14px;text-align:center;">输入关键词搜索…</div>';
+  document.getElementById('gk-results').innerHTML = '<div style="color:var(--mut);font-size:13.5px;padding:14px;text-align:center;">输入关键词搜索…</div>';
 }
 function closeGlobalSearch(){ __gkOpen = false; const b = document.getElementById('gk-search'); if(b) b.style.display = 'none'; }
 async function gkSearch(){
   const q = document.getElementById('gk-input').value.trim();
   const res = document.getElementById('gk-results');
-  if(!q){ res.innerHTML = '<div style="color:var(--mut);font-size:12px;padding:14px;text-align:center;">输入关键词搜索…</div>'; return; }
-  res.innerHTML = '<div style="color:var(--mut);font-size:12px;padding:14px;text-align:center;">搜索中…</div>';
+  if(!q){ res.innerHTML = '<div style="color:var(--mut);font-size:13.5px;padding:14px;text-align:center;">输入关键词搜索…</div>'; return; }
+  res.innerHTML = '<div style="color:var(--mut);font-size:13.5px;padding:14px;text-align:center;">搜索中…</div>';
   __gkData = [];
   try{
     const [convs, ont, ents] = await Promise.all([
@@ -48,11 +48,11 @@ async function gkSearch(){
     const e = (ents||[]).filter(x=>((x.name||'')).toLowerCase().includes(ql)).slice(0,5)
       .map(x=>({kind:'ent', id:x.id, name:x.name, sub:'实例 · '+x.entity_type+'（'+(x.branch||'')+'）'}));
     __gkData = [...c, ...t, ...e];
-    if(!__gkData.length){ res.innerHTML = '<div style="color:var(--mut);font-size:12px;padding:14px;text-align:center;">无结果</div>'; return; }
+    if(!__gkData.length){ res.innerHTML = '<div style="color:var(--mut);font-size:13.5px;padding:14px;text-align:center;">无结果</div>'; return; }
     res.innerHTML = __gkData.map((d,i)=>`<div class="gk-item" data-i="${i}" style="padding:8px 14px;cursor:pointer;display:flex;justify-content:space-between;gap:10px;border-bottom:1px dashed var(--line);" onclick="gkJump(${i})">
-      <b style="font-size:12.5px;">${d.kind==='conv'?'💬':d.kind==='type'?'🧬':'🕸'} ${esc(d.name)}</b>
-      <small style="color:var(--mut);font-size:11px;flex:none;">${esc(d.sub)}</small></div>`).join('');
-  }catch(e){ res.innerHTML = '<div style="color:var(--red);font-size:12px;padding:14px;">搜索失败：'+esc(e.message)+'</div>'; }
+      <b style="font-size:13.5px;">${d.kind==='conv'?'💬':d.kind==='type'?'🧬':'🕸'} ${esc(d.name)}</b>
+      <small style="color:var(--mut);font-size:12.5px;flex:none;">${esc(d.sub)}</small></div>`).join('');
+  }catch(e){ res.innerHTML = '<div style="color:var(--red);font-size:13.5px;padding:14px;">搜索失败：'+esc(e.message)+'</div>'; }
 }
 function gkJump(i){
   const d = __gkData[i]; if(!d) return;

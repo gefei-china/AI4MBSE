@@ -9,11 +9,11 @@
   st.textContent = [
     '.capbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;}',
     '.captabs{display:flex;gap:2px;background:var(--bg2,#f7f9fc);border:1px solid var(--line,#d5dce6);border-radius:8px;padding:3px;}',
-    '.captabs span{padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;color:var(--mut,#5a6678);}',
+    '.captabs span{padding:5px 14px;border-radius:6px;cursor:pointer;font-size:13.5px;color:var(--mut,#5a6678);}',
     '.captabs span.on{background:var(--bg-card,#fff);color:var(--blue-d,#0C447C);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.06);}',
-    '.captabs span .tag{margin-left:5px;font-size:10px;}',
+    '.captabs span .tag{margin-left:5px;font-size:12px;}',
     '.capchips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}',
-    '.capchips span{padding:3px 10px;border-radius:20px;font-size:11.5px;cursor:pointer;border:1px solid var(--line,#d5dce6);color:var(--mut,#5a6678);background:transparent;}',
+    '.capchips span{padding:3px 10px;border-radius:20px;font-size:12.5px;cursor:pointer;border:1px solid var(--line,#d5dce6);color:var(--mut,#5a6678);background:transparent;}',
     '.capchips span.on{background:var(--blue-d,#0C447C);border-color:var(--blue-d,#0C447C);color:#fff;}',
     '.capgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:10px;}',
     '.capcard{position:relative;background:var(--bg-card,#fff);border:1px solid var(--line,#d5dce6);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;transition:border-color .15s;}',
@@ -21,36 +21,38 @@
     '.capcard.mine{border-left:3px solid var(--green,#3B6D11);}',
     '.capcard.dis{opacity:.55;}',
     '.capcard-h{display:flex;align-items:center;gap:9px;}',
-    '.capico{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;background:var(--bg2,#f0f3f8);}',
-    '.captit{flex:1;min-width:0;font-size:13px;font-weight:500;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-    '.capdesc{font-size:12px;color:var(--mut,#5a6678);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:37px;}',
-    '.capmeta{display:flex;gap:10px;font-size:11px;color:var(--mut,#8a96ad);border-top:1px dashed var(--line,#e9edf3);padding-top:6px;flex-wrap:wrap;}',
+    '.capico{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:17.5px;flex-shrink:0;background:var(--bg2,#f0f3f8);}',
+    '.captit{flex:1;min-width:0;font-size:14.5px;font-weight:500;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+    // min-height 必须 = 2 行实际高度（2×1.55×13.5 ≈ 42）；原 37px 是按 12px 字号算的，
+    // 2026-10-30 字号标准化后失配 ⇒ 短描述的卡片会比别的矮一截。
+    '.capdesc{font-size:13.5px;color:var(--mut,#5a6678);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:42px;}',
+    '.capmeta{display:flex;gap:10px;font-size:12.5px;color:var(--mut,#8a96ad);border-top:1px dashed var(--line,#e9edf3);padding-top:6px;flex-wrap:wrap;}',
     '.capmeta b{font-weight:500;color:var(--blue-d,#0C447C);}',
     '.capmeta .warn{color:var(--orange,#BA7517);}',
-    '.capempty{grid-column:1/-1;padding:36px;text-align:center;color:var(--mut,#8a96ad);font-size:12px;}',
+    '.capempty{grid-column:1/-1;padding:36px;text-align:center;color:var(--mut,#8a96ad);font-size:13.5px;}',
     '.cappane{display:none;} .cappane.on{display:block;}',
     '.capacts{display:flex;gap:6px;align-items:center;justify-content:flex-end;margin-top:8px;padding-top:8px;border-top:1px solid var(--line,#e9edf3);flex-wrap:wrap;}',
-    '.capacts .btn.sm{padding:3px 10px;font-size:11.5px;}',
-    '.capok{font-size:11px;color:var(--green,#3B6D11);padding:0 6px;}',
+    '.capacts .btn.sm{padding:3px 10px;font-size:12.5px;}',
+    '.capok{font-size:12.5px;color:var(--green,#3B6D11);padding:0 6px;}',
     /* 启用/停用 徽标与筛选 chips（2026-09-17：市场区此前看不到启用状态，也没有状态筛选） */
-    '.capbadge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:10.5px;font-weight:500;line-height:1.6;}',
+    '.capbadge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:500;line-height:1.6;}',
     '.capbadge.on{background:rgba(59,109,17,.13);color:var(--green,#3B6D11);}',
     '.capbadge.off{background:rgba(186,117,23,.15);color:var(--orange,#BA7517);}',
     '.capchips .capsep{width:1px;align-self:stretch;background:var(--line,#d5dce6);margin:2px 4px;padding:0;border:none;cursor:default;}',
     '.capmenu{position:absolute;right:0;top:26px;z-index:80;min-width:148px;background:var(--bg-card,#fff);border:1px solid var(--line,#d5dce6);border-radius:8px;box-shadow:0 6px 18px rgba(20,35,60,.14);padding:4px;}',
-    '.capmenu div{padding:6px 10px;font-size:12px;border-radius:6px;cursor:pointer;white-space:nowrap;color:var(--ink,#1a2332);}',
+    '.capmenu div{padding:6px 10px;font-size:13.5px;border-radius:6px;cursor:pointer;white-space:nowrap;color:var(--ink,#1a2332);}',
     '.capmenu div:hover{background:var(--bg-hover,#eef4ff);}',
     '.capmenu .sep{height:1px;background:var(--line,#e9edf3);margin:4px 2px;padding:0;}',
     '.capmenu div.has-hint{white-space:normal;max-width:236px;}',
-    '.capmenu div .hint{display:block;font-size:10.5px;color:var(--mut,#8a96ad);margin-top:1px;line-height:1.45;}',
+    '.capmenu div .hint{display:block;font-size:12px;color:var(--mut,#8a96ad);margin-top:1px;line-height:1.45;}',
     /* [2] Agent 主子分栏 */
     '.capgroup{grid-column:1/-1;}',
     '.capgroup + .capgroup{margin-top:14px;}',
-    '.capgroup-h{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:500;color:var(--ink,#1a2332);margin:0 0 8px;}',
-    '.capgroup-h .cnt{font-size:11px;color:var(--mut,#8a96ad);font-weight:400;}',
+    '.capgroup-h{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:500;color:var(--ink,#1a2332);margin:0 0 8px;}',
+    '.capgroup-h .cnt{font-size:12.5px;color:var(--mut,#8a96ad);font-weight:400;}',
     '.capgroup-h .ln{flex:1;height:1px;background:var(--line,#e9edf3);}',
     '.capgroup .capgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:10px;}',
-    '.caplegend{font-size:11px;color:var(--mut,#8a96ad);line-height:1.8;}',
+    '.caplegend{font-size:12.5px;color:var(--mut,#8a96ad);line-height:1.8;}',
     '.caplegend code{background:var(--bg2,#f0f3f8);padding:1px 5px;border-radius:4px;font-family:inherit;}',
   ].join('');
   document.head.appendChild(st);
@@ -93,7 +95,7 @@ async function capMount(page) {
   box.innerHTML = `
       <div class="capbar">
       ${typeTabs}
-      <input id="cap-${page}-q" placeholder="搜索名称 / 描述…" style="border:1px solid var(--line,#d5dce6);border-radius:6px;padding:4px 10px;font-size:12px;width:190px;" oninput="capSearch('${page}',this.value)">
+      <input id="cap-${page}-q" placeholder="搜索名称 / 描述…" style="border:1px solid var(--line,#d5dce6);border-radius:6px;padding:4px 10px;font-size:13.5px;width:190px;" oninput="capSearch('${page}',this.value)">
       <button class="btn sm ghost" onclick="capRefresh('${page}')">刷新</button>
       <span style="flex:1"></span>
       <!-- 2026-10-29：能力中心 → 能力账本 的**实体级互链**。
@@ -102,7 +104,7 @@ async function capMount(page) {
            这里给一个**带 KPI 的入口**：先看整体判定，再一键跳过去细查。 -->
       <button class="btn sm ghost" id="cap-${page}-ledger" onclick="capJumpLedger()"
               title="跳到「能力账本」：看同一批能力的声明集 × 调用集判定（在用 / 已声明未用 / 无声明入口 / 未使用）">
-        📊 能力账本 <span id="cap-${page}-ledger-kpi" style="color:var(--mut,#8a96ad);font-size:10.5px;"></span>
+        📊 能力账本 <span id="cap-${page}-ledger-kpi" style="color:var(--mut,#8a96ad);font-size:12px;"></span>
       </button>
       <div style="position:relative;">
         <button class="btn sm" onclick="capAddToggle(event)">＋ 新建能力 ▾</button>
@@ -118,7 +120,7 @@ async function capMount(page) {
       <button class="btn sm ghost" onclick="capToggleManage('${page}')" id="cap-${page}-mbtn">管理能力（审核 / 范围 / 下架）</button>
     </div>
     <div class="subpage" id="cap-${page}-manage" style="margin-top:12px;">
-      <div style="font-size:11.5px;color:var(--mut,#8a96ad);padding:8px 0;">治理入口：上架审核、范围分配、全市场插件管理见「插件市场」。<button class="btn sm ghost" onclick="capJumpManage()">前往</button></div>
+      <div style="font-size:12.5px;color:var(--mut,#8a96ad);padding:8px 0;">治理入口：上架审核、范围分配、全市场插件管理见「插件市场」。<button class="btn sm ghost" onclick="capJumpManage()">前往</button></div>
     </div>`;
   capHideSiblings(box);
   // 账本 KPI 异步填充（失败静默：账本不可用不应挡住能力中心本身）
@@ -352,7 +354,7 @@ async function capBindHealth(page) {
     el.id = 'cap-bind-health';
     grid.parentNode.insertBefore(el, grid);
   }
-  el.style.cssText = 'font-size:11.5px;color:var(--mut,#8a96ad);padding:2px 0 8px;line-height:1.6;';
+  el.style.cssText = 'font-size:12.5px;color:var(--mut,#8a96ad);padding:2px 0 8px;line-height:1.6;';
   const d = _bindHealth, bs = d.by_state || {};
   el.innerHTML =
     '🔗 绑定关系：<b>' + d.total + '</b> 条 · 生效 <b style="color:#2e7d32">' + d.effective + '</b> · '

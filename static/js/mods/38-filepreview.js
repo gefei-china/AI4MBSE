@@ -66,7 +66,7 @@ function pvKindLabel(st){
 function pvNotice(html, tone){
   const border = tone === 'warn' ? 'var(--red,#c53030)' : 'var(--line,#e5e8ee)';
   return '<div style="border:1px dashed ' + border + ';border-radius:8px;padding:12px 14px;'
-       + 'font-size:12.5px;line-height:1.8;color:var(--txt,#222);margin-bottom:8px;">' + html + '</div>';
+       + 'font-size:13.5px;line-height:1.8;color:var(--txt,#222);margin-bottom:8px;">' + html + '</div>';
 }
 
 /* ── 入口：统一打开源文件预览 ───────────────────────────────────────────
@@ -108,7 +108,7 @@ async function openFilePreview(o){
 }
 
 function pvSkeleton(msg){
-  return '<div style="padding:20px 4px;color:var(--mut,#888);font-size:12.5px;">'
+  return '<div style="padding:20px 4px;color:var(--mut,#888);font-size:13.5px;">'
        + esc(msg) + '</div>';
 }
 
@@ -217,12 +217,12 @@ function pvBodyHtml(st){
     }
     return esc(t);
   }
-  return '<div style="font-size:12px;color:var(--mut,#888);margin-bottom:6px;">'
+  return '<div style="font-size:13.5px;color:var(--mut,#888);margin-bottom:6px;">'
     + '抽取全文 ' + st.text.length.toLocaleString() + ' 字符'
     + (st.meta && st.meta.has_file === false ? '（由分块拼接）' : '')
     + (st.findText ? ' · <span style="color:var(--blue-d,#3478f6);">🎯 引用锚点定位模式</span>' : '')
     + '</div>'
-    + '<div style="background:var(--blue-l,#f4f8ff);border-radius:8px;padding:12px;font-size:12.5px;'
+    + '<div style="background:var(--blue-l,#f4f8ff);border-radius:8px;padding:12px;font-size:13.5px;'
     + 'white-space:pre-wrap;word-break:break-word;line-height:1.75;max-height:min(70vh,680px);overflow:auto;">'
     + pvAnchorHtml(st) + '</div>';
 }

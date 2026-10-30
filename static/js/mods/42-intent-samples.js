@@ -115,7 +115,7 @@ function isRenderStats(d) {
     <span class="badge g" title="人工确认过，唯一参与评测的部分">已确认 ${n('confirmed')}</span>
     <span class="badge r" title="人工判定为无效样本">已驳回 ${n('rejected')}</span>
     <span class="badge" title="样本池总行数（按不同说法去重计数）">总数 ${total}</span>
-    <span style="font-size:11px;color:var(--mut);">只有「已确认」会进评测 —— 系统建议（suggested）只是待办，拿它当标签是自我循环</span>
+    <span style="font-size:12.5px;color:var(--mut);">只有「已确认」会进评测 —— 系统建议（suggested）只是待办，拿它当标签是自我循环</span>
   </div>`;
 }
 
@@ -126,14 +126,14 @@ function isRenderList(d) {
   const total = (d && d.total) || 0;
   if (!items.length) {
     el.innerHTML = '<div class="panel"><div class="ph">样本列表 <span class="badge">0</span></div>'
-      + '<div class="pb" style="text-align:center;color:var(--mut);padding:18px;font-size:12px;">'
+      + '<div class="pb" style="text-align:center;color:var(--mut);padding:18px;font-size:13.5px;">'
       + '没有匹配的样本 —— 可先点上方「从内置 29 例导入」建立评测基线，或「从历史回填」把线上真实说法采进来</div></div>';
     return;
   }
   el.innerHTML = `<div class="panel">
     <div class="ph">样本列表 <span class="badge">${items.length} / ${total}</span>
       <span style="flex:1"></span>
-      <span style="font-size:10.5px;font-weight:400;color:var(--mut);">按「待标注优先 + 高频优先」排序：先标真实高频说法，性价比最高</span></div>
+      <span style="font-size:12px;font-weight:400;color:var(--mut);">按「待标注优先 + 高频优先」排序：先标真实高频说法，性价比最高</span></div>
     <div class="pb" style="padding:0;"><table class="t">
       <tr><th style="min-width:260px;">用户说法</th><th>标签（人工）</th><th>状态</th><th>来源</th>
         <th>频次</th><th>系统判定对照</th><th style="white-space:nowrap;">操作</th></tr>
@@ -149,12 +149,12 @@ function isRow(s) {
   let cmp = '<span style="color:var(--mut);">—</span>';
   if (pend) {
     const hit = s.hit_intent || '';
-    if (!hit) cmp = '<span style="font-size:10.5px;color:var(--mut);">无历史判定</span>';
+    if (!hit) cmp = '<span style="font-size:12px;color:var(--mut);">无历史判定</span>';
     else {
       const same = hit === label;
       cmp = `<span class="st ${same ? 'ok' : 'w'}" title="采集当时的系统判定：${escA(isIntentLabel(hit))}">`
         + `${esc(isIntentLabel(hit))}${same ? '' : ' ≠ 标签'}</span>`
-        + `<div style="font-size:10.5px;color:var(--mut);margin-top:2px;">${esc(s.hit_route || '—')}`
+        + `<div style="font-size:12px;color:var(--mut);margin-top:2px;">${esc(s.hit_route || '—')}`
         + ` · 置信 ${(Number(s.hit_conf) || 0).toFixed(2)}</div>`;
     }
   }
@@ -166,13 +166,13 @@ function isRow(s) {
   return `<tr>
     <td style="max-width:420px;">
       <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escA(s.text)}">${esc(s.text)}</div>
-      ${s.note ? `<div style="font-size:10.5px;color:var(--mut);">备注：${esc(s.note)}</div>` : ''}</td>
+      ${s.note ? `<div style="font-size:12px;color:var(--mut);">备注：${esc(s.note)}</div>` : ''}</td>
     <td><select id="is-int-${s.id}" onchange="isSetIntent(${s.id},this.value)"
-      style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:11.5px;max-width:130px;">
+      style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12.5px;max-width:130px;">
       ${ph}${opts}</select></td>
     <td>${isStatusBadge(s.status)}</td>
-    <td style="font-size:11px;color:var(--mut);">${esc(s.source || '—')}</td>
-    <td style="font-size:11.5px;text-align:center;">${Number(s.seen_count) || 0}</td>
+    <td style="font-size:12.5px;color:var(--mut);">${esc(s.source || '—')}</td>
+    <td style="font-size:12.5px;text-align:center;">${Number(s.seen_count) || 0}</td>
     <td>${cmp}</td>
     <td style="white-space:nowrap;">
       <button class="btn sm" onclick="isConfirm(${s.id})"${s.status === 'confirmed' ? ' disabled' : ''}>确认</button>
@@ -291,7 +291,7 @@ async function isRunEval() {
   _isBtn('is-btn-eval', true, '⏳ 评测中…');
   // 先在卡片位置给出"在被处理"的说明：逐条真实识别、每条都可能走 embedding，秒数不好预估
   if (box) box.innerHTML = '<div class="panel"><div class="ph">评测结果</div>'
-    + '<div class="pb" style="font-size:12px;color:var(--mut);">⏳ 正在用「已确认」样本逐条真实识别（并绕开意图缓存，避免测到历史结论）…请稍候。</div></div>';
+    + '<div class="pb" style="font-size:13.5px;color:var(--mut);">⏳ 正在用「已确认」样本逐条真实识别（并绕开意图缓存，避免测到历史结论）…请稍候。</div></div>';
   try {
     const m = await api('/api/intent-samples/run-eval', { method: 'POST', body: '{}' });
     if (!m || m.ok === false) {
@@ -310,8 +310,8 @@ async function isRunEval() {
 function isEvalHtml(m) {
   if (!m || m.ok === false) {
     return `<div class="panel"><div class="ph">评测结果</div>
-      <div class="pb" style="font-size:12px;color:var(--amb);">⚠️ ${esc((m && m.message) || '评测未执行')}
-        <div style="color:var(--mut);font-size:11px;margin-top:6px;line-height:1.65;">
+      <div class="pb" style="font-size:13.5px;color:var(--amb);">⚠️ ${esc((m && m.message) || '评测未执行')}
+        <div style="color:var(--mut);font-size:12.5px;margin-top:6px;line-height:1.65;">
           评测只消费「已确认」样本。可先点「从内置 29 例导入」—— 那 29 例本就是人工整理的标注，入库即 confirmed、直接可评测；
           或给列表里的待确认样本选好标签后逐条「确认」。</div></div></div>`;
   }
@@ -332,31 +332,31 @@ function isEvalHtml(m) {
       <span class="badge g">准确率 ${(Number(m.accuracy) * 100).toFixed(1)}%</span>
       <span class="badge a">macro-F1 ${m.macro_f1}</span>
       <span style="flex:1"></span>
-      <span style="font-size:10.5px;font-weight:400;color:var(--mut);">口径与 tests/manual_verify/eval_intent_routing.py 一致，并与命令行复跑可对齐</span></div>
+      <span style="font-size:12px;font-weight:400;color:var(--mut);">口径与 tests/manual_verify/eval_intent_routing.py 一致，并与命令行复跑可对齐</span></div>
     <div class="pb">
-      <div style="font-size:11.5px;color:var(--mut);margin-bottom:5px;">分意图指标（n=该意图的期望样本数）</div>
+      <div style="font-size:12.5px;color:var(--mut);margin-bottom:5px;">分意图指标（n=该意图的期望样本数）</div>
       <table class="t" style="margin-bottom:12px;">
         <tr><th>意图</th><th>precision</th><th>recall</th><th>f1</th><th>n</th></tr>
         ${per.map(p => `<tr><td>${esc(isIntentLabel(p.intent))}
-          <span style="font-size:10.5px;color:var(--mut);font-family:monospace;">${esc(p.intent)}</span></td>
+          <span style="font-size:12px;color:var(--mut);font-family:monospace;">${esc(p.intent)}</span></td>
           <td>${p.precision}</td><td>${p.recall}</td>
           <td style="font-weight:600;">${p.f1}</td><td>${p.n}</td></tr>`).join('')}
       </table>
-      <div style="font-size:11.5px;color:var(--mut);margin-bottom:5px;">混淆矩阵（行 = 期望，列 = 实得；只列非零）</div>
+      <div style="font-size:12.5px;color:var(--mut);margin-bottom:5px;">混淆矩阵（行 = 期望，列 = 实得；只列非零）</div>
       <table class="t" style="margin-bottom:12px;">
         <tr><th>期望 ＼ 实得</th>${cols.map(c => `<th style="text-align:center;">${esc(isIntentLabel(c))}</th>`).join('')}</tr>
         ${rows.map(a => `<tr><td>${esc(isIntentLabel(a))}</td>${cols.map(b => cell(a, b)).join('')}</tr>`).join('')}
       </table>
-      <div style="font-size:11.5px;color:var(--mut);margin-bottom:5px;">错例（${wrong.length} 条；route/置信 是判定当时的实际路径）</div>
+      <div style="font-size:12.5px;color:var(--mut);margin-bottom:5px;">错例（${wrong.length} 条；route/置信 是判定当时的实际路径）</div>
       ${wrong.length ? `<table class="t">
         <tr><th style="min-width:240px;">用户说法</th><th>期望</th><th>实得</th><th>route</th><th>置信</th></tr>
         ${wrong.map(w => `<tr>
           <td style="max-width:360px;"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escA(w.text)}">${esc(w.text)}</div></td>
           <td><span class="st ok">${esc(isIntentLabel(w.want))}</span></td>
           <td><span class="st r">${esc(isIntentLabel(w.got))}</span></td>
-          <td style="font-size:11px;color:var(--mut);">${esc(w.route || '—')}</td>
-          <td style="font-size:11.5px;">${(Number(w.confidence) || 0).toFixed(2)}</td></tr>`).join('')}
-      </table>` : '<div style="font-size:12px;color:var(--grn);">✅ 没有错例</div>'}
+          <td style="font-size:12.5px;color:var(--mut);">${esc(w.route || '—')}</td>
+          <td style="font-size:12.5px;">${(Number(w.confidence) || 0).toFixed(2)}</td></tr>`).join('')}
+      </table>` : '<div style="font-size:13.5px;color:var(--grn);">✅ 没有错例</div>'}
     </div></div>`;
 }
 

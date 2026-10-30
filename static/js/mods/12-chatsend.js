@@ -476,8 +476,8 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
     try{ aiBox.dataset.reuseForPick = ''; }catch(_e){}   // 异常收口：清防替换标记，避免下次 done 误跳过
     const errNote = document.createElement('div');
     errNote.style.cssText = 'margin-top:8px;';
-    errNote.innerHTML = `<div style="color:var(--red);font-size:11.5px;">调用失败：${esc(e.message)}</div>`
-      + `<div style="color:var(--mut);font-size:10.5px;margin-top:4px;line-height:1.6;">`
+    errNote.innerHTML = `<div style="color:var(--red);font-size:12.5px;">调用失败：${esc(e.message)}</div>`
+      + `<div style="color:var(--mut);font-size:12px;margin-top:4px;line-height:1.6;">`
       + `本次执行已终止，不再有后台任务在跑。上方已生成内容与执行轨迹<b>已保留</b>；`
       + `确认原因（如网络波动）后，<b>直接重新发送消息</b>即可从头执行。</div>`;
     if(bodyEl) bodyEl.appendChild(errNote);

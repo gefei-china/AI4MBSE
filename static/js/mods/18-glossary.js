@@ -7,7 +7,7 @@
  */
 function _cptBadge(st){
   const s = _CPT_STATUS[st] || [st,'#718096','#EDF0F2'];
-  return `<span style="font-size:10px;padding:1px 7px;border-radius:8px;background:${s[2]};color:${s[1]};font-weight:600;">${s[0]}</span>`;
+  return `<span style="font-size:12px;padding:1px 7px;border-radius:8px;background:${s[2]};color:${s[1]};font-weight:600;">${s[0]}</span>`;
 }
 const _CPT_DOT = {candidate:'#B7791F', approved:'#2F855A', deprecated:'#C53030', retired:'#718096'};
 
@@ -30,22 +30,22 @@ async function conceptsLoad(){
     if(optC) optC.textContent = '候选' + (window._cptPending ? `（${window._cptPending}）` : '');
     // 首次：搭骨架（批量条 + 左树/右详情 split）；后续只就地更新（不重建，保护未保存表单）
     if(!document.getElementById('cpt-tree')){
-      el.innerHTML = `<div id="cpt-batch-bar" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:0 0 8px;padding:6px 10px;background:#f0f6ff;border:1px solid #B5D4F4;border-radius:8px;font-size:11.5px;display:none;">
+      el.innerHTML = `<div id="cpt-batch-bar" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:0 0 8px;padding:6px 10px;background:#f0f6ff;border:1px solid #B5D4F4;border-radius:8px;font-size:12.5px;display:none;">
         <span>已选 <b style="color:#1d4ed8;">0</b> 个概念</span>
         <span style="color:var(--line);">|</span>
         <label style="display:flex;align-items:center;gap:3px;cursor:pointer;"><input type="checkbox" onchange="cptSelAll(this.checked)" style="cursor:pointer;">全选</label>
         <span style="color:var(--line);">|</span>
-        <button class="btn sm" style="padding:2px 10px;font-size:11px;" onclick="cptBatch('approve')" title="批量批准（缺定义自动跳过并提示）">✓ 批量批准</button>
-        <button class="btn sm ghost" style="padding:2px 10px;font-size:11px;" onclick="cptBatchFlow()" title="批量状态流转（弃用需替代概念）">⤵ 批量流转</button>
-        <button class="btn sm ghost" style="padding:2px 10px;font-size:11px;" onclick="cptBatchDomain()" title="批量修改域">🏷 批量改域</button>
-        <button class="btn sm ghost" style="padding:2px 10px;font-size:11px;color:var(--mut);" onclick="cptBatchClear()">⏮ 清除选择</button>
+        <button class="btn sm" style="padding:2px 10px;font-size:12.5px;" onclick="cptBatch('approve')" title="批量批准（缺定义自动跳过并提示）">✓ 批量批准</button>
+        <button class="btn sm ghost" style="padding:2px 10px;font-size:12.5px;" onclick="cptBatchFlow()" title="批量状态流转（弃用需替代概念）">⤵ 批量流转</button>
+        <button class="btn sm ghost" style="padding:2px 10px;font-size:12.5px;" onclick="cptBatchDomain()" title="批量修改域">🏷 批量改域</button>
+        <button class="btn sm ghost" style="padding:2px 10px;font-size:12.5px;color:var(--mut);" onclick="cptBatchClear()">⏮ 清除选择</button>
         <span style="flex:1"></span>
-        <span style="font-size:10.5px;color:var(--mut);">拦截项（缺定义/弃用无替代）自动跳过并列出原因</span>
+        <span style="font-size:12px;color:var(--mut);">拦截项（缺定义/弃用无替代）自动跳过并列出原因</span>
       </div>
       <div style="display:flex;gap:10px;align-items:stretch;">
         <div id="cpt-tree" style="width:300px;flex:none;border:1px solid var(--line);border-radius:8px;background:#fff;max-height:calc(100vh - 250px);display:flex;flex-direction:column;">
           <div style="display:flex;align-items:center;gap:6px;padding:7px 10px;border-bottom:1px solid var(--line);flex:none;">
-            <b style="font-size:12px;">概念层级</b><span style="flex:1"></span>
+            <b style="font-size:13.5px;">概念层级</b><span style="flex:1"></span>
             <button class="btn sm" onclick="cptCreateMini()" title="新建概念：输入名称回车创建，左树与右侧同步出现">＋ 新增</button>
           </div>
           <div id="cpt-tree-body" style="padding:6px 4px;overflow:auto;flex:1;min-height:0;">${_cptTreeHtml(items)}</div>
@@ -78,11 +78,11 @@ async function conceptsLoad(){
   }catch(e){ el.innerHTML = `<div class="fempty">加载失败：${esc(String(e))}</div>`; }
 }
 function _cptDetailEmpty(noData){
-  return '<div style="height:320px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--mut);font-size:12px;gap:8px;">'
-    + '<div style="font-size:30px;opacity:.4;">🗂</div>'
+  return '<div style="height:320px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--mut);font-size:13.5px;gap:8px;">'
+    + '<div style="font-size:31px;opacity:.4;">🗂</div>'
     + (noData ? '<div>暂无概念——点左树顶部「＋ 新增」建立第一个概念</div>'
               : '<div>左侧选择一个概念，此处直接进入编辑</div>'
-               +'<div style="font-size:11px;">树按「上位概念」层级组织 · 节点圆点=状态 · 勾选可批量操作</div>')
+               +'<div style="font-size:12.5px;">树按「上位概念」层级组织 · 节点圆点=状态 · 勾选可批量操作</div>')
     + '</div>';
 }
 // ── 左树：broader 层级（选中高亮 / 折叠 / 状态圆点 / 缺定义标记 / 批量勾选） ──
@@ -106,7 +106,7 @@ function _cptTreeHtml(items){
     const kids = children[c.concept_id]||[];
     const open = !collapsed.has(c.concept_id);
     const caret = kids.length
-      ? `<span onclick="event.stopPropagation();cptTreeToggle('${c.concept_id}')" style="cursor:pointer;display:inline-block;width:13px;flex:none;color:var(--mut);font-size:9px;transform:rotate(${open?'0deg':'-90deg'});transition:transform .12s;">▶</span>`
+      ? `<span onclick="event.stopPropagation();cptTreeToggle('${c.concept_id}')" style="cursor:pointer;display:inline-block;width:13px;flex:none;color:var(--mut);font-size:11.5px;transform:rotate(${open?'0deg':'-90deg'});transition:transform .12s;">▶</span>`
       : '<span style="display:inline-block;width:13px;flex:none;"></span>';
     const on = sel===c.concept_id;
     return `<div class="cpt-tree-row" style="display:flex;align-items:center;gap:3px;padding:4px 6px 4px ${4+depth*16}px;border-radius:6px;cursor:pointer;${on?'background:var(--blue-l);':''}"
@@ -115,10 +115,10 @@ function _cptTreeHtml(items){
       ${caret}
       <span onclick="cptSelect('${c.concept_id}')" style="flex:1;min-width:0;display:flex;align-items:center;gap:5px;overflow:hidden;">
         <span style="width:7px;height:7px;border-radius:50%;background:${_CPT_DOT[c.concept_status]||'#999'};flex:none;" title="${c.concept_status}"></span>
-        <b style="font-size:12px;${on?'color:var(--blue-d);':''}white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.pref_label)}</b>
+        <b style="font-size:13.5px;${on?'color:var(--blue-d);':''}white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.pref_label)}</b>
         ${c.homonym?'<span title="同形异义：该词指向多个概念">🔴</span>':''}
-        ${c.definition?'':'<span style="color:#C53030;font-size:9px;flex:none;font-weight:600;" title="缺定义（ISO 704 审批拦截）">缺定</span>'}
-        ${kids.length?`<span style="color:var(--mut);font-size:9.5px;flex:none;">${kids.length}</span>`:''}
+        ${c.definition?'':'<span style="color:#C53030;font-size:11.5px;flex:none;font-weight:600;" title="缺定义（ISO 704 审批拦截）">缺定</span>'}
+        ${kids.length?`<span style="color:var(--mut);font-size:11.5px;flex:none;">${kids.length}</span>`:''}
       </span>
       <span class="cpt-ops" style="display:inline-flex;gap:1px;flex:none;opacity:0;transition:opacity .12s;">
         <a title="新增直接下级（上位概念自动填本节点）" onclick="event.stopPropagation();cptCreateChild('${c.concept_id}')">＋</a>
@@ -128,7 +128,7 @@ function _cptTreeHtml(items){
   };
   const roots = children['']||[];
   return roots.length ? roots.map(c=>row(c,0)).join('')
-    : '<div style="padding:16px 10px;color:var(--mut);font-size:11.5px;text-align:center;line-height:1.8;">当前筛选无匹配概念<div style="margin-top:6px;"><button class="btn sm ghost" onclick="cptFilterReset()">清除筛选</button></div></div>';
+    : '<div style="padding:16px 10px;color:var(--mut);font-size:12.5px;text-align:center;line-height:1.8;">当前筛选无匹配概念<div style="margin-top:6px;"><button class="btn sm ghost" onclick="cptFilterReset()">清除筛选</button></div></div>';
 }
 function cptTreeToggle(cid){
   const s = window._cptCollapsed || (window._cptCollapsed = new Set());
@@ -144,15 +144,15 @@ function cptTreeRefresh(){
 function _fsec(title){
   return `<div style="display:flex;align-items:center;gap:8px;margin:16px 0 10px;">
     <span style="width:3px;height:14px;background:var(--blue);border-radius:2px;flex:none;"></span>
-    <b style="font-size:12.5px;">${title}</b><span style="flex:1;height:1px;background:var(--line);"></span></div>`;
+    <b style="font-size:13.5px;">${title}</b><span style="flex:1;height:1px;background:var(--line);"></span></div>`;
 }
 function _frow(label, fieldHtml, hint){
   return `<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:8px;">
-    <label style="width:104px;flex:none;text-align:right;color:var(--mut);font-size:12px;padding-top:6px;">${label}${hint?`<span class="info-tip" title="${escA(hint)}">ⓘ</span>`:''}</label>
+    <label style="width:104px;flex:none;text-align:right;color:var(--mut);font-size:13.5px;padding-top:6px;">${label}${hint?`<span class="info-tip" title="${escA(hint)}">ⓘ</span>`:''}</label>
     <div style="flex:1;min-width:0;">${fieldHtml}</div>
   </div>`;
 }
-const _FINP = 'width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12.5px;font-family:inherit;box-sizing:border-box;';
+const _FINP = 'width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13.5px;font-family:inherit;box-sizing:border-box;';
 // 必填标识（红星）与校验失败高亮（红框+聚焦+滚动到视野，输入即清除）
 const _req = () => ' <span style="color:#C53030;font-weight:700;" title="必填">*</span>';
 // 条件必填标识（琥珀星：仅在特定操作/状态下必填，hover 看条件）
@@ -217,15 +217,15 @@ async function cptSelect(cid, opt){
       <td style="padding:5px 8px;font-weight:${t.term_kind==='preferred'?'600':'400'};">${esc(t.term)}</td>
       <td style="padding:5px 8px;color:var(--mut);">${t.lang==='en'?'EN':'ZH'}</td>
       <td style="padding:5px 8px;">${_TERM_KIND_CN[t.term_kind]||t.term_kind}</td>
-      <td style="padding:5px 8px;color:var(--mut);font-size:11px;">${esc(t.source||'')}</td>
-      <td style="padding:5px 8px;"><a style="color:#C53030;cursor:pointer;font-size:11px;" onclick="termRemove(${t.id},'${esc(t.term).replace(/'/g,'')}', '${escA(cid)}')">删</a></td>
+      <td style="padding:5px 8px;color:var(--mut);font-size:12.5px;">${esc(t.source||'')}</td>
+      <td style="padding:5px 8px;"><a style="color:#C53030;cursor:pointer;font-size:12.5px;" onclick="termRemove(${t.id},'${esc(t.term).replace(/'/g,'')}', '${escA(cid)}')">删</a></td>
     </tr>`).join('');
   const mapTxt = c.maps_to_class?'类':c.maps_to_prop?'属性':c.maps_to_inst?'关系':'';
   const head = `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
-      <b style="font-size:15px;">${esc(c.pref_label)}</b>${_cptBadge(c.concept_status)}
-      <span style="color:var(--mut);font-size:11px;">ID <code>${esc(c.concept_id)}</code></span>
-      <span style="color:var(--mut);font-size:11px;">v${c.version||1}</span>
-      ${c.homonym?`<span style="color:#C53030;font-size:11px;">🔴 同形异义 ×${r.homonym} <a style="cursor:pointer;text-decoration:underline;" onclick="conceptMergeModal('${escA(cid)}')">合并…</a></span>`:''}
+      <b style="font-size:16.5px;">${esc(c.pref_label)}</b>${_cptBadge(c.concept_status)}
+      <span style="color:var(--mut);font-size:12.5px;">ID <code>${esc(c.concept_id)}</code></span>
+      <span style="color:var(--mut);font-size:12.5px;">v${c.version||1}</span>
+      ${c.homonym?`<span style="color:#C53030;font-size:12.5px;">🔴 同形异义 ×${r.homonym} <a style="cursor:pointer;text-decoration:underline;" onclick="conceptMergeModal('${escA(cid)}')">合并…</a></span>`:''}
       <span style="flex:1"></span>
       <button class="btn sm ghost" onclick="cptSelect('${escA(cid)}')" title="放弃未保存修改，重新加载">↺ 重置</button>
       ${next?`<button class="btn sm" onclick="conceptFlow('${escA(cid)}','${next[0]}')" title="ISO 704 状态流转（弃用需指定替代概念）">${next[1]}</button>`:''}
@@ -246,27 +246,27 @@ async function cptSelect(cid, opt){
     + _frow('定义来源', `<input id="cf-dsrc" value="${escA(c.source||'')}" placeholder="如 GB/T XXXX / 手册 3.2 节" style="${_FINP}">`, 'ISO 704 要求定义可溯源')
     + _fsec(`术语与同义词（${terms.length}）`)
     + `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:6px;">
-        <textarea id="new-term-input" rows="1" placeholder="批量录入：分号 / 换行分隔，如 功放; 放大器; PA" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;resize:vertical;"></textarea>
-        <select id="new-term-kind" style="border:1px solid var(--line);border-radius:6px;padding:5px;font-size:12px;">
+        <textarea id="new-term-input" rows="1" placeholder="批量录入：分号 / 换行分隔，如 功放; 放大器; PA" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;resize:vertical;"></textarea>
+        <select id="new-term-kind" style="border:1px solid var(--line);border-radius:6px;padding:5px;font-size:13.5px;">
           <option value="synonym">同义</option><option value="abbr">缩写</option><option value="alias">别名</option><option value="hidden">禁用</option>
         </select>
-        <select id="new-term-lang" style="border:1px solid var(--line);border-radius:6px;padding:5px;font-size:12px;">
+        <select id="new-term-lang" style="border:1px solid var(--line);border-radius:6px;padding:5px;font-size:13.5px;">
           <option value="">语(自动)</option><option value="zh">中文</option><option value="en">EN</option>
         </select>
         <button class="btn sm" onclick="termBatchAdd('${escA(cid)}')">＋ 批量加</button>
       </div>
-      <table class="tbl" style="width:100%;font-size:12px;">
+      <table class="tbl" style="width:100%;font-size:13.5px;">
         <thead><tr style="color:var(--mut);text-align:left;"><th style="padding:5px 8px;">术语</th><th style="padding:5px 8px;">语</th><th style="padding:5px 8px;">类型</th><th style="padding:5px 8px;">来源</th><th></th></tr></thead>
         <tbody>${termRows||'<tr><td colspan="5" style="padding:8px;color:var(--mut);">暂无术语</td></tr>'}</tbody>
       </table>`
     + _fsec('关联信息')
     + _frow('上位概念', `<select id="cf-broader" style="${_FINP}"><option value="">— 无（顶级概念）—</option>
         ${cands.map(o=>`<option value="${escA(o.id)}"${c.broader===o.id?' selected':''}>${esc(o.label)}</option>`).join('')}</select>`, 'broader 构成层级（左树结构）')
-    + _frow('相关概念', `<select id="cf-related" multiple size="4" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:12px;">
+    + _frow('相关概念', `<select id="cf-related" multiple size="4" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:13.5px;">
         ${cands.map(o=>`<option value="${escA(o.id)}"${(c.related||'').split(',').filter(Boolean).includes(o.id)?' selected':''}>${esc(o.label)}</option>`).join('')}</select>
-        <small style="color:var(--mut);font-size:11px;">Ctrl/Shift 多选，或点开面板搜索</small>`, 'related 表达横向关联')
+        <small style="color:var(--mut);font-size:12.5px;">Ctrl/Shift 多选，或点开面板搜索</small>`, 'related 表达横向关联')
     + ((c.narrower||[]).length?_frow('下位概念（自动派生）', `<div>${c.narrower.map(n=>`<span class="tag" style="cursor:pointer;" onclick="cptSelect('${escA(n)}')">${esc(n.replace(/^C-/,'')||n)}</span>`).join(' ')}</div>`):'')
-    + _frow('关系图', '<div id="cpt-minigraph" style="font-size:11px;color:var(--mut);">📊 生成中…</div>')
+    + _frow('关系图', '<div id="cpt-minigraph" style="font-size:12.5px;color:var(--mut);">📊 生成中…</div>')
     + _fsec('本体映射')
     + _frow('映射对象', _mapRow('cf', {cls:c.maps_to_class, prop:c.maps_to_prop, inst:c.maps_to_inst}), '挂接后术语命中可直连图谱查询')
     + _fsec('治理信息')
@@ -276,14 +276,14 @@ async function cptSelect(cid, opt){
     + _frow('替代概念<span id="cf-rep-req"></span>', `<input id="cf-rep" value="${escA(c.replaced_by||'')}" placeholder="状态=已弃用时必填" style="${_FINP}">`)
     + _frow('意图路由', `<input id="cf-intent" value="${escA(c.intent||'')}" placeholder="如 knowledge_qa" style="${_FINP}">`, '命中该概念术语时路由到对应意图')
     + _frow('检索加权', `<input id="cf-boost" type="number" step="0.1" min="1" value="${c.boost||1.0}" style="${_FINP}">`)
-    + (impact.length?`<div style="margin:8px 0 8px 102px;padding:8px 10px;background:#FDE8E8;border-radius:8px;font-size:12px;">
+    + (impact.length?`<div style="margin:8px 0 8px 102px;padding:8px 10px;background:#FDE8E8;border-radius:8px;font-size:13.5px;">
         <b style="color:#C53030;">弃用影响：${impact.length} 处仍在使用该概念的术语</b>
         <div style="margin-top:4px;">${impact.slice(0,10).map(x=>`<span class="tag">${x.kind==='entity'?'实体':'关系'}: ${esc(x.name)}</span>`).join(' ')}${impact.length>10?'…':''}</div></div>`:'')
     + `</div>
       <div id="cpt-tab-hist" style="display:none;">
-        <div id="cpt-changelog"><div style="color:var(--mut);font-size:11px;margin-top:6px;">加载中…</div></div>
+        <div id="cpt-changelog"><div style="color:var(--mut);font-size:12.5px;margin-top:6px;">加载中…</div></div>
       </div>
-      <div style="margin-top:10px;padding:8px 10px;background:#F8FAFC;border:1px solid var(--line);border-radius:8px;font-size:10.5px;color:var(--mut);line-height:1.7;">
+      <div style="margin-top:10px;padding:8px 10px;background:#F8FAFC;border:1px solid var(--line);border-radius:8px;font-size:12px;color:var(--mut);line-height:1.7;">
         提示：修改后点右上角「💾 保存」；未保存切换节点将丢弃修改。</div>`;
   host.innerHTML = `${_mapDatalist(ontTypeCandidates())}${html}`;
   setTimeout(()=>enhanceMultiSelect(document.getElementById('cf-related')),0);
@@ -308,13 +308,13 @@ async function cptSelect(cid, opt){
     const its = (cl.items||[]).slice(0, 15).map(x=>{
       const actCls = {flow:'b', add:'ok', merge:'w', update:'', terms:''}[x.action] || '';
       const actLbl = {flow:'流转', add:'新建', merge:'合并', update:'编辑', terms:'术语'}[x.action] || x.action;
-      return `<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:11px;line-height:1.6;">
-        <span class="st ${actCls}" style="padding:0 6px;font-size:9.5px;">${actLbl}</span>
+      return `<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:12.5px;line-height:1.6;">
+        <span class="st ${actCls}" style="padding:0 6px;font-size:11.5px;">${actLbl}</span>
         ${esc(x.detail||'')}${x.reason?`<span style="color:var(--mut);"> · 理由: ${esc(x.reason)}</span>`:''}
-        <span style="color:var(--mut);font-size:10px;margin-left:4px;">${esc((x.created_at||'').slice(0,16).replace('T',' '))}${x.operator?' · '+esc(x.operator):''}</span>
+        <span style="color:var(--mut);font-size:12px;margin-left:4px;">${esc((x.created_at||'').slice(0,16).replace('T',' '))}${x.operator?' · '+esc(x.operator):''}</span>
       </div>`;}).join('');
-    el.innerHTML = '<div style="font-size:11.5px;font-weight:600;color:var(--blue-d);">📜 变更历史'+((cl.items||[]).length?'（'+cl.items.length+'）':'')+'</div>'
-      + (its || '<div style="color:var(--mut);font-size:11px;margin-top:4px;">暂无变更记录</div>');
+    el.innerHTML = '<div style="font-size:12.5px;font-weight:600;color:var(--blue-d);">📜 变更历史'+((cl.items||[]).length?'（'+cl.items.length+'）':'')+'</div>'
+      + (its || '<div style="color:var(--mut);font-size:12.5px;margin-top:4px;">暂无变更记录</div>');
   }).catch(()=>{});
 }
 // 兼容别名：既有调用点（mini 图链/术语增删/合并流）不动
@@ -360,13 +360,13 @@ function cptCreateRender(pref, adopt){
   Promise.all([ensureOntTypes(), conceptOptions(null)]).then(([,cands])=>{
     const sug = (adopt&&adopt.sug)||{};
     const banner = adopt
-      ? `<div style="margin-bottom:10px;padding:8px 12px;background:#F5F3FF;border:1px solid #DDD6FE;border-radius:8px;font-size:11.5px;color:#7c3aed;line-height:1.7;">
+      ? `<div style="margin-bottom:10px;padding:8px 12px;background:#F5F3FF;border:1px solid #DDD6FE;border-radius:8px;font-size:12.5px;color:#7c3aed;line-height:1.7;">
           <b>💡 AI 建议采纳</b>${sug.definition?' · AI 已预填下列字段（可修改）':''}
           ${sug.is_new_concept===false?`<div style="margin-top:3px;">🔀 AI 判定这可能不是新概念${sug.synonym_of?`（应归属 ${esc(sug.synonym_of)}）`:''}——建议关闭后用「合并到已有概念」。</div>`:''}
         </div>`
       : '';
     const html = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-        <b style="font-size:15px;">新建概念</b><span style="color:var(--mut);font-size:11px;">创建后为候选（candidate），走「⏳ 待审定」审批</span>
+        <b style="font-size:16.5px;">新建概念</b><span style="color:var(--mut);font-size:12.5px;">创建后为候选（candidate），走「⏳ 待审定」审批</span>
         <span style="flex:1"></span>
         <button class="btn ghost" onclick="cptCreateCancel()">取消</button>
         <button class="btn" onclick="cptCreateSubmit()" style="min-width:88px;">✓ 创建</button>
@@ -386,7 +386,7 @@ function cptCreateRender(pref, adopt){
       + _fsec('关联信息')
       + _frow('上位概念', `<select id="cf-broader" style="${_FINP}"><option value="">— 无（顶级概念）—</option>
           ${cands.map(o=>`<option value="${escA(o.id)}"${(pref.broader||adopt&&adopt.sug&&adopt.sug.broader)===o.id?' selected':''}>${esc(o.label)}</option>`).join('')}</select>`)
-      + _frow('相关概念', `<select id="cf-related" multiple size="3" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:12px;">
+      + _frow('相关概念', `<select id="cf-related" multiple size="3" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:13.5px;">
           ${cands.map(o=>`<option value="${escA(o.id)}">${esc(o.label)}</option>`).join('')}</select>`)
       + _fsec('本体映射')
       + _frow('映射对象', _mapRow('cf', {}), '可留空稍后补');
@@ -409,13 +409,13 @@ function cptCreateMini(pref){
   if(!host) return;
   const bLabel = pref.broader ? (((window._cptItems||[]).find(x=>x.concept_id===pref.broader)||{}).pref_label || pref.broader) : '';
   host.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-      <b style="font-size:14.5px;">新建概念</b>
-      <span style="color:var(--mut);font-size:11px;">输入名称回车创建，随后在右侧完善字段</span></div>
+      <b style="font-size:15.5px;">新建概念</b>
+      <span style="color:var(--mut);font-size:12.5px;">输入名称回车创建，随后在右侧完善字段</span></div>
     <div style="border:1px solid var(--line);border-radius:10px;padding:20px 22px;background:#F8FAFD;max-width:440px;">
-      <div style="font-size:12px;color:var(--mut);margin-bottom:6px;">规范词 <span style="color:#C53030;font-weight:700;">*</span></div>
-      <input id="cpt-mini-name" placeholder="如：行波管放大器" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 12px;font-size:13px;font-family:inherit;box-sizing:border-box;"
+      <div style="font-size:13.5px;color:var(--mut);margin-bottom:6px;">规范词 <span style="color:#C53030;font-weight:700;">*</span></div>
+      <input id="cpt-mini-name" placeholder="如：行波管放大器" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 12px;font-size:14.5px;font-family:inherit;box-sizing:border-box;"
         onkeydown="if(event.key==='Enter'){event.preventDefault();cptMiniSubmit();}">
-      <div style="margin-top:10px;font-size:10.5px;color:var(--mut);line-height:1.8;">
+      <div style="margin-top:10px;font-size:12px;color:var(--mut);line-height:1.8;">
         ${bLabel?`上位概念将默认填入「<b>${esc(bLabel)}</b>」。<br>`:''}创建后为候选（candidate），进「⏳ 待审定」审批；定义补全后方可批准（ISO 704）。</div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
         <button class="btn ghost" onclick="cptCreateCancel()">取消</button>
@@ -529,12 +529,12 @@ async function conceptMergeModal(cid){
   const lbx = document.getElementById('lbx'), body = document.getElementById('lbx-body');
   if(!lbx || !body){ toast('弹窗容器缺失'); return; }
   body.innerHTML = `<h3>⇄ 合并同形异义概念</h3>
-    <div style="font-size:12px;color:var(--mut);margin:4px 0 8px;line-height:1.6;">
+    <div style="font-size:13.5px;color:var(--mut);margin:4px 0 8px;line-height:1.6;">
       源概念 <b>${esc(cid)}</b> 的术语将并入目标概念，源转为「已弃用」并指向目标（旧词保留可召回）。</div>
     <div style="margin-bottom:8px;">
-      <div style="font-size:12px;margin-bottom:4px;">目标概念（可搜索）</div>
-      <input id="mg-kw" oninput="conceptMergeFilter()" placeholder="🔍 搜索概念名/ID" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12px;box-sizing:border-box;">
-      <select id="mg-target" size="8" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:12px;margin-top:4px;">
+      <div style="font-size:13.5px;margin-bottom:4px;">目标概念（可搜索）</div>
+      <input id="mg-kw" oninput="conceptMergeFilter()" placeholder="🔍 搜索概念名/ID" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13.5px;box-sizing:border-box;">
+      <select id="mg-target" size="8" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:13.5px;margin-top:4px;">
         ${cands.map(c=>`<option value="${escA(c.concept_id)}">${esc(c.pref_label)}　${esc(c.concept_id)}</option>`).join('')}
       </select>
     </div>
@@ -587,13 +587,13 @@ function _mapRow(prefix, cur){
   const kind = cur.cls ? 'entity' : cur.prop ? 'attribute' : cur.inst ? 'relation' : '';
   const val = cur.cls || cur.prop || cur.inst || '';
   return `<div style="display:flex;gap:8px;margin-top:4px;">
-    <select id="${prefix}-mapkind" onchange="ontMapKindChanged('${prefix}')" style="width:96px;flex:none;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;">
+    <select id="${prefix}-mapkind" onchange="ontMapKindChanged('${prefix}')" style="width:96px;flex:none;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13.5px;">
       <option value="">不映射</option>
       <option value="entity"${kind==='entity'?' selected':''}>类</option>
       <option value="attribute"${kind==='attribute'?' selected':''}>属性</option>
       <option value="relation"${kind==='relation'?' selected':''}>关系</option>
     </select>
-    <input id="${prefix}-mapval" list="dl-entity" value="${escA(val)}" placeholder="选择或输入本体类型名（可搜索）" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12px;">
+    <input id="${prefix}-mapval" list="dl-entity" value="${escA(val)}" placeholder="选择或输入本体类型名（可搜索）" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13.5px;">
   </div>`;
 }
 function ontMapKindChanged(prefix){
@@ -653,11 +653,11 @@ function glossaryImportModal(){
   const lbx = document.getElementById('lbx'), body = document.getElementById('lbx-body');
   if(!lbx || !body){ toast('弹窗容器缺失'); return; }
   body.innerHTML = `<h3>⇧ 导入术语</h3>
-    <div style="font-size:12px;color:var(--mut);margin:4px 0 10px;line-height:1.7;">
+    <div style="font-size:13.5px;color:var(--mut);margin:4px 0 10px;line-height:1.7;">
       支持 CSV / XLSX，表头需含「名称」列。先<b>预检</b>（不落库）确认问题无误后再导入。
       <a style="color:var(--blue-d);cursor:pointer;" onclick="glossaryTemplate()">下载模板</a></div>
-    <input type="file" id="gi-file" accept=".csv,.txt,.xlsx,.xlsm" style="font-size:12px;margin-bottom:8px;">
-    <div id="gi-report" style="max-height:300px;overflow:auto;font-size:12px;"></div>
+    <input type="file" id="gi-file" accept=".csv,.txt,.xlsx,.xlsm" style="font-size:13.5px;margin-bottom:8px;">
+    <div id="gi-report" style="max-height:300px;overflow:auto;font-size:13.5px;"></div>
     <div class="lbx-actions">
       <button class="btn ghost" id="gi-close">关闭</button>
       <button class="btn ghost" id="gi-check">预检 dry-run</button>
@@ -757,21 +757,21 @@ function cptBatchFlow(){
   const ids = [...(window._cptSel||new Set())];
   if(!ids.length){ toast('请先勾选概念'); return; }
   openPanel(`⤵ 批量状态流转（${ids.length} 个概念）`, `
-    <div style="font-size:12.5px;line-height:1.8;">
+    <div style="font-size:13.5px;line-height:1.8;">
       <div style="margin-bottom:10px;color:var(--mut);">治理规则与单条一致：批准需定义非空（ISO 704）；弃用需替代概念——不满足的自动跳过并列出原因。</div>
       <div style="margin-bottom:10px;"><b>目标状态</b><br>
-        <select id="pb-status" style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px;">
+        <select id="pb-status" style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13.5px;">
           <option value="approved">已批准（approved）</option>
           <option value="deprecated">已弃用（deprecated）</option>
           <option value="retired">退役（retired）</option>
         </select></div>
       <div id="pb-rep-row" style="margin-bottom:10px;display:none;"><b>替代概念 <span style="color:var(--red);">*</span></b><br>
-        <select id="pb-replaced" style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px;">
+        <select id="pb-replaced" style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13.5px;">
           ${(window._cptOptions||[]).map(o=>`<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('')}
         </select>
-        <div style="font-size:10.5px;color:var(--mut);margin-top:3px;">弃用概念将由替代概念承接召回（replaced_by）</div></div>
+        <div style="font-size:12px;color:var(--mut);margin-top:3px;">弃用概念将由替代概念承接召回（replaced_by）</div></div>
       <div style="margin-bottom:10px;"><b>变更理由</b><br>
-        <input id="pb-reason" placeholder="记录本次批量流转理由（进入变更历史）" style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px;font-family:inherit;"></div>
+        <input id="pb-reason" placeholder="记录本次批量流转理由（进入变更历史）" style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13.5px;font-family:inherit;"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn ghost" onclick="closePanel()">取消</button>
         <button class="btn primary" onclick="cptBatchFlowSubmit()">确认流转</button>
@@ -796,15 +796,15 @@ function cptBatchDomain(){
   if(!ids.length){ toast('请先勾选概念'); return; }
   const doms = window._cptDomains||[];
   openPanel(`🏷 批量修改域（${ids.length} 个概念）`, `
-    <div style="font-size:12.5px;line-height:1.8;">
+    <div style="font-size:13.5px;line-height:1.8;">
       <div style="margin-bottom:10px;color:var(--mut);">域（subject field）用于检索过滤与知识分域；下拉选项来自现有概念的域去重。</div>
       <div style="margin-bottom:10px;"><b>目标域</b><br>
-        <select id="pb-domain" style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px;">
+        <select id="pb-domain" style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13.5px;">
           ${doms.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join('')}
           <option value="__new">＋ 新建域…</option>
         </select></div>
       <div id="pb-dom-new" style="margin-bottom:10px;display:none;"><b>新域名称</b><br>
-        <input id="pb-domain-new" placeholder="输入新域名称" style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px;font-family:inherit;"></div>
+        <input id="pb-domain-new" placeholder="输入新域名称" style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13.5px;font-family:inherit;"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn ghost" onclick="closePanel()">取消</button>
         <button class="btn primary" onclick="cptBatchDomainSubmit()">确认修改</button>
@@ -831,7 +831,7 @@ function _cptMiniGraph(cid, c, ctx){
   });
   const chList = (ctx && ctx.childrenByBroader) ? (ctx.childrenByBroader[cid]||[]) : [];
   chList.forEach(x=>push(x.id, x.label, 'narrower'));
-  if(nodes.length < 2) return '<div style="color:var(--mut);font-size:11px;padding:4px 0;">暂无关系可视化数据（补上位/相关概念并保存后自动生成）</div>';
+  if(nodes.length < 2) return '<div style="color:var(--mut);font-size:12.5px;padding:4px 0;">暂无关系可视化数据（补上位/相关概念并保存后自动生成）</div>';
   const W = 480, H = 210, cx = W/2, cy = H/2;
   const others = nodes.filter(n=>n.id!==cid);
   const R = 78;
@@ -879,36 +879,36 @@ function _discRender(){
     const st = stMap[x.status]||['','?'];
     const sug = x.suggestion||{};
     const sugTxt = sug.pref_label
-      ? '<div style="margin-top:5px;padding:6px 9px;background:#EAF3DE;border-radius:6px;font-size:11px;line-height:1.7;">'
+      ? '<div style="margin-top:5px;padding:6px 9px;background:#EAF3DE;border-radius:6px;font-size:12.5px;line-height:1.7;">'
         + '<b style="color:#2F6F4F;">AI 建议：</b>'+esc(sug.pref_label||'')+(sug.english?(' · '+esc(sug.english)):'')+(sug.domain?(' · 域:'+esc(sug.domain)):'')
         + (sug.definition?('<div style="color:var(--mut);margin-top:2px;">'+esc(sug.definition)+'</div>'):'')
         + (sug.is_new_concept===false?('<div style="color:#7c3aed;margin-top:2px;">🔀 AI 判定：非新概念'+(sug.synonym_of?('（应归属 '+esc(sug.synonym_of)+'）'):'')+'</div>'):'')
         + '</div>' : '';
     const ops = x.status==='discovered'
-      ? '<button class="btn sm" style="padding:2px 10px;font-size:11px;" onclick="discoverySuggest('+x.id+')">🤖 AI 预填</button>'
-        + '<button class="btn sm ghost" style="padding:2px 10px;font-size:11px;" onclick="discoveryAdopt('+x.id+')" title="进入统一建词页（AI 字段已预填，可修改）">＋ 采纳</button>'
-        + '<button class="btn sm ghost" style="padding:2px 10px;font-size:11px;color:var(--mut);" onclick="discoveryDismiss('+x.id+')">⛔ 忽略</button>'
+      ? '<button class="btn sm" style="padding:2px 10px;font-size:12.5px;" onclick="discoverySuggest('+x.id+')">🤖 AI 预填</button>'
+        + '<button class="btn sm ghost" style="padding:2px 10px;font-size:12.5px;" onclick="discoveryAdopt('+x.id+')" title="进入统一建词页（AI 字段已预填，可修改）">＋ 采纳</button>'
+        + '<button class="btn sm ghost" style="padding:2px 10px;font-size:12.5px;color:var(--mut);" onclick="discoveryDismiss('+x.id+')">⛔ 忽略</button>'
       : '';
     return '<div style="border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:8px;background:#fff;">'
       + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
-      + '<b style="font-size:12.5px;">'+esc(x.term)+'</b>'
-      + '<span class="st '+st[0]+'" style="padding:0 6px;font-size:9.5px;">'+st[1]+'</span>'
-      + '<span style="font-size:10.5px;color:#B7791F;" title="归一中未命中的出现次数">频次 ×'+(x.freq||1)+'</span>'
-      + '<span style="font-size:10px;color:var(--mut);">'+esc((x.created_at||'').slice(0,10))+'</span>'
+      + '<b style="font-size:13.5px;">'+esc(x.term)+'</b>'
+      + '<span class="st '+st[0]+'" style="padding:0 6px;font-size:11.5px;">'+st[1]+'</span>'
+      + '<span style="font-size:12px;color:#B7791F;" title="归一中未命中的出现次数">频次 ×'+(x.freq||1)+'</span>'
+      + '<span style="font-size:12px;color:var(--mut);">'+esc((x.created_at||'').slice(0,10))+'</span>'
       + '<span style="flex:1"></span>'+ops+'</div>'
-      + (x.context?('<div style="margin-top:3px;font-size:10.5px;color:var(--mut);">上下文：'+esc(x.context.slice(0,80))+'</div>'):'')
+      + (x.context?('<div style="margin-top:3px;font-size:12px;color:var(--mut);">上下文：'+esc(x.context.slice(0,80))+'</div>'):'')
       + sugTxt + '</div>';
   };
   const tbtn = (k, label, n)=>'<button class="cpt-dtab'+(tab===k?' on':'')+'" onclick="discTab(\''+k+'\')">'+label+'（'+n+'）</button>';
   document.getElementById('panel-body').innerHTML =
-    '<div style="font-size:11.5px;color:var(--mut);line-height:1.8;margin-bottom:10px;padding:8px 12px;background:var(--blue-l);border-radius:8px;">'
+    '<div style="font-size:12.5px;color:var(--mut);line-height:1.8;margin-bottom:10px;padding:8px 12px;background:var(--blue-l);border-radius:8px;">'
     + '<b>词库的"发现漏斗"：</b>AI 建模/归一校验中<b>未命中词库</b>的实体名自动收集到这里（不进词库）。值得沉淀的 → 「AI 预填」→「采纳」（统一建词页，AI 字段可改）；一次性实例名 → 「忽略」。</div>'
     + '<div style="display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:10px;">'
     + tbtn('discovered','🆕 待处理',groups.discovered.length)
     + tbtn('adopted','✅ 已采纳',groups.adopted.length)
     + tbtn('dismissed','⛔ 已忽略',groups.dismissed.length)
     + '<span style="flex:1"></span></div>'
-    + (groups[tab].length ? groups[tab].map(card).join('') : '<div style="color:var(--mut);font-size:11.5px;padding:14px 0;text-align:center;">该状态下暂无记录</div>');
+    + (groups[tab].length ? groups[tab].map(card).join('') : '<div style="color:var(--mut);font-size:12.5px;padding:14px 0;text-align:center;">该状态下暂无记录</div>');
 }
 async function discoverySuggest(did){
   toast('🤖 AI 分析中…（生成规范词/定义/英文/上位词/消歧预判）');
@@ -967,14 +967,14 @@ async function conceptDelete(cid){
 }
 // ④ 通用输入弹框（替代浏览器 prompt）：opts=数组时渲染下拉，否则文本输入；allowEmpty 允许空提交
 function cptPromptModal(title, label, opts, cb, hint, placeholder, allowEmpty){
-  const F = 'width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12.5px;font-family:inherit;box-sizing:border-box;';
+  const F = 'width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13.5px;font-family:inherit;box-sizing:border-box;';
   const field = Array.isArray(opts)
     ? '<select id="cpt-pm-in" style="'+F+'"><option value="">— 请选择 —</option>'
       + opts.map(o=>'<option value="'+esc(o.id)+'">'+esc(o.label)+'</option>').join('')+'</select>'
     : '<input id="cpt-pm-in" placeholder="'+escA(placeholder||'')+'" style="'+F+'">';
-  openPanel(title, '<div style="font-size:12.5px;line-height:1.8;">'
+  openPanel(title, '<div style="font-size:13.5px;line-height:1.8;">'
     + '<div style="margin-bottom:4px;"><b>'+label+'</b></div>'
-    + (hint?'<div style="font-size:11px;color:var(--mut);margin-bottom:8px;line-height:1.7;">'+esc(hint)+'</div>':'')
+    + (hint?'<div style="font-size:12.5px;color:var(--mut);margin-bottom:8px;line-height:1.7;">'+esc(hint)+'</div>':'')
     + field
     + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">'
     + '<button class="btn ghost" onclick="closePanel()">取消</button>'
@@ -996,7 +996,7 @@ function _abbrBoxHtml(){
   window._cptAbbr = window._cptAbbr||[];
   return '<div id="cf-abbr-box" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;border:1px solid var(--line);border-radius:6px;padding:4px 8px;min-height:34px;background:#fff;">'
     + '<input type="hidden" id="cf-abbr">'
-    + '<input id="cf-abbr-in" placeholder="输入缩写后回车新增" style="border:0;outline:none;flex:1;min-width:120px;font-size:12.5px;font-family:inherit;background:transparent;" onkeydown="cptAbbrKey(event)">'
+    + '<input id="cf-abbr-in" placeholder="输入缩写后回车新增" style="border:0;outline:none;flex:1;min-width:120px;font-size:13.5px;font-family:inherit;background:transparent;" onkeydown="cptAbbrKey(event)">'
     + '</div>';
 }
 function _abbrRender(){
@@ -1007,8 +1007,8 @@ function _abbrRender(){
   (window._cptAbbr||[]).forEach((a,i)=>{
     const s = document.createElement('span');
     s.className = 'cpt-abbr-tag';
-    s.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--blue-l);color:var(--blue-d);border-radius:10px;padding:2px 8px;font-size:11.5px;font-weight:600;';
-    s.innerHTML = esc(a) + ' <a style="cursor:pointer;color:var(--mut);font-size:12px;" title="删除" onclick="cptAbbrRemove('+i+')">×</a>';
+    s.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--blue-l);color:var(--blue-d);border-radius:10px;padding:2px 8px;font-size:12.5px;font-weight:600;';
+    s.innerHTML = esc(a) + ' <a style="cursor:pointer;color:var(--mut);font-size:13.5px;" title="删除" onclick="cptAbbrRemove('+i+')">×</a>';
     box.insertBefore(s, inEl);
   });
   const hid = document.getElementById('cf-abbr');

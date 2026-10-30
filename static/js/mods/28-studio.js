@@ -72,7 +72,7 @@ async function loadSkillDrafts(box, sum){
   const r = await api('/api/studio/skills?status=draft').catch(()=>[]);
   const items = r || [];
   if(sum) sum.textContent = `草稿箱共 ${items.length} 个（AI 自动沉淀/自改进草稿，审核后发布）`;
-  if(!items.length){ box.innerHTML = '<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:12px;">暂无草稿。任务产出满足「方法/流程/模板/最佳实践」信号时会自动沉淀为技能草稿</div>'; return; }
+  if(!items.length){ box.innerHTML = '<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:13.5px;">暂无草稿。任务产出满足「方法/流程/模板/最佳实践」信号时会自动沉淀为技能草稿</div>'; return; }
   box.innerHTML = items.map(s=>{
     const srcTag = s.source==='ai_deposit' ? '<span class="st amb">AI 沉淀</span>'
       : s.source==='ai_improve' ? '<span class="st amb">AI 改进</span>' : '<span class="st b">草稿</span>';
@@ -80,7 +80,7 @@ async function loadSkillDrafts(box, sum){
     const preview = String(s.content||'').slice(0,160);
     return `<div class="panel"><div class="ph">${esc(s.name||'')} ${srcTag} ${stTag}</div>
     <div class="pb">
-      <div style="font-size:11px;color:var(--mut);line-height:1.5;min-height:34px;max-height:60px;overflow:hidden;" title="${esc(s.description||'')}">${esc(preview)}</div>
+      <div style="font-size:12.5px;color:var(--mut);line-height:1.5;min-height:34px;max-height:60px;overflow:hidden;" title="${esc(s.description||'')}">${esc(preview)}</div>
       ${cardMeta({category:s.category, version:s.version, description:s.description})}
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         <button class="btn sm" onclick="publishSkill(${s.id})">✓ 发布</button>
@@ -131,20 +131,20 @@ async function loadSkillCombined(){
     const pN = items.filter(x=>x.view==='personal').length;
     const bN = items.filter(x=>x.view==='builtin').length;
     if(sum) sum.textContent = `共 ${items.length} 个 · 插件市场 ${mkN} · 自定义 ${pN} · 内置 ${bN}`;
-    if(!items.length){ box.innerHTML = '<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:12px;">暂无匹配的技能（调整筛选条件），或点击「＋ 添加技能」创建/上传</div>'; return; }
+    if(!items.length){ box.innerHTML = '<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:13.5px;">暂无匹配的技能（调整筛选条件），或点击「＋ 添加技能」创建/上传</div>'; return; }
     box.innerHTML = items.map(it=>{
       if(it.view==='market-add'){
         return `<div class="panel"><div class="ph">${esc(_skDispName(it))} <span class="st b">Skill</span></div>
         <div class="pb">
-          <div style="font-size:11.5px;color:var(--mut);min-height:34px;max-height:60px;overflow:hidden;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
+          <div style="font-size:12.5px;color:var(--mut);min-height:34px;max-height:60px;overflow:hidden;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
           <div style="margin-top:8px;"><button class="btn sm" onclick="marketInstall('skill','${esc(String(it.name).replace(/'/g,"\\'"))}',this)">＋ 添加</button></div>
         </div></div>`;
       }
       if(it.view==='builtin'){
         return `<div class="panel"><div class="ph">${esc(_skDispName(it))} <span class="st b">平台内置</span></div>
         <div class="pb">
-          <div style="font-size:11.5px;color:var(--mut);min-height:34px;max-height:60px;overflow:hidden;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
-          <div style="margin-top:8px;"><span style="font-size:10.5px;color:var(--mut);">平台预置技能，直接可用</span></div>
+          <div style="font-size:12.5px;color:var(--mut);min-height:34px;max-height:60px;overflow:hidden;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
+          <div style="margin-top:8px;"><span style="font-size:12px;color:var(--mut);">平台预置技能，直接可用</span></div>
         </div></div>`;
       }
       const tag = it.view==='market-installed' ? '<span class="st" style="background:#e8f5e9;color:#2e7d32;">来自市场</span>' : '<span class="st amb">自定义</span>';
@@ -170,7 +170,7 @@ async function loadSkillCombined(){
         <button class="btn sm red" onclick="deleteMCP(${it.id})">删除</button>`;
       return `<div class="panel"><div class="ph"> ${esc(_skDispName(it))} ${tag} <span style="flex:1"></span>${st}</div>
       <div class="pb">
-        <div style="font-size:11.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
+        <div style="font-size:12.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
         <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${ops}${share}</div>
       </div></div>`;
     }).join('');
@@ -229,20 +229,20 @@ async function loadMCPCombined(){
     if(sum) sum.textContent = `共 ${items.length} 个 · 插件市场 ${mkN} · 自定义 ${pN+ (items.filter(x=>x.view==='mcp-server').length)}`;
     const mcpCnt = document.getElementById('tm-mcp-count');
     if(mcpCnt) mcpCnt.textContent = items.length;
-    if(!items.length){ box.innerHTML = '<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:12px;">暂无匹配的工具（调整筛选条件），或点击「＋ 创建工具」创建</div>'; return; }
+    if(!items.length){ box.innerHTML = '<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:13.5px;">暂无匹配的工具（调整筛选条件），或点击「＋ 创建工具」创建</div>'; return; }
     box.innerHTML = items.map(it=>{
       if(it.view==='market-add'){
         return `<div class="panel"><div class="ph"> ${esc(_skDispName(it))} <span class="st" style="background:#e8f5e9;color:#2e7d32;">来自市场</span></div>
         <div class="pb">
-          <div style="font-size:11.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
+          <div style="font-size:12.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
           <div style="margin-top:8px;"><button class="btn sm" onclick="marketInstall('mcp','${esc(String(it.name).replace(/'/g,"\\'"))}',this)">＋ 添加</button></div>
         </div></div>`;
       }
       if(it.view==='builtin'){
         return `<div class="panel"><div class="ph">${esc(_skDispName(it))} <span class="st b">内置</span></div>
         <div class="pb">
-          <div style="font-size:11.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
-          <div style="margin-top:8px;"><span style="font-size:10.5px;color:var(--mut);">平台预置，直接可用</span></div>
+          <div style="font-size:12.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
+          <div style="margin-top:8px;"><span style="font-size:12px;color:var(--mut);">平台预置，直接可用</span></div>
         </div></div>`;
       }
       // ★ B5-3：`mcp-server` 是本平台 mcp_servers 表的记录（用户在「＋ 添加 MCP 服务器」建的），
@@ -265,7 +265,7 @@ async function loadMCPCombined(){
         ? `<button class="btn sm ghost" onclick="testMCP(${it.id})">🔌 测试</button>
            <button class="btn sm ghost" onclick="editMCP(${it.id})">✏️</button>
            <button class="btn sm ${it.enabled===0?'ok':'ghost amb'}" onclick="toggleMCPStatus(${it.id},${it.enabled===0?1:0})">${it.enabled===0?'启用':'停用'}</button>
-           <span style="font-size:10.5px;color:var(--mut);align-self:center;">内置不可删</span>`
+           <span style="font-size:12px;color:var(--mut);align-self:center;">内置不可删</span>`
         : '';
       const st = it.enabled===0 ? '<span class="st r">停用</span>' : '<span class="st ok">启用</span>';
       // 2026-09-17 第二刀：分享/撤回统一走 /api/plugins/{plugin_id}/*（与能力中心同一套守卫与语义）。
@@ -291,7 +291,7 @@ async function loadMCPCombined(){
         <button class="btn sm red" onclick="deleteMCP(${it.id})">删除</button>`;
       return `<div class="panel"><div class="ph"> ${esc(_skDispName(it))} ${tag} <span style="flex:1"></span>${st}</div>
       <div class="pb">
-        <div style="font-size:11.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
+        <div style="font-size:12.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
         ${_srvUse}
         <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${ops}${share}</div>
       </div></div>`;
@@ -337,7 +337,7 @@ function renderToolSourceCards(box, sumId, items, kind){
   const sum = document.getElementById(sumId);
   if(sum) sum.textContent = `共 ${items.length} 个工具`;
   if(!items.length){
-    box.innerHTML = '<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:12px;">暂无匹配的工具（调整筛选条件），或点击「＋ 新增工具」创建</div>';
+    box.innerHTML = '<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:13.5px;">暂无匹配的工具（调整筛选条件），或点击「＋ 新增工具」创建</div>';
     return;
   }
   box.innerHTML = items.map(t=>toolSourceCard(t, kind)).join('');
@@ -392,7 +392,7 @@ function toolSourceCard(t, kind){
   return `<div class="panel">
     <div class="ph">${esc(t.name)} ${typeTag} <span style="flex:1"></span>${st}</div>
     <div class="pb">
-      <div style="font-size:11.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${esc(t.description||'')}">${esc(t.description||'-')}</div>
+      <div style="font-size:12.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${esc(t.description||'')}">${esc(t.description||'-')}</div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${ops}${share}</div>
     </div></div>`;
 }
@@ -518,7 +518,7 @@ async function loadMarketManage(){
     const offN = items.filter(x=>(x.status||'published')==='disabled').length;
     if(sum) sum.textContent = `共 ${items.length} 条 · 平台内置 ${builtinN} · 管理员创建 ${adminN} · 个人分享 ${shareN} · 已停用 ${offN}`;
     if(!items.length){
-      box.innerHTML = '<div style="padding:24px;text-align:center;color:var(--mut);font-size:12px;">暂无符合条件的市场插件（「＋ 新建插件」创建即上架；个人分享需通过审核后入市场）</div>';
+      box.innerHTML = '<div style="padding:24px;text-align:center;color:var(--mut);font-size:13.5px;">暂无符合条件的市场插件（「＋ 新建插件」创建即上架；个人分享需通过审核后入市场）</div>';
     } else {
       // 按类型分组，纵向按区域铺开
       const groups = {};
@@ -561,7 +561,7 @@ async function loadMarketManage(){
             : '');
           return `<div class="panel"><div class="ph">${_micon[k]||'🧩'} ${esc(it.name)} ${oriBadge} ${stBadge} <span style="flex:1"></span></div>
       <div class="pb">
-        <div style="font-size:11.5px;color:var(--mut);min-height:32px;max-height:58px;overflow:hidden;" title="${esc(it.descr||'')}">${dispDescr(it)}</div>${cardMeta(it)}
+        <div style="font-size:12.5px;color:var(--mut);min-height:32px;max-height:58px;overflow:hidden;" title="${esc(it.descr||'')}">${dispDescr(it)}</div>${cardMeta(it)}
         <div class="kv"><span>分类</span><b>${esc(it.category||_mlabel[k]||'—')}</b></div>
         <div class="kv"><span>版本</span><b>${esc(it.version||'—')}</b></div>
         <div class="kv"><span>安装</span><b>${it.install_count||0} 次</b></div>
@@ -569,7 +569,7 @@ async function loadMarketManage(){
       </div></div>`;
         }).join('');
         return `<div style="margin-bottom:14px;">
-          <div style="font-size:12.5px;font-weight:600;margin-bottom:6px;">${_micon[k]||'🧩'} ${_mlabel[k]||k} <span class="tag">${list.length}</span></div>
+          <div style="font-size:13.5px;font-weight:600;margin-bottom:6px;">${_micon[k]||'🧩'} ${_mlabel[k]||k} <span class="tag">${list.length}</span></div>
           <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;">${cards}</div>
         </div>`;
       }).join('');
@@ -654,7 +654,7 @@ async function loadShareManage(){
               <button class="btn sm red" onclick="shareReview('${esc(it.kind)}','${esc(it.plugin_id||it.id)}','reject')">❌ 驳回</button>
             </td>
           </tr>`).join('') + `</table>`
-        : '<div style="padding:16px;color:var(--mut);font-size:12px;">暂无待审核的分享申请</div>';
+        : '<div style="padding:16px;color:var(--mut);font-size:13.5px;">暂无待审核的分享申请</div>';
     }
     if(rBox){
       rBox.innerHTML = rej.length
@@ -669,7 +669,7 @@ async function loadShareManage(){
               <button class="btn sm red" title="删除" onclick="deleteMarketItem('${it.kind}',${it.id},'${esc(String(it.name).replace(/'/g,"\\'"))}')">🗑</button>
             </td>
           </tr>`).join('') + `</table>`
-        : '<div style="padding:16px;color:var(--mut);font-size:12px;">暂无驳回记录</div>';
+        : '<div style="padding:16px;color:var(--mut);font-size:13.5px;">暂无驳回记录</div>';
     }
   }catch(e){
     if(pBox) pBox.innerHTML = '<div style="padding:12px;color:var(--red);">加载失败：' + esc(e.message||e) + '</div>';
@@ -824,7 +824,7 @@ function renderUnifiedPending(items){
   const box = document.getElementById('unified-pending-table');
   if(!box) return;
   if(sum) sum.textContent = `${items.length} 个待审`;
-  if(!items.length){ box.innerHTML = '<div style="padding:14px;color:var(--mut);font-size:12px;">暂无待审核插件</div>'; return; }
+  if(!items.length){ box.innerHTML = '<div style="padding:14px;color:var(--mut);font-size:13.5px;">暂无待审核插件</div>'; return; }
   box.innerHTML = `<table class="t"><tr><th>名称</th><th>类型</th><th>版本</th><th>作者</th><th>描述</th><th>操作</th></tr>` +
     items.map(it=>{
       const m = UNIFIED_TYPE_META[it.type] || {icon:'🧩', label:it.type};
@@ -1039,7 +1039,7 @@ async function loadStChangelog(){
     const sum = document.getElementById('st-cl-summary');
     if(sum) sum.textContent = r && r.note ? r.note : `共 ${items.length} 条字段级变更`;
     if(!items.length){
-      box.innerHTML = '<div style="padding:24px;text-align:center;color:var(--mut);font-size:12px;">暂无变更记录（迁移未执行或尚无资产更新）</div>';
+      box.innerHTML = '<div style="padding:24px;text-align:center;color:var(--mut);font-size:13.5px;">暂无变更记录（迁移未执行或尚无资产更新）</div>';
       return;
     }
     const rows = items.map(it=>{
@@ -1050,16 +1050,16 @@ async function loadStChangelog(){
         : '<span style="color:var(--mut);">—</span>';
       const ov = (it.old_value==null||it.old_value==='') ? '<span style="color:var(--mut);">（空）</span>' : _clClip(it.old_value, 120);
       const nv = (it.new_value==null||it.new_value==='') ? '<span style="color:var(--mut);">（空）</span>' : _clClip(it.new_value, 120);
-      return `<tr><td style="white-space:nowrap;color:var(--mut);font-size:11px;">${esc((it.created_at||'').replace('T',' ').slice(0,19))}</td>`
+      return `<tr><td style="white-space:nowrap;color:var(--mut);font-size:12.5px;">${esc((it.created_at||'').replace('T',' ').slice(0,19))}</td>`
         + `<td><span class="st b">${esc(tl)}</span> ${esc(nm)} <span style="color:var(--mut);">#${it.asset_id}</span></td>`
         + `<td><code>${esc(it.field)}</code></td>`
         + `<td style="max-width:260px;" title="${esc(it.old_value==null?'':String(it.old_value))}">${ov}</td>`
         + `<td style="max-width:260px;" title="${esc(it.new_value==null?'':String(it.new_value))}">${nv}</td>`
         + `<td style="white-space:nowrap;">${ver}</td>`
-        + `<td style="white-space:nowrap;">${esc(it.changed_by||'—')}<div style="font-size:10px;color:var(--mut);">${esc(it.source||'')}</div></td></tr>`;
+        + `<td style="white-space:nowrap;">${esc(it.changed_by||'—')}<div style="font-size:12px;color:var(--mut);">${esc(it.source||'')}</div></td></tr>`;
     }).join('');
     box.innerHTML = '<table class="t"><tr><th>时间</th><th>资产</th><th>字段</th><th>旧值</th><th>新值</th><th>版本</th><th>操作人</th></tr>' + rows + '</table>';
   }catch(e){
-    box.innerHTML = '<div style="padding:24px;text-align:center;color:var(--red,#c00);font-size:12px;">加载失败：' + esc(e.message||e) + '</div>';
+    box.innerHTML = '<div style="padding:24px;text-align:center;color:var(--red,#c00);font-size:13.5px;">加载失败：' + esc(e.message||e) + '</div>';
   }
 }

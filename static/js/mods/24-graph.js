@@ -151,9 +151,9 @@ function gvSkeletonBanner(){
   const crumbs = [];
   if(sk.drill) crumbs.push(`<span style="cursor:pointer;text-decoration:underline;" onclick="gvSkHome()">类型骨架</span>`);
   if(sk.focus) crumbs.push(`<span style="cursor:pointer;text-decoration:underline;" onclick="gvSkBack()">${esc(sk.drill)}</span>`);
-  return `<div style="padding:5px 12px;font-size:11.5px;color:var(--blue-d);background:var(--blue-l,#E6F1FB);border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;">
+  return `<div style="padding:5px 12px;font-size:12.5px;color:var(--blue-d);background:var(--blue-l,#E6F1FB);border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;">
     ${crumbs.length?`<span style="color:var(--mut);">${crumbs.join(' / ')} /</span>`:''}${crumb}
-    ${sk.drill?`<button class="btn sm ghost" style="padding:1px 8px;font-size:11px;" onclick="gvSkBack()">返回${sk.focus ? '实例' : '类型骨架'}</button>`:''}
+    ${sk.drill?`<button class="btn sm ghost" style="padding:1px 8px;font-size:12.5px;" onclick="gvSkBack()">返回${sk.focus ? '实例' : '类型骨架'}</button>`:''}
     <span style="flex:1"></span>
     <span style="color:var(--mut);">点击 🦴 骨架 按钮退出</span>
   </div>`;

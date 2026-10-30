@@ -41,10 +41,10 @@ function caNum(n) {
 
 function caKpi(label, value, sub, color) {
   return `<div style="background:var(--bg2,#f7f9fc);border-radius:8px;padding:12px;min-width:0;">
-    <div style="font-size:11.5px;color:var(--mut);margin-bottom:6px;">${esc(label)}</div>
-    <div style="font-size:22px;font-weight:600;line-height:1.15;${color ? 'color:' + color + ';' : ''}
+    <div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">${esc(label)}</div>
+    <div style="font-size:23px;font-weight:600;line-height:1.15;${color ? 'color:' + color + ';' : ''}
                 overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(value)}</div>
-    <div style="font-size:10.5px;color:var(--mut);margin-top:4px;">${esc(sub || '')}</div>
+    <div style="font-size:12px;color:var(--mut);margin-top:4px;">${esc(sub || '')}</div>
   </div>`;
 }
 
@@ -59,12 +59,12 @@ function caBlocksHtml(b) {
     const dyn = r.layer === 'dynamic';
     const col = dyn ? 'var(--amb,#EF9F27)' : 'var(--line-strong,#B4B2A9)';
     return `<div style="display:grid;grid-template-columns:104px 1fr 62px 46px;gap:8px;
-                align-items:center;font-size:11.5px;margin-bottom:7px;">
+                align-items:center;font-size:12.5px;margin-bottom:7px;">
       <div style="color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
            title="${escA(r.label || r.block)}">${esc(r.block)}</div>
       <div style="height:9px;border-radius:4px;background:${col};width:${w}%;min-width:3px;"></div>
       <div style="text-align:right;font-weight:600;">${caNum(tok)}</div>
-      <div style="text-align:right;color:var(--mut);font-size:10.5px;">${caNum(r.token_share)}%</div>
+      <div style="text-align:right;color:var(--mut);font-size:12px;">${caNum(r.token_share)}%</div>
     </div>`;
   }).join('');
   const L = b.layers || {};
@@ -76,17 +76,17 @@ function caBlocksHtml(b) {
     <div class="ph">📊 块级 token 分布
       <span class="badge">按占比降序</span>
       <span style="flex:1"></span>
-      <span style="font-size:10.5px;font-weight:400;color:var(--mut);">
+      <span style="font-size:12px;font-weight:400;color:var(--mut);">
         灰=静态可缓存 · 橙=动态每轮变</span>
     </div>
     <div class="pb">
       ${body}
       <div style="margin-top:10px;padding-top:9px;border-top:1px solid var(--line-soft,#e9edf3);
-                  display:flex;gap:18px;flex-wrap:wrap;font-size:11.5px;color:var(--mut);">
+                  display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:var(--mut);">
         <span>静态合计 <b style="color:var(--txt);">${caNum(st)}</b>
-          <span style="font-size:10.5px;">(${(st / tt * 100).toFixed(1)}%)</span></span>
+          <span style="font-size:12px;">(${(st / tt * 100).toFixed(1)}%)</span></span>
         <span>动态合计 <b style="color:var(--amb,#BA7517);">${caNum(dy)}</b>
-          <span style="font-size:10.5px;">(${(dy / tt * 100).toFixed(1)}%)</span></span>
+          <span style="font-size:12px;">(${(dy / tt * 100).toFixed(1)}%)</span></span>
         <span>合计 <b style="color:var(--txt);">${caNum(tt)}</b> tok</span>
         <span style="flex:1"></span>
         <span>${b.total_hits || 0} 块行 / ${asm || '—'} 次装配 / ${b.window_days} 天</span>
@@ -100,10 +100,10 @@ function caSwitchChip(m) {
   const v = +m.value || 0;
   if (m.kind === 'count') {
     return v > 0
-      ? '<span style="font-size:10.5px;padding:1px 6px;border-radius:4px;background:var(--grn-l);color:var(--grn-d);">生效</span>'
-      : '<span style="font-size:10.5px;padding:1px 6px;border-radius:4px;background:var(--bg2,#f1efE8);color:var(--mut);">未触发</span>';
+      ? '<span style="font-size:12px;padding:1px 6px;border-radius:4px;background:var(--grn-l);color:var(--grn-d);">生效</span>'
+      : '<span style="font-size:12px;padding:1px 6px;border-radius:4px;background:var(--bg2,#f1efE8);color:var(--mut);">未触发</span>';
   }
-  return '<span style="font-size:10.5px;padding:1px 6px;border-radius:4px;background:var(--amb-l);color:var(--amb);">每轮均值</span>';
+  return '<span style="font-size:12px;padding:1px 6px;border-radius:4px;background:var(--amb-l);color:var(--amb);">每轮均值</span>';
 }
 
 function caSwitchesHtml(s) {
@@ -112,7 +112,7 @@ function caSwitchesHtml(s) {
   const cnt = ms.filter(m => m.kind === 'count');
   const gau = ms.filter(m => m.kind !== 'count');
   const head = '<div style="display:grid;grid-template-columns:1.5fr 84px 96px 60px;gap:8px;' +
-    'padding:5px 0;color:var(--mut);border-bottom:1px solid var(--line-soft,#e9edf3);font-size:11px;">' +
+    'padding:5px 0;color:var(--mut);border-bottom:1px solid var(--line-soft,#e9edf3);font-size:12.5px;">' +
     '<span>指标</span><span>状态</span><span style="text-align:right;">数值</span>' +
     '<span style="text-align:right;">样本</span></div>';
   const row = m => {
@@ -123,25 +123,25 @@ function caSwitchesHtml(s) {
         ${esc(m.label || m.metric)}</span>
       <span>${caSwitchChip(m)}</span>
       <span style="text-align:right;font-weight:600;">${caNum(m.value)}${esc(u)}</span>
-      <span style="text-align:right;color:var(--mut);font-size:10.5px;">${m.samples || 0}</span>
+      <span style="text-align:right;color:var(--mut);font-size:12px;">${m.samples || 0}</span>
     </div>`;
   };
   let html = `<div class="panel" style="margin-bottom:12px;">
     <div class="ph">🔧 优化项实际运行情况
-      <span style="font-size:10.5px;font-weight:400;color:var(--mut);">
+      <span style="font-size:12px;font-weight:400;color:var(--mut);">
         回答「改了但生效了吗」· 读运行时指标，不是读配置</span>
     </div>
-    <div class="pb" style="font-size:11.5px;">`;
+    <div class="pb" style="font-size:12.5px;">`;
   if (cnt.length) {
-    html += `<div style="font-size:10.5px;color:var(--mut);margin-bottom:4px;">
+    html += `<div style="font-size:12px;color:var(--mut);margin-bottom:4px;">
       计数型：值为窗口内<b>发生次数</b>（累加有意义）</div>` + head + cnt.map(row).join('');
   }
   if (gau.length) {
-    html += `<div style="font-size:10.5px;color:var(--mut);margin:12px 0 4px;">
+    html += `<div style="font-size:12px;color:var(--mut);margin:12px 0 4px;">
       快照型：值为<b>单轮</b>用量，显示<b>均值</b>（累加会翻倍失真，故不展示总和）</div>` +
       head + gau.map(row).join('');
   }
-  html += `<div style="margin-top:9px;font-size:10.5px;color:var(--mut);line-height:1.6;">
+  html += `<div style="margin-top:9px;font-size:12px;color:var(--mut);line-height:1.6;">
       读法：计数型 0 = 该能力本窗口<b>没被触发</b>（配置未开 / 前置不满足如 MCP offline / 场景没走到）；
       快照型的均值才是「每轮典型用量」，跟配置阈值比才有意义。</div>
     </div></div>`;
@@ -163,12 +163,12 @@ function caDailyHtml(d) {
   }).join('');
   return `<div class="panel" style="margin-bottom:12px;">
     <div class="ph">📈 按日趋势
-      <span style="font-size:10.5px;font-weight:400;color:var(--mut);">
+      <span style="font-size:12px;font-weight:400;color:var(--mut);">
         柱高=当日 system 块总 token · 颜色=静态占比（蓝≥70% 优 / 橙 40~70% / 红&lt;40%）</span>
     </div>
     <div class="pb">
       <div style="display:flex;gap:3px;align-items:flex-end;">${bars}</div>
-      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--mut);margin-top:5px;">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--mut);margin-top:5px;">
         <span>${esc(rows[0].date)}</span><span>${esc(rows[rows.length - 1].date)}</span>
       </div>
     </div>
@@ -178,7 +178,7 @@ function caDailyHtml(d) {
 function caTopConvHtml(list) {
   if (!list || !list.length) return '';
   const rows = list.map(c => `<div style="display:grid;grid-template-columns:1fr 70px 80px;gap:8px;
-      padding:5px 0;border-bottom:1px solid var(--line-soft,#e9edf3);font-size:11.5px;">
+      padding:5px 0;border-bottom:1px solid var(--line-soft,#e9edf3);font-size:12.5px;">
       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
         title="${escA(c.title || c.conversation_id)}">${esc(c.title || ('会话 ' + c.conversation_id))}</span>
       <span style="text-align:right;color:var(--mut);">${c.traces || 0} 轮</span>
@@ -186,11 +186,11 @@ function caTopConvHtml(list) {
     </div>`).join('');
   return `<div class="panel">
     <div class="ph">💰 最贵会话 TOP ${list.length}
-      <span style="font-size:10.5px;font-weight:400;color:var(--mut);">按 system 块 token 合计</span>
+      <span style="font-size:12px;font-weight:400;color:var(--mut);">按 system 块 token 合计</span>
     </div>
     <div class="pb">
       <div style="display:grid;grid-template-columns:1fr 70px 80px;gap:8px;padding:4px 0;
-                  color:var(--mut);font-size:10.5px;border-bottom:1px solid var(--line-soft,#e9edf3);">
+                  color:var(--mut);font-size:12px;border-bottom:1px solid var(--line-soft,#e9edf3);">
         <span>会话</span><span style="text-align:right;">轮次</span>
         <span style="text-align:right;">token</span></div>
       ${rows}
@@ -203,19 +203,19 @@ function caEmptyHtml(ov) {
   const hint = ov && ov.hint ? ov.hint : '';
   return `<div class="panel">
     <div class="ph">📭 暂无归因数据</div>
-    <div class="pb" style="font-size:12px;line-height:1.8;">
+    <div class="pb" style="font-size:13.5px;line-height:1.8;">
       <div style="color:var(--mut);">最近 <b>${_CA_DAYS}</b> 天没有真实的上下文装配落库。</div>
       <div style="margin-top:10px;padding:9px 11px;border-radius:6px;
-                  background:var(--amb-l);color:var(--amb);font-size:11.5px;">
+                  background:var(--amb-l);color:var(--amb);font-size:12.5px;">
         这不是错误，通常是以下三种情况之一：
       </div>
-      <ol style="margin:8px 0 0 18px;padding:0;color:var(--txt);font-size:11.5px;line-height:1.9;">
+      <ol style="margin:8px 0 0 18px;padding:0;color:var(--txt);font-size:12.5px;line-height:1.9;">
         <li><b>部署后还没有新对话</b> —— 归因在每次真实请求装配时写入，发一条对话后点「刷新」即可。</li>
         <li><b>归因开关被关</b> —— 检查 <code>context_audit.enabled</code>（默认开）。</li>
         <li><b>表未迁移</b> —— 建表在 <code>init_db()</code>（仅应用启动时执行），
             未迁移会得到「表不存在」而不是空数据。</li>
       </ol>
-      ${hint ? `<div style="margin-top:10px;font-size:10.5px;color:var(--mut);">诊断提示：${esc(hint)}</div>` : ''}
+      ${hint ? `<div style="margin-top:10px;font-size:12px;color:var(--mut);">诊断提示：${esc(hint)}</div>` : ''}
     </div>
   </div>`;
 }
@@ -233,7 +233,7 @@ async function loadCtxAudit() {
     ov = await api('/api/diagnostics/context-audit/overview?days=' + _CA_DAYS);
   } catch (e) {
     box.innerHTML = `<div class="panel"><div class="ph">⚠️ 加载失败</div>
-      <div class="pb" style="font-size:12px;color:var(--mut);">
+      <div class="pb" style="font-size:13.5px;color:var(--mut);">
         ${esc(e && e.message || e)}<br><br>
         常见原因：后端未启动、或该接口需要更高权限。</div></div>`;
     _CA_BUSY = false;
@@ -245,9 +245,9 @@ async function loadCtxAudit() {
   const blk = ov.blocks || {};
   if (blk.ready === false) {
     box.innerHTML = `<div class="panel"><div class="ph">⚠️ 归因表不可用</div>
-      <div class="pb" style="font-size:12px;line-height:1.8;">
+      <div class="pb" style="font-size:13.5px;line-height:1.8;">
         <div style="color:var(--mut);">${esc(blk.hint || '')}</div>
-        <div style="margin-top:8px;font-size:11.5px;">
+        <div style="margin-top:8px;font-size:12.5px;">
           建表在 <code>init_db()</code>，只在应用启动时执行。启动一次服务即可自动补建。</div>
       </div></div>`;
     return;

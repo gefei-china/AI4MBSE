@@ -1121,6 +1121,26 @@ class FlowNodesMixin:
             return t if (cap <= 0 or len(t) <= cap) else t[:cap]
 
     @staticmethod
+    def _pass_score() -> int:
+        """通过线（`refine.pass_score`，默认 70）。
+
+        ⚠️ 必须在本类自持一份，**不能**去调 `RefineGate._pass_score()`：
+           ① `refine.py` 顶部就 import 了本模块（`from workflows.nodes import FlowNodesMixin`）
+              ⇒ 反向 import 会成环；
+           ② 本轮实测：写成 `FlowNodesMixin._pass_score` 时该属性根本不存在，
+              直接抛 `AttributeError`，而当时仍处在新加的 try 里 ⇒
+              表现成"评审调用异常"，**评审整体失效**。
+              这正是新增 `_diag` 的价值所在：修复前这类错只会显示六个字
+              「评审解析失败」，现在能读到 `AttributeError` 与具体属性名。
+        配置口径与 RefineGate 完全一致（同一个 `refine.pass_score` 键）。
+        """
+        try:
+            from core import config as _cfg
+            return int(_cfg.get("refine", "pass_score", 70) or 70)
+        except Exception:                                          # noqa: BLE001
+            return 70
+
+    @staticmethod
     def _eval_max_tokens() -> int:
         """评审**输出**上限（P0-7，2026-09-30 会话 514 实测）。
 
@@ -1208,16 +1228,70 @@ class FlowNodesMixin:
                     _why = "解析失败（输出被 max_tokens 截断，未见 score 字段）"
                 else:
                     _why = "解析失败"
-                data = {"score": 0, "passed": False, "issues": [_why]}
+                # ★★ 2026-10-30（用户「0/100 未通过 · 评审解析失败，这个评审的依据是什么，
+                #   看不出来」）：**把「为什么没取到分」的证据一并带回**。
+                #   此前只回一句"解析失败" ⇒ 用户与我们**都无从判断**到底是
+                #   模型没吐 JSON、被截断、还是 provider 报错。
+                #   现在带 raw_head（首 300 字）+ raw_len + finish_reason，
+                #   足以区分：模型吐了别的措辞 / 吐了半截 JSON / 干脆空。
+                data = {"score": 0, "passed": False, "issues": [_why],
+                        "_diag": {"raw_len": len(raw or ""),
+                                  "raw_head": (raw or "")[:300],
+                                  "finish_reason": _fr,
+                                  "max_tokens": FlowNodesMixin._eval_max_tokens(),
+                                  "criteria": criteria}}
             score = int(data.get("score", 0))
             issues = data.get("issues") or []
-            passed = bool(data.get("passed", score >= 60))
+            # ★★ 2026-10-30：**分数与通过线是主判据，模型自报的 passed 只作参考**。
+            #   实测（本轮跑同一段报告两次）：score=75 而 passed=false —— 模型自己
+            #   给的分数过了线（pass_score=70），它却在 passed 里写 false。
+            #   界面于是显示「75/100（通过线 70）未通过」，用户看到的是一条自相矛盾的
+            #   结论，且**没有任何办法判断该信哪个**（这正是"看不出评审依据"的另一半）。
+            #   取值原则（与本仓"确定性判据优先于模型自报"一致）：以 score 与
+            #   pass_score 的比较为准；模型自报与之矛盾时**以分数为准并留痕**，
+            #   不静默采信任何一方。
+            _m_passed = data.get("passed")
+            _by_score = score >= FlowNodesMixin._pass_score()
+            passed = _by_score
+            _inconsistent = (_m_passed is not None and bool(_m_passed) != _by_score)
             meta = resp.get("_meta", {})
             meta = dict(meta) if isinstance(meta, dict) else {}
             meta.setdefault("finish_reason", _fr)   # 便于现场判读"是被截断还是模型没吐 JSON"
+            _diag = data.get("_diag") or {}
+            _diag.update({"criteria": criteria,
+                          "max_tokens": FlowNodesMixin._eval_max_tokens(),
+                          "pass_score": FlowNodesMixin._pass_score()})
+            if _inconsistent:
+                _diag["inconsistent"] = {
+                    "model_passed": bool(_m_passed),
+                    "by_score": _by_score,
+                    "score": score,
+                    "pass_score": FlowNodesMixin._pass_score(),
+                }
+                # 让用户在 issues 里直接看到这条矛盾，而不是只在 diag 里
+                issues = list(issues) + [
+                    "评审自相矛盾：模型给出 %d 分（通过线 %d，按分应判%s），"
+                    "但自报 passed=%s。已按分数判定；此处如实留痕供人工复核"
+                    % (score, FlowNodesMixin._pass_score(),
+                       "通过" if _by_score else "未通过", str(bool(_m_passed)).lower())]
             return {"score": score, "passed": passed, "issues": issues,
-                    "advice": data.get("advice", ""), "_meta": meta}
-        except Exception:
-            return {"score": 0, "passed": False, "issues": ["评审解析失败"], "advice": "", "_meta": {}}
+                    "advice": data.get("advice", ""), "_meta": meta,
+                    "criteria": criteria, "_diag": _diag}
+        except Exception as e:
+            # ★★ 2026-10-30：**异常也必须说出自己是谁**。
+            #   原实现 `except Exception: return {... "issues": ["评审解析失败"] ...}`
+            #   把异常整个吞掉 —— 真机 msg 5378 因此只留下"评审解析失败"六个字，
+            #   而 `reflection.provider` 同时是 `"-"`（说明走的就是这条分支），
+            #   可**连是 KeyError 还是超时还是 401 都无从知道**。
+            #   现在：异常类名 + 摘要进 issues，并把 type/msg 放进 `_diag` 供卡片展示。
+            _et = type(e).__name__
+            _em = str(e)[:200]
+            return {"score": 0, "passed": False,
+                    "issues": ["评审调用异常（%s）：%s" % (_et, _em or "无详情")],
+                    "advice": "", "_meta": {},
+                    "criteria": criteria,
+                    "_diag": {"error_type": _et, "error_msg": _em,
+                              "criteria": criteria,
+                              "max_tokens": FlowNodesMixin._eval_max_tokens()}}
 
     # ── 运行轨迹落库（P0：先建 run 占位 → 检查点落库 → 结束写 steps）──

@@ -355,7 +355,7 @@ function renderPermMatrix(){
   for(const dom of UR_PERM_DOMAINS){
     const checked=perms[dom.key]||[];
     html+=`<tr><td style="white-space:nowrap;"><b>${esc(dom.label)}</b><br><small style="color:var(--mut);">${esc(dom.key)}</small></td>
-      <td>${dom.ops.map(o=>`<label style="display:inline-flex;align-items:center;gap:4px;margin:2px 12px 2px 0;font-size:12px;${readonly?'color:var(--mut);':''}"><input type="checkbox" data-dom="${esc(dom.key)}" data-op="${esc(o.key)}" ${checked.includes(o.key)?'checked':''} ${readonly?'disabled':''} onchange="onPermChange()"> ${esc(o.label)}</label>`).join('')}</td></tr>`;
+      <td>${dom.ops.map(o=>`<label style="display:inline-flex;align-items:center;gap:4px;margin:2px 12px 2px 0;font-size:13.5px;${readonly?'color:var(--mut);':''}"><input type="checkbox" data-dom="${esc(dom.key)}" data-op="${esc(o.key)}" ${checked.includes(o.key)?'checked':''} ${readonly?'disabled':''} onchange="onPermChange()"> ${esc(o.label)}</label>`).join('')}</td></tr>`;
   }
   html+='</table>';
   el.innerHTML=html;
@@ -365,7 +365,7 @@ function onPermChange(){ _permDirty=true; }
 function resetPermMatrix(){ renderPermMatrix(); }   // 从已保存 role.permissions 重新渲染 = 还原
 // ── 权限域管理（2026-09-01 权限域表化：openPermDomainMgr 面板，内置种子域受保护）──
 async function openPermDomainMgr(){
-  openPanel('⚙️ 权限域管理', '<div id="perm-dom-mgr" style="font-size:12px;"><div class="loading">加载中…</div></div>');
+  openPanel('⚙️ 权限域管理', '<div id="perm-dom-mgr" style="font-size:13.5px;"><div class="loading">加载中…</div></div>');
   await permDomMgrLoad();
 }
 async function permDomMgrLoad(){
@@ -377,17 +377,17 @@ async function permDomMgrLoad(){
   let h = '<div class="note" style="margin-bottom:8px;">🛡 内置种子域/操作项受保护不可删除；自定义域可增删（删除前校验角色引用）。变更后权限矩阵自动生效。</div>';
   h += '<div style="margin-bottom:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:var(--bg2, #fafafa);padding:8px;border-radius:8px;">';
   h += '<b style="color:var(--blue-d);">＋ 新增域</b>';
-  h += '<input id="pdm-key" placeholder="域键 kb_publish" style="width:130px;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:12px;">';
-  h += '<input id="pdm-label" placeholder="显示名" style="width:100px;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:12px;">';
+  h += '<input id="pdm-key" placeholder="域键 kb_publish" style="width:130px;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:13.5px;">';
+  h += '<input id="pdm-label" placeholder="显示名" style="width:100px;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:13.5px;">';
   h += '<button class="btn sm" onclick="permDomAdd()">创建</button></div>';
   h += '<div style="max-height:46vh;overflow:auto;">';
   h += doms.map(d=>{
     const ops = (d.ops||[]).map(o=>
-      `<span style="display:inline-flex;align-items:center;gap:3px;background:var(--bg2,#f5f5f5);border:1px solid var(--line);border-radius:12px;padding:1px 8px;margin:2px;font-size:11px;">
+      `<span style="display:inline-flex;align-items:center;gap:3px;background:var(--bg2,#f5f5f5);border:1px solid var(--line);border-radius:12px;padding:1px 8px;margin:2px;font-size:12.5px;">
          ${esc(o.label)}<small style="color:var(--mut);">(${esc(o.key)})</small>
          ${o.builtin?'':`<a style="color:var(--red);cursor:pointer;" title="删除操作项" onclick="permOpDel('${esc(d.key)}','${esc(o.key)}')">✕</a>`}
        </span>`).join('');
-    const addOp = `<span style="display:inline-flex;gap:3px;margin:2px;"><input id="pop-${esc(d.key)}" placeholder="操作key" style="width:86px;border:1px solid var(--line);border-radius:6px;padding:2px 4px;font-size:11px;"><input id="popl-${esc(d.key)}" placeholder="显示名" style="width:64px;border:1px solid var(--line);border-radius:6px;padding:2px 4px;font-size:11px;"><button class="btn sm ghost" style="padding:1px 8px;" onclick="permOpAdd('${esc(d.key)}')">＋</button></span>`;
+    const addOp = `<span style="display:inline-flex;gap:3px;margin:2px;"><input id="pop-${esc(d.key)}" placeholder="操作key" style="width:86px;border:1px solid var(--line);border-radius:6px;padding:2px 4px;font-size:12.5px;"><input id="popl-${esc(d.key)}" placeholder="显示名" style="width:64px;border:1px solid var(--line);border-radius:6px;padding:2px 4px;font-size:12.5px;"><button class="btn sm ghost" style="padding:1px 8px;" onclick="permOpAdd('${esc(d.key)}')">＋</button></span>`;
     return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;">
       <div style="display:flex;align-items:center;gap:6px;">
         <b>${esc(d.label)}</b><small style="color:var(--mut);">${esc(d.key)}</small>
@@ -462,7 +462,7 @@ async function loadAudit() {
     const msg = (d && d.error) ? d.error : '审计数据暂不可用';
     if(statsEl) statsEl.innerHTML = '';
     if(tableEl) tableEl.innerHTML =
-      `<div class="mut" style="padding:16px;font-size:12px;">⚠ ${esc(msg)}<br>
+      `<div class="mut" style="padding:16px;font-size:13.5px;">⚠ ${esc(msg)}<br>
        <span style="color:var(--mut);">需要 admin:audit_view 或 audit:view 权限（当前角色未授予时请联系系统管理员）。</span></div>`;
     return;
   }
@@ -478,7 +478,7 @@ async function loadAudit() {
       <td><span class="st b">${esc(l.event_type||'')}</span></td><td>${esc(l.detail||'')}</td>
       <td><span class="st ${l.result==='success'?'ok':l.result==='blocked'?'r':'w'}">${esc(l.result||'')}</span></td>
     </tr>`).join('') + '</table>'
-    : '<div class="mut" style="padding:16px;font-size:12px;">暂无审计记录</div>';
+    : '<div class="mut" style="padding:16px;font-size:13.5px;">暂无审计记录</div>';
 }
 
 // ── 统一监控平台（D12） ──
@@ -489,14 +489,14 @@ async function loadOps() {
   // UX 交互指标面板：复用 29-flow.js 的 uxMetricsHtml（全局作用域；放在 ok 判定之前，UX 独立于监控接口可用性）
   const uxEl = document.getElementById('ops-ux');
   if(uxEl) uxEl.innerHTML = (ux && typeof uxMetricsHtml === 'function') ? uxMetricsHtml(ux)
-    : '<div class="mut" style="padding:10px;font-size:12px;">UX 指标暂不可用</div>';
+    : '<div class="mut" style="padding:10px;font-size:13.5px;">UX 指标暂不可用</div>';
   const ok = d.runs && d.llm && d.trend;
   if(!ok){ document.getElementById('ops-kpis').innerHTML = '<div class="mut">监控接口不可用</div>'; return; }
   // KPI 四卡：真实聚合（成功率/平均耗时/LLM Mock率/开放告警）
   document.getElementById('ops-kpis').innerHTML = `
-    <div class="kpi"><div class="n" style="color:${d.runs.total?((d.runs.success_rate<100)?'var(--amb)':'var(--grn)'):'var(--mut)'};">${d.runs.success_rate}<span style="font-size:13px;">%</span></div><div class="l">运行成功率 <span class="st ${d.runs.total?((d.runs.failed>0)?'w':'ok'):'g'}">${d.runs.total} 次 / ${d.runs.failed} 失败</span></div></div>
-    <div class="kpi"><div class="n">${d.runs.avg_latency_ms}<span style="font-size:13px;">ms</span></div><div class="l">平均耗时 <span class="st b">近 7 天</span></div></div>
-    <div class="kpi"><div class="n" style="color:${d.llm.calls?((d.llm.mock_rate>50)?'var(--amb)':'var(--grn)'):'var(--mut)'};">${d.llm.mock_rate}<span style="font-size:13px;">%</span></div><div class="l">LLM Mock 率 <span class="st g">${d.llm.calls} 次调用 / ${d.llm.total_tokens} Tokens</span></div></div>
+    <div class="kpi"><div class="n" style="color:${d.runs.total?((d.runs.success_rate<100)?'var(--amb)':'var(--grn)'):'var(--mut)'};">${d.runs.success_rate}<span style="font-size:14.5px;">%</span></div><div class="l">运行成功率 <span class="st ${d.runs.total?((d.runs.failed>0)?'w':'ok'):'g'}">${d.runs.total} 次 / ${d.runs.failed} 失败</span></div></div>
+    <div class="kpi"><div class="n">${d.runs.avg_latency_ms}<span style="font-size:14.5px;">ms</span></div><div class="l">平均耗时 <span class="st b">近 7 天</span></div></div>
+    <div class="kpi"><div class="n" style="color:${d.llm.calls?((d.llm.mock_rate>50)?'var(--amb)':'var(--grn)'):'var(--mut)'};">${d.llm.mock_rate}<span style="font-size:14.5px;">%</span></div><div class="l">LLM Mock 率 <span class="st g">${d.llm.calls} 次调用 / ${d.llm.total_tokens} Tokens</span></div></div>
     ${renderProbeSplit(d.llm)}
     <div class="kpi" style="cursor:pointer;" onclick="loadOpsAlerts()"><div class="n" style="color:${d.open_alerts>0?'var(--red)':'var(--grn)'};">${d.open_alerts}</div><div class="l">开放告警 <span class="st ${d.open_alerts>0?'r':'ok'}">${d.subs_active} 订阅活跃</span></div></div>`;
   document.getElementById('ops-alert-badge').textContent = `${d.open_alerts} 开放`;
@@ -521,14 +521,14 @@ async function loadOps() {
   // 系统信息（进程 PID / 运行时长 / DB 大小）挂到趋势面板右上角
   const sys = d.system || {};
   document.getElementById('ops-trend').insertAdjacentHTML('beforeend',
-    `<div class="mut" style="font-size:11px;margin-top:6px;">PID ${sys.pid} · 运行 ${fmtUptime(sys.uptime_s)} · DB ${sys.db_size_kb} KB</div>`);
+    `<div class="mut" style="font-size:12.5px;margin-top:6px;">PID ${sys.pid} · 运行 ${fmtUptime(sys.uptime_s)} · DB ${sys.db_size_kb} KB</div>`);
   // 错误码 + 备份容灾（沿用 7.1/7.2/7.3 运维信息）
   // 2026-10-03 根修：/api/ops/metrics 回包无 error_codes 字段，原 m.error_codes.map 每次进页必炸
   //   （控制台 toast「Cannot read properties of undefined (reading 'map')」）——守卫 + 空态
   document.getElementById('ops-errors').innerHTML = (m.error_codes || []).length ? `<table class="t">
     <tr><th>错误码</th><th>含义</th><th>解决方案</th></tr>` +
     m.error_codes.map(e=>`<tr><td>${e.code}</td><td>${e.desc}</td><td>${e.solution}</td></tr>`).join('') + '</table>'
-    : '<div class="mut" style="padding:10px;font-size:12px;">错误码字典暂未接入（/api/ops/metrics 未返回 error_codes）</div>';
+    : '<div class="mut" style="padding:10px;font-size:13.5px;">错误码字典暂未接入（/api/ops/metrics 未返回 error_codes）</div>';
   const bk = m.backup || {};
   document.getElementById('ops-backup').innerHTML = `
     <div class="kv"><span>备份策略</span><b>${bk.strategy || '—'}</b></div>
@@ -563,12 +563,12 @@ async function loadOpsCapability(d){
   box.innerHTML = renderOpsCapability(d, orphan, sess, tenant);
 }
 function _capLayer(title, statusCls, statusTxt, rows, onclick){
-  const rowHtml = rows.map(r=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;padding:2.5px 0;border-bottom:1px dashed var(--line);">
+  const rowHtml = rows.map(r=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:2.5px 0;border-bottom:1px dashed var(--line);">
       <span style="color:var(--mut);white-space:nowrap;">${r[0]}</span>
       <b style="text-align:right;${r[2]?'color:'+r[2]:''};">${r[1]}</b></div>`).join('');
   return `<div ${onclick?`style="cursor:pointer;" onmouseover="this.style.background='#f7f8fa'" onmouseout="this.style.background=''" onclick="${onclick}"`:''}>
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">
-      <b style="font-size:12px;">${title}</b><span class="st ${statusCls}">${statusTxt}</span>
+      <b style="font-size:13.5px;">${title}</b><span class="st ${statusCls}">${statusTxt}</span>
     </div>${rowHtml}</div>`;
 }
 function renderOpsCapability(d, orphan, sess, tenant){
@@ -626,7 +626,7 @@ function renderOpsCapability(d, orphan, sess, tenant){
   return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
     ${layers.map(l=>`<div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;">${l}</div>`).join('')}
   </div>
-  <div style="font-size:9.5px;color:var(--mut);margin-top:6px;">口径：LLM 层=core/llm_health.py（唯一真源）· 编排层=/api/monitor/orphan-runs · 会话层=/api/monitor/sessions · 治理层=/api/monitor/tenant-readiness；「样本不足」= 无真实调用样本，任何质量结论均不成立。</div>`;
+  <div style="font-size:11.5px;color:var(--mut);margin-top:6px;">口径：LLM 层=core/llm_health.py（唯一真源）· 编排层=/api/monitor/orphan-runs · 会话层=/api/monitor/sessions · 治理层=/api/monitor/tenant-readiness；「样本不足」= 无真实调用样本，任何质量结论均不成立。</div>`;
 }
 /**
  * S0（2026-10-29）LLM 用量「业务 / 探针」双口径卡片。
@@ -649,9 +649,9 @@ function renderProbeSplit(llm){
   const col = pr >= 30 ? 'var(--amb)' : 'var(--grn)';
   const costAll = Number(l.estimated_cost||0), costBiz = Number(l.cost_biz||0);
   return `<div class="kpi" title="探针=健康巡检/自检调用（chat_probe 等），不计入业务统计。判定口径来自 core/probe_mark">
-    <div class="n" style="color:${col};">${pr.toFixed(0)}<span style="font-size:13px;">%</span></div>
+    <div class="n" style="color:${col};">${pr.toFixed(0)}<span style="font-size:14.5px;">%</span></div>
     <div class="l">探针占比 <span class="st ${pr>=30?'w':'ok'}">${l.calls_probe||0} / ${tot} 次</span></div>
-    <div style="font-size:11px;color:var(--mut);margin-top:3px;line-height:1.5;">
+    <div style="font-size:12.5px;color:var(--mut);margin-top:3px;line-height:1.5;">
       业务 <b>${l.calls_biz||0}</b> 次 · ${(l.tokens_biz||0).toLocaleString()} Tok · $${costBiz.toFixed(4)}<br>
       全量 $${costAll.toFixed(4)}（含探针）
     </div>
@@ -687,7 +687,7 @@ function renderOpsTrend(trend){
   </svg>`;
 }
 function renderOpsNodeStats(stats){
-  if(!stats || !stats.length) return '<div class="mut" style="padding:10px;font-size:12px;">暂无节点执行数据</div>';
+  if(!stats || !stats.length) return '<div class="mut" style="padding:10px;font-size:13.5px;">暂无节点执行数据</div>';
   const maxMs = Math.max(...stats.map(s=>s.avg_ms),1);
   return stats.map(s=>`
     <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);">
@@ -695,7 +695,7 @@ function renderOpsNodeStats(stats){
       <div style="flex:1;background:#f0f2f7;border-radius:4px;height:10px;overflow:hidden;">
         <div style="height:100%;width:${Math.min(100,(s.avg_ms/maxMs)*100).toFixed(1)}%;background:${s.errors>0?'var(--red)':'#7c5cff'};border-radius:4px;"></div>
       </div>
-      <span style="width:70px;text-align:right;font-size:11px;color:#555;">${s.avg_ms}ms</span>
+      <span style="width:70px;text-align:right;font-size:12.5px;color:#555;">${s.avg_ms}ms</span>
       <span class="st ${s.errors>0?'r':'ok'}">×${s.count}${s.errors?` ⚠${s.errors}`:''}</span>
     </div>`).join('');
 }
@@ -713,7 +713,7 @@ function alertStatusBadge(s){
 }
 function renderOpsAlerts(alerts){
   const box = document.getElementById('ops-alerts');
-  if(!alerts || !alerts.length){ box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">暂无告警事件</div>'; return; }
+  if(!alerts || !alerts.length){ box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">暂无告警事件</div>'; return; }
   box.innerHTML = `<table class="t"><tr><th>时间</th><th>规则</th><th>条件</th><th>触发值</th><th>命中</th><th>等级</th><th>状态</th><th></th></tr>` +
     alerts.map(a=>{
       const hit = Number(a.hit_count||1);
@@ -721,8 +721,8 @@ function renderOpsAlerts(alerts){
       const hitCell = hit>1
         ? `<span title="同因告警已折叠为一行，累计命中 ${hit} 次">×${hit}</span>`
         : `<span style="color:var(--mut);">1</span>`;
-      const seen = a.last_seen_at ? `<div style="font-size:10px;color:var(--mut);">最近 ${escMd(String(a.last_seen_at).slice(5,16))}</div>` : '';
-      const note = a.note ? `<div style="font-size:10px;color:var(--mut);">备注：${escMd(a.note)}</div>` : '';
+      const seen = a.last_seen_at ? `<div style="font-size:12px;color:var(--mut);">最近 ${escMd(String(a.last_seen_at).slice(5,16))}</div>` : '';
+      const note = a.note ? `<div style="font-size:12px;color:var(--mut);">备注：${escMd(a.note)}</div>` : '';
       const st = a.status||'open';
       let actions = '';
       if((a.conversation_id>0)) actions += `<button class="btn sm ghost" title="查看该告警所属会话的完整执行证据链" onclick="openSessionDrill(${a.conversation_id})">🔎 跳会话</button>`;
@@ -731,11 +731,11 @@ function renderOpsAlerts(alerts){
       if(st==='open'||st==='acked'||st==='triaged') actions += `<button class="btn sm ghost" onclick="advanceAlert(${a.id},'fixed')">🔧 已修</button>`;
       if(st==='fixed') actions += `<button class="btn sm ghost" onclick="advanceAlert(${a.id},'verified')">✔️ 已验证</button>`;
       return `<tr>
-      <td style="font-size:11px;">${escMd((a.created_at||'').slice(5,16))}${seen}</td>
-      <td><b>${escMd(a.rule_name)}</b><div style="font-size:10px;color:var(--mut);">run#${a.run_id}${(a.conversation_id>0)?` · 会话#${a.conversation_id}`:''} ${escMd(a.flow_name||'')}</div>${note}</td>
+      <td style="font-size:12.5px;">${escMd((a.created_at||'').slice(5,16))}${seen}</td>
+      <td><b>${escMd(a.rule_name)}</b><div style="font-size:12px;color:var(--mut);">run#${a.run_id}${(a.conversation_id>0)?` · 会话#${a.conversation_id}`:''} ${escMd(a.flow_name||'')}</div>${note}</td>
       <td>${escMd(a.metric)} ${escMd(a.operator)} ${a.threshold}</td>
       <td style="color:${a.actual>=a.threshold?'var(--red)':'var(--amb)'};font-weight:600;">${a.actual}</td>
-      <td style="font-size:11px;">${hitCell}</td>
+      <td style="font-size:12.5px;">${hitCell}</td>
       <td>${levelBadge(a.level)}</td>
       <td>${alertStatusBadge(st)}</td>
       <td style="white-space:nowrap;">${actions}</td>
@@ -782,15 +782,15 @@ async function loadOpsLogs(){
   if(q) p.set('q', q);
   const d = await api('/api/monitor/logs?'+p.toString());
   const box = document.getElementById('ops-log-list');
-  if(!d.logs || !d.logs.length){ box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">无匹配日志</div>'; return; }
+  if(!d.logs || !d.logs.length){ box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">无匹配日志</div>'; return; }
   box.innerHTML = `<table class="t"><tr><th>Run</th><th>节点</th><th>类型</th><th>状态</th><th>耗时</th><th>内容</th></tr>` +
     d.logs.map(l=>`<tr>
-      <td style="font-size:11px;">#${l.run_id}</td>
+      <td style="font-size:12.5px;">#${l.run_id}</td>
       <td><b>${escMd(l.node_label||l.node_id)}</b></td>
       <td>${escMd(l.node_type)}</td>
       <td>${l.status==='done'?'<span class="st ok">done</span>':l.status==='error'?'<span class="st r">error</span>':'<span class="st g">skipped</span>'}</td>
       <td>${l.latency_ms||0}ms</td>
-      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;">${escMd(String(l.content||'').slice(0,70))}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;">${escMd(String(l.content||'').slice(0,70))}</td>
     </tr>`).join('') + '</table>';
 }
 // ── 告警规则管理（弹窗） ──
@@ -799,16 +799,16 @@ async function openAlertRules(){
   const b = document.getElementById('modal-body');
   b.innerHTML = `
     <h3 style="margin:0 0 2px;">告警规则管理</h3>
-    <div class="mut" style="font-size:12px;margin-bottom:10px;">运行结束后自动评估：success_rate / avg_latency / error_count / mock_rate，命中写入告警中心并可推送 A2A webhook</div>
+    <div class="mut" style="font-size:13.5px;margin-bottom:10px;">运行结束后自动评估：success_rate / avg_latency / error_count / mock_rate，命中写入告警中心并可推送 A2A webhook</div>
     <div style="max-height:290px;overflow:auto;margin-bottom:12px;">
       <table class="t" id="ar-table"><tr><th>规则</th><th>条件</th><th>等级</th><th>通知</th><th>状态</th><th>最近触发</th><th></th></tr>
       ${rules.length?rules.map(r=>`<tr>
         <td><b>${escMd(r.name)}</b></td>
         <td>${escMd(r.metric)} ${escMd(r.operator)} ${r.threshold}</td>
         <td>${levelBadge(r.level)}</td>
-        <td style="font-size:11px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escMd(r.notify_url||'—')}</td>
+        <td style="font-size:12.5px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escMd(r.notify_url||'—')}</td>
         <td>${r.status==='active'?'<span class="st ok">active</span>':'<span class="st w">paused</span>'}</td>
-        <td style="font-size:11px;">${escMd((r.last_fired_at||'—').slice(0,16))}</td>
+        <td style="font-size:12.5px;">${escMd((r.last_fired_at||'—').slice(0,16))}</td>
         <td style="white-space:nowrap;">
           <button class="btn sm ghost" onclick="toggleAlertRule(${r.id})" title="${r.status==='active'?'暂停':'激活'}">${r.status==='active'?'⏸':'▶'}</button>
           <button class="btn sm ghost" onclick="delAlertRule(${r.id})" title="删除">🗑</button>
@@ -931,9 +931,9 @@ function uxMetricsHtml(ux){
   // 判色必须用原始数值 —— pct() 返回 '85.0%'，'85.0%' >= 85 是 NaN 比较，恒 false（实测踩坑）
   const cell = (label, val, color, sub) =>
     `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;text-align:center;">
-       <div style="font-size:16px;font-weight:500;${color ? 'color:' + color : ''};">${val}</div>
-       <div style="font-size:10px;color:var(--mut);">${esc(label)}</div>
-       ${sub ? `<div style="font-size:9.5px;color:var(--mut);margin-top:2px;">${esc(sub)}</div>` : ''}
+       <div style="font-size:17.5px;font-weight:500;${color ? 'color:' + color : ''};">${val}</div>
+       <div style="font-size:12px;color:var(--mut);">${esc(label)}</div>
+       ${sub ? `<div style="font-size:11.5px;color:var(--mut);margin-top:2px;">${esc(sub)}</div>` : ''}
      </div>`;
   const t = ux.tasks || {}, cl = ux.clarify || {}, fr = ux.failure_recovery || {}, wa = ux.wait_abandon || {};
   const cr = pct(t.completion_rate), irl = pct((ux.interrupt || {}).rate),
@@ -944,7 +944,7 @@ function uxMetricsHtml(ux){
   const crN = p100(t.completion_rate), irN = p100((ux.interrupt || {}).rate),
         chN = p100(cl.hit_rate), waN = p100(wa.rate), frN = p100(fr.rate);
   return `<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px;">
-    <div style="font-size:12px;font-weight:500;margin-bottom:6px;">UX 交互指标（近 ${ux.days || 7} 天）<span style="color:var(--mut);font-size:10.5px;font-weight:400;"> · 规范 §11 评估体系</span></div>
+    <div style="font-size:13.5px;font-weight:500;margin-bottom:6px;">UX 交互指标（近 ${ux.days || 7} 天）<span style="color:var(--mut);font-size:12px;font-weight:400;"> · 规范 §11 评估体系</span></div>
     <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;">
       ${cell('任务完成率', cr === null ? '样本不足' : cr, cr === null ? '' : (crN >= 85 ? _g : _a), (t.done||0) + '/' + (t.total||0))}
       ${cell('主动中断率', irl === null ? '样本不足' : irl, irl === null ? '' : (irN >= 15 && irN <= 25 ? _g : _a), (ux.interrupt||{}).count + '次')}
@@ -953,7 +953,7 @@ function uxMetricsHtml(ux){
       ${cell('失败自恢复率', frr === null ? '样本不足' : frr, frr === null ? '' : (frN >= 70 ? _g : _a), (fr.recovered||0) + '/' + (fr.err_convs||0))}
       ${cell('滚动抢夺', String(steal), steal === 0 ? _g : _r, steal === 0 ? '守护通过' : '违反§8.4')}
     </div>
-    <div style="font-size:9.5px;color:var(--mut);margin-top:5px;">目标：完成率≥85% · 中断率15–25% · 澄清命中≥90% · 等待放弃&lt;5% · 自恢复≥70% · 滚动抢夺=0</div>
+    <div style="font-size:11.5px;color:var(--mut);margin-top:5px;">目标：完成率≥85% · 中断率15–25% · 澄清命中≥90% · 等待放弃&lt;5% · 自恢复≥70% · 滚动抢夺=0</div>
   </div>`;
 }
 
@@ -978,7 +978,7 @@ async function loadOpsSessions(){
     const fb = document.getElementById('ops-sess-flagged');
     if(fb){ fb.style.display = d.flagged>0 ? '' : 'none'; fb.textContent = d.flagged+' 异常'; }
     if(!d.sessions || !d.sessions.length){
-      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">该时间窗内无会话</div>'; return;
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">该时间窗内无会话</div>'; return;
     }
     box.innerHTML = `<table class="t"><tr><th>最近活跃</th><th>会话</th><th>意图</th><th>问题信号</th><th>LLM</th><th>编排</th><th>成本</th></tr>` +
       d.sessions.map(s=>{
@@ -990,17 +990,17 @@ async function loadOpsSessions(){
         ].filter(Boolean).join('') || '<span class="st ok">正常</span>';
         const cost = Number(s.llm_cost||0);
         return `<tr style="cursor:pointer;" onclick="openSessionDrill(${s.conversation_id})">
-          <td style="font-size:11px;">${escMd((s.updated_at||'').slice(5,16))}</td>
-          <td><b>${escMd(String(s.title||'').slice(0,28))}</b> <span style="color:var(--mut);font-size:10px;">#${s.conversation_id}</span></td>
-          <td style="font-size:11px;">${escMd(s.intent||'')}</td>
+          <td style="font-size:12.5px;">${escMd((s.updated_at||'').slice(5,16))}</td>
+          <td><b>${escMd(String(s.title||'').slice(0,28))}</b> <span style="color:var(--mut);font-size:12px;">#${s.conversation_id}</span></td>
+          <td style="font-size:12.5px;">${escMd(s.intent||'')}</td>
           <td style="white-space:nowrap;">${sig}</td>
-          <td style="font-size:11px;">${s.llm_calls} 次${s.llm_max_ms ? ` / 峰值 ${s.llm_max_ms}ms` : ''}</td>
-          <td style="font-size:11px;">${s.runs} run / ${s.total_tasks} 任务</td>
-          <td style="font-size:11px;">$${cost.toFixed(4)}</td>
+          <td style="font-size:12.5px;">${s.llm_calls} 次${s.llm_max_ms ? ` / 峰值 ${s.llm_max_ms}ms` : ''}</td>
+          <td style="font-size:12.5px;">${s.runs} run / ${s.total_tasks} 任务</td>
+          <td style="font-size:12.5px;">$${cost.toFixed(4)}</td>
         </tr>`;
       }).join('') + '</table>';
   }catch(e){
-    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">会话列表加载失败：'+escMd(String(e).slice(0,80))+'</div>';
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">会话列表加载失败：'+escMd(String(e).slice(0,80))+'</div>';
   }
 }
 function _tlEvent(t, kind, level, html, raw){
@@ -1008,11 +1008,11 @@ function _tlEvent(t, kind, level, html, raw){
   const c = level==='err' ? 'var(--red)' : level==='warn' ? 'var(--amb)' : level==='ok' ? 'var(--grn)' : 'var(--line)';
   const body = raw
     ? `<details style="border-left:3px solid ${c};margin:0 0 6px 0;padding:4px 8px;background:#fff;border-radius:6px;">
-         <summary style="cursor:pointer;font-size:12px;"><span class="st b" style="font-size:10px;">${escMd(t)}</span> <span class="badge" style="font-size:9.5px;">${escMd(kind)}</span> ${html}</summary>
-         <pre style="font-size:10.5px;white-space:pre-wrap;word-break:break-all;margin:6px 0 0;color:#444;background:#f7f8fa;padding:6px;border-radius:6px;max-height:220px;overflow:auto;">${escMd(raw)}</pre>
+         <summary style="cursor:pointer;font-size:13.5px;"><span class="st b" style="font-size:12px;">${escMd(t)}</span> <span class="badge" style="font-size:11.5px;">${escMd(kind)}</span> ${html}</summary>
+         <pre style="font-size:12px;white-space:pre-wrap;word-break:break-all;margin:6px 0 0;color:#444;background:#f7f8fa;padding:6px;border-radius:6px;max-height:220px;overflow:auto;">${escMd(raw)}</pre>
        </details>`
-    : `<div style="border-left:3px solid ${c};margin:0 0 6px 0;padding:4px 8px;background:#fff;border-radius:6px;font-size:12px;">
-         <span class="st b" style="font-size:10px;">${escMd(t)}</span> <span class="badge" style="font-size:9.5px;">${escMd(kind)}</span> ${html}
+    : `<div style="border-left:3px solid ${c};margin:0 0 6px 0;padding:4px 8px;background:#fff;border-radius:6px;font-size:13.5px;">
+         <span class="st b" style="font-size:12px;">${escMd(t)}</span> <span class="badge" style="font-size:11.5px;">${escMd(kind)}</span> ${html}
        </div>`;
   return {t, body};
 }
@@ -1020,8 +1020,8 @@ function _renderSessionDrill(d){
   const c = d.conversation || {};
   const p = d.error_profile || {};
   const head = `<div style="margin-bottom:10px;">
-    <div style="font-size:14px;font-weight:600;">${escMd(c.title||'')} <span style="color:var(--mut);font-size:11px;">#${d.conversation_id} · ${escMd(c.status||'')} · ${escMd(c.main_agent||'')}</span></div>
-    <div style="font-size:11px;color:var(--mut);margin-top:2px;">意图 ${escMd(c.current_intent||c.intent||'—')} · 创建 ${(c.created_at||'').slice(0,19)} · 最近活跃 ${(c.updated_at||'').slice(0,19)}</div>
+    <div style="font-size:15.5px;font-weight:600;">${escMd(c.title||'')} <span style="color:var(--mut);font-size:12.5px;">#${d.conversation_id} · ${escMd(c.status||'')} · ${escMd(c.main_agent||'')}</span></div>
+    <div style="font-size:12.5px;color:var(--mut);margin-top:2px;">意图 ${escMd(c.current_intent||c.intent||'—')} · 创建 ${(c.created_at||'').slice(0,19)} · 最近活跃 ${(c.updated_at||'').slice(0,19)}</div>
   </div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
     <span class="st ${p.llm_calls?'b':'g'}">LLM ${p.llm_calls||0} 次 / $${Number(p.llm_cost||0).toFixed(4)}</span>
@@ -1035,7 +1035,7 @@ function _renderSessionDrill(d){
     ${p.hil?`<span class="st b">HIL ${p.hil}</span>`:''}
     ${p.weight===0?'<span class="st ok">无异常信号</span>':''}
   </div>
-  <div style="font-size:12px;font-weight:500;margin:8px 0 8px;">执行时间线 <span style="color:var(--mut);font-size:10.5px;font-weight:400;">（点条目展开原始数据）</span></div>`;
+  <div style="font-size:13.5px;font-weight:500;margin:8px 0 8px;">执行时间线 <span style="color:var(--mut);font-size:12px;font-weight:400;">（点条目展开原始数据）</span></div>`;
   const ev = [];
   (d.messages||[]).forEach(m => ev.push(_tlEvent((m.created_at||'').slice(0,19), '消息', 'info',
     `<b>${escMd(m.role||'')}</b> ${escMd(String(m.content||'').slice(0,70))}`, m.content)));
@@ -1068,7 +1068,7 @@ function _renderSessionDrill(d){
   (d.hil||[]).forEach(h => ev.push(_tlEvent((h.created_at||'').slice(0,19), 'HIL', 'warn',
     `<b>${escMd(h.agent_id||'')}</b> ${escMd(h.action||'')} · ${escMd(h.status||'')}`, JSON.stringify(h, null, 1))));
   ev.sort((a,b) => a.t < b.t ? -1 : a.t > b.t ? 1 : 0);
-  return head + (ev.length ? ev.map(e => e.body).join('') : '<div class="mut" style="padding:8px;font-size:12px;">该会话暂无执行记录</div>');
+  return head + (ev.length ? ev.map(e => e.body).join('') : '<div class="mut" style="padding:8px;font-size:13.5px;">该会话暂无执行记录</div>');
 }
 async function openSessionDrill(cid){
   try{
@@ -1102,12 +1102,12 @@ async function loadOpsLifecycle(){
       thr.textContent = `判据：闲置≥${d.thresholds.idle_days}天 · 使用<${d.thresholds.min_uses}次 · 失败率≥${d.thresholds.fail_rate_pct}%（core.config lifecycle 组）`;
     }
     if(!d.items || !d.items.length){
-      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">'+
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">'+
         (v ? '该档位下无资产' : '暂无可分析资产')+'</div>'; return;
     }
     box.innerHTML = renderOpsLifecycle(d);
   }catch(e){
-    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">长尾治理数据加载失败：'+escMd(String(e).slice(0,80))+'</div>';
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">长尾治理数据加载失败：'+escMd(String(e).slice(0,80))+'</div>';
   }
 }
 function _lcVerdictSt(v){
@@ -1118,20 +1118,20 @@ function renderOpsLifecycle(d){
   const rows = (d.items||[]).map(it=>{
     const fail = it.fail_rate>=30 ? 'var(--red)' : (it.fail_rate>=15 ? 'var(--amb)' : 'var(--mut)');
     return `<tr>
-      <td style="font-size:11px;white-space:nowrap;">${escMd(it.kind_label||it.kind)} #${it.id}</td>
+      <td style="font-size:12.5px;white-space:nowrap;">${escMd(it.kind_label||it.kind)} #${it.id}</td>
       <td><b>${escMd(String(it.name||'').slice(0,24))}</b>${it.online===false?' <span class="st g">已下线</span>':''}</td>
       <td>${_lcVerdictSt(it.verdict)}</td>
-      <td style="font-size:11px;">${it.uses} 次 / ${it.failures} 败</td>
-      <td style="font-size:11px;color:${fail};">${it.fail_rate}%</td>
-      <td style="font-size:11px;">${it.idle_days===null||it.idle_days===undefined?'—':it.idle_days+' 天'}</td>
-      <td style="font-size:11px;color:var(--mut);">${escMd((it.reasons||[]).join('；')||'—')}</td>
+      <td style="font-size:12.5px;">${it.uses} 次 / ${it.failures} 败</td>
+      <td style="font-size:12.5px;color:${fail};">${it.fail_rate}%</td>
+      <td style="font-size:12.5px;">${it.idle_days===null||it.idle_days===undefined?'—':it.idle_days+' 天'}</td>
+      <td style="font-size:12.5px;color:var(--mut);">${escMd((it.reasons||[]).join('；')||'—')}</td>
     </tr>`;
   }).join('');
   const s = d.summary || {};
   const bv = s.by_verdict || {};
   const chips = [['retire_candidate','待评估退役','r'],['review','需复核','w'],['watch','观察','b'],['keep','健康','ok']]
     .map(([k,label,c])=>`<span class="st ${c}" style="margin-right:6px;">${label} ${bv[k]||0}</span>`).join('');
-  return `<div style="margin-bottom:6px;font-size:11px;">${chips}<span class="mut">共 ${s.total||0} 项 · 生成于 ${escMd(d.generated_at||'')}</span></div>` +
+  return `<div style="margin-bottom:6px;font-size:12.5px;">${chips}<span class="mut">共 ${s.total||0} 项 · 生成于 ${escMd(d.generated_at||'')}</span></div>` +
     `<table class="t"><tr><th>资产</th><th>名称</th><th>档位</th><th>使用/失败</th><th>失败率</th><th>闲置</th><th>判定理由</th></tr>${rows}</table>`;
 }
 
@@ -1158,23 +1158,23 @@ async function loadOpsBadCases(){
     const nOpen = (d.summary && d.summary.open) || 0;
     if(badge){ badge.style.display = nOpen>0 ? '' : 'none'; badge.textContent = nOpen+' 待处理'; }
     if(!d.items || !d.items.length){
-      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">'+
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">'+
         (d.note ? escMd(d.note) : '暂无 Bad Case（可点「试运行收集」扫描判据面）')+'</div>'; return;
     }
     box.innerHTML = renderOpsBadCases(d);
   }catch(e){
-    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">Bad Case 数据加载失败：'+escMd(String(e).slice(0,80))+'</div>';
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">Bad Case 数据加载失败：'+escMd(String(e).slice(0,80))+'</div>';
   }
 }
 function renderOpsBadCases(d){
   const rows = (d.items||[]).map(it=>`
     <tr>
-      <td style="font-size:11px;white-space:nowrap;">${escMd(it.kind)}<br><span class="mut">${escMd(it.subject||'')}</span></td>
-      <td><b>${escMd(String(it.title||'').slice(0,40))}</b><div class="mut" style="font-size:10.5px;max-width:340px;overflow:hidden;text-overflow:ellipsis;" title="${escMd(it.detail||'')}">${escMd(String(it.detail||'').slice(0,80))}</div></td>
+      <td style="font-size:12.5px;white-space:nowrap;">${escMd(it.kind)}<br><span class="mut">${escMd(it.subject||'')}</span></td>
+      <td><b>${escMd(String(it.title||'').slice(0,40))}</b><div class="mut" style="font-size:12px;max-width:340px;overflow:hidden;text-overflow:ellipsis;" title="${escMd(it.detail||'')}">${escMd(String(it.detail||'').slice(0,80))}</div></td>
       <td>${_bcSevSt(it.severity)}</td>
-      <td style="font-size:11px;">×${it.occurrences}</td>
-      <td style="font-size:11px;color:var(--mut);white-space:nowrap;">${escMd((it.first_seen_at||'').slice(0,10))}<br>→ ${escMd((it.last_seen_at||'').slice(0,10))}</td>
-      <td>${_bcStatusSt(it.status)}${it.resolved_by?'<div class="mut" style="font-size:10px;">'+escMd(it.resolved_by)+'</div>':''}</td>
+      <td style="font-size:12.5px;">×${it.occurrences}</td>
+      <td style="font-size:12.5px;color:var(--mut);white-space:nowrap;">${escMd((it.first_seen_at||'').slice(0,10))}<br>→ ${escMd((it.last_seen_at||'').slice(0,10))}</td>
+      <td>${_bcStatusSt(it.status)}${it.resolved_by?'<div class="mut" style="font-size:12px;">'+escMd(it.resolved_by)+'</div>':''}</td>
       <td style="white-space:nowrap;">
         ${it.status==='open'
           ? `<button class="btn sm ghost" onclick="triageBadcase(${it.id},'resolved')">解决</button>
@@ -1185,7 +1185,7 @@ function renderOpsBadCases(d){
   const s = d.summary || {};
   const chips = [['open','待处理','r'],['resolved','已解决','ok'],['ignored','已忽略','g']]
     .map(([k,label,c])=>`<span class="st ${c}" style="margin-right:6px;">${label} ${s[k]||0}</span>`).join('');
-  return `<div style="margin-bottom:6px;font-size:11px;">${chips}<span class="mut">共 ${s.total||0} 条</span></div>` +
+  return `<div style="margin-bottom:6px;font-size:12.5px;">${chips}<span class="mut">共 ${s.total||0} 条</span></div>` +
     `<table class="t"><tr><th>类型/主题</th><th>摘要与证据</th><th>严重度</th><th>复现</th><th>首现→最近</th><th>状态</th><th>处理</th></tr>${rows}</table>`;
 }
 async function runBadcaseCollect(apply){
@@ -1199,7 +1199,7 @@ async function runBadcaseCollect(apply){
       const nAct = (pl.new||0) + (pl.recur||0) + (pl.reopen||0);
       if(dry){
         dry.style.display = '';
-        dry.innerHTML = `<div class="mut" style="font-size:11.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
+        dry.innerHTML = `<div class="mut" style="font-size:12.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
           试运行结果（未写库）：窗口 ${escMd(String(r.window_days))} 天 · 命中事件 ${(r.summary&&r.summary.total_events)||0} 起 · 主题 ${(r.candidates||[]).length} 个
           <span class="st b" style="margin-left:6px;">新建 ${pl.new||0}</span>
           <span class="st w" style="margin-left:4px;">复现累加 ${pl.recur||0}</span>
@@ -1237,12 +1237,12 @@ async function loadOpsOnlineEval(){
     const nP = (d.summary && d.summary.by_status && d.summary.by_status.pending) || 0;
     if(badge){ badge.style.display = nP>0 ? '' : 'none'; badge.textContent = nP+' 待标注'; }
     if(!d.items || !d.items.length){
-      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">'+
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">'+
         (d.note ? escMd(d.note) : '暂无待标注样本（先「试运行采样」→「确认入队」）')+'</div>'; return;
     }
     box.innerHTML = renderOpsOnlineEval(d);
   }catch(e){
-    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">加载失败：'+escMd(String(e).slice(0,80))+'</div>';
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">加载失败：'+escMd(String(e).slice(0,80))+'</div>';
   }
 }
 function _oeTypeSt(t){
@@ -1260,19 +1260,19 @@ function renderOpsOnlineEval(d){
   const cov = s.auto_coverage==null ? '—' : Math.round(s.auto_coverage*100)+'%';
   const rows = (d.items||[]).map(it=>`
     <tr>
-      <td style="font-size:11px;white-space:nowrap;">#${it.id} ${_oeTypeSt(it.sample_type)}<br>${_oeReasonSt(it.sample_reason)}</td>
-      <td style="font-size:11px;color:var(--mut);">conv ${it.conversation_id||'-'} · msg ${it.message_id||'-'} · qt ${it.query_trace_id||'-'}</td>
-      <td style="font-size:11px;">${it.auto_score==null?'<span class="mut">未评</span>':escMd(String(it.auto_score))}</td>
+      <td style="font-size:12.5px;white-space:nowrap;">#${it.id} ${_oeTypeSt(it.sample_type)}<br>${_oeReasonSt(it.sample_reason)}</td>
+      <td style="font-size:12.5px;color:var(--mut);">conv ${it.conversation_id||'-'} · msg ${it.message_id||'-'} · qt ${it.query_trace_id||'-'}</td>
+      <td style="font-size:12.5px;">${it.auto_score==null?'<span class="mut">未评</span>':escMd(String(it.auto_score))}</td>
       <td style="white-space:nowrap;">
-        <select id="oe-score-${it.id}" style="width:56px;font-size:11px;">
+        <select id="oe-score-${it.id}" style="width:56px;font-size:12.5px;">
           <option value="">评分</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option>
         </select>
-        <input id="oe-reason-${it.id}" placeholder="原因（可选）" style="width:90px;font-size:11px;">
+        <input id="oe-reason-${it.id}" placeholder="原因（可选）" style="width:90px;font-size:12.5px;">
         <button class="btn sm grn" onclick="submitEvalLabel(${it.id},true)">✓ 提交并批准</button>
         <button class="btn sm ghost" onclick="submitEvalLabel(${it.id},false)">✕ 驳回</button>
       </td>
     </tr>`).join('');
-  return `<div style="margin-bottom:6px;font-size:11px;">${chips}<span class="mut">共 ${s.total||0} 条 · 自动评覆盖率 ${cov}（分母=可评样本）</span></div>` +
+  return `<div style="margin-bottom:6px;font-size:12.5px;">${chips}<span class="mut">共 ${s.total||0} 条 · 自动评覆盖率 ${cov}（分母=可评样本）</span></div>` +
     `<table class="t"><tr><th>队列/类型/理由</th><th>溯源</th><th>auto</th><th>人工标注（HIL 确认卡）</th></tr>${rows}</table>`;
 }
 // 标注提交：label 端点建 HIL 确认单（幂等）→ 同卡片按钮直接 decide（批准/驳回）。
@@ -1301,7 +1301,7 @@ async function runOnlineEvalSample(apply){
       const n = (r.candidates||[]).length;
       const byReason = {};
       (r.candidates||[]).forEach(c=>{ byReason[c.sample_reason]=(byReason[c.sample_reason]||0)+1; });
-      _oeDryBox(`<div class="mut" style="font-size:11.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
+      _oeDryBox(`<div class="mut" style="font-size:12.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
         试运行采样（未写库）：候选 ${n} 条
         ${Object.keys(byReason).map(k=>'<span class="st b" style="margin-left:6px;">'+escMd(k)+' '+byReason[k]+'</span>').join('')}
         <div style="margin-top:4px;">${n>0?'确认后入队（同键去重）。':'窗口内无候选。'}</div></div>`);
@@ -1321,7 +1321,7 @@ async function runOnlineEvalAuto(apply){
     if(r.error){ toast(r.error); return; }
     const btn = document.getElementById('ops-oe-auto-btn');
     if(!apply){
-      _oeDryBox(`<div class="mut" style="font-size:11.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
+      _oeDryBox(`<div class="mut" style="font-size:12.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
         试运行自动评（未写库）：扫到 ${r.scanned||0} 条，可评分 ${(r.items||[]).length} 条
         ${(r.items||[]).slice(0,5).map(x=>'<div>#'+x.queue_id+' → '+escMd(String(x.auto_score))+'</div>').join('')}
         ${(r.failures||[]).length?'<div style="color:var(--orange,#B96A00);">失败 '+r.failures.length+' 条（记入 failures 不补零）</div>':''}</div>`);
@@ -1341,7 +1341,7 @@ async function runOnlineEvalPromote(apply){
     const btn = document.getElementById('ops-oe-promote-btn');
     if(!apply){
       const n = (r.items||[]).length;
-      _oeDryBox(`<div class="mut" style="font-size:11.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
+      _oeDryBox(`<div class="mut" style="font-size:12.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
         试运行转正（未写库）：待转正 ${n} 条（仅 labeled_confirmed；auto 分永不自动转正）
         <div style="margin-top:4px;">${n>0?'确认后三分流：intent→intent_samples · retrieval→qrels.jsonl · generation→eval_gen_labels（幂等）。':'暂无 confirmed 样本。'}</div></div>`);
       if(btn) btn.style.display = n>0 ? '' : 'none';
@@ -1379,7 +1379,7 @@ async function loadConfigHistory(){
     const rows = (d && d.history) || [];
     if(badge) badge.textContent = `${rows.length} 条`;
     if(!rows.length){
-      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">暂无配置变更（变更须经 HIL 批准，见 core/config_promotion.py）</div>';
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">暂无配置变更（变更须经 HIL 批准，见 core/config_promotion.py）</div>';
       return;
     }
     box.innerHTML = `<table class="t"><tr><th>时间</th><th>配置项</th><th>旧值 → 新值</th><th>来源</th><th>效果</th></tr>` +
@@ -1389,15 +1389,15 @@ async function loadConfigHistory(){
         const lbl = CFG_EFFECT_LABEL[v] || v;
         const tip = h.effect_detail ? ` title="${escMd(h.effect_detail)}"` : '';
         return `<tr>
-          <td style="font-size:11px;">${escMd(String(h.applied_at||'').slice(5,16))}</td>
+          <td style="font-size:12.5px;">${escMd(String(h.applied_at||'').slice(5,16))}</td>
           <td><b>${escMd(h.section||'')}.${escMd(h.key||'')}</b></td>
-          <td style="font-size:11px;">${escMd(String(h.old_value||'').slice(0,18))} → <b>${escMd(String(h.new_value||'').slice(0,18))}</b></td>
-          <td style="font-size:10.5px;color:var(--mut);">${escMd(h.source||'')}${h.applied_by?'·'+escMd(h.applied_by):''}</td>
+          <td style="font-size:12.5px;">${escMd(String(h.old_value||'').slice(0,18))} → <b>${escMd(String(h.new_value||'').slice(0,18))}</b></td>
+          <td style="font-size:12px;color:var(--mut);">${escMd(h.source||'')}${h.applied_by?'·'+escMd(h.applied_by):''}</td>
           <td><span class="st ${cls}"${tip}>${escMd(lbl)}</span></td>
         </tr>`;
       }).join('') + '</table>';
   }catch(e){
-    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">台账加载失败</div>';
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">台账加载失败</div>';
   }
 }
 async function runConfigEffectCheck(){

@@ -211,8 +211,8 @@ function openNormReport(btn) {
   host.classList.add('nr-full');                 // ★ 直接全屏展示（不再内联展开）
   document.body.classList.add('nr-full-lock');
   host.innerHTML = `<div style="padding:22px;text-align:center;color:var(--mut);">
-    <div style="font-size:13px;">⏳ 正在生成归一确认清单…</div>
-    <div style="font-size:11px;margin-top:6px;">实例 → 本体类型对齐 · 词典归一 · 同形消歧 · 证据与置信度计算</div></div>`;
+    <div style="font-size:14.5px;">⏳ 正在生成归一确认清单…</div>
+    <div style="font-size:12.5px;margin-top:6px;">实例 → 本体类型对齐 · 词典归一 · 同形消歧 · 证据与置信度计算</div></div>`;
   api(`/api/conversations/${currentConvId}/messages/${mid}/normalize-report`, {method:'POST'})
     .then(r => {
       if(!r || r.error){ throw new Error((r && r.error) || '归一清单生成失败'); }
@@ -233,7 +233,7 @@ function openNormReport(btn) {
       _nrRender();
     })
     .catch(e => {
-      host.innerHTML = `<div style="padding:16px;color:var(--red);font-size:12px;">✕ 生成失败：${esc(e.message || String(e))}</div>`;
+      host.innerHTML = `<div style="padding:16px;color:var(--red);font-size:13.5px;">✕ 生成失败：${esc(e.message || String(e))}</div>`;
     });
 }
 function _nrHost() {
@@ -279,16 +279,16 @@ function _renderNormReport() {
   let h = `<div style="margin-top:9px;border:1px solid var(--line);border-radius:9px;background:var(--card);overflow:hidden;">`;
   const collapsed = !!st.collapsed;
   // ① 卡头（点击整行 = 展开/收起；不提供关闭入口，决策保留）
-  h += `<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--bg);font-size:12.5px;cursor:pointer;user-select:none;"
+  h += `<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--bg);font-size:13.5px;cursor:pointer;user-select:none;"
       onclick="_nrToggleCollapse()" title="${collapsed?'展开':'收起'}归一确认区（决策保留）">
       <span style="font-weight:600;">🧹 归一确认（人在回路）</span>
-      <span style="font-size:10.5px;padding:1px 8px;border-radius:9px;${pending?'background:#fff5f5;border:1px solid #F3C1C1;color:#b91c1c;':'background:#f7fbee;border:1px solid #C0DD97;color:#2f855a;'}">${pending?`待确认 ${pending} 项`:'已全部确认'}</span>
-      <span style="font-size:10.5px;padding:1px 8px;border-radius:9px;background:#f3f4f6;border:1px solid #d1d5db;color:#6b7280;">实体 ${cnt.entity||0} · 属性 ${cnt.attr||0} · 关系 ${cnt.relation||0}</span>
+      <span style="font-size:12px;padding:1px 8px;border-radius:9px;${pending?'background:#fff5f5;border:1px solid #F3C1C1;color:#b91c1c;':'background:#f7fbee;border:1px solid #C0DD97;color:#2f855a;'}">${pending?`待确认 ${pending} 项`:'已全部确认'}</span>
+      <span style="font-size:12px;padding:1px 8px;border-radius:9px;background:#f3f4f6;border:1px solid #d1d5db;color:#6b7280;">实体 ${cnt.entity||0} · 属性 ${cnt.attr||0} · 关系 ${cnt.relation||0}</span>
       <span style="flex:1"></span>
-    <span style="font-size:10.5px;color:var(--mut);">决策暂存于本页，刷新后清空</span>
+    <span style="font-size:12px;color:var(--mut);">决策暂存于本页，刷新后清空</span>
       <button class="btn sm ghost" onclick="event.stopPropagation();_nrToggleFullscreen(false)"
-   title="关闭全屏清单（Esc）" style="flex:none;padding:2px 9px;font-size:11px;">✕ 关闭</button>
-      <span style="color:var(--mut);font-size:11px;flex:none;">${collapsed?'▸ 展开':'▾ 收起'}</span>
+   title="关闭全屏清单（Esc）" style="flex:none;padding:2px 9px;font-size:12.5px;">✕ 关闭</button>
+      <span style="color:var(--mut);font-size:12.5px;flex:none;">${collapsed?'▸ 展开':'▾ 收起'}</span>
     </div>`;
   // ②~⑤ 主体（收起时仅隐藏，状态与决策保留）
   h += `<div style="display:${collapsed?'none':''};">`;
@@ -297,10 +297,10 @@ function _renderNormReport() {
   h += _NR_TABS.map(t => {
     const n = t.k === 'cons' ? '' : (cnt[t.k] || 0);
     const p = t.k === 'cons' ? 0 : _nrTabRows(t.k).filter(x => _nrIsBlocking(x) && !st.decisions[x._i]).length;
-    return `<div onclick="_nrTab('${t.k}')" style="padding:6px 12px;font-size:12px;cursor:pointer;border-bottom:2px solid ${st.tab===t.k?'var(--blue-d,#1d4ed8)':'transparent'};color:${st.tab===t.k?'var(--blue-d,#1d4ed8)':'var(--mut)'};font-weight:${st.tab===t.k?'600':'400'};">
-      ${t.l}${n!==''?` <span style="font-size:10.5px;color:var(--mut);">${n}</span>`:''}${p?` <span style="font-size:10px;color:#b91c1c;font-weight:700;">·${p}待决</span>`:''}</div>`;
+    return `<div onclick="_nrTab('${t.k}')" style="padding:6px 12px;font-size:13.5px;cursor:pointer;border-bottom:2px solid ${st.tab===t.k?'var(--blue-d,#1d4ed8)':'transparent'};color:${st.tab===t.k?'var(--blue-d,#1d4ed8)':'var(--mut)'};font-weight:${st.tab===t.k?'600':'400'};">
+      ${t.l}${n!==''?` <span style="font-size:12px;color:var(--mut);">${n}</span>`:''}${p?` <span style="font-size:12px;color:#b91c1c;font-weight:700;">·${p}待决</span>`:''}</div>`;
   }).join('');
-  h += `<label style="margin-left:auto;font-size:11.5px;cursor:pointer;user-select:none;white-space:nowrap;padding:0 2px;">
+  h += `<label style="margin-left:auto;font-size:12.5px;cursor:pointer;user-select:none;white-space:nowrap;padding:0 2px;">
           <input type="checkbox" ${st.onlyPending?'checked':''} onchange="_nrTogglePending(this.checked)"
             style="vertical-align:-1px;"> 只看未决（${pending}）</label>`;
   h += `</div>`;
@@ -367,7 +367,7 @@ function _nrTableHtml() {
   const rs = _nrVisibleRows();
   // 批量操作入口常驻表格上方（勾选后按钮解禁），不再藏在列表底部
   let h = `<div id="nr-sel-bar" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;
-      margin-bottom:5px;padding:6px 9px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;font-size:11.5px;">
+      margin-bottom:5px;padding:6px 9px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;font-size:12.5px;">
       <label style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;">
         <input type="checkbox" id="nr-cb-all" onchange="_nrToggleAll(this)"
           style="cursor:pointer;vertical-align:-1px;" title="全选/取消本页可见行"> 全选本页</label>
@@ -376,26 +376,26 @@ function _nrTableHtml() {
       <span class="nr-bulk-wrap" style="display:none;align-items:center;gap:7px;">
         <span style="color:var(--line);">|</span>
         <button class="nr-bulk" data-b="accept" onclick="_nrSelAction('accept')"
-          style="padding:2px 9px;font-size:11px;border-radius:5px;border:1px solid #1e7e34;background:#1e7e34;color:#fff;cursor:pointer;">✓ 接纳</button>
+          style="padding:2px 9px;font-size:12.5px;border-radius:5px;border:1px solid #1e7e34;background:#1e7e34;color:#fff;cursor:pointer;">✓ 接纳</button>
         <button class="nr-bulk" data-b="rename" onclick="_nrSelAction('rename')"
-          style="padding:2px 9px;font-size:11px;border-radius:5px;border:1px solid #c98a2e;background:#c98a2e;color:#fff;cursor:pointer;">✎ 改为规范名</button>
+          style="padding:2px 9px;font-size:12.5px;border-radius:5px;border:1px solid #c98a2e;background:#c98a2e;color:#fff;cursor:pointer;">✎ 改为规范名</button>
         <button class="nr-bulk" data-b="merge" onclick="_nrSelAction('merge')"
-          style="padding:2px 9px;font-size:11px;border-radius:5px;border:1px solid #7c3aed;background:#7c3aed;color:#fff;cursor:pointer;">🔀 合并</button>
+          style="padding:2px 9px;font-size:12.5px;border-radius:5px;border:1px solid #7c3aed;background:#7c3aed;color:#fff;cursor:pointer;">🔀 合并</button>
         <button class="nr-bulk" data-b="clear" onclick="_nrSelClear()"
-          style="padding:2px 9px;font-size:11px;border-radius:5px;border:1px solid var(--line);background:#fff;color:var(--mut);cursor:pointer;">⏮ 撤销所选决策</button>
+          style="padding:2px 9px;font-size:12.5px;border-radius:5px;border:1px solid var(--line);background:#fff;color:var(--mut);cursor:pointer;">⏮ 撤销所选决策</button>
       </span>
       <span style="flex:1"></span>
-      <span id="nr-sel-tip" style="font-size:10.5px;color:var(--mut);">勾选左侧复选框后可批量操作</span>
+      <span id="nr-sel-tip" style="font-size:12px;color:var(--mut);">勾选左侧复选框后可批量操作</span>
     </div>
     <div style="overflow-x:auto;border:1px solid var(--line);border-radius:6px;">`;
   h += `<div style="display:grid;grid-template-columns:${_NR_COLS};gap:6px;align-items:center;min-width:${_NR_TBL_MIN}px;
-      padding:6px 8px;background:var(--bg);border-bottom:1px solid var(--line);font-size:11px;color:var(--mut);font-weight:600;">
+      padding:6px 8px;background:var(--bg);border-bottom:1px solid var(--line);font-size:12.5px;color:var(--mut);font-weight:600;">
       <span></span><span>本体类型</span><span title="本次生成的原始数据名称">实例名称（本次生成）</span><span title="词典/图库中已存在的对齐对象">比对目标（词典/图库）</span><span>建议类型</span><span>置信度</span>
       <span>证据</span><span>操作</span>
     </div>
     <div id="nr-rows" style="max-height:340px;overflow-y:auto;">`;
   h += rs.length ? rs.map(r => _nrRowHtml(r)).join('')
-    : `<div style="padding:22px;text-align:center;color:var(--mut);font-size:12px;">无匹配行</div>`;
+    : `<div style="padding:22px;text-align:center;color:var(--mut);font-size:13.5px;">无匹配行</div>`;
   h += `</div></div>`;
   return h;
 }
@@ -424,7 +424,7 @@ function _nrTargetCellHtml(r) {
   else if (men) { tag = r.kind === 'attr' ? '词典词条' : '图库已有'; name = men; }
   else if (nn && nn !== (r.name || '') && r.kind !== 'relation') { tag = '词典规范名'; name = nn; }
   if (r.kind === 'relation' && !name && r.matched_entity_id) { tag = '图库已有关系'; name = '#' + r.matched_entity_id; }
-  if (!name) return `<div style="min-width:0;font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.45;"
+  if (!name) return `<div style="min-width:0;font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.45;"
     title="词典/图库无对齐对象">—</div>`;
   const stt = r.matching_status;
   const isDup = stt === 'dup_high' || stt === 'dup_suspect';
@@ -438,7 +438,7 @@ function _nrTargetCellHtml(r) {
   const nameHtml = (r.kind === 'relation') ? esc(name) : _nrDiffHtml(cmpSrc, name);
   return `<div style="min-width:0;line-height:1.45;" title="比对目标（${tag}）——即改名/合并的去向">
     <div style="display:inline-flex;align-items:center;gap:4px;max-width:100%;background:${bg};border:1px solid ${bdc};border-radius:4px;padding:1px 6px;">
-      <span style="flex:none;font-size:9.5px;color:${c};font-weight:600;">${tag}</span>
+      <span style="flex:none;font-size:11.5px;color:${c};font-weight:600;">${tag}</span>
       <span style="min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:${c};">${nameHtml}</span>
     </div></div>`;
 }
@@ -454,11 +454,11 @@ function _nrInstanceHtml(r) {
     const val = r.attr_value || '';
     return `<div style="min-width:0;line-height:1.45;">
       <div style="display:flex;gap:4px;align-items:baseline;min-width:0;">
-        <span style="flex:none;font-size:9.5px;color:#0C447C;background:#E6F1FB;border:1px solid #B5D4F4;
+        <span style="flex:none;font-size:11.5px;color:#0C447C;background:#E6F1FB;border:1px solid #B5D4F4;
           padding:0 5px;border-radius:3px;" title="所属实体">${esc(ent||'—')}</span>
         <span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
           title="属性名：${esc(nm)}">${esc(nm)}</span>
-        <span style="flex:none;font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;"
+        <span style="flex:none;font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;"
           title="属性值：${esc(val||'—')}">${val?('= '+esc(val)):'—'}</span>
       </div></div>`;
   }
@@ -467,7 +467,7 @@ function _nrInstanceHtml(r) {
       <div style="display:flex;gap:4px;align-items:baseline;min-width:0;">
         <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;"
           title="源端：${esc(r.rel_source||'')}">${esc(r.rel_source||'—')}</span>
-        <span style="flex:none;font-size:10.5px;color:#c98a2e;font-weight:600;white-space:nowrap;"
+        <span style="flex:none;font-size:12px;color:#c98a2e;font-weight:600;white-space:nowrap;"
           title="关系类型：${esc(r.rel_type||'')}">—[${esc(r.rel_type||'?')}]→</span>
         <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;"
           title="目标端：${esc(r.rel_target||'')}">${esc(r.rel_target||'—')}</span>
@@ -519,23 +519,23 @@ function _nrScoreCardHtml(r){
     const col  = !has ? 'var(--mut)' : pass ? '#1e7e34' : '#b91c1c';
     const bg   = !has ? 'var(--line)' : pass ? '#f0fdf4' : '#fef2f2';
     return `<tr title="${esc(tip)}">
-      <td style="padding:2px 6px;font-size:10px;color:var(--mut);white-space:nowrap;">${label}</td>
+      <td style="padding:2px 6px;font-size:12px;color:var(--mut);white-space:nowrap;">${label}</td>
       <td style="padding:2px 4px;width:80px;"><div style="background:${bg};border-radius:3px;height:11px;overflow:hidden;">
         <div style="width:${bar}%;height:100%;background:${col};opacity:.75;"></div></div></td>
-      <td style="padding:2px 6px;font-size:10px;color:${col};text-align:right;">${has ? Number(v).toFixed(2) : '—'}</td>
-      <td style="padding:2px 6px;font-size:9.5px;white-space:nowrap;">${!has ? '<span style="color:var(--mut)">未参与</span>'
+      <td style="padding:2px 6px;font-size:12px;color:${col};text-align:right;">${has ? Number(v).toFixed(2) : '—'}</td>
+      <td style="padding:2px 6px;font-size:11.5px;white-space:nowrap;">${!has ? '<span style="color:var(--mut)">未参与</span>'
         : pass ? '<span style="color:#1e7e34">✓过阈</span>' : `<span style="color:#b91c1c">✗低于${floor}</span>`}</td>
     </tr>`;
   };
   const rows = dim('向量', s.vec, fl[0], 'bigram TF 余弦（字符分布接近度）')
              + dim('模糊', s.fuzzy, fl[1], '字符 bigram 重叠度（2026-10-11 P4 修复：无空格连写的拉丁名此前恒返回 0，85% 候选受影响）');
   return `<div style="margin:2px 0 4px;border:1px solid var(--line);border-radius:5px;padding:5px 7px;background:#fbfcfd;">
-    <div style="font-size:9.5px;color:var(--mut);margin-bottom:3px;">
+    <div style="font-size:11.5px;color:var(--mut);margin-bottom:3px;">
       逐维度评分（加权总分 <b>${Number(s.score||0).toFixed(2)}</b> · floor ${fl[0]}/${fl[1]} ·
       判定 <b>${esc(s.floor_ok ? '过 floor' : '未过 floor')}</b>）
     </div>
     <table style="width:100%;border-collapse:collapse;">${rows}</table>
-    <div style="font-size:9px;color:var(--mut);margin-top:3px;">
+    <div style="font-size:11.5px;color:var(--mut);margin-top:3px;">
       分数是<b>档位切分点</b>不是精度保证（Neo4j 官方口径）；任一维低于 floor 即不算匹配。</div>
   </div>`;
 }
@@ -550,7 +550,7 @@ function _nrRelateBtnHtml(r, i){
   const st = r.matching_status;
   // 只在「有比对对端」的重复类状态上出现（none=无对象可关联）
   if (!r.batch_dup_of && !r.matched_entity_name) return '';
-  return `<button style="padding:1px 6px;font-size:10.5px;border:1px solid #0891b2;color:#fff;background:#0891b2;border-radius:4px;cursor:pointer;"
+  return `<button style="padding:1px 6px;font-size:12px;border:1px solid #0891b2;color:#fff;background:#0891b2;border-radius:4px;cursor:pointer;"
     onclick="_nrRelate(${i})" title="标记为「相关但不是同一实体」（如部件⊂分系统、功能⇄需求）——两者都保留，不合并">🔗</button>`;
 }
 async function _nrRelate(i){
@@ -581,24 +581,24 @@ function _nrRowHtml(r) {
   const ontoDisp = (r.kind === 'attr' && r.attr_onto_display) ? r.attr_onto_display : (r.ontology_type || '—');
   const ontoOk = r.ontology_matched;
   let h = `<div style="display:grid;grid-template-columns:${_NR_COLS};gap:6px;align-items:center;min-width:${_NR_TBL_MIN}px;
-      padding:4px 8px;border-top:1px solid var(--line);font-size:11.5px;background:${decBg};">
+      padding:4px 8px;border-top:1px solid var(--line);font-size:12.5px;background:${decBg};">
     <input type="checkbox" class="nr-cb" value="${i}" onchange="_nrUpdateSel()" style="cursor:pointer;">
     <div style="min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.45;"
       title="本体类型：${esc(ontoDisp)}（${esc(_nrOntoKindLabel(r.ontology_type_kind))}）${ontoOk?'':' · 类型名未在本体模型中命中（实例名与词典/图库的对齐不受影响）'}">
       <span style="font-weight:600;color:${ontoOk?'var(--ink)':'var(--mut)'};">${esc(ontoDisp)}</span></div>
     ${_nrInstanceHtml(r)}
     ${_nrTargetCellHtml(r)}
-    <span><span style="font-size:10.5px;padding:1px 6px;border-radius:9px;border:1px solid ${sg.bd};background:${sg.bg};color:${sg.c};">${sg.l}</span></span>
-    <span style="font-size:11px;color:${confColor};">${conf}</span>
-    <div title="${esc(evTitle)}" style="min-width:0;font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.45;${(r.attr_type_check==='mismatch')?'color:#b91c1c;':''}">${evSrcs.length?`<span onclick="_nrScoreToggle(${i});event.stopPropagation();" style="cursor:pointer;color:var(--blue-d);border-bottom:1px dotted var(--blue-bd,#B5D4F4);">${_nrScoreBtnHtml(r)}</span>`:(evFirst ? esc(evFirst) : '—')}</div>    <div style="display:flex;gap:3px;align-items:center;white-space:nowrap;">
+    <span><span style="font-size:12px;padding:1px 6px;border-radius:9px;border:1px solid ${sg.bd};background:${sg.bg};color:${sg.c};">${sg.l}</span></span>
+    <span style="font-size:12.5px;color:${confColor};">${conf}</span>
+    <div title="${esc(evTitle)}" style="min-width:0;font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.45;${(r.attr_type_check==='mismatch')?'color:#b91c1c;':''}">${evSrcs.length?`<span onclick="_nrScoreToggle(${i});event.stopPropagation();" style="cursor:pointer;color:var(--blue-d);border-bottom:1px dotted var(--blue-bd,#B5D4F4);">${_nrScoreBtnHtml(r)}</span>`:(evFirst ? esc(evFirst) : '—')}</div>    <div style="display:flex;gap:3px;align-items:center;white-space:nowrap;">
       ${_nrRelateBtnHtml(r, i)}
-      <button style="padding:1px 6px;font-size:10.5px;border:1px solid #1e7e34;color:#fff;background:#1e7e34;border-radius:4px;cursor:pointer;"
+      <button style="padding:1px 6px;font-size:12px;border:1px solid #1e7e34;color:#fff;background:#1e7e34;border-radius:4px;cursor:pointer;"
         onclick="_nrDecide(${i},'accept')" title="接纳：按 AI 建议处理">✓</button>
-      <button style="padding:1px 6px;font-size:10.5px;border:1px solid #c98a2e;color:#fff;background:#c98a2e;border-radius:4px;cursor:pointer;"
+      <button style="padding:1px 6px;font-size:12px;border:1px solid #c98a2e;color:#fff;background:#c98a2e;border-radius:4px;cursor:pointer;"
         onclick="_nrRename(${i})" title="修改：改为规范名 / 手工改名">✎</button>
-      <button style="padding:1px 6px;font-size:10.5px;border:1px solid #7c3aed;color:#fff;background:#7c3aed;border-radius:4px;cursor:pointer;"
+      <button style="padding:1px 6px;font-size:12px;border:1px solid #7c3aed;color:#fff;background:#7c3aed;border-radius:4px;cursor:pointer;"
         onclick="_nrMerge(${i})" title="合并：合并到已有元素">🔀</button>
-      <span style="font-size:9.5px;color:${d?'#1e7e34':'var(--mut)'};">${decLbl}</span>
+      <span style="font-size:11.5px;color:${d?'#1e7e34':'var(--mut)'};">${decLbl}</span>
     </div>
   </div>
   ${_nrScoreOpen[i] ? `<div style="padding:2px 8px 6px 26px;margin-top:-2px;">${_nrScoreCardHtml(r)}</div>` : ''}`;
@@ -612,7 +612,7 @@ function _nrConsHtml(s, c) {
   if(s.props_total) bits.push(`属性键 <b>${s.props_total}</b>（已入表 ${s.attrs||0} 行，命中词典 ${s.attrs_matched||0}）`);
   if(s.props_failed) bits.push(`属性校验失败 <b style="color:#b91c1c;">${s.props_failed}</b>`);
   if(s.cross_view_dups) bits.push(`跨视图重复 <b>${s.cross_view_dups}</b> 个（已合并为一行）`);
-  let h = `<div style="padding:10px;border:1px dashed var(--line);border-radius:6px;font-size:11.5px;line-height:1.9;">
+  let h = `<div style="padding:10px;border:1px dashed var(--line);border-radius:6px;font-size:12.5px;line-height:1.9;">
     🔍 <b>一致性</b>：${bits.length?bits.join(' · '):'无异常'}`;
   if((c.dangling||[]).length){
     h += `<div style="margin-top:6px;color:var(--mut);">悬空：${c.dangling.slice(0,5).map(d=>`${esc(d[0])} --${esc(d[2])}→ ${esc(d[1])}`).join('；')}${(c.dangling||[]).length>5?'…':''}</div>`;
@@ -620,18 +620,18 @@ function _nrConsHtml(s, c) {
   if((c.batch_dups||[]).length){
     h += `<div style="margin-top:4px;color:var(--mut);">疑似重复：${c.batch_dups.slice(0,5).map(d=>`${esc(d[0])} ≈ ${esc(d[1])}`).join('；')}</div>`;
   }
-  h += `</div><div style="margin-top:8px;font-size:11px;color:var(--mut);line-height:1.8;">
+  h += `</div><div style="margin-top:8px;font-size:12.5px;color:var(--mut);line-height:1.8;">
     说明：结构字段（stereotype / ports / value 等）标记为「忽略」，不进词库、不需拍板。</div>`;
   return h;
 }
 /* ── 提交区（inline 二次确认，不跳面板） ── */
 function _nrFooterHtml(pending, needDecide) {
   const st = window._nrState;
-  if(st.applying) return `<div style="margin-top:12px;padding:16px;text-align:center;color:var(--mut);font-size:12.5px;">
+  if(st.applying) return `<div style="margin-top:12px;padding:16px;text-align:center;color:var(--mut);font-size:13.5px;">
       <div>🤖 AI 正在按确认结果更新 V2 代码…</div>
-      <div style="font-size:11px;margin-top:5px;">改写元素名称 · 重渲染视图 · 直接更新原代码文件与视图（不新建版本）</div></div>`;
+      <div style="font-size:12.5px;margin-top:5px;">改写元素名称 · 重渲染视图 · 直接更新原代码文件与视图（不新建版本）</div></div>`;
   if(st.applied && st.applied.no_change){
-    return `<div style="margin-top:12px;padding:11px 13px;border:1px solid #93C5FD;background:#eff6ff;border-radius:8px;font-size:12px;line-height:1.9;color:#1e40af;">
+    return `<div style="margin-top:12px;padding:11px 13px;border:1px solid #93C5FD;background:#eff6ff;border-radius:8px;font-size:13.5px;line-height:1.9;color:#1e40af;">
       ℹ️ ${esc(st.applied.message || '本次确认未产生名称改写，V2 代码无需更新')}
       <div style="margin-top:6px;color:var(--mut);">建议类型若为「新增 / 忽略 / 已对齐」，本就不需要改写代码。可继续发起新一轮建模。</div>
       <div style="margin-top:8px;"><button class="btn ghost" onclick="window._nrState.applied=null;_nrRender()">返回修改</button></div></div>`;
@@ -646,7 +646,7 @@ function _nrFooterHtml(pending, needDecide) {
       else if(a === 'reject') ch.rejected++; else ch.accepted++;
     });
     const gl = !!st.writeGlossary;
-    return `<div style="margin-top:12px;padding:11px 13px;border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;font-size:12px;line-height:1.95;">
+    return `<div style="margin-top:12px;padding:11px 13px;border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;font-size:13.5px;line-height:1.95;">
       <b>确认应用归一决策？</b><br>
       改名 <b>${ch.renamed}</b> · 合并 <b>${ch.merged}</b> · 接纳 <b>${ch.accepted}</b> · 不入图库 <b>${ch.rejected}</b><br>
       同步写入词库：<b style="color:${gl?'#1e7e34':'#6b7280'};">${gl?'是（原名→规范名写入概念层）':'否（仅本次生效）'}</b>　
@@ -660,19 +660,19 @@ function _nrFooterHtml(pending, needDecide) {
   const canSubmit = pending === 0 && needDecide > 0;
   return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line);">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <label style="font-size:11.5px;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:4px;line-height:24px;" title="勾选后把「原名 → 规范名」写入概念层词库；不勾选则仅本次生效">
+        <label style="font-size:12.5px;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:4px;line-height:24px;" title="勾选后把「原名 → 规范名」写入概念层词库；不勾选则仅本次生效">
           <input type="checkbox" id="nr-glossary" ${st.writeGlossary?'checked':''}
             onchange="window._nrState.writeGlossary=this.checked"> 同步写入词库</label>
-        <span style="font-size:10.5px;color:var(--mut);">默认不选：仅本次生效</span>
+        <span style="font-size:12px;color:var(--mut);">默认不选：仅本次生效</span>
         <span style="flex:1"></span>
-        <span style="font-size:11px;color:var(--mut);">已决策 ${Object.keys(st.decisions).length} 项</span>
-        <button class="btn ghost" onclick="_nrExport()" style="padding:2px 10px;font-size:11px;line-height:18px;">📤 导出决策</button>
+        <span style="font-size:12.5px;color:var(--mut);">已决策 ${Object.keys(st.decisions).length} 项</span>
+        <button class="btn ghost" onclick="_nrExport()" style="padding:2px 10px;font-size:12.5px;line-height:18px;">📤 导出决策</button>
         <button class="btn primary" ${canSubmit?'':'disabled'}
-          style="padding:3px 12px;font-size:11.5px;line-height:18px;${canSubmit?'':'opacity:.5;cursor:not-allowed;'}"
+          style="padding:3px 12px;font-size:12.5px;line-height:18px;${canSubmit?'':'opacity:.5;cursor:not-allowed;'}"
           onclick="window._nrState.confirming=true;_nrRender()">✓ 提交并更新 V2 代码</button>
       </div>
-      ${needDecide>0&&pending>0?`<div style="margin-top:4px;font-size:11px;color:#b91c1c;">⛔ 还有 ${pending} 项未确认，全部拍板后才能提交。</div>`:''}
-      ${needDecide===0?`<div style="margin-top:4px;font-size:11px;color:#1e7e34;">✅ 本次归一无需人工确认，可直接提交。</div>`:''}
+      ${needDecide>0&&pending>0?`<div style="margin-top:4px;font-size:12.5px;color:#b91c1c;">⛔ 还有 ${pending} 项未确认，全部拍板后才能提交。</div>`:''}
+      ${needDecide===0?`<div style="margin-top:4px;font-size:12.5px;color:#1e7e34;">✅ 本次归一无需人工确认，可直接提交。</div>`:''}
     </div>`;
 }
 /* ── V2 代码预览区（点击行内「📄 Lxx」在此查看） ── */
@@ -680,7 +680,7 @@ function _nrV2PaneHtml() {
   const st = window._nrState;
   if(!st.v2Open) return '';
   return `<div id="nr-v2pane" style="margin-top:10px;border:1px solid var(--line);border-radius:8px;overflow:hidden;">
-      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg);border-bottom:1px solid var(--line);font-size:11.5px;">
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg);border-bottom:1px solid var(--line);font-size:12.5px;">
         <b>📄 V2 代码预览</b>
         <span id="nr-v2tip" style="color:var(--mut);"></span>
         <span style="flex:1"></span>
@@ -713,11 +713,11 @@ function _nrSyncV2Pane() {
   const code = st.newCode || (st.report && st.report.code_text) || '';
   const isNew = !!st.newCode;
   if(tip) tip.textContent = isNew ? '更新后的 V2 代码' : '本次生成的 V2 代码';
-  if(!code){ box.innerHTML = `<div style="padding:16px;color:#94a3b8;font-size:12px;">无可预览的 V2 代码</div>`; return; }
+  if(!code){ box.innerHTML = `<div style="padding:16px;color:#94a3b8;font-size:13.5px;">无可预览的 V2 代码</div>`; return; }
   const lines = String(code).split('\n');
   box.innerHTML = lines.map((ln, n) => {
     const on = (n + 1) === st.v2Focus;
-    return `<div id="nrl-${n+1}" ${on?'data-hl="1"':''} style="display:flex;font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.65;background:${on?'#3b2f0b':'transparent'};">
+    return `<div id="nrl-${n+1}" ${on?'data-hl="1"':''} style="display:flex;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;line-height:1.65;background:${on?'#3b2f0b':'transparent'};">
       <span style="flex:none;width:46px;text-align:right;padding-right:8px;color:#64748b;user-select:none;">${n+1}</span>
       <span style="flex:1;white-space:pre-wrap;word-break:break-all;color:${on?'#fbbf24':'#e2e8f0'};">${esc(ln)}</span></div>`;
   }).join('');
@@ -900,12 +900,12 @@ function _nrAppliedHtml() {
   const st = window._nrState, a = st.applied || {};
   const ch = a.changes || {}, gl = a.glossary || {}, rg = a.v2_regen || {};
   if(st.applyError){
-    return `<div style="margin-top:12px;padding:11px 13px;border:1px solid #F3C1C1;background:#fff5f5;border-radius:8px;font-size:12px;color:#b91c1c;">
+    return `<div style="margin-top:12px;padding:11px 13px;border:1px solid #F3C1C1;background:#fff5f5;border-radius:8px;font-size:13.5px;color:#b91c1c;">
       ✕ 应用失败：${esc(st.applyError)}
       <div style="margin-top:8px;"><button class="btn ghost" onclick="window._nrState.applyError=null;_nrRender()">返回修改</button></div></div>`;
   }
   const inplace = a.inplace !== false;
-  return `<div style="margin-top:12px;padding:11px 13px;border:1px solid #C0DD97;background:#f7fbee;border-radius:8px;font-size:12px;line-height:1.95;">
+  return `<div style="margin-top:12px;padding:11px 13px;border:1px solid #C0DD97;background:#f7fbee;border-radius:8px;font-size:13.5px;line-height:1.95;">
       <b style="color:#2f855a;">✅ 已应用：V2 代码与视图已就地更新至 ${esc(a.version_label||'')}</b>
       ${inplace
         ? `（直接改写原代码文件与视图，版本 #${a.new_version_id}，未新建版本）`
@@ -922,7 +922,7 @@ function _nrAppliedHtml() {
         <button class="btn" onclick="_nrPushModal()" title="确认完成后才提供写回入口：先语法检测，通过后才写入">🔗 写回建模软件（版本 #${a.new_version_id}）</button>
         <button class="btn ghost" onclick="_nrRefreshConv()" title="刷新会话后，上方代码/视图卡将展示更新后的代码与视图">🔄 刷新会话查看更新后代码/视图</button>
       </div>
-      <div style="margin-top:6px;font-size:10.5px;color:var(--mut);">写回建模软件仅在归一确认完成后开放，且需再次点击确认才会执行。</div></div>`;
+      <div style="margin-top:6px;font-size:12px;color:var(--mut);">写回建模软件仅在归一确认完成后开放，且需再次点击确认才会执行。</div></div>`;
 }
 /* ── 闸口②：写入建模软件（overlay modal，非独立页） ── */
 function _nrPushModal() {
@@ -930,13 +930,13 @@ function _nrPushModal() {
   const ov = document.createElement('div');
   ov.id = 'nr-push-modal';
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;display:flex;align-items:center;justify-content:center;';
-  ov.innerHTML = `<div style="width:520px;background:#fff;border-radius:10px;box-shadow:0 10px 34px rgba(20,35,60,.2);overflow:hidden;font-size:12.5px;">
+  ov.innerHTML = `<div style="width:520px;background:#fff;border-radius:10px;box-shadow:0 10px 34px rgba(20,35,60,.2);overflow:hidden;font-size:13.5px;">
       <div style="padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;">🔗 写入建模软件（智源）</div>
       <div style="padding:14px 16px;line-height:1.95;">
         目标版本：<b>${esc(a.version_label||'')}</b>（#${a.new_version_id}）<br>
         <div style="margin-top:8px;">版本控制串 vc（留空则用上次配置）：</div>
-        <input id="nr-push-vc" style="width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:5px;font-size:12px;" placeholder="projectId,branchId">
-        <div style="margin-top:6px;color:var(--mut);font-size:11px;">先执行语法检测（只读），通过后才写入；检测不通过或调用失败均不会写入。</div>
+        <input id="nr-push-vc" style="width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:5px;font-size:13.5px;" placeholder="projectId,branchId">
+        <div style="margin-top:6px;color:var(--mut);font-size:12.5px;">先执行语法检测（只读），通过后才写入；检测不通过或调用失败均不会写入。</div>
         <div id="nr-push-msg" style="margin-top:8px;"></div>
       </div>
       <div style="padding:10px 16px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px;">
