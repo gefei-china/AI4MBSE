@@ -150,6 +150,12 @@ def b_group():
     ORIG = LC.chat
     TXT = "对当前模型进行预评审校验"
 
+    # ★ 2026-10-29：save_override 写的是**用户全局配置文件**（~/.workbuddy/mbse_config.json）。
+    #   原实现 finally 里硬写 `rule_llm_confirm: False` ⇒ **跑一次门禁就把生产开关重置掉**。
+    #   改为「读原值 → 临时改成门禁需要的状态 → finally 原样写回」。
+    _ORIG_CFG = {k: cfg.get("intent", k) for k in ("rule_llm_confirm", "explain_preempt",
+                                                   "speech_act")}
+
     def stub(payload_text):
         return lambda *a, **k: {"choices": [{"message": {"content": payload_text}}]}
 
@@ -251,7 +257,10 @@ def b_group():
     finally:
         LC.chat = ORIG
         try:
-            cfg.save_override({"intent.rule_llm_confirm": False})
+            # ★ 原样写回（不再硬写 False —— 那会把生产开关重置掉）
+            cfg.save_override({"intent.rule_llm_confirm": _ORIG_CFG["rule_llm_confirm"],
+                               "intent.explain_preempt": _ORIG_CFG["explain_preempt"],
+                               "intent.speech_act": _ORIG_CFG["speech_act"]})
         except Exception:                                    # noqa: BLE001
             pass
         conn.close()
@@ -266,8 +275,14 @@ def c_group():
 
     conn = sqlite3.connect("file:%s?mode=ro" % os.path.join(_ROOT, "mbse.db"), uri=True)
     conn.row_factory = sqlite3.Row
+    _ORIG_CFG = {k: cfg.get("intent", k) for k in ("rule_llm_confirm", "explain_preempt",
+                                                   "speech_act")}
     try:
-        cfg.save_override({"intent.rule_llm_confirm": False})
+        # ★ 改造前状态 = explain 前置短路 + 不做复核 + 无言语行为层（三个开关都要显式重建，
+        #   不能依赖默认值——生产配置里 explain_preempt 可能已被置 false）
+        cfg.save_override({"intent.rule_llm_confirm": False,
+                           "intent.explain_preempt": True,
+                           "intent.speech_act": False})
         r = IntentRouter()
         # ⚠️ 期望值取**实测的既有行为**，不是 `intent_samples` 的标注。
         #   首版我把「生成需求质量报告」的期望写成 requirement_quality（照抄评测集标注）
@@ -319,6 +334,12 @@ def c_group():
         #    因为它比的是**真实的改造前行为**。
         c5_check(conn)
     finally:
+        try:
+            cfg.save_override({"intent.rule_llm_confirm": _ORIG_CFG["rule_llm_confirm"],
+                               "intent.explain_preempt": _ORIG_CFG["explain_preempt"],
+                               "intent.speech_act": _ORIG_CFG["speech_act"]})
+        except Exception:                                    # noqa: BLE001
+            pass
         conn.close()
 
 
@@ -359,7 +380,9 @@ def c5_check(conn):
         "输出变更影响报告",
         "做一次需求质量评审",
     ]
-    cfg.save_override({"intent.rule_llm_confirm": False})
+    cfg.save_override({"intent.rule_llm_confirm": False,
+                       "intent.explain_preempt": True,
+                       "intent.speech_act": False})
 
     # 改造后
     after = []
@@ -397,11 +420,153 @@ def c5_check(conn):
           n_distinct >= 3, "实测 %d 种：%s" % (n_distinct, sorted(set(before))[:4]))
 
 
+# ──────────────────────── D 组 · 2026-10-29 意图审计新增的两处判据
+def d_group():
+    """D 组：explain 前置降级为兜底 + chat/判不出 可区分。
+
+    背景（2026-10-29 意图审计，实测 conv 真实输入）：
+      · explain 前置短路是误判率最高的确定性层（可判集 n=277：命中 44 / 误判 13 = 30%），
+        且位置在 LLM 主裁判之前 ⇒ 「你好 介绍下你的能力边界」被硬判 knowledge_qa@0.80。
+      · `detect_llm` 把 LLM 判的 chat 与「判不出」一起折叠成 ("",0)
+        ⇒ 上层 `verdict=chat_real` 分支**永远不可达**（死代码）。
+    本组锁住这两点，并各做一次变异自证。
+    """
+    print("\n=== D 组 · explain 前置降级为兜底 + chat 可区分（2026-10-29）===")
+    src = open(INTENT, encoding="utf-8").read()
+    lines = src.split("\n")
+
+    # D1 explain 前置短路必须受开关控制（前置判定 + 末尾兜底 两处引用）
+    n_pre = src.count('self._cfg_get("explain_preempt"')
+    check("D1 explain 短路受 intent.explain_preempt 开关控制（源码引用 ≥2 处）",
+          n_pre >= 2, "实测 %d 处" % n_pre)
+
+    # D2 末尾兜底必须**在** inherit 之后（顺序判据：兜底只能兜底，不能前置）
+    i_inherit = i_fallback = -1
+    for i, l in enumerate(lines):
+        if "if prev_intent and prev_intent in self._db_intents:" in l:
+            i_inherit = i
+        if 'not bool(self._cfg_get("explain_preempt", True))' in l:
+            i_fallback = i
+    ok_order = (i_inherit > 0 and i_fallback > i_inherit)
+    check("D2 explain 兜底位于 inherit 之后（兜底不得前置）", ok_order,
+          "inherit@L%d 兜底@L%d" % (i_inherit + 1, i_fallback + 1))
+
+    # ── detect_llm 的函数体片段（判据必须**限定在函数体内**）──────────────
+    #   ⚠️ `if intent == "chat":` 在本文件有 3 处（L228/L793 为既有代码，L1316 才是
+    #   detect_llm 里的本分支）。用整文件搜子串做判据 ⇒ 变异掉目标那处后仍搜得到 ⇒ **恒绿假绿**。
+    _fn_llm = None
+    for n in ast.walk(ast.parse(src)):
+        if isinstance(n, ast.FunctionDef) and n.name == "detect_llm":
+            _fn_llm = n
+            break
+    if _fn_llm is None:
+        check("D3 detect_llm 把 LLM 判的 chat 与『判不出』区分开", False, "找不到 detect_llm")
+        check("D4 ★变异：把 chat 分支改死 ⇒ D3 判据必须能抓到", False, "找不到 detect_llm")
+    else:
+        lo, hi = _fn_llm.lineno, (_fn_llm.end_lineno or len(lines))
+        llm_lines = lines[lo - 1:min(hi, len(lines))]
+        llm_src = "\n".join(llm_lines)
+
+        # D3 detect_llm 必须把 chat 与「判不出」区分开（判据范围 = detect_llm 函数体）
+        ok_chat = ('if intent == "chat":' in llm_src) and ('return ("chat",' in llm_src)
+        check("D3 detect_llm 把 LLM 判的 chat 与『判不出』区分开", ok_chat,
+              "detect_llm@L%d-%d" % (lo, hi))
+
+        # D4 ★变异自证：把 detect_llm 里的 chat 分支改死 ⇒ D3 必须判红
+        mut = list(lines)
+        hit = 0
+        for i in range(lo - 1, min(hi, len(lines))):
+            if 'if intent == "chat":' in lines[i]:
+                mut[i] = lines[i].replace('if intent == "chat":', "if False:")
+                hit += 1
+                break
+        mut_llm_src = "\n".join(mut[lo - 1:min(hi, len(mut))])
+        check("D4 ★变异：把 chat 分支改死 ⇒ D3 判据必须能抓到",
+              hit == 1 and not (('if intent == "chat":' in mut_llm_src)
+                                and ('return ("chat",' in mut_llm_src)),
+              "锚点未命中" if not hit else "")
+
+    # D5 ★变异自证：删掉末尾兜底 ⇒ D2 必须判红
+    mut2 = list(lines)
+    hit2 = 0
+    for i, l in enumerate(mut2):
+        if 'not bool(self._cfg_get("explain_preempt", True))' in l:
+            mut2[i] = "            pass  # 变异：删掉 explain 兜底"
+            hit2 += 1
+            break
+    mut2_src = "\n".join(mut2)
+    i2_inherit = i2_fallback = -1
+    for i, l in enumerate(mut2):
+        if "if prev_intent and prev_intent in self._db_intents:" in l:
+            i2_inherit = i
+        if 'not bool(self._cfg_get("explain_preempt", True))' in l:
+            i2_fallback = i
+    check("D5 ★变异：删掉 explain 末尾兜底 ⇒ D2 判据必须能抓到",
+          hit2 == 1 and not (i2_inherit > 0 and i2_fallback > i2_inherit),
+          "锚点未命中" if not hit2 else "")
+
+    # D6 配置可达：explain_preempt 必须同时在 DEFAULT_CONFIG 与 CONFIG_SCHEMA
+    try:
+        from core import config as cfg
+        d = set(cfg.DEFAULT_CONFIG["intent"].keys())
+        s = set(cfg.CONFIG_SCHEMA.get("intent", {}).keys())
+        check("D6 explain_preempt 在 DEFAULT_CONFIG 与 CONFIG_SCHEMA 中都可配",
+              "explain_preempt" in d and "explain_preempt" in s,
+              "DEFAULT有=%s SCHEMA有=%s" % ("explain_preempt" in d,
+                                            "explain_preempt" in s))
+    except Exception as e:                                  # noqa: BLE001
+        check("D6 explain_preempt 在 DEFAULT_CONFIG 与 CONFIG_SCHEMA 中都可配", False, repr(e))
+
+    # ── D7~D9：言语行为层（speech-act gate，2026-10-29）────────────────────
+    #   判"问 vs 做"：名词化形态（"生成条件"）→ knowledge_qa；自指元问题（"你的能力边界"）→ chat。
+    #   ⚠️ 顺序是硬要求：必须在**建模强信号正则之前**，否则
+    #     「参数视图的生成条件，依赖哪些前置数据」会先被"视图…生成"抢走 → 实测该误判复现。
+    n_sa = src.count('self._cfg_get("speech_act"')
+    check("D7 言语行为层受 intent.speech_act 开关控制（源码引用 ≥1 处）", n_sa >= 1,
+          "实测 %d 处" % n_sa)
+    check("D7b 言语行为层实现存在（_speech_act 方法）",
+          "def _speech_act" in src)
+
+    i_sa = i_design = -1
+    for i, l in enumerate(lines):
+        if "_speech_act(t, conn=conn)" in l:
+            i_sa = i
+        if 're.search(r"(生成|给出|输出|编写|创建).{0,24}(sysml|kerml|建模|模型|bdd|ibd|视图|代码)"' in l:
+            i_design = i
+    check("D8 言语行为层位于建模强信号正则之前（顺序硬要求）",
+          i_sa > 0 and i_design > 0 and i_sa < i_design,
+          "言语行为层@L%d 建模强信号@L%d" % (i_sa + 1, i_design + 1))
+
+    # D8b 言语行为层还必须在 **explain 前置短路之前** ——
+    #   否则「介绍下你的能力边界」被 explain 的"介绍"命中 → knowledge_qa@0.80（实测仍错）。
+    i_explain = -1
+    for i, l in enumerate(lines):
+        if 'if self._is_explain_ask(t) and bool(self._cfg_get("explain_preempt"' in l:
+            i_explain = i
+            break
+    check("D8b 言语行为层位于 explain 前置短路之前（顺序硬要求）",
+          i_sa > 0 and i_explain > 0 and i_sa < i_explain,
+          "言语行为层@L%d explain短路@L%d" % (i_sa + 1, i_explain + 1))
+
+    # D9 ★变异自证：把言语行为层的调用改死 ⇒ D7 必须判红
+    mut3 = list(lines)
+    hit3 = 0
+    for i, l in enumerate(mut3):
+        if "_speech_act(t, conn=conn)" in l:
+            mut3[i] = l.replace("_speech_act(t, conn=conn)", "_speech_act_DISABLED(t, conn=conn)")
+            hit3 += 1
+            break
+    check("D9 ★变异：改掉言语行为层调用 ⇒ D7 判据必须能抓到",
+          hit3 == 1 and ("_speech_act(t, conn=conn)" not in "\n".join(mut3)),
+          "锚点未命中" if not hit3 else "")
+
+
 def main():
     print("=== verify_intent_llm_review · B4-5 ===")
     a_group()
     b_group()
     c_group()
+    d_group()
     tot = len(_PASS) + len(_FAIL)
     print("\n%d pass / %d fail" % (len(_PASS), len(_FAIL)))
     return 1 if _FAIL else 0

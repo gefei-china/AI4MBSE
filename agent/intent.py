@@ -33,6 +33,69 @@ class IntentRouter:
     #    新逻辑永不生效（本仓"缓存毒化"是有前例的坑，见下方 requirement_quality / impact 两道防线）。
     #  已知边界（保守取向）：形如"介绍一下代码生成"这类**说明+动作词混用**句仍走 design——
     #    宁可让少见的混用句走原路径，也不放宽条件去抢正例（正例误伤=白跑一次建模，代价更大）。
+    # ★★ 2026-10-29（意图审计）：**言语行为层（speech-act gate）** 词表 ──
+    #   解决的是"**问 vs 做**"这一维 —— 现有全部判据都是**话题/对象匹配**，
+    #   于是「参数视图的生成条件，依赖哪些前置数据」（问条件）会被"视图…生成"当成要生成，
+    #   「你好 介绍下你的能力边界」（问系统自身）会被"介绍"当成要检索知识。
+    #   判据只用**结构特征**，不穷举业务词：
+    #     ① **名词化形态**：动作词 + 抽象后缀相邻（"生成**条件**"）——动作词被名词化了 ⇒ 是"问"不是"做"
+    #     ② **自指元问题**：主语是"你/你的" + 能力/身份类谓词 + **句中无技术术语**
+    #        （技术术语用**已有 glossary** 判，不另造术语表）⇒ 是"问系统自己" ⇒ 闲聊
+    #   ⚠️ 刻意**只保留这两类窄形态**，不做通用疑问词判定：
+    #     实测（confirmed 48 条，见 tmp/intent_audit/probe_speech_act.py）：
+    #       通用疑问形态（哪些/什么/有没有）会误捕 2 条正例
+    #       （「接口变更会波及哪些模块」gold=impact、「这份需求的模糊词有哪些」gold=requirement_quality）；
+    #       窄判据（仅名词化 + 自指）= **修正 4 条 / 误伤 0 条**，且修好的正是那 4 条真实误判。
+    _SPEECH_ACT_VERBS = (
+        "生成", "输出", "导出", "校验", "评审", "检查", "创建", "编写", "绘制",
+        "导入", "落库", "发布", "重构", "补充", "提取", "解析", "分析", "建模",
+    )
+    _SPEECH_ACT_SUFFIXES = (
+        "条件", "规则", "原理", "过程", "方式", "依据", "前提", "机制", "流程",
+        "判据", "准则", "策略", "标准", "要求", "算法", "时机", "含义", "定义",
+        "作用", "用途", "区别", "差异", "逻辑", "边界", "目的",
+    )
+    _SELF_REFER = ("你", "你的", "你们", "您")
+    _SELF_PREDICATES = (
+        "能力", "身份", "是谁", "做什么", "会什么", "能干什么", "能做什么",
+        "怎么用", "用法", "是什么", "边界", "干什么", "会做", "能做",
+    )
+    _IMPERATIVE_MARKERS = (
+        "帮我", "请", "给我", "做一份", "出一份", "生成一份", "绘制", "编写",
+        "创建", "新建", "输出", "导出", "落库", "立即", "现在",
+    )
+
+    def _speech_act(self, t: str, conn=None) -> tuple:
+        """言语行为判定：这句话要的是「问」还是「做」。
+
+        返回 (intent, reason)：intent 为 None 表示"没识别出问形态" ⇒ 交回既有链路。
+        判据见 `_SPEECH_ACT_VERBS` 处的注释（窄形态，误伤 0）。
+        """
+        low = (t or "").lower()
+        # ① 自指元问题（先判：它比名词化更具体）——「你/你的」+ 能力类谓词 + 句中无技术术语
+        if (any(k in low for k in self._SELF_REFER)
+                and any(k in low for k in self._SELF_PREDICATES)):
+            if not self._has_tech_term(low, conn):
+                return ("chat", "自指元问题（你/你的 + 能力类谓词 + 无技术术语）")
+            # 有技术术语（如「介绍一下 SysML v2 的作用」）⇒ 是问概念，不是问系统自己 ⇒ 继续往下
+        # ② 名词化形态：动作词与抽象后缀**相邻** ⇒ 动作被名词化 ⇒ 是"问条件/问原理"不是"要执行"
+        if not any(k in low for k in self._IMPERATIVE_MARKERS):
+            for v in self._SPEECH_ACT_VERBS:
+                for s in self._SPEECH_ACT_SUFFIXES:
+                    if v + s in low:
+                        return ("knowledge_qa", "名词化形态「%s%s」" % (v, s))
+        return (None, "")
+
+    def _has_tech_term(self, t: str, conn=None) -> bool:
+        """句中是否含技术术语（用**已有 glossary** 判，不另造术语表）。查不到就当"没有"。"""
+        if conn is None:
+            return False
+        try:
+            from glossary import GlossaryMatcher
+            return bool(GlossaryMatcher(conn).resolve(t).get("hits"))
+        except Exception:
+            return False
+
     _EXPLAIN_SIGNALS = (
         "介绍", "说明", "是什么", "什么是", "啥是", "区别", "差异", "原理", "概述",
         "包含哪些", "有哪些", "如何理解", "怎么理解", "怎么用", "如何使用", "用途",
@@ -635,7 +698,41 @@ class IntentRouter:
         # 2026-09-25 说明类优先（**必须在缓存之前**）：修「MBSE建模方法论介绍」→ design 这类误路由。
         # 位置理由：该输入早已被误判写入意图缓存，若放在规则层之后会被旧缓存挡住、新逻辑永不生效。
         # 强度：conf 0.8 且 route='explain' → _done 里不触发澄清（needs_clarify 仅针对 weak/inherit/llm<0.85）。
-        if self._is_explain_ask(t):
+        #
+        # ★ 2026-10-29（意图审计，conv 真实输入实测）：本短路是**误判率最高的确定性层**
+        #   （可判集 n=277：命中 44 条 / 误判 13 条 = 30%），且位置在 LLM 主裁判之前 ⇒
+        #   任何"含说明词"的句子都**轮不到 LLM**。实测误判：
+        #     「你好 介绍下你的能力边界」→ knowledge_qa@0.80（应为闲聊，落知识问答Agent 召回 0 条）
+        #   根因：`_is_explain_ask` 的判据只有「含说明信号 且 不含动作信号」，
+        #     无法区分「介绍**技术对象**」（⇒knowledge_qa，正例）
+        #     与「介绍**你自己**」（⇒闲聊）。
+        #   修法（开关 `intent.explain_preempt`，默认 True = 改造前行为，零回归）：
+        #     False 时本短路**降级为末尾兜底**（见 detect() 末尾）——先让规则层/语义层/LLM 主裁判裁决：
+        #       LLM 判具体意图 → 采信；LLM 判 chat → 落 chat 兜底桶（verdict=chat_real）；
+        #       LLM 判不出 → 才回落本兜底 knowledge_qa@0.80。
+        #   实测（真实 LLM + 真实 few-shot，2026-10-29）：
+        #     「介绍下你的能力边界」×3 → LLM 判 chat ⇒ 落 chat 桶 ✔
+        #     「参数视图的生成条件，依赖哪些前置数据」→ LLM 判 knowledge_qa@0.98 ✔
+        #     「MBSE建模方法论介绍」「介绍一下SysML v2的作用」→ knowledge_qa@0.95/0.97 ✔（正例不退）
+        #   ⚠️ 代价：explain 类输入每次多一次 LLM 调用（仓库记录约 3.6s/条）。
+        # ★★ 2026-10-29（意图审计）：**言语行为层（speech-act gate）** —— 判"问 vs 做"。
+        #   位置：**整个决策链最前面**（在 explain 前置短路之前）。两处顺序都是硬要求：
+        #     · 必须在 **explain 前置短路**之前 —— 否则「介绍下你的能力边界」被"介绍"命中 explain
+        #       → knowledge_qa@0.80（实测：言语行为层放在后面时这 3 条仍错）；
+        #     · 必须在 **建模强信号正则**之前 —— 否则「参数视图的生成条件，依赖哪些前置数据」
+        #       被"视图…生成"抢走 → design@0.95。
+        #   判据很窄（只认"名词化形态"与"自指元问题"），实测在 confirmed 48 条上
+        #   **修正 4 条真实误判 / 误伤 0 条**，故不需要给其它强信号层让位。
+        #   置信：knowledge_qa 给 0.85（低于强信号 0.95、高于 explain 兜底 0.80）；
+        #         chat 桶给 0.60 + verdict='chat_real'（真闲聊，与"没判出"可区分）。
+        #   ⚠️ 开关 `intent.speech_act`（默认 True = 启用；置 False 即回到改造前行为，可回退）。
+        if bool(self._cfg_get("speech_act", True)):
+            _sa_intent, _sa_why = self._speech_act(t, conn=conn)
+            if _sa_intent == "chat":
+                return self._done("chat", "speech_act", 0.60, text, fp, verdict="chat_real")
+            if _sa_intent == "knowledge_qa":
+                return self._done("knowledge_qa", "speech_act", 0.85, text, fp)
+        if self._is_explain_ask(t) and bool(self._cfg_get("explain_preempt", True)):
             return self._done("knowledge_qa", "explain", 0.80, text, fp)
         # P0-3：意图级缓存（L1 命中直接返回，省重复规则/语义/LLM 全链路）
         # P1-31（2026-10-02）：**默认停用**，开关在 `_cache_get`/`_cache_set` 内部集中把关
@@ -933,6 +1030,16 @@ class IntentRouter:
         # P0-2：会话级意图保持——无任何信号命中时继承上轮意图（追问/续写不被误判 chat）
         if prev_intent and prev_intent in self._db_intents:
             return self._done(prev_intent, "inherit", 0.55, text, fp)
+        # ★ 2026-10-29（意图审计）：explain **兜底**（`intent.explain_preempt=False` 时才走到这里）。
+        #   为什么放在最后：说明类提问**不该**由一条子串规则在链路最前面就定死 —— 它是误判率最高的
+        #   确定性层（可判集 30%），且会**屏蔽 LLM 主裁判**。
+        #   放到末尾后：LLM 判得出具体意图 → 上面已 return；LLM 判 chat → 上面 `llm_weak` 已 return
+        #   （verdict=chat_real，落 chat 兜底桶）；**只有 LLM 也判不出**时才用这条兜底 knowledge_qa@0.80。
+        #   ⚠️ LLM 返回 ("",0)（判不出/解析失败）与"判 chat"在改造前是同一个值（`detect_llm` 会把 chat
+        #     折叠成 ""）—— 已修：`detect_llm` 现在把 chat 原样上交（chat 仍**不是可路由意图**，
+        #     不会被采纳执行，只用于区分"闲聊"与"判不出"并标 verdict=chat_real）。
+        if (not bool(self._cfg_get("explain_preempt", True))) and self._is_explain_ask(t):
+            return self._done("knowledge_qa", "explain", 0.80, text, fp)
         return self._done("chat", "chat", 0.0, text, fp, verdict="unsure")
 
     # ══════════════════════════════════════════════════════════════════════
@@ -1276,6 +1383,18 @@ class IntentRouter:
                 # llm_first 的 unsure 一等出口：模型明确"都不匹配"⇒ 原样上交，
                 # 上层按低置信弱路径走（继承/澄清），绝不硬选一个意图。
                 return ("unsure", min(conf, 0.5))
+            # ★ 2026-10-29（意图审计）：**chat 与"判不出"必须可区分**。
+            #   改造前：chat 不在 `known` 里 ⇒ 与"解析失败/都不匹配"一起折叠成 ("",0)。
+            #   后果：① 上层 `elif llm_intent == "chat" and conf>=0.5 → verdict=chat_real`
+            #   这条分支**永远不可达**（死代码，真闲聊与"判不出"观测上不可分）；
+            #   ② explain 降级为兜底后（`intent.explain_preempt=False`），真闲聊会与
+            #   "LLM 判不出"一起落进 explain 兜底 → 仍被误判成知识问答。
+            #   现在把 chat 原样上交。
+            #   ⚠️ **chat 仍然不是可路由意图**（语义与门禁 B7b 一致）：上层 llm_first 采纳分支
+            #     显式排除 chat（`llm_intent not in ("chat","unsure")`）⇒ 绝不会被拿去执行；
+            #     它只用于落 chat 兜底桶 + 标 verdict=chat_real（"真闲聊" vs "没判出"）。
+            if intent == "chat":
+                return ("chat", min(conf, 0.9))
             return ("", 0.0)
         except Exception:
             return ("", 0.0)
@@ -1501,7 +1620,7 @@ class IntentRouter:
         tasks = [{"intent": self._clause_to_intent_strict(f), "text": f} for f in frags]
         return self._finalize_tasks(tasks)   # 2026-09-26：收口逻辑收敛到 _finalize_tasks（L1/L2 共用）
 
-    def _finalize_tasks(self, tasks: list) -> list:
+    def _finalize_tasks(self, tasks: list, allow_same_intent: bool = False) -> list:
         """多意图收口（L1/L2 **共用**）：过滤"没映射上意图"的片段、同一意图只留首段、不足 2 个不同意图不算多意图。
 
         2026-09-26（多意图评测集驱动）：此前只有 L2 做了这套收口，L1 直接用宽松映射 + 不去重 + 不判数量，
@@ -1510,11 +1629,24 @@ class IntentRouter:
           ② 「先看看再想想」→ `['看看','想想']`（映射失败的原句片段被当成意图名）
           ③ 宽松映射按元组顺序首个命中，「做需求质量评审」落到 requirement_analysis（应为 requirement_quality）
         判据同 L2：映射函数的**未命中约定是"原样返回文本"**，故 `it == text` 即未映射。
+
+        ★ 2026-10-29（用户问「是否支持多意图」实测触发）：曾尝试对 L1 放开同意图多去重，
+        使「先生成结构视图，再生成参数视图」切成 2 段（两个不同视图、同一 intent）。
+        **实测为净负，默认关闭**（`intent.multi_same_intent_stage=False`）：
+          · 基线（关闭）：accuracy 0.944 / precision 1.000 / recall 0.875 / F1 0.933，序列匹配 0.875
+          · 放开（开启）：accuracy 0.889 / precision 0.875 / recall 0.875 / F1 0.875，序列匹配 0.750
+          · 连带影响：「先做需求分析，再进行方案设计，最后生成 sysml 代码」由 2 段变 3 段
+            （末段与"方案设计"同属 design），说明"按句切+同意图保留"过粗。
+        取舍依据（不是照抄指标）：单个 design Agent 本来就能在一次回答里产出多个视图，
+        拆成两个同 Agent 任务不增加能力，只增加调度开销与失败面；收益不确定、成本确定。
+        保留开关是为了把"粒度按意图还是按交付物"这条产品口径留成可 A/B 的项，而非写死。
         """
         out, seen = [], set()
         for t in tasks or []:
             it, txt = t.get("intent"), t.get("text")
-            if not it or it == txt or it not in self._db_intents or it in seen:
+            if not it or it == txt or it not in self._db_intents:
+                continue
+            if (not allow_same_intent) and it in seen:
                 continue
             seen.add(it)
             out.append(t)
@@ -1532,8 +1664,16 @@ class IntentRouter:
         """
         clauses = self._split_stage_clauses(text)
         if clauses:
+            # L1 = 用户显式声明的阶段序（先…再…/然后/最后）⇒ 允许同意图不同对象的多阶段。
+            # 开关关闭时回到旧行为（按意图去重，会丢掉「结构视图→参数视图」这类请求）。
+            _allow_same = True
+            try:
+                _allow_same = bool(self._cfg_get("multi_same_intent_stage", True))
+            except Exception:
+                _allow_same = True
             return self._finalize_tasks(
-                [{"intent": self._clause_to_intent_strict(c), "text": c} for c in clauses])
+                [{"intent": self._clause_to_intent_strict(c), "text": c} for c in clauses],
+                allow_same_intent=_allow_same)
         return self._split_parallel_clauses(text)
 
     def split_multi_intent(self, text: str) -> list:
