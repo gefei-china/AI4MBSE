@@ -23,6 +23,9 @@ from .providers import (  # noqa: F401  （注册副作用）
 #: LLM 层日志器（思考超限告警用；与 provider 层 `mbse.llm` 同族）
 _log = logging.getLogger("mbse.llm")
 
+# P1-5：上下文占用告警去重（(窗口, 10% 分桶) → 同一档只报一次）
+_CTX_UTIL_WARNED = set()
+
 #: 思考超限告警去重集合（2026-10-10）。
 #: 键 = (intent, provider_id)。**为什么进程内去重**：真实量级 310/6890≈4.5%，
 #: 且单次会话会连续多轮触发同一组合 ⇒ 不去重会把日志刷爆、反而看不见。
@@ -326,6 +329,25 @@ class LLMClient:
           会把**所有失败调用**算进来 —— 我据此误判过一次（见 docs 报告 §5.3）。
           新增 `failure_kind` / `failure_msg` 两列，让失败可按类聚合。
         """
+        # ★ P1-5（2026-10-30）：本行的上下文窗口（利用率分母）。
+        #   取 provider 的 cfg（与 provider 层守卫读的是同一个值，不另算一份，
+        #   否则"记账里的窗口"与"实际截断用的窗口"会漂移）。
+        _cw = 0
+        _pname = "?"
+        try:
+            # ⚠️ `provider` 实参是**配置 dict 本身**（调用处 `provider.get("api_key")` 可证），
+            #   不是带 `.cfg` 的 provider 对象 —— 第一版按对象取，`getattr` 恒 None
+            #   ⇒ 每行 `context_window` 都写成 0（门禁 A2/A3 只判"列在 INSERT 里"，
+            #   抓不到"值恒为 0"这种**接线但取不到值**的形态；靠端到端实测才发现）。
+            #   两种形态都兼容：dict 直接取；对象回落 `.cfg`。
+            if isinstance(provider, dict):
+                _pcfg = provider
+            else:
+                _pcfg = getattr(provider, "cfg", None) or {}
+            _cw = int(_pcfg.get("context_window") or 0)
+            _pname = str(_pcfg.get("name") or _pcfg.get("model_name") or "?")
+        except Exception:
+            _cw = 0
         try:
             failure_kind = self.classify_failure(failure) if call_failed else ""
             failure_msg = ""
@@ -352,6 +374,29 @@ class LLMClient:
                     ct = max(len(str(_content)) // 2, 1) if _content else 0
                 except Exception:
                     ct = 0
+            # ★ P1-5（2026-10-30）：**上下文占用告警**（只留痕不拦截）。
+            #   为什么需要：既有 `context_window_guard` 只管"输出上限超窗口"（mt>cw），
+            #   对"输入把窗口吃掉"完全无信号 —— id=71 配 mt=112000/cw=128000，
+            #   输入余量只剩 ~15.5k，而生产 prompt 实测最大 27.5k，旧口径下一点动静都没有。
+            #   为什么只留痕：真到顶由 provider 报错（`finish_reason` / 400），
+            #   我们不该用估算值去**拦截**真实调用（估算与真实 tokenizer 必然有偏差）。
+            #   去重键 (窗口, 按 10% 分桶)：同一档位只报一次，避免长会话每轮刷屏。
+            try:
+                if _cw > 0 and pt > 0:
+                    _util = float(pt) / float(_cw)
+                    from core import config as _cfgcu
+                    _uw = float(_cfgcu.get("llm", "context_util_warn", 0.85) or 0)
+                    if _uw > 0 and _util >= _uw:
+                        _k = (int(_cw), int(_util * 10))
+                        if _k not in _CTX_UTIL_WARNED:
+                            _CTX_UTIL_WARNED.add(_k)
+                            _log.warning(
+                                "[context_util] 上下文占用 %.1f%%（prompt=%d / window=%d）"
+                                "｜intent=%s provider=%s｜阈值 llm.context_util_warn=%.2f"
+                                "｜只留痕不拦截：真到顶由 provider 报错",
+                                _util * 100, pt, _cw, intent, _pname, _uw)
+            except Exception:
+                pass
             est = 0.0
             if not used_mock:
                 _pi = LLMClient.PRICE_PER_1M["input"]
@@ -466,10 +511,12 @@ class LLMClient:
                         "finish_reason, reasoning_tokens, retry_count, fallback_used, fallback_provider_id, "
                         "estimated_cost, latency_ms, conversation_id, run_id, trace_id, sub_task_key, "
                         # ★ P0-3新增三列
-                        "call_failed, failure_kind, failure_msg, is_probe) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "call_failed, failure_kind, failure_msg, is_probe, "
+                        # ★ P1-5（2026-10-30）：分母（上下文利用率的唯一来源）
+                        "context_window) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         _vals + (_cid, _rid, _tid, _skey,
-                                 1 if call_failed else 0, failure_kind, failure_msg, _probe),
+                                 1 if call_failed else 0, failure_kind, failure_msg, _probe, _cw),
                     )
                 except Exception as _e2:
                     # 关联列迁移未跑到 → 降级写入原有 17 列（不丢用量数据，绝不因记账失败阻断调用）

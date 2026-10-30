@@ -185,6 +185,12 @@ def _migrate_columns(conn):
     except Exception as e:
         print(f"[init_db] 迁移: is_probe 索引创建失败：{e}")
 
+    # ── P1-5（2026-10-30）上下文利用率：**分母**必须落库 ─────────────────────
+    # 没有这一列时，"prompt_tokens=27529" 无法判断是"用了 21% 窗口"还是"用了 84%"。
+    # 存量行为 0（未知）—— 统计侧必须**只按有分母的行**算利用率，
+    # 绝不能把 0 当分母（除零）或当成"窗口为 0"（会导致利用率恒为无穷/1.0）。
+    _add("llm_usage_stats", "context_window", "INTEGER DEFAULT 0")
+
     # P1-27 截断诊断（思考模型 reasoning 与正文共享 max_tokens 配额）
     _add("llm_usage_stats", "finish_reason", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "reasoning_tokens", "INTEGER DEFAULT 0")

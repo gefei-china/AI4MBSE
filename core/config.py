@@ -1177,6 +1177,16 @@ DEFAULT_CONFIG = {
         "auto_resume_max_runs": 1,         # 单轮最多重投几个批次（防一次性打爆额度）
         "auto_resume_daily_budget": 5,     # 每日自动重投总次数上限（0=不限；按 UTC 日计数）
         "auto_resume_include_failed": False,  # 是否连带重跑 failed（默认否：可能有副作用）
+        # ★ 2026-10-30（P0-1）：`failed` 里"进程死亡"这一类（error_class=interrupted）
+        #   单独放行 —— 它的重跑等价于续跑，前提是写类工具幂等已开启
+        #   （`core/idempotency.py`，关掉则本开关自动失效、行为退回改动前）。
+        #   为什么与 auto_resume_include_failed 分开：后者会连带重跑**确定性失败**，
+        #   只烧钱不解决问题；而 interrupted 是本工程最大的失败源（failed 的 24%）。
+        "resume_interrupted": True,
+        # ★ 2026-10-30（P0-1）：自动重投的**年龄闸**。超龄批次不自动投（转人工），
+        #   避免"三天前的问题今天冒出一个答案"。0=不限。
+        #   注意它与"可续跑"是两件事：超龄批次仍可在界面上人工点「继续编排」。
+        "auto_resume_max_age_s": 259200,   # 3 天
         "checkpoint_enabled": True,      # 旁路开关：检查点写入失败永不阻断编排
     },
     # ── P0-C（2026-10-04）：异步作业队列（长任务提交即返回 job_id）──
@@ -2287,6 +2297,10 @@ CONFIG_SCHEMA = {
         "auto_resume_max_runs":       {"type": "int",  "desc": "单轮最多重投几个批次（成本闸之一，默认 1）"},
         "auto_resume_daily_budget":   {"type": "int",  "desc": "每日自动重投总次数上限（成本闸之二，0=不限；按 UTC 日计数）"},
         "auto_resume_include_failed": {"type": "bool", "desc": "守护是否重跑 failed 任务（成本闸之三，默认否：有副作用风险）"},
+        # ★ 2026-10-30（P0-1）：与上一行**刻意分开** —— 上一行会连带重跑确定性失败（只烧钱），
+        #   本行只放行"进程死亡"（error_class=interrupted）。关掉 = 行为退回改动前。
+        "resume_interrupted":         {"type": "bool", "desc": "放行 interrupted（进程死亡类）自动续跑；需写类工具幂等开启，关掉即退回改动前行为"},
+        "auto_resume_max_age_s":      {"type": "int",  "desc": "自动重投年龄闸：批次失活超过该秒数不再自动投（转人工），0=不限"},
         "checkpoint_enabled":         {"type": "bool", "desc": "检查点写入开关（失败永不阻断编排）"},
     },
     "replanning": {
