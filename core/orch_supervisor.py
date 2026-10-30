@@ -66,6 +66,15 @@ def _cfg_int(group, key, default):
         return int(default)
 
 
+def _conv_exists(conn, conv_id: int) -> bool:
+    """会话行是否还在（查不到表/异常时**返回 True**，即不因探测失败而阻断自愈）。"""
+    try:
+        row = conn.execute("SELECT 1 FROM conversations WHERE id=?", (int(conv_id),)).fetchone()
+        return row is not None
+    except Exception:
+        return True
+
+
 def _db_resumes_today(conn=None):
     """今日已发生的自动重投次数（读审计表）。
 
@@ -218,6 +227,26 @@ def _scan_conn(conn, res: dict, *, max_runs: int, stale_s: int | None,
             conv_id = int(ck.get("conversation_id") or 0)
             if not conv_id:
                 res["unrecoverable"].append({"run_id": rid, "why": "no_conversation"})
+                continue
+            # ★ P0-1（2026-10-30）：**会话必须仍存在**。
+            #   为什么这条是硬闸：记录里 6 个 interrupted 批次的 `conversation_id`
+            #   （9757/9760/9761/9762）在 `conversations` 表里**已经不存在**
+            #   （用户删了会话 = 明确放弃了这件事）。此时续跑只会把消息写进一个
+            #   悬空 conversation_id，产出一份**没有人会看到**的答复，还照花额度。
+            #   "能恢复"的前提是"还有人要"，不是"技术上可以"。
+            if not _conv_exists(conn, conv_id):
+                res["unrecoverable"].append({"run_id": rid, "why": "conversation_missing",
+                                             "conv_id": conv_id})
+                continue
+            # ★ 年龄闸：太老的批次不自动投（转人工），避免"三天前的问题今天冒出个答案"。
+            _max_age = _cfg_int("orchestration", "auto_resume_max_age_s", 259200)
+            try:
+                _age = float(it.get("age_s") or 0.0)
+            except Exception:
+                _age = 0.0
+            if _max_age > 0 and _age > float(_max_age):
+                res["unrecoverable"].append({"run_id": rid, "why": "too_old",
+                                             "age_s": round(_age, 1), "max_age_s": _max_age})
                 continue
 
             mode = dec.get("mode") or "tasks"

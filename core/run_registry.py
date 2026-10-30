@@ -76,6 +76,19 @@ def orphan_summary(conn, ttl_s: int | None = None) -> dict:
             "ttl_s": _ttl() if ttl_s is None else int(ttl_s)}
 
 
+def _ckpt_stale(conn, run_id: int, ttl_s: float) -> bool:
+    """该批次的心跳是否也超过 TTL（SQL 内算，避免 Python/UTC 混算，见模块文件头）。"""
+    try:
+        row = conn.execute(
+            "SELECT (julianday('now') - julianday(updated_at)) * 86400.0 FROM orch_checkpoints "
+            "WHERE run_id=?", (int(run_id),)).fetchone()
+        if row is None or row[0] is None:
+            return False          # 无 checkpoint：无从标记（任务层仍已回收）
+        return float(row[0]) >= float(ttl_s)
+    except Exception:
+        return False              # 表不存在 / 老库：不标（行为回到改动前）
+
+
 def reap_orphans(conn, ttl_s: int | None = None, dry_run: bool = False, audit=True) -> dict:
     """把孤儿任务**显式失败化**，保住上下文供重跑。
 
@@ -125,6 +138,24 @@ def reap_orphans(conn, ttl_s: int | None = None, dry_run: bool = False, audit=Tr
         conn.commit()
         out["reaped"] = len(rows)
         out["error_class"] = _ek
+        # ── P0-1（2026-10-30）：把批次本身标成 `interrupted` ────────────────────
+        # 为什么必须做（否则本轮的"可续跑"能力等于不存在）：
+        #   `resumable()` 与 `prepare_resume()` 的**第一道判据都是 checkpoint.phase**
+        #   （`phase NOT IN ('done','failed')`）。只标任务、不标 checkpoint 的话，
+        #   崩溃批次停在 `executing`/`planned`，而它一旦被任何一次收尾/对账写成
+        #   `failed`，就**永久失去自愈资格** —— 实测 4 个批次正是这么丢的。
+        #   `PHASE_INTERRUPTED` 与 `mark_interrupted()` 早就存在，但全仓零调用点。
+        # ⚠️ 只对"checkpoint 也超时未动"的批次动手：若进程其实还活着（心跳在走），
+        #   改 phase 会误导后续 resume 的 `is_alive` 判定之外的运维判断。
+        # ⚠️ 标记失败不阻断回收（与 error_class 同一旁路原则）。
+        try:
+            from agent.orch_checkpoint import mark_interrupted as _mi
+            _runs = sorted({int(r["run_id"]) for r in rows if int(r["run_id"] or 0) > 0})
+            _stale = [rid for rid in _runs if _ckpt_stale(conn, rid, ttl)]
+            if _stale:
+                out["checkpoints_interrupted"] = _mi(conn, _stale)
+        except Exception as _e:      # noqa: BLE001
+            out["phase_mark_error"] = "%s: %s" % (type(_e).__name__, str(_e)[:120])
     except Exception as e:      # noqa: BLE001
         # 回收失败不得阻断启动 —— 但必须留痕，否则"孤儿永远收不掉"会变成又一个静默失败
         try:

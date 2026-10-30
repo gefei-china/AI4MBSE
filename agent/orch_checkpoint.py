@@ -54,6 +54,49 @@ REQUEUE_STATUSES = ("planned", "ready", "blocked", "canceled")
 DEFAULT_STALE_S = 1800      # 30 分钟无心跳即判定失活（编排单任务实测上限 1155 s，取 1.5 倍余量）
 _MAX_ATTEMPTS = 5           # resume 次数上限：超过即不再自愈（防"恢复→再崩→再恢复"死循环）
 
+# ── 可续跑的失败类别（P0-1，2026-10-30）──────────────────────────────────
+# ★ 这条常量解决的是本工程**最大的失败源**：
+#   真库实测 failed 84 条里 `error_class='interrupted'` 占 20 条（24%），
+#   而近 4 天近乎 100% —— 它们的成因是**宿主没了**（进程重启 / 执行线程丢失），
+#   不是"任务做错了"。旧口径用 `include_failed=False` 把它们一刀切 skip ⇒
+#   **结构上永远等不到自愈**，成功率被钉死在 70% 量级。
+#
+# ★ 为什么"重跑 interrupted"与"重跑失败任务"是两件事（不该共用 include_failed）：
+#   · `include_failed=True` 的顾虑是"副作用可能已写了一半 ⇒ 重跑产生重复实体"；
+#   · 而 interrupted 的重跑语义**等价于续跑**（同一个 run、同一个 task_key），
+#     只要写类工具幂等开启，重复写会被**重放**而不是再执行一次
+#     （`core/idempotency.py`，键 = run|task|args|ordinal，重试时序号对齐）。
+#   ⇒ 于是"能不能重跑"的判据从"状态是否为 failed"细化为"**这个 failed 是不是进程死亡**"。
+#
+# ⚠️ 白名单而非黑名单：只有明确知道"重跑安全"的类才放行。
+#   timeout（逻辑停滞）/ internal / 未知 一律仍按 include_failed 处理 ——
+#   它们可能是任务本身的确定性缺陷，重跑只会再烧一次额度。
+SAFE_REQUEUE_CLASSES = ("interrupted",)
+
+
+def safe_requeue_classes() -> tuple:
+    """当前可"自动续跑"的失败类别（受两道开关约束，缺一即返回空）。
+
+    守卫①：`orchestration.resume_interrupted`（默认 True）——运维可一键回到旧行为。
+    守卫②：**写类工具幂等必须开着**。幂等关了还重跑 interrupted，
+           就是把"重复写"的风险重新引进来；此时宁可继续 skip（等人点"继续编排"）。
+
+    返回空元组 ⇒ 调用方行为与改动前**逐字节一致**（零回归路径）。
+    """
+    try:
+        from core import config as _c
+        if not bool(_c.get("orchestration", "resume_interrupted", True)):
+            return ()
+    except Exception:
+        pass
+    try:
+        from core import idempotency as _idem
+        if not _idem.enabled():
+            return ()
+    except Exception:
+        return ()            # 判不了 ⇒ 保守不放行
+    return tuple(SAFE_REQUEUE_CLASSES)
+
 
 # ── 写入 ────────────────────────────────────────────────────────────────────
 def save(conn, run_id: int, *, conversation_id: int = 0, phase: str = PHASE_PLANNED,
@@ -124,13 +167,22 @@ def finish(conn, run_id: int, phase: str) -> None:
 
 
 def mark_interrupted(conn, run_ids) -> int:
-    """批次挂钩：把被孤儿回收判定失效的 run 标记 `interrupted`（供 UI 与 resume 判定）。"""
+    """批次挂钩：把被孤儿回收判定失效的 run 标记 `interrupted`（供 UI 与 resume 判定）。
+
+    ⚠️ **刻意不刷新 `updated_at`**（2026-10-30，门禁 C4~C7 抓出来的真 bug）：
+       `is_alive()` 的判据是"心跳是否还在 stale 窗口内"，而本函数的语义是
+       "这个批次**已经没有进展了**"。第一版写成 `updated_at=CURRENT_TIMESTAMP`，
+       等于**用'标记失活'这个动作刷新了失活判据本身** ⇒ 标记完立刻 `still_alive`，
+       批次永远既不可续跑、又不算死 —— 比不标更糟（僵尸从"看不见"变成"看得见但动不了"）。
+       语义上 `updated_at` 是**进展**时间戳，宣布失败不是进展。
+    ⚠️ 只改非终态批次：已 done/failed 的批次不该被"回收"改写阶段（防覆盖真实结论）。
+    """
     ids = [int(x) for x in (run_ids or []) if int(x or 0) > 0]
     if not ids:
         return 0
     try:
-        q = ("UPDATE orch_checkpoints SET phase=?, updated_at=CURRENT_TIMESTAMP "
-             "WHERE run_id IN (%s)" % ",".join("?" * len(ids)))
+        q = ("UPDATE orch_checkpoints SET phase=? "
+             "WHERE run_id IN (%s) AND phase NOT IN ('done','failed')" % ",".join("?" * len(ids)))
         conn.execute(q, tuple([PHASE_INTERRUPTED]) + tuple(ids))
         conn.commit()
         return len(ids)
@@ -197,7 +249,14 @@ def is_alive(conn, run_id: int, stale_s: int | None = None) -> bool:
     ck = load(conn, run_id)
     if not ck:
         return False
-    if (ck.get("phase") or "") in TERMINAL_PHASES:
+    _ph = ck.get("phase") or ""
+    if _ph in TERMINAL_PHASES:
+        return False
+    # ★ 2026-10-30：`interrupted` 的定义就是"没有活着的宿主"——
+    #   不该再走到心跳比较（那条判据依赖 `updated_at`，而标记失活本身不应改动它）。
+    #   两处判据都留着是刻意的：即便日后有人又给 `mark_interrupted` 加了 `updated_at`，
+    #   这里也不会再出现"宣布死亡却仍判活着"的自相矛盾。
+    if _ph == PHASE_INTERRUPTED:
         return False
     s = stale_seconds(conn, run_id)
     if s < 0:
@@ -207,11 +266,17 @@ def is_alive(conn, run_id: int, stale_s: int | None = None) -> bool:
 
 # ── resume 策略（纯函数，便于脚本抽取验证）─────────────────────────────────
 def policy_classify(status: str, *, run_has_owner: bool = False,
-                    include_failed: bool = False) -> str:
+                    include_failed: bool = False, error_class: str = "",
+                    requeue_classes=()) -> str:
     """单个任务状态 → 处置：`reuse` | `requeue` | `skip` | `owned`。
 
     run_has_owner=True 表示这个 run 还有活进程在跑 —— 此时 running 任务绝不能被接管
     （否则两个进程同时执行同一任务，写类工具会产生重复实体）。
+
+    `error_class` + `requeue_classes`（P0-1，2026-10-30）：把 `failed` 再拆一层 ——
+    `error_class ∈ requeue_classes` 的是**进程死亡**类失败（宿主没了，不是任务做错了），
+    它的重跑等价于续跑，不该被 `include_failed=False` 一刀切挡掉。
+    详见 `safe_requeue_classes()` 的注释（含为什么这条与幂等键是配套的）。
     """
     st = (status or "").strip()
     if st == "done":
@@ -219,22 +284,29 @@ def policy_classify(status: str, *, run_has_owner: bool = False,
     if st == "running":
         return "owned" if run_has_owner else "requeue"
     if st == "failed":
-        return "requeue" if include_failed else "skip"
+        if include_failed:
+            return "requeue"
+        # ★ 进程死亡类失败：放行（白名单 + 幂等双守卫，见模块常量注释）
+        if str(error_class or "").strip() in tuple(requeue_classes or ()):
+            return "requeue"
+        return "skip"
     if st in REQUEUE_STATUSES:
         return "requeue"
     return "skip"
 
 
 def pick_requeue_ids(tasks: list, *, run_has_owner: bool = False,
-                     include_failed: bool = False) -> tuple:
+                     include_failed: bool = False, requeue_classes=()) -> tuple:
     """任务行列表 → (待重排队 id 列表, 复用 id 列表, 跳过 id 列表)。
 
-    `tasks`: [{id, task_key, status, ...}]
+    `tasks`: [{id, task_key, status, error_class, ...}]
     """
     requeue, reuse, skip = [], [], []
     for t in tasks or []:
         verdict = policy_classify(t.get("status") or "", run_has_owner=run_has_owner,
-                                 include_failed=include_failed)
+                                 include_failed=include_failed,
+                                 error_class=str(t.get("error_class") or ""),
+                                 requeue_classes=requeue_classes)
         tid = t.get("id")
         if verdict == "requeue":
             requeue.append(tid)
@@ -246,7 +318,8 @@ def pick_requeue_ids(tasks: list, *, run_has_owner: bool = False,
 
 
 def prepare_resume(conn, run_id: int, *, include_failed: bool = False,
-                   stale_s: int | None = None, max_attempts: int = _MAX_ATTEMPTS) -> dict:
+                   stale_s: int | None = None, max_attempts: int = _MAX_ATTEMPTS,
+                   requeue_classes=None) -> dict:
     """为一次 resume 做全部前置判定，**返回决策而不落任何写操作**（便于测试与灰度）。
 
     :returns: {"ok": bool, "reason": str, "mode": "tasks"|"summary"|"", "checkpoint": dict|None,
@@ -275,8 +348,11 @@ def prepare_resume(conn, run_id: int, *, include_failed: bool = False,
                 "attempt": attempt, "stale_s": stale_seconds(conn, run_id)}
     try:
         rows = [dict(r) for r in conn.execute(
+            # ⚠️ `error_class` 必须一起取 —— 缺它的话 `policy_classify` 永远拿不到
+            #   失败类别，于是"只重跑进程死亡类"这条判据**在结构上无法生效**
+            #   （P0-1 之前正是这个形态：分类器造好了，但这条 SQL 不给它数据）。
             "SELECT id, task_key, status, deps, context, expected_output, agent_id, title, "
-            "task_type, config, seq FROM agent_tasks WHERE run_id=? ORDER BY seq, id",
+            "task_type, config, seq, error_class FROM agent_tasks WHERE run_id=? ORDER BY seq, id",
             (int(run_id),)).fetchall()]
     except Exception:
         rows = []
@@ -284,7 +360,9 @@ def prepare_resume(conn, run_id: int, *, include_failed: bool = False,
         return {"ok": False, "reason": "no_tasks", "mode": "", "checkpoint": ck,
                 "requeue_ids": [], "reuse_ids": [], "skip": [],
                 "attempt": attempt, "stale_s": stale_seconds(conn, run_id)}
-    rq, re_, sk = pick_requeue_ids(rows, run_has_owner=False, include_failed=include_failed)
+    _rqc = safe_requeue_classes() if requeue_classes is None else tuple(requeue_classes or ())
+    rq, re_, sk = pick_requeue_ids(rows, run_has_owner=False, include_failed=include_failed,
+                                   requeue_classes=_rqc)
     if not rq:
         # C-1：没有待重跑任务时，先问一句"是不是只是汇总崩了"——
         # 是则放行（mode=summary）；否则维持拒绝（真的没什么可做）。
@@ -372,9 +450,19 @@ def apply_resume(conn, decision: dict) -> int:
     if not ids:
         return 0
     try:
-        q = ("UPDATE agent_tasks SET status='ready', error='', updated_at=CURRENT_TIMESTAMP "
-             "WHERE id IN (%s)" % ",".join("?" * len(ids)))
-        conn.execute(q, tuple(int(i) for i in ids))
+        # ★ 2026-10-30：**同时清 error_class**。
+        #   不清的话，被重排队的任务仍带着上一轮的 `interrupted` 标签 ——
+        #   若它这一轮又因别的原因失败（且新的 error_class 没写入），
+        #   下一轮会拿**旧的类别**再投一次，归因与决策一起失真。
+        #   老库无该列时退回旧语句（不阻断 resume）。
+        try:
+            q = ("UPDATE agent_tasks SET status='ready', error='', error_class='', "
+                 "updated_at=CURRENT_TIMESTAMP WHERE id IN (%s)" % ",".join("?" * len(ids)))
+            conn.execute(q, tuple(int(i) for i in ids))
+        except Exception:
+            q = ("UPDATE agent_tasks SET status='ready', error='', updated_at=CURRENT_TIMESTAMP "
+                 "WHERE id IN (%s)" % ",".join("?" * len(ids)))
+            conn.execute(q, tuple(int(i) for i in ids))
         conn.commit()
         return len(ids)
     except Exception:
@@ -382,8 +470,15 @@ def apply_resume(conn, decision: dict) -> int:
 
 
 def resumable(conn, conversation_id: int = 0, limit: int = 10,
-              stale_s: int | None = None) -> list:
-    """列出"可恢复"的 run：非终态 phase + 心跳已超时 + 仍有非终态任务 + 未超 resume 上限。"""
+              stale_s: int | None = None, requeue_classes=None) -> list:
+    """列出"可恢复"的 run：非终态 phase + 心跳已超时 + 仍有待办任务 + 未超 resume 上限。
+
+    ⚠️ "待办任务"含**两类**（P0-1，2026-10-30）：
+      ① 非终态（planned/ready/running/blocked）—— 崩在半路；
+      ② `status='failed'` 但 `error_class` 属可续跑类 —— 崩在宿主侧（进程重启）。
+    只数①的话，②这类批次 `pending=0` ⇒ 被当成"没得恢复"直接跳过 ⇒
+    `prepare_resume` 里那条新判据**永远没有机会被调用**（能力在、入口没接）。
+    """
     try:
         q = ("SELECT run_id, conversation_id, phase, attempt_count, user_input, updated_at, "
              "(julianday('now') - julianday(updated_at)) * 86400.0 AS age_s "
@@ -416,6 +511,16 @@ def resumable(conn, conversation_id: int = 0, limit: int = 10,
                 (rid,)).fetchone()[0]
         except Exception:
             pending = 0
+        # ★ ② 可续跑的 failed（进程死亡类）：必须计入 pending，否则这类批次被"没得恢复"挡死。
+        _rqc = safe_requeue_classes() if requeue_classes is None else tuple(requeue_classes or ())
+        if _rqc:
+            try:
+                _marks = ",".join("?" * len(_rqc))
+                pending += int(conn.execute(
+                    "SELECT COUNT(*) FROM agent_tasks WHERE run_id=? AND status='failed' "
+                    "AND error_class IN (%s)" % _marks, (rid,) + tuple(_rqc)).fetchone()[0] or 0)
+            except Exception:
+                pass          # 老库无 error_class 列：当作没有（行为回到改动前）
         if not pending:
             # C-1：pending=0 不代表"没得恢复"—— 崩在汇总阶段时子任务全 done，
             # 但 assistant 消息尚未落库，这正是一个**可省掉整轮任务 LLM 费用**的恢复机会。
