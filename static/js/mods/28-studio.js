@@ -91,6 +91,14 @@ async function loadSkillDrafts(box, sum){
   }).join('');
 }
 
+// ★ 2026-10-30：卡片标题必须用 display_name（人类可读名），不能用 name（机器 slug）。
+//   实证：`智源MCP工具手册` 的 plugins.name 是 `mcp`（中文 ASCII 化只剩它）⇒
+//   页面上一张叫「mcp」的卡片，用户等于看不到这个技能；`智源平台管理` 更惨，是 `skill-95`。
+//   后端 plugin_dto 已补 display_name（源自 manifest.label.zh_CN），这里优先取它。
+function _skDispName(it){
+  const d = (it && it.display_name) || '';
+  return d || (it && it.name) || '';
+}
 async function loadSkillCombined(){
   const box = document.getElementById('sk-cards');
   if(!box) return;
@@ -126,14 +134,14 @@ async function loadSkillCombined(){
     if(!items.length){ box.innerHTML = '<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:12px;">暂无匹配的技能（调整筛选条件），或点击「＋ 添加技能」创建/上传</div>'; return; }
     box.innerHTML = items.map(it=>{
       if(it.view==='market-add'){
-        return `<div class="panel"><div class="ph">${esc(it.name)} <span class="st b">Skill</span></div>
+        return `<div class="panel"><div class="ph">${esc(_skDispName(it))} <span class="st b">Skill</span></div>
         <div class="pb">
           <div style="font-size:11.5px;color:var(--mut);min-height:34px;max-height:60px;overflow:hidden;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
           <div style="margin-top:8px;"><button class="btn sm" onclick="marketInstall('skill','${esc(String(it.name).replace(/'/g,"\\'"))}',this)">＋ 添加</button></div>
         </div></div>`;
       }
       if(it.view==='builtin'){
-        return `<div class="panel"><div class="ph">${esc(it.name)} <span class="st b">平台内置</span></div>
+        return `<div class="panel"><div class="ph">${esc(_skDispName(it))} <span class="st b">平台内置</span></div>
         <div class="pb">
           <div style="font-size:11.5px;color:var(--mut);min-height:34px;max-height:60px;overflow:hidden;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
           <div style="margin-top:8px;"><span style="font-size:10.5px;color:var(--mut);">平台预置技能，直接可用</span></div>
@@ -160,7 +168,7 @@ async function loadSkillCombined(){
         <button class="btn sm ghost" title="复制为副本" onclick="copySkill(${it.id})">📑 复制</button>
         <button class="btn sm ${it.enabled===0?'ok':'ghost amb'}" onclick="toggleMCPStatus(${it.id},${it.enabled===0?1:0})">${it.enabled===0?'启用':'停用'}</button>
         <button class="btn sm red" onclick="deleteMCP(${it.id})">删除</button>`;
-      return `<div class="panel"><div class="ph"> ${esc(it.name)} ${tag} <span style="flex:1"></span>${st}</div>
+      return `<div class="panel"><div class="ph"> ${esc(_skDispName(it))} ${tag} <span style="flex:1"></span>${st}</div>
       <div class="pb">
         <div style="font-size:11.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
         <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${ops}${share}</div>
@@ -224,14 +232,14 @@ async function loadMCPCombined(){
     if(!items.length){ box.innerHTML = '<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:12px;">暂无匹配的工具（调整筛选条件），或点击「＋ 创建工具」创建</div>'; return; }
     box.innerHTML = items.map(it=>{
       if(it.view==='market-add'){
-        return `<div class="panel"><div class="ph"> ${esc(it.name)} <span class="st" style="background:#e8f5e9;color:#2e7d32;">来自市场</span></div>
+        return `<div class="panel"><div class="ph"> ${esc(_skDispName(it))} <span class="st" style="background:#e8f5e9;color:#2e7d32;">来自市场</span></div>
         <div class="pb">
           <div style="font-size:11.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
           <div style="margin-top:8px;"><button class="btn sm" onclick="marketInstall('mcp','${esc(String(it.name).replace(/'/g,"\\'"))}',this)">＋ 添加</button></div>
         </div></div>`;
       }
       if(it.view==='builtin'){
-        return `<div class="panel"><div class="ph">${esc(it.name)} <span class="st b">内置</span></div>
+        return `<div class="panel"><div class="ph">${esc(_skDispName(it))} <span class="st b">内置</span></div>
         <div class="pb">
           <div style="font-size:11.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
           <div style="margin-top:8px;"><span style="font-size:10.5px;color:var(--mut);">平台预置，直接可用</span></div>
@@ -281,7 +289,7 @@ async function loadMCPCombined(){
         <button class="btn sm ghost" title="复制为副本" onclick="copyMCP(${it.id})">📑 复制</button>
         <button class="btn sm ${it.enabled===0?'ok':'ghost amb'}" onclick="toggleMCPStatus(${it.id},${it.enabled===0?1:0})">${it.enabled===0?'启用':'停用'}</button>
         <button class="btn sm red" onclick="deleteMCP(${it.id})">删除</button>`;
-      return `<div class="panel"><div class="ph"> ${esc(it.name)} ${tag} <span style="flex:1"></span>${st}</div>
+      return `<div class="panel"><div class="ph"> ${esc(_skDispName(it))} ${tag} <span style="flex:1"></span>${st}</div>
       <div class="pb">
         <div style="font-size:11.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
         ${_srvUse}

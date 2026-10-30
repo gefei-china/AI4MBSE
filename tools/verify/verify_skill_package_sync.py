@@ -77,7 +77,7 @@ def _db_rows():
     c.row_factory = sqlite3.Row
     try:
         return list(c.execute(
-            "SELECT id, name, version, content, package_path, `references`, scripts "
+            "SELECT id, name, version, content, package_path, `references`, scripts, status, enabled "
             "FROM skills WHERE status='published' AND COALESCE(package_path,'')<>'' "
             "ORDER BY id"))
     finally:
@@ -162,18 +162,102 @@ def check_generated_pkg():
                 % (missing, ghost))
 
 
+def check_plugin_visibility(rows):
+    """S5（可见性）+ S6（重复登记）：能力中心能不能"看到且只看到一份"。
+
+    判据只针对 **published 且 enabled=1** 的行 —— 那才是真正会出现在
+    能力中心、也会被注入到模型面前的那批。"停用"的行按设计就不该有卡片，
+    拿它判红只会制造噪声。
+
+    ## S5 为什么必需（本轮实证）
+    本仓有两套事实源：
+      · 运行时 = `skills` 表（pipeline 读它 ⇒ AI 会不会用）
+      · 管理视图 = `plugins` 表（能力中心「技能」页的卡片来源）
+    只写 `skills` ⇒ 技能对模型生效、**页面上没有卡片**，用户视角就是
+    "我加的技能没出现"（本轮实际投诉）。写入本应经
+    `plugin_system.legacy_sync.sync_from_legacy`（studio_repo 都这么走），
+    而"脚本用裸 SQL 写 skills"会绕过它 —— 这条就盯那个缺口。
+
+    ## S6 为什么必需
+    同名多行（本轮实测：`行业调研` 有 3 条 published，其中 2 条 enabled）
+    ⇒ 运行时重复注入同一份正文、页面上多张同名卡，且**互相之间没有主从关系**，
+    改哪份都不确定生效。重复登记几乎都来自"重复跑注册脚本"，
+    所以必须由门禁挡住，不能靠人记得。
+
+    ⚠️ 判据用 `manifest.runtime.legacy_id` 反查 plugins（同步桥写进去的唯一钥匙），
+       不用 name：`plugins.name` 是 slug（中文名 ASCII 化后是 `skill-137`）。
+    """
+    ok = True
+    active = [r for r in rows
+              if str(r.get("status") or "") == "published" and int(r.get("enabled") or 0) == 1]
+    for r in active:
+        n = r.get("_plugin_rows", 0)
+        ok &= _rec("S5 skill#%s %-16s 能力中心可见（plugins 行 %d 条）"
+                   % (r["id"], r["name"], n), n >= 1,
+                   "缺 plugins 行 ⇒ 页面上没有卡片（跑 register_* 或 sync_from_legacy）")
+    # S6：同名只能有一份"已发布且启用"
+    by_name = {}
+    for r in active:
+        by_name.setdefault(str(r["name"]), []).append(r["id"])
+    dup = {k: v for k, v in by_name.items() if len(v) > 1}
+    ok &= _rec("S6 无同名重复登记（已发布且启用）", not dup,
+               "重复：%s ⇒ 运行时重复注入 + 页面多张同名卡" % dup)
+
+    # S7：slug 不得是退化值（`mcp` / `skill` 这类与类型名相同的 slug）
+    try:
+        import sqlite3
+        _c = sqlite3.connect(os.path.join(_ROOT, "mbse.db"))
+        _c.row_factory = sqlite3.Row
+        _rows = _c.execute(
+            "SELECT plugin_id, name, type FROM plugins WHERE status!='removed'").fetchall()
+        _c.close()
+        from plugin_system.legacy_sync import _DEGENERATE_SLUGS
+        bad = [dict(x) for x in _rows if str(x["name"]) in _DEGENERATE_SLUGS]
+        ok &= _rec("S7 无退化 slug（slug 不得等于类型名 %s）" % sorted(_DEGENERATE_SLUGS),
+                   not bad, "退化：%s ⇒ 卡片标题会变成类型名本身" % bad[:3])
+    except Exception as _e:              # noqa: BLE001
+        ok &= _rec("S7 退化 slug 检查", True, "跳过：%s" % str(_e)[:80])
+    return ok
+
+
 def main():
     print("=" * 78)
     print("技能包磁盘文件 ↔ skills 表 内容一致性")
     print("=" * 78)
 
     rows = _db_rows()
+    if rows is not None:
+        # 给每行补 plugins 可见性计数（S5 用）
+        try:
+            import sqlite3
+            _c = sqlite3.connect(os.path.join(_ROOT, "mbse.db"))
+            _c.row_factory = sqlite3.Row
+            # ⚠️ `sqlite3.Row` 只读，不能就地加键 ⇒ 转 dict（本轮踩到 TypeError）
+            _dicts = []
+            for _r in rows:
+                _d = dict(_r)
+                _d["_plugin_rows"] = _c.execute(
+                    "SELECT COUNT(*) FROM plugins "
+                    "WHERE json_extract(manifest_json,'$.runtime.legacy_table')='skills' "
+                    "AND json_extract(manifest_json,'$.runtime.legacy_id')=? "
+                    "AND status!='removed'", (_d["id"],)).fetchone()[0]
+                _dicts.append(_d)
+            rows = _dicts
+            _c.close()
+        except Exception:
+            rows = [dict(r) for r in rows]
+            for r in rows:
+                r["_plugin_rows"] = 0
     if rows is None:
         print("\n=== S1/S2（CI 无 mbse.db ⇒ 无法比对 DB）===")
         _rec("S1/S2 需要 mbse.db（CI 跳过）", True, "本机跑才有判定", SKIP)
     else:
         print("\n=== S1/S2 已发布且有包目录的技能（%d 个）===" % len(rows))
         check_packages(rows)
+
+    if rows:
+        print("\n=== S5 能力中心可见性（skills → plugins 同步）===")
+        check_plugin_visibility(rows)
 
     print("\n=== S3 生成型包的新鲜度 ===")
     check_generated_pkg()

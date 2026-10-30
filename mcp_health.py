@@ -107,26 +107,51 @@ def _make_client(srv: dict):
     )
 
 
+#: 探测失败后的**重试次数与间隔**（★ 2026-10-30）
+#: 为什么必须有：`AgentRepo.bound_tools_for()` 对 mcp 要求 `status=='online'`，
+#: 一次瞬时 502 会把整台 server 标成 offline ⇒ **所有绑定它的 Agent 立刻失去全部 MCP 工具**
+#: （用户看到的正是"工具不全"），而且要等下一轮巡检（默认 300s）才恢复。
+#: 实测：上游直连 3/3 次均 200（0.44–0.57s），而库里留着一条 12:30 的 502 ⇒
+#: 一整个 5 分钟窗口里工具是空的。巡检周期是给"稳定故障"用的，
+#: 不该让**一次抖动**触发 5 分钟的能力缺失 ⇒ 判死前先原地重试。
+_PROBE_RETRIES = 2
+_PROBE_RETRY_WAIT_S = 1.2
+
+
 def check_server(srv: dict, repo=None):
-    """轻量健康探测：initialize 握手 → 更新状态/延迟/last_error。返回 (ok, detail)。"""
+    """轻量健康探测：initialize 握手 → 更新状态/延迟/last_error。返回 (ok, detail)。
+
+    ★ 2026-10-30：失败不再"一次定生死" —— 先原地重试 `_PROBE_RETRIES` 次
+      （间隔 `_PROBE_RETRY_WAIT_S`），全部失败才写 offline。
+      理由见 `_PROBE_RETRIES` 注释：offline 的代价是"该 server 的所有工具对所有
+      Agent 立刻不可见"，远大于多花 2 秒探测。`detail["attempts"]` 记录实际次数，
+      便于事后区分"真挂了"与"抖了一下"。
+    """
     import time as _t
-    t0 = _t.time()
     transport = _norm_transport(srv.get("transport"))
     sid = srv["id"]
     if transport in ("sse", "http"):
-        try:
-            client = _make_client(srv)
-            client.initialize(force=True)
-            latency = int((_t.time() - t0) * 1000)
-            if repo is not None:
-                repo.update_mcp_status(sid, "online", latency)
-            return True, {"status": "online", "latency_ms": latency,
-                          "protocol": client.protocol_version}
-        except Exception as e:
-            latency = int((_t.time() - t0) * 1000)
-            if repo is not None:
-                repo.update_mcp_error(sid, f"{type(e).__name__}: {str(e)[:150]}")
-            return False, {"status": "offline", "latency_ms": latency, "error": str(e)[:200]}
+        t0 = _t.time()
+        last_err = None
+        for _i in range(_PROBE_RETRIES + 1):
+            try:
+                client = _make_client(srv)
+                client.initialize(force=True)
+                latency = int((_t.time() - t0) * 1000)
+                if repo is not None:
+                    repo.update_mcp_status(sid, "online", latency)
+                return True, {"status": "online", "latency_ms": latency,
+                              "protocol": client.protocol_version,
+                              "attempts": _i + 1}
+            except Exception as e:          # noqa: BLE001
+                last_err = e
+                if _i < _PROBE_RETRIES:
+                    _t.sleep(_PROBE_RETRY_WAIT_S)
+        latency = int((_t.time() - t0) * 1000)
+        if repo is not None:
+            repo.update_mcp_error(sid, f"{type(last_err).__name__}: {str(last_err)[:150]}")
+        return False, {"status": "offline", "latency_ms": latency,
+                       "error": str(last_err)[:200], "attempts": _PROBE_RETRIES + 1}
     return False, {"status": "unknown", "note": f"transport {transport} 仅校验命令不自动拉起"}
 
 

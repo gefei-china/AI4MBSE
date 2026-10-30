@@ -193,22 +193,30 @@ class StudioRepo(BaseRepo):
         # 否则"状态 online 却挂着一条 403 旧账"，排查时先被错误信息带偏
         # （与 update_mcp_discovery 的清零行为对齐，两路写入口径一致）。
         _clear_err = ", last_error=CASE WHEN ?='online' THEN '' ELSE last_error END"
-        _params = (status, status)
+        # ★★ 2026-10-30：**参数必须按 SQL 占位符顺序排**（本轮实测抓到）。
+        #   SQL 顺序是 `status=?, latency_ms=?, [tools=?,] last_error=CASE WHEN ?=... , ... id=?`
+        #   而原实现按 `(status, status) + (latency, ...)` 拼 —— 第二个 `status` 绑到了
+        #   `latency_ms`、`latency_ms` 绑到了 `CASE WHEN ?='online'`
+        #   ⇒ 两个后果同时发生，且都**不报错**：
+        #     ① `latency_ms` 列被写成一个等于状态字符串的值（数值列存文本）；
+        #     ② 清零判据变成 `CASE WHEN <延迟数字>='online'` ⇒ 恒 false
+        #        ⇒ `last_error` **永不清理**。
+        #   实测证据：巡检恢复 online 后，`status='online'` 却仍挂着
+        #   `HTTPStatusError: 502 Bad Gateway` ⇒ 排查时被旧账带偏（正是上面注释
+        #   声称要避免的那件事，但参数顺序错了 3 年没人发现）。
         if tools is not None:
-            _params = _params + (latency_ms, tools, sid)
             self.execute(
                 """UPDATE mcp_servers SET status=?, latency_ms=?, tools=?,"""
                 + _clear_err +
                 """, last_check=CURRENT_TIMESTAMP WHERE id=?""",
-                _params,
+                (status, latency_ms, tools, status, sid),
             )
         else:
-            _params = _params + (latency_ms, sid)
             self.execute(
                 """UPDATE mcp_servers SET status=?, latency_ms=?"""
                 + _clear_err +
                 """, last_check=CURRENT_TIMESTAMP WHERE id=?""",
-                _params,
+                (status, latency_ms, status, sid),
             )
 
     def delete_mcp_server(self, sid: int) -> None:

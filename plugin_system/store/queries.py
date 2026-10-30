@@ -63,6 +63,18 @@ def plugin_dto(row, user=None):
         d["manifest"] = {}
     d.pop("manifest_json", None)
     d["status_label"] = STATUS_LABELS.get(d.get("status"), d.get("status"))
+    # ★ 2026-10-30：**展示名单独给出**，前端卡片标题用它而不是 `name`。
+    #   为什么必须有：`plugins.name` 是**机器 slug**（`^[a-z][a-z0-9-]{0,63}$`），
+    #   中文能力名 ASCII 化后只剩残渣（`智源MCP工具手册` → `mcp`，
+    #   `智源平台管理` → 空 → 兜底 `skill-95`）。而能力中心卡片标题取的正是 `name`
+    #   ⇒ 用户在页面上看到一张叫「mcp」的卡片，等同于"这个技能不存在"（本轮实际投诉）。
+    #   人类可读名一直在 `manifest.label.zh_CN` 里（`build_manifest` 就写在那里），
+    #   只是**列表 DTO 没往外暴露**；`_plugin_to_market_dto` 早就这么做了（市场侧对），
+    #   「我安装的/自定义」侧漏了 ⇒ 同一份数据两套呈现。
+    #   ⚠️ 不改 `name` 本身：安装/卸载/分享等接口按 name 查库，改名会打断既有引用。
+    _mf = d.get("manifest") or {}
+    _lbl = _mf.get("label") or {}
+    d["display_name"] = (_lbl.get("zh_CN") or "").strip() or d.get("name")
     d["installed"] = False
     d["enabled"] = None
     if user and user.get("id"):

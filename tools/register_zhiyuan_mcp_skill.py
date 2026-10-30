@@ -176,6 +176,23 @@ def main():
                 #    第一版直接把 payload 传进去 ⇒ "uses 12, supplied 11"（实测）。
                 (name,) + payload)
             print("\n已创建：%s" % name)
+        # ★★ 2026-10-30（本轮踩到）：**必须过 legacy_sync 同步桥**，否则能力中心看不到。
+        #   本仓有两套事实源（见 plugin_system/legacy_sync.py 模块 docstring）：
+        #     运行时 = `skills` 表（pipeline 读它，决定 AI 会不会用）
+        #     管理视图 = `plugins` 表（能力中心「技能」页的卡片来源）
+        #   只写 `skills` ⇒ 技能对模型生效、但**页面上没有卡片**；
+        #   用户视角就是"我加的技能没出现"（本轮实际投诉）。
+        #   既有写入路径（studio_repo）都走 `_sync_row` → `sync_from_legacy_safe`，
+        #   本脚本用裸 SQL 绕过了它 —— 这是"看起来写成功了、实际管理视图缺一条"的根源。
+        row2 = conn.execute("SELECT id FROM skills WHERE name=? ORDER BY id LIMIT 1",
+                            (name,)).fetchone()
+        if row2:
+            try:
+                from plugin_system import legacy_sync
+                _ok, _msg = legacy_sync.sync_from_legacy_safe(conn, "skills", row2["id"])
+                print("\n已同步能力中心（plugins）：%s" % (_msg or _ok))
+            except Exception as _e:      # noqa: BLE001
+                print("\n[warn] 同步 plugins 失败（能力中心可能看不到）：%r" % (_e,))
         conn.commit()
 
         r2 = conn.execute("SELECT id,name,version,status,enabled,builtin,"
