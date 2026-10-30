@@ -575,7 +575,7 @@ class ExecuteMixin:
             # 2026-10-04：接入统一护栏（与编排路径同源，见 agent/loop_guard.py）。
             # 原先这条路径只有轮次上限/token 上限/重复检测/工具超时，
             # 而编排路径有前三者 —— 同一套 ReAct 语义的两处实现护栏不对称。
-            from agent.loop_guard import LoopGuard
+            from agent.loop_guard import LoopGuard, is_correctable_failure
             # P0-①/P0-②（2026-10-07）协议护栏，与 stream.py **同源**。
             from agent import loop_protocol as _lproto
             _guard = LoopGuard(
@@ -720,7 +720,12 @@ class ExecuteMixin:
                         if result.get("ok") and not _weak:
                             # ★ 真实拿到可用结果 ⇒ 本轮是**成功推进**，不扣失败预算
                             _round_had_ok = True
-                        elif _guard.is_correctable_failure(result):
+                        # ⚠️ 必须调**模块级纯函数** `is_correctable_failure(result)`。
+                        #   2026-10-30 真机（conv 9779/18:11）实证：原写法 `_guard.is_correctable_failure(...)`
+                        #   把纯函数当 LoopGuard 的实例方法调 ⇒ AttributeError 直接掀翻整轮
+                        #   （用户侧表现"本轮未产出正文内容 / 任务终止"），且**只在有工具失败时触发**
+                        #   ——这正是它要救的那个分支，结果救兵自己先炸。
+                        elif is_correctable_failure(result):
                             # ★ 2026-10-28（与 stream.py 同源）：参数类错误（INVALID_ARGUMENTS /
                             #   args_truncated / recovery.action=CORRECT_ARGUMENTS）是**可自修正**的
                             #   信息性结果，不该扣失败轮 —— 否则"再改一次参数就会对"的场景

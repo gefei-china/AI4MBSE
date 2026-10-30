@@ -453,6 +453,18 @@ class LoopGuard:
             return False
         return True
 
+    # ── 兼容垫片（2026-10-30）──────────────────────────────────────────────
+    # 为什么类上要留一个同名静态方法：`is_correctable_failure` 是**模块级纯函数**，
+    # 但 2026-10-28 引入时两个调用点写成了 `_guard.is_correctable_failure(result)`
+    # （execute.py / stream.py）⇒ 只在"有工具调用失败"时抛
+    #   AttributeError: 'LoopGuard' object has no attribute 'is_correctable_failure'
+    # 整轮被掀翻、用户侧看到"本轮未产出正文内容 / 任务终止"。
+    # 讽刺之处：它恰好是**为那个分支**写的救兵，救兵自己先炸。
+    # 两处调用点已改为直调模块函数；这里再补一个静态同名方法作为**兜底**，
+    # 让任何遗漏/第三方写法退化为"正常返回布尔值"，而不是把整轮打成异常。
+    # ⚠️ 它是 staticmethod（无 self）—— 判据只有一份，禁止在此复制逻辑。
+    is_correctable_failure = staticmethod(is_correctable_failure)
+
     # ── 超时 ──
     def call(self, exec_fn, name: str, args, *, weak: bool = False):
         """带超时执行一次工具，并**统一记账**（耗时/结果文本/去重计数/超时数）。

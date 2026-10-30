@@ -16,6 +16,10 @@ G4 超时结果必须**如实说"超时"而非"已取消"** —— Python 无法
 G5 预算必须按**累计**判定，且 token 取 `_meta.token_count`（含 mock 估算兜底）——
     直接读 `usage.prompt_tokens` 会在降级路径上恒为 0，预算闸完全失效。
 G6 两处 loop 必须**同源引用同一个模块**（防"补了 A 忘了 B"再次出现不对称）。
+G7 判据函数的**调用形态**必须是模块函数直调（AST 级）—— 2026-10-30 真机事故：
+    `_guard.is_correctable_failure(...)` 把纯函数当实例方法调，只在"有工具失败"时抛
+    AttributeError 掀翻整轮（用户侧「本轮未产出正文内容 / 任务终止」）。
+    G6a/G6f 那种"文件里出现过 import / 模块里 def 过该名字"的文本检查**抓不到**它。
 """
 import os
 import sys
@@ -221,6 +225,131 @@ def t_g6():
 
 
 # ══════════════════════════════════════════════════════════════════
+# G7 判据 API 的**调用形态**（2026-10-30 真机事故）
+# ══════════════════════════════════════════════════════════════════
+# 事故：`is_correctable_failure` 是**模块级纯函数**，但两个调用点写成
+#   `_guard.is_correctable_failure(result)` / `_lg.is_correctable_failure(result)`
+# ⇒ 只在"有工具调用失败"时抛
+#   AttributeError: 'LoopGuard' object has no attribute 'is_correctable_failure'
+# ⇒ 整轮被掀翻，用户看到「本轮未产出正文内容 / 任务终止」（conv 9779、9780，2026-10-30 三次）。
+# 为什么 G6/G6f 放过了它：G6a 只查"文件里出现过 from agent.loop_guard import"，
+# G6f 只查"模块里 def 了这些名字" —— **都不断言"怎么调用"**。
+# 所以 G7 必须是 AST 级的：属性访问形式本身判红，不看函数是否存在。
+_GUARD_CALLSITES = ("agent/pipeline_parts/execute.py", "agent/pipeline_parts/stream.py")
+_DIRECT_NAMES = {"is_correctable_failure", "_is_correctable_failure"}
+
+
+def _guard_api_audit(srcs):
+    """审计"判据函数被怎么调用"。返回问题清单（空 = 通过）。
+
+    srcs: {相对路径: 源码文本} —— 抽成纯函数是为了让变异自证能喂**变异的源码**进来。
+    """
+    import ast
+    probs = []
+    for path, text in srcs.items():
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as e:
+            probs.append("%s 语法错误：%s" % (path, e))
+            continue
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+                    and n.func.attr == "is_correctable_failure":
+                probs.append("%s:%d 以**属性访问**调用判据（`x.is_correctable_failure(...)`）"
+                             "—— 它只有模块级实现，会抛 AttributeError 掀翻整轮"
+                             % (path, getattr(n, "lineno", 0)))
+    for path in _GUARD_CALLSITES:
+        if path not in srcs:
+            probs.append("缺少必检文件 %s" % path)
+            continue
+        tree = ast.parse(srcs[path])
+        direct = {n.func.id for n in ast.walk(tree)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        if not (_DIRECT_NAMES & direct):
+            probs.append("%s 没有**直调**模块函数 is_correctable_failure"
+                         "（判据接线缺失或改回属性访问）" % path)
+        # 直调还得**在作用域里绑得上**：删了 import 就变成 NameError（同样掀翻整轮，
+        # 只是异常类型不同）。故按"所在函数"逐个核对名字是否在该作用域绑定过。
+        probs.extend(_check_bound(tree, path))
+    return probs
+
+
+def _check_bound(tree, path):
+    """直调点所在函数作用域内，名字必须已绑定（import / 赋值）。"""
+    import ast
+    parent = {}
+    for n in ast.walk(tree):
+        for ch in ast.iter_child_nodes(n):
+            parent[ch] = n
+
+    def _scope_of(node):
+        cur = node
+        while cur is not None:
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return cur
+            cur = parent.get(cur)
+        return None
+
+    probs = []
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id in _DIRECT_NAMES):
+            continue
+        scope = _scope_of(n)
+        if scope is None:
+            continue
+        bound = set()
+        for m in ast.walk(scope):
+            if isinstance(m, ast.ImportFrom):
+                bound |= {(a.asname or a.name) for a in m.names}
+            elif isinstance(m, ast.Import):
+                bound |= {(a.asname or a.name.split(".")[0]) for a in m.names}
+            elif isinstance(m, (ast.Assign, ast.AnnAssign)):
+                tgts = m.targets if isinstance(m, ast.Assign) else [m.target]
+                for t in tgts:
+                    for x in ast.walk(t):
+                        if isinstance(x, ast.Name):
+                            bound.add(x.id)
+        if n.func.id not in bound:
+            probs.append("%s:%d 直调 `%s` 但所在函数未 import/赋值该名字 ⇒ 运行期 NameError"
+                         % (path, getattr(n, "lineno", 0), n.func.id))
+    return probs
+
+
+def t_g7():
+    print("\n=== G7 判据函数的调用形态（防『纯函数当方法调』掀翻整轮）===")
+    from agent.loop_guard import LoopGuard, is_correctable_failure
+
+    # 真实现场回执（tool_call_logs id=6077）
+    real = {"ok": False, "error": "input_invalid",
+            "result": '{"code":"INVALID_ARGUMENTS","message":"参数不符合工具定义","retryable":false}'}
+    g = _fresh()
+    ok = _rec("G7a 实例可调且与模块函数**同一实现**（不是复制逻辑）",
+              LoopGuard.is_correctable_failure is is_correctable_failure)
+    ok &= _rec("G7b 现场回执（INVALID_ARGUMENTS）判 True", g.is_correctable_failure(real) is True)
+    ok &= _rec("G7c 反例（网络错误）判 False（防恒 True 空转）",
+               g.is_correctable_failure({"ok": False, "result": "网络错误",
+                                         "error": "network"}) is False)
+
+    srcs = {}
+    for p in _GUARD_CALLSITES:
+        srcs[p] = open(os.path.join(ROOT, p), encoding="utf-8").read()
+    probs = _guard_api_audit(srcs)
+    ok &= _rec("G7d 调用点均为**模块函数直调**（AST 级，不是文本包含）",
+               not probs, "; ".join(probs)[:300])
+    # G7e：变异"删掉 import"也必须被抓（NameError 与 AttributeError 同样掀翻整轮）
+    ex = srcs[_GUARD_CALLSITES[0]]
+    noimp = ex.replace(
+        "from agent.loop_guard import LoopGuard, is_correctable_failure",
+        "from agent.loop_guard import LoopGuard", 1)
+    caught = bool(noimp != ex) and any(
+        "NameError" in p for p in _guard_api_audit({_GUARD_CALLSITES[0]: noimp,
+                                                    _GUARD_CALLSITES[1]: srcs[_GUARD_CALLSITES[1]]}))
+    ok &= _rec("G7e 漏 import 会被判红（防 NameError 变体）", caught)
+    return ok
+
+
+# ══════════════════════════════════════════════════════════════════
 # 变异自证
 # ══════════════════════════════════════════════════════════════════
 def _load_lg(mutate=None):
@@ -285,20 +414,46 @@ def m_m4():
 
 
 def m_m5():
-    """M5：token 只读 usage.prompt_tokens（降级路径恒 0）⇒ G5 必须判红。"""
-    print("\n=== 变异 M5：token 改读 usage.prompt_tokens ===")
-    ns = _load_lg(('        return int(meta.get("token_count") or 0)',
-                   '        return 0'))
+    """M5：预算记账读到 0 ⇒ G5 必须判红。
+
+    ⚠️ 2026-10-30 修：原锚点 `return int(meta.get("token_count") or 0)` 在
+       2026-10-28「tokens_of 改计费等效口径」后**已不在 `tokens_of` 里**
+       （它现在只剩在 `tokens_total_of`，供排障展示）⇒ 变异打在别的函数上，
+       `tokens_of` 纹丝不动，M5 变成**空转变异**（HEAD 上实测 41 断言 1 FAIL）。
+       现锚定 `tokens_of` 的唯一实现行 `return charged_tokens(resp)`，
+       把"预算入口恒 0"这个失效形态真正注入。
+    """
+    print("\n=== 变异 M5：预算记账恒 0 ===")
+    ns = _load_lg(("    return charged_tokens(resp)", "    return 0"))
     caught = ns["tokens_of"]({"_meta": {"token_count": 999}}) == 0
     return _rec("M5 复现（预算闸读到 0 ⇒ 完全失效）⇒ 证明 G5a 非空转", caught)
+
+
+def m_m6():
+    """M6：把 execute.py 改回属性访问形式 ⇒ G7 必须判红（证明 AST 断言非空转）。"""
+    print("\n=== 变异 M6：判据改回 `_guard.is_correctable_failure(...)` ===")
+    ex = open(os.path.join(ROOT, _GUARD_CALLSITES[0]), encoding="utf-8").read()
+    anchor = "elif is_correctable_failure(result):"
+    assert anchor in ex, "变异锚点未命中：%r" % anchor
+    mutated = ex.replace(anchor, "elif _guard.is_correctable_failure(result):", 1)
+    srcs = {_GUARD_CALLSITES[0]: mutated,
+            _GUARD_CALLSITES[1]: open(os.path.join(ROOT, _GUARD_CALLSITES[1]),
+                                      encoding="utf-8").read()}
+    probs = _guard_api_audit(srcs)
+    caught = any("属性访问" in p for p in probs)
+    # 反证：文本包含式检查（G6a/G6f 的口径）**抓不到**这个变异 ——
+    #   这正是当初放行的地方，写下来是为了防止有人把 AST 检查退回成 grep。
+    blind = "from agent.loop_guard import" in mutated
+    return _rec("M6 复现（属性访问被 AST 抓红，而文本包含式检查全绿）⇒ 证明 G7d 非空转",
+                caught and blind, "probs=%d text_check_pass=%s" % (len(probs), blind))
 
 
 def main():
     print("=" * 76)
     print("Agent loop 护栏（token 预算 / 重复调用短路 / 工具超时）—— 不变式 + 变异自证")
     print("=" * 76)
-    t_g1(); t_g2(); t_g3(); t_g4(); t_g5(); t_g6()
-    m_m1(); m_m2(); m_m3(); m_m4(); m_m5()
+    t_g1(); t_g2(); t_g3(); t_g4(); t_g5(); t_g6(); t_g7()
+    m_m1(); m_m2(); m_m3(); m_m4(); m_m5(); m_m6()
     bad = [r for r in _results if r[0] != PASS]
     print("\n" + "=" * 76)
     print("断言总数 %d  PASS %d  FAIL/VACUOUS %d"
@@ -308,7 +463,8 @@ def main():
             print("  [%s] %s  %s" % (k, n, d))
         print("\n结论：有断言未通过 / 至少一组变异未被复现（空转）")
         return 1
-    print("结论：全部通过，且 5 组变异均被复现（断言非空转）")
+    n_mut = 6
+    print("结论：全部通过，且 %d 组变异均被复现（断言非空转）" % n_mut)
     return 0
 
 

@@ -4905,7 +4905,8 @@ class StreamMixin:
             # 2026-10-04：接入统一护栏（与 execute.py 的非流式 loop **同源**）。
             # 为什么必须同源：这两段是同一套 ReAct 语义的两种实现，此前只有编排路径
             # 有 token 预算，重复检测与工具超时两边都没有 ⇒ 补一边就会留下新的不对称。
-            from agent.loop_guard import LoopGuard as _LoopGuard
+            from agent.loop_guard import (LoopGuard as _LoopGuard,
+                                          is_correctable_failure as _is_correctable_failure)
             # P0-①/P0-②（2026-10-07）协议护栏：并行 tool_calls 配对 + 截断参数拒绝。
             # 与 execute.py **同源**（同一模块）—— 两条路径是同一套 ReAct 语义的两种实现，
             # 协议层缺陷漏一条路径就是线上 HTTP 400（同 loop_guard 立规时的判断）。
@@ -5394,7 +5395,10 @@ class StreamMixin:
                                               or ("未检索到" in _r_full)
                                               or ("无新冲突" in _r_full)):
                                 _round_had_ok = True
-                            elif _lg.is_correctable_failure(result):
+                            # ⚠️ 模块级纯函数，**不是** `_lg` 的方法（2026-10-30 真机修复）。
+                            #   原写法 `_lg.is_correctable_failure(...)` ⇒ AttributeError
+                            #   掀翻整轮（conv 9779/18:11，恰好发生在它要救的参数错误分支上）。
+                            elif _is_correctable_failure(result):
                                 # 可修正的参数错误：本轮不算失败（给模型改参数的机会）
                                 _round_had_ok = True
                                 _fix_hint = (
