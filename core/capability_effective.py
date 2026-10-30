@@ -242,6 +242,178 @@ def entry_kinds(entry: dict) -> list:
     return kinds
 
 
+# ══ plugin 类能力的用量解析（2026-10-29）══════════════════════════════════════
+#
+# 为什么必须单独解析（实测缺陷，本轮修复）：
+#   `capability_registry` 里 `kind='plugin'` 有 127 行，其 `display_name` 是**插件名**
+#   （`agent-735` / `file-ops` / `e2e-checker`），而 `tool_call_logs` 记的是**工具名**
+#   （`query_projects` / `file_read`）。两者永不相等 ⇒ 旧实现里这些行
+#   `entries=[]`、`calls=0` ⇒ verdict 恒为 `unused`。
+#   实测后果：**126/127 个插件被标"未使用"**，其中包含 `agent-735`
+#   （「智源对接agent」，`orch_stream_events` 里 1491 条事件、最常执行的执行主体）。
+#   而唯一被判 `in_use` 的是 `validate` —— 只因为某个插件恰好叫这个名字，
+#   被 `usage_by_name` 撞上了。**这正是本模块 docstring 警告的"治理视图与事实相反"。**
+#
+# 正确口径：插件是**管理面的投影**，用量要落到它的运行时行上，按类型分别取：
+#   tool → tool_call_logs（按工具名）
+#   skill → skills.use_stats.uses
+#   agent → orch_stream_events / messages.card_data.exec.agent（按 name 与 display_name）
+#   mcp → 该 server 全部工具在 tool_call_logs 的合计
+#   prompt → **没有用量事实源**（无 prompt 调用日志）⇒ 标 unknown，不谎报 unused
+_NO_USAGE_SOURCE_TYPES = ("prompt",)
+
+
+def collect_plugin_usage(conn) -> dict:
+    """返回 `{capability_id: {"calls","fails","last_at","no_source","runtime_type"}}`。
+
+    `capability_id` 形如 `plugin:<plugin_id>`。取不到的行（映射缺失）返回 `no_source=True`。
+    """
+    out: dict = {}
+    try:
+        rows = conn.execute(
+            "SELECT plugin_id, name, type, status, manifest_json FROM plugins").fetchall()
+    except Exception:
+        return out
+    if not rows:
+        return out
+
+    # 运行时用量索引（一次扫完，避免 per-plugin 查询）
+    tool_use: dict = {}
+    try:
+        for r in conn.execute(
+                "SELECT tool_name, COUNT(*) n, SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END) f, "
+                "MAX(created_at) last FROM tool_call_logs "
+                "WHERE 1=1" + _PROBE + " GROUP BY tool_name").fetchall():
+            nm = r["tool_name"] if hasattr(r, "keys") else r[0]
+            tool_use[str(nm or "")] = (int(r["n"] if hasattr(r, "keys") else r[1] or 0),
+                                      int((r["f"] if hasattr(r, "keys") else r[2]) or 0),
+                                      (r["last"] if hasattr(r, "keys") else r[3]) or "")
+    except Exception:
+        tool_use = {}
+
+    skill_use: dict = {}
+    try:
+        for r in conn.execute("SELECT name, use_stats FROM skills").fetchall():
+            nm = r["name"] if hasattr(r, "keys") else r[0]
+            js = r["use_stats"] if hasattr(r, "keys") else r[1]
+            if isinstance(js, str):
+                try:
+                    js = json.loads(js)
+                except Exception:
+                    js = {}
+            if isinstance(js, dict):
+                skill_use[str(nm or "")] = (int(js.get("uses") or 0), 0,
+                                            js.get("last_used") or "")
+    except Exception:
+        skill_use = {}
+
+    agent_use: dict = {}
+    try:
+        for r in conn.execute("SELECT payload_json FROM orch_stream_events "
+                              "WHERE payload_json LIKE '%\"agent\"%'").fetchall():
+            raw = r["payload_json"] if hasattr(r, "keys") else r[0]
+            try:
+                a = json.loads(raw or "{}").get("agent")
+            except Exception:
+                a = None
+            if a:
+                agg = agent_use.setdefault(str(a), [0, 0, ""])
+                agg[0] += 1
+        for r in conn.execute("SELECT card_data FROM messages "
+                              "WHERE card_data LIKE '%\"agent\"%'").fetchall():
+            raw = r["card_data"] if hasattr(r, "keys") else r[0]
+            try:
+                a = ((json.loads(raw or "{}").get("exec") or {})).get("agent")
+            except Exception:
+                a = None
+            if a:
+                agg = agent_use.setdefault(str(a), [0, 0, ""])
+                agg[0] += 1
+    except Exception:
+        agent_use = {}
+
+    # agents / mcp_servers 的 id→名、名→工具
+    agent_names: dict = {}
+    try:
+        for r in conn.execute("SELECT id, name, display_name FROM agents").fetchall():
+            agent_names[int(r["id"])] = (r["name"] or "", r["display_name"] or "")
+    except Exception:
+        pass
+    server_tools: dict = {}
+    try:
+        from core.capability_registry import extract_mcp_tool_names
+        for r in conn.execute("SELECT name, tools, capabilities, server_info, tool_meta "
+                              "FROM mcp_servers").fetchall():
+            server_tools[r["name"]] = extract_mcp_tool_names(
+                r["capabilities"], r["server_info"], r["tool_meta"]) or _json_list(r["tools"])
+    except Exception:
+        pass
+
+    for r in rows:
+        pid = r["plugin_id"] if hasattr(r, "keys") else r[0]
+        ptype = (r["type"] if hasattr(r, "keys") else r[2]) or ""
+        man = r["manifest_json"] if hasattr(r, "keys") else r[4]
+        cid = "plugin:%s" % pid
+        calls = fails = 0
+        last = ""
+        no_source = False
+        runtime_type = ptype
+        if ptype in _NO_USAGE_SOURCE_TYPES:
+            no_source = True
+        else:
+            try:
+                m = json.loads(man or "{}") or {}
+            except Exception:
+                m = {}
+            rt = m.get("runtime") or {}
+            tbl, lid = rt.get("legacy_table") or "", rt.get("legacy_id")
+            if ptype == "tool" and tbl == "tools" and lid is not None:
+                try:
+                    lr = conn.execute("SELECT name FROM tools WHERE id=?", (lid,)).fetchone()
+                except Exception:
+                    lr = None
+                if lr is None:
+                    no_source = True
+                else:
+                    calls, fails, last = tool_use.get(str(lr["name"]), (0, 0, ""))
+            elif ptype == "skill" and tbl == "skills" and lid is not None:
+                try:
+                    lr = conn.execute("SELECT name FROM skills WHERE id=?", (lid,)).fetchone()
+                except Exception:
+                    lr = None
+                if lr is None:
+                    no_source = True
+                else:
+                    calls, fails, last = skill_use.get(str(lr["name"]), (0, 0, ""))
+            elif ptype == "agent" and tbl == "agents" and lid is not None:
+                nm, dp = agent_names.get(int(lid), ("", ""))
+                if not nm and not dp:
+                    no_source = True
+                else:
+                    _n = agent_use.get(nm, [0, 0, ""])[0] + (
+                        agent_use.get(dp, [0, 0, ""])[0] if dp and dp != nm else 0)
+                    calls = int(_n)
+            elif ptype == "mcp" and tbl == "mcp_servers" and lid is not None:
+                try:
+                    lr = conn.execute("SELECT name FROM mcp_servers WHERE id=?", (lid,)).fetchone()
+                except Exception:
+                    lr = None
+                if lr is None:
+                    no_source = True
+                else:
+                    for t in (server_tools.get(str(lr["name"])) or []):
+                        n, f, lt = tool_use.get(str(t), (0, 0, ""))
+                        calls += n
+                        fails += f
+                        if lt > last:
+                            last = lt
+            else:
+                no_source = True
+        out[cid] = {"calls": calls, "fails": fails, "last_at": last,
+                    "no_source": no_source, "runtime_type": runtime_type}
+    return out
+
+
 def build_ledger(conn, days: int = 30) -> dict:
     """把「声明集」×「调用集」拼成一张账本 —— 端点的唯一实现。
 
@@ -297,6 +469,9 @@ def build_ledger(conn, days: int = 30) -> dict:
         usage_error = "%s: %s" % (type(e).__name__, str(e)[:160])
 
     # ── 注册表行（统一账本的"名前"那一半）────────────────────────────────
+    # ★ 2026-10-29：plugin 类单独取用量（见 collect_plugin_usage 的注释——
+    #   按插件名查 tool_call_logs 必然为 0，会造成 126/127 全部"未使用"的假象）。
+    plugin_usage = collect_plugin_usage(conn)
     rows = []
     reg_names = set()
     try:
@@ -320,6 +495,38 @@ def build_ledger(conn, days: int = 30) -> dict:
         else:
             entry = declared["tools"].get(name) or _empty_entry()
         kinds = entry_kinds(entry)
+        # ★ 2026-10-29：plugin 类走专用用量解析（插件名 ≠ 工具名，按名字查必然 0）
+        _pl = plugin_usage.get(cid) if kind == "plugin" else None
+        if _pl is not None:
+            calls = int(_pl["calls"])
+            fails = int(_pl["fails"])
+            last_at = _pl["last_at"]
+            src = "plugin_runtime"
+            _no_src = bool(_pl["no_source"])
+            # 插件是管理面投影，`entries` 对它无意义（它本身就是"被登记"这件事）⇒
+            # 用运行时可用性表达：有运行时行即算"有落点"。
+            if _no_src:
+                verdict = "unknown"          # 没有用量事实源（如 prompt），不谎报未使用
+            elif calls:
+                verdict = "in_use"
+            else:
+                verdict = "unused"
+            rows.append({
+                "capability_id": cid, "kind": kind, "display_name": name,
+                "source_table": d.get("source_table") or "", "source_id": d.get("source_id") or "",
+                "status": d.get("status") or "", "lifecycle": d.get("lifecycle") or "",
+                "risk_level": d.get("risk_level") or "", "version": d.get("version") or "",
+                "bound_agents": [], "bound_count": 0,
+                "agent_builtin": [], "skill_allowed": [], "unconditional": False,
+                "entries": [],
+                "entry_labels": [],
+                "call_count": calls, "fail_count": fails, "last_used_at": last_at,
+                "usage_source": src if calls else "",
+                "plugin_runtime_type": _pl["runtime_type"],
+                "no_usage_source": _no_src,
+                "verdict": verdict,
+            })
+            continue
         use = usage_by_cid.get(cid)
         if use is None and kind == "mcp_server":
             # MCP server 的调用记在工具级（mcp:{server}:{tool}）⇒ 按前缀汇总。

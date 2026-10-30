@@ -31,21 +31,41 @@ EXACT_KEYS = frozenset({
     "triple_only_writer",         # vector2graph.py 三元组唯一写入源
     "memory.project_memory_enabled",  # agent/pipeline_parts/memory.py 项目记忆注入开关
     "memory.project_memory_chars",    # agent/pipeline_parts/memory.py 项目记忆注入预算
-    # ── P0-2（2026-10-26）：上下文注入精度旋钮（消费点 = agent/pipeline_parts/context.py
-    #    检索注入多样性 / agent/pipeline_parts/memory.py 记忆单一真源 / tools.py JIT 回退）──
-    # 这些是**本轮修复项的行为开关**：置回旧行为即可一键回滚，无需改代码。
-    "context_audit.enabled",                 # agent/context_audit.py 分块归因总开关
-    "context_audit.retrieval_per_doc_max",   # context.py 同一 source_doc 最多占几个槽
-    "context_audit.retrieval_merge_neighbor",  # context.py 同文档近邻 chunk 是否合并
-    "context_audit.memory_single_source",    # memory.py 是否以 rag.memory_hits 为唯一真源
-    "context_audit.memory_max_chars",        # 记忆注入正文截断字符数
-    "context_audit.jit_fallback_top_n",      # tools.py JIT 空回退时的 top-N（0=退回全量）
-    "context_audit.mcp_meta_enabled",         # tools.py 是否用 MCP 真实描述+参数契约（tool_meta）
-    "context_audit.mcp_min_keep",             # tools.py 每个 MCP server 至少暴露的工具数
-    "context_audit.mcp_top_n",                # tools.py 每个 MCP server 暴露总量上限（0=不限）
-    "context_audit.role_manual_filter",       # prompt.py role 块内工具手册段按需裁剪（默认关）
-    "context_audit.mcp_exempt_skill_whitelist",  # tools.py MCP 绑定工具豁免技能白名单（默认开）
 })
+
+# ★★ 2026-10-29 除名：11 个 `context_audit.*` —— 它们**不属于 settings 表这条链**。
+#
+# 实测（本轮，可复现）：
+#   ① `PUT /api/system/config/runtime {"context_audit.mcp_min_keep": 77}` → `ok=True`
+#      （白名单放行、写入 settings 表成功）
+#   ② 但 `config.get("context_audit","mcp_min_keep",8)` 读到的仍是 **8**
+#   ③ 同一键经 `PUT /api/system/config/static`（写配置文件）→ 读到 99 ✓
+#
+# 根因：`context_audit.*` 的消费点是 `config.get("context_audit", ...)`（读配置文件 / DEFAULT_CONFIG），
+#   而**全仓不存在 settings 表 → config 的合并**（`runtime_settings()` 只把行读出来给页面看，
+#   不回填 `_CONFIG`）⇒ 写 settings 表对这些键**必然无效**。
+#
+# 上一版把它们登记进本白名单，是"有消费点"与"经 settings 表可达"两个判据被混为一谈：
+#   前者为真，后者为假。结果与本模块要防的病一模一样 —— **界面/接口能改、改了不生效**，
+#   而且比原来的更隐蔽（写接口返回成功）。
+#
+# 正确入口：这些键走 `/api/system/config/static`（写 `~/.workbuddy/mbse_config.json`，即时 reload），
+#   设置页「参数设置」(`static/js/mods/35-ctxconfig.js`) 用的正是这条，所以**界面侧一直是有效的**；
+#   本次只关掉那条会静默失败的旁路。
+# 门禁：`tools/verify/verify_settings_data_audit.py --strict` 的白名单腐烂检查现在应为通过。
+_REMOVED_TO_CONFIG_FILE = (
+    "context_audit.enabled",
+    "context_audit.retrieval_per_doc_max",
+    "context_audit.retrieval_merge_neighbor",
+    "context_audit.memory_single_source",
+    "context_audit.memory_max_chars",
+    "context_audit.jit_fallback_top_n",
+    "context_audit.mcp_meta_enabled",
+    "context_audit.mcp_min_keep",
+    "context_audit.mcp_top_n",
+    "context_audit.role_manual_filter",
+    "context_audit.mcp_exempt_skill_whitelist",
+)
 
 # 前缀键：staging_fuse 融合闸配置（staging_fuse.py get/set_fuse_config，
 # 读取形态 LIKE 'staging_fuse.%'；静态扫描不到变量拼接，故整前缀放行）

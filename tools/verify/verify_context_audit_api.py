@@ -18,7 +18,21 @@ import tempfile
 
 ROOT = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system"
 sys.path.insert(0, ROOT)
-PROD = os.path.join(ROOT, "backups", "t-prod-20261026-122709.db")
+# ⚠️ 2026-10-30 修：此前**硬编码**一份备份快照（`backups/t-prod-20261026-122709.db`），
+#   而 `backups/` 是会被清理的目录 ⇒ 该文件一旦不在，本门禁**永远红**
+#   （实测报 `FileNotFoundError: [WinError 2]`，且报错点与业务无关）。
+#   ⇒ 改为"有快照用快照，没有就用真库"：两者都是**副本**（`shutil.copy2` 到临时目录后
+#   重定向 `MBSE_DB_PATH`），所以"不写真库"这条前提不变。
+#   门禁的价值在于**判据**，不该被一份可选快照的存在性绑架。
+_CANDIDATES = [
+    os.path.join(ROOT, "backups", "t-prod-20261026-122709.db"),
+    os.path.join(ROOT, "mbse.db"),
+]
+PROD = next((p for p in _CANDIDATES if os.path.exists(p)), "")
+if not PROD:
+    print("[SKIP] 找不到可用的数据库副本（backups/ 与 mbse.db 均不存在）")
+    sys.exit(0)
+print("[db] 使用副本源：%s" % PROD)
 T = os.path.join(tempfile.gettempdir(), "step10_audit.db")
 for p in (T, T + "-wal", T + "-shm"):
     if os.path.exists(p):

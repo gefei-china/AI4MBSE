@@ -27,6 +27,10 @@ var CAPR_VERDICT = {
   declared_unused: { label: '已声明未用', color: '#8a6d3b', bg: '#fdf6e3' },
   runtime_only: { label: '无声明入口', color: '#b26a00', bg: '#fff4e5' },
   unused: { label: '未使用', color: '#6b7280', bg: '#f1f2f4' },
+  // ★ 2026-10-29：插件（kind=plugin）里 prompt 类**没有用量事实源**。
+  //   此前它们与"真没人用"同显「未使用」⇒ 用户会把还在用的 prompt 当垃圾清掉。
+  //   现在单列一档，标签即结论：不知道就是不知道。
+  unknown: { label: '无可判据', color: '#5b6b7c', bg: '#eef1f5' },
 };
 
 function caprEsc(v) {
@@ -68,11 +72,14 @@ function caprMatrixHtml(m) {
       <div style="font-size:19px;font-weight:600;color:${tone};margin:2px 0 3px;">${caprNum(n)}</div>
       <div style="font-size:10.5px;color:var(--mut);line-height:1.5;">${caprEsc(desc)}</div>
     </div>`;
+  const _unk = Number(m.unknown || 0);
   return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;">
     ${cell('有声明入口 · 有调用', m.in_use, '#2e7d32', '正常在用')}
     ${cell('有声明入口 · 无调用', m.declared_unused, '#8a6d3b', '冗余绑定，可清理')}
     ${cell('无声明入口 · 有调用', m.runtime_only, '#b26a00', '运行时旁路，需公示')}
-    ${cell('无声明入口 · 无调用', m.unused, '#6b7280', '未使用')}
+    ${cell('无声明入口 · 无调用', m.unused, '#6b7280', _unk
+        ? ('未使用；另有 ' + _unk + ' 项无可判据')
+        : '未使用')}
   </div>`;
 }
 
