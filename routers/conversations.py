@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from core.deps import db_session, current_user
 from core.config import STATIC_DIR
+from core import runtime_state as _runtime_state   # 2026-10-30：关闭/并发闸/墙钟
 from database import db_conn   # B2-11：事件落库用**独立连接**（请求级 conn 在流式循环里会抢写锁）
 from repositories.conversation_repo import ConversationRepo, conv_visible_to
 from repositories.studio_repo import StudioRepo
@@ -357,7 +358,7 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
     _tracer.begin_conversation()
     _conv_meta = {}   # done 帧里回填 intent/route（闭 span 时写入 meta）
 
-    async def event_stream():
+    async def _event_stream_inner(deadline_ts=0.0):
         # P1-2：首帧声明重连间隔（SSE 协议字段），并立刻产一帧心跳，
         # 让 nginx/网关在本轮第一个 LLM 请求发出前就看到"连接活跃"。
         yield "retry: 3000\n\n"
@@ -392,6 +393,98 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         _fail_reason = ""
         _last_event = ""
         _sent_any = False
+        # ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」，真库 conv 9754/9755 实证）：
+        #   **转发层必须自己攒一份正文**，用于收口兜底固化。
+        #   为什么不能只靠 agent 侧的 `_persist_partial_stream`：
+        #     · conv 9754：8 轮工具 probe 后内部异常，**没有正文**（token 全带 key，
+        #       属子任务实时输出）⇒ agent 侧 `候选字符=0` 静默跳过 ⇒ 库里 0 条；
+        #     · conv 9755：客户端断开时 `async for _frames` **正常结束**（不是 GeneratorExit）
+        #       ⇒ agent 侧的 except 分支一个都没命中（日志零记录）⇒ 固化从未执行。
+        #   而这里（finally）**一定执行** —— span 已能记 error 就是证据。
+        #   故：转发层逐帧攒一份"用户真的看到过的正文"，收口时若无终态又无 assistant 消息，
+        #   就用它兜底落库。含子任务 key 的 token 也计入 —— 那正是用户在屏幕上看到的内容。
+        _acc_text = []          # 本轮所有 token 的 delta（含子任务）
+        _acc_len = [0]          # 已累积长度（增量计数，避免每帧 sum() 的 O(n²)）
+        _acc_cap = 200000       # 上限（防异常流吃内存；约 200KB 远超单条消息实际长度）
+        # ★ 2026-10-29：**执行过程也要攒**，否则兜底落的消息只有一句"未产出正文"，
+        #   用户刷新后仍然看不到"这轮到底跑了哪些子任务/工具/思考"
+        #   （正是用户反馈的「不清楚是什么环节输出的」）。
+        #   结构对齐后端正常落库的 `card_data.exec`（见 stream.py 的 exec 构造），
+        #   前端 `procBlocksHtml(cd.exec)` 据此还原时间线。
+        _acc_exec = {"agent": "", "subtasks": [], "tools": [], "reasoning": []}
+        _acc_exec_cap = 8000   # reasoning 上限（与 stream.py 落库口径一致）
+
+        def _acc_frame(raw):
+            """逐帧攒正文 + 执行过程。任何异常静默（绝不能影响转发）。"""
+            try:
+                if not (isinstance(raw, str) and raw.startswith("event: ")):
+                    return
+                _ei = raw.find("\n", 7)
+                if _ei < 0:
+                    return
+                _typ = raw[7:_ei].strip()
+                if _typ not in ("token", "agent", "subtask", "tool", "reasoning"):
+                    return
+                _di = raw.find("data:")
+                if _di < 0:
+                    return
+                _pl = _json.loads(raw[_di + 5:].strip())
+                if _typ == "token":
+                    if _acc_len[0] >= _acc_cap:
+                        return
+                    _d = _pl.get("delta") or ""
+                    if _d:
+                        _acc_text.append(_d)
+                        _acc_len[0] += len(_d)
+                elif _typ == "reasoning":
+                    # 只收模型 CoT（kind != progress）；系统进度提示不属于"思考"
+                    if _pl.get("kind") != "progress":
+                        _cur = _acc_exec["reasoning"]
+                        if sum(len(x) for x in _cur) < _acc_exec_cap:
+                            _cur.append(_pl.get("delta") or "")
+                elif _typ == "agent":
+                    if _pl.get("status") == "done":
+                        _nm = _pl.get("display_name") or _pl.get("name") or ""
+                        if _nm:
+                            _acc_exec["agent"] = str(_nm)
+                elif _typ == "subtask":
+                    _k = str(_pl.get("key") or "")
+                    if not _k:
+                        return
+                    _item = next((x for x in _acc_exec["subtasks"]
+                                  if x.get("key") == _k), None)
+                    if _item is None:
+                        _item = {"key": _k}
+                        _acc_exec["subtasks"].append(_item)
+                    for _sk, _dk in (("title", ""), ("status", ""), ("agent", "")):
+                        if _pl.get(_sk):
+                            _item[_sk] = _pl.get(_sk)
+                    if _pl.get("latency_ms"):
+                        _item["latency_ms"] = _pl.get("latency_ms")
+                elif _typ == "tool":
+                    # run 帧带 arguments / done 帧带 ok+result ⇒ 按 call_id 合并
+                    _cid = str(_pl.get("call_id") or _pl.get("name") or "")
+                    if not _cid:
+                        return
+                    _t = next((x for x in _acc_exec["tools"]
+                               if x.get("_cid") == _cid), None)
+                    if _t is None:
+                        _t = {"_cid": _cid, "name": _pl.get("name") or ""}
+                        _acc_exec["tools"].append(_t)
+                        if len(_acc_exec["tools"]) > 60:
+                            _acc_exec["tools"].pop(1)   # 只保留最近 60 条（防异常流撑爆）
+                    if _pl.get("status") == "done":
+                        _t["ok"] = _pl.get("ok")
+                        _t["error"] = str(_pl.get("error") or "")[:200]
+                        _t["arguments"] = _pl.get("arguments") or _t.get("arguments") or {}
+                        _t["result"] = str(_pl.get("result") or "")[:2000]
+                        if _pl.get("latency_ms"):
+                            _t["elapsed_ms"] = _pl.get("latency_ms")
+                    else:
+                        if _pl.get("arguments"):
+                            _t["arguments"] = _pl.get("arguments")
+            except Exception:
+                pass
 
         def _flush_evbuf():
             """把缓冲的 stage/tool 帧落库（幂等：刷完即清空）。
@@ -439,6 +532,8 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                                      resume_of_user_msg_id=int(body.resume_of_user_msg_id or 0),
                                      resume_append=body.resume_append or "",
                                      # P0-b：会话级 tracer（M1→M2 显式传参，跨线程边界）
+                                     # 2026-10-30：整轮墙钟 deadline（到点收尾、保留已产出）
+                                     deadline_ts=deadline_ts,
                                      _tracer=_tracer,
                                      user=user),
                 # P1-2：15 s —— 链路上最小 idle timeout 通常是 nginx 默认 60 s，取 1/4 留余量
@@ -466,6 +561,10 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                         _last_event = ""
                     if _last_event not in ("done", "error", "heartbeat", "retry", "connected"):
                         _sent_any = True
+                # ★ 2026-10-29：逐帧攒正文（收口兜底固化用；见 _acc_text 处的注释）
+                #   放在事件录制**之前**且不受 `stream_event_log` 开关影响 ——
+                #   这是"用户能否看到已生成内容"的问题，不是可选的观测项。
+                _acc_frame(raw)
                 # ── B2-11（2026-10-13）：编排关键事件落库 ──
                 # 落点选这里，因为 `async for raw in _frames` 是**真正唯一的收口**：
                 # 生成器内部 88 处 yield 分散、无收口（编排子任务的 _evq 队列只带子任务事件，
@@ -588,6 +687,71 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             #   与 `_tracer.flush()` / `_ctx_flush()` 同一位置、同一理由：
             #   GeneratorExit 期间禁止 yield，但**不禁止** DB 写。
             _flush_evbuf()
+            # ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」）：
+            #   **收口兜底固化** —— 这是本轮最后一道防线，必须早于 `_client_gone` 早退。
+            #   触发条件（**只表达观测事实**）：本流从未发过终态帧（done/error）。
+            #   覆盖两条真实事故路径（agent 侧固化都没执行）：
+            #     · conv 9755：客户端断开 → `async for` 正常结束 → agent 侧 except 一个都没命中；
+            #     · conv 9754：内部异常但**没有正文**（token 全带 key = 子任务输出）
+            #       → agent 侧 `len<4` 静默跳过。
+            #   行为：
+            #     · 有攒到正文 → 落库 + 「已中断」说明后缀（内容一字不丢）；
+            #     · 一个字都没有 → 落一条**如实说明**（不留"发了消息但没有任何回应"的空档）。
+            #   幂等：库里最后一条已是 assistant ⇒ 跳过（正常 done 已落过 / agent 侧已固化）。
+            if not _terminal:
+                try:
+                    _pending = "".join(_acc_text).strip()
+                    with db_conn() as _pc:
+                        _lastrow = _pc.execute(
+                            "SELECT role FROM messages WHERE conversation_id=? "
+                            "ORDER BY id DESC LIMIT 1", (conv_id,)).fetchone()
+                        _already = bool(_lastrow and (_lastrow["role"] == "assistant"))
+                    if not _already:
+                        if _pending:
+                            _tail = ("\n\n> ⏹ 连接已中断（以上为已生成内容，"
+                                     "可直接重新发送这条消息继续）")
+                            _body = _pending + _tail
+                        else:
+                            _body = ("**原因**：本轮未产出正文内容就结束了"
+                                     "（连接中断或服务端异常；执行过程见下方「执行过程」）。\n\n"
+                                     "可以直接重新发送这条消息。")
+                        # ★ 执行过程一并落库（对齐正常路径的 card_data.exec 结构）
+                        #   前端 procBlocksHtml 据此还原时间线 ⇒ 刷新后仍能看到
+                        #   "这轮跑了哪些子智能体/子任务/工具/思考"。
+                        _exec = {}
+                        _rs = "".join(_acc_exec["reasoning"])[:_acc_exec_cap]
+                        if _rs.strip():
+                            _exec["reasoning"] = _rs
+                        if _acc_exec["agent"]:
+                            _exec["agent"] = _acc_exec["agent"]
+                        if _acc_exec["subtasks"]:
+                            _exec["subtasks"] = _acc_exec["subtasks"]
+                        if _acc_exec["tools"]:
+                            _exec["tools"] = [
+                                {k: v for k, v in t.items() if not k.startswith("_")}
+                                for t in _acc_exec["tools"]]
+                        _card = _json.dumps({"exec": _exec}, ensure_ascii=False) if _exec else "{}"
+                        with db_conn() as _wc:
+                            _wc.execute(
+                                "INSERT INTO messages (conversation_id, role, content, "
+                                "msg_type, card_data) VALUES (?,?,?,?,?)",
+                                (conv_id, "assistant", _body, "text", _card))
+                            _wc.execute(
+                                "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP "
+                                "WHERE id=?", (conv_id,))
+                        print("[route_persist_gone] conv=%s 兜底固化 正文=%d 字 有内容=%s "
+                              "子任务=%d 工具=%d 思考=%d 字"
+                              % (conv_id, len(_pending), bool(_pending),
+                                 len(_exec.get("subtasks") or []),
+                                 len(_exec.get("tools") or []),
+                                 len(_rs)), flush=True)
+                    else:
+                        print("[route_persist_gone] conv=%s 跳过：末条已是 assistant"
+                              % conv_id, flush=True)
+                except Exception as _pg_err:
+                    # 兜底失败不能掩盖原始故障，但必须留痕（否则又是一次"静默丢内容"）
+                    print("[route_persist_gone] conv=%s 兜底固化失败：%r"
+                          % (conv_id, _pg_err), flush=True)
             if _client_gone:
                 return
             # P1-32：终态兜底 —— 流结束却从未发过 done/error ⇒ 必须补一条 error，
@@ -627,6 +791,59 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                     }, ensure_ascii=False) + "\n\n")
             except Exception:
                 pass   # 降级告知失败绝不阻断已完成的主流程
+
+    async def event_stream():
+        """流式入口的**语义闸**（2026-10-30，P0 缺口①②）。
+
+        为什么在外面再包一层、而不是把 `_event_stream_inner` 整体缩进：
+          · 内层是 400+ 行、承担落库/断点固化/降级告知等关键路径，
+            整体缩进会让 diff 淹没真正的改动，评审时无法分辨"改了逻辑"还是"动了缩进"；
+          · 薄包装让三件事一眼可见：关闭中拒流、并发名额、墙钟起点。
+
+        ⚠️ **信号量必须在生成器内部持有**（`async with` 包住 `async for`）：
+          写在端点函数里 `return StreamingResponse(gen())` 时函数已返回、信号量已释放，
+          流的整个生命周期根本没被计入 —— 行业原话："Hold the semaphore inside the
+          generator. Otherwise your limiter is measuring the wrong thing."
+
+        ⚠️ **拒绝必须走 `event: error` 帧而非 HTTP 503**：
+          走到这里时响应头已经发出（SSE 200 已建立），改状态码只会得到一个
+          半开连接；用事件帧前端才能显示"服务忙，请稍后重试"并停止转圈。
+        """
+        import json as _j
+
+        def _err_frame(msg, code, retry_after=None):
+            _d = {"type": "error", "message": msg, "code": code}
+            if retry_after is not None:
+                _d["retry_after_s"] = retry_after
+                _d["retryable"] = True
+            return "event: error\ndata: %s\n\n" % _j.dumps(_d, ensure_ascii=False)
+
+        # ① 关闭中：不再接新流。否则 lifespan 的在途计数永远归不了零。
+        if _runtime_state.is_draining():
+            yield _err_frame("服务正在重启，请稍后重新发送这条消息。", "draining")
+            return
+
+        # ② 并发名额（排队 `runtime.queue_wait_s` 后仍无 ⇒ 快速失败）
+        _gate = _runtime_state.stream_gate()
+        try:
+            await _gate.__aenter__()
+        except _runtime_state.GateBusy:
+            yield _err_frame(
+                "当前并发会话已达上限（%d 路），请稍后重试。"
+                % int(_runtime_state.stats().get("gate_limit") or 0),
+                "busy", retry_after=5)
+            return
+
+        # ③ 整轮墙钟起点（拿到名额之后才算 —— 排队时间不该计入用户预算）
+        _deadline = _runtime_state.compute_deadline()
+
+        try:
+            async for _f in _event_stream_inner(deadline_ts=_deadline):
+                yield _f
+        finally:
+            # 必须放 finally：客户端断开时 `async for` 会被 GeneratorExit 打断，
+            # 不放这里就会出现"名额永久泄漏 ⇒ 几次之后所有人 429"。
+            await _gate.__aexit__(None, None, None)
 
     return StreamingResponse(
         event_stream(),

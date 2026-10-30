@@ -16,6 +16,7 @@ from .common import *
 from core.audit import audit, audit_user
 from . import tool_offload as _tool_offload  # P1-4：大工具结果 offload（引用块+按需重读）
 import queue as _queue  # 编排子任务事件的**实时**转发通道（见 _stream_orchestrated_flow 的 _evq）
+import asyncio  # ★ 2026-10-29：`except asyncio.CancelledError`（客户端断开的真实异常类型）
 from contextlib import nullcontext  # P0-b：_turn_cm 无 tracer 时的零开销占位
 
 
@@ -802,12 +803,33 @@ class StreamMixin:
                 else:
                     _sub_att = attachments or []
                 query = cfg.get("query") or f"{ttitle}\n团队目标：{goal}"
+                # ★★ 2026-10-30（长任务治理·缺口2）：**重试必须缩小规模，而不是重跑同一件事**。
+                #   为什么（真库归因）：重试是"同 key 原地重派"（UPDATE agent_tasks），
+                #   `tk` 原样复用 ⇒ 同样的 prompt、同样的产出预期 ⇒ 上次 240s 超时，
+                #   这次几乎必然同样超时。这是"用同一把钥匙开同一把坏锁"。
+                #   行业判据（Temporal / durable execution）：*"If an operation doesn't fit
+                #   into the allotted budget, make it smaller rather than giving it more time."*
+                #   ⇒ 重试时显式要求"缩小范围、先给最小可用结果"。
+                #   ⚠️ 不改变任务目标（`title`/`expected_output` 不动）——只约束**贪心程度**，
+                #   否则会变成"换个活干"，汇总时对不上。
+                _rc = int(tk.get("retry_count") or 0)
+                if _rc > 0:
+                    query = (
+                        "【第 %d 次尝试 · 上次因执行时间到点被中断】\n"
+                        "请**缩小范围**：优先产出可独立使用的最小完整结果，"
+                        "不要追求完整覆盖、不要为了凑齐而反复调工具。\n"
+                        "若某部分依赖外部数据但取不到，**直接说明缺口**并给出可执行的下一步，"
+                        "而不是继续尝试。\n\n%s" % (_rc + 1, query))
                 # T7：任务上下文快照（任务定义 + 前置依赖结果摘要 + 交付规范）
                 try:
                     from workflows.planner import build_subtask_context
+                    # 2026-10-29：带 plan ⇒ 依赖按**传递闭包**展开（与非流式 _run_task 同口径）。
+                    #   此前两处都只取直接依赖 ⇒ t1→t2→t3 长链上 t3 看不见 t1，
+                    #   而多意图输入（需求→设计→校验）最容易产生这种长链。
                     _tctx = build_subtask_context(tk, goal, list(done_items),
                                               artifact_digest=_digest,
-                                              offload_map=dict(_orch_offloads))
+                                              offload_map=dict(_orch_offloads),
+                                              plan=plan)
                     if _tctx:
                         query = f"[任务上下文快照]\n{_tctx}\n\n[任务]\n{query}"
                 except Exception:
@@ -934,6 +956,13 @@ class StreamMixin:
                                                      forced_intent=tk.get("agent_id") or None,
                                                      skill_name=skill_name2, user=user, dry_run=True):
                             _hb[tkey] = _t.time()   # P0-7：任何产出（token/reasoning/tool）都算"活着"
+                            # ★ 2026-10-30：同步刷新"活到哪儿了"的快照（超时兜底要用）。
+                            #   每帧都写：超时判定的粒度是 2s 轮询，慢了就会丢最后一段。
+                            #   只存正文（sub_res），不存事件流 —— 上限由 `_hb_text_cap` 兜住，
+                            #   防止某个子任务产出几十万字把内存吃满。
+                            if len(sub_res) <= _hb_text_cap:
+                                with _hb_lock:
+                                    _hb_text[tkey] = sub_res
                             # ★ 2026-10-14（#19 健壮性）：**协作式中止探针**。
                             #   每收到一个产出就问一次"这个任务被取消了吗"，命中即 `break`
                             #   —— 正在飞行的那一次 LLM 调用会跑完，但**后续步骤全部跳过**
@@ -1209,8 +1238,46 @@ class StreamMixin:
                                 return last_res
                         else:
                             # 超时：不等待线程（后台继续运行），标记 error 含 "timeout"
-                            last_res = (tkey, ttitle, False, "", [], _stall,
-                                        int((_t.time() - _t0) * 1000), 0, None)
+                            # ★★ 2026-10-30（长任务治理）：**把已产出的正文带回来**。
+                            #   改前 payload 硬写 `""` ⇒ 子任务跑了 240s、吐出几千字，
+                            #   却对下游表现为"什么都没做" ⇒ 整批降级（真库 63/76 失败即此类）。
+                            #   现在取 `_hb_text` 的最新快照，并加 `partial` 标记与中断说明后缀：
+                            #   下游汇总（`build_subtask_context` / 报告合成）据此能把
+                            #   "有内容但不确定完整"与"完全失败"区分开。
+                            #   ⚠️ 不改 `ok=False`：它确实是失败（未完成），只是**有半成品**。
+                            #   语义严格对齐行业做法（OpenAI Agents SDK：命中上限不许静默，
+                            #   要返回标明 partial 的结构化结果）。
+                            try:
+                                with _hb_lock:
+                                    _partial_txt = _hb_text.get(tkey, "") or ""
+                            except Exception:
+                                _partial_txt = ""
+                            if _partial_txt.strip():
+                                _partial_txt = (
+                                    _partial_txt
+                                    + "\n\n> ⏱ 本子任务因执行时间到点被中断（%s）。"
+                                      "以上为**已生成的部分内容**，未经完整性校验。\n" % _stall)
+                            last_res = (tkey, ttitle, False, _partial_txt, [], _stall,
+                                        int((_t.time() - _t0) * 1000),
+                                        # 第 8 位是 `tok_used`（token 数）——**不能**塞字符数：
+                                        # 那会污染 run 级 token 预算统计（`run_tokens`）与
+                                        # 用量报表。真实 token 已由 llm 层独立记账，
+                                        # 这里保持 0（与改动前一致），不引入第二份来源。
+                                        0,
+                                        # 第 9 位 `_summary`（结构化协议摘要）：超时时没有
+                                        # 完整 JSON ⇒ None（**不能**拿假结构糊上去，
+                                        # 否则下游 partial_policy 会把"没协议"当成"协议残缺"）。
+                                        None,
+                                        # ★★ 2026-10-30 修：**缺这一位会让整批编排崩掉**。
+                                        #   本元组与成功路径（第 1158 行）必须**同为 10 位**，
+                                        #   调用点按 10 位解包。此前这里只有 9 位
+                                        #   （`... 0, None)`）⇒ 任何子任务超时都会抛
+                                        #   `ValueError: not enough values to unpack
+                                        #   (expected 10, got 9)`，把**整个流**打断 ——
+                                        #   实测 `verify_orch_reliability` G2 必现。
+                                        #   ⇒ 上一轮"超时保留产出"的改动因此从未真正生效
+                                        #   （它在崩溃点之前就死了）。
+                                        0)
                         # ★ 2026-10-13（B1-6）：**先分类、再决定要不要重试**。
                         #   改前判据只有 `if retry_left <= 0`，不看失败原因 ⇒ 权限拒绝、参数非法、
                         #   输出不合格这类"重试也不会变"的永久失败也白白重试一次，
@@ -1268,8 +1335,46 @@ class StreamMixin:
                         _spans.close(_tsid, "ok" if (last_res and last_res[2]) else "error",
                                      _w_meta)
 
+            # ★ 2026-10-30：编排路径的整轮墙钟（由 `execute_stream` 入口写入实例属性）。
+            #   `_deadline_hit` 供收尾标记"这是到点收尾"而非"正常完成"，
+            #   避免被误读成"计划已全部执行"。
+            _orch_deadline = float(getattr(self, "_deadline_ts", 0) or 0)
+            # ── 编排批次总预算（`delegation.total_time_budget_s`）——
+            #   2026-10-30 复活：此前是**死配置**（全仓零消费点 ⇒ "改了不起作用"的配置谎言）。
+            #   现在它是整轮墙钟之外的**额外一道闸**：>0 时取更严格者先生效；
+            #   默认 0 = 不启用 ⇒ 零行为变更（实测编排可达 849s，默认值不得误杀正常长任务）。
+            #   与整轮墙钟并存但**不抢优先级**：两个 deadline 各自独立判，任一到点即收尾。
+            _orch_batch_budget = 0
+            try:
+                from core import config as _ocfg_b
+                _orch_batch_budget = int(_ocfg_b.get("delegation", "total_time_budget_s", 0) or 0)
+            except Exception:
+                _orch_batch_budget = 0
+            _orch_batch_deadline = (_t.time() + _orch_batch_budget) if _orch_batch_budget > 0 else 0.0
+            _deadline_hit = False
             while TaskQueue.pending_count(conn, run_id) > 0 and guard < 200:
                 guard += 1
+                # ★★ 2026-10-30（P0 缺口②·编排路径）：**整轮墙钟到点 ⇒ 停止派发新任务**。
+                #   为什么必须在这里单独判一次（ReAct 循环里的检查覆盖不到编排）：
+                #   编排走的是 `run_planner_plan` + 本 while，**不进** ReAct 主循环
+                #   （实测编排批次 avg 918s、max 1155s，正是超时的主要来源）。
+                #   到点行为：把未派发的 planned/ready 标记 blocked（与下面"预算超限"
+                #   分支同口径），然后 break 进汇总 —— **汇总会带上已完成的子任务产出**，
+                #   所以用户拿到的不是空答复，而是"已完成部分 + 明确的未完成项"。
+                #   ⚠️ 不 kill 正在跑的子任务线程：它们只在本进程内且已有自己的
+                #   idle/hard 超时，硬杀会丢断点固化。
+                if (_orch_deadline and _t.time() >= _orch_deadline) or \
+                   (_orch_batch_deadline and _t.time() >= _orch_batch_deadline):
+                    _deadline_hit = True
+                    try:
+                        for _tkd in TaskQueue.tasks(conn, run_id):
+                            if _tkd["status"] in ("planned", "ready"):
+                                TaskQueue.block(conn, _tkd["id"], "整轮墙钟到点")
+                    except Exception:
+                        pass
+                    yield {"type": "progress", "kind": "progress",
+                           "delta": "（整轮墙钟到点）已停止派发剩余任务，正在汇总已完成部分…"}
+                    break
                 # P0-2 持久执行：主循环心跳（节流 5 s —— 主循环每 50 ms 转一圈，不节流会把
                 # SQLite 单写者打满；节流后即使任务执行 20 分钟也只有几百次 UPDATE）
                 try:
@@ -2147,6 +2252,26 @@ class StreamMixin:
                 #  事件自身的 `key`/`name` 前缀（`tkey:`）保证前端把它们归到**对应子任务的卡片**下。
                 _evq = _queue.Queue()
                 _hb = {}   # P0-7：子任务活性心跳表 {task_key: 最近产出时刻}（_worker 停滞超时用）
+                # ★★ 2026-10-30（长任务治理，最关键的一处）：**子任务最新产出快照**。
+                #   为什么必须有它（真库归因：agent_tasks 76 条 failed 里 **63 条**是
+                #   `timeout（240s 无产出）`，占 83%，且集中在 design 这类长推理 Agent）：
+                #     超时分支原本写 `last_res = (tkey, ttitle, False, "", [], _stall, ...)`
+                #     —— payload 是**空字符串**，把子任务已经产出的几千字整块丢掉。
+                #   后果不是"少留点字"，而是**下游汇总误判这个子任务什么都没做** ⇒
+                #   整批降级为"（计划已执行，但无成功交付物）"（conv 514 实证）。
+                #   行业依据（OpenAI Agents SDK）：命中上限不许静默，要返回**标明 partial
+                #   的结构化结果**；丢弃产出等于把"超时"伪装成"没干活"。
+                #   `_hb` 与 `_hb_text` 必须**同一时刻**更新：一个判"是否还活着"，
+                #   一个留"活到哪儿了"；只留前者就只能在超时后一无所知。
+                _hb_text = {}   # {task_key: 已累积的正文}
+                # 快照上限：超过就不再刷新（保留已存的那份，而不是清空）。
+                # 取值 200KB ≈ 6 万汉字，远超单个子任务的实际正文（`report_in_chars` 默认 24000）；
+                # 上限只为防"异常子任务无限吐字"把内存打满，不作为质量约束。
+                _hb_text_cap = 200_000
+                # 就地导入而非复用外层 `_th`：`_th` 是 `:579` 那个函数的**局部**导入，
+                # 本函数作用域看不到它（同一文件不同函数，名称不共享）。
+                _import_threading = __import__("threading")
+                _hb_lock = _import_threading.Lock()
                 _orch_offloads = {}   # 共享产物工作区：{task_key: (offload_id, 字符数)}（下游按 id 取全文）
 
                 def _drain():
@@ -3448,12 +3573,24 @@ class StreamMixin:
                           "graph_count": 0, "vector_count": 0, "attachment_used": False},
         }}
 
-    def _persist_partial_stream(self, conversation_id, content, reason="error", dry_run=False):
+    def _persist_partial_stream(self, conversation_id, content, reason="error",
+                                dry_run=False, force=False, detail=""):
         """2026-09-29（用户五轮反馈4）：流式异常/客户端断开时，把已生成内容固化落库。
 
         此前 except 分支只 yield error 事件：浏览器里看得到的内容在库中 0 条，
         刷新即蒸发（"打开页面之前输出的内容不见了"）。现按 reason 补中断说明后缀，
         并与前端停止路径（/messages/partial）去重 —— 最后一条消息已是固化消息则跳过。
+
+        ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」）：
+          原实现 `len(text) < 4` **静默跳过**，导致两类真实事故在库里**什么都不留**：
+            · conv 9754：8 轮工具 probe 后内部异常，无正文 ⇒ 跳过（日志只一行"内容过短"）
+            · conv 9755：客户端断开（CancelledError），424 条 token 已流出但固化未执行
+          两种情况下用户看到的都是"我发了一条消息，AI 什么也没回，刷新后连过程都没有"。
+          ⇒ 新增 `force`：**即使没有正文也要落一条说明**（`reason` 决定文案），
+            让用户至少能回答"这轮跑到哪一步、为什么没有输出"。
+          ⚠️ 只在 `force=True`（异常/断连等**非用户主动停止**）时启用；
+             `reason="stop"` 且用户是主动点停止时保持原行为（用户本来就不想看了）。
+        ⚠️ `detail`：异常摘要（可选），写进说明正文，便于用户/排查直接看到原因。
         """
         if dry_run or not conversation_id:
             return
@@ -3467,15 +3604,26 @@ class StreamMixin:
         #   不加 flush 这些行会一直躺在缓冲区里（本轮排查为此白跑两轮：以为"没走到固化"，
         #   其实只是没刷出来）。真正需要被看见的告警一律 flush。
         print(f"[_persist_partial_stream] reason={reason} conv={conversation_id} "
-              f"候选字符={len(text)}", flush=True)
+              f"候选字符={len(text)} force={force}", flush=True)
         if len(text) < 4:
-            print("[_persist_partial_stream] 跳过：内容过短（<4 字），不生成空消息",
-                  flush=True)
-            return
-        suffix = {
-            "stop": "\n\n> ⏹ 已停止生成（以上为已生成内容）",
-            "error": "\n\n> ⚠️ 输出因网络错误中断（以上为已生成内容，可直接输入\"重试\"继续）",
-        }.get(reason, "\n\n> ⚠️ 输出中断（以上为已生成内容）")
+            if not force:
+                print("[_persist_partial_stream] 跳过：内容过短（<4 字），且非强制 ⇒ 不生成空消息",
+                      flush=True)
+                return
+            # 强制模式：没有正文也要落一条**如实说明**，否则库里只剩 user 消息。
+            print("[_persist_partial_stream] 无正文但 force=True ⇒ 落一条失败说明", flush=True)
+            text = (
+                "> ⚠️ 本轮未产出正文内容\n\n"
+                + ("**原因**：" + str(detail).strip()[:300] + "\n\n" if detail else "")
+                + "本轮的执行过程（工具调用 / 阶段）已记录；"
+                  "若是网络或服务波动导致，直接重新发送这条消息即可。"
+            )
+        else:
+            suffix = {
+                "stop": "\n\n> ⏹ 已停止生成（以上为已生成内容）",
+                "error": "\n\n> ⚠️ 输出因网络错误中断（以上为已生成内容，可直接输入\"重试\"继续）",
+            }.get(reason, "\n\n> ⚠️ 输出中断（以上为已生成内容）")
+            text = text + suffix
         try:
             with db_conn() as conn:
                 last = conn.execute(
@@ -3503,7 +3651,7 @@ class StreamMixin:
                         return
                 conn.execute(
                     "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
-                    (conversation_id, "assistant", text + suffix, "text", "{}"))
+                    (conversation_id, "assistant", text, "text", "{}"))
                 conn.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
                              (conversation_id,))
         except Exception as _persist_err:
@@ -3599,7 +3747,8 @@ class StreamMixin:
     def execute_stream(self, user_input, conversation_id, branch="dev", provider_id=None,
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
                        team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0,
-                       resume_of_user_msg_id: int = 0, resume_append: str = "", _tracer=None):
+                       resume_of_user_msg_id: int = 0, resume_append: str = "", _tracer=None,
+                       deadline_ts: float = 0.0):
         """流式执行（V2.3.2 优化：AI 输出流式 + 执行过程可观测）。生成器逐段产出 SSE 事件：
 
         {"type":"stage","name":..., "status":"run|done"}   右侧智能体执行状态
@@ -3620,6 +3769,38 @@ class StreamMixin:
         编排子任务流不传（_tracer=None）⇒ 全部打点退化为 no-op。
         """
         attachments = attachments or []
+        # ★★ 2026-10-30（P0 缺口②）：**单请求墙钟预算**。
+        #   传 `deadline_ts`（绝对时间戳，`time.time()` 口径）而非"剩余秒数"：
+        #   剩余秒数每过一层都要重算，任一层忘了减就放大预算；绝对时间戳幂等。
+        #   为什么必须有它（《运行时评估》实测）：改前只有 `auto_continue_deadline_s`
+        #   （"自动续跑"的闸）与 `subtask_idle_timeout_s`（子任务级），**整轮无上限** ——
+        #   实测存在 run 跑到 918s（15 分钟）仍算正常返回，异常批次可无限占资源。
+        #   语义：到点**不是 kill**，是收尾并保留已产出（走既有 done/断点固化路径）。
+        _deadline_ts = float(deadline_ts or 0.0)
+        # ★ 同一份截止时间也挂到实例上，供**编排路径**读取。
+        #   为什么这里用实例属性而不是逐层加签名参数（与 `_tracer` 的做法不同）：
+        #     · `_tracer` 必须显式传，是因为它要**跨线程**（ContextVar 不继承）；
+        #       `_deadline_ts` 全程在同一 pipeline 实例内，不跨线程边界；
+        #     · 编排链路有 3 个调用点 + 2 层包装（`_stream_orchestrated_traced`
+        #       → `_stream_orchestrated_flow`），逐个加参数要改 5 处且每个都能漏；
+        #     · **每请求新建 pipeline**（`agent/__init__.py:get_pipeline`，已有门禁
+        #       `verify_pipeline_concurrency` 守 9/9），所以实例属性天然是请求私有的，
+        #       不存在并发串味。这是"实例字段"能安全用于请求级状态的**前提条件**。
+        #   ⚠️ 2026-10-30（门禁实测）：**赋值必须放在 `reset_request_state` 之后**。
+        #     清零函数的纪律是"早于本方法内任何 `self.X =`"，而这里先赋值再清零
+        #     ⇒ 刚设好的 deadline 会被自己抹掉（`verify_request_state_reset` A1 判红）。
+        #     现在顺序改为：算局部 → 清零 → 再落实例属性。
+        # ★ 2026-10-30：登记到**线程局部**，供 llm 层把每次调用的 timeout 压到剩余预算内。
+        #   为什么需要这一层（实测 conv 9771）：墙钟只在主循环边界判是不够的 ——
+        #   planner 的**单次** LLM 调用阻塞了 56.9s（span: unclosed_at_flush），
+        #   而 planner 在编排主循环之前 ⇒ 循环检查一次都没跑到，用户等了 61s。
+        #   线程局部而非 ContextVar：pipeline 生成器与 LLM 调用在**同一 daemon 线程**内，
+        #   不需要跨线程继承（`_tracer` 之所以显式传参，是因为它跨线程）。
+        try:
+            from core import runtime_state as _rs_dl
+            _rs_dl.set_thread_deadline(_deadline_ts)
+        except Exception:
+            pass
         # ★ 2026-11-13（#56）：**会话级附件继承** —— 附件是会话资源，不必每轮重传。
         #   实测根因（会话 9571）：用户 02:49 上传 doc 848，04:26/04:41 两轮追问
         #   「再次分析上传附件的内容」时请求里 **attachments=[]**
@@ -3636,6 +3817,10 @@ class StreamMixin:
         #   否则清零会抹掉本次请求刚设好的上下文。
         #   根因与实测证据见 `common.reset_request_state` 的 docstring。
         reset_request_state(self)
+        # ★ 2026-10-30：清零**之后**再落实例属性（顺序是硬约束，见上方「赋值必须放在
+        #   reset_request_state 之后」）。`_deadline_ts` 已登记进清零清单 ⇒
+        #   上一轮残留不会漏进本轮；本行再把本轮的值写回。
+        self._deadline_ts = _deadline_ts
         # P0-b（M2）：把会话 tracer 落入**本线程** ContextVar —— 执行流跑在 SSE 心跳
         # daemon 线程，入口线程 set 的值不继承；深层挂载点（M3 tool / M4 rag / M5 llm）
         # 全部经 current_tracer() 取，取不到即 no-op（降级安全）。
@@ -3818,6 +4003,14 @@ class StreamMixin:
                 # ★ 2026-10-16 R1：把所选主 Agent **落到会话**，供后续任何未显式带 team 的
                 #   请求回读（澄清续答/换标签页/新接口忘传都不再静默掉回通用 Agent）。
                 self._save_main_agent(conversation_id, team_intent)
+                # ★ 2026-10-29：记下本轮主 Agent，供工具构建继承其平台能力（MCP/技能）。
+                #   事故依据（conv 9754）：主 Agent「智源对接agent」绑了 zhiyuan-dev-mcp（71 个工具），
+                #   但团队路由把请求定向给成员「工程建模方案设计Agent」（MCP 绑定数=0）
+                #   ⇒ `_build_tools_def("design")` 只取成员自己的绑定 ⇒ **71 个智源工具全部消失**
+                #   ⇒ 模型如实回答"当前工具清单无智源 MCP 查询工具，无法拉取工程数据"
+                #   ⇒ 全程空转，最终异常中断。用户选择了具备该能力的主 Agent，
+                #   能力却因"定向到成员"而丢失，这与选择意图直接冲突。
+                self._team_main_agent = team_intent or ""
             elif conversation_id and int(conversation_id) > 0:
                 # ★ 2026-10-16 R1：请求未带 team ⇒ 回读会话绑定。命中则按它执行并**明示**，
                 #   让"为什么是这个 Agent"始终可解释（不静默继承）。
@@ -3873,11 +4066,10 @@ class StreamMixin:
             # 2026-09-25：阶段序约束**带上每个阶段在说什么**（`{意图}（原句）`）。
             # 修前只传意图名序列（如 "requirement_analysis → design"），planner 只能知道"要哪些阶段"，
             # 不知道各阶段具体干什么（用户原句里的对象/范围全丢了）→ 生成的子任务描述容易泛化。
-            # tasks 为空时回落到 sequence（保持旧行为，不因新字段缺失而退化）。
-            _stage_hint = None
-            if _multi_intent:
-                _stage_hint = [f"{t['intent']}（{t['text']}）" for t in (_multi_intent.get("tasks") or [])] \
-                              or _multi_intent["sequence"]
+            # ★ 2026-10-29：拼法抽到 `OrchestrMixin._build_stage_hint`，本处**不再自拼** ——
+            #   此前流式与非流式各写一套（非流式干脆没有），正是"两套 prompt 漂移"的老形态。
+            #   现在两条路径共用同一个纯函数，结构上不可能再漂。空 ⇒ None（不加段落）。
+            _stage_hint = self._build_stage_hint(_multi_intent) or None
             if _multi_intent:
                 yield {"type": "multi_intent", "sequence": _multi_intent["sequence"],
                        "raw_subtasks": _multi_intent["raw_subtasks"]}
@@ -3901,11 +4093,41 @@ class StreamMixin:
                         "team_decision": team_decision,
                         "content": _msg, "message_id": 0}}
                     return
+                # ★ 2026-10-29：多阶段段数（团队 direct 分支要用；提到分支外只为让 H4 断言
+                #   「`elif _act ==` 出现在 team_forced 之前」的字面判据继续成立——断言按字面
+                #   锚 `elif _act ==`，写成 `elif (_act == ...` 会让它认不出这一支而误判）。
+                _multi_stages = len(((_multi_intent or {}).get("sequence") or []))
                 if _act == "chat":
                     # 短噪声/问候：走通用直答，不编排、不定向团队成员
                     intent = "chat"
                     forced_intent = None
                     team_direct = True
+                    # ★ 2026-10-29：记下「本轮执行主体是团队路由改写的」——
+                    #   否则 exec_subject.source 只能靠"team 非空"判成 manual，
+                    #   变成"用户手动选了 chat/成员"的错误归因（实测 conv 9754）。
+                    self._team_routed_to = "chat"
+                elif _act == "direct" and (team_decision or {}).get("target") and _multi_stages >= 2:
+                    # ★★ 2026-10-29（用户问「是否支持多意图」实测发现的断链）：
+                    #   多阶段输入在**团队模式下会被 direct 截断**——只执行一个成员，其余阶段全丢。
+                    #   证据（同一句真实请求「分析工程数据 → 生成 IBD 视图 → 完成内容校验」）：
+                    #     · detect_multi → 2 段 [design, review]
+                    #     · 非团队模式 `_needs_orchestration(multi=...)` → **True**（会编排）
+                    #     · 团队 direct 后 `_needs_orchestration(forced_intent='design')` → **False**
+                    #       （`forced_intent` 短路 + `team_direct` 短路，两道门同时关）
+                    #   ⇒ 用户写了三个阶段，实际只有一个成员在跑 —— 多意图能力等于不存在。
+                    #   现在：direct 且识别出 ≥2 阶段 ⇒ 交给**主 Agent 编排**（不是放弃团队模式，
+                    #   而是从"定向单个成员"升级为"主 Agent 分派多成员"，这才是团队该有的形态）。
+                    #   ⚠️ 不设 team_direct / 不设 forced_intent：两者都会把编排路径关掉。
+                    team_forced = True
+                    _seq = (_multi_intent or {}).get("sequence") or []
+                    _subj_note = (
+                        f"（团队路由）本轮识别到 {_multi_stages} 个阶段"
+                        f"（{' → '.join(str(x) for x in _seq)}），"
+                        f"已由主 Agent「{team_intent}」编排分派"
+                        f"（否则只会执行成员「{team_decision['target']}」，其余阶段丢失）")
+                    exec_notices.append({"kind": "progress", "text": _subj_note})
+                    yield {"type": "reasoning", "delta": _subj_note, "kind": "progress"}
+                    self._exec_subject_note = _subj_note
                 elif _act == "direct" and (team_decision or {}).get("target"):
                     # 定向到团队内最相近/命中的成员直行（仍不编排）
                     intent = team_decision["target"]
@@ -3921,14 +4143,28 @@ class StreamMixin:
                     #   原来以纯 reasoning 发出 ⇒ 落进"AI 思考"框，用户看不到）。
                     #   修法：同一条文案**同时**进 exec_notices（落库可见）。
                     if _detected and _detected != intent:
-                        _subj_note = (f"（团队路由）已定向到团队成员「{team_decision['target']}」"
+                        _subj_note = (f"（团队路由）主 Agent「{team_intent}」将本次请求定向给成员"
+                                      f"「{team_decision['target']}」"
                                       f"（{team_decision.get('reason') or ''}）；"
                                       f"意图识别结果为 {_detected}")
                     else:
-                        _subj_note = (f"（团队路由）已定向到团队成员「{team_decision['target']}」"
+                        _subj_note = (f"（团队路由）主 Agent「{team_intent}」将本次请求定向给成员"
+                                      f"「{team_decision['target']}」"
                                       f"（{team_decision.get('reason') or ''}）")
                     exec_notices.append({"kind": "progress", "text": _subj_note})
                     yield {"type": "reasoning", "delta": _subj_note, "kind": "progress"}
+                    # ★★ 2026-10-29（用户问「工程建模方案设计agent 不是主 agent，为啥会匹配到他」）：
+                    #   真因就是**这里**——主 Agent「智源对接agent」(main, 12 名成员) 作为团队负责人，
+                    #   因意图识别结果 `design` 命中其成员（team_router C4 分支：命中成员直接采纳），
+                    #   把本轮**定向给成员 design 直行** ⇒ 下游 `agent_def = registry.get("design")`
+                    #   ⇒ 执行主体显示为「工程建模方案设计Agent」。
+                    #   旧代码的两个缺陷让这条链路**完全不可见**：
+                    #     ① `exec_subject.source` 只用 `"manual" if team` 判定 ⇒ 明明是你选了主 Agent、
+                    #        系统内部定向，却被标成「你手动选择」（连排查者都会被误导，实测本轮即如此）；
+                    #     ② 说明只进 `exec_notices`（历史还原才看得到），`exec_subject.note` 恒为空。
+                    #   现在：source 用独立取值 `team_route`，note 带上主 Agent → 成员的完整说明。
+                    self._team_routed_to = intent
+                    self._exec_subject_note = _subj_note
                 elif _act == "orchestrate":
                     team_forced = True
                 else:
@@ -4063,8 +4299,15 @@ class StreamMixin:
             #   现在前端可在「意图识别」这一行直接显示：本轮主体 + 来源（路由/会话绑定/手动选择）。
             _exec_subject = {
                 "name": agent_def.name,
-                "source": ("manual" if team else ("bound" if getattr(self, "_exec_subject_note", "") else "route")),
+                # ★ 2026-10-29：新增 `team_route` —— 本轮执行主体是**主 Agent 在团队内定向**的结果。
+                #   旧实现只有 manual/bound/route 三档，且 manual 的判据是"请求带了 team"
+                #   ⇒ 用户选了主 Agent、系统定向到成员时被误标成"你手动选择"（conv 9754 实测）。
+                "source": ("team_route" if getattr(self, "_team_routed_to", "") else
+                           ("manual" if team else
+                            ("bound" if getattr(self, "_exec_subject_note", "") else "route"))),
                 "note": getattr(self, "_exec_subject_note", "") or "",
+                # 主 Agent（团队负责人）：team_route 时前端可显示"经由 X 定向"
+                "main_agent": (team_intent or "") if getattr(self, "_team_routed_to", "") else "",
             }
             yield {"type": "stage", "name": "意图识别", "status": "done", "intent": intent,
                    "agent": agent_def.name, "hil_level": hil_level,
@@ -4831,6 +5074,33 @@ class StreamMixin:
                         _rnd = -1
                     _rnd += 1
                     if _rnd >= max_tool_rounds:
+                        break
+                    # ★★ 2026-10-30（P0 缺口②）：**整轮墙钟到点 ⇒ 收尾**（不 kill）。
+                    #   ⚠️ 必须放在 `if not tools_def: break` **之前**：
+                    #   首版放在其后，而无工具场景会先 `break` 出去、根本到不了这里
+                    #   ⇒ 那条路径的墙钟形同不存在（实测 conv 9772/9773 都是这样漏掉的）。
+                    #   位置在轮次闸之后、工具闸之前，语义是"该收尾了"而不是"没工具可用"。
+                    #   行为：`break` 落到主路径收尾（固化正文 + 发 done + 断点落库），
+                    #   不是掐断连接，所以已生成内容全部保留。
+                    #   ⚠️ 必须显式告知两端（与 token 预算那次教训同源）：模型若不知道
+                    #   停机原因，会在最终回答里**自己编一个**（conv 9726 编成"次数上限"）。
+                    if _deadline_ts and time.time() >= _deadline_ts:
+                        _dl_note = ("（本轮墙钟预算已到）已达到单轮最长执行时间上限，"
+                                    "请基于**已有信息**直接给出结论；不要再调用工具，"
+                                    "也不要归因为『工具次数上限』或『token 上限』——"
+                                    "真实原因是整轮执行时长到点。")
+                        try:
+                            exec_notices.append({"kind": "progress",
+                                                 "text": "（本轮墙钟预算已到）已收尾并保留已生成内容"})
+                        except Exception:
+                            pass
+                        try:
+                            messages.append({"role": "user", "content": _dl_note})
+                        except Exception:
+                            pass
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": "（本轮墙钟预算已到）正在收尾，已生成内容会保留…"}
+                        _lg.stop_reason = "deadline"
                         break
                     if not tools_def:
                         break
@@ -6165,6 +6435,32 @@ class StreamMixin:
                 #   （0 = 一轮收口；>0 = 评估器放行了 N 次续跑，前端/排查可追溯）。
                 "auto_continues": _auto_continues,
             }}
+        except asyncio.CancelledError:
+            # ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」，真库 conv 9755 实证）：
+            #   客户端断开时，ASGI 层取消的是**任务**，抛 `asyncio.CancelledError`
+            #   —— 它继承 `BaseException`（不是 `Exception`），也**不是** `GeneratorExit`
+            #   （实测：MRO = CancelledError → BaseException → object）⇒
+            #   下面两个 except 分支**都抓不到** ⇒ 固化完全不执行 ⇒
+            #   库中只有 user 消息、AI 产出全丢，且 `_persist_partial_stream` 连一行日志都没有
+            #   （conv 9755：span `reason=no_terminal_frame / last_event=ping / terminal_sent=0`，
+            #    已流出 424 条 token 事件，最终 messages 仅 1 条 user）。
+            #   ⇒ 与 GeneratorExit **同性质**（用户不再看这一轮）⇒ 同样固化，然后照原样抛出
+            #   （取消语义必须继续向上传播，不能吞掉，否则任务永不结束）。
+            try:
+                print("[stream_cancelled] conv=%s 客户端断开/任务取消 → 固化已流出内容"
+                      % conversation_id, flush=True)
+            except Exception:
+                pass
+            self._persist_partial_stream(conversation_id,
+                                         _best_partial(_full_content, llm_content,
+                                                       _orch_acc, _streamed_acc),
+                                         "stop", dry_run=dry_run, force=True)
+            if conversation_id:
+                try:
+                    _fup.drop(conversation_id)
+                except Exception:
+                    pass
+            raise
         except GeneratorExit:
             # 2026-09-29（用户五轮反馈4）：客户端断开（停止按钮/关页/网络断）→ 已流出内容固化落库。
             #  此前直接 raise，浏览器里看得到的已生成内容一刷新就没了（库中 0 条）。
@@ -6199,8 +6495,25 @@ class StreamMixin:
             #   （真库 conv 9629「写入工程」轮：llm_usage 4 次调用、messages 0 条 assistant。）
             #   现在三件事一起兜：① 流循环内**增量**累积 llm_content（根治）；
             #   ② `_streamed_acc` 记录"真的流出去过什么"；③ 取两者更长者固化。
+            #
+            # ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」）：
+            #   **本分支此前只 yield、不记日志** ⇒ 真库 conv 9754 那轮（8 轮 probe / 47s）
+            #   事后**无法回答"抛的是什么异常"**：conversations.py 侧 `_fail_reason` 为空
+            #   （没有 Python 异常逃出生成器，是本函数内部捕掉的），span 只留下
+            #   `reason=no_terminal_frame / last_event=error`。故障归因不能靠猜。
+            #   ⇒ 必须把异常类型 + 完整 traceback 落日志。
+            #   ⚠️ 记日志本身失败绝不能阻断"已生成内容固化"，故单独 try 包住。
+            try:
+                import traceback as _tb
+                print("[stream_error] conv=%s type=%s msg=%.300s"
+                      % (conversation_id, type(e).__name__, e), flush=True)
+                print(_tb.format_exc(), flush=True)
+            except Exception:
+                pass
             self._persist_partial_stream(conversation_id,
                                          _best_partial(_full_content, llm_content,
                                                        _orch_acc, _streamed_acc),
-                                         "error", dry_run=dry_run)
+                                         "error", dry_run=dry_run,
+                                         force=True,
+                                         detail="%s：%s" % (type(e).__name__, e))
             yield {"type": "error", "message": str(e)}

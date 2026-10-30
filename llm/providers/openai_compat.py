@@ -537,6 +537,36 @@ class OpenAICompatProvider(BaseLLM):
             _to = float(_c.get("llm", "http_timeout_s", 180))
         except Exception:
             _to = 180.0
+        # ★★ 2026-10-30（P0 缺口②·deadline 传播）：把本次调用的超时**压到剩余墙钟以内**。
+        #   为什么必须在**这一层**做（实测得出，不是理论）：
+        #     墙钟只在主循环轮次边界检查是不够的 —— 单次 LLM 调用能一口气阻塞几十秒。
+        #     实测 conv 9771（墙钟 8s）：卡在 planner 的 LLM 调用 **56,978 ms**，
+        #     而 planner 跑在编排主循环**之前** ⇒ 循环里的检查一次都没跑到，
+        #     用户等了 61s 才拿到"无终态帧"。
+        #   语义：未登记 deadline（脚本/测试/非会话调用）⇒ 原样返回 `_to`，
+        #        **零行为变更**；登记了 ⇒ 取 min(原 timeout, 剩余)。
+        #   `cap_timeout` 返回 0 = 预算已耗尽 ⇒ 直接放弃本次调用（下方 raise），
+        #   让上层走"基于已有信息收尾"而不是继续烧一次完整调用。
+        try:
+            from core import runtime_state as _rs
+            _capped = _rs.cap_timeout(_to)
+            if _capped <= 0:
+                raise ValueError("整轮墙钟预算已耗尽，放弃本次 LLM 调用（rl=deadline）")
+            # 只在**真的压过**时留痕（正常路径零噪声）：
+            #   排查"墙钟为什么没生效"时，唯一能回答的是"cap 当时返回了 8 还是 180"。
+            #   实测背景：conv 9774 的 task_decompose 单次跑 57s，需确认是 cap 没生效
+            #   还是 httpx 没按 timeout 中断。
+            if _capped < _to:
+                try:
+                    print("[llm_deadline] timeout %.1fs → %.1fs（剩余墙钟 %.1fs）"
+                          % (_to, _capped, _rs.thread_deadline_left() or 0), flush=True)
+                except Exception:
+                    pass
+            _to = _capped
+        except ValueError:
+            raise
+        except Exception:
+            pass      # 运行时状态模块不可用 ⇒ 保持原 timeout（绝不因为观测设施挂掉而阻断调用）
         resp = httpx.post(url, json=payload, headers=headers, timeout=_to)
         data = resp.json()
         if resp.status_code != 200 or not data.get("choices"):
@@ -586,8 +616,22 @@ class OpenAICompatProvider(BaseLLM):
         if _include_usage:
             payload = dict(payload)
             payload["stream_options"] = {"include_usage": True}
+        # 2026-10-30：流式同样受剩余墙钟约束（与上方非流式同源，避免两套口径）。
+        #   ⚠️ 流式一次连接可能持续很久（边生成边收），把 timeout 压到"剩余预算"
+        #   相当于给整个流一个硬上限 —— 这正是我们要的：到点必须收尾。
+        _sto = 120
         try:
-            with httpx.stream("POST", url, json=payload, headers=headers, timeout=120) as resp:
+            from core import runtime_state as _rs2
+            _c2 = _rs2.cap_timeout(_sto)
+            if _c2 <= 0:
+                raise ValueError("整轮墙钟预算已耗尽，放弃本次流式 LLM 调用（rl=deadline）")
+            _sto = _c2
+        except ValueError:
+            raise
+        except Exception:
+            pass
+        try:
+            with httpx.stream("POST", url, json=payload, headers=headers, timeout=_sto) as resp:
                 if resp.status_code != 200:
                     _body = ""
                     try:

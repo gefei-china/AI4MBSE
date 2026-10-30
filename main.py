@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse
 
 from database import init_db, get_db
 from core import config
+from core import runtime_state
 from core.rate_limit import RateLimitMiddleware
 from routers import (
     auth_router,
@@ -95,13 +96,14 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         print("[startup] 周期告警评估器跳过: %s" % str(_e)[:120], flush=True)
     # P0-2b（2026-10-04）：编排自动重投守护 —— 让"崩溃的编排自己好"，不再等人点继续。
-    # 默认关（会真的调 LLM）；开关口径见 config.orchestration.auto_resume_*。
+    # ★ 2026-10-30（P0-2）：默认**开**，但配了三道成本闸（单轮 1 批 / 每日 5 次 /
+    #   不重跑 failed 任务）。开关口径见 config.orchestration.auto_resume_*。
     try:
-        if config.as_bool("orchestration", "auto_resume_enabled", False):
+        if config.as_bool("orchestration", "auto_resume_enabled", True):
             from core.orch_supervisor import start_resume_loop
             start_resume_loop(
                 interval_sec=float(config.get("orchestration", "auto_resume_interval_s", 300)),
-                max_runs=int(config.get("orchestration", "auto_resume_max_runs", 3)),
+                max_runs=int(config.get("orchestration", "auto_resume_max_runs", 1)),
                 stale_s=int(config.get("orchestration", "resume_stale_s", 1800)),
                 include_failed=bool(config.get("orchestration", "auto_resume_include_failed", False)),
             )
@@ -186,7 +188,80 @@ async def lifespan(app: FastAPI):
                 print("[startup] 孤儿回收异常（已跳过）：%s" % _res["error"], flush=True)
     except Exception as _e:
         print("[startup] 孤儿回收跳过：%s" % str(_e)[:120], flush=True)
+    # ── 2026-10-30：运行时状态初始化（优雅关闭 / 并发闸 / 墙钟预算的配置快照）──
+    try:
+        _rs = runtime_state.init()
+        print("[startup] 运行时状态就绪：并发上限 %s 路 / 排队 %ss / 单轮墙钟 %ss / 关闭排空 %ss"
+              % (_rs["max_concurrent_streams"], _rs["queue_wait_s"],
+                 _rs["chat_deadline_s"], _rs["shutdown_drain_s"]), flush=True)
+    except Exception as _e:
+        print("[startup] 运行时状态初始化失败（退化用默认值）：%s" % str(_e)[:120], flush=True)
+
     yield
+
+    # ══════════════════════════════════════════════════════════════════════
+    # 关闭收尾（2026-10-30 新增 —— 此前 `yield` 之后**一行代码都没有**）
+    # ══════════════════════════════════════════════════════════════════════
+    # 为什么必须有（《运行时评估》缺口①）：
+    #   改前 uvicorn 收到 SIGTERM 即退出，而 SSE 的 worker 线程是 `daemon=True`
+    #   ⇒ 进程消失时在途编排被硬杀，`route_persist_gone` 兜底**根本不会执行**
+    #   ⇒ 用户看到"跑到一半没了，刷新只看到自己的输入"（conv 9754 就是这么丢的）。
+    #
+    # 三个设计取舍：
+    #   ① **先置 draining 再做任何等待**：入口端点据此立即拒新请求，
+    #      否则"边收尾边接新活"会让 in-flight 计数永远归不了零；
+    #   ② **等待是有界的**（`runtime.shutdown_drain_s`，默认 30s）：行业阈值区间
+    #      20~45s，超过 45s 容易被上层（K8s gracePeriod / nginx proxy_read_timeout）
+    #      直接 SIGKILL，反而连收尾都做不完；
+    #   ③ **排空不可能等到长任务跑完**（实测批次 avg 918s）—— 所以这里只是
+    #      "给正在收尾的流一点时间"，真正的产出保全靠各自 deadline 与断点固化。
+    #      行业原文："if you have endpoints that run longer than 10 seconds,
+    #      the problem can't be solved by increasing the timeout"。
+    import asyncio as _asyncio
+    import time as _time
+
+    _drain_budget = float(runtime_state._cfg("shutdown_drain_s") or 30)
+    _inflight_at_signal = runtime_state.inflight_count()
+    runtime_state.begin_drain()
+    print("[shutdown] 收到关闭信号：新请求将被拒；在途 %d 路流，最多等 %.0fs"
+          % (_inflight_at_signal, _drain_budget), flush=True)
+    _t0 = _time.monotonic()
+    while runtime_state.inflight_count() > 0 and (_time.monotonic() - _t0) < _drain_budget:
+        await _asyncio.sleep(0.2)
+    _left = runtime_state.inflight_count()
+    _waited = _time.monotonic() - _t0
+    if _left:
+        print("[shutdown] ⚠️ 排空预算耗尽，仍有 %d 路流未结束（已等 %.1fs）—— "
+              "它们靠各自 deadline 兜底固化，本进程即将退出（未固化部分依赖 "
+              "`route_persist_gone`，若进程被 SIGKILL 则该兜底不执行）"
+              % (_left, _waited), flush=True)
+    else:
+        print("[shutdown] 在途流已全部结束（%.1fs）" % _waited, flush=True)
+
+    # ── 停后台守护线程 ────────────────────────────────────────────────
+    # 顺序：先停"会产生新工作"的（作业队列），再停"只做观测"的（告警、续跑守护）。
+    # 每个独立 try：某个停不掉不能阻断其它收尾（收尾阶段最忌讳"一处异常全停"）。
+    try:
+        from core import job_queue as _jq
+        _jq.stop_workers()
+        print("[shutdown] 作业队列 worker 已停止", flush=True)
+    except Exception as _e:
+        print("[shutdown] 作业队列停止失败（忽略）：%s" % str(_e)[:100], flush=True)
+    try:
+        from core import alert_evaluator as _ae
+        _ae.stop_alert_loop()
+        print("[shutdown] 告警评估器已停止", flush=True)
+    except Exception as _e:
+        print("[shutdown] 告警评估器停止失败（忽略）：%s" % str(_e)[:100], flush=True)
+    try:
+        from core import orch_supervisor as _osv
+        _osv.stop_resume_loop()
+        print("[shutdown] 编排续跑守护已停止", flush=True)
+    except Exception as _e:
+        print("[shutdown] 编排续跑守护停止失败（忽略）：%s" % str(_e)[:100], flush=True)
+    # MCP 健康巡检线程无 stop 入口（`mcp_health.start_health_loop` 只起不停）——
+    # 它是 daemon 线程且只读库、不发外部调用以外的副作用，进程退出即随之消失，
+    # 故此处不做处理（避免为了一致性去改一个与本次目标无关的模块）。
 
 
 app = FastAPI(title=config.APP_TITLE, version=config.APP_VERSION, lifespan=lifespan)
@@ -304,6 +379,32 @@ if os.path.exists(static_dir):
     app.mount("/static", NoCacheStaticFiles(directory=static_dir), name="static")
 
 
+# ── 2026-10-30：健康检查（liveness / readiness 必须分开）────────────────────
+# 为什么不能合并成一个端点（行业共识，不是风格问题）：
+#   关闭过程中需要「`/ready` 返 503 让负载均衡摘流量」而「`/live` 仍 200 让进程别被杀」。
+#   合并 ⇒ 要摘流量就得让 liveness 也失败 ⇒ 编排器直接重启进程 ⇒ 在途编排被硬杀。
+@app.get("/api/health/live")
+def health_live():
+    """存活探针：进程与事件循环还活着就 200（不依赖 DB / LLM / 任何外部资源）。"""
+    return {"status": "alive", "draining": runtime_state.is_draining()}
+
+
+@app.get("/api/health/ready")
+def health_ready():
+    """就绪探针：关闭中返 503（让上游摘流量），否则 200。
+
+    ⚠️ 刻意**不**检查 DB/LLM 可用性 —— 就绪探针判"能否接流量"，
+    依赖健康属于另一条链路（`/api/dashboard` 与告警评估器）。
+    把依赖探进 readiness 会导致"LLM 抖动 → 全体摘流量 → 雪崩"。
+    """
+    from fastapi.responses import JSONResponse as _JR
+    if runtime_state.is_draining():
+        return _JR(status_code=503, content={"status": "draining",
+                                            "inflight": runtime_state.inflight_count(),
+                                            "elapsed_s": round(runtime_state.drain_elapsed(), 1)})
+    return {"status": "ready", **runtime_state.stats()}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     index_path = os.path.join(static_dir, "index.html")
@@ -318,4 +419,16 @@ def index():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=config.HOST, port=config.PORT)
+    # ★ 2026-10-30（P0 缺口①）：`timeout_graceful_shutdown` **必须显式给**。
+    #   改前调用是 `uvicorn.run(app, host=..., port=...)` —— 不设该参数时 uvicorn
+    #   收到 SIGTERM 会**立即**退出，不等待在途请求 ⇒ 长任务被硬杀、断点固化来不及跑。
+    #   （行业原文："Without an explicit parameter it will stop the process right after
+    #    receiving SIGTERM, without waiting for current requests to finish."）
+    #   取值与 lifespan 的排空预算同源（`runtime.shutdown_drain_s`，默认 30s），
+    #   避免两处口径漂移导致"uvicorn 先杀、lifespan 还在等"。
+    try:
+        _drain_s = int(runtime_state._cfg("shutdown_drain_s") or 30)
+    except Exception:
+        _drain_s = 30
+    uvicorn.run(app, host=config.HOST, port=config.PORT,
+                timeout_graceful_shutdown=_drain_s)

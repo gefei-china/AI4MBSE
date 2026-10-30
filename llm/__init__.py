@@ -521,6 +521,23 @@ class LLMClient:
     def chat(self, messages, provider_id=None, stream=False, tools=None, thinking=False,
              route_tags=None, **kwargs):
         """统一 LLM 入口（兼容旧签名，逻辑等价旧实现，真实调用经 ProviderRegistry 插件化）。"""
+        # ★★ 2026-10-30（P0 缺口②·最外层必经检查）：**预算已耗尽就在入口直接拒**。
+        #   为什么 provider 层已有 `cap_timeout` 还要再来一次（本机实测 conv 9773）：
+        #     该轮墙钟 8s，`planner` 在 5.3s 被正确拦截（日志有"墙钟预算已耗尽"），
+        #     但**回落单 Agent 的路径**随后又发起 `chat_probe` 并跑了 75s ——
+        #     因为那条路径没经过我们改的那一处 provider 方法（本仓有多条
+        #     provider/调用形态，逐个堵必然漏）。
+        #   ⇒ 在**统一入口**再判一次：只要已登记且预算耗尽，任何调用形态都出不去。
+        #   这是"纵深防御"而非重复：provider 层管"压 timeout"，本层管"已无预算"。
+        try:
+            from core import runtime_state as _rs_c
+            _left_c = _rs_c.thread_deadline_left()
+            if _left_c is not None and _left_c <= 0:
+                raise ValueError("整轮墙钟预算已耗尽，放弃本次 LLM 调用（入口拦截 rl=deadline）")
+        except ValueError:
+            raise
+        except Exception:
+            pass      # 运行时状态不可用 ⇒ 不阻断调用（观测设施故障不得变成业务故障）
         provider = None
         route_reason = ""
         if provider_id:
@@ -721,6 +738,28 @@ class LLMClient:
             times = 0
         last = None
         for attempt in range(times + 1):
+            # ★★ 2026-10-30（P0 缺口②·重试放大）：**每轮重试前先看墙钟还剩多少**。
+            #   为什么必须有这一条（本机实测 conv 9774）：
+            #     墙钟 8s，但 `task_decompose` 的一次调用跑了 **57,390 ms 且 status=ok**
+            #     —— 因为 `cap_timeout` 压的是**单次** timeout，
+            #     而 `llm.retry_times=2` 会让总耗时至多 ×3，再叠加退避：
+            #     8s × 3 + 2×0.5s ≈ 25s，加上"每次独立成功"的情形可以更长。
+            #     **压单次 ≠ 压总量**，这是本节最容易被忽略的乘法效应。
+            #   行为：剩余预算不足以再跑一次（< 单次下限 3s）⇒ 直接停，不再重试。
+            try:
+                from core import runtime_state as _rs_r
+                _rl = _rs_r.thread_deadline_left()
+                if _rl is not None and _rl < 3.0:
+                    try:
+                        import logging as _lg3
+                        _lg3.getLogger("mbse.llm").warning(
+                            "LLM 重试中止：整轮墙钟只剩 %.1fs（provider=%s model=%s，attempt=%d）",
+                            _rl, provider_name, model_name, attempt)
+                    except Exception:
+                        pass
+                    break
+            except Exception:
+                pass
             # 总预算闸：剩余预算不够再跑一次就**不再重试**（避免长尾）
             if _budget and attempt > 0:
                 _elapsed = _tt.time() - _t_start
@@ -934,6 +973,24 @@ class LLMClient:
         _chars = 0
         try:
             for ev in gen:
+                # ★★ 2026-10-30（P0 缺口②·流式最后一处）：**在流式消费点检查墙钟**。
+                #   为什么前面那些检查都打不断它（本机实测两次才定位）：
+                #     · `httpx.stream(timeout=N)` 的 N 是**每次读操作的超时**，
+                #       不是整个流的时长 —— 逐帧都很快到达时总时长可远超 N。
+                #       实测 conv 9772：墙钟 8s、`cap_timeout` 已生效，仍连续吐了 19 个 token 不停。
+                #     · 主循环里的墙钟也管不到：长文本是**一次** LLM 调用吐完的，
+                #       期间不回到主循环。
+                #   ⇒ 必须在这里（每帧必经的消费点）判，到点即 `break` 并**保留已收内容**。
+                #   为什么 break 而不 raise：抛异常会让上层把"正常收尾"当成"调用失败"，
+                #   从而丢弃已收文本 —— 那正是本次要根治的"超时即丢产出"。
+                try:
+                    from core import runtime_state as _rs_s
+                    _sleft = _rs_s.thread_deadline_left()
+                    if _sleft is not None and _sleft <= 0:
+                        _finish = _finish or "deadline"
+                        break
+                except Exception:
+                    pass
                 # ⚠️ 解析必须在 `yield` **之前**（实测踩过）：若放在 yield 之后，最后一帧
                 #    "已发给客户端、但还没解析"就遇到客户端 close⇒ 该帧的 usage 永久丢失
                 #    （实测：usage 帧正好是倒数第二帧 ⇒ 中断时 pt/ct 全丢，只剩正文估算值）。
