@@ -6,6 +6,45 @@
 `agent/pipeline.py` 现为薄 Mixin 入口，**本目录（pipeline_parts/）才是当前真源，可直接编辑**。"""
 from .common import *
 
+import re as _re
+
+# ── 身份声明剥离（2026-10-29）───────────────────────────────────────────────
+# 实测：长期记忆里存着一条「用户叫米巴，最喜欢的产品代号是「智源」」，
+#   而账号登录用户是 gefei —— 两者并存时，模型**优先用记忆里的自报名**称呼用户
+#   （截图实测：输出"你好，米巴！"），因为记忆块的标题是「【核心偏好（跨会话稳定，请遵守）】」。
+# 判词：**称呼的权威来源是登录账号，不是记忆里的自报名**。
+#   ⇒ 有登录身份时，把记忆中的「用户叫X」这类**身份声明子句剥掉**，
+#     记忆里其余偏好（"最喜欢的产品代号是…"）仍照常注入，不丢信息。
+# ⚠️ 只剥**子句**、不整条丢：该条记忆里还有有效偏好，整条丢会连带损失。
+_IDENTITY_CLAIM_RE = _re.compile(
+    r"(?:用户叫|我叫|我的名字是|我的名字|我的称呼是|我的称呼|称呼我为?|称呼我是|"
+    r"大家都叫我|本人叫|可以叫我|请叫我)[^，,。；;、！!？?\n]{1,20}"
+)
+
+
+def _strip_identity_claim(content: str) -> str:
+    """把记忆文本里的「用户叫X」身份声明子句剥掉，返回剩余内容。
+
+    纯函数（无 IO、无外部依赖），便于单测与变异自证。
+    剥完若只剩空白/标点 ⇒ 返回空串（调用方据此整条不注入）。
+    """
+    c = str(content or "")
+    if not c:
+        return ""
+    out = _IDENTITY_CLAIM_RE.sub("", c)
+    out = out.lstrip("，,。；;、 　")
+    return out.strip()
+
+
+def _has_account_identity(user) -> bool:
+    """当前会话是否带登录账号身份（display_name / username）。"""
+    if not user:
+        return False
+    try:
+        return bool(str(user.get("display_name") or user.get("username") or "").strip())
+    except Exception:
+        return False
+
 
 class MemoryMixin:
     """记忆/模型上下文/用户上下文/报告素材构建。"""
@@ -112,6 +151,34 @@ class MemoryMixin:
                     recall_rows = [r for r in recall_rows if r.get("id") not in _core_ids]
                 if not core_rows and not recall_rows:
                     return ""
+                # ── 身份声明剥离（2026-10-29）：有登录账号身份时，称呼以账号为准 ──
+                #   记忆里的「用户叫X」不得作为称呼来源（否则模型会优先用它，
+                #   实测输出"你好，米巴！"而账号是 gefei）。
+                #   开关：`context_audit.memory_identity_strip`（默认 True；置 False 退回旧行为）。
+                _strip_identity = False
+                try:
+                    from core import config as _cfg3
+                    _strip_identity = bool(_cfg3.get("context_audit",
+                                                     "memory_identity_strip", True))
+                except Exception:
+                    _strip_identity = True
+                if _strip_identity and _has_account_identity(user):
+                    def _strip_rows(rows):
+                        out = []
+                        for r in (rows or []):
+                            _c = str(r.get("content") or "")
+                            _new = _strip_identity_claim(_c)
+                            if not _new:
+                                continue          # 剥完为空 ⇒ 该条只剩身份声明 ⇒ 不注入
+                            if _new != _c:
+                                r = dict(r)
+                                r["content"] = _new
+                            out.append(r)
+                        return out
+                    core_rows = _strip_rows(core_rows)
+                    recall_rows = _strip_rows(recall_rows)
+                    if not core_rows and not recall_rows:
+                        return ""
                 lines = []
                 if core_rows:
                     lines.append("【核心偏好（跨会话稳定，请遵守）】")
@@ -606,10 +673,21 @@ class MemoryMixin:
 
     def _build_user_context(self, user) -> str:
         """P2 用户上下文注入（文章：用户/业务/企业知识三类上下文）：
-        身份/角色进 prompt，让同一技能因人而异；无身份时返回空串。"""
+        身份/角色进 prompt，让同一技能因人而异；无身份时返回空串。
+
+        ★ 2026-10-29：**称呼的权威来源是登录账号**。
+          实测：长期记忆里存着「用户叫米巴…」，账号是 gefei，两者并存时模型
+          优先用记忆里的自报名（输出"你好，米巴！"）⇒ 与用户诉求冲突。
+          ⇒ 这里显式声明优先级：称呼以本块的「当前用户」为准，
+            长期记忆里的自报名**不得**作为称呼依据（记忆注入侧已同步剥离该子句）。
+        """
         if not user:
             return ""
-        parts = [f"当前用户：{user.get('display_name') or user.get('username') or ''}"]
+        _disp = str(user.get("display_name") or user.get("username") or "")
+        parts = [f"当前用户：{_disp}"]
+        if _disp:
+            parts.append(f"称呼用户时一律使用「{_disp}」；长期记忆中出现的其他自报名（如“用户叫X”）"
+                         f"不得作为称呼依据")
         if user.get("role_name"):
             parts.append(f"角色：{user['role_name']}")
         if user.get("department"):

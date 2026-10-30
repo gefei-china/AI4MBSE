@@ -200,9 +200,20 @@ ck("if team_prompt:" in _pl, "G2 ★team_prompt 真正拼进 prompt（不是只�
 _i = _pl.find("if team_prompt:")
 _j2 = _pl.find(".format(n=max_tasks)")
 ck(_i > _j2, "G3 ★拼接在 .format() 之后（名册含 { }，放前面会 KeyError）")
-ck("_planner_core(goal, agents, max_tasks, parallel, provider_id, run_id, conn," in _pl
-   and "conversation_id, team_prompt)" in _pl,
+# ★ 2026-10-29：判据从「team_prompt 是**最后一个**实参」放宽为「它确实被透传」。
+#   原判据 `"conversation_id, team_prompt)"` 把"参数列表末尾"当成了契约 ——
+#   只要在它后面追加任何参数（本轮加了 branch/user，为修子任务 branch 硬编码 dev），
+#   断言就误判红，而透传本身完好。这是典型的**断言与实现字面耦合**：
+#   它校验的不是"有没有传"，而是"位置恰好是最后一个"。
+#   保留意图（漏传则静默失效）：① 调用点必须出现 team_prompt 传参；
+#   ② 定义处必须接受 team_prompt；③ 变异自证见下方 G4b。
+_ck_callsite = _pl[_pl.find("_planner_core(goal, agents"):_pl.find("_planner_core(goal, agents") + 400]
+ck("team_prompt" in _ck_callsite,
    "G4 参数一路透传到 _planner_core（漏传则静默失效）")
+if "team_prompt" not in _ck_callsite:
+    print("       调用片段：%r" % _ck_callsite[:160])
+ck("team_prompt: str = \"\"" in _pl,
+   "G4b ★_planner_core 定义处接受 team_prompt（定义漏了就收不到）")
 _orch = open(os.path.join(ROOT, "agent", "pipeline_parts", "orchestration.py"),
              encoding="utf-8").read()
 ck('_kw["team_prompt"]' in _orch and "**_kw)" in _orch,
@@ -220,6 +231,40 @@ ck("[:300]" not in _code_only,
    "G8 ★team 分支代码内不再有 [:300] 截断（注释里的历史说明不算）")
 ck("[:4000]" in _code_only,
    "G9 保留超长 prompt 防御上限（[:4000]，不是无上限拼接）")
+
+print("\n== G10-G12. 多意图 stage_hint 双路径接线（2026-10-29） ==")
+# 背景：stage_hint（阶段序约束）此前**只有流式路径**注入 planner prompt，
+#   非流式（Flow 节点/试跑）没有 ⇒ 同一句「需求分析、方案设计、代码校验」
+#   流式按 3 阶段排 deps、非流式不排。这里是"漏传即静默失效"的同一类风险。
+# ⚠️ G10 判据必须**锚定到 `_planner_core` 自己的参数表**，不能用整文件搜
+#   `"stage_hint: list | None = None"` —— 该串在 `run_planner_plan` 的定义里**也**存在
+#   ⇒ 删掉 `_planner_core` 的那一份，整文件仍然匹配得到 ⇒ 判据恒绿（假绿）。
+#   本轮变异自证实测：用宽串时删定义仍 ok，PASS 计数不变。改为 AST 取该函数参数名集合。
+import ast as _ast  # noqa: E402
+_pc_args = set()
+for _n in _ast.walk(_ast.parse(_pl)):
+    if isinstance(_n, _ast.FunctionDef) and _n.name == "_planner_core":
+        _pc_args = {a.arg for a in (_n.args.args + _n.args.kwonlyargs)}
+        break
+ck("stage_hint" in _pc_args,
+   "G10 ★_planner_core 接受 stage_hint（定义漏了非流式就永远收不到）")
+if "stage_hint" not in _pc_args:
+    print("       _planner_core 实有参数：%s" % sorted(_pc_args))
+_i_sh = _pl.find("if stage_hint:")
+ck(_i_sh > 0 and _i_sh > _pl.find(".format(n=max_tasks)"),
+   "G11 ★stage_hint 拼进 planner prompt 且在 .format() 之后"
+   "（阶段原句可能含 { }，放前面会 KeyError）")
+# G12：两条路径必须共用**同一个**拼法 —— 各自手拼就是漂移的温床（本仓已踩过）。
+#   判据要**精确锚定那段旧拼法**：旧写法是
+#     `[f"{t['intent']}（{t['text']}）" for t in (...)]`
+#   ⇒ 特征串就是 `（{t['text']}）`。
+#   ⚠️ 不要用 `"".join` 之类的宽串做判据：stream.py 里 `"".join(exec_reasoning)` 等
+#   无关用法存在，宽串会让判据恒假（本轮实测踩到，PASS 59→FAIL，误报）。
+_legacy_build = "（{t['text']}）" not in _st
+ck("_build_stage_hint(" in _st and _legacy_build,
+   "G12 ★流式与非流式共用 _build_stage_hint（不再各自手拼，防两套口径漂移）")
+ck("def _build_stage_hint" in _orch and "_build_stage_hint(self.router.detect_multi" in _orch,
+   "G13 ★非流式路径把 detect_multi 的结果喂给 stage_hint（不是只收不用）")
 
 print("\n== H. C3 双路径口径对齐（stream / execute 都要判） ==")
 _ex = open(os.path.join(ROOT, "agent", "pipeline_parts", "execute.py"), encoding="utf-8").read()

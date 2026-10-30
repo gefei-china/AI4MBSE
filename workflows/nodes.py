@@ -1018,12 +1018,17 @@ class FlowNodesMixin:
                             if tk["status"] in ("planned", "ready"):
                                 TaskQueue.block(conn, tk["id"], "依赖任务失败，无法推进")
                         break
+                    # 2026-10-29：plan/branch 一并透传（依赖按传递闭包展开；不再是硬编码 dev）
+                    _nd_branch = str(cfg.get("branch") or "dev")
                     if parallel and len(ready) > 1:
                         from concurrent.futures import ThreadPoolExecutor
                         with ThreadPoolExecutor(max_workers=min(len(ready), 3)) as pool:
-                            results_list = list(pool.map(lambda tk: self._run_task(tk, goal, conn), ready))
+                            results_list = list(pool.map(
+                                lambda tk: self._run_task(tk, goal, conn, plan=plan, branch=_nd_branch),
+                                ready))
                     else:
-                        results_list = [self._run_task(tk, goal, conn) for tk in ready]
+                        results_list = [self._run_task(tk, goal, conn, plan=plan, branch=_nd_branch)
+                                        for tk in ready]
                     for tk, rr in zip(ready, results_list):
                         tk_res, meta, ok, err = rr
                         if ok:

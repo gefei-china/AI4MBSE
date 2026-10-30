@@ -8,9 +8,43 @@ from typing import Any, Optional
 from .tools import ToolExecutor
 
 
+def _dep_closure(dep_keys: set, plan: list, _guard: int = 32) -> set:
+    """把直接依赖展开成**传递闭包**（含自身）。`_guard` 防环形 deps 死循环。
+
+    plan 元素形如 {"task_key": "t2", "deps": ["t1"]}；缺失/非法 deps 一律忽略。
+    """
+    by_key = {}
+    for t in (plan or []):
+        if not isinstance(t, dict):
+            continue
+        k = str(t.get("task_key") or "")
+        if not k:
+            continue
+        ds = t.get("deps") or []
+        if isinstance(ds, str):
+            try:
+                ds = json.loads(ds) or []
+            except Exception:
+                ds = []
+        by_key[k] = [str(d) for d in ds if d]
+    out = set(dep_keys)
+    frontier = set(dep_keys)
+    for _ in range(max(1, _guard)):
+        nxt = set()
+        for k in frontier:
+            for d in by_key.get(k, []):
+                if d not in out:
+                    out.add(d)
+                    nxt.add(d)
+        if not nxt:
+            break
+        frontier = nxt
+    return out
+
+
 def build_subtask_context(tk: dict, goal: str, done_items: list = None,
                           artifact_digest: str = "",
-                          offload_map: dict = None) -> str:
+                          offload_map: dict = None, plan: list = None) -> str:
     """T7 子任务上下文快照：任务定义 + 前置结果摘要 + 会话既有产物 + 交付规范（最小充分上下文）。
 
     供 _run_task 与 _stream_orchestrated_flow 复用，保证会话编排/画布路径行为一致。
@@ -21,6 +55,13 @@ def build_subtask_context(tk: dict, goal: str, done_items: list = None,
     `_load_history` 对子任务等于空。所以多轮产物只能由此显式注入，否则子任务只看得见"本轮目标"、
     看不见"会话已经有什么"（实测会话 514：第 2 轮子任务把上一轮建好的需求模型当成不存在）。
     空串 = 不加段落（与改动前逐字节一致）。
+
+    plan（2026-10-29）：全量计划（含各任务 deps）。给了就把依赖展开成**传递闭包**。
+    为什么必须展开：旧实现 `dep_keys = {deps 里的直接依赖}`，于是
+    t1(需求) → t2(设计) → t3(报告) 这条链上，**t3 只看得见 t2、完全看不见 t1**
+    （实测：t3 快照里 grep 不到 t1 的结论）。多阶段任务的末段恰恰最需要开头的需求约束 ——
+    「需求分析、方案设计、代码校验」这类多意图输入必然产生长链，全链断头等于把多意图做废。
+    plan=None ⇒ 退化为直接依赖（逐字节兼容旧行为）。
     """
     cfg = tk.get("config") or {}
     if isinstance(cfg, str):
@@ -40,6 +81,10 @@ def build_subtask_context(tk: dict, goal: str, done_items: list = None,
         except Exception:
             deps = []
     dep_keys = {str(d) for d in deps}
+    # ★ 2026-10-29：依赖传递闭包（只对给了 plan 的调用方生效）。
+    if plan:
+        dep_keys = _dep_closure(dep_keys, plan)
+    # 按计划顺序输出（稳定：避免同一任务两次执行拿到不同顺序的摘要）
     pre = [it for it in (done_items or []) if it.get("task_key") in dep_keys and it.get("result")]
     if pre:
         parts.append("- 上游交付物摘要：")
@@ -152,7 +197,9 @@ class FlowPlannerMixin:
 
     def run_planner_plan(self, goal: str = "", agents=None, max_tasks: int = 6, parallel: bool = True,
                          provider_id=None, run_id: int = 0, conn=None, attachments=None, pool=None,
-                         conversation_id: int = 0, team_prompt: str = "") -> dict:
+                         conversation_id: int = 0, team_prompt: str = "",
+                         branch: str = "dev", user: dict | None = None,
+                         stage_hint: list | None = None) -> dict:
         """P0-1/P1-1/P1-2 Planner-Executor 服务（会话入口自动编排 / Flow planner 节点共用）。
 
         - LLM 计划生成：目标 → 子任务 DAG（key/title/agent/deps/task_type），
@@ -174,7 +221,8 @@ class FlowPlannerMixin:
         conn = conn or get_db()
         try:
             return self._planner_core(goal, agents, max_tasks, parallel, provider_id, run_id, conn,
-                                      attachments, pool, conversation_id, team_prompt)
+                                      attachments, pool, conversation_id, team_prompt,
+                                      branch=branch, user=user, stage_hint=stage_hint)
         finally:
             if own:
                 try:
@@ -184,7 +232,9 @@ class FlowPlannerMixin:
 
     def _planner_core(self, goal: str, agents, max_tasks: int, parallel: bool,
                       provider_id, run_id: int, conn, attachments=None, pool=None,
-                      conversation_id: int = 0, team_prompt: str = "") -> dict:
+                      conversation_id: int = 0, team_prompt: str = "",
+                      branch: str = "dev", user: dict | None = None,
+                      stage_hint: list | None = None) -> dict:
         """Planner-Executor 核心（run_planner_plan 的连接由外层管理）。
 
         pool（Task 5）：外部传入的编排候选池意图名列表（pipeline._orch_pool 结果），
@@ -270,6 +320,16 @@ class FlowPlannerMixin:
                 "若「本会话既有产物」非空且与本目标相关：任务必须**在既有产物上做增量** —— "
                 "title 写明增量的对象（如「在既有需求模型 v0.1 上补充参与者」），"
                 "context 写清引用哪个既有版本/元素；禁止规划「从零分析/重新建立」类任务。\n")
+        # ★ 2026-10-29：多意图阶段序约束。**与流式路径同口径、同样放在 `.format()` 之后**
+        #   （阶段原句可能含 { }，放进被 format 的模板会 KeyError）。
+        #   此前只有流式路径注入 stage_hint，非流式（Flow 节点/试跑）没有 ⇒ 同一句
+        #   「需求分析、方案设计、代码校验」流式会按 3 阶段排 deps、非流式不会。
+        #   stage_hint 为空 ⇒ 不加段落（逐字节回到旧行为）。
+        if stage_hint:
+            prompt += (
+                "\n★ 用户明确要求按以下**阶段顺序**执行，请让 plan 的任务顺序与 deps 与该序列对齐"
+                "（同一阶段的任务可并行；某阶段在本目标下确实无意义可跳过，但不得乱序）："
+                + " → ".join(str(x) for x in stage_hint))
         # C2（2026-10-07）：团队定义注入。**放在 `.format()` 之后** —— 名册里含中文括号与
         # 可能的 { }，放进被 format 的模板会 KeyError（与 artifact_digest 同理）。
         if team_prompt:
@@ -348,8 +408,12 @@ class FlowPlannerMixin:
                     _wt = int(_cfg.get("delegation", "worker_timeout_s", 120))
                     with ThreadPoolExecutor(max_workers=min(len(ready), 3)) as pool:
                         # T7：注入已完成的依赖结果摘要（跨线程只读共享 _done_items 快照）
+                        # 2026-10-29：plan 一并传入 → 依赖按传递闭包展开（长链不再断头）；
+                        #   branch/user 透传（此前 branch 硬编码 "dev" ⇒ 非 dev 分支的知识库检索范围错、
+                        #   user=None ⇒ 子任务无用户上下文、Skill 角色过滤失效）。
                         _futs = [pool.submit(self._run_task, tk, goal, conn, attachments,
-                                             list(_done_items), artifact_digest)
+                                             list(_done_items), artifact_digest,
+                                             plan, branch, user)
                                  for tk in ready]
                         results_list = []
                         for _f in _futs:
@@ -361,7 +425,7 @@ class FlowPlannerMixin:
                                 results_list.append(("", {}, False, f"{type(_e).__name__}: {str(_e)[:120]}"))
                 else:
                     results_list = [self._run_task(tk, goal, conn, attachments, list(_done_items),
-                                                   artifact_digest) for tk in ready]
+                                                   artifact_digest, plan, branch, user) for tk in ready]
                 for tk, rr in zip(ready, results_list):
                     tk_res, meta, ok, err = rr
                     if ok:
@@ -420,7 +484,8 @@ class FlowPlannerMixin:
         }
 
     def _run_task(self, tk: dict, goal: str, conn, attachments=None, done_items: list = None,
-                  artifact_digest: str = "") -> tuple:
+                  artifact_digest: str = "", plan: list = None, branch: str = "dev",
+                  user: dict | None = None) -> tuple:
         """执行单个计划任务（agent | react | llm | tool），返回 (result, metadata, ok, error)。
 
         P0 委派协议：config 支持 context/expected_output/tools/skills——
@@ -451,7 +516,9 @@ class FlowPlannerMixin:
                 tools_wl = [x.strip() for x in tools_wl.split(",") if x.strip()]
             query = cfg.get("query") or f"{title}\n团队目标：{goal}"
             # T7：任务上下文快照（任务定义 + 前置依赖结果摘要 + 交付规范），注入隔离窗口
-            _ctx_block = build_subtask_context(tk, goal, done_items, artifact_digest=artifact_digest)
+            # 2026-10-29：带 plan ⇒ 依赖按**传递闭包**展开（否则 t1→t2→t3 的链上 t3 看不见 t1）
+            _ctx_block = build_subtask_context(tk, goal, done_items, artifact_digest=artifact_digest,
+                                               plan=plan)
             if _ctx_block:
                 query = f"[任务上下文快照]\n{_ctx_block}\n\n[任务]\n{query}"
             if context:
@@ -468,9 +535,9 @@ class FlowPlannerMixin:
                     row = conn.execute("SELECT name FROM skills WHERE name=? AND status='published'", (skill_name,)).fetchone()
                     if not row:
                         skill_name = None
-                out = pipe.execute(query, 0, "dev", None, attachments or [], dry_run=True,
+                out = pipe.execute(query, 0, branch, None, attachments or [], dry_run=True,
                                    forced_intent=tk.get("agent_id") or None, skill_name=skill_name,
-                                   tools_whitelist=tools_wl)
+                                   user=user, tools_whitelist=tools_wl)
                 content = (out.get("content") or "").strip()
                 llm = out.get("llm") or {}
                 meta = self._delegate_result(content, status="done", provider=llm.get("provider", "-"),

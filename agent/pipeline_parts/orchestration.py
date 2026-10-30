@@ -203,7 +203,8 @@ class OrchestrMixin:
 
     def _try_orchestrate_team(self, user_input: str, team_intent: str, provider_id=None,
                               attachments=None, conversation_id: int = 0,
-                              team_def: dict | None = None) -> dict | None:
+                              team_def: dict | None = None, branch: str = "dev",
+                              user: dict | None = None) -> dict | None:
         """团队模式编排：主 Agent（团队负责人）分解任务 → 分派团队成员 → 汇总。
 
         委派候选收敛到「团队成员 + 主 Agent 自身」最小权限池（非全量 Agent 池）；
@@ -242,7 +243,9 @@ class OrchestrMixin:
             return FlowExecutor().run_planner_plan(
                 goal=user_input, agents=self._ORCH_AGENTS, max_tasks=self._ORCH_MAX_TASKS,
                 parallel=True, provider_id=provider_id, attachments=attachments, pool=pool,
-                conversation_id=conversation_id, **_kw)
+                conversation_id=conversation_id, branch=branch, user=user,
+                stage_hint=self._build_stage_hint(self.router.detect_multi(user_input)),
+                **_kw)
         except Exception as e:
             self._orch_error = str(e)[:150]
             return None
@@ -322,12 +325,18 @@ class OrchestrMixin:
             return False
 
     def _try_orchestrate(self, user_input: str, intent: str, provider_id=None, attachments=None,
-                         conversation_id: int = 0) -> dict | None:
+                         conversation_id: int = 0, branch: str = "dev",
+                         user: dict | None = None) -> dict | None:
         """P0-1 会话入口自动编排：复杂任务 → Planner-Executor（复用 FlowExecutor.run_planner_plan）。
         简单任务 / 带附件且非规则信号 / 编排异常 → 返回 None（回落单 Agent 直行）。
         附件随编排透传（子任务执行时注入，避免丢附件）。"""
+        # ★ 2026-10-29：多意图结果**只算一次**并复用（判编排 + 拼 stage_hint）。
+        #   此前这里只把 multi 传给 _needs_orchestration 就丢掉，而流式路径会把它拼成
+        #   stage_hint 注入 planner prompt 约束"阶段序 + deps" ⇒ 两条路径口径不一致：
+        #   同一句"需求分析、方案设计、代码校验"，流式会按 3 阶段排 deps，非流式不会。
+        _multi = self.router.detect_multi(user_input)
         if not self._needs_orchestration(user_input, intent, has_attachments=bool(attachments),
-                                        multi=self.router.detect_multi(user_input)):
+                                        multi=_multi):
             return None
         try:
             from workflows import FlowExecutor
@@ -337,10 +346,32 @@ class OrchestrMixin:
             return FlowExecutor().run_planner_plan(
                 goal=user_input, agents=self._ORCH_AGENTS, max_tasks=self._ORCH_MAX_TASKS,
                 parallel=True, provider_id=provider_id, attachments=attachments, pool=_pool,
-                conversation_id=conversation_id)
+                conversation_id=conversation_id, branch=branch, user=user,
+                stage_hint=self._build_stage_hint(_multi))
         except Exception as e:
             self._orch_error = str(e)[:150]
             return None
+
+    @staticmethod
+    def _build_stage_hint(multi: dict | None) -> list:
+        """多意图结果 → stage_hint（`{意图}（{该阶段原句}）`，与流式路径**同口径**）。
+
+        流式路径 (`stream.py`) 用的是同一拼法；抽成静态方法是为了让两条路径不可能再漂移
+        （本仓已因"两套 prompt 漂移"付出过代价，见 planner.py 里 expected_output 的注释）。
+        无多意图 / 结构非法 ⇒ 返回 []（falsy，调用方不加段落 ⇒ 逐字节回到旧行为）。
+        """
+        tasks = (multi or {}).get("tasks") or []
+        out = []
+        for t in tasks:
+            if not isinstance(t, dict):
+                continue
+            it, tx = t.get("intent"), t.get("text")
+            if it and tx:
+                out.append(f"{it}（{tx}）")
+        if out:
+            return out
+        seq = (multi or {}).get("sequence") or []
+        return [str(x) for x in seq]
 
     def _finish_orchestrated(self, orch: dict, user_input: str, conversation_id, intent: str,
                              agent_def, hil_level: str, kb_tags: list, attachments: list,

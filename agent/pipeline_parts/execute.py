@@ -236,7 +236,7 @@ class ExecuteMixin:
             # 团队模式：主 Agent（团队负责人）编排——意图识别/拆解/计划/分派/汇总
             _orch = self._try_orchestrate_team(user_input, team_intent, effective_provider,
                                                attachments=attachments, conversation_id=conversation_id,
-                                               team_def=team_def)
+                                               team_def=team_def, branch=branch, user=user)
             if _orch is not None:
                 self._save_conversation_dst(conversation_id, intent, slots)
                 return self._finish_orchestrated(_orch, user_input, conversation_id, intent,
@@ -244,7 +244,7 @@ class ExecuteMixin:
                                                  team=team_intent, user=user)
         elif not forced_intent and not team_direct and not dry_run:
             _orch = self._try_orchestrate(user_input, intent, effective_provider, attachments=attachments,
-                                          conversation_id=conversation_id)
+                                          conversation_id=conversation_id, branch=branch, user=user)
             if _orch is not None:
                 # P0-2 DST：编排前落会话意图状态（编排执行走独立子管道，主会话状态在此保存）
                 self._save_conversation_dst(conversation_id, intent, slots)
