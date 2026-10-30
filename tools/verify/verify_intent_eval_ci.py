@@ -47,6 +47,11 @@ CI_TOL = 0.03             # 区间下限容差
 SETS = ("gold", "silver", "synth")
 
 _results = []
+# [E] 功能自证需要**调用 main() 自身**来取得返回码 ⇒ 无此标志会无限递归
+# （实测：递归到解释器上限，输出 180KB 后 RecursionError）。
+# 语义：为 True 时 main() 只跑 A~D 就收尾 —— 内层 rc 正好反映 A~D 的判定，
+# 正是自证要断言的"判据会不会翻红"。
+_IN_SELFTEST = False
 
 
 def check(name, ok, detail=""):
@@ -174,6 +179,90 @@ def main():
     names = [r[1] for r in _results]
     check("D4 断言名唯一", len(set(names)) == len(names),
           "dups=%s" % [x for x in set(names) if names.count(x) > 1])
+
+    # ── [E] 功能自证：**门禁自己会不会判红** ───────────────────────────────
+    # 为什么必须有：A~D 四组都是"对当前这份报告做判定"，**没有一条能证明
+    #   判据真的会翻红**。本仓已有过多次"门禁写了、接进 CI 了、但永远绿"的先例
+    #   （YAML 续行导致 argparse 直接 exit 2 就是最近一次）。
+    # 做法：把 5 个合成报告喂给 main() 自身，断言返回码与失败断言名。
+    if _IN_SELFTEST:
+        # 自证内层：只跑 A~D，返回其判定（不再进入 [E]，否则递归）
+        _p = sum(1 for ok, _, _ in _results if ok)
+        return 0 if _p == len(_results) else 1
+
+    hr("[E] 功能自证：合成报告下门禁必须按预期翻红/放行")
+    keep = list(_results)
+
+    def _run(rep, base=None):
+        """用合成报告跑一遍 main()，返回 (rc, stdout)。不改动磁盘上的真报告。"""
+        import contextlib
+        import io as _io
+        import tempfile
+        d = tempfile.mkdtemp(prefix="intent_gate_selftest_")
+        rp, bp = os.path.join(d, "r.json"), os.path.join(d, "b.json")
+        with open(rp, "w", encoding="utf-8") as f:
+            json.dump(rep, f, ensure_ascii=False)
+        if base is not None:
+            with open(bp, "w", encoding="utf-8") as f:
+                json.dump(base, f, ensure_ascii=False)
+        g_rep, g_base = globals()["REPORT"], globals()["BASELINE"]
+        globals()["REPORT"], globals()["BASELINE"] = rp, bp
+        globals()["_IN_SELFTEST"] = True          # ← 截断递归（见模块级注释）
+        _results.clear()
+        buf = _io.StringIO()
+        old_argv = sys.argv
+        sys.argv = ["verify_intent_eval_ci"]
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = main()
+        finally:
+            sys.argv = old_argv
+            globals()["_IN_SELFTEST"] = False
+            globals()["REPORT"], globals()["BASELINE"] = g_rep, g_base
+            _results[:] = list(keep)
+        return rc, buf.getvalue()
+
+    def _mk(g_n, g_k, s_n, s_k, y_n, y_k, outs_gold=None):
+        def _set(n, k, outs=None):
+            lo, hi = wilson_ci(k, n)
+            d = {"n": n, "correct": k, "accuracy": round(k / n, 4) if n else 0.0,
+                 "ci95": [round(lo, 4), round(hi, 4)],
+                 "width_pts": round((hi - lo) * 100, 2),
+                 "macro_f1": 0.0, "confusion": {}}
+            if outs:
+                d["outcomes"] = outs
+            return d
+        rep = {"generated_at": "selftest", "sets": {
+            "gold": _set(g_n, g_k, outs_gold), "silver": _set(s_n, s_k), "synth": _set(y_n, y_k)}}
+        rep["corpus_n"] = g_n + s_n + y_n
+        return rep
+
+    # E1 正常报告（无基线）⇒ 必须放行
+    rc, out = _run(_mk(48, 45, 164, 140, 200, 120))
+    check("E1 合格报告放行（rc=0）", rc == 0, "rc=%s" % rc)
+
+    # E2 手改区间 ⇒ B1 必须翻红
+    r2 = _mk(48, 45, 164, 140, 200, 120)
+    r2["sets"]["gold"]["ci95"] = [0.80, 0.99]
+    rc, out = _run(r2)
+    check("E2 ★变异：篡改 ci95 ⇒ B1 翻红", rc == 1 and "B1" in out, "rc=%s" % rc)
+
+    # E3 语料不足 ⇒ A1/A2 必须翻红（这是本项目最容易被绕过的一条）
+    rc, out = _run(_mk(48, 45, 100, 90, 0, 0))
+    check("E3 ★变异：语料 148 < 300 ⇒ 规模闸翻红（A1 且 A2）",
+          rc == 1 and "A1" in out and "A2" in out, "rc=%s" % rc)
+
+    # E4 基线更优 ⇒ C1 必须翻红
+    rc, out = _run(_mk(48, 45, 164, 140, 200, 120), base=_mk(48, 48, 164, 150, 200, 130))
+    check("E4 ★变异：准确率低于基线超容差 ⇒ C1 翻红", rc == 1 and "C1" in out, "rc=%s" % rc)
+
+    # E5 系统性变差（配对）⇒ C3 必须翻红
+    outs_ok = [{"h": "g%d" % i, "ok": True} for i in range(48)]
+    outs_bad = [{"h": "g%d" % i, "ok": i >= 9} for i in range(48)]   # 9 条由对翻错、0 条反向
+    rc, out = _run(_mk(48, 39, 164, 140, 200, 120, outs_gold=outs_bad),
+                   base=_mk(48, 48, 164, 140, 200, 120, outs_gold=outs_ok))
+    check("E5 ★变异：9 条对→错、0 条反向 ⇒ McNemar 判系统性变差（C3 翻红）",
+          rc == 1 and "C3" in out, "rc=%s" % rc)
 
     n_pass = sum(1 for ok, _, _ in _results if ok)
     n_fail = len(_results) - n_pass
