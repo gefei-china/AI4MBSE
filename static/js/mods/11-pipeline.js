@@ -39,9 +39,16 @@ function onStageEvent(ev){
         const _es = ev.exec_subject || null;
         let _subjLine = '';
         if(_es && _es.name){
-          const _srcMap = {manual:'你手动选择', bound:'本会话已绑定', route:'按意图路由'};
+          // ★ 2026-10-29：新增 team_route —— 本轮执行主体是**主 Agent 在团队内定向**的结果。
+          //   旧实现没有这一档，团队定向被归成 manual（"你手动选择"），与事实相反
+          //   （conv 9754：用户选的是主 Agent「智源对接agent」，系统定向给成员 design）。
+          //   必须显式列出主 Agent 名，否则用户仍会问"这不是主 Agent，怎么是它在跑"。
+          const _srcMap = {manual:'你手动选择', bound:'本会话已绑定', route:'按意图路由', team_route:'主 Agent 定向成员'};
           const _src = _srcMap[_es.source] || '';
-          if(_es.source === 'route'){
+          if(_es.source === 'team_route'){
+            const _via = _es.main_agent ? `经由「${_es.main_agent}」` : '主 Agent';
+            _subjLine = `→ ${_es.name}（${_via}定向，HIL ${ev.hil_level||'-'}）`;
+          } else if(_es.source === 'route'){
             _subjLine = `→ ${_es.name}（${_src}，HIL ${ev.hil_level||'-'}）`;
           } else {
             // 非路由来的，必须显式说明"不是识别出来的"

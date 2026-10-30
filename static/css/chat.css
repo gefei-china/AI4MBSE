@@ -152,6 +152,28 @@
 .proc{max-height:44vh;overflow-y:auto;overscroll-behavior:auto;padding-right:2px;}
 .proc::-webkit-scrollbar{width:6px;}
 .proc::-webkit-scrollbar-thumb{background:var(--line,#dde3ec);border-radius:3px;}
+
+/* ── 正文区呈现层（2026-10-29，js/mods/51-answer-view.js 配套） ────────────
+   用户反馈：「LLM的输出可以放在具体执行节点吗，不要都展示在这里，不清楚是什么环节输出的」
+            +「这个区域因为输出内容较多，导致页面被拉的很长」。
+
+   ⚠️ 与 B5-8 的关系（必须写清，否则后人会误判为违规）：
+      B5-8（米爸原话）：「最终输出结果不要收起来，也不允许收起来」
+      ⇒ 本层**不做折叠、不做展开/收起**，正文**一字不删、始终完整存在**。
+      「限高 + 区域内滚动」是米爸 2026-10-27 对执行过程区提出的**同一措辞**要求：
+      「要求此区域限制高度，可以滑动查看完整内容」—— 限的是容器高度，不是内容可见性。
+      两处需求方向一致（都是"限高内滚"），因此正文区沿用同一口径。
+   ⚠️ 只在**渲染收口之后**加（见 51-answer-view.js 的幂等实现），流式期间不限高，
+      否则会破坏跟读与「贴底才跟随」的滚动语义。 */
+.msg.ai .body.ans-capped{max-height:60vh;overflow-y:auto;overscroll-behavior:auto;}
+.msg.ai .body.ans-capped::-webkit-scrollbar{width:6px;}
+.msg.ai .body.ans-capped::-webkit-scrollbar-thumb{background:var(--line,#dde3ec);border-radius:3px;}
+/* 来源标注：回答"这一段是谁给的"（此前正文与执行过程在视觉上分离，但看不出归属） */
+.ans-src{margin:0 0 4px;padding-left:2px;font-size:10.5px;color:var(--mut);line-height:1.5;}
+.ans-src::before{content:"▸ ";color:var(--blue-d,#3478f6);}
+/* 限高提示：明确告知"内容未截断，区域内滚动可看全"，避免误以为被截断 */
+.ans-cap-hint{margin:0 0 4px;font-size:10.5px;color:var(--mut);line-height:1.5;opacity:.85;}
+.ans-cap-hint::before{content:"⌄ ";}
 /* 意图理解明细（procAddStage 的 body；2026-10-27）：回答"你到底把我理解成什么" */
 .ib-brief{display:flex;flex-direction:column;gap:3px;white-space:normal;font-size:11px;line-height:1.6;}
 .ib-brief .ib-row{display:flex;gap:6px;align-items:flex-start;min-width:0;}

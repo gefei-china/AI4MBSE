@@ -458,6 +458,10 @@ let _stickRaf = 0;                     // rAF 句柄（合批用）
 // UX规范§8.4（2026-10-02）：脱离跟读期间新内容到达 → 未读增量计数 + 「回到最新」浮钮。
 // 内容每到达一批 +1（封顶 999）；回到底部 / 点击浮钮 / 发送消息即清零。
 let _stickUnread = 0;
+// ★ 2026-10-29：最近一次**程序化钉底**写入的 scrollTop（-1 = 尚未写过）。
+//   用途见 `_bindStickDetach` 的 scroll 监听：区分"自己滚的"与"用户滚的"，
+//   避免内容长高导致 scroll 事件迟到时被误判成"用户上滑"而中途掉线。
+let _lastPinTop = -1;
 
 // 浮钮：挂在 #chat-col（聊天列）右下、输入区上方。只增不重建，按 unread 显隐。
 function _stickBtnShow(){
@@ -518,20 +522,38 @@ function _anchorChatToLatest(area){
 }
 function _isNearBottom(area){
   if(!area) return true;
-  if((area.scrollHeight - area.scrollTop - area.clientHeight) <= _STICK_EPS) return true;
-  // scrollHeight 是估算值时的补判据：最后一条消息本身已在视口底附近 ⇒ 视为在底部。
-  // （否则内容每长高一帧，距底就变大一次 ⇒ 被 scroll 监听误判成"用户上滑"⇒ 中途脱离跟读。）
+  // ★ 2026-10-29（用户反馈：AI 输出过程中上滑总被拽回新输出位置）：
+  //   根因 = **主判据用了被 content-visibility 严重失真的 scrollHeight**。
+  //   `.msg` 带 `content-visibility:auto; contain-intrinsic-size:auto 132px`
+  //   ⇒ 屏外消息只按 132px 估算，实测同一会话 估算 3680px / 真实 28170px（**差 6.6 倍**）
+  //   ⇒ `scrollHeight - scrollTop - clientHeight` 在估算值偏小时**严重低估距底距离**
+  //   ⇒ 用户明明上滑了，却被判成"仍在底部" ⇒ `_stickFollow` 保持 true ⇒ 每帧继续钉底
+  //   ⇒ 表现为「拖动页面上滑总被自动返回新输出位置」。
+  //   修法：**真实几何优先**（与 `_anchorChatToLatest` 同源，用最后一条消息的真实底边），
+  //   估算值只在真实几何不可得时兜底。顺序反了就会重犯"假绿"。
   try{
     const last = _latestChatMsg(area);
     if(last && last.getBoundingClientRect && area.getBoundingClientRect){
       const r = last.getBoundingClientRect();
+      const box = area.getBoundingClientRect();
+      // 真实几何可用（消息已渲染，rect 高度 > 0）⇒ 以它为准
       if(r.height > 0){
-        const box = area.getBoundingClientRect();
-        return (r.bottom - box.bottom) >= -_STICK_EPS;
+        // ⚠️ 符号是本判据的全部要害（2026-10-29 真实浏览器实测抓出）：
+        //   d = 最后一条消息底边 − 视口底边
+        //     · 跟读中：d ≈ 0（流式期间新内容尚未入帧时 d 略正，几十 px 内）
+        //     · **用户上滑：d 明显为正**（视口上移，内容底边被推到视口下方）
+        //     · 越过底部（回弹/缩放）：d 为负
+        //   ⇒ 「在底部」= **d 至多只有 EPS 的余量**，即 `d <= _STICK_EPS`。
+        //   反例（原写法 `d >= -_STICK_EPS` 的错处，实测）：长答复内上滑 600px 时 d=+600，
+        //   `600 >= -48` 成立 ⇒ 被判成"仍在底部" ⇒ 继续钉底 ⇒ 就是用户报的
+        //   「拖动页面上滑总是被自动返回新输出位置」。
+        const d = r.bottom - box.bottom;
+        return d <= _STICK_EPS;
       }
     }
   }catch(e){}
-  return false;
+  // 真实几何不可得（最后一条尚未实现 / 被 content-visibility 跳过）⇒ 回落估算值
+  return (area.scrollHeight - area.scrollTop - area.clientHeight) <= _STICK_EPS;
 }
 // 用户交互 → 脱离跟读。一次绑定，常驻监听（只读判断，成本可忽略）。
 function _bindStickDetach(){
@@ -543,6 +565,12 @@ function _bindStickDetach(){
   area.addEventListener('touchmove', detach, {passive:true});
   // 拖动滚动条 / 键盘翻页 / 程序性滚动后同步跟读态；回到底部 → 未读清零并隐藏浮钮
   area.addEventListener('scroll', ()=>{
+    // ★ 2026-10-29：**区分「自己滚的」与「用户滚的」**。
+    //   `stickBottom()` 的程序化钉底也会触发 scroll 事件，而事件是**异步**派发的 ——
+    //   派发时内容可能又长高了一截（流式 token 连续到达）⇒ 几何判据变成"离底很远"
+    //   ⇒ 被误判成"用户上滑" ⇒ 跟读中途掉线（这是原注释担心的那个误判）。
+    //   判据：scrollTop 与本进程最近一次写入的值一致（±2px）⇒ 是程序化钉底，不是用户意图。
+    if(_stickFollow && Math.abs(area.scrollTop - _lastPinTop) <= 2) return;
     _stickFollow = _isNearBottom(area);
     if(_stickFollow){ _stickUnread = 0; _stickBtnShow(); }
   }, {passive:true});
@@ -565,6 +593,7 @@ function stickBottom(force){
     if(!a || !_stickFollow) return;
     a.scrollTop = a.scrollHeight;
     _anchorChatToLatest(a);      // 2026-10-22：估算高度失真 ⇒ 粗跳之后再按真实元素校正一次
+    _lastPinTop = a.scrollTop;   // ★ 2026-10-29：记下自己的写入值，供 scroll 监听区分来源
   });
 }
 // 强制滚动（用户显式动作：发送消息、切换会话、点"回到最新"）——绕过跟读态判断
@@ -577,6 +606,7 @@ function scrollChatToBottom(){
   _stickBtnShow();
   area.scrollTop = area.scrollHeight;
   _anchorChatToLatest(area);
+  _lastPinTop = area.scrollTop;      // ★ 与 stickBottom 同口径：记录程序化写入值
 }
 // 2026-09-16：打开会话后持续钉底——懒加载内容（mermaid 库首载/图片/缩略图挂载）会在
 // 数秒内持续长高，固定时间补偿追不上。策略：150ms 步进钉底至超时；用户滚轮/触摸上滑立即让位。
@@ -586,11 +616,18 @@ function pinChatBottom(area, ms){
   const stop = ()=>{ userInterrupted = true; };
   area.addEventListener('wheel', stop, {once:true, passive:true});
   area.addEventListener('touchmove', stop, {once:true, passive:true});
+  // ★ 2026-10-29（用户反馈：拖动页面上滑总被拽回）：**拖动滚动条**既不触发 wheel
+  //   也不触发 touchmove ⇒ 中断条件永远不成立 ⇒ 每 150ms 的强制钉底把用户拽回底部。
+  //   pointerdown 在滚动条上按下时同样落到容器上（滚动条属于元素的一部分）⇒ 可捕获。
+  area.addEventListener('pointerdown', stop, {once:true, passive:true});
+  // 键盘翻页（PageUp/空格/Home）同样不产生 wheel/touchmove ⇒ 也要能中断
+  area.addEventListener('keydown', stop, {once:true, passive:true});
   const start = Date.now();
   (function tick(){
     if(userInterrupted || Date.now() - start > (ms||8000)) return;
     area.scrollTop = area.scrollHeight;
     _anchorChatToLatest(area);
+    _lastPinTop = area.scrollTop;    // ★ 与 stickBottom 同口径
     setTimeout(tick, 150);
   })();
 }
@@ -628,7 +665,13 @@ function renderMessagesChunked(area, msgs, done){
     }
     area.appendChild(frag);
     if(i < msgs.length) requestAnimationFrame(step);
-    else { syncChatHeavy(area); if(done) done(); }
+    else {
+      syncChatHeavy(area);
+      // ★ 2026-10-29：历史消息同样要限高（否则刷新后长答复又把页面拉得很长）。
+      //   批量扫描不带 meta（历史消息没有当轮 agent 上下文）⇒ 只做限高，不编造来源标注。
+      try{ if(typeof applyAnswerFrame === 'function') applyAnswerFrame(area); }catch(e){}
+      if(done) done();
+    }
   })();
 }
 // ★ 2026-10-28（用户报「AI 输出完成后滚动页面内容错位，刷新才正常」）：

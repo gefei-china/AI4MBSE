@@ -384,6 +384,17 @@ function finishStream(r, aiBox) {
   }
   // 会话产物分栏增量刷新（后端已归档本消息产物）
   if(currentConvId) loadArtifacts(currentConvId);
+  // ★ 2026-10-29（用户反馈2）：正文来源标注 + 限高内滚（详见 js/mods/51-answer-view.js）。
+  //   必须在 **outerHTML 替换之后**——替换前的流式 DOM 已被丢弃，加在那儿等于没加。
+  //   不折叠、不隐藏（遵守 B5-8「最终输出结果不要收起来」），只限容器高度。
+  try{
+    if(r && r.message_id){
+      const _el = document.getElementById('msg-' + r.message_id);
+      if(_el && typeof applyAnswerFrame === 'function'){
+        applyAnswerFrame(_el, {agent: r.agent, hil: r.hil_level});
+      }
+    }
+  }catch(e){}
   // 2026-09-29：流结束改贴底才跟随（用户上滑阅读上文时不被打断）
   stickBottom();
   // ★ 2026-10-17（米爸反馈2）：收口替换（outerHTML 重渲染 + 卡片/报告附加块）之后
