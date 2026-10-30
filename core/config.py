@@ -2399,6 +2399,7 @@ def save_override(updates: dict) -> dict:
     - 写回时保留文件内既有未知键，不覆盖
     """
     converted: dict = {}
+    skipped_masked: list = []
     for dotted, raw in (updates or {}).items():
         if not isinstance(dotted, str) or "." not in dotted:
             raise ValueError(f"配置键必须是 分组.键 格式（如 zhiyuan.base_url），收到: {dotted!r}")
@@ -2406,11 +2407,84 @@ def save_override(updates: dict) -> dict:
         meta = CONFIG_SCHEMA.get(section, {}).get(key)
         if meta is None:
             raise ValueError(f"未知配置项: {dotted}")
+        # ★ P1-6（2026-10-30）：**掩码回写护栏**。
+        #   `schema()` 对 secret 类返回 `abc****`；前端若把表单原样提交回来，
+        #   下面 `_coerce` 会把它当合法字符串写进配置文件 ⇒ **真密钥被 6 个字符覆盖**。
+        #   判据：secret 类且值以 `****` 结尾 ⇒ 视为"未修改"，跳过该键。
+        #   （若用户真想清空密钥，提交空串 —— 那是明确意图，允许。）
+        if (str(meta.get("type") or "") == "secret"
+                and isinstance(raw, str) and raw.endswith("****")):
+            skipped_masked.append(dotted)
+            continue
         converted.setdefault(section, {})[key] = _coerce(meta, raw)
     merged = _force_merge(_load_file(CONFIG_PATH), converted)
     _write_file(CONFIG_PATH, merged)
     reload()
-    return {"path": CONFIG_PATH, "updated": list((updates or {}).keys())}
+    return {"path": CONFIG_PATH,
+            "updated": list((updates or {}).keys()),
+            # P1-6：被"掩码回写护栏"跳过的键（如实回报，别让调用方以为改了）
+            "skipped_masked": skipped_masked}
+
+
+# ── P1-6（2026-10-30）：补齐 29 个「DEFAULT 有、SCHEMA 无」的键 ────────────
+# 为什么必须补：`CONFIG_SCHEMA` 是界面/API 的**唯一真源**。不在里面的键，
+# `PUT /api/system/config/static` 直接抛「未知配置项」⇒ 界面上根本改不了。
+# 这 29 个恰是"出问题时要第一时间调"的旋钮（限流阈值、worker 并发、登录策略、OCR 预算）。
+# ⚠️ `client_secret` / `api_key` 用 `type="secret"`：`schema()` 会脱敏成 `xxx****`，
+#    写回时由 `save_override` 的护栏跳过（否则掩码会把真密钥覆盖掉）。
+# ⚠️ **必须逐段 merge，不能 `CONFIG_SCHEMA.update({...})`**（2026-10-30 实测踩到）：
+#   `dict.update` 对已存在的段是**整段替换** ⇒ embedding / extract / rag 三个段
+#   原有的 58 个键被一次抹掉（schema 键数从 455 掉到 426，且界面会显示"未知配置项"）。
+#   正确姿势：`setdefault(段, {}).update(本段新增项)` —— 只加不改。
+_EXTRA_SCHEMA = {
+    "auth": {
+        "mode":                    {"type": "str",  "desc": "登录模式：local=本地账号 / sso=单点登录"},
+        "sso_base":                {"type": "str",  "desc": "SSO 服务基地址（mode=sso 时生效）"},
+        "client_id":               {"type": "str",  "desc": "SSO 客户端 ID"},
+        "client_secret":           {"type": "secret", "desc": "SSO 客户端密钥（脱敏显示；提交掩码值不会覆盖真值）"},
+        "redirect_uri":            {"type": "str",  "desc": "SSO 回调地址（须与 SSO 侧登记一致）"},
+        "default_role_id":         {"type": "int",  "desc": "新用户默认角色 id（现网 80=设计师）"},
+        "session_ttl_hours":       {"type": "int",  "desc": "登录会话有效期（小时）"},
+        "enforce_login":           {"type": "bool", "desc": "是否强制登录（关=匿名可访问，权限门对匿名一律放行）"},
+        "trust_user_id_header":    {"type": "bool", "desc": "是否信任 X-User-Id 头（仅内网/联调应开启）"},
+    },
+    "conv_summary": {
+        "max_tokens":              {"type": "int",  "desc": "会话摘要输出上限（token）。P1-27 实测硬编码 300 时 266 次调用恒触顶、摘要功能基本失效"},
+    },
+    "embedding": {
+        "on_quota_exhausted":      {"type": "str",  "desc": "额度耗尽时的策略：block=直接报错 / 其它=降级 bigram（bigram 与真向量物理不可比）"},
+        "quota_block_sec":         {"type": "int",  "desc": "额度熔断时长（秒）：命中 403/429+quota 后在此期间直接降级，不反复试"},
+    },
+    "extract": {
+        "ocr_page_batch":          {"type": "int",  "desc": "OCR 每页批大小（整份入库持写事务，批太大易撞 busy_timeout）"},
+        "ocr_resume_enabled":      {"type": "bool", "desc": "OCR 断点续跑（中断后从已完成页继续，避免整份重跑）"},
+        "ocr_time_budget_sec":     {"type": "int",  "desc": "单份文档 OCR 总时间预算（秒，超时按已完成页收尾）"},
+    },
+    "jobs": {
+        "worker_enabled":          {"type": "bool", "desc": "后台作业 worker 总开关（关=作业只入队不执行）"},
+        "worker_count":            {"type": "int",  "desc": "worker 并发数（与 SQLite 单写者争用相关，别盲目调大）"},
+        "worker_interval_s":       {"type": "int",  "desc": "worker 轮询间隔（秒）"},
+        "worker_lease_s":          {"type": "int",  "desc": "作业租约（秒）：超时未续租视为失活，可被其它 worker 接管"},
+    },
+    "rag": {
+        "hyde_embed_max_chunks":   {"type": "int",  "desc": "HyDE 向量化的最多块数（0=不限）。HyDE 让索引期向量请求数翻倍，设上限可控成本"},
+        "tenant_isolation":        {"type": "str",  "desc": "租户隔离策略：off=不做 / 其它=按租户过滤（当前默认 off，改前需评估存量数据归属）"},
+        "tenant_unresolved":       {"type": "str",  "desc": "租户无法解析时的处置：passthrough=放行 / 其它=拒绝"},
+    },
+    "rate_limit": {
+        "enabled":                 {"type": "bool", "desc": "限流总开关"},
+        "chat_per_min":            {"type": "int",  "desc": "每用户每分钟对话请求上限（最贵的入口，通常最先被压）"},
+        "write_per_min":           {"type": "int",  "desc": "每用户每分钟写请求上限"},
+        "read_per_min":            {"type": "int",  "desc": "每用户每分钟读请求上限"},
+        "exempt_paths":            {"type": "list", "desc": "限流豁免路径前缀（健康检查/监控/静态资源等）"},
+    },
+    "web_search": {
+        "provider":                {"type": "str",  "desc": "联网搜索提供方（空=不启用）"},
+        "api_key":                 {"type": "secret", "desc": "搜索服务密钥（脱敏显示；提交掩码值不会覆盖真值）"},
+    },
+}
+for _sec, _items in _EXTRA_SCHEMA.items():
+    CONFIG_SCHEMA.setdefault(_sec, {}).update(_items)
 
 
 def schema() -> dict:
