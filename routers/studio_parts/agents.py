@@ -414,3 +414,50 @@ def mcp_tools_inspect(tool_name: str, conn=Depends(db_session)):
     if not info:
         return JSONResponse({"error": f"工具未找到: {tool_name}"}, 404)
     return info
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 能力关系图谱（Agent ↔ 技能 / MCP / 工具）—— 2026-10-30
+# 判据全部在 `services/capability_graph.py`（单一真源，可被门禁与脚本共用）。
+# 这里只做"把真源端出来"，不重复实现任何规则。
+# ══════════════════════════════════════════════════════════════════════
+@router.get("/api/studio/agents/{aid}/bindings")
+def list_agent_bindings(aid: int, only_problems: int = 0, conn=Depends(db_session)):
+    """某 Agent 的全部绑定 + **是否生效** + 原因。
+
+    回答的是"配置里绑了 16 条，运行时真的有几条会进上下文"：
+    这也是编辑页那句「已绑定 N」之外**必须**给出的信息 —— 只有 N 没有 M，
+    用户永远不知道有没有死绑定。
+    """
+    from services import capability_graph as _cg
+    got = _cg.agent_bindings(conn, aid, only_problems=bool(only_problems))
+    if not got:
+        return JSONResponse({"error": "Agent not found"}, 404)
+    return got
+
+
+@router.get("/api/studio/bindings/audit")
+def bindings_audit(conn=Depends(db_session)):
+    """全量体检：179 条绑定按状态归类 + 失效清单 + 停用的 Agent。"""
+    from services import capability_graph as _cg
+    return _cg.audit(conn)
+
+
+@router.get("/api/studio/bindings/usage")
+def bindings_usage(kind: str, name: str, conn=Depends(db_session)):
+    """反向关系：**谁在用这个能力**（停用/卸载前的影响面）+ 它到底被调过没有。
+
+    ⚠️ `usage.call_count=0` 不等于"坏了"：它只说明能力中心度量里没记录到调用
+       （可能是刚上线、或从未被触发），与"绑定失效"是两个维度。
+    """
+    from services import capability_graph as _cg
+    if kind not in ("skill", "mcp", "tool"):
+        return JSONResponse({"error": "kind 必须是 skill/mcp/tool"}, 400)
+    return _cg.usage_of(conn, kind, name)
+
+
+@router.get("/api/studio/bindings/usage-map")
+def bindings_usage_map(conn=Depends(db_session)):
+    """{kind: {name: 绑定 Agent 数}} —— 批量标注用（能力中心卡片一次取全）。"""
+    from services import capability_graph as _cg
+    return _cg.usage_map(conn)

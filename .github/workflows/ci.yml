@@ -200,6 +200,16 @@ jobs:
       - name: Guard 意图目录完整性 + 关键词不被清空（21 项 + 变异）
         run: python tools/verify/verify_intent_catalog.py
 
+      # ── 2026-10-30：能力关系图谱（Agent ↔ 技能 / MCP / 工具）生效判定 ──
+      # 为什么需要：一条绑定要过四道闸才真的生效（Agent 启用 / 绑定行启用 /
+      # 目标端可用 / 插件可消费），四道闸分散在四个文件。此前没有任何一处能回答
+      # "这条边现在还生效吗"，于是同时存在两类错误：看板说生效但运行时没注入；
+      # 看板说失效但运行时仍在注入（实测 17 条「停用但仍注入」）。
+      # 这条门禁把 `services/capability_graph` 的判定与**真 pipeline** 对拍，
+      # 并用事务内变异自证判据非空转。无 mbse.db 时自动 SKIP。
+      - name: Guard 绑定生效判定 ↔ 运行时一致（9 项 + 变异）
+        run: python tools/verify/verify_binding_graph.py
+
       # ── 2026-10-09：请求级状态隔离三道（均静态/AST + 线程探针，不需真实 LLM）──
       # 这三道锁的是 2026-10-09 定位的 N3 产出雷同根因：模块级单例 Pipeline
       # 把请求级产物挂�� self 上跨请求残留（叙述是新的、代码是旧的）。

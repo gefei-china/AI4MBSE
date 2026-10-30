@@ -311,7 +311,22 @@ class AgentRepo(BaseRepo):
         out = []
         for b in binds:
             if b["tool_type"] == "skill":
-                row = self.one("SELECT * FROM skills WHERE name=?", (b["tool_name"],))
+                # ★★ 2026-10-30：**重名技能必须确定性解析**，否则绑定"绑到哪一份"由 rowid 决定。
+                #   实测（真库 3 组重名，每组 3 条 enabled、正文各不同）：
+                #     `行业调研` 有 5 行，rowid 最小的 #49 是 **enabled=0** ⇒ 原写法
+                #     `SELECT * ... WHERE name=?` 取到它 ⇒ `if row.enabled` 判假 ⇒
+                #     这条绑定**静默失效**，而用户在页面上明明看到一条已发布的同名技能。
+                #     `Requirement_Analysis_Pre-check` 取到 #70（154 字），而页面上还有
+                #     266/244 字的两份草稿修订 ⇒ 模型用的是最短的那份，用户以为用的是新版。
+                #   ⇒ 排序口径与"人看到的优先顺序"对齐：启用 → 已发布 → 无草稿修订 → id 小。
+                #   ⚠️ 这只是把"随机"变成"确定"，没有解决**name 作为关系键本身不唯一**
+                #      （见 docs/能力关系图谱-20261030.md 的"重名"一节）。
+                row = self.one(
+                    "SELECT * FROM skills WHERE name=? "
+                    "ORDER BY CASE COALESCE(enabled,0) WHEN 1 THEN 0 ELSE 1 END, "
+                    "         CASE COALESCE(status,'') WHEN 'published' THEN 0 "
+                    "              WHEN 'draft_revision' THEN 1 ELSE 2 END, id "
+                    "LIMIT 1", (b["tool_name"],))
                 if row and row.get("enabled", 1):
                     # D4：技能分层结构 JSON 字段统一解析（allowed_tools 白名单 + 渐进披露资源）
                     def _lj(v):

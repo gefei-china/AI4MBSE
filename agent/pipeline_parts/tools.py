@@ -161,6 +161,37 @@ def _impact_preview(name: str, arguments: dict) -> str:
     return "；".join(_parts)
 
 
+#: 内置工具名 → 一句话描述。**运行时注入的唯一事实源**（`_build_tools_def` 的
+#: `if name in BUILTIN_DESC`）。
+#: ⚠️ 2026-10-30 从函数内提到模块级：`services/capability_graph` 判「内置工具绑定是否生效」
+#:   必须引用**同一份**键集合 —— 在此之前它只能猜（`tools.source='builtin'` 并不等价：
+#:   实测 design 绑的 entity_create 有 builtin 行却不注入，review 绑的 validate 行已停用却仍注入）。
+BUILTIN_DESC = {
+    "graph_retrieve": "知识图谱检索（GraphRAG：实体链接 + 子图遍历 + 向量降级），参数 query:str",
+    # ⚠️ 2026-10-13 已移除 `conflict_check`（假实现，无条件返回"无新冲突"）。
+    #    连带移除本登记：留着会让它继续进 payload，却已无执行器 ⇒ 模型拿到一个必败工具。
+    "impact_analyze": "变更影响分析（BFS 遍历产出影响图）",
+    "validate": "模型预评审校验（规范性/一致性/合理性）",
+    "entity_create": "创建知识实体（人工确认后入库）",
+    # 基础通用文件操作工具（系统文件读写/增删，定义见 file_tools.py）
+    "file_list": "列出目录下的文件与子目录（参数 path:str，recursive:bool 可选）",
+    "file_read": "读取文本文件内容（UTF-8，参数 path:str，max_chars:int 可选）",
+    "file_write": "创建或覆盖写入文本文件（UTF-8 自动建父目录，参数 path:str, content:str；写操作）",
+    "file_append": "追加文本到文件末尾（不存在则创建，参数 path:str, content:str；写操作）",
+    "file_mkdir": "创建目录（参数 path:str；写操作）",
+    "file_delete": "删除文件或空目录（参数 path:str，recursive:bool 可选；destructive 高风险需人工确认）",
+    # 基础通用报告导出工具（内容→md/docx/pdf，定义见 report_tools.py）
+    "report_export": "把报告内容导出为指定格式文档并落盘（参数 path:str, title:str, content:str 或 sections:str, fmt:md|docx|pdf；写操作）",
+    # ★ 2026-10-17（米爸能力配置）：save_artifact——把内容显式登记进**产物库**
+    #   （file_write 只写磁盘进不了产物库；参数 title:str, content:str,
+    #   kind:code|document|sysml|report 可选, lang:str 可选；写操作）
+    "save_artifact": "把代码/文档全文保存为会话产物（入产物库，用户可在产物面板查看下载；参数 title:str, content:str, kind:str 可选, lang:str 可选；写操作）",
+    # ★ 2026-10-17（米爸需求）：联网搜索/网页抓取（定义见 web_tools.py）
+    "web_search": "联网搜索互联网最新消息（参数 query:str, max_results:int 可选；时效性问题——最新/今天/新闻/发布——必用本工具，不要凭训练记忆回答时效问题）",
+    "web_fetch": "抓取指定网页的正文文本（参数 url:str, max_chars:int 可选；配合 web_search 结果链接深读）",
+}
+
+
 class ToolMixin:
     """工具定义、执行、重试策略与调用留痕。"""
 
@@ -234,30 +265,7 @@ class ToolMixin:
         #:   （过滤、角色校验、JIT 预筛、拼装…），扩成 5 元组会让每一处都变成潜在 IndexError。
         #:   旁挂字典是零侵入方案，且与"过滤逻辑与 schema 无关"这个事实相符。
         _schema_by_name = {}
-        builtin_desc = {
-            "graph_retrieve": "知识图谱检索（GraphRAG：实体链接 + 子图遍历 + 向量降级），参数 query:str",
-            # ⚠️ 2026-10-13 已移除 `conflict_check`（假实现，无条件返回"无新冲突"）。
-            #    连带移除本登记：留着会让它继续进 payload，却已无执行器 ⇒ 模型拿到一个必败工具。
-            "impact_analyze": "变更影响分析（BFS 遍历产出影响图）",
-            "validate": "模型预评审校验（规范性/一致性/合理性）",
-            "entity_create": "创建知识实体（人工确认后入库）",
-            # 基础通用文件操作工具（系统文件读写/增删，定义见 file_tools.py）
-            "file_list": "列出目录下的文件与子目录（参数 path:str，recursive:bool 可选）",
-            "file_read": "读取文本文件内容（UTF-8，参数 path:str，max_chars:int 可选）",
-            "file_write": "创建或覆盖写入文本文件（UTF-8 自动建父目录，参数 path:str, content:str；写操作）",
-            "file_append": "追加文本到文件末尾（不存在则创建，参数 path:str, content:str；写操作）",
-            "file_mkdir": "创建目录（参数 path:str；写操作）",
-            "file_delete": "删除文件或空目录（参数 path:str，recursive:bool 可选；destructive 高风险需人工确认）",
-            # 基础通用报告导出工具（内容→md/docx/pdf，定义见 report_tools.py）
-            "report_export": "把报告内容导出为指定格式文档并落盘（参数 path:str, title:str, content:str 或 sections:str, fmt:md|docx|pdf；写操作）",
-            # ★ 2026-10-17（米爸能力配置）：save_artifact——把内容显式登记进**产物库**
-            #   （file_write 只写磁盘进不了产物库；参数 title:str, content:str,
-            #   kind:code|document|sysml|report 可选, lang:str 可选；写操作）
-            "save_artifact": "把代码/文档全文保存为会话产物（入产物库，用户可在产物面板查看下载；参数 title:str, content:str, kind:str 可选, lang:str 可选；写操作）",
-            # ★ 2026-10-17（米爸需求）：联网搜索/网页抓取（定义见 web_tools.py）
-            "web_search": "联网搜索互联网最新消息（参数 query:str, max_results:int 可选；时效性问题——最新/今天/新闻/发布——必用本工具，不要凭训练记忆回答时效问题）",
-            "web_fetch": "抓取指定网页的正文文本（参数 url:str, max_chars:int 可选；配合 web_search 结果链接深读）",
-        }
+        builtin_desc = BUILTIN_DESC
         candidates = []  # (name, desc, type, server_name_or_None)
 
         def _absorb_schema(name: str, raw) -> None:

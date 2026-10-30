@@ -328,6 +328,42 @@ function capRender(page) {
   }
   // 「＋ 新建能力」按当前类型路由到原有的专用表单
   capBuildAddMenu(page);
+  capBindHealth(page);
+}
+
+// ══ 绑定关系体检（2026-10-30）══════════════════════════════════════════
+// 能力中心此前只回答"我有哪些能力"，不回答"这些能力跟 Agent 的关系还成立吗"。
+// 真库实测 178 条绑定里 45 条挂在已停用的 Agent 上、11 条目标已停用、
+// 17 条"停用了但仍会被注入"——这些都**没有任何界面提示**，
+// 用户只能靠"AI 行为不对"倒推。判据在 services/capability_graph.py（单一真源）。
+let _bindHealth = null, _bindHealthAt = 0;
+async function capBindHealth(page) {
+  // ⚠️ 插在**卡片网格之前**，不是图例之后：图例在网格下方（页面底部），
+  //   实测插在那里时 top=1533px，用户根本看不到 —— "加了等于没加"。
+  const grid = document.getElementById('cap-' + page + '-grid');
+  if (!grid || !grid.parentNode) return;
+  if (!_bindHealth || Date.now() - _bindHealthAt > 60000) {
+    try { _bindHealth = await api('/api/studio/bindings/audit'); _bindHealthAt = Date.now(); }
+    catch (e) { return; }
+  }
+  let el = document.getElementById('cap-bind-health');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'cap-bind-health';
+    grid.parentNode.insertBefore(el, grid);
+  }
+  el.style.cssText = 'font-size:11.5px;color:var(--mut,#8a96ad);padding:2px 0 8px;line-height:1.6;';
+  const d = _bindHealth, bs = d.by_state || {};
+  el.innerHTML =
+    '🔗 绑定关系：<b>' + d.total + '</b> 条 · 生效 <b style="color:#2e7d32">' + d.effective + '</b> · '
+    + '需处理 <b style="color:' + (d.broken ? '#c92a2a' : '#2e7d32') + '">' + d.broken + '</b>'
+    + '（悬空 ' + (bs.dangling || 0) + ' · 目标停用 ' + (bs.off || 0) + ' · MCP 离线 ' + (bs.offline || 0)
+    + ' · 未就绪 ' + (bs.unready || 0) + ' · 所属 Agent 停用 ' + (bs.inactive || 0) + '）'
+    + ((bs.bypass || 0) ? '；<span style="color:#c9821a" title="「停用」对这类绑定不生效：内置工具按名字注入、插件「自动消费」通道不看 tools.status">'
+        + bs.bypass + ' 条「已停用但仍会被注入」</span>' : '')
+    + ((bs.plugin_off || 0) ? '；<span style="color:#c9821a" title="插件侧已下架/停用，但旧表仍 enabled=1，绑定注入不看插件状态">'
+        + bs.plugin_off + ' 条「插件已下架但旧表仍启用」</span>' : '')
+    + '<br><span style="color:#8a96ad">生效=这一轮会进模型上下文；「有用过没有」看能力卡片的调用次数，二者不是一回事。</span>';
 }
 
 function capFilterCat(page, c) {

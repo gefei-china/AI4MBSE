@@ -74,12 +74,13 @@ async function loadSkills() {
 
       <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
         <button class="btn sm ghost" onclick="editSkill(${s.id})">✏️</button>
-        <button class="btn sm ${s.enabled===0?'ok':'ghost amb'}" onclick="toggleSkillStatus(${s.id},${s.enabled===0?1:0})">${s.enabled===0?'启用':'停用'}</button>
-        ${s.builtin?'<span style="font-size:10.5px;color:var(--mut);align-self:center;">内置不可删</span>':(s.scope==='public'?'<span class="st" style="background:#e8f5e9;color:#2e7d32;align-self:center;">市场在售</span>':`<button class="btn sm ghost" onclick="marketPublishFrom('skill','${esc(s.name.replace(/'/g,"\\'"))}')">⬆ 发布</button><button class="btn sm red" onclick="deleteSkill(${s.id})">删除</button>`)}
+        <button class="btn sm ${s.enabled===0?'ok':'ghost amb'}" onclick="toggleSkillStatus(${s.id},${s.enabled===0?1:0},'${escA(s.name)}')">${s.enabled===0?'启用':'停用'}</button>
+        ${s.builtin?'<span style="font-size:10.5px;color:var(--mut);align-self:center;">内置不可删</span>':(s.scope==='public'?'<span class="st" style="background:#e8f5e9;color:#2e7d32;align-self:center;">市场在售</span>':`<button class="btn sm ghost" onclick="marketPublishFrom('skill','${esc(s.name.replace(/'/g,"\\'"))}')">⬆ 发布</button><button class="btn sm red" onclick="deleteSkill(${s.id},'${escA(s.name)}')">删除</button>`)}
       </div>
     </div></div>`).join('') + '</div>';
 }
-async function toggleSkillStatus(id, enabled) {
+async function toggleSkillStatus(id, enabled, name) {
+  if(!enabled && name && !(await _confirmImpact('skill', name, '停用'))) return;
   await api(`/api/studio/skills/${id}/${enabled?'enable':'disable'}`, {method:'POST'});
   toast(enabled ? '已启用' : '已停用');
   loadSkills();
@@ -144,7 +145,8 @@ async function saveSkill() {
   }
   closeModal(); skillEditId = null; skillPrevEnabled = 1; skillEditObj = null; loadSkills(); loadMinePlugins(); loadMarket(); loadMarketManage();
 }
-async function deleteSkill(id) {
+async function deleteSkill(id, name) {
+  if(name && !(await _confirmImpact('skill', name, '删除'))) return;
   if(!(await confirmDialog('确认删除该 Skill？'))) return;
   await api(`/api/studio/skills/${id}`, {method:'DELETE'});
   toast('已删除'); loadSkills(); loadMinePlugins(); loadMarket(); loadMarketManage();
@@ -255,12 +257,13 @@ async function loadMCPServers() {
     <div style="margin-top:6px;display:flex;gap:6px;">
       <button class="btn sm ghost" onclick="testMCP(${s.id})">🔌 测试</button>
       <button class="btn sm ghost" onclick="editMCP(${s.id})">✏️</button>
-      <button class="btn sm ${s.enabled===0?'ok':'ghost amb'}" onclick="toggleMCPStatus(${s.id},${s.enabled===0?1:0})">${s.enabled===0?'启用':'停用'}</button>
-      ${s.builtin?'<span style="font-size:10.5px;color:var(--mut);align-self:center;">内置不可删</span>':(s.scope==='public'?'<span class="st" style="background:#e8f5e9;color:#2e7d32;align-self:center;">市场在售</span>':`<button class="btn sm ghost" onclick="marketPublishFrom('mcp','${esc(s.name.replace(/'/g,"\\'"))}')">⬆ 发布</button><button class="btn sm red" onclick="deleteMCP(${s.id})">删除</button>`)}
+      <button class="btn sm ${s.enabled===0?'ok':'ghost amb'}" onclick="toggleMCPStatus(${s.id},${s.enabled===0?1:0},'${escA(s.name)}')">${s.enabled===0?'启用':'停用'}</button>
+      ${s.builtin?'<span style="font-size:10.5px;color:var(--mut);align-self:center;">内置不可删</span>':(s.scope==='public'?'<span class="st" style="background:#e8f5e9;color:#2e7d32;align-self:center;">市场在售</span>':`<button class="btn sm ghost" onclick="marketPublishFrom('mcp','${esc(s.name.replace(/'/g,"\\'"))}')">⬆ 发布</button><button class="btn sm red" onclick="deleteMCP(${s.id},'${escA(s.name)}')">删除</button>`)}
     </div></div></div>`;
   }).join('');
 }
-async function toggleMCPStatus(id, enabled) {
+async function toggleMCPStatus(id, enabled, name) {
+  if(!enabled && name && !(await _confirmImpact('mcp', name, '停用'))) return;
   await api(`/api/studio/mcp-servers/${id}/${enabled?'enable':'disable'}`, {method:'POST'});
   toast(enabled ? '已启用' : '已停用');
   loadMCPServers();
@@ -366,7 +369,8 @@ async function testMCP(id) {
   } catch(e) { toast('❌ 测试失败：'+e.message); }
   loadMCPServers();
 }
-async function deleteMCP(id) {
+async function deleteMCP(id, name) {
+  if(name && !(await _confirmImpact('mcp', name, '删除'))) return;
   if(!(await confirmDialog('确认删除？'))) return;
   await api(`/api/studio/mcp-servers/${id}`, {method:'DELETE'});
   toast('已删除'); loadMCPServers(); loadMinePlugins(); loadMarket(); loadMarketManage();
@@ -717,6 +721,7 @@ function editAgent(id) {
     onAgentRoleChange((a.team_members||[]).map(m=>m.id));
     // 能力绑定回填（skill / mcp / tool，逐个添加列表）
     loadAgentBindOptions((a.tools||[]).map(t=>`${t.tool_type}:${t.tool_name}`));
+    loadBindEffectiveness(id);
   });
 }
 // ── 主/子 Agent 团队：角色切换 → 团队成员候选加载（子 Agent 无成员区）──
@@ -833,6 +838,69 @@ let _agentBindSets = {skill:new Set(), mcp:new Set(), tool:new Set()};
 let _agentBindCands = {skill:[], mcp:[], tool:[]};   // 缓存候选（异步加载；未到时用已选值兜底）
 const _CB = 'width:auto;flex:none;margin:0;accent-color:var(--blue-d,#3478f6);cursor:pointer;';
 const _TX = 'flex:1;text-align:left;min-width:0;';
+
+// ══ 绑定生效状态（2026-10-30）══════════════════════════════════════
+// 为什么必须加：编辑页只显示"已绑定 N"，用户无法知道其中几条运行时真的会生效。
+// 实测真库 178 条绑定里 45 条挂在已停用的 Agent 上、11 条目标已停用、17 条
+// "停用了但仍会被注入" —— 只给 N 不给 M，等于让用户以为全都生效。
+// 判据在后端 `services/capability_graph.py`（单一真源），此处只做呈现。
+function _bindEffBox(kind){
+  let box = document.getElementById('f-bind-'+kind+'-eff');
+  if(box) return box;
+  // ⚠️ 容器 id 是 `f-bind-<kind>-dd`（01-core.js bindDropdown 的骨架），不是 `f-bind-<kind>`：
+  //   第一版写成后者 ⇒ 取不到节点 ⇒ 提示条从不出现，而"没有报错"。
+  //   这类错只能靠**真浏览器量 DOM**发现（API 层一切正常）。
+  const dd = document.getElementById('f-bind-'+kind+'-dd');
+  if(!dd || !dd.parentNode) return null;
+  box = document.createElement('div');
+  box.id = 'f-bind-'+kind+'-eff';
+  box.style.cssText = 'margin-top:5px;font-size:11px;line-height:1.55;color:var(--mut);';
+  dd.parentNode.insertBefore(box, dd.nextSibling);
+  return box;
+}
+async function loadBindEffectiveness(aid){
+  if(!aid) return;
+  let got = null;
+  try { got = await api('/api/studio/agents/'+aid+'/bindings'); } catch(e) { got = null; }
+  (['skill','mcp','tool']).forEach(function(kind){
+    const box = _bindEffBox(kind);
+    if(!box) return;
+    if(!got || !got.summary){ box.innerHTML = ''; return; }
+    const k = (got.summary.by_kind||{})[kind] || {total:0, effective:0};
+    if(!k.total){ box.innerHTML = ''; return; }
+    const bad = (got.bindings||[]).filter(function(b){ return b.kind===kind && !b.effective; });
+    let html = '已选 <b>'+k.total+'</b> · 生效 <b style="color:'+(k.effective===k.total?'#2e7d32':'#c9821a')+'">'+k.effective+'</b>';
+    // 「有效但状态不干净」必须单列：bypass=停用了仍会被注入、draft=注入的是草稿。
+    // 混进"生效"里，用户会以为停用成功（实测 17 条 bypass）。
+    const dirty = (got.bindings||[]).filter(function(b){ return b.kind===kind && b.effective && b.state!=='effective'; });
+    if(dirty.length){
+      html += ' · <span style="color:#c9821a;" title="'+escA(dirty.map(function(b){ return b.name+'：'+(b.state_label||b.state); }).join('；'))+'">待治理 '+dirty.length+'</span>';
+    }
+    if(bad.length){
+      html += ' · <span style="color:#c92a2a;">失效 '+bad.length+'</span>';
+      html += '<div style="margin-top:2px;">' + bad.slice(0,4).map(function(b){
+        return '<div title="'+escA(b.hint||b.reason||'')+'" style="color:#c92a2a;">· '+esc(b.name)+'：'+esc(b.state_label||b.state)+'</div>';
+      }).join('') + (bad.length>4?'<div style="color:#c92a2a;">· 其余 '+(bad.length-4)+' 条…</div>':'') + '</div>';
+    }
+    box.innerHTML = html;
+  });
+}
+
+// ══ 停用/删除前的影响面提示 ══════════════════════════════════════════
+// 反向关系：这个能力被哪些 Agent 绑着。以前停用是"静默生效"——用户不知道
+// 一按下去有几个 Agent 会当场失去该能力（实测 `变更影响分析` 绑了 4 个 Agent）。
+async function _impactNames(kind, name){
+  if(!name) return [];
+  let u = null;
+  try { u = await api('/api/studio/bindings/usage?kind='+kind+'&name='+encodeURIComponent(name)); } catch(e) { return []; }
+  return (u && u.active_agents) || [];
+}
+async function _confirmImpact(kind, name, verb){
+  const act = await _impactNames(kind, name);
+  if(!act.length) return true;
+  const head = act.slice(0,6).map(function(a){ return a.name; }).join('、') + (act.length>6?' 等':'');
+  return await confirmDialog(verb+'「'+name+'」？\n\n当前有 '+act.length+' 个 Agent 依赖它生效：\n'+head+'\n\n'+verb+'后这些 Agent 会立即失去该能力（绑定关系保留，状态变为「不生效」）。');
+}
 
 async function loadAgentBindOptions(selected){
   const sel = new Set(selected||[]);
@@ -1016,6 +1084,7 @@ function openAgentForm(){
   bindDdCloseAll();
   loadProviderOptions();
   loadAgentBindOptions([]);
+  (['skill','mcp','tool']).forEach(function(k){ const b=_bindEffBox(k); if(b) b.innerHTML=''; });
 }
 // ── 名称口径统一（2026-09-30 用户反馈 2）：标识名可编辑 ──
 // 此前 `#f-name` 是 hidden input，`saveAgent` 里写死 `name = f-name || disp` →
