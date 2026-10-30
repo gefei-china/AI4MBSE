@@ -29,6 +29,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_conv_scope_guard.py`
 """
 import ast
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import io
 import os
 import re
@@ -194,7 +195,7 @@ else:
     print("  [SKIP] 未找到真库")
 
 # 隔离矩阵：临时库造 4 类会话
-TMP = tempfile.mkdtemp(prefix="verify_conv_")
+TMP = mkdtemp(prefix="verify_conv_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _tc = sqlite3.connect(TMP_DB)

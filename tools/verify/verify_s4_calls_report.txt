@@ -1,4 +1,4 @@
-S4 离线验证结果：53/53 PASS
+S4 离线验证结果：54/54 PASS
 PASS 1.0 session.py 可整体 exec（相对导入替换为 pass）
 PASS 1.1 模块常量 _CLARIFY_ACTION_VERBS 含建模/动作动词
 PASS 1.2 模块常量 _CLARIFY_SKIP_MIN_CHARS == 80  | 80
@@ -26,7 +26,7 @@ PASS 1.11 _clarify_detect 签名含 forced_intent/skill_name 形参
 PASS 2.1 knowledge_engine.hybrid_search 默认 top_k == 4
 PASS 2.2 hybrid_search 旧默认 top_k=5 已不存在
 PASS 2.2b 同文件其它检索函数（向量 _vector.search / BM25Engine.search）未被改动
-PASS 2.3 四层旋钮齐备且分层约束成立：recall_k >= top_k >= rerank_max_candidates >= inject_k  | recall_k=20 top_k=20 rerank_max_candidates=20 inject_k=3
+PASS 2.3 四层旋钮齐备且分层约束成立：recall_k >= top_k >= rerank_max_candidates >= inject_k  | recall_k=20 top_k=20 rerank_max_candidates=10 inject_k=3
 PASS 2.3b 消费侧走配置读取（不硬编码 top_k）
 PASS 2.4 最终注入条数由 inject_k 控制（消费侧 chunk_hits[:inject_k]）
 PASS 2.4b inject_k 兜底默认仍为 3（配置缺失时不放大注入量）
@@ -39,7 +39,8 @@ PASS 3.3 旧阻断 A 形态已不存在（llm/__init__.py 不再显式传 + **kw
 PASS 3.3b 修法在位：三键走具名参数、且**不重复透传**（避免 TypeError）
 PASS 3.3c 降级留痕已补（except 内 WARNING，不改降级行为）
 PASS 3.4 旧阻断 B 形态已不存在（openai_compat 不再 kwargs.get 优先）
-PASS 3.4b 新优先级在位：调用方显式 > DB > 内置默认
+PASS 3.4b 新优先级在位：调用方显式 > DB > 内置默认  | 命中行=['mt = max_tokens if max_tokens is not None else (cfg.get("max_tokens") or 4096)']
+PASS 3.4b2 DB 值为 NULL 时退回内置默认（`or` 兜底，非仅键缺失兜底）  | 命中行=['mt = max_tokens if max_tokens is not None else (cfg.get("max_tokens") or 4096)']（缺 `or 4096` ⇒ NULL 会漏成 None）
 PASS 3.4c 三参数默认值改为 None（否则无法区分未传与显式传默认值）
 PASS 3.5 cfg 上限仍被 context_window 二次截断（原行为保留）
 PASS 3.6 基线：不传采样参数 -> 真实 provider，三键均 None（回落 DB 配置，行为不变）  | seen={'model': None, 'temperature': None, 'max_tokens': None, 'kwargs_keys': ['_intent']}

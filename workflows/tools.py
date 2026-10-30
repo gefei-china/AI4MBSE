@@ -206,7 +206,12 @@ class ToolExecutor:
 
         D2 容错：对 MCP/HTTP 集成工具按 retry_policy 做指数退避重试（仅瞬态失败），
         重试耗尽后按 fallback_to 降级切换，结果携带 degraded_from 标记供链路追踪。
+
+        P0-a（2026-10-24）：补 tool_call_logs 统一调用日志。此前工作流引擎的
+        工具调用**零日志**（grep 全目录无写点）⇒ 度量盲区，编排里调了什么工具
+        在能力中心完全不可见。run_id 由实例化方挂 `_flow_run_id`（FlowExecutor.run_id）。
         """
+        _t0 = time.time()
         meta = self._tool_meta(name)
         external = (meta["source"] == "mcp") or (meta["kind"] == "http")
         if external and meta["retry_policy"].get("max_retries", 0) > 0:
@@ -221,8 +226,53 @@ class ToolExecutor:
         if not r.get("ok") and meta["fallback_to"] and meta["fallback_to"] != name:
             r2 = self._safe_execute(meta["fallback_to"], arguments or {}, branch)
             r2 = {**r2, "degraded_from": name, "fallback_to": meta["fallback_to"]}
+            self._log_wf_tool_call(name, meta, r2, _t0)
             return r2
+        self._log_wf_tool_call(name, meta, r, _t0)
         return r
+
+    def _log_wf_tool_call(self, name: str, meta: dict, result: dict, t0: float) -> None:
+        """P0-a：工作流工具调用落 tool_call_logs（失败不阻断主流程）。
+
+        tool_type 口径与主链路一致：mcp（source=mcp）/ http（kind=http）/ builtin。
+        capability_id：mcp 留空（本路径未反查 server 名，不造假映射）；其余 tool:{name}
+        （这些分支的前提就是 tools 表有行——BUILTINS 在 seeds 有 builtin 行）。
+        入参不落库（工作流节点参数可能是敏感配置；主链路落的是脱敏后文本，
+        这里取最小集——只回答"调了哪个工具、成没成、多快、属哪次编排"）。
+        """
+        try:
+            if meta.get("source") == "mcp":
+                _tt = "mcp"
+            elif meta.get("kind") == "http":
+                _tt = "http"
+            else:
+                _tt = "builtin"
+            _cid = "" if _tt == "mcp" else "tool:%s" % name
+            # ★ P0-3（2026-10-27）：工作流节点跑在对话链路内 ⇒ 沿用该轮 trace
+            #   （**不**用 request_id 兜底出新 id —— 那会把一轮拆成两条链）。
+            try:
+                from core.audit import current_trace_id as _ctid_wf
+                _tid = _ctid_wf()
+            except Exception:
+                _tid = ""
+            from database import db_conn
+            with db_conn() as conn:
+                # S0（2026-10-28）探针标记（core/probe_mark）
+                try:
+                    from core.probe_mark import is_probe_tool as _ipt_wf
+                    _probe_wf = _ipt_wf(name)
+                except Exception:
+                    _probe_wf = 0
+                conn.execute(
+                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
+                    "arguments, result, ok, latency_ms, run_id, capability_id, trace_id, is_probe) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ("workflow", "", name, _tt, "tool", "{}",
+                     str(result.get("result", ""))[:2000], 1 if result.get("ok") else 0,
+                     int((time.time() - t0) * 1000),
+                     int(getattr(self, "_flow_run_id", 0) or 0), _cid, _tid, _probe_wf))
+        except Exception:
+            pass  # 观测落库失败不影响工具执行（同主链路 _log_tool_call 旁路原则）
 
     def _safe_execute(self, name: str, arguments: dict, branch: str) -> dict:
         try:

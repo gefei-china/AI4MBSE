@@ -38,6 +38,7 @@ class FlowNodesMixin:
                                  "confirmation_id": conf_id},
                     }
         executor = ToolExecutor(conn)
+        executor._flow_run_id = int(getattr(self, 'run_id', 0) or 0)  # P0-a：工具调用日志编排归属
         r = executor.execute(tool_name, arguments, branch)
         return {
             "type": "tool", "node": label, "tool": tool_name, "status": r.get("ok") and "done" or "error",
@@ -111,7 +112,7 @@ class FlowNodesMixin:
         # P0-5：技能使用反馈采集（画布 agent 节点路径；execute 非流式不自动采集，此处补采）
         try:
             if getattr(pipe, "_last_skill_hits", None):
-                pipe._record_skill_feedback(run_id=int(getattr(self, "run_id", 0) or 0),
+                pipe._record_skill_feedback(conversation_id=int(getattr(self, "run_id", 0) or 0),
                                             intent=intent or out.get("intent", ""),
                                             output_content=out.get("content") or "")
         except Exception:
@@ -869,6 +870,7 @@ class FlowNodesMixin:
         steps = []
         obs = ""
         executor = ToolExecutor(conn)
+        executor._flow_run_id = int(getattr(self, 'run_id', 0) or 0)  # P0-a：工具调用日志编排归属
         t0 = time.time()
         final_answer = ""
         resp = {}
@@ -1016,12 +1018,17 @@ class FlowNodesMixin:
                             if tk["status"] in ("planned", "ready"):
                                 TaskQueue.block(conn, tk["id"], "依赖任务失败，无法推进")
                         break
+                    # 2026-10-29：plan/branch 一并透传（依赖按传递闭包展开；不再是硬编码 dev）
+                    _nd_branch = str(cfg.get("branch") or "dev")
                     if parallel and len(ready) > 1:
                         from concurrent.futures import ThreadPoolExecutor
                         with ThreadPoolExecutor(max_workers=min(len(ready), 3)) as pool:
-                            results_list = list(pool.map(lambda tk: self._run_task(tk, goal, conn), ready))
+                            results_list = list(pool.map(
+                                lambda tk: self._run_task(tk, goal, conn, plan=plan, branch=_nd_branch),
+                                ready))
                     else:
-                        results_list = [self._run_task(tk, goal, conn) for tk in ready]
+                        results_list = [self._run_task(tk, goal, conn, plan=plan, branch=_nd_branch)
+                                        for tk in ready]
                     for tk, rr in zip(ready, results_list):
                         tk_res, meta, ok, err = rr
                         if ok:

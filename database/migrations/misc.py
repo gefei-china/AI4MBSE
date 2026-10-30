@@ -61,10 +61,82 @@ def _migrate_eval_tables(conn):
         relation_f1 REAL DEFAULT 0,
         detail TEXT DEFAULT '{}',              -- JSON: {extracted, golden, hits, misses, metric}
         created_by TEXT DEFAULT '',
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        eval_kind TEXT DEFAULT '',                -- 2026-10-22：评测类型 rag_retrieval|memory_quality|…
+        doc_recall_at_5 REAL DEFAULT 0,            -- doc 域主指标（此前只在 JSON 里）
+        doc_mrr_at_10 REAL DEFAULT 0,
+        doc_ndcg_at_10 REAL DEFAULT 0,
+        doc_pool_recall REAL DEFAULT 0,
+        doc_rerank_drop_rate REAL DEFAULT 0,
+        doc_recall_miss_rate REAL DEFAULT 0,
+        gen_citation_valid_rate REAL,              -- 2026-10-22 断链③：生成质量主指标（NULL=未测，区别于 0 分）
+        gen_citation_usage_rate REAL,
+        gen_grounded_entity_rate REAL,
+        gen_no_citation_factual_rate REAL,
+        gen_faithful_rate REAL,                    -- 2026-10-22 晚 断链③语义层：LLM 忠实率（未启用评判时 NULL）
+        trace_agreement_rate REAL,                -- 2026-10-22 断链②：Trace 裁决一致率（NULL=未测）
+        trace_repeat_mistake_rate REAL            -- 2026-10-22 断链②：Trace 重错率（无路由纠错类负样本时为 NULL）
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_eval_reports_doc ON eval_reports(doc_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_eval_reports_time ON eval_reports(created_at)")
+    # ── 2026-10-23（评估 O3 / P0-3）：指标快照表 ─────────────────────
+    # 背景：指标写死成 eval_reports 的固定列（doc_*/gen_*/trace_*），新增一个
+    #   指标实测要改 8 个文件 14 处；漏改前端 = 静默不显示（无报错）。
+    # 语义：一行 = 一个指标快照，三色 status **落库时由后端算好**（前端只渲染，
+    #   纪律 A8 不破）。固定列保留（历史兼容 + 主指标快查），快照表是扩展通道：
+    #   新增指标只需在评测器侧写入一行，repo/前端自动透出，零迁移。
+    c.execute("""CREATE TABLE IF NOT EXISTS eval_metrics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        report_id INTEGER NOT NULL,            -- → eval_reports.id
+        eval_kind TEXT DEFAULT '',
+        metric_key TEXT NOT NULL,              -- 与固定列同名（如 gen_faithful_rate）或新键
+        value REAL,                            -- NULL=本轮未测（区别于 0 分）
+        direction TEXT DEFAULT 'high',         -- high=越大越好 | low=越小越好
+        gate_key TEXT DEFAULT '',              -- → core.config.eval_gates 键（空=不门禁）
+        threshold REAL,                        -- 落库时的阈值快照（阈值后来改了不影响历史）
+        status TEXT DEFAULT '',                -- ok|alert|warn|''（后端算好）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_eval_metrics_report ON eval_metrics(report_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_eval_metrics_kind ON eval_metrics(eval_kind, metric_key)")
+    # 历史行回填（幂等）：已有报告若还没有任何快照行，从固定列补写。
+    # 三色沿用 metric_status_for（repo 层同一份实现，避免迁移里另写判定）。
+    try:
+        from repositories.eval_report_repo import write_metric_rows
+        have = {r[0] for r in c.execute(
+            "SELECT DISTINCT report_id FROM eval_metrics").fetchall()}
+        rows = c.execute(
+            "SELECT id, eval_kind, doc_recall_at_5, doc_mrr_at_10, doc_ndcg_at_10, "
+            "doc_pool_recall, doc_rerank_drop_rate, doc_recall_miss_rate, "
+            "gen_citation_valid_rate, gen_citation_usage_rate, "
+            "gen_grounded_entity_rate, gen_no_citation_factual_rate, gen_faithful_rate, "
+            "trace_agreement_rate, trace_repeat_mistake_rate, entity_f1 "
+            "FROM eval_reports ORDER BY id").fetchall()
+        n_back = 0
+        for r in rows:
+            rid, kind = r[0], r[1] or ""
+            if rid in have or not kind:
+                continue
+            vals = {}
+            if kind == "rag_retrieval":
+                vals = dict(zip(("doc_recall_at_5", "doc_mrr_at_10", "doc_ndcg_at_10",
+                                 "doc_pool_recall", "doc_rerank_drop_rate",
+                                 "doc_recall_miss_rate"), r[2:8]))
+            elif kind == "generation_quality":
+                vals = dict(zip(("gen_citation_valid_rate", "gen_citation_usage_rate",
+                                 "gen_grounded_entity_rate",
+                                 "gen_no_citation_factual_rate", "gen_faithful_rate"),
+                                r[8:13]))
+            elif kind == "trace_consistency":
+                vals = dict(zip(("trace_agreement_rate", "trace_repeat_mistake_rate"),
+                                r[13:15]))
+            elif kind == "memory_quality":
+                vals = {"entity_f1": r[15]}
+            n_back += write_metric_rows(c, rid, kind, vals)
+        if n_back:
+            print(f"[init_db] eval_metrics 历史回填: {n_back} 行（固定列 → 快照表）")
+    except Exception as _e:
+        print(f"[init_db] eval_metrics 历史回填跳过: {_e}")
     conn.commit()
 
 def _migrate_kb_v2_enhance(conn):
@@ -92,6 +164,51 @@ def _migrate_kb_v2_enhance(conn):
     _add("eval_reports", "model_version", "TEXT DEFAULT ''")
     _add("eval_reports", "is_golden", "INTEGER DEFAULT 0")
     _add("eval_reports", "golden_set_id", "INTEGER DEFAULT 0")
+    # ── 2026-10-22（评估 P0-5）：eval_kind —— 评测**类型**列 ──────────
+    # 背景：`eval_reports` 此前**没有任何类型列**，而两类完全不同的评测往同一张表写：
+    #   RAG 检索评测（entity_recall/relation_recall 有真实语义）
+    #   记忆质量评测（把同一个 rate **写进 6 个 P/R/F1 字段**）
+    # ⇒ 同一张表里entity_f1=1.0 既可能是"检索全对"，也可能是"记忆 15/15"，
+    #   **只能靠 created_by 字段名反推**（而这正是脚本自己警告过的脆弱口径）。
+    # 语义：rag_retrieval | memory_quality | intent_routing | doc_extract | ''
+    # 旧行为：默认 ''（不回填历史行—— 历史行的类型不可靠地推断出来，
+    #   猜错比空着更坏；需要区分时按 created_by 查）。
+    _add("eval_reports", "eval_kind", "TEXT DEFAULT ''")
+    # doc 域检索主指标（recall@5 / mrr / ndcg / pool_recall / rerank_drop_rate /
+    # recall_miss_rate）—— 此前**只存在于 JSON 文件里**，库里查不到。
+    # 评估指出：doc 域是检索质量的主指标，却因表只有 entity/relation 两列而无法
+    # 落库 ⇒ 看板与趋势分析只能靠 docs/评测/ 下的单份 JSON 快照。
+    _add("eval_reports", "doc_recall_at_5", "REAL DEFAULT 0")
+    _add("eval_reports", "doc_mrr_at_10", "REAL DEFAULT 0")
+    _add("eval_reports", "doc_ndcg_at_10", "REAL DEFAULT 0")
+    _add("eval_reports", "doc_pool_recall", "REAL DEFAULT 0")
+    _add("eval_reports", "doc_rerank_drop_rate", "REAL DEFAULT 0")
+    _add("eval_reports", "doc_recall_miss_rate", "REAL DEFAULT 0")
+    # ── 2026-10-22（断链③）：生成质量主指标列 ────────────────
+    # 背景：faithfulness/groundedness 全仓零命中 —— 系统评测检索/路由/记忆，
+    #   唯独不评测生成质量。gen_* 四列让生成质量报告进同一张表、同一套
+    #   历史/趋势/看板（见 tools/eval/eval_generation_quality.py）。
+    # ⚠ DEFAULT NULL 而非 0：doc_* 列的 DEFAULT 0 是历史包袱（"没测到"会被
+    #   看板渲染成 0 分 = 假绿），新列不继承这个坑。
+    _add("eval_reports", "gen_citation_valid_rate", "REAL")
+    _add("eval_reports", "gen_citation_usage_rate", "REAL")
+    _add("eval_reports", "gen_grounded_entity_rate", "REAL")
+    _add("eval_reports", "gen_no_citation_factual_rate", "REAL")
+    # ── 2026-10-22 晚（断链③语义层）：LLM 忠实率列 ────────────────
+    # 背景：确定性指标回答不了"答案有没有曲解证据"。gen_faithful_rate
+    #   让 LLM 评判结果进同一张表、同一套趋势/看板。
+    # ⚠ DEFAULT NULL：未启用 --llm-judge 时**没有这个数**，填 0 会被
+    #   读成"忠实率 0 分"（假红），与 gen_* 既有列语义一致。
+    _add("eval_reports", "gen_faithful_rate", "REAL")
+    # ── 2026-10-22（断链②）：Trace 一致性主指标列 ────────────────
+    # 背景：trace2dataset 产出的生产裁决样本（intent_confirmed/
+    #   intent_rejected）此前无消费方 —— 供料环通了、度量环没接。
+    #   trace_* 两列让"当前路由 ↔ 人工裁决"的一致率/重错率进同一张
+    #   表、同一套历史/趋势/看板（见 tools/eval/eval_trace_consistency.py）。
+    # ⚠ DEFAULT NULL 而非 0：重错率在"无路由纠错类负样本"时**没有分母**，
+    #   填 0 会被读成"一条旧错都没再犯"（那是假绿，与"没测到"是两件事）。
+    _add("eval_reports", "trace_agreement_rate", "REAL")
+    _add("eval_reports", "trace_repeat_mistake_rate", "REAL")
     # P2-1 整合：本体蓝图统一 Profile 导入（profile 草案透传溯源列）
     _add("ontology_drafts", "profile_source", "TEXT DEFAULT ''")
     _add("ontology_drafts", "profile_ref", "TEXT DEFAULT ''")
@@ -820,3 +937,139 @@ def _migrate_flow_topology_p24(conn):
     conn.commit()
     print("[init_db] 迁移: 画布拓扑台账 flow_topology_variants 已建立"
           "（P2-4，结构体检 + 同构去重；只记录不改拓扑，红线 #6）")
+
+def _migrate_online_eval_tables(conn):
+    """P0-b（2026-10-25）生产回流两表：online_eval_queue + eval_gen_labels。幂等建表。
+
+    设计文档 docs/P0-b-生产回流详细设计-2026-10-25.md §3。五段闭环
+    （采样→自动评→人工转正→三分流→门禁可见）的落点：
+      · online_eval_queue：候选样本队列。三态 pending/labeled_confirmed/
+        labeled_rejected 与 intent_samples 的 suggested/confirmed/rejected
+        同构（防"自动打分自动转正"的自我循环——B1 纪律）。
+      · eval_gen_labels：生成质量转正标签。为什么不起 qrels.jsonl：
+        qrels 是 (query, doc, idx) 三元组，装不下"答案-引用-评分"结构。
+    不走 columns.py：两表均为**新表**（非补列），且 init_db 每次启动都执行
+    CREATE TABLE IF NOT EXISTS ⇒ 老库启动即建，无补列迁移路径。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS online_eval_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sample_type TEXT DEFAULT '',        -- intent | retrieval | generation（转正分流依据）
+        -- 完整 trace 引用（转正时回查原文，不留孤儿标签）：
+        conversation_id INTEGER DEFAULT 0,
+        message_id INTEGER DEFAULT 0,      -- messages.id（生成质量样本的答案体）
+        query_trace_id INTEGER DEFAULT 0,  -- query_trace.id（检索/意图样本）
+        trace_id TEXT DEFAULT '',          -- llm_usage_stats.trace_id（LLM 侧关联，P0-c 已有）
+        -- 采样原因（可解释：为什么这条进了队列）：
+        sample_reason TEXT DEFAULT '',     -- neg_feedback | low_conf | random_5pct
+        reason_detail TEXT DEFAULT '',     -- 具体信号（ux event 名 / top_score 值 / 随机种子序号）
+        -- 自动评估（reference-free，只进"建议"）：
+        auto_score REAL,                   -- 0-1 综合分；NULL=自动评失败（不补零）
+        auto_detail TEXT DEFAULT '{}',     -- JSON：citation_use/grounding/unsupported/latency 分项
+        auto_eval_at TEXT,
+        -- 人工标注（复用 hil 确认卡语义）：
+        status TEXT DEFAULT 'pending',     -- pending | labeled_confirmed | labeled_rejected
+        human_score INTEGER,               -- 1-5 人工评分（NULL=未评）
+        human_reason TEXT DEFAULT '',
+        labeled_by TEXT DEFAULT '',
+        labeled_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_oeq_status ON online_eval_queue(status, sample_type)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_oeq_conv ON online_eval_queue(conversation_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_oeq_trace ON online_eval_queue(trace_id)")
+    # 生成质量转正标签（message_id 关联即可被 eval_generation_quality.evaluate_answers join）
+    c.execute("""CREATE TABLE IF NOT EXISTS eval_gen_labels (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        queue_id INTEGER DEFAULT 0,        -- online_eval_queue.id（外键溯源）
+        message_id INTEGER DEFAULT 0,      -- messages.id（答案体）
+        conversation_id INTEGER DEFAULT 0,
+        human_score INTEGER,               -- 1-5
+        faithfulness INTEGER,              -- 忠实度 1-5（LLM judge 同维度，人工版）
+        citation_ok INTEGER,               -- 引用编号是否与 citations 对齐 0/1
+        reason TEXT DEFAULT '',
+        created_by TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_egl_msg ON eval_gen_labels(message_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_egl_queue ON eval_gen_labels(queue_id)")
+    conn.commit()
+    print("[init_db] 迁移: P0-b 生产回流两表已建立"
+          "（online_eval_queue + eval_gen_labels，五段闭环落点；只记录不自动转正）")
+
+
+def _migrate_agent_todos(conn):
+    """P0-3（2026-10-28）计划外化：agent_todos 表（幂等建表）。
+
+    方案：docs/持续自主执行能力-最终方案设计-20261028.md §4.2 / §6 第 3 步。
+
+    为什么要有这张表（诊断依据，真实数据）：
+      本工程**没有任何**会话内待办载体（grep 无 todo_write/TodoWrite、DB 无对应表）
+      ⇒ 完成度评估器只能"读答复猜还剩什么"
+      ⇒ 实测 4 条真实样本里，评估器把「建议下一步执行校验」判成 done=true
+      （msg 3985）、把「请转交对应 Agent」也判成 done=true（msg 2731）。
+      ⇒ "完成"的定义权事实上在模型手里。
+
+    关键字段（与官方四态生命周期 + 本工程必需项对齐）：
+      · verify       —— 验收方式。**置 completed 的前置条件**（必填）
+      · verify_result—— 验收回执。**置 completed 的前置条件**（必填）
+        依据官方 "Only mark as passing after careful testing"
+      · blocked_by   —— 依赖/阻塞说明。置 blocked 的前置条件
+      · 至多一个 in_progress ⇒ 由 agent/agent_todo.py 的状态机保证
+
+    不走 columns.py：本表是**新表**（非补列），init_db 每次启动执行
+    CREATE TABLE IF NOT EXISTS ⇒ 老库启动即建，无补列迁移路径。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS agent_todos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER NOT NULL,      -- 会话（待办是会话内状态）
+        run_id INTEGER DEFAULT 0,             -- 本轮请求标识（同会话多次请求可区分）
+        seq INTEGER,                          -- 顺序（显示与"第一个 pending"用）
+        subject TEXT NOT NULL,                -- 待办标题（具体到对象，如"校验包 P-001 的 SysML v2 语法"）
+        status TEXT DEFAULT 'pending',         -- pending|in_progress|completed|blocked|deleted
+        verify TEXT DEFAULT '',               -- ★ 验收方式（可执行描述）；completed 必填
+        verify_result TEXT DEFAULT '',        -- ★ 验收回执；completed 必填且表示通过
+        blocked_by TEXT DEFAULT '',           -- 依赖/阻塞原因；blocked 必填
+        note TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_atodo_conv ON agent_todos(conversation_id, status)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_atodo_run ON agent_todos(conversation_id, run_id)")
+    conn.commit()
+    print("[init_db] 迁移: agent_todos 已建立（计划外化；verify/verify_result 为 completed 前置条件）")
+
+
+def _migrate_tool_idempotency(conn):
+    """P0-1（2026-10-30）写类工具幂等键记录表（幂等，纯新表）。
+
+    ## 为什么单独一张表，而不是复用 `tool_call_logs`
+    - `tool_call_logs` 是**观测**：每次调用都留痕（含失败、含只读）；
+    - 幂等表是**控制**：只记"**已成功执行**"的写类调用，且按幂等键唯一。
+    ⇒ 混在一起会出现"失败也命中"⇒ 写操作被错误吞掉（比不做更危险）。
+
+    ## 表结构要点
+    - `key` 为主键（幂等键 = sha256(scope|tool|args_hash|ordinal)[:32]）；
+    - `result_json` 存执行结果 —— 命中时**原样重放**（含模型的"成功"回执）；
+    - `hits` 记被重放命中的次数（观测：省了多少次重复写）。
+
+    不走 columns.py：本表是**新表**（非补列），init_db 每次启动执行
+    CREATE TABLE IF NOT EXISTS ⇒ 老库启动即建，无补列迁移路径。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS tool_idempotency (
+        key TEXT PRIMARY KEY,             -- 幂等键（scope|tool|args_hash|ordinal 的摘要）
+        tool TEXT DEFAULT '',             -- 工具名
+        scope TEXT DEFAULT '',            -- 执行单元（run:<批次号>:task:<task_key>）
+        args_hash TEXT DEFAULT '',        -- 规范化参数摘要
+        ordinal INTEGER DEFAULT 0,        -- 同一次尝试内该 (tool,args) 的第几次出现
+        result_json TEXT DEFAULT '',      -- 执行结果（重放时原样返回）
+        hits INTEGER DEFAULT 0,           -- 被重放命中的次数（观测：省掉多少次重复写）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_tool_idem_scope ON tool_idempotency(scope)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_tool_idem_created ON tool_idempotency(created_at)")
+    conn.commit()
+    print("[init_db] 迁移: tool_idempotency 已建立（写类工具幂等键）")

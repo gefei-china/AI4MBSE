@@ -51,6 +51,63 @@ _state = {
 _MAX_HISTORY = 20
 
 
+def _utc_day():
+    """今日（UTC 日）。审计表 `created_at` 用的也是 SQLite `CURRENT_TIMESTAMP`（UTC）
+    ⇒ 计数口径与被计数对象一致（**别用本地时间比**，跨时区会错）。"""
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def _cfg_int(group, key, default):
+    try:
+        from core import config as _c
+        v = _c.get(group, key, default)
+        return int(default if v is None else v)
+    except Exception:
+        return int(default)
+
+
+def _conv_exists(conn, conv_id: int) -> bool:
+    """会话行是否还在（查不到表/异常时**返回 True**，即不因探测失败而阻断自愈）。"""
+    try:
+        row = conn.execute("SELECT 1 FROM conversations WHERE id=?", (int(conv_id),)).fetchone()
+        return row is not None
+    except Exception:
+        return True
+
+
+def _db_resumes_today(conn=None):
+    """今日已发生的自动重投次数（读审计表）。
+
+    ⚠️ 审计是**重投完成后**才写的 ⇒ 它滞后于真实触发数；
+    因此调用方还要与进程内计数取 **max**（保守侧：宁可少投一次）。
+    """
+    try:
+        if conn is None:
+            from database import db_conn
+            with db_conn() as c:
+                return _db_resumes_today(c)
+        row = conn.execute(
+            "SELECT COUNT(*) c FROM audit_logs WHERE event_type=? AND created_at >= date('now')",
+            ("orch_auto_resume",)).fetchone()
+        if row is None:
+            return 0
+        try:
+            return int(row["c"] or 0)
+        except (TypeError, KeyError, IndexError):
+            return int(row[0] or 0)
+    except Exception:
+        return 0
+
+
+def _resumes_today(conn=None):
+    """今日自动重投次数（进程内计数与审计表计数取 max）。"""
+    inmem = 0
+    if _state.get("resumed_date") == _utc_day():
+        inmem = int(_state.get("resumed_today") or 0)
+    return max(inmem, _db_resumes_today(conn))
+
+
+
 def _record(action: str, run_id: int, detail: str = "") -> None:
     """把一次守护动作记进内存历史（供可观测；进程重启即丢，是刻意的）。"""
     _state["last_runs"].append({
@@ -65,6 +122,11 @@ def _record(action: str, run_id: int, detail: str = "") -> None:
 def supervisor_status() -> dict:
     """守护状态快照（供 /api/monitor/orchestration-supervisor）。"""
     inflight = dict(_state.get("inflight") or {})
+    _daily = int(_cfg_int("orchestration", "auto_resume_daily_budget", 5))
+    try:
+        _used = _resumes_today()
+    except Exception:
+        _used = int(_state.get("resumed_today") or 0)
     return {
         "running": bool(_loop_thread and _loop_thread.is_alive()),
         "uptime_s": round(time.time() - _state["started_at"], 1) if _state["started_at"] else 0.0,
@@ -75,6 +137,10 @@ def supervisor_status() -> dict:
         if _state["last_scan_at"] else "",
         "last_error": _state["last_error"],
         "inflight": inflight,
+        # ── 成本闸可见性（P0-2）：不暴露就没法运维 ──
+        "daily_budget": _daily,
+        "resumed_today": _used,
+        "budget_exhausted": bool(_daily and _used >= _daily),
         "recent": list(reversed(_state["last_runs"])),
     }
 
@@ -109,7 +175,8 @@ def scan_once(conn=None, *, max_runs: int = 3, stale_s: int | None = None,
     :param include_failed: 是否连 `failed` 任务一并重跑（默认否：可能副作用已落一半）
     """
     res = {"scanned": 0, "resumed": [], "eligible": [], "skipped": [], "already_running": [],
-           "maxed_out": [], "unrecoverable": []}
+           "maxed_out": [], "unrecoverable": [], "daily_budget": 0, "resumed_today": 0,
+           "budget_exhausted": False}
     if conn is not None:
         return _scan_conn(conn, res, max_runs=max_runs, stale_s=stale_s,
                           include_failed=include_failed)
@@ -133,6 +200,15 @@ def _scan_conn(conn, res: dict, *, max_runs: int, stale_s: int | None,
         # 为什么不早`continue`：预演的价值就在于看清"哪些能投、哪些不能、为什么"，
         # 早 continue 只会得到一个空列表，等于没信息。
         _budget = int(max_runs or 0)
+        # ── 成本闸之二：每日自动重投总次数上限（P0-2，2026-10-30）──
+        # 为什么必须有：守护默认开了（能力可用），但**自动重投会真的调 LLM**。
+        # 单轮上限（max_runs）只约束"一轮"，一轮一轮累加仍可能一天投几十次。
+        # ⇒ 再加一道"每日总量"闸，把自动化的花费封顶。
+        _daily = int(_cfg_int("orchestration", "auto_resume_daily_budget", 5))
+        _used = _resumes_today(conn)
+        res["daily_budget"] = _daily
+        res["resumed_today"] = _used
+        res["budget_exhausted"] = bool(_daily and _used >= _daily)
         for it in cands:
             rid = int(it.get("run_id") or 0)
             if rid in (_state.get("inflight") or {}):
@@ -152,6 +228,26 @@ def _scan_conn(conn, res: dict, *, max_runs: int, stale_s: int | None,
             if not conv_id:
                 res["unrecoverable"].append({"run_id": rid, "why": "no_conversation"})
                 continue
+            # ★ P0-1（2026-10-30）：**会话必须仍存在**。
+            #   为什么这条是硬闸：记录里 6 个 interrupted 批次的 `conversation_id`
+            #   （9757/9760/9761/9762）在 `conversations` 表里**已经不存在**
+            #   （用户删了会话 = 明确放弃了这件事）。此时续跑只会把消息写进一个
+            #   悬空 conversation_id，产出一份**没有人会看到**的答复，还照花额度。
+            #   "能恢复"的前提是"还有人要"，不是"技术上可以"。
+            if not _conv_exists(conn, conv_id):
+                res["unrecoverable"].append({"run_id": rid, "why": "conversation_missing",
+                                             "conv_id": conv_id})
+                continue
+            # ★ 年龄闸：太老的批次不自动投（转人工），避免"三天前的问题今天冒出个答案"。
+            _max_age = _cfg_int("orchestration", "auto_resume_max_age_s", 259200)
+            try:
+                _age = float(it.get("age_s") or 0.0)
+            except Exception:
+                _age = 0.0
+            if _max_age > 0 and _age > float(_max_age):
+                res["unrecoverable"].append({"run_id": rid, "why": "too_old",
+                                             "age_s": round(_age, 1), "max_age_s": _max_age})
+                continue
 
             mode = dec.get("mode") or "tasks"
             #分类已完成 —— 到这里才是"决定要不要动手"的岔路口
@@ -163,6 +259,12 @@ def _scan_conn(conn, res: dict, *, max_runs: int, stale_s: int | None,
                 res["skipped"].append({"run_id": rid,
                                        "why": ("preview_only" if _budget == 0
                                                else "max_runs_reached")})
+                continue
+            # 成本闸之二（每日上限）。**预演（_budget==0）不受此闸约束** ——
+            # 预演本来就不触发任何执行，"预算是否用完"对它没有意义，
+            # 若也拦，会让运维看不到"今天还会投哪些批次"。
+            if _budget > 0 and res.get("budget_exhausted"):
+                res["skipped"].append({"run_id": rid, "why": "daily_budget_exhausted"})
                 continue
 
             if mode == "tasks":
@@ -177,6 +279,11 @@ def _scan_conn(conn, res: dict, *, max_runs: int, stale_s: int | None,
 
             _state["inflight"][rid] = time.time()
             _state["resumed"] += 1
+            # 进程内当日计数（成本闸之二的另一半；审计是事后写的 ⇒ 滞后）
+            if _state.get("resumed_date") != _utc_day():
+                _state["resumed_date"] = _utc_day()
+                _state["resumed_today"] = 0
+            _state["resumed_today"] = int(_state.get("resumed_today") or 0) + 1
             res["resumed"].append(rid)
             _record("triggered", rid, "mode=%s conv=%s" % (mode, conv_id))
 

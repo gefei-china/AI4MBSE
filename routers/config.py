@@ -42,6 +42,24 @@ def get_config_schema():
     return {"ok": True, "schema": config.schema()}
 
 
+@router.get("/api/system/budget-policy")
+def get_budget_policy():
+    """预算层级审计（P0-3，2026-10-30）。
+
+    回答三个问题，每个都有机器可核的判据：
+      1. **谁是真源** —— 四层（L1 整轮 / L2 编排批次 / L3 子任务 / L4 单次调用）
+         每层的权威键、别名键、当前值、实际生效上限（同层取最严）；
+      2. **哪些是假权威** —— 同层别名比真源更严（真源形同虚设）/ 父层严于子层
+         （子层额度永远用不满）；
+      3. **哪些是配置谎言** —— 零消费点的键（改了了不起任何作用）。
+    """
+    try:
+        from core import budget_policy
+        return budget_policy.audit()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"预算层级审计失败: {str(e)[:200]}"}, 500)
+
+
 @router.put("/api/system/config/static")
 def update_static_config(body: StaticConfigIn):
     """修改静态配置：校验 → 落盘系统级配置文件 → 即时 reload。"""
@@ -94,6 +112,9 @@ def update_runtime_config(body: RuntimeConfigIn, conn=Depends(db_session)):
     try:
         result = config.update_runtime_settings(body.updates, conn)
         return {"ok": True, **result, "runtime": config.runtime_settings(conn)}
+    except ValueError as e:
+        # 白名单拒绝（未知/无消费点键）—— 不是"更新失败"，是"不允许写"
+        return JSONResponse({"ok": False, "error": str(e)}, 400)
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"更新动态配置失败: {str(e)[:200]}"}, 400)
 
@@ -121,6 +142,38 @@ def config_history(section: str = "", limit: int = 100,
     return {"ok": True, "history": rows, "sources": [_promo.SRC_PROPOSAL,
                                                      _promo.SRC_ROLLBACK,
                                                      _promo.SRC_MANUAL]}
+
+
+@router.post("/api/config/effect-check")
+def config_effect_check(body: dict = Body(default={}),
+                        conn=Depends(db_session), user=Depends(current_user)):
+    """配置变更「改后效果」判定（2026-10-29）。
+
+    补的是 P1-4 之后的空档：沙箱只证明"改前没改坏"，改完**有没有真的变好**
+    此前无人回答。本端点用 `eval_metrics` 做前后等长窗口对比（方向敏感），
+    给出 effective / ineffective / mixed / no_data / inconclusive。
+
+    · 单条：`{history_id: 12}` → 判定该行（默认 dry-run，`apply=true` 才落库）
+    · 批量：不传 history_id → 判定全部"已应用但未判定"的行
+    """
+    from core import config_effect as _ce
+    apply = bool(body.get("apply"))
+    hid = int(body.get("history_id") or 0)
+    if hid:
+        res = _ce.evaluate_effect(conn, hid,
+                                  window_days=int(body.get("window_days") or
+                                                  _ce.DEFAULT_WINDOW_DAYS))
+        if apply and res.get("ok"):
+            conn.execute(
+                "UPDATE config_history SET effect_verdict=?, effect_detail=?, "
+                "effect_checked_at=? WHERE id=?",
+                (res["verdict"], res["reason"], res["checked_at"], hid))
+            conn.commit()
+        return res
+    return _ce.evaluate_pending(conn, apply=apply,
+                                limit=int(body.get("limit") or 20),
+                                window_days=int(body.get("window_days") or
+                                                _ce.DEFAULT_WINDOW_DAYS))
 
 
 @router.post("/api/config/rollback")

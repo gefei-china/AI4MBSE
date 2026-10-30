@@ -19,6 +19,22 @@ import threading
 import time
 from datetime import datetime
 
+# 告警状态机单一真源（2026-10-29）：未终结状态的取值域不在本模块另写一份
+#（此前 'acked' 字面量在本模块与 routers/monitor.py 各写一次，必然漂移）。
+from core.alert_state import open_statuses_sql
+
+# ★ 2026-10-29：本模块的指标分两族，**口径不能一刀切**：
+#   ① 「业务口径」（成本 / 延迟 / 调用量 / mock·trunc·fallback 比率）
+#      → 必须排除探针。理由：chat_probe 实测占 7 天 LLM 成本 51%，
+#        不过滤会让 `cost_1h_usd` 与成本突增告警长期虚高。
+#   ② 「provider 健康口径」（llm_fail_1h / llm_fail_rate_1h）
+#      → **刻意保留探测**（该处原有注释即如此声明）：活体探针失败
+#        正是 provider 故障的第一手信号，排除它等于把警报器捂上。
+#   ⇒ 下面只在 ① 类查询上拼 probe_where()，② 类保持原样并加说明。
+from core.probe_mark import probe_where as _probe_where, sane_latency_where as _sane_lat
+
+_PROBE = _probe_where()
+
 # 全局专有指标（与 run 级四个 metric 零重叠 —— 保证两套评估器互不重复告警）
 GLOBAL_METRICS = (
     "llm_mock_rate_1h",        # 近 1h Mock 降级率（%）：provider 不可用/未配置的直接信号
@@ -43,6 +59,39 @@ GLOBAL_METRICS = (
     "misev_whitelist_denied_rate",     # 白名单越权尝试率（委派最小权限）
     "misev_tool_fail_rate",            # 工具失败率（健康度）
     "misev_kind_coverage",             # failure_kind 覆盖率（可监控性，红线 #4）
+    # ── P0-a（2026-10-24）度量收口：6 个新指标（告警规则体系化）──
+    # 口径说明：
+    # - llm_fail_rate_1h / llm_fail_1h：近 1h LLM 失败率/次数。**含探测调用**
+    #   （conversation_id=0 AND run_id=0，真库 278 条失败中 261 条是探测）——
+    #   与 badcase 检测器的 include_probes=False 不同：告警要看全部失败，
+    #   探测失败同样是 provider 故障信号。绝对次数 llm_fail_1h 防小样本失真。
+    # - orch_stale_runs：非终态 orch_checkpoints 心跳超 30min 的编排数。
+    #   口径与 core/orch_supervisor resume_stale_s=1800 对齐（同源不造第二口径）。
+    # - hil_pending_old24h：pending 且超 24h 的 HIL 确认单数（真库实测 10/10 全超）。
+    # - auth_login_failed_1h：**真·登录失败**（event_type='auth_login' AND failed）。
+    #   与既有 auth_failed_1h（auth_% 宽口径，99.8% 是身份拒绝）拆分，规则语义归位。
+    # - rag_low_quality_rate_1h：检索低质占比（**代理口径**：top_score<0.1 或 0 命中）。
+    #   P1 的 query_trace.rag_quality 列落地后只换取数 SQL，规则行不动。
+    # - intent_mismatch_rate：意图误判率（**代理口径**：有命中结论样本中
+    #   intent<>hit_intent，近 1 天）。意图评测落库（P0-b）后校准阈值。
+    "llm_fail_rate_1h",
+    "llm_fail_1h",
+    "orch_stale_runs",
+    "hil_pending_old24h",
+    "auth_login_failed_1h",
+    "rag_low_quality_rate_1h",
+    "intent_mismatch_rate",
+    # ── P0-b（2026-10-25）生产回流三指标（R12/R13/R14 告警供数）──
+    # 口径与 core/online_eval.online_eval_metrics 同源（该函数是唯一计算处，
+    # 这里只做发布——不造第二套口径）；缺表 ⇒ 0/None，评估器按规则判。
+    # - eval_backlog_pending：pending 样本数（R12 积压，阈值见 alert_rules 行）。
+    # - eval_promoted_7d：近 7 天 labeled_confirmed 数（R13 回流停滞：=0 且
+    #   backlog>0 才告警——零样本期不误报，规则行带组合条件）。
+    # - eval_auto_coverage：自动评覆盖率（可评样本中 auto_score 非 NULL 占比，
+    #   R14）。**分母为 0 时发布 None 不是 0**（空队列不是 0% 覆盖率）。
+    "eval_backlog_pending",
+    "eval_promoted_7d",
+    "eval_auto_coverage",
 )
 
 _P95_MIN_SAMPLES = 5     # 样本不足不出分位数（避免用 3 个样本算 p95 误导告警）
@@ -61,10 +110,12 @@ def collect_global_metrics(conn) -> dict:
             return 0
 
     # ── LLM 用量窗口（近 1h）──
+    # ⚠️ 业务口径：排除探针（chat_probe 实测占总成本 51%）
     base = ("SELECT COUNT(*) c, COALESCE(SUM(used_mock),0) mock, "
             "COALESCE(SUM(fallback_used),0) fb, "
             "COALESCE(SUM(CASE WHEN finish_reason='length' THEN 1 ELSE 0 END),0) trunc, "
-            "COALESCE(SUM(estimated_cost),0) cost FROM llm_usage_stats WHERE created_at >= datetime('now','-1 hour')")
+            "COALESCE(SUM(estimated_cost),0) cost FROM llm_usage_stats "
+            "WHERE created_at >= datetime('now','-1 hour')" + _PROBE)
     try:
         r = conn.execute(base).fetchone()
         c = int(r["c"] or 0)
@@ -78,10 +129,14 @@ def collect_global_metrics(conn) -> dict:
         pass
 
     # ── 延迟 P95（近 1h）：内存排序，1h 量级记录数可接受；样本不足不出值 ──
+    # ⚠️ 两道过滤都要：
+    #   · probe_where —— 探针延迟（fake_tool 实测记过 56 年）
+    #   · sane_latency_where —— **非探针**但计时溢出的脏行（实测 2 行 file_read
+    #     记了 ≈56.8 年）。二者正交：一条记录可以既是生产调用、又计时出错。
     try:
         rows = conn.execute(
             "SELECT latency_ms FROM llm_usage_stats WHERE created_at >= datetime('now','-1 hour') "
-            "AND latency_ms > 0 ORDER BY latency_ms").fetchall()
+            "AND latency_ms > 0" + _PROBE + _sane_lat() + " ORDER BY latency_ms").fetchall()
         vals = [int(x[0]) for x in rows]
         if len(vals) >= _P95_MIN_SAMPLES:
             idx = max(0, int(round(len(vals) * 0.95)) - 1)
@@ -90,12 +145,13 @@ def collect_global_metrics(conn) -> dict:
         pass
 
     # ── 成本突增：今日累计 vs 昨日同一时刻前（同口径比较，避免"刚过零点就暴涨"的伪阳性）──
+    # ⚠️ 业务口径：排除探针（否则成本曲线约一半来自 chat_probe）
     try:
         today = float(_one("SELECT COALESCE(SUM(estimated_cost),0) FROM llm_usage_stats "
-                           "WHERE date(created_at)=date('now','localtime')") or 0)
+                           "WHERE date(created_at)=date('now','localtime')" + _PROBE) or 0)
         yday = float(_one("SELECT COALESCE(SUM(estimated_cost),0) FROM llm_usage_stats "
                           "WHERE date(created_at)=date('now','localtime','-1 day') "
-                          "AND time(created_at) <= time('now','localtime')") or 0)
+                          "AND time(created_at) <= time('now','localtime')" + _PROBE) or 0)
         m["cost_today_vs_yday"] = round(today / yday, 2) if yday > 0.000001 else 0.0
     except Exception:
         pass
@@ -122,6 +178,84 @@ def collect_global_metrics(conn) -> dict:
         m["badcase_open_count"] = float(open_badcase_count(conn))
     except Exception:
         pass
+
+    # ── P0-a（2026-10-24）度量收口：6 个新指标取数 ──
+    # LLM 失败率/次数（近 1h，**含探测**——探测失败同样是 provider 故障信号）
+    # ⚠️ 2026-10-29 明确：这是**刻意的例外**，不要与本模块其它指标"统一口径"。
+    #    · 成本 / 延迟 / 调用量 / mock·trunc·fallback 比率 → 业务口径（已排除探针）
+    #    · 失败率 / 失败数                              → provider 健康口径（含探针）
+    #    两者**分母不同，不可互相除算**（`llm_fail_1h / llm_calls_1h` 是错的）。
+    try:
+        r = conn.execute(
+            "SELECT COUNT(*) c, COALESCE(SUM(call_failed),0) f FROM llm_usage_stats "
+            "WHERE created_at >= datetime('now','-1 hour')").fetchone()
+        c = int(r["c"] or 0)
+        m["llm_fail_1h"] = float(r["f"] or 0)
+        if c:
+            m["llm_fail_rate_1h"] = round((r["f"] or 0) * 100.0 / c, 1)
+    except Exception:
+        pass
+    # 编排停滞：非终态 checkpoint 心跳超 30min（口径同 orch_supervisor.resume_stale_s）
+    try:
+        m["orch_stale_runs"] = float(_one(
+            "SELECT COUNT(*) FROM orch_checkpoints "
+            "WHERE phase NOT IN ('done','failed') "
+            "AND (julianday('now') - julianday(updated_at))*24*60 > 30") or 0)
+    except Exception:
+        pass
+    # HIL 确认队列积压：pending 且超 24h
+    try:
+        m["hil_pending_old24h"] = float(_one(
+            "SELECT COUNT(*) FROM hil_confirmations "
+            "WHERE status='pending' AND (julianday('now') - julianday(created_at))*24 > 24") or 0)
+    except Exception:
+        pass
+    # 真·登录失败（与 auth_failed_1h 的身份拒绝宽口径拆分）
+    try:
+        m["auth_login_failed_1h"] = float(_one(
+            "SELECT COUNT(*) FROM audit_logs "
+            "WHERE event_type='auth_login' AND result='failed' "
+            "AND created_at >= datetime('now','-1 hour')") or 0)
+    except Exception:
+        pass
+    # 检索低质占比（代理口径，待 rag_quality 列替换）
+    try:
+        r = conn.execute(
+            "SELECT COUNT(*) c, COALESCE(SUM(CASE WHEN top_score < 0.1 OR hit_count = 0 "
+            "THEN 1 ELSE 0 END),0) low FROM query_trace "
+            "WHERE created_at >= datetime('now','-1 hour')").fetchone()
+        c = int(r["c"] or 0)
+        if c:
+            m["rag_low_quality_rate_1h"] = round((r["low"] or 0) * 100.0 / c, 1)
+    except Exception:
+        pass
+    # 意图误判率（代理口径，近 1 天有命中结论样本）
+    try:
+        r = conn.execute(
+            "SELECT COUNT(*) c, COALESCE(SUM(CASE WHEN intent <> hit_intent THEN 1 ELSE 0 END),0) mm "
+            "FROM intent_samples "
+            "WHERE COALESCE(NULLIF(TRIM(hit_intent),''),'') <> '' "
+            "AND created_at >= datetime('now','-1 day')").fetchone()
+        c = int(r["c"] or 0)
+        if c:
+            m["intent_mismatch_rate"] = round((r["mm"] or 0) * 100.0 / c, 1)
+    except Exception:
+        pass
+
+    # ── P0-b（2026-10-25）生产回流三指标：委托 core/online_eval 唯一计算处 ──
+    try:
+        from core.online_eval import online_eval_metrics as _oe_metrics
+        _oem = _oe_metrics(conn)
+        m["eval_backlog_pending"] = float(_oem.get("eval_backlog_pending") or 0)
+        m["eval_promoted_7d"] = float(_oem.get("eval_promoted_7d") or 0)
+        _cov = _oem.get("eval_auto_coverage")
+        # 分母为 0 ⇒ None（空队列 ≠ 0% 覆盖；评估器跳过 None，见 evaluate_once）
+        m["eval_auto_coverage"] = (None if _cov is None
+                                   else round(float(_cov) * 100.0, 1))
+    except Exception:
+        # 缺表/供数失败 ⇒ 覆盖率同样发布 None（0% 会让 R14「< 阈值」假告警；
+        # 两个计数指标回落 0 是安全的：R12 是 > 判据、R13 需 backlog>0 组合）
+        m["eval_auto_coverage"] = None
 
     # ── P2-1 misevolution 安全回归信号（红线 #5）─────────────────────────
     # 口径全部委托 core/misevolution（只读引擎，窗口/阈值走其配置组）；本处
@@ -238,11 +372,29 @@ def evaluate_once(conn=None, cooldown_min: int = 30, notify: bool = True) -> dic
             except Exception:
                 pass
             try:
-                c.execute(
-                    "INSERT INTO alert_events (rule_id, rule_name, run_id, flow_name, metric, actual, "
-                    "threshold, operator, level, status) VALUES (?,?,?,?,?,?,?,?,?,'open')",
-                    (r["id"], r["name"], 0, "(periodic)", metric, actual, th, op,
-                     r["level"] or "warning"))
+                # ★ 2026-10-29 折叠：同一规则的**未终结**告警累加计数，而非新增行。
+                #   此前每次命中都 INSERT ⇒ 同因告警累积 81 次（实测），看板被淹没
+                #   ⇒ 告警疲劳（"BadCase 积压"响了 81 次，而那 6 条坏例一条没动）。
+                #   折叠后：首次 INSERT（hit_count=1，created_at 保留首次触发时刻），
+                #   后续命中 UPDATE（hit_count+1 / last_seen_at / actual 刷新）。
+                #   「已终结(fixed/verified)」不参与折叠 ⇒ 问题复发会开**新事件**，
+                #   不会被算成旧事件的又一次命中。
+                _open_sql = open_statuses_sql()
+                _row = c.execute(
+                    "SELECT id FROM alert_events WHERE rule_id=? AND status IN (%s) "
+                    "ORDER BY id DESC LIMIT 1" % _open_sql, (r["id"],)).fetchone()
+                if _row:
+                    c.execute(
+                        "UPDATE alert_events SET hit_count=COALESCE(hit_count,1)+1, actual=?, "
+                        "last_seen_at=datetime('now') WHERE id=?",
+                        (actual, int(_row[0])))
+                else:
+                    c.execute(
+                        "INSERT INTO alert_events (rule_id, rule_name, run_id, flow_name, metric, actual, "
+                        "threshold, operator, level, status, hit_count, last_seen_at) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,'open',1,datetime('now'))",
+                        (r["id"], r["name"], 0, "(periodic)", metric, actual, th, op,
+                         r["level"] or "warning"))
                 c.execute("UPDATE alert_rules SET last_fired_at=datetime('now') WHERE id=?", (r["id"],))
                 c.commit()
                 fired += 1
@@ -287,6 +439,15 @@ def start_alert_loop(interval_sec: float = 300, cooldown_min: int = 30) -> bool:
                                             if v}), flush=True)
             except Exception as e:
                 print("[alert-loop] 评估异常（不中断）: %s" % str(e)[:160], flush=True)
+            # P0-a：能力度量聚合搭车本周期（零新线程）。从 tool_call_logs 只读
+            # 聚合到 capability_registry；异常不中断告警循环。
+            try:
+                from database import db_conn as _dbc
+                from core import capability_registry as _cr
+                with _dbc() as _c:
+                    _cr.aggregate_capability_metrics(_c)
+            except Exception as e:
+                print("[alert-loop] 能力度量聚合异常（不中断）: %s" % str(e)[:160], flush=True)
 
     _loop_stop.clear()
     _loop_thread = threading.Thread(target=_run, daemon=True, name="alert-evaluator")

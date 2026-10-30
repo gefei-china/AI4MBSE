@@ -21,6 +21,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_failure_class.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import sys
@@ -117,9 +118,20 @@ check("C4b 明确属于瞬态的判为 transient",
 
 print("\n=== D. 分类驱动重试已接线 ===")
 check("D1 worker 内引入了分类器", "from services import failure_class as _fc" in s_src)
-check("D2 import 包在 try 里（不可用时不中断编排）",
-      re.search(r"try:\s*\n\s*from services import failure_class as _fc\s*\n"
-                r"\s*except Exception:\s*\n\s*_fc = None", s_src) is not None)
+# ⚠️ 2026-10-29 修正（**存量假红**，非本轮引入）：原断言把变量名写死成
+#   `as _fc` + `_fc = None`，而实现早已演进为 `as _fc_main` + `_FC_MAIN_OK` 标志
+#   （见 stream.py:615-619，且 2189 行 `if _FC_MAIN_OK else "internal"` 才是真降级）。
+#   实现**比旧断言要求得更健壮**（多了可用性标志），断言却因名字变了而常红——
+#   本仓已知纪律：**门禁断言写错 ≠ 实现错**，改断言前先证实现正确。
+#   现改为按**语义**判：在 try 内 import 分类器，并在 except 里把某个 *OK 标志置 False。
+_d2 = re.search(
+    r"try:\s*\n\s*from services import failure_class as (\w+)\s*\n"
+    r"\s*(\w*OK\w*)\s*=\s*True\s*\n"
+    r"\s*except Exception:\s*\n"
+    r"\s*\2\s*=\s*False",
+    s_src)
+check("D2 import 包在 try 里（不可用时不中断编排）", _d2 is not None,
+      ("alias=%s flag=%s" % (_d2.group(1), _d2.group(2))) if _d2 else "未匹配到 try/except+标志 形态")
 check("D3 先分类再决定是否重试", "_retry_ok = _fc.is_retryable_class(_ecls)" in s_src)
 check("D4 判据含 not _retry_ok（永久失败直接放弃）",
       re.search(r"if retry_left <= 0 or not _retry_ok:", s_src) is not None)
@@ -171,7 +183,7 @@ else:
     print("  [SKIP] 未找到真库")
 
 print("\n=== G. 行为层：fail() 真落库（临时库）===")
-TMP = tempfile.mkdtemp(prefix="verify_fcls_")
+TMP = mkdtemp(prefix="verify_fcls_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _tc = sqlite3.connect(TMP_DB)

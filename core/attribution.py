@@ -56,6 +56,17 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+# ★ 2026-10-29：归因取材必须排除探针/验证噪声。
+#   为什么在这里不可省：归因 → 首坏步模式 → config_proposal → 配置提案，
+#   是一条**决策链**。探针一旦混入取材，`fake_tool`（126 次 / 112 失败）
+#   会被识别成"高频首坏步"，进而产出针对假工具的配置提案。
+#   实测（不过滤时）：tool_call 来源里 fake_tool 稳居 actor 首位。
+#   口径真源：core/probe_mark.probe_where()（本仓已有，勿另写一份）。
+from core.probe_mark import probe_where as _probe_where
+
+#: 拼在 `WHERE ...` 之后的探针过滤片段（空别名版）
+_PROBE = _probe_where()
+
 # ── 产品契约常量（面板/API/门禁三方共用，勿在调用处另写字面量）───────────
 LABEL_GOOD = "GOOD"
 LABEL_BAD = "BAD"
@@ -140,12 +151,12 @@ _SPECS = [
                                'fallback_used', COALESCE(fallback_used, 0),
                                'used_mock', COALESCE(used_mock, 0),
                                'latency_ms', COALESCE(latency_ms, 0)) AS meta_json
-            FROM llm_usage_stats WHERE conversation_id = ?
+            FROM llm_usage_stats WHERE conversation_id = ?""" + _PROBE + """
         """,
         enum_sql="""
             SELECT conversation_id AS cid, MAX(created_at) AS last_at
             FROM llm_usage_stats
-            WHERE conversation_id > 0 AND created_at >= ?
+            WHERE conversation_id > 0 AND created_at >= ?""" + _PROBE + """
             GROUP BY conversation_id
         """),
     StepSourceSpec(
@@ -165,12 +176,12 @@ _SPECS = [
                                'tool_type', COALESCE(tool_type, ''),
                                'latency_ms', COALESCE(latency_ms, 0),
                                'result_head', substr(COALESCE(result, ''), 1, 200)) AS meta_json
-            FROM tool_call_logs WHERE conversation_id = ?
+            FROM tool_call_logs WHERE conversation_id = ?""" + _PROBE + """
         """,
         enum_sql="""
             SELECT conversation_id AS cid, MAX(created_at) AS last_at
             FROM tool_call_logs
-            WHERE conversation_id > 0 AND created_at >= ?
+            WHERE conversation_id > 0 AND created_at >= ?""" + _PROBE + """
             GROUP BY conversation_id
         """),
     StepSourceSpec(

@@ -58,9 +58,18 @@
         <div class="mf-item" onclick="hideMoreFlyout();go('audit')" data-page-node-id="cfrD4EBHcQGKdI4YABYHku">🛡 <span data-page-node-id="5iGWwkJyC6v6z4tQ6gAc2o">审计日志</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;" data-page-node-id="yWReV03xzZiKiPcVanx99j">操作追溯</span></div>
         <div class="mf-item" onclick="hideMoreFlyout();go('ops')" data-page-node-id="azJY2GCDl73FDbe1eQDEvf">📈 <span data-page-node-id="bcGbW9DCuZ8GzMYYvAHbOy">运行监控</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;" data-page-node-id="ZEOAdzwFxE3x7xo9vjxsUo">LLM/HIL 用量</span></div>
         <div class="mf-item" onclick="hideMoreFlyout();go('users')" data-page-node-id="mf-users-entry">👥 <span>用户与权限</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">角色/权限配置</span></div>
-        <!-- 2026-09-17 R7：审批管理（pg-approval）此前全库无任何入口（孤立页），按「管理类入口统一收口」原则补进「更多」 -->
-        <div class="mf-item" onclick="hideMoreFlyout();go('approval')" data-page-node-id="mf-approval-entry">✅ <span>审批管理</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">审批流配置</span></div>
+        <!-- 2026-10-23：审批管理（pg-approval）入口已下线 ——
+             该模块是**纯前端原型**：5 个审批类型 / 4 套流程模板 / 5 条编造审批流水
+             （含虚构人名与审批意见）全部硬编码在 32-approval.js 并存 localStorage，
+             后端**无任何审批 API**，权限判定也是写死的「角色→人名」映射。
+             在「真正生产可用」标准下，用户看到的是**假业务记录**。
+             米爸决策（2026-10-23）：仅移除入口，后端另立需求重做（届时建表 + 路由
+             + 前端接真源）。深链 go('approval') 亦已失效（页面 DOM 一并移除）。 -->
         <div class="mf-item" onclick="hideMoreFlyout();go('evolution')" data-page-node-id="mf-evolution-entry" title="自进化周报：要你决策的 / 本周体检（环比上周）/ 数据可信度">🧬 <span>自进化周报</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">这周该做什么</span></div>
+        <!-- 2026-10-22：评测管理（pg-eval）—— 评测历史 / 趋势 / 可信度 / 门禁接线。
+             按「管理类入口统一收口」原则（2026-09-14 用户与权限、2026-09-17 审批管理
+             均按此原则补进「更多」），与「自进化周报」同构。 -->
+        <div class="mf-item" onclick="hideMoreFlyout();go('eval')" data-page-node-id="mf-eval-entry" title="评测管理：各能力最新分 / 历史趋势 / 这个分数能不能信 / 多少门禁在拦回归">🧪 <span>评测管理</span><span style="margin-left:auto;font-size:10px;color:#7fa3cc;">分数 · 趋势 · 可信度</span></div>
       </div>
     </nav>
     <!-- 2026-09-24 v2：项目组（项目 = 任务的容器）——每个项目声明数据来源（本地工作空间 / 远端 SSH）；
@@ -450,7 +459,7 @@
                   <div id="doc-batch-list" style="display:none;margin-top:8px;max-height:120px;overflow-y:auto;border:1px dashed var(--blue);border-radius:6px;padding:6px;" data-page-node-id="MDrIervAZ1Uo38lGII3t6O"></div>
                   <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;" data-page-node-id="x1MbCe29lGiV1iaTzgGVnj">
                     <input id="dm-title" placeholder="标题（默认=文件名）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:180px;" data-page-node-id="PkHie0DEWdqwF5X67LMiUu">
-                    <input id="dm-author" placeholder="作者（默认=王工）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:110px;" data-page-node-id="c448FV2DEs7pQHaGFyuPOg">
+                    <input id="dm-author" placeholder="作者（默认=当前用户）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:110px;" data-page-node-id="c448FV2DEs7pQHaGFyuPOg">
                     <input id="dm-version" placeholder="版本" value="v1.0" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:80px;" data-page-node-id="tkGhyAP9ZSfwaDNjjrpqfC">
                     <input id="dm-tags" placeholder="标签（逗号分隔）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:12px;width:180px;" data-page-node-id="KRyqmA57xyTE0V3pSe5BDp">
                     <button class="btn grn" onclick="doUploadDoc()" data-page-node-id="TrSkDMrdlD1BTIuyqxtqHS">🚀 开始上传</button>
@@ -992,7 +1001,7 @@
             <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="jo5QM5rHgK0ZFOFAookLUc">🤖 Agent</span>
             <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="zQjmt5u1irv3TH4MBq5Dih">🧩 技能</span>
             <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="j9UGw7CKZyZLoI5Rf042yC">🔌 工具与 MCP</span>
-            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="Bnutfl5u9B99ei2rH7gQxT">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="8Dk8Q1IOeKeldhVGHbmYEn">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span>
+            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="Bnutfl5u9B99ei2rH7gQxT">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="8Dk8Q1IOeKeldhVGHbmYEn">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span><span data-tabgrp="stlib" data-pane="st-registry" onclick="switchStLibTab(this,'st-registry')">📊 能力账本</span>
           </div>
 
           <div class="panel" data-page-node-id="cduEI0nauqjYg9SX28wERm"><div class="ph" data-page-node-id="I5BZYjEVSIfng2HX3UtVRF">系统提示词列表 <span class="badge" data-page-node-id="ePaZVVZNxjwrnfhFkEwzqe">FR-UI-5</span><span style="flex:1" data-page-node-id="D4wtFbY7HCsbMuafnnyEI6"></span><button class="btn sm" onclick="showModal('prompt')" data-page-node-id="yF0SB28JiE10SOsNp4HIxa">＋ 新建</button></div><div class="pb" style="padding:0;" id="prompt-table" data-page-node-id="rB2MeKb0DmchnVb7KTUtGA"><div class="loading" data-page-node-id="v7SMHsnPqER3itlKv11Myf">加载中…</div></div></div>
@@ -1004,7 +1013,7 @@
             <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="Z6AEGI1BtmB3Gte3OnW451">🤖 Agent</span>
             <span data-tabgrp="stlib" data-pane="st-skill" class="on" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="o5riIppmN5nhPD1N6G65UC">🧩 技能</span>
             <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="tZ4YEo1AI0rPe3w5J4P7un">🔌 工具与 MCP</span>
-            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="vf7fCA3vYjBe9XMEzwhwsj">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="w53YAU4Z9Gvoo8f6KdyWZP">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span>
+            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="vf7fCA3vYjBe9XMEzwhwsj">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="w53YAU4Z9Gvoo8f6KdyWZP">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span><span data-tabgrp="stlib" data-pane="st-registry" onclick="switchStLibTab(this,'st-registry')">📊 能力账本</span>
           </div>
 
           <!-- Skills 管理：Skills 列表（插件市场 / 自定义 / 内置 单一筛选；操作入口在右上角） -->
@@ -1034,7 +1043,7 @@
             <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="CqGqbSuLBlowUdQxZnFFwc">🤖 Agent</span>
             <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="EfpgPEu5Wh55K5U03gD26G">🧩 技能</span>
             <span data-tabgrp="stlib" data-pane="st-mcp" class="on" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="C9zAxNOvlePHlGBKSaIqyl">🔌 工具与 MCP</span>
-            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="OgugFVRwLMCzWpx9dGcaQ2">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="xyhWnQl26VYjwHpbKw0Q8y">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span>
+            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="OgugFVRwLMCzWpx9dGcaQ2">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="xyhWnQl26VYjwHpbKw0Q8y">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span><span data-tabgrp="stlib" data-pane="st-registry" onclick="switchStLibTab(this,'st-registry')">📊 能力账本</span>
           </div>
 
           <!-- 工具管理：MCP 工具 / HTTP 工具（内置工具按类型归入对应 tab） -->
@@ -1074,7 +1083,7 @@
             <span data-tabgrp="stlib" data-pane="st-agent" class="on" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="aNNOw3Qk4t9lAS9qDEshTi">🤖 Agent</span>
             <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="Y2S3GPWZFaRgmYMjZFMPDQ">🧩 技能</span>
             <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="lxRf0Uo2DtfzYu53GCNWJL">🔌 工具与 MCP</span>
-            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="brbDBlWiLfM8tJlyBfBohW">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="d01lwpBmGlS8wtYj5IAnzg">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span>
+            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="brbDBlWiLfM8tJlyBfBohW">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="d01lwpBmGlS8wtYj5IAnzg">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span><span data-tabgrp="stlib" data-pane="st-registry" onclick="switchStLibTab(this,'st-registry')">📊 能力账本</span>
           </div>
 
           <!-- 优化：Agent 列表 / 调用日志 拆分为页内 Tab（日志不再与卡片上下堆叠） -->
@@ -1131,7 +1140,7 @@
             <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="Y9QQ8DrB1gVonRsHlSioyI">🤖 Agent</span>
             <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="isREVol1ag5YEkcUnYR2XB">🧩 技能</span>
             <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="aYyGHXKONHkZuyPko6NGio">🔌 工具与 MCP</span>
-            <span data-tabgrp="stlib" data-pane="st-market" class="on" onclick="switchStLibTab(this,'st-market')" data-page-node-id="ERs21O0kWCmPoprKemeNKR">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="ny7AIEzEyU3PXMWD5sFbTa">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span>
+            <span data-tabgrp="stlib" data-pane="st-market" class="on" onclick="switchStLibTab(this,'st-market')" data-page-node-id="ERs21O0kWCmPoprKemeNKR">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')" data-page-node-id="ny7AIEzEyU3PXMWD5sFbTa">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span><span data-tabgrp="stlib" data-pane="st-registry" onclick="switchStLibTab(this,'st-registry')">📊 能力账本</span>
           </div>
 
           <!-- 插件市场（2026-09-17 定稿）：单页直出全量公共插件目录（按类型纵向分区 + 类型/状态筛选 + 管理操作）；
@@ -1213,7 +1222,7 @@
             <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')" data-page-node-id="mdt-a1">🤖 Agent</span>
             <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')" data-page-node-id="mdt-s1">🧩 技能</span>
             <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')" data-page-node-id="mdt-m1">🔌 工具与 MCP</span>
-            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="mdt-k1">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" class="on" onclick="switchStLibTab(this,'st-model')" data-page-node-id="mdt-c1">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span>
+            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')" data-page-node-id="mdt-k1">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" class="on" onclick="switchStLibTab(this,'st-model')" data-page-node-id="mdt-c1">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span><span data-tabgrp="stlib" data-pane="st-registry" onclick="switchStLibTab(this,'st-registry')">📊 能力账本</span>
           </div>
           <div class="pd" data-page-node-id="RzqoTp13YjnImwKXpglIDv">对话/向量模型接入 · 智能路由 · 停用启用 <span class="badge" data-page-node-id="eFAECkdZIgg3P9RDeHdlyT">ExtInfR-LLM-1/2</span><span class="badge" data-page-node-id="bCG9sUSHtNKfXCwYJqG2Rp">D10</span></div>
           <div class="panel" data-page-node-id="NIHW8MbXDgjVGZSravpe23"><div class="pb" style="padding:8px;display:flex;align-items:center;flex-wrap:wrap;gap:8px;" data-page-node-id="k1SjpqDMPCYbaUNI7jMNw2">
@@ -1233,7 +1242,7 @@
             <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')">🤖 Agent</span>
             <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')">🧩 技能</span>
             <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')">🔌 工具与 MCP</span>
-            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" class="on" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span>
+            <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" class="on" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span><span data-tabgrp="stlib" data-pane="st-registry" onclick="switchStLibTab(this,'st-registry')">📊 能力账本</span>
           </div>
           <div class="pd">资产变更审计 · 字段级 diff · 版本跃迁 <span class="badge">asset_change_logs</span><span class="badge">P0-2</span></div>
           <div class="panel">
@@ -1248,6 +1257,56 @@
             <div class="pb" style="padding:0;" id="st-changelog-box"><div class="loading">加载中…</div></div>
           </div>
         </div>
+      <!-- 2026-10-27（P0-2）能力账本：capability_registry 统一注册处的**界面出口**。
+           此前 205 行投影 + 准确的调用度量只在告警循环与周报里被读，界面看不到
+           ⇒ 业务方想问"这个能力到底有没有在用"只能靠 SQL（等于"有账本没账本柜"）。
+           数据源：GET /api/capabilities/ledger（声明集 × 调用集 2×2）、
+                   GET /api/capabilities/trace（追溯填充率）、…/trace/detail（单轮下钻）。
+           全部只读；不展示 arguments/result（治理视图，不是内容审计）。 -->
+      <div class="subpage" id="st-registry" data-tabpanel="st">
+        <div class="subtab" style="padding:6px 10px 0;">
+          <span data-tabgrp="stlib" data-pane="st-agent" onclick="switchStLibTab(this,'st-agent')">🤖 Agent</span>
+          <span data-tabgrp="stlib" data-pane="st-skill" onclick="switchStLibTab(this,'st-skill')">🧩 技能</span>
+          <span data-tabgrp="stlib" data-pane="st-mcp" onclick="switchStLibTab(this,'st-mcp')">🔌 工具与 MCP</span>
+          <span data-tabgrp="stlib" data-pane="st-market" onclick="switchStLibTab(this,'st-market')">📦 插件市场</span><span data-tabgrp="stlib" data-pane="st-model" onclick="switchStLibTab(this,'st-model')">🧠 模型配置</span><span data-tabgrp="stlib" data-pane="st-changelog" onclick="switchStLibTab(this,'st-changelog')">📜 变更记录</span><span data-tabgrp="stlib" data-pane="st-registry" class="on" onclick="switchStLibTab(this,'st-registry')">📊 能力账本</span>
+        </div>
+        <div class="pd">统一注册处 · 声明集 × 调用集 · 任务级追溯 <span class="badge">capability_registry</span><span class="badge">只读</span></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+          <span style="font-size:11px;color:var(--mut);">
+            一个能力的"可用"有 <b>4 条声明入口</b>（Agent 绑定 / 全局技能池 / Agent 内置声明 / 技能工具白名单）
+            ＋ 1 条无条件注入 —— 只看"绑定"会把在用的能力误判成"没人用"。
+          </span>
+          <span style="flex:1"></span>
+          <select id="capr-days" onchange="caprDays(this)" title="统计窗口"
+                  style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+            <option value="7">近 7 天</option>
+            <option value="30" selected>近 30 天</option>
+            <option value="90">近 90 天</option>
+            <option value="3650">全部历史</option>
+          </select>
+          <select id="capr-kind" onchange="caprFilter(this,'kind')" title="能力类型"
+                  style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+            <option value="">全部类型</option>
+            <option value="tool">工具 tool</option>
+            <option value="skill">技能 skill</option>
+            <option value="mcp_server">MCP 服务</option>
+            <option value="mcp_tool">MCP 工具</option>
+            <option value="plugin">插件 plugin</option>
+            <option value="prompt">提示词 prompt</option>
+          </select>
+          <select id="capr-verdict" onchange="caprFilter(this,'verdict')" title="判定"
+                  style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+            <option value="">全部判定</option>
+            <option value="in_use">在用</option>
+            <option value="declared_unused">已声明未用</option>
+            <option value="runtime_only">无声明入口</option>
+            <option value="unused">未使用</option>
+          </select>
+          <button class="btn" onclick="loadCapRegistry()" title="重新拉取">🔄 刷新</button>
+        </div>
+        <div id="capr-body"><div class="loading">加载能力账本…</div></div>
+      </div>
+
       </div>
 
       <!-- 2026-09-04 v4：模型配置页(pg-modelcfg)已并入能力中心末 tab（st-model），此处移除原独立页 -->
@@ -1310,6 +1369,24 @@
         </div>
         <!-- AI 会话上下文管理（T6 token 预算 + 历史压缩 + 语义拉回；静态配置即时生效） -->
         <div class="subpage" id="st-ctx" data-tabpanel="stg">
+          <!-- ★ 2026-10-27 上下文构成观测：**放在配置区之上** —— 先看现状、再改配置。
+               数据源 context_audit（只读聚合），与下方配置表单互不影响。 -->
+          <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span style="font-size:11px;color:var(--mut);">上下文构成观测：分块 token 归因 /
+              优化项实际触发 / 按日趋势（只读，数据来自每轮真实装配）</span>
+            <span style="flex:1"></span>
+            <select id="ctx-audit-days" onchange="ctxAuditDays(this)"
+                    title="统计窗口"
+                    style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;">
+              <option value="1">近 1 天</option>
+              <option value="7" selected>近 7 天</option>
+              <option value="14">近 14 天</option>
+              <option value="30">近 30 天</option>
+            </select>
+            <button class="btn" onclick="loadCtxAudit()" title="重新拉取">🔄 刷新</button>
+          </div>
+          <div id="ctx-audit-body" style="margin-bottom:16px;"><div class="loading">加载归因数据…</div></div>
+
           <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <span style="font-size:11px;color:var(--mut);">AI 会话上下文管理：历史压缩 / Token 预算 / 语义拉回（每项附解读与调整影响；保存后<b style="color:var(--txt);">即时生效</b>，落盘系统级配置文件）</span>
             <span style="flex:1"></span>
@@ -1494,6 +1571,24 @@
             <div style="max-height:360px;overflow:auto;" id="ops-badcases"><div class="mut" style="padding:10px;font-size:12px;">加载中…</div></div>
           </div>
         </div>
+        <!-- P0-b 在线评测生产回流（2026-10-25）：采样（负反馈>低置信>随机5%）→ 自动评
+             （确定性层只写建议）→ 人工标注（HIL 确认卡 eval_label）→ 转正三分流
+             （intent_samples / qrels.jsonl / eval_gen_labels）。全部 dry-run 默认。 -->
+        <div class="panel" style="margin-bottom:14px;"><div class="ph">在线评测回流 <span class="badge">dry-run 默认</span><span class="badge r" id="ops-oe-pending" style="display:none;">0 待标注</span></div>
+          <div class="pb">
+            <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center;">
+              <button class="btn sm ghost" onclick="runOnlineEvalSample(false)" title="负反馈优先 > 低置信优先 > 随机5%；只预判不写库">🔍 试运行采样</button>
+              <button class="btn sm" id="ops-oe-sample-btn" style="display:none;" onclick="runOnlineEvalSample(true)">✅ 确认入队</button>
+              <button class="btn sm ghost" onclick="runOnlineEvalAuto(false)" title="对 pending 样本跑确定性指标，只写 auto_score 建议">🔍 试运行自动评</button>
+              <button class="btn sm" id="ops-oe-auto-btn" style="display:none;" onclick="runOnlineEvalAuto(true)">✅ 确认写分</button>
+              <button class="btn sm ghost" onclick="runOnlineEvalPromote(false)" title="把人工 confirmed 样本转正进 dataset（三分流幂等）">🔍 试运行转正</button>
+              <button class="btn sm" id="ops-oe-promote-btn" style="display:none;" onclick="runOnlineEvalPromote(true)">✅ 确认转正</button>
+              <button class="btn sm" onclick="loadOpsOnlineEval()">刷新</button>
+            </div>
+            <div id="ops-oe-dryrun" style="display:none;margin-bottom:8px;"></div>
+            <div style="max-height:420px;overflow:auto;" id="ops-online-eval"><div class="mut" style="padding:10px;font-size:12px;">加载中…</div></div>
+          </div>
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;" data-page-node-id="1QPPFGR66kxFhP8arcB5ND">
           <div class="panel" data-page-node-id="lcsjbJ8PGHVFfc0V4cQaLR"><div class="ph" data-page-node-id="BGqEAVMJnOAdiVeLREfPFO">近 7 天趋势 <span class="badge" data-page-node-id="DzhIqpy7yTpeKSvVUu0159">运行数/平均耗时</span></div><div class="pb" id="ops-trend" data-page-node-id="n5Ebw6CeqFNv9NlW2ug6ri"><div class="loading" data-page-node-id="f8vsELao76eYA5VmNIpfeo">加载中…</div></div></div>
           <div class="panel" data-page-node-id="AfYGcEKnNkW3hiu0HwCGuj"><div class="ph" data-page-node-id="agtdlaJJ7JXQcilOJVO9q9">⏱ 节点耗时分布 <span class="badge" data-page-node-id="qPPb0g8qpvOzKtCoK7d7oC">按节点类型</span></div><div class="pb" id="ops-node-stats" data-page-node-id="sjMtrC1Gm0ZfAdwGuGDJJx"><div class="loading" data-page-node-id="9eYIYm537dGKwSY2vYHdFx">加载中…</div></div></div>
@@ -1530,6 +1625,13 @@
               <button class="btn sm ghost" style="float:right;" onclick="openAlertRules()" data-page-node-id="LnkMrkMwScNiR600hRNEA2">⚙ 规则管理</button></div>
             <div class="pb" style="padding:0;" id="ops-alerts" data-page-node-id="xR0rMxdE4Z3TM9TehbMmec"><div class="loading" data-page-node-id="pQ2DhHp7T336fIL1c7MwnA">加载中…</div></div>
           </div>
+          <!-- 配置变更台账（2026-10-29）：P1-4 晋升台账此前后端有、前端无入口。
+               「效果判定」补的是沙箱之后的空档：改完到底有没有变好。 -->
+          <div class="panel" data-page-node-id="CfGh7yS0pQm2LxWnVbAe1k">
+            <div class="ph" data-page-node-id="CfGh7yS0pQm2LxWnVbAe2k">配置变更台账 <span class="badge" id="ops-cfg-badge" data-page-node-id="CfGh7yS0pQm2LxWnVbAe3k">—</span>
+              <button class="btn sm ghost" style="float:right;" onclick="runConfigEffectCheck()" title="用 eval_metrics 对比改前/改后同口径指标，判定这次改动有没有用" data-page-node-id="CfGh7yS0pQm2LxWnVbAe4k">🩺 判定效果</button></div>
+            <div class="pb" style="padding:0;" id="ops-config-history" data-page-node-id="CfGh7yS0pQm2LxWnVbAe5k"><div class="loading" data-page-node-id="CfGh7yS0pQm2LxWnVbAe6k">加载中…</div></div>
+          </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;" data-page-node-id="NiRYyfj47Xu7XZyl8YgCD3">
           <div class="panel" data-page-node-id="oI5vVDyBQQT96EPiRwkN14"><div class="ph" data-page-node-id="xXM7BbEPcowLtwgExZDUA3">错误码查询 <span class="badge" data-page-node-id="CBAfAX7B9SzEEz2Le8sG6E">11.3-b</span></div><div class="pb" style="padding:0;" id="ops-errors" data-page-node-id="vWVilEN68ab46JLLn5Hguh"><div class="loading" data-page-node-id="vPobwjdsKnCqyqSTgPjxhL">加载中…</div></div></div>
@@ -1537,69 +1639,31 @@
         </div>
       </div>
 
-      <!-- ===== 审批管理（前端原型：审批类型 / 流程模板 / 节点 / 审批人） ===== -->
-      <div class="page" id="pg-approval" data-page-node-id="DhkfthnES7mZEKv1bO3j0t">
-        <h3 class="pt" data-page-node-id="eQCGG7ekibUlo3vRZPCMhw">审批管理</h3>
-        <div class="pd" data-page-node-id="DgonmgLHWyKZlAifOEhchO">自定义流程模板 · 节点 · 审批人 · 审批类型（适用场景） <span class="badge" data-page-node-id="OQV2uqsTrEdHt8WBaP1ENP">原型</span></div>
-        <div class="subtab" data-page-node-id="P2eaoYw68NNdpVHeBCLlki">
-          <span class="on" data-tabgrp="ap" onclick="tab(this,'ap','ap-type')" data-page-node-id="n7AzinTGWxqYcy3oPFxOXL">📋 审批类型</span>
-          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-tpl')" data-page-node-id="6ZmA49K6PtCxrHZND9QZOQ">🧾 流程模板</span>
-          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-new')" data-page-node-id="SP9X2NUsNIgQ9uO2Ax747J">🚀 发起审批</span>
-          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-todo')" data-page-node-id="ZBkLjN6XRCO4XXvaXNtW72">⏳ 我的待办</span>
-          <span data-tabgrp="ap" onclick="tab(this,'ap','ap-rec')" data-page-node-id="fqVZ8yPAClDK72xESL8DEa">📚 审批记录</span>
-        </div>
-        <!-- 审批类型（用于哪些场景） -->
-        <div class="subpage on" id="ap-type" data-tabpanel="ap" data-page-node-id="4AW9C1EZvZwrFsDC46oH7M">
-          <div class="note" style="margin-bottom:12px;" data-page-node-id="l10ZyAf8EyiWavTDkIDFJM">审批类型定义「用于哪些场景」。系统预置通用类型（发布 / 变更 / 资产入库 / 分支合并 / 自定义），可直接使用，也可新增自定义类型；停用后发起审批时不可选。</div>
-          <div class="panel" data-page-node-id="l4uKMDNfEtXKvjN2PYzuzy"><div class="ph" data-page-node-id="knokTEpCz16iNnSDBDM39h">审批类型 <span class="badge" data-page-node-id="YBnf2gY3IpKPdBzzy91xFA">通用业务</span><span style="flex:1" data-page-node-id="3LIioEK8CwkHaCkKk3oFbK"></span>
-            <input id="ap-type-search" placeholder="搜索名称/场景" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:160px;" oninput="renderApprovalTypes()" data-page-node-id="pEaT6okOLhXnRhOw5mxuoZ">
-            <button class="btn sm" onclick="editApprovalType()" data-page-node-id="KG2pryW7mfSgo3QCvZWx6H">＋ 新增类型</button></div>
-            <div class="pb" style="padding:0;" id="ap-type-table" data-page-node-id="Z9lXD7TfHxUDQzrZ7x4auf"><div class="loading" data-page-node-id="NVJPNGOwHQsgPdQTB7FEVN">加载中…</div></div>
-          </div>
-        </div>
-        <!-- 流程模板 -->
-        <div class="subpage" id="ap-tpl" data-tabpanel="ap" data-page-node-id="HqjaPAy0RWj9b8Ft0oDvQv">
-          <div class="note" style="margin-bottom:12px;" data-page-node-id="cN5hCND0NeOmZT5g7cnrBf">流程模板定义「审批怎么走」：模板归属于某个审批类型，节点按顺序执行；每个节点可配置审批人（指定人员 / 指定角色 / 发起人自选）与通过规则（全部 / 任一）。</div>
-          <div class="panel" data-page-node-id="MLb4Zjw5juiyCmX627PVql"><div class="ph" data-page-node-id="BkEQF9KdFdp4RRj3wMIrLW">流程模板 <span class="badge" data-page-node-id="GcKF6p2tJJaFpl0MuhKhRW">节点可编排</span><span style="flex:1" data-page-node-id="tQtyyEubkWzUrP6x2AKJz1"></span>
-            <button class="btn sm" onclick="editApprovalTpl()" data-page-node-id="dtdzcgGlAZRS3xCMAiAxIV">＋ 新建模板</button></div>
-            <div class="pb" style="padding:0;" id="ap-tpl-table" data-page-node-id="2KX5ToiiGAtDb4smogaRVy"><div class="loading" data-page-node-id="qiZFMBwzR2PIOaFu2OaVu4">加载中…</div></div>
-          </div>
-        </div>
-        <!-- 发起审批 -->
-        <div class="subpage" id="ap-new" data-tabpanel="ap" data-page-node-id="Hg2bobkkufQIyM8oxjQuk0">
-          <div class="panel" data-page-node-id="AoC2ibpW0jZvc4RgyF9257"><div class="ph" data-page-node-id="7YGZ7XauMDQy9g7U7wOCQV">发起审批 <span class="badge" data-page-node-id="daWhA6kCaUcHmbHCVE7A1M">选择类型与模板</span></div>
-            <div class="pb" id="ap-new-form" data-page-node-id="kocn98na4U0BRtiu9XXXeT"><div class="loading" data-page-node-id="GliMACwh6X7BYdCBnx1vzR">加载中…</div></div>
-          </div>
-        </div>
-        <!-- 我的待办 -->
-        <div class="subpage" id="ap-todo" data-tabpanel="ap" data-page-node-id="HAZF2b85gsLorAtj7kngsG">
-          <div class="panel" data-page-node-id="pZ0ocMbDRbfxbFWAAm4xBF"><div class="ph" data-page-node-id="fayyvw1lkcVvxPjSKtvLx1">⏳ 我的待办 <span class="badge r" id="ap-todo-badge" data-page-node-id="8rw332dvislARxeFb18ThF">0</span><span style="flex:1" data-page-node-id="6KLlSJ6ZVdJ4duKJqgf7GD"></span>
-            <button class="btn sm ghost" onclick="renderApprovalTodo()" data-page-node-id="0x6B5bnbDKp25BT9gAxuo1">🔄 刷新</button></div>
-            <div class="pb" style="padding:0;" id="ap-todo-table" data-page-node-id="FYncLaJ8z6ZIZlg8P4PivJ"><div class="loading" data-page-node-id="xGBosCq3bexv89fBaxnwMV">加载中…</div></div>
-          </div>
-        </div>
-        <!-- 审批记录 -->
-        <div class="subpage" id="ap-rec" data-tabpanel="ap" data-page-node-id="CPpD7LblHARHuXfspeXDIF">
-          <div class="panel" data-page-node-id="2K8jDOZPzSV1dffooPY9fy"><div class="ph" data-page-node-id="MmY0A0GApzrc4NEy8qG1Sn">审批记录 <span style="flex:1" data-page-node-id="P5TYb6vP8H4Le6GpDElZnP"></span>
-            <select id="ap-rec-status" onchange="renderApprovalRecs()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" data-page-node-id="cF9gUz2lIIPzfDonboeaJU">
-              <option value="" data-page-node-id="9nghMDFJ2VviJm1Z4idkje">全部状态</option><option value="running" data-page-node-id="lvRUyQt0hk1QosdSYCwNJD">审批中</option><option value="approved" data-page-node-id="HeGlHH2V48TTB3s8ZfvfbY">已通过</option><option value="rejected" data-page-node-id="HtpbJuHu7cvLHLy0FRlc5M">已驳回</option><option value="withdrawn" data-page-node-id="NWog3CYtumF0DfQd3LgPU8">已撤销</option>
-            </select>
-            <button class="btn sm ghost" onclick="renderApprovalRecs()" data-page-node-id="QOdXVlz68HmBNoZe5fA6Nt">🔄 刷新</button></div>
-            <div class="pb" style="padding:0;" id="ap-rec-table" data-page-node-id="xWCymt4NfSSUE6y7CXMRqO"><div class="loading" data-page-node-id="m7utEJi2j3ZBPwjGWt18Bk">加载中…</div></div>
-          </div>
-        </div>
-      </div>
+            <!-- 2026-10-23：审批管理页（pg-approval）已移除 ——
+           该页是**纯前端原型**：审批类型 / 流程模板 / 节点 / 审批人 全部硬编码在
+           32-approval.js（5 个类型 + 4 套模板 + 5 条编造审批流水，含虚构人名与
+           审批意见），后端无任何审批 API，权限判定靠写死的「角色→人名」映射。
+           米爸决策：仅移除入口与页面，后端另立需求重做（建表 + 路由 + 前端接真源）。 -->
 
-      <!-- ===== 自进化周报（2026-10-20 价值感知收官）：要你决策的 / 本周体检 / 数据可信度 ===== -->
-      <!-- ★必须是 #pages 的直接子级：曾插到 #pages 闭合之后成为游离节点，
-           .page.on 高亮靠 class 全局匹配仍能亮，但布局脱离主区容器被挤成右侧窄条
-           （用户报"页面展示异常"）。放置位置以 div 栈追踪核实。 -->
-      <div class="page" id="pg-evolution" data-page-node-id="evr-page-20261020">
+<div class="page" id="pg-evolution" data-page-node-id="evr-page-20261020">
         <h3 class="pt" data-page-node-id="evr-h3">自进化周报</h3>
         <div class="pd" data-page-node-id="evr-pd">这一周，系统替我做了什么？我该做什么？ <span class="badge" data-page-node-id="evr-bd">P0-P2 收官</span>
           <span id="evr-head" style="float:right" data-page-node-id="evr-head"></span>
         </div>
         <div id="evr-body" data-page-node-id="evr-body"><div class="loading" data-page-node-id="evr-load">加载中…</div></div>
+      </div>
+
+      <!-- 评测管理（2026-10-22）：三段信息架构，按用户的三个问题排 ——
+           ① 现在什么状态（各能力最新分 + 这个分数能不能信）
+           ② 历史怎么变（按类型分组的趋势）
+           ③ 什么在拦着我（门禁接线状态）
+           ⚠ 与 #pg-evolution 一样必须是 #pages 的直接子级（否则布局脱离主区容器）。 -->
+      <div class="page" id="pg-eval" data-page-node-id="evm-page-20261022">
+        <h3 class="pt" data-page-node-id="evm-h3">评测管理</h3>
+        <div class="pd" data-page-node-id="evm-pd">系统现在答得好不好？这些数字能不能信？ <span class="badge" data-page-node-id="evm-bd">质量可见性</span>
+          <span id="evm-head" style="float:right" data-page-node-id="evm-head"></span>
+        </div>
+        <div id="evm-body" data-page-node-id="evm-body"><div class="loading" data-page-node-id="evm-load">加载中…</div></div>
       </div>
     </div>
   </div>
@@ -1782,10 +1846,12 @@
     <script src="/static/js/mods/28-studio.js" defer></script>
     <script src="/static/js/mods/30-agents.js" defer></script>
     <script src="/static/js/mods/31-admin.js" defer></script>
-    <script src="/static/js/mods/32-approval.js" defer></script>
+    <!-- 2026-10-23：32-approval.js 已随审批管理模块下线而移除（纯前端原型、假业务数据） -->
     <script src="/static/js/mods/33-search.js" defer></script>
     <script src="/static/js/mods/34-graphtabs.js" defer></script>
     <script src="/static/js/mods/35-ctxconfig.js" defer></script>
+    <script src="/static/js/mods/35-ctxaudit.js" defer></script>
+    <script src="/static/js/mods/50-capregistry.js" defer></script>
     <script src="/static/js/mods/36-thinking.js" defer></script>
     <script src="/static/js/mods/36-capability.js" defer></script>
 <div id="gnav-tip" data-page-node-id="0BjF8bZHUY5ifs1giLFsmS"></div>
@@ -1832,5 +1898,11 @@
 <script src="/static/js/mods/43-doccat.js" defer></script>
 <script src="/static/js/mods/44-memory.js" defer></script>
 <script src="/static/js/mods/47-evolution-report.js" defer></script>
+<!-- 2026-10-22 评测管理页（第二批：依赖 #pg-eval 的 DOM） -->
+<script src="/static/js/mods/48-eval.js" defer></script>
+<!-- 2026-10-22 会话轮次目录（右缘刻度 + hover 展开用户输入清单，默认收起） -->
+<script src="/static/js/mods/49-convnav.js" defer></script>
+<!-- 2026-10-29 AI 答复呈现层（来源标注 + 正文限高内滚；内容不删、不折叠，遵守 B5-8） -->
+<script src="/static/js/mods/51-answer-view.js" defer></script>
 </body>
 </html>

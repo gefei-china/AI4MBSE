@@ -17,6 +17,53 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 // 属性安全转义（data-* 用于会话信息卡）
 function escA(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;');}
 
+// ── 服务端时间戳解析（2026-10-28 用户反馈「系统的时间不是北京时间」）──
+/* ★ 为什么必须收敛成**一个**函数：
+   后端所有 `created_at/updated_at` 来自 SQLite `CURRENT_TIMESTAMP`，它是 **UTC**；
+   而前端此前有 5 处各自 `new Date(ts.replace(' ','T'))` —— 无时区后缀的
+   `YYYY-MM-DDTHH:mm:ss` 会被 **当作本地时间**解析 ⇒ 显示比真实时间早 8 小时。
+   更糟的是其中 1 处（21-ontology.js）自己加了 'Z' 是**对的**，其余 4 处没加
+   ⇒ 同一份数据在不同页面显示成不同时间。这正是本仓反复记录的
+   「同一语义在多处各写一份，最后必然对不上」。
+   ⇒ 收敛为单点：凡解析服务端时间戳，一律调本函数。
+
+   ⚠️ 兼容三种入参，返回 Date（解析失败返回 null，调用方自行降级）：
+     ① 无时区 `2026-10-28 05:44:52`（SQLite UTC）→ 补 'Z' 按 UTC 解析
+     ② 已带时区 `2026-10-28T05:44:52Z` / `+08:00` → 原样解析
+     ③ Date / 毫秒数 → 直接构造
+   注意：**不要**用它解析用户本地输入的时间字符串（那本来就该按本地解释）。 */
+function parseServerTime(ts){
+  if(ts == null || ts === '') return null;
+  if(ts instanceof Date) return isNaN(ts.getTime()) ? null : ts;
+  if(typeof ts === 'number'){ const d = new Date(ts); return isNaN(d.getTime()) ? null : d; }
+  let s = String(ts).trim();
+  if(!s) return null;
+  // 纯数字字符串 → 毫秒时间戳
+  if(/^\d{10,}$/.test(s)){ const d = new Date(Number(s)); return isNaN(d.getTime()) ? null : d; }
+  s = s.replace(' ', 'T');
+  // 已带时区标记（Z 或 ±HH:MM / ±HHMM）⇒ 原样交给 Date
+  const hasTZ = /(Z|[+-]\d{2}:?\d{2})$/i.test(s);
+  let d = new Date(hasTZ ? s : s + 'Z');
+  if(isNaN(d.getTime()) && !hasTZ){
+    // 极端兜底：补 Z 仍失败 ⇒ 退回原始字符串（让浏览器尽力解析），仍失败则 null
+    d = new Date(String(ts));
+  }
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// 服务端时间戳 → 本地 `MM-DD HH:mm` / `HH:mm`（当天）。等价于原 formatMsgTime 的展示口径。
+function fmtServerTime(ts, opts){
+  const d = parseServerTime(ts);
+  if(!d) return '';
+  const now = new Date();
+  const sameDay = d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
+  const p = n => String(n).padStart(2,'0');
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  if(opts && opts.dateOnly) return `${p(d.getMonth()+1)}-${p(d.getDate())}`;
+  if(opts && opts.withSeconds) return sameDay ? `${hm}:${p(d.getSeconds())}` : `${p(d.getMonth()+1)}-${p(d.getDate())} ${hm}:${p(d.getSeconds())}`;
+  return sameDay ? hm : `${p(d.getMonth()+1)}-${p(d.getDate())} ${hm}`;
+}
+
 // ── 能力绑定下拉多选面板（2026-09-30 用户反馈 3）──
 // 绑定区原先是「下拉单选 + ＋添加按钮 + chips 标签」，与「主 Agent 关联子 Agent」的下拉多选
 // 长得不一样，用户要在两种交互之间来回切。这里生成与 f-team-dd **同构**的骨架：
@@ -592,34 +639,6 @@ const MODAL_FORMS = {
       </div>
       <div id="merge-preview" style="font-size:11.5px;color:var(--mut);background:var(--blue-l);padding:8px 10px;border-radius:6px;display:none;">选择分支后显示合并预览</div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveMerge()">创建</button></div>`,
-  approval_type: `<h3 id="apt-form-title">＋ 新增审批类型</h3>
-      <input type="hidden" id="apt-id" value="">
-      <div class="form-section">
-        <div class="form-section-head"><span class="fs-icon">📋</span><span class="fs-title">类型信息</span></div>
-        <div class="form-row"><label>类型名称 <span class="req">*</span></label><input id="apt-name" placeholder="如：报销审批"></div>
-        <div class="form-row"><label>图标 <span class="info-tip" title="emoji 图标；用于列表与卡片展示">ⓘ</span></label><input id="apt-icon" placeholder="如：📦" style="width:90px;"></div>
-        <div class="form-row"><label>适用场景 <span class="info-tip" title="该审批类型适用的业务场景（如 报销/采购/发布等）">ⓘ</span></label><textarea id="apt-scenario" placeholder="描述该审批类型适用的业务场景…"></textarea></div>
-        <div class="form-row"><label>说明</label><input id="apt-desc" placeholder="补充说明（可空）"></div>
-      </div>
-      <div class="form-section">
-        <div class="form-section-head"><span class="fs-icon">⚙️</span><span class="fs-title">状态</span></div>
-        <div class="form-row"><label>启用 <span class="info-tip" title="启用：流程模板可关联；停用：保留但不可选用">ⓘ</span></label><select id="apt-enabled"><option value="1">启用</option><option value="0">停用</option></select></div>
-      </div>
-      <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveApprovalType()">保存</button></div>`,
-  approval_tpl: `<h3 id="aptpl-form-title">＋ 新建流程模板</h3>
-      <input type="hidden" id="aptpl-id" value="">
-      <div class="form-section">
-        <div class="form-section-head"><span class="fs-icon">📜</span><span class="fs-title">模板信息</span></div>
-        <div class="form-row"><label>模板名称 <span class="req">*</span></label><input id="aptpl-name" placeholder="如：发布审批·两级"></div>
-        <div class="form-row"><label>关联审批类型 <span class="req">*</span> <span class="info-tip" title="该模板对应的审批类型（来自审批类型列表）">ⓘ</span></label><select id="aptpl-type"></select></div>
-        <div class="form-row"><label>描述</label><input id="aptpl-desc" placeholder="模板用途说明（可空）"></div>
-        <div class="form-row"><label>启用 <span class="info-tip" title="启用：可被发起审批；停用：保留但不可选用">ⓘ</span></label><select id="aptpl-enabled"><option value="1">启用</option><option value="0">停用</option></select></div>
-      </div>
-      <div class="form-section">
-        <div class="form-section-head"><span class="fs-icon">🛤</span><span class="fs-title">流程节点 <span class="fs-hint">（按顺序执行，首节点自动进入审批流）</span></span><span style="flex:1;"></span><button class="btn sm" style="padding:1px 8px;font-size:11px;" onclick="apTplAddNode()">＋ 添加节点</button></div>
-        <div id="aptpl-nodes" style="display:flex;flex-direction:column;gap:6px;"></div>
-      </div>
-      <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveApprovalTpl()">保存</button></div>`,
   owlImport: `<h3 id="oi-title">⬆ 导入 OWL · RDF/XML</h3>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">📥</span><span class="fs-title">导入内容</span></div>
@@ -697,14 +716,18 @@ function closeModal() { _mmCreate = null; document.getElementById('modal').class
 function confirmDialog(msg, opts={}) {
   const lbx = document.getElementById('lbx');
   const b = document.getElementById('lbx-body');
+  // hideCancel（2026-10-23）：告警型单按钮（没有"取消"语义的提示）
+  const cancelBtn = opts.hideCancel ? ''
+    : '<button class="btn ghost" id="cd-cancel">取消</button>';
   b.innerHTML = `<h3>${opts.title||'操作确认'}</h3>
     <div style="font-size:13px;color:var(--txt);line-height:1.7;margin:4px 0 6px;max-height:200px;overflow:auto;white-space:pre-wrap;">${esc(msg)}</div>
-    <div class="lbx-actions"><button class="btn ghost" id="cd-cancel">取消</button><button class="btn red" id="cd-ok">${opts.okText||'确认'}</button></div>`;
+    <div class="lbx-actions">${cancelBtn}<button class="btn ${opts.danger?'red':''}" id="cd-ok">${opts.okText||'确认'}</button></div>`;
   lbx.classList.add('show');
   return new Promise(resolve => {
     const done = v => { lbx.classList.remove('show'); document.removeEventListener('keydown', _kd); resolve(v); };
     document.getElementById('cd-ok').onclick = () => done(true);
-    document.getElementById('cd-cancel').onclick = () => done(false);
+    const cbtn = document.getElementById('cd-cancel');
+    if (cbtn) cbtn.onclick = () => done(false);
     // G4 键盘可达：Enter 确认 / Esc 取消
     const _kd = e => {
       if(e.key === 'Enter') done(true);

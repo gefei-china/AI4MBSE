@@ -96,6 +96,14 @@ async function capMount(page) {
       <input id="cap-${page}-q" placeholder="搜索名称 / 描述…" style="border:1px solid var(--line,#d5dce6);border-radius:6px;padding:4px 10px;font-size:12px;width:190px;" oninput="capSearch('${page}',this.value)">
       <button class="btn sm ghost" onclick="capRefresh('${page}')">刷新</button>
       <span style="flex:1"></span>
+      <!-- 2026-10-29：能力中心 → 能力账本 的**实体级互链**。
+           此前两个 tab 各用一套数据源（本页读 /api/plugins，账本读 /api/capabilities/*），
+           用户在本页看到卡片却无法知道"它在账本里被判成在用还是没用"。
+           这里给一个**带 KPI 的入口**：先看整体判定，再一键跳过去细查。 -->
+      <button class="btn sm ghost" id="cap-${page}-ledger" onclick="capJumpLedger()"
+              title="跳到「能力账本」：看同一批能力的声明集 × 调用集判定（在用 / 已声明未用 / 无声明入口 / 未使用）">
+        📊 能力账本 <span id="cap-${page}-ledger-kpi" style="color:var(--mut,#8a96ad);font-size:10.5px;"></span>
+      </button>
       <div style="position:relative;">
         <button class="btn sm" onclick="capAddToggle(event)">＋ 新建能力 ▾</button>
         <div class="capmenu" id="cap-${page}-addmenu" style="display:none;"></div>
@@ -113,7 +121,50 @@ async function capMount(page) {
       <div style="font-size:11.5px;color:var(--mut,#8a96ad);padding:8px 0;">治理入口：上架审核、范围分配、全市场插件管理见「插件市场」。<button class="btn sm ghost" onclick="capJumpManage()">前往</button></div>
     </div>`;
   capHideSiblings(box);
+  // 账本 KPI 异步填充（失败静默：账本不可用不应挡住能力中心本身）
+  if (typeof capLoadLedgerKpi === 'function') capLoadLedgerKpi(page);
   await capLoad(page);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   能力中心 → 能力账本 互链（2026-10-29）
+   ══════════════════════════════════════════════════════════════════════
+   为什么需要它：两个 tab 的数据源不同 ——
+     · 本页（st-agent / st-skill / st-mcp / st-prompt / st-market）读 /api/plugins
+       （"我能用哪些能力"的消费视图）
+     · 账本（st-registry）读 /api/capabilities/ledger
+       （"这些能力到底有没有被用"的治理视图）
+   同一批能力在两个 tab 里各有一套事实，中间没有连路 ⇒ 用户看完卡片想知道
+   "它到底在用吗"只能自己去另一个 tab 再找一遍。
+
+   本处只做两件事：**显示整体判定 KPI** + **一键跳转**。
+   刻意**不按页预置 kind** —— 因为 st-agent 在账本里没有对应 kind
+   （Agent 是"绑定者"，不是被计数的能力），硬映射会让人以为"Agent 不在账本里"。
+   ⚠️ 这个取舍是有意的：宁可让用户跳过去自己筛，也不要给一个会误导的预筛。
+*/
+async function capLoadLedgerKpi(page) {
+  const el = document.getElementById('cap-' + page + '-ledger-kpi');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/capabilities/ledger?days=30');
+    if (!r.ok) return;
+    const d = await r.json();
+    const m = d.matrix || {};
+    const inUse = m.in_use || 0, unused = m.unused || 0, rot = m.runtime_only || 0;
+    el.textContent = `在用 ${inUse} · 未用 ${unused}` + (rot ? ` · 无声明入口 ${rot}` : '');
+  } catch (e) { /* 静默：能力中心不因账本异常而残缺 */ }
+}
+
+function capJumpLedger() {
+  // 走既有 subpage 显隐机制（.on class），不绕过加载钩子。
+  // `switchStLibTab(null, 'st-registry')` 内部已有 `if(pane==='st-registry') loadCapRegistry()`
+  // 的加载钩子（见 09-impact.js），所以这里**不需要**再手动触发一次 ——
+  // 重复调用会导致两遍并发请求互相覆盖（先返回的那次后渲染）。
+  if (typeof switchStLibTab === 'function') {
+    switchStLibTab(null, 'st-registry');
+  } else if (typeof loadCapRegistry === 'function') {
+    loadCapRegistry();   // 理论上不会走到（switchStLibTab 是全局函数）
+  }
 }
 
 /* 能力区独占该类型页：摆正一级 tab 条位置 + 隐藏同级旧视图

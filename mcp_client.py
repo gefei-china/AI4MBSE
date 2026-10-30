@@ -252,11 +252,26 @@ class MCPClient:
                 else:
                     texts.append(str(item))
             raw = "\n".join(texts) or json.dumps(result, ensure_ascii=False)[: self.max_response]
+            # ★ 2026-10-27（会话 9629 实测，产物库为空的真因之一）：
+            #   此前这里是**无标记硬截** `raw[:self.max_response]`。max_response 默认仅 4000，
+            #   而结构化信封（如智源 export READ 的 {fileName,content,eof,sizeBytes,...}）
+            #   一段就 32KB ⇒ 被切成**非法 JSON**（实测 json.loads 报
+            #   "Unterminated string starting at char 242"）。
+            #   后果连环：
+            #     ① 下游 extract_sysml_doc_from_result 解析失败 ⇒ 交付物不入产物库；
+            #     ② `truncated` 标志为 False（比的是 6000 的展示上限）⇒ 没人看得见被截了；
+            #     ③ 模型只看到 4000 字符却宣称"全文 80,543 字节已取回并归档"⇒ 假报告。
+            #   修法：**截断必须可观测**——把实际长度与是否截断一并回传，
+            #   调用方（归档/展示/告警）据此决策，而不是各猜各的。
+            _full = len(raw)
+            _cut = _full > self.max_response
             return {
                 "ok": not is_error,
                 "result": raw[: self.max_response],
                 "is_error": is_error,
                 "latency_ms": latency,
+                "truncated": _cut,
+                "full_len": _full,
             }
         except Exception as e:
             latency = int((time.time() - t0) * 1000)

@@ -13,16 +13,32 @@
      **无区分度**：实测「生成状态机视图」~「SysML v2 状态视图代码」= **0.236**，
      而与无关的「报告生成」**同为 0.236**，都低于 `EMBED_THRESHOLD=0.55`。
   ⇒ 原样接线 = 接一个"专长项恒 0"的残缺品。故先改匹配手段（字符 bigram 重合度），
-    再定权重，最后接线。标定结果见下方 D 组（8 视图 top-1 **6/6**）。
+    再定权重，最后接线。标定结果见下方 D 组。
+
+**★ 2026-10-26 D/E 组重标定（为什么改，改前是什么）**：
+  原 D 组用 6 条「8 视图任务」用例，期望 top-1 命中 8 个**视图生成 Agent**。但这 8 个 Agent
+  已于 2026-10-14（commit 07ffea0「B4-4 下线视图 Agent 双轨」）按取证下线
+  （视图能力已由 `sysml_view_generation_*` skill 承载；它们同时在抢 `view_expansion` 的路由）
+  ⇒ 候选池里根本没有它们 ⇒ D1 恒 **0/6**、G1 变异自证同步失效（现行 0/6 vs 变异 0/6，
+  **抓不住差异**）⇒ 门禁对着**已退役的架构**要绿。
+  另一层约束：`capabilities` 受 `agent/registry.py` 的 `_CAPABILITIES_ENUM`（**23 词白名单**）
+  硬约束，视图专属词（状态机/活动图/时序图/IBD）**不在枚举内**
+  ⇒ 任何配置都做不到让「生成状态机视图」top-1 命中 `view_expansion`
+  （实测最高只到 0.20，输给 `report_generation` 的 0.20）⇒ 这不是调参能解决的。
+  ⇒ 改法：D 组换成**现行 active Agent 自己的能力词**构成的能力域用例（9 条，实测 9/9），
+    并新增 D0（保护"视图 Agent 保持退役"这一取证决策）与 D1b（防"并列靠字母序"的假命中）；
+    E 组锚点从已退役的「状态机视图生成」换成在池的 `requirement_structuring`，
+    并新增 E0 —— **锚点不在池里就判红，不许静默跳过**（原 E 组被 `if _state:` 整组跳过，
+    门禁却报"通过"：判据空转的症状是"少了几条断言"，不是"红了"）。
 
 **本脚本守什么**：
   [A] 配置组存在且权重可覆盖（可回退）
   [B] 接线存在且**包在 try 里**（分派失败不阻断编排）
   [C] **不改派 planner 的选择**（弱信号不改强信号的决定）—— 这条最容易被"优化"掉
-  [D] 标定效果：8 视图任务 top-1 命中（用真库 27 个 active Agent 实跑）
+  [D] 标定效果：能力域任务 top-1 命中（现行 active 候选池实跑）+ 视图 Agent 保持退役
   [E] 区分度：真配对 > 错配对（防止权重调好后反而无区分度）
   [F] 留痕字段真的进 config（assign_score / load_snapshot / capability_match）
-  [G] 变异自证：把权重塌缩成"只有负载" ⇒ D 组必须 FAIL
+  [G] 变异自证：抽掉 bigram 匹配这一层 ⇒ D 组命中数必须下降
 
 **只读**：真库 `mode=ro`；变异在内存副本做，**不写回源文件**。
 
@@ -128,28 +144,80 @@ check("C5 源码里没有直接改写 agent 名的赋值",
                     if "def _assign_load_aware" in i_src else ""),
       "检测到改派赋值")
 
-print("\n=== D. 标定效果（真库 27 个 active Agent 实跑）===")
+print("\n=== D. 标定效果（现行 active 候选池实跑）===")
+# ★ 2026-10-26 重标定（根因见文件头「为什么 D 组要重标」）：
+#   原 6 条用例锚在 8 个**视图生成 Agent**上，而它们已于 2026-10-14
+#   （commit 07ffea0「B4-4 下线视图 Agent 双轨」）按取证下线 ⇒ 候选池里根本没有它们
+#   ⇒ D1 恒 0/6、G1 变异自证同步失效（现行 0/6 vs 变异 0/6，抓不住差异）。
+#   现改为「在现行词表下，各能力域任务 top-1 命中对应 Agent」+「视图域交给意图路由」。
+_RETIRED_VIEW_AGENTS = ("需求视图生成", "结构视图生成", "交互视图（IBD）生成", "用例视图生成",
+                        "活动图生成", "状态机视图生成", "参数视图生成", "顺序视图（时序图）生成")
 if os.path.exists(PROD_DB):
     _c = sqlite3.connect("file:%s?mode=ro" % PROD_DB, uri=True)
     _c.row_factory = sqlite3.Row
     _ags = [(r["name"], json.loads(r["capabilities"] or "[]"))
             for r in _c.execute("SELECT name, capabilities FROM agents WHERE status='active'")]
     _c.close()
+    _active_names = {n for n, _ in _ags}
     print("  候选 Agent: %d 个" % len(_ags))
-    cases = [("生成状态机视图", "状态机视图生成"),
-             ("生成活动图", "活动图生成"),
-             ("生成顺序时序图", "顺序视图（时序图）生成"),
-             ("生成SysML v2参数视图", "参数视图生成"),
-             ("生成用例视图", "用例视图生成"),
-             ("生成内部块图IBD", "交互视图（IBD）生成")]
+    # D0 保护退役决策：视图生成 Agent 不得回到 active 池
+    #   （它们会抢 view_expansion 的路由 —— 2026-10-14 取证：视图能力已由
+    #    sysml_view_generation_* skill 承载，Agent 侧只做单轨）
+    _still_active = [n for n in _RETIRED_VIEW_AGENTS if n in _active_names]
+    check("D0 视图生成 Agent 仍处退役态（不在 active 池）",
+          not _still_active, "又 active 了：%s" % _still_active)
+
+    # D1 标定：各能力域任务 top-1 命中对应 Agent
+    #   ⚠️ 用例必须是**改述**（不是照抄能力词），否则命中由「词表层」给出 1.0/0.8，
+    #      bigram 层就不承重 ⇒ G 组变异自证会**空转**（变异体照样全中）。
+    #      D1c 专门守这条，防止后人"简化"用例时把自证悄悄弄废。
+    cases = [("把需求里的条目逐条理清", "requirement_structuring"),
+             ("读懂这段自然语言并澄清其中的歧义", "requirement_analysis"),
+             ("把结论装订成一份可交付的稿子并导出为文档", "report_generation"),
+             ("检查各部分描述是否前后一致并给出合理性评价", "review"),
+             ("核对模型中的错误并按优先级修好", "model_validation_repair"),
+             ("给出几种候选方案并逐一比较取舍", "多方案生成"),
+             ("讲清两种方法论在概念上的差别与适用路线", "knowledge_qa"),
+             ("沿依赖关系逐层遍历并产出影响图", "impact")]
     _hit = 0
+    _margins = []
     for _t, _want in cases:
         _sc = sorted(((A.capability_match(_caps, _t), _n) for _n, _caps in _ags), reverse=True)
         _ok_top = _sc and _sc[0][1] == _want
         _hit += 1 if _ok_top else 0
-        print("    %-20s → %-22s %.2f %s" % (_t[:18], _sc[0][1] if _sc else "-",
-                                            _sc[0][0] if _sc else 0, "✓" if _ok_top else "✗"))
-    check("D1 8 视图任务 top-1 命中 ≥ 5/6", _hit >= 5, "只中 %d/%d" % (_hit, len(cases)))
+        _m = (_sc[0][0] - _sc[1][0]) if len(_sc) > 1 else _sc[0][0]
+        _margins.append((_m, _ok_top, _t))
+        print("    %-24s → %-24s %.2f margin=%.2f %s"
+              % (_t[:22], _sc[0][1] if _sc else "-", _sc[0][0] if _sc else 0, _m,
+                 "✓" if _ok_top else "✗"))
+    check("D1 能力域任务 top-1 命中 ≥ 7/8", _hit >= 7, "只中 %d/%d" % (_hit, len(cases)))
+    # D1b 防「并列靠字母序」的假命中：命中还不够，得**明显领先**才算真的分得开
+    _clear = sum(1 for _m, _ok, _t in _margins if _ok and _m >= 0.1)
+    _ties = [t for m, ok, t in _margins if ok and m <= 0]
+    check("D1b 命中项领先幅度 ≥0.1 的至少 7 个，且**无并列**（并列即靠字母序取胜）",
+          _clear >= 7 and not _ties,
+          "清晰 %d 个，并列 %s" % (_clear, _ties))
+    # D1c 标定用例**不触发词表层**（层①给 1.0/0.8）——否则 bigram 层不承重，
+    #      G 组变异自证会空转（变异体照样全中，自证等于没做）
+    _wl_bad = []
+    for _t, _want in cases:
+        for _n, _caps in _ags:
+            for _cap in _caps:
+                _norm = A.normalize_capability(_cap)
+                for _v in [_norm] + list(A.SYNONYM_MAP.get(_norm, [])):
+                    if _v and _v in _t:
+                        _wl_bad.append("%s:『%s』含触发串『%s』" % (_t[:12], _n, _v))
+    check("D1c 标定用例不触发词表层（bigram 必须承重，否则变异自证空转）",
+          not _wl_bad, "；".join(_wl_bad[:3]))
+    # D1d 已知天花板（如实记录，不判红）：视图类词不在 23 词枚举内
+    #   ⇒ 打分器对视图任务**不区分**（实测 top-1 是 report_generation 0.20，view_expansion 0.00）
+    #   ⇒ 视图任务的正确去向由**意图路由**负责（view_expansion 的 intent_keywords 含
+    #     生成活动图/生成用例视图/生成状态机/生成时序图/生成IBD/生成参数视图），
+    #     负载感知分派只留痕、不改派（C 组）⇒ 这里如实标注，不假装自己能分。
+    _v_sc = sorted(((A.capability_match(_c2, "生成状态机视图"), _n2) for _n2, _c2 in _ags),
+                   reverse=True)
+    print("  [INFO] 视图任务「生成状态机视图」打分 top-1=%s(%.2f) —— 视图域由意图路由负责"
+          % (_v_sc[0][1] if _v_sc else "-", _v_sc[0][0] if _v_sc else 0))
 
     # D2 原词表覆盖率（本条守护"为什么不能只用词表"这个前提）
     _allcaps = set()
@@ -163,16 +231,24 @@ else:
     print("  [SKIP] 未找到真库")
 
 print("\n=== E. 区分度（真配对 vs 错配对）===")
-_state = [c for n, c in _ags if n == "状态机视图生成"]
+# ★ 2026-10-26 换锚点：原锚点写死「状态机视图生成」，而它 2026-10-14 已退役
+#   ⇒ `_state` 为空 ⇒ 整个 E 组被 `if _state:` **静默跳过**，门禁却报"通过"
+#   （判据空转的典型：症状是"少了几条断言"，不是"红了"）。故换现行 active 锚点，
+#   并加 E0 守卫：锚点 Agent 不在池里 ⇒ 直接判红，不许静默跳过。
+_E_ANCHOR = "requirement_structuring"
+_state = [c for n, c in _ags if n == _E_ANCHOR]
+check("E0 锚点 Agent 在 active 池内（防空转：锚点不存在时整组须判红而非跳过）",
+      bool(_state), "锚点 %s 不在候选池 ⇒ E 组会静默空转" % _E_ANCHOR)
 if _state:
-    _pos = A.bigram_overlap(_state[0], "生成状态机视图")
-    _neg = A.bigram_overlap(_state[0], "生成需求评审报告")
-    print("  状态机视图生成 ~「生成状态机视图」= %.3f｜~「生成需求评审报告」= %.3f" % (_pos, _neg))
+    _pos = A.bigram_overlap(_state[0], "把需求里的条目逐条理清")
+    _neg = A.bigram_overlap(_state[0], "把这张幻灯片排版调好看")
+    print("  %s ~「把需求里的条目逐条理清」= %.3f｜~「把这张幻灯片排版调好看」= %.3f"
+          % (_E_ANCHOR, _pos, _neg))
     check("E1 真配对高于错配对", _pos > _neg, "pos=%.3f neg=%.3f" % (_pos, _neg))
     check("E2 真配对过门槛（能被 capability_match 采用）",
-          A.capability_match(_state, "生成状态机视图") > 0)
+          A.capability_match(_state, "把需求里的条目逐条理清") > 0)
     check("E3 错配对被门槛滤掉（不误判为有关）",
-          A.bigram_overlap(_state, "生成需求评审报告") < A.BIGRAM_MIN_OVERLAP,
+          A.bigram_overlap(_state, "把这张幻灯片排版调好看") < A.BIGRAM_MIN_OVERLAP,
           "错配对 %.3f 过了门槛 %.3f" % (_neg, A.BIGRAM_MIN_OVERLAP))
 check("E4 噪声门槛已设（0< x <1）", 0 < A.BIGRAM_MIN_OVERLAP < 1)
 
@@ -213,15 +289,15 @@ else:
                 _zeros += 1
             if _sc and _sc[0][1] == _want:
                 _hits += 1
-        print("  变异体下 8 视图 top-1 命中: %d/%d（其中 %d 例匹配度直接归 0）"
+        print("  变异体下能力域 top-1 命中: %d/%d（其中 %d 例匹配度直接归 0）"
               % (_hits, len(cases), _zeros))
         check("G1 变异体命中率显著低于现行实现（bigram 匹配确实在承重）",
-              _hits < _hit, "变异体 %d/6 vs 现行 %d/6 —— D1 抓不住变异，自证无效"
-              % (_hits, _hit))
+              _hits < _hit, "变异体 %d/%d vs 现行 %d/%d —— D1 抓不住变异，自证无效"
+              % (_hits, len(cases), _hit, len(cases)))
         check("G2 变异体确实出现匹配度归 0 的用例（词表覆盖不到的直接塌成 0）",
               _zeros > 0, "无一例归 0 ⇒ 变异没生效或词表已够用（需重新评估）")
         _muts.append(("M1", "capability_match 跳过 bigram 层（回到只有 6 组词表）"))
-        print("  [SELF-PROOF] M1 抽掉 bigram 匹配 —— 8 视图 top-1 命中率下降，"
+        print("  [SELF-PROOF] M1 抽掉 bigram 匹配 —— 能力域 top-1 命中率下降，"
               "证明该层是主要区分来源（改前它们全靠词表、恒为 0）")
     except Exception as e:
         check("G1 变异体执行成功", False, str(e))

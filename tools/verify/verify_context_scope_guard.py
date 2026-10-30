@@ -165,6 +165,65 @@ from core import config as _cfg2
 m = MemoryMixin()
 _O = _cfg2.get
 
+# ★★ 2026-10-30 修：本段原先是**裸调真实库**，即犯了 [3] 段注释里点名的那个错
+#   （"不得对真实库断言语义 … 属误报"）。实测证据：CI 的干净库里 `entities` 表为空
+#   ⇒ `_build_model_context` 正确地返回 `""`（产品行为无误）⇒ 两条断言拿到空串判红：
+#     FAIL count（默认）只报数量、不列具体实体名  | ''
+#     FAIL 预算极小（40 字符）时范围声明仍完整保留  | ''
+#   而本机（生产库有 dev 分支实体）52/52 通过 —— 典型的"门禁只在自己的环境里验过"。
+#   ⇒ 改为**夹具驱动**：临时库只建 `_build_model_context` 真正读的 4 张表，
+#     断言对象是「注入形态与预算裁剪的机制」，与部署里恰好有哪些实体无关。
+import tempfile as _tf2
+import database as _dbmod2
+
+
+def _model_ctx_fixture(entities=3, branch="dev", extras=True):
+    """建模上下文夹具库：entities / graph_views / impact_analyses / artifacts。
+
+    只建 `_build_model_context` 实际 SELECT 到的列（见 memory.py 该函数体），
+    行数可控 —— 让「只报数量 / 列名字 / 不含实体」的差异可被稳定复现。
+
+    :param extras: 是否插入视图与最近变更。**测"全空 ⇒ 空串"时必须传 False** ——
+        产品逻辑是"任一类资产存在就注入"，只把 entities 置 0 而留着视图，
+        得到的是非空串（我第一版断言就这么写错了，实测抓出来）。
+    """
+    fd, path = _tf2.mkstemp(suffix=".db")
+    os.close(fd)
+    c = sqlite3.connect(path)
+    c.row_factory = sqlite3.Row
+    c.execute("CREATE TABLE entities (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, "
+              "branch TEXT, status TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+    c.execute("CREATE TABLE graph_views (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, branch TEXT)")
+    c.execute("CREATE TABLE impact_analyses (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+              "change_source TEXT, title TEXT, created_at TEXT)")
+    c.execute("CREATE TABLE artifacts (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+              "conversation_id INTEGER, kind TEXT, title TEXT)")
+    for i in range(entities):
+        c.execute("INSERT INTO entities (name,branch,status) VALUES (?,?,'active')",
+                  ("夹具实体%d" % (i + 1), branch))
+    if extras:
+        c.execute("INSERT INTO graph_views (name,branch) VALUES ('夹具视图',?)", (branch,))
+        c.execute("INSERT INTO impact_analyses (change_source,title,created_at) "
+                  "VALUES ('夹具变更','t','2026-10-30 00:00:00')")
+    c.commit()
+    c.close()
+    return path
+
+
+def _with_model_db(path, fn):
+    """令本段内的 `from database import get_db` 指向夹具库（每次调用返回新连接，可被 close）。"""
+    _orig = _dbmod2.get_db
+
+    def _fake():
+        cc = sqlite3.connect(path)
+        cc.row_factory = sqlite3.Row
+        return cc
+    _dbmod2.get_db = _fake
+    try:
+        return fn()
+    finally:
+        _dbmod2.get_db = _orig
+
 
 def _with_mode(mode, fn):
     def _fake(sec, key, default=None):
@@ -178,35 +237,63 @@ def _with_mode(mode, fn):
         _cfg2.get = _O
 
 
-_out_count = _with_mode("count", lambda: m._build_model_context("dev", 0, "帮我生成电动汽车热管理系统代码"))
-_out_names = _with_mode("names", lambda: m._build_model_context("dev", 0, "帮我生成电动汽车热管理系统代码"))
-_out_none = _with_mode("none", lambda: m._build_model_context("dev", 0, "帮我生成电动汽车热管理系统代码"))
-
-check("count（默认）只报数量、不列具体实体名", "既有建模实体：本分支共" in _out_count and "活跃实体：" not in _out_count,
-      repr(_out_count[:120]))
-check("names 模式仍可列出具体名字（旧行为可回退）", ("活跃实体：" in _out_names) or ("既有建模实体" not in _out_names),
-      repr(_out_names[:120]))
-check("none 模式不含实体项", "实体" not in _out_none, repr(_out_none[:120]))
-check("三种模式都带「适用范围」声明（第二层防御）",
-      all("与本" in t and "不符" in t for t in (_out_count, _out_names, _out_none) if t),
-      repr(_out_count[:60]))
-
-# 声明必须**不参与预算裁剪**：把预算压到极小，声明仍应完整
-def _fake_small(sec, key, default=None):
-    if (sec, key) == ("context", "model_context_chars"):
-        return 40
-    if (sec, key) == ("context", "model_context_entities"):
-        return "names"
-    return _O(sec, key, default)
-
-
-_cfg2.get = _fake_small
+_pth_mc = _model_ctx_fixture()
 try:
-    _out_small = m._build_model_context("dev", 0, "x")
+    _out_count = _with_mode("count", lambda: _with_model_db(
+        _pth_mc, lambda: m._build_model_context("dev", 0, "帮我生成电动汽车热管理系统代码")))
+    _out_names = _with_mode("names", lambda: _with_model_db(
+        _pth_mc, lambda: m._build_model_context("dev", 0, "帮我生成电动汽车热管理系统代码")))
+    _out_none = _with_mode("none", lambda: _with_model_db(
+        _pth_mc, lambda: m._build_model_context("dev", 0, "帮我生成电动汽车热管理系统代码")))
+
+    check("count（默认）只报数量、不列具体实体名",
+          "既有建模实体：本分支共" in _out_count and "活跃实体：" not in _out_count,
+          repr(_out_count[:160]))
+    check("names 模式仍可列出具体名字（旧行为可回退）",
+          ("活跃实体：" in _out_names) or ("既有建模实体" not in _out_names),
+          repr(_out_names[:160]))
+    check("none 模式不含实体项", "实体" not in _out_none, repr(_out_none[:160]))
+    check("三种模式都带「适用范围」声明（第二层防御）",
+          all("与本" in t and "不符" in t for t in (_out_count, _out_names, _out_none) if t),
+          repr(_out_count[:60]))
+
+    # 声明必须**不参与预算裁剪**：把预算压到极小，声明仍应完整
+    def _fake_small(sec, key, default=None):
+        if (sec, key) == ("context", "model_context_chars"):
+            return 40
+        if (sec, key) == ("context", "model_context_entities"):
+            return "names"
+        return _O(sec, key, default)
+
+    _cfg2.get = _fake_small
+    try:
+        _out_small = _with_model_db(_pth_mc, lambda: m._build_model_context("dev", 0, "x"))
+    finally:
+        _cfg2.get = _O
+    check("预算极小（40 字符）时范围声明仍完整保留（不被截掉）",
+          "不符" in _out_small and "必须忽略" in _out_small, repr(_out_small[:100]))
+
+    # ★ 2026-10-30 新增：**全空库必须返回空串**（不是崩溃、也不是塞占位内容）。
+    #   这条正是原判据在 CI 上"意外失败"所掩盖的分支 —— 产品行为本来就该是这样
+    #   （`if not lines: return ""`），现在把它钉成显式断言，
+    #   让干净库与生产库跑出来的结论一致。
+    #   ⚠️ 必须 `extras=False`：产品是"任一类资产存在就注入"，
+    #      只把 entities 置 0 而留着视图会得到非空串（我第一版就这么写错，被这条断言自己抓出来）。
+    _pth_empty = _model_ctx_fixture(entities=0, extras=False)
+    try:
+        _out_empty = _with_model_db(_pth_empty, lambda: m._build_model_context("dev", 0, "x"))
+    finally:
+        try:
+            os.remove(_pth_empty)
+        except Exception:
+            pass
+    check("无任何既有资产 ⇒ 返回空串（不崩溃、不塞占位内容）",
+          _out_empty == "", repr(_out_empty[:80]))
 finally:
-    _cfg2.get = _O
-check("预算极小（40 字符）时范围声明仍完整保留（不被截掉）",
-      "不符" in _out_small and "必须忽略" in _out_small, repr(_out_small[:100]))
+    try:
+        os.remove(_pth_mc)
+    except Exception:
+        pass
 
 # ─────────────────────────────────────────────────────────────────────────────
 hr("[3] 项目宪法：注入带项目名 + 适用范围声明（memory.MemoryMixin._build_project_memory）")

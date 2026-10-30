@@ -64,6 +64,42 @@ class SessionMixin:
     #   为什么单独立方法而不塞进 DST：DST 管的是"这一轮在聊什么意图"（每轮都变），
     #   主 Agent 管的是"这个会话由谁执行"（用户选定后长期不变）—— 两者生命周期不同，
     #   混在一个 JSON 里会被 `_merge_slots` 的覆盖语义冲掉。
+
+    #: 标准意图标签（= agents 表 builtin=1 的那批 name，2026-10-29 实测核对）。
+    #: `conversations.intent` 只应存这些值；存主 Agent 名属**字段语义污染**。
+    _STANDARD_INTENT_LABELS = frozenset({
+        "requirement_analysis", "design", "impact", "review", "report_generation",
+        "knowledge_qa", "chat", "system_mgmt", "zhiyuan_mgmt", "requirement_quality",
+        "requirement_structuring", "view_expansion", "architecture_skeleton",
+        "trace_verification", "model_validation_repair", "change_safety_gate",
+        "model_release", "methodology_resolver",
+    })
+
+    def _intent_for_storage(self, intent: str, detected: str = "") -> str:
+        """把"本轮执行主体"规范化为**可入库的意图标签**（2026-10-29）。
+
+        ★ 为什么需要（实测污染）：`conversations.intent` 被写入过主 Agent 名 ——
+          近期 60 个会话里 25 条存成「智源对接agent」，全库 150 条里 40 条形如 Agent 名。
+          根因是 `intent = forced_intent or _detected` 之后，团队模式把
+          `forced_intent` 设成主 Agent 名，于是"执行主体"被当成"意图"落库：
+          ① 意图分布统计失真（智源对接agent 成了最大"意图"）；
+          ② 同一字段两轮之间含义跳变（这轮是 design、下轮是 Agent 名）。
+
+        口径：**`conversations.intent` 只存意图标签**，执行主体由 `main_agent` 承载（已有）。
+          传入值不在标准意图集 ⇒ 判为"执行主体" ⇒ 回落到 detected，再不行落 chat。
+
+        ⚠️ 刻意**不查库**：本方法在每轮落库路径上高频调用，查 agents 表会引入
+           额外往返；标准标签集是内置能力名（内置能力不改名），用常量足够。
+           新增内置意图时同步本常量（tests/test_intent_storage_hygiene.py 有断言守护）。
+        """
+        _i = str(intent or "").strip()
+        if _i in self._STANDARD_INTENT_LABELS:
+            return _i
+        _d = str(detected or "").strip()
+        if _d in self._STANDARD_INTENT_LABELS:
+            return _d
+        return "chat"
+
     def _load_main_agent(self, conversation_id) -> str:
         """读会话绑定的主 Agent 名（空串=未绑定/会话不存在）。绝不抛。"""
         if not conversation_id or int(conversation_id) <= 0:
@@ -600,10 +636,61 @@ class SessionMixin:
                 return "action_kw:" + str(k)
         return ""
 
+    def _persist_hil_confirm(self, conversation_id, intent, confirm_req,
+                             content="", card_data=None) -> int:
+        """★ 2026-10-28（写前确认 HITL）：落一条"等待人工确认"的消息（时间线痕迹）。
+
+        ## 为什么状态源仍然是 `hil_confirmations` 而不是 `conversations.pending_clarify`
+        - 澄清只有**一个**待答状态 ⇒ 放 `conversations.pending_clarify` 够用；
+        - 写前确认是**多张单**（不同工具、不同批次可同时在等）⇒ 必须有独立的表
+          ⇒ `hil_confirmations` 才是状态源（`status` / `payload` / `decided_by` / `result_json`）。
+        ⇒ 本方法只负责"会话时间线上有一条可见的等待卡片"，**不承担状态**。
+          （刷新页面后前端可从 `GET /api/studio/hil-confirmations` 重建卡片。）
+
+        返回消息 id（供 done 事件携带，前端据此定位消息容器）。失败返回 0。
+
+        ★ 2026-10-28（conv 9733 实测）：**不能再只存一句占位语**。
+          那次真机：模型已经跑完校验、生成了完整时序图代码，最后一步写入被判"待确认"，
+          而这里把整轮内容压成 16 个字的「⏸ 写操作需要人工确认后才能执行」，
+          `exec`（工具回执/思考/进度）直接为空 ⇒ 刷新后**这一轮做过什么全丢了**，
+          用户只看到一句"待确认"，无从判断该不该批准。
+          ⇒ 新增 `content` / `card_data` 两个可选入参：
+            · `content` 为空时才回落到占位语（向后兼容既有调用）；
+            · `card_data` 带上本轮 `exec`（工具/思考/进度）+ `confirm`，供历史还原。
+        """
+        _msg_id = 0
+        try:
+            from database import db_conn
+            _card = {"confirm": confirm_req or {}}
+            if isinstance(card_data, dict):
+                _card.update(card_data)
+            _content = str(content or "").strip() or "⏸ 写操作需要人工确认后才能执行"
+            with db_conn() as _cc:
+                cur = _cc.execute(
+                    "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) "
+                    "VALUES (?,?,?,?,?)",
+                    (conversation_id, "assistant", _content, "hil_confirm",
+                     json.dumps(_card, ensure_ascii=False)))
+                _msg_id = cur.lastrowid or 0
+        except Exception:
+            pass
+        return _msg_id
+
     def _persist_clarify(self, conversation_id, user_input, intent, branch, attachments,
-                         forced_intent, skill_name, team, questions) -> int:
+                         forced_intent, skill_name, team, questions,
+                         content="", card_data=None) -> int:
         """落库澄清挂起状态（conversations.pending_clarify）+ 澄清卡消息（msg_type='clarify'）。
-        返回澄清消息 id（供 done 事件携带，前端据此定位重建后的消息容器）。失败返回 0。"""
+        返回消息 id（供 done 事件携带，前端据此定位重建后的消息容器）。失败返回 0。
+
+        ★ 2026-10-28（conv 9735 实测）：与 `_persist_hil_confirm` **同一个坑** ——
+          此前只写死「需要您确认建模信息后继续」（12 个字），
+          而那一轮已经跑完定位、生成了时序图代码、`sysml_v2_validate` 返回 **0 错误**。
+          结果：用户看到的是一条"请确认"，**没有代码、没有校验回执**，
+          却要在 4 个写入选项里挑一个 —— 等于盲确认。
+          用户原话是「写入前需要我确认」，确认的前提是**能看到要写什么**。
+          ⇒ 新增 `content` / `card_data`：调用方把本轮正文与 `exec`（工具回执/
+          思考/闸门）传进来，历史里就能还原"做了什么、要确认什么"。
+        """
         _msg_id = 0
         try:
             _pending = {
@@ -613,6 +700,10 @@ class SessionMixin:
                             "skill_name": skill_name or "", "team": team or ""},
             }
             from database import db_conn
+            _card = {"questions": questions}
+            if isinstance(card_data, dict):
+                _card.update(card_data)
+            _content = str(content or "").strip() or "需要您确认建模信息后继续"
             with db_conn() as _cc:
                 _cc.execute(
                     "UPDATE conversations SET pending_clarify=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -620,8 +711,8 @@ class SessionMixin:
                 cur = _cc.execute(
                     "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) "
                     "VALUES (?,?,?,?,?)",
-                    (conversation_id, "assistant", "需要您确认建模信息后继续",
-                     "clarify", json.dumps({"questions": questions}, ensure_ascii=False)))
+                    (conversation_id, "assistant", _content,
+                     "clarify", json.dumps(_card, ensure_ascii=False)))
                 _msg_id = cur.lastrowid or 0
         except Exception:
             pass

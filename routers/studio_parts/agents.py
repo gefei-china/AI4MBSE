@@ -202,16 +202,42 @@ def add_agent_tool(aid: int, body: AgentToolIn, conn=Depends(db_session), user=D
     #     ② 非 builtin 经 tools.py:76 的 SQL 注入（要求 status='active'）
     #   两条都要求「名字在 tools 表里」，且②硬要求 active；builtin 同样按「停用即停用」处理，不再例外。
     _nm = (body.tool_name or "").strip()
-    _nerr = check_tool_name(_nm)
-    if _nerr:
-        # 非法名（如中文名）绑上去等于白绑：运行时会被剔除且不报错，UI 却显示已绑定
-        return JSONResponse({"error": _nerr}, 400)
+    if not _nm:
+        return JSONResponse({"error": "tool_name 必填"}, 400)
     if body.tool_type == "tool":
+        # P1-4：函数名 ASCII 约束**只对 tool 类型**生效 —— tool 名会作为 OpenAI function.name
+        #   发给 provider（协议硬要求 ^[a-zA-Z0-9_-]{1,64}$）；而 skill / mcp 的 tool_name 是
+        #   内部标识符（可含中文，如「智源平台管理」/「AI4MBSE 领域能力（内置 MCP 供给）」），
+        #   套同一套 ASCII 正则会把合法绑定判成非法 ⇒ 6 个中文名技能无法经 API 绑定、走查记为 P1-4。
+        #   约束跟着"它最终被怎么用"走，而不是一刀切。
+        _nerr = check_tool_name(_nm)
+        if _nerr:
+            return JSONResponse({"error": _nerr}, 400)
         _row = conn.execute("SELECT name, status FROM tools WHERE name=?", (_nm,)).fetchone()
         if not _row:
             return JSONResponse({"error": f"工具「{_nm}」不在工具注册表里，请先在「能力中心 · 工具与MCP」注册"}, 400)
         if (_row["status"] or "") != "active":
             return JSONResponse({"error": f"工具「{_nm}」当前为「{_row['status']}」状态，启用后才能绑定"}, 409)
+    elif body.tool_type == "skill":
+        # P1-3：绑定前校验技能**真的存在**（此前 skill/mcp 完全不查，绑不存在的名字静默失效）。
+        # P2-2：且必须**可消费**（全局技能池口径 status='published' AND enabled=1）。
+        #   agent_tools 里的技能绑定本就冗余（全局池已对所有 Agent 注入 published 技能），
+        #   绑一个不可消费的技能 = 静默无效绑定（开不了却显示已绑），故直接拦下并说清原因，
+        #   而非留一条看似成功、实则永不触发的记录。
+        _s = conn.execute(
+            "SELECT id, status, COALESCE(enabled,1) AS enabled FROM skills WHERE name=?", (_nm,)).fetchone()
+        if not _s:
+            return JSONResponse({"error": f"技能「{_nm}」不存在，请先创建并发布"}, 404)
+        _s_status, _s_enabled = (_s["status"] or ""), int(_s["enabled"] or 0)
+        if _s_status != "published" or _s_enabled != 1:
+            _why = ("未发布（status=%s）" % _s_status) if _s_status != "published" else "已停用"
+            return JSONResponse(
+                {"error": f"技能「{_nm}」当前{_why}，发布并启用后才能绑定（否则绑定了也不会被消费）"}, 409)
+    elif body.tool_type == "mcp":
+        # P1-3：MCP 绑定按 server 名软引用，先校验 server 存在（离线允许，运行时 UI 会标灰）。
+        _m = conn.execute("SELECT name, status FROM mcp_servers WHERE name=?", (_nm,)).fetchone()
+        if not _m:
+            return JSONResponse({"error": f"MCP 服务器「{_nm}」不存在，请先添加"}, 404)
     tid = repo.add_tool(aid, body.tool_type, body.tool_name)
     audit(audit_user(user), "agent_tool_bind", f"Agent#{aid} 绑定 {body.tool_type}:{body.tool_name}", conn=conn)
     return {"ok": True, "id": tid}

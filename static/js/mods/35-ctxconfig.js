@@ -39,8 +39,10 @@ const CTX_CFG_CLUSTERS = [
   },
   {
     id: 'split', title: '📜 历史注入内分配（瓜分历史区预算）', viz: 'split', checks: [],
-    hint: '🔗 这六项<b>共同瓜分历史区预算</b>，注入顺序与占比是固定结构：当前话题原文（约 50%）→ 语义拉回片段（用至 75%）'
-      + '→ 其他话题摘要（剩余）。单条消息截断与建模工作记忆是前置硬上限。',
+    hint: '🔗 这七项<b>共同瓜分历史区预算</b>，注入顺序与占比是固定结构：当前话题原文（约 50%）→ 语义拉回片段（用至 75%）'
+      + '→ 其他话题摘要（剩余）。<b>2026-10-27 起「单条消息上限」默认 0 = 不限</b> —— '
+      + '原因是原 1500 字固定上限把 21.7% 的历史消息裁掉（含用户贴的代码），'
+      + '而历史预算实测只用了 18.5%；现在改由「预算 + 用户/助手分级份额」决定长度，裁剪必带标记。',
   },
   {
     id: 'dual', title: '🔍 语义判定双路阈值（同量纲对照）', viz: 'dual', checks: ['dual'],
@@ -68,6 +70,16 @@ const CTX_CFG_CLUSTERS = [
       + '由<b>维护引擎</b>周期做「软遗忘 + 同作用域合并」，检索时按<b>作用域优先级加成</b>软重排（不是硬分桶）。'
       + '工程槽来自<b>会话所属工程</b>，用户槽来自当前登录用户身份；存量老记忆（作用域为空）按 Agent 槽召回，不会丢。'
       + '记忆只作「参考对齐」，System Prompt 硬约束「不得虚构扩展」，不会被当作事实检索结果引用。',
+  },
+  {
+    id: 'autoexec', title: '🤖 持续自主执行（完成判定 / 强制闸 / 障碍恢复）', viz: 'none', checks: [],
+    hint: '🔗 这一簇回答「AI 为什么老是自己停下来」：把<b>「完成」的定义权</b>从模型手里挪到<b>可执行验收</b>手里。'
+      + '三件事必须一起看：①<b>待办清单</b>（多步任务外化成可验收的条目）；'
+      + '②<b>harness 强制闸</b>（有未通过验收的待办就<b>不许结束本轮</b>，不依赖模型配合）；'
+      + '③<b>障碍恢复</b>（工具失败时按错误类型自动换路径，而不是直接问人）。'
+      + '⚠️ <b>三项默认关闭</b> —— 关闭时行为与改造前<b>完全一致</b>（逐字节兼容），'
+      + '打开后才会启用新机制。建议先在测试会话开「待办清单 + 强制闸」观察，再开障碍恢复。'
+      + '⚠️ <b>改完即时生效，无需重启服务</b>。',
   },
 ];
 
@@ -135,19 +147,24 @@ const CTX_CFG_FIELDS = [
     desc:'知识库检索结果注入 prompt 的 token 上限（超限从尾部裁剪，保留最相关头部）。占比为 0 时生效。',
     impact:'调大：检索依据更全；调小：只保留最相关头部。实测检索段实际用量约 458 token，当前值留有余量。' },
   { cluster:'budget', sec:'context', key:'context.budget_retrieval_ratio', type:'float', label:'检索区占比',
-    desc:'检索区预算 = 窗口基准 × 本比例。<b>>0 时覆盖左侧绝对值</b>；0 = 关闭占比制。',
-    impact:'换成大窗口模型时不用手改绝对值（行业做法：Codex 按窗口 50% 设压缩阈值）。建议 0.05~0.10。' },
+    desc:'检索区预算 = 窗口基准 × 本比例。<b>>0 时覆盖左侧绝对值</b>；0 = 关闭占比制。<b>默认 0.15</b>。',
+    impact:'换成大窗口模型时不用手改绝对值（行业做法：Codex 按窗口 50% 设压缩阈值）。'
+      + '实测检索段实际只用约 458 token ⇒ 0.10~0.20 都够；<b>不建议 <0.05</b>（长文档多来源时会被压掉）。' },
   { cluster:'budget', sec:'context', key:'context.budget_history_tokens', type:'int', label:'历史区预算 (绝对值)',
     desc:'会话历史注入总预算：当前话题原文占 50%，语义拉回片段用至 75%，剩余给其他话题摘要。占比为 0 时生效。',
     impact:'调大：长对话更连贯、旧话题细节更多；调小：更省 token，旧话题靠摘要兜底。' },
   { cluster:'budget', sec:'context', key:'context.budget_history_ratio', type:'float', label:'历史区占比',
-    desc:'历史区预算 = 窗口基准 × 本比例。<b>>0 时覆盖左侧绝对值</b>；0 = 关闭占比制。',
-    impact:'同上，适配换模型场景。建议 0.03~0.08。' },
+    desc:'历史区预算 = 窗口基准 × 本比例。<b>>0 时覆盖左侧绝对值</b>；0 = 关闭占比制。<b>默认 0.35</b>（2026-10-27 由 0.25 上调）。',
+    impact:'上调依据（真库实测）：取消「单条 1500 字硬截」后历史区真的用满了 —— 会话里用户两次贴代码共 14,810 token，'
+      + '0.25 时老那条仍被裁、0.35 时两条完整进入。窗口 128k 下 0.15(检索)+0.35(历史) = 50%，'
+      + '距总闸（total_budget_window_ratio 0.75）仍有余量。<b>换小窗口模型时请下调</b>（如 256k→保持，8k→0.2 以下）。' },
 
   // ── 簇 6：历史注入内分配 ──
   { cluster:'split', sec:'context', key:'context.topic_current_max_msgs', type:'int', label:'当前话题原文条数',
-    desc:'当前话题逐字注入的最大消息数（倒序填充至历史预算的 50%）。',
-    impact:'调大：当前讨论原文更完整、指代（"刚才那个"）更可靠；调小：省预算给语义拉回与摘要。' },
+    desc:'当前话题逐字注入的最大消息数（倒序填充至历史预算的 50%）。<b>默认 20</b>（2026-10-27 由 8 上调）：'
+      + '实测 8 条窗口下，用户 17 条之前定下的工程名已滑出窗口 ⇒ 模型重新乱选工程。',
+    impact:'调大：当前讨论原文更完整、指代（"刚才那个"）更可靠；调小：省预算给语义拉回与摘要。'
+      + '注意：工程/分支/版本这类<b>会话级事实</b>已另由「会话坐标锚点」持久化（agent/conv_anchors.py），与窗口解耦，本项是第二道。' },
   { cluster:'split', sec:'context', key:'context.topic_boundary_keep', type:'int', label:'话题切换边界保留',
     desc:'刚切话题且新话题很短时，补注入上一话题末尾 N 条原文，保证切换语义连续。',
     impact:'调大：切换更自然；调小：更"干净"，但可能丢上一话题的关键收尾。' },
@@ -157,12 +174,21 @@ const CTX_CFG_FIELDS = [
   { cluster:'split', sec:'context', key:'context.history_summary_chars', type:'int', label:'分话题摘要上限 (字符)',
     desc:'其他话题由 LLM 压缩生成的摘要长度上限（保留决策/实体/约束/待办，丢客套话）。',
     impact:'调大：摘要细节更全；调小：更精炼但可能丢细节。摘要按话题缓存、段变化才重算，不影响响应速度。' },
-  { cluster:'split', sec:'context', key:'context.history_msg_max_chars', type:'int', label:'单条消息截断 (字符)',
-    desc:'参与注入/摘要的单条历史消息截断上限；超长消息（如粘贴整篇文档）只取前缀。',
-    impact:'调大：粘贴长文时上下文更完整；调小：防单条长消息挤占整个历史预算。' },
+  { cluster:'split', sec:'context', key:'context.history_msg_max_chars', type:'int', label:'单条消息上限 (字符)',
+    desc:'参与注入/摘要的单条历史消息<b>固定</b>上限。<b>0 = 不限（默认）</b> —— 长度改由「历史预算 + 份额」决定。'
+      + '填 &gt;0 才恢复固定字符上限（仅调试用）。',
+    impact:'<b>保留 0（推荐）</b>：原 1500 实测裁掉 21.7% 的消息、累计丢 46.9 万字，用户贴 V2 代码（12,476 字）只剩 12%；'
+      + '而放开后总长度仍受历史预算约束，且裁剪必带「因预算省略 N 字」标记，不会静默。'
+      + '调小：相当于人为压紧，只在"刻意做小上下文"的对照实验里用。' },
+  { cluster:'split', sec:'context', key:'context.topic_retrieve_per_role_cap', type:'int', label:'语义拉回·分角色配额',
+    desc:'语义拉回的块数配额：user / assistant 各最多 N 条（0 = 不限制）。<b>默认 5</b>（2026-10-27 由 3 上调）。',
+    impact:'为什么要分：短文本余弦系统性偏高（实测 13 字的「继续」得 0.988），不分配额时混合 top-k 会被用户侧通吃、'
+      + '助手此前产出的结论一条都进不来。调大：单一角色不易被卡；调小：另一角色更容易进榜。' },
   { cluster:'split', sec:'context', key:'context.model_context_chars', type:'int', label:'建模工作记忆 (字符)',
-    desc:'MBSE 特有：注入当前模型状态（活跃实体/视图/最近变更/会话产物）的字符上限，来自模型库实时查询。',
-    impact:'调大：AI 对模型现状感知更全；调小：省预算但可能漏掉已建元素导致重复建模。' },
+    desc:'MBSE 特有：注入当前模型状态（活跃实体/视图/最近变更/会话产物）的字符上限，来自模型库实时查询。'
+      + '<b>默认 1500</b>（2026-10-27 由 800 上调）。',
+    impact:'调大：AI 对模型现状感知更全（原 800 常把"最近变更"腰斩 ⇒ 重复建模已存在元素）；'
+      + '调小：省预算但可能漏掉已建元素导致重复建模。' },
 
   // ── 簇 7：语义判定双路阈值 ──
   { cluster:'dual', sec:'embedding', key:'embedding.enabled', type:'bool', label:'语义出口总开关',
@@ -216,7 +242,8 @@ const CTX_CFG_FIELDS = [
       + '调大：更多页走 OCR（更慢、可能引入识别误差）；调小：省时间，但图内文字可能漏掉。默认 100。' },
   { cluster:'ocr', sec:'extract', key:'extract.ocr_max_pages', type:'int', label:'③ 单次入库 OCR 页数上限',
     desc:'稀疏页超过此数时，只 OCR 前 N 页（在解析详情里留痕说明丢弃了哪些页）。0 = 不限。',
-    impact:'防超大扫描件拖垮入库（实测 691 页规范全量 OCR 要 30~50 分钟）。默认 50。' },
+    impact:'防超大扫描件拖垮入库（实测 691 页规范全量 OCR 要 30~50 分钟）。<b>默认 0 = 不限</b>'
+      + '（2026-10-27 与后端对齐：此前此处标的是 50，而后端 DEFAULT_CONFIG 实际为 0 —— 标错会让人以为已设硬上限）。' },
   { cluster:'ocr', sec:'extract', key:'extract.ocr_render_scale', type:'float', label:'④ PDF 渲染倍率',
     desc:'PDF 页渲染成位图的放大倍率（2.0 ≈ 1224×1584 px）。<b>仅影响 PDF</b>，图片走原图。',
     impact:'★ 实测：放大<b>并不能</b>提升质量（2x/3x 反而从 0.595 降到 0.645/0.623，且耗时翻倍）—— '
@@ -270,6 +297,39 @@ const CTX_CFG_FIELDS = [
       + '<code>memory_backend_&lt;名字&gt;</code> 模块的 <code>BACKEND</code> 对象，失败自动回落 sqlite（不抛）。',
     impact:'为将来接 mem0 / Graphiti 这类外部记忆引擎预留的接口缝（届时只需新增一个适配模块，'
       + '领域层不改）。当前<b>没有</b>其它可用实现 —— 除非已部署对应模块，否则保持 sqlite。' },
+
+  // ── 簇：持续自主执行（2026-10-28）──
+  // ⚠️ 这三项默认关闭是**刻意的**：关闭时行为与改造前逐字节一致，
+  //    打开才启用新机制。顺序建议：先 todo_enabled，观察待办清单生成质量；
+  //    再 harness_enabled（会真正拦人）；最后 obstacle_recovery_enabled。
+  { cluster:'autoexec', sec:'agent', key:'agent.todo_enabled', type:'bool', label:'① 计划外化（待办清单）',
+    desc:'开启后模型可调用 <b>todo_write</b> 建待办清单，并把「完成」的判定改为<b>所有待办都通过验收</b>；'
+      + '关闭则无待办、走原有评估器路径。',
+    impact:'开启：多步任务有客观进度可查，缓解「把建议当完成」（实测样本 3985：模型说"建议下一步执行校验"却被判完成）；'
+      + '关闭：行为与改造前完全一致，无待办清单。' },
+  { cluster:'autoexec', sec:'agent', key:'agent.harness_enabled', type:'bool', label:'② harness 强制闸（不达验收不许结束）',
+    desc:'对齐 Claude Code 的 <b>Stop hook</b>：存在未通过验收的待办时，<b>不允许结束本轮</b>，'
+      + '把失败明细回灌让 AI 继续做。由 harness 执行，<b>不依赖模型配合</b>。',
+    impact:'开启：真正能拦住「看起来完成了」；代价是每次拦截要多跑一轮（真机实测 <b>一次拦截 ≈17 秒</b>）。'
+      + '关闭：只做判定不强制。' },
+  { cluster:'autoexec', sec:'agent', key:'agent.harness_max_blocks', type:'int', label:'② 连续阻断上限',
+    desc:'连续拦截多少次后<b>强制放行</b>并如实说明「未完成，卡在 X」。对齐官方 8 次。',
+    impact:'必须有上限：MAST 数据显示「该停不停」12.4% 高于「过早终止」6.20%，只堵早停会加剧停不下来。'
+      + '0 = 不阻断（等于关闭强制）。' },
+  { cluster:'autoexec', sec:'agent', key:'agent.harness_max_stall', type:'int', label:'② 无进展检测阈值',
+    desc:'同一批待办连续 N 次拦截后<b>完全没变化</b> ⇒ 判定模型卡死，<b>提前</b>强制放行（优先于次数上限）。',
+    impact:'真机实测依据：只靠次数上限 8 时，模型反复说要完成同一待办、待办毫无变化，'
+      + '<b>连续拦截 8 次、耗时约 2.3 分钟，结果与立刻放行完全相同</b>。默认 2 可把最坏耗时压到约 1/4。' },
+  { cluster:'autoexec', sec:'agent', key:'agent.budget_degrade_ratio', type:'float', label:'③ 预算降级收尾阈值',
+    desc:'token 预算用到该比例时<b>主动收尾</b>：停止新开子任务、写「待续清单」、告知还差什么。',
+    impact:'替代原来的「预算耗尽硬停」（实测 89 次评估中 11 次即 12% 是硬停，用户感知"突然断了"）。'
+      + '0.7 = 用掉七成时收尾；0 = 关闭降级。' },
+  { cluster:'autoexec', sec:'agent', key:'agent.obstacle_recovery_enabled', type:'bool', label:'④ 障碍恢复矩阵',
+    desc:'工具失败时按错误特征分类（auth / not_found / precondition / capability / transient），'
+      + '前四类<b>自动换路径重试而不是问人</b>；权限类失败仍然问人。',
+    impact:'开启：减少「可自己解决却来问你」（实测样本 3173 的 next_step 就是"刷新凭据后重新调用"，'
+      + '说明模型知道该自恢复、只是没人给它这个信号）；关闭：沿用现有行为（失败即问人）。' },
+
 ];
 
 // ══ 耦合约束校验器 ═══════════════════════════════════════════════════════════
@@ -460,7 +520,10 @@ function ctxViz(c, v) {
   if (c.viz === 'split') {
     const msgs = +v['context.topic_current_max_msgs'] || 0, keep = +v['context.topic_boundary_keep'] || 0,
           topk = +v['context.topic_retrieve_topk'] || 0, sum = +v['context.history_summary_chars'] || 0,
-          msgc = +v['context.history_msg_max_chars'] || 0, modc = +v['context.model_context_chars'] || 0;
+          msgc = +v['context.history_msg_max_chars'] || 0, modc = +v['context.model_context_chars'] || 0,
+          prc = +v['context.topic_retrieve_per_role_cap'] || 0;
+    // 0 = 不限：不能在界面上显示成 "0 字符"（那会被理解成"什么都不给"）
+    const msgcTxt = msgc > 0 ? `${msgc} 字符` : '不限（由预算与份额决定）';
     return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--bg2,#fafbfc);margin-bottom:10px;">`
       + `<div style="font-size:11px;color:var(--mut);margin-bottom:6px;">历史区预算的固定分配结构</div>`
       + `<div style="display:flex;height:16px;border-radius:5px;overflow:hidden;margin-bottom:5px;">`
@@ -469,8 +532,13 @@ function ctxViz(c, v) {
       + `<div style="flex:1;background:#c9a227;color:#fff;font-size:9.5px;text-align:center;line-height:16px;">其他话题摘要</div></div>`
       + `<div style="font-size:11px;color:var(--mut);line-height:1.7;">`
       + `当前话题原文 ≤ <b>${msgs}</b> 条（+切换边界保留 <b>${keep}</b> 条）`
-      + ` ｜ 语义拉回 <b>${topk}</b> 条 ｜ 摘要上限 <b>${sum}</b> 字符<br>`
-      + `前置硬上限：单条消息 <b>${msgc}</b> 字符 ｜ 建模工作记忆 <b>${modc}</b> 字符（独立来源、同样占预算）</div></div>`;
+      + ` ｜ 语义拉回 <b>${topk}</b> 条（每角色 ≤ <b>${prc > 0 ? prc : '不限'}</b>）`
+      + ` ｜ 摘要上限 <b>${sum}</b> 字符<br>`
+      + `前置上限：单条消息 <b>${msgcTxt}</b> ｜ 建模工作记忆 <b>${modc}</b> 字符（独立来源、同样占预算）`
+      + (msgc > 0
+          ? `<br><span style="color:#8a6d1f;">⚠️ 单条消息上限 >0 会按字符数硬裁（用户贴长文时丢细节）；建议保持 0</span>`
+          : '')
+      + `</div></div>`;
   }
   if (c.viz === 'dual') {
     const on = v['embedding.enabled'];
@@ -547,7 +615,15 @@ async function loadCtxConfig() {
           let input;
           if (f.type === 'bool') {
             const on = (cur === true || cur === 'true' || cur === 1);
-            input = `<select id="ctx-${f.key}" onchange="ctxRecheck()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:100px;">
+            // ★ 2026-10-28（conv 9726 实证）：布尔开关**改完立即落盘**。
+            //   此前 onchange 只做联动预览（ctxRecheck），真正落盘要另外点「💾 保存配置」
+            //   ⇒ 用户把下拉改成「开启」就以为生效了，服务端读到的仍是 false
+            //   ⇒ 「计划外化 / harness 强制闸」这两个安全闸**静默失效**，
+            //     而用户坚信自己开了（排障时双方各信一半）。
+            //   `data-prev` 用于保存失败时**回退到改之前的值**，绝不让界面显示一个
+            //   没生效的状态。
+            input = `<select id="ctx-${f.key}" data-prev="${on ? '1' : '0'}"
+              onchange="ctxAutoSaveBool(this)" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;width:100px;">
               <option value="1"${on ? ' selected' : ''}>开启</option><option value="0"${on ? '' : ' selected'}>关闭</option></select>`;
           } else if (f.type === 'str') {
             input = `<input id="ctx-${f.key}" type="text" value="${cur ?? ''}"
@@ -604,6 +680,42 @@ function ctxValidate() {
   return true;
 }
 
+/** 单个布尔开关**改完立刻落盘 + 回读校验**（2026-10-28，conv 9726 实证）。
+
+ * 为什么不能再依赖「💾 保存配置」按钮：那是全局提交，用户改了一个安全闸的开关
+ * 却忘了点按钮（或点了但被别簇的 err 约束拦下），界面显示"开启"、服务端仍是 false。
+ * 后果不是"配置没保存"，而是**强制闸静默失效**——有未完成的活也不会拦。
+ *
+ * 三道自证（缺一就会重犯）：
+ *   ① 写后**回读** `/api/system/config`，值不一致就报错（不信 PUT 的 200）；
+ *   ② 失败**回退界面**到改之前的值（绝不显示一个没生效的状态）；
+ *   ③ 成功 toast 里写明"已即时生效"，与"保存成功"区分开。
+ */
+async function ctxAutoSaveBool(el) {
+  const key = String(el.id || '').replace(/^ctx-/, '');
+  if (!key) return;
+  const want = el.value === '1';
+  const prev = el.getAttribute('data-prev') === '1';
+  const norm = v => (v === true || v === 'true' || v === 1 || v === '1');
+  try {
+    const r = await api('/api/system/config/static', {
+      method: 'PUT', body: JSON.stringify({ updates: { [key]: want } }) });
+    if (r && r.ok === false) throw new Error(r.error || '保存失败');
+    const cfg = await api('/api/system/config');
+    const [sec, k2] = key.split('.');
+    const actual = (((cfg || {}).static || {})[sec] || {})[k2];
+    if (norm(actual) !== want) {
+      throw new Error('回读不一致（服务端实际=' + JSON.stringify(actual) + '）');
+    }
+    el.setAttribute('data-prev', want ? '1' : '0');
+    toast((want ? '✅ 已开启 ' : '✅ 已关闭 ') + k2 + '（已即时生效，下一轮对话起按此执行）');
+  } catch (e) {
+    el.value = prev ? '1' : '0';
+    toast('⛔ 未生效，已回退：' + (e.message || e));
+  }
+  ctxRecheck();
+}
+
 async function saveCtxConfig() {
   if (!ctxValidate()) return;
   const updates = {};
@@ -619,7 +731,22 @@ async function saveCtxConfig() {
   try {
     const r = await api('/api/system/config/static', { method: 'PUT', body: JSON.stringify({ updates }) });
     if (r && r.ok === false) throw new Error(r.error || '保存失败');
-    toast('✅ AI 上下文配置已保存并即时生效（' + Object.keys(updates).length + ' 项）');
+    // ★ 2026-10-28：**回读校验**——PUT 返回 200 不等于值真落盘。
+    //   "声称已生效"必须有回读证据（否则又是一个"我以为开了"）。
+    const cfg = await api('/api/system/config');
+    const st = (cfg || {}).static || {};
+    const norm = v => (v === true || v === 'true' || v === 1 || v === '1');
+    const bad = [];
+    for (const k of Object.keys(updates)) {
+      const [sec, k2] = k.split('.');
+      const actual = (st[sec] || {})[k2];
+      const want = updates[k];
+      const same = (typeof want === 'boolean') ? (norm(actual) === want)
+                                              : (String(actual) === String(want));
+      if (!same) bad.push(k + '（实际=' + JSON.stringify(actual) + '）');
+    }
+    if (bad.length) throw new Error('回读不一致：' + bad.join('；'));
+    toast('✅ AI 上下文配置已保存并即时生效（' + Object.keys(updates).length + ' 项，已回读核对）');
     loadCtxConfig();
   } catch (e) {
     toast('保存失败：' + (e.message || e));

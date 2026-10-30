@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from core.deps import db_session, current_user
 from core.config import STATIC_DIR
+from core import runtime_state as _runtime_state   # 2026-10-30：关闭/并发闸/墙钟
 from database import db_conn   # B2-11：事件落库用**独立连接**（请求级 conn 在流式循环里会抢写锁）
 from repositories.conversation_repo import ConversationRepo, conv_visible_to
 from repositories.studio_repo import StudioRepo
@@ -186,11 +187,13 @@ def delete_conversation(conv_id: int, conn=Depends(db_session),
 
 
 @router.post("/api/upload")
-def upload_file(file: UploadFile = File(...), conn=Depends(db_session)):
+def upload_file(file: UploadFile = File(...), conn=Depends(db_session),
+                u=Depends(current_user)):
     """通用附件/图片上传（V2.3 优化：会话窗口富输入）。落盘 static/uploads/,返回可访问 URL。
     AI 建模：文档类附件自动进入文档管理（解析→分块→向量化→落库），逻辑同文件管理上传；
     响应携带 doc_id/parse_status/chunk_count/kb，前端据此展示入库状态。
-    注意：必须为同步 def —— db_session 连接在线程池创建,async 端点跨线程使用会抛 sqlite3.ProgrammingError。"""
+    注意：必须为同步 def —— db_session 连接在线程池创建,async 端点跨线程使用会抛 sqlite3.ProgrammingError。
+    ★ 2026-10-23：补 current_user 依赖 —— 此前上传归属恒为「未登录」，审计不可追责。"""
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_EXTS:
         return JSONResponse({"error": f"不支持的文件类型: {ext or 'unknown'}"}, 400)
@@ -222,18 +225,18 @@ def upload_file(file: UploadFile = File(...), conn=Depends(db_session)):
             from knowledge_pipeline import ingest_upload_document
             file_type = file.filename.split(".")[-1] if "." in file.filename else ""
             kb = ingest_upload_document(conn, file.filename, file_type, content,
-                                        uploaded_by="王工", branch="global")
+                                        uploaded_by=audit_user(u), branch="global")
             resp["doc_id"] = kb.get("doc_id")
             resp["parse_status"] = kb.get("parse_status")
             resp["chunk_count"] = kb.get("chunk_count", 0)
             resp["kb"] = kb
             if kb.get("parse_status") == "failed":
-                audit("王工", "file_upload",
+                audit(audit_user(u), "file_upload",
                       f"附件入库文档管理失败: {file.filename} → {kb.get('error', '')[:120]}", conn=conn)
         except Exception as e:
-            audit("王工", "file_upload",
+            audit(audit_user(u), "file_upload",
                   f"附件入库文档管理异常(不阻断附件): {file.filename} → {str(e)[:120]}", conn=conn)
-    audit("王工", "file_upload", f"上传附件: {file.filename} ({len(content)}B)", conn=conn)
+    audit(audit_user(u), "file_upload", f"上传附件: {file.filename} ({len(content)}B)", conn=conn)
     return resp
 
 
@@ -342,7 +345,20 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
 
     _degrade_base = _degrade_snapshot()
 
-    async def event_stream():
+    # ── P0-b（2026-10-25）会话级 trace：M1 挂载点 ──────────────────────
+    # 为什么建在这里（execute_stream 体内之前）：conversation span 要覆盖
+    # **用户感知的端到端**（含 SSE 心跳包装/降级告知），且 flush 需在流尾
+    # finally 用独立连接做（请求级 conn 在流式循环里抢写锁 —— 同 _evbuf 刷库）。
+    # tracer 经 _tracer= 显式传进 execute_stream（跨线程边界不能靠 ContextVar
+    # 继承：pipeline 生成器跑在 sse worker 线程，与事件循环不同上下文）；
+    # execute_stream 入口再 set 进 ContextVar 供 M3/M4/M5 同线程可见。
+    # 开关 services.orch_span._enabled()（orch_span.enabled）→ 全链路零开销。
+    from services.orch_span import ConversationTracer as _ConvTracer
+    _tracer = _ConvTracer(conv_id)
+    _tracer.begin_conversation()
+    _conv_meta = {}   # done 帧里回填 intent/route（闭 span 时写入 meta）
+
+    async def _event_stream_inner(deadline_ts=0.0):
         # P1-2：首帧声明重连间隔（SSE 协议字段），并立刻产一帧心跳，
         # 让 nginx/网关在本轮第一个 LLM 请求发出前就看到"连接活跃"。
         yield "retry: 3000\n\n"
@@ -367,6 +383,137 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         _maxr = 0
         _SER_TYPES = ("stage", "tool")
         _terminal = False   # P1-32：本流是否已发过 done/error（终态哨兵）
+        # ── S1（2026-10-29）失败归因：把"为什么失败"变成可查的事实 ────────────
+        # 背景（实测 @75eca26）：近 7 天 conversation span 有 73 条 error，
+        #   `meta_json` 全为 `{}` —— 一条都说不出原因。这里补三个**可观测**的维度：
+        #   · `_fail_reason`：失败类别（枚举，非自由文本，便于按列聚合）
+        #   · `_last_event`：最后一个已转发的帧类型（`event: xxx`），回答"死在哪一步"
+        #   · `_sent_any`：是否已向前端输出过任何正文帧（区分"一个字没出"与"说到一半断"）
+        #   ⚠️ 只记观测到的事实，**不推测根因**（根因要靠日志/异常，不能在这里编）。
+        _fail_reason = ""
+        _last_event = ""
+        _sent_any = False
+        # ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」，真库 conv 9754/9755 实证）：
+        #   **转发层必须自己攒一份正文**，用于收口兜底固化。
+        #   为什么不能只靠 agent 侧的 `_persist_partial_stream`：
+        #     · conv 9754：8 轮工具 probe 后内部异常，**没有正文**（token 全带 key，
+        #       属子任务实时输出）⇒ agent 侧 `候选字符=0` 静默跳过 ⇒ 库里 0 条；
+        #     · conv 9755：客户端断开时 `async for _frames` **正常结束**（不是 GeneratorExit）
+        #       ⇒ agent 侧的 except 分支一个都没命中（日志零记录）⇒ 固化从未执行。
+        #   而这里（finally）**一定执行** —— span 已能记 error 就是证据。
+        #   故：转发层逐帧攒一份"用户真的看到过的正文"，收口时若无终态又无 assistant 消息，
+        #   就用它兜底落库。含子任务 key 的 token 也计入 —— 那正是用户在屏幕上看到的内容。
+        _acc_text = []          # 本轮所有 token 的 delta（含子任务）
+        _acc_len = [0]          # 已累积长度（增量计数，避免每帧 sum() 的 O(n²)）
+        _acc_cap = 200000       # 上限（防异常流吃内存；约 200KB 远超单条消息实际长度）
+        # ★ 2026-10-29：**执行过程也要攒**，否则兜底落的消息只有一句"未产出正文"，
+        #   用户刷新后仍然看不到"这轮到底跑了哪些子任务/工具/思考"
+        #   （正是用户反馈的「不清楚是什么环节输出的」）。
+        #   结构对齐后端正常落库的 `card_data.exec`（见 stream.py 的 exec 构造），
+        #   前端 `procBlocksHtml(cd.exec)` 据此还原时间线。
+        _acc_exec = {"agent": "", "subtasks": [], "tools": [], "reasoning": []}
+        _acc_exec_cap = 8000   # reasoning 上限（与 stream.py 落库口径一致）
+
+        def _acc_frame(raw):
+            """逐帧攒正文 + 执行过程。任何异常静默（绝不能影响转发）。"""
+            try:
+                if not (isinstance(raw, str) and raw.startswith("event: ")):
+                    return
+                _ei = raw.find("\n", 7)
+                if _ei < 0:
+                    return
+                _typ = raw[7:_ei].strip()
+                if _typ not in ("token", "agent", "subtask", "tool", "reasoning"):
+                    return
+                _di = raw.find("data:")
+                if _di < 0:
+                    return
+                _pl = _json.loads(raw[_di + 5:].strip())
+                if _typ == "token":
+                    if _acc_len[0] >= _acc_cap:
+                        return
+                    _d = _pl.get("delta") or ""
+                    if _d:
+                        _acc_text.append(_d)
+                        _acc_len[0] += len(_d)
+                elif _typ == "reasoning":
+                    # 只收模型 CoT（kind != progress）；系统进度提示不属于"思考"
+                    if _pl.get("kind") != "progress":
+                        _cur = _acc_exec["reasoning"]
+                        if sum(len(x) for x in _cur) < _acc_exec_cap:
+                            _cur.append(_pl.get("delta") or "")
+                elif _typ == "agent":
+                    if _pl.get("status") == "done":
+                        _nm = _pl.get("display_name") or _pl.get("name") or ""
+                        if _nm:
+                            _acc_exec["agent"] = str(_nm)
+                elif _typ == "subtask":
+                    _k = str(_pl.get("key") or "")
+                    if not _k:
+                        return
+                    _item = next((x for x in _acc_exec["subtasks"]
+                                  if x.get("key") == _k), None)
+                    if _item is None:
+                        _item = {"key": _k}
+                        _acc_exec["subtasks"].append(_item)
+                    for _sk, _dk in (("title", ""), ("status", ""), ("agent", "")):
+                        if _pl.get(_sk):
+                            _item[_sk] = _pl.get(_sk)
+                    if _pl.get("latency_ms"):
+                        _item["latency_ms"] = _pl.get("latency_ms")
+                elif _typ == "tool":
+                    # run 帧带 arguments / done 帧带 ok+result ⇒ 按 call_id 合并
+                    _cid = str(_pl.get("call_id") or _pl.get("name") or "")
+                    if not _cid:
+                        return
+                    _t = next((x for x in _acc_exec["tools"]
+                               if x.get("_cid") == _cid), None)
+                    if _t is None:
+                        _t = {"_cid": _cid, "name": _pl.get("name") or ""}
+                        _acc_exec["tools"].append(_t)
+                        if len(_acc_exec["tools"]) > 60:
+                            _acc_exec["tools"].pop(1)   # 只保留最近 60 条（防异常流撑爆）
+                    if _pl.get("status") == "done":
+                        _t["ok"] = _pl.get("ok")
+                        _t["error"] = str(_pl.get("error") or "")[:200]
+                        _t["arguments"] = _pl.get("arguments") or _t.get("arguments") or {}
+                        _t["result"] = str(_pl.get("result") or "")[:2000]
+                        if _pl.get("latency_ms"):
+                            _t["elapsed_ms"] = _pl.get("latency_ms")
+                    else:
+                        if _pl.get("arguments"):
+                            _t["arguments"] = _pl.get("arguments")
+            except Exception:
+                pass
+
+        def _flush_evbuf():
+            """把缓冲的 stage/tool 帧落库（幂等：刷完即清空）。
+
+            ★ 2026-10-27（用户反馈「中途失败后之前输出的内容没有任何展示」）：
+            **必须在断连路径也调用**。原实现只在收到 done/error 帧时刷，
+            而客户端断开（切页/关标签/网络 reset → GeneratorExit）时：
+              · 源生成器被 close，不再产出任何帧 ⇒ 永远等不到 done/error；
+              · `finally` 又在 `if _client_gone: return` 处早退 ⇒ 缓冲**永久留在内存**。
+            ⇒ 该轮 `orch_stream_events` **0 条**（真库 conv 9629 07:34:39 那轮实证），
+              事后根本看不出"跑到哪一步、哪一步开始错" —— 断点保护丢的不只是正文，
+              连归因线索一起丢了。
+            """
+            nonlocal _ev_flushing, _et
+            if not _evbuf or _ev_flushing:
+                return
+            _ev_flushing = True
+            try:
+                from services.stream_event_recorder import record as _ser_record2
+                with db_conn() as _evc:
+                    for _f in _evbuf:
+                        _ser_record2(_evc, conv_id, _f,
+                                     run_id=int(_orch_run_id[0]),
+                                     task_key="", max_per_run=_maxr)
+                    _evc.commit()
+            except Exception:
+                pass          # 观测落库失败绝不影响主流程
+            _evbuf[:] = []
+            _ev_flushing = False
         # P1-1 停止生成：客户端断开（AbortController）→ Starlette 关闭生成器 → GeneratorExit
         # 在 yield 点抛出，这里放行让连接干净关闭；其余异常转为 error 事件（不中断会话）
         try:
@@ -384,6 +531,10 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                                      # ★ 2026-10-17：澄清续答单轮化 —— 追加到原 user 消息，不新起一轮
                                      resume_of_user_msg_id=int(body.resume_of_user_msg_id or 0),
                                      resume_append=body.resume_append or "",
+                                     # P0-b：会话级 tracer（M1→M2 显式传参，跨线程边界）
+                                     # 2026-10-30：整轮墙钟 deadline（到点收尾、保留已产出）
+                                     deadline_ts=deadline_ts,
+                                     _tracer=_tracer,
                                      user=user),
                 # P1-2：15 s —— 链路上最小 idle timeout 通常是 nginx 默认 60 s，取 1/4 留余量
                 interval_s=15.0,
@@ -401,6 +552,19 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 # （本哨兵只认帧前缀，不解析 JSON —— 解析失败也不能影响转发。）
                 if isinstance(raw, str) and raw.startswith(("event: done", "event: error")):
                     _terminal = True
+                # S1：记录最后一个已转发帧的类型（失败时回答"死在哪一步"）。
+                # 只取前缀，不解析 JSON —— 与上面的终态哨兵同一纪律（解析失败不能影响转发）。
+                if isinstance(raw, str) and raw.startswith("event: "):
+                    try:
+                        _last_event = raw[7:raw.index("\n", 7)].strip()[:32]
+                    except Exception:
+                        _last_event = ""
+                    if _last_event not in ("done", "error", "heartbeat", "retry", "connected"):
+                        _sent_any = True
+                # ★ 2026-10-29：逐帧攒正文（收口兜底固化用；见 _acc_text 处的注释）
+                #   放在事件录制**之前**且不受 `stream_event_log` 开关影响 ——
+                #   这是"用户能否看到已生成内容"的问题，不是可选的观测项。
+                _acc_frame(raw)
                 # ── B2-11（2026-10-13）：编排关键事件落库 ──
                 # 落点选这里，因为 `async for raw in _frames` 是**真正唯一的收口**：
                 # 生成器内部 88 处 yield 分散、无收口（编排子任务的 _evq 队列只带子任务事件，
@@ -426,6 +590,16 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                                 _orch_run_id[0] = int((_pl.get("data") or {}).get("orch_run_id") or 0)
                             except Exception:
                                 _orch_run_id[0] = 0
+                            # P0-b：done 帧回带 intent/route ⇒ 闭 conversation span 时
+                            # 写进 meta（monitor 页按 key 取；取不到留空，不编造）
+                            try:
+                                _d = _pl.get("data") or {}
+                                for _k in ("intent", "route"):
+                                    _v = str(_d.get(_k) or "").strip()
+                                    if _v:
+                                        _conv_meta[_k] = _v[:60]
+                            except Exception:
+                                pass
                         elif _et in _SER_TYPES:
                             _evbuf.append(raw)
                             if len(_evbuf) > _evbuf_max:
@@ -436,18 +610,7 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 #   放在 yield **之前**：yield 之后代码要等下一次 __anext__ 才继续跑，
                 #   而客户端断连（GeneratorExit）会让生成器停在 yield 处 ⇒ 缓冲永不清空。
                 if _evbuf and _et in ("done", "error"):
-                    _ev_flushing = True
-                    try:
-                        with db_conn() as _evc:
-                            for _f in _evbuf:
-                                _ser_record(_evc, conv_id, _f,
-                                            run_id=int(_orch_run_id[0]),
-                                            task_key="", max_per_run=_maxr)
-                            _evc.commit()
-                    except Exception:
-                        pass
-                    _evbuf[:] = []
-                    _ev_flushing = False
+                    _flush_evbuf()
                 yield raw
         except GeneratorExit:
             _client_gone = True
@@ -465,8 +628,130 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             # 同一条流里出现**两条互相矛盾的错误提示**（门禁 I11e 实证抓到：
             # 除错分支那条 + 兜底那条）。兜底只在"从未发过终态"时才该出现。
             _terminal = True
+            # ── S1（2026-10-29）：**真异常必须留下原因** ──────────────────
+            # 这里补一个此前存在的语义错误：`_terminal` 的语义是"发过终态帧"，
+            #   而 finally 用它决定 span 的 ok/error ⇒ **真抛出异常的一轮被记成 ok**
+            #   （因为本分支把 _terminal 置了 True）。结果是"看起来成功、实际报错"。
+            # ⇒ 用 `_fail_reason` 单独表达"这轮失败了"，与"是否已通知前端"解耦。
+            _fail_reason = "exception:%s" % type(_e).__name__
             yield f"event: error\ndata: {_json.dumps({'message': str(_e)[:200]}, ensure_ascii=False)}\n\n"
         finally:
+            # ── P0-b：会话 span 收口 + 落库（必须早于 _client_gone 早退）──
+            # 客户端断开时本轮 span 同样有归因价值（"用户等到哪一步走的"）；
+            # 且 GeneratorExit 期间禁止 yield，但**不禁止** DB 写（无 yield）。
+            # 判据 _terminal：从未发过 done/error 的流（内部吞异常正常 return）⇒
+            # conversation span 记 error（"哪一步开始错"的归因入口，P0-b 病灶②）。
+            #
+            # ── S1（2026-10-29）状态判定改为"多重事实"，不再用单一哨兵 ──────
+            # 旧逻辑 `"ok" if _terminal else "error"` 有两个错误：
+            #   ① 真异常被记成 ok（except 分支把 _terminal 置了 True）；
+            #   ② 内部吞异常后正常 return 时记 error，但 meta 为空 ⇒ 无法归因
+            #      （实测 73 条 error 的 meta_json 全是 `{}`）。
+            # 新逻辑（优先级从上到下，**只表达观测到的事实，不推测根因**）：
+            #   client_gone       → 用户/网络主动断开（须与"服务端故障"分开统计）
+            #   _fail_reason 非空 → 真异常，带异常类型
+            #   已发 done 帧      → ok
+            #   其余              → no_terminal_frame：流悄悄结束，前端会一直转圈
+            try:
+                _m = dict(_conv_meta)
+                if _client_gone:
+                    _status, _reason = "error", "client_gone"
+                elif _fail_reason:
+                    _status, _reason = "error", _fail_reason
+                elif _last_event == "done":
+                    _status, _reason = "ok", "ok"
+                else:
+                    _status, _reason = "error", "no_terminal_frame"
+                _m["reason"] = _reason
+                # 三个归因维度：死在哪一步 / 有没有输出过内容 / 是否已通知前端
+                _m["last_event"] = _last_event or ""
+                _m["sent_any"] = 1 if _sent_any else 0
+                _m["terminal_sent"] = 1 if _terminal else 0
+                _tracer.end_conversation(_status, meta=_m)
+                _tracer.flush()
+            except Exception:
+                pass   # 观测落库失败绝不阻断已完成的主流程
+            # ── P0-2（2026-10-26）：上下文分块归因落库 ──
+            # 与上面的 tracer.flush() 同理：观测在请求收口处统一落库（一次请求 = 一次装配），
+            # 失败不阻断。`context_audit.trace_id` 与 `llm_usage_stats.trace_id` 同源 ⇒ 可 JOIN。
+            try:
+                from agent.context_audit import flush as _ctx_flush
+                _ctx_flush()
+            except Exception:
+                pass
+            # ★★ 2026-10-27（用户反馈「中途失败后之前输出的内容没有任何展示」）：
+            #   **必须早于 `_client_gone` 早退**。断连时源生成器已 close、永远等不到
+            #   done/error 帧 ⇒ 上面的"收到终态才刷"永远不会发生 ⇒ 该轮
+            #   `orch_stream_events` 一条都没有（真库 conv 9629 07:34:39 那轮实证：
+            #   正文 0 条 + 事件 0 条，事后无法回答"跑到哪一步、哪步开始错"）。
+            #   与 `_tracer.flush()` / `_ctx_flush()` 同一位置、同一理由：
+            #   GeneratorExit 期间禁止 yield，但**不禁止** DB 写。
+            _flush_evbuf()
+            # ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」）：
+            #   **收口兜底固化** —— 这是本轮最后一道防线，必须早于 `_client_gone` 早退。
+            #   触发条件（**只表达观测事实**）：本流从未发过终态帧（done/error）。
+            #   覆盖两条真实事故路径（agent 侧固化都没执行）：
+            #     · conv 9755：客户端断开 → `async for` 正常结束 → agent 侧 except 一个都没命中；
+            #     · conv 9754：内部异常但**没有正文**（token 全带 key = 子任务输出）
+            #       → agent 侧 `len<4` 静默跳过。
+            #   行为：
+            #     · 有攒到正文 → 落库 + 「已中断」说明后缀（内容一字不丢）；
+            #     · 一个字都没有 → 落一条**如实说明**（不留"发了消息但没有任何回应"的空档）。
+            #   幂等：库里最后一条已是 assistant ⇒ 跳过（正常 done 已落过 / agent 侧已固化）。
+            if not _terminal:
+                try:
+                    _pending = "".join(_acc_text).strip()
+                    with db_conn() as _pc:
+                        _lastrow = _pc.execute(
+                            "SELECT role FROM messages WHERE conversation_id=? "
+                            "ORDER BY id DESC LIMIT 1", (conv_id,)).fetchone()
+                        _already = bool(_lastrow and (_lastrow["role"] == "assistant"))
+                    if not _already:
+                        if _pending:
+                            _tail = ("\n\n> ⏹ 连接已中断（以上为已生成内容，"
+                                     "可直接重新发送这条消息继续）")
+                            _body = _pending + _tail
+                        else:
+                            _body = ("**原因**：本轮未产出正文内容就结束了"
+                                     "（连接中断或服务端异常；执行过程见下方「执行过程」）。\n\n"
+                                     "可以直接重新发送这条消息。")
+                        # ★ 执行过程一并落库（对齐正常路径的 card_data.exec 结构）
+                        #   前端 procBlocksHtml 据此还原时间线 ⇒ 刷新后仍能看到
+                        #   "这轮跑了哪些子智能体/子任务/工具/思考"。
+                        _exec = {}
+                        _rs = "".join(_acc_exec["reasoning"])[:_acc_exec_cap]
+                        if _rs.strip():
+                            _exec["reasoning"] = _rs
+                        if _acc_exec["agent"]:
+                            _exec["agent"] = _acc_exec["agent"]
+                        if _acc_exec["subtasks"]:
+                            _exec["subtasks"] = _acc_exec["subtasks"]
+                        if _acc_exec["tools"]:
+                            _exec["tools"] = [
+                                {k: v for k, v in t.items() if not k.startswith("_")}
+                                for t in _acc_exec["tools"]]
+                        _card = _json.dumps({"exec": _exec}, ensure_ascii=False) if _exec else "{}"
+                        with db_conn() as _wc:
+                            _wc.execute(
+                                "INSERT INTO messages (conversation_id, role, content, "
+                                "msg_type, card_data) VALUES (?,?,?,?,?)",
+                                (conv_id, "assistant", _body, "text", _card))
+                            _wc.execute(
+                                "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP "
+                                "WHERE id=?", (conv_id,))
+                        print("[route_persist_gone] conv=%s 兜底固化 正文=%d 字 有内容=%s "
+                              "子任务=%d 工具=%d 思考=%d 字"
+                              % (conv_id, len(_pending), bool(_pending),
+                                 len(_exec.get("subtasks") or []),
+                                 len(_exec.get("tools") or []),
+                                 len(_rs)), flush=True)
+                    else:
+                        print("[route_persist_gone] conv=%s 跳过：末条已是 assistant"
+                              % conv_id, flush=True)
+                except Exception as _pg_err:
+                    # 兜底失败不能掩盖原始故障，但必须留痕（否则又是一次"静默丢内容"）
+                    print("[route_persist_gone] conv=%s 兜底固化失败：%r"
+                          % (conv_id, _pg_err), flush=True)
             if _client_gone:
                 return
             # P1-32：终态兜底 —— 流结束却从未发过 done/error ⇒ 必须补一条 error，
@@ -506,6 +791,59 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                     }, ensure_ascii=False) + "\n\n")
             except Exception:
                 pass   # 降级告知失败绝不阻断已完成的主流程
+
+    async def event_stream():
+        """流式入口的**语义闸**（2026-10-30，P0 缺口①②）。
+
+        为什么在外面再包一层、而不是把 `_event_stream_inner` 整体缩进：
+          · 内层是 400+ 行、承担落库/断点固化/降级告知等关键路径，
+            整体缩进会让 diff 淹没真正的改动，评审时无法分辨"改了逻辑"还是"动了缩进"；
+          · 薄包装让三件事一眼可见：关闭中拒流、并发名额、墙钟起点。
+
+        ⚠️ **信号量必须在生成器内部持有**（`async with` 包住 `async for`）：
+          写在端点函数里 `return StreamingResponse(gen())` 时函数已返回、信号量已释放，
+          流的整个生命周期根本没被计入 —— 行业原话："Hold the semaphore inside the
+          generator. Otherwise your limiter is measuring the wrong thing."
+
+        ⚠️ **拒绝必须走 `event: error` 帧而非 HTTP 503**：
+          走到这里时响应头已经发出（SSE 200 已建立），改状态码只会得到一个
+          半开连接；用事件帧前端才能显示"服务忙，请稍后重试"并停止转圈。
+        """
+        import json as _j
+
+        def _err_frame(msg, code, retry_after=None):
+            _d = {"type": "error", "message": msg, "code": code}
+            if retry_after is not None:
+                _d["retry_after_s"] = retry_after
+                _d["retryable"] = True
+            return "event: error\ndata: %s\n\n" % _j.dumps(_d, ensure_ascii=False)
+
+        # ① 关闭中：不再接新流。否则 lifespan 的在途计数永远归不了零。
+        if _runtime_state.is_draining():
+            yield _err_frame("服务正在重启，请稍后重新发送这条消息。", "draining")
+            return
+
+        # ② 并发名额（排队 `runtime.queue_wait_s` 后仍无 ⇒ 快速失败）
+        _gate = _runtime_state.stream_gate()
+        try:
+            await _gate.__aenter__()
+        except _runtime_state.GateBusy:
+            yield _err_frame(
+                "当前并发会话已达上限（%d 路），请稍后重试。"
+                % int(_runtime_state.stats().get("gate_limit") or 0),
+                "busy", retry_after=5)
+            return
+
+        # ③ 整轮墙钟起点（拿到名额之后才算 —— 排队时间不该计入用户预算）
+        _deadline = _runtime_state.compute_deadline()
+
+        try:
+            async for _f in _event_stream_inner(deadline_ts=_deadline):
+                yield _f
+        finally:
+            # 必须放 finally：客户端断开时 `async for` 会被 GeneratorExit 打断，
+            # 不放这里就会出现"名额永久泄漏 ⇒ 几次之后所有人 429"。
+            await _gate.__aexit__(None, None, None)
 
     return StreamingResponse(
         event_stream(),
@@ -596,12 +934,14 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
         resume_text = "【澄清补充】用户选择跳过澄清，请按现有信息直接继续执行，不要再次提问。"
         append_text = "\n\n———\n\n【澄清补充】用户选择跳过澄清，按现有信息继续执行"
     elif free_text:
+        # 2026-10-27（截断清单 P2-D2）：4000 → 8000。澄清补充常是用户把整段约束/代码贴进来，
+        #   4000 处腰斩后模型"接着半截话"执行（且无标记）。8000 覆盖绝大多数补充说明。
         resume_text = (
             "【澄清补充】用户在待澄清状态下直接补充了以下信息（请据此继续，无需再确认）：\n"
-            + free_text[:4000]
+            + free_text[:8000]
             + f"\n\n原请求：{(context.get('input') or '')[:2000]}"
         )
-        append_text = "\n\n———\n\n【澄清补充】" + free_text[:4000]
+        append_text = "\n\n———\n\n【澄清补充】" + free_text[:8000]
     else:
         qmap = {str(q.get("id")): q for q in questions}
         lines = []
@@ -683,7 +1023,7 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
     _n = len((body.get("answers") or []))
     _tail = '跳过' if body.get("skip") else (
         '自由文本' if free_text else (f"{_n} 条选项" + (f" + 补充说明" if (body.get("note") or "").strip() else "")))
-    audit("王工", "clarify_answer", f"会话#{conv_id} 澄清回答（{_tail}）", conn=conn)
+    audit(audit_user(user), "clarify_answer", f"会话#{conv_id} 澄清回答（{_tail}）", conn=conn)
     return {"ok": True, "resume_text": resume_text, "append_text": append_text,
             "resume_of_user_msg_id": _resume_of_uid, "free_text": bool(free_text)}
 
@@ -743,7 +1083,7 @@ def commit_partial_message(conv_id: int, body: dict = None, conn=Depends(db_sess
         # 静默 pass 会让"去重失效"这类缺陷完全不可见（2026-10-10 就是这么漏了一整天）。
         print(f"[commit_partial] 去重判据异常，会退化为写入一条：{_dedup_err!r}")
     mid = repo.add_assistant_message(conv_id, content + suffix, msg_type="text")
-    audit("王工", "conversation_partial_commit", f"会话#{conv_id} 固化已生成内容（{len(content)} 字）", conn=conn)
+    audit(audit_user(user), "conversation_partial_commit", f"会话#{conv_id} 固化已生成内容（{len(content)} 字）", conn=conn)
     return {"ok": True, "id": mid}
 
 
@@ -834,9 +1174,21 @@ def redraw_confirm(conv_id: int, body: dict = None, conn=Depends(db_session),
 @router.post("/api/messages/{msg_id}/feedback")
 def message_feedback(msg_id: int, body: dict, conn=Depends(db_session),
                      user=Depends(current_user)):
-    fb_type = body.get("type", "")
+    """评审动作反馈（approve/reject/modify + 兼容历史 wrong/corrected）。
+
+    ⚠️ 2026-10-29：新增**白名单校验**（原先零校验，脏值可落库 ⇒ 污染统计口径）。
+       取值域单一真源：`core/feedback_types.py`。
+       ⚠️ 本端点记录的是**评审动作**（流程裁决），**不是**用户质量差评 ——
+       质量信号走 `/api/messages/{msg_id}/quality`（up/down），两者分列存储。
+    """
+    from core.feedback_types import REVIEW_TYPES, NEGATIVE_REVIEW_TYPES
+    fb_type = str(body.get("type", "") or "").strip().lower()
+    _allowed = tuple(REVIEW_TYPES) + tuple(NEGATIVE_REVIEW_TYPES)
+    if fb_type not in _allowed:
+        raise HTTPException(status_code=400,
+                            detail=f"type 取值非法：{fb_type!r}，允许 {list(_allowed)}")
     context = body.get("context", "") or ""
-    actor = (user or {}).get("display_name") or "王工"
+    actor = audit_user(user)
     repo = ConversationRepo(conn)
     repo.update_message_feedback(msg_id, fb_type)
     repo.create_feedback(msg_id, fb_type, context, actor)
@@ -853,6 +1205,53 @@ def message_feedback(msg_id: int, body: dict, conn=Depends(db_session),
         except Exception:
             pass
     return {"ok": True}
+
+
+@router.post("/api/messages/{msg_id}/quality")
+def message_quality(msg_id: int, body: dict, conn=Depends(db_session),
+                    user=Depends(current_user)):
+    """用户质量信号（up/down）："这条回答好不好"。
+
+    ★ 2026-10-29 新增。这是**显式负反馈的唯一入口** —— 在此之前
+      前端没有任何可点击的反馈按钮（`05-markdown.js` 的按钮已被 V3.0 移除），
+      后端 badcase/online_eval 又只认 `modify/wrong/corrected` ⇒
+      **显式负反馈常年 0 条**，采样队列 0 行，进化系统没有方向信号。
+
+    与评审动作**分列**的原因：`reject` 是"评审拒绝"（流程否决），
+    若当成"用户差评"会让进化去修根本没坏的东西（misevolution）。
+    """
+    from core.feedback_types import QUALITY_TYPES
+    q = str(body.get("quality") or body.get("type") or "").strip().lower()
+    # ⚠️ 空串 = **取消评价**（前端 toggle），是合法操作 ⇒ 不进白名单校验。
+    #    但**绝不能写 feedback 历史**：取消动作若留痕，会被采样器当成负反馈采走
+    #    ⇒ 用户"先踩后撤"被记成两次差评，信号被放大。
+    if q and q not in QUALITY_TYPES:
+        raise HTTPException(status_code=400,
+                            detail=f"quality 取值非法：{q!r}，允许 {list(QUALITY_TYPES)}")
+    context = body.get("context", "") or ""
+    actor = audit_user(user)
+    repo = ConversationRepo(conn)
+    row = conn.execute("SELECT conversation_id FROM messages WHERE id=?", (msg_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="消息不存在")
+    conv_id = int(row[0] or 0)
+    repo.update_message_quality(msg_id, q)
+    if q:
+        repo.create_quality_feedback(msg_id, q, context, actor, conversation_id=conv_id)
+        audit(actor, "quality", f"消息#{msg_id} 质量信号:{q}", conn=conn)
+    else:
+        audit(actor, "quality", f"消息#{msg_id} 质量信号:清除", conn=conn)
+    return {"ok": True, "quality": q}
+
+
+@router.get("/api/feedback-types")
+def feedback_types():
+    """反馈取值目录（单一真源下发）。
+
+    前端据此渲染与校验，**不再硬编码**取值集合 —— 跨语言一致性的根。
+    """
+    from core.feedback_types import public_catalog
+    return public_catalog()
 
 
 # ── P0：消息结论速览生成（资料库与AI建模优化 §2.2）──
@@ -951,7 +1350,7 @@ def list_scopes(conn=Depends(db_session), user=Depends(current_user)):
 def add_scope(body: dict, conn=Depends(db_session), user=Depends(current_user)):
     """保存建模范围：body {name, mode, doc_names, fragment_text, chunk_ids}。同名幂等覆盖。"""
     from services.scope_service import save_scope
-    actor = (user or {}).get('display_name') or '王工'
+    actor = audit_user(user)
     b = body or {}
     r = save_scope(conn, b.get('name') or '', b.get('mode') or 'doc',
                     doc_names=b.get('doc_names'), fragment_text=b.get('fragment_text') or '',
@@ -963,7 +1362,7 @@ def add_scope(body: dict, conn=Depends(db_session), user=Depends(current_user)):
 def remove_scope(scope_id: int, conn=Depends(db_session), user=Depends(current_user)):
     from services.scope_service import delete_scope
     delete_scope(conn, scope_id)
-    audit((user or {}).get('display_name') or '王工', 'modeling_scope', f"删除建模范围#{scope_id}", conn=conn)
+    audit(audit_user(user), 'modeling_scope', f"删除建模范围#{scope_id}", conn=conn)
     return {"ok": True}
 
 @router.post("/api/scopes/preview")

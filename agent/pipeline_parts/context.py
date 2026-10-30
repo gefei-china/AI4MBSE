@@ -193,8 +193,49 @@ class ContextMixin:
         except Exception:
             _inject_k = 3
         if chunk_hits:
-            for i, c in enumerate(chunk_hits[:_inject_k], 1):
-                parts.append(f"【来源{i}】{c.get('source_doc','')} §{c.get('chunk_index',0)}: {c.get('content','')}")
+            # ── P0-3（2026-10-26）：检索注入**多样性约束** ──
+            # 问题（实测，生产快照 6 个 query）：3 个注入槽实际只换来 1.14~2.48 条信息。
+            #   根因：语料 7177 chunk 只来自 14 个文档（top2 占 64.3%），
+            #   且相邻 chunk 字符集 Jaccard 中位数 0.659 / p90 0.816
+            #   （切片 overlap=90 所致）⇒ top3 常落在同一文档的连续 §，语义高度重复。
+            # 做法（**无损去重**，对齐 Deep Agents「先无损、后有损」）：
+            #   ① per-doc 配额（同一文档最多占 N 槽）② 同文档近邻 chunk 合并（保留 §a-b 坐标）
+            #   ③ 槽位不足时从 RRF 池补位（不因约束导致信息变少）
+            # ⚠️ 编号语义不变：合并后条目仍占**一个**【来源n】位，编号顺序 = 注入顺序，
+            #    与前端 citations 数组 1 基对齐（context.py:187 硬约束）。
+            _sel = list(chunk_hits)
+            _div_stats = {}
+            try:
+                from core import config as _cfg2
+                _per_doc = int(_cfg2.get("context_audit", "retrieval_per_doc_max", 2) or 0)
+                _merge = bool(_cfg2.get("context_audit", "retrieval_merge_neighbor", True))
+                if _per_doc > 0 or _merge:
+                    from agent.retrieval_diversity import select_diverse
+                    _sel, _div_stats = select_diverse(
+                        chunk_hits, inject_k=_inject_k, per_doc_max=_per_doc,
+                        merge_neighbor=_merge)
+            except Exception:
+                _sel = list(chunk_hits[:_inject_k])
+                _div_stats = {}
+            for i, c in enumerate(_sel[:_inject_k], 1):
+                _doc = c.get("source_doc", "")
+                _sec = c.get("section_range") or c.get("chunk_index", 0)
+                _mf = c.get("merged_from")
+                _tag = f"§{_sec}" + (f"（合并 {len(_mf)} 段）" if _mf and len(_mf) > 1 else "")
+                parts.append(f"【来源{i}】{_doc} {_tag}: {c.get('content','')}")
+            # 归因：把"名义条数 vs 有效条数"喂给 context_audit（可观测）
+            if _div_stats:
+                try:
+                    from agent.context_audit import record_blocks
+                    record_blocks({}, phase="retrieval", extra={
+                        "retrieval_nominal": _div_stats.get("nominal", 0),
+                        "retrieval_selected": _div_stats.get("selected", 0),
+                        "retrieval_effective": _div_stats.get("effective", 0),
+                        "retrieval_merged": _div_stats.get("merged", 0),
+                        "retrieval_docs": _div_stats.get("docs", 0),
+                    })
+                except Exception:
+                    pass
         else:
             for d in retrieval["vector_docs"][:_inject_k]:
                 parts.append(f"[向量] {d.get('filename','')} ({d.get('parse_status','')})")
@@ -204,7 +245,17 @@ class ContextMixin:
         #    （用户需求里「幻觉写进知识库被引用」的正是此坑）。故独立成块 + 显式禁止作事实来源。
         memory_hits = retrieval.get("memory_hits") or []
         if memory_hits:
-            _ml = [f"· [{h.get('mem_type','')}] {h.get('content','')}" for h in memory_hits[:4]]
+            # ★ P0-4（2026-10-26）：统一截断口径。
+            #   改动前本处**完全不截断**（直接取 content），而 memory.py 侧截 160 字 ——
+            #   同一记忆在两个块里长度不同（长版 + 短版），短版被长版完全覆盖 ⇒ 冗余。
+            #   现统一为 `context_audit.memory_max_chars`（默认 200，与 recall_memories 一致）。
+            try:
+                from core import config as _cfg3
+                _mem_cap = int(_cfg3.get("context_audit", "memory_max_chars", 200) or 200)
+            except Exception:
+                _mem_cap = 200
+            _ml = [f"· [{h.get('mem_type','')}] {str(h.get('content') or '')[:_mem_cap]}"
+                   for h in memory_hits[:4]]
             parts.append(
                 "【已沉淀记忆（跨会话经验/决策，**仅供对齐参考，不得作为事实依据引用**，"
                 "与本次任务无关时必须忽略；不可据此编造需求或参数）】\n" + "\n".join(_ml))

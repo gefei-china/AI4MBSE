@@ -36,11 +36,19 @@
    读表由 `load_policies(conn)` 负责；`evaluate()` 只吃内存里的策略列表。
    ⇒ 裁决逻辑可单测，且能离线跑评测集（评测脚本把 record 打成 no-op 的做法同理）。
 
-## 为什么现在不接链路
+## ★ 已接入执行链路（2026-10-28，写前确认 HITL）
 
-P0 只交付"表 + 种子 + 裁决器 + 单测"，**不接入 tools.py:434**。
-因为接入必然要回答"approve(异步) 与现有 L2(同步) 如何并存"，
-那会改变现有行为，属于高风险变更。先把裁决器本身验证干净。
+原 P0 只交付"表 + 种子 + 裁决器 + 单测"，**不接链路**（担心 approve 异步与 L2 同步并存）。
+2026-10-28 已接线，落点 `agent/pipeline_parts/tools.py::ToolMixin._hil_gate`：
+- 判定：`hil_service.classify_action`（`tools.side_effect` ∪ MCP 动词族，**双源**）
+- 裁决：本模块 `evaluate(policies, decision_point="tool_write", match_key=<动作族>, ...)`
+- 位置：白名单 → RBAC → Hook → **本裁决** → 执行（四道闸，各管一个维度）
+- 与 L2 的关系：**不再用 `agents.hil_level` 单独判定** —— 它只作为"下限"参与
+  `escalate()`（只收紧不放宽）。理由见本模块「行业依据」Suntec 那条：
+  **不要给 agent 整体分等级，要给每个动作分等级**。
+- 灰度：**改表即改行为**（`hil_policies.match_key` → level），不改代码。
+  当前档位见 `database/seeds_data/hil_policies.json` 的 `mcp_write`（notify）
+  与 `mcp_destructive`（confirm）两条 —— 智源平台单独一档。
 
 用法（接入时）::
 

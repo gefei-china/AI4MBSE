@@ -39,6 +39,15 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+  # ── nightly（2026-10-22 补，见评估 P1-2）────────────────────────────────
+  # 评估发现：文档两处承诺"模型相关nightly 跑"，但在此之前 ci.yml **无
+  # schedule 块** ⇒ 该承诺从未落地；配套地 verify_intent_routing_baseline.py
+  # 因"自身不稳定"被豁免 ⇒ **模型语义层漂移完全无监控**。
+  # 工程自己的设计意图（"确定性进 PR 阻断、模型相关 nightly 跑"，
+  # 对标 LangSmith / Dify 的eval-in-CI 分层）只落地了前半。
+  # 定时 03:17（避开整点，减少与其它仓库的排队竞争）。
+  schedule:
+    - cron: "17 3 * * *"
 
 jobs:
   tests-and-guards:
@@ -87,10 +96,77 @@ jobs:
       # 为什么单独一个 job 而不是塞进上面：它**自建干净库**（MBSE_DB_PATH 指向临时文件
       # 并 init_db），口径与开发机生产库**故意不同** —— 因为准确率门禁只有在输入等价时
       # 才有意义（详见 tools/eval/run_ci_eval.py 文件头的踩坑记录）。
-      # 锁的是「规则层+语义层不许塌」，阈值 0.70（干净库+无LLM 实测基线 0.828）。
+      # 锁的是「规则层+语义层不许塌」。阈值不再写死在这里 —— 唯一真源是
+      # core/config.py 的 eval_gates.intent_min_accuracy（当前 0.85）。
+      # ★ 2026-10-22 修正：本行原写「阈值 0.70（干净库+无LLM 实测基线 0.828）」，
+      #   与 run_ci_eval.py 实值 0.85 已漂移。改为引用变量名，杜绝同类漂移；
+      #   verify_ci_comment_consistency.py 会把「注释里出现的阈值数字」判红。
       # 模型质量评测另跑带 LLM 的夜间任务（CI 无 secret，且模型输出有温度）。
-      - name: Guard 意图路由评测（19 项，含准确率下限 0.70）
+      - name: Guard 意图路由评测（19 项，准确率下限见 core/config.py eval_gates）
         run: python tools/eval/run_ci_eval.py
+
+      # ── 评测基础设施自检（2026-10-22）────────────────────────────────────
+      # 这道门禁保护的是**上面那些门禁本身**：ci.yml 注释里的数字若与脚本实值
+      # 漂移，CI 照样全绿，而人读到一个错误的事实（评估实测三处：意图路由阈值
+      # 有 0.70/0.85/0.86 三个数在流通、分层基线注释与实值不同）。
+      # 静默失真比缺陷更危险 —— 它不报错，只误导人调错地方。
+      - name: Guard CI 注释 ↔ 代码实值一致（10 项 + 4 变异）
+        run: python tools/verify/verify_ci_comment_consistency.py
+
+      # ── 2026-10-22：评测管理页门禁 ──────────────────────────────────
+      # 新增一个整页要动 6 处（页面容器/脚本引入/导航入口/TITLES/loadPage
+      # 分派/数据端点），**漏任何一处都不报错** —— 漏 loadPage 分派只是白屏，
+      # 漏导航入口则页面"存在但找不到"（正是 2026-09-17 补「审批管理」的原因）。
+      # 本门禁把"接好了吗"变成可断言的对象：静态挂载 + 后端字段核对 +
+      # Node vm 真实渲染冒烟（含 undefined/[object Object] 泄漏检查与 div 配平哨兵），
+      # 外加 4 组变异自证证明判据真的会拦。
+      - name: Guard 评测管理页接线与渲染（静态挂载 + 端点字段 + Node vm 渲染）
+        run: python tools/verify/verify_eval_management.py
+
+      # ── P1-1（2026-10-22）：RAG 检索评测接入门禁（补断链①）──────────────
+      # 评估发现：检索评测的度量比决策质量更完备（双层漏斗分解 + 负对照 +
+      # 指纹漂移拒绝），却**完全不在 CI 里** —— 分数全是"有人手动跑了一次"。
+      #
+      # ⚠ 报告来源是**本地跑批器 checked-in 的快照**（docs/评测/nightly/
+      #   latest-rag-report.json），不是本 job 现跑 —— 语料库 378MB 不入
+      #   git，PR 上跑不出真实分数（recall≈0 是"没数据"不是"质量差"）。
+      #   现跑由 tools/eval/run_nightly_local.py（本机定时）或本仓库
+      #   nightly-evals 作业（需先接语料，见该作业注释里的方案决策）承担。
+      #   快照缺失时 --allow-missing 判 SKIP 而非恒红（恒红门禁会被豁免，
+      #   比没门禁更糟）；快照在 ⇒ 指标退化立刻在 PR 上可见。
+      # ★ 2026-10-30 修（三处同一个写法错，全部从未真正执行过）：
+      #   原写法是把续行反斜杠放在 YAML **plain scalar** 里：
+      #       run: python ... --allow-missing \
+      #         --report docs/...
+      #   plain scalar 的换行+缩进会被折叠成**一个空格**，反斜杠于是变成**字面 token**
+      #   传给 argparse ⇒ `error: unrecognized arguments:  --report docs/...` ⇒ exit 2。
+      #   实测（run 41002420545）就是这么挂在 step 15 的 —— 门禁一项都没跑。
+      #   ⇒ 改用 block scalar（`run: |`），反斜杠由 **shell** 解释而不是 YAML。
+      #   同类写法在本文件共 3 处（RAG / 生成质量 / Trace 三个评测门禁），一并修。
+      - name: Guard RAG 检索评测指标不塌陷（13 项 + 4 变异；消费 checked-in 快照，缺失则跳过）
+        run: |
+          python -X utf8 tools/verify/verify_rag_eval_gate.py --allow-missing \
+            --report docs/评测/nightly/latest-rag-report.json
+
+      # ── P0-3（2026-10-22）：生成质量评测接入门禁（补断链③）──────────────
+      # 评估发现：faithfulness/groundedness **全仓零命中** —— 检索、路由、
+      # 记忆都有门禁，唯独生成质量（答案有没有依据、引用编号对不对）是黑的。
+      # 报告来源同为本地跑批器快照（docs/评测/nightly/latest-gen-report.json）。
+      - name: Guard 生成质量评测指标不塌陷（7 项 + 6 变异；消费 checked-in 快照，缺失则跳过）
+        run: |
+          python -X utf8 tools/verify/verify_generation_quality_gate.py --allow-missing \
+            --report docs/评测/nightly/latest-gen-report.json
+
+      # ── P0-1b（2026-10-22）：Trace 一致性评测接入门禁（补断链②）────────────
+      # 评估发现：trace2dataset 产出的 228 条生产人工裁决样本**无消费方**
+      #   ——「生产轨迹→评测集→优化→再部署」断在第二环，llm_usage_stats
+      #   10593 条躺表无人消费正是"数据坟墓"形态。本门禁消费一致性报告，
+      #   回答"人对过的题还在丢分吗"（实测一致率 0.881，负对照洗牌 0.167）。
+      # 报告来源同为本地跑批器快照（docs/评测/nightly/latest-trace-report.json）。
+      - name: Guard Trace 一致性评测指标不塌陷（7 项 + 10 变异；消费 checked-in 快照，缺失则跳过）
+        run: |
+          python -X utf8 tools/verify/verify_trace_quality_gate.py --allow-missing \
+            --report docs/评测/nightly/latest-trace-report.json
 
       # ── P0-2 批次 2/3（2026-10-03/04）：编排 checkpoint + 断点续跑 ──────────────
       - name: Guard 编排 checkpoint / resume（79 项 + 6 变异）
@@ -101,6 +177,13 @@ jobs:
       # 且用户完全无感），比不重投严重得多。
       - name: Guard 编排自动重投守护（23 项 + 4 变异，含 dry_run 零副作用）
         run: python tools/verify/verify_orch_supervisor.py
+
+      # ── 2026-10-22 晚：补接线 verify_partial_policy（提交 098780e 遗漏）──────
+      # 背景：同日 20:53 的「编排 partial 病因分类 + 自动补齐」提交带了门禁文件
+      #   但没进 CI ⇒ 门禁元门禁（verify_gate_wiring）判红：写了不接等于没写。
+      #   本行补上接线；门禁自身 71 项 + 变异已实测全绿（真实样本取自会话 9587）。
+      - name: Guard 编排 partial 补齐决策（71 项 + 变异，判错方向双向烧钱/毁交付）
+        run: python tools/verify/verify_partial_policy.py
 
       # ── Agent loop 护栏（2026-10-04）：token 预算 / 重复调用短路 / 工具超时 ────
       # 关键断言是 G6c/G6d：两条 ReAct 路径都不得出现裸的 self._exec_tool_call(，
@@ -215,10 +298,10 @@ jobs:
       # 实测 292 处直连读 SQL 高度分散（glossary.py 49 / pipeline 27 / ontology 25…），
       # 每一处都带着权限 / 分支 / 生命周期过滤（多租户隔离边界）⇒
       # 全量搬迁的收益是「架构整洁」（用户不可感知），风险是漏掉过滤条件。
-      # ⇒ 本门禁只做两件事：① 断言不超过基线 292；② 新增须登记豁免且**带理由**。
-      # 基线 292 由门禁自己的 scan_direct_sql() 实测得出 —— 第一版填了
-      # 另一套口径的 425（把三引号/f-string SQL 也算进去）⇒ 门禁一上线就虚设。
-      - name: Guard 分层绕过不增长（P1-10 · 基线 292）
+      # ⇒ 本门禁只做两件事：① 断言不超过基线；② 新增须登记豁免且**带理由**。
+      # 基线值由 tools/verify/verify_layering.py 的 BASELINE_DIRECT_SQL 持有
+      # （2026-10-21 重测为 323；历史 292 是过期值，2026-10-22 修正本注释）。
+      - name: Guard 分层绕过不增长（P1-10 · 基线见 verify_layering.BASELINE_DIRECT_SQL）
         run: python tools/verify/verify_layering.py
 
       # ── P2-1（2026-10-04）：列表 limit 边界语义统一 ───────────────────────
@@ -361,6 +444,12 @@ jobs:
       - name: Guard 工程归属 · 变异自证版
         run: python tools/verify/verify_p1_project_attribution_mutate.py
 
+      # ★ 2026-10-26：变异门禁**原地改写产品源文件**，运行窗口内产品文件是坏的
+      #   （实测：回归在跑时 git add -A，把 routers/sysml_versions.py 的变异体提交了）。
+      #   ⇒ 放在变异门禁**之后**做残留检查：变异体没还原干净就判红。
+      - name: Guard 变异残留（产品文件不得停留在变异体状态）
+        run: python tools/verify/verify_no_mutation_residue.py
+
       - name: Guard 重试与降级统计（三列契约 + 幂等）
         run: python tools/verify/verify_retry_fallback_stats.py
 
@@ -383,6 +472,17 @@ jobs:
 
       - name: Guard 编排触发白名单动态化（10 项）
         run: python tools/verify/verify_orch_whitelist.py
+
+      # ── settings 白名单收口（2026-10-23）：两个通用写入入口的准入 + 存量数据审计 ──
+      # 前者锁行为：合法键放行 / 无效键拒绝且不落库 / 含无效键整批原子不落 /
+      # 专用入口（project_repo 直写）不受误伤；后者锁数据：每个 settings 键必须
+      # 有真实消费点（只出现在 seeds/注释的 = 孤儿数据），指针类键必须指向真实
+      # 行。--strict 模式下发现无效键 exit 1（CI 门禁口径）。
+      - name: Guard settings 白名单收口（入口准入行为，非实现）
+        run: python tools/verify/verify_setting_keys_guard.py
+
+      - name: Guard settings 数据审计（每键有消费点 + 指针指向真实行）
+        run: python tools/verify/verify_settings_data_audit.py --strict
 
       - name: Guard Agent 绑定插件机制已移除（21 项）
         run: python tools/verify/verify_plugin_bind_removed.py
@@ -474,6 +574,12 @@ jobs:
 
       - name: Guard Agent 名称统一与级联改名（71 项 + 变异自证）
         run: python tools/verify/verify_agent_name_unify.py
+
+      # 防「虚构人名写进生产数据」回归（2026-10-23 米爸决策：mock 数据排查并
+      # 移除）。王工/李工/赵管类兜底人名曾作为审计/创建人默认值，看起来像
+      # "系统里有这三个同事"实际查无此人——门禁扫默认值/兜底值/种子数据。
+      - name: Guard 无虚构人名（审计/创建人兜底值不得写生产数据）
+        run: python tools/verify/verify_no_fake_actor.py
 
       - name: Guard 多工程作用域与新建任务归属（40 项）
         run: python tools/verify/verify_multi_project_scope.py
@@ -720,6 +826,20 @@ jobs:
       - name: Guard Bad Case 闭环（dry-run 人工关口 + 去重累加 + 告警指标/规则/冷却）
         run: python tools/verify/verify_badcase.py
 
+      # ── P0-a（2026-10-24 产品优化方案）：能力度量收口 ─────────────────
+      # capability_registry 统一注册处：五源表（tools/skills/plugins/mcp_servers/
+      # prompts）权威数据不动，本表只做物化投影（一个 capability_id 口径 + 一套
+      # 启停/发布态/版本语义 + 一张调用度量入口）。门禁八条判据：A 投影完整性
+      # （五源同构 LEFT JOIN 孤儿=0）/ B 无幽灵投影（删源行/插幽灵 reconcile 后
+      # 随之消失）/ C 度量五类齐（六种 tool_type 可落库 + 聚合口径精确）/ D 六处
+      # 挂载点 capability_id 赋值在位（行边界法抽取，抽取器自带完整性守卫）/
+      # E 版本非空（空版本归一 1.0.0）/ F 告警防假（metric 白名单，引用不存在
+      # 指标的规则=永不触发的假告警）/ G BadCase 闭环（apply 后 open>0 且 R5
+      # fired≥1）/ H 阳性对照（构造能力必有投影且 call_count=1）。退出码 0/1/2
+      # （2=守卫失效，禁止据此下任何结论）。真库段只读（CI 无库按惯例 SKIP）。
+      - name: Guard 能力度量收口（投影五源同构 + 无幽灵 + 六处收口 + 告警防假 + 闭环）
+        run: python tools/verify/verify_capability_registry.py
+
       # ── #18（2026-10-18 自进化调研路线图）：统一状态机 ─────────────────
       # 一个纯函数引擎 + 一张声明式注册表收口全仓状态字面量（MR/bad_case/V2G 双
       # 生命周期/文档生命周期/意图样本/HIL/flow_run/进化流水线模板机）。已接线
@@ -907,6 +1027,18 @@ jobs:
       - name: Guard 编排观测性 trace（span 树六类插桩 + 端点归属门，54 项）
         run: python tools/verify/verify_orch_span.py
 
+      # ── P0-b（2026-10-25）：生产回流五段闭环 ─────────────────────────────
+      # 采样（负反馈>低置信>随机5%）→ 自动评（确定性层只写建议）→ 人工标注
+      # （HIL 确认卡 eval_label）→ 转正三分流（intent_samples/qrels.jsonl/
+      # eval_gen_labels，幂等）→ 告警/周报可见（R12-R14 + 第七行动源）。
+      # 锁定的失效模式：auto 分自动转正（LLM 自循环）/ dry-run 不默认 /
+      # rejected 进 dataset / 转正不幂等 / 指标白名单外假实现。含 span 五类
+      # 闭环与挂载点静态扫描；变异自证走空输入（不摸产品文件——ENOSPC 下
+      # 原地变异还原失败会留残，2026-10-24/25 两次事故的教训）。阳性对照
+      # 失效 ⇒ exit 2。
+      - name: Guard 生产回流五段闭环（采样/自动评/标注/转正三分流/告警可见，34 项）
+        run: python tools/verify/verify_online_eval_loop.py
+
       # ── P1 replanning（2026-10-21）：执行中重规划第一阶段 ─────────────────
       # 观测与信号结构化：S3~S7 信号纯函数 + 每次判定落 kind=replan span 决策
       # 记录（含 action=none，"为什么不重画"与"为什么重画"同等重要）+ T1 补跑
@@ -1054,6 +1186,25 @@ jobs:
       # ⚠️ 刻意**不**排除 db 之外的路径：CI 跑在 checkout 出来的干净树上，
       #    门禁只读数据库（生产库不入库，见 .gitignore 的 mbse.db* 规则），
       #    因此工作区变脏**只可能**是脚本改文件。
+      # ── 2026-10-30 新增两个门禁（此前只在本机跑，未接进 CI）──
+      # 为什么必须接：`verify_gate_wiring` 的 W1a 明确要求"每个门禁要么进 CI、
+      # 要么带理由豁免"。不接 = 这两个门禁永远不会在合并前跑，
+      # 等于"写了判据但没人执行"（与配置谎言同型）。
+      - name: Guard 控制面（写类工具幂等 / 停滞自愈成本闸 / 预算层级真源，115 项 + 8 变异）
+        run: python tools/verify/verify_control_plane.py
+      - name: Guard 运行时稳定性（优雅关闭 / 并发闸 / 墙钟 / 超时保留产出，80 项 + 10 变异）
+        run: python tools/verify/verify_runtime_stability.py
+
+      # ── P0-3（2026-10-30）：意图评测必须**带区间**判定 ────────────────────
+      # 为什么这一步重要：此前"accuracy=0.9792"是**点估计**，而 n=48 时
+      # Wilson 95% 区间是 [89.1%, 99.6%]（宽 10.5 点）⇒ 门禁阈值落在区间内部，
+      # 红/绿由噪声决定。本步消费 checked-in 快照（`docs/评测/nightly/latest-intent-report.json`），
+      # 断言：语料 ≥300、生产语句 ≥200、区间可复现、与基线配对比较无系统性变差。
+      # 快照缺失时 `--allow-missing` 判 SKIP（PR CI 无 mbse.db，跑不了评测）。
+      - name: Guard 意图评测带区间判定（语料≥300 / 区间可复现 / 配对无回归）
+        run: |
+          python -X utf8 tools/verify/verify_intent_eval_ci.py --allow-missing
+
       - name: Guard 工作区洁净（门禁跑完不得留下任何改动）
         run: |
           git status --porcelain
@@ -1065,3 +1216,159 @@ jobs:
             exit 1
           fi
           echo "工作区洁净 ✓"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # nightly：模型相关评测（2026-10-22 新增，见评估 P1-1 / P1-2）
+  # ═══════════════════════════════════════════════════════════════════════
+  # 设计意图（工程自己的说法，对标 LangSmith / Dify的 eval-in-CI 分层）：
+  #   **确定性进 PR 阻断、模型相关 nightly 跑**。此前只有前半，
+  #   连带后果是 verify_intent_routing_baseline.py 因"自身不稳定"被豁免
+  #   ⇒ 模型语义层漂移完全无监控。本 job 补上后半。
+  #
+  # ⚠ 为什么单独一个 job 而不是塞进 tests-and-guards：
+  #   ① 耗时量级不同（分钟级 vs 秒级）；② 需要模型 secret；③ 允许 failure
+  #   不阻断 PR —— 夜间失败不让人卡在合并上，但要**发邮件让人看见**。
+  #   continue-on-error: true + 显式 notice 事件= "失败但不阻断，且不会被忽略"。
+  #   评估实测这两点是反模式：既没有 schedule（永远不跑），又有豁免清单
+  #   （跑了也不信）。这里两者都要避免。
+  nightly-evals:
+    runs-on: ubuntu-latest
+    continue-on-error: true          # 夜间失败不阻断 PR，但会发通知（见末尾）
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 Python 环境
+        run: |
+          python -m pip install --quiet --upgrade pip
+          pip install --quiet -r requirements.txt
+
+      # ── 不依赖语料的一段：意图路由评测（每日 03:17 真正在跑的语义监控）──
+      # 评估指出的"模型语义层漂移零监控"，缺口最大的一块其实**不需要语料**：
+      # run_ci_eval 自建干净库跑 builtin 集，verify_eval_routing 同理。
+      # ⇒ 这一段现在每天真跑（LLM 意图分类行为漂移次日可见）。
+      - name: 跑意图路由评测（干净库，不需要语料）
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -X utf8 tools/eval/run_ci_eval.py --report
+          python -X utf8 tools/verify/verify_eval_routing.py
+
+      - name: 判定语料是否可用（检索评测的前置条件）
+        id: corpus
+        run: |
+          # ⚠ 硬约束（实测）：mbse.db 约 378MB，**不入 git**（.gitignore 的 *.db）。
+          #   ⇒ 干净 checkout 上没有语料库，检索评测跑不出真实分数
+          #   （跑出来是 recall≈0，那是"没数据"不是"质量差"）。
+          #   而 doc 域的 gold 标注（章节 → 其下 chunk）**只能从真实语料推导**
+          #   —— 空库建出来的评测集没有意义。
+          #
+          # 方案决策（2026-10-22 逐一评估后记录在此，免得后来人重新调研）：
+          #   ③ 语料 md 入库重建 —— **证伪**：实测 14 份语料全是用户上传
+          #      （origin='upload'，含 14MB 的 OMG SysML v2 PDF），不在 git。
+          #   ① artifact 导出库 —— 可行但笨重：VACUUM 后仍 345MB（数据本身
+          #      就这么大），且**生产库含用户会话/附件，出网即敏感数据外流**。
+          #   ② 对象存储 + 加密快照 —— 最稳健，待用户提供 COS 桶与 secrets。
+          #   ④ 本地跑批器（**当前主路径**）：tools/eval/run_nightly_local.py
+          #      在本机定时跑同一套评测，报告 checked-in 到
+          #      docs/评测/nightly/latest-*.json，PR 门禁消费快照。
+          #      库不出机器、零新基础设施；代价是机器关机则当日不跑。
+          # ⇒ 在 ①② 落地前，本作业的检索段保持"显式失败并说明"，不静默绿。
+          if [ -f mbse.db ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 语料缺失时的处理：**显式警告，不再 exit 1**。
+      # 原设计是"失败并不静默绿"（防恒绿占位作业）—— 那是在本作业**什么都不跑**
+      # 的前提下成立的。现在意图段每天真跑，作业不再是占位；检索段每日失败
+      # 只会制造告警疲劳（结论永远是"未接线"，没有新信息）。
+      # 不静默的保证换成三样：①本步骤名与 ::warning:: 明说未接线及原因；
+      # ②注释里留全四方案决策矩阵；③ PR 门禁消费本地跑批器的 checked-in
+      # 快照（docs/评测/nightly/），检索指标的退化不会因为这里跳过而看不见。
+      - name: ⚠ 检索段未接线（语料库不入 git；方案决策见上方注释）
+        if: steps.corpus.outputs.found != 'true'
+        run: |
+          echo "::warning title=nightly 检索段未接线::mbse.db（约378MB，含用户会话/附件）不入 git，干净 checkout 无语料。"
+          echo "::warning::检索/生成质量评测的主路径是本机跑批器 tools/eval/run_nightly_local.py（报告 checked-in 后 PR 门禁消费）。"
+          echo "::warning::本作业的意图路由段（上方）不受影响，每日真跑。"
+
+      - name: 构建评测集（从真实语料派生 gold）
+        if: steps.corpus.outputs.found == 'true'
+        run: |
+          mkdir -p tmp/p21
+          python -X utf8 tools/eval/build_evalset.py
+
+      - name: 跑检索评测（含负对照）
+        if: steps.corpus.outputs.found == 'true'
+        env:
+          # 模型 secret：夜间才用，PR 上不可用故 PR job 不依赖它
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -X utf8 tools/eval/run_eval.py --tag nightly \
+            --control --out tmp/p21/eval_report_ci.json
+
+      - name: 门禁校验（消费上面产出的报告）
+        if: steps.corpus.outputs.found == 'true'
+        run: |
+          python -X utf8 tools/verify/verify_rag_eval_gate.py \
+            --report tmp/p21/eval_report_ci.json
+
+      # ── P0-3（2026-10-22）：生成质量评测（补断链③）────────────────────
+      # 读的是**生产 messages**（答案 + citations 全在库里），与检索评测
+      # 共用同一个 mbse.db（nightly 的库就是它的来源）。只读连接 + 零外部
+      # 依赖（不调 embedding/LLM）⇒ 比检索评测更轻，先跑它更有诊断价值。
+      # --llm-judge（2026-10-22 晚）：faithfulness 语义层只在本作业跑
+      #   （模型相关、有温度，不进 PR 阻断）；服务不可用 ⇒ 三态记账 +
+      #   门禁 SKIP，不把环境故障读成质量差。
+      - name: 跑生成质量评测（引用完整性/使用率/无据声称密度/接地信号 + LLM 忠实度）
+        if: steps.corpus.outputs.found == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -X utf8 tools/eval/eval_generation_quality.py --llm-judge \
+            --db mbse.db --out tmp/p21/eval_generation_quality.json --save
+
+      - name: Guard 生成质量评测指标不塌陷（报告即产即验）
+        if: steps.corpus.outputs.found == 'true'
+        run: |
+          python -X utf8 tools/verify/verify_generation_quality_gate.py \
+            --report tmp/p21/eval_generation_quality.json
+
+      # ── P0-1b（2026-10-22）：Trace 一致性评测（补断链②）────────────────────
+      # 消费 trace2dataset 产出的生产人工裁决样本（228 条），度量"当前
+      # 路由 ↔ 人工裁决"一致率。与生成质量同库同条件（mbse.db 在才跑）；
+      # --no-llm 保确定性（含 LLM 口径随服务波动，不适合进门禁）。
+      # ⚠ 前置依赖 build_evalset.py（上面已跑）—— 它默认附带构建
+      #   tmp/p21/trace_evalset.json；缺了它本步会显式失败并说明。
+      - name: 跑 Trace 一致性评测（生产人工裁决 ↔ 当前路由）
+        if: steps.corpus.outputs.found == 'true'
+        run: |
+          python -X utf8 tools/eval/eval_trace_consistency.py --no-llm \
+            --db mbse.db --out tmp/p21/eval_trace_consistency.json --save
+
+      - name: Guard Trace 一致性评测指标不塌陷（报告即产即验）
+        if: steps.corpus.outputs.found == 'true'
+        run: |
+          python -X utf8 tools/verify/verify_trace_quality_gate.py \
+            --report tmp/p21/eval_trace_consistency.json
+
+      - name: 上传评测报告为 artifact（供人工查看与趋势对比）
+        if: steps.corpus.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-eval-report-${{ github.run_number }}
+          path: |
+            tmp/p21/eval_report_ci.json
+            tmp/p21/eval_generation_quality.json
+          retention-days: 30
+
+      - name: 夜间失败通知（continue-on-error 不能等于"没人看见"）
+        if: failure()
+        run: |
+          echo "::warning title=nightly 评测失败::意图路由评测（不需要语料的那段）夜间运行失败。"
+          echo "::warning::检索段未接线是已知状态（见上方警告），**不是**本通知的原因。"
+          echo "::warning::请查看 Actions 日志定位，修好后重跑 workflow_dispatch。"
+          echo "::notice::检索/生成质量的主路径：tools/eval/run_nightly_local.py（本机跑批）。"

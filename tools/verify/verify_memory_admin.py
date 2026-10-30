@@ -13,6 +13,7 @@
 隔离：`MBSE_DB_PATH` 指向临时目录（写入类断言零污染）；生产库仅只读打开。
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import json
 import os
 import re
@@ -22,7 +23,7 @@ import tempfile
 import types
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_TMP = tempfile.mkdtemp(prefix="verify_memory_admin_")
+_TMP = mkdtemp(prefix="verify_memory_admin_")
 os.environ["MBSE_DB_PATH"] = os.path.join(_TMP, "t.db")
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)

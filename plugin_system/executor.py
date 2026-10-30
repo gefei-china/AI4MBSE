@@ -187,7 +187,13 @@ def run_mcp(plugin, tool, params=None):
 
 
 def execute(conn, plugin, tool, params=None, user=None):
-    """统一入口：按插件类型分发执行，并写 plugin_call_logs（审计闭环 P0）。"""
+    """统一入口：按插件类型分发执行，并写 plugin_call_logs（审计闭环 P0）。
+
+    P0-a（2026-10-24）：同时写 tool_call_logs 统一调用日志（call_kind='plugin'）。
+    此前沙箱试运行只写 plugin_call_logs——而生产路径的读取方全在 tool_call_logs
+    ⇒ 试运行流量在能力度量里不可见，plugin_call_logs 也就成了 0 行孤表。
+    两表并存：plugin_call_logs 保留（向后兼容），统一度量以 tool_call_logs 为准。
+    """
     ptype = plugin.get("type") or "bundle"
     t0 = time.time()
     if ptype in ("skill", "bundle") and (tool in ("skill", "skill/run", "") or ptype == "skill"):
@@ -199,5 +205,30 @@ def execute(conn, plugin, tool, params=None, user=None):
                    "success" if result.get("ok") else "error", latency)
     store.log_audit(conn, user, plugin.get("plugin_id"), "run",
                     {"tool": tool or ptype, "ok": result.get("ok")})
+    try:
+        # ★ P0-3（2026-10-27）：沙箱试跑是**独立请求**（无对话轮次）⇒ request_id 作 trace。
+        try:
+            from core.audit import current_trace_id as _ctid_pl
+            _tid_pl = _ctid_pl(fallback_request=True)
+        except Exception:
+            _tid_pl = ""
+        # S0（2026-10-28）探针标记（core/probe_mark）：沙箱试跑的假工具不能污染失败率
+        try:
+            from core.probe_mark import is_probe_tool as _ipt_pl
+            _probe_pl = _ipt_pl(tool or ptype)
+        except Exception:
+            _probe_pl = 0
+        conn.execute(
+            "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
+            "arguments, result, ok, latency_ms, capability_id, trace_id, is_probe) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("plugin_sandbox", "", str(tool or ptype), "plugin", "plugin", "{}",
+             str(result.get("result") or result.get("error") or "")[:2000],
+             1 if result.get("ok") else 0, latency,
+             "plugin:%s" % (plugin.get("plugin_id") or ""), _tid_pl,
+             # S0（2026-10-28）探针标记（core/probe_mark）
+             _probe_pl))
+    except Exception:
+        pass  # 统一度量落库失败不影响沙箱执行与既有审计
     conn.commit()
     return result

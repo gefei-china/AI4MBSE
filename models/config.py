@@ -11,6 +11,9 @@ class StaticConfigIn(BaseModel):
 
 
 class RuntimeConfigIn(BaseModel):
-    """动态配置更新：{"query_route": "graph_first", "default_project_id": "..."}"""
+    """动态配置更新：{"file_auto_extract_enabled": "1", "default_project_id": "..."}
+
+    合法键以 tools/verify/verify_settings_data_audit.py 审计结果为准（有真实消费点）；
+    2026-10-23 已移除 query_route / graph_confidence_threshold 等 5 个零消费点键。"""
 
     updates: Dict[str, Any]

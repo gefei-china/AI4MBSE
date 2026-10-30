@@ -13,9 +13,13 @@
 
 职责边界：
 - 本模块只管「静态/部署配置」（启动时确定，不随界面变化）。
-- 「动态配置」（运行时可通过界面调整，如 query_route / graph_confidence_threshold /
-  default_project_id 等）走 settings 表，由 routers/meta.py 提供 REST 管理，
+- 「动态配置」（运行时可通过界面调整，如 default_project_id / file_auto_extract_enabled /
+  entity_candidate_source 等）走 settings 表，由 routers/meta.py 提供 REST 管理，
   读取入口见 database.meta_repo（get_settings）。
+  ⚠️ 2026-10-23 审计：原举例的 query_route / graph_confidence_threshold 经全库消费点
+  扫描确认零读取表达式（仅存于本 docstring 与 seeds），已从 settings 表与种子中移除 ——
+  "可在界面调整"的旧描述不成立，勿再据本行把键写回（验证：
+  tools/verify/verify_settings_data_audit.py --strict）。
 
 典型用法：
     from core import config
@@ -91,6 +95,11 @@ DEFAULT_CONFIG = {
         "thinking_budget": 0,            # 给思考的独立上限（token）；0=不启用
         "thinking_reserve_tokens": 0,    # 给正文的保底额度（token）；0=不启用
         # 思考超限**告警**阈值（token）；0=不启用。★ 只留痕不拦截（拦截用 thinking_budget）
+        # ★ P1-5（2026-10-30）：上下文占用告警线（prompt/context_window）。
+        #   0=关。为什么要有：既有守卫只拦 "输出上限超窗口"（mt>cw），
+        #   对"输入把窗口吃掉"完全无信号（id=71 mt=112000/cw=128000 ⇒ 输入余量 15.5k）。
+        #   它是**留痕**不是拦截（真到顶由 provider 报错，不必我们猜）。
+        "context_util_warn": 0.85,
         "thinking_warn_tokens": 0,
         # 按 intent 分流思考（L1）。★ 未命中的 intent 不发 thinking 字段（保持原行为）。
         #   数据依据见 core/config.py 的 schema desc（廉价任务思考占 58~86% 属浪费）。
@@ -157,7 +166,13 @@ DEFAULT_CONFIG = {
     },
     "mcp": {
         "timeout": 15,           # MCP JSON-RPC 调用超时（秒）
-        "max_response": 4000,    # MCP 响应截断上限（字符）
+        # ★ 2026-10-27（会话 9629 实测）：4000 太小，会把**结构化信封切成非法 JSON**。
+        #   智源 export READ 一段就 32KB（{fileName,content,eof,sizeBytes}），
+        #   截到 4000 后 json.loads 直接失败 ⇒ 交付物归档判据全部落空（产物库空）。
+        #   这里只作**内存安全上限**（防单次响应打爆进程），不是「给模型看的长度」——
+        #   给模型看的长度由 agent 侧 _TOOL_MODEL_CAP=3000 + offload 引用块统一收口。
+        #   两个上限职责分离后，服务端才拿得到完整载荷去归档，模型侧也不会膨胀。
+        "max_response": 200000,  # MCP 响应安全上限（字符）；模型可见长度另由 agent 侧收口
     },
     "zhiyuan": {
         "base_url": "",          # MBSE 平台地址，如 http://mbse-platform:8080
@@ -203,19 +218,21 @@ DEFAULT_CONFIG = {
         "subtask_timeout_s": 600,        # P1-27：300→600（建模子任务实测 2~3 分钟，300s 余量太薄）
         # P0-7：agent_tasks 每会话保留的编排批次数（run_id 唯一化后防无界增长；只清终态旧批次）
         "keep_runs_per_conversation": 50,
-        # ── ⚠️ 2026-10-02（P0 配置审计）实测：本项是**死配置**，全仓零消费点 ──────────
-        # `grep -rn total_time_budget_s --include=*.py .` 只命中「本文件定义 + CONFIG_SCHEMA」
-        # 两处，**没有任何编排代码读它** ⇒ 原注释「超限终止剩余任务降级汇总」是**未兑现的承诺**
-        # （配置谎言：用户以为有全局兜底，实际没有）。
-        # 处置（刻意**不接线、不删除**）：
-        #   · 不接线 —— 实测真实编排耗时可达 849s（> 此处 600s），一旦接线会**中断正常长任务**，
-        #     属于"为了让配置看起来生效而破坏功能"，与"先保证功能跑通"相悖；
-        #   · 不删除 —— 键与 schema 保留，现场若确有需求可接线；删除反而会让已有配置文件里的
-        #     该键变成"静默失效的未知项"。
-        # 现状的等价兜底是逐子任务的 `subtask_timeout_s`（600s/个）+ `subtask_idle_timeout_s`
-        # （240s 无产出），它们**都在真实生效**（P0-7 实测）。
-        # 要真正启用全局预算：在编排子任务调度处加 deadline 检查，并同时把默认值改到 > 3600。
-        "total_time_budget_s": 600,  # ⚠️ 当前**未接线**（死配置），见上方说明；改它不会影响行为
+        # ── 编排批次总时间预算（2026-10-30 复活：此前是**死配置**）──────────────
+        # 历史（2026-10-02 实测）：本项是死配置，全仓零消费点 ⇒ "配置谎言"：
+        #   用户以为有全局兜底，实际改了不起任何作用。
+        # 为什么当时"刻意不接线也不删除"：实测真实编排耗时可达 849 s（> 此处 600 s），
+        #   一旦接线会**中断正常长任务** —— 属于"为了让配置看起来生效而破坏功能"。
+        # 为什么现在可以复活（2026-10-30，两个前提都变了）：
+        #   ① 整轮墙钟已落地：`runtime.chat_deadline_s`（默认 900s，覆盖实测均值 918s）
+        #      已在 ReAct 与编排两条路径上真实生效（`runtime_state.compute_deadline`）；
+        #   ② 默认值改为 **0 = 不启用** ⇒ 零行为变更，不会误杀 849s 的正常长任务。
+        # 现在的语义（**不产生第二个真源**）：
+        #   · 0（默认）→ 只受整轮墙钟约束；
+        #   · > 0        → **额外**加一道编排批次闸（更严格者先生效），
+        #                    由编排主循环检查 `_orch_deadline` 与本值共同决定。
+        #   这样"改它立即有效"（不再是说谎），又不与整轮墙钟抢优先级。
+        "total_time_budget_s": 0,      # 编排批次总预算（0=不启用，只受整轮墙钟约束）
         "max_depth": 3,          # 委派递归深度上限
         # ── 汇总环节输入预算（2026-09-20 新增；此前是 planner.py:54 硬编码 `[:500]`）──────
         # 背景（会话 368 实测）：汇总 LLM 每个子任务只看得到**前 500 字符**，而交付物实际
@@ -376,6 +393,34 @@ DEFAULT_CONFIG = {
     "intent": {
         "keyword_scored": True,    # 关键词层"竞争打分"（False = 回到"首个命中即 return"旧行为，A/B 用）
         "keyword_generic": True,   # 泛词是否参与打分（False = 泛词既不加分也不触发共现，A/B 用）
+        # ★ 2026-10-29（意图审计）：explain 前置短路是否**前置**。
+        #   改造前（True）：`_is_explain_ask` 命中即 return knowledge_qa@0.80，位置在
+        #   缓存/关键词/规则/语义/**LLM 全部之前** ⇒ 任何"含说明词"的句子都轮不到 LLM 主裁判。
+        #   实测误判（2026-10-29，conv 真实输入）：
+        #     「你好 介绍下你的能力边界」→ knowledge_qa@0.80（应为闲聊）
+        #     「用一句话介绍热管理系统」等 9 条 confirmed 正例同样走这条前置。
+        #   改造后（False）：explain **降级为末尾兜底** —— 先让规则层/语义层/LLM 主裁判裁决：
+        #     LLM 判具体意图 → 采信；LLM 判 chat → 落 chat 兜底桶（verdict=chat_real）；
+        #     LLM 判不出 → 才回落 explain 兜底 knowledge_qa@0.80。
+        #   ⚠️ 代价（实测）：explain 类输入每次多一次 LLM 调用（仓库记录约 3.6s/条）。
+        #   ⚠️ 默认 True = 改造前行为（代码层零回归，回退位明确）；生产启用请在
+        #      `~/.workbuddy/mbse_config.json` 里显式置 false。
+        "explain_preempt": True,
+        # ★ 2026-10-29（意图审计）：**言语行为层**（speech-act gate）开关。
+        #   判"问 vs 做"：名词化形态（"生成**条件**"）→ knowledge_qa；自指元问题（"你的能力边界"）→ chat 桶。
+        #   位置：review 强信号之后、建模强信号正则之前（否则「参数视图的生成条件」被"视图…生成"抢走）。
+        #   实测（confirmed 48 条）：**修正 4 条真实误判 / 误伤 0 条**。
+        #   False = 回到改造前行为（零回归回退位）。
+        "speech_act": True,
+        # ★ 2026-10-29（多意图实测）：L1 阶段连词（先…再…/然后/最后）是否允许**同意图多阶段**。
+        #   背景：「先生成结构视图，再生成参数视图」是两个不同视图、同一 intent(design)，
+        #   按意图去重 ⇒ 切成 0 段。放开后可切 2 段。
+        #   **但实测为净负，故默认 False**（`tests/manual_verify/eval_multi_intent.py` 18 条）：
+        #     关闭：accuracy 0.944 / precision 1.000 / F1 0.933 / 序列匹配 0.875
+        #     开启：accuracy 0.889 / precision 0.875 / F1 0.875 / 序列匹配 0.750
+        #   并连带把「先需求分析→方案设计→生成 sysml 代码」由 2 段拆成 3 段（末段同为 design）。
+        #   保留开关：把"粒度按意图还是按交付物"留成可 A/B 的产品口径项，而不是写死一个方向。
+        "multi_same_intent_stage": False,
         "sample_collect": True,    # 真实请求是否把用户输入采集进意图样本池（设置页「意图样本」的数据来源）
         # P1-31（2026-10-02）意图级缓存开关。**默认关**，依据是实测而非偏好：
         #   缓存收益 = 重复率 × 真实调用量，两项都极小 —— 真库 `messages` 近 7 天仅 **18 条**
@@ -391,6 +436,20 @@ DEFAULT_CONFIG = {
         # 触发面刻意收窄到"系统自己没把握"：llm_weak / fused_conflict / semantic_weak / llm<0.85 /
         # 完全无信号但像在求助；有把握的（规则命中/两路互证/高置信语义/会话继承）一律不打断。
         "confirm_when_unsure": True,
+        # ── 2026-10-23（米爸拍板）：LLM 主裁判（llm_first，默认开）──────────
+        # 行业共识（Coze 意图节点 / LangGraph 生态）：LLM 是主裁判而非高门槛兜底，
+        # 配套 = 每意图 few-shot 示例 + unsure 一等出口 + 澄清卡（"router without
+        # unsure is a misrouting machine"）。规则强信号快路径保留不动（0.92/0.95）。
+        # ⚠️ 吸收三轮实测教训（预算→report@0.60 误判 / 噪声上文 7/9 误判 /
+        #   "不存在安全阈值"）：**收益来自 few-shot 与 unsure→澄清，不是放宽门槛
+        #   或放松上下文** —— 上下文纪律（v2 只确认不改判）原样保留。
+        "llm_first": True,
+        # LLM 主裁判直接采纳门槛（规则无信号时）。0.75 = 旧 0.85 与被实测否决的
+        # 0.60 之间的保守起点；上线后用 confirmed 样本池标定（P2）。
+        "llm_first_min_conf": 0.75,
+        # 弱采纳下限：0.50~0.75 的非 chat 猜测 ⇒ 不静默执行，转**澄清卡**
+        # （"确定不了就别硬选"既有机制）；低于 0.50 或 unsure ⇒ 回退旧路（继承/chat）。
+        "llm_first_weak_conf": 0.50,
         # 2026-10-17（米爸反馈"澄清卡每次都是固定 4 项"）：意图确认卡的候选选项数上限。
         # 候选主序 = 本次输入的语义意图级排名（动态），不足才按 Agent 注册序兜底填满。
         # 10 = 一屏滚动内可览尽；前端选项区限高滚动，卡片不会被撑长。
@@ -441,6 +500,16 @@ DEFAULT_CONFIG = {
         #      ⇒ 默认关 = **线上行为与改造前逐字节一致**（零回归）；
         #      开关打开前请先用 tools/calib/eval_intent_baseline.py 做 A/B 对比。
         "rule_llm_confirm": False,
+        # ── 2026-10-27：意图理解摘要（agent/intent_brief.py）──────────────────
+        #   用户反馈：「意图识别环节总是匹配到具体的 agent，不能提供更好理解的内容吗？
+        #   比如对于用户意图的分析与总结 —— 用户到底想要什么」。
+        #   stage 事件因此新增 `brief` 字段（goal/need/basis/missing），零额外 LLM 调用：
+        #   goal 复用 task_decompose 的 slots.goal，没有就**忠实复述用户原话首句**。
+        "brief_enabled": True,        # 是否下发 brief（False = 回到只显示 agent 名的旧行为）
+        # 判"输入过短、可能没说清"的阈值（字符数）。只影响 brief 里那句**提示**，
+        #   不触发任何打断（弹卡仍由 needs_clarification / 内容级澄清决定）。
+        "brief_short_chars": 8,
+        "brief_missing_check": True,  # 是否做上述"过短输入"提示（关掉则 missing 恒空）
     },
     # P1-4（2026-10-01）会话槽位（DST slots）治理：合并口径 + 入参净化。
     #   三层根因与实测见 agent/pipeline_parts/common.py 顶部注释。
@@ -461,11 +530,25 @@ DEFAULT_CONFIG = {
     "context": {
         "history_immediate_turns": 6,   # 即时窗口轮数（原文逐字注入）
         "history_mid_turns": 20,        # 中期窗口轮数（LLM 摘要压缩）
-        "history_msg_max_chars": 1500,  # 单条消息截断上限（字符）
+        # ★ 2026-10-27（截断清单 P0-A1/A3）：单条消息**固定字符上限**默认**取消（0=不限）**。
+        #   为什么必须取消（实测）：原 1500 把 456 条消息里 **99 条（21.7%）** 裁掉，
+        #   累计丢 **468,727 字符**；其中 2 条是**用户输入**（msg 4761 贴 V2 代码
+        #   12,476→1,500，丢 88%）⇒ 模型只看到代码前 12%，"校验代码"类任务必然失败。
+        #   更关键的是**位置错了**：窗口 128k、历史预算 32k token（ratio 0.25），
+        #   实测只用 5,922（**18.5%**）—— 先按 1500 砍再谈 32k 预算，等于预算形同虚设。
+        #   现在口径：**先按预算装**，装不下由 `push_raw` 的份额 / `_clip` 的预算裁剪
+        #   负责（且必带"此处因上下文预算省略 N 字"标记，不静默）。
+        #   填 >0 = 恢复固定上限（仅用于"刻意压小块"的调试场景）。
+        "history_msg_max_chars": 0,     # 单条消息截断上限（字符）；0=不限，交给预算与份额机制
         "history_summary_chars": 800,   # 中期摘要上限（字符）
         "topic_sim_threshold": 0.15,    # 话题切换相似度阈值（相邻用户消息 bigram 余弦，低于则开新话题）
         "topic_label_chars": 14,        # 话题标签长度（取段首用户消息前 N 字符）
-        "topic_current_max_msgs": 8,    # 当前话题原文注入最大消息数
+        # ★ 2026-10-27（截断清单 P1-A2）：8 → 20。
+        #   实测（conv 9629）：用户 msg 4869 定下工程名，17 条之后 msg 4899 提问时
+        #   4869 **已滑出 8 条窗口**（同窗口内恰好有 4 条助手回复复述了工程名才没丢）
+        #   ⇒ 工程/分支/版本这类会话级事实随时可能丢。20 = 与 history_mid_turns 对齐。
+        #   （另有 agent/conv_anchors.py 把这类事实落成锚点、彻底与窗口解耦，本项是第二道。）
+        "topic_current_max_msgs": 20,   # 当前话题原文注入最大消息数
         "topic_boundary_keep": 2,       # 话题切换边界保留上一话题原文条数（保证切换语义连续）
         "topic_retrieve_topk": 6,       # 会话内语义拉回的历史片段条数
         "topic_retrieve_threshold": 0.15,  # 语义拉回最低相似度（低于不注入；对齐 intent 语义兜底经验值）
@@ -476,7 +559,9 @@ DEFAULT_CONFIG = {
         #      助手此前产出的结论/版本一条都进不来（实测 conv=1 的 top-6 全是 user）；
         #   ③ 丢弃与当前输入逐字重复的拉回块（高相似度 ≠ 有信息量）。
         "history_raw_min_share_tokens": 96,   # 原文段每条的最小 token 份额（均分的下限）
-        "topic_retrieve_per_role_cap": 3,     # 拉回分角色配额（user/assistant 各 ≤N，0=不限制）
+        # 2026-10-27（截断清单 P1-A5）：3 → 5。拉回条数 topk=6 时，3 的配额会让
+        #   「每角色各 3」永远先占满、把名额吃光（两角色即 6）；5 给单角色留出补齐空间。
+        "topic_retrieve_per_role_cap": 5,     # 拉回分角色配额（user/assistant 各 ≤N，0=不限制）
         "topic_retrieve_drop_echo": True,     # 拉回块与当前输入逐字重复时丢弃
         # P1-4b（2026-09-21）标定修订：原 0.35 为经验值。标定脚本 tools/_topic_threshold_calibrate.py
         # （分位等价映射，真 embedding dim=1024，153 条真实 query）实测：**0.35 的判定通过率高达 99.3%**
@@ -490,7 +575,9 @@ DEFAULT_CONFIG = {
         #   bigram top1 p90=0.4267 / max=0.6092；0.5 的等价 dense 分位 = 0.7855（正例率 8.4%）。
         #   标定法同 embedding 组（分位等价映射）；脚本：calibrate_dense_thresholds.py
         "semantic_fallback_gate_dense": 0.79,
-        "model_context_chars": 800,     # 建模上下文注入上限（字符，当前模型状态工作记忆）
+        # 2026-10-27（截断清单 P2-C8）：800 → 1500。实测摘要块里"最近变更/活跃视图"
+        #   常在 800 处被腰斩，模型据此重复建模（建了已有元素）。1500 ≈ 750 token，成本可忽略。
+        "model_context_chars": 1500,    # 建模上下文注入上限（字符，当前模型状态工作记忆）
         # P0（2026-09-19）：建模上下文的**既有实体**注入形态（实现在 memory.py::_build_model_context）。
         # 实况：实体原先按 branch 无条件「列名字」注入 → 把上一任务的领域素材带进本轮（会话 351 实测：
         # 电动汽车 TMS 任务被注入「巡飞弹/动力分系统」，子 Agent 因此拒绝产出代码 → 全链断裂）。
@@ -527,7 +614,15 @@ DEFAULT_CONFIG = {
         #   占比键 > 0 → 用「窗口 × ratio」；否则回退绝对值键（保持向后兼容）。
         #   默认占比：检索 15% / 历史 25%（合计 40%，给system 本体与工具留 60%）。
         "budget_retrieval_ratio": 0.15,  # 检索区占窗口比例（>0 覆盖绝对值键；0=用绝对值）
-        "budget_history_ratio": 0.25,    # 历史区占窗口比例（>0 覆盖绝对值键；0=用绝对值）
+        # ★ 2026-10-27（截断清单 A4 落地时实测修正）：0.25 → 0.35。
+        #   为什么改（不是拍脑袋）：取消单条硬截后，历史区**真的用满了** ——
+        #   真库 conv 9586（用户两次贴代码：12,476 + 8,411 字 = 14,810 token）实测：
+        #     · ratio 0.25（raw_cap 16,000 token）⇒ 老那条仍被裁到 9,229 字；
+        #     · ratio 0.35（raw_cap 22,400 token）⇒ **两条完整进入**，助手各轮也基本不裁。
+        #   这与「能不加的限制先不加，不要为省 token 让流程走不通」一致；
+        #   窗口 128k × (检索 0.15 + 历史 0.35) = 50%，距总闸 0.75 仍有余量。
+        #   ⚠️ 该值在「设置 → AI 上下文管理」可调（budget_history_ratio）；换小窗口模型时下调。
+        "budget_history_ratio": 0.35,    # 历史区占窗口比例（>0 覆盖绝对值键；0=用绝对值）
         # 绝对值兜底（占比键为 0 时才用；保留以支持"刻意压小块"的调试场景）
         "budget_retrieval_tokens": 2600, # T6 token 驱动预算：检索区上限（保头，保留最相关）
         "budget_history_tokens": 2000,  # T6 token 驱动预算：历史区上限（当前话题原文50%/语义拉回75%/分话题摘要剩余）
@@ -553,7 +648,9 @@ DEFAULT_CONFIG = {
         # ⚠️ **无产物会话 → 空串 → 各处完全不加段落**（提示词逐字节不变）—— 这是零回归的保证，
         #    也是验收断言 D1 的对象。三键都可回退（enabled=false 即回到改动前行为）。
         "artifact_digest_enabled": True,   # 会话产物摘要开关（false = 回退到改动前行为）
-        "artifact_digest_max_chars": 900,  # 摘要字符上限（<=0 不限）
+        # 2026-10-27（截断清单 P2-C7）：900 → 1500。摘要里"最近 N 个版本 + 产物标题"
+        #   在 900 处常被砍到只剩前两条 ⇒ 模型看不到上一轮刚建的那份，重复产出。
+        "artifact_digest_max_chars": 1500, # 摘要字符上限（<=0 不限）
         "artifact_digest_versions": 3,     # 摘要中列出最近 N 个 SysML 模型版本
         # P1-7（2026-10-01）：标题恰为系统性兜底名（AI 生成文档/报告、{kind}产物）的产物行整行不列。
         # 判据单一真源 = core/artifact_titles.py；实测占位名占真库 artifacts 的 35.7%，
@@ -562,6 +659,54 @@ DEFAULT_CONFIG = {
     },
     "reasoning": {
         "direct_merge": True,        # 推理结果直接并入图库（跳过审核队列）；false=恢复「提交审核→审核队列」门禁
+    },
+    "context_audit": {
+        # ── P0-2（2026-10-26）：上下文分块 token 归因 ──
+        # 背景：`llm_usage_stats` 只记**整包** prompt_tokens（生产实测 chat_probe 均值
+        #   12,511 / 峰值 64,552 token），**无分块归因** ⇒ 无法回答"这轮 token 花在哪"。
+        #   历史上两次真实损失（总闸静默空转 / 流式路径腰斩 82% prompt）都因"看不见"而延迟发现。
+        # 归因点在 `assemble_system_prompt`（块边界本就已知 ⇒ 零额外切分成本）。
+        # 落库：context_audit（块级）+ context_audit_summary（每 trace 聚合 + 去重后指标）。
+        "enabled": True,          # 总开关；关闭时零开销（record_blocks 直接 return）
+        # 以下为**下游修复项**的阈值开关（本次一并落地，默认值即修复后行为）：
+        "retrieval_per_doc_max": 2,   # 检索注入：同一 source_doc 最多占几个槽（3 槽时 ≤2）
+        "retrieval_merge_neighbor": True,  # 检索注入：同文档近邻 chunk（|Δindex|≤2）合并为一条
+        "memory_single_source": True, # 记忆注入：以 rag.memory_hits 为唯一真源，消除双路重复
+        "memory_max_chars": 200,      # 记忆注入正文截断（两条路径统一口径）
+        # ★ 2026-10-29：记忆中的「用户叫X」身份声明剥离。
+        #   实测：长期记忆存有「用户叫米巴…」（tier=core，无条件常驻注入），
+        #   而登录账号是 gefei ⇒ 模型优先用记忆里的自报名称呼用户（输出"你好，米巴！"）。
+        #   True = 有登录身份时把身份声明子句从记忆里剥掉（其余偏好照常注入），
+        #   且用户上下文块显式声明"称呼以当前用户为准"。置 False = 退回旧行为。
+        "memory_identity_strip": True,
+        "jit_fallback_top_n": 8,      # JIT 语义预筛空回退时取 top-N（替代全量注入）
+        # ── P0-6（2026-10-26）：MCP 工具元数据与按需暴露 ──
+        # 背景：MCP 工具此前 description 全是同一句模板、parameters 全是宽松空壳
+        #   （实测 71 个工具 description 去重后仅 1 种）⇒ JIT 零区分度 + 模型无从下手。
+        "mcp_meta_enabled": True,     # 是否使用 mcp_servers.tool_meta（真实描述+参数契约）
+        "mcp_min_keep": 8,           # 每个 MCP server 至少暴露几个工具（0=不保底；兼容旧行为）
+        "mcp_top_n": 0,               # 每个 MCP server 暴露总量上限（0=不限）
+        # ── P0-7（2026-10-26）：role 块内「工具手册段」按需裁剪 ──
+        # 背景（实测，生产快照 + 真实 execute 链路）：
+        #   `智源对接agent` 的 system_prompt = 14,538 字符 / 8,995 tok，
+        #   其中 14,531 字符（**100%**）是 58 个 MCP 工具的手册，非工具叙述仅 7 字符；
+        #   其余 16 个 active Agent 手册占比**全为 0%**（本开关对它们零影响）。
+        #   上一轮已把 MCP 工具按需暴露到 8 个 ⇒ 手册里 50 个工具的说明对应工具
+        #   本轮根本没进 payload ⇒ 纯噪音；MCP server 离线时更是 100% 死重。
+        # ⚠️ **默认关闭**：这是改「模型可见内容」，风险高于纯注入量优化。
+        #   先在 diagnostics 看 `role_manual_dropped_chars`，确认任务正确率不掉再开。
+        #   兜底完备：无手册段 / 暴露集为空 / 切分不自洽 ⇒ 逐字节原样返回。
+        "role_manual_filter": False,
+        # ── P0-9（2026-10-26）：MCP 显式绑定工具豁免技能白名单 ──
+        # 实测：`智源对接agent` 绑了 MCP(71) + 技能「智源平台管理」(allowed_tools 6 项)，
+        #   技能命中后白名单把绑定的 MCP 工具**全部裁掉**：查询工程列表 8 MCP → **0**，
+        #   而白名单里 5 个 `zhiyuan_*` 未以 type='tool' 绑定 ⇒ 进不了候选
+        #   ⇒ 「授了拿不到、却把已有的全撤销」，且静默无日志。
+        #   这是 2026-10-16「绑 71 个只露 6 个」事故的真正根因之一（当时归因为 JIT）。
+        # 语义依据：绑定 MCP 与绑定技能是同一管理员的两次显式授权；
+        #   技能 allowed_tools 表示「本技能只需这些」，不表示「撤销其它已授权工具」。
+        # 置 False ⇒ 逐字节退回改动前（白名单连 MCP 一起裁）。只豁免 MCP，内置/DB 工具仍受限。
+        "mcp_exempt_skill_whitelist": True,
     },
     "memory": {
         "forget_enabled": True,      # 遗忘引擎开关
@@ -599,6 +744,27 @@ DEFAULT_CONFIG = {
         #  真实阈值需等生产出现第一个真实互斥对后再标定（届时开开关并观察）。
         #  现在取 0.5 的理由：宁可多报候选（互斥词已是很强的过滤器）也不漏。
         "conflict_detect_sim_high": 0.5,  # 同键候选的相似度下限（**未在真向量口径下标定**，见上）
+        # ── P0#1 显式记忆触发器（2026-10-28 落地）──
+        # 把"是否查/写记忆"从隐式（intent 标签 + 提取门限）升级为任务级显式判断。
+        # 全部默认**放行**（零行为漂移）；仅对明确该跳过的才跳（寒暄跳过召回、排除 intent 跳过写回）。
+        "recall_trigger_enabled": True,   # 读触发总开关（关=每轮都召回，回退旧行为）
+        "deposit_trigger_enabled": True,  # 写触发总开关（关=每会话照常尝试沉淀）
+        "recall_skip_intents": "",        # 永不召回记忆的 intent 列表（逗号分隔，默认空）
+        "deposit_skip_intents": "",       # 永不沉淀记忆的 intent 列表（逗号分隔，默认空）
+        # ── P0#2 融合排序五维（2026-10-28）──
+        # ⚠️ 生产库实测（mbse.db，agent_memory 252 行）后**如实标注**，勿再凭直觉填：
+        #   ① `relevance` 是**死列**：252/252 全为默认值 1.0，`deposit` 的
+        #      `extra.get('relevance',1.0)` **从未有调用方传过非默认值**。
+        #      ⇒ 它现在只是中性因子（乘 1.0），不构成真实维度；待有真实赋值来源后自然生效。
+        #   ② `source` 的真实取值**只有 3 种**（不是猜测的 agent/push/flow）：
+        #      llm_agent=186 / reflow=56 / rule_agent=10。
+        #   ③ 为何**默认空（不配 credibility）**：试过用 access_count 反推来源可信度，
+        #      结果被数据否掉 —— rule_agent 平均访问 239 次最高，但抽查发现它装着
+        #      「# MBSE 任务汇总最终报告」这类长报告壳（正是文档主体污染）。
+        #      **访问高 ≠ 可信，反而可能是长文本 bigram 更容易撞 query 在吸流量**。
+        #      ⇒ 无可靠依据时不配，避免引入未标定偏差。
+        #   若要配，形如 "llm_agent=1.0,reflow=0.95,rule_agent=0.85"（**须先有标定依据**）。
+        "source_credibility": "",
     },
     # ── 实体归一消歧（P1-1，2026-10-11）──
     # ⚠️ 此前 entity_resolver.py 把 0.92 / 0.62 写成函数体内的**裸字面量**，既不可配也**无法关闭自动合并**；
@@ -741,7 +907,7 @@ DEFAULT_CONFIG = {
         #     与 L0 卡里「有硬错就调 autofix」都**没有前提**：
         #     模型压根看不到这个工具 ⇒ 实测 autofix 调用 **0 次**。
         #   ⇒ 修复的**第一前提**是"它得在清单里"，这才是根因。
-        "core_keep_extra": "sysml_v2_validate,sysml_v2_autofix",
+        "core_keep_extra": "sysml_v2_validate,sysml_v2_autofix,zhiyuan_sysmlv2_gen,zhiyuan_sysmlv2_check,zhiyuan_sysmlv2_import",
         # ★ 2026-10-13：把 `tools.input_schema` 真值注入 function-calling payload（开关，可回退）。
         # 背景（对标取证）：`_build_tools_def` 的 SQL **已经 SELECT 了 t.input_schema**，
         # 但 candidates 是 4 元组、没有 schema 位，`:94` 直接丢弃；随后 `:280/:290` **两个分支**
@@ -755,6 +921,15 @@ DEFAULT_CONFIG = {
         #    本开关关掉即回到改动前行为（宽松 schema），保证可回退。
         # ⚠️ 解析失败一律降级为宽松 schema，**不得因单个脏 schema 拖垮整次工具定义构建**。
         "inject_input_schema": True,
+        # ── S2（2026-10-29）把「历史被拒字段」注入工具描述 ──────────────────
+        # 背景（真库实测）：`mcp_servers.tool_meta` 里 schema **为空**
+        #   （properties=0 / required=None）⇒ 本地拿不到字段契约；
+        #   而服务端每次拒绝都在 `fields[].expected` 给出真实字段清单。
+        #   实测代价：错字段 `value` 近 7 天在 **8 个会话**里各犯 1~11 次
+        #   （conv 9629 犯 11 次），因为提示追加在长结果末尾、模型不采纳。
+        # 本开关=开 ⇒ 失败时学到"该工具认哪些字段"，下次构建工具定义时前置进描述。
+        # 关⇒ 完全回到旧行为（不注入任何 hint）。
+        "inject_arg_hints": True,
     },
     "subtask_protocol": {
         # ── 交付协议契约是否注入子任务 query（2026-10-13，批次二 P2-2）──────────
@@ -963,6 +1138,23 @@ DEFAULT_CONFIG = {
         "orphan_ttl_s": 1800,
         "reap_on_startup": True,     # 启动时执行回收；排障期可置 False 临时关闭
         "reap_dry_run": False,       # True = 只报告不改写（上线灰度/排障用）
+        # ── 2026-10-30：运行时稳定性四键 ──
+        # 为什么这四个必须有默认值（不只是"补齐更规范"）：
+        #   本仓 `DEFAULT_CONFIG['agent']` 就是 None（26 个键全靠 `get(..., default)` 兜底），
+        #   那种形态的直接后果是**设置页显示空白、无法反映真实生效值**（已列入
+        #   《能力中心插件盘点与设置页参数体检》的未修项）。新键不重复这个坑。
+        "max_concurrent_streams": 8,     # 全局并发流上限（每路占 1 个 daemon 线程 + LLM 连接）
+        "queue_wait_s": 2.0,             # 并发闸排队窗口；超时快速失败而非无限排队
+        "chat_deadline_s": 900,          # 单轮墙钟（实测编排 avg 918s / max 1155s 的折中）；0=不限
+        "shutdown_drain_s": 30,          # 关闭排空（uvicorn graceful 与 lifespan 共用）
+        # ── 2026-10-30 P0-1：写类工具幂等键（durable execution 第一步）──
+        # 为什么要有：引擎（Temporal/DBOS/LangGraph）**不会**替你做幂等 ——
+        #   行业原话："pass an idempotency key to anything with side effects"。
+        #   本工程的"同一步被重跑"有两处真实路径：编排重试（同 key 原地重派）
+        #   与断点续跑（沿用原批次号）⇒ 写类工具会执行两次 ⇒ 重复写入。
+        "tool_idempotency_enabled": True,   # 写类工具幂等闸总开关（关 = 回到改动前行为）
+        "tool_idempotency_scope": "subtask",  # 作用域：subtask=只在编排子任务内生效（默认）/ off=全关
+        "tool_idempotency_ttl_s": 86400,    # 幂等记录保留时长（秒，默认 24h）
     },
     # ── P0-2 持久执行：编排检查点与断点续跑（2026-10-03）────────────────────────
     # 默认**不做自动重投**：进程起来后自动恢复所有中断批次看似美好，实则危险 ——
@@ -976,13 +1168,30 @@ DEFAULT_CONFIG = {
         "resume_include_failed": False,  # 是否连带重跑 failed 任务（默认否：可能有副作用）
         "auto_resume_on_startup": False, # 启动自动重投（默认关，理由同上）
         # ── P0-2b（2026-10-04）：自动重投守护（core/orch_supervisor.py）──
-        # 默认**关**，与 run_registry.reap_on_startup（启动必跑）刻意不同：
-        #   孤儿回收只改状态、零副作用；**自动重投会真的调 LLM 烧额度**。
-        # 开启前建议先跑几轮 scan_once(dry 观察) 看清它会投哪些批次。
-        "auto_resume_enabled": False,      # 总开关（守护线程是否启动）
+        # ── 2026-10-30（P0-2）改为**默认开**，但加了三道成本闸 ──
+        # 为什么改：停滞自愈是 durable execution 的核心能力；本仓已有
+        #   checkpoint / resume / 租约队列全套骨架，缺的只是"没人点的自愈"。
+        #   而"默认关"意味着能力存在但**永远不会被使用**（配置即功能）。
+        # 三道成本闸（缺一即可能烧掉额度）：
+        #   ① `auto_resume_max_runs`=1  单轮最多重投 1 个批次；
+        #   ② `auto_resume_daily_budget`=5  每日自动重投总次数上限（按 UTC 日计数）；
+        #   ③ `auto_resume_include_failed`=False  不重跑已 failed 的任务（有副作用风险）。
+        # 手动点「继续编排」走的是同一条路径但**不受**②限制（那是用户的明确意图）。
+        "auto_resume_enabled": True,       # 总开关（守护线程是否启动）
         "auto_resume_interval_s": 300,     # 扫描周期（与 alert_loop 同量级）
-        "auto_resume_max_runs": 3,         # 单轮最多重投几个批次（防一次性打爆额度）
+        "auto_resume_max_runs": 1,         # 单轮最多重投几个批次（防一次性打爆额度）
+        "auto_resume_daily_budget": 5,     # 每日自动重投总次数上限（0=不限；按 UTC 日计数）
         "auto_resume_include_failed": False,  # 是否连带重跑 failed（默认否：可能有副作用）
+        # ★ 2026-10-30（P0-1）：`failed` 里"进程死亡"这一类（error_class=interrupted）
+        #   单独放行 —— 它的重跑等价于续跑，前提是写类工具幂等已开启
+        #   （`core/idempotency.py`，关掉则本开关自动失效、行为退回改动前）。
+        #   为什么与 auto_resume_include_failed 分开：后者会连带重跑**确定性失败**，
+        #   只烧钱不解决问题；而 interrupted 是本工程最大的失败源（failed 的 24%）。
+        "resume_interrupted": True,
+        # ★ 2026-10-30（P0-1）：自动重投的**年龄闸**。超龄批次不自动投（转人工），
+        #   避免"三天前的问题今天冒出一个答案"。0=不限。
+        #   注意它与"可续跑"是两件事：超龄批次仍可在界面上人工点「继续编排」。
+        "auto_resume_max_age_s": 259200,   # 3 天
         "checkpoint_enabled": True,      # 旁路开关：检查点写入失败永不阻断编排
     },
     # ── P0-C（2026-10-04）：异步作业队列（长任务提交即返回 job_id）──
@@ -1045,6 +1254,33 @@ DEFAULT_CONFIG = {
         "reopen_on_recur": True,     # 已 triage 的主题复现时重开（否则告警闭环对复发失明）
         "alert_threshold": 5,        # 默认告警线（open 数 ≥N 触发；也可在 alert_rules 自建规则）
     },
+    # ── 技能自改进判据（2026-10-29 登记）──────────────────────────────
+    # ⚠️ 背景（实测暴露的真缺陷）：`skill_improve.py` 用 `_cfg.get("skill", ...)` 读这组参数，
+    #   但本组**此前既不在 DEFAULT_CONFIG、也不在 CONFIG_SCHEMA** ⇒ 两个后果：
+    #     ① 设置页 UI 不渲染（`schema()` 只遍历 CONFIG_SCHEMA）；
+    #     ② `save_override()` 直接抛错「未知配置项: skill.improve_fail_ratio」
+    #        ——它是白名单校验（core/config.py:save_override）。
+    #   ⇒ 判据参数实际**埋在代码默认值里，运维既看不见也改不了**
+    #     （手写 JSON 能生效，但得先知道键名，等于没有可运维性）。
+    #   这与本仓反复出现的"同一判据散在多处"是同一族问题：**判据该在配置层，不该埋在代码里**。
+    #   本次登记**零行为变化**（默认值与代码原默认完全一致），只是让它可见、可改、可审计。
+    "skill": {
+        "self_improve_enabled": True,   # 技能自改进总开关（关=不扫描候选、不出草稿）
+        "improve_min_fail": 3,          # 绝对失败次数下限（与 improve_fail_ratio 取 AND）
+        "improve_min_uses": 10,         # 绝对使用次数下限（同上）
+        # 失败率下限（fails/uses）。2026-10-29 由 0.3 调到 0.12，理由见下方 abs 通道注释。
+        "improve_fail_ratio": 0.12,
+        # ★ 2026-10-29 新增「绝对失败数」通道（OR 通道，补比例判据的结构性盲区）：
+        #   纯比例判据对大样本技能**系统性失灵** —— 实测 Requirement_Analysis_Pre-check
+        #   uses=120 / fail=17（失败率 14.2%），按 0.3 要攒到 **36 次失败**才提议修订，
+        #   等攒够时污染面已经很大；而小样本技能（uses=10, fail=3 = 30%）反而容易触发。
+        #   ⇒ 比例判据惩罚"用得多的技能"，与"该修谁"的直觉相反。
+        #   绝对通道：fails ≥ N 且 uses ≥ M 也触发，使"高频技能的真实失败量"不被比例稀释。
+        "improve_abs_min_fail": 15,     # 绝对失败数下限（达到即触发，不看比例）
+        "improve_abs_min_uses": 50,     # 绝对通道的使用次数门槛（防小样本偶发失败误触发）
+        "improve_idle_days": 30,        # 长期未更新的技能也纳入（闲置技能需要体检）
+        "improve_max_revisions": 5,     # 同技能 ai_improve 草稿上限（防批量刷 LLM）
+    },
     # ── P1-1（2026-10-18 自进化调研路线图）：Trace2Dataset ────────────
     # 背景：生产轨迹（会话/HIL 裁决/意图样本/编排运行/Bad Case 台账）此前没有
     #   任何通路变成可复用评测样本 —— 飞轮不接回管道就是数据坟墓（Airbnb AITL /
@@ -1058,6 +1294,72 @@ DEFAULT_CONFIG = {
         "mock_markers": "（Mock 回答）,Mock 降级模式",  # Mock 标记（逗号分隔，命中即排除）
         "min_query_chars": 4,        # query 最短长度（"嗯"/"好"不构成评测样本）
         "max_response_chars": 600,   # response 截断上限（回归集只需可读开头）
+    },
+    # ── 评测门禁阈值单一真源（2026-10-22）────────────────────────────
+    # 背景：评估发现同一意图路由评测有**三个阈值在流通** —— ci.yml 注释 0.70、
+    #   tools/eval/run_ci_eval.py 的 MIN_ACCURACY=0.85、tools/verify/
+    #   verify_eval_routing.py 的 THRESHOLD_ACC=0.86。注释漂移让"改哪个"
+    #   成为不确定问题（评估报告 P0-1）。
+    # 本组是**唯一真源**：门禁脚本一律 `from core.config import ...` 读阈值，
+    #   CI 注释只写变量名不写数字。改阈值 = 只改这里。
+    # 阈值本身不变（沿用各自实测基线与余量），只把"两处硬编码"收敛为"一处配置"。
+    "eval_gates": {
+        "intent_min_cases": 20,      # 意图黄金集条数下限（低于此值判"样本池被删"假绿）
+        "intent_min_accuracy": 0.85,  # run_ci_eval.py 准确率下限（距干净库基线 0.931 约 8pp）
+        "intent_baseline_acc": 0.931,  # 干净库 builtin(29) 实测基线（仅 --report 打印对照）
+        "intent_baseline_f1": 0.9158,
+        "intent_baseline_n": 29,
+        "routing_baseline_acc": 0.9310,  # verify_eval_routing.py 的干净库基线
+        "routing_baseline_f1": 0.9158,
+        "routing_threshold_acc": 0.86,   # 只挡塌陷（余量 0.07 ≈ 2/29）
+        "routing_threshold_f1": 0.84,
+        "retrieval_min_recall_at_5": 0.85,  # RAG doc 域 recall@5 下限（实测 0.90，留 5pp）
+        "retrieval_min_route_acc": 0.95,    # graph 域 route_acc 下限（实测 1.0）
+        "retrieval_min_route_ok": 0.75,      # neg 域 route_ok 下限（实测 0.875）
+        "retrieval_max_rerank_drop": 0.15,  # rerank_drop_rate 上限（实测 0.0，重排不该挤掉对的）
+        "retrieval_control_max_recall": 0.05,  # RAG 负对照轮转后 recall 上限（原判据恒零 ⇒ 机遇撞中 0.02 随机红；0.05 与真实 0.90 拉开 18 倍，真假绿态仍红）
+        # 各域样本量下限（比例类指标的分辨率下限；neg 域 2026-10-23 扩样
+        # 8→30 后把下限从 5 提到 20 ⇒ FPR 分辨率 0.125 → 0.033）
+        "retrieval_min_doc_cases": 5,
+        "retrieval_min_graph_cases": 5,
+        "retrieval_min_neg_cases": 20,
+        "require_negative_control": 1,      # 是否强制负对照非零（0=轮转后分数仍高 → 假绿）
+        # ── 生成质量门禁（2026-10-22 补断链③：faithfulness 全仓零命中）──────
+        # 实测基线（mbse.db 生产库 150 条 RAG 问答）：valid=1.000 / usage=0.344 /
+        #   grounded=0/2 实体 / no_cit_factual=0.169。grounded 暂不设阈值——
+        #   2 个实体的样本上没有判别力（负对照也拉不开），设了要么恒绿要么
+        #   恒红；等 claim 密度上来（generation_min_entities）再升级为门禁。
+        "generation_min_citation_valid": 1.0,   # 正文 [n] 编号有效率（编号错位即判红）
+        "generation_min_citation_usage": 0.25,  # 带引用答案里真用 [n] 的下限（实测 0.344，留 ~3 条余量）
+        "generation_max_no_citation_factual": 0.30,  # 无引用答案含可核查实体占比上限（实测 0.169）
+        "generation_min_answers": 20,       # 样本量下限（低于此判"样本池被删"，不判通过）
+        "generation_min_entities": 30,      # 接地率升级为门禁指标所需的最少可核查实体数
+        "generation_min_grounded_rate": 0.70,  # 接地率下限（**未标定**：当前样本 2 实体无判别力，此值等首次具判别力实测后校准）
+        # ── 生成质量语义层门禁（2026-10-22 晚：LLM 忠实度评判）──────
+        # faithful_rate 只在 --llm-judge 启用且样本足量时判定（否则 SKIP：
+        # LLM 服务不可用是环境问题不是质量差）。阈值标定方式同 trace：
+        # 首次实测留余量。判不了的（调用/解析失败）**不计入分母**——
+        # 把环境故障读成质量差是红线。
+        # 标定实测（2026-10-22 晚，mbse.db，15 条带引用答案，
+        #   deepseek-v4-flash）：两轮 0.60 / 0.533（1 条边界案例翻转，
+        #   波动 ≈ ±1/15）。judge 合成对照两轮均过（pos faithful /
+        #   neg unfaithful）。口径含两项豁免（工具执行结果/会话上下文
+        #   不算无支撑——评判员只看得到引用块，这两类声称有合法来源）。
+        "generation_min_judged": 10,        # LLM 评判最少成功条数（不足 ⇒ SKIP 不判通过）
+        "generation_min_faithful": 0.40,    # 忠实率下限（实测 0.53~0.60；0.40 ≈ 容 2 条边界翻转 + 塌陷余量）
+        "generation_judge_limit": 15,       # LLM 评判采样上限（只评带引用的答案）
+        # ── Trace 一致性门禁（2026-10-22 补断链②：trace_evalset 无消费方）──────
+        # 实测基线（mbse.db 生产库，42 条人工确认样本）：无LLM口径 0.881
+        #   （两次运行逐条一致）；含LLM口径 0.881~0.929（随 LLM 服务可用性
+        #   波动，LLM 全失败时回落到无LLM水平）。负对照（gold 洗牌）0.167。
+        # 下限取 0.75：距最坏观测 ~13pp，且覆盖"LLM 全失败且全判错"的
+        #   理论最坏 ~0.79；规则层真塌陷会把一致率打到 0.3~0.5（负对照
+        #   量级），0.75 拦得住那种塌陷，不会在正常波动上随机红。
+        "trace_min_agreement": 0.75,       # 裁决一致率下限（当前路由 vs 生产人工裁决）
+        "trace_max_repeat_mistake": 0.50,  # 重错率上限（**常驻 SKIP**：当前无路由纠错类负样本，n=0 无分母；出现真负样本后自动生效）
+        "trace_min_positive": 20,          # positive 样本量下限（低于此判"样本池被删"，不判通过）
+        "trace_control_min_gap": 0.30,     # 负对照可判别的最小差距（真实一致率 − 洗牌后一致率；实测 0.714）
+        "trace_max_stale_ratio": 0.20,     # gold 失效样本占比上限（超过即判"样本池被删/被改"）
     },
     # ── P1-2（2026-10-18 自进化调研路线图）：步骤级归因器 ──────────────
     # 背景：AgentEvolver self-attributing 的最小版——error_profile 只到会话级
@@ -1160,6 +1462,7 @@ DEFAULT_CONFIG = {
         "window_days": 7,               # 本周窗口（天）；环比对照 = 上一个等长窗口
         "max_actions": 50,              # 待决策条目上限（防长尾注水）
         "max_detail": 8,                # 每源明细条目上限
+        "longtail_days": 90,            # P0-a：能力长尾判定天数（只提议不自动执行）
     },
     # ── P1 replanning（2026-10-21，执行中重规划；设计见 docs/执行中重规划
     #   replanning方案评估与完善设计-v2-20261021.md §4/§6）──────────────────
@@ -1354,6 +1657,9 @@ CONFIG_SCHEMA = {
     "intent": {
         "keyword_scored":         {"type": "bool", "desc": "关键词层「竞争打分」（False = 回到「首个命中即返回」旧行为，A/B 用）"},
         "keyword_generic":        {"type": "bool", "desc": "泛词是否参与打分（False = 泛词既不加分也不触发共现，A/B 用）"},
+        "explain_preempt":         {"type": "bool", "desc": "说明类前置短路是否前置（True=改造前：命中即判知识问答；False=降级为末尾兜底，先由 LLM 主裁判裁决）"},
+        "speech_act":              {"type": "bool", "desc": "言语行为层（问 vs 做）：名词化形态判知识问答、自指元问题判闲聊（False=回到改造前行为）"},
+        "multi_same_intent_stage": {"type": "bool", "desc": "L1 阶段连词（先…再…/最后）是否允许同意图多阶段｜默认 False（按意图去重）：实测开启后 accuracy 0.944→0.889、precision 1.000→0.875，且把「需求分析→方案设计→生成 sysml 代码」由 2 段拆成 3 段 ⇒ 净负。开启则「结构视图→参数视图」可切 2 段"},
         "sample_collect":         {"type": "bool", "desc": "真实请求是否把用户输入采集进意图样本池"},
         "cache_enabled":          {"type": "bool", "desc": "意图级缓存（精确文本 + 索引指纹双匹配）"},
         "confirm_when_unsure":    {"type": "bool", "desc": "低置信/冲突时是否转入澄清确认"},
@@ -1366,6 +1672,12 @@ CONFIG_SCHEMA = {
         "history_llm_min":        {"type": "float", "desc": "带历史采纳（route=llm_history）的地板值（非分离阈）"},
         "history_confirm_silent": {"type": "bool", "desc": "两路一致（确认）时不弹「可改选」澄清细条"},
         "rule_llm_confirm":       {"type": "bool", "desc": "B4-5：规则命中后先经 LLM 独立复核（确认/否决/不可用三态）。默认关=零回归；开启前请用 tools/calib/eval_intent_baseline.py 做 A/B"},
+        "brief_enabled":          {"type": "bool", "desc": "意图识别环节下发「意图理解摘要」（goal/need/basis/missing）。关=回到只显示 Agent 名的旧行为"},
+        "brief_short_chars":      {"type": "int",  "desc": "输入短于此字符数时，在摘要里提示「要求可能没说清」（仅提示，不打断执行）"},
+        "brief_missing_check":    {"type": "bool", "desc": "是否做「输入过短」提示判定"},
+        "llm_first":              {"type": "bool", "desc": "LLM 主裁判：规则无信号时 LLM 为主识别（配 few-shot 与 unsure 出口）。规则强信号快路径不受影响"},
+        "llm_first_min_conf":     {"type": "float", "desc": "LLM 主裁判直接采纳门槛（默认 0.75 保守起点，待 confirmed 池标定）"},
+        "llm_first_weak_conf":    {"type": "float", "desc": "LLM 主裁判弱采纳下限：0.50~门槛的猜测转澄清卡不静默执行"},
     },
     "database": {
         "path":           {"type": "str", "desc": "SQLite 数据文件路径（需重启生效）"},
@@ -1396,6 +1708,7 @@ CONFIG_SCHEMA = {
         #   ⇒ 按 20~80ms/token 线性拉长耗时 ⇒ 撞超时 ⇒ 重试 ⇒ 更慢（乘法放大）。
         "thinking_budget":         {"type": "int", "desc": "★ **给 reasoning 思考的独立上限**（token），默认 0=不启用。思考与正文共享 max_tokens，不设限时思考可吃掉 63% 输出（实测）"},
         "thinking_reserve_tokens": {"type": "int", "desc": "★ **给正文的保底额度**（token，思考不得吃光），默认 0=不启用。实际压算 max_tokens = min(max_tokens, thinking_budget + thinking_reserve_tokens)"},
+        "context_util_warn": {"type": "float", "desc": "★ **上下文占用告警线**（prompt/context_window，默认 0.85；0=关）。只留痕不拦截 —— 既有守卫只拦『输出上限超窗口』(mt>cw)，对『输入把窗口吃掉』无信号（id=71 mt=112000/cw=128000 ⇒ 输入余量仅 15.5k）"},
         "thinking_warn_tokens": {"type": "int", "desc": "★ **思考超限告警阈值**（token），默认 0=不启用。只在 `_record_usage` 打 WARNING（流式/非流式唯一共同点），**只留痕不拦截**（拦截用 thinking_budget）。实测 310/6890 次调用 reasoning>2000tok，极端例 13430/13535=99.2% 耗 4017s。按 (intent, provider) 去重防刷屏"},
         # ── 2026-10-09 thinking 按 intent 分流（L1；粒度=任务维度）──
         # 依据实测（llm_usage_stats 按 intent 聚合思考占completion 的比例）：
@@ -1424,7 +1737,7 @@ CONFIG_SCHEMA = {
     },
     "mcp": {
         "timeout":      {"type": "int", "desc": "MCP JSON-RPC 调用超时（秒）"},
-        "max_response": {"type": "int", "desc": "MCP 响应截断上限（字符）"},
+        "max_response": {"type": "int", "desc": "MCP 响应安全上限（字符，防单次响应打爆内存；模型可见长度另由 agent 侧收口，勿与展示上限混用）"},
     },
     "zhiyuan": {
         "base_url":     {"type": "url",   "desc": "智源平台地址（MBSE 平台网关）"},
@@ -1444,7 +1757,7 @@ CONFIG_SCHEMA = {
         "subtask_idle_timeout_s": {"type": "int", "desc": "流式编排：子任务无产出判超时（秒，默认 150）"},
         "subtask_timeout_s":      {"type": "int", "desc": "流式编排：子任务 wall-clock 硬上限（秒，默认 300）"},
         "keep_runs_per_conversation": {"type": "int", "desc": "agent_tasks 每会话保留批次数（默认 50）"},
-        "total_time_budget_s": {"type": "int", "desc": "⚠️ 未接线（死配置，2026-10-02 实测全仓零消费点）：当前改此值不影响任何行为；真实兜底是 subtask_timeout_s / subtask_idle_timeout_s"},
+        "total_time_budget_s": {"type": "int", "desc": "编排批次总时间预算（秒，0=不启用）：>0 时作为**整轮墙钟之外**的额外一道编排闸（更严格者先生效）；默认值 0＝不启用，避免误杀长任务（实测编排可达 849s）"},
         "max_depth":           {"type": "int", "desc": "委派递归深度上限"},
         "summary_item_max_chars":     {"type": "int", "desc": "汇总输入：单个子任务交付物上限（字符，默认 1600）"},
         "summary_total_chars":        {"type": "int", "desc": "汇总输入：本轮合计预算（字符，按子任务数均分，默认 12000）"},
@@ -1484,6 +1797,65 @@ CONFIG_SCHEMA = {
         "auto_continue_enabled": {"type": "bool", "desc": "★ 自主续跑总开关（默认开）：AI 完成度评估判定「任务未完成」时自动继续工作，无需用户逐条下达指令；关闭则维持一问一答形态"},
         "auto_continue_max":     {"type": "int", "desc": "★ 自主续跑次数上限（默认 3）：单轮请求内最多自动续跑几次（AutoGPT「无完成任务生成」对策；每次续跑重置 ReAct 轮次预算，但仍共享 token 预算）"},
         "auto_continue_deadline_s": {"type": "int", "desc": "★ 自主续跑墙钟上限（秒，默认 600；0=不设）：从本轮请求开始累计，超时不再续跑（仍受次数/token 闸约束）"},
+        # ── 持续自主执行（2026-10-28「Agent 遇到问题就终止」方案）──
+        # 依据 docs/持续自主执行能力-最终方案设计-20261028.md。
+        # ⚠️ 全部**默认关**：任一项上线都不改变现有行为，可灰度、可独立回滚。
+        #   默认关的代价：不开则该能力不生效（用户看不到变化）；收益：不冒未验证的风险。
+        #   灰度建议：先在测试会话开启，观察 stage 事件与 todo 表，再全量。
+        "todo_enabled": {"type": "bool", "default": False, "desc": "★ 计划外化总开关（默认关）：开启后模型可调 todo_write 建待办清单，完成判定改为『所有待办已通过验收』；关闭则无待办、走原有评估器路径（逐字节兼容）"},
+        "todo_require_verify": {"type": "bool", "default": True, "desc": "★ 待办置 completed 是否强制要有验收回执（默认开，2026-10-28）：依据官方『Only mark as passing after careful testing』；关闭则允许无回执置完成（削弱约束力，仅供排障）"},
+        "harness_enabled": {"type": "bool", "default": False, "desc": "★ harness 级强制闸总开关（默认关）：对齐官方 Stop hook —— 存在未完成待办且验收未过时**不允许结束本轮**，把失败输出回灌让 AI 继续；关闭则只做判定不强制"},
+        "harness_max_blocks": {"type": "int", "default": 8, "desc": "★ harness 强制闸连续阻断上限（默认 8，对齐官方）：达到上限后强制放行并如实说明『未完成，卡在 X』——上限是必需的（FM-1.5 该停不停 12.4% > 过早终止 6.20%，双向都要管）；0=不阻断"},
+        # ── 团队内定向的能力继承（2026-10-29，conv 9754 实测）──
+        # 事实：主 Agent「智源对接agent」绑 71 个智源 MCP 工具；团队路由按意图把请求
+        # 定向给成员「工程建模方案设计Agent」（MCP 绑定 0）⇒ 旧实现只取成员绑定 ⇒ 工具全丢
+        # ⇒ 模型回执"无智源 MCP 查询工具，无法拉取工程数据" ⇒ 待办推不动 ⇒ 中断。
+        "team_member_inherit_mcp": {"type": "bool", "default": True, "desc": "★ 团队内定向时成员是否继承主 Agent 的 MCP 平台能力（默认开，2026-10-29）：用户选主 Agent 即选了它的平台对接能力，定向只应改『谁思考』，不该把能力一起丢掉；关闭则回到旧行为（只取成员自身 MCP 绑定）"},
+        "harness_max_stall": {"type": "int", "default": 2, "desc": "★ harness 闸**无进展检测**阈值（默认 2）：同一批未完成待办连续 N 次阻断后**完全没变化** ⇒ 判定模型卡死，提前强制放行并如实告知卡在哪（真机实测：只靠次数上限 8 会连续拦截 8 次且待办毫无变化，耗时 ≈2.3 分钟，结果与立刻放行相同 —— MAST「该停不停」的活样本）；0/1=不启用"},
+        "budget_degrade_ratio": {"type": "float", "default": 0.7, "desc": "★ 预算**收紧续跑**触发点（默认 0.7，2026-10-28 语义变更）：token 预算用达到此比例时**不停**，而是切到「收紧续跑」——只做剩余关键步骤、禁开新检索；真正停由下面的硬停线或预算耗尽决定。旧语义是「到此比例就停」，真机（conv 9730）后果：86% 就停，而当时还剩 14%≈2~3 轮，任务差一步（跑校验器）没做完"},
+        "budget_hard_stop_ratio": {"type": "float", "default": 0.95, "desc": "★ 预算**硬停线**（默认 0.95，2026-10-28 新增）：用到此比例即停止新开续跑轮，写待续清单并如实告知未完成。与上面『收紧续跑』配对：0.7~0.95 之间是收紧而非停止，避免「还有额度却提前收工」"},
+        "cache_hit_weight": {"type": "float", "default": 0.1, "desc": "★ 预算记账的**缓存命中权重**（默认 0.1，对齐 DeepSeek 命中价≈1/10，2026-10-28 新增）：预算按『计费等效 token = miss + 完成 + hit×权重』累计。为什么必须这样记：实测 conv 9730 的 270,433 prompt 里 **249,344（92%）是缓存命中**，旧口径按全价累计 ⇒ 判『已用 86%』而真实新增只有 3.2 万 ⇒ 任务在离终点两轮处被判超预算。置 1.0 = 退回旧口径（按原始 token 计）"},
+        "obstacle_recovery_enabled": {"type": "bool", "default": False, "desc": "★ 障碍恢复矩阵总开关（默认关）：工具失败时按错误特征分类（auth/not_found/precondition/capability/transient），其中前四类**自动换路径重试而非问人**；关闭则沿用现有行为（失败即问人）"},
+        # ── 编排 partial 补齐（2026-10-22 米爸「是否重跑需要一个健全的机制」）──
+        # 对齐标杆：Claude Code「stop_reason 七值 → 五种处置」（先分类病因再决定动作）
+        # + Stop hook 否决权 + LangGraph pending writes（已完成一律复用）。
+        # 核心判准（真数据取证，会话 9587）：**是否重跑不看 partial 多严重，看有没有靶子**。
+        #   t1/t2 缺用户输入（blocked）⇒ 补了必得同一结果；t3/t5 轮次耗尽未校验
+        #   （transient/gap）⇒ 补跑能改变结果。故只有 transient/gap 会触发重跑。
+        "fill_enabled":      {"type": "bool", "desc": "★ 编排 partial 自动补齐总开关（默认开）：收尾时按病因分类，只对「执行中断/客观缺口」两类自动补跑；「待用户输入/质量不足」不补，只在前置缺口说明里列出（关了则仅出分类与缺口说明，不重跑）"},
+        "fill_max_per_task": {"type": "int", "desc": "单个子任务的补齐次数上限（默认 2，对标 Claude Code 的 3 次恢复上限；第 3 次转人工）"},
+        "fill_max_tasks":    {"type": "int", "desc": "单轮补救最多补几个子任务（默认 2，控墙钟与成本；按「无外部门槛优先」排序）"},
+        "fill_deadline_s":   {"type": "int", "desc": "自动补齐的墙钟上限（秒，默认 300）：超时未完成的子任务协作式取消并转人工，绝不阻塞汇总"},
+        # ── 技能池范围（2026-10-27 对标 Anthropic Agent Skills / OpenAI Agents SDK 后的口径收口）──
+        # 行业里「绑定」有两种语义，必须显式选定，不能含糊：
+        #   · bound_first（默认，Anthropic 做法）：绑定=优先候选；未绑定的已发布技能
+        #     仍可被自动匹配命中（"装进环境即可用"）。代价：可能命中无关技能。
+        #   · bound_only（OpenAI Agents SDK / Bedrock Agents 做法）：只认绑定，最可控，
+        #     代价是每个 Agent 必须手工挂全。
+        # 切换用配置、不改代码；两档都有门禁断言，可随时回滚。
+        "skill_pool_scope":  {"type": "str", "desc": "★ 技能池范围：bound_first=绑定优先但全池可命中（默认，对齐 Anthropic Agent Skills）；bound_only=只认绑定的技能（对齐 OpenAI Agents SDK / Bedrock Agents 显式装配）"},
+        # ── S3（2026-10-28）技能提示词总量预算 ──────────────────────────────
+        # 背景（真库实测 @75eca26，`context_audit.block_name='skill_prompt'`，n=124）：
+        #   p50 3,669 tok / p90 7,244 / p99 30,009 / **峰值 34,761 tok（48,813 字符）**，
+        #   7% 的轮次超 8K tok。根因是**只有单条正文 cap（600 字符）没有总量上限**：
+        #   `skill_pool_scope=bound_first` 让候选＝绑定＋全局池，命中数不设限，
+        #   每命中一条就注入一段完整正文 ⇒ 多技能场景线性膨胀。
+        # 口径：字符（不引 tokenizer 依赖；实测本仓中文正文 ≈ 1.4 字符/token）。
+        # 降级方式：超出预算的技能**不掉命中、不改 bound_first 语义**，只把正文换成
+        #   「一行描述 + offload 引用块」，模型可经 `skill_body_fetch(id)` 取回全文
+        #   （复用既有的 skill_body_on_demand 通道，不新造机制）。
+        "skill_prompt_max_chars": {"type": "int", "desc": "★ 技能提示词总量预算（字符，默认 12000；<=0 不限）。超限的技能正文降级为一行描述+按需取回，不改变技能命中结果"},
+        # ── 技能白名单语义（2026-10-29，P0-3）──────────────────────────────
+        # `allowed_tools` 的语义已统一为「授权补充」（把技能需要的工具**补进**候选），
+        # **不再**当工具集上限使用。原因（代码内原有事故记录 + Claude Code 对照）：
+        #   · Claude Code 的 subagent `tools` 是**独立实体**的工具集（省略=继承全部），
+        #     subagent 有自己的 context，限制是自然的；
+        #   · 本平台的 skill 是**注入既有 Agent 的 prompt 片段**，Agent 的工具由
+        #     agent_tools 绑定决定；技能白名单表达的是「干活需要什么」（需求）而非
+        #     「只能用什么」（上限）；
+        #   · 旧实现拿它当上限 ⇒ 实测把 `智源对接agent` 的 71 个 MCP 工具裁到 0
+        #     （15 工具/8 MCP → 2 工具/0 MCP），即 2026-10-16「绑了只露几个」事故根因。
+        "skill_whitelist_enforce": {"type": "bool", "desc": "★ 是否把技能 allowed_tools 当工具集硬上限（默认 False=只做授权补充）。置 True 会重现「技能命中后 Agent 已绑定工具被裁掉」问题，仅供排查最小权限时临时使用"},
     },
     "embedding": {
         "enabled":          {"type": "bool", "desc": "语义出口总开关（False 强制 bigram）"},
@@ -1514,11 +1886,12 @@ CONFIG_SCHEMA = {
     "context": {
         "history_immediate_turns": {"type": "int", "desc": "即时窗口轮数（原文逐字）"},
         "history_mid_turns":       {"type": "int", "desc": "中期窗口轮数（LLM 摘要压缩）"},
-        "history_msg_max_chars":   {"type": "int", "desc": "单条消息截断上限（字符）"},
+        # 0 = 不限（默认）：交由「预算 + 份额」机制裁剪，且裁剪必带标记；>0 = 固定字符上限（调试用）
+        "history_msg_max_chars":   {"type": "int", "desc": "单条历史消息固定截断上限（字符）；0=不限（默认，交由预算与份额机制）"},
         "history_summary_chars":   {"type": "int", "desc": "中期摘要上限（字符）"},
         "topic_sim_threshold":     {"type": "float", "desc": "话题切换相似度阈值（相邻用户消息 bigram 余弦）"},
         "topic_label_chars":       {"type": "int", "desc": "话题标签长度（段首消息前 N 字符）"},
-        "topic_current_max_msgs":  {"type": "int", "desc": "当前话题原文注入最大消息数"},
+        "topic_current_max_msgs":  {"type": "int", "desc": "当前话题原文注入最大消息数（默认 20；会话级事实已另由 conv_anchors 锚点固化）"},
         "topic_boundary_keep":     {"type": "int", "desc": "话题切换边界保留上一话题原文条数"},
         "topic_retrieve_topk":     {"type": "int", "desc": "会话内语义拉回片段条数"},
         "topic_retrieve_threshold": {"type": "float", "desc": "语义拉回最低相似度"},
@@ -1528,7 +1901,7 @@ CONFIG_SCHEMA = {
         "topic_retrieve_threshold_dense": {"type": "float", "desc": "语义拉回阈值（真 embedding 路；已按分位等价映射标定修订为 0.5）"},
         "topic_group_match_dense": {"type": "float", "desc": "当前话题组匹配阈值（真 embedding 路；已标定修订为 0.5）"},
         "semantic_fallback_gate_dense": {"type": "float", "desc": "工作流语义补召门（dense 路；bigram 路固定 0.5，实测等价 0.79）"},
-        "model_context_chars":     {"type": "int", "desc": "建模上下文注入上限（字符，当前模型状态工作记忆）"},
+        "model_context_chars":     {"type": "int", "desc": "建模上下文注入上限（字符，当前模型状态工作记忆；默认 1500）"},
         "model_context_entities":  {"type": "str", "desc": "建模上下文既有实体注入形态：count(只报数量,默认)/names(列名字)/none"},
         "rerank":                  {"type": "bool", "desc": "知识库检索后 LLM 重排开关"},
         "rerank_top_n":            {"type": "int", "desc": "重排候选数"},
@@ -1540,8 +1913,8 @@ CONFIG_SCHEMA = {
         "budget_history_tokens":   {"type": "int", "desc": "T6 历史区 token 预算（话题原文/语义拉回/摘要分区复用，0=回退字符版）"},
         "budget_window_tokens":    {"type": "int", "desc": "占比制分母：上下文窗口基准 token（换模型时同步）"},
         "total_budget_window_ratio": {"type": "float", "desc": "总闸上限=provider窗口×该比例（默认0.75；总闸只防撞硬上限，不用于省token）"},
-        "budget_retrieval_ratio":  {"type": "float", "desc": "检索区占窗口比例（>0 覆盖绝对值键；0=关闭占比制）"},
-        "budget_history_ratio":    {"type": "float", "desc": "历史区占窗口比例（>0 覆盖绝对值键；0=关闭占比制）"},
+        "budget_retrieval_ratio":  {"type": "float", "desc": "检索区占窗口比例（>0 覆盖绝对值键；0=关闭占比制；默认 0.15）"},
+        "budget_history_ratio":    {"type": "float", "desc": "历史区占窗口比例（>0 覆盖绝对值键；0=关闭占比制；默认 0.35）"},
         "artifact_digest_enabled": {"type": "bool", "desc": "会话产物摘要注入开关（多轮：让后续轮次知道本会话已产出什么）"},
         "artifact_digest_max_chars": {"type": "int", "desc": "会话产物摘要字符上限（<=0 不限）"},
         "artifact_digest_versions": {"type": "int", "desc": "摘要中列出的最近 SysML 模型版本数"},
@@ -1549,6 +1922,20 @@ CONFIG_SCHEMA = {
     },
     "reasoning": {
         "direct_merge":            {"type": "bool", "desc": "推理结果直接并入图库（跳过审核队列）；false=恢复提交审核门禁"},
+    },
+    "context_audit": {
+        "enabled":                {"type": "bool", "desc": "上下文分块 token 归因落库总开关"},
+        "retrieval_per_doc_max":  {"type": "int",  "desc": "检索注入：同一 source_doc 最多占几个槽"},
+        "retrieval_merge_neighbor": {"type": "bool", "desc": "检索注入：同文档近邻 chunk 是否合并"},
+        "memory_single_source":  {"type": "bool", "desc": "记忆注入：是否以 rag.memory_hits 为唯一真源"},
+        "memory_max_chars":      {"type": "int",  "desc": "记忆注入正文截断字符数"},
+        "memory_identity_strip": {"type": "bool", "desc": "有登录身份时，是否剥离记忆中的「用户叫X」身份声明子句（称呼以账号为准）"},
+        "jit_fallback_top_n":    {"type": "int",  "desc": "JIT 语义预筛空回退时的 top-N（0=退回全量）"},
+        "mcp_meta_enabled":      {"type": "bool", "desc": "MCP 工具是否使用真实描述+参数契约（tool_meta）"},
+        "mcp_min_keep":          {"type": "int",  "desc": "每个 MCP server 至少暴露的工具数（0=不保底）"},
+        "mcp_top_n":             {"type": "int",  "desc": "每个 MCP server 暴露总量上限（0=不限）"},
+        "role_manual_filter":    {"type": "bool", "desc": "role 块内工具手册段按本轮暴露工具裁剪（默认关）"},
+        "mcp_exempt_skill_whitelist": {"type": "bool", "desc": "MCP 显式绑定工具豁免技能白名单（默认开）"},
     },
     "memory": {
         "forget_enabled":       {"type": "bool", "desc": "遗忘引擎开关"},
@@ -1563,6 +1950,11 @@ CONFIG_SCHEMA = {
         "forget_by_activation": {"type": "bool", "desc": "启用按 activation 衰减阈值遗忘（遗留通道，本工程实测恒定不触发，默认关）"},
         "conflict_detect_enabled": {"type": "bool", "desc": "冲突消解总开关：检出同键互斥记忆后打 superseded_by 标记（仅标记不删；默认关）"},
         "conflict_detect_sim_high": {"type": "float", "desc": "冲突检测的同键候选相似度下限（互斥事实字面高度重叠，实测 0.73）"},
+        "recall_trigger_enabled": {"type": "bool", "desc": "记忆读触发总开关：关=每轮无条件召回（回退旧行为）；开=寒暄/噪音类 query 跳过召回（省检索开销，零行为漂移）"},
+        "deposit_trigger_enabled": {"type": "bool", "desc": "记忆写触发总开关：关=每会话照常尝试沉淀；开=被显式排除的 intent 不沉淀"},
+        "recall_skip_intents": {"type": "str", "desc": "永不召回记忆的 intent 列表（逗号分隔，默认空）"},
+        "deposit_skip_intents": {"type": "str", "desc": "永不沉淀记忆的 intent 列表（逗号分隔，默认空）"},
+        "source_credibility": {"type": "str", "desc": "融合排序五维之『可信度』：按来源给定权重（真实取值仅 llm_agent/reflow/rule_agent）。默认空=全部中性 1.0；无标定依据前不建议配"},
     },
     "entity_merge": {
         "auto_threshold": {"type": "float", "desc": "实体消歧自动合并分阈值（≥ 该分自动合并；>1.0 等价关闭。DB settings 的 auto_threshold 优先）"},
@@ -1592,7 +1984,7 @@ CONFIG_SCHEMA = {
         "pdf_max_pages":          {"type": "int",   "desc": "PDF 抽取页数上限（<=0 不限制，默认 1200）"},
         "ocr_enabled":            {"type": "bool",  "desc": "扫描件/图片 OCR 兜底总开关（关=回到改动前行为）"},
         "ocr_min_chars_per_page": {"type": "int",   "desc": "页文本层字数低于此值视为稀疏页并补 OCR（默认 100）"},
-        "ocr_max_pages":          {"type": "int",   "desc": "单次入库允许 OCR 的页数上限（默认 50）"},
+        "ocr_max_pages":          {"type": "int",   "desc": "单次入库允许 OCR 的页数上限（0=不限，默认；>0 才启用硬上限并显式告警）"},
         "ocr_render_scale":       {"type": "float", "desc": "PDF 渲染倍率（默认 2.0 ≈ 1224x1584 px）"},
         "ocr_min_avg_score":      {"type": "float", "desc": "OCR 结果平均置信度下限（默认 0.70；低于此值判质量不合格，不入库）"},
         "ocr_dense_min_lines":    {"type": "float", "desc": "OCR 密集文本放行：行数下限（默认 30；行数多=真实内容结构，达线即低质放行并打标）"},
@@ -1625,6 +2017,7 @@ CONFIG_SCHEMA = {
     "tool_jit": {
         "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）。★ 2026-10-10 实测：修复类工具必须列进来，否则会被语义预筛裁掉（实测 view_expansion 清单 6 个里原本没有 sysml_v2_autofix，导致 autofix 一次都没被调用）"},
         "inject_input_schema": {"type": "bool", "desc": "把 tools.input_schema 注入 function-calling 的 parameters（关=回到 2026-10-13 之前的宽松空 schema）。★ 实测该列 39/41 有真值，此前被 SELECT 后丢弃、payload 恒为 properties:{}"},
+        "inject_arg_hints": {"type": "bool", "desc": "★ S2：把「历史上被服务端拒绝过的字段」前置注入工具描述（数据来自失败时学到的 fields[].expected）。关=不加任何 hint"},
     },
     "subtask_protocol": {
         "inject_contract": {"type": "bool", "desc": "把交付协议契约注入子任务 query（关=模型只返纯文本，协议三数组恒空）。★ 实测注入前 artifacts/evidence/risks 非空率 0%"},
@@ -1733,7 +2126,54 @@ CONFIG_SCHEMA = {
         "reopen_on_recur":    {"type": "bool",  "desc": "已 triage 的主题复现时重开为 open"},
         "alert_threshold":    {"type": "int",   "desc": "默认告警线：open 数达到即值得关注"},
     },
-    # P1-1（2026-10-18）：Trace2Dataset（tools/eval/trace2dataset.py 消费）
+    # 技能自改进判据（2026-10-29 登记；此前参数埋在 skill_improve.py 代码默认值里，
+    # 设置页不渲染、save_override 抛「未知配置项」⇒ 运维改不了判据）
+    "skill": {
+        "self_improve_enabled": {"type": "bool",  "desc": "技能自改进总开关（关=不扫描候选、不出修订草稿）"},
+        "improve_min_fail":     {"type": "int",   "desc": "绝对失败次数下限（与失败率取 AND）"},
+        "improve_min_uses":     {"type": "int",   "desc": "绝对使用次数下限（与失败率取 AND）"},
+        "improve_fail_ratio":   {"type": "float", "desc": "失败率下限 fails/uses（默认 0.12；原 0.3 对大样本技能结构性失灵）"},
+        "improve_abs_min_fail": {"type": "int",   "desc": "★绝对失败数通道：失败数达到即触发，不看比例（治高频技能被比例稀释）"},
+        "improve_abs_min_uses": {"type": "int",   "desc": "绝对通道的使用次数门槛（防小样本偶发失败误触发）"},
+        "improve_idle_days":    {"type": "int",   "desc": "技能闲置天数：超过则纳入体检（提出修订草稿）"},
+        "improve_max_revisions": {"type": "int",  "desc": "同技能 ai_improve 草稿上限（防批量刷 LLM）"},
+    },
+    # 评测门禁阈值单一真源（2026-10-22）：门禁脚本一律读本组，CI 注释只写变量名不写数字
+    "eval_gates": {
+        "intent_min_cases":       {"type": "int",   "desc": "意图黄金集条数下限（低于此值判样本池被删，评测会假绿）"},
+        "intent_min_accuracy":     {"type": "float", "desc": "意图路由准确率下限（距干净库基线 0.931 约 8pp，只挡塌陷）"},
+        "intent_baseline_acc":    {"type": "float", "desc": "意图路由干净库实测基线 accuracy（仅报告打印，不参与判定）"},
+        "intent_baseline_f1":     {"type": "float", "desc": "意图路由干净库实测基线 macro-F1（仅报告打印）"},
+        "intent_baseline_n":      {"type": "int",   "desc": "基线对应的样本条数（clean库 builtin 集）"},
+        "routing_baseline_acc":   {"type": "float", "desc": "路由门禁基线 accuracy（干净库 builtin 29 条实测）"},
+        "routing_baseline_f1":    {"type": "float", "desc": "路由门禁基线 macro-F1（干净库 builtin 29 条实测）"},
+        "routing_threshold_acc":  {"type": "float", "desc": "路由门禁准确率下限（余量 0.07 ≈ 2/29，再大就什么都拦不住）"},
+        "routing_threshold_f1":   {"type": "float", "desc": "路由门禁 macro-F1 下限"},
+        "retrieval_min_recall_at_5": {"type": "float", "desc": "RAG 检索 doc 域 recall@5 下限（实测 0.90）"},
+        "retrieval_min_route_acc":   {"type": "float", "desc": "RAG graph 域路由准确率下限（实测 1.0）"},
+        "retrieval_min_route_ok":    {"type": "float", "desc": "RAG neg 域路由正确率下限（实测 0.875）"},
+        "retrieval_max_rerank_drop": {"type": "float", "desc": "重排丢对率上限（实测 0.0；重排把对的挤下去才算问题）"},
+        "retrieval_control_max_recall": {"type": "float", "desc": "RAG 负对照轮转后 recall 上限（量级判定，非恒零：机遇撞中 0.02 不应判红；真假绿态轮转 ~0.9 仍判红）"},
+        "retrieval_min_doc_cases":  {"type": "int",   "desc": "RAG doc 域样本量下限（低于此比例类指标无判别力，判 SKIP）"},
+        "retrieval_min_graph_cases": {"type": "int",   "desc": "RAG graph 域样本量下限（低于此判 SKIP）"},
+        "retrieval_min_neg_cases":  {"type": "int",   "desc": "RAG neg 域样本量下限（2026-10-23 扩样 8→30 ⇒ FPR 分辨率 0.033）"},
+        "require_negative_control":  {"type": "int",   "desc": "是否强制负对照非零（1=轮转后分数仍高即判假绿）"},
+        "generation_min_citation_valid": {"type": "float", "desc": "生成质量：正文 [n] 编号有效率下限（实测 1.000，错位即判红）"},
+        "generation_min_citation_usage": {"type": "float", "desc": "生成质量：带引用答案实际使用 [n] 比例下限（实测 0.344，软约束塌陷即判红）"},
+        "generation_max_no_citation_factual": {"type": "float", "desc": "生成质量：无引用答案含可核查实体占比上限（实测 0.169，无据声称密度）"},
+        "generation_min_answers":     {"type": "int",   "desc": "生成质量：样本量下限（低于此判样本池被删）"},
+        "generation_min_entities":    {"type": "int",   "desc": "生成质量：接地率升级为门禁指标所需最少可核查实体数（当前样本 2 个，不具判别力）"},
+        "generation_min_grounded_rate": {"type": "float", "desc": "生成质量：实体接地率下限（未标定，等首次具判别力实测后校准；仅在实体量达标且负对照可判别时生效）"},
+        "generation_min_judged":        {"type": "int",   "desc": "生成质量：LLM 评判最少成功条数（不足判 SKIP——服务不可用是环境问题不是质量差）"},
+        "generation_min_faithful":      {"type": "float", "desc": "生成质量：LLM 忠实率下限（仅样本足量时判定；判失败不计入分母）"},
+        "generation_judge_limit":       {"type": "int",   "desc": "生成质量：LLM 评判采样上限（只评带引用的答案，控成本）"},
+        "trace_min_agreement":     {"type": "float", "desc": "Trace 一致性：裁决一致率下限（实测 0.881~0.929，含 LLM 全失败最坏 ~0.79；规则层塌陷会掉到 0.3~0.5）"},
+        "trace_max_repeat_mistake": {"type": "float", "desc": "Trace 一致性：重错率上限（常驻 SKIP——当前无路由纠错类负样本；出现后自动生效）"},
+        "trace_min_positive":      {"type": "int",   "desc": "Trace 一致性：positive 样本量下限（低于此判样本池被删，不判通过）"},
+        "trace_control_min_gap":   {"type": "float", "desc": "Trace 一致性：负对照可判别的最小差距（真实一致率 − gold 洗牌后一致率；实测 0.714）"},
+        "trace_max_stale_ratio":   {"type": "float", "desc": "Trace 一致性：gold 失效样本占比上限（超过判样本池被删/被改）"},
+    },
+    # P1-2（2026-10-18）：Trace2Dataset（tools/eval/trace2dataset.py 消费）
     "trace2dataset": {
         "enabled":            {"type": "bool",  "desc": "Trace2Dataset 取材总开关（False 时构建返空）"},
         "window_days":        {"type": "int",   "desc": "取材窗口：只取最近 N 天的生产证据"},
@@ -1822,13 +2262,55 @@ CONFIG_SCHEMA = {
         "window_days":  {"type": "int",  "desc": "本周窗口（天）；环比对照窗口为上一个等长窗口"},
         "max_actions":  {"type": "int",  "desc": "待决策条目上限（防长尾注水）"},
         "max_detail":   {"type": "int",  "desc": "每源明细条目上限"},
+        "longtail_days": {"type": "int", "desc": "P0-a：能力长尾判定天数（active 且零调用超过该天数进周报清单；只提议不自动执行）"},
     },
     # ── P1 replanning（2026-10-21）：执行中重规划 ──────────────────────────
     # 白名单纪律（B4-5 教训）：配置存在 ≠ 可被配置 —— 不登记进 SCHEMA 的键
     #   连设置页/REST 都改不了。五个键全部登记；默认值见 DEFAULT_CONFIG 注释。
+    # ── 运行时稳定性（2026-10-30）────────────────────────────────────────
+    # 为什么必须登记进 SCHEMA（不是"登记一下更规范"，而是**功能可用性**）：
+    #   `save_override()` 对未登记键直接 `raise ValueError("未知配置项")`
+    #   ⇒ 缺这一段时，下面四个开关**根本改不了**（实测报错：
+    #     `未知配置项: runtime.max_concurrent_streams`）。
+    #   这正是《能力中心插件盘点与设置页参数体检》记录的"B 类漂移"形态：
+    #   DEFAULT_CONFIG 有、CONFIG_SCHEMA 无 ⇒ 界面看不到、API 也写不进。
+    "runtime": {
+        "max_concurrent_streams": {"type": "int",   "desc": "全局并发流上限（每个 SSE 长连接占 1 路；单进程 + SQLite 单写者，默认 8）"},
+        "queue_wait_s":           {"type": "float", "desc": "并发闸排队窗口（秒）：超时仍拿不到名额则快速失败并提示稍后重试，避免 p99 雪崩"},
+        "chat_deadline_s":        {"type": "float", "desc": "单轮墙钟预算（秒）：到点收尾并**保留已产出**（不是掐断）；0=不限。默认 900 覆盖实测编排均值"},
+        "shutdown_drain_s":       {"type": "int",   "desc": "关闭排空预算（秒）：uvicorn 的 graceful timeout 与 lifespan 收尾共用同一值，防两处口径漂移"},
+        "orphan_ttl_s":           {"type": "int",   "desc": "非终态任务超过该秒数无进展 ⇒ 判孤儿（既有键，一并登记以便界面可调）"},
+        "reap_on_startup":        {"type": "bool",  "desc": "启动时回收孤儿编排任务（既有键）"},
+        "reap_dry_run":           {"type": "bool",  "desc": "孤儿回收只报告不改写（既有键，灰度/排障用）"},
+        "tool_idempotency_enabled": {"type": "bool", "desc": "写类工具幂等闸总开关：同一子任务的重试/续跑不会重复执行已成功的写（关 = 回到改动前行为）"},
+        "tool_idempotency_scope":  {"type": "str",   "desc": "幂等作用域：subtask=仅编排子任务（默认，有重试语义处）/ off=全关"},
+        "tool_idempotency_ttl_s":  {"type": "int",   "desc": "幂等记录保留时长（秒，默认 86400=24h）"},
+    },
+    # ── 2026-10-30（P0-2）：orchestration 段此前**未登记进 SCHEMA** ──
+    # 后果：`save_override()` 对未登记键直接 `raise ValueError("未知配置项")`
+    #   ⇒ `orchestration.*` 这 7 个键**在接口与界面上根本改不了**
+    #   （实测：`PUT /api/system/config/static` 写 orchestration.auto_resume_enabled
+    #     会报「未知配置项」）。这与 runtime 段是同一类缺陷（DEFAULT 有、SCHEMA 无），
+    #   只是这次落在**停滞自愈总开关**上 —— 一个改不了的开关等于没有开关。
+    # ⇒ 本段整体登记（键不多、语义清楚），使「默认开 + 三道成本闸」可被现场调。
+    "orchestration": {
+        "resume_stale_s":             {"type": "int",  "desc": "编排失活阈值（秒）：心跳超过该值才算死掉（单批实测上限 1155s，取 1.5 倍）"},
+        "resume_max_attempts":        {"type": "int",  "desc": "单批次最多恢复几次（超过不再自愈，防「恢复→再崩」死循环）"},
+        "resume_include_failed":      {"type": "bool", "desc": "恢复时是否连带重跑 failed 任务（默认否：可能有副作用）"},
+        "auto_resume_on_startup":     {"type": "bool", "desc": "启动时自动重投中断批次（默认否，与守护默认开的口径不同）"},
+        "auto_resume_enabled":        {"type": "bool", "desc": "编排自动重投守护总开关（默认开；关 = 崩溃批次只能人工点继续）"},
+        "auto_resume_interval_s":     {"type": "int",  "desc": "守护扫描周期（秒）"},
+        "auto_resume_max_runs":       {"type": "int",  "desc": "单轮最多重投几个批次（成本闸之一，默认 1）"},
+        "auto_resume_daily_budget":   {"type": "int",  "desc": "每日自动重投总次数上限（成本闸之二，0=不限；按 UTC 日计数）"},
+        "auto_resume_include_failed": {"type": "bool", "desc": "守护是否重跑 failed 任务（成本闸之三，默认否：有副作用风险）"},
+        # ★ 2026-10-30（P0-1）：与上一行**刻意分开** —— 上一行会连带重跑确定性失败（只烧钱），
+        #   本行只放行"进程死亡"（error_class=interrupted）。关掉 = 行为退回改动前。
+        "resume_interrupted":         {"type": "bool", "desc": "放行 interrupted（进程死亡类）自动续跑；需写类工具幂等开启，关掉即退回改动前行为"},
+        "auto_resume_max_age_s":      {"type": "int",  "desc": "自动重投年龄闸：批次失活超过该秒数不再自动投（转人工），0=不限"},
+        "checkpoint_enabled":         {"type": "bool", "desc": "检查点写入开关（失败永不阻断编排）"},
+    },
     "replanning": {
-        "enabled":             {"type": "bool", "desc": "重规划总闸（差量重画/LLM 重画；默认关=零行为变更，T1 补跑不受此闸约束——由 retry_once 单独控制）"},
-        "retry_once":          {"type": "bool", "desc": "T1 补跑：可重试类失败（timeout/transient/internal，排除 interrupted）同 key 自动补跑一次"},
+        "enabled":             {"type": "bool", "desc": "重规划总闸（差量重画/LLM 重画；默认关=零行为变更，T1 补跑不受此闸约束——由 retry_once 单独控制）"},        "retry_once":          {"type": "bool", "desc": "T1 补跑：可重试类失败（timeout/transient/internal，排除 interrupted）同 key 自动补跑一次"},
         "max_redraw_rounds":   {"type": "int",  "desc": "差量重画轮次上限（与无进展检测互为兜底，防无限重画烧钱）"},
         "redraw_expand_ratio": {"type": "float", "desc": "重画规模上限：新任务数 ≤ 原图剩余任务数 × 此值（Q4 质量门，防重画膨胀）"},
         "llm_redraw":          {"type": "bool", "desc": "LLM 整图重画（T3，默认关；规则重画确定性优先，Mock 环境行为不漂移）"},
@@ -1917,6 +2399,7 @@ def save_override(updates: dict) -> dict:
     - 写回时保留文件内既有未知键，不覆盖
     """
     converted: dict = {}
+    skipped_masked: list = []
     for dotted, raw in (updates or {}).items():
         if not isinstance(dotted, str) or "." not in dotted:
             raise ValueError(f"配置键必须是 分组.键 格式（如 zhiyuan.base_url），收到: {dotted!r}")
@@ -1924,11 +2407,84 @@ def save_override(updates: dict) -> dict:
         meta = CONFIG_SCHEMA.get(section, {}).get(key)
         if meta is None:
             raise ValueError(f"未知配置项: {dotted}")
+        # ★ P1-6（2026-10-30）：**掩码回写护栏**。
+        #   `schema()` 对 secret 类返回 `abc****`；前端若把表单原样提交回来，
+        #   下面 `_coerce` 会把它当合法字符串写进配置文件 ⇒ **真密钥被 6 个字符覆盖**。
+        #   判据：secret 类且值以 `****` 结尾 ⇒ 视为"未修改"，跳过该键。
+        #   （若用户真想清空密钥，提交空串 —— 那是明确意图，允许。）
+        if (str(meta.get("type") or "") == "secret"
+                and isinstance(raw, str) and raw.endswith("****")):
+            skipped_masked.append(dotted)
+            continue
         converted.setdefault(section, {})[key] = _coerce(meta, raw)
     merged = _force_merge(_load_file(CONFIG_PATH), converted)
     _write_file(CONFIG_PATH, merged)
     reload()
-    return {"path": CONFIG_PATH, "updated": list((updates or {}).keys())}
+    return {"path": CONFIG_PATH,
+            "updated": list((updates or {}).keys()),
+            # P1-6：被"掩码回写护栏"跳过的键（如实回报，别让调用方以为改了）
+            "skipped_masked": skipped_masked}
+
+
+# ── P1-6（2026-10-30）：补齐 29 个「DEFAULT 有、SCHEMA 无」的键 ────────────
+# 为什么必须补：`CONFIG_SCHEMA` 是界面/API 的**唯一真源**。不在里面的键，
+# `PUT /api/system/config/static` 直接抛「未知配置项」⇒ 界面上根本改不了。
+# 这 29 个恰是"出问题时要第一时间调"的旋钮（限流阈值、worker 并发、登录策略、OCR 预算）。
+# ⚠️ `client_secret` / `api_key` 用 `type="secret"`：`schema()` 会脱敏成 `xxx****`，
+#    写回时由 `save_override` 的护栏跳过（否则掩码会把真密钥覆盖掉）。
+# ⚠️ **必须逐段 merge，不能 `CONFIG_SCHEMA.update({...})`**（2026-10-30 实测踩到）：
+#   `dict.update` 对已存在的段是**整段替换** ⇒ embedding / extract / rag 三个段
+#   原有的 58 个键被一次抹掉（schema 键数从 455 掉到 426，且界面会显示"未知配置项"）。
+#   正确姿势：`setdefault(段, {}).update(本段新增项)` —— 只加不改。
+_EXTRA_SCHEMA = {
+    "auth": {
+        "mode":                    {"type": "str",  "desc": "登录模式：local=本地账号 / sso=单点登录"},
+        "sso_base":                {"type": "str",  "desc": "SSO 服务基地址（mode=sso 时生效）"},
+        "client_id":               {"type": "str",  "desc": "SSO 客户端 ID"},
+        "client_secret":           {"type": "secret", "desc": "SSO 客户端密钥（脱敏显示；提交掩码值不会覆盖真值）"},
+        "redirect_uri":            {"type": "str",  "desc": "SSO 回调地址（须与 SSO 侧登记一致）"},
+        "default_role_id":         {"type": "int",  "desc": "新用户默认角色 id（现网 80=设计师）"},
+        "session_ttl_hours":       {"type": "int",  "desc": "登录会话有效期（小时）"},
+        "enforce_login":           {"type": "bool", "desc": "是否强制登录（关=匿名可访问，权限门对匿名一律放行）"},
+        "trust_user_id_header":    {"type": "bool", "desc": "是否信任 X-User-Id 头（仅内网/联调应开启）"},
+    },
+    "conv_summary": {
+        "max_tokens":              {"type": "int",  "desc": "会话摘要输出上限（token）。P1-27 实测硬编码 300 时 266 次调用恒触顶、摘要功能基本失效"},
+    },
+    "embedding": {
+        "on_quota_exhausted":      {"type": "str",  "desc": "额度耗尽时的策略：block=直接报错 / 其它=降级 bigram（bigram 与真向量物理不可比）"},
+        "quota_block_sec":         {"type": "int",  "desc": "额度熔断时长（秒）：命中 403/429+quota 后在此期间直接降级，不反复试"},
+    },
+    "extract": {
+        "ocr_page_batch":          {"type": "int",  "desc": "OCR 每页批大小（整份入库持写事务，批太大易撞 busy_timeout）"},
+        "ocr_resume_enabled":      {"type": "bool", "desc": "OCR 断点续跑（中断后从已完成页继续，避免整份重跑）"},
+        "ocr_time_budget_sec":     {"type": "int",  "desc": "单份文档 OCR 总时间预算（秒，超时按已完成页收尾）"},
+    },
+    "jobs": {
+        "worker_enabled":          {"type": "bool", "desc": "后台作业 worker 总开关（关=作业只入队不执行）"},
+        "worker_count":            {"type": "int",  "desc": "worker 并发数（与 SQLite 单写者争用相关，别盲目调大）"},
+        "worker_interval_s":       {"type": "int",  "desc": "worker 轮询间隔（秒）"},
+        "worker_lease_s":          {"type": "int",  "desc": "作业租约（秒）：超时未续租视为失活，可被其它 worker 接管"},
+    },
+    "rag": {
+        "hyde_embed_max_chunks":   {"type": "int",  "desc": "HyDE 向量化的最多块数（0=不限）。HyDE 让索引期向量请求数翻倍，设上限可控成本"},
+        "tenant_isolation":        {"type": "str",  "desc": "租户隔离策略：off=不做 / 其它=按租户过滤（当前默认 off，改前需评估存量数据归属）"},
+        "tenant_unresolved":       {"type": "str",  "desc": "租户无法解析时的处置：passthrough=放行 / 其它=拒绝"},
+    },
+    "rate_limit": {
+        "enabled":                 {"type": "bool", "desc": "限流总开关"},
+        "chat_per_min":            {"type": "int",  "desc": "每用户每分钟对话请求上限（最贵的入口，通常最先被压）"},
+        "write_per_min":           {"type": "int",  "desc": "每用户每分钟写请求上限"},
+        "read_per_min":            {"type": "int",  "desc": "每用户每分钟读请求上限"},
+        "exempt_paths":            {"type": "list", "desc": "限流豁免路径前缀（健康检查/监控/静态资源等）"},
+    },
+    "web_search": {
+        "provider":                {"type": "str",  "desc": "联网搜索提供方（空=不启用）"},
+        "api_key":                 {"type": "secret", "desc": "搜索服务密钥（脱敏显示；提交掩码值不会覆盖真值）"},
+    },
+}
+for _sec, _items in _EXTRA_SCHEMA.items():
+    CONFIG_SCHEMA.setdefault(_sec, {}).update(_items)
 
 
 def schema() -> dict:
@@ -1944,7 +2500,14 @@ def schema() -> dict:
             out[section][key] = {
                 **meta,
                 "current": shown,
-                "default": DEFAULT_CONFIG.get(section, {}).get(key),
+                # ★ 2026-10-28：允许在 CONFIG_SCHEMA 的 meta 里直接声明 default。
+                #   为什么需要：`agent` 段原本没有 DEFAULT_CONFIG 条目 ⇒ 该段**所有**
+                #   配置项在界面上"默认 —"，而像 todo_enabled 这种"默认关"
+                #   恰恰是最关键的信息（用户要一眼看出"现在没开"）。
+                #   向后兼容：既有键的 meta 里没有 default ⇒ 仍回落 DEFAULT_CONFIG。
+                "default": (meta.get("default")
+                            if "default" in meta
+                            else DEFAULT_CONFIG.get(section, {}).get(key)),
             }
     return out
 
@@ -1968,8 +2531,21 @@ def runtime_settings(conn=None) -> dict:
 
 
 def update_runtime_settings(updates: dict, conn=None) -> dict:
-    """批量 upsert settings 动态配置（key → value）。"""
+    """批量 upsert settings 动态配置（key → value）。
+
+    ⚠️ 白名单准入（2026-10-23）：本函数与 PUT /api/settings/{key} 是两个通用写入入口，
+       此前均无校验 —— 5 个"零消费点"无效键（query_route 等）正是从这类入口写进库的
+       （界面能改、改了不生效）。合法键唯一权威 = core/setting_keys.py；
+       专用入口（staging_fuse.set_fuse_config / project_repo 的 default_project_id）
+       走直接 SQL，不经本函数，不受此限。
+    """
+    from core.setting_keys import is_valid_setting_key, valid_keys_hint
     updates = updates or {}
+    bad = [k for k in updates if not is_valid_setting_key(str(k))]
+    if bad:
+        raise ValueError(
+            "未知配置键 %s（无消费点，写了也不会生效）。合法键：%s"
+            % (bad, "、".join(valid_keys_hint())))
     own = conn is None
     if own:
         from database import get_db

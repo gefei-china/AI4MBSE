@@ -23,6 +23,9 @@ from .providers import (  # noqa: F401  （注册副作用）
 #: LLM 层日志器（思考超限告警用；与 provider 层 `mbse.llm` 同族）
 _log = logging.getLogger("mbse.llm")
 
+# P1-5：上下文占用告警去重（(窗口, 10% 分桶) → 同一档只报一次）
+_CTX_UTIL_WARNED = set()
+
 #: 思考超限告警去重集合（2026-10-10）。
 #: 键 = (intent, provider_id)。**为什么进程内去重**：真实量级 310/6890≈4.5%，
 #: 且单次会话会连续多轮触发同一组合 ⇒ 不去重会把日志刷爆、反而看不见。
@@ -326,6 +329,25 @@ class LLMClient:
           会把**所有失败调用**算进来 —— 我据此误判过一次（见 docs 报告 §5.3）。
           新增 `failure_kind` / `failure_msg` 两列，让失败可按类聚合。
         """
+        # ★ P1-5（2026-10-30）：本行的上下文窗口（利用率分母）。
+        #   取 provider 的 cfg（与 provider 层守卫读的是同一个值，不另算一份，
+        #   否则"记账里的窗口"与"实际截断用的窗口"会漂移）。
+        _cw = 0
+        _pname = "?"
+        try:
+            # ⚠️ `provider` 实参是**配置 dict 本身**（调用处 `provider.get("api_key")` 可证），
+            #   不是带 `.cfg` 的 provider 对象 —— 第一版按对象取，`getattr` 恒 None
+            #   ⇒ 每行 `context_window` 都写成 0（门禁 A2/A3 只判"列在 INSERT 里"，
+            #   抓不到"值恒为 0"这种**接线但取不到值**的形态；靠端到端实测才发现）。
+            #   两种形态都兼容：dict 直接取；对象回落 `.cfg`。
+            if isinstance(provider, dict):
+                _pcfg = provider
+            else:
+                _pcfg = getattr(provider, "cfg", None) or {}
+            _cw = int(_pcfg.get("context_window") or 0)
+            _pname = str(_pcfg.get("name") or _pcfg.get("model_name") or "?")
+        except Exception:
+            _cw = 0
         try:
             failure_kind = self.classify_failure(failure) if call_failed else ""
             failure_msg = ""
@@ -352,6 +374,29 @@ class LLMClient:
                     ct = max(len(str(_content)) // 2, 1) if _content else 0
                 except Exception:
                     ct = 0
+            # ★ P1-5（2026-10-30）：**上下文占用告警**（只留痕不拦截）。
+            #   为什么需要：既有 `context_window_guard` 只管"输出上限超窗口"（mt>cw），
+            #   对"输入把窗口吃掉"完全无信号 —— id=71 配 mt=112000/cw=128000，
+            #   输入余量只剩 ~15.5k，而生产 prompt 实测最大 27.5k，旧口径下一点动静都没有。
+            #   为什么只留痕：真到顶由 provider 报错（`finish_reason` / 400），
+            #   我们不该用估算值去**拦截**真实调用（估算与真实 tokenizer 必然有偏差）。
+            #   去重键 (窗口, 按 10% 分桶)：同一档位只报一次，避免长会话每轮刷屏。
+            try:
+                if _cw > 0 and pt > 0:
+                    _util = float(pt) / float(_cw)
+                    from core import config as _cfgcu
+                    _uw = float(_cfgcu.get("llm", "context_util_warn", 0.85) or 0)
+                    if _uw > 0 and _util >= _uw:
+                        _k = (int(_cw), int(_util * 10))
+                        if _k not in _CTX_UTIL_WARNED:
+                            _CTX_UTIL_WARNED.add(_k)
+                            _log.warning(
+                                "[context_util] 上下文占用 %.1f%%（prompt=%d / window=%d）"
+                                "｜intent=%s provider=%s｜阈值 llm.context_util_warn=%.2f"
+                                "｜只留痕不拦截：真到顶由 provider 报错",
+                                _util * 100, pt, _cw, intent, _pname, _uw)
+            except Exception:
+                pass
             est = 0.0
             if not used_mock:
                 _pi = LLMClient.PRICE_PER_1M["input"]
@@ -369,6 +414,16 @@ class LLMClient:
             _meta = resp.get("_meta")
             if isinstance(_meta, dict):
                 _meta["token_count"] = pt + ct
+                # ★ 2026-10-28（conv 9730 实证）：把**缓存命中/未命中/输出**三笔分开回填。
+                #   为什么必须分开：预算闸原先只拿到 `token_count = pt + ct`，
+                #   于是"每轮重发那 16.7k 固定前缀"被**按全价重复计入**。
+                #   实测该会话 270,433 prompt 里 **249,344（92%）是缓存命中**
+                #   （真实新增只有 21,089 miss + 10,600 输出）⇒ 预算看到 280,049 撞 300k
+                #   而"实际花掉的新信息量"只有 3.2 万 ⇒ 一个 15 步任务在 86% 处被判超预算、
+                #   停在离终点两轮的地方。记账口径错，判定就必然错。
+                _meta["cache_hit_tokens"] = pch
+                _meta["cache_miss_tokens"] = pcm
+                _meta["completion_tokens"] = ct
             # P1-1c：重试/回退观测（值由各调用路径写入 _meta；Mock/旧路径缺失 → 全 0，零行为漂移）
             try:
                 _rc = int((_meta or {}).get("retry_count") or 0)
@@ -441,6 +496,13 @@ class LLMClient:
                      pt, ct, pt + ct, pch, pcm,
                      _fr, rt, _rc, _fu, _fp, round(est, 6), latency_ms)
             with db_conn() as conn:
+                # S0（2026-10-28）探针标记：`chat_probe` 实测占 7 天 LLM 成本 51%，
+                #   不标则"成本优化"的基线全错。判定集中在 core/probe_mark（不另写正则）。
+                try:
+                    from core.probe_mark import is_probe_intent as _ipi
+                    _probe = _ipi(intent)
+                except Exception:
+                    _probe = 0
                 try:
                     conn.execute(
                         "INSERT INTO llm_usage_stats (provider_id, provider_name, model_name, intent, used_mock, "
@@ -449,10 +511,12 @@ class LLMClient:
                         "finish_reason, reasoning_tokens, retry_count, fallback_used, fallback_provider_id, "
                         "estimated_cost, latency_ms, conversation_id, run_id, trace_id, sub_task_key, "
                         # ★ P0-3新增三列
-                        "call_failed, failure_kind, failure_msg) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "call_failed, failure_kind, failure_msg, is_probe, "
+                        # ★ P1-5（2026-10-30）：分母（上下文利用率的唯一来源）
+                        "context_window) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         _vals + (_cid, _rid, _tid, _skey,
-                                 1 if call_failed else 0, failure_kind, failure_msg),
+                                 1 if call_failed else 0, failure_kind, failure_msg, _probe, _cw),
                     )
                 except Exception as _e2:
                     # 关联列迁移未跑到 → 降级写入原有 17 列（不丢用量数据，绝不因记账失败阻断调用）
@@ -467,6 +531,23 @@ class LLMClient:
                         raise
         except Exception:
             pass
+        finally:
+            # P0-b M5：闭 llm span——放 **finally** 而非 try 尾：记账成败
+            # （DB 插入被上面 except 吞掉）与 span 生命周期解耦，否则 flush
+            # 只能按 unclosed_at_flush 收口、token 归属丢失。pt/ct/_tid 可能
+            # 因早期异常未绑定 ⇒ locals() 兜底（不伪造：拿不到就记 0）。
+            try:
+                from services.orch_span import current_tracer as _ct
+                _tracer = _ct()
+                if _tracer is not None:
+                    _tracer.close_llm(
+                        trace_id=str(locals().get("_tid") or ""),
+                        tokens_in=int(locals().get("pt") or 0),
+                        tokens_out=int(locals().get("ct") or 0),
+                        latency_ms=int(latency_ms or 0),
+                        ok=not call_failed)
+            except Exception:
+                pass   # 观测收口失败绝不阻断记账/主链路
 
     def get_default_provider(self):
         from database import get_db
@@ -487,6 +568,23 @@ class LLMClient:
     def chat(self, messages, provider_id=None, stream=False, tools=None, thinking=False,
              route_tags=None, **kwargs):
         """统一 LLM 入口（兼容旧签名，逻辑等价旧实现，真实调用经 ProviderRegistry 插件化）。"""
+        # ★★ 2026-10-30（P0 缺口②·最外层必经检查）：**预算已耗尽就在入口直接拒**。
+        #   为什么 provider 层已有 `cap_timeout` 还要再来一次（本机实测 conv 9773）：
+        #     该轮墙钟 8s，`planner` 在 5.3s 被正确拦截（日志有"墙钟预算已耗尽"），
+        #     但**回落单 Agent 的路径**随后又发起 `chat_probe` 并跑了 75s ——
+        #     因为那条路径没经过我们改的那一处 provider 方法（本仓有多条
+        #     provider/调用形态，逐个堵必然漏）。
+        #   ⇒ 在**统一入口**再判一次：只要已登记且预算耗尽，任何调用形态都出不去。
+        #   这是"纵深防御"而非重复：provider 层管"压 timeout"，本层管"已无预算"。
+        try:
+            from core import runtime_state as _rs_c
+            _left_c = _rs_c.thread_deadline_left()
+            if _left_c is not None and _left_c <= 0:
+                raise ValueError("整轮墙钟预算已耗尽，放弃本次 LLM 调用（入口拦截 rl=deadline）")
+        except ValueError:
+            raise
+        except Exception:
+            pass      # 运行时状态不可用 ⇒ 不阻断调用（观测设施故障不得变成业务故障）
         provider = None
         route_reason = ""
         if provider_id:
@@ -507,6 +605,19 @@ class LLMClient:
         provider_name = provider.get("name", "未配置") if provider else "未配置"
         model_name = provider.get("model_name", "-") if provider else "-"
         t0 = time.time()
+        # P0-b M5：llm span（会话级 trace）。开在 chat() 入口——mock / no-key /
+        # 真实非流式 / 真实流式 / 异常五类出口的**唯一公共前躯**；闭点在
+        # _record_usage 的 finally（流式与非流式唯一记账点，8 个调用全覆盖）。
+        # 无 tracer（编排子任务线程持空 Context / 非 chat/stream 路径）⇒ no-op。
+        # ⚠️ 不在此处存 sid：嵌套 chat（工具执行中再发起）由 llms 栈 LIFO 保证
+        #    内外层各自闭对（见 close_llm docstring）。
+        try:
+            from services.orch_span import current_tracer as _ct
+            _tracer = _ct()
+            if _tracer is not None:
+                _tracer.open_llm(model_name, kwargs.get("_intent", ""), t0=t0)
+        except Exception:
+            pass   # 观测装配失败绝不阻断 LLM 调用
 
         # 测试确定性：llm.force_mock 强制 Mock（回归测试不依赖外部网络；兼容 MBSE_LLM_FORCE_MOCK）
         from core import config as _cfg
@@ -674,6 +785,28 @@ class LLMClient:
             times = 0
         last = None
         for attempt in range(times + 1):
+            # ★★ 2026-10-30（P0 缺口②·重试放大）：**每轮重试前先看墙钟还剩多少**。
+            #   为什么必须有这一条（本机实测 conv 9774）：
+            #     墙钟 8s，但 `task_decompose` 的一次调用跑了 **57,390 ms 且 status=ok**
+            #     —— 因为 `cap_timeout` 压的是**单次** timeout，
+            #     而 `llm.retry_times=2` 会让总耗时至多 ×3，再叠加退避：
+            #     8s × 3 + 2×0.5s ≈ 25s，加上"每次独立成功"的情形可以更长。
+            #     **压单次 ≠ 压总量**，这是本节最容易被忽略的乘法效应。
+            #   行为：剩余预算不足以再跑一次（< 单次下限 3s）⇒ 直接停，不再重试。
+            try:
+                from core import runtime_state as _rs_r
+                _rl = _rs_r.thread_deadline_left()
+                if _rl is not None and _rl < 3.0:
+                    try:
+                        import logging as _lg3
+                        _lg3.getLogger("mbse.llm").warning(
+                            "LLM 重试中止：整轮墙钟只剩 %.1fs（provider=%s model=%s，attempt=%d）",
+                            _rl, provider_name, model_name, attempt)
+                    except Exception:
+                        pass
+                    break
+            except Exception:
+                pass
             # 总预算闸：剩余预算不够再跑一次就**不再重试**（避免长尾）
             if _budget and attempt > 0:
                 _elapsed = _tt.time() - _t_start
@@ -887,6 +1020,24 @@ class LLMClient:
         _chars = 0
         try:
             for ev in gen:
+                # ★★ 2026-10-30（P0 缺口②·流式最后一处）：**在流式消费点检查墙钟**。
+                #   为什么前面那些检查都打不断它（本机实测两次才定位）：
+                #     · `httpx.stream(timeout=N)` 的 N 是**每次读操作的超时**，
+                #       不是整个流的时长 —— 逐帧都很快到达时总时长可远超 N。
+                #       实测 conv 9772：墙钟 8s、`cap_timeout` 已生效，仍连续吐了 19 个 token 不停。
+                #     · 主循环里的墙钟也管不到：长文本是**一次** LLM 调用吐完的，
+                #       期间不回到主循环。
+                #   ⇒ 必须在这里（每帧必经的消费点）判，到点即 `break` 并**保留已收内容**。
+                #   为什么 break 而不 raise：抛异常会让上层把"正常收尾"当成"调用失败"，
+                #   从而丢弃已收文本 —— 那正是本次要根治的"超时即丢产出"。
+                try:
+                    from core import runtime_state as _rs_s
+                    _sleft = _rs_s.thread_deadline_left()
+                    if _sleft is not None and _sleft <= 0:
+                        _finish = _finish or "deadline"
+                        break
+                except Exception:
+                    pass
                 # ⚠️ 解析必须在 `yield` **之前**（实测踩过）：若放在 yield 之后，最后一帧
                 #    "已发给客户端、但还没解析"就遇到客户端 close⇒ 该帧的 usage 永久丢失
                 #    （实测：usage 帧正好是倒数第二帧 ⇒ 中断时 pt/ct 全丢，只剩正文估算值）。

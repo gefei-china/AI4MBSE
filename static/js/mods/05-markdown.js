@@ -55,7 +55,7 @@ function renderTable(rows){
 }
 function renderMarkdown(text, cites){
   if(!text) return '';
-  // V2.6 代码块折叠卡：默认收起（头部=语言+行数+复制），点击展开，避免长代码霸屏
+  // V2.6 代码块折叠卡：默认展开（2026-10-27 用户要求；头部=语言+行数+复制，点击可收起）
   function _codeFold(lines){
     const lang = (lines[0]||'').match(/^```(\w+)/);
     const body = lines.slice(1, lines.length && /^```\s*$/.test(lines[lines.length-1]) ? -1 : undefined);
@@ -73,11 +73,19 @@ function renderMarkdown(text, cites){
         + `<div class="mermaid-view" id="${mid}"><div style="padding:10px;font-size:11px;color:var(--mut);">Mermaid 视图渲染中…</div></div>`
         + `<pre class="md-code" style="display:none;"><code>${escMd(body.join('\n'))}</code></pre></div>`;
     }
-    return `<div class="code-fold">`
-      + `<div class="cf-head" onclick="codeFoldToggle(this)"><span class="cf-lang">${escMd(langName)}</span>`
+    // ★ 2026-10-27（用户："输出的代码块需要支持展开/收起能力，默认展开"）：
+    //   原实现**默认收起**（`.code-fold` 不带 open ⇒ `.md-code{display:none}`），
+    //   用户要复制/阅读得先点一下，7 个代码块就是 7 次点击；且收起态只剩 29px 的头部，
+    //   长代码完全看不见。
+    //   现在默认 `open`：代码**默认完整可见**，点头部可收起 ——
+    //   与 B5-8 的「最终输出不许收起来」同向（默认可见是底线，收起是用户主动选择）。
+    //   高度仍受 `.md-code{max-height:340px;overflow:auto}` 约束 ⇒ 超长代码内滚，
+    //   不会把页面拉长（这正是"可滑动查看完整内容"）。
+    return `<div class="code-fold open">`
+      + `<div class="cf-head" onclick="codeFoldToggle(this)" title="点击收起 / 展开"><span class="cf-lang">${escMd(langName)}</span>`
       + `<span class="cf-meta">${n} 行</span>`
       + `<span class="cf-act" onclick="event.stopPropagation();codeFoldCopy(this)">📋 复制</span>`
-      + `<span class="chev">▸</span></div>`
+      + `<span class="chev">▾</span></div>`
       + `<pre class="md-code"><code>${escMd(body.join('\n'))}</code></pre></div>`;
   }
   /*★ B5-8（2026-10-14 米爸明确要求，撤销 B5-6/A-2）：**正文一律不折叠**。
@@ -88,6 +96,8 @@ function renderMarkdown(text, cites){
    *
    * 保留原样、**不动**的部分：
    *   · `_codeFold`（代码块折叠）—— 那是 2026-09-16 就有的既有行为，与本次无关；
+   *     **2026-10-27 变更**：用户要求「代码块支持展开/收起，默认展开」⇒ 默认态由收起改为展开，
+   *     与上面"正文不折叠"的纪律同向（默认可见是底线，收起只由用户主动触发）。
    *   · 引用来源折叠区（`cite-src-body`，`static/js/mods/05-markdown.js` 内）——
    *     它是**用户主动点开的抽屉**，不是"默认收起的正文"。
    *
@@ -192,6 +202,27 @@ function codeFoldCopy(actEl){
   navigator.clipboard.writeText(code.textContent||'').then(()=>toast('代码已复制')).catch(()=>toast('复制失败'));
 }
 
+// ── 用户输入折叠（2026-10-28，用户反馈「输入内容多导致页面很长」）──────────────
+// ★ 只折「用户输入」，**绝不折 AI 输出正文** —— 见 renderMessage 内的区分说明。
+// 行数阈值：约 8 行（≈ 屏幕上一屏的 1/4，足够看出这轮问了什么）。
+const USER_FOLD_LINES = 8;
+// 折叠条上的字数提示（用户据此判断要不要展开）
+function _raw_len_hint(s){
+  const n = String(s||'').length;
+  return n >= 1000 ? (n/1000).toFixed(1) + 'k' : String(n);
+}
+// 展开/收起用户输入
+function toggleUserFold(btn){
+  const bar = btn && btn.closest ? btn.closest('.uf-bar') : null;
+  const box = bar ? bar.previousElementSibling : null;
+  if(!box) return;
+  const collapsed = box.classList.toggle('collapsed');
+  const n = box.getAttribute('data-lines') || '';
+  btn.textContent = collapsed
+    ? `展开全部（共约 ${n} 行，${_raw_len_hint(box.textContent)} 字）`
+    : '收起';
+}
+
 function renderMessage(m) {
   const cls = m.role==='user' ? 'u' : 'ai';
   const who = m.role==='user' ? '王' : 'AI';
@@ -211,13 +242,62 @@ function renderMessage(m) {
   const bodySrc = codeFound ? stripFencedCode(m.content||'') : (m.content||'');
   const contentHtml = m.role==='assistant' ? renderMarkdown(bodySrc, cites) : bodySrc;
   let html = `<div class="msg ${cls}"${m.id?` id="msg-${m.id}" data-mid="${m.id}"`:''}><span class="who">${who}</span><div class="msg-inner">`;
-  // V2.4 会话内执行过程：思考 → 子智能体 → 工具调用（流式当时传入 process_html；历史消息从 card_data.exec 还原）
-  // 2026-09-25：同时把 card_data 按消息 id 缓存 —— 「🔍 执行详情」面板据此读**落库的原始执行数据**
-  //  （intent/agent/skill_hits/source/confidence/provider/used_mock/tools/reasoning），
-  //   而不是只从 DOM 过程块里刮（DOM 只有 exec 的子集，会漏掉技能/意图/模型等字段）。
+
+  /* ★ 2026-10-28（用户反馈「用户输入内容较多，直接都展示出来，导致页面拉的很长，
+        应该默认展示几行上下的收起来，支持展开查看」）：
+     **只对「用户输入」折叠，绝不折 AI 输出正文。**
+     这个区分是刻意的、有先例的 —— 本仓用户此前明确要求
+     「最终输出结果不要收起来，也不允许收起来」，所以此处折叠范围严格限定
+     `m.role==='user'`。若将来要给 AI 输出加折叠，那是**另一条需求**，须先经确认。
+
+     判据：按**估算行数**而非字符数决定是否折叠 —— 同样 300 字，
+     有换行会占 20 行、无换行只占 4 行，按字符数会误折短消息。
+     估算口径：显式换行数 + 每个「按容器宽度折行」的折算行数，取较大者。 */
+  let _userFold = null;
+  // ⚠️ `_raw` 必须在**块外**声明：折叠条拼接在 if 块之外引用它。
+  //   第一版写在 if 块内 ⇒ ReferenceError: _raw is not defined
+  //   ⇒ 所有用户消息渲染直接抛异常（门禁 verify_ux_four_fixes.js 抓到）。
+  const _raw = String(bodySrc || '');
+  if(m.role === 'user' && !m.__noFold){
+    const _nl = (_raw.match(/\n/g) || []).length;
+    // 用户气泡宽度有限（约 60 字符/行），按 60 折算软换行
+    const _soft = Math.ceil(_raw.replace(/\n/g, '').length / 60);
+    const _lines = Math.max(_nl + 1, _soft);
+    if(_lines > USER_FOLD_LINES){
+      _userFold = { lines: _lines };
+    }
+  }
+
+  // ★ 2026-10-28（用户报「已完成环节卡片被移动到代码块上方了，之前是在最上方的」）：
+  //   **顺序必须与流式一致** —— 直播时 DOM 是
+  //     `<div class="proc"></div><div class="body streaming">`
+  //   即「执行过程在上、正文在下」；而历史渲染此前是「正文先、proc 后」⇒ 同一份消息
+  //   在"收口那一瞬"卡片会从上跳到下（或反之），刷新后又一种顺序。
+  //   现在统一为 **先 proc（收口条 + 时间线）、后正文**：
+  //     · 与直播同构 ⇒ 收口不跳位；
+  //     · 也符合用户预期「最上方」。
+  //   `procHtmlNow` 在正文之前先算出来（历史路径与流式快照都用它）。
+  const _procHtmlNow = m.process_html
+    ? `<div class="proc">${m.process_html}</div>`
+    : ((cd && cd.exec) ? `<div class="proc">${procBlocksHtml(cd.exec, m.id)}</div>` : '');
+  // card_data 按消息 id 缓存（「🔍 执行详情」面板据此读落库原始数据，与渲染顺序无关）
   if(m.id && cd) { (window._msgCardCache = window._msgCardCache || {})[m.id] = cd; }
-  if(m.process_html) html += `<div class="proc">${m.process_html}</div>`;
-  else if(cd && cd.exec) html += procBlocksHtml(cd.exec, m.id);
+  html += _procHtmlNow;              // ① 执行过程（最上方）
+  html += `<div class="body" style="min-width:0;">`;   // ② 正文
+  if(_userFold){
+    // 折叠容器：默认只显示 USER_FOLD_LINES 行高度，点「展开」看全文
+    html += `<div class="user-fold collapsed" id="uf-${esc(String(m.id||Math.random().toString(36).slice(2,8)))}"`
+          + ` data-lines="${_userFold.lines}">${contentHtml}</div>`
+          + `<div class="uf-bar"><button class="uf-btn" onclick="toggleUserFold(this)">`
+          + `展开全部（共约 ${_userFold.lines} 行，${_raw_len_hint(_raw)} 字）</button></div>`;
+  } else {
+    html += contentHtml;
+  }
+  // V2.4 会话内执行过程：思考 → 子智能体 → 工具调用
+  // ⚠️ 2026-10-28：**已上移到正文之前**（见 `_procHtmlNow`），此处**不得**再渲染一次
+  //   —— 否则同一份执行过程会出现两遍（第一版改顺序时漏删，正是这种"两处各写一份"的坑）。
+  if(m.process_html) { /* 已前置渲染 */ }
+  else if(cd && cd.exec) { /* 已前置渲染 */ }
   // ★ 2026-10-17（米爸反馈1）：同轮澄清卡合并渲染 —— 由 03-chat.js 预处理挂到
   //   续答消息的 _clarify_prev 上（clarify 消息本身不再独立成气泡）。渲染为
   //   本消息流程时间线上的「确认环节」：问题清单 + 用户实际回答（card_data.answered，
@@ -247,7 +327,7 @@ function renderMessage(m) {
       <div class="proc-body"><div style="font-size:11.5px;line-height:1.7;">${_qHtml}${_ansHtml}<div style="color:var(--mut);margin-top:6px;">已在原输出流程内继续执行（本卡为流程中的一个确认环节）</div></div></div>
     </div>`;
   }
-  html += `<div class="body" style="min-width:0;">${contentHtml}`;
+  // body 容器已在上方按「是否折叠」分别拼接（含折叠条），此处不再重复开标签
   // V2.3 富输入：user 消息附件渲染（图片内联 / 文件链接）
   if(m.attachments) {
     let atts = [];
@@ -287,7 +367,21 @@ function renderMessage(m) {
         const hl = (cd.hil_level||'').toLowerCase();
         const hilBadge = cd.hil_level ? `<span class="hil ${hl.startsWith('l2')?'l2':hl.startsWith('l1')?'l1':'l0'}">HIL ${cd.hil_level}</span>` : '';
         const kb = (cd.kb_tags||[]).length ? ` ｜ 知识库：${cd.kb_tags.map(t=>'#'+t).join(' ')}` : '';
-        html += `<div style="margin-top:8px;font-size:11px;color:var(--mut);">${cd.agent?`<b>${cd.agent}</b> `:''}${hilBadge} 意图：${cd.intent} ｜ 来源：${cd.source}（图谱${cd.graph_count||0} / 向量${cd.vector_count||0}）置信度 ${(cd.confidence||0).toFixed(2)}${kb}</div>`;
+        // ★★ 2026-10-29（实测 conv 9751，排查时我自己都误读过一次）：
+        //   `cd.confidence` 是**检索置信度**（retrieval.confidence），不是意图置信度；
+        //   而意图置信度在 `cd.intent_confidence`。原实现把「置信度 x.xx」紧跟在
+        //   「意图：xxx ｜ 来源：xxx」之后，读起来就是"意图置信度" ——
+        //   实测该会话 cd.confidence=0.00 而真实意图置信度是 0.80（intent_samples 实证），
+        //   于是界面显示「意图：knowledge_qa … 置信度 0.00」，与事实相反。
+        //   修法：两个置信度**分别标注用途**，意图置信度单独渲染；检索置信度改名「检索置信度」。
+        const iconf = (cd.intent_confidence != null) ? Number(cd.intent_confidence) : null;
+        const rconf = (cd.confidence != null) ? Number(cd.confidence) : null;
+        const intentPart = iconf != null
+          ? ` 意图：${cd.intent}（意图置信 ${iconf.toFixed(2)}）`
+          : ` 意图：${cd.intent}`;
+        const retrPart = `来源：${cd.source}（图谱${cd.graph_count||0} / 向量${cd.vector_count||0}）`
+          + (rconf != null ? ` 检索置信 ${rconf.toFixed(2)}` : '');
+        html += `<div style="margin-top:8px;font-size:11px;color:var(--mut);">${cd.agent?`<b>${cd.agent}</b> `:''}${hilBadge}${intentPart} ｜ ${retrPart}${kb}</div>`;
       }
       // P0：结论速览面板（资料库与AI建模优化 §2）—— 默认展开，集中阅读最终结论
       const summaryHtml = renderSummaryPanel(cd);
@@ -322,6 +416,19 @@ function renderMessage(m) {
     const fbCls = m.feedback==='approve'?'ok':m.feedback==='reject'?'r':'w';
     html += `<div style="margin-top:6px;"><span class="st ${fbCls} hil-fb">${fbMap[m.feedback]||m.feedback}</span></div>`;
   }
+  // ── 消息质量信号（👍/👎）2026-10-29 新增 ──
+  // 与上面 `m.feedback`（**评审动作**：采纳/拒绝/修订）**语义不同**，分列显示：
+  //   feedback = 流程裁决（这份产物我批不批）
+  //   quality  = 质量评价（这条回答好不好）← 后者才是驱动进化的方向信号
+  // ⚠️ 合并成一套会让"评审拒绝"被当成"用户差评"，进化系统会去修没坏的东西。
+  // 取值集合从后端单一真源下发（GET /api/feedback-types），此处仅做兜底默认。
+  if(m.role==='assistant' && m.id){
+    const _q = String(m.quality||'');
+    html += `<div class="msg-qc" data-mid="${m.id}">
+      <button class="msg-qc-btn${_q==='up'?' on':''}" data-q="up" title="这条回答有帮助（用于优化检索与回答质量）">👍 有帮助</button>
+      <button class="msg-qc-btn${_q==='down'?' on is-down':''}" data-q="down" title="这条回答有问题（会成为改进信号）">👎 有问题</button>
+    </div>`;
+  }
   // V3.0 去消息级采纳/拒绝按钮：确认动作收敛到关键环节（确认写入/审核通过）。
   // 2026-09-17 移除「⚠ 需要确认 · SysML 产物入库」审批卡（用户确认移除）：
   //   该卡早已与架构脱节——14-sysml.js 顶部即注明「旧单版本入库入口已移除，AI 建模代码不再直接入库，
@@ -341,15 +448,10 @@ function renderMessage(m) {
 
 // ── 消息时间格式化：当日的 HH:MM，之前的 MM-DD HH:MM ──
 function formatMsgTime(ts){
-  if(!ts) return '';
-  const d = new Date(ts);
-  const now = new Date();
-  const isToday = d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
-  const hh = String(d.getHours()).padStart(2,'0');
-  const mm = String(d.getMinutes()).padStart(2,'0');
-  const MM = String(d.getMonth()+1).padStart(2,'0');
-  const DD = String(d.getDate()).padStart(2,'0');
-  return isToday ? `${hh}:${mm}` : `${MM}-${DD} ${hh}:${mm}`;
+  // ★ 2026-10-28（用户反馈「系统的时间不是北京时间」）：统一走 fmtServerTime，
+  //   原实现 `new Date(ts)` 对 `2026-10-28 05:44:52` 会按**本地时间**解析
+  //   （V8 宽松解析）或直接 Invalid Date（严格内核）⇒ 早 8 小时或空白。
+  return fmtServerTime(ts);
 }
 // ── 复制消息内容（按钮默认仅 icon，hover 展开文字；成功反馈显示 ✓ 已复制）──
 function copyMsg(btn){
@@ -386,3 +488,71 @@ function copyMsg(btn){
 }
 
 // ── V3 会话内执行过程：持久化数据（card_data.exec）→ 时间线顺序 HTML ──
+
+// ══════════════════════════════════════════════════════════════════════
+// 消息质量信号（👍/👎）—— 交互与取值目录（2026-10-29）
+// ══════════════════════════════════════════════════════════════════════
+// 为什么单独一个文件段落：质量信号是**显式负反馈的唯一入口**，
+// 在此之前前端没有任何可点的反馈入口，而后端 badcase / online_eval
+// 只认 modify/wrong/corrected ⇒ 显式负反馈常年 0 条、采样队列 0 行。
+//
+// ★ 取值集合**从后端单一真源下发**（GET /api/feedback-types），
+//   这里的数组只是**兜底默认**（API 不可用时不至于按钮全废）。
+//   两端集合相等由 tests/test_feedback_type_consistency.py 断言。
+const FB_QUALITY_TYPES_DEFAULT = ['up', 'down'];
+let FB_TYPES_CATALOG = null;   // {review_types:[], quality_types:[], ...}
+
+function fbQualityTypes(){
+  if(FB_TYPES_CATALOG && Array.isArray(FB_TYPES_CATALOG.quality_types) && FB_TYPES_CATALOG.quality_types.length){
+    return FB_TYPES_CATALOG.quality_types;
+  }
+  return FB_QUALITY_TYPES_DEFAULT;
+}
+
+// 拉一次取值目录（失败静默：走兜底默认，不阻断聊天）
+(function loadFbTypes(){
+  if(typeof api!=='function') return;
+  try{
+    api('/api/feedback-types').then(function(r){
+      if(r && Array.isArray(r.quality_types)) FB_TYPES_CATALOG = r;
+    }).catch(function(){});
+  }catch(e){ /* 兜底默认 */ }
+})();
+
+// ── 点击处理：事件委托（消息流是动态插入的，不能逐条绑定）──
+document.addEventListener('click', function(e){
+  const btn = e.target && e.target.closest ? e.target.closest('.msg-qc-btn') : null;
+  if(!btn) return;
+  const wrap = btn.closest('.msg-qc');
+  if(!wrap) return;
+  const mid = parseInt(wrap.getAttribute('data-mid')||'0', 10);
+  const q = btn.getAttribute('data-q')||'';
+  if(!mid || fbQualityTypes().indexOf(q)<0) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  const isDown = btn.classList.contains('is-down');
+  const cur = btn.classList.contains('on') ? (isDown ? 'down' : 'up') : '';
+  const next = (cur===q) ? '' : q;          // 再次点击同一项 = 取消评价
+
+  btn.disabled = true;
+  api(`/api/messages/${mid}/quality`, {method:'POST', body: JSON.stringify({quality: next})})
+    .then(function(r){
+      const got = (r && r.quality!=null) ? String(r.quality) : next;
+      wrap.querySelectorAll('.msg-qc-btn').forEach(function(b){
+        b.classList.remove('on','is-down');
+        const bq = b.getAttribute('data-q');
+        if(bq===got){
+          b.classList.add('on');
+          if(bq==='down') b.classList.add('is-down');
+        }
+      });
+      if(typeof toast==='function'){
+        toast(got ? (got==='down' ? '已记录：这条回答有问题，将用于改进' : '已记录：这条回答有帮助') : '已取消评价');
+      }
+    })
+    .catch(function(err){
+      if(typeof toast==='function') toast('反馈提交失败，请重试');
+    })
+    .finally(function(){ btn.disabled = false; });
+});

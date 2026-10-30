@@ -61,6 +61,19 @@ for (const c of M.CTX_CFG_CLUSTERS) {
     ck(v[k] !== undefined && v[k] !== null && !Number.isNaN(v[k]), '取值异常 ' + k + '=' + v[k]);
   }
 
+  // ── 2026-10-27（截断清单）本页必须表达的语义 ──────────────────────────────
+  // 只断言"字段在清单里"不够：用户在界面上看到的是**渲染后的文案**。
+  // ① 「单条消息上限」默认 0 = 不限 —— 渲染出来必须出现"不限"，不能显示成 "0 字符"
+  //    （0 字符会被理解成"什么都不给"，与实现相反的误读）。
+  // ② 新增的「语义拉回·分角色配额」必须真的在页面上（否则用户改不了它）。
+  ck(M.CTX_CFG_FIELDS.some(f => f.key === 'context.topic_retrieve_per_role_cap'),
+     '缺少字段 context.topic_retrieve_per_role_cap（分角色配额无法在界面调整）');
+  const splitViz = M.ctxViz(M.CTX_CFG_CLUSTERS.find(c => c.id === 'split'), v);
+  ck(/不限/.test(splitViz), '历史分配视图未把「单条消息上限=0」渲染成"不限"');
+  ck(!/>0 字符</.test(splitViz), '历史分配视图把 0 渲染成了 "0 字符"（语义相反）');
+  ck(/分角色配额|每角色/.test(splitViz), '历史分配视图未展示「分角色配额」');
+  ck(/单条消息上限/.test(body.innerHTML), '字段标签未更新为「单条消息上限」');
+
   let htmlOut = '';
   for (const c of M.CTX_CFG_CLUSTERS) {
     // viz:'none' 的簇（融合公式与补召）有意不画耦合图，只要不抛错即可

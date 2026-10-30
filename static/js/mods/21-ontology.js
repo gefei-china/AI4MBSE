@@ -2244,7 +2244,7 @@ function ontClTname(id, fb){
 function ontClTimeago(s){
   // created_at 形如 "YYYY-MM-DD HH:MM:SS"（UTC）→ 相对时间；解析失败回退原串
   try{
-    const ms = Date.parse(s.replace(' ','T')+'Z');
+    const _pd = parseServerTime(s); const ms = _pd ? _pd.getTime() : NaN;   // ★ 统一 UTC 解析（2026-10-28）
     if(isNaN(ms)) return esc(s||'');
     const diff = Math.max(0, Date.now()-ms);
     const m = Math.floor(diff/60000);

@@ -4,6 +4,16 @@
 由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
 
+# ★ 2026-10-28：补模块级 `logger`。
+#   此前本文件有 **5 处** `logger.warning/info`（可消费过滤剔除、技能白名单裁剪、
+#   MCP 动词闸挡掉、可消费过滤失败、未就绪工具跳过），但模块里**从未定义 logger**
+#   ⇒ 每处都抛 NameError，而它们又统统被 `except Exception: pass` 包住
+#   ⇒ **一行日志都没打出来，也没有任何报错**。
+#   这正是"静默兜底把错误变成不可见"的典型：留痕代码写了等于没写。
+import logging as _logging
+
+logger = _logging.getLogger(__name__)
+
 #: ★2026-10-10：确定性**本地**修复类工具，豁免「写意图闸」（仅对产码类 Agent）。
 #: 为什么需要：它们的 side_effect=write（确实改代码），而八视图输入是
 #: 「生成 X 视图并校验」—— 不含修复词 ⇒ 被整类过滤 ⇒ 模型看不到它们
@@ -81,6 +91,76 @@ _READ_ATTACHMENT_TOOL = {
 }
 
 
+def _impact_preview(name: str, arguments: dict) -> str:
+    """★ 2026-10-28（写前确认 HITL）：生成**影响面摘要**（给人看的），而不是裸参数 JSON。
+
+    ## 为什么不能只给 JSON
+    "只给 JSON 让人批 = 没让人批" —— 人看不懂参数就不会认真看，
+    于是审批退化成闭眼点通过（行业反模式：approval fatigue）。
+    ⇒ 摘要必须回答三个问题：**做什么 / 对谁做 / 影响多大**。
+
+    ## 口径（纯结构推导，零硬编码工具名）
+    - **目标名**：取常见命名键（name / title / label / elementName / ...）
+    - **容器**：取常见容器键（parentId / ownerId / containerId / viewId / projectId ...）
+    - **规模**：取列表型参数的条数（elements / items / elementIds / operations ...）
+    - **动作**：从工具名的动词族反推（create→新增 / update→修改 / delete→删除 ...）
+    """
+    args = arguments or {}
+    # 目标名
+    _target = ""
+    # ① 语义名（最易识别）
+    for _k in ("name", "title", "label", "elementName", "packageName", "viewName",
+               "newName", "targetName"):
+        _v = args.get(_k)
+        if isinstance(_v, (str, int)) and str(_v).strip():
+            _target = str(_v).strip()
+            break
+    # ② ★ ID 类键（2026-10-28 真机清库实测补：删除/移动类参数里**只有 ID 没有 name**
+    #   ⇒ 初版摘要渲染成「删除「（未命名对象）」× N」，用户等于盲批。
+    #   与 `hil_service._batch_target` 保持同一口径。)
+    if not _target:
+        for _k in ("dataId", "dataID", "data_id", "elementId", "elementID", "viewId",
+                   "presentingId", "packageId", "targetId", "id", "uuid"):
+            _v = args.get(_k)
+            if isinstance(_v, (str, int)) and str(_v).strip():
+                _s = str(_v).strip()
+                _target = "#" + (_s[-12:] if len(_s) > 12 else _s)
+                break
+    # 容器
+    _container = ""
+    for _k in ("parentId", "parentElementId", "ownerId", "containerId", "viewId",
+               "packageId", "versionId", "projectId", "branchId"):
+        _v = args.get(_k)
+        if isinstance(_v, (str, int)) and str(_v).strip():
+            _container = "%s=%s" % (_k, str(_v).strip())
+            break
+    # 规模
+    _count = 0
+    for _k in ("elements", "items", "elementIds", "operations", "changes",
+               "presentingIds", "targets", "relationships"):
+        _v = args.get(_k)
+        if isinstance(_v, (list, tuple)) and len(_v) > _count:
+            _count = len(_v)
+    # 动作
+    _n = str(name or "").lower()
+    _verb = "执行"
+    for _pat, _w in (("delete", "删除"), ("remove", "移除"), ("import", "导入"),
+                     ("apply", "应用变更"), ("undo", "撤销"), ("overwrite", "覆盖"),
+                     ("create", "新增"), ("update", "修改"), ("set", "设置"),
+                     ("move", "移动"), ("clone", "克隆"), ("layout", "布局"),
+                     ("present", "呈现"), ("configure", "配置"), ("generate", "生成"),
+                     ("run", "运行"), ("annotate", "标注")):
+        if _pat in _n:
+            _verb = _w
+            break
+    _parts = ["%s「%s」" % (_verb, _target or "（未命名对象）")]
+    if _container:
+        _parts.append("容器 %s" % _container)
+    if _count:
+        _parts.append("影响 %d 项" % _count)
+    return "；".join(_parts)
+
+
 class ToolMixin:
     """工具定义、执行、重试策略与调用留痕。"""
 
@@ -116,6 +196,30 @@ class ToolMixin:
 
         tools = []
         bound = self.registry.get_bound_mcp(intent)
+        # ★★ 2026-10-29（conv 9754 实测，用户问「智源 mcp 为啥没用到」）：
+        #   团队内定向（主 Agent → 成员直行）时，成员**必须继承主 Agent 的 MCP 平台能力**。
+        #   事实链：主 Agent「智源对接agent」绑 zhiyuan-dev-mcp（71 个工具）；
+        #   团队路由按意图把本轮定向给成员「工程建模方案设计Agent」（MCP 绑定数=0）；
+        #   旧实现只 `get_bound_mcp(成员)` ⇒ 71 个工具全部消失 ⇒ 模型如实回执
+        #   "当前工具清单无智源 MCP 查询工具，无法直接拉取工程实例数据" ⇒ 待办无法推进 ⇒ 中断。
+        #   语义依据：用户选主 Agent 就是选了它的**平台对接能力**；定向只该改"谁思考"，
+        #   不该把用户选中的能力一起丢掉（与 R1「改判意图不改执行主体」同源）。
+        #   取舍：**只继承 MCP**，不继承技能/知识库范围（那些是成员自身职责，混进来会污染）。
+        #   开关 `agent.team_member_inherit_mcp`（默认 True；置 False 逐字节回到改动前行为）。
+        _main_intent = getattr(self, "_team_main_agent", "") or ""
+        if _main_intent and _main_intent != intent:
+            try:
+                from core import config as _cfg_inh
+                _inherit_main_mcp = bool(_cfg_inh.get("agent", "team_member_inherit_mcp", True))
+            except Exception:
+                _inherit_main_mcp = True
+            if _inherit_main_mcp:
+                _seen_srv = {(m.get("name") or "") for m in bound}
+                for _m in (self.registry.get_bound_mcp(_main_intent) or []):
+                    _srv_nm = _m.get("name") or ""
+                    if _srv_nm and _srv_nm not in _seen_srv:
+                        bound.append(_m)
+                        _seen_srv.add(_srv_nm)
         # ★ 2026-10-13：工具参数契约注入开关（config: tool_jit.inject_input_schema，默认开）。
         #   背景见 core/config.py 同名键的注释——简言之：SQL 早就 SELECT 了 t.input_schema，
         #   但 candidates 是 4 元组装不下它，payload 恒为 `"properties": {}`（模型以为任意参数）。
@@ -192,11 +296,101 @@ class ToolMixin:
         #   根因：JIT 的本意是防「无关工具被顺手调用」，但**绑定动作本身就是用户的显式授权**，
         #   把绑定工具和偶然候选一起语义裁剪 ⇒ 绑了 71 个只露 6 个，绑定形同虚设。
         _bound_mcp_names = set()
+        # ★ P0-6（2026-10-26）：MCP 工具**真实元数据** + **按需暴露**。
+        #   背景（实测，生产库快照）：
+        #     · MCP 工具的 description 此前是**同一个模板串**、parameters 是宽松空壳
+        #       ⇒ 71 个工具 description 去重后仅 1 种 ⇒ **JIT 语义打分零区分度**
+        #       ⇒ 只能"全量注入"（5,467 token/轮，占整包 71~80%）；
+        #     · 模型看到 71 个工具，但**没有用途说明、没有参数契约** ⇒ 只能靠名字猜。
+        #   根因：`mcp_health.discover_server` 落库时只存了 name，
+        #   把 `list_tools()` 返回的 description / inputSchema **主动丢弃**了。
+        #   本次：① 真实 description + 真实 inputSchema（有 tool_meta 时）；
+        #        ② 每个 server **保底 min_keep 个**（保"显式契约"语义）+ 语义命中者额外入选。
+        #   兼容：tool_meta 为空（存量/未重新发现）⇒ **逐字节退回改动前行为**。
+        _mcp_meta_enabled = True
+        _mcp_min_keep = 8
+        _mcp_top_n = 0
+        try:
+            from core import config as _cfg_mcp
+            _mcp_meta_enabled = bool(_cfg_mcp.get("context_audit", "mcp_meta_enabled", True))
+            _mcp_min_keep = int(_cfg_mcp.get("context_audit", "mcp_min_keep", 8) or 0)
+            _mcp_top_n = int(_cfg_mcp.get("context_audit", "mcp_top_n", 0) or 0)
+        except Exception:
+            pass
+        _mcp_stats = {"servers": 0, "total": 0, "selected": 0, "meta_servers": 0}
+        _mcp_semantic_names = set()   # ★ 语义命中的 MCP 工具（供 core_keep 保底）
+        _mcp_write_groups = {}        # ★ MCP 写类工具 → 动词族（供"动词级意图闸"使用）
         for m in bound:
-            for t in (m.get("tools") or []):
+            _srv_name = m.get("name", "")
+            _tools = list(m.get("tools") or [])
+            # ── 读该 server 的工具元数据（description + inputSchema）──
+            _meta = {}
+            if _mcp_meta_enabled:
+                try:
+                    from agent.mcp_tool_meta import load_tool_meta
+                    _meta = load_tool_meta({"tool_meta": m.get("tool_meta") or ""})
+                except Exception:
+                    _meta = {}
+            if _meta:
+                _mcp_stats["meta_servers"] += 1
+                # 按需暴露：保底 min_keep + 语义命中补充
+                try:
+                    from agent.mcp_tool_meta import pick_for_injection
+                    _picked, _pst = pick_for_injection(
+                        _meta, user_input or "", min_keep=_mcp_min_keep, top_n=_mcp_top_n)
+                except Exception:
+                    _picked, _pst = list(_meta.keys()), {"selected": len(_meta), "keep": 0,
+                                                        "semantic": 0, "semantic_names": []}
+                _tools = _picked or _tools
+                _mcp_semantic_names |= set(_pst.get("semantic_names") or [])
+                _mcp_stats["servers"] += 1
+                _mcp_stats["total"] += _pst.get("total", len(_meta))
+                _mcp_stats["selected"] += _pst.get("selected", len(_picked))
+            else:
+                # 存量 server（无 tool_meta）⇒ 全量（改动前行为，逐字节一致）
+                _mcp_stats["servers"] += 1
+                _mcp_stats["total"] += len(_tools)
+                _mcp_stats["selected"] += len(_tools)
+            for t in _tools:
                 _bound_mcp_names.add(t)
-                candidates.append((t, f"MCP 工具（{m.get('name','')}），端点 {m.get('endpoint','')}",
-                                   "mcp", m.get("name", "")))
+                # ★ 写类动词归类（MCP 工具不在 tools 表 ⇒ 后面的 side_effect 闸管不到它们）
+                try:
+                    from agent.mcp_tool_meta import mcp_write_group as _mwg
+                    _g = _mwg(t)
+                    if _g:
+                        _mcp_write_groups[t] = _g
+                except Exception:
+                    pass
+                # description：有真实元数据就用真实的（模型才知道这工具干什么）；
+                # 无元数据 ⇒ 保持改动前的模板串（逐字节一致）
+                _info = _meta.get(t) if _meta else None
+                if _info and _info.get("description"):
+                    _desc = _info["description"]
+                else:
+                    _desc = f"MCP 工具（{_srv_name}），端点 {m.get('endpoint','')}"
+                candidates.append((t, _desc, "mcp", _srv_name))
+                # 真实参数契约（有则用；无则保持宽松空壳）
+                if _info:
+                    _sch = _info.get("inputSchema")
+                    if isinstance(_sch, dict) and _sch:
+                        try:
+                            if not isinstance(_sch.get("properties"), dict):
+                                _sch["properties"] = {}
+                            if not _sch.get("type"):
+                                _sch["type"] = "object"
+                            # ★ 2026-10-27（conv 9637 实测）：**参数契约必须瘦身**再注入。
+                            #   21 个 MCP 工具的完整 schema 共 47KB（≈16k tokens/轮），
+                            #   13 轮就烧穿 300k token 预算 ⇒ 模型在第 12 轮被判"预算耗尽"、
+                            #   离建包只差最后一步。压掉参数级长描述（保留 type/required/enum
+                            #   这些结构性信息），体量降一半而可用性不降。
+                            try:
+                                from agent.mcp_tool_meta import slim_schema as _slim
+                                _sch = _slim(_sch)
+                            except Exception:
+                                pass
+                            _schema_by_name[t] = _sch
+                        except Exception:
+                            pass
         # 内置工具（仅 Agent 声明过的）
         agent_def = self.registry.get(intent)
         for name in agent_def.tools:
@@ -209,7 +403,8 @@ class ToolMixin:
             conn = get_db()
             try:
                 for row in conn.execute(
-                    "SELECT t.name, t.description, t.input_schema, t.side_effect FROM tools t "
+                    "SELECT t.name, t.description, t.input_schema, t.side_effect, "
+                    "       t.kind, t.config FROM tools t "
                     "JOIN agent_tools at ON at.tool_name=t.name JOIN agents a ON at.agent_id=a.id "
                     "WHERE a.name=? AND at.tool_type='tool' AND at.enabled=1 AND t.status='active' "
                     "AND t.source!='builtin'", (intent,)).fetchall():
@@ -218,6 +413,34 @@ class ToolMixin:
                         desc += "（写操作，需人工确认）"
                     elif row["side_effect"] == "destructive":
                         desc += "（高风险操作，必须人工确认）"
+                    # ★★ 2026-10-28（conv 9736~9740 实证）：**配置未就绪的工具不注入**。
+                    #   真机：`zhiyuan_sysmlv2_gen/check/import` 的 url 是
+                    #   `{cfg:zhiyuan.base_url}/...`，而运行配置里 base_url 与 token
+                    #   都是空串 ⇒ 这 5 个工具历史调用 **16 次、成功 0 次**
+                    #   （timed out / WinError 10054），却因列在
+                    #   `tool_jit.core_keep_extra` 里被**常驻注入**，每轮白占名额。
+                    #   更糟的是模型会优先用它们（"看起来是同平台的官方工具"），
+                    #   而不是真正能落库的 MCP `import_sysml_text`；
+                    #   失败又长成"网络超时"，把排障方向引到"平台连不上"，
+                    #   而真相是"配置是空串"。⇒ 未就绪即不注入，并留痕。
+                    try:
+                        from agent.tool_readiness import readiness as _ready
+                        _ok, _why = _ready(row["config"])
+                    except Exception:
+                        _ok, _why = True, ""
+                    if not _ok:
+                        try:
+                            self._dropped_unready = list(
+                                getattr(self, "_dropped_unready", []) or []) + [
+                                "%s（%s）" % (row["name"], _why)]
+                        except Exception:
+                            pass
+                        try:
+                            logger.warning("[tool_gate] 跳过未就绪工具 %s：%s",
+                                           row["name"], _why)
+                        except Exception:
+                            pass
+                        continue
                     if not any(c[0] == row["name"] for c in candidates):
                         candidates.append((row["name"], desc, "db_tool", ""))
                     _absorb_schema(row["name"], row["input_schema"])
@@ -283,7 +506,27 @@ class ToolMixin:
                 _keep_t = _pstore_t2.consumable_filter(_fc, user)
                 _name2id = {r["name"]: r["id"]
                             for r in _fc.execute("SELECT id, name FROM tools").fetchall()}
+                _before = [c[0] for c in candidates]
                 candidates = [c for c in candidates if _keep_t("tools", _name2id.get(c[0], -1))]
+                # ★ 2026-10-28（conv 9737 实证）：**剔除必须可见**。
+                #   真机：我把 zhiyuan_sysmlv2_import/gen/check 绑给本 Agent，
+                #   但 `_build_tools_def` 实调仍只有 12 个工具、三者全部 MISSING ——
+                #   绑定动作"看起来成功"，运行时被本闸静默剔除，模型只能走次优路径。
+                #   根因：这三个插件 author_name='平台内置' 且**从未有过安装记录**，
+                #   被判成"被管理员全局卸载"（见 visibility.py 的 2026-09-29 收窄），
+                #   而"从未装过"与"被卸载"在该判据下不可区分（数据侧已用
+                #   tools/migrate_seed_builtin_installs.py 补齐系统级可用标记）。
+                #   ⇒ 这里把剔除清单留痕，杜绝同类问题再次静默。
+                _gone = [n for n in _before if n not in {c[0] for c in candidates}]
+                if _gone:
+                    self._dropped_by_visibility = list(_gone)
+                    try:
+                        logger.warning(
+                            "[tools] 以下**已绑定**工具被「可消费过滤」剔除（插件未安装/被停用）：%s"
+                            "；若是平台内置能力，多半是缺 user_id=0 的 plugin_installs 行"
+                            "（见 tools/migrate_seed_builtin_installs.py）", _gone)
+                    except Exception:
+                        pass
             finally:
                 _fc.close()
         except Exception:
@@ -318,7 +561,60 @@ class ToolMixin:
         _wl = getattr(self, "_tool_whitelist", None)
         if _wl:
             _wlset = set(_wl)
-            candidates = [c for c in candidates if c[0] in _wlset]
+            # ★ P0-9（2026-10-26）：**MCP 显式绑定工具豁免技能白名单**。
+            #
+            # 问题（实测，生产库快照 + 真实 _build_tools_def）：
+            #   `智源对接agent` 同时绑定了 MCP server（71 工具）与技能「智源平台管理」
+            #   （allowed_tools 6 项）。技能一命中就被写成 `_tool_whitelist`
+            #   （execute.py:460-466）⇒ 白名单**把绑定的 MCP 工具全部裁掉**：
+            #     问「查询智源工程列表」：无白名单 15 工具/8 MCP → 有白名单 **2 工具/0 MCP**
+            #     问「读取文件内容」    ：无白名单 21 工具/8 MCP → 有白名单 **8 工具/0 MCP**
+            #   更糟的是：该技能白名单里 5 个 `zhiyuan_*` 工具虽在 tools 表且 active，
+            #   却**没有以 type='tool' 绑定到本 agent** ⇒ 进不了候选集
+            #   ⇒ 白名单「授了什么也拿不到、却把已有的全撤销」。
+            #   ⚠️ 这正是 2026-10-16「绑了 71 个只露 6 个、工程列表查不到」事故的
+            #     **真正根因之一**（当时归因为 JIT），至今仍在。
+            #
+            # 判断（为什么 MCP 该豁免）：
+            #   「绑定 MCP」与「绑定技能」是**同一管理员、同一面板**的两次显式授权。
+            #   技能的 `allowed_tools` 语义是「本技能干活只需要这几个工具」，
+            #   不是「撤销本 agent 已获授权的其它工具」。用它反向撤销 MCP 授权属于越权，
+            #   且失败是**静默**的（工具凭空消失，无日志、无提示）。
+            #
+            # 开关：`context_audit.mcp_exempt_skill_whitelist`（默认 True）。
+            #   置 False ⇒ 逐字节退回改动前（白名单连 MCP 一起裁）。
+            # ⚠️ 只豁免 **MCP**；内置工具 / DB 工具仍受白名单约束（最小权限不放松）。
+            _mcp_exempt = True
+            try:
+                from core import config as _cfg_wl
+                _mcp_exempt = bool(_cfg_wl.get("context_audit",
+                                               "mcp_exempt_skill_whitelist", True))
+            except Exception:
+                _mcp_exempt = True
+            if _mcp_exempt:
+                _mcp_cand_names = {c[0] for c in candidates if c[2] == "mcp"}
+                _rescue = [c for c in candidates if c[2] == "mcp" and c[0] not in _wlset]
+                candidates = [c for c in candidates if c[0] in _wlset] + _rescue
+                if _rescue:
+                    try:
+                        from agent.context_audit import record_blocks
+                        record_blocks({}, phase="tools", extra={
+                            "whitelist_exempted_mcp": len(_rescue),
+                            "whitelist_size": len(_wlset),
+                        })
+                    except Exception:
+                        pass
+                    try:
+                        logger.warning(
+                            "技能白名单（%d 项）会裁掉 %d 个已显式绑定的 MCP 工具（如 %s），"
+                            "已按 `mcp_exempt_skill_whitelist=True` 豁免。"
+                            "若要恢复严格最小权限，请把该开关置 False。",
+                            len(_wlset), len(_rescue),
+                            ", ".join(sorted(c[0] for c in _rescue)[:3]))
+                    except Exception:
+                        pass
+            else:
+                candidates = [c for c in candidates if c[0] in _wlset]
         # P0-按需工具：写类工具默认不注入（side_effect=write/destructive）——
         # 仅当输入含明确写意图关键词（创建/入库/保存/修改/删除…）时注入，
         # 防「无关写工具被注入 / LLM 顺手调用」；白名单（委派最小权限）模式下跳过
@@ -371,6 +667,33 @@ class ToolMixin:
                     candidates = [c for c in candidates
                                   if _se_map.get(c[0], "read") not in ("write", "destructive")
                                   or (_sk_wl and c[0] in _sk_wl)]
+        # ── ★ MCP 写类工具的「动词级」意图闸（2026-10-27）──
+        #   上面那道闸按 `tools.side_effect` 过滤，**MCP 工具不在 tools 表 ⇒ 管不到**。
+        #   实测后果：「导出 SysML v2 源码」的清单里出现 `delete_model_elements`，
+        #   「校验语法」的清单里出现 `apply_model_changes` / `import_sysml_text`
+        #   —— 读类任务被塞进破坏性工具，模型"顺手调用"就是事故。
+        #   这里按**工具名里的动词族**判定：用户输入没提这个动作 ⇒ 本轮不注入。
+        #   ⚠️ 与技能白名单 `_sk_wl` 的关系：白名单是**权限**（能不能用），
+        #      本闸是**恰当性**（这一轮该不该递到模型眼前）——两者不是一回事。
+        #      白名单模式（`_wl` 非空，即 execute 冷路径把技能白名单独占成 `_tool_whitelist`）
+        #      下**整闸跳过** —— 与上面那道 side_effect 闸保持同一口径，
+        #      且避免「白名单声明了 delete ⇒ 恒常暴露」的副作用。
+        if _mcp_write_groups and not _wl:
+            try:
+                from agent.mcp_tool_meta import filter_mcp_by_intent as _fmbi
+                _keep_names, _drop_names = _fmbi(
+                    [c[0] for c in candidates if c[0] in _mcp_write_groups],
+                    user_input or "", _mcp_write_groups)
+                if _drop_names:
+                    _drop_set = set(_drop_names)
+                    candidates = [c for c in candidates if c[0] not in _drop_set]
+                    try:
+                        logger.info("[tool_gate] MCP 写类工具按动词闸挡掉 %d 个: %s",
+                                    len(_drop_names), ", ".join(sorted(_drop_names)[:6]))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         # TR-P3a：JIT 语义预筛——候选 ≥2（多工具可挑）即按输入语义裁剪，防「无关工具也被注入/LLM 顺手调用」
         # 保底：读类核心工具（graph_retrieve/validate/impact_analyze）不因预筛丢失；全弱相关时空回退维持全量
         jit_threshold = 2
@@ -394,6 +717,17 @@ class ToolMixin:
         # ★ 2026-10-16：Agent 显式绑定的 MCP 工具同样是显式契约 —— 用户在「绑定 MCP 服务器」
         #   面板里逐个绑上去的，JIT 无权以"语义不相关"为由把它们裁掉。
         #   （不设这一步 ⇒ 绑 71 个只露 6 个，工程列表查询类工具必被裁，见上方事故依据。）
+        # ★ P0-6（2026-10-26）**保底粒度细化**：
+        #   改动前：绑定的**全部** MCP 工具进 core_keep ⇒ 恒不裁剪（71 个全量注入，
+        #     实测 5,467 token/轮、占整包 71~80%）。根因是 MCP 工具的 description
+        #     全是同一句模板 ⇒ JIT 打分零区分度 ⇒ 只能"要么全给要么全裁"。
+        #   现在：**筛选前移** —— `pick_for_injection` 已按「min_keep 保底 + 语义命中补充」
+        #     把 71 个压到 N 个，故 `_bound_mcp_names`（= 已选出的集合）就是**新的显式契约粒度**，
+        #     整集进 core_keep ⇒ JIT **不得二次裁剪**。
+        #   ⚠️ 为什么不是"只保底语义命中者"：那会让 JIT 再把 min_keep 保底项裁掉
+        #     ⇒ `mcp_min_keep` 的"至少露 N 个"保证失效（弱相关场景可能只剩 1~2 个），
+        #     且同一 server 两次请求暴露的工具集不稳定。筛选只做一次，位置前移到 pick 阶段。
+        #   无 tool_meta（存量 server）⇒ `_bound_mcp_names` 即全量 ⇒ **逐字节退回改动前行为**。
         if _bound_mcp_names:
             core_keep = core_keep | _bound_mcp_names
         if len(candidates) >= jit_threshold and user_input:
@@ -405,24 +739,80 @@ class ToolMixin:
                 # 2026-09-19：阈值按**本次实际走的路**选（两路余弦量纲不同，一套阈值必有一路失准）：
                 #   dense（真 embedding）→ tool_threshold_dense（0.53，分位等价标定）
                 #   bigram（降级）      → tool_threshold（0.12，原经验值）
-                # 弱相关 → 不预筛，维持全量注入（保底可靠）
+                # ★ 2026-10-26（P0-5）：**空回退语义已变更** —— 原"弱相关 → 维持全量注入"
+                #   改为"弱相关 → 取语义 top-N"（`context_audit.jit_fallback_top_n`，0 退回全量）。
+                #   理由：阈值是**质量线**不是**开关**；弱相关时排序仍有信息量，
+                #   全量注入实测把 5 个工具的任务膨胀到 24 个（7,487 字符 / 4,162 token）。
                 _ss = SemanticSearch()
                 _th_b = float(_cfg.get("embedding", "tool_threshold", 0.12) or 0.12)
                 _th_d = float(_cfg.get("embedding", "tool_threshold_dense", 0.53) or 0.53)
+                # ★ P0-5（2026-10-26）：空回退改 top-N。**rank 的 top_k 必须 ≥ 回退 N**，
+                #   否则 `scored` 会被提前截断（semantic.rank 返回 `scored[:top_k]`），
+                #   取 top-N 只能拿到 ≤top_k 条 ⇒ 回退 N 形同虚设。
+                _fb_n = 0
+                try:
+                    from core import config as _cfg_fb
+                    _fb_n = int(_cfg_fb.get("context_audit", "jit_fallback_top_n", 8) or 0)
+                except Exception:
+                    _fb_n = 8
+                _rank_k = max(jit_top_n, _fb_n) if _fb_n > 0 else jit_top_n
                 scored = _ss.rank(user_input, idx,
-                                  top_k=int(_cfg.get("embedding", "tool_top_k", jit_top_n)),
+                                  top_k=int(_cfg.get("embedding", "tool_top_k", _rank_k)) or _rank_k,
                                   threshold=0, key="text")
                 _th = _th_d if getattr(_ss, "last_backend", "bigram") == "dense" else _th_b
                 chosen = {s[1]["name"] for s in scored if s[0] >= _th}
+                # ★ P0-5（2026-10-26）：空回退改为「取语义 top-N」而非「全量注入」。
+                #   改动前：全部候选都低于阈值 ⇒ chosen 为空 ⇒ **全量注入**
+                #   （实测「帮我把活动图生成出来」⇒ 24 个工具 / 7,487 字符 / 4,162 token，
+                #    而该任务实际只需 sysml 视图类工具；同族意图载荷波动 5→24 个）。
+                #   根因：把「阈值」当成了「开关」—— 阈值是**质量线**，不是**开关**。
+                #   弱相关时排序**仍有信息量**（最不相关的排在后面），故 top-N 是无损的收紧。
+                #   ⚠️ core_keep 保底**不受影响**：无论走哪条分支都要并入（否则
+                #   graph_retrieve/validate/impact_analyze 会在弱相关场景丢失）。
+                #   开关：`context_audit.jit_fallback_top_n`（0 = 退回改动前的全量行为）。
                 if not chosen:
-                    # 空回退：全弱相关时维持全量（不瘦身，保底可靠）——
-                    # core_keep 保底只能在「语义确有命中」时叠加，否则 chosen 永非空、空回退失效
-                    candidates = [c for c in candidates]
-                else:
-                    for c in candidates:
-                        if c[0] in core_keep:
-                            chosen.add(c[0])
-                    candidates = [c for c in candidates if c[0] in chosen]
+                    if _fb_n > 0:
+                        # 排序降序 ⇒ 取前 N 个（scored 已按 score 降序）
+                        # ⚠️ `scored` 可能**为空**：bigram 降级 + 全部零相关时，
+                        #   `semantic.rank(threshold=0)` 会把 0 分条目全过滤掉 ⇒ 返回 []。
+                        #   此时不能退化为全量（那正是本次要修的膨胀源），
+                        #   改用**候选集原始顺序**取前 N 个（顺序本身携带一定优先级：
+                        #   内置工具 → 技能白名单 → 显式绑定，详见本函数上游构建顺序）。
+                        if scored:
+                            _top = {s[1]["name"] for s in scored[:_fb_n]}
+                        else:
+                            _top = {c[0] for c in candidates[:_fb_n]}
+                        chosen |= _top
+                        try:
+                            from agent.context_audit import record_blocks
+                            record_blocks({}, phase="tools", extra={
+                                "jit_fallback_full": 0,
+                                "jit_fallback_top_n": len(_top),
+                                "jit_fallback_no_scores": 0 if scored else 1,
+                                "tool_candidates": len(candidates),
+                            })
+                        except Exception:
+                            pass
+                    else:
+                        # 退回改动前行为（全量注入）。
+                        # ⚠️ 必须把 chosen 置为**全部候选名** —— 否则后面的
+                        #    `candidates = [c for c in candidates if c[0] in chosen]`
+                        #    会把候选**全部清空**（chosen 为空 ⇒ 过滤结果为空），
+                        #    这是"全量"与"清空"的区别，务必显式写全。
+                        chosen = {c[0] for c in candidates}
+                        try:
+                            from agent.context_audit import record_blocks
+                            record_blocks({}, phase="tools", extra={
+                                "jit_fallback_full": 1,
+                                "tool_candidates": len(candidates),
+                            })
+                        except Exception:
+                            pass
+                # core_keep 保底：两条分支都要并入（读类核心工具 + 显式绑定的 MCP）
+                for c in candidates:
+                    if c[0] in core_keep:
+                        chosen.add(c[0])
+                candidates = [c for c in candidates if c[0] in chosen]
             except Exception:
                 pass  # 预筛失败则维持全量
         # 2026-09-17 S4：工具名合法性护栏 —— OpenAI 兼容协议要求 function.name 匹配 ^[a-zA-Z0-9_-]+$。
@@ -440,17 +830,76 @@ class ToolMixin:
                     _bad_names)
             except Exception:
                 pass
+        # ★★ 2026-10-28：**就绪度单点闸**（放在所有过滤之后、装配之前）。
+        #   为什么必须放这里而不是只放在"DB 工具分支"：
+        #   `tool_jit.core_keep_extra` 会在 JIT 之后把名字**再塞回** chosen
+        #   ⇒ 分支处的跳过会被复活（实测：分支处已打印"跳过未就绪工具
+        #   zhiyuan_sysmlv2_check/gen/import"，最终清单里三个仍在）。
+        #   ⇒ 只在"最终候选集"上判一次，才不依赖任何后续链路是否又加回来。
+        #   判据与理由见 `agent/tool_readiness`（必需配置为空 ⇒ 必然失败 ⇒ 不注入）。
+        try:
+            from agent.tool_readiness import missing_required as _miss_req
+            from database import get_db as _rdb
+            _rc = _rdb()
+            try:
+                _cfgmap = {r["name"]: r["config"] for r in _rc.execute(
+                    "SELECT name, config FROM tools WHERE kind='http'").fetchall()}
+            finally:
+                _rc.close()
+            _unready = []
+            _kept = []
+            for _c in candidates:
+                _cfgj = _cfgmap.get(_c[0])
+                if _cfgj:
+                    _miss = _miss_req(_cfgj)
+                    if _miss:
+                        _unready.append("%s（缺 %s）" % (_c[0], "/".join(_miss)))
+                        continue
+                _kept.append(_c)
+            if _unready:
+                candidates = _kept
+                self._dropped_unready = _unready
+                try:
+                    logger.warning("[tool_gate] 未就绪工具不注入（必需配置为空 ⇒ 必然失败）: %s",
+                                   ", ".join(_unready))
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # ★ 2026-10-13：按工具名注入真实参数契约（此前**两个分支都硬编码 properties:{}**，
         #   等于把 DB 里 39/41 条已存在的 input_schema 全部丢弃 ⇒ 模型以为"任意参数"）。
         #   _LOOSE 是回落形态，与改动前**逐字节一致**，保证关开关/无 schema 时行为不变。
         _LOOSE = {"type": "object", "properties": {}, "additionalProperties": True}
+        # ★ S2（2026-10-29）「学到就用」：把历史被服务端拒绝过的字段约束前置进描述。
+        #   为什么需要：`mcp_servers.tool_meta` 里 schema **实测为空**
+        #     （properties=0 / required=None），本地拿不到字段契约；而服务端每次拒绝都会
+        #     在 `fields[].expected` 里给出真实字段清单 —— 那才是唯一权威契约。
+        #   实测价值：`value` 这个错字段在近 7 天 8 个会话里各犯 1~11 次，
+        #     若第一次失败后即写进工具描述，后续同工具调用即可避免（省一整轮空转）。
+        #   ⚠️ 只追加**远端明确断言过**的清单（tool_arg_hints 由失败时写入）；
+        #     没学过就不加，保持描述原样（零回归面）。开关：tool_jit.inject_arg_hints（默认开）。
+        try:
+            from core.config import get as _cfg_hint
+            _inject_hint = bool(_cfg_hint("tool_jit", "inject_arg_hints", True))
+        except Exception:
+            _inject_hint = True
+        _hint_suffix_by_name = {}
+        if _inject_hint:
+            try:
+                from agent.tool_arg_hint import describe_suffix as _desc_suffix
+                for _n in {c[0] for c in candidates}:
+                    _s = _desc_suffix(_n)
+                    if _s:
+                        _hint_suffix_by_name[_n] = _s
+            except Exception:
+                _hint_suffix_by_name = {}
         for name, desc, ctype, server in candidates:
             _params = _schema_by_name.get(name) or _LOOSE
             tools.append({
                 "type": "function",
                 "function": {
                     "name": name,
-                    "description": desc,
+                    "description": (desc or "") + _hint_suffix_by_name.get(name, ""),
                     "parameters": _params,
                 },
             })
@@ -466,6 +915,24 @@ class ToolMixin:
             _ask_on = True
         if _ask_on and not any(t.get("function", {}).get("name") == "ask_user" for t in tools):
             tools.append(_ASK_USER_TOOL)
+        # ★ P0-3（2026-10-28）计划外化：`todo_write` —— 与 ask_user 同理**无条件**注入。
+        #   理由同 ask_user：它是**对话级能力**（管理本会话待办清单），不属于任何
+        #   Agent 绑定 ⇒ 白名单（委派最小权限）/ JIT 预筛 / 写意图闸都不该挡它。
+        #   ⚠️ 挡掉它的后果不是"少个功能"，而是**"完成"的定义权退回模型手里**
+        #     （实测：评估器把「建议下一步执行校验」判成 done=true，msg 3985）。
+        #   开关：config `agent.todo_enabled`（**默认关** ⇒ 不改变现有行为）。
+        #   默认关的代价是"不开则该能力不生效"；收益是"不冒未验证的风险"。
+        try:
+            from core.config import get as _cfg_todo
+            _todo_on = bool(_cfg_todo("agent", "todo_enabled", False))
+        except Exception:
+            _todo_on = False
+        if _todo_on and not any(t.get("function", {}).get("name") == "todo_write" for t in tools):
+            try:
+                from agent.todo_store import todo_tool_def as _todo_def
+                tools.append(_todo_def())
+            except Exception:
+                pass
         # ★ 2026-11-13（#55）：`read_attachment_section` 与 ask_user 同理**无条件**注入 ——
         #   它是「把本轮已上传的附件读全」的对话级能力。若被白名单/写意图闸挡掉，
         #   模型就只能看着提纲干瞪眼、回头找用户要原文（实测原话：「请把第 5、6、7 章的
@@ -482,10 +949,46 @@ class ToolMixin:
         if getattr(self, "_orch_result_offloads", None):
             from agent.pipeline_parts import tool_offload as _toff2
             _toff2.ensure_fetch_tool(tools, getattr(self, "_tool_whitelist", None))
+        # ★ P0-6（2026-10-26）：MCP 暴露情况归因 ⇒ "暴露了多少 / 裁掉了多少"可观测。
+        #   这三个数字是判断 `mcp_min_keep` 该设多少的唯一依据（靠猜会重演
+        #   "JIT 裁太狠 ⇒ 工程列表查不到"的事故）。
+        #   ⚠️ `mcp_injected` 必须按**工具名集合**判定，不能按 description 前缀 ——
+        #   有 tool_meta 时 description 是真实描述（不以"MCP "开头）。
+        try:
+            from agent.context_audit import record_blocks
+            if _mcp_stats.get("servers"):
+                _mcp_names = {c[0] for c in candidates if c[2] == "mcp"}
+                record_blocks({}, phase="tools", extra={
+                    "mcp_servers": _mcp_stats["servers"],
+                    "mcp_meta_servers": _mcp_stats["meta_servers"],
+                    "mcp_total": _mcp_stats["total"],
+                    "mcp_selected": _mcp_stats["selected"],
+                    "mcp_semantic": len(_mcp_semantic_names),
+                    "mcp_injected": len([t for t in tools
+                                        if t.get("function", {}).get("name") in _mcp_names]),
+                    "tool_payload_total": len(tools),
+                })
+        except Exception:
+            pass
         return tools
 
     def _tool_side_effect(self, name: str) -> str:
-        """TR-P2b：查询工具副作用分类（read/write/destructive），查不到默认 read。"""
+        """TR-P2b：查询工具副作用分类（read/write/destructive），查不到默认 read。
+
+        ★ 2026-10-30：加**请求内缓存**（`_tool_se_cache`）。
+        为什么（不是过早优化）：本轮在 `_exec_tool_call` 增加了幂等闸后，
+        同一个 `(tool, args)` 的一次调用会让本函数被调用 **2~3 次**
+        （幂等判定 → 写前确认闸 → 写入目标网关），一次子任务 10~20 次工具调用
+        ⇒ 多出 20~60 次 `SELECT ... FROM tools`。SQLite 单写者下这些读虽然便宜，
+        但都在**同一条请求的串行路径**上，纯属重复劳动。
+        缓存语义：`tools.side_effect` 是管理员配置项，**请求结束即失效**
+        （`reset_request_state` 会清 `_tool_se_cache`）⇒ 不会看到陈旧值超过一轮。
+        ⚠️ 缓存**同时记忆"查不到"**（值 `""`）—— 否则每次未登记的工具（MCP 工具走另一条路）
+        仍会重查。用 `""` 而不是 `None` 表示"查过但无记录"，与"没查过"区分开。
+        """
+        _cache = getattr(self, "_tool_se_cache", None)
+        if isinstance(_cache, dict) and name in _cache:
+            return _cache[name] or "read"
         try:
             from database import get_db
             conn = get_db()
@@ -493,13 +996,376 @@ class ToolMixin:
                 row = conn.execute(
                     "SELECT side_effect FROM tools WHERE name=? AND status='active'", (name,)
                 ).fetchone()
-                return row["side_effect"] if row else "read"
+                val = (row["side_effect"] if row else "") or ""
             finally:
                 conn.close()
         except Exception:
             return "read"
+        try:
+            if not isinstance(_cache, dict):
+                _cache = {}
+                self._tool_se_cache = _cache
+            _cache[name] = val
+        except Exception:
+            pass
+        return val or "read"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # ★ 2026-10-28（写前确认 HITL）统一人工确认闸
+    # ══════════════════════════════════════════════════════════════════════
+    def _hil_gate(self, name: str, arguments: dict, agent_ctx: dict,
+                  conv_ctx: int, tool_type: str = "") -> dict | None:
+        """写前确认闸。返回 **None ⇒ 放行**；返回 dict ⇒ **拦截**（该 dict 即工具结果）。
+
+        ## 位置（全链最靠后的确定性边界）
+        `白名单(852) → RBAC(877) → mbse_pull_ingest(915) → Hook(985) → 本闸 → 执行(1114+)`
+        - **RBAC 之后**：无权限的人不该让工具走到"要不要人工确认"这一步
+          （`tools.py:870-876` 的既定不变量：把"他本来没资格"伪装成"他够格但需要审批"更糟）。
+        - **Hook 之后**：Hook 是管理员配的**确定性细粒度**规则（`tool_hooks`，可带参数条件），
+          比策略层的粗分档更具体 ⇒ 它先判；本闸只兜"Hook 没覆盖到"的。
+        - **执行之前**：这是唯一能保证"**没有副作用发生**"的位置。
+
+        ## 判据：双源写类判定 + 策略表取档位（策略即数据）
+        - 写类：`hil_service.classify_action`（`tools.side_effect` ∪ MCP 动词族）
+          ⇒ 修掉"**MCP 工具不在 tools 表 ⇒ side_effect 恒判 read ⇒ 三道闸全失效**"这个实测断链。
+        - 档位：`services/hil_policy.evaluate`（**灰度 = 改表不改代码**）
+
+        ## 行业依据（详见 services/hil_policy.py 模块头的「行业依据」段）
+        AWS AGENTREL02-BP05「按**影响 × 可逆性**分档」；
+        Suntec「不要给 agent 整体分等级，要给**每个动作**分等级」；
+        agentpatternscatalog 反模式「**approval fatigue** — 闸门太多会让人闭眼点通过」
+        ⇒ ⇒ ① 按动作分档 ② 策略外置为数据 ③ **必须批次合并**（否则逐条确认 ⇒ 退化）。
+
+        ## 返回的拦截信号形状（**刻意对齐 clarify_required**）
+        `{"ok": True, "confirm_required": True, "confirm": {...}}`
+        ⇒ ReAct 循环（stream.py / execute.py）与 `ask_user` 澄清**同构处理**
+        （检出即 break，由外层发事件 + 落挂起）。
+        """
+        # ── 批准旁路：确认单被批准后，执行它时不能再进本闸（否则无限循环）──
+        _auth = getattr(self, "_hil_authorized_conf_id", None)
+        if _auth:
+            return None
+        # ★ 2026-10-28（conv 9733 实测）：**确定性本地修复工具豁免写前确认**。
+        #   真机现场：validate 报 12 条 ERROR（block）⇒ 模型调 `sysml_v2_autofix` 修 ⇒
+        #   被判"写操作" ⇒ 弹确认单 ⇒ ReAct 中断 ⇒ 这一轮以
+        #   「⏸ 写操作需要人工确认后才能执行」收尾 —— **修复闭环被一次人工点击卡死**，
+        #   而该工具 `sysml_autofix_tools.py` 里 `INSERT/UPDATE/commit` 出现次数为 **0**，
+        #   只对传入的 code 字符串做规则级改写（无任何持久化/外部副作用）。
+        #   ⇒ 与「入库/删改平台数据」的写操作不是一类，不该共用同一道确认闸。
+        #   ⚠️ 豁免范围严格等于 `_REPAIR_WRITE_EXEMPT`（当前仅 sysml_v2_autofix），
+        #      绝不扩大：真正的平台写入（create/import/delete）仍必须人工确认。
+        if str(name) in _REPAIR_WRITE_EXEMPT:
+            return None
+        try:
+            from hil_service import classify_action as _ca
+            _cls = _ca(name, self._tool_side_effect(name))
+        except Exception:
+            return None
+        if _cls.get("kind") == "read":
+            return None
+
+        # ── 取档位（策略即数据；策略不可读 ⇒ fail-closed 按 confirm）──
+        _level, _reason, _pol = "confirm", "", {}
+        try:
+            from services.hil_policy import load_policies as _lp, evaluate as _ev
+            from database import get_db as _gdb
+            _c = _gdb()
+            try:
+                _pols = _lp(_c)
+            finally:
+                _c.close()
+            _d = _ev(_pols, decision_point="tool_write",
+                     match_key=_cls.get("match_key") or "read",
+                     context={"side_effect": _cls.get("kind"),
+                              "tool": name,
+                              "tool_family": _cls.get("match_key") or "",
+                              "tool_type": tool_type or _cls.get("source")})
+            _level = _d.get("level") or "confirm"
+            _reason = _d.get("reason") or ""
+            _pol = _d
+        except Exception as _pe:
+            # fail-closed：策略层异常 ⇒ 按 confirm（**绝不静默放行写操作**）
+            _level = "confirm"
+            _reason = "策略层不可读（fail-closed）：%s" % (str(_pe)[:120])
+
+        # ── auto：放行 ──
+        if _level == "auto":
+            return None
+        # ── agent 级 hil_level 作为**下限**（只收紧、不放宽）──
+        #   为什么只当"地板"：行业依据（Suntec 治理框架）明确说
+        #   「**不要给 agent 整体分等级，要给每个动作分等级**」——
+        #   agent 级若能独立决定，会退化成"整个 agent 一刀切"。
+        #   而 `hil_policy.escalate` 的不变式正是「策略层只能收紧、不能放宽」。
+        #   ⚠️ 目标档位**只用 confirm / notify**，不用 approve ——
+        #   approve 与 confirm 不是严格程度关系（approve 要更高权限角色批，
+        #   confirm 是用户本人点一下），混进同一条 rank 会产生"approve 被 confirm 覆盖"的歧义。
+        #   破坏族要不要 approve，由**策略表**按 match_key 决定（动作级分档）。
+        try:
+            _agent_lvl = str(getattr(self, "_hil_level", "") or "")
+            if _agent_lvl in ("L1", "L2"):
+                from services.hil_policy import escalate as _esc
+                _floor = "notify" if _agent_lvl == "L1" else "confirm"
+                _level = _esc(_level, _floor)
+        except Exception:
+            pass
+        # ── notify：放行 + 留痕（**灰度第一档的采集点**：不拦但记全量数据）──
+        if _level == "notify":
+            try:
+                from core.audit import audit as _au, audit_user as _auu
+                _au(_auu(getattr(self, "_tool_user", None)), "hil_notify",
+                    f"tool={name} match_key={_cls.get('match_key')} kind={_cls.get('kind')} "
+                    f"convo={conv_ctx}", "notify",
+                    branch=str((agent_ctx or {}).get("branch") or ""))
+            except Exception:
+                pass
+            return None
+
+        # ── confirm / approve：入队并挂起 ──
+        _agent = str((agent_ctx or {}).get("agent") or "")
+        _run_id = int((agent_ctx or {}).get("run_id") or 0)
+        # ★ 2026-10-28（真机 E2E 暴露）：`tool_type` **必须在闸内自己判**。
+        #   外面传进来的 `tool_type` 在闸这个位置还是初值 `"builtin"`
+        #   （真正的类型分派在后面的 MCP / HTTP / local 分支里才发生）
+        #   ⇒ 直接用它会把 MCP 写操作记成 builtin ⇒ 批准后走错执行器、审计也看不出类型。
+        #   判据：`classify_action` 的 `source` 已经告诉我们它是从哪个源判出来的。
+        _ttype = tool_type or ""
+        if _cls.get("source") == "mcp_verb" or _ttype in ("", "builtin"):
+            _src = _cls.get("source") or ""
+            if _src == "mcp_verb":
+                _ttype = "mcp"
+            elif _src == "tools.side_effect":
+                # 本地工具：按 tools 表 kind 细分（http 集成 vs 内置）
+                try:
+                    from database import get_db as _gdb2
+                    _c2 = _gdb2()
+                    try:
+                        _kr = _c2.execute(
+                            "SELECT kind FROM tools WHERE name=? AND status='active'",
+                            (name,)).fetchone()
+                        _k = str((_kr["kind"] if _kr else "") or "")
+                        _ttype = "http" if _k == "http" else (_k or "builtin")
+                    finally:
+                        _c2.close()
+                except Exception:
+                    _ttype = "local"
+            elif not _ttype:
+                _ttype = "local"
+        # 批次合并键：同一轮 + 同族 + 同会话 ⇒ 合并成一张卡（approval fatigue 防线）
+        _trace = str(getattr(self, "_tool_trace_id", "") or "") or "no-trace"
+        _batch = ""
+        try:
+            import hashlib as _h
+            _batch = _h.sha1(("|".join([str(conv_ctx or 0), _agent,
+                                        str(_cls.get("match_key")), _trace,
+                                        str(_run_id)])).encode("utf-8")).hexdigest()[:20]
+        except Exception:
+            _batch = ""
+        _prev = _impact_preview(name, arguments or {})
+        _conf = None
+        try:
+            from hil_service import HILService as _HS
+            from database import db_conn as _dbc
+            with _dbc() as _c:
+                _conf = _HS.queue_confirmation(
+                    _c, _agent, name, arguments or {},
+                    preview=_prev,
+                    conversation_id=conv_ctx or 0,
+                    run_id=_run_id,
+                    tool_type=_ttype,
+                    level=_level,
+                    batch_id=_batch,
+                    timeout_min=int(_pol.get("timeout_min") or 0))
+        except Exception as _qe:
+            # 入队失败 ⇒ **fail-closed**：宁可不做，也不能在没确认的情况下写下去
+            return {"ok": False, "confirm_required": False,
+                    "result": f"写操作「{name}」无法进入人工确认流程（{str(_qe)[:120]}），已拒绝执行"}
+
+        if not _conf:
+            return {"ok": False, "confirm_required": False,
+                    "result": f"写操作「{name}」需人工确认，但确认单创建失败，已拒绝执行"}
+
+        _cid = int(_conf.get("id") or 0)
+        _bn = int(_conf.get("batch_count") or 1)
+        _merged = bool(_conf.get("batch_merged"))
+        return {
+            "ok": True,
+            "confirm_required": True,
+            "confirm": {
+                "id": _cid,
+                "tool": name,
+                "tool_type": _ttype,
+                "level": _level,
+                "match_key": _cls.get("match_key"),
+                "kind": _cls.get("kind"),
+                "reason": _reason,
+                "preview": _prev,
+                "arguments": arguments or {},
+                "batch_count": _bn,
+                "batch_merged": _merged,
+                "conversation_id": conv_ctx or 0,
+                "timeout_at": _conf.get("timeout_at") or "",
+            },
+            "result": ("⏸ 写操作「%s」已进入人工确认队列（确认单 #%d%s）：%s"
+                       % (name, _cid,
+                          ("，同批共 %d 项" % _bn) if _bn > 1 else "",
+                          "等待人工批准后才会真正执行；**在此之前不会产生任何副作用**。"
+                          "不要重复发起该操作。")),
+        }
 
     def _exec_tool_call(self, name: str, arguments: dict) -> dict:
+        """工具调用**唯一出口**：跑一遍真实执行，再补一句确定性判读。
+
+        ★ 2026-10-28（conv 9726 实证）：为什么判读要挂在**这里**而不是各工具里
+          ── 执行体有 10+ 个 return（白名单/权限/确认/超时/异常/MCP/内置…），
+             逐个补注解必然漏；而 stream.py 与 execute.py **两条 ReAct 路径**
+             最终都只经这一个方法 ⇒ 挂在出口即两路同源（本仓"同一语义只写一份"纪律）。
+          ── 注解**不改 result 原文**，只在末尾追加判读句（原文仍是审计口径）。
+          ── 判读失败绝不阻断执行（旁路原则，见 agent/tool_result_notes.py）。
+
+        ★ 2026-10-30（P0-1 幂等键）：为什么幂等闸也挂在**这里**
+          ── 同一理由：这是唯一出口 ⇒ 两条 ReAct 路径（stream/execute）天然同源；
+          ── 且必须**先于**任何副作用：查在执行前、记在执行后；
+          ── 作用域只在**编排子任务**内生效（run+task 标识）⇒ 那里才有
+             "同一步被重试/续跑重跑"的语义；会话直答路径不纳入（见 core/idempotency.py）。
+        """
+        # ── 幂等闸（P0-1）────────────────────────────────────────────────
+        _idem_ctx = None
+        try:
+            from core import idempotency as _idem
+            if _idem.enabled() and _idem.derive_scope(self):
+                # ⚠️ `_tool_side_effect` 会查一次 tools 表 ⇒ 先判作用域再查（省一次 DB 往返）
+                _idem_ctx = _idem.prepare(self, name, arguments, self._tool_side_effect(name))
+        except Exception:
+            _idem_ctx = None      # 幂等层故障**一律放行**（fail-open，见模块头）
+        _replay = None
+        if _idem_ctx:
+            try:
+                from core import idempotency as _idem
+                _prev = _idem.lookup(_idem_ctx["key"])
+                if _prev:
+                    _replay = _idem.replay(_prev)
+            except Exception:
+                _replay = None
+        if _replay is not None:
+            res = _replay          # 已执行过 ⇒ 直接重放结果（不再产生副作用）
+        else:
+            res = self._exec_tool_call_impl(name, arguments)
+            if _idem_ctx and isinstance(res, dict) and res.get("ok") is True:
+                # ⚠️ 只记**成功**的执行：被闸拦下/失败的结果不是"已产生副作用"
+                try:
+                    from core import idempotency as _idem
+                    _idem.record(_idem_ctx["key"], name, _idem_ctx["scope"],
+                                 _idem_ctx["args_hash"], _idem_ctx["ordinal"], res)
+                except Exception:
+                    pass
+        try:
+            from agent import tool_result_notes as _notes
+            return _notes.annotate(name, arguments, res)
+        except Exception:
+            return res
+
+    #: 写入类工具里承载"目标元素标识"的参数名（不同平台叫法不同，全部覆盖）。
+    #: MCP `import_sysml_text` → `targetPackageId`；自建 REST `sysmlv2/import` →
+    #: `targetPackageDataId`；命令批/视图类 → `ownerId`。新增平台只加一行，不改逻辑。
+    _TARGET_ID_KEYS = ("targetPackageId", "targetPackageDataId",
+                       "targetPackageID", "packageId", "ownerId")
+
+    def _import_target_gate(self, name, arguments, intent_ctx, conv_ctx):
+        """**统一写入目标网关**（MCP 与 HTTP 两条通道共用，执行前唯一一处）。
+
+        返回 `None`（放行）或一个 `{ok:False, code:...}` 的拦截结果。
+
+        ## 为什么它是"网关"而不是"校验补丁"（2026-10-28 米爸追问后的定型）
+        旧实现是"拿到模型给的 id，判它是不是父包"。那默认了**目标 id 由模型提供**，
+        于是无论判得多准，最好的结果也只是"拦住"，差的形态是"拦住却不给正确 id"
+        ⇒ 模型下一轮还是得猜。
+
+        现在改为：**先解析、再判定**——
+          ① `write_target_resolver.resolve()` 从"用户点名的名字 + 本会话回执"
+             解出**唯一确定的目标 id**（不是校验，是求解）；
+          ② 模型给对了 ⇒ 放行（正常路径）；
+          ③ 模型给错了 ⇒ **拒绝并直接把正确 id 写进回执**，让它在同一轮内自我修正
+             （回执里带上"父包会冲掉子树"的后果说明，避免它换个写法继续错）；
+          ④ 解析不出唯一目标 ⇒ 不猜；退回"父包检测"这一保守口径，
+             判不出就放行交给人工确认（绝不因为"解析失败"把正常写入堵死）。
+
+        ## 覆盖范围为什么扩大到所有 import 类
+        真机（conv 9740）暴露的正是这个缺口：闸只挂在 `zhiyuan_sysmlv2_import`
+        上，而**真正能落库**的是 MCP 的 `import_sysml_text`（走 MCP 分支，
+        在本闸原来的位置之前就 return 了）⇒ 等于没拦。
+        ⇒ 判据改为"名字里是否含 import"（词元匹配），两条通道一次覆盖。
+        """
+        try:
+            nm = str(name or "")
+            try:
+                from agent.mcp_tool_meta import name_hits_group as _nhg
+                _is_import = _nhg(nm, "import") or "import" in nm.lower()
+            except Exception:
+                _is_import = "import" in nm.lower()
+            if not _is_import:
+                return None
+            args = arguments or {}
+            did = ""
+            for k in self._TARGET_ID_KEYS:
+                if args.get(k) not in (None, ""):
+                    did = str(args.get(k))
+                    break
+            if not did:
+                # 没给目标 id：ADD_PACKAGE 可能按包名新建，不拦（交给平台与人工确认）
+                return None
+            uinput = str((intent_ctx or {}).get("user_input") or "")
+            from database import get_db as _gdb3
+            from agent import write_target_resolver as _wtr
+            _c3 = _gdb3()
+            try:
+                _rv = _wtr.resolve(_c3, int(conv_ctx or 0), uinput)
+                _verdict, _why = _wtr.check(did, _rv)
+                # 解析不出唯一目标时，退回旧的"父包检测"（保守兜底，不改变既有语义）
+                if _verdict == "unknown":
+                    try:
+                        from agent import import_target_guard as _itg
+                        _par, _child = _itg.is_parent_of_target(
+                            _c3, int(conv_ctx or 0), did, uinput)
+                    except Exception:
+                        _par, _child = False, ""
+                    if _par:
+                        return {
+                            "ok": False,
+                            "code": "WRONG_TARGET_PACKAGE",
+                            "result": (
+                                "⛔ 已拒绝执行：`%s` 是**父包**，不是你要写的那一个 ——"
+                                "它的子级里就含「%s」。本工具是**覆盖导入**，"
+                                "写到父包会冲掉它下面既有的全部子树。"
+                                "请改用**目标包自身**的 id（取回执里的 elementId，"
+                                "不要用 parentId），确认后再导入。" % (did, _child)),
+                        }
+                    return None
+            finally:
+                _c3.close()
+            if _verdict == "ok":
+                return None
+            # verdict == wrong：拒绝 + 把正确 id 一并回喂（自我修正，不靠下一轮猜）
+            return {
+                "ok": False,
+                "code": "WRONG_TARGET_PACKAGE",
+                "result": (
+                    "⛔ 已拒绝执行：写入目标不对。\n"
+                    "· 本次调用给的目标：%s\n"
+                    "· 用户点名的元素：%s%s ⇒ 正确 id = **%s**%s\n"
+                    "· 原因：%s\n"
+                    "⇒ 请用正确的 id 重新调用（本工具是覆盖语义，写到父包/别的元素会破坏其既有内容）。"
+                    "若你判断用户其实要写的是另一个元素，请先用 ask_user 让用户确认。"
+                    % (did,
+                       _rv.get("name") or "?",
+                       ("（%s）" % _rv["type"]) if _rv.get("type") else "",
+                       _rv.get("target_id") or "?",
+                       ("，父级：%s" % _rv["parent_name"]) if _rv.get("parent_name") else "",
+                       _why)),
+            }
+        except Exception:
+            return None  # 网关自身异常绝不阻断执行（旁路原则）
+
+    def _exec_tool_call_impl(self, name: str, arguments: dict) -> dict:
         """缺口B：执行单个工具调用（内置 handler / MCP tools/call），返回标准化结果。
 
         优化1：每次调用落库 tool_call_logs（可观测），异常同样记录。
@@ -509,6 +1375,19 @@ class ToolMixin:
         agent_ctx = getattr(self, "_tool_agent_ctx", None) or {}
         conv_ctx = getattr(self, "_tool_conv_ctx", 0)
         t0 = _time.time()
+        # ── P0-b（2026-10-25）M3：tool span 开点 ───────────────────────
+        # 为什么开在这里而不是 with 包方法体：_exec_tool_call 有 10+ 个出口
+        # （ask_user/权限闸/异常各自 return），逐个补 close 必然漏；而**所有**
+        # 出口都汇入 _log_tool_call（8 个调用点）⇒ 开在此、闭在 _log_tool_call，
+        # 一条不错。t0 传入让 span 窗口覆盖真实执行时长（backdate 校正时钟）。
+        # 无 tracer（编排子任务/开关关）⇒ open 返回 0，闭点 no-op，零开销。
+        try:
+            from services.orch_span import current_tracer as _ct
+            _tracer = _ct()
+            if _tracer is not None:
+                _tracer.open_tool(name, t0=t0)
+        except Exception:
+            pass   # 观测装配失败绝不阻断工具执行
         tool_type = "builtin"
         try:
             # ── ★ 2026-10-17（米爸反馈3）：ask_user 拦截（人在回路澄清）─────────
@@ -552,6 +1431,20 @@ class ToolMixin:
                 result = ({"ok": True, "result": _off[:20000]}
                           if _off else
                           {"ok": False, "result": f"offload #{_oid} 不存在（可能 id 无效——以工具结果提示中的编号为准）"})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            if name == "todo_write":
+                # ★ P0-3（2026-10-28）计划外化：管理本会话待办清单。
+                #   与 ask_user 同属**对话级能力** ⇒ 放在白名单/RBAC 之前
+                #   （它不碰任何外部数据源，只写本会话自己的 agent_todos 表）。
+                #   状态迁移一律走 agent_todo.transition() ⇒ 非法迁移如实报错不静默。
+                _a = arguments or {}
+                _conv = int(getattr(self, "_tool_conv_ctx", 0) or 0)
+                try:
+                    from agent.todo_store import handle_todo_write as _tw
+                    result = _tw(_a, _conv)
+                except Exception as e:
+                    result = {"ok": False, "result": "todo_write 执行异常：%r" % (e,)}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
             if name == "ask_user":
@@ -763,54 +1656,105 @@ class ToolMixin:
                                   "result": f"写操作「{name}」暂存失败（已阻止直接执行）: {str(_we)[:100]}"}
                     self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                     return result
-            # M5：HIL 强制——L2 Agent 的写工具操作进入人工确认队列（不直接执行）
-            if getattr(self, "_hil_level", "L0") == "L2":
-                from hil_service import HILService
-                if HILService.is_write_tool(name):
-                    from database import db_conn
-                    with db_conn() as conn:
-                        conf = HILService.queue_confirmation(
-                            conn, agent_ctx.get("agent", ""), name, arguments or {},
-                            preview=f"Agent 请求执行写操作 {name}，参数：{str(arguments or {})[:200]}",
-                            conversation_id=conv_ctx or 0)
-                        if conf:
-                            result = {"ok": True,
-                                      "result": f"写操作「{name}」已进入人工确认队列（确认单 #{conf['id']}），确认后生效"}
-                            self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
-                            return result
-            # TR-P2b：副作用门控——destructive 工具必须人工确认（行业标准：模型只推荐不授权）
-            if self._tool_side_effect(name) == "destructive":
-                from hil_service import HILService
-                from database import db_conn
-                with db_conn() as conn:
-                    conf = HILService.queue_confirmation(
-                        conn, agent_ctx.get("agent", ""), name, arguments or {},
-                        preview=f"高风险工具「{name}」需人工确认后执行，参数：{str(arguments or {})[:200]}",
-                        conversation_id=conv_ctx or 0)
-                if conf:
-                    result = {"ok": True,
-                              "result": f"高风险工具「{name}」已进入人工确认队列（确认单 #{conf['id']}），确认后执行"}
-                else:
-                    result = {"ok": False, "requires_confirm": True,
-                              "result": f"「{name}」为 destructive 高风险工具，已拒绝直接执行，请通过人工确认流程操作"}
-                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+            # ══════════════════════════════════════════════════════════════
+            # ★ 2026-10-28（写前确认 HITL）**统一人工确认闸** —— 替换此前分散的三道闸
+            #   （M5 L2 分级闸 / TR-P2b destructive 闸 / 2026-09-11 write 闸）
+            #
+            # ## 为什么合并成一道
+            # ① 旧三道闸**判定依据互不相同**（`hil_level` / `side_effect` / `side_effect`）
+            #    ⇒ 同一类操作在不同闸得到不同结论，且**彼此不覆盖**；
+            # ② 实测三处断链（全部真机验证）：
+            #    · `self._hil_level` 在 stream 路径**从不赋值** ⇒ L2 闸永不触发；
+            #    · `_tool_side_effect` 查不到返回 "read"，而 **MCP 工具不在 tools 表**
+            #      ⇒ destructive/write 闸对 `create_model_elements` 等**全部失效**；
+            #    · `HILService.WRITE_TOOLS` 是硬编码 5 个名字，其中 **4 个在 tools 表里
+            #      根本不存在**（真库实证）⇒ 永远匹配不到。
+            # ⇒ 现在统一为：**双源写类判定**（tools.side_effect ∪ MCP 动词族）
+            #    + **策略表取档位**（`services/hil_policy.evaluate`，策略即数据，
+            #    灰度 = 改表不改代码）。
+            #
+            # ## 判据与档位的分工（口径刻意不同，不可照抄）
+            # · **注入侧**（该不该递到模型眼前）＝ 恰当性 ⇒ 窄口径，只闸破坏族；
+            # · **执行侧**（要不要人点头）       ＝ 授权   ⇒ 宽口径，覆盖全部写族。
+            #
+            # ## 位置
+            # RBAC 之后（`tools.py:870-876` 既定不变量：无权限的人不该走到"要不要审批"）
+            # → Hook 之后（Hook 是管理员配的**细粒度确定性**规则，比策略粗分档更具体）
+            # → 执行之前（唯一能保证"没有副作用发生"的位置）。
+            # ★★ 2026-10-28（conv 9741 实证）：**参数不全的调用不得进入确认队列**。
+            #   真机：模型把待办的验收文案当成入参发了出去 ——
+            #     import_sysml_text  {"value": "回执成功 + query_data_tree 能看到新元素"}
+            #   （同一轮 query_projects / query_data_tree / validate 各带一条待办 verify 文案）
+            #   MCP 工具此前**没有必填参数校验**（校验只写在 http_tool_executor，仅 HTTP 工具），
+            #   于是这笔畸形调用入了队（确认单 #38，预览「导入（未命名对象）」）。
+            #   用户若批准，执行的是一笔没有包名、没有正文的导入 ⇒ 必然不生效
+            #   ⇒ 用户看到的就是"我确认了却没写进去"。⇒ 在"要不要人点头"之前先挡回。
+            _mreq = None
+            try:
+                # ⚠️ 本模块**没有模块级 `json`**（文件内已有注释警告过这一点），
+                #   直接写 `json.loads` 会抛 NameError 并被下面的 except 吞掉
+                #   ⇒ 闸永远不生效、且没有任何日志。必须显式局部导入。
+                import json as _json_arg
+                from agent.tool_readiness import missing_args as _miss_args
+                from database import get_db as _argdb
+                _ac = _argdb()
+                try:
+                    _mrow = _ac.execute(
+                        "SELECT tool_meta FROM mcp_servers WHERE tools LIKE ? AND status='online' "
+                        "ORDER BY id LIMIT 1", ("%" + str(name) + "%",)).fetchone()
+                    _sch = None
+                    if _mrow and _mrow[0]:
+                        try:
+                            _mmeta = (_json_arg.loads(_mrow[0])
+                                      if isinstance(_mrow[0], str) else _mrow[0])
+                            for _mi in (_mmeta or []):
+                                if isinstance(_mi, dict) and _mi.get("name") == name:
+                                    _sch = _mi.get("inputSchema") or _mi.get("input_schema")
+                                    break
+                        except Exception:
+                            _sch = None
+                    if _sch:
+                        _mreq = _miss_args(_sch, arguments or {})
+                finally:
+                    _ac.close()
+            except Exception:
+                _mreq = None
+            if _mreq:
+                _mres = {
+                    "ok": False,
+                    "code": "MISSING_ARGUMENTS",
+                    "result": (
+                        "\u26d4 未执行：调用 `%s` 缺少必需参数 %s。\n"
+                        "\u00b7 本次给的参数键：%s\n"
+                        "\u00b7 该工具的参数契约要求：%s\n"
+                        "\u21d2 请按契约补齐后重新调用。"
+                        "\u26a0\ufe0f 不要把**待办条目的验收说明**（如「回执成功」「返回 verdict=pass」）"
+                        "当成工具参数 —— 那些是给人看的验收标准，不是入参。"
+                        % (name, "\u3001".join(_mreq),
+                           "\u3001".join(sorted((arguments or {}).keys())) or "\uff08\u65e0\uff09",
+                           "\u3001".join(_mreq)))
+                }
+                self._log_tool_call(name, tool_type, arguments, _mres,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
+                return _mres
+            _hil_res = self._hil_gate(name, arguments or {}, agent_ctx, conv_ctx, tool_type)
+            if _hil_res is not None:
+                result = _hil_res
+                self._log_tool_call(name, tool_type, arguments, result,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
-            # 人在回路（2026-09-11）：外部集成写工具（tools.side_effect='write'，如智源覆盖导入）
-            # 一律不直接执行——进入人工确认队列，批准后由确认处理端自动执行并回写结果
-            if self._tool_side_effect(name) == "write" and not getattr(self, "_orch_subtask", False):
-                from hil_service import HILService
-                from database import db_conn
-                with db_conn() as conn:
-                    conf = HILService.queue_confirmation(
-                        conn, agent_ctx.get("agent", ""), name, arguments or {},
-                        preview=f"写操作「{name}」需人工确认（模型只推荐不授权），参数：{str(arguments or {})[:200]}",
-                        conversation_id=conv_ctx or 0)
-                if conf:
-                    result = {"ok": True,
-                              "result": f"⏸ 写操作「{name}」已进入人工确认队列（确认单 #{conf['id']}）："
-                                        f"执行前需要你在「工作流 → 执行监控 → HIL 人工确认队列」中批准，批准后自动执行并回写结果。"}
-                    self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
-                    return result
+
+            # ★★ 2026-10-28：**统一写入目标网关** —— 必须位于 MCP/HTTP 两条分派**之前**。
+            #   位置理由（真机 conv 9740 的教训）：真正能落库的是 MCP `import_sysml_text`，
+            #   它走下面 MCP 分支、在那里 return；旧闸只挂在 HTTP 分支
+            #   （`zhiyuan_sysmlv2_import`）上 ⇒ 真写入路径**完全绕过**了检查。
+            #   语义见 `_import_target_gate`（先解析目标、再判定，给错时回喂正确 id）。
+            _itg_res = self._import_target_gate(name, arguments or {},
+                                                intent_ctx, conv_ctx)
+            if _itg_res is not None:
+                self._log_tool_call(name, tool_type, arguments, _itg_res,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
+                return _itg_res
             # MCP 工具：从 DB 找所属服务器端点（真实 JSON-RPC 调用）
             try:
                 from database import get_db
@@ -845,7 +1789,9 @@ class ToolMixin:
                     self._retry_policy_for(name))
                 if retried:
                     result = {**result, "retried": retried}
-                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                # P0-a：source_ref=mcp_servers.name ⇒ capability_id=mcp:{server}:{tool}
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0,
+                                    source_ref=row["name"])
                 return result
             # 通用 HTTP 集成工具（tools.kind='http'，配置驱动执行器——适配建模软件等外部系统，零代码接入）
             try:
@@ -863,6 +1809,10 @@ class ToolMixin:
                 from http_tool_executor import exec_http_tool
                 from tool_resilience import retry_exec
                 tool_type = "http"
+                # ★ 2026-10-28（conv 9740 实证）：**覆盖导入的目标一致性闸**。
+                #   ⚠️ 已上移为**统一网关**（`_import_target_gate`），位于 MCP/HTTP
+                #   两条分派之前 —— 因为真正能落库的是 MCP 的 `import_sysml_text`，
+                #   而它走的是 MCP 分支（在本段之前就 return 了），只在这里拦等于漏拦。
                 # D2：HTTP 集成工具重试（仅瞬态失败）
                 result, retried, _did = retry_exec(
                     lambda: exec_http_tool(name, arguments or {}),
@@ -1014,23 +1964,55 @@ class ToolMixin:
             if name == "graph_retrieve":
                 q = (arguments or {}).get("query", "")
                 r = self.rag.retrieve(q)
-                hits = r.get("chunk_hits") or r.get("entities") or []
-                # Q2-修复：实质相关判断——查询词中文 token 与命中内容的重叠率 < 20% 视为弱相关，
-                # 引导以用户上下文/上传资料为准，避免 LLM 拿历史无关实体硬凑分析
-                q_tokens = set(re.findall(r"[\u4e00-\u9fa5]{2,4}", q or ""))
-                hit_text = " ".join([(h.get("content") or "")[:500] for h in (r.get("chunk_hits") or [])])
-                hit_tokens = set(re.findall(r"[\u4e00-\u9fa5]{2,4}", hit_text))
-                overlap = q_tokens & hit_tokens
-                ratio = len(overlap) / max(len(q_tokens), 1)
-                max_score = max([h.get("score") or 0 for h in (r.get("chunk_hits") or [])], default=0)
-                weak = (not hits) or (not q_tokens) or (ratio < 0.2 and max_score < 0.5)
-                if weak:
-                    detail = f"知识库未检索到与查询实质相关的内容（词重叠 {len(overlap)}/{len(q_tokens)}），请基于用户上下文与上传资料回答"
-                    result = {"ok": True, "result": detail, "weak": True}  # P0-按需工具：弱相关标记 → 上层收敛工具循环
+                _chunk_hits = r.get("chunk_hits") or []
+                hits = _chunk_hits or r.get("entities") or []
+                # ★ 2026-10-28（用户报「知识库明明有 OMG 规范讲 perform action，
+                #   检索却说未检索到」）：判定逻辑整体移到纯函数模块。
+                #
+                #   旧实现三条独立缺陷（任一条都足以让检索"看起来失效"）：
+                #   ① `q_tokens` 只抽中文 ⇒ 英文术语查询 `not q_tokens` 恒真 ⇒ 必判弱
+                #   ② 命中的是英文规范 ⇒ overlap 恒 0 ⇒ 中文查英文文档必判弱
+                #   ③ `max_score < 0.5`：score 是 RRF 融合分 1/(60+rank)，
+                #      理论最大 ≈2/61=0.033 ⇒ 该条件**恒真**，等于没写
+                #   实测：vec_score 0.57~0.72（置信度中/高）的正确命中被判成
+                #   「未检索到实质相关内容（词重叠 0/0）」= 用户看到的原话。
+                from agent.retrieval_relevance import assess_relevance as _assess
+                try:
+                    from core import config as _cfg_rr
+                    _conf_mid = float(_cfg_rr.get("rag", "confidence_mid", 0.45))
+                except Exception:
+                    _conf_mid = 0.45
+                _rel = _assess(q, _chunk_hits, conf_mid=_conf_mid)
+                _ev = _rel["evidence"]
+                if _rel["weak"]:
+                    detail = ("知识库未检索到与查询实质相关的内容"
+                              f"（{_rel['reason']}），请基于用户上下文与上传资料回答")
+                    result = {"ok": True, "result": detail, "weak": True,
+                              "relevance": _rel}  # P0-按需工具：弱相关标记 → 上层收敛工具循环
                 else:
-                    detail = f"图谱 {r['graph_count']} 条 / 向量 {r['vector_count']} 条（词重叠 {len(overlap)}/{len(q_tokens)}）：" \
-                             f"{[h.get('name') or h.get('content','')[:60] for h in hits[:3]]}"
-                    result = {"ok": True, "result": detail}
+                    # ★ 同时修「检索到了但答不出」：旧实现只给 hits[:3] 各 60 字符
+                    #   （共 180 字），LLM 拿不到条文全文 ⇒ 只能答"信息不足"。
+                    #   现改为给 top 4 条的**完整切片内容**（每条约 300 字）并标注来源，
+                    #   让模型能真正引用规范原文。
+                    _top = [h for h in _chunk_hits[:4] if isinstance(h, dict)]
+                    _lines = [
+                        f"知识库检索到 {len(_chunk_hits)} 条相关片段"
+                        f"（最高向量相似度 {_ev['max_vec']:.3f}，"
+                        f"最高 BM25 {_ev['max_bm25']:.1f}）。"
+                        f"以下为原文摘录，回答时请引用具体条文："
+                    ]
+                    for _i, _h in enumerate(_top, 1):
+                        _src = _h.get("source_doc") or "（未知来源）"
+                        _sec = str(_h.get("section") or "").strip()
+                        _sec = f" · {_sec}" if _sec else ""
+                        _conf = _h.get("confidence_level") or "-"
+                        _lines.append(
+                            f"\n【来源 {_i}】{_src}{_sec}"
+                            f"（相似度 {float(_h.get('vec_score') or 0):.3f}，置信度 {_conf}）\n"
+                            f"{str(_h.get('content') or '').strip()}"
+                        )
+                    result = {"ok": True, "result": "\n".join(_lines),
+                              "relevance": _rel, "hit_count": len(_chunk_hits)}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
             if name == "impact_analyze":
@@ -1111,7 +2093,8 @@ class ToolMixin:
         self._retry_policy_cache[name] = policy
         return policy
 
-    def _log_tool_call(self, name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0):
+    def _log_tool_call(self, name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0,
+                       source_ref=""):
         """优化1：工具调用可观测——落库 tool_call_logs（失败不阻断主流程）。
 
         P0-2（2026-10-06）两处补强：
@@ -1120,6 +2103,12 @@ class ToolMixin:
         - **参数脱敏**：`arguments` 此前**原样入库**，而 http 集成工具的入参可能含
           鉴权头、MCP 配置含 token ⇒ 审计日志会变成新的泄露源（core/redact.py 文件头）。
           脱敏在**序列化之后**做（对最终落库文本生效），键名保留、只遮值。
+
+        P0-a（2026-10-24）：补 capability_id（capability_registry 统一注册处关联列）。
+        口径同 core/capability_registry：mcp → mcp:{server}:{tool}（server 名由 MCP 分支
+        经 source_ref 传入，该分支已反查出 mcp_servers 行）；skill → skill:{id}（反查，
+        skills.name 无 UNIQUE 不能用 name 当键）；其余分支 → tool:{name}（这些分支的
+        前提就是 tools 表有该行）。反查失败留空——不造假映射。
         """
         try:
             import time as _time
@@ -1127,13 +2116,23 @@ class ToolMixin:
             import json as _json
             latency = int((_time.time() - t0) * 1000)
             # P0-3：脱敏。失败不阻断（旁路原则），但要留痕让人知道没脱敏成功。
+            # ★ 2026-10-27（截断清单 P0-B3）：结果落库上限 2000 → 8000，且**截断可观测**。
+            #   原 2000 是**静默**截断：我据此统计"工具结果都在 2000 以内"，把
+            #   `mcp.max_response=4000` 造成的丢失误判成"没有大结果"，直接诊断跑偏一次。
+            #   现口径：`result` 仍存文本（保持既有解析口径不变），另落 `result_len`
+            #   （原始长度）与 `result_truncated`（是否被裁）两列 ⇒ 任何"看到的是不是全部"
+            #   都能用 SQL 直接回答，不靠猜。
+            _LOG_RES_CAP = 8000
+            _raw_res = str(result.get("result", ""))
+            _res_len = len(_raw_res)
+            _res_trunc = 1 if _res_len > _LOG_RES_CAP else 0
             try:
                 from core.redact import redact_text as _redact
                 _args_txt = _redact(_json.dumps(arguments or {}, ensure_ascii=False)[:2000])
-                _res_txt = _redact(str(result.get("result", ""))[:2000])
+                _res_txt = _redact(_raw_res[:_LOG_RES_CAP])
             except Exception:
                 _args_txt = _json.dumps(arguments or {}, ensure_ascii=False)[:2000]
-                _res_txt = "[redact-failed] " + str(result.get("result", ""))[:1900]
+                _res_txt = "[redact-failed] " + _raw_res[:_LOG_RES_CAP]
             # P0-2：操作者。口径同 audit_logs.user_name（display_name，回落 username）。
             _uname = ""
             try:
@@ -1149,6 +2148,18 @@ class ToolMixin:
                 # 不改签名：8 处调用点各自加参数风险远大于收益，直接从 self 读。
                 _run_id = int(getattr(self, "_tool_run_ctx", 0) or 0)
                 _task_key = str(getattr(self, "_tool_task_key", "") or "")
+                # ★ P0-3（2026-10-27）：本轮 trace_id（与 llm_usage_stats.trace_id **同源**）。
+                #   此前本表只有 run_id/task_key，而主对话路径**没有编排批次**
+                #   ⇒ 83.2% 的行 run_id=0，且与 LLM 使用量统计是两套 id、无法 JOIN
+                #   ⇒ 回答不了「这一轮对话调了哪些能力、花了多少钱」。
+                #   两级取值：实例属性（stream.py 入口落的）→ ContextVar（线程/子任务兜底）。
+                _trace_id = str(getattr(self, "_tool_trace_id", "") or "")
+                if not _trace_id:
+                    try:
+                        from core.audit import current_trace_id as _ctid
+                        _trace_id = _ctid()
+                    except Exception:
+                        _trace_id = ""
                 # failure_kind：复用 B1-6 的分类器（不另造第二份词表——两份必然漂移）。
                 # 只在失败时写，成功留空（避免"成功"也带一个无意义的分类）。
                 # ★ 2026-10-18 修（P1-2 步骤级归因器真库取证时发现）：原写法
@@ -1169,16 +2180,138 @@ class ToolMixin:
                             ok=False)
                     except Exception:
                         _fkind = ""
+                # P0-a：capability_id（统一注册处关联）。skill 反查一次（name 不唯一）；
+                # 反查不到留空（不造假映射）。
+                _cid = ""
+                try:
+                    if tool_type == "mcp" and source_ref:
+                        _cid = "mcp:%s:%s" % (source_ref, name)
+                    elif tool_type == "skill":
+                        _sid = conn.execute(
+                            "SELECT id FROM skills WHERE name=? ORDER BY id LIMIT 1",
+                            (name,)).fetchone()
+                        _cid = ("skill:%s" % _sid[0]) if _sid else ""
+                    else:
+                        _cid = "tool:%s" % name
+                except Exception:
+                    _cid = ""
+                # S0（2026-10-28）探针标记：验证脚本造的假工具（fake_tool 等）会把
+                #   `ok=0` 与天文 latency 一起写进来，实测让全量失败率虚高 3.2 个点
+                #   （15.0% → 11.8%）⇒ 写入侧就打好标记，统计侧用 probe_where() 排除。
+                try:
+                    from core.probe_mark import is_probe_tool as _is_probe_tool
+                    _is_probe = _is_probe_tool(name)
+                except Exception:
+                    _is_probe = 0
                 conn.execute(
-                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name, run_id, task_key, failure_kind) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, arguments, result, ok, latency_ms, conversation_id, user_name, run_id, task_key, failure_kind, capability_id, trace_id, result_len, result_truncated, is_probe) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (intent_ctx.get("intent", ""), agent_ctx.get("agent", ""),
                      name, tool_type, _args_txt, _res_txt,
                      1 if result.get("ok") else 0,
-                     latency, conv_ctx or 0, _uname, _run_id, _task_key, _fkind),
+                     latency, conv_ctx or 0, _uname, _run_id, _task_key, _fkind, _cid, _trace_id,
+                     _res_len, _res_trunc,
+                     # S0（2026-10-28）：探针/验证噪声标记，统计侧据此排除（core/probe_mark）
+                     _is_probe),
                 )
         except Exception:
             pass  # 观测落库失败不影响工具执行
+        # P0-b：闭 tool span（sid=0 ⇒ LIFO 弹线程栈顶，即本次工具）。
+        # 放在**方法级**而非 DB try 内：落库失败/异常出口也必须闭 span，否则
+        # 线程栈泄漏 ⇒ 后续工具的 parent 挂到已闭节点上、end 时悬挂。
+        # latency 用真实执行时长（t0 起算），与 tool_call_logs.latency_ms 同源。
+        try:
+            import time as _t2
+            from services.orch_span import current_tracer as _ct
+            _tracer = _ct()
+            if _tracer is not None:
+                _tracer.close_tool(0, ok=bool(result.get("ok")),
+                                   latency_ms=int((_t2.time() - t0) * 1000))
+        except Exception:
+            pass   # 观测收口失败绝不阻断工具执行
+        # ★ P0-5（2026-10-28）障碍恢复：给**失败结果**追加「这属于什么障碍 / 该怎么恢复」。
+        #
+        # 为什么加在这里（而不是各失败出口）：
+        #   `_exec_tool_call` 有 10+ 个失败出口（白名单/RBAC/HIL/超时/异常…），
+        #   逐个补必然漏；而**所有出口都汇入本方法** ⇒ 改这一处，一条不错。
+        #   （本仓已用同一理由把 tool span 的开闭点放在这里。）
+        #
+        # 为什么追加到 result["result"]（而不是只写日志）：
+        #   模型看到的是 result["result"]。失败原因若只说「失败」，
+        #   模型只能选择"问用户"；给出障碍类型 + 恢复动作，它才能自己换路径。
+        #   实测依据（真实样本 #3173）：模型的 next_step 是「刷新凭据后重新调用」——
+        #   说明它**知道**该自恢复，只是系统没给它这个信号，它只能绕回问人。
+        #
+        # ⚠️ 不动 result["ok"]：失败仍是失败，只是**附带恢复建议**。
+        # ⚠️ 权限类失败（permission_denied/permission_error）不追加 —— 那确实该找人。
+        try:
+            _ob_on = False
+            try:
+                from core.config import as_bool as _as_bool
+                _ob_on = bool(_as_bool("agent", "obstacle_recovery_enabled", False))
+            except Exception:
+                _ob_on = False
+            if (_ob_on and isinstance(result, dict) and not result.get("ok")
+                    and not result.get("permission_denied")
+                    and not result.get("permission_error")):
+                from agent import agent_todo as _at
+                _etxt = str(result.get("result") or result.get("error") or "")
+                _cls = _at.classify_obstacle(_etxt)
+                _ACTION_TXT = {
+                    "retry": "重试（可能是瞬时故障）",
+                    "refresh_retry": "刷新凭据后重试一次",
+                    "repath": "换路径：先用 list/search 定位到正确对象再重试",
+                    "refetch_replay": "重新获取最新坐标/版本后重放",
+                    "downgrade": "换等价工具或缩小范围后重试",
+                    "ask_user": "向用户澄清",
+                }
+                _hint = ("\n\n【障碍恢复建议】本失败被判定为「%s」类：%s。"
+                         % (_cls["kind"], _ACTION_TXT.get(_cls["action"], _cls["action"])))
+                if not _cls["ask_user_allowed"]:
+                    _hint += ("\n该类问题**用现有工具可以自行解决** —— "
+                              "请按上面的恢复动作再试一次，**不要**直接问用户。")
+                else:
+                    _hint += "\n该类信息只有用户能提供，可以调用 ask_user 澄清。"
+                result["result"] = _etxt + _hint
+                result["obstacle"] = _cls
+        except Exception:
+            pass   # 障碍提示失败绝不阻断工具结果返回
+        # ★ S2（2026-10-29）远端参数错误「可执行化 + 学到就用」。
+        #
+        # 为什么单独一段、且**不挂在 obstacle_recovery_enabled 开关下**：
+        #   · P0-5 的障碍恢复是"猜类别、给建议"，默认关闭是合理的（建议可能不准）；
+        #   · 本段是**转述服务端自己给出的断言**（`fields[].expected` / `recovery`），
+        #     不存在猜测成分，且修复成本极低（一次重试 vs 一整轮空转）⇒ 默认开启。
+        #
+        # 实证依据（@2026-10-29，近 7 天真实库）：
+        #   参数类失败 46 条，其中 `field=value / KnownField` 占 18 条；
+        #   **8/12 个会话在重复犯**（conv 9629 犯 11 次、conv 9736 犯 9 次）。
+        #   ⇒ 说明"把服务端原报文追加到结果末尾"这件事模型**根本没有采纳**
+        #     （原有 `_etxt + _hint` 是追加在末尾）。故本段改为**前置**。
+        try:
+            if isinstance(result, dict) and not result.get("ok"):
+                from agent.tool_arg_hint import (
+                    parse_arg_error as _pae, format_hint_zh as _fhz,
+                    lead_with_hint as _lwh, learn as _learn,
+                )
+                _rtext = str(result.get("result") or result.get("error") or "")
+                _ah = _pae(_rtext)
+                if _ah:
+                    # 1) 学到就用：记住该工具真实接受的字段（供后续工具描述注入）
+                    _learn(name, _ah)
+                    # 2) 前置中文祈使指令（读的人先看到"下一步做什么"）
+                    _htxt = _fhz(name, _ah)
+                    result["result"] = _lwh(_rtext, _htxt)
+                    result["arg_fix"] = {
+                        "code": _ah["code"],
+                        "bad_fields": [f["field"] for f in _ah["fields"]],
+                        "allowed": _ah["allowed"][:20],
+                    }
+                    # 3) 参数错误**不该**被上层当作可重试的"瞬时故障"：
+                    #    服务端已标 retryable=false，同参重试必然再错。
+                    result["retryable"] = False
+        except Exception:
+            pass   # 参数提示失败绝不阻断错误信息本身的返回
 
     def _resolve_req_scope(self, scope_ids, scope_id, scope, agent_def):
         """解析建模范围（文件管理=全局数据，不分分支）。

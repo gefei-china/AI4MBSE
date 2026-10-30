@@ -16,7 +16,51 @@ function onStageEvent(ev){
       if(_cont){ procAddStage('意图识别','run','按你的确认继续…'); }
       else { resetPipeline(); procAddStage('意图识别','run','正在识别意图…'); }
     }
-    else { procAddStage('意图识别','done', ev.intent ? `→ ${ev.agent||ev.intent}（HIL ${ev.hil_level||'-'}）` : ''); }
+    else {
+      // ★ 2026-10-27（用户反馈）：「意图识别环节总是匹配到具体的 agent，不能提供更好理解的内容吗，
+      //   比如对于用户意图的分析与总结 —— 用户到底想要什么」。
+      //   原实现只显示 `→ 智源对接agent（HIL 2）` —— 那是**内部路由目标**，用户读不出"我要的东西对不对"。
+      //   现在折叠态显示「理解：<goal>」（后端 brief.goal，建模意图取自 slots.goal，
+      //   其余为忠实复述用户原话首句），展开可看「归类 / 判据 / 待确认 / 执行主体」。
+      //   后端不下发 brief（老版本 / 配置关闭）⇒ 自动回退到旧的 agent 行，行为不变。
+      const _b = ev.brief;
+      if(_b && (_b.goal || _b.followup)){
+        // goal 为空 + followup=true = 本轮是「回答澄清卡」，没有重新分析目标。
+        //   这种情况下**不能**拿澄清壳当"理解"（实测出现过「理解：【澄清补充】用户在待澄清…」），
+        //   如实说明这一轮的性质，比编一句理解更可信。
+        const _line = _b.goal ? ('理解：' + _b.goal) : '按你的确认继续（本轮不重新分析目标）';
+        procAddStage('意图识别','done', _line, '', _intentBriefBody(_b, ev));
+      } else {
+        // ★ 2026-10-28（用户反馈③「我只是输入一段V2代码让AI校验，他自动读取了智源的工程数据」）：
+        //   真因是**会话绑定过主 Agent ⇒ 覆盖了意图路由**（R1 决策），
+        //   而此前只在 reasoning 里说明一句（还落进"AI 思考"框看不见）
+        //   ⇒ 用户以为系统自己跑去做智源对接了。
+        //   现在把「执行主体 + 来源」直接显示在这一行，让"为什么是它"一眼可见。
+        const _es = ev.exec_subject || null;
+        let _subjLine = '';
+        if(_es && _es.name){
+          // ★ 2026-10-29：新增 team_route —— 本轮执行主体是**主 Agent 在团队内定向**的结果。
+          //   旧实现没有这一档，团队定向被归成 manual（"你手动选择"），与事实相反
+          //   （conv 9754：用户选的是主 Agent「智源对接agent」，系统定向给成员 design）。
+          //   必须显式列出主 Agent 名，否则用户仍会问"这不是主 Agent，怎么是它在跑"。
+          const _srcMap = {manual:'你手动选择', bound:'本会话已绑定', route:'按意图路由', team_route:'主 Agent 定向成员'};
+          const _src = _srcMap[_es.source] || '';
+          if(_es.source === 'team_route'){
+            const _via = _es.main_agent ? `经由「${_es.main_agent}」` : '主 Agent';
+            _subjLine = `→ ${_es.name}（${_via}定向，HIL ${ev.hil_level||'-'}）`;
+          } else if(_es.source === 'route'){
+            _subjLine = `→ ${_es.name}（${_src}，HIL ${ev.hil_level||'-'}）`;
+          } else {
+            // 非路由来的，必须显式说明"不是识别出来的"
+            _subjLine = `→ ${_es.name}（${_src}${_src?'，':' '}非本轮识别结果，HIL ${ev.hil_level||'-'}）`;
+          }
+        } else {
+          _subjLine = ev.intent ? `→ ${ev.agent||ev.intent}（HIL ${ev.hil_level||'-'}）` : '';
+        }
+        procAddStage('意图识别','done', _subjLine,
+                     '', _es && _es.note ? `<div style="font-size:11px;color:var(--mut);margin-top:4px;">${esc(_es.note)}</div>` : '');
+      }
+    }
   } else if(name === '知识库检索'){
     if(st === 'run'){ procAddStage('知识库检索','run', ev.retrieved===false ? '按需检索未触发（纯问答）' : '图谱 / 向量检索中…'); }
     else {
@@ -51,6 +95,34 @@ function onStageEvent(ev){
     // ★ 2026-10-17（米爸方案A1）：工具结果里识别出完整 SysML 文档并已自动存入产物——
     //   流内只发 done（无 run 态），detail 形如「xxx.sysml（24.1KB）已自动存入产物」
     if(st === 'done'){ procAddStage('取回模型文件','done', ev.detail||''); }
+  } else if(name === '待办验收闸' || name === '验收未通过 · 继续工作'
+            || name === '验收闸强制放行'){
+    // ★ P0-1/P0-2（2026-10-28）持续自主执行的三个新阶段。
+    //   为什么必须显式列出：本函数的 if-else 链**没有兜底分支**（见下方 else），
+    //   未知 name 会被**静默丢弃** —— 用户看不到「为什么这轮没结束」。
+    //   ⚠️ 这与本仓已记录的「静默丢弃」同族：不是报错，是"什么都没发生"。
+    //   三者的语义不同，展示也要不同：
+    //     · 待办验收闸        —— P0-1：待办清单对完成判定的结论（可能"全部通过"）
+    //     · 验收未通过 · 继续工作 —— P0-2：闸拦住了本轮，AI 继续干活
+    //     · 验收闸强制放行    —— P0-2：连续 N 次没通过，放行但**如实说未完成**
+    if(name === '待办验收闸'){
+      if(st === 'done'){ procAddStage('待办验收闸','done', ev.detail||'按待办清单判定完成度'); }
+      else { procAddStage('待办验收闸','run','按待办清单判定完成度…'); }
+    } else if(name === '验收未通过 · 继续工作'){
+      procAddStage('验收未通过 · 继续工作','done',
+                   ev.detail||'还有待办未通过验收，继续执行');
+    } else {
+      // 强制放行：文案已由后端保证含「未完成」，这里原样透传，不改写
+      procAddStage('验收闸强制放行','done', ev.detail||'已达到阻断上限，如实告知未完成');
+    }
+  } else {
+    // ★ 兜底（2026-10-28）：**任何未识别的 stage 名称都要可见**，不许静默丢弃。
+    //   加这条的直接原因：本轮新增三个 stage 时发现原链没有 else ⇒
+    //   新阶段在界面上完全消失（用户侧表现为"什么都没发生"，最难排查的一类）。
+    //   兜底只做最小展示（名称 + detail），不猜测语义；有专门分支的仍走上面。
+    if(name){
+      procAddStage(String(name), st==='run' ? 'run' : 'done', ev.detail||'');
+    }
   }
 }
 
@@ -75,6 +147,14 @@ function toggleProc(headEl){
   const blk = headEl.closest('.proc-block');
   if(!blk) return;
   blk.classList.toggle('collapsed');
+  // 2026-10-23：记住用户的手动折叠意图 —— procUpsert 不再对 run 态强制展开
+  //（否则流式期间用户收起一个吵闹环节，下一条 delta 又把它弹开）。
+  const pid = blk.getAttribute('data-pid');
+  const it = pid && _procS.timeline.find(x=>x.id===pid);
+  if(it){
+    it._userCollapsed = blk.classList.contains('collapsed');
+    if(!it._userCollapsed) it._userExpanded = true;   // 手动展开过的完成后也不自动收
+  }
   // P0-1 展开时补渲染 DAG（收起时容器隐藏不可布局；展开后重建并 fit）
   if(!blk.classList.contains('collapsed')){
     const viz = blk.querySelector('.dag-viz');
@@ -97,9 +177,18 @@ function procUpsert(id, patch){
   let s = _procS.timeline.find(x=>x.id===id);
   if(!s){ s = Object.assign({id, type:'', icon:'•', title:'', sub:'', status:'run', statusText:'执行中…', detail:'', collapsed:false}, patch); _procS.timeline.push(s); }
   else { Object.assign(s, patch); }
-  // P0-1：进行中步骤保持展开；完成/失败自动收起（编排 DAG 块新任务启动时重新展开）
-  if(s.status !== 'run') s.collapsed = true;
-  else s.collapsed = false;
+  // ★ 2026-10-23（米爸参照 WorkBuddy 输出形态）：环节卡片三件套补齐 ——
+  //   ① 完成/失败自动收起（既有）+ **头部摘要**：收起后 head 不能只有一行
+  //     泛化的"✓ 完成"——把 detail 首句提炼到 sub（WorkBuddy 式"总结文案"）；
+  //   ② **用户手动展开/收起被记住**：此前每次 delta 都强制 run=展开 ⇒ 用户在
+  //     流式过程中手动收起一个吵闹的环节，下一条 delta 又把它弹开。
+  //     toggleProc 现在记录 _userCollapsed / _userExpanded，这里不再无脑覆盖。
+  if(s.status !== 'run'){
+    if(!s._userCollapsed && !s._userExpanded) s.collapsed = true;
+    if(!s.sub && !s.subHtml && s.detail) s.sub = _procSumText(String(s.detail));
+  } else {
+    s.collapsed = !!s._userCollapsed;   // 用户收起的运行中环节不再被弹开
+  }
   procRender();
 }
 // V2.6 统一收口条：执行中显示 spinner+动态耗时；完成后「✓ 已完成 · N 环节 · 耗时」；点击展开/收起时间线
@@ -163,13 +252,28 @@ function procRender(){
       const parentId = s.parent ? ` data-parent="${esc(s.parent)}"` : '';
       const lvlCls = dp>0 ? ` proc-lv${Math.min(dp,2)}` : '';
       const guide = dp>0 ? `<span class="proc-guide" aria-hidden="true"></span>` : '';
-      h += `<div class="proc-block ${s.type}${run?' running':''}${s.collapsed?' collapsed':''}${lvlCls}" data-depth="${dp}"${parentId}>
+      h += `<div class="proc-block ${s.type}${run?' running':''}${s.collapsed?' collapsed':''}${lvlCls}" data-depth="${dp}"${parentId} data-pid="${esc(s.id)}">
         <div class="proc-head" onclick="toggleProc(this)" title="点击${s.collapsed?'展开':'收起'}详情">${guide}<span>${s.icon}</span><span class="proc-title">${esc(s.title)}${sub}${subHtml}</span>${elapsed}<span class="st ${statusCls}" style="margin-left:auto;">${spin}${esc(s.statusText)}</span><span class="chev">▾</span></div>
         ${s.detail?`<div class="proc-body">${s.detail}</div>`:''}
       </div>`;
     });
   }
   b.innerHTML = h;
+  // 2026-10-23（WorkBuddy 式"进行中环节收敛在卡片中"）：running 卡片的内滚区
+  //   自动跟随到底 —— proc-body 有 340px max-height（内容确实被收敛在卡片内），
+  //   但流式追加时视口停在顶部，用户看到的永远是旧内容。用户在卡片内上滑查看
+  //   上文时不强拽（与外层 stickBottom 同策略：判断是否已近底部）。
+  b.querySelectorAll('.proc-block.running .proc-body').forEach(body=>{
+    const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 48;
+    if(nearBottom) body.scrollTop = body.scrollHeight;
+  });
+  // ★ 2026-10-27：执行过程区已**整区限高**（CSS `.proc{max-height:44vh;overflow-y:auto}`）
+  //   ⇒ 新环节追加后，若用户本来就停在底部，必须把**外层容器**也钉到底，
+  //   否则会被看成"内容卡住不动"。与外层会话的 stickBottom 同策略：用户上滑查看后不强拽。
+  try {
+    const nearBottomBox = b.scrollHeight - b.scrollTop - b.clientHeight < 48;
+    if(nearBottomBox) b.scrollTop = b.scrollHeight;
+  } catch(e) {}
   // P0-1：编排 DAG 重建——数据更新（dagDirty）或展开态画布被时间线重绘清除（无 canvas）时重建
   if(!hideBody && _procS.dag && _procS.dag.order.length){
     const dagEl = document.getElementById('proc-dag-live');
@@ -193,23 +297,55 @@ function procAddSystemNotice(text){
   procUpsert(id, {type:'notice', icon:'ℹ️', title:'系统提示', status:'done',
     statusText:'提示', sub: t, detail: t});
 }
-function procAddStage(name, status, detail, detailHtml){
+// ★ 2026-10-27：意图理解明细（展开体）。**白名单构造** —— 所有动态文本逐个 esc()，
+//   因为 procUpsert 的 detail 是直接 innerHTML 的（与 subHtml 同一纪律）。
+//   后端 agent/intent_brief.py 保证字段齐全且已截断，这里只做展示与兜底。
+function _intentBriefBody(b, ev){
+  if(!b) return '';
+  const row = (k, v, cls) => (v === undefined || v === null || v === '')
+    ? '' : `<div class="ib-row${cls?' '+cls:''}"><span class="ib-k">${esc(k)}</span><span class="ib-v">${esc(String(v))}</span></div>`;
+  const basis = Array.isArray(b.basis) ? b.basis.filter(Boolean).join(' · ') : '';
+  const miss = Array.isArray(b.missing) ? b.missing.filter(Boolean) : [];
+  const who = [b.agent || ev.agent || '', ev.hil_level ? ('HIL ' + ev.hil_level) : '']
+    .filter(Boolean).join(' ｜ ');
+  let h = '<div class="ib-brief">';
+  h += row('我理解你要的', b.goal || (b.followup ? '（本轮是在回答你的确认，没有重新分析目标）' : ''));
+  h += row('归类', b.need);
+  h += row('判断依据', basis);
+  miss.forEach(m => { h += row('可能要补充', m, 'warn'); });
+  h += row('执行主体', who, 'muted');
+  // 「理解不对怎么办」必须给出**可操作的下一步**，否则用户只能干看着（本仓 UX 硬规则）
+  h += '<div class="ib-tip">如果我理解偏了：直接在输入框补一句更具体的，或在下方澄清卡里改选——不用重开会话。</div>';
+  h += '</div>';
+  return h;
+}
+
+function procAddStage(name, status, detail, detailHtml, body){
   const iconMap = {'意图识别':'🔍','知识库检索':'📚','生成与校验':'✍️','写入会话':'💾',
                    '任务完成度评估':'⚖️','自主续跑':'🔄','取回模型文件':'📄'};
   procUpsert('stage_'+name, {type:'stage', icon: iconMap[name]||'🔍', title: name,
     status, statusText: status==='run'?'执行中…':'✓ 完成',
-    sub: detail||'', subHtml: detailHtml||''});
+    sub: detail||'', subHtml: detailHtml||'',
+    // body：展开区的可信 HTML（当前仅「意图识别」的意图理解明细使用）。
+    //   与 subHtml 同为白名单构造，**不经过 esc** ⇒ 调用方必须自己转义所有动态文本。
+    ...(body !== undefined ? {detail: body} : {})});
   // 生成与校验完成 → 自动收起思考过程（思考没有单独的事件"完成"）
+  // ★ 2026-10-27：思考已按轮次拆成多个块（thinking / thinking_rN），这里必须**逐个收口**——
+  //   只处理 id==='thinking' 会让第 2 轮之后的思考块永远停在「思考中…」的转圈态。
   if(name === '生成与校验' && status === 'done' && _procS.thinking) {
-    const s = _procS.timeline.find(x=>x.id==='thinking');
-    if(s && s.status === 'run') {
+    const _nodes = _procS.timeline.filter(x=>x.type==='thinking' && x.status==='run');
+    const _rounds = (_procS.thinkingOrder || []).length;
+    if(_nodes.length) {
       // 2026-09-29（WorkBuddy 式环节总结）：完成时头部切为**首句总结**（浅色），
       //   状态文案带轮数；点击仍可展开完整思考流（轮次分隔保留）。
-      const _head = _procSumText(String(_procS.thinking || '').replace(/\s+/g, ' ').trim());
-      s.status = 'done';
-      s.statusText = '✓ 已深度思考' + (_procS.thinkingOrder.length > 1 ? ` ${_procS.thinkingOrder.length} 轮` : '');
-      s.sub = _head;
-      s.collapsed = true; procRender();
+      _nodes.forEach(s=>{
+        const _head = _procSumText(String(s.raw || '').replace(/\s+/g, ' ').trim());
+        s.status = 'done';
+        s.statusText = '✓ 已深度思考' + (_rounds > 1 ? ` ${_rounds} 轮` : '');
+        if(_head) s.sub = _head;
+        s.collapsed = true;
+      });
+      procRender();
     }
   }
 }
@@ -224,18 +360,28 @@ function procAddThinking(delta, round, key){
   if(key && !_procS.keyMarked[key]){ _procS.thinkingRounds[round] += '【'+key+'】'; _procS.keyMarked[key] = true; }
   _procS.thinkingRounds[round] += delta;
   _procS.thinking = _procS.thinkingOrder.map(r=>_procS.thinkingRounds[r]).join(' ');
-  // P1-3：按轮次分组渲染（round>0 显示「第 N 轮」分隔，LLM 无轮次思考归入 round 0）
-  const detail = _procS.thinkingOrder.map(r=>{
-    const head = r>0 ? `<div class="proc-round">第 ${r} 轮</div>` : '';
-    return head + esc(_procS.thinkingRounds[r]);
-  }).join('');
-  // 2026-09-29（WorkBuddy 式环节总结）：头部一行**浅色实时摘要** —— 显示思考流的末句，
-  //   用户不展开也能看到"AI 此刻在想什么"。原实现头部只有静态标题"思考过程"，
-  //   内容全部埋在展开体里，运行期间等于黑盒（用户反馈"AI 思考内容无法查看"）。
-  const _tail = String(_procS.thinking || '').replace(/\s+/g, ' ').trim();
+  /* ★ 2026-10-27（用户反馈）：「这里的内容之前提到过分散在具体环节输出，为撒总是在这一个位置输出」。
+   *
+   * 原实现：**所有轮次的思考全部 join 成一个 `thinking` 块** —— 第 1 轮 ReAct、第 2 轮、
+   *   子任务的思考，全堆在时间线的同一个节点里。流式跑久了，那一个块就是"最下面一大坨文本"，
+   *   而且看不出哪段思考属于哪个环节（用户原话"不清楚哪些内容是在什么情况下触发输出"）。
+   *
+   * 现在：**一轮思考 = 一个块**（round 0 是模型未分轮的首段 CoT）。
+   *   · 块 id 按轮次稳定（`thinking` / `thinking_r2`…），跨 delta 原地增长、不新建；
+   *   · 位置即语义：它出现在**该轮工具调用之前**，用户能顺着时间线看出"想 → 做 → 再想 → 再做"；
+   *   · 每块仍受 `.proc-body` 的 max-height 约束（限高可滚，不把页面拉长）。
+   */
+  const _txt = _procS.thinkingRounds[round];
+  const _tail = String(_txt || '').replace(/\s+/g, ' ').trim();
   const _liveSum = _tail ? _toolSumm(_tail.slice(-90), 56) : '';
-  procUpsert('thinking', {type:'thinking', icon:'💭', title:'思考过程', status:'run',
-    statusText:'思考中…', sub: _liveSum ? ('…' + _liveSum) : '', detail});
+  const _id = round > 0 ? ('thinking_r' + round) : 'thinking';
+  const _title = round > 0 ? ('思考 · 第 ' + round + ' 轮') : '思考过程';
+  // detail 只放**本块自己的**文本（原来放的是全部轮次的拼接 —— 这正是"总在一个位置"的根源）
+  procUpsert(_id, {type:'thinking', icon:'💭', title:_title, status:'run',
+    statusText:'思考中…', sub: _liveSum ? ('…' + _liveSum) : '', detail: esc(_txt),
+    // raw = 本块**未转义**原文，供收口时提炼首句摘要（从 detail 反解 HTML 不可靠：
+    //   esc 后是 &lt; 实体，任何标签剥离都会误伤正文）
+    raw: _txt});
 }
 function procAddAgent(ev){
   const name = ev.display_name||ev.name||'-';
@@ -466,6 +612,86 @@ function procMarkClarifyAnswered(answerText){
 // ── UX规范 B3（2026-10-03）内联确认闸门 ──
 // 同一确认单在时间线上只允许一个节点（硬规则1）；确认卡 = 需要用户行动的单元，
 // 保持 run 态常驻展开，直至批准/拒绝落终态。
+/* ★ 2026-10-28（写前确认 HITL）：确认卡（计划级摘要，不是单条参数 JSON）
+ *
+ * ## 为什么必须"摘要"而不是"参数 JSON"（有实证，不是审美）
+ * Anthropic 生产遥测：**计划级审批拒绝率 39%**，而**逐条权限请求拒绝率仅 3%**（差 13 倍）。
+ * 受控实验（n=1,053）：人工拦下危险命令仅 **13.6%**，且会话越长越差（17% → 5%）。
+ * ⇒ 逐条参数弹窗**几乎无筛选力**（approval fatigue）。
+ * OWASP ASI09 原文：**"A human in the loop is not a control if the UI conceals the exact
+ * effect or trains users to approve automatically."** —— 只给 JSON 就是"conceal the exact effect"。
+ *
+ * ## 所以这张卡必须回答四个问题（都是**系统算出来的事实**，不是模型的自述理由）
+ *   ① 做什么（动作 + 目标对象）
+ *   ② 影响多大（批次内 N 项 + 受影响对象清单）
+ *   ③ 可逆吗（破坏性 vs 可逆写 —— 决定要不要看得更仔细）
+ *   ④ 坐标/容器（写到哪儿）
+ * 参数 JSON 折叠在「查看原始参数」里（要能查，但不该是默认视图）。
+ */
+/* ★ 2026-10-28（写前确认 HITL）：按**确认单号**取卡片 DOM 元素。
+ *
+ * ## 为什么不能用 getElementById('hil_' + cid)
+ * `procRender()` 渲染的卡片是 `<div class="proc-block" data-pid="hil_<cid>">` ——
+ * 元素**没有 id 属性**，只有 `data-pid`。
+ * ⇒ `getElementById('hil_123')` **恒返回 null** ⇒ 依赖它的两处静默失效：
+ *   ① `hil_confirm` 事件的「滚到可见」不执行（用户看不到卡已弹出）
+ *   ② 批准后的回灌续跑拿到 `null` 卡片
+ * 这个缺陷**只在真实浏览器里才暴露**：DOM 状态断言若写成 getElementById 会全红，
+ * 而若只断言 `_procS.timeline` 会全绿 —— 两边都不指向真因。
+ */
+function _hilCardEl(cid){
+  const n = parseInt(cid || 0, 10);
+  if(!n) return null;
+  return document.querySelector('[data-pid="hil_' + n + '"]');
+}
+
+function procAddHilConfirm(ev){
+  const cid = parseInt(ev.confirmation_id || 0, 10);
+  if(!cid) return;
+  // 乐观锁基线：记下"用户看到这张卡时的版本坐标"，批准时回传比对（防坐标已过期）
+  try{
+    window._hilVerMap = window._hilVerMap || {};
+    const _a = ev.arguments || {};
+    const _v = (a => a && (a.versionId || a.version_id ||
+                          (a.version && (a.version.versionId || a.version.id)) ||
+                          (a.workspace && (a.workspace.versionId || a.workspace.id))))(_a);
+    if(_v) window._hilVerMap[cid] = String(_v);
+  }catch(e){}
+  const id = 'hil_' + cid;
+  if(_procS.timeline.some(x=>x.id === id)) return;   // 同一确认单不重复建卡
+  const tool = ev.tool || '';
+  const prev = ev.preview || '';
+  const kind = ev.kind || '';
+  const bn = parseInt(ev.batch_count || 1, 10);
+  const merged = !!ev.batch_merged;
+  // 可逆性是**独立算出**的判定（kind 来自后端双源分类），不采信模型自述
+  const irreversible = (kind === 'destructive');
+  const _kindTxt = irreversible
+    ? '<strong style="color:var(--red,#C0392B);">不可逆</strong>（删除/覆盖/导入类，出错无法回滚）'
+    : '<strong style="color:var(--orange,#B96A00);">可逆写</strong>（创建/修改类，通常可撤销）';
+  const _batchTxt = bn > 1
+    ? `<div style="margin-top:4px;"><b>本批共 ${bn} 项</b>（同类动作已合并，一次批准覆盖整批）</div>`
+    : '';
+  const args = ev.arguments ? (typeof ev.arguments === 'string' ? ev.arguments : JSON.stringify(ev.arguments, null, 1)) : '';
+  const detail = `<div style="font-size:11.5px;line-height:1.7;">`
+    + `<div><b>动作：</b>${esc(_toolActivity(tool) || tool)}</div>`
+    + (prev ? `<div><b>影响面：</b>${esc(prev)}</div>` : '')
+    + `<div><b>性质：</b>${_kindTxt}</div>`
+    + _batchTxt
+    + `<div style="color:var(--mut);margin-top:6px;">批准后才会真正执行；<b>在此之前不会产生任何副作用</b>。拒绝则该动作不生效。</div>`
+    + (args ? `<details style="margin-top:6px;"><summary style="cursor:pointer;color:var(--mut);font-size:11px;">查看原始参数</summary>`
+        + `<div style="max-height:120px;overflow:auto;white-space:pre-wrap;background:var(--bg,#f6f7f9);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:4px;font-size:10.5px;">${esc(args)}</div></details>` : '')
+    + `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">`
+      + `<button class="btn sm ${irreversible ? '' : 'grn'}" id="hil-ok-${cid}" onclick="hilInlineDecide(${cid}, true)">✓ 批准并执行</button>`
+      + `<button class="btn sm ghost" id="hil-no-${cid}" onclick="hilInlineDecide(${cid}, false)">✕ 拒绝</button>`
+    + `<span style="font-size:10px;color:var(--mut);">确认单 #${cid}${ev.timeout_at ? ' · 超时 ' + esc(String(ev.timeout_at).slice(5,16)) : ''}</span></div></div>`;
+  procUpsert(id, {type:'confirm', icon: irreversible ? '⛔' : '🔐',
+                  title: (irreversible ? '待确认（不可逆）：' : '待确认：') + (prev || _toolActivity(tool) || tool),
+                  status:'run', statusText: merged ? `⏸ 待人工确认 · 同批 ${bn} 项` : '⏸ 待人工确认',
+                  detail});
+  uxTrack('confirm_shown', {cid, kind, batch: bn});
+}
+
 function procAddConfirmGate(cid, ev){
   const id = 'hil_' + cid;
   if(_procS.timeline.some(x=>x.id === id)) return;   // 同一确认单不重复建卡
@@ -491,12 +717,50 @@ async function hilInlineDecide(cid, approve){
   if(okBtn) okBtn.disabled = true;
   if(noBtn) noBtn.disabled = true;
   try{
-    await api('/api/studio/hil-confirmations/' + cid + '/decide',
-              {method:'POST', body:JSON.stringify({approve:!!approve, decided_by:'王工'})});
-    procUpsert('hil_' + cid, approve ? {status:'done', statusText:'✓ 已批准 · 自动执行中'}
-                                     : {status:'failed', statusText:'✗ 已拒绝 · 动作不生效'});
-    uxTrack('confirm_decided', {cid, approve: !!approve});   // §11 埋点：闸门处置（分子）
-    if(window.toast && toast.success) toast.success(approve ? '已批准，确认单 #' + cid + ' 将自动执行' : '已拒绝确认单 #' + cid);
+    // ★ 2026-10-23：**不再传 decided_by**。
+    //   原代码硬编码 decided_by:'王工'，会把虚构人名写进审计流水（"谁批准的"不可追责）。
+    //   后端 P0-6（2026-10-06）已改为**以已认证用户身份为准**（display_name → username），
+    //   body 的 decided_by 只在匿名兼容期兜底 ⇒ 前端再传只会污染兜底路径。
+    //   前端不该自报身份：谁点的按钮由服务端从会话解析。
+    //
+    // ★ 2026-10-28（写前确认 HITL）：乐观锁 `expected_version` ——
+    //   把"用户看到这张卡时的版本坐标"回传，后端比对确认单 payload 里的坐标；
+    //   不一致 ⇒ 409 ⇒ **不执行**（防"确认单挂起期间版本已变、批准后写到错的地方"）。
+    const _ev = (window._hilVerMap || {})[cid] || '';
+    const _body = {approve: !!approve};
+    if(_ev) _body.expected_version = _ev;
+    const r = await api('/api/studio/hil-confirmations/' + cid + '/decide',
+                        {method:'POST', body:JSON.stringify(_body)});
+    // 409 版本不一致：不执行，恢复按钮可重试（用户需重新定位）
+    if(r && r.status === 'version_mismatch'){
+      if(okBtn) okBtn.disabled = false;
+      if(noBtn) noBtn.disabled = false;
+      procUpsert('hil_' + cid, {status:'failed', statusText:'⚠ 确认单已过期 · 未执行'});
+      if(window.toast && toast.error) toast.error(r.error || '确认单已过期，未执行');
+      return;
+    }
+    const _execOk = !!(r && (r.executed ? (r.exec_result && r.exec_result.ok) : true));
+    procUpsert('hil_' + cid, approve
+      ? {status: _execOk ? 'done' : 'failed',
+         statusText: _execOk ? '✓ 已批准 · 已执行' : '✗ 已批准 · 执行失败'}
+      : {status:'failed', statusText:'✗ 已拒绝 · 动作不生效'});
+    uxTrack('confirm_decided', {cid, approve: !!approve, exec: _execOk});   // §11 埋点：闸门处置（分子）
+    if(window.toast && toast.success){
+      if(!approve) toast.success('已拒绝确认单 #' + cid + '，该动作不生效');
+      else if(_execOk) toast.success('已批准并执行（确认单 #' + cid + '）');
+      else toast.error('已批准但执行失败（确认单 #' + cid + '），详见执行回执');
+    }
+    // ★ 2026-10-28（D-2 回灌）：把**真实执行结果**送回给模型。
+    //   为什么必须做：批准执行发生在**原 ReAct 循环之外**（一次独立 HTTP 请求）⇒
+    //   **LLM 永远收不到"工具已执行"的回执** ⇒ 它会重发同一操作、或宣称"尚未执行"
+    //   （真机实测 E8：回执 SUCCEEDED、平台回读证实已建成，模型却断言「尚未写入平台」）。
+    //   后端 `resume_text` 已含"原请求复述"+"不要重复发起"两条必需内容。
+    if(r && r.resume_text && r.conversation_id &&
+       parseInt(r.conversation_id, 10) === parseInt(window.currentConvId || 0, 10)){
+      const _card = _hilCardEl(cid);
+      _continueInSameBox(_card, r.resume_text, null,
+                         approve ? '✓ 已批准' : '✗ 已拒绝');
+    }
   }catch(e){
     if(okBtn) okBtn.disabled = false;
     if(noBtn) noBtn.disabled = false;
@@ -704,10 +968,12 @@ function subtaskCardHtml(s){
   const _LIM = 'max-height:300px;overflow:auto;';
   // ── 结果块（默认展示，限高内滚）──
   const outRaw = s.output || s.liveOutput || '';
+  // ★ 2026-10-22：输出框加 class `proc-out-box` —— 滚动条样式在 chat.css 里定制
+  //   （默认 webkit 滚动条在高密度小字区太细，300px 高的框里 12k 字抓不住 ⇒ 用户观感「拖不动」）。
   const outHtml = outRaw ? `
     <div style="margin-top:4px;">
       <div style="font-size:10px;color:var(--mut);font-weight:600;margin-bottom:2px;">📤 执行结果（${String(outRaw).length} 字）</div>
-      <div style="padding:5px 7px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;${_LIM}font-size:10.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;color:var(--fg);">${esc(String(outRaw))}</div>
+      <div class="proc-out-box" style="padding:5px 7px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;${_LIM}font-size:10.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;color:var(--fg);">${esc(String(outRaw))}</div>
     </div>` : '';
   // ── 详情块（默认折叠，点开再看）──
   //   来源：协议摘要 summary（artifacts/claims/risks/missing/evidence/confidence）。
@@ -739,7 +1005,22 @@ function subtaskCardHtml(s){
     </div>`;
     }
   }
-  return `<div class="proc-line" style="border:1px solid var(--line);border-radius:8px;padding:5px 8px;margin:3px 0;background:#fff;">
+  // ★ 2026-10-22（米爸反馈「阶段卡上方空白太多 / 输出内容看不完又拖不动滚动条」）——
+  //   根因（真实浏览器量取，勿凭印象改）：
+  //   ① `.proc-line` 在 app.css:402 / chat.css:196 是 **display:flex;align-items:center**
+  //      的**横向行容器**（原本给「质量评审：62/100」这类**单行**摘要用的）。
+  //      本函数返回的是**纵向多块**结构（状态行 / 摘要 / 执行结果 / 详情），
+  //      塞进行容器 ⇒ 三个子块**横向并排**（实测 left=477/667/1083），
+  //      执行结果块被挤到 **228px 宽**、详情块被挤到右侧 ⇒ 「上方空白」正是
+  //      align-items:center 把矮块（摘要 34px）与高块（结果 432px）**垂直居中**留下的。
+  //      ⇒ 这里**不能复用 .proc-line 的 flex 语义**，必须显式改回块级纵向流。
+  //   ② 模板字符串里的换行 + 缩进（"\n    "）在 `white-space:pre-wrap`（.proc-body 继承）
+  //      下会渲染成**可见空行** ⇒ 每个子块上方多出一段空白。
+  //      ⇒ 显式 `white-space:normal` 复位（与 .rc / .art-card / 引用卡同款处置）。
+  //   ③ 执行结果框 `max-height:300px;overflow:auto` 自身**能滚**（实测 scrollTop 可写），
+  //      但它被塞进 228px 宽的格子里 ⇒ 滚动条细到抓不住，用户观感是「拖不动」。
+  //      ⇒ 宽度恢复正常后即可正常拖动。
+  return `<div class="proc-subtask" style="border:1px solid var(--line);border-radius:8px;padding:5px 8px;margin:3px 0;background:#fff;display:block;white-space:normal;align-items:stretch;">
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${ok?'✓':part?'◐':run?'⟳':stopped?'⏹':skipSt?'⊘':'✗'}${badge}${s.agent?` <span class="tag" style="font-size:10px;">${esc(s.agent)}</span>`:''}${caps}${retry}${sumBadge}${s.latency_ms?` <span style="color:var(--mut);font-size:10.5px;">⏱ ${(s.latency_ms/1000).toFixed(1)}s</span>`:''}${tk}${run?' <span class="st w">执行中…</span>':''}${stopped?' <span class="st w">已终止</span>':''}${skipSt?' <span class="st g">主动放弃</span>':''}</div>
     ${sum}${outHtml}${detailHtml}${s.error?`<div style="color:var(--red);font-size:10.5px;margin-top:2px;">${esc(s.error)}</div>`:''}${failNote}</div>`;
 }
@@ -1236,6 +1517,15 @@ function handleSSE(raw) {
     setPendingClarify(ev);   // 2026-09-25：登记挂起 → 输入框上方出现「AI 正在等待确认」提示（可在此直接作答）
     renderClarifyAsk(ev);   // 内容级澄清：信息不清晰 → 选择题确认（回答后续答）
     procAddClarifyGate(ev); // ★ 2026-10-17（米爸反馈1）：澄清 = 原输出流程时间线上的一个环节（不再是独立气泡）
+  } else if(evType === 'hil_confirm') {
+    /* ★ 2026-10-28（写前确认 HITL）：**一等公民事件**，不再靠正则从工具结果文本抠单号。
+       老前端无此分支 ⇒ `handleSSE` 是 if/else-if 链且**末尾无 else 兜底** ⇒ 静默忽略，
+       行为与从前完全一致（与 `redraw_confirm` / `clarify_ask` 同一种兼容策略）。 */
+    _forceFlushTokens();
+    procAddHilConfirm(ev);
+    uxTrack('scroll_force', {reason: 'hil_confirm'});
+    const _hc = _hilCardEl(ev.confirmation_id);
+    if(_hc && _hc.scrollIntoView){ try{ _hc.scrollIntoView({block:'center'}); }catch(e){ _hc.scrollIntoView(); } }
   } else if(evType === 'done') {
     _forceFlushTokens();
     _forceFlushSubOutput();   // ★ F-1：子任务实时输出末帧刷齐（防 rAF 未触发丢尾巴）
@@ -1280,16 +1570,26 @@ function renderClarify(ev){
   if(!inner) return;
   const pct = Math.round((ev.confidence||0) * 100);
   const _det = ev.detected ? `<b>识别为「${esc(ev.detected)}」</b>，` : '';
+  // ★ 2026-10-27：澄清条上先摊开「我的理解」，用户才能判断"要不要改"。
+  //   原来只写"已按「intent_key」继续执行" —— 给的是内部 key，用户无法据此判断对错。
+  //   brief 缺失（老服务端/配置关闭）时本行不出现，行为与从前一致。
+  const _b = ev.brief;
+  const _und = (_b && _b.goal)
+    ? `<div style="margin-bottom:3px;color:var(--fg);">我的理解：<b>${esc(_b.goal)}</b>`
+      + (_b.need ? `<span style="color:var(--mut);font-weight:400;">（归类：${esc(_b.need)}）</span>` : '') + '</div>'
+    : '';
   const btns = (ev.candidates||[]).slice(0,4).map(c =>
     `<button onclick="pickIntent(this.dataset.m, this.dataset.i)" data-m="${esc(ev.message)}" data-i="${esc(c)}"
       style="border:1px solid var(--line);background:#fff;color:var(--pri,#3478f6);border-radius:4px;padding:1px 6px;font-size:11px;cursor:pointer;margin:2px 4px 0 0;">改选：${esc(c)}</button>`).join('');
   const bar = document.createElement('div');
   bar.id = 'clarify-bar';
   bar.style.cssText = 'border:1px dashed var(--line);background:#f7f8fa;border-radius:6px;padding:6px 8px;font-size:11px;color:var(--mut);margin-bottom:6px;';
-  bar.innerHTML = `⚠ 意图置信度较低（${pct}%），${_det}已按「${esc(ev.intent)}」继续执行。理解有误？${btns}`;
+  bar.innerHTML = `${_und}⚠ 把握不大（${pct}%），${_det}已按「${esc(ev.intent)}」继续执行。理解有误？${btns}`;
   inner.insertBefore(bar, inner.firstChild);
   const st = document.getElementById('chat-status');
-  if(st) st.textContent = `意图置信度 ${pct}% · 已按「${ev.intent}」继续（可点选改选重发）`;
+  if(st) st.textContent = _b && _b.goal
+    ? `理解：${String(_b.goal).slice(0,30)} · 把握 ${pct}%（可点选改选重发）`
+    : `意图置信度 ${pct}% · 已按「${ev.intent}」继续（可点选改选重发）`;
 }
 // 澄清改选：改判本轮意图 → **在原输出流内**重跑（不新起一轮）
 // ★ 2026-10-16（米爸决策 R1）：改判意图只影响"谁理解"，不改"谁执行"（执行主体永远是 quick-team）。

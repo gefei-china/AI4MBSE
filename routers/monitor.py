@@ -42,6 +42,16 @@ def monitor_dashboard(days: int = 7, conn=Depends(db_session)):
     mock_n = sum(1 for u in usage if u.get("used_mock"))
     total_tok = sum((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0) for u in usage)
     cost = round(sum(u.get("estimated_cost") or 0 for u in usage), 6)
+    # ── S0 补充（2026-10-29）：LLM 用量的**业务口径**汇总 ────────────────────
+    # 上面三个量是**全量**（含探针）。实测 `chat_probe` 占某窗口成本达 51%
+    #   ⇒ 只给全量会让"这台机器一天花了多少"和"业务花了多少"混成一个数。
+    # 为什么在这里加、而不让前端自己 filter：
+    #   ① `usage` 是 LIMIT 1000 的截断样本，前端再聚合会二次截断，口径不可控；
+    #   ② 探针判定必须走 `core/probe_mark`（单一真源），不能在 JS 里再写一份正则。
+    _probe_n = sum(1 for u in usage if (u.get("is_probe") or 0))
+    _biz = [u for u in usage if not (u.get("is_probe") or 0)]
+    biz_tok = sum((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0) for u in _biz)
+    biz_cost = round(sum(u.get("estimated_cost") or 0 for u in _biz), 6)
     # ── 系统级（真实进程信息 + DB 文件大小）──
     proc = {"pid": os.getpid(), "uptime_s": int(time.time() - _PROC_START), "db_size_kb": 0}
     try:
@@ -72,7 +82,12 @@ def monitor_dashboard(days: int = 7, conn=Depends(db_session)):
         "runs": {"total": total, "success": ok, "failed": err, "success_rate": round(ok * 100 / total, 1) if total else 0,
                  "avg_latency_ms": avg_ms},
         "llm": {"calls": len(usage), "mock_rate": round(mock_n * 100 / len(usage), 1) if usage else 0,
-                "total_tokens": total_tok, "estimated_cost": cost},
+                "total_tokens": total_tok, "estimated_cost": cost,
+                # S0：业务口径（已排除探针）+ 探针单列。两口径都下发，前端可并排展示，
+                # 也可让调用方判断"探针占了多少"——**不删数据、不改既有键**（零回归）。
+                "calls_biz": len(_biz), "calls_probe": _probe_n,
+                "tokens_biz": biz_tok, "cost_biz": biz_cost,
+                "probe_rate": round(_probe_n * 100.0 / len(usage), 1) if usage else 0},
         "llm_health": llm_health,
         "system": proc,
         "subs_active": active_subs, "open_alerts": open_alerts,
@@ -104,8 +119,15 @@ def _build_trend(conn, days: int) -> list:
         AVG(total_latency_ms) avg_ms
         FROM flow_runs WHERE created_at >= datetime('now', ?)
         GROUP BY d ORDER BY d""", (f"-{days} days",))
+    # S0（2026-10-28）口径隔离：`chat_probe` 等探针实测占 7 天成本 51%，
+    #   若与业务调用混在一列，趋势图上"业务量"会被探针削平/放大。
+    #   **不删数据**（探针健康本身要能看），改为分列返回：业务 / 探针。
+    #   探针成本仍是真实支出，故成本列两口径都给，调用方按需取。
     usage_rows = _rows(conn, """SELECT substr(created_at,1,10) d, COUNT(*) c,
-        SUM(prompt_tokens + completion_tokens) tok
+        SUM(prompt_tokens + completion_tokens) tok,
+        SUM(CASE WHEN COALESCE(is_probe,0)=0 THEN 1 ELSE 0 END) c_biz,
+        SUM(CASE WHEN COALESCE(is_probe,0)=1 THEN 1 ELSE 0 END) c_probe,
+        SUM(CASE WHEN COALESCE(is_probe,0)=0 THEN prompt_tokens + completion_tokens ELSE 0 END) tok_biz
         FROM llm_usage_stats WHERE created_at >= datetime('now', ?)
         GROUP BY d ORDER BY d""", (f"-{days} days",))
     run_by, use_by = {}, {}
@@ -125,7 +147,12 @@ def _build_trend(conn, days: int) -> list:
             "date": d,
             "runs": r.get("c") or 0, "ok": r.get("ok") or 0, "fail": r.get("fail") or 0,
             "avg_ms": int(r.get("avg_ms") or 0),
+            # 全量口径（兼容既有前端字段名，值仍是"含探针"的全部调用）
             "llm_calls": u.get("c") or 0, "llm_tokens": u.get("tok") or 0,
+            # S0：业务口径（已排除探针）+ 探针单列，两者之和 = 全量
+            "llm_calls_biz": u.get("c_biz") or 0,
+            "llm_calls_probe": u.get("c_probe") or 0,
+            "llm_tokens_biz": u.get("tok_biz") or 0,
         })
     return out
 
@@ -169,9 +196,86 @@ def monitor_alerts(status: str = "", level: str = "", limit: int = 30, conn=Depe
 
 @router.post("/api/monitor/alerts/{aid}/ack")
 def ack_alert(aid: int, conn=Depends(db_session)):
+    """已知悉（open → acked）。保留此端点向后兼容；内部走统一状态机。"""
+    from core.alert_state import can_transition
+    row = conn.execute("SELECT status FROM alert_events WHERE id=?", (aid,)).fetchone()
+    if row is None:
+        return {"ok": False, "reason": "not_found"}
+    if not can_transition(str(row[0] or ""), "acked"):
+        return {"ok": False, "reason": "illegal_transition", "from": row[0]}
     conn.execute("UPDATE alert_events SET status='acked' WHERE id=?", (aid,))
     conn.commit()
     return {"ok": True, "id": aid}
+
+
+@router.post("/api/monitor/alerts/{aid}/status")
+def set_alert_status(aid: int, body: dict, conn=Depends(db_session),
+                     user=Depends(current_user)):
+    """告警处置流转（2026-10-29 新增）。
+
+    状态机见 `core/alert_state.py`：open → acked → triaged → fixed → verified。
+    ★ 动机：生产库 328 条告警 **status 全是 'open'**，一条都没被处理过 ——
+      此前只有 ack、没有后续流转 ⇒ "这条到底修了没"无记录，
+      告警只是"响"而不是"待办"，且同因告警每 30 分钟一条、累积 81 次刷屏。
+
+    约束：
+      · **只能单步前进**（可跳过中间态，不可回退）——回退会让噪声回潮；
+      · 处置人/时间/备注落 `handled_by`/`handled_at`/`note` ⇒ 可追溯"谁在什么时候
+        把它判成已修"；
+      · 非法流转**明确报错**（不静默接受），否则看板会出现"已验证但其实没修"的假闭环。
+    """
+    from core.alert_state import can_transition, is_valid_status, ALERT_STATUSES
+    target = str(body.get("status", "") or "").strip()
+    note = str(body.get("note", "") or "").strip()
+    if not is_valid_status(target):
+        return JSONResponse({"ok": False, "reason": "invalid_status",
+                             "allowed": list(ALERT_STATUSES)}, status_code=400)
+    row = conn.execute("SELECT id, status FROM alert_events WHERE id=?", (aid,)).fetchone()
+    if row is None:
+        return JSONResponse({"ok": False, "reason": "not_found"}, status_code=404)
+    cur = str(row["status"] or "")
+    if not can_transition(cur, target):
+        return JSONResponse({"ok": False, "reason": "illegal_transition",
+                             "from": cur, "to": target}, status_code=400)
+    try:
+        from core.audit import audit_user as _au
+        actor = _au(user)
+    except Exception:
+        actor = ""
+    conn.execute(
+        "UPDATE alert_events SET status=?, handled_by=?, handled_at=datetime('now','localtime'), "
+        "note=? WHERE id=?",
+        (target, actor, note, aid))
+    conn.commit()
+    try:
+        from core.audit import audit as _audit
+        _audit(actor, "alert_status", f"告警#{aid} {cur}→{target} {note}", conn=conn)
+    except Exception:
+        pass
+    return {"ok": True, "id": aid, "status": target, "handled_by": actor}
+
+
+@router.get("/api/monitor/alerts/summary")
+def monitor_alerts_summary(conn=Depends(db_session)):
+    """告警**按状态**聚合（看板用）。
+
+    为什么要有：生产库 328 条全 'open' —— 看板只给总数，看不出"有没有人在处理"。
+    按状态拆开后，"open=328 / triaged=0 / fixed=0" 本身就是最刺眼的信号：
+    **告警从未被处置**。同时给同因折叠后的 hit_count 汇总（真实问题数远小于事件数）。
+    """
+    from core.alert_state import ALERT_STATUSES
+    by_status = {s: 0 for s in ALERT_STATUSES}
+    for r in _rows(conn, "SELECT status, COUNT(*) c FROM alert_events GROUP BY status"):
+        by_status[str(r["status"] or "")] = int(r["c"] or 0)
+    total = sum(by_status.values())
+    hit_total = 0
+    try:
+        hit_total = int(conn.execute(
+            "SELECT COALESCE(SUM(hit_count),0) FROM alert_events").fetchone()[0] or 0)
+    except Exception:
+        pass
+    return {"total": total, "by_status": by_status, "hit_total": hit_total,
+            "unhandled": by_status.get("open", 0) + by_status.get("acked", 0)}
 
 
 # ── P0-4（2026-10-04）：多租户隔离开启前的**数据体检**──
@@ -756,6 +860,110 @@ def monitor_badcase_triage(case_id: int, body: dict, conn=Depends(db_session)):
         return JSONResponse(res, 400)
     res["summary"] = badcase.badcase_summary(conn)
     return res
+
+
+# ── P0-b：在线评测生产回流（采样 → 自动评 → 人工标注 → 转正）──────────────
+# 设计 docs/P0-b-生产回流详细设计-2026-10-25.md §4.3：4 端点全部 dry-run
+# 默认 + apply 显式；标注交互不建新端点（走 hil_confirmations 确认卡，
+# action='eval_label'，online_eval_queue.status 随之更新）。
+@router.get("/api/monitor/online-eval/queue")
+def monitor_online_eval_queue(status: str = "pending", limit: int = 50,
+                              conn=Depends(db_session)):
+    """待标注队列（前端「待标注」卡片数据源）。老库无表返空列表不 500。"""
+    from core import online_eval as oe
+    items, total = oe.queue_rows(conn, status, limit)
+    return {"ok": True, "items": items, "total": total,
+            "summary": oe.queue_summary(conn)}
+
+
+@router.post("/api/monitor/online-eval/sample")
+def monitor_online_eval_sample(body: dict = None, apply: bool = False,
+                               conn=Depends(db_session)):
+    """采样入队（负反馈优先 > 低置信优先 > 随机 5%）。默认 dry-run。"""
+    from core import online_eval as oe
+    do_apply = bool(apply or (body or {}).get("apply"))
+    try:
+        res = oe.sample_candidates(conn, apply=do_apply)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"采样失败: {e}"}, 500)
+    if not do_apply:
+        res["apply_result"] = {"skipped": True,
+                               "reason": "dry-run（人工确认后带 apply=true 入队）"}
+    return res
+
+
+@router.post("/api/monitor/online-eval/auto-eval")
+def monitor_online_eval_auto(body: dict = None, apply: bool = False,
+                             conn=Depends(db_session)):
+    """跑自动评（确定性层，只写 auto_score 建议）。默认 dry-run。"""
+    from core import online_eval as oe
+    do_apply = bool(apply or (body or {}).get("apply"))
+    limit = int((body or {}).get("limit") or 50)
+    try:
+        res = oe.auto_evaluate_pending(conn, limit=limit, apply=do_apply)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"自动评失败: {e}"}, 500)
+    if not do_apply:
+        res["apply_result"] = {"skipped": True,
+                               "reason": "dry-run（人工确认后带 apply=true 写分）"}
+    return res
+
+
+@router.post("/api/monitor/online-eval/promote")
+def monitor_online_eval_promote(body: dict = None, apply: bool = False,
+                                conn=Depends(db_session)):
+    """转正 labeled_confirmed 样本进 dataset（三分流，幂等）。默认 dry-run。
+
+    唯一真写点：只认人工 labeled_confirmed——自动打分永不自动转正
+    （B1 纪律，防 LLM 自循环）；labeled_rejected 不进任何 dataset（B3）。
+    """
+    from core import online_eval as oe
+    do_apply = bool(apply or (body or {}).get("apply"))
+    try:
+        res = oe.promote_confirmed(conn, apply=do_apply)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"转正失败: {e}"}, 500)
+    if not do_apply:
+        res["apply_result"] = {"skipped": True,
+                               "reason": "dry-run（人工确认后带 apply=true 转正）"}
+    return res
+
+
+@router.post("/api/monitor/online-eval/label")
+def monitor_online_eval_label(body: dict = None, conn=Depends(db_session),
+                              user=Depends(current_user)):
+    """人工标注入队（HIL 确认单 action='eval_label'，幂等键防重复标注）。
+
+    前端「待标注」卡片：评分 1-5 + 原因 → 本端点建确认单 → 同一张卡片的
+    「✓ 提交并批准 / ✕ 驳回」走既有 /api/studio/hil-confirmations/{id}/decide
+    （decide 的 eval_label 分支执行状态流转）——**不建第二套交互**（设计纪律）。
+    """
+    from hil_service import HILService
+    from core import online_eval as oe
+    body = body or {}
+    qid = int(body.get("queue_id") or 0)
+    if not qid:
+        return JSONResponse({"ok": False, "error": "queue_id 必填"}, 400)
+    row = oe.get_queue_row(conn, qid)
+    if not row:
+        return JSONResponse({"ok": False, "error": "queue_id=%d 不存在" % qid}, 404)
+    payload = {"queue_id": qid, "score": int(body.get("score") or 0),
+               "reason": str(body.get("reason") or "")[:500]}
+    actor = ""
+    if user:
+        actor = (user.get("display_name") or user.get("username") or "").strip()
+    preview = "在线评测标注 #%d（%s/%s）：评分 %s %s" % (
+        qid, row.get("sample_type") or "", row.get("sample_reason") or "",
+        payload["score"] or "-", payload["reason"][:60])
+    conf = HILService.queue_confirmation(
+        conn, "online-eval", "eval_label", payload, preview=preview,
+        conversation_id=int(row.get("conversation_id") or 0))
+    if not conf:
+        return JSONResponse({"ok": False, "error": "确认单创建失败"}, 500)
+    return {"ok": True, "confirmation_id": conf.get("id"),
+            "idempotent_hit": bool(conf.get("idempotent_hit")),
+            "queue": row, "hint": "批准/驳回走 /api/studio/hil-confirmations/%d/decide"
+                                   % conf.get("id")}
 
 
 _PROC_START = time.time()

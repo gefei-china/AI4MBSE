@@ -28,6 +28,11 @@ mbse.db-wal
 *.db
 *.db-shm
 *.db-wal
+# 2026-10-29：测试运行时配置（conftest 每会话重置为空），是**运行时产物**不是源码。
+# 曾误提交一次（c8795fe）——它是被测试写脏的残留，纳入版本库会让
+# 「配置被污染」变成所有人共享的既有状态，掩盖隔离问题。
+tests/_test_config.json
+tests/_test_config.json.*
 static/uploads/
 static/skill_packages/
 
@@ -70,6 +75,28 @@ logs/
 tools/verify/_fe_dead.tsv
 tools/verify/_fe_dead_reach.tsv
 tools/verify/_fe_reach.json
+
+# ── 一次性探针 / 数据修补 / 结构改造脚本（不入库）──
+# 2026-10-27 清理：历轮修复过程中累计入库 40+ 个「跑一次就完」的脚本，让 tools/verify 从
+# 门禁目录膨胀成垃圾场，且其中 `_restructure_*_autopilot.py` 是**高危**——它按行号重写
+# stream.py / execute.py 的自主续跑层，改造完成后重跑会把已修好的代码覆盖回去。
+# 三类都不该入库，判据已固化在常驻门禁里（见 docs/…走查与评估-20261027.md §20 对照表）：
+#   · probe_*     取证探针 → 判据在 verify_*（如 probe_autonomy_live → verify_autonomy_and_clarify）
+#   · repro_*     缺陷复现 → 判据在对应 verify_*
+#   · backfill_/repair_/fix_/rewrite_  一次性数据修补 → 执行完即失效，重跑会二次改库
+# ⚠️ 锚定 `verify/` 与 `tools/` 根目录，避免误伤 `tools/eval/probe_qrel.py`（检索评测集常驻脚本）。
+# 反查：git check-ignore -v tools/verify/probe_xxx.py
+/tools/verify/probe_*.py
+# 例外：这两个是「变异自证」的历史案例，被 verify_no_mutation_residue.py 正文引用，保留
+!/tools/verify/probe_auto_continue.py
+!/tools/verify/probe_save_artifact.py
+/tools/verify/_restructure_*
+/tools/verify/repro_*.py
+/tools/verify/backfill_*.py
+/tools/verify/repair_*.py
+/tools/verify/rewrite_*.py
+/tools/_probe_*
+/tools/_tmp_*
 
 # ── 大体积二进制与第三方压缩库 ──
 static/vendor/

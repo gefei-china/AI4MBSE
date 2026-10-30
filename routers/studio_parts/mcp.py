@@ -123,8 +123,15 @@ def delete_mcp_server(sid: int, conn=Depends(db_session), user=Depends(current_u
         return JSONResponse({"error": "MCP server not found"}, 404)
     if srv.get("builtin"):
         return JSONResponse({"error": "内置 MCP 服务器禁止删除，可「编辑」修改配置"}, 400)
+    # P1-5（2026-10-27）：删 MCP 服务器**级联清绑定** —— 同 delete_skill。MCP 绑定按 server 名
+    #   软引用（agent_tools.tool_name 存的是 server 名，如「zhiyuan-dev-mcp」），按名匹配。
+    try:
+        _cleared = conn.execute(
+            "DELETE FROM agent_tools WHERE tool_type='mcp' AND tool_name=?", (srv.get("name"),)).rowcount
+    except Exception as e:
+        return JSONResponse({"error": f"清理 MCP 绑定失败：{e}"}, 500)
     repo.delete_mcp_server(sid)
-    audit(audit_user(user), "mcp_delete", f"删除MCP服务器#{sid}", conn=conn)
+    audit(audit_user(user), "mcp_delete", f"删除MCP服务器#{sid}（级联清绑定 {_cleared} 条）", conn=conn)
     return {"ok": True}
 
 

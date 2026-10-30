@@ -81,7 +81,7 @@ def _extract_code_blocks(content: str, limit: int = 5) -> list:
 
 
 def _archive_impact_analysis(conn, conversation_id: int, message_id: int,
-                             card_data, user_input: str, created_by: str = "王工") -> None:
+                             card_data, user_input: str, created_by: str = "未登录") -> None:
     """CIA（FR-CIA-3）：变更影响分析结果快照落库（含失败引导记录，可追溯）。
 
     在 execute / execute_stream 两条落库链路统一调用；失败静默（不影响会话主流程）。
@@ -104,7 +104,7 @@ def _archive_impact_analysis(conn, conversation_id: int, message_id: int,
 
 
 def _archive_sysml_version(conn, conversation_id: int, message_id: int,
-                           sysml_views: dict, created_by: str = "王工",
+                           sysml_views: dict, created_by: str = "未登录",
                            code_text: str = "") -> int | None:
     """AI 建模 SysML 版本建档：每次 AI 生成/修订 SysML → sysml_versions 新版本（v0.n 递增）。
 
@@ -214,7 +214,19 @@ def extract_sysml_doc_from_result(tool_name: str, result_text: str) -> dict | No
         if isinstance(d, dict):
             fn = str(d.get("fileName") or "").strip()
             body = d.get("content")
-            if isinstance(body, str) and len(body) >= 500:
+            # ★ 2026-10-27（会话 9629 实测）：**分页读取的尾段不是全文**。
+            #   该轮 export_sysml_v2 按 offset 0/32767/65534 三段读（maxBytes=32768），
+            #   只有第三段带 eof=true，但它的 content 只是 65534 之后的**尾部 15KB**。
+            #   旧判据只看 `eof is True` ⇒ 会把半截尾巴当全文归档（比不归档更坏：
+            #   产物库里出现一个"看起来完整"的残缺文件）。
+            #   ⇒ 带非零 offset 的段一律交给 accumulate_paged_doc 累积，单段不单独归档。
+            _off = d.get("offset")
+            try:
+                _off_n = int(_off) if _off is not None else 0
+            except Exception:
+                _off_n = 0
+            _paged = (_off_n > 0) or ("nextOffset" in d)
+            if isinstance(body, str) and len(body) >= 500 and not _paged:
                 _complete = (d.get("eof") is True) or (d.get("completeFile") is True) \
                     or ("eof" not in d and "completeFile" not in d)
                 _is_sysml = fn.lower().endswith((".sysml", ".kerml")) or \
@@ -227,8 +239,128 @@ def extract_sysml_doc_from_result(tool_name: str, result_text: str) -> dict | No
     return None
 
 
+def accumulate_paged_doc(pages: dict, tool_name: str, result_text: str) -> dict | None:
+    """**分页读取**的通用累积器：按字节偏移把多个分片拼成全文，只在「齐了」时返回。
+
+    为什么需要（会话 9629 实测，产物库为空的真因之二）：
+      智源 `export_sysml_v2` 的 READ 是**分页协议**——一次只回 maxBytes 字节，
+      带 ``offset`` / ``bytesRead`` / ``nextOffset`` / ``eof``。80KB 的导出要读 3 段。
+      旧链路对每段独立判断「是否完整」⇒ 尾段(eof=true)被当成整份文件，
+      而前面两段被丢弃 ⇒ 要么归档半截、要么（配合响应截断）干脆一段都不命中。
+
+    判据（**协议通用，不针对任何具体平台/工具**）：
+      · 信封可解析，且有 ``content``；
+      · 分片按 ``offset`` 落位，用 ``bytesRead``（缺省则按 UTF-8 字节数）串成**无缝链**；
+      · 链首必须从 0 开始，末段 ``eof``/``completeFile`` 为真，且**每一段都在**；
+      ⇒ 齐全才返回 ``{"title": 文件名, "text": 拼接全文}``，否则返回 None（半截不入库）。
+
+    :param pages: 调用方持有的累积状态 dict（每请求生命周期内复用；键=文件名/taskId）；
+                  本函数**就地**写入，便于跨轮跨工具累积。
+    """
+    t = (result_text or "").strip()
+    if not t.startswith("{"):
+        return None
+    try:
+        d = json.loads(t)
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    body = d.get("content")
+    if not isinstance(body, str) or not body:
+        return None
+    fn = str(d.get("fileName") or "").strip()
+    key = fn or str(d.get("taskId") or "") or str(tool_name or "")
+    try:
+        off = int(d.get("offset")) if d.get("offset") is not None else 0
+    except Exception:
+        off = 0
+    try:
+        nbytes = int(d.get("bytesRead")) if d.get("bytesRead") is not None \
+            else len(body.encode("utf-8"))
+    except Exception:
+        nbytes = len(body.encode("utf-8"))
+    eof = (d.get("eof") is True) or (d.get("completeFile") is True) \
+        or ("eof" not in d and "completeFile" not in d and "nextOffset" not in d)
+    st = pages.setdefault(key, {"segs": {}, "title": fn, "tool": str(tool_name or "")})
+    st["segs"][off] = {"text": body, "nbytes": nbytes}
+    if not eof:
+        return None      # 还没读到末段 ⇒ 不归档（防半截）
+    # 串链：从 0 起，每段的 [offset, offset+bytesRead) 必须与下一段首尾相接
+    pos = 0
+    parts = []
+    for o in sorted(st["segs"]):
+        seg = st["segs"][o]
+        if o != pos:
+            return None  # 有缺口（中间段缺失/被截断）⇒ 不归档
+        parts.append(seg["text"])
+        pos = o + seg["nbytes"]
+    text = "".join(parts)
+    if len(text) < 500:
+        return None
+    _is_sysml = key.lower().endswith((".sysml", ".kerml")) \
+        or text.lstrip().lower().startswith("package")
+    if not _is_sysml:
+        return None
+    return {"title": st.get("title") or "SysML 源码（分页取回）", "text": text}
+
+
+def collect_tool_sysml_doc(pages: dict, tool_name: str, result_text: str) -> dict | None:
+
+    """工具结果 → 完整 SysML 文档的唯一入口（单次全文 + 分页累积两条路）。
+
+    调用方（stream / execute 同构）只调本函数，不再各自拼判据——避免两条路径判据漂移。
+    """
+    doc = extract_sysml_doc_from_result(tool_name, result_text)
+    if doc:
+        return doc
+    try:
+        return accumulate_paged_doc(pages, tool_name, result_text)
+    except Exception:
+        return None
+
+
+#: 工具调用标记泄漏的识别（实测 conv 9629 msg 4892：模型把 tool call 写成了正文，
+#: 形如 `<｜｜DSML｜｜ invoke name="export_sysml_v2">`，全角 `｜`(U+FF5C) 与半角 `|` 都会出现）。
+#: 后果有两层：① 用户直接看到一串机器标记；② 那些调用**根本没执行**，
+#: 模型却按"已发出"继续叙事（随后自述"工具额度已用尽"）。
+_LEAK_MARK = re.compile(r"(?:DSML|dsml|antml|ANTML)")
+#: 标记外层的定界符（全角/半角竖线，允许 1~2 个）
+_LEAK_SEP = "｜|"
+#: 清理后可能残留的碎片行（整行只有 `xxx>` 这种残骸）
+_LEAK_RESIDUE = re.compile(r"(?m)^\s*(?:invoke|parameter|calls|function_calls|"
+                           r"function|parameters|function_results)\s*>?\s*$")
+
+
+def strip_leaked_tool_markup(text: str) -> tuple:
+    """清掉正文里泄漏的工具调用标记，返回 ``(clean_text, removed_count)``。
+
+    为什么用"扫描"而不是一条正则：泄漏标记的闭合形态不稳定（`</｜｜DSML｜｜ invoke>`
+    / `<｜｜DSML｜｜ parameter ...>` / 只留 `<... calls>`），单条正则非贪婪会把
+    开标签和闭标签拆开、留下 `parameter>` 这类碎片。这里按"标记出现处向左扩到最近的
+    `<`、向右扩到最近的 `>`"整段切除，循环到没有标记为止，再清残骸行。
+
+    只做**可见性**处理；**不**把泄漏内容还原成真实工具调用——参数未经协议校验，
+    贸然执行可能带错 taskId 重复提交，比不执行更危险。
+    """
+    s = text or ""
+    if not s:
+        return s, 0
+    marks = list(_LEAK_MARK.finditer(s))
+    if not marks:
+        return s, 0
+    first = marks[0]
+    # 从"第一个标记所属的 `<`"起**整段截断**：标记之后全是参数值等机器残骸
+    # （实测残留 `STATUS` / `2114956963811217410` / `1` / `100` 这类裸值），
+    # 逐段删会留下这类碎片，比原样更难看。正文 prose 在标记之前，截断即干净。
+    cut = s.rfind("<", max(0, first.start() - 64), first.start() + 1)
+    if cut < 0:
+        cut = first.start()
+    return s[:cut].rstrip(), len(marks)
+
+
 def _archive_artifacts(conn, conversation_id: int, message_id: int,
-                       card_data, content: str, intent: str, created_by: str = "王工",
+                       card_data, content: str, intent: str, created_by: str = "未登录",
                        tool_docs=None) -> None:
     """把 AI 生成内容登记为会话产物（幂等：同 (会话,消息,类型,标题) 不重复）。
 

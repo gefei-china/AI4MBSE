@@ -274,7 +274,14 @@ def _text_result(payload, is_error: bool = False) -> dict:
 
 
 def _audit_call(tool: str, is_error: bool, latency_ms: int, detail: str = "") -> None:
-    """每次外部调用落审计（治理追溯）；失败不阻断工具返回，但留痕。"""
+    """每次外部调用落审计（治理追溯）；失败不阻断工具返回，但留痕。
+
+    P0-a（2026-10-24）：同时落 tool_call_logs 统一调用日志。此前平台作为 MCP
+    Server 被外部调用**只写 audit_logs**（不进能力度量）⇒「外部流量用了哪些
+    能力」在能力中心完全不可见。capability_id 反查 tools 表（命中 tool:{name}），
+    不命中留空——SERVER_NAME（ai4mbse-domain）不是 mcp_servers 表里的行，
+    不造假映射。
+    """
     try:
         from core.audit import audit
         audit("mcp-client", "mcp_tool_call",
@@ -282,6 +289,33 @@ def _audit_call(tool: str, is_error: bool, latency_ms: int, detail: str = "") ->
               result="fail" if is_error else "success")
     except Exception:  # noqa: BLE001
         traceback.print_exc()
+    try:
+        from database import db_conn
+        # ★ P0-3（2026-10-27）：外部 harness 的入站调用**没有对话轮次**
+        #   ⇒ 用 request_id 作 trace（一次外部请求 = 一条链），这是如实口径。
+        #   这样"MCP 供给出去的调用"也能和它自己的其它日志串起来。
+        try:
+            from core.audit import current_trace_id as _ctid_gw
+            _tid_gw = _ctid_gw(fallback_request=True)
+        except Exception:
+            _tid_gw = ""
+        with db_conn() as _c:
+            _hit = _c.execute("SELECT 1 FROM tools WHERE name=?", (tool,)).fetchone()
+            # S0（2026-10-28）探针标记（core/probe_mark）：外部 harness 会拿假工具探活
+            try:
+                from core.probe_mark import is_probe_tool as _ipt_gw
+                _probe_gw = _ipt_gw(tool)
+            except Exception:
+                _probe_gw = 0
+            _c.execute(
+                "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
+                "arguments, result, ok, latency_ms, capability_id, trace_id, is_probe) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("mcp_gateway", "", tool, "mcp", "tool", "{}",
+                 detail[:2000], 0 if is_error else 1, latency_ms,
+                 ("tool:%s" % tool) if _hit else "", _tid_gw, _probe_gw))
+    except Exception:  # noqa: BLE001
+        pass  # 度量落库失败不影响审计与工具返回
 
 
 def _dispatch(msg: dict):

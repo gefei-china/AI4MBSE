@@ -31,6 +31,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if ROOT not in sys.path:
@@ -238,6 +239,18 @@ check("C1d checks 八列（epoch/source/signals_json/comparison_json/verdict）"
 # C2 合成数据：100 审计事件（5 拒答）+ 100 工具调用（30 失败/15 带 kind）
 #   失败数 30 ≥ min_denominator(20) ⇒ kind_coverage 可算（10 条会被正确判
 #   unknown，那是分母纪律不是缺陷）
+#
+# ★ 2026-10-26 **时间炸弹修复**：合成时间戳原写死 "2026-10-19 10:00:00"，
+#   而 `collect_global_metrics` 走 `collect_signals(conn, settings)` 的**默认窗口**
+#   （window_days=7 ⇒ cutoff = now-7d）。⇒ 当"今天"越过 10-19 10:00 + 7d 之后，
+#   这批 C2 数据**滑出窗口**，C8 段只剩 C5 注入的 100 条全失败 ⇒ 发布值 100.0%，
+#   C8c 期望的 65% 判红（C8e 连带）。
+#   实测：10-25 基线还绿（cutoff=10-18，两批都在窗口内），10-26 变红
+#   （cutoff=10-19 10:4x，C2 那批 10:00 差 71 分钟出窗）——**与产品无关，纯时间到了**。
+#   ⇒ 修法：时间戳**相对 now**（恒在窗口内），并在 C8 段加"窗口内行数"前置断言，
+#      万一窗口口径再变，报错直接说"合成数据滑出窗口"，而不是甩一个 100.0 让人猜。
+_T_C2 = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 2 * 3600))
+_T_C5 = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 1 * 3600))
 for i in range(100):
     _c.execute("INSERT INTO audit_logs (user_name, event_type, detail, result) "
                "VALUES ('gate', ?, 'd', 'success')",
@@ -246,7 +259,7 @@ for i in range(100):
     _c.execute("INSERT INTO tool_call_logs (tool_name, ok, failure_kind, created_at) "
                "VALUES (?,?,?,?)",
                ("t%d" % i, 0 if i < 30 else 1, "timeout" if i < 15 else "",
-                "2026-10-19 10:00:00"))
+                _T_C2))
 _conn.commit()
 _S = me.get_settings()
 _sig = me.collect_signals(_conn, settings=_S, cutoff="2000-01-01 00:00:00")
@@ -294,7 +307,7 @@ finally:
 # C5 回归判定（端到端）：再注入 100 次全失败无 kind
 for i in range(100):
     _c.execute("INSERT INTO tool_call_logs (tool_name, ok, failure_kind, created_at) "
-               "VALUES (?,?,?,?)", ("r%d" % i, 0, "", "2026-10-19 11:00:00"))
+               "VALUES (?,?,?,?)", ("r%d" % i, 0, "", _T_C5))
 _conn.commit()
 _sig2 = me.collect_signals(_conn, settings=_S, cutoff="2000-01-01 00:00:00")
 _cmp = me.compare_signals(_sig2, _latest["signals"], settings=_S)
@@ -354,8 +367,23 @@ check("C8b 发布值为百分数（0-100 量纲）",
       all((_m["misev_" + n] is None) or (0 <= _m["misev_" + n] <= 100)
           for n in me.SPEC_NAMES),
       {k: _m["misev_" + k] for k in me.SPEC_NAMES})
-check("C8c tool_fail 百分数自洽（≈130/200*100=65）",
-      abs(_m["misev_tool_fail_rate"] - 65.0) < 0.01, _m["misev_tool_fail_rate"])
+# C8b2 ★ 2026-10-26：**发布口径与同库数据自洽**（不再拿魔法常数当期望值）
+#   期望值从**同库现算**：失败数/总数×100。窗口口径（window_days）一旦变化，
+#   期望值自动跟着变 ⇒ 不会因为"改了窗口配置"而假红。
+#   ⚠️ 附带守卫：分母必须=200（门禁自己注入的两批共 200 行）——
+#   分母偏小 ⇒ 说明合成数据**滑出窗口**了（2026-10-26 那次时间炸弹的现场），
+#   此时报"分母=N"比甩一个 100.0 可读得多。
+_cut = me._cutoff(int(_S["window_days"]))
+_win = _c.execute("SELECT COUNT(*), SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END) "
+                   "FROM tool_call_logs WHERE created_at>=?", (_cut,)).fetchone()
+_win_tot, _win_fail = int(_win[0] or 0), int(_win[1] or 0)
+check("C8b2 合成数据**全部落在信号窗口内**（分母=200；否则是时间炸弹，不是数据问题）",
+      _win_tot == 200, "窗口内 %d 行（失败 %d）；cutoff=%s" % (_win_tot, _win_fail, _cut))
+_expect_fail = (round(100.0 * _win_fail / _win_tot, 2) if _win_tot else None)
+check("C8c tool_fail 百分数自洽（发布值 = 同库失败数/总数×100）",
+      _expect_fail is not None and abs(_m["misev_tool_fail_rate"] - _expect_fail) < 0.01,
+      "发布=%r 期望=%r（窗口内 %d/%d）"
+      % (_m["misev_tool_fail_rate"], _expect_fail, _win_fail, _win_tot))
 # C8d 空数据不告警：五条 misev 规则 + 指标全 None ⇒ 全跳过不 fire
 #   （monkeypatch collect_global_metrics 返全 None，模拟「没数据」；
 #     不另建空库是因为规则/事件表结构由 init_db 管，补丁更贴近口径本身）

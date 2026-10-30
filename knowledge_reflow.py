@@ -96,7 +96,11 @@ def reflow_from_text(conn, text: str, source: str = "conversation", batch_id: st
     # 2) 降级：规则提炼
     if not candidates:
         mock = _mock_extract_knowledge(text)
-        candidates = [{"name": c["name"], "entity_type": c["entity_type"], "note": "规则提炼"} for c in mock]
+        # ★ 2026-10-23：降级候选显式带 extractor="rule" + source="rule_extract"，
+        #   使"规则提炼"与"LLM 提炼"在数据层可区分（此前只有一句 note 文本，容易被漏读）。
+        candidates = [{"name": c["name"], "entity_type": c["entity_type"],
+                       "note": "规则提炼（LLM 不可用时的降级抽取，非模型输出）",
+                       "extractor": "rule"} for c in mock]
         degraded = True
 
     # 3) 双写记忆层（R1=B）：project_memories（项目经验/决策，pipeline 自动注入）+ agent_memory（Agent 长期经验）

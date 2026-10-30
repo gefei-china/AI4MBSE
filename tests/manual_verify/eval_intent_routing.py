@@ -14,7 +14,15 @@ import os
 import sys
 from collections import Counter, defaultdict
 
-ROOT = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system"
+# ★ 2026-10-30 修：此前硬编码本机绝对路径
+#   `ROOT = r"C:\Users\gefei\WorkBuddy\...\mbse_system"` + `os.chdir(ROOT)`
+#   ⇒ 在 Linux CI（`/home/runner/work/AI4MBSE/AI4MBSE`）上第 19 行直接
+#   `FileNotFoundError: 'C:\\Users\\gefei\\...'` ⇒ `nightly-evals` **永久红**，
+#   自 2026-10-07 起每一笔提交都失败（查 Actions 历史确认）。
+#   ⇒ CI 永久红等于 CI 失效：任何真回归都会被淹没在"本来就是红的"里。
+#   改为**从本文件位置推导**仓库根（本文件在 <repo>/tests/manual_verify/ ⇒ 上两级），
+#   与仓内其它脚本（tools/verify/*）的既有写法一致。
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 

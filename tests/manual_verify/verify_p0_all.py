@@ -107,13 +107,13 @@ conn.execute("INSERT OR IGNORE INTO skills (name, skill_type, description, conte
 conn.commit()
 pipe = AgentPipeline()
 pipe._last_skill_hits = ["p0_fb_skill"]
-pipe._record_skill_feedback(run_id=1, intent="chat", output_content="本次输出成功内容")
+pipe._record_skill_feedback(conversation_id=1, intent="chat", output_content="本次输出成功内容")
 row = conn.execute("SELECT use_stats, feedback_notes FROM skills WHERE name='p0_fb_skill'").fetchone()
 st = json.loads(row["use_stats"] or "{}")
 ok("成功路径 use_stats 累加", st.get("uses") == 1 and st.get("success") == 1 and st.get("fail") == 0, str(st))
 pipe2 = AgentPipeline()
 pipe2._last_skill_hits = ["p0_fb_skill"]
-pipe2._record_skill_feedback(run_id=1, intent="chat", output_content="", error="子任务未产生输出")
+pipe2._record_skill_feedback(conversation_id=1, intent="chat", output_content="", error="子任务未产生输出")
 row2 = conn.execute("SELECT use_stats, feedback_notes FROM skills WHERE name='p0_fb_skill'").fetchone()
 st2 = json.loads(row2["use_stats"] or "{}")
 notes2 = json.loads(row2["feedback_notes"] or "[]")

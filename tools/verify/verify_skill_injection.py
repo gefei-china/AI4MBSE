@@ -214,7 +214,12 @@ def _variant(replacements):
 
 
 if _READY:
-    _M1 = _variant([("pipe._skill_allowed_tools = None", "pass")])
+    # ⚠️ 锚点必须**唯一**：common.py 里 `pipe._skill_allowed_tools = None` 出现**两次**
+    #   （另一次在 :642 的历史兼容分支里）⇒ 只锚这一行时，`.replace(..., 1)` 命中的是
+    #   **前者**，`reset_skill_state` 根本没被变异 ⇒ M1 永远抓不到东西（恒假红）。
+    #   ⇒ 带上前一行 `pipe._skill_forced = bool(skill_name)` 才能唯一定位到 reset_skill_state。
+    _M1 = _variant([("pipe._skill_forced = bool(skill_name)\n    pipe._skill_allowed_tools = None",
+                     "pipe._skill_forced = bool(skill_name)\n    pass")])
     if _M1:
         _p = types.SimpleNamespace(_skill_allowed_tools={"residual"})
         try:

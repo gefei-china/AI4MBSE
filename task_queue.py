@@ -133,6 +133,28 @@ class TaskQueue:
                 raise ValueError(
                     "计划依赖图非法（reason=%s cycle=%s self_loop=%s），已中止落库以避免静默阻塞"
                     % (_vd.get("reason"), _vd.get("cycle"), _vd.get("self_loop")))
+            # ★ 2026-10-29（P0-1）：**Agent 名必须能解析到在役 Agent**，否则中止落库。
+            #
+            #   为什么与"依赖环"同等严格：名字解析不到时，执行期 `registry.get()` 会
+            #   回落 `通用问答Agent`（tools=0）—— 任务照跑、状态照标 done，但**一个工具都
+            #   没调**。实测（2026-10-29 真库）287 个任务里 69 个（24%）如此，且降级任务
+            #   的成功率 74% 与正常任务 78% 几乎相同 ⇒ **指标层面完全看不出来**。
+            #   宁可让这一次编排明确失败、把坏名字摆到脸上，也不要"跑完了但什么都没做"。
+            #
+            #   空 agent 名**不算错**：执行期 `forced_intent=None` 会走意图识别，
+            #   这是编排的合法用法（planner 只给任务不给主体）。
+            _unresolved = []
+            for _t in plan:
+                _raw = str(_t.get("agent") or "").strip()
+                if _raw and not resolve_agent_name(conn, _raw):
+                    if _raw not in _unresolved:
+                        _unresolved.append(_raw)
+            if _unresolved:
+                raise ValueError(
+                    "计划引用了无法解析的 Agent：%s（不在 agents 表，或 status!='active'）。"
+                    "已中止落库 —— 若照常执行，这些子任务会静默降级为「通用问答Agent」"
+                    "（无任何工具），产出看似成功实则未调用工具。"
+                    "请改用当前在役的 Agent 名后重试。" % "、".join(_unresolved))
         plan_keys = {t.get("key") for t in plan}
         n = 0
         for t in plan:

@@ -7,7 +7,38 @@ function procBlocksHtml(ex, mid){
   const now = new Date().toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const uid = (mid || 'h' + Math.random().toString(36).slice(2,8));
   let steps = [];
-  if(ex.reasoning) steps.push({icon:'💭', title:'思考过程', status:'done', body: esc(ex.reasoning), cls:'thinking'});
+  /* ★ 2026-10-27（用户："意图识别环节总是匹配到具体的 agent，不能提供更好理解的内容吗"）：
+     历史消息也要有「意图理解」这一行 —— 否则**刷新前看得到、刷新后消失**，
+     同一份数据两套呈现（本仓已因这类前后端不一致被反馈过多次）。
+     数据源 = card_data.exec.brief（stream.py 阶段 4 随消息落库）；
+     老消息没有这个键 ⇒ 不产生该行，行为与从前一致。 */
+  if(ex.brief && (ex.brief.goal || ex.brief.followup)){
+    steps.push({icon:'🔍', title:'意图识别', status:'done', cls:'stage',
+      sub: ex.brief.goal ? ('理解：' + String(ex.brief.goal)) : '按你的确认继续（本轮不重新分析目标）',
+      body: (typeof _intentBriefBody === 'function') ? _intentBriefBody(ex.brief, {}) : esc(ex.brief.goal || '')});
+  }
+  /* ★ 2026-10-28（用户反馈「执行过程的秩序输出，不是强调收编到对应的执行环节吗，
+        不用给出统一的思考过程的输出」）：
+     原来这里无条件把 `ex.reasoning` 渲染成一个**大块「💭 思考过程」**，
+     而 reasoning 里混着两类东西：模型真 CoT + 7 类系统进度提示
+     （收到补充指令/判断要调工具/工具结果弱相关/重复调用收敛/写操作已记入/harness 持续工作）。
+     ⇒ 用户看到的就是"一堆统一思考过程"，而不是各归各位。
+     现在拆成两条通道（落库侧已分开：exec.reasoning / exec.notices）：
+       · reasoning ⇒ 只在**确实是模型心智链**时渲染，且标题改为「模型思考」以示区分
+       · notices   ⇒ 按 kind 收编到对应环节的展开区（不独立成大块） */
+  const _notices = Array.isArray(ex.notices) ? ex.notices : [];
+  if(ex.reasoning) steps.push({icon:'💭', title:'模型思考', status:'done', sub:'（模型推理过程）', body: esc(ex.reasoning), cls:'thinking'});
+  // 系统进度提示：收编为**独立的小行「执行说明」**，与模型思考分开、不抢主线
+  if(_notices.length){
+    const _ntBody = _notices.map(n => {
+      const t = (n && typeof n === 'object') ? (n.text || '') : String(n || '');
+      return t ? `<div style="padding:2px 0;font-size:11px;color:var(--mut);">· ${esc(t)}</div>` : '';
+    }).join('');
+    if(_ntBody){
+      steps.push({icon:'📌', title:`执行说明（${_notices.length}）`, status:'done',
+                  sub:'系统进度提示（非模型思考）', body:_ntBody, cls:'notice'});
+    }
+  }
   if(ex.agent) steps.push({icon:'🤖', title:`子智能体：${esc(ex.agent)}`, status:'done', sub:'✓ 已完成', cls:'agent', noBody: true});
   const subs = ex.subtasks||[];
   if(subs.length){
@@ -359,67 +390,14 @@ function svmTabSwitch(tabEl) {
     card.querySelectorAll('.sv-thumb').forEach(th=>{ svmThumbMount(th); });
   }
 }
-function wbModalHtml(vCount) {
-  return `<div style="font-size:12px;line-height:1.9;color:var(--mut);margin-bottom:8px;">
-    通过<b>标准写回接口</b>将本消息的 <b>${vCount||0} 个 SysML 视图</b> 写回外部建模软件（MagicDraw / Cameo 等）。<br>
-    写回流程内置两道校验：<b>① 归一校验</b>（术语词典对齐 + 同名消歧，确保元素符合本体规范）→ <b>② 一致性检查</b>（重名 / 悬空引用 / 循环）→ 校验通过才写入目标。</div>
-  <div style="font-size:10.5px;color:var(--mut);margin-top:6px;line-height:1.7;">写回方式：仅通过接口（无手工导入通道）。校验未通过时接口返回问题清单，不执行写入。此处为前端交互演示，未连接真实工具。</div>
-  <div id="wb-progress" style="margin-top:10px;font-size:12px;line-height:2;min-height:24px;"></div>
-  <div style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px;">
-    <button class="btn ghost" onclick="closePanel()">取消</button>
-    <button class="btn" id="wb-start" onclick="wbStart()">🚀 通过接口写回</button>
-  </div>`;
-}
-function wbStart() {
-  const box = document.getElementById('wb-progress'); if(!box) return;
-  const start = document.getElementById('wb-start'); if(start) start.disabled = true;
-  const vN = (window._wb && window._wb.vCount) || 0;
-  const steps = [
-    '① 调用写回接口（POST /api/model/writeback）',
-    '② 归一校验：术语词典对齐 '+vN+' 个元素 · 同名消歧合并',
-    '③ 一致性检查：重名 0 · 悬空引用 0 · 循环 0',
-    '④ 校验通过，写入目标工具…',
-    '✅ 写回完成'
-  ];
-  box.innerHTML = '<div style="color:var(--blue-d);">⏳ 执行中…</div>';
-  let i = 0;
-  if(window._wbTimer) clearInterval(window._wbTimer);
-  window._wbTimer = setInterval(()=>{
-    if(i >= steps.length){ clearInterval(window._wbTimer); wbDone(); return; }
-    box.innerHTML = steps.slice(0, i+1).map((s,k)=>
-      `<div style="color:${k<i?'var(--grn,#2f855a)':'var(--ink,#223)'};">${k<i?'✅':(k===i?'⏳':'')} ${s}</div>`).join('');
-    i++;
-  }, 620);
-}
-function wbDone() {
-  const box = document.getElementById('wb-progress'); if(!box) return;
-  box.innerHTML = `<div style="margin-top:6px;border:1px solid #C0DD97;background:#f7fbee;border-radius:8px;padding:12px;font-size:12px;">
-    <b style="color:var(--grn,#2f855a);">✅ 写回完成（前端演示）</b>
-    <div style="margin-top:6px;line-height:1.9;">
-      <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0;"><span style="color:var(--mut);">写回接口</span><span>/api/model/writeback</span></div>
-      <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0;"><span style="color:var(--mut);">归一校验</span><span style="color:var(--grn,#2f855a);">通过（对齐 5 · 消歧 2）</span></div>
-      <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0;"><span style="color:var(--mut);">一致性检查</span><span style="color:var(--grn,#2f855a);">通过（重名 0 · 悬空 0）</span></div>
-      <div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="color:var(--mut);">写入目标</span><span>MagicDraw / Cameo（SysML v2）</span></div>
-    </div>
-    <div style="margin-top:8px;display:flex;gap:6px;">
-      <button class="btn sm ghost" onclick="wbSimulateFail()">⚠️ 模拟校验失败分支</button>
-    </div>
-  </div>`;
-  const start = document.getElementById('wb-start'); if(start){ start.disabled=false; start.textContent='↻ 重新写回'; }
-}
-function wbSimulateFail() {
-  if(window._wbTimer) clearInterval(window._wbTimer);   // 失败分支先停定时器，防被 wbDone 覆盖
-  const box = document.getElementById('wb-progress'); if(!box) return;
-  box.innerHTML = `<div style="margin-top:6px;border:1px solid #F3C1C1;background:#fff5f5;border-radius:8px;padding:12px;font-size:12px;">
-    <b style="color:var(--red);">✕ 校验未通过，接口拒绝写回</b>
-    <div style="margin-top:6px;line-height:1.9;">
-      <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0;"><span style="color:var(--mut);">归一校验</span><span style="color:var(--red);">2 个元素未命中词典</span></div>
-      <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0;"><span style="color:var(--mut);">一致性检查</span><span style="color:var(--red);">1 处悬空引用（TWTA → ?）</span></div>
-      <div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="color:var(--mut);">写入</span><span style="color:var(--red);">未执行（校验阻断）</span></div>
-    </div>
-    <div style="color:var(--mut);margin-top:6px;">请先修正问题（可在「本体模型维护」补齐类型 / 术语词典添加词条），再重新发起写回。</div>
-  </div>`;
-}
+// ★ 2026-10-23：删除「写回建模软件」前端演示（wbModalHtml / wbStart / wbDone /
+//   wbSimulateFail）——它对外宣称「POST /api/model/writeback」，但**后端该端点不存在**
+//   （全库 grep model/writeback 零命中），整个流程是 setInterval 逐行播放的**动画**，
+//   校验结果（"对齐 5 · 消歧 2"、"1 处悬空引用（TWTA → ?）"）全是写死的。
+//   性质：对外宣称的能力其实是假的 ⇒ 生产可用性谎言。
+//   这 4 个函数此前无任何调用方（死代码），故删除不影响现有功能。
+//   ⚠️ 真正的写回链路是 14-sysml.js 的「写回智源」（sysmlPushModal → push-zhiyuan），
+//      那是真接口 —— 不要误删。
 // ── 🧹 归一校验报告（2026-09-08 P0-1/P0-2 真实后端版）：
 //    归一/消歧报告 → 人在回路确认 → 应用回 V2 代码与视图（新版本，不覆盖）→ 闸口② 写入建模软件
 // 行匹配状态 → 色块（与后端 sysml_importer.build_normalize_report 输出对齐）

@@ -223,6 +223,14 @@ class AgentRegistry:
     def __init__(self):
         self._db_defs: dict = {}          # name(intent) → AgentDefinition（DB 加载）
         self._db_meta: dict = {}          # name → 扩展元数据（display_name/icon/intent_keywords）
+        # ★ 2026-10-29（P0-1）：**未解析 Agent 名台账**。
+        #   为什么必须有：`get()` 未命中时回落 `DEFINITIONS["chat"]`（通用问答Agent，tools=0）
+        #   —— 编排子任务因此会"静默降质"：任务标 done，实际一个工具都没调。
+        #   实测（真库 2026-10-29）287 个任务里 69 个（24%）的 agent_id 解析不到 active Agent，
+        #   而降级任务 done 率 74% 与正常任务 78% 几乎相同 ⇒ **现有指标测不出来**。
+        #   这份台账让"解析失败"变成可查事实，而不是隐形。
+        #   进程内计数（不落库）：本对象随每次 execute 新建/复用，量级可控。
+        self._unresolved: dict = {}       # raw_name → {"count": n, "first_at": ts, "hint": str}
 
     def load_from_db(self, conn, user=None) -> None:
         """从 DB agents 表加载可配置 Agent（status='active'），DB 覆盖同名内置。
@@ -385,7 +393,100 @@ class AgentRegistry:
                 if t.get("type") == "mcp"]
 
     def get(self, intent: str) -> AgentDefinition:
-        return self._db_defs.get(intent) or self.DEFINITIONS.get(intent, self.DEFINITIONS["chat"])
+        """取 Agent 定义（**保证返回可用定义**：未命中回落 chat）。
+
+        ⚠️ 调用方若需要知道"是否真的解析到了"，请用 `resolve()` 而非本方法 ——
+        本方法刻意保留"静默回落"语义以兼容既有 30+ 调用点（多数只是取 prompt/工具，
+        回落 chat 是可接受的降级）。**编排/委派等需要追责的路径必须用 resolve()**。
+        """
+        return self.resolve(intent)[0]
+
+    def resolve(self, intent: str) -> tuple:
+        """解析 Agent 名 → `(AgentDefinition, resolved, hint)`。
+
+        `resolved=False` 表示该名字既不在 DB（status='active' 才加载）也不在内置表，
+        返回的是兜底 `chat` 定义（通用问答Agent，**tools=0**）。
+        `hint` 是给人看的原因（含"库里有同名但已停用"这类**) —— 只有名字对不上时才非空。
+
+        设计取舍（对齐 Claude Code 的 subagent 行为）：Claude Code 在 subagent 的
+        `tools` 列表里**没有任何条目能解析成工具时会明确报错并列出条目**，而不是
+        静默用一个空工具集跑。本方法把这层"真相"暴露给调用方，由调用方决定
+        fail-fast 还是降级 —— 但**至少不再是隐形的**。
+        """
+        key = str(intent or "").strip()
+        if key:
+            hit = self._db_defs.get(key)
+            if hit is not None:
+                return hit, True, ""
+            hit = self.DEFINITIONS.get(key)
+            if hit is not None:
+                return hit, True, ""
+        hint = self._unresolved_hint(key)
+        self._note_unresolved(key, hint)
+        return self.DEFINITIONS["chat"], False, hint
+
+    def _unresolved_hint(self, key: str) -> str:
+        """给未解析的名字补一句原因（**只做诊断，不改变解析结果**）。
+
+        三种情形分开说，因为处置方式完全不同：
+          · 库里没有        ⇒ planner 拼错 / 该 Agent 已被删除
+          · 有但非 active   ⇒ 该 Agent 被停用，但历史计划仍在派给它（最常见）
+          · 大小写/空格差异 ⇒ 能命中，属正常解析（走不到这里）
+        """
+        if not key:
+            return "计划未指定 Agent"
+        try:
+            with db_conn() as _c:
+                row = _c.execute(
+                    "SELECT name, status FROM agents "
+                    "WHERE LOWER(TRIM(name))=LOWER(?) OR LOWER(TRIM(display_name))=LOWER(?) "
+                    "LIMIT 1", (key, key)).fetchone()
+                if row is not None:
+                    st = str((row["status"] if hasattr(row, "keys") else row[1]) or "")
+                    nm = str((row["name"] if hasattr(row, "keys") else row[0]) or "")
+                    return ("Agent「%s」存在但 status=%s（非 active，不参与路由）"
+                            "—— 计划仍在派给它，将无法执行其工具" % (nm, st or "?"))
+        except Exception:
+            pass
+        return "Agent「%s」在 agents 表中不存在（拼写错误 / 已被删除 / 曾被改名）" % key
+
+    def _note_unresolved(self, key: str, hint: str) -> None:
+        """记一次未解析（幂等累加，异常静默——诊断记账不得影响主流程）。
+
+        ★ 2026-10-29（P0-1）：**必须同时落日志**。
+        原因：`get_pipeline()` 是"每请求新建一个实例"，所以 `self._unresolved`
+        只活在**本请求内**，跨请求的统计会随实例销毁而消失。
+        要让运维"事后能查"，唯一可靠的出口是日志（服务日志里 grep `[agent-resolve]`）。
+        同实例内**同名只打一次**（节流）：一个坏名字可能被 `_build_tools_def` 等
+        高频路径调用几十次，每次都打会把日志刷爆。
+        """
+        try:
+            k = key or "(空)"
+            rec = self._unresolved.get(k)
+            if rec is None:
+                self._unresolved[k] = {"count": 1, "first_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                       "hint": hint}
+                # 首见即告警（之后仅累加计数，不再刷屏）
+                try:
+                    print("[agent-resolve] 未解析的 Agent 名：%s —— %s"
+                          "（将回落「通用问答Agent」，该 Agent 无任何工具）" % (k, hint),
+                          flush=True)
+                except Exception:
+                    pass
+            else:
+                rec["count"] = int(rec.get("count") or 0) + 1
+        except Exception:
+            pass
+
+    def unresolved_stats(self) -> list:
+        """本实例期间所有未解析的 Agent 名（按次数倒序）—— 供诊断出口读。"""
+        try:
+            return [{"agent": k, "count": int(v.get("count") or 0),
+                     "first_at": v.get("first_at") or "", "hint": v.get("hint") or ""}
+                    for k, v in sorted(self._unresolved.items(),
+                                       key=lambda kv: -int(kv[1].get("count") or 0))]
+        except Exception:
+            return []
 
     def get_meta(self, intent: str) -> dict:
         """返回 DB 加载 Agent 的扩展元数据（含 Task 4 能力元数据字段）；未加载返回 {}。"""

@@ -529,8 +529,9 @@ function simRenderPanel(){
   panel.innerHTML = `
     <div class="rc-chip b">🛠 变更模拟（沙箱 · 不影响正式模型）</div>
     <div class="note" style="margin:8px 0;">模拟原理：沙箱内复制基线子图 → 应用变更（更新/删除/新增）→ 同引擎重算影响 → 与基线 diff 输出前后对比。全程不写正式图谱。</div>
+    <div class="note" style="margin:0 0 8px 0;color:var(--warn,#b8860b);">⚠️ 下方为<b>内置演示场景</b>，用的是系统自带的虚构图谱（卫星/载荷等），<b>不是你的模型</b>。演示场景的模拟结论<b>不会回流</b>为 v2g 候选，避免污染你的真实候选表。要分析自己的模型，请点上方「以真实图谱预演」。</div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-      <label style="font-size:12px;color:var(--mut);">多层级演示场景</label>
+      <label style="font-size:12px;color:var(--mut);">多层级演示场景（内置虚构图谱）</label>
       <select id="sim-scene" style="flex:1;min-width:220px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;" onchange="simSceneChange(this.value)">${opts||'<option>无场景</option>'}</select>
       <button class="btn sm grn" onclick="simRunPre()">▶ 预演变更</button>
       <button class="btn sm ghost" onclick="simExport()">📄 导出对比报告</button>
@@ -697,7 +698,8 @@ async function simStartFromImpact(){
     _simReal = {graph: r.graph, source: r.source, title: '真实图谱 · '+srcName,
                 depth: r.depth||3, direction: r.direction||'both'};
     _simState.scene = '';   // 真实图谱模式：脱离演示场景（防场景说明/预置变更串扰）
-    _simState.changes = [{op:'modify', target: srcName, new_value:'参数调整（示例，可编辑）'}];
+    // 预置一条空变更：用户必须自己填「新值」才有意图，不预填任何示例内容
+    _simState.changes = [{op:'modify', target: srcName, new_value:''}];
     simRenderPanelReal();
   }catch(e){ toast('基线构建失败：'+(e.message||e)); }
 }
@@ -1064,6 +1066,7 @@ function switchStLibTab(el, pane){
   if(pane==='st-market') loadMarketManage();  // 2026-09-17 定稿：插件市场单页直出（消费视图在类型页 cap-zone）
   if(pane==='st-model') loadLLMProviders();
   if(pane==='st-changelog') loadStChangelog();  // P0-2 资产变更审计（字段级 diff 历史）
+  if(pane==='st-registry') loadCapRegistry();   // 2026-10-27 能力账本（统一注册处 + 声明/调用 2×2）
   // 2026-09-04 v4：能力中心内部子 tab 切换 → 同步顶栏面包屑 cur
   const _bc = document.getElementById('br-cur');
   if(_bc) _bc.textContent = ST_TAB_TITLES[pane] || '能力中心';

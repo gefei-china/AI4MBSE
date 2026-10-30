@@ -11,6 +11,35 @@ from agent.pipeline_parts import skill_body_on_demand as _sbody
 class SkillMixin:
     """技能池加载、语义匹配与技能提示词构建。"""
 
+    @staticmethod
+    def _trigger_hit(triggers, low: str) -> bool:
+        """触发词命中判定（支持**合取**写法，向后兼容）。
+
+        两种写法：
+          · 普通词      —— 子串包含（**原有语义，逐字节不变**）
+          · `A+B`       —— **合取**：A、B 都出现才算命中（新增）
+
+        为什么需要合取（2026-10-27 实测）：中文里「新增包」「新增测试包」「新建一个包」
+        表达的是同一个意图，但**没有任何一个单一子串能同时覆盖且不过匹配**——
+        用「新增包」会漏掉「新增测试包」；用「包」又会把「生成需求视图」这类
+        完全无关的请求也拉进来（实测「智源平台管理」因 trigger 含「包」「元素」
+        「建模」「校验」「视图」而**一次输入命中 3 个技能**）。
+        合取让触发词既精确又不漏：写 `新增+包` ⇒ 「新增测试包」命中、
+        「生成需求视图」不命中。
+
+        ⚠️ 现有触发词里**没有** `+` ⇒ 对存量技能的行为**逐字节不变**。
+        """
+        for t in triggers:
+            if not t:
+                continue
+            if "+" in t:
+                parts = [p.strip() for p in t.split("+") if p.strip()]
+                if parts and all(p in low for p in parts):
+                    return True
+            elif t in low:
+                return True
+        return False
+
     def _global_skill_pool(self, user=None) -> list:
         """全局技能池（不含绑定技能，供跨 Agent 自动匹配）。
 
@@ -128,11 +157,55 @@ class SkillMixin:
         - 三级匹配：triggers 关键词 → bigram 语义（双条件防误路由）→ LLM 批量兜底
         - 角色权限：skill.allowed_roles 非空且当前用户角色不在其中 → 跳过（P2）
         - 命中 → 注入元数据 + 正文摘要（全局命中标注建议绑定）；结果写入 self._last_skill_hits
+
+        ★ 2026-10-27（真机 E2E 暴露）：**本轮缓存**（同 intent+input 只算一次）。
+          起因：`stream.py` 曾在**技能匹配之前**就 yield `skill` 事件与 reasoning 文本
+          （旧 4165~4172 vs `build_prompt_blocks` 旧 4254）⇒ `_last_skill_hits` 恒为空
+          ⇒ 前端「🧩 技能执行」卡永远空白、真机 E2E 的 E2 判据恒 FAIL。
+          修法不是挪事件（那会让事件晚于 reasoning 到达），而是**提前预匹配 + 复用**：
+          调用方（stream）先调一次本方法拿到命中集，随后 `build_prompt_blocks`
+          命中缓存 ⇒ **不重复匹配、不重复 offload**（offload 是有副作用的：
+          会写 `skill_body_offloads` 表并分配 id，重复做会留垃圾行）。
+          ⇒ 缓存键必须含 intent + user_input + user 角色 + skill_name 语义。
         """
+        _ck = (str(intent or ""), str(user_input or ""),
+               str((user or {}).get("role_name") or ""),
+               bool(getattr(self, "_skill_forced", False)))
+        _cached = getattr(self, "_skill_prompt_cache", None)
+        if isinstance(_cached, dict) and _cached.get("key") == _ck:
+            self._last_skill_hits = list(_cached.get("hits") or [])
+            return _cached.get("prompt") or ""
+        _out = self._build_skill_prompt_uncached(intent, user_input, user)
+        self._skill_prompt_cache = {"key": _ck, "prompt": _out,
+                                    "hits": list(self._last_skill_hits or [])}
+        return _out
+
+    def _build_skill_prompt_uncached(self, intent: str, user_input: str, user=None) -> str:
+        """`_build_skill_prompt` 的实际实现（无缓存层）—— 见上方法的说明。"""
         bound = self.registry.get_bound_skills(intent)
         bound_names = {s.get("name") for s in bound}
-        extra = [s for s in self._global_skill_pool(user) if s["name"] not in bound_names]
-        candidates = list(bound) + extra
+        # ★ 2026-10-27（对标 Anthropic Agent Skills 后的口径收口）：
+        #   「绑定」在行业里有两种截然不同的语义，必须由产品显式选定，不能含糊：
+        #     · bound_first（默认，= Anthropic 的做法）：绑定只是**优先候选**，
+        #       未绑定的已发布技能仍可被自动匹配命中。好处是"装进环境即可用"，
+        #       代价是可能命中与当前任务无关的技能（实测 conv 9633 里只绑了
+        #       「文件操作」，却还注入了 sysml_view_generation_activity）。
+        #     · bound_only（= OpenAI Agents SDK / Bedrock Agents 的显式装配）：
+        #       绑了技能就只认绑定的，未绑定的一律不参与。可控性最强，
+        #       代价是每个 Agent 必须手工挂全。
+        #   两种都合理，取决于"这个 Agent 是不是面向最终用户的收敛入口"。
+        #   ⇒ 做成配置开关而非删改代码：切换不用改代码、可回归、可按 Agent 灰度。
+        _scope = "bound_first"
+        try:
+            from core import config as _cfg
+            _scope = str(_cfg.get("agent", "skill_pool_scope", "bound_first") or "bound_first").strip().lower()
+        except Exception:
+            _scope = "bound_first"
+        if _scope == "bound_only":
+            candidates = list(bound)
+        else:
+            extra = [s for s in self._global_skill_pool(user) if s["name"] not in bound_names]
+            candidates = list(bound) + extra
         if not candidates:
             self._last_skill_hits = []
             return ""
@@ -146,7 +219,7 @@ class SkillMixin:
         low = str(user_input or "").lower()
         for s in candidates:
             trg = [str(t).lower() for t in (s.get("triggers") or [])]
-            if any(t and t in low for t in trg):
+            if self._trigger_hit(trg, low):
                 hits.add(s["name"])
         if len(hits) < 3:
             rest = [s for s in candidates if s["name"] not in hits]
@@ -165,6 +238,22 @@ class SkillMixin:
             self._skill_allowed_tools = None
         parts = []
         _offload_ids = []          # 本轮被offload 的技能正文 id（有则需注入 fetch 工具）
+        # ── S3（2026-10-28）技能提示词**总量**预算 ──────────────────────────
+        # 为什么需要（真库实测 @75eca26，n=124）：`skill_prompt` p50 3,669 tok、
+        #   p90 7,244、p99 30,009、**峰值 34,761 tok（48,813 字符）**，7% 超 8K。
+        #   根因不是"单条太长"（单条 cap=600 字符早已有），而是**没有总量上限**：
+        #   bound_first 让候选＝绑定＋全局池，命中几条就注几条正文 ⇒ 线性膨胀。
+        # 做法：先算预算，逐条累加；**超出预算的技能不掉命中**（hits 不变、SQL 不变），
+        #   只把正文降级为「一行描述 + 引用块」，正文经既有 offload 通道按需取回。
+        #   ⇒ 不改 bound_first 语义、不改命中判定、可回滚（<=0 即完全关闭）。
+        _budget = 0
+        try:
+            from core import config as _cfg_b
+            _budget = int(_cfg_b.get("agent", "skill_prompt_max_chars", 12000) or 0)
+        except Exception:
+            _budget = 12000
+        _used = 0
+        _trimmed = []              # 被预算裁掉的技能名（可观测，便于判断预算是否偏紧）
         for s in candidates:
             is_bound = any(s["name"] == b.get("name") for b in bound)
             if s["name"] not in hits:
@@ -176,6 +265,13 @@ class SkillMixin:
                 if self._skill_allowed_tools is None:
                     self._skill_allowed_tools = set()
                 self._skill_allowed_tools |= set(at)
+            # ★ S3：预算判定（**预估式**，不是"超了才停"——否则最后一条会整体越界）。
+            #   规则：① 第一条命中的技能**必定全量**（关键技能不该被预算裁掉）；
+            #        ② 之后按「正文 + 元数据 + 装配开销」预估，装不下就降级为按需取回。
+            #   粗估常数 260 ≈ 提示语/引用块/白名单的固定开销，宁紧不松。
+            _body_now = (s.get("content") or "")
+            _est = len(_body_now) + len((s.get("frontmatter") or "").strip()[:400]) + 260
+            _over_budget = bool(_budget > 0 and _used > 0 and (_used + _est) > _budget)
             meta = (s.get("frontmatter") or "").strip()[:400]
             body = (s.get("content") or "")
             # 2026-10-08：正文**按需加载**（此前是 body[:600] 硬截断，
@@ -186,14 +282,37 @@ class SkillMixin:
             #   会话 id 取 self._tool_conv_ctx（execute/tools.py:293 同源），
             #   不用虚构字段——否则恒为 0，退化成"每次会话都重新落库"。
             _conv = int(getattr(self, "_tool_conv_ctx", 0) or 0)
-            _ref, _off, _oid = _sbody.offload_body(
-                s.get("name", ""), body, conversation_id=_conv)
-            if _off:
-                _offload_ids.append(_oid)
-                at_body = _ref                              # 引用块（含取回指引）
+            if _over_budget:
+                # 预算已满：先落库（拿 oid，同会话幂等），再注入**极简**引用。
+                # ⚠️ 必须用 build_terse_reference 而不是 offload_body 的返回值：
+                #   后者带 head 摘要（实测 2,449 字符），降级后长度几乎不变
+                #   ⇒ 闸门触发了但注入量不降，等于没修（2026-10-28 实测踩到）。
+                _ref, _off, _oid = _sbody.offload_body(
+                    s.get("name", ""), body, conversation_id=_conv, cap=0)
+                if _off:
+                    _offload_ids.append(_oid)
+                    at_body = _sbody.build_terse_reference(
+                        _oid, s.get("name", ""), len(body), s.get("desc", "") or "")
+                else:
+                    at_body = _ref
+                _trimmed.append(s.get("name", ""))
             else:
-                at_body = body
+                _ref, _off, _oid = _sbody.offload_body(
+                    s.get("name", ""), body, conversation_id=_conv)
+                if _off:
+                    _offload_ids.append(_oid)
+                    at_body = _ref                              # 引用块（含取回指引）
+                else:
+                    at_body = body
             src_tag = "" if is_bound else "（全局匹配·未绑定 Agent，建议绑定）"
+            if _over_budget:
+                # S3 降级：**不再装配**元数据/轮次说明/资源清单 —— 那三项是给"要用这份技能"
+                #   的轮次准备的；本技能已按需加载，多给一行都是纯浪费。
+                #   （实测：meta 400 + 轮次说明 ~230 + 资源清单 ~200 ≈ 830 字符/技能，
+                #     6 个技能就是 5K 字符，占预算的一半以上。）
+                parts.append(f"- 技能「{s.get('name','')}」已触发但**正文按需加载**：{at_body}\n")
+                _used += len(parts[-1])
+                continue
             snippet = f"【Skill 已触发：{s.get('name','')}{src_tag}】（正文按需加载，摘要如下）\n"
             if meta:
                 snippet += f"元数据：{meta}\n"
@@ -207,10 +326,19 @@ class SkillMixin:
             #   非产码 Agent 或读配置失败 ⇒ 不注入（保持原样，零回归面）。
             try:
                 from core import config as _cfg
-                _rounds = int(_cfg.get("agent", "max_tool_rounds", 6))
-                snippet += (f"工具轮次预算（运行时真值，共 {_rounds} 轮）："
-                            f"请在**前 2 轮内产出代码**，"
-                            f"剩余轮次用于 validate 与按诊断修复。\n")
+                # ★ 单一真源：与 execute.py / stream.py 同读 config「agent.max_tool_rounds」，
+                #   默认值对齐 100（2026-10-17 米爸反馈提高的「防死循环绝对天花板」）。
+                #   旧 fallback 6 与两侧不一致 ⇒ 模型被告知「6 轮」却在 100 轮的 harness 上
+                #   自我停手，把未真正触发的上限当成终止理由（会话 9629 实测）。
+                _rounds = int(_cfg.get("agent", "max_tool_rounds", 100))
+                # 预算只作「天花板提示」，不规定「第几轮必须产出」——
+                # 规定轮次会让长任务（定位→分支→版本→导出→读取，草稿态还要换通道）
+                # 在额到来前仓促收尾或同参数重试。给模型「按链路调用、遇空结果换通道
+                # 而非同参重试」的**通用指引**（不写死任何工程/状态分支）。
+                snippet += (f"工具轮次预算（运行时真值，共 {_rounds} 轮，防死循环绝对天花板）："
+                            f"按任务链路需要调用工具即可，成功推进不受此限；"
+                            f"若某步返回空（例如版本列表为空，常意味着草稿态工程），"
+                            f"优先换通道（草稿态用 branchId=0 / draft 通道）而非同参数重试。\n")
             except Exception:
                 pass
             snippet += f"正文摘要：{at_body}"
@@ -229,10 +357,17 @@ class SkillMixin:
             if at:
                 snippet += f"\n🔒 工具白名单（仅可调用）：{', '.join(at)}"
             parts.append(snippet)
+            # S3：累加本技能实际注入量（用它做预算闸，不是用原文字节）
+            _used += len(snippet)
         # 本轮有长正文被 offload ⇒ 记录并放行 fetch 工具
         #（execute 侧据此把 skill_body_fetch 注入 tools_def；
         #  白名单是「最小权限」最后一道闸，不放行则模型调不到）
         self._skill_body_offloads = list(_offload_ids)
+        # S3 可观测：被总量预算裁掉的技能名单（空=本轮未触发预算）。
+        # 用途：判断预算是否偏紧（若长期大量裁剪，说明该调大或该收紧命中）。
+        self._skill_budget_trimmed = list(_trimmed)
+        self._skill_budget_used = _used
+        self._skill_budget_limit = _budget
         if _offload_ids:
             _wl = getattr(self, "_tool_whitelist", None)
             if _wl is not None and _sbody.FETCH_TOOL not in _wl:

@@ -14,6 +14,7 @@
 隔离：`MBSE_DB_PATH` 指向临时目录（写入类断言零污染）；生产库仅**只读**打开。
 """
 import json
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import shutil
 import sqlite3
@@ -22,7 +23,7 @@ import tempfile
 import types
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_TMP = tempfile.mkdtemp(prefix="verify_llm_health_")
+_TMP = mkdtemp(prefix="verify_llm_health_")
 os.environ["MBSE_DB_PATH"] = os.path.join(_TMP, "t.db")
 os.environ["MBSE_LLM_FORCE_MOCK"] = "1"
 sys.path.insert(0, ROOT)

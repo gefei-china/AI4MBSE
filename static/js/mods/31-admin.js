@@ -497,6 +497,7 @@ async function loadOps() {
     <div class="kpi"><div class="n" style="color:${d.runs.total?((d.runs.success_rate<100)?'var(--amb)':'var(--grn)'):'var(--mut)'};">${d.runs.success_rate}<span style="font-size:13px;">%</span></div><div class="l">运行成功率 <span class="st ${d.runs.total?((d.runs.failed>0)?'w':'ok'):'g'}">${d.runs.total} 次 / ${d.runs.failed} 失败</span></div></div>
     <div class="kpi"><div class="n">${d.runs.avg_latency_ms}<span style="font-size:13px;">ms</span></div><div class="l">平均耗时 <span class="st b">近 7 天</span></div></div>
     <div class="kpi"><div class="n" style="color:${d.llm.calls?((d.llm.mock_rate>50)?'var(--amb)':'var(--grn)'):'var(--mut)'};">${d.llm.mock_rate}<span style="font-size:13px;">%</span></div><div class="l">LLM Mock 率 <span class="st g">${d.llm.calls} 次调用 / ${d.llm.total_tokens} Tokens</span></div></div>
+    ${renderProbeSplit(d.llm)}
     <div class="kpi" style="cursor:pointer;" onclick="loadOpsAlerts()"><div class="n" style="color:${d.open_alerts>0?'var(--red)':'var(--grn)'};">${d.open_alerts}</div><div class="l">开放告警 <span class="st ${d.open_alerts>0?'r':'ok'}">${d.subs_active} 订阅活跃</span></div></div>`;
   document.getElementById('ops-alert-badge').textContent = `${d.open_alerts} 开放`;
   // 趋势 SVG（柱=运行数，折线=平均耗时）
@@ -513,6 +514,10 @@ async function loadOps() {
   try{ loadOpsLifecycle(); }catch(e){}
   // Bad Case 台账（2026-10-18 P0-3）：LLM 失败/截断 + 负向反馈，独立端点独立降级
   try{ loadOpsBadCases(); }catch(e){}
+  // P0-b 在线评测回流（2026-10-25）：待标注队列 + 三段 dry-run 操作，独立端点独立降级
+  try{ loadOpsOnlineEval(); }catch(e){}
+  // 配置变更台账 + 改后效果判定（2026-10-29）：P1-4 台账此前无前端入口
+  try{ loadConfigHistory(); }catch(e){}
   // 系统信息（进程 PID / 运行时长 / DB 大小）挂到趋势面板右上角
   const sys = d.system || {};
   document.getElementById('ops-trend').insertAdjacentHTML('beforeend',
@@ -623,6 +628,35 @@ function renderOpsCapability(d, orphan, sess, tenant){
   </div>
   <div style="font-size:9.5px;color:var(--mut);margin-top:6px;">口径：LLM 层=core/llm_health.py（唯一真源）· 编排层=/api/monitor/orphan-runs · 会话层=/api/monitor/sessions · 治理层=/api/monitor/tenant-readiness；「样本不足」= 无真实调用样本，任何质量结论均不成立。</div>`;
 }
+/**
+ * S0（2026-10-29）LLM 用量「业务 / 探针」双口径卡片。
+ *
+ * 为什么要在页面上分开（真库实测）：`chat_probe` 在近 7 天窗口里占了 LLM 成本的 51%。
+ * 只看全量一个数，「这台机器一天花了多少」和「业务实际花了多少」会混成同一个数，
+ * 既没法判断成本是否合理，也没法解释"为什么调用量很大但没产出内容"。
+ *
+ * 判据口径由后端给出（`core/probe_mark` 单一真源），前端**不自己再判**——
+ * 在前端写一份"探针名字正则"必然与后端漂移（本仓已有同类教训）。
+ *
+ * 数据缺失（老后端）时**整块不渲染**，不显示 0 误导人。
+ */
+function renderProbeSplit(llm){
+  const l = llm || {};
+  if(l.calls_biz === undefined || l.calls_probe === undefined) return '';
+  const tot = (l.calls_biz||0) + (l.calls_probe||0);
+  const pr = tot ? (l.calls_probe*100/tot) : 0;
+  // 视觉语义：探针占比高不是"错误"，而是"这个窗口的用量有水分"⇒ 用琥珀色提示，不用红色报警
+  const col = pr >= 30 ? 'var(--amb)' : 'var(--grn)';
+  const costAll = Number(l.estimated_cost||0), costBiz = Number(l.cost_biz||0);
+  return `<div class="kpi" title="探针=健康巡检/自检调用（chat_probe 等），不计入业务统计。判定口径来自 core/probe_mark">
+    <div class="n" style="color:${col};">${pr.toFixed(0)}<span style="font-size:13px;">%</span></div>
+    <div class="l">探针占比 <span class="st ${pr>=30?'w':'ok'}">${l.calls_probe||0} / ${tot} 次</span></div>
+    <div style="font-size:11px;color:var(--mut);margin-top:3px;line-height:1.5;">
+      业务 <b>${l.calls_biz||0}</b> 次 · ${(l.tokens_biz||0).toLocaleString()} Tok · $${costBiz.toFixed(4)}<br>
+      全量 $${costAll.toFixed(4)}（含探针）
+    </div>
+  </div>`;
+}
 function renderOpsTrend(trend){
   if(!trend || !trend.length) return '<div class="mut">暂无趋势数据</div>';
   const W=470,H=192,padL=38,padR=58,padT=16,padB=24;
@@ -668,28 +702,72 @@ function renderOpsNodeStats(stats){
 function levelBadge(l){
   return l==='critical'?'<span class="st r">critical</span>':l==='warning'?'<span class="st w">warning</span>':'<span class="st g">info</span>';
 }
+// ── 告警状态（与后端 core/alert_state.py 单一真源对齐）──
+// ⚠️ 2026-10-29：此前前端只有 open/acked 两态、非 open 一律显示 'acked'
+//   （328 条真实状态全 open，掩盖了"从未处置"这一事实）。现按后端五态渲染。
+const ALERT_STATUS_LABEL = {open:'未阅', acked:'已阅', triaged:'已归因', fixed:'已修', verified:'已验证'};
+const ALERT_STATUS_CLS   = {open:'w', acked:'g', triaged:'b', fixed:'ok', verified:'ok'};
+function alertStatusBadge(s){
+  const k = (s||'open');
+  return `<span class="st ${ALERT_STATUS_CLS[k]||'g'}">${ALERT_STATUS_LABEL[k]||k}</span>`;
+}
 function renderOpsAlerts(alerts){
   const box = document.getElementById('ops-alerts');
   if(!alerts || !alerts.length){ box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">暂无告警事件</div>'; return; }
-  box.innerHTML = `<table class="t"><tr><th>时间</th><th>规则</th><th>条件</th><th>触发值</th><th>等级</th><th>状态</th><th></th></tr>` +
-    alerts.map(a=>`<tr>
-      <td style="font-size:11px;">${escMd((a.created_at||'').slice(5,16))}</td>
-      <td><b>${escMd(a.rule_name)}</b><div style="font-size:10px;color:var(--mut);">run#${a.run_id}${(a.conversation_id>0)?` · 会话#${a.conversation_id}`:''} ${escMd(a.flow_name||'')}</div></td>
+  box.innerHTML = `<table class="t"><tr><th>时间</th><th>规则</th><th>条件</th><th>触发值</th><th>命中</th><th>等级</th><th>状态</th><th></th></tr>` +
+    alerts.map(a=>{
+      const hit = Number(a.hit_count||1);
+      // 折叠计数：同一告警被反复命中时不再新增行，而是累加计数 ⇒ 看板不被同因刷屏
+      const hitCell = hit>1
+        ? `<span title="同因告警已折叠为一行，累计命中 ${hit} 次">×${hit}</span>`
+        : `<span style="color:var(--mut);">1</span>`;
+      const seen = a.last_seen_at ? `<div style="font-size:10px;color:var(--mut);">最近 ${escMd(String(a.last_seen_at).slice(5,16))}</div>` : '';
+      const note = a.note ? `<div style="font-size:10px;color:var(--mut);">备注：${escMd(a.note)}</div>` : '';
+      const st = a.status||'open';
+      let actions = '';
+      if((a.conversation_id>0)) actions += `<button class="btn sm ghost" title="查看该告警所属会话的完整执行证据链" onclick="openSessionDrill(${a.conversation_id})">🔎 跳会话</button>`;
+      if(st==='open') actions += `<button class="btn sm ghost" onclick="ackAlert(${a.id})">✅ 已知悉</button>`;
+      if(st==='open'||st==='acked') actions += `<button class="btn sm ghost" onclick="advanceAlert(${a.id},'triaged')">🔬 归因</button>`;
+      if(st==='open'||st==='acked'||st==='triaged') actions += `<button class="btn sm ghost" onclick="advanceAlert(${a.id},'fixed')">🔧 已修</button>`;
+      if(st==='fixed') actions += `<button class="btn sm ghost" onclick="advanceAlert(${a.id},'verified')">✔️ 已验证</button>`;
+      return `<tr>
+      <td style="font-size:11px;">${escMd((a.created_at||'').slice(5,16))}${seen}</td>
+      <td><b>${escMd(a.rule_name)}</b><div style="font-size:10px;color:var(--mut);">run#${a.run_id}${(a.conversation_id>0)?` · 会话#${a.conversation_id}`:''} ${escMd(a.flow_name||'')}</div>${note}</td>
       <td>${escMd(a.metric)} ${escMd(a.operator)} ${a.threshold}</td>
       <td style="color:${a.actual>=a.threshold?'var(--red)':'var(--amb)'};font-weight:600;">${a.actual}</td>
+      <td style="font-size:11px;">${hitCell}</td>
       <td>${levelBadge(a.level)}</td>
-      <td>${a.status==='open'?'<span class="st w">open</span>':'<span class="st ok">acked</span>'}</td>
-      <td style="white-space:nowrap;">${(a.conversation_id>0)?`<button class="btn sm ghost" title="查看该告警所属会话的完整执行证据链" onclick="openSessionDrill(${a.conversation_id})">🔎 跳会话</button>`:''}${a.status==='open'?`<button class="btn sm ghost" onclick="ackAlert(${a.id})">✅ 确认</button>`:''}</td>
-    </tr>`).join('') + '</table>';
+      <td>${alertStatusBadge(st)}</td>
+      <td style="white-space:nowrap;">${actions}</td>
+    </tr>`;}).join('') + '</table>';
 }
 async function loadOpsAlerts(){
   const d = await api('/api/monitor/alerts');
-  document.getElementById('ops-alert-badge').textContent = `${d.total_open} 开放`;
+  // 按状态汇总（后端 core/alert_state.py）："未处置数"比"总数"更能暴露
+  // 「告警响了但没人管」——此前看板只给总数，328 条全 open 反而看不出来。
+  let sum = null;
+  try{ sum = await api('/api/monitor/alerts/summary'); }catch(e){}
+  const badge = document.getElementById('ops-alert-badge');
+  if(badge){
+    if(sum) badge.textContent = `${sum.unhandled} 未处置 / ${sum.total} 事件`;
+    else badge.textContent = `${d.total_open} 开放`;
+  }
   renderOpsAlerts(d.alerts);
 }
 async function ackAlert(id){
   await api(`/api/monitor/alerts/${id}/ack`, {method:'POST'});
   toast('告警已确认');
+  loadOpsAlerts();
+}
+// 状态流转（2026-10-29）：open → acked → triaged → fixed → verified
+async function advanceAlert(id, to){
+  let note = '';
+  try{
+    note = (prompt('处置备注（可留空）', '') || '').trim();
+  }catch(e){ note=''; }
+  const r = await api(`/api/monitor/alerts/${id}/status`, {method:'POST', body: JSON.stringify({status:to, note})});
+  if(r && r.ok===false){ toast(`流转失败：${r.reason||'未知'}`); return; }
+  toast(`告警已置为「${ALERT_STATUS_LABEL[to]||to}」`);
   loadOpsAlerts();
 }
 async function loadOpsLogs(){
@@ -836,13 +914,14 @@ async function saveMerge() {
   loadMerges();
 }
 
-// ════════════ 审批管理（前端原型：mock 数据存 localStorage，结构对齐未来后端接口）════════════
-const AP_KEY='mbse_approval_data_v1';
-// 原型演示用「角色 → 当前用户」映射（真实系统按用户-角色关系匹配）
-const AP_ROLE_USERS={'部门负责人':'王工','平台管理员':'赵管','技术负责人':'王工','知识工程师':'李工','系统管理员':'赵管'};
-let AP=null;              // {types:[], tpls:[], runs:[], seq:{}}
-let _apTplDraft=null;     // 模板编辑草稿
-let _apTypeEdit=null;     // 类型编辑 {id}
+// ════════════ 审批管理（2026-10-23 已下线）════════════
+// 该模块原为**纯前端原型**：审批类型 / 流程模板 / 审批流水全部硬编码在
+// 32-approval.js（5 个类型 + 4 套模板 + 5 条编造流水，含虚构人名与审批意见），
+// 存 localStorage；后端无任何审批 API，权限判定靠写死的「角色→当前用户」映射
+// （AP_ROLE_USERS = 部门负责人→王工 / 平台管理员→赵管 …）。
+// 米爸决策（2026-10-23）：仅移除入口与页面，后端另立需求重做。
+// 此处保留一行说明，避免后人误以为"审批功能漏做了"而照抄原型。
+// 待重做时的真数据来源：users/roles 表的真实用户-角色关系 + 后端审批表。
 
 
 // ── §11 UX 指标面板渲染（2026-10-03 自 29-flow.js 迁入：29-flow 随编排孤页整页移除）──
@@ -1146,4 +1225,190 @@ async function triageBadcase(id, status){
     toast(status==='open' ? '已重开' : (status==='resolved' ? '已标记解决' : '已忽略'));
     loadOpsBadCases();
   }catch(e){ toast('处理失败：' + (e.message||e)); }
+}
+
+// ── P0-b 在线评测回流（core/online_eval.py；采样/自动评/转正全 dry-run 默认）──
+async function loadOpsOnlineEval(){
+  const box = document.getElementById('ops-online-eval');
+  if(!box) return;
+  try{
+    const d = await api('/api/monitor/online-eval/queue?status=pending&limit=50');
+    const badge = document.getElementById('ops-oe-pending');
+    const nP = (d.summary && d.summary.by_status && d.summary.by_status.pending) || 0;
+    if(badge){ badge.style.display = nP>0 ? '' : 'none'; badge.textContent = nP+' 待标注'; }
+    if(!d.items || !d.items.length){
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">'+
+        (d.note ? escMd(d.note) : '暂无待标注样本（先「试运行采样」→「确认入队」）')+'</div>'; return;
+    }
+    box.innerHTML = renderOpsOnlineEval(d);
+  }catch(e){
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">加载失败：'+escMd(String(e).slice(0,80))+'</div>';
+  }
+}
+function _oeTypeSt(t){
+  const m = { intent:['b','意图'], retrieval:['w','检索'], generation:['g','生成'] };
+  return `<span class="st ${m[t]?m[t][0]:'g'}">${m[t]?m[t][1]:escMd(t||'?')}</span>`;
+}
+function _oeReasonSt(r){
+  const m = { neg_feedback:['r','负反馈'], low_conf:['w','低置信'], random_5pct:['b','随机5%'] };
+  return `<span class="st ${m[r]?m[r][0]:'g'}">${m[r]?m[r][1]:escMd(r||'?')}</span>`;
+}
+function renderOpsOnlineEval(d){
+  const s = d.summary || {};
+  const chips = Object.keys(s.by_status||{}).map(k=>
+    `<span class="st b" style="margin-right:6px;">${escMd(k)} ${s.by_status[k]}</span>`).join('');
+  const cov = s.auto_coverage==null ? '—' : Math.round(s.auto_coverage*100)+'%';
+  const rows = (d.items||[]).map(it=>`
+    <tr>
+      <td style="font-size:11px;white-space:nowrap;">#${it.id} ${_oeTypeSt(it.sample_type)}<br>${_oeReasonSt(it.sample_reason)}</td>
+      <td style="font-size:11px;color:var(--mut);">conv ${it.conversation_id||'-'} · msg ${it.message_id||'-'} · qt ${it.query_trace_id||'-'}</td>
+      <td style="font-size:11px;">${it.auto_score==null?'<span class="mut">未评</span>':escMd(String(it.auto_score))}</td>
+      <td style="white-space:nowrap;">
+        <select id="oe-score-${it.id}" style="width:56px;font-size:11px;">
+          <option value="">评分</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option>
+        </select>
+        <input id="oe-reason-${it.id}" placeholder="原因（可选）" style="width:90px;font-size:11px;">
+        <button class="btn sm grn" onclick="submitEvalLabel(${it.id},true)">✓ 提交并批准</button>
+        <button class="btn sm ghost" onclick="submitEvalLabel(${it.id},false)">✕ 驳回</button>
+      </td>
+    </tr>`).join('');
+  return `<div style="margin-bottom:6px;font-size:11px;">${chips}<span class="mut">共 ${s.total||0} 条 · 自动评覆盖率 ${cov}（分母=可评样本）</span></div>` +
+    `<table class="t"><tr><th>队列/类型/理由</th><th>溯源</th><th>auto</th><th>人工标注（HIL 确认卡）</th></tr>${rows}</table>`;
+}
+// 标注提交：label 端点建 HIL 确认单（幂等）→ 同卡片按钮直接 decide（批准/驳回）。
+async function submitEvalLabel(qid, approve){
+  const sc = (document.getElementById('oe-score-'+qid)||{}).value || '';
+  const rs = (document.getElementById('oe-reason-'+qid)||{}).value || '';
+  if(approve && !sc){ toast('批准需选评分 1-5'); return; }
+  try{
+    const lr = await api('/api/monitor/online-eval/label',
+      {method:'POST', body: JSON.stringify({queue_id: qid, score: parseInt(sc||'0',10)||0, reason: rs})});
+    if(lr.error){ toast(lr.error); return; }
+    if(lr.idempotent_hit){ toast('该样本已有待确认标注单（幂等命中 #'+lr.confirmation_id+'），请在 HIL 页面处理'); return; }
+    const dr = await api(`/api/studio/hil-confirmations/${lr.confirmation_id}/decide`,
+      {method:'POST', body: JSON.stringify({approve: !!approve})});
+    toast(approve ? ('标注已生效（'+((dr.exec_result||{}).status||'')+'）') : '已驳回（labeled_rejected，不进 dataset）');
+    loadOpsOnlineEval();
+  }catch(e){ toast('标注失败：' + (e.message||e)); }
+}
+function _oeDryBox(html){ const d = document.getElementById('ops-oe-dryrun'); if(d){ d.style.display=''; d.innerHTML = html; } }
+async function runOnlineEvalSample(apply){
+  try{
+    const r = await api('/api/monitor/online-eval/sample', {method:'POST', body: JSON.stringify({apply: !!apply})});
+    if(r.error){ toast(r.error); return; }
+    const btn = document.getElementById('ops-oe-sample-btn');
+    if(!apply){
+      const n = (r.candidates||[]).length;
+      const byReason = {};
+      (r.candidates||[]).forEach(c=>{ byReason[c.sample_reason]=(byReason[c.sample_reason]||0)+1; });
+      _oeDryBox(`<div class="mut" style="font-size:11.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
+        试运行采样（未写库）：候选 ${n} 条
+        ${Object.keys(byReason).map(k=>'<span class="st b" style="margin-left:6px;">'+escMd(k)+' '+byReason[k]+'</span>').join('')}
+        <div style="margin-top:4px;">${n>0?'确认后入队（同键去重）。':'窗口内无候选。'}</div></div>`);
+      if(btn) btn.style.display = n>0 ? '' : 'none';
+    } else {
+      const ar = r.apply_result || {};
+      toast(ar.skipped ? '试运行未入队' : '已入队');
+      _oeDryBox(''); const d=document.getElementById('ops-oe-dryrun'); if(d) d.style.display='none';
+      if(btn) btn.style.display='none';
+      loadOpsOnlineEval();
+    }
+  }catch(e){ toast('采样失败：' + (e.message||e)); }
+}
+async function runOnlineEvalAuto(apply){
+  try{
+    const r = await api('/api/monitor/online-eval/auto-eval', {method:'POST', body: JSON.stringify({apply: !!apply})});
+    if(r.error){ toast(r.error); return; }
+    const btn = document.getElementById('ops-oe-auto-btn');
+    if(!apply){
+      _oeDryBox(`<div class="mut" style="font-size:11.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
+        试运行自动评（未写库）：扫到 ${r.scanned||0} 条，可评分 ${(r.items||[]).length} 条
+        ${(r.items||[]).slice(0,5).map(x=>'<div>#'+x.queue_id+' → '+escMd(String(x.auto_score))+'</div>').join('')}
+        ${(r.failures||[]).length?'<div style="color:var(--orange,#B96A00);">失败 '+r.failures.length+' 条（记入 failures 不补零）</div>':''}</div>`);
+      if(btn) btn.style.display = (r.items||[]).length>0 ? '' : 'none';
+    } else {
+      toast('已写分');
+      const d=document.getElementById('ops-oe-dryrun'); if(d) d.style.display='none';
+      if(btn) btn.style.display='none';
+      loadOpsOnlineEval();
+    }
+  }catch(e){ toast('自动评失败：' + (e.message||e)); }
+}
+async function runOnlineEvalPromote(apply){
+  try{
+    const r = await api('/api/monitor/online-eval/promote', {method:'POST', body: JSON.stringify({apply: !!apply})});
+    if(r.error){ toast(r.error); return; }
+    const btn = document.getElementById('ops-oe-promote-btn');
+    if(!apply){
+      const n = (r.items||[]).length;
+      _oeDryBox(`<div class="mut" style="font-size:11.5px;border:1px dashed var(--line);border-radius:6px;padding:8px;">
+        试运行转正（未写库）：待转正 ${n} 条（仅 labeled_confirmed；auto 分永不自动转正）
+        <div style="margin-top:4px;">${n>0?'确认后三分流：intent→intent_samples · retrieval→qrels.jsonl · generation→eval_gen_labels（幂等）。':'暂无 confirmed 样本。'}</div></div>`);
+      if(btn) btn.style.display = n>0 ? '' : 'none';
+    } else {
+      toast(`已转正：intent ${r.intent_samples||0} · qrels ${r.qrels||0} · gen ${r.eval_gen_labels||0}`);
+      const d=document.getElementById('ops-oe-dryrun'); if(d) d.style.display='none';
+      if(btn) btn.style.display='none';
+      loadOpsOnlineEval();
+    }
+  }catch(e){ toast('转正失败：' + (e.message||e)); }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   配置变更台账 + 改后效果判定（2026-10-29）
+   ══════════════════════════════════════════════════════════════════
+   为什么加：P1-4 的晋升台账（config_history）**后端有、前端无入口**；
+   而"改完有没有真的变好"此前无人回答 —— 沙箱只证明"改前没改坏"，
+   覆盖不到长尾。判定口径见 core/config_effect.py（前后等长窗口、
+   方向敏感：direction=low 越低越好 / high 越高越好）。
+   四态：effective 有效 / ineffective 劣化(建议回滚) / mixed 各半需权衡 /
+        no_data 无数据 / inconclusive 样本不足。 */
+const CFG_EFFECT_LABEL = {
+  effective:'有效', ineffective:'劣化·建议回滚', mixed:'有得有失',
+  no_data:'无数据', inconclusive:'样本不足', '':'未判定'
+};
+const CFG_EFFECT_CLS = {
+  effective:'ok', ineffective:'r', mixed:'w', no_data:'g', inconclusive:'w', '':'g'
+};
+async function loadConfigHistory(){
+  const box = document.getElementById('ops-config-history');
+  const badge = document.getElementById('ops-cfg-badge');
+  if(!box) return;
+  try{
+    const d = await api('/api/config/history?limit=20');
+    const rows = (d && d.history) || [];
+    if(badge) badge.textContent = `${rows.length} 条`;
+    if(!rows.length){
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">暂无配置变更（变更须经 HIL 批准，见 core/config_promotion.py）</div>';
+      return;
+    }
+    box.innerHTML = `<table class="t"><tr><th>时间</th><th>配置项</th><th>旧值 → 新值</th><th>来源</th><th>效果</th></tr>` +
+      rows.map(h=>{
+        const v = h.effect_verdict || '';
+        const cls = CFG_EFFECT_CLS[v] || 'g';
+        const lbl = CFG_EFFECT_LABEL[v] || v;
+        const tip = h.effect_detail ? ` title="${escMd(h.effect_detail)}"` : '';
+        return `<tr>
+          <td style="font-size:11px;">${escMd(String(h.applied_at||'').slice(5,16))}</td>
+          <td><b>${escMd(h.section||'')}.${escMd(h.key||'')}</b></td>
+          <td style="font-size:11px;">${escMd(String(h.old_value||'').slice(0,18))} → <b>${escMd(String(h.new_value||'').slice(0,18))}</b></td>
+          <td style="font-size:10.5px;color:var(--mut);">${escMd(h.source||'')}${h.applied_by?'·'+escMd(h.applied_by):''}</td>
+          <td><span class="st ${cls}"${tip}>${escMd(lbl)}</span></td>
+        </tr>`;
+      }).join('') + '</table>';
+  }catch(e){
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:12px;">台账加载失败</div>';
+  }
+}
+async function runConfigEffectCheck(){
+  try{
+    const d = await api('/api/config/effect-check', {method:'POST', body: JSON.stringify({apply:true})});
+    if(!d || d.ok===false){ toast('判定失败：'+((d&&d.reason)||'未知')); return; }
+    const c = d.counts || {};
+    const summary = Object.keys(c).map(k=>`${CFG_EFFECT_LABEL[k]||k} ${c[k]}`).join(' / ') || '无可判定的变更';
+    toast(`判定完成：${summary}`);
+    loadConfigHistory();
+  }catch(e){
+    toast('判定失败，请重试');
+  }
 }

@@ -225,14 +225,31 @@ def _static_alias_shadow(repo_root, roots):
                 continue
             fns = [n for n in ast.walk(tree)
                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
-            # 危险名集合：模块级 import ∪ 文件内任一处 import 绑定名。
-            # 不区分二者是刻意的 —— 两种写法下「再绑定 + 当模块用」都是 bug：
-            #   · 模块级别名被函数内绑定 → 该名在函数内变局部 → 之前的 `_t.time()` 直接 UnboundLocalError；
-            #   · 函数自身 import 的别名被同函数内绑定 → 后段 `_t.time()` 抛 AttributeError（本次实测形态）。
-            danger = _imported_names(tree)
-            for fn in fns:
-                danger |= _imported_names(fn)
+            # 危险名集合：**分两层**，逐 scope 取用。
+            #
+            # ★ 2026-10-30 修（真实误报，挡住了其后 190 个门禁）：
+            #   旧写法把所有函数的 import 名**并成一个** danger 集合给所有 scope 用：
+            #       danger = _imported_names(tree)
+            #       for fn in fns: danger |= _imported_names(fn)      # ← 全文件合并
+            #       for scope in [tree] + fns: _shadow_sites(scope, danger)
+            #   于是 `agent/pipeline_parts/tools.py` 里 `_hil_gate` 的**函数局部**
+            #   `import hashlib as _h` 污染了 `_exec_tool_call_impl` 的判定 ——
+            #   后者 `for _i, _h in enumerate(_top, 1)` 里的 `_h` 只是**本函数的局部循环变量**，
+            #   与 `_hil_gate` 的 `_h` 毫无关系（不同函数 = 不同命名空间，永不互相影响）。
+            #   实测：CI 的 G0 从 2026-10-07 起一直因此判红，其后 190 个门禁**全部 skipped**
+            #   ⇒ CI 实际上只验了 pytest，等于失效。
+            #
+            #   判据本来要守的两种形态**都不受此修影响**（真正的危险名是"模块级"的）：
+            #     · 模块级别名被函数内绑定 → 该名在函数内变局部 → 前面的 `_t.time()` UnboundLocalError；
+            #     · 函数自身 import 的别名被同函数内绑定 → 后段 `_t.time()` AttributeError。
+            #   两者用的都是 **module_level ∪ 当前函数自身**，恰好就是下面的写法。
+            #   换句话说：旧注释说"不区分二者是刻意的"，但**合并的范围**超出了这两种形态
+            #   （它把*其他*函数的局部 import 也算进来了）—— 是范围写宽了，不是立意错了。
+            _module_danger = _imported_names(tree)
             for scope, label in [(tree, "<模块>")] + [(f, f.name) for f in fns]:
+                # 模块作用域只需模块级；函数作用域 = 模块级 ∪ **该函数自身**的 import
+                danger = (_module_danger if scope is tree
+                          else (_module_danger | _imported_names(scope)))
                 for ln, nm in _shadow_sites(scope, danger):
                     hits.append((rel, ln, label, nm))
     return hits, scanned

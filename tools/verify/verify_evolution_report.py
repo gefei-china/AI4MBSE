@@ -15,7 +15,9 @@ curriculum 域 / sandbox+HIL 域 / 拓扑域）。跑完暴露两个真问题，
   ① **信息架构是模块视角不是用户视角** —— 用户看完仍要问「哪条要我点」
      「比上周好还是坏」「这数字是真的吗」。产品版重排为三段：
      actions（要你决策的）/ digest（本周体检+环比）/ confidence（数据可信度）。
-     A6a断言三段齐备且**不含旧的四段域式标题**。
+     A6a断言行动源齐备且**不含旧的四段域式标题**。（P0-a 2026-10-24：
+     行动源增 capability「能力长尾」、分区增 capability「能力度量」——
+     判据已同步为五源/四段。）
 
   ② **不能点的事被装成能点** —— HIL 待确认 8 条、拓扑缺陷 2 条在原型里跟
      可裁决的任务提案长得一样，用户理所当然以为能点。全库核过：
@@ -148,9 +150,12 @@ def _tbl(conn, name):
         return False
 
 
-#: 门禁要造数/清数的表（只需清这五张，不必全库归零）
+#: 门禁要造数/清数的表（只需清这六张，不必全库归零）
+#: ★llm_usage_stats 必须在列：C7b 造了一条失败调用来点亮 BadCase 行动源，
+#:   不清就会漏进后续 _fresh_db 场景（实测 C7b7 反向测试因此假红——
+#:   "无候选"场景里残留着上一条场景的候选）。
 _GATE_TABLES = ["curriculum_items", "hil_confirmations", "sandbox_runs",
-                "agent_variants", "asset_change_logs"]
+                "agent_variants", "asset_change_logs", "llm_usage_stats"]
 
 
 def _isolated_db(tag):
@@ -265,11 +270,19 @@ def _A():
           and er._delta(5, 2) == 3 and er._delta(2, 5) == -3)
 
     # A6 信息架构：三段齐备，且不含旧的四段域式标题
+    # P0-a（2026-10-24）：新增 capability 行动源与体检分区（能力长尾/零调度，
+    # 只提议不自动执行）；S5 再增 badcase 行动源（BadCase 候选未入库，
+    # 一键 apply 走真实收集端点）⇒ 判据从「四源/三段」经「五源/四段」
+    # 同步为「六源/四段」——需求变更时判据必须跟着改，否则旧判据持续假红。
+    # P0-b（2026-10-25）：再增 online_eval 行动源（待标注积压/回流停滞，
+    # 一键 promote 走真实端点）⇒「六源」同步为「七源」（本次留注释）。
     keys = [k for k, _l, _f in er.ACTION_SOURCES]
-    check("A6a 行动源注册表四源",
-          keys == ["curriculum", "hil", "topology", "safety"], str(keys))
+    check("A6a 行动源注册表七源（P0-a 增 capability/badcase，P0-b 增 online_eval）",
+          keys == ["curriculum", "hil", "topology", "safety", "capability",
+                   "badcase", "online_eval"], str(keys))
     scopes = [k for k, _t, _s in er.DIGEST_SECTIONS]
-    check("A6b 体检分区三段", scopes == ["evolve", "guard", "structure"], str(scopes))
+    check("A6b 体检分区四段（P0-a 增 capability）",
+          scopes == ["evolve", "guard", "structure", "capability"], str(scopes))
     rep_keys = ["actions", "digest", "confidence"]
     check("A6c 三段键名（用户动作视角）", all(k in er.__doc__ or True for k in rep_keys))
     # 旧域式标题「省了什么 / 抓到了什么 / 守住了什么 / 还欠着什么」不得残留
@@ -519,6 +532,44 @@ def _C():
     after = _snapshot(conn2, tabs)
     check("C7 连跑两次周报全表行数零变化", before == after,
           "%s -> %s" % (before, after))
+
+    # C7b ★P0-a S5 BadCase 行动源：候选未入库 ⇒ 真按钮（端点真实存在）
+    # 造一条真实失败调用（llm_usage_stats.call_failed=1，conversation_id>0
+    # 过探测过滤），dry-run 采集必得 1 候选 ⇒ actions 段应出可一键入库条目。
+    # 反向：无候选不出条目——不制造假待办（与 C2 真闭环同构）。
+    bc_db = _fresh_db()
+    _seed(bc_db)
+    bc_db.execute(
+        "INSERT INTO llm_usage_stats(provider_name, model_name, call_failed, "
+        "failure_kind, failure_msg, conversation_id, created_at) "
+        "VALUES('deepseek','deepseek-chat',1,'timeout','读取超时',7,?)",
+        (_ago(1),))
+    bc_db.commit()
+    rep_bc = er.build_report(bc_db)
+    bcs = [i for i in rep_bc["actions"]["items"] if i["source"] == "badcase"]
+    check("C7b BadCase 候选未入库进 actions 段", len(bcs) == 1,
+          "got %d" % len(bcs))
+    if bcs:
+        it = bcs[0]
+        check("C7b2 BadCase 条目带可执行动作", bool(it.get("action")))
+        check("C7b3 动作指向真收集端点（apply 人工关口）",
+              it["action"]["path"] == "/api/monitor/badcases/collect"
+              and it["action"]["method"] == "POST"
+              and it["action"]["payload"] == {"apply": True},
+              str(it.get("action")))
+        check("C7b4 计数口径=plan 预判（new=1/open=0）",
+              (it["meta"]["plan"] or {}).get("new") == 1
+              and it["meta"]["open_count"] == 0, str(it.get("meta")))
+        check("C7b5 标题含候选数与四键分解",
+              "1 条 BadCase 候选未入库（新 1 / 复现 0 / 重开 0）" in it["title"],
+              it["title"])
+    # dry-run 不写库：跑完周报 bad_cases 仍 0 行（只读铁律落在真数据上）
+    bc_after = bc_db.execute("SELECT COUNT(*) FROM bad_cases").fetchone()[0]
+    check("C7b6 周报只读：bad_cases 零写入", bc_after == 0, "got %d" % bc_after)
+    rep_none = er.build_report(_fresh_db())
+    check("C7b7 无候选不出 BadCase 条目（不制造假待办）",
+          not any(i["source"] == "badcase"
+                  for i in rep_none["actions"]["items"]))
 
     # C8 端点行为级
     # ★直接调路由函数，不起 TestClient：with TestClient(app) 会跑 lifespan，

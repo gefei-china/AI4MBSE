@@ -268,6 +268,27 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
         except BaseException as e:      # noqa: BLE001 —— 含 GeneratorExit，必须回传
             box["exc"] = e
         finally:
+            # ★★ 2026-10-27（用户反馈「中途执行失败后之前输出的内容没有任何展示」）：
+            #   **必须在 worker 线程内关闭事件源**，这是断点保护的最后一环。
+            #
+            #   旧实现只在下面 async 的 `finally` 里 `iterator.close()`，而那一刻
+            #   worker 正阻塞在 `iterator.__next__()`（跑 LLM）里 ⇒ 主线程 close 抛
+            #   `ValueError: generator already executing` ⇒ 被 `except: pass` 吞掉
+            #   ⇒ **事件源从未被真正关闭**：
+            #     · 它停在某个 `yield` 处永远悬着（连 GC 都不会跑，worker 线程还引用着）；
+            #     · `execute_stream` 的 `except GeneratorExit`（断点固化）**永不执行**；
+            #     · 真库实证（conv 9660）：LLM 已生成 872 tokens、库里 0 条 assistant；
+            #       用户报的"输出内容没有任何展示"就是这个。
+            #
+            #   在这里 close：此刻本线程刚跳出 for，事件源**处于挂起态**（不在执行中），
+            #   `close()` 会正常把 `GeneratorExit` 注入到它的 yield 处 ⇒
+            #   其 except/finally（固化正文、闭 span、回填 artifact）得以运行。
+            try:
+                close = getattr(iterator, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                pass
             try:
                 loop.call_soon_threadsafe(q.put_nowait, (True, _DONE))
             except RuntimeError:
@@ -293,7 +314,11 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
             raise exc
     finally:
         stop.set()             # 先叫停 worker，再关事件源（顺序反了会漏帧）
-        # 客户端断开 → 外层关闭本生成器 → 连带把事件源关掉，避免 LLM 继续烧钱
+        # 客户端断开 → 外层关闭本生成器 → 连带把事件源关掉，避免 LLM 继续烧钱。
+        # ⚠️ 2026-10-27：这里通常是**尽力而为**（worker 正在 `__next__` 里跑 LLM 时，
+        #   本线程 close 会抛 `generator already executing`，被下面吞掉）。
+        #   **真正生效的 close 在 `_worker` 的 finally 里**（同一线程、挂起态，必成）。
+        #   两处都留：worker 已结束的场景由这里直接关，worker 仍在跑的场景由它自己关。
         try:
             close = getattr(iterator, "close", None)
             if callable(close):

@@ -327,6 +327,11 @@ class AgentRepo(BaseRepo):
                         "desc": f"MCP 工具（{row['name']}）", "endpoint": row["endpoint"],
                         "transport": row.get("transport", "sse"),
                         "tools": json.loads(row.get("tools") or "[]"),
+                        # ★ P0-6（2026-10-26）：透出工具元数据（description + inputSchema）。
+                        #   此前只透出 name 数组 ⇒ 注入时 71 个工具的 description 全是同一句模板
+                        #   （实测去重后仅 1 种）⇒ JIT 零区分度 + 模型不知道工具能做什么。
+                        #   存量 server 该字段为空 ⇒ 调用方自动退回旧行为。
+                        "tool_meta": row.get("tool_meta") or "",
                     })
             elif b["tool_type"] == "tool":
                 out.append({

@@ -43,6 +43,7 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_cancel_and_reap.py
 """
 from __future__ import annotations
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 
 import ast
 import os
@@ -75,7 +76,7 @@ def check(name, ok, detail=""):
 
 def _fresh_db(tag):
     """每次用例一份**干净副本**，互不污染（用例要断言精确行数）。"""
-    d = tempfile.mkdtemp(prefix="cancel_%s_" % tag)
+    d = mkdtemp(prefix="cancel_%s_" % tag)
     p = os.path.join(d, "t.db")
     s = sqlite3.connect("file:%s?mode=ro" % PROD_DB, uri=True)
     t = sqlite3.connect(p)

@@ -283,9 +283,25 @@ body.preview-dragging *{cursor:col-resize !important;}
 .side2 .foot{border-top:1px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;gap:6px;}
 .side2 .foot a{color:var(--mut);font-size:12.5px;text-decoration:none;display:flex;gap:8px;align-items:center;cursor:pointer;}
 .msg{display:flex;gap:10px;max-width:94%;min-width:0;
-  /* P0 性能修复：屏外消息跳过布局/绘制（长会话 1500+ 条曾致整页 reflow 每帧上百 ms，展开预览面板时鼠标冻结）。
-     contain-intrinsic-size 提供占位高度估算，避免滚动条大幅跳动 */
-  content-visibility:auto;contain-intrinsic-size:auto 132px;}
+  /* ★ 2026-10-28 移除 `content-visibility:auto`（用户报「AI 输出完成后滚动页面内容错位，
+     需要刷新页面才正常」）。真实浏览器实测（conv 9629，65 条消息 / 7.3 万字，viewport 1600x900）：
+
+       · 有 content-visibility：`scrollHeight` 从真实 **41777px** 被低估成 **4049px（差 10.3 倍）**；
+         滚动过程中高度跳变 **7 次**（单次最大 1146px）；
+         `scrollTop` 被浏览器**滚动锚定**推走 **3 次**（最严重：设 2720 实际变 1574，偏移 −1146px）
+         ⇒ 用户感知就是「内容错位」。
+       · 禁用后：`scrollHeight` 恒为 41777px，**零跳变、零错位**。
+       · 性能代价实测为零：65 条 / 5744 DOM 节点时同步布局 median **0ms**。
+
+     ⇒ 聊天场景用户**本来就要从底部向上翻历史**，而屏外消息按 132px 估算（真实均值 ≈640px）
+       与「高度必须准确」这个硬需求直接冲突。性能改由**分页渲染（80 条/批 + rAF 分片）**
+       承担（见 `03-chat.js` 的 `MSG_PAGE_SIZE` / `MSG_RENDER_CHUNK`）。
+     超长会话兜底：消息数 > 300 时由 JS 给 `#chat-area` 加 `.chat-heavy`（规则见下）。 */
+}
+/* 超长会话（消息数 > 300）兜底：只在极端规模下恢复"跳过屏外绘制"，
+   并把估算高度从 132px 提到 240px（132px 远低于真实均值，是错位幅度大的直接原因之一）。
+   该类的挂载/摘除见 03-chat.js `syncChatHeavy()`。 */
+#chat-area.chat-heavy .msg{content-visibility:auto;contain-intrinsic-size:auto 240px;}
 .msg-inner{display:flex;flex-direction:column;gap:8px;min-width:0;flex:1;align-items:stretch;}
 .msg .who{width:30px;height:30px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;}
 .msg.u .who{background:var(--blue);color:#fff;}
@@ -321,7 +337,40 @@ body.nr-full-lock{overflow:hidden;}
 /* 2026-09-04 复制按钮：默认仅 icon，hover icon 时展开「复制」文字 */
 .msg-copy-btn .cp-txt{display:none;}
 .msg-copy-btn:hover .cp-txt{display:inline;}
+/* ── 消息质量信号（👍/👎）2026-10-29 新增 ──
+   为什么加：此前前端**没有任何可点的反馈按钮**（消息级采纳/拒绝按钮已于 V3.0 移除），
+   而后端 badcase / online_eval 只认 `modify/wrong/corrected` ⇒
+   **显式负反馈常年 0 条、采样队列 0 行** ⇒ 进化系统没有方向信号（"越用越聪明"断链）。
+   交互范式沿用 .msg-copy-btn：默认低调、hover 显形，不增加常态视觉密度。 */
+.msg-qc{display:flex;gap:4px;align-items:center;margin-top:6px;opacity:.35;transition:opacity .15s;}
+.msg:hover .msg-qc,.msg-qc:focus-within{opacity:1;}
+.msg-qc-btn{font-size:10.5px;line-height:1.7;color:var(--mut);background:transparent;border:1px solid var(--line);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit;transition:all .15s;}
+.msg-qc-btn:hover{color:var(--blue-d);border-color:var(--blue-bd);background:var(--blue-l);}
+.msg-qc-btn.on{color:var(--grn);border-color:var(--grn);background:var(--grn-l);}
+.msg-qc-btn.on.is-down{color:var(--red);border-color:var(--red);background:var(--red-l);}
+.msg-qc-btn[disabled]{opacity:.5;cursor:default;}
 /* ── 会话内执行过程（V3 增强：Trae 式 + 视觉升级）── */
+/* ★ 2026-10-27（用户反馈：「AI 在执行环节，最下面总是输出大量的文本内容，且页面会被拉得很长，
+   要求此区域限制高度，可以滑动查看完整内容」）：
+   执行过程区**整区限高 + 内滚**。
+   此前每个 .proc-body 各自 max-height:340px（单块不失控），但多个环节
+   （意图 / 技能 / 每个工具 / 子任务 / 每轮思考）叠起来实测能到 1500px+，
+   整条消息把会话流顶得很长。限高后**内容一条不丢**（可滑动查看完整），
+   只是盒子不再无限长高。
+   ⚠️ 只作用于「执行过程」容器；**正文 .body 不设任何高度限制** ——
+      按 B5-8（米爸原话「最终输出结果不要收起来，也不允许收起来」），正文必须完整展开。
+   反查：本机 1600x900 视口下 44vh ≈ 396px，正好容纳一个满高思考块 + 2~3 个阶段行。 */
+.proc{max-height:44vh;overflow-y:auto;overscroll-behavior:auto;padding-right:2px;}
+.proc::-webkit-scrollbar{width:6px;}
+.proc::-webkit-scrollbar-thumb{background:var(--line,#dde3ec);border-radius:3px;}
+/* 意图理解明细（procAddStage 的 body；2026-10-27）：回答"你到底把我理解成什么" */
+.ib-brief{display:flex;flex-direction:column;gap:3px;white-space:normal;font-size:11px;line-height:1.6;}
+.ib-brief .ib-row{display:flex;gap:6px;align-items:flex-start;min-width:0;}
+.ib-brief .ib-k{flex:none;color:var(--mut);font-weight:600;min-width:64px;}
+.ib-brief .ib-v{flex:1;min-width:0;color:var(--fg);word-break:break-word;}
+.ib-brief .ib-row.warn .ib-v{color:#b26a00;}
+.ib-brief .ib-row.muted{opacity:.75;}
+.ib-brief .ib-tip{margin-top:3px;color:var(--mut);font-size:10.5px;border-top:1px dashed var(--line,#e5e8ee);padding-top:4px;}
 .proc{display:flex;flex-direction:column;gap:6px;width:100%;max-width:1040px;font-size:11.5px;}
 /* 加载更早消息入口（消息区顶部；长会话分页渲染配套） */
 .load-earlier{margin:6px auto 14px;padding:6px 18px;border:1px dashed var(--blue-bd);border-radius:16px;
@@ -395,7 +444,21 @@ body.nr-full-lock{overflow:hidden;}
    米爸明确要求「最终输出结果不要收起来，也不允许收起来」⇒ 正文一律全量展示。
    代码块折叠（.code-fold，2026-09-16 既有行为）与引用抽屉保持原样不动。 */
 .hist-proc .proc-timeline{display:none;}
-.hist-proc.open .proc-timeline{display:flex;flex-direction:column;gap:6px;margin-top:6px;}
+/* ★ 2026-10-27：**历史回看**的执行过程区也必须限高。
+   实测 conv 9686 的历史消息 exec.reasoning 8000 字，展开后单条消息高达 2966px。
+   历史容器是 .hist-proc（不是 .proc）—— 只给 .proc 加限高，只能治「正在跑的那条」，
+   回看旧消息照旧被拉长（前端两条渲染路径必须成对改，本仓已多次踩到）。 */
+.hist-proc.open .proc-timeline{display:flex;flex-direction:column;gap:6px;margin-top:6px;
+  max-height:44vh;overflow-y:auto;overscroll-behavior:auto;padding-right:2px;}
+/* ★★ 2026-10-28（用户反馈「截断卡片重叠在一起、相互挤压」「不允许滑动页面或展开查看」）
+   实测 conv 9726（22 个工具卡片 / 1600x900）：`.proc-block` 默认 flex-shrink:1 被压缩，
+   真实需要 34px 却只有 12px；压缩后总高 264px < 容器 396px ⇒ 连滚动条都不出现
+   （既看不到内容也滚不动）。用户在内区滚动时 #chat-area 的 scrollTop 不动
+   （overscroll-behavior:contain）⇒ 输出过程中无法翻页。
+   决定性实验：只加 `flex:0 0 auto` ⇒ 恢复 34px / 总高 748px / 出现滚动条 / 内滚 0→300 生效。
+   ⚠️ 与 chat.css 同源维护（两处必须成对改，只改一处会在另一条渲染路径复发）。 */
+.proc > .proc-block,
+.proc-timeline > .proc-block{flex:0 0 auto;}
 /* 步骤头部副标题（折叠后仍可见的阶段详情，Trae 式时间线） */
 .proc-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .proc-sub{color:var(--mut);font-weight:400;font-size:10.5px;margin-left:4px;}
@@ -415,6 +478,17 @@ body.nr-full-lock{overflow:hidden;}
 .dag-viz{width:100%;}
 .msg.u{align-self:flex-end;flex-direction:row-reverse;}
 .msg.u .body{background:var(--blue-l);border-color:var(--blue-bd);}
+/* ── 用户输入折叠（2026-10-28 用户反馈：输入内容多导致页面拉得很长）─────────────
+   只作用于**用户输入**（.msg.u），不影响 AI 输出正文 —— 后者不允许收起是既有明确要求。
+   收起时按行数限高（8 行 × 1.6 行高 ≈ 12.8em），底部渐隐提示"还有内容"。 */
+.user-fold{position:relative;overflow:hidden;}
+.user-fold.collapsed{max-height:12.8em;}
+.user-fold.collapsed::after{content:'';position:absolute;left:0;right:0;bottom:0;height:2.2em;
+  background:linear-gradient(rgba(233,240,252,0),var(--blue-l));pointer-events:none;}
+.uf-bar{margin-top:6px;display:flex;justify-content:flex-start;}
+.uf-btn{border:1px solid var(--blue-bd);background:#fff;color:var(--blue-d);border-radius:6px;
+  padding:2px 10px;font-size:11.5px;cursor:pointer;line-height:1.7;}
+.uf-btn:hover{background:var(--blue-l);}
 .result-card{border:1px solid var(--blue-bd);border-radius:10px;background:#fff;overflow:hidden;margin-top:10px;}
 .result-card .rc-header{background:var(--blue-l);border-bottom:1px solid var(--blue-bd);padding:10px 14px;display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;color:var(--blue-d);}
 .result-card .rc-body{padding:12px 14px;font-size:12.5px;}

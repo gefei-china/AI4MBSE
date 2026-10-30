@@ -260,25 +260,22 @@ def main():
     check("C2 ★ RefineGate 附近应留「plan_eval 计数低不等于没跑」的说明",
           "plan_eval" in r_src or "plan_eval" in s_src,
           "无留痕 ⇒ 下一个人会重复今天这个误判")
-    if not check("C3", True, ""):
-        pass
-    # 在 refine.py 里补一条说明（幂等）
-    if "plan_eval 计数" not in r_src:
-        _anchor = "    def _enabled() -> bool:"
-        if _anchor in r_src:
-            _note = (
-                '    # ⚠️ 观测口径提醒（2026-10-13 复核）：`llm_usage_stats` 里 `plan_eval`\n'
-                '    #   计数很低（真库 1 次）**不代表评审没跑** —— ① `_intent="plan_eval"`\n'
-                '    #   标注是 2026-10-02（commit 42cf293）才上线的，此前 11 条真评审\n'
-                '    #   （score 25~72、rounds 1~3、provider=deepseek-v4-flash）都没进这张表；\n'
-                '    #   ② 标注上线之后又恰好没有多子任务编排流量。\n'
-                '    #   ⇒ **判据要看 messages.card_data 的 `reflection` 字段，不是这张表的计数**。\n'
-                '    @staticmethod\n'
-            )
-            r_src = r_src.replace(_anchor, _note + _anchor, 1)
-            io.open(os.path.join(ROOT, "workflows/refine.py"), "w",
-                    encoding="utf-8", newline="").write(r_src)
-            print("  [INFO] 已往 refine.py 补观测口径提醒")
+    # ★ 2026-10-26：**只判不改**（门禁不得改产品源文件）
+    #   原实现「在 refine.py 里补一条说明（幂等）」—— 幂等判断写的是
+    #   `if "plan_eval 计数" not in r_src:`，而注入文本里根本没有这个**连续串**
+    #   （注入的是 `plan_eval` + 换行 + `#   计数很低`）⇒ 判断永远成立
+    #   ⇒ **每跑一次门禁就往产品文件插一份**。
+    #   实测：HEAD 里已积到 6 份（历史上人工清过两次：2db6064「判据自身有洞」、
+    #   13b049c「清掉第二份」—— 但两次都只清了文件、没修根因）；
+    #   2026-10-26 的全量回归又把它插到 7 份，还多出 7 个野生 `@staticmethod`。
+    #   ⇒ 改成：缺注释就**判红并给出补法**（人工补一次即可），门禁自己绝不写产品文件。
+    #      （"门禁偷偷改产品文件"与"变异体"同族：门禁改了源码，判据却看不出来。）
+    _NOTE_MARK = "观测口径提醒（2026-10-13 复核）"
+    _note_count = r_src.count(_NOTE_MARK)
+    check("C3 refine.py 的观测口径提醒**恰好一份**（重复=门禁自注入的残留）",
+          _note_count == 1,
+          "出现 %d 份（>1 ⇒ 有门禁在往产品文件反复注入；=0 ⇒ 需人工补一条，"
+          "模板见本脚本 _NOTE_TEMPLATE）" % _note_count)
 
     # ══════════════ D. 变异自证 ══════════════
     print("\n=== D. 变异自证===")

@@ -26,7 +26,8 @@ function getRoleProfile(me){
     // 2026-09-17 D3：与主导航口径同步——「资料库 / 图谱工作区」合并为「🕸 知识中心」（页内双 Tab 切换）；
     // 「AI 设计工坊」统一称「能力中心」；2026-09-11 数据整理入口已隐藏（深链 go('kb','kb-b') 仍可用）
     knowledge: {label:'知识工程师', entries:[['🕸 知识中心','kb','kb-a'],['🧬 本体模型','kb','kb-c'],['💬 AI 建模','ai']]},
-    admin:     {label:'系统管理员', entries:[['👥 用户与权限','users'],['🛡 审计日志','audit'],['📈 运行监控','ops'],['✅ 审批管理','approval']]},
+    // 2026-10-23：审批管理入口下线（纯前端原型、假审批流水，后端另立需求重做）
+    admin:     {label:'系统管理员', entries:[['👥 用户与权限','users'],['🛡 审计日志','audit'],['📈 运行监控','ops']]},
     general:   {label:'通用',     entries:[['💬 新建建模对话','ai'],['🕸 知识中心','kb','kb-a'],['🏭 能力中心','studio'],['📄 报告','reports']]},
   };
   return profiles[key] || profiles.general;
@@ -91,8 +92,10 @@ function _nowISO(){
 }
 function _convTimeBucket(iso){
   if(!iso) return 'earlier';
-  const d = new Date(String(iso).replace(' ','T'));
-  if(isNaN(d.getTime())) return 'earlier';
+  // ★ 2026-10-28：改用 parseServerTime（统一按 UTC 解析服务端时间戳）。
+  //   原 `new Date(String(iso).replace(' ','T'))` 会把 UTC 当本地 ⇒ 分桶/时间早 8 小时。
+  const d = parseServerTime(iso);
+  if(!d) return 'earlier';
   const now = new Date();
   const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const y0 = new Date(t0); y0.setDate(y0.getDate()-1);
@@ -455,6 +458,10 @@ let _stickRaf = 0;                     // rAF 句柄（合批用）
 // UX规范§8.4（2026-10-02）：脱离跟读期间新内容到达 → 未读增量计数 + 「回到最新」浮钮。
 // 内容每到达一批 +1（封顶 999）；回到底部 / 点击浮钮 / 发送消息即清零。
 let _stickUnread = 0;
+// ★ 2026-10-29：最近一次**程序化钉底**写入的 scrollTop（-1 = 尚未写过）。
+//   用途见 `_bindStickDetach` 的 scroll 监听：区分"自己滚的"与"用户滚的"，
+//   避免内容长高导致 scroll 事件迟到时被误判成"用户上滑"而中途掉线。
+let _lastPinTop = -1;
 
 // 浮钮：挂在 #chat-col（聊天列）右下、输入区上方。只增不重建，按 unread 显隐。
 function _stickBtnShow(){
@@ -483,8 +490,69 @@ function _stickBtnShow(){
 function _chatAreaEl(){
   return document.getElementById('chat-area');
 }
+// ★ 2026-10-22（米爸反馈「打开会话/输出完成后总定位在最上面，要拖很久」）——
+//   **锚定式贴底**：以「最后一条 .msg 的真实底边」为基准，而不是 `scrollHeight`。
+//   根因（真实浏览器实测，勿凭印象改）：
+//     `.msg` 带 `content-visibility:auto; contain-intrinsic-size:auto 132px`（P0 性能优化，
+//     防长会话上万 DOM 节点同步布局）。副作用是**屏外消息只按 132px 估算**，于是
+//     `scrollHeight` 严重失真 —— 实测同一会话：估算 3680px / 真实 28170px（**差 6.6 倍**）。
+//     ⇒ `scrollTop = scrollHeight` 这种「钉底」钉到的是**估算出来的假底部**：
+//       实测钉完之后最后一条消息仍在视口下方 3190px（视口仅 659px）= 用户完全看不见最新内容，
+//       体感就是「停在了最上面 / 中间，得手动拖很久」。
+//     ⇒ 锚定法实测 1 轮迭代即收敛（最后一条消息底边精确贴齐视口底）。
+//   ⚠️ 保留「先粗跳到 scrollHeight」这一步：它会把底部内容**逼进视口**触发真实布局，
+//      再由锚定做微校正；纯锚定在极端情况下（最后一条尚未实现、rect 高 0）会无从下手。
+function _latestChatMsg(area){
+  try{
+    const msgs = area && area.querySelectorAll ? area.querySelectorAll('.msg') : null;
+    return (msgs && msgs.length) ? msgs[msgs.length - 1] : null;
+  }catch(e){ return null; }
+}
+// 返回 true=本次做了校正（还需再迭代一轮）；false=已贴底或无法锚定
+function _anchorChatToLatest(area){
+  const last = _latestChatMsg(area);
+  if(!last || !last.getBoundingClientRect || !area.getBoundingClientRect) return false;
+  const r = last.getBoundingClientRect();
+  if(!(r.height > 0)) return false;              // 未实现（屏外被 content-visibility 跳过）→ 交给粗跳
+  const box = area.getBoundingClientRect();
+  const d = r.bottom - box.bottom;               // >0 底边在视口下方（看不见最新）／<0 已过底
+  if(Math.abs(d) <= 0.5) return false;
+  area.scrollTop += d;
+  return true;
+}
 function _isNearBottom(area){
   if(!area) return true;
+  // ★ 2026-10-29（用户反馈：AI 输出过程中上滑总被拽回新输出位置）：
+  //   根因 = **主判据用了被 content-visibility 严重失真的 scrollHeight**。
+  //   `.msg` 带 `content-visibility:auto; contain-intrinsic-size:auto 132px`
+  //   ⇒ 屏外消息只按 132px 估算，实测同一会话 估算 3680px / 真实 28170px（**差 6.6 倍**）
+  //   ⇒ `scrollHeight - scrollTop - clientHeight` 在估算值偏小时**严重低估距底距离**
+  //   ⇒ 用户明明上滑了，却被判成"仍在底部" ⇒ `_stickFollow` 保持 true ⇒ 每帧继续钉底
+  //   ⇒ 表现为「拖动页面上滑总被自动返回新输出位置」。
+  //   修法：**真实几何优先**（与 `_anchorChatToLatest` 同源，用最后一条消息的真实底边），
+  //   估算值只在真实几何不可得时兜底。顺序反了就会重犯"假绿"。
+  try{
+    const last = _latestChatMsg(area);
+    if(last && last.getBoundingClientRect && area.getBoundingClientRect){
+      const r = last.getBoundingClientRect();
+      const box = area.getBoundingClientRect();
+      // 真实几何可用（消息已渲染，rect 高度 > 0）⇒ 以它为准
+      if(r.height > 0){
+        // ⚠️ 符号是本判据的全部要害（2026-10-29 真实浏览器实测抓出）：
+        //   d = 最后一条消息底边 − 视口底边
+        //     · 跟读中：d ≈ 0（流式期间新内容尚未入帧时 d 略正，几十 px 内）
+        //     · **用户上滑：d 明显为正**（视口上移，内容底边被推到视口下方）
+        //     · 越过底部（回弹/缩放）：d 为负
+        //   ⇒ 「在底部」= **d 至多只有 EPS 的余量**，即 `d <= _STICK_EPS`。
+        //   反例（原写法 `d >= -_STICK_EPS` 的错处，实测）：长答复内上滑 600px 时 d=+600，
+        //   `600 >= -48` 成立 ⇒ 被判成"仍在底部" ⇒ 继续钉底 ⇒ 就是用户报的
+        //   「拖动页面上滑总是被自动返回新输出位置」。
+        const d = r.bottom - box.bottom;
+        return d <= _STICK_EPS;
+      }
+    }
+  }catch(e){}
+  // 真实几何不可得（最后一条尚未实现 / 被 content-visibility 跳过）⇒ 回落估算值
   return (area.scrollHeight - area.scrollTop - area.clientHeight) <= _STICK_EPS;
 }
 // 用户交互 → 脱离跟读。一次绑定，常驻监听（只读判断，成本可忽略）。
@@ -497,6 +565,12 @@ function _bindStickDetach(){
   area.addEventListener('touchmove', detach, {passive:true});
   // 拖动滚动条 / 键盘翻页 / 程序性滚动后同步跟读态；回到底部 → 未读清零并隐藏浮钮
   area.addEventListener('scroll', ()=>{
+    // ★ 2026-10-29：**区分「自己滚的」与「用户滚的」**。
+    //   `stickBottom()` 的程序化钉底也会触发 scroll 事件，而事件是**异步**派发的 ——
+    //   派发时内容可能又长高了一截（流式 token 连续到达）⇒ 几何判据变成"离底很远"
+    //   ⇒ 被误判成"用户上滑" ⇒ 跟读中途掉线（这是原注释担心的那个误判）。
+    //   判据：scrollTop 与本进程最近一次写入的值一致（±2px）⇒ 是程序化钉底，不是用户意图。
+    if(_stickFollow && Math.abs(area.scrollTop - _lastPinTop) <= 2) return;
     _stickFollow = _isNearBottom(area);
     if(_stickFollow){ _stickUnread = 0; _stickBtnShow(); }
   }, {passive:true});
@@ -518,6 +592,8 @@ function stickBottom(force){
     const a = _chatAreaEl();
     if(!a || !_stickFollow) return;
     a.scrollTop = a.scrollHeight;
+    _anchorChatToLatest(a);      // 2026-10-22：估算高度失真 ⇒ 粗跳之后再按真实元素校正一次
+    _lastPinTop = a.scrollTop;   // ★ 2026-10-29：记下自己的写入值，供 scroll 监听区分来源
   });
 }
 // 强制滚动（用户显式动作：发送消息、切换会话、点"回到最新"）——绕过跟读态判断
@@ -529,18 +605,29 @@ function scrollChatToBottom(){
   _stickUnread = 0;      // UX规范§8.4：显式回底 = 已读到最新，清零并隐藏浮钮
   _stickBtnShow();
   area.scrollTop = area.scrollHeight;
+  _anchorChatToLatest(area);
+  _lastPinTop = area.scrollTop;      // ★ 与 stickBottom 同口径：记录程序化写入值
 }
 // 2026-09-16：打开会话后持续钉底——懒加载内容（mermaid 库首载/图片/缩略图挂载）会在
 // 数秒内持续长高，固定时间补偿追不上。策略：150ms 步进钉底至超时；用户滚轮/触摸上滑立即让位。
+// 2026-10-22：每步在粗跳之后补一次锚定校正（同 stickBottom 的理由：估算高度失真）。
 function pinChatBottom(area, ms){
   let userInterrupted = false;
   const stop = ()=>{ userInterrupted = true; };
   area.addEventListener('wheel', stop, {once:true, passive:true});
   area.addEventListener('touchmove', stop, {once:true, passive:true});
+  // ★ 2026-10-29（用户反馈：拖动页面上滑总被拽回）：**拖动滚动条**既不触发 wheel
+  //   也不触发 touchmove ⇒ 中断条件永远不成立 ⇒ 每 150ms 的强制钉底把用户拽回底部。
+  //   pointerdown 在滚动条上按下时同样落到容器上（滚动条属于元素的一部分）⇒ 可捕获。
+  area.addEventListener('pointerdown', stop, {once:true, passive:true});
+  // 键盘翻页（PageUp/空格/Home）同样不产生 wheel/touchmove ⇒ 也要能中断
+  area.addEventListener('keydown', stop, {once:true, passive:true});
   const start = Date.now();
   (function tick(){
     if(userInterrupted || Date.now() - start > (ms||8000)) return;
     area.scrollTop = area.scrollHeight;
+    _anchorChatToLatest(area);
+    _lastPinTop = area.scrollTop;    // ★ 与 stickBottom 同口径
     setTimeout(tick, 150);
   })();
 }
@@ -578,8 +665,31 @@ function renderMessagesChunked(area, msgs, done){
     }
     area.appendChild(frag);
     if(i < msgs.length) requestAnimationFrame(step);
-    else if(done) done();
+    else {
+      syncChatHeavy(area);
+      // ★ 2026-10-29：历史消息同样要限高（否则刷新后长答复又把页面拉得很长）。
+      //   批量扫描不带 meta（历史消息没有当轮 agent 上下文）⇒ 只做限高，不编造来源标注。
+      try{ if(typeof applyAnswerFrame === 'function') applyAnswerFrame(area); }catch(e){}
+      if(done) done();
+    }
   })();
+}
+// ★ 2026-10-28（用户报「AI 输出完成后滚动页面内容错位，刷新才正常」）：
+//   `content-visibility:auto` 让屏外消息按 132px 估算高度（真实均值 ≈640px）
+//   ⇒ `scrollHeight` 严重低估 + 滚动中反复跳变 ⇒ 浏览器滚动锚定把视口推走 = 错位。
+//   实测（conv 9629 / 65 条 / 7.3 万字）：真实 41777px → 估算 4049px（**差 10.3 倍**），
+//   滚动中高度跳变 7 次、scrollTop 被推走 3 次（最严重 −1146px）。
+//   故默认关闭；只在**超长会话**（>300 条，此时 DOM 规模才真正影响性能）恢复启用兜底。
+//   两种状态各自是"对的那一边"：常规会话要**高度准确**，超长会话要**能滚得动**。
+const CHAT_HEAVY_THRESHOLD = 300;
+function syncChatHeavy(area){
+  const a = area || _chatAreaEl();
+  if(!a || !a.classList) return;
+  const n = a.querySelectorAll('.msg').length;
+  const want = n > CHAT_HEAVY_THRESHOLD;
+  if(want !== a.classList.contains('chat-heavy')){
+    a.classList.toggle('chat-heavy', want);
+  }
 }
 // 加载更早消息（向上翻页）：prepend 到消息区，保持视口停留位置不跳动
 async function loadEarlierMessages(){
@@ -602,6 +712,9 @@ async function loadEarlierMessages(){
       });
       area.insertBefore(frag, area.firstChild);
       area.scrollTop += area.scrollHeight - prevHeight;   // 视口锚定：读完仍在原位置
+      // ⚠️ 必须在锚定**之后**同步：切换 .chat-heavy 会改变高度估算 ⇒ 若在锚定前切，
+      //    上面这句用到的 scrollHeight 就变了，视口锚定会失准（又变回"错位"）。
+      syncChatHeavy(area);
     }
     const btn2 = document.getElementById('load-earlier-btn');
     if(btn2){

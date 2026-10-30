@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from core.deps import db_session, current_user
-from core.audit import audit
+from core.audit import audit, audit_user
 from models import GlossaryIn, DomainReviewIn
 
 router = APIRouter(tags=["术语·Trace·域审核"])
@@ -230,7 +230,7 @@ def concept_create(body: dict, conn=Depends(db_session), user=Depends(current_us
         (cid, label, (body.get("definition") or "").strip(),
          body.get("domain") or "unknown", status,
          body.get("maps_to_class") or "", body.get("maps_to_prop") or "",
-         body.get("maps_to_inst") or "", "王工",
+         body.get("maps_to_inst") or "", audit_user(user),
          (body.get("intent") or "").strip(), body.get("boost") or 1.0,
          (body.get("context") or "").strip(), (body.get("note") or "").strip(),
          (body.get("source") or "").strip(), broader, ",".join(related)))
@@ -245,7 +245,7 @@ def concept_create(body: dict, conn=Depends(db_session), user=Depends(current_us
                      "term_status, source) VALUES (?,?,?,?,?,?)",
                      (cid, en, "en", "synonym", "admitted", "manual"))
     conn.commit()
-    _actor = getattr(user, "username", "") or "王工"
+    _actor = audit_user(user)
     _glog(conn, cid, "add", f"新建概念「{label}」[{cid}]（{status}）", _actor)
     conn.commit()
     audit(_actor, "concept_create", f"新建概念: {label} [{cid}]", conn=conn)
@@ -327,7 +327,7 @@ def concept_update(cid: str, body: dict, conn=Depends(db_session), user=Depends(
                      "term_status, source) VALUES (?,?,?,?,?,?)",
                      (cid, label, "zh", "preferred", "preferred", "manual"))
     conn.commit()
-    _actor = getattr(user, "username", "") or "王工"
+    _actor = audit_user(user)
     _reason = (body.get("change_reason") or "").strip()
     # 留痕：状态流转单列一条（含理由），其余变更合并一条
     if status != cur["concept_status"]:
@@ -354,7 +354,7 @@ def concept_update(cid: str, body: dict, conn=Depends(db_session), user=Depends(
 
 
 @router.post("/api/glossary/concepts/{cid}/terms")
-def term_add(cid: str, body: dict, conn=Depends(db_session)):
+def term_add(cid: str, body: dict, conn=Depends(db_session), user=Depends(current_user)):
     """加术语（同义词/缩写/别名）。同形异义由前端 GET detail 的 homonym 标记提示。"""
     if not conn.execute("SELECT 1 FROM glossary_concepts WHERE concept_id=?", (cid,)).fetchone():
         return JSONResponse({"error": "概念不存在"}, 404)
@@ -374,14 +374,14 @@ def term_add(cid: str, body: dict, conn=Depends(db_session)):
                   (body.get("part_of_speech") or "").strip(),
                   (body.get("geography") or "").strip()))
     conn.commit()
-    _glog(conn, cid, "terms", f"加术语「{term}」（{kind}）", "王工")
+    _glog(conn, cid, "terms", f"加术语「{term}」（{kind}）", audit_user(user))
     conn.commit()
-    audit("王工", "term_add", f"概念 {cid} 加术语: {term}", conn=conn)
+    audit(audit_user(user), "term_add", f"概念 {cid} 加术语: {term}", conn=conn)
     return {"ok": True}
 
 
 @router.post("/api/glossary/concepts/{cid}/terms/batch")
-def term_batch_add(cid: str, body: dict, conn=Depends(db_session)):
+def term_batch_add(cid: str, body: dict, conn=Depends(db_session), user=Depends(current_user)):
     """批量加术语（R3，2026-09-07）：terms 支持数组或换行/分号分隔字符串。
 
     body: {terms: "a;b;c" | ["a","b"], term_kind, lang(留空=按中英文自动判定), source}
@@ -419,12 +419,12 @@ def term_batch_add(cid: str, body: dict, conn=Depends(db_session)):
         if others:
             dups.append({"term": t, "concepts": [r["concept_id"] for r in others]})
     conn.commit()
-    audit("王工", "term_batch_add", f"概念 {cid} 批量加术语 {added} 条", conn=conn)
+    audit(audit_user(user), "term_batch_add", f"概念 {cid} 批量加术语 {added} 条", conn=conn)
     return {"ok": True, "added": added, "skipped": skipped, "dups": dups}
 
 
 @router.post("/api/glossary/concepts/merge")
-def concept_merge(body: dict, conn=Depends(db_session)):
+def concept_merge(body: dict, conn=Depends(db_session), user=Depends(current_user)):
     """同形异义合并（R3，2026-09-07）：源概念术语并入目标概念，源转 deprecated + replaced_by。
 
     body: {source_cid, target_cid}
@@ -462,22 +462,22 @@ def concept_merge(body: dict, conn=Depends(db_session)):
                  "version=version+1, updated_at=CURRENT_TIMESTAMP WHERE concept_id=?",
                  (tgt_cid, src_cid))
     conn.commit()
-    _glog(conn, src_cid, "merge", f"合并到「{tgt.get('pref_label') or tgt_cid}」（迁移术语 {moved} 条）", "王工")
-    _glog(conn, tgt_cid, "merge", f"并入源概念 {src_cid}（迁移术语 {moved} 条）", "王工")
+    _glog(conn, src_cid, "merge", f"合并到「{tgt.get('pref_label') or tgt_cid}」（迁移术语 {moved} 条）", audit_user(user))
+    _glog(conn, tgt_cid, "merge", f"并入源概念 {src_cid}（迁移术语 {moved} 条）", audit_user(user))
     conn.commit()
-    audit("王工", "concept_merge",
+    audit(audit_user(user), "concept_merge",
           f"合并概念 {src_cid} → {tgt_cid}（迁移术语 {moved} 条）", conn=conn)
     return {"ok": True, "moved": moved, "skipped": skipped,
             "source_status": "deprecated", "source_replaced_by": tgt_cid}
 
 
 @router.delete("/api/glossary/terms/{tid}")
-def term_delete(tid: int, conn=Depends(db_session)):
+def term_delete(tid: int, conn=Depends(db_session), user=Depends(current_user)):
     row = conn.execute("SELECT term, concept_id FROM glossary_terms WHERE id=?", (tid,)).fetchone()
     if not row:
         return JSONResponse({"error": "术语不存在"}, 404)
     conn.execute("DELETE FROM glossary_terms WHERE id=?", (tid,))
-    _glog(conn, row["concept_id"], "terms", f"删术语「{row['term']}」", "王工")
+    _glog(conn, row["concept_id"], "terms", f"删术语「{row['term']}」", audit_user(user))
     conn.commit()
     return {"ok": True}
 
@@ -625,7 +625,7 @@ def domain_reviews(status: Optional[str] = "pending", limit: int = 50, conn=Depe
 
 
 @router.post("/api/knowledge/domain-reviews/{qid}/review")
-def domain_review(qid: int, body: DomainReviewIn, conn=Depends(db_session)):
+def domain_review(qid: int, body: DomainReviewIn, conn=Depends(db_session), user=Depends(current_user)):
     """人工确认/修正 domain 分类：confirm → 采纳 suggested_domain；correct → 覆盖新值。"""
     row = conn.execute("SELECT * FROM domain_review_queue WHERE id=?", (qid,)).fetchone()
     if not row:
@@ -634,14 +634,14 @@ def domain_review(qid: int, body: DomainReviewIn, conn=Depends(db_session)):
     if not final_domain:
         return JSONResponse({"error": "correct 时必须指定 corrected_domain"}, 400)
     conn.execute("UPDATE domain_review_queue SET status=?, reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?",
-                 ("confirmed" if body.action == "confirm" else "corrected", "王工", qid))
+                 ("confirmed" if body.action == "confirm" else "corrected", audit_user(user), qid))
     # 回写 documents + document_chunks
     did = row["document_id"]
     if did:
         conn.execute("UPDATE documents SET domain=?, domain_confidence=0.95 WHERE id=?", (final_domain, did))
         conn.execute("UPDATE document_chunks SET domain=? WHERE document_id=?", (final_domain, did))
     conn.commit()
-    audit("王工", "domain_review", f"域审核#{qid}: {row['suggested_domain']} → {final_domain}", conn=conn)
+    audit(audit_user(user), "domain_review", f"域审核#{qid}: {row['suggested_domain']} → {final_domain}", conn=conn)
     return {"ok": True, "domain": final_domain}
 
 
@@ -672,7 +672,7 @@ def concepts_batch(body: dict, conn=Depends(db_session), user=Depends(current_us
     from core.deps import current_user as _cu  # noqa: F401（显式依赖已生效）
     ids = [str(x).strip() for x in (body.get("ids") or []) if str(x).strip()]
     action = (body.get("action") or "").strip()
-    actor = getattr(user, "username", "") or "王工"
+    actor = audit_user(user)
     if not ids:
         return JSONResponse({"error": "ids 必填"}, 400)
     done, skipped = 0, []
@@ -849,7 +849,7 @@ def discovery_adopt(did: int, body: dict = None, conn=Depends(db_session), user=
         "broader, related) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid, label, definition,
          (body.get("domain") or sug.get("domain") or "unknown").strip(),
-         "candidate", body.get("maps_to_class") or "", "", "", actor := (getattr(user, "username", "") or "AI建议流"),
+         "candidate", body.get("maps_to_class") or "", "", "", actor := audit_user(user),
          "", 1.0, (sug.get("context") or row["context"] or "")[:200],
          f"来源：AI 建议流（发现频次 {row['freq']}）", row["source_ref"] or "ai_suggest",
          (body.get("broader") or sug.get("broader") or "").strip(), ""))
@@ -908,7 +908,7 @@ def concept_delete(cid: str, conn=Depends(db_session), user=Depends(current_user
     rep = conn.execute("SELECT COUNT(*) FROM glossary_concepts WHERE replaced_by=?", (cid,)).fetchone()[0]
     if rep:
         return JSONResponse({"error": f"被 {rep} 个弃用概念指定为替代概念——请先修改它们的替代指向"}, 422)
-    actor = getattr(user, "username", "") or "王工"
+    actor = audit_user(user)
     conn.execute("DELETE FROM glossary_terms WHERE concept_id=?", (cid,))
     conn.execute("DELETE FROM glossary_changelog WHERE concept_id=?", (cid,))
     conn.execute("DELETE FROM glossary_concepts WHERE concept_id=?", (cid,))

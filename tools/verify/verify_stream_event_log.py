@@ -81,7 +81,16 @@ def main():
           and col_src.count('_add("tool_call_logs", "task_key"') == 1
           and col_src.count('_add("tool_call_logs", "failure_kind"') == 1)
 
-    _lg = t_src.split("def _log_tool_call")[1][:3000] if "def _log_tool_call" in t_src else ""
+    # P0-a（2026-10-25 修）：原 `[:3000]` 定长窗口在 _log_tool_call 加了
+    # capability_id 推导逻辑（函数 4768 字符）后把 INSERT（距头 4171）与
+    # services.failure_class 引用（距头 3029）挤出窗口 ⇒ A3/A6 假红。
+    # 改**行边界法**：抽到下一个同类缩进 `def` 为止（不依赖函数长短）。
+    if "def _log_tool_call" in t_src:
+        _fi = t_src.find("def _log_tool_call")
+        _fj = t_src.find("\n    def ", _fi + 10)
+        _lg = t_src[_fi:_fj if _fj > 0 else _fi + 8000]
+    else:
+        _lg = ""
     check("A3 _log_tool_call 的 INSERT 含三列", "run_id, task_key, failure_kind" in _lg)
     check("A4 读了 self._tool_run_ctx（归因来源）",
           '_tool_run_ctx' in _lg, "未消费 stream.py 挂好的 run 上下文")

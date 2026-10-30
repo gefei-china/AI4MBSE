@@ -195,6 +195,12 @@ def create_tool(body: ToolIn, conn=Depends(db_session), user=Depends(current_use
     name = body.name.strip()
     if not name:
         return JSONResponse({"error": "工具名必填"}, 400)
+    # P1-6（2026-10-27）：工具 description 必填。模型完全靠 description 判断**何时调用**该工具；
+    #   空描述 = "无名之器"，会被 JIT 语义预筛误裁、或在注入时退化成模板描述 ⇒ 该工具形同虚设
+    #   （走查实测：MCP 工具 description 去重后仅 1 种时就会触发这类问题）。
+    #   ⚠️ 向前约束：只拦新注册；存量空描述工具不动（避免误伤，迁移策略见下）。
+    if not (body.description or "").strip():
+        return JSONResponse({"error": "工具 description 必填（模型靠它判断何时调用该工具；空描述=无名之器，会被误裁或静默不调）"}, 400)
     # P0-3（2026-09-30）：名字合法性前置校验 —— 运行时会把它当 OpenAI function.name 发出去，
     #   协议要求 ^[a-zA-Z0-9_-]{1,64}$；不合法的名字不会报错，而是被**静默剔除**
     #   （agent/pipeline_parts/tools.py:232），注册完显示成功、实际永远调不动。能在入口拦就别留到运行时。
@@ -239,6 +245,15 @@ def update_tool(tid: int, body: ToolIn, conn=Depends(db_session), user=Depends(c
     t = repo.get_tool(tid)
     if not t:
         return JSONResponse({"error": "Tool not found"}, 404)
+    # P1-6（2026-10-27）：编辑时 description 语义。
+    #   body.description 为 None ⇒ 表单没传 ⇒ 保留原值（不因为编辑其它字段而把描述清空）；
+    #   显式传了空串 ⇒ 拒绝（不可把已有描述清成空）。
+    if body.description is None:
+        _desc = (t.get("description") or "")
+    elif not (body.description or "").strip():
+        return JSONResponse({"error": "工具 description 不能为空（模型靠它判断何时调用）"}, 400)
+    else:
+        _desc = body.description
     # 构建 config JSON（HTTP 工具专属字段）——合并式更新：在原 config 基础上覆盖表单字段，
     # 保留表单不覆盖的键（body/data_path/defaults/query/max_response 等），避免 UI 编辑丢配置
     try:
@@ -252,7 +267,7 @@ def update_tool(tid: int, body: ToolIn, conn=Depends(db_session), user=Depends(c
     if body.timeout: _cfg["timeout"] = body.timeout
     if body.headers is not None: _cfg["headers"] = body.headers
     repo.update_tool(
-        tid, body.description or "", json.dumps(body.input_schema or {}, ensure_ascii=False),
+        tid, _desc, json.dumps(body.input_schema or {}, ensure_ascii=False),
         retry_policy=json.dumps(body.retry_policy or {}, ensure_ascii=False),
         fallback_to=(body.fallback_to or "").strip(),
         config=json.dumps(_cfg, ensure_ascii=False),

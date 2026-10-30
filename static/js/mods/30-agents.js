@@ -89,6 +89,7 @@ async function toggleSkillStatus(id, enabled) {
 }
 let skillEditId = null;
 let skillPrevEnabled = 1;
+let skillEditObj = null;   // P2-4：编辑时缓存原始技能对象，保存时合并，避免清空未展示字段
 function editSkill(id) {
   skillEditId = id;
   showModal('skill');
@@ -96,6 +97,7 @@ function editSkill(id) {
   api('/api/studio/skills').then(items=>{
     const s = items.find(x=>x.id===id);
     if(!s) return;
+    skillEditObj = s;   // P2-4：保留原始（含 triggers/frontmatter/references/examples/scripts…）
     document.getElementById('f-name').value = s.name;
     document.getElementById('f-desc').value = s.description||'';
     document.getElementById('f-content').value = s.content||'';
@@ -114,11 +116,23 @@ function openSkillForm() {
 async function saveSkill() {
   const name = document.getElementById('f-name').value.trim();
   if(!name) { toast('名称必填'); return; }
-  const body = {
-    name,
-    description: document.getElementById('f-desc').value,
-    content: document.getElementById('f-content').value,
-  };
+  // P2-4（2026-10-27）：编辑时以原始技能对象为底，只覆盖界面展示的 3 个字段，
+  //   保留 triggers / frontmatter / references / examples / scripts / allowed_tools /
+  //   dependencies / skill_type / category 等未展示字段 —— 否则后端把这些字段按 None 清空。
+  let body;
+  if(skillEditId && skillEditObj) {
+    body = Object.assign({}, skillEditObj, {
+      name,
+      description: document.getElementById('f-desc').value,
+      content: document.getElementById('f-content').value,
+    });
+  } else {
+    body = {
+      name,
+      description: document.getElementById('f-desc').value,
+      content: document.getElementById('f-content').value,
+    };
+  }
   const enEl = document.getElementById('f-enabled');
   const wantEnabled = !enEl || enEl.checked ? 1 : 0;
   let sid = null;
@@ -128,7 +142,7 @@ async function saveSkill() {
   if(sid && wantEnabled !== skillPrevEnabled) {
     await api('/api/studio/skills/'+sid+'/'+(wantEnabled?'enable':'disable'), {method:'POST'});
   }
-  closeModal(); skillEditId = null; skillPrevEnabled = 1; loadSkills(); loadMinePlugins(); loadMarket(); loadMarketManage();
+  closeModal(); skillEditId = null; skillPrevEnabled = 1; skillEditObj = null; loadSkills(); loadMinePlugins(); loadMarket(); loadMarketManage();
 }
 async function deleteSkill(id) {
   if(!(await confirmDialog('确认删除该 Skill？'))) return;
@@ -206,7 +220,16 @@ async function loadMCPServers() {
     const toolN = (()=>{ try{return JSON.parse(s.tools||'[]').length;}catch(e){return 0;} })();
     const proto = s.protocol_version?`<span class="st b">${s.protocol_version}</span>`:'';
     const err = s.last_error?`<div style="font-size:11px;color:var(--red);margin-top:4px;" title="${esc(s.last_error)}">⚠ ${esc(s.last_error).slice(0,80)}</div>`:'';
-    const statusBadge = s.status==='online' ? '<span class="st ok">online</span>' : '';
+    // ★ 2026-10-23：状态徽章如实反映**探测结果**，不美化未知态。
+    //   原：只有 online 显示徽章，offline/unknown 一律什么都不显示（用户看不出
+    //   "是没检测"还是"检测失败"）。且延迟为 NULL 时会渲染成 "nullms"。
+    //   现在：online→绿 / offline→红 / unknown（未检测）→灰「未检测」/ 其它→灰「未知」，
+    //   延迟无值时显示「-」而不是 nullms。
+    const _st = s.status || 'unknown';
+    const statusBadge = _st==='online' ? '<span class="st ok">online</span>'
+                      : _st==='offline' ? '<span class="st r">offline</span>'
+                      : _st==='unknown' ? '<span class="st b">未检测</span>'
+                      : `<span class="st b">${esc(_st)}</span>`;
     // ★ B5-3：内置 MCP 必须说清「它是什么」——
     //   此前卡片只有名字 +「内置不可删」，用户看不出这个条目指向哪、为什么删不掉。
     //   事实（据 audit_logs.event_type='mcp_tool_call' 审计）：它**被真实调用过 22 次**
@@ -226,7 +249,7 @@ async function loadMCPServers() {
     <div class="pb"><div class="kv"><span>端点</span><b>${s.endpoint}</b></div>
     <div class="kv"><span>传输</span><b>${s.transport||'sse'}</b></div>
     <div class="kv"><span>清单</span><b>${toolN} 工具 / ${resN} 资源 / ${prmN} 提示词</b></div>
-    <div class="kv"><span>延迟</span><b>${s.latency_ms}ms</b> <span style="font-size:11px;color:var(--mut);">巡检 ${(s.last_check||'').slice(5,19)||'-'}</span></div>
+    <div class="kv"><span>延迟</span><b>${(s.latency_ms==null||s.latency_ms==='')?'-':esc(String(s.latency_ms))+'ms'}</b> <span style="font-size:11px;color:var(--mut);">巡检 ${(s.last_check||'').slice(5,19)||'未检测'}</span></div>
     ${builtinNote}
     ${err}
     <div style="margin-top:6px;display:flex;gap:6px;">
@@ -825,7 +848,7 @@ async function loadAgentBindOptions(selected){
     const [skills, mcps, tools] = await Promise.all([
       api('/api/studio/skills'), api('/api/studio/mcp-servers'), api('/api/studio/agent-tools'),
     ]);
-    _agentBindCands.skill = (skills||[]).filter(s=>s.enabled!==0).map(s=>({value:s.name, note:'', on:1}));
+    _agentBindCands.skill = (skills||[]).filter(s=>s.enabled!==0).map(s=>({value:s.name, disp:s.name, note:'', on:1}));
     // ★ B5-3：MCP 候选不再「不满足条件就悄悄消失」。
     //   修复前：`filter(m => m.status==='online' && m.enabled!==0)`
     //   ⇒ 新增的 MCP 只要还没测通（status=offline）或被停用（enabled=0），
@@ -835,13 +858,26 @@ async function loadAgentBindOptions(selected){
     //   现在：**全部列出**，用 note 标明状态（离线/已停用），并把原因挂在 title 上。
     //   ⚠️ 仍允许勾选离线项 —— 绑定的是"这个 MCP 服务器"，
     //     不是"此刻它通不通"（测试连通是 `/test` 的职责，不是绑定的门槛）。
+    // ★ 2026-10-23（米爸截图报障）：折叠摘要此前"优先用 title"，而插件事代
+    //   title=中文名的假设对 MCP 不成立 —— 本行把 title 拼成
+    //   endpoint+状态+**完整 last_error**（含 Mozilla 文档链接的
+    //   HTTPStatusError 长串）⇒ 编辑页"绑定 MCP 服务器"折叠摘要直接显示
+    //   一长串 URL + 报错，名称反而看不见。修法：
+    //   · disp = 名称（+短状态）—— 摘要与行内显示一律用它；
+    //   · title 只做 hover 提示，last_error 截断 120 字符（全文去作业日志/
+    //     运行监控看，不属于选择器的可见信息）。
     _agentBindCands.mcp = (mcps||[]).map(m=>{
       const dis = (m.enabled===0 || String(m.enabled)==='0');
       const off = m.status !== 'online';
       const note = dis ? '已停用（不参与发现）'
                 : off ? '离线（尚未测通 / 上次探测失败）' : '';
-      return {value:m.name, note,
-              title:[m.endpoint, note, m.last_error ? ('上次错误：'+m.last_error) : ''].filter(Boolean).join(' · '),
+      const err = m.last_error ? String(m.last_error) : '';
+      return {value:m.name,
+              disp:m.name + (dis ? '（已停用）' : off ? '（离线）' : ''),
+              note,
+              title:[m.name, m.endpoint, note,
+                     err ? ('上次错误：' + err.slice(0, 120) + (err.length > 120 ? '…' : '')) : ''
+                    ].filter(Boolean).join(' · '),
               on:m.status};
     });
     // ⚠️「工具」候选口径（2026-09-30 更正 —— 上一版在这里过度收紧了，必须写清为什么）：
@@ -856,7 +892,7 @@ async function loadAgentBindOptions(selected){
     //   即**返回给前端的每一条都已经满足 status='active'**，前端不必也不能再按 source 二次过滤 ——
     //   过滤的唯一结果是：用户误删了某条内置绑定（如 system_mgmt 的 sys_query_*）就再也补不回来。
     _agentBindCands.tool = (tools||[]).filter(t=>t.type==='tool')
-                                      .map(t=>({value:t.name, note:(t.source==='builtin'?'内置':''), on:1}));
+                                      .map(t=>({value:t.name, disp:t.name + (t.source==='builtin'?'（内置）':''), note:(t.source==='builtin'?'内置':''), on:1}));
     // 2026-09-30（用户第 10 轮）：此处原有 `_agentBindCands.plugin` 候选构建（第 9 轮曾收窄为
     //   type∈{skill,mcp} && (installed||平台内置)，命中 5 条）。现随「绑定插件」面板整体移除而删除。
     //   `/api/plugins` 的拉取也已从上面的 Promise.all 去掉 —— 该面板不再有任何数据源依赖。
@@ -876,10 +912,10 @@ function _bindSumRefresh(kind){
   if(!set.size){ sum.textContent = '选择' + (_BIND_LABEL[kind]||'') + '…'; sum.style.color = 'var(--mut)'; return; }
   const names = [...set].map(v=>{
     const c = (_agentBindCands[kind]||[]).find(x=>x.value===v);
-    // 摘要优先用 title（插件的**中文显示名**，如"文件操作"），比 note（类型标签"技能"/"MCP"）可读；
-    // 无 title 时退回原 id —— 避免摘要只显示一长串 com.zhiyuan.legacy.* 让用户认不出。
-    if(c && c.title) return c.title;
-    return (c && c.note) ? `${v}（${c.note}）` : v;
+    // 2026-10-23：摘要一律用 disp（名称优先）。此前"优先用 title"是插件事代
+    // 的假设（title=中文名），MCP 候选的 title 是 endpoint+错误串 ⇒ 折叠摘要
+    // 显示一长串 URL + HTTPStatusError（米爸截图报障）。title 现在只做 hover。
+    return (c && c.disp) || v;
   });
   sum.textContent = names.length<=2 ? names.join('、') : `${names.slice(0,2).join('、')} 等 ${names.length} 个`;
   sum.style.color = 'var(--ink)';

@@ -29,17 +29,43 @@ def save(report_path: str, tag: str = "") -> int:
                 f"{'+负对照' if summary.get('doc_control') else ''}，共 {n_total} 例)")
     conn = get_db()
     try:
+        # ★ 2026-10-22（P0-5）：补eval_kind + doc 域主指标落库。
+        #   此前 doc 域的 recall@5 / mrr / ndcg / pool_recall / rerank_drop_rate
+        #   / recall_miss_rate **只存在于 JSON 文件里**，库里查不到 ⇒ 看板与趋势
+        #   分析只能靠 docs/评测/ 下的单份快照。doc 域才是检索质量的主指标。
+        #   eval_kind 则解决"两类评测写进同一张表、只能靠 created_by 字段名
+        #   反推类型"的脆弱口径（脚本自己的注释里就警告过这个问题）。
         cur = conn.execute(
             "INSERT INTO eval_reports (doc_id, doc_name, entity_recall, relation_recall, detail, "
-            "created_by, model_version, is_golden) VALUES (0,?,?,?,?,?,?,0)",
+            "created_by, model_version, is_golden, eval_kind, "
+            "doc_recall_at_5, doc_mrr_at_10, doc_ndcg_at_10, doc_pool_recall, "
+            "doc_rerank_drop_rate, doc_recall_miss_rate) "
+            "VALUES (0,?,?,?,?,?,?,0,?,?,?,?,?,?,?)",
             (doc_name, graph.get("entity_recall"), graph.get("relation_hit"),
              json.dumps(report, ensure_ascii=False), "tools/eval/run_eval",
-             f"rag-eval {report.get('tag') or tag}"))
+             f"rag-eval {report.get('tag') or tag}",
+             "rag_retrieval",
+             doc.get("recall@5"), doc.get("mrr@10"), doc.get("ndcg@10"),
+             doc.get("pool_recall@20"), doc.get("rerank_drop_rate"),
+             doc.get("recall_miss_rate")))
         conn.commit()
         rid = cur.lastrowid
+        # O3（2026-10-23）：同步写指标快照表（每指标一行，三色落库时算好）
+        from repositories.eval_report_repo import write_metric_rows
+        n_m = write_metric_rows(conn, rid, "rag_retrieval", {
+            "doc_recall_at_5": doc.get("recall@5"),
+            "doc_mrr_at_10": doc.get("mrr@10"),
+            "doc_ndcg_at_10": doc.get("ndcg@10"),
+            "doc_pool_recall": doc.get("pool_recall@20"),
+            "doc_rerank_drop_rate": doc.get("rerank_drop_rate"),
+            "doc_recall_miss_rate": doc.get("recall_miss_rate"),
+        })
+        print(f"  eval_metrics 快照 {n_m} 行")
         print(f"eval_reports 落库成功: id={rid}")
         print(f"  {doc_name}")
-        print(f"  doc recall@5={doc.get('recall@5')} | graph entity_recall={graph.get('entity_recall')} "
+        print(f"  [eval_kind=rag_retrieval] doc recall@5={doc.get('recall@5')} "
+              f"mrr={doc.get('mrr@10')} ndcg={doc.get('ndcg@10')}")
+        print(f"  graph entity_recall={graph.get('entity_recall')} "
               f"route_acc={graph.get('route_acc')} | neg route_ok={neg.get('route_ok')}")
         return rid
     finally:

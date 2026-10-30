@@ -22,6 +22,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_tool_input_schema.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import sys
 import json
@@ -124,7 +125,7 @@ if not os.path.exists(PROD_DB):
     print("  [SKIP] 未找到 %s" % PROD_DB)
     sys.exit(0)
 
-TMP = tempfile.mkdtemp(prefix="verify_tool_schema_")
+TMP = mkdtemp(prefix="verify_tool_schema_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     # sqlite3.backup 是整库复制，对 WAL 库也安全（比文件 copy 可靠）

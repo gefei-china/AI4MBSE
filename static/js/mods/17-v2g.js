@@ -130,7 +130,7 @@ function v2gRenderBatchPanel() {
     if(_v2g.batchTime){
       const days = parseInt(_v2g.batchTime);
       const cutoff = Date.now() - days*86400*1000;
-      const t = new Date((b.last_at||'').replace(' ','T'));
+      const t = parseServerTime(b.last_at);   // ★ 统一 UTC 解析（2026-10-28）
       if(isNaN(t.getTime()) || t.getTime() < cutoff) return false;
     }
     if(_v2g.batchKw){

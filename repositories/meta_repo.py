@@ -46,7 +46,7 @@ class MetaRepo(BaseRepo):
         )
 
     # ── documents ──
-    def create_document(self, filename: str, file_type: str, file_size: int, uploaded_by: str = "王工") -> int:
+    def create_document(self, filename: str, file_type: str, file_size: int, uploaded_by: str = "未登录") -> int:
         return self.execute(
             "INSERT INTO documents (filename, file_type, file_size, parse_status, uploaded_by) VALUES (?,?,?,?,?)",
             (filename, file_type, file_size, "pending", uploaded_by),

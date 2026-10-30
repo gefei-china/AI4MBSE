@@ -94,7 +94,7 @@ def build_reference_block(offload_id: int, tool_name: str, full_len: int, full_t
 
 
 def model_side_content(tool_name: str, result: dict, conversation_id: int = 0,
-                       cap: int = 3000) -> tuple:
+                       cap: int = 8000) -> tuple:
     """构造回填给模型的 tool 消息 content（stream/execute 两路径唯一真源）。
 
     返回 (content_dict, offloaded_bool)：

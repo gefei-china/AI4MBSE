@@ -22,6 +22,8 @@ from .rebuild import (
 from .columns import (
     _migrate_columns,
     _migrate_branch_protection,
+    _migrate_skill_revision_rejects,
+    _backfill_probe_marks,
 )
 from .ontology import (
     _ensure_ontology_types,
@@ -79,6 +81,9 @@ from .misc import (
     _migrate_mr_status,
     _apply_env_keys,
     _migrate_eval_tables,
+    _migrate_online_eval_tables,      # 2026-10-25 P0-b 生产回流两表（采样队列 + 生成标签）
+    _migrate_agent_todos,             # 2026-10-28 P0-3 计划外化：agent_todos 表
+    _migrate_tool_idempotency,        # 2026-10-30 P0-1 写类工具幂等键表
     _migrate_kb_v2_enhance,
     _backfill_commit_baseline,
     _migrate_mr_comments,
@@ -154,6 +159,9 @@ __all__ = [
     "_migrate_mr_status",
     "_apply_env_keys",
     "_migrate_eval_tables",
+    "_migrate_online_eval_tables",
+    "_migrate_agent_todos",
+    "_migrate_tool_idempotency",
     "_migrate_kb_v2_enhance",
     "_backfill_commit_baseline",
     "_migrate_mr_comments",

@@ -50,10 +50,15 @@ def _seed(conn):
         c.execute("INSERT OR IGNORE INTO roles (name, type, permissions) VALUES (?,?,?)", (name, rtype, perms))
 
     # 预置用户
+    # ★ 2026-10-23：display_name 由虚构人名（「王工」「李工」「赵管」）改为**中性角色名**。
+    #   理由：这三人名是演示遗留，但会随审计/分享/创建等操作**持久写进生产数据**，
+    #   用户在日志里看到「王工 创建了项目」却查无此人 ⇒ 审计不可追责。
+    #   username 保持不变（前端 31-admin.js 的 protect 名单按 username 匹配，不可改）。
+    #   ⚠️ 这三个是**内置初始账号**，部署后应立即接入 SSO / 修改口令。
     users = [
-        ("wang", "王工", "网络系统总体设计室", 1, "ws-wang", "ldap"),
-        ("li", "李工", "数字化部", 2, "ws-li", "ldap"),
-        ("admin", "赵管", "数字化部", 3, "ws-admin", "oauth2"),
+        ("wang", "设计师账号", "网络系统总体设计室", 1, "ws-wang", "ldap"),
+        ("li", "知识工程师账号", "数字化部", 2, "ws-li", "ldap"),
+        ("admin", "系统管理员账号", "数字化部", 3, "ws-admin", "oauth2"),
     ]
     for u in users:
         c.execute("INSERT OR IGNORE INTO users (username, display_name, department, role_id, workspace, source) VALUES (?,?,?,?,?,?)", u)
@@ -82,10 +87,16 @@ def _seed(conn):
     c.execute("INSERT OR IGNORE INTO branches (name, branch_type, parent_branch, description) VALUES ('personal', 'personal', 'dev', '个人工作分支')")
 
     # 预置 MCP 服务器
+    # ★ 2026-10-23：状态与延迟**不再写死**。原值 status='online' / latency_ms=120/210
+    #   是常量而非探测结果 ⇒ 健康页显示的是**假健康态**（用户会以为服务真的在线）。
+    #   现在种子一律置 status='unknown' / latency_ms=NULL —— 由 core/mcp_health.py
+    #   的巡检（check_all）真探测后回写。巡检未跑或失败时，如实显示"未检测"。
+    #   ⚠️ 这两条 endpoint 是**占位示例**（mbse-mcp:4001 / doc-mcp:4002），并非
+    #     真实部署的服务；真实 MCP 由用户在「能力中心 → MCP」自行登记。
     c.execute("""INSERT OR IGNORE INTO mcp_servers (name, endpoint, tools, status, latency_ms)
-                 VALUES ('MCP-建模服务', 'http://mbse-mcp:4001', '["create_element","layout","validate","read_model","update_element","delete_element","list_elements","apply_profile","export_model"]', 'online', 120)""")
+                 VALUES ('MCP-建模服务', 'http://mbse-mcp:4001', '["create_element","layout","validate","read_model","update_element","delete_element","list_elements","apply_profile","export_model"]', 'unknown', NULL)""")
     c.execute("""INSERT OR IGNORE INTO mcp_servers (name, endpoint, tools, status, latency_ms)
-                 VALUES ('MCP-文档解析', 'http://doc-mcp:4002', '["parse","ocr","chunk","extract"]', 'online', 210)""")
+                 VALUES ('MCP-文档解析', 'http://doc-mcp:4002', '["parse","ocr","chunk","extract"]', 'unknown', NULL)""")
 
     # 预置本体类型（O-3：补 MBSE 通用类型 需求/部件/功能 支撑 SysML 导入）
     #
@@ -143,68 +154,31 @@ def _seed(conn):
         (_json.dumps({"required": [], "unique": [], "desc": "包含（composition，组合/包含语义，与 CONTAINS 对齐）",
                       "allowed_values": {"src": _sys_src, "tgt": _sys_tgt}}, ensure_ascii=False),))
 
-    # 预置知识实体（示例数据）
-    entities = [
-        ("ENT-001", "宽带通信载荷", "载荷", '{"band":"V","throughput":"2Gbps"}', "reviewed", "release"),
-        ("ENT-002", "转发器", "转发器", '{"band":"V","channels":48}', "reviewed", "release"),
-        ("ENT-003", "相控阵天线", "天线", '{"gain":"38dBi","beams":64}', "candidate", "dev"),
-        ("ENT-004", "TWTA", "TWTA", '{"eirp":"62dBW","power":"200W"}', "reviewed", "release"),
-        ("REQ-BC-001", "REQ-BC-001 吞吐能力", "需求", '{"text":"系统应在V波段提供不小于2Gbps的用户链路吞吐能力","source":"任务书§3.2","score":92}', "candidate", "dev"),
-        ("REQ-BC-002", "REQ-BC-002 并发接入", "需求", '{"text":"系统应支持不少于100万用户的并发接入","source":"任务书§3.4","score":88}', "candidate", "dev"),
-        ("REQ-A-117", "REQ-A-117 并发接入", "需求", '{"text":"单星并发接入≥50万","source":"历史基线"}', "reviewed", "release"),
-        # 以下行用于满足 relations 复合外键 (id, branch) 引用（跨分支候选关系）
-        ("ENT-001", "宽带通信载荷", "载荷", '{}', "candidate", "dev"),
-        ("ENT-004", "TWTA", "TWTA", '{}', "candidate", "dev"),
-        ("REQ-A-117", "REQ-A-117 并发接入", "需求", '{}', "candidate", "dev"),
-    ]
-    for e in entities:
-        c.execute("INSERT OR IGNORE INTO entities (id, name, entity_type, properties, status, branch) VALUES (?,?,?,?,?,?)", e)
-
-    # 预置关系
-    relations = [
-        ("ENT-001", "ENT-002", "CONTAINS", "reviewed", "release"),
-        ("ENT-001", "ENT-003", "CONTAINS", "candidate", "dev"),
-        ("ENT-002", "ENT-004", "CONTAINS", "reviewed", "release"),
-        ("ENT-001", "ENT-004", "CONTAINS", "reviewed", "release"),
-        ("ENT-004", "REQ-BC-001", "SATISFIES", "candidate", "dev"),
-        ("ENT-003", "REQ-BC-002", "SATISFIES", "candidate", "dev"),
-        ("ENT-002", "REQ-A-117", "SATISFIES", "reviewed", "release"),
-        ("REQ-BC-002", "REQ-A-117", "CONFLICTS", "candidate", "dev"),
-    ]
-    for s, t, r, st, br in relations:
-        c.execute("INSERT OR IGNORE INTO relations (source_id, target_id, relation_type, status, branch) VALUES (?,?,?,?,?)", (s, t, r, st, br))
-
-    # 预置对话
-    c.execute("""INSERT OR IGNORE INTO conversations (id, title, intent, user_id, phase)
-                 VALUES (1, '宽带通信需求分析', 'requirement_analysis', 1, 'change')""")
+    # ★ 2026-10-23：原此处预置**示例知识实体/关系/对话/生成历史**（ENT-001…REQ-A-117、
+    #   「宽带通信需求分析」会话、28 条候选的生成记录等）—— 那是**演示数据**，
+    #   会让新装库一上来就带着虚构的模型内容与"已确认"状态，用户分不清哪些是自己的。
+    #   现已移除：新装库的模型库从**空**开始，由用户真实建模产生。
+    #   ⚠️ 移除的还有 3 行"为满足 relations 复合外键而塞的重复占位"（ENT-001/ENT-004/REQ-A-117
+    #   在 dev 分支的空壳副本）—— 它们本身就是占位垃圾，一并去除。
 
     # 预置提示词
     c.execute("""INSERT OR IGNORE INTO prompts (name, scenario, content, variables, version, status, created_by)
                  VALUES ('需求分析-宽带通信', 'BR-3 需求分析',
                  '你是网络总体MBSE需求分析助手。领域本体：{{ontology_profile}}\\n约束：1)输出条目化需求；2)标注来源追溯；3)引用互联数据：{{linked_data_scope}}；4)不确定输出[TBD]',
-                 '["ontology_profile","linked_data_scope","output_schema"]', 'v5', 'published', '王工')""")
+                 '["ontology_profile","linked_data_scope","output_schema"]', 'v5', 'published', '未登录')""")
 
-    # 预置生成历史
-    c.execute("""INSERT OR IGNORE INTO generation_history (id, conversation_id, gen_type, title, element_count, version, status, confirmed_by)
-                 VALUES (1, 1, 'requirement', '宽带通信需求分析', 28, 'gen-v12', 'confirmed', '王工')""")
-
-    # 预置审计日志
-    logs = [
-        ("王工", "llm_chat", "需求分析会话 #2055 · 生成28条候选", "success"),
-        ("王工", "upload", "任务书_v2.3.docx (2.1MB)", "success"),
-        ("李工", "branch_merge", "dev/窄带→release", "success"),
-        ("陈专", "permission_denied", "访问分支合并评审(无权限)", "blocked"),
-    ]
-    for l in logs:
-        c.execute("INSERT OR IGNORE INTO audit_logs (user_name, event_type, detail, result) VALUES (?,?,?,?)", l)
+    # ★ 2026-10-23：原此处预置 4 条**编造审计日志**（「王工 llm_chat 需求分析会话 #2055 ·
+    #   生成28条候选」「李工 branch_merge dev/窄带→release」「陈专 permission_denied」等）——
+    #   它们会进入带哈希链的 audit_logs 表，**污染审计链的语义**（用户以为真有这几次操作），
+    #   且 seed 写入的不参与哈希链 ⇒ verify_chain 会报"未入链"。现已移除。
 
     # 预置设置
+    # ★ 2026-10-23 审计：原此处另预置 5 个键（query_route / graph_confidence_threshold /
+    #   max_conversation_context / system_name）经全库消费点扫描确认**零读取表达式**
+    #   （仅存于 docstring/注释），属"改了不生效"的错觉配置，已移除（DB 行同步删除，
+    #   见 tools/verify/verify_settings_data_audit.py 与 docs/设置模块数据审计报告-2026-10-23.md）。
     settings = [
-        ("system_name", "AI赋能MBSE系统设计工具", "系统名称"),
         ("default_branch", "dev", "默认工作分支"),
-        ("query_route", "graph_first", "查询路由策略"),
-        ("graph_confidence_threshold", "0.75", "图谱置信度降级阈值"),
-        ("max_conversation_context", "20", "对话上下文最大轮数"),
     ]
     for k, v, d in settings:
         c.execute("INSERT OR IGNORE INTO settings (key, value, description) VALUES (?,?,?)", (k, v, d))

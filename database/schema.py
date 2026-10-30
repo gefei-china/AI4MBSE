@@ -11,6 +11,7 @@ from .migrations import (
     _migrate_columns,
     _migrate_agent_tool_perm,
     _migrate_branch_protection,
+    _migrate_skill_revision_rejects,
     _migrate_mr_status,
     _rebuild_entities_pk,
     _repair_relations_fk,
@@ -36,6 +37,9 @@ from .migrations import (
     _dedupe_ontology_types,
     _migrate_ontology_iri,
     _migrate_eval_tables,
+    _migrate_online_eval_tables,  # P0-b 生产回流两表（2026-10-25）
+    _migrate_agent_todos,  # P0-3 计划外化：agent_todos 表（2026-10-28）
+    _migrate_tool_idempotency,  # P0-1 写类工具幂等键表（2026-10-30）
     _migrate_kb_v2_enhance,
     _migrate_entity_temporal,  # P0-④ 时态管理（2026-09-11）
     _migrate_triple_optimization,
@@ -161,8 +165,22 @@ def backup_db(dest_dir: str | None = None, tag: str = "pre-migrate") -> str:
     :param tag:       文件名标签
     """
     import time as _t
-    d = dest_dir or os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backups")
+    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    d = dest_dir or os.path.join(_repo, "backups")
+    # ★ 2026-10-26：源库**不是生产库**时，备份不许混进生产备份目录。
+    #   起因（实测）：门禁/迁移脚本常把 `MBSE_DB_PATH` 指到临时库（自己 init_db 出来的
+    #   空库），此时 backup_db 产出一份 40KB 的"合法空壳备份"（表集合一致 ⇒ 过校验），
+    #   却写进了 `backups/` 的**平铺目录**——而按 mtime 保留备份的清理逻辑会优先留它
+    #   （mtime 最新）、把真正的 362MB 生产备份删掉 ⇒ 恢复时会炸。
+    #   ⇒ 非生产库的备份隔离到 `backups/nonprod-<源库名>/`，生产目录只放真备份。
+    _src_abs = os.path.abspath(DB_PATH)
+    _prod_abs = os.path.abspath(os.path.join(_repo, "mbse.db"))
+    if dest_dir is None and _src_abs != _prod_abs:
+        _stem = os.path.splitext(os.path.basename(_src_abs))[0] or "db"
+        d = os.path.join(_repo, "backups", "nonprod-%s" % _stem)
+        print("[backup] 源库不是生产库（%s）⇒ 备份隔离到 %s，"
+              "不污染生产备份目录" % (os.path.basename(_src_abs),
+                                    os.path.relpath(d, _repo)))
     os.makedirs(d, exist_ok=True)
     dst = os.path.join(d, "%s-%s.db" % (tag, _t.strftime("%Y%m%d-%H%M%S")))
     src = sqlite3.connect(DB_PATH)
@@ -551,6 +569,14 @@ def init_db():
         headers TEXT DEFAULT '{}',
         -- ★ B5-4：MCP 描述（此前只在前端表单里，保存即丢弃 ⇒ 再次编辑必为空）
         description TEXT DEFAULT '',
+        -- ★ P0-6（2026-10-26）：MCP 工具元数据（JSON: [{name, description, inputSchema}]）
+        --   此前 `tools` 列只存**名字数组**（发现流程主动丢弃了 description 与 schema），
+        --   注入时每个 MCP 工具的 description 退化成同一句模板、parameters 退化成宽松空壳
+        --   （实测 71 个工具 description 去重后仅 1 种）⇒
+        --     ① JIT 语义预筛零区分度（不得不把 MCP 工具列入 core_keep 禁裁剪）
+        --     ② 模型不知道工具能做什么、参数怎么传
+        --   本列把丢掉的东西存回来（存量 server 需"重新发现"补齐；空 ⇒ 完全退回旧行为）。
+        tool_meta TEXT DEFAULT '[]',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
@@ -961,7 +987,33 @@ def init_db():
         -- ⚠️ **不设 UNIQUE 约束**：确认单是"待办"，人工可能隔很久才处理；永久唯一会让
         --   "上次被拒、今天想重来"被静默吞掉（返回那条已拒绝的旧记录）—— 那比重复确认更糟。
         --   去重在**代码层**按 (idem_key, status='pending', 24h 窗口) 判定，可回退、可调参。
-        idem_key TEXT DEFAULT ''
+        idem_key TEXT DEFAULT '',
+        -- ★ 2026-10-28（写前确认 HITL）：统一闸 + 批准即执行所需的 8 列。
+        --   为什么必须扩列（实测缺陷）：
+        --     · tool_type   —— 批准后要走哪个执行器（local / mcp / http）；
+        --       此前 decide 端点只真执行 kind='http' + save_artifact + eval_label，
+        --       **MCP 写操作全部落 else 分支「不支持批准后自动执行」**。
+        --     · level       —— confirm / approve（决定审批权限门）。
+        --     · batch_id    —— 批次合并键（实测一次建包 19 次调用 ⇒ 不合并则 HITL 退化）。
+        --     · batch_count —— 批次内操作数（用户要知道要批多少条）。
+        --     · timeout_at  —— 超时时刻（超时 ≠ 默许，必须显式 expired）。
+        --     · result_json —— 执行回执；**同时是执行幂等的依据**（非空 ⇒ 已执行过）。
+        --     · exec_idem_key —— 执行幂等键（缺它 ⇒ 用户点两下就写两次 ⇒ 重复包）。
+        --     · tool_call_id —— 对齐前端 SSE 节点（确认卡挂到对应工具节点上）。
+        tool_type TEXT DEFAULT '',
+        tool_call_id TEXT DEFAULT '',
+        level TEXT DEFAULT '',
+        batch_id TEXT DEFAULT '',
+        batch_count INTEGER DEFAULT 1,
+        timeout_at TEXT DEFAULT '',
+        result_json TEXT DEFAULT '',
+        exec_idem_key TEXT DEFAULT '',
+        -- ★ 2026-10-28（写前确认 HITL·第二版）：批次对象清单（计划级确认卡要展示"这轮要动哪些东西"）
+        --   为什么必须有：实证（Anthropic 生产遥测）显示 **计划级审批拒绝率 39%**，
+        --   而 **逐条权限请求拒绝率仅 3%**（差 13 倍）⇒ 逐条弹窗几乎无筛选力（approval fatigue）。
+        --   ⇒ 确认卡必须以"**摘要**"呈现本批要做的 N 件事 + 受影响对象清单，而不是只给一条参数 JSON。
+        --   本列存 JSON 数组，批次合并时**追加**（不是覆盖）⇒ 摘要随批次增长而完整。
+        batch_items TEXT DEFAULT '[]'
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ux_hc_status ON hil_confirmations(status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_hc_run ON hil_confirmations(run_id)")
@@ -1003,9 +1055,51 @@ def init_db():
         run_id INTEGER DEFAULT 0,             -- 所属编排 run（task_runs 表 id；0=非编排调用）
         trace_id TEXT DEFAULT '',             -- 一次请求轮次的链路号（同一请求的多次 LLM 调用同号）
         sub_task_key TEXT DEFAULT '',         -- 编排子任务 key（区分一次 run 内哪个子任务花的钱）
+        -- ── S0（2026-10-28）统计口径隔离：1 = 探针/自检调用，不进业务成本统计 ──
+        -- 实测（@75eca26，近 7 天）：`chat_probe` 1,186 次，prompt 19.79M token、
+        --   cost 0.9043，**占该窗口总成本 1.7716 的 51%**。不隔离则"成本优化"基线全错。
+        -- ⚠️ 只标「探针」，**不标在线评测**（chat_eval / gen_faithfulness）——
+        --   评测消费的是真实回答，属业务成本的真实组成，排除会让单轮成本偏低。
+        is_probe INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ux_lus_time ON llm_usage_stats(created_at)")
+
+    # ── 上下文分块归因（P0-2 · 2026-10-26）──
+    # 背景：`llm_usage_stats` 只记**整包** prompt_tokens，无分块归因 ⇒ 无法回答
+    #   "这一轮 12.5k token 花在哪"（生产实测 chat_probe 均值 12,511 / 峰值 64,552）。
+    #   历史上两次真实损失（总闸静默空转、流式路径腰斩 82% prompt）都因"看不见"而延迟发现。
+    # 归因点在 `assemble_system_prompt`（块边界本就已知，零额外切分成本）。
+    # `trace_id` 与 `llm_usage_stats.trace_id` 同源（core.audit.begin_trace）⇒ 可直接 JOIN。
+    c.execute("""CREATE TABLE IF NOT EXISTS context_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trace_id TEXT DEFAULT '',             -- 链路号（与 llm_usage_stats.trace_id 同源）
+        conversation_id INTEGER DEFAULT 0,    -- 所属会话（0=会话外调用）
+        block_name TEXT DEFAULT '',           -- 块 key（role/retrieval/memory/…）
+        layer TEXT DEFAULT 'dynamic',         -- static（可缓存区）/ dynamic（动态区）
+        tokens INTEGER DEFAULT 0,             -- 该块 token 估算
+        chars INTEGER DEFAULT 0,              -- 该块字符数（token/字符比诊断用）
+        phase TEXT DEFAULT 'system',          -- 装配阶段
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ux_ctxaudit_trace ON context_audit(trace_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ux_ctxaudit_time ON context_audit(created_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS ux_ctxaudit_block ON context_audit(block_name)")
+    # 聚合表：一行 = 一个 (trace, phase)，存总量与**去重后**指标。
+    # `metrics` 存 JSON，键如 retrieval_effective / memory_unique / tool_count /
+    # jit_fallback_full —— 直接量化"名义条数 vs 有效条数"这类 P0 缺陷。
+    c.execute("""CREATE TABLE IF NOT EXISTS context_audit_summary (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trace_id TEXT DEFAULT '',
+        conversation_id INTEGER DEFAULT 0,
+        phase TEXT DEFAULT 'system',
+        total_tokens INTEGER DEFAULT 0,
+        total_chars INTEGER DEFAULT 0,
+        block_count INTEGER DEFAULT 0,
+        metrics TEXT DEFAULT '{}',             -- JSON：去重后指标
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ux_ctxsum_trace ON context_audit_summary(trace_id)")
 
     # ── 生成历史与反馈 ──
     c.execute("""CREATE TABLE IF NOT EXISTS generation_history (
@@ -1025,7 +1119,14 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER REFERENCES conversations(id),
         message_id INTEGER REFERENCES messages(id),
-        feedback_type TEXT NOT NULL,  -- approve | reject | modify
+        -- ⚠️ 2026-10-29：取值域**不在此写死**，单一真源见 core/feedback_types.py
+        --   feedback_type = 评审动作：approve | reject | modify（流程裁决）
+        --   quality      = 用户质量信号：up | down（"这条回答好不好"）—— 由 _migrate_columns 补列
+        --   signal_kind  = review | quality（显式标注本行语义来源）
+        -- 之所以分列：'reject' 是评审拒绝而非用户差评，混用会让 badcase 去修没坏的东西。
+        feedback_type TEXT NOT NULL,
+        quality TEXT DEFAULT '',
+        signal_kind TEXT DEFAULT '',
         context TEXT DEFAULT '',
         created_by TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -1195,9 +1296,64 @@ def init_db():
         run_id INTEGER DEFAULT 0,
         task_key TEXT DEFAULT '',
         failure_kind TEXT DEFAULT '',
+        -- P0-3（2026-10-27）：**任务级追溯的 JOIN 键**。
+        -- 背景（走查实测）：`run_id` 在 83.2% 的工具调用上为 0 —— 因为主对话路径
+        --   （`stream.execute_stream` 单 Agent 直行）**根本没有编排批次**，
+        --   只有编排子任务才挂 `_tool_run_ctx`。而 `llm_usage_stats` 早就有
+        --   `trace_id`（每个请求一个，`core.audit.begin_trace` 生成）——
+        --   两套 id 体系不可 JOIN ⇒ 回答不了「这一轮对话花了多少钱、调了哪些能力」。
+        -- 取值口径：与 `llm_usage_stats.trace_id` **同源同值**（都取 `core.audit.trace_context()`），
+        --   编排子任务沿用外层 trace（不新开，否则整轮成本拆散）。
+        -- 存量行无法回溯（历史未记录）⇒ 留空，**不编造**。
+        trace_id TEXT DEFAULT '',
+        -- 2026-10-27（截断清单 P0-B3）：**落库截断可观测**。
+        --   `result` 从 2000 提到 8000 并另记原始长度与是否被裁 —— 原 2000 是静默截断，
+        --   导致"工具结果都很短"的错误结论（据此误判过 mcp.max_response 造成的数据丢失）。
+        --   `result` 文本口径不变（仍是脱敏后的前缀），解析方不受影响。
+        result_len INTEGER DEFAULT 0,        -- 原始结果字符数（未截断时 = length(result)）
+        result_truncated INTEGER DEFAULT 0,  -- 1 = result 被截（result_len > 落库上限）
+        -- ── S0（2026-10-28）统计口径隔离：1 = 探针/验证噪声，不进业务统计 ──
+        -- 实测（@75eca26）：本表 7 天内混入 fake_tool 126 次（失败率 89%、latency 记成
+        --   1.79e12 ms）、definitely_not_a_real_tool_xyzzy 14 次 ⇒ 全量失败率 15.0%
+        --   看起来"工具很不可靠"，剔除假工具后真实约 11.8%。
+        -- 语义：**标记而非删除**（探针自身健康也要能查）；判定集中在 core/probe_mark.py。
+        is_probe INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_time ON tool_call_logs(created_at)")
+    # ⚠️ P0-3 的 `idx_tool_logs_trace` **刻意放在列迁移之后**（database/migrations/columns.py）：
+    #   老库这张表已存在且没有 trace_id 列，若在此处建索引会直接抛
+    #   `no such column: trace_id` 让 init_db 崩掉（本轮实测踩过）。
+    #   建表语句里带 trace_id 只解决"新库"，"老库"必须靠 _add + 其后建索引。
+
+    # ── P0-a（2026-10-24）能力统一注册处：capability_registry 逻辑投影层 ──
+    # 五类能力（tools/skills/plugins/mcp_servers/prompts）权威数据不动，本表只做
+    # 统一投影：一个 capability_id 口径、一套启停/发布态/版本语义、一张调用度量入口。
+    # 刷新机制见 core/capability_registry.py（启动全量 reconcile + 运行时增量）。
+    # 幂等：CREATE TABLE IF NOT EXISTS，老库 init_db 时自动补建，零迁移风险。
+    c.execute("""CREATE TABLE IF NOT EXISTS capability_registry (
+        capability_id   TEXT PRIMARY KEY,        -- tool:{name} | skill:{id} | plugin:{plugin_id} | mcp:{name} | mcp:{name}:{tool} | prompt:{id}
+        kind            TEXT NOT NULL,           -- tool | skill | plugin | mcp_server | mcp_tool | prompt
+        display_name    TEXT DEFAULT '',
+        source_table    TEXT NOT NULL,           -- 权威数据所在源表
+        source_id       TEXT NOT NULL,           -- 源表业务键
+        status          TEXT DEFAULT 'active',   -- active | disabled（启停态）
+        lifecycle       TEXT DEFAULT 'published',-- draft | published | deprecated（发布态）
+        version         TEXT DEFAULT '1.0.0',
+        publisher       TEXT DEFAULT '',
+        visibility      TEXT DEFAULT 'private',  -- private | team | public
+        risk_level      TEXT DEFAULT 'read',     -- read | write | destructive（驱动 HIL 审批强度）
+        builtin         INTEGER DEFAULT 0,
+        call_count      INTEGER DEFAULT 0,       -- 度量投影（聚合而来，非双写）
+        fail_count      INTEGER DEFAULT 0,
+        last_used_at    TEXT DEFAULT '',
+        created_at      TEXT DEFAULT CURRENT_TIMESTAMP,  -- 首次投影时间（≈能力存在时间，upsert 不覆盖）
+        updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_cr_kind ON capability_registry(kind)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_cr_source ON capability_registry(source_table, source_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_cr_last ON capability_registry(last_used_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_cr_longtail ON capability_registry(status, call_count, updated_at)")
     # ⚠️ idx_tool_logs_user（user_name）**不在这里建** —— 本段是 CREATE TABLE IF NOT EXISTS，
     # 老库走该分支时表已存在、**不会加列**，索引建在缺列的表上会直接
     # `no such column: user_name` 让 init_db 整体失败（2026-10-06 实测踩到）。
@@ -1227,7 +1383,9 @@ def init_db():
     #     但没有父子结构、没有起止对 ⇒ 算不出每段 latency；
     #   · 本表是 **span 树**（开/关时刻对）——聚合"每段花了多久、烧了多少 token"，
     #     正是排障时"55s 的编排慢在哪"要的回答。
-    # kind 六类：run（根，整轮）/ plan / task / summary / reflection / views。
+    # kind 两类来源共 12 类：编排七类 run/plan/task/summary/reflection/views/replan
+    # （Task #43 + P1）；会话五类 conversation/turn/tool/rag/llm（P0-b 生产回流，
+    # 设计 docs/P0-b-生产回流详细设计-2026-10-25.md §3.2，conversation 的 run_id=0）。
     # 写入方 services/orch_span.py：**内存收集 → 流尾一次性 flush**（旁路失败绝不
     # 阻断主链路，与本仓观测层原则一致）；未闭合 span 在 flush 时按 error 收口。
     # 注意：本表索引只引用自家 CREATE TABLE 的列 ⇒ 不存在 verify_schema_index_order
@@ -1236,7 +1394,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER DEFAULT 0,
         run_id INTEGER DEFAULT 0,
-        kind TEXT DEFAULT '',               -- run | plan | task | summary | reflection | views | replan（P1 重规划决策记录，2026-10-21）
+        kind TEXT DEFAULT '',               -- run | plan | task | summary | reflection | views | replan（P1 重规划决策记录，2026-10-21）| conversation | turn | tool | rag | llm（P0-b 会话级 trace，2026-10-25）
         name TEXT DEFAULT '',               -- span 名（task 时为 task_key）
         parent_id INTEGER DEFAULT 0,        -- 父 span 的 orch_run_spans.id（0=根）
         status TEXT DEFAULT 'running',      -- running | ok | error
@@ -1249,6 +1407,13 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_ors_conv_run "
               "ON orch_run_spans(conversation_id, run_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_ors_time ON orch_run_spans(created_at)")
+    # P0-b（2026-10-25）会话级 span 索引：kind+created_at。
+    # 为什么安全（verify_schema_index_order O2）：kind 与 created_at 均为本表
+    # CREATE TABLE 自有列，不引用 _migrate_columns 补的列 ⇒ 建在建表段无
+    # "no such column" 风险（同 orch_stream_events 范式，见上方注释）。
+    # 查询场景：monitor 页会话下钻按 kind 过滤 + 时间倒序（conversation 根定位）。
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ors_kind_time "
+              "ON orch_run_spans(kind, created_at)")
 
     # ── P4 replanning（2026-10-21）：重规划决策记录表 ─────────────────────
     # 为什么在 span 之外再建一张表（v2 §4.6）：span 的 meta_json 是**单次判定**
@@ -1344,7 +1509,7 @@ def init_db():
         title TEXT NOT NULL,
         content TEXT DEFAULT '',
         enabled INTEGER DEFAULT 1,
-        created_by TEXT DEFAULT '王工',
+        created_by TEXT DEFAULT '未登录',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
@@ -1547,6 +1712,10 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_user ON tool_call_logs(user_name)")
     # ── P0-2 分支保护规则：branches.protection_rules 内置分支默认值回填（幂等，仅填空）──
     _migrate_branch_protection(conn)
+    # ── 2026-10-29：技能修订自检拒绝台账（SkillImprover 的 self-verification）──
+    # 为什么不落台账就不行：自检拒绝不产出草稿，若不记录，"质量不合格被拒"
+    # 与"没有需要修订的技能"在界面上完全无法区分（静默失败长得像没问题）。
+    _migrate_skill_revision_rejects(conn)
     # ── P0-6（2026-10-06）Agent 工具链 RBAC + HIL 批准授权 ──
     # 必须**早于种子执行**：新库的角色行由 _seed_* 写入，若本迁移跑在种子之前，
     # 新角色不会被授权（老库则因已落库、种子"存在即跳过"而必须靠本迁移补）。
@@ -1709,6 +1878,16 @@ def init_db():
     _seed_intent_rules(conn)
     # 2026-10-16 P0-8：人工介入治理策略种子（hil_policies，不改现有链路行为）
     _seed_hil_policies(conn)
+    # ── P0-b（2026-10-25）生产回流：online_eval_queue + eval_gen_labels 两表 ──
+    # 放在 _migrate_columns 之后（纯新表 CREATE IF NOT EXISTS，无补列依赖，
+    # 位置仅在语义上归入"表结构迁移"族）；真写端点 S4 才接，本步只建结构。
+    _migrate_online_eval_tables(conn)
+    # ── P0-3（2026-10-28）计划外化：agent_todos 表（幂等，纯新表无补列依赖）──
+    # 放在 _migrate_columns 之后无依赖（纯新表），位置按"表结构迁移"族归类。
+    _migrate_agent_todos(conn)
+    # ── P0-1（2026-10-30）写类工具幂等键表（幂等，纯新表无补列依赖）──
+    # 放在 _migrate_columns 之后（纯新表），语义上属"控制面"族。
+    _migrate_tool_idempotency(conn)
     conn.close()
 
 
