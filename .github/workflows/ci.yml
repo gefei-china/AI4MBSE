@@ -472,6 +472,15 @@ jobs:
       - name: Guard 技能注入边界（23 项）
         run: python tools/verify/verify_skill_injection.py
 
+      # ── 2026-10-30：技能包磁盘文件 ↔ skills 表 内容一致性 ────────────────
+      # 实测缺陷：技能「智源平台管理」磁盘 skill.md 是 v1.0（1677 字，讲已失效的
+      #   zhiyuan_sysmlv2_* HTTP 工具），而 skills.content 是 v1.3（4830 字，MCP 版）
+      #   ⇒ 改文件不影响模型、改库不影响文件，且**无任何报错**。
+      # 另含生成型包的新鲜度断言：references 工具条数必须等于活库 tool_meta 条数
+      #   （服务端加了工具但没重跑生成器 ⇒ 文档静默过期）。无 mbse.db 时该项 SKIP。
+      - name: Guard 技能包与 DB 内容一致（16 项 + 变异）
+        run: python tools/verify/verify_skill_package_sync.py
+
       # ── 第二轮第 2 项：红灯门禁归因后修复，已双环境（生产库 + 干净库）实测绿 ──
       - name: Guard 续作输入识别（22 项，carry 词表单一来源）
         run: python tools/verify/verify_continuation.py
