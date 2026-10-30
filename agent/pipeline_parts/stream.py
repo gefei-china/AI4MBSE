@@ -1025,6 +1025,24 @@ class StreamMixin:
                             if isinstance(_parsed, dict):
                                 _pr = _sp_validate(_parsed)
                                 _summary_proto = _pr.get("sanitized")
+                                # ★ P0-4（2026-10-30）：**引用可回查** —— 只降不升。
+                                #   为什么必须在这一行（而不是汇总/评审处）：
+                                #     `summary_json` 是下游唯一的协议真源（物化 → 汇总 → 评审），
+                                #     若把未校验的 `verified` 写进去，三条下游都会采信它，
+                                #     事后再改也追不回来（同一份数据存在两处口径）。
+                                #   为什么"降级"而不"丢弃"：内容一字不动，只改信任标记 ——
+                                #     丢弃是信息损失，判失败会让整批降级（连带损失）。
+                                #   详见 `services/evidence_check.py` 模块头（含三条判据与边界）。
+                                if _summary_proto:
+                                    try:
+                                        from services.evidence_check import enforce as _ev_enforce
+                                        _c_ev = get_db()
+                                        try:
+                                            _ev_enforce(_c_ev, _summary_proto)
+                                        finally:
+                                            _c_ev.close()
+                                    except Exception:
+                                        pass
                             else:
                                 _summary_proto = _sp_normalize(sub_res)
                             # 协议状态 → 子任务成功标志：failed→fail（现状 tk_ok 判定保留兼容）
