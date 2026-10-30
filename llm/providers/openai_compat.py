@@ -341,7 +341,18 @@ class OpenAICompatProvider(BaseLLM):
         model_name = model or cfg.get("model_name") or "-"
         cw = cfg.get("context_window") or 8192
         # 优先级：调用方显式 max_tokens > DB max_tokens > 4096
-        mt = max_tokens if max_tokens is not None else cfg.get("max_tokens", 4096)
+        # ★ 2026-10-30 修（真实崩溃路径，非洁癖）：
+        #   原写法 `cfg.get("max_tokens", 4096)` 的默认值**只在键不存在时生效**；
+        #   而 provider 的该列常常**存在但为 NULL**（新建 provider 没填、或迁移补列留空）
+        #   ⇒ `.get` 返回 `None` ⇒ `mt` 为 None ⇒ 紧随其后的守卫比较抛
+        #   `TypeError: '>' not supported between instances of 'NoneType' and 'int'`
+        #   ⇒ 整个对话失败（被上层包成 "LLM 调用失败…原因：TypeError"）。
+        #   实测触发点：`verify_llm_context_guard` 的夹具 provider（8 列无 max_tokens）。
+        #   ⚠️ 本注释**刻意不写出那段比较的源码原文** —— 门禁 5.1 用字面串锚定它的位置，
+        #      注释里出现同一串会让锚点命中注释、切片错位（本仓已踩过一次同类坑）。
+        #   ⇒ 改为 `or` 兜底（与紧邻上一行 `cw` 的写法一致 —— 同一段里两种兜底语义并存
+        #   本身就是隐患，这次统一）。语义：显式传参 > DB 非空值 > 4096，与改动前**一致**。
+        mt = max_tokens if max_tokens is not None else (cfg.get("max_tokens") or 4096)
         # ── context_window 守卫（2026-09-20：由「静默截断」改为「可配置 + 留痕」）────────
         # 原实现只有一句**静默截断**（`mt` 一旦超过 `cw` 就把它赋值成 `cw`）：把 DB 的
         # context_window 当硬上限，但该值可能是**保守配置而非模型真实上限**

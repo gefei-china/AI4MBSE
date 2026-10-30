@@ -337,8 +337,30 @@ chk("3.3c 降级留痕已补（except 内 WARNING，不改降级行为）", 'LLM
 
 chk("3.4 旧阻断 B 形态已不存在（openai_compat 不再 kwargs.get 优先）",
     'mt = kwargs.get("max_tokens", cfg.get("max_tokens", max_tokens))' not in _oac_src)
+# ★ 2026-10-30 改判据：原写法锚**整行源码字面量**
+#   `'mt = max_tokens if max_tokens is not None else cfg.get("max_tokens", 4096)' in src`
+#   ⇒ 只要那一行有一个字符变动就判红（本轮实测：给 else 分支加 `or 4096` 兜底，
+#     为了修一个**真实的 NULL 崩溃**，判据立刻红，而优先级语义完全没变）。
+#   这与 `test_p4_team_direct_notice_is_persisted` 锚展示文案是同一类毛病：
+#   **判据耦合了实现细节，把"改进"判成"回归"**。
+#   ⇒ 改为断言**优先级语义**（三件事缺一不可）：
+#     ① 显式传参优先（`if max_tokens is not None`）；
+#     ② else 分支读 DB（`cfg.get("max_tokens")`）；
+#     ③ 有内置默认 4096 兜底（且**必须能兜住 NULL** —— 这正是本轮修的缺陷）。
+_mt_lines = [ln.strip() for ln in _oac_src.split("\n")
+             if ln.strip().startswith("mt = max_tokens if max_tokens is not None")]
 chk("3.4b 新优先级在位：调用方显式 > DB > 内置默认",
-    'mt = max_tokens if max_tokens is not None else cfg.get("max_tokens", 4096)' in _oac_src)
+    len(_mt_lines) == 1
+    and 'cfg.get("max_tokens")' in _mt_lines[0]
+    and "4096" in _mt_lines[0],
+    "命中行=%s" % (_mt_lines or "未找到"))
+# ★ 3.4b2（2026-10-30 新增）：DB 值为 **NULL** 时必须退回内置默认。
+#   原写法 `cfg.get("max_tokens", 4096)` 的默认值只在"键不存在"时生效；
+#   列存在但为 NULL 时 `.get` 返回 None ⇒ `mt` 为 None ⇒ context_window 守卫
+#   比较抛 TypeError ⇒ 整轮对话失败（实测触发：verify_llm_context_guard 夹具）。
+chk("3.4b2 DB 值为 NULL 时退回内置默认（`or` 兜底，非仅键缺失兜底）",
+    len(_mt_lines) == 1 and "or 4096" in _mt_lines[0],
+    "命中行=%s（缺 `or 4096` ⇒ NULL 会漏成 None）" % (_mt_lines or "未找到"))
 chk("3.4c 三参数默认值改为 None（否则无法区分未传与显式传默认值）",
     'def chat(self, messages, model=None, temperature=None, max_tokens=None, stream=False,' in _oac_src)
 chk("3.5 cfg 上限仍被 context_window 二次截断（原行为保留）",
