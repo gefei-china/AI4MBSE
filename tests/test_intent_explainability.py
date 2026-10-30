@@ -182,11 +182,26 @@ def test_p4_team_direct_notice_is_persisted():
 
     实测 conv 9751：main_agent=智源对接agent、实际执行知识问答Agent，
     而 exec.notices=null ⇒ 完全无法解释"为什么换了 Agent"。
+
+    ★ 2026-10-30 修判据（原判据锚**展示文案**，已失效）：
+      原写法 `src.find('已定向到团队成员')` —— 文案是展示层，随时会为了更准确而改。
+      实测：把文案从「（团队路由）已定向到团队成员「X」」
+      改成「（团队路由）主 Agent「Y」将本次请求定向给成员「X」」（**更准确**：补上了
+      主 Agent 是谁，正是 P4 要说清的那件事），断言立刻 `idx=-1` 判红 ——
+      功能没坏，判据坏了。这类"文案耦合"判据会让**改进文案的人被判红**，是反向激励。
+
+      ⇒ 改锚**代码结构不变量**：`_subj_note` 这个变量的赋值点，其邻近必须同时出现
+        `exec_notices.append`。这才是 P4 真正要守的东西：
+        **说明文本进了结构化 notices，而不只是发了一条 reasoning**。
+
+    变异自证：删掉 `exec_notices.append({"kind": "progress", "text": _subj_note})`
+    ⇒ `_subj_note` 附近再无 append ⇒ 判红（验证见下方 `_assert_invariant` 的注释）。
     """
     src = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
-    # 定位团队定向分支，确认 exec_notices.append 与该说明同时出现
-    idx = src.find('已定向到团队成员')
-    assert idx > 0, "找不到团队定向说明"
-    seg = src[max(0, idx - 1200): idx + 600]
+    idx = src.find("_subj_note = (")
+    assert idx > 0, "找不到团队定向说明的赋值点（_subj_note）"
+    seg = src[max(0, idx - 1200): idx + 900]
     assert "exec_notices.append" in seg, (
         "团队定向说明仍未写入 exec_notices（只 yield reasoning 会在刷新后丢失）")
+    # 补充约束：说明必须同时以 reasoning 发出（前端实时可见），两者缺一都不算修好
+    assert '"delta": _subj_note' in seg, "定向说明未以 reasoning 实时发出（用户当轮看不到）"
