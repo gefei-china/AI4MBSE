@@ -68,7 +68,7 @@ from core.events import model as evmodel            # noqa: E402
 from core.events import sources as evsources        # noqa: E402  ★ 变异要打在这个模块上
 from core.events.sources import SourceRegistry, SourceSpec  # noqa: E402
 from core.events.model import (                      # noqa: E402
-    Admission, OBSERVE_MODE, EXECUTE_MODE, admit, build_trigger,
+    Admission, OBSERVE_MODE, EXECUTE_MODE, admit, build_trigger, make_workitem,
 )
 from repositories.event_repo import EventRepo        # noqa: E402
 from services.event_service import EventService      # noqa: E402
@@ -314,6 +314,55 @@ check("G20", "看门狗只留痕不自动推进（工单状态不变）",
       before_state == "open" and after_state == "open" and scan_res.get("found", 0) >= 1,
       f"{before_state}→{after_state} found={scan_res.get('found')}")
 
+# ══ 真实源：文档入库（第一个接上真实链路的 Source）══
+from core.events.sources_docs import build_docs_source, DOCS_SOURCE_KIND, emit_document_stored  # noqa: E402
+
+# G21 系统事件不被白名单拒（否则底座永远收不到系统侧信号）
+sys_trg = build_trigger(DOCS_SOURCE_KIND, "doc-1", "doc-1", "system",
+                        actor_type="system", text="需求规范.pdf")
+sys_spec = build_docs_source(allowed_senders=frozenset(), scope_keys=frozenset())
+sys_adm = sys_spec.admission          # ⚠️ build_docs_source 返回 SourceSpec，准入在 .admission
+sys_v = admit(sys_trg, sys_adm)
+check("G21", "系统事件不被空白名单拒（建工单）",
+      sys_v.accepted and sys_v.reason == "system_event",
+      f"accepted={sys_v.accepted} reason={sys_v.reason}")
+
+# G22 系统事件仍然只观察不执行（mode=observe）
+sys_wi = make_workitem(sys_trg, sys_adm, sys_v, "extract_entities", "文档入库待抽取")
+check("G22", "系统事件工单仍是 observe（不自动写图谱）",
+      sys_wi.mode == OBSERVE_MODE, f"mode={sys_wi.mode}")
+
+# G23 真人事件走白名单（系统事件豁免不放宽真人路径）
+hu_trg = build_trigger(DOCS_SOURCE_KIND, "doc-2", "doc-2", "mallory",
+                       actor_type="human", addressed="mention", text="x")
+hu_v = admit(hu_trg, sys_adm)
+check("G23", "真人事件仍走白名单（系统豁免不放宽真人路径）",
+      (not hu_v.accepted) and hu_v.reason in ("not_listed", "addressed_only"),
+      f"accepted={hu_v.accepted} reason={hu_v.reason}")
+
+# G24 真实 emit：同一 doc_id 重复调用 ⇒ 只 1 条 Trigger / 1 个工单（幂等）
+docs_reg = SourceRegistry()
+docs_reg.register(build_docs_source(allowed_senders=frozenset()))
+docs_svc = EventService(EventRepo(conn), docs_reg)
+r1 = docs_svc.receive(DOCS_SOURCE_KIND, {"external_id": "doc-idem", "filename": "a.pdf",
+                                          "actor": "system", "actor_type": "system"})
+n_t1 = EventRepo(conn).count("ev_triggers")
+n_w1 = EventRepo(conn).count("ev_workitems")
+r2 = docs_svc.receive(DOCS_SOURCE_KIND, {"external_id": "doc-idem", "filename": "a.pdf",
+                                          "actor": "system", "actor_type": "system"})
+n_t2 = EventRepo(conn).count("ev_triggers")
+n_w2 = EventRepo(conn).count("ev_workitems")
+check("G24", "真实源幂等（同 doc_id 重投 ⇒ Trigger/工单数不增）",
+      r2.get("disposition") == "duplicate" and n_t1 == n_t2 and n_w1 == n_w2,
+      f"{r1.get('disposition')}→{r2.get('disposition')} trg {n_t1}→{n_t2} wi {n_w1}→{n_w2}")
+
+# G25 emit_document_stored 永不抛异常（不阻断入库）
+em_res = emit_document_stored(conn, doc_id="doc-emit", filename="b.pdf", chunk_count=7,
+                               registry=docs_reg)
+check("G25", "emit_document_stored 成功产出处置结论（不抛异常）",
+      isinstance(em_res, dict) and not em_res.get("error"),
+      f"res={ {k: v for k, v in em_res.items() if k in ('disposition', 'reason', 'error')} }")
+
 conn.close()
 
 # ══════════════════════════════════════════════════════════
@@ -395,6 +444,17 @@ def _run_gid(gid):
             h = sv.handoff(w, 9999)
             return (h.get("ok") is False and "terminal" in str(h.get("reason")),
                     f"ok={h.get('ok')} reason={h.get('reason')}")
+        if gid == "G21":
+            from core.events.sources_docs import build_docs_source as _bds
+            t = build_trigger("documents", "doc-m8", "doc-m8", "system",
+                              actor_type="system", text="x.pdf")
+            a = _bds(allowed_senders=frozenset(), scope_keys=frozenset()).admission
+            # ⚠️ 必须走 `evsources.admit`（真实调用点），不能直接用 `admit`
+            #    —— 否则 M8 的变异打不到这里，G21 会**假绿**。
+            #    （这是本轮第三次踩"变异锚点"同一个坑，已固化为纪律。）
+            v = evsources.admit(t, a)
+            return (v.accepted and v.reason == "system_event",
+                    f"accepted={v.accepted} reason={v.reason}")
         return (False, "unknown gid")
     finally:
         c2.close()
@@ -525,6 +585,24 @@ def _m7_handoff(workitem, to_conversation_id, current_conversation_id=0):
 
 _mutate_and_check("M7", "终态/同会话也放行接力 ⇒ G17 翻红", "G17",
                   [(evservice, "decide_handoff", _m7_handoff)])
+
+# M8: 系统事件也按白名单拒 ⇒ G21 翻
+# ⚠️ 变异锚点：`core/events/model.py` 的 admit 被 `core/events/sources.py`
+#    以 `from ... import admit` **静态绑定**引入 ⇒ 必须打 evsources.admit。
+def _m8_admit(trigger, adm, is_duplicate=False):
+    if is_duplicate:
+        return evmodel.AdmissionVerdict(False, "duplicate", "none", True)
+    # 变异：去掉"系统事件豁免"分支 ⇒ 系统事件按白名单被拒
+    actor_l = (trigger.actor or "").strip().lower()
+    listed = actor_l in {a.lower() for a in adm.allowed}
+    addressed = trigger.addressed in ("mention", "direct")
+    if listed and addressed:
+        return evmodel.AdmissionVerdict(True, "explicit", "explicit", True)
+    return evmodel.AdmissionVerdict(False, "not_listed", "none", True)
+
+
+_mutate_and_check("M8", "系统事件也按白名单拒 ⇒ G21 翻红", "G21",
+                  [(evsources, "admit", _m8_admit)])
 
 # ══════════════════════════════════════════════════════════
 # 汇总

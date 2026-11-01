@@ -140,6 +140,27 @@ async def lifespan(app: FastAPI):
         print("[startup] 作业队列 worker 启动失败（长任务将只能同步跑）：%s" % str(_e)[:160],
               flush=True)
 
+    # ── 2026-11-01 事件源注册（文档入库 = 第一个真实源）──
+    # ⚠️ **注册不等于启用**：来源注册只是让底座认识这个 kind，
+    #    事件仍按 observe 模式记录、**不执行任何动作**。
+    #    （放开执行是逐来源显式动作，见 POST /api/events/sources/{kind}/mode）
+    try:
+        from core.events.sources_docs import build_docs_source, DOCS_SOURCE_KIND
+        from core.events.sources import get_registry as _get_ev_reg
+        from repositories.event_repo import EventRepo as _EvRepo
+        from services.event_service import EventService as _EvService
+        from database import db_conn as _db_conn_ev2
+        with _db_conn_ev2() as _c:
+            _spec_docs = build_docs_source(
+                allowed_senders=frozenset(),
+                scope_keys=frozenset(),
+                mode="observe", policy_version="v1")
+            _EvService(_EvRepo(_c), _get_ev_reg()).register_source(_spec_docs)
+        print("[startup] 事件源已注册：%s（observe 模式：只记录不执行）" % DOCS_SOURCE_KIND,
+              flush=True)
+    except Exception as _e:
+        print("[startup] 事件源注册失败（不影响主流程）：%s" % str(_e)[:160], flush=True)
+
     # ── P1-5（2026-11-01）事件域看门狗：工单停滞检测 ──
     # ⚠️ **默认关**：与 orch_supervisor 的 auto_resume 同口径 ——
     #   它只留痕（写 alert_events）**不自动推进**工单，但长期开着会积累告警噪音。

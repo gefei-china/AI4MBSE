@@ -284,6 +284,18 @@ def admit(trigger: Trigger, adm: Admission, is_duplicate: bool = False) -> Admis
     if adm.scope_keys and trigger.thread_key.split(":", 1)[-1] not in adm.scope_keys:
         return AdmissionVerdict(False, "source_not_listed", "none", True)
 
+    # ⚠️ **系统事件不按白名单拒**（2026-11-01 加，理由见下）。
+    # 系统事件（actor_type='system'）是**系统自己产生的既成事实**
+    # （如"文档已入库"、"校验已失败"），不是"某个人的请求"。
+    # 它不需要任何人授权 —— 需要授权的是**后续动作**（写图谱），那由
+    # WorkItem 的 mode（observe/execute）+ 人工确认裁决。
+    # ⇒ 若按白名单拒系统事件 ⇒ 事件底座永远收不到系统侧信号 ⇒
+    #    "人点一次"的现状无法改变（本工程最需要打破的正是这一点）。
+    # ⇒ 但**系统事件也绝不自动执行**：它只建工单，mode 默认 observe。
+    if trigger.actor_type == "system":
+        return AdmissionVerdict(True, "system_event", "explicit",
+                                adm.mode == OBSERVE_MODE)
+
     actor_l = (trigger.actor or "").strip().lower()
     listed = actor_l in {a.lower() for a in adm.allowed}
     addressed = trigger.addressed in ("mention", "direct")
