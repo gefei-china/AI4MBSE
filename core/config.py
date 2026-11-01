@@ -1207,6 +1207,17 @@ DEFAULT_CONFIG = {
         # 入库实测 13.4 min ⇒ 这里给 900 s；长作业另由 handler 的 LeaseKeeper 持续续租。
         "worker_lease_s": 900,
     },
+    # ── P1-5（2026-11-01）：事件驱动底座（Super-agent 落地）──
+    # 事件来源的准入规则存在 ev_sources 表（可运行时改），此处只放**全局运行参数**。
+    "events": {
+        # 看门狗默认**关**：它只留痕（写 alert_events）**不自动推进**工单，
+        # 但长期开着会积累告警噪音。灰度：先开 3~5 天统计 found 数量。
+        # 补的缺口：既有五套守护（告警评估器/编排重投/作业队列/MCP 巡检/BM25 预热）
+        # **都不看 ev_workitems** ⇒ "事件接到了、工单建了、没人管"完全不可见。
+        "watchdog_enabled": False,
+        "watchdog_interval_s": 300,  # 扫描间隔（秒）
+        "watchdog_stale_s": 1800,    # 停滞阈值（秒）：非终态工单多久没动算停滞
+    },
     # ── P1-1（2026-10-03 整改）：入口限流（对标 Dify 配额 / Anthropic X-RateLimit-* 契约）──
     # 评估 §6 P1-1 实测：全仓 0 处限流；`budget_tokens` 曾超支 35%，后又被置 0 ⇒ 完全无闸。
     # 阈值为"远超当前真实用量、但能挡住失控"的量级，不是"刚好卡住现有业务"的量级：
@@ -2471,6 +2482,11 @@ _EXTRA_SCHEMA = {
         "worker_count":            {"type": "int",  "desc": "worker 并发数（与 SQLite 单写者争用相关，别盲目调大）"},
         "worker_interval_s":       {"type": "int",  "desc": "worker 轮询间隔（秒）"},
         "worker_lease_s":          {"type": "int",  "desc": "作业租约（秒）：超时未续租视为失活，可被其它 worker 接管"},
+    },
+    "events": {
+        "watchdog_enabled":        {"type": "bool", "desc": "事件工单看门狗总开关（默认关；开也只是留痕告警，不自动推进工单）"},
+        "watchdog_interval_s":     {"type": "int",  "desc": "看门狗扫描间隔（秒）"},
+        "watchdog_stale_s":        {"type": "int",  "desc": "工单停滞阈值（秒）：非终态工单多久没动算停滞"},
     },
     "rag": {
         "hyde_embed_max_chunks":   {"type": "int",  "desc": "HyDE 向量化的最多块数（0=不限）。HyDE 让索引期向量请求数翻倍，设上限可控成本"},

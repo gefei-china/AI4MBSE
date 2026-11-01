@@ -45,6 +45,7 @@ from core.events.model import (
     Admission, AdmissionVerdict, Trigger, WorkItem,
     OBSERVE_MODE, EXECUTE_MODE,
     decide_workitem_transition, is_terminal,
+    decide_handoff, build_handoff_context,
 )
 from core.events.sources import SourceRegistry, get_registry
 from repositories.event_repo import EventRepo
@@ -198,6 +199,42 @@ class EventService:
 
     def stats(self) -> dict:
         return self.repo.stats()
+
+    # ── 跨会话接力（Super-agent 的"连续"特征）──
+    def handoff(self, workitem_id: str, to_conversation_id: int) -> dict:
+        """把工单挂到另一个会话，并返回接力上下文包。
+
+        ⚠️ **本方法不做任何业务执行** —— 只做"挂载 + 给上下文"。
+        理由与 `claim_for_execute` 同源：执行必须由人确认后显式发起，
+        否则"观察期零写库"这条判据无法成立。
+
+        ⚠️ **挂载是"并行认领"不是"转移"**：原会话仍可继续推进。
+        两个会话同时跑同一工单 ⇒ 重复写图谱 ⇒ 副作用不可逆。
+        ⇒ 真正的执行裁决权仍在状态机 + 人工确认。
+        """
+        wi = self.repo.get_workitem(workitem_id)
+        if not wi:
+            return {"ok": False, "reason": "workitem_not_found"}
+        cur = int(wi.get("conversation_id") or 0)
+        ok, why = decide_handoff(wi, to_conversation_id, cur)
+        if not ok:
+            return {"ok": False, "reason": why, "state": wi.get("state"),
+                    "conversation_id": cur}
+        trg = self.repo.get_trigger(wi.get("trigger_id") or "") or {}
+        ctx = build_handoff_context(wi, trg,
+                                     self.repo.list_workitems_by_thread(
+                                         wi.get("thread_key") or "", 5))
+        n = self.repo.bind_workitem_conversation(workitem_id, to_conversation_id)
+        if not n:
+            return {"ok": False, "reason": "bind_failed"}
+        return {"ok": True, "reason": why, "workitem_id": workitem_id,
+                "conversation_id": int(to_conversation_id),
+                "previous_conversation_id": cur,
+                "context": ctx}
+
+    def list_for_conversation(self, conversation_id: int, limit: int = 50) -> list:
+        """某会话关联的工单（会话页"待办/相关事件"面板用）。"""
+        return self.repo.list_workitems_by_conversation(conversation_id, limit)
 
 
 # ── 便捷函数（供 router 层用，避免每次都 new）──

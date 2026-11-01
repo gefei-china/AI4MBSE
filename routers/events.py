@@ -204,6 +204,78 @@ def events_stats(conn=Depends(db_session), user=Depends(current_user)):
     return {"stats": EventRepo(conn).stats()}
 
 
+@router.post("/api/events/workitems/{wid}/handoff")
+def handoff_workitem(wid: str, body: dict, conn=Depends(db_session),
+                     user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """跨会话接力：把工单挂到另一个会话，并返回接力上下文包。
+
+    body = {conversation_id}
+
+    ⚠️ **只挂载 + 给上下文，不执行任何业务动作**。
+    ⚠️ 挂载是「并行认领」不是「转移」：原会话仍可继续推进
+       （两个会话同时跑同一工单 ⇒ 重复写图谱 ⇒ 副作用不可逆）。
+    ⚠️ 终态工单不可接力（已 done/failed/stopped 的事不该被复活重跑）。
+    """
+    cid = int((body or {}).get("conversation_id") or 0)
+    if cid <= 0:
+        return JSONResponse({"error": "缺少 conversation_id"}, 400)
+    res = _svc(conn).handoff(wid, cid)
+    if not res.get("ok"):
+        return JSONResponse(res, 409)
+    return res
+
+
+@router.get("/api/events/conversations/{cid}/workitems")
+def conversation_workitems(cid: int, conn=Depends(db_session),
+                            user=Depends(current_user),
+                            limit: int = Query(50, ge=1, le=200)):
+    """某会话关联的工单（会话页"相关事件/待办"面板用）。"""
+    items = EventRepo(conn).list_workitems_by_conversation(cid, _limit_default(limit, 200))
+    return {"items": items, "conversation_id": cid}
+
+
+@router.get("/api/events/threads/{thread_key:path}/workitems")
+def thread_workitems(thread_key: str, conn=Depends(db_session),
+                     user=Depends(current_user),
+                     limit: int = Query(50, ge=1, le=200)):
+    """某线程下的全部工单（同一业务对象的事件历史 —— Thread 的价值所在）。
+
+    thread_key 形如 `zhiyuan:branch-9`（含冒号，故用 :path 捕获）。
+    """
+    items = EventRepo(conn).list_workitems_by_thread(thread_key, _limit_default(limit, 200))
+    return {"items": items, "thread_key": thread_key}
+
+
+@router.get("/api/events/stuck")
+def stuck_workitems(conn=Depends(db_session), user=Depends(current_user),
+                    stale_s: int = Query(1800, ge=60, le=86400)):
+    """停滞工单（非终态且超过阈值未动）—— 看门狗的只读视图。
+
+    ⚠️ 默认**只报不自动推进**（与编排 auto_resume 同口径）：
+    推进意味着真的写图谱/调 LLM，代价真实且副作用不可逆。
+    """
+    from core.events.watchdog import stuck_candidates, watchdog_status
+    items = stuck_candidates(conn, stale_s)
+    return {"items": items, "count": len(items), "stale_s": stale_s,
+            "watchdog": watchdog_status(),
+            "note": "默认只留痕不自动推进；推进需人显式发起"}
+
+
+@router.post("/api/events/watchdog/scan")
+def watchdog_scan(conn=Depends(db_session),
+                  user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """手动跑一轮看门狗扫描（留痕到 alert_events）。
+
+    ⚠️ 仍然**不自动推进工单** —— 只把停滞项变成可见告警。
+    """
+    from core.events.watchdog import run_once
+    try:
+        r = run_once(conn)
+    except Exception as e:
+        return JSONResponse({"error": "看门狗扫描失败: %s" % e}, 500)
+    return r
+
+
 # ── 来源构造（从请求体）──
 def build_source_from_body(body: dict):
     """把请求体变成 SourceSpec。

@@ -382,3 +382,96 @@ def decide_workitem_transition(cur: str, nxt: str) -> tuple[bool, str]:
 def is_terminal(state: str) -> bool:
     """是否终态（不再需要推进）。"""
     return state in TERMINAL_WORKITEM_STATES
+
+
+# ─────────────────────────────────────────────────────────────
+# 跨会话接力（Super-agent 的"连续性"能力）
+# ─────────────────────────────────────────────────────────────
+def decide_handoff(workitem: dict, to_conversation_id: int,
+                   current_conversation_id: int = 0) -> tuple[bool, str]:
+    """跨会话接力的判定：工单能否挂到另一个会话上继续推进。
+
+    ━━━ 为什么需要它（Super-agent §1 的"连续"特征）━━━
+    原文：「用户先在 IM 提了方案 A，随后在 GitHub PR 评论里改成方案 B，
+    Super-agent 能理解并调整执行方向」——**同一件事跨入口连续**。
+    本工程的等价形态：同一分支的变更事件，可能在会话 #100 触发、
+    但后续讨论发生在会话 #207。工单若绑死在原会话，就会"看起来没接上"。
+
+    ━━━ 三条硬约束（每条都对应一个真实风险）━━━
+    ① **终态工单不可接力** —— 已 done/failed/stopped 的事情不该被"复活重跑"。
+       （与 `decide_workitem_transition` 的终态纪律同源。）
+    ② **同会话接力是空操作** —— to == current 时不产生任何变化，
+       否则会留下一条"已接力到自己"的脏记录。
+    ③ **接力必须换会话** —— 工单原会话仍可继续；新会话是**并行认领**，
+       不是"转移"（避免两个会话同时跑同一工单 ⇒ 重复写图谱）。
+
+    :returns: (是否允许, 原因)
+    """
+    if not workitem:
+        return False, "workitem_not_found"
+    state = str(workitem.get("state") or "open")
+    if is_terminal(state):
+        return False, "workitem_terminal:%s" % state
+    cur = int(current_conversation_id or 0)
+    tgt = int(to_conversation_id or 0)
+    if tgt <= 0:
+        return False, "invalid_target_conversation"
+    if cur > 0 and tgt == cur:
+        return False, "same_conversation_noop"
+    return True, "ok"
+
+
+def build_handoff_context(workitem: dict, trigger: Optional[dict] = None,
+                          recent_items: Optional[list] = None) -> dict:
+    """构造接力时的上下文包（**Inline & Spill 的最小等价物**）。
+
+    ━━━ 为什么只给"摘要 + ID"而不是全量历史 ━━━
+    Super-agent 原文的 Inline & Spill 三阶段：
+      ① 从最少信息开始（当前对象 ID + 内容摘要）
+      ② 局部性 Inline（紧密关联对象的 ID + 时空相邻内容）
+      ③ 超预算则 Spill（留引用，模型按需续读）
+    本工程已有等价的上下文预算机制（`agent/pipeline_parts/history.py` 四通道），
+    ⇒ 这里**不重复造轮子**，只负责产出"接力包"：
+      · **Inline**：工单标题 + 动作 + 授权快照 + 触发事件摘要（前 50 字）+ 工单 ID
+      · **Spill 入口**：工单 ID / trigger_id / thread_key ⇒ 模型可凭 ID 回查全量
+
+    ⚠️ **不塞正文全文**：事件正文不可信且可能很长；
+       塞全文会让"注入话术"进入下游模型的上下文（虽然不参与授权，
+       但仍可能影响模型判断）。只给前 50 字摘要（对齐原文的具体做法）。
+    """
+    wi = workitem or {}
+    trg = trigger or {}
+    items = recent_items or []
+    # 摘要只取前 50 字（Super-agent 原文的具体口径：内容前 50 字）
+    text_summary = sanitize_text(trg.get("text", ""), 50)
+    return {
+        "workitem_id": wi.get("id", ""),
+        "title": wi.get("title", ""),
+        "action": wi.get("action", ""),
+        "scope": wi.get("scope", ""),
+        "mandate": {
+            "actor": wi.get("actor", ""),
+            "actor_type": wi.get("actor_type", "human"),
+            "policy_version": wi.get("policy_version", ""),
+            "strength": wi.get("strength", ""),
+        },
+        "trigger": {
+            "id": trg.get("id", ""),
+            "source": trg.get("source", ""),
+            "thread_key": trg.get("thread_key", ""),
+            "actor": trg.get("actor", ""),
+            "summary": text_summary,
+        },
+        # Spill 入口：凭这些 ID 可回查全量（不在包里展开）
+        "refs": {
+            "trigger_id": trg.get("id", ""),
+            "thread_key": trg.get("thread_key", ""),
+            "workitem_id": wi.get("id", ""),
+        },
+        "recent": [
+            {"id": it.get("id", ""), "state": it.get("state", ""),
+             "title": sanitize_text(it.get("title", ""), 50)}
+            for it in items[:5]
+        ],
+        "note": "Inline=摘要与 ID；Spill=凭 refs 回查全量（不展开正文）",
+    }

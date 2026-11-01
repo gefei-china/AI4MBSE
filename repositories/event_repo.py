@@ -139,14 +139,15 @@ class EventRepo(BaseRepo):
             """INSERT OR IGNORE INTO ev_workitems
                  (id, trigger_id, source, thread_key, scope, title, action,
                   actor, actor_type, policy_version, strength, mode, state,
-                  result, error, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+                  result, error, created_at, conversation_id, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,CURRENT_TIMESTAMP)""",
             (row["id"], row["trigger_id"], row["source"], row["thread_key"],
              row.get("scope", ""), row.get("title", ""), row.get("action", ""),
              row.get("actor", ""), row.get("actor_type", "human"),
              row.get("policy_version", "v1"), row.get("strength", "none"),
              row.get("mode", "observe"), row.get("state", "open"),
-             row.get("result", ""), row.get("error", "")),
+             row.get("result", ""), row.get("error", ""),
+             int(row.get("conversation_id", 0) or 0)),
         )
         self.conn.commit()
         return bool(cur.rowcount)
@@ -172,12 +173,48 @@ class EventRepo(BaseRepo):
 
     def set_workitem_state(self, wid: str, state: str, result: str = "",
                            error: str = "") -> int:
-        """改工单状态。**状态机判定在 service 层做**，这里只落库。"""
+        """改工单状态。**状态机判定在 service 层做**，这里只落库。
+
+        ⚠️ 同时刷新 `updated_at`（停滞检测的判据基准）。
+        ⚠️ 时间戳用 SQLite 的 CURRENT_TIMESTAMP（**UTC**）——
+           与本仓其它表一致；⚠️ 不可用 Python datetime.now()（本地时间 UTC+8）
+           ⇒ 与 CURRENT_TIMESTAMP 相减会凭空多 8 小时（`agent/orch_checkpoint.py` 同源坑）。
+        """
         cur = self.conn.execute(
-            "UPDATE ev_workitems SET state=?, result=?, error=? WHERE id=?",
+            "UPDATE ev_workitems SET state=?, result=?, error=?, "
+            "updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (state, result, error, wid))
         self.conn.commit()
         return cur.rowcount
+
+    def bind_workitem_conversation(self, wid: str, conversation_id: int) -> int:
+        """把工单挂到会话上（跨会话接力）。
+
+        ⚠️ 语义是「**并行认领**」不是「转移」：原会话仍可继续推进。
+        理由：两个会话同时跑同一工单 ⇒ 重复写图谱 ⇒ 副作用不可逆。
+        ⇒ 挂载只是"这个会话知道这件事"，**执行仍由状态机 + 人工确认裁决**。
+        """
+        cur = self.conn.execute(
+            "UPDATE ev_workitems SET conversation_id=?, updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=?",
+            (int(conversation_id or 0), wid))
+        self.conn.commit()
+        return cur.rowcount
+
+    def list_workitems_by_conversation(self, conversation_id: int,
+                                       limit: int = 50) -> list:
+        """某会话关联的工单（跨会话连续性查询口）。"""
+        return self.rows(
+            "SELECT * FROM ev_workitems WHERE conversation_id=? "
+            "ORDER BY id DESC LIMIT ?",
+            (int(conversation_id or 0), int(limit)))
+
+    def list_workitems_by_thread(self, thread_key: str, limit: int = 50) -> list:
+        """某线程下的全部工单（同一业务对象的事件历史 —— Thread 的价值所在）。"""
+        return self.rows(
+            "SELECT * FROM ev_workitems WHERE thread_key=? "
+            "ORDER BY id DESC LIMIT ?",
+            (str(thread_key or ""), int(limit)))
 
     # ── 统计 ──
     def stats(self) -> dict:

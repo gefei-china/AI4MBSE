@@ -116,5 +116,20 @@ def _migrate_event_tables(conn):
     c.execute("CREATE INDEX IF NOT EXISTS ix_evwi_state ON ev_workitems(state)")
     c.execute("CREATE INDEX IF NOT EXISTS ix_evwi_mode ON ev_workitems(mode)")
 
+    # ── 补列（老库兼容）──
+    # conversation_id：工单当前挂载的会话（跨会话接力时更新）。
+    # ⚠️ 语义是"**并行认领**"而非"转移"：原会话仍可继续推进，
+    #    新会话是第二个认领者 —— 两个会话同时跑同一工单 ⇒ 重复写图谱，
+    #    所以接力必须由人显式发起，且工单状态机仍是唯一裁决。
+    _wi_cols = [r[1] for r in c.execute("PRAGMA table_info(ev_workitems)").fetchall()]
+    if "conversation_id" not in _wi_cols:
+        c.execute("ALTER TABLE ev_workitems ADD COLUMN `conversation_id` INTEGER DEFAULT 0")
+        print("[init_db] 迁移: ev_workitems 增加列 conversation_id")
+    # updated_at：停滞检测的判据基准（看门狗按"多久没动"判停滞）。
+    # ⚠️ 必须有：没有它就只能用 created_at ⇒ 工单一旦被推进过就永远不算停滞。
+    if "updated_at" not in _wi_cols:
+        c.execute("ALTER TABLE ev_workitems ADD COLUMN `updated_at` TEXT DEFAULT ''")
+        print("[init_db] 迁移: ev_workitems 增加列 updated_at")
+
     conn.commit()
     print("[init_db] 迁移: ev_sources / ev_triggers / ev_workitems 已建立（事件驱动底座）")

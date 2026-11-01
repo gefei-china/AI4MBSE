@@ -140,6 +140,30 @@ async def lifespan(app: FastAPI):
         print("[startup] 作业队列 worker 启动失败（长任务将只能同步跑）：%s" % str(_e)[:160],
               flush=True)
 
+    # ── P1-5（2026-11-01）事件域看门狗：工单停滞检测 ──
+    # ⚠️ **默认关**：与 orch_supervisor 的 auto_resume 同口径 ——
+    #   它只留痕（写 alert_events）**不自动推进**工单，但长期开着会积累告警噪音。
+    #   灰度建议：先开 3~5 天统计 found 数量，恒为 0 再考虑接入自动推进。
+    #   补的是既有五套守护都没覆盖的缺口：①告警评估器看全局指标、
+    #   ②编排守护看 agent_tasks、③作业队列看 job_jobs、④MCP 巡检看 server
+    #   ⇒ **都不看 ev_workitems** ⇒ "事件接到了、工单建了、没人管"完全不可见。
+    try:
+        from core.events.watchdog import start_watchdog as _start_ev_wd
+        from database import db_conn as _db_conn_ev
+        if config.as_bool("events", "watchdog_enabled", False):
+            _start_ev_wd(
+                _db_conn_ev,
+                interval_s=int(config.get("events", "watchdog_interval_s", 300) or 300),
+                stale_s=int(config.get("events", "watchdog_stale_s", 1800) or 1800),
+                enabled=True)
+            print("[startup] 事件工单看门狗已启动（只留痕不自动推进）", flush=True)
+        else:
+            print("[startup] 事件工单看门狗未启用（events.watchdog_enabled=off）——"
+                  "工单停滞不会自动告警；可手动调 POST /api/events/watchdog/scan", flush=True)
+    except Exception as _e:
+        print("[startup] 事件工单看门狗启动失败（不影响主流程）：%s" % str(_e)[:160],
+              flush=True)
+
     # MCP-D1：后台健康巡检线程（每 5 分钟对 sse/http 服务器做 initialize 握手探测）
     try:
         from mcp_health import start_health_loop

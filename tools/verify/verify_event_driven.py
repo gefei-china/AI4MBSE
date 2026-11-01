@@ -225,6 +225,95 @@ check("G12", "重投不改写首次结论（首次仍 admitted，重投计 hit_c
       trg_b.get("disposition") == "admitted" and (trg_b.get("hit_count") or 0) >= 1,
       f"disp={trg_b.get('disposition')} hits={trg_b.get('hit_count')}")
 
+# ══ P1-3 跨会话接力（Super-agent 的"连续"特征）══
+# ⚠️ **断言之间不能有状态污染**：G9 已把 `wid` 推进到 done（终态），
+#    接力测试必须用**独立的新工单**，否则测的是"终态拒绝"而非"接力成功"。
+#    （这是本轮修的第 2 个验证器缺陷——症状与"实现没生效"完全一致。）
+ho_r = svc.receive("zhiyuan", {"external_id": "ext-H1", "thread_scope": "branch-9",
+                                "actor": "alice", "addressed": "mention",
+                                "text": "跨会话接力测试事件，正文用于验证不被全量塞进上下文包"})
+ho_wid = ho_r.get("workitem_id") or ""
+
+# G13 接力成功：工单挂到新会话 + 返回接力上下文包
+ho = svc.handoff(ho_wid, 8888)
+check("G13", "跨会话接力成功且返回上下文包（Inline 摘要 + Spill 入口）",
+      ho.get("ok") and ho.get("conversation_id") == 8888
+      and bool(ho.get("context", {}).get("refs", {}).get("workitem_id")),
+      f"ok={ho.get('ok')} reason={ho.get('reason')}")
+
+# G14 接力上下文：只给摘要（正文前 50 字），不塞全文
+ctxp = ho.get("context") or {}
+ho_trg = (EventRepo(conn).get_trigger(ho_r.get("trigger_id") or {}) or {})
+trg_txt = ho_trg.get("text", "")
+check("G14", "接力上下文只含摘要（≤50字）不含正文全文",
+      0 < len(ctxp.get("trigger", {}).get("summary", "")) <= 50
+      and trg_txt[:50] == ctxp.get("trigger", {}).get("summary", ""),
+      f"summary_len={len(ctxp.get('trigger', {}).get('summary', ''))} full_len={len(trg_txt)}")
+
+# G15 接力上下文含授权快照（谁授权/哪版策略）
+check("G15", "接力上下文携带授权快照（actor/policy_version/strength）",
+      bool(ctxp.get("mandate", {}).get("actor"))
+      and bool(ctxp.get("mandate", {}).get("policy_version")),
+      f"mandate={ctxp.get('mandate')}")
+
+# G16 同会话接力是空操作（拒绝）
+ho_same = svc.handoff(ho_wid, 8888)
+check("G16b", "同会话接力是空操作（拒绝）",
+      ho_same.get("ok") is False and "noop" in str(ho_same.get("reason")),
+      f"reason={ho_same.get('reason')}")
+
+# G17 终态工单不可接力（done ⇒ 拒绝）
+# ⚠️ 状态机 open→done 是**非法跳步**（open 只允许 →running/stopped）：
+#    必须在**推进之前**测这个跳步，测完再走 running→done 才是终态。
+#    （本轮第 3 个验证器缺陷：把跳步测试放在 done 之后，那时已是 done→done noop。）
+skip = svc.advance(ho_wid, "done")     # 此刻 state=open ⇒ 应被拒
+check("G17a", "状态机拒绝 open→done 跳步（须经 running）",
+      skip.get("ok") is False and "illegal_transition" in str(skip.get("reason")),
+      f"skip_reason={skip.get('reason')}")
+adv1 = svc.advance(ho_wid, "running")
+adv2 = svc.advance(ho_wid, "done")
+check("G17b", "合法路径 open→running→done 通过",
+      adv1.get("ok") is True and adv2.get("ok") is True,
+      f"running={adv1.get('ok')} done={adv2.get('ok')}")
+ho_done = svc.handoff(ho_wid, 9999)
+check("G17", "终态工单不可接力（done ⇒ 拒绝）",
+      ho_done.get("ok") is False and "terminal" in str(ho_done.get("reason")),
+      f"reason={ho_done.get('reason')}")
+
+# ══ P1-5 看门狗（工单停滞检测）══
+# G18 停滞判据：非终态且超时 ⇒ 被检出；终态 ⇒ 不检出
+from core.events.watchdog import stuck_candidates, run_once, watchdog_status  # noqa: E402
+
+# 造一条"很久以前创建且未动"的工单（直接改 updated_at 模拟）
+old_wid = (svc.receive("zhiyuan", {"external_id": "ext-STUCK", "thread_scope": "branch-9",
+                                    "actor": "alice", "addressed": "mention",
+                                    "text": "停滞测试"}) or {}).get("workitem_id") or ""
+conn.execute("UPDATE ev_workitems SET updated_at='2020-01-01 00:00:00' WHERE id=?", (old_wid,))
+conn.commit()
+stuck = stuck_candidates(conn, stale_s=1800)
+check("G18", "停滞工单被检出（非终态 + 超时）",
+      any(i.get("id") == old_wid for i in stuck),
+      f"stuck_count={len(stuck)}")
+
+# G19 终态工单不被报（否则每轮扫描都刷一遍）
+conn.execute("UPDATE ev_workitems SET state='done' WHERE id=?", (old_wid,))
+conn.commit()
+stuck2 = stuck_candidates(conn, stale_s=1800)
+check("G19", "终态工单不被报（避免每轮噪音）",
+      not any(i.get("id") == old_wid for i in stuck2),
+      f"stuck_count={len(stuck2)}")
+
+# G20 扫描只留痕，**不自动推进**（工单状态不变）
+conn.execute("UPDATE ev_workitems SET state='open', updated_at='2020-01-01 00:00:00' "
+             "WHERE id=?", (old_wid,))
+conn.commit()
+before_state = (EventRepo(conn).get_workitem(old_wid) or {}).get("state")
+scan_res = run_once(conn)
+after_state = (EventRepo(conn).get_workitem(old_wid) or {}).get("state")
+check("G20", "看门狗只留痕不自动推进（工单状态不变）",
+      before_state == "open" and after_state == "open" and scan_res.get("found", 0) >= 1,
+      f"{before_state}→{after_state} found={scan_res.get('found')}")
+
 conn.close()
 
 # ══════════════════════════════════════════════════════════
@@ -297,6 +386,15 @@ def _run_gid(gid):
             return (bool(t) and t.get("disposition") == "admitted"
                     and (t.get("hit_count") or 0) >= 1,
                     f"disp={t.get('disposition') if t else None} hits={t.get('hit_count') if t else None}")
+        if gid == "G17":
+            r1 = sv.receive("zhiyuan", {"external_id": "ext-G17", "thread_scope": "branch-9",
+                                         "actor": "alice", "addressed": "mention", "text": "t"})
+            w = r1.get("workitem_id") or ""
+            sv.advance(w, "running")     # 状态机要求经 running（open→done 非法）
+            sv.advance(w, "done")
+            h = sv.handoff(w, 9999)
+            return (h.get("ok") is False and "terminal" in str(h.get("reason")),
+                    f"ok={h.get('ok')} reason={h.get('reason')}")
         return (False, "unknown gid")
     finally:
         c2.close()
@@ -412,6 +510,21 @@ def _m6_bump(self, tid):
 
 _mutate_and_check("M6", "重投覆盖首次结论 ⇒ G12 翻红", "G12",
                   [(EventRepo, "bump_trigger_hit", _m6_bump)])
+
+# M7: 终态也允许接力 ⇒ G16 翻
+# ⚠️ 变异锚点：`services/event_service.py` 用的是 `from core.events.model import
+#    decide_handoff` —— **静态绑定**。变异必须打在 **service 模块**上，
+#    打在 model 上打不到真实调用点（M2/M3 已栽过一次，见上）。
+from services import event_service as evservice   # noqa: E402
+
+
+def _m7_handoff(workitem, to_conversation_id, current_conversation_id=0):
+    # 变异：去掉终态校验与同会话空操作校验
+    return (True, "ok")
+
+
+_mutate_and_check("M7", "终态/同会话也放行接力 ⇒ G17 翻红", "G17",
+                  [(evservice, "decide_handoff", _m7_handoff)])
 
 # ══════════════════════════════════════════════════════════
 # 汇总

@@ -26,6 +26,7 @@ from core.events.model import (  # noqa: F401
     derive_trigger_id, derive_thread_key, derive_workitem_id,
     build_trigger, admit, make_workitem,
     decide_workitem_transition, is_terminal,
+    decide_handoff, build_handoff_context,
     WORKITEM_TRANSITIONS, TERMINAL_WORKITEM_STATES,
     OBSERVE_MODE, EXECUTE_MODE, sanitize_text, stable_json,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "derive_trigger_id", "derive_thread_key", "derive_workitem_id",
     "build_trigger", "admit", "make_workitem",
     "decide_workitem_transition", "is_terminal",
+    "decide_handoff", "build_handoff_context",
     "WORKITEM_TRANSITIONS", "TERMINAL_WORKITEM_STATES",
     "OBSERVE_MODE", "EXECUTE_MODE", "sanitize_text", "stable_json",
     "SourceSpec", "SourceRegistry", "registry", "get_registry",
