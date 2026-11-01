@@ -1538,6 +1538,10 @@
       <div class="page" id="pg-ops" data-page-node-id="uPOVSEbwUu8nszCReuHiLy">
         <h3 class="pt" data-page-node-id="tFeFcsZXNRQLth7z9hCJcK">统一监控平台</h3>
         <div class="pd" data-page-node-id="9QIsdA7ooP7stEPAG7k345">运行 · LLM · 系统 一体化监控 + 日志检索 + 告警中心 <span class="badge" data-page-node-id="fFmQ5pHUPgXnZBu5CbUNWV">7.1/7.2/7.3</span><span class="badge" data-page-node-id="kFEyY0Ig38sbACZaXhycQL">11.3</span><span class="badge" data-page-node-id="ULsIw2gh3EB5937ywjFG5n">D12</span></div>
+        <!-- 事件驱动面板（2026-11-01，Super-agent 落地）：放在最上方，
+             因为按"面板先列需要人处理的事"——观察期工单就是"本应做什么"，
+             不放到最前就没人看得到。数据全部来自 /api/events/*。 -->
+        <div id="ev-panel"><div class="loading">加载事件面板…</div></div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px;" id="ops-kpis" data-page-node-id="j7t9LTQW4sbWXn0HOGCqz5"></div>
         <!-- 平台能力总览（2026-10-18 v2 方案收口）：LLM 健康 / 编排运行 / 会话排查 / 治理就绪 四层一屏总览。
              取数全部复用既有口径（llm_health 为 LLM 层唯一真源），各段独立降级，不新造指标。 -->
@@ -1904,5 +1908,6 @@
 <script src="/static/js/mods/49-convnav.js" defer></script>
 <!-- 2026-10-29 AI 答复呈现层（来源标注 + 正文限高内滚；内容不删、不折叠，遵守 B5-8） -->
 <script src="/static/js/mods/51-answer-view.js" defer></script>
+<script src="/static/js/mods/52-events.js" defer></script>
 </body>
 </html>

@@ -146,18 +146,21 @@ async def lifespan(app: FastAPI):
     #    （放开执行是逐来源显式动作，见 POST /api/events/sources/{kind}/mode）
     try:
         from core.events.sources_docs import build_docs_source, DOCS_SOURCE_KIND
+        from core.events.sources_sysml import build_sysml_source, SYML_SOURCE_KIND
         from core.events.sources import get_registry as _get_ev_reg
         from repositories.event_repo import EventRepo as _EvRepo
         from services.event_service import EventService as _EvService
         from database import db_conn as _db_conn_ev2
         with _db_conn_ev2() as _c:
-            _spec_docs = build_docs_source(
-                allowed_senders=frozenset(),
-                scope_keys=frozenset(),
-                mode="observe", policy_version="v1")
-            _EvService(_EvRepo(_c), _get_ev_reg()).register_source(_spec_docs)
-        print("[startup] 事件源已注册：%s（observe 模式：只记录不执行）" % DOCS_SOURCE_KIND,
-              flush=True)
+            _svc_ev = _EvService(_EvRepo(_c), _get_ev_reg())
+            _svc_ev.register_source(build_docs_source(
+                allowed_senders=frozenset(), scope_keys=frozenset(),
+                mode="observe", policy_version="v1"))
+            _svc_ev.register_source(build_sysml_source(
+                allowed_senders=frozenset(), scope_keys=frozenset(),
+                mode="observe", policy_version="v1"))
+        print("[startup] 事件源已注册：%s, %s（observe 模式：只记录不执行）"
+              % (DOCS_SOURCE_KIND, SYML_SOURCE_KIND), flush=True)
     except Exception as _e:
         print("[startup] 事件源注册失败（不影响主流程）：%s" % str(_e)[:160], flush=True)
 

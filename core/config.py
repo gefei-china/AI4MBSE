@@ -1217,6 +1217,10 @@ DEFAULT_CONFIG = {
         "watchdog_enabled": False,
         "watchdog_interval_s": 300,  # 扫描间隔（秒）
         "watchdog_stale_s": 1800,    # 停滞阈值（秒）：非终态工单多久没动算停滞
+        # SysML 校验失败是否发事件。**默认关**：校验在 AI 建模主链路高频执行，
+        # 无条件发事件会把台账灌满（与"少占用人的注意力"冲突）。
+        # 开启后仍靠"Trigger ID 由代码哈希派生"天然去重，同一段失败代码只记一条。
+        "sysml_source_enabled": False,
     },
     # ── P1-1（2026-10-03 整改）：入口限流（对标 Dify 配额 / Anthropic X-RateLimit-* 契约）──
     # 评估 §6 P1-1 实测：全仓 0 处限流；`budget_tokens` 曾超支 35%，后又被置 0 ⇒ 完全无闸。
@@ -2487,6 +2491,7 @@ _EXTRA_SCHEMA = {
         "watchdog_enabled":        {"type": "bool", "desc": "事件工单看门狗总开关（默认关；开也只是留痕告警，不自动推进工单）"},
         "watchdog_interval_s":     {"type": "int",  "desc": "看门狗扫描间隔（秒）"},
         "watchdog_stale_s":        {"type": "int",  "desc": "工单停滞阈值（秒）：非终态工单多久没动算停滞"},
+        "sysml_source_enabled":    {"type": "bool", "desc": "SysML 校验失败是否发事件（默认关；校验高频执行，开了会给台账灌量）"},
     },
     "rag": {
         "hyde_embed_max_chunks":   {"type": "int",  "desc": "HyDE 向量化的最多块数（0=不限）。HyDE 让索引期向量请求数翻倍，设上限可控成本"},

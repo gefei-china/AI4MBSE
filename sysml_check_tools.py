@@ -239,4 +239,30 @@ def _validate(args):
         print(svc.line_text(r), flush=True)
     except Exception:
         pass
+
+    # ── 事件驱动钩子（2026-11-01）：校验**硬错**时发一条事件 ──
+    # ⚠️ 三条纪律（缺一即变成噪音或阻断主链路）：
+    #   ① **默认关**（`events.sysml_source_enabled`）：校验在 AI 建模主链路上高频执行，
+    #      无条件发事件会把台账灌满 —— 与"少占用人的注意力"直接冲突。
+    #   ② **只在 verdict='block' 时发**：pass/report 不打扰。
+    #      且 Trigger ID 由**代码哈希**派生 ⇒ 同一段失败代码只产生一条事件（天然去重）。
+    #   ③ **绝不阻断校验**：本段全程 try/except，失败只留日志。
+    #      校验结果 `out` 已经算完，钩子在任何情况下都不改它。
+    try:
+        from core import config as _cfg_ev
+        if _cfg_ev.as_bool("events", "sysml_source_enabled", False) \
+                and out.get("verdict") == "block":
+            from core.events.sources import get_registry as _get_reg
+            if _get_reg().get("sysml_check") is not None:
+                from core.events.sources_sysml import emit_sysml_check_failed as _emit
+                from database import db_conn as _db_conn
+                _code = (args.get("code") if isinstance(args, dict) else "") or ""
+                if str(_code).strip():
+                    with _db_conn() as _c:
+                        _rv = _emit(_c, _code, out, model=str((args or {}).get("model") or "default"))
+                    if _rv.get("error") and _rv.get("error") not in ("not_block",):
+                        logger.info("SysML 校验失败事件未发出: %s", str(_rv.get("error"))[:120])
+    except Exception as _e_ev:
+        logger.warning("SysML 校验失败事件发送异常（不阻断校验）: %s", str(_e_ev)[:160])
+
     return out

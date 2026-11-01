@@ -163,8 +163,106 @@ def _h_review_trace(conn, wi: dict) -> dict:
                        "note": "只读：产出待审线索，不写库"}}
 
 
+def _h_autofix_sysml(conn, wi: dict) -> dict:
+    """SysML 校验失败 → **规则级自动修复 → 重校验**（闭环核心）。
+
+    ━━━ 闭环四步（判据明确，不靠"看着像好了"）━━━
+      ① 取原始代码（来自 Trigger payload —— 不读文件，防"文件已被改写拿不到原文"）
+      ② `sysml_v2_autofix` 修复（它内部已做**逐条改写后重跑校验**，
+         硬错/错误数增加 ⇒ **自动回滚该条**，见 `apply_rules`）
+      ③ 判成功：`after.n_hard <= before.n_hard` **且** `after.verdict != 'block'`
+      ④ 成功 ⇒ 返回 `fixed_code`（**不落盘**）+ 报告；失败 ⇒ 明确报"未修复项"
+
+    ━━━ 为什么做到这一步就停（不自动写回模型文件）━━━
+    `autofix` 的契约是 `side_effect=write` 但**不落盘**（只返回 `fixed_code`）。
+    落盘 = 不可逆 ⇒ 必须人确认。
+    ⇒ 本 handler 也**不落盘**：它的产出是"可用的修复结果 + 明确的剩余问题"，
+      写回哪一版、要不要写，是建模决策（与既有的"人是一等公民"取向一致）。
+
+    ━━━ 为什么"涉及建模意图的错误"必须如实报告为未修复 ━━━
+    `UNFIXABLE` 表里那几类（类型族、satisfy 引用谁、subject 与 satisfy 二选一、
+    first...if 缺条件）改了就是**改变模型语义**。
+    ⇒ 报成"已修复"会让下游以为模型没问题了 —— 这是比报错更危险的失败模式
+      （对齐 `sysml_check_tools` ④ 号约束："校验器不可用时必须明确告知未真正校验"）。
+    """
+    # ① 取原始代码
+    trg = {}
+    try:
+        from repositories.event_repo import EventRepo
+        trg = EventRepo(conn).get_trigger(wi.get("trigger_id") or "") or {}
+    except Exception:
+        trg = {}
+    payload = {}
+    try:
+        import json as _j
+        payload = _j.loads(trg.get("payload_json") or "{}")
+    except Exception:
+        payload = {}
+
+    code = str(payload.get("code") or "")
+    if not code.strip():
+        return {"ok": False, "writes": False,
+                "error": "payload 无原始代码，无法修复（可能超长被截断）",
+                "result": {"model": payload.get("model"), "truncated": payload.get("code_truncated")}}
+    if payload.get("code_truncated"):
+        # 半截代码修出来的结果必然错 ⇒ 明确拒绝，不产出假结果
+        return {"ok": False, "writes": False,
+                "error": "原始代码超长已截断，拒绝在残缺代码上修复",
+                "result": {"truncated": True}}
+
+    # ② 修复（autofix 内部自带自校验回滚）
+    try:
+        import sysml_autofix_tools as af
+        fx = af.exec_tool("sysml_v2_autofix", {"code": code})
+    except Exception as e:
+        return {"ok": False, "writes": False,
+                "error": "autofix 不可用：%s: %s" % (type(e).__name__, str(e)[:160]),
+                "result": {}}
+
+    if not fx.get("ok"):
+        return {"ok": False, "writes": False,
+                "error": "autofix 执行失败：%s" % str(fx.get("result") or "")[:180],
+                "result": {}}
+
+    before = fx.get("before") or {}
+    after = fx.get("after") or {}
+    b_hard = int(before.get("n_hard") or 0)
+    a_hard = int(after.get("n_hard") or 0)
+    a_verdict = str(after.get("verdict") or "")
+
+    # ③ 判据：硬错未增 且 不再 block
+    ok = (a_hard <= b_hard) and a_verdict != "block"
+
+    result = {
+        "model": payload.get("model"),
+        "changed": bool(fx.get("changed")),
+        "n_applied": fx.get("n_applied", 0),
+        "n_rolled_back": fx.get("n_rolled_back", 0),
+        "applied_rules": fx.get("applied_rules") or [],
+        "rolled_back_rules": fx.get("rolled_back_rules") or [],
+        "unfixable": fx.get("unfixable") or [],
+        "before": before,
+        "after": after,
+        # ⚠️ 修复结果**只返回不落盘**（落盘不可逆，属建模决策）
+        "fixed_code_len": len(str(fx.get("fixed_code") or "")),
+    }
+
+    if not ok:
+        # 修了但没修好 ⇒ 如实报告，不伪装成功
+        return {"ok": False, "writes": False,
+                "error": "修复后仍未通过：硬错 %d→%d，verdict=%s" % (b_hard, a_hard, a_verdict),
+                "result": result}
+    if not fx.get("changed"):
+        # 没有可自动修复的规则命中 ⇒ 明确告知"无可自动修复项"
+        return {"ok": True, "writes": False,
+                "result": dict(result, note="无可自动修复的规则命中；剩余问题需人工/LLM 处理")}
+
+    return {"ok": True, "writes": False, "result": result}
+
+
 register_handler("extract_entities", _h_extract_entities)
 register_handler("review_trace", _h_review_trace)
+register_handler("autofix_sysml", _h_autofix_sysml)
 
 
 # ══════════════════════════════════════════════════════════

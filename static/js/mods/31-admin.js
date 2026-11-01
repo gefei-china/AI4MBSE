@@ -483,6 +483,9 @@ async function loadAudit() {
 
 // ── 统一监控平台（D12） ──
 async function loadOps() {
+  // 事件驱动面板（2026-11-01，52-events.js）：**放在监控主数据之前**加载，
+  // 且独立 try/catch —— 事件接口挂了不能拖垮监控页（与 UX 面板同思路）。
+  try{ if(typeof loadEventPanel === 'function') loadEventPanel(); }catch(_){ }
   // UX规范§11（2026-10-03）：UX 指标第三路并行拉取，失败只降级不拖垮监控主数据
   const [d, m, ux] = await Promise.all([api('/api/monitor/dashboard?days=7'), api('/api/ops/metrics'),
     api('/api/ux-metrics/summary?days=7').catch(()=>null)]);

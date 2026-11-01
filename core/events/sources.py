@@ -59,6 +59,11 @@ class SourceSpec:
     action_for: Callable[[Trigger], str]
     scope_of: Callable[[dict], str]
     reply_to: Optional[Callable[[dict], str]] = None
+    # 可选：**建单前置校验**（返回 (ok, reason)）。用于"这类事件即使准入通过，
+    # 也不该建工单"的场景 —— 例如 SysML 事件没带原始代码（无从修复）。
+    # ⚠️ 与 admission 分工：admission 判"该不该做"（身份/范围），
+    #    precheck 判"能不能做"（数据完备性）。两者都是**结构化判定**，都不读正文语义。
+    precheck: Optional[Callable[[dict], tuple]] = None
 
 
 class SourceRegistry:
@@ -116,6 +121,7 @@ class SourceRegistry:
             action_for=spec.action_for,
             scope_of=spec.scope_of,
             reply_to=spec.reply_to,
+            precheck=spec.precheck,   # ⚠️ 必须带上，否则切模式后前置校验静默失效
         )
         return True
 
