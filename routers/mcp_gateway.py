@@ -22,7 +22,11 @@ MCP Streamable HTTP（规范版本 2025-06-18）：JSON-RPC 2.0 over `POST /mcp`
 
 安全
 ----
-- 三个工具**全部只读**：只做检索 / 校验 / 影响推演，不写 entities / relations 正式表。
+- 三个**检索/校验类**工具全部只读：只做检索 / 校验 / 影响推演，不写 entities / relations 正式表。
+- `report_event`（2026-11-01 新增）是本网关**唯一**写类工具，但写边界极窄：
+  只写 `ev_triggers` / `ev_workitems`，**不执行任何业务动作**（不改图谱、不跑抽取）。
+  执行由 `core/events/executor.py` 那一层做，受「准入 + 工单 mode 快照 + 人工确认」
+  三重约束 ⇒ 该工具**无法**被用来绕过授权改模型，最多让一件事出现在待办清单上。
 - 总开关 `config.get("mcp", "server_enabled", True)`；关闭后 `POST /mcp` 一律 404。
 - 每次工具调用落审计（`core.audit.audit`，动作 `mcp_tool_call`），供治理追溯。
 - 工具参数做最小 required 校验；异常一律转 `isError:true` 的 tool 结果并**留痕**
@@ -42,11 +46,13 @@ MCP_PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "ai4mbse-domain"
 SERVER_VERSION = "1.0.0"
 SERVER_INSTRUCTIONS = (
-    "AI4MBSE 领域能力网关（MBSE / SysML v2 建模平台）。提供三项只读能力：\n"
+    "AI4MBSE 领域能力网关（MBSE / SysML v2 建模平台）。提供三项只读能力 + 一项事件上报：\n"
     "· graphrag_search —— GraphRAG 混合检索（图谱实体/关系 + 向量文档片段，带路由决策与置信度）\n"
     "· impact_analysis —— 变更影响传播分析（全路径枚举 + CPM 组合风险 + 处置建议）\n"
     "· ontology_validate —— 本体一致性校验（12 条规则：循环继承/悬空父类/孤立类/dom-range/重名等）\n"
-    "所有工具只读，不修改模型资产。branch 参数用于选择模型空间。"
+    "· report_event —— 上报环境事件（模型变更/校验失败/文档入库）。"
+    "**它只落事件台账与工单，不执行任何业务动作**；执行由平台观察期/授权机制决定。\n"
+    "前三个工具只读，不修改模型资产。branch 参数用于选择模型空间。"
 )
 
 # ── 工具目录（tools/list 的单一真源） ────────────────────────────────────────
@@ -113,6 +119,55 @@ TOOLS = [
                 "scope": {"type": "string", "description": "只校验指定类型名（配合 instances 使用，缩小扫描面）"},
             },
             "required": [],
+        },
+    },
+    # ── 写类工具（2026-11-01，Super-agent 事件驱动）：外部 harness 上报环境事件 ──
+    # ⚠️ 这是本网关**唯一**的写类工具，但它的"写"边界极窄：
+    #    只写 ev_triggers（事件台账）+ ev_workitems（工单），**不执行任何业务动作**。
+    #    真正的执行由 `core/events/executor.py` 那一层做，且受 mode（observe/execute）
+    #    与来源准入双重约束 ⇒ 这个工具**不能**绕过授权去改模型。
+    {
+        "name": "report_event",
+        "title": "上报环境事件",
+        "description": (
+            "把外部系统发生的事件（模型变更 / 校验失败 / 文档入库 / 需求变更）上报给 MBSE 平台，"
+            "平台按来源准入规则决定是否建工单。**本工具不执行任何业务动作**："
+            "它只落事件台账与工单，实际执行由平台的观察期/授权机制决定。\n"
+            "典型用法：智源/Super-agent 在建模会话里发现模型变更或校验失败时调用本工具，"
+            "让平台侧「不需要人再发一句『帮我做影响分析』」也能接住这件事。\n"
+            "幂等：同一 source + external_id（+ version）重复上报只产生一条事件。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "description": "事件来源种类。已注册：zhiyuan(智源模型变更) / sysml_check(校验失败) / documents(文档入库)",
+                },
+                "external_id": {
+                    "type": "string",
+                    "description": "外部稳定业务 ID（分支ID/文档ID/代码哈希）。**必须稳定**——平台按它去重，不要用时间戳或随机串",
+                },
+                "thread_scope": {
+                    "type": "string",
+                    "description": "归属线程（同一业务对象用同一个值：分支ID/文档ID/包名）。省略时取 external_id",
+                },
+                "actor": {"type": "string", "description": "发起者 ID（人类用户名或 system）"},
+                "actor_type": {
+                    "type": "string",
+                    "enum": ["human", "bot", "system"],
+                    "description": "发起者类型。system=系统既成事实（不需白名单，但仍只建单不执行）",
+                },
+                "addressed": {
+                    "type": "string",
+                    "enum": ["mention", "direct"],
+                    "description": "是否明确请求处理（人类发起时建议填 mention）",
+                },
+                "text": {"type": "string", "description": "事件简述（人类可读；**不参与授权判定**）"},
+                "payload": {"type": "object", "description": "结构化附加数据（如 code/n_hard/model 等）"},
+                "version": {"type": "string", "description": "版本号（同一 external_id 的修订，如评论 updated_at）"},
+            },
+            "required": ["kind", "external_id"],
         },
     },
 ]
@@ -246,10 +301,87 @@ def _tool_ontology(args: dict) -> dict:
     return rep
 
 
+def _tool_report_event(args: dict) -> dict:
+    """**上报环境事件**（本网关唯一写类工具）—— 让外部 harness 走标准 MCP 驱动事件底座。
+
+    ━━━ 为什么这个工具必须存在（而不是让外部去裸调 HTTP）━━━
+    原文《Super-agent》的核心主张：Agent 的输入不该只有"人逐条键入的提示词"，
+    而是**环境中的半结构化事件**。
+    本平台已经是 MCP server，外部 harness（智源 / DeepSeek Harness / Claude Code）
+    通过 MCP 消费本平台能力 ⇒ 事件的**入口也应该在 MCP 上**，
+    否则外部要同时维护两条通道（MCP 调工具 + HTTP 报事件），很容易只做了前者。
+
+    ━━━ 写边界（这个工具**能做什么、不能做什么**）━━━
+    能：写 ev_triggers（事件台账）、可能写 ev_workitems（工单）。
+    不能：**不执行任何业务动作**（不改 entities/relations、不写图谱、不跑抽取）。
+    ⇒ 真正的执行在 `core/events/executor.py`，受三重约束：
+       ① 准入（来源白名单 / scope / 系统事件豁免）
+       ② 工单 mode 快照（observe 一律拒绝执行）
+       ③ 人工确认（execute-pending 由人触发，或来源显式切 execute）
+    ⇒ 所以这个工具**无法**被用来"绕过授权改模型"——它最多让一件事**出现在待办清单上**。
+
+    ━━━ 幂等 ━━━
+    同一 (kind, external_id, version) 重复上报 ⇒ 同一条 Trigger ⇒ 不重复建工单。
+    重复时返回 disposition='duplicate' 并带 first_disposition（首次处置结论），
+    让人能区分"本来就该 duplicate"与"admitted 后被重投"。
+    """
+    kind = (args.get("kind") or "").strip()
+    if not kind:
+        raise ToolArgError("kind 不能为空")
+    external_id = str(args.get("external_id") or "").strip()
+    if not external_id:
+        raise ToolArgError("external_id 不能为空（且必须稳定，平台按它去重）")
+
+    payload = args.get("payload")
+    if payload is not None and not isinstance(payload, dict):
+        raise ToolArgError("payload 必须是对象")
+
+    # 来源必须已注册（未注册 ⇒ 不静默吞，明确报错并列出可用来源）
+    from core.events.sources import get_registry
+    reg = get_registry()
+    if reg.get(kind) is None:
+        raise ToolArgError("未知事件来源 kind=%s；可用：%s"
+                           % (kind, ", ".join(reg.kinds()) or "(无已注册来源)"))
+
+    from database import get_db
+    from repositories.event_repo import EventRepo
+    from services.event_service import EventService
+
+    conn = get_db()
+    try:
+        svc = EventService(EventRepo(conn), reg)
+        # ⚠️ **payload 必须平铺到顶层**（2026-11-01 端到端实测修掉的真实缺陷）：
+        #    各来源的 `to_trigger` 约定读**顶层字段**（如 sysml_check 读 raw["code"]、
+        #    documents 读 raw["filename"]），而 MCP 的入参天然是 `arguments.payload.xxx`。
+        #    只传嵌套 payload ⇒ sysml_check 判定 `empty_code` ⇒ **事件被前置校验拦下**，
+        #    症状是"上报成功了但没建单"，看起来像"准入没配好"，实则是字段层级不匹配。
+        #    ⇒ 平铺（顶层优先，payload 兜底），并保留 payload 原样供后续 handler 使用。
+        _flat = dict(payload or {})
+        for _k in ("external_id", "thread_scope", "actor", "actor_type", "addressed",
+                   "text", "version"):
+            if args.get(_k) is not None:
+                _flat[_k] = args.get(_k)
+        _flat["payload"] = payload or {}
+        res = svc.receive(kind, _flat)
+    finally:
+        conn.close()
+
+    # 回给调用方的语义要**恰好**（不夸大）：明确说"只建单，未执行"
+    if res.get("disposition") == "admitted":
+        res["note"] = ("事件已受理并建工单；**未执行任何动作**。"
+                       "执行取决于来源模式（observe 只等待人工，execute 才自动跑）")
+    elif res.get("disposition") == "filtered":
+        res["note"] = "事件已记录但未建工单（见 reason：来源范围/白名单/数据不完备）"
+    elif res.get("disposition") == "duplicate":
+        res["note"] = "同一事件此前已上报（幂等），未重复建单"
+    return res
+
+
 _HANDLERS = {
     "graphrag_search": _tool_graphrag,
     "impact_analysis": _tool_impact,
     "ontology_validate": _tool_ontology,
+    "report_event": _tool_report_event,
 }
 
 

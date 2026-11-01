@@ -147,6 +147,7 @@ async def lifespan(app: FastAPI):
     try:
         from core.events.sources_docs import build_docs_source, DOCS_SOURCE_KIND
         from core.events.sources_sysml import build_sysml_source, SYML_SOURCE_KIND
+        from core.events.sources_zhiyuan import build_zhiyuan_source, ZHIYUAN_SOURCE_KIND
         from core.events.sources import get_registry as _get_ev_reg
         from repositories.event_repo import EventRepo as _EvRepo
         from services.event_service import EventService as _EvService
@@ -159,8 +160,13 @@ async def lifespan(app: FastAPI):
             _svc_ev.register_source(build_sysml_source(
                 allowed_senders=frozenset(), scope_keys=frozenset(),
                 mode="observe", policy_version="v1"))
-        print("[startup] 事件源已注册：%s, %s（observe 模式：只记录不执行）"
-              % (DOCS_SOURCE_KIND, SYML_SOURCE_KIND), flush=True)
+            # 智源：**白名单为空 + 分支范围为空** ⇒ 默认谁都不放行（真人事件必须有显式配置）
+            # 这是刻意的：谁能在智源里一句话就触发本平台写操作，必须由人配置。
+            _svc_ev.register_source(build_zhiyuan_source(
+                allowed_senders=frozenset(), scope_keys=frozenset(),
+                mode="observe", policy_version="v1"))
+        print("[startup] 事件源已注册：%s, %s, %s（observe 模式：只记录不执行）"
+              % (DOCS_SOURCE_KIND, SYML_SOURCE_KIND, ZHIYUAN_SOURCE_KIND), flush=True)
     except Exception as _e:
         print("[startup] 事件源注册失败（不影响主流程）：%s" % str(_e)[:160], flush=True)
 

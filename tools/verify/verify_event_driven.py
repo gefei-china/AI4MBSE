@@ -515,6 +515,57 @@ check("G35", "空代码 ⇒ 不建单（reason=empty_code，不留必然失败�
       and not nocode_r.get("workitem_id"),
       f"disp={nocode_r.get('disposition')} reason={nocode_r.get('reason')}")
 
+# ══ MCP 入口：report_event（让外部 harness 走标准 MCP，不必裸调 HTTP）══
+# ⚠️ 本组直接调 handler 函数（不启 HTTP），因为验证脚本是进程内的；
+#    HTTP/MCP 协议层的往返由 verify_events_mcp.js 覆盖。
+from routers.mcp_gateway import TOOLS as _MCP_TOOLS, _HANDLERS as _MCP_HANDLERS  # noqa: E402
+
+# G36 MCP 工具清单含 report_event，且它是**唯一**写类工具
+_mcp_names = [t["name"] for t in _MCP_TOOLS]
+check("G36", "MCP 工具清单含 report_event（外部可走标准协议上报）",
+      "report_event" in _mcp_names and len(_mcp_names) == 4,
+      "工具=" + ",".join(_mcp_names))
+
+# G37 report_event 把 payload **平铺到顶层**（否则 sysml_check 读不到 code ⇒ empty_code）
+#     ★ 这是端到端实测抓到的真实缺陷：MCP 入参天然嵌套，各源 to_trigger 约定读顶层。
+from core.events.sources import get_registry as _get_reg2  # noqa: E402
+_reg_backup = {}
+for _k in ("sysml_check", "zhiyuan"):
+    _reg_backup[_k] = _get_reg2().get(_k)
+_get_reg2().register(build_sysml_source(mode=EXECUTE_MODE))
+_mcp_r = _MCP_HANDLERS["report_event"]({
+    "kind": "sysml_check",
+    "external_id": "mcp-verify-1",
+    "thread_scope": "McpPkg",
+    "actor": "system", "actor_type": "system",
+    "text": "MCP 上报校验失败",
+    "payload": {"code": "package M { part def A; part a : A; }",
+                "model": "McpPkg", "n_hard": 2, "verdict": "block"},
+})
+check("G37", "report_event payload 平铺到顶层（系统事件 admitted，不误判 empty_code）",
+      _mcp_r.get("disposition") == "admitted" and _mcp_r.get("reason") == "system_event",
+      f"disp={_mcp_r.get('disposition')} reason={_mcp_r.get('reason')}")
+
+# G38 未知来源 ⇒ 明确报错，**不静默吞**（错误里要列出可用来源）
+_g38_msg = ""
+try:
+    _MCP_HANDLERS["report_event"]({"kind": "no_such_kind", "external_id": "x"})
+    _g38_ok = False
+except Exception as _e:
+    _g38_msg = str(_e)
+    _g38_ok = "未知事件来源" in _g38_msg and "sysml_check" in _g38_msg
+check("G38", "未知来源明确报错且列出可用来源（不静默吞）", _g38_ok, _g38_msg[:70])
+
+# G39 report_event 回给调用方的 note 必须**说清"未执行"**（不夸大）
+check("G39", "report_event 回执明确声明「未执行任何动作」",
+      "未执行" in str(_mcp_r.get("note") or ""),
+      str(_mcp_r.get("note") or "")[:60])
+
+# 还原注册表（避免污染后续/重跑）
+for _k, _v in _reg_backup.items():
+    if _v is not None:
+        _get_reg2().register(_v)
+
 conn.close()
 
 # ══════════════════════════════════════════════════════════
@@ -795,6 +846,66 @@ try:
           + f"空代码现在 {_m9_r.get('disposition')}（变异生效 ⇒ precheck 承重）")
     RESULTS.append(("M9", "摘掉前置校验 ⇒ G35 翻红", _m9_flipped,
                     f"disp={_m9_r.get('disposition')}"))
+finally:
+    pass
+
+# M10: 去掉 payload 平铺 ⇒ G37（MCP 上报能 admitted）必须翻红
+# ⚠️ 变异锚点必须落在**真实调用点**：G37 直接调 `_HANDLERS["report_event"]`，
+#    故变异也必须换掉 `_HANDLERS["report_event"]` 本身，而不是改源码字符串。
+print("  ", end="")
+_orig_report = _HANDLERS["report_event"] if "_HANDLERS" in dir() else _MCP_HANDLERS["report_event"]
+try:
+    import tempfile as _tf10
+    from _tmpdir import mkdtemp as _mk10
+    _d10 = _mk10(prefix="wb_ev_m10_")
+    _db10 = os.path.join(_d10, "m10.db")
+    _s10 = sqlite3.connect("file:%s?mode=ro" % COPY_DB, uri=True)
+    _t10 = sqlite3.connect(_db10)
+    _s10.backup(_t10); _s10.close(); _t10.close()
+
+    def _m10_report(args):
+        """变异：**不平铺 payload**（只传嵌套），即修复前的行为。
+
+        ⚠️ 必须**自带独立 registry 并显式注册 sysml_check**：
+        验证脚本前面用的是局部 registry，全局 registry 里可能没有该源。
+        若依赖全局 ⇒ 会因 `source_not_registered` 而返回 filtered
+        ⇒ 断言"翻红"了，但**翻红的原因不是 payload 没平铺** ⇒ 假绿。
+        （这是"变异锚点"坑的变种：变异生效了、但生效的原因不是我声称的那个。）
+        """
+        from core.events.sources import SourceRegistry as _SR
+        from core.events.sources_sysml import build_sysml_source as _bss
+        from repositories.event_repo import EventRepo as _ER
+        from services.event_service import EventService as _ES
+        _m10reg = _SR()
+        _m10reg.register(_bss(mode="observe"))
+        _c = sqlite3.connect(_db10); _c.row_factory = sqlite3.Row
+        try:
+            _sv = _ES(_ER(_c), _m10reg)
+            return _sv.receive(args.get("kind") or "", {
+                "external_id": str(args.get("external_id") or ""),
+                "thread_scope": str(args.get("thread_scope") or ""),
+                "actor": str(args.get("actor") or "external"),
+                "actor_type": str(args.get("actor_type") or "human"),
+                "text": str(args.get("text") or ""),
+                "payload": args.get("payload") or {},
+            })
+        finally:
+            _c.close()
+
+    _m10_r = _m10_report({
+        "kind": "sysml_check", "external_id": "m10", "thread_scope": "M10",
+        "actor": "system", "actor_type": "system",
+        "payload": {"code": "package M10 { part def A; }", "model": "M10",
+                    "n_hard": 1, "verdict": "block"},
+    })
+    # 只有"因为缺 code 被 empty_code 拦下"才算真正翻红（不能是别的原因）
+    _m10_flip = (_m10_r.get("disposition") == "filtered"
+                 and _m10_r.get("reason") == "empty_code")
+    print(("[PASS] " if _m10_flip else "[FAIL] ")
+          + "M10 去掉 payload 平铺 ⇒ G37 翻红  — "
+          + f"现在 {_m10_r.get('disposition')}/{_m10_r.get('reason')}（应为 empty_code ⇒ 平铺承重）")
+    RESULTS.append(("M10", "去掉 payload 平铺 ⇒ G37 翻红", _m10_flip,
+                    f"disp={_m10_r.get('disposition')} reason={_m10_r.get('reason')}"))
 finally:
     pass
 

@@ -260,9 +260,71 @@ def _h_autofix_sysml(conn, wi: dict) -> dict:
     return {"ok": True, "writes": False, "result": result}
 
 
+def _h_impact_analysis(conn, wi: dict) -> dict:
+    """智源模型变更 → 变更影响分析（**只读**：调用既有引擎，不写图谱）。
+
+    ⚠️ 为什么是只读动作：
+    `services/impact_engine` 是**纯计算**（枚举传播路径 + CPM 组合风险），
+    不改实体/关系 ⇒ 副作用为零 ⇒ 这是最适合"放开自动执行"的第一类动作。
+    （写类动作如 `extract_entities` 要更谨慎，因为它会写候选表。）
+
+    输入口径：`change_name` 从**工单标题里解析**（"…影响分析：<分支>"）不可靠，
+    故优先取 Trigger payload 的 `change_name`；没有则退回工单 scope。
+    """
+    trg = {}
+    try:
+        from repositories.event_repo import EventRepo
+        trg = EventRepo(conn).get_trigger(wi.get("trigger_id") or "") or {}
+    except Exception:
+        trg = {}
+    payload = {}
+    try:
+        import json as _j
+        payload = _j.loads(trg.get("payload_json") or "{}")
+    except Exception:
+        payload = {}
+
+    change_name = str(payload.get("change_name") or "").strip()
+    if not change_name:
+        # 退回分支名（scope 形如 zhiyuan:branch-9）
+        change_name = str(wi.get("scope") or "").split(":")[-1].strip()
+    if not change_name:
+        return {"ok": False, "writes": False,
+                "error": "缺 change_name（payload 或 scope 都没有）", "result": {}}
+
+    try:
+        from services.impact_engine import (
+            CHANGE_MATRIX, analyze_graph_v2, build_baseline, decide_recommendation,
+        )
+        change_type = str(payload.get("change_type") or "attribute")
+        if change_type not in CHANGE_MATRIX:
+            change_type = "attribute"
+        base = build_baseline(conn) if callable(build_baseline) else None
+        rep = analyze_graph_v2(conn, change_name, depth=int(payload.get("depth") or 3),
+                              direction=str(payload.get("direction") or "both"),
+                              change_type=change_type)
+        rec = decide_recommendation(rep) if callable(decide_recommendation) else None
+    except Exception as e:
+        return {"ok": False, "writes": False,
+                "error": "影响分析引擎不可用：%s: %s" % (type(e).__name__, str(e)[:150]),
+                "result": {"change_name": change_name}}
+
+    affected = rep.get("affected") if isinstance(rep, dict) else None
+    return {"ok": True, "writes": False,
+            "result": {
+                "change_name": change_name,
+                "change_type": change_type,
+                "affected_count": len(affected or []),
+                "risk": (rep or {}).get("risk_matrix") or (rep or {}).get("risk"),
+                "recommendation": rec,
+                "note": "只读：影响面推演，未修改模型",
+            }}
+
+
 register_handler("extract_entities", _h_extract_entities)
 register_handler("review_trace", _h_review_trace)
 register_handler("autofix_sysml", _h_autofix_sysml)
+register_handler("impact_analysis", _h_impact_analysis)
 
 
 # ══════════════════════════════════════════════════════════
