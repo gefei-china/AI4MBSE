@@ -155,9 +155,31 @@ async function cdp(ws, method, params, id) {
     console.log('  [FAIL] 浏览器验证异常: ' + e.message);
     fail++;
   } finally {
-    try { proc.kill(); } catch (_) {}
+    // ⚠️ **必须等 Chrome 真正退出再删 user-data-dir**（2026-11-01 实测）：
+    //    `proc.kill()` 是异步的，进程还占着文件时 rmtree 在 Windows 下**静默失败**
+    //    ⇒ 每跑一次留 12MB 目录（累积到写满磁盘，症状是
+    //    `sqlite3.OperationalError: database or disk is full`，看起来像脚本坏了）。
+    //    这与 `_tmpdir.py` 头部记录的「Windows 文件锁导致 rmtree 静默失败」同型。
+    //    ⇒ 等 exit 事件 + 重试删除 + **失败要留痕**（不静默吞）。
     try { ws && ws.close(); } catch (_) {}
-    try { fs.rmSync(udd, { recursive: true, force: true }); } catch (_) {}
+    try { proc && proc.kill(); } catch (_) {}     // 先杀进程，再等它真的退出
+    try {
+      if (proc && proc.exitCode === null) {
+        await new Promise((res) => {
+          proc.once('exit', res);
+          setTimeout(res, 5000);       // 兜底：5s 后无论退没退都不再等
+        });
+      }
+    } catch (_) {}
+    for (let i = 0; i < 5; i++) {
+      try {
+        fs.rmSync(udd, { recursive: true, force: true });
+        break;
+      } catch (e) {
+        await sleep(300);              // 文件锁未释放 ⇒ 退避重试
+        if (i === 4) console.log('  [warn] 临时目录清理失败（需手工删）: ' + udd);
+      }
+    }
   }
 
   console.log('\n' + '='.repeat(60));
