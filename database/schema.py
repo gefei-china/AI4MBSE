@@ -81,6 +81,7 @@ from .migrations import (
     _migrate_curriculum_p22,  # 2026-10-19 失败驱动任务提案队列（P2-2，只提议不自动执行）
     _migrate_agent_archive_p23,  # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3，只记录不切换生效版本）
     _migrate_flow_topology_p24,  # 2026-10-20 画布拓扑台账 + 结构体检（P2-4，只读画布不改拓扑）
+    _migrate_event_tables,  # 2026-11-01 事件驱动底座三表（Super-agent 落地 P0-2/P0-4）
 )
 from .seeds import (
     _seed,
@@ -1838,6 +1839,10 @@ def init_db():
     #    只记录，不切换生效 agent、不回滚配置（过人的铁律同 P1-4）。
     _migrate_agent_archive_p23(conn)
     _migrate_flow_topology_p24(conn)
+    # ── 2026-11-01 事件驱动底座（Super-agent 落地 P0-2/P0-4）──
+    #    ev_sources / ev_triggers / ev_workitems —— 补"事件驱动"这一层，
+    #    使触发不再只能来自"人点一次"。纯新表，幂等建表。
+    _migrate_event_tables(conn)
     # ── P0-④（2026-09-11）时态管理：双时态列 + 索引 + 视图 + W3C Time 对齐表 ──
     _migrate_entity_temporal(conn)
     # ── P1-①（2026-09-11）SWRL 规则管理表：swrl_rules + inferred_facts（推理产出暂存）──

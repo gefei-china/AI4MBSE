@@ -48,6 +48,7 @@ from .evolution_report import router as evolution_report_router  # 2026-10-20 �
 from .evaluation import router as evaluation_router  # 2026-10-22 评测管理（历史/趋势/可信度/门禁接线）
 from .diagnostics import router as diagnostics_router  # 2026-10-26 P0-8 上下文归因只读诊断（让 token 构成可见）
 from .capabilities import router as capabilities_router  # 2026-10-27 P0-2 能力账本（统一注册处 + 声明/调用 2×2 + 追溯）
+from .events import router as events_router  # 2026-11-01 事件驱动（入站事件 + 观察记录 + 授权快照）
 
 __all__ = [
     "dashboard_router",
@@ -91,4 +92,5 @@ __all__ = [
     "evaluation_router",        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
     "diagnostics_router",       # 2026-10-26 P0-8 上下文归因只读诊断
     "capabilities_router",      # 2026-10-27 P0-2 能力账本（注册处 + 声明/调用 + 追溯）
+    "events_router",            # 2026-11-01 事件驱动（入站事件 + 观察记录 + 授权快照）
 ]
