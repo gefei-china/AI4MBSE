@@ -151,6 +151,38 @@ class EventService:
             "title": wi.title, "action": wi.action,
         }
 
+    # ── 来源模式切换（放开自动执行的唯一入口）──
+    def set_mode(self, kind: str, mode: str) -> dict:
+        """切来源模式（observe ⇄ execute）：**DB 与进程内 registry 同时改**。
+
+        ⚠️ **两处必须同时改**（2026-11-01 实测修掉的真实缺陷）：
+        原先只改 DB（`repo.set_source_mode`），进程内 `spec.admission.mode` 没同步
+        ⇒ 切到 execute 后**新事件建的工单仍拿 observe 快照**
+        ⇒ **"放开自动执行"这个开关实际不生效**（症状：DB 说 execute，
+        但新工单 mode=observe，执行被拒）。
+        ⇒ DB 与进程内不一致 = 开关失灵 ⇒ 必须同一个入口一次改两处。
+
+        ⚠️ **两个方向都要能切**（第二次实测修的）：
+        · 来源在 DB 里（生产路径：`register_source` 写过）⇒ 改 DB + registry
+        · 来源**只在 registry 里**（单测/临时注册，没写 DB）⇒ 改 registry，
+          DB 侧跳过但**不算失败**
+        ⇒ 原实现"DB 没有就直接 return source_not_found" ⇒ registry 也没改
+          ⇒ 开关仍然失灵（症状同前，但这次是"来源未落库"这条路）。
+
+        ⚠️ **已建工单的 mode 是快照，不随之改变**（刻意）：
+        观察期建的工单即使后来切了 execute，也**仍不可执行**
+        ⇒ 观察期不会被"事后放开"绕过（见 executor 的 mode 判据）。
+        """
+        if mode not in (OBSERVE_MODE, EXECUTE_MODE):
+            return {"ok": False, "reason": "invalid_mode", "mode": mode}
+        db_changed = self.repo.set_source_mode(kind, mode) > 0
+        reg_changed = self.registry.set_mode(kind, mode)
+        if not db_changed and not reg_changed:
+            return {"ok": False, "reason": "source_not_found", "kind": kind}
+        return {"ok": True, "kind": kind, "mode": mode,
+                "db_changed": db_changed, "registry_synced": reg_changed,
+                "note": "已建工单的模式是快照，不随本次切换改变；仅新工单用新模式"}
+
     # ── 工单状态流转 ──
     def advance(self, workitem_id: str, nxt_state: str, result: str = "",
                 error: str = "") -> dict:

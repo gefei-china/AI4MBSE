@@ -84,6 +84,41 @@ class SourceRegistry:
     def get(self, kind: str) -> Optional[SourceSpec]:
         return self._specs.get(kind)
 
+    def set_mode(self, kind: str, mode: str) -> bool:
+        """改某个来源的**进程内**模式（observe ⇄ execute）。
+
+        ⚠️ **为什么必须有这个方法（2026-11-01 实测修掉的真实缺陷）**：
+        原实现只改 DB（`EventRepo.set_source_mode`），
+        **进程内 `spec.admission.mode` 从没同步** ⇒
+        切到 execute 之后，**新事件建的工单仍然拿 observe 快照** ⇒
+        "放开自动执行"这个开关**实际不生效**。
+        （实测症状：DB 里 mode='execute'，但新工单 mode='observe'，执行被拒。）
+        ⇒ DB 与进程内必须**同时**改，两处不一致 = 开关失灵。
+
+        :returns: True=该 kind 已注册且已切换；False=未注册
+        """
+        spec = self._specs.get(kind)
+        if not spec:
+            return False
+        adm = spec.admission
+        self._specs[kind] = SourceSpec(
+            kind=spec.kind,
+            title=spec.title,
+            admission=Admission(
+                source=adm.source,
+                allowed=adm.allowed,
+                listen=adm.listen,
+                scope_keys=adm.scope_keys,
+                mode=mode,
+                version=adm.version,
+            ),
+            to_trigger=spec.to_trigger,
+            action_for=spec.action_for,
+            scope_of=spec.scope_of,
+            reply_to=spec.reply_to,
+        )
+        return True
+
     def kinds(self) -> list:
         return sorted(self._specs.keys())
 

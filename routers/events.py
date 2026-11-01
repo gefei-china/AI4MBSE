@@ -100,38 +100,20 @@ def set_source_mode(kind: str, body: dict, conn=Depends(db_session),
     if not repo.get_source(kind):
         return JSONResponse({"error": "来源不存在: %s" % kind}, 404)
     n = repo.set_source_mode(kind, mode)
-    if n:
+    if not n:
+        return JSONResponse({"error": "来源不存在: %s" % kind}, 404)
+    # ⚠️ 必须**同时**改进程内 registry：只改 DB ⇒ "放开自动执行"实际不生效
+    #    （新事件建的工单仍拿 observe 快照）—— 实测修过的真实缺陷。
+    synced = _svc(conn).registry.set_mode(kind, mode)
+    if synced:
         try:
             audit(audit_user(user), "event_source_mode",
                   f"事件来源 {kind} 模式切为 {mode}", conn=conn)
         except Exception:
             pass   # 审计失败不得阻断切换（但模式已改，需人工核对）
     return {"ok": True, "kind": kind, "mode": mode,
+            "registry_synced": synced,
             "note": "已建工单的模式是快照，不随本次切换改变；仅新工单用新模式"}
-
-
-@router.post("/api/events/{kind}")
-def receive_event(kind: str, body: dict, conn=Depends(db_session),
-                  user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
-    """接收一个外部事件 ⇒ 返回处置结论。
-
-    body = {external_id, thread_scope, actor, actor_type?, addressed?, text?, payload?, version?, at?}
-
-    返回 = {disposition, reason, strength, trigger_id, workitem_id?, mode, accepted}
-    ⚠️ disposition 取值：admitted / filtered / duplicate / rejected
-       —— **永远有结论**，不会出现"提交了但什么都没发生且查不到"。
-    """
-    svc = _svc(conn)
-    try:
-        res = svc.receive(kind, body or {})
-    except KeyError as e:
-        return JSONResponse({"error": "未注册的事件来源: %s" % kind,
-                             "registered": svc.registry.kinds()}, 400)
-    except Exception as e:
-        return JSONResponse({"error": "事件处理失败: %s" % e}, 500)
-    if res.get("disposition") == "rejected":
-        return JSONResponse(res, 400)
-    return res
 
 
 @router.get("/api/events/triggers")
@@ -202,6 +184,38 @@ def advance_workitem(wid: str, body: dict, conn=Depends(db_session),
 def events_stats(conn=Depends(db_session), user=Depends(current_user)):
     """事件域概览。"""
     return {"stats": EventRepo(conn).stats()}
+
+
+@router.post("/api/events/workitems/{wid}/execute")
+def execute_workitem(wid: str, conn=Depends(db_session),
+                     user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """执行一个工单的 action —— **闭环的最后一环**。
+
+    ⚠️ **observe 工单拒绝执行**（观察期铁律，且判据取**工单快照**的 mode
+       ⇒ 来源后来切 execute，已建的观察期工单仍不可执行）。
+    ⚠️ 动作由 `core/events/executor.py` 的 handler 表决定；
+       **准入与执行彻底分离** ⇒ 执行器有 bug 也不可能绕过准入做未授权的事。
+    返回含 `elapsed_ms`（**价值数据来源**：事件→产出结果的真实耗时）。
+    """
+    from core.events.executor import execute_workitem as _exec
+    res = _exec(conn, wid)
+    return dict(res)
+
+
+@router.post("/api/events/execute-pending")
+def execute_pending_events(conn=Depends(db_session),
+                           user=Depends(require_any_permission(EVENT_WRITE_PERMS)),
+                           limit: int = Query(10, ge=1, le=50),
+                           only_action: str = ""):
+    """批量执行待办工单（**只取 mode='execute' 且 state='open'**）。
+
+    ⚠️ 串行执行（SQLite 单写者 ⇒ 并发会打写锁）。
+    返回逐条结果 + **总耗时**（价值数据）。
+    """
+    from core.events.executor import execute_pending as _exec_pending
+    items = _exec_pending(conn, limit=limit, only_action=only_action)
+    total_ms = sum(int(i.get("elapsed_ms") or 0) for i in items)
+    return {"count": len(items), "total_ms": total_ms, "items": [dict(i) for i in items]}
 
 
 @router.post("/api/events/workitems/{wid}/handoff")
@@ -336,3 +350,34 @@ def build_source_from_body(body: dict):
         action_for=_action_for,
         scope_of=lambda raw: str((raw or {}).get("thread_scope") or ""),
     )
+
+
+# ⚠️⚠️ **本路由必须放在本文件所有静态路径之后**（2026-11-01 实测修掉的真实 bug）
+# FastAPI 按**声明顺序**匹配路由。`{kind}` 是通配段，若它排在
+# `/api/events/execute-pending` 之前 ⇒ 请求 `execute-pending` 会被
+# **当成 kind="execute-pending"** ⇒ 返回 "source_not_registered"，
+# 看起来像"来源没注册"，实则是**路由被通配吃掉**。
+# ⇒ 凡是本文件新增静态路径，必须加在**本路由之前**；或把本路由移到文件末尾（当前做法）。
+# ⇒ 判据：任何新增的 `/api/events/xxx` 静态端点，都要 curl 验证它没被通配吃掉。
+@router.post("/api/events/{kind}")
+def receive_event(kind: str, body: dict, conn=Depends(db_session),
+                  user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """接收一个外部事件 ⇒ 返回处置结论。
+
+    body = {external_id, thread_scope, actor, actor_type?, addressed?, text?, payload?, version?, at?}
+
+    返回 = {disposition, reason, strength, trigger_id, workitem_id?, mode, accepted}
+    ⚠️ disposition 取值：admitted / filtered / duplicate / rejected
+       —— **永远有结论**，不会出现"提交了但什么都没发生且查不到"。
+    """
+    svc = _svc(conn)
+    try:
+        res = svc.receive(kind, body or {})
+    except KeyError as e:
+        return JSONResponse({"error": "未注册的事件来源: %s" % kind,
+                             "registered": svc.registry.kinds()}, 400)
+    except Exception as e:
+        return JSONResponse({"error": "事件处理失败: %s" % e}, 500)
+    if res.get("disposition") == "rejected":
+        return JSONResponse(res, 400)
+    return res

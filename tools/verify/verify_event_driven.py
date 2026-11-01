@@ -363,6 +363,93 @@ check("G25", "emit_document_stored 成功产出处置结论（不抛异常）",
       isinstance(em_res, dict) and not em_res.get("error"),
       f"res={ {k: v for k, v in em_res.items() if k in ('disposition', 'reason', 'error')} }")
 
+# ══ P2-1 闭环执行（此前最大的缺口：全仓无代码执行 workitem 的 action）══
+from core.events.executor import execute_workitem as _exec_wi, execute_pending as _exec_pending  # noqa: E402
+from core.events import executor as _execmod  # noqa: E402
+
+# G26 observe 工单拒绝执行（观察期铁律）
+obs_wid = (svc.receive("zhiyuan", {"external_id": "ext-EXEC-1", "thread_scope": "branch-9",
+                                    "actor": "alice", "addressed": "mention",
+                                    "text": "观察期工单"}) or {}).get("workitem_id") or ""
+r_obs = _exec_wi(conn, obs_wid)
+check("G26", "observe 工单拒绝执行（skipped=observe_mode）",
+      r_obs.get("ok") is False and r_obs.get("skipped") == "observe_mode",
+      f"skipped={r_obs.get('skipped')} err={r_obs.get('error')}")
+
+# G27 来源切 execute 后，**旧工单仍不可执行**（快照口径，观察期不被绕过）
+# ⚠️ 必须走 **service.set_mode**（与生产路径一致）：它同时改 DB 与进程内 registry。
+#    只改 DB ⇒ 新工单仍拿 observe 快照 ⇒ "放开自动执行"实际不生效
+#    —— 这是 2026-11-01 实测修掉的真实缺陷（见 G28a 的对照）。
+svc.set_mode("zhiyuan", EXECUTE_MODE)
+r_obs2 = _exec_wi(conn, obs_wid)
+check("G27", "来源切 execute 后旧 observe 工单仍不可执行（快照口径）",
+      r_obs2.get("ok") is False and r_obs2.get("skipped") == "observe_mode",
+      f"skipped={r_obs2.get('skipped')}")
+
+# G28 execute 工单执行成功 ⇒ 状态 running→done + 有结果 + 有耗时
+_execd = svc.receive("zhiyuan", {"external_id": "ext-EXEC-2", "thread_scope": "branch-9",
+                                 "actor": "alice", "addressed": "mention",
+                                 "text": "可执行工单"})
+exec_wid = _execd.get("workitem_id") or ""
+# 该工单 mode 来自来源快照（已切 execute）⇒ 应为 execute
+wi_exec = EventRepo(conn).get_workitem(exec_wid) or {}
+check("G28a", "新工单继承来源当前模式（execute）",
+      wi_exec.get("mode") == EXECUTE_MODE, f"mode={wi_exec.get('mode')}")
+
+# 注册一个**测试 handler**（不依赖真实抽取，避免依赖开关与 embedding）
+# ⚠️ handler 名必须与**来源声明的 action** 一致（这里是 impact_analysis，
+#    见 _svc 里的 action_for）—— 否则会 no_handler，
+#    而"no_handler"恰好也是 G29 断言 failed 的一个合法原因 ⇒ 会掩盖真问题。
+_calls = {"n": 0}
+
+
+def _fake_handler(conn_, wi_):
+    _calls["n"] += 1
+    return {"ok": True, "writes": False, "result": {"echo": wi_.get("action"),
+                                                    "called": _calls["n"]}}
+
+
+_execmod.register_handler("impact_analysis", _fake_handler)
+r_run = _exec_wi(conn, exec_wid)
+wi_after = EventRepo(conn).get_workitem(exec_wid) or {}
+check("G28", "execute 工单执行成功 ⇒ state=done + 有结果 + 有耗时",
+      r_run.get("ok") is True and wi_after.get("state") == "done"
+      and bool(r_run.get("result")) and int(r_run.get("elapsed_ms") or 0) >= 0,
+      f"ok={r_run.get('ok')} state={wi_after.get('state')} ms={r_run.get('elapsed_ms')}")
+
+# G29 执行失败要留痕（state=failed + error 非空），不吞异常
+def _boom_handler(conn_, wi_):
+    raise RuntimeError("故意炸：验证失败留痕")
+
+
+_execmod.register_handler("impact_analysis", _boom_handler)
+boom_wid = (svc.receive("zhiyuan", {"external_id": "ext-EXEC-3", "thread_scope": "branch-9",
+                                     "actor": "alice", "addressed": "mention",
+                                     "text": "会炸的工单"}) or {}).get("workitem_id") or ""
+r_boom = _exec_wi(conn, boom_wid)
+wi_boom = EventRepo(conn).get_workitem(boom_wid) or {}
+check("G29", "handler 抛异常 ⇒ state=failed + error 留痕（不吞异常）",
+      r_boom.get("ok") is False and wi_boom.get("state") == "failed"
+      and bool(wi_boom.get("error"))
+      # ⚠️ 必须排除 no_handler —— 否则"没有 handler"也会让本断言通过，
+      #    掩盖"异常没被留痕"的真问题（本轮第一版就栽在这）。
+      and "no_handler" not in (wi_boom.get("error") or "")
+      and "故意炸" in (wi_boom.get("error") or ""),
+      f"state={wi_boom.get('state')} err={(wi_boom.get('error') or '')[:40]}")
+
+# G30 终态工单不可重复执行
+r_again = _exec_wi(conn, exec_wid)
+check("G30", "终态工单不可重复执行（done ⇒ 拒绝）",
+      r_again.get("ok") is False and r_again.get("skipped") == "illegal_state",
+      f"skipped={r_again.get('skipped')}")
+
+# G31 批量执行只取 execute + open 的工单（observe 跳过）
+pending = _exec_pending(conn, limit=50)
+pending_wids = {i.get("action") for i in pending}
+check("G31", "批量执行不碰 observe 工单",
+      all(i.get("skipped") != "observe_mode" for i in pending),
+      f"批内 skipped 集合={ {i.get('skipped') for i in pending} }")
+
 conn.close()
 
 # ══════════════════════════════════════════════════════════
