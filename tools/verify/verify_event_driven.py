@@ -55,7 +55,13 @@ LIVE_DB = os.path.join(ROOT, "mbse.db")
 
 # ── 隔离：整库复制 + 重定向（必须在 import core.config 之前）──
 import tempfile
-_TMP = tempfile.mkdtemp(prefix="wb_ev_")
+from _tmpdir import mkdtemp as _mkdtemp   # ⚠️ 共享助手：创建即登记，atexit 自动回收
+# 为什么不用 tempfile.mkdtemp（2026-11-01 实测）：本脚本每次要复制 ~400MB 真库，
+# 而 tempfile.mkdtemp 跑完**不删目录** ⇒ 连跑几轮后 %TEMP% 被写满，
+# 症状是 `sqlite3.OperationalError: database or disk is full`，
+# **看起来像脚本坏了，实际是临时副本堆满磁盘**。
+# （与 _tmpdir.py 头部记录的「累积 1266 个空目录」同型，故统一走该助手。）
+_TMP = _mkdtemp(prefix="wb_ev_")
 COPY_DB = os.path.join(_TMP, "copy.db")
 _src = sqlite3.connect("file:%s?mode=ro" % LIVE_DB, uri=True)
 _dst = sqlite3.connect(COPY_DB)
@@ -450,6 +456,65 @@ check("G31", "批量执行不碰 observe 工单",
       all(i.get("skipped") != "observe_mode" for i in pending),
       f"批内 skipped 集合={ {i.get('skipped') for i in pending} }")
 
+# ══ SysML 校验失败源 + 自动修复闭环（第二类真实源）══
+from core.events.sources_sysml import (  # noqa: E402
+    build_sysml_source, emit_sysml_check_failed, SYML_SOURCE_KIND, MAX_CODE_CHARS,
+)
+
+_sys_reg = SourceRegistry()
+_sys_reg.register(build_sysml_source())
+_sys_svc = EventService(EventRepo(conn), _sys_reg)
+_sys_svc.set_mode(SYML_SOURCE_KIND, EXECUTE_MODE)
+
+_BAD_SYSML = (
+    "package T {\n  part def A;\n  part def B;\n  part a : A;\n  part b : B;\n"
+    "  connector c from a to b;\n}\n"
+)
+_BAD_RES = {"verdict": "block", "n_hard": 3, "n_error": 3, "n_syntax": 3, "n_lexical": 0,
+            "n_semantic": 0, "summary": "syntax err"}
+
+# G32 事件产生 + 代码哈希去重（同一段失败代码只一条）
+sys_r1 = emit_sysml_check_failed(conn, _BAD_SYSML, _BAD_RES, model="T", registry=_sys_reg)
+sys_r2 = emit_sysml_check_failed(conn, _BAD_SYSML, _BAD_RES, model="T", registry=_sys_reg)
+check("G32", "SysML 校验失败事件产生 + 代码哈希去重（同代码重投 duplicate）",
+      sys_r1.get("disposition") == "admitted" and sys_r2.get("disposition") == "duplicate",
+      f"{sys_r1.get('disposition')} → {sys_r2.get('disposition')}")
+
+# G33 闭环修复：block/3 → pass/0，工单 state=done
+sys_wid = sys_r1.get("workitem_id") or ""
+sys_exec = _exec_wi(conn, sys_wid)
+_sr = sys_exec.get("result") or {}
+sys_after = EventRepo(conn).get_workitem(sys_wid) or {}
+check("G33", "自动修复闭环：block/3 → 非 block，工单 done",
+      sys_exec.get("ok") is True
+      and (_sr.get("before") or {}).get("verdict") == "block"
+      and (_sr.get("after") or {}).get("verdict") != "block"
+      and sys_after.get("state") == "done",
+      f"before={( _sr.get('before') or {}).get('verdict')}/{( _sr.get('before') or {}).get('n_hard')} "
+      f"after={(_sr.get('after') or {}).get('verdict')}/{( _sr.get('after') or {}).get('n_hard')} "
+      f"state={sys_after.get('state')} rules={_sr.get('applied_rules')}")
+
+# G34 超长代码 ⇒ **不建单**（前置校验拦下，而不是建了再失败）
+#     为什么判据是"不建单"而不是"建了拒绝执行"：
+#     在残缺代码上修复产出的结果**必然错**，比不修更危险 ⇒ 应该在建单前就拦。
+_huge = "package T {\n" + ("// padding line to exceed limit\n" * 7000) + "}\n"
+_huge_res = dict(_BAD_RES)
+huge_r = emit_sysml_check_failed(conn, _huge, _huge_res, model="HUGE", registry=_sys_reg)
+check("G34", "超长代码 ⇒ 前置校验拦下不建单（reason=code_too_long）",
+      huge_r.get("disposition") == "filtered"
+      and str(huge_r.get("reason") or "").startswith("code_too_long")
+      and not huge_r.get("workitem_id"),
+      f"disp={huge_r.get('disposition')} reason={str(huge_r.get('reason'))[:40]} "
+      f"len={len(_huge)}>{MAX_CODE_CHARS}")
+
+# G35 空代码 ⇒ **不建单**（emit 与 API 两个入口都要拦）
+nocode_r = _sys_svc.receive(SYML_SOURCE_KIND, {"code": "", "model": "N", "actor": "system",
+                                               "actor_type": "system"})
+check("G35", "空代码 ⇒ 不建单（reason=empty_code，不留必然失败的工单）",
+      nocode_r.get("disposition") == "filtered" and nocode_r.get("reason") == "empty_code"
+      and not nocode_r.get("workitem_id"),
+      f"disp={nocode_r.get('disposition')} reason={nocode_r.get('reason')}")
+
 conn.close()
 
 # ══════════════════════════════════════════════════════════
@@ -477,7 +542,7 @@ def _mutate_and_check(mid, name, gid_to_flip, mutate):
 
 def _run_gid(gid):
     """重跑单个 G 断言（每次用新库副本，避免互相污染）。"""
-    tmp2 = tempfile.mkdtemp(prefix="wb_ev_mut_")
+    tmp2 = _mkdtemp(prefix="wb_ev_mut_")
     db2 = os.path.join(tmp2, "m.db")
     s = sqlite3.connect("file:%s?mode=ro" % COPY_DB, uri=True)
     d = sqlite3.connect(db2)
@@ -690,6 +755,48 @@ def _m8_admit(trigger, adm, is_duplicate=False):
 
 _mutate_and_check("M8", "系统事件也按白名单拒 ⇒ G21 翻红", "G21",
                   [(evsources, "admit", _m8_admit)])
+
+# M9: 摘掉 SysML 前置校验 ⇒ G35（空代码不建单）必须翻红
+# ⚠️ 这个变异不能走 `_mutate_and_check`：那个 helper 靠 `_run_gid` 重放断言，
+#    而 `_run_gid` 用的是 `_svc` 的注册表（没有 sysml 源）。
+#    ⇒ 就地替换注册表里的 spec（摘掉 precheck），重跑同一场景，然后再还原。
+print("  ", end="")
+_orig_spec = _sys_reg.get(SYML_SOURCE_KIND)
+try:
+    # ⚠️ 必须自建库副本：主 `conn` 在 G 组末尾已 close（`Cannot operate on a closed database`）
+    _m9dir = _mkdtemp(prefix="wb_ev_m9_")
+    _m9db = os.path.join(_m9dir, "m9.db")
+    _s9 = sqlite3.connect("file:%s?mode=ro" % COPY_DB, uri=True)
+    _d9 = sqlite3.connect(_m9db)
+    _s9.backup(_d9)
+    _s9.close(); _d9.close()
+    _c9 = sqlite3.connect(_m9db)
+    _c9.row_factory = sqlite3.Row
+
+    _nopre = type(_orig_spec)(
+        kind=_orig_spec.kind, title=_orig_spec.title, admission=_orig_spec.admission,
+        to_trigger=_orig_spec.to_trigger, action_for=_orig_spec.action_for,
+        scope_of=_orig_spec.scope_of, reply_to=_orig_spec.reply_to,
+        precheck=None,            # ← 变异：前置校验被摘掉
+    )
+    _reg9 = SourceRegistry()
+    _reg9.register(_nopre)
+    _svc9 = EventService(EventRepo(_c9), _reg9)
+    _svc9.set_mode(SYML_SOURCE_KIND, EXECUTE_MODE)
+    _m9_r = _svc9.receive(SYML_SOURCE_KIND, {"code": "", "model": "M9FRESH",
+                                              "actor": "system", "actor_type": "system"})
+    _c9.close()
+    # 变异生效的标志：空代码**不再被 filtered**（说明 precheck 是承重的那一层）
+    # ⚠️ 用唯一 model 名（M9FRESH）避免撞上 G35 已写入的同 external_id ⇒ 否则会返回
+    #    duplicate 而不是 admitted，证明力被削弱（第一版就踩了这个）。
+    _m9_flipped = _m9_r.get("disposition") != "filtered"
+    print(("[PASS] " if _m9_flipped else "[FAIL] ")
+          + "M9 摘掉 SysML 前置校验 ⇒ G35 翻红  — "
+          + f"空代码现在 {_m9_r.get('disposition')}（变异生效 ⇒ precheck 承重）")
+    RESULTS.append(("M9", "摘掉前置校验 ⇒ G35 翻红", _m9_flipped,
+                    f"disp={_m9_r.get('disposition')}"))
+finally:
+    pass
 
 # ══════════════════════════════════════════════════════════
 # 汇总
