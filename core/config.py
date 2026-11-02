@@ -117,7 +117,12 @@ DEFAULT_CONFIG = {
         #   ⚠️ **只加 probe（探针轮）**：答案轮/修复轮的正文长、思考确有收益，
         #     保持默认（不关）—— 收益有限、风险未测。
         "thinking_policy": '{"off": ["crypto_probe", "probe", "routing", "doc_summary", '
-                           '"chat_probe"], "on": []}',
+                           '"chat_probe", "subtask_protocol_repair"], "on": []}',
+        # ★ 2026-11-02（实测发现）：`subtask_protocol_repair` **必须关思考**。
+        #   它是"把已有正文归纳成 JSON"的确定性任务，思考无收益；
+        #   实测（deepseek-v4-flash）：max_tokens=700 时 reasoning 吃掉 700 token、
+        #   `finish_reason=length`、**content 为空** ⇒ 补格式上线即静默失效。
+        #   这是"功能看起来写了、实际拿不到结果"的典型，故进 off 名单（非仅靠调大预算）。
         # ── 2026-10-10 形态规则层（**可维护性**：让新增 intent 零配置被覆盖）──
         # ★ 为什么需要：`_intent` 是**动态**的 —— `orchestration.py` 用 `agent_def.name`
         #   当 intent，agents 表有**27 个** active Agent（含中文名）。
@@ -260,6 +265,14 @@ DEFAULT_CONFIG = {
                                          # 因为"用户可见报告被砍半"的代价更大（脚本原本也自述"宁可少省一点"）。
                                          # 要换回来只需改这里（或走配置面板），无需动代码。
         "subtask_result_keep_chars": 20000,  # 子任务结果落库保留上限（字符；原先 task_queue 硬编码 4000）
+        # ── 主→子上下文传递（2026-11-02，米爸改进点①②）──────────────────────────
+        # 依据（本轮调研）：Google ADK「working context 是 compiled view，artifacts 按名引用，
+        #   不内联」；Claude Code subagent「子上下文由显式 allow-list 组装，想『全传以防万一』
+        #   说明任务边界没定清楚」；Anthropic「子 Agent 只回 1~2k token 摘要」。
+        "attachments_mode": "auto",      # 子任务附件注入：auto=图片+小文本内联、其余给清单 /
+                                         # all=旧行为(全量) / manifest=只给清单
+        "upstream_digest_chars": 900,    # 上游交付物摘要预算（字符）。原硬编码 400 会切在
+                                         # ```sysml 代码块中间、或切掉「## 结论」段
     },
     # ── 反思闭环 RefineGate（汇总 → 评审 → 修订 → 复评）────────────────────────────
     # ⚠️ 2026-09-20 新建该组：**此前 config 里根本没有 `refine` 组** ——
@@ -946,6 +959,10 @@ DEFAULT_CONFIG = {
         # 真库 10 个 write 工具里只有 5 个在白名单 ⇒ 交付类产物从无路径进表）。
         # 物化后交付物"库里有行、可查询"，汇总/审计可按 kind 聚合，不必解 JSON。
         "materialize": True,
+        # 协议 JSON 缺失时**一次性补格式**（2026-11-02，改进点③）：正文已产出，
+        # 只让模型按 schema 再归纳一遍（≤700 token），不重跑子任务。
+        # 关 = 缺失即回落 normalize_text（三数组恒空，但 meta.protocol_source='missing'）。
+        "json_repair": True,
     },
     "stream_event_log": {
         # ── 编排 SSE 关键事件落库（2026-10-13，B2-11）──────────────────────
@@ -1909,6 +1926,8 @@ CONFIG_SCHEMA = {
         "summary_floor_chars":        {"type": "int", "desc": "汇总输入：均分后每项保底（字符，默认 600）"},
         "summary_max_tokens":         {"type": "int", "desc": "汇总输出上限（token，默认 8000；门禁报「结论前中断」时再调。注：id=1 的 context_window 已解锁为 65536，但 DB max_tokens 仍 8192）"},
         "subtask_result_keep_chars":  {"type": "int", "desc": "子任务结果落库保留上限（字符，默认 20000）"},
+        "attachments_mode":           {"type": "str", "desc": "子任务附件注入模式：auto(默认,图片+小文本内联其余给清单)/all(旧行为全量)/manifest(只给清单)"},
+        "upstream_digest_chars":      {"type": "int", "desc": "上游交付物摘要预算（字符，默认 900）。原硬编码 400 会切在代码块中间或切掉结论段"},
     },
     "refine": {
         "enabled":            {"type": "bool", "desc": "反思闭环（汇总→评审→修订→复评）总开关"},
@@ -2173,6 +2192,7 @@ CONFIG_SCHEMA = {
     "subtask_protocol": {
         "inject_contract": {"type": "bool", "desc": "把交付协议契约注入子任务 query（关=模型只返纯文本，协议三数组恒空）。★ 实测注入前 artifacts/evidence/risks 非空率 0%"},
         "materialize": {"type": "bool", "desc": "把协议三数组物化写入 subtask_artifacts（关=只留在 summary_json 里，该表实测 0 行）"},
+        "json_repair": {"type": "bool", "desc": "协议 JSON 缺失时一次性补格式（≤700 token，不重跑子任务）。关=回落纯文本，三数组恒空"},
     },
     "agent_assignment": {
         "enabled": {"type": "bool", "desc": "编排分派打分总开关（关=不算分不改派，完全退回 2026-10-13 之前行为）。★ 该打分器只做择优与留痕，planner LLM 仍是决策者"},

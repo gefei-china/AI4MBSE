@@ -42,9 +42,28 @@ _done = [
 ]
 _ctx = build_subtask_context(_tk, "无人机动力系统建模", _done, artifact_digest="【产物】已有 SysML 模型")
 
-check("F1 上游交付物摘要被截到 ≤400 字（最小上下文，非全量）",
-      "A" * 400 in _ctx and "A" * 401 not in _ctx,
-      "len=%d" % len(_ctx))
+# ★ 2026-11-02（米爸改进点②）：判据**反转并加强**，不是删除。
+#   旧判据「摘要硬截 ≤400 字」正是被修掉的缺陷：400 字会切在 ```sysml 代码块中间
+#   （下游拿到半份代码 + 半份正文，两半都不可用），也会切在「## 结论」之前。
+#   新判据守三件事：
+#     ① 仍有**预算上限**（不是无限制注入）—— 取配置值，且 ≤2000；
+#     ② 代码围栏**不成半份**（围栏数必须为偶数）；
+#     ③ 尾部「结论」能被保住。
+_code_ctx = "```sysml\n" + "package 'P' {\n" + "  part def 'A';\n" * 120 + "}\n```"
+_ctx2 = build_subtask_context(_tk, "无人机动力系统建模",
+                              [{"task_key": "t1", "title": "需求分析",
+                                "result": "A" * 800 + _code_ctx + "\n## 结论\n三个方案选 B"}],
+                              artifact_digest="【产物】已有 SysML 模型")
+from core import config as _cfg_i
+_cap_i = int(_cfg_i.get("delegation", "upstream_digest_chars", 900) or 900)
+check("F1 上游摘要受**配置预算**约束（不再是硬编码 400，也不是无限制）",
+      200 <= _cap_i <= 2000 and _cap_i != 400,
+      "cap=%d" % _cap_i)
+check("F1b 快照里代码围栏不成半份（原 400 硬截会把 ```sysml 劈开）",
+      _ctx2.count("```") % 2 == 0,
+      "fences=%d" % _ctx2.count("```"))
+check("F1c 尾部结论进快照（原实现只留头，结论整段丢）",
+      "三个方案选 B" in _ctx2 or "结论" in _ctx2)
 check("F2 只注入任务定义/期望产出/交付规范，不注入父会话历史消息",
       all(k in _ctx for k in ("任务定义", "期望产出", "交付规范", "上游交付物摘要")),
       "")

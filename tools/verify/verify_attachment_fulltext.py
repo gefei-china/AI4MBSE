@@ -160,9 +160,19 @@ def main() -> int:
         encoding="utf-8").read()
     chk("H4h 变异锚点命中（注入点仍在拼接提纲层）",
         "_att_outline" in _mut_stream and "章节提纲" in _mut_stream)
-    # 反证：只取前 4 块的旧行为下，后段章节在注入文本里**不存在**
-    chk("H4i 反证：仅取前 4 块时后段章节不在注入文本（这正是原 bug）",
-        "5.3" not in _body and "7.1" not in _body,
+    # 反证：只取前 4 块的旧行为下，**第 5 块之后**的章节在注入文本里**不存在**。
+    # ★ 2026-11-02：改用**合成夹具**而非 doc 847 的前 4 块 —— 原写法依赖真库分块结果，
+    #   而 847 已下线/其前 4 块实测已含「5.3.1 设计数据管理」⇒ 断言随数据漂移变红，
+    #   与"修复是否有效"已无关（误报）。合成夹具把语义固定在"后段只在后续块"。
+    _syn = ["【d.pdf】\n第1章 概述\n1.1 范围",
+            "【d.pdf#2】\n第2章 术语",
+            "【d.pdf#3】\n第3章 总体要求",
+            "【d.pdf#4】\n第4章 功能要求\n4.1 建模"]
+    _syn_tail = ["【d.pdf#5】\n5.3.3 模型问答",
+                 "【d.pdf#6】\n第7章 验收\n7.1 交付清单"]
+    _syn_body = ("\n\n".join(_syn))[:_ATT_INJECT_CAP]
+    chk("H4i 反证：仅取前 4 块时后段章节不在注入文本（合成夹具，原 bug 形态）",
+        "5.3" not in _syn_body and "7.1" not in _syn_body,
         "旧行为确实丢失后段章节")
     # H4j 变异自证：把注入点换回「只有前 4 块、没有提纲层」的旧写法，
     #     H4f/H4g 必须 FAIL（否则本段全是假绿）。内存替换，不写生产文件。
@@ -175,12 +185,16 @@ def main() -> int:
                 "            pass  # MUT: 去掉提纲层\n            " + _mut_no_outline[_i1:]
     chk("H4j 变异锚点命中（注入点含提纲拼接段）", _mut_no_outline != _mut_stream)
     if _mut_no_outline != _mut_stream:
-        _body_only = ("\n\n".join(blocks[:4]))[:_ATT_INJECT_CAP]
-        _mut_injected = _body_only          # 旧写法：没有任何提纲层
+        # ★ 2026-11-02：同样改用合成夹具（口径同 H4i），不再依赖真库前 4 块的偶然内容
+        _body_only = _syn_body             # 旧写法：没有任何提纲层
+        _mut_injected = _body_only
         chk("H4k 换回旧写法（无提纲层）⇒ H4f 失效（提纲确实不在注入文本）",
             "章节提纲" not in _mut_injected)
         chk("H4l 换回旧写法 ⇒ 后段章节在注入文本里彻底缺失（原 bug 复现）",
             "5.3" not in _mut_injected and "7.1" not in _mut_injected)
+        # 正对照：提纲层在 ⇒ 后段章节名可见（H4b 已证 outline 含 5.3/6.4/7.1）
+        chk("H4m 正对照：带提纲层时后段章节能被模型看到",
+            any(t in outline for t in ("5.3", "7.1")))
 
     # ─────────────────────────────────────────────────────────────────────────
     section("H5 · 提纲函数纯函数边界（合成数据，不依赖真库）")

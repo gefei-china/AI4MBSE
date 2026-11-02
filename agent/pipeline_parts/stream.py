@@ -848,27 +848,49 @@ class StreamMixin:
                 except Exception:
                     pass
                 _hb[tkey] = _t.time()   # P0-7：活性心跳（置位即表示"已启动"，worker 的停滞超时据此判定）
+                # 改进点②：初始化「是否取回上游全文」记录（见 _sub_meta 定义处的设计说明）
+                try:
+                    _sub_meta[tkey] = {
+                        "fetched": False,
+                        "up_off": len([_k for _k in (_orch_offloads or {}) if _k != tkey]),
+                    }
+                except Exception:
+                    pass
                 cfg = tk.get("config") or {}
                 if isinstance(cfg, str):
                     try:
                         cfg = json.loads(cfg) or {}
                     except Exception:
                         cfg = {}
-                # Task 9：附件按需注入——config.attachments 白名单优先；未声明时传全部（兼容存量）
+                # Task 9：附件按需注入——config.attachments 白名单优先；未声明时按
+                # `delegation.attachments_mode` 判定（2026-11-02 米爸改进点①）。
+                #
+                # ★ 为什么不再"未声明就全量透传"（行业依据）：
+                #   · Google ADK：artifacts **按名引用**，working context 是 compiled view；
+                #     「Share memory by communicating, don't communicate by sharing memory」；
+                #   · Claude Code subagent：子上下文由**显式 allow-list** 组装；原文
+                #     "当你想要『全都传过去以防万一』时，那说明子任务边界没定义清楚"。
+                #   原实现把 run 级附件无差别灌给每个子任务 ⇒ 5 个附件 × 每个子任务
+                #   最多 8000 字符 ⇒ 与任务无关的噪音挤掉真正的任务上下文。
+                #   auto 模式：图片直传（视觉无法按需读取）+ 小规模文本全传，
+                #   其余只给**清单**（文件名/doc_id/体积 + read_attachment_section 取回指引）。
                 _cfg_att = cfg.get("attachments")
-                if isinstance(_cfg_att, list) and _cfg_att:
-
-                    def _att_id(a):
-                        if isinstance(a, str):
-                            return a
-                        if isinstance(a, dict):
-                            return str(a.get("name") or a.get("filename") or a.get("id") or a)
-                        return str(a)
-
-                    _whitelist = {str(x) for x in _cfg_att}
-                    _sub_att = [a for a in (attachments or []) if _att_id(a) in _whitelist]
-                else:
+                _att_manifest = ""
+                try:
+                    from agent.context_compress import plan_subtask_attachments as _plan_att
+                    from core.config import get as _cfg_am
+                    _amode = str(_cfg_am("delegation", "attachments_mode", "auto") or "auto")
+                    _sub_att, _att_manifest = _plan_att(
+                        attachments or [],
+                        declared=(_cfg_att if isinstance(_cfg_att, list) else None),
+                        mode=_amode)
+                except Exception:
+                    # 规划层失败 → 退回旧行为（不阻断子任务）
                     _sub_att = attachments or []
+                    _att_manifest = ""
+                if _att_manifest:
+                    # 清单随 query 下发（位置在 T7 快照之后、协议契约之前，见下）
+                    pass
                 query = cfg.get("query") or f"{ttitle}\n团队目标：{goal}"
                 # ★★ 2026-10-30（长任务治理·缺口2）：**重试必须缩小规模，而不是重跑同一件事**。
                 #   为什么（真库归因）：重试是"同 key 原地重派"（UPDATE agent_tasks），
@@ -908,6 +930,11 @@ class StreamMixin:
                 _plan_ctx = str(tk.get("context") or cfg.get("context") or "").strip()
                 if _plan_ctx:
                     query += f"\n\n任务上下文（只读，勿编造上下文外事实）：\n{_plan_ctx[:2000]}"
+                # ★ 2026-11-02（改进点①）：附件清单（未内联部分的可见引用）。
+                #   放在任务本体之后、协议契约之前 —— 模型先看清"任务是什么、有哪些资料
+                #   可查"，再被要求按协议交付；顺序反了会把协议当成任务的一部分。
+                if _att_manifest:
+                    query += "\n\n" + _att_manifest
                 # ★ 2026-10-13（批次二 P2-2）：**把交付协议契约注入子任务 query**。
                 #   真库实证（2026-10-12 只读）：`summary_json` 的
                 #   `artifacts`/`evidence`/`risks` 三数组**非空率 0%**（180 行全空）——
@@ -1069,6 +1096,17 @@ class StreamMixin:
                                 evs.append(ev)
                                 _evq.put(ev)
                             elif _et == "tool":
+                                # ★ 2026-11-02（改进点②）：记录"下游是否真去读了上游全文"。
+                                #   `tool_result_fetch` 是唯一能取回 offload 全文的通道；
+                                #   成功调用过即视为"按需取用已发生"。只记事实，不改行为。
+                                try:
+                                    _nm_raw = str(ev.get("name") or "")
+                                    if (_nm_raw == "tool_result_fetch"
+                                            and ev.get("ok") is not False
+                                            and _sub_meta.get(tkey) is not None):
+                                        _sub_meta[tkey]["fetched"] = True
+                                except Exception:
+                                    pass
                                 e2 = dict(ev); e2["name"] = f"{tkey}:{e2.get('name','')}"
                                 evs.append(e2)
                                 _evq.put(e2)
@@ -1095,9 +1133,65 @@ class StreamMixin:
                             #   原写法只试 `startswith("{")`，对"正文在前"的形态恒为 False
                             #   ⇒ 注入契约后仍拿不到三数组（实测踩到的真缺口）。
                             _parsed = _sp_extract(_s0)
+                            _proto_src = "parsed" if isinstance(_parsed, dict) else ""
+                            # 补格式失败原因（空串=没试过；非空=试过但没成）——
+                            #   必须定义在**两支之前**，否则 normalize_text 支会 NameError
+                            _rp_err = ""
+                            # ★ 2026-11-02（改进点③）：协议缺失 → **一次性补格式**。
+                            #   为什么要重试：协议是三数组（artifacts/evidence/risks/claims）
+                            #   的唯一来源，缺失即整批降级为 normalize_text（三数组恒空）。
+                            #   为什么不重跑子任务：正文已产出，缺的只是"按 schema 再陈述一遍"的
+                            #   归纳动作 —— 一次 ≤700 token 的补交即可，成本≈重跑的 1/10。
+                            #   判据：只做**一次**；正文 ≥200 字才有归纳价值；可配置关闭。
+                            if not isinstance(_parsed, dict) and len(_s0) >= 200:
+                                try:
+                                    from core.config import get as _cfg_rp
+                                    _rp_on = bool(_cfg_rp("subtask_protocol", "json_repair", True))
+                                except Exception:
+                                    _rp_on = True
+                                if _rp_on:
+                                    try:
+                                        from llm import llm_client as _lc_rp
+                                        from services.subtask_protocol import (
+                                            build_repair_prompt as _sp_prompt)
+                                        # ⚠️ max_tokens 取 1800（不是 700）：
+                                        #   实测带思考的默认模型会把预算吃在 reasoning 上 ⇒
+                                        #   `finish_reason=length` + content 空。
+                                        #   已在 `thinking_policy.off` 关掉本 intent 的思考，
+                                        #   这里再留足余量做纵深防御（配置被改也不会静默失效）。
+                                        _rr = _lc_rp.chat(
+                                            [{"role": "user",
+                                              "content": _sp_prompt(_s0)}],
+                                            provider_id=provider_id, max_tokens=1800,
+                                            _intent="subtask_protocol_repair")
+                                        _ch_rp = (_rr.get("choices") or [{}])[0] or {}
+                                        _rc2 = ((_ch_rp.get("message") or {}).get("content") or "")
+                                        _p2 = _sp_extract(_rc2 or "")
+                                        if isinstance(_p2, dict):
+                                            _parsed = _p2
+                                            _proto_src = "repaired"
+                                        else:
+                                            # 失败要**留下原因**（否则又是一处静默）：
+                                            # finish_reason=length 说明预算被吃光，与"模型不配合"不同源
+                                            _rp_err = "finish=%s len=%d" % (
+                                                _ch_rp.get("finish_reason") or "-", len(_rc2))
+                                    except Exception as _e_rp:
+                                        _rp_err = "%s" % type(_e_rp).__name__
                             if isinstance(_parsed, dict):
                                 _pr = _sp_validate(_parsed)
                                 _summary_proto = _pr.get("sanitized")
+                                if isinstance(_summary_proto, dict):
+                                    # 协议来源随结构落库：'parsed'=模型自己给的 /
+                                    # 'repaired'=补格式补上的 / 'missing'=只有纯文本兜底。
+                                    # 这是"协议是否按契约交付"的唯一可证伪标记。
+                                    _meta_p = _summary_proto.get("meta")
+                                    if not isinstance(_meta_p, dict):
+                                        _meta_p = {}
+                                    _meta_p["protocol_source"] = _proto_src or "parsed"
+                                    if not _pr.get("ok"):
+                                        _meta_p["validate_reason"] = str(
+                                            _pr.get("reason") or "")[:120]
+                                    _summary_proto["meta"] = _meta_p
                                 # ★ P0-4（2026-10-30）：**引用可回查** —— 只降不升。
                                 #   为什么必须在这一行（而不是汇总/评审处）：
                                 #     `summary_json` 是下游唯一的协议真源（物化 → 汇总 → 评审），
@@ -1118,6 +1212,18 @@ class StreamMixin:
                                         pass
                             else:
                                 _summary_proto = _sp_normalize(sub_res)
+                                # ★ 2026-11-02：纯文本兜底必须**自报**「协议缺失」，
+                                #   否则下游看到的是"一份完整摘要"，而三数组其实全空
+                                #   —— 这正是本仓反复栽过的"空字段看起来像已检查无问题"。
+                                if isinstance(_summary_proto, dict):
+                                    _m2 = _summary_proto.get("meta")
+                                    if not isinstance(_m2, dict):
+                                        _m2 = {}
+                                    _m2["protocol_source"] = "missing"
+                                    if _rp_err:
+                                        # 补格式**试过但没成**——与"压根没试"必须可区分
+                                        _m2["protocol_repair_error"] = str(_rp_err)[:120]
+                                    _summary_proto["meta"] = _m2
                             # 协议状态 → 子任务成功标志：failed→fail（现状 tk_ok 判定保留兼容）
                             if _summary_proto and _summary_proto.get("status") == "failed":
                                 ok = False
@@ -2364,6 +2470,15 @@ class StreamMixin:
                 _import_threading = __import__("threading")
                 _hb_lock = _import_threading.Lock()
                 _orch_offloads = {}   # 共享产物工作区：{task_key: (offload_id, 字符数)}（下游按 id 取全文）
+                # ★ 2026-11-02（改进点②后半）：下游是否**真的读了**上游完整交付物。
+                #   `{task_key: {"fetched": bool, "up_off": 可取回份数}}`
+                #   为什么需要：给下游的摘要必然是有损的（900 字符 + 协议结论）。
+                #   原设计给了 offload 引用 + "摘要不够就取全文"的指引，但**取不取全凭模型自觉**，
+                #   而"没取"在汇总里完全不可见 ⇒ 汇总读起来像"信息完整"。
+                #   行业判据：Google ADK「compiled view + 按名引用」成立的前提是
+                #   **取用有据可查**；Anthropic 则要求交接内容"足以判断"。
+                #   本表不改变任何产出，只把"仅凭摘要下结论"这件事**显式带到汇总与评审面前**。
+                _sub_meta = {}
 
                 def _drain():
                     """取出队列里**已到达**的子任务事件；把**连续的 token 合并成一条**再吐。
@@ -2662,6 +2777,18 @@ class StreamMixin:
                     _sm = _it.get("summary")
                     if isinstance(_sm, dict) and str(_sm.get("summary") or "").strip():
                         _sec = _sm.get("summary")
+                        # ★ 2026-11-02（改进点②）：**仅凭摘要下结论**必须显式可见。
+                        #   该子任务有上游 offload 全文可取却一次没取 ⇒ 它看到的只有
+                        #   有损摘要。此提示进汇总输入（评审也会读到），
+                        #   避免"看起来信息完整、实则有损"的假象。
+                        try:
+                            _mt = _sub_meta.get(str(_it.get("task_key") or "")) or {}
+                            if _mt.get("up_off") and not _mt.get("fetched"):
+                                _sec += ("\n⚠️ 本子任务未取回上游完整交付物（%d 份可取），"
+                                         "其结论仅基于摘要，可能不完整"
+                                         % int(_mt.get("up_off") or 0))
+                        except Exception:
+                            pass
                         _arts = _sm.get("artifacts") or []
                         if _arts:
                             _sec += "\n交付物：" + "；".join(

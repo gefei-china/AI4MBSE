@@ -42,9 +42,72 @@ def _dep_closure(dep_keys: set, plan: list, _guard: int = 32) -> set:
     return out
 
 
+def _upstream_digest_cap() -> int:
+    """上游交付物摘要的字符预算（`delegation.upstream_digest_chars`，默认 900）。
+
+    ★ 2026-11-02：原实现硬编码 `[:400]` —— 实测两个问题：
+      ① 切在 ```sysml 代码块中间 ⇒ 下游拿到半份代码 + 半份正文，两半都不可用；
+      ② 切在「## 结论」之前 ⇒ 只留过程、丢掉结论，下游据此把上游判定为"缺失"。
+    为什么是 900 而不是更大：Anthropic 的实证是子 Agent 只回 1~2k token 摘要；
+    摘要的作用是"让下游判断要不要取全文"，不是"把上游正文搬过来"。
+    需要全文时走 offload + `tool_result_fetch`（调用点已给引用行）。
+    """
+    try:
+        from core import config as _cfg
+        v = int(_cfg.get("delegation", "upstream_digest_chars", 900) or 900)
+        return max(200, min(4000, v))
+    except Exception:
+        return 900
+
+
+def _protocol_digest(sm) -> str:
+    """把子任务的**协议摘要**压成几行「结论级」信息（无协议返回 ""）。
+
+    行业依据：OpenAI Agents SDK / Anthropic 的 handoff 都强调「传结论，不传推理」。
+    本仓的协议里恰好已有 struct 化的结论槽（claims[].kind + subject），
+    比让下游从正文里自己找结论更可靠 —— 且 subject 已被用于跨子任务冲突检测。
+    """
+    if not isinstance(sm, dict) or not sm:
+        return ""
+    parts = []
+    st = sm.get("status")
+    one = str(sm.get("summary") or "").strip()
+    if st or one:
+        parts.append("  状态=%s%s" % (st or "?", ("；成果：" + one[:200]) if one else ""))
+    cl = sm.get("claims") or []
+    if cl:
+        _K = {"fact": "已核实", "inference": "推断", "to_verify": "待验证"}
+        try:
+            _c = sorted(cl, key=lambda c: {"fact": 0, "inference": 1,
+                                           "to_verify": 2}.get(str((c or {}).get("kind")),
+                                                               "to_verify"))
+        except Exception:
+            _c = cl
+        parts.append("  关键结论：" + "；".join(
+            "【%s】%s%s" % (_K.get(str((x or {}).get("kind") or "to_verify"), "待验证"),
+                           (str(x.get("subject")) + "：") if (x or {}).get("subject") else "",
+                           str((x or {}).get("text") or "")[:120])
+            for x in _c[:4] if isinstance(x, dict)))
+    rk = sm.get("risks") or []
+    if rk:
+        parts.append("  风险：" + "；".join(
+            "[%s]%s" % ((r or {}).get("level") or "?", str((r or {}).get("title") or "")[:60])
+            for r in rk[:3] if isinstance(r, dict)))
+    ar = sm.get("artifacts") or []
+    if ar:
+        parts.append("  产物：" + "；".join(
+            "%s《%s》" % ((a or {}).get("kind") or "-", str((a or {}).get("title") or "")[:40])
+            for a in ar[:4] if isinstance(a, dict)))
+    ms = sm.get("missing") or []
+    if ms:
+        parts.append("  自报缺口：" + "；".join(str(x)[:50] for x in ms[:4]))
+    return "\n".join(parts)
+
+
 def build_subtask_context(tk: dict, goal: str, done_items: list = None,
                           artifact_digest: str = "",
-                          offload_map: dict = None, plan: list = None) -> str:
+                          offload_map: dict = None, plan: list = None,
+                          digest_cap: int | None = None) -> str:
     """T7 子任务上下文快照：任务定义 + 前置结果摘要 + 会话既有产物 + 交付规范（最小充分上下文）。
 
     供 _run_task 与 _stream_orchestrated_flow 复用，保证会话编排/画布路径行为一致。
@@ -88,8 +151,30 @@ def build_subtask_context(tk: dict, goal: str, done_items: list = None,
     pre = [it for it in (done_items or []) if it.get("task_key") in dep_keys and it.get("result")]
     if pre:
         parts.append("- 上游交付物摘要：")
+        _cap = int(digest_cap or _upstream_digest_cap())
+        try:
+            from agent.context_compress import smart_excerpt as _sx
+        except Exception:
+            _sx = None
         for it in pre:
-            parts.append(f"  · {it.get('task_key')}（{it.get('title') or '-'}）：{str(it.get('result'))[:400]}")
+            _key = it.get('task_key')
+            _title = it.get('title') or '-'
+            # ★ 2026-11-02（改进点②）：**协议结论优先**，正文摘要用围栏安全截断。
+            #   为什么先给协议：claims/risks/artifacts 是"结论级"结构，
+            #   正是下游判断"要不要取全文、能不能直接用"所需的最少信息；
+            #   而正文截断只能给到"过程"，还容易切在代码块中间。
+            _pd = _protocol_digest(it.get("summary"))
+            _body = str(it.get('result') or '')
+            if _sx is not None:
+                _snippet, _om = _sx(_body, _cap)
+                if _om:
+                    _snippet += "\n  （正文已省略 %d 字符%s）" % (
+                        _om, "，完整内容见下方 offload 引用" if offload_map else "")
+            else:
+                _snippet = _body[:_cap] + ("…" if len(_body) > _cap else "")
+            parts.append(f"  · {_key}（{_title}）：{_snippet}")
+            if _pd:
+                parts.append(_pd)
         # ★ 2026-10-20（共享产物工作区·方案1）：摘要只有 400 字，下游曾因只看到片段
         #   把上游交付物误判为"缺失/失败"（会话 9565 t1—t5 全部误报）。完整交付物
         #   已由 worker 落 offload 共享区 —— 这里给**按需取全文的引用**（id + 字符数 +
@@ -544,6 +629,22 @@ class FlowPlannerMixin:
                 query += f"\n\n任务上下文（只读，勿编造上下文外事实）：\n{context[:2000]}"
             if expected_output:
                 query += f"\n\n期望输出/完成标准：\n{expected_output[:1000]}"
+            # ★ 2026-11-02（改进点①，与流式路径同口径）：附件按需注入。
+            #   非流式路径原本也是 `attachments or []` 全量透传 —— 两条路径必须同源，
+            #   否则"同一个任务走流式/非流式拿到不同资料"，是更隐蔽的口径分裂。
+            _sub_att, _att_manifest = attachments or [], ""
+            try:
+                from agent.context_compress import plan_subtask_attachments as _plan_att
+                from core.config import get as _cfg_am2
+                _sub_att, _att_manifest = _plan_att(
+                    attachments or [],
+                    declared=(cfg.get("attachments")
+                              if isinstance(cfg.get("attachments"), list) else None),
+                    mode=str(_cfg_am2("delegation", "attachments_mode", "auto") or "auto"))
+            except Exception:
+                _sub_att, _att_manifest = attachments or [], ""
+            if _att_manifest:
+                query += "\n\n" + _att_manifest
             if ttype == "agent":
                 from agent import AgentPipeline
                 pipe = AgentPipeline()
@@ -554,7 +655,7 @@ class FlowPlannerMixin:
                     row = conn.execute("SELECT name FROM skills WHERE name=? AND status='published'", (skill_name,)).fetchone()
                     if not row:
                         skill_name = None
-                out = pipe.execute(query, 0, branch, None, attachments or [], dry_run=True,
+                out = pipe.execute(query, 0, branch, None, _sub_att, dry_run=True,
                                    forced_intent=tk.get("agent_id") or None, skill_name=skill_name,
                                    user=user, tools_whitelist=tools_wl)
                 content = (out.get("content") or "").strip()

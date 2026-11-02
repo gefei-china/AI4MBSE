@@ -400,40 +400,11 @@ def validate(raw):
             "truncated": truncated, "warnings": warnings}
 
 
-def extract_protocol_json(text):
-    """★ 2026-10-13（批次二 P2-2）：从子任务输出里**抽出尾部的协议 JSON**。
+def _balanced_json_at(t: str, end: int):
+    """从 `t[end]`（应为 `}`）向前做括号配平，返回 (start, frag) 或 None。
 
-    为什么需要（实测踩到的一个真缺口）：子任务 prompt 要求的是
-    「**正文在前**，另起一段以单个 JSON 对象结尾」（不能只吐 JSON —— 那会毁掉
-    面向用户的可读交付物）。而调用方此前的解析只试 `text.strip().startswith("{")`，
-    对"正文 + JSON"这种形态**恒为 False** ⇒ 永远走 `normalize_text`
-    ⇒ 三数组永远为空 ⇒ **注入契约了却仍拿不到结构化字段**。
-    ⇒ 光注入契约不够，**解析端必须同步支持尾部 JSON**。
-
-    识别口径（从后往前找，优先取最后一个平衡的 JSON 对象）：
-      ① 整段就是 JSON → 直接用；
-      ② 否则找**最后一个** `}`，向前做括号配平，得到候选片段后 `json.loads`；
-      ③ 解析失败 → 返回 None（调用方回落 `normalize_text`，行为与改动前一致）。
-
-    ⚠️ 只取**一个** JSON 对象（不合并多个）—— 多 JSON 场景本协议未定义，
-    宁可漏也不猜（错的字段比空字段更坏）。
     ⚠️ 配平时**跳过字符串字面量内的括号**，否则正文中出现 `"}"` 就会算错配平。
     """
-    s = str(text or "")
-    if not s.strip():
-        return None
-    # ① 整段就是 JSON
-    t = s.strip()
-    if t.startswith("{"):
-        try:
-            obj = json.loads(t)
-            return obj if isinstance(obj, dict) else None
-        except Exception:
-            return None
-    # ② 从最后一个 } 向前配平
-    end = t.rfind("}")
-    if end < 0:
-        return None
     depth = 0
     in_str = False
     esc = False
@@ -454,13 +425,151 @@ def extract_protocol_json(text):
         elif ch == "{":
             depth -= 1
             if depth == 0:
-                frag = t[i:end + 1]
-                try:
-                    obj = json.loads(frag)
-                    return obj if isinstance(obj, dict) else None
-                except Exception:
-                    return None
+                return i, t[i:end + 1]
     return None
+
+
+#: 协议候选片段必须出现的「身份词」—— 用来在多 JSON 文本里挑出协议那一个
+_PROTO_HINTS = ("schema_version", "artifacts", "evidence", "risks", "claims", "status")
+
+
+def _repair_json_text(frag: str) -> str:
+    """**结构性**修复（只动语法，不动内容）。
+
+    ★ 2026-11-02（改进点③）：模型输出的 JSON 高频坏法就三种 ——
+      ① 尾随逗号 `{...,}`；② 被截断（缺右括号）；③ 外面裹了 ```json 围栏。
+    这三类都能**确定性地**修好，且修完不会改变任何字段值。
+    ⚠️ 明确**不做**的事：不改引号内容、不补字段、不猜枚举值 ——
+      那是"编内容"，错的字段比空字段更坏（本模块既有判据）。
+    """
+    s = frag.strip()
+    # ③ 剥围栏
+    s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
+    s = re.sub(r"\s*```$", "", s)
+    # ① 去尾随逗号（`,\s*}` 或 `,\s*]`）
+    s = re.sub(r",(\s*[}\]])", r"\1", s)
+    # ② 截断补齐：按括号栈补右侧
+    depth = 0
+    in_str = False
+    esc = False
+    stack = []
+    for ch in s:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+    if in_str:
+        s += '"'
+    for ch in reversed(stack):
+        s += "}" if ch == "{" else "]"
+    return s
+
+
+def extract_protocol_json(text):
+    """从子任务输出里**抽出协议 JSON**（正文在前、JSON 在尾）。
+
+    ★ 2026-10-13（批次二 P2-2）：原解析只试 `startswith("{")`，对"正文 + JSON"
+    恒为 False ⇒ 永远走 `normalize_text` ⇒ 三数组恒空。
+
+    ★ 2026-11-02（改进点③，米爸「协议靠模型自觉」）：**多轮候选 + 语法级修复**。
+      实测坏法三类（都不该让整份协议作废）：
+        · 外面裹 ```json 围栏 → 真库常见，原实现配平能取到，但一遇到围栏里
+          再带 `}` 说明文字就会跑偏；
+        · 尾随逗号 / 被 max_tokens 截断 → json.loads 直接失败；
+        · 正文里既有示例 JSON 又有真协议 JSON → "最后一个平衡对象"未必是协议。
+      现在按候选列表逐个尝试，**优先带协议身份词（schema_version/artifacts/…）的对象**，
+      每个候选先严格解析、失败再做 `_repair_json_text` 的结构性修复。
+      ⚠️ 仍然**只取一个对象**，仍然不猜字段值 —— 只是把"能确定修好的语法问题"修好。
+
+    返回 dict 或 None（None ⇒ 调用方回落 normalize_text，行为与改动前一致）。
+    """
+    s = str(text or "")
+    if not s.strip():
+        return None
+    t = s.strip()
+
+    cands = []          # [(score, frag)]，score 越大越像协议
+    # ① 整段就是 JSON
+    if t.startswith("{"):
+        cands.append((2, t))
+    # ② 围栏块（```json … ``` 或 ``` … ```）
+    for m in re.finditer(r"```[a-zA-Z]*[ \t]*\r?\n(.*?)\r?\n[ \t]*```", t, re.S):
+        blk = (m.group(1) or "").strip()
+        if blk.startswith("{"):
+            cands.append((3, blk))
+    # ③ 从后往前逐个 `}` 配平（最多取 5 个，避免长正文里大量对象拖慢）
+    pos, tries = len(t) - 1, 0
+    while tries < 5:
+        end = t.rfind("}", 0, pos + 1)
+        if end < 0:
+            break
+        got = _balanced_json_at(t, end)
+        if got:
+            cands.append((1, got[1]))
+        pos, tries = end - 1, tries + 1
+    # ④ **被截断的协议**：以协议身份键开头的对象，一直到文末（修复会补齐括号）。
+    #   为什么必须单独一支：截断后"最后一个 }"落在某个内层对象上，
+    #   配平只能取到那个内层片段（无身份词 ⇒ 被丢弃），整份协议就此丢失。
+    for m in re.finditer(r'\{\s*"(?:schema_version|status|summary|artifacts|claims|missing)"\s*:', t):
+        cands.append((4, t[m.start():]))
+
+    best = None
+    for base, frag in cands:
+        for attempt in (frag, _repair_json_text(frag)):
+            try:
+                obj = json.loads(attempt)
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            score = base + sum(1 for h in _PROTO_HINTS if h in obj)
+            if best is None or score > best[0]:
+                best = (score, obj)
+            break
+    if best and best[0] >= 2:       # 至少是围栏块或整段 JSON
+        return best[1]
+    if best and any(h in best[1] for h in _PROTO_HINTS):
+        return best[1]              # 尾部对象里带协议身份词 ⇒ 认它
+    return None
+
+
+def build_repair_prompt(body: str, max_body: int = 6000) -> str:
+    """为「协议 JSON 缺失/损坏」构造**一次性补格式**请求（纯函数）。
+
+    ★ 2026-11-02（改进点③）：行业做法（OpenAI Agents SDK handoff / 生产实践）
+    是「边界即契约，**reject don't repair**，带错误重试一次」。
+    本仓不能重跑整个子任务（成本/时延都不可接受），但可以只让模型**补交协议块** ——
+    正文已产出，只需它把同一份结论按 schema 再陈述一遍（≤700 token）。
+    ⇒ 既不编造内容（只做归纳），也不让"模型少写一段 JSON"升级成"整批降级"。
+    """
+    b = str(body or "")
+    if max_body > 0 and len(b) > max_body:
+        # 头尾采样：结论通常在后半段
+        head = b[: int(max_body * 0.3)]
+        tail = b[-int(max_body * 0.7):]
+        b = head + "\n…（中间省略）…\n" + tail
+    return (
+        "下面是一次已完成任务的产出正文。请**只输出一个 JSON 对象**（不要任何解释、"
+        "不要 markdown 围栏），把这次任务的结论按给定字段归纳出来。\n"
+        "字段：schema_version=1；status 取 full|partial|failed；summary 一句话成果；"
+        "artifacts[]（kind/title/ref，无则 []）；evidence[]（source/ref/basis，"
+        "basis 取 verified|derived|asserted，没查证的一律 asserted）；"
+        "risks[]（level/title/desc/advice）；claims[]（text/kind/subject，"
+        "kind 取 fact|inference|to_verify）；missing[]（status 非 full 时必填）；confidence 0~1。\n"
+        "**只依据正文内容归纳，不得补充正文里没有的事实**；正文没写的字段给空数组。\n\n"
+        "正文：\n" + b
+    )
 
 
 def normalize_text(raw_text, task_status=None):

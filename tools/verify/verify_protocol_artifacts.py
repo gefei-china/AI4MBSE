@@ -207,34 +207,50 @@ if os.path.exists(PROD_DB):
     _pc.close()
     print("  真库：subtask_artifacts %d 行｜三数组非空的 summary_json %d/%d"
           % (_sa, _ne, len(_rows)))
-    check("E1 记录到改动前基线为 0（本次修复的目标）", _sa == 0 or _ne == 0,
-          "真库已有数据 ⇒ 本门禁的基线描述需更新")
+    # ★ 2026-11-02：原断言是「基线为 0（待修复）」——那是**改动当时**的表述。
+    #   修复上线后该断言必然变红（真库已 816 行），这不是回归而是**判据过期**。
+    #   按「判据要随需求反转、不许删」的纪律，改为守**修复已生效**的不变式：
+    #   表里有行（物化路径真的在跑）且 summary_json 三数组确实出现过非空值。
+    check("E1 修复已生效：subtask_artifacts 有行 且 summary_json 三数组出现过非空",
+          _sa > 0 and _ne > 0,
+          "真库 %d 行 / 非空 %d 条（若为 0 说明物化或协议注入回退了）" % (_sa, _ne))
 else:
     print("  [SKIP] 未找到真库")
 
-print("\n=== F. 变异自证（解析器退回『只认整段 JSON』）===")
-# 精确复原改动前的解析形态：只试 startswith("{")，不做尾部抽取
-_old = '            obj = json.loads(t)\n            return obj if isinstance(obj, dict) else None'
+print("\n=== F. 变异自证（解析器退回『不做结构修复』）===")
+# ★ 2026-11-02：`extract_protocol_json` 已重写（多轮候选 + 结构修复），
+#   原变异锚点（`obj = json.loads(t)` 直出）**已不存在** ⇒ 旧写法会打印
+#   [VACUOUS] 并让 `_muts` 为空（门禁静默失效 = 假绿）。改锚到新的承重段：
+#   把 `_repair_json_text` 退化为恒等函数（= 只能严格解析），
+#   于是「尾随逗号 / 被截断」两类真实坏法必然抽不出。
+_old = "def _repair_json_text(frag: str) -> str:\n"
 if _old not in p_src:
-    print("  [VACUOUS] 锚点不在源码里，自证中止")
+    check("F0 变异锚点命中（_repair_json_text 仍在源码里）", False,
+          "解析器实现又变了 ⇒ 本段自证需同步更新，勿留空跑")
 else:
-    # 变异：让 ② 分支（尾部扫描）永远不命中
-    _mut = p_src.replace("    end = t.rfind(\"}\")\n    if end < 0:\n        return None",
-                         "    end = t.rfind(\"}\")\n    if end >= 0:\n        return None  # MUTATION: 不做尾部扫描", 1)
+    _mut = p_src.replace(_old, _old + "    return frag  # MUTATION: 不做结构修复\n", 1)
     _ns = {"__name__": "_mut_proto"}
+    _TRAIL = '正文\n{"status":"full","artifacts":[{"kind":"model","title":"M",},],}'
+    _TRUNC = '正文\n{"status":"partial","risks":[{"level":"high","title":"R"}'
     try:
         exec(compile(_mut, "<mutant>", "exec"), _ns)
         _mE = _ns["extract_protocol_json"]
-        _r1 = _mE(_JK)                       # 纯 JSON：应仍能抽（改动前也支持）
-        _r2 = _mE("正文\n\n" + _JK)          # 正文+JSON：改动前**抽不出**
+        _r1 = _mE(_JK)                       # 纯 JSON：对照（修复前后都可抽）
+        _r2 = _mE("正文\n\n" + _JK)          # 正文+尾部 JSON：对照
+        _r3 = _mE(_TRAIL)                    # 尾随逗号：无修复 ⇒ 抽不出
+        _r4 = _mE(_TRUNC)                    # 被截断：无修复 ⇒ 抽不出
         check("F1 变异体下『纯 JSON』仍可抽（对照组）", isinstance(_r1, dict))
-        check("F2 变异体下『正文+尾部 JSON』抽不出（缺陷形态复现）",
-              _r2 is None, "变异体竟还能抽出 ⇒ 自证无效")
-        check("F3 现行实现能抽出（与变异体形成对照）",
-              isinstance(extract_protocol_json("正文\n\n" + _JK), dict))
-        _muts.append(("M1", "解析器不做尾部扫描（回到只认整段 JSON）"))
-        print("  [SELF-PROOF] M1 解析器退回原形态 —— 正文+JSON 抽不出，"
-              "证明第②处改动是承重的（只注入契约不改解析 = 无效）")
+        check("F2 变异体下『正文+尾部 JSON』仍可抽（对照组，非本次改动点）",
+              isinstance(_r2, dict))
+        check("F3 变异体下『尾随逗号』抽不出（缺陷形态复现）", _r3 is None,
+              "变异体竟还能抽出 ⇒ 自证无效")
+        check("F4 变异体下『被截断协议』抽不出（缺陷形态复现）", _r4 is None,
+              "变异体竟还能抽出 ⇒ 自证无效")
+        check("F5 现行实现能抽出这两类坏法（与变异体形成对照）",
+              isinstance(extract_protocol_json(_TRAIL), dict)
+              and isinstance(extract_protocol_json(_TRUNC), dict))
+        _muts.append(("M1", "解析器不做结构修复（尾随逗号/截断协议全部丢失）"))
+        print("  [SELF-PROOF] M1 结构修复是承重的 —— 去掉它，两类高频坏法即整份协议作废")
     except Exception as e:
         check("F1 变异体执行成功", False, str(e))
 
