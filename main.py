@@ -87,6 +87,30 @@ async def lifespan(app: FastAPI):
         ensure_fts(get_db())
     except Exception:
         pass
+    # ★ 2026-11-01（检索性能）：BM25 索引**预热**。
+    #   实测（cProfile）：冷启动首次 hybrid_search 要 **35 秒** ——
+    #   7179 个 chunk 做 bigram 分词 ≈ 1.17 亿次函数调用，全在首个用户请求里同步做。
+    #   用户看到的是"问一句等半分钟"，与"卡死"无法区分（本轮实测同一条 query
+    #   偶发 13s / 21.7s / 35s，就是这个冷启动抖动）。
+    #   为什么放后台线程：预热不该阻塞启动（服务立即可用），也不该假如失败影响主流程。
+    #   预热后首次查询 ≈ 5s（剩余是 embedding 超时 + RRF）。
+    #   ⚠️ 只预热 `branches=None` 这一个 key：检索侧 `rag.py` 调 hybrid_search 时
+    #     branches 恒为 None（文档全局化设计），其它 key 是低频路径，不值得占预热时间。
+    try:
+        import threading as _th
+
+        def _warm_bm25():
+            try:
+                from knowledge_engine import _bm25_cache_get
+                from database import get_db as _gdb_w
+                _bm25_cache_get(_gdb_w(), None, None, None, False)
+                print("[startup] BM25 索引预热完成（首次检索不再等 35s）", flush=True)
+            except Exception as _e_w:
+                print("[startup] BM25 预热跳过: %s" % str(_e_w)[:120], flush=True)
+
+        _th.Thread(target=_warm_bm25, daemon=True, name="bm25-warm").start()
+    except Exception:
+        pass
     # P0-d（2026-10-03 评估）：周期告警评估器 —— 现状只有 run 结束时的一次性评估，
     #   非编排流量（会话直答/意图识别等绝大多数真实请求）的 LLM 异常、成本突增、延迟劣化、
     #   以及登录失败突增、审计链破损，此前都处于无守护状态。

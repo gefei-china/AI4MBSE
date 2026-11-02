@@ -21,6 +21,74 @@
 @keyframes rec-pulse{0%,100%{opacity:1;}50%{opacity:.45;}}
 #llm-providers{border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;background:#fff;color:var(--fg);cursor:pointer;max-width:170px;}
 #llm-providers:focus{outline:none;border-color:var(--blue);}
+/* ── 2026-10-31 会话入口模型切换面板（按钮 + 卡片列表）──
+   为什么不直接用原生 select 加 title：原生 option 无法展示多行描述、标签徽章、
+   ✅ 选中态与 ⚙ 设置入口；而“每个模型分别设置”必须能就地看到该模型的参数摘要。
+   面板用 position:absolute 向上弹（输入框在页面底部，向下弹会溢出视口）。 */
+.llm-pick-wrap{position:relative;display:inline-flex;}
+.llm-pick-btn{display:inline-flex;align-items:center;gap:5px;max-width:220px;border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;background:var(--card);color:var(--fg);cursor:pointer;font-family:inherit;}
+.llm-pick-btn:hover{border-color:var(--blue);}
+.llm-pick-btn .llm-pick-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.llm-pick-btn .llm-pick-caret{color:var(--mut);font-size:10.5px;}
+/* 2026-11-01 修（米爸反馈"没有会话改参数的入口了"）：
+   根因不是没渲染，而是**布局把它挤出了可视区** —— 原先整块 panel 是
+   `max-height:440px; overflow-y:auto`，模型列表（7 个 ≈ 490px）在前、
+   会话设置在后 ⇒ 会话设置落在滚动区底部，不主动滚动就永远看不到。
+   ⇒ 改为**三段式 flex**：head / 会话设置（固定不滚）/ 模型列表（内部滚动）。
+     这样无论模型多少，会话设置永远在可视区顶部。
+   ⚠️ 不要用"把 max-height 调大"来修：模型再多一次还是会被挤出去，那是治标。 */
+.llm-pick-panel{position:absolute;right:0;bottom:calc(100% + 8px);width:390px;max-height:560px;
+  display:flex;flex-direction:column;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;box-shadow:0 10px 32px rgba(0,0,0,.22);padding:6px;z-index:1200;}
+/* 2026-11-01：改为**二级树**（米爸）——设置挂在每个模型行后面，
+   不再有列表上方的公共块。故 .llm-pick-conv 已废弃，只有 .llm-pick-list 滚动。 */
+.llm-pick-list{flex:1 1 auto;overflow-y:auto;min-height:72px;}
+.llm-pick-head{display:flex;align-items:center;justify-content:space-between;padding:5px 8px 7px;border-bottom:1px solid var(--line);margin-bottom:4px;font-size:12.5px;color:var(--mut);}
+/* 一行 = 一级（模型本身）+ 可选二级（该模型的设置） */
+.llm-pick-item{border-radius:8px;}
+.llm-pick-item + .llm-pick-item{margin-top:2px;}
+.llm-pick-row{display:flex;gap:8px;padding:8px;border-radius:8px;cursor:pointer;align-items:flex-start;}
+.llm-pick-row:hover{background:var(--blue-l);}
+.llm-pick-row.on{background:var(--blue-l);box-shadow:inset 0 0 0 1px var(--blue);}
+.llm-pick-row .lp-main{flex:1;min-width:0;}
+.llm-pick-row .lp-name{font-size:13.5px;font-weight:600;color:var(--fg);display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.llm-pick-row .lp-desc{font-size:12px;color:var(--mut);margin-top:3px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.llm-pick-row .lp-meta{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px;}
+/* 一级行右侧的「⚙ 设置」：只展开二级，**不跳页**（跳页会改系统默认，已删过一次） */
+.lp-set{flex:0 0 auto;align-self:center;font-size:11.5px;padding:3px 8px;border-radius:6px;
+  border:1px solid var(--line);background:var(--card);color:var(--mut);cursor:pointer;white-space:nowrap;
+  font-family:inherit;line-height:1.4;}
+.lp-set:hover{border-color:var(--blue);color:var(--blue-d);}
+.lp-set.open{border-color:var(--blue);color:var(--blue-d);background:var(--blue-l);}
+/* 二级面板：左侧竖线 + 缩进，形成"树"的视觉从属关系 */
+.lp-sub{margin:0 8px 8px 20px;border-left:2px solid var(--blue-l);padding-left:8px;}
+.lp-sub .llm-turn-box{margin-top:2px;padding:8px 9px;border-top:none;background:rgba(255,193,7,.06);border-radius:6px;}
+.llm-pick-tag{margin:0;}
+.llm-pick-tag{font-size:10.5px;padding:1px 6px;border-radius:5px;background:var(--line);color:var(--mut);white-space:nowrap;}
+.llm-pick-tag.ctx{background:#eef2ff;color:#3f51b5;}
+.llm-pick-tag.think{background:#fff4e5;color:#b26a00;}
+.llm-pick-tag.pri{background:#e8f5e9;color:#2e7d32;}
+.llm-pick-tag.def{background:#e3f2fd;color:#1565c0;}
+/* 「本会话已设」：让用户在收起状态下也能看出这个模型被单独调过 */
+.llm-pick-tag.custom{background:#fff8e1;color:#b26a00;border:1px solid #ffe0a3;}
+/* .llm-pick-cfg 已删除（2026-10-31）：该按钮跳模型编辑页会改系统默认，属误导入口 */
+.llm-pick-empty{padding:14px;text-align:center;font-size:12.5px;color:var(--mut);}
+/* 二级区内的参数行（沿用原 .llm-turn-* 语义，只调间距适配嵌套） */
+.llm-turn-box{margin-top:6px;padding:9px 10px;border-top:1px dashed var(--line);background:rgba(255,193,7,.06);border-radius:0 0 8px 8px;}
+.llm-turn-head{font-size:12.5px;font-weight:600;color:var(--fg);display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.llm-turn-note{font-weight:400;font-size:11px;color:var(--mut);}
+.llm-turn-row{display:flex;align-items:center;gap:6px;margin-top:7px;flex-wrap:wrap;}
+.llm-turn-row label{font-size:11.5px;color:var(--mut);white-space:nowrap;}
+.llm-turn-row select{font-size:12px;padding:2px 6px;border:1px solid var(--line);border-radius:5px;background:var(--card);color:var(--fg);max-width:96px;}
+.llm-turn-reset{margin-top:6px;font-size:11.5px;color:var(--blue-d);cursor:pointer;}
+.llm-turn-reset span:hover{text-decoration:underline;}
+.llm-turn-def{font-weight:400;font-size:10.5px;color:var(--mut);}
+/* 不支持设置的占位：不用 disabled 的 select（那会看起来"能点但点不动"），
+   直接显示不可设置 + hover 说明原因（米爸：不支持的可以提示，或屏蔽入口）。 */
+.llm-turn-off{display:inline-block;font-size:11.5px;color:var(--mut);background:var(--line);
+  padding:2px 8px;border-radius:5px;cursor:not-allowed;}
+.llm-turn-why{margin-top:6px;font-size:11px;color:var(--amb);line-height:1.6;background:var(--amb-l);
+  padding:5px 8px;border-radius:6px;}
 .tb-sel{border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;background:#fff;color:var(--fg);cursor:pointer;max-width:160px;}
 .tb-sel:focus{outline:none;border-color:var(--blue);}
 .tool-item.run{border-color:var(--blue) !important;}

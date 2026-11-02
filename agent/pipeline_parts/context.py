@@ -193,6 +193,40 @@ class ContextMixin:
         except Exception:
             _inject_k = 3
         if chunk_hits:
+            # ★ 2026-11-01（P0-2）文档级背景：命中已出现的文档若有 LLM 摘要就注入一段。
+            #   为什么需要：chunk 命中给的是**局部条文**，模型常缺全局语境而误判
+            #   （实测案例：把"技术要求书 7.4 节"当成全部，忽略 11.1 的相关约束）。
+            #   为什么放【来源n】之前：先建立"这是哪份文档、讲什么"的框架，再看具体条文，
+            #   与人的阅读顺序一致；放后面会让模型先入为主地只认片段。
+            #   为什么只给命中文档：避免把无关文档的摘要当噪声塞进来。
+            _ds = retrieval.get("doc_summaries") or []
+            if _ds:
+                _lines = []
+                for _d in _ds[:3]:
+                    _t = str((_d or {}).get("summary") or "").strip()
+                    if _t:
+                        _lines.append("《%s》：%s" % (str((_d or {}).get("source_doc") or "")[:40],
+                                                    _t[:220]))
+                if _lines:
+                    parts.append("【文档背景 · 命中文档的概要（用于建立语境，不是引用依据）】\n"
+                                 + "\n".join(_lines))
+            # ★ 2026-11-01（P0-1 降级告知）：检索降级时必须**明确告诉模型"这批分数不可信"**。
+            #   为什么必要：embedding 服务故障时向量分系统性塌陷（实测 0.07~0.29），
+            #   命中仍可能是对的（字面匹配），但**排序与置信不再可靠**。
+            #   不告知 ⇒ 模型会把"分数低"当成"内容不相关"，从而拒用正确材料、或反过来
+            #   把噪声当权威。两种情况都是"看起来正常、实则错"的失效。
+            #   只加一行提示，不减少任何注入内容（宁多给、不误删）。
+            _lc = retrieval.get("low_conf") or {}
+            if _lc.get("degraded"):
+                parts.append(
+                    "【检索状态：降级】本次向量检索降级为字面匹配（embedding 服务不可用），"
+                    "以下片段的**相似度分数与排序不可靠**，请以内容本身是否切题为准，"
+                    "并在回答中说明「本次检索为降级模式」。")
+            elif _lc.get("dropped"):
+                parts.append(
+                    "【检索状态：已过滤低相关】本次共命中 %s 条，已过滤 %s 条低于相关度门槛（%s）的结果，"
+                    "以下为保留的 %s 条。" % (_lc.get("nominal"), _lc.get("dropped"),
+                                            _lc.get("floor"), _lc.get("kept")))
             # ── P0-3（2026-10-26）：检索注入**多样性约束** ──
             # 问题（实测，生产快照 6 个 query）：3 个注入槽实际只换来 1.14~2.48 条信息。
             #   根因：语料 7177 chunk 只来自 14 个文档（top2 占 64.3%），
@@ -210,8 +244,13 @@ class ContextMixin:
                 _per_doc = int(_cfg2.get("context_audit", "retrieval_per_doc_max", 2) or 0)
                 _merge = bool(_cfg2.get("context_audit", "retrieval_merge_neighbor", True))
                 if _per_doc > 0 or _merge:
-                    from agent.retrieval_diversity import select_diverse
-                    _sel, _div_stats = select_diverse(
+                    # ★ 2026-11-01：改用**共用选择器** `select_for_injection`，
+                    #   与 `agent/utils._citations_payload`（界面引用数据）同源。
+                    #   此前两边各调一次 `select_diverse`，虽然参数相同，但一旦
+                    #   某一边单独改参数就会让【来源n】与 citations[n] 指向不同条目
+                    #   （实测已发生：位次 3/4/5 全错位）。共用函数 ⇒ 结构上不会错位。
+                    from agent.retrieval_diversity import select_for_injection
+                    _sel, _div_stats = select_for_injection(
                         chunk_hits, inject_k=_inject_k, per_doc_max=_per_doc,
                         merge_neighbor=_merge)
             except Exception:
@@ -223,6 +262,20 @@ class ContextMixin:
                 _mf = c.get("merged_from")
                 _tag = f"§{_sec}" + (f"（合并 {len(_mf)} 段）" if _mf and len(_mf) > 1 else "")
                 parts.append(f"【来源{i}】{_doc} {_tag}: {c.get('content','')}")
+            # ★ 2026-11-02：**显式给出可引用编号范围**。
+            #   实测缺陷（会话 9986）：注入 5 条【来源1-5】，模型却在正文写了 [6][7][8] ——
+            #   这三条在 citations 里不存在，用户点它们没有任何反应（"死编号"）。
+            #   根因是此前只隐含约定"编号与 citations 对齐"，**没有告诉模型范围**；
+            #   模型在多段长回答里会自行续编号。
+            #   为什么用提示而不是后处理删标记：删标记会改动模型原文（且代码块里的 [n] 难区分），
+            #   而"告诉它范围"是从源头减少发生，两者代价不同 —— 先用零副作用的那种。
+            _n_src = min(len(_sel), _inject_k)
+            if _n_src > 0:
+                parts.append(
+                    "（引用规则：正文中的 [n] **只能取 1–%d**，分别对应上面的【来源n】；"
+                    "**不得写超出该范围的编号**，也不要为未列出的材料编号。"
+                    "若要用的证据不在这 %d 条里，请直说「现有材料未覆盖」。）"
+                    % (_n_src, _n_src))
             # 归因：把"名义条数 vs 有效条数"喂给 context_audit（可观测）
             if _div_stats:
                 try:

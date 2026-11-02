@@ -138,8 +138,358 @@ async function loadChatProviders(){
       }
       _chatProvidersLoaded = true;
     }
+    renderLLMPicker();
+    // 会话就绪后补拉一次该会话的参数（新建会话时 openConv 还没跑，此时才拿到 id）
+    try{ if(typeof loadConvLLMSettings === 'function') loadConvLLMSettings(_currentConvId()); }catch(e){}
   }catch(e){ /* 加载失败静默：保留「默认模型」选项 */ }
 }
+
+// ── 会话入口模型切换面板（2026-10-31）──────────────────────────────────────
+// 设计要点：
+//   ① **真值仍在隐藏的 #llm-providers**。面板只负责展示与写回，避免出现
+//      "面板显示 A、实际发给后端 B" 的双事实源（这类错位最难查，历史已踩过）。
+//   ② 每个模型显示：描述 / 能力标签 / 上下文档位 / 思考强度 / 默认标记，
+//      并带 ⚙ 直达「模型配置」弹窗 —— 满足"在会话入口逐个模型分别设置"。
+//   ③ 上下文用**档位化**展示（1M/600K/300K…），因为 1048576 这种数字
+//      在界面上没人能一眼判断大小；档位名与模型配置页的下拉同源（fmtCtxTier）。
+const CTX_TIERS = [
+  {v:1048576, label:'1M'},
+  {v:614400,  label:'600K'},
+  {v:307200,  label:'300K'},
+  {v:262144,  label:'256K'},
+  {v:131072,  label:'128K'},
+  {v:65536,   label:'64K'},
+  {v:32768,   label:'32K'},
+  {v:16384,   label:'16K'},
+  {v:8192,    label:'8K'}
+];
+function fmtCtxTier(n){
+  n = Number(n)||0;
+  if(!n) return '—';
+  const hit = CTX_TIERS.find(t=>t.v===n);
+  if(hit) return hit.label;
+  // 非标准档位：按 K 取整展示，便于一眼比较（如 112000 → 109K）
+  return (n>=1024 ? Math.round(n/1024)+'K' : n+'');
+}
+function _thinkLevelOf(p){
+  const mp = (p && p.model_params) || {};
+  return mp.thinking_level || mp.thinking_mode || '模型默认';
+}
+function _providerLabelOf(id){
+  const sel = document.getElementById('llm-providers');
+  if(!sel) return '默认模型';
+  const opt = Array.from(sel.options).find(o=>String(o.value)===String(id||''));
+  return opt ? opt.textContent : '默认模型';
+}
+function syncLLMPickerLabel(){
+  const el = document.getElementById('llm-pick-label');
+  const sel = document.getElementById('llm-providers');
+  if(!el || !sel) return;
+  const cur = sel.value;
+  if(!cur){ el.textContent = '默认模型'; return; }
+  const p = (_chatProvidersCache||[]).find(x=>String(x.id)===String(cur));
+  el.textContent = p ? (p.name||p.model_name||'模型') : _providerLabelOf(cur);
+}
+function renderLLMPicker(){
+  const panel = document.getElementById('llm-pick-panel');
+  if(!panel) return;
+  syncLLMPickerLabel();
+  const sel = document.getElementById('llm-providers');
+  const cur = sel ? sel.value : '';
+  const list = (_chatProvidersCache||[]).filter(p=>(p.model_type==='chat'||p.model_type==='multimodal') && p.status!=='disabled');
+  if(!list.length){
+    panel.innerHTML = '<div class="llm-pick-empty">当前没有可用的对话模型，请到「能力中心 → 模型配置」添加</div>';
+    return;
+  }
+
+  // ★★ 2026-11-01（米爸）：设置改为**二级树** —— 挂在每个模型行后面，
+  //   不再是列表上方一块公共区。理由：
+  //     ① 语义上设置就是「该模型」的，放在列表上方会被误读成"整个会话共用"；
+  //     ② 模型越多，公共区离具体模型越远，用户要来回对照。
+  //   交互：每行右侧「⚙ 设置」按钮 → 就地展开该行的二级面板（不跳页、不改系统默认）。
+  //   ⚠️ 展开态存在 `_expandedPid`，render 后要保留：保存一次就收起会让人以为没生效。
+  const rows = list.map(p=>{
+    const tags = (p.tags||[]).filter(Boolean);
+    const lv = _thinkLevelOf(p);
+    const lvCls = lv==='关闭' ? 'think' : (lv==='模型默认' ? '' : 'think');
+    const ov = _convOverridesForModel(p.id);
+    const hasCustom = !!(ov.thinking_level || ov.context_window);
+    const expanded = String(_expandedPid) === String(p.id);
+    const cap = _capabilityOf(p);
+    return `<div class="llm-pick-item">
+      <div class="llm-pick-row ${String(p.id)===String(cur)?'on':''}" onclick="pickLLMModel(${p.id})">
+        <div class="lp-main">
+          <div class="lp-name">${esc(p.name||'-')}
+            ${p.is_default?'<span class="llm-pick-tag def">默认</span>':''}
+            <span style="font-weight:400;font-size:11.5px;color:var(--mut);">${esc(p.model_name||'')}</span>
+            ${hasCustom?'<span class="llm-pick-tag custom" title="该模型在本会话有独立设置">本会话已设</span>':''}
+          </div>
+          ${p.description ? `<div class="lp-desc">${esc(p.description)}</div>` : ''}
+          <div class="lp-meta">
+            <span class="llm-pick-tag ctx" title="上下文窗口（输入）">🗂 ${fmtCtxTier((ov.context_window)||p.context_window)}</span>
+            <span class="llm-pick-tag ${lvCls}" title="思考强度">🧠 思考：${esc(lv)}</span>
+            ${tags.slice(0,4).map(t=>`<span class="llm-pick-tag">${esc(t)}</span>`).join('')}
+          </div>
+        </div>
+        <button type="button" class="lp-set ${expanded?'open':''}"
+                title="展开本会话 · 该模型的参数设置（思考强度 / 上下文）"
+                onclick="event.stopPropagation();toggleModelSettings(${p.id})">⚙ 设置</button>
+      </div>
+      ${expanded?`<div class="lp-sub">${buildModelSettingsHtml(p)}</div>`:''}
+    </div>`;
+  }).join('');
+
+  panel.innerHTML = `<div class="llm-pick-head"><span>选择对话模型 · ${list.length} 个可用</span>
+      <span style="cursor:pointer;color:var(--mut);font-weight:400;"
+            title="这里是「会话 + 该模型」的设置，不回写系统默认。系统默认（所有会话共用）在「能力中心 → 模型配置」里改"
+            onclick="event.stopPropagation();gotoModelConfig();">改系统默认 ↗</span></div>`
+      + `<div class="llm-pick-list">${rows}</div>`;
+}
+
+// 展开/收起某个模型的二级设置。只允许一个展开：同时展开多个会把面板撑很高，
+// 也会让"我在改哪个模型"变得不清楚（这是二级树的常见问题，故限单选）。
+function toggleModelSettings(pid){
+  _expandedPid = (String(_expandedPid) === String(pid)) ? null : pid;
+  renderLLMPicker();
+}
+
+// 会话参数区：与模型列表用分隔线+底色区分，明确"这是本会话的，不是模型的"
+// ★ 2026-10-31（米爸要求）：**按当前模型的真实能力**决定能不能设。
+//   不支持的 → 屏蔽下拉并给出原因；部分支持的 → 只列真有效的档位 + 说明。
+//   能力数据来自后端 `capability`（唯一真源），前端不按模型名猜。
+function _currentModel(){
+  const sel = document.getElementById('llm-providers');
+  const pid = sel ? sel.value : '';
+  return ((_chatProvidersCache||[]).find(x=>String(x.id)===String(pid))) || null;
+}
+// 能力判定：传模型对象（二级树里要判断"那一行"的模型，不是当前选中的）
+function _capabilityOf(p){
+  if(p && p.capability) return p.capability;
+  // 取不到（老接口/缓存未就绪）⇒ 当"可设"处理，避免误屏蔽；但不编造档位
+  return {supported:true, level:'full', levels:['关闭','低','中','高'],
+          default_level:'模型默认', reason:'', context:{supported:true, reason:''}};
+}
+function _capabilityOfCurrentModel(){ return _capabilityOf(_currentModel()); }
+// 读**指定模型**的会话桶（二级树按行取，不能用"当前选中"代替）
+function _convOverridesForModel(pid){
+  const bm = (_convLlm && _convLlm.byModel) || {};
+  return bm[String(pid)] || bm['__legacy__'] || {};
+}
+
+// ── 二级区：某个模型在本会话的参数设置 ──────────────────────────────────────
+// ★★ 2026-11-01（米爸）：从"列表上方公共块"改为"挂在每个模型行后面的二级面板"。
+//   ⚠️ 数据链路关键点：所有控件的 onchange **必须显式传该行的 p.id**。
+//      若沿用 `_currentProviderId()`，就会出现「在 A 行展开设置，但当前选中的是 B
+//      ⇒ 存进了 B 的桶」—— 界面看着对、数据落错桶，是最难查的那类错。
+function buildModelSettingsHtml(p){
+  const pid = p.id;
+  const ov = _convOverridesForModel(pid);
+  const cap = _capabilityOf(p);
+  const ctxCap = cap.context || {supported:true, reason:''};
+  // 「系统默认」= **该模型**在 llm_providers 里的值（不是会话绑定模型的值）
+  const sd = { thinking_level: _thinkLevelOf(p), context_window: p.context_window };
+  const lv = ov.thinking_level || '';
+  const ctx = ov.context_window || '';
+  const hasEffective = !!(lv || ctx || ov.max_tokens || (ov.temperature != null));
+
+  // 档位集合 = 「该模型配置的控制粒度」∩「该模型客观能力」
+  const ctl = (p.model_params && p.model_params.thinking_control) || 'tier';
+  let levels;
+  if(ctl === 'toggle'){
+    levels = ['开启', '关闭'];          // 两态永远有效，不受 capability.levels 影响
+  }else{
+    levels = (cap.levels && cap.levels.length) ? cap.levels : ['关闭','低','中','高'];
+  }
+  const thinkOpt = (v, label) => `<option value="${v}" ${String(v)===String(lv)?'selected':''}>${label}</option>`;
+  let thinkEl;
+  if(!cap.supported){
+    thinkEl = `<span class="llm-turn-off" title="${esc(cap.reason||'')}">不可设置</span>`;
+  }else{
+    thinkEl = `<select onchange="saveConvLLM('thinking_level', this.value, ${pid})"
+        title="${ctl==='toggle'?'该模型在模型配置里选择了「按开关」控制，故只提供 开启/关闭':'该模型按挡位控制'}">
+        ${thinkOpt('', '跟随系统默认')}${levels.map(v=>thinkOpt(v, v)).join('')}</select>`
+      + `<span class="llm-turn-def">${ctl==='toggle'?'按开关':'按挡位'}</span>`;
+  }
+
+  const tiers = [['','跟随系统默认'],['1048576','1M'],['614400','600K'],['307200','300K'],
+                 ['262144','256K'],['131072','128K'],['65536','64K'],['32768','32K'],
+                 ['16384','16K'],['8192','8K']];
+  let ctxEl;
+  if(!ctxCap.supported){
+    ctxEl = `<span class="llm-turn-off" title="${esc(ctxCap.reason||'')}">不可设置</span>`;
+  }else{
+    ctxEl = `<select onchange="saveConvLLM('context_window', this.value, ${pid})">${
+      tiers.map(([v,l])=>`<option value="${v}" ${String(v)===String(ctx)?'selected':''}>${l}</option>`).join('')
+    }</select>`;
+  }
+
+  const why = [];
+  if(!cap.supported && cap.reason) why.push('🧠 ' + cap.reason);
+  else if(cap.level === 'partial' && cap.reason) why.push('🧠 ' + cap.reason);
+  else if(cap.level === 'unverified' && cap.reason) why.push('⚠ ' + cap.reason);
+  if(!ctxCap.supported && ctxCap.reason) why.push('🗂 ' + ctxCap.reason);
+
+  return `<div class="llm-turn-box"${hasEffective?' style="border-color:var(--amb);"':''}>
+    <div class="llm-turn-head">🗂 本会话 · ${esc(p.name||'模型')} 的参数
+      <span class="llm-turn-note">只影响「本会话 + 该模型」· 不回写模型配置</span></div>
+    <div class="llm-turn-row">
+      <label>思考强度 <span class="llm-turn-def">${esc(String(sd.thinking_level||'—'))}</span></label>
+      ${thinkEl}
+      <label>上下文 <span class="llm-turn-def">${esc(fmtCtxTier(sd.context_window))}</span></label>
+      ${ctxEl}
+    </div>
+    ${why.length ? `<div class="llm-turn-why">${why.map(esc).join('<br>')}</div>` : ''}
+    ${hasEffective
+      ? `<div class="llm-turn-reset"><span onclick="clearConvLLM(${pid})">✕ 该模型恢复系统默认（仅本会话）</span></div>`
+      : '<div class="llm-turn-def" style="margin-top:6px;">当前沿用系统默认；改动只存到「本会话 + 该模型」</div>'}
+  </div>`;
+}
+
+// ── 会话 × 模型 维度的参数（2026-11-01 再修正）──────────────────────────────
+// ★★ 米爸澄清：「会话中的设置是按照（会话+模型）维度来设置的，
+//    不是一个会话中所有模型按照同一套设置控制」。
+// 三层语义（别自行合并）：
+//   · **模型维度 = 系统默认**：`llm_providers`，所有会话共用，在「模型配置」页改；
+//   · **会话 × 模型**：`conversations.llm_overrides.by_model[<providerId>]`，
+//     只影响「本会话 + 该模型」，**绝不回写模型配置**；
+//   · 切到另一个模型 ⇒ 用的是那个模型自己的桶（或系统默认），**不继承**上一个模型的值。
+// 存储结构：{"by_model": {"71": {...}, "104": {...}}}
+let _convLlm = { byModel: {}, systemDefault: {}, providerId: null, loadedFor: null };
+// 二级树展开态：存"哪个模型被展开"。render 后要保留（保存一次就收起会让人以为没生效）。
+let _expandedPid = null;
+
+function _currentProviderId(){
+  const sel = document.getElementById('llm-providers');
+  return sel && sel.value ? Number(sel.value) : null;
+}
+
+async function loadConvLLMSettings(convId, force){
+  convId = convId || _currentConvId();
+  const pid = _currentProviderId();
+  if(!convId) { _convLlm = { byModel:{}, systemDefault:{}, providerId:null, loadedFor:null }; return; }
+  // 同一会话 + 同一模型 ⇒ 不重复拉（但 force=true 时强制刷新，保存后要用）
+  if(!force && String(_convLlm.loadedFor) === String(convId)) return;
+  try{
+    const q = pid ? `?provider_id=${pid}` : '';
+    const r = await api(`/api/conversations/${convId}/llm-settings${q}`);
+    _convLlm = { byModel: (r && r.all_overrides) || {},
+                 systemDefault: (r && r.system_default) || {},
+                 providerId: (r && r.provider_id) || pid,
+                 loadedFor: convId };
+  }catch(e){
+    _convLlm = { byModel:{}, systemDefault:{}, providerId: pid, loadedFor: convId };
+  }
+  renderLLMPicker();
+}
+function _currentConvId(){
+  try{
+    if(typeof currentConvId !== 'undefined' && currentConvId) return currentConvId;
+    const box = document.getElementById('ai-box');
+    return (box && box.dataset && box.dataset.convId) || null;
+  }catch(e){ return null; }
+}
+async function saveConvLLM(key, value, pid){
+  const convId = _currentConvId();
+  // ★★ 数据链路关键（2026-11-01 二级树）：pid 必须由**调用方传入**（= 展开的那一行），
+  //   不能回落到 `_currentProviderId()`。二级树允许「展开 A 的二级面板，但选中的是 B」，
+  //   回落就会把 A 的设置存进 B 的桶 —— 界面看着对、数据落错桶，最难查那类。
+  pid = (pid != null && pid !== '') ? Number(pid) : _currentProviderId();
+  if(!convId){ toast('请先创建会话再设置（当前会话未就绪）'); return; }
+  if(!pid){ toast('请先选择一个模型（设置按「会话 + 模型」保存）'); return; }
+  const body = { provider_id: pid };
+  body[key] = value;
+  try{
+    const r = await api(`/api/conversations/${convId}/llm-settings`, {method:'PUT', body:JSON.stringify(body)});
+    const bm = Object.assign({}, (_convLlm && _convLlm.byModel) || {});
+    if(r && r.overrides && Object.keys(r.overrides).length) bm[String(pid)] = r.overrides;
+    else delete bm[String(pid)];
+    _convLlm.byModel = bm;
+    _convLlm.providerId = pid;
+    _convLlm.loadedFor = convId;
+    renderLLMPicker();
+    toast(value === '' || value === 0 || value === null
+          ? '已恢复为系统默认（本会话 + 该模型）'
+          : '已保存到本会话的该模型（不影响模型配置）');
+  }catch(e){
+    toast('保存失败：' + (e && e.message ? e.message : '未知错误'));
+  }
+}
+async function clearConvLLM(pid){
+  const convId = _currentConvId();
+  // 同上：必须用传进来的 pid（该行模型），不回落当前选中
+  pid = (pid != null && pid !== '') ? Number(pid) : _currentProviderId();
+  if(!convId){ toast('当前会话未就绪'); return; }
+  if(!pid){ toast('请先选择模型'); return; }
+  try{
+    await api(`/api/conversations/${convId}/llm-settings`,
+              {method:'PUT', body:JSON.stringify({provider_id: pid, clear: true})});
+    const bm = Object.assign({}, (_convLlm && _convLlm.byModel) || {});
+    delete bm[String(pid)];
+    _convLlm.byModel = bm;
+    renderLLMPicker();
+    toast('该模型已恢复为系统默认（本会话）');
+  }catch(e){ toast('清除失败'); }
+}
+// 从会话页跳到「能力中心 → 模型配置」
+// 只调 switchStLibTab 是不够的：它仅切 subpage 显隐，若当前不在 studio 页
+// 用户看到的仍是原页面（点了"没反应"）。必须先 go() 切主页面。
+function gotoModelConfig(){
+  closeLLMPicker();
+  // go('studio','st-model') 是已有路由收口（等同于 go('modelcfg')），会做完导航高亮、
+  // subpage 切换与 st-model 的 loadLLMProviders 钩子；不要自己拼两步（会漏钩子）。
+  try{
+    if(typeof go === 'function'){ go('studio', 'st-model'); return; }
+  }catch(e){}
+  try{ if(typeof switchStLibTab === 'function') switchStLibTab(null, 'st-model'); }catch(e){}
+}
+function toggleLLMPicker(e){
+  if(e) e.stopPropagation();
+  const panel = document.getElementById('llm-pick-panel');
+  if(!panel) return;
+  const willShow = panel.style.display === 'none' || !panel.style.display;
+  // ★ 2026-11-01 真机实测修的 bug（静态门禁抓不到，必须量像素才发现）：
+  //   这里原写 `display='block'`，而**内联样式优先级高于样式表** ⇒
+  //   把 CSS 里的 `.llm-pick-panel{display:flex;flex-direction:column}` 覆盖掉了。
+  //   后果：面板不是 flex 容器 ⇒ `flex:1;overflow-y:auto` 的模型列表**不收缩也不滚动**，
+  //   实测 list 高 451px 溢出面板底边 111px（panel bottom=605, list bottom=716）。
+  //   会话设置块虽然排在了前面（能看见），但整个面板的滚动约束失效。
+  //   ⇒ 必须写 'flex'，与样式表同值。别图省事写 'block'。
+  if(willShow){ renderLLMPicker(); panel.style.display = 'flex'; }
+  else panel.style.display = 'none';
+}
+function closeLLMPicker(){
+  const panel = document.getElementById('llm-pick-panel');
+  if(panel) panel.style.display = 'none';
+}
+function pickLLMModel(id){
+  const sel = document.getElementById('llm-providers');
+  if(sel){ sel.value = String(id); }
+  closeLLMPicker();
+  syncLLMPickerLabel();
+  renderLLMPicker();
+  // ★ 2026-11-01（会话×模型）：切换模型后**必须重新拉该模型的设置**。
+  //   为什么不能只靠本地 byModel 缓存：
+  //     ① 会话里给的 by_model 只含"已设置过的"模型，未设置的模型要拿 system_default；
+  //     ② 别的标签页/设备可能刚改过该模型的会话设置。
+  //   force=true 绕开"同会话不重复拉"的短路。失败时静默（保留旧显示，不阻断切模型）。
+  try{
+    const cid = _currentConvId();
+    if(cid && typeof loadConvLLMSettings === 'function') loadConvLLMSettings(cid, true);
+  }catch(e){}
+  // 通知监听者（若有）——沿用原生 select 的 change 语义，避免破坏既有外部依赖
+  try{ sel && sel.dispatchEvent(new Event('change')); }catch(e){}
+}
+// ★ 2026-10-31：`openLLMConfigFromPicker()` **已删除**（米爸纠正）。
+//   它把"会话里想调参数"变成"打开模型配置弹窗"⇒ 改的是系统默认，所有会话一起变。
+//   保留一个空壳只会被后来人重新接上，所以直接不留。
+//   会话内调参统一走 `saveConvLLM()`（写 conversations.llm_overrides）。
+// 点击面板外关闭（capture=false，避免抢走面板内按钮的点击）
+document.addEventListener('click', function(ev){
+  const wrap = document.getElementById('llm-pick-wrap');
+  const panel = document.getElementById('llm-pick-panel');
+  if(!wrap || !panel || panel.style.display === 'none') return;
+  if(!wrap.contains(ev.target)) closeLLMPicker();
+});
 // ── 报告下载（通用报告服务 → 多格式导出 md/docx/pdf）──
 // 从当前激活预览 tab 导出报告（分节卡片视图上的导出按钮）
 function reportTabExport(fmt){

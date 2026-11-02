@@ -367,6 +367,8 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     """
     from knowledge_engine import VectorEngine, BM25Engine
     from knowledge_pipeline import _branch_clause, _doc_clause, _lifecycle_clause
+    # P0-1（2026-11-01）：命中内容的统一长度预算（单一实现，见 knowledge_pipeline/textlimit.py）
+    from knowledge_pipeline.textlimit import clip as _clip
 
     # P1-4（2026-09-21）：混合检索参数配置化（rag.* 组；默认值与改动前硬编码一致）
     # P1-4b（2026-09-21）：新增 rag.recall_k —— 每路召回宽度从 top_k*2 解耦（此前 top_k 兼任两职）
@@ -410,6 +412,11 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     # Embedder 不可用 / 无同版本向量 / 维度不一致 → 降级实时 bigram（与历史行为一致）
     import math as _mv
     vec_scores = {}
+    # ★ 2026-11-01（P0-1 降级标注）：如实记录"本次向量是**真 embedding** 还是 **bigram 降级**"。
+    #   为什么要显式记录：降级时 vec_score 系统性塌陷（实测 0.07~0.29 vs 真向量 0.4~0.8），
+    #   下游会把"服务故障"误读成"内容不相关"。此前只能靠日志里的 warning 猜，
+    #   而检索结果本身**不带这个信息** ⇒ 上层无从判断分数可不可信。
+    _embed_mode = "bigram"
     try:
         from knowledge_pipeline import Embedder
         embedder = Embedder(conn)
@@ -441,6 +448,10 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
                         s = sum(a * b for a, b in zip(q, vec)) / (qn * vn)
                         if s > 0:
                             vec_scores[vr["id"]] = s
+                # 只在**真的有同版本向量参与打分**时才认定 dense（vrows 为空说明库里没有
+                # 该版本向量，下面会走 bigram 降级，此时不能标 dense）。
+                if vec_scores:
+                    _embed_mode = "dense"
     except Exception as e:
         logger.warning("hybrid_search 向量侧失败，降级实时 bigram: %s", e)
     if not vec_scores:
@@ -575,8 +586,14 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
             "source_doc": r.get("source_doc", ""),
             "section": r.get("section", ""),
             "chunk_index": r.get("chunk_index"),
-            "content": r.get("content", "")[:300],
+            # P0-1（2026-11-01）：内容长度改为**统一预算**（rag.chunk_content_chars，默认 1200）。
+            #   原为硬编码 `[:300]`，而 chunk p50=523 字 ⇒ 71.3% 的命中被砍掉一截，
+            #   模型只看到半句条文（这是"检索到了却答不出"的隐性原因）。
+            "content": _clip(r.get("content", "")),   # 命中正文（按统一预算截断，0=不截断）
             "embed_version": r.get("embed_version", ""),
+            # P0-1（2026-11-01）：本次**这一条的打分来自真向量还是 bigram 降级**。
+            # 降级时分数不可信（系统性偏低），必须让消费侧能看出来，而不是当成"不相关"。
+            "vector_mode": _embed_mode,
             "domain": r.get("domain", "unknown"),
             "glossary_boost": round(boost, 2) if boost > 1.0 else None,
         }
@@ -593,4 +610,5 @@ def hybrid_search(conn, query: str, top_k: int = 4, bm25_weight: float = 0.3,
     except Exception:
         pass
     return {"hits": hits, "bm25_count": len(bm25_scores), "vec_count": len(vec_scores),
+            "embed_mode": _embed_mode,
             "mode": "hybrid", "rrf": True}

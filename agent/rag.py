@@ -210,6 +210,8 @@ class GraphRAG:
         # Step 3: 真路由——GraphRAG 命中且置信足够 → 跳过向量；否则向量兜底（chunk 优先，文档粗匹配兜底）
         vector_results = []
         chunk_hits = []
+        # P0-1（2026-11-01）：低置信过滤统计，供 trace 落库（"丢了几条"必须可查）
+        _lc_stats = {}
         # P0-1/P0-2/P2-2：Glossary 归一化 + domain 过滤 + Trace
         _glossary_res = {}
         if conn is not None:
@@ -321,12 +323,34 @@ class GraphRAG:
             # （chunk 级 + 文档粗匹配兜底）。只作用于向量兜底路径：图谱路由有独立
             # route_threshold 门禁、附件命中不拦（用户上传资料是首要依据）。
             # 开关 rag.suppress_low_confidence（默认 True）。
-            if chunk_hits and self._low_conf_suppressed(chunk_hits):
-                chunk_hits = []
-                vector_results = []
-            elif chunk_hits:
+            # ★ 2026-11-01（P0-1）：「全批低置信 ⇒ 整批清零」改为「按分数门槛过滤」。
+            #   旧行为的问题（A/B 实测 tools/verify/ab_suppress_low_conf.py）：
+            #     embedding 服务 502 → 降级 bigram → vec_score 塌到 0.07~0.29 → 必判「低」
+            #     → 整批丢弃 ⇒ **连切题金标（4.2.2 系统需求分析）也一起丢**，
+            #     实测 6 条 query 只 1 条有结果。这是"静默清零"，最难归因。
+            #   新口径：只丢"低于门槛"的，并且把"降级/丢弃"如实标注出来（不再无声无息）。
+            if chunk_hits:
+                # ── P3-a（2026-11-02）元数据块不参与排序 ──────────────────
+                # 块级评测实测：封面/版权页/签批表/目录会靠"文档标题里的关键词"空降前 5，
+                # 白占 inject_k 的槽（实例：`818:0`「> 所属方法论… 更新日期…」排在
+                # succession 问题的第 2 位；`847:1` 签批表排在"交付哪些文档"的第 4 位）。
+                # 位置选在 `_filter_low_conf` **之前**：先摘噪声再算置信度，
+                # 否则噪声会被算进 (max, avg) 从而影响域外拒答判定。
+                # 保护：`filter_metadata` 内部有 min_keep，剩太少就放弃过滤（绝不清空）。
+                try:
+                    from agent.metadata_blocks import filter_metadata
+                    from core import config as _cfg_mb
+                    if _cfg_mb.as_bool("rag", "drop_metadata_blocks", True):
+                        _min_keep = int(_cfg_mb.get("rag", "metadata_min_keep", 3) or 3)
+                        chunk_hits, _mb_stats = filter_metadata(chunk_hits, min_keep=_min_keep)
+                        if _mb_stats.get("dropped"):
+                            _mb_stats["query"] = (query or "")[:60]
+                except Exception:
+                    pass    # 判定失败绝不阻断检索（退化为不过滤，比丢结果安全）
+                chunk_hits, _lc_stats = self._filter_low_conf(chunk_hits)
                 vector_results = chunk_hits
             else:
+
                 doc_sql, doc_params = "", []
                 if scope_docs:
                     doc_sql = " AND filename IN ({})".format(",".join("?" * len(scope_docs)))
@@ -368,6 +392,165 @@ class GraphRAG:
         #   · `route` 用决策结果真值，另附 `reason`（graph_no_hit / no_hit_fallback …）
         #     与 `graph_count`/`vector_count`，使"为什么走这条路"可直接按列聚合；
         #   · `hit_docs` 取**该路由实际参与结果的来源**，不再是向量分支的局部变量。
+
+        # ── P0-1b（2026-11-01）域外整体拒答 ──────────────────────────────────
+        # 与 low_conf_floor 是两层语义：
+        #   low_conf_floor → 逐条过滤（去掉明显无关的，留下真命中）
+        #   这里           → 整体拒答（**最好的那条都不够** ⇒ 查询不在知识域内）
+        # 为什么必须有这一层：只做逐条过滤时，域外问题仍会拿到 1~20 条"字面巧合"片段
+        #   （实测"Python 写爬虫"拿到 20 条、"卫星太阳能板清洗"拿到 1 条），
+        #   喂给 LLM 就是幻觉温床 —— 实测拒答准确率仅 0.333。
+        # 判据（**两者都低于才拒**，宁少拒不误杀）：
+        #   top1 relevance < reject_max_score 且 均分 < reject_avg_score
+        # 生效范围（很关键）：**只在「向量路由 且 图谱无命中」时**——
+        #   · 模型域问题（"转发器 EIRP 多少"）走 graph/mixed，命中实体就算有依据，不受此限；
+        #   · 附件命中优先（attachment_hits）也不受此限。
+        _reject_info = {"rejected": False}
+        try:
+            if (route == "vector" and not graph_results and chunk_hits
+                    and not attachment_hits):
+                from core import config as _cfg_rj
+                _rj_max = float(_cfg_rj.get("rag", "reject_max_score", 0.35) or 0)
+                _rj_avg = float(_cfg_rj.get("rag", "reject_avg_score", 0.22) or 0)
+                _rels = [self._relevance_of(h) for h in chunk_hits]
+                _mx = max(_rels) if _rels else 0.0
+                _av = (sum(_rels) / len(_rels)) if _rels else 0.0
+                _reject_info = {"rejected": False, "max": round(_mx, 4),
+                                "avg": round(_av, 4),
+                                "max_th": _rj_max, "avg_th": _rj_avg}
+                if _rj_max > 0 and _mx < _rj_max and _av < _rj_avg:
+                    # ── P1-a（2026-11-01）补救：判域外之前，用高区分度关键词再确认一次 ──
+                    # 为什么必须有这一步（实测，不是推测）：
+                    #   `信息安全有哪些要求` 捞到的正是技术要求书 7.4 的信息安全条款
+                    #   （正文为"网络会话加密/弱口令/组件安全/白名单"，内容完全正确），
+                    #   但 bigram 降级态下 relevance 只有 0.195 / 0.194，双双低于
+                    #   0.35 / 0.22 ⇒ 被判 out_of_domain **整批清空**，
+                    #   用户看到的是"知识库里没有相关内容" —— 纯误杀。
+                    # 判据：关键词重试**仍能命中**，就证明"查询携带的领域实词在库中有对应
+                    #   内容"⇒ 域外的前提不成立，不该拒。真正的域外问题（红烧肉/北京天气）
+                    #   在重试里召不回任何条目，仍会正常拒答。
+                    _kw_kept = []
+                    try:
+                        _b = float(boost)      # boost 在 vector 路由下必已定义，防御性处理
+                    except Exception:
+                        _b = 1.0
+                    try:
+                        _kw = self._retry_with_keywords(
+                            conn, query, _b, scope_docs, _rag_top_k, _inc_dep)
+                        if _kw:
+                            _kw_kept, _ = self._filter_low_conf(_kw)
+                    except Exception:
+                        _kw_kept = []
+                    # ★★ 2026-11-02 修正：**重试结果也必须过同一套域外判据**。
+                    #   旧实现只要 `_kw_kept` 非空就无条件采纳，而 `_filter_low_conf`
+                    #   只按 `low_conf_floor`（0.15）过滤 —— 比拒答阈值（0.481）宽松得多
+                    #   ⇒ 任何"能字面匹配一点东西"的域外问题都会被救活。
+                    #   实测（embedding 恢复后阈值重标定，11/02）：
+                    #     `红烧肉怎么做` → 关键词重试捞回 **20 条 KerML 英文规范**
+                    #     （kw_retry_rescued=20）⇒ 拒答被完全绕过 ⇒ 基线拒答准确率
+                    #     从标定预测的 11/11 跌到实际 3/5。
+                    #   为什么上一轮没暴露：当时阈值 0.35 是按降级态标的，
+                    #   降级态下重试命中分数也低，`_filter_low_conf` 就把它滤光了，
+                    #   所以"无条件采纳"没有机会发生 —— **阈值一放宽，缺陷立刻显形**。
+                    #   ⇒ 现在对重试结果再算一次 (max, avg)，同样要求"两者都低于才拒"。
+                    if _kw_kept:
+                        _kw_rels = [self._relevance_of(h) for h in _kw_kept]
+                        _kw_mx = max(_kw_rels) if _kw_rels else 0.0
+                        _kw_av = (sum(_kw_rels) / len(_kw_rels)) if _kw_rels else 0.0
+                        _reject_info["kw_retry"] = {"n": len(_kw_kept),
+                                                    "max": round(_kw_mx, 4),
+                                                    "avg": round(_kw_av, 4)}
+                        if _rj_max > 0 and _kw_mx < _rj_max and _kw_av < _rj_avg:
+                            # 重试命中的同样是弱相关 ⇒ 判定域外，不采纳
+                            _kw_kept = []
+                    if _kw_kept:
+                        _reject_info["kw_retry_rescued"] = len(_kw_kept)
+                        chunk_hits = _kw_kept
+                        vector_results = chunk_hits
+                    else:
+                        # 拒答：清空结果，但**保留判据数字**，让"为什么拒"可查（不静默）
+                        _reject_info["rejected"] = True
+                        _reject_info["dropped"] = len(chunk_hits)
+                        chunk_hits = []
+                        vector_results = []
+                        route, reason = "vector", "out_of_domain"
+                        # ★ 2026-11-02：拒答清空后必须同步 low_conf 统计口径。
+                        #   否则 `stats.kept` 还是"拒答前"的数字（实测 L3b 转红：
+                        #   统计说 11 条、实际返回 0 条）。**同一语义的量在两处各写一份，
+                        #   迟早对不上** —— 这是本项目反复踩的老坑，见下方去重块的同类同步。
+                        _lc_rj = locals().get("_lc_stats")
+                        if isinstance(_lc_rj, dict):
+                            _lc_rj["kept"] = 0
+                            _lc_rj["rejected_dropped"] = _reject_info["dropped"]
+        except Exception:
+            pass   # 拒答判定失败绝不阻断检索（退化为不拒答，比误拒安全）
+
+        # ── P0-a（2026-11-01）检索结果去重 + 来源名归一化 ────────────────────
+        # 位置在**拒答之后**，保证对"原始命中"和"关键词重试捞回的命中"一视同仁
+        # （只做一次，不会漏掉重试路径）。
+        # 为什么必须在 rag 层而不是 select_diverse 里做：citations 直接用本函数的
+        # `chunk_hits`（不经过 select_diverse），只在后者做会让引用区仍出现两份相同来源。
+        try:
+            from agent.retrieval_dedup import dedupe_and_normalize
+            from core import config as _cfg_dd
+            if chunk_hits and _cfg_dd.as_bool("rag", "dedupe_exact", True):
+                _min_c = int(_cfg_dd.get("rag", "dedupe_min_chars", 80) or 80)
+                _before_dd = len(chunk_hits)
+                chunk_hits, _dd_stats = dedupe_and_normalize(chunk_hits, min_chars=_min_c)
+                vector_results = chunk_hits
+                if _dd_stats.get("dup_dropped") or _dd_stats.get("doc_renamed"):
+                    _dd_stats["query"] = (query or "")[:60]
+                # ★ 同步 low_conf 统计口径 —— 否则 `stats.kept` 会是"去重前"的数字，
+                #   与调用方实际拿到的条数对不上（实测 L3b 门禁因此转红：
+                #   统计说 15 条、实际返回 12 条）。**两个数字必须同源**，
+                #   否则"为什么少了几条"永远查不清 —— 详见 `deduped` 字段。
+                _lc = locals().get("_lc_stats")
+                if isinstance(_lc, dict):
+                    _after_dd = len(chunk_hits)
+                    _lc["deduped"] = _before_dd - _after_dd
+                    _lc["kept"] = _after_dd
+                    _lc["dropped"] = max(0, int(_lc.get("nominal", _after_dd) or 0) - _after_dd)
+        except Exception:
+            pass    # 去重失败绝不阻断检索（退化为不去重，比丢结果安全）
+
+        # ── P0-2（2026-11-01）文档级摘要接入 ────────────────────────────────
+        # 现状：`documents.summary` 早就在生成（LLM 摘要，实测质量不错：
+        #   160~209 字能准确概括文档范围），但 `rag.py` / `knowledge_engine.py`
+        #   **完全不读它** —— 已建好的能力在空转。
+        # 用途（刻意只做"背景"，不做"证据"）：
+        #   chunk 级命中给的是**局部条文**，模型常因缺全局语境而误判
+        #   （如把"技术要求书的 7.4 节"当成全部，忽略 11.1 的相关约束）。
+        #   补一段文档摘要能显著改善"这段在讲什么、还有哪些相关章节"。
+        # 为什么只取**命中已出现的文档**：避免把无关文档的摘要塞进上下文（那是噪声）。
+        # 为什么限制条数：摘要 200 字 × 全部命中文档会挤占正文预算；取前 3 个文档足够。
+        doc_summaries = []
+        try:
+            if chunk_hits and conn is not None:
+                _seen = []
+                for _h in chunk_hits:
+                    _d = str(_h.get("source_doc") or "")
+                    if _d and _d not in _seen:
+                        _seen.append(_d)
+                    if len(_seen) >= 3:
+                        break
+                if _seen:
+                    _ph2 = ",".join(["?"] * len(_seen))
+                    _rows2 = conn.execute(
+                        "SELECT filename, summary FROM documents "
+                        f"WHERE filename IN ({_ph2}) AND COALESCE(summary,'') <> ''",
+                        _seen).fetchall()
+                    _got = {}
+                    for _r2 in _rows2:
+                        _fn = _r2["filename"] if isinstance(_r2, dict) or hasattr(_r2, "keys") else _r2[0]
+                        _sm = _r2["summary"] if isinstance(_r2, dict) or hasattr(_r2, "keys") else _r2[1]
+                        if _fn and _sm and _fn not in _got:
+                            _got[_fn] = str(_sm)
+                    # 按命中顺序输出（与【来源n】的文档顺序一致，便于模型对照）
+                    doc_summaries = [{"source_doc": _f, "summary": _got[_f]}
+                                     for _f in _seen if _f in _got]
+        except Exception:
+            doc_summaries = []   # 摘要缺失绝不阻断检索
+
         try:
             if conn is not None:
                 from glossary import trace_query as _tq
@@ -397,6 +580,13 @@ class GraphRAG:
                         "glossary_recall": glossary_recall.get("concepts", []),
                         "recall_reasons": [(h or {}).get("recall_reason", "")
                                            for h in (chunk_hits or [])[:3] if isinstance(h, dict)],
+                        # P0-1（2026-11-01）：低置信过滤的可观测性。
+                        # 旧实现"整批清零"时这里**什么都不留** ⇒ 无法区分
+                        # "库里没内容"与"有内容但被丢了"，是本次故障难归因的直接原因。
+                        "low_conf": _lc_stats,
+                        # P0-1b：拒答判据数字（rejected/max/avg/阈值）。
+                        # 保留数字而不是只存 true/false —— 阈值是否合适要靠这些数字回溯。
+                        "out_of_domain": _reject_info,
                     },
                 })
         except Exception:
@@ -476,6 +666,16 @@ class GraphRAG:
             "relations": graph_relations,
             "vector_docs": vector_results,
             "chunk_hits": chunk_hits,  # 缺口A：分块级命中预览（含 content 片段）
+            # P0-1（2026-11-01）：低置信过滤回显。让"被丢了几条、门槛多少、是否降级"
+            # 直接可见 —— 不再需要靠猜。下游可据此在 prompt 里标注"本次为降级检索"。
+            "low_conf": _lc_stats,
+            # P0-1b：域外拒答判据回显（rejected/max/avg/阈值）。
+            # 消费侧据此给"未在知识库找到依据"的提示与建议（FR-MQ-4），
+            # 而不是让模型对着空上下文硬编。
+            "out_of_domain": _reject_info,
+            # P0-2（2026-11-01）：命中文档的摘要（文档级背景，非证据）。
+            # 消费侧（context.py）只在有值时注入一小段，帮模型建立"这段在讲什么"的语境。
+            "doc_summaries": doc_summaries,
             "attachment_hits": attachment_hits,   # 上传文档命中片段（首要依据）
             "attachment_used": bool(attachment_hits),
             "graph_count": len(graph_results),
@@ -635,6 +835,68 @@ class GraphRAG:
             return []
 
     @staticmethod
+    def _retry_with_keywords(conn, query: str, boost: float, scope_docs,
+                             top_k: int, inc_dep: bool) -> list:
+        """P1-a（2026-11-01）：零召回时用**高区分度关键词**重查一次。
+
+        ## 为什么需要（实测，`agent/query_keywords.py` 有完整记录）
+        embedding 不可用 → 降级 bigram-tf → 长问句极易零召回：
+            `信息安全有哪些要求` → 0 条
+            `信息安全`          → 2 条（内容正确：技术要求书 7.4 的信息安全条款）
+        根因是问句里的"有哪些/怎么/吗"稀释了 2-gram 重叠比例，不是知识库没有。
+
+        ## 触发条件（刻意收窄到最窄）
+        必须**命中为空**才调用。实测反例：`需求应该怎么写才规范` 原本 13 条命中，
+        用关键词重试反而变 0 条 ⇒ 有命中时重试是**纯粹的破坏**，故只做零召回兜底。
+
+        ## 质量怎么保证
+        不做事后过滤，而是**只让高区分度词进入重试**（实词 + 长度≥3，
+        详见 `high_signal_terms`）。结果仍走下游既有的 `_filter_low_conf`
+        与域外拒答判据，分数不够一样会被拒 ⇒ 不会把"字面巧合"变成"有答案"。
+
+        ## 安全边界
+        - 最多试 `len(candidates)` 次（≤5），首个非空即返回；全空返回 [] 走原降级路径。
+        - 撤 domain（与 `_retry_without_domain` 同理：零召回更可能是域误判所致），
+          但**保留** `glossary_boost` 与 `doc_names`（来源隔离是权限边界，不是偏好）。
+        - 开关 `rag.zero_hit_retry`（默认 True，置 False 精确回退）。
+        - 纯函数语义：只调 hybrid_search，不改状态；任何异常一律返回 []。
+        """
+        try:
+            from core import config as _cfg
+            if not _cfg.as_bool("rag", "zero_hit_retry", True):
+                return []
+        except Exception:
+            pass
+        try:
+            from agent.query_keywords import retry_candidates
+            cands = retry_candidates(query)
+            if not cands:
+                return []
+            from knowledge_engine import hybrid_search as _hybrid
+            for cand in cands:
+                try:
+                    _hy = _hybrid(conn, cand, top_k=top_k, branches=None,
+                                  domain=None, glossary_boost=boost,
+                                  doc_names=scope_docs or None,
+                                  include_deprecated=inc_dep)
+                    hits = _hy.get("hits") or []
+                except Exception:
+                    hits = []
+                if hits:
+                    # 标注来源，便于从结果侧分辨"这是重试捞回来的"。
+                    # ⚠️ 必须用**独立字段** `recall_via`，不能用 `recall_reason`：
+                    #   后者已被上游写成 `RRF 融合(vec#… + bm25#…) + HyDE`，
+                    #   用 `setdefault` 根本不会覆盖 ⇒ 标记永远打不上（实测踩过，
+                    #   表现为"关键词重试明明捞回了内容，却仍被判域外"）。
+                    for h in hits:
+                        if isinstance(h, dict):
+                            h["recall_via"] = "keyword_retry"
+                    return hits
+            return []
+        except Exception:
+            return []
+
+    @staticmethod
     def _low_conf_suppressed(chunk_hits: list) -> bool:
         """P1-5：低置信检索抑制判据——注入宽度内（chunk_hits 全部，即 rag.top_k 条）**全部**为「低」置信。
 
@@ -644,6 +906,11 @@ class GraphRAG:
         判据从「首条低」升级为「全批低」的原因：A/B 实测「首条低」误伤 doc 2/43
         （recall@5 0.837 vs 0.884）——那些查询 top1 低但后续条高置信，整批挡掉会丢金标。
         开关 rag.suppress_low_confidence（默认 True，置 False 回旧行为）。
+
+        ⚠️ 2026-11-01：本函数**已不再被主链路调用**（保留为兼容/门禁引用）。
+        主链路改用 `_filter_low_conf()` —— 理由：本函数只能表达"丢光/不丢光"两态，
+        而降级场景需要"丢一部分、留一部分"。判据逻辑（含强 BM25 豁免）已在
+        `_filter_low_conf` 内原样继承，二者口径一致。
         """
         try:
             from core import config as _cfg
@@ -667,6 +934,102 @@ class GraphRAG:
             return all(str(h.get("confidence_level") or "") == "低" for h in chunk_hits)
         except Exception:
             return False
+
+    # ── P0-1（2026-11-01）低置信「过滤」而非「清零」────────────────────────────
+    #: 强 BM25 豁免线（与 `agent/retrieval_relevance.STRONG_BM25` 同口径）
+    _STRONG_BM25 = 40.0
+
+    @staticmethod
+    def _relevance_of(hit: dict) -> float:
+        """单条命中的"相关度"（0~1），**复用 knowledge_engine 的同一量纲**。
+
+        why 不直接用 `score`：`score` 是 RRF 融合分（≈0.03~0.06，量纲不可解释）；
+        而 `confidence_level` 的定级依据是 `max(vec_score, bm25/50)`，
+        实测该值切题 0.273~0.632 / 域外 0.069（差 4 倍，可比 score 的 2 倍更可分）。
+        用同一把尺子，阈值才有物理意义。
+        """
+        try:
+            vs = float(hit.get("vec_score") or 0)
+        except Exception:
+            vs = 0.0
+        try:
+            bs = float(hit.get("bm25_score") or 0)
+        except Exception:
+            bs = 0.0
+        return max(vs, min(bs / 50.0, 1.0) if bs > 0 else 0.0)
+
+    def _filter_low_conf(self, chunk_hits: list) -> tuple:
+        """全批低置信时按 `rag.low_conf_floor` 过滤，返回 `(kept, stats)`。
+
+        设计取舍（为什么不是"直接关掉 suppress"）：
+          · 关掉 suppress ⇒ 域外 query（今天天气）也能拿到 3~20 条噪声 —— 矫枉过正；
+          · 保留整批清零 ⇒ 降级时切题命中全丢 —— 也就是现在的故障；
+          · 按门槛过滤是唯一同时满足"救回切题"与"挡住域外"的做法（A/B 已验证可分）。
+
+        stats 供 trace/观测使用，字段名与既有 `suppressed_count` 口径衔接：
+          nominal            过滤前条数
+          kept               过滤后条数
+          dropped            被丢条数
+          floor              本次生效门槛
+          all_low            是否全批低置信（即是否触发了本逻辑）
+          strong_bm25_exempt 是否因强 BM25 而豁免（豁免时不做过滤）
+          degraded           是否处于 embedding 降级态
+        """
+        stats = {
+            "nominal": len(chunk_hits or []), "kept": len(chunk_hits or []), "dropped": 0,
+            "floor": 0.0, "all_low": False, "strong_bm25_exempt": False, "degraded": False,
+        }
+        if not chunk_hits:
+            return [], stats
+        try:
+            from core import config as _cfg
+            if not _cfg.as_bool("rag", "suppress_low_confidence", True):
+                return chunk_hits, stats          # 开关关闭 ⇒ 完全不过滤（旧行为）
+            floor = float(_cfg.get("rag", "low_conf_floor", 0.15) or 0.0)
+        except Exception:
+            floor = 0.15
+        stats["floor"] = floor
+
+        # 降级判定：优先用 knowledge_engine 如实上报的 `vector_mode`（唯一可信来源）。
+        # 为什么要标：降级时"低置信"是**系统性塌陷**（实测 vec 0.07~0.29 vs 真向量 0.4~0.8）
+        #   而非"内容不相关"，必须让下游知道"这次分数不可信"，否则会把降级当结论。
+        # fallback：老数据/别的召回路径没有 vector_mode 时，按 embed_version 推断
+        #   （出现 bigram-tf 视为降级）；两者都没有则不臆断，保持 False。
+        try:
+            _modes = {str(h.get("vector_mode") or "") for h in chunk_hits}
+            _modes.discard("")
+            if _modes:
+                stats["degraded"] = "bigram" in _modes
+            else:
+                _vers = {str(h.get("embed_version") or "") for h in chunk_hits}
+                _vers.discard("")
+                stats["degraded"] = bool(_vers) and _vers.issubset({"bigram-tf", "bigram"})
+        except Exception:
+            stats["degraded"] = False
+
+        # 强 BM25 豁免：稀疏精确匹配不依赖 embedding，高分是强证据（口径同 _low_conf_suppressed）
+        if any(float(h.get("bm25_score") or 0) >= self._STRONG_BM25 for h in chunk_hits):
+            stats["strong_bm25_exempt"] = True
+            return chunk_hits, stats
+
+        # 只有"全批低"才进入过滤；否则原样返回（高/中置信说明召回本身健康）
+        _all_low = all(str(h.get("confidence_level") or "") == "低" for h in chunk_hits)
+        stats["all_low"] = _all_low
+        if not _all_low:
+            return chunk_hits, stats
+
+        kept = []
+        for h in chunk_hits:
+            _rel = self._relevance_of(h)
+            if _rel >= floor:
+                # 打降级标记（**不改变 content 本身**，只加元信息，下游可选择性展示）
+                h = dict(h)
+                h["degraded"] = stats["degraded"]
+                h["relevance"] = round(_rel, 4)
+                kept.append(h)
+        stats["kept"] = len(kept)
+        stats["dropped"] = stats["nominal"] - len(kept)
+        return kept, stats
 
     @staticmethod
     def _resolve_scope_docs(conn, raw_docs, include_deprecated: bool = False) -> tuple:

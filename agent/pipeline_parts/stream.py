@@ -3903,7 +3903,7 @@ class StreamMixin:
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
                        team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0,
                        resume_of_user_msg_id: int = 0, resume_append: str = "", _tracer=None,
-                       deadline_ts: float = 0.0, session_conv_id: int = 0):
+                       deadline_ts: float = 0.0, session_conv_id: int = 0, overrides=None):
         """流式执行（V2.3.2 优化：AI 输出流式 + 执行过程可观测）。生成器逐段产出 SSE 事件：
 
         {"type":"stage","name":..., "status":"run|done"}   右侧智能体执行状态
@@ -3966,6 +3966,14 @@ class StreamMixin:
         try:
             from core import runtime_state as _rs_dl
             _rs_dl.set_thread_deadline(_deadline_ts)
+        except Exception:
+            pass
+        # ★ 2026-10-31：本轮临时推理参数覆盖 —— 与 deadline 同一登记点（同一 daemon 线程）。
+        #   必须在**这里**登记（生成器顶部），因为整个生成器体跑在 SSE daemon 线程内；
+        #   在路由层（async 主协程）登记会落在另一个线程 ⇒ LLM 层读不到。
+        try:
+            from core import runtime_state as _rs_ovr
+            _rs_ovr.set_llm_overrides(overrides)
         except Exception:
             pass
         # ★ 2026-11-13（#56）：**会话级附件继承** —— 附件是会话资源，不必每轮重传。
@@ -4359,6 +4367,25 @@ class StreamMixin:
             #   要给每个动作分等级 —— agent 级只能当"地板"，不能当唯一判据）。
             self._hil_level = hil_level
             effective_provider = provider_id or self.registry.get_provider_id(intent)  # 优化2
+            # ★★ 2026-11-01（米爸）：会话设置是「**会话 + 模型**」维度 ——
+            #   必须在确定 effective_provider 之后才读，否则读错模型桶。
+            #   合并：会话设置 → 单轮临时（后者更高）。与 execute 同口径。
+            try:
+                _sess_ov = {}
+                if conversation_id:
+                    from database import db_conn as _db_conn_ov
+                    with _db_conn_ov() as _c_ov:
+                        from repositories.conversation_repo import ConversationRepo as _CR
+                        _sess_ov = _CR(_c_ov).get_llm_overrides(int(conversation_id),
+                                                                effective_provider) or {}
+                _merged_ov = dict(_sess_ov)
+                _merged_ov.update(overrides or {})
+                if _merged_ov:
+                    from core import runtime_state as _rs_ovr2
+                    _rs_ovr2.set_llm_overrides(_merged_ov)
+                self._llm_overrides_effective = _merged_ov
+            except Exception:
+                _merged_ov = dict(overrides or {})
             # ★ P1-b（2026-10-10）Agent 级模型参数（含 thinking_mode）——
             #   `agents.model_params` 此前是**死配置**（有列、有前端表单，无消费点）。
             #   取一次供本方法所有 chat 调用复用；取不到一律 {} ⇒ 零行为漂移。
@@ -4366,6 +4393,14 @@ class StreamMixin:
                 _agent_mp = self.registry.get_model_params(intent)
             except Exception:
                 _agent_mp = {}
+            # ★ 会话⊕单轮 的思考强度并入（同名键覆盖 Agent 级）——与 execute 同口径
+            try:
+                _ovr_lv = str((_merged_ov or {}).get("thinking_level") or "").strip()
+                if _ovr_lv:
+                    _agent_mp = dict(_agent_mp or {})
+                    _agent_mp["thinking_level"] = _ovr_lv
+            except Exception:
+                pass
             # ── P0-2 断点续跑（2026-10-03）：resume 绕过"意图识别之后的一切前置判定" ──────
             # 为什么必须在这里插队：内容级澄清（`_clarify_detect`）、复杂度判定（`_needs_orchestration`）、
             # 沉淀流程复用（`_try_reuse_planner_flow`）都是**启发式**的。续跑时用户可能一句话都不输入，

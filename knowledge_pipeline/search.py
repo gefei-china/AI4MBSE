@@ -8,6 +8,8 @@ import uuid
 from .extract import extract_text
 from .embedder import Embedder
 from .ingest import ingest_document, chunking_params
+# P0-1（2026-11-01）：命中内容的统一长度预算（单一实现；原为 4 处硬编码 [:300]）
+from .textlimit import clip as _clip
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +110,7 @@ def _search_chunks_bigram(conn, query: str, top_k: int = 5, branches: list | Non
             "document_id": it["document_id"],
             "source_doc": it.get("source_doc", ""),
             "chunk_index": it["chunk_index"],
-            "content": it.get("content", "")[:300],  # 命中预览
+            "content": _clip(it.get("content", "")),  # 命中正文（P0-1：统一预算）
             "embed_version": it.get("embed_version", ""),
             "origin": it.get("origin") or "upload",  # 2026-09-15：命中标注来源（AI 生成/用户上传）
         })
@@ -162,7 +164,7 @@ def vector_search_embed(conn, query: str, top_k: int = 5, branches: list | None 
                     "document_id": d["document_id"],
                     "source_doc": d.get("source_doc", ""),
                     "chunk_index": d["chunk_index"],
-                    "content": d.get("content", "")[:300],  # 命中预览
+                    "content": _clip(d.get("content", "")),  # 命中正文（P0-1：统一预算）
                     "embed_version": d.get("embed_version", ""),
                     "origin": d.get("origin") or "upload",
                 })
@@ -189,7 +191,7 @@ def vector_search_embed(conn, query: str, top_k: int = 5, branches: list | None 
                 "document_id": it["document_id"],
                 "source_doc": it.get("source_doc", ""),
                 "chunk_index": it["chunk_index"],
-                "content": it.get("content", "")[:300],  # 命中预览
+                "content": _clip(it.get("content", "")),  # 命中正文（P0-1：统一预算）
                 "embed_version": it.get("embed_version", ""),
                 "origin": it.get("origin") or "upload",
             })

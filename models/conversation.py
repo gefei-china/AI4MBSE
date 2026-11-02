@@ -38,6 +38,16 @@ class ChatIn(BaseModel):
     #   只认 clarify-answer 当时从本会话查出来的那一条。
     resume_of_user_msg_id: Optional[int] = 0   # 触发本轮澄清的那条 user 消息 id（追加目标）
     resume_append: Optional[str] = ""          # 要追加进该 user 消息的澄清补充文本（不含"原请求"复述）
+    # ★ 2026-10-31（会话入口「本轮临时调整」）：**只作用于本次请求**的推理参数覆盖。
+    #   为什么单独开一组字段而不复用 provider_id 的 model_params：
+    #     用户的心智是"这一轮我想多想一点/看长一点"，而 model_params 是**该模型的全局配置**；
+    #     把临时意图写进全局配置 ⇒ 调一次之后所有会话都变了（最难发现的副作用）。
+    #   语义：留空 = 不覆盖（沿用模型配置，零行为漂移）；有值 = 本轮压过模型配置。
+    #   优先级：本轮覆盖 > Agent 级 model_params > provider 级 > 模型默认。
+    o_think: Optional[str] = ""       # 思考强度：模型默认|关闭|低|中|高（空=不覆盖）
+    o_context: Optional[int] = 0      # 本轮上下文窗口（tokens，0=不覆盖）
+    o_max_tokens: Optional[int] = 0   # 本轮输出上限（tokens，0=不覆盖）
+    o_temperature: Optional[float] = None  # 本轮温度（None=不覆盖；0 是合法值）
 
 
 class RenameIn(BaseModel):

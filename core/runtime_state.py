@@ -27,6 +27,7 @@
    服务是单 loop，但测试/脚本会反复新建 loop ⇒ 必须每次校验。
 """
 import asyncio
+import contextvars
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -35,6 +36,7 @@ __all__ = [
     "init", "is_draining", "begin_drain", "drain_elapsed",
     "stream_gate", "inflight_count", "compute_deadline", "deadline_left",
     "set_thread_deadline", "thread_deadline_left", "cap_timeout",
+    "set_llm_overrides", "llm_overrides",
     "stats", "reset_for_test",
 ]
 
@@ -241,6 +243,51 @@ def thread_deadline_left():
     if ts is None:
         return None
     return deadline_left(ts)
+
+
+# ── 单轮 LLM 参数覆盖（会话入口「本轮临时调整」用）────────────────────────────
+# ★★ 为什么必须是 **ContextVar**，不能用 `threading.local`（2026-10-31 实测踩过）：
+#   编排子任务跑在 `ThreadPoolExecutor`（`stream.py:_submit_with_ctx`）里。
+#   实测：主线程 set 覆盖后，`ThreadPoolExecutor` 里读到的全是 `{}`。
+#   于是"用户设了关闭思考"只在**主路径的 3 次调用**上生效，
+#   而一次用户消息实际产生 **38~41 次上游调用** ⇒ 覆盖率仅 3/38 ≈ **8%**。
+#   现象是"设了但只快一点点"，而字段级断言全绿 —— 最难查的那类。
+#   ContextVar 也**不会**自动跨线程，但代码里已有先例：
+#   `_submit_with_ctx` 会 `copy_context()` 显式复制 ⇒ ContextVar 能被子任务继承，
+#   thread-local 不能。改 ContextVar 是**让既有 copy_context 机制自动带上覆盖**。
+#
+# 语义（**严格分层，越靠前优先级越高**）：
+#   ① 本轮显式覆盖（用户在会话入口临时调）
+#   ② Agent 级 model_params
+#   ③ provider 级 model_params（DB）
+#   ④ 模型默认
+#
+# 为什么不覆盖进 DB：临时调整是"这一次想这样"，写进 DB 会污染该模型的全局配置
+#   （用户在入口调一次，之后所有会话都变了 —— 这是最难被发现的副作用）。
+_OVERRIDE_KEYS = ("thinking_level", "context_window", "temperature", "max_tokens")
+
+_LLM_OVERRIDES = contextvars.ContextVar("llm_overrides", default={})
+
+
+def set_llm_overrides(overrides):
+    """在当前执行上下文登记「本轮」LLM 参数覆盖。
+
+    :param overrides: `dict`，只认 `_OVERRIDE_KEYS` 里的键；`None`/空 ⇒ 清除登记。
+                      值为 `None` 或空串的键会被忽略（含义是"本轮不覆盖"）。
+    """
+    clean = {}
+    if isinstance(overrides, dict):
+        for k in _OVERRIDE_KEYS:
+            v = overrides.get(k)
+            if v is None or v == "":
+                continue
+            clean[k] = v
+    _LLM_OVERRIDES.set(clean)
+
+
+def llm_overrides():
+    """当前上下文的覆盖（`{}` = 无覆盖 ⇒ 调用方保持原行为，零漂移）。"""
+    return dict(_LLM_OVERRIDES.get() or {})
 
 
 def cap_timeout(base_s, floor_s=3.0):

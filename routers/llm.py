@@ -19,11 +19,17 @@ router = APIRouter(tags=["LLM 配置"])
 
 
 def _check_context_window(cw) -> None:
-    """上下文窗口轻量校验：合理范围 512 ~ 1000000，防误填为 0 导致调用约束异常。"""
+    """上下文窗口轻量校验：合理范围 512 ~ 2000000，防误填为 0 导致调用约束异常。
+
+    ★ 2026-10-31 上限从 1000000 提到 2000000：
+      会话入口的「上下文档位」要支持 **1M**（=1,048,576 tokens，Gemini/Claude 长窗口径），
+      而旧上限 1,000,000 **恰好把 1M 档挡在门外**（1048576 > 1000000 ⇒ 直接 400），
+      表现为"选了 1M 保存报错"。上限改成 2,000,000 才能容纳 1M 档并留余量。
+    """
     if cw is None:
         return
-    if not (512 <= cw <= 1000000):
-        raise ValueError("context_window 需在 512 ~ 1000000 之间")
+    if not (512 <= cw <= 2000000):
+        raise ValueError("context_window 需在 512 ~ 2000000 之间")
 
 
 def _mask_providers(providers: list) -> list:
@@ -40,6 +46,10 @@ def list_providers(model_type: Optional[str] = None, conn=Depends(db_session)):
     """模型列表；?model_type=chat|embedding|multimodal 可过滤（管理面板按类型切换）。
 
     D10：每条附带 tags/priority/budget_tokens 与已用 token（budget_used，供前端展示预算条）。
+    ★ 2026-10-31：每条另附 `capability`（思考/上下文的**可设能力**）。
+      为什么由后端给：思考字段的形态与是否真生效，只有 LLM 层知道（`_provider_family`
+      + 实测结论）。前端按模型名猜必然猜错 —— 猜"能设"而底层无效，就是最坏的静默失效。
+      前端据此**屏蔽入口或给出提示**，而不是让用户选了一个没反应。
     """
     items = LlmRepo(conn).list_providers()
     for p in items:
@@ -52,6 +62,14 @@ def list_providers(model_type: Optional[str] = None, conn=Depends(db_session)):
         except Exception:
             p["model_params"] = {}
         p["budget_used"] = llm_router.usage_of(conn, p["id"])
+        try:
+            from llm.providers.openai_compat import thinking_capability
+            p["capability"] = thinking_capability(p)
+        except Exception:
+            # 能力判定失败绝不能阻断列表（否则整页模型都看不见）
+            p["capability"] = {"supported": False, "level": "none", "levels": [],
+                               "default_level": "模型默认",
+                               "reason": "能力信息暂不可用", "context": {"supported": True, "reason": ""}}
     if model_type:
         items = [p for p in items if p.get("model_type") == model_type]
     return _mask_providers(items)
@@ -92,7 +110,8 @@ def create_provider(p: ProviderIn, conn=Depends(db_session), user=Depends(curren
     pid = repo.create_provider(p.name, p.provider_type, p.base_url, p.api_key, p.model_name,
                                p.max_tokens, p.temperature, p.is_default, p.model_type, p.context_window,
                                json.dumps(p.tags or [], ensure_ascii=False),
-                               int(p.priority or 0), int(p.budget_tokens or 0))
+                               int(p.priority or 0), int(p.budget_tokens or 0),
+                               p.description or "")
     audit(audit_user(user), "llm_create", f"添加模型: {p.name}（{p.model_type}）", conn=conn)
     return {"ok": True, "id": pid}
 
@@ -109,7 +128,8 @@ def update_provider(pid: int, p: ProviderIn, conn=Depends(db_session), user=Depe
     repo.update_provider(pid, p.name, p.provider_type, p.base_url, p.model_name,
                          p.max_tokens, p.temperature, p.is_default, p.model_type, p.context_window,
                          json.dumps(p.tags or [], ensure_ascii=False),
-                         int(p.priority or 0), int(p.budget_tokens or 0))
+                         int(p.priority or 0), int(p.budget_tokens or 0),
+                         p.description or "")
     if p.api_key:
         repo.update_provider_key(pid, p.api_key)
     audit(audit_user(user), "llm_update", f"更新模型#{pid}", conn=conn)

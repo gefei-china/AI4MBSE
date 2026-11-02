@@ -129,6 +129,24 @@ class EventService:
         # ② Fast Path 准入（纯函数）
         verdict = self.registry.evaluate(kind, trigger, is_duplicate=False)
 
+        # ②b 建单前置校验（数据完备性）—— 准入通过但数据不全时**不建工单**
+        #     为什么要有这一层：准入判"该不该做"（身份/范围），
+        #     但"该做"不等于"能做"（如 SysML 事件没带原始代码 ⇒ 无从修复）。
+        #     若不拦，会建出一堆"必然失败"的工单，把面板噪音化。
+        if verdict.accepted and spec.precheck:
+            try:
+                _ok, _why = spec.precheck(raw)
+            except Exception as _e:
+                _ok, _why = False, "precheck_error:%s" % str(_e)[:80]
+            if not _ok:
+                self.repo.set_trigger_disposition(trigger.id, "filtered", _why)
+                return {
+                    "disposition": "filtered", "reason": _why,
+                    "strength": verdict.strength, "trigger_id": trigger.id,
+                    "workitem_id": "", "mode": adm.mode, "accepted": False,
+                    "note": "准入通过但数据不完备，未建工单",
+                }
+
         if not verdict.accepted:
             self.repo.set_trigger_disposition(trigger.id, "filtered", verdict.reason)
             return {

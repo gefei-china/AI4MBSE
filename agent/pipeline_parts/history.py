@@ -1603,6 +1603,24 @@ class HistoryMixin:
             explicit = int(_cfg.get("context", "total_budget_tokens", 0) or 0)
             if explicit > 0:
                 return explicit
+            # ★ 2026-10-31：**本轮上下文覆盖优先**（会话入口「本轮临时调整」）。
+            #   为什么必须接进来（实测发现的真实不一致）：
+            #     `openai_compat` 已按本轮覆盖夹 max_tokens，但本函数只读 DB 的
+            #     context_window ⇒ 用户在入口把上下文调成 8K，**历史/检索预算仍是
+            #     128K 的口径（96000）** ⇒ 表现为"调了没效果"（正是本仓最忌的静默失效）。
+            #   实测证据：`tools/verify/experiment_context_window.py` C 组
+            #     不覆盖 → 96000；本轮覆盖 8192 → 仍 96000（修前）。修后应为 6144。
+            #   未登记覆盖 ⇒ 空 dict ⇒ 走原路径，零行为漂移。
+            try:
+                from core import runtime_state as _rs_cw
+                _ov_cw = int((_rs_cw.llm_overrides() or {}).get("context_window") or 0)
+                if _ov_cw > 0:
+                    _r = float(_cfg.get("context", "total_budget_window_ratio", 0.75) or 0.75)
+                    if _r <= 0 or _r > 1:
+                        _r = 0.75
+                    return int(_ov_cw * _r)
+            except Exception:
+                pass
             cw = 0
             try:
                 from database import get_db

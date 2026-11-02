@@ -419,6 +419,11 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
         skill_name: _selSkill,
         team: _selTeam,                // 主 Agent：负责意图识别/任务拆分/计划制定/任务分派/内容整合输出
         provider_id: Number(document.getElementById('llm-providers')?.value) || undefined,
+        // ★ 2026-10-31（按米爸澄清的语义修正）：**会话维度**参数由后端读
+        //   `conversations.llm_overrides` 自动生效，前端**不需要**每轮发送。
+        //   这正是与上一版的本质差别：上一版靠前端每轮带 o_*（= 单轮语义，
+        //   会话第二轮就丢、刷新更丢）；现在设置存服务端会话行，跨轮/刷新/切回都还在。
+        //   `o_*` 字段仍保留在 ChatIn 里作为「会话内临时加压」，但界面不再使用。
         // ★ 2026-10-17（米爸 Q1 DB 层收口）：澄清续答单轮化转呈字段（普通发送为 0/空）
         resume_of_user_msg_id: (resumeOf && resumeOf.user_msg_id) || 0,
         resume_append: (resumeOf && resumeOf.append) || '',

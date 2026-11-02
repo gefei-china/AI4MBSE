@@ -107,6 +107,22 @@ def _migrate_columns(conn):
     _add("llm_providers", "tags", "TEXT DEFAULT '[]'")                  # 能力标签 JSON 数组，如 ["code","chinese","fast"]
     _add("llm_providers", "priority", "INTEGER DEFAULT 0")              # 路由优先级（越大越优先，同权重按 is_default）
     _add("llm_providers", "budget_tokens", "INTEGER DEFAULT 0")         # Token 预算（0=不限；聚合 llm_usage_stats 判定耗尽）
+    # ── 2026-10-31 模型档案（每个模型单独设置，供模型配置页与会话入口模型切换列表展示）──
+    # 为什么单独加描述列而不是复用 tags：
+    #   tags 是**机器判据**（vision 标签决定图片能不能发、路由标签决定选哪个模型），
+    #   人工说明混进去会让 composeTagsFromForm 的"保留其他标签"逻辑把说明词当标签。
+    #   描述只给人看（会话入口下拉里给用户判断"这个模型适合干什么"），互不污染。
+    _add("llm_providers", "description", "TEXT DEFAULT ''")             # 模型描述（面向使用者的能力说明，可空）
+    # ── 2026-10-31 会话维度 LLM 参数（与「模型维度=系统默认」严格分开）──
+    # 语义（米爸 2026-10-31 明确）：
+    #   模型维度 = 系统默认（llm_providers 那份，所有会话共用）
+    #   会话维度 = 本会话的个性化设置，**只影响本会话，绝不回写 llm_providers**
+    # 为什么必须存 DB 而不是前端内存：
+    #   会话级设置要能"切走再切回仍在"、"刷新不丢"、"跨多轮持续生效"。
+    #   放前端内存只能做到"下一次发送生效"（那是单轮语义，不是会话语义）。
+    # 结构：JSON，只存**用户显式改过**的键（如 {"thinking_level":"高"}）；
+    #   空 = 全部沿用系统默认 ⇒ 与改动前逐字节等价。
+    _add("conversations", "llm_overrides", "TEXT DEFAULT '{}'")
     # ── P1-20 prompt caching 观测：DeepSeek 上下文磁盘缓存命中/未命中（自动缓存，命中≈1/10 价）──
     _add("llm_usage_stats", "prompt_cache_hit_tokens", "INTEGER DEFAULT 0")
     # ── P0-c（2026-10-03）LLM 调用 trace 关联三列（评估：无 conversation_id/run_id 无法下钻）──

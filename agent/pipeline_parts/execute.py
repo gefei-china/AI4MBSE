@@ -47,7 +47,7 @@ def _repair_tool_subset(tools_def):
 class ExecuteMixin:
     """主执行入口 execute（非流式全流程）。"""
 
-    def execute(self, user_input, conversation_id, branch="dev", provider_id=None, attachments=None, dry_run=False, forced_intent=None, skill_name=None, user=None, tools_whitelist=None, team=None, scope_id=None, scope_ids=None, scope=None):
+    def execute(self, user_input, conversation_id, branch="dev", provider_id=None, attachments=None, dry_run=False, forced_intent=None, skill_name=None, user=None, tools_whitelist=None, team=None, scope_id=None, scope_ids=None, scope=None, overrides=None):
         """Execute the full agent pipeline.
 
         attachments: V2.3 会话窗口富输入——[{url, filename, size, is_image}]，落库 user 消息 attachments JSON。
@@ -57,9 +57,20 @@ class ExecuteMixin:
         tools_whitelist: P0-3 委派最小权限——本次执行仅授予的工具名列表（Worker ⊆ Supervisor）；
         非空时 function calling 只注入白名单工具，且 _exec_tool_call 拒绝白名单外调用。
         team: 团队模式（AI 会话页「工作流」下拉）——主 Agent 团队负责人统一调度：
-        意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
+        意图识别/任务拆分/计划制定/任务分派（内容整合输出）。
+        overrides: 会话入口「本轮临时调整」——{"thinking_level","context_window","max_tokens","temperature"}，
+        只作用于本次调用（登记到线程局部，LLM 层读取），**不写 DB**。空/None ⇒ 零行为漂移。
         """
         attachments = attachments or []
+        # ★ 2026-10-31：本轮临时覆盖登记（必须在本方法内、LLM 调用之前）。
+        #   线程局部而非逐层加参数：execute 内有 13 个 llm_client.chat 调用点，
+        #   逐个加参数必然漏（这正是"同一语义多处各写一份，迟早错位"的老坑）。
+        #   未传 overrides ⇒ 清除登记 ⇒ 非会话路径（脚本/测试/编排子任务）行为不变。
+        try:
+            from core import runtime_state as _rs_ovr
+            _rs_ovr.set_llm_overrides(overrides)
+        except Exception:
+            pass
         # ★ 2026-11-13（#56）：**会话级附件继承**（与 stream.py 同源同口径，见那里的根因说明）。
         #   追问轮请求里 attachments=[] ⇒ 章节索引为空 ⇒ read_attachment_section 工具
         #   压根没进 tools_def ⇒ 模型既无正文也无取正文的通道。
@@ -195,6 +206,29 @@ class ExecuteMixin:
         self._hil_level = hil_level  # M5：HIL 分级——L2 时写工具进入人工确认队列
         # 优化2：Agent 指定 LLM provider 优先（显式 provider_id > Agent 绑定 > 全局默认）
         effective_provider = provider_id or self.registry.get_provider_id(intent)
+        # ★★ 2026-11-01（米爸）：会话设置是「**会话 + 模型**」维度，不是"一个会话一套"。
+        #   ⇒ 必须**在这里**（已确定 effective_provider 之后）才读会话设置，
+        #     在路由层读会读错桶（那时 provider 可能还是 None）。
+        #   合并顺序：会话设置 → 单轮临时（后者更高）。
+        #   ⚠️ 与既有 `set_llm_overrides(overrides)` 的关系：
+        #     入口那次登记的是**单轮临时**；这里重登记为「会话 ⊕ 单轮」，
+        #     否则"会话里设了关闭思考"从第二轮就丢（会话设置根本没进线程局部）。
+        try:
+            _sess_ov = {}
+            if conversation_id:
+                from database import db_conn as _db_conn_ov
+                with _db_conn_ov() as _c_ov:
+                    from repositories.conversation_repo import ConversationRepo as _CR
+                    _sess_ov = _CR(_c_ov).get_llm_overrides(int(conversation_id),
+                                                            effective_provider) or {}
+            _merged_ov = dict(_sess_ov)
+            _merged_ov.update(overrides or {})
+            if _merged_ov:
+                from core import runtime_state as _rs_ovr2
+                _rs_ovr2.set_llm_overrides(_merged_ov)
+            self._llm_overrides_effective = _merged_ov
+        except Exception:
+            _merged_ov = dict(overrides or {})
         # ★ P1-b（2026-10-10）Agent 级模型参数（含 thinking_mode）——
         #   `agents.model_params` 此前是**死配置**（有列、有前端表单，无消费点）。
         #   取一次供本方法所有 chat 调用复用；取不到一律 {} ⇒ 零行为漂移。
@@ -202,6 +236,18 @@ class ExecuteMixin:
             _agent_mp = self.registry.get_model_params(intent)
         except Exception:
             _agent_mp = {}
+        # ★ 2026-10-31：把本轮生效的思考强度并入 model_params（同名键覆盖 Agent 级）。
+        #   2026-11-01：来源从"仅单轮"改为"会话⊕单轮"（`_merged_ov`），
+        #   否则会话级设置到不了 model_params 这条读取路径。
+        #   只并 thinking_level（其余 context/max_tokens/temperature 在 LLM 层从线程局部取，
+        #   因为改它们属于 payload 组装，不该混进 model_params 这个"模型参数模板"）。
+        try:
+            _ovr_lv = str((_merged_ov or {}).get("thinking_level") or "").strip()
+            if _ovr_lv:
+                _agent_mp = dict(_agent_mp or {})
+                _agent_mp["thinking_level"] = _ovr_lv
+        except Exception:
+            pass
         # P1 意图结构化拆解（建模类意图；Mock 环境自动降级 {}）
         # P0-2：槽位跨轮合并——上轮槽位为底，本轮新值覆盖（entities/constraints 并集）
         # P1-4（2026-10-01）：带上 conversation_id/user_input —— 换话题时丢弃历史槽位

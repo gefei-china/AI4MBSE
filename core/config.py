@@ -1015,6 +1015,44 @@ DEFAULT_CONFIG = {
         # 7 例 top5 全低（最大 vec_score 0.359）。图谱路由有独立 route_threshold 门禁、
         # 附件命中不拦。置 False 回旧行为（低置信命中照常注入）。
         "suppress_low_confidence": True,
+        # ★ 2026-11-01（检索质量专项整治 P0-1）：全批低置信时**不再整批清零**，改为按分数门槛过滤。
+        #   为什么改（A/B 实测，tools/verify/ab_suppress_low_conf.py）：
+        #     旧行为 = 全批低 ⇒ chunk_hits 整个置空。embedding 服务 502 降级 bigram 时
+        #     vec_score 全面塌到 0.07~0.29 ⇒ 必判「低」⇒ **把切题命中（含金标 4.2.2 系统需求分析）
+        #     一起丢光**。实测 6 条 query 只 1 条有结果，症状与"知识库没数据"完全一样，
+        #     属最难归因的静默失效。
+        #   新口径：保留 relevance ≥ floor 的条目（打 degraded 标记 + 注入时告知降级），
+        #     只有"低于门槛"的才丢。relevance 复用 knowledge_engine 同一量纲
+        #     （max(vec_score, min(bm25/50,1))），不另造一套尺子。
+        #   标定：实测切题 relevance 0.273~0.632，域外 0.069 ⇒ 门槛 0.15 落在可分间隙内。
+        #     ⚠️ 该标定仅 6 条样本，只证明"可分"不证明"最优"；扩到 200 条 qrels 后必须重算。
+        "low_conf_floor": 0.15,
+        # ★ 2026-11-01（P0-1b 拒答）：域外问题的"整体拒答"门槛。
+        #   与 low_conf_floor 是**两层**语义，别混：
+        #     low_conf_floor → 逐条过滤（去掉明显无关的，留下真命中）
+        #     reject_*       → 整体拒答（**最好的那条都不够** ⇒ 这个查询不在知识域内）
+        #   为什么需要：只靠逐条过滤，域外问题仍会拿到 1~3 条"字面巧合"的片段
+        #   （实测"卫星太阳能板的清洗周期"返回 1 条、"Python 爬虫"返回 20 条），
+        #   喂给 LLM 就是幻觉温床。实测拒答准确率仅 0.333。
+        #   标定（13 条样本，2026-11-01）：
+        #     切题 7 条 rel_max 0.405~0.739 / rel_avg 0.267~0.532
+        #     域外 6 条 rel_max 0.000~0.293 / rel_avg 0.000~0.195
+        #     ⇒ 间隙 0.293~0.405，取 0.35（max）/ 0.22（avg）落在间隙中位偏保守处。
+        #   判据形态：**两者都低于阈值**才拒答（任一超标即放行），宁少拒不误杀。
+        #   ⚠️ 仅在「向量路由 且 图谱无命中」时生效 —— 模型域问题走图谱，不受此限。
+        "reject_max_score": 0.35,
+        "reject_avg_score": 0.22,
+        # ★ 2026-11-01（P0-1）：检索命中内容的**返回长度上限**（字符）。
+        #   为什么改：原实现是 `content[:300]` **硬编码在 4 处**
+        #   （knowledge_engine 1 + knowledge_pipeline/search.py 3），实测
+        #   chunk 实际 p50=523 / avg=432 字 ⇒ **71.3%（5122/7179）的命中被砍一截**，
+        #   模型只看到"半句条文"，于是答"信息不足"或自行补全（幻觉）。
+        #   0 = 不截断；>0 = 每条上限。默认 1200 覆盖绝大多数 chunk，
+        #   同时挡住 p99 以上的异常长块（库里 max 5681 字，多为整段代码块）。
+        #   代价（实测估算）：注 5 条时从最多 1500 字 → 约 2600 字（+约 700 token）。
+        #   ⚠️ 前端 citations 另有 800 字上限（agent/utils._citations_payload），
+        #      故放大本项**不会**把前端响应撑大。
+        "chunk_content_chars": 1200,
         # ── RAGFlow 接入（L3，2026-10-10）─────────────────────────────────
         # ⚠️⚠️ 这 6 项**必须同时落在 DEFAULT_CONFIG**，
         #   只登记 CONFIG_SCHEMA 是不够的——config.get() 读 _CONFIG（由 DEFAULT_CONFIG 构建），
@@ -1042,11 +1080,63 @@ DEFAULT_CONFIG = {
         #       → 送进 LLM 重排的候选被 top_k 卡死在 4 条，重排无选择空间（结构倒挂）。
         #       行业标准是「广召回 20-50（每路）→ 融合 20-50 → 重排 20-50 → 窄注入 3-8」，
         #       故拆成四层独立旋钮，约束：recall_k ≥ top_k ≥ rerank_max_candidates ≥ inject_k。
-        "recall_k": 20,              # 每路（BM25 / 向量）召回宽度；0 = 回落旧行为 top_k*2
+        # ★ 2026-11-02：20 → 25。与条件重排**配套**（单独改无效，已实测）：
+        #   `rerank_mode="auto"` 触发时需要更宽的候选池才有东西可捞 ——
+        #   实测 `座舱负荷` 的金标在 BM25 第 22 位，recall_k=20 时**根本不进候选池**，
+        #   重排再强也看不到它（recall_k=20 + 窗口25 → 救不回；
+        #   recall_k=25 + 窗口25 → 名次 19 → 重排后第 2，救回）。
+        #   ⚠️ 单独把 recall_k 加到 40 而重排关着：覆盖 14/17 **一分不涨**。
+        "recall_k": 25,              # 每路（BM25 / 向量）召回宽度；0 = 回落旧行为 top_k*2
         "top_k": 20,                 # RRF 融合后保留的候选池（= 送 LLM 重排的池子）
-        "inject_k": 3,               # 最终注入 prompt 的片段条数（消费侧 chunk_hits[:inject_k]）
+        # ★ 2026-11-01（P0-3）：3 → 5。
+        #   问题：`rag.top_k=20` 召回 20 条、只注入 3 条 ⇒ **85% 的检索成本白花**，
+        #   且长尾金标（排第 4~5 位）永远进不了上下文。
+        #   为什么敢调：`select_diverse` 已做 per-doc 配额 + 同文档近邻合并，
+        #   不会因为多给 2 槽就灌满重复片段；citations 条数**同源于本项**
+        #   （`agent/utils._citations_payload`），不会出现"界面 5 条、prompt 3 条"的错位
+        #   —— 该错位历史上出现过，现有门禁 verify_citation_alignment.py D1 守着。
+        #   风险控制：每条 content 注入前已截断（约 300 字），多 2 条 ≈ +400 token。
+        "inject_k": 5,               # 最终注入 prompt 的片段条数（消费侧 chunk_hits[:inject_k]）
         "fallback_top_k": 5,         # 混合检索异常时 search_chunks 兜底条数
-        "rrf_k": 60,                 # RRF 融合常数（Σ1/(k+rank)；越大排名差异对得分影响越平缓，行业常用 60）
+        # ★ 2026-11-01（P0-a）检索结果去重：同一份文件被导入两次时，
+        #   两份副本会**各占 per_doc_max 的槽位**（配额按 source_doc 字符串计数，
+        #   而副本的 source_doc 形态不同 → 被当成两个独立文档）。
+        #   实测：id=847/848 是同一份 PDF（55 chunk 逐字相同），
+        #   注入 5 条里 4 条来自这一份，界面看着引了 3 个文档实际只 2 个真实来源。
+        #   修复：正文逐字相同且 document_id 不同 ⇒ 判副本丢弃（不动任何数据）。
+        #   置 False 精确回退到改动前行为。
+        "dedupe_exact": True,
+        "dedupe_min_chars": 80,      # 正文短于此长度不参与去重（避免误合并套话短片段）
+        # ★ 2026-11-01（P1-a）零召回关键词重试：bigram 降级态下长问句极易 0 命中
+        #   （实测 `信息安全有哪些要求`=0 条，而 `信息安全`=2 条真命中）。
+        #   只在**命中为空**时触发，用「实词且长度≥3」的关键词重查一次。
+        #   有命中时**绝不重试** —— 实测 `需求应该怎么写才规范` 原本 13 条，重试反而 0 条。
+        "zero_hit_retry": True,
+        # ★ 2026-11-02（P3-a）元数据块不参与排序：封面/版权页/签批表/目录会靠
+        #   "文档标题里的关键词"空降前 5，白占 inject_k 的槽。
+        #   实测实例：`818:0`「> 所属方法论… 更新日期…」排在 succession 问题第 2 位；
+        #             `847:1` 签批表排在"交付哪些文档"第 4 位。
+        #   判定见 `agent/metadata_blocks.py`（全库 7179 块命中 45 块 = 0.6%，金标误杀 0）。
+        #   `metadata_min_keep`：过滤后剩余不足此数就**放弃过滤**（绝不清空结果）。
+        "drop_metadata_blocks": True,
+        "metadata_min_keep": 3,
+        # ★★ 2026-11-02：60 → 10。**这是 embedding 恢复后才显形的调优点**。
+        #   RRF = Σ 1/(k + rank)。k 越大，名次差异被压得越平：
+        #       k=60：第1名 1/61 vs 第25名 1/85 ⇒ 只差 **1.39 倍**
+        #       k=10：第1名 1/11 vs 第25名 1/35 ⇒ 差 **3.18 倍**
+        #   ⇒ k=60 时"BM25 第 1 名的强命中"与"向量第 10 名的弱命中"几乎同分（都 ≈0.0164），
+        #     纯 BM25 命中的文档（`vec_score=0`）被大量向量条目**淹没出前 20**。
+        #   实测（27 条可答 query，进程内改 k 不落盘）：
+        #       k=60 → hit@5 0.7407 / MRR 0.9500
+        #       k=20 → hit@5 0.8148 / MRR 0.9470
+        #       k=10 → hit@5 **0.8519** / MRR **0.9783**
+        #       k=5  → hit@5 0.8889 / MRR 0.9028   （hit 更高但 MRR 掉，第 1 名不稳）
+        #   取 10：hit@5 与 k∈{8,12,15} 并列最高，MRR 接近满分，且**不在极值上**（留余量）。
+        #   ⚠️ 行业常用 60 是"候选池都很大且两路质量相当"的场景；本工程 BM25 强命中
+        #     的绝对分很高（20+）而向量分区间窄（0.54~0.61），两路质量并不相当。
+        #   ⚠️ 降级态（bigram）下此值不宜过低：那时 vec_score 不可信，
+        #     压低 k 会让噪声向量条目挤占排名 —— 若 embedding 再次不可用，回调 30 更稳。
+        "rrf_k": 10,                 # RRF 融合常数（Σ1/(k+rank)；**越小名次差异越显著**）
         "hyde_enabled": True,        # Reverse HyDE 兜底开关（chunk 假设问题匹配；用户措辞≠文档措辞时补召回）
         "hyde_weight": 0.05,         # HyDE 补充分权重（叠加进融合分，0=等效关闭）
         # P1-2（2026-10-04）**入库侧**成本闸：HyDE 向量化使 embedding 调用翻倍
@@ -1067,13 +1157,45 @@ DEFAULT_CONFIG = {
         # 且线上每轮多 2 次 LLM 往返（rag_rerank ~1775 + rerank ~810 tokens，**缓存命中恒 0**）。
         # 结论：当前语料/配置下 LLM 重排是纯成本。旋钮保留，换语料或换 provider 后可置 true 重评。
         "rerank_enabled": False,         # LLM Rerank 重排开关（LLM 不可用/超时静默回退原排序）
+        # ★★ 2026-11-02（米爸拍板"方案 2"）**条件重排**——三态开关，取代上面的布尔开关。
+        #   "off"  永不重排
+        #   "on"   总是重排（每条 +1.46s，串行阻塞在用户请求里）
+        #   "auto" **仅当排序可能已坏时重排**（`services/rag_rerank.needs_rerank()` 判据）
+        #
+        #   ⚠️ 为什么推翻了上面那条"纯成本"结论（不是无视，是那套评测有结构性盲区）：
+        #     上面依据是 `tools/eval/run_eval.py`，它判的是**文档级 recall**
+        #     （期望文档有没有被召回）——而重排改变的是**文档内部 chunk 的先后**。
+        #     文档本来就召回到了、只是答案所在 chunk 排第 9 进不了注入窗口时，
+        #     文档级 recall **结构上不可能**反映出重排的价值。
+        #     ⇒ 按 chunk 级指标重测（17 条「单答案」用例）：
+        #         重排关      14/17（金标进注入窗口）
+        #         重排开·窗口10 15/17（+1，零回归）
+        #         重排开·窗口25 16/17（+2，零回归）
+        #
+        #   ⚠️ 为什么是 "auto" 而不是 "on"：无条件重排 17 条里只有 3 条真需要，
+        #     82% 是白花钱。条件判据实测：**触发率 41%、召回 3/3（全覆盖）、
+        #     误触发 4/14**，平均代价从 1.46s/次 降到 ≈0.60s/次。
+        #     两个信号（单文档垄断 / 头部文档漂移）的机理与筛选过程见
+        #     `services/rag_rerank.needs_rerank()` 文档，量化脚本 `tools/diag/diag_rerank_trigger.py`。
+        #
+        #   ⚠️ 与 `recall_k` 的**配套关系**（单独改任一项都无效，已实测）：
+        #     条件重排触发时需要一个够宽的窗口才捞得回来，故 `rerank_max_candidates`
+        #     同步 10 → 25（多 0.25s）；`recall_k` 20 → 25 让金标先进入候选池。
+        #     单独把 recall_k 加到 40 而重排关着：覆盖 14/17 **一分不涨**（已实测）。
+        "rerank_mode": "auto",
+        # 未设置 rerank_mode 时的旧开关（保留以兼容既有配置文件，读取优先级低于 rerank_mode）
         # ★ 重排专用 provider（2026-10-10）：实测默认 provider 可能**整体不可用**
         #   （所有 intent 一律 31.7s 超时、ct=0）⇒ 重排 100% 静默降级，
         #   表现为"开关开了但排序一字未变"，排查花了 4 轮。
         #   ⚠️ **必须在 DEFAULT_CONFIG 的 rag 组**（与 CONFIG_SCHEMA["rag"] 同组），
         #      否则 config.get("rag", ...) 读不到 ⇒ 又一次"注册了但调不动"。
         "rerank_provider_id": 0,
-        "rerank_max_candidates": 10, # 送 LLM 重排的候选上限（应 ≤ top_k，否则上限形同虚设）；0 = 全部候选
+        # ★ 2026-11-02：10 → 25。条件重排（rerank_mode="auto"）触发时，需要一个
+        #   够宽的窗口才有修正空间：实测金标在 RRF 里的名次多是 9~27，
+        #   窗口 10 只覆盖到"第 9 名"这类，窗口 25 能救回 `座舱负荷`（名次 24 → 2）。
+        #   代价实测只多 **0.25s/次**（1.21s → 1.46s），因为多送 15 段约 +1.5k token。
+        #   ⚠️ 上限仍应 ≤ top_k（当前 25 ≤ 25），否则窗口形同虚设。
+        "rerank_max_candidates": 25, # 送 LLM 重排的候选上限（应 ≤ top_k，否则上限形同虚设）；0 = 全部候选
         # ── P0 记忆召回（2026-09-29）───────────────────────────────────────────
         # 背景：累积层（agent_memory/project_memories）早就建好，但检索侧零消费 ——
         #       knowledge_reflow.py 沉淀的结论从未被下次检索读回，闭环缺一半。
@@ -2087,6 +2209,11 @@ CONFIG_SCHEMA = {
         "top_k":                 {"type": "int",   "desc": "RRF 融合后保留的候选池（送 LLM 重排）"},
         "inject_k":              {"type": "int",   "desc": "最终注入 prompt 的片段条数"},
         "fallback_top_k":        {"type": "int",   "desc": "混合检索异常时 search_chunks 兜底条数"},
+        "dedupe_exact":          {"type": "bool",  "desc": "检索结果去重：正文逐字相同且 document_id 不同 ⇒ 判为重复副本丢弃（防同一份文件两份副本各占配额槽）"},
+        "dedupe_min_chars":      {"type": "int",   "desc": "去重最小正文长度，短于此不参与（避免误合并套话短片段）"},
+        "zero_hit_retry":        {"type": "bool",  "desc": "零召回关键词重试：命中为空时用实词关键词重查一次（bigram 降级态救长问句）"},
+        "drop_metadata_blocks":  {"type": "bool",  "desc": "元数据块（封面/版权页/签批表/目录）不参与排序（防其靠文档标题关键词空降前 5 白占注入槽）"},
+        "metadata_min_keep":     {"type": "int",   "desc": "元数据过滤后的最少保留条数，不足则放弃过滤（绝不清空结果）"},
         "rrf_k":                 {"type": "int",   "desc": "RRF 融合常数（Σ1/(k+rank)，越大排名差异越平缓；行业常用 60）"},
         "hyde_enabled":          {"type": "bool",  "desc": "Reverse HyDE 兜底开关（chunk 假设问题匹配补召回）"},
         "hyde_weight":           {"type": "float", "desc": "HyDE 补充分权重（叠加进融合分，0=等效关闭）"},
@@ -2094,10 +2221,15 @@ CONFIG_SCHEMA = {
         "w_relations":           {"type": "float", "desc": "图谱置信权重：关系连接性因子"},
         "w_typing":              {"type": "float", "desc": "图谱置信权重：类型标注完整度因子"},
         "relation_relevance_gate": {"type": "bool", "desc": "图谱置信度关系因子只计入与 query 相关的关系（两端实体名均在 query 中）；False=旧行为全量计数"},
-        "suppress_low_confidence": {"type": "bool", "desc": "低置信检索抑制：向量兜底注入宽度内全为「低」置信时不返回任何向量内容（neg 域收敛）；False=旧行为"},
+        "suppress_low_confidence": {"type": "bool", "desc": "低置信检索抑制：全批「低」置信时不返回任何向量内容（neg 域收敛）；False=旧行为"},
+        "low_conf_floor": {"type": "float", "desc": "低置信过滤分数门槛（0~1）：全批低置信时只保留 relevance ≥ 该值的条目；relevance=max(vec,bm25/50)。0=不过滤（等价旧的一刀切保留）"},
+        "reject_max_score": {"type": "float", "desc": "域外拒答门槛（最高分）：向量路由且图谱无命中时，若 top1 relevance 与均值都低于本档则整体拒答"},
+        "reject_avg_score": {"type": "float", "desc": "域外拒答门槛（均分）：与 reject_max_score **同时**低于才拒答（任一超标即放行，宁少拒不误杀）"},
+        "chunk_content_chars": {"type": "int", "desc": "检索命中内容的返回长度上限（字符）：0=不截断；默认 1200。仅影响注入/工具返回，不影响前端 citations（另有 800 上限）"},
         "confidence_high":       {"type": "float", "desc": "命中置信等级「高」分界（真向量相似度口径）"},
         "confidence_mid":        {"type": "float", "desc": "命中置信等级「中」分界"},
-        "rerank_enabled":        {"type": "bool",  "desc": "LLM Rerank 重排开关（失败静默回退原排序）"},
+        "rerank_enabled":        {"type": "bool",  "desc": "LLM Rerank 重排开关（失败静默回退原排序）。★ 已被 rerank_mode 取代，仅在未设置 rerank_mode 时生效"},
+        "rerank_mode":           {"type": "str",   "desc": "★ 重排三态：off=永不 / on=总是（每条 +1.46s）/ auto=条件重排（仅当检测到「单文档垄断」或「头部文档漂移」时才调 LLM，实测触发率 41%、召回 3/3、平均代价约 0.60s）。留空则回落到 rerank_enabled"},
         "rerank_provider_id":   {"type": "int",   "desc": "★ 重排专用 LLM provider_id（0=用默认）。实测默认 provider 可能整体不可用（所有 intent 一律 31.7s 超时、ct=0）⇒ 重排 100% 静默降级、表现为「开关开了但排序未变」。重排每次查询都跑、对延迟敏感，应独立指定更稳的 provider"},
         "rerank_max_candidates": {"type": "int",   "desc": "送 LLM 重排的候选上限（应 ≤ top_k，0=全部候选）"},
         "memory_enabled":        {"type": "bool",  "desc": "P0 记忆召回开关：把已沉淀的 agent_memory/project_memories 作为一路召回源"},

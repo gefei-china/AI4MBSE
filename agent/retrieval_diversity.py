@@ -189,6 +189,43 @@ def select_diverse(hits, inject_k: int = 3, per_doc_max: int = 2,
     return selected, stats
 
 
+def select_for_injection(hits, inject_k=None, per_doc_max=None, merge_neighbor=None):
+    """**注入侧与引用侧共用的唯一选择器**（2026-11-01，修既有编号错位）。
+
+    ## 修的是什么（实测，非推测）
+    `_citations_payload`（界面引用数据）一直直接用**原始** `chunk_hits[:inject_k]`，
+    而 prompt 里的【来源n】用的是**本模块 `select_diverse` 之后**的结果 ——
+    两者在多重约束下会选出不同条目，于是**同一编号指向不同来源**：
+
+        实测 query「自主可控在部署和数据存储方面有什么要求」
+          【来源3】= 广汽方法论 §1.2.1.2.3 (chunk 12)
+          citations[3] = 技术要求书 §5.3.1 (chunk 26)   ← 位次 3/4/5 全错位
+        后果：模型写 [3] 指的是广汽方法论，用户点第 3 条看到的是技术要求书，
+              **引用指向错误的证据**（比"少引几条"严重得多）。
+
+    ## 为什么必须抽成共用函数
+    只在两边各写一份相同的调用，早晚会因为某一边改参数而再次错位
+    （这正是 B5-10「四处各写一份数字」同族问题的翻版）。
+    共用同一个函数 + 读同一份配置 ⇒ 结构上不可能错位。
+
+    ## 参数
+    `inject_k` / `per_doc_max` / `merge_neighbor` 传 None 表示读配置；
+    显式传入时以传入值为准（供已有配置的调用方保持行为不变）。
+    """
+    try:
+        from core import config as _cfg
+        _k = inject_k if inject_k is not None else int(_cfg.get("rag", "inject_k", 5) or 5)
+        _pd = per_doc_max if per_doc_max is not None else int(
+            _cfg.get("context_audit", "retrieval_per_doc_max", 2) or 0)
+        _mg = merge_neighbor if merge_neighbor is not None else bool(
+            _cfg.get("context_audit", "retrieval_merge_neighbor", True))
+    except Exception:
+        _k = inject_k if inject_k is not None else 5
+        _pd = per_doc_max if per_doc_max is not None else 2
+        _mg = merge_neighbor if merge_neighbor is not None else True
+    return select_diverse(hits, inject_k=_k, per_doc_max=_pd, merge_neighbor=_mg)
+
+
 def _jaccard(a: str, b: str) -> float:
     """字符集 Jaccard（与调研口径一致：相邻 chunk 实测中位数 0.659、p90 0.816）。"""
     sa, sb = set(a or ""), set(b or "")

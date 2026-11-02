@@ -812,6 +812,11 @@ async function selectConv(id) {
   }
   currentConvId = id;
   _isDraft = false;   // 2026-09-04 v3：选中真实会话，退出草稿态
+  // ★ 2026-10-31：切到某会话时**加载它的模型参数设置**（会话维度）。
+  //   为什么必须在这里：会话设置存服务端（conversations.llm_overrides），
+  //   不在这里拉就只会显示上一个会话的参数 —— 那会让用户误以为"设置丢了/串了"。
+  //   函数内部有「同一会话不重复拉」的判断，切换开销只是一次轻量 GET。
+  try{ if(typeof loadConvLLMSettings === 'function') loadConvLLMSettings(id); }catch(e){}
   _renderToken++;                       // 作废进行中的分片渲染
   svmVmStorePrune();                    // 清理旧会话缩略图视图数据缓存
   // 2026-09-04 v5：选中会话进入聊天态 → 先把居中的输入区归位到底部，避免被下方 area.innerHTML 覆盖丢失

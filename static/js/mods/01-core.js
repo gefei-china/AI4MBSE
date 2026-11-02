@@ -426,7 +426,6 @@ const MODAL_FORMS = {
       <input type="hidden" id="f-ptype" value="openai">
       <input type="hidden" id="f-priority" value="0">
       <input type="hidden" id="f-budget" value="0">
-      <input type="hidden" id="f-tags" value="">
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🤖</span><span class="fs-title">基础信息</span></div>
         <div class="form-row"><label>模型类型 <span class="info-tip" title="对话模型=LLM（生成文本）；向量模型=Embedding（生成向量用于 RAG/检索）；多模态=既能对话又能理解图像（如 qwen-vl-max、gpt-4o、qwen3.8-omni），会话选择器与对话默认模型都会收录它；纯对话模型如需传图，改用「支持图片理解」标签。">ⓘ</span></label><select id="f-model-type" onchange="onLLMTypeChange()">
@@ -439,20 +438,59 @@ const MODAL_FORMS = {
         <div class="form-row"><label>Base URL <b class="req">*</b> <span class="info-tip" title="OpenAI 兼容接口地址（结尾 /v1），如 https://api.deepseek.com/v1">ⓘ</span></label><input id="f-url" placeholder="https://api.deepseek.com/v1"></div>
         <div class="form-row"><label>API Key <b class="req">*</b> <span class="info-tip" title="服务端 API Key；保存后只显示脱敏（••••），不可再次查看明文">ⓘ</span></label><input id="f-key" type="password" placeholder="sk-..." autocomplete="off"> <span id="f-key-hint" style="display:none;font-size:12.5px;color:var(--mut);">已配置（••••），保存后不可修改</span></div>
         <div class="form-row"><label>模型名 <b class="req">*</b> <span class="info-tip" title="服务端真实模型标识，如 deepseek-chat / gpt-4o / text-embedding-v3">ⓘ</span></label><input id="f-model" placeholder="deepseek-chat / text-embedding-v3"></div>
+        <!-- 2026-10-31 模型档案：描述与标签都是**每个模型单独设置**，并会展示在会话入口的模型切换列表里。
+             描述只给人看（帮助选模型）；标签是**机器判据**（vision 决定能否发图、路由按标签选模型），
+             两者刻意分列，避免人工说明被当成路由标签。 -->
+        <div class="form-row"><label>模型描述 <span class="info-tip" title="面向使用者的能力说明，会显示在会话入口的模型切换列表中，帮助判断该选哪个模型。例如：通用对话，响应快、成本低；适合日常问答与轻量分析。">ⓘ</span></label><textarea id="f-desc" rows="2" placeholder="例：通用对话模型，响应快、成本低，适合日常问答与轻量分析" style="min-height:46px;resize:vertical;"></textarea></div>
+        <div class="form-row"><label>能力标签 <span class="info-tip" title="逗号分隔。用于展示与智能路由：vision=支持图片理解（勾选下方「图片理解」会自动写入）、code=擅长代码、long-ctx=长上下文、fast=低延迟。与上面的复选框联动，不会互相覆盖。">ⓘ</span></label><input id="f-tags" placeholder="code, long-ctx, fast（逗号分隔，可空）"></div>
         <div class="form-row"><label>图片理解 <span class="info-tip" title="勾选后，该模型可在「AI 建模」会话里接收上传的图片（架构图/连线图/截图），图片会作为多模态内容随消息一起送给模型。⚠️ 仅当模型确实支持图像输入时才勾选：勾错会把图片发给纯文本模型，上游直接报错。勾选写入能力标签 tags=vision（与工程 2026-09-04 起的前端能力判据同源）。">ⓘ</span></label><label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="f-vision" style="width:auto;"> 支持图片理解（多模态 / VL），如 qwen-vl-max、gpt-4o</label></div>
         <div class="form-row"><label>设为默认 <span class="info-tip" title="该类型的默认模型（对话/向量各自独立一个默认）">ⓘ</span></label><label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="f-is-default" style="width:auto;"> 该类型的默认模型（对话/向量各自独立一个默认）</label></div>
       </div>
       <div class="adv-box collapsed" id="f-adv">
-        <div class="adv-head" onclick="document.getElementById('f-adv').classList.toggle('collapsed')"><span class="chev">▾</span>高级设置<span style="font-weight:400;color:var(--mut);font-size:12.5px;">上下文窗口 · 温度 · TopP · TopK · 思考模式</span></div>
+        <div class="adv-head" onclick="document.getElementById('f-adv').classList.toggle('collapsed')"><span class="chev">▾</span>高级设置<span style="font-weight:400;color:var(--mut);font-size:12.5px;">上下文档位 · 思考强度 · 温度 · TopP · TopK</span></div>
         <div class="adv-body">
-          <div class="form-row"><label>上下文窗口（输入）</label><input id="f-ctx" type="number" min="512" step="512" style="width:150px;" value="8192"> <span style="font-size:12.5px;color:var(--mut);">tokens</span></div>
+          <!-- 上下文档位：2026-10-31 改为「档位下拉 + 自定义输入」。
+               为什么不能只留一个数字框：1,048,576 / 614,400 这类数字在界面上无法一眼判断大小，
+               而档位名（1M / 600K / 300K）是使用者真正的心智单位。
+               真值仍写在 #f-ctx（隐藏不了，saveLLM 直接读它），档位只是快捷赋值 +
+               反向回显（打开编辑时按现有 context_window 自动匹配档位）。 -->
+          <div class="form-row"><label>上下文档位 <span class="info-tip" title="快捷档位，选择后会写入下方「上下文窗口（输入）」；模型真实上限以官方文档为准，填大了上游会报 400。">ⓘ</span></label>
+            <select id="f-ctx-tier" onchange="onCtxTierChange()" style="width:150px;">
+              <option value="1048576">1M（1,048,576）</option>
+              <option value="614400">600K（614,400）</option>
+              <option value="307200">300K（307,200）</option>
+              <option value="262144">256K（262,144）</option>
+              <option value="131072">128K（131,072）</option>
+              <option value="65536">64K（65,536）</option>
+              <option value="32768">32K（32,768）</option>
+              <option value="16384">16K（16,384）</option>
+              <option value="8192">8K（8,192）</option>
+              <option value="custom">自定义…</option>
+            </select>
+            <span style="font-size:12.5px;color:var(--mut);margin-left:6px;">选档位即自动填入下方输入框</span>
+          </div>
+          <div class="form-row"><label>上下文窗口（输入） <span class="info-tip" title="该模型单次请求可容纳的总 tokens（输入+输出）。上限 2,000,000。">ⓘ</span></label><input id="f-ctx" type="number" min="512" max="2000000" step="512" style="width:150px;" value="8192"> <span style="font-size:12.5px;color:var(--mut);">tokens</span></div>
           <div class="form-row"><label>上下文窗口（输出）</label><input id="f-maxt" type="number" min="1" step="128" style="width:150px;" value="8192"> <span style="font-size:12.5px;color:var(--mut);">tokens（≤ 输入）</span></div>
+          <!-- 思考强度：2026-11-01 增加「控制方式」。
+               为什么需要它：不同厂商/团队对"思考"的心智不同 ——
+                 有的只想要「开/关」两态（简单、和厂商控制台一致）；
+                 有的要「低/中/高」细粒度（能控成本与耗时）。
+               把"控制粒度"做成**模型级配置**，会话里就按该模型的粒度展示，
+               避免出现"在会话里看到 5 档、但底层只认开/关"的错位。
+               存储：model_params.thinking_control = "tier"(挡位) | "toggle"(开关) -->
+          <div class="form-row"><label>思考控制方式 <span class="info-tip" title="按挡位=可用 关闭/低/中/高（细粒度，能控思考预算）；按开关=只有 开启/关闭（与多数厂商控制台一致，不涉及预算）。会话入口会按这里选的粒度显示。">ⓘ</span></label>
+            <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+              <label style="display:flex;align-items:center;gap:4px;font-size:13.5px;font-weight:400;margin:0;cursor:pointer;"><input type="radio" name="f-thinking-control" value="tier" checked onchange="onThinkControlChange()" style="width:auto;"> 按挡位（关闭/低/中/高）</label>
+              <label style="display:flex;align-items:center;gap:4px;font-size:13.5px;font-weight:400;margin:0;cursor:pointer;"><input type="radio" name="f-thinking-control" value="toggle" onchange="onThinkControlChange()" style="width:auto;"> 按开关（仅开启/关闭）</label>
+            </div>
+          </div>
+          <div class="form-row"><label>默认思考强度 <span class="info-tip" title="该模型的**系统默认**（所有会话共用）。在会话入口可单独覆盖，不会写回这里。模型默认=不发任何思考字段（沿用上游默认，兼容旧行为）。">ⓘ</span></label>
+            <div id="f-think-levels" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;"></div>
+          </div>
+          <div id="f-think-hint" style="font-size:12px;color:var(--mut);margin:-2px 0 10px 0;line-height:1.7;"></div>
           <div class="form-row"><label>温度</label><input id="f-temp" type="number" min="0" max="2" step="0.1" style="width:150px;" value="0.3"> <span style="font-size:12.5px;color:var(--mut);">0~2，越小越确定</span></div>
           <div class="form-row"><label>TopP</label><input id="f-top-p" type="number" min="0" max="1" step="0.01" style="width:150px;" placeholder="留空不设置"> <span style="font-size:12.5px;color:var(--mut);">0~1 核采样</span></div>
           <div class="form-row"><label>TopK</label><input id="f-top-k" type="number" min="1" max="100" step="1" style="width:150px;" placeholder="1~100 整数"> <span style="font-size:12.5px;color:var(--mut);">整数 1~100</span></div>
-          <div class="form-row"><label>思考模式</label><div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
-            ${['模型默认','开启','关闭'].map(v=>`<label style="display:flex;align-items:center;gap:4px;font-size:13.5px;font-weight:400;margin:0;cursor:pointer;"><input type="radio" name="f-thinking" value="${v}" ${v==='模型默认'?'checked':''} style="width:auto;"> ${v}</label>`).join('')}
-          </div></div>
         </div>
       </div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn ghost" onclick="testLLMFromForm()" title="用当前表单配置发起连通性测试（未保存也可测）">🔌 测试</button><button class="btn" onclick="saveLLM()">保存</button></div>`,

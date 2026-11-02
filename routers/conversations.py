@@ -2,6 +2,7 @@
 import os
 import time
 import uuid
+import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query
@@ -165,6 +166,167 @@ def rename_conversation(conv_id: int, body: dict = None, conn=Depends(db_session
     return out
 
 
+@router.get("/api/conversations/{conv_id}/llm-settings")
+def get_conv_llm_settings(conv_id: int, provider_id: Optional[int] = Query(None),
+                          conn=Depends(db_session), user=Depends(current_user)):
+    """读「本会话 × 该模型」的 LLM 参数设置。
+
+    ★ 2026-11-01 语义修正（米爸）：
+      「会话中的设置是按照（会话+模型）维度来设置的，
+        不是一个会话中所有模型按照同一套设置控制」
+      ⇒ 本接口必须知道**哪个模型**：`?provider_id=71`。
+        不传时按会话绑定/默认模型兜底，并在响应里回传 `provider_id` 让前端确认。
+
+    响应同时返回：
+      · `overrides`        该模型的会话级覆盖
+      · `all_overrides`    全部模型各自的覆盖（前端切换模型时不必再请求一次）
+      · `system_default`   **该模型**的系统默认（供界面显示"跟随默认=多少"）
+
+    ⚠️ 只读 `conversations.llm_overrides`，**不碰 llm_providers**。
+    """
+    _own_conv(conn, conv_id, user)
+    repo = ConversationRepo(conn)
+    conv = repo.get_conversation(conv_id)
+    if not conv:
+        return JSONResponse({"error": "Conversation not found"}, 404)
+
+    # 解析"这次问的是哪个模型"：显式 provider_id > 会话绑定 > 默认 chat 模型
+    eff_pid = None
+    row = None
+    try:
+        if provider_id:
+            row = conn.execute("SELECT * FROM llm_providers WHERE id=?", (int(provider_id),)).fetchone()
+            eff_pid = int(provider_id)
+        if not row and conv.get("provider_id"):
+            row = conn.execute("SELECT * FROM llm_providers WHERE id=?",
+                               (int(conv["provider_id"]),)).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT * FROM llm_providers WHERE status='active' AND model_type<>'embedding' "
+                "AND is_default=1 ORDER BY priority DESC, id ASC LIMIT 1").fetchone()
+        if row:
+            eff_pid = row["id"]
+    except Exception:
+        pass
+
+    ov = repo.get_llm_overrides(conv_id, eff_pid)
+    all_ov = repo.get_llm_overrides_all(conv_id)
+    sys_default = {}
+    if row:
+        try:
+            mp = json.loads((row["model_params"] or "{}")) if row["model_params"] else {}
+            sys_default = {
+                "provider_id": row["id"], "provider_name": row["name"],
+                "thinking_level": mp.get("thinking_level") or mp.get("thinking_mode") or "模型默认",
+                "thinking_control": mp.get("thinking_control") or "tier",
+                "context_window": row["context_window"], "max_tokens": row["max_tokens"],
+                "temperature": row["temperature"],
+            }
+        except Exception:
+            pass
+    return {"conv_id": conv_id, "provider_id": eff_pid, "overrides": ov,
+            "all_overrides": all_ov, "system_default": sys_default}
+
+
+@router.put("/api/conversations/{conv_id}/llm-settings")
+def set_conv_llm_settings(conv_id: int, body: dict = None, conn=Depends(db_session),
+                          user=Depends(current_user)):
+    """写「本会话 × 该模型」的 LLM 参数（只写 conversations，**不回写模型配置**）。
+
+    body：
+      · {"provider_id": 71, "thinking_level": "高"|"中"|"低"|"关闭"|""}
+      · {"provider_id": 71, "context_window": 1048576|0}  0 = 跟随系统默认
+      · {"provider_id": 71, "max_tokens": 8192|0}
+      · {"provider_id": 71, "temperature": 0.1|null}
+      · {"provider_id": 71, "clear": true}   只清**该模型**的覆盖
+      · {"clear_all": true}                  清空本会话**所有模型**的覆盖
+
+    ★ 2026-11-01：`provider_id` 必填（`clear_all` 除外）。
+      语义是（会话+模型）维度 —— 不传 provider_id 就退化成"整个会话一套"，那是要修正的旧语义，
+      所以**宁可报 400 也不静默按会话维度写**（静默写错比报错难查得多）。
+
+    为什么"逐键恢复"而不是整体覆盖：
+      用户可能只想把思考强度改回默认、上下文仍保持自定义。
+      整体覆盖会把他没提的键一起抹掉（"我就想复位一个，结果全丢了"）。
+    """
+    _own_conv(conn, conv_id, user)
+    repo = ConversationRepo(conn)
+    if not repo.get_conversation(conv_id):
+        return JSONResponse({"error": "Conversation not found"}, 404)
+    body = body or {}
+
+    if body.get("clear_all"):
+        repo.set_llm_overrides_all(conv_id, {})
+        audit(audit_user(user), "conversation_llm_settings_clear",
+              f"会话#{conv_id} 清除全部模型的会话参数", conn=conn)
+        return {"ok": True, "conv_id": conv_id, "overrides": {}, "all_overrides": {}}
+
+    pid = body.get("provider_id")
+    try:
+        pid = int(pid) if pid is not None else None
+    except (TypeError, ValueError):
+        pid = None
+    if not pid:
+        return JSONResponse(
+            {"error": "provider_id 必填（会话参数是「会话 + 模型」维度，不能只按会话设置）"}, 400)
+
+    if body.get("clear"):
+        repo.set_llm_overrides(conv_id, pid, {})
+        # set_llm_overrides 传空 dict 时会把桶里所有键删掉 ⇒ 需要显式清空该桶
+        repo.clear_llm_overrides_for(conv_id, pid)
+        audit(audit_user(user), "conversation_llm_settings_clear",
+              f"会话#{conv_id} 模型#{pid} 清除会话参数", conn=conn)
+        return {"ok": True, "conv_id": conv_id, "provider_id": pid, "overrides": {}}
+
+    cur = repo.get_llm_overrides(conv_id, pid)
+    # 只接受白名单键，防止前端塞任意字段进这个 JSON
+    _K = ("thinking_level", "context_window", "max_tokens", "temperature")
+    for k in _K:
+        if k not in body:
+            continue
+        v = body.get(k)
+        if v is None or v == "" or v == 0:
+            cur.pop(k, None)            # 传空/0 ⇒ 该键恢复系统默认
+        else:
+            if k == "thinking_level":
+                # 2026-11-01 增「开启」：toggle（按开关）模式下的有效值
+                if v not in ("关闭", "开启", "低", "中", "高", "模型默认"):
+                    return JSONResponse({"error": "thinking_level 取值非法"}, 400)
+                if v == "模型默认":
+                    cur.pop(k, None)
+                else:
+                    cur[k] = v
+            elif k == "context_window":
+                try:
+                    iv = int(v)
+                except (TypeError, ValueError):
+                    return JSONResponse({"error": "context_window 必须是整数"}, 400)
+                if not (512 <= iv <= 2000000):
+                    return JSONResponse({"error": "context_window 需在 512 ~ 2000000 之间"}, 400)
+                cur[k] = iv
+            elif k == "max_tokens":
+                try:
+                    iv = int(v)
+                except (TypeError, ValueError):
+                    return JSONResponse({"error": "max_tokens 必须是整数"}, 400)
+                if iv <= 0:
+                    cur.pop(k, None)
+                else:
+                    cur[k] = iv
+            elif k == "temperature":
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    return JSONResponse({"error": "temperature 必须是数字"}, 400)
+                if not (0 <= fv <= 2):
+                    return JSONResponse({"error": "temperature 需在 0 ~ 2 之间"}, 400)
+                cur[k] = fv
+    repo.set_llm_overrides(conv_id, pid, cur)
+    audit(audit_user(user), "conversation_llm_settings",
+          f"会话#{conv_id} 模型#{pid} 设置参数: {json.dumps(cur, ensure_ascii=False)}", conn=conn)
+    return {"ok": True, "conv_id": conv_id, "provider_id": pid, "overrides": cur}
+
+
 @router.delete("/api/conversations/{conv_id}")
 def delete_conversation(conv_id: int, conn=Depends(db_session),
                         user=Depends(current_user)):
@@ -281,6 +443,40 @@ def get_messages(conv_id: int, limit: int | None = None, before_id: int | None =
             "main_agent": main_agent}
 
 
+def _turn_overrides(body) -> dict:
+    """**仅单轮临时**的覆盖（`ChatIn.o_*`，程序调用才用，界面已不用）。
+
+    ★ 2026-11-01 语义再修正（米爸）：会话设置是「**会话 + 模型**」维度，
+      必须在**确定了实际用哪个 provider 之后**才读得到正确的桶。
+      而路由层此刻还不知道（`provider_id` 可能为空，真实值要等意图识别后的
+      `registry.get_provider_id(intent)`）⇒ 会话设置的读取**下沉到 execute/stream**。
+      本函数只负责单轮临时值，避免在路由层读错模型。
+    """
+    ov = {}
+    try:
+        if (body.o_think or "").strip():
+            ov["thinking_level"] = body.o_think.strip()
+        if body.o_context and int(body.o_context) > 0:
+            ov["context_window"] = int(body.o_context)
+        if body.o_max_tokens and int(body.o_max_tokens) > 0:
+            ov["max_tokens"] = int(body.o_max_tokens)
+        if body.o_temperature is not None:
+            ov["temperature"] = float(body.o_temperature)
+    except Exception:
+        return {}
+    return ov
+
+
+def _session_overrides(conn, conv_id: int, provider_id) -> dict:
+    """读该**会话 × 该模型**的持久设置（`{}` = 全部沿用系统默认）。"""
+    if not conv_id:
+        return {}
+    try:
+        return ConversationRepo(conn).get_llm_overrides(int(conv_id), provider_id) or {}
+    except Exception:
+        return {}
+
+
 @router.post("/api/conversations/{conv_id}/chat")
 def chat(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depends(current_user)):
     _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
@@ -299,6 +495,9 @@ def chat(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depends(curr
                            forced_intent=body.intent_override or None, skill_name=body.skill_name or None,
                            team=body.team or None,
                            scope_id=body.scope_id, scope_ids=body.scope_ids, scope=body.scope,
+                           # 2026-11-01：只传**单轮临时**；会话设置（会话×模型维度）
+                           # 由 execute 在确定 effective_provider 之后自己读，否则会读错模型桶
+                           overrides=_turn_overrides(body),
                            user=user)
     return result
 
@@ -535,6 +734,8 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                                      # 2026-10-30：整轮墙钟 deadline（到点收尾、保留已产出）
                                      deadline_ts=deadline_ts,
                                      _tracer=_tracer,
+                                     # 2026-11-01：只传单轮临时（会话设置由 execute 按 effective_provider 读）
+                                     overrides=_turn_overrides(body),
                                      user=user),
                 # P1-2：15 s —— 链路上最小 idle timeout 通常是 nginx 默认 60 s，取 1/4 留余量
                 interval_s=15.0,

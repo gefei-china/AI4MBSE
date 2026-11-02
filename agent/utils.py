@@ -37,8 +37,23 @@ def _citations_payload(hits) -> list:
         _k = int(_cfg.get("rag", "inject_k", 3)) or 3
     except Exception:
         _k = 8
+    # ★ 2026-11-01：与 prompt 注入**同源**——都走 `select_for_injection`。
+    #   修的是既有编号错位（实测位次 3/4/5 全错）：
+    #     prompt 注入的是 `select_diverse` 之后的结果（受 per_doc_max 配额、
+    #     近邻合并影响），而这里一直用**原始** `chunk_hits[:k]` ⇒ 同一编号
+    #     指向两个不同来源 ⇒ 模型写 `[3]` 指的是 A 文档，用户点第 3 条看到的
+    #     是 B 文档（引用指向错误证据，比"少引几条"严重）。
+    #   抽成共用函数而不是两边各抄一份：抄两份早晚会因单边改参数再次错位
+    #   （B5-10「四处各写一份数字」同族）。
+    items = (hits or [])[:_k]
+    try:
+        from agent.retrieval_diversity import select_for_injection
+        _sel, _ = select_for_injection(hits)
+        items = _sel[:_k]
+    except Exception:
+        pass    # 选择器异常 ⇒ 退回原始截断（宁可不合并，也不能让引用区清空）
     out = []
-    for h in (hits or [])[:_k]:
+    for h in items:
         out.append({
             "document_id": h.get("document_id"),
             "source_doc": h.get("source_doc", ""),

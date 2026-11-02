@@ -3,6 +3,7 @@
 对应 routers/conversations.py 的全部数据访问。
 """
 from datetime import datetime
+import json
 
 from repositories.base import BaseRepo
 
@@ -175,6 +176,128 @@ class ConversationRepo(BaseRepo):
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if pinned else None
         self.execute("UPDATE conversations SET pinned_at=? WHERE id=?", (ts, conv_id))
         return True
+
+    # ── 会话维度 LLM 参数（2026-10-31）────────────────────────────────────
+    # 与「模型维度 = 系统默认」严格分开：这里**只动 conversations**，
+    # **绝不写 llm_providers**。米爸的原话：「基于会话进行设置时，只会对当前会话有影响，
+    # 不会反向影响 LLM 维度的配置」。所以两个写入口在代码层就得是两条独立的 SQL，
+    # 不能共用一个"保存参数"函数（共用就迟早有人把会话设置写进 provider）。
+    # ── 会话 × 模型 维度的 LLM 参数（2026-11-01 修正）─────────────────────
+    # ★ 米爸澄清：「会话中的设置是按照（会话+模型）维度来设置的，
+    #   不是一个会话中所有模型按照同一套设置控制」。
+    #   ⇒ 存储必须按 provider 分桶，否则"在 A 会话给 deepseek 设了关闭，
+    #     切到 qwen 还是关闭" —— 那是会话维度，不是（会话×模型）维度。
+    #
+    # 结构（`by_model` 包一层是为了将来加 schema 版本不破坏解析）：
+    #   {"by_model": {"71": {"thinking_level": "关闭"}, "104": {"thinking_level": "高"}}}
+    #
+    # ⚠️ 兼容老数据（2026-10-31 那版是**扁平** {"thinking_level": "高"}，不分模型）：
+    #   读到扁平结构时按 legacy 处理 —— 视为"该会话所有模型共用"，
+    #   但**只在读取时兼容，写入一律升级为 by_model**。存量实测 0 行，仍保留兼容
+    #   以防生产库有数据（清空等于丢用户已做出的设置）。
+    _LEGACY_KEYS = ("thinking_level", "context_window", "max_tokens", "temperature")
+
+    @classmethod
+    def _normalize_overrides(cls, raw: dict) -> tuple:
+        """把存储结构归一化为 `(by_model_dict, is_legacy)`。"""
+        if not isinstance(raw, dict) or not raw:
+            return {}, False
+        bm = raw.get("by_model")
+        if isinstance(bm, dict):
+            return {str(k): (v if isinstance(v, dict) else {}) for k, v in bm.items()}, False
+        # 扁平（老格式）：键是参数名而非 provider id
+        if any(k in cls._LEGACY_KEYS for k in raw.keys()):
+            return {"__legacy__": dict(raw)}, True
+        # 其它：当作已经是 {provider_id: {...}} 的裸映射（防御性兼容）
+        numeric = {str(k): v for k, v in raw.items() if str(k).isdigit() and isinstance(v, dict)}
+        if numeric:
+            return numeric, False
+        return {}, False
+
+    def get_llm_overrides(self, conv_id: int, provider_id=None) -> dict:
+        """读**该会话 × 该模型**的参数覆盖（`{}` = 全部沿用系统默认）。
+
+        provider_id 为空时返回 `{}`（无法确定模型就无法确定该用哪套设置）——
+        这比"回退到某套默认值"安全：回退会让用户看到不属于该模型的值。
+        """
+        row = self.one("SELECT llm_overrides FROM conversations WHERE id=?", (conv_id,))
+        if not row:
+            return {}
+        try:
+            raw = json.loads((row.get("llm_overrides") or "{}"))
+        except Exception:
+            return {}
+        by_model, is_legacy = self._normalize_overrides(raw)
+        if is_legacy:
+            # 老数据：不分模型，对任何 provider 都生效（保持升级前行为）
+            return dict(by_model.get("__legacy__") or {})
+        if provider_id is None:
+            return {}
+        return dict(by_model.get(str(provider_id)) or {})
+
+    def get_llm_overrides_all(self, conv_id: int) -> dict:
+        """读该会话**全部模型**的覆盖（供接口一次性返回，前端切模型不用再请求）。"""
+        row = self.one("SELECT llm_overrides FROM conversations WHERE id=?", (conv_id,))
+        if not row:
+            return {}
+        try:
+            raw = json.loads((row.get("llm_overrides") or "{}"))
+        except Exception:
+            return {}
+        by_model, is_legacy = self._normalize_overrides(raw)
+        if is_legacy:
+            return {"__legacy__": dict(by_model.get("__legacy__") or {})}
+        return by_model
+
+    def set_llm_overrides(self, conv_id: int, provider_id, overrides: dict) -> None:
+        """写**该会话 × 该模型**的参数（只动 conversations，**绝不写 llm_providers**）。
+
+        ⚠️ 必须带 provider_id：不带就退化成"会话维度"，那是这次要修正的语义。
+        不动 `updated_at`：改会话参数不算"会话有新内容"，
+        否则用户只是看一眼设置，会话就会被顶到列表最前面。
+        """
+        if provider_id is None:
+            raise ValueError("set_llm_overrides 需要 provider_id（会话×模型维度）")
+        cur = self.get_llm_overrides_all(conv_id)
+        # 老数据（__legacy__）在首次写入时按"迁移到当前模型"处理：
+        #   用户既然在给某个模型调参，就把他之前那套值带到这个模型上，
+        #   避免"改一个模型，之前的设置凭空消失"。
+        legacy = cur.pop("__legacy__", None)
+        bucket = dict(cur.get(str(provider_id)) or {})
+        if legacy:
+            merged = dict(legacy)
+            merged.update(bucket)
+            bucket = merged
+        bucket.update(overrides or {})
+        # 空值语义：值为 None/""/0 的键视为"恢复系统默认"⇒ 从桶里删掉
+        for k in list(bucket.keys()):
+            v = bucket[k]
+            if v is None or v == "" or v == 0:
+                bucket.pop(k, None)
+        if bucket:
+            cur[str(provider_id)] = bucket
+        else:
+            cur.pop(str(provider_id), None)
+        payload = json.dumps({"by_model": cur}, ensure_ascii=False)
+        self.execute("UPDATE conversations SET llm_overrides=? WHERE id=?", (payload, conv_id))
+
+    def clear_llm_overrides_for(self, conv_id: int, provider_id) -> None:
+        """只清**该模型**的会话参数（其它模型保持不动）。
+
+        为什么不用 set_llm_overrides(conv_id, pid, {}) 代替：
+          那个方法在 bucket 变空时会弹掉该键 —— 结果是对的，但它同时会把
+          legacy 数据"迁移"到本模型再删，语义绕。这里写成显式删除，意图更清楚。
+        """
+        cur = self.get_llm_overrides_all(conv_id)
+        cur.pop("__legacy__", None)
+        cur.pop(str(provider_id), None)
+        payload = json.dumps({"by_model": cur}, ensure_ascii=False)
+        self.execute("UPDATE conversations SET llm_overrides=? WHERE id=?", (payload, conv_id))
+
+    def set_llm_overrides_all(self, conv_id: int, by_model: dict) -> None:
+        """整体覆盖该会话的 by_model 映射（供 clear_all 使用）。"""
+        payload = json.dumps({"by_model": by_model or {}}, ensure_ascii=False)
+        self.execute("UPDATE conversations SET llm_overrides=? WHERE id=?", (payload, conv_id))
 
     def search_conversations(self, user=None, q: str = "", limit: int = 100) -> list:
         """内容检索（P1 列表搜索「标题+内容」）：标题/意图 LIKE 或消息正文 LIKE。

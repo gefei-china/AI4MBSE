@@ -19,6 +19,7 @@ class ProviderIn(BaseModel):
     tags: Optional[list] = []             # 能力标签，如 ["code","chinese","fast"]
     priority: Optional[int] = 0           # 路由优先级（越大越优先）
     budget_tokens: Optional[int] = 0      # Token 预算（0=不限）
+    description: Optional[str] = ""       # 模型描述（面向使用者，供会话入口模型切换列表展示）
 
 
 class ProviderKeyIn(BaseModel):

@@ -219,7 +219,20 @@
                     <select id="quick-team" onchange="renderChips()" title="选择主 Agent（执行主体）：每次会话都必须指定" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;color:var(--mut);max-width:180px;" data-page-node-id="mfe91BnXLMQjdEpuX2FQ9W"><option value="" disabled selected data-page-node-id="fHfWAQevh2wK9ikqq2TUdr">👑 加载中…</option></select>
                   </div>
                   <div class="tb-right" data-page-node-id="02FGR2NbOGDH45IYPAbFmm">
-                    <select id="llm-providers" title="对话模型" data-page-node-id="KhoScLf0ptcp5kcw1z0ugz"><option value="" data-page-node-id="rSu5DVIh6UJxCztAStpCml">默认模型</option></select>
+                    <!-- 2026-10-31 会话入口模型切换：原生 select 改为「按钮 + 卡片面板」。
+                         为什么保留隐藏的原生 select（#llm-providers）：
+                           10-chatinput.js / 12-chatsend.js / 13-reports.js 三处都靠
+                           `document.getElementById('llm-providers').value` 取当前模型，
+                           以及 loadChatProviders 往它里面灌 option。改结构会一次性断三条链路。
+                         ⇒ 面板只是**视图层**，真值仍写回隐藏 select（单一事实源）。 -->
+                    <span class="llm-pick-wrap" id="llm-pick-wrap">
+                      <button type="button" class="llm-pick-btn" id="llm-pick-btn" onclick="toggleLLMPicker(event)" title="切换对话模型｜可查看每个模型的描述、能力标签、上下文档位与思考强度，并逐个设置">
+                        <span class="llm-pick-label" id="llm-pick-label">默认模型</span>
+                        <span class="llm-pick-caret">▾</span>
+                      </button>
+                      <select id="llm-providers" title="对话模型" style="display:none;"><option value="">默认模型</option></select>
+                      <div class="llm-pick-panel" id="llm-pick-panel" style="display:none;"></div>
+                    </span>
                     <button class="tb-icon" id="mic-btn" title="语音输入" onclick="toggleVoice()" data-page-node-id="UbZ4acRYFhDSLqA190Avk9">🎤</button>
                     <button class="send-purple" id="send-btn" title="发送" onclick="sendChat()" data-page-node-id="90WuV9ZVVLsLnGwC9Ax0LA">➤</button>
                     <button class="send-purple" id="stop-btn" title="停止生成（保留已生成内容）" onclick="stopStream()" style="display:none;background:linear-gradient(135deg,#f05a5a,#d93636);box-shadow:0 2px 6px rgba(217,54,54,.3);" data-page-node-id="J4UfrV7t6IhaacLqv8vdFG">■</button>

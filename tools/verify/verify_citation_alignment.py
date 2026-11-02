@@ -67,27 +67,48 @@ utils_code = strip_py_comments(read("agent/utils.py"))
 chk("A1 _citations_payload 读 rag.inject_k 作为上限",
     '_k = int(_cfg.get("rag", "inject_k", 3)) or 3' in utils_code)
 chk("A2 切片上限用变量而非写死的 8",
-    "for h in (hits or [])[:_k]:" in utils_code
-    and "for h in (hits or [])[:8]:" not in utils_code)
+    ("(hits or [])[:_k]" in utils_code or "_sel[:_k]" in utils_code)
+    and "[:8]" not in utils_code)
 chk("A3 读配置失败有回落（异常态不清空引用区）",
     "_k = 8" in utils_code)
+# ★ 2026-11-01 新增：citations 必须走与 prompt 注入**同一个选择器**
+#   （只查"上限是变量"已经不够 —— 上限对、选出来的条目也可能不同）
+chk("A2b citations 走共用选择器 select_for_injection（与注入同源）",
+    "select_for_injection" in utils_code)
 
 # 行为断言：真实调函数（不碰真库，纯函数）
 from agent.utils import _citations_payload
 _hits = [{"document_id": i, "source_doc": "d%d" % i, "chunk_index": i, "section": "s",
           "score": 0.5, "confidence_level": "高", "content": "x"} for i in range(20)]
 _out = _citations_payload(_hits)
-chk("A4 行为·20 条命中 → 返回 3 条（= inject_k，改前恒 8）", len(_out) == 3,
-    "实得 %d" % len(_out))
+# 判据必须**从配置读**、不能硬编码具体条数：
+#   2026-11-01 把 inject_k 从 3 调到 5 时，这里硬编码 3 直接假红 ——
+#   "预期值写死在测试里"会让每次合理调参都触发误报，久了就没人看了。
+try:
+    from core import config as _cfg_k
+    _expect_k = int(_cfg_k.get("rag", "inject_k", 5)) or 5
+except Exception:
+    _expect_k = 5
+chk("A4 行为·20 条命中 → 返回 inject_k 条（与配置同源，不写死）",
+    len(_out) == _expect_k, "实得 %d，inject_k=%d" % (len(_out), _expect_k))
+
 chk("A5 行为·编号连续从 1 开始（前端 [n] 映射 cites[n-1]）",
     len(_out) > 0 and _out[0].get("document_id") == 0)
 chk("A6 行为·空命中不炸", _citations_payload([]) == [] and _citations_payload(None) == [])
 
 # ── 变异 M1：把上限写回 8 ──
-_m1 = utils_code.replace("for h in (hits or [])[:_k]:", "for h in (hits or [])[:8]:")
-M1 = ("for h in (hits or [])[:_k]:" in utils_code) and \
-     ("for h in (hits or [])[:_k]:" not in _m1)
+# 同时验证两件事：① 上限确实来自变量；② 去掉共用选择器会被 A2b 抓住。
+_m1 = utils_code.replace("[:8]", "[:8]")
+_m1_upper = utils_code.replace("items = _sel[:_k]", "items = _sel[:8]")
+M1 = (("[:8]" not in utils_code)
+      and (("_sel[:_k]" in utils_code) or ("(hits or [])[:_k]" in utils_code))
+      and ("items = _sel[:8]" in _m1_upper))
 chk("M1 变异（上限写回 8）被 A2 抓住", M1)
+
+# ── 变异 M1b：去掉共用选择器（退回原始截断）⇒ A2b 必须能抓住 ──
+_m1b = utils_code.replace("select_for_injection", "select_diverse_removed")
+chk("M1b 变异（移除共用选择器）被 A2b 抓住",
+    ("select_for_injection" in utils_code) and ("select_for_injection" not in _m1b))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -156,6 +177,55 @@ chk("D1 rag.inject_k == citations 条数", _inject_k == _n_cit,
     "inject_k=%d citations=%d" % (_inject_k, _n_cit))
 chk("D2 citations 不超过 8（不退回旧写死值）", _n_cit <= 8, "实得 %d" % _n_cit)
 
+# ── D3 ★ 逐位同源：citations[i] 必须就是 prompt 里【来源i+1】那一条 ──
+# 为什么单独守这条：D1 只保证"条数相等"，**条数相等但内容不同**照样是错的。
+# 实测既有缺陷（2026-11-01 发现）：注入侧走 select_diverse（受 per_doc 配额 +
+# 近邻合并影响），citations 侧走原始 chunk_hits[:k] ⇒ 位次 3/4/5 全部错位，
+# 模型写 [3] 指的是广汽方法论、用户点第 3 条看到的是技术要求书 §5.3.1。
+# ⚠️ 夹具必须是**混合文档**（同文档多 + 跨文档），否则 per_doc 配额不触发、
+#    "没有错位"是必然结果 —— 那是空转，不是通过（本项目踩过同类坑）。
+from agent.retrieval_diversity import select_for_injection   # noqa: E402
+_hits_mix = [
+    {"document_id": 847, "source_doc": "技术要求.pdf", "chunk_index": 51, "section": "11.1",
+     "score": 0.5, "confidence_level": "高", "content": "自主可控要求 " + "x" * 90},
+    {"document_id": 847, "source_doc": "技术要求.pdf", "chunk_index": 24, "section": "5.1",
+     "score": 0.5, "confidence_level": "高", "content": "系统架构要求 " + "y" * 90},
+    {"document_id": 847, "source_doc": "技术要求.pdf", "chunk_index": 26, "section": "5.3.1",
+     "score": 0.5, "confidence_level": "高", "content": "设计数据管理 " + "z" * 90},
+    {"document_id": 2, "source_doc": "广汽方法论.docx", "chunk_index": 12, "section": "1.2.1.2.3",
+     "score": 0.5, "confidence_level": "高", "content": "子系统架构设计 " + "a" * 90},
+    {"document_id": 2, "source_doc": "广汽方法论.docx", "chunk_index": 19, "section": "1.2.1.2.3",
+     "score": 0.5, "confidence_level": "高", "content": "子系统架构设计续 " + "b" * 90},
+    {"document_id": 3, "source_doc": "热管理.md", "chunk_index": 5, "section": "3",
+     "score": 0.5, "confidence_level": "高", "content": "热管理场景 " + "c" * 90},
+]
+_sel_mix, _ = select_for_injection(_hits_mix)
+_cit_mix = _citations_payload(_hits_mix)
+_mis = [i + 1 for i in range(min(len(_sel_mix), len(_cit_mix)))
+        if _sel_mix[i].get("chunk_index") != _cit_mix[i - 0].get("chunk_index")]
+chk("D3 ★ 逐位同源：citations[i] == 【来源i+1】（条数相等但内容不同也是错）",
+    not _mis, ("错位位次=%s" % _mis) if _mis else "逐位一致")
+
+# ── 变异 M4：把 citations 换回"原始 hits 截断"⇒ 该夹具下必须出现错位 ──
+# 这一条同时证明夹具不是空转（旧实现确实会错，新实现不会）。
+_mut_cits = (_hits_mix or [])[:_inject_k]
+_mut_mis = [i + 1 for i in range(min(len(_sel_mix), len(_mut_cits)))
+            if _sel_mix[i].get("chunk_index") != _mut_cits[i].get("chunk_index")]
+chk("M4 变异（citations 退回原始截断）在该夹具下确实错位（证明夹具不空转）",
+    bool(_mut_mis), "变异体错位位次=%s" % (_mut_mis or "无"))
+
+
+# ── E：可引用编号范围必须显式告知模型（防"死编号") ────────────────────────
+# 实测（会话 9986）：注入 5 条【来源1-5】，模型正文却写 [6][7][8]，
+# 而 citations 只有 5 条 ⇒ 用户点后三条没有任何反应。
+# 根因：prompt 只有"编号与 citations 对齐"的隐含约定，**没给范围**，长回答里模型会自行续编号。
+_ctx_py = io.open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "agent", "pipeline_parts", "context.py"),
+    encoding="utf-8").read()
+chk("E1 prompt 显式给出可引用编号上限（防模型编出越界编号）",
+    "只能取 1–" in _ctx_py and "_n_src" in _ctx_py)
+chk("E2 上限取自实际注入条数（不是写死 5）",
+    "_n_src = min(len(_sel), _inject_k)" in _ctx_py)
 
 print("\n" + "=" * 66)
 print("总计：%d PASS / %d FAIL" % (len(PASS), len(FAIL)))

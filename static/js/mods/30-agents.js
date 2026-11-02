@@ -1627,8 +1627,10 @@ async function loadLLMProviders() {
     items.map(p=>{
       const disabled = p.status==='disabled';
       return `<tr>
-      <td><b>${esc(p.name)}</b></td>
-      <td>${p.model_type==='embedding'?'<span class="st b">向量</span>':(p.model_type==='multimodal'?'<span class="st" style="background:#f3e8ff;color:#7c3aed;">多模态</span>':'<span class="st g">对话</span>')}${p.model_type!=='embedding'&&p.model_type!=='multimodal'&&hasVisionTag(p)?' <span class="st" style="background:#eef2ff;color:#3f51b5;" title="支持图片理解：AI 建模会话中上传的图片会作为多模态内容送给该模型">🖼 视觉</span>':''}</td>
+      <td><b>${esc(p.name)}</b>${p.is_default===1?' <span class="st b" style="font-size:10.5px;">默认</span>':''}
+        ${p.description?`<div style="font-size:11.5px;color:var(--mut);margin-top:2px;max-width:240px;line-height:1.45;">${esc(p.description)}</div>`:''}</td>
+      <td>${p.model_type==='embedding'?'<span class="st b">向量</span>':(p.model_type==='multimodal'?'<span class="st" style="background:#f3e8ff;color:#7c3aed;">多模态</span>':'<span class="st g">对话</span>')}${p.model_type!=='embedding'&&p.model_type!=='multimodal'&&hasVisionTag(p)?' <span class="st" style="background:#eef2ff;color:#3f51b5;" title="支持图片理解：AI 建模会话中上传的图片会作为多模态内容送给该模型">🖼 视觉</span>':''}
+        <div style="font-size:11px;color:var(--mut);margin-top:2px;">${fmtCtxTier(p.context_window)} · 思考:${esc((p.model_params&&(p.model_params.thinking_level||p.model_params.thinking_mode))||'模型默认')}</div></td>
       <td style="font-size:12.5px;">${esc(p.model_name)}</td>
       <td><label class="sw" title="设为该类型（对话/向量）的默认模型"><input type="checkbox" ${p.is_default===1?'checked':''} onchange="toggleLLMDefault(${p.id},this.checked)"><span class="sl"></span></label></td>
       <td>${disabled?'<span class="st g">停用</span>':'<span class="st ok">启用</span>'}</td>
@@ -1649,7 +1651,7 @@ function addLLM() {
   showModal('llm');
   document.getElementById('f-edit-llm').value = '';
   document.getElementById('llm-modal-title').innerText = '添加模型';
-  ['f-name','f-url','f-key','f-model','f-tags'].forEach(i=>{const el=document.getElementById(i); if(el) el.value='';});
+  ['f-name','f-url','f-key','f-model','f-tags','f-desc'].forEach(i=>{const el=document.getElementById(i); if(el) el.value='';});
   setVisionCheckbox(false);
   document.getElementById('f-model-type').value = 'chat';
   const dcb = document.getElementById('f-is-default');
@@ -1662,10 +1664,86 @@ function addLLM() {
   document.getElementById('f-budget').value = 0;
   document.getElementById('f-top-p').value = '';
   document.getElementById('f-top-k').value = '';
-  const tr = document.querySelector('input[name="f-thinking"][value="模型默认"]'); if(tr) tr.checked = true;
+  setThinkingControl('tier');       // 默认按挡位（细粒度），用户可切按开关
+  setThinkingLevel('模型默认');
+  syncCtxTier(8192);
   const k = document.getElementById('f-key'); if(k) k.disabled = false;
   const kh = document.getElementById('f-key-hint'); if(kh) kh.style.display = 'none';
   onLLMTypeChange();
+}
+
+// ── 上下文档位 ↔ 数字输入 双向同步（2026-10-31）────────────────────────────
+// 单一事实源 = #f-ctx（数字）。档位下拉只是"快捷赋值 + 回显"，不参与保存，
+// 避免出现"下拉显示 1M，实际存 8192"的双事实源错位。
+function onCtxTierChange(){
+  const t = document.getElementById('f-ctx-tier');
+  if(!t || t.value === 'custom') return;      // 自定义：不动数字框，让用户自己填
+  const v = parseInt(t.value, 10);
+  const ctx = document.getElementById('f-ctx');
+  if(Number.isFinite(v) && ctx){
+    ctx.value = v;
+    // 输出上限保持 ≤ 输入：原先可能因为换小档位而变成非法（mt > cw ⇒ 保存被拦）
+    const mt = document.getElementById('f-maxt');
+    if(mt && (parseInt(mt.value,10)||0) > v) mt.value = Math.min(v, 8192);
+  }
+}
+function syncCtxTier(n){
+  const t = document.getElementById('f-ctx-tier');
+  if(!t) return;
+  const v = String(parseInt(n,10)||0);
+  const hit = Array.from(t.options).some(o=>o.value === v);
+  t.value = hit ? v : 'custom';
+}
+// ── 思考控制方式（2026-11-01 新增）──────────────────────────────────────────
+// 两套粒度：
+//   tier   = 按挡位：模型默认 / 关闭 / 低 / 中 / 高（细粒度，能控思考预算）
+//   toggle = 按开关：模型默认 / 开启 / 关闭（与多数厂商控制台一致，不涉及预算）
+// 为什么要做模型级开关（而不是全局只留一种）：
+//   不同厂商对"思考"的暴露程度不同 —— 有的只有 enable/disable，有的支持 token 预算。
+//   由用户按模型选择粒度，会话入口就按该粒度展示，避免"给 5 档但底层只认开关"的错位。
+function getThinkingControl(){
+  return document.querySelector('input[name="f-thinking-control"]:checked')?.value || 'tier';
+}
+function setThinkingControl(v){
+  const el = document.querySelector(`input[name="f-thinking-control"][value="${v||'tier'}"]`);
+  if(el) el.checked = true;
+  onThinkControlChange();
+}
+const _THINK_BY_CONTROL = {
+  tier:   { levels: ['模型默认','关闭','低','中','高'],
+            hint: '预算参考：低 1024 · 中 4096 · 高 8192 tokens（思考与正文共享输出上限，给思考的额度越多，留给正文的越少）' },
+  toggle: { levels: ['模型默认','开启','关闭'],
+            hint: '按开关模式：只下发 开启 / 关闭，不控制思考预算。适合厂商只支持两态、或希望行为与厂商控制台完全一致的场景。' },
+};
+function renderThinkLevels(keep){
+  const box = document.getElementById('f-think-levels');
+  const hint = document.getElementById('f-think-hint');
+  if(!box) return;
+  const ctl = getThinkingControl();
+  const cfg = _THINK_BY_CONTROL[ctl] || _THINK_BY_CONTROL.tier;
+  // keep 优先（编辑回填时不丢当前值）；否则沿用已选值；再否则「模型默认」
+  const cur = keep || document.querySelector('input[name="f-thinking-level"]:checked')?.value || '模型默认';
+  const val = cfg.levels.includes(cur) ? cur : '模型默认';
+  box.innerHTML = cfg.levels.map(v=>
+    `<label style="display:flex;align-items:center;gap:4px;font-size:13.5px;font-weight:400;margin:0;cursor:pointer;">`
+    + `<input type="radio" name="f-thinking-level" value="${v}" ${v===val?'checked':''} style="width:auto;"> ${v}</label>`
+  ).join('');
+  if(hint) hint.textContent = cfg.hint;
+}
+function onThinkControlChange(){ renderThinkLevels(); }
+function setThinkingLevel(level){
+  const v = level || '模型默认';
+  // 先按目标值决定控制方式：「开启」只有 toggle 才有；低/中/高 只有 tier 才有。
+  // 顺序必须先切控制方式再渲染 —— 否则在 tier 模式下选「开启」匹配不到，
+  // 会静默回落成「模型默认」（用户看到"保存了但变回默认"）。
+  if(v === '开启') setThinkingControl('toggle');
+  else if(['低','中','高'].includes(v)) setThinkingControl('tier');
+  else renderThinkLevels(v);        // 模型默认/关闭：两种粒度都有，只按当前粒度渲染
+  const el = document.querySelector(`input[name="f-thinking-level"][value="${v}"]`);
+  if(el) el.checked = true;
+}
+function getThinkingLevel(){
+  return document.querySelector('input[name="f-thinking-level"]:checked')?.value || '模型默认';
 }
 async function editLLM(id) {
   const items = await api('/api/llm/providers');
@@ -1685,15 +1763,35 @@ async function editLLM(id) {
   document.getElementById('f-maxt').value = p.max_tokens || 8192;
   document.getElementById('f-temp').value = p.temperature ?? 0.3;
   document.getElementById('f-tags').value = (p.tags||[]).join(', ');
+  const _d = document.getElementById('f-desc'); if(_d) _d.value = p.description || '';
   setVisionCheckbox(hasVisionTag(p));
   document.getElementById('f-priority').value = p.priority || 0;
   document.getElementById('f-budget').value = p.budget_tokens || 0;
-  // 高级设置回填（上下文输入/输出、温度、TopP、TopK、思考模式）
+  // 高级设置回填（上下文档位、思考强度、温度、TopP、TopK）
   const mp = p.model_params || {};
   document.getElementById('f-top-p').value = (mp.top_p ?? '');
   document.getElementById('f-top-k').value = (mp.top_k ?? '');
-  const tr = document.querySelector('input[name="f-thinking"][value="' + (mp.thinking_mode||'模型默认') + '"]');
-  if(tr) tr.checked = true;
+  syncCtxTier(p.context_window || 8192);
+  // 思考控制方式回填：新字段 thinking_control；老数据没有该字段时按值推断 ——
+  //   有 thinking_level 且是 低/中/高 ⇒ tier；否则看 thinking_mode：
+  //     '开启' 且无 level ⇒ toggle（用户本来就只有开关语义，别擅自升级成挡位）
+  let _ctl = mp.thinking_control;
+  if(!_ctl){
+    if(['低','中','高'].includes(mp.thinking_level)) _ctl = 'tier';
+    else if(mp.thinking_mode === '开启' && !mp.thinking_level) _ctl = 'toggle';
+    else _ctl = 'tier';
+  }
+  // 思考强度回填：优先 thinking_level；老数据只有 thinking_mode 时做兼容映射
+  let _lv = mp.thinking_level;
+  if(!_lv){
+    if(mp.thinking_mode === '关闭') _lv = '关闭';
+    else if(mp.thinking_mode === '开启') _lv = '开启';   // toggle 语义，不再擅自映射成「中」
+    else _lv = '模型默认';
+  }
+  // ⚠️ 顺序：先 setThinkingControl 会触发一次渲染，再由 setThinkingLevel 覆盖为正确值。
+  //    不要反过来（先 level 后 control 会把 level 重置掉 —— 典型的"回填丢失"）。
+  setThinkingControl(_ctl);
+  setThinkingLevel(_lv);
   // 密钥：已配置 → 默认展示点点且不可编辑修改（保存时也不回传）；未配置 → 可填写
   const k = document.getElementById('f-key');
   const kh = document.getElementById('f-key-hint');
@@ -1727,12 +1825,17 @@ async function saveLLM() {
     if(!Number.isInteger(tk) || tk < 1 || tk > 100){ toast('TopK 需为 1~100 的整数'); return; }
     topK = tk;
   }
-  const thinking_mode = document.querySelector('input[name="f-thinking"]:checked')?.value || '模型默认';
+  const level = getThinkingLevel();                 // 模型默认 | 开启 | 关闭 | 低 | 中 | 高
+  const control = getThinkingControl();             // tier(挡位) | toggle(开关)
+  // thinking_mode 保持三态写入（**兼容**：后端旧链路仍读它，且历史数据/其他面板依赖该字段）
+  // thinking_level 是新字段（后端优先消费），二者由同一选择推导，不会互相矛盾。
+  const thinking_mode = level === '关闭' ? '关闭' : (level === '模型默认' ? '模型默认' : '开启');
   const body = {
     name, base_url, api_key, model_name, model_type, context_window, is_default,
     provider_type: document.getElementById('f-ptype').value || 'openai',
     max_tokens, temperature,
     tags: composeTagsFromForm(),
+    description: (document.getElementById('f-desc')?.value || '').trim(),
     priority: parseInt(document.getElementById('f-priority').value)||0,
     budget_tokens: parseInt(document.getElementById('f-budget').value)||0,
   };
@@ -1744,9 +1847,12 @@ async function saveLLM() {
     const r = await api('/api/llm/providers', {method:'POST', body:JSON.stringify(body)});
     savedId = r.id || '';
   }
-  // 高级参数（top_p/top_k/thinking_mode）落库 model_params
-  if(savedId) await api(`/api/llm/providers/${savedId}/params`, {method:'PATCH', body:JSON.stringify({model_params:{top_p:topP, top_k:topK, thinking_mode}})});
+  // 高级参数（top_p/top_k/thinking_mode/thinking_level）落库 model_params
+  if(savedId) await api(`/api/llm/providers/${savedId}/params`, {method:'PATCH', body:JSON.stringify({model_params:{top_p:topP, top_k:topK, thinking_mode, thinking_level:level, thinking_control:control}})});
   closeModal(); toast(id ? '已保存' : '已添加'); loadLLMProviders(); loadHome();
+  // 会话入口的模型切换面板与本表同源（都读 /api/llm/providers）⇒ 改完必须同步刷新，
+  // 否则"改了描述但入口列表还是旧的"（双份缓存不同步的典型症状）。
+  try{ if(typeof loadChatProviders === 'function') loadChatProviders(); }catch(e){}
 }
 async function testLLM(id) {
   const r = await api(`/api/llm/providers/${id}/test`, {method:'POST'});
