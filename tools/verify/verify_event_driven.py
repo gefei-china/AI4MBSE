@@ -42,6 +42,8 @@
 """
 
 import inspect
+import json          # ⚠️ 假 MCP client 用 json.dumps 造响应；缺它会让 poll_once 的
+                     #    except 把它当成"智源调用失败" ⇒ G43 假红（本轮踩过）
 import os
 import sqlite3
 import sys
@@ -566,6 +568,104 @@ for _k, _v in _reg_backup.items():
     if _v is not None:
         _get_reg2().register(_v)
 
+# ══ 智源轮询：**"拉不到"绝不能伪装成"没有变更"** ══
+# ★ 这是端到端实测抓到的真实缺陷：`MCPClient.call_tool` 失败时**不抛异常**，
+#   而是返回 {ok:False, result:"错误描述"}。第一版只做 _tool_json 然后 `or []`
+#   ⇒ 502 的错误文本解析不出 list ⇒ 空列表 ⇒ 被判成"该工程没有分支"
+#   ⇒ 返回 {ok:true, emitted:0, branches_scanned:0}
+#   ⇒ **智源停服期间的变更被永久漏掉，且台账显示一切正常**。
+from core.events import sources_zhiyuan_poll as _zy  # noqa: E402
+from core.events import sources_zhiyuan as _zysrc    # noqa: E402
+
+
+class _FakeCli:
+    """假 MCP 客户端：按预设返回三种形态之一，用于验证检查层。"""
+
+    def __init__(self, mode):
+        self.mode = mode
+
+    def call_tool(self, name, args=None):
+        if self.mode == "ok_bad":
+            return {"ok": False, "result": "Server error '502 Bad Gateway'", "is_error": True}
+        if self.mode == "ok_unparsable":
+            return {"ok": True, "is_error": False, "result": "<html>nginx 502</html>"}
+        if self.mode == "ok_empty_list":
+            return {"ok": True, "is_error": False, "result": '{"data": []}'}
+        raise AssertionError("unknown mode")
+
+
+# G40 三种失败形态都必须抛错（不能静默返回空）
+_g40 = {}
+for _mode in ("ok_bad", "ok_unparsable"):
+    try:
+        _zy._call_tool_checked(_FakeCli(_mode), "query_branches", {"projectId": "p"})
+        _g40[_mode] = False
+    except _zy.ZhiyuanCallError:
+        _g40[_mode] = True
+check("G40", "MCP 调用失败/不可解析 ⇒ 抛 ZhiyuanCallError（不静默当空）",
+      all(_g40.values()), str(_g40))
+
+# G40b 真正的空列表**不**抛错（合法：工程确实没分支）—— 不能过度拦截
+try:
+    _r40b = _zy._call_tool_checked(_FakeCli("ok_empty_list"), "query_branches", {"projectId": "p"})
+    _g40b = _r40b.get("data") == []
+except Exception:
+    _g40b = False
+check("G40b", "合法空列表不报错（不把「真没数据」误判成失败）", _g40b, "")
+
+# G41 poll_once 在智源不可用时：ok 必须为 False 且 errors 非空
+#     （若返回 ok=True/0 分支 = 静默失效，最危险的失败模式）
+_zy_reg = SourceRegistry()
+_zy_reg.register(_zysrc.build_zhiyuan_source(mode=EXECUTE_MODE))
+_g41 = _zy.poll_once(conn, projects=["p1"], registry=_zy_reg,
+                     client=_FakeCli("ok_bad"))
+check("G41", "poll_once 拉取失败 ⇒ ok=False 且有 errors（不伪装成「没变更」）",
+      _g41.get("ok") is False and bool(_g41.get("errors")),
+      "ok=%s errors=%s" % (_g41.get("ok"), str(_g41.get("errors"))[:1]))
+
+# G41b 未配 projects ⇒ 明确拒绝（避免全库扫描），而不是空跑成功
+_g42 = _zy.poll_once(conn, projects=[], registry=_zy_reg, client=_FakeCli("ok_bad"))
+check("G42", "未配 projects ⇒ 明确拒绝（避免全库扫描）",
+      _g42.get("ok") is False and _g42.get("error") == "no_projects_configured",
+      f"error={_g42.get('error')}")
+
+# G43 **成功路径**：能拉到版本 ⇒ 建工单，且幂等（重跑不新增）
+class _GoodCli:
+    """假智源：1 工程 / 2 分支 / 每分支 1 版本。"""
+    def __init__(self):
+        self.calls = []
+
+    def call_tool(self, name, args=None):
+        self.calls.append((name, dict(args or {})))
+        if name == "query_branches":
+            return {"ok": True, "is_error": False,
+                    "result": json.dumps({"data": [
+                        {"branchId": "b1", "name": "主线"},
+                        {"branchId": "b2", "name": "热管理"}]})}
+        if name == "query_model_versions":
+            bid = (args or {}).get("branchId")
+            return {"ok": True, "is_error": False,
+                    "result": json.dumps({"data": [
+                        {"versionId": "v-%s-1" % bid, "name": "v1",
+                         "publishedAt": "2026-11-01T10:00:00Z"}]})}
+        raise AssertionError("unexpected tool: " + name)
+
+
+_good = _GoodCli()
+_g43 = _zy.poll_once(conn, projects=["P1"], registry=_zy_reg, client=_good)
+check("G43", "成功拉取 ⇒ 建工单（2 分支 × 1 版本）",
+      _g43.get("ok") is True and _g43.get("branches_scanned") == 2
+      and _g43.get("emitted") == 2,
+      "scanned=%s emitted=%s errors=%s"
+      % (_g43.get("branches_scanned"), _g43.get("emitted"),
+         str(_g43.get("errors"))[:2]))
+
+# G43b 幂等：同一批版本重跑 ⇒ 不再新增
+_g43b = _zy.poll_once(conn, projects=["P1"], registry=_zy_reg, client=_GoodCli())
+check("G43b", "重跑同批版本 ⇒ 不重复建单（幂等）",
+      _g43b.get("ok") is True and _g43b.get("emitted") == 0,
+      "emitted=%s" % _g43b.get("emitted"))
+
 conn.close()
 
 # ══════════════════════════════════════════════════════════
@@ -907,7 +1007,35 @@ try:
     RESULTS.append(("M10", "去掉 payload 平铺 ⇒ G37 翻红", _m10_flip,
                     f"disp={_m10_r.get('disposition')} reason={_m10_r.get('reason')}"))
 finally:
-    pass
+    pass   # M10 自带独立 db 连接，已在内部关闭；此处仅收口 try
+
+# M11: 去掉 MCP 调用的 ok 检查 ⇒ G41 必须翻红（**"拉不到"被伪装成"没变更"**）
+# ★ 这是本轮最重要的变异：它守的是一个"**不报错但结果全错**"的缺陷。
+#   原实现 `_tool_json(res)` + `or []` 会让 502 变成空列表 ⇒ ok=True/0 分支 ⇒
+#   停服期间的变更永久漏掉，且台账显示一切正常。
+print("  ", end="")
+_orig_checked = _zy._call_tool_checked
+
+
+def _m11_naive(cli, tool, args):
+    """变异：退回第一版的"只解析、不检查"实现（即缺陷版）。"""
+    return _zy._tool_json(cli.call_tool(tool, args))
+
+
+try:
+    _zy._call_tool_checked = _m11_naive
+    _m11 = _zy.poll_once(conn, projects=["p-m11"], registry=_zy_reg,
+                         client=_FakeCli("ok_bad"))
+    # 变异生效的标志：502 被吞成 ok=True（正是那个危险行为）
+    _m11_flip = (_m11.get("ok") is True and not _m11.get("errors"))
+    print(("[PASS] " if _m11_flip else "[FAIL] ")
+          + "M11 去掉 ok 检查 ⇒ G41 翻红  — "
+          + f"502 现在被判成 ok={_m11.get('ok')} errors={len(_m11.get('errors') or [])}"
+          + "（应为 ok=True ⇒ 证明检查层承重）")
+    RESULTS.append(("M11", "去掉 ok 检查 ⇒ G41 翻红", _m11_flip,
+                    f"ok={_m11.get('ok')} errs={len(_m11.get('errors') or [])}"))
+finally:
+    _zy._call_tool_checked = _orig_checked
 
 # ══════════════════════════════════════════════════════════
 # 汇总

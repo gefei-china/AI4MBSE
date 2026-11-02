@@ -352,6 +352,65 @@ def build_source_from_body(body: dict):
     )
 
 
+# ══ 智源轮询（2026-11-02）：本工程作为 MCP **客户端**主动拉智源变更 ══
+# ⚠️ 方向澄清：不是"智源调本工程"，而是**本工程访问智源**
+#    （智源侧已配 zhiyuan_dev_mcp，endpoint 与 Bearer 都在 mcp_servers 表里，
+#      共 71 个工具，含 query_projects / query_branches / query_model_versions）。
+# ⇒ 事件从"别人推给我"变成"我主动去拉" ⇒ 必须有个 poller。
+
+@router.post("/api/events/zhiyuan/probe")
+def zhiyuan_probe(conn=Depends(db_session),
+                  user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """探测智源 MCP 真实 schema 并落库 —— **服务恢复后第一件要做的事**。
+
+    为什么必须探测：`mcp_servers.tool_meta` 里只有 name + description，
+    **没有 inputSchema** ⇒ 轮询参数只能靠猜 ⇒ 猜错会静默拉不到数据
+    （症状是"轮询是空的"，看起来像"没有变更"，实际是参数名错了）。
+    """
+    from core.events.sources_zhiyuan_poll import probe_zhiyuan_schema
+    res = probe_zhiyuan_schema(conn)
+    if not res.get("ok"):
+        return JSONResponse(res, 502)
+    return res
+
+
+@router.post("/api/events/zhiyuan/poll")
+def zhiyuan_poll(conn=Depends(db_session),
+                 user=Depends(require_any_permission(EVENT_WRITE_PERMS)),
+                 body: dict = None):
+    """手动跑一轮智源轮询（不依赖后台线程，便于排障与首次接入）。
+
+    body = {projects?: [projectId...], versions_args?: {...}}
+
+    ⚠️ **拉取失败 ≠ 没有变更**：返回里 ok=false 时，绝不能当作"智源没变更"，
+       恢复后必须重跑，否则停服期间的变更会永久丢失。
+    """
+    from core import config as _cfg
+    from core.events.sources_zhiyuan_poll import poll_once, poller_status
+    body = body or {}
+    projects = body.get("projects") or _cfg.get("events", "zhiyuan_poll_projects", []) or []
+    vargs = body.get("versions_args") or {}
+    res = poll_once(conn, projects=list(projects), versions_args=vargs,
+                    name=str(_cfg.get("events", "zhiyuan_poll_mcp_server",
+                                      "zhiyuan-dev-mcp")))
+    res["poller"] = poller_status()
+    return res
+
+
+@router.get("/api/events/zhiyuan/status")
+def zhiyuan_poller_status(conn=Depends(db_session), user=Depends(current_user)):
+    """轮询状态 + 智源 MCP 连通性（只读）。"""
+    from core.events.sources_zhiyuan_poll import poller_status, _load_mcp_server
+    st = poller_status()
+    srv = _load_mcp_server(conn) or {}
+    st["mcp_server"] = {
+        "name": srv.get("name"), "endpoint": srv.get("endpoint"),
+        "status": srv.get("status"), "last_error": (srv.get("last_error") or "")[:200],
+        "has_auth": bool(srv.get("headers")),
+    }
+    return st
+
+
 # ⚠️⚠️ **本路由必须放在本文件所有静态路径之后**（2026-11-01 实测修掉的真实 bug）
 # FastAPI 按**声明顺序**匹配路由。`{kind}` 是通配段，若它排在
 # `/api/events/execute-pending` 之前 ⇒ 请求 `execute-pending` 会被

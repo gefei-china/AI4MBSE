@@ -194,6 +194,32 @@ async def lifespan(app: FastAPI):
         print("[startup] 事件工单看门狗启动失败（不影响主流程）：%s" % str(_e)[:160],
               flush=True)
 
+    # ── 智源变更轮询（2026-11-02）：本工程作为 MCP **客户端**主动拉智源 ──
+    # ⚠️ 方向澄清：不是"智源调本工程"，而是**本工程访问智源**
+    #    （智源侧 mcp_servers 里已配 zhiyuan-dev-mcp，71 个工具，含 query_model_versions）。
+    # ⚠️ 默认关 + 必须显式配 projects：轮询会消耗智源接口配额，
+    #    且不配工程就等于全库扫描（不可接受）⇒ 没配 projects 时不启。
+    try:
+        from core.events.sources_zhiyuan_poll import start_poller as _start_poller
+        from database import db_conn as _db_conn_poll
+        _poll_projects = config.get("events", "zhiyuan_poll_projects", []) or []
+        if config.as_bool("events", "zhiyuan_poll_enabled", False) and _poll_projects:
+            _ok = _start_poller(
+                _db_conn_poll, projects=list(_poll_projects),
+                interval_s=int(config.get("events", "zhiyuan_poll_interval_s", 600) or 600),
+                name=str(config.get("events", "zhiyuan_poll_mcp_server", "zhiyuan-dev-mcp")),
+                enabled=True)
+            print("[startup] 智源变更轮询已启动：%d 个工程 / 间隔 %ss%s"
+                  % (len(_poll_projects),
+                     config.get("events", "zhiyuan_poll_interval_s", 600),
+                     "" if _ok else "（启动失败：检查 mcp_servers 与网络）"), flush=True)
+        else:
+            print("[startup] 智源变更轮询未启用（events.zhiyuan_poll_enabled=off "
+                  "或未配 zhiyuan_poll_projects）——可手动调 POST /api/events/zhiyuan/poll",
+                  flush=True)
+    except Exception as _e:
+        print("[startup] 智源变更轮询启动失败（不影响主流程）：%s" % str(_e)[:160], flush=True)
+
     # MCP-D1：后台健康巡检线程（每 5 分钟对 sse/http 服务器做 initialize 握手探测）
     try:
         from mcp_health import start_health_loop

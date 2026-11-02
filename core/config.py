@@ -1221,6 +1221,14 @@ DEFAULT_CONFIG = {
         # 无条件发事件会把台账灌满（与"少占用人的注意力"冲突）。
         # 开启后仍靠"Trigger ID 由代码哈希派生"天然去重，同一段失败代码只记一条。
         "sysml_source_enabled": False,
+        # ── 智源轮询（2026-11-02）：本工程作为 MCP **客户端**主动拉智源变更 ──
+        # ⚠️ 方向澄清：不是"智源调本工程"，而是**本工程访问智源**
+        #    （智源侧已配 zhiyuan_dev_mcp，71 个工具）。
+        # 默认关：轮询消耗智源接口配额 + 我方库写入。
+        "zhiyuan_poll_enabled": False,
+        "zhiyuan_poll_interval_s": 600,   # 轮询间隔（秒）
+        "zhiyuan_poll_projects": [],      # 要监听的智源 projectId 列表（**空=不扫**，避免全库）
+        "zhiyuan_poll_mcp_server": "zhiyuan-dev-mcp",   # mcp_servers 表里的名字
     },
     # ── P1-1（2026-10-03 整改）：入口限流（对标 Dify 配额 / Anthropic X-RateLimit-* 契约）──
     # 评估 §6 P1-1 实测：全仓 0 处限流；`budget_tokens` 曾超支 35%，后又被置 0 ⇒ 完全无闸。
@@ -2492,6 +2500,10 @@ _EXTRA_SCHEMA = {
         "watchdog_interval_s":     {"type": "int",  "desc": "看门狗扫描间隔（秒）"},
         "watchdog_stale_s":        {"type": "int",  "desc": "工单停滞阈值（秒）：非终态工单多久没动算停滞"},
         "sysml_source_enabled":    {"type": "bool", "desc": "SysML 校验失败是否发事件（默认关；校验高频执行，开了会给台账灌量）"},
+        "zhiyuan_poll_enabled":    {"type": "bool", "desc": "智源变更轮询开关（本工程作为 MCP 客户端主动拉；默认关，消耗智源接口配额）"},
+        "zhiyuan_poll_interval_s": {"type": "int",  "desc": "智源轮询间隔（秒）"},
+        "zhiyuan_poll_projects":   {"type": "list", "desc": "要监听的智源工程 projectId 列表（空=不扫描，避免全库拉取）"},
+        "zhiyuan_poll_mcp_server": {"type": "str",  "desc": "mcp_servers 表里智源 MCP 的 name（默认 zhiyuan-dev-mcp）"},
     },
     "rag": {
         "hyde_embed_max_chunks":   {"type": "int",  "desc": "HyDE 向量化的最多块数（0=不限）。HyDE 让索引期向量请求数翻倍，设上限可控成本"},
