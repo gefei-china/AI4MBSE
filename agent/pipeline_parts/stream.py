@@ -3347,10 +3347,27 @@ class StreamMixin:
                     orch_content = "（编排质量门禁：" + "；".join(_gate_gaps) + "）\n\n" + orch_content
                     yield {"type": "progress", "kind": "progress",
                            "delta": "（自动编排）编排质量门禁：" + "；".join(_gate_gaps)}
-            # P0-1：编排成功后沉淀为可复用工作流（draft，前端可另存/画布编辑/发布）
-            saved_flow_id = None
-            if done_items:
-                saved_flow_id = self._save_planner_flow(goal, plan, intent)
+        # P0-1：编排成功后沉淀为可复用工作流（draft，前端可另存/画布编辑/发布）
+        saved_flow_id = None
+        if done_items:
+            saved_flow_id = self._save_planner_flow(goal, plan, intent)
+
+        # ★ 2026-11-02（米爸「最终正文只承载最后确定的代码」）：流式推送前做一次
+        #   中间版本代码收敛。为什么必须在这里（而不是只在 _summarize_plan 出口）：
+        #   ① reflection 修订会**整体重写** orch_content（L3305），可能把各子任务的
+        #      版本代码重新带回来；② 质量门禁 prepend（L3347）之后内容才定型。
+        #   放在流式推送之前 ⇒ 前端流式看到的正文就是收敛后的；`_ensure_sysml_blocks`
+        #   在其后仍有效（正文确无代码时才补回，补回的是最后确定版所在交付物）。
+        #   失败绝不阻断（呈现层纪律），返回原文。
+        try:
+            from agent.final_content import dedupe_interim_code_blocks as _dedupe_fc
+            orch_content, _fc_removed = _dedupe_fc(orch_content)
+            if _fc_removed:
+                yield {"type": "progress", "kind": "progress",
+                       "delta": ("（自动编排）最终正文收敛：%d 份中间版本代码不再重复展示"
+                                 "（各版本在子任务执行卡中可见，正文保留最后确定版）" % _fc_removed)}
+        except Exception:
+            pass
 
         # 5) 汇总内容流式推送
         #    P0-3（2026-09-17）：原 `range(0, len, 24)` 无节流切片 → 几十毫秒内把整段灌给前端，

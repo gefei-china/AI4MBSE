@@ -198,11 +198,23 @@ def cleanup_expired(days: int = 30) -> int:
         return cur.rowcount
 
 
-def cleanup_conversation(conversation_id: int) -> int:
-    """会话删除级联：清该会话的全部 offload（routers/conversations.py delete 端点调用）。"""
-    from database import db_conn
-    with db_conn() as conn:
+def cleanup_conversation(conversation_id: int, conn=None) -> int:
+    """会话删除级联：清该会话的全部 offload（routers/conversations.py delete 端点调用）。
+
+    ★ 2026-11-02（实测每次删除卡 30+ 秒的真因）：调用方（delete 端点）已在**请求连接**上
+    执行了 DELETE（事务未提交、持有写锁），本函数原先又开**第二条连接**执行 DELETE
+    ⇒ 自己等自己的锁，白等满 busy_timeout=30s 才以异常收场 —— 端点里 `except: pass`
+    把超时吞掉，表面"删除成功"，实际每次都静默挂 30 秒（前端表现就是「点删除没反应」）。
+    修法：端点把请求连接传入，同连接同事务执行（随请求收尾统一 commit），不再抢锁。
+    conn=None 保持旧行为（独立连接），兼容既有调用（tools/verify/verify_tool_offload.py）。
+    """
+    if conn is not None:
         cur = conn.execute(
             "DELETE FROM tool_result_offloads WHERE conversation_id=?", (int(conversation_id),))
-        conn.commit()
+        return cur.rowcount
+    from database import db_conn
+    with db_conn() as _c:
+        cur = _c.execute(
+            "DELETE FROM tool_result_offloads WHERE conversation_id=?", (int(conversation_id),))
+        _c.commit()
         return cur.rowcount

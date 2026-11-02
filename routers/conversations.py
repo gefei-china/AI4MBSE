@@ -339,9 +339,12 @@ def delete_conversation(conv_id: int, conn=Depends(db_session),
     _own_conv(conn, conv_id, user)
     repo.delete_conversation(conv_id)
     # P1-4（2026-10-02）：级联清理该会话的工具结果 offload（会话没了，全文引用失去意义）
+    # ★ 2026-11-02：必须传入请求连接 conn —— 上面的 repo.delete_conversation 已在本连接
+    #   开了写事务（未提交）；不传 conn 时 cleanup 会开第二条连接抢写锁 = 自己等自己
+    #   busy_timeout=30s（实测每次删除静默挂 30+ 秒，前端表现「点删除没反应」）。
     try:
         from agent.pipeline_parts import tool_offload as _to
-        _to.cleanup_conversation(conv_id)
+        _to.cleanup_conversation(conv_id, conn=conn)
     except Exception:
         pass  # 级联清理失败不阻断删除主流程（offload 由 TTL 兜底）
     audit(audit_user(user), "conversation_delete", f"删除对话#{conv_id}", conn=conn)

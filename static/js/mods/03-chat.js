@@ -57,7 +57,22 @@ async function loadConversations() {
         <div class="sk-line sm" style="width:50%;margin-top:6px;opacity:.6;"></div>
       </div>`).join('');
   }
-  const convs = await api('/api/conversations');
+  // ★ 2026-11-02（米爸「会话列表无法展示」）：拉取失败必须有可见终点 ——
+  //   此前 api() 抛异常直接冒出本 async 函数（unhandled rejection），skeleton 永远留在原地，
+  //   用户看到的就是「列表一直转圈/空白」，且无从区分"没数据"还是"加载失败"。
+  let convs;
+  try{
+    convs = await api('/api/conversations');
+  }catch(e){
+    if(_list){
+      _list.innerHTML = `<div class="task-empty">
+        <div class="te-title">任务列表加载失败</div>
+        <div class="te-sub">${esc(String(e && e.message || e)).slice(0,120) || '网络或服务异常'}</div>
+        <button class="te-go" onclick="loadConversations()">重试</button>
+      </div>`;
+    }
+    return;
+  }
   const _isArr = Array.isArray(convs);
   // 2026-09-24 左侧项目管理：**项目下的任务只在项目分组内展示**，本组降级为「未分组任务」兜底。
   // 归属判定用后端给的 c.grouped（= 已归属某个仍存在的项目），前端不拿 project_id 非空自判。
@@ -424,16 +439,27 @@ async function renameConv(id) {
   toast('对话已重命名');
   loadConversations();
 }
+let _deletingConvId = 0;   // ★ 2026-11-02：删除防重入（同一会话删除进行中时忽略再点）
 async function deleteConv(id) {
+  if(_deletingConvId === id) return;      // 删除进行中：忽略重复点击（30s 级慢删除时代留下的教训）
   if(!(await confirmDialog('确认删除该会话？其下所有消息与反馈将一并删除，不可恢复。'))) return;
-  await api(`/api/conversations/${id}`, {method:'DELETE'});
-  if(currentConvId === id) {
-    currentConvId = null;
-    document.getElementById('chat-area').innerHTML = '<div class="loading">选择或新建对话开始建模…</div>';
-    // 2026-09-29：「未选择」与「已加载」同性质（零信息量常驻），不再写入状态栏
+  _deletingConvId = id;
+  toast('正在删除…');
+  try{
+    await api(`/api/conversations/${id}`, {method:'DELETE'});
+    if(currentConvId === id) {
+      currentConvId = null;
+      document.getElementById('chat-area').innerHTML = '<div class="loading">选择或新建对话开始建模…</div>';
+      // 2026-09-29：「未选择」与「已加载」同性质（零信息量常驻），不再写入状态栏
+    }
+    toast('对话已删除');
+    loadConversations();
+  }catch(e){
+    // ★ 2026-11-02：失败必须可见 —— 此前 await 抛异常 = 无 toast、无刷新，界面"没反应"
+    toast('删除失败：' + (e && e.message || e), 'error');
+  }finally{
+    _deletingConvId = 0;
   }
-  toast('对话已删除');
-  loadConversations();
 }
 
 // ── 消息渲染性能（P0 修复）──

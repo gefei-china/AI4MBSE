@@ -157,7 +157,13 @@ class FlowPlannerMixin:
         return t[:head] + mark + t[-tail:]
 
     def _summarize_plan(self, done_items: list, plan: list, provider_id=None) -> str:
-        """P1-1 计划总结节点：多个子任务交付物 → LLM 结构化整合；LLM 不可用/失败 → 拼接降级。"""
+        """P1-1 计划总结节点：多个子任务交付物 → LLM 结构化整合；LLM 不可用/失败 → 拼接降级。
+
+        ★ 2026-11-02（米爸「最终正文只承载最后确定的代码」）：两条出口（LLM 整合 / 拼接降级）
+        都过一遍 `dedupe_interim_code_blocks` —— 各子任务交付物**各自带一份完整模型代码**，
+        原样进最终正文就是「同一模型的多份版本代码块叠在一起」（真库实证 conv 9999/msg 5689：
+        3 份 ```sysml，32308 字）。中间版本在子任务执行卡本就可见，正文收敛为最后确定版。
+        """
         if len(done_items) < 2:
             return ""
         _cap = self._summarize_item_budget(len(done_items))
@@ -171,7 +177,10 @@ class FlowPlannerMixin:
                 "你是 MBSE 团队任务汇总专家。将以下多个已完成子任务的交付物整合成一份结构化最终报告："
                 "1) 按逻辑顺序组织（需求→设计→分析→结论）；2) 只基于给定交付物整合，禁止补充虚构事实；"
                 "3) 用标题分节；4) 交付物中的风险/待确认/缺失信息必须在报告对应小节显式标注，不得当作已确认事实；"
-                "5) 末尾给出总体结论与后续建议。\n\n"
+                "5) 末尾给出总体结论与后续建议。"
+                "6) 若多个交付物包含**同一模型/同一数据的多个版本代码或视图**，最终报告只保留"
+                "最后一个确定版本的完整代码；早期版本用一句话说明演进关系即可，**不要重复粘贴**"
+                "（各版本已在执行过程卡的实时输出中可见）。\n\n"
                 "子任务交付物：\n" + items_txt)
             # 2026-09-17 S4：汇总环节加输出上限 —— 实测 plan_summary 平均 completion 7,470，
             # 是单任务里最贵的输出之一。上限取 3000（而非更激进的 1500）：本环节产出的是
@@ -190,10 +199,20 @@ class FlowPlannerMixin:
                                    provider_id=provider_id, max_tokens=_mt, _intent="plan_summary")
             content = ((resp.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "")
             if content and len(content) > 80:
+                # ★ 2026-11-02：LLM 整合也可能把各版本的代码原样带出来（prompt 只是软约束）⇒ 出口统一收敛
+                from agent.final_content import dedupe_interim_code_blocks as _dedupe
+                content, _n = _dedupe(content)
                 return content.strip()
         except Exception:
             pass
-        return "\n\n".join(f"## {it.get('title')}\n{(it.get('result') or '').strip()}" for it in done_items)
+        # 拼接降级出口：各交付物的完整代码必然全量带入 ⇒ 必须收敛（同上）
+        try:
+            from agent.final_content import dedupe_interim_code_blocks as _dedupe
+            _joined = "\n\n".join(f"## {it.get('title')}\n{(it.get('result') or '').strip()}" for it in done_items)
+            _joined, _n = _dedupe(_joined)
+            return _joined
+        except Exception:
+            return "\n\n".join(f"## {it.get('title')}\n{(it.get('result') or '').strip()}" for it in done_items)
 
     def run_planner_plan(self, goal: str = "", agents=None, max_tasks: int = 6, parallel: bool = True,
                          provider_id=None, run_id: int = 0, conn=None, attachments=None, pool=None,
