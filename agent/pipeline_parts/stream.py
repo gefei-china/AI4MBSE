@@ -5238,6 +5238,22 @@ class StreamMixin:
             except Exception:
                 max_tool_rounds, max_failed_rounds = 100, 3
                 _lg_budget, _lg_retries, _lg_retry_wait = 300000, 3, 30.0
+            # ★ 2026-11-02（全链路实测发现的无进展循环）：**结果侧**进度护闸。
+            #   与上面的 `_lg`（参数侧去重 + 预算）互补：`_lg` 按 `工具|参数` 精确计数，
+            #   模型同义改写 query 即失效（实测 86 次调用参数几乎全不同）；
+            #   本护闸看"结果还有没有新增内容"，与问法无关。
+            #   tracker 生命周期 = 本函数一次调用 = 一个子任务/一轮主 Agent ⇒ 不会跨任务串味。
+            _pg, _pg_stop, _pg_reason = None, False, ""
+            try:
+                from core import config as _cfg_pg
+                if bool(_cfg_pg.get("agent", "progress_guard_enabled", True)):
+                    from agent.loop_progress import ProgressTracker as _PT
+                    _pg = _PT(
+                        novelty_min=float(_cfg_pg.get("agent", "progress_novelty_min", 0.05) or 0.05),
+                        streak_stop=int(_cfg_pg.get("agent", "progress_streak_stop", 4) or 4),
+                        hard_cap=int(_cfg_pg.get("agent", "progress_hard_cap_per_tool", 30) or 30))
+            except Exception:
+                _pg = None
             # 2026-10-04：接入统一护栏（与 execute.py 的非流式 loop **同源**）。
             # 为什么必须同源：这两段是同一套 ReAct 语义的两种实现，此前只有编排路径
             # 有 token 预算，重复检测与工具超时两边都没有 ⇒ 补一边就会留下新的不对称。
@@ -5773,6 +5789,44 @@ class StreamMixin:
                             _weak = bool(result.get("weak")) or ("未检索到" in _t_result) or ("无新冲突" in _t_result)
                             if _weak:
                                 weak_count += 1
+                            # ★★ 2026-11-02（全链路实测发现的无进展循环）：
+                            #   判据 = **边际新颖度**（本次结果相对"本次子任务已看过的全部内容"
+                            #   的新增比例），不是"参数是否重复"。
+                            #   现场证据（conv 10004 实测）：graph_retrieve 被调 86 次，
+                            #   参数几乎每次不同（同义改写 query）⇒ 既有 `dedup_hit`
+                            #   的精确键一次都没命中；而边际新颖度在第 17 次后
+                            #   大面积 ≤0.01（45 次零新增）。详见 agent/loop_progress.py。
+                            #   软判定（无新增）⇒ 在结果里追加提示；
+                            #   硬判定（连续无新增 / 单工具超上限）⇒ 置位 `_pg_stop`，
+                            #   本轮结束后收尾作答（**不掐断**，已产出内容全部保留）。
+                            if _pg is not None and not _skipped:
+                                try:
+                                    _pv = _pg.observe(tname, _r_full)
+                                    if _pv.get("hint"):
+                                        # 提示追加在**模型侧**内容里（不改工具原文）
+                                        _t_content["progress_hint"] = _pv["hint"]
+                                    if _pv.get("novel"):
+                                        pass
+                                    else:
+                                        try:
+                                            exec_notices.append(({
+                                                "kind": "progress",
+                                                "text": "（无进展护闸）%s 本次检索无新增（新增 %.0f%%），已提示模型停止重复检索"
+                                                        % (tname, float(_pv.get("ratio") or 0) * 100)}))
+                                        except Exception:
+                                            pass
+                                    if _pv.get("stop"):
+                                        _pg_stop = True
+                                        _pg_reason = str(_pv.get("stop_reason") or "")
+                                        try:
+                                            exec_notices.append(({
+                                                "kind": "progress",
+                                                "text": "（无进展护闸）%s 已连续无新增/超调用上限（%s），本轮提前收尾"
+                                                        % (tname, _pg_reason or "no_progress")}))
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass    # 护闸故障绝不阻断工具链
                             # 2026-09-17 S3：回填给模型的结果单独封顶（此前用未截断的原始结果，长结果被后续每轮重发）
                             # P1-4（2026-10-02）：封顶升级为 offload——全文落库，模型侧换引用块（可寻址召回）
                             _t_model = str(result.get("result") or "")
@@ -5814,6 +5868,16 @@ class StreamMixin:
                         #      3s/次、最多烧到 max_tool_rounds=100 轮，每轮还多一条工具留痕）。
                         if _clarify_req:
                             break
+                        # ★ 2026-11-02（无进展护闸）：连续零新增 ⇒ **收尾**（不做无意义的下轮）。
+                        #   ⚠️ 与 `_clarify_req` 的 break 不同：那个 break 是为了**不补 skip**
+                        #   （avoid 悬空 tool_call）；这里必须**先把 results 回填**，
+                        #   否则下一轮 LLM 看不到本轮结果、会把"没结果"当结论。
+                        # ★ 2026-11-02（无进展护闸）：连续零新增 ⇒ 本轮结束后**收尾作答**。
+                        #   ⚠️ 这里**只记录标志、不发消息**：此刻 results 尚未回填，
+                        #   提前 append 一条 user 消息会破坏
+                        #   `assistant(tool_calls) → tool...` 的严格配对顺序（HTTP 400）。
+                        #   真正下发在下面 results 回填之后（见 `messages.extend(results)` 之后）。
+                        _pg_stop_now = bool(_pg_stop)
                         if _skip_calls:
                             _skip_res = _lproto.skipped_results(_skip_calls)
                             for _sr in _skip_res:
@@ -5894,6 +5958,20 @@ class StreamMixin:
                             _elide_queue = _still
                             messages.append(pmsg)
                             messages.extend(results)
+                            # ★ 2026-11-02（无进展护闸）：**必须**在 results 回填之后再发提示，
+                            #   否则 `assistant(tool_calls) → tool...` 的配对顺序被打断（HTTP 400）。
+                            #   语义：告知"为什么不能再检索"，并要求基于已有结果作答
+                            #   （不给原因时模型会自己编一个 —— 与墙钟停机那次教训同源）。
+                            if _pg_stop_now:
+                                try:
+                                    messages.append({"role": "user", "content": (
+                                        "\n\n【系统】本子任务已触发**无进展护闸**（%s）："
+                                        "检索连续没有带来新内容，或单个工具调用次数已达上限。"
+                                        "请**立即**停止调用工具，基于上面已有的结果给出结论；"
+                                        "未覆盖的部分如实写进 missing[]。"
+                                        % (_pg_reason or "no_progress"))})
+                                except Exception:
+                                    pass
                             for _k in range(len(messages) - len(results), len(messages)):
                                 _elide_queue.append((_rnd, _k))
         # P0-按需工具：本轮工具结果全弱相关 → 收敛（跳出循环走兜底流式生成，避免连环调用）
