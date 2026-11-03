@@ -553,12 +553,36 @@ body.nr-full-lock{overflow:hidden;}
   margin-right:max(0px, calc((100% - var(--chat-track, 920px)) / 2));
 }
 /* ↑ 同时解决「下方元素与消息列差 7px」：
-   ⚠️ #chat-area 是 overflow-y:auto 的滚动容器，滚动条（实测 15px，Windows）只吃**右侧**空间
-   → 消息列在「padding-box − 右侧滚动条」里居中，而状态栏/输入区在 #chat-col 里居中（无滚动条）
-   → 两者**中心线差 ~6.5px**（实测 left 410 vs 417）。宽度一样却看着不齐，即此因。
-   ✅ scrollbar-gutter:stable both-edges 让滚动条占位**左右对称**，中心线回到容器中心，
-      与下方元素同轴。（stable 还避免"无滚动条↔有滚动条"时内容跳动。） */
-#chat-area{scrollbar-gutter:stable both-edges;}
+   ⚠️ 历史上（2026-09-28 之前）#chat-area 是 overflow-y:auto 的滚动容器，滚动条（实测 15px，
+   Windows）只吃**右侧**空间 → 消息列在「padding-box − 右侧滚动条」里居中，而状态栏/输入区
+   在 #chat-col 里居中（无滚动条）→ 两者**中心线差 ~6.5px**（实测 left 410 vs 417）。
+   📌 [已废弃 2026-11-03] 当时的解法是 `scrollbar-gutter:stable both-edges`（左右各 15px 对称
+      占位把中心线拉回来）。**该规则已按米爸要求移除** —— 滚动条现在不展示了，不再占位，
+      中心线天然对齐，那 30px 占位就变成纯空白。详见下面那段 2026-11-03 的说明。
+      `stable` 当初还兼有"避免无/有滚动条时内容跳动"的作用，现在滚动条恒不占位，该作用一并消失。 */
+/* ★ 2026-11-03（米爸：「AI 正文输出区域，最外层，不要展示这个滚动条 —— 滚动条嵌入太多，
+   操作体验很差」）：**隐藏 #chat-area 自身的滚动条**（保留滚动能力，仅不展示滚动条）。
+
+   ⚠️ 必须与 `scrollbar-gutter` **一起改**，两者是同一件事的两面：
+     · 上面那段注释记录的根因是「Windows 滚动条 15px 只吃右侧 ⇒ 消息列与底部输入区
+       中心线差 ~6.5px」，当时的解法是 `stable both-edges` 用**左右各 15px 的对称占位**
+       把中心线拉回来 —— 也就是说那 30px 空白是"为了对齐而付的买路钱"。
+     · 滚动条不再展示后它**不再占位** ⇒ 中心线天然对齐，买路钱不必再付。
+     · 实测（1600×900，conv 10009）：`#chat-area` w=1308 / cw=1278 差 **30px**，
+       正是两侧各 15px 的 gutter 占位 —— 这就是米爸说的"嵌入太多"的直接来源。
+   ⇒ 两种改法缺一不可：
+      只隐藏滚动条、留着 gutter  → 白留 30px 空白（更难看）；
+      只去 gutter、不隐藏滚动条  → 中心线偏回 6.5px（回到老问题）。
+
+   为什么不用"hover 时才显示"：米爸明确要求「不要展示」，加 hover 仍属"会展示"。
+   滚动位置感由 `.cn-tick` 轮次刻度（49-convnav.js）与正文内 6px 滚动条提供；
+   滚轮/触摸板/键盘/`jumpTo()` 均不依赖滚动条可见性。 */
+#chat-area{
+  scrollbar-gutter:auto;             /* 同步去掉两侧 15px 对称占位 */
+  scrollbar-width:none;              /* Firefox 64+ */
+  -ms-overflow-style:none;           /* 旧 Edge / IE */
+}
+#chat-area::-webkit-scrollbar{width:0;height:0;}   /* Chrome / Safari / Edge(Chromium) */
 /* 底部输入区 / 状态栏与消息列对齐
    2026-09-28（第一版，已废弃）：曾用 968px（=920+24*2），理由是"#chat-area 左右各 24px padding"。
    实测证伪：.msg 的**边框盒**就是 920px、left=410；而 968px 的状态栏/输入区 left=393，
