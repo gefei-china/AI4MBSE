@@ -79,8 +79,9 @@ function renderMarkdown(text, cites){
     //   长代码完全看不见。
     //   现在默认 `open`：代码**默认完整可见**，点头部可收起 ——
     //   与 B5-8 的「最终输出不许收起来」同向（默认可见是底线，收起是用户主动选择）。
-    //   高度仍受 `.md-code{max-height:340px;overflow:auto}` 约束 ⇒ 超长代码内滚，
-    //   不会把页面拉长（这正是"可滑动查看完整内容"）。
+    //   ★ 2026-11-03：**不再限高**。原 `max-height:340px; overflow:auto` 会让超长代码
+    //   内滚，米爸原话「每一段 AI 正式内容输出不用滚动条，不用限制在固定的高度内」
+    //   ⇒ 代码块完整撑开（纵向交给外层 #chat-area），只保留 overflow-x 供长代码行横向滚动。
     return `<div class="code-fold open">`
       + `<div class="cf-head" onclick="codeFoldToggle(this)" title="点击收起 / 展开"><span class="cf-lang">${escMd(langName)}</span>`
       + `<span class="cf-meta">${n} 行</span>`
