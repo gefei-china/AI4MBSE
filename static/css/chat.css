@@ -378,8 +378,8 @@
 .code-fold .cf-act{cursor:pointer;color:var(--blue-d,#3478f6);text-decoration:underline;margin-left:auto;}
 .code-fold .chev{color:var(--mut);font-size:12px;transition:transform .2s ease;}
 .code-fold.open .chev{transform:rotate(90deg);}
-/* 同上（app.css 同选择器已同步）：代码块不限高，只保留横向滚动 */
-.code-fold .md-code{display:none;margin:0;border-radius:0;overflow-x:auto;}
+/* 代码块限高内滚（2026-11-03 已恢复原值；米爸只要改正文，代码块不动） */
+.code-fold .md-code{display:none;margin:0;border-radius:0;max-height:340px;overflow:auto;}
 .code-fold.open .md-code{display:block;}
 /* P1-3 思考轮次分隔 */
 .proc-round{font-size:12px;color:var(--blue-d,#3478f6);font-weight:600;margin:6px 0 2px;border-left:2px solid #cfe0ff;padding-left:6px;}

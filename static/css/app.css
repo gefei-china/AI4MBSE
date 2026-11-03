@@ -438,13 +438,15 @@ body.nr-full-lock{overflow:hidden;}
 .code-fold .cf-head{display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;user-select:none;font-size:12px;color:var(--mut);background:rgba(0,0,0,.02);}
 .code-fold .cf-lang{font-weight:700;color:var(--blue-d,#3478f6);text-transform:uppercase;}
 .code-fold .cf-act{cursor:pointer;color:var(--blue-d,#3478f6);text-decoration:underline;margin-left:auto;}
-/* ★ 2026-11-03（米爸：「每一段 AI 正式内容输出不用滚动条，不用限制在固定的高度内」）：
-   原为 `max-height:340px; overflow:auto` ⇒ 超长代码块被压在 340px 里内滚，
-   即"每一段各自一条滚动条"的最内层。现改为**不限制高度**，代码完整撑开，
-   纵向滚动交给唯一的外层 #chat-area。
-   ⚠️ 保留 `overflow-x:auto`：长代码行不换行是代码可读性的底线，横向滚动必需；
-      它与"限高"无关（纵向高度随内容自适应，不会产生纵向滚动条）。 */
-.code-fold .md-code{display:none;margin:0;overflow-x:auto;}
+/* ★ 2026-11-03（米爸纠正）：**代码块必须保持限高内滚，不要动它。**
+   我上一轮把「每一段 AI 正式内容输出不用滚动条」扩大理解成也包含代码块，擅自删掉了
+   这里的 max-height —— 米爸明确否定：「代码块滚动条为什么去掉了，我有这条指令吗？」
+   ⇒ 已恢复 `max-height:340px; overflow:auto`（原值）。
+   ⇒ 范围边界：米爸要改的**只有正文 `.msg.ai .body`**（那是"正式内容"）。
+      代码块（有独立头部、行数、复制、折叠，本身是"代码视窗"）、
+      整合卡代码面板 `.svm-code`、执行过程区 `.proc` 都**保持原样**。
+   反查：谁再想动这里，先去问，不要"顺手统一"。 */
+.code-fold .md-code{display:none;margin:0;max-height:340px;overflow:auto;}
 .code-fold.open .md-code{display:block;}
 /*★ B5-8（2026-10-14）：`.body-fold` 正文折叠样式**已整体移除** ——
    米爸明确要求「最终输出结果不要收起来，也不允许收起来」⇒ 正文一律全量展示。
@@ -827,13 +829,12 @@ body.sp-resizing .slide-panel,body.sp-resizing .modal .mbox{transition:none;}
 .svm-tab.active{background:#fff;color:var(--blue-d);font-weight:600;border-color:var(--line);}
 .svm-tab .sv-cnt{font-style:normal;background:var(--blue-l);color:var(--blue-d);border-radius:8px;padding:0 6px;font-size:12px;}
 .svm-pane{padding:10px;min-width:0;}
-/* ★ 2026-11-03（米爸：「每一段 AI 正式内容输出不用滚动条，不用限制在固定的高度内」）：
-   原 `max-height:440px; overflow:auto` ⇒ 整合卡里的 SysML v2 代码面板被锁在 440px
-   内滚（实测 conv 9779 一页有 4 处，最长的内容 4959px 只露出 438px）。
-   现不限制高度、完整撑开；纵向滚动交给唯一外层 #chat-area。
-   ⚠️ 保留 `overflow-x:auto`：`code` 是 `white-space:pre`（不换行），长代码行必须横向滚动。
-   ⚠️ 不涉及 `.svm-canvas`（max-height:520px）—— 那是**图形视口**的高度，不是文字被截断。 */
-.svm-code{overflow-x:auto;margin:0;background:#f6f8fa;border:1px solid var(--line);border-radius:8px;padding:10px 12px;}
+/* ★ 2026-11-03（米爸纠正）：「整合卡也不用去掉滚动条，只需要处理正文部分」
+   我上一轮擅自把这里的 `max-height:440px` 也删了 —— 已恢复原值。
+   ⇒ 范围边界：米爸要改的**只有正文 `.msg.ai .body`**。
+      整合卡代码面板是"代码视窗"（带 tab/复制），保持限高内滚。
+   反查：谁再想动这里，先去问，不要"顺手统一"。 */
+.svm-code{max-height:440px;overflow:auto;margin:0;background:#f6f8fa;border:1px solid var(--line);border-radius:8px;padding:10px 12px;}
 .svm-code code{font-family:Consolas,monospace;font-size:12.5px;color:var(--fg);line-height:1.55;white-space:pre;}
 /* 整合卡复用 sv-card 容器时：内部 tab 自带描边，外层 padding 收敛 */
 .svm-card-wrap{padding:0 !important;overflow:hidden;}
