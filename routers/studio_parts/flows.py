@@ -262,7 +262,12 @@ def run_agent_flow_async(fid: int, body: dict | None = None, conn=Depends(db_ses
             except Exception:
                 pass
 
-    threading.Thread(target=_worker, daemon=True).start()
+    # ★ 2026-11-03：继承请求上下文（裸线程不继承 ContextVar ⇒ 流程内 LLM 调用
+    #   会丢 conversation_id/trace_id，成本无法归到该请求）。与 core/sse.py、
+    #   agent/loop_guard.py 同一缺陷族，统一用 copy_context 一次继承全部字段。
+    import contextvars as _cv3
+    _flow_ctx = _cv3.copy_context()
+    threading.Thread(target=lambda: _flow_ctx.run(_worker), daemon=True).start()
     audit(audit_user(user), "flow_run_async", f"异步执行Agent流程#{fid}: {flow['name']}", conn=conn)
     return {"ok": True, "run_id": run_id, "flow_id": fid, "name": flow["name"]}
 

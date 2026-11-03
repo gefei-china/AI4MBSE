@@ -175,10 +175,21 @@ def iter_with_heartbeat(iterator, interval_s: float = 15.0, comment: str = "ping
         finally:
             q.put((True, _SENTINEL))   # 无论正常结束还是异常，都必须给下游一个终点
 
-    _t = threading.Thread(target=_worker, name="sse-source", daemon=True)
+    # ★★ 2026-11-03（真库实证）：**必须继承调用方上下文**。
+    #   本 worker 消费的是**编排/对话的同步生成器**（`iterator`），也就是说
+    #   `_stream_orchestrated_flow` / `execute_stream` 里所有 `bind_trace`
+    #   都发生在这条线程上。裸 `threading.Thread` 不继承 ContextVar ⇒
+    #   父请求的 `trace_id` 在这里断掉，生成器内部再 `begin_trace` 会**新开一条链**
+    #   ⇒ 「一次请求 = 一条 trace」不成立，按 trace 聚合成本会把一轮拆成多段
+    #   （实测：同一会话中 `planner` 的 usage `run_id=0`，而子任务是 `run=570`）。
+    #   ⚠️ 用 `copy_context()` 而非 `bind_trace(...)` 逐字段补：后者要在这里
+    #     重新枚举所有字段，漏一个就再次丢归属（本缺陷已因"漏一处"复发过两次）。
+    import contextvars as _cv
+    _sse_ctx = _cv.copy_context()
+    _t = threading.Thread(target=lambda: _sse_ctx.run(_worker),
+                          name="sse-source", daemon=True)
     _t.start()
     started.wait(timeout=5)   # 只等线程启动本身，不等它产出数据
-
     try:
         while True:
             try:
@@ -294,7 +305,13 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
             except RuntimeError:
                 pass                        # loop 已关，无需收尾
 
-    _th.Thread(target=_worker, name="sse-source-async", daemon=True).start()
+    # ★★ 2026-11-03：与同步版同一个缺陷（裸 threading.Thread 不继承 ContextVar）。
+    #   本 worker 在自建线程里迭代生成器 ⇒ 生成器内所有 `bind_trace` 都落在这条线程上，
+    #   父请求的 trace 在这里断链。用 `copy_context()` 一次性继承全部字段。
+    import contextvars as _cv2
+    _sse_ctx2 = _cv2.copy_context()
+    _th.Thread(target=lambda: _sse_ctx2.run(_worker),
+               name="sse-source-async", daemon=True).start()
 
     try:
         while True:

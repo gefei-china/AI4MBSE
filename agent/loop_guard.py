@@ -152,9 +152,21 @@ def call_tool_guarded(exec_fn, name: str, args: dict, *,
 
     box: dict = {}
 
+    # ★★ 2026-11-03（真库 28 条实证）：**必须继承上下文**。
+    #   工具在裸 `threading.Thread` 里执行 —— `ContextVar` 不跨线程传播 ⇒
+    #   工具内部的一切 LLM 调用（典型：`graph_retrieve` → `knowledge_engine`
+    #   → `services.rag_rerank.llm_rerank`）拿到的 trace 上下文是**空的**：
+    #   实测那 28 条 `rag_rerank` 的 `trace_id=''`、`conversation_id=0`、`run_id=0`，
+    #   而同期同编排的 `chat_probe` 归属完整。
+    #   后果：① 检索重排的 token 完全不计入会话/run 成本；
+    #        ② `trace_id` 为空使"这一轮调了哪些能力、花了多少钱"断链。
+    #   ⚠️ 不用 `threading.Thread` 的 kwargs（没有该能力），必须在 _target 内部 run。
+    import contextvars as _cv
+    _tool_ctx = _cv.copy_context()
+
     def _target():
         try:
-            box["r"] = exec_fn(name, args)
+            box["r"] = _tool_ctx.run(exec_fn, name, args)
         except BaseException as e:      # noqa: BLE001 —— 线程里必须全接，否则静默丢失
             box["e"] = e
 

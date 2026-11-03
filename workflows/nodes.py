@@ -690,7 +690,12 @@ class FlowNodesMixin:
                 _wt = int(_cfg.get("delegation", "worker_timeout_s", 120))
                 try:
                     with ThreadPoolExecutor(max_workers=min(len(workers), 4)) as pool:
-                        _futs = [pool.submit(_run_worker, w) for w in workers]
+                        # ★ 2026-11-03：`submit_with_ctx` —— 裸 submit 不继承 ContextVar，
+                        #   worker 内的 LLM/工具调用会丢掉 conversation_id/run_id/trace_id
+                        #   （真库 75 条 usage 实证：conv=0 但 trace_id 有值 = 空上下文
+                        #   触发了 begin_trace(0) 新开链）。三处提交点统一收口。
+                        from core.audit import submit_with_ctx as _swc
+                        _futs = [_swc(pool, _run_worker, w) for w in workers]
                         bids = []
                         for _f in _futs:
                             try:

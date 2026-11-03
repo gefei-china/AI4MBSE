@@ -515,9 +515,13 @@ class FlowPlannerMixin:
                         # 2026-10-29：plan 一并传入 → 依赖按传递闭包展开（长链不再断头）；
                         #   branch/user 透传（此前 branch 硬编码 "dev" ⇒ 非 dev 分支的知识库检索范围错、
                         #   user=None ⇒ 子任务无用户上下文、Skill 角色过滤失效）。
-                        _futs = [pool.submit(self._run_task, tk, goal, conn, attachments,
-                                             list(_done_items), artifact_digest,
-                                             plan, branch, user)
+                        # ★ 2026-11-03：改用 `submit_with_ctx` —— 裸 submit 不继承 ContextVar，
+                        #   子任务内的 LLM 调用会丢掉 conversation_id/run_id（真库 75 条实证），
+                        #   且因 trace_id 为空触发 `begin_trace(0)` 把一次编排拆成多条链。
+                        from core.audit import submit_with_ctx as _swc
+                        _futs = [_swc(pool, self._run_task, tk, goal, conn, attachments,
+                                      list(_done_items), artifact_digest,
+                                      plan, branch, user)
                                  for tk in ready]
                         results_list = []
                         for _f in _futs:

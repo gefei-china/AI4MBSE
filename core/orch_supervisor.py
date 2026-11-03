@@ -288,6 +288,18 @@ def _scan_conn(conn, res: dict, *, max_runs: int, stale_s: int | None,
             _record("triggered", rid, "mode=%s conv=%s" % (mode, conv_id))
 
             def _target(rid=rid, conv_id=conv_id, ck=ck):
+                # ★ 2026-11-03：续跑线程**显式**绑定归属（不是 copy_context）——
+                #   本线程由守护循环发起，发起点是"常驻后台"，没有活的请求上下文可继承；
+                #   归属只能从**检查点**推出来（`_ck_load` 给了 conv_id）。
+                #   不绑 ⇒ 续跑批次内的 LLM 调用落成 conv=0/run=0，成本无处归。
+                #   与 `agent/loop_guard.py`（工具线程）、`core/sse.py`（事件源线程）
+                #   是同一缺陷族，但取值来源不同：那两处有活上下文可继承，这里只能显式给。
+                try:
+                    from core.audit import inherit_trace as _it
+                    _it(conversation_id=int(conv_id or 0),
+                        run_id=int(rid or 0))
+                except Exception:
+                    pass
                 try:
                     _drive(rid, conv_id, ck.get("branch") or "dev")
                 except Exception as e:

@@ -647,10 +647,14 @@ class StreamMixin:
             from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac, wait as _wait
             def _submit_with_ctx(pool, fn, *args):
                 """P0-c：ThreadPoolExecutor.submit 不会继承 ContextVar —— 显式 copy_context，
-                否则子任务线程里发生的 LLM 调用会丢掉 conversation_id/run_id/trace_id 归属。"""
-                import contextvars as _cvx
-                _ctx = _cvx.copy_context()
-                return pool.submit(lambda *a: _ctx.run(fn, *a), *args)
+                否则子任务线程里发生的 LLM 调用会丢掉 conversation_id/run_id/trace_id 归属。
+
+                ★ 2026-11-03：实现收口到 `core.audit.submit_with_ctx`。
+                本文件曾**只定义不使用**（主路径用了、补跑路径用裸 `pool.submit`）
+                ⇒ 真库 75 条 usage 的 conv/run 归零。现在统一委托，避免两份实现漂移。
+                """
+                from core.audit import submit_with_ctx as _swc
+                return _swc(pool, fn, *args)
             _max_workers = getattr(self, "_ORCH_MAX_WORKERS", 3)        # 全局并发 worker 上限（每批）
             _timeout = getattr(self, "_ORCH_SUBTASK_TIMEOUT", 120)      # 子任务 wall-clock 超时（秒，旧口径）
             # P0-7：超时判据改为「停滞为主 + 硬上限兜底」，两者均接 config（现场可调，不必改代码）
@@ -842,9 +846,17 @@ class StreamMixin:
                 tkey = tk.get("task_key") or "t"
                 ttitle = tk.get("title") or tkey
                 # P0-c：子任务标识进链路上下文（本线程独立 context，不污染兄弟子任务）
+                # ★ 2026-11-03（纵深防御）：**不要只 bind sub_task_key**。
+                #   `ContextVar` 不跨线程传播 —— 若本函数被裸 `pool.submit` 提交，
+                #   进入时上下文是**空的**，只补 sub_task_key 会让 conversation_id/run_id
+                #   双双丢失（真库 75 条 usage 实证），并因 trace_id 为空触发
+                #   `begin_trace(0)` **新开一条链**（一次编排碎成 N+1 条）。
+                #   ⇒ 这里显式带上父轮次归属，与主路径 `submit_with_ctx` 双保险。
                 try:
-                    from core.audit import bind_trace
-                    bind_trace(sub_task_key=tkey)
+                    from core.audit import inherit_trace as _inherit
+                    _inherit(sub_task_key=tkey,
+                             conversation_id=(int(conversation_id) if conversation_id else None),
+                             run_id=(int(run_id) if run_id else None))
                 except Exception:
                     pass
                 _hb[tkey] = _t.time()   # P0-7：活性心跳（置位即表示"已启动"，worker 的停滞超时据此判定）
@@ -3167,7 +3179,13 @@ class StreamMixin:
                                 pass
                             _r_f = None
                             try:
-                                _fut_f = _pool_f.submit(_run_subtask, _tk_f)
+                                # ★ 2026-11-03（真库 75 条实证）：**必须**走 _submit_with_ctx。
+                                #   此处原为裸 `_pool_f.submit` ⇒ 补跑线程拿不到父轮次上下文
+                                #   ⇒ usage 落成 conv=0/run=0，且因 ctx 为空触发
+                                #   `begin_trace(0)` **新开一条 trace**（一次编排碎成多条链）。
+                                #   `_submit_with_ctx` 此前只被首跑路径用，本文件"定义了却没接线"
+                                #   正是该缺陷的直接成因。
+                                _fut_f = _submit_with_ctx(_pool_f, _run_subtask, _tk_f)
                                 _r_f = _fut_f.result(timeout=_rem)
                             except Exception as _fe:
                                 # 超时/异常 ⇒ 协作式取消（子任务在下个事件点 break，
