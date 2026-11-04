@@ -26,6 +26,9 @@
   G8     pr 层不许含外部依赖（防把需要服务/LLM 的门禁塞进 pr，让 CI 恒红）
   G9     **债务上限**：broken / backlog 条数不得超过 budget（只降不升）
          —— 把红门禁搬出 CI 换绿灯是最容易也最坏的作弊；账必须记下来。
+  G10    **nightly 不得在 PR 上执行**：含 nightly 门禁的 job 必须带
+         `schedule` 闸门（`if:`）。2026-11-04 实测：拆了 job 但没加 `if:`，
+         每个 PR 仍跑 21+14 步，且任一红就会让整个 run 判红。
 
 ## 为什么需要 broken / backlog（而不是"搬走就绿了"）
 
@@ -125,6 +128,61 @@ def ci_steps():
     return names, n_soft
 
 
+def ci_jobs():
+    """job 名 → {"if": 条件表达式, "gates": 该 job 会执行的门禁脚本名集合}。
+
+    ── 为什么需要（2026-11-04 实测事故）──────────────────────────────
+    把 nightly 门禁"拆成独立 job"**并不等于**"不再在 PR 上跑"：
+    两个 nightly job 当时都没有 `if:` ⇒ 每次 PR 都会并行跑 21+14 步，
+    而只要任一 nightly 门禁红，**整个 run 照样判红**（并行 ≠ 不阻断）。
+    `ci_steps()` 只统计主 job（到 nightly-evals 为止），看不到这个面，
+    所以 G6 一直是绿的 —— 与"元门禁只数 yml 里有没有这行"是同一类盲区。
+
+    实现保持**逐行正则**（不引 PyYAML）：CI 环境不一定装 yaml，
+    且本文件既有判据都按行口径，多一条依赖就多一个"CI 上 import 失败"的风险。
+    """
+    path = os.path.join(ROOT, ".github", "workflows", "ci.yml")
+    with open(path, encoding="utf-8") as f:
+        lines = f.readlines()
+
+    jobs, cur, in_jobs = {}, None, False
+    for ln in lines:
+        s = ln.rstrip("\n")
+        if s.rstrip() == "jobs:":
+            in_jobs = True
+            continue
+        if not in_jobs:
+            continue
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", s)
+        if m:
+            cur = m.group(1)
+            jobs[cur] = {"if": "", "gates": set()}
+            continue
+        if cur is None:
+            continue
+        t = s.strip()
+        if t.startswith("#"):
+            continue
+        mi = re.match(r"^    if:\s*(.+)$", s)
+        if mi:
+            jobs[cur]["if"] = mi.group(1).strip()
+        mg = re.search(r"python\b[^\n]*?tools/verify/([a-z_0-9]+)\.py", t)
+        if mg:
+            jobs[cur]["gates"].add(mg.group(1) + ".py")
+    return jobs
+
+
+def nightly_violations(jobs, nightly_gates):
+    """在 PR/push 上会执行的 job 里，若含 nightly 门禁且无 schedule 闸门 ⇒ 违规。"""
+    bad = []
+    for name, info in jobs.items():
+        if not (info.get("gates") & nightly_gates):
+            continue
+        if "schedule" not in str(info.get("if") or ""):
+            bad.append("%s(if=%r)" % (name, info.get("if") or ""))
+    return bad
+
+
 def check_all(m):
     gates = m.get("gates") or []
 
@@ -212,6 +270,22 @@ def check_all(m):
             over.append("%s=%d > budget=%s" % (k, cnt[k], cap))
     rec("G9 债务（broken/backlog）不超过 budget（只降不升）", not over,
         "；".join(over) + "（真修好了就把 budget 下调，别只改数字）")
+
+    # G10 nightly 门禁不得在 PR 上执行（2026-11-04 事故：见 ci_jobs 的注释）
+    nightly_gates = {g.get("script") for g in gates if g.get("tier") == "nightly"}
+    jobs = ci_jobs()
+    bad = nightly_violations(jobs, nightly_gates)
+    rec("G10 nightly 门禁所在 job 必须带 schedule 闸门（否则 PR 也会跑）",
+        not bad, "缺 if: 的 job: %s" % bad[:4])
+
+    # G10b 判据自证：合成两例，必须一绿一红（防判据写成恒真 / 恒假）
+    _syn_pass = not nightly_violations(
+        {"n": {"if": "github.event_name == 'schedule'", "gates": {"x.py"}}}, {"x.py"})
+    _syn_fail = bool(nightly_violations(
+        {"n": {"if": "", "gates": {"x.py"}}}, {"x.py"}))
+    rec("G10b 判据自证（有 schedule 闸门=绿 / 无 if=红）",
+        _syn_pass and _syn_fail,
+        "有闸门判绿=%s 无 if 判红=%s" % (_syn_pass, _syn_fail))
 
 
 def mutations(m):

@@ -1722,6 +1722,12 @@ jobs:
         run: python tools/verify/verify_vec_cache.py
 
   nightly-guards:
+    # ⚠️ 2026-11-04 修复：此前无 `if:`，导致**每个 PR 也跑这 21 条 nightly 门禁**——
+    #    "拆 job" 只把它们从主链路的串行里拿出来，并没有把它们从 PR 上拿下来；
+    #    而只要任一 nightly 门禁红，**整个 run 照样判红**（并行 ≠ 不阻断）。
+    #    nightly 的判据（真库 / 真 LLM / 长耗时 / >15s 变异）在 PR 环境本就不成立，
+    #    于是 nightly 变成了 PR 的随机阻断器。此处收紧为定时 / 手动触发。
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       PYTHONIOENCODING: utf-8
@@ -1863,8 +1869,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_multi_project_scope_mutate.py
   nightly-evals:
+    # 同 nightly-guards：只在定时 / 手动触发。此前无 `if:` ⇒ 每个 PR 都跑评测
+    #（还带 secrets.OPENAI_API_KEY），PR 上要么白等、要么因缺 secret 空转。
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    continue-on-error: true          # 夜间失败不阻断 PR，但会发通知（见末尾）
+    continue-on-error: true          # 定时跑失败不阻断（评测集漂移单独通知），见末尾
     env:
       PYTHONIOENCODING: utf-8
     steps:
