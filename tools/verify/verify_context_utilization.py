@@ -91,20 +91,28 @@ check("A5 阈值已登记 CONFIG_SCHEMA（界面可调，不是硬编码常量�
 #   实测踩到——用"近 24h 内 cw=0 的行数"作判据，会把**修复前**写入的历史行
 #   和**并发旧进程**（评测跑批）写的行一起算进来 ⇒ 恒红且与本次改动无关。
 #   这属于本仓反复记录的「判据耦合部署状态」坑（§6.1）。
+# ⚠️ 2026-11-05：A6 是**数据级**断言（"取值路径真的通"只有真跑过 LLM 才看得见）。
+#   这条判据走了三轮才对，每轮的错法都记下来（同一个坑的三个面）：
+#     第 1 版：`cw>0 的行数 > 0`。干净库 0 行 ⇒ 恒红。
+#     第 2 版：`无任何调用才 SKIP`。CI 上有 1 条**前序门禁的 mock 调用** ⇒ 不 SKIP ⇒ 仍红。
+#     第 3 版（本版）：**把"期望"也算出来** —— 用 LEFT JOIN 找「真实调用（非 mock）
+#       且其 provider 配了窗口」的行数，那才是"应该写进 context_window"的调用。
+#       它为 0 ⇒ 无窗口可写 ⇒ SKIP 合理；它 >0 而 cw 全 0 ⇒ **真缺陷**（接线了取不到值）必须红。
+#   ⇒ 判据从"数行数"升级为"数期望值"，不再依赖环境有没有流量。
 _cw_rows = conn.execute(
     "SELECT COUNT(*) FROM llm_usage_stats WHERE COALESCE(context_window,0)>0").fetchone()[0]
-# ⚠️ 2026-11-05：A6 是**数据级**断言（"取值路径真的通"只有真跑过 LLM 才看得见）。
-#   干净库（CI / 全新克隆）一条 LLM 调用都没有 ⇒ 必然 0 行 ⇒ 恒红。
-#   与 B2 / C1 同一处理：**无样本 ⇒ SKIP 并打印原因**，而不是判失败。
-#   （它在开发机真库上仍然生效 —— 那里有大量真实调用。）
-_n_calls = conn.execute("SELECT COUNT(*) FROM llm_usage_stats").fetchone()[0]
-if int(_n_calls or 0) == 0:
-    print("    A6 SKIP：库中无任何 LLM 调用记录（干净库口径）⇒ 取值路径无从验证")
+_should_have_cw = conn.execute(
+    "SELECT COUNT(*) FROM llm_usage_stats s "
+    "LEFT JOIN llm_providers p ON p.id = s.provider_id "
+    "WHERE COALESCE(s.used_mock,0)=0 AND COALESCE(p.context_window,0)>0").fetchone()[0]
+if int(_should_have_cw or 0) == 0:
+    print("    A6 SKIP：库中无「真实调用且 provider 配了窗口」的记录"
+          "（干净库 / 仅 mock）⇒ 无窗口可写，取值路径无从验证")
 else:
-    check("A6 存在带分母的行（%d 行）⇒ 取值路径确实通，不是只加了一列" % _cw_rows,
+    check("A6 有窗口可写的调用共 %d 次，其中落库带分母 %d 行"
+          "（取值路径确实通，不是只加了一列）" % (_should_have_cw, _cw_rows),
           int(_cw_rows or 0) > 0,
-          "0 行 ⇒ 接线了但取不到值（`provider` 实参形态与取值方式不匹配）"
-          "（库内共 %d 次调用）" % _n_calls)
+          "0 行 ⇒ 接线了但取不到值（`provider` 实参形态与取值方式不匹配）")
 # 变异自证：换一个没有 context_window 的 provider dict ⇒ 必须得 0 且不抛异常（fail-safe）
 try:
     _pp = {"name": "fixture-no-cw"}
