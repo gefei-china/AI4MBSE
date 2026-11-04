@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库会话 9730 的四项根因；空库无该会话
 """门禁：会话 9730「还是没有持续走下去」四项根因（2026-10-28 第二轮）。
 
 ## 被验的真实故障（数据全部取自 mbse.db，不造样本）
@@ -48,7 +49,7 @@ def check(group: str, name: str, ok: bool, detail: str = "") -> None:
 
 
 def _db():
-    p = os.path.join(_ROOT, "mbse.db")
+    p = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
     return sqlite3.connect("file:%s?mode=ro" % p.replace("\\", "/"), uri=True)
 
 

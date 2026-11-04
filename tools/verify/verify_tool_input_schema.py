@@ -120,7 +120,7 @@ check("B1 变异体锚点齐全", mut_self_proof(
 # ── 3. 行为层：用独立临时库实跑 _build_tools_def ────────────────────────────
 print("\n=== C. 行为层：实跑 _build_tools_def（独立临时库）===")
 
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 if not os.path.exists(PROD_DB):
     print("  [SKIP] 未找到 %s" % PROD_DB)
     sys.exit(0)

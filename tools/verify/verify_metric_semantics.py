@@ -46,7 +46,7 @@ def check(name, ok, detail=""):
 
 
 # ── 准备隔离库（绝不碰生产库）─────────────────────────────────
-_PROD = os.path.join(_ROOT, "mbse.db")
+_PROD = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 _TMP = os.path.join(tempfile.gettempdir(), "verify_sw_semantics.db")
 for _p in (_TMP, _TMP + "-wal", _TMP + "-shm"):
     if os.path.exists(_p):

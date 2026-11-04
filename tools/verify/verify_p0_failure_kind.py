@@ -32,7 +32,7 @@ _ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-DB = os.path.join(_ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 
 
 def real_count() -> int:

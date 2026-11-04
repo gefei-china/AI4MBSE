@@ -195,7 +195,7 @@ print("\n== F. ★端到端：驱动真实 ReAct 循环 ==")
 import shutil
 import tempfile
 
-_SRC_DB = os.path.join(ROOT, "mbse.db")
+_SRC_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 _TMP_DB = os.path.join(tempfile.gettempdir(), "_loop_e2e.db")
 _have_db = os.path.exists(_SRC_DB)
 ck(_have_db, "F0 生产库存在（端到端需真实会话/工具元数据）")

@@ -761,7 +761,7 @@ section("D 真库：只读取证（结构完整，不断言具体值）")
 
 
 def _D():
-    real = os.path.join(ROOT, "mbse.db")
+    real = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     if not os.path.exists(real):
         print("  （真库不存在，跳过）")
         return

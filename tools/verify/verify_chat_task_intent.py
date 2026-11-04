@@ -59,7 +59,7 @@ if _ROOT not in sys.path:
 COMMON = os.path.join(_ROOT, "agent", "pipeline_parts", "common.py")
 STREAM = os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py")
 EXECUTE = os.path.join(_ROOT, "agent", "pipeline_parts", "execute.py")
-DB = os.path.join(_ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 
 ROLE_PROBE = "CHAT_TASK_PROBE"
 ROLE_REPAIR = "CHAT_TASK_REPAIR"

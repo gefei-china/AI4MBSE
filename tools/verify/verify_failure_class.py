@@ -35,7 +35,7 @@ TQUEUE = os.path.join(ROOT, "task_queue.py")
 FCLS = os.path.join(ROOT, "services", "failure_class.py")
 SCHEMA = os.path.join(ROOT, "database", "schema.py")
 MIGR = os.path.join(ROOT, "database", "migrations", "columns.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0
 _fail = 0

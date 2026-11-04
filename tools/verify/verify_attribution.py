@@ -418,7 +418,7 @@ def main():
 
     # ── D. 真库只读 smoke ──────────────────────────────────────────
     print("\n== D. 真库只读 smoke（裸 SQL 对账 + 聚合自洽 + 写入点行为级证明）==")
-    _prod = os.path.join(ROOT, "mbse.db")
+    _prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     if not os.path.exists(_prod):
         skip("D1-D5b 真库 smoke", "mbse.db 不存在（CI 环境）")
     else:

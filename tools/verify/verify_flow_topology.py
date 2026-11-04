@@ -781,7 +781,7 @@ else:
 # ══════════════════════════════════════════════════════════════
 section("D 真库（只读取证）")
 # ══════════════════════════════════════════════════════════════
-_real_db = os.path.join(ROOT, "mbse.db")
+_real_db = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 if not os.path.exists(_real_db):
     print("  （跳过：未找到真库 mbse.db）")
 else:

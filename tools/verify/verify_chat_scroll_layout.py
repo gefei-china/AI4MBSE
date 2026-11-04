@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D 断言本机浏览器实测证据 outputs/_verify_cv_fixed.json 已留档（outputs/ 不入库）
 """门禁：聊天滚动错位（`content-visibility` 高度估算）—— 2026-10-28。
 
 ## 被验的真实故障

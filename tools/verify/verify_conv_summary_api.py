@@ -28,7 +28,7 @@ except Exception:
 
 BASE = os.environ.get("MBSE_BASE", "http://127.0.0.1:8000")
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DB = os.path.join(ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 # ⚠️ 本机设了 http_proxy（实测 127.0.0.1:59906），urllib 默认会走代理 →
 # 访问本机服务得到 502 "upstream connect failed"，看起来像服务挂了，实为代理拦截。

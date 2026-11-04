@@ -45,7 +45,7 @@ import sys
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _ROOT)
 
-DB = os.path.join(_ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 F_REPO = os.path.join(_ROOT, "repositories", "intent_sample_repo.py")
 F_MODEL = os.path.join(_ROOT, "models", "studio.py")
 F_SCHEMA = os.path.join(_ROOT, "database", "schema.py")

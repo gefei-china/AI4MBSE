@@ -58,7 +58,7 @@ def main():
     import vector_index as vi
     from vector_index import ChunkVectorIndex as CVI
 
-    db = os.path.join(_ROOT, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
     con = sqlite3.connect("file:" + db + "?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
 

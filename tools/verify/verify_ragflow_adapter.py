@@ -28,7 +28,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-DB = os.path.join(_ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 SAMPLE = ("# 需求规格说明\n\n"
           "## 1. 系统需求\n"
           "整车应具备儿童遗留保护功能。\n\n"

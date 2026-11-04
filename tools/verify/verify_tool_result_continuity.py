@@ -193,7 +193,7 @@ def main():
     print("=" * 78)
     print("工具结果跨轮连续性 / 子任务会话归属")
     print("=" * 78)
-    if not os.path.exists(os.path.join(_ROOT, "mbse.db")):
+    if not os.path.exists((os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))):
         _rec("前置：mbse.db 存在", False, "无库 ⇒ 跳过（本门禁只在本机有意义）")
         print("\n结论：SKIP")
         return 0

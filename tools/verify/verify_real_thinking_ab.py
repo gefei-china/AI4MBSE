@@ -104,7 +104,7 @@ def _run_once(pid: int, policy: dict, intent: str) -> dict:
 def main() -> int:
     import sqlite3
     env_id = os.environ.get("THINKING_AB_PROVIDER_ID")
-    db = os.path.join(_ROOT, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
     if env_id and env_id.isdigit():
         row = conn.execute("SELECT id, model_name FROM llm_providers WHERE id=?",

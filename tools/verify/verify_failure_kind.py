@@ -1,4 +1,4 @@
-# CI-OPTIONAL: D 组查真库 tool_call_logs 的 kind 填充率（`mbse.db` 不入 git），E 组跑一次回填脚本（需库）。A/B/C/F 组本身无库依赖，但整脚本依赖 D/E 才有意义。
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D2 断言真库 failure_kind 分布 ≥5 类且 internal<60%；空库仅 3 类 22 条样本
 # -*- coding: utf-8 -*-
 """门禁：`failure_kind` 归属必须可用（P0-2，2026-10-30）。
 
@@ -168,7 +168,7 @@ for rel in ("agent/pipeline_parts/tools.py", "agent/pipeline_parts/memory.py"):
 hr("[D] 真库不变量：失败行 kind 填充率必须 100%")
 # ─────────────────────────────────────────────────────────────────────────────
 try:
-    ro = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+    ro = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
     n_all, n_fail, n_kind = ro.execute(
         "SELECT COUNT(*), SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END), "
         "SUM(CASE WHEN ok=0 AND COALESCE(failure_kind,'')<>'' THEN 1 ELSE 0 END) "

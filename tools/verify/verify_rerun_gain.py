@@ -38,7 +38,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
 
-DB = os.path.join(_ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 BASE = [9240, 9242, 9243, 9244, 9245, 9246, 9247, 9248]
 VIEW_OF = {9240: "v1 需求", 9242: "v2 用例", 9243: "v3 结构", 9244: "v4 活动",
            9245: "v5 IBD", 9246: "v6 时序", 9247: "v7 状态机", 9248: "v8 参数"}

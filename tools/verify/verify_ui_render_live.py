@@ -105,7 +105,7 @@ except Exception as _e:
           % str(_e)[:60])
     import sqlite3
     from knowledge_engine import QueryRouter
-    _con = sqlite3.connect(os.path.join(_ROOT, "mbse.db"))
+    _con = sqlite3.connect((os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db")))
     _con.row_factory = sqlite3.Row
     eng = QueryRouter().stats(_con)
     _rows = [dict(x) for x in _con.execute(

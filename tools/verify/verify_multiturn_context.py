@@ -57,7 +57,7 @@ if _VERIFY_DIR not in sys.path:
     sys.path.insert(0, _VERIFY_DIR)
 import _srctool  # noqa: E402  —— 正确 dedent 的 getsource（见 _srctool 模块注释）
 
-LIVE_DB = os.path.join(ROOT, "mbse.db")
+LIVE_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 PASS, FAIL = [], []
 

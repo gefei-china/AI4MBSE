@@ -158,7 +158,7 @@ def _fetch_payload():
     for suf in ("", "-wal", "-shm"):
         if os.path.exists(tmpdb + suf):
             os.remove(tmpdb + suf)
-    prod = os.path.join(ROOT, "mbse.db")
+    prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     if not os.path.exists(prod):
         return None, "生产库不存在（mbse.db）"
     import sqlite3

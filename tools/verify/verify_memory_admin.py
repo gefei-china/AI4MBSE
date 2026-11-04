@@ -256,7 +256,7 @@ else:
 # E 组：真实生产库只读交叉验证
 # ══════════════════════════════════════════════════════════════════════════════
 print("\n== E 真实生产库只读交叉验证 ==")
-_PROD = os.path.join(ROOT, "mbse.db")
+_PROD = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 if os.path.exists(_PROD):
     try:
         pc = sqlite3.connect("file:%s?mode=ro" % _PROD.replace("\\", "/"), uri=True)

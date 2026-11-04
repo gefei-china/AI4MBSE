@@ -545,7 +545,7 @@ check("C10d 规则注册表已复位（四规则齐）", len(cu._RULES) == 4)
 # ═══════════════════════════════════════════════════════════════
 section("D 真库：只读取证证据包可取（不断言具体值——真库状态会变）")
 # ═══════════════════════════════════════════════════════════════
-_PROD_DB = os.path.join(ROOT, "mbse.db")
+_PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 _pc = sqlite3.connect(_PROD_DB)
 _pc.row_factory = sqlite3.Row
 try:

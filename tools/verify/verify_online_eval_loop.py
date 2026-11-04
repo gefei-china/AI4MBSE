@@ -312,7 +312,7 @@ def main():
 
     # ═══ G 真库只读取证 ═══
     print("\n=== G. 真库只读取证 ===")
-    db = os.path.join(ROOT, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     if os.path.exists(db):
         try:
             ro = sqlite3.connect("file:%s?mode=ro" % db, uri=True)

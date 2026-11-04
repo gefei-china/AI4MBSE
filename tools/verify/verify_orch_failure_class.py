@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。F 段断言「真库 agent_tasks 有 failed 记录并可按 error_class 分解」；空库无失败样本
 """S5 门禁：编排失败必须可按类别分解，且孤儿回收不能因缺列而整体失败（2026-10-29）。
 
 ## 要防的三件事
@@ -114,6 +115,7 @@ check("E3 fail() 也有降级", tq.count("status='failed'") >= 2, tq.count("stat
 
 print()
 print("== F 真实库：可按 error_class 分解（证明这个维度有意义）==")
+# ⚠️ 2026-11-05：此处**故意不跟随 MBSE_DB_PATH**（真库金标，见 agent_archive 同款注释）。
 _db = os.path.join(_ROOT, "mbse.db")
 if not os.path.isfile(_db):
     check("F 库存在", False, _db)

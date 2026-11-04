@@ -68,7 +68,7 @@ def _find_root():
 ROOT = _find_root()
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _results = []
 SKIPPED = []   # 判据面不存在（干净库无编排消息）——SKIP 不计 FAIL，但也不装 PASS

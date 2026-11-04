@@ -35,7 +35,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-DB = os.path.join(ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 # 8 个视图的枚举值与期望硬约束关键词（关键词取自 V10 写入的 skill 正文）
 #

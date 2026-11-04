@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需真库 mcp_servers.tool_meta（MCP 重新发现后才有）；空库该字段为空
 # -*- coding: utf-8 -*-
 """verify_mcp_tool_closure — 门禁：**工具暴露必须保住「动作链完整」**，不能只做 top-k 裁剪。
 
@@ -52,7 +53,7 @@ def ok(name, cond, detail=""):
 
 
 def load_meta():
-    c = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+    c = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
     c.row_factory = sqlite3.Row
     row = c.execute("SELECT tool_meta FROM mcp_servers WHERE name='zhiyuan-dev-mcp'").fetchone()
     c.close()

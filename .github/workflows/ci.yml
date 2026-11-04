@@ -502,14 +502,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_audit_p0.py
 
-      - name: Guard 分支权限闸（19 项 + 变异）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_branch_permission_gates.py
-
-      - name: Guard 分支保护规则
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_branch_protection_rules.py
-
       # ── 意图识别 ──
       - name: Guard 意图缓存键设计（含大写路径对照）
         if: ${{ !cancelled() }}
@@ -527,10 +519,6 @@ jobs:
       - name: Guard 文档目录树（19 项 + 变异）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_doc_folders.py
-
-      - name: Guard 实体时态历史（entity_versions）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_entity_versions.py
 
       - name: Guard 工程归属标注（图库写入兜底）
         if: ${{ !cancelled() }}
@@ -563,10 +551,6 @@ jobs:
       #   ⇒ 改文件不影响模型、改库不影响文件，且**无任何报错**。
       # 另含生成型包的新鲜度断言：references 工具条数必须等于活库 tool_meta 条数
       #   （服务端加了工具但没重跑生成器 ⇒ 文档静默过期）。无 mbse.db 时该项 SKIP。
-      - name: Guard 技能包与 DB 内容一致（16 项 + 变异）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_skill_package_sync.py
-
       # ── 第二轮第 2 项：红灯门禁归因后修复，已双环境（生产库 + 干净库）实测绿 ──
       - name: Guard 续作输入识别（22 项，carry 词表单一来源）
         if: ${{ !cancelled() }}
@@ -600,10 +584,6 @@ jobs:
 
       # 卸载/装回全链路（20 项）。无插件数据的库会自行 SKIP（rc=0）而非崩溃；
       # 有 plugins 数据时完整验证管理员/普通用户两类权限视角。
-      - name: Guard 卸载装回全链路（20 项）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_uninstall_flow.py
-
       # ── 2026-10-09：清掉「14 份防御写了但从未执行」的欠账 ──
       # 起因：`verify_gate_wiring` 判红（门禁总数 104 / 未接线 14 / 豁免无理由 0）。
       # 本批 6 个经**干净库口径实测 rc=0**（MBSE_DB_PATH 指向空库）才接线。
@@ -626,10 +606,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_memory_conflict_gate.py
 
-      - name: Guard 建模流水线链路闭环
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_pipeline_closure.py
-
       # ★ 2026-11-04 新增：**环境可重建**（资产快照 ↔ 库 的漂移检测）。
       #   为什么单独立一条：本轮实测同一份代码，`init_db()` 建的空库只有
       #   7 agents / 14 tools / 0 skills，而真库是 30 / 45 / 42（差额全靠 25 个手工迁移脚本搬运），
@@ -643,6 +619,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_asset_snapshot_sync.py
 
+      # pr 层的准入判据 = 「全新克隆 + 空库能绿」。本门禁是其静态部分：
+      # 本机绝对路径 / 平台特定解释器 / 引用了未入库的 data 文件，三者任一即红。
+      - name: Guard pr 层可移植性（本机路径/venv/未入库配置）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_gate_portability.py
+
       - name: Guard ReAct 工具轮次预算两侧一致
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_tool_round_budget.py
@@ -653,10 +635,6 @@ jobs:
 
       #诊断里的中文乱码会让LLM 认不出自己刚写的中文名 ⇒ 反复乱改。
       # 修法是一行 JVM 参数（-Dsun.stdout.encoding=UTF-8），这里守住它不被回退。
-      - name: Guard 校验器诊断中文编码
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_checker_diag_encoding.py
-
       # ── 2026-10-05 第二轮第 2 项续：变异锚点漂移 5 个（锚点不中 ⇒ 变异自证恒绿 ⇒ 门禁形同虚设）──
       # 五者根因不同，但共同点是「看起来红了，实际是自证失效」：
       #   · orch_reliability / multiturn_context：`textwrap.dedent(getsource(flow))` 静默失效
@@ -859,10 +837,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_thinking_shape.py
 
-      - name: Guard 思考自动调优
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_thinking_autotune.py
-
       - name: Guard 端到端总超时预算
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_total_timeout_budget.py
@@ -968,10 +942,6 @@ jobs:
         run: python tools/verify/verify_mcp_edit_and_resume_gate.py
 
       # ── 标准库索引覆盖 ──
-      - name: Guard 标准库索引覆盖
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_stdlib_index_coverage.py
-
       # ── Agent 收尾链路（2026-10-18 修复后接线）────────────────────────────
       # common_exports：2026-10-10「CHAT_TASK_PROBE 漏 __all__ ⇒ 全部对话一轮即挂」
       #   的同族漏网第二次（CHAT_TASK_EVAL，2026-10-18 抓到并修复）⇒ 必须常驻。
@@ -993,10 +963,6 @@ jobs:
       - name: Guard 平台能力总览面板（40 项，含 Node vm 前端渲染冒烟）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_capability_overview.py
-
-      - name: Guard 会话运行监控（迁移幂等 + 列表加权 + 下钻证据链）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_session_monitor.py
 
       # ── P0-1（2026-10-18 自进化调研整改）：资产长尾治理 ──────────────
       # 把一次性硬编码退役工具（retire_view_agents）泛化为配置驱动分析器后的守门条：
@@ -1118,21 +1084,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_curriculum.py
 
-      - name: Guard Agent 档案库（变体台账 + 死路记忆 + 只记录不切换生效版本）
-        if: ${{ !cancelled() }}
-        # DGM/AlphaZero 式种群的价值在于**记住死掉的个体**——否则系统反复重走
-        # 已知死路。本门禁守四条命脉：
-        #   ① 画像只用真实可算的证据——外部评估表（sandbox_runs /
-        #      misevolution_checks）没有 agent_id+version 列，硬关联就是
-        #      fabricate ⇒ 结论必须显式挂载，档案库不猜这次评估针对哪个变体；
-        #   ② 诚实 unknown——维度分母不足即 None 不回落 0；探索读数
-        #      （lineage_depth=0 = 没探索过）不作为 pass 证据；
-        #   ③ 死路门槛 = 2 次回归（一次可能是噪声/并发/偶发，反复才是模式）；
-        #      error / insufficient_data 不算负向（环境坏≠这条路不行）；
-        #   ④ 引擎/repo/router 三层无 UPDATE agents / config_history /
-        #      rollback 路径——档案库是记忆，不是手（回滚过人的铁律同 P1-4）。
-        run: python tools/verify/verify_agent_archive.py
-
       - name: Guard 画布拓扑台账（结构体检 + 同构去重 + 只读不改拓扑）
         if: ${{ !cancelled() }}
         continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
@@ -1167,18 +1118,12 @@ jobs:
         if: ${{ !cancelled() }}
         continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
         run: python tools/verify/verify_tool_input_schema.py
-      - name: Guard 子任务协议状态（normalize_text 不再恒 full）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_subtask_status.py
       - name: Guard 编排规划契约（两套 planner prompt 字段集合一致）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_orch_planning.py
       - name: Guard running 态真写入（claim 已接线）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_running_state.py
-      - name: Guard 检查点 phase 与任务状态口径一致
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_ck_phase_consistency.py
       - name: Guard 依赖图环检测（环不再静默阻塞）
         if: ${{ !cancelled() }}
         continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
@@ -1202,9 +1147,6 @@ jobs:
         if: ${{ !cancelled() }}
         continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
         run: python tools/verify/verify_load_aware_assign.py
-      - name: Guard 交付协议三数组 + 产物物化（批次二 P2）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_protocol_artifacts.py
       - name: Guard 事实/推断分档（§08，缺失一律按 asserted 兜底）
         if: ${{ !cancelled() }}
         continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
@@ -1362,10 +1304,6 @@ jobs:
       # ⇒ 这三条此前**只存在于对话里，没有任何门禁在守** ——
       #   任何人（包括我自己）都可以在不知情的情况下把架构改歪，门禁不会响。
       # 本门禁把三条钉成判据，并**显式记录当前与目标的差距**（不粉饰）。
-      - name: Guard 架构假设（意图分析 / 能力承载 / 主子职责，14 条 + 3 项已知差距）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_arch_assumptions.py
-
       # ── B4-5（2026-10-14）：规则命中 → LLM 独立复核 ────────────────────
       # 米爸：「意图识别必须是那几个 agent？应该经过 LLM 分析来判断有哪些意图，
       #       再和平台的能力进行匹配」。
@@ -1536,21 +1474,9 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_budget_needsuser_p1.py
 
-      - name: Guard capability consistency
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_capability_consistency.py
-
       - name: Guard chat area scrollbar
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_chat_area_scrollbar.py
-
-      - name: Guard chat scroll layout
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_chat_scroll_layout.py
-
-      - name: Guard chunk gold
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_chunk_gold.py
 
       - name: Guard confirm pairing
         if: ${{ !cancelled() }}
@@ -1559,22 +1485,6 @@ jobs:
       - name: Guard context audit
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_context_audit.py
-
-      - name: Guard context utilization
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_context_utilization.py
-
-      - name: Guard conv9726 fixes
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_conv9726_fixes.py
-
-      - name: Guard conv9730 continue
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_conv9730_continue.py
-
-      - name: Guard conv anchors
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_conv_anchors.py
 
       - name: Guard conv failure attribution
         if: ${{ !cancelled() }}
@@ -1588,10 +1498,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_evidence_recheck.py
 
-      - name: Guard failure kind
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_failure_kind.py
-
       - name: Guard final content dedupe
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_final_content_dedupe.py
@@ -1603,10 +1509,6 @@ jobs:
       - name: Guard harness gate p02
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_harness_gate_p02.py
-
-      - name: Guard hil write gate
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_hil_write_gate.py
 
       - name: Guard impact archive
         if: ${{ !cancelled() }}
@@ -1623,10 +1525,6 @@ jobs:
       - name: Guard jit tool fallback
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_jit_tool_fallback.py
-
-      - name: Guard mcp tool closure
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_mcp_tool_closure.py
 
       - name: Guard memory injection
         if: ${{ !cancelled() }}
@@ -1647,10 +1545,6 @@ jobs:
       - name: Guard obstacle p05
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_obstacle_p05.py
-
-      - name: Guard orch failure class
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_orch_failure_class.py
 
       - name: Guard paged doc archive
         if: ${{ !cancelled() }}
@@ -1703,10 +1597,6 @@ jobs:
       - name: Guard skill binding semantics
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_skill_binding_semantics.py
-
-      - name: Guard skill tool names
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_skill_tool_names.py
 
       - name: Guard slot merge
         if: ${{ !cancelled() }}

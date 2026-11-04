@@ -48,7 +48,7 @@ def hr(t):
 
 
 def ro_conn():
-    db = os.path.join(ROOT, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     c = sqlite3.connect("file:" + db.replace("\\", "/") + "?mode=ro", uri=True)
     c.row_factory = sqlite3.Row
     return c

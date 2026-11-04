@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言用真库 intent 记录产出建议清单；空库无历史 intent
 """verify_thinking_autotune — 判据：**数据自校正**（可维护性的最后一环，2026-10-10）。
 
 ## 米爸提的问题

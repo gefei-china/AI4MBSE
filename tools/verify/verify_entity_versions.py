@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。从真库快照拷贝后跑时态迁移验证（fresh_copy）；干净克隆无 mbse.db
 # -*- coding: utf-8 -*-
 """P0-1 时态主键解耦（影子历史表 entity_versions）：自检脚本。
 
@@ -24,7 +25,7 @@ os.chdir(ROOT)
 from database.migrations import _migrate_entity_temporal     # noqa: E402
 from repositories.knowledge_repo import KnowledgeRepo        # noqa: E402
 
-REAL = os.path.join(ROOT, "mbse.db")
+REAL = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 PAST = "2026-09-15 00:00:00"      # 早于本次更新、晚于数据创建（2026-09-10）
 FUTURE = "2099-01-01 00:00:00"
 

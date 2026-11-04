@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。G1 需要 failed 子任务样本算空文本率；空库 0/0（分母为 0 时判据无意义）
 # -*- coding: utf-8 -*-
 """B1-2 门禁：`normalize_text` 不再恒返回 `status="full"`（假绿根因）。
 
@@ -34,7 +35,7 @@ import collections
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SRC = os.path.join(ROOT, "services", "subtask_protocol.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0
 _fail = 0

@@ -53,7 +53,7 @@ _TABLES = ("orch_checkpoints", "agent_tasks", "conversations")
 
 def fixture():
     """建临时库：从真库复制这三张表的 DDL（不复制数据）⇒ 列口径永不漂移。"""
-    src = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+    src = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
     ddl = []
     for (sql,) in src.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name IN (%s)"
@@ -269,7 +269,7 @@ finally:
 hr("[E] 真库只读体检（证明 D1 那道闸不是想象出来的）")
 # ─────────────────────────────────────────────────────────────────────────────
 try:
-    ro = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+    ro = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
     ro.row_factory = sqlite3.Row
     rows = ro.execute(
         "SELECT t.run_id, ck.conversation_id, "

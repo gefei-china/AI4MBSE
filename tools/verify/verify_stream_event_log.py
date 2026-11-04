@@ -45,7 +45,7 @@ ROOT = _find_root()
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _results = []
 

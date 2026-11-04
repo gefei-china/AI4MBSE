@@ -43,7 +43,7 @@ def _db_path() -> str:
         return DB_PATH
     except Exception:
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        return os.path.join(root, "mbse.db")
+        return (os.environ.get("MBSE_DB_PATH") or os.path.join(root, "mbse.db"))
 
 
 def main() -> int:

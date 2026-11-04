@@ -514,9 +514,9 @@ def main():
     hr("[7] 入库留痕：_archive_sysml_version → element_summary[\"check\"]（事务内验完 ROLLBACK）")
     try:
         from core import config as _cfg2
-        db = _cfg2.get("database", "path") or os.path.join(ROOT, "mbse.db")
+        db = _cfg2.get("database", "path") or (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     except Exception:
-        db = os.path.join(ROOT, "mbse.db")
+        db = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     from agent.utils import _archive_sysml_version
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row

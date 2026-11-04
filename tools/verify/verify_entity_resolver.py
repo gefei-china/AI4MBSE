@@ -59,7 +59,7 @@ import tempfile
 
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, BASE)
-DB_PATH = os.path.join(BASE, "mbse.db")
+DB_PATH = (os.environ.get("MBSE_DB_PATH") or os.path.join(BASE, "mbse.db"))
 
 PASS, FAIL = [], []
 
@@ -699,7 +699,7 @@ def _open_real():
     """真库**只读**连接；取不到返回 None（判据面不存在 ⇒ 上层 SKIP，绝不伪装成 PASS）。"""
     import os
     import sqlite3 as _sq
-    db = os.path.join(BASE, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(BASE, "mbse.db"))
     if not os.path.isfile(db):
         return None
     try:

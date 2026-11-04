@@ -354,7 +354,7 @@ ck(_score_long > _score_short,
    % (_score_long, _score_short))
 
 print("\n== J. 数据落库校验（capabilities/system_prompt 真的写进去了） ==")
-_db = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+_db = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
 _db.row_factory = sqlite3.Row
 _n = _db.execute(
     """SELECT COUNT(*) n FROM agent_team_members m JOIN agents a ON a.id=m.sub_agent_id

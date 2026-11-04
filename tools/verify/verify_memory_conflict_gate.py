@@ -201,7 +201,7 @@ ck(_c3.execute("SELECT COUNT(*) FROM agent_memory WHERE id=?", (_a3,)).fetchone(
 _c3.close()
 
 print("\n== D. 迁移幂等 ==")
-_prod = os.path.join(ROOT, "mbse.db")
+_prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 if os.path.exists(_prod):
     _c = sqlite3.connect("file:%s?mode=ro" % _prod, uri=True)
     _cols = {r[1] for r in _c.execute("PRAGMA table_info(agent_memory)")}

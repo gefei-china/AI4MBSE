@@ -56,7 +56,7 @@ ASSIGN = os.path.join(ROOT, "services", "assignment.py")
 INTEG = os.path.join(ROOT, "services", "assignment_integration.py")
 STREAM = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
 CONFIG = os.path.join(ROOT, "core", "config.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0
 _fail = 0

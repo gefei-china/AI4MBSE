@@ -27,7 +27,7 @@ sys.path.insert(0, ROOT)
 #   门禁的价值在于**判据**，不该被一份可选快照的存在性绑架。
 _CANDIDATES = [
     os.path.join(ROOT, "backups", "t-prod-20261026-122709.db"),
-    os.path.join(ROOT, "mbse.db"),
+    (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")),
 ]
 PROD = next((p for p in _CANDIDATES if os.path.exists(p)), "")
 if not PROD:

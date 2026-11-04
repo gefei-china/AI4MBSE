@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言技能已发布可绑定；空库种子里的技能是 draft（status=409）
 # -*- coding: utf-8 -*-
 """能力中心一致性门禁（P1-3 / P1-4 / P1-5 / P1-6 / P2-1 / P2-2 / P2-3 / P2-4 · 2026-10-27）。
 
@@ -18,7 +19,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-DB = os.path.join(ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 sys.path.insert(0, ROOT)
 
 PASS = FAIL = 0

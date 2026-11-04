@@ -145,7 +145,7 @@ def b_group():
     from llm import llm_client as LC
     import sqlite3
 
-    conn = sqlite3.connect("file:%s?mode=ro" % os.path.join(_ROOT, "mbse.db"), uri=True)
+    conn = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db")), uri=True)
     conn.row_factory = sqlite3.Row
     ORIG = LC.chat
     TXT = "对当前模型进行预评审校验"
@@ -273,7 +273,7 @@ def c_group():
     from core import config as cfg
     from agent.intent import IntentRouter
 
-    conn = sqlite3.connect("file:%s?mode=ro" % os.path.join(_ROOT, "mbse.db"), uri=True)
+    conn = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db")), uri=True)
     conn.row_factory = sqlite3.Row
     _ORIG_CFG = {k: cfg.get("intent", k) for k in ("rule_llm_confirm", "explain_preempt",
                                                    "speech_act")}

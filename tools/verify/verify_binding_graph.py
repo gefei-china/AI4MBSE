@@ -50,7 +50,7 @@ def _rec(name, ok, detail="", kind=FAIL):
 
 
 def _db():
-    p = os.path.join(_ROOT, "mbse.db")
+    p = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
     if not os.path.exists(p):
         return None
     c = sqlite3.connect(p)

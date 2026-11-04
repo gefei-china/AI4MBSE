@@ -483,7 +483,7 @@ check("M5 变异：指纹恒定（检测失灵）⇒ 本应判红的场景不再
 
 # ══════════════════════════════════════════════════════════════════════
 print("\n== D. 真库只读 smoke ==")
-_prod = os.path.join(ROOT, "mbse.db")
+_prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 if os.path.exists(_prod):
     _pc = sqlite3.connect("file:%s?mode=ro" % _prod.replace("\\", "/"), uri=True)
     _pc.row_factory = sqlite3.Row

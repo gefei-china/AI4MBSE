@@ -51,7 +51,7 @@ for _p in (_CLEAN_DB, _CLEAN_CFG):
 io.open(_CLEAN_CFG, "w", encoding="utf-8").write("{}")
 os.environ["MBSE_DB_PATH"] = _CLEAN_DB
 os.environ["MBSE_CONFIG_PATH"] = _CLEAN_CFG
-_PROD_DB = os.path.join(ROOT, "mbse.db")
+_PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _results = []
 

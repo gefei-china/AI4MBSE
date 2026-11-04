@@ -90,7 +90,7 @@ class FakePipe:
 
 def prepare_db(tmpconv, task_id, status, progress=0):
     """在**真库临时副本**上验证，避免污染生产。"""
-    src = os.path.join(ROOT, "mbse.db")
+    src = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     tmp = os.path.join(ROOT, "tmp", "_async_resume_test.db")
     os.makedirs(os.path.dirname(tmp), exist_ok=True)
     for suf in ("", "-wal", "-shm"):
@@ -242,7 +242,7 @@ def main():
     if "--live" in sys.argv:
         print("\n=== ⑦ 真实链路（--live）：真 MCP 拉 conv 9629 的已完成任务 ===")
         from mcp_client import MCPClient
-        c0 = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+        c0 = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
         c0.row_factory = sqlite3.Row
         row = c0.execute("SELECT endpoint,transport,headers FROM mcp_servers "
                          "WHERE name='zhiyuan-dev-mcp'").fetchone()

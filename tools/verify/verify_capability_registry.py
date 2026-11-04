@@ -414,7 +414,7 @@ check("G3 alert_events 落 R5 事件（actual≥threshold）",
 
 # ══════════════════════════════════════════════════════════════
 section("真库只读取证（结构完整，不断言具体值——真库状态会变）")
-_real = os.path.join(ROOT, "mbse.db")
+_real = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 if os.path.exists(_real):
     rc = sqlite3.connect(_real)
     rc.row_factory = sqlite3.Row

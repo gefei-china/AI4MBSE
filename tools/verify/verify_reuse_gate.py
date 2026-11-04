@@ -46,7 +46,7 @@ import sys
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _ROOT)
 
-DB = os.path.join(_ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 
 # 实测过的劫持样本（负）：修复前全部命中，复用泛词不得独享准入权
 GENERIC_PROBES = [

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。B1 断言「视图生成本身由 skill 承载且被用过」，空库 0 个视图 skill、0 次使用
 # -*- coding: utf-8 -*-
 """verify_arch_assumptions —— 把「多 Agent 平台的实现逻辑是否与设计一致」变成可执行判据。
 
@@ -55,7 +56,7 @@ if _ROOT not in sys.path:
 INTENT = os.path.join(_ROOT, "agent", "intent.py")
 STREAM = os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py")
 ORCH = os.path.join(_ROOT, "agent", "pipeline_parts", "orchestration.py")
-DB = os.path.join(_ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 
 PASS, FAIL = "PASS", "FAIL"
 _results = []

@@ -26,7 +26,7 @@ except Exception:
 
 from services import conv_summary as cs  # noqa: E402
 
-DB = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mbse.db"))
 
 OK, FAIL = [], []
 

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言 skill 引用的 MCP 工具在库里注册；空库未做 MCP 发现 ⇒ 工具缺失
 # -*- coding: utf-8 -*-
 """规划 vs 落地 链路闭环核查 —— 回答「是否都替换完成、绑定与数据链路是否闭环」。
 
@@ -28,7 +29,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
-DB = os.path.join(_ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 
 # ── 规划（来自 data/modeling_nodes.json v3.1.0，不手写避免漂移）────
 REG = os.path.join(_ROOT, "data", "modeling_nodes.json")

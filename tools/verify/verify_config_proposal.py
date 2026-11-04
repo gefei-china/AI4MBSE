@@ -380,7 +380,7 @@ def main():
 
     # ── D. 真库只读 smoke ──────────────────────────────────────────
     print("\n== D. 真库只读 smoke（规则在真实模式上跑通 + 活配置对账）==")
-    _prod = os.path.join(ROOT, "mbse.db")
+    _prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     if not os.path.exists(_prod):
         skip("D1-D2 真库 smoke", "mbse.db 不存在（CI 环境）")
     else:

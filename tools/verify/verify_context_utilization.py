@@ -1,4 +1,4 @@
-# CI-OPTIONAL: 全部判据基于真库 llm_usage_stats 的 14 天窗口（`mbse.db` 不入 git）；CI 无库 ⇒ 走 `--allow-missing` 也只能 SKIP，故本地/nightly 跑。
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言真库 llm_usage_stats 14 天窗口的利用率；**并已发现 schema 漂移**：真库有 context_window 列，init_db 建的空库没有 ⇒ 待补 schema 后回收
 # -*- coding: utf-8 -*-
 """门禁：上下文利用率必须**可测**，且"不加滑窗"这个决定必须**可被数据翻转**（P1-5，2026-10-30）。
 
@@ -63,7 +63,7 @@ def _pct(vals, q):
     return float(xs[i])
 
 
-conn = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+conn = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
 conn.row_factory = sqlite3.Row
 
 # ─────────────────────────────────────────────────────────────────────────────

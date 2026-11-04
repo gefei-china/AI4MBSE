@@ -84,7 +84,7 @@ def config_checks() -> list:
 def data_checks() -> list:
     """只读复核：真库里 type 三元组的状态是否与代码修正一致。"""
     import sqlite3
-    conn = sqlite3.connect("file:" + os.path.join(_ROOT, "mbse.db") + "?mode=ro", uri=True)
+    conn = sqlite3.connect("file:" + (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db")) + "?mode=ro", uri=True)
     typed_lit = conn.execute(
         "SELECT COUNT(*) FROM triples WHERE predicate='type' "
         "AND COALESCE(graph_stored,0)=1 AND COALESCE(object_type,'')='class'").fetchone()[0]
@@ -126,7 +126,7 @@ def live_checks() -> list:
         sys.path.insert(0, _ROOT)
         from graph_db import get_writer, sync_pending_triples
         w = get_writer(True, "fuseki", endpoint=f"http://127.0.0.1:{PORT}/mbse/")
-        conn = sqlite3.connect(os.path.join(_ROOT, "mbse.db"))
+        conn = sqlite3.connect((os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db")))
         conn.row_factory = sqlite3.Row
         # ★ 用 dry-run 语义：把待物化的行临时挑出来单独验，不污染生产 graph_stored
         rows = conn.execute(

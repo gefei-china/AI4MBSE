@@ -263,7 +263,7 @@ def main():
 
     # ── D. 真库只读 smoke（开发机；CI 无库 ⇒ 整体 SKIP）────────────────
     print("\n== D. 真库只读 smoke（file:...?mode=ro，不写不迁移）==")
-    _prod = os.path.join(ROOT, "mbse.db")
+    _prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     if not os.path.exists(_prod):
         skip("D1-D4 真库断言", "CI 环境无 mbse.db（干净库口径）⇒ 判据面不存在")
     else:

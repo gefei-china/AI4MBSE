@@ -43,7 +43,7 @@ MINIT = os.path.join(ROOT, "database", "migrations", "__init__.py")
 WTOOLS = os.path.join(ROOT, "workflows", "tools.py")
 WNODE = os.path.join(ROOT, "workflows", "nodes.py")
 RESOLVER = os.path.join(ROOT, "entity_resolver.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 sys.path.insert(0, ROOT)   # 本脚本以脚本方式运行，需手动把仓库根放进 path
 

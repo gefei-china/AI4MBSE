@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。REAL=ROOT/mbse.db 做「零回归：既有保护语义不变」对拍；干净克隆无 mbse.db
 # -*- coding: utf-8 -*-
 """P0-2 分支保护规则配置化：自检脚本。
 
@@ -31,7 +32,7 @@ from repositories.branch_repo import BranchRepo                    # noqa: E402
 from routers.branches import (update_branch_protection,           # noqa: E402
                               delete_branch)
 
-REAL = os.path.join(ROOT, "mbse.db")
+REAL = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 COPY = os.path.join(ROOT, "tmp", "p02_verify.db")
 
 _ok = []

@@ -43,7 +43,7 @@ import sqlite3
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PROTO = os.path.join(ROOT, "services", "subtask_protocol.py")
 STREAM = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0
 _fail = 0

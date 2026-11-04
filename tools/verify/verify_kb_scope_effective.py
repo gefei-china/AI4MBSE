@@ -69,7 +69,7 @@ EXPECT_OFF = ("change_safety_gate", "model_release")
 def main() -> int:
     from agent.rag import GraphRAG
 
-    db = os.path.join(ROOT, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     cc = sqlite3.connect(db)
     cc.row_factory = sqlite3.Row
     g = GraphRAG()

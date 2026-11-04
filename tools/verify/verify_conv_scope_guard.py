@@ -42,7 +42,7 @@ import shutil
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ROUTER = os.path.join(ROOT, "routers", "conversations.py")
 REPO = os.path.join(ROOT, "repositories", "conversation_repo.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0
 _fail = 0

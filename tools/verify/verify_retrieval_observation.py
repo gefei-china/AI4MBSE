@@ -100,7 +100,7 @@ for r in ("no_hit_directive", "no_hit_biz_query", "no_hit_tiny", "graph_no_hit",
 
 print()
 print("== H 真实样本回放：错配占比必须显著（证明统计口径确有失真）==")
-_db = os.path.join(_ROOT, "mbse.db")
+_db = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 if not os.path.isfile(_db):
     check("H 库存在", False, _db)
 else:

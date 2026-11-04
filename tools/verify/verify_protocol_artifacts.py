@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。E1 断言真库 subtask_artifacts 有行且 summary_json 三数组非空；空库 0 行
 # -*- coding: utf-8 -*-
 """批次二 P2 门禁：协议三数组真有值 + 交付物物化进 subtask_artifacts。
 
@@ -44,7 +45,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 STREAM = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
 PROTO = os.path.join(ROOT, "services", "subtask_protocol.py")
 CONFIG = os.path.join(ROOT, "core", "config.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0
 _fail = 0

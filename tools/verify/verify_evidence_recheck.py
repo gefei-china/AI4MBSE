@@ -49,7 +49,7 @@ def fixture():
     这正是本仓反复记录的"夹具手抄 DDL 漂移"坑，修法与 `verify_context_scope_guard` 一致：
     **从真库 sqlite_master 抄 DDL**。
     """
-    src = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+    src = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
     ddl = []
     for (sql,) in src.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name IN "
@@ -140,7 +140,7 @@ try:
     # 真库三通道联通性：任一通道报"查询失败"都说明 SQL 与库结构漂移
     try:
         import sqlite3 as _s3
-        _ro = _s3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+        _ro = _s3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
         _ent = _ro.execute("SELECT id FROM entities LIMIT 1").fetchone()
         _rel = _ro.execute("SELECT id FROM relations LIMIT 1").fetchone()
         _doc = _ro.execute("SELECT id FROM documents LIMIT 1").fetchone()
@@ -222,7 +222,7 @@ try:
     # ── F 真库体检 ──
     hr("[F] 真库只读体检：现存 verified 依据的回查率")
     try:
-        ro = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+        ro = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
         ro.row_factory = sqlite3.Row
         rows = ro.execute("SELECT task_key, summary_json FROM agent_tasks "
                           "WHERE COALESCE(summary_json,'') NOT IN ('','{}')").fetchall()

@@ -48,7 +48,7 @@ def check(group, name, ok, detail=""):
 
 
 def _db():
-    p = os.path.join(_ROOT, "mbse.db")
+    p = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
     return sqlite3.connect("file:%s?mode=ro" % p.replace("\\", "/"), uri=True)
 
 

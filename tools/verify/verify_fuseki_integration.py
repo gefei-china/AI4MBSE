@@ -160,7 +160,7 @@ def main() -> int:
     # ③ 真实物化
     print("\n③ 真实物化（生产链sync_pending_triples）")
     import sqlite3
-    db = os.path.join(_ROOT, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
     conn = sqlite3.connect(db, timeout=20)
     conn.row_factory = sqlite3.Row
     pending = conn.execute(

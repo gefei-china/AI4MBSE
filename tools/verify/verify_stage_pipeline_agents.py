@@ -44,7 +44,7 @@ import sys
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _ROOT)
 
-DB = os.path.join(_ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 
 # (name, stage_order, baseline_binds)
 # ⚠️ 第三列是 **2026-10-14 的实测快照**，不是"产品要求的下限"。

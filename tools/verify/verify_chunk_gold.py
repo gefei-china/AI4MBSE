@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。用真库 document_chunks 真实切片算 nDCG/命中率；空库无文档切片
 # -*- coding: utf-8 -*-
 """门禁：chunk 级评测体系本身必须可信（评测器/金标/变异自证）。
 

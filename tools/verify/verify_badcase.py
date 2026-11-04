@@ -314,7 +314,7 @@ def main():
 
     # ── D. 真库只读 dry-run smoke ───────────────────────────────────
     print("\n== D. 真库只读 dry-run smoke（判据面真实存在性取证）==")
-    _prod = os.path.join(ROOT, "mbse.db")
+    _prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     if not os.path.exists(_prod):
         skip("D1 真库 smoke", "mbse.db 不存在（CI 环境）")
     else:

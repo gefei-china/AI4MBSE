@@ -36,7 +36,7 @@ def chk(desc, cond, extra=""):
         fail += 1
 
 
-conn = sqlite3.connect(os.path.join(_ROOT, "mbse.db"))
+conn = sqlite3.connect((os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db")))
 conn.row_factory = sqlite3.Row
 
 print("=" * 92)

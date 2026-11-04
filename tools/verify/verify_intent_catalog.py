@@ -119,7 +119,7 @@ def t_static():
 
 def t_data():
     print("\n=== C1/C2 真库：核心意图目录完整 + 关键词非空 ===")
-    db = os.path.join(_ROOT, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
     if not os.path.exists(db):
         return _rec("C1/C2 需要真库（CI 无 mbse.db）⇒ SKIP", True, "本机跑才有判定", SKIP)
     import json as _json

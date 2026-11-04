@@ -97,7 +97,7 @@ from agent.retrieval_diversity import select_diverse  # noqa: E402
 import sqlite3                                        # noqa: E402
 
 g = GraphRAG()
-conn = sqlite3.connect(os.path.join(_ROOT, "mbse.db"))
+conn = sqlite3.connect((os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db")))
 conn.row_factory = sqlite3.Row
 QS = ["技术要求书里有哪些信息安全要求",
       "SysML v2 相比 v1 有哪些主要变化",

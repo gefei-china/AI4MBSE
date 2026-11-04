@@ -23,7 +23,7 @@ import sqlite3
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-DB = os.path.join(ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 SELF = os.path.abspath(__file__)
 
 # 扫描范围：只扫会真实执行的代码/前端；排除 文档/测试/缓存/验证脚本自身

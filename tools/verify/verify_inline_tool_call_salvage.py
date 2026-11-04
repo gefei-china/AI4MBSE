@@ -49,7 +49,7 @@ _REAL_CONV = 9169
 
 
 def real_sample() -> str:
-    db = os.path.join(ROOT, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     if not os.path.exists(db):
         return ""
     c = sqlite3.connect(db)

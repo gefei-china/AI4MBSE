@@ -134,17 +134,19 @@ def t_ci_has_new_batch(root=ROOT):
             "verify_prompt_blocks", "verify_tiered_compression",
             "verify_trace_cols", "verify_alert_evaluator",
             "verify_tool_offload", "verify_s4_toolname",
-            "verify_branch_permission_gates", "verify_intent_cache_key",
-            "verify_intent_cache_toggle", "verify_entity_versions",
+            "verify_intent_cache_key",
+            "verify_intent_cache_toggle",
             "verify_memory_tier", "verify_retry_fallback_stats",
             "verify_p1_project_attribution",
             "verify_p1_project_attribution_mutate",
-            "verify_agent_tools_no_params", "verify_branch_protection_rules",
+            "verify_agent_tools_no_params",
             "verify_b1_runtime_smoke",
             # 第二轮第 2 项：红灯门禁归因后修复并接线（生产库 + 干净库双绿）
             "verify_continuation", "verify_partial_persist",
             "verify_orch_whitelist", "verify_plugin_bind_removed",
-            "verify_uninstall_flow",
+            # ⚠️ 2026-11-05 移出：verify_uninstall_flow —— 本机真库上 I1「重新安装」
+            #   被 install() 拒绝（能力未上架市场）而红，干净库上绿 ⇒ 属真库状态断言。
+            #   已降 local 并写 reason；与"曾接线过 ≠ 现在还能接"同一教训。
             # ── 2026-10-09：清「14 份写了从未执行」的欠账 ──
             # 起因：本门禁 W1a 判红（未接线 14 / 豁免无理由 0）。
             # 这 7 个经**干净库口径实测 rc=0** 才接线（MBSE_DB_PATH 指向空库）。
@@ -152,12 +154,19 @@ def t_ci_has_new_batch(root=ROOT):
             # 写 `# CI-OPTIONAL: <理由>` 显式豁免 —— 见EXEMPTED 清单。
             "verify_agent_loop_protocol", "verify_agent_perm_gate",
             "verify_llm_circuit_breaker", "verify_memory_conflict_gate",
-            "verify_sysml_autofix", "verify_pipeline_closure",
+            "verify_sysml_autofix",
             "verify_sysml_baseline",
             # 2026-10-09 续：产出雷同定性后补的两道**通用性**门禁
             # （流式/非流式轮次漂移、行内工具调用不被识别）
-            "verify_tool_round_budget", "verify_inline_tool_call_salvage",
-            "verify_checker_diag_encoding"]
+            "verify_tool_round_budget", "verify_inline_tool_call_salvage"]
+    # ⚠️ 2026-11-05 移出 must（不是"忘了"，是**判据过期**）：
+    #   verify_branch_permission_gates / verify_entity_versions /
+    #   verify_branch_protection_rules / verify_pipeline_closure /
+    #   verify_checker_diag_encoding
+    #   在「全新克隆 + 空库」实测红（读真库 ROOT/mbse.db、或需 checker.jar、
+    #   或空库种子量不足）⇒ 已降 local 并写明 reason（见 gates_manifest.json）。
+    #   教训与 2026-10-05 那条同族：**"曾接线过"不等于"现在还能接"**，
+    #   判据必须重新实测；把它们留在 must 里 = 让本门禁替一个假前提背书。
     # 2026-10-09 新增接线（必须随 ci.yml 一起更新，否则本门禁自己会红）
     _NEW = ["verify_agent_loop_protocol", "verify_agent_perm_gate",
             "verify_llm_circuit_breaker", "verify_memory_conflict_gate",

@@ -53,7 +53,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-LIVE_DB = os.path.join(ROOT, "mbse.db")
+LIVE_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 # ── 隔离：整库复制 + 重定向（必须在 import core.config 之前）──
 import tempfile

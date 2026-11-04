@@ -37,7 +37,7 @@ def check(name, cond, detail=""):
 # ══════════════════════════════════════════════════════════════════
 # 夹具
 # ══════════════════════════════════════════════════════════════════
-DB = os.path.join(REPO, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(REPO, "mbse.db"))
 con = sqlite3.connect("file:%s?mode=ro" % DB, uri=True)
 con.row_factory = sqlite3.Row
 

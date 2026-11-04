@@ -197,7 +197,7 @@ def main():
 
     print("\n=== ⑤ 真实数据盘点（只报告，不判失败）===")
     try:
-        c = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+        c = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
         c.row_factory = sqlite3.Row
         r = c.execute("SELECT COUNT(*) n FROM skills WHERE status='published' AND enabled=1").fetchone()
         print("   全池（published+enabled）技能数 = %s" % r["n"])

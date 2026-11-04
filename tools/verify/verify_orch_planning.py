@@ -34,7 +34,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 STREAM = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
 PLANNER = os.path.join(ROOT, "workflows", "planner.py")
 TQUEUE = os.path.join(ROOT, "task_queue.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0
 _fail = 0

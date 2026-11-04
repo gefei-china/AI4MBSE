@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。V4 下钻断言真库会话 #9779 的明细（356 段证据链）；空库无该会话。附：该门禁已抓出真缺陷 weight 详情40≠列表45（待修）
 # -*- coding: utf-8 -*-
 """会话级运行监控（2026-10-18《运行监控选型建议 v2》实施）真实库验证。
 
@@ -135,7 +136,7 @@ def main():
     os.makedirs(os.path.dirname(copy_path), exist_ok=True)
     if os.path.exists(copy_path):
         os.remove(copy_path)
-    src = sqlite3.connect(os.path.join(ROOT, "mbse.db"))
+    src = sqlite3.connect((os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")))
     cp = sqlite3.connect(copy_path)
     src.backup(cp)
     src.close()

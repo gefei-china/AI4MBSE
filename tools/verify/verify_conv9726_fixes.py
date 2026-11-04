@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库会话 9726 的三项修复（判读句/语义去重/降级顺序）；空库无该会话
 """门禁：会话 9726「目标包明明查到了却说没找到」三项修复（2026-10-28）。
 
 ## 被验的真实故障（全部取自 conv 9726 的真机回执，不造数据）
@@ -53,7 +54,7 @@ def check(group: str, name: str, ok: bool, detail: str = "") -> None:
 
 
 def _db():
-    p = os.path.join(_ROOT, "mbse.db")
+    p = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
     return sqlite3.connect("file:%s?mode=ro" % p.replace("\\", "/"), uri=True)
 
 

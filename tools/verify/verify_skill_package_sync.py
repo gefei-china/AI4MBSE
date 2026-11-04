@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。S3 需生成型 skill 包 zhiyuan_mcp_tools 的 references 目录（随包/生成产物）
 # -*- coding: utf-8 -*-
 """门禁：技能包**磁盘文件**与 `skills` 表**内容**不得漂移（2026-10-30）。
 
@@ -69,7 +70,7 @@ def _norm(s: str) -> str:
 
 
 def _db_rows():
-    db = os.path.join(_ROOT, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
     if not os.path.exists(db):
         return None
     import sqlite3
@@ -137,7 +138,7 @@ def check_generated_pkg():
     text = open(ref, encoding="utf-8").read()
     doc_tools = set(re.findall(r"\n### `([a-z0-9_]+)`", text))
 
-    db = os.path.join(_ROOT, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
     if not os.path.exists(db):
         return _rec("S3 文档条数 == 活库工具数（CI 无 mbse.db ⇒ SKIP）", True,
                     "doc=%d；本机跑才有判定" % len(doc_tools), SKIP)
@@ -206,7 +207,7 @@ def check_plugin_visibility(rows):
     # S7：slug 不得是退化值（`mcp` / `skill` 这类与类型名相同的 slug）
     try:
         import sqlite3
-        _c = sqlite3.connect(os.path.join(_ROOT, "mbse.db"))
+        _c = sqlite3.connect((os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db")))
         _c.row_factory = sqlite3.Row
         _rows = _c.execute(
             "SELECT plugin_id, name, type FROM plugins WHERE status!='removed'").fetchall()
@@ -230,7 +231,7 @@ def main():
         # 给每行补 plugins 可见性计数（S5 用）
         try:
             import sqlite3
-            _c = sqlite3.connect(os.path.join(_ROOT, "mbse.db"))
+            _c = sqlite3.connect((os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db")))
             _c.row_factory = sqlite3.Row
             # ⚠️ `sqlite3.Row` 只读，不能就地加键 ⇒ 转 dict（本轮踩到 TypeError）
             _dicts = []

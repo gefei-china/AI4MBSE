@@ -61,7 +61,7 @@ def code_only(src: str) -> str:
     return "\n".join(out)
 
 
-DB = os.path.join(REPO, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(REPO, "mbse.db"))
 HAS_DB = os.path.exists(DB)
 
 

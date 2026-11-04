@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。先 `file:mbse.db?mode=ro` 只读取证再建临时副本（真库金标）；干净克隆无 mbse.db
 # -*- coding: utf-8 -*-
 """★ 写前确认（HITL）统一闸的**离线闭环测试** —— 不联网、不调 LLM、不起服务。
 

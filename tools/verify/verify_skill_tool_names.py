@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需真库 zhiyuan-dev-mcp 的 tool_meta；空库无
 # -*- coding: utf-8 -*-
 """verify_skill_tool_names — 门禁：**技能正文里点名的工具，必须真实存在于 MCP 工具清单**。
 
@@ -60,7 +61,7 @@ def ok(name, cond, detail=""):
 
 
 def main():
-    c = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+    c = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
     c.row_factory = sqlite3.Row
     srow = c.execute("SELECT id, version, content FROM skills WHERE name=?", (SKILL,)).fetchone()
     mrow = c.execute("SELECT tool_meta FROM mcp_servers WHERE name=?", (MCP,)).fetchone()

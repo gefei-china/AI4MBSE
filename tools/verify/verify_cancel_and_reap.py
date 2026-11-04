@@ -58,7 +58,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 STREAM = os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py")
-PROD_DB = os.path.join(_ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 
 PASS, FAIL = "PASS", "FAIL"
 _results = []

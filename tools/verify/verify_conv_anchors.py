@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库 tool_call_logs id=4593 那次会话的锚点提取；空库无该记录
 # -*- coding: utf-8 -*-
 """verify_conv_anchors — 门禁：**会话坐标不能靠历史窗口活着**。
 
@@ -76,7 +77,7 @@ def main():
     ok("有独立的 persist 表名", A.TABLE == "conversation_anchors")
 
     print("\n=== ② 从真实回执提取（用 conv 9629 的实际返回）===")
-    c = sqlite3.connect("file:%s?mode=ro" % os.path.join(ROOT, "mbse.db"), uri=True)
+    c = sqlite3.connect("file:%s?mode=ro" % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), uri=True)
     c.row_factory = sqlite3.Row
     proj = c.execute("SELECT result FROM tool_call_logs WHERE id=4593").fetchone()
     bran = c.execute("SELECT result FROM tool_call_logs WHERE id=4594").fetchone()
@@ -131,7 +132,7 @@ def main():
         if os.path.exists(tmp + suf):
             os.remove(tmp + suf)
     import shutil
-    shutil.copyfile(os.path.join(ROOT, "mbse.db"), tmp)
+    shutil.copyfile((os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")), tmp)
     c2 = sqlite3.connect(tmp)
     c2.row_factory = sqlite3.Row
     A.ensure_table(c2)
