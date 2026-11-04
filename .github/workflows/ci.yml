@@ -65,6 +65,12 @@ jobs:
       PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 2026-11-05 修：默认浅克隆（depth=1）时 git 历史缺失 ⇒
+          #   verify_prompt_blocks 的 `git show 06eaab7:<file>` 直接 fatal:
+          #   invalid object name ⇒ CI 恒红，而本机（全历史）从来不会红。
+          #   凡门禁要回溯历史基线，checkout 就必须给全历史。
+          fetch-depth: 0
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
@@ -1742,6 +1748,12 @@ jobs:
       PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 2026-11-05 修：默认浅克隆（depth=1）时 git 历史缺失 ⇒
+          #   verify_prompt_blocks 的 `git show 06eaab7:<file>` 直接 fatal:
+          #   invalid object name ⇒ CI 恒红，而本机（全历史）从来不会红。
+          #   凡门禁要回溯历史基线，checkout 就必须给全历史。
+          fetch-depth: 0
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
@@ -1887,6 +1899,12 @@ jobs:
       PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 2026-11-05 修：默认浅克隆（depth=1）时 git 历史缺失 ⇒
+          #   verify_prompt_blocks 的 `git show 06eaab7:<file>` 直接 fatal:
+          #   invalid object name ⇒ CI 恒红，而本机（全历史）从来不会红。
+          #   凡门禁要回溯历史基线，checkout 就必须给全历史。
+          fetch-depth: 0
 
       - name: 准备 Python 环境
         run: |

@@ -18,7 +18,8 @@ import os
 import sqlite3
 import sys
 
-ROOT = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system"
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ⚠️ 2026-11-05：原先写死 `C:\Users\<user>\...` ⇒ CI 上 os.chdir 直接 FileNotFoundError。
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 

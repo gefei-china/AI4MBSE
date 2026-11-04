@@ -31,6 +31,13 @@ data/*
 !data/bootstrap/
 data/bootstrap/*
 !data/bootstrap/pipeline_assets.json
+# 2026-11-05：`data/modeling_nodes.json` 同样是**代码级配置**，不是运行数据——
+#    它是建模流水线 8 个节点的契约**单一真源**，被 tools/migrate_v5/v8/v9/v25
+#    直接读取（`REG = os.path.join(ROOT, "data", "modeling_nodes.json")`）。
+#    被 `data/*` 忽略时，CI 上 verify_pipeline_closure 直接
+#    FileNotFoundError: .../data/modeling_nodes.json ⇒ 恒红，而本机永远绿。
+#    入参已脱敏（原文件含 `C:/Users/<user>/Downloads/...` 溯源路径）。
+!data/modeling_nodes.json
 mbse.db
 mbse.db-shm
 mbse.db-wal

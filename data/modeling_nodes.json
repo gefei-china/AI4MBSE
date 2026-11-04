@@ -1,0 +1,2755 @@
+{
+  "$schema": "internal://mbse-modeling-node-registry/v3",
+  "version": "3.1.0",
+  "generated_at": "2026-10-08",
+  "baseline_commit": "355e791",
+  "note": "AI 建模节点体系注册表。stage_order 决定流水线拓扑；stage_gate 是产出判据；无 stage_gate 判据的节点不允许 published。",
+  "constraints": {
+    "naming": {
+      "agent_name": "snake_case 英文，路由唯一依据（agents.name）",
+      "agent_display_name": "中文展示，会被写入主 Agent system_prompt 名册，改名必须同步 tools/seed_team_definitions.py",
+      "skill_name": "snake_case 英文，前缀 sysml_ 表示 SysML 域",
+      "tool_name": "snake_case 英文，前缀 sysml_v2_ / sysml_ / requirement_ 表示所属域"
+    },
+    "skill_required_fields": [
+      "name",
+      "description",
+      "triggers",
+      "allowed_tools",
+      "allowed_roles"
+    ],
+    "skill_iron_rules": [
+      "allowed_tools 为空数组 = 该 skill 不得调用任何工具（必须显式声明，不可留空）",
+      "正文中的任何数字必须来自确定性工具，LLM 心算即为伪造",
+      "禁止声称未实际调用工具的操作已完成（如未调 validate 不得说通过）",
+      "verdict=unavailable 不得表述为通过"
+    ],
+    "agent_iron_rules": [
+      "产出模型代码的 Agent 必须绑 sysml_v2_validate（_is_v2_code_agent 靠此判定注入 L0 卡）",
+      "N1-N5 禁止写数据库；只有 N6 可落库",
+      "view_type 必须是枚举，禁止自由文本"
+    ]
+  },
+  "nodes": [
+    {
+      "stage_order": 0,
+      "key": "M0",
+      "agent": {
+        "name": "methodology_resolver",
+        "display_name": "方法论解析Agent",
+        "agent_role": "sub",
+        "hil_level": "L0",
+        "status": "active",
+        "builtin": 0,
+        "description": "解析当前工程采用的建模方法论（OMG SysML V2 / MagicDraw / 客户自定义），加载对应的文档规范、本体约束与强制规则，产出建模规约卡，作为后续所有建模阶段的约束来源。",
+        "capabilities": [
+          "方法论识别",
+          "建模规约卡生成",
+          "本体约束加载",
+          "命名规范提取",
+          "规则集编译"
+        ],
+        "intent_keywords": [
+          "方法论",
+          "建模规范",
+          "建模约定",
+          "用哪个方法",
+          "MagicDraw",
+          "建模标准"
+        ],
+        "max_concurrency": 1,
+        "protocol_range": ">=1,<3",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "project_id"
+          ],
+          "properties": {
+            "project_id": {
+              "type": "string"
+            },
+            "methodology": {
+              "enum": [
+                "omg_sysml_v2",
+                "magicdraw",
+                "custom"
+              ]
+            },
+            "custom_profile_id": {
+              "type": "string"
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "profile_id",
+            "rules"
+          ],
+          "properties": {
+            "profile_id": {
+              "type": "string"
+            },
+            "methodology": {
+              "type": "string"
+            },
+            "syntax_rules": {
+              "type": "array"
+            },
+            "ontology_constraints": {
+              "type": "array"
+            },
+            "naming_conventions": {
+              "type": "object"
+            },
+            "mandatory_properties": {
+              "type": "object"
+            },
+            "source_doc_ids": {
+              "type": "array"
+            }
+          }
+        },
+        "system_prompt_rules": [
+          "先查 project_methodology 绑定关系；未绑定则走 LLM 判定并征求用户确认，不擅自假设",
+          "文档型规范走 RAG 检索，但必须结构化为规约卡，禁止把整段检索文本当规约卡",
+          "每条规则必须标 source_doc_id，客户可追溯规则来源",
+          "enforce 必须分级 lint/check/forbid：不分级则无法自动执行",
+          "「必须用驼峰」与「建议用驼峰」不能同等处理"
+        ],
+        "bind_tools": [
+          "graph_retrieve",
+          "sysml_stdlib_meta",
+          "methodology_profile_load"
+        ],
+        "bind_skills": [
+          "sysml_methodology_profile_guide"
+        ]
+      },
+      "stage_gate": {
+        "metrics": [
+          "profile_id",
+          "rule_count"
+        ],
+        "pass_when": "profile_id 非空且 rule_count > 0",
+        "on_fail": "无方法论可用时用 OMG SysML V2 默认profile 并明确标注 fallback"
+      }
+    },
+    {
+      "stage_order": 1,
+      "key": "N1",
+      "agent": {
+        "name": "requirement_structuring",
+        "display_name": "需求结构化Agent",
+        "agent_role": "sub",
+        "hil_level": "L1",
+        "status": "active",
+        "builtin": 0,
+        "description": "把自然语言需求转成结构化需求条目集：条目化、分类（功能/性能/接口/约束）、标注来源追溯，识别歧义与缺项。不产出 SysML 代码。",
+        "capabilities": [
+          "自然语言需求解析",
+          "需求条目化与规格化",
+          "需求分类与追溯标注",
+          "歧义与缺项识别"
+        ],
+        "intent_keywords": [
+          "需求条目化",
+          "需求结构化",
+          "需求拆解",
+          "需求规格化",
+          "条目化需求",
+          "需求分类"
+        ],
+        "max_concurrency": 2,
+        "protocol_range": ">=1,<3",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "raw_text"
+          ],
+          "properties": {
+            "raw_text": {
+              "type": "string"
+            },
+            "domain": {
+              "type": "string"
+            },
+            "source_ref": {
+              "type": "string"
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "text",
+                  "category"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "enum": [
+                      "functional",
+                      "performance",
+                      "interface",
+                      "constraint"
+                    ]
+                  },
+                  "subject": {
+                    "type": "string"
+                  },
+                  "source_ref": {
+                    "type": "string"
+                  },
+                  "ambiguous": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "gaps": {
+              "type": "array"
+            }
+          }
+        },
+        "system_prompt_rules": [
+          "每条需求必须可独立验证：主语 + 动作 + 可测量判据",
+          "禁止输出「系统应具有良好的性能」这类不可测条目 —— 归入 gaps 并标注 need_clarification",
+          "category 取值仅限 functional/performance/interface/constraint",
+          "条目 id 采用 REQ-{类别首字母}{序号}，供下游 satisfy 引用",
+          "你不产出 SysML 代码；下游 N2 消费你的 items"
+        ],
+        "bind_tools": [
+          "requirement_itemize",
+          "graph_retrieve",
+          "coverage_matrix"
+        ],
+        "bind_skills": [
+          "sysml_requirement_to_model_method",
+          "sysml_trace_coverage_analysis"
+        ]
+      },
+      "stage_gate": {
+        "metrics": [
+          "itemize_ratio",
+          "ambiguous_count",
+          "unmeasurable_count"
+        ],
+        "pass_when": "itemize_ratio >= threshold.itemize_ratio AND unmeasurable_ratio <= threshold.unmeasurable_ratio",
+        "on_fail": "退回澄清（N1 内部重试 ≤2，仍失败则要求人工补需求）",
+        "thresholds": {
+          "itemize_ratio": null,
+          "unmeasurable_ratio": null,
+          "_note": "阈值必须由 36 条真实 query 采样后取分位数得出，不得凭印象填"
+        }
+      }
+    },
+    {
+      "stage_order": 2,
+      "key": "N2",
+      "agent": {
+        "name": "architecture_skeleton",
+        "display_name": "架构骨架生成Agent",
+        "agent_role": "sub",
+        "hil_level": "L0",
+        "status": "active",
+        "builtin": 0,
+        "description": "消费结构化需求条目，生成 SysML v2 架构骨架：包结构、部件定义、端口定义、需求声明与 satisfy 分配。只出骨架，不出视图细节。",
+        "capabilities": [
+          "SysML v2 骨架生成",
+          "包与部件定义",
+          "端口与接口定义",
+          "需求声明与满足分配",
+          "类型族匹配"
+        ],
+        "intent_keywords": [
+          "架构骨架",
+          "骨架生成",
+          "系统架构定义",
+          "部件定义",
+          "包结构生成"
+        ],
+        "max_concurrency": 2,
+        "protocol_range": ">=1,<3",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "requirements"
+          ],
+          "properties": {
+            "requirements": {
+              "type": "array"
+            },
+            "package_name": {
+              "type": "string"
+            },
+            "domain": {
+              "type": "string"
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "skeleton_code",
+            "package_name"
+          ],
+          "properties": {
+            "skeleton_code": {
+              "type": "string"
+            },
+            "package_name": {
+              "type": "string"
+            },
+            "declared_requirements": {
+              "type": "array"
+            },
+            "skeleton_hash": {
+              "type": "string"
+            }
+          }
+        },
+        "system_prompt_rules": [
+          "骨架只含：package 声明、part def、port def、requirement def、satisfy 分配",
+          "禁止出现 action/state/flow（那是 N3 的活）",
+          "生成后必须调用 sysml_v2_validate，verdict=block 时按诊断位置修复后重试，最多 3 轮",
+          "part/port/item 分别由 part def/port def/item def 定型，不可混用",
+          "引用类语法（satisfy/perform/allocate/include）只能引用 usage，不能引用 definition",
+          "先调 sysml_stdlib_meta 确认元类存在，禁止臆造属性"
+        ],
+        "bind_tools": [
+          "sysml_v2_validate",
+          "sysml_stdlib_meta",
+          "graph_retrieve"
+        ],
+        "bind_skills": [
+          "sysml_skeleton_generation_guide"
+        ]
+      },
+      "stage_gate": {
+        "metrics": [
+          "verdict",
+          "n_hard",
+          "n_syntax"
+        ],
+        "pass_when": "verdict != 'block'",
+        "on_fail": "骨架不过 → 不进 N3（硬阻断，不降级）"
+      }
+    },
+    {
+      "stage_order": 3,
+      "key": "N3",
+      "fanout": {
+        "mode": "parallel",
+        "param": "view_type",
+        "order": [
+          "requirement",
+          "structure",
+          "usecase",
+          "activity",
+          "ibd",
+          "sequence",
+          "state",
+          "parameter"
+        ],
+        "on_upstream_degraded": "下游必须标 degraded=true 并显式声明缺失风险，禁止编造上游元素"
+      },
+      "agent": {
+        "name": "view_expansion",
+        "display_name": "视图展开Agent",
+        "agent_role": "sub",
+        "hil_level": "L0",
+        "status": "active",
+        "builtin": 0,
+        "description": "消费已通过校验的架构骨架，按 view_type 参数展开单个 SysML v2 视图（需求/结构/用例/活动/IBD/时序/状态机/参数），每个视图独立校验、独立重试。",
+        "capabilities": [
+          "SysML v2 视图展开",
+          "八视图固定顺序依赖",
+          "活动决策与异常分支",
+          "状态转换与守护条件",
+          "端口连接器建模"
+        ],
+        "intent_keywords": [
+          "视图展开",
+          "生成活动图",
+          "生成用例视图",
+          "生成状态机",
+          "生成时序图",
+          "生成IBD",
+          "生成参数视图",
+          "视图建模"
+        ],
+        "max_concurrency": 2,
+        "protocol_range": ">=1,<3",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "skeleton_code",
+            "view_type"
+          ],
+          "properties": {
+            "skeleton_code": {
+              "type": "string"
+            },
+            "view_type": {
+              "enum": [
+                "requirement",
+                "structure",
+                "usecase",
+                "activity",
+                "ibd",
+                "sequence",
+                "state",
+                "parameter"
+              ]
+            },
+            "upstream_views": {
+              "type": "object"
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "view_type",
+            "view_code"
+          ],
+          "properties": {
+            "view_type": {
+              "type": "string"
+            },
+            "view_code": {
+              "type": "string"
+            },
+            "check": {
+              "type": "object"
+            },
+            "depends_on": {
+              "type": "array"
+            },
+            "degraded": {
+              "type": "boolean"
+            }
+          }
+        },
+        "system_prompt_rules": [
+          "view_type 是枚举参数，不是自由文本；一次调用只产出一个视图",
+          "只允许引用 skeleton_code 中已存在的元素，禁止凭空引入部件/端口",
+          "活动视图必须包含决策分支与异常分支（Exception Branch）",
+          "生成后必须调 sysml_v2_validate；本视图失败独立重试，不牵连其他视图"
+        ],
+        "bind_tools": [
+          "sysml_v2_validate",
+          "sysml_ast_extract",
+          "graph_retrieve"
+        ],
+        "bind_skills": [
+          "sysml_view_generation_requirement",
+          "sysml_view_generation_structure",
+          "sysml_view_generation_usecase",
+          "sysml_view_generation_activity",
+          "sysml_view_generation_ibd",
+          "sysml_view_generation_sequence",
+          "sysml_view_generation_state",
+          "sysml_view_generation_parameter"
+        ]
+      },
+      "stage_gate": {
+        "metrics": [
+          "per_view_verdict"
+        ],
+        "pass_when": "所有非降级视图 verdict != 'block'",
+        "on_fail": "独立失败独立重试；重试上限 3 轮后标记该视图 failed 并继续其余视图"
+      }
+    },
+    {
+      "stage_order": 4,
+      "key": "N4",
+      "agent": {
+        "name": "model_validation_repair",
+        "display_name": "模型校验修复Agent",
+        "agent_role": "sub",
+        "hil_level": "L0",
+        "status": "active",
+        "builtin": 0,
+        "description": "消费视图产出与校验诊断，按「词法→语法→语义」顺序定位修复并复检，最多 3 轮。n_hard 必须单调下降。绝不伪造通过。",
+        "capabilities": [
+          "SysML v2 三层诊断定位",
+          "按优先级修复",
+          "修复轮次预算控制",
+          "修复有效性判定"
+        ],
+        "intent_keywords": [
+          "校验模型",
+          "模型检查",
+          "修复语法错误",
+          "校验不过",
+          "模型报错",
+          "诊断修复"
+        ],
+        "max_concurrency": 2,
+        "protocol_range": ">=1,<3",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "code",
+            "diagnostics"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "diagnostics": {
+              "type": "array"
+            },
+            "round": {
+              "type": "integer"
+            },
+            "prev_n_hard": {
+              "type": "integer"
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "fixed_code",
+            "rounds_used"
+          ],
+          "properties": {
+            "fixed_code": {
+              "type": "string"
+            },
+            "rounds_used": {
+              "type": "integer"
+            },
+            "n_hard": {
+              "type": "integer"
+            },
+            "verdict": {
+              "enum": [
+                "pass",
+                "report",
+                "block",
+                "unavailable"
+              ]
+            },
+            "residual_errors": {
+              "type": "array"
+            },
+            "fabricated": {
+              "type": "boolean"
+            }
+          }
+        },
+        "system_prompt_rules": [
+          "第 1 步先跑 sysml_v2_autofix（确定性规则修复，零 LLM 成本）",
+          "残余错误按词法→语法→语义顺序处理，硬错误优先",
+          "每轮记录 n_hard，若本轮 n_hard >= 上轮则放弃本轮修复并报错",
+          "3 轮后仍不过 → 明确报告「未通过 + 残余错误清单」",
+          "禁止：不调 validate 就声称通过；禁止把 unavailable 说成通过；禁止造关键字"
+        ],
+        "bind_tools": [
+          "sysml_v2_validate",
+          "sysml_v2_autofix"
+        ],
+        "bind_skills": [
+          "sysml_validation_repair_loop"
+        ]
+      },
+      "stage_gate": {
+        "metrics": [
+          "n_hard",
+          "rounds_used"
+        ],
+        "pass_when": "verdict in ['pass','report'] AND n_hard <= prev_n_hard (单调不增)",
+        "on_fail": "3 轮后阻断，报N4 failed"
+      }
+    },
+    {
+      "stage_order": 5,
+      "key": "N5",
+      "agent": {
+        "name": "trace_verification",
+        "display_name": "追溯核验Agent",
+        "agent_role": "sub",
+        "hil_level": "L0",
+        "status": "active",
+        "builtin": 0,
+        "description": "生成需求↔模型元素双向追溯矩阵，识别未覆盖需求、无源元素、断裂 satisfy 链。所有数字来自确定性工具。",
+        "capabilities": [
+          "需求到元素追溯矩阵",
+          "反向孤儿元素识别",
+          "satisfy 链完整性检查",
+          "覆盖缺项汇总"
+        ],
+        "intent_keywords": [
+          "追溯矩阵",
+          "覆盖性分析",
+          "需求覆盖检查",
+          "追溯链检查",
+          "缺项分析"
+        ],
+        "max_concurrency": 2,
+        "protocol_range": ">=1,<3",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "requirement_ids"
+          ],
+          "properties": {
+            "requirement_ids": {
+              "type": "array"
+            },
+            "model_refs": {
+              "type": "array"
+            },
+            "branches": {
+              "type": "array"
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "matrix",
+            "uncovered",
+            "orphans"
+          ],
+          "properties": {
+            "matrix": {
+              "type": "array"
+            },
+            "uncovered": {
+              "type": "array"
+            },
+            "orphans": {
+              "type": "array"
+            },
+            "broken_chains": {
+              "type": "array"
+            },
+            "metrics_source": {
+              "type": "string"
+            }
+          }
+        },
+        "system_prompt_rules": [
+          "调用序固定：coverage_matrix → trace_chain_check → scene_coverage → gap_summary",
+          "gap_summary 必须最后调（消费前三者结果，单独跑会遗漏）",
+          "所有百分比必须来自工具返回值，禁止心算或估算",
+          "报告须标注规则版本（随工具结果返回的 cov-v1.0）"
+        ],
+        "bind_tools": [
+          "coverage_matrix",
+          "trace_chain_check",
+          "scene_coverage",
+          "gap_summary",
+          "modeling_coverage"
+        ],
+        "bind_skills": [
+          "sysml_trace_coverage_analysis"
+        ]
+      },
+      "stage_gate": {
+        "metrics": [
+          "coverage_ratio",
+          "orphan_count"
+        ],
+        "pass_when": "always（产出清单即可，是否阻断由人工决策）",
+        "on_fail": "uncovered 项列清单交人工，不自动判失败"
+      }
+    },
+    {
+      "stage_order": 6,
+      "key": "N6",
+      "agent": {
+        "name": "model_release",
+        "display_name": "模型发布Agent",
+        "agent_role": "sub",
+        "hil_level": "L2",
+        "status": "active",
+        "builtin": 0,
+        "description": "消费通过校验的模型产物，落库为 entities/relations，写 sysml_versions 版本链与 check 留痕，推送智源平台。所有写操作逐条人工确认。",
+        "capabilities": [
+          "模型落库与版本链",
+          "实体关系图谱回灌",
+          "智源平台推送",
+          "check 留痕审计"
+        ],
+        "intent_keywords": [
+          "发布模型",
+          "落库",
+          "导入智源",
+          "模型入库",
+          "生成版本"
+        ],
+        "max_concurrency": 1,
+        "protocol_range": ">=1,<3",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "view_bundle",
+            "check_verdict"
+          ],
+          "properties": {
+            "view_bundle": {
+              "type": "object"
+            },
+            "check_verdict": {
+              "enum": [
+                "pass",
+                "report"
+              ]
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "branch_id": {
+              "type": "string"
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "released",
+            "version_id"
+          ],
+          "properties": {
+            "released": {
+              "type": "boolean"
+            },
+            "version_id": {
+              "type": "string"
+            },
+            "entities_created": {
+              "type": "integer"
+            },
+            "relations_created": {
+              "type": "integer"
+            },
+            "pushed": {
+              "type": "boolean"
+            },
+            "confirmed_by": {
+              "type": "string"
+            }
+          }
+        },
+        "system_prompt_rules": [
+          "verdict=block → 禁止发布",
+          "verdict=report → 允许发布但须在报告首屏列出全部语义错",
+          "verdict=unavailable → 允许发布但标注「未校验」，禁止表述为「已通过」",
+          "归一决策（中文名→英文标识符）必须逐条人工确认后才应用",
+          "所有写操作走 HIL L2 确认队列，不得绕过"
+        ],
+        "bind_tools": [
+          "entity_create",
+          "zhiyuan_sysmlv2_import",
+          "mbse_pull_ingest",
+          "graph_db_query",
+          "sysml_v2_project_check"
+        ],
+        "bind_skills": [
+          "sysml_release_checklist"
+        ]
+      },
+      "stage_gate": {
+        "metrics": [
+          "verdict",
+          "coverage_clean"
+        ],
+        "pass_when": "verdict in ['pass','report'] AND人工确认完成",
+        "on_fail": "阻断，不落库"
+      }
+    },
+    {
+      "stage_order": 5.5,
+      "key": "G",
+      "conditional": true,
+      "trigger": "operation ∈ {delete, remove, refactor, batch_replace, boundary_change}",
+      "agent": {
+        "name": "change_safety_gate",
+        "display_name": "变更安全门Agent",
+        "agent_role": "sub",
+        "hil_level": "L1",
+        "status": "active",
+        "builtin": 0,
+        "description": "对删除/移除/批量替换/边界变更类操作，先分析影响面：沿 connection→port、requirement→design element、view→元素、behavior→subsystem、verification case→requirement 引用链遍历，输出受影响元素清单与风险等级，交人工决策。不执行变更。",
+        "capabilities": [
+          "引用链影响分析",
+          "删除范围确认",
+          "风险等级评估",
+          "高风险操作拦截"
+        ],
+        "intent_keywords": [
+          "删除",
+          "移除",
+          "清空",
+          "重构",
+          "批量替换",
+          "改边界"
+        ],
+        "max_concurrency": 1,
+        "protocol_range": ">=1,<3",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "operation",
+            "target",
+            "location"
+          ],
+          "properties": {
+            "operation": {
+              "enum": [
+                "delete",
+                "remove",
+                "refactor",
+                "batch_replace",
+                "boundary_change"
+              ]
+            },
+            "target": {
+              "type": "string"
+            },
+            "location": {
+              "type": "object"
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "risk_level",
+            "affected"
+          ],
+          "properties": {
+            "risk_level": {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "affected": {
+              "type": "array"
+            },
+            "dangling_refs": {
+              "type": "array"
+            },
+            "proceed_allowed": {
+              "type": "boolean"
+            },
+            "confirm_prompt": {
+              "type": "string"
+            }
+          }
+        },
+        "system_prompt_rules": [
+          "你只分析影响面，绝不执行变更",
+          "必须沿五类引用链遍历：connection→port、requirement→design element、view→展示元素、behavior→subsystem、verification case→requirement",
+          "proceed_allowed=false 时禁止进入 N6 落库",
+          "影响面数字必须来自 impact_analyze 工具，禁止估算",
+          "「把没用的删掉」这类模糊指令必须先问清删除对象和范围，不得自行推测删除目标"
+        ],
+        "bind_tools": [
+          "impact_analyze",
+          "graph_retrieve",
+          "graph_db_query"
+        ],
+        "bind_skills": [
+          "sysml_change_safety_analysis"
+        ]
+      },
+      "stage_gate": {
+        "metrics": [
+          "risk_level",
+          "dangling_refs_count",
+          "proceed_allowed"
+        ],
+        "pass_when": "proceed_allowed == true",
+        "on_fail": "阻断，输出 confirm_prompt 交人工确认"
+      }
+    }
+  ],
+  "skills": [
+    {
+      "name": "sysml_requirement_to_model_method",
+      "description": "需求条目到 SysML 元素的映射方法论：功能需求→activity 行为、性能需求→constraint/attribute、接口需求→port/connector、约束需求→requirement def。含 satisfy 分配与追溯标注纪律。",
+      "triggers": [
+        "需求映射",
+        "需求到模型",
+        "如何建模",
+        "需求转元素",
+        "映射方法",
+        "建模方法论"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "graph_retrieve",
+        "coverage_matrix"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师",
+        "架构师"
+      ],
+      "dependencies": [],
+      "references": [
+        {
+          "title": "需求类型映射表",
+          "path": "references/需求类型映射表.md"
+        }
+      ],
+      "scripts": [],
+      "iron_rules": [
+        "映射前必须先检索本体（graph_retrieve），确认目标元类存在",
+        "禁止建立本体中不存在的元素类型；缺失时在 gaps 中标注",
+        "每条 requirement def 至少被一个 part 的 satisfy 覆盖，否则视为未实现"
+      ]
+    },
+    {
+      "name": "sysml_skeleton_generation_guide",
+      "description": "SysML v2 架构骨架生成指南：包与导入纪律、part/port/item 类型族匹配、需求声明与 satisfy 分配、部件层级划分原则。",
+      "triggers": [
+        "骨架生成",
+        "架构定义",
+        "包结构",
+        "部件定义",
+        "端口定义"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "sysml_v2_validate",
+        "sysml_stdlib_meta"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师",
+        "架构师"
+      ],
+      "dependencies": [],
+      "references": [
+        {
+          "title": "骨架模板集",
+          "path": "references/骨架模板集.md"
+        },
+        {
+          "title": "标准库可导入包清单",
+          "path": "references/stdlib_packages.md"
+        }
+      ],
+      "scripts": [],
+      "iron_rules": [
+        "import 可见性前缀必填：private import ScalarValues::*;",
+        "':' 是 defined by，不是 typed by",
+        "先查 sysml_stdlib_meta 确认元类与属性存在，禁止臆造"
+      ]
+    },
+    {
+      "name": "sysml_view_generation_requirement",
+      "description": "需求视图生成指南：需求层次结构建模、利益相关方与需求主体识别、subject 位置约束、需求间 refine 关系。",
+      "triggers": [
+        "需求视图",
+        "需求层次",
+        "利益相关方",
+        "requirement def"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "sysml_v2_validate",
+        "graph_retrieve"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师"
+      ],
+      "dependencies": [
+        "sysml_skeleton_generation_guide"
+      ],
+      "references": [
+        {
+          "title": "需求视图模板",
+          "path": "references/requirement_template.md"
+        }
+      ],
+      "scripts": [],
+      "iron_rules": [
+        "体内出现 stakeholder 或 actor 时 subject 必须写，且置于体内第一个参数位",
+        "subject 与 satisfy 对同一需求只能二选一，同时写会报 Cannot override a binding feature value"
+      ]
+    },
+    {
+      "name": "sysml_view_generation_structure",
+      "description": "结构视图生成指南：系统层级组成建模、部件与端口定义、块定义图 BDD、继承与 specialize 关系。",
+      "triggers": [
+        "结构视图",
+        "块定义图",
+        "BDD",
+        "部件定义",
+        "层级组成"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "sysml_v2_validate",
+        "graph_retrieve"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师"
+      ],
+      "dependencies": [
+        "sysml_skeleton_generation_guide"
+      ],
+      "references": [
+        {
+          "title": "结构视图模板",
+          "path": "references/structure_template.md"
+        }
+      ],
+      "scripts": [],
+      "iron_rules": [
+        "part def 定义部件，禁止用 item def 代替",
+        "继承写:> (specializes)，重定义写 :>>"
+      ]
+    },
+    {
+      "name": "sysml_view_generation_usecase",
+      "description": "用例视图生成指南：用例层次结构建模、参与者与主体识别、顶层用例与子用例分解、include/extend 关系。",
+      "triggers": [
+        "用例视图",
+        "use case",
+        "参与者",
+        "actor",
+        "用例分解"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "sysml_v2_validate",
+        "graph_retrieve"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师"
+      ],
+      "dependencies": [
+        "sysml_skeleton_generation_guide"
+      ],
+      "references": [
+        {
+          "title": "用例视图模板",
+          "path": "references/usecase_template.md"
+        }
+      ],
+      "scripts": [],
+      "iron_rules": [
+        "v2 没有 extend 关键字，复用写 include use case ...",
+        "用例分解深度不超过 3 层"
+      ]
+    },
+    {
+      "name": "sysml_view_generation_activity",
+      "description": "活动视图生成指南：动作顺序与并发分区建模、决策分支、异常分支（Exception Branch 必含）、数据流传递、约束条件。",
+      "triggers": [
+        "活动图",
+        "活动视图",
+        "action",
+        "并发",
+        "异常分支",
+        "决策分支"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "sysml_v2_validate",
+        "graph_retrieve"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师"
+      ],
+      "dependencies": [
+        "sysml_skeleton_generation_guide"
+      ],
+      "references": [
+        {
+          "title": "活动视图模板",
+          "path": "references/activity_template.md"
+        }
+      ],
+      "scripts": [],
+      "iron_rules": [
+        "活动图必须显式包含异常分支，只画正常流程视为不合格",
+        "条件表达式写 if C { action X; } else { action Y; }，不是 first A if C then B else D",
+        "逻辑运算用 & 和 or，不用 && 和 ||"
+      ]
+    },
+    {
+      "name": "sysml_view_generation_ibd",
+      "description": "交互视图 IBD 生成指南：端口与连接器定义、部件间连接关系建模、跨层级连接分析、内部块图投影。",
+      "triggers": [
+        "IBD",
+        "内部块图",
+        "交互视图",
+        "连接器",
+        "端口连接"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "sysml_v2_validate",
+        "graph_retrieve"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师",
+        "架构师"
+      ],
+      "dependencies": [
+        "sysml_skeleton_generation_guide"
+      ],
+      "references": [
+        {
+          "title": "IBD 模板",
+          "path": "references/ibd_template.md"
+        }
+      ],
+      "scripts": [],
+      "iron_rules": [
+        "连接写 connect a to b，不是 connector c from a to b",
+        "共轭端口只能写 port p : ~A;"
+      ]
+    },
+    {
+      "name": "sysml_view_generation_sequence",
+      "description": "顺序视图（时序图）生成指南：时间顺序建模、部件间消息交换定义、时序图投影。",
+      "triggers": [
+        "时序图",
+        "顺序视图",
+        "消息交换",
+        "sequence"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "sysml_v2_validate",
+        "graph_retrieve"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师"
+      ],
+      "dependencies": [
+        "sysml_skeleton_generation_guide"
+      ],
+      "references": [
+        {
+          "title": "时序图模板",
+          "path": "references/sequence_template.md"
+        }
+      ],
+      "scripts": [],
+      "blockers": [
+        "sysml_ast.py:43 NODE_KINDS 缺 MessageUsage —— 投影产不出 message 边，须先补"
+      ],
+      "iron_rules": [
+        "消息必须引用 usage，不能引用 definition"
+      ]
+    },
+    {
+      "name": "sysml_view_generation_state",
+      "description": "状态视图生成指南：状态与转换建模、触发-守护-执行逻辑、运行模式描述、状态机投影。",
+      "triggers": [
+        "状态机",
+        "状态视图",
+        "状态转换",
+        "state machine",
+        "运行模式"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "sysml_v2_validate",
+        "graph_retrieve"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师"
+      ],
+      "dependencies": [
+        "sysml_skeleton_generation_guide"
+      ],
+      "references": [
+        {
+          "title": "状态机模板",
+          "path": "references/state_template.md"
+        }
+      ],
+      "scripts": [],
+      "blockers": [
+        "sysml_ast.py:43 NODE_KINDS 缺 TransitionUsage —— 只有状态节点无转换边，须先补"
+      ],
+      "iron_rules": [
+        "每个 transition 必须有 trigger 或 guard，禁止裸转换"
+      ]
+    },
+    {
+      "name": "sysml_view_generation_parameter",
+      "description": "参数视图生成指南：工程约束建模、参数化关系定义、属性与参数绑定、参���视图投影。",
+      "triggers": [
+        "参数视图",
+        "工程约束",
+        "参数化",
+        "parameter",
+        "属性绑定"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "sysml_v2_validate",
+        "graph_retrieve"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师"
+      ],
+      "dependencies": [
+        "sysml_skeleton_generation_guide"
+      ],
+      "references": [
+        {
+          "title": "参数视图模板",
+          "path": "references/parameter_template.md"
+        }
+      ],
+      "scripts": [],
+      "blockers": [
+        "sysml_ast.py:43 NODE_KINDS 缺 ParameterUsage（仅 ConstraintUsage）—— 须先补"
+      ],
+      "iron_rules": [
+        "物理量写 attribute x :> ISQ::xxx，不写 attribute def X :> ISQ::某量"
+      ]
+    },
+    {
+      "name": "sysml_validation_repair_loop",
+      "description": "SysML v2 校验修复闭环：生成后调 sysml_v2_validate 取三路诊断，按「词法→语法→语义」顺序修复并复检，最多 3 轮；n_hard 必须单调下降；不伪造通过。",
+      "triggers": [
+        "校验",
+        "检查模型",
+        "模型检查",
+        "校验模型",
+        "语法错误",
+        "语义错",
+        "编译错误",
+        "修复",
+        "模型报错"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "sysml_v2_validate",
+        "sysml_v2_autofix"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师",
+        "评审工程师"
+      ],
+      "dependencies": [],
+      "references": [
+        {
+          "title": "高频错误对照表",
+          "path": "references/error_pairs.md"
+        }
+      ],
+      "scripts": [],
+      "replaces_skill_id": 99,
+      "iron_rules": [
+        "第 1 步先跑 sysml_v2_autofix（确定性规则修复，零 LLM 成本）",
+        "残余错误按词法→语法→语义顺序处理（硬错误优先）",
+        "每轮记录 n_hard，若本轮 n_hard >= 上轮则放弃本轮修复并报错",
+        "3 轮后仍不过 → 明确报告「未通过 + 残余错误清单」",
+        "禁止：不调 validate 就声称通过",
+        "禁止：把 verdict=unavailable 说成通过",
+        "禁止：引入未在 sysml.library 中验证的 import"
+      ]
+    },
+    {
+      "name": "sysml_trace_coverage_analysis",
+      "description": "需求↔模型双向覆盖核验方法：正向查未覆盖需求，反向查孤儿元素，断裂 satisfy 链检测。所有数字来自确定性工具，禁止心算。",
+      "triggers": [
+        "覆盖性",
+        "追溯",
+        "覆盖分析",
+        "缺项",
+        "追溯矩阵",
+        "覆盖性分析"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "coverage_matrix",
+        "trace_chain_check",
+        "scene_coverage",
+        "gap_summary",
+        "modeling_coverage"
+      ],
+      "allowed_roles": [
+        "验证工程师",
+        "系统工程师",
+        "质量工程师"
+      ],
+      "dependencies": [],
+      "references": [
+        {
+          "title": "调用序与解读模板",
+          "path": "references/coverage_reading.md"
+        }
+      ],
+      "scripts": [],
+      "iron_rules": [
+        "调用序固定：coverage_matrix → trace_chain_check → scene_coverage → gap_summary",
+        "gap_summary 必须最后调（消费前三者，单独跑会遗漏）",
+        "数字一律来自确定性工具，你负责编排、解读、建议",
+        "你心算或估算的任何百分比都是伪造",
+        "报告须标注规则版本 cov-v1.0"
+      ]
+    },
+    {
+      "name": "sysml_release_checklist",
+      "description": "模型发布前检查清单：校验 verdict 判定、追溯覆盖率阈值、归一决策确认、版本留痕、智源推送前置条件。",
+      "triggers": [
+        "发布模型",
+        "入库检查",
+        "发布检查",
+        "上线模型",
+        "模型入库"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "entity_create",
+        "graph_db_query",
+        "sysml_v2_project_check"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "架构师"
+      ],
+      "dependencies": [
+        "sysml_validation_repair_loop",
+        "sysml_trace_coverage_analysis"
+      ],
+      "references": [
+        {
+          "title": "发布检查清单",
+          "path": "references/release_checklist.md"
+        }
+      ],
+      "scripts": [],
+      "iron_rules": [
+        "verdict=block → 禁止发布",
+        "verdict=report → 允许发布但须在报告首屏列出全部语义错",
+        "verdict=unavailable → 允许发布但标注「未校验」，禁止表述为「已通过」",
+        "覆盖矩阵存在 uncovered 项 → 列清单交人工决策，不自动判失败",
+        "归一决策必须逐条人工确认后才应用"
+      ]
+    },
+    {
+      "name": "sysml_methodology_profile_guide",
+      "description": "建模方法论 profile 解析指南：区分文档型/本体型/规则型三类载体，把 MagicDraw 用法说明与客户建模规范提炼为可自动执行的规约卡（命名正则、必填属性、层级约束、视图齐备要求）。",
+      "triggers": [
+        "方法论",
+        "建模规范",
+        "建模约定",
+        "profile",
+        "规约卡",
+        "建模标准"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "graph_retrieve",
+        "sysml_stdlib_meta",
+        "methodology_profile_load"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "系统工程师",
+        "架构师"
+      ],
+      "dependencies": [],
+      "references": [
+        {
+          "title": "方法论规约卡schema",
+          "path": "references/methodology_card.md"
+        },
+        {
+          "title": "MagicDraw 映射对照",
+          "path": "references/magicdraw_mapping.md"
+        }
+      ],
+      "scripts": [],
+      "iron_rules": [
+        "文档型规范只提供「应该怎么画」，不能直接机器判定 —— 必须结构化后才可执行",
+        "本体型提供「能用什么」，规则型提供「必须怎样」，三者缺一不可",
+        "enforce 分级必须明确：lint 提示 / check 阻断 / forbid 禁止",
+        "每条规则必须带 source_doc_id，否则客户无法追溯规则来源",
+        "同名对象在不同方法论下含义可能不同，禁止跨profile 复用规约卡"
+      ]
+    },
+    {
+      "name": "sysml_change_safety_analysis",
+      "description": "删除/变更前的影响面分析方法：沿 SysML V2 引用关系链遍历受影响元素，输出风险等级与悬空引用清单，生成确认话术。",
+      "triggers": [
+        "删除影响",
+        "影响面",
+        "变更风险",
+        "安全检查",
+        "删除确认"
+      ],
+      "category": "AI建模",
+      "allowed_tools": [
+        "impact_analyze",
+        "graph_retrieve",
+        "graph_db_query"
+      ],
+      "allowed_roles": [
+        "建模工程师",
+        "架构师",
+        "系统工程师"
+      ],
+      "dependencies": [],
+      "references": [
+        {
+          "title": "SysML V2 五类引用链",
+          "path": "references/sysml_ref_chains.md"
+        }
+      ],
+      "scripts": [],
+      "iron_rules": [
+        "必须沿五类引用链遍历：connection→port、requirement→design element、view→展示元素、behavior→subsystem、verification case→requirement",
+        "proceed_allowed=false 时禁止进入落库阶段",
+        "影响面数字必须来自 impact_analyze，禁止估算",
+        "「把没用的删掉」这类模糊指令必须先问清删除对象和范围，不得自行推测"
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "sysml_v2_autofix",
+      "description": "SysML v2 确定性规则修复：按实测高频错误表（import 可见性前缀、:> 与 :>> 误用、doc 语法、&& 与 ||、extend 不存在、first...if...then 等）逐条定位并改写，返回已修复项与未修复项。修复前先调本工具，再考虑 LLM 手改。不做语义判断，不猜测。",
+      "side_effect": "write",
+      "risk_level": "low",
+      "version": "v1.0",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "待修复的 SysML v2 代码全文"
+          },
+          "rule_set": {
+            "type": "string",
+            "description": "规则集名，默认 default"
+          },
+          "max_fixes": {
+            "type": "integer",
+            "description": "单次最大修复项数，默认 20"
+          }
+        }
+      }
+    },
+    {
+      "name": "sysml_v2_project_check",
+      "description": "工程级 SysML v2 门禁：对整包多文件合并校验（避免单文件伪错），返回 verdict 与按文件聚合的诊断。发布前必调，不可与 sysml_v2_validate 混用。",
+      "side_effect": "read",
+      "risk_level": "low",
+      "version": "v1.0",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "package_path"
+        ],
+        "properties": {
+          "package_path": {
+            "type": "string",
+            "description": "工程根相对路径"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "待校验文件列表，空则扫全包"
+          }
+        }
+      }
+    },
+    {
+      "name": "sysml_stdlib_meta",
+      "description": "查询 sysml.library 标准库元类：给定元类名返回必填/可选特征、可导入包清单、标准示例用法。生成前查标准库，禁止臆造属性。",
+      "side_effect": "read",
+      "risk_level": "low",
+      "version": "v1.0",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "metaclass"
+        ],
+        "properties": {
+          "metaclass": {
+            "type": "string",
+            "description": "元类名，如 PartDef"
+          },
+          "package": {
+            "type": "string",
+            "description": "限定包，空则全局搜"
+          }
+        }
+      }
+    },
+    {
+      "name": "sysml_ast_extract",
+      "description": "解析 SysML v2 AST，抽取声明元素与关系边（part/port/requirement/connection/transition/message/constraint），返回结构化清单与位置。用于视图投影与覆盖核验。",
+      "side_effect": "read",
+      "risk_level": "low",
+      "version": "v1.0",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "只抽取指定元类，空则全抽"
+          }
+        }
+      }
+    },
+    {
+      "name": "requirement_itemize",
+      "description": "需求条目化：把自然语言需求按句切分并结构化（主语/动作/判据/分类），标出不可测项与歧义项。确定性规则为主，LLM 增强可选。",
+      "side_effect": "read",
+      "risk_level": "low",
+      "version": "v1.0",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "raw_text"
+        ],
+        "properties": {
+          "raw_text": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "sysml_import_graph",
+      "description": "把校验通过的 SysML 产物导入图谱为 entities/relations，按本体类型对齐，回写映射报告与未对齐清单。写操作走人工确认。",
+      "side_effect": "write",
+      "risk_level": "medium",
+      "version": "v1.0",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string",
+            "description": "目标分支，必须是已发布 release 分支"
+          },
+          "domain": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "methodology_profile_load",
+      "description": "加载指定方法论 profile 并返回结构化规约卡：语法规则（含 enforce 分级）、本体约束、命名正则、必填属性、视图齐备要求。建模前先调本工具拿到规约，禁止凭记忆假设方法论要求。",
+      "side_effect": "read",
+      "risk_level": "low",
+      "version": "v1.0",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "project_id"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string"
+          },
+          "methodology": {
+            "enum": [
+              "omg_sysml_v2",
+              "magicdraw",
+              "custom"
+            ]
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "M0",
+              "N1",
+              "N2",
+              "N3",
+              "N4",
+              "N5",
+              "N6"
+            ],
+            "description": "按阶段只返回该阶段需要的规则子集，控制 token 预算"
+          }
+        }
+      }
+    },
+    {
+      "name": "sysml_v2_lint",
+      "description": "按方法论规约卡做确定性检查：命名正则、必填属性、forbidden 规则。返回违反项与 enforce 级别（lint 提示 / check 阻断 / forbid 禁止）。修复前先跑本工具，不要用 LLM 肉眼比对命名。",
+      "side_effect": "read",
+      "risk_level": "low",
+      "version": "v1.0",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "enforce_filter": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "lint",
+                "check",
+                "forbid"
+              ]
+            },
+            "description": "只检查指定级别，空则全查"
+          }
+        }
+      }
+    }
+  ],
+  "db_migrations": [
+    {
+      "table": "agents",
+      "add_columns": [
+        {
+          "name": "stage_order",
+          "type": "INTEGER",
+          "default": null,
+          "note": "流水线位置，路由状态机用；不要与 max_concurrency 混用"
+        },
+        {
+          "name": "stage_gate",
+          "type": "JSON",
+          "default": null,
+          "note": "产出判据；output_schema 只描述结构不含判据"
+        },
+        {
+          "name": "mutually_exclusive",
+          "type": "JSON",
+          "default": null,
+          "note": "互斥节点组"
+        }
+      ],
+      "backfill": "现有 19 个 active Agent 的 stage_order 置 NULL（表示非流水线节点），不猜测归属"
+    },
+    {
+      "table": "(new) methodology_rules",
+      "create_sql": "CREATE TABLE methodology_rules (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, rule_id TEXT NOT NULL, scope TEXT NOT NULL, rule_type TEXT NOT NULL, expression TEXT, message TEXT NOT NULL, enforce TEXT NOT NULL CHECK(enforce IN ('lint','check','forbid')), source_doc_id INTEGER, UNIQUE(profile_id, rule_id));",
+      "note": "方法论规则表；enforce 分级是能否自动执行的关键"
+    },
+    {
+      "table": "(new) project_methodology",
+      "create_sql": "CREATE TABLE project_methodology (project_id TEXT NOT NULL, profile_id TEXT NOT NULL, is_active INTEGER DEFAULT 1, bound_at TIMESTAMP, PRIMARY KEY(project_id, profile_id));",
+      "note": "项目↔方法论绑定；未绑定时 M0 走 LLM 判定 + 用户确认"
+    },
+    {
+      "table": "agents",
+      "add_columns": [
+        {
+          "name": "task_domain",
+          "type": "TEXT DEFAULT 'general'",
+          "note": "任务域：modeling/qa/system/report/impact/general；非 modeling 强制 stage_order=NULL"
+        },
+        {
+          "name": "intent_keywords_active",
+          "type": "INTEGER DEFAULT 0",
+          "note": "0=该 Agent 不参与关键词路由（当前 19 个 Agent 全为 0 条关键词，属此状态）"
+        }
+      ]
+    }
+  ],
+  "flow": {
+    "name": "MBSE建模六阶段标准流水线",
+    "source": "manual",
+    "status": "published",
+    "note": "预置并 published，让 _try_reuse_planner_flow(orchestration.py:520) 真正命中；现状 57 条全 draft 导致复用闭环不通 | v2.0: 前置 m0 方法论解析；n5 后接 g 变更安全门（条件触发，破坏性操作才走）",
+    "nodes": [
+      {
+        "id": "m0",
+        "type": "agent",
+        "label": "方法论解析",
+        "config": {
+          "agent": "methodology_resolver",
+          "expect": "MethodologyCard"
+        }
+      },
+      {
+        "id": "n1",
+        "type": "agent",
+        "label": "需求结构化",
+        "config": {
+          "agent": "requirement_structuring",
+          "expect": "RequirementSet"
+        }
+      },
+      {
+        "id": "n2",
+        "type": "agent",
+        "label": "架构骨架生成",
+        "config": {
+          "agent": "architecture_skeleton",
+          "context_from": "n1",
+          "expect": "SysMLSkeleton"
+        }
+      },
+      {
+        "id": "n3",
+        "type": "agent",
+        "label": "视图展开",
+        "config": {
+          "agent": "view_expansion",
+          "context_from": "n2",
+          "expect": "ViewBundle"
+        }
+      },
+      {
+        "id": "n4",
+        "type": "agent",
+        "label": "模型校验修复",
+        "config": {
+          "agent": "model_validation_repair",
+          "context_from": "n3",
+          "expect": "ValidatedModel"
+        }
+      },
+      {
+        "id": "n5",
+        "type": "agent",
+        "label": "追溯核验",
+        "config": {
+          "agent": "trace_verification",
+          "context_from": "n3",
+          "expect": "TraceMatrix"
+        }
+      },
+      {
+        "id": "g",
+        "type": "agent",
+        "label": "变更安全门",
+        "config": {
+          "agent": "change_safety_gate",
+          "conditional": true,
+          "trigger": "operation in [delete,remove,refactor,batch_replace,boundary_change]",
+          "expect": "SafetyVerdict",
+          "note": "条件触发：非破坏性操作跳过此节点"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "agent",
+        "label": "模型发布",
+        "config": {
+          "agent": "model_release",
+          "context_from": "n4",
+          "hil_level": "L2",
+          "expect": "ReleaseResult"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "m0",
+        "to": "n1"
+      },
+      {
+        "from": "n1",
+        "to": "n2"
+      },
+      {
+        "from": "n2",
+        "to": "n3"
+      },
+      {
+        "from": "n3",
+        "to": "n4"
+      },
+      {
+        "from": "n3",
+        "to": "n5"
+      },
+      {
+        "from": "n4",
+        "to": "n6"
+      },
+      {
+        "from": "n5",
+        "to": "g"
+      },
+      {
+        "from": "g",
+        "to": "n6"
+      }
+    ],
+    "critical_rule": "context_from 由编排层从上游 output 自动填充，禁止依赖 LLM 自觉填 context（现状 planner_auto flow 只传 payload.input，t2/t3 拿不到 t1 结果）",
+    "edge_note": "n4->n6 与 n5->g->n6 是两条路径：校验通过可直发；经追溯核验的走安全门。破坏性操作只走 n5->g->n6"
+  },
+  "main_agent": {
+    "name": "MBSE建模总体负责人",
+    "agent_role": "main",
+    "roster": [
+      "方法论解析Agent",
+      "需求结构化Agent",
+      "架构骨架生成Agent",
+      "视图展开Agent",
+      "模型校验修复Agent",
+      "追溯核验Agent",
+      "模型发布Agent",
+      "变更安全门Agent"
+    ],
+    "orchestration_rules": [
+      "M0 必须最先执行：先确定方法论，再开始任何建模",
+      "阶段顺序固定 M0→N1→N2→N3→N4→N5→(G)→N6，不得跳步、不得倒序",
+      "N3 内八视图按 需求→结构→用例→活动→IBD→时序→状态机→参数 并行展开",
+      "生成≠校验≠落库，三阶段严格分离",
+      "破坏性操作（删除/移除/重构/改边界）必须经变更安全门Agent，proceed_allowed=false 时禁止落库",
+      "N6 必须置于末尾，且 notes 标注「需人工确认」",
+      "三标识（做什么/作用谁/在哪里）不齐全时先澄清，不得硬派",
+      "缺能力时在 notes 写明「团队暂不支持」，不得硬派"
+    ]
+  },
+  "migration": {
+    "disable_after_success": [
+      {
+        "id": 165,
+        "name": "需求视图生成",
+        "to": "N3 view_type=requirement"
+      },
+      {
+        "id": 166,
+        "name": "结构视图生成",
+        "to": "N3 view_type=structure"
+      },
+      {
+        "id": 167,
+        "name": "交互视图（IBD）生成",
+        "to": "N3 view_type=ibd"
+      },
+      {
+        "id": 168,
+        "name": "用例视图生成",
+        "to": "N3 view_type=usecase"
+      },
+      {
+        "id": 169,
+        "name": "活动图生成",
+        "to": "N3 view_type=activity"
+      },
+      {
+        "id": 170,
+        "name": "状态机视图生成",
+        "to": "N3 view_type=state"
+      },
+      {
+        "id": 171,
+        "name": "参数视图生成",
+        "to": "N3 view_type=parameter"
+      },
+      {
+        "id": 172,
+        "name": "顺序视图（时序图）生成",
+        "to": "N3 view_type=sequence"
+      }
+    ],
+    "keep_active": [
+      {
+        "id": 173,
+        "name": "多方案生成",
+        "reason": "变体空间候选提议，不产出模型代码，职责独立"
+      },
+      {
+        "id": null,
+        "name": "impact变更影响",
+        "reason": "独立能力"
+      },
+      {
+        "id": null,
+        "name": "knowledge_qa/ report_generation / chat / system_mgmt",
+        "reason": "非建模域"
+      }
+    ],
+    "order": "必须在 db_migrations 与 flow 落地之后执行"
+  },
+  "supersedes": "data/modeling_nodes.v1.bak.json",
+  "revision_note": "v3.1.0：V7 评估结论=撤销（路由基线 0.955/0.965 达标，不动intent_keywords）；V2 前置实测 operation 可推导（95.5%），判据成立",
+  "intent_slots": {
+    "description": "竞品 SysModeler 2.2 节的三标识意图解析。本工程原slots 块(agent/pipeline_parts/common.py:242)只有 goal/entities/constraints，无 target/location。",
+    "slots": [
+      {
+        "key": "operation",
+        "label": "What - 做什么",
+        "enum": [
+          "create",
+          "analyze",
+          "modify",
+          "delete",
+          "repair",
+          "verify",
+          "explain",
+          "view"
+        ],
+        "missing_behavior": "追问",
+        "note": "现有意图识别的结果映射到本枚举"
+      },
+      {
+        "key": "target",
+        "label": "Which - 作用对象",
+        "enum": [
+          "system",
+          "subsystem",
+          "part",
+          "port",
+          "connection",
+          "requirement",
+          "constraint",
+          "action",
+          "state",
+          "view"
+        ],
+        "missing_behavior": "追问",
+        "note": "v1.0 缺口：实测 run 367「生成模型代码」What 判对、Which 判错"
+      },
+      {
+        "key": "location",
+        "label": "Where - 作用位置",
+        "type": "object",
+        "properties": {
+          "file": "string",
+          "package": "string",
+          "element": "string"
+        },
+        "missing_behavior": "追问",
+        "note": "可从当前画布/选中元素/最近上下文推断"
+      }
+    ],
+    "gate": {
+      "when_incomplete": "clarify_needed=true，生成澄清卡，不进入流水线",
+      "threshold": null,
+      "_note": "阈值需采样标定"
+    },
+    "relation_to_existing": "与 intent.py detect_llm 的 confidence<0.85 澄清卡互补：这里是结构化前置澄清（进流水线前）"
+  },
+  "methodology": {
+    "why": "方法论文档已在库（doc812广汽方法论 180 chunks 已向量化），但 ontology_profiles 表 0 行、Repository 只在 backups/ —— 缺的是接线不是能力",
+    "three_layers": {
+      "A_document": {
+        "status": "已有",
+        "examples": [
+          {
+            "doc_id": 800,
+            "name": "SysML-v2-AI建模知识文档.md",
+            "chunks": 270
+          },
+          {
+            "doc_id": 812,
+            "name": "广汽方法论-260813.docx",
+            "chunks": 180
+          },
+          {
+            "doc_id": 816,
+            "name": "SysML_v2_常见语法错误与修正.md",
+            "chunks": 101
+          }
+        ],
+        "scope": "语法/格式纪律，应该怎么画",
+        "carrier": "RAG 检索"
+      },
+      "B_ontology": {
+        "status": "半残",
+        "detail": "ontology_types 52 行有数据；ontology_profiles 0 行",
+        "scope": "能用什么不能用什么",
+        "carrier": "本体 profile"
+      },
+      "C_rule": {
+        "status": "空白",
+        "detail": "无强制校验规则表",
+        "scope": "必须怎样，可机器判定",
+        "carrier": "methodology_rules（新表）"
+      }
+    },
+    "card_schema": {
+      "profile_id": "string",
+      "methodology": "omg_sysml_v2|magicdraw|custom",
+      "display_name": "string",
+      "source_doc_ids": "int[]",
+      "syntax_rules": [
+        {
+          "id": "NM-001",
+          "rule": "string",
+          "scope": "package|part|port|requirement|view",
+          "enforce": "lint|check|forbid",
+          "message": "string"
+        }
+      ],
+      "ontology_constraints": [
+        {
+          "id": "OT-001",
+          "metaclass": "PartDef",
+          "required": "string[]",
+          "forbidden": "string[]"
+        }
+      ],
+      "naming_conventions": {
+        "part_def": "regex",
+        "requirement": "regex",
+        "port": "regex"
+      },
+      "mandatory_properties": {
+        "PartDef": [
+          "name",
+          "description"
+        ],
+        "RequirementDef": [
+          "name",
+          "text",
+          "subject"
+        ]
+      },
+      "view_requirements": {
+        "required_views": "view_type[]",
+        "optional_views": "view_type[]"
+      }
+    },
+    "card_hard_requirements": [
+      "enforce 字段必须分级 lint/check/forbid —— 不分级则无法自动执行",
+      "命名规范必须用正则表达 —— 可直接喂 sysml_v2_lint",
+      "必须标 source_doc_ids —— 方法论可审计的前提"
+    ],
+    "injection_by_stage": {
+      "N1": [
+        "requirement 命名规范",
+        "mandatory_properties.RequirementDef"
+      ],
+      "N2": [
+        "naming_conventions.part_def",
+        "ontology_constraints",
+        "view_requirements.required_views"
+      ],
+      "N3": [
+        "syntax_rules（按 view_type 过滤）",
+        "对应视图的 mandatory_properties"
+      ],
+      "N4": [
+        "全部 syntax_rules",
+        "forbidden 规则"
+      ],
+      "N5": [
+        "view_requirements（检查必需视图齐备）"
+      ],
+      "_warning": "流式(stream.py:1656)与非流式(execute.py:287)两路都要接，勿重复 _skill_forced 的单例漂移坑(common.py:264-269 已登记)"
+    }
+  },
+  "two_layer_model": {
+    "principle": "阶段层保证流程正确性与门禁顺序（竞品缺）；对象层保证专业深度（v1.0 缺）。不做笛卡尔积—— 对象能力做成 Skill 在阶段内路由",
+    "matrix": {
+      "M0": [
+        "方法论识别",
+        "规约卡生成"
+      ],
+      "N1": [
+        "需求提取",
+        "需求分类",
+        "歧义检测"
+      ],
+      "N2": [
+        "架构分解(竞品#4)",
+        "接口定义(竞品#5)",
+        "命名规范应用"
+      ],
+      "N3": [
+        "行为建模(竞品#6)",
+        "视图生成(竞品#8)"
+      ],
+      "N4": [
+        "诊断定位",
+        "规则修复",
+        "语义修复"
+      ],
+      "N5": [
+        "约束与验证(竞品#7)",
+        "覆盖矩阵",
+        "孤儿元素识别"
+      ],
+      "G": [
+        "影响面分析",
+        "删除范围确认"
+      ],
+      "N6": [
+        "落库",
+        "版本链",
+        "平台推送"
+      ]
+    },
+    "competitor_agents_placement": {
+      "1_orchestrator": "已采用（六节点 flow）",
+      "2_parser_inspector": "由 sysml_ast_extract 工具 + N3 承担，不需独立 Agent",
+      "3_requirements": "N1",
+      "4_architecture": "N2 内Skill",
+      "5_interface": "N2 内 Skill",
+      "6_behavior": "N3 内 Skill",
+      "7_constraint_verification": "N5 内 Skill",
+      "8_view": "N3 内 Skill",
+      "9_validation_repair": "N4",
+      "10_safety_governance": "G 独立节点 + S7"
+    }
+  },
+  "roadmap_v2": [
+    {
+      "seq": 1,
+      "item": "修 input_schema 注入断链（tools.py:242）",
+      "cost": "极低",
+      "type": "修bug"
+    },
+    {
+      "seq": 2,
+      "item": "15 个 skill约束字段填实",
+      "cost": "低",
+      "type": "补数据"
+    },
+    {
+      "seq": 3,
+      "item": "意图槽位三标识 + 澄清门",
+      "cost": "中",
+      "type": "补机制"
+    },
+    {
+      "seq": 4,
+      "item": "stage_order/stage_gate 迁移 + 8 节点入库",
+      "cost": "中",
+      "type": "补机制"
+    },
+    {
+      "seq": 5,
+      "item": "methodology_rules 表 + 恢复 profile Repository（backups/project_repo.py:153 有现成实现）",
+      "cost": "低",
+      "type": "补机制"
+    },
+    {
+      "seq": 6,
+      "item": "预置 published 八节点 flow + context 自动填充",
+      "cost": "低",
+      "type": "补数据"
+    },
+    {
+      "seq": 7,
+      "item": "广汽方法论规则提炼（180 chunks → 规则行）",
+      "cost": "高",
+      "type": "需业务判断",
+      "note": "唯一需客户共同决策的一步：哪些是必须/建议，机器判断不了"
+    },
+    {
+      "seq": 8,
+      "item": "8 个新 Tool（含 methodology_profile_load / sysml_v2_lint）",
+      "cost": "中高",
+      "type": "补工具"
+    },
+    {
+      "seq": 9,
+      "item": "M0 Agent + 规约卡生成",
+      "cost": "中",
+      "type": "补节点"
+    },
+    {
+      "seq": 10,
+      "item": "规约卡分阶段注入（流式+非流式两路）",
+      "cost": "中",
+      "type": "接线"
+    },
+    {
+      "seq": 11,
+      "item": "change_safety_gate + S7",
+      "cost": "低",
+      "type": "补节点",
+      "note": "低成本高收益，建议与 1/2/3 同批做"
+    },
+    {
+      "seq": 12,
+      "item": "补 3 个 AST 元类（Message/Transition/Parameter）",
+      "cost": "中",
+      "type": "解锁视图"
+    },
+    {
+      "seq": 13,
+      "item": "熔断器",
+      "cost": "中",
+      "type": "补机制"
+    },
+    {
+      "seq": 14,
+      "item": "8 个旧视图 Agent 迁 disabled",
+      "cost": "低",
+      "type": "清理"
+    }
+  ],
+  "competitor_benchmark": {
+    "source": "AI建模的实现流程.docx（竞品资料，本机不再保存）",
+    "extracted": "435 节点/42 表/6725 字，已全文提取",
+    "adopted": [
+      {
+        "competitor": "2.2 意图理解三标识（What/Which/Where）",
+        "ours": "intent_slots + 澄清门",
+        "spec": "§3.5"
+      },
+      {
+        "competitor": "3.5 Interface Agent",
+        "ours": "N2 内「接口定义」Skill",
+        "spec": "§3.3"
+      },
+      {
+        "competitor": "3.6 Behavior Agent",
+        "ours": "N3 内「行为建模」Skill",
+        "spec": "§3.3"
+      },
+      {
+        "competitor": "3.7 Constraint & Verification",
+        "ours": "N5 内「约束与验证」Skill",
+        "spec": "§3.3"
+      },
+      {
+        "competitor": "3.10 Safety/Governance",
+        "ours": "change_safety_gate + S7",
+        "spec": "§3.4"
+      },
+      {
+        "competitor": "6 任务路由（六分类）",
+        "ours": "请求级读写分类（补工具层之上的请求层）",
+        "spec": "§2.2"
+      },
+      {
+        "competitor": "7.3 高风险操作保护",
+        "ours": "change_safety_gate",
+        "spec": "§3.4"
+      }
+    ],
+    "our_advantages": [
+      "SysML V2 语法正确性：实测 L0 卡 A/B 6/9 ERROR → 0/0，竞品全文 0 处语法陷阱",
+      "校验闭环有量化门禁（checker.jar + n_hard + 3轮预算），竞品是口号级",
+      "工程语义存储：entities189/relations249/sysml_versions59/本体表，竞品仅描述性文字未说怎么存",
+      "节点契约 input_schema/output_schema/stage_gate，竞品无"
+    ],
+    "competitor_advantages": [
+      "三标识意图解析（我们 v1.0 只有 What，实测 run367 Which 判错）",
+      "Safety/Governance 独立 Agent（我们完全没有）",
+      "请求级读写路由分类（我们只有工具级门控）"
+    ],
+    "competitor_maturity_stages": [
+      "AI 辅助建模",
+      "AI 语义建模",
+      "AI 工程闭环"
+    ]
+  },
+  "task_domains": {
+    "rationale": "v2.0 只设计了建模流水线，未定义非建模任务归属。实测证明现有架构早已承认此需求：orchestration.py:19 的 _ORCH_EXCLUDE_INTENTS 已排除 chat/system_mgmt/requirement_quality",
+    "field": {
+      "name": "task_domain",
+      "type": "TEXT",
+      "default": "general",
+      "enum": [
+        "modeling",
+        "qa",
+        "system",
+        "report",
+        "impact",
+        "general"
+      ]
+    },
+    "agent_assignment": {
+      "modeling": {
+        "pipeline": true,
+        "need_M0": true,
+        "agents": [
+          "M0 methodology_resolver",
+          "N1..N6",
+          "G change_safety_gate",
+          "多方案生成(独立)"
+        ],
+        "backfill": [
+          "requirement_analysis",
+          "design",
+          "review",
+          "8个视图Agent(迁移前)"
+        ]
+      },
+      "qa": {
+        "pipeline": false,
+        "need_M0": false,
+        "agents": [
+          "knowledge_qa",
+          "chat"
+        ],
+        "note": "零建模产物⇒零门禁；已在编排黑名单"
+      },
+      "system": {
+        "pipeline": false,
+        "need_M0": false,
+        "agents": [
+          "system_mgmt"
+        ],
+        "note": "6个 sys_* 全部 read，与建模零交集；已在编排黑名单"
+      },
+      "report": {
+        "pipeline": false,
+        "need_M0": false,
+        "agents": [
+          "report_generation"
+        ],
+        "note": "旁路消费建模产物，禁止重跑流水线",
+        "defect": "实测 0 工具绑定"
+      },
+      "impact": {
+        "pipeline": false,
+        "need_M0": false,
+        "agents": [
+          "impact"
+        ],
+        "note": "独立触发；能力已在库(5工具+L1)，G 节点复用其 impact_analyze"
+      },
+      "general": {
+        "pipeline": false,
+        "need_M0": false,
+        "agents": [
+          "requirement_quality"
+        ],
+        "note": "execute 有专门双通道，不编排"
+      }
+    },
+    "stage_order_rule": [
+      "task_domain='modeling' 且 stage_order 非空 → 流水线节点",
+      "task_domain='modeling' 且 stage_order 为空 → 独立触发的建模 Agent（如 impact、多方案生成）",
+      "task_domain!='modeling' → stage_order 强制 NULL，一律不进流水线"
+    ],
+    "backfill_rule": "现有 19 个 active Agent 全部显式赋值，不猜；main Agent(160) 标 modeling+main，只调度建模域"
+  },
+  "top_level_dispatch": {
+    "principle": "三标识解析后先判域，再决定通路。M0 不是无条件前置 —— 回答「SysML2是什么」不需要解析方法论",
+    "M0_trigger": "operation ∈ {create,modify,verify,delete,refactor,view} AND target ∈ 建模元素集",
+    "M0_skip": "operation ∈ {analyze,explain} 或 target 非建模元素 → 跳过 M0",
+    "routes": [
+      {
+        "condition": "operation ∈ {create,modify}",
+        "domain": "modeling",
+        "path": "M0→N1→N2→N3→N4→N5→N6"
+      },
+      {
+        "condition": "operation = verify",
+        "domain": "modeling",
+        "path": "M0→N3(已有视图)→N4→N5",
+        "note": "最小视图集按项目 view_requirements 动态定"
+      },
+      {
+        "condition": "operation ∈ {delete,refactor}",
+        "domain": "modeling",
+        "path": "M0→G(安全门)→视 proceed_allowed 决定是否 N6"
+      },
+      {
+        "condition": "operation = view",
+        "domain": "modeling",
+        "path": "M0→N3(该 view_type)→N4"
+      },
+      {
+        "condition": "operation ∈ {analyze,explain} AND target 是模型元素",
+        "domain": "qa",
+        "path": "直答（无门禁）"
+      },
+      {
+        "condition": "operation ∈ {analyze,explain} AND target 非模型元素",
+        "domain": "qa",
+        "path": "直答 chat"
+      },
+      {
+        "condition": "系统类查询",
+        "domain": "system",
+        "path": "直答 system_mgmt"
+      },
+      {
+        "condition": "要报告/要影响分析",
+        "domain": "report|impact",
+        "path": "旁路 Agent（无建模）"
+      }
+    ],
+    "gate_scope": {
+      "建模域专属": [
+        "阶段顺序M0→N6",
+        "sysml_v2_validate",
+        "追溯覆盖率阈值",
+        "G变更安全门"
+      ],
+      "平台级跨域（已全局生效，无需新建）": [
+        "HIL L2 人工确认",
+        "RBAC 权限域",
+        "写意图闸",
+        "tool_hooks",
+        "审计哈希链",
+        "脱敏"
+      ],
+      "结论": "非建模任务的安全保障已有基础设施，只需确保不误绑 write 工具，无需新建机制"
+    }
+  },
+  "cross_domain_findings": [
+    {
+      "finding": "v2.0「N6 是唯一落库出口」表述过窄",
+      "evidence": "tools 表 write 7 个：entity_create/zhiyuan_sysmlv2_import(建模) + file_write/file_append/file_mkdir/report_export/mbse_pull_ingest(跨域)；destructive 1 个 file_delete",
+      "fix": "改为「模型图谱实体的唯一落库出口」，已在 v1.0/v2.0 文档就地加修正标注",
+      "severity": "设计错误"
+    },
+    {
+      "finding": "【已更正】19 个 active Agent 的 intent_keywords 非空（合计 112 词，19/21 条有值）—— 我曾误判为\"全空\"",
+      "evidence": "sqlite3 返回的是 JSON 字符串（如 '[\"设计\",\"架构\",...]'），我上轮用 isinstance(x,list) 判断恒为 False ⇒ 误报全空。实测：design 10 词/ knowledge_qa 15 / system_mgmt 13 / 8个视图Agent 各 3 词；仅主Agent 与 测试agent 为空数组（符合预期）",
+      "impact": "V7 的**结论仍成立**（路由 0.955 不该动），但**理由必须改**：不是「空表导致下沉」，而是「路由本来就不差，且给近义 Agent 填词会触发 _kw_score 长词优先互抢」",
+      "fix": "无需修复（数据本就正常）。V7 撤销，理由改为：路由基线达标 + 填词有互抢风险",
+      "severity": "我的判断错误（已更正）",
+      "roadmap": "V7",
+      "root_cause": "用 isinstance 判断 JSON 列，而 sqlite3 返回 str。这是「类型处理错误伪装成数据问题」的典型",
+      "status": "CORRECTED"
+    },
+    {
+      "finding": "report_generation 零工具绑定",
+      "evidence": "group_concat(tool_name) 返回 NULL；tools 表有 report_export 但未绑给任何 Agent",
+      "impact": "报告 Agent 只能纯文本输出",
+      "fix": "绑 report_export + graph_db_query + coverage_matrix，并加「只消费已有建模产物，禁止重跑流水线」约束",
+      "severity": "中",
+      "roadmap": "V3"
+    },
+    {
+      "finding": "knowledge_qa 绑了 gap_summary 存在语义冲突",
+      "evidence": "gap_summary 是 N5 工具，skill 铁律要求「必须最后调、必须消费前三者结果」",
+      "impact": "单独调用会遗漏，违反其自身规约",
+      "fix": "从 knowledge_qa 解绑 gap_summary（问答场景不需要缺项汇总），或绑 sysml_trace_coverage_analysis 约束调用序",
+      "severity": "中",
+      "roadmap": "V4",
+      "recommend": "解绑（更干净）"
+    },
+    {
+      "finding": "sys_* 工具被绑给 12 个 Agent",
+      "evidence": "DISTINCT 查询命中 8 个视图 Agent + 工程建模方案设计 + 预评审 + 系统管理",
+      "impact": "6 个 sys_* 占 33 工具的 18%，挤占 JIT 预筛与 core_keep 位",
+      "fix": "建模节点一律不绑 sys_*；从 tool_jit.core_keep_extra 移除",
+      "severity": "中",
+      "roadmap": "V5"
+    }
+  ],
+  "cross_domain_skill_matrix": {
+    "note": "跨域复用的关键：命中不等于可执行，靠 allowed_tools=[] + iron_rules 声明「只解释不生成」",
+    "matrix": [
+      {
+        "skill": "sysml_trace_coverage_analysis",
+        "modeling": "N5",
+        "report": "只读取值",
+        "impact": "缺项即影响面",
+        "qa": "需约束 gap_summary 调用序",
+        "system": false
+      },
+      {
+        "skill": "sysml_validation_repair_loop",
+        "modeling": "N3/N4",
+        "report": "只引用结论",
+        "impact": false,
+        "qa": false,
+        "system": false
+      },
+      {
+        "skill": "sysml_skeleton_generation_guide",
+        "modeling": "N2",
+        "report": false,
+        "impact": false,
+        "qa": "仅「怎么建模」问答",
+        "system": false
+      },
+      {
+        "skill": "sysml_view_generation_*（8个）",
+        "modeling": "N3",
+        "report": false,
+        "impact": false,
+        "qa": "仅「怎么画X」问答（须声明只解释不生成）",
+        "system": false
+      },
+      {
+        "skill": "sysml_change_safety_analysis",
+        "modeling": "G",
+        "report": false,
+        "impact": "独立触发复用",
+        "qa": false,
+        "system": false
+      },
+      {
+        "skill": "sysml_release_checklist",
+        "modeling": "N6",
+        "report": false,
+        "impact": false,
+        "qa": false,
+        "system": false
+      },
+      {
+        "skill": "sysml_methodology_profile_guide",
+        "modeling": "M0",
+        "report": false,
+        "impact": false,
+        "qa": "「客户用什么方法论」",
+        "system": false
+      }
+    ]
+  },
+  "compat_matrix": [
+    {
+      "agent": "chat",
+      "domain": "qa",
+      "pipeline": false,
+      "need_M0": false,
+      "gate": "无",
+      "action": "不动"
+    },
+    {
+      "agent": "knowledge_qa",
+      "domain": "qa",
+      "pipeline": false,
+      "need_M0": false,
+      "gate": "无",
+      "action": "解绑 gap_summary（V4）"
+    },
+    {
+      "agent": "system_mgmt",
+      "domain": "system",
+      "pipeline": false,
+      "need_M0": false,
+      "gate": "无",
+      "action": "保持 6 个 sys_*"
+    },
+    {
+      "agent": "report_generation",
+      "domain": "report",
+      "pipeline": false,
+      "need_M0": false,
+      "gate": "无",
+      "action": "补绑 report_export+2 只读（V3）"
+    },
+    {
+      "agent": "impact",
+      "domain": "impact",
+      "pipeline": false,
+      "need_M0": false,
+      "gate": "HIL L1",
+      "action": "保持；G 复用其 impact_analyze"
+    },
+    {
+      "agent": "requirement_analysis",
+      "domain": "modeling",
+      "pipeline": "→N1",
+      "need_M0": true,
+      "gate": "N1",
+      "action": "迁移后 disabled"
+    },
+    {
+      "agent": "design",
+      "domain": "modeling",
+      "pipeline": "→N2",
+      "need_M0": true,
+      "gate": "N2",
+      "action": "迁移后 disabled"
+    },
+    {
+      "agent": "review",
+      "domain": "modeling",
+      "pipeline": "→N4",
+      "need_M0": true,
+      "gate": "n_hard",
+      "action": "迁移后 disabled"
+    },
+    {
+      "agent": "8个视图Agent",
+      "domain": "modeling",
+      "pipeline": "→N3",
+      "need_M0": true,
+      "gate": "逐视图",
+      "action": "迁移后 disabled；且不绑 sys_*"
+    },
+    {
+      "agent": "多方案生成",
+      "domain": "modeling",
+      "pipeline": "独立",
+      "need_M0": true,
+      "gate": "候选筛选",
+      "action": "保留 active"
+    },
+    {
+      "agent": "requirement_quality",
+      "domain": "general",
+      "pipeline": false,
+      "need_M0": false,
+      "gate": "双通道",
+      "action": "不动（黑名单已有）"
+    },
+    {
+      "agent": "MBSE建模总体负责人",
+      "domain": "modeling",
+      "pipeline": "调度",
+      "need_M0": false,
+      "gate": "-",
+      "action": "roster 收敛为 8 节点；名册外意图走直答"
+    }
+  ],
+  "compat_principle": "12 个 Agent 需动（8视图+design+requirement_analysis+review+report_generation+knowledge_qa），其余 7 个完全不动",
+  "roadmap_v3_delta": [
+    {
+      "seq": "V1",
+      "item": "task_domain 字段迁移 + 19 Agent 显式回填",
+      "cost": "低",
+      "pri": "P0",
+      "why": "不做则域分流无法实现"
+    },
+    {
+      "seq": "V2",
+      "item": "顶层分流逻辑（三标识→域→通路）",
+      "cost": "中",
+      "pri": "P0"
+    },
+    {
+      "seq": "V3",
+      "item": "report_generation 补绑工具",
+      "cost": "极低",
+      "pri": "P0",
+      "why": "修实测缺口"
+    },
+    {
+      "seq": "V4",
+      "item": "knowledge_qa 解绑 gap_summary",
+      "cost": "极低",
+      "pri": "P0",
+      "why": "修语义冲突"
+    },
+    {
+      "seq": "V5",
+      "item": "sys_* 从建模节点解绑 + 移出 core_keep_extra",
+      "cost": "低",
+      "pri": "P1"
+    },
+    {
+      "seq": "V6",
+      "item": "跨域 skill 补「只解释不生成」iron_rules",
+      "cost": "低",
+      "pri": "P1"
+    },
+    {
+      "seq": "V7",
+      "item": "确认 intent_keywords 路由侧是否消费",
+      "cost": "低",
+      "pri": "P0",
+      "why": "写了不生效等于没写"
+    }
+  ],
+  "v7_assessment": {
+    "conclusion": "撤销 V7 —— 不填 intent_keywords",
+    "evidence": {
+      "内置评测集": {
+        "n": 29,
+        "accuracy": 1.0,
+        "macro_f1": 1.0,
+        "错例": 0
+      },
+      "真实样本池": {
+        "n": 44,
+        "accuracy": 0.9545,
+        "macro_f1": 0.9652,
+        "错例": 2,
+        "来源": "intent_samples status=confirmed"
+      }
+    },
+    "why_not_fill": [
+      "关键词层只是多路路由之一（实测 route 取值覆盖 rule/rule_scored/explain/fused/llm/chat/session），空表会自然下沉不塌方",
+      "_db_kw_priority 有 _DB_KW_PRIORITY_MIN_SCORE=1.0 门槛（要求≥4字非泛词），不会因空表误抢",
+      "8 个视图 Agent 名近义（需求/结构/用例/活动/状态机/参数/时序视图），填词会触发 _kw_score 长词优先互抢 —— P1-13/P1-14反复加守卫正为防此",
+      "现有 2 个错例是 design↔review 语义摇摆；给 review 填「设计」类词会把错例固化成系统性错误"
+    ],
+    "gate": "tools/verify/verify_intent_routing_baseline.py（阈值 内置0.99 / 真实池 0.90，可挂 CI）",
+    "self_correction_note": "我曾据「intent_keywords 全空」推断「路由失效」，该推断被评测推翻。真实原因是自测姿势错——未调 AgentPipeline._load_db_agents() 导致语义索引为空。评测脚本注释里已明确警告过此坑。",
+    "evidence_corrected": {
+      "intent_keywords_actual": "19/21 条非空，合计 112 词（design 10 / knowledge_qa 15 / system_mgmt 13 / 8个视图各 3 / zhiyuan_mgmt 12 / impact 9 / report_generation 8 / review 7 / requirement_analysis 5 / requirement_quality 5 / chat 1 / 多方案 3）；空数组仅主Agent与测试agent",
+      "my_mistake": "上轮用 isinstance(r[4], list) 判断，sqlite3 返回 JSON 字符串 ⇒ 恒 False ⇒ 误报「全库 0 条」",
+      "conclusion_unchanged": "V7 仍撤销，但理由改为：①路由基线 0.955 达标 ②给 8 个近义视图 Agent 填词会触发 _kw_score 长词优先互抢（P1-13/P1-14 反复加守卫正为防此）③现有 2 个错例是 design↔review 语义摇摆，填词会固化错例"
+    }
+  },
+  "v2_precheck": {
+    "conclusion": "V2 判据成立",
+    "method": "真实 44 条 confirmed 样本，跑 AgentPipeline 真实路由，人工标注 intent→operation 映射后检查可推导性",
+    "intent_acc": 0.9545,
+    "operation_acc": 0.9545,
+    "error_decomposition": {
+      "意图判错导致": 2,
+      "意图对但映射错": 0
+    },
+    "key_finding": "operation 误差与 intent 误差**完全同源**（映射表零错误）⇒ 提升 operation 准确率的唯一途径是提升意图识别，不存在独立的映射优化空间",
+    "failed_cases": [
+      {
+        "text": "帮我看看这个系统大概是怎么设计的",
+        "expect": "design/create",
+        "got": "chat/explain",
+        "route": "llm_weak",
+        "note": "只读查看类被误判为 create 类 —— V2 分流必须处理"
+      },
+      {
+        "text": "帮我看看这个系统的接口设计是否合理",
+        "expect": "design/create",
+        "got": "review/verify",
+        "route": "llm",
+        "note": "只读查看类被误判为 verify 类"
+      }
+    ],
+    "implication": "两条错例都是「看看…设计」型**只读请求**被当成产出类。若直接进M0→N6流水线会造成「本该只读回答，却跑一遍全流程」—— V2 分流必须对此类降级为 qa 域直答",
+    "probe": "tools/eval/probe_operation_slot.py（阈值 0.90）",
+    "premise_correction": "我原以为「关键词表空 → 路由失效 → 需先修」。实测关键词表本来就有 112 词、路由 0.955 达标。V2 判据成立与这一点无关（它只依赖 operation 可推导性 95.5%）。"
+  }
+}

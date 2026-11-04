@@ -49,7 +49,8 @@ import os
 import re
 import sys
 
-ROOT = "C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system"
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ⚠️ 2026-11-05：原先写死本机绝对路径 ⇒ CI 上 FileNotFoundError。改为按脚本位置推导。
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
