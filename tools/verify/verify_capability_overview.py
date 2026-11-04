@@ -19,6 +19,7 @@
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -26,10 +27,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-# Node 运行时：优先 managed 版本（环境隔离纪律），缺失回退系统 node
-NODE = r"C:\Users\gefei\.workbuddy\binaries\node\versions\22.22.2-6\node.exe"
-if not os.path.exists(NODE):
-    NODE = "node"
+# Node 运行时：① `MBSE_NODE` 显式指定 ② PATH 上的 node ③ 回落裸命令名
+# ⚠️ 2026-11-05：原先写死 `C:\Users\<user>\.workbuddy\binaries\node\...\node.exe`。
+#    那是**开发机的 SDK 位置**，CI（Linux）上必然不存在——靠下面的 fallback 才没红，
+#    但它同时泄露了本机用户名，属 pr 层不该有的环境依赖。
+NODE = os.environ.get("MBSE_NODE") or shutil.which("node") or "node"
 
 PASS, FAIL = [], []
 

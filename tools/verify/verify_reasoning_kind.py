@@ -23,6 +23,7 @@
 import io
 import os
 import re
+import shutil
 import sys
 
 
@@ -237,8 +238,7 @@ def main():
     print("\n=== E. 端到端：前端分流行为（真跑 JS，零 LLM/零服务）===")
     import subprocess
     node = None
-    for _c in (r"C:\Users\gefei\.workbuddy\binaries\node\versions\22.22.2-6\node.exe",
-               "node"):
+    for _c in (os.environ.get("MBSE_NODE") or shutil.which("node") or "node",):
         try:
             subprocess.run([_c, "--version"], capture_output=True, timeout=30)
             node = _c

@@ -60,7 +60,7 @@ def payload(content):
 
 
 S1 = (f"<{T}DSML{T} calls> <{T}DSML{T} invoke name=\"file_list\"> "
-      f"<{T}DSML{T} parameter name=\"path\" string=\"true\">C:\\Users\\gefei\\WorkBuddy\\x"
+      f"<{T}DSML{T} parameter name=\"path\" string=\"true\">C:\\Users\\<user>\\WorkBuddy\\x"
       f"</{T}DSML{T} parameter> </{T}DSML{T} invoke> </{T}DSML{T} calls>")
 
 print("=" * 70)

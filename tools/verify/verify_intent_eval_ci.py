@@ -75,7 +75,7 @@ def main():
 
     if not os.path.exists(REPORT):
         msg = ("缺少意图评测快照 %s。生成：\n"
-               "  .venv/Scripts/python.exe -X utf8 tools/intent_eval_snapshot.py" % REPORT)
+               "  python -X utf8 tools/intent_eval_snapshot.py" % REPORT)
         if a.allow_missing:
             print("[SKIP] " + msg)
             return 0

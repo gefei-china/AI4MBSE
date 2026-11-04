@@ -27,6 +27,7 @@
 import ast
 import io
 import os
+import shutil
 import re
 import subprocess
 import sys
@@ -200,7 +201,7 @@ def main():
         check("S0a stream.py AST 可解析", False, str(e))
         return _summary()
     node = None
-    for _c in (r"C:\Users\gefei\.workbuddy\binaries\node\versions\22.22.2-6\node.exe", "node"):
+    for _c in (os.environ.get("MBSE_NODE") or shutil.which("node") or "node",):
         try:
             subprocess.run([_c, "--version"], capture_output=True, timeout=30)
             node = _c

@@ -42,6 +42,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import re
 import subprocess
 import sys
@@ -51,10 +52,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-#: Node 运行时：优先 managed 版本（环境隔离纪律），缺失回退系统 node
-NODE = r"C:\Users\gefei\.workbuddy\binaries\node\versions\22.22.2-6\node.exe"
-if not os.path.exists(NODE):
-    NODE = "node"
+#: Node 运行时：① `MBSE_NODE` 显式指定 ② PATH 上的 node ③ 回落裸命令名
+#: ⚠️ 2026-11-05：原先写死开发机的 SDK 绝对路径（泄露用户名且 CI 上不存在）。
+NODE = os.environ.get("MBSE_NODE") or shutil.which("node") or "node"
 
 PASS, FAIL = "PASS", "FAIL"
 _results = []
