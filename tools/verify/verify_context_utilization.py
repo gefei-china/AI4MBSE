@@ -93,9 +93,18 @@ check("A5 阈值已登记 CONFIG_SCHEMA（界面可调，不是硬编码常量�
 #   这属于本仓反复记录的「判据耦合部署状态」坑（§6.1）。
 _cw_rows = conn.execute(
     "SELECT COUNT(*) FROM llm_usage_stats WHERE COALESCE(context_window,0)>0").fetchone()[0]
-check("A6 存在带分母的行（%d 行）⇒ 取值路径确实通，不是只加了一列" % _cw_rows,
-      int(_cw_rows or 0) > 0,
-      "0 行 ⇒ 接线了但取不到值（`provider` 实参形态与取值方式不匹配）")
+# ⚠️ 2026-11-05：A6 是**数据级**断言（"取值路径真的通"只有真跑过 LLM 才看得见）。
+#   干净库（CI / 全新克隆）一条 LLM 调用都没有 ⇒ 必然 0 行 ⇒ 恒红。
+#   与 B2 / C1 同一处理：**无样本 ⇒ SKIP 并打印原因**，而不是判失败。
+#   （它在开发机真库上仍然生效 —— 那里有大量真实调用。）
+_n_calls = conn.execute("SELECT COUNT(*) FROM llm_usage_stats").fetchone()[0]
+if int(_n_calls or 0) == 0:
+    print("    A6 SKIP：库中无任何 LLM 调用记录（干净库口径）⇒ 取值路径无从验证")
+else:
+    check("A6 存在带分母的行（%d 行）⇒ 取值路径确实通，不是只加了一列" % _cw_rows,
+          int(_cw_rows or 0) > 0,
+          "0 行 ⇒ 接线了但取不到值（`provider` 实参形态与取值方式不匹配）"
+          "（库内共 %d 次调用）" % _n_calls)
 # 变异自证：换一个没有 context_window 的 provider dict ⇒ 必须得 0 且不抛异常（fail-safe）
 try:
     _pp = {"name": "fixture-no-cw"}
