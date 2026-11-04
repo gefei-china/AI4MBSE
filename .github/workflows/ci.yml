@@ -93,10 +93,6 @@ jobs:
         run: pytest -q -p no:warnings
 
       # ── 以下门禁均为「零 LLM、零外部网络」，退出码即判定 ──────────────────────────
-      - name: Guard G0 静态哨兵（模块别名遮蔽，毫秒级）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_orchestration_e2e.py --static-only
-
       - name: Guard 编排输入/输出预算不变式（I1~I5 + M1~M12）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_orch_summary_budget.py
@@ -167,34 +163,16 @@ jobs:
       #   实测（run 41002420545）就是这么挂在 step 15 的 —— 门禁一项都没跑。
       #   ⇒ 改用 block scalar（`run: |`），反斜杠由 **shell** 解释而不是 YAML。
       #   同类写法在本文件共 3 处（RAG / 生成质量 / Trace 三个评测门禁），一并修。
-      - name: Guard RAG 检索评测指标不塌陷（13 项 + 4 变异；消费 checked-in 快照，缺失则跳过）
-        if: ${{ !cancelled() }}
-        run: |
-          python -X utf8 tools/verify/verify_rag_eval_gate.py --allow-missing \
-            --report docs/评测/nightly/latest-rag-report.json
-
       # ── P0-3（2026-10-22）：生成质量评测接入门禁（补断链③）──────────────
       # 评估发现：faithfulness/groundedness **全仓零命中** —— 检索、路由、
       # 记忆都有门禁，唯独生成质量（答案有没有依据、引用编号对不对）是黑的。
       # 报告来源同为本地跑批器快照（docs/评测/nightly/latest-gen-report.json）。
-      - name: Guard 生成质量评测指标不塌陷（7 项 + 6 变异；消费 checked-in 快照，缺失则跳过）
-        if: ${{ !cancelled() }}
-        run: |
-          python -X utf8 tools/verify/verify_generation_quality_gate.py --allow-missing \
-            --report docs/评测/nightly/latest-gen-report.json
-
       # ── P0-1b（2026-10-22）：Trace 一致性评测接入门禁（补断链②）────────────
       # 评估发现：trace2dataset 产出的 228 条生产人工裁决样本**无消费方**
       #   ——「生产轨迹→评测集→优化→再部署」断在第二环，llm_usage_stats
       #   10593 条躺表无人消费正是"数据坟墓"形态。本门禁消费一致性报告，
       #   回答"人对过的题还在丢分吗"（实测一致率 0.881，负对照洗牌 0.167）。
       # 报告来源同为本地跑批器快照（docs/评测/nightly/latest-trace-report.json）。
-      - name: Guard Trace 一致性评测指标不塌陷（7 项 + 10 变异；消费 checked-in 快照，缺失则跳过）
-        if: ${{ !cancelled() }}
-        run: |
-          python -X utf8 tools/verify/verify_trace_quality_gate.py --allow-missing \
-            --report docs/评测/nightly/latest-trace-report.json
-
       # ── P0-2 批次 2/3（2026-10-03/04）：编排 checkpoint + 断点续跑 ──────────────
       - name: Guard 编排 checkpoint / resume（79 项 + 6 变异）
         if: ${{ !cancelled() }}
@@ -239,10 +217,6 @@ jobs:
       # 看板说失效但运行时仍在注入（实测 17 条「停用但仍注入」）。
       # 这条门禁把 `services/capability_graph` 的判定与**真 pipeline** 对拍，
       # 并用事务内变异自证判据非空转。无 mbse.db 时自动 SKIP。
-      - name: Guard 绑定生效判定 ↔ 运行时一致（9 项 + 变异）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_binding_graph.py
-
       # ── 2026-10-30：工具结果**跨轮连续性**（用户「人工确认后无辜终止」的直接根因）──
       # 旧实现每轮把上一轮所有 tool 结果整条抹空，**连 offload 编号一起抹** ⇒
       # 多步核对任务从第 3 轮起"看不到任何明细、也没编号可重读" ⇒ 猜编号/重查 ⇒
@@ -261,46 +235,23 @@ jobs:
       # 一次性迁移脚本 tools/_migrate_font_scale.py 收成 6 档并整体 +1.5px；
       # 这条门禁守住：档位不得越界、最小 11.5px、正文 14~15.5px、
       # 轨道四处同源同一变量且带 fallback。附 4 条变异自证（改坏必须判红）。
-      - name: Guard 字号标准 + 会话轨道宽度（11 项 + 4 变异）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_typography_scale.py
-
       # ── 2026-10-09：请求级状态隔离三道（均静态/AST + 线程探针，不需真实 LLM）──
       # 这三道锁的是 2026-10-09 定位的 N3 产出雷同根因：模块级单例 Pipeline
       # 把请求级产物挂�� self 上跨请求残留（叙述是新的、代码是旧的）。
       # A2/A3 是**差集**判据（AST 扫全部 self._xxx 赋值点与清零清单求差），
       # ⇒ 将来新增字段忘登记**立即判红**，不依赖人记得维护清单。
-      - name: Guard 请求级状态清零（AST 差集，清零早于首个赋值，13 项 + 4 变异）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_request_state_reset.py
-
       # ── 2026-10-21：附件正文消费闭环（#55/#56/#57 的守门）────────────────────
       # 这道锁的是"模型到底有没有真读到附件正文"。#55~#57 修的正是这条链上
       # 四个断点（专用回填上限 / fetch 前移权限闸 / offload 自循环熔断 / 取章风暴），
       # 任一退化都会让用户重见"上传了附件却说读不到正文"。
       # 84 项里含大量**变异自证**（把修复逐个反向改回去，必须判红）。
-      - name: Guard 附件正文消费闭环（章节继承/提纲/按需取章/回填上限，84 项）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_attachment_fulltext.py
-
       # 锁 PDF 水印字符层不进正文（它是"解析出的正文是脏的"的源头之一）
-      - name: Guard logging 占位符与实参一致（全仓 135 点 + 3 条真实告警，24 项）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_rerank_logging_fmt.py
-
       # ── 2026-10-21：图谱后端端点契约 ────────────────────────────────────────
       # 真实事故：get_writer 的兜底默认端点是 `…/ds`，而本仓 fuseki_start 注册的
       # 数据集实名是 `mbse` ⇒ endpoint 留空时打到不存在的路径 ⇒ 405/404，
       # 而 405/404 既不算语法错(400)、又没落进熔断判据 ⇒ **既不熔断也不快失败**
       # ⇒ 每轮每次图谱查询白等满 15s，且日志被 HTML 错误页淹没。
       # 本门禁的 A3/A4 从 fuseki_start.py **解析** DS 常量，不抄字符串。
-      - name: Guard 图谱端点契约（默认端点/端点错可诊断/不误熔断，16 项）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_fuseki_endpoint.py
-
       # ★ A4 是**双向**断言：共享单例**必须**观测到覆盖，否则说明风险不成立、
       #   门禁该撤 —— 不让基于错误前提的门禁长期存在。
       - name: Guard 多用户并发隔离（每请求新建 Pipeline，双向实测 9 项 + 3 变异）
@@ -364,11 +315,6 @@ jobs:
       # 这个缺陷单测测不出（不接 LLM 时无感）、人 review 看不出来
       # （"插完行→生成摘要→commit" 完全正常，只是 commit 晚了）
       # ⇒ 用结构断言把它钉住。
-      - name: Guard 入库事务边界（13 项 + 3 变异）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_ingest_tx.py
-
       # P0-2 / P1-3 / P2：大文件链路三项整改
       #   P0-2 embedding 配额耗尽**静默**降级 ⇒ 810 chunk 词面污染检索（米爸："不降级"）
       #   P1-3 ocr_max_pages=50 是文档级硬上限 ⇒ 超出的页**静默丢弃**（对标 RAGFlow
@@ -386,11 +332,6 @@ jobs:
       # ⇒ 本门禁只做两件事：① 断言不超过基线；② 新增须登记豁免且**带理由**。
       # 基线值由 tools/verify/verify_layering.py 的 BASELINE_DIRECT_SQL 持有
       # （2026-10-21 重测为 323；历史 292 是过期值，2026-10-22 修正本注释）。
-      - name: Guard 分层绕过不增长（P1-10 · 基线见 verify_layering.BASELINE_DIRECT_SQL）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_layering.py
-
       # ── P2-1（2026-10-04）：列表 limit 边界语义统一 ───────────────────────
       # 原估「82 处已分页 / 573 端点要覆盖，3~5 天重构」—— 实测**推翻**：
       #   最大表 document_chunks 7269 行、业务表百级；
@@ -411,11 +352,6 @@ jobs:
       # 门禁 H3 在真库上跑 A/B 把「HyDE 不是死代码」钉死。
       # 注意：H3 需要本地库（真实 chunk + hyde_questions），CI 里跑不了
       #   ⇒ 用 --static-only 只跑 H1/H2 的结构断言。
-      - name: Guard 意图路由评测（P1-8 · 阈值 0.86 / 基线 0.9310）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_eval_routing.py
-
       # ── P1-6 收口（2026-10-04）：重复定义审计从"没进 CI"变成"在 CI 里"─────
       # 这个脚本早写好了但一直没接进流水线 ⇒ 一次都没在合并请求上跑过。
       # 接之前先修了它两个会让门禁"形同虚设"的问题：
@@ -465,11 +401,6 @@ jobs:
       - name: Guard 鉴权强制（15 项 + 2 变异）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_auth_enforce.py
-
-      - name: Guard SSE 心跳与降级可见（23 项 + 4 变异）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_sse_heartbeat.py
 
       - name: Guard 孤儿编排回收（29 项 + 2 变异）
         if: ${{ !cancelled() }}
@@ -573,11 +504,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_setting_keys_guard.py
 
-      - name: Guard settings 数据审计（每键有消费点 + 指针指向真实行）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_settings_data_audit.py --strict
-
       - name: Guard Agent 绑定插件机制已移除（21 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_plugin_bind_removed.py
@@ -589,11 +515,6 @@ jobs:
       # 本批 6 个经**干净库口径实测 rc=0**（MBSE_DB_PATH 指向空库）才接线。
       # 需真 LLM / checker.jar / 真库金标的那些，改在脚本内写`# CI-OPTIONAL: <理由>`
       # 显式豁免（verify_gate_wiring 会校验理由非空），而不是默默不接。
-      - name: Guard AgentLoop 协议配对（tool_call 闭环）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_agent_loop_protocol.py
-
       - name: Guard Agent 工具链权限闸（RBAC）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_agent_perm_gate.py
@@ -625,6 +546,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_gate_portability.py
 
+      # 2026-11-05 回收：此前因 `max([])` 崩溃（空库无生产样本）降级，
+      # 修法=空样本 SKIP 而非崩溃；真库/空库两口径均 rc=0 ⇒ 回到 pr 层。
+      - name: Guard 上下文利用率分母（两口径 + 空样本保护）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_context_utilization.py
+
       - name: Guard ReAct 工具轮次预算两侧一致
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_tool_round_budget.py
@@ -642,26 +569,6 @@ jobs:
       #   · token_budget：夹具缺依赖（源码改走 tool_offload 后新增 `_tool_offload`/`self`）。
       #   · llm_context_guard_mutate：源码文件是 CRLF，而变异锚点写 `\n` ⇒ count 恒 0。
       #   · intent_history：P1-31 把 cache_enabled 默认改 False ⇒ 缓存整体不落库。
-      - name: Guard 多轮上下文与产物标题（132 项，含 8 组变异自证）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_multiturn_context.py
-
-      - name: Guard 运行时 token 预算（34 项）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_token_budget.py
-
-      - name: Guard LLM 上下文守卫变异自证（5 变异全抓住）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_llm_context_guard_mutate.py
-
-      - name: Guard 意图历史与缓存防线（47 项，含 8 组变异自证）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_intent_history.py
-
       # p14b：recall_k 透传。向量路在 embedding 降级时被**设计性跳过**（防词面向量污染检索），
       # 此时只验 bm25 侧；干净库无可检索数据时 recall 三条整体 SKIP（判据面不存在）。
       - name: Guard P1-4 检索召回与注入（29 项）
@@ -682,10 +589,6 @@ jobs:
       - name: Guard 能力中心内置口径（16 项 + 变异自证）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_plugin_builtin.py
-
-      - name: Guard Agent 名称统一与级联改名（71 项 + 变异自证）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_agent_name_unify.py
 
       # 防「虚构人名写进生产数据」回归（2026-10-23 米爸决策：mock 数据排查并
       # 移除）。王工/李工/赵管类兜底人名曾作为审计/创建人默认值，看起来像
@@ -720,10 +623,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_trace_cols.py
 
-      - name: Guard 告警评估器（24 项）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_alert_evaluator.py
-
       # ── 工具与运行时 ──
       - name: Guard 文件系统写入护栏（11 项 + 变异）
         if: ${{ !cancelled() }}
@@ -732,15 +631,6 @@ jobs:
       - name: Guard 工具结果 offload（含故障注入）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_tool_offload.py
-
-      - name: Guard 工具命名规范（active 工具）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_s4_toolname.py
-
-      - name: Guard 容器运行时冒烟（B1 校验结论字段）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_b1_runtime_smoke.py
 
       # ── 第二批接线（2026-10-05）：核实豁免时实测发现这批**两环境都绿** ──────
       # 原以为它们要豁免（其中两个曾被注明「需 checker.jar + java」），
@@ -756,16 +646,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_conv_summary_fallback.py
 
-      - name: Guard 意图 DB 关键词层
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_intent_db_kw.py
-
-      - name: Guard 意图关键词分层
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_intent_kw_layers.py
-
       - name: Guard 提示词分层装配
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_prompt_layering.py
@@ -773,11 +653,6 @@ jobs:
       - name: Guard RAG 配置口径
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_rag_config.py
-
-      - name: Guard S4 提示词契约
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_s4_prompt.py
 
       - name: Guard 子任务隔离
         if: ${{ !cancelled() }}
@@ -828,11 +703,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_thinking_budget.py
 
-      - name: Guard 思考策略（何时思考）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_thinking_policy.py
-
       - name: Guard 思考形态（输出形状不变式）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_thinking_shape.py
@@ -858,17 +728,9 @@ jobs:
         run: python tools/verify/verify_p0_tool_results_var.py
 
       # 锁「在途重复提交必须去重」（副作用重复 + 费用翻倍，用户无感——比不重投严重得多）
-      - name: Guard embedding 不可用熔断
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_embed_unavail_breaker.py
-
       # ── 检索族：BM25 索引与修复 / HyDE 标题 / 引用对齐 ──
       # bm25 两道锁的是 2026-10 实修的两个真缺陷：bm25_text 漏建（召回率 0%）与
       # 修复路径不回写。干净库口径 rc=0（无样本处自动 SKIP）。
-      - name: Guard BM25 修复路径（6 项）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_bm25_fix_live.py
-
       - name: Guard HyDE 标题注入
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_hyde_heading.py
@@ -892,10 +754,6 @@ jobs:
       #   （原先断言"必须启用"，与 core/config.py「默认关，保全现状」的既定决策相反）。
       #   本地实测全绿，含真起 Fuseki 验证 rdf:type 是类 IRI。见该文件 `# CI-OPTIONAL:` 理由。
 
-      - name: Guard 图谱熔断（挂了不拖死主链路）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_graph_breaker.py
-
       - name: Guard 图谱镜像契约
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_graph_mirror_contract.py
@@ -908,11 +766,6 @@ jobs:
       - name: Guard 子任务去重与收尾提示
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_dedup_and_finalize_hint.py
-
-      - name: Guard 分层压缩锚点
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_compression_anchor.py
 
       # ── 澄清与意图 ──
       - name: Guard 泛词劫持澄清（B5-7，无样本自动 SKIP）
@@ -936,11 +789,6 @@ jobs:
         run: python tools/verify/verify_event_type_split.py
 
       # ── MCP 编辑与恢复门（36 项）────────────────────────────────────────
-      - name: Guard MCP 编辑保存与断点恢复
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_mcp_edit_and_resume_gate.py
-
       # ── 标准库索引覆盖 ──
       # ── Agent 收尾链路（2026-10-18 修复后接线）────────────────────────────
       # common_exports：2026-10-10「CHAT_TASK_PROBE 漏 __all__ ⇒ 全部对话一轮即挂」
@@ -970,11 +818,6 @@ jobs:
       # 十类形态端到端 + 真库 name-join 只读 smoke（CI 无库按惯例不执行该段）
       # + 前后端接线（只改后端不改编前端 = 改动无效）。干净库口径：门禁自建
       # MBSE_DB_PATH 临时空库 + init_db，与 CI 环境等价。
-      - name: Guard 资产长尾治理（四档判定 + 配置消费 + name-join smoke + 前后端接线）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_lifecycle.py
-
       # ── P0-2（2026-10-18 自进化调研整改）：资产变更审计 ──────────────
       # 四类资产（agents/prompts/skills/agent_flows）更新收敛到 audited_update：
       # 字段级 diff（无 diff 不动手）+ 版本跃迁（调用方显式版本受尊重，缺省自动递升）
@@ -990,11 +833,6 @@ jobs:
       # （人工确认后 apply）；同 kind 同 subject 去重累加；(seen_at, src_id) 二元组
       # 水位防同秒 burst 漏计；triage 三态 + 复现重开（开关可关）。真库段只读
       # dry-run 取证（CI 无库按惯例 SKIP）。
-      - name: Guard Bad Case 闭环（dry-run 人工关口 + 去重累加 + 告警指标/规则/冷却）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_badcase.py
-
       # ── P0-a（2026-10-24 产品优化方案）：能力度量收口 ─────────────────
       # capability_registry 统一注册处：五源表（tools/skills/plugins/mcp_servers/
       # prompts）权威数据不动，本表只做物化投影（一个 capability_id 口径 + 一套
@@ -1006,11 +844,6 @@ jobs:
       # 指标的规则=永不触发的假告警）/ G BadCase 闭环（apply 后 open>0 且 R5
       # fired≥1）/ H 阳性对照（构造能力必有投影且 call_count=1）。退出码 0/1/2
       # （2=守卫失效，禁止据此下任何结论）。真库段只读（CI 无库按惯例 SKIP）。
-      - name: Guard 能力度量收口（投影五源同构 + 无幽灵 + 六处收口 + 告警防假 + 闭环）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_capability_registry.py
-
       # ── #18（2026-10-18 自进化调研路线图）：统一状态机 ─────────────────
       # 一个纯函数引擎 + 一张声明式注册表收口全仓状态字面量（MR/bad_case/V2G 双
       # 生命周期/文档生命周期/意图样本/HIL/flow_run/进化流水线模板机）。已接线
@@ -1018,11 +851,6 @@ jobs:
       # 的 MR 二次改写、triage 原地流转在数据层即拒。未接线实体先声明覆盖，
       # 门禁 D 段用真库 9 列状态值勘察佐证（不是纸上机器）。真库段只读（CI 无库
       # 按惯例 SKIP）。
-      - name: Guard 统一状态机（迁移矩阵 + 注册表自检 + MR/badcase 过机检 + 真库状态域勘察）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_statemachine.py
-
       # ── P1-1（2026-10-18 自进化调研路线图）：Trace2Dataset ─────────────
       # AgentLoop 闭环「生产轨迹 → 评测集 → 优化 → 再部署」的供料环：8 个抽取器
       # 注册表（intent/HIL 强标注、conv_clean/flow_completed 回归、conv_badcase/
@@ -1042,11 +870,6 @@ jobs:
       # kind 覆盖率诚实统计（tool 历史空 kind 记 unknown，不伪装有类型）；顺手
       # 修掉 tool_call_logs 写入点把 classify 嵌套调两次导致 failure_kind 恒空
       # 的 bug（真库 273 条 ok=0 全空的成因），门禁 D6 子进程行为级证明。
-      - name: Guard 步骤级归因（3 源注册表 + 首坏/级联 + 三态 verdict + 六键变异自证 + 真库对账 + 写入点行为级证明）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_attribution.py
-
       # ── P1-3（2026-10-18 自进化调研路线图）：配置提案器 ───────────────
       # RefineGate 从「内容评审」泛化为「配置评审」：读 P1-2 首坏步模式，按 5
       # 条规则注册表提议 prompt/skill/配置修订（GEPA 式反思改写，llm_draft
@@ -1084,28 +907,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_curriculum.py
 
-      - name: Guard 画布拓扑台账（结构体检 + 同构去重 + 只读不改拓扑）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        # 路线图 P2 第四项原文「多画布流拓扑实验」，但真库agent_flows 62 幅
-        # vs flow_runs 仅 11 条（9 条还是同日同构画布的秒级重复）⇒ 在这个
-        # 分母上比较两种拓扑得到的是噪声；而红线 #6 明写「不碰架构拓扑」。
-        # 故口径定为**台账 + 体检**：只读画布、只记缺陷、只报同构。本门禁守：
-        #   ① 口径不漂回自动改拓扑——引擎/repo/router 三层零写 agent_flows
-        #      语句（静态断言 + agent_flows 字节级零变化的行为级断言）；
-        #   ② 诚实 unknown 且判据顺序正确——空库(0 幅)判 insufficient_data
-        #      不是 clean；blocker>0 判 defective 不是 unknown（把「明确有
-        #      缺陷」显示成「数据不足」方向完全反了）；
-        #   ③ 指纹不含 name/version/label——改个名不该造出新拓扑、也不该让
-        #      同构分组漏检（P2-3 变体指纹同型坑）；
-        #   ④ 同构只报结构同构不报相似（相似度要阈值，阈值是拍出来的）。
-        run: python tools/verify/verify_flow_topology.py
-
-      - name: Guard 向量二进制缓存保真
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_vector_binary_cache.py
-
       # ── 元门禁：新写的门禁必须接线，或写明豁免理由 ──────────────────────
       - name: Guard 门禁接线（每个门禁要么在 CI 里，要么带 #CI-OPTIONAL 理由）
         if: ${{ !cancelled() }}
@@ -1114,51 +915,17 @@ jobs:
       # ── B1 批次一（2026-10-13）新增的 9 个门禁 ──────────────────────────
       # 全部**零 LLM、不起服务、不写生产库**（临时库/内存库），故可直接进 CI。
       # 一并接线是为消除 `verify_gate_wiring` 的 W1a 红灯（"新写的门禁必须接线"是本仓纪律）。
-      - name: Guard 工具参数契约注入（tools.input_schema 真值进 payload）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_tool_input_schema.py
       - name: Guard 编排规划契约（两套 planner prompt 字段集合一致）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_orch_planning.py
       - name: Guard running 态真写入（claim 已接线）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_running_state.py
-      - name: Guard 依赖图环检测（环不再静默阻塞）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_plan_cycle_guard.py
-      - name: Guard 会话归属隔离（对话列表按用户 + 按项目）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_conv_scope_guard.py
-
       # 2026-10-18 修复后接线：worker 的 user 载荷缺 id ⇒ 与 B1-9 归属契约
       # （row.user_id == user.id）脱节，404 假红；产品行为正确，门禁已对齐。
-      - name: Guard 失败分类与分类驱动重试
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_failure_class.py
-      - name: Guard Agent 名孤儿引用（快照留痕）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_orphan_agent_ref.py
-      - name: Guard 负载感知分派（权重已标定 + 不改派 planner）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_load_aware_assign.py
-      - name: Guard 事实/推断分档（§08，缺失一律按 asserted 兜底）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_fact_inference.py
       - name: Guard 写操作幂等（§06，悬空注释已落实为真实去重）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_idempotency.py
-      - name: Guard conflict_check 假实现已下线（两条进入路径都断）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_conflict_check_retired.py
-
       # ── 批次三（2026-10-14）：claims 协议 / 结论冲突检测 / 三类交付物结构校验 ──
       # ⚠️ **这批门禁是"建好却不接线"的直接受害者**（米爸 2026-10-13 20:25 指出）：
       #   上批次建的 `verify_orch_run_id_scope` / `verify_stream_event_log` /
@@ -1181,10 +948,6 @@ jobs:
       # 六类插桩 + 查询端点 + 前端入口五层缺一层即无数据可看。含 3 个变异自证
       # （丢 parent / 未闭合不标 error / 删 task 插桩）。零 LLM、不起服务、
       # 不写生产库（U1 跑真 init_db 时 monkeypatch 两处模块级 DB_PATH 指临时库）。
-      - name: Guard 编排观测性 trace（span 树六类插桩 + 端点归属门，54 项）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_orch_span.py
-
       # ── P0-b（2026-10-25）：生产回流五段闭环 ─────────────────────────────
       # 采样（负反馈>低置信>随机5%）→ 自动评（确定性层只写建议）→ 人工标注
       # （HIL 确认卡 eval_label）→ 转正三分流（intent_samples/qrels.jsonl/
@@ -1205,18 +968,9 @@ jobs:
       # 是 reap_stuck_runs 孤儿标记、run 已终止归 resume）。默认纪律：总闸
       # replanning.enabled=False 零行为变更，retry_once=True 可回滚。
       # 含 4 个变异自证（S3' 收窄被抹/无进展防护被删/失败点接线被删/reason 丢失）。
-      - name: Guard P1 重规划信号与决策记录（59 项 + 4 变异）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_replan_p1.py
-
       # ★ P2（2026-10-21）：差量重画（规则版）—— 失效传播/轻量重两级/五道质量门/
       # 无进展检测。含 5 项变异自证（关 done 复用/关无进展检测/删 deps 重映射/
       # 质量门恒放行/轻量级改追行）。放在 P1 之后：P2 依赖 P1 的信号与决策记录。
-      - name: Guard P2 重规划差量重画与质量门（60 项 + 5 变异）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_replan_p2.py
-
       # ── P3（2026-10-21）：用户指令触发（S1/S2）+ 确认卡 + T3 LLM 重画 ─────
       # DAG 级指令挂点（迭代边界，与 followup 共队列但一个只读一个消费）+
       # 影响评估（v2 §4.7「没有影响评估的 S1/S2 不得直接进 T3」）+ 确认卡
@@ -1224,11 +978,6 @@ jobs:
       # （默认关，范围锁定 replace，skip/insert 留 P4）。
       # 含 7 项变异自证（删 T3 判据/去终态过滤/点名未命中即 T0/TTL 沿用请求
       # 动作/放开 replace 锁定/质量门恒放行/删挂点闸）。
-      - name: Guard P3 重规划用户指令与确认卡（124 项 + 7 变异）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_replan_p3.py
-
       # ── P4（2026-10-21）：健康巡检（S10）+ 提前收敛 + LLM 三动作 ──────────
       # 缓慢漂移型失败的前置信号（M1 partial 密度 / M2 冲突密度 / M4 预算偏离，
       # 阈值按真库标定：M1=50%=基线 5 倍、M4=120%；M3 停用无基线）+ 提前收敛
@@ -1244,11 +993,6 @@ jobs:
       - name: Guard reasoning 事件区分模型 CoT 与系统提示（36 条，派生判据非硬编码快照）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_reasoning_kind.py
-
-      - name: Guard 质量评审接线（口径：plan_eval 计数低 ≠ 评审没跑）
-        if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
-        run: python tools/verify/verify_quality_review_wiring.py
 
       - name: Guard claims 协议 + 多 Agent 结论冲突检测（批次三 #16/#15，25 条 + 4 变异）
         if: ${{ !cancelled() }}

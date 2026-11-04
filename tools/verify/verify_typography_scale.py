@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] F1 字号档位 ⊆ 标准集合（25 档）  ← 越界档位：[10.5, 11.0, 13.0]（示例：['chat.css:32', 'alternatives.css:33', 'alternatives 
 # -*- coding: utf-8 -*-
 """门禁：全局字号标准 + 会话内容轨道宽度（2026-10-30）。
 

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] ^^^^^^^^^^^^^ | AssertionError: 变异锚点丢失：            _terminal = True | yield f"event: error 
 # -*- coding: utf-8 -*-
 """P1-2（SSE 心跳保活）与 P1-3（降级显式化）回归验证 —— 零 LLM、零库写入，可反复跑。
 

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] C6b 内置写操作工具拿到真 schema（高危操作有契约了）  parameters={'type': 'object', 'properties': {}, 'additionalProperties' 
 # -*- coding: utf-8 -*-
 """B1-1 门禁：`tools.input_schema` 真值注入 function-calling payload。
 

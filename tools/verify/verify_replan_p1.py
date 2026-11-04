@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] 需真实服务/真 LLM/生产真库金标或随包运行时资产，CI 跑不了；源码直连真实服务/真实 key（CI 无服务无 secret） 
 # -*- coding: utf-8 -*-
 """P1 replanning（2026-10-21，执行中重规划第一阶段）回归验证 —— 零 LLM、零服务、零生产库写。
 

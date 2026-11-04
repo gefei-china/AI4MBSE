@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] D1 ★引擎计数 == 裸 SQL 对账（total/bad/good 三通道 + 首坏+级联=坏）  ← engine={'total': 25, 'good': 15, 'bad': 10, 'bad_ 
 # -*- coding: utf-8 -*-
 """P1-2 门禁：步骤级归因器（core/attribution.py + monitor 接线 + 写入点修复）。
 

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [backlog] 从未接线，待逐个定性（接入 pr 需先过「全新克隆+空库能绿」）；未接线（2026-11-04 盘点未覆盖，待逐个定性） 
 # -*- coding: utf-8 -*-
 # CI-OPTIONAL: 真调 LLM 生成骨架 + 需 checker.jar 解析（随包运行时 126MB，不入库）；本地裸跑已可出诊断。
 """N2 架构骨架能力实测：用真实建模需求跑 Agent，检查产出能否过 checker.jar。

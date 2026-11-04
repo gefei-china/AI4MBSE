@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [TIMEOUT]  
 # -*- coding: utf-8 -*-
 """设置模块数据审计：settings 表每个键的「有效性 + 合理性」可复现验证。
 

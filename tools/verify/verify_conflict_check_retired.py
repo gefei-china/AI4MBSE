@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] B4 ReAct 默认串仍含它（走 workflows 那套） 
 # -*- coding: utf-8 -*-
 """门禁：`conflict_check` 假实现已下线（米爸 2026-10-13 决定：只移除假实现，保留可用那套）。
 

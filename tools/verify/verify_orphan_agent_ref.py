@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] B1 INSERT 语句含 agent_name_snapshot 
 # -*- coding: utf-8 -*-
 """B1-11 门禁：`agent_tasks.agent_id` 的**孤儿引用**检测。
 

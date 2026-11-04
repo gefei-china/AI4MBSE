@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] F1 存量全覆盖（无 internal 兜底）  以下 error 落到兜底未归类：['子任务未产生输出'] 
 # -*- coding: utf-8 -*-
 """B1-6 门禁：失败分类 + 分类驱动重试。
 

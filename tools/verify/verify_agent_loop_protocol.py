@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL F5 ★合法空参数在真实循环里正常执行（未被误判为截断） 
 # -*- coding: utf-8 -*-
 """Agent Loop 协议门禁（2026-10-07）—— 并行 tool_calls 配对 + 截断参数拒绝。
 

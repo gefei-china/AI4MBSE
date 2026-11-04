@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] M6 变异（接返回值判真假）被 C9 抓住 
 # -*- coding: utf-8 -*-
 """B5-4/ B5-5 回归自检：MCP 编辑回填 + 编排 resume 门控。
 

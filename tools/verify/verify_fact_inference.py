@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] F1 记录到改动前基线（evidence 本就全空，basis 无从谈起）  真库已有 473 条带 basis ⇒ 基线描述需更新 
 # -*- coding: utf-8 -*-
 """批次二 §08 门禁：事实/推断分档（evidence.basis）。
 

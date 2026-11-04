@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] 需真实服务/真 LLM/生产真库金标或随包运行时资产，CI 跑不了；源码直连真实服务/真实 key（CI 无服务无 secret） 
 # -*- coding: utf-8 -*-
 """P0-d 验证：周期告警评估器（全局时间窗指标 + 冷却去重 + 两套评估器互不重复）。"""
 import os

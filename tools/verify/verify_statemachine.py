@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] D hil_confirmations.status ∈ hil_confirmation 状态域  ← 越界值 {'executed': 1}；实测分布 {'executed': 1, 'pending' 
 # -*- coding: utf-8 -*-
 """#18 门禁：统一状态机（core/statemachine.py + 已接线实体的读写路径）。
 

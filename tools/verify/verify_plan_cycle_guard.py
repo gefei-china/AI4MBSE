@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] ...<3 lines>... | "请改用当前在役的 Agent 名后重试。" % "、".join(_unresolved)) | ValueError: 计划引用了无法解析的 Agent：design（不在 age 
 # -*- coding: utf-8 -*-
 """B1-8 门禁：依赖图环 / 自环 / 空 key / 重复 key 检测。
 

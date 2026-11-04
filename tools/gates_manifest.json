@@ -1052,9 +1052,8 @@
     },
     {
       "script": "verify_context_utilization.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言真库 llm_usage_stats 14 天窗口的利用率；**并已发现 schema 漂移**：真库有 context_window 列，init_db 建的空库没有 ⇒ 待补 schema 后回收"
+      "tier": "pr",
+      "timeout": 120
     },
     {
       "script": "verify_continuation.py",

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL B5 默认值：enabled=True / max_chars=900 / versions=3 
 # -*- coding: utf-8 -*-
 """P0-6 会话产物摘要（多轮上下文）常驻验收：纯函数 + 四落点接线 + 零回归 + 变异自证。
 

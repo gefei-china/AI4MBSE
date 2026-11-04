@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL T2 真库各 Agent 在纯净 db 层下自认领成功  <- 异常=[('methodology_resolver', '方法论解析', 'knowledge_qa')] 
 # -*- coding: utf-8 -*-
 """意图识别「DB 自定义 Agent 强特异关键词优先」的自检（P1-13，步骤 B 代码侧）。
 

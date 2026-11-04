@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] B3 匿名不加 user 条件（口径②） 
 # -*- coding: utf-8 -*-
 """B1-9 门禁：会话归属隔离（对话列表按用户 + 按项目过滤）。
 

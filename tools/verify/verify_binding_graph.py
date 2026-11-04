@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] 需真实服务/真 LLM/生产真库金标或随包运行时资产，CI 跑不了；依赖生产库存量数据（真库绿 / CI 干净库红），CI 跑不了: [FAIL] G3 无「判死却仍注入」（核对 9 条）  ← 越界：requirement_analysis/gap_summary, requirement_analysis/scene_coverage, knowl 
 # -*- coding: utf-8 -*-
 """门禁：Agent ↔ 技能 / MCP / 工具 的**绑定生效判定**必须与运行时一致（2026-10-30）。
 

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] ~~~~^^^^^^^^^^^ | File "<string>", line 73, in <module> | NameError: name '_pg_stop_now' is not defined 
 # -*- coding: utf-8 -*-
 """S3 运行时 token 预算回归（离线，不依赖 8000 端口服务）。
 

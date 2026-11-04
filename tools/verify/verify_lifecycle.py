@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] D4 ★真库 'design' 使用证据非零（agent_tasks 按 name join 生效）  ← got=(13, 0) 
 # -*- coding: utf-8 -*-
 """P0-1 门禁：资产长尾治理（core/lifecycle.py + GET /api/monitor/lifecycle + 面板接线）。
 

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] C7 与 prev 一致 + 弱置信(0.70) → 采纳为 llm_history  <- 实得=llm_first_weak 
 # -*- coding: utf-8 -*-
 """P0-5 历史联合召回（v2 定稿）+ 语义意见喂澄清卡 —— 常驻断言 + 变异自证。
 

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [backlog] 从未接线，待逐个定性（接入 pr 需先过「全新克隆+空库能绿」）；未接线（2026-11-04 盘点未覆盖，待逐个定性） 
 # -*- coding: utf-8 -*-
 # CI-OPTIONAL: A+B 真库金标 + 运行中的 MCP 服务（2026-10-18 干净库实测：库中不存在 zhiyuan-dev-mcp、registry 取不到主 Agent、tools 0 个——三态都依赖生产库 MCP 注册与在线服务）
 """MCP 可用性链路验证（2026-10-16）。

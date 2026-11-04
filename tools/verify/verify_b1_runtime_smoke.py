@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] 需真实服务/真 LLM/生产真库金标或随包运行时资产，CI 跑不了；依赖生产库存量数据（真库绿 / CI 干净库红），CI 跑不了: [FAIL] D1 能取到 dev 分支实体（读取链路未断）  → eid=None status=200 
 # -*- coding: utf-8 -*-
 """
 B1 汇总验证 · 运行时冒烟

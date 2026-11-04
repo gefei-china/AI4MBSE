@@ -273,6 +273,7 @@ def check_all(m):
 
     # G10 nightly 门禁不得在 PR 上执行（2026-11-04 事故：见 ci_jobs 的注释）
     nightly_gates = {g.get("script") for g in gates if g.get("tier") == "nightly"}
+    tier_of = {g.get("script"): g.get("tier") for g in gates}
     jobs = ci_jobs()
     bad = nightly_violations(jobs, nightly_gates)
     rec("G10 nightly 门禁所在 job 必须带 schedule 闸门（否则 PR 也会跑）",
@@ -286,6 +287,21 @@ def check_all(m):
     rec("G10b 判据自证（有 schedule 闸门=绿 / 无 if=红）",
         _syn_pass and _syn_fail,
         "有闸门判绿=%s 无 if 判红=%s" % (_syn_pass, _syn_fail))
+
+    # G11 **反向一致**：CI 主 job 里只能有 pr 层（G6a 只管 pr⊆CI，这个方向没人管）
+    #    2026-11-05 实测：主 job 跑着 213 个门禁脚本，其中 53 个不是 pr 层
+    #    （broken 38 + local 12 + backlog 3）——「broken 记账不进 CI」这条约定
+    #    只写在文档里，代码里从没生效，于是 CI 一边跑 38 条已知红一边判红。
+    main = jobs.get("tests-and-guards") or {}
+    non_pr = sorted(s for s in (main.get("gates") or set())
+                    if tier_of.get(s) not in (None, "pr"))
+    rec("G11 ci.yml 主 job 只跑 pr 层（清单是唯一真源）", not non_pr,
+        "非 pr 层却在跑 %d 条: %s" % (len(non_pr), non_pr[:6]))
+
+    # G11b 判据自证：合成样本必须能抓出 non-pr
+    _t = {"x.py": "broken", "y.py": "pr"}
+    _bad = [s for s in {"x.py", "y.py"} if _t.get(s) not in (None, "pr")]
+    rec("G11b 判据自证（合成 broken 样本被判红）", _bad == ["x.py"], "got=%s" % _bad)
 
 
 def mutations(m):

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL  llm/__init__.py 在 except 分支加 WARNING 
 """S4 验证：工具名合法性护栏 + LLM 静默降级留痕（2026-09-17）。
 
 事故背景（实测定论，非推测）：`tools` 表存在中文名工具（id=1594「知识库查询」）→

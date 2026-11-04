@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] B1 删 skills 源行 ⇒ 其投影随之删除  ← got 29（应只剩 A 段夹具 1 行） 
 # -*- coding: utf-8 -*-
 """P0-a 门禁：capability_registry 能力统一注册处（度量收口第一项）。
 

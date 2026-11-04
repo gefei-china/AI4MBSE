@@ -1,4 +1,3 @@
-# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言真库 llm_usage_stats 14 天窗口的利用率；**并已发现 schema 漂移**：真库有 context_window 列，init_db 建的空库没有 ⇒ 待补 schema 后回收
 # -*- coding: utf-8 -*-
 """门禁：上下文利用率必须**可测**，且"不加滑窗"这个决定必须**可被数据翻转**（P1-5，2026-10-30）。
 
@@ -140,13 +139,19 @@ check("B1 分母为 0 的行不得进入利用率分母（0=未知，不是窗�
       all(int(r.get("context_window") or 0) > 0 for r in _cw_new))
 
 # 近似口径：用 intent→provider 不可考，故按"该次调用最可能用过的窗口"上界（取最大窗口）
-if not _util_new and _cw_fallback:
+# ⚠️ 2026-11-05：必须同时要求 `_pt_prod` 非空。
+#   干净库上 `_cw_fallback` 有值（provider 种子带窗口）但 `_pt_prod` 为空（无生产调用）⇒
+#   `_util_apx = []` ⇒ `max([])` 直接 ValueError 崩，而不是"判据不成立"。
+#   空样本的正确语义是「本环境无样本，跳过」，不是「崩溃」。
+if not _util_new and _cw_fallback and _pt_prod:
     _maxcw = max(_cw_fallback.values())
     _util_apx = [float(x) / float(_maxcw) for x in _pt_prod]
     print("    近似口径（分母固定取最大窗口 %d）：p95=%.3f max=%.3f"
           % (_maxcw, _pct(_util_apx, 0.95), max(_util_apx)))
     check("B2 近似口径下 p95 仍远低于阈值（说明当前的宽裕不是假的）",
           _pct(_util_apx, 0.95) < 0.85, "p95=%.3f" % _pct(_util_apx, 0.95))
+else:
+    print("    B2 跳过：无生产 prompt 样本或已有真实分母（干净库口径）")
 
 # ─────────────────────────────────────────────────────────────────────────────
 hr("[C] 口径隔离：排除脚本流量必须**有可观测的差别**（否则等于没排除）")
@@ -155,8 +160,17 @@ _pt_all = [int(r["prompt_tokens"]) for r in _rows_all]
 _gap = _pct(_pt_all, 0.95) - _pct(_pt_prod, 0.95)
 print("    全部口径 p95=%d vs 生产口径 p95=%d（差 %d）"
       % (_pct(_pt_all, 0.95), _pct(_pt_prod, 0.95), _gap))
-check("C1 脚本流量确实会抬高 p95（否则'排除探针'这条口径是空动作）",
-      _gap > 0, "两种口径 p95 相同 ⇒ 探针未混入，或排除名单已过时")
+# ⚠️ 2026-11-05：这是**区分度自证**，需要「探针流量真实存在」才成立。
+#   干净库一条探针都没有 ⇒ 两种口径必然相同 ⇒ 原判据恒红（假红）。
+#   无样本的正确语义是「本环境无法验证区分度」= SKIP，不是「判据失败」。
+#   （同族：verify_subtask_status 的 0/0 分母。）
+_n_probe = len(_rows_all) - len(_prod)
+if _n_probe <= 0:
+    print("    C1 SKIP：干净库无探针样本（0 条），区分度无从验证")
+else:
+    check("C1 脚本流量确实会抬高 p95（否则'排除探针'这条口径是空动作）",
+          _gap > 0, "两种口径 p95 相同 ⇒ 探针未混入，或排除名单已过时（探针样本 %d 条）"
+          % _n_probe)
 
 # ─────────────────────────────────────────────────────────────────────────────
 hr("[D] 阈值与判据")
