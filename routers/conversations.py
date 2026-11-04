@@ -914,6 +914,14 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                         if _pending:
                             _tail = ("\n\n> ⏹ 连接已中断（以上为已生成内容，"
                                      "可直接重新发送这条消息继续）")
+                            # ★ 2026-11-04：先闭合正文末尾**未配对**的 ``` 围栏 ——
+                            #   否则「连接已中断」提示会落进代码块内部（真库实证 msg 5761：
+                            #   21432 字正文围栏 13 个=奇数，末段 ```sysml 未闭合）。
+                            try:
+                                from agent.final_content import close_open_fences as _close_fences
+                                _pending = _close_fences(_pending)
+                            except Exception:
+                                pass
                             _body = _pending + _tail
                         else:
                             _body = ("**原因**：本轮未产出正文内容就结束了"

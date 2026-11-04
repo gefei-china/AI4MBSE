@@ -101,6 +101,124 @@ def _is_interim(earlier: str, later: str, family: str) -> bool:
     return _similar(ne, nl) >= _SIM_OTHER
 
 
+_CN_NUM = "一二三四五六七八九十"
+
+
+def _cn_to_int(s: str) -> int:
+    """中文序号 → 整数（只覆盖标题里真实会出现的 1~99）。解析不了返回 0。"""
+    s = (s or "").strip()
+    if not s:
+        return 0
+    if s == "十":
+        return 10
+    if "十" in s:
+        a, _, b = s.partition("十")
+        tens = _CN_NUM.index(a) + 1 if a in _CN_NUM else 0
+        # ⚠️ `b in _CN_NUM` 对空串恒为 True（`"" in "一二三"` == True），
+        #   必须显式判 `b` 非空 —— 否则「二十」会被算成 2*10+1=21（本轮自测抓到的真 bug）。
+        ones = _CN_NUM.index(b) + 1 if (b and b in _CN_NUM) else 0
+        return tens * 10 + ones
+    return (_CN_NUM.index(s) + 1) if s in _CN_NUM else 0
+
+
+def _int_to_cn(n: int) -> str:
+    """整数 → 中文序号（1~99）。"""
+    if n <= 0:
+        return ""
+    if n <= 10:
+        return _CN_NUM[n - 1]
+    if n < 20:
+        return "十" + (_CN_NUM[n - 11] if n > 10 else "")
+    tens, ones = divmod(n, 10)
+    return _CN_NUM[tens - 1] + "十" + (_CN_NUM[ones - 1] if ones else "")
+
+
+# 中文序号标题：`## 一、标题` / `### 二. 标题` / `#### 三 标题`
+_ORD_HEAD_RE = re.compile(
+    r"^(#{2,6})[ \t]*([一二三四五六七八九十]+)[ \t]*([、.．)）][ \t]*)(?=\S)", re.M)
+
+
+def normalize_ordinal_headings(text: str):
+    """把**因拼接而重复/回退**的中文序号标题，重排为一条连续序号。返回 (new_text, changed)。
+
+    ★ 2026-11-04（真库实证 conv 990408 / msg 5761）：
+      自动编排汇总时若"整合"退化成拼接，正文就是 3 份报告首尾相接 ——
+      每份各自从「一、」开始，于是出现
+        `## 一、结论先行 … ## 六、风险` → `## 二、本次实际做了什么` → `## 一、结论先行`（重开）
+      读者看到「二」排在「六」后面、且「一」出现两次，完全失去章节层次。
+
+    ── 判据（刻意保守：**只在已经坏掉的文档上动手**）────────────────────
+      · 按标题层级（`##`/`###`…）**分组独立**处理（不同层级各有自己的序号体系）；
+      · 组内序号**严格单调递增** ⇒ 视为正常文档，**一字不动**（返回原文、changed=0）；
+      · 出现**回退或重复**（后一个 ≤ 前一个）⇒ 判定为拼接痕迹 ⇒ 该组整体重排为 1..n；
+      · **只改序号本身**，标题文字、层级符号 `#`、分隔符 `、` 全部原样保留；
+      · 只有 1 个带序号标题 ⇒ 不动（无从判断，且改了没意义）。
+
+    ⚠️ 为什么不用"输出侧去重标题"而用"重排序号"：
+      重复的标题文字往往**内容并不相同**（是不同子任务的不同结论），删掉会丢信息；
+      而序号回退才是"读者认知错乱"的真正来源。**改序号不删内容**。
+    """
+    s = str(text or "")
+    if not s:
+        return s, 0
+    hits = list(_ORD_HEAD_RE.finditer(s))
+    if len(hits) < 2:
+        return s, 0
+    # 按层级分组（保持出现顺序）
+    groups = {}
+    for m in hits:
+        groups.setdefault(m.group(1), []).append(m)
+    out, pos, changed = [], 0, 0
+    for level, ms in groups.items():
+        if len(ms) < 2:
+            continue
+        nums = [_cn_to_int(m.group(2)) for m in ms]
+        if any(n <= 0 for n in nums):
+            continue
+        # 严格单调递增 ⇒ 正常文档，不动
+        if all(nums[i] > nums[i - 1] for i in range(1, len(nums))):
+            continue
+        # 回退/重复 ⇒ 重排
+        for i, m in enumerate(ms, start=1):
+            new = _int_to_cn(i)
+            if new == m.group(2):
+                continue
+            out.append(s[pos:m.start(2)])
+            out.append(new)
+            pos = m.end(2)
+            changed += 1
+    if not out:
+        return s, 0
+    out.append(s[pos:])
+    return "".join(out), changed
+
+
+def close_open_fences(text: str) -> str:
+    """闭合正文末尾**未配对**的 ``` 围栏。已配对则**一字不动**地原样返回。
+
+    ★ 2026-11-04（真库实证 conv 990408 / msg 5761，21432 字，围栏 13 个=奇数）：
+      流式连接中断时，正文可能正好停在代码块中间 ⇒ 随后追加的
+      「⏹ 连接已中断」提示直接**落进代码块内部** ⇒ 用户看到提示被当成代码高亮，
+      后续正文也被吞进代码块。
+
+    ⚠️ 只在**确实存在未配对**时补一个闭合围栏；已配对的一律不动 ——
+      本函数在**呈现层**收尾处调用，多加一个 ``` 会让正常正文多出围栏。
+    """
+    s = str(text or "")
+    if "```" not in s:
+        return s
+    n, pos = 0, 0
+    while True:
+        i = s.find("```", pos)
+        if i < 0:
+            break
+        n += 1
+        pos = i + 3
+    if n % 2 == 0:          # 已配对 ⇒ 原样返回（不改一个字）
+        return s
+    return s + "\n```\n"
+
+
 def dedupe_interim_code_blocks(text: str):
     """收敛最终正文中的中间版本代码块。返回 (new_text, removed_count)。
 

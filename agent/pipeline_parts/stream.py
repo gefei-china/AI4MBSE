@@ -640,7 +640,7 @@ class StreamMixin:
                                 _lgpg.getLogger("mbse.planner").warning(
                                     "计划语义校验发现 %d 项问题（mode=%s）：%s",
                                     len(_pg["violations"]), _pg.get("mode"), _pgmsg)
-                                yield {"type": "reasoning", "kind": "progress",
+                                yield {"type": "progress", "kind": "progress",
                                        "delta": "（计划校验）%s" % _pgmsg[:300]}
                             if _pg.get("blocked"):
                                 _pgerrs = [v for v in _pg.get("violations") or []
@@ -1218,7 +1218,8 @@ class StreamMixin:
                         try:
                             from services.subtask_protocol import validate as _sp_validate, \
                                 normalize_text as _sp_normalize, \
-                                extract_protocol_json as _sp_extract
+                                extract_protocol_json as _sp_extract, \
+                                strip_protocol_json as _sp_strip
                             _s0 = str(sub_res or "").strip()
                             # ★ 2026-10-13：改用 `extract_protocol_json`（能处理「正文 + 尾部 JSON」）。
                             #   原写法只试 `startswith("{")`，对"正文在前"的形态恒为 False
@@ -1315,6 +1316,23 @@ class StreamMixin:
                                         # 补格式**试过但没成**——与"压根没试"必须可区分
                                         _m2["protocol_repair_error"] = str(_rp_err)[:120]
                                     _summary_proto["meta"] = _m2
+                            # ★ 2026-11-04：协议 JSON **从正文里删掉**（"抽出来"还不够）。
+                            #   真库实证 conv 990408 / msg 5761（21432 字）：3 段协议 JSON 全留在正文 ⇒
+                            #     ① 用户看到**裸露**的 JSON（无结构、无代码块收敛）；
+                            #     ② 汇总输入按 summary_item_max_chars(1600) 头尾裁剪，协议 JSON 正好在
+                            #        交付物**尾部** ⇒ 必被保留 ⇒ LLM 拿到三份残缺交付物，
+                            #        "整合"退化成**拼接** ⇒ 正文出现多组「一、二、三」章节标题；
+                            #     ③ dedupe_interim_code_blocks 只处理**围栏代码块**，围栏外的 JSON 永不被收敛。
+                            #   剥离后的 sub_res 才是"给人看的正文" —— 它会流入落库 / 汇总 / UI 摘要。
+                            #   ⚠️ 放在 if/else **之外**：不新增任何分支配对，原兜底路径
+                            #      （协议解析失败 ⇒ normalize_text）完全不受影响；
+                            #      解析不出协议时 strip 返回 None ⇒ 原样不动（宁可漏删也不能删错正文）。
+                            try:
+                                _clean_body, _stripped = _sp_strip(_s0)
+                                if _stripped is not None:
+                                    sub_res = _clean_body
+                            except Exception:
+                                pass
                             # 协议状态 → 子任务成功标志：failed→fail（现状 tk_ok 判定保留兼容）
                             if _summary_proto and _summary_proto.get("status") == "failed":
                                 ok = False
@@ -1765,7 +1783,7 @@ class StreamMixin:
                                                 pass
                                         if _d_applied:
                                             conn.commit()
-                                            yield {"type": "reasoning",
+                                            yield {"type": "progress",
                                                    "kind": "progress",
                                                    "delta": "（自动编排）按用户中途指令"
                                                             "重派 %d 个任务：%s"
@@ -1979,14 +1997,14 @@ class StreamMixin:
                                                         str(k) for k in
                                                         (_d_dec.get("skip") or [])]
                                                     yield _pd3
-                                            yield {"type": "reasoning", "kind": "progress",
+                                            yield {"type": "progress", "kind": "progress",
                                                    "delta": "（自动编排）T3 整图重画："
                                                             "新增 %d 个替代任务（%s）"
                                                             % (_d_ins, _d_dec.get("reason")
                                                                or "")[:50]}
                                         else:
                                             # 质量门不过 ⇒ T4 停手（保持原计划，不落库）
-                                            yield {"type": "reasoning", "kind": "progress",
+                                            yield {"type": "progress", "kind": "progress",
                                                    "delta": "（自动编排）T3 重画被拦：%s"
                                                             % (_d_dec.get("reason") or "")[:80]}
                     except Exception:
@@ -2064,7 +2082,7 @@ class StreamMixin:
                                             "retry_count": int(
                                                 _tk4.get("retry_count") or 0),
                                             "summary_status": ""})
-                                yield {"type": "reasoning", "kind": "progress",
+                                yield {"type": "progress", "kind": "progress",
                                        "delta": "（自动编排）目标已达成提前收敛："
                                                 "必需产出全部完成，主动放弃 %d 个"
                                                 "非必需任务（%s）"
@@ -2161,7 +2179,7 @@ class StreamMixin:
                                         TaskQueue.block(
                                             conn, int(_tk5["id"]),
                                             "预计耗时超时间预算（M4 巡检）")
-                                yield {"type": "reasoning", "kind": "progress",
+                                yield {"type": "progress", "kind": "progress",
                                        "delta": "（自动编排）健康巡检 M4：%s"
                                                 % (_hp_dec.get("reason") or "")[:100]}
                                 break
@@ -2189,7 +2207,7 @@ class StreamMixin:
                                         pass
                                 if _hp_applied:
                                     conn.commit()
-                                    yield {"type": "reasoning", "kind": "progress",
+                                    yield {"type": "progress", "kind": "progress",
                                            "delta": "（自动编排）健康巡检 S10：%s"
                                                     % (_hp_dec.get("reason") or "")[:100]}
                                     if _RS_OK:
@@ -2405,14 +2423,14 @@ class StreamMixin:
                                                         != _rcfm.ACTION_APPROVE:
                                                     # 维持原计划：不改图、不推进轮次，
                                                     #   只把"曾有一次重画被否决/超时"落留痕。
-                                                    yield {"type": "reasoning",
+                                                    yield {"type": "progress",
                                                            "kind": "progress",
                                                            "delta": "（自动编排）重画未执行：%s"
                                                                     % (_rs6.get("reason") or "")}
                                                     _rd_act = "none"
                                                     _redraw_dec = None
                                                 else:
-                                                    yield {"type": "reasoning",
+                                                    yield {"type": "progress",
                                                            "kind": "progress",
                                                            "delta": "（自动编排）用户已批准重画"}
                                         except Exception:
@@ -2481,7 +2499,7 @@ class StreamMixin:
                                     if _applied:
                                         _redraw_rounds += 1
                                         # 用户可见：reasoning 进度 + subtask 重派轨迹
-                                        yield {"type": "reasoning", "kind": "progress",
+                                        yield {"type": "progress", "kind": "progress",
                                                "delta": "（自动编排）执行中重规划 %s：%s"
                                                         % (_redraw_dec.get("level"),
                                                            _redraw_dec.get("reason"))}
@@ -2505,7 +2523,7 @@ class StreamMixin:
                                 elif _rd_act == "skip":
                                     # T1.5：叶子失效任务主动跳过（决策留痕，不改终态 ——
                                     #   failed 是终态，skip 只是"明确标记"而非状态变更）
-                                    yield {"type": "reasoning", "kind": "progress",
+                                    yield {"type": "progress", "kind": "progress",
                                            "delta": "（自动编排）%s" % (_redraw_dec.get("reason") or "")}
                         except Exception:
                             pass
@@ -3605,12 +3623,24 @@ class StreamMixin:
         #   在其后仍有效（正文确无代码时才补回，补回的是最后确定版所在交付物）。
         #   失败绝不阻断（呈现层纪律），返回原文。
         try:
-            from agent.final_content import dedupe_interim_code_blocks as _dedupe_fc
+            from agent.final_content import (dedupe_interim_code_blocks as _dedupe_fc,
+                                             normalize_ordinal_headings as _ordfix_fc)
             orch_content, _fc_removed = _dedupe_fc(orch_content)
             if _fc_removed:
                 yield {"type": "progress", "kind": "progress",
                        "delta": ("（自动编排）最终正文收敛：%d 份中间版本代码不再重复展示"
                                  "（各版本在子任务执行卡中可见，正文保留最后确定版）" % _fc_removed)}
+            # ★ 2026-11-04：中文序号标题去回退（拼接痕迹）。
+            #   必须放在**本处**（reflection 整体重写正文之后、流式推送之前）：
+            #   `_summarize_plan` 里已重排过一次，但 reflection 修订会**整体重写**
+            #   `orch_content`（L3305），把各子任务自带的「一、二、三」重新带回来 ——
+            #   那正是真库 msg 5761 的形态（`## 一、结论先行` 出现 2 次）。
+            #   ⇒ 出口再收一次，且**只改序号、不删标题**。
+            orch_content, _ord_n = _ordfix_fc(orch_content)
+            if _ord_n:
+                yield {"type": "progress", "kind": "progress",
+                       "delta": ("（自动编排）章节序号已归一：%d 处重复/回退的中文序号"
+                                 "重排为连续序号（标题内容与顺序不变）" % _ord_n)}
         except Exception:
             pass
 
@@ -4446,7 +4476,7 @@ class StreamMixin:
                     _subj_note = (f"（执行主体）已按你选择的主 Agent「{team_intent}」执行；"
                                   f"忽略外部传入的定向值 {forced_intent}")
                     exec_notices.append({"kind": "progress", "text": _subj_note})
-                    yield {"type": "reasoning", "delta": _subj_note, "kind": "progress"}
+                    yield {"type": "progress", "delta": _subj_note, "kind": "progress"}
                     forced_intent = None
                 else:
                     forced_intent = team_intent
@@ -4478,7 +4508,7 @@ class StreamMixin:
                                   f"「{_bound}」继续执行；如需更换，请在输入框上方重新选择主 Agent")
                     exec_notices.append({"kind": "progress", "text": _subj_note})
                     self._exec_subject_note = _subj_note
-                    yield {"type": "reasoning", "delta": _subj_note, "kind": "progress"}
+                    yield {"type": "progress", "delta": _subj_note, "kind": "progress"}
             # ── 阶段 1：意图识别（V2.7：无论是否指定智能体，一律执行识别——
             # 指定智能体只作"执行 Agent 定向"，不再跳过识别；目标/槽位/澄清/多意图都依赖识别结果）──
             yield {"type": "stage", "name": "意图识别", "status": "run"}
@@ -4535,7 +4565,12 @@ class StreamMixin:
                     # 明确提示不支持 —— 必须带能力清单与出路，不返回死胡同
                     _msg = self._team_unsupported_message(team_def,
                                                           (team_decision or {}).get("reason"))
-                    yield {"type": "reasoning", "delta": f"（团队路由）{_msg}"}
+                    # ★ 2026-11-04（门禁盘点）：本处是**漏拆**——文案以「（团队路由）」开头
+                    #   是系统提示，却仍发 reasoning 且不带 kind ⇒ S2（零残留）漏掉它、
+                    #   S3a（带指纹必须是 progress）抓到它。这是"两条判据互补"的实例：
+                    #   只守 S2 会漏掉"没写 kind 的系统提示"。
+                    yield {"type": "progress", "kind": "progress",
+                           "delta": f"（团队路由）{_msg}"}
                     yield {"type": "stage", "name": "团队路由", "status": "skip",
                            "reason": (team_decision or {}).get("reason")}
                     yield {"type": "done", "data": {
@@ -4576,7 +4611,7 @@ class StreamMixin:
                         f"已由主 Agent「{team_intent}」编排分派"
                         f"（否则只会执行成员「{team_decision['target']}」，其余阶段丢失）")
                     exec_notices.append({"kind": "progress", "text": _subj_note})
-                    yield {"type": "reasoning", "delta": _subj_note, "kind": "progress"}
+                    yield {"type": "progress", "delta": _subj_note, "kind": "progress"}
                     self._exec_subject_note = _subj_note
                 elif _act == "direct" and (team_decision or {}).get("target"):
                     # 定向到团队内最相近/命中的成员直行（仍不编排）
@@ -4602,7 +4637,7 @@ class StreamMixin:
                                       f"「{team_decision['target']}」"
                                       f"（{team_decision.get('reason') or ''}）")
                     exec_notices.append({"kind": "progress", "text": _subj_note})
-                    yield {"type": "reasoning", "delta": _subj_note, "kind": "progress"}
+                    yield {"type": "progress", "delta": _subj_note, "kind": "progress"}
                     # ★★ 2026-10-29（用户问「工程建模方案设计agent 不是主 agent，为啥会匹配到他」）：
                     #   真因就是**这里**——主 Agent「智源对接agent」(main, 12 名成员) 作为团队负责人，
                     #   因意图识别结果 `design` 命中其成员（team_router C4 分支：命中成员直接采纳），
@@ -5569,7 +5604,7 @@ class StreamMixin:
                                          "content": _FOLLOWUP_PREFIX + _fu})
                         _fu_delta = f"（{agent_def.name}）收到生成期间的补充指令，重新规划：{_fu[:60]}"
                         exec_notices.append(({"kind": "progress", "text": _fu_delta}))
-                        yield {"type": "reasoning", "delta": _fu_delta, "kind": "progress",
+                        yield {"type": "progress", "delta": _fu_delta, "kind": "progress",
                                "round": _rnd + 2, "phase": "followup"}
                         # ★ 重置轮次：新指令值得完整的工具轮次预算（否则它只能拿到剩 1~2 轮）
                         _rnd = -1
@@ -5686,7 +5721,7 @@ class StreamMixin:
                         plan = "、".join((tc.get("function") or {}).get("name", "") for tc in ptool_calls[:3])
                         _p_delta = f"（{agent_def.name}）判断需要调用工具补充上下文，计划调用：{plan}。开始执行工具…（第 {_rnd + 1} 轮）"
                         exec_notices.append(({"kind": "progress", "text": _p_delta}))
-                        yield {"type": "reasoning", "delta": _p_delta, "kind": "progress", "round": _rnd + 1, "phase": "plan"}
+                        yield {"type": "progress", "delta": _p_delta, "kind": "progress", "round": _rnd + 1, "phase": "plan"}
                         weak_count = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
                         _round_had_ok = False   # 本轮是否有可用工具结果（失败轮预算判据）
                         #── P0-①（2026-10-07）并行调用配对：切成「执行队列 / 未执行队列」────
@@ -6170,7 +6205,7 @@ class StreamMixin:
                                         "并在答复里写明缺什么。")
                                     messages.append({"role": "user", "content": _dup_cmd})
                                     exec_notices.append(({"kind": "progress", "text": _d_delta}))
-                                    yield {"type": "reasoning", "delta": _d_delta,
+                                    yield {"type": "progress", "delta": _d_delta,
                                            "kind": "progress", "round": _rnd + 1, "phase": "plan"}
                                     yield {"type": "stage", "name": "重复调用收敛",
                                            "status": "done",
@@ -6182,7 +6217,7 @@ class StreamMixin:
                                     f"（{agent_def.name}）已多次被要求停止重复勘查仍未推进，"
                                     f"本轮收敛：改为基于已有信息组织回答。")
                                 exec_notices.append(({"kind": "progress", "text": _d_delta}))
-                                yield {"type": "reasoning", "delta": _d_delta, "kind": "progress",
+                                yield {"type": "progress", "delta": _d_delta, "kind": "progress",
                                        "round": _rnd + 1, "phase": "plan"}
                                 yield {"type": "stage", "name": "重复调用收敛",
                                        "status": "done",
@@ -6192,7 +6227,7 @@ class StreamMixin:
                             if weak_count == len(_exec_calls) and weak_count > 0:
                                 _w_delta = f"（{agent_def.name}）本轮工具结果均与任务弱相关，不再继续调用工具，直接基于已有信息组织回答。"
                                 exec_notices.append(({"kind": "progress", "text": _w_delta}))
-                                yield {"type": "reasoning", "delta": _w_delta, "kind": "progress", "kind": "progress", "round": _rnd + 1, "phase": "plan"}
+                                yield {"type": "progress", "delta": _w_delta, "kind": "progress", "round": _rnd + 1, "phase": "plan"}
                                 break
                 # ★ 2026-10-28（写前确认 HITL）写前确认收口 —— 落痕迹 + 发确认卡 + 结束本次流。
                 #   位置同样选在「最终生成之前」：ReAct 循环已因 confirm_required 中断，
@@ -6311,7 +6346,7 @@ class StreamMixin:
                         _fu2_delta = (f"（{agent_def.name}）生成最终回答前收到补充指令，"
                                       f"已并入本轮：{_fu2[:60]}")
                         exec_notices.append(({"kind": "progress", "text": _fu2_delta}))
-                        yield {"type": "reasoning", "delta": _fu2_delta, "kind": "progress",
+                        yield {"type": "progress", "delta": _fu2_delta, "kind": "progress",
                                "round": _rnd + 1, "phase": "followup"}
                         # ★ 有正文也照样重来一次最终生成：补充必须真正影响答案，
                         #   否则用户看到的是"完全没理会我的补充"。
@@ -6467,7 +6502,7 @@ class StreamMixin:
                         _w_delta = ("（已成功执行的写操作已记入上下文）"
                                     + "、".join(str(o.get("name") or "") for o in _write_ops))
                         exec_notices.append(({"kind": "progress", "text": _w_delta}))
-                        yield {"type": "reasoning", "delta": _w_delta, "kind": "progress",
+                        yield {"type": "progress", "delta": _w_delta, "kind": "progress",
                                "round": _rnd + 1, "phase": "plan"}
                     except Exception:
                         pass

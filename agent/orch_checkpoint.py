@@ -354,8 +354,19 @@ def prepare_resume(conn, run_id: int, *, include_failed: bool = False,
             "SELECT id, task_key, status, deps, context, expected_output, agent_id, title, "
             "task_type, config, seq, error_class FROM agent_tasks WHERE run_id=? ORDER BY seq, id",
             (int(run_id),)).fetchall()]
-    except Exception:
-        rows = []
+    except Exception as _e_q:
+        # ★ 2026-11-04：**不再把查询失败伪装成「没有任务」**。
+        #   原写法 `except Exception: rows = []` ⇒ 下游一律返回 `reason=no_tasks`，
+        #   于是「表缺列 / 列改名 / SQL 写错」这几种**真故障**与「这一批本来就没任务」
+        #   在外部完全不可区分。实测代价：本仓 `verify_orch_resume` 因此**整体红 21 条**
+        #   且长期挂在 CI 里没人发现（夹具 DDL 缺 `error_class` 列，SELECT 直接抛，
+        #   被这行 except 吞成 no_tasks）。
+        #   ⇒ 现在返回一个**可区分**的 reason，让失败在 `resume_block_reason` 里可见。
+        #   ⚠️ 仍然 `ok=False`（行为上依旧拒绝恢复），只是不再**静默**。
+        return {"ok": False, "reason": "tasks_query_error:%s" % type(_e_q).__name__,
+                "mode": "", "checkpoint": ck, "requeue_ids": [], "reuse_ids": [], "skip": [],
+                "attempt": attempt, "stale_s": stale_seconds(conn, run_id),
+                "detail": str(_e_q)[:200]}
     if not rows:
         return {"ok": False, "reason": "no_tasks", "mode": "", "checkpoint": ck,
                 "requeue_ids": [], "reuse_ids": [], "skip": [],

@@ -241,6 +241,18 @@ class FlowPlannerMixin:
         为什么不是"只留头"（`_truncate_budget(keep_head=True)` 的语义）：交付物的
         「结论 / 方案对比 / 风险与待确认」在**尾部**，只留头会把结论整段丢掉 —— 会话 368
         的门禁缺口正是这一形态（t2 可见文本止于「给出三个方案」，三个方案的内容与选择结论全丢）。
+
+        ★ 2026-11-04：切口**按围栏边界对齐** —— 绝不把 ``` 围栏从中间切开。
+          为什么：切口落在围栏内部时，裁出的头/尾两段各自带着半个围栏，拼回去 ``` 数量变奇数
+          ⇒ 下游 markdown 渲染把后续正文**全吞进代码块**。真库实证 conv 990408 / msg 5761：
+          21432 字正文里围栏 13 个（**奇数**），最后一段 ```sysml 没闭合，
+          尾部的「连接已中断」提示直接落进了代码块内部。
+
+        ⚠️ **本函数必须零外部依赖**（只用内置字符串操作）：
+          `tools/verify/verify_subtask_isolation.py` 的变异自证会把本函数源码
+          `exec` 到一个**空命名空间**里执行（那里没有 `re`、没有 `FlowPlannerMixin`）——
+          用到模块级名字就会 NameError，门禁自身先崩。
+          ⇒ 围栏扫描用 `str.find` 而非 `re.finditer`；对齐逻辑内联，不抽成独立方法。
         """
         t = str(text or "")
         if cap <= 0 or len(t) <= cap:
@@ -250,7 +262,45 @@ class FlowPlannerMixin:
         tail = cap - head
         if tail <= 0:
             return t[:cap] + "\n…（超预算已裁剪）"
-        return t[:head] + mark + t[-tail:]
+        # 围栏起点列表（成对：fences[0]-fences[1] 是一个代码块）
+        fences, _pos = [], 0
+        while True:
+            _i = t.find("```", _pos)
+            if _i < 0:
+                break
+            fences.append(_i)
+            _pos = _i + 3
+        spans = [(fences[k], fences[k + 1]) for k in range(0, len(fences) - 1, 2)]
+        # ⚠️ 2026-11-04 实测补丁：**悬空的尾部开围栏**（围栏数为奇数）不在任何配对 span 里。
+        #   真库 msg 5761 正是 13 个（奇数）—— 末段 ```sysml 未闭合 ⇒ 若只按配对 span 对齐，
+        #   tail 切口会正好落进这段悬空围栏，裁出来仍然不配对（端到端实测抓到的真缺口）。
+        #   ⇒ 把悬空开围栏当作"延伸到文末"的 span 一并纳入对齐。
+        if len(fences) % 2 == 1:
+            spans.append((fences[-1], len(t)))
+
+        def _align(cut, toward_head):
+            """把切口移到围栏边界（不切开围栏）。
+            toward_head=True  → 回退到围栏开头（用于 head 段末尾）
+            toward_head=False → 前移到围栏结尾（用于 tail 段开头）
+            ⚠️ 若外扩会让该段变空（围栏紧贴文本端），则**整体保留该围栏** ——
+               宁多留不可少留（少留会把结论整段丢掉，I2 门禁守的就是这条）。"""
+            for _s, _e in spans:
+                if _s < cut < _e:
+                    if toward_head:
+                        return _s if _s > 0 else _e
+                    return _e if _e < len(t) else _s
+            return cut
+
+        h_end = _align(head, True)
+        t_start = _align(len(t) - tail, False)
+        if h_end >= t_start:            # 对齐后两段交叉 ⇒ 退回原切口（不制造新的破坏）
+            h_end, t_start = head, len(t) - tail
+        out = t[:h_end] + mark + t[t_start:]
+        # 最后一道保险：输出围栏数必须为偶数（悬空开围栏在这里被显式闭合）。
+        # 只在确为奇数时动手 —— 正常文本一字不加。
+        if out.count("```") % 2 == 1:
+            out += "\n```\n"
+        return out
 
     def _summarize_plan(self, done_items: list, plan: list, provider_id=None) -> str:
         """P1-1 计划总结节点：多个子任务交付物 → LLM 结构化整合；LLM 不可用/失败 → 拼接降级。
@@ -296,16 +346,24 @@ class FlowPlannerMixin:
             content = ((resp.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "")
             if content and len(content) > 80:
                 # ★ 2026-11-02：LLM 整合也可能把各版本的代码原样带出来（prompt 只是软约束）⇒ 出口统一收敛
-                from agent.final_content import dedupe_interim_code_blocks as _dedupe
+                from agent.final_content import (dedupe_interim_code_blocks as _dedupe,
+                                                 normalize_ordinal_headings as _ordfix)
                 content, _n = _dedupe(content)
+                # ★ 2026-11-04：整合退化成拼接时，各份报告会各自从「一、」重开
+                #   （真库 msg 5761：`## 一、结论先行` 出现 2 次、`二` 排在 `六` 之后）
+                #   ⇒ 只重排**序号**，不删任何标题文字（判据见函数文档）。
+                content, _no = _ordfix(content)
                 return content.strip()
         except Exception:
             pass
         # 拼接降级出口：各交付物的完整代码必然全量带入 ⇒ 必须收敛（同上）
         try:
-            from agent.final_content import dedupe_interim_code_blocks as _dedupe
+            from agent.final_content import (dedupe_interim_code_blocks as _dedupe,
+                                             normalize_ordinal_headings as _ordfix)
             _joined = "\n\n".join(f"## {it.get('title')}\n{(it.get('result') or '').strip()}" for it in done_items)
             _joined, _n = _dedupe(_joined)
+            # 拼接降级**必然**产生序号回退（每份交付物自带「一、二、三」）⇒ 这里最需要重排
+            _joined, _no = _ordfix(_joined)
             return _joined
         except Exception:
             return "\n\n".join(f"## {it.get('title')}\n{(it.get('result') or '').strip()}" for it in done_items)
