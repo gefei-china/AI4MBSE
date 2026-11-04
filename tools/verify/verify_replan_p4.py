@@ -213,20 +213,25 @@ def t_static():
 
 def t_config_runtime():
     print("\n=== S6. 运行期默认值 ===")
-    from core.config import get as _get
+    # ★ 2026-11-04：改读 **DEFAULT_CONFIG（出厂默认）** 而非运行期生效值。
+    #   原判据读 `core.config.get(...)`，真机验证把 health_probe/early_stop
+    #   按序开启后（这正是能力生效的证明）此判据恒红——"配置被开启"不是回归。
+    #   判据语义是"出厂默认保守（False）"，出厂值在 DEFAULT_CONFIG 里看。
+    from core.config import DEFAULT_CONFIG as _DF
+    _rp = _DF.get("replanning") or {}
     ok = True
-    ok &= _rec("S6a health_probe 运行期默认 False（零行为变更第一闸）",
-               _get("replanning", "health_probe", True) is False)
-    ok &= _rec("S6b health_probe_llm 运行期默认 False",
-               _get("replanning", "health_probe_llm", True) is False)
-    ok &= _rec("S6c early_stop 运行期默认 False",
-               _get("replanning", "early_stop", True) is False)
-    ok &= _rec("S6d llm_actions 运行期默认 replace（P3 行为）",
-               _get("replanning", "llm_actions", "skip,insert") == "replace")
+    ok &= _rec("S6a health_probe 出厂默认 False（零行为变更第一闸）",
+               _rp.get("health_probe") is False)
+    ok &= _rec("S6b health_probe_llm 出厂默认 False",
+               _rp.get("health_probe_llm") is False)
+    ok &= _rec("S6c early_stop 出厂默认 False",
+               _rp.get("early_stop") is False)
+    ok &= _rec("S6d llm_actions 出厂默认 replace（P3 行为）",
+               _rp.get("llm_actions") == "replace")
     ok &= _rec("S6e 巡检节奏默认 3 任务 / 60 秒 / 预算 1800s",
-               _get("replanning", "probe_every_tasks", 0) == 3
-               and _get("replanning", "probe_every_sec", 0) == 60
-               and _get("replanning", "probe_time_budget_sec", 0) == 1800)
+               _rp.get("probe_every_tasks") == 3
+               and _rp.get("probe_every_sec") == 60
+               and _rp.get("probe_time_budget_sec") == 1800)
     return ok
 
 
@@ -635,11 +640,14 @@ def t_decisions_table():
             ok &= _rec("U12b DDL 执行失败", False, str(e)[:120])
     # 写入侧契约（stream.py）
     st = _read(STREAM_SRC)
-    ok &= _rec("U12d 七类决策点都落库（t1_fail/stall/redraw/directive/"
+    # ★ 2026-11-04（conv 990403 实证）：失败决策的 source 由硬编码 "t1_fail"
+    #   改为按任务键拼接 `"%s_fail" % tkey`（t2 的失败也曾被记成 t1_fail）。
+    ok &= _rec("U12d 七类决策点都落库（<task>_fail/stall/redraw/directive/"
                "health/early_stop/t3_redraw；1 def + 7 调用 = 8 处）",
-               all(('"%s"' % s) in st
-                   for s in ("t1_fail", "stall", "redraw", "directive",
-                             "health", "early_stop", "t3_redraw"))
+               all(lit in st
+                   for lit in ('"%s_fail" % tkey', '"stall"', '"redraw"',
+                               '"directive"', '"health"', '"early_stop"',
+                               '"t3_redraw"'))
                and st.count("_write_decision(") == 8,
                "calls=%d" % st.count("_write_decision("))
     ok &= _rec("U12e ★ signals 归一化两种形状（信号 dict 列表 / basis 列表）",
@@ -661,11 +669,11 @@ def t_zero_change():
     from services import replan_health as RH
     st = _read(STREAM_SRC)
     ok = True
-    ok &= _rec("U13a 三闸默认取 False（运行期默认值，非写死的 True）",
-               '_rp_hp = bool(_rcfg.get("replanning", "health_probe", False))'
-               in st
-               and '_rp_early = bool(_rcfg.get("replanning", "early_stop",'
-               ' False))' in st)
+    # ★ 2026-11-04：字面量随「双路径统一」重构更新 —— 闸值改由 `gates()` 归一后的
+    #   `_rl_gates` 读取（services/replan_loop.py 唯一出处），不再直连 `_rcfg.get`。
+    ok &= _rec("U13a 三闸默认取 False（闸值经 gates() 归一，默认 False）",
+               '_rp_hp = bool(_rl_gates.get("health_probe", False))' in st
+               and '_rp_early = bool(_rl_gates.get("early_stop", False))' in st)
     ok &= _rec("U13b ★ 挂点闸 = 总闸 + (health_probe 或 early_stop)"
                "（两者全关 ⇒ 段整体 no-op）",
                "_RH_OK and _rp_enabled and (_rp_hp or _rp_early)" in st)

@@ -65,8 +65,10 @@ class SessionMixin:
     #   主 Agent 管的是"这个会话由谁执行"（用户选定后长期不变）—— 两者生命周期不同，
     #   混在一个 JSON 里会被 `_merge_slots` 的覆盖语义冲掉。
 
-    #: 标准意图标签（= agents 表 builtin=1 的那批 name，2026-10-29 实测核对）。
-    #: `conversations.intent` 只应存这些值；存主 Agent 名属**字段语义污染**。
+    #: ⚠️ 2026-11-04：本常量已降级为**兜底镜像**，真实来源是 `core.agent_catalog`
+    #:   （读 `agents` 表：`builtin=1 OR stage_order IS NOT NULL`）。
+    #:   保留它只为"DB 不可读时也要能落库"，**不再作为策略来源** ——
+    #:   改前新增内置意图必须手改这里（`tests/test_intent_explainability.py` 专门盯着这个漂移）。
     _STANDARD_INTENT_LABELS = frozenset({
         "requirement_analysis", "design", "impact", "review", "report_generation",
         "knowledge_qa", "chat", "system_mgmt", "zhiyuan_mgmt", "requirement_quality",
@@ -88,15 +90,21 @@ class SessionMixin:
         口径：**`conversations.intent` 只存意图标签**，执行主体由 `main_agent` 承载（已有）。
           传入值不在标准意图集 ⇒ 判为"执行主体" ⇒ 回落到 detected，再不行落 chat。
 
-        ⚠️ 刻意**不查库**：本方法在每轮落库路径上高频调用，查 agents 表会引入
-           额外往返；标准标签集是内置能力名（内置能力不改名），用常量足够。
-           新增内置意图时同步本常量（tests/test_intent_storage_hygiene.py 有断言守护）。
+        ★ 2026-11-04：标签集改由 `core.agent_catalog` 提供（读 `agents` 表，**进程内缓存 60s**）。
+          原注释写「刻意不查库」是怕每轮落库高频往返 —— 缓存后一次查询覆盖 N 秒内全部调用，
+          既保住性能，又消除了「新增内置意图需手改常量」的漂移。
+          DB 不可读时 `agent_catalog` 自动回落本类常量，**行为与改造前逐字节一致**。
         """
+        try:
+            from core.agent_catalog import standard_intents as _std
+            _labels = _std()
+        except Exception:
+            _labels = self._STANDARD_INTENT_LABELS
         _i = str(intent or "").strip()
-        if _i in self._STANDARD_INTENT_LABELS:
+        if _i in _labels:
             return _i
         _d = str(detected or "").strip()
-        if _d in self._STANDARD_INTENT_LABELS:
+        if _d in _labels:
             return _d
         return "chat"
 

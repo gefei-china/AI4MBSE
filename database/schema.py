@@ -1447,6 +1447,28 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_rpd_action "
               "ON replan_decisions(action, created_at)")
 
+    # ── 多方案选型决策（FR-MG-6 收口，2026-11-04）──
+    # 为什么需要：对比卡此前只到「推荐 / 并列 / 数据不足」三态，**人的选型决定没有落点**——
+    #   选了哪个方案、谁选的、当时的得分矩阵长什么样，事后查不到。
+    #   本表把"人的决策"变成可审计记录（append-only，重选不覆盖历史行；
+    #   卡片读最新一行）。
+    # ⚠️ 与"入库为 SysML 版本"的分工：本表只记录**决策**，不产生模型版本；
+    #   "选定方案 → 生成版本入库"若将来要做，应挂 HIL L2 确认后另走 sysml_versions。
+    c.execute("""CREATE TABLE IF NOT EXISTS alternative_selections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER DEFAULT 0,
+        message_id INTEGER DEFAULT 0,       -- 被选定的对比卡所在消息
+        selected_name TEXT NOT NULL,        -- 选定的候选方案名（须在该卡 columns 中）
+        reason TEXT DEFAULT '',             -- 选型理由（人填，可空）
+        decided_by TEXT DEFAULT '未登录',
+        alternatives_snapshot TEXT DEFAULT '{}',  -- 决策时对比矩阵快照（审计：当时看到的推荐/得分）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_altsel_msg "
+              "ON alternative_selections(message_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_altsel_conv "
+              "ON alternative_selections(conversation_id)")
+
     # ── P1 知识引擎双引擎：查询路由统计（图/向量/混合消费观测）──
     c.execute("""CREATE TABLE IF NOT EXISTS query_routing_stats (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

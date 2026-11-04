@@ -421,6 +421,22 @@ class AgentRegistry:
             hit = self.DEFINITIONS.get(key)
             if hit is not None:
                 return hit, True, ""
+            # ★ 2026-11-03：**display_name 兜底解析**（实测缺口修复）。
+            #   背景：主 Agent 的 system_prompt 名册表历史上只给「显示名」，
+            #   甚至明文要求「子任务的 agent 字段必须逐字取自上表 display_name」，
+            #   而本方法只按 `name`（intent 名）解析 ⇒ 填显示名必然落到下面的
+            #   `DEFINITIONS["chat"]` 兜底（**tools=0**）⇒ 子任务照跑照标 done，
+            #   但一个工具都调不了（实测：`架构骨架生成Agent` → 通用问答Agent，工具 0；
+            #   `architecture_skeleton` → 正确，工具 11）。
+            #   ⇒ 加一层**向后兼容的兜底**：name 解析不到时，再按 display_name 反查。
+            #   安全性：实测 agents 表 display_name **无重名、且不与任何 name 冲突**
+            #   （2026-11-03 核对，冲突数 0）⇒ 反查唯一，不会误命中。
+            #   ⚠️ 优先级严格低于 name：name 命中即返回，绝不因 display_name 覆盖既有解析。
+            for _n, _m in self._db_meta.items():
+                if str(_m.get("display_name") or "").strip() == key:
+                    _hit = self._db_defs.get(_n)
+                    if _hit is not None:
+                        return _hit, True, ""
         hint = self._unresolved_hint(key)
         self._note_unresolved(key, hint)
         return self.DEFINITIONS["chat"], False, hint
@@ -444,8 +460,20 @@ class AgentRegistry:
                 if row is not None:
                     st = str((row["status"] if hasattr(row, "keys") else row[1]) or "")
                     nm = str((row["name"] if hasattr(row, "keys") else row[0]) or "")
-                    return ("Agent「%s」存在但 status=%s（非 active，不参与路由）"
-                            "—— 计划仍在派给它，将无法执行其工具" % (nm, st or "?"))
+                    # ★ 2026-11-03：修**自相矛盾的诊断文案**。
+                    #   原写法无条件拼「（非 active，不参与路由）」——
+                    #   当 status 明明是 active 时输出
+                    #   「Agent「architecture_skeleton」存在但 status=active（非 active，不参与路由）」，
+                    #   自己打自己脸，排障时会被它带偏。
+                    #   真相分两种：
+                    #     · status 非 active ⇒ 确实是停用；
+                    #     · status 是 active 却解析不到 ⇒ 名字不是路由键（多为 display_name，
+                    #       或拼写/空格差异）⇒ 明确告诉调用方该改成哪个 name。
+                    if st and st != "active":
+                        return ("Agent「%s」存在但 status=%s（已停用，不参与路由）"
+                                "—— 计划仍在派给它，将无法执行其工具" % (nm, st))
+                    return ("Agent「%s」status=active，但**路由键只认 agents.name（intent 名）**，"
+                            "不认显示名/别写法 —— 请把任务里的 agent 字段改成 `%s`" % (key, nm))
         except Exception:
             pass
         return "Agent「%s」在 agents 表中不存在（拼写错误 / 已被删除 / 曾被改名）" % key

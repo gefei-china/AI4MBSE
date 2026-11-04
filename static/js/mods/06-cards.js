@@ -105,7 +105,12 @@ function procBlocksHtml(ex, mid){
     // V2.7：失败且已有错误面时跳过结果区（错误信息已在 errface 展示，避免重复占位）
     if(!(t.ok===false && t.error)){
       // SRS-GN-CO（2026-09-21）：覆盖性工具结果渲染为行业风格富组件（DOORS 矩阵/Cameo 链/Polarion 风险分级），
-      // 内嵌「预览大图」入口；JSON 截断或非覆盖工具时回退原文本展示
+      // 内嵌「预览大图」入口；JSON 截断或非覆盖工具时回退原文本展示。
+      // ⚠️ 2026-11-03（浏览器 E2E 实测）：多方案对比表**不在这里渲染**。
+      //   原因：执行过程区**默认收起**（`.proc-timeline` display:none），
+      //   实测表格在 DOM 里内容全对，但 rect 全 0 ⇒ **用户看不见**。
+      //   ⇒ 已提升为**消息级独立卡片**（05-markdown.js 调 `altCardFromTools`），
+      //      与编排卡 renderOrchCard 同样处理。此处若再渲染一份会**重复**。
       const covHtml = (typeof covTryCard === 'function') ? covTryCard(t.name, t.result, t.arguments) : null;
       if(covHtml){
         body += `<div class="proc-tool-result" style="border:none;padding:0;">${covHtml}</div>`;
@@ -194,6 +199,38 @@ function renderOrchCard(cd){
       + `<div id="${_bodyId}" style="display:none;font-size:12px;color:var(--mut);margin-top:4px;padding:6px 8px;border-left:2px solid var(--line,#e5e8ee);line-height:1.7;">${_lines.join('<br>')}</div></div>`;
   }
   // 2026-09-29（用户反馈）：AI 输出完成后，最下方平铺的子任务卡片"那一坨"默认收起 ——
+  // ★ 2026-11-04：计划校验 + 重规划（此前只进 SSE 事件与日志，**刷新即丢**，事后无法回答
+  //   "这轮计划合不合规""为什么少了几个任务"）。数据源：
+  //     · card_data.plan_guard → core/plan_guard.py 的 {violations:[{code,severity,message,fix,...}]}
+  //     · card_data.replan     → 本轮重规划动作摘要（含 action=none，"为什么不动"同样要留）
+  //   两段都默认收起，只在一行 chip 里报数量 —— 与既有"汇总 chip + 展开明细"的交互一致。
+  const _pgv = (cd.plan_guard && cd.plan_guard.violations) || [];
+  const _rpv = Array.isArray(cd.replan) ? cd.replan : [];
+  const _ACT_LABEL = {early_stop: '提前收敛', stop: '停止剩余', refine: '上下文精修', none: '无动作'};
+  let planAuditHtml = '';
+  if(_pgv.length || _rpv.length){
+    const _errN = _pgv.filter(v=>v.severity==='error').length;
+    const _acts = _rpv.filter(x=>x.action && x.action!=='none');
+    const _head = [];
+    if(_pgv.length) _head.push(`计划校验 ${_pgv.length} 项${_errN?`（${_errN} 项严重）`:''}`);
+    if(_acts.length) _head.push(`执行中调整 ${_acts.length} 次`);
+    const _id = 'pga-' + Math.random().toString(36).slice(2, 8);
+    const _lines = [];
+    _pgv.slice(0, 4).forEach(v=>{
+      const c = v.severity==='error' ? 'var(--red,#c92a2a)' : 'var(--amb,#c9821a)';
+      _lines.push(`<span style="color:${c};">${v.severity==='error'?'✗':'!'}</span> ${esc(v.message || v.code || '')}`
+        + (v.fix ? `<span style="color:var(--mut);"> → ${esc(v.fix)}</span>` : ''));
+    });
+    if(_pgv.length > 4) _lines.push(`… 其余 ${_pgv.length-4} 项（完整清单见 card_data.plan_guard）`);
+    _rpv.slice(-6).forEach(x=>{
+      const lb = _ACT_LABEL[x.action] || x.action || '';
+      const sk = (x.skipped||[]).length ? `（放弃 ${x.skipped.join('、')}）` : '';
+      _lines.push(`<span style="color:var(--blue-d,#3478f6);">↻ ${esc(lb)}</span>${esc(String(x.reason||'').slice(0,140))}${esc(sk)}`);
+    });
+    planAuditHtml = `<div class="proc-line" style="padding:2px 0;font-size:12.5px;color:var(--mut);">🧭 ${_head.join(' · ')}`
+      + `<span style="cursor:pointer;color:var(--blue-d,#3478f6);margin-left:6px;" onclick="(function(el){var b=document.getElementById('${_id}');if(b){b.style.display=b.style.display==='none'?'block':'none';el.textContent=b.style.display==='none'?'明细 ›':'收起 ▾';}})(this)">明细 ›</span>`
+      + `<div id="${_id}" style="display:none;font-size:12px;color:var(--mut);margin-top:4px;padding:6px 8px;border-left:2px solid var(--line,#e5e8ee);line-height:1.7;">${_lines.join('<br>')}</div></div>`;
+  }
   //   只留一行汇总 chip（🕸 自动编排 · N 个子任务 · 完成 M + 状态徽章），点击展开明细。
   //   此前 rows 默认展开，与已收起的执行过程收口条（V2.6）设计不一致，完成后霸屏。
   return `<div class="rc">
@@ -201,6 +238,7 @@ function renderOrchCard(cd){
     ${partialHint}
     ${budgetHtml}
     ${refHtml}
+    ${planAuditHtml}
     <div class="proc-body orch-detail" style="display:none;">${rows}</div>
   </div>`;
 }
@@ -216,6 +254,11 @@ function orchDetailToggle(chipEl){
 /* ── 富卡片渲染（FR-HIL-1/2 中间结果逐条确认 · FR-CIA · FR-VR/VC 可视化） ── */
 function renderRichCard(type, cd, content) {
   if(!cd) return '';
+  // ⚠️ 2026-11-03（平台化改造）：此处**不再**有"多方案对比卡"分支。
+  //   多方案对比改由**平台工具** `alternatives_score` 的调用结果驱动 ——
+  //   在工具事件流（11-pipeline.js）与历史回放（本文件 procBlocksHtml）里，
+  //   按**工具名**统一渲染（与覆盖性工具 covTryCard 同款机制）。
+  //   ⇒ 管线与本函数都**不认识**"多方案"这个概念 ⇒ 新增/变更该能力**不必改前端路由**。
   // 2026-09-16：impact 卡优先于 sysml_views 路由——影响分析不带「代码/视图/归一校验」
   // （那是 AI 建模能力；历史消息 card_data 里残留的 sysml_views 不再劫持渲染）
   if(type==='card_impact' || (type==='impact' && (cd.impact_nodes||cd.impact_edges))){

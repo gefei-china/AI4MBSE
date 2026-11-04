@@ -396,6 +396,15 @@ function renderMessage(m) {
       if(cd.orchestrated && (cd.plan||[]).length){
         html += renderOrchCard(cd);
       }
+      // ★ 2026-11-03（FR-MG-6）：多方案对比卡**提升为消息级独立卡片**。
+      //   为什么不在执行过程区里（`procBlocksHtml`）：那个区**默认收起**，
+      //   实测浏览器 E2E 抓出：表格在 DOM 里（5维×3方案、内容全对），
+      //   但 `.proc-timeline` 是 display:none ⇒ rect 全 0 ⇒ **用户根本看不见**。
+      //   多方案对比是本轮的**核心产出**，不该藏在过程区里（与编排卡同样的处理）。
+      //   ⚠️ 仍是平台化：判据是「工具结果形状」，不认识"多方案"这个业务概念 ——
+      //   altCardFromTools 遍历 card_data.exec.tools，按**工具名**取结果并渲染。
+      const altHtml = (typeof altCardFromTools === 'function') ? altCardFromTools(cd) : null;
+      if(altHtml) html += `<div class="rc">${altHtml}</div>`;
   }
   // P0-3 会话产物（规范06 产物即界面）：产物卡片网格（图标+标题+类型+操作），≥3 横滑
   if(m.role==='assistant' && cd) {

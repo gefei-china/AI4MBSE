@@ -1346,10 +1346,24 @@ class IntentRouter:
             #   view_expansion 而非 design）。判词：阶段意图**语义上更准**，但
             #   编排按粗类分派执行主体 ⇒ 粒度必须对齐：阶段不明选粗类，明确点名
             #   阶段才选阶段意图。
+            #
+            # ★ 2026-11-04：阶段名单改为从 `agents.stage_order` 读（`core.agent_catalog`，
+            #   带缓存），此前是硬编码 8 个字符串 —— 新增阶段 Agent 要改这里，
+            #   漏改则该阶段永远无法被路由命中（且无任何报错）。
+            _stage_names = None
+            try:
+                from core.agent_catalog import stage_intents as _si
+                _stage_names = _si()
+            except Exception:
+                _stage_names = None
+            if not _stage_names:
+                # DB 不可读兜底（与 agents.stage_order 的 8 个阶段同源同序）
+                _stage_names = ["methodology_resolver", "requirement_structuring",
+                                "architecture_skeleton", "view_expansion",
+                                "model_validation_repair", "trace_verification",
+                                "change_safety_gate", "model_release"]
             _stage_note = (
-                "\n粒度规则：methodology_resolver/requirement_structuring/"
-                "architecture_skeleton/view_expansion/model_validation_repair/"
-                "trace_verification/change_safety_gate/model_release 是 MBSE 建模"
+                "\n粒度规则：" + "/".join(_stage_names) + " 是 MBSE 建模"
                 "流水线的**阶段**意图。用户的建模任务没有明确点名某个阶段时，"
                 "选粗类（design / requirement_analysis / review）；只有明确说出"
                 "该阶段要做的事（如\"生成结构树→架构骨架\"\"追溯矩阵→追溯核验\"）"

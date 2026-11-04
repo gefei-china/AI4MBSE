@@ -52,21 +52,67 @@ def _backfill_probe_marks(conn) -> None:
     _mark("llm_usage_stats", "intent", PROBE_INTENTS, ("probe",))
 
 
+def _backfill_agent_roles(conn, *, code: bool = True, orch: bool = True) -> None:
+    """2026-11-04：把「产码阶段 / 默认编排池」两个角色位回填成**与硬编码时完全一致**的值。
+
+    为什么必须回填而不是"新写入打标就够了"：两列默认 0 ⇒ 存量 Agent 全是 0，
+    各处读表后拿到的集合会变成**空集** —— 产码意图不再被识别为产码、编排默认池为空。
+    那不叫"改了配置"，叫"当场把能力关掉了"（本仓已多次栽在"改了配置≠改了生效值"）。
+
+    取值依据（逐条对齐搬迁前的代码常量，**不做任何"顺手优化"**）：
+      · `is_code_stage`：`stream._CODE_STAGE_INTENTS` 里有 6 个名字，其中
+        `multi_design` / `sysml_view_generation` 在 `agents` 表**根本不存在**（幽灵名，
+        实测 0 行）⇒ 只回填真实存在的 4 个。**不回填幽灵名**：那等于把错误固化进数据。
+      · `is_orch_default`：`_ORCH_AGENTS` 的 6 个名字，全部真实存在。
+
+    幂等：只在 `COALESCE(col,0)=0` 的行上写，且**仅在两列刚建出来时**由调用方触发。
+    名字查不到就跳过并打印，不静默（改名后这份名单会自然失效，届时由人决定是否补）。
+    """
+    CODE_STAGES = ["design", "architecture_skeleton", "view_expansion", "model_validation_repair"]
+    ORCH_DEFAULT = ["requirement_analysis", "design", "impact", "review",
+                    "report_generation", "knowledge_qa"]
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(agents)").fetchall()]
+        if not cols:
+            return
+        for col, names in (("is_code_stage", CODE_STAGES), ("is_orch_default", ORCH_DEFAULT)):
+            if not ((col == "is_code_stage" and code) or (col == "is_orch_default" and orch)):
+                continue
+            if col not in cols:
+                continue
+            done, missing = 0, []
+            for n in names:
+                cur = conn.execute(
+                    f"UPDATE agents SET {col}=1 WHERE name=? AND COALESCE({col},0)=0", (n,))
+                if cur.rowcount:
+                    done += cur.rowcount
+                elif not conn.execute("SELECT 1 FROM agents WHERE name=?", (n,)).fetchone():
+                    missing.append(n)
+            print(f"[init_db] 迁移: agents.{col} 回填 {done} 行"
+                  + (f"（名单中 {len(missing)} 个名字在库中不存在，已跳过：{missing}）" if missing else ""))
+    except Exception as e:  # 回填失败不阻断启动（列已在，读取侧有兜底默认）
+        print(f"[init_db] 迁移: agents 角色位回填失败（不阻断启动）：{e}")
+
+
 def _migrate_columns(conn):
     """幂等列迁移：CREATE TABLE IF NOT EXISTS 不会给已有表加列，
     P0-1 引入 project_id 后需对老库补列并回填默认项目（兼容既有数据）。
     """
-    def _add(table: str, column: str, ddl: str) -> None:
+    def _add(table: str, column: str, ddl: str) -> bool:
+        """补列。**返回是否真的新建了列** —— 调用方据此决定要不要做一次性回填
+        （只在"列刚建出来"时回填，避免把管理员后来的显式配置覆盖回去）。"""
         # 表尚未创建（由后续建表迁移补齐，含该列）→ 跳过列迁移（PRAGMA 对不存在表返回空列表，需先查 sqlite_master）
         exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
         if not exists:
-            return
+            return False
         cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
         if column not in cols:
             # 列名加反引号：规避 SQLite 保留字（如 references）导致的 ALTER 语法错误
             conn.execute(f"ALTER TABLE {table} ADD COLUMN `{column}` {ddl}")
             print(f"[init_db] 迁移: {table} 增加列 {column}")
+            return True
+        return False
 
     _add("conversations", "project_id", "TEXT DEFAULT ''")
     _add("entities", "project_id", "TEXT DEFAULT ''")
@@ -443,6 +489,32 @@ def _migrate_columns(conn):
     _add("agents", "max_concurrency", "INTEGER DEFAULT 2")                # 最大并发任务数
     _add("agents", "version", "TEXT DEFAULT 'v1.0.0'")                    # Agent 语义版本（老库已存在 version 则跳过）
     _add("agents", "protocol_range", "TEXT DEFAULT '>=1,<3'")             # A2A 协议版本范围
+    # ── 2026-11-04：Agent 的**流水线角色位**（把散在代码里的阶段清单收敛成表字段）──
+    #
+    # 背景：同一份「哪些 Agent 属于哪个阶段集合」曾硬编码在 4 处代码常量里
+    #   （`session._STANDARD_INTENT_LABELS` / `stream._CODE_STAGE_INTENTS` /
+    #    `intent.py` 的粒度规则提示词 / `_ORCH_AGENTS` 默认池），
+    #   新增一个阶段 Agent 要改 4 个文件。与 `register_sysml_check_tools.py` 文件头的
+    #   纪律相反（"策略写在 DB 里则改文本即生效"）。
+    #
+    # 收敛口径：**能由现有字段推导的就不加列**，只补推导不出来的两个：
+    #   · `is_code_stage` —— 产码阶段。**不能**用"绑了 sysml_v2_validate"推导：
+    #       实测 `design` 靠"正文里输出 ```sysml 代码块"产码，未绑任何 sysml 工具；
+    #       而 `review`/`多方案生成` 绑了 validate 却不是产码阶段。工具绑定 ≠ 产码身份。
+    #   · `is_orch_default` —— 默认编排池成员（无团队模式时的兜底候选）。
+    #       **不能**用 `builtin=1 AND agent_role='sub'` 推导：那会多出 `chat`
+    #       （兜底问答，不该被派子任务）与 `requirement_quality`，改变既有编排行为。
+    #
+    # 另两个集合复用**既有**事实，不加列：
+    #   · 建模阶段意图 = `stage_order IS NOT NULL`（该列 2026-10 已由
+    #     `tools/migrate_v5_pipeline_nodes.py` 建好并填了 8 个阶段）；
+    #   · 标准意图标签 = `builtin=1 OR stage_order IS NOT NULL`。
+    _new_code = _add("agents", "is_code_stage", "INTEGER DEFAULT 0")       # 1=产码阶段（视图/骨架/修复）
+    _new_orch = _add("agents", "is_orch_default", "INTEGER DEFAULT 0")     # 1=默认编排池成员
+    # ⚠️ **只在新列刚建出来时回填**：否则管理员在后台取消勾选后，下次启动会被回填逻辑重新打开
+    #    （本仓已因"改了配置≠改了生效值"栽过，反向的"改了配置被悄悄改回来"同样不能有）。
+    if _new_code or _new_orch:
+        _backfill_agent_roles(conn, code=_new_code, orch=_new_orch)
     # ── 架构优化：子任务执行快照（负载 / 分派打分 / 结构化摘要 / 重试 / token 统计）──
     _add("agent_tasks", "load_snapshot", "TEXT DEFAULT '{}'")             # 分派时各 Agent 负载快照
     _add("agent_tasks", "assign_score", "REAL DEFAULT 0")                 # 分派打分

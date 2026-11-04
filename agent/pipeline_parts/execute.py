@@ -47,7 +47,7 @@ def _repair_tool_subset(tools_def):
 class ExecuteMixin:
     """主执行入口 execute（非流式全流程）。"""
 
-    def execute(self, user_input, conversation_id, branch="dev", provider_id=None, attachments=None, dry_run=False, forced_intent=None, skill_name=None, user=None, tools_whitelist=None, team=None, scope_id=None, scope_ids=None, scope=None, overrides=None):
+    def execute(self, user_input, conversation_id, branch="dev", provider_id=None, attachments=None, dry_run=False, forced_intent=None, skill_name=None, user=None, tools_whitelist=None, team=None, scope_id=None, scope_ids=None, scope=None, overrides=None, max_tool_rounds=None):
         """Execute the full agent pipeline.
 
         attachments: V2.3 会话窗口富输入——[{url, filename, size, is_image}]，落库 user 消息 attachments JSON。
@@ -58,6 +58,10 @@ class ExecuteMixin:
         非空时 function calling 只注入白名单工具，且 _exec_tool_call 拒绝白名单外调用。
         team: 团队模式（AI 会话页「工作流」下拉）——主 Agent 团队负责人统一调度：
         意图识别/任务拆分/计划制定/任务分派（内容整合输出）。
+        max_tool_rounds: 2026-11-04（react 方案 A）——本次执行的**工具轮上限覆盖**。
+        只在「工具循环绝对硬上限」这一处生效（不改变失败轮预算）；None ⇒ 读配置
+        `agent.max_tool_rounds`（默认 100），**默认行为逐字节不变**。
+        用途：`task_type=react` 的子任务用它把轮次收窄成"受限多步求解"。
         overrides: 会话入口「本轮临时调整」——{"thinking_level","context_window","max_tokens","temperature"}，
         只作用于本次调用（登记到线程局部，LLM 层读取），**不写 DB**。空/None ⇒ 零行为漂移。
         """
@@ -605,6 +609,9 @@ class ExecuteMixin:
             #     · `max_tool_rounds`   → **绝对硬上限**（防死循环），6 放宽到 12
             #     · `max_failed_rounds` → **失败轮预算**，只有失败轮才扣（默认 3）
             #   成功轮再多也不扣预算 ⇒ 正常推进不被限制。
+            # 2026-11-04（react 方案 A）：调用方显式给的轮次覆盖。
+            # 先存下来再进 try —— 否则 except 分支把它一起覆盖成 100，覆盖静默失效。
+            _round_override = max_tool_rounds
             try:
                 from core import config as _cfg
                 # ★ 2026-10-17（米爸反馈1）：12 → 100（与 stream.py 同步，一致性门禁会判）。
@@ -618,6 +625,12 @@ class ExecuteMixin:
             except Exception:
                 max_tool_rounds, max_failed_rounds = 100, 3
                 _lg_budget, _lg_retries, _lg_retry_wait = 300000, 3, 30.0
+            # 覆盖放在 try/except **之后**：无论配置读取成功与否都要生效。
+            if _round_override:
+                try:
+                    max_tool_rounds = max(1, int(_round_override))
+                except (TypeError, ValueError):
+                    pass
             # 2026-10-04：接入统一护栏（与编排路径同源，见 agent/loop_guard.py）。
             # 原先这条路径只有轮次上限/token 上限/重复检测/工具超时，
             # 而编排路径有前三者 —— 同一套 ReAct 语义的两处实现护栏不对称。
@@ -1107,21 +1120,15 @@ class ExecuteMixin:
                 self._tool_sysml_docs = []      # 已登记，防重复归档
                 self._tool_doc_pages = {}       # 分页累积状态同步清零
                 # CIA：变更影响分析记录（FR-CIA-3 每次分析结果快照落库，可追溯）
-                if intent == "impact":
-                    try:
-                        from repositories.impact_repo import ImpactRepo
-                        _cd = json.loads(card_data)
-                        ImpactRepo(conn).create_analysis(
-                            title=(_cd.get("change_source") or {}).get("name", user_input[:60]),
-                            change_source=(_cd.get("change_source") or {}).get("name", ""),
-                            params=_cd.get("params", {}),
-                            result=_cd,
-                            status="ok" if _cd.get("ok") is not False else "error",
-                            error_code=_cd.get("code", ""),
-                            conversation_id=conversation_id, message_id=msg_id,
-                            created_by=audit_user(user))
-                    except Exception:
-                        pass
+                # ★ 2026-11-04：改调**共享实现** `_archive_impact_analysis`，删掉此处的内联副本。
+                #   为什么（两处都是真问题）：
+                #   ① 内联版只在 `intent == "impact"` 时归档 ⇒ **CIA 错误引导卡**
+                #      （`{ok: false, code: ...}`，intent 可能不是 impact）永远不入库，
+                #      而共享版判据是 `intent=='impact' or ok is not None or impact_nodes is not None`
+                #      —— 失败引导同样要可追溯（FR-CIA-3 原文）。
+                #   ② 同一份写库逻辑存在两份，改一处必漏另一处（本仓反复出现的病）。
+                _archive_impact_analysis(conn, conversation_id, msg_id, card_data, user_input,
+                                         created_by=audit_user(user) if isinstance(user, dict) else "未登录")
 
                 # Update conversation
                 conn.execute(

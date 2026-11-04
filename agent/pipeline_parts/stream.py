@@ -50,7 +50,7 @@ def _gen_stage_name(intent, agent_def) -> str:
     任一命中 -> 「生成与校验」；否则 -> 「生成汇总」。
     """
     try:
-        if str(intent or "") in _CODE_STAGE_INTENTS:
+        if str(intent or "") in _code_stages():
             return "生成与校验"
         from agent.pipeline_parts.prompt import PromptMixin as _PM
         if agent_def is not None and _PM._is_v2_code_agent(agent_def):
@@ -60,10 +60,26 @@ def _gen_stage_name(intent, agent_def) -> str:
     return "生成汇总"
 
 
-#: 产码意图白名单（编排多阶段合成 intent 时的兜底；细则以 2) 的绑定判据为准）
+def _code_stages() -> set:
+    """产码阶段集合。真实来源 `agents.is_code_stage`（`core.agent_catalog`，带缓存）；
+    读不到回落 `_CODE_STAGE_INTENTS` 兜底常量。"""
+    try:
+        from core.agent_catalog import code_stages
+        got = code_stages()
+        if got:
+            return set(got)
+    except Exception:
+        pass
+    return set(_CODE_STAGE_INTENTS)
+
+
+#: 产码意图**兜底**清单（编排多阶段合成 intent 时的兜底；细则以 `_is_v2_code_agent` 的绑定判据为准）
+#: ⚠️ 2026-11-04：已降级为兜底，真实来源是 `agents.is_code_stage`。
+#:   同时**清掉了 2 个幽灵名**：`multi_design` 与 `sysml_view_generation` 在 `agents` 表
+#:   根本不存在（实测 0 行）—— 留着它们等于让"产码判定"依赖两个不存在的 Agent。
 _CODE_STAGE_INTENTS = {
     "design", "architecture_skeleton", "view_expansion",
-    "model_validation_repair", "multi_design", "sysml_view_generation",
+    "model_validation_repair",
 }
 
 
@@ -517,6 +533,11 @@ class StreamMixin:
                           "tasks": len(plan)})
 
         # 2) 降级：计划失败 → 单 Agent 流式直行
+        # ★ 2026-11-04：两个审计字段必须在**分支之前**初始化 —— 降级分支（plan 为空 ⇒ 单 Agent
+        #   直行）不经过建计划段；只在 else 里初始化会让卡片组装 UnboundLocalError
+        #   （与 `_gate_gaps` 同一类地雷：变量只在某条分支赋值）。
+        _plan_guard_info = None
+        _replan_events: list = []
         if not plan:
             direct = "requirement_analysis"
             try:
@@ -588,6 +609,51 @@ class StreamMixin:
                     #   **明确终止且可在库里查到原因**（status=blocked + error），而不是静默消失。
                     #   降级路径与门禁脚本可用 strict=False 显式取旧行为。
                     try:
+                        # ── 计划**语义**校验（2026-11-04，与 `_planner_core` 同一校验器）──
+                        #   ⚠️ 此前本校验只接在非流式 `_planner_core`，而**流式主路径不走它**
+                        #   （`_stream_orchestrated_flow` 自己建计划）—— 于是"一处接线覆盖四路"
+                        #   是假的：真实用户的 SSE 会话从未校验过阶段序/完备性。
+                        #   本段补齐：默认 mode=warn 只让违规**可见**（progress 事件 + 日志）；
+                        #   mode=block 时抛 ValueError，走下方既有"非法计划早退"通道
+                        #   （落 blocked 行 + span 收口，不静默）。
+                        try:
+                            from core.plan_guard import (
+                                load_pipeline_config as _load_pg,
+                                mentioned_from_stage_hint as _mentioned_pg,
+                                render_violations as _render_pg,
+                                validate_pipeline_plan as _validate_pg,
+                            )
+                            from task_queue import resolve_agent_name as _resolve_pg
+                            _pgcfg = _load_pg(conn)
+                            _pg = _validate_pg(
+                                plan,
+                                stage_order=_pgcfg.get("stage_order"),
+                                required_stages=_pgcfg.get("required_stages"),
+                                mentioned_stages=_mentioned_pg(stage_hint),
+                                resolve=lambda _n: _resolve_pg(conn, _n),
+                                mode=_pgcfg.get("mode"),
+                            )
+                            _plan_guard_info = _pg      # ★ 进 card_data（前端/审计可见）
+                            if _pg.get("violations"):
+                                _pgmsg = _render_pg(_pg["violations"])
+                                import logging as _lgpg
+                                _lgpg.getLogger("mbse.planner").warning(
+                                    "计划语义校验发现 %d 项问题（mode=%s）：%s",
+                                    len(_pg["violations"]), _pg.get("mode"), _pgmsg)
+                                yield {"type": "reasoning", "kind": "progress",
+                                       "delta": "（计划校验）%s" % _pgmsg[:300]}
+                            if _pg.get("blocked"):
+                                _pgerrs = [v for v in _pg.get("violations") or []
+                                           if v.get("severity") == "error"]
+                                raise ValueError("计划语义校验未通过（mode=block）："
+                                                 + _render_pg(_pgerrs))
+                        except ValueError:
+                            raise            # block 档要真的终止（交给下方 except 收口）
+                        except Exception as _pge:
+                            # 兜底必须留痕：校验器自身崩了，不能变成"静默无问题"
+                            import logging as _lgpg2
+                            _lgpg2.getLogger("mbse.planner").warning(
+                                "计划语义校验异常（已跳过，不影响执行）：%s", str(_pge)[:200])
                         TaskQueue.create_plan(conn, run_id, plan, assigned_by="session",
                                               conversation_id=int(conversation_id or 0))
                     except ValueError as _vde:
@@ -676,8 +742,19 @@ class StreamMixin:
             #   2026-10-21 同批修掉 _worker 的 _fc 同型历史 hit（B1-6 遗留）。
             try:
                 from core import config as _rcfg
-                _retry_once = bool(_rcfg.get("replanning", "retry_once", True))
+                # ★ 2026-11-04：**21 个 replanning 闸门统一从
+                #   `services.replan_loop.gates()` 读**（唯一出处，P1~P4 共用）。
+                #   为什么改：这些键此前在此处内联读一遍，而非流式路径
+                #   （`workflows/planner.py::_planner_core`）一行都不读 ⇒
+                #   「新增一个闸门键时必有一边漏读」。本仓已因
+                #   「`AgentRegistry.resolve` 与 `resolve_agent_name` 口径分裂」付过代价。
+                #   变量名保持不变（下游大量引用），只是改由单一出处赋值；
+                #   读配置失败 ⇒ 回落 GATE_DEFAULTS（全关/保守值），与旧兜底同口径。
+                from services.replan_loop import gates as _replan_gates, llm_actions as _replan_acts
+                _rl_gates = _replan_gates(_rcfg)
+                _retry_once = bool(_rl_gates.get("retry_once", True))
             except Exception:
+                _rl_gates = {}
                 _retry_once = True
             _t1_retried = set()          # 本次编排已 DAG 级补跑过的 task_key
             # ★ P2：重画尝试台账 `{key: [失败指纹, ...]}`（进程内）。
@@ -709,19 +786,15 @@ class StreamMixin:
             except Exception:
                 _RR_OK = False
             _redraw_rounds = 0
-            try:
-                _rp_enabled = bool(_rcfg.get("replanning", "enabled", False))
-                _rp_on_stall = bool(_rcfg.get("replanning", "redraw_on_stall", True))
-                _rp_light = bool(_rcfg.get("replanning", "redraw_light", True))
-                _rp_heavy = bool(_rcfg.get("replanning", "heavy_redraw", False))
-                _rp_skip = bool(_rcfg.get("replanning", "skip_leaf", False))
-                _rp_noprog = bool(_rcfg.get("replanning", "no_progress_stop", True))
-                _rp_rounds = int(_rcfg.get("replanning", "max_redraw_rounds", 1) or 1)
-                _rp_ratio = float(_rcfg.get("replanning", "redraw_expand_ratio", 1.5) or 1.5)
-            except Exception:
-                _rp_enabled = _rp_heavy = _rp_skip = False
-                _rp_light = _rp_on_stall = _rp_noprog = True
-                _rp_rounds, _rp_ratio = 1, 1.5
+            # 闸门已在上面（`_rl_gates`）一次性读出，此处不再重复读取。
+            _rp_enabled = bool(_rl_gates.get("enabled", False))
+            _rp_on_stall = bool(_rl_gates.get("redraw_on_stall", True))
+            _rp_light = bool(_rl_gates.get("redraw_light", True))
+            _rp_heavy = bool(_rl_gates.get("heavy_redraw", False))
+            _rp_skip = bool(_rl_gates.get("skip_leaf", False))
+            _rp_noprog = bool(_rl_gates.get("no_progress_stop", True))
+            _rp_rounds = int(_rl_gates.get("max_redraw_rounds", 1) or 1)
+            _rp_ratio = float(_rl_gates.get("redraw_expand_ratio", 1.5) or 1.5)
             # ★ P3 replanning（2026-10-21，v2 §4.7/§4.8）：DAG 级用户指令 + 确认卡。
             #   可选依赖同样走「导入成功标志位」（同 P1/P2 的 _RS_OK/_RR_OK 纪律）。
             #   `_directive_seen` = 本次编排已评估过的指令指纹（进程内）：
@@ -739,15 +812,11 @@ class StreamMixin:
             except Exception:
                 _RCFM_OK = False
             _directive_seen = set()
-            try:
-                _rp_uidir = bool(_rcfg.get("replanning", "user_directive", False))
-                _rp_confirm = bool(_rcfg.get("replanning", "user_confirm_redraw", False))
-                _rp_cttl = int(_rcfg.get("replanning", "confirm_ttl_sec", 60) or 60)
-                _rp_touch = int(_rcfg.get("replanning", "directive_max_touch", 3) or 3)
-                _rp_llm = bool(_rcfg.get("replanning", "llm_redraw", False))
-            except Exception:
-                _rp_uidir = _rp_confirm = _rp_llm = False
-                _rp_cttl, _rp_touch = 60, 3
+            _rp_uidir = bool(_rl_gates.get("user_directive", False))
+            _rp_confirm = bool(_rl_gates.get("user_confirm_redraw", False))
+            _rp_cttl = int(_rl_gates.get("confirm_ttl_sec", 60) or 60)
+            _rp_touch = int(_rl_gates.get("directive_max_touch", 3) or 3)
+            _rp_llm = bool(_rl_gates.get("llm_redraw", False))
             # ★ P4 replanning（2026-10-21，v2 §4.4）：健康巡检 + 提前收敛 + 三动作。
             #   可选依赖同款「导入成功标志位」纪律；配置读取失败一律取**保守值**
             #   （health_probe/early_stop/llm_actions 全关或锁 replace）——
@@ -760,20 +829,17 @@ class StreamMixin:
                 _RH_OK = True
             except Exception:
                 _RH_OK = False           # 巡检模块不可用 ⇒ 整体退化为 P3 行为
+            _rp_hp = bool(_rl_gates.get("health_probe", False))
+            _rp_hpllm = bool(_rl_gates.get("health_probe_llm", False))
+            _rp_early = bool(_rl_gates.get("early_stop", False))
+            # ⚠️ 不再写 `int(x or 3)`：0 是**合法值**（=「按任务数判永不触发」），
+            #    被 `or` 吞成 3 就等于「显式配置静默失效」。判空收在 gates() 里。
+            _rp_pe_tasks = int(_rl_gates.get("probe_every_tasks", 3) or 0)
+            _rp_pe_sec = int(_rl_gates.get("probe_every_sec", 60) or 0)
+            _rp_pe_budget = int(_rl_gates.get("probe_time_budget_sec", 1800) or 0)
             try:
-                _rp_hp = bool(_rcfg.get("replanning", "health_probe", False))
-                _rp_hpllm = bool(_rcfg.get("replanning", "health_probe_llm", False))
-                _rp_early = bool(_rcfg.get("replanning", "early_stop", False))
-                _rp_pe_tasks = int(_rcfg.get("replanning", "probe_every_tasks", 3) or 3)
-                _rp_pe_sec = int(_rcfg.get("replanning", "probe_every_sec", 60) or 60)
-                _rp_pe_budget = int(_rcfg.get("replanning", "probe_time_budget_sec", 1800) or 0)
-                _rp_llm_acts = tuple(
-                    x.strip().lower() for x in
-                    str(_rcfg.get("replanning", "llm_actions", "replace") or "replace")
-                    .split(",") if x.strip()) or ("replace",)
+                _rp_llm_acts = _replan_acts(_rl_gates)
             except Exception:
-                _rp_hp = _rp_hpllm = _rp_early = False
-                _rp_pe_tasks, _rp_pe_sec, _rp_pe_budget = 3, 60, 1800
                 _rp_llm_acts = ("replace",)
             _hp_done_mark = 0              # 上次巡检时的 done_items 水位
             _hp_last_ts = _t.time()        # 上次巡检时刻（M4/节奏用）
@@ -1010,6 +1076,7 @@ class StreamMixin:
                     )
                 skill_name2 = cfg.get("skill") or None
                 evs, sub_res, sub_has_token = [], "", False
+                _sub_err = ""   # ★ 2026-11-04：error 事件的真实死因（原为永久空串）
                 tok_used = 0
                 _t0 = _t.time()
 
@@ -1131,6 +1198,18 @@ class StreamMixin:
                                     _tc = _m.get("token_count")
                                     if isinstance(_tc, (int, float)) and _tc > 0:
                                         tok_used = int(_tc)
+                            # ★ 2026-11-04（conv 990403 完整一轮真机实证）：**error 事件必须接住**。
+                            #   execute_stream 顶层 except 会把异常转成
+                            #   `{"type":"error","message":...}`（约 7119 行）而非抛出 ——
+                            #   此前本循环不认识这个类型 ⇒ 事件被静默丢弃 ⇒
+                            #   子任务以 ok=False + **空错误** 收场，DB 里只剩兜底文案
+                            #   「子任务未产生输出」（真机 t2 实测：真实死因是
+                            #   "LLM API 400: tool_calls 配对缺失"，完全不可见）。
+                            #   修法：捕获 → 记 _sub_err → 随返回值第 6 位带出
+                            #   （失败分类器 / replan 决策 / DB error 列终于拿到真因）。
+                            elif _et == "error":
+                                _sub_err = str(ev.get("message") or "子任务流异常终止")
+                                evs.append(dict(ev))
                         ok = bool(sub_res.strip()) or sub_has_token
                         if not tok_used:
                             tok_used = max(len(str(sub_res)) // 2, 0)   # 估算兜底：len(输出文本)//2
@@ -1364,7 +1443,7 @@ class StreamMixin:
                                     "task_result:%s" % tkey, sub_res, int(conversation_id or 0))
                             except Exception:
                                 _off_id = 0      # 落库失败不阻断编排（退化为纯摘要口径）
-                        return tkey, ttitle, ok, sub_res, evs, "", int((_t.time() - _t0) * 1000), tok_used, _summary_proto, _off_id
+                        return tkey, ttitle, ok, sub_res, evs, _sub_err, int((_t.time() - _t0) * 1000), tok_used, _summary_proto, _off_id
                     except Exception as e:
                         return tkey, ttitle, False, "", [], str(e)[:150], int((_t.time() - _t0) * 1000), 0, None, 0
                     finally:
@@ -1950,6 +2029,13 @@ class StreamMixin:
                                 # 取消剩余非 required 任务 + 轨迹记账（前端可见）
                                 _es_cancel = [str(k) for k in
                                               (_es_dec.get("cancel_keys") or [])]
+                                # ★ 进 card_data（"为什么少跑了几个任务"要能事后查）
+                                _replan_events.append({
+                                    "action": "early_stop",
+                                    "reason": (_es_dec.get("reason") or "")[:300],
+                                    "skipped": list(_es_cancel)[:8]})
+                                if len(_replan_events) > 8:
+                                    del _replan_events[:-8]
                                 _early_stopped = True
                                 _es_cancel_keys = list(_es_cancel)
                                 for _tk4 in _hp_tasks:
@@ -2035,7 +2121,9 @@ class StreamMixin:
                                     _hp_verdict = None
                             _hp_dec = _rh.health_probe(
                                 done_items, _hp_tasks, enabled=True,
-                                window=_rp_pe_tasks,
+                                # ⚠️ 窗口 ≠ 节奏：M1 要求样本 ≥3，若把 window 绑成
+                                #   probe_every_tasks，设成 1 时 M1 永不触发（refine 静默失效）。
+                                window=max(int(_rp_pe_tasks or 0), _rh.M1_MIN_WINDOW),
                                 latencies_ms=list(_done_lats[-max(3, _rp_pe_tasks):]),
                                 remaining_tasks=_hp_remain,
                                 budget_left_sec=_hp_left,
@@ -2057,6 +2145,12 @@ class StreamMixin:
                                     pass
                             _write_decision("health", _hp_dec)
                             _hp_act = str(_hp_dec.get("action") or "none")
+                            # ★ 进 card_data：`none` 也要留（"为什么没动"与"为什么动"同等重要）
+                            _replan_events.append({
+                                "action": _hp_act,
+                                "reason": (_hp_dec.get("reason") or "")[:300]})
+                            if len(_replan_events) > 8:
+                                del _replan_events[:-8]
                             if _hp_act == "stop":
                                 # M4 ⇒ S9 语义：该停，不重画。block 剩余任务后
                                 # break（与预算护栏同口径，汇总如实记 partial）。
@@ -2114,7 +2208,10 @@ class StreamMixin:
                                     continue
                     except Exception:
                         pass
-                ready = TaskQueue.ready_tasks(conn, run_id)
+                # ★ 早停开时：同批里若既有必需又有非必需任务，本轮**只派必需任务**
+                #   （否则可选任务与最后一个必需任务同批跑完 ⇒ 早停永远无事可做）。
+                #   关早停时 `defer_optional=False` ⇒ 行为逐字节不变。
+                ready = TaskQueue.ready_tasks(conn, run_id, defer_optional=bool(_rp_early))
                 # ★ 2026-10-29（P0-1）：**派发前剔除 Agent 不可解析的任务**（第三道防线）。
                 #
                 #   为什么必须在派发处拦：`create_plan` 已在校验（第二道），但历史计划、
@@ -2621,7 +2718,10 @@ class StreamMixin:
                                                     _rsid, "ok",
                                                     _rs.decision_meta(_dec, latency_ms=_dec_ms))
                                         # ★ P4：决策记录落 replan_decisions（与 span 同点）
-                                        _write_decision("t1_fail", _dec,
+                                        # ★ 2026-11-04（conv 990403 实证）：source 不能硬编码
+                                        #   "t1_fail" —— t2 的失败决策也被记成 t1_fail，
+                                        #   审计里看不出"哪个任务在反复失败"。按任务键拼接。
+                                        _write_decision("%s_fail" % tkey, _dec,
                                                         latency_ms=_dec_ms)
                                     except Exception:
                                         pass
@@ -3568,6 +3668,15 @@ class StreamMixin:
             _ck_fin(conn, run_id, _final_phase)
         except Exception:
             pass
+        # ★ 2026-11-04 修（**既有缺陷**，非本轮引入）：`_gate_gaps` 只在"有成功子任务"的
+        #   分支里赋值 —— 本轮**零成功子任务**（计划为空走降级 / 全部子任务失败 /
+        #   提前收敛后无交付）时该名字根本不存在 ⇒ 卡片组装抛 UnboundLocalError，
+        #   整轮以 error 收尾。实测会话 10028：计划为空走降级，用户看到"编排执行失败"，
+        #   其实只是没有交付物可汇总（而汇总/徽章本该照常渲染）。
+        try:
+            _gate_gaps
+        except NameError:
+            _gate_gaps = []
         card_data = json.dumps({
             "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
@@ -3591,6 +3700,9 @@ class StreamMixin:
             "run_budget": {"used_tokens": run_tokens, "budget": run_token_budget,
                            "hit": budget_hit, "executed": executed_count, "max_tasks": _max_tasks},
             "plan": orch_tasks, "sysml_views": sysml_views,
+            # ★ 2026-11-04：计划校验 + 重规划摘要（此前只进事件/日志，刷新即丢）
+            "plan_guard": _plan_guard_info,
+            "replan": _replan_events,
             "source": "none", "confidence": 0, "graph_count": 0, "vector_count": 0,
             "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
             "saved_flow_id": saved_flow_id,   # P0-1：编排沉淀的工作流 id（前端「另存为流程」）
@@ -5885,6 +5997,19 @@ class StreamMixin:
                         #      ⇒ 下一轮 LLM 看到**同一份上下文** ⇒ 换措辞再问一遍（真库实测
                         #      3s/次、最多烧到 max_tool_rounds=100 轮，每轮还多一条工具留痕）。
                         if _clarify_req:
+                            break
+                        # ★ 2026-11-04（conv 990403 完整一轮真机实证）：confirm_required
+                        #   **同样必须轮级 break** —— 此前只有内层 for 的 break，
+                        #   轮级回填 `if results: messages.append(pmsg)` 仍会执行：
+                        #   pmsg 带确认工具的 tool_call 但没有配对 tool_result ⇒
+                        #   下一轮探测 **HTTP 400**（tool_calls 必须跟齐 tool 消息），
+                        #   且 messages 已永久带毒 ⇒ 后续**每一次**调用都 400 ⇒
+                        #   子任务零产出失败（真机：todo_write+save_artifact 同轮，
+                        #   save_artifact 命中写前确认闸，t2 两次尝试都死在下一轮探测）。
+                        #   为什么以前没暴露：确认工具独占一轮时 results 为空 ⇒
+                        #   `if results:` 整块跳过 ⇒ 无悬空 ⇒ 侥幸走到 6216 的确认卡。
+                        #   修法与 clarify 同构：轮级 break，直接落到下方确认卡收口。
+                        if _hil_confirm_req:
                             break
                         # ★ 2026-11-02（无进展护闸）：连续零新增 ⇒ **收尾**（不做无意义的下轮）。
                         #   ⚠️ 与 `_clarify_req` 的 break 不同：那个 break 是为了**不补 skip**

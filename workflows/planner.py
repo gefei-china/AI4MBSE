@@ -1,11 +1,22 @@
 """FlowPlannerMixin：编排规划（_summarize_plan/run_planner_plan/_planner_core/_run_task/_delegate_result/_score_bid）。"""
 import json
+import logging
 import re
 import time
 import uuid
 from datetime import datetime
 from typing import Any, Optional
 from .tools import ToolExecutor
+
+# ★ 2026-11-04：计划**语义**校验（阶段序/完备性/覆盖性/路由声明）。
+#   与 `TaskQueue.validate_plan`（结构层：环/重复 key）**正交**，两层都要有：
+#   结构层答"能不能跑"，本层答"跑得对不对"。详见 core/plan_guard.py 模块头。
+from core.plan_guard import (
+    load_pipeline_config,
+    mentioned_from_stage_hint,
+    render_violations,
+    validate_pipeline_plan,
+)
 
 
 def _dep_closure(dep_keys: set, plan: list, _guard: int = 32) -> set:
@@ -483,6 +494,62 @@ class FlowPlannerMixin:
                 elif row["status"] != "published":
                     warnings.append(f"技能 {sk} 未发布（任务 {t.get('key')}）")
 
+        # 3b) 计划**语义**校验（2026-11-04）：阶段序 / 完备性 / 覆盖性 / 路由声明。
+        #
+        #     ⚠️ 与 `TaskQueue.validate_plan`（结构层：空 key/重复 key/自环/环）**不重叠**。
+        #        结构层在 `create_plan` 内跑并抛异常；本层只做语义，且**默认不阻断**。
+        #
+        #     为什么必须有这一层：`agents.id=160` 的 prompt 写着「阶段顺序固定…不得跳步、
+        #     不得倒序」，但全仓没有一处校验 —— 模型真倒序了只会按它给的 deps 执行。
+        #     与「名册漂移导致派给零工具 Agent 却照标 done」是同一类病：**约束只在提示词里**。
+        #
+        #     默认 mode=warn（读 `generate_rules.pipeline_guard_mode`）⇒ 只让违规**可见**；
+        #     要收紧成拦截，改那条规则为 `block` 即可，**不必改代码**。
+        _plan_guard = None
+        _pg_blocked = False
+        try:
+            from task_queue import resolve_agent_name as _resolve_agent
+            _pgcfg = load_pipeline_config(conn)
+            _plan_guard = validate_pipeline_plan(
+                plan,
+                stage_order=_pgcfg.get("stage_order"),
+                required_stages=_pgcfg.get("required_stages"),
+                mentioned_stages=mentioned_from_stage_hint(stage_hint),
+                # 传解析器 ⇒ 才会校验路由；不传就跳过（不猜）
+                resolve=lambda _n: _resolve_agent(conn, _n),
+                mode=_pgcfg.get("mode"),
+            )
+            _plan_guard["config_source"] = _pgcfg.get("source")
+            if _plan_guard.get("violations"):
+                _pg_msg = render_violations(_plan_guard["violations"])
+                warnings.append("计划校验：" + _pg_msg)
+                logging.getLogger("mbse.planner").warning(
+                    "计划语义校验发现 %d 项问题（mode=%s）：%s",
+                    len(_plan_guard["violations"]), _plan_guard.get("mode"), _pg_msg)
+            _pg_blocked = bool(_plan_guard.get("blocked"))
+        except Exception as _e:
+            # 兜底必须留痕：校验器自身崩了，绝不能变成"静默无问题"
+            logging.getLogger("mbse.planner").warning(
+                "计划语义校验异常（已跳过，不影响执行）：%s", str(_e)[:200])
+            warnings.append("计划校验器异常，已跳过：%s" % str(_e)[:120])
+
+        if _pg_blocked:
+            _errs = [v for v in (_plan_guard or {}).get("violations", [])
+                     if v.get("severity") == "error"]
+            _err_txt = render_violations(_errs)
+            logging.getLogger("mbse.planner").error(
+                "计划语义校验未通过（mode=block），已中止执行：%s", _err_txt)
+            return {
+                "content": ("计划未通过语义校验，已中止执行（mode=block）：\n"
+                            + "\n".join("· " + (v.get("message") or "") for v in _errs[:6])
+                            + "\n\n把 `generate_rules.pipeline_guard_mode` 改回 `warn` 可先观察后收紧。"),
+                "plan": plan, "task_summary": {"counts": {}, "total": 0, "items": []},
+                "degraded": True,
+                "data": {"degraded": True, "blocked_by": "plan_guard",
+                         "warnings": warnings, "plan_guard": _plan_guard},
+                "llm": {}, "latency_ms": int((_t.time() - t0) * 1000),
+            }
+
         # 4) DAG 执行（agent_tasks 队列）
         # P0-7（2026-09-30）：会话入口此前恒传 run_id=0 → 所有批次共用 0、各自 clear_run 互相覆盖；
         # 且 `_finish_orchestrated` 按 conversation_id 读回 → 非流式路径**读不到自己的计划**
@@ -491,6 +558,7 @@ class FlowPlannerMixin:
         _given_run_id = int(run_id or 0)
         run_id = _given_run_id or TaskQueue.new_run_id(conn)
         executed = []
+        _plan_error = ""   # ★ 2026-11-04：落库/执行中断的真实原因（此前被 except 吞掉）
         _done_items = []   # T7：已完成子任务结果（供依赖任务注入上下文快照）
         try:
             if _given_run_id:
@@ -498,9 +566,110 @@ class FlowPlannerMixin:
             TaskQueue.create_plan(conn, run_id, plan, assigned_by="session",
                                   conversation_id=int(conversation_id or 0))
             guard = 0
+            # ── P4 replanning（2026-11-04）：**与流式路径同一个决策器** ────────────
+            #   为什么补在这里：此前 `replanning` 全套只挂在流式主循环
+            #   （`agent/pipeline_parts/stream.py`），非流式（Flow 节点 / 试跑 / 直调）
+            #   **一行都没有** —— 同一句话走流式会「观察→重评估→调计划」，走非流式不会。
+            #   闸门与节奏统一读 `services/replan_loop`（21 个键的唯一出处）；
+            #   **应用动作**各自实现（流式发 SSE 事件，这里写回 executed / 返回 data），
+            #   那是呈现差异，不是第二套判定。
+            _rl = None
+            try:
+                from services.replan_loop import ReplanLoop, make_decision_writer
+                _rl = ReplanLoop(
+                    conn=conn, conversation_id=int(conversation_id or 0),
+                    run_id=int(run_id or 0), goal=goal, provider_id=provider_id,
+                    write_decision=make_decision_writer(
+                        conn, conversation_id=int(conversation_id or 0),
+                        run_id=int(run_id or 0)))
+            except Exception as _e:
+                # 兜底必须留痕：决策器不可用 ≠ 本次编排没问题，只是没做重规划。
+                logging.getLogger("mbse.planner").warning(
+                    "重规划决策器不可用（已跳过重规划，执行不受影响）：%s", str(_e)[:160])
+                _rl = None
+            _replan_notes: list = []   # 决策摘要（进 data，供审计/前端展示）
+            _done_lats: list = []      # done 任务耗时（M4 预算偏离的滑动窗口）
             while TaskQueue.pending_count(conn, run_id) > 0 and guard < 200:
                 guard += 1
-                ready = TaskQueue.ready_tasks(conn, run_id)
+                # ── P4 边界点：本批产出刚落库，是「计划还健康吗 / 目标达成了吗」
+                #    的天然检查点（与流式路径同点，不打断任何 in-flight 任务）──
+                if _rl is not None:
+                    try:
+                        _decs = _rl.decide(_done_items, TaskQueue.tasks(conn, run_id),
+                                           latencies_ms=_done_lats)
+                    except Exception as _e:
+                        _decs = []
+                        logging.getLogger("mbse.planner").warning(
+                            "重规划决策异常（已跳过本边界）：%s", str(_e)[:160])
+                    _stop_loop = False
+                    for _d in _decs:
+                        _act = str(_d.get("action") or "none")
+                        if _act == "early_stop":
+                            _ck = set(_d.get("cancel_keys") or [])
+                            for _tk2 in TaskQueue.tasks(conn, run_id):
+                                if (str(_tk2.get("task_key") or "") in _ck
+                                        and str(_tk2.get("status") or "")
+                                        in ("planned", "ready")):
+                                    TaskQueue.cancel(
+                                        conn, int(_tk2["id"]),
+                                        "目标已达成提前收敛（主动放弃非必需任务）")
+                                    executed.append({"key": _tk2.get("task_key"),
+                                                     "title": _tk2.get("title"),
+                                                     "agent": _tk2.get("agent_id"),
+                                                     "ok": False, "skipped": True})
+                            _replan_notes.append({"action": "early_stop",
+                                                  "reason": _d.get("reason") or "",
+                                                  "skipped": sorted(_ck)})
+                            warnings.append("重规划：目标已达成提前收敛，放弃 %d 个非必需任务（%s）"
+                                            % (len(_ck), ",".join(sorted(_ck)[:5])))
+                            _stop_loop = True
+                        elif _act == "stop":
+                            for _tk3 in TaskQueue.tasks(conn, run_id):
+                                if str(_tk3.get("status") or "") in ("planned", "ready"):
+                                    TaskQueue.block(conn, int(_tk3["id"]),
+                                                    "预计耗时超时间预算（M4 巡检）")
+                            _replan_notes.append({"action": "stop",
+                                                  "reason": _d.get("reason") or ""})
+                            warnings.append("重规划：M4 时间预算不足，已停止剩余任务")
+                            _stop_loop = True
+                        elif _act == "refine":
+                            # S10 ⇒ T2-light：只改剩余任务的 context（不追行、不改拓扑）。
+                            # 文案与流式路径同款，便于日志/审计统一检索。
+                            _note = ("\n【重规划 r1·巡检精修】%s。请按此调整后续执行重点。"
+                                     % str(_d.get("reason") or "")[:300])
+                            _n_touch = 0
+                            for _tk4 in TaskQueue.tasks(conn, run_id):
+                                if str(_tk4.get("status") or "") not in ("planned", "ready"):
+                                    continue
+                                try:
+                                    conn.execute(
+                                        "UPDATE agent_tasks SET context=? WHERE id=?",
+                                        ((str(_tk4.get("context") or "") + _note)[:1000],
+                                         int(_tk4["id"])))
+                                    _n_touch += 1
+                                except Exception:
+                                    pass
+                            if _n_touch:
+                                conn.commit()
+                            _replan_notes.append({"action": "refine",
+                                                  "reason": _d.get("reason") or "",
+                                                  "touched": _n_touch})
+                            if _n_touch:
+                                warnings.append("重规划：巡检发现健康度超阈，已对 %d 个剩余任务"
+                                                "追加上下文说明" % _n_touch)
+                        else:
+                            # action=none 也留痕（「为什么不动」与「为什么动」同等重要），
+                            # 但不进 warnings —— "计划健康"不是警告。
+                            _replan_notes.append({"action": "none",
+                                                  "reason": _d.get("reason") or ""})
+                    if _stop_loop:
+                        break
+                # ★ 早停开时：同批里若既有必需又有非必需任务，本轮**只派必需任务**
+                #   （否则可选任务与最后一个必需任务同批跑完 ⇒ 早停永远无事可做，
+                #    扇出型计划下这条能力等于没开）。关早停时行为不变。
+                ready = TaskQueue.ready_tasks(
+                    conn, run_id,
+                    defer_optional=bool(_rl is not None and _rl.g.get("early_stop")))
                 if not ready:
                     for tk in TaskQueue.tasks(conn, run_id):
                         if tk["status"] in ("planned", "ready"):
@@ -541,13 +710,22 @@ class FlowPlannerMixin:
                                            latency_ms=int(meta.get("latency_ms", 0)))
                         _done_items.append({"task_key": tk["task_key"], "title": tk["title"],
                                             "result": tk_res, "status": "done"})
+                        # M4 预算偏离需要真实耗时窗口（与流式路径 _done_lats 同口径）
+                        _done_lats.append(int(meta.get("latency_ms", 0) or 0))
                     else:
                         TaskQueue.fail(conn, tk["id"], err)
                     TaskQueue.release_deps(conn, run_id, tk["task_key"])
                     executed.append({"key": tk["task_key"], "title": tk["title"],
                                      "agent": tk["agent_id"], "ok": ok})
         except Exception as e:
-            executed.append({"error": str(e)[:150]})
+            # ★ 2026-11-04：原来只 `executed.append({"error": ...})` 就完了 —— 而 `executed`
+            #   既不进 content 也不进 data，于是 `create_plan` 抛的**具体原因**（例如
+            #   "计划引用了无法解析的 Agent：xxx"）被彻底吞掉，用户只看到
+            #   "（计划已执行，但无成功交付物）" 这句**误导性**文案。
+            #   改：留全量到 `_plan_error`，进 content 与 data。日志同时落一条 error。
+            _plan_error = str(e)[:400]
+            executed.append({"error": _plan_error})
+            logging.getLogger("mbse.planner").error("计划落库/执行中断：%s", _plan_error)
 
         # 5) 汇总 + P1-1 总结节点
         summ = TaskQueue.summary(conn, run_id)
@@ -557,7 +735,8 @@ class FlowPlannerMixin:
             content = self._summarize_plan(done_items, plan, provider_id)
         else:
             content = "\n\n".join(f"## {it.get('title')}\n{(it.get('result') or '').strip()}" for it in done_items) \
-                or "（计划已执行，但无成功交付物）"
+                or (("计划未执行 —— %s" % _plan_error) if _plan_error
+                    else "（计划已执行，但无成功交付物）")
         # T4：反思闭环——汇总后质量评审 → 未达标修订（与流式编排行为一致，复用 RefineGate）
         reflection_meta = None
         if done_items:
@@ -585,6 +764,10 @@ class FlowPlannerMixin:
             "run_id": run_id,   # P0-7：把批次号交回调用方（`_finish_orchestrated` 据此读回自己的计划）
             "data": {"plan": plan[:max_tasks], "task_total": summ["total"], "task_done": len(done_items),
                      "task_failed": len(fail_items), "warnings": warnings,
+                     "plan_guard": _plan_guard,          # ★ 计划语义校验明细（审计/前端展示）
+                     "plan_error": _plan_error or None,  # ★ 落库/执行中断的真实原因（非空即未跑成）
+                     # ★ 2026-11-04：重规划决策摘要（与流式路径同源决策器；空列表=本边界未动）
+                     "replan": _replan_notes,
                      "reflection": reflection_meta,
                      "tasks": [{"key": it.get("task_key"), "title": it.get("title"),
                                 "agent": it.get("agent_id"), "status": it.get("status")} for it in summ["items"]]},
@@ -669,10 +852,43 @@ class FlowPlannerMixin:
                                              latency_ms=int((time.time() - t0) * 1000))
                 return content, meta, True, ""
             if ttype == "react":
-                out = self._exec_react(tk.get("task_key", "t"), cfg, {}, {}, conn, None)
+                # ★ 2026-11-04（react 方案 A）：**委托主链路 Agent 执行**，不再自带工具循环。
+                #
+                #   旧实现 `self._exec_react(...)` 是「文本 JSON + 正则提取 + 自己拼观察」的
+                #   **第二个工具循环**，与主链路 `execute.py` 的原生 tool-calling 循环平行：
+                #     · 不读 `agent`（docstring 却声称由它驱动）⇒ 声明的执行主体是假的；
+                #     · 不走 `_exec_tool_call` 的 HIL 闸 ⇒ 写类工具可绕过人工确认；
+                #     · 靠模型自觉输出 `finish` 或耗尽步数 ⇒ 不写 finish 就白烧步数。
+                #   改为委托后，react 只保留它真正独有的两件事：
+                #     ① 工具白名单（最小权限，Worker ⊆ Supervisor）；② 轮次上限（受限多步求解）。
+                #   依据：docs/react执行器-标杆调研与落地方案-20261104.md。
+                from agent import AgentPipeline
+                pipe = AgentPipeline()
+                pipe._load_db_agents()
+                _react_agent = str(tk.get("agent_id") or cfg.get("agent") or "").strip()
+                # ⚠️ 不要写 `int(cfg.get("max_steps") or 5)`：`0` 是 falsy ⇒ 显式传 0 会被
+                #    静默变成 5（"猜一个默认值"），而调用方本意是"最小轮次"。
+                #    显式判空 + 越界夹取，语义才闭合。
+                _raw_steps = cfg.get("max_steps")
+                if _raw_steps in (None, ""):
+                    _react_steps = 5
+                else:
+                    try:
+                        _react_steps = max(1, min(int(_raw_steps), 10))
+                    except (TypeError, ValueError):
+                        _react_steps = 5
+                out = pipe.execute(query, 0, branch, None, _sub_att, dry_run=True,
+                                   # 不填 agent ⇒ forced_intent=None ⇒ 走意图识别
+                                   # （`create_plan` 注释已明确这是编排的合法用法）
+                                   forced_intent=_react_agent or None,
+                                   user=user, tools_whitelist=tools_wl,
+                                   max_tool_rounds=_react_steps)
                 content = (out.get("content") or "").strip()
+                llm = out.get("llm") or {}
                 meta = self._delegate_result(content, status="done",
-                                             latency_ms=out.get("latency_ms", int((time.time() - t0) * 1000)))
+                                             provider=llm.get("provider", "-"),
+                                             used_mock=llm.get("used_mock", True),
+                                             latency_ms=int((time.time() - t0) * 1000))
                 return content, meta, True, ""
             if ttype == "llm":
                 from llm import llm_client

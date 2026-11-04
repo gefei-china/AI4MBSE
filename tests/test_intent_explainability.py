@@ -124,21 +124,49 @@ def test_intent_for_storage_never_returns_empty():
 
 
 def test_standard_labels_cover_db_builtin_intents():
-    """标准标签集必须覆盖库里 builtin=1 的全部意图（否则会被降级成 chat）。
+    """**生效的**标准标签集必须覆盖库里 builtin=1 的全部意图（否则会被降级成 chat）。
 
-    ⚠️ 生产库若新增内置意图而本常量未同步，该意图会被规范化成 chat（静默丢信息）。
-       本用例用真实库校对，防止这种漂移。
+    ⚠️ 2026-11-04 修正了本用例的**判据对象**：原断言打在 `_STANDARD_INTENT_LABELS`
+       这个类常量上，而该类常量自改造后已降级为**兜底镜像** —— 真实来源是
+       `core.agent_catalog`（读 `agents` 表）。断言打在兜底上等于"盯着备份文件判断
+       生产数据是否正确"：库里新增 `多方案设计` 时它报错，但线上行为其实是对的
+       （目录读表已包含它）⇒ 典型的**判据盯错对象**。
+
+    现在的口径：
+      1. 生效集合（目录）必须覆盖 builtin=1 —— 这是真正防"意图被静默降级成 chat"的那条；
+      2. 兜底常量必须非空且包含核心意图 —— 保证 DB 不可读时不至于把一切都降级。
     """
-    db = os.path.join(ROOT, "mbse.db")
+    # ⚠️ **必须读应用实际使用的那个库**，不能用 `os.path.join(ROOT, "mbse.db")`。
+    #   实测（2026-11-04）：pytest 环境下 `core.config.DB_PATH` 指向
+    #   `tests/_test_mbse.db`，而本用例原来硬编码读仓库根的 `mbse.db` ——
+    #   **两个库在互相比对**，于是生产库新增的 Agent 被报成"目录缺失"（假失败），
+    #   而真正的漂移反而检不出来。判据与被测对象必须是同一个数据源。
+    from core.config import DB_PATH as _DBP
+    db = str(_DBP)
     if not os.path.exists(db):
-        pytest.skip("生产库不存在")
-    c = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+        pytest.skip("应用库不存在：%s" % db)
+    c = sqlite3.connect("file:%s?mode=ro" % db.replace("\\", "/"), uri=True)
     try:
-        names = {r[0] for r in c.execute("SELECT name FROM agents WHERE builtin=1")}
+        # ⚠️ 必须过滤 status='active'：目录只收在役 Agent。
+        #    `system_mgmt` 是 builtin=1 但 **disabled** —— 拿它当"应覆盖"的对象会恒报缺失
+        #    （口径不同，不是漂移）。这类"判据与实现口径不一致"的测试比没测试更糟。
+        names = {r[0] for r in c.execute(
+            "SELECT name FROM agents WHERE builtin=1 AND status='active'")}
     finally:
         c.close()
-    missing = names - set(SessionMixin._STANDARD_INTENT_LABELS)
-    assert not missing, f"标准标签集缺内置意图：{missing}（新增内置意图需同步常量）"
+
+    from core import agent_catalog as _cat
+    _cat.invalidate()
+    effective = set(_cat.standard_intents())
+    missing = names - effective
+    assert not missing, (
+        f"生效的标准标签集缺内置意图：{missing}"
+        f"（来源 source={_cat.source()}；若 source=fallback 说明读表失败，"
+        f"若 source=db 说明该 Agent 既未 builtin=1 也未设 stage_order）")
+
+    fallback = set(SessionMixin._STANDARD_INTENT_LABELS)
+    assert fallback, "兜底常量不得为空（DB 不可读时会全量降级成 chat）"
+    assert {"chat", "design", "requirement_analysis"} <= fallback, "兜底常量缺核心意图"
 
 
 # ══════════════════════════════════════════════════════════════════════

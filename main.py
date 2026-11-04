@@ -59,6 +59,7 @@ from routers import (
     diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断（让 token 构成可见）
     capabilities_router,      # 2026-10-27 P0-2 能力账本（统一注册处 + 声明/调用 2×2 + 任务级追溯）
     events_router,            # 2026-11-01 事件驱动（入站事件 → 准入 → 工单；默认 observe 只记录不执行）
+    alternatives_router,      # 2026-11-03 多方案设计（FR-MG-6：比较 + 多维度打分端点）
 )
 
 @asynccontextmanager
@@ -465,6 +466,7 @@ for _router in (
     diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断
     capabilities_router,      # 2026-10-27 P0-2 能力账本（all read-only）
     events_router,            # 2026-11-01 事件驱动（入站事件 → 准入 → 工单；默认 observe 只记录不执行）
+    alternatives_router,      # 2026-11-03 多方案设计（FR-MG-6：比较 + 多维度打分端点）
 ):
     app.include_router(_router)
 

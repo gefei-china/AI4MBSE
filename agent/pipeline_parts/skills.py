@@ -374,7 +374,24 @@ class SkillMixin:
                 _wl.append(_sbody.FETCH_TOOL)
         return "\n绑定技能：\n" + "\n".join(parts) + "\n" if parts else ""
 
-    _ORCH_AGENTS = "requirement_analysis,design,impact,review,report_generation,knowledge_qa"
+    #: 默认编排候选池**兜底**（与 `agent.registry._FALLBACK_ORCH_AGENTS` 同值）。
+    #: ⚠️ 2026-11-04：已降级为兜底，真实来源是 `agents.is_orch_default`
+    #:   （`core.agent_catalog`，带缓存）。改前新增一个可编排 Agent 必须同时改
+    #:   本文件与 registry 两处常量，漏改则该 Agent 在"无团队模式"下永远不被派单。
+    _ORCH_AGENTS_FALLBACK = "requirement_analysis,design,impact,review,report_generation,knowledge_qa"
+
+    @property
+    def _ORCH_AGENTS(self) -> str:
+        """默认编排候选池（逗号串）。读 `agents.is_orch_default`，读不到回落兜底常量。"""
+        try:
+            from core.agent_catalog import orch_default_csv
+            v = orch_default_csv()
+            if v:
+                return v
+        except Exception:
+            pass
+        return self._ORCH_AGENTS_FALLBACK
+
     _ORCH_MAX_TASKS = 6
     # Task 7：执行层并发与可靠性配置（类属性默认，均允许实例覆盖）
     _ORCH_MAX_WORKERS = 3            # 每批 ready 并行执行 worker 上限（全局并发）

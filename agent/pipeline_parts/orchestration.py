@@ -473,6 +473,10 @@ class OrchestrMixin:
             "team": team or None,   # 团队模式：主 Agent 团队负责人
             "plan": plan_meta,
             "reflection": (orch.get("data") or {}).get("reflection"),   # P0-1（T4）：反思闭环评审轨迹
+            # ★ 2026-11-04：计划校验 + 重规划摘要（与流式 card_data **同名字段**，
+            #   前端 `renderOrchCard` 一套渲染吃两条路径）。数据来自 `_planner_core` 的 data。
+            "plan_guard": (orch.get("data") or {}).get("plan_guard"),
+            "replan": (orch.get("data") or {}).get("replan") or [],
             "sysml_views": sysml_views,
             "source": "none", "confidence": 0, "graph_count": 0, "vector_count": 0,
             "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
@@ -507,6 +511,13 @@ class OrchestrMixin:
             )
             msg_id = cursor.lastrowid
             _archive_artifacts(conn, conversation_id, msg_id, card_data, llm_content, intent)
+            # CIA：变更影响分析快照落库（FR-CIA-3）
+            # ★ 2026-11-04 补：**本路径此前完全没有归档** —— 若编排计划里含 impact 子任务，
+            #   分析结果只留在消息 JSON 里，`impact_analyses` 表查不到 ⇒ "做过了但无记录"。
+            #   走共享实现（与流式 `stream.py:6928` 同一判据：intent==impact /
+            #   有 ok 字段 / 有 impact_nodes，含失败引导卡）。
+            _archive_impact_analysis(conn, conversation_id, msg_id, card_data, user_input,
+                                     created_by=audit_user(user) if isinstance(user, dict) else "未登录")
             conn.execute(
                 "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
                 # ★ 2026-10-29：入库前规范化（同 stream.py，conversations.intent 只存意图标签）

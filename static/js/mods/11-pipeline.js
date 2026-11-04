@@ -499,9 +499,14 @@ function procAddTool(ev){
     // V2.7：失败且已有错误面时跳过结果区（错误信息已在 errface 展示，避免重复占位）
     if(!(ev.ok === false && ev.error)){
       // SRS-GN-CO（2026-09-21）：覆盖性工具结果 → 行业风格富组件（与历史回放 06-cards 同一套 covTryCard）
-      const covHtml = (typeof covTryCard === 'function') ? covTryCard(ev.name, ev.result, ev.arguments) : null;
-      if(covHtml){
-        detail += `<div class="proc-tool-result" style="border:none;padding:0;">${covHtml}</div>`;
+      // ★ 2026-11-03：多方案对比（平台工具 alternatives_score）→ 对比表。
+      //   走**同一套「按工具名渲染」机制** ⇒ 工具名不匹配时返回 null，自动回退通用文本展示。
+      //   ⚠️ 三元表达式**必须加括号**（`?:` 优先级高于 `||`，否则 f1 返回 null 会短路掉 f2，
+      //      表现为"工具结果卡片静默不渲染"）—— 详见 06-cards.js 同处注释。
+      const richHtml = (typeof covTryCard === 'function' ? covTryCard(ev.name, ev.result, ev.arguments) : null)
+                     || (typeof altTryCard === 'function' ? altTryCard(ev.name, ev.result, ev.arguments) : null);
+      if(richHtml){
+        detail += `<div class="proc-tool-result" style="border:none;padding:0;">${richHtml}</div>`;
       } else {
         detail += `<div class="proc-tool-result ${trunc?'trunc':''}">
         <div class="pr-head"><span>结果</span>${trunc?`<span class="pr-act" onclick="toolExpand(this)">展开全文</span>`:''}<span class="pr-act" onclick="copyToolResult(this)">📋 复制</span></div>

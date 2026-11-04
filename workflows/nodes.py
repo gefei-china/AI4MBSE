@@ -844,95 +844,105 @@ class FlowNodesMixin:
     # ── M3：ReAct 节点 —— 思考(Thought)→行动(Action)→观察(Observation) 循环执行器 ──
     def _exec_react(self, label: str, cfg: dict, results: dict, payload: dict, conn,
                     blackboard: dict | None = None) -> dict:
-        """ReAct 推理执行器：LLM 驱动多步工具求解。
+        """ReAct 节点：**委托主链路 Agent 执行**（2026-11-04 方案 A 改造）。
 
-        cfg:
-        - goal: 任务目标（支持 {{节点.字段}} / {{blackboard.键}}）
-        - max_steps: 最大循环步数（默认 5）
-        - tools: 可用工具（逗号分隔，默认全部内置工具）
-        - agent: 可选，思考由指定 Agent 体系驱动（forced_intent）
-        - provider_id / branch
+        ## ⚠️ 本方法所属的「画布 workflow」链路**已废弃**
 
-        Mock/无 key 环境：LLM 返回普通文本无法解析 JSON → 直接视为最终答案（单步，确定性保持）。
+        画布（`agent_flows` + `workflows/engine.py`）是早期方案，已不再发展。
+        本方法仅保留给**历史流程定义**的兼容执行（实测：83 个流程里 **0 个**含 react 节点）。
+        **新能力不要往这里加** —— 编排路径（`task_type=react`）走的是
+        `workflows/planner.py::_run_task`，两条路径现在共用同一份实现。
+
+        ## 为什么不再自带工具循环
+
+        旧实现是「文本 JSON 输出 → 正则提取 → 自己拼观察」的**第二个工具循环**，
+        与主链路 `agent/pipeline_parts/execute.py` 的原生 tool-calling 循环平行。
+        实测漂了三处：
+
+          · **不读 `agent`** —— docstring 声称「由指定 Agent 体系驱动(forced_intent)」，
+            实现里从未取过 `cfg["agent"]` ⇒ 声明的执行主体是假的；
+          · **不走 HIL 闸** —— 工具调用绕开 `_exec_tool_call`，写类工具可跳过人工确认；
+          · **终止条件不自洽** —— 靠模型自觉输出 `finish` 或耗尽 `max_steps`，
+            模型不写 finish 就白烧步数（标杆的终止条件是"模型不再请求工具"）。
+
+        依据：`docs/react执行器-标杆调研与落地方案-20261104.md`。
+
+        ## 现在的语义
+
+        - `agent`：执行主体。**不填 ⇒ 走意图识别**（`forced_intent=None`，合法用法）
+        - `tools`：工具白名单（逗号分隔）⇒ 最小权限，Worker ⊆ Supervisor
+        - `max_steps`：工具轮上限（默认 5，夹在 1~10）
+        - `goal` / `query`：任务目标（支持 `{{节点.字段}}` / `{{blackboard.键}}`）
+        - `provider_id` / `branch`：保留键名（模型由 Agent 配置决定；branch 仍生效）
+
+        ## 返回结构（与旧实现保持兼容，供 engine 的节点结果消费）
+
+        `steps` 现在恒为空 —— 工具轨迹由主链路写入 `card_data.exec.tools` 与
+        `tool_call_logs`（那里才是权威出处），不在节点返回值里再抄一份。
         """
-        from llm import llm_client
+        from agent import AgentPipeline
+
         goal = self._render(cfg.get("goal", cfg.get("query", "")), results, payload, blackboard)
         if not goal:
             goal = "执行该任务并给出结论"
-        max_steps = max(1, min(int(cfg.get("max_steps", 5) or 5), 10))
-        tool_names = cfg.get("tools") or "graph_retrieve,conflict_check,impact_analyze,validate,entity_create"
-        if isinstance(tool_names, str):
-            tool_names = [x.strip() for x in tool_names.split(",") if x.strip()]
-        tool_desc = "\n".join(f"- {t}" for t in tool_names)
-        system = (
-            "你是 ReAct 推理执行器。对目标执行「思考→行动→观察」循环，直到可以给出最终答案。\n"
-            "行动类型：\n"
-            f"1. tool：调用工具，action_input 形如 {{\"tool\":\"工具名\",\"arguments\":{{参数JSON}}}}\n"
-            "   可用工具：\n" + tool_desc + "\n"
-            "2. finish：给出最终答案，action_input 形如 {\"answer\":\"最终答案\"}\n"
-            "每步只输出一个 JSON 对象：{\"thought\":\"推理\",\"action\":\"tool|finish\",\"action_input\":{...}}，不要其他文字。"
-        )
-        steps = []
-        obs = ""
-        executor = ToolExecutor(conn)
-        executor._flow_run_id = int(getattr(self, 'run_id', 0) or 0)  # P0-a：工具调用日志编排归属
-        t0 = time.time()
-        final_answer = ""
-        resp = {}
-        for i in range(1, max_steps + 1):
-            msgs = [{"role": "system", "content": system},
-                    {"role": "user", "content": f"目标：{goal}\n\n已观察到的信息：\n{obs or '（无）'}"}]
-            resp = llm_client.chat(msgs, provider_id=cfg.get("provider_id"), _intent="react_step")
-            msg = (resp.get("choices") or [{}])[0].get("message", {})
-            raw = msg.get("content") or ""
-            m = re.search(r"\{[\s\S]*\}", raw)
-            if not m:
-                # 非 JSON（Mock/降级）→ 当前内容即答案
-                final_answer = raw.strip()
-                steps.append({"step": i, "thought": "", "action": "finish", "answer": final_answer[:300]})
-                break
+
+        # 工具白名单：逗号串或列表；空 ⇒ 继承该 Agent 的默认绑定（不再自造默认清单）
+        tools = cfg.get("tools")
+        if isinstance(tools, str):
+            tools = [x.strip() for x in tools.split(",") if x.strip()]
+        tools = list(tools or []) or None
+
+        # ⚠️ 不要写 `int(cfg.get("max_steps") or 5)`：`0` 是 falsy ⇒ 显式传 0 会被静默变成 5。
+        _raw_steps = cfg.get("max_steps")
+        if _raw_steps in (None, ""):
+            max_steps = 5
+        else:
             try:
-                data = json.loads(m.group(0))
-            except Exception:
-                data = {}
-            thought = data.get("thought", "")
-            action = data.get("action", "finish")
-            ai = data.get("action_input", {}) if isinstance(data.get("action_input", {}), dict) else {}
-            if action in ("finish", "final") or not action:
-                final_answer = str(ai.get("answer") or thought or "").strip()
-                steps.append({"step": i, "thought": thought, "action": "finish", "answer": final_answer[:300]})
-                break
-            if action == "tool":
-                tname = ai.get("tool", "")
-                args = ai.get("arguments") or {}
-                if tname in tool_names:
-                    try:
-                        r = executor.execute(tname, args if isinstance(args, dict) else {}, cfg.get("branch", "dev"))
-                        ob = str(r.get("result", ""))[:400]
-                    except Exception as e:
-                        ob = f"工具执行失败: {str(e)[:150]}"
-                else:
-                    ob = f"未知工具「{tname}」，请从可用工具中选择"
-            else:
-                ob = "无法识别的行动类型，请直接 finish"
-            steps.append({"step": i, "thought": thought, "action": action, "tool": ai.get("tool", ""), "observation": ob})
-            obs = (obs + f"\n[步骤{i}] {thought}\n观察：{ob}").strip()[-1500:]
-        if not final_answer:
-            final_answer = obs[-800:] if obs else goal + "（未能得出最终结论）"
-        meta = resp.get("_meta", {})
-        return {
-            "type": "react", "node": label, "status": "done",
-            "content": final_answer,
-            "steps": steps, "step_count": len(steps),
-            "provider": meta.get("provider", "-"), "model": meta.get("model", "-"),
-            "used_mock": meta.get("used_mock", True),
-            "data": {
-                "goal": goal, "step_count": len(steps),
-                "steps": steps[:10],
-                "provider": meta.get("provider", "-"), "used_mock": meta.get("used_mock", True),
-            },
-            "latency_ms": int((time.time() - t0) * 1000),
-        }
+                max_steps = max(1, min(int(_raw_steps), 10))
+            except (TypeError, ValueError):
+                max_steps = 5
+
+        agent = str(cfg.get("agent") or "").strip()
+
+        t0 = time.time()
+        try:
+            pipe = AgentPipeline()
+            pipe._load_db_agents()
+            out = pipe.execute(goal, 0, str(cfg.get("branch") or "dev"), None, [],
+                               dry_run=True,
+                               forced_intent=agent or None,
+                               tools_whitelist=tools,
+                               max_tool_rounds=max_steps)
+            content = (out.get("content") or "").strip()
+            llm = out.get("llm") or {}
+            return {
+                "type": "react", "node": label, "status": "done",
+                "content": content,
+                "steps": [], "step_count": 0,
+                "delegated_to": "AgentPipeline.execute",
+                "provider": llm.get("provider", "-"),
+                "model": llm.get("model", "-"),
+                "used_mock": bool(llm.get("used_mock", False)),
+                "data": {
+                    "goal": goal, "agent": agent or "(意图识别)",
+                    "tools_whitelist": tools or [],
+                    "max_steps": max_steps,
+                    "step_count": 0,
+                    "provider": llm.get("provider", "-"),
+                    "used_mock": bool(llm.get("used_mock", False)),
+                    "note": "工具轨迹见 card_data.exec.tools / tool_call_logs（不在节点返回值重复）",
+                },
+                "latency_ms": int((time.time() - t0) * 1000),
+            }
+        except Exception as e:
+            return {
+                "type": "react", "node": label, "status": "failed",
+                "content": "", "steps": [], "step_count": 0,
+                "delegated_to": "AgentPipeline.execute",
+                "error": f"{type(e).__name__}: {str(e)[:200]}",
+                "data": {"goal": goal, "agent": agent or "(意图识别)"},
+                "latency_ms": int((time.time() - t0) * 1000),
+            }
 
     # ── M3：Planner-Executor 节点 —— LLM 计划分解 → 任务队列 DAG 执行 → 汇总 ──
     def _exec_planner(self, label: str, cfg: dict, results: dict, payload: dict, conn,

@@ -81,6 +81,16 @@ const CTX_CFG_CLUSTERS = [
       + '打开后才会启用新机制。建议先在测试会话开「待办清单 + 强制闸」观察，再开障碍恢复。'
       + '⚠️ <b>改完即时生效，无需重启服务</b>。',
   },
+  {
+    id: 'replan', title: '🔁 执行中重规划（ReAct 的编排层）', viz: 'none', checks: [],
+    hint: '🔗 这一簇回答「子任务结果回到主 Agent 之后，要不要重新评估并调整计划」。'
+      + '这正是 ReAct 的<b>编排层</b>形态：观察（子任务结果）→ 再判断（是否仍匹配目标）→ 调整（补派 / 重排 / 提前收尾）。'
+      + '⚠️ <b>总闸 enabled 同时管三件事</b>：健康巡检、提前收敛、停滞重画 —— 只想开其中一件时，'
+      + '必须把另外两件的分闸<b>显式关掉</b>（尤其「停滞重画」默认是开的，开总闸会连带开启）。'
+      + '⚠️ <b>2026-11-04 起两条编排路径都生效</b>：流式（`stream.py`）与非流式（`_planner_core`，'
+      + 'Flow 节点 / 直调 / API）共用同一个决策器 `services/replan_loop`，闸门只有一处。'
+      + '⚠️ <b>改完即时生效，无需重启服务</b>。',
+  },
 ];
 
 // ══ 字段定义（按簇归属）══════════════════════════════════════════════════════
@@ -329,6 +339,46 @@ const CTX_CFG_FIELDS = [
       + '前四类<b>自动换路径重试而不是问人</b>；权限类失败仍然问人。',
     impact:'开启：减少「可自己解决却来问你」（实测样本 3173 的 next_step 就是"刷新凭据后重新调用"，'
       + '说明模型知道该自恢复、只是没人给它这个信号）；关闭：沿用现有行为（失败即问人）。' },
+
+  // ── 簇 12：执行中重规划（ReAct 编排层）──
+  { cluster:'replan', sec:'replanning', key:'replanning.enabled', type:'bool', label:'① 总闸（enabled）',
+    desc:'重规划总开关。关 ⇒ 整段逻辑 no-op（<b>零行为变化</b>）。',
+    impact:'开：解锁巡检 / 早停 / 重画三类动作；关：一切照旧。⚠️ 开它等于同时放行三类动作 —— '
+      + '只想观测就把「停滞重画」显式关掉，否则会被连带开启。' },
+  { cluster:'replan', sec:'replanning', key:'replanning.health_probe', type:'bool', label:'② 健康巡检（S10）',
+    desc:'每 N 个任务完成时检查计划健康度（M1 完成率 / M2 失败 / M4 耗时），判定结果落 replan_decisions。',
+    impact:'开：能拿到「计划还健康吗」的信号（规则判定、不调 LLM，成本极低）；关：无信号。'
+      + '⚠️ 巡检判定为「需精修」时会向剩余任务写入调整说明（<b>不改拓扑</b>）。' },
+  { cluster:'replan', sec:'replanning', key:'replanning.health_probe_llm', type:'bool', label:'③ 巡检升级 LLM',
+    desc:'巡检判定升级为一次轻量 LLM 调用，判断剩余计划是否仍匹配目标。',
+    impact:'开：判得更准，但每次巡检多一次 LLM 调用（延迟与成本）；关：纯规则阈值。' },
+  { cluster:'replan', sec:'replanning', key:'replanning.early_stop', type:'bool', label:'④ 提前收敛',
+    desc:'required 为真的任务全部完成且零失败 ⇒ 主动放弃剩余非必需任务。',
+    impact:'开：省掉非必需任务的白跑（实测 5 任务计划省 1 个）；关：全部跑完。'
+      + '⚠️ 依赖模型给任务标 required，无标则不动作（不猜目标边界）。' },
+  { cluster:'replan', sec:'replanning', key:'replanning.probe_every_tasks', type:'int', label:'⑤ 巡检节奏（每 N 个任务）',
+    desc:'每完成 N 个任务做一次巡检 / 早停判定。',
+    impact:'调大：判定稀疏、早停更晚；调小（含 1）：判定更勤、早停更及时，代价是判定次数增加（规则判定，成本极低）。'
+      + '3 任务的小计划 + N=3 ⇒ 第 3 个完成才判，结构上不可能早停。' },
+  { cluster:'replan', sec:'replanning', key:'replanning.retry_once', type:'bool', label:'⑥ 失败补跑一次（T1）',
+    desc:'timeout / transient / internal 类失败，同 key 自动补跑一次（刻意排除 interrupted —— 那是进程重启的孤儿标记）。',
+    impact:'开：抗瞬时故障；关：失败即 blocked。这是本簇唯一<b>默认开</b>的项。' },
+  { cluster:'replan', sec:'replanning', key:'replanning.redraw_on_stall', type:'bool', label:'⑦ 停滞重画（T2）',
+    desc:'收敛点判定「卡住了」时重画剩余计划。',
+    impact:'⚠️ <b>默认开</b>，但被总闸挡着；一旦开总闸而本项未关，就会连带开启重画。'
+      + '想「只观测、不改图」必须把它关掉。' },
+  { cluster:'replan', sec:'replanning', key:'replanning.redraw_light', type:'bool', label:'⑧ 轻量重画优先',
+    desc:'重画优先同 key 原地重派（不动图拓扑）；关则走新 key。',
+    impact:'开：改动小、可回滚；关：新 key 会改变图结构，调试更难。' },
+  { cluster:'replan', sec:'replanning', key:'replanning.heavy_redraw', type:'bool', label:'⑨ 重量级重画',
+    desc:'新 key + lineage 的重画方式。',
+    impact:'开：表达力强但拓扑变化大；建议先只用轻量。' },
+  { cluster:'replan', sec:'replanning', key:'replanning.llm_redraw', type:'bool', label:'⑩ LLM 整图重画（T3）',
+    desc:'让 LLM 直接重写整个剩余计划。',
+    impact:'开：最灵活也最不可控（多一次 LLM 调用、结果不确定）；规则重画更确定，建议保持关。' },
+  { cluster:'replan', sec:'replanning', key:'replanning.max_redraw_rounds', type:'int', label:'⑪ 重画轮次上限',
+    desc:'单次编排最多重画几轮（防无限重画）。',
+    impact:'调大：允许多次自我修正；调小：更快收敛但容错低。0 = 不允许重画。' },
 
 ];
 

@@ -25,6 +25,9 @@ def resolve_agent_name(conn, raw) -> str:
       · 只认 `status='active'` 的 Agent —— **已 disabled 的不算在役权威名**。
         （否则改名过渡期新旧两名都算"存在"，孤儿检不出来。）
       · 比对时两侧都 `strip().lower()`，命中后返回**库里的原样写法**（权威值）。
+      · **先按 `name` 精确匹配，再按 `display_name` 兜底**（2026-11-04 加，与
+        `AgentRegistry.resolve()` 同口径）。不加兜底时两条路径结论相反 —— 规划器能派、
+        落库却整批中止，实测 78 行历史数据正是显示名写法。
       · 查不到 → 返回 `""`，由调用方回落原值（不写空、不丢信息、不抛错）。
     """
     if raw is None:
@@ -35,6 +38,22 @@ def resolve_agent_name(conn, raw) -> str:
     try:
         row = conn.execute(
             "SELECT name FROM agents WHERE LOWER(TRIM(name))=LOWER(?) AND status='active' LIMIT 1",
+            (name,)).fetchone()
+        if row and row["name"]:
+            return str(row["name"])
+        # ★ 2026-11-04：**display_name 兜底**，与 `AgentRegistry.resolve()` 同口径。
+        #
+        #   起因（真库实证）：`agent_tasks.agent_id` 里有 78 行是 `工程建模方案设计Agent`
+        #   —— 那是 `design` 的**显示名**。而 `AgentRegistry.resolve()` 上一轮已加
+        #   display_name 兜底（能解析），本函数却没加 ⇒ **同一个名字在两条路径上结论相反**：
+        #   规划器能派（resolve 通），落库却整批中止（create_plan 抛 ValueError）。
+        #   口径分裂比两边都严格更糟 —— 它让"为什么这次编排没跑"无从解释。
+        #
+        #   安全性：实测 `display_name` 全库无重名、且与任何 `name` 无跨字段冲突
+        #   ⇒ 反查唯一，不会误命中。优先级**低于** name（先按 name 精确匹配）。
+        row = conn.execute(
+            "SELECT name FROM agents WHERE LOWER(TRIM(display_name))=LOWER(?) "
+            "AND status='active' LIMIT 1",
             (name,)).fetchone()
         if row and row["name"]:
             return str(row["name"])
@@ -251,8 +270,22 @@ class TaskQueue:
             "SELECT * FROM agent_tasks WHERE run_id=? ORDER BY seq, id", (run_id,)).fetchall()]
 
     @staticmethod
-    def ready_tasks(conn, run_id: int) -> list:
-        """全部就绪（依赖已 done）任务，按 seq 排序。"""
+    def ready_tasks(conn, run_id: int, *, defer_optional: bool = False) -> list:
+        """全部就绪（依赖已 done）任务，按 seq 排序。
+
+        `defer_optional=True`（2026-11-04，供「提前收敛」使用）：
+        **若同批里既有必需任务又有非必需任务，本轮只派必需任务**，把非必需任务留到下一边界。
+
+        为什么需要（实测，不是理论）：早停的判据是「必需全 done ⇒ 取消剩余非必需」，
+        而检查点只在**每批派发前**。扇出型计划里（可选任务与最后一个必需任务**并列**
+        依赖同一个上游），两者会落在**同一批**：等必需任务跑完时，可选任务**已经跑完了**
+        ⇒ 早停永远无事可做（上一轮流式验证能生效，只是因为那个计划的可选任务在链尾）。
+        推迟一轮就能让早停真正省下这些工作。
+
+        安全性：
+          · 只推迟**本轮**，不是不跑；没有必需任务可跑时**返回全部**就绪任务（不会死锁）；
+          · 默认 `False` ⇒ **关掉早停时行为逐字节不变**。
+        """
         rows = conn.execute(
             "SELECT * FROM agent_tasks WHERE run_id=? AND status IN ('planned','ready') ORDER BY seq, id",
             (run_id,)).fetchall()
@@ -263,12 +296,37 @@ class TaskQueue:
             deps = json.loads(r["deps"] or "[]")
             if not deps or all(d in done for d in deps):
                 out.append(dict(r))
+        if defer_optional and len(out) > 1:
+            def _required(t) -> bool:
+                c = t.get("config")
+                if isinstance(c, str):
+                    try:
+                        c = json.loads(c or "{}")
+                    except Exception:
+                        c = {}
+                return bool((c or {}).get("required")) if isinstance(c, dict) else False
+
+            _req = [t for t in out if _required(t)]
+            if _req:                      # 有必需任务 ⇒ 本轮只派它们
+                return _req
         return out
 
     @staticmethod
     def pending_count(conn, run_id: int) -> int:
+        """本批次**仍需推进**的任务数（非终态）。
+
+        ⚠️ 2026-11-04 修：原来只排除 `'canceled'`（**一个 L**），而 `TaskQueue.cancel`
+        写入的是 `'cancelled'`（**两个 L**，见 `TERMINAL_STATUSES`）—— 于是**已取消的
+        任务仍被算作"待处理"**。后果：`_planner_core` 的主循环 `while pending_count>0`
+        在提前收敛取消剩余任务后，靠"ready_tasks 为空 ⇒ block 剩余 ⇒ break"才勉强退出，
+        多空转一轮；任何依赖 `pending_count==0` 判"这批跑完了"的调用方都会**永远等不到**。
+
+        两种拼写都排除：历史库里既有 `'canceled'`（早期 job 体系口径）也有 `'cancelled'`
+        （`agent_tasks` 现行口径），只改一边就会在跨表/跨版本时再次分裂。
+        """
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM agent_tasks WHERE run_id=? AND status NOT IN ('done','failed','canceled')",
+            "SELECT COUNT(*) AS n FROM agent_tasks WHERE run_id=? "
+            "AND status NOT IN ('done','failed','canceled','cancelled')",
             (run_id,)).fetchone()
         return row["n"] if row else 0
 

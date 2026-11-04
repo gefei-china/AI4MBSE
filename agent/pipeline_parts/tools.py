@@ -1933,6 +1933,25 @@ class ToolMixin:
                 result = _exec_coverage(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
+            # ── 多方案打分（FR-MG-6，2026-11-03）──────────────────────────
+            # 平台化说明：本工具的**算子**在 `alternatives_tools.py`，**策略**（维度/权重/
+            # 门槛/编排规则）在 DB（generate_rules + skills 表）。⇒ 换维度集、改权重、
+            # 改编排规则**都不必改本文件**。
+            # ⚠️ 独立分流分支：工具名 `alternatives_score` 不带任何既有前缀，
+            #    若并入前缀分支会被路由不到（=「注册并绑定了却永远调不到」，
+            #    本仓 2026-10-08 实测踩过同类坑）。
+            if name == "alternatives_score":
+                try:
+                    import alternatives_tools as _alt
+                    result = _alt.exec_tool(name, arguments or {})
+                except Exception as exc:    # noqa: BLE001
+                    result = {"ok": False,
+                              "result": f"多方案打分模块不可用：{type(exc).__name__}: {exc}。"
+                                        f"⚠️ 打分**未完成** —— 请如实说明『打分未完成』，"
+                                        f"不要自行编造综合分。"}
+                self._log_tool_call(name, tool_type, arguments, result,
+                                    intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
             # SysML v2 结构化抽取 / 方法论规约卡（2026-10-08新增）。
             # 这两个工具名**不带 sysml_v2_ 前缀**（历史前缀表已固定，改前缀会波及
             # 已有绑定），故需独立分流分支。放在 sysml_v2_ 分支之前以免被误吞。
