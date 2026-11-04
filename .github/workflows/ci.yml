@@ -49,6 +49,15 @@ on:
   schedule:
     - cron: "17 3 * * *"
 
+# 同一 ref 只保留最新一次运行：连续推送时旧 run 自动取消。
+# 2026-11-04 实测：4 次推送产生 2 个同 ref 的 queued run（旧 run 无法 cancel —
+#   REST 对 queued 返回 409 "not in progress"）⇒ 两个 run 同时抢 runner、
+#   各 3 个 job，纯浪费且让"到底哪个 run 才算验证"变得含糊。
+# 用 concurrency 从根上避免重复排队（pull_request 的 ref 是 refs/pull/N/merge，稳定）。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests-and-guards:
     runs-on: ubuntu-latest
