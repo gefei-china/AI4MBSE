@@ -19,7 +19,9 @@ import sqlite3
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # ← 上溯到工程根
-DB = os.path.join(ROOT, "mbse.db")
+# ⚠️ 2026-11-04：不再硬编码 mbse.db（无视 MBSE_DB_PATH ⇒ 迁移永远改开发机真库、
+#   CI 连到空库 ⇒ 环境不可重建）。现改为 MBSE_DB_PATH 优先 + 绝对路径兜底。
+DB = os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")
 REG = os.path.join(ROOT, "data", "modeling_nodes.json")
 
 stats = {"created": 0, "same": 0, "skipped": 0, "changed": 0}

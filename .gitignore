@@ -21,7 +21,16 @@ node_modules/
 .playwright-cli/
 
 # ── 运行数据与数据库（含 WAL 边车）──
-data/
+# ⚠️ 2026-11-04：`data/bootstrap/pipeline_assets.json` 是**配置资产种子快照**——
+#    环境可重建的唯一真源（database/bootstrap_assets.py 读它建库）。
+#    它必须入库：否则全新克隆 / CI checkout 拿不到它，
+#    verify_asset_snapshot_sync 第 64 行直接 rc=1（"环境可重建"变成"CI 恒红"）。
+#    git 的例外规则要求**父目录先解封**才能解封文件，故写成三段式；
+#    反查：git check-ignore -v data/bootstrap/pipeline_assets.json（应无输出）
+data/*
+!data/bootstrap/
+data/bootstrap/*
+!data/bootstrap/pipeline_assets.json
 mbse.db
 mbse.db-shm
 mbse.db-wal
@@ -75,6 +84,8 @@ logs/
 tools/verify/_fe_dead.tsv
 tools/verify/_fe_dead_reach.tsv
 tools/verify/_fe_reach.json
+# 2026-11-04：run_full_round_live.py 每次运行写的事件流（运行时产物，逐次覆盖）
+tools/verify/_full_round_events.json
 
 # ── 一次性探针 / 数据修补 / 结构改造脚本（不入库）──
 # 2026-10-27 清理：历轮修复过程中累计入库 40+ 个「跑一次就完」的脚本，让 tools/verify 从

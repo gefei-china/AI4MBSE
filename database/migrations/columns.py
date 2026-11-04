@@ -489,6 +489,26 @@ def _migrate_columns(conn):
     _add("agents", "max_concurrency", "INTEGER DEFAULT 2")                # 最大并发任务数
     _add("agents", "version", "TEXT DEFAULT 'v1.0.0'")                    # Agent 语义版本（老库已存在 version 则跳过）
     _add("agents", "protocol_range", "TEXT DEFAULT '>=1,<3'")             # A2A 协议版本范围
+    # ── 2026-11-04：**补 v3.0 三列**（`task_domain` / `stage_order` / `intent_keywords_active`）──
+    #
+    # 为什么必须补在这里（实测缺口）：
+    #   这三列是 v3.0 多任务域路由与六节点流水线顺序的**承载列**，
+    #   但此前只由 `tools/migrate_v3_nodes.py`、`migrate_v5_pipeline_nodes.py` 等
+    #   **手工脚本** ALTER 添加 —— `init_db()` 的建表语句里没有、`_migrate_columns` 里也没有。
+    #   ⇒ 实测：`init_db()` 建出的空库 `agents` 只有 25 列（真库 28 列），
+    #     缺 `task_domain` / `stage_order` / `intent_keywords_active`；
+    #     缺 `stage_order` 会让"建模阶段意图 = stage_order IS NOT NULL"恒为空集，
+    #     缺 `task_domain` 会让多任务域路由整条失效 —— 而**空库上什么都查不出来**，
+    #     因为相关代码大多是 `try/except` 兜底（又一个"环境不一致、CI 却全绿"的实例）。
+    #   放在这里而不是建表语句里：老库已有这三列时会自动跳过（幂等），
+    #   不用重建表；新库由 `_add` 补上，与真库对齐。
+    _add("agents", "task_domain", "TEXT DEFAULT 'general'")               # 任务域（modeling/impact/report/qa/system/general）
+    _add("agents", "stage_order", "INTEGER")                              # 流水线位置（NULL=不属流水线）
+    # ⚠️ `intent_keywords_active` 默认 **0**，不是 1 —— 实测真库 30/30 行全为 0，
+    #   且**全仓代码 0 处引用该列**（`grep -rn intent_keywords_active agent/ core/` 空）。
+    #   即：它是"声明了但从未接线"的字段。默认给 1 会凭空造出与真库不一致的状态，
+    #   让人误以为"打开了路由开关"。保持 0 = 诚实反映现状（未接线）。
+    _add("agents", "intent_keywords_active", "INTEGER DEFAULT 0")          # 预留：关键词路由开关（当前未接线）
     # ── 2026-11-04：Agent 的**流水线角色位**（把散在代码里的阶段清单收敛成表字段）──
     #
     # 背景：同一份「哪些 Agent 属于哪个阶段集合」曾硬编码在 4 处代码常量里

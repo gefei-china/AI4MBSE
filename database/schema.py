@@ -1915,6 +1915,29 @@ def init_db():
     # ── P0-1（2026-10-30）写类工具幂等键表（幂等，纯新表无补列依赖）──
     # 放在 _migrate_columns 之后（纯新表），语义上属"控制面"族。
     _migrate_tool_idempotency(conn)
+
+    # ── 2026-11-04：**流水线配置资产自举**（把"环境不可重建"补上）──────────────
+    # 背景（实测）：同一份代码，`init_db()` 建出的空库只有 7 agents / 14 tools / 0 skills，
+    #   而真库是 30 / 45 / 42 —— 差额全由 25 个**手工迁移脚本**搬运，它们不在本函数调用链里。
+    #   ⇒ 空库永远长不到真库的样子，"CI 绿灯"与"这台机器上的产品对不对"无关。
+    # 做法：配置类资产（agents/tools/skills/绑定/团队）导出为随代码走的 JSON 快照
+    #   （`data/bootstrap/pipeline_assets.json`），此处据快照 **UPSERT** 回库。
+    #   键用业务名而非自增 id ⇒ 跨库可移植；运行期开关（status/enabled）不被覆盖。
+    # 幂等：已存在则按快照覆盖声明性字段；无快照则跳过（老库/裁剪仓库不受影响）。
+    # ⚠️ 失败绝不阻断启动（自举是"补齐"，不是"启动前提"），但**必须留痕**而不是静默。
+    try:
+        from database.bootstrap_assets import bootstrap_assets as _boot_assets
+        _bs = _boot_assets(conn)
+        if _bs.get("ok"):
+            if _bs.get("inserted") or _bs.get("updated") or _bs.get("relations"):
+                print("[init_db] 资产自举: 新增 %d / 覆盖 %d / 绑定 %d%s" % (
+                    _bs.get("inserted", 0), _bs.get("updated", 0), _bs.get("relations", 0),
+                    (" / 跳过 %d" % _bs["skipped"]) if _bs.get("skipped") else ""))
+        elif _bs.get("reason") not in ("no_snapshot", ""):
+            print("[init_db] ⚠️ 资产自举失败（不影响启动）: %s" % _bs.get("reason"))
+    except Exception as _e_boot:
+        print("[init_db] ⚠️ 资产自举异常（不影响启动）: %s: %s"
+              % (type(_e_boot).__name__, str(_e_boot)[:120]))
     conn.close()
 
 

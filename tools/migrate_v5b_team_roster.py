@@ -30,7 +30,12 @@ import os
 import sqlite3
 import sys
 
-DB = "mbse.db"
+# ⚠️ 2026-11-04：**不再硬编码 mbse.db**。原写法无视 MBSE_DB_PATH ⇒
+#   迁移永远改开发机的真库、CI 上却连到空库/不存在的库 ⇒
+#   「环境不可重建」：CI 的绿灯与真库状态无关（本轮定位到的根系缺陷）。
+#   现在：MBSE_DB_PATH 优先（core.config 的 ENV_MAP 同键），否则回落仓库内绝对路径。
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB = os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db")
 MAIN_NAME = "MBSE建模总体负责人"
 
 # pipeline 节点：system_prompt 名册里有的，必须在团队里
