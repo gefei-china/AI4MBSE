@@ -100,6 +100,27 @@ def main() -> int:
     print("\n── ①c 工具落地率 ──")
     tools = {r["name"]: r for r in q(
         "SELECT name, side_effect, risk_level, status FROM tools")}
+    # ★ 2026-11-04：**MCP 工具不属于 `tools` 表**（实测 `tools.source='mcp'` 恒 0 条、
+    #   `tools.mcp_server_id` 全空）—— MCP 是**服务器级**注册，工具清单存在
+    #   `mcp_servers.tools`(JSON 数组) 里。原实现只查 `tools` 表 ⇒ 把
+    #   「skill 引用了 MCP 提供的工具」一律判成"引用了不存在的工具"（**误报**，
+    #   真库实证：`智源MCP工具手册` 引用的 query_projects 等 6 个工具，
+    #   全部由 `zhiyuan-dev-mcp`（71 个工具）提供）。
+    #   ⇒ 把**已启用 MCP 服务器**暴露的工具名并入可引用集合。
+    mcp_tool_names = set()
+    try:
+        for r in q("SELECT name, tools, enabled FROM mcp_servers WHERE enabled=1"):
+            for one in (jload(r["tools"], []) or []):
+                if isinstance(one, str) and one.strip():
+                    mcp_tool_names.add(one.strip())
+                elif isinstance(one, dict) and one.get("name"):
+                    mcp_tool_names.add(str(one["name"]).strip())
+    except Exception:
+        mcp_tool_names = set()
+    referable = set(tools) | mcp_tool_names
+    if mcp_tool_names:
+        print(f"  [INFO] MCP 服务器另提供 {len(mcp_tool_names)} 个可引用工具"
+              f"（不在 tools 表，属服务器级注册）")
     miss_tools = []
     for t in plan["tools"]:
         nm = t["name"]
@@ -135,8 +156,11 @@ def main() -> int:
     bad_ref = 0
     for nm, row in skills.items():
         for t in jload(row["allowed_tools"], []):
-            if t not in tools:
-                print(f"  [FAIL] skill「{nm}」引用了不存在的工具: {t}")
+            # ⚠️ 用 `referable`（tools 表 ∪ MCP 服务器工具），不能只用 `tools` ——
+            #    否则 MCP 工具一律被误判为"不存在"（见 ①c 处注释）。
+            if t not in referable:
+                src = "MCP 服务器与 tools 表" if mcp_tool_names else "tools 表"
+                print(f"  [FAIL] skill「{nm}」引用了不存在的工具: {t}（已核对 {src}）")
                 bad_ref += 1
     if bad_ref:
         gaps.append(f"{bad_ref} 处 skill 工具引用失效")

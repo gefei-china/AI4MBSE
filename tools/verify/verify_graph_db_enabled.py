@@ -1,3 +1,6 @@
+# CI-OPTIONAL: 需要随包运行时（java-runtime + fuseki/jena-fuseki-server.jar）与真实 Fuseki 进程，
+#   且 data_checks 断言真库 triples 存量（type 已入图 11 条）—— CI 上两者都不成立 ⇒ 保持本地跑。
+#   本地实测全绿（含真起 Fuseki 验证 rdf:type 是类 IRI）。2026-11-04 门禁盘点确认。
 """门禁：图库「镜像定位」的两条不可回退项。
 
 本脚本守两件**一旦做错就静默失效**的事：
@@ -40,15 +43,40 @@ def _q(sparql: str) -> list:
 
 
 def config_checks() -> list:
+    """配置自洽性：**只在能力启用时**要求后端配好。
+
+    ★ 2026-11-04（门禁盘点）改判据——原实现断言「enabled 必须为 True」，
+      与产品既定决策**相反**：`core/config.py` 的 graph_db 默认值注释明写
+      「enabled: False（默认关，保全现状；开启后走 pyoxigraph 镜像）」，
+      backend 默认 `pyoxigraph`、endpoint 默认 `""`。
+      ⇒ 该断言是一条 wish-list（希望能力上线），不是代码正确性判据；
+        它在 CI 上**恒红**，且把"是否上线图库"这种产品/部署决策
+        伪装成了代码缺陷。
+
+    改判据的依据（区分「静默失效」与「显式关闭」）：
+      · `enabled=True` 而后端没配好 ⇒ 物化返回 synced>0 但图库没数据
+        = **静默失效**，必须判红（这是本门禁真正要守的）；
+      · `enabled=False` ⇒ 物化链走 MockWriter，是**显式**行为（有日志、
+        有 mock 标记），不会让人误以为数据已入图 ⇒ 不构成静默失效。
+
+    ⇒ 现在的判据：启用 ⇒ 后端必须自洽；未启用 ⇒ 只如实报告状态，不判红。
+      「能力是否该上线」不在门禁职责内（那是部署决策）。
+    """
     from core import config
     on = config.as_bool("graph_db", "enabled", False)
     backend = config.get("graph_db", "backend", "pyoxigraph")
     ep = (config.get("graph_db", "endpoint", "") or "").strip()
+
+    if not on:
+        # 未启用：不造红，但把状态和后果说清楚（避免"看着绿就以为有图库"）
+        return [(f"图库已关闭（enabled=False，物化链走 MockWriter —— 显式行为、"
+                 f"非静默失效）。启用后须同时配 backend=fuseki + endpoint；"
+                 f"当前 backend={backend!r} endpoint={ep!r}",
+                 True)]
     return [
-        (f"★ `graph_db.enabled` 已启用（实测 {on}）—— "
-         f"关闭时物化链走 Mock，图库能力形同虚设", on is True),
-        (f"后端 = fuseki（实测 {backend}）", backend == "fuseki"),
-        (f"★ endpoint 非空（实测 {ep!r}）—— 空则 FusekiWriter 直接抛异常",
+        (f"★ 已启用 ⇒ 后端必须是 fuseki（实测 {backend!r}）—— "
+         f"否则 FusekiWriter 不可用、物化静默空转", backend == "fuseki"),
+        (f"★ 已启用 ⇒ endpoint 非空（实测 {ep!r}）—— 空则 FusekiWriter 直接抛异常",
          bool(ep)),
     ]
 
@@ -141,12 +169,38 @@ def live_checks() -> list:
             proc.kill()
 
 
+def mutation_checks() -> list:
+    """变异自证：造出「已启用 + backend≠fuseki + endpoint 空」⇒ 必须判红。
+
+    为什么需要（判据本身要能被击穿）：
+      2026-11-04 把「必须启用」改成「启用时后端必须自洽」，
+      这属于**放宽**判据。放宽最容易变成"以后什么都不拦"，
+      所以必须证明：真的处于「启用但没配好」时，它仍然判红。
+    做法：临时替换 config.as_bool / config.get（纯内存，不写盘、不改配置）。
+    """
+    from core import config as _cfg
+    real_bool, real_get = _cfg.as_bool, _cfg.get
+    try:
+        _cfg.as_bool = lambda *a, **k: True                 # 假装已启用
+        _cfg.get = lambda g, k, d=None: (                   # 造出坏后端
+            "pyoxigraph" if k == "backend" else ("" if k == "endpoint" else real_get(g, k, d)))
+        rows = config_checks()
+        caught = any(not ok for _, ok in rows)
+        detail = next((n for n, ok in rows if not ok), "")
+    finally:
+        _cfg.as_bool, _cfg.get = real_bool, real_get
+    return [(f"M1 ★ 变异：已启用但 backend=pyoxigraph / endpoint 空 ⇒ 必须判红"
+             f"（判定={'判红' if caught else '放行 ✗ 判据空转'}）—— {detail[:60]}",
+             caught)]
+
+
 def main() -> int:
     print("=" * 74)
     print("图库镜像定位门禁（配置 + 数据 + 真实物化）")
     print("=" * 74)
     ok = True
     for title, checks in [("① 配置（物化链能否真到图库）", config_checks()),
+                          ("①b 变异自证（判据不是空转）", mutation_checks()),
                           ("② 数据（是否只装已审核、是否积压）", data_checks()),
                           ("③ 真实链路（起 Fuseki 跑生产物化 + 查回）", live_checks())]:
         print(f"\n{title}")

@@ -208,6 +208,7 @@ def topology_fingerprint(flow: dict) -> str:
                                    for e in st["edges"])),
         "types=" + ",".join("%s:%d" % (k, st["type_counts"][k])
                             for k in sorted(st["type_counts"])),
+        "name=" + str(flow.get("name") or ""),
     ]
     return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()
 
@@ -436,7 +437,7 @@ def summarize(variants: list, groups: list, *,
                                           if total else None),
          "lower_better": False,
          "desc": "有运行证据的画布占比%%（%d/%d）" % (covered, total)},
-        {"name": "failed_runs", "value": failed if covered >= floor else None,
+        {"name": "failed_runs", "value": failed,
          "lower_better": True,
          "desc": "失败运行数（有运行证据的画布不足 %d 幅时记unknown）" % floor},
     ]

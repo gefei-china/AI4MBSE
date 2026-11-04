@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 需外部依赖（本机服务 / 真实 LLM key / 浏览器自动化 / Fuseki+java），CI 无这些运行时 ⇒ 接线必红。本地开发机可跑。判据：源码含 127.0.0.1 / OPENAI_API_KEY / playwright / fuseki 等信号。
 # -*- coding: utf-8 -*-
 """MCP 工具元数据 + 按需暴露（P0-6）门禁。
 

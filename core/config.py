@@ -1211,8 +1211,16 @@ DEFAULT_CONFIG = {
         #   够宽的窗口才有修正空间：实测金标在 RRF 里的名次多是 9~27，
         #   窗口 10 只覆盖到"第 9 名"这类，窗口 25 能救回 `座舱负荷`（名次 24 → 2）。
         #   代价实测只多 **0.25s/次**（1.21s → 1.46s），因为多送 15 段约 +1.5k token。
-        #   ⚠️ 上限仍应 ≤ top_k（当前 25 ≤ 25），否则窗口形同虚设。
-        "rerank_max_candidates": 25, # 送 LLM 重排的候选上限（应 ≤ top_k，否则上限形同虚设）；0 = 全部候选
+        #   ⚠️ 上限仍应 ≤ top_k，否则窗口形同虚设。
+        # ★ 2026-11-04（门禁盘点）：25 → 20，**纯口径对齐，行为不变**。
+        #   原因：`knowledge_engine.hybrid_search` 里 `scored[:top_k]` 先把候选截到
+        #   top_k=20，再交给 `llm_rerank(max_candidates=...)` ⇒ 传 25 与传 20
+        #   **完全等价**（`cand = hits[:max_candidates]` 时 hits 最多 20 条）。
+        #   当年设 25 是因为那时 top_k 也是 25；后来 top_k 降到 20（见 rag.top_k 注释），
+        #   这个 25 忘了跟着降 ⇒ 配置注释自己写着"应 ≤ top_k"却长期违反，
+        #   且 `verify_s4_calls` 的分层不变式 `recall_k ≥ top_k ≥ rerank_max_candidates`
+        #   一直在红。**同一语义的量分处两个键，必然漂移**（本仓已多次踩）。
+        "rerank_max_candidates": 20, # 送 LLM 重排的候选上限（必须 ≤ top_k，否则上限形同虚设）；0 = 全部候选
         # ── P0 记忆召回（2026-09-29）───────────────────────────────────────────
         # 背景：累积层（agent_memory/project_memories）早就建好，但检索侧零消费 ——
         #       knowledge_reflow.py 沉淀的结论从未被下次检索读回，闭环缺一半。

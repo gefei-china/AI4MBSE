@@ -73,19 +73,29 @@ hist_src = read("agent/pipeline_parts/history.py")
 from core.config import DEFAULT_CONFIG as D, CONFIG_SCHEMA as S
 
 rag, ctx = D["rag"], D["context"]
-check("A1 rag.recall_k 默认 20", rag.get("recall_k") == 20, f"got {rag.get('recall_k')}")
+# ★ 2026-11-04 门禁盘点：A1/A3/A4 的期望值落后于配置演进（门禁恒红而配置是对的）。
+#   现值与依据（见 core/config.py 的 rag 组逐键注释）：
+#     recall_k 20→25（金标在 BM25 第 22 位，20 进不了候选池）
+#     inject_k 3→5  / rerank_max_candidates 10→20（后者须 ≤ top_k，见 verify_s4_calls A2.3）
+check("A1 rag.recall_k 默认 25", rag.get("recall_k") == 25, f"got {rag.get('recall_k')}")
 check("A2 rag.top_k 默认 20（原 4）", rag.get("top_k") == 20, f"got {rag.get('top_k')}")
-check("A3 rag.inject_k 默认 3", rag.get("inject_k") == 3, f"got {rag.get('inject_k')}")
-check("A4 rag.rerank_max_candidates 默认 10（原 8）",
-      rag.get("rerank_max_candidates") == 10, f"got {rag.get('rerank_max_candidates')}")
+check("A3 rag.inject_k 默认 5", rag.get("inject_k") == 5, f"got {rag.get('inject_k')}")
+check("A4 rag.rerank_max_candidates 默认 20（须 ≤ top_k）",
+      rag.get("rerank_max_candidates") == 20, f"got {rag.get('rerank_max_candidates')}")
 check("A5 漏斗约束 recall_k ≥ top_k ≥ rerank_max_candidates ≥ inject_k（默认值）",
       rag["recall_k"] >= rag["top_k"] >= rag["rerank_max_candidates"] >= rag["inject_k"],
       f"{rag['recall_k']}/{rag['top_k']}/{rag['rerank_max_candidates']}/{rag['inject_k']}")
 check("A6 context 新增 budget_window_tokens/retrieval_ratio/history_ratio",
       all(k in ctx for k in ("budget_window_tokens", "budget_retrieval_ratio", "budget_history_ratio")),
       f"缺 {[k for k in ('budget_window_tokens','budget_retrieval_ratio','budget_history_ratio') if k not in ctx]}")
-check("A7 占比键默认 0（零行为漂移）",
-      ctx.get("budget_retrieval_ratio") == 0 and ctx.get("budget_history_ratio") == 0)
+check("A7 占比键已启用（检索 0.15 / 历史 0.35）",
+      # ★ 2026-11-04：原断言「默认 0（零行为漂移）」——那是占比制刚引入时的保守默认。
+      #   后续实测确认占比制优于固定绝对值（长文档/大检索集下固定值成硬天花板，
+      #   见 core/config.py 该组注释），config 已改为 0.15/0.35。
+      #   ⇒ 期望值改为「已启用」，并保留"两者都 > 0"的一致性约束。
+      (ctx.get("budget_retrieval_ratio") or 0) > 0 and (ctx.get("budget_history_ratio") or 0) > 0,
+      "retrieval=%r history=%r（若为 0 说明占比制被关闭，需确认是有意回退）"
+      % (ctx.get("budget_retrieval_ratio"), ctx.get("budget_history_ratio")))
 for k in ("recall_k", "inject_k", "budget_window_tokens", "budget_retrieval_ratio", "budget_history_ratio"):
     grp = "rag" if k in ("recall_k", "inject_k") else "context"
     check(f"A8 schema 声明 {grp}.{k}", k in (S.get(grp) or {}), "schema 中缺失")
@@ -126,12 +136,34 @@ try:
     check("B1 占比=0 → 取绝对值 2000", ctx_budget_tokens("history", "budget_history_chars", 3000) == 2000,
           f"got {ctx_budget_tokens('history', 'budget_history_chars', 3000)}")
 
-    # B2 占比 > 0 → 窗口 × 比例
-    setc("context", "budget_window_tokens", 65536)
+    # B2 占比 > 0 → 「**provider 真实窗口** × 比例」
+    # ★ 2026-11-04 门禁盘点改判据：原断言用 `budget_window_tokens=65536` 当分母，
+    #   但实现已于 2026-11-11 改为读 `llm_providers.context_window`（真库默认 provider
+    #   是 128000 ⇒ 128000×0.05=6400，与原期望 3276 不符而判红）。
+    #   实现是对的（"换模型自适应"不能拿固定 64K 当分母），门禁的期望值过期。
+    #   新判据：期望值**与实现同源**取窗口，换模型不假红；分母来源本身另做断言。
+    def _provider_window() -> int:
+        from database import get_db
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT context_window FROM llm_providers WHERE status='active' "
+                "AND model_type<>'embedding' AND is_default=1 "
+                "ORDER BY priority DESC, id ASC LIMIT 1").fetchone()
+            return int((row["context_window"] if row else 0) or 0)
+        finally:
+            conn.close()
+
+    _win = _provider_window()
+    setc("context", "budget_window_tokens", 65536)      # 仅作回落分母
     setc("context", "budget_history_ratio", 0.05)
-    exp = int(65536 * 0.05)
+    exp = int((_win or 65536) * 0.05)
     got = ctx_budget_tokens("history", "budget_history_chars", 3000)
-    check(f"B2 占比=0.05 → 窗口×比例 = {exp}", got == exp, f"got {got}")
+    # 断言名保持**稳定**（动态的窗口值放 detail）——否则换 provider 后
+    # C1/C2 的"按名匹配"会全部失配，变异自证变成假红。
+    check("B2 占比=0.05 → provider窗口×比例（与实现同源取窗口）", got == exp,
+          f"窗口={_win or 65536} exp={exp} got={got}"
+          f"（若 got={int(65536 * 0.05)} 说明分母仍用固定 64K，未取 provider 窗口）")
 
     # B3 占比 > 0 时绝对值被忽略（这是「占比优先」的强断言）
     setc("context", "budget_history_tokens", 999)
@@ -268,7 +300,9 @@ MUT = [
      ["A11 context.py 已无 `chunk_hits[:3]` 硬编码注入", "A12 context.py 读取 rag.inject_k 并以 [:_inject_k] 注入"]),
     ("还原占比制（ratio 分支失效）", "agent/pipeline_parts/history.py",
      "if ratio > 0:", "if False:",
-     ["B2 占比=0.05 → 窗口×比例 = 3276", "B3 占比>0 时绝对值键被忽略（仍按占比）"]),
+     # 断言名必须与 B2 的实际文案**逐字一致**（否则 C1/C2 按名匹配会报"未抓到"）
+     ["B2 占比=0.05 → provider窗口×比例（与实现同源取窗口）",
+      "B3 占比>0 时绝对值键被忽略（仍按占比）"]),
 ]
 MUT_LABELS = [t for _, _, _, _, tags in MUT for t in tags]
 # 判据面不存在（本库无可检索数据 ⇒ B6 已 SKIP）时，B6 相关标签永远不会被抓到

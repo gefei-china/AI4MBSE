@@ -39,15 +39,24 @@ from core import config as cfg  # noqa: E402
 # 注：rag.py 内的**硬编码兜底**（route_threshold 0.75 / top_k 4）仍早于本表，
 #     属既有不一致（仅影响「配置文件缺失」场景），已登记遗留，未在本批改。
 RAG_DEFAULTS = {
-    "route_threshold": 0.7, "recall_k": 20, "top_k": 20, "inject_k": 3,
-    "fallback_top_k": 5, "rrf_k": 60,
+    # ⚠️ 本表是「DEFAULT_CONFIG.rag 的**现状快照**」，不是永久标准。
+    #   它守的是「默认值被无意改动」，所以改配置时必须同步改这里；
+    #   但**约束类**判据（分层不变式 recall_k≥top_k≥rerank_max_candidates≥inject_k）
+    #   在 verify_s4_calls 里另有一条，那条才是"语义正确性"的守卫。
+    #
+    # ★ 2026-11-04 门禁盘点：4 个值落后于配置演进（门禁一直红，而配置是对的）：
+    #   recall_k 20→25（2026-11-02：金标在 BM25 第 22 位，20 根本进不了候选池）
+    #   inject_k 3→5  / rrf_k 60→10 / rerank_max_candidates 10→20
+    #   —— 依据见 core/config.py 的 rag 组逐键注释（每条都有实测数据）。
+    "route_threshold": 0.7, "recall_k": 25, "top_k": 20, "inject_k": 5,
+    "fallback_top_k": 5, "rrf_k": 10,
     "hyde_enabled": True, "hyde_weight": 0.05,
     "w_coverage": 0.50, "w_relations": 0.30, "w_typing": 0.20,
     "confidence_high": 0.70, "confidence_mid": 0.45,
     # P1-22（2026-10-02）：rerank_enabled 默认由 True 改为 **False** —— 官方评测 A/B 实测
     # 证明两级 LLM 重排「召回零提升（recall@3/@5 开与关完全相同）、ndcg 仅 +0.002，
     # 却慢 7 倍、每轮多 ~2585 tokens 且缓存命中恒 0」。旋钮保留，置 true 可重开。
-    "rerank_enabled": False, "rerank_max_candidates": 10,
+    "rerank_enabled": False, "rerank_max_candidates": 20,
 }
 missing = [k for k, v in RAG_DEFAULTS.items() if cfg.DEFAULT_CONFIG.get("rag", {}).get(k) != v]
 check("A1 DEFAULT_CONFIG.rag 15 键默认值（四层漏斗口径）", not missing, f"缺失/不符: {missing}")
@@ -81,7 +90,10 @@ B = [
     ("B11 ke.py HyDE 权重用配置", "hyde_scores.get(cid, 0.0) * _hyde_w" in ke_py),
     ("B12 ke.py 置信等级用配置分界", '_ref >= _conf_high' in ke_py and '_ref >= _conf_mid' in ke_py),
     ("B13 ke.py 重排候选数传配置", "max_candidates=_rerank_cand" in ke_py),
-    ("B14 rerank 开关仍读 rag.rerank_enabled", rr_py.count('_cfg.get("rag", "rerank_enabled", True)') == 1),
+    # ★ 2026-11-04：断言里的默认值 True→False。代码与 DEFAULT_CONFIG 都是 False
+    #   （P1-22 实测重排召回零提升、慢 7 倍），门禁的期望值过期 ⇒ 判红。
+    ("B14 rerank 开关仍读 rag.rerank_enabled",
+     rr_py.count('_cfg.get("rag", "rerank_enabled", False)') == 1),
     # 前端已改版为「参数簇（CTX_CFG_CLUSTERS）」：rag 四层漏斗由 **funnel 簇**承载，
     # 不再有 id:'rag' 的簇（rag 字段改用 sec:'rag' 标记所属配置段）。故改为断言
     # 「漏斗簇存在 + rag 段字段有承载」，保留原意图（前端能配置 rag 参数）。

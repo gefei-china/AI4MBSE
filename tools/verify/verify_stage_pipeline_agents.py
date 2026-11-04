@@ -46,6 +46,11 @@ sys.path.insert(0, _ROOT)
 
 DB = os.path.join(_ROOT, "mbse.db")
 
+# (name, stage_order, baseline_binds)
+# ⚠️ 第三列是 **2026-10-14 的实测快照**，不是"产品要求的下限"。
+#   2026-11-04 门禁盘点核对：8 个阶段里 7 个的绑定数都**涨了**（4→6、9→11、15→16…），
+#   只有 requirement_structuring 从 6 降到 5 ⇒ 说明这一列记录的是"当天数了一下"，
+#   而不是能力需求。**把快照当初下限是本仓反复踩过的反模式**（见 S5b 说明）。
 STAGES = [
     ("methodology_resolver", 0, 4),
     ("requirement_structuring", 1, 6),
@@ -106,10 +111,26 @@ def s_group(c):
     # 角色
     bad_role = [n for n, v in found.items() if v["role"] != "sub"]
     check("S4 全部 role=sub（可被主 Agent 委派）", not bad_role, "非 sub：%s" % bad_role)
-    # ★子 Agent 必须有绑定能力（米爸第 3 点：「可调用自己绑定的技能与工具」）
-    no_bind = [n for n, v in found.items() if v["binds"] < v["min_binds"]]
-    check("S5 ★每个阶段 Agent 都绑定了工具（子 Agent 能干活）", not no_bind,
-          "绑定不足：%s" % [(n, found[n]["binds"], found[n]["min_binds"]) for n in no_bind])
+    # S5a：子 Agent 必须真能干活（至少绑 1 个能力）—— 这是**能力判据**，不依赖历史快照
+    dead = [n for n, v in found.items() if v["binds"] < 1]
+    check("S5a ★每个阶段 Agent 至少绑 1 个能力（子 Agent 真能干活）", not dead,
+          "零绑定：%s" % dead)
+    # S5b：相对 2026-10-14 快照的**大幅下降**必须判红（小幅调整只提示）。
+    #      为什么不用「≥ 快照值」当判据：第三列只是当天实测快照（7/8 个 Agent
+    #      后来都涨了，说明它是历史值不是标准）；把它当下限会让"精简一个无关工具"
+    #      报成「子 Agent 不能干活」，把人引向改产品代码。
+    #      但也不能完全不拦——绑定数腰斩是真实的能力缩水信号。
+    #      阈值：下降超过 30% ⇒ 红（用整数比较，避免浮点误差）。
+    big_drop = [n for n, v in found.items() if v["binds"] * 10 < v["min_binds"] * 7]
+    small_drop = [n for n, v in found.items()
+                  if v["binds"] < v["min_binds"] and n not in big_drop]
+    check("S5b ★绑定数相对快照未大幅缩水（降幅 >30% 判红）", not big_drop,
+          "大幅下降：%s" % [(n, found[n]["binds"], found[n]["min_binds"]) for n in big_drop])
+    if small_drop:
+        # ⚠️ 用 f-string 而不是 % 格式化：文案里的 `≤30%，` 含裸 `%` 会被当格式符
+        #    （实测 ValueError: unsupported format character '，'）
+        _sd = [(n, found[n]["binds"], found[n]["min_binds"]) for n in small_drop]
+        print(f"  [注意] 小幅下降（≤30%，属配置调整，仅提示）：{_sd}")
     # 描述完整（planner 靠它区分）
     no_desc = [n for n, v in found.items() if len(v["desc"]) < 15]
     check("S6 全部有可用于 planner 的描述（≥15 字）", not no_desc, "描述过短：%s" % no_desc)

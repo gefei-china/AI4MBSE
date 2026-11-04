@@ -6,6 +6,11 @@ from routers.knowledge_parts.shared import *
 
 # P1-1（2026-10-15）：发布门禁档位（core.config 单一真源；显式 import——shared 的 * 不带它）
 from core import config as _cfg
+# 分页夹紧：统一走单一实现（2026-11-04 盘点；shared 的 * 不导出它）
+# ⚠️ 语义差异（有意为之，与 graph_workspace 已确立的口径一致）：
+#   原手写 `max(1, min(int(limit or N), C))` 在 `limit=-5` 时返回 **1 条**（最没意义的结果）；
+#   clamp_limit 按 `n <= 0 ⇒ default` 处理，返回默认条数。
+from core.pagination import clamp_limit
 
 _GATE_DESC = {"off": "不拦截（体检仅留痕）", "high": "仅 high 拦截", "warn": "warn 及以上拦截"}
 
@@ -128,7 +133,7 @@ def ontology_health_trend(limit: int = 30, conn=Depends(db_session),
       · `instances_checked=1` ⇒ 慢口径（多扫了逐实例），与默认口径不可直接比。
     前端据此在图上标注断点，而不是把三条不同口径的点连成一条"下降曲线"。
     """
-    limit = max(1, min(int(limit or 30), 200))
+    limit = clamp_limit(limit, default=30, maximum=200)
     rows = conn.execute(
         "SELECT id, ts, source, ontology_version_id, total, high, warn, low, info, "
         "rule_version, rule_count, degraded_count, instances_checked, codes, note "
@@ -269,7 +274,7 @@ def ontology_cq_run(body: dict = None, conn=Depends(db_session), user=Depends(cu
 @router.get("/api/knowledge/ontology/cqs/logs")
 def ontology_cq_logs(limit: int = 50, conn=Depends(db_session), user=Depends(current_user)):
     """CQ 执行历史（最近 N 条，默认 50，含来源 gate/validate/manual —— 追责「谁放行了带红 CQ 的发布」）。"""
-    limit = max(1, min(int(limit or 50), 500))
+    limit = clamp_limit(limit, default=50, maximum=500)
     rows = [dict(r) for r in conn.execute(
         "SELECT l.*, q.question FROM ontology_cq_logs l "
         "LEFT JOIN ontology_questions q ON q.id=l.question_id "

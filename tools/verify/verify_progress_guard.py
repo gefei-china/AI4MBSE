@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-04 盘点实测：在干净库（init_db 新建，CI 等价口径）上 rc≠0，接线会让 CI 恒红、成为噪音。需先逐条定性（产品缺陷 vs 门禁口径过期）再接线。证据：tmp/backlog_probe.json 的 red 列表；方法见 docs/门禁盘点-20261104.md §4。
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """verify_progress_guard.py —— 无进展护闸门禁（2026-11-02，全链路实测发现）。

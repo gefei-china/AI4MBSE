@@ -79,6 +79,21 @@ check("F4 _head_tail_clip 超限时保头尾（头 60% 尾 40%，保结论）",
       "len=%d" % len(_capped))
 check("F5 _head_tail_clip 未超限原样返回", _ht("短文本", cap=50) == "短文本", "")
 
+# ── F7：_head_tail_clip 不得把 ``` 围栏从中间切开（2026-11-04 新增）──────
+#   真库实证 conv 990408 / msg 5761：21432 字正文围栏 13 个（**奇数**），
+#   最后一段 ```sysml 未闭合 ⇒ 尾部「连接已中断」提示直接落进代码块内部。
+#   ⇒ 切口必须对齐到围栏边界（实现见 planner.py::_head_tail_clip 文档）。
+_fenced = ("开头重要信息" + "中" * 300
+           + "\n```sysml\npackage P {\n" + "    part def X;\n" * 120 + "}\n```\n"
+           + "结尾结论" + "后" * 300)
+_out7 = _ht(_fenced, cap=400)
+check("F7 _head_tail_clip 裁剪后围栏仍配对（不切开代码块）",
+      _out7.count("```") % 2 == 0,
+      "fences=%d（奇数=被切开）" % _out7.count("```"))
+check("F7b 围栏对齐不得牺牲头尾（结论仍在）",
+      _out7.startswith("开头重要信息") and _out7.endswith("后"),
+      "len=%d" % len(_out7))
+
 # ── F6：_summarize_item_budget 预算 ─────────────────────────────────────
 _bud = FlowPlannerMixin._summarize_item_budget
 check("F6 预算随子任务数均分并夹在 [floor, item_max]",
@@ -99,8 +114,13 @@ def _twin(fn_name, mutate):
 
 
 # M1：_head_tail_clip 只留头（去掉尾采样）→ 结尾结论丢失，被抓住
-_ns1 = _twin("_head_tail_clip", lambda s: s.replace("return t[:head] + mark + t[-tail:]",
-                                                     "return t[:cap]"))
+#   ★ 2026-11-04：变异锚点随实现更新 ——
+#     原实现是 `return t[:head] + mark + t[-tail:]`（单行切口）；
+#     现实现（围栏对齐后）拆成 h_end / t_start 两个切口 ⇒ 变异点改为「t_start 取全文长度」。
+#   ⚠️ 锚点必须**随实现同步更新**，否则门禁会「锚点未命中 → NameError」而崩，
+#     崩掉的门禁 = 没有门禁（比断言失效更隐蔽）。
+_ns1 = _twin("_head_tail_clip", lambda s: s.replace(
+    "t_start = _align(len(t) - tail, False)", "t_start = len(t)", 1))
 _r1 = _ns1["_head_tail_clip"](_txt, cap=50)
 check("M1 _head_tail_clip 变异（只留头）→ 结尾结论丢失被抓住", not _r1.endswith("结尾结论"), "")
 
