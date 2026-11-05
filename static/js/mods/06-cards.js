@@ -138,7 +138,12 @@ function procBlocksHtml(ex, mid){
 function renderOrchCard(cd){
   const plan = cd.plan||[];
   const doneN = plan.filter(p=>p.status==='done').length;
-  const failN = plan.length - doneN;
+  // ★ 2026-11-05（conv 990461 实测）：旧口径 `plan.length - doneN` 把 partial
+  //   （依赖阻塞、根本没跑）和 skipped（主动放弃）全算成「失败」⇒ 1 个真失败
+  //   被报成「0 完成 / 6 失败」。与 11-pipeline.js 实时 DAG 口径对齐：只数 failed，
+  //   其余非 done 单独报「未完成」，不再把「没做」说成「做砸了」。
+  const failN = plan.filter(p=>p.status==='failed').length;
+  const pendingN = plan.filter(p=>p.status && p.status!=='done' && p.status!=='failed').length;
   const degraded = cd.degraded ? `<span class="st w" style="margin-left:4px;">降级</span>` : '';
   // Task 14：编排汇总状态徽章（card_data.orchestrated_status：full/partial/failed）
   const osc = cd.orchestrated_status;
@@ -234,7 +239,7 @@ function renderOrchCard(cd){
   //   只留一行汇总 chip（🕸 自动编排 · N 个子任务 · 完成 M + 状态徽章），点击展开明细。
   //   此前 rows 默认展开，与已收起的执行过程收口条（V2.6）设计不一致，完成后霸屏。
   return `<div class="rc">
-    <div class="rc-chip b" style="cursor:pointer;user-select:none;" title="点击展开/收起子任务明细" onclick="orchDetailToggle(this)">🕸 自动编排 · ${plan.length} 个子任务 · ${doneN} 完成${failN?` / ${failN} 失败`:''}${degraded}${oscBadge}<span class="chev" style="margin-left:6px;font-size:11.5px;">▾</span></div>
+    <div class="rc-chip b" style="cursor:pointer;user-select:none;" title="点击展开/收起子任务明细" onclick="orchDetailToggle(this)">🕸 自动编排 · ${plan.length} 个子任务 · ${doneN} 完成${failN?` / ${failN} 失败`:''}${pendingN?` / ${pendingN} 未完成`:''}${degraded}${oscBadge}<span class="chev" style="margin-left:6px;font-size:11.5px;">▾</span></div>
     ${partialHint}
     ${budgetHtml}
     ${refHtml}

@@ -2766,6 +2766,11 @@ class StreamMixin:
                                 _ui_summary = _ui_sum(sub_res)
                             except Exception:
                                 _ui_summary = ""
+                            # ★ 2026-11-05（conv 990461 实测）：T1 补跑会用同一 key
+                            #   再执行一遍，旧逻辑直接 append ⇒ t1 在 card_data.plan
+                            #   里出现两次（5 个任务显示成 6 条），失败计数随之虚高。
+                            #   按 key 覆盖：计划轨迹每个任务只保留最后一次终态。
+                            orch_tasks[:] = [x for x in orch_tasks if x.get("key") != tkey]
                             orch_tasks.append({"key": tkey, "title": ttitle,
                                                "agent": tk.get("agent_id"),
                                                "status": "done" if tk_ok else "failed",
@@ -2789,6 +2794,7 @@ class StreamMixin:
                             #   ⚠️ `output` **不截断** —— 用户明确要求"点开能看完整产出"；
                             #      截断会让"查看完整产出"变成看不全，反而不如不给。
                             #      代价是 card_data 变大（实测单条约 +7~10KB），SQLite 无压力。
+                            subtasks[:] = [x for x in subtasks if x.get("key") != tkey]
                             subtasks.append({"key": tkey, "title": ttitle, "agent": tk.get("agent_id") or "",
                                              "deps": _deps_map.get(tkey, []),
                                              "status": "done" if tk_ok else "failed",

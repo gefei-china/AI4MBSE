@@ -639,6 +639,8 @@ function finishStream(r, aiBox) {
   try{ if(aiBox && r && r.message_id) aiBox.dataset.finalizedId = String(r.message_id); }catch(e){}
   // 内容级澄清收尾：done 用 renderMessage 重建会清掉交互卡 → 重建后重新插入澄清卡
   if(r && r.msg_type === 'clarify'){
+    // ★ 2026-11-05：done 收口前先收敛残留 run 态环节，否则「思考中…」会被快照进历史
+    if(typeof procFinalizePending === 'function') procFinalizePending();
     const _pb0 = document.getElementById('proc-box');
     if(_pb0) _pb0.querySelectorAll('.proc-block').forEach(b=>b.classList.add('collapsed'));
     const procHtml = _procBoxBlocksHtml(_pb0);
@@ -654,6 +656,11 @@ function finishStream(r, aiBox) {
   // 流式结束：替换为完整 renderMessage（含执行过程块 + 卡片 + HIL 按钮 + 来源信息）
   const cardTypeMap = {impact:'card_impact', review:'card_review', requirement_analysis:'card_candidates'};
   // 流式结束：全部步骤已完成 → 统一收口（V2.6：默认收起时间线，只留「✓ 已完成」汇总条，可展开按层级回看）
+  // ★ 2026-11-05（conv 990461 实测）：旧版只置 `_procS.done` 就打印「✓ 已完成」，
+  //   timeline 里残留的 run 态环节（尤其「思考中…」）从未被收敛，且此时终止按钮已隐藏、
+  //   `_streaming=false` ⇒ 用户既看到转圈又点不到任何按钮。必须在**快照 DOM 之前**
+  //   把状态翻成终态，否则残影会写进 process_html，刷新后依然存在。
+  if(typeof procFinalizePending === 'function') procFinalizePending();
   const _pb = document.getElementById('proc-box');
   if(_pb) _pb.querySelectorAll('.proc-block').forEach(b=>b.classList.add('collapsed'));
   // V2.4 保留会话内执行过程（完整时间线，历史展开时还原）；2026-09-26：**剔除 live 收口条**，
