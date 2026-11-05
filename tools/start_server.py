@@ -47,14 +47,19 @@ def stop():
         print("[stop] 端口 %d 无服务" % PORT)
         return 0
     # 找到占用端口的 PID 再杀（连带子进程用 /T）
-    out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True).stdout
+    # ⚠️ 2026-11-05 实测（中文 Windows）：`netstat -ano` / `taskkill` 输出是 GBK，
+    #   `text=True` 按 UTF-8 解码会抛 UnicodeDecodeError ⇒ stdout 变 None ⇒
+    #   `out.splitlines()` 再抛 AttributeError，`--stop` 整个不可用（端口根本没停掉）。
+    #   这里只需要 ":8000 " / "LISTENING" / PID 这几个 **ASCII** 片段，
+    #   故显式 utf-8 + errors="replace"：中文乱码无碍匹配，且跨平台都不会再崩。
+    _RUNKW = dict(capture_output=True, text=True, encoding="utf-8", errors="replace")
+    out = subprocess.run(["netstat", "-ano"], **_RUNKW).stdout or ""
     pids = set()
     for line in out.splitlines():
         if ":%d " % PORT in line and "LISTENING" in line:
             pids.add(line.split()[-1])
     for pid in pids:
-        r = subprocess.run(["taskkill", "/PID", pid, "/T", "/F"],
-                           capture_output=True, text=True)
+        r = subprocess.run(["taskkill", "/PID", pid, "/T", "/F"], **_RUNKW)
         print("[stop] taskkill %s -> %s" % (pid, (r.stdout or r.stderr).strip()))
     time.sleep(2)
     print("[stop] 端口仍存活?" , _port_alive())

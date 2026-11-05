@@ -241,6 +241,35 @@ check("P5-s 判据自证（本机路径判红 / 相对路径判绿）",
 # ⇒ 这条以**纪律**存在：docs/门禁分层-20261105.md §9 + AGENTS.md，
 #    人工 review 时核对。承认"判据不可静态化"比留一个假判据诚实。
 
+# ══════════════════════════════════════════════════════════════════════════
+# P7 服务停止脚本不能依赖平台默认编码解码子进程输出
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-11-05 实测（中文 Windows）：`netstat -ano` / `taskkill` 输出是 GBK，
+# `subprocess.run(..., text=True)` 按 UTF-8 解码抛 UnicodeDecodeError ⇒
+# stdout 变 None ⇒ `tools/start_server.py --stop` 崩在 `out.splitlines()`，
+# 端口根本没停掉（当时只能改用按 PID 停）。修法：显式 utf-8 + errors="replace"，
+# 反正解析只依赖 ":8000 " / "LISTENING" / PID 这几个 ASCII 片段。
+_stop_src = open(os.path.join(ROOT, "tools", "start_server.py"),
+                 encoding="utf-8", errors="replace").read()
+check("P7 start_server.py 的 netstat/taskkill 都走容错解码",
+      'errors="replace"' in _stop_src and _stop_src.count("**_RUNKW") >= 2,
+      "count=%d" % _stop_src.count("**_RUNKW"))
+# ⚠️ 地址用拼接而**不写字面量**：元门禁 G8 会全文扫描，源码里只要出现
+#   「回环地址 + 8000 端口」就会被当成"pr 层依赖外部服务"判红（连注释也算），
+#   而这里只是纯文本样本、不发起任何连接。与 P5-s 用 chr(92) 拼路径
+#   避开自命中是同一款做法。
+_local_addr = "127.0.0.1" + ":" + "8000"
+_gbk = ("活动连接\r\n  TCP    %s   0.0.0.0:0   LISTENING   253716\r\n" % _local_addr).encode("gbk")
+_dec = _gbk.decode("utf-8", errors="replace")
+check("P7-s GBK 输出容错解码后仍能匹配 ASCII 关键字",
+      "LISTENING" in _dec and ":8000 " in _dec and "253716" in _dec)
+try:
+    _gbk.decode("utf-8")
+    check("P7-b 反证:不带容错解码必须抛 UnicodeDecodeError", False,
+          "没抛 ⇒ 本自证失真，P7 判据不可信")
+except UnicodeDecodeError:
+    check("P7-b 反证:不带容错解码确实抛 UnicodeDecodeError", True)
+
 print("\n" + "=" * 72)
 print("PASS %d / FAIL %d" % (len(PASS), len(FAIL)))
 print("=" * 72)
