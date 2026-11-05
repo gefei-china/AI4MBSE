@@ -111,16 +111,24 @@ except Exception as e:
     _msg = str(e)
 
 print("     错误端点异常文本：%s" % _msg[:230])
-check("B3 端点错被识别（异常文本标明端点配置错）",
-      "端点配置错" in _msg, _msg[:160])
-check("B4 错误文本含排查指引（$/datasets 核对数据集实名）",
-      "$/datasets" in _msg, _msg[:200])
-check("B5 错误文本点明「服务本身是活的」（区别于连接被拒）",
-      "服务本身是活的" in _msg, _msg[:200])
-check("B6 剥 HTML：报错文本里不得再有标签噪声",
-      ("<html" not in _msg.lower() and "<meta" not in _msg.lower()), _msg[:200])
-check("B6b 剥 HTML 后仍保留了服务端的可读说明（不是清空）",
-      ("HTTP ERROR" in _msg or "not supported" in _msg or "Not Found" in _msg), _msg[:200])
+# ⚠️ 2026-11-05：B3~B6b 要测的是「**打错数据集时 Fuseki 回 404**，异常文本能否
+#   一眼诊断」。Fuseki 没在跑时拿到的是连接拒绝（10061）⇒ 这四条的**判据面不存在**，
+#   必须 SKIP 而非 FAIL。此前它们恒红，把"服务未启"与"错误分类坏了"混同 ——
+#   红色一多，真问题就被淹掉（与本轮别的门禁同族：无样本/无环境要 SKIP 且打印原因）。
+if ("10061" in _msg) or ("积极拒绝" in _msg) or ("Connection refused" in _msg):
+    print("  [SKIP] B3~B6b  端点未监听（%s）⇒ 「端点配置错」的判据面不存在"
+          % _msg[:70])
+else:
+    check("B3 端点错被识别（异常文本标明端点配置错）",
+          "端点配置错" in _msg, _msg[:160])
+    check("B4 错误文本含排查指引（$/datasets 核对数据集实名）",
+          "$/datasets" in _msg, _msg[:200])
+    check("B5 错误文本点明「服务本身是活的」（区别于连接被拒）",
+          "服务本身是活的" in _msg, _msg[:200])
+    check("B6 剥 HTML：报错文本里不得再有标签噪声",
+          ("<html" not in _msg.lower() and "<meta" not in _msg.lower()), _msg[:200])
+    check("B6b 剥 HTML 后仍保留了服务端的可读说明（不是清空）",
+          ("HTTP ERROR" in _msg or "not supported" in _msg or "Not Found" in _msg), _msg[:200])
 
 # B7 404/405 不得触发「服务不可用」熔断（服务是活的，只是打错了门）
 _i = SRC.find("def _note_unavail")

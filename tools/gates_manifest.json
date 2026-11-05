@@ -781,7 +781,7 @@
       "script": "verify_fuseki_endpoint.py",
       "tier": "local",
       "timeout": 240,
-      "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+      "reason": "需真实 Fuseki 在 3030 上跑（B3~B6b 要真 404/405 响应；B8~B10 要真连通）。2026-11-05 起：无服务时这 7 条**显式 SKIP 并打印原因**，不再判红 —— 有服务实测 16 PASS / 0 FAIL，无服务 8 PASS / 4 SKIP，两态都健康。CI 无 Fuseki（随包 java 运行时 + 126MB jar 不入库）⇒ 保持 local。"
     },
     {
       "script": "verify_graph_breaker.py",
