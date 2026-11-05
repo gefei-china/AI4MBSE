@@ -573,6 +573,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_alert_evaluator.py
 
+      # 2026-11-05 回收：此前本机真库 I1「重新安装成功」红 ⇒ 降 local。
+      # 米爸拍板「卸载后重装被拒是 bug」后定位为口径打架：系统预装 legacy 能力
+      #   scope=personal（真库 95/129），user_id=0 人人可消费，却被市场口径拦下。
+      # 修法：legacy 恢复路径跳过 scope 校验，disabled/removed 治理闸门一律保留。
+      # 判据同步补夹具：干净库 plugins=0 时按真库形态在副本内造 3 条系统预装，
+      #   不再整组 SKIP（SKIP 进 pr 等于零防护）。实测干净克隆+空库 28/0、
+      #   真库形态 25/0；把修复回退的变异体 24 PASS / 4 FAIL，I1 明确判红。
+      - name: Guard 卸载/装回全链路（legacy 重装豁免边界矩阵，28 项）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_uninstall_flow.py
+
       - name: Guard ReAct 工具轮次预算两侧一致
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_tool_round_budget.py

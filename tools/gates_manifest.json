@@ -878,9 +878,8 @@
     },
     {
       "script": "verify_uninstall_flow.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 实测：本机真库上 I1「重新安装成功」红——`install()` 拒绝重装「未上架市场」的能力；干净克隆/空库上该判据绿。⇒ 它是**真库市场状态**断言，不是确定性判据。附注：本机红本身可能暴露真缺陷（卸载后应允许重装），待与产品口径确认后再回收。"
+      "tier": "pr",
+      "timeout": 120
     },
     {
       "script": "verify_bm25_indexes_bm25_text.py",
