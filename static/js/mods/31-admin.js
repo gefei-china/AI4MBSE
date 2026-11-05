@@ -1028,6 +1028,7 @@ function _renderSessionDrill(d){
   </div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
     <span class="st ${p.llm_calls?'b':'g'}">LLM ${p.llm_calls||0} 次 / $${Number(p.llm_cost||0).toFixed(4)}</span>
+    ${p.llm_calls_truncated?`<span class="st" style="background:var(--bg2,#f2f3f5);color:var(--mut);" title="统计口径是全量（与列表页一致）；时间线只渲染最近 ${p.llm_calls_shown||0} 条">明细 ${p.llm_calls_shown||0}/${p.llm_calls}</span>`:''}
     ${p.llm_failed?`<span class="st r">失败 ${p.llm_failed}</span>`:''}
     ${p.llm_trunc?`<span class="st w">截断 ${p.llm_trunc}</span>`:''}
     ${p.llm_fallback?`<span class="st w">回退 ${p.llm_fallback}</span>`:''}

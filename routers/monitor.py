@@ -600,12 +600,88 @@ def _sess_rows(conn, sql: str, args=(), clip: int = 0) -> list:
     return rows
 
 
+#: 监控口径的默认时间窗（天）。
+#: 列表与详情的 error_profile **必须用同一个窗口**才可比 —— 曾因详情是全生命周期、
+#: 列表是近 7 天，两处"同一指标"给出不同数（2026-11-05 conv #9779）。单点定义。
+_MONITOR_DAYS = 7
+
+
 def _session_weight(s: dict) -> int:
-    """问题信号加权（越大越优先展示）：失败调用/任务/运行 > 截断/回退 > 重试/HIL。"""
+    """问题信号加权（越大越优先展示）：失败调用/任务/运行 > 截断/回退 > 重试/HIL。
+
+    ⚠️ **公式只此一份**：列表 `/api/monitor/sessions` 与详情 `/api/monitor/session/{id}`
+    都调它。2026-11-05 之前详情里又抄了一遍同样的算式 —— 而两侧的**输入**是两套
+    口径（列表全量聚合 / 详情截断明细），于是同一会话同一个"weight"给出 45 与 40。
+    """
     return (int(s.get("llm_failed") or 0) * 5 + int(s.get("failed_tasks") or 0) * 4
             + int(s.get("failed_runs") or 0) * 4 + int(s.get("llm_trunc") or 0) * 2
             + int(s.get("llm_fallback") or 0) * 2 + int(s.get("llm_retries") or 0)
             + int(s.get("hil") or 0))
+
+
+# ── 问题信号的**列表达式**（列表与详情共用，唯一定义处）──────────────────────
+# 为什么抽出来（2026-11-05 实测，conv #9779）：
+#   列表用 `GROUP BY conversation_id` 全量聚合，详情用 `LIMIT 200` 的明细遍历。
+#   同一会话：列表 llm_calls=367 / call_failed=1 / cost=0.452308，
+#             详情 llm_calls=200 / call_failed=0 / cost=0.268637（**成本少算 40%**）
+#   ⇒ weight 45 vs 40。根因不是算术，是「统计用了展示用的截断明细」。
+#   ⇒ 口径必须共用同一组 SQL 表达式；展示的截断只影响"明细列表"，
+#     绝不能反过来影响"统计"。
+def _llm_signal_cols(lus):
+    """llm_usage_stats 的问题信号列（老库列自适应，缺列时给常量 0）。"""
+    failed_e = "SUM(COALESCE(call_failed,0))" if "call_failed" in lus else "0"
+    trunc_e = ("SUM(CASE WHEN finish_reason='length' THEN 1 ELSE 0 END)"
+               if "finish_reason" in lus else "0")
+    fb_e = "SUM(COALESCE(fallback_used,0))" if "fallback_used" in lus else "0"
+    retry_e = "SUM(COALESCE(retry_count,0))" if "retry_count" in lus else "0"
+    mock_e = "SUM(COALESCE(used_mock,0))" if "used_mock" in lus else "0"
+    return """COUNT(*) calls, %s failed, %s trunc, %s fallback, %s retries, %s mock,
+              ROUND(COALESCE(SUM(estimated_cost),0),6) cost,
+              COALESCE(MAX(latency_ms),0) max_ms, MAX(created_at) last_at""" % (
+        failed_e, trunc_e, fb_e, retry_e, mock_e)
+
+
+_TASK_SIGNAL_COLS = """COUNT(*) total_tasks,
+    SUM(CASE WHEN status IN ('failed','error') THEN 1 ELSE 0 END) failed_tasks"""
+_RUN_SIGNAL_COLS = """COUNT(*) runs,
+    SUM(CASE WHEN phase='failed' THEN 1 ELSE 0 END) failed_runs,
+    SUM(COALESCE(attempt_count,0)) resumes"""
+_HIL_SIGNAL_COLS = "COUNT(*) hil"
+
+
+def _signals_dict(l, t, o, h):
+    """把四张表的一行聚合结果拼成统一的信号 dict（键名即 `_session_weight` 的入参名）。"""
+    return {
+        "llm_calls": l.get("calls") or 0, "llm_failed": l.get("failed") or 0,
+        "llm_trunc": l.get("trunc") or 0, "llm_fallback": l.get("fallback") or 0,
+        "llm_retries": l.get("retries") or 0, "llm_mock": l.get("mock") or 0,
+        "llm_cost": l.get("cost") or 0, "llm_max_ms": l.get("max_ms") or 0,
+        "llm_last_at": l.get("last_at") or "",
+        "total_tasks": t.get("total_tasks") or 0, "failed_tasks": t.get("failed_tasks") or 0,
+        "runs": o.get("runs") or 0, "failed_runs": o.get("failed_runs") or 0,
+        "resumes": o.get("resumes") or 0, "hil": h.get("hil") or 0,
+    }
+
+
+def _session_signals(conn, cid, days=None):
+    """**单会话**的问题信号（与列表 `monitor_sessions` 同一组 SQL 表达式）。
+
+    days=None ⇒ 全生命周期；days=N ⇒ 与列表同口径的近 N 天。
+    详情页要「与列表对得上」，就用 days=列表的 days；要「看真相」，再看 lifetime。
+    """
+    lus = _table_cols(conn, "llm_usage_stats")
+    w, a = "", [cid]
+    if days:
+        w, a = " AND created_at >= datetime('now', ?)", [cid, "-%d days" % int(days)]
+    l = _sess_rows(conn, "SELECT %s FROM llm_usage_stats WHERE conversation_id=?%s"
+                   % (_llm_signal_cols(lus), w), tuple(a)) or [{}]
+    t = _sess_rows(conn, "SELECT %s FROM agent_tasks WHERE conversation_id=?"
+                   % _TASK_SIGNAL_COLS, (cid,)) or [{}]
+    o = _sess_rows(conn, "SELECT %s FROM orch_checkpoints WHERE conversation_id=?"
+                   % _RUN_SIGNAL_COLS, (cid,)) or [{}]
+    h = _sess_rows(conn, "SELECT %s FROM hil_confirmations WHERE conversation_id=?"
+                   % _HIL_SIGNAL_COLS, (cid,)) or [{}]
+    return _signals_dict(l[0], t[0], o[0], h[0])
 
 
 @router.get("/api/monitor/sessions")
@@ -618,30 +694,19 @@ def monitor_sessions(days: int = 7, limit: int = 30, q: str = "", conn=Depends(d
     days = max(min(days, 90), 1)
     limit = min(max(limit, 1), 100)
     lus = _table_cols(conn, "llm_usage_stats")
-    # 老库列自适应：call_failed / finish_reason / fallback_used / retry_count 均为后补列
-    failed_e = "SUM(call_failed)" if "call_failed" in lus else "0"
-    trunc_e = "SUM(CASE WHEN finish_reason='length' THEN 1 ELSE 0 END)" if "finish_reason" in lus else "0"
-    fb_e = "SUM(fallback_used)" if "fallback_used" in lus else "0"
-    retry_e = "SUM(retry_count)" if "retry_count" in lus else "0"
-    mock_e = "SUM(used_mock)" if "used_mock" in lus else "0"
+    # 列表达式一律取自 `_llm_signal_cols` / `_TASK_SIGNAL_COLS` / …（与详情共用同一处定义）
     lls = _sess_rows(conn, f"""
-        SELECT conversation_id cid, COUNT(*) calls, {failed_e} failed, {trunc_e} trunc,
-               {fb_e} fallback, {retry_e} retries, {mock_e} mock,
-               ROUND(COALESCE(SUM(estimated_cost),0),6) cost,
-               COALESCE(MAX(latency_ms),0) max_ms, MAX(created_at) last_at
+        SELECT conversation_id cid, {_llm_signal_cols(lus)}
         FROM llm_usage_stats WHERE conversation_id>0 AND created_at >= datetime('now', ?)
         GROUP BY conversation_id""", (f"-{days} days",))
-    tasks = _sess_rows(conn, """
-        SELECT conversation_id cid, COUNT(*) total_tasks,
-               SUM(CASE WHEN status IN ('failed','error') THEN 1 ELSE 0 END) failed_tasks
+    tasks = _sess_rows(conn, f"""
+        SELECT conversation_id cid, {_TASK_SIGNAL_COLS}
         FROM agent_tasks GROUP BY conversation_id""")
-    runs = _sess_rows(conn, """
-        SELECT conversation_id cid, COUNT(*) runs,
-               SUM(CASE WHEN phase='failed' THEN 1 ELSE 0 END) failed_runs,
-               SUM(COALESCE(attempt_count,0)) resumes
+    runs = _sess_rows(conn, f"""
+        SELECT conversation_id cid, {_RUN_SIGNAL_COLS}
         FROM orch_checkpoints GROUP BY conversation_id""")
-    hils = _sess_rows(conn, """
-        SELECT conversation_id cid, COUNT(*) hil FROM hil_confirmations
+    hils = _sess_rows(conn, f"""
+        SELECT conversation_id cid, {_HIL_SIGNAL_COLS} FROM hil_confirmations
         GROUP BY conversation_id""")
     by = lambda rows: {r["cid"]: r for r in rows}
     lb, tb, ob, hb = by(lls), by(tasks), by(runs), by(hils)
@@ -657,17 +722,11 @@ def monitor_sessions(days: int = 7, limit: int = 30, q: str = "", conn=Depends(d
     for c in convs:
         cid = c["id"]
         l, t, o, h = lb.get(cid, {}), tb.get(cid, {}), ob.get(cid, {}), hb.get(cid, {})
-        s = {"conversation_id": cid, "title": c.get("title") or "", "intent": c.get("current_intent") or c.get("intent") or "",
-             "status": c.get("status") or "", "main_agent": c.get("main_agent") or "",
-             "updated_at": c.get("updated_at") or "",
-             "llm_calls": l.get("calls") or 0, "llm_failed": l.get("failed") or 0,
-             "llm_trunc": l.get("trunc") or 0, "llm_fallback": l.get("fallback") or 0,
-             "llm_retries": l.get("retries") or 0, "llm_mock": l.get("mock") or 0,
-             "llm_cost": l.get("cost") or 0, "llm_max_ms": l.get("max_ms") or 0,
-             "llm_last_at": l.get("last_at") or "",
-             "total_tasks": t.get("total_tasks") or 0, "failed_tasks": t.get("failed_tasks") or 0,
-             "runs": o.get("runs") or 0, "failed_runs": o.get("failed_runs") or 0,
-             "resumes": o.get("resumes") or 0, "hil": h.get("hil") or 0}
+        s = _signals_dict(l, t, o, h)
+        s.update({"conversation_id": cid, "title": c.get("title") or "",
+                  "intent": c.get("current_intent") or c.get("intent") or "",
+                  "status": c.get("status") or "", "main_agent": c.get("main_agent") or "",
+                  "updated_at": c.get("updated_at") or ""})
         s["weight"] = _session_weight(s)
         out.append(s)
     # 排序：问题权重高的绝对优先；同权重按最近活跃（updated_at 为 'YYYY-MM-DD HH:MM:SS' 可字典序比较）
@@ -728,24 +787,21 @@ def monitor_session_detail(conversation_id: int, conn=Depends(db_session)):
     out["hil"] = _sess_rows(conn, """SELECT id, agent_id, run_id, action, status, created_at
         FROM hil_confirmations WHERE conversation_id=? ORDER BY id DESC LIMIT 20""", (cid,))
     # ── 错误画像：一次看全该会话的问题信号（排查首屏直接给结论）──
-    llm = out["llm_calls"]
-    def _n(key): return sum(1 for x in llm if x.get(key))
-    profile = {
-        "llm_calls": len(llm),
-        "llm_failed": _n("call_failed"),
-        "llm_trunc": sum(1 for x in llm if x.get("finish_reason") == "length"),
-        "llm_fallback": _n("fallback_used"),
-        "llm_retries": sum(int(x.get("retry_count") or 0) for x in llm),
-        "llm_mock": _n("used_mock"),
-        "failed_tasks": sum(1 for t in out["agent_tasks"] if t.get("status") in ("failed", "error")),
-        "failed_runs": sum(1 for r in run_rows if r.get("phase") == "failed"),
-        "hil": len(out["hil"]),
-        "llm_cost": round(sum(float(x.get("estimated_cost") or 0) for x in llm), 6),
-        "llm_max_ms": max([int(x.get("latency_ms") or 0) for x in llm] or [0]),
-    }
-    profile["weight"] = (profile["llm_failed"] * 5 + profile["failed_tasks"] * 4
-                         + profile["failed_runs"] * 4 + profile["llm_trunc"] * 2
-                         + profile["llm_fallback"] * 2 + profile["llm_retries"] + profile["hil"])
+    # ⚠️ 2026-11-05 修：**统计口径与列表对齐，不能拿截断明细算**。
+    #   旧实现从上面 `llm_calls`（LIMIT 200）/ `agent_tasks`（LIMIT 100）/
+    #   `orch_runs`（LIMIT 50）/ `hil`（LIMIT 20）四条**展示用**列表里数，
+    #   而列表页是全量 `GROUP BY` 聚合 ⇒ 同一会话 weight 45 vs 40、
+    #   llm_cost 0.452308 vs 0.268637（**成本少算 40%**，conv #9779 实测）。
+    #   现在改成走 `_session_signals`（与列表同一组 SQL），并额外给 lifetime。
+    sig = _session_signals(conn, cid, days=_MONITOR_DAYS)
+    lifetime = _session_signals(conn, cid)
+    profile = dict(sig)
+    profile["weight"] = _session_weight(sig)      # 公式只有一份（见 _session_weight）
+    # 「明细列表被截断了多少」必须显式给出来，否则用户会拿明细条数去质疑统计值。
+    profile["llm_calls_shown"] = len(out["llm_calls"])
+    profile["llm_calls_truncated"] = max(0, int(sig["llm_calls"]) - len(out["llm_calls"]))
+    profile["window_days"] = _MONITOR_DAYS
+    profile["lifetime"] = dict(lifetime, weight=_session_weight(lifetime))
     out["error_profile"] = profile
     # ── P1-2 步骤级归因（AgentEvolver self-attributing 最小版）──
     # error_profile 回答「坏了几次」（计数），attribution 回答「哪一步开始
