@@ -332,7 +332,10 @@ function procAddStage(name, status, detail, detailHtml, body){
   // 生成与校验完成 → 自动收起思考过程（思考没有单独的事件"完成"）
   // ★ 2026-10-27：思考已按轮次拆成多个块（thinking / thinking_rN），这里必须**逐个收口**——
   //   只处理 id==='thinking' 会让第 2 轮之后的思考块永远停在「思考中…」的转圈态。
-  if(name === '生成与校验' && status === 'done' && _procS.thinking) {
+  // ★ 2026-11-05（conv 990461 实测）：后端 `_gen_stage_name()` 在非产码轮返回
+  //   「生成汇总」而不是「生成与校验」（stream.py:38-60）。旧判据只认前者 ⇒
+  //   这类轮次的思考块**永远收不了口**，停在「思考中…」。两个终态阶段名都认。
+  if((name === '生成与校验' || name === '生成汇总') && status === 'done' && _procS.thinking) {
     const _nodes = _procS.timeline.filter(x=>x.type==='thinking' && x.status==='run');
     const _rounds = (_procS.thinkingOrder || []).length;
     if(_nodes.length) {
@@ -915,7 +918,16 @@ function _toolActivity(name){
 // 展示优先用后端 `ui_summary`（已剔除"承接上游/职责是"这类内部交接语）；老历史数据无此字段 →
 // 回退到原 summary，此处只做「去 markdown + 首句收口」（内部黑话的剔除规则留在后端一处，避免两份词表漂移）。
 function _procSumText(t){
-  let s = String(t||'').replace(/\*\*(.+?)\*\*/g,'$1').replace(/`([^`]*)`/g,'$1').replace(/^\s*#{1,6}\s*/gm,'').trim();
+  // ★ 2026-11-05（conv 990461 实测）：本函数会被 procUpsert 拿 `s.detail` 当输入，
+  //   而 `detail` 是**可信 HTML**（planList / subtaskCardHtml 的返回值）。旧版只剥
+  //   markdown 不剥标签 ⇒ 标题后出现 `<div style="display:flex;` 这类裸 HTML 文本；
+  //   且截断正则含半角分号，正好停在 CSS 的第一个 `;`。修法：先解码实体再剥标签，
+  //   让「HTML → 纯文本摘要」这一步真正成立（esc 显示的是文本，不是标签源码）。
+  let s = String(t||'')
+    .replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&')
+    .replace(/<[^>]*>/g,' ')
+    .replace(/\s+/g,' ')
+    .replace(/\*\*(.+?)\*\*/g,'$1').replace(/`([^`]*)`/g,'$1').replace(/^\s*#{1,6}\s*/gm,'').trim();
   if(!s) return '';
   const m = s.match(/[。！？；!?;]/);
   if(m) s = s.slice(0, m.index + 1);
@@ -1054,7 +1066,9 @@ function procMarkStopped(){
     (_procS.timeline||[]).forEach(x=>{
       if(x.status !== 'run') return;
       x.status = 'stopped';
-      x.statusText = (x.id === 'thinking') ? '⏹ 思考已中断' : '⏹ 已终止';
+      // ★ 2026-11-05：思考块按轮次拆成 thinking / thinking_rN，只认 id==='thinking'
+      //   会让第 2 轮之后的块显示「⏹ 已终止」而不是「⏹ 思考已中断」（与 335 行同型）。
+      x.statusText = (x.type === 'thinking') ? '⏹ 思考已中断' : '⏹ 已终止';
       x.elapsedStart = null;
       x.collapsed = true;
       if(x.type === 'subtask' && x.key !== undefined){
@@ -1109,6 +1123,46 @@ function procMarkStopped(){
   try{ _procS.endTime = _procS.endTime || Date.now(); }catch(e){}
   try{ stopElapsedTimer(); }catch(e){}
   try{ procRender(); }catch(e){}
+}
+// ★ 2026-11-05（conv 990461 实测）：SSE `done` → finishStream 只置 `_procS.done`
+//   并撤走终止按钮（showStopBtn(false) / _streaming=false），**不收敛 timeline 里
+//   残留的 run 态环节** ⇒ 顶部「✓ 已完成」与「思考中…」转圈同屏，且没有任何入口
+//   能把状态翻成终态；残影还被 `_procBoxBlocksHtml` 快照进 process_html 永久固化。
+//   与 procMarkStopped 的区别：这是**正常结束**，不冒充「用户终止」，也不冒充「完成」：
+//     · thinking → 已深度思考（思考确实发生过）
+//     · 其它 run 态 → 中性「◦ 已结束」（流已关闭，但无成功证据，不谎报 done）
+//     · DAG run 节点 → partial（未确认），subtask 卡重建以去掉内部「执行中」徽章
+function procFinalizePending(){
+  try{
+    let flipped = 0;
+    (_procS.timeline||[]).forEach(x=>{
+      if(x.status !== 'run') return;
+      if(x.type === 'thinking'){
+        const _rounds = (_procS.thinkingOrder || []).length;
+        x.status = 'done';
+        x.statusText = '✓ 已深度思考' + (_rounds > 1 ? ` ${_rounds} 轮` : '');
+        const _head = _procSumText(String(x.raw || '').replace(/\s+/g,' ').trim());
+        if(_head) x.sub = _head;
+      } else {
+        x.status = 'stopped';
+        x.statusText = '◦ 已结束';
+      }
+      x.elapsedStart = null;
+      x.collapsed = true;
+      if(x.type === 'subtask' && x.key !== undefined){
+        x.detail = subtaskCardHtml(Object.assign({}, x, {status:'partial', error:''})) + _subChildrenHtml(x.key);
+      }
+      flipped++;
+    });
+    if(_procS.dag && _procS.dag.order){
+      _procS.dag.order.forEach(k=>{
+        const n = _procS.dag.nodes[k];
+        if(n && n.status === 'run') n.status = 'partial';
+      });
+    }
+    if(flipped) procRender();
+    return flipped;
+  }catch(e){ return 0; }
 }
 // P0-1：编排 DAG 轨迹图（Cytoscape + dagre，节点=子任务，边=deps 依赖，按状态着色）
 function dagBuild(containerId, data){

@@ -882,6 +882,16 @@
       "timeout": 120
     },
     {
+      "script": "verify_long_query_entity_link.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_orch_ui_residual.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
       "script": "verify_bm25_indexes_bm25_text.py",
       "tier": "nightly",
       "timeout": 240,

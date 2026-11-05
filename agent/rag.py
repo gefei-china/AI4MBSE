@@ -1163,7 +1163,24 @@ class GraphRAG:
           （TDB 为查询镜像，SQLite 为治理权威源）。
         - 回退：SPARQL 无命中 / 未启用 / 异常 → 原 SQLite LIKE 路径（可开关，保全现状）。
         branches: 分支列表（消费侧传已发布(release)分支）；source_docs: 来源文档过滤（SQLite 侧）。
+
+        ⚠️ 2026-11-05（conv 990461 实测）：query 可能是**整份粘贴的模型代码**
+        （实测 94,538 字符）。此前把它原样拼成 ``%{query}%``，突破 SQLite 的
+        ``SQLITE_MAX_LIKE_PATTERN_LENGTH``（默认 50,000 字节）⇒
+        ``OperationalError: LIKE or GLOB pattern too complex``；异常被上层转成
+        error 事件后子任务零产出 ⇒ 判 failed ⇒ 全批编排失败，用户看到「刚发就失败」。
+        治理：**整句 LIKE 只取前 200 字**（实体名不可能更长）；token 路径仍用完整 query
+        （实测 105K 字符分词仅 0.057s / 71 token，无需截断）。超长时打可见日志，
+        不静默吞掉——静默兜底会把「我写错了」变成「查不到但没报错」。
         """
+        _LIKE_MAX = 200
+        _like_q = query if len(query) <= _LIKE_MAX else query[:_LIKE_MAX]
+        if len(query) > _LIKE_MAX:
+            try:
+                print("[entity_link] query 超长 %d 字，整句 LIKE 截断为 %d 字（token 路径不受影响）"
+                      % (len(query), _LIKE_MAX), flush=True)
+            except Exception:
+                pass
         # P1：真图数据库优先（分支命名图）
         try:
             from core import config
@@ -1173,7 +1190,7 @@ class GraphRAG:
                                 config.get("graph_db", "path", ""),
                                 config.get("graph_db", "use_memory", False))
                 try:
-                    hits = query_entities_by_name(_w, query, branches=branches, limit=10)
+                    hits = query_entities_by_name(_w, _like_q, branches=branches, limit=10)
                     if hits:
                         out = []
                         ids = [h["id"] for h in hits if h.get("id")]
@@ -1202,7 +1219,7 @@ class GraphRAG:
         rows = conn.execute(
             f"SELECT * FROM entities WHERE (name LIKE ? OR id LIKE ?) AND status != 'deprecated' "
             f"AND branch IN ({in_sql})" + doc_sql + " LIMIT 10",
-            (f"%{query}%", f"%{query}%", *branches, *doc_params)
+            (f"%{_like_q}%", f"%{_like_q}%", *branches, *doc_params)
         ).fetchall()
         if rows:
             return [dict(r) for r in rows]
@@ -1211,7 +1228,7 @@ class GraphRAG:
         # 注意占位符顺序：branch IN 在 ON 子句中先于 WHERE 的 alias LIKE，参数需按 SQL 文本序绑定。
         alias_rows = []
         try:
-            a_cond, a_params = ["(a.alias_name LIKE ? OR a.alias_name LIKE ?)"], [f"%{query}%", f"%{query}%"]
+            a_cond, a_params = ["(a.alias_name LIKE ? OR a.alias_name LIKE ?)"], [f"%{_like_q}%", f"%{_like_q}%"]
             _a_toks = [t for t in GraphRAG._tokens(query) if len(t) >= 2][:8]
             if _a_toks:
                 a_cond.append("(" + " OR ".join(["a.alias_name LIKE ?"] * len(_a_toks)) + ")")

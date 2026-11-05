@@ -584,6 +584,18 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_uninstall_flow.py
 
+      # 2026-11-05（conv 990461 实证）：粘贴 94,538 字符 SysML 代码 ⇒
+      #   `%{query}%` 撑爆 SQLite LIKE 上限 ⇒ 首个子任务零产出 ⇒ 整轮全批失败。
+      #   两条门禁分别守后端（含"未截断必须复现事故"的反证）与前端
+      #   （状态收敛 / 裸 HTML / 失败计数 / T1 重复，Node 真实函数行为 + 变异自证）。
+      - name: Guard 超长 query 不撑爆 SQLite LIKE（反证 + 行为）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_long_query_entity_link.py
+
+      - name: Guard 编排 UI 残影与计数口径（静态接线 + Node 行为）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_orch_ui_residual.py
+
       - name: Guard ReAct 工具轮次预算两侧一致
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_tool_round_budget.py
