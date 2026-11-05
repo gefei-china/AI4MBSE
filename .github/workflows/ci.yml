@@ -88,9 +88,14 @@ jobs:
       - name: Init database (schema + seeds)
         run: python -c "from database import init_db; init_db()"
 
-      - name: pytest（35 项单元/功能测试）
+      # ⚠️ 2026-11-05：pytest 收进**门禁清单**（verify_pytest_suite.py，tier=pr），
+      #   不再是 ci.yml 里的裸步骤。原因：`gate_runner --tier pr` 只跑清单里的门禁，
+      #   而 pytest 从不在清单 ⇒ 本地"160/160 全绿"后推送，CI **第一步**就红
+      #   （test_probe_filter_consumers 用精确 SQL 串当锚点）。
+      #   ⇒ "本地预演 = CI" 必须有机制保障，否则靠人记得跑 pytest 是空话。
+      - name: Guard pytest 全量套件（CI 同口径 -q -p no:warnings）
         if: ${{ !cancelled() }}
-        run: pytest -q -p no:warnings
+        run: python tools/verify/verify_pytest_suite.py
 
       # ── 以下门禁均为「零 LLM、零外部网络」，退出码即判定 ──────────────────────────
       - name: Guard 编排输入/输出预算不变式（I1~I5 + M1~M12）

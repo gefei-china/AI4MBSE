@@ -196,8 +196,18 @@ def test_alert_business_metrics_exclude_probe():
         "★ 成本/调用量口径未拼 _PROBE"
     assert _block_has_probe("SELECT latency_ms FROM llm_usage_stats"), \
         "★ 延迟 p95 未拼 _PROBE"
-    assert _block_has_probe("WHERE date(created_at)=date('now','localtime')"), \
-        "★ 今日成本未拼 _PROBE"
+    # ⚠️ 2026-11-05：锚点从**精确字面量**改成**正则形状**。
+    #   原锚点 `WHERE date(created_at)=date('now','localtime')` 在给存储列补上
+    #   `,'localtime'` 修饰符（修 UTC 存值 × 本地日期的口径错配）后失效 ⇒
+    #   测试报"找不到锚点"而不是"探针过滤丢了"——典型**假红**。
+    #   判据要问的是"今日成本那段 SQL 有没有 _PROBE"，不是"这段 SQL 恰好长什么样"。
+    import re as _re
+    pat = _re.compile(r"FROM llm_usage_stats\b(?:(?!FROM |_PROBE).)*?"
+                      r"date\(created_at[^)]*\)\s*=\s*date\('now','localtime'\)", _re.S)
+    m = pat.search(src)
+    assert m, "★ 找不到「今日成本」SQL（`date(created_at…) = date('now','localtime')`）"
+    seg = src[m.start():m.end() + 400]
+    assert "_PROBE" in seg, "★ 今日成本未拼 _PROBE"
 
 
 def test_alert_fail_rate_keeps_probe_on_purpose():

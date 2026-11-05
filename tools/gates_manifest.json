@@ -652,6 +652,12 @@
       "reason": "两库都红 [FAIL] [FAIL] ★ 第二次命中二进制（hit_bin 增量=+0，应为 1）"
     },
     {
+      "script": "verify_agent_archive.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D3 用真库副本做「档案库收敛」取证（真库零写入）；干净克隆无 mbse.db"
+    },
+    {
       "script": "verify_agent_name_unify.py",
       "tier": "local",
       "timeout": 240,
@@ -662,6 +668,12 @@
       "tier": "local",
       "timeout": 240,
       "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+    },
+    {
+      "script": "verify_arch_assumptions.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。B1 断言「视图生成本身由 skill 承载且被用过」，空库 0 个视图 skill、0 次使用"
     },
     {
       "script": "verify_attachment_fulltext.py",
@@ -688,10 +700,82 @@
       "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
     },
     {
+      "script": "verify_branch_permission_gates.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红：断言取证 `ROOT/mbse.db`（真库）的存量数据；干净克隆无该文件。证据：~~~~~^^^^^"
+    },
+    {
+      "script": "verify_branch_protection_rules.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。REAL=ROOT/mbse.db 做「零回归：既有保护语义不变」对拍；干净克隆无 mbse.db"
+    },
+    {
+      "script": "verify_capability_consistency.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言技能已发布可绑定；空库种子里的技能是 draft（status=409）"
+    },
+    {
+      "script": "verify_chat_scroll_layout.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D 断言本机浏览器实测证据 outputs/_verify_cv_fixed.json 已留档（outputs/ 不入库）"
+    },
+    {
+      "script": "verify_checker_diag_encoding.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需 checker.jar（126MB 随包运行时，.gitignore 排除）⇒ CI 上 verdict=unavailable"
+    },
+    {
+      "script": "verify_chunk_gold.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。用真库 document_chunks 真实切片算 nDCG/命中率；空库无文档切片"
+    },
+    {
+      "script": "verify_ck_phase_consistency.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D1 断言真库存在「口径分裂现场 run 531」；空库无该 run"
+    },
+    {
+      "script": "verify_conv9726_fixes.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库会话 9726 的三项修复（判读句/语义去重/降级顺序）；空库无该会话"
+    },
+    {
+      "script": "verify_conv9730_continue.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库会话 9730 的四项根因；空库无该会话"
+    },
+    {
+      "script": "verify_conv_anchors.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库 tool_call_logs id=4593 那次会话的锚点提取；空库无该记录"
+    },
+    {
       "script": "verify_embed_unavail_breaker.py",
       "tier": "local",
       "timeout": 240,
       "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+    },
+    {
+      "script": "verify_entity_versions.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。从真库快照拷贝后跑时态迁移验证（fresh_copy）；干净克隆无 mbse.db"
+    },
+    {
+      "script": "verify_failure_kind.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D2 断言真库 failure_kind 分布 ≥5 类且 internal<60%；空库仅 3 类 22 条样本"
     },
     {
       "script": "verify_fuseki_endpoint.py",
@@ -712,6 +796,24 @@
       "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
     },
     {
+      "script": "verify_hil_write_gate.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。先 `file:mbse.db?mode=ro` 只读取证再建临时副本（真库金标）；干净克隆无 mbse.db"
+    },
+    {
+      "script": "verify_mcp_tool_closure.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需真库 mcp_servers.tool_meta（MCP 重新发现后才有）；空库该字段为空"
+    },
+    {
+      "script": "verify_orch_failure_class.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。F 段断言「真库 agent_tasks 有 failed 记录并可按 error_class 分解」；空库无失败样本"
+    },
+    {
       "script": "verify_orch_span.py",
       "tier": "local",
       "timeout": 240,
@@ -724,10 +826,64 @@
       "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
     },
     {
+      "script": "verify_pipeline_closure.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言 skill 引用的 MCP 工具在库里注册；空库未做 MCP 发现 ⇒ 工具缺失"
+    },
+    {
+      "script": "verify_protocol_artifacts.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。E1 断言真库 subtask_artifacts 有行且 summary_json 三数组非空；空库 0 行"
+    },
+    {
       "script": "verify_replan_p1.py",
       "tier": "local",
       "timeout": 240,
       "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+    },
+    {
+      "script": "verify_session_monitor.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。V4 下钻断言真库会话 #9779 的明细（356 段证据链）；空库无该会话。附：该门禁已抓出真缺陷 weight 详情40≠列表45（待修）"
+    },
+    {
+      "script": "verify_skill_package_sync.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。S3 需生成型 skill 包 zhiyuan_mcp_tools 的 references 目录（随包/生成产物）"
+    },
+    {
+      "script": "verify_skill_tool_names.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需真库 zhiyuan-dev-mcp 的 tool_meta；空库无"
+    },
+    {
+      "script": "verify_stdlib_index_coverage.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需 sysml.library（7.7MB OMG 规范库，.gitignore 排除）⇒ 索引为空、定义数 0"
+    },
+    {
+      "script": "verify_subtask_status.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。G1 需要 failed 子任务样本算空文本率；空库 0/0（分母为 0 时判据无意义）"
+    },
+    {
+      "script": "verify_thinking_autotune.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言用真库 intent 记录产出建议清单；空库无历史 intent"
+    },
+    {
+      "script": "verify_uninstall_flow.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 实测：本机真库上 I1「重新安装成功」红——`install()` 拒绝重装「未上架市场」的能力；干净克隆/空库上该判据绿。⇒ 它是**真库市场状态**断言，不是确定性判据。附注：本机红本身可能暴露真缺陷（卸载后应允许重装），待与产品口径确认后再回收。"
     },
     {
       "script": "verify_bm25_indexes_bm25_text.py",
@@ -842,12 +998,6 @@
       "timeout": 120
     },
     {
-      "script": "verify_agent_archive.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D3 用真库副本做「档案库收敛」取证（真库零写入）；干净克隆无 mbse.db"
-    },
-    {
       "script": "verify_agent_catalog.py",
       "tier": "pr",
       "timeout": 120
@@ -881,12 +1031,6 @@
       "script": "verify_answer_no_inner_scroll.py",
       "tier": "pr",
       "timeout": 120
-    },
-    {
-      "script": "verify_arch_assumptions.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。B1 断言「视图生成本身由 skill 承载且被用过」，空库 0 个视图 skill、0 次使用"
     },
     {
       "script": "verify_artifact_validator.py",
@@ -924,18 +1068,6 @@
       "timeout": 120
     },
     {
-      "script": "verify_branch_permission_gates.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红：断言取证 `ROOT/mbse.db`（真库）的存量数据；干净克隆无该文件。证据：~~~~~^^^^^"
-    },
-    {
-      "script": "verify_branch_protection_rules.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。REAL=ROOT/mbse.db 做「零回归：既有保护语义不变」对拍；干净克隆无 mbse.db"
-    },
-    {
       "script": "verify_budget_headroom.py",
       "tier": "pr",
       "timeout": 120
@@ -956,12 +1088,6 @@
       "timeout": 120
     },
     {
-      "script": "verify_capability_consistency.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言技能已发布可绑定；空库种子里的技能是 draft（status=409）"
-    },
-    {
       "script": "verify_capability_overview.py",
       "tier": "pr",
       "timeout": 120
@@ -977,24 +1103,6 @@
       "timeout": 120
     },
     {
-      "script": "verify_chat_scroll_layout.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D 断言本机浏览器实测证据 outputs/_verify_cv_fixed.json 已留档（outputs/ 不入库）"
-    },
-    {
-      "script": "verify_checker_diag_encoding.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需 checker.jar（126MB 随包运行时，.gitignore 排除）⇒ CI 上 verdict=unavailable"
-    },
-    {
-      "script": "verify_chunk_gold.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。用真库 document_chunks 真实切片算 nDCG/命中率；空库无文档切片"
-    },
-    {
       "script": "verify_ci_comment_consistency.py",
       "tier": "pr",
       "timeout": 120
@@ -1003,12 +1111,6 @@
       "script": "verify_citation_alignment.py",
       "tier": "pr",
       "timeout": 120
-    },
-    {
-      "script": "verify_ck_phase_consistency.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D1 断言真库存在「口径分裂现场 run 531」；空库无该 run"
     },
     {
       "script": "verify_claims_and_conflicts.py",
@@ -1066,24 +1168,6 @@
       "timeout": 120
     },
     {
-      "script": "verify_conv9726_fixes.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库会话 9726 的三项修复（判读句/语义去重/降级顺序）；空库无该会话"
-    },
-    {
-      "script": "verify_conv9730_continue.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库会话 9730 的四项根因；空库无该会话"
-    },
-    {
-      "script": "verify_conv_anchors.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库 tool_call_logs id=4593 那次会话的锚点提取；空库无该记录"
-    },
-    {
       "script": "verify_conv_failure_attribution.py",
       "tier": "pr",
       "timeout": 120
@@ -1124,12 +1208,6 @@
       "timeout": 120
     },
     {
-      "script": "verify_entity_versions.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。从真库快照拷贝后跑时态迁移验证（fresh_copy）；干净克隆无 mbse.db"
-    },
-    {
       "script": "verify_eval_fingerprint_gate.py",
       "tier": "pr",
       "timeout": 120
@@ -1148,12 +1226,6 @@
       "script": "verify_evidence_recheck.py",
       "tier": "pr",
       "timeout": 120
-    },
-    {
-      "script": "verify_failure_kind.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D2 断言真库 failure_kind 分布 ≥5 类且 internal<60%；空库仅 3 类 22 条样本"
     },
     {
       "script": "verify_final_content_contract.py",
@@ -1204,12 +1276,6 @@
       "script": "verify_hier_events.py",
       "tier": "pr",
       "timeout": 120
-    },
-    {
-      "script": "verify_hil_write_gate.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。先 `file:mbse.db?mode=ro` 只读取证再建临时副本（真库金标）；干净克隆无 mbse.db"
     },
     {
       "script": "verify_hyde_heading.py",
@@ -1312,12 +1378,6 @@
       "timeout": 120
     },
     {
-      "script": "verify_mcp_tool_closure.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需真库 mcp_servers.tool_meta（MCP 重新发现后才有）；空库该字段为空"
-    },
-    {
       "script": "verify_memory_admin.py",
       "tier": "pr",
       "timeout": 120
@@ -1391,12 +1451,6 @@
       "script": "verify_online_eval_loop.py",
       "tier": "pr",
       "timeout": 120
-    },
-    {
-      "script": "verify_orch_failure_class.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。F 段断言「真库 agent_tasks 有 failed 记录并可按 error_class 分解」；空库无失败样本"
     },
     {
       "script": "verify_orch_planning.py",
@@ -1479,12 +1533,6 @@
       "timeout": 120
     },
     {
-      "script": "verify_pipeline_closure.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言 skill 引用的 MCP 工具在库里注册；空库未做 MCP 发现 ⇒ 工具缺失"
-    },
-    {
       "script": "verify_pipeline_concurrency.py",
       "tier": "pr",
       "timeout": 120
@@ -1525,10 +1573,9 @@
       "timeout": 120
     },
     {
-      "script": "verify_protocol_artifacts.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。E1 断言真库 subtask_artifacts 有行且 summary_json 三数组非空；空库 0 行"
+      "script": "verify_pytest_suite.py",
+      "tier": "pr",
+      "timeout": 900
     },
     {
       "script": "verify_rag_config.py",
@@ -1626,12 +1673,6 @@
       "timeout": 120
     },
     {
-      "script": "verify_session_monitor.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。V4 下钻断言真库会话 #9779 的明细（356 段证据链）；空库无该会话。附：该门禁已抓出真缺陷 weight 详情40≠列表45（待修）"
-    },
-    {
       "script": "verify_setting_keys_guard.py",
       "tier": "pr",
       "timeout": 120
@@ -1647,18 +1688,6 @@
       "timeout": 120
     },
     {
-      "script": "verify_skill_package_sync.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。S3 需生成型 skill 包 zhiyuan_mcp_tools 的 references 目录（随包/生成产物）"
-    },
-    {
-      "script": "verify_skill_tool_names.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需真库 zhiyuan-dev-mcp 的 tool_meta；空库无"
-    },
-    {
       "script": "verify_slot_merge.py",
       "tier": "pr",
       "timeout": 120
@@ -1667,12 +1696,6 @@
       "script": "verify_stage_pipeline_agents.py",
       "tier": "pr",
       "timeout": 120
-    },
-    {
-      "script": "verify_stdlib_index_coverage.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需 sysml.library（7.7MB OMG 规范库，.gitignore 排除）⇒ 索引为空、定义数 0"
     },
     {
       "script": "verify_stream_event_log.py",
@@ -1695,21 +1718,9 @@
       "timeout": 120
     },
     {
-      "script": "verify_subtask_status.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。G1 需要 failed 子任务样本算空文本率；空库 0/0（分母为 0 时判据无意义）"
-    },
-    {
       "script": "verify_tenant_isolation.py",
       "tier": "pr",
       "timeout": 120
-    },
-    {
-      "script": "verify_thinking_autotune.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言用真库 intent 记录产出建议清单；空库无历史 intent"
     },
     {
       "script": "verify_thinking_budget.py",
@@ -1770,12 +1781,6 @@
       "script": "verify_trace_inherit.py",
       "tier": "pr",
       "timeout": 120
-    },
-    {
-      "script": "verify_uninstall_flow.py",
-      "tier": "local",
-      "timeout": 120,
-      "reason": "2026-11-05 实测：本机真库上 I1「重新安装成功」红——`install()` 拒绝重装「未上架市场」的能力；干净克隆/空库上该判据绿。⇒ 它是**真库市场状态**断言，不是确定性判据。附注：本机红本身可能暴露真缺陷（卸载后应允许重装），待与产品口径确认后再回收。"
     },
     {
       "script": "verify_ux_metrics.py",
