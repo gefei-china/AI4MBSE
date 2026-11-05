@@ -58,6 +58,7 @@ span 树（orch_run_spans + services/orch_span.py）补这一格；本门禁钉�
     <repo>\\.venv\\Scripts\\python.exe -X utf8 tools/verify/verify_orch_span.py [--live]
 退出码：全绿 0 / 有失败或空转 1。
 """
+import ast as _ast
 import json
 import os
 import shutil
@@ -95,6 +96,32 @@ def _rec(name, ok, detail="", kind=FAIL):
 def _read(p):
     with open(p, encoding="utf-8") as f:
         return f.read()
+
+
+def _has_param(src, func_name, param):
+    """函数签名里是否有名为 `param` 的形参（**AST 级**，不看字面量）。
+
+    ⚠️ 2026-11-05：P2a 原先断言 `"_tracer=None):" in stream` ——
+    即要求 `_tracer=None` **正好是最后一个参数**。而实现后来在它之后又加了
+    `deadline_ts` / `session_conv_id` / `overrides` 三个参数（完全合法的演进），
+    于是 `_tracer=None,` 后面不再是 `):` ⇒ **判据恒红、代码其实是对的**。
+    ⇒ 判据必须问「签名里有没有这个形参」，而不是「这段字面量在不在」。
+    （本仓同族教训：用固定行窗口做源码回溯 → 全改 AST。）
+    """
+    try:
+        tree = _ast.parse(src)
+    except SyntaxError:
+        return False
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == func_name:
+            a = node.args
+            names = [x.arg for x in (getattr(a, "posonlyargs", []) or []) + a.args + a.kwonlyargs]
+            if a.vararg:
+                names.append(a.vararg.arg)
+            if a.kwarg:
+                names.append(a.kwarg.arg)
+            return param in names
+    return False
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -212,8 +239,14 @@ def t_static():
                and "_tracer.flush()" in conv)
     ok &= _rec("P1c M1 done 帧回填 intent/route 后闭 conversation span",
                "_tracer.end_conversation(" in conv)
-    ok &= _rec("P2a M2 execute_stream 收 _tracer 参数（跨线程显式传参）",
-               "_tracer=None):" in stream)
+    ok &= _rec("P2a M2 execute_stream 收 _tracer 形参（跨线程显式传参；AST 判据）",
+               _has_param(stream, "execute_stream", "_tracer"),
+               "签名里找不到 _tracer 形参 ⇒ 跨线程显式传参断了")
+    # P2a 判据自证：合成两例必须一绿一红（防判据退化成恒真/恒假）
+    _syn_ok = _has_param("def f(a, _tracer=None, deadline_ts=0.0):\n    pass\n", "f", "_tracer")
+    _syn_bad = _has_param("def f(a, deadline_ts=0.0):\n    pass\n", "f", "_tracer")
+    ok &= _rec("P2a-s 判据自证（参数在中间=绿 / 参数缺失=红）",
+               _syn_ok and not _syn_bad, "ok=%s bad=%s" % (_syn_ok, _syn_bad))
     ok &= _rec("P2b M2 worker 线程里 set_current_tracer（ContextVar 不跨线程继承）",
                "set_current_tracer as _set_ct" in stream and "_set_ct(_tracer)" in stream)
     ok &= _rec("P2c M2 ReAct 轮包 with _turn_cm（_turn_cm 定义 + 调用点）",

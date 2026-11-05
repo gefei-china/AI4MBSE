@@ -854,11 +854,11 @@ check("E1d schema.py import 接线",
 check("E1e schema.py 调用点接线",
       "_migrate_agent_archive_p23(conn)" in _sc)
 
-_ci = _read(os.path.join(".github", "workflows", "ci.yml"))
-check("E2 CI 已接线 verify_agent_archive", "verify_agent_archive.py" in _ci)
-check("E2b CI 注释含设计依据（DGM/死路记忆）",
-      "档案库" in _ci or "死路" in _ci or "P2-3" in _ci)
-
+# ⚠️ 2026-11-05 **删除**了原 E2 / E2b「CI 已接线 verify_agent_archive + CI 注释含设计依据」。
+#   理由同 verify_replan_p1 的 S6：**门禁不该自证自己跑在哪一层**。
+#   「清单 pr ⊆ ci.yml」由 verify_gate_manifest G6a 统一管、反方向由 G11 管；
+#   在业务门禁里再断一次 = 两处真源，本门禁降级到 local 后必然假红
+#   （降级是完全合法的操作，不该触发任何业务门禁变红）。
 _ri = _read(os.path.join("routers", "__init__.py"))
 _mn = _read("main.py")
 check("E3a routers/__init__.py 导入 agent_archive_router",

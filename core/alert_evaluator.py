@@ -146,13 +146,27 @@ def collect_global_metrics(conn) -> dict:
 
     # ── 成本突增：今日累计 vs 昨日同一时刻前（同口径比较，避免"刚过零点就暴涨"的伪阳性）──
     # ⚠️ 业务口径：排除探针（否则成本曲线约一半来自 chat_probe）
+    # ⚠️ 2026-11-05 真缺陷修复：`created_at` 存的是 **UTC**（SQLite CURRENT_TIMESTAMP），
+    #   而这里原来用 `date('now','localtime')`（**本地日期**）去比 ⇒ 口径错配。
+    #   在中国时区（UTC+8），本地 00:00~08:00 期间：
+    #     · 库中最新记录的 date(created_at) 仍是"UTC 昨天"
+    #     · 而 date('now','localtime') 已是"本地今天"
+    #   ⇒ today 恒为 0 ⇒ 倍数恒 0 ⇒ **成本突增告警每天失效 8 小时**（实测撞上）。
+    #   正解：把**存储列也转成本地**再比（`date(created_at,'localtime')`），
+    #   这样"今日"是用户语义上的本地自然日，且与 UTC 存值对齐。
     try:
         today = float(_one("SELECT COALESCE(SUM(estimated_cost),0) FROM llm_usage_stats "
-                           "WHERE date(created_at)=date('now','localtime')" + _PROBE) or 0)
+                           "WHERE date(created_at,'localtime')=date('now','localtime')"
+                           + _PROBE) or 0)
         yday = float(_one("SELECT COALESCE(SUM(estimated_cost),0) FROM llm_usage_stats "
-                          "WHERE date(created_at)=date('now','localtime','-1 day') "
-                          "AND time(created_at) <= time('now','localtime')" + _PROBE) or 0)
+                          "WHERE date(created_at,'localtime')=date('now','localtime','-1 day') "
+                          "AND time(created_at,'localtime') <= time('now','localtime')"
+                          + _PROBE) or 0)
         m["cost_today_vs_yday"] = round(today / yday, 2) if yday > 0.000001 else 0.0
+        # ⚠️ 已知边界（2026-11-05 记录，未改，属产品口径决策）：
+        #   yday≈0 而 today>0 时返回 0.0 ⇒「从零开始花钱」不会触发成本突增告警，
+        #   而这恰恰是最该告警的场景。改成"返回一个大数/单独信号"会改变现网告警行为，
+        #   需产品确认后再动。此处只标注，避免下一个人以为这是 bug 就顺手改掉。
     except Exception:
         pass
 
