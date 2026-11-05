@@ -3,7 +3,7 @@
 运行后自动清理副本。"""
 import os, sys, json, shutil, sqlite3
 
-BASE = r'C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system'
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE)
 from plugin_system import store  # noqa
 

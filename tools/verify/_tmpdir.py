@@ -19,8 +19,8 @@
 """
 from __future__ import annotations
 
-import atexit
 import os
+import atexit
 import shutil
 import tempfile
 import threading

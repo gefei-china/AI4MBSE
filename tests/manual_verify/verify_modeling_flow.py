@@ -15,7 +15,7 @@ import re
 import sys
 import time
 
-BASE = r"C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system"
+BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, BASE)
 OUTPUTS = os.path.join(BASE, "outputs")
 

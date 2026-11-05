@@ -7,13 +7,13 @@
 无法重嵌 → 置空（检索侧 v2 自动回退 embedding 列主路）。
 可中断可重跑：按 id 升序分页，已重嵌行会被同模型再次覆盖（无害）。
 """
+import os
 import json
 import sys
 import time
 
-sys.path.insert(0, r"C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system")
-import os
-os.chdir(r"C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import db_conn, get_db
 from knowledge_pipeline import Embedder
@@ -24,7 +24,8 @@ T0 = time.time()
 
 conn = db_conn().__enter__() if False else None  # 占位，下面用显式连接
 import sqlite3
-con = sqlite3.connect(r"C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system/mbse.db")
+con = sqlite3.connect((os.environ.get("MBSE_DB_PATH") or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mbse.db")))
 total = con.execute("SELECT COUNT(*) FROM document_chunks WHERE content != ''").fetchone()[0]
 print(f"待重嵌 {total} 行", flush=True)
 

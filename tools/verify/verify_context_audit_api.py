@@ -17,7 +17,7 @@ import json
 import shutil
 import tempfile
 
-ROOT = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system"
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 # ⚠️ 2026-10-30 修：此前**硬编码**一份备份快照（`backups/t-prod-20261026-122709.db`），
 #   而 `backups/` 是会被清理的目录 ⇒ 该文件一旦不在，本门禁**永远红**

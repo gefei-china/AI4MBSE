@@ -16,7 +16,7 @@ import json
 import shutil
 import tempfile
 
-ROOT = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system"
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 PROD = os.path.join(ROOT, "backups", "t-prod-20261026-122709.db")
 T = os.path.join(tempfile.gettempdir(), "role_filter.db")

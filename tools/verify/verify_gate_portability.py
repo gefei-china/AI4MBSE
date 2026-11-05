@@ -34,6 +34,7 @@ CI 终于逐步执行之后（252 步全跑完），37 条红里有 8 条与门�
   ③ 只对**剩下真正参与取值**的字符串做判定。
 """
 import ast
+import glob
 import json
 import os
 import re
@@ -167,6 +168,78 @@ check("P4a 判据自证：本机路径样本被判红、干净样本判绿",
       "bad=(%d,%d) good=(%d,%d)" % (_bh, _bv, _gh, _gv))
 check("P4b 判据自证：docstring 里的路径不算依赖（不误报）",
       _dh == 0 and _dv == 0, "doc=(%d,%d)" % (_dh, _dv))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# P5 全仓（tools/ + tests/ + 应用包）不得出现本机绝对路径
+# ══════════════════════════════════════════════════════════════════════════
+# 为什么从「只扫 pr 层」扩到「全仓」（2026-11-05）：
+#   ① 仓库是**公开的** —— `C:\Users\<name>\...` 把本机用户名与完整目录结构
+#      写进每个提交，属隐私泄露，与"这层跑不跑 CI"无关；
+#   ② pr 层之外的脚本（`tools/reembed_chunks.py`、`tests/manual_verify/*`）
+#      正是"门禁红了怎么查"的诊断工具 —— 换机器就全废，
+#      最需要它们的时候恰好不能用；
+#   ③ 只扫 pr 层时它们永远无人过问（实测残留 21 处，横跨 tools/ 与 tests/）。
+# P5 与 P1 的区别：P1 只查"pr 层参与取值的字符串"，P5 查**全仓任何 py 的任何字符串**。
+APP_DIRS = ("tools", "tests", "agent", "core", "routers", "services",
+            "database", "llm", "repositories", "knowledge_pipeline")
+HOME_ABS_ANCHORED = re.compile(
+    r"^[A-Za-z]:[\\/]+Users[\\/](?!<)|^/home/(?!<)[a-z0-9_]+/|^/Users/(?!<)[^/]+/", re.I)
+# P6 的模式串必须定义在 scan_repo_abs **之前**（P5/P6 共用同一趟目录遍历）。
+# ⚠️ 方向：真实代码形态是 `tree = ast.parse(src)` 然后 `except SyntaxError:`
+#    ⇒ ast.parse 在**前**、SyntaxError 在**后**。
+#    第一版把方向写反了（SyntaxError 在前）⇒ 合成自证当场抓住（P6-s FAIL），
+#    而真实场景永远不命中 ⇒ **判据空转**。合成自证的价值就在这：写反了立刻红。
+
+
+def scan_repo_abs():
+    hits = []
+    for base in APP_DIRS:
+        for p in glob.glob(os.path.join(ROOT, base, "**", "*.py"), recursive=True):
+            rel = os.path.relpath(p, ROOT).replace(os.sep, "/")
+            if "__pycache__" in rel or rel.endswith("verify_gate_portability.py"):
+                continue                     # 判据自身含合成样本
+            try:
+                src = open(p, encoding="utf-8", errors="replace").read()
+                tree = ast.parse(src)
+            except SyntaxError:
+                continue
+            for ln, val in str_constants(tree):
+                if HOME_ABS_ANCHORED.match(val.strip()):
+                    hits.append("%s:%d %r" % (rel, ln, val[:52]))
+    return hits
+
+
+_p5 = scan_repo_abs()
+check("P5 全仓不得出现本机绝对路径（隐私 + 换机可用性）", not _p5,
+      "命中 %d 处: %s" % (len(_p5), _p5[:6]))
+# P5 判据自证：合成两例一红一绿（防判据写成恒真）
+_syn_hit = 'X = r"C:' + chr(92) + 'Users' + chr(92) + 'someone' + chr(92) + 'proj"'
+check("P5-s 判据自证（本机路径判红 / 相对路径判绿）",
+      bool(HOME_ABS_ANCHORED.match("C:" + chr(92) + "Users" + chr(92) + "someone"))
+      and not HOME_ABS_ANCHORED.match("data/x.json"),
+      "自证样本异常")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# P6（纪律，非自动判据）语法结论必须来自 compile()，不能是 ast.parse()
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-11-05 被咬一次：批量改写把 `import os` 插到
+# `from __future__ import annotations` **之前** ——
+#   · ast.parse(src)  → 通过
+#   · compile(src)    → SyntaxError: from __future__ imports must occur at the
+#                       beginning of the file
+# ⇒ 凡"语法 0 错"的结论，都必须来自 compile()。
+#
+# ⚠️ 这条**不做成自动判据**（两版正则都被自证证伪后放弃）：
+#   "拿 ast.parse 当语法判据"与"正常的解析容错"（ast.parse 失败 ⇒ 跳过）
+#   在源码形态上几乎相同 —— 都有 `ast.parse` + `except SyntaxError`，
+#   区别只在 except 之后做了什么（判红 vs 跳过），静态正则无法区分。
+#   实测：v1 方向写反（SyntaxError 在前）⇒ 命中 0；v2 修正方向/缩进 ⇒ 误报 10 个
+#   文件（全是正常容错写法）。误报会让门禁变噪音，而噪音门禁的下场是
+#   被加豁免/被关掉 —— 等于没写。
+# ⇒ 这条以**纪律**存在：docs/门禁分层-20261105.md §9 + AGENTS.md，
+#    人工 review 时核对。承认"判据不可静态化"比留一个假判据诚实。
 
 print("\n" + "=" * 72)
 print("PASS %d / FAIL %d" % (len(PASS), len(FAIL)))

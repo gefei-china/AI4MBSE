@@ -7,14 +7,14 @@
 计算 query-bigram 在命中实体文本中的覆盖率（qrel），看两组分布是否可分。
 可分 → 加因子有意义；不可分 → 诚实放弃（相关性判断不属于置信度层）。
 """
+import os
 import io
 import json
 import contextlib
 import sys
 
-sys.path.insert(0, r"C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system")
-import os
-os.chdir(r"C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+os.chdir(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from agent.rag import GraphRAG
 
@@ -33,7 +33,8 @@ def qrel(query, graph_results):
     return len(q & corpus) / len(q)
 
 rag = GraphRAG()
-ev = json.load(open(r"C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system/tmp/p21/evalset.json", encoding="utf-8"))
+ev = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "tmp", "p21", "evalset.json"), encoding="utf-8"))
 
 rows = []
 for kind in ("graph", "neg"):

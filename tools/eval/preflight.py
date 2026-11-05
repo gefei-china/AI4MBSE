@@ -32,7 +32,7 @@ import sys
 import time
 from contextlib import redirect_stdout, redirect_stderr
 
-REPO = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system"
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB = os.path.join(REPO, "mbse.db")
 OUT = os.path.join(REPO, "tmp", "p21", "eval_preflight.json")
 sys.path.insert(0, REPO)

@@ -14,13 +14,15 @@ exec（tools/reasoning/agent）与 used_mock → 输出给驱动层做浏览器�
 #   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
 #   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
 #   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
+import os
 import json
 import sqlite3
 import sys
 import urllib.request
 
 BASE = "http://127.0.0.1:8000"
-DB = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system\mbse.db"
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mbse.db"))
 # 复用模式：python verify_chat_contract_e2e.py --reuse <conv_id>
 #   （上次真跑一轮后若想复核库中数据，可跳过真实 LLM 调用；--keep 保留会话不删）
 REUSE = None

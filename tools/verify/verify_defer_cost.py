@@ -185,9 +185,18 @@ check("A2 关 defer ⇒ 三个任务都跑了（可选任务来不及取消）",
 check("A3 开 defer 只多 **1 轮决策**（该轮不含任务，无 LLM 成本）",
       a_defer["rounds"] == a_plain["rounds"] + 1,
       "%d vs %d" % (a_defer["rounds"], a_plain["rounds"]))
-check("A4 墙钟不高于关 defer 的 1.5 倍（预热后；省任务不牺牲时间）",
-      a_defer["wall"] <= a_plain["wall"] * 1.5,
-      "%.2f vs %.2f" % (a_defer["wall"], a_plain["wall"]))
+# ⚠️ 2026-11-05 降级为**弱判据**（此前是 `wall <= plain*1.5` 的硬断言，会偶发假红）：
+#   TASK_SEC=0.12s ⇒ 总墙钟 0.2~0.5s。这个尺度下，一次 GC / 一次调度让位
+#   就足以把比值推到 1.5 以上 ⇒ 判据测的是**机器当时忙不忙**，不是代码行为。
+#   实测证据：gate_runner 里偶发红一次，单独连跑 3 次全绿（9/0/9/0/9/0）。
+#   "省任务不牺牲时间"的强证据本来就在 A1/A2/A3 —— 任务数与轮次都是确定性的。
+#   墙钟只保留"不显著恶化"的兜底（3× 且仅当 plain 足够长时才判），并在下方打印实测值。
+_wall_ratio = (a_defer["wall"] / a_plain["wall"]) if a_plain["wall"] else 0
+_a4_ok = True if a_plain["wall"] < 0.30 else (a_defer["wall"] <= a_plain["wall"] * 3.0)
+check("A4 墙钟不显著恶化（弱判据；抖动主导时只观测，强证据见 A1~A3）",
+      _a4_ok,
+      "%.2fs vs %.2fs（比值 %.2f，plain<0.30s 时抖动主导故不判红）"
+      % (a_defer["wall"], a_plain["wall"], _wall_ratio))
 
 print()
 print("=" * 74)
@@ -205,9 +214,17 @@ check("B1 开 defer ⇒ 必需先跑、可选第二批（t1 先于 t2/t3）",
       and len(b_defer["calls"]) == 3, b_defer["calls"])
 check("B2 关 defer ⇒ 三个任务同批（1 批完成）",
       sorted(b_plain["calls"]) == ["t1", "t2", "t3"], b_plain["calls"])
-check("B3 开 defer 的墙钟 ≥ 关 defer 的 1.5 倍（**代价：多一批真实任务**）",
-      b_defer["wall"] >= b_plain["wall"] * 1.5,
-      "%.2f vs %.2f（比值 %.2f）"
+# ⚠️ 2026-11-05 同上：原 `wall >= plain*1.5` 是硬墙钟断言，会偶发假红。
+#   "多一批真实任务的代价"有**三个确定性证据**，不需要靠墙钟：
+#     ① B5：开 defer 比关 defer 多 1 轮决策，且该轮含真实任务；
+#     ② B4：两版执行的任务数相同（3 个，defer 没省到）；
+#     ③ B1：t1 先于 t2/t3（必需先跑、可选第二批）。
+#   墙钟只作观测打印 —— 保留它是因为"1.9×"这个数字对决策有用，
+#   但**数字进日志、不进判据**。
+check("B3 开 defer 的决策轮次多于关 defer（代价的确定性证据）",
+      b_defer["rounds"] > b_plain["rounds"],
+      "轮次 %d vs %d" % (b_defer["rounds"], b_plain["rounds"]))
+print("      墙钟参考（**非判据**，仅供人工核）：%.2fs vs %.2fs，比值 %.2f"
       % (b_defer["wall"], b_plain["wall"],
          (b_defer["wall"] / b_plain["wall"]) if b_plain["wall"] else 0))
 check("B4 失败路径下 defer **没有省到任何任务**（两版都执行 3 个）",
@@ -224,9 +241,11 @@ print()
 print("=" * 74)
 print("结论（写进文档/决策用）")
 print("=" * 74)
-print("  · 收益：成功路径下**直接省掉**全部可选任务（本例 3→1 个任务），墙钟不变。")
-print("  · 代价：必需任务失败时，可选任务晚一批（本例墙钟约 %.1f×），且没省到任务。"
-      % ((b_defer["wall"] / b_plain["wall"]) if b_plain["wall"] else 0))
+print("  · 收益：成功路径下**直接省掉**全部可选任务（本例 3→1 个任务）。")
+print("  · 代价：必需任务失败时，可选任务晚一批（本例墙钟约 %.1f×，**参考值**），"
+      "且没省到任务。" % ((b_defer["wall"] / b_plain["wall"]) if b_plain["wall"] else 0))
+print("  · 判据口径：任务数 / 轮次是**确定性**判据；墙钟只观测不判定")
+print("    （TASK_SEC=0.12s 的总时长下，调度抖动足以让比值翻倍 —— 见 A4/B3 注释）。")
 print("  · 净判断：成功路径是常态、失败路径是少数 ⇒ 默认开启合理；"
       "若某类计划失败率高，可考虑关掉（当前无独立开关，跟随 early_stop）。")
 print()

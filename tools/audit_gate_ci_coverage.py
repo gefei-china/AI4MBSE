@@ -37,7 +37,7 @@ import subprocess
 import sys
 import time
 
-ROOT = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(ROOT)
 PY = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
 CI = io.open(os.path.join(ROOT, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
