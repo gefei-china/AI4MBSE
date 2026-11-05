@@ -665,9 +665,8 @@
     },
     {
       "script": "verify_alert_evaluator.py",
-      "tier": "local",
-      "timeout": 240,
-      "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+      "tier": "pr",
+      "timeout": 240
     },
     {
       "script": "verify_arch_assumptions.py",
@@ -815,9 +814,8 @@
     },
     {
       "script": "verify_orch_span.py",
-      "tier": "local",
-      "timeout": 240,
-      "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+      "tier": "pr",
+      "timeout": 240
     },
     {
       "script": "verify_orchestration_e2e.py",
@@ -839,9 +837,8 @@
     },
     {
       "script": "verify_replan_p1.py",
-      "tier": "local",
-      "timeout": 240,
-      "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+      "tier": "pr",
+      "timeout": 240
     },
     {
       "script": "verify_session_monitor.py",

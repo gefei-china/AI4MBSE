@@ -69,6 +69,22 @@ EXT_DEP = re.compile(
     r"api_key\s*=\s*['\"][A-Za-z0-9]{16,}|os\.environ\[['\"]OPENAI_API_KEY['\"]\]|"
     r"EventSource|playwright|agent-browser")
 
+#: G8 的**显式豁免**：脚本里出现外部地址，但不在 pr 执行路径上。
+#: ⚠️ 2026-11-05：G8 原来是"全文正则一票否决"，无法区分「引用」与「依赖」——
+#:   本仓已为此栽过（它给 verify_gate_manifest 自己做过自排除，但没推广）。
+#:   三条实测都是**引用而非依赖**，理由必须可核验（不是"我知道它没问题"）：
+#:     · t_live() 段：由 `--live` 开关保护，默认不执行（代码里写明 "CI 不执行"）
+#:     · 反面测试：故意指向不可达端口，验证"返回 False 而非抛异常"
+#: 豁免不是免检：这些脚本仍要在 gate_runner 的干净环境里**实测绿**才算数。
+EXT_DEP_EXEMPT = {
+    "verify_orch_span.py":
+        "外部地址只在 t_live() 内，由 --live 开关保护，默认不执行（CI 不触发）",
+    "verify_replan_p1.py":
+        "同上：t_live() opt-in 段，默认不执行",
+    "verify_alert_evaluator.py":
+        "反面测试：故意指向 http://127.0.0.1:1/nope，验证不可达时返回 False 而非抛异常",
+}
+
 
 def rec(name, ok, detail=""):
     _results.append((PASS if ok else FAIL, name, "" if ok else str(detail)[:260]))
@@ -253,9 +269,23 @@ def check_all(m):
             src = open(p, encoding="utf-8", errors="replace").read()
         except Exception:
             continue
-        if EXT_DEP.search(src):
+        if EXT_DEP.search(src) and g.get("script") not in EXT_DEP_EXEMPT:
             ext.append(g.get("script"))
     rec("G8 pr 层不含需要服务/LLM/浏览器的门禁", not ext, "疑似外部依赖: %s" % ext[:8])
+
+    # G8b 豁免必须写理由（否则"加个文件名"就能绕过 —— 与 W1a 同一纪律）
+    def _exempt_violations(d):
+        return [k for k, v in d.items() if not str(v).strip()]
+
+    bad_ex = _exempt_violations(EXT_DEP_EXEMPT)
+    rec("G8b G8 的每条豁免都写了非空理由", not bad_ex, bad_ex[:6])
+
+    # G8c 判据自证：合成两例必须一绿一红（防豁免机制把门禁变成恒真）
+    _syn = {"a.py": "", "b.py": "有理由"}
+    _viol = _exempt_violations(_syn)
+    rec("G8c 判据自证（豁免有理由=绿 / 无理由=红）",
+        ("a.py" in _viol) and ("b.py" not in _viol),
+        "违规=%s（期望只有 a.py）" % _viol)
 
     # G9 债务上限：broken / backlog 只降不升（防「搬走换绿」）
     budget = m.get("budget") or {}

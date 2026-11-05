@@ -1,4 +1,3 @@
-# CI-OPTIONAL: [local] 需真实服务/真 LLM/生产真库金标或随包运行时资产，CI 跑不了；源码直连真实服务/真实 key（CI 无服务无 secret） 
 # -*- coding: utf-8 -*-
 """Task #43（2026-10-20）编排观测性 trace 回归验证 —— 零 LLM、零服务、零生产库写。
 
