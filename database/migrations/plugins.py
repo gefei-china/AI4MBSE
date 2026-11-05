@@ -183,7 +183,7 @@ def _migrate_p0_capabilities(conn):
             title TEXT NOT NULL,
             content TEXT DEFAULT '',
             enabled INTEGER DEFAULT 1,
-            created_by TEXT DEFAULT '王工',
+            created_by TEXT DEFAULT '未登录',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )""")
@@ -340,10 +340,10 @@ def _migrate_plugin_tables(conn):
         ("plugin_review_policy", "forced",
          "公共插件审核策略（forced=强制审核，默认；auto=免审直发，内部团队可配置）"))
     _migrate_legacy_refs(conn)
-    conn.execute(
-        "INSERT OR IGNORE INTO settings (key, value, description) VALUES (?,?,?)",
-        ("legacy_migrate", "1",
-         "旧三表（skills/mcp_servers）→ 统一插件模型迁移开关（1=启用，0=关闭，同步桥由 source_ref='legacy:' 判定）"))
+    # ★ 2026-10-23 审计：原此处 INSERT OR IGNORE 一个 legacy_migrate 标记键 —— 迁移函数
+    #   _migrate_legacy_refs 本身不读它，全库零消费点，且本 migration 每次 init_db 无条件执行、
+    #   INSERT OR IGNORE 会在键缺失时反复"复活"该行。已移除（DB 行同步删除，
+    #   见 tools/verify/verify_settings_data_audit.py 与 docs/设置模块数据审计报告-2026-10-23.md）。
     conn.commit()
 
 def _migrate_plugin_dependencies(conn):

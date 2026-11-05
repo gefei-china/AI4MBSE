@@ -81,7 +81,7 @@ async function loadDocFolders() {
     _docTotalAll = (t && t.total_docs) || 0;
     renderDocFolders();
   } catch(e) {
-    box.innerHTML = `<div style="padding:8px;font-size:11px;color:var(--red);">目录加载失败：${esc(e.message)}</div>`;
+    box.innerHTML = `<div style="padding:8px;font-size:12.5px;color:var(--red);">目录加载失败：${esc(e.message)}</div>`;
   }
 }
 
@@ -474,7 +474,7 @@ function renderDocCrumb() {
     });
     // 2026-09-28：默认 **含子目录**（与左栏累计计数同口径）。勾选框语义不变，
     // 取消勾选 = 只看本目录直接挂载的文档，此时列表条数会**小于**左栏显示的数字（这是预期，不是 bug）。
-    parts.push(`<label style="margin-left:10px;font-size:11px;color:var(--mut);cursor:pointer;" title="默认勾选：与左栏目录数字（含子目录）同口径&#10;取消勾选 = 只看本目录直接挂载的文档">&#10;<input type="checkbox" ${_docFolderScope==='subtree'?'checked':''} onchange="docSetFolderScope(this.checked?'subtree':'self')"> 含子目录</label>`);
+    parts.push(`<label style="margin-left:10px;font-size:12.5px;color:var(--mut);cursor:pointer;" title="默认勾选：与左栏目录数字（含子目录）同口径&#10;取消勾选 = 只看本目录直接挂载的文档">&#10;<input type="checkbox" ${_docFolderScope==='subtree'?'checked':''} onchange="docSetFolderScope(this.checked?'subtree':'self')"> 含子目录</label>`);
   } else {
     // ⚠️ 必须显式隐藏 + 清空：只 return 会把上一条面包屑（含「含子目录」勾选框）留在中栏，
     //    切回「全部文档」后看起来仍筛着某个目录（2026-09-28 截图复核实测到的既有缺陷）。
@@ -648,16 +648,16 @@ function docFolderMoveTargetsHtml(excludeId) {
 
 function docFolderMovePrompt(fid) {
   const f = (_docFolders||[]).find(x=>x.id===fid) || {};
-  const html = `<div style="font-size:12.5px;">
+  const html = `<div style="font-size:13.5px;">
     <div style="margin-bottom:6px;color:var(--mut);">把目录「<b>${esc(f.name || ('#'+fid))}</b>」移动到：</div>
-    <select id="dft-move-sel" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px;">
+    <select id="dft-move-sel" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13.5px;">
       ${docFolderMoveTargetsHtml(fid)}
     </select>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
       <button class="btn sm ghost" onclick="closePanel()">取消</button>
       <button class="btn sm" onclick="docFolderMoveConfirm(${fid})">移动</button>
     </div>
-    <div style="margin-top:10px;font-size:11px;color:var(--mut);">只改目录树的归属层级：其下的文档与子目录一起跟随；不移动磁盘文件、不重算向量。</div>
+    <div style="margin-top:10px;font-size:12.5px;color:var(--mut);">只改目录树的归属层级：其下的文档与子目录一起跟随；不移动磁盘文件、不重算向量。</div>
   </div>`;
   openPanel('📁 移动目录', html);
 }
@@ -700,7 +700,7 @@ function _dftCtxMenu(anchor, items) {
   const m = document.createElement('div');
   m.id = 'doc-ctx-menu';
   m.style.cssText = 'position:fixed;z-index:6000;min-width:158px;background:#fff;border:1px solid var(--line);'
-    + 'border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:4px;font-size:12px;';
+    + 'border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:4px;font-size:13.5px;';
   // ⚠️ 菜单项文本一律走 esc() 的**文本节点**，绝不拼进 onclick 串（目录名可含引号）；
   // 动作靠 data-dftmi 索引 + 事件委托取，因此用户输入永远不会进入任何代码串。
   m.innerHTML = items.map((it, i)=>{
@@ -936,16 +936,16 @@ function docMoveTargetsHtml() {
 }
 
 async function docMovePrompt(docId) {
-  const html = `<div style="font-size:12.5px;">
+  const html = `<div style="font-size:13.5px;">
     <div style="margin-bottom:6px;color:var(--mut);">把文档移动到：</div>
-    <select id="doc-move-sel" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px;">
+    <select id="doc-move-sel" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13.5px;">
       ${docMoveTargetsHtml()}
     </select>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
       <button class="btn sm ghost" onclick="closePanel()">取消</button>
       <button class="btn sm" onclick="docMoveConfirm(${docId})">移动</button>
     </div>
-    <div style="margin-top:10px;font-size:11px;color:var(--mut);">提示：移动只改归属目录，不重算向量、不改文件名、不动磁盘副本。</div>
+    <div style="margin-top:10px;font-size:12.5px;color:var(--mut);">提示：移动只改归属目录，不重算向量、不改文件名、不动磁盘副本。</div>
   </div>`;
   openPanel('📁 移动文档到目录', html);
 }
@@ -966,9 +966,9 @@ async function docMoveConfirm(docId) {
 async function batchMoveSelected() {
   const ids = [..._docSelected];
   if(!ids.length) { toast('请先勾选文档'); return; }
-  const html = `<div style="font-size:12.5px;">
+  const html = `<div style="font-size:13.5px;">
     <div style="margin-bottom:6px;color:var(--mut);">把选中的 <b>${ids.length}</b> 份文档移动到：</div>
-    <select id="doc-move-sel" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px;">
+    <select id="doc-move-sel" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13.5px;">
       ${docMoveTargetsHtml()}
     </select>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">

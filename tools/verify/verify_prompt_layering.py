@@ -192,8 +192,12 @@ if _r:
     check("C7 动态区块均确实依赖动态输入", not weak, "suspect=%s" % weak)
 
 # ── C8：P1-28 新增 —— 两条路径的差异必须**显式**存在于调用点（防"顺手抹平"）──
+# ⚠️ 2026-11-04 修（过时判据）：此前期待字面量 `role_cap=0`，但代码早已改为具名常量
+#    `_AGENT_ROLE_CAP`（common.py:153，=8000，两路径同值）—— **路径差异只剩
+#    `include_tool_rules`（False/True）**。判据若不跟着改，永远假红，
+#    把真正的新回归淹没在 1 条已知失败里。
 _c8 = {
-    "execute.py": ("role_cap=0", "include_tool_rules=False"),
+    "execute.py": ("role_cap=_AGENT_ROLE_CAP", "include_tool_rules=False"),
     "stream.py": ("role_cap=_AGENT_ROLE_CAP", "include_tool_rules=True"),
 }
 for name, (a, b) in _c8.items():

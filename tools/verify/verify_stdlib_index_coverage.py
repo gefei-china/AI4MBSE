@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需 sysml.library（7.7MB OMG 规范库，.gitignore 排除）⇒ 索引为空、定义数 0
 """verify_stdlib_index_coverage — 标准库索引**覆盖率**判据（含变异自证）。
 
 ## 缺陷（2026-10-09 实测发现）

@@ -193,14 +193,34 @@ function draftTitle(msg){
 }
 async function sendChat() {
   const input = document.getElementById('chat-input');
-  const msg = input.value.trim();
-  if(!msg) return;
+  // ★★ 2026-10-30（用户报「从产物加入会话后发送异常，附件消失、输入框还在、会话没发起」）：
+  //   `msg` 原为 **const**，而下面「Cursor 式引用」分支要给它前置引用文本：
+  //       if(_refs.length){ msg = _refs.map(...) + '\n\n' + msg; }
+  //   ⇒ `TypeError: Assignment to constant variable`（严格模式/现代浏览器必抛）。
+  //   抛点位置决定了症状**正好**是用户描述的那样：
+  //     · 上一行 `chatRefs.splice(0, len)` 已把引用清空 ⇒ **附件（引用 chip）消失**；
+  //     · 再下一行 `input.value=''` 永远不会执行 ⇒ **用户输入还在输入框**；
+  //     · `pumpStream` 在更后面 ⇒ **会话没发起**。
+  //   三个症状同源，所以必须一起改：`const` → **`let`**（这一处是唯一原因）。
+  let msg = input.value.trim();
+  // 只有附件/引用、没打字时**不许静默无反应**（原实现 `if(!msg) return` 什么都不做，
+  // 用户点发送像"点了没反应"）。允许发出去，并给一句中性指令；
+  // 若连材料都没有，仍然直接返回（空 Enter 不该建会话）。
+  const _hasCargo = !!((typeof pendingAttachments!=='undefined' && pendingAttachments.length)
+                    || (typeof chatRefs!=='undefined' && chatRefs.length));
+  if(!msg && !_hasCargo) return;
   // ★ 2026-10-16（米爸决策 R1）：**必须先选主 Agent 才能发起会话**。
   //   原实现允许 team=''（下拉有空串"自动"项）⇒ 后端意图识别自由发挥 ⇒ 执行主体随机
   //   （实测会话 9372 掉到「通用问答Agent」，该 Agent 没绑 MCP ⇒ 工程列表查询必失败）。
   //   判据用**下拉当前值**而非 localStorage：后者是全局记忆，可能与当前页面状态不同步。
   //   ⚠️ 放在最前面（建会话之前）：否则会先造一个空会话再被拦下，留下垃圾会话。
   if(!requireMainAgent()) return;
+  // 只有附件/引用、没打字：补一句中性指令再发（放在主 Agent 校验**之后**，
+  // 否则"未选主 Agent"场景会先弹一条"已按…发送"的误导提示）。
+  if(!msg && _hasCargo){
+    msg = '请查看我附加的材料，并据此继续。';
+    toast('未输入文字，已按「请查看我附加的材料」发送');
+  }
   // 2026-09-04 v3：草稿态首次提交时创建会话（未提交前左侧列表不出现空会话）
   // 2026-09-24：若由「项目 → ＋ 新建任务」发起，带走该项目归属（window._pendingProjectId），
   //   创建成功后立刻刷新项目组（任务数 +1），并清除暂存避免下一次误归属。
@@ -399,6 +419,11 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
         skill_name: _selSkill,
         team: _selTeam,                // 主 Agent：负责意图识别/任务拆分/计划制定/任务分派/内容整合输出
         provider_id: Number(document.getElementById('llm-providers')?.value) || undefined,
+        // ★ 2026-10-31（按米爸澄清的语义修正）：**会话维度**参数由后端读
+        //   `conversations.llm_overrides` 自动生效，前端**不需要**每轮发送。
+        //   这正是与上一版的本质差别：上一版靠前端每轮带 o_*（= 单轮语义，
+        //   会话第二轮就丢、刷新更丢）；现在设置存服务端会话行，跨轮/刷新/切回都还在。
+        //   `o_*` 字段仍保留在 ChatIn 里作为「会话内临时加压」，但界面不再使用。
         // ★ 2026-10-17（米爸 Q1 DB 层收口）：澄清续答单轮化转呈字段（普通发送为 0/空）
         resume_of_user_msg_id: (resumeOf && resumeOf.user_msg_id) || 0,
         resume_append: (resumeOf && resumeOf.append) || '',
@@ -456,8 +481,8 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
     try{ aiBox.dataset.reuseForPick = ''; }catch(_e){}   // 异常收口：清防替换标记，避免下次 done 误跳过
     const errNote = document.createElement('div');
     errNote.style.cssText = 'margin-top:8px;';
-    errNote.innerHTML = `<div style="color:var(--red);font-size:11.5px;">调用失败：${esc(e.message)}</div>`
-      + `<div style="color:var(--mut);font-size:10.5px;margin-top:4px;line-height:1.6;">`
+    errNote.innerHTML = `<div style="color:var(--red);font-size:12.5px;">调用失败：${esc(e.message)}</div>`
+      + `<div style="color:var(--mut);font-size:12px;margin-top:4px;line-height:1.6;">`
       + `本次执行已终止，不再有后台任务在跑。上方已生成内容与执行轨迹<b>已保留</b>；`
       + `确认原因（如网络波动）后，<b>直接重新发送消息</b>即可从头执行。</div>`;
     if(bodyEl) bodyEl.appendChild(errNote);

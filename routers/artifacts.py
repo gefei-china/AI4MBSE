@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, JSONResponse
 
 from core.deps import db_session, current_user
-from core.audit import audit
+from core.audit import audit, audit_user
 from repositories.artifact_repo import ArtifactRepo, KIND_LABELS
 
 router = APIRouter(tags=["会话产物"])
@@ -68,8 +68,8 @@ def register_artifact(body: dict, conn=Depends(db_session), u=Depends(current_us
         str(body.get("preview_content") or ""),
         body.get("meta") if isinstance(body.get("meta"), dict) else {},
         filename=str(body.get("filename") or ""),
-        source="manual", created_by=(u or {}).get("name", "王工"))
-    audit((u or {}).get("name", "王工"), "artifact_register",
+        source="manual", created_by=audit_user(u))
+    audit(audit_user(u), "artifact_register",
           f"登记会话产物 #{aid}: {title}（{kind}，会话 #{conversation_id}）", conn=conn)
     return {"ok": True, "id": aid}
 
@@ -97,7 +97,7 @@ def rename_artifact(artifact_id: int, body: dict, conn=Depends(db_session),
         raise HTTPException(404, "产物不存在")
     title = str((body or {}).get("title") or "").strip() or a["title"]
     repo.rename_artifact(artifact_id, title)
-    audit("王工", "artifact_rename", f"重命名会话产物#{artifact_id}: {title}", conn=conn)
+    audit(audit_user(u), "artifact_rename", f"重命名会话产物#{artifact_id}: {title}", conn=conn)
     return {"ok": True, "title": title}
 
 
@@ -108,7 +108,7 @@ def delete_artifact(artifact_id: int, conn=Depends(db_session), u=Depends(curren
     if not a:
         raise HTTPException(404, "产物不存在")
     repo.delete_artifact(artifact_id)
-    audit("王工", "artifact_delete", f"删除会话产物#{artifact_id}: {a['title']}", conn=conn)
+    audit(audit_user(u), "artifact_delete", f"删除会话产物#{artifact_id}: {a['title']}", conn=conn)
     return {"ok": True}
 
 

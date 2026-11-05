@@ -1,6 +1,6 @@
 {
-  "_comment": "人工介入策略种子（P0，2026-10-16）。设计约束：全部取现状语义 ⇒ 零行为变化。要收紧由用户在管理页自行调高，不在此预设。",
-  "_levels": "auto < notify < approve < confirm，越严数字越大",
+  "_comment": "人工介入策略种子（P0，2026-10-16 初版；2026-10-28 写前确认 HITL 扩写）。★ 2026-10-28 起策略**已接入执行链**（agent/pipeline_parts/tools.py::_hil_gate）——此前只有表+裁决器、明确注明「不接链路」。⚠️ 灰度不是一刀切从松到严，而是**按后果分档**：破坏性（不可逆）动作从第一档就拦（数量少、不可逆、且现状是零拦截=最大安全缺口）；可逆写动作第一档只留痕（notify）采集数据，第二档才拦（数量大，需先校准分类准确性）。⚠️ 依据（勿重复调研）：Anthropic 生产遥测：计划级审批拒绝率 39% vs 逐条权限请求 3%（差 13 倍）⇒ 逐条弹窗几乎无筛选力；不可逆动作在官方口径里只有 delete/send/pay/publish 四类；OWASP LLM03:2026 Complete mediation：低后果/易回退的动作自动放行，高后果/不可逆的转人工复核。",
+  "_levels": "auto < notify < approve < confirm（数值越大越严；approve 与 confirm 是不同维度：前者需更高权限角色批）",
   "_decision_points": [
     "tool_write",
     "retrieval_domain_conflict",
@@ -16,7 +16,9 @@
       "match_key": "destructive",
       "decision_point": "tool_write",
       "level": "confirm",
-      "conditions": {"side_effect": "destructive"},
+      "conditions": {
+        "side_effect": "destructive"
+      },
       "reason": "不可逆操作：删除/覆盖类动作须人工确认后方可执行",
       "timeout_min": 0,
       "fallback_level": "confirm",
@@ -27,7 +29,9 @@
       "match_key": "write",
       "decision_point": "tool_write",
       "level": "confirm",
-      "conditions": {"side_effect": "write"},
+      "conditions": {
+        "side_effect": "write"
+      },
       "reason": "写库/对外生效动作逐条确认（与现状 hil_service L2 语义一致）",
       "timeout_min": 0,
       "fallback_level": "confirm",
@@ -38,7 +42,9 @@
       "match_key": "read",
       "decision_point": "tool_write",
       "level": "auto",
-      "conditions": {"side_effect": "read"},
+      "conditions": {
+        "side_effect": "read"
+      },
       "reason": "只读操作直接放行，仅记审计",
       "timeout_min": 0,
       "fallback_level": "auto",
@@ -108,6 +114,32 @@
       "reason": "导入智源/对外推送：影响外部系统，须人工放行",
       "timeout_min": 1440,
       "fallback_level": "approve",
+      "priority": 15
+    },
+    {
+      "scope": "global",
+      "match_key": "mcp_write",
+      "decision_point": "tool_write",
+      "level": "notify",
+      "conditions": {
+        "tool_family": "mcp_write"
+      },
+      "reason": "★ 灰度第 1 档：智源平台的可逆写（create/update/set/…，实测 34 个工具）先只留痕不拦 —— 数量大，需先用 notify 采集数据校准分类准确性（Anthropic 遥测：逐条弹窗拒绝率仅 3%，无筛选力 ⇒ 不能一上来就逐条拦）。第 2 档升为 confirm（计划级批次卡）。",
+      "timeout_min": 1440,
+      "fallback_level": "confirm",
+      "priority": 25
+    },
+    {
+      "scope": "global",
+      "match_key": "mcp_destructive",
+      "decision_point": "tool_write",
+      "level": "confirm",
+      "conditions": {
+        "tool_family": "mcp_destructive"
+      },
+      "reason": "★ 灰度第 1 档即拦：智源平台的不可逆动作（delete/remove/import/apply/undo/overwrite，实测 7 个工具）。理由：① 数量少 ⇒ 不造成审批疲劳；② 不可逆 ⇒ 出错无法回滚；③ **改动前它们是零拦截**（MCP 工具不在 tools 表 ⇒ side_effect 恒判 read ⇒ 三道闸全失效）⇒ 这是最大的安全缺口，必须立即补上。",
+      "timeout_min": 1440,
+      "fallback_level": "confirm",
       "priority": 15
     }
   ]

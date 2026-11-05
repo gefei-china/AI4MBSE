@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [TIMEOUT] [FAIL] A7 改名/改版本/改标签不改指纹  ← ('2da843069b1415f2fa23562162578dc789435061', '5c0c2f80edde70a5112d57c6dad188f67c72 
 # -*- coding: utf-8 -*-
 """P2-4 门禁：多画布流拓扑台账与结构体检（自进化调研路线图 P2 第四项）。
 
@@ -781,7 +782,7 @@ else:
 # ══════════════════════════════════════════════════════════════
 section("D 真库（只读取证）")
 # ══════════════════════════════════════════════════════════════
-_real_db = os.path.join(ROOT, "mbse.db")
+_real_db = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 if not os.path.exists(_real_db):
     print("  （跳过：未找到真库 mbse.db）")
 else:

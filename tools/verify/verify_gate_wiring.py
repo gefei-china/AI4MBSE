@@ -34,6 +34,7 @@
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
 import sys
@@ -127,45 +128,22 @@ def t_all_gates_wired(root=ROOT):
 
 
 def t_ci_has_new_batch(root=ROOT):
-    print("\n=== W2 本批（2026-10-05）接线的门禁确实在 CI 里 ===")
+    print("\n=== W2 manifest 的 pr 层必须都真的在 CI 执行行里 ===")
     cmds = " ".join(ci_commands(root))
-    must = ["verify_fs_guard", "verify_doc_folders", "verify_memory_admin",
-            "verify_llm_health", "verify_skill_injection", "verify_audit_p0",
-            "verify_prompt_blocks", "verify_tiered_compression",
-            "verify_trace_cols", "verify_alert_evaluator",
-            "verify_tool_offload", "verify_s4_toolname",
-            "verify_branch_permission_gates", "verify_intent_cache_key",
-            "verify_intent_cache_toggle", "verify_entity_versions",
-            "verify_memory_tier", "verify_retry_fallback_stats",
-            "verify_p1_project_attribution",
-            "verify_p1_project_attribution_mutate",
-            "verify_agent_tools_no_params", "verify_branch_protection_rules",
-            "verify_b1_runtime_smoke",
-            # 第二轮第 2 项：红灯门禁归因后修复并接线（生产库 + 干净库双绿）
-            "verify_continuation", "verify_partial_persist",
-            "verify_orch_whitelist", "verify_plugin_bind_removed",
-            "verify_uninstall_flow",
-            # ── 2026-10-09：清「14 份写了从未执行」的欠账 ──
-            # 起因：本门禁 W1a 判红（未接线 14 / 豁免无理由 0）。
-            # 这 7 个经**干净库口径实测 rc=0** 才接线（MBSE_DB_PATH 指向空库）。
-            # 其余 7 个（需真 LLM / checker.jar / 真库金标）改在脚本内
-            # 写 `# CI-OPTIONAL: <理由>` 显式豁免 —— 见EXEMPTED 清单。
-            "verify_agent_loop_protocol", "verify_agent_perm_gate",
-            "verify_llm_circuit_breaker", "verify_memory_conflict_gate",
-            "verify_sysml_autofix", "verify_pipeline_closure",
-            "verify_sysml_baseline",
-            # 2026-10-09 续：产出雷同定性后补的两道**通用性**门禁
-            # （流式/非流式轮次漂移、行内工具调用不被识别）
-            "verify_tool_round_budget", "verify_inline_tool_call_salvage",
-            "verify_checker_diag_encoding"]
-    # 2026-10-09 新增接线（必须随 ci.yml 一起更新，否则本门禁自己会红）
-    _NEW = ["verify_agent_loop_protocol", "verify_agent_perm_gate",
-            "verify_llm_circuit_breaker", "verify_memory_conflict_gate",
-            "verify_sysml_autofix", "verify_pipeline_closure",
-            "verify_sysml_baseline"]
+    # ⚠️ 2026-11-05 重构：原来这里是一份**硬编码的历史名单**（2026-10-05 那批 38 个）。
+    #    它每轮都在制造摩擦：清单降级一条，这里就要手改一条，忘改就红；
+    #    而且"名单里有"≠"现在该在 CI 里"（曾接线过 ≠ 现在还能接）。
+    #    现在直接读清单 —— **清单是唯一真源**，本断言只做"清单 pr ⊆ ci.yml"的对账。
+    #    （与 verify_gate_manifest 的 G6a 同向，但这里是逐 job 级的独立复核。）
+    try:
+        with open(os.path.join(root, "tools", "gates_manifest.json"), encoding="utf-8") as f:
+            _m = json.load(f)
+    except (OSError, ValueError) as e:
+        return _rec("W2a 清单可读", False, str(e))
+    must = [g["script"][:-3] for g in _m.get("gates") or [] if g.get("tier") == "pr"]
     missing = [m for m in must if ("tools/verify/%s.py" % m) not in cmds]
-    ok = _rec("W2a 本批 %d 个门禁全部在 ci.yml 执行行里" % len(must),
-              not missing, "缺：%s" % missing)
+    ok = _rec("W2a 清单 pr 层的 %d 个门禁全部在 ci.yml 执行行里" % len(must),
+              not missing, "缺：%s" % missing[:8])
     # 反证：被排除的那几个**必须不在** CI 里（否则我的分类是错的）
     # ⚠️ 2026-10-05 更新：verify_orch_whitelist / verify_plugin_bind_removed 已于第二轮第 2 项
     # 修复并接线（双环境实测绿），故从「排除」移入上面的 `must`。

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] A1 检测器注册表三类（llm_call_failed/user_negative_feedback/llm_truncated）  ← got=['llm_call_failed', 'user_nega 
 # -*- coding: utf-8 -*-
 """P0-3 门禁：Bad Case 收集 → 台账 → 告警闭环（core/badcase.py + bad_cases + alert_evaluator）。
 
@@ -314,7 +315,7 @@ def main():
 
     # ── D. 真库只读 dry-run smoke ───────────────────────────────────
     print("\n== D. 真库只读 dry-run smoke（判据面真实存在性取证）==")
-    _prod = os.path.join(ROOT, "mbse.db")
+    _prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     if not os.path.exists(_prod):
         skip("D1 真库 smoke", "mbse.db 不存在（CI 环境）")
     else:

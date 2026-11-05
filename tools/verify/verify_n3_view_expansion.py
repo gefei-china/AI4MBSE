@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [backlog] 从未接线，待逐个定性（接入 pr 需先过「全新克隆+空库能绿」）；未接线（2026-11-04 盘点未覆盖，待逐个定性） 
 """verify_n3_view_expansion — N3 视图展开节点能力实测（真实链路，非静态推断）。
 # CI-OPTIONAL: 真调 LLM 跑 N2 骨架 + 8 视图（checker.jar 随包运行时不入库 + LLM 费用）；本地为唯一可信口径。
 
@@ -35,7 +36,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-DB = os.path.join(ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 # 8 个视图的枚举值与期望硬约束关键词（关键词取自 V10 写入的 skill 正文）
 #

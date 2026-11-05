@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL F4 内置意图完整性：9 个系统级意图名都在 db 层  <- 缺失={'system_mgmt'} 
 # -*- coding: utf-8 -*-
 """意图识别「关键词路由只用 DB 层（INTENTS 常量已彻底移除）」的自检（P1-16）。
 

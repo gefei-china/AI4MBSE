@@ -19,6 +19,7 @@
 变异自证：把「默认关闭」改成默认 true ⇒ 必须判红。
 """
 import hashlib
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import sqlite3
 import sys
@@ -27,7 +28,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-DB = os.path.join(_ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 SAMPLE = ("# 需求规格说明\n\n"
           "## 1. 系统需求\n"
           "整车应具备儿童遗留保护功能。\n\n"
@@ -260,7 +261,7 @@ def drift_check() -> bool:
     import hashlib
     import shutil
     import tempfile
-    tmpdir = tempfile.mkdtemp(prefix="rf_drift_")
+    tmpdir = mkdtemp(prefix="rf_drift_")
     db = os.path.join(tmpdir, "t.db")
     src = sqlite3.connect("file:" + DB + "?mode=ro", uri=True)
     dst = sqlite3.connect(db)

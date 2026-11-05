@@ -44,6 +44,26 @@ def fetch_offload(offload_id: int) -> str:
         conn.close()
 
 
+def offload_exists(offload_id: int) -> bool:
+    """该编号**是否有行**（与"内容是否为空"分开）。
+
+    为什么单独一个函数（2026-10-30）：`fetch_offload` 返回空串时无法区分
+    「编号不存在」与「行在但内容为空」，而这两者对模型意味着完全不同的下一步 ——
+    前者要"别再猜编号、重新调用工具"，后者要"这就是空结果、照此继续"。
+    把判据摊成两个函数，比让调用方靠 `if _off` 猜要诚实。
+    """
+    if not offload_id or int(offload_id) <= 0:
+        return False
+    from database import db_conn
+    try:
+        with db_conn() as conn:
+            return conn.execute(
+                "SELECT 1 FROM tool_result_offloads WHERE id=?", (int(offload_id),)
+            ).fetchone() is not None
+    except Exception:            # noqa: BLE001  表缺失/库异常 ⇒ 保守判"不知道有"，不阻断
+        return False
+
+
 def save_offload_by_key(tool_name: str, content: str, conversation_id: int = 0,
                         key: str = "") -> int:
     """**幂等**落库：同 (conversation_id, tool_name, key) 已存在则复用其 id。
@@ -94,7 +114,7 @@ def build_reference_block(offload_id: int, tool_name: str, full_len: int, full_t
 
 
 def model_side_content(tool_name: str, result: dict, conversation_id: int = 0,
-                       cap: int = 3000) -> tuple:
+                       cap: int = 8000) -> tuple:
     """构造回填给模型的 tool 消息 content（stream/execute 两路径唯一真源）。
 
     返回 (content_dict, offloaded_bool)：
@@ -178,11 +198,23 @@ def cleanup_expired(days: int = 30) -> int:
         return cur.rowcount
 
 
-def cleanup_conversation(conversation_id: int) -> int:
-    """会话删除级联：清该会话的全部 offload（routers/conversations.py delete 端点调用）。"""
-    from database import db_conn
-    with db_conn() as conn:
+def cleanup_conversation(conversation_id: int, conn=None) -> int:
+    """会话删除级联：清该会话的全部 offload（routers/conversations.py delete 端点调用）。
+
+    ★ 2026-11-02（实测每次删除卡 30+ 秒的真因）：调用方（delete 端点）已在**请求连接**上
+    执行了 DELETE（事务未提交、持有写锁），本函数原先又开**第二条连接**执行 DELETE
+    ⇒ 自己等自己的锁，白等满 busy_timeout=30s 才以异常收场 —— 端点里 `except: pass`
+    把超时吞掉，表面"删除成功"，实际每次都静默挂 30 秒（前端表现就是「点删除没反应」）。
+    修法：端点把请求连接传入，同连接同事务执行（随请求收尾统一 commit），不再抢锁。
+    conn=None 保持旧行为（独立连接），兼容既有调用（tools/verify/verify_tool_offload.py）。
+    """
+    if conn is not None:
         cur = conn.execute(
             "DELETE FROM tool_result_offloads WHERE conversation_id=?", (int(conversation_id),))
-        conn.commit()
+        return cur.rowcount
+    from database import db_conn
+    with db_conn() as _c:
+        cur = _c.execute(
+            "DELETE FROM tool_result_offloads WHERE conversation_id=?", (int(conversation_id),))
+        _c.commit()
         return cur.rowcount

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。V4 下钻断言真库会话 #9779 的明细（356 段证据链）；空库无该会话。附：该门禁已抓出真缺陷 weight 详情40≠列表45（待修）
 # -*- coding: utf-8 -*-
 """会话级运行监控（2026-10-18《运行监控选型建议 v2》实施）真实库验证。
 
@@ -112,8 +113,28 @@ def main():
             check("证据链分段齐备（≥1 段）", seg_n > 0,
                   f"共 {seg_n} 段（底层证据 {_ev} 行 ⇒ 有样本必须返段）")
         p = det.get("error_profile") or {}
-        check("错误画像 weight 与列表一致",
-              p.get("weight") == target["weight"], f"detail={p.get('weight')} list={target['weight']}")
+        # ⚠️ 2026-11-05：原来只比 weight。而本轮实测的根因是「统计用了展示用的截断明细」，
+        #   它同时污染了 **llm_calls 与 llm_cost**（cost 少算 40%：0.268637 vs 0.452308），
+        #   只比 weight 会让"成本错"这一面继续漏网（weight 恰好不变时就完全看不见）。
+        #   ⇒ 三个数一起比：weight / llm_calls / llm_cost。
+        _diffs = []
+        for _k in ("weight", "llm_calls", "llm_cost"):
+            _a, _b = p.get(_k), target.get(_k)
+            if isinstance(_a, float) or isinstance(_b, float):
+                if abs(float(_a or 0) - float(_b or 0)) > 1e-9:
+                    _diffs.append("%s detail=%s list=%s" % (_k, _a, _b))
+            elif _a != _b:
+                _diffs.append("%s detail=%s list=%s" % (_k, _a, _b))
+        check("错误画像与列表同口径（weight/llm_calls/llm_cost 三项一致）",
+              not _diffs, "；".join(_diffs))
+        # 明细被截断时必须自报（否则用户会拿时间线条数质疑统计值）
+        if int(p.get("llm_calls") or 0) > len(det.get("llm_calls") or []):
+            check("明细截断已自报（llm_calls_truncated）",
+                  int(p.get("llm_calls_truncated") or 0)
+                  == int(p.get("llm_calls") or 0) - len(det.get("llm_calls") or []),
+                  "truncated=%s shown=%s total=%s" % (
+                      p.get("llm_calls_truncated"), p.get("llm_calls_shown"),
+                      p.get("llm_calls")))
         times = [r.get("created_at") or "" for r in det.get("messages", [])]
         if len(times) < 2:
             skip("时间线时间可排序（非降序破坏）", f"仅 {len(times)} 条消息 ⇒ 排序判据面不存在")
@@ -135,7 +156,7 @@ def main():
     os.makedirs(os.path.dirname(copy_path), exist_ok=True)
     if os.path.exists(copy_path):
         os.remove(copy_path)
-    src = sqlite3.connect(os.path.join(ROOT, "mbse.db"))
+    src = sqlite3.connect((os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")))
     cp = sqlite3.connect(copy_path)
     src.backup(cp)
     src.close()

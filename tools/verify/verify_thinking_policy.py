@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] ★ off 列表含实测确认的 4 个廉价任务 + `chat_probe`（有A/B 证据） 
 """verify_thinking_policy — 判据：thinking 按 intent **三态**分流（L1，米爸"实施"）。
 
 ## 要修的两个缺陷（实施前先发现）

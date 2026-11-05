@@ -5,6 +5,34 @@
 from routers.studio_parts.shared import *
 
 
+def _bump_version(v):
+    """技能版本 patch 级递增（P2-3）。容忍 'v' 前缀与非标写法，绝不返回空。"""
+    import re
+    v = (v or "").strip() or "1.0.0"
+    _m = re.match(r"^(v?)(\d+)\.(\d+)\.(\d+)$", v)
+    if _m:
+        return "%s%s.%s.%d" % (_m.group(1), _m.group(2), _m.group(3), int(_m.group(4)) + 1)
+    return v + ".1"
+
+
+def _normalize_trg(triggers):
+    """triggers 规范化 → `(列表, 警告列表, 是否变化)`。
+
+    ★ 2026-10-29（P1-4）：接 `core/skill_triggers`。
+    取 `strict=False`（自动拆分 + 告警，不阻断）：历史数据与第三方导入可能已是此形态，
+    硬拦会让既有流程挂掉；从源头自动修掉更实际。
+    ⚠️ 校验器不可用时**退回原值**（不因辅助模块异常挡住技能保存）。
+    """
+    try:
+        from core.skill_triggers import normalize_triggers as _nt
+        return _nt(triggers, strict=False)
+    except Exception:
+        try:
+            return list(triggers or []), [], False
+        except Exception:
+            return [], [], False
+
+
 @router.get("/api/studio/skills")
 def list_skills(status: str = "", conn=Depends(db_session)):
     """技能列表（P1-3 草稿箱：status=draft|draft_revision 筛选 AI 沉淀/自改进草稿）。"""
@@ -19,9 +47,20 @@ def create_skill(body: SkillIn, conn=Depends(db_session), user=Depends(current_u
     repo = StudioRepo(conn)
     if repo.get_skill_by_name(body.name):
         return JSONResponse({"error": f"Skill 名称已存在: {body.name}"}, 400)
+    # ★ 2026-10-29（P1-4）：triggers 入库前规范化。
+    #   匹配是**逐元素子串**，把「变更、调整、更新、影响」当**一个元素**会让该技能
+    #   几乎永不命中（实测技能 id=47 因此长期未触发）。此处自动拆分并返回告警，
+    #   让问题在写入时就被看见，而不是事后靠巡检发现"这个技能好像没用"。
+    _trg, _trg_warn, _trg_changed = _normalize_trg(body.triggers)
+    if _trg_changed:
+        try:
+            audit(audit_user(user), "skill_triggers_normalized",
+                  f"创建Skill: {body.name}；triggers 已自动拆分（原含分隔符清单）", conn=conn)
+        except Exception:
+            pass
     sid = repo.create_skill(
         body.name, body.description, body.skill_type,
-        json.dumps(body.triggers, ensure_ascii=False), body.category,
+        json.dumps(_trg, ensure_ascii=False), body.category,
         body.content, body.frontmatter, "",
         dependencies=json.dumps(body.dependencies or [], ensure_ascii=False),
         allowed_roles=json.dumps(body.allowed_roles or [], ensure_ascii=False),
@@ -31,7 +70,7 @@ def create_skill(body: SkillIn, conn=Depends(db_session), user=Depends(current_u
         scripts=json.dumps(body.scripts or [], ensure_ascii=False),
     )
     audit(audit_user(user), "skill_create", f"创建Skill: {body.name}", conn=conn)
-    return {"ok": True, "id": sid}
+    return {"ok": True, "id": sid, "trigger_warnings": _trg_warn}
 
 
 @router.put("/api/studio/skills/{sid}")
@@ -39,9 +78,11 @@ def update_skill(sid: int, body: SkillIn, conn=Depends(db_session), user=Depends
     repo = StudioRepo(conn)
     if not repo.get_skill(sid):
         return JSONResponse({"error": "Skill not found"}, 404)
+    # ★ 2026-10-29（P1-4）：同 create，编辑时也规范化（老脏数据经一次编辑即被修好）
+    _trg, _trg_warn, _trg_changed = _normalize_trg(body.triggers)
     repo.update_skill(
         sid, body.name, body.description, body.skill_type,
-        json.dumps(body.triggers, ensure_ascii=False), body.category,
+        json.dumps(_trg, ensure_ascii=False), body.category,
         body.content, body.frontmatter,
         dependencies=json.dumps(body.dependencies or [], ensure_ascii=False),
         allowed_roles=json.dumps(body.allowed_roles or [], ensure_ascii=False),
@@ -51,6 +92,12 @@ def update_skill(sid: int, body: SkillIn, conn=Depends(db_session), user=Depends
         scripts=json.dumps(body.scripts or [], ensure_ascii=False),
         actor=audit_user(user), source="api",
     )
+    # P2-3（2026-10-27）：编辑技能即 bump 版本（patch 级），让"哪个版本表现如何"可观测
+    #   （文章 7 项可观测要求之一：Skill 及版本）。registry 已投影 skills.version。
+    try:
+        conn.execute("UPDATE skills SET version=? WHERE id=?", (_bump_version(s.get("version")), sid))
+    except Exception:
+        pass
     audit(audit_user(user), "skill_update", f"更新Skill#{sid}: {body.name}", conn=conn)
     return {"ok": True}
 
@@ -63,8 +110,16 @@ def delete_skill(sid: int, conn=Depends(db_session), user=Depends(current_user))
         return JSONResponse({"error": "Skill not found"}, 404)
     if s.get("builtin"):
         return JSONResponse({"error": "内置 Skill 禁止删除，可「编辑」修改配置"}, 400)
+    # P1-5（2026-10-27）：删技能**级联清绑定** —— 此前只删 skills 行，agent_tools 里的
+    #   技能绑定变孤儿（当前孤儿为 0 靠清理脚本，非机制保证）。删前先清，让"无孤儿绑定"
+    #   成为机制保证，而非依赖一次性脚本。用原名匹配（绑定存的是技能 name）。
+    try:
+        _cleared = conn.execute(
+            "DELETE FROM agent_tools WHERE tool_type='skill' AND tool_name=?", (s.get("name"),)).rowcount
+    except Exception as e:
+        return JSONResponse({"error": f"清理技能绑定失败：{e}"}, 500)
     repo.delete_skill(sid)
-    audit(audit_user(user), "skill_delete", f"删除Skill#{sid}", conn=conn)
+    audit(audit_user(user), "skill_delete", f"删除Skill#{sid}（级联清绑定 {_cleared} 条）", conn=conn)
     return {"ok": True}
 
 
@@ -72,10 +127,21 @@ def delete_skill(sid: int, conn=Depends(db_session), user=Depends(current_user))
 def enable_skill(sid: int, conn=Depends(db_session), user=Depends(current_user)):
     """启用 Skill（停用的技能不参与触发匹配与绑定注入）。"""
     repo = StudioRepo(conn)
-    if not repo.get_skill(sid):
+    s = repo.get_skill(sid)
+    if not s:
         return JSONResponse({"error": "Skill not found"}, 404)
+    # P2-1（2026-10-27）：启用语义自洽。全局技能池准入 = status='published' AND enabled=1；
+    #   一个 status='draft' 却 enabled=1 的技能是矛盾态（开不了却显示已启用，走查记 P2-1）。
+    #   故启用时若仍是 draft，自动置为 published（启用即视为可消费）；非 draft 不动 status。
+    #   （注：不重跑发布依赖校验 —— 它本就 enabled=1，系统中已按"活跃"对待，这里只是对齐数据。）
+    if (s.get("status") or "") == "draft":
+        try:
+            repo.publish_skill(sid)
+        except Exception:
+            pass
     repo.set_skill_enabled(sid, 1)
-    audit(audit_user(user), "skill_enable", f"启用Skill#{sid}", conn=conn)
+    audit(audit_user(user), "skill_enable", f"启用Skill#{sid}"
+          + ("（draft→published 自动对齐）" if (s.get("status") or "") == "draft" else ""), conn=conn)
     return {"ok": True}
 
 

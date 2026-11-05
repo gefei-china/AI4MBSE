@@ -27,6 +27,7 @@
 import ast
 import io
 import os
+import shutil
 import re
 import subprocess
 import sys
@@ -64,8 +65,25 @@ def read(rel):
 
 
 # 系统进度提示的文案指纹（与 stream.py 实际前缀一致；**新提示种类必须在此登记**）
-SYS_PREFIXES = ("（自动编排）", "（断点续跑）", "（知识库范围）", "（harness 持续工作）")
+SYS_PREFIXES = ("（自动编排）", "（断点续跑）", "（知识库范围）", "（harness 持续工作）",
+                # ★ 2026-11-04 门禁盘点：拆型收尾时补登记。
+                #   这些前缀**一直存在**（不是新造），只是没登记 ⇒ S3b 把它们判成
+                #   "无指纹的 progress"，而实际文案一眼就是系统提示。
+                #   不登记就只能把它们留在 reasoning+kind=progress 的兼容态（S2 恒红）。
+                "（执行主体）", "（团队路由）", "（整轮墙钟到点）", "（本轮墙钟预算已到）",
+                "（harness 验收闸）", "（编排）", "（计划校验）")
 _SYS_RE = re.compile("|".join(re.escape(p) for p in SYS_PREFIXES))
+#: 动态前缀：`f"（{agent_def.name}）本轮工具结果…"` 经 AST 字面量化后变成 `（）本轮…`
+#:   （FormattedValue 被剔除，只剩两个残缺括号）。
+#:   所以额外允许「行首中文括号短语」。空括号 `（）` 只可能来自 f-string 变量，
+#:   不会是模型 CoT 的自然开头 ⇒ 这条放宽**不削弱**「防把 CoT 误拆成 progress」的判据。
+_DYN_RE = re.compile(r"^（[^）]{0,20}）")
+
+
+def _is_sys_prompt(txt: str) -> bool:
+    """该文案是否像系统提示（静态前缀命中 或 行首中文括号短语）。"""
+    head = (txt or "")[:200]
+    return bool(_SYS_RE.search(head) or _DYN_RE.search(head))
 
 
 def _enum_sites(src):
@@ -94,24 +112,79 @@ def _enum_sites(src):
     return out
 
 
+def _owner_func(lineno: int):
+    """返回包含该行的**最内层**函数定义 {name, start, end}（AST 精确，不用窗口猜）。"""
+    try:
+        tree = ast.parse(read("agent/pipeline_parts/stream.py"))
+    except Exception:
+        return None
+    best = None
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = getattr(n, "end_lineno", None) or n.lineno
+            if n.lineno <= lineno <= end:
+                if best is None or n.lineno > best["start"]:
+                    best = {"name": n.name, "start": n.lineno, "end": end}
+    return best
+
+
+def _assign_texts():
+    """AST 建「变量名 → [(赋值行, 字面量文本)]」，按行号升序。
+
+    ★ 2026-11-04：替代原来的「往前扫 16 行」固定窗口。
+      实测 `_subj_note` 在 L4476 赋值、用到它的 yield 在 L4609（相距 133 行）
+      ⇒ 16 行窗口必然漏判，把正确的系统提示报成「无指纹」。
+      固定窗口是本仓反复踩的坑（太宽串味 / 太窄漏判）；AST 建表后可精确取
+      「同一函数内、行号在该站点之前的最近一次赋值」。
+    """
+    out = {}
+    try:
+        tree = ast.parse(read("agent/pipeline_parts/stream.py"))
+    except Exception:
+        return out
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            txt = "".join(s.value for s in ast.walk(node.value)
+                          if isinstance(s, ast.Constant) and isinstance(s.value, str))
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    out.setdefault(t.id, []).append((node.lineno, txt))
+    for v in out.values():
+        v.sort()
+    return out
+
+
+_ASSIGNS = None
+
+
 def _resolve_text(src_lines, ln, txt):
-    """delta 是变量时回溯其赋值行（判据宽松：赋值行出现指纹即算数）。
+    """delta 是变量时回溯其赋值（AST 精确，不靠行窗口）。
 
     2026-10-13/14 两次踩坑的沉淀：① 只取字面量 ⇒ 漏；② 源码切片窗口太宽 ⇒ 串味；
     ③ delta 是变量 ⇒ 空串。正确做法 = AST 取本节点字面量 + 变量回溯赋值行。
+    ★ 2026-11-04：把「固定 16 行窗口」换成 AST 赋值表（窗口太窄会漏，实测差 133 行）。
     """
-    if _SYS_RE.search(txt[:200]):
+    global _ASSIGNS
+    if _is_sys_prompt(txt):
         return txt, "inline"
     _src_line = src_lines[ln - 1] if 0 < ln <= len(src_lines) else ""
     m = re.search(r'"delta":\s*([A-Za-z_]\w*)\s*[,}]', _src_line)
     if not m:
+        # 跨行形态：在本行及下一行里找 "delta": var,
+        m = re.search(r'"delta":\s*([A-Za-z_]\w*)\s*[,}]',
+                      "\n".join(src_lines[ln - 1:ln + 2]))
+    if not m:
         return txt, "unknown"
     var = m.group(1)
-    for k in range(ln - 2, max(0, ln - 16), -1):
-        if re.search(r"\b%s\s*=" % re.escape(var), src_lines[k]) \
-                and _SYS_RE.search(src_lines[k]):
-            return src_lines[k], "via:" + var
-    return txt, "no-assign-with-prefix:" + var
+    if _ASSIGNS is None:
+        _ASSIGNS = _assign_texts()
+    cand = [(aln, atxt) for aln, atxt in _ASSIGNS.get(var, []) if aln < ln]
+    if cand:
+        aln, atxt = cand[-1]
+        if _is_sys_prompt(atxt):
+            return atxt, "via:%s@L%d" % (var, aln)
+        return atxt, "no-prefix:%s@L%d" % (var, aln)
+    return txt, "no-assign:" + var
 
 
 def main():
@@ -128,7 +201,7 @@ def main():
         check("S0a stream.py AST 可解析", False, str(e))
         return _summary()
     node = None
-    for _c in (r"C:\Users\gefei\.workbuddy\binaries\node\versions\22.22.2-6\node.exe", "node"):
+    for _c in (os.environ.get("MBSE_NODE") or shutil.which("node") or "node",):
         try:
             subprocess.run([_c, "--version"], capture_output=True, timeout=30)
             node = _c
@@ -175,7 +248,7 @@ def main():
     unfp = []
     for ln, k, t in prog:
         _txt, _how = _resolve_text(s_lines, ln, t)
-        if not _SYS_RE.search(_txt[:200]):
+        if not _is_sys_prompt(_txt):
             unfp.append((ln, _how))
     check("S3b ★ 每条 progress 文案都带系统提示指纹（防误拆 CoT）", not unfp,
           "无指纹的 progress 行号：%s —— 若是新提示种类，请在 SYS_PREFIXES 登记" % unfp)
@@ -186,10 +259,20 @@ def main():
     check("S4a 转发点共两处（降级直行 + 编排子任务）", len(fwd) == 2,
           "实测 %d 处：%s" % (len(fwd), fwd))
     for ln in fwd:
-        win = "\n".join(s_lines[max(0, ln - 30):ln + 5])
-        check("S4b L%d 转发点在 execute_stream 子流上下文里" % ln,
-              "execute_stream(" in win,
-              "窗口内未见 execute_stream —— 可能改错了地方")
+        # ★ 2026-11-04 改判据：原来只看「前 30 行窗口」，但实测两个转发点分别位于
+        #   `_run_subtask`(L895~1470) 与 `_stream_orchestrated_flow`(L266~3840)
+        #   —— 它们**都在**含 `execute_stream(` 的函数体内，只是离得超过 30 行
+        #   ⇒ 固定窗口把正确的代码判成"改错了地方"。
+        #   固定窗口本身就是本仓踩过的坑（太宽串味 / 太窄漏判），改用 AST 取所属函数。
+        owner = _owner_func(ln)
+        ok = False
+        detail = "未找到所属函数"
+        if owner is not None:
+            seg = "\n".join(s_lines[owner["start"] - 1:owner["end"]])
+            ok = "execute_stream(" in seg
+            detail = "所属函数 %s(L%d~%d) 内含 execute_stream=%s" % (
+                owner["name"], owner["start"], owner["end"], ok)
+        check("S4b L%d 转发点在 execute_stream 子流上下文里" % ln, ok, detail)
 
     # ══════════════ S5. 前端分支（新 type + 老 kind 兼容）══════════════
     print("\n=== S5. 前端分派（新 progress 分支 + reasoning+kind 兼容）===")

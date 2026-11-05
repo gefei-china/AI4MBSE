@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [backlog] 从未接线，待逐个定性（接入 pr 需先过「全新克隆+空库能绿」）；未接线（2026-11-04 盘点未覆盖，待逐个定性） 
 """verify_frontend_modeling_e2e — **前端 AI 建模入口**的完整链路验证。
 # CI-OPTIONAL: 需**真实 HTTP 服务在跑**（uvicorn 起在 8012）且真调 LLM；CI 里没有常驻服务 ⇒ 属本地端到端口径。与 verify_chat_contract_e2e 同类（那批也因需服务而豁免）。
 

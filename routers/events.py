@@ -1,0 +1,442 @@
+# -*- coding: utf-8 -*-
+"""事件驱动 API（2026-11-01，Super-agent 落地 P0-4）。
+
+## 端点
+    GET  /api/events/sources              已注册来源列表（含 observe/execute 与策略版本）
+    POST /api/events/sources              注册/更新来源配置（准入规则）
+    POST /api/events/sources/{kind}/mode  切 observe ⇄ execute（**放开自动执行的唯一开关**）
+    POST /api/events/{kind}               接收一个外部事件（入站事件入口）
+    GET  /api/events/triggers             事件台账（含 disposition + reason）
+    GET  /api/events/workitems            工作单元列表（观察记录 = "本应做什么"）
+    GET  /api/events/workitems/{id}       单个工单详情（含授权快照）
+    POST /api/events/workitems/{id}/advance  推进工单状态（状态机判定在 service）
+    GET  /api/events/stats                事件域概览
+
+## 为什么入站端点需要鉴权（不是"公开 webhook"）
+`POST /api/events/{kind}` 会**创建工作单元**。虽然默认 observe（不执行动作），
+但"匿名可投递事件"意味着任何人都能往库里灌事件、污染台账、消耗准入额度。
+⇒ 写类端点走 `require_any_permission(EVENT_WRITE_PERMS)`（与作业提交同档）。
+
+⚠️ **来源级白名单**是第一道防线，端点鉴权是第二道 —— 两道都要有：
+  · 端点鉴权 = "谁能往这个系统投事件"（部署级）
+  · 来源白名单 = "这个来源里谁能发起工作"（来源级）
+只做前者 ⇒ 任何登录用户都能冒充名单内的人触发工作。
+
+## 幂等契约（与 core/job_queue 同源，但判据不同）
+事件端点的幂等键 = **来源 + 外部事件 ID**（由来源自己定义，见 SourceSpec.to_trigger）。
+⇒ 外部系统重投同一条消息 ⇒ 同一 Trigger ⇒ 不重复建工单，返回 disposition='duplicate'。
+⚠️ 与 job_queue 的差别：作业的幂等键是"当次在途操作"（终态可重跑），
+   事件的幂等键是"外部事实"（**终态也不该重跑** —— 同一个分支变更被做两次是事故）。
+"""
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
+
+from core.deps import db_session, current_user, require_any_permission
+from repositories.event_repo import EventRepo
+from services.event_service import EventService
+
+router = APIRouter(tags=["事件驱动"])
+
+# 事件投递会创建工单并写台账 → 与作业提交同档（写类，非只读）
+EVENT_WRITE_PERMS = [("config", "write"), ("kb_review", "modify"), ("kb_ontology", "edit")]
+
+
+def _limit_default(default: int = 50, cap: int = 200) -> int:
+    return max(1, min(int(default or 50), cap))
+
+
+def _svc(conn) -> EventService:
+    return EventService(EventRepo(conn))
+
+
+@router.get("/api/events/sources")
+def list_sources(conn=Depends(db_session), user=Depends(current_user)):
+    """已注册来源列表（DB 为准，含 mode 与策略版本）。"""
+    repo = EventRepo(conn)
+    items = repo.list_sources()
+    return {
+        "items": items,
+        "registered": _svc(conn).registry.kinds(),
+        "note": "mode=observe 表示只记录不执行；切 execute 需显式调用 mode 端点",
+    }
+
+
+@router.post("/api/events/sources")
+def upsert_source(body: dict, conn=Depends(db_session),
+                  user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """注册/更新来源配置。
+
+    body = {kind, title?, listen?, allowed?, scope_keys?, mode?, policy_version?}
+
+    ⚠️ `kind` 一旦有历史数据就**不可改语义**（它出现在历史 Trigger 里）。
+    改策略请用同一 kind 更新配置；要换语义请新建 kind。
+    """
+    spec = build_source_from_body(body)
+    if not spec:
+        return JSONResponse({"error": "缺少必填字段 kind / allowed / scope_keys"}, 400)
+    try:
+        row = _svc(conn).register_source(spec)
+    except Exception as e:
+        return JSONResponse({"error": "注册来源失败: %s" % e}, 500)
+    return {"ok": True, "source": row}
+
+
+@router.post("/api/events/sources/{kind}/mode")
+def set_source_mode(kind: str, body: dict, conn=Depends(db_session),
+                    user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """切换来源模式：observe ⇄ execute。
+
+    ⚠️ **这是放开自动执行的唯一开关**，因此：
+      · 要求写权限；
+      · 必须写审计（复用 `audit()`）—— 谁在什么时候放开了哪个来源，要能查；
+      · 切回 observe **不撤回已建工单**（对齐 dsh「Policy 变更不撤销 Mandate，
+        只把变更投递给在途工单」—— 撤销会让半成品留在库里）。
+    """
+    from core.audit import audit, audit_user
+    mode = str((body or {}).get("mode") or "").strip()
+    if mode not in ("observe", "execute"):
+        return JSONResponse({"error": "mode 必须是 observe 或 execute"}, 400)
+    repo = EventRepo(conn)
+    if not repo.get_source(kind):
+        return JSONResponse({"error": "来源不存在: %s" % kind}, 404)
+    n = repo.set_source_mode(kind, mode)
+    if not n:
+        return JSONResponse({"error": "来源不存在: %s" % kind}, 404)
+    # ⚠️ 必须**同时**改进程内 registry：只改 DB ⇒ "放开自动执行"实际不生效
+    #    （新事件建的工单仍拿 observe 快照）—— 实测修过的真实缺陷。
+    synced = _svc(conn).registry.set_mode(kind, mode)
+    if synced:
+        try:
+            audit(audit_user(user), "event_source_mode",
+                  f"事件来源 {kind} 模式切为 {mode}", conn=conn)
+        except Exception:
+            pass   # 审计失败不得阻断切换（但模式已改，需人工核对）
+    return {"ok": True, "kind": kind, "mode": mode,
+            "registry_synced": synced,
+            "note": "已建工单的模式是快照，不随本次切换改变；仅新工单用新模式"}
+
+
+@router.get("/api/events/triggers")
+def list_triggers(conn=Depends(db_session), user=Depends(current_user),
+                  source: str = "", thread_key: str = "",
+                  limit: int = Query(50, ge=1, le=200)):
+    """事件台账（含 disposition + reason —— 被过滤的事件也在，能回答"为什么没动"）。"""
+    items = EventRepo(conn).list_triggers(source=source, thread_key=thread_key,
+                                          limit=_limit_default(limit, 200))
+    return {"items": items}
+
+
+@router.get("/api/events/workitems")
+def list_workitems(conn=Depends(db_session), user=Depends(current_user),
+                   source: str = "", state: str = "", mode: str = "",
+                   limit: int = Query(50, ge=1, le=200)):
+    """工作单元列表。
+
+    ⚠️ `mode=observe` 的条目 = **"本应做什么"的观察记录**（P0-3 的核心产物）。
+    观察期内这些条目的 action 不会被执行。
+    """
+    items = EventRepo(conn).list_workitems(source=source, state=state, mode=mode,
+                                           limit=_limit_default(limit, 200))
+    return {"items": items,
+            "note": "observe 工单只记录不执行；action 字段是建议动作"}
+
+
+@router.get("/api/events/workitems/{wid}")
+def get_workitem(wid: str, conn=Depends(db_session), user=Depends(current_user)):
+    """单个工单详情（含授权快照：actor / policy_version / strength）。"""
+    wi = EventRepo(conn).get_workitem(wid)
+    if not wi:
+        return JSONResponse({"error": "工单不存在", "id": wid}, 404)
+    trg = EventRepo(conn).get_trigger(wi.get("trigger_id") or "")
+    return {"workitem": wi, "trigger": trg,
+            "mandate": {
+                "actor": wi.get("actor"),
+                "actor_type": wi.get("actor_type"),
+                "policy_version": wi.get("policy_version"),
+                "strength": wi.get("strength"),
+                "scope": wi.get("scope"),
+            }}
+
+
+@router.post("/api/events/workitems/{wid}/advance")
+def advance_workitem(wid: str, body: dict, conn=Depends(db_session),
+                     user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """推进工单状态。
+
+    body = {state, result?, error?}    state ∈ open/running/done/failed/stopped
+
+    ⚠️ 状态机判定在 service 层（`decide_workitem_transition`），
+       非法迁移返回 409 而不是静默改库。
+    ⚠️ 本端点**只改状态，不执行 action** —— 执行由人确认后显式发起。
+    """
+    state = str((body or {}).get("state") or "").strip()
+    if not state:
+        return JSONResponse({"error": "缺少 state"}, 400)
+    res = _svc(conn).advance(wid, state,
+                             result=str((body or {}).get("result") or ""),
+                             error=str((body or {}).get("error") or ""))
+    if not res.get("ok"):
+        return JSONResponse(res, 409)
+    return res
+
+
+@router.get("/api/events/stats")
+def events_stats(conn=Depends(db_session), user=Depends(current_user)):
+    """事件域概览。"""
+    return {"stats": EventRepo(conn).stats()}
+
+
+@router.post("/api/events/workitems/{wid}/execute")
+def execute_workitem(wid: str, conn=Depends(db_session),
+                     user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """执行一个工单的 action —— **闭环的最后一环**。
+
+    ⚠️ **observe 工单拒绝执行**（观察期铁律，且判据取**工单快照**的 mode
+       ⇒ 来源后来切 execute，已建的观察期工单仍不可执行）。
+    ⚠️ 动作由 `core/events/executor.py` 的 handler 表决定；
+       **准入与执行彻底分离** ⇒ 执行器有 bug 也不可能绕过准入做未授权的事。
+    返回含 `elapsed_ms`（**价值数据来源**：事件→产出结果的真实耗时）。
+    """
+    from core.events.executor import execute_workitem as _exec
+    res = _exec(conn, wid)
+    return dict(res)
+
+
+@router.post("/api/events/execute-pending")
+def execute_pending_events(conn=Depends(db_session),
+                           user=Depends(require_any_permission(EVENT_WRITE_PERMS)),
+                           limit: int = Query(10, ge=1, le=50),
+                           only_action: str = ""):
+    """批量执行待办工单（**只取 mode='execute' 且 state='open'**）。
+
+    ⚠️ 串行执行（SQLite 单写者 ⇒ 并发会打写锁）。
+    返回逐条结果 + **总耗时**（价值数据）。
+    """
+    from core.events.executor import execute_pending as _exec_pending
+    items = _exec_pending(conn, limit=limit, only_action=only_action)
+    total_ms = sum(int(i.get("elapsed_ms") or 0) for i in items)
+    return {"count": len(items), "total_ms": total_ms, "items": [dict(i) for i in items]}
+
+
+@router.post("/api/events/workitems/{wid}/handoff")
+def handoff_workitem(wid: str, body: dict, conn=Depends(db_session),
+                     user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """跨会话接力：把工单挂到另一个会话，并返回接力上下文包。
+
+    body = {conversation_id}
+
+    ⚠️ **只挂载 + 给上下文，不执行任何业务动作**。
+    ⚠️ 挂载是「并行认领」不是「转移」：原会话仍可继续推进
+       （两个会话同时跑同一工单 ⇒ 重复写图谱 ⇒ 副作用不可逆）。
+    ⚠️ 终态工单不可接力（已 done/failed/stopped 的事不该被复活重跑）。
+    """
+    cid = int((body or {}).get("conversation_id") or 0)
+    if cid <= 0:
+        return JSONResponse({"error": "缺少 conversation_id"}, 400)
+    res = _svc(conn).handoff(wid, cid)
+    if not res.get("ok"):
+        return JSONResponse(res, 409)
+    return res
+
+
+@router.get("/api/events/conversations/{cid}/workitems")
+def conversation_workitems(cid: int, conn=Depends(db_session),
+                            user=Depends(current_user),
+                            limit: int = Query(50, ge=1, le=200)):
+    """某会话关联的工单（会话页"相关事件/待办"面板用）。"""
+    items = EventRepo(conn).list_workitems_by_conversation(cid, _limit_default(limit, 200))
+    return {"items": items, "conversation_id": cid}
+
+
+@router.get("/api/events/threads/{thread_key:path}/workitems")
+def thread_workitems(thread_key: str, conn=Depends(db_session),
+                     user=Depends(current_user),
+                     limit: int = Query(50, ge=1, le=200)):
+    """某线程下的全部工单（同一业务对象的事件历史 —— Thread 的价值所在）。
+
+    thread_key 形如 `zhiyuan:branch-9`（含冒号，故用 :path 捕获）。
+    """
+    items = EventRepo(conn).list_workitems_by_thread(thread_key, _limit_default(limit, 200))
+    return {"items": items, "thread_key": thread_key}
+
+
+@router.get("/api/events/stuck")
+def stuck_workitems(conn=Depends(db_session), user=Depends(current_user),
+                    stale_s: int = Query(1800, ge=60, le=86400)):
+    """停滞工单（非终态且超过阈值未动）—— 看门狗的只读视图。
+
+    ⚠️ 默认**只报不自动推进**（与编排 auto_resume 同口径）：
+    推进意味着真的写图谱/调 LLM，代价真实且副作用不可逆。
+    """
+    from core.events.watchdog import stuck_candidates, watchdog_status
+    items = stuck_candidates(conn, stale_s)
+    return {"items": items, "count": len(items), "stale_s": stale_s,
+            "watchdog": watchdog_status(),
+            "note": "默认只留痕不自动推进；推进需人显式发起"}
+
+
+@router.post("/api/events/watchdog/scan")
+def watchdog_scan(conn=Depends(db_session),
+                  user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """手动跑一轮看门狗扫描（留痕到 alert_events）。
+
+    ⚠️ 仍然**不自动推进工单** —— 只把停滞项变成可见告警。
+    """
+    from core.events.watchdog import run_once
+    try:
+        r = run_once(conn)
+    except Exception as e:
+        return JSONResponse({"error": "看门狗扫描失败: %s" % e}, 500)
+    return r
+
+
+# ── 来源构造（从请求体）──
+def build_source_from_body(body: dict):
+    """把请求体变成 SourceSpec。
+
+    ⚠️ **这里不接"工具/动作执行器"** —— 来源只声明"收到事件后建议做什么动作"，
+    真正的执行由上层在**人确认后**发起。
+    这样做的理由：若来源自带执行器，"observe 模式不执行"就无从保证
+    （执行器已经挂在来源上了，很难证明它没被调用）。
+    """
+    from core.events.model import Admission, OBSERVE_MODE, build_trigger
+    from core.events.sources import SourceSpec
+
+    body = body or {}
+    kind = str(body.get("kind") or "").strip()
+    if not kind:
+        return None
+    listen = str(body.get("listen") or "mentions").strip()
+    if listen not in ("mentions", "all"):
+        listen = "mentions"
+    mode = str(body.get("mode") or OBSERVE_MODE).strip()
+    if mode not in ("observe", "execute"):
+        mode = OBSERVE_MODE
+
+    adm = Admission(
+        source=kind,
+        allowed=frozenset(str(x).strip().lower() for x in (body.get("allowed") or []) if str(x).strip()),
+        listen=listen,
+        scope_keys=frozenset(str(x).strip() for x in (body.get("scope_keys") or []) if str(x).strip()),
+        mode=mode,
+        version=str(body.get("policy_version") or "v1"),
+    )
+
+    def _to_trigger(raw: dict):
+        raw = raw or {}
+        ext = str(raw.get("external_id") or "").strip()
+        scope = str(raw.get("thread_scope") or "").strip() or ext
+        actor = str(raw.get("actor") or "").strip()
+        addressed = raw.get("addressed")
+        addressed = str(addressed) if addressed in ("mention", "direct") else None
+        return build_trigger(
+            source=kind, external_id=ext, thread_scope=scope,
+            actor=actor, actor_type=str(raw.get("actor_type") or "human"),
+            addressed=addressed, text=str(raw.get("text") or ""),
+            payload=raw.get("payload") or {},
+            version=str(raw.get("version") or ""),
+            at=str(raw.get("at") or ""),
+        )
+
+    def _action_for(trigger):
+        """默认动作：**只描述，不执行**。来源可自定义（注册 SourceSpec 时覆盖）。"""
+        return (f"evaluate:{trigger.source}", (trigger.text or "")[:60])
+
+    return SourceSpec(
+        kind=kind,
+        title=str(body.get("title") or kind),
+        admission=adm,
+        to_trigger=_to_trigger,
+        action_for=_action_for,
+        scope_of=lambda raw: str((raw or {}).get("thread_scope") or ""),
+    )
+
+
+# ══ 智源轮询（2026-11-02）：本工程作为 MCP **客户端**主动拉智源变更 ══
+# ⚠️ 方向澄清：不是"智源调本工程"，而是**本工程访问智源**
+#    （智源侧已配 zhiyuan_dev_mcp，endpoint 与 Bearer 都在 mcp_servers 表里，
+#      共 71 个工具，含 query_projects / query_branches / query_model_versions）。
+# ⇒ 事件从"别人推给我"变成"我主动去拉" ⇒ 必须有个 poller。
+
+@router.post("/api/events/zhiyuan/probe")
+def zhiyuan_probe(conn=Depends(db_session),
+                  user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """探测智源 MCP 真实 schema 并落库 —— **服务恢复后第一件要做的事**。
+
+    为什么必须探测：`mcp_servers.tool_meta` 里只有 name + description，
+    **没有 inputSchema** ⇒ 轮询参数只能靠猜 ⇒ 猜错会静默拉不到数据
+    （症状是"轮询是空的"，看起来像"没有变更"，实际是参数名错了）。
+    """
+    from core.events.sources_zhiyuan_poll import probe_zhiyuan_schema
+    res = probe_zhiyuan_schema(conn)
+    if not res.get("ok"):
+        return JSONResponse(res, 502)
+    return res
+
+
+@router.post("/api/events/zhiyuan/poll")
+def zhiyuan_poll(conn=Depends(db_session),
+                 user=Depends(require_any_permission(EVENT_WRITE_PERMS)),
+                 body: dict = None):
+    """手动跑一轮智源轮询（不依赖后台线程，便于排障与首次接入）。
+
+    body = {projects?: [projectId...], versions_args?: {...}}
+
+    ⚠️ **拉取失败 ≠ 没有变更**：返回里 ok=false 时，绝不能当作"智源没变更"，
+       恢复后必须重跑，否则停服期间的变更会永久丢失。
+    """
+    from core import config as _cfg
+    from core.events.sources_zhiyuan_poll import poll_once, poller_status
+    body = body or {}
+    projects = body.get("projects") or _cfg.get("events", "zhiyuan_poll_projects", []) or []
+    vargs = body.get("versions_args") or {}
+    res = poll_once(conn, projects=list(projects), versions_args=vargs,
+                    name=str(_cfg.get("events", "zhiyuan_poll_mcp_server",
+                                      "zhiyuan-dev-mcp")))
+    res["poller"] = poller_status()
+    return res
+
+
+@router.get("/api/events/zhiyuan/status")
+def zhiyuan_poller_status(conn=Depends(db_session), user=Depends(current_user)):
+    """轮询状态 + 智源 MCP 连通性（只读）。"""
+    from core.events.sources_zhiyuan_poll import poller_status, _load_mcp_server
+    st = poller_status()
+    srv = _load_mcp_server(conn) or {}
+    st["mcp_server"] = {
+        "name": srv.get("name"), "endpoint": srv.get("endpoint"),
+        "status": srv.get("status"), "last_error": (srv.get("last_error") or "")[:200],
+        "has_auth": bool(srv.get("headers")),
+    }
+    return st
+
+
+# ⚠️⚠️ **本路由必须放在本文件所有静态路径之后**（2026-11-01 实测修掉的真实 bug）
+# FastAPI 按**声明顺序**匹配路由。`{kind}` 是通配段，若它排在
+# `/api/events/execute-pending` 之前 ⇒ 请求 `execute-pending` 会被
+# **当成 kind="execute-pending"** ⇒ 返回 "source_not_registered"，
+# 看起来像"来源没注册"，实则是**路由被通配吃掉**。
+# ⇒ 凡是本文件新增静态路径，必须加在**本路由之前**；或把本路由移到文件末尾（当前做法）。
+# ⇒ 判据：任何新增的 `/api/events/xxx` 静态端点，都要 curl 验证它没被通配吃掉。
+@router.post("/api/events/{kind}")
+def receive_event(kind: str, body: dict, conn=Depends(db_session),
+                  user=Depends(require_any_permission(EVENT_WRITE_PERMS))):
+    """接收一个外部事件 ⇒ 返回处置结论。
+
+    body = {external_id, thread_scope, actor, actor_type?, addressed?, text?, payload?, version?, at?}
+
+    返回 = {disposition, reason, strength, trigger_id, workitem_id?, mode, accepted}
+    ⚠️ disposition 取值：admitted / filtered / duplicate / rejected
+       —— **永远有结论**，不会出现"提交了但什么都没发生且查不到"。
+    """
+    svc = _svc(conn)
+    try:
+        res = svc.receive(kind, body or {})
+    except KeyError as e:
+        return JSONResponse({"error": "未注册的事件来源: %s" % kind,
+                             "registered": svc.registry.kinds()}, 400)
+    except Exception as e:
+        return JSONResponse({"error": "事件处理失败: %s" % e}, 500)
+    if res.get("disposition") == "rejected":
+        return JSONResponse(res, 400)
+    return res

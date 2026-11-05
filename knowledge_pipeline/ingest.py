@@ -264,7 +264,7 @@ def _gen_llm_summary(text: str, filename: str, max_chars: int = 4000) -> str:
 
 
 def ingest_document(conn, filename: str, file_type: str, content: bytes,
-                    uploaded_by: str = "王工", metadata: dict | None = None,
+                    uploaded_by: str = "未登录", metadata: dict | None = None,
                     doc_id: int | None = None, branch: str = "global") -> dict:
     """上传文档 → 状态机入库：解析 → 结构感知分块 → 向量化 → document_chunks + 元数据。
 
@@ -654,6 +654,23 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
         except Exception as e:
             logger.warning("向量索引失效标记失败（不阻断）: %s", e)
 
+        # ── 8) 事件驱动（2026-11-01）：发一条"文档入库完成"事件 ──
+        # ⚠️ **必须在 commit 之后**：此刻 chunks 已落库（"入库完成"为真），
+        #    且已放锁（事件处理不与入库抢写锁 —— 与上面"先 commit 再调 LLM"同源纪律）。
+        # ⚠️ **永不阻断入库**：emit 内部已 try/except，失败只留日志。
+        #    事件是旁路，入库成功才是主流程。
+        #    幂等：同一 doc_id 重复调用只产生一条 Trigger（不重复建工单）。
+        try:
+            from core.events.sources_docs import emit_document_stored
+            _ev = emit_document_stored(
+                conn, doc_id=doc_id, filename=filename,
+                chunk_count=len(chunks), entity_count=0,
+                file_type=str(file_type or ""), actor="system", actor_type="system")
+            if _ev.get("error"):
+                logger.info("文档入库事件未发出（不阻断入库）: %s", str(_ev.get("error"))[:120])
+        except Exception as _e:
+            logger.warning("文档入库事件发送异常（不阻断入库）: %s", str(_e)[:160])
+
         # 7) LLM 真摘要（2026-09-29 痛点2）：写 documents.summary（旧文档列为空 → preview 回退旧行为）。
         #    生成失败/mock 留空且**不覆盖旧值**（重解析失败时保住已有摘要）；绝不因摘要丢掉入库成果。
         _summary = _gen_llm_summary(text, filename)
@@ -692,7 +709,7 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
 
 
 def stage_upload_document(conn, filename: str, file_type: str, content: bytes,
-                          uploaded_by: str = "王工", metadata: dict | None = None,
+                          uploaded_by: str = "未登录", metadata: dict | None = None,
                           branch: str = "global") -> dict:
     """【P0-C异步】上传轻量登记：建 documents 行 + 落源文件副本，**不跑管道**。
 
@@ -820,7 +837,7 @@ def run_staged_ingest(conn, doc_id: int, metadata: dict | None = None) -> dict:
 
 
 def ingest_upload_document(conn, filename: str, file_type: str, content: bytes,
-                           uploaded_by: str = "王工", metadata: dict | None = None,
+                           uploaded_by: str = "未登录", metadata: dict | None = None,
                            branch: str = "global") -> dict:
     """文档上传统一入口：ingest_document 全管道（解析→分块→向量化→落库）+ 上传即抽取。
 

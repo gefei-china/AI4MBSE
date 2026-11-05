@@ -29,13 +29,13 @@ async function projectIngestLogsPanel(projectId){
     const isZpull = (l.source === 'zhiyuan_pull');
     return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:8px;background:var(--card);">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <span class="st" style="padding:0 6px;font-size:9.5px;color:${src[1]};border-color:${src[1]}44;background:${src[1]}11;">${src[0]}</span>
-        <b style="font-size:11.5px;">${esc(l.project_name||l.project_id||'—')}</b>
-        <span class="st ${st[0]}" style="padding:0 6px;font-size:9.5px;">${st[1]}</span>
-        <span style="font-size:10px;color:var(--mut);">${esc((l.created_at||'').slice(0,16))} · ${esc(l.operator||'')} · ${esc(l.target_branch)}</span>
-        <span style="margin-left:auto;font-size:10px;color:var(--mut);">${esc(l.batch_id)}</span>
+        <span class="st" style="padding:0 6px;font-size:11.5px;color:${src[1]};border-color:${src[1]}44;background:${src[1]}11;">${src[0]}</span>
+        <b style="font-size:12.5px;">${esc(l.project_name||l.project_id||'—')}</b>
+        <span class="st ${st[0]}" style="padding:0 6px;font-size:11.5px;">${st[1]}</span>
+        <span style="font-size:12px;color:var(--mut);">${esc((l.created_at||'').slice(0,16))} · ${esc(l.operator||'')} · ${esc(l.target_branch)}</span>
+        <span style="margin-left:auto;font-size:12px;color:var(--mut);">${esc(l.batch_id)}</span>
       </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:10.5px;color:var(--mut);">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:12px;color:var(--mut);">
         ${isZpull ? `<span>候选 <b style="color:var(--ink);">${s.candidates||0}</b></span>`
                   : `<span>版本 <b style="color:var(--ink);">${(s.versions_total||0)-(s.versions_failed||0)}/${s.versions_total||0}</b></span>`}
         <span>三元组 <b style="color:#7c3aed;">+${s.triples_approved||s.triples_staged||0}</b></span>
@@ -44,11 +44,11 @@ async function projectIngestLogsPanel(projectId){
         <span>人工队列 ${s.review_queue||0}</span>
         <span>耗时 ${((s.elapsed_ms||0)/1000).toFixed(1)}s</span>
       </div>
-      ${l.error_msg?`<div style="margin-top:5px;font-size:10.5px;color:var(--red);">${esc(l.error_msg)}</div>`:''}
+      ${l.error_msg?`<div style="margin-top:5px;font-size:12px;color:var(--red);">${esc(l.error_msg)}</div>`:''}
     </div>`;
   }).join('');
   openPanel('📜 入库台账' + (projectId?'':'（全部工程）'),
-    `<div style="font-size:11.5px;color:var(--mut);margin-bottom:8px;">本工程历次入库批次的持久记录（对话流回执易逝，以台账为准）。入库内容可在「知识库 · 图谱」按 personal 分支查看。工程入库直入捷径已下线（2026-09-24 方案A：数据链路统一走「写回智源 → 智源拉取」），其历史批次标记为「旧」保留可查。</div>
+    `<div style="font-size:12.5px;color:var(--mut);margin-bottom:8px;">本工程历次入库批次的持久记录（对话流回执易逝，以台账为准）。入库内容可在「知识库 · 图谱」按 personal 分支查看。工程入库直入捷径已下线（2026-09-24 方案A：数据链路统一走「写回智源 → 智源拉取」），其历史批次标记为「旧」保留可查。</div>
      ${rows || '<div style="padding:24px;text-align:center;color:var(--mut);">暂无入库记录——点击「⇩ 智源拉取」发起第一次入库</div>'}`);
 }
 // 2026-09-24 方案A（用户拍板）：AI 建模数据链路统一「归一确认 → 写回智源 → 智源拉取 → 个人分支」——
@@ -70,15 +70,15 @@ async function loadSysmlIngestBar(convId){
       const pushed = String(cur.zhiyuan_imported_id || '').trim();
       const lbl = String(cur.version_label || '').replace(/['"\\]/g, '');
       pushBtn = pushed
-        ? `<button class="btn sm ghost" disabled style="font-size:10px;padding:0 8px;color:var(--mut);cursor:not-allowed;" title="当前版本已写回智源（${esc(pushed)}）。暂定规则：已写回的版本不可重复写回；归一修改会产生新版本，新版本可再次写回。">✅ 已写回智源</button>`
-        : `<button class="btn sm ghost" style="font-size:10px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="sysmlPushModal(${cur.id},'${lbl}')" title="把当前版本 SysML v2 源码写入智源建模软件：先语法检测（只读），通过后覆盖导入；成功后「智源拉取」即可拉到本版本">🔗 写回智源</button>`;
+        ? `<button class="btn sm ghost" disabled style="font-size:12px;padding:0 8px;color:var(--mut);cursor:not-allowed;" title="当前版本已写回智源（${esc(pushed)}）。暂定规则：已写回的版本不可重复写回；归一修改会产生新版本，新版本可再次写回。">✅ 已写回智源</button>`
+        : `<button class="btn sm ghost" style="font-size:12px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="sysmlPushModal(${cur.id},'${lbl}')" title="把当前版本 SysML v2 源码写入智源建模软件：先语法检测（只读），通过后覆盖导入；成功后「智源拉取」即可拉到本版本">🔗 写回智源</button>`;
     }
   }catch(e){ pushBtn = ''; cur = null; }
   el.innerHTML = `<div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);text-align:left;display:flex;gap:4px;justify-content:flex-end;">
       ${pushBtn}
-      ${cur ? `<button class="btn sm ghost" style="font-size:10px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="sysmlGenCandidates(${cur.id})" title="把当前版本的 SysML v2 解析成候选清单，打开「AI 建模入库向导」。\n\n这是与图库已有实体做归一消歧的主入口：向导里可逐条勾选、查消歧徽章、选重复策略（对齐复用 / 强制新建 / 跳过）。\n解析后候选进入待审核队列，经三元组统一审核通过才落 personal 分支。">📥 入库向导</button>` : ''}
-      <button class="btn sm ghost" style="font-size:10px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="zhiyuanPullIngest()" title="从智源拉取当前工程建模数据，后端直接转三元组入个人图库（对话流回执）">⇩ 智源拉取</button>
-      <button class="btn sm ghost" style="font-size:10px;padding:0 8px;" onclick="projectIngestLogsPanel()" title="本工程历次入库批次台账（智源拉取 / 旧工程入库）">📜 入库台账</button>
+      ${cur ? `<button class="btn sm ghost" style="font-size:12px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="sysmlGenCandidates(${cur.id})" title="把当前版本的 SysML v2 解析成候选清单，打开「AI 建模入库向导」。\n\n这是与图库已有实体做归一消歧的主入口：向导里可逐条勾选、查消歧徽章、选重复策略（对齐复用 / 强制新建 / 跳过）。\n解析后候选进入待审核队列，经三元组统一审核通过才落 personal 分支。">📥 入库向导</button>` : ''}
+      <button class="btn sm ghost" style="font-size:12px;padding:0 8px;color:var(--blue-d);border-color:var(--blue-bd,#B5D4F4);" onclick="zhiyuanPullIngest()" title="从智源拉取当前工程建模数据，后端直接转三元组入个人图库（对话流回执）">⇩ 智源拉取</button>
+      <button class="btn sm ghost" style="font-size:12px;padding:0 8px;" onclick="projectIngestLogsPanel()" title="本工程历次入库批次台账（智源拉取 / 旧工程入库）">📜 入库台账</button>
   </div>`;
 }
 
@@ -125,12 +125,12 @@ function sysmlPushModal(vid, label){
   const ov = document.createElement('div');
   ov.id = 'svm-push-modal';
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;display:flex;align-items:center;justify-content:center;';
-  ov.innerHTML = `<div style="width:520px;background:#fff;border-radius:10px;box-shadow:0 10px 34px rgba(20,35,60,.2);overflow:hidden;font-size:12.5px;">
+  ov.innerHTML = `<div style="width:520px;background:#fff;border-radius:10px;box-shadow:0 10px 34px rgba(20,35,60,.2);overflow:hidden;font-size:13.5px;">
       <div style="padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;">🔗 写回智源建模软件（${esc(label||('v'+vid))}）</div>
       <div style="padding:14px 16px;line-height:1.95;">
         <div>版本控制串 vc（留空则用系统默认配置）：</div>
-        <input id="svm-push-vc" style="width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:5px;font-size:12px;" placeholder="projectId,branchId">
-        <div style="margin-top:6px;color:var(--mut);font-size:11px;">流程：语法检测（只读）→ 通过后覆盖导入智源。检测不通过 / 智源不可达均不会写入；写回成功后该版本标记「已写回」，不可重复写回。</div>
+        <input id="svm-push-vc" style="width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:5px;font-size:13.5px;" placeholder="projectId,branchId">
+        <div style="margin-top:6px;color:var(--mut);font-size:12.5px;">流程：语法检测（只读）→ 通过后覆盖导入智源。检测不通过 / 智源不可达均不会写入；写回成功后该版本标记「已写回」，不可重复写回。</div>
         <div id="svm-push-msg" style="margin-top:8px;"></div>
       </div>
       <div style="padding:10px 16px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px;">
@@ -251,35 +251,35 @@ function openSysmlImportDialog(batchId, candidates, versionId, dup){
   const dupN = ents.filter(c=>(c.matching_status==='dup_high'||c.matching_status==='dup_suspect')||_batchDup(c)).length
              + rels.filter(c=>c.rel_matching_status==='dup_high').length;
   const rowHtml = c => `
-    <div style="display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px dashed var(--line);font-size:11.5px;">
+    <div style="display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px dashed var(--line);font-size:12.5px;">
       <input type="checkbox" class="si-cb" value="${c.cid}" checked style="width:auto;flex:none;" title="勾选该候选入库">
       <span style="width:14px;">${c.status==='rejected'?'🛑':'☑'}</span>
       <b style="max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(_isRel(c) ? _relLabel(c) : _nm(c))}">${esc(_isRel(c) ? _relLabel(c) : _nm(c))}</b>
-      ${_view(c)?`<span class="tag" style="font-size:9.5px;background:#eef1f6;color:var(--mut);">${esc(_view(c))}</span>`:''}
-      <span class="tag" style="font-size:10px;">${esc(_isRel(c) ? '关系' : (c.entity_type||'实体'))}</span>
+      ${_view(c)?`<span class="tag" style="font-size:11.5px;background:#eef1f6;color:var(--mut);">${esc(_view(c))}</span>`:''}
+      <span class="tag" style="font-size:12px;">${esc(_isRel(c) ? '关系' : (c.entity_type||'实体'))}</span>
       ${_batchDup(c)?`<span class="st w" title="与同批次候选近似重复">批内疑似</span>`:''}
       <span style="margin-left:auto;">${_sysmlMatchBadge(c)}</span>
     </div>`;
   const listHtml = typeNames.map(t => `
-    <div style="background:#f7f9fc;padding:4px 6px;font-size:10.5px;color:var(--mut);border-bottom:1px solid var(--line);">${esc(t)}（${groups[t].length}）</div>
+    <div style="background:#f7f9fc;padding:4px 6px;font-size:12px;color:var(--mut);border-bottom:1px solid var(--line);">${esc(t)}（${groups[t].length}）</div>
     ${groups[t].map(rowHtml).join('')}`).join('');
   b.innerHTML = `
-    <div style="border:1px solid var(--line);border-radius:8px;font-size:11.5px;margin-bottom:10px;">
+    <div style="border:1px solid var(--line);border-radius:8px;font-size:12.5px;margin-bottom:10px;">
       ${listHtml}
-      ${rels.length?`<div style="background:#f7f9fc;padding:4px 6px;font-size:10.5px;color:var(--mut);border-bottom:1px solid var(--line);">关系候选（${rels.length}，两端实体须已入库，确认时自动校验）</div>`:''}
+      ${rels.length?`<div style="background:#f7f9fc;padding:4px 6px;font-size:12px;color:var(--mut);border-bottom:1px solid var(--line);">关系候选（${rels.length}，两端实体须已入库，确认时自动校验）</div>`:''}
       ${rels.map(rowHtml).join('')}
       ${(ents.length+rels.length)===0?'<div style="padding:12px;color:var(--mut);text-align:center;">无候选</div>':''}
     </div>
-    <div style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:11px;color:var(--mut);flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:12.5px;color:var(--mut);flex-wrap:wrap;">
       <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="si-all" checked style="width:auto;">全选</label>
-      <span>重复候选处理：<select id="sysml-dup-action" style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:11.5px;">
+      <span>重复候选处理：<select id="sysml-dup-action" style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12.5px;">
         <option value="create">强制新建（保留重复）</option>
         <option value="align">对齐复用（合并到已有元素）</option>
         <option value="skip">跳过（不入库）</option>
       </select></span>
-      <span id="si-dup-hint" style="color:var(--mut);font-size:10.5px;"></span>
+      <span id="si-dup-hint" style="color:var(--mut);font-size:12px;"></span>
     </div>
-    <div style="font-size:10.5px;color:var(--mut);">AI 建模生成的 V2 候选默认进入「待审核队列」，经三元组统一审核通过后写入模型库（一次入库 = 一次提交）；入库数据与「个人分支已有模型元素 + 同批候选」比对消歧后写入 personal 分支。</div>`;
+    <div style="font-size:12px;color:var(--mut);">AI 建模生成的 V2 候选默认进入「待审核队列」，经三元组统一审核通过后写入模型库（一次入库 = 一次提交）；入库数据与「个人分支已有模型元素 + 同批候选」比对消歧后写入 personal 分支。</div>`;
   if(sub) sub.textContent = `${versionId?`版本 ${versionId} · `:''}来源：统一闸门暂存（未入库） · 共 ${ents.length} 实体 / ${rels.length} 关系${dupN?` · 重复 ${dupN}`:''}${rejN?` · ${rejN} 项校验不通过（自动拒绝）`:''}`;
   drawer.classList.add('show');
   mask.classList.add('show');
@@ -383,11 +383,11 @@ async function zhiyuanPullIngest(){
   if(b && b.tool && b.tool !== 'zhiyuan'){
     const tl = ZP_PULL_TOOL_LABEL[b.tool] || b.tool;
     openPanel('⇩ 模型拉取 — ' + (projName || '（会话未关联工程）'),
-      `<div style="font-size:12px;line-height:1.9;">
-        <div style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:11.5px;color:var(--mut);">
+      `<div style="font-size:13.5px;line-height:1.9;">
+        <div style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:12.5px;color:var(--mut);">
           目标工程：<b style="color:var(--ink);">${esc(projName||'-')}</b> · 绑定建模工具：<b style="color:var(--ink);">${tl}</b>${b.name?`（${esc(b.name)}）`:''}
         </div>
-        <div style="margin-top:10px;padding:10px 12px;border:1px solid #F3D9A4;background:#fffbf0;border-radius:8px;font-size:11.5px;color:#8a5a10;line-height:1.8;">
+        <div style="margin-top:10px;padding:10px 12px;border:1px solid #F3D9A4;background:#fffbf0;border-radius:8px;font-size:12.5px;color:#8a5a10;line-height:1.8;">
           ℹ️ <b>${tl}</b> 的拉取连接器尚未接入——绑定已登记（ref=${esc(b.ref)}），无需重新绑定。<br>
           MagicDraw 通道按 08-31 设计分三层：<b>文件导入</b>（.kerml/.profile，MVP）→ <b>SysML v2 API</b>（ISO 标准）→ <b>Cameo OpenAPI 插件</b>（深度集成）。<br>
           任一通道接入后，本工程的写回 / 拉取将自动按绑定路由。
@@ -400,19 +400,19 @@ async function zhiyuanPullIngest(){
   }
   const boundVc = (b && b.tool === 'zhiyuan' && b.ref) || '';
   openPanel('⇩ 智源拉取 — ' + (projName || '（会话未关联工程）'),
-    `<div style="font-size:12px;line-height:1.8;">
-      <div style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:11.5px;color:var(--mut);">
+    `<div style="font-size:13.5px;line-height:1.8;">
+      <div style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:12.5px;color:var(--mut);">
         后端将把该工程在<b style="color:var(--ink);">智源</b>中的建模数据：解析 → 候选化 → 融合闸 → 转三元组 → 入库<b style="color:var(--ink);">个人分支图库</b>。<br>
         （不产生数据治理审核面板待办，回执在本对话流显示，批次记录进「入库台账」）
       </div>
       <div style="margin:10px 0 4px;">目标工程</div>
-      <div style="padding:6px 10px;border:1px solid var(--line);border-radius:8px;font-size:12px;">
+      <div style="padding:6px 10px;border:1px solid var(--line);border-radius:8px;font-size:13.5px;">
         ${projName ? esc(projName) : '<span style="color:var(--red);">✕ 当前会话未关联工程——请先在工程页归属会话</span>'}
       </div>
       <div style="margin:10px 0 4px;">智源 vc（branchId）</div>
-      <input id="zp-vc-input" type="text" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:12px;" placeholder="${boundVc ? '' : '未绑定——填写该工程在智源的 vc，填一次即长期绑定本工程'}"
+      <input id="zp-vc-input" type="text" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:13.5px;" placeholder="${boundVc ? '' : '未绑定——填写该工程在智源的 vc，填一次即长期绑定本工程'}"
              value="${esc(boundVc)}" ${boundVc ? '' : ''}>
-      <div style="margin-top:4px;font-size:10.5px;color:var(--mut);">
+      <div style="margin-top:4px;font-size:12px;color:var(--mut);">
         ${boundVc ? '✅ 本工程已绑定 vc，可直接拉取；修改输入框可改绑' : '⚠ 本工程尚未绑定智源 vc，不绑定无法确定拉取目标（防止拉错工程数据）'}
       </div>
       <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
@@ -444,15 +444,15 @@ function _zhiyuanReceipt(r){
   const row = (k,v,c)=>'<div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0;"><span style="color:var(--mut);">'+k+'</span><b style="color:'+(c||'var(--ink)')+';">'+v+'</b></div>';
   let body;
   if(r.error){
-    body = '<div style="font-size:12px;color:#b91c1c;">✕ 拉取入库失败：'+esc(r.error)+'</div>';
+    body = '<div style="font-size:13.5px;color:#b91c1c;">✕ 拉取入库失败：'+esc(r.error)+'</div>';
   } else {
     const vcSrc = r.vc_source || '';
     const vcNote = vcSrc==='project' ? '（工程绑定 vc）'
       : vcSrc==='explicit' ? '（本次指定并已绑定工程）'
       : vcSrc==='default' ? '<span style="color:var(--amb,#b45309);">（⚠ 默认 vc，非工程绑定——建议在拉取弹窗绑定本工程 vc）</span>' : '';
-    body = '<div style="font-size:12px;line-height:1.8;">'
-      + '<div style="margin-bottom:6px;"><span class="st ok" style="font-size:12px;padding:3px 12px;">✅ 智源拉取直通入库完成</span>'
-      + '<span style="font-size:10.5px;color:var(--mut);margin-left:8px;">批次 '+esc(r.batch_id||'')+' · 工程 '+esc(r.project_name||'默认工程')+' · vc '+esc(r.vc||'')+' '+vcNote+' · 分支 '+esc(r.target_branch||'personal')+' · 耗时 '+((s.elapsed_ms/1000)||0).toFixed(1)+'s</span></div>'
+    body = '<div style="font-size:13.5px;line-height:1.8;">'
+      + '<div style="margin-bottom:6px;"><span class="st ok" style="font-size:13.5px;padding:3px 12px;">✅ 智源拉取直通入库完成</span>'
+      + '<span style="font-size:12px;color:var(--mut);margin-left:8px;">批次 '+esc(r.batch_id||'')+' · 工程 '+esc(r.project_name||'默认工程')+' · vc '+esc(r.vc||'')+' '+vcNote+' · 分支 '+esc(r.target_branch||'personal')+' · 耗时 '+((s.elapsed_ms/1000)||0).toFixed(1)+'s</span></div>'
       + '<div style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);">'
       + row('模型来源', esc(r.model_name||'智源'))
       + row('候选（实体+关系）', s.candidates||0)
@@ -461,13 +461,13 @@ function _zhiyuanReceipt(r){
       + row('融合闸：自动合并 / 人工队列', (s.auto_merged||0)+' / '+(s.review_queue||0))
       + row('本体校验拒绝', s.rejected||0, s.rejected?'var(--amb)':'')
       + '</div>'
-      + (r.text_preview?('<details style="margin-top:6px;"><summary style="cursor:pointer;font-size:10.5px;color:var(--mut);">智源回读文本预览（前 400 字符）</summary><pre style="margin:4px 0 0;padding:6px 8px;background:#0f172a;color:#e2e8f0;border-radius:5px;font-size:10px;overflow-x:auto;white-space:pre-wrap;">'+esc(r.text_preview)+'</pre></details>'):'')
+      + (r.text_preview?('<details style="margin-top:6px;"><summary style="cursor:pointer;font-size:12px;color:var(--mut);">智源回读文本预览（前 400 字符）</summary><pre style="margin:4px 0 0;padding:6px 8px;background:#0f172a;color:#e2e8f0;border-radius:5px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">'+esc(r.text_preview)+'</pre></details>'):'')
       + '</div>';
   }
   if(!area){ toast(r.error? '拉取失败' : '✅ 智源拉取入库完成'); return; }
   const card = document.createElement('div');
   card.className = 'msg ai';
-  card.innerHTML = '<div class="msg-inner"><div class="body" style="border-color:#C9B8F5;background:#FBF9FF;"><div style="font-size:11px;color:#7c3aed;font-weight:600;margin-bottom:6px;">⇩ 智源拉取直通入库</div>'+body+'</div></div>';
+  card.innerHTML = '<div class="msg-inner"><div class="body" style="border-color:#C9B8F5;background:#FBF9FF;"><div style="font-size:12.5px;color:#7c3aed;font-weight:600;margin-bottom:6px;">⇩ 智源拉取直通入库</div>'+body+'</div></div>';
   area.appendChild(card);
   area.scrollTop = area.scrollHeight;
 }

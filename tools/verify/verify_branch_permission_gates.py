@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红：断言取证 `ROOT/mbse.db`（真库）的存量数据；干净克隆无该文件。证据：~~~~~^^^^^
 # -*- coding: utf-8 -*-
 """P0-4 权限门自检：分支管理 4 个端点挂门 + 权限判定单元 + 角色矩阵数据。
 
@@ -24,7 +25,7 @@ if ROOT not in sys.path:
 
 ROUTER = os.path.join(ROOT, "routers", "branches.py")
 SEEDS = os.path.join(ROOT, "database", "seeds.py")
-DB = os.path.join(ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 # 计划规定：endpoint → (domain, op)
 EXPECT = {

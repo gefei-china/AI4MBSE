@@ -146,12 +146,18 @@ def main() -> int:
             continue
         cands = by_sec.get(sec) or []
         rel = [x for x in cands if x != r["id"] and not _is_noise(x, by_id)][:6]
-        if len(rel) < 2:
+        note = ""
+        # ★ 2026-10-22 修正：此处原是 `if len(rel) < 2: continue` 之后又判一次
+        #   `if len(rel) < 2: note=...; need_review += 1` —— 第二个判断**永远不可达**
+        #   （第一个已 continue）⇒ `need_review` 恒为 0、人工复核环节从未触发，
+        #   而报告显示"需人工确认 0 条"看起来像"没有需要复核的"，实则是判据失效。
+        #   改法：相关集为 0 ⇒ 不可用（跳过）；为 1 ⇒ **可用但标记需复核**（单条相关集
+        #   算不出 recall 的分母，评测价值有限，但不该直接丢）。
+        if not rel:
             skipped_nosec += 1
             continue
-        note = ""
-        if len(rel) < 2:
-            note = "相关集较小，需人工确认"
+        if len(rel) == 1:
+            note = "相关集仅 1 条（算不出 recall 分母），需人工确认"
             need_review += 1
         seen_q.add(q)
         out.append({

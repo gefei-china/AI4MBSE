@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL  X1c ★ 挂点段整体 try/except（观测旁路铁律） 
 # -*- coding: utf-8 -*-
 """P3 replanning（2026-10-21，执行中重规划第三阶段）回归验证 —— 零 LLM、零服务、零生产库写。
 

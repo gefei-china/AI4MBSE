@@ -1,4 +1,6 @@
 """安装/授权/启停/软删除：plugin_installs 与 plugins.status 的写路径。"""
+import json
+
 from plugin_system.store.base import (
     STATUS_LABELS,
     _now,
@@ -31,7 +33,32 @@ def install(conn, plugin_id, user, enabled=True):
     p = get_plugin(conn, plugin_id)
     if not p:
         return False, "插件不存在"
+    # ── 2026-11-05 重装豁免（米爸拍板：卸载后重装被拒是 bug）──────────────────
+    # 现象：管理员全局卸载（uninstall 删系统级 user_id=0 行）后重新安装，
+    #   被 `scope != "public"` 拦下（"该能力未上架市场"）。
+    # 根因是**口径打架**：系统预装的 legacy 能力 scope 是 personal（真库 95/129），
+    #   按市场口径它"从未上架"，按系统口径它 user_id=0 **人人可消费**。
+    #   U1 卸载删掉了全部安装行 ⇒ 没有任何"曾安装"痕迹可查 ⇒ 只能从
+    #   manifest 的 legacy runtime（legacy_table + legacy_id 且旧表行存在）
+    #   判断"这是系统预装能力"。
+    # 语义边界（刻意的）：
+    #   · 跳过的是 **scope** 校验（上架与否）—— 恢复一个系统曾装过的能力；
+    #   · **status='disabled' 治理闸门保留** —— 市场管理员全局停用仍拒绝；
+    #   · status='removed'/draft 等非 published 仍拒绝（能力真被删了不该复活）。
+    _legacy_restore = False
     if p["scope"] != "public":
+        try:
+            _rt = (json.loads(p["manifest_json"] or "{}").get("runtime") or {})
+        except (ValueError, TypeError):
+            _rt = {}
+        _lt, _lid = _rt.get("legacy_table"), _rt.get("legacy_id")
+        if _lt and _lid is not None:
+            try:
+                _legacy_restore = conn.execute(
+                    "SELECT 1 FROM %s WHERE id=?" % _lt, (_lid,)).fetchone() is not None
+            except Exception:               # noqa: BLE001 旧表不存在 ⇒ 非恢复场景
+                _legacy_restore = False
+    if p["scope"] != "public" and not _legacy_restore:
         return False, "该能力未上架市场，无法安装"
     if p["status"] == "disabled":
         return False, "该能力已被市场管理员全局停用，暂不可安装"

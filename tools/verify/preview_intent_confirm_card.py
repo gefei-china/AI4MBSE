@@ -86,12 +86,14 @@ TEMPLATE = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><tit
     card.innerHTML = clarifyCardInnerHtml(qs, title);
     document.getElementById('host').appendChild(card);
     var d = document.createElement('div'); d.id = 'render-probe';
-    d.textContent = card.innerHTML;
+    // ★ 2026-10-23：探针改用 base64 —— dump-dom 会把文本节点里的 `"` 序列化成
+    //   `&quot;`，导致 `class="cq-custom"` 之类的断言永远数不到（假红）。
+    d.setAttribute('data-b64', btoa(unescape(encodeURIComponent(card.innerHTML))));
     document.body.appendChild(d);
   }catch(e){
     // 渲染失败必须可见（否则断言只会看到"空产物"，定位不到真因）
     var err = document.createElement('div'); err.id = 'render-probe';
-    err.textContent = 'RENDER_ERROR: ' + (e && (e.message||e));
+    err.setAttribute('data-b64', btoa(unescape(encodeURIComponent('RENDER_ERROR: ' + (e && (e.message||e))))));
     document.body.appendChild(err);
   }
 })();
@@ -113,16 +115,48 @@ dom = subprocess.run(base + ["--dump-dom", hp.as_uri()],
 (out / "intent_confirm_card.dom.txt").write_text(dom, encoding="utf-8")
 shot = out / "intent_confirm_card.png"
 subprocess.run(base + ["--screenshot=%s" % shot, hp.as_uri()], capture_output=True, timeout=120)
-_re = re.search(r'<div id="render-probe">(.*?)</div>', dom, re.S)
-render = _re.group(1) if _re else ""
+import base64
+_re = re.search(r'<div id="render-probe" data-b64="([^"]*)"', dom)
+render = base64.b64decode(_re.group(1)).decode("utf-8", "replace") if _re else ""
 
 print("── 断言 ──")
+# ── 2026-10-23 修正（本门禁此前 T4/T6 两个失败是**门禁过期**，非产品缺陷）──
+# ① T4：门禁原要求"补充输入框**常显** + 文案『可直接在此输入你的答复』"，但
+#    2026-09-28 卡片已**有意**改为「一次一题向导式 + 选『其他/自定义』才展开
+#    输入框」（生产注释明写"不再默认铺开"），文案也换成『✎ 请填写你的答案
+#    （填写后以此为准）』。⇒ 断言必须对齐**当前设计**：入口存在 + 输入框按需展开。
+# ② T6：『（我的猜测）』标注由**后端** session.py 写进 options 数组，前端只原样
+#    渲染。此前门禁却去前端 HTML 里找它 —— 找错了层（两张不同的卡被混为一谈）。
+#    现在分两层断言：后端载荷层（options 是否标注）+ 前端渲染层（标注是否透传）。
 chk(payload["title"] in dom, "T1 卡片标题用事件带的标题（不再硬编码「确认建模信息」）")
 chk(render.count('type="radio"') >= 4, "T2 选项为单选按钮（实际 %d 个）" % render.count('type="radio"'))
 chk('value="__custom__"' in render and "其他 / 自定义" in render, "T3 有「其他 / 自定义」入口")
-chk('class="cq-custom"' in render and "可直接在此输入你的答复" in render, "T4 常显补充输入框（可自由作答）")
+chk('class="cq-custom"' in render and "请填写你的答案" in render,
+    "T4 补充输入框存在且提示明确（按需展开，非常显）")
 chk("clarifyAnswerSend()" in render and "clarifySkipSend()" in render, "T5 提交/跳过按钮齐备")
-chk("（我的猜测）" in render, "T6 系统当前猜测如实标注（不假装确定）")
+_q0 = (payload.get("questions") or [{}])[0]
+_opts = _q0.get("options") or []
+_back_guess = any("（我的猜测）" in str(o) for o in _opts)
+_front_guess = "（我的猜测）" in render
+chk(_front_guess == _back_guess,
+    "T6 猜测标注前后端一致（后端标注=%s / 前端透传=%s）" % (_back_guess, _front_guess))
+# T6b：**判别力**补充 —— 光比"两者相等"在都不含时恒真。直接调后端构造器：
+# 给定一个**确定**意图，首项必须带「（我的猜测）」—— 否则"如实标注当前猜测"这条
+# 契约在真正需要它时会静默失效（而线上载荷可能恰好不含它，测不出来）。
+try:
+    import sys as _sys
+    _sys.path.insert(0, str(REPO))
+    from agent.pipeline_parts.session import SessionMixin
+    import agent.pipeline as _ap
+    _pipe = _ap.AgentPipeline()
+    _pipe._load_db_agents()
+    _qs = _pipe._intent_confirm_questions("帮我看看这个系统的接口设计是否合理", "design")
+    _o = (_qs[0].get("options") or [])
+    _hit = bool(_o) and "（我的猜测）" in str(_o[0])
+    chk(_hit, "T6b 后端在**给定确定意图**时把「（我的猜测）」标在首项（实际首项=%s）"
+        % (str(_o[0])[:48] if _o else "<空>"))
+except Exception as _e:
+    chk(False, "T6b 后端构造器直调失败：%s" % _e)
 chk("undefined" not in render and "NaN" not in render, "T7 渲染产物无 undefined / NaN")
 chk(shot.exists() and shot.stat().st_size > 2000, "T8 截图已产出")
 print("\nDOM: %s\n截图: %s" % (out / "intent_confirm_card.dom.txt", shot))

@@ -447,13 +447,24 @@ class FusekiWriter(GraphDBWriter):
     def _post(self, url: str, body: str, ctype: str) -> str:
         import urllib.request
         import urllib.error
+        import urllib.parse
         headers = {"Content-Type": ctype,
                    "Accept": "application/sparql-results+json, application/n-quads, */*"}
         if self._auth:
             headers["Authorization"] = self._auth
         req = urllib.request.Request(url, data=body.encode("utf-8"), headers=headers)
+        # ⚠️ 2026-11-05 真缺陷：`urlopen` 默认读 `HTTP_PROXY/HTTPS_PROXY`。
+        #   本机装了代理而系统例外表没列 127.0.0.1 时，访问本机 Fuseki 会走代理
+        #   ⇒ 代理回 `502 upstream connect failed`，**错误文本把矛头指向 Fuseki**，
+        #   而真相是"请求根本没到 Fuseki"。实测就是这个形态。
+        #   （同族：curl 探活 127.0.0.1 必须 `--noproxy '*'`，否则拿到的是代理状态码。
+        #     另一处客户端 services/sparql_sync.py 已同步修好 —— 两个客户端必须同口径。）
+        _host = (urllib.parse.urlparse(url).hostname or "").lower()
+        _opener = (urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                   if _host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+                   else urllib.request.build_opener())
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with _opener.open(req, timeout=self.timeout) as resp:
                 return resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             # ★★ 先把 HTML 错误页剥掉（2026-10-21 修）：

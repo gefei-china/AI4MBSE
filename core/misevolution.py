@@ -63,6 +63,17 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+# ── S0（2026-10-28）统计口径隔离 ──────────────────────────────────────────────
+# 三个质量信号的分母/分子都来自 `tool_call_logs`，而该表混有验证脚本的假工具
+# （实测近 7 天 fake_tool 126 次、失败率 89%、latency 记成 1.79e12 ms）。
+# 不排除 ⇒ `tool_fail_rate` 被假工具拉到 15.0%（真实 11.8%），
+#   而本模块的用途正是「判断能力是否退化」——被噪声抬高的基线会**误报退化**，
+#   也会在真退化时因基线抬高而**漏报**。故统一用 core.probe_mark 的口径。
+from core.probe_mark import probe_where as _probe_where
+
+_PROBE = _probe_where()   # " AND COALESCE(is_probe,0)=0"，可直拼在 created_at>=? 之后
+
+
 # ── 产品契约常量（面板/API/门禁三方共用，勿在调用处另写字面量）───────────
 STATUS_OK = "ok"
 STATUS_WARN = "warn"
@@ -110,7 +121,7 @@ _SPECS = [
         label="工具权限拒绝率（越权边界）",
         num_sql="SELECT COUNT(*) FROM audit_logs "
                 "WHERE event_type='tool_perm_denied' AND created_at>=?",
-        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=?",
+        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE call_kind<>'plugin' AND created_at>=?" + _PROBE,
         lower_better=True,
         warn_key="perm_denied_warn",
         alert_key="perm_denied_alert",
@@ -121,7 +132,7 @@ _SPECS = [
         label="白名单越权尝试率",
         num_sql="SELECT COUNT(*) FROM audit_logs "
                 "WHERE event_type='tool_whitelist_denied' AND created_at>=?",
-        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=?",
+        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE call_kind<>'plugin' AND created_at>=?" + _PROBE,
         lower_better=True,
         warn_key="whitelist_denied_warn",
         alert_key="whitelist_denied_alert",
@@ -130,8 +141,8 @@ _SPECS = [
     SignalSpec(
         name="tool_fail_rate",
         label="工具失败率",
-        num_sql="SELECT COUNT(*) FROM tool_call_logs WHERE ok=0 AND created_at>=?",
-        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=?",
+        num_sql="SELECT COUNT(*) FROM tool_call_logs WHERE ok=0 AND call_kind<>'plugin' AND created_at>=?" + _PROBE,
+        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE call_kind<>'plugin' AND created_at>=?" + _PROBE,
         lower_better=True,
         warn_key="tool_fail_warn",
         alert_key="tool_fail_alert",
@@ -141,8 +152,8 @@ _SPECS = [
         name="kind_coverage",
         label="failure_kind 覆盖率（可监控性）",
         num_sql="SELECT COUNT(*) FROM tool_call_logs "
-                "WHERE ok=0 AND COALESCE(failure_kind,'')<>'' AND created_at>=?",
-        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE ok=0 AND created_at>=?",
+                "WHERE ok=0 AND COALESCE(failure_kind,'')<>'' AND call_kind<>'plugin' AND created_at>=?" + _PROBE,
+        den_sql="SELECT COUNT(*) FROM tool_call_logs WHERE ok=0 AND call_kind<>'plugin' AND created_at>=?" + _PROBE,
         lower_better=False,      # 覆盖率越高越好——下滑即红线 #4 告警
         warn_key="kind_coverage_warn",
         alert_key="kind_coverage_alert",

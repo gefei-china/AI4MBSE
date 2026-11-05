@@ -1,0 +1,1792 @@
+{
+  "version": 1,
+  "generated_at": "2026-11-04",
+  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
+  "budget": {
+    "broken": 38,
+    "backlog": 68,
+    "tolerated_steps": 39
+  },
+  "tiers": {
+    "pr": "每次 push/PR 必跑，必须全绿（干净库、≤15s）",
+    "nightly": "夜间/手动；慢或不稳定但在 CI 等价口径下绿",
+    "local": "需真实服务/LLM/生产真库金标，CI 跑不了（必须写理由）",
+    "broken": "已知红，记账不进 CI；数量不得超过 budget（只降不升）",
+    "backlog": "从未接线的存量门禁，待评估；数量不得超过 budget"
+  },
+  "gates": [
+    {
+      "script": "verify_alternatives_platform.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_autonomy_and_clarify.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_capability_chain.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_chat_clarify_partial.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_chat_contract_e2e.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_chat_task_intent.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_checker_three_paths.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_clarify_single_turn.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_content_budget.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_context_audit_api.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_conv9736_write.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_conv_llm_scoped.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_conv_model_e2e.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_conv_model_scoped.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_conv_summary_api.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_doc_summary.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_e2e_chat.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_entity_resolver.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_frontend_modeling_e2e.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_fuseki_integration.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_fuseki_readwrite.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_generation_quality_gate.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_intent_llm_fusion.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_intent_routing_baseline.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_job_handpoints_live.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_kb_dashboard.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_kb_scope_effective.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_llm_cost_cache.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_main_agent_execution.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_main_agent_persistence.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_mcp_availability.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_mcp_tool_meta.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_mcp_whitelist_exempt.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_mcp_write_path.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_n2_skeleton.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_n3_e2e_real.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_n3_stability.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_n3_view_expansion.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_norm_summary.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_ontology_dom_range.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_p0_failure_kind.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_p0_repair_round_tools.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_partial_persist_on_failure.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_probe_mark.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_progress_guard.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_projects_nav.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_prompt_cache_order.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_q1_q2_q3.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_rag_eval_gate.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_ragflow_adapter.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_rerank_effective.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_rerun_gain.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_retrieval_low_conf.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_retrieval_relevance.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_role_block_sections.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_role_manual_filter.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_s3_e2e.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_s4_llm_params.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_semantic_cache_stream.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_skill_frontmatter.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_skill_prompt_budget.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_team_defined_orchestration.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_trace_quality_gate.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_truncation_policy.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_turn_override_e2e.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_ui_intent_brief.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_ui_render_live.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_zhiyuan_matching.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_agent_loop_protocol.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL F5 ★合法空参数在真实循环里正常执行（未被误判为截断）"
+    },
+    {
+      "script": "verify_attribution.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] D1 ★引擎计数 == 裸 SQL 对账（total/bad/good 三通道 + 首坏+级联=坏）  ← engine={'total': 25, 'good': 15, 'bad': 10, 'bad_"
+    },
+    {
+      "script": "verify_badcase.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] A1 检测器注册表三类（llm_call_failed/user_negative_feedback/llm_truncated）  ← got=['llm_call_failed', 'user_nega"
+    },
+    {
+      "script": "verify_capability_registry.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B1 删 skills 源行 ⇒ 其投影随之删除  ← got 29（应只剩 A 段夹具 1 行）"
+    },
+    {
+      "script": "verify_compression_anchor.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] [1] 压缩锚点覆盖组装侧真实产出的全部块名　— 未覆盖 3 个：['【%s %s】\\\\n%s%s', '【%s 已取回】\\\\n%s\\\\n\\\\n（父章 %s 上一轮已取回，', '【%s 已取回】\\\\n%s"
+    },
+    {
+      "script": "verify_conflict_check_retired.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B4 ReAct 默认串仍含它（走 workflows 那套）"
+    },
+    {
+      "script": "verify_conv_scope_guard.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B3 匿名不加 user 条件（口径②）"
+    },
+    {
+      "script": "verify_eval_routing.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] E2 run1 macro_f1=0.7909 >= 阈值 0.84（基线 0.9158）  <- f1=0.7909 thr=0.84"
+    },
+    {
+      "script": "verify_fact_inference.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] F1 记录到改动前基线（evidence 本就全空，basis 无从谈起）  真库已有 473 条带 basis ⇒ 基线描述需更新"
+    },
+    {
+      "script": "verify_failure_class.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] F1 存量全覆盖（无 internal 兜底）  以下 error 落到兜底未归类：['子任务未产生输出']"
+    },
+    {
+      "script": "verify_flow_topology.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [TIMEOUT] [FAIL] A7 改名/改版本/改标签不改指纹  ← ('2da843069b1415f2fa23562162578dc789435061', '5c0c2f80edde70a5112d57c6dad188f67c72"
+    },
+    {
+      "script": "verify_ingest_tx.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] T1d commit 在 chunks INSERT 之后（锁已释放）  ← insert@17404 commit@12993"
+    },
+    {
+      "script": "verify_intent_db_kw.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL T2 真库各 Agent 在纯净 db 层下自认领成功  <- 异常=[('methodology_resolver', '方法论解析', 'knowledge_qa')]"
+    },
+    {
+      "script": "verify_intent_history.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] C7 与 prev 一致 + 弱置信(0.70) → 采纳为 llm_history  <- 实得=llm_first_weak"
+    },
+    {
+      "script": "verify_intent_kw_layers.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL F4 内置意图完整性：9 个系统级意图名都在 db 层  <- 缺失={'system_mgmt'}"
+    },
+    {
+      "script": "verify_layering.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] L1b 基线与实测一致（差值 ≤ 3，防止口径漂移导致门禁虚设）  <- 基线=323 实测=344 ⇒ 口径不一致，请用 scan_direct_sql() 重新测基线"
+    },
+    {
+      "script": "verify_lifecycle.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] D4 ★真库 'design' 使用证据非零（agent_tasks 按 name join 生效）  ← got=(13, 0)"
+    },
+    {
+      "script": "verify_llm_context_guard_mutate.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL 1.3 guard=warn → **不截断**（放开假天花板）  | 实收=8192"
+    },
+    {
+      "script": "verify_load_aware_assign.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] D1 能力域任务 top-1 命中 ≥ 7/8  只中 6/8"
+    },
+    {
+      "script": "verify_mcp_edit_and_resume_gate.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] M6 变异（接返回值判真假）被 C9 抓住"
+    },
+    {
+      "script": "verify_multiturn_context.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL B5 默认值：enabled=True / max_chars=900 / versions=3"
+    },
+    {
+      "script": "verify_orphan_agent_ref.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B1 INSERT 语句含 agent_name_snapshot"
+    },
+    {
+      "script": "verify_plan_cycle_guard.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] ...<3 lines>... | \"请改用当前在役的 Agent 名后重试。\" % \"、\".join(_unresolved)) | ValueError: 计划引用了无法解析的 Agent：design（不在 age"
+    },
+    {
+      "script": "verify_quality_review_wiring.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B4 ★ 标注上线后 reflection 与 plan_eval 双留痕一致（每轮评审恰好一次 eval）  ← 缺归属：{9779: (10, 4), 9999: (3, 0), 10012: (1, "
+    },
+    {
+      "script": "verify_replan_p2.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL  S3d 保守默认：配置读取失败取 enabled=False（不会因读不到配置就开重画）"
+    },
+    {
+      "script": "verify_replan_p3.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL  X1c ★ 挂点段整体 try/except（观测旁路铁律）"
+    },
+    {
+      "script": "verify_request_state_reset.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] A2 有 1 个 `self._xxx` 赋值字段未在reset_request_state 中登记（跨请求会残留）：['_llm_overrides_effective']"
+    },
+    {
+      "script": "verify_rerank_logging_fmt.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B2 解析失败告警：真的写出了内容"
+    },
+    {
+      "script": "verify_s4_prompt.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL  common.py 定义 _AGENT_ROLE_CAP = 1200"
+    },
+    {
+      "script": "verify_s4_toolname.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL  llm/__init__.py 在 except 分支加 WARNING"
+    },
+    {
+      "script": "verify_settings_data_audit.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [TIMEOUT] "
+    },
+    {
+      "script": "verify_sse_heartbeat.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] ^^^^^^^^^^^^^ | AssertionError: 变异锚点丢失：            _terminal = True | yield f\"event: error"
+    },
+    {
+      "script": "verify_statemachine.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] D hil_confirmations.status ∈ hil_confirmation 状态域  ← 越界值 {'executed': 1}；实测分布 {'executed': 1, 'pending'"
+    },
+    {
+      "script": "verify_thinking_policy.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] ★ off 列表含实测确认的 4 个廉价任务 + `chat_probe`（有A/B 证据）"
+    },
+    {
+      "script": "verify_token_budget.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] ~~~~^^^^^^^^^^^ | File \"<string>\", line 73, in <module> | NameError: name '_pg_stop_now' is not defined"
+    },
+    {
+      "script": "verify_tool_input_schema.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] C6b 内置写操作工具拿到真 schema（高危操作有契约了）  parameters={'type': 'object', 'properties': {}, 'additionalProperties'"
+    },
+    {
+      "script": "verify_typography_scale.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] F1 字号档位 ⊆ 标准集合（25 档）  ← 越界档位：[10.5, 11.0, 13.0]（示例：['chat.css:32', 'alternatives.css:33', 'alternatives"
+    },
+    {
+      "script": "verify_vector_binary_cache.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] ★ 第二次命中二进制（hit_bin 增量=+0，应为 1）"
+    },
+    {
+      "script": "verify_agent_archive.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D3 用真库副本做「档案库收敛」取证（真库零写入）；干净克隆无 mbse.db"
+    },
+    {
+      "script": "verify_agent_name_unify.py",
+      "tier": "local",
+      "timeout": 240,
+      "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+    },
+    {
+      "script": "verify_alert_evaluator.py",
+      "tier": "pr",
+      "timeout": 240
+    },
+    {
+      "script": "verify_arch_assumptions.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。B1 断言「视图生成本身由 skill 承载且被用过」，空库 0 个视图 skill、0 次使用"
+    },
+    {
+      "script": "verify_attachment_fulltext.py",
+      "tier": "local",
+      "timeout": 240,
+      "reason": "依赖生产库存量数据（真库绿 / CI 干净库红），CI 跑不了: [FAIL] H1a 解析成功（parsed=1、skipped 空）  -- parsed=0 skipped=['Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf(不支持的地址)']"
+    },
+    {
+      "script": "verify_b1_runtime_smoke.py",
+      "tier": "local",
+      "timeout": 240,
+      "reason": "依赖生产库存量数据（真库绿 / CI 干净库红），CI 跑不了: [FAIL] D1 能取到 dev 分支实体（读取链路未断）  → eid=None status=200"
+    },
+    {
+      "script": "verify_binding_graph.py",
+      "tier": "local",
+      "timeout": 240,
+      "reason": "依赖生产库存量数据（真库绿 / CI 干净库红），CI 跑不了: [FAIL] G3 无「判死却仍注入」（核对 9 条）  ← 越界：requirement_analysis/gap_summary, requirement_analysis/scene_coverage, knowl"
+    },
+    {
+      "script": "verify_bm25_fix_live.py",
+      "tier": "local",
+      "timeout": 240,
+      "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+    },
+    {
+      "script": "verify_branch_permission_gates.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红：断言取证 `ROOT/mbse.db`（真库）的存量数据；干净克隆无该文件。证据：~~~~~^^^^^"
+    },
+    {
+      "script": "verify_branch_protection_rules.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。REAL=ROOT/mbse.db 做「零回归：既有保护语义不变」对拍；干净克隆无 mbse.db"
+    },
+    {
+      "script": "verify_capability_consistency.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言技能已发布可绑定；空库种子里的技能是 draft（status=409）"
+    },
+    {
+      "script": "verify_chat_scroll_layout.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D 断言本机浏览器实测证据 outputs/_verify_cv_fixed.json 已留档（outputs/ 不入库）"
+    },
+    {
+      "script": "verify_checker_diag_encoding.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需 checker.jar（126MB 随包运行时，.gitignore 排除）⇒ CI 上 verdict=unavailable"
+    },
+    {
+      "script": "verify_chunk_gold.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。用真库 document_chunks 真实切片算 nDCG/命中率；空库无文档切片"
+    },
+    {
+      "script": "verify_ck_phase_consistency.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D1 断言真库存在「口径分裂现场 run 531」；空库无该 run"
+    },
+    {
+      "script": "verify_conv9726_fixes.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库会话 9726 的三项修复（判读句/语义去重/降级顺序）；空库无该会话"
+    },
+    {
+      "script": "verify_conv9730_continue.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库会话 9730 的四项根因；空库无该会话"
+    },
+    {
+      "script": "verify_conv_anchors.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。复现真库 tool_call_logs id=4593 那次会话的锚点提取；空库无该记录"
+    },
+    {
+      "script": "verify_embed_unavail_breaker.py",
+      "tier": "local",
+      "timeout": 240,
+      "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+    },
+    {
+      "script": "verify_entity_versions.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。从真库快照拷贝后跑时态迁移验证（fresh_copy）；干净克隆无 mbse.db"
+    },
+    {
+      "script": "verify_failure_kind.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D2 断言真库 failure_kind 分布 ≥5 类且 internal<60%；空库仅 3 类 22 条样本"
+    },
+    {
+      "script": "verify_fuseki_endpoint.py",
+      "tier": "local",
+      "timeout": 240,
+      "reason": "需真实 Fuseki 在 3030 上跑（B3~B6b 要真 404/405 响应；B8~B10 要真连通）。2026-11-05 起：无服务时这 7 条**显式 SKIP 并打印原因**，不再判红 —— 有服务实测 16 PASS / 0 FAIL，无服务 8 PASS / 4 SKIP，两态都健康。CI 无 Fuseki（随包 java 运行时 + 126MB jar 不入库）⇒ 保持 local。"
+    },
+    {
+      "script": "verify_graph_breaker.py",
+      "tier": "local",
+      "timeout": 240,
+      "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+    },
+    {
+      "script": "verify_graph_db_enabled.py",
+      "tier": "local",
+      "timeout": 240,
+      "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+    },
+    {
+      "script": "verify_hil_write_gate.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。先 `file:mbse.db?mode=ro` 只读取证再建临时副本（真库金标）；干净克隆无 mbse.db"
+    },
+    {
+      "script": "verify_mcp_tool_closure.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需真库 mcp_servers.tool_meta（MCP 重新发现后才有）；空库该字段为空"
+    },
+    {
+      "script": "verify_orch_failure_class.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。F 段断言「真库 agent_tasks 有 failed 记录并可按 error_class 分解」；空库无失败样本"
+    },
+    {
+      "script": "verify_orch_span.py",
+      "tier": "pr",
+      "timeout": 240
+    },
+    {
+      "script": "verify_orchestration_e2e.py",
+      "tier": "local",
+      "timeout": 240,
+      "reason": "源码直连真实服务/真实 key（CI 无服务无 secret）"
+    },
+    {
+      "script": "verify_pipeline_closure.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言 skill 引用的 MCP 工具在库里注册；空库未做 MCP 发现 ⇒ 工具缺失"
+    },
+    {
+      "script": "verify_protocol_artifacts.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。E1 断言真库 subtask_artifacts 有行且 summary_json 三数组非空；空库 0 行"
+    },
+    {
+      "script": "verify_replan_p1.py",
+      "tier": "pr",
+      "timeout": 240
+    },
+    {
+      "script": "verify_session_monitor.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。V4 下钻断言真库会话 #9779 的明细（356 段证据链）；空库无该会话。附：该门禁已抓出真缺陷 weight 详情40≠列表45（待修）"
+    },
+    {
+      "script": "verify_skill_package_sync.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。S3 需生成型 skill 包 zhiyuan_mcp_tools 的 references 目录（随包/生成产物）"
+    },
+    {
+      "script": "verify_skill_tool_names.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需真库 zhiyuan-dev-mcp 的 tool_meta；空库无"
+    },
+    {
+      "script": "verify_stdlib_index_coverage.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需 sysml.library（7.7MB OMG 规范库，.gitignore 排除）⇒ 索引为空、定义数 0"
+    },
+    {
+      "script": "verify_subtask_status.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。G1 需要 failed 子任务样本算空文本率；空库 0/0（分母为 0 时判据无意义）"
+    },
+    {
+      "script": "verify_thinking_autotune.py",
+      "tier": "local",
+      "timeout": 120,
+      "reason": "2026-11-05 干净克隆+空库实测红 ⇒ 降 local。断言用真库 intent 记录产出建议清单；空库无历史 intent"
+    },
+    {
+      "script": "verify_uninstall_flow.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_bm25_indexes_bm25_text.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（40s > 15s）"
+    },
+    {
+      "script": "verify_event_driven.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "干净库绿但慢（>15s），已接进 nightly-guards"
+    },
+    {
+      "script": "verify_evolution_report.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（26s > 15s）"
+    },
+    {
+      "script": "verify_failed_round_budget.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（25s > 15s）"
+    },
+    {
+      "script": "verify_hyde_gate.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（43s > 15s）"
+    },
+    {
+      "script": "verify_multi_project_scope_mutate.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "干净库绿但慢（>15s），已接进 nightly-guards"
+    },
+    {
+      "script": "verify_orch_reliability.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（30s > 15s）"
+    },
+    {
+      "script": "verify_p0_dup_shortcircuit_runtime.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（37s > 15s）"
+    },
+    {
+      "script": "verify_p1_project_attribution_mutate.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（28s > 15s）"
+    },
+    {
+      "script": "verify_partial_dedup.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（17s > 15s）"
+    },
+    {
+      "script": "verify_pdf_watermark_filter.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（22s > 15s）"
+    },
+    {
+      "script": "verify_sandbox.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "干净库绿但慢（49s > 15s）"
+    },
+    {
+      "script": "verify_sysml_autofix.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（55s > 15s）"
+    },
+    {
+      "script": "verify_sysml_baseline.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（79s > 15s）"
+    },
+    {
+      "script": "verify_sysml_check_gate.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "干净库绿但慢（61s > 15s）"
+    },
+    {
+      "script": "verify_tool_result_continuity.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（41s > 15s）"
+    },
+    {
+      "script": "verify_view_projection.py",
+      "tier": "nightly",
+      "timeout": 240,
+      "reason": "真库绿但慢（44s > 15s）"
+    },
+    {
+      "script": "audit_dup_defs.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "audit_dup_routes.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_agent_catalog.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_agent_model_params.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_agent_perm_gate.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_agent_todo.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_agent_tools_no_params.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_alternatives_select.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_answer_no_inner_scroll.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_artifact_validator.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_asset_audit.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_asset_snapshot_sync.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_async_resume.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_audit_p0.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_auth_enforce.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_b5_7_generic_intent_clarify.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_budget_headroom.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_budget_needsuser_p1.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_cancel_and_reap.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_capability_config.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_capability_overview.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_chat_area_scrollbar.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_chat_entry_contract.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_ci_comment_consistency.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_citation_alignment.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_claims_and_conflicts.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_commit_hash.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_common_exports.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_config_proposal.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_confirm_pairing.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_containerization.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_context_audit.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_context_scope_guard.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_context_utilization.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_continuation.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_control_plane.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_conv_failure_attribution.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_conv_summary_fallback.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_curriculum.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_dedup_and_finalize_hint.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_defer_cost.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_doc_folders.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_doc_global.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_doc_trace_ui.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_eval_fingerprint_gate.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_eval_management.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_event_type_split.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_evidence_recheck.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_final_content_contract.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_final_content_dedupe.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_fs_guard.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_gate_manifest.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_gate_portability.py",
+      "tier": "pr",
+      "timeout": 60
+    },
+    {
+      "script": "verify_gate_wiring.py",
+      "tier": "pr",
+      "timeout": 180
+    },
+    {
+      "script": "verify_graph_mirror_contract.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_guard_arg_fix.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_harness_gate_p02.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_hier_events.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_hyde_heading.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_idempotency.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_impact_archive.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_inline_tool_call_salvage.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_inline_tool_calls.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_intent_cache_key.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_intent_cache_toggle.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_intent_catalog.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_intent_eval_ci.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_intent_llm_review.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_interrupted_resume.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_jit_tool_fallback.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_job_handlers.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_job_queue.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_job_ui.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_largefile_pipeline.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_llm_circuit_breaker.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_llm_context_guard.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_llm_health.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_loop_guard.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_memory_admin.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_memory_conflict_gate.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_memory_injection.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_memory_tier.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_metric_semantics.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_migration_guard.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_misevolution.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_model_profile_fields.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_multi_project_scope.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_no_fake_actor.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_no_mock_fallback.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_no_mutation_residue.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_observability_ui.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_obstacle_p05.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_online_eval_loop.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_orch_planning.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_orch_resume.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_orch_run_id_scope.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_orch_summary_budget.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_orch_supervisor.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_orch_whitelist.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_orphan_reap.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_output_contracts.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_p0_tool_results_var.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_p14b.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_p1_project_attribution.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_paged_doc_archive.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_pagination.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_partial_exec_persist.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_partial_persist.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_partial_policy.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_pipeline_concurrency.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_plan_block_live.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_plan_guard.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_platform_generality.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_plugin_bind_removed.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_plugin_builtin.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_prompt_blocks.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_prompt_layering.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_pytest_suite.py",
+      "tier": "pr",
+      "timeout": 900
+    },
+    {
+      "script": "verify_rag_config.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_rate_limit.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_react_delegation.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_real_thinking_ab.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_reasoning_kind.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_reasoning_passthrough.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_replan_loop.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_replan_nonstream.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_replan_p4.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_rerank_auto.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_retrieval_dedup.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_retrieval_diversity.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_retrieval_observation.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_retry_fallback_stats.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_reuse_gate.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_running_state.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_runtime_stability.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_s4_calls.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_schema_index_order.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_setting_keys_guard.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_skill_binding_semantics.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_skill_injection.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_slot_merge.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_stage_pipeline_agents.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_stream_event_log.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_stream_repair_loop.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_subtask_context.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_subtask_isolation.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_tenant_isolation.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_thinking_budget.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_thinking_level.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_thinking_shape.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_tiered_compression.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_todo_gate_p01.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_tool_arg_hint.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_tool_offload.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_tool_round_budget.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_total_timeout_budget.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_trace2dataset.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_trace_cols.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_trace_inherit.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_ux_metrics.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_vec_cache.py",
+      "tier": "pr",
+      "timeout": 120
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+/* ── 多方案对比卡样式（FR-MG-6） ──
+ * 用语义 token（--color-*）而非硬编码色值，亮/暗主题自动跟随
+ * （暗色覆盖见 tokens.css 的 [data-theme="dark"] 段）。
+ */
+.alt-wrap{margin-top:6px;}
+.alt-scroll{overflow-x:auto;margin-top:8px;border:1px solid var(--color-line-soft);border-radius:8px;background:var(--color-bg-card);}
+.alt-table{border-collapse:collapse;width:100%;font-size:13px;}
+.alt-table th,.alt-table td{border-bottom:1px solid var(--color-line-soft);padding:7px 10px;text-align:center;vertical-align:middle;}
+.alt-table thead th{background:var(--color-bg-canvas);font-weight:600;position:sticky;top:0;z-index:1;}
+.alt-table tbody tr:last-child th,.alt-table tbody tr:last-child td{border-bottom:none;}
+.alt-table tbody tr:hover td,.alt-table tbody tr:hover th{background:var(--color-bg-hover);}
+
+/* 维度名列（首列） */
+.alt-table th.alt-dim{text-align:left;min-width:118px;font-weight:500;background:var(--color-bg-canvas);}
+.alt-dimname{display:block;color:var(--color-ink);font-weight:600;}
+.alt-dimtip{display:block;color:var(--color-text-faint);font-size:11.5px;font-weight:400;}
+
+/* 方案列头 */
+.alt-colname{font-size:13.5px;color:var(--color-ink);font-weight:600;word-break:break-word;}
+.alt-colmeta{font-size:11.5px;color:var(--color-text-muted);font-weight:400;margin:2px 0 4px;}
+th.alt-col-rec{background:var(--color-green-l);}
+
+/* 单元格 */
+.alt-raw{display:block;color:var(--color-ink);font-weight:600;font-variant-numeric:tabular-nums;}
+.alt-na{color:var(--color-text-faint);font-size:12.5px;}
+
+/* 归一化条 */
+.alt-bar{position:relative;height:5px;border-radius:3px;background:var(--color-line-soft);margin-top:5px;overflow:hidden;}
+.alt-bar i{display:block;height:100%;border-radius:3px;}
+.alt-bar-hi{background:var(--color-green);}
+.alt-bar-md{background:var(--color-amber);}
+.alt-bar-lo{background:var(--color-red);}
+.alt-bar-na{height:auto;background:none;color:var(--color-text-faint);font-size:11px;text-align:center;line-height:1.4;}
+
+/* 汇总行 */
+.alt-total th,.alt-total td{background:var(--color-bg-canvas);border-top:2px solid var(--color-line);}
+.alt-total th{text-align:left;font-weight:600;color:var(--color-ink);}
+.alt-total-val{font-variant-numeric:tabular-nums;font-weight:600;color:var(--color-ink);}
+.alt-total-rec{color:var(--color-green);}
+
+/* 说明区 */
+.alt-notes{margin-top:6px;font-size:12px;color:var(--color-text-muted);line-height:1.6;}

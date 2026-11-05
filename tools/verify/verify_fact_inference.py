@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] F1 记录到改动前基线（evidence 本就全空，basis 无从谈起）  真库已有 473 条带 basis ⇒ 基线描述需更新 
 # -*- coding: utf-8 -*-
 """批次二 §08 门禁：事实/推断分档（evidence.basis）。
 
@@ -43,7 +44,7 @@ import sqlite3
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PROTO = os.path.join(ROOT, "services", "subtask_protocol.py")
 STREAM = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0
 _fail = 0

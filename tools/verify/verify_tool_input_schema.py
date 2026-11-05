@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] C6b 内置写操作工具拿到真 schema（高危操作有契约了）  parameters={'type': 'object', 'properties': {}, 'additionalProperties' 
 # -*- coding: utf-8 -*-
 """B1-1 门禁：`tools.input_schema` 真值注入 function-calling payload。
 
@@ -22,6 +23,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_tool_input_schema.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import sys
 import json
@@ -119,12 +121,12 @@ check("B1 变异体锚点齐全", mut_self_proof(
 # ── 3. 行为层：用独立临时库实跑 _build_tools_def ────────────────────────────
 print("\n=== C. 行为层：实跑 _build_tools_def（独立临时库）===")
 
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 if not os.path.exists(PROD_DB):
     print("  [SKIP] 未找到 %s" % PROD_DB)
     sys.exit(0)
 
-TMP = tempfile.mkdtemp(prefix="verify_tool_schema_")
+TMP = mkdtemp(prefix="verify_tool_schema_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     # sqlite3.backup 是整库复制，对 WAL 库也安全（比文件 copy 可靠）

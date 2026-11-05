@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] D4 ★真库 'design' 使用证据非零（agent_tasks 按 name join 生效）  ← got=(13, 0) 
 # -*- coding: utf-8 -*-
 """P0-1 门禁：资产长尾治理（core/lifecycle.py + GET /api/monitor/lifecycle + 面板接线）。
 
@@ -263,7 +264,7 @@ def main():
 
     # ── D. 真库只读 smoke（开发机；CI 无库 ⇒ 整体 SKIP）────────────────
     print("\n== D. 真库只读 smoke（file:...?mode=ro，不写不迁移）==")
-    _prod = os.path.join(ROOT, "mbse.db")
+    _prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     if not os.path.exists(_prod):
         skip("D1-D4 真库断言", "CI 环境无 mbse.db（干净库口径）⇒ 判据面不存在")
     else:

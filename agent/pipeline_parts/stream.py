@@ -16,6 +16,23 @@ from .common import *
 from core.audit import audit, audit_user
 from . import tool_offload as _tool_offload  # P1-4：大工具结果 offload（引用块+按需重读）
 import queue as _queue  # 编排子任务事件的**实时**转发通道（见 _stream_orchestrated_flow 的 _evq）
+import asyncio  # ★ 2026-10-29：`except asyncio.CancelledError`（客户端断开的真实异常类型）
+from contextlib import nullcontext  # P0-b：_turn_cm 无 tracer 时的零开销占位
+
+
+def _gates_safe():
+    """执行闸生效值快照（**诊断用，永不抛**）。
+
+    ★ 2026-10-28：本函数存在的唯一理由是"诊断信息不得带崩主流程"。
+      第一次实现直接在卡片字典里写 `_gates_snapshot()`（函数名还写错了），
+      实测 conv 9728：落库阶段 `NameError` ⇒ 整条消息的卡片装配中断，
+      只能走 `_persist_partial_stream` 兜底存正文、卡片退化成 `[]`。
+      ⇒ 诊断数据必须包在 try 里，取不到就给 None。
+    """
+    try:
+        return gates_snapshot()
+    except Exception:
+        return None
 
 
 def _gen_stage_name(intent, agent_def) -> str:
@@ -33,7 +50,7 @@ def _gen_stage_name(intent, agent_def) -> str:
     任一命中 -> 「生成与校验」；否则 -> 「生成汇总」。
     """
     try:
-        if str(intent or "") in _CODE_STAGE_INTENTS:
+        if str(intent or "") in _code_stages():
             return "生成与校验"
         from agent.pipeline_parts.prompt import PromptMixin as _PM
         if agent_def is not None and _PM._is_v2_code_agent(agent_def):
@@ -43,11 +60,163 @@ def _gen_stage_name(intent, agent_def) -> str:
     return "生成汇总"
 
 
-#: 产码意图白名单（编排多阶段合成 intent 时的兜底；细则以 2) 的绑定判据为准）
+def _code_stages() -> set:
+    """产码阶段集合。真实来源 `agents.is_code_stage`（`core.agent_catalog`，带缓存）；
+    读不到回落 `_CODE_STAGE_INTENTS` 兜底常量。"""
+    try:
+        from core.agent_catalog import code_stages
+        got = code_stages()
+        if got:
+            return set(got)
+    except Exception:
+        pass
+    return set(_CODE_STAGE_INTENTS)
+
+
+#: 产码意图**兜底**清单（编排多阶段合成 intent 时的兜底；细则以 `_is_v2_code_agent` 的绑定判据为准）
+#: ⚠️ 2026-11-04：已降级为兜底，真实来源是 `agents.is_code_stage`。
+#:   同时**清掉了 2 个幽灵名**：`multi_design` 与 `sysml_view_generation` 在 `agents` 表
+#:   根本不存在（实测 0 行）—— 留着它们等于让"产码判定"依赖两个不存在的 Agent。
 _CODE_STAGE_INTENTS = {
     "design", "architecture_skeleton", "view_expansion",
-    "model_validation_repair", "multi_design", "sysml_view_generation",
+    "model_validation_repair",
 }
+
+
+def _turn_cm(tracer, turn_no):
+    """P0-b（2026-10-25）M2：ReAct 轮的 turn span 上下文管理器。
+
+    为什么用 with 包整轮而不是开闭配对：循环体有 10+ 个出口（break×6 /
+    continue×2 / 异常上抛），逐个补 close 必然漏（同 _stream_orchestrated_traced
+    "三类出口逐个补 finally 必然漏"的判据）；with 的 __exit__ 在
+    break/continue/GeneratorExit（生成器被关闭）三条路径上都保证闭 span。
+    无 tracer（编排子任务流/关闭开关）⇒ nullcontext，零开销。
+    """
+    if tracer is None:
+        return nullcontext()
+    return tracer.turn(turn_no)
+
+
+#: `exec` 快照里"有内容"的判定键（任一非空 ⇒ 视为有快照）
+_EXEC_MEAT_KEYS = ("reasoning", "notices", "tools", "agent")
+
+#: 保留最近 N 轮的**工具结果原文**，更早的轮次只留"可寻址摘要"（2026-10-30）。
+#: 为什么需要（真机 conv 9779 13:27 那轮）：原实现把上一轮所有工具结果整条抹空，
+#: 连 offload 编号一起抹 ⇒ 模型从第 3 轮起拿不到任何明细、也没法按编号重读，
+#: 只能猜编号/重查 ⇒ 撞 max_failed_rounds=3 ⇒ 用户看到"人工确认后无辜终止"。
+#: N=1 的含义：**上一轮的原文永远保留**（多步核对最需要的就是它），
+#: 再早的轮次换成 {工具名, offload_id, head 400 字, 重读指引}。
+#: 设为 0 即回到旧行为（逐轮抹空）—— 保留开关是为了出问题能快速回退。
+try:
+    from core import config as _cfg_kr
+    _KEEP_TOOL_ROUNDS = int(_cfg_kr.get("agent", "tool_result_keep_rounds", 1) or 0)
+except Exception:                    # noqa: BLE001
+    _KEEP_TOOL_ROUNDS = 1
+if _KEEP_TOOL_ROUNDS < 0:
+    _KEEP_TOOL_ROUNDS = 0
+
+
+
+def _partial_exec_card(scope: dict):
+    """异常/断开/取消时随消息落库的 `exec` 快照（与成功路径**同构**）。
+
+    ★ 2026-10-30（用户反馈「刷新后这么多环节的内容都不见了」）：
+      成功轮把 `exec`（reasoning / notices / tools / brief / gates）写进 card_data，
+      前端历史还原**只认它**（`05-markdown.js` 的 `_procHtmlNow`）；
+      而固化路径的 card_data 写死 `"{}"` ⇒ 失败轮跑过的意图识别 / 工具调用 / 阶段
+      **刷新即全部蒸发**（真机 conv 9779 msg 5262：card_data=`{}`，
+      而同轮 SSE 里已有 22 次工具事件）。
+      同一份"执行过程"两条出口只存了一条 —— 这是路径不对称，不是"失败轮本来就没过程"。
+
+    ## 为什么参数是 `scope` 而不是五个形参
+    本函数服务于**三个不同位置的 except**（CancelledError / GeneratorExit / Exception），
+    它们与 `exec_*` 累加器之间存在"可能尚未执行到"的先后关系：
+    异常可能发生在 `exec_tools = []` **之前**（如意图路由阶段），此时裸引用必然 NameError
+    —— 而本函数是"保住用户已看到内容"的最后一环，**它自己绝不能成为新的失败点**
+    （同文件 `_interim_exec_card` 注释里记着这个坑：闭包读未赋值变量把整轮打挂）。
+    传 `locals()` 进来，缺键即 None，天然 fail-safe。
+
+    ⚠️ 只在 `execute_stream` 内调用（需要同一作用域的 `locals()`）；
+       `locals()` 在**嵌套函数**里只看得到自己的局部变量，别挪进闭包。
+    """
+    _g = scope.get
+    _out = {}
+
+    def _safe(fn, default=None):
+        try:
+            return fn()
+        except Exception:              # noqa: BLE001
+            return default
+
+    _rs = _g("exec_reasoning")
+    _out["reasoning"] = _safe(lambda: "".join(_rs or [])[:8000] or None)
+    _nt = _g("exec_notices")
+    _out["notices"] = _safe(lambda: (_nt or [])[:60] or None)
+    _out["tools"] = _safe(lambda: _g("exec_tools") or None)
+    _ag = _g("agent_def")
+    _out["agent"] = _safe(lambda: _ag.name)
+    _self = _g("self")
+    _out["brief"] = _safe(lambda: getattr(_self, "_last_intent_brief", None) or None)
+    _out["gates"] = _safe(lambda: _gates_safe())
+    if not any(_out.get(k) for k in _EXEC_MEAT_KEYS):
+        return None                    # 全空 ⇒ 无快照，让固化的文案如实说"未能留存"
+    return _out
+
+
+def _best_partial(full_content, llm_content, orch_acc, streamed_acc) -> str:
+    """中断时**该固化哪段**：返回"能最完整代表用户已看到内容"的那一份。
+
+    ★ 2026-10-27（用户反馈「中途执行失败后之前输出的内容没有任何展示」）：
+    判据不是"最新一轮写了什么"，而是**"用户屏幕上到底出现过什么"**。三个来源各有盲区：
+
+    | 来源 | 覆盖 | 盲区 |
+    |---|---|---|
+    | `_full_content + llm_content` | 跨续跑轮的完整产出 | 续跑复位/补充指令重置时，**前一段**已流出的内容不在其中 |
+    | `_orch_acc`（编排路径 token） | 编排流的逐字产出 | 直行路径为空 |
+    | `_streamed_acc`（本轮所有 token） | **真的发给过用户的每一个字** | 含被重置掉的过程性叙述（但那正是用户看到的东西）|
+
+    所以取**长度更大者**（而非固定优先级）：短的那个必然是被清空/被截断的记录，
+    长的是更完整的现场。实测病灶（conv 9629 15:34:39「写入工程」轮）：前两源皆空
+    （旧代码 llm_content 在流循环结束后才赋值 ⇒ 中途异常时为空），只有固化 0 条。
+    """
+    _norm = (((full_content + "\n\n" + llm_content) if full_content else llm_content)
+             or "".join(orch_acc or [])
+             or "")
+    _streamed = (streamed_acc[0] if streamed_acc else "") or ""
+    return _streamed if len(_streamed) > len(_norm) else _norm
+
+
+def _write_op_detail(result_text: str) -> str:
+    """从写操作回执里抽一句人可读摘要（供收尾提示）。
+
+    ⚠️ 刻意**不抽业务字段**（dataId / status 等）：不同 MCP 后端的字段名不统一
+    （`operationId` / `semanticStatus` / `status` …），硬抽字段名必然漏或错。
+    ⇒ 只取**有界长度的原文片段**，让模型自己读出成功标识。
+    """
+    _t = str(result_text or "").strip()
+    if not _t:
+        return ""
+    return (_t[:180] + "…") if len(_t) > 180 else _t
+
+
+def _is_write_tool(pipe, name: str) -> bool:
+    """判断一个工具是否是**写类**（含 MCP 工具）。
+
+    - 本地工具：查 `tools.side_effect`（write / destructive）。
+    - MCP 工具：**不在 tools 表** ⇒ `_tool_side_effect` 恒返回 "read" ⇒ 必须另行判定；
+      用 `agent.mcp_tool_meta.mcp_write_group`（按工具名动词族识别，零硬编码）。
+    """
+    try:
+        _se = pipe._tool_side_effect(name)
+    except Exception:
+        _se = "read"
+    if _se in ("write", "destructive"):
+        return True
+    try:
+        from agent.mcp_tool_meta import mcp_write_group
+        return bool(mcp_write_group(name))
+    except Exception:
+        return False
 
 
 class StreamMixin:
@@ -199,6 +368,15 @@ class StreamMixin:
             ' "tools": ["允许的工具白名单(可空，空=继承该 Agent 默认绑定)"],'
             ' "skills": ["指定技能(可空)"]}]}\n'
             f"可用 Agent 池：\n" + "\n".join(pool_lines) + "\n"
+            # ★ 2026-10-29（P0-1 配套，两处 prompt 同改）：**禁止自创 Agent 名**。
+            #   实测 24% 的 agent_tasks 指向解析不到的名字（已停用的旧名、被改名的旧名、
+            #   planner 凭印象编出的中文名）。此前 prompt 只给池、无硬约束；而下游
+            #   `registry.get()` 对未知名字是**静默回落**（通用问答Agent，无工具）
+            #   ⇒ 任务"跑完"但什么都没做。这里把约束显式化。
+            #   ⚠️ 与团队模式那处 prompt 逐字一致，避免两套措辞再漂（本仓已有先例）。
+            "⚠️ agent 字段**必须从上面「可用 Agent 池」里原样复制**（区分大小写，不要翻译成中文，"
+            "不要使用你记忆里的旧名字）。池中没有合适的就**留空字符串**（系统会自动选），"
+            "**严禁自创或拼写近似的名字** —— 无法解析的名字会让该子任务直接失败。\n"
             "task_type 可选 agent（走 Agent 完整管线）或 react（多步思考-工具求解）或 llm（纯生成）。\n"
             f"{skill_pool_txt}"
             f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；"
@@ -215,8 +393,9 @@ class StreamMixin:
             # 此前是 `agent_def.system_prompt[:300]` —— 主 Agent 的 prompt 补齐后长1354B，
             # 300 字截断恰好切在「拆解规则」中间（规则 1-2 保留、3-6 与输出格式全丢），
             # 而规则 3（生成≠校验）、5（不虚构能力）正是编排最需要的那几条。
-            # 仍保留 4000B 上限防御异常超长 prompt。
-            _lead_sp = ((team_def or {}).get("system_prompt") or agent_def.system_prompt or "").strip()[:4000]
+            # 仍保留 8000B 上限防御异常超长 prompt（2026-10-27 截断清单 P2-C2：4000 → 8000；
+            #   真库最大 agents.system_prompt = 7,981 字符 ⇒ 8000 对现有资产实际不裁）。
+            _lead_sp = ((team_def or {}).get("system_prompt") or agent_def.system_prompt or "").strip()[:8000]
             # 成员名册（capabilities + 触发词）——近义成员（结构视图 vs 需求视图）的唯一区分依据
             _team_roster = ""
             if team_def:
@@ -354,13 +533,19 @@ class StreamMixin:
                           "tasks": len(plan)})
 
         # 2) 降级：计划失败 → 单 Agent 流式直行
+        # ★ 2026-11-04：两个审计字段必须在**分支之前**初始化 —— 降级分支（plan 为空 ⇒ 单 Agent
+        #   直行）不经过建计划段；只在 else 里初始化会让卡片组装 UnboundLocalError
+        #   （与 `_gate_gaps` 同一类地雷：变量只在某条分支赋值）。
+        _plan_guard_info = None
+        _replan_events: list = []
         if not plan:
             direct = "requirement_analysis"
             try:
                 sub = type(self)()  # 拆包后避免循环导入：type(self)==AgentPipeline
                 sub._load_db_agents(user)
                 _sub = sub.execute_stream(goal, 0, branch, provider_id, attachments or [],
-                                          forced_intent=direct, user=user, dry_run=True)
+                                          forced_intent=direct, user=user, dry_run=True,
+                                          session_conv_id=conversation_id)
                 _sub_content = ""
                 for ev in _sub:
                     _et = ev.get("type")
@@ -424,6 +609,51 @@ class StreamMixin:
                     #   **明确终止且可在库里查到原因**（status=blocked + error），而不是静默消失。
                     #   降级路径与门禁脚本可用 strict=False 显式取旧行为。
                     try:
+                        # ── 计划**语义**校验（2026-11-04，与 `_planner_core` 同一校验器）──
+                        #   ⚠️ 此前本校验只接在非流式 `_planner_core`，而**流式主路径不走它**
+                        #   （`_stream_orchestrated_flow` 自己建计划）—— 于是"一处接线覆盖四路"
+                        #   是假的：真实用户的 SSE 会话从未校验过阶段序/完备性。
+                        #   本段补齐：默认 mode=warn 只让违规**可见**（progress 事件 + 日志）；
+                        #   mode=block 时抛 ValueError，走下方既有"非法计划早退"通道
+                        #   （落 blocked 行 + span 收口，不静默）。
+                        try:
+                            from core.plan_guard import (
+                                load_pipeline_config as _load_pg,
+                                mentioned_from_stage_hint as _mentioned_pg,
+                                render_violations as _render_pg,
+                                validate_pipeline_plan as _validate_pg,
+                            )
+                            from task_queue import resolve_agent_name as _resolve_pg
+                            _pgcfg = _load_pg(conn)
+                            _pg = _validate_pg(
+                                plan,
+                                stage_order=_pgcfg.get("stage_order"),
+                                required_stages=_pgcfg.get("required_stages"),
+                                mentioned_stages=_mentioned_pg(stage_hint),
+                                resolve=lambda _n: _resolve_pg(conn, _n),
+                                mode=_pgcfg.get("mode"),
+                            )
+                            _plan_guard_info = _pg      # ★ 进 card_data（前端/审计可见）
+                            if _pg.get("violations"):
+                                _pgmsg = _render_pg(_pg["violations"])
+                                import logging as _lgpg
+                                _lgpg.getLogger("mbse.planner").warning(
+                                    "计划语义校验发现 %d 项问题（mode=%s）：%s",
+                                    len(_pg["violations"]), _pg.get("mode"), _pgmsg)
+                                yield {"type": "progress", "kind": "progress",
+                                       "delta": "（计划校验）%s" % _pgmsg[:300]}
+                            if _pg.get("blocked"):
+                                _pgerrs = [v for v in _pg.get("violations") or []
+                                           if v.get("severity") == "error"]
+                                raise ValueError("计划语义校验未通过（mode=block）："
+                                                 + _render_pg(_pgerrs))
+                        except ValueError:
+                            raise            # block 档要真的终止（交给下方 except 收口）
+                        except Exception as _pge:
+                            # 兜底必须留痕：校验器自身崩了，不能变成"静默无问题"
+                            import logging as _lgpg2
+                            _lgpg2.getLogger("mbse.planner").warning(
+                                "计划语义校验异常（已跳过，不影响执行）：%s", str(_pge)[:200])
                         TaskQueue.create_plan(conn, run_id, plan, assigned_by="session",
                                               conversation_id=int(conversation_id or 0))
                     except ValueError as _vde:
@@ -483,10 +713,14 @@ class StreamMixin:
             from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac, wait as _wait
             def _submit_with_ctx(pool, fn, *args):
                 """P0-c：ThreadPoolExecutor.submit 不会继承 ContextVar —— 显式 copy_context，
-                否则子任务线程里发生的 LLM 调用会丢掉 conversation_id/run_id/trace_id 归属。"""
-                import contextvars as _cvx
-                _ctx = _cvx.copy_context()
-                return pool.submit(lambda *a: _ctx.run(fn, *a), *args)
+                否则子任务线程里发生的 LLM 调用会丢掉 conversation_id/run_id/trace_id 归属。
+
+                ★ 2026-11-03：实现收口到 `core.audit.submit_with_ctx`。
+                本文件曾**只定义不使用**（主路径用了、补跑路径用裸 `pool.submit`）
+                ⇒ 真库 75 条 usage 的 conv/run 归零。现在统一委托，避免两份实现漂移。
+                """
+                from core.audit import submit_with_ctx as _swc
+                return _swc(pool, fn, *args)
             _max_workers = getattr(self, "_ORCH_MAX_WORKERS", 3)        # 全局并发 worker 上限（每批）
             _timeout = getattr(self, "_ORCH_SUBTASK_TIMEOUT", 120)      # 子任务 wall-clock 超时（秒，旧口径）
             # P0-7：超时判据改为「停滞为主 + 硬上限兜底」，两者均接 config（现场可调，不必改代码）
@@ -508,8 +742,19 @@ class StreamMixin:
             #   2026-10-21 同批修掉 _worker 的 _fc 同型历史 hit（B1-6 遗留）。
             try:
                 from core import config as _rcfg
-                _retry_once = bool(_rcfg.get("replanning", "retry_once", True))
+                # ★ 2026-11-04：**21 个 replanning 闸门统一从
+                #   `services.replan_loop.gates()` 读**（唯一出处，P1~P4 共用）。
+                #   为什么改：这些键此前在此处内联读一遍，而非流式路径
+                #   （`workflows/planner.py::_planner_core`）一行都不读 ⇒
+                #   「新增一个闸门键时必有一边漏读」。本仓已因
+                #   「`AgentRegistry.resolve` 与 `resolve_agent_name` 口径分裂」付过代价。
+                #   变量名保持不变（下游大量引用），只是改由单一出处赋值；
+                #   读配置失败 ⇒ 回落 GATE_DEFAULTS（全关/保守值），与旧兜底同口径。
+                from services.replan_loop import gates as _replan_gates, llm_actions as _replan_acts
+                _rl_gates = _replan_gates(_rcfg)
+                _retry_once = bool(_rl_gates.get("retry_once", True))
             except Exception:
+                _rl_gates = {}
                 _retry_once = True
             _t1_retried = set()          # 本次编排已 DAG 级补跑过的 task_key
             # ★ P2：重画尝试台账 `{key: [失败指纹, ...]}`（进程内）。
@@ -541,19 +786,15 @@ class StreamMixin:
             except Exception:
                 _RR_OK = False
             _redraw_rounds = 0
-            try:
-                _rp_enabled = bool(_rcfg.get("replanning", "enabled", False))
-                _rp_on_stall = bool(_rcfg.get("replanning", "redraw_on_stall", True))
-                _rp_light = bool(_rcfg.get("replanning", "redraw_light", True))
-                _rp_heavy = bool(_rcfg.get("replanning", "heavy_redraw", False))
-                _rp_skip = bool(_rcfg.get("replanning", "skip_leaf", False))
-                _rp_noprog = bool(_rcfg.get("replanning", "no_progress_stop", True))
-                _rp_rounds = int(_rcfg.get("replanning", "max_redraw_rounds", 1) or 1)
-                _rp_ratio = float(_rcfg.get("replanning", "redraw_expand_ratio", 1.5) or 1.5)
-            except Exception:
-                _rp_enabled = _rp_heavy = _rp_skip = False
-                _rp_light = _rp_on_stall = _rp_noprog = True
-                _rp_rounds, _rp_ratio = 1, 1.5
+            # 闸门已在上面（`_rl_gates`）一次性读出，此处不再重复读取。
+            _rp_enabled = bool(_rl_gates.get("enabled", False))
+            _rp_on_stall = bool(_rl_gates.get("redraw_on_stall", True))
+            _rp_light = bool(_rl_gates.get("redraw_light", True))
+            _rp_heavy = bool(_rl_gates.get("heavy_redraw", False))
+            _rp_skip = bool(_rl_gates.get("skip_leaf", False))
+            _rp_noprog = bool(_rl_gates.get("no_progress_stop", True))
+            _rp_rounds = int(_rl_gates.get("max_redraw_rounds", 1) or 1)
+            _rp_ratio = float(_rl_gates.get("redraw_expand_ratio", 1.5) or 1.5)
             # ★ P3 replanning（2026-10-21，v2 §4.7/§4.8）：DAG 级用户指令 + 确认卡。
             #   可选依赖同样走「导入成功标志位」（同 P1/P2 的 _RS_OK/_RR_OK 纪律）。
             #   `_directive_seen` = 本次编排已评估过的指令指纹（进程内）：
@@ -571,15 +812,11 @@ class StreamMixin:
             except Exception:
                 _RCFM_OK = False
             _directive_seen = set()
-            try:
-                _rp_uidir = bool(_rcfg.get("replanning", "user_directive", False))
-                _rp_confirm = bool(_rcfg.get("replanning", "user_confirm_redraw", False))
-                _rp_cttl = int(_rcfg.get("replanning", "confirm_ttl_sec", 60) or 60)
-                _rp_touch = int(_rcfg.get("replanning", "directive_max_touch", 3) or 3)
-                _rp_llm = bool(_rcfg.get("replanning", "llm_redraw", False))
-            except Exception:
-                _rp_uidir = _rp_confirm = _rp_llm = False
-                _rp_cttl, _rp_touch = 60, 3
+            _rp_uidir = bool(_rl_gates.get("user_directive", False))
+            _rp_confirm = bool(_rl_gates.get("user_confirm_redraw", False))
+            _rp_cttl = int(_rl_gates.get("confirm_ttl_sec", 60) or 60)
+            _rp_touch = int(_rl_gates.get("directive_max_touch", 3) or 3)
+            _rp_llm = bool(_rl_gates.get("llm_redraw", False))
             # ★ P4 replanning（2026-10-21，v2 §4.4）：健康巡检 + 提前收敛 + 三动作。
             #   可选依赖同款「导入成功标志位」纪律；配置读取失败一律取**保守值**
             #   （health_probe/early_stop/llm_actions 全关或锁 replace）——
@@ -592,20 +829,17 @@ class StreamMixin:
                 _RH_OK = True
             except Exception:
                 _RH_OK = False           # 巡检模块不可用 ⇒ 整体退化为 P3 行为
+            _rp_hp = bool(_rl_gates.get("health_probe", False))
+            _rp_hpllm = bool(_rl_gates.get("health_probe_llm", False))
+            _rp_early = bool(_rl_gates.get("early_stop", False))
+            # ⚠️ 不再写 `int(x or 3)`：0 是**合法值**（=「按任务数判永不触发」），
+            #    被 `or` 吞成 3 就等于「显式配置静默失效」。判空收在 gates() 里。
+            _rp_pe_tasks = int(_rl_gates.get("probe_every_tasks", 3) or 0)
+            _rp_pe_sec = int(_rl_gates.get("probe_every_sec", 60) or 0)
+            _rp_pe_budget = int(_rl_gates.get("probe_time_budget_sec", 1800) or 0)
             try:
-                _rp_hp = bool(_rcfg.get("replanning", "health_probe", False))
-                _rp_hpllm = bool(_rcfg.get("replanning", "health_probe_llm", False))
-                _rp_early = bool(_rcfg.get("replanning", "early_stop", False))
-                _rp_pe_tasks = int(_rcfg.get("replanning", "probe_every_tasks", 3) or 3)
-                _rp_pe_sec = int(_rcfg.get("replanning", "probe_every_sec", 60) or 60)
-                _rp_pe_budget = int(_rcfg.get("replanning", "probe_time_budget_sec", 1800) or 0)
-                _rp_llm_acts = tuple(
-                    x.strip().lower() for x in
-                    str(_rcfg.get("replanning", "llm_actions", "replace") or "replace")
-                    .split(",") if x.strip()) or ("replace",)
+                _rp_llm_acts = _replan_acts(_rl_gates)
             except Exception:
-                _rp_hp = _rp_hpllm = _rp_early = False
-                _rp_pe_tasks, _rp_pe_sec, _rp_pe_budget = 3, 60, 1800
                 _rp_llm_acts = ("replace",)
             _hp_done_mark = 0              # 上次巡检时的 done_items 水位
             _hp_last_ts = _t.time()        # 上次巡检时刻（M4/节奏用）
@@ -678,40 +912,91 @@ class StreamMixin:
                 tkey = tk.get("task_key") or "t"
                 ttitle = tk.get("title") or tkey
                 # P0-c：子任务标识进链路上下文（本线程独立 context，不污染兄弟子任务）
+                # ★ 2026-11-03（纵深防御）：**不要只 bind sub_task_key**。
+                #   `ContextVar` 不跨线程传播 —— 若本函数被裸 `pool.submit` 提交，
+                #   进入时上下文是**空的**，只补 sub_task_key 会让 conversation_id/run_id
+                #   双双丢失（真库 75 条 usage 实证），并因 trace_id 为空触发
+                #   `begin_trace(0)` **新开一条链**（一次编排碎成 N+1 条）。
+                #   ⇒ 这里显式带上父轮次归属，与主路径 `submit_with_ctx` 双保险。
                 try:
-                    from core.audit import bind_trace
-                    bind_trace(sub_task_key=tkey)
+                    from core.audit import inherit_trace as _inherit
+                    _inherit(sub_task_key=tkey,
+                             conversation_id=(int(conversation_id) if conversation_id else None),
+                             run_id=(int(run_id) if run_id else None))
                 except Exception:
                     pass
                 _hb[tkey] = _t.time()   # P0-7：活性心跳（置位即表示"已启动"，worker 的停滞超时据此判定）
+                # 改进点②：初始化「是否取回上游全文」记录（见 _sub_meta 定义处的设计说明）
+                try:
+                    _sub_meta[tkey] = {
+                        "fetched": False,
+                        "up_off": len([_k for _k in (_orch_offloads or {}) if _k != tkey]),
+                    }
+                except Exception:
+                    pass
                 cfg = tk.get("config") or {}
                 if isinstance(cfg, str):
                     try:
                         cfg = json.loads(cfg) or {}
                     except Exception:
                         cfg = {}
-                # Task 9：附件按需注入——config.attachments 白名单优先；未声明时传全部（兼容存量）
+                # Task 9：附件按需注入——config.attachments 白名单优先；未声明时按
+                # `delegation.attachments_mode` 判定（2026-11-02 米爸改进点①）。
+                #
+                # ★ 为什么不再"未声明就全量透传"（行业依据）：
+                #   · Google ADK：artifacts **按名引用**，working context 是 compiled view；
+                #     「Share memory by communicating, don't communicate by sharing memory」；
+                #   · Claude Code subagent：子上下文由**显式 allow-list** 组装；原文
+                #     "当你想要『全都传过去以防万一』时，那说明子任务边界没定义清楚"。
+                #   原实现把 run 级附件无差别灌给每个子任务 ⇒ 5 个附件 × 每个子任务
+                #   最多 8000 字符 ⇒ 与任务无关的噪音挤掉真正的任务上下文。
+                #   auto 模式：图片直传（视觉无法按需读取）+ 小规模文本全传，
+                #   其余只给**清单**（文件名/doc_id/体积 + read_attachment_section 取回指引）。
                 _cfg_att = cfg.get("attachments")
-                if isinstance(_cfg_att, list) and _cfg_att:
-
-                    def _att_id(a):
-                        if isinstance(a, str):
-                            return a
-                        if isinstance(a, dict):
-                            return str(a.get("name") or a.get("filename") or a.get("id") or a)
-                        return str(a)
-
-                    _whitelist = {str(x) for x in _cfg_att}
-                    _sub_att = [a for a in (attachments or []) if _att_id(a) in _whitelist]
-                else:
+                _att_manifest = ""
+                try:
+                    from agent.context_compress import plan_subtask_attachments as _plan_att
+                    from core.config import get as _cfg_am
+                    _amode = str(_cfg_am("delegation", "attachments_mode", "auto") or "auto")
+                    _sub_att, _att_manifest = _plan_att(
+                        attachments or [],
+                        declared=(_cfg_att if isinstance(_cfg_att, list) else None),
+                        mode=_amode)
+                except Exception:
+                    # 规划层失败 → 退回旧行为（不阻断子任务）
                     _sub_att = attachments or []
+                    _att_manifest = ""
+                if _att_manifest:
+                    # 清单随 query 下发（位置在 T7 快照之后、协议契约之前，见下）
+                    pass
                 query = cfg.get("query") or f"{ttitle}\n团队目标：{goal}"
+                # ★★ 2026-10-30（长任务治理·缺口2）：**重试必须缩小规模，而不是重跑同一件事**。
+                #   为什么（真库归因）：重试是"同 key 原地重派"（UPDATE agent_tasks），
+                #   `tk` 原样复用 ⇒ 同样的 prompt、同样的产出预期 ⇒ 上次 240s 超时，
+                #   这次几乎必然同样超时。这是"用同一把钥匙开同一把坏锁"。
+                #   行业判据（Temporal / durable execution）：*"If an operation doesn't fit
+                #   into the allotted budget, make it smaller rather than giving it more time."*
+                #   ⇒ 重试时显式要求"缩小范围、先给最小可用结果"。
+                #   ⚠️ 不改变任务目标（`title`/`expected_output` 不动）——只约束**贪心程度**，
+                #   否则会变成"换个活干"，汇总时对不上。
+                _rc = int(tk.get("retry_count") or 0)
+                if _rc > 0:
+                    query = (
+                        "【第 %d 次尝试 · 上次因执行时间到点被中断】\n"
+                        "请**缩小范围**：优先产出可独立使用的最小完整结果，"
+                        "不要追求完整覆盖、不要为了凑齐而反复调工具。\n"
+                        "若某部分依赖外部数据但取不到，**直接说明缺口**并给出可执行的下一步，"
+                        "而不是继续尝试。\n\n%s" % (_rc + 1, query))
                 # T7：任务上下文快照（任务定义 + 前置依赖结果摘要 + 交付规范）
                 try:
                     from workflows.planner import build_subtask_context
+                    # 2026-10-29：带 plan ⇒ 依赖按**传递闭包**展开（与非流式 _run_task 同口径）。
+                    #   此前两处都只取直接依赖 ⇒ t1→t2→t3 长链上 t3 看不见 t1，
+                    #   而多意图输入（需求→设计→校验）最容易产生这种长链。
                     _tctx = build_subtask_context(tk, goal, list(done_items),
                                               artifact_digest=_digest,
-                                              offload_map=dict(_orch_offloads))
+                                              offload_map=dict(_orch_offloads),
+                                              plan=plan)
                     if _tctx:
                         query = f"[任务上下文快照]\n{_tctx}\n\n[任务]\n{query}"
                 except Exception:
@@ -723,6 +1008,11 @@ class StreamMixin:
                 _plan_ctx = str(tk.get("context") or cfg.get("context") or "").strip()
                 if _plan_ctx:
                     query += f"\n\n任务上下文（只读，勿编造上下文外事实）：\n{_plan_ctx[:2000]}"
+                # ★ 2026-11-02（改进点①）：附件清单（未内联部分的可见引用）。
+                #   放在任务本体之后、协议契约之前 —— 模型先看清"任务是什么、有哪些资料
+                #   可查"，再被要求按协议交付；顺序反了会把协议当成任务的一部分。
+                if _att_manifest:
+                    query += "\n\n" + _att_manifest
                 # ★ 2026-10-13（批次二 P2-2）：**把交付协议契约注入子任务 query**。
                 #   真库实证（2026-10-12 只读）：`summary_json` 的
                 #   `artifacts`/`evidence`/`risks` 三数组**非空率 0%**（180 行全空）——
@@ -767,10 +1057,26 @@ class StreamMixin:
                         "risks 用 level/title/desc/advice 四字段"
                         "（level 取 high|mid|low，title 是一句话风险名，desc 是描述，"
                         "advice 是缓解建议）——**字段名必须是这四个**，写错会被校验器丢弃；"
-                        "status=partial 时在 missing 里标注缺什么。"
+                        # ★ 2026-10-22：missing[] 从"顺带一提"升为**硬约束**。
+                        # 它是补齐判定器的**第一判据**（agent/partial_policy.py 的 classify_partial
+                        # 优先读它，而不是从正文里正则猜"有没有说没校验"）。
+                        # 真库实测：写了的 missing 如「模型校验结果（未执行 sysml_v2_validate）」
+                        # 能直接判成"客观缺口、可自动补"；没写就只能靠猜，猜错方向就是
+                        # 该补的不补 / 不该补的白补 token。
+                        "**status=partial 或 failed 时必须写 missing[]**，逐条列出缺什么"
+                        "（缺的产物 / 数据 / 步骤 / 结论）；"
+                        "missing 与 risks 的分工：**missing=缺什么，risks=已有什么风险及缓解建议**，"
+                        "两者都要写、不要互相替代。"
+                        # ★ 关键区分：缺"自己能补的"与缺"要外部给的"处置完全不同
+                        # （前者自动补跑，后者补跑一百次也一样，转人工）。所以要求模型
+                        # 把两类都如实写进 missing —— 判定器会按条目里的主语分流。
+                        "特别注意：缺**自己就能补的**（如某一步校验没跑、某个产物没落盘）"
+                        "与缺**需要客户/用户/外部提供的**（如名单、口径、指标区间、基线数据）"
+                        "都必须如实写进 missing，不要因为「怕显得没做完」而省略。"
                     )
                 skill_name2 = cfg.get("skill") or None
                 evs, sub_res, sub_has_token = [], "", False
+                _sub_err = ""   # ★ 2026-11-04：error 事件的真实死因（原为永久空串）
                 tok_used = 0
                 _t0 = _t.time()
 
@@ -800,6 +1106,15 @@ class StreamMixin:
                     sub._orch_subtask = True
                     sub._tool_run_ctx = int(run_id or 0)
                     sub._tool_task_key = tkey
+                    # ★ P0-3（2026-10-27）：子任务**沿用外层 trace**（不新开 ——
+                    #   否则一次编排会碎成 N 个 trace，整轮成本无法聚合）。
+                    #   两级取值：外层实例 → 当前 ContextVar（子任务线程可能拿不到实例属性）。
+                    try:
+                        from core.audit import trace_context as _tc3
+                        sub._tool_trace_id = (getattr(self, "_tool_trace_id", "")
+                                              or str((_tc3() or {}).get("trace_id") or ""))
+                    except Exception:
+                        sub._tool_trace_id = getattr(self, "_tool_trace_id", "") or ""
                     # Task 9：隔离命名空间 run:tkey + kb_scope 预留
                     # （execute_stream 无 kb_scope 参数 → 跳过透传；存属性供后续检索/记忆过滤消费）
                     sub._ns_ctx = f"{run_id}:{tkey}"
@@ -810,10 +1125,23 @@ class StreamMixin:
                         # tools.py 构建 tools_def 定稿时据此注入 tool_result_fetch（供下游取全文）
                         if _orch_offloads:
                             sub._orch_result_offloads = dict(_orch_offloads)
+                        # ★ 2026-10-30：`session_conv_id` = 父会话。
+                        #   子任务的 messages 仍不落库（conversation_id=0 语义不变），
+                        #   但 todo_write / 工具留痕 / HIL 归属到**用户真正在看的会话**。
+                        #   修前实测：conv=0 的工具留痕 1478 条，且 todo_write 一律
+                        #   「无会话上下文」⇒ 失败轮累计 ⇒ 人工确认后必被强制收尾。
                         for ev in sub.execute_stream(query, 0, branch, provider_id, _sub_att,
                                                      forced_intent=tk.get("agent_id") or None,
-                                                     skill_name=skill_name2, user=user, dry_run=True):
+                                                     skill_name=skill_name2, user=user, dry_run=True,
+                                                     session_conv_id=conversation_id):
                             _hb[tkey] = _t.time()   # P0-7：任何产出（token/reasoning/tool）都算"活着"
+                            # ★ 2026-10-30：同步刷新"活到哪儿了"的快照（超时兜底要用）。
+                            #   每帧都写：超时判定的粒度是 2s 轮询，慢了就会丢最后一段。
+                            #   只存正文（sub_res），不存事件流 —— 上限由 `_hb_text_cap` 兜住，
+                            #   防止某个子任务产出几十万字把内存吃满。
+                            if len(sub_res) <= _hb_text_cap:
+                                with _hb_lock:
+                                    _hb_text[tkey] = sub_res
                             # ★ 2026-10-14（#19 健壮性）：**协作式中止探针**。
                             #   每收到一个产出就问一次"这个任务被取消了吗"，命中即 `break`
                             #   —— 正在飞行的那一次 LLM 调用会跑完，但**后续步骤全部跳过**
@@ -847,6 +1175,17 @@ class StreamMixin:
                                 evs.append(ev)
                                 _evq.put(ev)
                             elif _et == "tool":
+                                # ★ 2026-11-02（改进点②）：记录"下游是否真去读了上游全文"。
+                                #   `tool_result_fetch` 是唯一能取回 offload 全文的通道；
+                                #   成功调用过即视为"按需取用已发生"。只记事实，不改行为。
+                                try:
+                                    _nm_raw = str(ev.get("name") or "")
+                                    if (_nm_raw == "tool_result_fetch"
+                                            and ev.get("ok") is not False
+                                            and _sub_meta.get(tkey) is not None):
+                                        _sub_meta[tkey]["fetched"] = True
+                                except Exception:
+                                    pass
                                 e2 = dict(ev); e2["name"] = f"{tkey}:{e2.get('name','')}"
                                 evs.append(e2)
                                 _evq.put(e2)
@@ -859,6 +1198,18 @@ class StreamMixin:
                                     _tc = _m.get("token_count")
                                     if isinstance(_tc, (int, float)) and _tc > 0:
                                         tok_used = int(_tc)
+                            # ★ 2026-11-04（conv 990403 完整一轮真机实证）：**error 事件必须接住**。
+                            #   execute_stream 顶层 except 会把异常转成
+                            #   `{"type":"error","message":...}`（约 7119 行）而非抛出 ——
+                            #   此前本循环不认识这个类型 ⇒ 事件被静默丢弃 ⇒
+                            #   子任务以 ok=False + **空错误** 收场，DB 里只剩兜底文案
+                            #   「子任务未产生输出」（真机 t2 实测：真实死因是
+                            #   "LLM API 400: tool_calls 配对缺失"，完全不可见）。
+                            #   修法：捕获 → 记 _sub_err → 随返回值第 6 位带出
+                            #   （失败分类器 / replan 决策 / DB error 列终于拿到真因）。
+                            elif _et == "error":
+                                _sub_err = str(ev.get("message") or "子任务流异常终止")
+                                evs.append(dict(ev))
                         ok = bool(sub_res.strip()) or sub_has_token
                         if not tok_used:
                             tok_used = max(len(str(sub_res)) // 2, 0)   # 估算兜底：len(输出文本)//2
@@ -867,17 +1218,121 @@ class StreamMixin:
                         try:
                             from services.subtask_protocol import validate as _sp_validate, \
                                 normalize_text as _sp_normalize, \
-                                extract_protocol_json as _sp_extract
+                                extract_protocol_json as _sp_extract, \
+                                strip_protocol_json as _sp_strip
                             _s0 = str(sub_res or "").strip()
                             # ★ 2026-10-13：改用 `extract_protocol_json`（能处理「正文 + 尾部 JSON」）。
                             #   原写法只试 `startswith("{")`，对"正文在前"的形态恒为 False
                             #   ⇒ 注入契约后仍拿不到三数组（实测踩到的真缺口）。
                             _parsed = _sp_extract(_s0)
+                            _proto_src = "parsed" if isinstance(_parsed, dict) else ""
+                            # 补格式失败原因（空串=没试过；非空=试过但没成）——
+                            #   必须定义在**两支之前**，否则 normalize_text 支会 NameError
+                            _rp_err = ""
+                            # ★ 2026-11-02（改进点③）：协议缺失 → **一次性补格式**。
+                            #   为什么要重试：协议是三数组（artifacts/evidence/risks/claims）
+                            #   的唯一来源，缺失即整批降级为 normalize_text（三数组恒空）。
+                            #   为什么不重跑子任务：正文已产出，缺的只是"按 schema 再陈述一遍"的
+                            #   归纳动作 —— 一次 ≤700 token 的补交即可，成本≈重跑的 1/10。
+                            #   判据：只做**一次**；正文 ≥200 字才有归纳价值；可配置关闭。
+                            if not isinstance(_parsed, dict) and len(_s0) >= 200:
+                                try:
+                                    from core.config import get as _cfg_rp
+                                    _rp_on = bool(_cfg_rp("subtask_protocol", "json_repair", True))
+                                except Exception:
+                                    _rp_on = True
+                                if _rp_on:
+                                    try:
+                                        from llm import llm_client as _lc_rp
+                                        from services.subtask_protocol import (
+                                            build_repair_prompt as _sp_prompt)
+                                        # ⚠️ max_tokens 取 1800（不是 700）：
+                                        #   实测带思考的默认模型会把预算吃在 reasoning 上 ⇒
+                                        #   `finish_reason=length` + content 空。
+                                        #   已在 `thinking_policy.off` 关掉本 intent 的思考，
+                                        #   这里再留足余量做纵深防御（配置被改也不会静默失效）。
+                                        _rr = _lc_rp.chat(
+                                            [{"role": "user",
+                                              "content": _sp_prompt(_s0)}],
+                                            provider_id=provider_id, max_tokens=1800,
+                                            _intent="subtask_protocol_repair")
+                                        _ch_rp = (_rr.get("choices") or [{}])[0] or {}
+                                        _rc2 = ((_ch_rp.get("message") or {}).get("content") or "")
+                                        _p2 = _sp_extract(_rc2 or "")
+                                        if isinstance(_p2, dict):
+                                            _parsed = _p2
+                                            _proto_src = "repaired"
+                                        else:
+                                            # 失败要**留下原因**（否则又是一处静默）：
+                                            # finish_reason=length 说明预算被吃光，与"模型不配合"不同源
+                                            _rp_err = "finish=%s len=%d" % (
+                                                _ch_rp.get("finish_reason") or "-", len(_rc2))
+                                    except Exception as _e_rp:
+                                        _rp_err = "%s" % type(_e_rp).__name__
                             if isinstance(_parsed, dict):
                                 _pr = _sp_validate(_parsed)
                                 _summary_proto = _pr.get("sanitized")
+                                if isinstance(_summary_proto, dict):
+                                    # 协议来源随结构落库：'parsed'=模型自己给的 /
+                                    # 'repaired'=补格式补上的 / 'missing'=只有纯文本兜底。
+                                    # 这是"协议是否按契约交付"的唯一可证伪标记。
+                                    _meta_p = _summary_proto.get("meta")
+                                    if not isinstance(_meta_p, dict):
+                                        _meta_p = {}
+                                    _meta_p["protocol_source"] = _proto_src or "parsed"
+                                    if not _pr.get("ok"):
+                                        _meta_p["validate_reason"] = str(
+                                            _pr.get("reason") or "")[:120]
+                                    _summary_proto["meta"] = _meta_p
+                                # ★ P0-4（2026-10-30）：**引用可回查** —— 只降不升。
+                                #   为什么必须在这一行（而不是汇总/评审处）：
+                                #     `summary_json` 是下游唯一的协议真源（物化 → 汇总 → 评审），
+                                #     若把未校验的 `verified` 写进去，三条下游都会采信它，
+                                #     事后再改也追不回来（同一份数据存在两处口径）。
+                                #   为什么"降级"而不"丢弃"：内容一字不动，只改信任标记 ——
+                                #     丢弃是信息损失，判失败会让整批降级（连带损失）。
+                                #   详见 `services/evidence_check.py` 模块头（含三条判据与边界）。
+                                if _summary_proto:
+                                    try:
+                                        from services.evidence_check import enforce as _ev_enforce
+                                        _c_ev = get_db()
+                                        try:
+                                            _ev_enforce(_c_ev, _summary_proto)
+                                        finally:
+                                            _c_ev.close()
+                                    except Exception:
+                                        pass
                             else:
                                 _summary_proto = _sp_normalize(sub_res)
+                                # ★ 2026-11-02：纯文本兜底必须**自报**「协议缺失」，
+                                #   否则下游看到的是"一份完整摘要"，而三数组其实全空
+                                #   —— 这正是本仓反复栽过的"空字段看起来像已检查无问题"。
+                                if isinstance(_summary_proto, dict):
+                                    _m2 = _summary_proto.get("meta")
+                                    if not isinstance(_m2, dict):
+                                        _m2 = {}
+                                    _m2["protocol_source"] = "missing"
+                                    if _rp_err:
+                                        # 补格式**试过但没成**——与"压根没试"必须可区分
+                                        _m2["protocol_repair_error"] = str(_rp_err)[:120]
+                                    _summary_proto["meta"] = _m2
+                            # ★ 2026-11-04：协议 JSON **从正文里删掉**（"抽出来"还不够）。
+                            #   真库实证 conv 990408 / msg 5761（21432 字）：3 段协议 JSON 全留在正文 ⇒
+                            #     ① 用户看到**裸露**的 JSON（无结构、无代码块收敛）；
+                            #     ② 汇总输入按 summary_item_max_chars(1600) 头尾裁剪，协议 JSON 正好在
+                            #        交付物**尾部** ⇒ 必被保留 ⇒ LLM 拿到三份残缺交付物，
+                            #        "整合"退化成**拼接** ⇒ 正文出现多组「一、二、三」章节标题；
+                            #     ③ dedupe_interim_code_blocks 只处理**围栏代码块**，围栏外的 JSON 永不被收敛。
+                            #   剥离后的 sub_res 才是"给人看的正文" —— 它会流入落库 / 汇总 / UI 摘要。
+                            #   ⚠️ 放在 if/else **之外**：不新增任何分支配对，原兜底路径
+                            #      （协议解析失败 ⇒ normalize_text）完全不受影响；
+                            #      解析不出协议时 strip 返回 None ⇒ 原样不动（宁可漏删也不能删错正文）。
+                            try:
+                                _clean_body, _stripped = _sp_strip(_s0)
+                                if _stripped is not None:
+                                    sub_res = _clean_body
+                            except Exception:
+                                pass
                             # 协议状态 → 子任务成功标志：failed→fail（现状 tk_ok 判定保留兼容）
                             if _summary_proto and _summary_proto.get("status") == "failed":
                                 ok = False
@@ -1006,7 +1461,7 @@ class StreamMixin:
                                     "task_result:%s" % tkey, sub_res, int(conversation_id or 0))
                             except Exception:
                                 _off_id = 0      # 落库失败不阻断编排（退化为纯摘要口径）
-                        return tkey, ttitle, ok, sub_res, evs, "", int((_t.time() - _t0) * 1000), tok_used, _summary_proto, _off_id
+                        return tkey, ttitle, ok, sub_res, evs, _sub_err, int((_t.time() - _t0) * 1000), tok_used, _summary_proto, _off_id
                     except Exception as e:
                         return tkey, ttitle, False, "", [], str(e)[:150], int((_t.time() - _t0) * 1000), 0, None, 0
                     finally:
@@ -1089,8 +1544,46 @@ class StreamMixin:
                                 return last_res
                         else:
                             # 超时：不等待线程（后台继续运行），标记 error 含 "timeout"
-                            last_res = (tkey, ttitle, False, "", [], _stall,
-                                        int((_t.time() - _t0) * 1000), 0, None)
+                            # ★★ 2026-10-30（长任务治理）：**把已产出的正文带回来**。
+                            #   改前 payload 硬写 `""` ⇒ 子任务跑了 240s、吐出几千字，
+                            #   却对下游表现为"什么都没做" ⇒ 整批降级（真库 63/76 失败即此类）。
+                            #   现在取 `_hb_text` 的最新快照，并加 `partial` 标记与中断说明后缀：
+                            #   下游汇总（`build_subtask_context` / 报告合成）据此能把
+                            #   "有内容但不确定完整"与"完全失败"区分开。
+                            #   ⚠️ 不改 `ok=False`：它确实是失败（未完成），只是**有半成品**。
+                            #   语义严格对齐行业做法（OpenAI Agents SDK：命中上限不许静默，
+                            #   要返回标明 partial 的结构化结果）。
+                            try:
+                                with _hb_lock:
+                                    _partial_txt = _hb_text.get(tkey, "") or ""
+                            except Exception:
+                                _partial_txt = ""
+                            if _partial_txt.strip():
+                                _partial_txt = (
+                                    _partial_txt
+                                    + "\n\n> ⏱ 本子任务因执行时间到点被中断（%s）。"
+                                      "以上为**已生成的部分内容**，未经完整性校验。\n" % _stall)
+                            last_res = (tkey, ttitle, False, _partial_txt, [], _stall,
+                                        int((_t.time() - _t0) * 1000),
+                                        # 第 8 位是 `tok_used`（token 数）——**不能**塞字符数：
+                                        # 那会污染 run 级 token 预算统计（`run_tokens`）与
+                                        # 用量报表。真实 token 已由 llm 层独立记账，
+                                        # 这里保持 0（与改动前一致），不引入第二份来源。
+                                        0,
+                                        # 第 9 位 `_summary`（结构化协议摘要）：超时时没有
+                                        # 完整 JSON ⇒ None（**不能**拿假结构糊上去，
+                                        # 否则下游 partial_policy 会把"没协议"当成"协议残缺"）。
+                                        None,
+                                        # ★★ 2026-10-30 修：**缺这一位会让整批编排崩掉**。
+                                        #   本元组与成功路径（第 1158 行）必须**同为 10 位**，
+                                        #   调用点按 10 位解包。此前这里只有 9 位
+                                        #   （`... 0, None)`）⇒ 任何子任务超时都会抛
+                                        #   `ValueError: not enough values to unpack
+                                        #   (expected 10, got 9)`，把**整个流**打断 ——
+                                        #   实测 `verify_orch_reliability` G2 必现。
+                                        #   ⇒ 上一轮"超时保留产出"的改动因此从未真正生效
+                                        #   （它在崩溃点之前就死了）。
+                                        0)
                         # ★ 2026-10-13（B1-6）：**先分类、再决定要不要重试**。
                         #   改前判据只有 `if retry_left <= 0`，不看失败原因 ⇒ 权限拒绝、参数非法、
                         #   输出不合格这类"重试也不会变"的永久失败也白白重试一次，
@@ -1148,8 +1641,46 @@ class StreamMixin:
                         _spans.close(_tsid, "ok" if (last_res and last_res[2]) else "error",
                                      _w_meta)
 
+            # ★ 2026-10-30：编排路径的整轮墙钟（由 `execute_stream` 入口写入实例属性）。
+            #   `_deadline_hit` 供收尾标记"这是到点收尾"而非"正常完成"，
+            #   避免被误读成"计划已全部执行"。
+            _orch_deadline = float(getattr(self, "_deadline_ts", 0) or 0)
+            # ── 编排批次总预算（`delegation.total_time_budget_s`）——
+            #   2026-10-30 复活：此前是**死配置**（全仓零消费点 ⇒ "改了不起作用"的配置谎言）。
+            #   现在它是整轮墙钟之外的**额外一道闸**：>0 时取更严格者先生效；
+            #   默认 0 = 不启用 ⇒ 零行为变更（实测编排可达 849s，默认值不得误杀正常长任务）。
+            #   与整轮墙钟并存但**不抢优先级**：两个 deadline 各自独立判，任一到点即收尾。
+            _orch_batch_budget = 0
+            try:
+                from core import config as _ocfg_b
+                _orch_batch_budget = int(_ocfg_b.get("delegation", "total_time_budget_s", 0) or 0)
+            except Exception:
+                _orch_batch_budget = 0
+            _orch_batch_deadline = (_t.time() + _orch_batch_budget) if _orch_batch_budget > 0 else 0.0
+            _deadline_hit = False
             while TaskQueue.pending_count(conn, run_id) > 0 and guard < 200:
                 guard += 1
+                # ★★ 2026-10-30（P0 缺口②·编排路径）：**整轮墙钟到点 ⇒ 停止派发新任务**。
+                #   为什么必须在这里单独判一次（ReAct 循环里的检查覆盖不到编排）：
+                #   编排走的是 `run_planner_plan` + 本 while，**不进** ReAct 主循环
+                #   （实测编排批次 avg 918s、max 1155s，正是超时的主要来源）。
+                #   到点行为：把未派发的 planned/ready 标记 blocked（与下面"预算超限"
+                #   分支同口径），然后 break 进汇总 —— **汇总会带上已完成的子任务产出**，
+                #   所以用户拿到的不是空答复，而是"已完成部分 + 明确的未完成项"。
+                #   ⚠️ 不 kill 正在跑的子任务线程：它们只在本进程内且已有自己的
+                #   idle/hard 超时，硬杀会丢断点固化。
+                if (_orch_deadline and _t.time() >= _orch_deadline) or \
+                   (_orch_batch_deadline and _t.time() >= _orch_batch_deadline):
+                    _deadline_hit = True
+                    try:
+                        for _tkd in TaskQueue.tasks(conn, run_id):
+                            if _tkd["status"] in ("planned", "ready"):
+                                TaskQueue.block(conn, _tkd["id"], "整轮墙钟到点")
+                    except Exception:
+                        pass
+                    yield {"type": "progress", "kind": "progress",
+                           "delta": "（整轮墙钟到点）已停止派发剩余任务，正在汇总已完成部分…"}
+                    break
                 # P0-2 持久执行：主循环心跳（节流 5 s —— 主循环每 50 ms 转一圈，不节流会把
                 # SQLite 单写者打满；节流后即使任务执行 20 分钟也只有几百次 UPDATE）
                 try:
@@ -1252,7 +1783,7 @@ class StreamMixin:
                                                 pass
                                         if _d_applied:
                                             conn.commit()
-                                            yield {"type": "reasoning",
+                                            yield {"type": "progress",
                                                    "kind": "progress",
                                                    "delta": "（自动编排）按用户中途指令"
                                                             "重派 %d 个任务：%s"
@@ -1466,14 +1997,14 @@ class StreamMixin:
                                                         str(k) for k in
                                                         (_d_dec.get("skip") or [])]
                                                     yield _pd3
-                                            yield {"type": "reasoning", "kind": "progress",
+                                            yield {"type": "progress", "kind": "progress",
                                                    "delta": "（自动编排）T3 整图重画："
                                                             "新增 %d 个替代任务（%s）"
                                                             % (_d_ins, _d_dec.get("reason")
                                                                or "")[:50]}
                                         else:
                                             # 质量门不过 ⇒ T4 停手（保持原计划，不落库）
-                                            yield {"type": "reasoning", "kind": "progress",
+                                            yield {"type": "progress", "kind": "progress",
                                                    "delta": "（自动编排）T3 重画被拦：%s"
                                                             % (_d_dec.get("reason") or "")[:80]}
                     except Exception:
@@ -1516,6 +2047,13 @@ class StreamMixin:
                                 # 取消剩余非 required 任务 + 轨迹记账（前端可见）
                                 _es_cancel = [str(k) for k in
                                               (_es_dec.get("cancel_keys") or [])]
+                                # ★ 进 card_data（"为什么少跑了几个任务"要能事后查）
+                                _replan_events.append({
+                                    "action": "early_stop",
+                                    "reason": (_es_dec.get("reason") or "")[:300],
+                                    "skipped": list(_es_cancel)[:8]})
+                                if len(_replan_events) > 8:
+                                    del _replan_events[:-8]
                                 _early_stopped = True
                                 _es_cancel_keys = list(_es_cancel)
                                 for _tk4 in _hp_tasks:
@@ -1544,7 +2082,7 @@ class StreamMixin:
                                             "retry_count": int(
                                                 _tk4.get("retry_count") or 0),
                                             "summary_status": ""})
-                                yield {"type": "reasoning", "kind": "progress",
+                                yield {"type": "progress", "kind": "progress",
                                        "delta": "（自动编排）目标已达成提前收敛："
                                                 "必需产出全部完成，主动放弃 %d 个"
                                                 "非必需任务（%s）"
@@ -1601,7 +2139,9 @@ class StreamMixin:
                                     _hp_verdict = None
                             _hp_dec = _rh.health_probe(
                                 done_items, _hp_tasks, enabled=True,
-                                window=_rp_pe_tasks,
+                                # ⚠️ 窗口 ≠ 节奏：M1 要求样本 ≥3，若把 window 绑成
+                                #   probe_every_tasks，设成 1 时 M1 永不触发（refine 静默失效）。
+                                window=max(int(_rp_pe_tasks or 0), _rh.M1_MIN_WINDOW),
                                 latencies_ms=list(_done_lats[-max(3, _rp_pe_tasks):]),
                                 remaining_tasks=_hp_remain,
                                 budget_left_sec=_hp_left,
@@ -1623,6 +2163,12 @@ class StreamMixin:
                                     pass
                             _write_decision("health", _hp_dec)
                             _hp_act = str(_hp_dec.get("action") or "none")
+                            # ★ 进 card_data：`none` 也要留（"为什么没动"与"为什么动"同等重要）
+                            _replan_events.append({
+                                "action": _hp_act,
+                                "reason": (_hp_dec.get("reason") or "")[:300]})
+                            if len(_replan_events) > 8:
+                                del _replan_events[:-8]
                             if _hp_act == "stop":
                                 # M4 ⇒ S9 语义：该停，不重画。block 剩余任务后
                                 # break（与预算护栏同口径，汇总如实记 partial）。
@@ -1633,7 +2179,7 @@ class StreamMixin:
                                         TaskQueue.block(
                                             conn, int(_tk5["id"]),
                                             "预计耗时超时间预算（M4 巡检）")
-                                yield {"type": "reasoning", "kind": "progress",
+                                yield {"type": "progress", "kind": "progress",
                                        "delta": "（自动编排）健康巡检 M4：%s"
                                                 % (_hp_dec.get("reason") or "")[:100]}
                                 break
@@ -1661,7 +2207,7 @@ class StreamMixin:
                                         pass
                                 if _hp_applied:
                                     conn.commit()
-                                    yield {"type": "reasoning", "kind": "progress",
+                                    yield {"type": "progress", "kind": "progress",
                                            "delta": "（自动编排）健康巡检 S10：%s"
                                                     % (_hp_dec.get("reason") or "")[:100]}
                                     if _RS_OK:
@@ -1680,7 +2226,53 @@ class StreamMixin:
                                     continue
                     except Exception:
                         pass
-                ready = TaskQueue.ready_tasks(conn, run_id)
+                # ★ 早停开时：同批里若既有必需又有非必需任务，本轮**只派必需任务**
+                #   （否则可选任务与最后一个必需任务同批跑完 ⇒ 早停永远无事可做）。
+                #   关早停时 `defer_optional=False` ⇒ 行为逐字节不变。
+                ready = TaskQueue.ready_tasks(conn, run_id, defer_optional=bool(_rp_early))
+                # ★ 2026-10-29（P0-1）：**派发前剔除 Agent 不可解析的任务**（第三道防线）。
+                #
+                #   为什么必须在派发处拦：`create_plan` 已在校验（第二道），但历史计划、
+                #   `strict=False` 路径、以及"计划生成后被停用/改名"的时序竞争仍会漏进来。
+                #   漏进来之后 `sub.execute_stream(forced_intent=tk['agent_id'])` 会让
+                #   `registry.get()` 回落「通用问答Agent」（tools=0）—— 任务照跑照标 done，
+                #   但一个工具都没调。实测 287 任务里 69 个（24%）如此，指标层面看不出来。
+                #
+                #   处置：**不执行，直接标 failed 并写明原因**。宁可明确失败也不静默降质
+                #   （对齐 Claude Code：subagent 的 tools 全无法解析时明确报错，不空跑）。
+                #   空 agent 名不拦 —— 执行期 `forced_intent=None` 走意图识别，是合法用法。
+                _blocked_agents = []
+                if ready:
+                    _kept = []
+                    for _tk in ready:
+                        _aid = str(_tk.get("agent_id") or "").strip()
+                        if not _aid:
+                            _kept.append(_tk)
+                            continue
+                        try:
+                            _adef, _aok, _ahint = self.registry.resolve(_aid)
+                        except Exception:
+                            _adef, _aok, _ahint = None, True, ""   # 解析器异常时不拦（保持旧行为）
+                        if _aok:
+                            _kept.append(_tk)
+                            continue
+                        _why = "Agent 无法解析，任务未执行：" + (_ahint or _aid)
+                        try:
+                            TaskQueue.fail(conn, _tk["id"], _why[:500])
+                        except Exception:
+                            pass
+                        _blocked_agents.append({"key": _tk.get("task_key") or "",
+                                                "agent": _aid, "reason": _ahint or ""})
+                    if _blocked_agents:
+                        # 让用户在编排卡片里**看得见**，而不是只写在库里
+                        try:
+                            yield {"type": "progress", "kind": "progress", "delta": (
+                                "（编排）%d 个子任务因 Agent 无法解析而未能执行：%s"
+                                % (len(_blocked_agents),
+                                   "、".join(sorted({b["agent"] for b in _blocked_agents}))))}
+                        except Exception:
+                            pass
+                        ready = _kept
                 if not ready:
                     # ★ P1 replanning（2026-10-21，v2 §4.6）：收敛点决策记录。
                     #   有 pending 但无 ready ⇒ 剩余任务被 failed 的失效传播堵死。
@@ -1831,14 +2423,14 @@ class StreamMixin:
                                                         != _rcfm.ACTION_APPROVE:
                                                     # 维持原计划：不改图、不推进轮次，
                                                     #   只把"曾有一次重画被否决/超时"落留痕。
-                                                    yield {"type": "reasoning",
+                                                    yield {"type": "progress",
                                                            "kind": "progress",
                                                            "delta": "（自动编排）重画未执行：%s"
                                                                     % (_rs6.get("reason") or "")}
                                                     _rd_act = "none"
                                                     _redraw_dec = None
                                                 else:
-                                                    yield {"type": "reasoning",
+                                                    yield {"type": "progress",
                                                            "kind": "progress",
                                                            "delta": "（自动编排）用户已批准重画"}
                                         except Exception:
@@ -1907,7 +2499,7 @@ class StreamMixin:
                                     if _applied:
                                         _redraw_rounds += 1
                                         # 用户可见：reasoning 进度 + subtask 重派轨迹
-                                        yield {"type": "reasoning", "kind": "progress",
+                                        yield {"type": "progress", "kind": "progress",
                                                "delta": "（自动编排）执行中重规划 %s：%s"
                                                         % (_redraw_dec.get("level"),
                                                            _redraw_dec.get("reason"))}
@@ -1931,7 +2523,7 @@ class StreamMixin:
                                 elif _rd_act == "skip":
                                     # T1.5：叶子失效任务主动跳过（决策留痕，不改终态 ——
                                     #   failed 是终态，skip 只是"明确标记"而非状态变更）
-                                    yield {"type": "reasoning", "kind": "progress",
+                                    yield {"type": "progress", "kind": "progress",
                                            "delta": "（自动编排）%s" % (_redraw_dec.get("reason") or "")}
                         except Exception:
                             pass
@@ -1984,7 +2576,36 @@ class StreamMixin:
                 #  事件自身的 `key`/`name` 前缀（`tkey:`）保证前端把它们归到**对应子任务的卡片**下。
                 _evq = _queue.Queue()
                 _hb = {}   # P0-7：子任务活性心跳表 {task_key: 最近产出时刻}（_worker 停滞超时用）
+                # ★★ 2026-10-30（长任务治理，最关键的一处）：**子任务最新产出快照**。
+                #   为什么必须有它（真库归因：agent_tasks 76 条 failed 里 **63 条**是
+                #   `timeout（240s 无产出）`，占 83%，且集中在 design 这类长推理 Agent）：
+                #     超时分支原本写 `last_res = (tkey, ttitle, False, "", [], _stall, ...)`
+                #     —— payload 是**空字符串**，把子任务已经产出的几千字整块丢掉。
+                #   后果不是"少留点字"，而是**下游汇总误判这个子任务什么都没做** ⇒
+                #   整批降级为"（计划已执行，但无成功交付物）"（conv 514 实证）。
+                #   行业依据（OpenAI Agents SDK）：命中上限不许静默，要返回**标明 partial
+                #   的结构化结果**；丢弃产出等于把"超时"伪装成"没干活"。
+                #   `_hb` 与 `_hb_text` 必须**同一时刻**更新：一个判"是否还活着"，
+                #   一个留"活到哪儿了"；只留前者就只能在超时后一无所知。
+                _hb_text = {}   # {task_key: 已累积的正文}
+                # 快照上限：超过就不再刷新（保留已存的那份，而不是清空）。
+                # 取值 200KB ≈ 6 万汉字，远超单个子任务的实际正文（`report_in_chars` 默认 24000）；
+                # 上限只为防"异常子任务无限吐字"把内存打满，不作为质量约束。
+                _hb_text_cap = 200_000
+                # 就地导入而非复用外层 `_th`：`_th` 是 `:579` 那个函数的**局部**导入，
+                # 本函数作用域看不到它（同一文件不同函数，名称不共享）。
+                _import_threading = __import__("threading")
+                _hb_lock = _import_threading.Lock()
                 _orch_offloads = {}   # 共享产物工作区：{task_key: (offload_id, 字符数)}（下游按 id 取全文）
+                # ★ 2026-11-02（改进点②后半）：下游是否**真的读了**上游完整交付物。
+                #   `{task_key: {"fetched": bool, "up_off": 可取回份数}}`
+                #   为什么需要：给下游的摘要必然是有损的（900 字符 + 协议结论）。
+                #   原设计给了 offload 引用 + "摘要不够就取全文"的指引，但**取不取全凭模型自觉**，
+                #   而"没取"在汇总里完全不可见 ⇒ 汇总读起来像"信息完整"。
+                #   行业判据：Google ADK「compiled view + 按名引用」成立的前提是
+                #   **取用有据可查**；Anthropic 则要求交接内容"足以判断"。
+                #   本表不改变任何产出，只把"仅凭摘要下结论"这件事**显式带到汇总与评审面前**。
+                _sub_meta = {}
 
                 def _drain():
                     """取出队列里**已到达**的子任务事件；把**连续的 token 合并成一条**再吐。
@@ -2115,7 +2736,10 @@ class StreamMixin:
                                                     _rsid, "ok",
                                                     _rs.decision_meta(_dec, latency_ms=_dec_ms))
                                         # ★ P4：决策记录落 replan_decisions（与 span 同点）
-                                        _write_decision("t1_fail", _dec,
+                                        # ★ 2026-11-04（conv 990403 实证）：source 不能硬编码
+                                        #   "t1_fail" —— t2 的失败决策也被记成 t1_fail，
+                                        #   审计里看不出"哪个任务在反复失败"。按任务键拼接。
+                                        _write_decision("%s_fail" % tkey, _dec,
                                                         latency_ms=_dec_ms)
                                     except Exception:
                                         pass
@@ -2283,6 +2907,18 @@ class StreamMixin:
                     _sm = _it.get("summary")
                     if isinstance(_sm, dict) and str(_sm.get("summary") or "").strip():
                         _sec = _sm.get("summary")
+                        # ★ 2026-11-02（改进点②）：**仅凭摘要下结论**必须显式可见。
+                        #   该子任务有上游 offload 全文可取却一次没取 ⇒ 它看到的只有
+                        #   有损摘要。此提示进汇总输入（评审也会读到），
+                        #   避免"看起来信息完整、实则有损"的假象。
+                        try:
+                            _mt = _sub_meta.get(str(_it.get("task_key") or "")) or {}
+                            if _mt.get("up_off") and not _mt.get("fetched"):
+                                _sec += ("\n⚠️ 本子任务未取回上游完整交付物（%d 份可取），"
+                                         "其结论仅基于摘要，可能不完整"
+                                         % int(_mt.get("up_off") or 0))
+                        except Exception:
+                            pass
                         _arts = _sm.get("artifacts") or []
                         if _arts:
                             _sec += "\n交付物：" + "；".join(
@@ -2479,6 +3115,333 @@ class StreamMixin:
             #   写出"编排显示 t1—t5 五个交付物缺失/失败"的缺口报告——交付物明明都在，
             #   用户看到的就是"编排大量失败"。措辞必须区分三态：failed 才叫失败，
             #   partial 是"部分完成（存在未验证环节）"，文案与 card_data 同口径。
+            # ═══════════════════════════════════════════════════════════════════
+            # ★ 2026-10-22（米爸「是否重跑需要一个健全的机制」）：
+            #   partial **病因分类 + 自动补齐**（默认开）。
+            #
+            # 为什么不能"partial 就重跑"（真数据取证，会话 9587 的 6 个子任务）：
+            #   · t1/t2 自报 partial，但 risks.advice 是「请用户明确方法论 / 补充规格书」
+            #     ⇒ 缺的是**用户输入**，重跑必然得到同一份结果（blocked，不补）；
+            #   · t3/t5 自报 partial，真实原因是「工具轮次耗尽，sysml_v2_validate 一次未调用」
+            #     ⇒ 执行中断 + **有靶子**（补跑只需跑一次校验），能改变结果（transient，补）。
+            #   ⇒ 判准不是"partial 多严重"，而是**"有没有靶子"**。6 个里只需补 2 个，
+            #     省掉 4 个无效重跑的 token。
+            #
+            # 标杆：Claude Code「stop_reason 七值 → 五种处置」（先分类再动作）+ Stop hook 否决权；
+            #       LangGraph pending writes（已完成一律复用）；AutoGPT boundedness（每维有天花板）。
+            # 四道闸：子任务 ≤2 次（D3）/ run ≤5 次 / token 预算 / 墙钟 + 空转。
+            # 整段 try 兜住：补齐失败只丢补齐，**绝不阻断汇总**。
+            # ═══════════════════════════════════════════════════════════════════
+            _fill_verdicts, _fill_filled, _fill_patch = [], [], {}
+            try:
+                from core.config import get as _cfg_fl
+                from agent import partial_policy as _pp
+                _fl_on = True
+                try:
+                    _fl_on = bool(_cfg_fl("agent", "fill_enabled", True))
+                except Exception:
+                    _fl_on = True
+                if _agg_status != "full" and _fl_on:
+                    # ① 收集未完成子任务：done_items 里自报非 full 的 ＋ orch_tasks 里没跑完的
+                    _inc, _seen_k = [], set()
+                    for _it in done_items:
+                        _sm_f = _it.get("summary")
+                        _st_f = (_sm_f.get("status") if isinstance(_sm_f, dict) else None) \
+                                or _it.get("proto_status")
+                        if _st_f in ("partial", "failed"):
+                            _inc.append(_it)
+                            _seen_k.add(str(_it.get("task_key") or ""))
+                    for _t_f in orch_tasks:
+                        _k_f = str(_t_f.get("key") or "")
+                        if str(_t_f.get("status") or "") not in ("done", "skipped") and _k_f not in _seen_k:
+                            _inc.append({"key": _k_f, "title": _t_f.get("title"),
+                                         "status": _t_f.get("status")})
+                    # ② 分类（判据优先级：外部锚 > 自报）
+                    _fill_verdicts = [_pp.classify_partial(x) for x in _inc
+                                      if (x.get("key") or x.get("task_key"))]
+                    if _fill_verdicts:
+                        _fc = _pp.summarize_causes(_fill_verdicts)
+                        # ★ evidence_thin：无 missing 也无 risks 的项，其分类是**保守兜底**
+                        #   而非确有证据。必须显式说出来 —— 否则用户会以为"系统查过了，
+                        #   确实只是质量不足"，实际是"判据不够，只能按最安全的口径判"。
+                        _thin = sum(1 for _v_t in _fill_verdicts
+                                    if _v_t.get("evidence_thin"))
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": ("（自动编排）未完成子任务病因分类：执行中断 %d / 客观缺口 %d / "
+                                         "待用户输入 %d / 质量不足 %d%s"
+                                         % (_fc["transient"], _fc["gap"],
+                                            _fc["blocked"], _fc["quality"],
+                                            ("（其中 %d 项无 missing/risks，按最保守口径判定）"
+                                             % _thin) if _thin else ""))}
+                    # ③ 决策（四道闸 + 下游覆盖闸）
+                    try:
+                        _mp_t = int(_cfg_fl("agent", "fill_max_per_task", 2))
+                    except Exception:
+                        _mp_t = 2
+                    try:
+                        _mx_t = int(_cfg_fl("agent", "fill_max_tasks", 2))
+                    except Exception:
+                        _mx_t = 2
+                    # 先取任务行：既供决策算"下游覆盖"，也供后面补跑复用（只查一次）
+                    _rows_f = {}
+                    try:
+                        for _t_r in TaskQueue.tasks(conn, run_id):
+                            _rows_f[str(_t_r.get("task_key") or "")] = _t_r
+                    except Exception:
+                        _rows_f = {}
+                    # ★ 下游覆盖闸（真机实测 2026-10-22）：t2「生成 BDD 骨架」自报 partial
+                    #   「本轮未调用校验器」，而 t3 的任务定义就是「运行 sysml_v2_validate 并修复」——
+                    #   t2 的"未校验"是**编排设计上交给下游的一步**，补跑 t2 = 重复劳动
+                    #   （实测单次 250s + 全量 token，产出还与 t3 重复）。
+                    #   只对 gap 生效：transient（中断）即使有下游也要补，否则下游仍拿不到产出。
+                    _covered_f = set()
+                    try:
+                        for _k_c, _t_c in _rows_f.items():
+                            if str(_t_c.get("status") or "") != "done":
+                                continue
+                            try:
+                                _deps_c = json.loads(_t_c.get("deps") or "[]")
+                            except Exception:
+                                _deps_c = []
+                            for _d_c in (_deps_c or []):
+                                _covered_f.add(str(_d_c))
+                    except Exception:
+                        _covered_f = set()
+                    # ★ 子任务级 attempt 记账（2026-10-22，D5 落地，**零表结构改动**）：
+                    #   直接复用既有 `agent_tasks.retry_count` —— 该字段已存在且 replanning(T1)
+                    #   就在用它。语义统一为「这个子任务总共被重试过几次」：
+                    #     · 好处：补齐与 replanning 共享同一个天花板，不会出现
+                    #       「replanning 补 1 次 + 补齐再补 2 次」的合计超限；
+                    #     · 代价：若 replanning 已补过，本轮的补齐次数会相应减少 —— 这正是收敛的本意。
+                    _used_per_task = {}
+                    for _k_u, _t_u in _rows_f.items():
+                        try:
+                            _used_per_task[_k_u] = int(_t_u.get("retry_count") or 0)
+                        except Exception:
+                            _used_per_task[_k_u] = 0
+                    _dec_f = _pp.decide_fill(_fill_verdicts, used_run=0,
+                                             max_per_task=_mp_t, max_tasks=_mx_t,
+                                             used_per_task=_used_per_task,
+                                             covered=_covered_f)
+                    _fill_stop = _dec_f.get("stop") or ""
+                    _plan_f = _dec_f.get("fill") or []
+                    # 被下游覆盖/闸门挡下的，也要在进度里说清（P5：不许静默）
+                    for _s_f in (_dec_f.get("skip") or []):
+                        if "下游" in str(_s_f.get("reason") or ""):
+                            yield {"type": "progress", "kind": "progress",
+                                   "delta": "（自动编排）%s 不补：%s"
+                                            % (_s_f.get("key"), _s_f.get("reason"))}
+                    if _fill_stop:
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": "（自动编排）不执行自动补齐：%s" % _fill_stop}
+                    if _plan_f:
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": "（自动编排）自动补齐 %d 项：%s"
+                                        % (len(_plan_f), "、".join(str(v.get("key")) for v in _plan_f))}
+                        # ④ 执行（复用 _run_subtask —— 唯一保证"补跑与首跑同构"的路径：
+                        #    同样的上下文快照/协议注入/token 记账/DB 写回）
+                        try:
+                            _dl_f = _t.time() + float(_cfg_fl("agent", "fill_deadline_s", 300))
+                        except Exception:
+                            _dl_f = _t.time() + 300.0
+                        _pool_f = None
+                        try:
+                            from concurrent.futures import ThreadPoolExecutor as _TPE2
+                            _pool_f = _TPE2(max_workers=1)
+                        except Exception:
+                            _pool_f = None
+                        for _v_f in _plan_f:
+                            _k_f2 = str(_v_f.get("key") or "")
+                            _tk_f = _rows_f.get(_k_f2)
+                            if not _tk_f or _pool_f is None:
+                                continue
+                            _rem = _dl_f - _t.time()
+                            if _rem <= 8:
+                                yield {"type": "progress", "kind": "progress",
+                                       "delta": "（自动编排）补齐墙钟已到，剩余 %s 转人工"
+                                                % _k_f2}
+                                break
+                            # escalate 升级序列（对齐 Claude Code 的
+                            #   escalate → inject continue → give up，上限 3 次）：
+                            #   第 1 次原参补跑；第 2 次起在指令里**明确要求更换策略**。
+                            #   为什么需要：同一参数重跑第 2 次，成功率不会更高 ——
+                            #   真机实测 t2 连续两轮都因「工具轮次耗尽」中断，第二次若不换策略
+                            #   （比如先把 validate 提前到第一步），结果还是一样。
+                            _rc_f = 0
+                            try:
+                                _rc_f = int(_tk_f.get("retry_count") or 0)
+                            except Exception:
+                                _rc_f = 0
+                            _rnd_f = _rc_f + 1
+                            _esc_f = _rnd_f >= 2
+                            try:
+                                _c_f = _tk_f.get("config")
+                                if isinstance(_c_f, str):
+                                    _c_f = json.loads(_c_f or "{}")
+                                _c_f = dict(_c_f or {})
+                                _bq = str(_c_f.get("query") or "")
+                                _c_f["query"] = ((_bq + "\n\n") if _bq else "") + \
+                                    _pp.fill_prompt(_v_f, _rnd_f, escalate=_esc_f)
+                                _tk_f["config"] = _c_f
+                            except Exception:
+                                pass
+                            # ★ 补跑记账**前置**（fail-safe 向停）：先 +1 再跑。
+                            #   若放在成功后，一旦补跑异常/超时就不计数 ⇒ 同一任务可被无限重试。
+                            #   与 replanning(T1) 的 retry_count 同源，共享 2 次天花板。
+                            try:
+                                conn.execute(
+                                    "UPDATE agent_tasks SET retry_count=COALESCE(retry_count,0)+1, "
+                                    "updated_at=CURRENT_TIMESTAMP WHERE id=?", (_tk_f["id"],))
+                                conn.commit()
+                            except Exception:
+                                pass
+                            _r_f = None
+                            try:
+                                # ★ 2026-11-03（真库 75 条实证）：**必须**走 _submit_with_ctx。
+                                #   此处原为裸 `_pool_f.submit` ⇒ 补跑线程拿不到父轮次上下文
+                                #   ⇒ usage 落成 conv=0/run=0，且因 ctx 为空触发
+                                #   `begin_trace(0)` **新开一条 trace**（一次编排碎成多条链）。
+                                #   `_submit_with_ctx` 此前只被首跑路径用，本文件"定义了却没接线"
+                                #   正是该缺陷的直接成因。
+                                _fut_f = _submit_with_ctx(_pool_f, _run_subtask, _tk_f)
+                                _r_f = _fut_f.result(timeout=_rem)
+                            except Exception as _fe:
+                                # 超时/异常 ⇒ 协作式取消（子任务在下个事件点 break，
+                                # 正解见 _cancel_probe；硬杀线程不安全）
+                                try:
+                                    TaskQueue.cancel(conn, _tk_f["id"],
+                                                     "自动补齐超时或异常")
+                                except Exception:
+                                    pass
+                                yield {"type": "progress", "kind": "progress",
+                                       "delta": "（自动编排）补齐 %s 未完成（%s），已取消"
+                                                % (_k_f2, type(_fe).__name__)}
+                                continue
+                            # 解包：**实际 10 元组**（函数 docstring 写的 9 元已过时，
+                            # 末尾 off_id 是后加的）——按实现解包，别信注释
+                            try:
+                                (_rk, _rt, _rok, _rres, _revs, _rerr,
+                                 _rlat, _rtok, _rsum, _roff) = _r_f
+                            except Exception:
+                                continue
+                            if not _rok:
+                                yield {"type": "progress", "kind": "progress",
+                                       "delta": "（自动编排）补齐 %s 仍未成功：%s"
+                                                % (_k_f2, str(_rerr or "")[:90])}
+                                continue
+                            # ui_summary 与首跑同源（services.subtask_protocol.ui_summary），
+                            # 否则卡片文案仍是旧的中断自述（实测踩到，见 _fill_patch 注释）
+                            try:
+                                from services.subtask_protocol import ui_summary as _ui_sum2
+                                _ui_f = _ui_sum2(_rres)
+                            except Exception:
+                                _ui_f = ""
+                            try:
+                                TaskQueue.complete(conn, _tk_f["id"],
+                                                   _rres or "（自动补齐产出）",
+                                                   {"summary": str(_rres)[:300],
+                                                    "score": len(str(_rres or ""))},
+                                                   latency_ms=_rlat)
+                            except Exception:
+                                pass
+                            _fill_patch[_k_f2] = {
+                                "task_key": _k_f2, "title": _rt,
+                                "agent_id": _tk_f.get("agent_id"),
+                                "result": _rres, "status": "done",
+                                "summary": _rsum,
+                                "result_offload_id": _roff or 0,
+                                "proto_status": ((_rsum or {}).get("status")
+                                                 if isinstance(_rsum, dict) else None),
+                                # ★ 2026-10-22 端到端实测发现的展示不一致：
+                                #   前端徽章读 `summary_status`、文案读 `ui_summary`。
+                                #   只更新前者 ⇒ 出现「徽章 full + 文案还写着『本轮只完成了一部分』」
+                                #   （实测消息 4780 的 t2 正是如此）。三处必须同源更新。
+                                "ui_summary": _ui_f,
+                            }
+                            _fill_filled.append(_k_f2)
+                            # 实时更正那张子任务卡（否则补齐期间卡片仍显示旧的 partial 徽章/文案，
+                            # 要等最终 done 重渲染才变 —— 用户会以为"补了个寂寞"）。
+                            # ⚠️ yield 不放进 try（吞掉 GeneratorExit 会让流无法正常关闭）。
+                            yield {"type": "subtask", "key": _k_f2, "status": "done",
+                                   "title": _rt, "agent": _tk_f.get("agent_id"),
+                                   "latency_ms": _rlat,
+                                   "token_count": _rtok,
+                                   "retry_count": int(_tk_f.get("retry_count") or 0) + 1,
+                                   "summary_status": ((_rsum or {}).get("status")
+                                                      if isinstance(_rsum, dict) else ""),
+                                   "ui_summary": _ui_f}
+                            yield {"type": "progress", "kind": "progress",
+                                   "delta": "（自动编排）补齐 %s 完成（第 %d 次补跑%s，%d 字）"
+                                            % (_k_f2, _rnd_f,
+                                               "，已升级策略" if _esc_f else "",
+                                               len(str(_rres or "")))}
+                        if _pool_f is not None:
+                            try:
+                                _pool_f.shutdown(wait=False)
+                            except Exception:
+                                pass
+                    # ⑤ 并回 + 重算三态（**只升不降**：补齐是改善，补坏了不背锅）
+                    if _fill_patch:
+                        for _i_p, _it_p in enumerate(done_items):
+                            _hit_p = _fill_patch.get(str(_it_p.get("task_key") or ""))
+                            if _hit_p:
+                                done_items[_i_p] = _hit_p
+                        for _t_p in orch_tasks:
+                            _hit_p = _fill_patch.get(str(_t_p.get("key") or ""))
+                            if _hit_p:
+                                _t_p["status"] = "done"
+                                _t_p["proto_status"] = _hit_p.get("proto_status")
+                                # ★ 三处同源更新（端到端实测 2026-10-22）：
+                                #   summary（协议原文）/ ui_summary（卡片文案）/ summary_status（徽章）
+                                #   —— 少更任何一个都会出现「徽章说完成、文案说没走完」的自相矛盾。
+                                if isinstance(_hit_p.get("summary"), dict):
+                                    _t_p["summary"] = _hit_p["summary"]
+                                    _t_p["summary_status"] = _hit_p.get("proto_status")
+                                if _hit_p.get("ui_summary"):
+                                    _t_p["ui_summary"] = _hit_p["ui_summary"]
+                        # 硬约束（P5：命中上限/仍有缺口**不许静默**）：
+                        #   只要 orch_tasks 里还有没跑完的、或 done_items 里还有非 full 的，
+                        #   聚合就不能是 full —— 否则就是"失败被记录成成功"的翻版。
+                        try:
+                            from services import subtask_protocol as _sp_p
+                            _sm_p = []
+                            for _it_q in done_items:
+                                _s_q = _it_q.get("summary")
+                                if isinstance(_s_q, dict) and _s_q.get("status") in _sp_p.STATUS_VALUES:
+                                    _sm_p.append(_s_q)
+                                else:
+                                    _sm_p.append(_sp_p.normalize_text(
+                                        _it_q.get("result"), task_status=_it_q.get("status")))
+                            _agg_new = _sp_p.summarize_status(_sm_p) if _sm_p else _agg_status
+                            _st_p = [str(t.get("status") or "") for t in orch_tasks]
+                            _has_unfin = any(s not in ("done", "skipped") for s in _st_p)
+                            _has_sum_unfull = any(
+                                (str(((t.get("summary_status") or "") if t.get("summary_status")
+                                      else "")) in ("partial", "failed"))
+                                for t in orch_tasks)
+                            if _agg_new == "full" and (_has_unfin or _has_sum_unfull):
+                                _agg_new = "partial"
+                            _rk_p = {"full": 2, "partial": 1, "failed": 0}
+                            if _rk_p.get(_agg_new, 2) > _rk_p.get(_agg_status, 2):
+                                _agg_status = _agg_new
+                            _missing_keys = [k for k in _missing_keys
+                                             if k not in set(_fill_filled)]
+                            if _agg_status == "full":
+                                _missing_keys = []
+                        except Exception:
+                            pass
+                # ⑥ 清空队列里补齐期间堆积的子任务事件（无消费者时会积压；不清理
+                #    会让后续 _drain 把补齐过程当"首跑实时输出"重放一遍）
+                try:
+                    while True:
+                        _evq.get_nowait()
+                except Exception:
+                    pass
+            except Exception as _fe2:
+                yield {"type": "progress", "kind": "progress",
+                       "delta": "（自动编排）自动补齐未执行（%s），按原状态汇总"
+                                % type(_fe2).__name__}
+
             if _agg_status != "full" and done_items:
                 _failed_keys = [str(t.get("task_key") or "") for t in orch_tasks
                                 if str(t.get("status") or "") == "failed"]
@@ -2492,10 +3455,43 @@ class StreamMixin:
                                   % (len(_partial_keys), ",".join(_partial_keys)))
                 _gap_txt = ("，".join(_parts)) if _parts \
                     else "聚合状态 %s，但无失败/部分完成子任务明细" % _agg_status
-                orch_content = ("（编排状态：%s——%s）\n\n"
-                                % (_agg_status, _gap_txt)) + orch_content
+                # ★ 2026-10-22（P0-b/P5）：把**病因分类前置到汇总开头**。
+                #   为什么必须前置：现状是缺口散落在卡片 bullet 里，正文却读起来像"全部完成"——
+                #   这是「失败被记录成成功」的**文案版**。用户会按 full 的理解去用这份汇总。
+                #   对齐 OpenAI「命中上限不许静默」+ Claude Code 的 Stop hook 否决权。
+                _cause_txt = ""
+                try:
+                    from agent import partial_policy as _pp2
+                    if _fill_verdicts:
+                        _cause_txt = _pp2.gate_summary(_fill_verdicts,
+                                                       filled=_fill_filled)
+                except Exception:
+                    _cause_txt = ""
+                if _cause_txt:
+                    orch_content = ("（编排状态：%s——%s）\n%s\n\n"
+                                    % (_agg_status, _gap_txt, _cause_txt)) + orch_content
+                else:
+                    orch_content = ("（编排状态：%s——%s）\n\n"
+                                    % (_agg_status, _gap_txt)) + orch_content
+                # ★ D4（2026-10-22）：blocked 类**自动生成澄清清单**，但不打断汇总
+                #   （打断会让用户看不到已完成的部分）。清单只列"需要用户提供什么"，
+                #   重跑无法解决 —— 对齐 Claude Code 对 `refusal` 的处置：不重试，直接说明。
+                _ask_txt = ""
+                try:
+                    _filled_set = set(_fill_filled)
+                    _blk = [v for v in _fill_verdicts
+                            if str(v.get("cause")) == "blocked"
+                            and str(v.get("key")) not in _filled_set]
+                    if _blk:
+                        _ask_txt = "；".join(
+                            "%s：%s" % (v.get("key"),
+                                        str(v.get("evidence") or v.get("hint") or "")[:70])
+                            for v in _blk[:4])
+                except Exception:
+                    _ask_txt = ""
                 yield {"type": "progress", "kind": "progress",
-                       "delta": f"（自动编排）编排状态 {_agg_status}：{_gap_txt}"}
+                       "delta": (f"（自动编排）编排状态 {_agg_status}：{_gap_txt}"
+                                 + (f"；待你补充：{_ask_txt}" if _ask_txt else ""))}
             # P0-1（T3）：反思闭环——汇总后质量评审 → 未达标修订（复用画布 reflection 公共评审）
             reflection_meta = None
             if done_items:
@@ -2512,7 +3508,10 @@ class StreamMixin:
                     "enabled": True,
                     "rounds": _ref.get("rounds", 0),
                     "score": _ref.get("score"),
-                    "passed": bool(_ref.get("passed", True)),
+                    # ⚠️ 不要 `bool(...)`：`None` 表示"评审未完成（无法评定）"，
+                    #   bool(None)=False 会把它降格成"评了没过" ⇒ 前端显示红色未通过、
+                    #   质量门禁还会因此把编排降级（见 apply_quality_gate 的 degraded 分支）。
+                    "passed": _ref.get("passed", True),
                     "issues": _ref.get("issues", []),
                     "advice": _ref.get("advice", ""),
                     "provider": (_ref.get("llm") or {}).get("provider", "-"),
@@ -2521,10 +3520,30 @@ class StreamMixin:
                     #   排障不必翻日志。⚠️ 含 stats.verdict —— 它区分
                     #   「检出 0 冲突」与「压根没数据可判」，两者**不可混为一谈**。
                     "conflicts": _ref.get("conflicts") or {"count": 0, "items": []},
+                    # ★★ 2026-10-30（用户「0/100 未通过 · 评审解析失败，这个评审的依据是
+                    #   什么，看不出来」）：把**评审依据**随 card_data 落库。
+                    #   此前 reflection 只有 score/passed/rounds/issues —— 用户看到
+                    #   「0/100 未通过」却没有任何可判断的依据：
+                    #     · 按什么标准评的？（criteria 从未出过服务器）
+                    #     · 多少分算过？（pass_score=70，界面没写 ⇒ "72 也判未通过"看着像 bug）
+                    #     · "解析失败"是模型没吐 JSON，还是调用直接报错？（异常被吞）
+                    #   ⇒ 这三个都必须能被用户看到，否则等于"给了结论不给理由"。
+                    "criteria": _ref.get("criteria") or "",
+                    "pass_score": _ref.get("pass_score"),
+                    "eval": _ref.get("eval") or {},
                 }
-                if reflection_meta.get("score") is not None:
+                # ★ 2026-10-30：三态文案。`passed is None` = 评审没评成，
+                #   不能报"未通过"（那是把基础设施故障说成质量问题）。
+                if reflection_meta.get("passed") is None and reflection_meta.get("degraded"):
+                    _dg2 = ((reflection_meta.get("eval") or {}).get("diag") or {})
+                    yield {"type": "progress", "kind": "progress", "delta": (
+                        "（自动编排）质量评审未完成（%s）——这不是对报告质量结论，"
+                        "可展开「依据」看失败证据"
+                        % (_dg2.get("error_type") or "回包无法解析"))}
+                elif reflection_meta.get("score") is not None:
                     yield {"type": "progress", "kind": "progress", "delta": (
                         f"（自动编排）质量评审：{reflection_meta['score']}/100 · "
+                        f"（通过线 {reflection_meta.get('pass_score') or 70}）· "
                         f"{'通过' if reflection_meta['passed'] else '未通过，已自动修订 ' + str(reflection_meta['rounds']) + ' 轮'}")}
                 # ★ 冲突：**先于**评分事件告知用户（这是需要人来裁决的事，
                 #   埋在分数后面会被忽略）。⚠️ stats.verdict 非 checkable 时
@@ -2591,10 +3610,39 @@ class StreamMixin:
                     orch_content = "（编排质量门禁：" + "；".join(_gate_gaps) + "）\n\n" + orch_content
                     yield {"type": "progress", "kind": "progress",
                            "delta": "（自动编排）编排质量门禁：" + "；".join(_gate_gaps)}
-            # P0-1：编排成功后沉淀为可复用工作流（draft，前端可另存/画布编辑/发布）
-            saved_flow_id = None
-            if done_items:
-                saved_flow_id = self._save_planner_flow(goal, plan, intent)
+        # P0-1：编排成功后沉淀为可复用工作流（draft，前端可另存/画布编辑/发布）
+        saved_flow_id = None
+        if done_items:
+            saved_flow_id = self._save_planner_flow(goal, plan, intent)
+
+        # ★ 2026-11-02（米爸「最终正文只承载最后确定的代码」）：流式推送前做一次
+        #   中间版本代码收敛。为什么必须在这里（而不是只在 _summarize_plan 出口）：
+        #   ① reflection 修订会**整体重写** orch_content（L3305），可能把各子任务的
+        #      版本代码重新带回来；② 质量门禁 prepend（L3347）之后内容才定型。
+        #   放在流式推送之前 ⇒ 前端流式看到的正文就是收敛后的；`_ensure_sysml_blocks`
+        #   在其后仍有效（正文确无代码时才补回，补回的是最后确定版所在交付物）。
+        #   失败绝不阻断（呈现层纪律），返回原文。
+        try:
+            from agent.final_content import (dedupe_interim_code_blocks as _dedupe_fc,
+                                             normalize_ordinal_headings as _ordfix_fc)
+            orch_content, _fc_removed = _dedupe_fc(orch_content)
+            if _fc_removed:
+                yield {"type": "progress", "kind": "progress",
+                       "delta": ("（自动编排）最终正文收敛：%d 份中间版本代码不再重复展示"
+                                 "（各版本在子任务执行卡中可见，正文保留最后确定版）" % _fc_removed)}
+            # ★ 2026-11-04：中文序号标题去回退（拼接痕迹）。
+            #   必须放在**本处**（reflection 整体重写正文之后、流式推送之前）：
+            #   `_summarize_plan` 里已重排过一次，但 reflection 修订会**整体重写**
+            #   `orch_content`（L3305），把各子任务自带的「一、二、三」重新带回来 ——
+            #   那正是真库 msg 5761 的形态（`## 一、结论先行` 出现 2 次）。
+            #   ⇒ 出口再收一次，且**只改序号、不删标题**。
+            orch_content, _ord_n = _ordfix_fc(orch_content)
+            if _ord_n:
+                yield {"type": "progress", "kind": "progress",
+                       "delta": ("（自动编排）章节序号已归一：%d 处重复/回退的中文序号"
+                                 "重排为连续序号（标题内容与顺序不变）" % _ord_n)}
+        except Exception:
+            pass
 
         # 5) 汇总内容流式推送
         #    P0-3（2026-09-17）：原 `range(0, len, 24)` 无节流切片 → 几十毫秒内把整段灌给前端，
@@ -2650,6 +3698,15 @@ class StreamMixin:
             _ck_fin(conn, run_id, _final_phase)
         except Exception:
             pass
+        # ★ 2026-11-04 修（**既有缺陷**，非本轮引入）：`_gate_gaps` 只在"有成功子任务"的
+        #   分支里赋值 —— 本轮**零成功子任务**（计划为空走降级 / 全部子任务失败 /
+        #   提前收敛后无交付）时该名字根本不存在 ⇒ 卡片组装抛 UnboundLocalError，
+        #   整轮以 error 收尾。实测会话 10028：计划为空走降级，用户看到"编排执行失败"，
+        #   其实只是没有交付物可汇总（而汇总/徽章本该照常渲染）。
+        try:
+            _gate_gaps
+        except NameError:
+            _gate_gaps = []
         card_data = json.dumps({
             "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
@@ -2658,9 +3715,24 @@ class StreamMixin:
             "orchestrated_status": _agg_status,   # Task 10：编排汇总三态（full/partial/failed）
             "run_id": run_id,   # ★ 2026-10-20：单点重跑入口依赖（前端编排卡「↻ 重跑子任务」）
             "quality_gate_gaps": _gate_gaps,      # P0-3：质量门禁缺口说明（与 orchestration.py 同键）
+            # ★ 2026-10-22：病因分类 + 补齐结果。与 orchestration.py 同名同义。
+            #   `fill_causes`：四类病因与证据（failed 徽章只说明"没成"，这里说明"为什么没成、
+            #   能不能补"）；`fill_filled`：本轮真实补齐成功的 task_key（前端可打「已自动补齐」标）。
+            "fill_causes": [{"key": v.get("key"), "cause": v.get("cause"),
+                             "evidence": v.get("evidence"),
+                             "fillable": bool(v.get("fillable")),
+                             # 证据是否充分：False 表示"无 missing 无 risks，按保守口径判的"，
+                             # 前端可据此显示"待复核"而不是当成确定结论。
+                             "evidence_thin": bool(v.get("evidence_thin")),
+                             "missing": v.get("missing") or []}
+                            for v in (_fill_verdicts or [])],
+            "fill_filled": list(_fill_filled or []),
             "run_budget": {"used_tokens": run_tokens, "budget": run_token_budget,
                            "hit": budget_hit, "executed": executed_count, "max_tasks": _max_tasks},
             "plan": orch_tasks, "sysml_views": sysml_views,
+            # ★ 2026-11-04：计划校验 + 重规划摘要（此前只进事件/日志，刷新即丢）
+            "plan_guard": _plan_guard_info,
+            "replan": _replan_events,
             "source": "none", "confidence": 0, "graph_count": 0, "vector_count": 0,
             "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
             "saved_flow_id": saved_flow_id,   # P0-1：编排沉淀的工作流 id（前端「另存为流程」）
@@ -2684,7 +3756,7 @@ class StreamMixin:
         # P0-3：编排产出记忆沉淀（LLM 提炼 or 规则降级，每会话限 2 次）
         self._deposit_session_memory(user_input, orch_content, intent)
         # P0-5：技能使用反馈采集（流式编排路径）
-        self._record_skill_feedback(run_id=int(conversation_id or 0), intent=intent, output_content=orch_content)
+        self._record_skill_feedback(conversation_id=int(conversation_id or 0), intent=intent, output_content=orch_content)
         with db_conn() as conn2:
             # 2026-09-29：user 消息已在 execute_stream 入口落库，此处只插 assistant（防重复）
             # ⚠️ 2026-10-21：编排**子任务**是以 `conversation_id=0` 嵌套调用本方法的
@@ -2714,8 +3786,12 @@ class StreamMixin:
                 )
                 msg_id = cur.lastrowid
                 _archive_artifacts(conn2, conversation_id, msg_id, card_data, orch_content, intent)
+                # ★ 2026-10-29：入库前规范化（conversations.intent 只存意图标签，
+                #   执行主体由 main_agent 承载）。原实现直接写 `intent`，
+                #   而团队模式下它可能是主 Agent 名 ⇒ 字段污染（实测 25/60 会话）。
                 conn2.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
-                              (intent, conversation_id))
+                              (self._intent_for_storage(intent, locals().get("_detected", "")),
+                               conversation_id))
                 # C-1（2026-10-04）：「汇总产物已落库」标记**必须与消息 INSERT 同事务**。
                 #   分两次提交的话，中途崩溃会留下「消息在、标记 0」→ resume 误判"可只重做汇总"
                 #   → 同一份汇总在会话里出现两次。故写在同一个 with 块内，由 db_conn 统一提交。
@@ -2885,7 +3961,9 @@ class StreamMixin:
             _archive_artifacts(conn, conversation_id, msg_id, card_data, orch_content, intent)
             conn.execute(
                 "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
-                (intent, conversation_id)
+                # ★ 2026-10-29：同上，入库前规范化
+                (self._intent_for_storage(intent, locals().get("_detected", "")),
+                 conversation_id)
             )
             # Audit log
 # P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——
@@ -2913,22 +3991,98 @@ class StreamMixin:
                           "graph_count": 0, "vector_count": 0, "attachment_used": False},
         }}
 
-    def _persist_partial_stream(self, conversation_id, content, reason="error", dry_run=False):
+    def _persist_partial_stream(self, conversation_id, content, reason="error",
+                                dry_run=False, force=False, detail="", exec_card=None):
         """2026-09-29（用户五轮反馈4）：流式异常/客户端断开时，把已生成内容固化落库。
 
         此前 except 分支只 yield error 事件：浏览器里看得到的内容在库中 0 条，
         刷新即蒸发（"打开页面之前输出的内容不见了"）。现按 reason 补中断说明后缀，
         并与前端停止路径（/messages/partial）去重 —— 最后一条消息已是固化消息则跳过。
+
+        ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」）：
+          原实现 `len(text) < 4` **静默跳过**，导致两类真实事故在库里**什么都不留**：
+            · conv 9754：8 轮工具 probe 后内部异常，无正文 ⇒ 跳过（日志只一行"内容过短"）
+            · conv 9755：客户端断开（CancelledError），424 条 token 已流出但固化未执行
+          两种情况下用户看到的都是"我发了一条消息，AI 什么也没回，刷新后连过程都没有"。
+          ⇒ 新增 `force`：**即使没有正文也要落一条说明**（`reason` 决定文案），
+            让用户至少能回答"这轮跑到哪一步、为什么没有输出"。
+          ⚠️ 只在 `force=True`（异常/断连等**非用户主动停止**）时启用；
+             `reason="stop"` 且用户是主动点停止时保持原行为（用户本来就不想看了）。
+        ⚠️ `detail`：异常摘要（可选），写进说明正文，便于用户/排查直接看到原因。
+        ★★ 2026-10-30（用户反馈「刷新后这么多环节的内容都不见了」）：**执行过程必须一起落库**。
+          原实现 `card_data` 写死 `"{}"`，于是失败/中断的消息**只剩一句说明**：
+          前端历史还原只认 `card_data.exec`（`05-markdown.js` 的 `_procHtmlNow`），
+          空卡 ⇒ 那一轮跑过的意图识别 / 工具调用 / 阶段卡片**刷新即全部蒸发**
+          （真机 conv 9779 msg 5262：card_data=`{}`，而同轮 SSE 里已有 22 次工具事件）。
+          更糟的是说明文案写着「本轮的执行过程已记录」——**它在撒谎**。
+          ⇒ 新增 `exec_card`：调用方把当前累计的执行快照传进来，与成功路径同构落库；
+             文案按"到底存没存"分岔，不再无条件声称已记录。
         """
         if dry_run or not conversation_id:
             return
         text = (content or "").strip()
+        # ★ 2026-10-27（用户反馈「中途失败后之前输出的内容没有任何展示」）：
+        #   断点固化是**低频且关键**的事件（一轮最多一次），必须留痕。
+        #   原实现只有"写库失败"才 print —— 于是"**跳过**固化"（内容为空/去重命中）
+        #   完全不可见，排查时只能靠猜（本轮为此多花了数轮才定位到 GeneratorExit 未注入）。
+        #   一行日志换"为什么没存下来"这句话能被直接回答，值得。
+        #   ⚠️ 必须 `flush=True`：服务以 `main.py > logs/xxx.log` 运行时 stdout 是**块缓冲**，
+        #   不加 flush 这些行会一直躺在缓冲区里（本轮排查为此白跑两轮：以为"没走到固化"，
+        #   其实只是没刷出来）。真正需要被看见的告警一律 flush。
+        print(f"[_persist_partial_stream] reason={reason} conv={conversation_id} "
+              f"候选字符={len(text)} force={force}", flush=True)
+        # ★ 2026-10-30：执行快照 → card_data。**必须 fail-safe**：
+        #   固化是"保住用户已看到内容"的最后一道防线，绝不能因为序列化/取字段失败
+        #   而整条消息写不进去（那正是本次要修的形态：宁可只存正文，也不能丢消息）。
+        _card_json = "{}"
+        if exec_card:
+            try:
+                # ⚠️ 必须**嵌在 `exec` 键下**（`{"exec": {...}}`），不能把 exec 的字段摊在顶层。
+                #   前端历史还原读的是 `card_data.exec`（`05-markdown.js` 的 `_procHtmlNow`：
+                #   `(cd && cd.exec) ? ... : ''`）。第一版直接 `json.dumps(exec_card)` 写在顶层
+                #   ⇒ 库里"有数据"、页面"什么都没有"，是那种最费时间的错法
+                #   （本轮由 verify_partial_exec_persist 的 P2 断言抓出）。
+                _card = {"exec": exec_card}
+                _ag = (exec_card or {}).get("agent")
+                if _ag:
+                    _card["agent"] = _ag
+                _card_json = json.dumps(_card, ensure_ascii=False, default=str)
+            except Exception as _ce:      # noqa: BLE001
+                print("[_persist_partial_stream] exec 快照序列化失败（退化为空卡）：%r"
+                      % (_ce,), flush=True)
+                _card_json = "{}"
         if len(text) < 4:
-            return
-        suffix = {
-            "stop": "\n\n> ⏹ 已停止生成（以上为已生成内容）",
-            "error": "\n\n> ⚠️ 输出因网络错误中断（以上为已生成内容，可直接输入\"重试\"继续）",
-        }.get(reason, "\n\n> ⚠️ 输出中断（以上为已生成内容）")
+            if not force:
+                print("[_persist_partial_stream] 跳过：内容过短（<4 字），且非强制 ⇒ 不生成空消息",
+                      flush=True)
+                return
+            # 强制模式：没有正文也要落一条**如实说明**，否则库里只剩 user 消息。
+            print("[_persist_partial_stream] 无正文但 force=True ⇒ 落一条失败说明", flush=True)
+            # 2026-10-30：文案必须与**事实**一致 —— 执行过程真的落库了才说"已记录"。
+            #   原句无条件写"已记录"，而 card_data 恒为 `{}` ⇒ 用户刷新后找不到任何环节，
+            #   只能怀疑是系统在敷衍（本轮反馈正是如此）。
+            _has_exec = bool(exec_card) and bool(
+                (exec_card or {}).get("tools") or (exec_card or {}).get("notices")
+                or (exec_card or {}).get("reasoning")
+                or (exec_card or {}).get("agent"))
+            _exec_line = (
+                "本轮的执行过程（工具调用 / 阶段）已随本条消息保存，"
+                "可在下方「执行过程」中展开回看；"
+                if _has_exec else
+                "本轮的执行过程未能留存（无可用快照）；"
+            )
+            text = (
+                "> ⚠️ 本轮未产出正文内容\n\n"
+                + ("**原因**：" + str(detail).strip()[:300] + "\n\n" if detail else "")
+                + _exec_line
+                + "若是网络或服务波动导致，直接重新发送这条消息即可。"
+            )
+        else:
+            suffix = {
+                "stop": "\n\n> ⏹ 已停止生成（以上为已生成内容）",
+                "error": "\n\n> ⚠️ 输出因网络错误中断（以上为已生成内容，可直接输入\"重试\"继续）",
+            }.get(reason, "\n\n> ⚠️ 输出中断（以上为已生成内容）")
+            text = text + suffix
         try:
             with db_conn() as conn:
                 last = conn.execute(
@@ -2956,18 +4110,104 @@ class StreamMixin:
                         return
                 conn.execute(
                     "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
-                    (conversation_id, "assistant", text + suffix, "text", "{}"))
+                    (conversation_id, "assistant", text, "text", _card_json))
                 conn.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
                              (conversation_id,))
         except Exception as _persist_err:
             # 固化失败不掩盖原始异常，但**必须留痕**（原来 `pass` 静默：
             # 去重/写入这类缺陷会完全不可见，2026-10-10 的重复落库就是这样漏掉的）。
-            print(f"[_persist_partial_stream] 固化失败（reason={reason}）：{_persist_err!r}")
+            print(f"[_persist_partial_stream] 固化失败（reason={reason}）：{_persist_err!r}",
+                  flush=True)
+
+    def _clarify_finish_events(self, conversation_id, user_input, intent, branch, attachments,
+                               forced_intent, skill_name, team, clarify_req,
+                               source="ask_user", title="❓ AI 执行中需要你确认后才能继续",
+                               content="", exec_card=None):
+        """澄清收口（生成器）：落挂起 + 归档已取回文档 + 发 clarify_ask 卡 + 发 done。
+
+        ★ 2026-10-27：抽出来的唯一理由是**第二处调用点**——评估器判定
+        `needs_user` 时也要走同一条收口（否则"需要你拍板"只能留在正文里，
+        用户得自己另起一轮，正是米爸反馈的现象）。
+        抽方法而不是复制粘贴：这段含"先归档再等回答"这条**踩过坑的**纪律
+        （澄清会 `return`，走不到 persist 的 `_archive_artifacts` ⇒ 已取回文件丢失），
+        复制一份必然在下一次修改时漂移。
+
+        调用方约定：`yield from` 之后必须 `return`（本方法已发 done，主流程收尾）。
+        """
+        _iqs = [dict(clarify_req)]
+        _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
+                                     forced_intent, skill_name, team, _iqs,
+                                     content=content, card_data=exec_card)
+        # 澄清不是失败：已经拿到的文件必须先落库，再等用户回答。
+        try:
+            if getattr(self, "_tool_sysml_docs", None):
+                with db_conn() as _c_ar:
+                    _archive_artifacts(_c_ar, conversation_id, _mid or 0,
+                                       "{}", "", intent,
+                                       tool_docs=self._tool_sysml_docs)
+                    try:
+                        from agent import async_jobs as _aj3
+                        _aj3.link_archived(_c_ar, conversation_id, self._tool_sysml_docs)
+                    except Exception:
+                        pass
+                self._tool_sysml_docs = []
+        except Exception:
+            pass
+        yield {"type": "clarify_ask", "questions": _iqs, "intent": intent,
+               "title": title,
+               "message": str(user_input)[:200], "source": source}
+        yield {"type": "done", "data": {
+            "ok": True, "clarify_asked": True, "intent": intent,
+            "content": "AI 执行中需要你确认（详见澄清卡片，回答后将继续）",
+            "msg_type": "clarify", "usage": {}, "questions": _iqs,
+            "message_id": _mid or 0, "clarify_source": source}}
+
+    def _hil_confirm_finish_events(self, conversation_id, intent, confirm_req,
+                                   content="", exec_card=None):
+        """★ 2026-10-28（写前确认 HITL）收口：发确认卡事件 + done，结束本次流。
+
+        ## 与 `clarify_required` 的关系：**同构但不同源**
+        - 同构：都中断本轮 → 发一个"等你"的事件 → 落痕迹 → done → 用户处理完**另起一轮**；
+        - 不同源：澄清的状态在 `conversations.pending_clarify`（单张），
+          写前确认的状态在 `hil_confirmations`（**多张单**，每张一个确认单）。
+
+        ## 为什么发**独立事件类型**而不是塞进工具结果文本
+        现状前端是从工具结果文本里**正则抠**确认单号（`/确认单\\s*#(\\d+)/`，
+        `static/js/mods/11-pipeline.js:465`）⇒ 后端改一个字就失效。
+        ⇒ 新事件 `hil_confirm` 自带 `confirmation_id` / `tool` / `arguments` / `preview`，
+        前端直接消费（老前端无此分支 ⇒ 静默忽略，**不破坏现有消费方**）。
+
+        ⚠️ 此刻**尚未发生任何副作用**（统一闸在执行之前拦截）⇒ 事件文案必须让人敢批。
+        """
+        _mid = self._persist_hil_confirm(conversation_id, intent, confirm_req,
+                                         content=content, card_data=exec_card)
+        yield {"type": "hil_confirm",
+               "confirmation_id": int((confirm_req or {}).get("id") or 0),
+               "tool": (confirm_req or {}).get("tool") or "",
+               "tool_type": (confirm_req or {}).get("tool_type") or "",
+               "level": (confirm_req or {}).get("level") or "confirm",
+               "match_key": (confirm_req or {}).get("match_key") or "",
+               "kind": (confirm_req or {}).get("kind") or "",
+               "preview": (confirm_req or {}).get("preview") or "",
+               "arguments": (confirm_req or {}).get("arguments") or {},
+               "batch_count": int((confirm_req or {}).get("batch_count") or 1),
+               "batch_merged": bool((confirm_req or {}).get("batch_merged")),
+               "conversation_id": int(conversation_id or 0),
+               "timeout_at": (confirm_req or {}).get("timeout_at") or "",
+               "title": "⏸ 写操作待人工确认",
+               "message": "批准后才会真正执行；在此之前不会产生任何副作用。"}
+        yield {"type": "done", "data": {
+            "ok": True, "hil_confirm": True, "intent": intent,
+            "content": "写操作已进入人工确认队列（批准后才会执行）",
+            "msg_type": "hil_confirm", "usage": {},
+            "confirmation_id": int((confirm_req or {}).get("id") or 0),
+            "message_id": _mid or 0}}
 
     def execute_stream(self, user_input, conversation_id, branch="dev", provider_id=None,
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
                        team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0,
-                       resume_of_user_msg_id: int = 0, resume_append: str = ""):
+                       resume_of_user_msg_id: int = 0, resume_append: str = "", _tracer=None,
+                       deadline_ts: float = 0.0, session_conv_id: int = 0, overrides=None):
         """流式执行（V2.3.2 优化：AI 输出流式 + 执行过程可观测）。生成器逐段产出 SSE 事件：
 
         {"type":"stage","name":..., "status":"run|done"}   右侧智能体执行状态
@@ -2981,8 +4221,65 @@ class StreamMixin:
         dry_run: 编排子任务流式执行时置 True（不落库，仅产出事件）。
         team: 团队模式（AI 会话页「工作流」下拉）——主 Agent 团队负责人统一调度：
         意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
+        session_conv_id: **会话级工具的归属会话**（★ 2026-10-30 新增）。
+        编排子任务以 `conversation_id=0` 嵌套调用本方法（约定：0 = 不落 messages），
+        但 `_tool_conv_ctx` 也取自该参数 ⇒ 子任务里所有"会话级工具"与工具留痕都成了
+        conv=0：
+          · `todo_write` 直接报「无会话上下文，无法建待办」（真机 1478 条 conv=0 留痕）；
+          · `tool_call_logs.conversation_id=0` ⇒ 用户在「执行过程」里看不到子任务的工具；
+          · HIL 确认单 / 写入闸也挂错会话。
+        而这些失败又计入失败轮 ⇒ 加速撞 `max_failed_rounds` ⇒「无辜终止」。
+        故把两者拆开：`conversation_id` 管**消息落库**（子任务仍传 0，语义不变），
+        `session_conv_id` 管**会话级能力归属**（子任务传父会话 id）。
+        缺省 0 ⇒ 回落到 conversation_id，非编排路径行为逐字节不变。
+
+        _tracer: P0-b 会话级 ConversationTracer（/chat/stream 入口创建）。**显式传参**
+        而非全局查找：execute_stream 的同步生成器整体跑在 SSE 心跳 daemon 线程
+        （core/sse.iter_with_heartbeat_async），ContextVar 不跨线程继承，深层挂载点
+        （tool/rag/llm）经 set_current_tracer 在本线程落地后才能被 current_tracer() 拿到。
+        编排子任务流不传（_tracer=None）⇒ 全部打点退化为 no-op。
         """
         attachments = attachments or []
+        # ★★ 2026-10-30（P0 缺口②）：**单请求墙钟预算**。
+        #   传 `deadline_ts`（绝对时间戳，`time.time()` 口径）而非"剩余秒数"：
+        #   剩余秒数每过一层都要重算，任一层忘了减就放大预算；绝对时间戳幂等。
+        #   为什么必须有它（《运行时评估》实测）：改前只有 `auto_continue_deadline_s`
+        #   （"自动续跑"的闸）与 `subtask_idle_timeout_s`（子任务级），**整轮无上限** ——
+        #   实测存在 run 跑到 918s（15 分钟）仍算正常返回，异常批次可无限占资源。
+        #   语义：到点**不是 kill**，是收尾并保留已产出（走既有 done/断点固化路径）。
+        _deadline_ts = float(deadline_ts or 0.0)
+        # ★ 同一份截止时间也挂到实例上，供**编排路径**读取。
+        #   为什么这里用实例属性而不是逐层加签名参数（与 `_tracer` 的做法不同）：
+        #     · `_tracer` 必须显式传，是因为它要**跨线程**（ContextVar 不继承）；
+        #       `_deadline_ts` 全程在同一 pipeline 实例内，不跨线程边界；
+        #     · 编排链路有 3 个调用点 + 2 层包装（`_stream_orchestrated_traced`
+        #       → `_stream_orchestrated_flow`），逐个加参数要改 5 处且每个都能漏；
+        #     · **每请求新建 pipeline**（`agent/__init__.py:get_pipeline`，已有门禁
+        #       `verify_pipeline_concurrency` 守 9/9），所以实例属性天然是请求私有的，
+        #       不存在并发串味。这是"实例字段"能安全用于请求级状态的**前提条件**。
+        #   ⚠️ 2026-10-30（门禁实测）：**赋值必须放在 `reset_request_state` 之后**。
+        #     清零函数的纪律是"早于本方法内任何 `self.X =`"，而这里先赋值再清零
+        #     ⇒ 刚设好的 deadline 会被自己抹掉（`verify_request_state_reset` A1 判红）。
+        #     现在顺序改为：算局部 → 清零 → 再落实例属性。
+        # ★ 2026-10-30：登记到**线程局部**，供 llm 层把每次调用的 timeout 压到剩余预算内。
+        #   为什么需要这一层（实测 conv 9771）：墙钟只在主循环边界判是不够的 ——
+        #   planner 的**单次** LLM 调用阻塞了 56.9s（span: unclosed_at_flush），
+        #   而 planner 在编排主循环之前 ⇒ 循环检查一次都没跑到，用户等了 61s。
+        #   线程局部而非 ContextVar：pipeline 生成器与 LLM 调用在**同一 daemon 线程**内，
+        #   不需要跨线程继承（`_tracer` 之所以显式传参，是因为它跨线程）。
+        try:
+            from core import runtime_state as _rs_dl
+            _rs_dl.set_thread_deadline(_deadline_ts)
+        except Exception:
+            pass
+        # ★ 2026-10-31：本轮临时推理参数覆盖 —— 与 deadline 同一登记点（同一 daemon 线程）。
+        #   必须在**这里**登记（生成器顶部），因为整个生成器体跑在 SSE daemon 线程内；
+        #   在路由层（async 主协程）登记会落在另一个线程 ⇒ LLM 层读不到。
+        try:
+            from core import runtime_state as _rs_ovr
+            _rs_ovr.set_llm_overrides(overrides)
+        except Exception:
+            pass
         # ★ 2026-11-13（#56）：**会话级附件继承** —— 附件是会话资源，不必每轮重传。
         #   实测根因（会话 9571）：用户 02:49 上传 doc 848，04:26/04:41 两轮追问
         #   「再次分析上传附件的内容」时请求里 **attachments=[]**
@@ -2999,6 +4296,19 @@ class StreamMixin:
         #   否则清零会抹掉本次请求刚设好的上下文。
         #   根因与实测证据见 `common.reset_request_state` 的 docstring。
         reset_request_state(self)
+        # ★ 2026-10-30：清零**之后**再落实例属性（顺序是硬约束，见上方「赋值必须放在
+        #   reset_request_state 之后」）。`_deadline_ts` 已登记进清零清单 ⇒
+        #   上一轮残留不会漏进本轮；本行再把本轮的值写回。
+        self._deadline_ts = _deadline_ts
+        # P0-b（M2）：把会话 tracer 落入**本线程** ContextVar —— 执行流跑在 SSE 心跳
+        # daemon 线程，入口线程 set 的值不继承；深层挂载点（M3 tool / M4 rag / M5 llm）
+        # 全部经 current_tracer() 取，取不到即 no-op（降级安全）。
+        if _tracer is not None:
+            try:
+                from services.orch_span import set_current_tracer as _set_ct
+                _set_ct(_tracer)
+            except Exception:
+                pass   # 观测装配失败绝不阻断主流程（不静默：span 缺失在 monitor 页可见）
         # 2026-09-29：user 消息在流开始即落库（原在流收尾与 assistant 一并 INSERT）。
         # 修「流式进行中库中 0 条消息 → 切页再切回，selectConv 渲染空态覆盖 #stream-ai 现场」；
         # 也顺带修复澄清路径（clarify_ask 提前 return）user 消息从未落库的缺口。
@@ -3053,22 +4363,71 @@ class StreamMixin:
         # 编排子任务会以 conversation_id=0 嵌套调用本方法 —— 此时**不重开** trace，沿用外层
         # （否则每颗子任务都会生成新 trace_id，整轮成本无法聚合）。
         try:
-            from core.audit import begin_trace, trace_context as _tctx_ex
+            from core.audit import begin_trace, bind_trace, trace_context as _tctx_ex
             _exist = _tctx_ex()
             _trace = begin_trace(conversation_id=int(conversation_id or 0)) \
                 if (conversation_id or not _exist.get("trace_id")) else _exist
         except Exception:
             _trace = {}
+        # ★ P0-3（2026-10-27）：把本轮 trace_id 落到实例上，供 `_log_tool_call` 写进
+        #   `tool_call_logs.trace_id`。**这是任务级追溯的 JOIN 键** ——
+        #   `llm_usage_stats` 早就按 trace_id 聚合，而工具调用日志此前只有
+        #   `run_id`（主对话路径恒 0，因为单 Agent 直行没有编排批次）⇒ 两套 id 不可 JOIN，
+        #   回答不了「这一轮对话调了哪些能力、花了多少钱」。
+        #   取值与 LLM 侧**同源**（同一个 `begin_trace` 产物，不是另造一个 id）。
+        self._tool_trace_id = str((_trace or {}).get("trace_id") or "")
+        # ★ 请求 3（2026-10-27）：单 Agent 直行路径的 run_id 归正。
+        #   此前 run_id 只由 `_stream_orchestrated_flow`（line 482）赋值 —— 那是编排批次号；
+        #   主对话（单 Agent 直行）从不赋值 `self._tool_run_ctx` ⇒ `_log_tool_call` 读到的恒 0
+        #   （走查 P0-3 记为"设计如此"）。但"设计如此"埋两雷：
+        #     ① 直行路径的工具调用无法按 run 归批（只能靠 trace_id，而 run_id / trace_id 是两套体系）；
+        #     ② 任何按 run_id 做统计/分组的看板都会把绝大部分流量（单 Agent 直行）漏掉 ⇒ 误导性空图。
+        #   彻底修法：把"一轮对话"明确定义为一个 run。编排路径已有 run（批次号），直行路径在此
+        #   就地分配一个 run_id（与编排同源的 TaskQueue.new_run_id），供 `_log_tool_call` 收口写入。
+        #   ⚠️ 仅顶层轮次分配：嵌套子 Agent（conversation_id=0，复用外层 trace）**不重分配**，
+        #   以免覆盖父编排已设的 run_id（见 _stream_orchestrated_flow:831 给 sub._tool_run_ctx 赋值）。
+        if conversation_id:
+            try:
+                from task_queue import TaskQueue
+                from database import db_conn as _dbc
+                with _dbc() as _c:
+                    self._tool_run_ctx = int(TaskQueue.new_run_id(_c) or 0)
+            except Exception:
+                self._tool_run_ctx = 0
+        else:
+            self._tool_run_ctx = 0
 
         self._mem_project_id_cache = None   # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
+        # ★ P0-4（2026-10-26）：RAG 侧记忆召回结果（单一真源用）。**每轮必须重置** ——
+        #   否则本轮未走检索时，会消费到**上一轮**的 memory_hits（跨轮串味）。
+        self._rag_memory_hits = []
         try:
             # V2.4 会话内执行过程持久化：累计思考/工具调用 → 写入 card_data.exec（前端历史消息还原）
             exec_reasoning = []
+            # ★ 2026-10-28（用户反馈「不用给出统一的思考过程的输出」）：
+            #   **系统进度提示与模型 CoT 分两条通道**。
+            #   此前 7 处系统提示（收到补充指令/判断需要调工具/工具结果弱相关/
+            #   重复调用收敛/写操作已记入/harness 持续工作）都 append 进 exec_reasoning
+            #   ⇒ 落库后前端统一渲染成一个大块「💭 思考过程」（06-cards.js:20），
+            #   用户看到的就是"一堆统一思考过程"，而不是归到对应执行环节。
+            #   现在：真 CoT 进 exec_reasoning（心智链），系统提示进 exec_notices（带 kind），
+            #   前端按 kind 收编到对应环节。
+            exec_notices = []
             exec_tools = []
             card_data = "{}"  # dry_run=True（编排子任务流式）不落库，done 事件仍引用 → 兜底空卡
+
             # 2026-09-29（用户五轮反馈4）：流式部分内容固化 —— llm_content 提前初始化（异常路径引用），
             # _orch_acc 收集编排路径的 token（直行路径已由 llm_content 承担）。
             llm_content = ""
+            # ★★ 2026-10-27（用户反馈「中途执行失败后之前输出的内容没有任何展示」）：
+            #   `_streamed_acc` = **本轮真的发给过用户的正文**，只增不减、跨自主续跑轮不复位。
+            #   为什么不复用 llm_content：`llm_content` 在半途会被两处**清空**
+            #     · 每轮续跑起点（`llm_content = ""`，续跑要干净起步）；
+            #     · 最终生成前收到补充指令时（`llm_content = ""`，强制按新指令重答）。
+            #   而这两处清空**之前**用户已经在屏幕上看到过内容；若失败只按 llm_content 固化，
+            #   那些内容照样蒸发（"第 2 轮失败"就是这种形态）。
+            #   ⚠️ 用单槽 list 是为了可变：except / GeneratorExit 分支在**闭包外**也要读到它。
+            _streamed_acc = [""]
             # ★ 2026-10-17（米爸「harness 持续工作」）：跨自主续跑轮的完整产出。早初始化是为了异常/断开路径（下方 except）引用不炸。
             _full_content = ""
             _orch_acc = []
@@ -3111,15 +4470,27 @@ class StreamMixin:
                 #   （workflows/nodes.py:88、planner.py:278、stream.py:267/536 分派子 Agent）
                 #   仍靠它直连指定 Agent；此处只改"用户入口"这条路径的优先级。
                 if forced_intent and forced_intent != team_intent:
-                    yield {"type": "reasoning", "delta": (
-                        f"（执行主体）已按你选择的主 Agent「{team_intent}」执行；"
-                        f"忽略外部传入的定向值 {forced_intent}")}
+                    # ★ 2026-10-28：补 kind=progress —— 这是**系统告知**不是模型思考。
+                    #   不带 kind 时前端走 procAddThinking（"AI 思考"框），
+                    #   用户根本看不到"为什么是这个执行主体"（用户反馈③的成因之一）。
+                    _subj_note = (f"（执行主体）已按你选择的主 Agent「{team_intent}」执行；"
+                                  f"忽略外部传入的定向值 {forced_intent}")
+                    exec_notices.append({"kind": "progress", "text": _subj_note})
+                    yield {"type": "progress", "delta": _subj_note, "kind": "progress"}
                     forced_intent = None
                 else:
                     forced_intent = team_intent
                 # ★ 2026-10-16 R1：把所选主 Agent **落到会话**，供后续任何未显式带 team 的
                 #   请求回读（澄清续答/换标签页/新接口忘传都不再静默掉回通用 Agent）。
                 self._save_main_agent(conversation_id, team_intent)
+                # ★ 2026-10-29：记下本轮主 Agent，供工具构建继承其平台能力（MCP/技能）。
+                #   事故依据（conv 9754）：主 Agent「智源对接agent」绑了 zhiyuan-dev-mcp（71 个工具），
+                #   但团队路由把请求定向给成员「工程建模方案设计Agent」（MCP 绑定数=0）
+                #   ⇒ `_build_tools_def("design")` 只取成员自己的绑定 ⇒ **71 个智源工具全部消失**
+                #   ⇒ 模型如实回答"当前工具清单无智源 MCP 查询工具，无法拉取工程数据"
+                #   ⇒ 全程空转，最终异常中断。用户选择了具备该能力的主 Agent，
+                #   能力却因"定向到成员"而丢失，这与选择意图直接冲突。
+                self._team_main_agent = team_intent or ""
             elif conversation_id and int(conversation_id) > 0:
                 # ★ 2026-10-16 R1：请求未带 team ⇒ 回读会话绑定。命中则按它执行并**明示**，
                 #   让"为什么是这个 Agent"始终可解释（不静默继承）。
@@ -3127,9 +4498,17 @@ class StreamMixin:
                 if _bound:
                     team_intent = _bound
                     forced_intent = forced_intent or _bound
-                    yield {"type": "reasoning", "delta": (
-                        f"（执行主体）本次未指定主 Agent，已按本会话绑定的「{_bound}」继续执行；"
-                        "如需更换，请在输入框上方重新选择主 Agent")}
+                    # ★ 2026-10-28（用户反馈③「我只是输入一段V2代码让AI校验，
+                    #   他自动读取了智源的工程数据」）：用户看到的"自动用智源"，
+                    #   真因是**本会话绑定的主 Agent 覆盖了意图**，而这条说明
+                    #   原来以纯 reasoning 形式发出去 ⇒ 落进"AI 思考"框，用户看不到。
+                    #   现在：① 走 progress 通道（界面可见）；② 进 exec_notices 落库；
+                    #   ③ 结构化写进意图识别 stage 的 exec_subject 字段（下一段代码）。
+                    _subj_note = (f"（执行主体）本次未指定主 Agent，已按本会话绑定的"
+                                  f"「{_bound}」继续执行；如需更换，请在输入框上方重新选择主 Agent")
+                    exec_notices.append({"kind": "progress", "text": _subj_note})
+                    self._exec_subject_note = _subj_note
+                    yield {"type": "progress", "delta": _subj_note, "kind": "progress"}
             # ── 阶段 1：意图识别（V2.7：无论是否指定智能体，一律执行识别——
             # 指定智能体只作"执行 Agent 定向"，不再跳过识别；目标/槽位/澄清/多意图都依赖识别结果）──
             yield {"type": "stage", "name": "意图识别", "status": "run"}
@@ -3153,20 +4532,24 @@ class StreamMixin:
             # 取舍：显式选择优先（用户选了团队就该按团队走），但差异必须可见——否则
             # 「识别到 A、实际跑 B」用户永远发现不了（会话 351 卡片的 confidence=0 即此形态：
             # 既无置信度、也无任何"为何是该意图"的说明）。
+            # P0 和解（2026-10-23 米爸反馈"意图识别与推荐不一致，感觉很不好"）：
+            # 不再把系统内部的两裁判分歧用技术措辞推给用户（"两者不一致，
+            # 如非所愿请去掉团队/Agent 指定后重发"——读起来像在怪用户）。
+            # 显式选择本就优先（行为不变），识别意见降级为一句中性备注，
+            # 分歧细节照常进 meta/日志（可观测不减）。
             if forced_intent and _detected and forced_intent != _detected:
                 yield {"type": "reasoning", "delta": (
-                    f"（意图定向）已按显式选择执行：{forced_intent}；语义识别结果为 {_detected}，"
-                    "两者不一致，如非所愿请去掉团队/Agent 指定后重发")}
+                    f"已按你选择的「{forced_intent}」执行"
+                    + (f"（识别意见：{_detected}，仅供编排参考）" if _detected != "chat" else ""))}
             # Task 11 多意图增强（可选项）：多阶段指令 → 附加 multi_intent 序列事件（供前端展示/编排衔接）
             _multi_intent = self.router.detect_multi(user_input)
             # 2026-09-25：阶段序约束**带上每个阶段在说什么**（`{意图}（原句）`）。
             # 修前只传意图名序列（如 "requirement_analysis → design"），planner 只能知道"要哪些阶段"，
             # 不知道各阶段具体干什么（用户原句里的对象/范围全丢了）→ 生成的子任务描述容易泛化。
-            # tasks 为空时回落到 sequence（保持旧行为，不因新字段缺失而退化）。
-            _stage_hint = None
-            if _multi_intent:
-                _stage_hint = [f"{t['intent']}（{t['text']}）" for t in (_multi_intent.get("tasks") or [])] \
-                              or _multi_intent["sequence"]
+            # ★ 2026-10-29：拼法抽到 `OrchestrMixin._build_stage_hint`，本处**不再自拼** ——
+            #   此前流式与非流式各写一套（非流式干脆没有），正是"两套 prompt 漂移"的老形态。
+            #   现在两条路径共用同一个纯函数，结构上不可能再漂。空 ⇒ None（不加段落）。
+            _stage_hint = self._build_stage_hint(_multi_intent) or None
             if _multi_intent:
                 yield {"type": "multi_intent", "sequence": _multi_intent["sequence"],
                        "raw_subtasks": _multi_intent["raw_subtasks"]}
@@ -3182,7 +4565,12 @@ class StreamMixin:
                     # 明确提示不支持 —— 必须带能力清单与出路，不返回死胡同
                     _msg = self._team_unsupported_message(team_def,
                                                           (team_decision or {}).get("reason"))
-                    yield {"type": "reasoning", "delta": f"（团队路由）{_msg}"}
+                    # ★ 2026-11-04（门禁盘点）：本处是**漏拆**——文案以「（团队路由）」开头
+                    #   是系统提示，却仍发 reasoning 且不带 kind ⇒ S2（零残留）漏掉它、
+                    #   S3a（带指纹必须是 progress）抓到它。这是"两条判据互补"的实例：
+                    #   只守 S2 会漏掉"没写 kind 的系统提示"。
+                    yield {"type": "progress", "kind": "progress",
+                           "delta": f"（团队路由）{_msg}"}
                     yield {"type": "stage", "name": "团队路由", "status": "skip",
                            "reason": (team_decision or {}).get("reason")}
                     yield {"type": "done", "data": {
@@ -3190,25 +4578,78 @@ class StreamMixin:
                         "team_decision": team_decision,
                         "content": _msg, "message_id": 0}}
                     return
+                # ★ 2026-10-29：多阶段段数（团队 direct 分支要用；提到分支外只为让 H4 断言
+                #   「`elif _act ==` 出现在 team_forced 之前」的字面判据继续成立——断言按字面
+                #   锚 `elif _act ==`，写成 `elif (_act == ...` 会让它认不出这一支而误判）。
+                _multi_stages = len(((_multi_intent or {}).get("sequence") or []))
                 if _act == "chat":
                     # 短噪声/问候：走通用直答，不编排、不定向团队成员
                     intent = "chat"
                     forced_intent = None
                     team_direct = True
+                    # ★ 2026-10-29：记下「本轮执行主体是团队路由改写的」——
+                    #   否则 exec_subject.source 只能靠"team 非空"判成 manual，
+                    #   变成"用户手动选了 chat/成员"的错误归因（实测 conv 9754）。
+                    self._team_routed_to = "chat"
+                elif _act == "direct" and (team_decision or {}).get("target") and _multi_stages >= 2:
+                    # ★★ 2026-10-29（用户问「是否支持多意图」实测发现的断链）：
+                    #   多阶段输入在**团队模式下会被 direct 截断**——只执行一个成员，其余阶段全丢。
+                    #   证据（同一句真实请求「分析工程数据 → 生成 IBD 视图 → 完成内容校验」）：
+                    #     · detect_multi → 2 段 [design, review]
+                    #     · 非团队模式 `_needs_orchestration(multi=...)` → **True**（会编排）
+                    #     · 团队 direct 后 `_needs_orchestration(forced_intent='design')` → **False**
+                    #       （`forced_intent` 短路 + `team_direct` 短路，两道门同时关）
+                    #   ⇒ 用户写了三个阶段，实际只有一个成员在跑 —— 多意图能力等于不存在。
+                    #   现在：direct 且识别出 ≥2 阶段 ⇒ 交给**主 Agent 编排**（不是放弃团队模式，
+                    #   而是从"定向单个成员"升级为"主 Agent 分派多成员"，这才是团队该有的形态）。
+                    #   ⚠️ 不设 team_direct / 不设 forced_intent：两者都会把编排路径关掉。
+                    team_forced = True
+                    _seq = (_multi_intent or {}).get("sequence") or []
+                    _subj_note = (
+                        f"（团队路由）本轮识别到 {_multi_stages} 个阶段"
+                        f"（{' → '.join(str(x) for x in _seq)}），"
+                        f"已由主 Agent「{team_intent}」编排分派"
+                        f"（否则只会执行成员「{team_decision['target']}」，其余阶段丢失）")
+                    exec_notices.append({"kind": "progress", "text": _subj_note})
+                    yield {"type": "progress", "delta": _subj_note, "kind": "progress"}
+                    self._exec_subject_note = _subj_note
                 elif _act == "direct" and (team_decision or {}).get("target"):
                     # 定向到团队内最相近/命中的成员直行（仍不编排）
                     intent = team_decision["target"]
                     forced_intent = intent
                     team_direct = True
+                    # ★★ 2026-10-29（实测 conv 9751：绑定与执行不一致却无任何说明）：
+                    #   该会话 `conversations.main_agent='智源对接agent'`，实际执行的是
+                    #   「知识问答Agent」（intent=knowledge_qa），而落库的
+                    #   `exec.notices` 是 **null** ⇒ 刷新后完全看不出"为什么换了 Agent"。
+                    #   根因：下面两处只 `yield reasoning`，**没有 append 到 exec_notices**，
+                    #   而 reasoning 在历史还原里是一条"AI 思考"文本，不是结构化说明。
+                    #   本仓已为此付出过一次学费（2026-10-28 同类问题：执行主体说明
+                    #   原来以纯 reasoning 发出 ⇒ 落进"AI 思考"框，用户看不到）。
+                    #   修法：同一条文案**同时**进 exec_notices（落库可见）。
                     if _detected and _detected != intent:
-                        yield {"type": "reasoning", "delta": (
-                            f"（团队路由）已定向到团队成员「{team_decision['target']}」"
-                            f"（{team_decision.get('reason') or ''}）；"
-                            f"意图识别结果为 {_detected}")}
+                        _subj_note = (f"（团队路由）主 Agent「{team_intent}」将本次请求定向给成员"
+                                      f"「{team_decision['target']}」"
+                                      f"（{team_decision.get('reason') or ''}）；"
+                                      f"意图识别结果为 {_detected}")
                     else:
-                        yield {"type": "reasoning", "delta": (
-                            f"（团队路由）已定向到团队成员「{team_decision['target']}」"
-                            f"（{team_decision.get('reason') or ''}）")}
+                        _subj_note = (f"（团队路由）主 Agent「{team_intent}」将本次请求定向给成员"
+                                      f"「{team_decision['target']}」"
+                                      f"（{team_decision.get('reason') or ''}）")
+                    exec_notices.append({"kind": "progress", "text": _subj_note})
+                    yield {"type": "progress", "delta": _subj_note, "kind": "progress"}
+                    # ★★ 2026-10-29（用户问「工程建模方案设计agent 不是主 agent，为啥会匹配到他」）：
+                    #   真因就是**这里**——主 Agent「智源对接agent」(main, 12 名成员) 作为团队负责人，
+                    #   因意图识别结果 `design` 命中其成员（team_router C4 分支：命中成员直接采纳），
+                    #   把本轮**定向给成员 design 直行** ⇒ 下游 `agent_def = registry.get("design")`
+                    #   ⇒ 执行主体显示为「工程建模方案设计Agent」。
+                    #   旧代码的两个缺陷让这条链路**完全不可见**：
+                    #     ① `exec_subject.source` 只用 `"manual" if team` 判定 ⇒ 明明是你选了主 Agent、
+                    #        系统内部定向，却被标成「你手动选择」（连排查者都会被误导，实测本轮即如此）；
+                    #     ② 说明只进 `exec_notices`（历史还原才看得到），`exec_subject.note` 恒为空。
+                    #   现在：source 用独立取值 `team_route`，note 带上主 Agent → 成员的完整说明。
+                    self._team_routed_to = intent
+                    self._exec_subject_note = _subj_note
                 elif _act == "orchestrate":
                     team_forced = True
                 else:
@@ -3226,7 +4667,34 @@ class StreamMixin:
             else:
                 agent_def = self.registry.get(intent)
             hil_level = agent_def.hil_level
+            # ★ 2026-10-28（写前确认 HITL）修断链①：**stream 路径从不把 hil_level 赋给 self**
+            #   ⇒ `common.py:644` 每请求清成 None 后无人再写 ⇒
+            #   `getattr(self,"_hil_level","L0") == "L2"` **恒 False** ⇒ L2 闸永不触发。
+            #   （真库实证：agents 表里唯一 L2 的 model_release 从未被强制过。）
+            #   现在赋上：统一闸用它作**下限**（只收紧不放宽，见 hil_policy.escalate），
+            #   动作级档位仍由策略表决定（行业依据 Suntec：不要给 agent 整体分等级，
+            #   要给每个动作分等级 —— agent 级只能当"地板"，不能当唯一判据）。
+            self._hil_level = hil_level
             effective_provider = provider_id or self.registry.get_provider_id(intent)  # 优化2
+            # ★★ 2026-11-01（米爸）：会话设置是「**会话 + 模型**」维度 ——
+            #   必须在确定 effective_provider 之后才读，否则读错模型桶。
+            #   合并：会话设置 → 单轮临时（后者更高）。与 execute 同口径。
+            try:
+                _sess_ov = {}
+                if conversation_id:
+                    from database import db_conn as _db_conn_ov
+                    with _db_conn_ov() as _c_ov:
+                        from repositories.conversation_repo import ConversationRepo as _CR
+                        _sess_ov = _CR(_c_ov).get_llm_overrides(int(conversation_id),
+                                                                effective_provider) or {}
+                _merged_ov = dict(_sess_ov)
+                _merged_ov.update(overrides or {})
+                if _merged_ov:
+                    from core import runtime_state as _rs_ovr2
+                    _rs_ovr2.set_llm_overrides(_merged_ov)
+                self._llm_overrides_effective = _merged_ov
+            except Exception:
+                _merged_ov = dict(overrides or {})
             # ★ P1-b（2026-10-10）Agent 级模型参数（含 thinking_mode）——
             #   `agents.model_params` 此前是**死配置**（有列、有前端表单，无消费点）。
             #   取一次供本方法所有 chat 调用复用；取不到一律 {} ⇒ 零行为漂移。
@@ -3234,6 +4702,14 @@ class StreamMixin:
                 _agent_mp = self.registry.get_model_params(intent)
             except Exception:
                 _agent_mp = {}
+            # ★ 会话⊕单轮 的思考强度并入（同名键覆盖 Agent 级）——与 execute 同口径
+            try:
+                _ovr_lv = str((_merged_ov or {}).get("thinking_level") or "").strip()
+                if _ovr_lv:
+                    _agent_mp = dict(_agent_mp or {})
+                    _agent_mp["thinking_level"] = _ovr_lv
+            except Exception:
+                pass
             # ── P0-2 断点续跑（2026-10-03）：resume 绕过"意图识别之后的一切前置判定" ──────
             # 为什么必须在这里插队：内容级澄清（`_clarify_detect`）、复杂度判定（`_needs_orchestration`）、
             # 沉淀流程复用（`_try_reuse_planner_flow`）都是**启发式**的。续跑时用户可能一句话都不输入，
@@ -3309,15 +4785,54 @@ class StreamMixin:
                 pass
             if _multi_intent:
                 _intent_meta["multi_intent"] = _multi_intent["sequence"]
+            # ★ 2026-10-27（用户："意图识别环节总是匹配到具体的 agent，不能提供更好理解的内容吗"）：
+            #   stage 事件里原本只带 `agent`（内部实现名），用户看到的是 `→ 智源对接agent（HIL 2）`——
+            #   那是"我们把它路由给了谁"，不是"我们理解成什么"。这里补一份**人能读懂的意图理解**
+            #   （goal/need/basis/missing），前端折叠态显示「理解：…」，展开可看判据与待确认点。
+            #   ⚠️ 位置纪律：必须在 `slots` 算完之后（goal 直接复用 task_decompose 的结果，零额外调用）。
+            _brief = None
+            try:
+                from core import config as _cfg_brief
+                if bool(_cfg_brief.get("intent", "brief_enabled", True)):
+                    from agent import intent_brief as _ib
+                    _brief = _ib.build(
+                        user_input, intent=intent, agent_name=agent_def.name,
+                        slots=slots, meta=_intent_meta,
+                        label=getattr(self, "_INTENT_LABEL", {}).get(intent, ""))
+            except Exception:
+                _brief = None      # 摘要只是可读性增强，任何异常都不得影响主流程
+            # 挂到实例上：落库（阶段 4 的 card_data.exec）与后续卡片组装都要用，
+            #   而那段代码离这里 1500 行 —— 用实例属性比依赖局部变量跨段存活更可靠。
+            self._last_intent_brief = _brief
+            # ★ 2026-10-28（用户反馈③）：把「执行主体从哪来」**结构化**下发。
+            #   背景：会话若绑定过主 Agent，它会覆盖意图路由（R1 决策），
+            #   但此前只在 reasoning 里说一句（还掉进"AI 思考"框看不见）⇒
+            #   用户看到"我只是让校验代码，怎么用上智源了"。
+            #   现在前端可在「意图识别」这一行直接显示：本轮主体 + 来源（路由/会话绑定/手动选择）。
+            _exec_subject = {
+                "name": agent_def.name,
+                # ★ 2026-10-29：新增 `team_route` —— 本轮执行主体是**主 Agent 在团队内定向**的结果。
+                #   旧实现只有 manual/bound/route 三档，且 manual 的判据是"请求带了 team"
+                #   ⇒ 用户选了主 Agent、系统定向到成员时被误标成"你手动选择"（conv 9754 实测）。
+                "source": ("team_route" if getattr(self, "_team_routed_to", "") else
+                           ("manual" if team else
+                            ("bound" if getattr(self, "_exec_subject_note", "") else "route"))),
+                "note": getattr(self, "_exec_subject_note", "") or "",
+                # 主 Agent（团队负责人）：team_route 时前端可显示"经由 X 定向"
+                "main_agent": (team_intent or "") if getattr(self, "_team_routed_to", "") else "",
+            }
             yield {"type": "stage", "name": "意图识别", "status": "done", "intent": intent,
                    "agent": agent_def.name, "hil_level": hil_level,
-                   "route": _intent_meta["route"], "confidence": _intent_meta["confidence"]}
+                   "route": _intent_meta["route"], "confidence": _intent_meta["confidence"],
+                   "brief": _brief,
+                   "exec_subject": _exec_subject}
             # P0-1 置信度三级决策：中置信（弱语义/继承/LLM<0.85）→ 澄清提示（不阻塞执行，供前端改选重发）
             # V2.7：指定智能体时同样给出提示（识别结果与执行 Agent 不一致时如实说明）
             if _intent_meta["needs_clarification"]:
                 yield {"type": "clarify", "intent": intent, "confidence": _intent_meta["confidence"],
                        "route": _intent_meta["route"], "message": str(user_input),
                        "detected": _detected if forced_intent and _detected != intent else None,
+                       "brief": _brief,
                        "candidates": self._clarify_candidates(intent)}
             # ── 承接轮判定（2026-10-17 米爸反馈，实证会话 9446）──
             #  上一轮走过 澄清→作答（answered 卡存在）且本轮是短输入 ⇒ 用户在回应
@@ -3546,6 +5061,10 @@ class StreamMixin:
                              "chunk_hits": [], "attachment_hits": [], "attachment_used": False,
                              "graph_count": 0, "vector_count": 0,
                              "memory_hits": [], "memory_count": 0}
+            # ★ P0-4（2026-10-26）：把 RAG 侧已召回的 memory_hits 挂到 pipeline 实例，
+            #   供 `_build_memory_hint` 消费（**单一真源**：记忆 recall 层不再二次查库）。
+            #   必须在 `_build_context` 之前赋值 —— 两者消费同一份召回结果。
+            self._rag_memory_hits = retrieval.get("memory_hits") or []
             if should_retrieve:
                 context_text = self._build_context(retrieval, retrieve_query)
                 if req_scope and req_scope.get('ok'):
@@ -3589,19 +5108,60 @@ class StreamMixin:
                     f"{len(_kbw.get('missing') or [])} 篇不存在，已自动剔除"
                     + ("；因全部失效，本次已暂放宽为不限文档" if _kbw.get("unfiltered") else "")
                     + "。建议到「能力中心 → Agent 管理」核对该 Agent 的知识库范围配置")}
+            # ★ 2026-10-27（真机 E2E 暴露）：**技能预匹配**必须发生在此处（reasoning/skill 事件之前）。
+            #   旧顺序：skill 事件 yield（旧 4165~4172）→ `build_prompt_blocks`（旧 4254）才调
+            #   `_build_skill_prompt` ⇒ `_last_skill_hits` 恒为空 ⇒ 前端「🧩 技能执行」卡永远空白。
+            #   修法：**提前算一次 + 缓存复用**（`_build_skill_prompt` 内置本轮缓存）——
+            #   随后 `build_prompt_blocks` 命中同一缓存 ⇒ 不重复匹配、不重复 offload
+            #   （offload 会写 `skill_body_offloads` 表，重复做会留垃圾行）。
+            #   ⚠️ 只算一次是硬要求：匹配里含 LLM 兜底（`_llm_pick_skills`），算两次 = 多烧一次 LLM。
+            #
+            # ★ 状态起点（`reset_skill_state`）**同步前移到此处**：
+            #   它必须早于预匹配，否则 `_skill_forced` 还是上一轮的值 ⇒
+            #   ① 缓存键错（`_skill_forced` 参与键）⇒ 复用失效 ⇒ 匹配算两次；
+            #   ② `_skill_allowed_tools` 被 reset 清零 ⇒ 预匹配并出的白名单丢失。
+            #   前移安全性：它只重置两个实例属性（`_skill_forced` / `_skill_allowed_tools`），
+            #   且本函数内 3619~4165 之间无任何依赖这两个属性的逻辑（已核）。
+            reset_skill_state(self, skill_name)
+            try:
+                self._build_skill_prompt(intent, user_input, user)
+            except Exception:
+                pass
             # 思考过程：检索决策 + 自动触发技能（真实执行信息，普通模型不流 reasoning 时也可见）
             if should_retrieve:
                 route = retrieval.get("route", "none")
-                _r_delta = (f"（{agent_def.name}）完成知识检索：图谱 {retrieval['graph_count']} 条 / "
-                            f"向量 {retrieval['vector_count']} 条（路由 {route}），将基于检索到的互联数据组织回答。")
+                # ★★ 2026-10-29（实测 conv 9751：检索 0 条却声称"基于检索到的互联数据"）：
+                #   原实现**无条件**写"将基于检索到的互联数据组织回答"，
+                #   而实测那一轮 graph_count=0 / vector_count=0 / citations=0 ——
+                #   模型其实**没有任何检索依据**，纯靠参数知识作答。
+                #   这与本仓反复强调的「不得虚构」「没检出 ≠ 检查过且无问题」直接冲突：
+                #   用户看到这句话会以为回答有知识库支撑，实际是模型自由发挥
+                #   （citations 为空时前端也无从纠正）。
+                #   修法：按**实际命中数**分支措辞，零命中时明确说"无检索依据"。
+                _g = int(retrieval.get("graph_count") or 0)
+                _v = int(retrieval.get("vector_count") or 0)
+                if _g + _v > 0:
+                    _r_delta = (f"（{agent_def.name}）完成知识检索：图谱 {_g} 条 / "
+                                f"向量 {_v} 条（路由 {route}），将基于检索到的互联数据组织回答。")
+                else:
+                    _r_delta = (f"（{agent_def.name}）已执行知识检索，但**未命中任何条目**"
+                                f"（图谱 0 条 / 向量 0 条，路由 {route}）"
+                                f"——本轮回答**无检索依据**，由模型基于自身知识生成，"
+                                f"请以规范原文为准。")
             else:
                 _r_delta = (f"（{agent_def.name}）本次未触发知识检索（纯问答/无 # 标签），直接基于专业知识与上传资料生成回答。")
             if self._last_skill_hits:
                 _r_delta += f" 自动触发技能：{'、'.join(self._last_skill_hits)}。"
                 # V2.5：技能执行环节独立事件（前端「🧩 技能执行」卡，命中技能与触发说明可见）
                 # ★ 2026-11-11 补层级字段（depth/agent/mcp），供前端三级展示归组。
+                # ⚠️ 2026-10-27 真机 E2E 暴露：此处**不能**引用 `_ctx_agent` ——
+                #   它在后面的工具循环段才定义（同一文件另一处 skill 事件已注明此坑）。
+                #   本分支此前**从未被执行过**（`_last_skill_hits` 恒空 ⇒ 整块跳过），
+                #   所以这个前向引用一直潜伏着；预匹配修好后才暴露 ⇒
+                #   直接报 `cannot access local variable '_ctx_agent'`。
+                #   与同文件另一处保持一致：直接取 `agent_def.name`（值等价，无耦合）。
                 yield {"type": "skill", "status": "done", "names": list(self._last_skill_hits),
-                       "agent": _ctx_agent, "depth": 1,
+                       "agent": (agent_def.name or "-"), "depth": 1,
                        "mcp": None,
                        "note": "技能指令已注入生成阶段（触发词命中，指导本回答的组织方式与工具白名单）"}
             exec_reasoning.append(_r_delta)
@@ -3632,12 +5192,43 @@ class StreamMixin:
             #   在 1656 行就要读它取会话 id ⇒ 永远读到**上一轮**的值。
             #   后果：长 skill 正文的 offload 挂错会话，`skill_body_fetch` 取回时 id 对不上
             #   ⇒ 多轮/多会话连续调用时产出互相串扰（实测两个视图产出 md5 完全相同）。
-            self._tool_conv_ctx = conversation_id
+            # ★ 2026-10-30：会话级能力归属用 session_conv_id（子任务传父会话），
+            #   消息落库仍用 conversation_id（子任务=0，语义不变）。
+            #   ⚠️ 这个值必须**在装配前定一次**，后续（工具留痕、技能反馈、HIL、写入闸）
+            #   一律引用 `_sess_conv`，不要再各处写 `int(conversation_id or 0)` ——
+            #   本轮就是这么漏掉技能反馈的：`tool_call_logs` 已归属父会话，
+            #   而 `_record_skill_feedback` 仍用 0 ⇒ 技能行落在 conv=0（实测 2 行）。
+            _sess_conv = int(session_conv_id or conversation_id or 0)
+            self._tool_conv_ctx = _sess_conv
+            # ★ 2026-10-27（会话 9629）：**异步任务跨轮续跑必须发生在 prompt 组装之前**。
+            #   ⚠️ 踩过的坑（本轮实测）：最初把它写在 ReAct 循环起点（messages 组装之后），
+            #   结果 `_async_notes` 要么还没算出来、要么被下一轮的初始化清空，
+            #   注入到 system prompt 的永远是空列表 ⇒ 模型完全不知道"上次的导出已经跑完"，
+            #   于是照样从零 PREVIEW/EXPORT（探针实测：仍重新提交了一次导出）。
+            #   顺序铁律：先跑续跑 → 再拼 prompt → 再进循环。
+            self._tool_sysml_docs = []
+            self._tool_sysml_docs_seen = set()
+            self._tool_doc_pages = {}
+            self._async_notes = []
+            try:
+                from agent import async_jobs as _aj0
+                _ajr0 = _aj0.resume_jobs(self, conversation_id)
+                self._async_notes = list(_ajr0.get("notes") or [])
+                for _d0 in (_ajr0.get("docs") or []):
+                    _dk0 = _d0["text"][:200]
+                    if _dk0 not in self._tool_sysml_docs_seen:
+                        self._tool_sysml_docs_seen.add(_dk0)
+                        self._tool_sysml_docs.append(_d0)
+            except Exception:
+                self._async_notes = []
             # P1-29（2026-10-02）：状态起点统一 —— 此前本路径**不设** `_skill_forced`，
             # 导致「显式指定技能」的白名单授权在对话主路径上不生效（`skills.py:153/163`
             # 会按"未强制"重置并只并集*自动命中*技能的白名单）；且 `_skill_allowed_tools`
             # 无每轮清零，全局单例下会跨轮残留。
-            reset_skill_state(self, skill_name)
+            # ★ 2026-10-27：`reset_skill_state(self, skill_name)` 已**前移**到本文件
+            #   「技能预匹配」处（reasoning 之前）—— 若在此再调一次，会把预匹配并出的
+            #   `_skill_allowed_tools` 清零 ⇒ 白名单丢失 ⇒ 命中技能的独占式白名单失效。
+            #   （`reset_skill_state` 的语义是"每轮状态起点"，前移后位置更正确。）
             if skill_name:
                 # P1-29：读取入口统一为 `load_forced_skill`（StudioRepo `SELECT *` 含
                 # references/examples/scripts/allowed_tools）。此前本处用只查 3 列的裸 SQL
@@ -3684,6 +5275,34 @@ class StreamMixin:
                 hist = self._load_history(conversation_id, cur_input=user_input)
                 if hist:
                     messages = [messages[0]] + hist + messages[1:]
+            # ★ 2026-10-27（会话 9629）：把「系统托管的异步任务」事实注入 system prompt。
+            #   为什么必须注入而不是靠历史对话：实测模型**每轮都从零重来**
+            #   （重查工程→分支→版本→PREVIEW→EXPORT），把整轮预算耗在重复劳动上，
+            #   而它真正该做的是"接着上次那个 taskId 往下走"。历史里虽有 taskId，
+            #   但模型不会主动把它当现场；系统陈述一句话，就等于给了它确定的现场。
+            #   注意：这些是**系统实测事实**（DB + 真 STATUS 调用），不是模型推断。
+            if getattr(self, "_async_notes", None):
+                messages[0]["content"] += (
+                    "\n\n【系统·异步任务现场（实测，非推断）】\n"
+                    + "\n".join("- " + str(n) for n in self._async_notes)
+                    + "\n以上结论来自系统对任务状态的真实查询，请以此为准；"
+                      "不要凭记忆或推断宣称「已归档/已存入产物库」。")
+            # ★ 2026-10-27（用户质疑"前面已确定工程，是不是上下文遗漏了"——实测确认会丢）：
+            #   把**会话级坐标**（工程/分支/版本/目标元素）作为独立块注入，与历史消息解耦。
+            #   为什么不能靠历史：`_load_history` 只取当前话题最近 8 条 + 3000 字符预算，
+            #   用户"基于这个工程 XXX"这类**锚点句**一旦滑出窗口就永久丢失（只能靠语义回捞，
+            #   而当前 embedding 404 降级 bigram，召回不可靠）。conv 9629 就是实例：
+            #   msg 4869 定工程 → msg 4899 提问，相隔 17 条，锚点已在窗口外。
+            try:
+                from agent import conv_anchors as _ca2
+                from database import db_conn as _cadb2
+                with _cadb2() as _cac2:
+                    _anc = _ca2.load_anchors(_cac2, conversation_id)
+                _ab = _ca2.render_block(_anc)
+                if _ab:
+                    messages[0]["content"] += _ab
+            except Exception:
+                pass
             # 2026-09-29（用户五轮反馈1）：续作短语（重试/继续）→ 显式续作指令。
             #  此前 AI 表现为"不知道之前的内容"：carry 词表没有"重试"→ 话题切新段，
             #  当前话题原文只剩两字；且被终止那轮的产出未落库（尾部 except 现已固化）。
@@ -3725,7 +5344,7 @@ class StreamMixin:
             # `_tool_conv_ctx` 已在 prompt 装配**之前**设好（见上方注释：原在此处赋值太晚，
             # 导致技能 offload 读到上一轮会话 id）—— 此处保留一次幂等赋值以防
             # 未来有人在中间插入分支时依赖它。
-            self._tool_conv_ctx = conversation_id
+            self._tool_conv_ctx = int(session_conv_id or conversation_id or 0)
             # P0-6（2026-10-06）：透传当前用户给工具链权限闸（与 execute.py 同口径）。
             # stream 是**生产主路径**（execute 是冷路径），权限闸必须在这里也生效，
             # 否则「生产走 stream、自检走 execute」会给出虚假的安全结论。
@@ -3743,17 +5362,23 @@ class StreamMixin:
             _auto_continues = 0
             _ac_cfg = self._auto_continue_cfg()
             _ac_seen_steps = []
+            # ★ 2026-10-28：澄清延后计数（见评估点"待办未做完时先别问人"）。
+            #   `_clarify_defer_n` 上限 2 次、`_clarify_defer_rem` 记上次剩余项数
+            #   （要求确实在减少才允许继续延后，否则照常转卡）。
+            _clarify_defer_n = 0
+            _clarify_defer_rem = None
             # ★ 2026-10-17（米爸反馈4）：工具结果里取回的完整 SysML 文档暂存。
-            #   智源导出→读取链路的全文在工具结果 JSON 信封里、AI 正文只有分析，
-            #   persist 时由 _archive_artifacts 第 5 节登记进产物库（实测 24688 字节
-            #   导出全文漏归档、AI 又无写入通道的根因修复）。
-            self._tool_sysml_docs = []
-            self._tool_sysml_docs_seen = set()
+            #   ⚠️ 2026-10-27 起**初始化已前移到 prompt 组装之前**（与异步续跑一起），
+            #   这里不再重复置空 —— 否则会把刚续跑取回的文档清掉（本轮实测踩过）。
             _ac_deadline = ((time.time() + _ac_cfg["deadline_s"])
                             if (_ac_cfg["enabled"] and _ac_cfg["deadline_s"] > 0) else None)
             _tools_def_full = tools_def   # 每轮续跑恢复完整工具集（offload 注入/预算闸会改它）
             tool_injected = False
             llm_content = ""
+            # ★ 2026-10-27：**连续重复调用**计数（跨 ReAct 轮累计、真执行即归零）。
+            #   用于"重复调用收敛闸"，见 round 末尾 `_dup_streak >= 2` 处注释。
+            #   初值必须在**外层循环之外**：跨轮累计才有意义（每轮归零就永远打不到 2）。
+            _dup_streak = 0
             # P0-2：多轮 ReAct——探测→执行工具→观察回填→再探测，直到无 tool_calls 或达上限（防死循环）
             # ★ 2026-10-09：3 → 6 且可配置，**与 execute.py 同源同值**。
             #   实测依据见 execute.py 同位置注释：3 轮预算在
@@ -3778,10 +5403,27 @@ class StreamMixin:
             except Exception:
                 max_tool_rounds, max_failed_rounds = 100, 3
                 _lg_budget, _lg_retries, _lg_retry_wait = 300000, 3, 30.0
+            # ★ 2026-11-02（全链路实测发现的无进展循环）：**结果侧**进度护闸。
+            #   与上面的 `_lg`（参数侧去重 + 预算）互补：`_lg` 按 `工具|参数` 精确计数，
+            #   模型同义改写 query 即失效（实测 86 次调用参数几乎全不同）；
+            #   本护闸看"结果还有没有新增内容"，与问法无关。
+            #   tracker 生命周期 = 本函数一次调用 = 一个子任务/一轮主 Agent ⇒ 不会跨任务串味。
+            _pg, _pg_stop, _pg_reason = None, False, ""
+            try:
+                from core import config as _cfg_pg
+                if bool(_cfg_pg.get("agent", "progress_guard_enabled", True)):
+                    from agent.loop_progress import ProgressTracker as _PT
+                    _pg = _PT(
+                        novelty_min=float(_cfg_pg.get("agent", "progress_novelty_min", 0.05) or 0.05),
+                        streak_stop=int(_cfg_pg.get("agent", "progress_streak_stop", 4) or 4),
+                        hard_cap=int(_cfg_pg.get("agent", "progress_hard_cap_per_tool", 30) or 30))
+            except Exception:
+                _pg = None
             # 2026-10-04：接入统一护栏（与 execute.py 的非流式 loop **同源**）。
             # 为什么必须同源：这两段是同一套 ReAct 语义的两种实现，此前只有编排路径
             # 有 token 预算，重复检测与工具超时两边都没有 ⇒ 补一边就会留下新的不对称。
-            from agent.loop_guard import LoopGuard as _LoopGuard, tokens_of as _tok_of
+            from agent.loop_guard import (LoopGuard as _LoopGuard,
+                                          is_correctable_failure as _is_correctable_failure)
             # P0-①/P0-②（2026-10-07）协议护栏：并行 tool_calls 配对 + 截断参数拒绝。
             # 与 execute.py **同源**（同一模块）—— 两条路径是同一套 ReAct 语义的两种实现，
             # 协议层缺陷漏一条路径就是线上 HTTP 400（同 loop_guard 立规时的判断）。
@@ -3789,6 +5431,23 @@ class StreamMixin:
             _lg = _LoopGuard(token_budget=_lg_budget, tool_timeout_s=120.0,
                              max_failed_rounds=max_failed_rounds, tool_retries=_lg_retries,
                              retry_timeout_s=_lg_retry_wait)
+            # ★ 2026-10-27（真机 E2E，conv 9698）：本轮**已成功执行的写操作**清单。
+            #   放在 while **外**（跨自主续跑轮累积）—— 写操作一旦执行成功就**一直成立**，
+            #   不该因为进入下一续跑轮而被"忘掉"（那正是模型误判「尚未写入」的成因之一）。
+            _write_ops = []
+            # ★ 2026-10-28（写前确认 HITL）：本轮是否命中"写前确认闸"。
+            #   形状刻意对齐 `clarify_required`（`_clarify_req`）⇒ ReAct 循环与外层收口
+            #   用**同一套**中断协议（检出即 break → 发事件 → 落挂起 → 等人 → 新一轮）。
+            _hil_confirm_req = None
+            # ★ P0-2（2026-10-28）harness 强制闸的**连续阻断计数**。
+            #   放在 while **外**（跨轮累积）—— 闸的语义是"连续 N 次没通过验收
+            #   就强制放行"，计数必须跨轮连续，否则每轮都从 0 数 ⇒ 永不触顶
+            #   ⇒ 会变成 FM-1.5「该停不停」12.4% 的温床。
+            _harness_blocks = 0
+            # ★ 无进展检测（真机实测驱动）：记录上轮 remaining 与连续无变化次数。
+            #   只靠次数上限 8 会连续拦截 8 次且待办毫无变化，耗时 ≈2.3 分钟而结果相同 —— 必须提前放行。
+            _harness_prev_rem = []
+            _harness_stall = 0
             # ★ 2026-10-17（米爸「harness 持续工作」）：自主续跑外层循环。
             #   round 1 = 原始请求；round 2+ = 评估器判定「未完成」放行的续跑。
             #   _lg（LoopGuard）**故意在循环外创建**：token 预算跨轮共享（config 既定语义），
@@ -3800,10 +5459,70 @@ class StreamMixin:
                 _ctx_skill = None           # None = 未命中技能（工具直接挂 agent 下）
                 _clarify_req = None
                 _rnd = -1
-                _prev_tool_idx = []
+                _elide_queue = []           # [(轮次, 消息下标)] —— 跨轮省略的**待办队列**
                 _fu_budget = 3              # 续跑轮同样限 3 次补充（与首轮同口径）
                 _fu_used = 0
                 tools_def = _tools_def_full  # 恢复完整工具集（offload 注入/预算闸会改它）
+                # ★ P1-1（2026-10-26）：**语义缓存（流式路径）**。
+                #
+                # 问题（实测）：`semantic_cache` 只在 execute.py:477/795 使用，stream.py **0 处引用**；
+                #   而生产 SSE 入口（routers/conversations.py:391）走 execute_stream
+                #   ⇒ **主对话完全不享受语义缓存**（chat_probe 占真实 token 的 51%）。
+                #   而且原闸门 `not tools_def` **恒为 False**（chat 恒注入 core_keep + ask_user）
+                #   ⇒ 该特性在两条路径上**从未命中过一次**，是彻底的死代码。
+                #
+                # 位置纪律（踩过两次坑）：必须在 **ReAct 之前**、且**不能**依赖 `not tool_injected`——
+                #   实测 `tool_injected` 在 ReAct 探测轮无 tool_calls 时也会被置 True
+                #   （stream.py 探测轮分支 `tool_injected = True`）⇒ 放在生成段前的判定恒为假。
+                #   故：命中直接**短路整轮 ReAct**（tools_def=None + tool_injected=True），
+                #   让后续落库/done/审计/citations 全部沿用原路径（零分叉，不做早期 return）。
+                #
+                # 闸门：intent ∈ {chat, knowledge_qa} · 无附件 · 无澄清 · 非 dry_run/resume。
+                #   ⚠️ 不再要求 `not tools_def`：安全性由**写入侧**保证（只有「本轮没调任何工具、
+                #   无附件、无澄清」的纯问答答案才入库）⇒ 命中天然是"无需工具"的结论。
+                _cache_answer = None
+                try:
+                    from core import config as _cfg_sc
+                    _sc_on = _cfg_sc.as_bool("semantic_cache", "enabled", False)
+                except Exception:
+                    _sc_on = False
+                if (bool(_sc_on) and intent in ("chat", "knowledge_qa")
+                        and not att_blocks and not _clarify_req
+                        and not dry_run and not resume_run_id and not resume_of_user_msg_id):
+                    try:
+                        from semantic_cache import SemanticCache
+                        from database import get_db
+                        _cc = get_db()
+                        try:
+                            _cache_answer = SemanticCache.get(_cc, user_input)
+                        finally:
+                            _cc.close()
+                    except Exception:
+                        _cache_answer = None      # 缓存不可用 ⇒ 如实走真实生成
+                if _cache_answer:
+                    # 按类人节奏"假装流式"（前端体验与真实流一致，不是啪一下一大段）
+                    # ★ 2026-10-27（断点保护）：**先赋值、后吐字**。
+                    #   原写法是「先 for 吐完 → 再 llm_content = ...」，中途被 close
+                    #   （客户端断开）时 llm_content 还是空 ⇒ 固化拿到 0 字符 ⇒ 用户看到的
+                    #   内容一条都不落库（真库 conv 9663 实证：reason=stop 候选字符=0）。
+                    llm_content = _cache_answer
+                    _streamed_acc[0] += _cache_answer
+                    for _ck in iter_stream_chunks(_cache_answer):
+                        yield {"type": "token", "delta": _ck}
+                    tool_injected = True       # 让下方生成段跳过（答案已就绪）
+                    tools_def = None           # 让 ReAct 立即 break（不再调工具）
+                    try:
+                        yield {"type": "reasoning", "delta": "（语义缓存命中）",
+                               "round": _rnd + 1, "phase": "llm"}
+                    except Exception:
+                        pass
+                    try:
+                        from agent.context_audit import record_blocks
+                        record_blocks({}, phase="semantic_cache",
+                                      extra={"cache_hit": 1,
+                                             "cache_answer_chars": len(_cache_answer)})
+                    except Exception:
+                        pass
                 if _auto_continues:
                     # 续跑轮清掉上轮 SysML 校验缓存：否则本轮 prose 答复会把**同一份代码**
                     #   再次拼进全量产出（_ensure_sysml_from_tools 的兜底追加是非幂等跨轮的）。
@@ -3853,8 +5572,8 @@ class StreamMixin:
                         return None
 
                 _rnd = 0  # 工具轮次计数（供 reasoning 事件 round/phase 标识；无工具直出时保持 0）
-                # 2026-09-17 S3：上一轮已回填的 tool 消息下标（下轮仅清空其 content，不删除消息）
-                _prev_tool_idx = []
+                # 2026-09-17 S3：已回填的 tool 消息**按下标省略 content**（不删消息——协议要求成对）
+                _elide_queue = []           # [(轮次, 消息下标)]
                 # ── P1-②（2026-10-07）follow-up 队列（第3 批阶段 1）──
                 #★ 循环头消费 follow-up，而不是循环尾：消费点在**轮次边界**，
                 #   此时上一轮 messages 已完整（含 tool_result），不会破坏 tool_call 配对。
@@ -3884,298 +5603,731 @@ class StreamMixin:
                         messages.append({"role": "user",
                                          "content": _FOLLOWUP_PREFIX + _fu})
                         _fu_delta = f"（{agent_def.name}）收到生成期间的补充指令，重新规划：{_fu[:60]}"
-                        exec_reasoning.append(_fu_delta)
-                        yield {"type": "reasoning", "delta": _fu_delta,
+                        exec_notices.append(({"kind": "progress", "text": _fu_delta}))
+                        yield {"type": "progress", "delta": _fu_delta, "kind": "progress",
                                "round": _rnd + 2, "phase": "followup"}
                         # ★ 重置轮次：新指令值得完整的工具轮次预算（否则它只能拿到剩 1~2 轮）
                         _rnd = -1
                     _rnd += 1
                     if _rnd >= max_tool_rounds:
                         break
+                    # ★★ 2026-10-30（P0 缺口②）：**整轮墙钟到点 ⇒ 收尾**（不 kill）。
+                    #   ⚠️ 必须放在 `if not tools_def: break` **之前**：
+                    #   首版放在其后，而无工具场景会先 `break` 出去、根本到不了这里
+                    #   ⇒ 那条路径的墙钟形同不存在（实测 conv 9772/9773 都是这样漏掉的）。
+                    #   位置在轮次闸之后、工具闸之前，语义是"该收尾了"而不是"没工具可用"。
+                    #   行为：`break` 落到主路径收尾（固化正文 + 发 done + 断点落库），
+                    #   不是掐断连接，所以已生成内容全部保留。
+                    #   ⚠️ 必须显式告知两端（与 token 预算那次教训同源）：模型若不知道
+                    #   停机原因，会在最终回答里**自己编一个**（conv 9726 编成"次数上限"）。
+                    if _deadline_ts and time.time() >= _deadline_ts:
+                        _dl_note = ("（本轮墙钟预算已到）已达到单轮最长执行时间上限，"
+                                    "请基于**已有信息**直接给出结论；不要再调用工具，"
+                                    "也不要归因为『工具次数上限』或『token 上限』——"
+                                    "真实原因是整轮执行时长到点。")
+                        try:
+                            exec_notices.append({"kind": "progress",
+                                                 "text": "（本轮墙钟预算已到）已收尾并保留已生成内容"})
+                        except Exception:
+                            pass
+                        try:
+                            messages.append({"role": "user", "content": _dl_note})
+                        except Exception:
+                            pass
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": "（本轮墙钟预算已到）正在收尾，已生成内容会保留…"}
+                        _lg.stop_reason = "deadline"
+                        break
                     if not tools_def:
                         break
                     # 预算耗尽 ⇒ 停止继续调工具，让模型基于已有信息直出（护栏三闸之一）
                     if not _lg.budget_left():
+                        # ★★ 2026-10-28（用户反馈「提示工具调用已达上限，为啥调用这么多次」）：
+                        #   实测 conv 9726：真实停机原因是 **token 预算耗尽**
+                        #   （stop_reason='token_budget'，316,885 / 300,000），
+                        #   但模型在最终回答里写成「本轮工具调用已达上限」——**归因错误**。
+                        #   根因链（真机数据）：
+                        #     · 本分支只 yield 一条 stage（发给前端），**不进 messages**
+                        #       ⇒ 模型不知道停机原因，只看到"工具没了" ⇒ 自己猜
+                        #     · 本文件又没有调用 `loop_protocol.finalize_messages`，
+                        #       所以已经有精确文案的 `finalize_hint_ex(reason='budget')`
+                        #       在主路径上**一次都没生效**
+                        #   后果：用户拿着"调用次数上限"去调配置也调不动
+                        #   （真正该看的是 loop_token_budget / 上下文膨胀）。
+                        #   修法：把**真实原因**同时给两端 ——
+                        #     ① `exec_notices`（界面可见，带具体数字）
+                        #     ② `messages`（模型可见，明确禁止它再归因为"次数上限"）
+                        _budget_note = (
+                            f"（工具预算耗尽）本轮 token 预算已用尽"
+                            f"（已用 {_lg.tokens_used} / 上限 {_lg.token_budget or '不限'}），"
+                            f"不是工具调用次数上限。请基于已有信息给出最终结论，"
+                            f"并在结论中如实说明「因 token 预算耗尽而停止」，"
+                            f"不要写成「工具调用次数已达上限」。")
+                        exec_notices.append(({"kind": "progress", "text": _budget_note}))
+                        try:
+                            messages.append({"role": "user", "content": _budget_note})
+                        except Exception:
+                            pass
                         yield {"type": "stage", "name": "工具预算耗尽，停止继续调用",
                                "status": "done", "detail": _lg.stats()}
                         tools_def = None
                         break
                     # ★ 失败轮预算：**只有失败轮才扣**（成功的正常推进不限制）
                     if not _lg.failed_rounds_left():
+                        # 同上：失败轮上限 ≠ 调用总数上限，必须把真实原因说清
+                        _fail_note = (
+                            f"（工具失败轮耗尽）连续工具失败轮已达上限"
+                            f"（{_lg.failed_rounds} / {_lg.max_failed_rounds} 次；成功轮不计数），"
+                            f"不是工具调用次数上限。请基于已有信息给出最终结论，"
+                            f"并如实说明是「失败次数达上限」而不是「调用次数达上限」。")
+                        exec_notices.append(({"kind": "progress", "text": _fail_note}))
+                        try:
+                            messages.append({"role": "user", "content": _fail_note})
+                        except Exception:
+                            pass
                         yield {"type": "stage", "name": "失败轮预算耗尽，停止继续调用",
                                "status": "done", "detail": _lg.stats()}
                         tools_def = None
                         break
-                    probe = llm_client.chat(messages, provider_id=effective_provider, stream=False,
-                                           tools=tools_def, _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
-                    _lg.add_tokens(_tok_of(probe))
-                    pmsg = probe["choices"][0]["message"]
-                    ptool_calls = pmsg.get("tool_calls") or []
-                    # V2.5：探测轮思考透传（模型决定是否调用工具的推理过程，非流式 message.reasoning_content）
-                    _p_think = str(pmsg.get("reasoning_content") or "").strip()
-                    if _p_think:
-                        exec_reasoning.append(_p_think)
-                        yield {"type": "reasoning", "delta": _p_think, "round": _rnd + 1, "phase": "probe"}
-                    if not ptool_calls:
-                        p_content = pmsg.get("content") or ""
-                        if p_content:
-                            tool_injected = True
-                            # P0-3（2026-09-17）：探测轮是非流式拿到的完整回复，此处按类人节奏补吐
-                            for _chunk in iter_stream_chunks(p_content):
-                                yield {"type": "token", "delta": _chunk}
-                            llm_content = p_content
-                        break
-                    tool_injected = True
-                    results = []
-                    # 思考过程：Agent 决策需要调用哪些工具（规划）
-                    plan = "、".join((tc.get("function") or {}).get("name", "") for tc in ptool_calls[:3])
-                    _p_delta = f"（{agent_def.name}）判断需要调用工具补充上下文，计划调用：{plan}。开始执行工具…（第 {_rnd + 1} 轮）"
-                    exec_reasoning.append(_p_delta)
-                    yield {"type": "reasoning", "delta": _p_delta, "round": _rnd + 1, "phase": "plan"}
-                    weak_count = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
-                    _round_had_ok = False   # 本轮是否有可用工具结果（失败轮预算判据）
-                    #── P0-①（2026-10-07）并行调用配对：切成「执行队列 / 未执行队列」────
-                    # ⚠️ 不能删掉上限（那是失控护栏），必须为未执行的尾部补结果，
-                    #    否则 pmsg 带全部 tool_calls 而 results 只有 3 笔 ⇒ 第 4 笔起悬空
-                    #    ⇒ 下一轮 HTTP 400（tool_use ids without tool_result blocks）。
-                    #    详见 agent/loop_protocol.py 模块 docstring 缺陷①。
-                    _exec_calls, _skip_calls = _lproto.split_calls(ptool_calls)
-                    for _ti, tc in enumerate(_exec_calls):
-                        fn = tc.get("function") or {}
-                        tname = fn.get("name", "")
-                        # UX规范·硬规则1（2026-10-02）：一动作一节点 —— 每笔调用携带稳定 call_id
-                        # （协议 tool_call id；缺失时用 名称#轮次-序号 兜底），前端以它为键复用节点，
-                        # 同名并发两笔调用各自成卡、不再互相覆盖。
-                        _call_id = str(tc.get("id") or f"{tname}#{_rnd + 1}-{_ti}")
-                        # ── P0-②（2026-10-07）截断参数：拒绝执行 + 明确告知重发 ──
-                        # ⚠️ 必须先判别再解析：`except: targs={}` 会让**空参数照常执行**，
-                        #    既可能误用工具默认行为，又掩盖了"模型输出被截断"这个真因。
-                        #    `is_truncated_args` 区分「非法 JSON=截断」与「合法空=正常请求」，避免误杀。
-                        if _lproto.is_truncated_args(fn):
-                            _tr = _lproto.truncated_result(tname)
-                            yield {"type": "tool", "status": "done", "name": tname,
-                                   "ok": False, "result": _tr["result"],
-                                   "error": "args_truncated", "call_id": _call_id,
-                                   "truncated": True,
+                    with _turn_cm(_tracer, _rnd + 1):   # P0-b：ReAct 轮 span（M2 挂载）
+                        probe = llm_client.chat(messages, provider_id=effective_provider, stream=False,
+                                               tools=tools_def, _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
+                        _lg.add_llm(probe)
+                        pmsg = probe["choices"][0]["message"]
+                        ptool_calls = pmsg.get("tool_calls") or []
+                        # V2.5：探测轮思考透传（模型决定是否调用工具的推理过程，非流式 message.reasoning_content）
+                        _p_think = str(pmsg.get("reasoning_content") or "").strip()
+                        if _p_think:
+                            exec_reasoning.append(_p_think)
+                            yield {"type": "reasoning", "delta": _p_think, "round": _rnd + 1, "phase": "probe"}
+                        if not ptool_calls:
+                            p_content = pmsg.get("content") or ""
+                            if p_content:
+                                tool_injected = True
+                                # P0-3（2026-09-17）：探测轮是非流式拿到的完整回复，此处按类人节奏补吐
+                                # ★ 2026-10-27（断点保护）：**先赋值、后吐字**（同 4391 处）。
+                                #   这是本轮最常命中的路径：模型"直接作答"（不调工具）时，
+                                #   内容已完整在手，却先按 45 字/秒慢慢吐 ⇒ 用户随时可能在这
+                                #   几秒里断开/关页 ⇒ 原写法此时 llm_content 仍为空
+                                #   ⇒ 断点固化判 `len<4` 跳过 ⇒ 屏幕上明明有字，刷新全没。
+                                llm_content = p_content
+                                _streamed_acc[0] += p_content
+                                for _chunk in iter_stream_chunks(p_content):
+                                    yield {"type": "token", "delta": _chunk}
+                            break
+                        tool_injected = True
+                        results = []
+                        # 思考过程：Agent 决策需要调用哪些工具（规划）
+                        plan = "、".join((tc.get("function") or {}).get("name", "") for tc in ptool_calls[:3])
+                        _p_delta = f"（{agent_def.name}）判断需要调用工具补充上下文，计划调用：{plan}。开始执行工具…（第 {_rnd + 1} 轮）"
+                        exec_notices.append(({"kind": "progress", "text": _p_delta}))
+                        yield {"type": "progress", "delta": _p_delta, "kind": "progress", "round": _rnd + 1, "phase": "plan"}
+                        weak_count = 0  # P0-按需工具：本轮弱相关结果数（全弱 → 收敛，禁止连环调用）
+                        _round_had_ok = False   # 本轮是否有可用工具结果（失败轮预算判据）
+                        #── P0-①（2026-10-07）并行调用配对：切成「执行队列 / 未执行队列」────
+                        # ⚠️ 不能删掉上限（那是失控护栏），必须为未执行的尾部补结果，
+                        #    否则 pmsg 带全部 tool_calls 而 results 只有 3 笔 ⇒ 第 4 笔起悬空
+                        #    ⇒ 下一轮 HTTP 400（tool_use ids without tool_result blocks）。
+                        #    详见 agent/loop_protocol.py 模块 docstring 缺陷①。
+                        _exec_calls, _skip_calls = _lproto.split_calls(ptool_calls)
+                        for _ti, tc in enumerate(_exec_calls):
+                            fn = tc.get("function") or {}
+                            tname = fn.get("name", "")
+                            # UX规范·硬规则1（2026-10-02）：一动作一节点 —— 每笔调用携带稳定 call_id
+                            # （协议 tool_call id；缺失时用 名称#轮次-序号 兜底），前端以它为键复用节点，
+                            # 同名并发两笔调用各自成卡、不再互相覆盖。
+                            _call_id = str(tc.get("id") or f"{tname}#{_rnd + 1}-{_ti}")
+                            # ── P0-②（2026-10-07）截断参数：拒绝执行 + 明确告知重发 ──
+                            # ⚠️ 必须先判别再解析：`except: targs={}` 会让**空参数照常执行**，
+                            #    既可能误用工具默认行为，又掩盖了"模型输出被截断"这个真因。
+                            #    `is_truncated_args` 区分「非法 JSON=截断」与「合法空=正常请求」，避免误杀。
+                            if _lproto.is_truncated_args(fn):
+                                _tr = _lproto.truncated_result(tname)
+                                yield {"type": "tool", "status": "done", "name": tname,
+                                       "ok": False, "result": _tr["result"],
+                                       "error": "args_truncated", "call_id": _call_id,
+                                       "truncated": True,
+                                       "agent": _ctx_agent, "skill": _ctx_skill,
+                                       "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
+                                results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
+                                                "name": tname,
+                                                "content": json.dumps(_tr, ensure_ascii=False)})
+                                continue
+                            try:
+                                targs = json.loads(fn.get("arguments") or "{}")
+                            except Exception:
+                                # 走到这里说明 `is_truncated_args` 判错了（非截断但仍解析失败）
+                                # ⇒ 保守当截断处理，**不**以空参数执行。
+                                _tr = _lproto.truncated_result(tname)
+                                results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
+                                                "name": tname,
+                                                "content": json.dumps(_tr, ensure_ascii=False)})
+                                continue
+                            # 工具调用结果：执行前 → 执行后（流式透传；结果全量返回，前端可展开/复制）
+                            yield {"type": "tool", "status": "run", "name": tname, "arguments": targs,
+                                   "call_id": _call_id,
+                                   # ★ 2026-11-11 三级展示层级（详见 _ctx_agent 处注释）
                                    "agent": _ctx_agent, "skill": _ctx_skill,
                                    "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
-                            results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
-                                            "name": tname,
-                                            "content": json.dumps(_tr, ensure_ascii=False)})
-                            continue
-                        try:
-                            targs = json.loads(fn.get("arguments") or "{}")
-                        except Exception:
-                            # 走到这里说明 `is_truncated_args` 判错了（非截断但仍解析失败）
-                            # ⇒ 保守当截断处理，**不**以空参数执行。
-                            _tr = _lproto.truncated_result(tname)
-                            results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
-                                            "name": tname,
-                                            "content": json.dumps(_tr, ensure_ascii=False)})
-                            continue
-                        # 工具调用结果：执行前 → 执行后（流式透传；结果全量返回，前端可展开/复制）
-                        yield {"type": "tool", "status": "run", "name": tname, "arguments": targs,
-                               "call_id": _call_id,
-                               # ★ 2026-11-11 三级展示层级（详见 _ctx_agent 处注释）
-                               "agent": _ctx_agent, "skill": _ctx_skill,
-                               "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
-                        _t0 = time.time()   # P0-1 工具耗时：run→done 计时
-                        # 2026-10-04：重复调用短路（同工具同参数已成功跑过 ⇒ 回喂既有结果）。
-                        # ⚠️ 必须发生在 yield "run" **之前**：否则前端会先亮起一个节点，
-                        #    然后既没有真实执行也没有 done 事件 ⇒ 节点永久停在"执行中"。
-                        _dup = _lg.probe_dup(tname, targs)
-                        if _dup:
-                            _lg.dup_short_circuits += 1
-                            result = {"ok": True,
-                                      "result": _lg.last_result_for(tname, targs),
-                                      "_dup": _dup}
-                        else:
-                            result = _lg.call(self._exec_tool_call, tname, targs)
-                            # ★ 2026-10-17：ask_user 人在回路澄清 —— 记录信号并中断 ReAct 循环
-                            #   （不再喂 tool_result、不再继续探测：等用户回答后续跑）
-                            if isinstance(result, dict) and result.get("clarify_required"):
-                                _clarify_req = result.get("clarify") or {}
-                                # ★ 2026-11-12（米爸反馈3 复发，conv 9571 实证 7 连问 /
-                                #   conv 9553 实证 24 连问）：**必须补 done 事件**。
-                                #   此前 break 发生在 yield "tool done" **之前** ⇒ 前端
-                                #   ask_user 节点永远停在"执行中"（用户截图 8 个节点各卡
-                                #   ~750s「调用中...」）。澄清不是失败，节点必须正常收口——
-                                #   否则"看起来有 8 个没跑完的工具"比"1 个已完成的确认"
-                                #   更让人怀疑系统状态。
-                                yield {"type": "tool", "status": "done", "name": tname,
-                                       "ok": True, "result": str(result.get("result") or ""),
-                                       "error": "", "truncated": False,
-                                       "latency_ms": int((time.time() - _t0) * 1000),
-                                       "call_id": _call_id, "skipped": False,
-                                       "skip_reason": "", "agent": _ctx_agent,
-                                       "skill": _ctx_skill, "depth": 2 if _ctx_skill else 1,
-                                       "mcp": _mcp_of(tname)}
-                                break
-                            _r0 = str(result.get("result") or "")
-                            if result.get("ok") and (result.get("weak")
-                                                     or ("未检索到" in _r0)
-                                                     or ("无新冲突" in _r0)):
-                                _lg.undo_dup_count(tname, targs)
-                        _t_ok = bool(result.get("ok"))
-                        _r_full = str(result.get("result") or "")
-                        # ★ 2026-10-17（米爸反馈4）：识别工具结果里的完整 SysML 文档
-                        #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
-                        _doc_hit = None
-                        try:
-                            from agent.utils import extract_sysml_doc_from_result as _esd
-                            _doc = _esd(tname, _r_full)
-                            if _doc:
-                                _dk = _doc["text"][:200]
-                                if _dk not in self._tool_sysml_docs_seen:
-                                    self._tool_sysml_docs_seen.add(_dk)
-                                    self._tool_sysml_docs.append(_doc)
-                                    _doc_hit = _doc
-                        except Exception:
-                            pass
-                        # ★ 会话流环节块（米爸方案A1）：取回即告知——「已自动存入产物」，
-                        #   点击产物面板可看全文。yield 必须在 try/except 之外。
-                        if _doc_hit:
-                            _dsz = len(_doc_hit.get("text") or "")
-                            yield {"type": "stage", "name": "取回模型文件",
-                                   "status": "done",
-                                   "detail": "{}（{}）已自动存入产物".format(
-                                       _doc_hit.get("title") or "模型文件",
-                                       "{:.1f}KB".format(_dsz / 1024) if _dsz >= 1024
-                                       else "{}B".format(_dsz))}
-                        # ★ 失败轮预算判据（与 execute.py 同源）：本轮是否有可用结果
-                        if _t_ok and not (result.get("weak")
-                                          or ("未检索到" in _r_full)
-                                          or ("无新冲突" in _r_full)):
-                            _round_had_ok = True
-                        _t_trunc = len(_r_full) > _TOOL_RESULT_CAP
-                        _t_result = _r_full[:_TOOL_RESULT_CAP]
-                        _e_full = str(result.get("error") or "")
-                        _t_error = _e_full[:_TOOL_RESULT_CAP]
-                        _t_ms = int((time.time() - _t0) * 1000)   # P0-1：毫秒耗时
-                        # 2026-10-04：把护栏判定回显到事件里 —— 用户看到的必须是
-                        # "这一步因重复调用被跳过"，而不是一个看起来正常执行成功的节点
-                        # （否则重复调用在界面上完全不可见，用户以为模型白跑了几次）。
-                        _skipped = bool(result.get("_dup")) or bool(result.get("_t_timeout"))
-                        _skip_why = ("dup_short_circuit" if result.get("_dup")
-                                     else "tool_timeout" if result.get("_t_timeout") else "")
-                        exec_tools.append({"name": tname, "ok": _t_ok,
-                                           "arguments": targs, "result": _t_result,
-                                           "error": _t_error, "truncated": _t_trunc,
-                                           "elapsed_ms": _t_ms,
-                                           "skipped": _skipped, "skip_reason": _skip_why})
-                        yield {"type": "tool", "status": "done", "name": tname,
-                               "ok": _t_ok, "result": _t_result, "error": _t_error,
-                               "truncated": _t_trunc, "latency_ms": _t_ms,
-                               "call_id": _call_id,
-                               "skipped": _skipped, "skip_reason": _skip_why,
-                               # ★ 2026-11-11 三级展示层级（与上方 run 事件同源）
-                               "agent": _ctx_agent, "skill": _ctx_skill,
-                               "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
-                        _weak = bool(result.get("weak")) or ("未检索到" in _t_result) or ("无新冲突" in _t_result)
-                        if _weak:
-                            weak_count += 1
-                        # 2026-09-17 S3：回填给模型的结果单独封顶（此前用未截断的原始结果，长结果被后续每轮重发）
-                        # P1-4（2026-10-02）：封顶升级为 offload——全文落库，模型侧换引用块（可寻址召回）
-                        _t_model = str(result.get("result") or "")
-                        # ★ 2026-11-13（#56 端到端实证）：`read_attachment_section` 用**专用上限**。
-                        #   通用上限 `_TOOL_MODEL_CAP=3000` 对它**天然不适用**：
-                        #   整章正文动辄 5000~7000 字符（第 5 章实测 6024）⇒ 每次取章都被
-                        #   offload 成引用块 ⇒ 模型只拿到一个 id ⇒ 它再去调 tool_result_fetch
-                        #   要全文（而那又被 RBAC 拦）⇒ 最终**看到的是空**
-                        #   ⇒ 得出"第 5/6/7 章正文读不到"的错误结论（实测原话：
-                        #   「全部返回空内容」——其实工具已返回全文，是回填环节丢的）。
-                        #   本工具的语义就是"把这一章的正文给模型" ⇒ 断章取义地截断
-                        #   会直接毁掉它的用途 ⇒ 给足整章上限，且**不 offload**。
-                        _t_cap = _ATT_SECTION_MODEL_CAP if tname == "read_attachment_section" else _TOOL_MODEL_CAP
-                        _t_content, _offloaded = _tool_offload.model_side_content(
-                            tname, result, getattr(self, "_tool_conv_ctx", 0), cap=_t_cap)
-                        if _offloaded:
-                            _tool_offload.ensure_fetch_tool(tools_def, getattr(self, "_tool_whitelist", None))
-                        if _weak:
-                            # 弱相关引导：明确告知 LLM 结果不可用，禁止继续调用工具连环试探
-                            _t_content["hint"] = "该工具结果与当前任务弱相关（或未命中实质内容），请直接基于已有信息回答，不要再调用其他工具。"
-                        results.append({
-                            "tool_call_id": tc.get("id", ""),
-                            "role": "tool",
-                            "name": tname,
-                            "content": json.dumps(_t_content, ensure_ascii=False),
-                        })
-                    # ── P0-①（2026-10-07）为**未执行**的尾部调用补结果 ──
-                    # pmsg 带的是**全部** ptool_calls，若不给尾部补 tool_result，
-                    # 第 4 笔起永久悬空 ⇒ 下一轮 HTTP 400（protocol 硬约束）。
-                    # ⚠️ 必须**在 `if results:` 之前**追加：全被截断时 results 也要非空，
-                    #    否则整轮 tool_calls 一个结果都没有，配对同样缺失。
-                    # ★ 2026-11-12（米爸反馈3，conv 9571 实证 7 连问 / conv 9553 实证 24 连问）：
-                    #   clarify 已记录 ⇒ **立即退出轮次循环，不再补 skip、不再回填 pmsg**。
-                    #   两个原因缺一不可：
-                    #   ① 协议：ask_user 的 tool_call 没有配对 tool_result，回填 pmsg 即悬空
-                    #      ⇒ 下一轮探测 HTTP 400；
-                    #   ② 防重问：results 为空时 `if results:` 整块跳过 ⇒ messages 不更新
-                    #      ⇒ 下一轮 LLM 看到**同一份上下文** ⇒ 换措辞再问一遍（真库实测
-                    #      3s/次、最多烧到 max_tool_rounds=100 轮，每轮还多一条工具留痕）。
-                    if _clarify_req:
-                        break
-                    if _skip_calls:
-                        _skip_res = _lproto.skipped_results(_skip_calls)
-                        for _sr in _skip_res:
-                            _sfn = _sr.get("name") or "-"
-                            yield {"type": "tool", "status": "done", "name": _sfn,
-                                   "ok": False, "result": "本轮并发已达上限，未执行",
-                                   "error": "round_tool_limit", "call_id": _sr.get("tool_call_id"),
-                                   "skipped": True, "skip_reason": "round_tool_limit",
+                            _t0 = time.time()   # P0-1 工具耗时：run→done 计时
+                            # 2026-10-04：重复调用短路（同工具同参数已成功跑过 ⇒ 回喂既有结果）。
+                            # ⚠️ 必须发生在 yield "run" **之前**：否则前端会先亮起一个节点，
+                            #    然后既没有真实执行也没有 done 事件 ⇒ 节点永久停在"执行中"。
+                            _dup = _lg.probe_dup(tname, targs)
+                            if _dup:
+                                _lg.dup_short_circuits += 1
+                                _dup_streak += 1      # ★ 2026-10-27：连续重复计数（见 round 末收敛闸）
+                                # ★ 2026-10-28：回喂体统一由 LoopGuard 生成
+                                #   （含"这是重放、不要据此判不存在"的说明；与 execute.py 同源）
+                                result = _lg.replay_payload(tname, targs, _dup)
+                            else:
+                                _dup_streak = 0       # ★ 真执行 ⇒ 有新进展，连续计数归零
+                                result = _lg.call(self._exec_tool_call, tname, targs)
+                                # ★ 2026-10-17：ask_user 人在回路澄清 —— 记录信号并中断 ReAct 循环
+                                #   （不再喂 tool_result、不再继续探测：等用户回答后续跑）
+                                if isinstance(result, dict) and result.get("clarify_required"):
+                                    _clarify_req = result.get("clarify") or {}
+                                    # ★ 2026-11-12（米爸反馈3 复发，conv 9571 实证 7 连问 /
+                                    #   conv 9553 实证 24 连问）：**必须补 done 事件**。
+                                    #   此前 break 发生在 yield "tool done" **之前** ⇒ 前端
+                                    #   ask_user 节点永远停在"执行中"（用户截图 8 个节点各卡
+                                    #   ~750s「调用中...」）。澄清不是失败，节点必须正常收口——
+                                    #   否则"看起来有 8 个没跑完的工具"比"1 个已完成的确认"
+                                    #   更让人怀疑系统状态。
+                                    yield {"type": "tool", "status": "done", "name": tname,
+                                           "ok": True, "result": str(result.get("result") or ""),
+                                           "error": "", "truncated": False,
+                                           "latency_ms": int((time.time() - _t0) * 1000),
+                                           "call_id": _call_id, "skipped": False,
+                                           "skip_reason": "", "agent": _ctx_agent,
+                                           "skill": _ctx_skill, "depth": 2 if _ctx_skill else 1,
+                                           "mcp": _mcp_of(tname)}
+                                    break
+                                # ★ 2026-10-28（写前确认 HITL）：写操作被确认闸拦下 ⇒ 中断本轮。
+                                #   与 `clarify_required` **同构**：不喂 tool_result、不继续探测
+                                #   （否则模型会继续发写请求 ⇒ 弹出一堆确认单）。
+                                #   ⚠️ 必须先补 done 事件：否则前端该工具节点永远停在"执行中"
+                                #   （与 2026-11-12 澄清 7 连问那次同源的问题）。
+                                if isinstance(result, dict) and result.get("confirm_required"):
+                                    _hil_confirm_req = result.get("confirm") or {}
+                                    yield {"type": "tool", "status": "done", "name": tname,
+                                           "ok": True, "result": str(result.get("result") or ""),
+                                           "error": "", "truncated": False,
+                                           "latency_ms": int((time.time() - _t0) * 1000),
+                                           "call_id": _call_id, "skipped": False,
+                                           "skip_reason": "", "agent": _ctx_agent,
+                                           "skill": _ctx_skill, "depth": 2 if _ctx_skill else 1,
+                                           "mcp": _mcp_of(tname)}
+                                    break
+                                _r0 = str(result.get("result") or "")
+                                if result.get("ok") and (result.get("weak")
+                                                         or ("未检索到" in _r0)
+                                                         or ("无新冲突" in _r0)):
+                                    _lg.undo_dup_count(tname, targs)
+                            _t_ok = bool(result.get("ok"))
+                            _r_full = str(result.get("result") or "")
+                            # ★ 2026-10-27（真机 E2E 实测，conv 9698）：**记录已成功执行的写操作**。
+                            #   现象：模型在第 11 轮触发「连续重复调用收敛闸」被强制退出循环，
+                            #   进入最终生成时**看漏**了 messages 里 `create_model_elements`
+                            #   的成功回执（status=SUCCEEDED），于是在最终回复里断言
+                            #   「尚未写入平台」——**与事实相反**（平台直连回读证实已建成）。
+                            #   ⇒ 收尾时把成功写操作**显式列出**（见 `loop_protocol.write_ops_digest`）。
+                            #   判据：① `ok=True`（只列成功的，失败由各自错误回执承载）；
+                            #        ② 该工具确实是写类（本地 `side_effect` + MCP 动词族）。
+                            if _t_ok and _is_write_tool(self, tname):
+                                _write_ops.append({
+                                    "name": tname,
+                                    "detail": _write_op_detail(_r_full),
+                                })
+                            # ★ 2026-10-27（用户质疑"前面已确定工程，是不是上下文遗漏了"——
+                            #   实测确认**会丢**）：把本轮工具回执里出现的
+                            #   工程/分支/版本/元素**落成会话锚点**，下一轮不依赖历史窗口。
+                            #   机制缺口：历史只取当前话题最近 8 条 + 3000 字符预算，
+                            #   更早的靠语义回捞（现 bigram 降级）⇒ conv 9629 里用户
+                            #   msg 4869「基于这个工程广汽方法论建模1022」落在窗口外，
+                            #   当时没丢只是因助手回复里反复复述了工程名（运气）。
+                            try:
+                                from agent import conv_anchors as _ca
+                                from database import db_conn as _cadb
+                                with _cadb() as _cac:
+                                    _ca.record_from_tool(_cac, conversation_id, _r_full, targs)
+                            except Exception:
+                                pass
+                            # ★ 2026-10-27（会话 9629）：**提交即托管**。
+                            #   工具一旦返回"异步任务已受理/运行中"（结果里带 taskId + status），
+                            #   立刻把任务登记进 async_external_jobs —— 责任从 LLM 转到系统：
+                            #   下一轮开头自动查状态、完成则自动分页读取并归档。
+                            #   为什么必须由系统记：实测模型从不跨轮复用 taskId，
+                            #   每轮重查工程/分支/版本并重新提交导出（白烧整轮预算）。
+                            try:
+                                from agent import async_jobs as _aj
+                                _ajob = _aj.detect_job(_r_full)
+                                if _ajob:
+                                    from database import db_conn as _adb
+                                    # ★ 2026-10-27：变量名**必须**不能叫 `_ac` ——
+                                    #   本函数里 `_ac` 是 `agent.auto_continue` 的模块别名
+                                    #   （4295 行 `from agent import auto_continue as _ac`），
+                                    #   而 `with ... as _ac` 会把它在**整个函数作用域**里覆盖成
+                                    #   数据库连接 ⇒ 之后 8 处 `_ac.decide/AUTO_EVAL_STAGE/
+                                    #   continuation_prompt/...` 全部 AttributeError。
+                                    #   潜伏条件：同一轮里既检测到异步任务、又走到自主续跑评估
+                                    #   （智源导出任务 + 长任务，正是本项目的常见组合）。
+                                    with _adb() as _ac_conn:
+                                        _aj.record(_ac_conn, conversation_id,
+                                                   _mcp_of(tname) or "", tname, _ajob)
+                            except Exception:
+                                pass
+                            # ★ 2026-10-17（米爸反馈4）：识别工具结果里的完整 SysML 文档
+                            #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
+                            _doc_hit = None
+                            try:
+                                from agent.utils import collect_tool_sysml_doc as _ctd
+                                _doc = _ctd(getattr(self, "_tool_doc_pages", {}), tname, _r_full)
+                                if _doc:
+                                    _dk = _doc["text"][:200]
+                                    if _dk not in self._tool_sysml_docs_seen:
+                                        self._tool_sysml_docs_seen.add(_dk)
+                                        self._tool_sysml_docs.append(_doc)
+                                        _doc_hit = _doc
+                            except Exception:
+                                pass
+                            # ★ 会话流环节块（米爸方案A1）：取回即告知——「已自动存入产物」，
+                            #   点击产物面板可看全文。yield 必须在 try/except 之外。
+                            if _doc_hit:
+                                _dsz = len(_doc_hit.get("text") or "")
+                                yield {"type": "stage", "name": "取回模型文件",
+                                       "status": "done",
+                                       "detail": "{}（{}）已自动存入产物".format(
+                                           _doc_hit.get("title") or "模型文件",
+                                           "{:.1f}KB".format(_dsz / 1024) if _dsz >= 1024
+                                           else "{}B".format(_dsz))}
+                            # ★ 失败轮预算判据（与 execute.py 同源）：本轮是否有可用结果
+                            # ★ 2026-10-28（conv 9736 实证）：**参数类错误不算失败轮**。
+                            #   那一轮 3 次把 elementTypes 传成不存在的类型名，平台回
+                            #   INVALID_ARGUMENTS + recovery.action=CORRECT_ARGUMENTS
+                            #   ⇒ 这是"按清单改就能对"的信息性结果，却被当工具坏了扣满
+                            #   失败轮 ⇒ 整轮判死，建包/写入一次都没尝试。
+                            #   ⇒ 判据抽成纯函数 `is_correctable_failure`（两路共用）。
+                            if _t_ok and not (result.get("weak")
+                                              or ("未检索到" in _r_full)
+                                              or ("无新冲突" in _r_full)):
+                                _round_had_ok = True
+                            # ⚠️ 模块级纯函数，**不是** `_lg` 的方法（2026-10-30 真机修复）。
+                            #   原写法 `_lg.is_correctable_failure(...)` ⇒ AttributeError
+                            #   掀翻整轮（conv 9779/18:11，恰好发生在它要救的参数错误分支上）。
+                            elif _is_correctable_failure(result):
+                                # 可修正的参数错误：本轮不算失败（给模型改参数的机会）
+                                _round_had_ok = True
+                                _fix_hint = (
+                                    "⚠️ 上一次调用是**参数不合法**（不是工具坏了）："
+                                    "请按回执里给出的字段/取值清单改正后重试，"
+                                    "**不要**因为这一次失败就放弃该步骤。")
+                                exec_notices.append(({"kind": "progress", "text": _fix_hint}))
+                                try:
+                                    messages.append({"role": "user", "content": _fix_hint})
+                                except Exception:
+                                    pass
+                            _t_trunc = len(_r_full) > _TOOL_RESULT_CAP
+                            _t_result = _r_full[:_TOOL_RESULT_CAP]
+                            _e_full = str(result.get("error") or "")
+                            _t_error = _e_full[:_TOOL_RESULT_CAP]
+                            _t_ms = int((time.time() - _t0) * 1000)   # P0-1：毫秒耗时
+                            # 2026-10-04：把护栏判定回显到事件里 —— 用户看到的必须是
+                            # "这一步因重复调用被跳过"，而不是一个看起来正常执行成功的节点
+                            # （否则重复调用在界面上完全不可见，用户以为模型白跑了几次）。
+                            _skipped = bool(result.get("_dup")) or bool(result.get("_t_timeout"))
+                            _skip_why = ("dup_short_circuit" if result.get("_dup")
+                                         else "tool_timeout" if result.get("_t_timeout") else "")
+                            exec_tools.append({"name": tname, "ok": _t_ok,
+                                               "arguments": targs, "result": _t_result,
+                                               "error": _t_error, "truncated": _t_trunc,
+                                               "elapsed_ms": _t_ms,
+                                               "skipped": _skipped, "skip_reason": _skip_why})
+                            yield {"type": "tool", "status": "done", "name": tname,
+                                   "ok": _t_ok, "result": _t_result, "error": _t_error,
+                                   "truncated": _t_trunc, "latency_ms": _t_ms,
+                                   "call_id": _call_id,
+                                   "skipped": _skipped, "skip_reason": _skip_why,
+                                   # ★ 2026-11-11 三级展示层级（与上方 run 事件同源）
                                    "agent": _ctx_agent, "skill": _ctx_skill,
-                                   "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(_sfn)}
-                        results.extend(_skip_res)
-                    # 工具结果回填后进入下一轮（观察 → 再思考）
-                    if results:
-                        # 2026-09-17 S3：上一轮 tool 内容换为省略标记
-                        # 不可删除该消息——OpenAI 兼容协议要求 tool 与 assistant.tool_calls 成对出现
-                        # ★ 2026-11-13（#57）：**取回的章节正文不可省略**。
-                        #   原实现把上一轮所有 tool 结果清空 ⇒ 模型下一轮看到"上下文里没有
-                        #   第 5/6/7 章正文" ⇒ 又去调 read_attachment_section 取一遍
-                        #   ⇒ 实测同一轮内取章 40+ 次（5→6→7→5.3→6.1→7.1→… 循环），
-                        #   每次都把整章正文再灌一遍上下文 ⇒ 上下文爆炸 + 60s+ 耗时。
-                        #   判据：章节正文是模型**唯一**的正文来源、且**不可再生**
-                        #   （清掉就只能重取）⇒ 保留；其他工具结果照旧省略（它们可再生）。
-                        for _pi in _prev_tool_idx:
-                            if 0 <= _pi < len(messages) and messages[_pi].get("role") == "tool":
-                                if messages[_pi].get("name") == "read_attachment_section":
-                                    continue      # ← 章节正文：保留，不省略
-                                messages[_pi]["content"] = json.dumps(
-                                    {"ok": True, "result": "",
-                                     "note": "前序工具结果已省略——其结论已体现在后续推理中"},
-                                    ensure_ascii=False)
-                        _prev_tool_idx = []
-                        messages.append(pmsg)
-                        messages.extend(results)
-                        for _k in range(len(messages) - len(results), len(messages)):
-                            _prev_tool_idx.append(_k)
-    # P0-按需工具：本轮工具结果全弱相关 → 收敛（跳出循环走兜底流式生成，避免连环调用）
-                        # ⚠️ 分母用**执行数**（`_exec_calls`）而非 `len(results)`：
-                        #    P0-① 为未执行尾部补了 skipped 结果，计入分母会让本该收敛的场景
-                        #    变成"不收敛"，也可能让本该继续的场景误收敛。
-                        # ★ 只有**失败轮**才扣失败预算（成功推进不限制，米爸 2026-10-09）
-                        _lg.charge_failed_round(_round_had_ok)
-                        if weak_count == len(_exec_calls) and weak_count > 0:
-                            _w_delta = f"（{agent_def.name}）本轮工具结果均与任务弱相关，不再继续调用工具，直接基于已有信息组织回答。"
-                            exec_reasoning.append(_w_delta)
-                            yield {"type": "reasoning", "delta": _w_delta, "round": _rnd + 1, "phase": "plan"}
+                                   "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
+                            _weak = bool(result.get("weak")) or ("未检索到" in _t_result) or ("无新冲突" in _t_result)
+                            if _weak:
+                                weak_count += 1
+                            # ★★ 2026-11-02（全链路实测发现的无进展循环）：
+                            #   判据 = **边际新颖度**（本次结果相对"本次子任务已看过的全部内容"
+                            #   的新增比例），不是"参数是否重复"。
+                            #   现场证据（conv 10004 实测）：graph_retrieve 被调 86 次，
+                            #   参数几乎每次不同（同义改写 query）⇒ 既有 `dedup_hit`
+                            #   的精确键一次都没命中；而边际新颖度在第 17 次后
+                            #   大面积 ≤0.01（45 次零新增）。详见 agent/loop_progress.py。
+                            #   软判定（无新增）⇒ 在结果里追加提示；
+                            #   硬判定（连续无新增 / 单工具超上限）⇒ 置位 `_pg_stop`，
+                            #   本轮结束后收尾作答（**不掐断**，已产出内容全部保留）。
+                            if _pg is not None and not _skipped:
+                                try:
+                                    _pv = _pg.observe(tname, _r_full)
+                                    if _pv.get("hint"):
+                                        # 提示追加在**模型侧**内容里（不改工具原文）
+                                        _t_content["progress_hint"] = _pv["hint"]
+                                    if _pv.get("novel"):
+                                        pass
+                                    else:
+                                        try:
+                                            exec_notices.append(({
+                                                "kind": "progress",
+                                                "text": "（无进展护闸）%s 本次检索无新增（新增 %.0f%%），已提示模型停止重复检索"
+                                                        % (tname, float(_pv.get("ratio") or 0) * 100)}))
+                                        except Exception:
+                                            pass
+                                    if _pv.get("stop"):
+                                        _pg_stop = True
+                                        _pg_reason = str(_pv.get("stop_reason") or "")
+                                        try:
+                                            exec_notices.append(({
+                                                "kind": "progress",
+                                                "text": "（无进展护闸）%s 已连续无新增/超调用上限（%s），本轮提前收尾"
+                                                        % (tname, _pg_reason or "no_progress")}))
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass    # 护闸故障绝不阻断工具链
+                            # 2026-09-17 S3：回填给模型的结果单独封顶（此前用未截断的原始结果，长结果被后续每轮重发）
+                            # P1-4（2026-10-02）：封顶升级为 offload——全文落库，模型侧换引用块（可寻址召回）
+                            _t_model = str(result.get("result") or "")
+                            # ★ 2026-11-13（#56 端到端实证）：`read_attachment_section` 用**专用上限**。
+                            #   通用上限 `_TOOL_MODEL_CAP=3000` 对它**天然不适用**：
+                            #   整章正文动辄 5000~7000 字符（第 5 章实测 6024）⇒ 每次取章都被
+                            #   offload 成引用块 ⇒ 模型只拿到一个 id ⇒ 它再去调 tool_result_fetch
+                            #   要全文（而那又被 RBAC 拦）⇒ 最终**看到的是空**
+                            #   ⇒ 得出"第 5/6/7 章正文读不到"的错误结论（实测原话：
+                            #   「全部返回空内容」——其实工具已返回全文，是回填环节丢的）。
+                            #   本工具的语义就是"把这一章的正文给模型" ⇒ 断章取义地截断
+                            #   会直接毁掉它的用途 ⇒ 给足整章上限，且**不 offload**。
+                            _t_cap = _ATT_SECTION_MODEL_CAP if tname == "read_attachment_section" else _TOOL_MODEL_CAP
+                            _t_content, _offloaded = _tool_offload.model_side_content(
+                                tname, result, getattr(self, "_tool_conv_ctx", 0), cap=_t_cap)
+                            if _offloaded:
+                                _tool_offload.ensure_fetch_tool(tools_def, getattr(self, "_tool_whitelist", None))
+                            if _weak:
+                                # 弱相关引导：明确告知 LLM 结果不可用，禁止继续调用工具连环试探
+                                _t_content["hint"] = "该工具结果与当前任务弱相关（或未命中实质内容），请直接基于已有信息回答，不要再调用其他工具。"
+                            results.append({
+                                "tool_call_id": tc.get("id", ""),
+                                "role": "tool",
+                                "name": tname,
+                                "content": json.dumps(_t_content, ensure_ascii=False),
+                            })
+                        # ── P0-①（2026-10-07）为**未执行**的尾部调用补结果 ──
+                        # pmsg 带的是**全部** ptool_calls，若不给尾部补 tool_result，
+                        # 第 4 笔起永久悬空 ⇒ 下一轮 HTTP 400（protocol 硬约束）。
+                        # ⚠️ 必须**在 `if results:` 之前**追加：全被截断时 results 也要非空，
+                        #    否则整轮 tool_calls 一个结果都没有，配对同样缺失。
+                        # ★ 2026-11-12（米爸反馈3，conv 9571 实证 7 连问 / conv 9553 实证 24 连问）：
+                        #   clarify 已记录 ⇒ **立即退出轮次循环，不再补 skip、不再回填 pmsg**。
+                        #   两个原因缺一不可：
+                        #   ① 协议：ask_user 的 tool_call 没有配对 tool_result，回填 pmsg 即悬空
+                        #      ⇒ 下一轮探测 HTTP 400；
+                        #   ② 防重问：results 为空时 `if results:` 整块跳过 ⇒ messages 不更新
+                        #      ⇒ 下一轮 LLM 看到**同一份上下文** ⇒ 换措辞再问一遍（真库实测
+                        #      3s/次、最多烧到 max_tool_rounds=100 轮，每轮还多一条工具留痕）。
+                        if _clarify_req:
                             break
+                        # ★ 2026-11-04（conv 990403 完整一轮真机实证）：confirm_required
+                        #   **同样必须轮级 break** —— 此前只有内层 for 的 break，
+                        #   轮级回填 `if results: messages.append(pmsg)` 仍会执行：
+                        #   pmsg 带确认工具的 tool_call 但没有配对 tool_result ⇒
+                        #   下一轮探测 **HTTP 400**（tool_calls 必须跟齐 tool 消息），
+                        #   且 messages 已永久带毒 ⇒ 后续**每一次**调用都 400 ⇒
+                        #   子任务零产出失败（真机：todo_write+save_artifact 同轮，
+                        #   save_artifact 命中写前确认闸，t2 两次尝试都死在下一轮探测）。
+                        #   为什么以前没暴露：确认工具独占一轮时 results 为空 ⇒
+                        #   `if results:` 整块跳过 ⇒ 无悬空 ⇒ 侥幸走到 6216 的确认卡。
+                        #   修法与 clarify 同构：轮级 break，直接落到下方确认卡收口。
+                        if _hil_confirm_req:
+                            break
+                        # ★ 2026-11-02（无进展护闸）：连续零新增 ⇒ **收尾**（不做无意义的下轮）。
+                        #   ⚠️ 与 `_clarify_req` 的 break 不同：那个 break 是为了**不补 skip**
+                        #   （avoid 悬空 tool_call）；这里必须**先把 results 回填**，
+                        #   否则下一轮 LLM 看不到本轮结果、会把"没结果"当结论。
+                        # ★ 2026-11-02（无进展护闸）：连续零新增 ⇒ 本轮结束后**收尾作答**。
+                        #   ⚠️ 这里**只记录标志、不发消息**：此刻 results 尚未回填，
+                        #   提前 append 一条 user 消息会破坏
+                        #   `assistant(tool_calls) → tool...` 的严格配对顺序（HTTP 400）。
+                        #   真正下发在下面 results 回填之后（见 `messages.extend(results)` 之后）。
+                        _pg_stop_now = bool(_pg_stop)
+                        if _skip_calls:
+                            _skip_res = _lproto.skipped_results(_skip_calls)
+                            for _sr in _skip_res:
+                                _sfn = _sr.get("name") or "-"
+                                yield {"type": "tool", "status": "done", "name": _sfn,
+                                       "ok": False, "result": "本轮并发已达上限，未执行",
+                                       "error": "round_tool_limit", "call_id": _sr.get("tool_call_id"),
+                                       "skipped": True, "skip_reason": "round_tool_limit",
+                                       "agent": _ctx_agent, "skill": _ctx_skill,
+                                       "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(_sfn)}
+                            results.extend(_skip_res)
+                        # 工具结果回填后进入下一轮（观察 → 再思考）
+                        if results:
+                            # 2026-09-17 S3：上一轮 tool 内容换为省略标记
+                            # 不可删除该消息——OpenAI 兼容协议要求 tool 与 assistant.tool_calls 成对出现
+                            # ★ 2026-11-13（#57）：**取回的章节正文不可省略**。
+                            #   原实现把上一轮所有 tool 结果清空 ⇒ 模型下一轮看到"上下文里没有
+                            #   第 5/6/7 章正文" ⇒ 又去调 read_attachment_section 取一遍
+                            #   ⇒ 实测同一轮内取章 40+ 次（5→6→7→5.3→6.1→7.1→… 循环），
+                            #   每次都把整章正文再灌一遍上下文 ⇒ 上下文爆炸 + 60s+ 耗时。
+                            #   判据：章节正文是模型**唯一**的正文来源、且**不可再生**
+                            #   （清掉就只能重取）⇒ 保留；其他工具结果照旧省略（它们可再生）。
+                            # ★★ 2026-10-30（用户「每次人工确认后都无辜终止」的**直接根因**）：
+                            #   原实现把上一轮所有 tool 结果替换成
+                            #     {"ok":true,"result":"","note":"前序工具结果已省略——其结论已体现在后续推理中"}
+                            #   ——**连 offload 编号和头部摘要一起抹掉**。于是从第 3 轮起：
+                            #     · 模型看不到任何明细（真机原话：「本轮所有读接口回执均为
+                            #       『前序工具结果已省略』——没有拿到任何一个可核验的元素明细」）；
+                            #     · 想按 offload 编号重读，但编号已被抹掉 ⇒ 只能**猜编号**
+                            #       （实测 tool_call_logs id=6238：「offload #2608 不存在」，
+                            #        而 #2608 是**下一笔**调用的编号，猜错一位）；
+                            #     · 猜错/重查都算失败轮 ⇒ 撞上 max_failed_rounds=3 ⇒ 强制收尾
+                            #       ⇒ 用户看到「无辜终止」。
+                            #   这是"为省 token 把可寻址性一起省掉"的典型错误：
+                            #   offload 模块的**全部价值**就是"引用块 + 按 id 重读"，抹掉编号
+                            #   等于把该模块降级成"纯丢弃"。
+                            #   修法两条，缺一不可：
+                            #     ① **保留最近 K 轮原文**（默认 1）——多步核对天然要回看上一轮；
+                            #       实测上一轮结果就是模型最需要的那份。
+                            #     ② 更早的轮次省略，但**保留可寻址摘要**：工具名 + 头部 400 字
+                            #       + offload 编号；有编号就能精确重读，不必重查、不必猜。
+                            #   为什么用"轮次"而不是"条数"：一轮里可能 1 条也可能 5 条，
+                            #   按条数切会把同一轮的证据切一半，反而更难推理。
+                            _keep_r = _KEEP_TOOL_ROUNDS
+                            _still = []
+                            for _rno, _pi in _elide_queue:
+                                if _rno > _rnd - 1 - _keep_r:
+                                    _still.append((_rno, _pi))      # 还在保留窗口内
+                                    continue
+                                if not (0 <= _pi < len(messages)) or messages[_pi].get("role") != "tool":
+                                    continue
+                                if messages[_pi].get("name") == "read_attachment_section":
+                                    _still.append((_rno, _pi))     # 章节正文：不可再生，永不省略
+                                    continue
+                                _old = messages[_pi].get("content")
+                                try:
+                                    _old_s = _old if isinstance(_old, str) else json.dumps(
+                                        _old, ensure_ascii=False)
+                                except Exception:
+                                    _old_s = str(_old)[:4000]
+                                # ★ offload 编号：从引用块里抠出来。**这是重读的唯一钥匙**，
+                                #   拿不到就降级为"请重新调用该工具"，而不是让模型猜。
+                                _m_oid = re.search(r"offload\s*#(\d+)", _old_s or "")
+                                _oid_v = int(_m_oid.group(1)) if _m_oid else 0
+                                _tnm = messages[_pi].get("name") or "-"
+                                _head = (_old_s or "")[:400]
+                                _note = ("前序工具结果已省略（工具 %s，第 %d 轮）"
+                                         % (_tnm, _rno + 1))
+                                if _oid_v:
+                                    _note += "；**全文可直接重读**：tool_result_fetch(id=%d)" % _oid_v
+                                else:
+                                    _note += "；该结果未 offload，如需请重新调用 %s" % _tnm
+                                messages[_pi]["content"] = json.dumps(
+                                    {"ok": True, "result": "", "note": _note,
+                                     "head": _head,
+                                     **({"offload_id": _oid_v} if _oid_v else {})},
+                                    ensure_ascii=False)
+                            _elide_queue = _still
+                            messages.append(pmsg)
+                            messages.extend(results)
+                            # ★ 2026-11-02（无进展护闸）：**必须**在 results 回填之后再发提示，
+                            #   否则 `assistant(tool_calls) → tool...` 的配对顺序被打断（HTTP 400）。
+                            #   语义：告知"为什么不能再检索"，并要求基于已有结果作答
+                            #   （不给原因时模型会自己编一个 —— 与墙钟停机那次教训同源）。
+                            if _pg_stop_now:
+                                try:
+                                    messages.append({"role": "user", "content": (
+                                        "\n\n【系统】本子任务已触发**无进展护闸**（%s）："
+                                        "检索连续没有带来新内容，或单个工具调用次数已达上限。"
+                                        "请**立即**停止调用工具，基于上面已有的结果给出结论；"
+                                        "未覆盖的部分如实写进 missing[]。"
+                                        % (_pg_reason or "no_progress"))})
+                                except Exception:
+                                    pass
+                            for _k in range(len(messages) - len(results), len(messages)):
+                                _elide_queue.append((_rnd, _k))
+        # P0-按需工具：本轮工具结果全弱相关 → 收敛（跳出循环走兜底流式生成，避免连环调用）
+                            # ⚠️ 分母用**执行数**（`_exec_calls`）而非 `len(results)`：
+                            #    P0-① 为未执行尾部补了 skipped 结果，计入分母会让本该收敛的场景
+                            #    变成"不收敛"，也可能让本该继续的场景误收敛。
+                            # ★ 只有**失败轮**才扣失败预算（成功推进不限制，米爸 2026-10-09）
+                            _lg.charge_failed_round(_round_had_ok)
+                            # ★★ 2026-10-27（用户「为啥不能自己持续运行完成任务」的第二根因）：
+                            #   **连续重复调用的收敛闸**。
+                            #
+                            #   实测（conv 9629 16:50 那轮）：5 次真调用后，模型又**连续 5 次**
+                            #   发出**完全相同**的 `query_data_tree`；`probe_dup` 每次短路回喂
+                            #   同一结果（`ok=True`），于是：
+                            #     · `charge_failed_round(_round_had_ok=True)` ⇒ **不计失败轮**
+                            #       ⇒ `max_failed_rounds` 这道闸完全不响；
+                            #     · 轮次预算 100 也远未到；
+                            #     · 每轮 prompt 约 28k ⇒ **5 轮烧掉约 14 万 token**（近半个预算）
+                            #   ⇒ 最终以「工具预算耗尽（307,505 / 300,000）」收场，
+                            #     而它其实只做了 5 件不同的事。
+                            #
+                            #   判据：**同一调用被连续短路 2 次**（= 第 3 次仍是它）就注入硬提示，
+                            #   连续 3 次直接收敛（交给下方兜底流式生成，基于已有信息作答）。
+                            #   为什么用"连续"而不是"累计"：多步任务里合法地回头重查同一个工具
+                            #   是常见的；只有**中间没有任何新进展**的连续重复才是空转。
+                            if _dup_streak >= 2:
+                                # ★ 2026-10-28（conv 9738 实证）：**不再直接终止循环**。
+                                #   真机现场：模型已经定位到目标包（2115385083629469696）、
+                                #   也用对了导入通道的措辞，但把**同一个 parentId 查了 3 次**
+                                #   （纯勘查、无新信息）⇒ 旧逻辑 break ⇒ 直接进最终生成
+                                #   ⇒ 交付里写着"下一步我会执行校验+导入"，本轮一次没做。
+                                #   判"空转"是对的，**处置错了**：空转时应把模型
+                                #   **强行切换执行模式**（禁止再查、立即做剩余关键动作），
+                                #   只有连续两次强指令仍不动才收敛终止。
+                                _dup_redirect = getattr(self, "_dup_redirect_n", 0)
+                                if _dup_redirect < 2:
+                                    self._dup_redirect_n = _dup_redirect + 1
+                                    _dup_streak = 0        # 归零：给它机会按新指令推进
+                                    _d_delta = (
+                                        f"（{agent_def.name}）已连续发出**完全相同**的工具调用"
+                                        f"（同一节点查了多次，结果不会变化）⇒ **停止勘查，"
+                                        f"立即切换到执行模式**。")
+                                    _dup_cmd = (
+                                        "【禁止重复勘查】你刚刚把同一个查询重复了多次，信息已经足够。\n"
+                                        "现在**不要再查任何已查过的节点**，直接按剩余待办执行：\n"
+                                        "· 有代码未校验 ⇒ 立即 `sysml_v2_validate`（硬错必须清零）；\n"
+                                        "· 需要把整段 SysML v2 写进某个包 ⇒ 立即 `zhiyuan_sysmlv2_import`"
+                                        "（`vc=\"<branchId>,0\"`、`text=<源码>`、"
+                                        "`targetPackageDataId=<包 id>`），**一次调用**完成；\n"
+                                        "· 写完立刻 `query_data_tree(parentId=目标包)` **回读确认**，"
+                                        "再向用户报结果。\n"
+                                        "若确实缺一项信息才能继续，只允许**换工具/换参数问一次**，"
+                                        "并在答复里写明缺什么。")
+                                    messages.append({"role": "user", "content": _dup_cmd})
+                                    exec_notices.append(({"kind": "progress", "text": _d_delta}))
+                                    yield {"type": "progress", "delta": _d_delta,
+                                           "kind": "progress", "round": _rnd + 1, "phase": "plan"}
+                                    yield {"type": "stage", "name": "重复调用收敛",
+                                           "status": "done",
+                                           "detail": f"连续 {_dup_streak or 2} 次相同调用："
+                                                     f"已注入「停止勘查、立即执行」强指令"
+                                                     f"（第 {_dup_redirect + 1}/2 次）"}
+                                    continue      # ← 回循环顶，让它按强指令继续做
+                                _d_delta = (
+                                    f"（{agent_def.name}）已多次被要求停止重复勘查仍未推进，"
+                                    f"本轮收敛：改为基于已有信息组织回答。")
+                                exec_notices.append(({"kind": "progress", "text": _d_delta}))
+                                yield {"type": "progress", "delta": _d_delta, "kind": "progress",
+                                       "round": _rnd + 1, "phase": "plan"}
+                                yield {"type": "stage", "name": "重复调用收敛",
+                                       "status": "done",
+                                       "detail": f"连续 {_dup_streak} 次相同调用已被短路，"
+                                                 f"强指令后仍无推进，停止空转（避免烧穿 token 预算）"}
+                                break
+                            if weak_count == len(_exec_calls) and weak_count > 0:
+                                _w_delta = f"（{agent_def.name}）本轮工具结果均与任务弱相关，不再继续调用工具，直接基于已有信息组织回答。"
+                                exec_notices.append(({"kind": "progress", "text": _w_delta}))
+                                yield {"type": "progress", "delta": _w_delta, "kind": "progress", "round": _rnd + 1, "phase": "plan"}
+                                break
+                # ★ 2026-10-28（写前确认 HITL）写前确认收口 —— 落痕迹 + 发确认卡 + 结束本次流。
+                #   位置同样选在「最终生成之前」：ReAct 循环已因 confirm_required 中断，
+                #   继续生成只会空转（而且会让模型在"没拿到批准"的情况下编造"已执行"）。
+
+                def _interim_exec_card():
+                    """**生成前**收口用的执行卡片（确认/澄清共用，唯一一份）。
+
+                    ★ 2026-10-28（conv 9739 实证）：第一版在两处各写了一份同构字典，
+                      而且都直接索引了 llm_info 的 used_mock —— 但 llm_info 是在
+                      **最终生成之后**（5525 行附近）才有值的。本收口发生在它之前
+                      ⇒ 抛 `cannot access local variable 'llm_info'` ⇒
+                      **整轮流中断**，用户连澄清卡都拿不到（比不修更糟）。
+                      ⇒ 抽成一个函数、所有可选字段用 `.get`/局部兜底；
+                        两处调用（hil / clarify）共用同一份，杜绝再次错位。
+                    """
+                    # ⚠️ 闭包读外层 `llm_info` 必须 try/except NameError：
+                    #   它在本收口点**可能尚未赋值**（那是本函数存在的全部理由）。
+                    #   `locals().get(...)` 在这里是错的 —— 函数内 locals() 只含**本函数**
+                    #   的局部变量，永远拿不到外层未赋值的名字（第一版就写错了）。
+                    try:
+                        _li = llm_info if isinstance(llm_info, dict) else {}
+                    except NameError:
+                        _li = {}
+                    _ret = retrieval if isinstance(retrieval, dict) else {}
+                    try:
+                        _cit = _citations_payload(_ret.get("chunk_hits"))
+                    except Exception:
+                        _cit = []
+                    return {
+                        "intent": intent, "agent": agent_def.name,
+                        "hil_level": hil_level, "kb_tags": kb_tags,
+                        "skill_hits": self._last_skill_hits, "slots": slots,
+                        "source": _ret.get("source"), "confidence": _ret.get("confidence"),
+                        "graph_count": _ret.get("graph_count"),
+                        "vector_count": _ret.get("vector_count"),
+                        "used_mock": _li.get("used_mock"),
+                        "provider": _li.get("provider"),
+                        "citations": _cit,
+                        "exec": {
+                            "reasoning": "".join(exec_reasoning)[:8000] or None,
+                            "notices": (exec_notices[:60] or None),
+                            "agent": agent_def.name,
+                            "tools": exec_tools,
+                            "brief": getattr(self, "_last_intent_brief", None) or None,
+                            "gates": _gates_safe(),
+                        },
+                    }
+
+                if _hil_confirm_req:
+                    # ★ 2026-10-28：把**本轮已产出/已做过什么**一并落库，别只留一句占位语。
+                    #   真机 9733：校验跑完、时序图代码已生成，但历史里只剩
+                    #   「⏸ 写操作需要人工确认」⇒ 用户无从判断该不该批准（见 session.py 注释）。
+                    _hil_content = (
+                        "⏸ **写操作待你确认**：%s\n\n"
+                        "本轮已完成：见下方执行过程（工具回执/思考）；"
+                        "批准后我会立即执行该写入并**回读确认**，再向你汇报结果。\n\n"
+                        "> 待确认动作：`%s`（确认单 #%s）"
+                        % (str((_hil_confirm_req or {}).get("title") or "需人工批准后执行"),
+                           str((_hil_confirm_req or {}).get("tool") or "?"),
+                           str((_hil_confirm_req or {}).get("id") or "?")))
+                    _hil_card = _interim_exec_card()
+                    yield from self._hil_confirm_finish_events(
+                        conversation_id, intent, _hil_confirm_req,
+                        content=_hil_content, exec_card=_hil_card)
+                    return
                 # ★ 2026-10-17（米爸反馈3）：ask_user 澄清收口 —— 落挂起 + 发射卡片 + 结束本次流。
                 #   位置选在「最终生成之前」：此时 ReAct 循环已中断，继续生成只会空转。
                 #   与 1.4/1.5 共用 _persist_clarify + clarify_ask 协议（前端同一套卡片/续跑机制）。
                 if _clarify_req:
-                    _iqs = [dict(_clarify_req)]
-                    _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
-                                                 forced_intent, skill_name, team, _iqs)
-                    yield {"type": "clarify_ask", "questions": _iqs, "intent": intent,
-                           "title": "❓ AI 执行中需要你确认后才能继续",
-                           "message": str(user_input)[:200], "source": "ask_user"}
-                    yield {"type": "done", "data": {
-                        "ok": True, "clarify_asked": True, "intent": intent,
-                        "content": "AI 执行中需要你确认（详见澄清卡片，回答后将继续）",
-                        "msg_type": "clarify", "usage": {}, "questions": _iqs,
-                        "message_id": _mid or 0, "clarify_source": "ask_user"}}
+                    # ★ 2026-10-27：收口逻辑抽到 `_clarify_finish_events`（两处共用，见该方法注释）
+                    # ★ 2026-10-28（conv 9735 实测）：**把本轮做过什么一起落库**。
+                    #   那轮已经跑完定位、生成时序图代码、`sysml_v2_validate` 返回 0 错误，
+                    #   却只留一句「需要您确认建模信息后继续」（12 字）⇒ 用户盲确认。
+                    #   ⇒ content 列出工具脉络 + 校验回执；card 带完整 exec（含代码与参数）。
+                    _clr_names = [str(t.get("name") or "") for t in (exec_tools or [])]
+                    _clr_pass = [t for t in (exec_tools or [])
+                                 if str(t.get("name") or "") in ("sysml_v2_validate", "sysml_v2_lint")
+                                 and bool(t.get("ok"))]
+                    _clr_lines = [
+                        "⏸ **暂停等你确认**：%s" % (
+                            str((_clarify_req or {}).get("question") or "需要你拍板后才能继续")),
+                        "",
+                        "本轮已完成：共 %d 次工具调用（%s）。"
+                        % (len(_clr_names),
+                           "、".join(dict.fromkeys(_clr_names))[:200] or "无"),
+                    ]
+                    if _clr_pass:
+                        _clr_lines.append(
+                            "校验回执：`%s` 已跑通（%s）"
+                            % (_clr_pass[-1].get("name"),
+                               str(_clr_pass[-1].get("result") or "")[:120].replace("\n", " ")))
+                    _clr_lines.append("")
+                    _clr_lines.append("> 生成的设计代码与全部工具回执见下方「执行过程」；"
+                                      "回答后我会继续。")
+                    _clr_card = _interim_exec_card()
+                    yield from self._clarify_finish_events(
+                        conversation_id, user_input, intent, branch, attachments,
+                        forced_intent, skill_name, team, _clarify_req,
+                        content="\n".join(_clr_lines), exec_card=_clr_card)
                     return
                 # P1-② 补救点（2026-10-07）：循环已 break、**最终生成之前**再消费一次 follow-up。
                 # ★ 为什么循环头不够（实测踩到）：循环头只覆盖「工具执行中 / 探测轮等待中」
@@ -4193,8 +6345,8 @@ class StreamMixin:
                                          "content": _FOLLOWUP_PREFIX + _fu2})
                         _fu2_delta = (f"（{agent_def.name}）生成最终回答前收到补充指令，"
                                       f"已并入本轮：{_fu2[:60]}")
-                        exec_reasoning.append(_fu2_delta)
-                        yield {"type": "reasoning", "delta": _fu2_delta,
+                        exec_notices.append(({"kind": "progress", "text": _fu2_delta}))
+                        yield {"type": "progress", "delta": _fu2_delta, "kind": "progress",
                                "round": _rnd + 1, "phase": "followup"}
                         # ★ 有正文也照样重来一次最终生成：补充必须真正影响答案，
                         #   否则用户看到的是"完全没理会我的补充"。
@@ -4236,7 +6388,8 @@ class StreamMixin:
                     _fin_msgs = _lproto.finalize_messages(
                         messages, extra_context=_extra,
                         reason=_lg_stop_reason(_lg), used=_lg_failed_rounds(_lg),
-                        limit=_lg_limit_of(_lg, max_tool_rounds))
+                        limit=_lg_limit_of(_lg, max_tool_rounds),
+                        write_ops=_write_ops)
 
                     # ★★ 2026-10-09（与 execute.py 同源，米爸纠正后补齐）：
                     #   收尾轮原来一律 `stream=True` 且**不传 tools**
@@ -4311,7 +6464,8 @@ class StreamMixin:
                         _repair_msgs = None
                     if _repair_msgs:
                         _fin_msgs = _lproto.finalize_messages(_repair_msgs,
-                                                               extra_context=_extra)
+                                                               extra_context=_extra,
+                                                               write_ops=_write_ops)
                     chunks = llm_client.chat(_fin_msgs, provider_id=effective_provider, stream=True,
                                             _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
                     for chunk in chunks:
@@ -4323,12 +6477,67 @@ class StreamMixin:
                                        "round": _rnd + 1, "phase": "llm"}
                             if delta.get("content"):
                                 llm_content += delta["content"]
+                                _streamed_acc[0] += delta["content"]
                                 yield {"type": "token", "delta": delta["content"]}
+                # ★★★ 2026-10-27（真机 E2E 实测，conv 9698）：**已成功写操作的事实注入**。
+                #   现象：`create_model_elements` 回执 `status=SUCCEEDED`（平台侧直连回读证实
+                #   新包确实建成、total 1→2），但模型最终回复断言「**尚未写入平台**……
+                #   因轮次用尽，写操作没有执行」——**与事实相反**。
+                #   机制：ReAct 已累积 11 轮、messages 极长 ⇒ 模型在收尾时**看漏**了那条回执；
+                #   而收尾提示（`finalize_messages`）只在 `lacks_deliverable` 为真时才走，
+                #   本次模型**产出了长回复** ⇒ 收尾提示**根本没触发** ⇒ 无任何机制纠正它。
+                #   ⇒ 修法：**在最终生成之前**把已成功写操作作为一条 user 消息追加进 messages
+                #      （不依赖收尾分支 ⇒ 两条路径都覆盖）。
+                #   ⚠️ 只在**确有成功写操作**时追加 ⇒ 无写操作的场景**逐字节不变**（零回归面）。
+                #   ⚠️ 这只纠正「虚构未完成」；「虚构已完成」由工具自身回执 + 技能纪律承担。
+                _wdigest = ""
+                try:
+                    _wdigest = _lproto.write_ops_digest(_write_ops)
+                except Exception:
+                    _wdigest = ""
+                if _wdigest:
+                    messages = list(messages) + [
+                        {"role": "user", "content": _wdigest}]
+                    try:
+                        _w_delta = ("（已成功执行的写操作已记入上下文）"
+                                    + "、".join(str(o.get("name") or "") for o in _write_ops))
+                        exec_notices.append(({"kind": "progress", "text": _w_delta}))
+                        yield {"type": "progress", "delta": _w_delta, "kind": "progress",
+                               "round": _rnd + 1, "phase": "plan"}
+                    except Exception:
+                        pass
                 # llm_client.chat(stream=True) 返回生成器；FORCE_MOCK 下 MockLLM 也走 _stream
                 if not tool_injected:
                     chunks = llm_client.chat(messages, provider_id=effective_provider, stream=True,
                                             _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
-                    full = []
+                    # ★★ 2026-10-27（用户反馈「中途执行失败后之前输出的内容没有任何展示」）
+                    #   ——**断点保护的真实缺口就在这里**，必须逐字看完本注释再改。
+                    #
+                    #   旧实现：
+                    #       full = []
+                    #       for chunk in chunks:
+                    #           ... full.append(delta["content"])
+                    #               yield {"type":"token", "delta": ...}   ← 已经发给用户了
+                    #       llm_content = "".join(full)                    ← **循环结束后**才赋值
+                    #   ⇒ 流**中途**抛异常（Provider 断流 / 网关 reset / 解析异常）时：
+                    #       · 用户屏幕上已有 N 个 token（真实可见）；
+                    #       · 但 `llm_content` 仍是 ""；
+                    #       · except 分支算出的 `_partial` 因此为空；
+                    #       · `_persist_partial_stream` 的 `len(text) < 4` 直接跳过 ⇒ **库里 0 条**
+                    #     ⇒ 刷新/切回会话= 一个字都不剩。真库实证（conv 9629 15:34:39「写入工程」）：
+                    #       `llm_usage_stats` 有 4 次调用（末次 22,707 prompt / 929 completion，
+                    #       内容确实生成过），而 `messages` **0 条 assistant**、
+                    #       `orch_stream_events` **0 条** —— 用户看到的东西全部蒸发。
+                    #
+                    #   为什么另一条分支（工具轮后的生成）没这个毛病：它写的是
+                    #       `llm_content += delta["content"]`（**增量赋值**，异常前已累积）。
+                    #   ⇒ 两条分支累积方式不一致，本身就是缺陷。现统一为增量累积。
+                    #
+                    #   额外引入 `_streamed_acc`：**只增不减**地记录"本轮真的发给过用户的正文字符"。
+                    #   为什么不直接用 llm_content：续跑（auto-continue）每轮开头会把
+                    #   `llm_content = ""` 复位，而用户此前**已经看到过**上一轮的内容；
+                    #   失败时若只看 llm_content，那些内容照样会丢（尤其是"第 2 轮失败"这种形态）。
+                    #   `_streamed_acc` 不复位、只做失败兜底，与正常落库的 `_full_content` 互不干扰。
                     for chunk in chunks:
                         for delta in self._extract_stream_deltas(chunk):
                             # 思考过程（reasoning_content）与正文（content）分流推送
@@ -4337,19 +6546,30 @@ class StreamMixin:
                                 yield {"type": "reasoning", "delta": delta["reasoning"],
                                        "round": _rnd + 1, "phase": "llm"}
                             if delta.get("content"):
-                                full.append(delta["content"])
+                                llm_content += delta["content"]
+                                _streamed_acc[0] += delta["content"]
                                 yield {"type": "token", "delta": delta["content"]}
-                    llm_content = "".join(full)
                 st = getattr(llm_client, "stats", {})
-                llm_info = {
-                    "provider": st.get("last_provider", "未配置"),
-                    "model": "-",
-                    "used_mock": bool(st.get("last_used_mock", True)),
-                    "latency_ms": st.get("last_latency_ms", 0),
-                    # V2.6：token 统计透传（前端执行收口条展示）
-                    "tokens": {"prompt": st.get("last_prompt_tokens", 0),
-                               "completion": st.get("last_completion_tokens", 0)},
-                }
+                if _cache_answer:
+                    # 缓存命中：**不谎报**成真实 provider 调用（含 0 延迟、0 token）
+                    llm_info = {
+                        "provider": "semantic-cache",
+                        "model": "-",
+                        "used_mock": False,
+                        "latency_ms": 0,
+                        "tokens": {"prompt": 0, "completion": 0},
+                        "cache_hit": True,
+                    }
+                else:
+                    llm_info = {
+                        "provider": st.get("last_provider", "未配置"),
+                        "model": "-",
+                        "used_mock": bool(st.get("last_used_mock", True)),
+                        "latency_ms": st.get("last_latency_ms", 0),
+                        # V2.6：token 统计透传（前端执行收口条展示）
+                        "tokens": {"prompt": st.get("last_prompt_tokens", 0),
+                                   "completion": st.get("last_completion_tokens", 0)},
+                    }
                 # 2026-09-20：正文无代码时用工具层缓存补回，并**增量补吐**（补回内容是事后拼接的，
                 # 不补吐则前端只看到结论、代码要等 done 重渲染才出现）。
                 _pre_sysml_len = len(llm_content)
@@ -4357,26 +6577,223 @@ class StreamMixin:
                 if len(llm_content) > _pre_sysml_len:
                     for _chunk in iter_stream_chunks(llm_content[_pre_sysml_len:]):
                         yield {"type": "token", "delta": _chunk}
+                # ★ P1-1（2026-10-26）：**纯问答写入语义缓存**（与 execute.py:790 同口径）。
+                #   此前 stream **从不写缓存** ⇒ 即便开了开关，主对话也永远建不起缓存。
+                #   闸门与读取侧一致，另加两条：
+                #     · `not exec_tools` —— 本轮真调过工具 ⇒ 答案含**实时数据**，
+                #       不能当"可复用结论"缓存（否则下次返回过期事实，比慢更糟）。
+                #     · `not _cache_answer` —— 本身来自缓存的不回写（否则 hit_count /
+                #       时间戳被反复刷新，LRU 淘汰失真）。
+                #   ⚠️ 位置在 `_ensure_sysml_from_tools` **之后**：缓存必须与用户最终看到的
+                #     正文逐字节一致，否则命中时少一段代码。
+                if (not _cache_answer and llm_content
+                        and intent in ("chat", "knowledge_qa")
+                        and not att_blocks and not _clarify_req
+                        and not exec_tools
+                        and not dry_run):
+                    try:
+                        from core import config as _cfg_scw
+                        if _cfg_scw.as_bool("semantic_cache", "enabled", False):
+                            from semantic_cache import SemanticCache
+                            from database import get_db
+                            _ccw = get_db()
+                            try:
+                                SemanticCache.put(_ccw, user_input, llm_content)
+                            finally:
+                                _ccw.close()
+                    except Exception:
+                        pass      # 缓存写入失败绝不能影响已生成的回答
                 # ★ 2026-10-17（米爸「harness 持续工作」）：完成度评估 + 续跑决策。
                 #   触发门三重（全满足才评估）：① 配置开且非 dry_run；② 本轮**实际调用过工具**
                 #   （exec_tools 非空——纯问答轮没有「剩余步骤」可言，且省评估器成本）；
                 #   ③ 续跑次数未满。评估器本身绝不抛异常（_evaluate_completion 内部吞），
                 #   判据解析失败 ⇒ verdict=None ⇒ decide 返不续跑（fail-safe 向停）。
-                if (_ac_cfg["enabled"] and not dry_run and exec_tools
+                # ★ 2026-10-22（米爸反馈3「不要遇到点问题就终止」）：
+                #   闸② 补一个**续跑意图**例外 —— 用户明确说「继续/接着/go on」时，
+                #   "要不要继续"恰恰是唯一值得评估的问题，却因这一轮没调工具而被整条跳过
+                #   （实测会话 9587：4777「继续」→ 4778 只走了 chat_probe，
+                #     llm_usage_stats 里**没有任何 CHAT_TASK_EVAL 调用** ⇒ 续跑机制等于没启动）。
+                #   ⇒ 续跑意图轮强制评估一次（成本：+1 次小调用），其余纯问答轮维持原样不评估。
+                _cont_input = False
+                try:
+                    _cont_input = bool(self._is_continuation_input(user_input))
+                except Exception:
+                    _cont_input = False
+                # ★★ 2026-10-27（用户两问）：「为啥不自己跑完」+「要澄清为啥不弹卡片」
+                #
+                #   实测现场（conv 9629，用户「继续写入工程」）：该轮 `tool_call_logs`
+                #   **零条 tool**（模型只写了一大段说明就收尾），而
+                #   `_is_continuation_input("继续写入工程")` = **False**（它要求整句是裸续作短语）
+                #   ⇒ 旧闸门 `(exec_tools or _cont_input)` **两个都不满足** ⇒ 评估器没跑
+                #   ⇒ 模型那句"下一轮我先用名称检索「测试D」"没人执行，用户只能自己再发一句。
+                #
+                #   ⇒ 补两个**更宽**的触发信号（都只用于"要不要评估"，不改主路径行为）：
+                #     · `_cont_cue`：用户这轮在说"接着干"（继续/接着/往下/按上面…开头即可）；
+                #     · `_awaiting`：**答复以征求许可/等拍板结束** —— 这是最该评估的一类：
+                #       任务明明没做完，只是模型停下来问了一句。旧闸门把它整类排除了。
+                #   为什么要包含"没调工具"的轮次：本仓旧注释的前提是"纯问答轮没有剩余步骤"，
+                #   但实测最常见的失败恰恰是「模型把剩余步骤写进了正文、却没执行」。
+                try:
+                    _cont_cue = bool(_ac.has_continue_cue(user_input))
+                except Exception:
+                    _cont_cue = False
+                _awaiting = False
+                try:
+                    _awaiting = bool(llm_content) and bool(_ac.looks_awaiting_permission(llm_content))
+                except Exception:
+                    _awaiting = False
+                if (_ac_cfg["enabled"] and not dry_run
+                        and (exec_tools or _cont_input or _cont_cue or _awaiting)
                         and _auto_continues < _ac_cfg["max"]):
                     # 本轮产出并进全量（落库/done/前端历史用全量；评估器只看本轮+工具史）
                     if llm_content:
-                        _full_content = ((_full_content + "\n\n" + llm_content)
-                                         if _full_content else llm_content)
+                        # ★ 2026-10-28（conv 9736 实证）：**去重式合并**，不再无脑累加。
+                        #   真机：一条消息 37,620 字符、7 个代码块 md5 全同 —— 用户报
+                        #   「生成代码中还是存在多份相同的内容」。同一任务的续跑轮
+                        #   模型每轮都重写完整报告，逐轮追加就堆成 7 份。
+                        _full_content = _ac.merge_round_content(_full_content, llm_content)
                     _verdict = self._evaluate_completion(
                         user_input=user_input, exec_tools=exec_tools, answer=llm_content,
                         provider_id=effective_provider, agent_name=agent_def.name,
                         model_params=_agent_mp, guard=_lg)
+                    # ★ 2026-10-27：评估器判「必须用户拍板」⇒ **直接变成澄清卡片**。
+                    #   这就是「需要澄清为啥不弹卡片、非要终止后让我另起一轮」的机制答案：
+                    #   以前只有"模型主动调用 ask_user 工具"才弹卡，而模型习惯把问题写在正文里
+                    #   （提示词写了"不要用纯文本请确认"，实测遵循率不稳）。
+                    #   现在由**评估器**兜住：它读到"先删掉再重来，还是留着？"这类问题，
+                    #   给出 needs_user + question + options ⇒ 这里复用 ask_user 的收口
+                    #   （落 pending_clarify + 发 clarify_ask 卡），用户在卡片上点一下就续跑。
+                    # ★ P1-2（2026-10-28）`has_default` ⇒ **不转卡**，转"按默认推进"。
+                    #   区分两种 needs_user：
+                    #     · user_only  —— 信息只有用户有（问就一定做错）⇒ 转卡（现状）
+                    #     · has_default—— 有合理默认值 ⇒ 按默认推进 + 答复里标注假设
+                    #   实测背景：6/89 次评估落在 needs_user，全转卡 ⇒ 用户感知"停"；
+                    #   其中一部分（如"两个口径"）任选一个都能推进。
+                    #   ⚠️ 必须在 clarify_from_verdict **之前**转换 ——
+                    #      clarify_from_verdict 对 has_default 返回 None，若不先转，
+                    #      这条结论会被完全丢弃（既不打回卡也不续跑 = 静默结束）。
+                    # ★ 2026-10-28（conv 9732 实测）：**待办未做完时，先别问人**。
+                    #   真机现象：评估器给出 needs_user（"是否按当前方案校验后写入"），
+                    #   系统立刻打回澄清卡片 ⇒ 用户被问一次，而**只读的校验一步都没做**。
+                    #   违反用户原话「完成校验后写入，写入前确认」：确认是写入门，
+                    #   不该把校验也挡在门外。
+                    #   ⚠️ 判定一律走 `_ac.defer_clarify`（纯函数，**唯一实现**）——
+                    #     本处只接收结果，不自己写"怎么覆盖 verdict"的分支
+                    #     （否则又成了"同一语义两处各写一份"，本仓已被门禁判红过一次）。
+                    #   ⚠️ 顺序（2026-10-28 修）：**先过待办闸，再判要不要问人**。
+                    #     待办闸是评估器结论的上位约束，"done 与否"必须先定；
+                    #     此前待办闸排在澄清块之后 ⇒ 本处引用未赋值的 `_tg` ⇒
+                    #     真机 conv 9734 抛 `cannot access local variable '_tg'`、
+                    #     整轮流中断（连评估环节都没跑到）。
+                    _verdict, _tg = self._apply_todo_gate(_verdict, conversation_id)
+                    if not _tg.get("fallback"):
+                        try:
+                            yield {"type": "stage", "name": "待办验收闸",
+                                   "status": "done",
+                                   "detail": _tg.get("reason") or ""}
+                        except Exception:
+                            pass
+                    _verdict, _defer_note, _clarify_defer_n, _clarify_defer_rem = \
+                        _ac.defer_clarify(_verdict, _tg,
+                                          n=_clarify_defer_n,
+                                          last_rem=_clarify_defer_rem)
+                    if _defer_note:
+                        try:
+                            yield {"type": "stage", "name": _ac.AUTO_EVAL_STAGE,
+                                   "status": "done", "detail": _defer_note}
+                        except Exception:
+                            pass
+                    try:
+                        _dp = _ac.default_progress_verdict(_verdict)
+                    except Exception:
+                        _dp = None
+                    if _dp:
+                        _verdict = _dp
+                        try:
+                            yield {"type": "stage", "name": _ac.AUTO_EVAL_STAGE,
+                                   "status": "done",
+                                   "detail": "该问题有合理默认值 —— 按默认推进，"
+                                             "并在答复中标注假设（不打断你）"}
+                        except Exception:
+                            pass
+                    try:
+                        _cq = _ac.clarify_from_verdict(_verdict)
+                    except Exception:
+                        _cq = None
+                    if _cq:
+                        try:
+                            yield {"type": "stage", "name": _ac.AUTO_EVAL_STAGE,
+                                   "status": "done",
+                                   "detail": "需要用户拍板后才能继续 —— 已转为澄清卡片"}
+                        except Exception:
+                            pass
+                        # ⚠️ 不能用 `break` 交给下方 `if _clarify_req:`：那块在
+                        #   **最终生成之前**（4822 行），而本处是生成之后 ⇒ break 会跳过它、
+                        #   直接进 persist，卡片永远发不出去（本轮实测踩到的位置陷阱）。
+                        #   故这里直接复用同一收口方法（生成器），发完 done 即 return。
+                        yield from self._clarify_finish_events(
+                            conversation_id, user_input, intent, branch, attachments,
+                            forced_intent, skill_name, team, _cq,
+                            source="auto_continue",
+                            title="❓ AI 需要你在两个方案间拍板（评估器判定）",
+                            content=(llm_content or ""),
+                            exec_card=_interim_exec_card())
+                        return
                     _deadline_left = (_ac_deadline - time.time()) if _ac_deadline else None
+                    # ★ P1-1（2026-10-28）预算降级阈值（配置化，默认 0.7）+ 硬停线（0.95）。
+                    #   ★ 2026-10-28 二次修正（conv 9730 实证）：到 degrade 阈值**不再停**，
+                    #   而是「收紧续跑」—— 只做剩余关键步骤；只有到硬停线或真耗尽才停。
+                    #   原语义在 86% 就停，而当时还剩 14% ≈ 2~3 轮，任务差一步没做完。
+                    try:
+                        from core import config as _cfg_dr
+                        _degrade_ratio = float(_cfg_dr.get(
+                            "agent", "budget_degrade_ratio", 0.7) or 0.0)
+                        _hard_stop_ratio = float(_cfg_dr.get(
+                            "agent", "budget_hard_stop_ratio", 0.95) or 0.0)
+                    except Exception:
+                        _degrade_ratio = 0.0
+                        _hard_stop_ratio = 0.0
+                    # ★ P0-1（2026-10-28）验收驱动：待办闸是评估器的**上位约束**。
+                    #   语义（fallback / done / next_step 怎么算）**只在 autopilot
+                    #   的 _apply_todo_gate 写一份** —— 两处同构接线共用它，
+                    #   绝不各写一份（各写一份必然错位）。
+                    #   fallback（无待办 / 开关关）⇒ 原样沿用评估器结论
+                    #     （逐字节兼容 D-3，不影响 98.4% 只读问答）。
+                    #   实测依据：msg 3985「建议下一步执行校验」被评估器判 done=true，
+                    #   且只改提示词纠正不了（1/2）⇒ 必须有客观清单可查。
+                    #   ⚠️ 2026-10-28：待办闸已**前移**到澄清转换之前（见上方同段注释）——
+                    #     那里已应用过一次，此处**不得再应用一遍**（重复应用会把
+                    #     澄清延后已经算好的 next_step 又覆盖回原值，语义互相打架）。
+                    #     下方 `_cont/_why` 直接用前面那份 `_verdict` / `_tg`。
+                    # ★ 2026-10-28（conv 9732）：**待办未做完时先别问人**已在前方处理。
                     _cont, _why = _ac.decide(
                         _verdict, used=_auto_continues, max_used=_ac_cfg["max"],
                         seen_steps=_ac_seen_steps, deadline_left_s=_deadline_left,
-                        budget_left=_lg.budget_left())
+                        budget_left=_lg.budget_left(),
+                        budget_ratio=_lg.budget_ratio(),
+                        degrade_ratio=_degrade_ratio,
+                        hard_stop_ratio=_hard_stop_ratio)
+                    # ★ P1-1（2026-10-28）降级收尾：把「待续清单」**写进答复**。
+                    #   为什么必须写：budget 闸本来就会停，但停得"无声" ⇒
+                    #   用户看到的是"突然断了"（实测 11/89 次）。
+                    #   写清单后变成"分段推进"，用户知道还差什么、怎么继续。
+                    #   ⚠️ 2026-10-28 二次修正（conv 9730 实证）：**必须同时写进
+                    #      `_full_content`** —— 本轮末尾有 `if _full_content: llm_content =
+                    #      _full_content`，只往 `llm_content` 追加会被静默覆盖掉。
+                    #      那次真机：清单确实生成了，用户一个字也没看到（含"回复继续"指引）。
+                    if (not _cont) and ("降级收尾" in str(_why)):
+                        try:
+                            _rem = (_verdict or {}).get("remaining") or []
+                            _nt = _ac.build_degrade_notice(
+                                _rem, _lg.budget_ratio(), _hard_stop_ratio or _degrade_ratio)
+                            if _nt:
+                                llm_content = ((llm_content + _nt) if llm_content else _nt)
+                                # 告知类文本（待续清单）**必须追加**，不能走产物去重
+                                # （它不是"同一份产物的重述"，合并会被判成重复而吞掉）
+                                _full_content = ((_full_content + _nt)
+                                                 if _full_content else _nt)
+                        except Exception:
+                            pass
                     # 评估发生过就透传（无论结论）——用户看得到「为什么停 / 为什么继续」
                     try:
                         yield {"type": "stage", "name": _ac.AUTO_EVAL_STAGE,
@@ -4389,11 +6806,21 @@ class StreamMixin:
                         # 续跑 = 崭新的一轮 ReAct：本轮答复 + 续跑指令并进 messages。
                         # ⚠️ assistant 消息必须带 content（部分 provider 拒绝空 content）。
                         messages.append({"role": "assistant", "content": llm_content})
-                        messages.append({"role": "user",
-                                         "content": _ac.continuation_prompt(
-                                             user_input, _verdict, _auto_continues)})
+                        _next_instr = _ac.continuation_prompt(
+                            user_input, _verdict, _auto_continues)
+                        # ★ 2026-10-28：预算吃紧时**追加收紧指令**（"收紧续跑"）。
+                        #   只说"继续"会让模型又去开新检索 ⇒ 一轮就把最后额度烧完；
+                        #   必须明确"只做剩余关键步骤、禁止新开查询"。
+                        if "收紧续跑" in str(_why):
+                            _next_instr += (
+                                "\n\n【预算吃紧】token 预算已用 %.0f%%，"
+                                "只做上面这一步（以及它的直接后继），"
+                                "**不要再新开工程检索/包树遍历/大范围查询**；"
+                                "若该步需要用户确认，就把确认点讲清楚并停下。"
+                                % (_lg.budget_ratio() * 100))
+                        messages.append({"role": "user", "content": _next_instr})
                         _ac_delta = f"（harness 持续工作）{_why}"
-                        exec_reasoning.append(_ac_delta)
+                        exec_notices.append(({"kind": "progress", "text": _ac_delta}))
                         # ★ type=progress（#10 拆型：系统提示独立事件类型，不再混入 reasoning）
                         #   + kind=progress（B2-10 兼容层：老消费方按 kind 分流仍生效）。
                         #   这是**系统进度提示**不是模型 CoT，必须走 procAddSystemNotice
@@ -4408,10 +6835,94 @@ class StreamMixin:
                         except Exception:
                             pass
                         continue   # ← 外层循环顶：状态复位后开启下一轮 ReAct
+                # ★ P0-2（2026-10-28）harness 级强制闸：**最终生成之后、persist 之前**。
+                #   对齐官方 Stop hook："the turn doesn't end until the typecheck passes"
+                #   —— 由 harness 执行，**不依赖模型配合**。
+                #
+                #   ⚠️ 位置很关键（第一版插错了，py_compile 直接报
+                #      "'continue' not properly in loop"）：
+                #      本闸必须在 `break` **之前**（即仍在 while@4533 体内）——
+                #      break 之后就已经跳出循环，continue 会变成语法错误。
+                #      而 break 之前 = 尚未收口 = 正是"拦住不让结束"的时机。
+                #
+                #   语义（唯一一份，IO 在 autopilot._harness_gate）：
+                #     ① 有未通过验收的待办 ⇒ **不结束本轮**，把失败明细回灌、继续 ReAct
+                #     ② 连续阻断达上限（默认 8）⇒ 强制放行，且**如实告知「未完成」**
+                #     ③ 无待办 / 开关关 ⇒ 完全不介入（逐字节兼容 D-3）
+                try:
+                    _hgate = self._harness_gate(conversation_id, _harness_blocks,
+                                             prev_remaining=_harness_prev_rem,
+                                             stall_streak=_harness_stall)
+                except Exception:
+                    _hgate = {"block": False, "feedback": "", "force_release": False,
+                              "notice": "", "remaining": [], "blocks_used": _harness_blocks,
+                              "reason": "harness 闸异常 ⇒ 不介入", "failures": []}
+                if _hgate.get("block"):
+                    _harness_blocks = int(_hgate.get("blocks_used") or 0)
+                    _harness_prev_rem = list(_hgate.get("remaining") or [])
+                    _harness_stall = int(_hgate.get("stall_streak") or 0)
+                    # 本轮产出并进全量（被拦下的这轮内容也要保留）
+                    if llm_content:
+                        _full_content = _ac.merge_round_content(_full_content, llm_content)
+                    try:
+                        yield {"type": "stage", "name": "验收未通过 · 继续工作",
+                               "status": "done",
+                               "detail": _hgate.get("reason") or ""}
+                    except Exception:
+                        pass
+                    # 回灌失败明细 ⇒ 驱动下一轮 ReAct（相当于官方 Stop hook 的 exit code 2）
+                    messages.append({"role": "assistant", "content": llm_content})
+                    messages.append({"role": "user", "content": _hgate.get("feedback") or ""})
+                    try:
+                        yield {"type": "progress",
+                               "delta": "（harness 验收闸）%s" % (_hgate.get("reason") or ""),
+                               "kind": "progress", "round": _harness_blocks,
+                               "phase": "harness"}
+                    except Exception:
+                        pass
+                    continue   # ← 回外层循环顶：状态复位后开启下一轮 ReAct
+                if _hgate.get("force_release"):
+                    # ★ 强制放行：**必须如实告知「未完成」**，不得伪装成完成
+                    _harness_blocks = int(_hgate.get("blocks_used") or 0)
+                    _notice = _hgate.get("notice") or ""
+                    if _notice:
+                        # ⚠️ 2026-10-28：与降级清单同源的坑 —— 只写 `llm_content`
+                        #   会被下面的 `llm_content = _full_content` 覆盖掉。
+                        #   凡"收尾告知"必须两处都写（用户可见的那一份才是有效的那一份）。
+                        llm_content = ((llm_content + "\n\n" + _notice)
+                                       if llm_content else _notice)
+                        _full_content = ((_full_content + "\n\n" + _notice)
+                                         if _full_content else _notice)
+                    try:
+                        yield {"type": "stage", "name": "验收闸强制放行",
+                               "status": "done",
+                               "detail": _hgate.get("reason") or ""}
+                    except Exception:
+                        pass
                 break               # ← 外层循环出口：收口（落库/done 只走一次）
             # 落库/done 用跨轮全量产出（续跑轮内容已在评估点并进 _full_content）
             if _full_content:
                 llm_content = _full_content
+            # ★ 2026-10-27（会话 9629 msg 4892 实测）：**工具调用标记泄漏清洗**。
+            #   那一轮正文末尾出现 `<｜｜DSML｜｜ invoke name="export_sysml_v2">` +
+            #   一串参数残骸（`STATUS` / `2114956963811217410` / `1` / `100`）。
+            #   成因：模型把工具调用写成了正文，协议层没解析到 tool_calls ⇒
+            #   ① 那些调用**根本没执行**（随后模型自述"工具额度已用尽"）；
+            #   ② 机器标记原样呈现给用户。
+            #   这里从不漏给用户看；同时留痕，便于统计"模型不走标准 tool_calls"的比例。
+            try:
+                from agent.utils import strip_leaked_tool_markup as _slm
+                llm_content, _leak_n = _slm(llm_content)
+                if _leak_n:
+                    self._leaked_tool_markup = _leak_n
+                    try:
+                        yield {"type": "stage", "name": "协议自愈",
+                               "status": "done",
+                               "detail": "清理了 %d 处泄漏的工具调用标记（未被执行）" % _leak_n}
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             # SysML v2 视图联动：LLM 输出含 SysML 代码 → 解析并投影各视图 ViewModel（会话内即时预览，不落库）
             sysml_views = self._gen_sysml_views(llm_content, intent, user_input)
             yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "done"}
@@ -4426,7 +6937,7 @@ class StreamMixin:
                 # P0-3：主会话产出记忆沉淀（LLM 提炼 or 规则降级，每会话限 2 次）
                 self._deposit_session_memory(user_input, llm_content, intent)
                 # P0-5：技能使用反馈采集（主会话直行路径）
-                self._record_skill_feedback(run_id=int(conversation_id or 0), intent=intent, output_content=llm_content)
+                self._record_skill_feedback(conversation_id=_sess_conv, intent=intent, output_content=llm_content)
                 card_data = json.dumps({
                     "intent": intent,
                     "agent": agent_def.name,
@@ -4436,6 +6947,17 @@ class StreamMixin:
                     "slots": slots,
                     "source": retrieval["source"],
                     "confidence": retrieval["confidence"],
+                    # ★ 2026-10-29：**意图置信度与检索置信度分列**。
+                    #   实测 conv 9751：confidence(检索)=0.00，而意图识别实际是 0.80
+                    #   （intent_samples.hit_conf 实证）。前端原先把 confidence 渲染在
+                    #   「意图：xxx」旁边，界面显示「意图：knowledge_qa … 置信度 0.00」，
+                    #   与事实相反；排查时我自己也误读过一次。
+                    #   单独立字段 ⇒ 前端可分别标注用途，两个数不再混淆。
+                    #   ⚠️ 用 getattr 兜底而非直接引用 `_intent_meta`：该变量在 3955 行
+                    #     定义于外层分支，若未来某条早退路径先到此处，直接引用会 NameError
+                    #     把整轮作答打挂（本仓"前向引用潜伏"有前例）。
+                    "intent_confidence": (getattr(self.router, "_last_meta", None) or {}).get("confidence"),
+                    "intent_route": (getattr(self.router, "_last_meta", None) or {}).get("route"),
                     "graph_count": retrieval["graph_count"],
                     "vector_count": retrieval["vector_count"],
                     "used_mock": llm_info["used_mock"],
@@ -4443,13 +6965,37 @@ class StreamMixin:
                     "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
                     # V2.4 会话内执行过程持久化（前端历史消息按序还原思考/子智能体/工具调用）
                     "exec": {
-                        "reasoning": "".join(exec_reasoning)[:4000] or None,
+                        # 2026-10-27（截断清单 P2-D1）：4000 → 8000。exec.reasoning 是历史消息
+                        #   还原"当时怎么想的"的唯一载体，4000 处腰斩后回看只剩开头。
+                        "reasoning": "".join(exec_reasoning)[:8000] or None,
+                        # ★ 2026-10-28：系统进度提示单独落库（带 kind），
+                        #   前端据此**收编到对应执行环节**，而不是堆成一个
+                        #   统一的「💭 思考过程」大块（用户明确反馈过这点）。
+                        #   与 reasoning 分开存 = 心智链与系统告知不混。
+                        "notices": (exec_notices[:60] or None),
                         "agent": agent_def.name,
                         "tools": exec_tools,
+                        # ★ 2026-10-27：意图理解摘要随消息持久化 —— 刷新后历史还原路径
+                        #   （06-cards.procBlocksHtml）据此重建「我理解你要的…」那一行。
+                        #   不存的话：刷新前看得到、刷新后消失，同一份数据两套呈现
+                        #   （本仓已因此被反馈过多次）。
+                        "brief": getattr(self, "_last_intent_brief", None) or None,
+                        # ★ 2026-10-28（用户报「我明明把两个开关都开了」但跑起来当关的用）：
+                        #   把**本轮真正读到的闸门值**随消息落库。
+                        #   此前"开没开"只存在于配置文件里，用户无法在会话中核对 ⇒
+                        #   界面下拉框看起来是"开启"（改完没点保存 / 被别的保存覆盖）
+                        #   而服务端读到的是 False，双方各信一半，排障必然跑偏。
+                        #   现在只要看这条卡片就知道"这一轮是按开还是按关跑的"。
+                        #   ⚠️ 必须 fail-safe：这是诊断信息，取不到就给 None，
+                        #   **绝不能**因为它抛异常而把整条消息的落库带崩
+                        #   （本行第一版写成未定义的 `_gates_snapshot()`，
+                        #     实测 conv 9728 直接 `name is not defined` ⇒
+                        #     落库中断、只能走 _persist_partial_stream 兜底存正文，
+                        #     卡片退化成 `[]`）。
+                        "gates": _gates_safe(),
                     },
                     "sysml_views": sysml_views,
-                    "submitted_by": ((user or {}).get("display_name") or (user or {}).get("name") or "会话发起人")
-                                     if isinstance(user, dict) else "会话发起人",
+                    "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",
                     **self._build_rich_card(intent, retrieval, branch, user_input, provider_id),
                 }, ensure_ascii=False)
                 with db_conn() as conn:
@@ -4462,7 +7008,17 @@ class StreamMixin:
                     # ★ 2026-10-17（米爸反馈4）：工具结果取回的 SysML 文档一并归档
                     _archive_artifacts(conn, conversation_id, msg_id, card_data, llm_content, intent,
                                        tool_docs=getattr(self, "_tool_sysml_docs", None))
+                    # ★ 2026-10-27：归档完成后**回填任务行的 artifact_id**，否则
+                    #   `open_jobs`（判据 artifact_id=0）下一轮会把同一任务再读一遍并
+                    #   生成重复产物（每轮 message_id 不同，幂等键挡不住）。
+                    try:
+                        from agent import async_jobs as _aj2
+                        _aj2.link_archived(conn, conversation_id,
+                                           getattr(self, "_tool_sysml_docs", None))
+                    except Exception:
+                        pass
                     self._tool_sysml_docs = []      # 已登记，防重复归档
+                    self._tool_doc_pages = {}       # 分页累积状态同步清零
                     # CIA：变更影响分析记录（FR-CIA-3 每次分析结果快照落库，可追溯）
                     _archive_impact_analysis(conn, conversation_id, msg_id, card_data, user_input)
                     conn.execute(
@@ -4540,6 +7096,33 @@ class StreamMixin:
                 #   （0 = 一轮收口；>0 = 评估器放行了 N 次续跑，前端/排查可追溯）。
                 "auto_continues": _auto_continues,
             }}
+        except asyncio.CancelledError:
+            # ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」，真库 conv 9755 实证）：
+            #   客户端断开时，ASGI 层取消的是**任务**，抛 `asyncio.CancelledError`
+            #   —— 它继承 `BaseException`（不是 `Exception`），也**不是** `GeneratorExit`
+            #   （实测：MRO = CancelledError → BaseException → object）⇒
+            #   下面两个 except 分支**都抓不到** ⇒ 固化完全不执行 ⇒
+            #   库中只有 user 消息、AI 产出全丢，且 `_persist_partial_stream` 连一行日志都没有
+            #   （conv 9755：span `reason=no_terminal_frame / last_event=ping / terminal_sent=0`，
+            #    已流出 424 条 token 事件，最终 messages 仅 1 条 user）。
+            #   ⇒ 与 GeneratorExit **同性质**（用户不再看这一轮）⇒ 同样固化，然后照原样抛出
+            #   （取消语义必须继续向上传播，不能吞掉，否则任务永不结束）。
+            try:
+                print("[stream_cancelled] conv=%s 客户端断开/任务取消 → 固化已流出内容"
+                      % conversation_id, flush=True)
+            except Exception:
+                pass
+            self._persist_partial_stream(conversation_id,
+                                         _best_partial(_full_content, llm_content,
+                                                       _orch_acc, _streamed_acc),
+                                         "stop", dry_run=dry_run, force=True,
+                                         exec_card=_partial_exec_card(locals()))
+            if conversation_id:
+                try:
+                    _fup.drop(conversation_id)
+                except Exception:
+                    pass
+            raise
         except GeneratorExit:
             # 2026-09-29（用户五轮反馈4）：客户端断开（停止按钮/关页/网络断）→ 已流出内容固化落库。
             #  此前直接 raise，浏览器里看得到的已生成内容一刷新就没了（库中 0 条）。
@@ -4548,10 +7131,14 @@ class StreamMixin:
             # ★ 2026-10-17（harness 持续工作）：部分固化带**跨续跑轮全量**——
             #   自主续跑轮的内容已并进 _full_content，只固化 llm_content（末轮）
             #   会把前几轮的产出丢掉（用户在停止前明明看得到）。
-            _partial = (((_full_content + "\n\n" + llm_content) if _full_content else llm_content)
-                        or "".join(_orch_acc))
-            self._persist_partial_stream(conversation_id, _partial,
-                                         "stop", dry_run=dry_run)
+            # ★ 2026-10-27：再与 `_streamed_acc` 取**更长者** —— 它是"用户真的看到过"的下界。
+            #   只看 llm_content/_full_content 会漏掉「被续跑复位/被补充指令重置掉的上一段」
+            #   （用户已经看到了，却被当成"没生成过"）。
+            self._persist_partial_stream(conversation_id,
+                                         _best_partial(_full_content, llm_content,
+                                                       _orch_acc, _streamed_acc),
+                                         "stop", dry_run=dry_run,
+                                         exec_card=_partial_exec_card(locals()))
             # P1-②：断连同样要清 follow-up 队列（否则下次接着这个会话时
             #  会消费到"上一轮被中断时没处理完的补充指令"）。
             if conversation_id:
@@ -4564,8 +7151,33 @@ class StreamMixin:
             # 2026-09-29（用户五轮反馈4）：网络错误等异常 → 已生成内容同样固化（带中断说明后缀），
             #  刷新后"之前输出的内容"仍在，不再整体蒸发。
             # ★ 2026-10-17：同 GeneratorExit 分支——带跨续跑轮全量（见上方注释）。
-            _partial = (((_full_content + "\n\n" + llm_content) if _full_content else llm_content)
-                        or "".join(_orch_acc))
-            self._persist_partial_stream(conversation_id, _partial,
-                                         "error", dry_run=dry_run)
+            # ★★ 2026-10-27（用户反馈「中途失败后之前输出的内容没有任何展示」）：
+            #   **这里就是那个 bug 的落点**。旧实现只取 llm_content/_full_content/_orch_acc，
+            #   而 llm_content 在旧代码里是「流循环结束后才赋值」⇒ 中途抛异常时它是空串
+            #   ⇒ 固化判据 `len(text) < 4` 直接跳过 ⇒ 库里 0 条 ⇒ 刷新全丢。
+            #   （真库 conv 9629「写入工程」轮：llm_usage 4 次调用、messages 0 条 assistant。）
+            #   现在三件事一起兜：① 流循环内**增量**累积 llm_content（根治）；
+            #   ② `_streamed_acc` 记录"真的流出去过什么"；③ 取两者更长者固化。
+            #
+            # ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」）：
+            #   **本分支此前只 yield、不记日志** ⇒ 真库 conv 9754 那轮（8 轮 probe / 47s）
+            #   事后**无法回答"抛的是什么异常"**：conversations.py 侧 `_fail_reason` 为空
+            #   （没有 Python 异常逃出生成器，是本函数内部捕掉的），span 只留下
+            #   `reason=no_terminal_frame / last_event=error`。故障归因不能靠猜。
+            #   ⇒ 必须把异常类型 + 完整 traceback 落日志。
+            #   ⚠️ 记日志本身失败绝不能阻断"已生成内容固化"，故单独 try 包住。
+            try:
+                import traceback as _tb
+                print("[stream_error] conv=%s type=%s msg=%.300s"
+                      % (conversation_id, type(e).__name__, e), flush=True)
+                print(_tb.format_exc(), flush=True)
+            except Exception:
+                pass
+            self._persist_partial_stream(conversation_id,
+                                         _best_partial(_full_content, llm_content,
+                                                       _orch_acc, _streamed_acc),
+                                         "error", dry_run=dry_run,
+                                         force=True,
+                                         detail="%s：%s" % (type(e).__name__, e),
+                                         exec_card=_partial_exec_card(locals()))
             yield {"type": "error", "message": str(e)}

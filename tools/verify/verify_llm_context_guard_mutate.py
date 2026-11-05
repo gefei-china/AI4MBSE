@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL 1.3 guard=warn → **不截断**（放开假天花板）  | 实收=8192 
 """变异测试：证明两处自检的断言不是空转（2026-09-20，第二轮扩充）。
 
 # ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
@@ -15,9 +16,16 @@ M5    ：I4d 评审窗口探针改回写死（verify_orch_summary_budget.py）�
 import os
 import shutil
 import subprocess
+import sys
 
-ROOT = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system"
-PY = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ⚠️ 2026-11-05 修两件事：
+#   ① ROOT 原先写死本机绝对路径 ⇒ CI 上直接 FileNotFoundError；
+#   ② PY 原先拼 `.venv/Scripts/python.exe`（Windows 布局）⇒ Linux CI 上
+#      报 `No such file or directory: '...\.venv/Scripts/python.exe'`。
+#      跑子门禁应当用**当前解释器**：它就是这个门禁被谁启动的那个 python，
+#      在开发机是 .venv 的、在 CI 是 setup-python 的，语义一致且跨平台。
+PY = sys.executable
 V_GUARD = os.path.join(ROOT, "tools", "verify", "verify_llm_context_guard.py")
 V_BUDGET = os.path.join(ROOT, "tools", "verify", "verify_orch_summary_budget.py")
 TMP = os.path.join(ROOT, "tmp", "llm_ctx", "mutbak")

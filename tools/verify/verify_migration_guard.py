@@ -23,6 +23,7 @@ M3 **无备份不迁移**：备份步骤抛异常时，`action` 必须是 aborte
   D3 把 abort 分支改成继续迁移 ⇒ M3 必须判红（init_db 被调用了）
 """
 import os
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import shutil
 import sqlite3
 import sys
@@ -123,7 +124,7 @@ def _fingerprint(path):
 # ══════════════════════════════════════════════════════════════════
 def t_m1(ns):
     print("\n=== M1 dry-run 零副作用 ===")
-    tmp = tempfile.mkdtemp()
+    tmp = mkdtemp()
     db = os.path.join(tmp, "t.db")
     _mk_db(db)
     ns["_bind"](db)                      # 把 schema 模块的 DB_PATH 指向临时库
@@ -161,7 +162,7 @@ def t_m2(ns, in_mut=False):
     if in_mut:
         _IN_MUT[0] = True
     print("\n=== M2 热备保真（含 WAL）===")
-    tmp = tempfile.mkdtemp()
+    tmp = mkdtemp()
     db = os.path.join(tmp, "t.db")
     _mk_db(db)
     ns["_bind"](db)
@@ -199,7 +200,7 @@ def t_m3(ns, in_mut=False):
     if in_mut:
         _IN_MUT[0] = True
     print("\n=== M3 备份失败 ⇒ 拒绝迁移（且不得调用 init_db）===")
-    tmp = tempfile.mkdtemp()
+    tmp = mkdtemp()
     db = os.path.join(tmp, "t.db")
     _mk_db(db)
     ns["_bind"](db)
@@ -278,7 +279,7 @@ def d1():
     print("\n=== 变异 D1：dry-run 不再短路（真去跑迁移）===")
     ns = _load(("    if dry_run:\n        rep[\"action\"] = \"dry-run（未落任何写操作）\"",
                 "    if False:\n        rep[\"action\"] = \"dry-run（未落任何写操作）\""))
-    tmp = tempfile.mkdtemp()
+    tmp = mkdtemp()
     db = os.path.join(tmp, "t.db")
     _mk_db(db)
     c = sqlite3.connect(db)

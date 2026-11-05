@@ -33,12 +33,12 @@ async function loadReviewQueue() {
   const mergeN = _rev.list.filter(e=>_rev.mergeIds.has(e.id)).length;
   const segs = [['candidate','⏳ 待审'],['merge','🔀 合并建议'],['reviewed','✅ 已通过'],['deprecated','🚫 已驳回']];
   const segBar = `<div style="padding:8px 10px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <span style="font-size:11px;color:var(--mut);">待审率 <b>${passRate}%</b></span>
-      ${segs.map(([k,l])=>`<span class="st ${_rev.seg===k?'b':'g'}" style="cursor:pointer;font-size:11px;${_rev.seg===k?'':'opacity:.7;'}" onclick="revSetSeg('${k}')">${l} <b>${k==='candidate'?_rev.list.length:k==='merge'?mergeN:k==='reviewed'?_rev.reviewed.length:_rev.deprecated.length}</b></span>`).join('')}
+      <span style="font-size:12.5px;color:var(--mut);">待审率 <b>${passRate}%</b></span>
+      ${segs.map(([k,l])=>`<span class="st ${_rev.seg===k?'b':'g'}" style="cursor:pointer;font-size:12.5px;${_rev.seg===k?'':'opacity:.7;'}" onclick="revSetSeg('${k}')">${l} <b>${k==='candidate'?_rev.list.length:k==='merge'?mergeN:k==='reviewed'?_rev.reviewed.length:_rev.deprecated.length}</b></span>`).join('')}
       <span style="flex:1"></span>
-      <input id="rev-search" placeholder="🔍 搜索名称…" oninput="revApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:130px;">
-      <select id="rev-type" onchange="revApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"><option value="">全部类型</option>${types.map(t=>`<option>${esc(t)}</option>`).join('')}</select>
-      <label style="font-size:12px;color:var(--mut);display:flex;align-items:center;gap:3px;">置信度 ≥ <input id="rev-conf" type="number" min="0" max="1" step="0.05" onchange="revApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12px;width:50px;"></label>
+      <input id="rev-search" placeholder="🔍 搜索名称…" oninput="revApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:13.5px;width:130px;">
+      <select id="rev-type" onchange="revApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"><option value="">全部类型</option>${types.map(t=>`<option>${esc(t)}</option>`).join('')}</select>
+      <label style="font-size:13.5px;color:var(--mut);display:flex;align-items:center;gap:3px;">置信度 ≥ <input id="rev-conf" type="number" min="0" max="1" step="0.05" onchange="revApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:13.5px;width:50px;"></label>
       <button class="btn sm ghost" onclick="loadReviewQueue()">刷新</button>
     </div>`;
   const rows = revFiltered();
@@ -47,13 +47,13 @@ async function loadReviewQueue() {
   const items = rows.slice((_rev.page-1)*_rev.size, _rev.page*_rev.size);
   const isActive = _rev.seg==='candidate' || _rev.seg==='merge';
   const batchBar = isActive
-    ? `<div style="padding:6px 8px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);font-size:11.5px;">
+    ? `<div style="padding:6px 8px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);font-size:12.5px;">
       <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="rev-check-all" onchange="revToggleAll(this)"> 全选</label>
       <button class="btn sm grn" onclick="batchReview('confirm')">✅ 批量通过</button>
       <button class="btn sm red" onclick="batchReview('reject')">🚫 批量驳回</button>
       <span style="flex:1"></span><span style="color:var(--mut);">筛选后 ${rows.length} 条</span>
     </div>` : '';
-  const emptyMsg = `<div style="padding:12px;color:var(--mut);font-size:12px;">${
+  const emptyMsg = `<div style="padding:12px;color:var(--mut);font-size:13.5px;">${
     _rev.seg==='candidate' ? '暂无待审实体（抽取候选确认入库后进入本队列，通过后状态为 reviewed）'
     : _rev.seg==='merge' ? '暂无合并建议（融合工作台生成候选对后自动进入本子分组）'
     : _rev.seg==='reviewed' ? '暂无已通过实体' : '暂无已驳回实体'}</div>`;
@@ -62,13 +62,13 @@ async function loadReviewQueue() {
     ? '<tr><th>选</th><th>ID</th><th>名称</th><th>类型</th><th>来源</th><th>置信度</th><th>建议</th><th>操作</th></tr>'
     : '<tr><th>ID</th><th>名称</th><th>类型</th><th>来源</th><th>置信度</th><th>审核时间</th><th>操作</th></tr>';
   const body = items.map(e=>{
-    const confCell = `<span style="font-size:11px;color:${(e.confidence||0)>=0.8?'var(--grn)':(e.confidence||0)>=0.6?'var(--blue-d)':'var(--amb)'};">${(e.confidence||0).toFixed(2)}</span>`;
+    const confCell = `<span style="font-size:12.5px;color:${(e.confidence||0)>=0.8?'var(--grn)':(e.confidence||0)>=0.6?'var(--blue-d)':'var(--amb)'};">${(e.confidence||0).toFixed(2)}</span>`;
     if(isActive){
       // P0-B：高置信建议（≥0.85 可直接通过）+ 重复簇提示（同名同类型，>1 即重复）
       const suggest = [];
-      if((e.confidence||0)>=0.85) suggest.push('<span class="tag" style="border-color:var(--grn);color:var(--grn);font-size:10px;">高置信建议通过</span>');
-      if((e.dup_count||0)>1) suggest.push(`<span class="tag" style="border-color:var(--amb);color:var(--amb);font-size:10px;cursor:pointer;" title="同名同类型实体共 ${e.dup_count} 条，建议合并或仅保留一条" onclick="showDupCluster('entity','${e.id}')">⚠ 同簇 ${e.dup_count} 条</span>`);
-      if(_rev.mergeIds.has(e.id)) suggest.push('<span class="tag" style="border-color:var(--blue);color:var(--blue-d);font-size:10px;" title="融合工作台已生成合并候选">🔀 合并候选</span>');
+      if((e.confidence||0)>=0.85) suggest.push('<span class="tag" style="border-color:var(--grn);color:var(--grn);font-size:12px;">高置信建议通过</span>');
+      if((e.dup_count||0)>1) suggest.push(`<span class="tag" style="border-color:var(--amb);color:var(--amb);font-size:12px;cursor:pointer;" title="同名同类型实体共 ${e.dup_count} 条，建议合并或仅保留一条" onclick="showDupCluster('entity','${e.id}')">⚠ 同簇 ${e.dup_count} 条</span>`);
+      if(_rev.mergeIds.has(e.id)) suggest.push('<span class="tag" style="border-color:var(--blue);color:var(--blue-d);font-size:12px;" title="融合工作台已生成合并候选">🔀 合并候选</span>');
       const suggestHtml = suggest.join(' ') || '-';
       const mergeBtn = _rev.mergeIds.has(e.id)
         ? `<button class="btn sm ghost" onclick="gotoFusionDup()">🔀 去融合</button>` : '';
@@ -84,11 +84,11 @@ async function loadReviewQueue() {
     }
     return `<tr>
       <td>${e.id}</td><td><b>${e.name}</b></td><td>${e.entity_type}</td><td>${e.source_doc||e.source_type||'-'}</td>
-      <td>${confCell}</td><td style="font-size:11px;color:var(--mut);white-space:nowrap;">${esc((e.reviewed_at||e.created_at||'').slice(0,16))}</td>
+      <td>${confCell}</td><td style="font-size:12.5px;color:var(--mut);white-space:nowrap;">${esc((e.reviewed_at||e.created_at||'').slice(0,16))}</td>
       <td><button class="btn sm ghost" onclick="viewEntity('${e.id}')">📋 详情</button></td>
     </tr>`;
   }).join('');
-  const foot = `<div style="padding:8px 10px;display:flex;gap:8px;align-items:center;font-size:11px;color:var(--mut);flex-wrap:wrap;">
+  const foot = `<div style="padding:8px 10px;display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--mut);flex-wrap:wrap;">
       <span>${isActive ? '✅ 通过→reviewed 进入知识库正式实体；🚫 驳回→已驳回区（留痕可查）。' : '只读历史视图，可点详情查看实体快照。'}</span>
       <span style="flex:1"></span>
       <div id="rev-pager" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"></div>
@@ -189,9 +189,9 @@ async function loadRelReview() {
     if(tabBadge) tabBadge.textContent = `${_rel.candidate.length} 条`;
     const segs = [['candidate','⏳ 待审'],['reviewed','✅ 已通过'],['deprecated','🚫 已驳回']];
     const segBar = `<div style="padding:8px 10px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      ${segs.map(([k,l])=>`<span class="st ${_rel.seg===k?'b':'g'}" style="cursor:pointer;font-size:11px;${_rel.seg===k?'':'opacity:.7;'}" onclick="relSetSeg('${k}')">${l} <b>${k==='candidate'?_rel.candidate.length:k==='reviewed'?_rel.reviewed.length:_rel.deprecated.length}</b></span>`).join('')}
+      ${segs.map(([k,l])=>`<span class="st ${_rel.seg===k?'b':'g'}" style="cursor:pointer;font-size:12.5px;${_rel.seg===k?'':'opacity:.7;'}" onclick="relSetSeg('${k}')">${l} <b>${k==='candidate'?_rel.candidate.length:k==='reviewed'?_rel.reviewed.length:_rel.deprecated.length}</b></span>`).join('')}
       <span style="flex:1"></span>
-      <input id="rel-search" placeholder="🔍 搜索关系类型/端点…" oninput="relApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;width:150px;">
+      <input id="rel-search" placeholder="🔍 搜索关系类型/端点…" oninput="relApplyFilter()" style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:13.5px;width:150px;">
       <button class="btn sm ghost" onclick="loadRelReview()">刷新</button>
     </div>`;
     const rows = relFiltered();
@@ -199,7 +199,7 @@ async function loadRelReview() {
     if(_rel.page > pages) _rel.page = pages;
     const items = rows.slice((_rel.page-1)*_rel.size, _rel.page*_rel.size);
     const batchBar = (_rel.seg==='candidate')
-      ? `<div style="padding:6px 8px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);font-size:11.5px;">
+      ? `<div style="padding:6px 8px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);font-size:12.5px;">
         <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="rel-check-all" onchange="relToggleAll(this)"> 全选</label>
         <button class="btn sm grn" onclick="batchRelReview('confirm')">✅ 批量通过</button>
         <button class="btn sm red" onclick="batchRelReview('reject')">🚫 批量驳回</button>
@@ -207,7 +207,7 @@ async function loadRelReview() {
       </div>` : '';
     if(!rows.length) {
       el.innerHTML = segBar + batchBar +
-        `<div style="padding:12px;color:var(--mut);font-size:12px;">${
+        `<div style="padding:12px;color:var(--mut);font-size:13.5px;">${
           _rel.seg==='candidate' ? '暂无待审关系（关系候选确认入库后进入本队列，通过后状态为 reviewed）'
           : _rel.seg==='reviewed' ? '暂无已通过关系' : '暂无已驳回关系'}</div>`;
       return;
@@ -216,23 +216,23 @@ async function loadRelReview() {
       ? '<tr><th>选</th><th>源 —[关系]→ 目标</th><th>端点状态</th><th>来源</th><th>置信度</th><th>操作</th></tr>'
       : '<tr><th>源 —[关系]→ 目标</th><th>端点状态</th><th>来源</th><th>置信度</th><th>操作</th></tr>';
     const body = items.map(r=>{
-      const triple = `<b>${esc(r.source_name||r.source_id)}</b> <span class="st b" style="font-size:10px;">${esc(r.relation_type)}</span> → <b>${esc(r.target_name||r.target_id)}</b>`;
-      const srcSt = r.src_status==='reviewed'?'<span class="st ok" style="font-size:10px;">源✓</span>'
-        : r.src_status==='deprecated'?'<span class="st r" style="font-size:10px;">源✗</span>'
-        : '<span class="st w" style="font-size:10px;">源待审</span>';
-      const tgtSt = r.tgt_status==='reviewed'?'<span class="st ok" style="font-size:10px;">目标✓</span>'
-        : r.tgt_status==='deprecated'?'<span class="st r" style="font-size:10px;">目标✗</span>'
-        : '<span class="st w" style="font-size:10px;">目标待审</span>';
-      const confCell = `<span style="font-size:11px;color:${(r.confidence||0)>=0.8?'var(--grn)':'var(--amb)'};">${(r.confidence||0).toFixed(2)}</span>`;
+      const triple = `<b>${esc(r.source_name||r.source_id)}</b> <span class="st b" style="font-size:12px;">${esc(r.relation_type)}</span> → <b>${esc(r.target_name||r.target_id)}</b>`;
+      const srcSt = r.src_status==='reviewed'?'<span class="st ok" style="font-size:12px;">源✓</span>'
+        : r.src_status==='deprecated'?'<span class="st r" style="font-size:12px;">源✗</span>'
+        : '<span class="st w" style="font-size:12px;">源待审</span>';
+      const tgtSt = r.tgt_status==='reviewed'?'<span class="st ok" style="font-size:12px;">目标✓</span>'
+        : r.tgt_status==='deprecated'?'<span class="st r" style="font-size:12px;">目标✗</span>'
+        : '<span class="st w" style="font-size:12px;">目标待审</span>';
+      const confCell = `<span style="font-size:12.5px;color:${(r.confidence||0)>=0.8?'var(--grn)':'var(--amb)'};">${(r.confidence||0).toFixed(2)}</span>`;
       if(_rel.seg==='candidate'){
         // P0-B：重复簇提示（同三元组 >1 即重复）+ P0-C：一键合并
         const dupTag = (r.dup_count||0)>1
-          ? `<span class="tag" style="border-color:var(--amb);color:var(--amb);font-size:10px;cursor:pointer;" title="同三元组关系共 ${r.dup_count} 条，建议合并或仅保留一条" onclick="showDupCluster('relation','${r.id}')">⚠ 同簇 ${r.dup_count} 条</span>` : '';
+          ? `<span class="tag" style="border-color:var(--amb);color:var(--amb);font-size:12px;cursor:pointer;" title="同三元组关系共 ${r.dup_count} 条，建议合并或仅保留一条" onclick="showDupCluster('relation','${r.id}')">⚠ 同簇 ${r.dup_count} 条</span>` : '';
         const mergeBtn = (r.dup_count||0)>1
           ? `<button class="btn sm ghost" onclick="relMergeEdge(${r.id})">🔀 合并</button>` : '';
         return `<tr>
         <td><input type="checkbox" class="rel-check" value="${r.id}"></td>
-        <td>${triple}${dupTag}</td><td>${srcSt} ${tgtSt}</td><td style="font-size:11px;color:var(--mut);">${esc(r.source_doc||'-')}</td>
+        <td>${triple}${dupTag}</td><td>${srcSt} ${tgtSt}</td><td style="font-size:12.5px;color:var(--mut);">${esc(r.source_doc||'-')}</td>
         <td>${confCell}</td>
         <td style="white-space:nowrap;"><button class="btn sm grn" onclick="relReviewOne(${r.id},'confirm')">✅ 通过</button>
         <button class="btn sm red" onclick="relReviewOne(${r.id},'reject')">🚫 驳回</button>
@@ -240,11 +240,11 @@ async function loadRelReview() {
         <button class="btn sm ghost" onclick="relFixEdge(${r.id},'${esc(r.relation_type)}')">✏️ 修正</button>
         <button class="btn sm ghost" onclick="relEdgeDetail(${r.id})">📋 详情</button></td></tr>`;
       }
-      return `<tr><td>${triple}</td><td>${srcSt} ${tgtSt}</td><td style="font-size:11px;color:var(--mut);">${esc(r.source_doc||'-')}</td>
+      return `<tr><td>${triple}</td><td>${srcSt} ${tgtSt}</td><td style="font-size:12.5px;color:var(--mut);">${esc(r.source_doc||'-')}</td>
         <td>${confCell}</td>
         <td><button class="btn sm ghost" onclick="relEdgeDetail(${r.id})">📋 详情</button></td></tr>`;
     }).join('');
-    const foot = `<div style="padding:8px 10px;display:flex;gap:8px;align-items:center;font-size:11px;color:var(--mut);flex-wrap:wrap;">
+    const foot = `<div style="padding:8px 10px;display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--mut);flex-wrap:wrap;">
       <span>✅ 通过→reviewed 进入图谱/发布；🚫 驳回→已驳回区（留痕可查）。两端实体须已入库（源/目标待审时边仍可审，发布时会被门禁拦截）。</span>
       <span style="flex:1"></span>
       <div id="rel-pager" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"></div>
@@ -255,7 +255,7 @@ async function loadRelReview() {
       onPage: p => { _rel.page = p; loadRelReview(); },
       onSize: s => { _rel.size = s; _rel.page = 1; loadRelReview(); }
     });
-  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${e.message}</div>`; }
+  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">加载失败：${e.message}</div>`; }
 }
 function relSetSeg(seg) {
   _rel.seg = seg; _rel.page = 1;
@@ -357,12 +357,12 @@ async function showDupCluster(kind, id) {
   const lbx = document.getElementById('lbx');
   const b = document.getElementById('lbx-body');
   const body = rows.map(r=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid ${r.isKeep?'var(--grn)':'var(--line)'};border-radius:6px;margin-bottom:6px;background:#fff;">
-      <b style="font-size:12.5px;flex:1;">${esc(r.label)}</b>
-      ${r.isKeep?'<span class="tag" style="font-size:10px;border-color:var(--grn);color:var(--grn);">keep 建议</span>':''}
-      <span style="font-size:11px;color:var(--mut);">${esc(r.id)} · ${esc(r.status||'')}</span>
+      <b style="font-size:13.5px;flex:1;">${esc(r.label)}</b>
+      ${r.isKeep?'<span class="tag" style="font-size:12px;border-color:var(--grn);color:var(--grn);">keep 建议</span>':''}
+      <span style="font-size:12.5px;color:var(--mut);">${esc(r.id)} · ${esc(r.status||'')}</span>
     </div>`).join('');
   b.innerHTML = `<h3>${kind==='entity'?'🔀 实体重复簇（同名同类型）':'🔀 关系重复簇（同三元组）'}（${rows.length} 条）</h3>
-    <div style="font-size:12px;color:var(--mut);margin:4px 0 8px;">keep 建议 = 已入库(reviewed)优先；可在对应审核队列对该项执行「🔀 合并」。</div>
+    <div style="font-size:13.5px;color:var(--mut);margin:4px 0 8px;">keep 建议 = 已入库(reviewed)优先；可在对应审核队列对该项执行「🔀 合并」。</div>
     <div style="max-height:240px;overflow:auto;">${body}</div>
     <div class="lbx-actions"><button class="btn" onclick="document.getElementById('lbx').classList.remove('show')">关闭</button></div>`;
   lbx.classList.add('show');

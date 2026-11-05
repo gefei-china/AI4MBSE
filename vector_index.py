@@ -20,6 +20,35 @@
   调用方走原逐行 json.loads 逻辑（**行为不变**）。
 
 缓存失效：模块级 _MATRICES 常驻；数据变更后调用 ChunkVectorIndex.invalidate()。
+
+══════════════════════════════════════════════════════════════════════
+★ 2026-11-02 事故修复：陈旧缓存导致"重算向量没生效"（真实发生，损失一整轮结论）
+══════════════════════════════════════════════════════════════════════
+**现象**：`tools/reembed_degraded.py --apply` 报告成功（720 条降级向量已重算，
+`audit_embed_degradation` 显示降级 720→0），但检索里这些块的 `vec_score` 恒为 **0.0**。
+实测：中文 query「自主可控要求对组件部署有什么限制」→ 目标块 `847:51`
+余弦相似度 **0.6111（全局最高）**，却在检索结果里排第 6 且 `vec_score=0.0`，
+位置被相似度只有 0.497 的英文块占着。
+
+**根因（两条，缺一不可）**：
+  ① `_load_binary()` 成功后**只校验 shape，不校验行集**：
+       磁盘缓存 6457 行（2026-10-28） vs 数据库 7179 行（今日重算后）
+       差的 722 行正是被重算的块 ⇒ 它们在矩阵里根本不存在 ⇒ 余弦分 0
+  ② `invalidate()` **只清内存 `_MATRICES`，不清磁盘 `.npy`** ——
+     原注释写"精确一致性由 invalidate() 在写入后显式清理保证"，**这句是错的**：
+     清完内存下次仍从同一个 `.npy` 重载，于是**永远用旧向量**。
+     而 `_rows_fingerprint()` 定义了却**从未被调用**（作者想到了但没接上）。
+
+**为什么难发现**：缓存"能加载成功"、检索"不报错"、分数"看起来只是低"。
+只有把余弦相似度单独算出来，才能看出"最高分的块竟然没被召回"。
+
+**修法（双保险）**：
+  ① **行数校验**（`_ensure_group`）：二进制行数必须等于数据库同版本行数，
+     不等则丢弃缓存、走 JSON 重建。零风险，只多一次 `SELECT COUNT(*)`（进程首次加载时）。
+  ② **epoch 后缀**（`_cache_paths`）：写入方改完向量调 `bump_epoch()`，
+     缓存文件名随之变化 ⇒ 旧文件被**自然绕过**。
+     为什么用 epoch 而不是删文件：本环境 `os.remove` 被 safe-delete 策略拦截，
+     `drop_disk_cache()` 会**静默返回 0**（"删不掉就算了"）⇒ 依赖删除的方案在这里不可靠。
 """
 import hashlib
 import json
@@ -37,8 +66,47 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(_ROOT, "tmp", "vec_cache")
 
 
+def _epoch_path() -> str:
+    return os.path.join(CACHE_DIR, "epoch.txt")
+
+
+def _read_epoch() -> str:
+    """读缓存纪元。无文件/读失败 → "0"（**不清空、不报错**：读不到只意味着用初始纪元）。"""
+    try:
+        with open(_epoch_path(), encoding="utf-8") as f:
+            v = (f.read() or "").strip()
+        return v if v else "0"
+    except Exception:
+        return "0"
+
+
+def bump_epoch() -> str:
+    """**写入路径的责任**：改完向量后调用，让所有磁盘缓存被自然绕过。
+
+    为什么需要它而 `invalidate()` 不够：`invalidate()` 只清进程内存，
+    下次仍从同一 `.npy` 重载 ⇒ 原地更新向量（行数不变）时永远检测不到。
+    改文件名则无需删除（绕开 safe-delete 拦截）。
+    返回新纪元字符串。
+    """
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        cur = _read_epoch()
+        try:
+            nxt = str(int(cur) + 1)
+        except Exception:
+            nxt = "1"
+        with open(_epoch_path(), "w", encoding="utf-8") as f:
+            f.write(nxt)
+        ChunkVectorIndex._MATRICES.clear()
+        return nxt
+    except Exception:
+        # 写不进纪元只意味着"缓存可能陈旧"，不该让调用方失败
+        return _read_epoch()
+
+
 def _cache_paths(version: str, dim: int) -> tuple:
-    tag = f"{_safe(version)}_{dim}"
+    # epoch 进文件名：写入方 bump 后旧文件自动失效（无需删除）
+    tag = f"{_safe(version)}_{dim}_{_safe(_read_epoch())}"
     return (os.path.join(CACHE_DIR, tag + ".npy"),
             os.path.join(CACHE_DIR, tag + ".ids.npy"))
 
@@ -144,6 +212,23 @@ class ChunkVectorIndex:
         return h.hexdigest()
 
     @classmethod
+    def _db_group_count(cls, conn, version: str):
+        """数据库里该版本"应进矩阵"的行数（与重建时的 WHERE 条件**必须一致**）。
+
+        ⚠️ 条件必须和 ② 里重建用的 SQL 逐字相同，否则会出现"永远认为缓存陈旧"
+        或"永远认为缓存新鲜"的假判据 —— 这正是"同一口径写两遍"的坑。
+        异常时返回 None（=不做校验，退化为旧行为，比误判重建安全）。
+        """
+        try:
+            r = conn.execute(
+                "SELECT COUNT(*) FROM document_chunks "
+                "WHERE content != '' AND embedding != '[]' AND embed_version=?",
+                (version,)).fetchone()
+            return int(r[0]) if r else None
+        except Exception:
+            return None
+
+    @classmethod
     def _ensure_group(cls, conn, version: str, dim: int) -> bool:
         """加载指定 (version, dim) 组。优先二进制缓存，其次 JSON 重建。"""
         key = (version, dim)
@@ -156,11 +241,23 @@ class ChunkVectorIndex:
         got = cls._load_binary(version, dim)
         if got is not None:
             m, ids = got
-            # 维度对但行集可能已变（ingest 删/改）⇒ 校验数量级一致即可用
-            # （精确一致性由 invalidate() 在写入后显式清理保证）
-            cls._MATRICES[key] = {"m": m, "ids": ids}
-            cls._STATS["hit_bin"] += 1
-            return True
+            # ★ 2026-11-02：**必须校验行数**，不能"能加载就用"。
+            #   实测事故：缓存 6457 行 / 数据库 7179 行（差 722 = 被重算的块），
+            #   缺的块在矩阵里不存在 ⇒ 余弦分 0 ⇒ 明明最高相似度却排不上来。
+            #   原注释"精确一致性由 invalidate() 保证"是错的（它不清磁盘），
+            #   故此处用**数据库行数**做权威对账；不一致就丢弃缓存走 JSON 重建。
+            #   代价：进程首次加载多一次 COUNT(*)（毫秒级），且只在 _MATRICES 未命中时发生。
+            want = cls._db_group_count(conn, version)
+            if want is not None and want != len(ids):
+                cls._STATS["stale_bin"] = cls._STATS.get("stale_bin", 0) + 1
+                cls._STATS["stale_detail"] = {
+                    "version": version, "dim": dim,
+                    "cached": len(ids), "db": want, "diff": want - len(ids)}
+                # 落到 ② 用 JSON 重建（不 return，继续往下）
+            else:
+                cls._MATRICES[key] = {"m": m, "ids": ids}
+                cls._STATS["hit_bin"] += 1
+                return True
 
         # ② 回退：从 JSON 权威源重建（≈2.4s），并写回二进制
         rows = conn.execute(

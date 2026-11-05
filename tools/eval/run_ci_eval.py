@@ -34,6 +34,8 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 PASS, FAIL = "PASS", "FAIL"
 _results = []
@@ -46,10 +48,29 @@ _results = []
 #     追溯矩阵检查一下→review；**新引入 0 条**。
 # 下限取 0.85：距基线 8 个百分点（够吸收种子数据小幅变动），又足够高到能挡住
 # "规则集丢失 / 规则层被改坏"这类量级的塌陷 —— 那正是入库前 0.828 的水平。
-MIN_CASES = 20
-MIN_ACCURACY = 0.85
-# 已知基线（仅用于 --report 时打印对照，不参与判定；判定只看 MIN_ACCURACY）
-KNOWN_BASELINE = {"accuracy": 0.931, "macro_f1": 0.9158, "n": 29}
+#
+# ★ 2026-10-22：阈值改为从 `core.config` 的 `eval_gates` 组读取（单一真源）。
+#   评估发现同一意图路由评测有**三个阈值在流通**（本文件 0.85 / verify_eval_routing
+#   0.86 / ci.yml 注释 0.70）⇒ "改哪个"成了不确定问题。收敛后改阈值只改 core/config.py。
+#   数值本身不变，语义与上面的基线推导保持一致。
+#
+# ⚠️ 惰性读取，**不可提到模块顶层**：`core.config` 及其依赖链在 import 期就会把
+#   DB_PATH 绑进各模块作用域，而本脚本要求"先设 MBSE_DB_PATH 再 import 业务模块"
+#   （见 _fresh_db 的注释，批次 2 已踩过一次）。实测提到顶层 ⇒ 门禁从 0.931 掉到 0.897、
+#   E2f/E2h/E3b 三项翻转（干净库口径被污染）。故此处只留函数，用时再取。
+def _gate(key, fallback):
+    """从 core.config.eval_gates 读阈值；未取到则回退到脚本内记录的历史值。"""
+    try:
+        from core.config import get as _g
+        v = _g("eval_gates", key, None)
+        return fallback if v is None else v
+    except Exception:
+        return fallback
+
+
+MIN_CASES = None            # 在 main() 里由 _gate() 赋值（见下方注释所述的惰性理由）
+MIN_ACCURACY = None
+KNOWN_BASELINE = None
 
 
 def _rec(name, ok, detail=""):
@@ -227,18 +248,90 @@ def e4_discipline():
     return ok
 
 
+def e4_production_voice():
+    """E4（2026-10-23，回应"29 例片面"）：生产 confirmed 池真实说法一致性。
+
+    为什么：29 例黄金集是**人工整理的说法**，与生产真实 phrasing 分布不同
+    （米爸实测截图："帮我看看这个系统大概是怎么设计的"这类口语说法不在
+    黄金集里）。本段从**真库** intent_samples（status=confirmed）取真实
+    用户话逐条路由，报告一致率。
+
+    ⚠️ **观测不门禁**：一致率门槛属 trace_consistency 门禁（0.75）——这里
+    判红会与它重复且口径打架；样本 <20 时判 SKIP（不具判别力不比）。
+    """
+    print("\n=== E4 生产样本一致性（confirmed 池真实说法，观测不门禁）===")
+    real_db = os.path.join(ROOT, "mbse.db")
+    if not os.path.exists(real_db):
+        _rec("E4 真库存在（无则 SKIP）", True, "mbse.db 不存在 → SKIP")
+        return True
+    try:
+        con = sqlite3.connect(f"file:{real_db}?mode=ro", uri=True)
+        rows = con.execute(
+            "SELECT text, intent FROM intent_samples "
+            "WHERE status='confirmed' AND intent IS NOT NULL AND intent != '' "
+            "AND text IS NOT NULL ORDER BY id DESC LIMIT 100").fetchall()
+        con.close()
+    except Exception as e:
+        _rec("E4 样本池可读", True, f"读取失败 → SKIP（{e}）")
+        return True
+    if len(rows) < 20:
+        _rec("E4 样本 ≥20（不足不比，无判别力）", True, f"n={len(rows)} → SKIP")
+        return True
+    from agent.pipeline import AgentPipeline
+    from agent.intent import IntentRouter
+    pipe = AgentPipeline()
+    pipe._load_db_agents()
+    rt = pipe.router
+    og, os_ = IntentRouter._cache_get, IntentRouter._cache_set
+    IntentRouter._cache_get = lambda self, *a, **k: None
+    IntentRouter._cache_set = lambda self, *a, **k: None
+    n_ok, detail = 0, []
+    try:
+        for text, want in rows:
+            got = rt.detect(str(text))
+            meta = rt.get_last_meta() or {}
+            if got == want:
+                n_ok += 1
+            else:
+                detail.append({"text": str(text)[:40], "want": want, "got": got,
+                               "route": meta.get("route", ""),
+                               "verdict": meta.get("verdict", "")})
+    finally:
+        IntentRouter._cache_get, IntentRouter._cache_set = og, os_
+    acc = round(n_ok / len(rows), 4)
+    _rec(f"E4a 生产一致率（n={len(rows)}）＝ {acc:.3f}（观测值，门禁在 trace 一致率）",
+         True, f"不一致 {len(detail)} 条")
+    unsure = sum(1 for d in detail if d.get("verdict") == "unsure")
+    _rec("E4b 不一致中 verdict=unsure 占比（错得诚实 vs 错得自信）", True,
+         f"unsure {unsure}/{len(detail)}")
+    for d in detail[:8]:
+        print(f"      - [{d['want']}→{d['got']}|{d['route']}|{d['verdict']}] {d['text']}")
+    return True
+
+
 def main():
     show = "--report" in sys.argv
     print("=" * 72)
     print("P1-8 意图路由评测 CI 门禁（确定性部分，自建干净库口径）")
     print("=" * 72)
     db = _fresh_db()
+    # 阈值在 _fresh_db() 之后读：此时 MBSE_DB_PATH 已设好，业务模块也已按干净库初始化。
+    # （历史值作为 fallback：config 不可用时门禁仍能跑，且不会静默改判据）
+    global MIN_CASES, MIN_ACCURACY, KNOWN_BASELINE
+    MIN_CASES = _gate("intent_min_cases", 20)
+    MIN_ACCURACY = _gate("intent_min_accuracy", 0.85)
+    KNOWN_BASELINE = {
+        "accuracy": _gate("intent_baseline_acc", 0.931),
+        "macro_f1": _gate("intent_baseline_f1", 0.9158),
+        "n": _gate("intent_baseline_n", 29),
+    }
     print("干净库: %s" % db)
     ok = e1_metrics()
     ok &= e2_dataset(db)
     r3, acc, wrong = e3_accuracy(show=show)
     ok &= r3
     ok &= e4_discipline()
+    e4_production_voice()  # E4 观测不门禁（返回恒 True）
 
     bad = [r for r in _results if r[0] != PASS]
     print("\n" + "=" * 72)

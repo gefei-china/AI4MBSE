@@ -88,7 +88,18 @@ class AgentIn(BaseModel):
     hil_level: Optional[str] = None
     kb_required: Optional[bool] = False
     kb_scope: Optional[dict] = None  # KB-S：None=不更新（保留既有值）；{}=清空；{mode,branches,docs}=自定义范围
-    intent_keywords: Optional[List[str]] = []
+    # ★★ 2026-10-30：缺省改 None（与 hil_level / kb_scope 同一纪律）—— PUT 更新时
+    #   None = **保留既有值**，只有显式传 [] 才表示"清空"。
+    #   事故（本机真库实证）：原缺省 `[]` ⇒ 任何**未感知该字段**的保存（改显示名、
+    #   改提示词、设团队成员等）都会把 `agents.intent_keywords` 覆盖成空数组 ⇒
+    #   意图路由的关键词层对该 Agent 失效。今天一天内已有 7 个 Agent 中招：
+    #     design(2) / report_generation(5) / knowledge_qa(6) / chat(7) /
+    #     requirement_quality(568) / view_expansion(637) / 智源对接agent(735)
+    #   ⇒ "生成视图" 类请求不再命中原意图，全落到 chat ⇒ 工具集不对 ⇒
+    #     用户看到的是"老是走不通 / MCP 工具不全"（真实数据见 asset_change_logs
+    #     field='intent_keywords' 的 7 条 old_value → []）。
+    #   语义分界：`[]` 是"我确实想清空关键词"，`null/缺省` 是"这次不改这项"。
+    intent_keywords: Optional[List[str]] = None
     icon: Optional[str] = "🤖"
     status: Optional[str] = "active"
     version: Optional[str] = "v1.0.0"

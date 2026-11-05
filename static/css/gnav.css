@@ -44,7 +44,7 @@
   position:fixed;z-index:var(--z-tooltip);
   background:var(--gnav-tip-bg);color:var(--gnav-fg-strong);
   padding:5px 10px;border-radius:var(--radius-md);
-  font-size:12px;white-space:nowrap;
+  font-size:13.5px;white-space:nowrap;
   box-shadow:var(--shadow-md);
   pointer-events:none;display:none;
 }
@@ -63,11 +63,11 @@
   background:var(--gnav-active);color:var(--gnav-active-text);
   border-radius:var(--radius-md);
   width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;
-  font-size:15px;font-weight:700;letter-spacing:.5px;
+  font-size:16.5px;font-weight:700;letter-spacing:.5px;
 }
-.gnav .brand .t{font-weight:700;font-size:14.5px;line-height:1.25;letter-spacing:.2px;}
+.gnav .brand .t{font-weight:700;font-size:15.5px;line-height:1.25;letter-spacing:.2px;}
 /* 副标用 token 取色替代 opacity —— 更可控（opacity 会连同背景一起变淡） */
-.gnav .brand small{display:block;font-size:10.5px;color:var(--gnav-fg-soft);font-weight:400;letter-spacing:.2px;}
+.gnav .brand small{display:block;font-size:12px;color:var(--gnav-fg-soft);font-weight:400;letter-spacing:.2px;}
 
 /* ── 4. gnav 滚动区 + 分组标题 ─────────────────────── */
 /* 2026-09-17 v2：主导航 flex:0 0 auto —— 任务列表改为 flex:1 后，若主导航仍可收缩会被压出滚动条
@@ -75,7 +75,7 @@
 .gnav nav{flex:0 0 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:12px 8px 14px;}
 .gnav .g{
   /* 2026-09-26 层次感：分组小标题升为「标签」级（11/600/字距收紧），与导航项拉开主次 */
-  font-size:11px;font-weight:600;color:var(--gnav-fg-soft);
+  font-size:12.5px;font-weight:600;color:var(--gnav-fg-soft);
   padding:16px 10px 6px;letter-spacing:.8px;
 }
 
@@ -86,7 +86,7 @@
   display:flex;align-items:center;gap:10px;
   padding:9px 10px;min-height:34px;border-radius:var(--radius-md);
   color:var(--gnav-fg);text-decoration:none;
-  font-size:13px;font-weight:500;margin-bottom:2px;
+  font-size:14.5px;font-weight:500;margin-bottom:2px;
   cursor:pointer;
   transition:background .12s ease,color .12s ease;
 }
@@ -104,13 +104,13 @@
 }
 .gnav a .ic{
   width:18px;text-align:center;flex:none;
-  font-size:14px;line-height:1;color:var(--gnav-icon);   /* 图标槽统一宽度与色调 → emoji 与文本符号视觉重量一致 */
+  font-size:15.5px;line-height:1;color:var(--gnav-icon);   /* 图标槽统一宽度与色调 → emoji 与文本符号视觉重量一致 */
 }
 .gnav a:hover .ic,.gnav a.on .ic{color:inherit;}
 .gnav a .bdg{
   margin-left:auto;
   background:var(--color-red);color:var(--gnav-fg-strong);
-  border-radius:10px;font-size:10px;
+  border-radius:10px;font-size:12px;
   padding:0 6px;line-height:16px;
 }
 
@@ -119,7 +119,7 @@
   background:var(--gnav-bg-soft);
   border-top:1px solid var(--gnav-divider);
   padding:10px 12px;display:flex;align-items:center;gap:9px;
-  font-size:12px;color:var(--gnav-fg);
+  font-size:13.5px;color:var(--gnav-fg);
 }
 .gnav-foot{
   /* 2026-09-26 层次感：底栏用更深一档色带（暗色主题取「略亮」）压住视线、收口整列 */
@@ -159,16 +159,16 @@
   box-shadow:inset 2px 0 0 var(--gnav-rail);
   display:flex;align-items:center;gap:8px;
   padding:11px 14px;cursor:pointer;
-  color:var(--gnav-fg-strong);font-size:12.5px;font-weight:700;
+  color:var(--gnav-fg-strong);font-size:13.5px;font-weight:700;
   user-select:none;transition:background .12s ease;
 }
 .gnav-task-head:hover{background:var(--gnav-hover);}
-.gnav-task-head .gth-ic{flex:none;font-size:14px;line-height:1;color:var(--gnav-icon);}
+.gnav-task-head .gth-ic{flex:none;font-size:15.5px;line-height:1;color:var(--gnav-icon);}
 .gnav-task-head .gth-name{flex:1;letter-spacing:.5px;}
 .gnav-task-head .gth-cnt{
   background:rgba(255,255,255,.16);
   color:var(--gnav-fg-strong);
-  border-radius:10px;font-size:10px;
+  border-radius:10px;font-size:12px;
   padding:1px 7px;line-height:14px;
   font-variant-numeric:tabular-nums;
 }
@@ -182,7 +182,7 @@
   flex:none;width:var(--gnav-tail,20px);display:flex;align-items:center;justify-content:center;
 }
 .gnav-task-head .gth-arr{
-  font-size:10px;color:var(--gnav-fg-soft);
+  font-size:12px;color:var(--gnav-fg-soft);
   transition:transform .2s;
 }
 .gnav-task.collapsed .gth-arr{transform:rotate(-90deg);}
@@ -197,7 +197,7 @@
 
 .gnav-task-body .task-it{
   padding:5px 14px;   /* 2026-09-17：7px→5px，配合列表向下拓展，同屏多显示约 2 行会话（行高 34→30） */
-  font-size:12.5px;color:var(--gnav-fg);
+  font-size:13.5px;color:var(--gnav-fg);
   cursor:pointer;
   border-left:3px solid transparent;border-radius:0;
   display:flex;flex-direction:column;gap:1px;
@@ -217,15 +217,15 @@
 .gnav-task-body .task-it .ti-ops{display:none;gap:3px;flex:none;}
 .gnav-task-body .task-it:hover .ti-ops{display:inline-flex;}
 .gnav-task-body .task-it .ti-ops button{
-  padding:1px 5px;font-size:10.5px;border-radius:4px;
+  padding:1px 5px;font-size:12px;border-radius:4px;
   background:rgba(255,255,255,.18);color:inherit;
   border:none;cursor:pointer;
 }
 .gnav-task-body .task-it .ti-ops button:hover{background:rgba(255,255,255,.32);}
-.gnav-task-body .task-it small{color:var(--color-muted);font-size:10.5px;}
+.gnav-task-body .task-it small{color:var(--color-muted);font-size:12px;}
 .gnav-task-body .task-it.on small{color:var(--color-primary-d);opacity:.7;}
 
-.gnav-task-body .task-empty{padding:14px 18px;font-size:11.5px;color:var(--gnav-fg-soft);text-align:center;}
+.gnav-task-body .task-empty{padding:14px 18px;font-size:12.5px;color:var(--gnav-fg-soft);text-align:center;}
 .gnav-task-body::-webkit-scrollbar{width:5px;}
 .gnav-task-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.28);border-radius:3px;}
 
@@ -233,18 +233,18 @@
 .gnav-task .conv-search-row{display:flex;gap:4px;padding:6px 10px 4px;}
 /* 搜索框本体作为定位容器：输入框撑满，✕ 清除键绝对定位于右侧内部（仅输入时显示） */
 .gnav-task .conv-search-input{position:relative;flex:1;min-width:0;display:block;}
-.gnav-task .conv-search-field{width:100%;font-size:12px;padding:5px 26px 5px 8px;border:1px solid var(--gnav-border,#2a3340);border-radius:6px;background:var(--gnav-input,#1c232e);color:var(--gnav-fg);outline:none;}
+.gnav-task .conv-search-field{width:100%;font-size:13.5px;padding:5px 26px 5px 8px;border:1px solid var(--gnav-border,#2a3340);border-radius:6px;background:var(--gnav-input,#1c232e);color:var(--gnav-fg);outline:none;}
 .gnav-task .conv-search-field:focus{border-color:var(--color-primary);}
-.gnav-task .conv-search-clear{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:20px;height:20px;border:none;background:transparent;color:var(--gnav-fg-soft);cursor:pointer;font-size:12px;line-height:1;border-radius:4px;display:none;}
+.gnav-task .conv-search-clear{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:20px;height:20px;border:none;background:transparent;color:var(--gnav-fg-soft);cursor:pointer;font-size:13.5px;line-height:1;border-radius:4px;display:none;}
 .gnav-task .conv-search-input.has-text .conv-search-clear{display:inline-flex;align-items:center;justify-content:center;}
 .gnav-task .conv-search-clear:hover{background:var(--gnav-hover);color:var(--gnav-fg);}
-.gnav-task-body .conv-grp-h{display:flex;align-items:center;gap:6px;padding:8px 14px 3px;font-size:10.5px;font-weight:600;letter-spacing:.04em;color:var(--gnav-fg-soft);}
+.gnav-task-body .conv-grp-h{display:flex;align-items:center;gap:6px;padding:8px 14px 3px;font-size:12px;font-weight:600;letter-spacing:.04em;color:var(--gnav-fg-soft);}
 .gnav-task-body .conv-grp-n{font-weight:400;opacity:.55;}
 /* 2026-10-16：ti-meta 行已按用户要求移除（标题下副行不需要，信息保留在 hover 提示 data-* 中） */
 .gnav-task-body .task-it .ti-ops button svg{display:block;pointer-events:none;}  /* 竖向铅笔 SVG 对齐 */
 .gnav-task-body .task-it .ti-pin{opacity:.45;}
 .gnav-task-body .task-it .ti-pin.on{opacity:1;}
-.gnav-task-body .conv-more{margin:6px 14px;padding:5px 0;width:calc(100% - 28px);font-size:11.5px;color:var(--gnav-fg-soft);background:transparent;border:1px dashed var(--gnav-border,#2a3340);border-radius:6px;cursor:pointer;}
+.gnav-task-body .conv-more{margin:6px 14px;padding:5px 0;width:calc(100% - 28px);font-size:12.5px;color:var(--gnav-fg-soft);background:transparent;border:1px dashed var(--gnav-border,#2a3340);border-radius:6px;cursor:pointer;}
 .gnav-task-body .conv-more:hover{background:var(--gnav-hover);color:var(--gnav-fg);}
 
 /* ── 8. #task-tip 信息卡（hover 任务条目显示） ── */
@@ -259,10 +259,10 @@
   line-height:1.5;overflow:hidden;
 }
 #task-tip::before{content:'';position:absolute;left:-5px;top:16px;border:5px solid transparent;border-left-color:var(--gnav-tip-bg);}
-#task-tip .tt-title{font-size:13px;font-weight:700;color:var(--gnav-fg-strong);margin-bottom:7px;display:flex;align-items:center;gap:6px;}
+#task-tip .tt-title{font-size:14.5px;font-weight:700;color:var(--gnav-fg-strong);margin-bottom:7px;display:flex;align-items:center;gap:6px;}
 #task-tip .tt-title .tt-dot{width:8px;height:8px;border-radius:50%;background:#4a9df0;flex:none;}
-#task-tip .tt-row{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:11px;color:var(--gnav-tip-fg);}
-#task-tip .tt-row .tt-tag{background:rgba(255,255,255,.14);border-radius:5px;padding:1px 7px;font-size:10.5px;color:var(--gnav-tip-fg-soft);}
+#task-tip .tt-row{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:12.5px;color:var(--gnav-tip-fg);}
+#task-tip .tt-row .tt-tag{background:rgba(255,255,255,.14);border-radius:5px;padding:1px 7px;font-size:12px;color:var(--gnav-tip-fg-soft);}
 /* 2026-09-28：元信息行改为「类型 · 标签 · 消息数」同排，消息数右对齐 —— 原先消息数独占一行，
    卡片三行全是元信息、留给摘要的空间被挤掉（hover 卡的价值主要是摘要）。
    同时保证**未分组任务与项目分组的卡片完全同构**（两处走同一段 HTML）。 */
@@ -272,14 +272,14 @@
 #task-tip .tt-sum{
   margin-top:8px;padding-top:8px;
   border-top:1px solid var(--gnav-border);
-  font-size:11.5px;color:var(--gnav-tip-fg-soft);
+  font-size:12.5px;color:var(--gnav-tip-fg-soft);
   display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;
 }
 /* 摘要来源徽标：区分「模型概括」与「结构化概述（未接模型）」，让降级可见 */
 #task-tip .tt-src{
   display:inline-block;margin-left:6px;vertical-align:1px;
   background:rgba(255,255,255,.12);border-radius:4px;padding:0 5px;
-  font-size:9.5px;color:var(--gnav-tip-fg);opacity:.8;white-space:nowrap;
+  font-size:11.5px;color:var(--gnav-tip-fg);opacity:.8;white-space:nowrap;
 }
 
 /* 折叠态：任务分组只保留标题 + 计数 */
@@ -292,7 +292,7 @@
 
 /* ── 9. "更多"入口 + hover 浮层卡 ─────────────────── */
 .gnav a.more-link{position:relative;}
-.gnav a.more-link .ic{font-size:15px;}
+.gnav a.more-link .ic{font-size:16.5px;}
 
 .more-flyout{
   position:fixed;z-index:9990;min-width:190px;
@@ -309,7 +309,7 @@
   display:flex;align-items:center;gap:10px;
   padding:9px 12px;border-radius:7px;
   cursor:pointer;
-  font-size:13px;color:var(--gnav-tip-fg-soft);
+  font-size:14.5px;color:var(--gnav-tip-fg-soft);
   text-decoration:none;
 }
 .more-flyout .mf-item:hover{background:rgba(255,255,255,.1);}
@@ -325,12 +325,12 @@
   padding:0 20px;gap:14px;flex:none;
 }
 .gbar .ptitle{
-  font-weight:600;font-size:15px;color:var(--color-primary-d);
+  font-weight:600;font-size:16.5px;color:var(--color-primary-d);
   display:inline-flex;align-items:center;gap:6px;
   flex-wrap:nowrap;overflow:hidden;white-space:nowrap;
 }
 .gbar .ptitle .br-root{color:var(--color-primary-d);font-weight:600;}
-.gbar .ptitle .br-sep{color:var(--color-muted);font-weight:400;margin:0 1px;font-size:13px;}
+.gbar .ptitle .br-sep{color:var(--color-muted);font-weight:400;margin:0 1px;font-size:14.5px;}
 .gbar .ptitle .br-cur{color:var(--color-primary-d);font-weight:600;}
 .gbar .sp{flex:1;}
 .gbar .chip{background:var(--color-primary-l);border-color:var(--color-primary-bd);color:var(--color-primary-d);}
@@ -340,7 +340,7 @@
   display:inline-flex;align-items:center;gap:6px;
   padding:4px 12px;border-radius:999px;
   background:var(--color-primary-l);color:var(--color-primary-d);
-  font-size:12px;font-weight:600;
+  font-size:13.5px;font-weight:600;
   border:1px solid var(--color-primary-bd);
   transition:background .12s ease,color .12s ease,border-color .12s ease;
 }
@@ -362,7 +362,7 @@
   display:inline-flex;align-items:center;justify-content:center;
   border:1px solid var(--color-line);border-radius:var(--radius-md);
   background:var(--color-bg-card);
-  font-size:16px;cursor:pointer;color:var(--color-text);line-height:1;
+  font-size:17.5px;cursor:pointer;color:var(--color-text);line-height:1;
   transition:background-color .15s,border-color .15s,transform .15s;
 }
 .theme-toggle:hover{background-color:var(--color-primary-l) !important;border-color:var(--color-primary-bd) !important;transform:translateY(-1px);}
@@ -387,8 +387,8 @@
   transition:background-color .15s,border-color .15s;
 }
 .user-chip:hover{background:var(--color-bg-hover);}
-.user-chip .u-name{font-size:12.5px;color:var(--color-primary-d);font-weight:600;}
-.user-chip .u-arrow{font-size:10px;color:var(--color-muted);}
+.user-chip .u-name{font-size:13.5px;color:var(--color-primary-d);font-weight:600;}
+.user-chip .u-arrow{font-size:12px;color:var(--color-muted);}
 [data-theme="dark"] .user-chip{background:var(--color-primary-100);border-color:var(--color-primary-bd);}
 [data-theme="dark"] .user-chip:hover{background:var(--color-bg-hover);}
 
@@ -409,12 +409,12 @@
   padding:10px 14px;
   border-bottom:1px solid var(--color-line);
   background:var(--color-bg);  /* 与主区画布底色一致，温润的浅色头 */
-  font-size:12px;color:var(--color-muted);
+  font-size:13.5px;color:var(--color-muted);
 }
-.user-menu .um-head b{color:var(--color-primary-d);font-size:13px;}
+.user-menu .um-head b{color:var(--color-primary-d);font-size:14.5px;}
 .user-menu .um-item{
   padding:9px 14px;
-  font-size:12.5px;color:var(--color-text);
+  font-size:13.5px;color:var(--color-text);
   cursor:pointer;
   display:flex;align-items:center;gap:8px;
   transition:background-color .12s;
@@ -434,7 +434,7 @@
 .user-menu .um-theme-opts button{
   border:none;background:transparent;cursor:pointer;
   width:24px;height:24px;border-radius:4px;
-  font-size:13px;line-height:1;
+  font-size:14.5px;line-height:1;
   color:var(--color-muted);
   display:inline-flex;align-items:center;justify-content:center;
   transition:background .15s,color .15s;
@@ -448,13 +448,13 @@
   display:flex;flex-direction:column;align-items:center;
   gap:6px;padding:18px 14px;text-align:center;
 }
-.task-empty .te-ic{font-size:28px;opacity:.6;margin-bottom:2px;}
-.task-empty .te-title{font-size:12.5px;color:#cfe1ff;font-weight:600;}
-.task-empty .te-sub{font-size:11px;color:#7fa3cc;line-height:1.6;margin-bottom:8px;}
+.task-empty .te-ic{font-size:29px;opacity:.6;margin-bottom:2px;}
+.task-empty .te-title{font-size:13.5px;color:#cfe1ff;font-weight:600;}
+.task-empty .te-sub{font-size:12.5px;color:#7fa3cc;line-height:1.6;margin-bottom:8px;}
 .task-empty .te-go{
   background:rgba(255,255,255,.16);color:#fff;
   border:1px solid rgba(255,255,255,.3);
-  padding:5px 12px;border-radius:14px;font-size:11.5px;
+  padding:5px 12px;border-radius:14px;font-size:12.5px;
   cursor:pointer;transition:background .15s;
 }
 .task-empty .te-go:hover{background:rgba(255,255,255,.28);}
@@ -481,7 +481,7 @@
 #gnav-project .gth-add{
   flex:none;width:20px;height:20px;line-height:18px;text-align:center;
   border:1px solid var(--gnav-border);border-radius:6px;
-  color:var(--gnav-fg);font-size:12px;cursor:pointer;background:transparent;padding:0;
+  color:var(--gnav-fg);font-size:13.5px;cursor:pointer;background:transparent;padding:0;
   transition:background .12s ease;
 }
 #gnav-project .gth-add:hover{background:rgba(255,255,255,.22);}
@@ -490,7 +490,7 @@
   position:relative;
   display:flex;align-items:center;gap:6px;
   padding:7px 14px;border-left:3px solid transparent;   /* 与 .task-it 同基准（内容左缘 = 17px） */
-  cursor:pointer;color:var(--gnav-fg-soft);font-size:12.5px;font-weight:500;transition:background .12s ease;
+  cursor:pointer;color:var(--gnav-fg-soft);font-size:13.5px;font-weight:500;transition:background .12s ease;
 }
 .gp-it:hover{background:var(--gnav-hover);color:var(--gnav-fg);}
 .gp-blk.cur .gp-it{color:var(--gnav-fg-strong);border-left-color:var(--color-primary);}
@@ -499,13 +499,13 @@
    取 3 会让箭头盒右缘落到 20px、压住 17px 起点的项目名（实测 arrInsideRow=false）。 */
 .gp-it .gp-arr{
   position:absolute;left:0;top:50%;transform:translateY(-50%);
-  width:14px;text-align:center;font-size:9px;color:var(--gnav-icon);cursor:pointer;
+  width:14px;text-align:center;font-size:11.5px;color:var(--gnav-icon);cursor:pointer;
 }
 .gp-it .gp-arr:hover{color:var(--gnav-fg-strong);}
 .gp-it .gp-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .gp-it .gp-cnt{
   flex:none;background:rgba(255,255,255,.16);color:var(--gnav-fg-strong);
-  border-radius:10px;font-size:10px;padding:1px 7px;line-height:14px;font-variant-numeric:tabular-nums;
+  border-radius:10px;font-size:12px;padding:1px 7px;line-height:14px;font-variant-numeric:tabular-nums;
   /* 让位给分组头同宽的尾槽（槽宽 + 头部 gap 8px）→ 行徽章与分组头徽章右缘同列 */
   margin-right:calc(var(--gnav-tail,20px) + 8px);
 }
@@ -514,7 +514,7 @@
 .gp-it:hover .gp-ops{display:inline-flex;}
 .gp-it:hover .gp-cnt{display:none;}   /* hover 时让位给操作按钮，避免徽章与按钮挤在一行 */
 .gp-it .gp-ops button{
-  padding:1px 5px;font-size:10.5px;border-radius:4px;
+  padding:1px 5px;font-size:12px;border-radius:4px;
   background:rgba(255,255,255,.18);color:inherit;border:none;cursor:pointer;
 }
 .gp-it .gp-ops button:hover{background:rgba(255,255,255,.32);}
@@ -535,7 +535,7 @@
   background:rgba(255,255,255,.16);
 }
 .gp-tasks .task-it.on{border-left-color:transparent;}              /* 缩进后主色左边线会跑到容器外缘，选中态改由底色表达 */
-.gp-empty,.gp-empty2{padding:8px 14px;font-size:11px;color:var(--gnav-fg-soft);opacity:.7;}
+.gp-empty,.gp-empty2{padding:8px 14px;font-size:12.5px;color:var(--gnav-fg-soft);opacity:.7;}
 .gp-empty2{padding:6px 14px 6px 17px;}
 .gnav.collapsed .gp-it,.gnav.collapsed .gp-empty{display:none;}
 .gnav.collapsed #gnav-project .gth-name,
@@ -545,16 +545,16 @@
 /* 创建/编辑项目弹窗：数据来源二选一卡片（本地 / 远端） */
 .cp-src-card{
   flex:1;border:1px solid var(--line);border-radius:10px;padding:10px 12px;
-  cursor:pointer;transition:border-color .15s,background .15s;font-size:12px;
+  cursor:pointer;transition:border-color .15s,background .15s;font-size:13.5px;
 }
 .cp-src-card:hover{border-color:var(--color-primary,#3b82f6);}
 .cp-src-card.on{border-color:var(--color-primary,#3b82f6);background:rgba(59,130,246,.08);}
 .cp-src-card .cp-src-title{font-weight:600;display:flex;align-items:center;gap:6px;margin-bottom:4px;}
-.cp-src-card small{color:var(--mut);font-size:10.5px;line-height:1.5;display:block;}
+.cp-src-card small{color:var(--mut);font-size:12px;line-height:1.5;display:block;}
 /* ── 16.1 SSH 连接表单（远端数据来源；字段与「添加 SSH 连接」弹窗一致）── */
 .ssh-field{margin:0 0 8px;}
-.ssh-lb{display:block;font-size:11.5px;color:var(--txt);margin-bottom:4px;font-weight:600;}
-.ssh-lb .ssh-opt{font-weight:400;color:var(--mut);font-size:10.5px;}
+.ssh-lb{display:block;font-size:12.5px;color:var(--txt);margin-bottom:4px;font-weight:600;}
+.ssh-lb .ssh-opt{font-weight:400;color:var(--mut);font-size:12px;}
 .ssh-in{
   display:flex;align-items:center;
   border:1px solid var(--line);border-radius:8px;background:var(--card);overflow:hidden;
@@ -562,16 +562,16 @@
 .ssh-in:focus-within{border-color:var(--color-primary,#3b82f6);}
 .ssh-in .ssh-ic{
   flex:none;width:34px;align-self:stretch;display:flex;align-items:center;justify-content:center;
-  font-size:13px;background:rgba(59,130,246,.08);border-right:1px solid var(--line);
+  font-size:14.5px;background:rgba(59,130,246,.08);border-right:1px solid var(--line);
 }
 .ssh-in input{
   flex:1;min-width:0;border:none;outline:none;background:transparent;
-  padding:7px 9px;font-size:12px;color:var(--ink);font-family:inherit;
+  padding:7px 9px;font-size:13.5px;color:var(--ink);font-family:inherit;
 }
 /* 认证方式分段控件（无身份验证 | 身份文件） */
 .ssh-seg{display:flex;gap:6px;margin:2px 0 8px;}
 .ssh-seg-it{
-  flex:1;text-align:center;padding:6px 8px;font-size:11.5px;cursor:pointer;
+  flex:1;text-align:center;padding:6px 8px;font-size:12.5px;cursor:pointer;
   border:1px solid var(--line);border-radius:8px;color:var(--mut);
   transition:border-color .15s,background .15s,color .15s;
 }

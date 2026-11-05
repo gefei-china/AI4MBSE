@@ -8,9 +8,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from core.deps import db_session
+from core.deps import db_session, current_user
 from repositories.project_repo import ProjectRepo
-from core.audit import audit
+from core.audit import audit, audit_user
 from models import ProjectIn
 
 router = APIRouter(tags=["项目"])
@@ -100,13 +100,13 @@ def get_default_project(conn=Depends(db_session)):
 
 
 @router.post("/api/projects/default")
-def set_default_project(body: dict, conn=Depends(db_session)):
+def set_default_project(body: dict, conn=Depends(db_session), user=Depends(current_user)):
     pid = (body or {}).get("project_id", "")
     repo = ProjectRepo(conn)
     if not repo.get_project(pid):
         return JSONResponse({"error": "Project not found"}, 404)
     repo.set_default_project(pid)
-    audit("王工", "project_switch", f"切换默认项目: {pid}", conn=conn)
+    audit(audit_user(user), "project_switch", f"切换默认项目: {pid}", conn=conn)
     return {"ok": True, "default_project_id": pid}
 
 
@@ -164,7 +164,7 @@ def get_project(project_id: str, conn=Depends(db_session)):
 
 
 @router.post("/api/projects")
-def create_project(p: ProjectIn, conn=Depends(db_session)):
+def create_project(p: ProjectIn, conn=Depends(db_session), user=Depends(current_user)):
     repo = ProjectRepo(conn)
     # 2026-09-24：id/code 可缺省自动生成 —— 前端创建项目弹窗（Codex 风格）只要求填名称
     import time as _time
@@ -188,7 +188,7 @@ def create_project(p: ProjectIn, conn=Depends(db_session)):
                         tool_binding=binding, source=source, workspace=workspace, remote=remote)
     _src_desc = ("本地工作空间 " + workspace) if source == "local" else (
         "远端 SSH " + (p.remote_display_name or p.remote_host))
-    audit("王工", "project_create", f"创建项目: {p.name}({pid})（{_src_desc}）"
+    audit(audit_user(user), "project_create", f"创建项目: {p.name}({pid})（{_src_desc}）"
           + (f" 绑定建模工具 {p.tool} 工程 {p.tool_name}(ref={p.tool_ref})" if binding else "（未绑定建模工具）"),
           conn=conn)
     return {"ok": True, "id": pid, "code": code, "source": source}
@@ -235,7 +235,7 @@ def update_project(project_id: str, body: dict, conn=Depends(db_session)):
 
 
 @router.delete("/api/projects/{project_id}")
-def delete_project(project_id: str, conn=Depends(db_session)):
+def delete_project(project_id: str, conn=Depends(db_session), user=Depends(current_user)):
     """移除项目。**只移除容器，不删内容**：其下会话/图谱资产的 project_id 置空后内容仍保留。
 
     「项目 = 任务的容器」是本次左侧项目管理优化的既定语义（2026-09-24 用户拍板），
@@ -262,7 +262,7 @@ def delete_project(project_id: str, conn=Depends(db_session)):
     if cleared_default:
         repo.set_default_project("")
     repo.delete_project(project_id)
-    audit("王工", "project_delete",
+    audit(audit_user(user), "project_delete",
           f"移除项目: {proj.get('name')}({project_id})（解绑任务 {detached.get('tasks', 0)} 个、"
           f"实体 {detached.get('entities', 0)} 个、关系 {detached.get('relations', 0)} 条，"
           "内容与消息保留"
@@ -449,7 +449,7 @@ def list_project_memories(project_id: str, category: str | None = None,
 
 
 @router.post("/api/projects/{project_id}/memories")
-def create_project_memory(project_id: str, body: dict, conn=Depends(db_session)):
+def create_project_memory(project_id: str, body: dict, conn=Depends(db_session), user=Depends(current_user)):
     repo = ProjectRepo(conn)
     if not repo.get_project(project_id):
         return JSONResponse({"error": "项目不存在"}, 404)
@@ -461,14 +461,14 @@ def create_project_memory(project_id: str, body: dict, conn=Depends(db_session))
         return JSONResponse({"error": "类别必须为 规范/基线/决策/经验"}, 400)
     mem_id = repo.create_project_memory(
         project_id, category, title[:120], str((body or {}).get("content") or "")[:4000],
-        created_by=(body or {}).get("created_by") or "王工")
-    audit("王工", "project_memory_create",
+        created_by=audit_user(user))
+    audit(audit_user(user), "project_memory_create",
           f"项目{project_id} 新增记忆[{category}]: {title[:30]}", conn=conn)
     return {"ok": True, "id": mem_id}
 
 
 @router.put("/api/projects/{project_id}/memories/{mem_id}")
-def update_project_memory(project_id: str, mem_id: int, body: dict, conn=Depends(db_session)):
+def update_project_memory(project_id: str, mem_id: int, body: dict, conn=Depends(db_session), user=Depends(current_user)):
     repo = ProjectRepo(conn)
     mem = repo.get_project_memory(mem_id)
     if not mem:
@@ -486,15 +486,15 @@ def update_project_memory(project_id: str, mem_id: int, body: dict, conn=Depends
         content=str((body or {}).get("content")).strip() if (body or {}).get("content") is not None else None,
         enabled=int((body or {}).get("enabled")) if (body or {}).get("enabled") is not None else None,
     )
-    audit("王工", "project_memory_update", f"项目{project_id} 更新记忆#{mem_id}", conn=conn)
+    audit(audit_user(user), "project_memory_update", f"项目{project_id} 更新记忆#{mem_id}", conn=conn)
     return {"ok": True}
 
 
 @router.delete("/api/projects/{project_id}/memories/{mem_id}")
-def delete_project_memory(project_id: str, mem_id: int, conn=Depends(db_session)):
+def delete_project_memory(project_id: str, mem_id: int, conn=Depends(db_session), user=Depends(current_user)):
     repo = ProjectRepo(conn)
     if not repo.get_project_memory(mem_id):
         return JSONResponse({"error": "记忆不存在"}, 404)
     repo.delete_project_memory(mem_id)
-    audit("王工", "project_memory_delete", f"项目{project_id} 删除记忆#{mem_id}", conn=conn)
+    audit(audit_user(user), "project_memory_delete", f"项目{project_id} 删除记忆#{mem_id}", conn=conn)
     return {"ok": True}

@@ -10,6 +10,7 @@
 用临时库（mkdtemp）建最小 agent_memory 表（含 tier 列），不污染真库；含变异自证。
 """
 import os
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import sqlite3
 import sys
 import tempfile
@@ -32,7 +33,7 @@ def check(name, cond, detail=""):
 
 def _fixture():
     """建最小 agent_memory 表（含 tier 列）的临时库连接。"""
-    d = tempfile.mkdtemp(prefix="memtier_")
+    d = mkdtemp(prefix="memtier_")
     conn = sqlite3.connect(os.path.join(d, "t.db"))
     conn.row_factory = sqlite3.Row
     conn.execute("""CREATE TABLE agent_memory (

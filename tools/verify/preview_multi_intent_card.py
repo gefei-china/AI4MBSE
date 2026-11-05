@@ -9,11 +9,25 @@
   · 载荷来自**正在跑的服务**产出的真实 `multi_intent` SSE 事件（不手写夹具，避免"夹具对了、契约错了"）
 
 ## 断言什么（改了 `procAddMultiIntent` 或 SSE 契约就会红）
+T0 渲染期间**无未捕获 JS 异常**（防止"静默失败"再次伪装成渲染不达标）
 T1 `#proc-box` 里出现 1 个 `proc-block multi`（多意图条目）
 T2 标题为「多意图分解（3 个阶段）」、状态徽章为「3 段」
 T3 3 个 stage chip，且**文案保序**：`1. 进行需求分析 → requirement_analysis` …
 T4 无 `undefined` / `[object Object]`（后者是 raw_subtasks 被改成 dict 时的典型症状）
 T5 截图产出（可人工复核布局），且 JS 无报错
+
+## 2026-10-23 修复记录（本门禁此前 4 个失败全是**验证器**的错，非产品缺陷）
+现场：T4 / T4b / T6b / T6c 红，但整份 DOM 里 chips 明明渲染成功。
+根因两条，都是"症状与功能没写完全一致"的经典：
+① **宿主依赖缺失**：`procRender()` 末尾调用 `stickBottom()`（定义在 `03-chat.js`，
+   夹具未内联）→ `ReferenceError` **抛在同一个 `<script>` 块内** → 同一块后面的
+   探针代码**从未执行** → 探针文本为空 → 四个断言全被误判为失败。
+   （chips 之所以在 DOM 里：`b.innerHTML = h` 在抛错**之前**已执行。）
+   修法：补 `stickBottom`/`toast` 垫片 + `window.onerror` 捕获。
+② **探针通道被转义**：探针原用 `textContent` 承载 innerHTML，dump-dom 会把 `"` 序列
+   化成 `&quot;` → 即便探针执行了，`class="hil l0"` 也永远数不到。
+   修法：探针改用 `data-b64`（base64）传递，Python 侧解码。
+此外新增 T0 断言（无未捕获 JS 异常）——今后再有同类静默失败，门禁会**响**。
 
 用法（需服务已在跑）：
     .venv/Scripts/python.exe -X utf8 tools/verify/preview_multi_intent_card.py
@@ -85,6 +99,33 @@ pipe = (repo / "static/js/mods/11-pipeline.js").read_text(encoding="utf-8")
 esc_src = "\n".join(l for l in core.split("\n")
                     if re.match(r"^function esc[A-Za-z]*\(", l))
 assert esc_src.count("function esc") == 2, "未取到 esc/escA 的定义"
+
+# ★ 2026-10-23 修：宿主依赖垫片 + JS 错误捕获（本门禁此前 4 个"失败"全是验证器的错）
+#   现场：11-pipeline.js 的 procRender() 末尾调用 stickBottom()（定义在 03-chat.js，
+#   夹具未内联）→ ReferenceError **抛在同一个 <script> 块内** → 同一块后面的探针
+#   代码从未执行 → 探针文本为空 → T4/T4b/T6b/T6c 全被误判为失败。
+#   症状迷惑性极强：chips 明明渲染进了 DOM（b.innerHTML=h 在抛错之前已执行），
+#   唯独探针 div 不存在。
+#   两条修法（都不改生产代码）：
+#   ① 垫片：补上被测渲染路径真正需要的宿主全局（stickBottom/toast）。这些是**滚动与
+#      提示**行为，与本门禁断言的多意图卡片渲染无关，no-op 不会掩盖任何被测行为。
+#   ② 错误捕获：window.onerror 收集未捕获异常并写进 DOM，新增 T0 断言"渲染期间
+#      无未捕获 JS 错误"——今后再有同类"静默失败"，门禁会**响**而不是给出假红。
+#   （教训同源：验证器出错时，症状与"功能没写"完全一致。）
+STUB_JS = """
+window.__errs = [];
+window.onerror = function(m, s, l, c, e){ window.__errs.push(String(m)+' @'+l+':'+c); };
+window.addEventListener('unhandledrejection', function(e){
+  window.__errs.push('unhandledrejection: '+String(e.reason));
+});
+// —— 宿主垫片（被测路径的最小依赖；行为无关，仅避免 ReferenceError 中断脚本块）——
+window.stickBottom = window.stickBottom || function(){};
+window.toast = window.toast || function(){};
+"""
+# ⚠️ 顺序要求（反证二实测发现）：**本块必须排在生产脚本之前**。
+#   否则生产脚本（如 procRender 末尾的 stickBottom）抛的 ReferenceError 发生在
+#   onerror hook 装上之前 → 异常被浏览器吞掉 → T0 反而 PASS（假绿）。
+#   正解：垫片 + hook 都在最前 ⇒ 生产脚本里的未定义全局被当场抓住。
 css = "\n".join((repo / "static/css" / f).read_text(encoding="utf-8")
                 for f in ("tokens.css", "app.css", "chat.css"))
 
@@ -93,23 +134,49 @@ html = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <body style="padding:14px;background:#fff;font-family:system-ui,'Microsoft YaHei',sans-serif;">
 <div id="proc-box"></div><div id="chat-area" style="height:200px;"></div>
 <h3 style="font:600 13px system-ui;color:#333;margin:14px 0 6px;">↑ 以上为真 Chrome 渲染结果（生产 11-pipeline.js 原样内联）</h3>
+<script>
+%s
+</script>
 <script>%s</script>
 <script>%s</script>
 <script>
-// 与 SSE 派发处同一入口（static/js/mods/11-pipeline.js 的 evType==='multi_intent' 分支调的就是它）
-procAddMultiIntent(%s);
-// 探针：把**渲染产物**本身（proc-box 的 innerHTML）以纯文本形式落到 DOM 里，供断言使用。
+// ⚠️ 2026-10-23：调用点**必须 try/catch**（不能只靠 window.onerror）。
+//   现场：生产脚本里抛的未捕获异常会让同块的探针代码整块不执行（探针 div 根本不
+//   存在），而 headless dump-dom 下 window.onerror **不一定**被触发（实测 E=[]）。
+//   ⇒ 只有在调用点就地捕获，才能既拿到错误、又保证探针继续跑完。
+//   （这正是"静默失败伪装成渲染不达标"的病根，必须在夹具层堵死。）
+try {
+  procAddMultiIntent(%s);
+} catch(e){
+  window.__errs.push('procAddMultiIntent: '+(e && e.message ? e.message : String(e)));
+}
+// 探针：把**渲染产物**本身（proc-box 的 innerHTML）以 **base64** 落到 DOM 属性里，供断言使用。
 // 为什么需要它：本页为实现"生产源码原样内联"必然把 11-pipeline.js 源码也放进文档，而源码里
 // 本来就有 `undefined` 字样 —— 直接在整份 DOM 上断言 undefined 会**误判**（首版就踩了）。
+// ⚠️ 为什么用 base64 而不是 textContent：dump-dom 会把文本节点里的 `"` 序列化成 `&quot;`，
+//    于是 `class="hil l0"` 永远数不到（T4b 假红的第二个来源）。base64 无需转义，原样还原。
+// ⚠️ 2026-10-23：探针必须**独立成块**放在 procAddMultiIntent 之后 —— 若与调用同块，
+//    前一个块的异常会中断本块，探针永不执行（表现为"DOM 里有 chips 但探针 div 不存在"，
+//    极像渲染失败）。这里还把未捕获异常一并回填，供 T0 断言。
 window.__probe = function(id){
   var d = document.createElement('div'); d.id = id;
-  d.textContent = document.getElementById('proc-box').innerHTML;
+  try{
+    var raw = document.getElementById('proc-box').innerHTML;
+    d.setAttribute('data-b64', btoa(unescape(encodeURIComponent(raw))));
+  }catch(e){ window.__errs.push('probe: '+e.message); }
   document.body.appendChild(d);
 };
-__probe('render-probe');
+try { __probe('render-probe'); } catch(e){ window.__errs.push('probe: '+e.message); }
 __EXTRA_JS__
+// 错误回填（供 T0 断言）：**必须放在 __EXTRA_JS__ 之后**，才能捕获点击交互等
+// 变体代码抛出的异常（否则变体里的错只会被吞掉、门禁仍然全绿）。
+try{
+  var ed=document.createElement('div'); ed.id='jserrs';
+  ed.setAttribute('data-b64', btoa(unescape(encodeURIComponent(JSON.stringify(window.__errs||[])))));
+  document.body.appendChild(ed);
+}catch(e){}
 </script>
-</body></html>""" % (css, esc_src, pipe, json.dumps(payload, ensure_ascii=False))
+</body></html>""" % (css, STUB_JS, esc_src, pipe, json.dumps(payload, ensure_ascii=False))
 
 # ⚠️ 变体注入用 **字符串替换** 而不是 `%` 再格式化一次：CSS 里有 `width:100%` 这类百分号，
 #    再走一次 %-formatting 会直接抛 "unsupported format character"（夹具会建不出来）。
@@ -133,9 +200,27 @@ def render(fname, extra_js, dump_name, shot_name):
 
 
 def probe_of(dom_text, pid="render-probe"):
-    """取探针承载的**渲染产物**文本（避开内联源码里的 undefined 字样）。"""
-    m = re.search(r'<div id="%s">(.*?)</div>' % pid, dom_text, re.S)
-    return m.group(1) if m else ""
+    """取探针承载的**渲染产物**（base64 解码，避开 dump-dom 的实体转义与内联源码噪声）。"""
+    m = re.search(r'<div id="%s" data-b64="([^"]*)"' % pid, dom_text)
+    if not m:
+        return ""
+    import base64
+    try:
+        return base64.b64decode(m.group(1)).decode("utf-8", "replace")
+    except Exception:
+        return ""
+
+
+def errs_of(dom_text):
+    """取页面回填的未捕获 JS 异常列表（base64 编码的 JSON）。"""
+    m = re.search(r'<div id="jserrs" data-b64="([^"]*)"', dom_text)
+    if not m:
+        return []
+    import base64
+    try:
+        return json.loads(base64.b64decode(m.group(1)).decode("utf-8", "replace"))
+    except Exception:
+        return ["<errs 解析失败>"]
 
 
 # ── 3) 真 Chrome：默认态（折叠）+ 展开态（点击交互）──
@@ -153,6 +238,8 @@ _, dom2, dom2_path, shot2_path = render(
 # ── 4) 断言（对真浏览器产出的 DOM）──
 print("── 断言 ──")
 render_txt = probe_of(dom)
+errs = errs_of(dom) + errs_of(dom2)
+chk(not errs, "T0 渲染期间无未捕获 JS 异常（%s）" % (errs[:3] if errs else "无"))
 chk("proc-block multi" in dom, "T1 时间线出现多意图条目（proc-block multi）")
 chk(re.search(r"多意图分解（3 个阶段）", dom) is not None, "T2a 标题为「多意图分解（3 个阶段）」")
 chk(re.search(r">3 段<", dom) is not None, "T2b 状态徽章为「3 段」")

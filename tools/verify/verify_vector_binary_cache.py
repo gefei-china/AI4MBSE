@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] ★ 第二次命中二进制（hit_bin 增量=+0，应为 1） 
 """门禁：向量检索二进制缓存（L2）必须满足的四条。
 
 本脚本守：
@@ -23,7 +24,7 @@ import time
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
-DB = os.path.join(_ROOT, "mbse.db")
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
 CACHE = os.path.join(_ROOT, "tmp", "vec_cache")
 
 

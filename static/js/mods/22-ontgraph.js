@@ -63,7 +63,7 @@ function ogNodeHover(name){
   const body = document.getElementById('ont-graph-body'); if(!body) return;
   let tip = document.getElementById('og-node-tip');
   if(!tip){ tip = document.createElement('div'); tip.id='og-node-tip';
-    tip.style.cssText='position:absolute;z-index:9;background:rgba(31,45,61,.95);color:#fff;border-radius:6px;padding:6px 9px;font-size:11px;line-height:1.55;pointer-events:none;max-width:200px;box-shadow:0 2px 8px rgba(0,0,0,.22);';
+    tip.style.cssText='position:absolute;z-index:9;background:rgba(31,45,61,.95);color:#fff;border-radius:6px;padding:6px 9px;font-size:12.5px;line-height:1.55;pointer-events:none;max-width:200px;box-shadow:0 2px 8px rgba(0,0,0,.22);';
     body.appendChild(tip);
   }
   const bind = (ontData.binding||[]).find(b=>b.entity_type===name);
@@ -721,10 +721,10 @@ function addPropRow(target, kv) {
   div.dataset.target = target;
   div.style.cssText = 'display:flex;gap:4px;align-items:center;background:#fafafa;border:1px solid var(--line);border-radius:6px;padding:4px 6px;';
   div.innerHTML = `
-    <span style="color:var(--mut);font-size:12px;cursor:grab;">⠿</span>
-    <input class="pr-k" value="${esc(k)}" placeholder="属性名" style="border:none;background:transparent;width:90px;font-size:12px;font-weight:600;">
-    <input class="pr-v" value="${esc(typeof v==='object'?JSON.stringify(v):v)}" placeholder="说明/示例" style="border:none;background:transparent;flex:1;font-size:12px;">
-    <select class="pr-t" style="border:none;background:transparent;font-size:11px;color:var(--mut);">
+    <span style="color:var(--mut);font-size:13.5px;cursor:grab;">⠿</span>
+    <input class="pr-k" value="${esc(k)}" placeholder="属性名" style="border:none;background:transparent;width:90px;font-size:13.5px;font-weight:600;">
+    <input class="pr-v" value="${esc(typeof v==='object'?JSON.stringify(v):v)}" placeholder="说明/示例" style="border:none;background:transparent;flex:1;font-size:13.5px;">
+    <select class="pr-t" style="border:none;background:transparent;font-size:12.5px;color:var(--mut);">
       <option value="string" ${typ==='string'||typ==='xsd:string'?'selected':''}>string</option>
       <option value="int" ${typ==='int'||typ==='xsd:int'?'selected':''}>int</option>
       <option value="decimal" ${typ==='decimal'||typ==='xsd:decimal'?'selected':''}>decimal</option>
@@ -734,8 +734,8 @@ function addPropRow(target, kv) {
       <option value="enum" ${typ==='enum'?'selected':''}>enum</option>
       <option value="text" ${typ==='text'?'selected':''}>text</option>
     </select>
-    <button class="pr-req" title="必填" style="background:${req?'var(--blue)':'transparent'};color:${req?'#fff':'var(--mut)'};border:none;border-radius:4px;padding:1px 5px;font-size:11px;cursor:pointer;">✏️</button>
-    <button class="pr-del" style="background:transparent;border:none;color:var(--mut);cursor:pointer;font-size:14px;" onclick="delPropRow(this)">🗑</button>`;
+    <button class="pr-req" title="必填" style="background:${req?'var(--blue)':'transparent'};color:${req?'#fff':'var(--mut)'};border:none;border-radius:4px;padding:1px 5px;font-size:12.5px;cursor:pointer;">✏️</button>
+    <button class="pr-del" style="background:transparent;border:none;color:var(--mut);cursor:pointer;font-size:15.5px;" onclick="delPropRow(this)">🗑</button>`;
   // 必填按钮切换
   div.querySelector('.pr-req').onclick = function() {
     const cur = this.dataset.on === '1';

@@ -45,6 +45,14 @@ import sqlite3
 import time
 from typing import Any, Optional
 
+# ★ 2026-10-29：周报的「能力调用（本周）」必须排除探针。
+#   探针（fake_tool 142 次等）不是业务调用，混入会让周报的能力调用量虚高，
+#   并让"上周 vs 本周"环比在看板脚本批量跑的那一周出现假峰值。
+#   口径真源：core/probe_mark.probe_where()（勿另写一份）。
+from core.probe_mark import probe_where as _probe_where
+
+_PROBE = _probe_where()
+
 # ══════════════════════════════════════════════════════════════
 # 配置
 # ══════════════════════════════════════════════════════════════
@@ -53,6 +61,7 @@ _SETTINGS_DEFAULTS = {
     "window_days": 7,       # 本周窗口（天）；环比对照窗口为上一个等长窗口
     "max_actions": 50,      # 单次返回的待决策条目上限（防长尾注水）
     "max_detail": 8,        # 每段明细条目上限
+    "longtail_days": 90,    # P0-a：能力长尾判定天数（active 且零调用超过该天数）
 }
 
 VERDICT_CLEAN = "clean"
@@ -81,7 +90,7 @@ def get_settings(overrides: Optional[dict] = None) -> dict:
     try:
         if not _c.as_bool("evolution_report", "enabled", True):
             s["enabled"] = False
-        for k in ("window_days", "max_actions", "max_detail"):
+        for k in ("window_days", "max_actions", "max_detail", "longtail_days"):
             v = _c.get("evolution_report", k)
             if v is None:
                 continue
@@ -170,6 +179,211 @@ def _delta(cur: Optional[int], prev: Optional[int]) -> Optional[int]:
 # ══════════════════════════════════════════════════════════════
 # ① actions —— 要你决策的（唯一需要人动手的一段）
 # ══════════════════════════════════════════════════════════════
+def _act_capability(conn: sqlite3.Connection, s: dict) -> list:
+    """P0-a 能力长尾与零调度：长尾能力（>90 天零调用）+ 零调度 Agent。
+
+    **只提议不自动执行**（延续本产品自进化纪律）：清单由人决定停用/下架，
+    系统不碰任何 status。无端点 ⇒ 显式 not_actionable_reason，不假装能点。
+    """
+    if not _tbl_exists(conn, "capability_registry"):
+        return []
+    from core import capability_registry as cr
+    out = []
+    for it in cr.longtail_capabilities(conn, days=int(s.get("longtail_days", 90))):
+        out.append({
+            "source": "capability",
+            "source_label": "能力长尾",
+            "id": it["capability_id"],
+            "title": "%s（%s）" % (it.get("display_name") or it["capability_id"],
+                                 it.get("kind") or ""),
+            "detail": "自 %s 创建后零调用。建议人工决定：停用 / 下架 / 保留观察。"
+                      % (it.get("created_at") or "（时间未知）"),
+            "meta": {"capability_id": it["capability_id"], "kind": it.get("kind"),
+                     "version": it.get("version"), "publisher": it.get("publisher"),
+                     "created_at": it.get("created_at")},
+            "action": None,
+            "not_actionable_reason": "停用/下架能力会改动 Agent 可用面，需人工决定；"
+                                     "系统只列清单，不自动执行（自进化纪律）",
+        })
+    for ag in cr.zero_dispatch_agents(conn):
+        out.append({
+            "source": "capability",
+            "source_label": "零调度 Agent",
+            "id": "agent:%s" % ag.get("name"),
+            "title": "%s（%s）" % (ag.get("name"), ag.get("status") or ""),
+            "detail": "从未被调度过（agent_tasks 零记录）。建议人工决定：启用 / 退役 / 保留观察。",
+            "meta": {"agent_id": ag.get("id"), "name": ag.get("name"),
+                     "status": ag.get("status")},
+            "action": None,
+            "not_actionable_reason": "Agent 退役是组织决策，需人工决定；系统只列清单",
+        })
+    return out
+
+
+def _act_badcase(conn: sqlite3.Connection, s: dict) -> list:
+    """P0-a BadCase 候选未入库：dry-run 计数 + 一键 apply（真端点）。
+
+    与 `_act_capability`（只列清单、显式不能点）的区别：收集端点**真实存在**
+    （`POST /api/monitor/badcases/collect`，body `{"apply": true}`，
+    见 routers/monitor.py:728-744）⇒ 这里给真按钮。端点默认 dry-run，
+    必须显式带 apply=true 才写库——不是系统自动执行，是人点一下
+    （人工关口纪律，与自进化「只建议不自动执行」同源）。
+
+    ★本函数只调 apply=False 的 dry-run 做计数，**不写任何库**
+      （周报只读铁律，A2 静态断言对此锁定）。
+    """
+    from core import badcase as bc
+    try:
+        res = bc.collect_bad_cases(conn, apply=False)
+    except Exception as e:                                        # noqa: BLE001
+        return [{
+            "source": "badcase", "source_label": "BadCase 入库", "id": None,
+            "title": "BadCase 采集失败", "detail": "%s: %s" % (type(e).__name__, e),
+            "meta": {}, "action": None, "not_actionable_reason": "采集未完成",
+        }]
+    if not res.get("enabled"):
+        return []
+    # ★ 2026-10-29：判据面级失败也要变成"人看得见的动作项"。
+    #   badcase 此前对 detector SQL 异常是 `except: continue` 静默跳过 ⇒
+    #   某个判据面瘫了，坏例数凭空变少，周报会把它当成"最近没有坏例、变好了"。
+    #   现在 badcase 把失败记进 res['failures']，此处显式转成 action。
+    _bc_failures = list(res.get("failures") or [])
+    if _bc_failures:
+        return [{
+            "source": "badcase", "source_label": "BadCase 入库", "id": None,
+            "title": "BadCase 判据面失效（坏例数不可信）",
+            "detail": "以下判据面执行失败，本轮坏例统计**不完整**，不可据此判断「变好了」："
+                      + "；".join(_bc_failures[:5]),
+            "meta": {"failures": _bc_failures},
+            "action": None,
+            "not_actionable_reason": "判据面执行失败，需先修 SQL/表结构",
+        }]
+    plan = res.get("plan") or {}
+    new, recur, reopen = (int(plan.get(k, 0) or 0)
+                          for k in ("new", "recur", "reopen"))
+    pending = new + recur + reopen
+    if pending <= 0:
+        return []
+    open_cnt = bc.open_badcase_count(conn)
+    by_kind = (res.get("summary") or {}).get("by_kind") or {}
+    kinds = "；".join("%s %d 个主题" % (v.get("label") or k, int(v.get("subjects", 0)))
+                     for k, v in by_kind.items()) or "（无明细）"
+    detail = ("%s；%d 天窗口内共 %d 起事件；当前 open %d 条。"
+              "点「一键入库」写入 bad_cases（收集端点默认 dry-run，"
+              "此按钮显式带 apply=true，人工确认后才落库）。"
+              % (kinds, int(res.get("window_days") or 0),
+                 int((res.get("summary") or {}).get("total_events", 0) or 0),
+                 open_cnt))
+    if not _tbl_exists(conn, "bad_cases"):
+        # 有候选但台账表不在 ⇒ 按钮点了也写不进去，必须显式说清堵在哪
+        return [{
+            "source": "badcase", "source_label": "BadCase 入库",
+            "id": "badcase:collect",
+            "title": "%d 条 BadCase 候选未入库，但 bad_cases 表尚未建立"
+                     % pending,
+            "detail": detail,
+            "meta": {"plan": plan, "open_count": open_cnt,
+                     "window_days": res.get("window_days")},
+            "action": None,
+            "not_actionable_reason": "bad_cases 表不存在（迁移未执行），"
+                                     "无法写入；先执行数据库迁移",
+        }]
+    return [{
+        "source": "badcase",
+        "source_label": "BadCase 入库",
+        "id": "badcase:collect",
+        "title": "%d 条 BadCase 候选未入库（新 %d / 复现 %d / 重开 %d）"
+                 % (pending, new, recur, reopen),
+        "detail": detail,
+        "meta": {"plan": plan, "open_count": open_cnt,
+                 "window_days": res.get("window_days"),
+                 "total_events": (res.get("summary") or {}).get("total_events", 0)},
+        # ★真闭环：收集端点已存在，一键 apply 由人确认后落库
+        "action": {"method": "POST",
+                   "path": "/api/monitor/badcases/collect",
+                   "label": "一键入库",
+                   "payload": {"apply": True}},
+    }]
+
+
+def _act_online_eval(conn: sqlite3.Connection, s: dict) -> list:
+    """P0-b 在线评测回流：待标注积压 + 7 日零转正 + 候选分布。
+
+    R13 组合判据的落地处（alert_rules 无组合条件列，见 seed_registry 注释）：
+    promoted_7d=0 **且** backlog>0 ⇒ 回流停滞，一条 warn 行动项。
+    confirmed 未转正 > 0 ⇒ 真按钮 POST /promote（apply=true 由人确认）。
+    纯 pending 积压 ⇒ 显式 not_actionable（标注必须逐条人看，没有一键）。
+    """
+    if not _tbl_exists(conn, "online_eval_queue"):
+        return []
+    from core import online_eval as oe
+    try:
+        met = oe.online_eval_metrics(conn)
+        summ = oe.queue_summary(conn)
+    except Exception as e:                                        # noqa: BLE001
+        return [{
+            "source": "online_eval", "source_label": "在线评测回流", "id": None,
+            "title": "在线评测指标读取失败",
+            "detail": "%s: %s" % (type(e).__name__, e),
+            "meta": {}, "action": None, "not_actionable_reason": "指标未读到",
+        }]
+    backlog = int(met.get("eval_backlog_pending") or 0)
+    promoted = int(met.get("eval_promoted_7d") or 0)
+    confirmed = int((summ.get("by_status") or {}).get("labeled_confirmed") or 0)
+    by_type = summ.get("by_type") or {}
+    out = []
+
+    # ① confirmed 未转正 ⇒ 真按钮（promote 是唯一真写点，dry-run 默认）
+    if confirmed > 0:
+        dist = "；".join("%s %d" % (k, v) for k, v in by_type.items()) or "（无明细）"
+        out.append({
+            "source": "online_eval",
+            "source_label": "在线评测回流",
+            "id": "online_eval:promote",
+            "title": "%d 条人工 confirmed 样本待转正进 dataset" % confirmed,
+            "detail": ("已人工标注确认的样本分布：%s。点「一键转正」按 sample_type "
+                       "三分流（intent→intent_samples / retrieval→qrels.jsonl / "
+                       "generation→eval_gen_labels，幂等）。转正端点默认 dry-run，"
+                       "此按钮显式带 apply=true。自动打分永不自动转正（B1）。" % dist),
+            "meta": {"confirmed": confirmed, "by_type": by_type,
+                     "promoted_7d": promoted},
+            "action": {"method": "POST",
+                       "path": "/api/monitor/online-eval/promote",
+                       "label": "一键转正",
+                       "payload": {"apply": True}},
+        })
+
+    # ② R13 组合判据：7 日零转正且仍有积压 ⇒ 回流停滞
+    if promoted == 0 and backlog > 0:
+        out.append({
+            "source": "online_eval",
+            "source_label": "在线评测回流",
+            "id": "online_eval:stalled",
+            "title": "回流停滞：7 日零转正且待标注积压 %d 条" % backlog,
+            "detail": ("采样在进队、标注/转正没人动 ⇒ 生产回流管道空转。"
+                       "去 监控 → 在线评测回流 面板逐条标注（评分 1-5 + 原因，"
+                       "走 HIL 确认卡），确认后的样本才能被「一键转正」送进 dataset。"),
+            "meta": {"backlog": backlog, "promoted_7d": promoted},
+            "action": None,
+            "not_actionable_reason": "标注必须逐条人工判断（无一键）；"
+                                     "管道入口在监控页「在线评测回流」面板",
+        })
+
+    # ③ 纯积压（有转正但积压增长）⇒ 一条提示，不制造噪音
+    elif backlog > 0 and not out:
+        out.append({
+            "source": "online_eval",
+            "source_label": "在线评测回流",
+            "id": "online_eval:backlog",
+            "title": "待标注积压 %d 条" % backlog,
+            "detail": "采样持续进队，标注节奏待跟进（面板：监控 → 在线评测回流）。",
+            "meta": {"backlog": backlog, "promoted_7d": promoted},
+            "action": None,
+            "not_actionable_reason": "逐条人工标注，无一键动作",
+        })
+    return out
+
+
 def _act_curriculum(conn: sqlite3.Connection, s: dict) -> list:
     """任务提案：有 decide 端点 ⇒ 真可一键裁决。"""
     if not _tbl_exists(conn, "curriculum_items"):
@@ -320,6 +534,9 @@ ACTION_SOURCES = (
     ("hil", "人工确认点", _act_hil),
     ("topology", "画布结构", _act_topology),
     ("safety", "安全信号", _act_safety),
+    ("capability", "能力长尾", _act_capability),
+    ("badcase", "BadCase 入库", _act_badcase),
+    ("online_eval", "在线评测回流", _act_online_eval),
 )
 
 
@@ -467,6 +684,35 @@ def _metrics_for(conn: sqlite3.Connection, s: dict, scope: str) -> list:
                                 "拓扑体检未产出结果")))
         out.append(("blocker 缺陷", _stock(_dim(ov, "blocker_defects"),
                                    "拓扑体检未产出结果")))
+    elif scope == "capability":
+        # P0-a 能力度量（capability_registry 统一注册处）：
+        # 调用总量走环比（流式），长尾/零调度走存量（_stock——环比无意义：
+        # 上周不存在的能力这周出现了，不是"新增 7 个长尾"）。
+        if _tbl_exists(conn, "capability_registry"):
+            out.append(("能力调用（本周）", _pair(
+                conn,
+                "SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=?" + _PROBE,
+                "SELECT COUNT(*) FROM tool_call_logs WHERE created_at>=? AND created_at<?" + _PROBE,
+                int(s["window_days"]))))
+            out.append(("零调用能力", _stock(_count(
+                conn,
+                "SELECT COUNT(*) FROM capability_registry "
+                "WHERE status='active' AND call_count=0"),
+                "注册处尚未建立")))
+            out.append(("零调度 Agent", _stock(_count(
+                conn,
+                "SELECT COUNT(*) FROM (SELECT a.id FROM agents a "
+                "LEFT JOIN agent_tasks t ON t.agent_id=a.name "
+                "GROUP BY a.id HAVING COUNT(t.id)=0)"),
+                "agents 表不可用")))
+            out.append(("长尾能力（>%d天）" % int(s.get("longtail_days", 90)), _stock(_count(
+                conn,
+                "SELECT COUNT(*) FROM capability_registry WHERE status='active' "
+                "AND call_count=0 AND julianday('now')-julianday(created_at)>?",
+                (int(s.get("longtail_days", 90)),)),
+                "注册处尚未建立")))
+        else:
+            out.append(("能力注册处", _stock(None, "capability_registry 表尚未建立")))
     return [{"name": n, **d} for n, d in out]
 
 
@@ -475,6 +721,7 @@ DIGEST_SECTIONS = (
     ("evolve", "进化留痕", "系统改了哪些东西、记住了哪些死路"),
     ("guard", "变更守卫", "改动之前有没有被拦下来、有没有等你点头"),
     ("structure", "结构欠账", "画布层面的重复与缺陷"),
+    ("capability", "能力度量", "五类能力的调用、长尾与零调度（P0-a 统一注册处）"),
 )
 
 

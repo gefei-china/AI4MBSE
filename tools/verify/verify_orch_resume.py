@@ -61,7 +61,15 @@ DDL_TASKS = """CREATE TABLE agent_tasks (
     result TEXT DEFAULT '', metadata TEXT DEFAULT '{}', error TEXT DEFAULT '',
     assigned_by TEXT DEFAULT 'planner', seq INTEGER DEFAULT 0, latency_ms INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    context TEXT DEFAULT '', expected_output TEXT DEFAULT '', conversation_id INTEGER DEFAULT 0)"""
+    context TEXT DEFAULT '', expected_output TEXT DEFAULT '', conversation_id INTEGER DEFAULT 0,
+    error_class TEXT DEFAULT '')"""
+# ⚠️ 2026-11-04 修复（本夹具曾**整体红 21 条**且一直挂在 CI 里）：
+#   `agent_tasks.error_class` 是后加到真库的列，`prepare_resume` 的 SELECT 里也取了它，
+#   但**本夹具的 DDL 没跟上** ⇒ 那句 SELECT 在夹具上抛 `no such column: error_class`
+#   ⇒ 被 `prepare_resume` 里的 `except Exception: rows = []` 吞掉 ⇒ 决策恒返回
+#   `reason=no_tasks` ⇒ I7/I8/I9/C-1 全线 FAIL。
+#   教训：**夹具手写 DDL 会静默漂移**；下方 `_check_fixture_covers_select()` 是防复发哨兵
+#   （直接把源码里那条 SELECT 拿到夹具上跑，跑不通即 FAIL）。
 
 DDL_CK = """CREATE TABLE orch_checkpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -602,8 +610,13 @@ def m_i5():
 def m_i7():
     """M3：apply_resume 顺手清掉 result —— 已交付内容被抹掉。"""
     print("\n=== 变异 M3：apply_resume 连带清空 result ===")
-    ns = _reload(("SET status='ready', error='', updated_at=CURRENT_TIMESTAMP",
-                  "SET status='ready', error='', result='', updated_at=CURRENT_TIMESTAMP"))
+    # ⚠️ 2026-11-04 锚点修复：`apply_resume` 的主 SQL 后来加了 `error_class=''`，
+    #   而旧锚点 `SET status='ready', error='', updated_at=...` 只匹配到**except 兜底分支**
+    #   （那条实际不执行）⇒ 变异打在一个永不运行的字符串上 ⇒ M3 恒 VACUOUS
+    #   ⇒ I7e「交付内容未被清空」这条断言**一直没被真正守住**。
+    #   现锚点改为带 `error_class=''` 的**主分支**文本。
+    ns = _reload(("SET status='ready', error='', error_class='', ",
+                  "SET status='ready', error='', error_class='', result='', "))
     con = _db()
     ids = _seed(con, statuses=("done", "running"))
     # 现实中崩溃往往发生在"已写出部分结果"之后：running 任务带着半截 result 更符合现场，
@@ -669,10 +682,48 @@ def m_c1():
                 caught, f"ok={ok} why={why}", VACUOUS)
 
 
+def t_i0():
+    """I0 夹具 ↔ 源码契约：夹具 DDL 必须覆盖 `prepare_resume` 那条 SELECT 的**全部列**。
+
+    ★ 2026-11-04（本条是本门禁长期红 21 条的防复发哨兵）：
+      本门禁用的是**手写 DDL**（`DDL_TASKS`）而不是真库 schema。
+      `agent_tasks.error_class` 后来加进真库、也加进了那条 SELECT，
+      但**夹具没跟上** ⇒ 那条 SELECT 在夹具上抛 `no such column`
+      ⇒ 被 `except Exception: rows = []` 吞掉 ⇒ 决策恒 `reason=no_tasks`
+      ⇒ I7/I8/I9/C-1 全红。**手写夹具必然漂移**，所以必须有一条断言盯着它。
+
+    判据（不靠"数自己写的列"，而是**直接把源码里那条 SQL 拿到夹具上跑**）：
+      从 `agent/orch_checkpoint.py` 里抓出 `SELECT ... FROM agent_tasks ...`，
+      在夹具库上 `execute` 一次 —— 抛异常即 FAIL（缺列/改名都会被抓住）。
+      这样将来 SELECT 再加列而夹具没跟上，**这里先红**，而不是整片 I7~I9 莫名全红。
+    """
+    print("\n=== I0 夹具 DDL 覆盖 prepare_resume 的 SELECT（防夹具漂移）===")
+    ok = True
+    src = open(CK_SRC, encoding="utf-8").read()
+    cands = re.findall(r'"(SELECT [^"]*?FROM agent_tasks[^"]*?)"', src, re.S)
+    if not cands:
+        return _rec("I0a 能从源码抓到 agent_tasks 的 SELECT", False, "正则未命中（源码变了要同步本条）")
+    ok &= _rec("I0a 能从源码抓到 agent_tasks 的 SELECT", True, "抓到 %d 条" % len(cands))
+    con = _db()
+    all_ok, detail = True, ""
+    for sql in cands:
+        one = " ".join(sql.split())
+        try:
+            # SQL 里带 `?` 占位（run_id 等）⇒ 按占位符个数补哑参数，
+            # 本条只验**列是否齐全**，不验结果集（无数据也应 0 行而不报错）。
+            con.execute(one, tuple([0] * one.count("?"))).fetchall()
+        except Exception as e:
+            all_ok = False
+            detail += "%s: %s | " % (type(e).__name__, e)
+    ok &= _rec("I0b 夹具 DDL 覆盖 SELECT 所需全部列（缺列即红）", all_ok, detail[:200])
+    return ok
+
+
 def main():
     print("=" * 72)
     print("P0-2 第二步：编排 checkpoint + 断点续跑 —— 不变式与变异自证")
     print("=" * 72)
+    t_i0()
     t_i1(); t_i2(); t_i3(); t_i4(); t_i5(); t_i6(); t_i7()
     t_i8(); t_i9(); t_i10(); t_i11(); t_i12(); t_i13(); t_i14(); t_i15()
     m_i4(); m_i5(); m_i7(); m_i8(); m_i2(); m_c1()

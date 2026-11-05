@@ -15,12 +15,13 @@
 隔离：`MBSE_DB_PATH` 指向临时库，零污染。
 """
 import os
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import sys
 import tempfile
 import types
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_TMP = tempfile.mkdtemp(prefix="verify_intent_cache_toggle_")
+_TMP = mkdtemp(prefix="verify_intent_cache_toggle_")
 os.environ["MBSE_DB_PATH"] = os.path.join(_TMP, "t.db")
 os.environ["MBSE_LLM_FORCE_MOCK"] = "1"
 sys.path.insert(0, ROOT)

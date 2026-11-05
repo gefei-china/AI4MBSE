@@ -12,7 +12,7 @@ class StudioRepo(BaseRepo):
 
     # ── legacy ↔ plugins 同步桥（2026-09-16）──
     def _sync(self, table: str, row_id) -> None:
-        """旧表行 → plugins 同步（管理视图随之更新）。
+        """旧表行 → plugins 同步（管理视图随之更新）+ capability_registry 单行刷新（P0-a）。
 
         失败绝不阻断主流程：能力中心的可见性不应影响业务写入。
         """
@@ -23,12 +23,18 @@ class StudioRepo(BaseRepo):
             legacy_sync.sync_from_legacy_safe(self.conn, table, row_id)
         except Exception:
             pass
+        try:
+            # P0-a（2026-10-24）：能力统一注册处运行时增量。行已删时刷新即删投影。
+            from core import capability_registry as _cr
+            _cr.refresh_registry_row(self.conn, table, row_id)
+        except Exception:
+            pass
 
     # ── prompts ──
     def list_prompts(self) -> list:
         return self.rows("SELECT * FROM prompts ORDER BY updated_at DESC")
 
-    def create_prompt(self, name: str, scenario: str, content: str, variables: str, version: str, created_by: str = "王工") -> int:
+    def create_prompt(self, name: str, scenario: str, content: str, variables: str, version: str, created_by: str = "未登录") -> int:
         rid = self.execute(
             "INSERT INTO prompts (name, scenario, content, variables, version, created_by) VALUES (?,?,?,?,?,?)",
             (name, scenario, content, variables, version, created_by),
@@ -187,22 +193,30 @@ class StudioRepo(BaseRepo):
         # 否则"状态 online 却挂着一条 403 旧账"，排查时先被错误信息带偏
         # （与 update_mcp_discovery 的清零行为对齐，两路写入口径一致）。
         _clear_err = ", last_error=CASE WHEN ?='online' THEN '' ELSE last_error END"
-        _params = (status, status)
+        # ★★ 2026-10-30：**参数必须按 SQL 占位符顺序排**（本轮实测抓到）。
+        #   SQL 顺序是 `status=?, latency_ms=?, [tools=?,] last_error=CASE WHEN ?=... , ... id=?`
+        #   而原实现按 `(status, status) + (latency, ...)` 拼 —— 第二个 `status` 绑到了
+        #   `latency_ms`、`latency_ms` 绑到了 `CASE WHEN ?='online'`
+        #   ⇒ 两个后果同时发生，且都**不报错**：
+        #     ① `latency_ms` 列被写成一个等于状态字符串的值（数值列存文本）；
+        #     ② 清零判据变成 `CASE WHEN <延迟数字>='online'` ⇒ 恒 false
+        #        ⇒ `last_error` **永不清理**。
+        #   实测证据：巡检恢复 online 后，`status='online'` 却仍挂着
+        #   `HTTPStatusError: 502 Bad Gateway` ⇒ 排查时被旧账带偏（正是上面注释
+        #   声称要避免的那件事，但参数顺序错了 3 年没人发现）。
         if tools is not None:
-            _params = _params + (latency_ms, tools, sid)
             self.execute(
                 """UPDATE mcp_servers SET status=?, latency_ms=?, tools=?,"""
                 + _clear_err +
                 """, last_check=CURRENT_TIMESTAMP WHERE id=?""",
-                _params,
+                (status, latency_ms, tools, status, sid),
             )
         else:
-            _params = _params + (latency_ms, sid)
             self.execute(
                 """UPDATE mcp_servers SET status=?, latency_ms=?"""
                 + _clear_err +
                 """, last_check=CURRENT_TIMESTAMP WHERE id=?""",
-                _params,
+                (status, latency_ms, status, sid),
             )
 
     def delete_mcp_server(self, sid: int) -> None:
@@ -216,7 +230,16 @@ class StudioRepo(BaseRepo):
     # ── MCP-D1：动态发现与健康巡检落库 ──
     def update_mcp_discovery(self, sid: int, status: str, latency_ms: int,
                              tools: str, capabilities: str, protocol_version: str,
-                             server_info: str, resources: str, prompts: str) -> None:
+                             server_info: str, resources: str, prompts: str,
+                             tool_meta: str = "") -> None:
+        """落库动态发现结果。
+
+        ★ P0-6（2026-10-26）：新增 `tool_meta` 参数（默认 "" ⇒ 旧调用方不受影响）。
+          它存 `[{name, description, inputSchema}]` —— 此前只存 name，
+          导致注入时每个 MCP 工具的 description 退化成同一句模板、parameters 退化成
+          宽松空壳（实测 71 个工具 description 去重后仅 1 种）⇒ JIT 零区分度 + 模型无从下手。
+          `tool_meta=""` 时**不覆盖**已有值（避免旧调用方把已发现的 schema 抹掉）。
+        """
         self.execute(
             """UPDATE mcp_servers SET status=?, latency_ms=?, tools=?, capabilities=?,
                protocol_version=?, server_info=?, resources=?, prompts=?,
@@ -225,6 +248,8 @@ class StudioRepo(BaseRepo):
             (status, latency_ms, tools, capabilities, protocol_version,
              server_info, resources, prompts, sid),
         )
+        if tool_meta:
+            self.execute("UPDATE mcp_servers SET tool_meta=? WHERE id=?", (tool_meta, sid))
 
     def update_mcp_error(self, sid: int, error: str) -> None:
         self.execute(
@@ -536,7 +561,7 @@ class StudioRepo(BaseRepo):
             "INSERT INTO plugin_review_log (kind, item_id, item_name, action, comment, operator) VALUES (?,?,?,?,?,?)",
             (kind, item_id, item_name, action, comment, operator))
 
-    def share_submit(self, kind: str, item_id: int) -> str | None:
+    def share_submit(self, kind: str, item_id: int, operator: str = "未登录") -> str | None:
         """个人插件提交分享（待管理员审核）。仅限私人空间自建条目（非内置、非市场副本）。
 
         返回 None=成功；否则返回错误文案。
@@ -555,10 +580,11 @@ class StudioRepo(BaseRepo):
         if st == "approved":
             return "该插件已在市场中"
         self.execute(f"UPDATE {table} SET share_status='submitted' WHERE id=?", (item_id,))
-        self._share_log(kind, item_id, str(item["name"]), "submit", "提交分享申请", "王工")
+        self._share_log(kind, item_id, str(item["name"]), "submit", "提交分享申请", operator)
         return None
 
-    def share_review(self, kind: str, item_id: int, action: str, comment: str = "") -> str | None:
+    def share_review(self, kind: str, item_id: int, action: str, comment: str = "",
+                    operator: str = "未登录") -> str | None:
         """管理员审核：approve 通过入市 / reject 驳回。返回 None=成功，否则错误文案。"""
         table, _ = self._MARKET_TABLES[kind]
         item = self.one(f"SELECT * FROM {table} WHERE id=?", (item_id,))
@@ -574,10 +600,10 @@ class StudioRepo(BaseRepo):
             if exists:
                 return f"公共市场已存在同名条目「{item['name']}」，无法通过审核（请先在个人空间重命名）"
             self.execute(f"UPDATE {table} SET scope='public', source_ref='', share_status='approved', origin='share' WHERE id=?", (item_id,))
-            self._share_log(kind, item_id, str(item["name"]), "approve", comment or "审核通过，上架市场", "王工")
+            self._share_log(kind, item_id, str(item["name"]), "approve", comment or "审核通过，上架市场", operator)
         else:  # reject
             self.execute(f"UPDATE {table} SET share_status='rejected' WHERE id=?", (item_id,))
-            self._share_log(kind, item_id, str(item["name"]), "reject", comment or "审核驳回", "王工")
+            self._share_log(kind, item_id, str(item["name"]), "reject", comment or "审核驳回", operator)
         return None
 
     def share_items(self, kind: str = "all", share_status: str = "") -> list:

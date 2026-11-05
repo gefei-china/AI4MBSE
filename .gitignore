@@ -21,13 +21,34 @@ node_modules/
 .playwright-cli/
 
 # ── 运行数据与数据库（含 WAL 边车）──
-data/
+# ⚠️ 2026-11-04：`data/bootstrap/pipeline_assets.json` 是**配置资产种子快照**——
+#    环境可重建的唯一真源（database/bootstrap_assets.py 读它建库）。
+#    它必须入库：否则全新克隆 / CI checkout 拿不到它，
+#    verify_asset_snapshot_sync 第 64 行直接 rc=1（"环境可重建"变成"CI 恒红"）。
+#    git 的例外规则要求**父目录先解封**才能解封文件，故写成三段式；
+#    反查：git check-ignore -v data/bootstrap/pipeline_assets.json（应无输出）
+data/*
+!data/bootstrap/
+data/bootstrap/*
+!data/bootstrap/pipeline_assets.json
+# 2026-11-05：`data/modeling_nodes.json` 同样是**代码级配置**，不是运行数据——
+#    它是建模流水线 8 个节点的契约**单一真源**，被 tools/migrate_v5/v8/v9/v25
+#    直接读取（`REG = os.path.join(ROOT, "data", "modeling_nodes.json")`）。
+#    被 `data/*` 忽略时，CI 上 verify_pipeline_closure 直接
+#    FileNotFoundError: .../data/modeling_nodes.json ⇒ 恒红，而本机永远绿。
+#    入参已脱敏（原文件含 `C:/Users/<user>/Downloads/...` 溯源路径）。
+!data/modeling_nodes.json
 mbse.db
 mbse.db-shm
 mbse.db-wal
 *.db
 *.db-shm
 *.db-wal
+# 2026-10-29：测试运行时配置（conftest 每会话重置为空），是**运行时产物**不是源码。
+# 曾误提交一次（c8795fe）——它是被测试写脏的残留，纳入版本库会让
+# 「配置被污染」变成所有人共享的既有状态，掩盖隔离问题。
+tests/_test_config.json
+tests/_test_config.json.*
 static/uploads/
 static/skill_packages/
 
@@ -70,6 +91,30 @@ logs/
 tools/verify/_fe_dead.tsv
 tools/verify/_fe_dead_reach.tsv
 tools/verify/_fe_reach.json
+# 2026-11-04：run_full_round_live.py 每次运行写的事件流（运行时产物，逐次覆盖）
+tools/verify/_full_round_events.json
+
+# ── 一次性探针 / 数据修补 / 结构改造脚本（不入库）──
+# 2026-10-27 清理：历轮修复过程中累计入库 40+ 个「跑一次就完」的脚本，让 tools/verify 从
+# 门禁目录膨胀成垃圾场，且其中 `_restructure_*_autopilot.py` 是**高危**——它按行号重写
+# stream.py / execute.py 的自主续跑层，改造完成后重跑会把已修好的代码覆盖回去。
+# 三类都不该入库，判据已固化在常驻门禁里（见 docs/…走查与评估-20261027.md §20 对照表）：
+#   · probe_*     取证探针 → 判据在 verify_*（如 probe_autonomy_live → verify_autonomy_and_clarify）
+#   · repro_*     缺陷复现 → 判据在对应 verify_*
+#   · backfill_/repair_/fix_/rewrite_  一次性数据修补 → 执行完即失效，重跑会二次改库
+# ⚠️ 锚定 `verify/` 与 `tools/` 根目录，避免误伤 `tools/eval/probe_qrel.py`（检索评测集常驻脚本）。
+# 反查：git check-ignore -v tools/verify/probe_xxx.py
+/tools/verify/probe_*.py
+# 例外：这两个是「变异自证」的历史案例，被 verify_no_mutation_residue.py 正文引用，保留
+!/tools/verify/probe_auto_continue.py
+!/tools/verify/probe_save_artifact.py
+/tools/verify/_restructure_*
+/tools/verify/repro_*.py
+/tools/verify/backfill_*.py
+/tools/verify/repair_*.py
+/tools/verify/rewrite_*.py
+/tools/_probe_*
+/tools/_tmp_*
 
 # ── 大体积二进制与第三方压缩库 ──
 static/vendor/

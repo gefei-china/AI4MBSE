@@ -658,3 +658,108 @@ def knowledge_dashboard_trend(branch: str = "", keys: str = "", limit: int = 12,
         NORTHSTAR_KEYS + ["type_coverage_sysml", "engine_rt_p50", "ontology_required_attrs"])
     return {"ok": True, "branch": (branch or "").strip(),
             "trends": metrics_core.trends(conn, klist, branch, max(1, min(limit, 90)))}
+
+# ══════════════════════════════════════════════════════════════════════
+# 评测历史（2026-10-22 新增，服务"怎么看 / 怎么感知"）
+# ══════════════════════════════════════════════════════════════════════
+# 为什么需要它（评估P0-5 / P1-1 的连带结论）：
+#   `/api/knowledge/dashboard` 里的知识消费簇读的是 `eval_reports` **最新一行**
+#   （LIMIT 1），且**不区分评测类型**。此前类型只能靠 created_by 字段名反推，
+#   而 `eval_kind` 列已在本次补上 ⇒ 现在可以按类型查、按类型看趋势。
+#   没有这个接口，"评测跑得怎么样"只能问开发看 JSON 文件 —— 那等于没有可见性。
+#
+# 设计要点（都是踩过的坑）：
+#  · **按 eval_kind 分组**：记忆评测与检索评测的 entity_f1 语义完全不同，
+#    混在一起的历史曲线会得出"指标忽高忽低"的错误结论。
+#  · **缺失即 null，不填 0**：记忆评测没有 doc_recall_at_5 这个概念，
+#    填 0 会被读成"召回 0 分"（本次已把该列写入改为 NULL）。
+#  · **不伪造数据**：没有记录就返回空数组 + note，由前端显示"暂无评测记录"，
+#    不用 0 画一条零线。
+@router.get("/api/knowledge/eval/history")
+def eval_history(eval_kind: str = "", limit: int = 20,
+                 conn=Depends(db_session)):
+    """评测历史（按类型分组，含 doc 域检索主指标）。
+
+    参数
+    ----
+    eval_kind : str
+        留空 = 全部类型；否则按 `eval_reports.eval_kind` 精确匹配
+        （rag_retrieval / memory_quality / intent_routing / doc_extract）。
+        注意历史行该列为空串（未回填，见迁移注释），故传空串与留空等价。
+    limit : int
+        每类型最多返回多少行（1~100，默认 20）。
+    """
+    lim = max(1, min(int(limit or 20), 100))
+    kinds = [k.strip() for k in (eval_kind or "").split(",") if k.strip()]
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(eval_reports)")}
+    # 老库尚未迁移时如实报告，而不是静默返回空（静默空= "没跑过评测"，是假绿）
+    if "eval_kind" not in cols:
+        return {"ok": False,
+                "note": "eval_reports 尚未迁移 eval_kind 列，请先跑 init_db 完成迁移",
+                "kinds": [], "history": {}}
+
+    where = "WHERE eval_kind IN (%s)" % ",".join("?" * len(kinds)) if kinds else ""
+    args = list(kinds)
+    rows = conn.execute(
+        "SELECT id, eval_kind, doc_name, entity_f1, relation_f1, "
+        "       doc_recall_at_5, doc_mrr_at_10, doc_ndcg_at_10, doc_pool_recall, "
+        "       doc_rerank_drop_rate, doc_recall_miss_rate, "
+        "       created_by, model_version, created_at, detail "
+        "  FROM eval_reports %s ORDER BY created_at DESC, id DESC" % where,
+        args).fetchall()
+
+    by_kind = {}
+    for r in rows:
+        k = (r["eval_kind"] or "") or "(未标注类型)"
+        bucket = by_kind.setdefault(k, [])
+        if len(bucket) >= lim:
+            continue
+        # ⚠️ `detail` 必须出现在上面 SELECT 的列清单里 —— 第一版漏了它，
+        #   而 sqlite3.Row 对未查询的列取��会抛 IndexError（不是返回 None）。
+        #   这里用它取负对照与漂移标记，故必须查出。
+        d = r["detail"] if "detail" in cols else None
+        drift = None
+        ctrl = None
+        try:
+            if d:
+                obj = json.loads(d)
+                drift = obj.get("fingerprint_drift") or None
+                nc = obj.get("negative_control") or {}
+                ctrl = nc.get("recall") if isinstance(nc, dict) else None
+        except Exception:
+            # detail 不是合法 JSON（如 doc_extract 评测存的是另一种结构）：
+            # 解析失败只说明"取不到负对照"，不该让整个接口500。
+            drift, ctrl = None, None
+
+        bucket.append({
+            "id": r["id"],
+            "doc_name": r["doc_name"],
+            "entity_f1": r["entity_f1"],
+            "relation_f1": r["relation_f1"],
+            "doc_recall_at_5": r["doc_recall_at_5"],
+            "doc_mrr_at_10": r["doc_mrr_at_10"],
+            "doc_ndcg_at_10": r["doc_ndcg_at_10"],
+            "doc_pool_recall": r["doc_pool_recall"],
+            "doc_rerank_drop_rate": r["doc_rerank_drop_rate"],
+            "doc_recall_miss_rate": r["doc_recall_miss_rate"],
+            "created_by": r["created_by"],
+            "model_version": r["model_version"],
+            "created_at": r["created_at"],
+            # 语料漂移标记：漂移下所有分数都不可作依据（实测唯一那份正式报告就带 drift）
+            "fingerprint_drift": drift,
+            "negative_control": ctrl,
+            # 结论可信度：没有负对照就没有"指标在测真实对齐关系"的证据
+            "trustworthy": bool(ctrl) and not drift,
+        })
+
+    return {
+        "ok": True,
+        "kinds": sorted(by_kind.keys()),
+        "counts": {k: len(v) for k, v in by_kind.items()},
+        "history": by_kind,
+        "note": ("" if by_kind else
+                 "暂无评测记录。生成方式："
+                 "tools/eval/build_evalset.py → tools/eval/run_eval.py --control"
+                 " → tools/eval/save_report.py"),
+    }

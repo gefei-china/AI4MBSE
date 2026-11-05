@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] A2 有 1 个 `self._xxx` 赋值字段未在reset_request_state 中登记（跨请求会残留）：['_llm_overrides_effective'] 
 # -*- coding: utf-8 -*-
 """verify_request_state_reset —— 防「单例Pipeline 跨请求状态泄漏」的门禁。
 

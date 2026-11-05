@@ -11,15 +11,18 @@
 用法：直接跑（零网络、零真库 —— MBSE_DB_PATH 指向临时库）。
 """
 import os
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import sys
 import tempfile
 
 # ⚠️ 必须在任何 repo import 之前：config.py 在 import 时解析 database.path
-_TMP = tempfile.mkdtemp(prefix="verify_retry_fallback_")
+_TMP = mkdtemp(prefix="verify_retry_fallback_")
 os.environ["MBSE_DB_PATH"] = os.path.join(_TMP, "verify.db")
 
-sys.path.insert(0, r"C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system")
-os.chdir(r"C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system")
+# ⚠️ 2026-11-05：原先写死本机绝对路径 ⇒ CI 上 os.chdir 直接 FileNotFoundError。
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _ROOT)
+os.chdir(_ROOT)
 
 import sqlite3
 

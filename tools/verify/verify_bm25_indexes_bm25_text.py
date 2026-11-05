@@ -42,7 +42,7 @@ def main():
     ck("A2 仍保留 content（兜底路径不可删）", "content" in ke._CHUNK_COLS)
 
     print("\n=== B. 行为：真实索引真的带该字段 ===")
-    db_path = os.path.join(_ROOT, "mbse.db")
+    db_path = (os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db"))
     conn = sqlite3.connect("file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True)
     conn.row_factory = sqlite3.Row
     ke._BM25_CACHE.clear()

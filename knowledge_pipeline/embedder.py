@@ -252,7 +252,18 @@ class Embedder:
                     "ORDER BY is_default DESC LIMIT 1"
                 ).fetchone()
             if row and row["api_key"]:
-                self._api = (row["base_url"].rstrip("/"), row["api_key"], row["model_name"])
+                # ★ 2026-10-28（用户报「知识库明明有，检索却说没有」）：
+                #   `model_name` 必须 **strip** —— 实测 provider 110 存的是
+                #   `'bge-m3  '`（两个尾随空格，len=8），服务端原样报
+                #   `The model `bge-m3  ` does not exist.` ⇒ HTTP 404
+                #   ⇒ embed() 的 except 吞掉后**静默降级 bigram** ⇒
+                #   向量分全面走低（实测 final 仅 0.05~0.08）⇒ 下游把
+                #   「检索到了内容」判成「未检索到实质相关内容」。
+                #   空格是人手填配置时带进来的（name 与 model_name 都带），
+                #   属于**脏数据**，但代码不该假设配置一定干净：
+                #   OpenAI 兼容协议里 model 是精确匹配，多一个空格就是另一个模型。
+                self._api = (row["base_url"].rstrip("/"), row["api_key"],
+                             str(row["model_name"] or "").strip())
         except Exception:
             self._api = None
         Embedder._PROBE_CACHE = self._api

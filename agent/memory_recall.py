@@ -85,6 +85,99 @@ def _is_noise(text: str) -> bool:
     return False
 
 
+# ── P0#1 显式记忆触发器（2026-10-28 落地）──
+# 原召回/写回**无条件触发**：`_build_memory_hint` 每轮都查库，`_deposit_session_memory`
+# 每会话最多沉淀 2 条但**不判断"这条对话值不值得写/读记忆"**。
+# 触发器把"是否查/写记忆"从隐式（intent 标签 + 提取门限）升级为**任务级显式判断**：
+#   - 读触发 `should_recall_memory`：寒暄/噪音类 query 直接跳过召回（省 embedding/检索开销，
+#     也避免把核心偏好块塞进纯问候轮次）；非噪音默认放行，**零行为漂移**。
+#   - 写触发 `should_deposit_memory`：显式排除的 intent 不沉淀（如纯检索/转写类不产生可复用经验）。
+# 全部配置门控，默认**放行**（绝不"默认不召回/不写"的激进裁剪 —— 否则会静默丢失本应消费的记忆，
+# 且被 except 静默吞掉时极难发现，见 delivery 纪律）。
+def _mem_cfg(key: str, default):
+    """读 memory.* 配置；缺失/异常回默认（不抛，不阻断主链路）。"""
+    try:
+        from core import config as _cfg
+        return _cfg.get("memory", key, default)
+    except Exception:
+        return default
+
+
+def _mem_cfg_bool(key: str, default: bool) -> bool:
+    v = _mem_cfg(key, default)
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _mem_skip_intents(key: str) -> set:
+    raw = str(_mem_cfg(key, "") or "").strip()
+    if not raw:
+        return set()
+    return {x.strip() for x in raw.split(",") if x.strip()}
+
+
+def should_recall_memory(intent: str, query: str) -> bool:
+    """读触发：该轮是否值得召回长期记忆。
+
+    返回 False（跳过召回）仅当**全部**满足：
+      ① 触发器开（`memory.recall_trigger_enabled`，默认开）；
+      ② query 是纯问候/平台话术/占位回声（见 `_is_greeting`）——
+         纯问候轮次召回记忆既无价值又浪费检索开销。
+    ⚠️ 这里**不复用 `_is_noise`**：后者含"<12 字即判噪音"的长度门，会把"画活动图"这种
+      短但有效的建模诉求误判为噪音而跳过召回（回归）。触发器只识别纯问候，绝不借内容噪音的长度门。
+    非问候 query、开关关、或空 query 兜底（空 query → 退化为最近 top_k，仍应召回）一律放行。
+    intent 排除集 `memory.recall_skip_intents` 预留接口（默认空）：留待"某些 intent 永不召回记忆"。
+    """
+    if not _mem_cfg_bool("recall_trigger_enabled", True):
+        return True
+    if intent and intent in _mem_skip_intents("recall_skip_intents"):
+        return False
+    q = (query or "").strip()
+    if q and _is_greeting(q):       # 纯问候/平台话术 → 跳过；其余放行（含空 query 兜底）
+        return False
+    return True
+
+
+# 触发器专用问候识别：仅匹配"纯问候 / 平台话术 / 占位回声"等**明确无检索价值**的形态。
+# 刻意**不复用** `_is_noise`（其 <12 字长度门会误杀"画活动图"等短有效诉求）。
+# 判据：
+#   · 平台话术 / 占位回声（Mock）→ 无论长短都跳（明确非任务输入）；
+#   · 纯问候词开头且长度 ≤10 → 跳（如"你好""您好，在吗"）；
+#   · 问候+真实诉求（如"你好，请帮我生成活动图"，较长）→ **不跳**，保留召回，
+#     否则会把有价值的任务轮次误判为纯寒暄、静默丢失记忆上下文。
+_GREETING_PREFIX_RE = re.compile(r"^(你好|您好|嗨|hi|hello|谢谢|感谢|收到|好的|ok|嗯)", re.I)
+_PLATFORM_RE = re.compile(r"我是\s*MBSE\s*平台的?通用助手")
+_MOCK_RE = re.compile(r"^[(（【\[]\s*(Mock|MOCK|mock)\s*(回答|回复|响应)?\s*[)）\]】]")
+
+
+def _is_greeting(text: str) -> bool:
+    s = " ".join(str(text or "").split())
+    if not s:
+        return False
+    if _PLATFORM_RE.search(s) or _MOCK_RE.search(s):
+        return True
+    # 纯问候（短）才跳；含实质诉求（较长）保留召回
+    return len(s) <= 10 and bool(_GREETING_PREFIX_RE.match(s))
+
+
+def should_deposit_memory(intent: str, content: str) -> bool:
+    """写触发：本轮产出是否值得尝试沉淀记忆。
+
+    返回 False（不写）仅当**显式排除**：
+      ① 触发器开（`memory.deposit_trigger_enabled`，默认开）；
+      ② intent 在 `memory.deposit_skip_intents`（默认空）——
+         如纯检索/转写类 intent 不产生可复用经验，沉淀反而污染库。
+    内容级价值判定仍由 `MemoryService.maybe_deposit` 的三重门负责，本函数只做 intent 级粗筛，
+    **不重复内容判断**（避免两处判据漂移）。
+    """
+    if not _mem_cfg_bool("deposit_trigger_enabled", True):
+        return True
+    if intent and intent in _mem_skip_intents("deposit_skip_intents"):
+        return False
+    return True
+
+
 # 记忆召回默认参数（可被 rag.* 配置覆盖；默认值与「改动前无此路」等价语义 = 不影响存量行为，
 # 因为这是**新增**召回源，不改变既有 BM25/向量/HyDE 的打分）
 DEFAULT_TOP_K = 4

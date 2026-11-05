@@ -46,21 +46,23 @@ class LlmRepo(BaseRepo):
     def create_provider(self, name: str, provider_type: str, base_url: str, api_key: str,
                         model_name: str, max_tokens: int, temperature: float, is_default: int,
                         model_type: str = "chat", context_window: int = 8192,
-                        tags: str = "[]", priority: int = 0, budget_tokens: int = 0) -> int:
+                        tags: str = "[]", priority: int = 0, budget_tokens: int = 0,
+                        description: str = "") -> int:
         self._warn_contract("新增", name, max_tokens, context_window)
         return self.execute(
-            "INSERT INTO llm_providers (name, provider_type, base_url, api_key, model_name, max_tokens, temperature, is_default, model_type, context_window, tags, priority, budget_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (name, provider_type, base_url, api_key, model_name, max_tokens, temperature, is_default, model_type, context_window, tags, priority, budget_tokens),
+            "INSERT INTO llm_providers (name, provider_type, base_url, api_key, model_name, max_tokens, temperature, is_default, model_type, context_window, tags, priority, budget_tokens, description) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (name, provider_type, base_url, api_key, model_name, max_tokens, temperature, is_default, model_type, context_window, tags, priority, budget_tokens, description or ""),
         )
 
     def update_provider(self, pid: int, name: str, provider_type: str, base_url: str,
                         model_name: str, max_tokens: int, temperature: float, is_default: int,
                         model_type: str = "chat", context_window: int = 8192,
-                        tags: str = "[]", priority: int = 0, budget_tokens: int = 0) -> None:
+                        tags: str = "[]", priority: int = 0, budget_tokens: int = 0,
+                        description: str = "") -> None:
         self._warn_contract("更新", name, max_tokens, context_window)
         self.execute(
-            "UPDATE llm_providers SET name=?, provider_type=?, base_url=?, model_name=?, max_tokens=?, temperature=?, is_default=?, model_type=?, context_window=?, tags=?, priority=?, budget_tokens=? WHERE id=?",
-            (name, provider_type, base_url, model_name, max_tokens, temperature, is_default, model_type, context_window, tags, priority, budget_tokens, pid),
+            "UPDATE llm_providers SET name=?, provider_type=?, base_url=?, model_name=?, max_tokens=?, temperature=?, is_default=?, model_type=?, context_window=?, tags=?, priority=?, budget_tokens=?, description=? WHERE id=?",
+            (name, provider_type, base_url, model_name, max_tokens, temperature, is_default, model_type, context_window, tags, priority, budget_tokens, description or "", pid),
         )
 
     def update_provider_key(self, pid: int, api_key: str) -> None:

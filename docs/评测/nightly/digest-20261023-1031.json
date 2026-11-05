@@ -1,0 +1,58 @@
+{
+ "started_at": "2026-10-23T10:31:56",
+ "host": "LAPTOP-U7N54VBI",
+ "steps": [
+  {
+   "step": "构建评测集",
+   "cmd": "-X utf8 tools/eval/build_evalset.py",
+   "exit": 0,
+   "secs": 13.9,
+   "tail": "    帮我配置一下 Nginx 的反向代理\n    需外部数据            我们这周的排产计划是什么\n    需外部数据            当前项目里还剩多少未关闭的缺陷\n    需外部数据            帮我查一下我上周提交的审批单批了没\n    需外部数据            现在的备件库存里还有几套动力电池\n    时间外              智源平台 v3.0 的需求规格说明有哪些\n    时间外              GB/T 标准 2027 修订版对接口一致性的要求是什么\n    时间外              下一版本计划新增哪些建模节点\n    跨域拼接             把巡飞弹的推进剂参数和汽车热管理器的冷却回路画成一张图\n    跨域拼接             用 SysML v2 建模一颗卫星的太阳能板清洗流程并给需求追溯矩阵\n\n==============================================================================\n产出\n==============================================================================\n→ C:\\Users\\gefei\\WorkBuddy\\2026-08-04-19-05-52\\mbse_system\\tmp\\p21\\evalset.json\n   89.1 KB | doc 50 + graph 18 + neg 30 = 98 例\n   指纹: chunks=7177 entities(release)=61 names_sha1=04c1ac33e06813fe\n\n==============================================================================\n步骤 5/4  P1-1 trace 域：生产证据链 → 评测样本\n==============================================================================\n  按抽取器: {'intent_confirmed': 42, 'intent_rejected': 13, 'hil_approved': 0, 'hil_rejected': 0, 'conv_clean': 168, 'conv_badcase': 0, 'flow_completed': 10, 'flow_failed': 0}\n  按标注口径: {'strong': 55, 'weak': 178}\n  排除 Mock 回答 15 条（Mock 不是系统能力证据）\n→ C:\\Users\\gefei\\WorkBuddy\\2026-08-04-19-05-52\\mbse_system\\tmp\\p21\\trace_evalset.json\n   320.8 KB | 233 例（strong=人工裁决 / weak=回归证据 / negative=已知失败）\n   trace 指纹: messages=517 intent_confirmed=373 hil=10\n\n→ docs/评测/datasets（dataset_id=f71364f2904a）\n   评测集已版本化：随 git 可 review；报告消费 manifest.json 取 dataset_id\n"
+  },
+  {
+   "step": "生成质量评测",
+   "cmd": "-X utf8 tools/eval/eval_generation_quality.py",
+   "exit": 0,
+   "secs": 132.8,
+   "tail": "lse\n  [PASS] F9a call_failed_counted expect=3 got=3\n  [PASS] F9b all_failed_control_skipped expect=False got=False\n自证结论：通过\n\n=== 取材记账（排除了什么、为什么，全部可见）===\n  assistant_text_total       198\n  sampled                    198\n  mock_excluded              23\n  attachment_conv_excluded   19\n  card_types_excluded        0\n  unparsable_card_data       0\n\n=== 指标（n=156 条 RAG 问答）===\n  citation_valid_rate        1.000\n  citation_usage_rate        0.344\n  grounded_entity_rate       0.000\n  no_citation_factual_rate   0.177\n  markers                    45 / 45（有效标记/总标记）\n  entities                   0 / 2（接地实体/可核查实体）\n  citations_without_content  0（schema 探针：无正文引用块）\n  负对照（池化它答案引用）   0.000 ⇒ 不具判别力（见文件头说明）\n\n=== LLM 忠实度评判（faithfulness 语义层）===\n  faithful_rate              0.6667（采样 15 / 带引用池 32）\n  三态记账                       faithful 10 / unfaithful 5 / 判不了 0\n  judge 自证（合成对照）             通过\n    - msg=4767 无据声称=根因是把**类型定义**与**实例用法**混写了。`part def` 声明的是（证据仅为通用SysML语法示例，未支撑答案对具体代码的根因判断、包路径/暴露/迁）\n    - msg=4760 无据声称=写法固定为 `perform action '别名' ::> '顶层动作';`（元类归属、Reference Subsetting 关系等与证据[1][2][3）\n    - msg=4757 无据声称=其中 `::>` 是引用子集（Reference Subsetting）关系（核心语义有证据支撑，但若干关于 ::> 符号、泳道/part 命名、redefi）\n    - msg=3991 无据声称=消息传递：用 `message '名称' of '消息类型' from 'A'.（前置状态与输入缺失属会话上下文，但建模方案中的 SequenceView/exp）\n    - msg=3985 无据声称=本次视图类型为**活动视图（ActionFlowView）**（证据仅提供 SysML 元素关键字表，未包含 ActionFlowView、IB）\n\n报告: tmp/p21/eval_generation_quality.json\neval_reports 落库成功: id=29 [eval_kind=generation_quality] faithful_rate=0.6667\n"
+  },
+  {
+   "step": "Trace 一致性评测",
+   "cmd": "-X utf8 tools/eval/eval_trace_consistency.py",
+   "exit": 0,
+   "secs": 3.6,
+   "tail": "BSE建模总体负责人 智能体团队工作流演示主Agent：负责意图识别/任务' 尾='账号角色管理'\n[semantic-prewarm] 预热未生效（缓存未命中，可能降级 bigram）\n  strong 55 条，耗时 0.8s，路由异常 0 条\n  weak 抽样 50 条（分布观测，不判定），路由异常 0 条\n\n=== 指标（裁决一致率 / 重错率）===\n  裁决一致率 agreement            0.881（n=42）\n  macro_f1                   0.7947\n  重错率 repeat_mistake         None（路由纠错类 n=0；池有效性 13 条不计入）\n  不一致样本（前 10）：\n    - 帮我看看这个系统大概是怎么设计的               gold=design             got=chat               route=chat conf=0.0\n    - 帮我看看这个系统的接口设计是否合理              gold=design             got=chat               route=chat conf=0.0\n    - 把任务书里的需求提取出来                   gold=requirement_analysis got=chat               route=chat conf=0.0\n    - 追溯矩阵检查一下                       gold=review             got=trace_verification route=rule_scored conf=0.95\n    - 对这个系统做总体设计                     gold=design             got=chat               route=chat conf=0.0\n  强标注路由层分布                   {\"chat\": 8, \"explain\": 10, \"rule\": 23, \"rule_scored\": 10, \"semantic_weak\": 1, \"semantic\": 1, \"fused\": 2}\n  负对照                        真实 0.881 vs 洗牌 0.1667 ⇒ 可判别\n  weak 回归稳定率                 None（交集 0 条，变化 0 条）无基线明细（首轮或旧格式报告）—— 不判定\n\n报告: tmp/p21/eval_trace_consistency.json\neval_reports 落库成功: id=30 [eval_kind=trace_consistency] agreement=0.881 repeat_mistake=None\nembedding 服务不可用，短熔断 60s：RemoteProtocolError\nembedding API 调用失败，降级 bigram: Server disconnected without sending a response.\nembedding 服务不可用，短熔断 60s：RemoteProtocolError\nembedding API 调用失败，降级 bigram: Server disconnected without sending a response.\n"
+  },
+  {
+   "step": "RAG 检索评测",
+   "cmd": "-X utf8 tools/eval/run_eval.py",
+   "exit": 0,
+   "secs": 309.5,
+   "tail": "         : 0.0\n  recall@5                 : 0.0\n  recall@10                : 0.0\n  mrr@10                   : 0.0\n\n[graph]\n  n                        : 18\n  route_acc                : 1.0\n  entity_recall            : 1.0\n  relation_hit             : 1.0\n  latency_p50_ms           : 58\n\n[neg]\n  n                        : 30\n  route_ok                 : 0.967\n  empty_hit_rate           : 0.833\n  false_graph_confident    : 0.0\n  suspect_answerable       : 0\n  latency_p50_ms           : 2090\n\n→ C:\\Users\\gefei\\WorkBuddy\\2026-08-04-19-05-52\\mbse_system\\tmp\\p21\\eval_report_ci.json\ngraph_db.fuseki.query_sparql 失败: Fuseki HTTP 502: upstream connect failed: 由于目标计算机积极拒绝，无法连接。 (os error 10061)\nBuilding prefix dict from the default dictionary ...\nLoading model from cache C:\\Users\\gefei\\AppData\\Local\\Temp\\jieba.cache\nLoading model cost 0.382 seconds.\nPrefix dict has been built successfully.\nembedding 服务不可用，短熔断 60s：RemoteProtocolError\nembedding API 调用失败，降级 bigram: Server disconnected without sending a response.\nembedding 服务不可用，短熔断 60s：RemoteProtocolError\nembedding API 调用失败，降级 bigram: Server disconnected without sending a response.\nembedding 服务不可用，短熔断 60s：RemoteProtocolError\nembedding API 调用失败，降级 bigram: Server disconnected without sending a response.\nembedding 服务不可用，短熔断 60s：RemoteProtocolError\nembedding API 调用失败，降级 bigram: Server disconnected without sending a response.\nembedding 服务不可用，短熔断 60s：RemoteProtocolError\nembedding API 调用失败，降级 bigram: Server disconnected without sending a response.\n"
+  },
+  {
+   "step": "意图路由评测",
+   "cmd": "-X utf8 tools/eval/run_ci_eval.py",
+   "exit": 0,
+   "secs": 3.5,
+   "tail": "盖）\n[seed] 人工介入策略：文件 9 条，本次新增 9 条（已存在不覆盖，跳过非法 0 条）\n干净库: C:\\Users\\gefei\\AppData\\Local\\Temp\\_ci_eval_169132.db\n\n=== E1 指标函数自身正确（纯函数，零依赖）===\n  PASS  E1a accuracy 精确等于 0.75（手算期望，不用被测代码算期望）\n  PASS  E1b n 正确\n  PASS  E1c macro_f1 在 [0,1]\n  PASS  E1d 全对时 accuracy == 1.0\n  PASS  E1e 全错时 accuracy == 0.0\n  PASS  E1f 空集不抛异常（门禁在空数据上要给出信息而非崩红）\n\n=== E2 黄金集健康度（防'删样本式假绿'）===\n  PASS  E2a 黄金集可载入\n  PASS  E2b 条数 ≥ 20（当前 29）\n  PASS  E2c 无空文本样本\n  PASS  E2d 无重复文本\n  PASS  E2e 期望意图 ≥3 类\n  PASS  E2f 期望意图均在合法集合内（允许清单外的必须为空）\n  PASS  E2g 允许清单本身不过期（每条都要仍被代码引用）\n  PASS  E2h 意图规则集已入库（干净库必须有规则，否则 CI 复现不了生产路由）\n\n=== E3 准确率下限 + 两次运行一致性（干净库 + 无 LLM 口径）===\n[semantic] 候选缓存未命中 fp=9a882c7e texts=39（已缓存 0 个 key：[]）首='通用问答Agent 纯问答直出，不打断用户（HIL L0）' 尾='账号角色管理'\n[semantic-prewarm] 预热未生效（缓存未命中，可能降级 bigram）\n  PASS  E3a 准确率 ≥ 0.85（实测 0.931，n=29）\n  PASS  E3b 两次运行结果完全一致（无隐藏随机性）\n      macro_f1=0.9158 错例 2 条（已知基线 acc=0.931）\n        - 对这个系统做总体设计                       want=design               got=chat                 route=chat conf=0.0\n        - 把任务书里的需求提取出来                     want=requirement_analysis got=chat                 route=chat conf=0.0\n\n=== E4 缓存绕过与口径一致（AGENTS.md 坑 26）===\n  PASS  E4a 评测前把 _cache_get 置空\n  PASS  E4b finally 恢复原方法（不留全局污染）\n  PASS  E4c 与线上端点同一 metrics 封装（不各写一份算法）\n  PASS  E4d 评测前自建干净库（保证跨环境口径等价）\n\n========================================================================\n断言总数 20  PASS 20  FAIL 0\n干净库+无LLM 口径准确率 0.931（下限 0.85），错例 2 条\n提示：本门禁测的是「规则层+语义层不许塌」。模型质量需另跑带 LLM 的夜间评测（CI 无 secret，且模型输出有温度，不是确定性断言）。\n结论：门禁通过\n"
+  }
+ ],
+ "gates": [
+  {
+   "gate": "verify_generation_quality_gate.py",
+   "exit": 0,
+   "secs": 1.5
+  },
+  {
+   "gate": "verify_trace_quality_gate.py",
+   "exit": 0,
+   "secs": 1.3
+  },
+  {
+   "gate": "verify_rag_eval_gate.py",
+   "exit": 0,
+   "secs": 1.4
+  }
+ ]
+}

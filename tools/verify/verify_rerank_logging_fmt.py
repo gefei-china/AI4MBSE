@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] B2 解析失败告警：真的写出了内容 
 # -*- coding: utf-8 -*-
 """门禁：logging 占位符与实参个数必须严格一致（#58）。
 

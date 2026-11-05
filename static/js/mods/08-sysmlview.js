@@ -28,7 +28,7 @@ function cardCandidates(cd) {
       <span class="rc-chip b"><span class="n">${cands.length}</span> 条候选条目</span>
       <span class="rc-chip ${confs.length?'r':'g'}">${confs.length?'⚠':'✓'} ${confs.length?confs.length+' 项冲突':'无冲突'}</span>
     </div>
-    <div class="rc-list">${items||'<div style="color:var(--mut);font-size:12px;">暂无候选条目</div>'}</div>
+    <div class="rc-list">${items||'<div style="color:var(--mut);font-size:13.5px;">暂无候选条目</div>'}</div>
     ${confHtml}
     <button class="btn sm ghost" style="margin-top:8px;" onclick="openPreviewReport('需求分析 · 完整报告', panelCandidates(${JSON.stringify(cd).replace(/"/g,'&quot;')}))">📄 查看完整报告</button>`;
 }
@@ -55,19 +55,19 @@ function cardImpact(cd) {
       <span class="rc-chip r"><span class="n">${lv.high||0}</span> 高影响</span>
       <span class="rc-chip w"><span class="n">${lv.mid||0}</span> 中影响</span>
       <span class="rc-chip g"><span class="n">${lv.low||0}</span> 低影响</span>
-      <span style="font-size:11px;color:var(--mut);">影响程度 · 关系权重×层衰减</span>
+      <span style="font-size:12.5px;color:var(--mut);">影响程度 · 关系权重×层衰减</span>
     </div>
-    ${src?`<div style="margin-top:6px;font-size:12px;"><b>变更源：</b>${esc(src.name)} <span class="tag">${esc(src.entity_type)}</span> <span class="tag">${esc(src.status)}</span></div>`:''}
-    <div class="rc-graph">${chain||'<span style="color:var(--mut);font-size:12px;">暂无可视化传播链</span>'}</div>
+    ${src?`<div style="margin-top:6px;font-size:13.5px;"><b>变更源：</b>${esc(src.name)} <span class="tag">${esc(src.entity_type)}</span> <span class="tag">${esc(src.status)}</span></div>`:''}
+    <div class="rc-graph">${chain||'<span style="color:var(--mut);font-size:13.5px;">暂无可视化传播链</span>'}</div>
     ${warn}
     <div class="rc-mini" style="margin-top:8px;flex-wrap:wrap;gap:6px;">
-      <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;color:var(--mut);">深度
-        <select style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:11.5px;"
+      <label style="display:flex;align-items:center;gap:4px;font-size:12.5px;color:var(--mut);">深度
+        <select style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12.5px;"
           onchange="impactReRun('${esc((src&&src.name)||'')}', this.value, '${cd.direction||'both'}')">
           ${[1,2,3,5,0].map(d=>`<option value="${d}" ${(cd.depth||3)===d?'selected':''}>${d===0?'全部':d+' 层'}</option>`).join('')}
         </select></label>
-      <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;color:var(--mut);">方向
-        <select style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:11.5px;"
+      <label style="display:flex;align-items:center;gap:4px;font-size:12.5px;color:var(--mut);">方向
+        <select style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12.5px;"
           onchange="impactReRun('${esc((src&&src.name)||'')}', ${cd.depth||3}, this.value)">
           <option value="both" ${cd.direction!=='up'&&cd.direction!=='down'?'selected':''}>双向</option>
           <option value="up" ${cd.direction==='up'?'selected':''}>上游</option>
@@ -85,7 +85,7 @@ function cardImpactGuide(cd) {
   let candHtml = '';
   if(isAmb && cands.length){
     candHtml = `<div style="margin-top:8px;">
-      <div style="font-size:11px;color:var(--mut);margin-bottom:4px;">匹配到 ${cands.length} 个候选变更源，请选择：</div>
+      <div style="font-size:12.5px;color:var(--mut);margin-bottom:4px;">匹配到 ${cands.length} 个候选变更源，请选择：</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;">${cands.map(c=>`<button class="btn sm" onclick="impactRunSource('${esc(c.name)}')">${esc(c.name)} <span class="tag">${esc(c.type||'')}</span></button>`).join('')}</div></div>`;
   }
   const actBtns = (cd.actions||[]).map(a=>{
@@ -97,7 +97,7 @@ function cardImpactGuide(cd) {
     <div class="rc-chip b">🔀 变更影响分析</div>
     <div class="rc-warn">
       <div><b>⚠ 分析未完成：${esc(cd.reason||'未知原因')}</b></div>
-      <div style="margin-top:4px;color:var(--mut);font-size:12px;">${esc(cd.impact||'')}</div>
+      <div style="margin-top:4px;color:var(--mut);font-size:13.5px;">${esc(cd.impact||'')}</div>
     </div>
     ${candHtml}
     <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">${actBtns}</div>`;
@@ -142,7 +142,7 @@ function cardReview(cd) {
         <span class="rc-chip b"><span class="n">${counts.提示}</span> 提示</span>
       </div>
     </div>
-    <div style="margin-top:8px;">${issueList||'<div style="color:var(--mut);font-size:12px;">未发现问题</div>'}</div>
+    <div style="margin-top:8px;">${issueList||'<div style="color:var(--mut);font-size:13.5px;">未发现问题</div>'}</div>
     <div class="${conclusion}">${cd.conclusion==='不通过'?'✖':'✔'} 评审结论：${cd.conclusion||'-'}</div>
     <button class="btn sm ghost" style="margin-top:8px;" onclick="openPreviewReport('预评审校验 · 完整报告', panelReview(${JSON.stringify(cd).replace(/"/g,'&quot;')}))">📄 查看完整报告</button>`;
 }

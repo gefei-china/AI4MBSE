@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [backlog] 从未接线，待逐个定性（接入 pr 需先过「全新克隆+空库能绿」）；未接线（2026-11-04 盘点未覆盖，待逐个定性） 
 # -*- coding: utf-8 -*-
 """P0-1 语义 ↔ LLM 互证（融合矩阵补齐）—— 常驻断言 + 变异自证。
 
@@ -49,7 +50,8 @@ import os
 import re
 import sys
 
-ROOT = "C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system"
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ⚠️ 2026-11-05：原先写死本机绝对路径 ⇒ CI 上 FileNotFoundError。改为按脚本位置推导。
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 

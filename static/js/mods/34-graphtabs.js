@@ -38,12 +38,12 @@ async function gwtDoSearch(q){
       +'&branch='+encodeURIComponent(getCurrentBranch())+'&limit=12');
     _gwtSearchItems = r.items||[];
     if(!_gwtSearchItems.length){
-      dd.innerHTML='<div style="padding:8px 10px;font-size:11px;color:var(--mut);">无匹配实体</div>';
+      dd.innerHTML='<div style="padding:8px 10px;font-size:12.5px;color:var(--mut);">无匹配实体</div>';
       dd.style.display='block'; return;
     }
-    dd.innerHTML = _gwtSearchItems.map((it,i)=>`<div class="gv-dd-item" style="padding:6px 10px;font-size:11.5px;cursor:pointer;display:flex;gap:6px;align-items:center;" onclick="gwtSearchPick(${i})">
+    dd.innerHTML = _gwtSearchItems.map((it,i)=>`<div class="gv-dd-item" style="padding:6px 10px;font-size:12.5px;cursor:pointer;display:flex;gap:6px;align-items:center;" onclick="gwtSearchPick(${i})">
       <span style="width:8px;height:8px;border-radius:50%;background:${graphColor(it.entity_type)};flex:none;border:1px solid rgba(0,0,0,.1);"></span>
-      <b>${esc(it.name)}</b><span style="color:var(--mut);font-size:10px;">${esc(it.entity_type||'')} · ${esc(it.branch||'')}</span></div>`).join('');
+      <b>${esc(it.name)}</b><span style="color:var(--mut);font-size:12px;">${esc(it.entity_type||'')} · ${esc(it.branch||'')}</span></div>`).join('');
     dd.style.display='block';
   }catch(e){ gwtSearchClose(); }
 }
@@ -51,7 +51,7 @@ async function gwtDoSearch(q){
 // 自动降级为当前分支实体关键词匹配（图库依赖同步链，实体库实时——保证一定搜得到）
 async function gwtNlSearch(q){
   const dd = document.getElementById('gv-search-dd'); if(!dd) return;
-  dd.innerHTML = '<div style="padding:8px 10px;font-size:11px;color:var(--mut);">检索中…</div>';
+  dd.innerHTML = '<div style="padding:8px 10px;font-size:12.5px;color:var(--mut);">检索中…</div>';
   dd.style.display = 'block';
   try{
     const r = await api('/api/graph-db/nlquery', {method:'POST', body:JSON.stringify({query:q, limit:10})});
@@ -62,15 +62,15 @@ async function gwtNlSearch(q){
     const r = await api('/api/knowledge/graph/entity-search?q='+encodeURIComponent(q)
       +'&branch='+encodeURIComponent(getCurrentBranch())+'&limit=12');
     _gwtSearchItems = r.items||[];
-    const head = '<div style="padding:5px 10px;font-size:10px;color:var(--mut);border-bottom:1px solid var(--line);">当前分支「'+esc(getCurrentBranch())+'」实体匹配</div>';
+    const head = '<div style="padding:5px 10px;font-size:12px;color:var(--mut);border-bottom:1px solid var(--line);">当前分支「'+esc(getCurrentBranch())+'」实体匹配</div>';
     dd.innerHTML = head + (!_gwtSearchItems.length
-      ? '<div style="padding:8px 10px;font-size:11px;color:var(--mut);">当前分支无匹配实体</div>'
-      : _gwtSearchItems.map((it,i)=>`<div class="gv-dd-item" style="padding:6px 10px;font-size:11.5px;cursor:pointer;display:flex;gap:6px;align-items:center;" onclick="gwtSearchPick(${i})">
+      ? '<div style="padding:8px 10px;font-size:12.5px;color:var(--mut);">当前分支无匹配实体</div>'
+      : _gwtSearchItems.map((it,i)=>`<div class="gv-dd-item" style="padding:6px 10px;font-size:12.5px;cursor:pointer;display:flex;gap:6px;align-items:center;" onclick="gwtSearchPick(${i})">
         <span style="width:8px;height:8px;border-radius:50%;background:${graphColor(it.entity_type)};flex:none;border:1px solid rgba(0,0,0,.1);"></span>
-        <b>${esc(it.name)}</b><span style="color:var(--mut);font-size:10px;">${esc(it.entity_type||'')}</span></div>`).join(''));
+        <b>${esc(it.name)}</b><span style="color:var(--mut);font-size:12px;">${esc(it.entity_type||'')}</span></div>`).join(''));
     dd.style.display = 'block';
   }catch(e){
-    dd.innerHTML = '<div style="padding:8px 10px;font-size:11px;color:var(--mut);">检索失败：'+esc(e.message||e)+'</div>';
+    dd.innerHTML = '<div style="padding:8px 10px;font-size:12.5px;color:var(--mut);">检索失败：'+esc(e.message||e)+'</div>';
   }
 }
 // SPARQL 模式：回车执行只读 SELECT，结果表内联展示 + 跳转完整编辑器入口
@@ -78,13 +78,13 @@ async function gwtSparqlQuick(){
   const inp = document.getElementById('gv-search'); if(!inp) return;
   const q = inp.value.trim(); if(!q) return;
   const dd = document.getElementById('gv-search-dd'); if(!dd) return;
-  dd.innerHTML = '<div style="padding:8px 10px;font-size:11px;color:var(--mut);">SPARQL 查询中…</div>';
+  dd.innerHTML = '<div style="padding:8px 10px;font-size:12.5px;color:var(--mut);">SPARQL 查询中…</div>';
   dd.style.display='block';
   try{
     const r = await api('/api/graph-db/query', {method:'POST', body:JSON.stringify({query:q, limit:10})});
     gwtRenderRows(dd, r, 'SPARQL 只读查询');
   }catch(e){
-    dd.innerHTML = '<div style="padding:8px 10px;font-size:11px;color:#A32D2D;">❌ '+esc(e.message||e)
+    dd.innerHTML = '<div style="padding:8px 10px;font-size:12.5px;color:#A32D2D;">❌ '+esc(e.message||e)
       +'<div style="margin-top:4px;"><span style="color:var(--blue);cursor:pointer;text-decoration:underline;" onclick="gwtSearchClose();window.open(\'/static/sparql_playground.html\',\'_blank\')">→ 打开 SPARQL Playground</span></div></div>';
   }
 }
@@ -92,9 +92,9 @@ async function gwtSparqlQuick(){
 function gwtRenderRows(dd, r, label){
   const rows = (r && (r.rows||r.results||r.data)) || [];
   const cols = rows.length ? Object.keys(rows[0]) : [];
-  dd.innerHTML = `<div style="padding:5px 10px;font-size:10px;color:var(--mut);border-bottom:1px solid var(--line);">${esc(label||'查询')} · ${rows.length} 行${(r&&r.count&&r.count>rows.length)?'（截断）':''}</div>`
-    + (!rows.length ? '<div style="padding:8px 10px;font-size:11px;color:var(--mut);">无结果</div>'
-    : `<div style="overflow-x:auto;"><table style="border-collapse:collapse;font-size:10.5px;min-width:260px;">
+  dd.innerHTML = `<div style="padding:5px 10px;font-size:12px;color:var(--mut);border-bottom:1px solid var(--line);">${esc(label||'查询')} · ${rows.length} 行${(r&&r.count&&r.count>rows.length)?'（截断）':''}</div>`
+    + (!rows.length ? '<div style="padding:8px 10px;font-size:12.5px;color:var(--mut);">无结果</div>'
+    : `<div style="overflow-x:auto;"><table style="border-collapse:collapse;font-size:12px;min-width:260px;">
         <tr>${cols.map(c=>`<th style="text-align:left;padding:3px 8px;background:#fafaf7;border-bottom:1px solid var(--line);color:var(--blue-d);white-space:nowrap;">${esc(c)}</th>`).join('')}</tr>
         ${rows.slice(0,10).map(row=>`<tr>${cols.map(c=>`<td style="padding:3px 8px;border-bottom:1px solid #f0efe9;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(String(row[c]??''))}">${esc(String(row[c]??''))}</td>`).join('')}</tr>`).join('')}
       </table></div>`);
@@ -156,8 +156,8 @@ function gwtReasoningInit(){
   el.innerHTML = `
   <div style="display:flex;flex-direction:column;height:100%;">
     <div style="display:flex;gap:10px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);background:#fafaf7;flex-wrap:wrap;">
-      <b style="color:var(--blue-d);font-size:12px;">🧠 本体推理</b>
-      ${Object.keys(gwtR.kinds).map(k=>`<label style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;cursor:pointer;" title="${{classify:'子类实例亦属于父类（沿类型层级）',transitive:'包含/连接/追溯等可传递关系的 BFS 闭包',symmetric:'公理标记对称的关系反向推断',reflexive:'公理标记自反的关系自环补齐',consistency:'类型合法性 + 必填继承 + 关系 domain/range'}[k]}">
+      <b style="color:var(--blue-d);font-size:13.5px;">🧠 本体推理</b>
+      ${Object.keys(gwtR.kinds).map(k=>`<label style="display:inline-flex;align-items:center;gap:4px;font-size:12.5px;cursor:pointer;" title="${{classify:'子类实例亦属于父类（沿类型层级）',transitive:'包含/连接/追溯等可传递关系的 BFS 闭包',symmetric:'公理标记对称的关系反向推断',reflexive:'公理标记自反的关系自环补齐',consistency:'类型合法性 + 必填继承 + 关系 domain/range'}[k]}">
         <input type="checkbox" ${gwtR.kinds[k]?'checked':''} onchange="gwtR.kinds.${k}=this.checked"> ${GWT_KIND_LABEL[k]}
       </label>`).join('')}
       <button class="btn sm" onclick="gwtReasoningRun()">▶ 执行推理</button>
@@ -166,12 +166,12 @@ function gwtReasoningInit(){
       <button class="btn sm ghost" onclick="gwtReasoningMaterialize()" title="数据流：推断三元组写入暂存（status=inferred）并生成审核批次，审核确认后才真正并入图库（实线）" id="gwt-mat-btn" disabled>📤 提交审核</button>
       <button class="btn sm ghost" id="gwt-queue-btn" onclick="gwtOpenQueue()" title="数据流：推理→提交审核→✅确认（幂等并入图库，实线显示）/🚫驳回（不落图）。支持批次级与单条级并入/忽略；批次条目可逐条取舍">🧭 审核队列</button>
       <span style="flex:1"></span>
-      <span id="gwt-r-stats" style="font-size:10.5px;color:var(--mut);"></span>
+      <span id="gwt-r-stats" style="font-size:12px;color:var(--mut);"></span>
     </div>
     <div id="gwt-r-body" style="flex:1;overflow:auto;padding:10px 14px;">
-      <div style="color:var(--mut);font-size:12px;padding:24px;text-align:center;">
+      <div style="color:var(--mut);font-size:13.5px;padding:24px;text-align:center;">
         勾选推理项 → 点击「▶ 执行推理」对当前全库图谱执行扫描<br>
-        <span style="font-size:10.5px;">推断结果不落库，可「叠加到图谱」可视化或「物化入库」进入三元组原子表</span></div>
+        <span style="font-size:12px;">推断结果不落库，可「叠加到图谱」可视化或「物化入库」进入三元组原子表</span></div>
     </div>
   </div>`;
   gwtR.inited = true;
@@ -198,7 +198,7 @@ async function gwtReasoningRun(){
     document.getElementById('gwt-overlay-btn').disabled = !(r.inferred||[]).some(t=>t.kind!=='classify');
     document.getElementById('gwt-mat-btn').disabled = !(r.inferred||[]).length;
     gwtReasoningRenderResults();
-  }catch(e){ body.innerHTML = '<div style="color:#A32D2D;font-size:12px;padding:16px;">推理失败：'+esc(e.message||e)+'</div>'; }
+  }catch(e){ body.innerHTML = '<div style="color:#A32D2D;font-size:13.5px;padding:16px;">推理失败：'+esc(e.message||e)+'</div>'; }
 }
 function gwtEntName(idOrUri){
   const id = gwtUri2id(idOrUri) || idOrUri;
@@ -314,9 +314,9 @@ function gwtReasoningRenderResults(){
     || checks.some(c=>!c.pass && !('errors' in c));
   body.innerHTML = `
   <div style="display:flex;flex-direction:column;gap:10px;">
-    ${oldBackend?`<div style="border:1px solid #E5B9B9;background:#FDF3F3;border-radius:8px;padding:8px 12px;font-size:12px;color:#A32D2D;line-height:1.6;">
+    ${oldBackend?`<div style="border:1px solid #E5B9B9;background:#FDF3F3;border-radius:8px;padding:8px 12px;font-size:13.5px;color:#A32D2D;line-height:1.6;">
       ⚠️ 检测到旧版后端响应（缺名称映射/结构化错误项）：请<b>重启后端服务</b>并<b>强刷页面（Ctrl+F5）</b>后重新执行推理，才有中文名解码、逐条定位与处理指引。</div>`:''}
-    <div style="font-size:10.5px;color:var(--mut);">📖 列说明：<b>推理</b>=推断种类（分类/传递/对称/自反）· <b>主语/谓词/宾语</b>=推断出的三元组（<b>type</b>=类型声明，不生成连线）· <b>推导依据</b>=传递关系的中间路径链。每行可单条「✅ 并入 / ✕ 忽略」，或整批「📤 提交审核」。扫描范围：<b>当前分支</b>${typeof getCurrentBranch==='function'?`「${esc(getCurrentBranch())}」`:''}。</div>
+    <div style="font-size:12px;color:var(--mut);">📖 列说明：<b>推理</b>=推断种类（分类/传递/对称/自反）· <b>主语/谓词/宾语</b>=推断出的三元组（<b>type</b>=类型声明，不生成连线）· <b>推导依据</b>=传递关系的中间路径链。每行可单条「✅ 并入 / ✕ 忽略」，或整批「📤 提交审核」。扫描范围：<b>当前分支</b>${typeof getCurrentBranch==='function'?`「${esc(getCurrentBranch())}」`:''}。</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;">
       ${checks.map(c=>{
         const guide = GWT_CHECK_GUIDE[c.name]||{};
@@ -324,36 +324,36 @@ function gwtReasoningRenderResults(){
         const many = errs.length > 5;   // 2026-09-14：明细多时折叠+滚动区，卡片不再被撑爆
         const errId = 'gwt-errs-' + c.name;
         return `<div style="border:1px solid ${c.pass?'#B7D6A8':'#E5B9B9'};background:${c.pass?'#F4FAEF':'#FDF3F3'};border-radius:8px;padding:8px 10px;">
-        <div style="font-weight:700;font-size:12px;color:${c.pass?'#3B6D11':'#A32D2D'};" title="${esc(guide.what||'')}">${c.pass?'✅':'⚠️'} ${esc(c.name)}${!c.pass&&errs.length?` <span style="font-weight:400;font-size:10.5px;color:#A32D2D;">（${errs.length} 条问题）</span>`:''}</div>
-        <div style="font-size:10.5px;color:#667;margin-top:3px;line-height:1.5;">${esc(guide.what||'')}</div>
-        <div style="font-size:11px;color:#555;margin-top:4px;line-height:1.6;">${esc(c.detail||'')}</div>
+        <div style="font-weight:700;font-size:13.5px;color:${c.pass?'#3B6D11':'#A32D2D'};" title="${esc(guide.what||'')}">${c.pass?'✅':'⚠️'} ${esc(c.name)}${!c.pass&&errs.length?` <span style="font-weight:400;font-size:12px;color:#A32D2D;">（${errs.length} 条问题）</span>`:''}</div>
+        <div style="font-size:12px;color:#667;margin-top:3px;line-height:1.5;">${esc(guide.what||'')}</div>
+        <div style="font-size:12.5px;color:#555;margin-top:4px;line-height:1.6;">${esc(c.detail||'')}</div>
         ${!c.pass && errs.length?`
           <div id="${esc(errId)}" style="margin-top:6px;border-top:1px dashed #E5B9B9;padding-top:5px;${many?'max-height:130px;overflow-y:auto;':''}">
-            ${errs.map(e=>`<div style="font-size:10.5px;color:#8A3B3B;line-height:1.7;display:flex;gap:6px;align-items:baseline;padding:1px 0;">
+            ${errs.map(e=>`<div style="font-size:12px;color:#8A3B3B;line-height:1.7;display:flex;gap:6px;align-items:baseline;padding:1px 0;">
               <span style="flex:1;">• ${esc(e.text||'')}</span>
-              <a style="color:var(--blue);cursor:pointer;font-size:10px;white-space:nowrap;" onclick="gwtLocateEntity('${esc(e.ent||'')}')" title="跳到图谱定位该实体">🕸 定位</a>
+              <a style="color:var(--blue);cursor:pointer;font-size:12px;white-space:nowrap;" onclick="gwtLocateEntity('${esc(e.ent||'')}')" title="跳到图谱定位该实体">🕸 定位</a>
             </div>`).join('')}
-            ${errs.length>=50?'<div style="font-size:10px;color:var(--mut);">（仅列出前 50 条）</div>':''}
+            ${errs.length>=50?'<div style="font-size:12px;color:var(--mut);">（仅列出前 50 条）</div>':''}
           </div>
-          ${many?`<a style="display:inline-block;margin-top:3px;color:var(--blue);cursor:pointer;font-size:10px;" onclick="(function(b,a){var open=b.style.maxHeight==='none';b.style.maxHeight=open?'130px':'none';a.textContent=open?('▼ 展开全部 '+${errs.length}+' 条'):'▲ 收起';})(document.getElementById('${esc(errId)}'),this)">▼ 展开全部 ${errs.length} 条</a>`:''}
+          ${many?`<a style="display:inline-block;margin-top:3px;color:var(--blue);cursor:pointer;font-size:12px;" onclick="(function(b,a){var open=b.style.maxHeight==='none';b.style.maxHeight=open?'130px':'none';a.textContent=open?('▼ 展开全部 '+${errs.length}+' 条'):'▲ 收起';})(document.getElementById('${esc(errId)}'),this)">▼ 展开全部 ${errs.length} 条</a>`:''}
         `:''}
-        ${!c.pass && guide.fix?`<div style="font-size:10.5px;color:#7A5A10;background:#FBF3DC;border-radius:5px;padding:4px 6px;margin-top:6px;line-height:1.5;">🛠 怎么处理：${esc(guide.fix)}</div>`:''}
+        ${!c.pass && guide.fix?`<div style="font-size:12px;color:#7A5A10;background:#FBF3DC;border-radius:5px;padding:4px 6px;margin-top:6px;line-height:1.5;">🛠 怎么处理：${esc(guide.fix)}</div>`:''}
       </div>`;}).join('')}
     </div>
     ${inferred.length?`
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <b style="font-size:12px;color:var(--blue-d);">推断三元组（${filtered.length}/${inferred.length}）</b>
-      <select onchange="gwtR.filterKind=this.value;gwtR.page=1;gwtReasoningRenderResults()" style="border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:11px;">
+      <b style="font-size:13.5px;color:var(--blue-d);">推断三元组（${filtered.length}/${inferred.length}）</b>
+      <select onchange="gwtR.filterKind=this.value;gwtR.page=1;gwtReasoningRenderResults()" style="border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:12.5px;">
         <option value="all" ${gwtR.filterKind==='all'?'selected':''}>全部类型</option>
         ${kinds.map(k=>`<option value="${k}" ${gwtR.filterKind===k?'selected':''}>${GWT_KIND_LABEL[k]||k}</option>`).join('')}
       </select>
-      <input placeholder="过滤（实体名/路径）…" value="${esc(gwtR.focusQ)}" onkeydown="if(event.key==='Enter'){gwtR.focusQ=this.value;gwtR.page=1;gwtReasoningRenderResults();}" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:11px;width:160px;">
+      <input placeholder="过滤（实体名/路径）…" value="${esc(gwtR.focusQ)}" onkeydown="if(event.key==='Enter'){gwtR.focusQ=this.value;gwtR.page=1;gwtReasoningRenderResults();}" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;width:160px;">
       <span style="flex:1;"></span>
-      <span style="display:inline-flex;gap:6px;align-items:center;font-size:11px;color:var(--mut);">已选 <b id="gwt-sel-n" style="color:var(--blue-d);">${gwtR.sel.size}</b> 条</span>
-      <button class="btn sm grn" style="font-size:11px;padding:2px 10px;" ${gwtR.sel.size?'':'disabled'} onclick="gwtBatchMerge()" title="把勾选的推断批量${gwtR.directMerge?'直接幂等并入图库':'提交审核（追加到当前待审批次）'}">✅ 批量并入</button>
-      <button class="btn sm ghost" style="font-size:11px;padding:2px 10px;" ${gwtR.sel.size?'':'disabled'} onclick="gwtBatchIgnore()" title="本次结果中批量忽略勾选条目">✕ 批量忽略</button>
+      <span style="display:inline-flex;gap:6px;align-items:center;font-size:12.5px;color:var(--mut);">已选 <b id="gwt-sel-n" style="color:var(--blue-d);">${gwtR.sel.size}</b> 条</span>
+      <button class="btn sm grn" style="font-size:12.5px;padding:2px 10px;" ${gwtR.sel.size?'':'disabled'} onclick="gwtBatchMerge()" title="把勾选的推断批量${gwtR.directMerge?'直接幂等并入图库':'提交审核（追加到当前待审批次）'}">✅ 批量并入</button>
+      <button class="btn sm ghost" style="font-size:12.5px;padding:2px 10px;" ${gwtR.sel.size?'':'disabled'} onclick="gwtBatchIgnore()" title="本次结果中批量忽略勾选条目">✕ 批量忽略</button>
     </div>
-    <table style="width:100%;border-collapse:collapse;font-size:11.5px;">
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
       <thead><tr style="background:var(--blue-l);color:var(--blue-d);text-align:left;">
         <th style="padding:5px 4px;border-bottom:1px solid var(--line);width:26px;"><input type="checkbox" title="全选/取消本页" onchange="gwtSelAllPage(this.checked)"></th>
         <th style="padding:5px 8px;border-bottom:1px solid var(--line);">推理</th>
@@ -369,11 +369,11 @@ function gwtReasoningRenderResults(){
         const sName = gwtName(t.s), oName = isCls ? gwtName(t.o) : gwtName(t.o);
         const viaTxt = isCls ? '类型层级继承（子类实例 ⇒ 父类型）' : gwtDecodePath(t.path||t.via);
         const opCell = gwtR.queued.has(idx)
-          ? '<span style="color:var(--grn);font-size:10.5px;white-space:nowrap;">✓ 已并入图库</span>'
-          : `<button class="btn sm grn" style="font-size:10.5px;padding:1px 7px;" onclick="gwtRowSubmit(${idx})" title="${gwtR.directMerge?'直接幂等并入图库（跳过审核）':'单条提交审核：写入暂存并追加到当前待审批次，确认后入图'}">✅ 并入</button>
-             <button class="btn sm ghost" style="font-size:10.5px;padding:1px 7px;" onclick="gwtRowIgnore(${idx})" title="本次结果中忽略该条">✕ 忽略</button>`;
+          ? '<span style="color:var(--grn);font-size:12px;white-space:nowrap;">✓ 已并入图库</span>'
+          : `<button class="btn sm grn" style="font-size:12px;padding:1px 7px;" onclick="gwtRowSubmit(${idx})" title="${gwtR.directMerge?'直接幂等并入图库（跳过审核）':'单条提交审核：写入暂存并追加到当前待审批次，确认后入图'}">✅ 并入</button>
+             <button class="btn sm ghost" style="font-size:12px;padding:1px 7px;" onclick="gwtRowIgnore(${idx})" title="本次结果中忽略该条">✕ 忽略</button>`;
         const chk = gwtR.queued.has(idx)
-          ? '<span style="color:var(--mut);font-size:10px;" title="已并入">✓</span>'
+          ? '<span style="color:var(--mut);font-size:12px;" title="已并入">✓</span>'
           : `<input type="checkbox" ${gwtR.sel.has(idx)?'checked':''} onchange="gwtRowSel(${idx}, this.checked)">`;
         return `<tr style="border-bottom:1px solid #f0efe9;">
         <td style="padding:4px 4px;text-align:center;">${chk}</td>
@@ -381,20 +381,20 @@ function gwtReasoningRenderResults(){
         <td style="padding:4px 8px;font-weight:600;" title="${esc(t.s)}">${esc(sName)}</td>
         <td style="padding:4px 8px;color:var(--blue-d);">${esc(gwtPrettyPred(t.p))}</td>
         <td style="padding:4px 8px;" title="${esc(t.o)}">${esc(oName)}</td>
-        <td style="padding:4px 8px;color:var(--mut);font-size:10px;word-break:break-all;" title="${esc(t.path||t.via||'')}">${esc(viaTxt)}</td>
+        <td style="padding:4px 8px;color:var(--mut);font-size:12px;word-break:break-all;" title="${esc(t.path||t.via||'')}">${esc(viaTxt)}</td>
         <td style="padding:4px 8px;white-space:nowrap;">${opCell}</td>
       </tr>`;}).join('')}</tbody></table>
-    <div style="display:flex;gap:10px;align-items:center;font-size:11px;color:var(--mut);flex-wrap:wrap;">
+    <div style="display:flex;gap:10px;align-items:center;font-size:12.5px;color:var(--mut);flex-wrap:wrap;">
       <span>共 ${filtered.length} 条 · 第 ${gwtR.page}/${totalPages} 页（每页 ${gwtR.pageSize} 条）</span>
-      <button class="btn sm ghost" style="font-size:11px;padding:1px 8px;" ${gwtR.page<=1?'disabled':''} onclick="gwtR.page--;gwtReasoningRenderResults()">← 上一页</button>
-      <button class="btn sm ghost" style="font-size:11px;padding:1px 8px;" ${gwtR.page>=totalPages?'disabled':''} onclick="gwtR.page++;gwtReasoningRenderResults()">下一页 →</button>
+      <button class="btn sm ghost" style="font-size:12.5px;padding:1px 8px;" ${gwtR.page<=1?'disabled':''} onclick="gwtR.page--;gwtReasoningRenderResults()">← 上一页</button>
+      <button class="btn sm ghost" style="font-size:12.5px;padding:1px 8px;" ${gwtR.page>=totalPages?'disabled':''} onclick="gwtR.page++;gwtReasoningRenderResults()">下一页 →</button>
       <span>每页</span>
-      <select onchange="gwtR.pageSize=+this.value||50;gwtR.page=1;gwtReasoningRenderResults()" style="border:1px solid var(--line);border-radius:6px;padding:1px 4px;font-size:11px;">
+      <select onchange="gwtR.pageSize=+this.value||50;gwtR.page=1;gwtReasoningRenderResults()" style="border:1px solid var(--line);border-radius:6px;padding:1px 4px;font-size:12.5px;">
         ${[50,100,200].map(n=>`<option value="${n}" ${gwtR.pageSize===n?'selected':''}>${n}</option>`).join('')}
       </select>
       <span>条</span>
     </div>`
-    :'<div style="color:var(--mut);font-size:12px;padding:10px;">本次推理无新增推断（图谱可能已完备，或本体未标记相关公理）</div>'}
+    :'<div style="color:var(--mut);font-size:13.5px;padding:10px;">本次推理无新增推断（图谱可能已完备，或本体未标记相关公理）</div>'}
   </div>`;
 }
 // 行级单条操作（2026-09-14）：
@@ -544,19 +544,19 @@ async function gwtRenderQueue(){
     const r = await api('/api/knowledge/reasoning/cohorts');
     rows = r.rows||[];
   }catch(e){
-    body.innerHTML = '<div style="color:#A32D2D;font-size:12px;padding:16px;">加载审核队列失败：'+esc(e.message||e)+'</div>';
+    body.innerHTML = '<div style="color:#A32D2D;font-size:13.5px;padding:16px;">加载审核队列失败：'+esc(e.message||e)+'</div>';
     return;
   }
   body.innerHTML = `
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;flex-wrap:wrap;">
-    <b style="font-size:12px;color:var(--blue-d);">🧭 推理审核队列（${rows.length}）</b>
+    <b style="font-size:13.5px;color:var(--blue-d);">🧭 推理审核队列（${rows.length}）</b>
     <button class="btn sm ghost" onclick="gwtRenderQueue()" title="刷新队列">🔄 刷新</button>
     <button class="btn sm ghost" onclick="gwtReasoningRenderResults()">⬅ 返回推理结果</button>
   </div>
-  <div style="font-size:10.5px;color:var(--mut);margin-bottom:8px;">数据流：推理结果 →「📤 提交审核」写入暂存并生成批次 → 在此逐条取舍（✅ 并入 / ✕ 忽略）或整批 <b style="color:var(--grn);">✅ 确认</b>（幂等并入图库，实线显示）/<b style="color:#A32D2D;">🚫 驳回</b>（不落图）。点批次行「📋 条目」展开单条操作。</div>
+  <div style="font-size:12px;color:var(--mut);margin-bottom:8px;">数据流：推理结果 →「📤 提交审核」写入暂存并生成批次 → 在此逐条取舍（✅ 并入 / ✕ 忽略）或整批 <b style="color:var(--grn);">✅ 确认</b>（幂等并入图库，实线显示）/<b style="color:#A32D2D;">🚫 驳回</b>（不落图）。点批次行「📋 条目」展开单条操作。</div>
   ${!rows.length
-    ?`<div style="color:var(--mut);font-size:12px;padding:20px;text-align:center;">暂无待审核批次<br><span style="font-size:10.5px;">推理完成后点「📤 提交审核」即进入本审核队列</span></div>`
-    :`<table style="width:100%;border-collapse:collapse;font-size:11.5px;">
+    ?`<div style="color:var(--mut);font-size:13.5px;padding:20px;text-align:center;">暂无待审核批次<br><span style="font-size:12px;">推理完成后点「📤 提交审核」即进入本审核队列</span></div>`
+    :`<table style="width:100%;border-collapse:collapse;font-size:12.5px;">
     <thead><tr style="background:var(--blue-l);color:var(--blue-d);text-align:left;">
       <th style="padding:5px 8px;border-bottom:1px solid var(--line);">批次</th>
       <th style="padding:5px 8px;border-bottom:1px solid var(--line);">状态</th>
@@ -567,10 +567,10 @@ async function gwtRenderQueue(){
     ${rows.map(c=>{
       const [slabel, scolor] = GWT_COHORT_ST[c.status]||['未知','#888'];
       return `<tr style="border-bottom:1px solid #f0efe9;">
-      <td style="padding:4px 8px;">#${c.id}<div style="color:var(--mut);font-size:10px;">${c.item_count||0} 条推断</div></td>
-      <td style="padding:4px 8px;"><span style="color:${scolor};font-weight:600;">${slabel}</span>${c.note?`<div style="color:var(--mut);font-size:10px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(c.note)}">${esc(c.note)}</div>`:''}</td>
+      <td style="padding:4px 8px;">#${c.id}<div style="color:var(--mut);font-size:12px;">${c.item_count||0} 条推断</div></td>
+      <td style="padding:4px 8px;"><span style="color:${scolor};font-weight:600;">${slabel}</span>${c.note?`<div style="color:var(--mut);font-size:12px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(c.note)}">${esc(c.note)}</div>`:''}</td>
       <td style="padding:4px 8px;">${c.status==='approved'?`<b style="color:var(--grn);">${c.entity_count||0} 实体 · ${c.relation_count||0} 关系</b>`:'<span style="color:var(--mut);">—</span>'}</td>
-      <td style="padding:4px 8px;color:var(--mut);font-size:10.5px;">${esc(c.created_by||'')}<br>${esc((c.created_at||'').slice(5,16))}</td>
+      <td style="padding:4px 8px;color:var(--mut);font-size:12px;">${esc(c.created_by||'')}<br>${esc((c.created_at||'').slice(5,16))}</td>
       <td style="padding:4px 8px;white-space:nowrap;">${gwtQueueActions(c)}</td>
       </tr>`;
     }).join('')}
@@ -586,19 +586,19 @@ async function gwtQueueItems(cid){
   box.innerHTML = '<div class="loading">加载批次条目…</div>';
   let d;
   try{ d = await api('/api/knowledge/reasoning/cohorts/' + cid); }
-  catch(e){ box.innerHTML = '<div style="color:#A32D2D;font-size:12px;padding:12px;">加载失败：'+esc(e.message||e)+'</div>'; return; }
-  if(d.error){ box.innerHTML = '<div style="color:#A32D2D;font-size:12px;padding:12px;">'+esc(d.error)+'</div>'; return; }
+  catch(e){ box.innerHTML = '<div style="color:#A32D2D;font-size:13.5px;padding:12px;">加载失败：'+esc(e.message||e)+'</div>'; return; }
+  if(d.error){ box.innerHTML = '<div style="color:#A32D2D;font-size:13.5px;padding:12px;">'+esc(d.error)+'</div>'; return; }
   _gwtQItemsFor = cid;
   const items = d.items || [];
   const stMap = {pending:['待定','var(--mut)'], approved:['✅ 已并入','var(--grn)'], rejected:['✕ 已忽略','#A32D2D']};
   box.innerHTML = `
   <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:8px;background:#fcfcf9;">
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
-      <b style="font-size:11.5px;color:var(--blue-d);">📋 批次 #${cid} 条目（${items.length}）</b>
-      <span style="font-size:10.5px;color:var(--mut);">✅ 并入 = 幂等写入图库（实线）；✕ 忽略 = 该条不再落图</span>
+      <b style="font-size:12.5px;color:var(--blue-d);">📋 批次 #${cid} 条目（${items.length}）</b>
+      <span style="font-size:12px;color:var(--mut);">✅ 并入 = 幂等写入图库（实线）；✕ 忽略 = 该条不再落图</span>
     </div>
-    ${!items.length ? '<div style="color:var(--mut);font-size:11.5px;padding:8px;">该批次无条目</div>' : `
-    <table style="width:100%;border-collapse:collapse;font-size:11.5px;">
+    ${!items.length ? '<div style="color:var(--mut);font-size:12.5px;padding:8px;">该批次无条目</div>' : `
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
       <thead><tr style="background:var(--blue-l);color:var(--blue-d);text-align:left;">
         <th style="padding:4px 8px;border-bottom:1px solid var(--line);">推理</th>
         <th style="padding:4px 8px;border-bottom:1px solid var(--line);">主语</th>
@@ -616,12 +616,12 @@ async function gwtQueueItems(cid){
         <td style="padding:3px 8px;font-weight:600;" title="${esc(it.s)}">${esc(it.s_name||'')}</td>
         <td style="padding:3px 8px;color:var(--blue-d);">${esc(it.p==='a'||it.p==='type'?'type':esc(it.p))}</td>
         <td style="padding:3px 8px;" title="${esc(it.o)}">${esc(it.o_name||'')}</td>
-        <td style="padding:3px 8px;color:var(--mut);font-size:10px;word-break:break-all;" title="${esc(it.via||'')}">${esc((it.via||'—').slice(0,60))}</td>
+        <td style="padding:3px 8px;color:var(--mut);font-size:12px;word-break:break-all;" title="${esc(it.via||'')}">${esc((it.via||'—').slice(0,60))}</td>
         <td style="padding:3px 8px;color:${sc};font-weight:600;white-space:nowrap;">${sl}</td>
         <td style="padding:3px 8px;white-space:nowrap;">${st==='pending'
-          ? `<button class="btn sm grn" style="font-size:10.5px;padding:1px 7px;" onclick="gwtItemApprove(${cid},${it.id})" title="单条幂等并入图库">✅ 并入</button>
-             <button class="btn sm ghost" style="font-size:10.5px;padding:1px 7px;" onclick="gwtItemReject(${cid},${it.id})" title="忽略该条，不再落图">✕ 忽略</button>`
-          : '<span style="color:var(--mut);font-size:10.5px;">—</span>'}</td>
+          ? `<button class="btn sm grn" style="font-size:12px;padding:1px 7px;" onclick="gwtItemApprove(${cid},${it.id})" title="单条幂等并入图库">✅ 并入</button>
+             <button class="btn sm ghost" style="font-size:12px;padding:1px 7px;" onclick="gwtItemReject(${cid},${it.id})" title="忽略该条，不再落图">✕ 忽略</button>`
+          : '<span style="color:var(--mut);font-size:12px;">—</span>'}</td>
       </tr>`;}).join('')}</tbody>
     </table>`}
   </div>`;
@@ -644,13 +644,13 @@ async function gwtItemReject(cid, iid){
   gwtQueueItems(cid);
 }
 function gwtQueueActions(c){
-  const itemsBtn = `<button class="btn sm ghost" style="font-size:10.5px;padding:1px 7px;" onclick="gwtQueueItems(${c.id})" title="展开批次条目，逐条 ✅ 并入 / ✕ 忽略">📋 条目</button> `;
+  const itemsBtn = `<button class="btn sm ghost" style="font-size:12px;padding:1px 7px;" onclick="gwtQueueItems(${c.id})" title="展开批次条目，逐条 ✅ 并入 / ✕ 忽略">📋 条目</button> `;
   if(c.status==='pending'){
     return `${itemsBtn}<button class="btn sm grn" onclick="gwtQueueApprove(${c.id})" title="确认并入图库（整批）">✅ 确认</button>
             <button class="btn sm red" onclick="gwtQueueReject(${c.id})" title="驳回，需填原因（整批不落图）">🚫 驳回</button>`;
   }
   if(c.status==='approved'){
-    return `${itemsBtn}<a style="color:var(--blue);cursor:pointer;font-size:11px;" onclick="gwtQueueView(${c.id})">📋 本次并入 ${c.entity_count||0} 实体 · ${c.relation_count||0} 关系</a>
+    return `${itemsBtn}<a style="color:var(--blue);cursor:pointer;font-size:12.5px;" onclick="gwtQueueView(${c.id})">📋 本次并入 ${c.entity_count||0} 实体 · ${c.relation_count||0} 关系</a>
             <button class="btn sm ghost" onclick="gwtOverlayCohort(${c.id})" title="把该批确认并入的边叠加高亮到图谱">🕸 叠加</button>`;
   }
   return `${itemsBtn}<button class="btn sm ghost" onclick="gwtQueueView(${c.id})" title="查看该批次详情">👁 查看</button>`;
@@ -695,21 +695,21 @@ async function gwtQueueView(id){
   const body = document.getElementById('gwt-r-body'); if(!body) return;
   body.innerHTML = `
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-    <b style="font-size:12px;color:var(--blue-d);">📋 本次并入 #${id} · ${ents.length} 实体 · ${rels.length} 关系</b>
+    <b style="font-size:13.5px;color:var(--blue-d);">📋 本次并入 #${id} · ${ents.length} 实体 · ${rels.length} 关系</b>
     <button class="btn sm ghost" onclick="gwtOverlayCohort(${id})" title="把该批确认并入的边叠加高亮到图谱">🕸 叠加到图谱</button>
     <button class="btn sm ghost" onclick="gwtRenderQueue()">⬅ 返回审核队列</button>
   </div>
-  ${ents.length?`<div style="font-weight:700;font-size:12px;color:var(--blue-d);margin:6px 0 4px;">新增实体</div>
-   <table style="width:100%;border-collapse:collapse;font-size:11.5px;">
+  ${ents.length?`<div style="font-weight:700;font-size:13.5px;color:var(--blue-d);margin:6px 0 4px;">新增实体</div>
+   <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
     <thead><tr style="background:var(--blue-l);color:var(--blue-d);text-align:left;"><th style="padding:5px 8px;">名称</th><th style="padding:5px 8px;">类型</th><th style="padding:5px 8px;">ID</th></tr></thead>
-    <tbody>${ents.map(e=>`<tr style="border-bottom:1px solid #f0efe9;"><td style="padding:4px 8px;font-weight:600;">${esc(e.name)}</td><td style="padding:4px 8px;"><span style="color:${graphColor(e.entity_type)};">●</span> ${esc(e.entity_type)}</td><td style="padding:4px 8px;color:var(--mut);font-size:10.5px;" title="${esc(e.id)}">${esc(e.id)}</td></tr>`).join('')}</tbody>
+    <tbody>${ents.map(e=>`<tr style="border-bottom:1px solid #f0efe9;"><td style="padding:4px 8px;font-weight:600;">${esc(e.name)}</td><td style="padding:4px 8px;"><span style="color:${graphColor(e.entity_type)};">●</span> ${esc(e.entity_type)}</td><td style="padding:4px 8px;color:var(--mut);font-size:12px;" title="${esc(e.id)}">${esc(e.id)}</td></tr>`).join('')}</tbody>
    </table>`:''}
-  ${rels.length?`<div style="font-weight:700;font-size:12px;color:var(--blue-d);margin:10px 0 4px;">新增关系</div>
-   <table style="width:100%;border-collapse:collapse;font-size:11.5px;">
+  ${rels.length?`<div style="font-weight:700;font-size:13.5px;color:var(--blue-d);margin:10px 0 4px;">新增关系</div>
+   <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
     <thead><tr style="background:var(--blue-l);color:var(--blue-d);text-align:left;"><th style="padding:5px 8px;">源</th><th style="padding:5px 8px;">谓词</th><th style="padding:5px 8px;">目标</th></tr></thead>
     <tbody>${rels.map(r=>`<tr style="border-bottom:1px solid #f0efe9;"><td style="padding:4px 8px;font-weight:600;">${esc(r.source||r.source_name||'')}</td><td style="padding:4px 8px;color:var(--blue-d);">${esc(r.predicate||r.name||'')}</td><td style="padding:4px 8px;">${esc(r.target||r.target_name||'')}</td></tr>`).join('')}</tbody>
    </table>`:''}
-  ${!ents.length && !rels.length?'<div style="color:var(--mut);font-size:12px;padding:16px;">该批次无新增实体/关系（可能在其它分支已存在，或均为重叠项）</div>':''}
+  ${!ents.length && !rels.length?'<div style="color:var(--mut);font-size:13.5px;padding:16px;">该批次无新增实体/关系（可能在其它分支已存在，或均为重叠项）</div>':''}
   `;
 }
 // 可选：把「本次并入」的边叠加高亮到图谱（复用既有橙色虚线叠加机制）
@@ -787,8 +787,8 @@ if(typeof showGraphDetail==='function'){
       const n = (graphState.all.nodes||[]).find(x=>x.id===id);
       const nm = n ? n.name : '';
       sticky.insertAdjacentHTML('beforeend', `<div class="gv-xlinks" style="display:flex;gap:6px;margin-top:6px;">
-        <button class="btn sm ghost" style="font-size:11px;padding:2px 8px;" onclick="gwtGotoReasoning('${esc(nm)}')" title="跳推理面板执行推理，过滤该实体相关推断">🧠 推理</button>
-        ${(graphState._infEdges||[]).length?`<button class="btn sm ghost" style="font-size:11px;padding:2px 8px;color:#E8912D;" onclick="gwtClearInferred()" title="清除图谱上的推断边叠加">✕ 清除叠加</button>`:''}
+        <button class="btn sm ghost" style="font-size:12.5px;padding:2px 8px;" onclick="gwtGotoReasoning('${esc(nm)}')" title="跳推理面板执行推理，过滤该实体相关推断">🧠 推理</button>
+        ${(graphState._infEdges||[]).length?`<button class="btn sm ghost" style="font-size:12.5px;padding:2px 8px;color:#E8912D;" onclick="gwtClearInferred()" title="清除图谱上的推断边叠加">✕ 清除叠加</button>`:''}
       </div>`);
     }
   };

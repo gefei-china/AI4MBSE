@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] 需真实服务/真 LLM/生产真库金标或随包运行时资产，CI 跑不了；源码直连真实服务/真实 key（CI 无服务无 secret） 
 # -*- coding: utf-8 -*-
 """verify_graph_breaker.py —— 守卫：图谱（Fuseki）不可用时必须短熔断，不得逐次白等。
 

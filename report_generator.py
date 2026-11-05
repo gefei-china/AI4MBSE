@@ -278,7 +278,7 @@ class ReportGenerator:
         tcPr = cell._tc.get_or_add_tcPr()
         shd = tcPr.find(".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}shd")
         if shd is None:
-            shd = cell._tc._element.makeelement(
+            shd = cell._tc.makeelement(
                 "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}shd", {})
             tcPr.append(shd)
         shd.set("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val", "clear")
@@ -503,8 +503,8 @@ class ReportGenerator:
         return out.replace("\n", "<br/>")
 
     # ── PDF 导出（reportlab platypus：封面页 + 页脚页码 + 样式化表格，自动注册系统中文字体）──
-    _PDF_HDR_FILL = "1F4E79"
-    _PDF_ALT_FILL = "F2F6FB"
+    _PDF_HDR_FILL = "#1F4E79"
+    _PDF_ALT_FILL = "#F2F6FB"
 
     def export_pdf(self, report: dict, path: str | None = None):
         """Report → PDF（封面页 + 分节正文 + 页脚页码）。path 为空返回 bytes。"""

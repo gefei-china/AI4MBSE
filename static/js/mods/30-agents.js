@@ -63,23 +63,24 @@ async function loadSkills() {
   const box = document.getElementById('skill-table');
   if(!box) return;  // 旧 Skill 模板库已迁移到「技能」主菜单入口
   if(!filtered.length){
-    box.innerHTML = `<div style="padding:36px;text-align:center;color:var(--mut);font-size:12px;">${items.length?'无匹配的 Skill（调整筛选条件）':'暂无 Skill'}</div>`;
+    box.innerHTML = `<div style="padding:36px;text-align:center;color:var(--mut);font-size:13.5px;">${items.length?'无匹配的 Skill（调整筛选条件）':'暂无 Skill'}</div>`;
     return;
   }
   box.innerHTML = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">` +
     filtered.map(s=>`<div class="panel"><div class="ph">${esc(s.name)} ${s.builtin?'<span class="st b">内置</span>':''} <span class="st ${s.enabled===0?'r':'ok'}">${s.enabled===0?'停用':'启用'}</span></div>
     <div class="pb">
-      <div style="font-size:11px;color:var(--mut);margin-bottom:6px;"><span class="st b">${esc(s.skill_type)}</span> v${esc(s.version||'1.0')}</div>
-      <div style="font-size:12px;color:var(--mut);min-height:32px;">${esc(s.description||'-')}</div>
+      <div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;"><span class="st b">${esc(s.skill_type)}</span> v${esc(s.version||'1.0')}</div>
+      <div style="font-size:13.5px;color:var(--mut);min-height:32px;">${esc(s.description||'-')}</div>
 
       <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
         <button class="btn sm ghost" onclick="editSkill(${s.id})">✏️</button>
-        <button class="btn sm ${s.enabled===0?'ok':'ghost amb'}" onclick="toggleSkillStatus(${s.id},${s.enabled===0?1:0})">${s.enabled===0?'启用':'停用'}</button>
-        ${s.builtin?'<span style="font-size:10.5px;color:var(--mut);align-self:center;">内置不可删</span>':(s.scope==='public'?'<span class="st" style="background:#e8f5e9;color:#2e7d32;align-self:center;">市场在售</span>':`<button class="btn sm ghost" onclick="marketPublishFrom('skill','${esc(s.name.replace(/'/g,"\\'"))}')">⬆ 发布</button><button class="btn sm red" onclick="deleteSkill(${s.id})">删除</button>`)}
+        <button class="btn sm ${s.enabled===0?'ok':'ghost amb'}" onclick="toggleSkillStatus(${s.id},${s.enabled===0?1:0},'${escA(s.name)}')">${s.enabled===0?'启用':'停用'}</button>
+        ${s.builtin?'<span style="font-size:12px;color:var(--mut);align-self:center;">内置不可删</span>':(s.scope==='public'?'<span class="st" style="background:#e8f5e9;color:#2e7d32;align-self:center;">市场在售</span>':`<button class="btn sm ghost" onclick="marketPublishFrom('skill','${esc(s.name.replace(/'/g,"\\'"))}')">⬆ 发布</button><button class="btn sm red" onclick="deleteSkill(${s.id},'${escA(s.name)}')">删除</button>`)}
       </div>
     </div></div>`).join('') + '</div>';
 }
-async function toggleSkillStatus(id, enabled) {
+async function toggleSkillStatus(id, enabled, name) {
+  if(!enabled && name && !(await _confirmImpact('skill', name, '停用'))) return;
   await api(`/api/studio/skills/${id}/${enabled?'enable':'disable'}`, {method:'POST'});
   toast(enabled ? '已启用' : '已停用');
   loadSkills();
@@ -89,6 +90,7 @@ async function toggleSkillStatus(id, enabled) {
 }
 let skillEditId = null;
 let skillPrevEnabled = 1;
+let skillEditObj = null;   // P2-4：编辑时缓存原始技能对象，保存时合并，避免清空未展示字段
 function editSkill(id) {
   skillEditId = id;
   showModal('skill');
@@ -96,6 +98,7 @@ function editSkill(id) {
   api('/api/studio/skills').then(items=>{
     const s = items.find(x=>x.id===id);
     if(!s) return;
+    skillEditObj = s;   // P2-4：保留原始（含 triggers/frontmatter/references/examples/scripts…）
     document.getElementById('f-name').value = s.name;
     document.getElementById('f-desc').value = s.description||'';
     document.getElementById('f-content').value = s.content||'';
@@ -114,11 +117,23 @@ function openSkillForm() {
 async function saveSkill() {
   const name = document.getElementById('f-name').value.trim();
   if(!name) { toast('名称必填'); return; }
-  const body = {
-    name,
-    description: document.getElementById('f-desc').value,
-    content: document.getElementById('f-content').value,
-  };
+  // P2-4（2026-10-27）：编辑时以原始技能对象为底，只覆盖界面展示的 3 个字段，
+  //   保留 triggers / frontmatter / references / examples / scripts / allowed_tools /
+  //   dependencies / skill_type / category 等未展示字段 —— 否则后端把这些字段按 None 清空。
+  let body;
+  if(skillEditId && skillEditObj) {
+    body = Object.assign({}, skillEditObj, {
+      name,
+      description: document.getElementById('f-desc').value,
+      content: document.getElementById('f-content').value,
+    });
+  } else {
+    body = {
+      name,
+      description: document.getElementById('f-desc').value,
+      content: document.getElementById('f-content').value,
+    };
+  }
   const enEl = document.getElementById('f-enabled');
   const wantEnabled = !enEl || enEl.checked ? 1 : 0;
   let sid = null;
@@ -128,9 +143,10 @@ async function saveSkill() {
   if(sid && wantEnabled !== skillPrevEnabled) {
     await api('/api/studio/skills/'+sid+'/'+(wantEnabled?'enable':'disable'), {method:'POST'});
   }
-  closeModal(); skillEditId = null; skillPrevEnabled = 1; loadSkills(); loadMinePlugins(); loadMarket(); loadMarketManage();
+  closeModal(); skillEditId = null; skillPrevEnabled = 1; skillEditObj = null; loadSkills(); loadMinePlugins(); loadMarket(); loadMarketManage();
 }
-async function deleteSkill(id) {
+async function deleteSkill(id, name) {
+  if(name && !(await _confirmImpact('skill', name, '删除'))) return;
   if(!(await confirmDialog('确认删除该 Skill？'))) return;
   await api(`/api/studio/skills/${id}`, {method:'DELETE'});
   toast('已删除'); loadSkills(); loadMinePlugins(); loadMarket(); loadMarketManage();
@@ -197,7 +213,7 @@ async function loadMCPServers() {
   const box = document.getElementById('mcp-cards');
   if(!box) return;  // 旧 MCP 服务器管理已迁移到「MCP」主菜单入口
   if(!items.length){
-    box.innerHTML = `<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:12px;">${all.length?'无匹配的 MCP 服务器（调整筛选条件）':'暂无 MCP 服务器，点击「＋ 添加 MCP 服务器」创建'}</div>`;
+    box.innerHTML = `<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:13.5px;">${all.length?'无匹配的 MCP 服务器（调整筛选条件）':'暂无 MCP 服务器，点击「＋ 添加 MCP 服务器」创建'}</div>`;
     return;
   }
   box.innerHTML = items.map(s=>{
@@ -205,8 +221,17 @@ async function loadMCPServers() {
     const prmN = (()=>{ try{return JSON.parse(s.prompts||'[]').length;}catch(e){return 0;} })();
     const toolN = (()=>{ try{return JSON.parse(s.tools||'[]').length;}catch(e){return 0;} })();
     const proto = s.protocol_version?`<span class="st b">${s.protocol_version}</span>`:'';
-    const err = s.last_error?`<div style="font-size:11px;color:var(--red);margin-top:4px;" title="${esc(s.last_error)}">⚠ ${esc(s.last_error).slice(0,80)}</div>`:'';
-    const statusBadge = s.status==='online' ? '<span class="st ok">online</span>' : '';
+    const err = s.last_error?`<div style="font-size:12.5px;color:var(--red);margin-top:4px;" title="${esc(s.last_error)}">⚠ ${esc(s.last_error).slice(0,80)}</div>`:'';
+    // ★ 2026-10-23：状态徽章如实反映**探测结果**，不美化未知态。
+    //   原：只有 online 显示徽章，offline/unknown 一律什么都不显示（用户看不出
+    //   "是没检测"还是"检测失败"）。且延迟为 NULL 时会渲染成 "nullms"。
+    //   现在：online→绿 / offline→红 / unknown（未检测）→灰「未检测」/ 其它→灰「未知」，
+    //   延迟无值时显示「-」而不是 nullms。
+    const _st = s.status || 'unknown';
+    const statusBadge = _st==='online' ? '<span class="st ok">online</span>'
+                      : _st==='offline' ? '<span class="st r">offline</span>'
+                      : _st==='unknown' ? '<span class="st b">未检测</span>'
+                      : `<span class="st b">${esc(_st)}</span>`;
     // ★ B5-3：内置 MCP 必须说清「它是什么」——
     //   此前卡片只有名字 +「内置不可删」，用户看不出这个条目指向哪、为什么删不掉。
     //   事实（据 audit_logs.event_type='mcp_tool_call' 审计）：它**被真实调用过 22 次**
@@ -218,7 +243,7 @@ async function loadMCPServers() {
            再作为「内置 MCP」回注给 Agent</b></div>
          <div class="kv"><span>真实调用</span><b>${s.call_scope==='platform_gateway_all'
              ? `本平台 MCP 网关被调用 <b>${esc(s.call_total ?? 0)}</b> 次${s.call_last?('，末次 '+esc(String(s.call_last).slice(0,16))):''}
-                <span style="font-size:11px;color:var(--mut);">（口径：audit_logs · mcp_tool_call，
+                <span style="font-size:12.5px;color:var(--mut);">（口径：audit_logs · mcp_tool_call，
                 <b>尚未按服务器区分</b>，故不能归因到单个 MCP）</span>`
              : '统计不可用'}</b></div>`
       : '';
@@ -226,18 +251,19 @@ async function loadMCPServers() {
     <div class="pb"><div class="kv"><span>端点</span><b>${s.endpoint}</b></div>
     <div class="kv"><span>传输</span><b>${s.transport||'sse'}</b></div>
     <div class="kv"><span>清单</span><b>${toolN} 工具 / ${resN} 资源 / ${prmN} 提示词</b></div>
-    <div class="kv"><span>延迟</span><b>${s.latency_ms}ms</b> <span style="font-size:11px;color:var(--mut);">巡检 ${(s.last_check||'').slice(5,19)||'-'}</span></div>
+    <div class="kv"><span>延迟</span><b>${(s.latency_ms==null||s.latency_ms==='')?'-':esc(String(s.latency_ms))+'ms'}</b> <span style="font-size:12.5px;color:var(--mut);">巡检 ${(s.last_check||'').slice(5,19)||'未检测'}</span></div>
     ${builtinNote}
     ${err}
     <div style="margin-top:6px;display:flex;gap:6px;">
       <button class="btn sm ghost" onclick="testMCP(${s.id})">🔌 测试</button>
       <button class="btn sm ghost" onclick="editMCP(${s.id})">✏️</button>
-      <button class="btn sm ${s.enabled===0?'ok':'ghost amb'}" onclick="toggleMCPStatus(${s.id},${s.enabled===0?1:0})">${s.enabled===0?'启用':'停用'}</button>
-      ${s.builtin?'<span style="font-size:10.5px;color:var(--mut);align-self:center;">内置不可删</span>':(s.scope==='public'?'<span class="st" style="background:#e8f5e9;color:#2e7d32;align-self:center;">市场在售</span>':`<button class="btn sm ghost" onclick="marketPublishFrom('mcp','${esc(s.name.replace(/'/g,"\\'"))}')">⬆ 发布</button><button class="btn sm red" onclick="deleteMCP(${s.id})">删除</button>`)}
+      <button class="btn sm ${s.enabled===0?'ok':'ghost amb'}" onclick="toggleMCPStatus(${s.id},${s.enabled===0?1:0},'${escA(s.name)}')">${s.enabled===0?'启用':'停用'}</button>
+      ${s.builtin?'<span style="font-size:12px;color:var(--mut);align-self:center;">内置不可删</span>':(s.scope==='public'?'<span class="st" style="background:#e8f5e9;color:#2e7d32;align-self:center;">市场在售</span>':`<button class="btn sm ghost" onclick="marketPublishFrom('mcp','${esc(s.name.replace(/'/g,"\\'"))}')">⬆ 发布</button><button class="btn sm red" onclick="deleteMCP(${s.id},'${escA(s.name)}')">删除</button>`)}
     </div></div></div>`;
   }).join('');
 }
-async function toggleMCPStatus(id, enabled) {
+async function toggleMCPStatus(id, enabled, name) {
+  if(!enabled && name && !(await _confirmImpact('mcp', name, '停用'))) return;
   await api(`/api/studio/mcp-servers/${id}/${enabled?'enable':'disable'}`, {method:'POST'});
   toast(enabled ? '已启用' : '已停用');
   loadMCPServers();
@@ -251,7 +277,7 @@ async function readMCPResource(sid, uri) {
     const r = await api(`/api/studio/mcp-servers/${sid}/read-resource?uri=${encodeURIComponent(uri)}`);
     const ok = r.ok!==false && !r.is_error;
     toast(ok ? '资源读取成功' : '资源读取失败：'+(r.result||'').slice(0,80));
-    if(ok) { const body = document.getElementById('mcp-detail-body'); if(body) body.innerHTML += `<div class="panel" style="margin-top:8px;"><div class="ph">资源内容</div><pre style="white-space:pre-wrap;font-size:11px;max-height:220px;overflow:auto;margin:0;">${esc(r.result)}</pre></div>`; }
+    if(ok) { const body = document.getElementById('mcp-detail-body'); if(body) body.innerHTML += `<div class="panel" style="margin-top:8px;"><div class="ph">资源内容</div><pre style="white-space:pre-wrap;font-size:12.5px;max-height:220px;overflow:auto;margin:0;">${esc(r.result)}</pre></div>`; }
   } catch(e) { toast('❌ 读取失败：'+e.message); }
 }
 let mcpEditId = null;
@@ -324,11 +350,11 @@ function editMCP(id) {
         //   （`headers=None` 保持原值）⇒ 用户不碰它就不会把凭据清掉。
         row.innerHTML =
           '<input class="tool-hdr-key" placeholder="Key" title="请求头名称" ' +
-          'style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" value="'+esc(k)+'">' +
+          'style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;" value="'+esc(k)+'">' +
           '<input class="tool-hdr-val" placeholder="留空则保持原值" title="'+esc(tip)+'" ' +
-          'style="flex:1.5;border:1px dashed var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" value="">' +
+          'style="flex:1.5;border:1px dashed var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;" value="">' +
           '<button class="btn sm ghost" onclick="this.parentElement.remove()" title="移除该请求头" ' +
-          'style="padding:2px 8px;font-size:11px;">✕</button>';
+          'style="padding:2px 8px;font-size:12.5px;">✕</button>';
         hdrList.appendChild(row);
       });
     }
@@ -343,7 +369,8 @@ async function testMCP(id) {
   } catch(e) { toast('❌ 测试失败：'+e.message); }
   loadMCPServers();
 }
-async function deleteMCP(id) {
+async function deleteMCP(id, name) {
+  if(name && !(await _confirmImpact('mcp', name, '删除'))) return;
   if(!(await confirmDialog('确认删除？'))) return;
   await api(`/api/studio/mcp-servers/${id}`, {method:'DELETE'});
   toast('已删除'); loadMCPServers(); loadMinePlugins(); loadMarket(); loadMarketManage();
@@ -392,19 +419,19 @@ async function loadToolLogs() {
     if(sum) sum.textContent = `共 ${total} 条`;
     const pagerEl = document.getElementById('tool-logs-pager');
     if(!logs.length) {
-      el.innerHTML = '<div style="padding:12px;color:var(--mut);font-size:12px;">暂无调用日志（Agent 执行工具 / 触发技能时自动记录）</div>';
+      el.innerHTML = '<div style="padding:12px;color:var(--mut);font-size:13.5px;">暂无调用日志（Agent 执行工具 / 触发技能时自动记录）</div>';
       if(pagerEl) pagerEl.innerHTML = '';
       return;
     }
     el.innerHTML = `<table class="t">
       <tr><th>时间</th><th>Agent</th><th>名称</th><th>类别</th><th>类型</th><th>结果摘要</th><th>耗时</th><th>状态</th></tr>` +
       logs.map(l=>`<tr>
-        <td style="font-size:11px;">${(l.created_at||'').slice(5,19)}</td>
-        <td style="font-size:12px;">${esc(l.agent_name||'-')}</td>
+        <td style="font-size:12.5px;">${(l.created_at||'').slice(5,19)}</td>
+        <td style="font-size:13.5px;">${esc(l.agent_name||'-')}</td>
         <td><b>${esc(l.tool_name)}</b></td>
         <td><span class="st ${l.call_kind==='skill'?'w':'b'}">${l.call_kind||'tool'}</span></td>
         <td><span class="tag">${l.tool_type||'-'}</span></td>
-        <td style="font-size:11px;color:var(--mut);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(l.result||'')}">${esc(l.result||'').slice(0,60)}</td>
+        <td style="font-size:12.5px;color:var(--mut);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(l.result||'')}">${esc(l.result||'').slice(0,60)}</td>
         <td>${l.latency_ms}ms</td>
         <td><span class="st ${l.ok?'ok':'r'}">${l.ok?'成功':'失败'}</span></td>
       </tr>`).join('') + '</table>';
@@ -413,7 +440,7 @@ async function loadToolLogs() {
       onPage: p => { _logs.page = p; loadToolLogs(); },
       onSize: s => { _logs.size = s; _logs.page = 1; loadToolLogs(); }
     });
-  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${esc(e.message)}</div>`; }
+  } catch(e) { el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">加载失败：${esc(e.message)}</div>`; }
 }
 async function toggleAgentStatus(id, cur) {
   const act = cur==='active' ? 'disable' : 'enable';
@@ -457,13 +484,13 @@ async function loadProjectMemories(){
           <span style="flex:1"></span>
           <button class="btn sm ghost" onclick="toggleProjectMemory(${m.id},${m.enabled?0:1})" title="启用/停用">${m.enabled?'停用':'启用'}</button>
         </div>
-        <div class="pb" style="font-size:12px;color:var(--ink);white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;">${esc(m.content||'-')}</div>
+        <div class="pb" style="font-size:13.5px;color:var(--ink);white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;">${esc(m.content||'-')}</div>
         <div style="display:flex;gap:6px;padding:8px 12px;border-top:1px solid var(--line);">
           <button class="btn sm ghost" onclick="editProjectMemory(${m.id})">✏️ 编辑</button>
           <button class="btn sm red" onclick="deleteProjectMemory(${m.id})">🗑 删除</button>
         </div>
       </div>`).join('');
-  }catch(e){ el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${esc(e.message)}</div>`; }
+  }catch(e){ el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">加载失败：${esc(e.message)}</div>`; }
 }
 function openProjectMemoryForm(){
   _pmEdit = {mode:'create', id:null, projectId: document.getElementById('pm-project')?.value || ''};
@@ -536,11 +563,11 @@ async function loadToolHooks(){
         const am = actMeta[h.action] || actMeta.warn;
         return `<tr>
           <td>#${h.id}</td>
-          <td><b>${esc(h.name)}</b><br><span style="font-size:11px;color:var(--mut);">${esc(h.description||'')}</span></td>
-          <td><code style="font-size:11px;">${esc(h.tool_pattern)}</code></td>
+          <td><b>${esc(h.name)}</b><br><span style="font-size:12.5px;color:var(--mut);">${esc(h.description||'')}</span></td>
+          <td><code style="font-size:12.5px;">${esc(h.tool_pattern)}</code></td>
           <td><span class="st ${am[1]}">${am[0]} ${esc(h.action)}</span></td>
-          <td style="font-size:11px;color:var(--mut);">${esc(h.condition_args||'-')}</td>
-          <td style="font-size:11px;color:var(--mut);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(h.message||'')}">${esc(h.message||'-')}</td>
+          <td style="font-size:12.5px;color:var(--mut);">${esc(h.condition_args||'-')}</td>
+          <td style="font-size:12.5px;color:var(--mut);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(h.message||'')}">${esc(h.message||'-')}</td>
           <td><span class="st ${h.enabled?'ok':'r'}">${h.enabled?'启用':'停用'}</span></td>
           <td style="white-space:nowrap;">
             <button class="btn sm ghost" onclick="toggleToolHook(${h.id},${h.enabled?0:1})">${h.enabled?'停用':'启用'}</button>
@@ -549,7 +576,7 @@ async function loadToolHooks(){
           </td></tr>`;}).join('')
         : '<tr><td colspan="8" style="text-align:center;color:var(--mut);padding:20px;">暂无工具钩子，点击「＋ 新增钩子」配置工具调用前的强制校验</td></tr>') +
       `</tbody></table>`;
-  }catch(e){ el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${esc(e.message)}</div>`; }
+  }catch(e){ el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">加载失败：${esc(e.message)}</div>`; }
 }
 function openToolHookForm(){
   _hookEdit = {mode:'create', id:null};
@@ -646,22 +673,22 @@ async function loadAgents() {
   if(scnt) scnt.textContent = subs.length;
   const mbox = document.getElementById('agent-main-cards');
   const sbox = document.getElementById('agent-sub-cards');
-  if(mbox) mbox.innerHTML = mains.length ? mains.map(agentCard).join('') : '<div style="grid-column:1/-1;padding:24px;text-align:center;color:var(--mut);font-size:12px;">暂无主 Agent — 点击「＋ 新建 Agent」创建（角色选「主 Agent」）</div>';
-  if(sbox) sbox.innerHTML = subs.length ? subs.map(agentCard).join('') : '<div style="grid-column:1/-1;padding:24px;text-align:center;color:var(--mut);font-size:12px;">暂无子 Agent — 点击「＋ 新建 Agent」创建（角色选「子 Agent」）</div>';
+  if(mbox) mbox.innerHTML = mains.length ? mains.map(agentCard).join('') : '<div style="grid-column:1/-1;padding:24px;text-align:center;color:var(--mut);font-size:13.5px;">暂无主 Agent — 点击「＋ 新建 Agent」创建（角色选「主 Agent」）</div>';
+  if(sbox) sbox.innerHTML = subs.length ? subs.map(agentCard).join('') : '<div style="grid-column:1/-1;padding:24px;text-align:center;color:var(--mut);font-size:13.5px;">暂无子 Agent — 点击「＋ 新建 Agent」创建（角色选「子 Agent」）</div>';
 }
 // 主/子分区共用的 Agent 卡片（无「试运行」入口）
 function agentCard(a){
   return `<div class="panel"><div class="ph">${a.icon||'🤖'} ${a.display_name||a.name} ${a.agent_role==='main'?'<span class="st" style="background:#fff3e0;color:#e65100;">👑 主</span>':'<span class="st b">🧩 子</span>'} ${a.builtin?'<span class="st b">内置</span>':''} <span class="st ${a.status==='active'?'ok':'r'}">${a.status}</span></div>
     <div class="pb">
-      <div style="font-size:11px;color:var(--mut);margin-bottom:6px;"><span class="st b" title="内部标识名（路由/日志关联键），编辑页「基础信息」可改">🔑 ${a.name}</span> ${a.provider_name?`<span class="st b">⚙ ${a.provider_name}</span>`:''}</div>
-      <div style="font-size:12px;color:var(--mut);min-height:32px;">${a.description||'-'}</div>
+      <div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;"><span class="st b" title="内部标识名（路由/日志关联键），编辑页「基础信息」可改">🔑 ${a.name}</span> ${a.provider_name?`<span class="st b">⚙ ${a.provider_name}</span>`:''}</div>
+      <div style="font-size:13.5px;color:var(--mut);min-height:32px;">${a.description||'-'}</div>
       <div class="kv"><span>绑定工具</span><b>${a.tool_count||0} 个</b></div>
       ${a.agent_role==='main'?`<div class="kv"><span>团队规模</span><b>${a.team_count||0} 人</b></div>`:''}
       <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
         <button class="btn sm ghost" onclick="editAgent(${a.id})">✏️</button>
         <button class="btn sm ghost" title="复制为副本" onclick="copyAgent(${a.id})">📑 复制</button>
         <button class="btn sm ${a.status==='active'?'ghost amb':'ok'}" onclick="toggleAgentStatus(${a.id},'${a.status}')">${a.status==='active'?'停用':'启用'}</button>
-        ${a.builtin?'<span style="font-size:10.5px;color:var(--mut);align-self:center;">内置不可删</span>':`<button class="btn sm red" onclick="deleteAgent(${a.id})">删除</button>`}
+        ${a.builtin?'<span style="font-size:12px;color:var(--mut);align-self:center;">内置不可删</span>':`<button class="btn sm red" onclick="deleteAgent(${a.id})">删除</button>`}
       </div>
     </div></div>`;
 }
@@ -694,6 +721,7 @@ function editAgent(id) {
     onAgentRoleChange((a.team_members||[]).map(m=>m.id));
     // 能力绑定回填（skill / mcp / tool，逐个添加列表）
     loadAgentBindOptions((a.tools||[]).map(t=>`${t.tool_type}:${t.tool_name}`));
+    loadBindEffectiveness(id);
   });
 }
 // ── 主/子 Agent 团队：角色切换 → 团队成员候选加载（子 Agent 无成员区）──
@@ -717,9 +745,9 @@ async function onAgentRoleChange(selectedMemberIds){
     const exclude = agentEditId || 0;
     const cands = await api('/api/studio/agents/sub-candidates?exclude=' + exclude);
     _agentTeamCands = cands||[];
-    if(!_agentTeamCands.length){ const box = document.getElementById('f-team-list'); if(box) box.innerHTML = '<div style="padding:8px 10px;color:var(--mut);font-size:11px;">暂无可用子 Agent（请先创建子 Agent 角色）</div>'; renderTeamChecks(); return; }
+    if(!_agentTeamCands.length){ const box = document.getElementById('f-team-list'); if(box) box.innerHTML = '<div style="padding:8px 10px;color:var(--mut);font-size:12.5px;">暂无可用子 Agent（请先创建子 Agent 角色）</div>'; renderTeamChecks(); return; }
     renderTeamChecks();   // 候选到位后重渲染（摘要换真名 + 面板补全选项）
-  }catch(e){ const box = document.getElementById('f-team-list'); if(box) box.innerHTML = '<div style="padding:8px 10px;color:var(--red);font-size:11px;">候选加载失败</div>'; }
+  }catch(e){ const box = document.getElementById('f-team-list'); if(box) box.innerHTML = '<div style="padding:8px 10px;color:var(--red);font-size:12.5px;">候选加载失败</div>'; }
 }
 // 头部摘要：未选=占位灰字；已选=前 2 个名称 + 剩余计数（候选到位前用 成员#id 兜底）
 function _teamSumRefresh(){
@@ -742,16 +770,16 @@ function renderTeamChecks(){
   const _tx = 'flex:1;text-align:left;min-width:0;';
   if(!_agentTeamCands.length){
     box.innerHTML = _agentTeamSet.size
-      ? [..._agentTeamSet].map(id=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;"><input type="checkbox" style="${_cb}" checked onchange="bindTeamToggle(${id},this.checked)"><span style="${_tx}">成员#${id} <span style="color:var(--mut);font-size:10.5px;">（候选加载中…）</span></span></label>`).join('')
-      : '<div style="padding:8px 10px;color:var(--mut);font-size:11px;">加载候选…</div>';
+      ? [..._agentTeamSet].map(id=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;"><input type="checkbox" style="${_cb}" checked onchange="bindTeamToggle(${id},this.checked)"><span style="${_tx}">成员#${id} <span style="color:var(--mut);font-size:12px;">（候选加载中…）</span></span></label>`).join('')
+      : '<div style="padding:8px 10px;color:var(--mut);font-size:12.5px;">加载候选…</div>';
     return;
   }
   box.innerHTML = _agentTeamCands.map(c=>{
     const on = _agentTeamSet.has(c.id);
     return `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;" onmouseover="this.style.background='#f4f6fa'" onmouseout="this.style.background=''">`
       + `<input type="checkbox" style="${_cb}" ${on?'checked':''} onchange="bindTeamToggle(${c.id},this.checked)">`
-      + `<span style="${_tx}">${c.icon||'🤖'} <b>${esc(c.display_name||c.name)}</b> <span style="color:var(--mut);font-size:10.5px;">（${esc(c.name)}）</span></span></label>`;
-  }).join('') || '<div style="padding:8px 10px;color:var(--mut);font-size:11px;">暂无可用子 Agent</div>';
+      + `<span style="${_tx}">${c.icon||'🤖'} <b>${esc(c.display_name||c.name)}</b> <span style="color:var(--mut);font-size:12px;">（${esc(c.name)}）</span></span></label>`;
+  }).join('') || '<div style="padding:8px 10px;color:var(--mut);font-size:12.5px;">暂无可用子 Agent</div>';
 }
 // 勾选只更新集合与头部摘要，不重渲面板（保留滚动位置与连点手感）
 function bindTeamToggle(id, checked){
@@ -811,6 +839,69 @@ let _agentBindCands = {skill:[], mcp:[], tool:[]};   // 缓存候选（异步加
 const _CB = 'width:auto;flex:none;margin:0;accent-color:var(--blue-d,#3478f6);cursor:pointer;';
 const _TX = 'flex:1;text-align:left;min-width:0;';
 
+// ══ 绑定生效状态（2026-10-30）══════════════════════════════════════
+// 为什么必须加：编辑页只显示"已绑定 N"，用户无法知道其中几条运行时真的会生效。
+// 实测真库 178 条绑定里 45 条挂在已停用的 Agent 上、11 条目标已停用、17 条
+// "停用了但仍会被注入" —— 只给 N 不给 M，等于让用户以为全都生效。
+// 判据在后端 `services/capability_graph.py`（单一真源），此处只做呈现。
+function _bindEffBox(kind){
+  let box = document.getElementById('f-bind-'+kind+'-eff');
+  if(box) return box;
+  // ⚠️ 容器 id 是 `f-bind-<kind>-dd`（01-core.js bindDropdown 的骨架），不是 `f-bind-<kind>`：
+  //   第一版写成后者 ⇒ 取不到节点 ⇒ 提示条从不出现，而"没有报错"。
+  //   这类错只能靠**真浏览器量 DOM**发现（API 层一切正常）。
+  const dd = document.getElementById('f-bind-'+kind+'-dd');
+  if(!dd || !dd.parentNode) return null;
+  box = document.createElement('div');
+  box.id = 'f-bind-'+kind+'-eff';
+  box.style.cssText = 'margin-top:5px;font-size:12.5px;line-height:1.55;color:var(--mut);';
+  dd.parentNode.insertBefore(box, dd.nextSibling);
+  return box;
+}
+async function loadBindEffectiveness(aid){
+  if(!aid) return;
+  let got = null;
+  try { got = await api('/api/studio/agents/'+aid+'/bindings'); } catch(e) { got = null; }
+  (['skill','mcp','tool']).forEach(function(kind){
+    const box = _bindEffBox(kind);
+    if(!box) return;
+    if(!got || !got.summary){ box.innerHTML = ''; return; }
+    const k = (got.summary.by_kind||{})[kind] || {total:0, effective:0};
+    if(!k.total){ box.innerHTML = ''; return; }
+    const bad = (got.bindings||[]).filter(function(b){ return b.kind===kind && !b.effective; });
+    let html = '已选 <b>'+k.total+'</b> · 生效 <b style="color:'+(k.effective===k.total?'#2e7d32':'#c9821a')+'">'+k.effective+'</b>';
+    // 「有效但状态不干净」必须单列：bypass=停用了仍会被注入、draft=注入的是草稿。
+    // 混进"生效"里，用户会以为停用成功（实测 17 条 bypass）。
+    const dirty = (got.bindings||[]).filter(function(b){ return b.kind===kind && b.effective && b.state!=='effective'; });
+    if(dirty.length){
+      html += ' · <span style="color:#c9821a;" title="'+escA(dirty.map(function(b){ return b.name+'：'+(b.state_label||b.state); }).join('；'))+'">待治理 '+dirty.length+'</span>';
+    }
+    if(bad.length){
+      html += ' · <span style="color:#c92a2a;">失效 '+bad.length+'</span>';
+      html += '<div style="margin-top:2px;">' + bad.slice(0,4).map(function(b){
+        return '<div title="'+escA(b.hint||b.reason||'')+'" style="color:#c92a2a;">· '+esc(b.name)+'：'+esc(b.state_label||b.state)+'</div>';
+      }).join('') + (bad.length>4?'<div style="color:#c92a2a;">· 其余 '+(bad.length-4)+' 条…</div>':'') + '</div>';
+    }
+    box.innerHTML = html;
+  });
+}
+
+// ══ 停用/删除前的影响面提示 ══════════════════════════════════════════
+// 反向关系：这个能力被哪些 Agent 绑着。以前停用是"静默生效"——用户不知道
+// 一按下去有几个 Agent 会当场失去该能力（实测 `变更影响分析` 绑了 4 个 Agent）。
+async function _impactNames(kind, name){
+  if(!name) return [];
+  let u = null;
+  try { u = await api('/api/studio/bindings/usage?kind='+kind+'&name='+encodeURIComponent(name)); } catch(e) { return []; }
+  return (u && u.active_agents) || [];
+}
+async function _confirmImpact(kind, name, verb){
+  const act = await _impactNames(kind, name);
+  if(!act.length) return true;
+  const head = act.slice(0,6).map(function(a){ return a.name; }).join('、') + (act.length>6?' 等':'');
+  return await confirmDialog(verb+'「'+name+'」？\n\n当前有 '+act.length+' 个 Agent 依赖它生效：\n'+head+'\n\n'+verb+'后这些 Agent 会立即失去该能力（绑定关系保留，状态变为「不生效」）。');
+}
+
 async function loadAgentBindOptions(selected){
   const sel = new Set(selected||[]);
   _agentBindSets = {skill:new Set(), mcp:new Set(), tool:new Set()};
@@ -825,7 +916,7 @@ async function loadAgentBindOptions(selected){
     const [skills, mcps, tools] = await Promise.all([
       api('/api/studio/skills'), api('/api/studio/mcp-servers'), api('/api/studio/agent-tools'),
     ]);
-    _agentBindCands.skill = (skills||[]).filter(s=>s.enabled!==0).map(s=>({value:s.name, note:'', on:1}));
+    _agentBindCands.skill = (skills||[]).filter(s=>s.enabled!==0).map(s=>({value:s.name, disp:s.name, note:'', on:1}));
     // ★ B5-3：MCP 候选不再「不满足条件就悄悄消失」。
     //   修复前：`filter(m => m.status==='online' && m.enabled!==0)`
     //   ⇒ 新增的 MCP 只要还没测通（status=offline）或被停用（enabled=0），
@@ -835,13 +926,26 @@ async function loadAgentBindOptions(selected){
     //   现在：**全部列出**，用 note 标明状态（离线/已停用），并把原因挂在 title 上。
     //   ⚠️ 仍允许勾选离线项 —— 绑定的是"这个 MCP 服务器"，
     //     不是"此刻它通不通"（测试连通是 `/test` 的职责，不是绑定的门槛）。
+    // ★ 2026-10-23（米爸截图报障）：折叠摘要此前"优先用 title"，而插件事代
+    //   title=中文名的假设对 MCP 不成立 —— 本行把 title 拼成
+    //   endpoint+状态+**完整 last_error**（含 Mozilla 文档链接的
+    //   HTTPStatusError 长串）⇒ 编辑页"绑定 MCP 服务器"折叠摘要直接显示
+    //   一长串 URL + 报错，名称反而看不见。修法：
+    //   · disp = 名称（+短状态）—— 摘要与行内显示一律用它；
+    //   · title 只做 hover 提示，last_error 截断 120 字符（全文去作业日志/
+    //     运行监控看，不属于选择器的可见信息）。
     _agentBindCands.mcp = (mcps||[]).map(m=>{
       const dis = (m.enabled===0 || String(m.enabled)==='0');
       const off = m.status !== 'online';
       const note = dis ? '已停用（不参与发现）'
                 : off ? '离线（尚未测通 / 上次探测失败）' : '';
-      return {value:m.name, note,
-              title:[m.endpoint, note, m.last_error ? ('上次错误：'+m.last_error) : ''].filter(Boolean).join(' · '),
+      const err = m.last_error ? String(m.last_error) : '';
+      return {value:m.name,
+              disp:m.name + (dis ? '（已停用）' : off ? '（离线）' : ''),
+              note,
+              title:[m.name, m.endpoint, note,
+                     err ? ('上次错误：' + err.slice(0, 120) + (err.length > 120 ? '…' : '')) : ''
+                    ].filter(Boolean).join(' · '),
               on:m.status};
     });
     // ⚠️「工具」候选口径（2026-09-30 更正 —— 上一版在这里过度收紧了，必须写清为什么）：
@@ -856,7 +960,7 @@ async function loadAgentBindOptions(selected){
     //   即**返回给前端的每一条都已经满足 status='active'**，前端不必也不能再按 source 二次过滤 ——
     //   过滤的唯一结果是：用户误删了某条内置绑定（如 system_mgmt 的 sys_query_*）就再也补不回来。
     _agentBindCands.tool = (tools||[]).filter(t=>t.type==='tool')
-                                      .map(t=>({value:t.name, note:(t.source==='builtin'?'内置':''), on:1}));
+                                      .map(t=>({value:t.name, disp:t.name + (t.source==='builtin'?'（内置）':''), note:(t.source==='builtin'?'内置':''), on:1}));
     // 2026-09-30（用户第 10 轮）：此处原有 `_agentBindCands.plugin` 候选构建（第 9 轮曾收窄为
     //   type∈{skill,mcp} && (installed||平台内置)，命中 5 条）。现随「绑定插件」面板整体移除而删除。
     //   `/api/plugins` 的拉取也已从上面的 Promise.all 去掉 —— 该面板不再有任何数据源依赖。
@@ -864,7 +968,7 @@ async function loadAgentBindOptions(selected){
   } catch(e) {
     _BIND_KINDS.forEach(k=>{
       const box = document.getElementById('f-bind-'+k+'-list');
-      if(box) box.innerHTML = '<div style="padding:8px 10px;color:var(--red);font-size:11px;">候选加载失败</div>';
+      if(box) box.innerHTML = '<div style="padding:8px 10px;color:var(--red);font-size:12.5px;">候选加载失败</div>';
     });
   }
 }
@@ -876,10 +980,10 @@ function _bindSumRefresh(kind){
   if(!set.size){ sum.textContent = '选择' + (_BIND_LABEL[kind]||'') + '…'; sum.style.color = 'var(--mut)'; return; }
   const names = [...set].map(v=>{
     const c = (_agentBindCands[kind]||[]).find(x=>x.value===v);
-    // 摘要优先用 title（插件的**中文显示名**，如"文件操作"），比 note（类型标签"技能"/"MCP"）可读；
-    // 无 title 时退回原 id —— 避免摘要只显示一长串 com.zhiyuan.legacy.* 让用户认不出。
-    if(c && c.title) return c.title;
-    return (c && c.note) ? `${v}（${c.note}）` : v;
+    // 2026-10-23：摘要一律用 disp（名称优先）。此前"优先用 title"是插件事代
+    // 的假设（title=中文名），MCP 候选的 title 是 endpoint+错误串 ⇒ 折叠摘要
+    // 显示一长串 URL + HTTPStatusError（米爸截图报障）。title 现在只做 hover。
+    return (c && c.disp) || v;
   });
   sum.textContent = names.length<=2 ? names.join('、') : `${names.slice(0,2).join('、')} 等 ${names.length} 个`;
   sum.style.color = 'var(--ink)';
@@ -893,8 +997,8 @@ function renderBindChecks(kind){
   if(!cands.length){
     // 候选还没到：把已选项先列出来（防止编辑回填的内容"看起来丢了"）
     box.innerHTML = set.size
-      ? [...set].map(v=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;"><input type="checkbox" style="${_CB}" checked data-v="${escA(v)}" onchange="bindToggle('${kind}',this.dataset.v,this.checked)"><span style="${_TX}">${esc(v)} <span style="color:var(--mut);font-size:10.5px;">（候选加载中…）</span></span></label>`).join('')
-      : '<div style="padding:8px 10px;color:var(--mut);font-size:11px;">加载候选…</div>';
+      ? [...set].map(v=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;"><input type="checkbox" style="${_CB}" checked data-v="${escA(v)}" onchange="bindToggle('${kind}',this.dataset.v,this.checked)"><span style="${_TX}">${esc(v)} <span style="color:var(--mut);font-size:12px;">（候选加载中…）</span></span></label>`).join('')
+      : '<div style="padding:8px 10px;color:var(--mut);font-size:12.5px;">加载候选…</div>';
     return;
   }
   // 已选但不在候选里的（停用 / 口径不符/被删）：必须照样列出来，
@@ -908,15 +1012,15 @@ function renderBindChecks(kind){
     const _ttl = [c.value, c.title, c.note].filter(Boolean).join(' · ');
     return `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;" title="${escA(_ttl)}" onmouseover="this.style.background='#f4f6fa'" onmouseout="this.style.background=''">`
       + `<input type="checkbox" style="${_CB}" ${on?'checked':''} data-v="${escA(c.value)}" onchange="bindToggle('${kind}',this.dataset.v,this.checked)">`
-      + `<span style="${_TX}"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(c.value)}</b>${c.note?`<span style="color:var(--mut);font-size:10.5px;">${esc(c.note)}</span>`:''}</span></label>`;
+      + `<span style="${_TX}"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(c.value)}</b>${c.note?`<span style="color:var(--mut);font-size:12px;">${esc(c.note)}</span>`:''}</span></label>`;
   }).join('');
   const _orphanHtml = _orphans.map(v=>
       `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;opacity:.72;" onmouseover="this.style.background='#f4f6fa'" onmouseout="this.style.background=''">`
     + `<input type="checkbox" style="${_CB}" checked data-v="${escA(v)}" onchange="bindToggle('${kind}',this.dataset.v,this.checked)">`
-    + `<span style="${_TX}">${esc(v)} <span style="color:#c9821a;font-size:10.5px;" title="已绑定但不在当前候选内（工具被停用，或内置工具只能由 registry 声明），运行时不会被消费">（失效绑定 · 点击取消）</span></span></label>`
+    + `<span style="${_TX}">${esc(v)} <span style="color:#c9821a;font-size:12px;" title="已绑定但不在当前候选内（工具被停用，或内置工具只能由 registry 声明），运行时不会被消费">（失效绑定 · 点击取消）</span></span></label>`
   ).join('');
   box.innerHTML = (_rowsHtml + _orphanHtml)
-    || `<div style="padding:8px 10px;color:var(--mut);font-size:11px;">暂无可用${_BIND_LABEL[kind]||''}</div>`;
+    || `<div style="padding:8px 10px;color:var(--mut);font-size:12.5px;">暂无可用${_BIND_LABEL[kind]||''}</div>`;
 }
 // 勾选只更新集合与摘要，不重渲面板（保留滚动位置与连点手感）—— 与 bindTeamToggle 同策略
 function bindToggle(kind, value, checked){
@@ -980,6 +1084,7 @@ function openAgentForm(){
   bindDdCloseAll();
   loadProviderOptions();
   loadAgentBindOptions([]);
+  (['skill','mcp','tool']).forEach(function(k){ const b=_bindEffBox(k); if(b) b.innerHTML=''; });
 }
 // ── 名称口径统一（2026-09-30 用户反馈 2）：标识名可编辑 ──
 // 此前 `#f-name` 是 hidden input，`saveAgent` 里写死 `name = f-name || disp` →
@@ -1052,7 +1157,7 @@ async function loadIntentRules() {
     const items = await api('/api/studio/intent-rules');
     if(cnt) cnt.textContent = items.length;
     if(sum) sum.textContent = `共 ${items.length} 条 · ${items.filter(r=>r.enabled).length} 启用`;
-    if(!items.length){ el.innerHTML = '<div style="padding:12px;color:var(--mut);font-size:12px;">暂无意图规则，点击「＋ 新增规则」创建（trigger 匹配用户输入 → 按 weight 路由到 intent）</div>'; return; }
+    if(!items.length){ el.innerHTML = '<div style="padding:12px;color:var(--mut);font-size:13.5px;">暂无意图规则，点击「＋ 新增规则」创建（trigger 匹配用户输入 → 按 weight 路由到 intent）</div>'; return; }
     el.innerHTML = `<table class="t"><tr><th>ID</th><th>触发词 trigger</th><th>定向意图 intent</th><th>权重</th><th>状态</th><th>操作</th></tr>` +
       items.map(r=>`<tr>
         <td>#${r.id}</td>
@@ -1065,7 +1170,7 @@ async function loadIntentRules() {
           <button class="btn sm ghost" onclick="editIntentRule(${r.id})">✏️</button>
           <button class="btn sm red" onclick="deleteIntentRule(${r.id})">删除</button>
         </td></tr>`).join('') + '</table>';
-  } catch(e){ el.innerHTML = `<div style="color:var(--red);font-size:12px;">加载失败：${esc(e.message)}</div>`; }
+  } catch(e){ el.innerHTML = `<div style="color:var(--red);font-size:13.5px;">加载失败：${esc(e.message)}</div>`; }
 }
 async function editIntentRule(id) {
   let cur = null;
@@ -1138,7 +1243,7 @@ function addToolHeader() {
   const list = document.getElementById('tool-headers-list');
   const row = document.createElement('div');
   row.className = 'form-row'; row.style.cssText = 'display:flex;gap:6px;align-items:center;';
-  row.innerHTML = '<input class="tool-hdr-key" placeholder="Key" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"><input class="tool-hdr-val" placeholder="Value" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;"><button class="btn sm ghost" onclick="this.parentElement.remove()" style="padding:2px 8px;font-size:11px;">✕</button>';
+  row.innerHTML = '<input class="tool-hdr-key" placeholder="Key" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"><input class="tool-hdr-val" placeholder="Value" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"><button class="btn sm ghost" onclick="this.parentElement.remove()" style="padding:2px 8px;font-size:12.5px;">✕</button>';
   list.appendChild(row);
 }
 
@@ -1159,7 +1264,7 @@ function renderToolChannel(t) {
   if (!body) return;
   if (hid) hid.value = (t && t.channel) || '';
   if (!t) {
-    body.innerHTML = '<div style="font-size:11.5px;color:var(--mut);line-height:1.75;">新增工具：选定上方「类型」后，这里说明它由谁执行、需要配什么。</div>';
+    body.innerHTML = '<div style="font-size:12.5px;color:var(--mut);line-height:1.75;">新增工具：选定上方「类型」后，这里说明它由谁执行、需要配什么。</div>';
     return;
   }
   const cls = t.channel === 'builtin-code' ? 'g' : (t.channel === 'unbound' ? 'r' : 'a');
@@ -1168,10 +1273,10 @@ function renderToolChannel(t) {
     : `${t.usage_count || 0} 次 · 成功 ${t.usage_ok || 0}`;
   body.innerHTML =
     `<div class="kv"><span>执行通道</span><b><span class="badge ${cls}">${esc(t.channel_label || t.channel || '-')}</span></b></div>` +
-    `<div class="kv"><span>执行入口</span><b style="font-family:monospace;font-size:11.5px;">${t.handler ? esc(t.handler) : '<span class="badge r">未找到执行入口</span>'}</b></div>` +
+    `<div class="kv"><span>执行入口</span><b style="font-family:monospace;font-size:12.5px;">${t.handler ? esc(t.handler) : '<span class="badge r">未找到执行入口</span>'}</b></div>` +
     `<div class="kv"><span>调用情况</span><b>${usageTxt}</b></div>` +
-    `<div style="margin-top:8px;padding:7px 9px;border-radius:6px;background:var(--blue-l);color:var(--blue-d);font-size:11.5px;line-height:1.75;">${esc(t.handler_note || '')}</div>` +
-    `<div style="margin-top:6px;padding:7px 9px;border-radius:6px;background:var(--bg-soft,#f7f8fa);border:1px solid var(--line);font-size:11.5px;line-height:1.75;">${_toolUsageText(t)}</div>`;
+    `<div style="margin-top:8px;padding:7px 9px;border-radius:6px;background:var(--blue-l);color:var(--blue-d);font-size:12.5px;line-height:1.75;">${esc(t.handler_note || '')}</div>` +
+    `<div style="margin-top:6px;padding:7px 9px;border-radius:6px;background:var(--bg-soft,#f7f8fa);border:1px solid var(--line);font-size:12.5px;line-height:1.75;">${_toolUsageText(t)}</div>`;
 }
 function renderToolParams(schema) {
   const boxEl = document.getElementById('tool-params-box');
@@ -1183,7 +1288,7 @@ function renderToolParams(schema) {
   if (!names.length) { boxEl.style.display = 'none'; body.innerHTML = ''; return; }  // 确属无入参的工具不占版面
   boxEl.style.display = '';
   body.innerHTML =
-    '<table class="t" style="width:100%;font-size:11.5px;"><thead><tr>' +
+    '<table class="t" style="width:100%;font-size:12.5px;"><thead><tr>' +
     '<th>参数名</th><th style="width:64px;">类型</th><th style="width:48px;">必填</th><th>说明</th>' +
     '</tr></thead><tbody>' +
     names.map(n => {
@@ -1211,7 +1316,7 @@ function renderToolMeta(t) {
     kv('风险等级', rkZh[t.risk_level] || t.risk_level || '-') +
     kv('版本', esc(t.version || '-')) +
     kv('归属', esc(t.owner || '—')) +
-    '<div style="font-size:10.5px;color:var(--mut);margin-top:4px;line-height:1.65;">副作用 / 风险 / 版本 / 归属由注册来源管理，此处只读。</div>';
+    '<div style="font-size:12px;color:var(--mut);margin-top:4px;line-height:1.65;">副作用 / 风险 / 版本 / 归属由注册来源管理，此处只读。</div>';
 }
 
 let toolEditId = null;
@@ -1273,7 +1378,7 @@ async function showToolForm(id) {
   Object.entries(hdrs).forEach(([k,v]) => {
     const row = document.createElement('div');
     row.className = 'form-row'; row.style.cssText = 'display:flex;gap:6px;align-items:center;';
-    row.innerHTML = '<input class="tool-hdr-key" placeholder="Key" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" value="'+k+'"><input class="tool-hdr-val" placeholder="Value" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;" value="'+v+'"><button class="btn sm ghost" onclick="this.parentElement.remove()" style="padding:2px 8px;font-size:11px;">✕</button>';
+    row.innerHTML = '<input class="tool-hdr-key" placeholder="Key" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;" value="'+k+'"><input class="tool-hdr-val" placeholder="Value" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;" value="'+v+'"><button class="btn sm ghost" onclick="this.parentElement.remove()" style="padding:2px 8px;font-size:12.5px;">✕</button>';
     hdrList.appendChild(row);
   });
   if (!Object.keys(hdrs).length) addToolHeader();
@@ -1457,7 +1562,7 @@ function renderToolCards() {
   if(!box) return;  // 旧工具注册表已随「工具移出插件市场」隐藏
   if(!items.length){
     const filteredEmpty = toolNeverFilter || fsv || ftv;
-    box.innerHTML = `<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:12px;">${toolNeverFilter?'🎉 未使用工具已清零':(filteredEmpty?'无匹配的工具（调整筛选条件）':'暂无工具，点击右上角「＋ 新增工具」注册')}</div>`;
+    box.innerHTML = `<div style="grid-column:1/-1;padding:36px;text-align:center;color:var(--mut);font-size:13.5px;">${toolNeverFilter?'🎉 未使用工具已清零':(filteredEmpty?'无匹配的工具（调整筛选条件）':'暂无工具，点击右上角「＋ 新增工具」注册')}</div>`;
     return;
   }
   box.innerHTML = items.map(t=>{
@@ -1466,18 +1571,18 @@ function renderToolCards() {
     const st = `<span class="st ${t.status==='active'?'ok':'w'}">${t.status==='active'?'启用':'停用'}</span>${t.health&&t.health!=='ok'?` <span class="st r">${t.health}</span>`:''}`;
     const usage = t.never_used
       ? `<span class="st r" title="从未被任何会话调用，候选清理">未使用</span>`
-      : `<span style="font-size:11px;color:var(--mut);">${t.usage_count} 次${t.last_used_at?` · 最近 ${(t.last_used_at||'').slice(5,16)}`:''}</span>`;
+      : `<span style="font-size:12.5px;color:var(--mut);">${t.usage_count} 次${t.last_used_at?` · 最近 ${(t.last_used_at||'').slice(5,16)}`:''}</span>`;
     return `<div class="panel">
       <div class="ph">${esc(t.name)} <span class="st b">${esc(t.source)}</span><span style="flex:1"></span>${st}</div>
       <div class="pb">
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">${side}${risk}${t.version?`<span class="st b">${esc(t.version)}</span>`:''}${t.owner?`<span class="tag">👤 ${esc(t.owner)}</span>`:''}</div>
-        <div style="font-size:11.5px;color:var(--mut);line-height:1.5;min-height:34px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;" title="${esc(t.description||'')}">${esc(t.description||'-')}</div>
+        <div style="font-size:12.5px;color:var(--mut);line-height:1.5;min-height:34px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;" title="${esc(t.description||'')}">${esc(t.description||'-')}</div>
         <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;gap:6px;">
-          <span style="font-size:11.5px;color:var(--mut);">📈 ${usage}</span>
+          <span style="font-size:12.5px;color:var(--mut);">📈 ${usage}</span>
           <span style="display:flex;gap:6px;flex-wrap:wrap;">
             <button class="btn sm ghost" onclick="showToolForm(${t.id})">✏️</button>
             <button class="btn sm ${t.status==='active'?'ghost amb':'ok'}" onclick="toggleToolStatus(${t.id},${t.status==='active'?0:1})">${t.status==='active'?'停用':'启用'}</button>
-            ${(t.source==='builtin'||t.builtin===1)?'<span style="font-size:10.5px;color:var(--mut);">内置</span>':(t.scope==='public'?'<span class="st" style="background:#e8f5e9;color:#2e7d32;">市场在售</span>':`<button class="btn sm ghost" onclick="marketPublishFrom('tool','${esc(t.name.replace(/'/g,"\\'"))}')">⬆ 发布</button><button class="btn sm red" onclick="deleteTool(${t.id})">删除</button>`)}
+            ${(t.source==='builtin'||t.builtin===1)?'<span style="font-size:12px;color:var(--mut);">内置</span>':(t.scope==='public'?'<span class="st" style="background:#e8f5e9;color:#2e7d32;">市场在售</span>':`<button class="btn sm ghost" onclick="marketPublishFrom('tool','${esc(t.name.replace(/'/g,"\\'"))}')">⬆ 发布</button><button class="btn sm red" onclick="deleteTool(${t.id})">删除</button>`)}
           </span>
         </div>
       </div>
@@ -1522,9 +1627,11 @@ async function loadLLMProviders() {
     items.map(p=>{
       const disabled = p.status==='disabled';
       return `<tr>
-      <td><b>${esc(p.name)}</b></td>
-      <td>${p.model_type==='embedding'?'<span class="st b">向量</span>':(p.model_type==='multimodal'?'<span class="st" style="background:#f3e8ff;color:#7c3aed;">多模态</span>':'<span class="st g">对话</span>')}${p.model_type!=='embedding'&&p.model_type!=='multimodal'&&hasVisionTag(p)?' <span class="st" style="background:#eef2ff;color:#3f51b5;" title="支持图片理解：AI 建模会话中上传的图片会作为多模态内容送给该模型">🖼 视觉</span>':''}</td>
-      <td style="font-size:11px;">${esc(p.model_name)}</td>
+      <td><b>${esc(p.name)}</b>${p.is_default===1?' <span class="st b" style="font-size:10.5px;">默认</span>':''}
+        ${p.description?`<div style="font-size:11.5px;color:var(--mut);margin-top:2px;max-width:240px;line-height:1.45;">${esc(p.description)}</div>`:''}</td>
+      <td>${p.model_type==='embedding'?'<span class="st b">向量</span>':(p.model_type==='multimodal'?'<span class="st" style="background:#f3e8ff;color:#7c3aed;">多模态</span>':'<span class="st g">对话</span>')}${p.model_type!=='embedding'&&p.model_type!=='multimodal'&&hasVisionTag(p)?' <span class="st" style="background:#eef2ff;color:#3f51b5;" title="支持图片理解：AI 建模会话中上传的图片会作为多模态内容送给该模型">🖼 视觉</span>':''}
+        <div style="font-size:11px;color:var(--mut);margin-top:2px;">${fmtCtxTier(p.context_window)} · 思考:${esc((p.model_params&&(p.model_params.thinking_level||p.model_params.thinking_mode))||'模型默认')}</div></td>
+      <td style="font-size:12.5px;">${esc(p.model_name)}</td>
       <td><label class="sw" title="设为该类型（对话/向量）的默认模型"><input type="checkbox" ${p.is_default===1?'checked':''} onchange="toggleLLMDefault(${p.id},this.checked)"><span class="sl"></span></label></td>
       <td>${disabled?'<span class="st g">停用</span>':'<span class="st ok">启用</span>'}</td>
       <td style="white-space:nowrap;"><button class="btn sm ghost" onclick="editLLM(${p.id})">编辑</button>
@@ -1544,7 +1651,7 @@ function addLLM() {
   showModal('llm');
   document.getElementById('f-edit-llm').value = '';
   document.getElementById('llm-modal-title').innerText = '添加模型';
-  ['f-name','f-url','f-key','f-model','f-tags'].forEach(i=>{const el=document.getElementById(i); if(el) el.value='';});
+  ['f-name','f-url','f-key','f-model','f-tags','f-desc'].forEach(i=>{const el=document.getElementById(i); if(el) el.value='';});
   setVisionCheckbox(false);
   document.getElementById('f-model-type').value = 'chat';
   const dcb = document.getElementById('f-is-default');
@@ -1557,10 +1664,86 @@ function addLLM() {
   document.getElementById('f-budget').value = 0;
   document.getElementById('f-top-p').value = '';
   document.getElementById('f-top-k').value = '';
-  const tr = document.querySelector('input[name="f-thinking"][value="模型默认"]'); if(tr) tr.checked = true;
+  setThinkingControl('tier');       // 默认按挡位（细粒度），用户可切按开关
+  setThinkingLevel('模型默认');
+  syncCtxTier(8192);
   const k = document.getElementById('f-key'); if(k) k.disabled = false;
   const kh = document.getElementById('f-key-hint'); if(kh) kh.style.display = 'none';
   onLLMTypeChange();
+}
+
+// ── 上下文档位 ↔ 数字输入 双向同步（2026-10-31）────────────────────────────
+// 单一事实源 = #f-ctx（数字）。档位下拉只是"快捷赋值 + 回显"，不参与保存，
+// 避免出现"下拉显示 1M，实际存 8192"的双事实源错位。
+function onCtxTierChange(){
+  const t = document.getElementById('f-ctx-tier');
+  if(!t || t.value === 'custom') return;      // 自定义：不动数字框，让用户自己填
+  const v = parseInt(t.value, 10);
+  const ctx = document.getElementById('f-ctx');
+  if(Number.isFinite(v) && ctx){
+    ctx.value = v;
+    // 输出上限保持 ≤ 输入：原先可能因为换小档位而变成非法（mt > cw ⇒ 保存被拦）
+    const mt = document.getElementById('f-maxt');
+    if(mt && (parseInt(mt.value,10)||0) > v) mt.value = Math.min(v, 8192);
+  }
+}
+function syncCtxTier(n){
+  const t = document.getElementById('f-ctx-tier');
+  if(!t) return;
+  const v = String(parseInt(n,10)||0);
+  const hit = Array.from(t.options).some(o=>o.value === v);
+  t.value = hit ? v : 'custom';
+}
+// ── 思考控制方式（2026-11-01 新增）──────────────────────────────────────────
+// 两套粒度：
+//   tier   = 按挡位：模型默认 / 关闭 / 低 / 中 / 高（细粒度，能控思考预算）
+//   toggle = 按开关：模型默认 / 开启 / 关闭（与多数厂商控制台一致，不涉及预算）
+// 为什么要做模型级开关（而不是全局只留一种）：
+//   不同厂商对"思考"的暴露程度不同 —— 有的只有 enable/disable，有的支持 token 预算。
+//   由用户按模型选择粒度，会话入口就按该粒度展示，避免"给 5 档但底层只认开关"的错位。
+function getThinkingControl(){
+  return document.querySelector('input[name="f-thinking-control"]:checked')?.value || 'tier';
+}
+function setThinkingControl(v){
+  const el = document.querySelector(`input[name="f-thinking-control"][value="${v||'tier'}"]`);
+  if(el) el.checked = true;
+  onThinkControlChange();
+}
+const _THINK_BY_CONTROL = {
+  tier:   { levels: ['模型默认','关闭','低','中','高'],
+            hint: '预算参考：低 1024 · 中 4096 · 高 8192 tokens（思考与正文共享输出上限，给思考的额度越多，留给正文的越少）' },
+  toggle: { levels: ['模型默认','开启','关闭'],
+            hint: '按开关模式：只下发 开启 / 关闭，不控制思考预算。适合厂商只支持两态、或希望行为与厂商控制台完全一致的场景。' },
+};
+function renderThinkLevels(keep){
+  const box = document.getElementById('f-think-levels');
+  const hint = document.getElementById('f-think-hint');
+  if(!box) return;
+  const ctl = getThinkingControl();
+  const cfg = _THINK_BY_CONTROL[ctl] || _THINK_BY_CONTROL.tier;
+  // keep 优先（编辑回填时不丢当前值）；否则沿用已选值；再否则「模型默认」
+  const cur = keep || document.querySelector('input[name="f-thinking-level"]:checked')?.value || '模型默认';
+  const val = cfg.levels.includes(cur) ? cur : '模型默认';
+  box.innerHTML = cfg.levels.map(v=>
+    `<label style="display:flex;align-items:center;gap:4px;font-size:13.5px;font-weight:400;margin:0;cursor:pointer;">`
+    + `<input type="radio" name="f-thinking-level" value="${v}" ${v===val?'checked':''} style="width:auto;"> ${v}</label>`
+  ).join('');
+  if(hint) hint.textContent = cfg.hint;
+}
+function onThinkControlChange(){ renderThinkLevels(); }
+function setThinkingLevel(level){
+  const v = level || '模型默认';
+  // 先按目标值决定控制方式：「开启」只有 toggle 才有；低/中/高 只有 tier 才有。
+  // 顺序必须先切控制方式再渲染 —— 否则在 tier 模式下选「开启」匹配不到，
+  // 会静默回落成「模型默认」（用户看到"保存了但变回默认"）。
+  if(v === '开启') setThinkingControl('toggle');
+  else if(['低','中','高'].includes(v)) setThinkingControl('tier');
+  else renderThinkLevels(v);        // 模型默认/关闭：两种粒度都有，只按当前粒度渲染
+  const el = document.querySelector(`input[name="f-thinking-level"][value="${v}"]`);
+  if(el) el.checked = true;
+}
+function getThinkingLevel(){
+  return document.querySelector('input[name="f-thinking-level"]:checked')?.value || '模型默认';
 }
 async function editLLM(id) {
   const items = await api('/api/llm/providers');
@@ -1580,15 +1763,35 @@ async function editLLM(id) {
   document.getElementById('f-maxt').value = p.max_tokens || 8192;
   document.getElementById('f-temp').value = p.temperature ?? 0.3;
   document.getElementById('f-tags').value = (p.tags||[]).join(', ');
+  const _d = document.getElementById('f-desc'); if(_d) _d.value = p.description || '';
   setVisionCheckbox(hasVisionTag(p));
   document.getElementById('f-priority').value = p.priority || 0;
   document.getElementById('f-budget').value = p.budget_tokens || 0;
-  // 高级设置回填（上下文输入/输出、温度、TopP、TopK、思考模式）
+  // 高级设置回填（上下文档位、思考强度、温度、TopP、TopK）
   const mp = p.model_params || {};
   document.getElementById('f-top-p').value = (mp.top_p ?? '');
   document.getElementById('f-top-k').value = (mp.top_k ?? '');
-  const tr = document.querySelector('input[name="f-thinking"][value="' + (mp.thinking_mode||'模型默认') + '"]');
-  if(tr) tr.checked = true;
+  syncCtxTier(p.context_window || 8192);
+  // 思考控制方式回填：新字段 thinking_control；老数据没有该字段时按值推断 ——
+  //   有 thinking_level 且是 低/中/高 ⇒ tier；否则看 thinking_mode：
+  //     '开启' 且无 level ⇒ toggle（用户本来就只有开关语义，别擅自升级成挡位）
+  let _ctl = mp.thinking_control;
+  if(!_ctl){
+    if(['低','中','高'].includes(mp.thinking_level)) _ctl = 'tier';
+    else if(mp.thinking_mode === '开启' && !mp.thinking_level) _ctl = 'toggle';
+    else _ctl = 'tier';
+  }
+  // 思考强度回填：优先 thinking_level；老数据只有 thinking_mode 时做兼容映射
+  let _lv = mp.thinking_level;
+  if(!_lv){
+    if(mp.thinking_mode === '关闭') _lv = '关闭';
+    else if(mp.thinking_mode === '开启') _lv = '开启';   // toggle 语义，不再擅自映射成「中」
+    else _lv = '模型默认';
+  }
+  // ⚠️ 顺序：先 setThinkingControl 会触发一次渲染，再由 setThinkingLevel 覆盖为正确值。
+  //    不要反过来（先 level 后 control 会把 level 重置掉 —— 典型的"回填丢失"）。
+  setThinkingControl(_ctl);
+  setThinkingLevel(_lv);
   // 密钥：已配置 → 默认展示点点且不可编辑修改（保存时也不回传）；未配置 → 可填写
   const k = document.getElementById('f-key');
   const kh = document.getElementById('f-key-hint');
@@ -1622,12 +1825,17 @@ async function saveLLM() {
     if(!Number.isInteger(tk) || tk < 1 || tk > 100){ toast('TopK 需为 1~100 的整数'); return; }
     topK = tk;
   }
-  const thinking_mode = document.querySelector('input[name="f-thinking"]:checked')?.value || '模型默认';
+  const level = getThinkingLevel();                 // 模型默认 | 开启 | 关闭 | 低 | 中 | 高
+  const control = getThinkingControl();             // tier(挡位) | toggle(开关)
+  // thinking_mode 保持三态写入（**兼容**：后端旧链路仍读它，且历史数据/其他面板依赖该字段）
+  // thinking_level 是新字段（后端优先消费），二者由同一选择推导，不会互相矛盾。
+  const thinking_mode = level === '关闭' ? '关闭' : (level === '模型默认' ? '模型默认' : '开启');
   const body = {
     name, base_url, api_key, model_name, model_type, context_window, is_default,
     provider_type: document.getElementById('f-ptype').value || 'openai',
     max_tokens, temperature,
     tags: composeTagsFromForm(),
+    description: (document.getElementById('f-desc')?.value || '').trim(),
     priority: parseInt(document.getElementById('f-priority').value)||0,
     budget_tokens: parseInt(document.getElementById('f-budget').value)||0,
   };
@@ -1639,9 +1847,12 @@ async function saveLLM() {
     const r = await api('/api/llm/providers', {method:'POST', body:JSON.stringify(body)});
     savedId = r.id || '';
   }
-  // 高级参数（top_p/top_k/thinking_mode）落库 model_params
-  if(savedId) await api(`/api/llm/providers/${savedId}/params`, {method:'PATCH', body:JSON.stringify({model_params:{top_p:topP, top_k:topK, thinking_mode}})});
+  // 高级参数（top_p/top_k/thinking_mode/thinking_level）落库 model_params
+  if(savedId) await api(`/api/llm/providers/${savedId}/params`, {method:'PATCH', body:JSON.stringify({model_params:{top_p:topP, top_k:topK, thinking_mode, thinking_level:level, thinking_control:control}})});
   closeModal(); toast(id ? '已保存' : '已添加'); loadLLMProviders(); loadHome();
+  // 会话入口的模型切换面板与本表同源（都读 /api/llm/providers）⇒ 改完必须同步刷新，
+  // 否则"改了描述但入口列表还是旧的"（双份缓存不同步的典型症状）。
+  try{ if(typeof loadChatProviders === 'function') loadChatProviders(); }catch(e){}
 }
 async function testLLM(id) {
   const r = await api(`/api/llm/providers/${id}/test`, {method:'POST'});

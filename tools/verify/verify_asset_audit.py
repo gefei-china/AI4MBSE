@@ -259,7 +259,7 @@ def main():
 
     # ── D. 真库只读 smoke（迁移幂等建表；CI 无库 ⇒ SKIP）─────────────
     print("\n== D. 真库迁移 smoke（备份 + 幂等建表 + 索引）==")
-    _prod = os.path.join(ROOT, "mbse.db")
+    _prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     if not os.path.exists(_prod):
         skip("D1-D3 真库断言", "CI 环境无 mbse.db（干净库口径）⇒ 判据面不存在")
     else:

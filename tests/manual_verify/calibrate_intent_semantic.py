@@ -37,7 +37,7 @@ import os
 import sys
 from contextlib import redirect_stdout
 
-ROOT = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system"
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 

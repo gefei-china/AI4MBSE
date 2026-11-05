@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。需 checker.jar（126MB 随包运行时，.gitignore 排除）⇒ CI 上 verdict=unavailable
 """verify_checker_diag_encoding —门禁：校验器诊断里的**中文不得乱码**。
 
 ## 为什么需要这道门禁（2026-10-09 实测）

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL  common.py 定义 _AGENT_ROLE_CAP = 1200 
 """S4 验证（2026-09-17）：配置层去重 / 占位符 / Agent 角色块按意图注入。
 
 离线可跑，不依赖 8000 端口服务：

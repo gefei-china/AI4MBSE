@@ -315,7 +315,7 @@ class ProjectRepo(BaseRepo):
         return self.one("SELECT * FROM project_memories WHERE id=?", (mem_id,))
 
     def create_project_memory(self, project_id: str, category: str, title: str,
-                              content: str, created_by: str = "王工") -> int:
+                              content: str, created_by: str = "未登录") -> int:
         return self.execute(
             "INSERT INTO project_memories (project_id, category, title, content, created_by) "
             "VALUES (?,?,?,?,?)",

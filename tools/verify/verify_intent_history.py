@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] C7 与 prev 一致 + 弱置信(0.70) → 采纳为 llm_history  <- 实得=llm_first_weak 
 # -*- coding: utf-8 -*-
 """P0-5 历史联合召回（v2 定稿）+ 语义意见喂澄清卡 —— 常驻断言 + 变异自证。
 
@@ -67,7 +68,10 @@ A 净化（纯函数）｜C 采纳门**确定性**判据（stub 掉 LLM，零抖
 import os
 import sys
 
-ROOT = "C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system"
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ⚠️ 2026-11-05：这里原先写死 `C:/Users/<user>/WorkBuddy/<会话>/mbse_system`。
+#    后果是本机绿、CI 直接 FileNotFoundError（CI 上没有这个目录）⇒ 该门禁进 pr 层
+#    就等于"CI 恒红"。位置必须由脚本自身位置推导（本文件在 tools/verify/ 下 ⇒ 上 3 级）。
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 

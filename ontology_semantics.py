@@ -547,7 +547,7 @@ class GraphStore:
         self.validator = OntologyValidator(conn)
 
     def create_node(self, node_id, name, entity_type, props, branch="dev", x=0, y=0,
-                    knowledge_category="", source_doc="", source_type="manual", created_by="王工"):
+                    knowledge_category="", source_doc="", source_type="manual", created_by="未登录"):
         """创建节点（先过本体校验）。返回 (ok, errors|node_id)。
 
         版本化语义：同 id 允许在**不同分支**分别创建版本行（支撑 dev fork），
@@ -605,7 +605,7 @@ class GraphStore:
                 n.get("x", 0), n.get("y", 0),
                 source_doc=n.get("source_doc", ""),
                 source_type=n.get("source_type", "manual"),
-                created_by=n.get("created_by", "王工"))
+                created_by=n.get("created_by", "未登录"))
             if ok:
                 created.append(res)
             else:

@@ -131,7 +131,7 @@ def find_similar(conn, content: bytes) -> dict:
 
 
 def ingest_artifact(conn, artifact_id: int, knowledge_category: str = "",
-                    actor: str = "王工", override: bool = False) -> dict:
+                    actor: str = "未登录", override: bool = False) -> dict:
     """收编主流程。返回 {ok, doc_id, chunk_count, category, superseded[], similar?}；
     查重命中且未 override → {ok: False, needs_confirm: True, similar...}。"""
     from repositories.artifact_repo import ArtifactRepo

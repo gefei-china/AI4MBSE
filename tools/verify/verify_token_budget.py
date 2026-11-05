@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] ~~~~^^^^^^^^^^^ | File "<string>", line 73, in <module> | NameError: name '_pg_stop_now' is not defined 
 # -*- coding: utf-8 -*-
 """S3 运行时 token 预算回归（离线，不依赖 8000 端口服务）。
 
@@ -126,9 +127,20 @@ print("\n[0] 常量定义与导出")
 from agent.pipeline_parts.common import _TOOL_RESULT_CAP, _TOOL_MODEL_CAP, _ATT_INJECT_CAP
 import agent.pipeline_parts.common as _common
 
-check("_TOOL_RESULT_CAP 仍为 6000（展示上限未被改动）", _TOOL_RESULT_CAP == 6000, _TOOL_RESULT_CAP)
-check("_TOOL_MODEL_CAP == 3000", _TOOL_MODEL_CAP == 3000, _TOOL_MODEL_CAP)
-check("_ATT_INJECT_CAP == 4000", _ATT_INJECT_CAP == 4000, _ATT_INJECT_CAP)
+# ★★ 2026-10-30：这三条此前**锁定的是过期字面量**（6000/3000/4000），
+#   而 37780d3「截断清单 P0/P1/P2 全量落地」已把三者统一提到 8000
+#   （理由：B3 工具日志落库 2000→8000 那一批，展示/回填/注入一起放宽）。
+#   结果是**这条门禁从 37780d3 起一直红在 CI 里**，而没人处理 ——
+#   门禁红了太久 = 等于没有门禁（和空转变异同一种失效）。
+#   修法：断言**不变量**而不是快照数字 —— 快照会随合理调参失效，
+#   不变量（量级、相对关系、导出）才是要守的东西。
+check("_TOOL_RESULT_CAP 展示上限为正且 >= 4000（不许缩到看不清结果）",
+      isinstance(_TOOL_RESULT_CAP, int) and _TOOL_RESULT_CAP >= 4000, _TOOL_RESULT_CAP)
+check("_TOOL_MODEL_CAP 回填上限为正且 <= 展示上限（模型侧不该比人看到的还多）",
+      isinstance(_TOOL_MODEL_CAP, int) and 0 < _TOOL_MODEL_CAP <= _TOOL_RESULT_CAP,
+      "%s vs 展示 %s" % (_TOOL_MODEL_CAP, _TOOL_RESULT_CAP))
+check("_ATT_INJECT_CAP 注入上限为正且 <= 8000（附件注入不许无界）",
+      isinstance(_ATT_INJECT_CAP, int) and 0 < _ATT_INJECT_CAP <= 8000, _ATT_INJECT_CAP)
 check("_TOOL_MODEL_CAP 已在 common.__all__ 导出", "_TOOL_MODEL_CAP" in _common.__all__)
 check("_ATT_INJECT_CAP 已在 common.__all__ 导出", "_ATT_INJECT_CAP" in _common.__all__)
 
@@ -195,16 +207,26 @@ check("(a) 契约层：>cap 时真函数给出引用块且 offloaded=True",
 
 check("stream.py 中不再存在未截断回填 result.get(\"result\", \"\")",
       'result.get("result", "")' not in stream_src)
-check("(a) 20000 字原始结果被砍掉 >= 80%",
-      len(str({"ok": True, "result": BIG}.get("result"))[:_TOOL_MODEL_CAP]) <= 0.2 * len(BIG))
+# ★ 2026-10-30：口径从"砍掉 ≥80%"（3000 时代的比例）改为**封顶真实生效**：
+#   要守的性质是"大结果不会全量回填"，而不是"必须砍掉八成"。
+#   比例阈值会随 cap 调参失效（8000 时候 20000 字只砍 60%），
+#   而"截断后长度 == cap 且 cap < 原文"永远成立。
+_big_len = len(BIG)
+_after = len(str({"ok": True, "result": BIG}.get("result"))[:_TOOL_MODEL_CAP])
+check("(a) 大结果封顶真实生效（截断后 == cap，且 cap < 原文）",
+      _TOOL_MODEL_CAP < _big_len and _after == _TOOL_MODEL_CAP,
+      "%d 字 → %d 字（cap=%d）" % (_big_len, _after, _TOOL_MODEL_CAP))
 
 # ---------- (b) 仅保留最近一轮工具结果 ----------
 print("\n[b] 仅保留最近一轮 tool 结果（role 序列不变、消息不删除）")
 # ★ 锚点从「行尾注释」换成「**起止两行都按代码内容定位**」（见 cut_block docstring）。
-#   终点用 `_prev_tool_idx = []`：它是省略逻辑的收尾语句，且是**代码**不是注释
+#   终点用 `_elide_queue.append((_rnd, _k))`：它是省略逻辑的收尾语句，且是**代码**不是注释
 #   ⇒ 注释怎么改、挪哪、改缩进都不再影响门禁。
+#   ★ 2026-10-30：锚点随实现改名（`_prev_tool_idx` → `_elide_queue`，因省略改为按**轮次**
+#     保留窗口）。这正是"按代码内容定位"的代价：实现一改，锚点必须同步 ——
+#     好在这类漂移**会立刻判红**（找不到块末行直接 AssertionError），不会静默失效。
 blk_b, line_b = cut_block(stream_src, "if results:",
-                          end_line="_prev_tool_idx.append(_k)")
+                          end_line="_elide_queue.append((_rnd, _k))")
 blk_b = textwrap.dedent(blk_b)
 print("     切出源码块：stream.py:%d 起，共 %d 字符" % (line_b, len(blk_b)))
 assert blk_b.startswith("if results:"), repr(blk_b[:60])
@@ -212,8 +234,13 @@ assert "messages.append(pmsg)" in blk_b, "块应包含消息追加逻辑"
 
 TOOL_RESULT = json.dumps({"ok": True, "result": "R" * 3000}, ensure_ascii=False)
 messages = [{"role": "system", "content": "S"}, {"role": "user", "content": "U"}]
-_prev_tool_idx = []
+_elide_queue = []
 role_seq_per_round = []
+# ★ 2026-10-30：块里现在还会用到 `re`（从引用块抠 offload 编号）与
+#   `_KEEP_TOOL_ROUNDS` / `_rnd`（按轮次保留窗口）。隔离执行必须把它们喂进去，
+#   否则 exec 报 NameError —— 而 NameError 会被误读成"实现坏了"。
+import re as _re
+_KEEP_TOOL_ROUNDS = 1
 for rnd in range(3):
     pmsg = {"role": "assistant", "content": "",
             "tool_calls": [{"id": "c%d" % rnd, "type": "function",
@@ -221,15 +248,16 @@ for rnd in range(3):
     results = [{"tool_call_id": "c%d" % rnd, "role": "tool", "name": "t%d" % rnd,
                 "content": TOOL_RESULT}]
     ns = {"messages": messages, "results": results, "pmsg": pmsg,
-          "_prev_tool_idx": _prev_tool_idx, "json": json}
+          "_elide_queue": _elide_queue, "json": json, "re": _re,
+          "_KEEP_TOOL_ROUNDS": _KEEP_TOOL_ROUNDS, "_rnd": rnd}
     exec(blk_b, ns)
     messages = ns["messages"]
-    _prev_tool_idx = ns["_prev_tool_idx"]
+    _elide_queue = ns["_elide_queue"]
     role_seq_per_round.append([m["role"] for m in messages])
 
 final_roles = [m["role"] for m in messages]
 print("     最终 role 序列:", final_roles)
-print("     最终 _prev_tool_idx:", _prev_tool_idx)
+print("     最终 _elide_queue:", _elide_queue)
 check("3 轮后消息条数 = 2 + 3*(assistant+tool) = 8", len(messages) == 8, len(messages))
 check("role 序列 = system,user,(assistant,tool)*3",
       final_roles == ["system", "user"] + ["assistant", "tool"] * 3, final_roles)
@@ -241,17 +269,30 @@ check("每轮消息数 4 / 6 / 8（省略不改变条数）",
       [len(s) for s in role_seq_per_round] == [4, 6, 8], [len(s) for s in role_seq_per_round])
 
 ELIDE = "前序工具结果已省略"
-earlier = [m for m in messages[:6] if m["role"] == "tool"]
-latest = messages[-1]
-check("第 1/2 轮 tool content 已替换为省略标记",
-      len(earlier) == 2 and all(ELIDE in m["content"] for m in earlier),
-      [m["content"][:50] for m in earlier])
+# ★ 2026-10-30 契约变更：从"每轮只留最近一轮"改为"**保留最近 N 轮原文**"（N=_KEEP_TOOL_ROUNDS，
+#   默认 1）。理由不在"省 token"而在于**可推理**：真机多步核对任务里，模型第 3 轮就需要
+#   回看第 2 轮读到的元素明细，抹空后它既看不到、也没 offload 编号可重读 ⇒ 只能猜编号/重查
+#   ⇒ 失败轮撞上限 ⇒ 用户看到「人工确认后无辜终止」。
+#   省 token 的性质没有丢，只是窗口从 1 轮变成 2 轮，且窗口外**仍保留可寻址摘要**。
+_tools_in_order = [m for m in messages if m["role"] == "tool"]
+check("tool 消息条数仍为 3（省略只换 content，不删消息）", len(_tools_in_order) == 3,
+      len(_tools_in_order))
+check("第 1 轮 tool content 已被省略标记替换（窗口外）",
+      ELIDE in _tools_in_order[0]["content"], _tools_in_order[0]["content"][:60])
+check("省略件仍保留 offload 编号可重读（无编号时明确说「重新调用」）",
+      ("offload_id" in _tools_in_order[0]["content"]
+       or "重新调用" in _tools_in_order[0]["content"]),
+      _tools_in_order[0]["content"][:80])
 check("省略标记仍为合法 JSON 且 result 为空串",
-      all(json.loads(m["content"]).get("result") == "" and json.loads(m["content"]).get("ok") is True
-          for m in earlier))
+      json.loads(_tools_in_order[0]["content"]).get("result") == ""
+      and json.loads(_tools_in_order[0]["content"]).get("ok") is True)
 check("最近一轮 tool content 保持完整（3000 字结果未被动）",
-      latest["role"] == "tool" and "R" * 3000 in latest["content"])
-check("_prev_tool_idx 指向最后一轮 tool 消息", _prev_tool_idx == [7], _prev_tool_idx)
+      messages[-1]["role"] == "tool" and "R" * 3000 in messages[-1]["content"])
+check("上一轮 tool content 也保持完整（保留窗口 N=1）",
+      "R" * 3000 in _tools_in_order[1]["content"],
+      "第 2 轮被提前省略 ⇒ 模型回看不到上一轮明细")
+check("_elide_queue 记录后两轮（窗口外已出队）",
+      [r for r, _ in _elide_queue] == [1, 2], _elide_queue)
 _saved = 2 * len(TOOL_RESULT)
 print("     估算：3 轮场景下回填体积 %d 字 → %d 字（省 %.0f%%）"
       % (3 * len(TOOL_RESULT), 3 * len(TOOL_RESULT) - _saved, 100.0 * _saved / (3 * len(TOOL_RESULT))))

@@ -112,14 +112,26 @@ def _now():
 
 # ────────────────────────── 工具 ──────────────────────────
 
+#: 与「类型名」同名的 slug 是退化产物，不是有意义的标识（见 _slug 注释）
+_DEGENERATE_SLUGS = {"skill", "tool", "mcp", "agent", "prompt"}
+
+
 def _slug(name, rid, kind):
     """旧表名 → plugins.name（须匹配 ^[a-z][a-z0-9-]{0,63}$）。
 
     中文名 ASCII 化后会退化成空串，此时用 `<kind>-<id>` 兜底（与迁移脚本一致）。
+
+    ★ 2026-10-30 补一条退化判据：**slug 恰好等于某个类型名**时同样兜底。
+      实测：`智源MCP工具手册` → 去掉非 ASCII 只剩 `mcp`（长度 3，能过旧判据）
+      ⇒ 生成的 plugin_id 是 `com.mbse.local.skill.mcp`、`plugins.name='mcp'`。
+      后果不只是难看：能力中心卡片标题取 `plugins.name`，用户看到的是一张叫
+      **「mcp」** 的卡片 —— 等于"这个技能在页面上不存在"（本轮实际投诉）。
+      判据取「等于类型名」而不是「长度太短」：`mcp` 作为某个 MCP server 的 slug
+      是合理的，作为 **skill** 的 slug 才是退化 —— 只有与自身 kind 同族才兜底。
     """
     s = re.sub(r"[^a-z0-9-]+", "-", str(name or "").lower()).strip("-")
     s = re.sub(r"-{2,}", "-", s)
-    if len(s) < 3 or s == kind or not re.match(r"^[a-z]", s):
+    if len(s) < 3 or s in _DEGENERATE_SLUGS or not re.match(r"^[a-z]", s):
         s = "%s-%s" % (kind, rid)
     return s[:60]
 

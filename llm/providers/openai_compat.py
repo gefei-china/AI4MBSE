@@ -37,22 +37,46 @@ _INLINE_MARKERS = (r"DSML", r"tool_call", r"TOOL_CALL")
 _RE_INVOKE = re.compile(
     r"invoke\s+name\s*=\s*[\"']([^\"']+)[\"']", re.I)
 #: `... parameter name="xxx" [string="true"]>值<｜｜DSML｜｜ parameter>`
-#: ★ 实测 deepseek-v4-flash 的真实格式（2026-10-09 从库里捞的原文）：
-#:   `<｜｜DSML｜｜ parameter name="code" string="true">package ...<｜｜DSML｜｜ parameter>`
-#:   ⇒ 结束标记带**词**（parameter / invoke / calls），且用**全角** `｜`
-#:   ⇒ 不能用半角 `\|`；也不能只匹配 `>`（会一路吃到下一个标记）。
+#: ★ 2026-11-01 重写：旧版是"参数值 + 精确匹配结束标签"的紧耦合写法，
+#:   实测在真实输出上**完全匹配不到**（参数全丢，`arguments` 退化成 `{}`）。
+#:   真实样本（会话 9911 / msg 3056 原文）：
+#:     `<｜｜DSML｜｜ parameter name="path" string="true">C:\...\mbse_system</｜｜DSML｜｜ parameter>`
+#:   新写法：值取到**下一个 DSML 标记之前**（lookahead），不依赖结束标签的具体词。
+#:   好处：`parameter`/`invoke`/`calls` 哪种收尾都能正确截断，且不会越界吃进下一个参数。
 _RE_PARAM = re.compile(
-    r"parameter\s+name\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)"
-    r"<[｜|]{2}\s*DSML\s*[｜|]{2}\s*parameter\s*>",
+    r'parameter\s+name\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)'
+    r'(?=\s*</?\s*[|｜]{1,3}\s*DSML|\Z)',
     re.I | re.S)
 
-#: 剥标记语言：`<｜｜DSML｜｜ ... >` 与 `<｜｜DSML｜｜ ... />`
-_RE_STRIP_MARKUP = re.compile(
-    r"<[｜|]{2}\s*DSML\s*[｜|]{2}[^>]*?>[\s\S]*?"
-    r"<[｜|]{2}\s*DSML\s*[｜|]{2}\s*(?:parameter|invoke|calls"
-    r"|endinvoke|endcalls|end_calls)\s*>"
-    r"|<[｜|]{2}\s*DSML\s*[｜|]{2}[^>]*/>",
+#: 删标记：**成对**标签（开始+结束）整段删除。
+#: 为什么用"删一对、循环"而不是一次性贪婪替换：
+#:   贪婪会把两个工具调用之间的**正文**一起吃掉（用户正常回答被抹掉），
+#:   非贪婪只删到第一个结束标签，剩下的孤立闭合标签会残留成乱码。
+#:   ⇒ 循环非贪婪 + 兜底删孤立标签，既删干净又不误伤正文。
+_RE_TAG_PAIR = re.compile(
+    r'<\s*[|｜]{1,3}\s*DSML\s*[|｜]{1,3}[^>]*>[\s\S]*?'
+    r'</\s*[|｜]{1,3}\s*DSML\s*[|｜]{1,3}[^>]*>',
     re.I)
+#: 孤立/未配对标签（含自闭合 `<.../>` 与残留的 `</...>`）
+_RE_TAG_SOLO = re.compile(
+    r'<\s*/?\s*[|｜]{1,3}\s*DSML\s*[|｜]{1,3}[^>]*/?>',
+    re.I)
+
+
+def _strip_inline_markup(text: str) -> str:
+    """把模型漏进正文的 DSML 工具调用标记清理干净（保留正文）。
+
+    实测危害（会话 9911 真实输出）：模型输出了
+        `<｜｜DSML｜｜ calls> ... <｜｜DSML｜｜ invoke name="file_list"> ...`
+    而旧实现剥不干净 ⇒ **用户直接看到这一串标记**，同时参数丢失导致工具白调。
+    """
+    prev, out = None, (text or "")
+    for _ in range(20):                    # 上限防死循环；实测 ≤3 次即收敛
+        if out == prev:
+            break
+        prev = out
+        out = _RE_TAG_PAIR.sub("", out)
+    return _RE_TAG_SOLO.sub("", out).strip()
 
 
 def _salvage_inline_tool_calls(data: dict):
@@ -97,7 +121,7 @@ def _salvage_inline_tool_calls(data: dict):
             return None
 
         # 把标记语言从 content 里剥掉，剩余文本仍作为正文（若有）
-        cleaned = _RE_STRIP_MARKUP.sub("", content).strip()
+        cleaned = _strip_inline_markup(content)
         new = dict(data)
         new["choices"] = [dict(choices[0])]
         new["choices"][0] = dict(choices[0])
@@ -288,6 +312,249 @@ def _decide_by_shape(*, has_tools: bool, max_tokens: int, messages,
     return None
 
 
+# ── 2026-10-31 思考强度档位（五档，per-model 配置）───────────────────────────
+# 为什么在 `thinking_mode` 三态之外再加一层：
+#   `thinking_mode`（模型默认/开启/关闭）只能表达"开不开"，**表达不了"开多大"**。
+#   而推理模型的思考与正文**共享 max_tokens** —— 实测思考占比 63%~99.2%，
+#   控制不住强度就等于控制不住成本与耗时（541s 超时、用户只拿到 103 token）。
+#   ⇒ 新增 `thinking_level` 五档，把"开"细化为可量化的预算。
+#
+# 档位 → 预算（tokens）与厂商无关的抽象语义：
+#   "模型默认" = **不表态**（不发任何思考字段，= 改动前行为，零漂移）
+#   "关闭"     = 显式关闭（**必须真发 disabled**，否则模型按默认开思考）
+#   "低"       = 1024    适合：分类/抽取/探针，要求快
+#   "中"       = 4096    适合：常规问答、单步工具决策
+#   "高"       = 8192    适合：建模、代码生成、多步规划（默认推荐给重产码任务）
+# 预算 0 表示"不发 budget 字段"（部分厂商不支持显式预算，只能用 enabled/effort）。
+_THINK_LEVELS = {
+    "低":   1024,
+    "中":   4096,
+    "高":   8192,
+    "极高": 16384,
+}
+# 各厂商 `thinking` 字段形态不同，**发错字段上游直接 400**（不是被忽略），
+# 故按「家族」严格分流；识别不出来就退回 DeepSeek/Anthropic 那套 `{"type":...}`（= 旧行为）。
+_FAMILY_OPENAI_REASONING = ("o1", "o3", "o4", "gpt-5")   # 用 reasoning_effort
+_FAMILY_QWEN_DASHSCOPE = ("qwen",)                        # 用 enable_thinking + thinking_budget
+
+# ── 2026-10-31 实测：哪些家族**真的**认预算（决定要不要发 budget 字段）───────────
+# 这不是保守起见，是**实测结论**（deepseek-v4-flash，provider 71，3 次重复）：
+#   budget_tokens 取 256/1024/4096/8192，reasoning_tokens 分别 58/167/69/64
+#   ⇒ **与预算无单调关系，纯噪声**；`reasoning_effort`（minimal~high）同样 53/73/65/86 无效。
+#   只有 `thinking:{type:disabled}` 真实把 reasoning 压到 0（耗时 1.9s→0.7s）。
+#   ⇒ 对这类家族，**低/中/高 三档在 API 层无法区分**。若仍假装发了预算，
+#     就是"配了不生效"——本仓最忌讳的那类静默失效。
+#   故：`budget_honored=False` 的家族不发 budget 字段，改走**提示词放大**（实测有效，见下），
+#       并把实际生效方式写进 `_meta`，让"这档到底有没有用"可审计。
+_BUDGET_HONORED = {
+    "qwen": True,        # DashScope 文档支持 thinking_budget
+    "anthropic": True,   # 原生 budget_tokens
+    "openai": True,      # 走 reasoning_effort（离散档，非 token 预算，但真实生效）
+    "deepseek": False,   # ★ 实测忽略（见上）
+    "generic": False,    # 未知端点，不发不认的字段
+}
+
+# ── 高思考档的「提示词放大」（仅在 API 无预算能力时使用）───────────────────────
+# 实测（deepseek-v4-flash，3 次重复，同一道算术题）：
+#   无提示    : reasoning 均值  65、耗时 1.84s、completion 240
+#   简短提示  : reasoning 均值  73、耗时 1.82s   ← **压不下去**（与基线无差异）
+#   深度提示  : reasoning 均值 210、耗时 4.46s、completion 703   ← **3.2×**
+#   ⇒ 提示词对思考是**单边有效**：只能放大、不能压缩。
+#   所以：高 档用它加强；低 档**不承诺**能压低（只靠预算模型，无预算就如实标注"未生效"）。
+_THINK_DEEP_HINT = (
+    "【思考强度：高】请在给出结论前充分推理：先列出至少两种可能的解题路径，"
+    "逐一排除不成立的，再换一种方式验算一遍确认结果一致；不要跳步。"
+)
+_THINK_BRIEF_HINT = (
+    "【思考强度：低】本题从简处理：不要反复验算、不要列举多种方案，"
+    "抓主要矛盾直接给出结论，并只用一两句话说明依据。"
+)
+
+
+def thinking_capability(cfg) -> dict:
+    """该模型对「思考强度」的支持能力 —— 供**界面**决定能否设、怎么提示。
+
+    ★ 为什么能力判定必须放在**这一层**（而不是前端按名字猜、或路由里另写一份）：
+      本仓已多次因"同一语义多处各写一份"出错。思考字段的形态与有效性
+      完全由这里的 `_provider_family` / `_BUDGET_HONORED` / 实测结论决定，
+      所以能力也必须从这里出 —— 否则界面显示"可设"，而底层其实无效。
+
+    返回四态（不是简单的 bool，因为存在"能设但只有部分档真有效"的中间状态）：
+      level = "full"       四档都真实生效（有预算能力或 effort 能力）
+              "partial"    只有部分档有效（实测：deepseek 只有 关闭 100% 有效，
+                           低/高 靠提示词约 -42%/+25%，中 ≈ 默认无独立效果）
+              "unverified" 未验证：厂商识别不出（私有端点换名/代理），**允许设但明确提示**。
+                           ★ 为什么是"提示"而不是"屏蔽"（2026-10-31 实测纠正）：
+                             库里 `ds-v4-flash-neibu`（base_url=1.95.113.224:10013、
+                             model_name=`ds`）其实是 deepseek，只是识别不出；
+                             若按"不支持"屏蔽，就把一个**能用**的模型挡在门外。
+                             我们不知道 ≠ 它不支持 ⇒ 不能拿"不知道"当"不支持"。
+              "none"       确定不支持（非对话模型，无思考过程可调）⇒ 屏蔽入口
+
+    字段：
+      supported      : bool           能否设（False 时界面应屏蔽入口并提示）
+      level          : full|partial|unverified|none
+      levels         : list[str]      建议展示的档位（partial 时会剔除无效档）
+      default_level  : str            建议默认值（"模型默认"）
+      reason         : str            给用户看的一句话
+      context        : dict           上下文设置的能力（同理）
+    """
+    fam = _provider_family(cfg)
+    mtype = str(cfg.get("model_type") or "chat").lower()
+    out = {
+        "family": fam,
+        "supported": False, "level": "none", "levels": [],
+        "default_level": "模型默认", "reason": "",
+        "budget_honored": bool(_BUDGET_HONORED.get(fam, False)),
+    }
+    # ── 上下文：任何对话模型都有意义（它夹 max_tokens + 定历史预算）──
+    ctx_ok = mtype in ("chat", "multimodal")
+    out["context"] = {
+        "supported": ctx_ok,
+        "reason": "" if ctx_ok else "该模型不是对话模型，上下文设置不起作用",
+    }
+
+    if mtype not in ("chat", "multimodal"):
+        out["reason"] = "该模型不是对话模型，无思考过程可调"
+        return out
+
+    if fam == "deepseek":
+        # ★ 实测结论（provider 1/71/72，同一道题 ×3）：
+        #   关闭 → reasoning=0（100% 有效）；低 → 约 -42%；高 → 约 +25%；
+        #   中 ≈ 默认（3140 vs 3269，无显著差异）⇒ 不展示「中」，避免"选了没反应"。
+        out.update({
+            "supported": True, "level": "partial",
+            "levels": ["关闭", "低", "高"],
+            "reason": "该厂商不支持按预算控制思考深度：「关闭」完全生效，「低/高」通过提示词生效，「中」与默认无差别故不提供",
+        })
+        return out
+    if fam in ("qwen", "anthropic", "openai"):
+        out.update({
+            "supported": True, "level": "full",
+            "levels": ["关闭", "低", "中", "高"],
+            "reason": "",
+        })
+        return out
+    # generic：字段形态未知。**允许设、但明确说"未验证"**（见上面 ★ 的理由）
+    out.update({
+        "supported": True, "level": "unverified",
+        "levels": ["关闭", "低", "中", "高"],
+        "reason": "该端点未识别出厂商，思考能力未经验证：设置可能不生效（不会报错）",
+    })
+    return out
+
+
+def _provider_family(cfg) -> str:
+    """按 base_url / model_name 判定厂商家族，用于选对思考字段形态。
+
+    ★ 为什么必须先判家族再发字段（不是保险起见）：
+      `thinking` 这个键**不是 OpenAI 标准字段**。对不支持它的端点（如 OpenAI 官方），
+      多传一个未识别键会被**拒绝 400**（部分网关只忽略、部分是硬报错），
+      而本地 mock 测试永远发现不了 —— 所以宁可退回旧形态，也不猜着发。
+    """
+    try:
+        base = str(cfg.get("base_url") or "").lower()
+        model = str(cfg.get("model_name") or "").lower()
+        ptype = str(cfg.get("provider_type") or "").lower()
+    except Exception:
+        return "generic"
+    if "dashscope" in base or "aliyuncs" in base or ptype in ("qwen", "dashscope"):
+        return "qwen"
+    if model.startswith(_FAMILY_QWEN_DASHSCOPE):
+        return "qwen"
+    if "anthropic" in base or "claude" in model or ptype in ("anthropic", "claude"):
+        return "anthropic"
+    if "deepseek" in base or model.startswith("deepseek") or ptype == "deepseek":
+        return "deepseek"
+    # OpenAI 官方或 o 系/gpt-5 系：只有这些模型认 reasoning_effort
+    if model.startswith(_FAMILY_OPENAI_REASONING) or "openai.com" in base:
+        return "openai"
+    return "generic"
+
+
+def _ensure_reasoning_passthrough(messages, family: str) -> int:
+    """★ 2026-11-01：思考模式下，带 `tool_calls` 的 assistant 消息**必须显式带
+    `reasoning_content` 字段**（值可为空串），否则上游直接 400。
+
+    ## 这个 bug 是怎么被发现的
+    对话级 A/B 实测（`tools/eval/eval_inject_k_chat_ab.py`）时，
+    问题「技术要求书验收交付要求交付哪些文档」在**新会话**里连续两次
+    `POST /api/conversations/{id}/chat` 返回 **500**，服务日志为：
+
+        LLM API 400: The `reasoning_content` in the thinking mode must be
+        passed back to the API.
+
+    ## 最小复现钉死的**精确**触发条件（`tools/verify/verify_reasoning_passthrough.py`）
+
+        assistant 带 tool_calls、**缺** reasoning_content 字段  → 400   ← 就是这个
+        assistant 带 tool_calls、reasoning_content=""           → OK
+        assistant 带 tool_calls、reasoning_content="（有内容）"   → OK
+
+    ⇒ **缺字段会报错，空串不会**。所以修法是"补齐字段"而不是"删除字段"。
+
+    ## 为什么修在 provider 层，而不是逐个修调用点
+    全仓有多处调用点会自己拼 assistant 消息（`execute.py` 的续跑轮与 harness 闸、
+    `stream.py` 同构两处、workflows 等）。逐个修的问题不是麻烦，而是**会漏** ——
+    这正是本项目记过的老账（同一语义多处各写一份，迟早错位）。
+    在**唯一的出站口**（构造 payload 前）统一补齐 ⇒ 新增调用点零配置被覆盖。
+
+    ## 为什么只对 deepseek 系补
+    `reasoning_content` 不是 OpenAI 标准字段。对不认它的端点（OpenAI 官方、部分网关）
+    多传一个未识别键**可能硬报错 400** —— 与 `_provider_family` 里"先判家族再发字段"
+    是同一教训。故仅 `family == "deepseek"` 时补。
+
+    返回补齐的条数（供日志/门禁断言，0 表示无需补）。
+    """
+    if family != "deepseek" or not isinstance(messages, list):
+        return 0
+    fixed = 0
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") != "assistant":
+            continue
+        if not m.get("tool_calls"):
+            continue          # 没有 tool_calls 的 assistant 消息不需要回传推理
+        if "reasoning_content" in m:
+            continue          # 已有该字段（含空串，实测合法）⇒ 不动
+        m["reasoning_content"] = ""
+        fixed += 1
+    return fixed
+
+
+def _apply_thinking_payload(payload: dict, family: str, enabled: bool, budget: int) -> str:
+    """把「思考开关 + 预算」落到**该厂商认识的字段**上，返回实际形态名（供日志）。
+
+    - qwen（DashScope 兼容模式）：`enable_thinking` + （有预算时）`thinking_budget`
+    - openai（o 系/gpt-5）：`reasoning_effort`（low/medium/high），**不发 thinking**
+      —— 这些模型不接受 `thinking:{type}`，发了就 400
+    - anthropic / deepseek / generic：`thinking:{"type":..., "budget_tokens":N}`
+      （deepseek-v3.1+ 用 type；budget_tokens 若上游不认也仅是多余键，风险最低）
+    """
+    if family == "qwen":
+        payload["enable_thinking"] = bool(enabled)
+        if enabled and budget > 0:
+            payload["thinking_budget"] = int(budget)
+        return "qwen:enable_thinking"
+    if family == "openai":
+        # 关闭：o 系没有"关"的开关，只能给最低档（low）
+        if not enabled:
+            payload["reasoning_effort"] = "low"
+            return "openai:reasoning_effort=low"
+        effort = "high" if budget >= 8192 else ("medium" if budget >= 4096 else "low")
+        payload["reasoning_effort"] = effort
+        return "openai:reasoning_effort=%s" % effort
+    # anthropic / deepseek / generic
+    if enabled:
+        node = {"type": "enabled"}
+        if budget > 0:
+            node["budget_tokens"] = int(budget)
+        payload["thinking"] = node
+        return "thinking:enabled" + ("+budget" if budget > 0 else "")
+    payload["thinking"] = {"type": "disabled"}
+    return "thinking:disabled"
+
+
 def _warn_context_once(cfg, cw, mt, est_in, guard, why) -> None:
     """上下文额度留痕（同 provider + cw + guard 只报一次；自身异常静默，不影响调用）。
 
@@ -341,7 +608,39 @@ class OpenAICompatProvider(BaseLLM):
         model_name = model or cfg.get("model_name") or "-"
         cw = cfg.get("context_window") or 8192
         # 优先级：调用方显式 max_tokens > DB max_tokens > 4096
-        mt = max_tokens if max_tokens is not None else cfg.get("max_tokens", 4096)
+        # ★ 2026-10-30 修（真实崩溃路径，非洁癖）：
+        #   原写法 `cfg.get("max_tokens", 4096)` 的默认值**只在键不存在时生效**；
+        #   而 provider 的该列常常**存在但为 NULL**（新建 provider 没填、或迁移补列留空）
+        #   ⇒ `.get` 返回 `None` ⇒ `mt` 为 None ⇒ 紧随其后的守卫比较抛
+        #   `TypeError: '>' not supported between instances of 'NoneType' and 'int'`
+        #   ⇒ 整个对话失败（被上层包成 "LLM 调用失败…原因：TypeError"）。
+        #   实测触发点：`verify_llm_context_guard` 的夹具 provider（8 列无 max_tokens）。
+        #   ⚠️ 本注释**刻意不写出那段比较的源码原文** —— 门禁 5.1 用字面串锚定它的位置，
+        #      注释里出现同一串会让锚点命中注释、切片错位（本仓已踩过一次同类坑）。
+        #   ⇒ 改为 `or` 兜底（与紧邻上一行 `cw` 的写法一致 —— 同一段里两种兜底语义并存
+        #   本身就是隐患，这次统一）。语义：显式传参 > DB 非空值 > 4096，与改动前**一致**。
+        mt = max_tokens if max_tokens is not None else (cfg.get("max_tokens") or 4096)
+        # ── 2026-10-31 单轮覆盖（会话入口「本轮临时调整」）─────────────────────────
+        # 严格分层：**本轮覆盖 > 调用方显式传参 > DB 配置 > 内置默认**。
+        # 为什么本轮覆盖要压过调用方显式传参：调用方的 max_tokens 是**代码里写死的**，
+        #   而这里是**用户此刻的意图**；用户说"这轮给我 1M 上下文"，代码写死的 8192 不该赢。
+        # 未登记覆盖（脚本/测试/非会话路径）⇒ `_ovr` 为 `{}` ⇒ 以下全部不生效，零漂移。
+        _ovr = {}
+        try:
+            from core import runtime_state as _rs_ov
+            _ovr = _rs_ov.llm_overrides()
+        except Exception:
+            _ovr = {}
+        if _ovr.get("context_window"):
+            try:
+                cw = int(_ovr["context_window"])
+            except (TypeError, ValueError):
+                pass
+        if _ovr.get("max_tokens"):
+            try:
+                mt = int(_ovr["max_tokens"])
+            except (TypeError, ValueError):
+                pass
         # ── context_window 守卫（2026-09-20：由「静默截断」改为「可配置 + 留痕」）────────
         # 原实现只有一句**静默截断**（`mt` 一旦超过 `cw` 就把它赋值成 `cw`）：把 DB 的
         # context_window 当硬上限，但该值可能是**保守配置而非模型真实上限**
@@ -391,10 +690,21 @@ class OpenAICompatProvider(BaseLLM):
             _allowed = _think_cap + _reserve
             if mt > _allowed:
                 mt = _allowed
+        # ★ 2026-11-01：思考模式多轮回传补齐（放在**唯一的出站口**，覆盖所有调用点）。
+        #   不补 ⇒ 带 tool_calls 的 assistant 消息缺 reasoning_content ⇒ 上游 400
+        #   （已最小复现三种形态，见 `_ensure_reasoning_passthrough` 文档）。
+        try:
+            _fixed = _ensure_reasoning_passthrough(messages, _provider_family(cfg))
+            if _fixed:
+                logging.getLogger(__name__).debug(
+                    "reasoning passthrough: 补齐 %d 条 assistant(tool_calls) 消息", _fixed)
+        except Exception:      # noqa: BLE001 —— 补齐失败不得阻断主链路
+            pass
         payload = {
             "model": model_name,
             "messages": messages,
-            "temperature": temperature if temperature is not None else cfg.get("temperature", 0.3),
+            "temperature": (_ovr.get("temperature") if _ovr.get("temperature") is not None
+                            else (temperature if temperature is not None else cfg.get("temperature", 0.3))),
             "max_tokens": mt,
             "stream": stream,
         }
@@ -447,6 +757,21 @@ class OpenAICompatProvider(BaseLLM):
         #   off 列表 → 显式 disabled
         #   其余     → **不发该字段**（= 保持改动前行为，零漂移）
         _tmode = mp.get("thinking_mode")
+        # ★★ 2026-10-31 修（实测发现的真空洞，不要改回去）：
+        #   本轮覆盖 `thinking_level` 必须**在这一层**也生效，不能只靠 execute/stream 合并。
+        #   实测过程：实验里"模型配置=关闭 + 本轮覆盖=高"，结果 `applied=api:off`（仍是关闭）
+        #     ⇒ 因为合并只加在 pipeline 的 `_agent_mp` 上，而 provider 自己读的是
+        #       `cfg.model_params`（DB 里的配置）——**两条读取路径，只改了一条**。
+        #   这正是本仓记过的"同一语义多处各写一份，迟早错位"。
+        #   ⇒ 覆盖在此处再做一次权威赋值（幂等：execute 已合并时这里是同值，无副作用）。
+        if _ovr.get("thinking_level"):
+            _lvl_ovr = str(_ovr["thinking_level"]).strip()
+            mp["thinking_level"] = _lvl_ovr
+            # 覆盖"关闭"档时，同步压掉 thinking_mode 的"开启"，避免两条链路打架
+            if _lvl_ovr == "关闭":
+                _tmode = "关闭"
+            elif _lvl_ovr and _lvl_ovr != "模型默认":
+                _tmode = "开启"
         # ★ P1-b（2026-10-10）记录 **thinking_mode 是「显式指定」还是「默认值」**。
         #   为什么必须区分：`thinking_mode=关闭` 与 `thinking=False`(默认值) 在
         #   `_decision` 里都表现为 False，但**语义完全相反**：
@@ -507,14 +832,98 @@ class OpenAICompatProvider(BaseLLM):
                    ("shape:" + ("off" if _by_shape is False else "on" if _by_shape else "none"))
                    if (_who and _by_shape is not None) else
                    "provider_default")
-        if _decision or (_tmode_explicit and _tmode == "开启"):
+        # ── 2026-10-31 思考强度（thinking_level，五档）优先级最高 ────────────────
+        # 分层语义（覆盖方向）：**显式档位 > 策略名单/形态规则 > thinking_mode 三态**。
+        # 为什么档位要压过名单：档位是用户在「模型配置」里**针对这个模型**表达的意图，
+        # 而名单是**全局**的系统调优；用户显式设置的个体意图应优先（否则配了不生效，
+        # 正是上一轮踩过的"死配置"坑）。
+        # 但 `thinking_level="模型默认"`/缺失时**完全不介入** ⇒ 旧三态链路逐字节不变。
+        #
+        # ★★ 2026-10-31 实测补正（关键，别改回去）：
+        #   光"发 budget_tokens"在 deepseek 上**无效**（实测 256/1024/4096/8192 →
+        #   reasoning 58/167/69/64，纯噪声；reasoning_effort 亦无效）。
+        #   若不处理，低/中/高三档就是**假的**——用户看到三档不同，实际行为完全一样。
+        #   故按家族是否认预算分流，并把"实际生效方式"记进 `_meta`：
+        #     认预算（qwen/anthropic/openai）⇒ 走 API 字段
+        #     不认预算（deepseek/generic） ⇒ 走**提示词放大**（实测 3.2×，仅高档有效）
+        #   低档在没有预算能力时**如实标注 unavailable**，不假装压低了。
+        _level = str(mp.get("thinking_level") or "").strip()
+        _think_meta = {}
+        if _level and _level not in ("模型默认", "default", "-"):
+            _fam = _provider_family(cfg)
+            _honor = bool(_BUDGET_HONORED.get(_fam, False))
+            if _level == "关闭":
+                _apply_thinking_payload(payload, _fam, False, 0)
+                _think_meta = {"level": _level, "family": _fam, "applied": "api:off"}
+            else:
+                _lv_budget = int(_THINK_LEVELS.get(_level, 0) or 0)
+                if _honor:
+                    # 兜底：档位名不认识但非空 ⇒ 按「开」处理且不给预算（宁可不限，也不误关）
+                    _apply_thinking_payload(payload, _fam, True, _lv_budget)
+                    _think_meta = {"level": _level, "family": _fam,
+                                   "applied": "api:on+budget", "budget": _lv_budget}
+                    # 把「思考预算」并入 max_tokens 压算（思考与正文共享额度）：
+                    #   只给预算不给正文保底 ⇒ 正文被吃光。
+                    if _lv_budget > 0:
+                        _reserve_min = 1024
+                        _need = _lv_budget + _reserve_min
+                        if mt < _need:
+                            mt = _need
+                            payload["max_tokens"] = mt
+                else:
+                    # 家族不认预算：**不发 budget 字段**（发了也是垃圾参数），改走提示词。
+                    _apply_thinking_payload(payload, _fam, True, 0)
+                    _hint = None
+                    if _level == "高":
+                        _hint = _THINK_DEEP_HINT
+                        _think_meta = {"level": _level, "family": _fam,
+                                       "applied": "prompt:deep", "note": "该家族无预算能力，实测提示词可放大思考 3.2×"}
+                        # ★★ 2026-10-31 修（实测到的**空回答**事故，必须保留这段）：
+                        #   "高"档实测 reasoning=4095/4096 吃光 max_tokens ⇒ **正文 0 字**，
+                        #   用户看到的是"思考了半天什么都没答"。
+                        #   两次实测都命中（E1 的 高 档正文长度 均为 0）。
+                        #   ⇒ 高档必须把 mt 提到「该档预算 + 正文保底」，
+                        #     即使上游不认 budget，也保证正文有额度可用。
+                        _hi_budget = int(_THINK_LEVELS.get("高", 8192) or 8192)
+                        _need_hi = _hi_budget + 1024      # 8192 + 1024 = 9216
+                        if mt < _need_hi:
+                            mt = _need_hi
+                            payload["max_tokens"] = mt
+                            _think_meta["mt_expanded_to"] = mt
+                    elif _level == "低":
+                        # ⚠️ 实测：提示词**压不下去**（72.7 vs 基线 65）。仍下发简短提示
+                        #   （对长任务通常能减少无用展开），但**不承诺**效果，如实标注。
+                        _hint = _THINK_BRIEF_HINT
+                        _think_meta = {"level": _level, "family": _fam,
+                                       "applied": "prompt:brief", "effective": "unverified",
+                                       "note": "该家族无预算能力；实测提示词对思考量无显著影响（72.7 vs 65）"}
+                    elif _level == "开启":
+                        # 2026-11-01：toggle 模式（模型配置里选了「按开关」）传进来的值。
+                        #   语义 = 只发 enabled，**不涉及思考预算**。
+                        #   不发任何提示词 —— 用户选"开关"就是想要"和厂商控制台一致"，
+                        #   此时擅自加"深度思考提示"等于偷偷改了粒度。
+                        _think_meta = {"level": _level, "family": _fam,
+                                       "applied": "api:on", "note": "按开关模式：只开思考，不控预算"}
+                    else:   # 中
+                        _think_meta = {"level": _level, "family": _fam,
+                                       "applied": "api:on", "note": "该家族无预算能力，中档=默认强度"}
+                    if _hint:
+                        # 作为**最后一条 system** 插入：放在末尾比放在开头更靠近生成点、遵循率更高；
+                        # 且不影响 `_looks_structured_output`（它扫所有 system，我们不写"输出 JSON"这类字样）。
+                        _msgs = list(payload.get("messages") or [])
+                        _msgs.append({"role": "system", "content": _hint})
+                        payload["messages"] = _msgs
+        elif _decision or (_tmode_explicit and _tmode == "开启"):
             # ★ 同理：显式「开启」也必须真发出去（否则 Agent 配的"开启"也是死配置）
             payload["thinking"] = {"type": "enabled"}
+            _think_meta = {"level": "(三态)", "family": _provider_family(cfg), "applied": "api:on"}
         elif (_off and _who in _off) or _by_shape is False or _tmode_explicit:
             # ★ 只在「**显式命中 off 列表**」/「**形态规则判关**」/「**thinking_mode 显式表态**」
             #   三者之一成立时才发 disabled —— 其余「关闭」一律不发字段（保持改动前行为）。
             #   这是避免"全链路被一起关掉"的关键（见上方缺陷 2）。
             payload["thinking"] = {"type": "disabled"}
+            _think_meta = {"level": "(策略/形态)", "family": _provider_family(cfg),
+                           "applied": "api:off", "reason": _reason}
             if _who:
                 _log.info("[thinking] 关思考｜intent=%s 依据=%s has_tools=%s max_tokens=%s",
                           _who, _reason, bool(tools), mt)
@@ -537,6 +946,36 @@ class OpenAICompatProvider(BaseLLM):
             _to = float(_c.get("llm", "http_timeout_s", 180))
         except Exception:
             _to = 180.0
+        # ★★ 2026-10-30（P0 缺口②·deadline 传播）：把本次调用的超时**压到剩余墙钟以内**。
+        #   为什么必须在**这一层**做（实测得出，不是理论）：
+        #     墙钟只在主循环轮次边界检查是不够的 —— 单次 LLM 调用能一口气阻塞几十秒。
+        #     实测 conv 9771（墙钟 8s）：卡在 planner 的 LLM 调用 **56,978 ms**，
+        #     而 planner 跑在编排主循环**之前** ⇒ 循环里的检查一次都没跑到，
+        #     用户等了 61s 才拿到"无终态帧"。
+        #   语义：未登记 deadline（脚本/测试/非会话调用）⇒ 原样返回 `_to`，
+        #        **零行为变更**；登记了 ⇒ 取 min(原 timeout, 剩余)。
+        #   `cap_timeout` 返回 0 = 预算已耗尽 ⇒ 直接放弃本次调用（下方 raise），
+        #   让上层走"基于已有信息收尾"而不是继续烧一次完整调用。
+        try:
+            from core import runtime_state as _rs
+            _capped = _rs.cap_timeout(_to)
+            if _capped <= 0:
+                raise ValueError("整轮墙钟预算已耗尽，放弃本次 LLM 调用（rl=deadline）")
+            # 只在**真的压过**时留痕（正常路径零噪声）：
+            #   排查"墙钟为什么没生效"时，唯一能回答的是"cap 当时返回了 8 还是 180"。
+            #   实测背景：conv 9774 的 task_decompose 单次跑 57s，需确认是 cap 没生效
+            #   还是 httpx 没按 timeout 中断。
+            if _capped < _to:
+                try:
+                    print("[llm_deadline] timeout %.1fs → %.1fs（剩余墙钟 %.1fs）"
+                          % (_to, _capped, _rs.thread_deadline_left() or 0), flush=True)
+                except Exception:
+                    pass
+            _to = _capped
+        except ValueError:
+            raise
+        except Exception:
+            pass      # 运行时状态模块不可用 ⇒ 保持原 timeout（绝不因为观测设施挂掉而阻断调用）
         resp = httpx.post(url, json=payload, headers=headers, timeout=_to)
         data = resp.json()
         if resp.status_code != 200 or not data.get("choices"):
@@ -562,6 +1001,16 @@ class OpenAICompatProvider(BaseLLM):
             # 不必再去猜 DB 配置。纯新增键，不改任何既有键的语义。
             "context_window": cw, "max_tokens_effective": mt,
             "est_input_tokens": _est_in, "context_guard": _guard,
+            # ★ 2026-10-31：思考强度**实际生效方式**留痕。
+            #   为什么必须记：deepseek 上 budget_tokens 被忽略（实测），若不在响应里写明
+            #   "applied=prompt:brief / effective=unverified"，界面上"低/中/高"看起来都正常，
+            #   而实际行为完全相同 —— 这正是最难查的"配了不生效"。
+            "thinking": _think_meta,
+            # 本轮临时覆盖是否被采用（会话入口调参的可审计出口）
+            "llm_override": {k: v for k, v in (_ovr or {}).items() if k in ("context_window", "max_tokens", "temperature")},
+            # 上游真实思考量（deepseek/qwen 在 usage.completion_tokens_details.reasoning_tokens）
+            "reasoning_tokens": (((data.get("usage") or {}).get("completion_tokens_details") or {})
+                                  .get("reasoning_tokens")),
         }
         return data
 
@@ -586,8 +1035,22 @@ class OpenAICompatProvider(BaseLLM):
         if _include_usage:
             payload = dict(payload)
             payload["stream_options"] = {"include_usage": True}
+        # 2026-10-30：流式同样受剩余墙钟约束（与上方非流式同源，避免两套口径）。
+        #   ⚠️ 流式一次连接可能持续很久（边生成边收），把 timeout 压到"剩余预算"
+        #   相当于给整个流一个硬上限 —— 这正是我们要的：到点必须收尾。
+        _sto = 120
         try:
-            with httpx.stream("POST", url, json=payload, headers=headers, timeout=120) as resp:
+            from core import runtime_state as _rs2
+            _c2 = _rs2.cap_timeout(_sto)
+            if _c2 <= 0:
+                raise ValueError("整轮墙钟预算已耗尽，放弃本次流式 LLM 调用（rl=deadline）")
+            _sto = _c2
+        except ValueError:
+            raise
+        except Exception:
+            pass
+        try:
+            with httpx.stream("POST", url, json=payload, headers=headers, timeout=_sto) as resp:
                 if resp.status_code != 200:
                     _body = ""
                     try:

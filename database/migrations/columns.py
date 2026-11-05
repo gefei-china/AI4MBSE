@@ -1,20 +1,118 @@
 """通用列补齐迁移（_migrate_columns）。"""
 import json
+
+
+def _backfill_probe_marks(conn) -> None:
+    """S0（2026-10-28）：把**已证实**的探针/验证噪声行标记 `is_probe=1`。
+
+    为什么必须回填而不是"新写入打标就够了"：
+        `is_probe` 默认 0 ⇒ 存量的 126 条 fake_tool、1,186 条 chat_probe 仍是 0，
+        统计口径**当场没变**，等于没修（本仓已多次栽在"改了配置≠改了生效值"）。
+
+    判据（全部来自 `core/probe_mark`，只用**确定**的假工具名与探针 intent）：
+        · `tool_name IN (...)`: fake_tool / definitely_not_a_real_tool_xyzzy /
+          no_such_tool_abc …… 这些名字只可能来自验证脚本；
+        · `intent IN (...)`: chat_probe / probe / probe_liveness_min。
+        **不按** "名字里含 test" 之类的模糊规则猜 —— 那会误伤真实工具。
+
+    幂等：只更新 `is_probe=0 OR is_probe IS NULL` 的行，重复执行无副作用。
+    """
+    try:
+        from core.probe_mark import PROBE_TOOL_NAMES, PROBE_TOOL_PREFIXES, PROBE_INTENTS
+    except Exception as e:  # 新库首次 init 时 core 尚未可导入的极端情形：跳过，不阻断启动
+        print(f"[init_db] 迁移: is_probe 回填跳过（无法导入 core.probe_mark：{e}）")
+        return
+
+    def _mark(table: str, col: str, exact: set, prefixes: tuple) -> int:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        if not exists:
+            return 0
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        if "is_probe" not in cols:
+            return 0
+        conds, args = [], []
+        if exact:
+            conds.append(f"{col} IN ({','.join('?' * len(exact))})")
+            args.extend(sorted(exact))
+        for p in prefixes:
+            conds.append(f"LOWER({col}) LIKE ?")
+            args.append(f"{p}%")
+        if not conds:
+            return 0
+        sql = (f"UPDATE {table} SET is_probe=1 "
+               f"WHERE COALESCE(is_probe,0)=0 AND ({' OR '.join(conds)})")
+        cur = conn.execute(sql, args)
+        n = cur.rowcount or 0
+        if n:
+            print(f"[init_db] 迁移: {table} 回填 is_probe=1 共 {n} 行")
+        return n
+
+    _mark("tool_call_logs", "tool_name", PROBE_TOOL_NAMES, PROBE_TOOL_PREFIXES)
+    _mark("llm_usage_stats", "intent", PROBE_INTENTS, ("probe",))
+
+
+def _backfill_agent_roles(conn, *, code: bool = True, orch: bool = True) -> None:
+    """2026-11-04：把「产码阶段 / 默认编排池」两个角色位回填成**与硬编码时完全一致**的值。
+
+    为什么必须回填而不是"新写入打标就够了"：两列默认 0 ⇒ 存量 Agent 全是 0，
+    各处读表后拿到的集合会变成**空集** —— 产码意图不再被识别为产码、编排默认池为空。
+    那不叫"改了配置"，叫"当场把能力关掉了"（本仓已多次栽在"改了配置≠改了生效值"）。
+
+    取值依据（逐条对齐搬迁前的代码常量，**不做任何"顺手优化"**）：
+      · `is_code_stage`：`stream._CODE_STAGE_INTENTS` 里有 6 个名字，其中
+        `multi_design` / `sysml_view_generation` 在 `agents` 表**根本不存在**（幽灵名，
+        实测 0 行）⇒ 只回填真实存在的 4 个。**不回填幽灵名**：那等于把错误固化进数据。
+      · `is_orch_default`：`_ORCH_AGENTS` 的 6 个名字，全部真实存在。
+
+    幂等：只在 `COALESCE(col,0)=0` 的行上写，且**仅在两列刚建出来时**由调用方触发。
+    名字查不到就跳过并打印，不静默（改名后这份名单会自然失效，届时由人决定是否补）。
+    """
+    CODE_STAGES = ["design", "architecture_skeleton", "view_expansion", "model_validation_repair"]
+    ORCH_DEFAULT = ["requirement_analysis", "design", "impact", "review",
+                    "report_generation", "knowledge_qa"]
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(agents)").fetchall()]
+        if not cols:
+            return
+        for col, names in (("is_code_stage", CODE_STAGES), ("is_orch_default", ORCH_DEFAULT)):
+            if not ((col == "is_code_stage" and code) or (col == "is_orch_default" and orch)):
+                continue
+            if col not in cols:
+                continue
+            done, missing = 0, []
+            for n in names:
+                cur = conn.execute(
+                    f"UPDATE agents SET {col}=1 WHERE name=? AND COALESCE({col},0)=0", (n,))
+                if cur.rowcount:
+                    done += cur.rowcount
+                elif not conn.execute("SELECT 1 FROM agents WHERE name=?", (n,)).fetchone():
+                    missing.append(n)
+            print(f"[init_db] 迁移: agents.{col} 回填 {done} 行"
+                  + (f"（名单中 {len(missing)} 个名字在库中不存在，已跳过：{missing}）" if missing else ""))
+    except Exception as e:  # 回填失败不阻断启动（列已在，读取侧有兜底默认）
+        print(f"[init_db] 迁移: agents 角色位回填失败（不阻断启动）：{e}")
+
+
 def _migrate_columns(conn):
     """幂等列迁移：CREATE TABLE IF NOT EXISTS 不会给已有表加列，
     P0-1 引入 project_id 后需对老库补列并回填默认项目（兼容既有数据）。
     """
-    def _add(table: str, column: str, ddl: str) -> None:
+    def _add(table: str, column: str, ddl: str) -> bool:
+        """补列。**返回是否真的新建了列** —— 调用方据此决定要不要做一次性回填
+        （只在"列刚建出来"时回填，避免把管理员后来的显式配置覆盖回去）。"""
         # 表尚未创建（由后续建表迁移补齐，含该列）→ 跳过列迁移（PRAGMA 对不存在表返回空列表，需先查 sqlite_master）
         exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
         if not exists:
-            return
+            return False
         cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
         if column not in cols:
             # 列名加反引号：规避 SQLite 保留字（如 references）导致的 ALTER 语法错误
             conn.execute(f"ALTER TABLE {table} ADD COLUMN `{column}` {ddl}")
             print(f"[init_db] 迁移: {table} 增加列 {column}")
+            return True
+        return False
 
     _add("conversations", "project_id", "TEXT DEFAULT ''")
     _add("entities", "project_id", "TEXT DEFAULT ''")
@@ -55,6 +153,22 @@ def _migrate_columns(conn):
     _add("llm_providers", "tags", "TEXT DEFAULT '[]'")                  # 能力标签 JSON 数组，如 ["code","chinese","fast"]
     _add("llm_providers", "priority", "INTEGER DEFAULT 0")              # 路由优先级（越大越优先，同权重按 is_default）
     _add("llm_providers", "budget_tokens", "INTEGER DEFAULT 0")         # Token 预算（0=不限；聚合 llm_usage_stats 判定耗尽）
+    # ── 2026-10-31 模型档案（每个模型单独设置，供模型配置页与会话入口模型切换列表展示）──
+    # 为什么单独加描述列而不是复用 tags：
+    #   tags 是**机器判据**（vision 标签决定图片能不能发、路由标签决定选哪个模型），
+    #   人工说明混进去会让 composeTagsFromForm 的"保留其他标签"逻辑把说明词当标签。
+    #   描述只给人看（会话入口下拉里给用户判断"这个模型适合干什么"），互不污染。
+    _add("llm_providers", "description", "TEXT DEFAULT ''")             # 模型描述（面向使用者的能力说明，可空）
+    # ── 2026-10-31 会话维度 LLM 参数（与「模型维度=系统默认」严格分开）──
+    # 语义（米爸 2026-10-31 明确）：
+    #   模型维度 = 系统默认（llm_providers 那份，所有会话共用）
+    #   会话维度 = 本会话的个性化设置，**只影响本会话，绝不回写 llm_providers**
+    # 为什么必须存 DB 而不是前端内存：
+    #   会话级设置要能"切走再切回仍在"、"刷新不丢"、"跨多轮持续生效"。
+    #   放前端内存只能做到"下一次发送生效"（那是单轮语义，不是会话语义）。
+    # 结构：JSON，只存**用户显式改过**的键（如 {"thinking_level":"高"}）；
+    #   空 = 全部沿用系统默认 ⇒ 与改动前逐字节等价。
+    _add("conversations", "llm_overrides", "TEXT DEFAULT '{}'")
     # ── P1-20 prompt caching 观测：DeepSeek 上下文磁盘缓存命中/未命中（自动缓存，命中≈1/10 价）──
     _add("llm_usage_stats", "prompt_cache_hit_tokens", "INTEGER DEFAULT 0")
     # ── P0-c（2026-10-03）LLM 调用 trace 关联三列（评估：无 conversation_id/run_id 无法下钻）──
@@ -91,6 +205,54 @@ def _migrate_columns(conn):
     _add("tool_call_logs", "failure_kind", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "sub_task_key", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "prompt_cache_miss_tokens", "INTEGER DEFAULT 0")
+    # ── P0-a（2026-10-24）能力统一注册处关联列 ──
+    # tool_call_logs 已是准统一调用日志（tool/skill × builtin/mcp/http/zhiyuan），
+    # 本列把它与 capability_registry 的 capability_id 口径接上，使「哪条调用属于
+    # 哪个统一能力」可查。存量行由 core/capability_registry.backfill_capability_ids
+    # 一次性回填（按 tool_type/tool_name 反查，查不到保留空——不造假映射）。
+    _add("tool_call_logs", "capability_id", "TEXT DEFAULT ''")
+    # ── P0-3（2026-10-27）任务级追溯：与 llm_usage_stats.trace_id 同源的 JOIN 键 ──
+    # 走查实测：run_id 在 83.2% 的工具调用上为 0（主对话路径没有编排批次），
+    # 而 llm_usage_stats 有 trace_id、tool_call_logs 没有 ⇒ 两套 id 不可 JOIN，
+    # 回答不了"这一轮对话调了哪些能力、花了多少钱"。本列补上同一个 trace_id。
+    # 存量行无法回溯（历史未记录）⇒ 留空，**不编造**。
+    _add("tool_call_logs", "trace_id", "TEXT DEFAULT ''")
+    # ── 2026-10-27（截断清单 P0-B3）：落库截断可观测 ──
+    # `result` 上限 2000 → 8000，并补这两列。原 2000 是**静默**截断：
+    #   我据此统计"工具结果都 ≤2000"，把 MCP 侧的数据丢失误判成"没有大结果"⇒ 诊断跑偏。
+    # 存量行无法回溯（当时没记长度）⇒ 留 0（= 未知），**不编造**。
+    _add("tool_call_logs", "result_len", "INTEGER DEFAULT 0")        # 原始结果字符数
+    _add("tool_call_logs", "result_truncated", "INTEGER DEFAULT 0")  # 1 = result 被裁
+    # 索引**必须**建在列补齐之后：老库这张表已存在且无 trace_id 列时，
+    # 提前建索引会抛 `no such column: trace_id` 让 init_db 整段崩掉（实测踩过）。
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_trace ON tool_call_logs(trace_id)")
+    except Exception as e:
+        print(f"[init_db] 迁移: tool_call_logs(trace_id) 索引创建失败：{e}")
+    # ── S0（2026-10-28）统计口径隔离：探针标记列 + 存量确定性回填 ──────────────
+    # 为什么需要（实测 @75eca26，近 7 天）：
+    #   `tool_call_logs` 混入 fake_tool 126 次（失败 112、latency 记成 1.79e12 ms）、
+    #   `llm_usage_stats` 里 chat_probe 占**总成本 51%** ⇒ 失败率/成本/延迟三条基线同时失真。
+    # 存量回填只按**已证实的**假工具名与探针 intent（core/probe_mark 的常量）判定，
+    #   拿不准的一律留 0 —— 与 retry_count / capability_id 的存量纪律一致，**不编造**。
+    _add("tool_call_logs", "is_probe", "INTEGER DEFAULT 0")
+    _add("llm_usage_stats", "is_probe", "INTEGER DEFAULT 0")
+    _backfill_probe_marks(conn)
+    # 索引**必须**建在补列与回填之后（同 trace_id 那条的约束）。
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_logs_probe "
+                     "ON tool_call_logs(is_probe, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_lus_probe "
+                     "ON llm_usage_stats(is_probe, created_at)")
+    except Exception as e:
+        print(f"[init_db] 迁移: is_probe 索引创建失败：{e}")
+
+    # ── P1-5（2026-10-30）上下文利用率：**分母**必须落库 ─────────────────────
+    # 没有这一列时，"prompt_tokens=27529" 无法判断是"用了 21% 窗口"还是"用了 84%"。
+    # 存量行为 0（未知）—— 统计侧必须**只按有分母的行**算利用率，
+    # 绝不能把 0 当分母（除零）或当成"窗口为 0"（会导致利用率恒为无穷/1.0）。
+    _add("llm_usage_stats", "context_window", "INTEGER DEFAULT 0")
+
     # P1-27 截断诊断（思考模型 reasoning 与正文共享 max_tokens 配额）
     _add("llm_usage_stats", "finish_reason", "TEXT DEFAULT ''")
     _add("llm_usage_stats", "reasoning_tokens", "INTEGER DEFAULT 0")
@@ -107,6 +269,34 @@ def _migrate_columns(conn):
     _add("conversations", "last_slots", "TEXT DEFAULT '{}'")            # 最近一轮 task_decompose 槽位 JSON（跨轮合并）
     # ── 上下文组装 v2（话题感知）：消息话题标签（惰性打标回写，供分话题摘要/相关历史拉回）──
     _add("messages", "topic", "TEXT DEFAULT ''")                         # 话题标签（段首用户消息前 N 字符）
+    # ── 2026-10-29：反馈语义分列（quality 与 review 分离）──
+    # 背景：`feedback_type` 一个字段混装了两件事 —— ①**评审动作**（approve/reject/modify，
+    #   表达流程裁决）②**质量信号**（这条回答好不好）。前端曾只认 approve/reject，
+    #   而 badcase/online_eval 只认 modify/wrong/corrected ⇒ 四份取值域互不相同，
+    #   结果**显式负反馈 0 条**、采样队列 0 行 ⇒ 进化系统没有方向信号。
+    #   （`reject` 是"评审拒绝"，不是"用户差评"，混用会让进化去修没坏的东西。）
+    # 修法：质量信号单列一列，取值域见单一真源 `core/feedback_types.py`（up/down）。
+    _add("messages", "quality", "TEXT DEFAULT ''")                       # 用户质量信号：up | down（空=未评价）
+    _add("feedback", "quality", "TEXT DEFAULT ''")                       # 同上（历史留痕，供采样回查）
+    _add("feedback", "signal_kind", "TEXT DEFAULT ''")                   # 信号类型：review | quality（显式标注语义来源）
+    # ── 2026-10-29：告警可处置化（alert_events）──
+    # 背景（生产库实证）：328 条告警 **status 全是 'open'**，一条都没被处理；
+    #   同一批规则每 30 分钟一条，累积 81 次 ⇒ 看板被同因告警淹没（告警疲劳）。
+    #   根因有二：① 没有折叠（每次命中都 INSERT 新行）；② 只有 ack、**没有后续流转**
+    #   （没人知道"这条到底修了没"）⇒ 告警只是"响"，不是"待办"。
+    # 修法：hit_count + last_seen_at（折叠），handled_by/handled_at/note（处置留痕）。
+    _add("alert_events", "hit_count", "INTEGER DEFAULT 1")               # 同因折叠计数（重复命中累加，不新增行）
+    _add("alert_events", "last_seen_at", "TEXT DEFAULT ''")              # 最近一次命中时间（created_at 保留首次）
+    _add("alert_events", "handled_by", "TEXT DEFAULT ''")                # 处置人
+    _add("alert_events", "handled_at", "TEXT DEFAULT ''")                # 处置时间
+    _add("alert_events", "note", "TEXT DEFAULT ''")                      # 处置备注（归因结论）
+    # ── 2026-10-29：配置变更「改后效果」判定（config_history）──
+    # 背景：P1-4 已保证"改前沙箱 A/B 证明不改坏"，但**改完有没有真的变好**没有任何回流。
+    #   ⇒ 无法回答"上次那个改动到底有没有用"，改坏了也发现不了（沙箱只覆盖门禁集）。
+    #   判据见 core/config_effect.py（eval_metrics 前后等长窗口对比，方向敏感）。
+    _add("config_history", "effect_verdict", "TEXT DEFAULT ''")          # effective | ineffective | mixed | no_data | inconclusive
+    _add("config_history", "effect_detail", "TEXT DEFAULT ''")           # 判定理由（人可读）
+    _add("config_history", "effect_checked_at", "TEXT DEFAULT ''")       # 判定时间
     _add("skills", "frontmatter", "TEXT DEFAULT '{}'")                   # SKILL.md frontmatter 原文（含 triggers/category/author）
     _add("skills", "content", "TEXT DEFAULT ''")                         # SKILL.md 指令正文
     _add("skills", "triggers", "TEXT DEFAULT '[]'")                      # 触发关键词 JSON
@@ -177,6 +367,11 @@ def _migrate_columns(conn):
     #   ⚠️ 这是「**写 A 表、读 B 表**」的另一个形态：不是读不到，是**根本没存**。
     #   与 tools/args/env/headers 同形态（TEXT 存标量），出参直出（描述非敏感）。
     _add("mcp_servers", "description", "TEXT DEFAULT ''")
+    # ── P0-6（2026-10-26）：MCP 工具元数据（description + inputSchema）──
+    #   `tools` 列只存名字数组（发现流程主动丢弃了 schema）⇒ 注入时 71 个工具的
+    #   description 全是同一句模板、parameters 全是宽松空壳 ⇒ JIT 零区分度 + 模型无从下手。
+    #   本列把丢掉的东西存回来；存量 server 需"重新发现"补齐，空值 ⇒ 完全退回旧行为。
+    _add("mcp_servers", "tool_meta", "TEXT DEFAULT '[]'")
     # ── P0 语义升级：长期记忆真向量版本标记（同 document_chunks.embed_version 语义）──
     _add("agent_memory", "embed_version", "TEXT DEFAULT ''")             # 真 embedding 版本（''=bigram/未向量化）
     # ── P2 记忆认知化：遗忘引擎（激活度）+ 合并引擎（反思）──
@@ -294,6 +489,52 @@ def _migrate_columns(conn):
     _add("agents", "max_concurrency", "INTEGER DEFAULT 2")                # 最大并发任务数
     _add("agents", "version", "TEXT DEFAULT 'v1.0.0'")                    # Agent 语义版本（老库已存在 version 则跳过）
     _add("agents", "protocol_range", "TEXT DEFAULT '>=1,<3'")             # A2A 协议版本范围
+    # ── 2026-11-04：**补 v3.0 三列**（`task_domain` / `stage_order` / `intent_keywords_active`）──
+    #
+    # 为什么必须补在这里（实测缺口）：
+    #   这三列是 v3.0 多任务域路由与六节点流水线顺序的**承载列**，
+    #   但此前只由 `tools/migrate_v3_nodes.py`、`migrate_v5_pipeline_nodes.py` 等
+    #   **手工脚本** ALTER 添加 —— `init_db()` 的建表语句里没有、`_migrate_columns` 里也没有。
+    #   ⇒ 实测：`init_db()` 建出的空库 `agents` 只有 25 列（真库 28 列），
+    #     缺 `task_domain` / `stage_order` / `intent_keywords_active`；
+    #     缺 `stage_order` 会让"建模阶段意图 = stage_order IS NOT NULL"恒为空集，
+    #     缺 `task_domain` 会让多任务域路由整条失效 —— 而**空库上什么都查不出来**，
+    #     因为相关代码大多是 `try/except` 兜底（又一个"环境不一致、CI 却全绿"的实例）。
+    #   放在这里而不是建表语句里：老库已有这三列时会自动跳过（幂等），
+    #   不用重建表；新库由 `_add` 补上，与真库对齐。
+    _add("agents", "task_domain", "TEXT DEFAULT 'general'")               # 任务域（modeling/impact/report/qa/system/general）
+    _add("agents", "stage_order", "INTEGER")                              # 流水线位置（NULL=不属流水线）
+    # ⚠️ `intent_keywords_active` 默认 **0**，不是 1 —— 实测真库 30/30 行全为 0，
+    #   且**全仓代码 0 处引用该列**（`grep -rn intent_keywords_active agent/ core/` 空）。
+    #   即：它是"声明了但从未接线"的字段。默认给 1 会凭空造出与真库不一致的状态，
+    #   让人误以为"打开了路由开关"。保持 0 = 诚实反映现状（未接线）。
+    _add("agents", "intent_keywords_active", "INTEGER DEFAULT 0")          # 预留：关键词路由开关（当前未接线）
+    # ── 2026-11-04：Agent 的**流水线角色位**（把散在代码里的阶段清单收敛成表字段）──
+    #
+    # 背景：同一份「哪些 Agent 属于哪个阶段集合」曾硬编码在 4 处代码常量里
+    #   （`session._STANDARD_INTENT_LABELS` / `stream._CODE_STAGE_INTENTS` /
+    #    `intent.py` 的粒度规则提示词 / `_ORCH_AGENTS` 默认池），
+    #   新增一个阶段 Agent 要改 4 个文件。与 `register_sysml_check_tools.py` 文件头的
+    #   纪律相反（"策略写在 DB 里则改文本即生效"）。
+    #
+    # 收敛口径：**能由现有字段推导的就不加列**，只补推导不出来的两个：
+    #   · `is_code_stage` —— 产码阶段。**不能**用"绑了 sysml_v2_validate"推导：
+    #       实测 `design` 靠"正文里输出 ```sysml 代码块"产码，未绑任何 sysml 工具；
+    #       而 `review`/`多方案生成` 绑了 validate 却不是产码阶段。工具绑定 ≠ 产码身份。
+    #   · `is_orch_default` —— 默认编排池成员（无团队模式时的兜底候选）。
+    #       **不能**用 `builtin=1 AND agent_role='sub'` 推导：那会多出 `chat`
+    #       （兜底问答，不该被派子任务）与 `requirement_quality`，改变既有编排行为。
+    #
+    # 另两个集合复用**既有**事实，不加列：
+    #   · 建模阶段意图 = `stage_order IS NOT NULL`（该列 2026-10 已由
+    #     `tools/migrate_v5_pipeline_nodes.py` 建好并填了 8 个阶段）；
+    #   · 标准意图标签 = `builtin=1 OR stage_order IS NOT NULL`。
+    _new_code = _add("agents", "is_code_stage", "INTEGER DEFAULT 0")       # 1=产码阶段（视图/骨架/修复）
+    _new_orch = _add("agents", "is_orch_default", "INTEGER DEFAULT 0")     # 1=默认编排池成员
+    # ⚠️ **只在新列刚建出来时回填**：否则管理员在后台取消勾选后，下次启动会被回填逻辑重新打开
+    #    （本仓已因"改了配置≠改了生效值"栽过，反向的"改了配置被悄悄改回来"同样不能有）。
+    if _new_code or _new_orch:
+        _backfill_agent_roles(conn, code=_new_code, orch=_new_orch)
     # ── 架构优化：子任务执行快照（负载 / 分派打分 / 结构化摘要 / 重试 / token 统计）──
     _add("agent_tasks", "load_snapshot", "TEXT DEFAULT '{}'")             # 分派时各 Agent 负载快照
     _add("agent_tasks", "assign_score", "REAL DEFAULT 0")                 # 分派打分
@@ -320,6 +561,22 @@ def _migrate_columns(conn):
     # 而它描述的常量并不存在、queue_confirmation 是无条件 INSERT ⇒ 重复提交产出重复确认单。
     # 真库实证：6 行里 id 13/14 完全重复（agent/action/payload 全同）。
     _add("hil_confirmations", "idem_key", "TEXT DEFAULT ''")   # sha1 前 24 位；去重在代码层按窗口判定
+    # ── 写前确认 HITL（2026-10-28）：统一闸 + 批准即执行所需的 8 列 ──
+    # 真库实证的三个断链（缺这些列就补不上）：
+    #   ① 批准后不知道走哪个执行器 ⇒ MCP 写操作全部落 else 分支「不支持自动执行」；
+    #   ② 没有 result_json ⇒ 无法区分「批了但没跑」与「跑成了」，审计里看不出真相；
+    #   ③ 没有 exec_idem_key ⇒ 用户点两下「批准」就执行两次写操作（重复包）。
+    _add("hil_confirmations", "tool_type", "TEXT DEFAULT ''")      # local / mcp / http
+    _add("hil_confirmations", "tool_call_id", "TEXT DEFAULT ''")   # 对齐前端 SSE 工具节点
+    _add("hil_confirmations", "level", "TEXT DEFAULT ''")          # confirm / approve
+    _add("hil_confirmations", "batch_id", "TEXT DEFAULT ''")       # 批次合并键
+    _add("hil_confirmations", "batch_count", "INTEGER DEFAULT 1")  # 批次内操作数
+    _add("hil_confirmations", "timeout_at", "TEXT DEFAULT ''")     # 超时时刻
+    _add("hil_confirmations", "result_json", "TEXT DEFAULT ''")    # 执行回执（同时是执行幂等依据）
+    _add("hil_confirmations", "exec_idem_key", "TEXT DEFAULT ''")  # 执行幂等键 sha1(conf_id+payload)
+    # 批次对象清单（计划级确认卡）：实证显示计划级审批拒绝率 39% vs 逐条 3%（差 13 倍）
+    # ⇒ 确认卡必须展示"这轮要动哪些东西"的摘要，而不是单条参数 JSON。
+    _add("hil_confirmations", "batch_items", "TEXT DEFAULT '[]'")   # JSON 数组，合并时追加
     # ── 分支管理 GitHub 对标（P0-1/P0-2/P1-1/P1-2）：冲突重算时间戳 / MR 标题 / 驳回意见 ──
     _add("merge_requests", "conflict_updated_at", "TEXT DEFAULT ''")  # 冲突清单最近重算时间（P0-1）
     _add("merge_requests", "title", "TEXT DEFAULT ''")                 # MR 标题（缺省 source → target）
@@ -457,6 +714,29 @@ def _migrate_columns(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS ix_bc_status ON bad_cases(status)")
     # 防御性补列：早期版本库已建过 bad_cases（无 last_src_id）时补齐，避免通用层读列炸。
     _add("bad_cases", "last_src_id", "INTEGER DEFAULT 0")
+    conn.commit()
+
+
+def _migrate_skill_revision_rejects(conn):
+    """技能修订自检拒绝台账（2026-10-29）。
+
+    为什么要有这张表：`SkillImprover` 新增了自检闸门（见 skill_improve.py
+    的 `_verify_revision`），不合格的修订**不产出草稿**。若不落台账，
+    "因为质量不合格被拒"与"没有需要修订的技能"在界面上**完全无法区分** ——
+    这正是本仓反复吃过的亏（静默失败长得像没问题）。
+    实测背景：修复前产出过 4830 → 453 字（-90.6%）的草稿，丢掉了多条安全护栏。
+
+    幂等：CREATE TABLE IF NOT EXISTS。
+    """
+    conn.execute("""CREATE TABLE IF NOT EXISTS skill_revision_rejects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT DEFAULT '',              -- 技能名
+        reason TEXT DEFAULT '',            -- 拒绝原因（人读：破坏性压缩 / 丢失护栏 …）
+        old_len INTEGER DEFAULT 0,         -- 原文字数
+        new_len INTEGER DEFAULT 0,         -- 候选修订字数
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_srr_created ON skill_revision_rejects(created_at)")
     conn.commit()
 
 

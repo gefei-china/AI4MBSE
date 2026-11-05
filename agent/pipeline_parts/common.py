@@ -34,8 +34,11 @@ from agent.utils import (
     _archive_artifacts,
 )
 
-# P0-2：工具结果展示上限（SSE 事件与落库共用；超出截断并标记 truncated）
-_TOOL_RESULT_CAP = 6000
+# P0-2：工具结果展示上限（SSE 事件与落库共用；超出截断并标记 truncated，前端可展开全文/复制）
+# ★ 2026-10-27（截断清单 P1-B2）：6000 → 8000，与回填给模型的上限（_TOOL_MODEL_CAP）**取同值**。
+#   原「展示 6000 / 给模型 3000」的双口径会让人误以为模型看到的就是 6000；
+#   统一后"落库-展示-回填"三处同一把尺，排查时不必再换算。
+_TOOL_RESULT_CAP = 8000
 
 # ── 2026-10-10 主对话任务类型标识（P0：让 llm.thinking_policy 管得到主对话）────────
 # ★ **为什么需要它**：`_intent` 此前只在辅助调用点传（如 `routing` / `doc_summary`），
@@ -104,9 +107,18 @@ def _lg_limit_of(lg, rounds_limit: int) -> int:
     return int(rounds_limit or 0)
 
 # 2026-09-17 S3：回填给模型的工具结果上限（远小于展示上限，防长工具结果反复占用输入 token）
-_TOOL_MODEL_CAP = 3000
+# ★ 2026-10-27（截断清单 P1-B1）：3000 → 8000。
+#   实测代价：超 3000 即触发 offload（结果落库 + 只回一个引用块），模型必须再调
+#   `tool_result_fetch` 才能看到全文 —— conv 9639 一轮里 fetch 5 次、9640 有 4 次，
+#   占该轮工具调用的 16% / 13%，**每次都是纯往返开销**（且 fetch 结果可能再撞另一道闸）。
+#   8000 覆盖"结构化 MCP 信封（单段 32K 字节分页除外）+ 常规查询结果"，
+#   真正超长的仍走 offload（可重读，不丢数据）。
+_TOOL_MODEL_CAP = 8000
 # 2026-09-17 S3：上传资料注入 prompt 的字符上限（att_text 不在 _apply_context_budget 裁剪范围内）
-_ATT_INJECT_CAP = 4000
+# ★ 2026-10-27（截断清单 P2-B5）：4000 → 8000。实测一份 8 章文档在 4000 处只到第 3 章，
+#   第 5/6/7 章条款整段不在上下文（"20 条 ERROR 只核实了 3 条"同源）。
+#   章节提纲（_ATT_OUTLINE_CAP）已能告知"还有哪些章"，正文上限同步放大后开篇细节也补齐。
+_ATT_INJECT_CAP = 8000
 # ★ 2026-11-13（米爸反馈「上传附件做需求分析，仍未完整读取」）：**章节提纲注入上限**。
 #   背景（截图实证）：注入侧只取 att_blocks[:4] 再砍到 4000 字符 ⇒ 一份 8 章文档
 #   模型只读到第 1~3 章和 4.1，**第 5/6/7 章条款整段不在上下文里**
@@ -120,8 +132,8 @@ _ATT_INJECT_CAP = 4000
 _ATT_OUTLINE_CAP = 2000
 
 # ★ 2026-11-13（#56）：`read_attachment_section` 回填给模型的**专用字符上限**。
-#   通用上限 `_TOOL_MODEL_CAP=3000` 对「取整章正文」天然不适用：整章动辄 5000~7000
-#   字符（doc 848 第 5 章实测 6024）⇒ 每次取章都被 offload 成引用块 ⇒ 模型只拿到
+#   通用上限 `_TOOL_MODEL_CAP`（现 8000）对「取整章正文」仍不适用：超长章节可达数万字符
+#   （doc 848 第 5 章实测 6024 字符，个别条款页更远超此数）⇒ 每次取章都被 offload 成引用块 ⇒ 模型只拿到
 #   一个 id（再去调 tool_result_fetch 要全文还会被 RBAC 拦）⇒ **模型看到的是空**
 #   ⇒ 误判"第 5/6/7 章正文读不到"（实测原话「全部返回空内容」）。
 #   本工具的语义就是"把这一章的正文交给模型"⇒ 截断会直接毁掉用途 ⇒ 给足整章上限。
@@ -131,11 +143,14 @@ _ATT_SECTION_MODEL_CAP = 20000
 # 2026-09-17 S4（C3=按意图只注入命中 Agent）：流式路径注入「命中 Agent 角色块」的字符上限。
 # 背景：SSE 路径此前**完全不消费** agents.system_prompt（硬编码一句通用角色），
 #   导致库里 20 个 Agent 的定制（合计 44,762 字）在主流式链路上不生效 —— 用户配了 Agent 却看不到效果。
-# 取值依据（实测 agents.system_prompt 长度）：核心 Agent 设计 476 / 评审 1011 / 影响 707 /
-#   需求分析 392 / 报告 862 / 知识问答 766 / 闲聊 839 字 → 1200 字可容纳核心 Agent 的完整指令；
-#   9 个「视图生成」Agent 为 2,500~7,981 字（它们的完整 prompt 由非流式 execute 路径消费），
-#   在流式路径按 1200 字截断，代价 ≤ 约 300 token/请求，换取 Agent 定制真正生效。
-_AGENT_ROLE_CAP = 1200
+# ★ 2026-10-27（截断清单 P1-C3）：1200 → 8000，且 **execute / stream 两路径统一取本值**。
+#   原状态：execute 传 0（不截断）、stream 传 1200 ⇒ **同一个 Agent 在两条路径上行为不同**，
+#   而这恰好是"试跑看着好好的、对话里效果差"的隐藏原因之一。
+#   8000 的取值依据（真库 agents.system_prompt 实测）：30 个 Agent 里 29 个 ≤ 7,981 字符
+#   ⇒ 8000 = 对现有资产"实际不裁"，同时保留对异常超长 prompt 的防御。
+#   注意：`_build_role_block` 的超限处置是**段级折叠**（只折可裁段「视图规范参考」，
+#   约束/输出示例/职责永不腰斩），不是字符腰斩 —— 见 prompt.py 该方法文档。
+_AGENT_ROLE_CAP = 8000
 
 # ── P0-3 流式输出节奏（2026-09-17）：消除「一次性瞬发一大段」 ──────────────
 # 速率取值依据：
@@ -227,20 +242,40 @@ PROMPT_CACHEABLE_KEYS = (
 
 #: 分界线**以下**的块 key（动态区）。元组顺序 = 实际拼装顺序（层内按「依赖的易变度」升序，
 #: 让相对稳定的块尽量靠前）。
+#:
+#: ★ P4（2026-10-26）**让实现符合本注释声明的原则**。
+#:   此前 `skill_prompt` 依赖 `user_input`（每轮可能变）却排在第 3 位，把它之后的
+#:   `memory` / `model_context` / `project_memory` / `slots` / `user_ctx` 一起拖成缓存 miss
+#:   —— 与本段声明的「按易变度升序」直接矛盾。
+#:
+#:   实测依据（生产库 conv=9571，8 个不同 query，逐块 md5）：
+#:     · 静态区 8 块 **全部恒定**
+#:     · 动态区**只有 `skill_prompt` 会变**（6/8 唯一值，均 1,016 tok）
+#:     · `memory` 80 tok / `model_context` 226 tok / `retrieval` 11 tok 逐个恒定
+#:   ⇒ `skill_prompt` 是**唯一真实缓存断点**，它前面的恒定量才是可救回的部分。
+#:
+#:   DeepSeek / Anthropic 的 prompt cache 都是**前缀完整匹配**：断点之后一律不计命中
+#:   ⇒ 把 `skill_prompt` 押后，「memory(80) + model_context(226) ≈ 306 tok」由"每轮白扔"
+#:   变为"可命中"。收益有限（system 约 6.7%）但**零语义代价**：只换顺序，不删内容。
+#:
+#:   ⚠️ 顺序契约由 tools/verify/verify_prompt_cache_order.py 锁定（含变异自证）：
+#:     「易变块必须排在稳定块之后」。新增块时按同一原则归位，否则该门禁翻红。
 PROMPT_DYNAMIC_KEYS = (
+    # ── 相对稳定（同会话内基本不变）──
     "intent_line",     # L3 当前意图（依赖 intent）
     "model_code_req",  # L3 建模输出要求 + L0 硬约束卡（依赖 intent；建模/非建模差异巨大）
-    "skill_prompt",    # L4 技能渐进式披露（依赖 user_input ⇒ 每轮可能变）
-    "skill_block",     # L4 显式指定技能正文（依赖本轮 skill_name）
-    "template",        # L4 提示词实验室模板（依赖 intent + user_input）
-    "memory",          # L4 长期记忆（依赖 user_input）
-    "model_context",   # L4 建模上下文（依赖 branch + conversation + user_input）
+    "memory",          # L4 长期记忆（依赖 user_input，但 core 层无条件常驻 ⇒ 实测恒定）
+    "model_context",   # L4 建模上下文（依赖 branch + conversation ⇒ 同会话稳定）
     "project_memory",  # L4 项目级记忆（依赖 user_input + conversation）
-    "slots",           # L4 任务拆解（本轮 LLM 产出）
     "user_ctx",        # L4 用户上下文
+    # ── 每轮可能变（必须押后：断点之后的内容一律无法命中缓存）──
+    "template",        # L4 提示词实验室模板（依赖 intent + user_input）
+    "slots",           # L4 任务拆解（本轮 LLM 产出）
+    "skill_prompt",    # L4 技能渐进式披露（依赖 user_input ⇒ **实测唯一断点**，均 1,016 tok）
+    "skill_block",     # L4 显式指定技能正文（依赖本轮 skill_name）
+    "report",          # L4 报告模板（本轮）
     "attachment",      # L4 用户上传资料（本轮附件）
     "retrieval",       # L4 检索到的互联数据（本轮检索）
-    "report",          # L4 报告模板（本轮）
 )
 
 #: 拼装顺序（**唯一真源**）：可缓存静态区 → 动态区。
@@ -252,7 +287,7 @@ PROMPT_BLOCK_ORDER = PROMPT_CACHEABLE_KEYS + PROMPT_DYNAMIC_KEYS
 PROMPT_LAYER_BOUNDARY = "── SYSTEM_PROMPT_DYNAMIC_BOUNDARY ──"
 
 
-def assemble_system_prompt(blocks: dict) -> str:
+def assemble_system_prompt(blocks: dict, audit: bool = True) -> str:
     """按 `PROMPT_BLOCK_ORDER` 拼装 system_prompt —— **顺序的唯一真源**。
 
     两条路径（非流式 `execute.py` / 流式 `stream.py`）都调用本函数，只负责收集各自的块
@@ -260,12 +295,30 @@ def assemble_system_prompt(blocks: dict) -> str:
 
     空块（`None` / `""`）跳过，不留多余空行。未登记在 `PROMPT_BLOCK_ORDER` 的 key 会被
     **忽略** —— 该情形（新增块忘了分层归类）由 tools/verify/verify_prompt_layering.py 抓。
+
+    ★ P0-2（2026-10-26）**分块 token 归因**：
+    本函数**本来就按块遍历** `PROMPT_BLOCK_ORDER`，块边界是已知量 ⇒ 在此记录每块 token
+    **零额外切分成本**（不需要重新分词、不需要二次分块）。归因落 `context_audit` 表，
+    `trace_id` 与 `llm_usage_stats.trace_id` 同源 ⇒ 可按 trace 聚合「这轮 token 花在哪」。
+
+    动机：`llm_usage_stats` 只记整包 prompt_tokens（生产 chat_probe 均值 12,511 / 峰值
+    64,552 token），**无分块归因** ⇒ 历史上两次真实损失（总闸静默空转、流式路径腰斩
+    82% prompt）都因"看不见"而延迟发现。本模块是后续所有上下文调优的**前提**。
+
+    `audit=False` 可关闭单次记录（配置 `context_audit.enabled=False` 亦全局关闭）。
+    归因**异常一律吞掉** —— 观测绝不阻断主流程。
     """
     out = []
     for key in PROMPT_BLOCK_ORDER:
         val = blocks.get(key) or ""
         if val:
             out.append(val)
+    if audit:
+        try:
+            from agent.context_audit import record_blocks
+            record_blocks(blocks, phase="system")
+        except Exception:
+            pass
     return "".join(out)
 
 
@@ -317,6 +370,32 @@ AUTOPILOT_RULES_TEXT = (
     "禁止用『需要我继续吗 / 要我接着做吗 / 是否继续』这类问句停下来等人吩咐；\n"
     "· 每步产出后自检是否已覆盖用户请求的全部要求，未覆盖就继续，不要分批交付；\n"
     "· 仅当真正被阻塞（缺关键信息、需用户授权/拍板、遇不可解错误）时才 ask_user 或收尾说明阻塞原因。\n")
+
+#: ★ 2026-10-28（conv 9726 / 9730 两次真机实证）：**待办清单的使用指引**。
+#:
+#: 为什么必须有这段字：`todo_write` 早就被无条件注入工具集（tools.py），
+#: 但**系统提示词里一次都没提过它** ⇒ 模型不会主动建清单
+#: ⇒ `_todo_gate` 恒走 fallback ⇒ 「完成」的定义权仍然只在模型/评估器手里。
+#: 真实数据：两次同题会话（9726 / 9730）`tool_call_logs` 里 `todo_write` **0 次**，
+#: `agent_todos` 表 0 行 —— P0-1 机制在真机上**从未被激活过**，
+#: 于是「有未完成的活也不许结束」这条约束形同不存在。
+#: ⇒ 光有工具与闸不够，必须显式告诉模型"什么时候建、建成什么样"。
+TODO_RULES_TEXT = (
+    "待办清单（多步骤任务的唯一进度依据）：\n"
+    "· 接到**需要 3 步以上**的任务（定位资源 → 设计/生成 → 校验 → 写入/交付）时，"
+    "**第一步就调 `todo_write`** 把全部步骤列出来（含用户明确要求的每个环节），"
+    "每条都要写 `verify`＝怎么证明这步真的做成了（可执行断言优先，例如"
+    "「sysml_v2_validate 返回无 ERROR」「query_data_tree 能看到该元素」）；\n"
+    "· 一条做完就 `todo_write(action=update)` 标记，**必须带验收回执**"
+    "（工具返回的关键字段/计数），没有回执不许置 completed；\n"
+    "· 被某个环节卡住（缺权限/缺信息/要用户确认）⇒ 置 blocked 并写明原因，"
+    "**不要**把整张清单丢掉或跳过；\n"
+    "· 收尾前逐条核对清单：还有未完成项就继续做，不要交付半成品；"
+    "确实必须停下（等用户拍板）时，在答复里**列出已完成/未完成各是哪几条**。\n"
+    "· **只读步骤不要等确认**：校验、检索、读结构这类无副作用的动作，"
+    "即使后面要用户拍板才能写入，也**先把它们做完再问**。"
+    "（用户原话『完成校验后写入，写入前确认』＝ 确认是写入门，不该把校验也挡在门外。）\n")
+
 
 #: ★ 2026-10-17（米爸方案A1）：产物自动归档说明——**纯追加进 tool_rules**（与
 #: AUTOPILOT_RULES_TEXT 同模式，所有 agent 生效）。作用：
@@ -463,9 +542,23 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
     #    （execute 原为 `_build_role_block(agent_def)`、stream 原为 `(agent_def, cap=_AGENT_ROLE_CAP)`）。
     #    这样"零行为变动"不依赖"我知道默认值是 0"这个隐含前提 —— 等价性可被逐字节证明。
     _role_kw = {"cap": ctx.role_cap} if ctx.role_cap else {}
+    _role_text = pipe._build_role_block(ctx.agent_def, **_role_kw)
+    # ★ P0-7（2026-10-26）：role 块内「工具手册段」按需裁剪。
+    #   实测（生产快照 + 真实链路）：`智源对接agent` 的 system_prompt 是
+    #   **14,538 字符 / 8,995 tok，其中 14,531 字符（100%）是 58 个 MCP 工具的手册**，
+    #   非工具叙述仅 7 字符；其余 16 个 Agent 手册占比全为 0%。
+    #   而上轮已把 MCP 工具按需暴露到 8 个 ⇒ role 里 50 个工具的手册对模型不可用，纯噪音；
+    #   MCP server 离线时更是 100% 死重（生产当前 state）。
+    #   默认**关闭**（改模型可见内容，风险高于纯注入量优化，需生产验证后再开）。
+    #   兜底完备：开关关 / 无手册段 / 暴露集为空 / 切分不自洽 ⇒ 逐字节原样返回。
+    try:
+        blocks_role_text = pipe._apply_role_manual_filter(_role_text, ctx) \
+            if hasattr(pipe, "_apply_role_manual_filter") else _role_text
+    except Exception:
+        blocks_role_text = _role_text
     blocks = {
         # ── L2 身份层 ──
-        "role": "%s\n" % pipe._build_role_block(ctx.agent_def, **_role_kw),
+        "role": "%s\n" % blocks_role_text,
         "tools": "可用工具：%s。\n" % (", ".join(ctx.agent_def.tools) or "无（纯问答直出）"),
         "roster": pipe._team_roster_block(ctx.agent_def),
         # ── L1 全局静态 ──
@@ -509,8 +602,26 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
         #   旧值（TOOL_RULES + ASK_USER）保持为前缀，verify_prompt_blocks 的 B 组
         #   等价判据（除 tool_rules 外逐字节 + tool_rules 旧值纯追加）因此不被破坏。
         blocks["tool_rules"] = (TOOL_RULES_TEXT + ASK_USER_RULES_TEXT
-                                + AUTOPILOT_RULES_TEXT + ARTIFACT_AUTO_RULES_TEXT)
+                                + AUTOPILOT_RULES_TEXT + ARTIFACT_AUTO_RULES_TEXT
+                                + _todo_rules_suffix())
     return blocks
+
+
+def _todo_rules_suffix() -> str:
+    """`todo_enabled` 开启时追加待办指引（关 ⇒ 空串，**逐字节零回归**）。
+
+    ★ 2026-10-28：为什么要"开关控制"而不是常开 —— 关闸是设计意图（未验证的机制
+      不上默认路径），但**开了就必须配套提示词**，否则工具在、模型不知道用，
+      闸永远走 fallback（9726/9730 的实测结论）。
+      判据：开 ⇒ 提示词含 `todo_write`；关 ⇒ 与旧值逐字节相同。
+    """
+    try:
+        from core import config as _cfg
+        if not bool(_cfg.as_bool("agent", "todo_enabled", False)):
+            return ""
+    except Exception:
+        return ""
+    return TODO_RULES_TEXT
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -567,15 +678,42 @@ def reset_request_state(pipe) -> None:
     pipe._tool_user = None               # 工具审计归属用户（跨用户泄漏审计链）
     pipe._tool_intent_ctx = None         # 工具审计归属意图
     pipe._tool_agent_ctx = None          # 工具审计归属 Agent
+    # ★ P0-3（2026-10-27）：本轮 trace_id —— 与 `llm_usage_stats.trace_id` **同源同值**，
+    #   是"这一轮对话调了哪些能力、花了多少钱"的唯一 JOIN 键。
+    #   ⚠️ **必须清零**：Pipeline 是全局单例，不清 ⇒ 上一轮的 trace 会被写进本轮的
+    #   工具调用日志，追溯结果指向**别人的那一轮**（比留空更糟：看起来有值、但是错的）。
+    pipe._tool_trace_id = ""
+    # ★ 2026-10-30：本轮墙钟 deadline（`time.time()` 绝对时间戳；0=不限）。
+    #   必须清零：Pipeline 是全局单例（见本函数 docstring），不清 ⇒ 上一轮的长墙钟
+    #   会漏进本轮，表现为"这轮刚开口就被判超预算"（比留空更糟：看起来在跑、其实立刻收尾）。
+    #   ⚠️ 顺序约束：`stream.py` 必须在**本函数之后**才赋 `self._deadline_ts`
+    #   （清零早于赋值），该顺序由 `verify_request_state_reset` A1 守着。
+    pipe._deadline_ts = 0.0
+    # ★ 2026-10-30：写类工具幂等键的**同尝试内序号表**（见 core/idempotency.py）。
+    #   为什么必须清零：序号决定"同一次尝试内第几次同参调用"，
+    #   跨轮残留会让本轮第一次调用就拿到第 N 次的序号 ⇒ 幂等键错位 ⇒ 去重失效。
+    pipe._tool_idem_seq = {}
+    # ★ 2026-10-30：`tools.side_effect` 的**请求内缓存**（见 tools._tool_side_effect）。
+    #   必须清零：管理员把某工具从 read 改成 write 后，若缓存跨轮残留，
+    #   写前确认闸会继续按旧值放行 —— 安全闸读陈旧配置属于"静默失效"。
+    pipe._tool_se_cache = {}
     pipe._skill_allowed_tools = None     # 显式技能授权（见 reset_skill_state 的历史注释）
     pipe._skill_forced = False
     pipe._hil_level = None               # HIL 分级（人工确认队列的判定依据）
+    #   ★ 2026-10-28：此处**每请求清零**（防跨轮残留）是正确的；
+    #   但 stream 路径此前**从不重新赋值** ⇒ 恒为 None ⇒ L2 闸永不触发（断链①）。
+    #   现已修：stream.py 在拿到 agent_def 后赋 `self._hil_level = agent_def.hil_level`。
     # ── 技能注入：本次绑了哪些技能、正文被 offload 到哪里 ──
     pipe._last_skill_hits = []           # 本次命中的技能（门禁与前端展示都读它）
     pipe._skill_body_offloads = []       # ★ 本次 offload 的正文 id（不清 ⇒ 收尾注入上一轮的正文）
     # ── 记忆作用域：mem0 式读写的作用域 ──
     pipe._mem_ctx = None
     pipe._mem_project_id_cache = None    # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
+    # ★ 2026-10-27：补登记 `_rag_memory_hits`（P0-4 引入、当轮漏登记）。
+    #   它虽在 stream.execute_stream 入口会被置 `[]`，但**登记缺失是门禁能发现的唯一信号** ——
+    #   一旦有人把入口那行删掉，跨轮串味（消费到上一轮的 memory_hits）将无人拦。
+    #   `verify_request_state_reset` 的 A2 扫全部 `self.X =` 赋值点与本清单的差集，正是为此。
+    pipe._rag_memory_hits = []
     # ── ★ SysML 交付兜底缓存（本条即"产出雷同"的根因字段）──
     pipe._sysml_last_checked_code = None
     pipe._sysml_last_pass_code = None
@@ -594,19 +732,76 @@ def reset_request_state(pipe) -> None:
     # ★ 2026-11-13（#57）：已取回章节记忆（{章号: 正文}）——请求级瞬态。
     #   不清 ⇒ 下一轮会拿到**上一轮别的用户**的章节正文 = 跨用户数据泄漏（安全红线）。
     pipe._att_fetched = {}
+    # ★ 2026-10-27（会话 9629）：工具结果分页读取的累积状态（键=文件名/taskId）。
+    #   run()/execute() 入口都会重新置 {}，但**必须在此登记**——单例复用下若无登记，
+    #   一旦入口那行被删，上一轮的分片会与本轮同名文件拼在一起（跨轮串味、拼出错文件）。
+    #   与 `_tool_sysml_docs` 同生命周期：persist 后清零。
+    pipe._tool_doc_pages = {}
+    # ★ 2026-10-27：异步任务续跑的「系统现场」陈述（注入 system prompt 用）。
+    #   不清 ⇒ 上一轮的"任务仍在跑"会被写进本轮，模型据此拒干活（跨轮串味）。
+    pipe._async_notes = []
+    # ★ 2026-10-27：本轮清理掉的泄漏工具标记处数（协议自愈留痕，供观测统计）。
+    pipe._leaked_tool_markup = 0
+    # ★ 2026-10-28：重复调用收敛的「强指令」已发次数（stream 的收敛闸用）。
+    #   ⚠️ **必须清零**：Pipeline 是全局单例，不清 ⇒ 下一个会话一进来就已用满 2 次
+    #   ⇒ 收敛闸对它**直接终止而不给强指令**（新会话被上一会话的状态连坐）。
+    pipe._dup_redirect_n = 0
+    # ★ 2026-10-28：被「可消费过滤」剔除的已绑定工具名（tools.py 留痕，供排障）。
+    #   不清 ⇒ 本轮会把**上一个会话**的剔除清单当成自己的，排障直接跑偏。
+    pipe._dropped_by_visibility = []
+    # ★ 2026-10-28：被「就绪度闸」跳过的工具（必需配置为空）。同属排障留痕，
+    #   同样必须清零 —— 否则上一个会话"配置缺失"的记录会挂在本次诊断上，
+    #   让人以为本轮的工具也被跳过了（门禁 A2 会判红，就是靠这条兜住的）。
+    pipe._dropped_unready = []
+    # ★ 2026-10-28（门禁 A2 检出）：以下三项此前未登记，跨请求会残留。
+    #   · `_last_intent_brief` —— 本轮被写进**消息卡片**（exec.brief）。不清 ⇒
+    #     新会话首轮可能带着上一个会话的「我理解你要的…」，用户看到的是别人的意图。
+    #   · `_exec_subject_note` / `_skill_prompt_cache` —— 前者是执行主体说明（会进正文），
+    #     后者虽有 key 比对兜底，但"靠 key 恰好不同"不是不变量 ⇒ 一并清零。
+    pipe._last_intent_brief = None
+    pipe._exec_subject_note = ""
+    pipe._skill_prompt_cache = None
+    # ★ 2026-10-29（同一类残留，本轮新增）：团队路由的归因字段
+    #   · `_team_routed_to` —— 本轮执行主体是否由「主 Agent 团队内定向」改写（非空 = 是）。
+    #     不清 ⇒ 下一轮**没走团队**的请求仍会被标成 source='team_route'（归因错到反方向）。
+    #   · `_team_main_agent` —— 主 Agent 名，供工具构建继承其 MCP/技能。
+    #     不清 ⇒ 下一轮普通请求会**继承上一个会话主 Agent 的平台工具**（越权风险）。
+    pipe._team_routed_to = ""
+    pipe._team_main_agent = ""
+    # ★ 2026-10-29（门禁 A2 检出，归属 S3 技能预算）：以下三项 S3 新增时漏登记。
+    #   均为「本轮技能注入预算」的观测字段，不清 ⇒ 跨请求残留，且**危害方向与缓存类相同**：
+    #   · `_skill_budget_used` / `_skill_budget_limit` —— 不清 ⇒ 上一个会话已用满预算
+    #     ⇒ 新会话**首个技能就被降级成"按需加载"**，本该全量注入的关键技能拿不到正文
+    #     （最坏情形：视图生成技能正文缺失 ⇒ 模型凭记忆造约束）。
+    #   · `_skill_budget_trimmed` —— 排障留痕。不清 ⇒ 把**别人会话**被裁的技能名单
+    #     当成本轮的，据此判断"预算是否偏紧"必然跑偏（同 `_dropped_by_visibility` 的坑）。
+    #   ⚠️ 注意 `_skill_budget_used` 的清零值必须是 0 而非 None：S3 的实现里
+    #     `_used += len(snippet)` 直接累加，None 会抛 TypeError。
+    pipe._skill_budget_used = 0
+    pipe._skill_budget_limit = 0
+    pipe._skill_budget_trimmed = []
 
 
 def reset_skill_state(pipe, skill_name) -> None:
     """显式技能注入的**状态起点**（两路径统一调用，且必须在任何分支之前）。
 
-    每轮无条件重置两项：`_skill_forced = bool(skill_name)`、`_skill_allowed_tools = None`。
+    每轮无条件重置三项：`_skill_forced = bool(skill_name)`、`_skill_allowed_tools = None`、
+    `_skill_prompt_cache = None`。
 
     ⚠️ 为什么必须**无条件清零**而不是"有技能时才设"：`_skill_allowed_tools` 是**实例属性**，
     而对话走的是**全局单例**。只在"有白名单时赋值"会让上一轮的值**残留到本轮**
     （表现为"这轮明明没指定技能，却拿到了上一个技能的授权"），且极难复现。
+
+    ★ 2026-10-27：新增清 `_skill_prompt_cache` —— 它是**本轮**技能匹配结果的缓存
+      （见 `skills.py::_build_skill_prompt`），若跨轮残留：
+      ① 同一 intent+input 的第二轮会复用第一轮的 offload id（`_sbody.offload_body`
+         写 `skill_body_offloads` 表并分配 id）⇒ 第二轮拿到的是**上一轮的正文引用**；
+      ② 匹配结果与本轮真实触发条件脱钩（用户改了角色/技能，命中集却不变）。
+      ⇒ 缓存的生命周期必须**严格等于一轮**。
     """
     pipe._skill_forced = bool(skill_name)
     pipe._skill_allowed_tools = None
+    pipe._skill_prompt_cache = None
 
 
 def load_forced_skill(skill_name, *, content_cap: int = 0, include_resources: bool = True,
@@ -775,6 +970,38 @@ def is_topic_switch(sim, shared, is_carry, threshold, use_shared=True):
         return False
 
 
+def gates_snapshot() -> dict:
+    """本轮**真正生效**的执行闸状态（供消息卡片回显）。
+
+    ★ 2026-10-28（conv 9726 实证）：用户明确说「两个开关都开了」，但服务端
+      读到的是 `todo_enabled=False` / `harness_enabled=False`
+      （`~/.workbuddy/mbse_config.json` 六项、两值皆 false，且 mtime 早于该会话）。
+      用户看的是界面下拉框（改完没点「保存配置」/ 被后续保存覆盖），
+      服务端读的是配置文件 —— 双方各信一半，根因判断必然跑偏。
+
+    ⇒ 把**生效值 + 来源文件**一起落进卡片：任何"我记得我开了"都能一眼证伪。
+    只读配置，不做任何写入；取不到就如实给 None（不猜）。
+    """
+    out = {"config_path": None}
+    try:
+        from core import config as _cfg
+        out["config_path"] = str(getattr(_cfg, "CONFIG_PATH", "") or "")
+        for k in ("todo_enabled", "harness_enabled", "obstacle_recovery_enabled"):
+            try:
+                out[k] = bool(_cfg.as_bool("agent", k, False))
+            except Exception:
+                out[k] = None
+        for k, dft in (("harness_max_blocks", 8), ("harness_max_stall", 2),
+                       ("budget_degrade_ratio", 0.7), ("loop_token_budget", 300000)):
+            try:
+                out[k] = _cfg.get("agent", k) if _cfg.get("agent", k) is not None else dft
+            except Exception:
+                out[k] = dft
+    except Exception:
+        pass
+    return out
+
+
 __all__ = [
     'os', 're', 'json', 'time', 'uuid', 'logging', 'logger',
     'get_db', 'db_conn', 'VectorEngine', 'QueryRouter', 'llm_client', 'STATIC_DIR',
@@ -790,6 +1017,7 @@ __all__ = [
     'PROMPT_LAYER_BOUNDARY', 'assemble_system_prompt',
     # P1-28：system_prompt 块内容单一真源（两条路径共用；差异显式参数化）
     'TOOL_RULES_TEXT', 'ASK_USER_RULES_TEXT', 'AUTOPILOT_RULES_TEXT',
+    'TODO_RULES_TEXT', '_todo_rules_suffix',
     'ARTIFACT_AUTO_RULES_TEXT', '_SKILL_CONTENT_CAP', 'PromptBlocksCtx',
     'build_slots_block', 'build_skill_block', 'build_prompt_blocks',
     # P1-29：显式指定技能的注入（两路径统一入口 + 每轮状态起点）
@@ -808,4 +1036,6 @@ __all__ = [
     #   但守卫 [1] import * 语义判红）—— 同族漏网第二次，正说明守卫不能只靠"记得"。
     'CHAT_TASK_PROBE', 'CHAT_TASK_REPAIR', 'CHAT_TASK_ANSWER', 'CHAT_TASK_EVAL',
     '_lg_failed_rounds', '_lg_limit_of', '_lg_stop_reason',
+    # 2026-10-28：执行闸生效值回显（卡片可证伪"我以为开了"）
+    'gates_snapshot',
 ]

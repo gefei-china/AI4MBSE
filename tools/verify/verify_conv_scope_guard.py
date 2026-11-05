@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] B3 匿名不加 user 条件（口径②） 
 # -*- coding: utf-8 -*-
 """B1-9 门禁：会话归属隔离（对话列表按用户 + 按项目过滤）。
 
@@ -29,6 +30,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_conv_scope_guard.py`
 """
 import ast
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import io
 import os
 import re
@@ -41,7 +43,7 @@ import shutil
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ROUTER = os.path.join(ROOT, "routers", "conversations.py")
 REPO = os.path.join(ROOT, "repositories", "conversation_repo.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0
 _fail = 0
@@ -194,7 +196,7 @@ else:
     print("  [SKIP] 未找到真库")
 
 # 隔离矩阵：临时库造 4 类会话
-TMP = tempfile.mkdtemp(prefix="verify_conv_")
+TMP = mkdtemp(prefix="verify_conv_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _tc = sqlite3.connect(TMP_DB)

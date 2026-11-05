@@ -128,6 +128,32 @@ class MemoryService:
         except Exception:
             return 1.0
 
+    @staticmethod
+    def _source_credibility(source: str) -> float:
+        """来源可信度权重（P0#2 融合排序五维之一）。
+
+        按 `memory.source_credibility`（逗号分隔 `key=value`）映射；未配置/解析失败/未知来源 → 1.0（中性，不漂移）。
+        设计：**默认中性**。待后续按 provenance 区分来源可信度（如 push<llm_agent<rule_agent）时，
+        仅改配置即可让融合排序生效，无需动代码。
+        """
+        try:
+            from core import config as _cfg
+            raw = str(_cfg.get("memory", "source_credibility", "") or "").strip()
+        except Exception:
+            raw = ""
+        if not raw:
+            return 1.0
+        _map = {}
+        for _pair in raw.split(","):
+            if "=" not in _pair:
+                continue
+            _k, _v = _pair.split("=", 1)
+            try:
+                _map[_k.strip()] = float(_v.strip())
+            except ValueError:
+                pass
+        return _map.get((source or "").strip(), 1.0)
+
     # ── 读：语义检索 ──
     @staticmethod
     def search(conn, agent_id: str, query: str = "", top_k: int = 5,
@@ -226,11 +252,38 @@ class MemoryService:
                 decay = max(0.4, 1.0 - age_days / max_age_days)  # 时间衰减：越新权重越高
                 # 作用域优先级软重排（mem0 式）：仅调整排序，不改写返回的 score（注入文案口径不变）
                 _boost = MemoryService._scope_boost_of(r, _idx_of, agent_id)
-                scored.append((s * decay * _boost, s, r))
+                # ── P0#2 融合排序五维（2026-10-28）：语义(s) × 时效(decay) × 作用域(_boost)
+                #    × 相关性(relevance) × 可信度(source_credibility) ──
+                # relevance 列已存（deposit 落 extra.get('relevance',1.0)），默认 1.0 中性不漂移；
+                # source_credibility 按来源映射（config `memory.source_credibility`，默认全 1.0 中性）。
+                # 两者默认中性 ⇒ **零行为漂移**；待按 provenance 填真实 relevance / 配 credibility 即生效。
+                rel = float(r.get("relevance") or 1.0) or 1.0
+                cred = MemoryService._source_credibility(r.get("source") or "")
+                scored.append((s * decay * _boost * rel * cred, s, r))
             scored.sort(key=lambda x: x[0], reverse=True)
             out = [{**dict(r), "score": round(_raw, 3)} for _fin, _raw, r in scored[:top_k]]
             # P2：命中记访问（激活度随使用上调，供遗忘引擎评估）
+            # ★ 2026-10-28 修复「噪音霸榜自锁」（生产库实证）：
+            #   此前 `record_access` **不区分命中质量**，任何被 search 命中的条目都 +1 access / +0.1 activation。
+            #   实测后果（mbse.db 172 条活跃）：
+            #     id=170「你好，我是 MBSE 平台的通用助手。你发送的「123」我这边没有识别到具体意图…」
+            #     ⇒ `_is_noise=True`（纯平台话术），却 access=1752、activation 封顶 2.0，
+            #       稳居活跃条 activation 第 1（第 2 名 843，差 2 倍以上）。
+            #   形成闭环：它被命中 → 使用证据上涨 → activation 更高 → 更容易再被命中（正反馈）；
+            #   同时 `access_count>forget_min_access` 使其**永不满足遗忘条件** ⇒ 一条噪音被永久保留。
+            #   修法：记账前先过**与下游同口径**的噪音闸门（`memory_recall._is_noise`），
+            #   噪音命中**不计入使用证据**。
+            #   ⚠️ 这是**纯统计修复，零排序/注入漂移**：闸门不影响本轮 `out`（排序已定），
+            #     而下游（`recall_memories._collect` / `_build_memory_hint`）本就会丢弃噪音。
+            #     收益：噪音不再自我强化，并回归「可被遗忘引擎正常淘汰」的状态。
+            try:
+                from agent.memory_recall import _is_noise as _access_noise_gate
+            except Exception:
+                def _access_noise_gate(_t):
+                    return False
             for it in out[:3]:
+                if _access_noise_gate(str(it.get("content") or "")):
+                    continue
                 MemoryService.record_access(conn, it.get("id"))
             return out
         except Exception:

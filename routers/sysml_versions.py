@@ -21,16 +21,17 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
 from core.deps import db_session, current_user
-from core.audit import audit
+from core.audit import audit, audit_user
 
 router = APIRouter(tags=["SysML 版本"])
 
 
 def _actor(user) -> str:
+    """审计操作人：取已认证用户显示名；取不到标注「未登录」（不再编造人名）。"""
     try:
-        return (user or {}).get("name") or "王工"
+        return audit_user(user)
     except Exception:
-        return "王工"
+        return "未登录"
 
 
 def _row_to_dict(row) -> dict:

@@ -42,9 +42,28 @@ _done = [
 ]
 _ctx = build_subtask_context(_tk, "无人机动力系统建模", _done, artifact_digest="【产物】已有 SysML 模型")
 
-check("F1 上游交付物摘要被截到 ≤400 字（最小上下文，非全量）",
-      "A" * 400 in _ctx and "A" * 401 not in _ctx,
-      "len=%d" % len(_ctx))
+# ★ 2026-11-02（米爸改进点②）：判据**反转并加强**，不是删除。
+#   旧判据「摘要硬截 ≤400 字」正是被修掉的缺陷：400 字会切在 ```sysml 代码块中间
+#   （下游拿到半份代码 + 半份正文，两半都不可用），也会切在「## 结论」之前。
+#   新判据守三件事：
+#     ① 仍有**预算上限**（不是无限制注入）—— 取配置值，且 ≤2000；
+#     ② 代码围栏**不成半份**（围栏数必须为偶数）；
+#     ③ 尾部「结论」能被保住。
+_code_ctx = "```sysml\n" + "package 'P' {\n" + "  part def 'A';\n" * 120 + "}\n```"
+_ctx2 = build_subtask_context(_tk, "无人机动力系统建模",
+                              [{"task_key": "t1", "title": "需求分析",
+                                "result": "A" * 800 + _code_ctx + "\n## 结论\n三个方案选 B"}],
+                              artifact_digest="【产物】已有 SysML 模型")
+from core import config as _cfg_i
+_cap_i = int(_cfg_i.get("delegation", "upstream_digest_chars", 900) or 900)
+check("F1 上游摘要受**配置预算**约束（不再是硬编码 400，也不是无限制）",
+      200 <= _cap_i <= 2000 and _cap_i != 400,
+      "cap=%d" % _cap_i)
+check("F1b 快照里代码围栏不成半份（原 400 硬截会把 ```sysml 劈开）",
+      _ctx2.count("```") % 2 == 0,
+      "fences=%d" % _ctx2.count("```"))
+check("F1c 尾部结论进快照（原实现只留头，结论整段丢）",
+      "三个方案选 B" in _ctx2 or "结论" in _ctx2)
 check("F2 只注入任务定义/期望产出/交付规范，不注入父会话历史消息",
       all(k in _ctx for k in ("任务定义", "期望产出", "交付规范", "上游交付物摘要")),
       "")
@@ -59,6 +78,21 @@ check("F4 _head_tail_clip 超限时保头尾（头 60% 尾 40%，保结论）",
       _capped.startswith("开头重要信息") and _capped.endswith("结尾结论") and "中间省略" in _capped,
       "len=%d" % len(_capped))
 check("F5 _head_tail_clip 未超限原样返回", _ht("短文本", cap=50) == "短文本", "")
+
+# ── F7：_head_tail_clip 不得把 ``` 围栏从中间切开（2026-11-04 新增）──────
+#   真库实证 conv 990408 / msg 5761：21432 字正文围栏 13 个（**奇数**），
+#   最后一段 ```sysml 未闭合 ⇒ 尾部「连接已中断」提示直接落进代码块内部。
+#   ⇒ 切口必须对齐到围栏边界（实现见 planner.py::_head_tail_clip 文档）。
+_fenced = ("开头重要信息" + "中" * 300
+           + "\n```sysml\npackage P {\n" + "    part def X;\n" * 120 + "}\n```\n"
+           + "结尾结论" + "后" * 300)
+_out7 = _ht(_fenced, cap=400)
+check("F7 _head_tail_clip 裁剪后围栏仍配对（不切开代码块）",
+      _out7.count("```") % 2 == 0,
+      "fences=%d（奇数=被切开）" % _out7.count("```"))
+check("F7b 围栏对齐不得牺牲头尾（结论仍在）",
+      _out7.startswith("开头重要信息") and _out7.endswith("后"),
+      "len=%d" % len(_out7))
 
 # ── F6：_summarize_item_budget 预算 ─────────────────────────────────────
 _bud = FlowPlannerMixin._summarize_item_budget
@@ -80,8 +114,13 @@ def _twin(fn_name, mutate):
 
 
 # M1：_head_tail_clip 只留头（去掉尾采样）→ 结尾结论丢失，被抓住
-_ns1 = _twin("_head_tail_clip", lambda s: s.replace("return t[:head] + mark + t[-tail:]",
-                                                     "return t[:cap]"))
+#   ★ 2026-11-04：变异锚点随实现更新 ——
+#     原实现是 `return t[:head] + mark + t[-tail:]`（单行切口）；
+#     现实现（围栏对齐后）拆成 h_end / t_start 两个切口 ⇒ 变异点改为「t_start 取全文长度」。
+#   ⚠️ 锚点必须**随实现同步更新**，否则门禁会「锚点未命中 → NameError」而崩，
+#     崩掉的门禁 = 没有门禁（比断言失效更隐蔽）。
+_ns1 = _twin("_head_tail_clip", lambda s: s.replace(
+    "t_start = _align(len(t) - tail, False)", "t_start = len(t)", 1))
 _r1 = _ns1["_head_tail_clip"](_txt, cap=50)
 check("M1 _head_tail_clip 变异（只留头）→ 结尾结论丢失被抓住", not _r1.endswith("结尾结论"), "")
 

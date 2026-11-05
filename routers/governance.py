@@ -5,7 +5,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from core.deps import db_session
+from core.deps import db_session, current_user
+from core.audit import audit_user
 
 router = APIRouter(tags=["知识治理"])
 
@@ -58,14 +59,14 @@ def shacl_findings(limit: int = 50, conn=Depends(db_session)):
 
 
 @router.post("/api/governance/ontology/release")
-def ontology_release(body: dict, conn=Depends(db_session)):
+def ontology_release(body: dict, conn=Depends(db_session), user=Depends(current_user)):
     """本体发布：SemVer 版本冻结 OWL+SHACL。有 SHACL Violation 时拦截。"""
     from governance import release_snapshot
     res = release_snapshot(
         conn, version=(body.get("version") or "").strip(),
         note=body.get("note") or "",
         project_id=body.get("project_id") or "", branch=body.get("branch") or "dev",
-        operator=body.get("operator") or "王工")
+        operator=audit_user(user))
     if not res.get("ok"):
         return JSONResponse(res, 422)
     return res

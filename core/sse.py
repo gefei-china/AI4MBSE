@@ -175,10 +175,21 @@ def iter_with_heartbeat(iterator, interval_s: float = 15.0, comment: str = "ping
         finally:
             q.put((True, _SENTINEL))   # 无论正常结束还是异常，都必须给下游一个终点
 
-    _t = threading.Thread(target=_worker, name="sse-source", daemon=True)
+    # ★★ 2026-11-03（真库实证）：**必须继承调用方上下文**。
+    #   本 worker 消费的是**编排/对话的同步生成器**（`iterator`），也就是说
+    #   `_stream_orchestrated_flow` / `execute_stream` 里所有 `bind_trace`
+    #   都发生在这条线程上。裸 `threading.Thread` 不继承 ContextVar ⇒
+    #   父请求的 `trace_id` 在这里断掉，生成器内部再 `begin_trace` 会**新开一条链**
+    #   ⇒ 「一次请求 = 一条 trace」不成立，按 trace 聚合成本会把一轮拆成多段
+    #   （实测：同一会话中 `planner` 的 usage `run_id=0`，而子任务是 `run=570`）。
+    #   ⚠️ 用 `copy_context()` 而非 `bind_trace(...)` 逐字段补：后者要在这里
+    #     重新枚举所有字段，漏一个就再次丢归属（本缺陷已因"漏一处"复发过两次）。
+    import contextvars as _cv
+    _sse_ctx = _cv.copy_context()
+    _t = threading.Thread(target=lambda: _sse_ctx.run(_worker),
+                          name="sse-source", daemon=True)
     _t.start()
     started.wait(timeout=5)   # 只等线程启动本身，不等它产出数据
-
     try:
         while True:
             try:
@@ -268,12 +279,39 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
         except BaseException as e:      # noqa: BLE001 —— 含 GeneratorExit，必须回传
             box["exc"] = e
         finally:
+            # ★★ 2026-10-27（用户反馈「中途执行失败后之前输出的内容没有任何展示」）：
+            #   **必须在 worker 线程内关闭事件源**，这是断点保护的最后一环。
+            #
+            #   旧实现只在下面 async 的 `finally` 里 `iterator.close()`，而那一刻
+            #   worker 正阻塞在 `iterator.__next__()`（跑 LLM）里 ⇒ 主线程 close 抛
+            #   `ValueError: generator already executing` ⇒ 被 `except: pass` 吞掉
+            #   ⇒ **事件源从未被真正关闭**：
+            #     · 它停在某个 `yield` 处永远悬着（连 GC 都不会跑，worker 线程还引用着）；
+            #     · `execute_stream` 的 `except GeneratorExit`（断点固化）**永不执行**；
+            #     · 真库实证（conv 9660）：LLM 已生成 872 tokens、库里 0 条 assistant；
+            #       用户报的"输出内容没有任何展示"就是这个。
+            #
+            #   在这里 close：此刻本线程刚跳出 for，事件源**处于挂起态**（不在执行中），
+            #   `close()` 会正常把 `GeneratorExit` 注入到它的 yield 处 ⇒
+            #   其 except/finally（固化正文、闭 span、回填 artifact）得以运行。
+            try:
+                close = getattr(iterator, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                pass
             try:
                 loop.call_soon_threadsafe(q.put_nowait, (True, _DONE))
             except RuntimeError:
                 pass                        # loop 已关，无需收尾
 
-    _th.Thread(target=_worker, name="sse-source-async", daemon=True).start()
+    # ★★ 2026-11-03：与同步版同一个缺陷（裸 threading.Thread 不继承 ContextVar）。
+    #   本 worker 在自建线程里迭代生成器 ⇒ 生成器内所有 `bind_trace` 都落在这条线程上，
+    #   父请求的 trace 在这里断链。用 `copy_context()` 一次性继承全部字段。
+    import contextvars as _cv2
+    _sse_ctx2 = _cv2.copy_context()
+    _th.Thread(target=lambda: _sse_ctx2.run(_worker),
+               name="sse-source-async", daemon=True).start()
 
     try:
         while True:
@@ -293,7 +331,11 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
             raise exc
     finally:
         stop.set()             # 先叫停 worker，再关事件源（顺序反了会漏帧）
-        # 客户端断开 → 外层关闭本生成器 → 连带把事件源关掉，避免 LLM 继续烧钱
+        # 客户端断开 → 外层关闭本生成器 → 连带把事件源关掉，避免 LLM 继续烧钱。
+        # ⚠️ 2026-10-27：这里通常是**尽力而为**（worker 正在 `__next__` 里跑 LLM 时，
+        #   本线程 close 会抛 `generator already executing`，被下面吞掉）。
+        #   **真正生效的 close 在 `_worker` 的 finally 里**（同一线程、挂起态，必成）。
+        #   两处都留：worker 已结束的场景由这里直接关，worker 仍在跑的场景由它自己关。
         try:
             close = getattr(iterator, "close", None)
             if callable(close):

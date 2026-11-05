@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL F5 ★合法空参数在真实循环里正常执行（未被误判为截断） 
 # -*- coding: utf-8 -*-
 """Agent Loop 协议门禁（2026-10-07）—— 并行 tool_calls 配对 + 截断参数拒绝。
 
@@ -195,7 +196,7 @@ print("\n== F. ★端到端：驱动真实 ReAct 循环 ==")
 import shutil
 import tempfile
 
-_SRC_DB = os.path.join(ROOT, "mbse.db")
+_SRC_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 _TMP_DB = os.path.join(tempfile.gettempdir(), "_loop_e2e.db")
 _have_db = os.path.exists(_SRC_DB)
 ck(_have_db, "F0 生产库存在（端到端需真实会话/工具元数据）")

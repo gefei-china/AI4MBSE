@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] 需真实服务/真 LLM/生产真库金标或随包运行时资产，CI 跑不了；源码直连真实服务/真实 key（CI 无服务无 secret） 
 """验证 Agent 名称口径统一（2026-09-30 用户反馈 2：卡片名 ≠ 编辑页设置的名）。
 
 # ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
@@ -33,6 +34,7 @@ H   真库端到端：拿既有「测试agent」改名 → 级联 → 改回（�
 - 变异自证：把级联换成 no-op / 换成 lastrowid 写法，关键判据必须翻转。
 """
 import json
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import shutil
@@ -51,7 +53,16 @@ from repositories.agent_repo import AgentRepo  # noqa: E402
 from routers.studio_parts.agents import _rename_warnings  # noqa: E402
 
 API = os.environ.get("MBSE_API", "http://127.0.0.1:8000")
-NODE = os.environ.get("MBSE_NODE", r"C:\Users\gefei\.workbuddy\binaries\node\versions\22.22.2-3\node.exe")
+# ★2026-10-24：硬编码的 node 版本目录会随 WorkBuddy 升级漂移（22.22.2-3 →
+#   22.22.2-6 实测 FileNotFoundError，门禁整体 exit 1）⇒ 两级解析：
+#   环境变量 > PATH 上的 node。没有 node 时该段子进程断言自然失败并说清原因。
+# ⚠️ 2026-11-05：删掉了第三级「硬编码本机路径（存在才用）」——
+#   那一条在本机永远存在、在 CI 永远不存在，等于**给本地和 CI 两套行为**，
+#   而且泄露本机用户名。既然有 PATH 兜底，硬编码这级就没有存在理由。
+NODE = os.environ.get("MBSE_NODE") or ""
+if not NODE:
+    import shutil as _sh
+    NODE = _sh.which("node") or _sh.which("node.exe") or ""
 PASS, FAIL = [], []
 CUR = FAIL
 MF = []
@@ -78,7 +89,7 @@ REF_COLS = (("agent_tasks", "agent_id"), ("agent_memory", "agent_id"), ("tool_ca
 
 
 def new_db():
-    d = tempfile.mkdtemp()
+    d = mkdtemp()
     c = sqlite3.connect(os.path.join(d, "t.db"))
     c.row_factory = sqlite3.Row
     for s in DDL:
@@ -303,7 +314,7 @@ def g_frontend():
                        "suggestAgentName('需求视图生成')",
                        "suggestAgentName('')",
                        "suggestAgentName('ab-c_9')"]) + "]));")
-    td = tempfile.mkdtemp()
+    td = mkdtemp()
     tmpjs = os.path.join(td, "s.js")
     open(tmpjs, "w", encoding="utf-8").write(src)
     r = subprocess.run([NODE, tmpjs], capture_output=True, text=True, timeout=40)

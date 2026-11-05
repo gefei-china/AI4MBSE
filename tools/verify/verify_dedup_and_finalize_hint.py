@@ -40,6 +40,7 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_dedup_and_finalize_hint.py
 """
 from __future__ import annotations
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 
 import os
 import sys
@@ -137,7 +138,7 @@ def _make_db(seed: str) -> str:
     import os as _os
     import sqlite3
     import tempfile
-    path = _os.path.join(tempfile.mkdtemp(prefix="dedup_probe_"), "t.db")
+    path = _os.path.join(mkdtemp(prefix="dedup_probe_"), "t.db")
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,"
                  " conversation_id INT, role TEXT, content TEXT,"

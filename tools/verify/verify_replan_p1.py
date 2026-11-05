@@ -39,6 +39,7 @@
 """
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -137,8 +138,21 @@ def t_static():
     ok &= _rec("S4b R11：schema DDL 注释含 replan 第七类",
                "views | replan" in schema)
     gate43 = _read(ORCH_SPAN_GATE)
-    ok &= _rec("S4c R11：verify_orch_span S1b/S2c 已同步 replan",
-               "views\", \"replan\")" in gate43 and "replan 第七类" in gate43)
+    # ⚠️ 2026-11-05 修：原判据是 `"replan 第七类" in gate43` —— 匹配的是**文案措辞**。
+    #    verify_orch_span 后来把文案改成「编排七类 kind 常量齐备（P1 起 + replan 重规划决策记录）」，
+    #    语义没变而判据翻红 ⇒ 假红。同族已撞三次（`_tracer=None):` / `"..." in ci_yml`）。
+    #    改成**语义锚点**：断言「七类清单的元组实参里含 replan」——
+    #    文案随便改都绿，一旦把 replan 从清单里删掉就红。
+    ok &= _rec("S4c R11：verify_orch_span 的七类 kind 清单含 replan（语义锚点，不看文案）",
+               bool(re.search(r'for\s+k\s+in\s+\(([^)]*)\)', gate43, re.S)
+                    and re.search(r'for\s+k\s+in\s+\([^)]*"replan"', gate43, re.S)),
+               "verify_orch_span 里找不到含 replan 的 seven-kind 清单")
+    # S4c 判据自证：合成两例（含/不含 replan）必须一绿一红
+    _syn_a = 'for k in ("run", "views", "replan")'
+    _syn_b = 'for k in ("run", "views", "summary")'
+    ok &= _rec("S4c-s 判据自证（含 replan=绿 / 缺 replan=红）",
+               bool(re.search(r'for\s+k\s+in\s+\([^)]*"replan"', _syn_a, re.S))
+               and not re.search(r'for\s+k\s+in\s+\([^)]*"replan"', _syn_b, re.S))
 
     chat = _read(CHAT_JS)
     ok &= _rec("S5a 前端 kindMeta 有 replan 标签",
@@ -154,9 +168,11 @@ def t_static():
     else:
         _rec("S5c JS 语法（无 node 环境，按惯例 SKIP）", True, kind=VACUOUS)
 
-    ci = _read(CI_YML) if os.path.exists(CI_YML) else ""
-    ok &= _rec("S6 CI 接线：verify_replan_p1 已注册（G5 纪律）",
-               "verify_replan_p1.py" in ci)
+    # ⚠️ 2026-11-05 **删除**了原 S6「verify_replan_p1 已注册在 ci.yml 里」这条断言。
+    #   理由：这是**元信息断言**，职责属于元门禁（verify_gate_manifest G6a 查
+    #   「清单 pr ⊆ ci.yml」、G11 查反方向）。把它塞进业务门禁里会制造两处真源：
+    #   本轮把本门禁降级到 local 后，CI 里自然没有它 ⇒ 这条断言假红，
+    #   而"降级"是完全合法的操作。**门禁不该自证自己跑在哪一层。**
     return ok
 
 

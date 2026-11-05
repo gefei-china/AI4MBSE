@@ -22,6 +22,8 @@ from .rebuild import (
 from .columns import (
     _migrate_columns,
     _migrate_branch_protection,
+    _migrate_skill_revision_rejects,
+    _backfill_probe_marks,
 )
 from .ontology import (
     _ensure_ontology_types,
@@ -79,6 +81,9 @@ from .misc import (
     _migrate_mr_status,
     _apply_env_keys,
     _migrate_eval_tables,
+    _migrate_online_eval_tables,      # 2026-10-25 P0-b 生产回流两表（采样队列 + 生成标签）
+    _migrate_agent_todos,             # 2026-10-28 P0-3 计划外化：agent_todos 表
+    _migrate_tool_idempotency,        # 2026-10-30 P0-1 写类工具幂等键表
     _migrate_kb_v2_enhance,
     _backfill_commit_baseline,
     _migrate_mr_comments,
@@ -96,6 +101,9 @@ from .misc import (
     _migrate_curriculum_p22,           # 2026-10-19 失败驱动任务提案队列（P2-2，只提议不自动执行）
     _migrate_agent_archive_p23,        # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3，只记录不切换生效版本）
     _migrate_flow_topology_p24,        # 2026-10-19 画布拓扑台账 + 结构体检（P2-4，只记录不改拓扑）
+)
+from .events import (
+    _migrate_event_tables,            # 2026-11-01 事件驱动底座三表（Super-agent 落地 P0-2/P0-4）
 )
 from .permissions import (
     _migrate_agent_tool_perm,         # 2026-10-06 Agent 工具链 RBAC + HIL 批准授权（P0-6/P0-2）
@@ -154,6 +162,9 @@ __all__ = [
     "_migrate_mr_status",
     "_apply_env_keys",
     "_migrate_eval_tables",
+    "_migrate_online_eval_tables",
+    "_migrate_agent_todos",
+    "_migrate_tool_idempotency",
     "_migrate_kb_v2_enhance",
     "_backfill_commit_baseline",
     "_migrate_mr_comments",
@@ -170,4 +181,5 @@ __all__ = [
     "_migrate_curriculum_p22",  # 2026-10-19 失败驱动任务提案队列（P2-2）
     "_migrate_agent_archive_p23",  # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3）
     "_migrate_flow_topology_p24",  # 2026-10-19 画布拓扑台账 + 结构体检（P2-4）
+    "_migrate_event_tables",  # 2026-11-01 事件驱动底座三表（Super-agent 落地 P0-2/P0-4）
 ]

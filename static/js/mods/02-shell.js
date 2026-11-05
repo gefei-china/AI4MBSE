@@ -147,13 +147,24 @@ function closePanel() {
 // 2026-09-17 D1：kb 的一级名统一为「知识中心」（与主导航项 nav-kbhub 对齐；原先写作「模型本体」，
 // 与导航标签口径不一致，会让「最近访问」标签显示成 模型本体）。
 // 2026-09-17 R7：移除死条目 branch('合并队列' 页已删，go('branch') 重定向到 kb-d) 与 modelcfg('模型配置' 已并入 studio/st-model)。
-const TITLES = {home:'总览',ai:'AI 建模',kb:'知识中心',reports:'报告',studio:'能力中心',settings:'设置',users:'用户与权限管理',audit:'审计日志',ops:'运行监控中心',approval:'审批管理',evolution:'自进化周报'};
+// 2026-10-23：移除死条目 approval('审批管理' 页已下线，纯前端原型、假审批流水)。
+const TITLES = {home:'总览',ai:'AI 建模',kb:'知识中心',reports:'报告',studio:'能力中心',settings:'设置',users:'用户与权限管理',audit:'审计日志',ops:'运行监控中心',evolution:'自进化周报',eval:'评测管理'};
 // 二级页提升一级导航：子 Tab 入口的页面标题映射
 const KB_TAB_TITLES = {'kb-a':'数据看板','kb-e':'文档库','kb-b':'治理中心','kb-c':'本体模型','kb-d':'知识图谱',};
 // 2026-09-17 R7：补 'st-prompt'（提示词模板，真实 subpage，`09-impact.js:1134` / `36-capability.js:72` 会 go 过来），
 // 缺它会让面包屑退化成「能力中心」、且 loadPage 走不到子 Tab 直达分支
-const ST_TAB_TITLES = {'st-agent':'Agent','st-skill':'技能','st-mcp':'工具与 MCP','st-market':'插件市场','st-model':'模型配置','st-prompt':'提示词模板','st-changelog':'变更记录'};
-const STG_TAB_TITLES = {'st-projmem':'项目记忆','st-hooks':'工具钩子','st-fextract':'文件抽取'};
+const ST_TAB_TITLES = {'st-agent':'Agent','st-skill':'技能','st-mcp':'工具与 MCP','st-market':'插件市场','st-model':'模型配置','st-prompt':'提示词模板','st-changelog':'变更记录','st-registry':'能力账本'};
+// ⚠️ 2026-10-27：本表**原只登记 3 项**（项目记忆/工具钩子/文件抽取），而 HTML 里
+//   `data-tabgrp="stg"` 实际有 7 个 tab。`go(p,tabId)` 的分支条件正是
+//   `if(p==='settings' && STG_TAB_TITLES[tabId])` ⇒ 深链到未登记的 tab
+//   （如 st-ctx / st-think / st-intent-samples / st-mem）会被**静默忽略**，
+//   停在默认的「项目记忆」上，既不报错也不提示 —— 典型的"看着没反应"。
+//   补齐后深链可用，面包屑也能取到正确的子页名。
+const STG_TAB_TITLES = {
+  'st-projmem': '项目记忆', 'st-hooks': '工具钩子', 'st-fextract': '文件抽取',
+  'st-ctx': 'AI 上下文', 'st-think': '任务级思考',
+  'st-intent-samples': '意图样本', 'st-mem': 'AI 记忆',
+};
 // 2026-09-17 D2：面包屑取名唯一入口。知识中心域（kb-a 数据看板 / kb-d 图谱工作区 / kb-e 资料库）只显示一级名「知识中心」，
 // 不再下钻到子域 —— 明确「主导航=域，面包屑=域」的口径（其余页面仍取子 Tab 名）。
 // 2026-09-18：kb-a 由**隐藏入口**升为知识中心默认落点，故一并纳入「只显示一级名」的范畴。
@@ -394,7 +405,7 @@ function tab(el,grp,id) {
   if(grp==='st') loadStudioTab(id);
   if(grp==='stg') loadSettingsTab(id);
   if(grp==='ur') loadURTab(id);
-  if(grp==='ap') loadApprovalTab(id);
+  // 2026-10-23：审批管理页下线（纯前端原型、假业务数据）——原：if(grp==='ap') loadApprovalTab(id);
   // 二级页提升一级导航：页面内 Tab 切换联动主导航高亮 + 顶栏面包屑 cur
   if(grp==='kb'||grp==='st'||grp==='stg'){
     const pg = grp==='kb' ? 'kb' : (grp==='st' ? 'studio' : 'settings');
@@ -449,9 +460,12 @@ function loadPage(p, tabId) {
   if(p==='users') loadURTab('ur-a');
   if(p==='audit') loadAudit();
   if(p==='ops') loadOps();
-  if(p==='approval') loadApprovalTab('ap-type');
+  // 2026-10-23：审批管理入口下线（纯前端原型、假业务数据，后端另立需求）——
+  // 原：if(p==='approval') loadApprovalTab('ap-type');
   // 2026-10-20 自进化周报（价值感知层）：三段可行动摘要，只读
   if(p==='evolution') loadEvolutionReport();
+  // 2026-10-22 评测管理（质量可见性）：最新分 + 历史趋势 + 门禁接线，只读
+  if(p==='eval') loadEvalManagement();
 }
 
 // ── 工作台 ──
@@ -476,10 +490,10 @@ async function loadHome() {
   if(convEl) convEl.innerHTML = convs.length
     ? convs.map(c=>`<div style="display:flex;align-items:center;gap:6px;padding:5px 4px;border-bottom:1px dashed var(--line);cursor:pointer;border-radius:6px;" onclick="goToConversation(${c.id})" title="进入对话：${esc(c.title)}">
         <span class="st ${c.status==='active'?'ok':'g'}">${c.status==='active'?'进行中':'已归档'}</span>
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;">${esc(c.title)}</span>
-        <small style="color:var(--mut);font-size:10.5px;flex:none;">${esc((c.updated_at||'').slice(5,16).replace('T',' '))}</small>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;">${esc(c.title)}</span>
+        <small style="color:var(--mut);font-size:12px;flex:none;">${esc((c.updated_at||'').slice(5,16).replace('T',' '))}</small>
       </div>`).join('')
-    : '<div style="font-size:11.5px;color:var(--mut);padding:4px 0;">暂无对话 — 点击「新建建模对话」开始</div>';
+    : '<div style="font-size:12.5px;color:var(--mut);padding:4px 0;">暂无对话 — 点击「新建建模对话」开始</div>';
   // 📦 资产概览：模型资产一屏掌握
   const as = d.assets||{};
   const assetEl = document.getElementById('assets-home');
@@ -499,18 +513,18 @@ async function loadHome() {
     if(g) g.innerHTML = `你好，<b>${esc(me.display_name)}</b>（${esc(roleTxt)}${esc(deptTxt)}）｜ 专属工作空间，数据/模型/配置隔离（FR-UR-3）`;
     const prof = getRoleProfile(me);
     const reEl = document.getElementById('role-entries-home');
-    if(reEl) reEl.innerHTML = `<div style="font-size:11px;color:var(--mut);margin-bottom:6px;">当前视角：<b>${esc(prof.label)}</b> — 按角色权限推荐入口</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">` +
+    if(reEl) reEl.innerHTML = `<div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;">当前视角：<b>${esc(prof.label)}</b> — 按角色权限推荐入口</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">` +
       prof.entries.map(e=>`<button class="btn ghost" onclick="go('${e[1]}'${e[2]?`,'${e[2]}'`:''})">${e[0]}</button>`).join('') + '</div>';
   } else {
     const reEl = document.getElementById('role-entries-home');
-    if(reEl) reEl.innerHTML = '<div style="font-size:11px;color:var(--mut);">未登录 — 切换账号后按角色展示专属入口</div>';
+    if(reEl) reEl.innerHTML = '<div style="font-size:12.5px;color:var(--mut);">未登录 — 切换账号后按角色展示专属入口</div>';
   }
   // 🕘 最近操作轨迹（audit_logs 当前用户）
   const acts = d.recent_activities||[];
   const actEl = document.getElementById('recent-acts-home');
   if(actEl) actEl.innerHTML = acts.length
-    ? acts.map(a=>`<span class="tag" title="${esc(a.detail||'')}" style="font-size:11px;">${esc(a.event_type||'')}：${esc((a.detail||'').slice(0,24))} <small style="opacity:.7;">${esc((a.created_at||'').slice(5,16).replace('T',' '))}</small></span>`).join('')
-    : '<span style="font-size:11px;color:var(--mut);">暂无操作记录 — 完成建模/审核等操作后会显示在这里</span>';
+    ? acts.map(a=>`<span class="tag" title="${esc(a.detail||'')}" style="font-size:12.5px;">${esc(a.event_type||'')}：${esc((a.detail||'').slice(0,24))} <small style="opacity:.7;">${esc((a.created_at||'').slice(5,16).replace('T',' '))}</small></span>`).join('')
+    : '<span style="font-size:12.5px;color:var(--mut);">暂无操作记录 — 完成建模/审核等操作后会显示在这里</span>';
   renderRecentPages();
   // 近期报告：报告前 5 条（工作台资产聚合入口）
   try{
@@ -518,15 +532,15 @@ async function loadHome() {
     const el = document.getElementById('recent-reports-home');
     const typeCls = {impact:'b', review:'w', analysis:'ok', other:'g'};
     if(!reports || !reports.length){
-      el.innerHTML = '<div style="font-size:11.5px;color:var(--mut);padding:4px 0;">暂无报告 — AI 建模产出报告后自动归档</div>';
+      el.innerHTML = '<div style="font-size:12.5px;color:var(--mut);padding:4px 0;">暂无报告 — AI 建模产出报告后自动归档</div>';
     }else{
       el.innerHTML = reports.slice(0,5).map(r=>`<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px dashed var(--line);">
         <span class="st ${typeCls[r.report_type]||'g'}" style="flex:none;">${esc(r.report_type_label||r.report_type)}</span>
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;cursor:pointer;color:var(--blue-d);" onclick="viewReport(${r.id})" title="${esc(r.title)}">${esc(r.title)}</span>
-        <span style="font-size:10.5px;color:var(--mut);flex:none;">${esc((r.created_at||'').slice(5,16).replace('T',' '))}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;cursor:pointer;color:var(--blue-d);" onclick="viewReport(${r.id})" title="${esc(r.title)}">${esc(r.title)}</span>
+        <span style="font-size:12px;color:var(--mut);flex:none;">${esc((r.created_at||'').slice(5,16).replace('T',' '))}</span>
       </div>`).join('') +
-      (reports.length>5?`<div style="font-size:11px;color:var(--mut);padding-top:4px;text-align:center;">… 共 ${reports.length} 份，<a style="cursor:pointer;color:var(--blue-d);" onclick="go('reports')">查看全部 →</a></div>`:'');
+      (reports.length>5?`<div style="font-size:12.5px;color:var(--mut);padding-top:4px;text-align:center;">… 共 ${reports.length} 份，<a style="cursor:pointer;color:var(--blue-d);" onclick="go('reports')">查看全部 →</a></div>`:'');
     }
-  }catch(e){ const el = document.getElementById('recent-reports-home'); if(el) el.innerHTML = '<div style="font-size:11.5px;color:var(--mut);">加载失败</div>'; }
+  }catch(e){ const el = document.getElementById('recent-reports-home'); if(el) el.innerHTML = '<div style="font-size:12.5px;color:var(--mut);">加载失败</div>'; }
 }
 // 工作台最近对话：进入 AI 建模并选中该对话

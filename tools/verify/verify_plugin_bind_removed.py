@@ -128,7 +128,7 @@ def main():
     print("=" * 72)
     print("D. 数据层：agent_tools 无 plugin 绑定残留（新连接复核）")
     print("=" * 72)
-    # ⚠️ 2026-10-05 修订：原先硬编码 `os.path.join(ROOT, "mbse.db")`
+    # ⚠️ 2026-10-05 修订：原先硬编码 `(os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))`
     # ⇒ 设了 MBSE_DB_PATH 指向干净库时它**仍在读生产库**（本地绿 / CI 红，同 verify_skill_injection 那个坑）。
     # 改读配置里的 DB_PATH。
     sys.path.insert(0, ROOT)

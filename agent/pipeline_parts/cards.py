@@ -83,9 +83,19 @@ class CardMixin:
             kinds_clean = [k for k in sysml_kinds if k and k != "None"][:4]
             if kinds_clean:
                 bullets.append(f"生成视图：{', '.join(kinds_clean)}")
-        # 方案/对比（design intent）
-        if cd.get("intent") == "design" and len(bullets) < 5:
-            bullets.append("生成多方案对比，等待确认")
+        # 方案/对比（多方案平台工具 `alternatives_score` 实际被调用时才显示）
+        # ⚠️ 2026-11-03（平台化改造）：原写法是 `intent == "design"` ⇒ **无条件**显示
+        #    「生成多方案对比，等待确认」—— 属**假信号**（不论模型是否真产出多方案都显示）。
+        #    改为按**实际工具调用**判定：数据源 = card_data.exec.tools（所有工具通用）。
+        #    ⇒ 文案与事实一致；且不再需要为"多方案"在管线里留任何专用分支。
+        try:
+            _alt_called = any(
+                str((t or {}).get("name") or "") == "alternatives_score"
+                for t in ((cd.get("exec") or {}).get("tools") or []))
+        except Exception:
+            _alt_called = False
+        if _alt_called and len(bullets) < 5:
+            bullets.append("已生成多方案对比表")
         if cd.get("orchestrated_status") == "partial" and len(bullets) < 5:
             bullets.append("⚠️ 部分完成，建议补充缺失子任务")
         elif cd.get("degraded") and len(bullets) < 5:
@@ -395,6 +405,12 @@ class CardMixin:
         except Exception:
             return None
 
+
+    # ⚠️ 2026-11-03（平台化改造）：`_gen_alternatives` 已**移除**。
+    #   多方案对比不再由管线抽取 LLM 正文生成，而是走**平台工具** `alternatives_score`：
+    #   模型调用工具 → 结果进 `card_data.exec.tools` → 前端按**工具名**渲染（与覆盖性
+    #   工具 covTryCard 同款机制）。
+    #   ⇒ 管线**不认识**"多方案"这个概念；换维度/改权重/改编排规则**都不必改本文件**。
 
     @staticmethod
     def _extract_stream_deltas(chunk):

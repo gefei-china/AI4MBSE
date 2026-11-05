@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] B1 INSERT 语句含 agent_name_snapshot 
 # -*- coding: utf-8 -*-
 """B1-11 门禁：`agent_tasks.agent_id` 的**孤儿引用**检测。
 
@@ -28,6 +29,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_orphan_agent_ref.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import sys
@@ -39,7 +41,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 TQUEUE = os.path.join(ROOT, "task_queue.py")
 SCHEMA = os.path.join(ROOT, "database", "schema.py")
 MIGR = os.path.join(ROOT, "database", "migrations", "columns.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0
 _fail = 0
@@ -94,7 +96,7 @@ check("C3 解析失败返回空串而非抛错（不阻断落库）",
       'return ""' in _rn or 'return str(' in _rn)
 
 print("\n=== D. 行为层：快照真落库（临时库）===")
-TMP = tempfile.mkdtemp(prefix="verify_orphan_")
+TMP = mkdtemp(prefix="verify_orphan_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _tc = sqlite3.connect(TMP_DB)

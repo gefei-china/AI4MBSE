@@ -56,7 +56,7 @@ function _thinkRow(f, v){
     <label style="min-width:230px;padding-top:4px;">${f.label}
       <div class="info-tip" title="${f.hint.replace(/"/g,'&quot;')}">ⓘ</div></label>
     <div style="flex:1;">${ctrl}
-      <div style="font-size:10.5px;color:var(--mut);margin-top:3px;line-height:1.5;">${f.hint}</div></div>
+      <div style="font-size:12px;color:var(--mut);margin-top:3px;line-height:1.5;">${f.hint}</div></div>
   </div>`;
 }
 
@@ -74,11 +74,11 @@ async function loadThinkCfg(){
   }
   const val = k => { const [s,key] = k.split('.'); return (st[s]||{})[key]; };
   // 附上「自校正建议清单」——让"要不要采纳"有据可依
-  let sugHtml = '<div style="font-size:11px;color:var(--mut);margin:10px 0;">正在计算自校正建议…</div>';
+  let sugHtml = '<div style="font-size:12.5px;color:var(--mut);margin:10px 0;">正在计算自校正建议…</div>';
   box.innerHTML = `<div class="panel" style="padding:12px;">
       ${THINK_FIELDS.map(f => _thinkRow(f, val(f.key))).join('')}
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);">
-        <div style="font-size:12px;font-weight:500;margin-bottom:6px;">📊 自校正建议清单（按真库实测数据）</div>
+        <div style="font-size:13.5px;font-weight:500;margin-bottom:6px;">📊 自校正建议清单（按真库实测数据）</div>
         <div id="think-suggest">${sugHtml}</div>
       </div>
     </div>`;
@@ -91,8 +91,8 @@ async function loadThinkSuggestions(){
   try{
     const r = await api('/api/system/config/think-suggest');
     const list = (r && r.suggestions) || [];
-    if(!list.length){ box.innerHTML = '<div style="font-size:11px;color:var(--mut);">当前无满足「建议关思考」条件的意图（样本量或占比未达阈值）。</div>'; return; }
-    box.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:11.5px;">
+    if(!list.length){ box.innerHTML = '<div style="font-size:12.5px;color:var(--mut);">当前无满足「建议关思考」条件的意图（样本量或占比未达阈值）。</div>'; return; }
+    box.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12.5px;">
       <tr style="color:var(--mut);"><td style="padding:3px 4px;">意图</td><td>样本</td><td>思考占比</td><td>平均产出</td><td></td></tr>
       ${list.map(s => `<tr style="border-top:1px solid var(--line);">
         <td style="padding:3px 4px;">${s.intent}</td>
@@ -102,12 +102,12 @@ async function loadThinkSuggestions(){
         <td><button class="btn sm" onclick='addThinkOff("${s.intent}")'>加入 off 名单</button></td>
       </tr>`).join('')}
     </table>
-    <div style="font-size:10.5px;color:var(--mut);margin-top:5px;">
+    <div style="font-size:12px;color:var(--mut);margin-top:5px;">
       判据：思考占比 ≥ <code>autotune_min_ratio</code> <b>且</b>平均产出 ≤ <code>autotune_max_output</code>，且样本量 ≥ <code>autotune_min_samples</code>。
       ⚠️ 点击只是<b>追加到下方输入框</b>，仍需点「保存配置」才生效。
     </div>`;
   }catch(e){
-    box.innerHTML = `<div style="font-size:11px;color:var(--danger);">建议清单不可用：${(e&&e.message)||e}</div>`;
+    box.innerHTML = `<div style="font-size:12.5px;color:var(--danger);">建议清单不可用：${(e&&e.message)||e}</div>`;
   }
 }
 

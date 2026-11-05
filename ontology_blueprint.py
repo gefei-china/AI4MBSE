@@ -57,7 +57,7 @@ def draft_from_text(conn, text: str, operator: str = "知识工程师") -> dict:
     LLM 模式：system prompt 要求输出 JSON
       [{"type_kind":"entity|relation|attribute","name","parent_name","properties":{},"relation_src","relation_tgt"}]
     严格按本体类型语义（relation 需 src/tgt 类型名）。
-    Mock/失败 → _mock_draft 规则兜底。
+    Mock/失败 → _mock_draft 规则兜底（标 extractor="rule"，**明确区别于模型产出**）。
     返回 {batch_id, drafts: [...], error}
     """
     text = (text or "").strip()
@@ -89,7 +89,11 @@ def draft_from_text(conn, text: str, operator: str = "知识工程师") -> dict:
     except Exception:
         candidates = None
     if candidates is None:
+        # ★ 2026-10-23：规则降级草案显式标注 extractor="rule"，
+        #   与 LLM 草案在数据层可区分（草案会进 ontology_drafts 待人工审）。
         candidates = _mock_draft(text)
+        for _c in (candidates or []):
+            _c["extractor"] = "rule"
     batch = f"ontd-{uuid.uuid4().hex[:8]}"
     drafts = []
     for c in (candidates or [])[:20]:
@@ -102,6 +106,11 @@ def draft_from_text(conn, text: str, operator: str = "知识工程师") -> dict:
         props = c.get("properties") or {}
         if not isinstance(props, dict):
             props = {"raw": str(props)[:200]}
+        else:
+            props = dict(props)
+        # extractor 标记落进 properties（持久化），使"规则草案"在治理界面可识别
+        if c.get("extractor"):
+            props["extractor"] = str(c["extractor"])[:20]
         ex = conn.execute(
             "SELECT id FROM ontology_drafts WHERE batch_id=? AND name=? AND type_kind=?",
             (batch, name, type_kind)).fetchone()
@@ -114,6 +123,7 @@ def draft_from_text(conn, text: str, operator: str = "知识工程师") -> dict:
              json.dumps(props, ensure_ascii=False), str(c.get("relation_src") or "")[:24],
              str(c.get("relation_tgt") or "")[:24], str(c.get("evidence") or "")[:300], operator))
         drafts.append({"id": cur.lastrowid, "name": name, "type_kind": type_kind,
+                       "extractor": c.get("extractor") or "llm",
                        "parent_name": c.get("parent_name") or "",
                        "relation_src": c.get("relation_src") or "",
                        "relation_tgt": c.get("relation_tgt") or "",

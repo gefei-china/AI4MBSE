@@ -197,13 +197,30 @@ try:
             "is_default INTEGER, model_type TEXT, context_window INTEGER, tags TEXT, "
             "priority INTEGER, budget_tokens INTEGER, status TEXT)")
 
-    def _mkdb(rows):
+    def _mkdb(rows, api_key=None, context_window=None):
+        """建夹具库。
+
+        ★ 2026-10-30 新增 `api_key` / `context_window` 形参（默认 None = 保持既有语义）：
+          背景 —— 这两处缺失会让本脚本 [7] 段（验 LLMRouter 是否被经过）**跑不到断言**：
+          · `llm/__init__.py` 自 2026-10-09（R1）起，provider 无 api_key 时
+            **直接抛 `LLMUnavailableError`** 而不是静默回落 Mock
+            （"编造内容比报错危险得多"，由 `verify_no_mock_fallback` 守着）；
+          · `context_window` 为 NULL 时，守卫段的 `if mt > cw:` 抛
+            `TypeError: '>' not supported between NoneType and int`。
+          本脚本的夹具历史只 INSERT 8 列 ⇒ 两处都缺 ⇒ 7.1/7.2
+          （验 LLMRouter 是否被经过）根本没机会执行，脚本抛异常退出。
+          实测：CI 与开发机**同型失败**（与 MBSE_DB_PATH 无关）。
+          修法：需要走真实调用链的段落显式传**假 key** 与**正数窗口**
+          （HTTP 已被 patch），既让判据按原意图执行，也不改变任何断言的严格度。
+        """
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         c = sqlite3.connect(path)
         c.execute(_DDL)
         c.executemany("INSERT INTO llm_providers (id,name,provider_type,model_type,is_default,"
-                      "priority,status,tags) VALUES (?,?,?,?,?,?,?,?)", rows)
+                      "priority,status,tags,api_key,context_window) "
+                      "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                      [tuple(r) + (api_key, context_window) for r in rows])
         c.commit()
         c.close()
         return path
@@ -314,7 +331,9 @@ try:
     #   （CI 干净库 ⇒ 没有 llm_providers 表 ⇒ `no such table` 崩）。
     #   修法：本段自己再 patch 一次到一个最小夹具库（单行 provider），
     #   保证 `_record_usage` 不写库、且 `chat` 能取到 provider 配置。
-    _pth7 = _mkdb([(1, "A", "openai", "chat", 1, 10, "active", "[]")])
+    _pth7 = _mkdb([(1, "A", "openai", "chat", 1, 10, "active", "[]")],
+                  api_key="sk-ci-fake-for-route-counting",
+                  context_window=128000)
     _patch(_pth7)
     try:
         _cnt["n"] = 0

@@ -30,6 +30,7 @@ running** —— `run_has_owner=True` ⇒ `owned`（拒绝接管，防双跑写�
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_running_state.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import sys
@@ -133,7 +134,7 @@ check("E1 ready_tasks 只取 planned/ready（不含 running）",
 check("E2 ready_tasks 有注释说明（可读性）", "就绪" in _rt)
 
 print("\n=== F. 行为层：claim 真能落库 + 前置条件生效 ===")
-TMP = tempfile.mkdtemp(prefix="verify_running_")
+TMP = mkdtemp(prefix="verify_running_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _c = sqlite3.connect(TMP_DB)

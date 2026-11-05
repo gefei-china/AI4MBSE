@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D3 用真库副本做「档案库收敛」取证（真库零写入）；干净克隆无 mbse.db
 # -*- coding: utf-8 -*-
 """P2-3 门禁：Agent 档案库/种群（DGM 式 archive，自进化调研路线图 P2 第三项）。
 
@@ -771,6 +772,10 @@ section("D 真库（只读取证）")
 # ══════════════════════════════════════════════════════════════
 
 # 真库只读：复制一份文件做档案库收敛（绝不在真库上建表/写入）
+# ⚠️ 2026-11-05：此处**故意不跟随 MBSE_DB_PATH**。
+#    "我要用哪个库跑门禁"（可被 env 覆盖）与"我要取证生产库长什么样"（金标）
+#    是两种语义，混在一起会变成"在隔离空库上断言真库有数据" ⇒ 恒红。
+#    受控 A/B 实测：误改成 env 优先后 D3 立刻红（{'scanned': 36, 'created': 0}）。
 _real_db = os.path.join(ROOT, "mbse.db")
 if not os.path.exists(_real_db):
     print("  （跳过：未找到真库 mbse.db）")
@@ -849,11 +854,11 @@ check("E1d schema.py import 接线",
 check("E1e schema.py 调用点接线",
       "_migrate_agent_archive_p23(conn)" in _sc)
 
-_ci = _read(os.path.join(".github", "workflows", "ci.yml"))
-check("E2 CI 已接线 verify_agent_archive", "verify_agent_archive.py" in _ci)
-check("E2b CI 注释含设计依据（DGM/死路记忆）",
-      "档案库" in _ci or "死路" in _ci or "P2-3" in _ci)
-
+# ⚠️ 2026-11-05 **删除**了原 E2 / E2b「CI 已接线 verify_agent_archive + CI 注释含设计依据」。
+#   理由同 verify_replan_p1 的 S6：**门禁不该自证自己跑在哪一层**。
+#   「清单 pr ⊆ ci.yml」由 verify_gate_manifest G6a 统一管、反方向由 G11 管；
+#   在业务门禁里再断一次 = 两处真源，本门禁降级到 local 后必然假红
+#   （降级是完全合法的操作，不该触发任何业务门禁变红）。
 _ri = _read(os.path.join("routers", "__init__.py"))
 _mn = _read("main.py")
 check("E3a routers/__init__.py 导入 agent_archive_router",

@@ -17,8 +17,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
-from core.deps import db_session
-from core.audit import audit
+from core.deps import db_session, current_user
+from core.audit import audit, audit_user
 
 router = APIRouter(tags=["术语导入导出"])
 
@@ -331,7 +331,7 @@ def _commit(conn, rows: list) -> dict:
 
 @router.post("/api/glossary/import")
 async def glossary_import(file: UploadFile = File(...), mode: str = Form("dry-run"),
-                          conn=Depends(db_session)):
+                          conn=Depends(db_session), user=Depends(current_user)):
     """导入术语。mode=dry-run 仅预检；mode=commit 落库（幂等 upsert）。
 
     返回 {total, issues:[{row,level,msg}], preview:[...], stats?}
@@ -352,7 +352,7 @@ async def glossary_import(file: UploadFile = File(...), mode: str = Form("dry-ru
     out = {"total": len(rows), **res}
     if mode == "commit":
         out["stats"] = _commit(conn, rows)
-        audit("王工", "glossary_import",
+        audit(audit_user(user), "glossary_import",
               f"导入术语：{out['stats']['created']} 新建 / {out['stats']['updated']} 更新 / "
               f"{out['stats']['terms']} 术语", conn=conn)
     return out

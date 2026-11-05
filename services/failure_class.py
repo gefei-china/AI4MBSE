@@ -71,6 +71,13 @@ _PERMISSION_KW = (
     "permission_denied", "permission denied", "permission_error",
     "permissiondenied", "forbidden", "403", "401", "unauthorized",
     "无权限", "权限不足", "权限被拒", "没有权限", "not allowed",
+    # ★ 2026-10-30（P0-2）：**委派最小权限**的白名单拒绝。
+    #   真库取证：90 条失败行的文案是「工具「x」不在本次子任务授予的工具白名单内
+    #   （最小权限，Worker ⊆ Supervisor），已拒绝执行」，旧词表零命中 ⇒ 全落兜底
+    #   `internal`（可重试）⇒ 每次重试都撞同一堵墙，白烧一整轮子 Agent。
+    #   `tools.py` 的拒绝分支注释早就写明这个缺口（当时只补了审计事件、没补词表）。
+    #   ⚠️ 用"工具白名单内"而非"白名单"：后者会误伤"文档白名单已放宽"这类信息性文案。
+    "工具白名单内", "不在本次子任务授予",
 )
 _INPUT_KW = (
     "invalid argument", "invalid input", "invalid parameter", "bad request",
@@ -80,6 +87,12 @@ _INPUT_KW = (
     #   不加这一条时它会落到兜底 `internal`（可重试）⇒ 白重试一次完整 LLM 调用。
     "400", "invalid_request", "bad_request", "unprocessable",
     "参数错误", "参数缺失", "参数非法", "缺少参数", "不合法的参数",
+    # ★ 2026-10-30（P0-2）：真库取证出来的三个同族漏判（行数见模块头表格）：
+    #   ① `INVALID_ARGUMENTS`（下划线形态）—— 旧词表只有带空格的 `invalid argument`；
+    #   ② `缺少必填参数` —— 旧词表有 `缺少参数`，但它不是前者的连续子串（差"必填"两字）；
+    #   ③ `不能为空` —— 文件/参数校验的高频形态。
+    "invalid_argument", "invalid_arguments", "缺少必填参数", "不能为空",
+    "必填参数", "缺少必要参数",
 )
 _OUTPUT_KW = (
     "schema_truncated", "parse_error", "json decode", "unexpected token",
@@ -88,10 +101,16 @@ _OUTPUT_KW = (
 _BUSINESS_KW = (
     "no data", "nothing to do", "not found", "empty result",
     "无数据", "没有数据", "无可用", "不存在", "为空",
+    # ★ 2026-10-30（P0-2）：工具已注册但**没有执行器**（配置缺失）。
+    #   真库 10 行。重试不会凭空长出一个执行器 ⇒ 永久失败。
+    "未配置执行器",
 )
 #: 停滞/超时/孤儿运行（本仓编排侧的真实形态，取自真库 54 条 failed 的全量聚类）
 _TIMEOUT_KW = (
     "timeout", "无产出", "硬上限", "停滞", "无任何进展", "stalled", "deadline",
+    # ★ 2026-10-30（P0-2）：`无输出` 与 `无产出` 同义（真库 36 行，旧判 transient）。
+    #   两者都可重试 ⇒ **不改变重试行为**，只把归因从"网络瞬态"纠正为"停滞"。
+    "无输出",
 )
 _INTERRUPTED_KW = (
     "孤儿运行", "进程重启", "执行线程丢失", "interrupted", "orphan",

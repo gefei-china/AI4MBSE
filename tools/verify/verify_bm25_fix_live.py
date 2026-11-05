@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] 需真实服务/真 LLM/生产真库金标或随包运行时资产，CI 跑不了；源码直连真实服务/真实 key（CI 无服务无 secret） 
 # -*- coding: utf-8 -*-
 """重启后验证：BM25 修复是否真的在线生效（真实 HTTP 链路）。
 

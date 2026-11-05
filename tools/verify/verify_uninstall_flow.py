@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-
-# ── CI 豁免（2026-10-05 标注，理由已实测）──────────────────
-# CI-OPTIONAL: C 实测本地红（TypeError: 'NoneType' object is not iterable）⇒ 需先修
-#   分类：A=需服务在跑/ B=需密钥或写真库/ C=实测就红需先修。
-#   依据见 docs/遗留优化项-第二轮盘点-20261005.md；
-#   由 tools/verify/verify_gate_wiring.py 强制要求（要么接线，要么写理由）。
 # -*- coding: utf-8 -*-
+# 2026-11-05 回收进 pr 层：旧的两条 CI-OPTIONAL 豁免已作废，理由见 docs/门禁分层-20261105.md §10。
+#   ① 历史「本地红需先修」：夹具改从副本读用户后已在两口径实测全绿；
+#   ② 上轮「真库 I1 红」：不是环境差异，是产品缺陷（卸载后重装被拒），已修并补边界矩阵。
+#   ⚠️ shebang 必须留在第 1 行、coding 声明第 2 行（曾把豁免注释插到 #! 前，6 个脚本失效）。
 """数据流转闭环验证：卸载/装回全链路（真库只读 + 副本全真跑）。
 
 断言清单（2026-09-29 数据流转审计 · 断层1/2/3 修复）：
@@ -31,10 +29,12 @@ sys.path.insert(0, ROOT)
 # **仍在读生产库**（本地绿 / CI 红；本项目第 5 处同型问题）。改读配置。
 SRC = os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")
 SRC = os.path.abspath(SRC)
-TMP = os.path.join(ROOT, "tmp", "verify_uninstall_copy.db")
-for p in (TMP, TMP + "-wal", TMP + "-shm"):
-    if os.path.exists(p):
-        os.remove(p)
+# ⚠️ 2026-11-05：临时副本不能放 `ROOT/tmp/` —— 克隆里没有这个目录
+#    （`ROOT/tmp` 在 .gitignore 里）⇒ sqlite3.connect 直接 "unable to open database file"。
+#    改用本仓统一的 `_tmpdir`（mkdtemp + atexit 回收，与其它门禁同口径）。
+sys.path.insert(0, os.path.join(ROOT, "tools", "verify"))
+from _tmpdir import mkdtemp           # noqa: E402
+TMP = os.path.join(mkdtemp(prefix="wb_uninstall_"), "copy.db")
 
 # WAL 库必须用 backup API（shutil.copy 只拷主文件会丢 WAL 未checkpoint数据）
 src = sqlite3.connect(SRC)
@@ -148,8 +148,11 @@ sysrows_before = ro.execute("SELECT COUNT(*) FROM plugin_installs WHERE user_id=
 
 # ⚠️ 2026-10-05 修订：原先硬编码 `com.zhiyuan.legacy.agent.design` 这一个插件 id。
 # 干净库里 plugins 表是空的 ⇒ probe=None ⇒ `probe["manifest_json"]` 崩溃。
-# 改为：优先用原目标，**没有就退而选任意一个带 legacy runtime 的插件**；
-# 一个都没有 ⇒ 明确 SKIP（"库里没有插件"不是卸载流程坏了）。
+# 改为：优先用原目标，**没有就退而选任意一个带 legacy runtime 的插件**。
+# ⚠️ 2026-11-05 二修：一个都没有时**不再整组 SKIP**。SKIP 在 pr 层等于零防护，
+#   而本门禁正是「卸载后重装被拒」这个 bug 的唯一回归防线 —— 干净库恰好没有
+#   legacy 插件（实测 plugins=0），回收进 CI 就会整条空转。改为在**副本**里按
+#   真库形态补建夹具；源库自始至终只读，末尾「系统级行未动」断言即是零漂移自证。
 target = "com.zhiyuan.legacy.agent.design"
 probe = ro.execute("SELECT manifest_json FROM plugins WHERE plugin_id=?", (target,)).fetchone()
 if probe is None:
@@ -158,14 +161,47 @@ if probe is None:
         if (_m.get("runtime") or {}).get("legacy_table"):
             target, probe = _r["plugin_id"], {"manifest_json": _r["manifest_json"]}
             break
+_fixture = False
 if probe is None:
-    print("SKIP 本库 plugins 表没有带 legacy runtime 的插件 "
-          "⇒ 卸载/装回全链路无从触发；这不是产品缺陷（干净库常态）。")
-    ro.close()
-    sys.exit(0)
+    # 真库形态（2026-11-05 只读实测）：plugin_id 落在 com.zhiyuan.legacy.* 命名空间、
+    # author_id=0 / author_name='平台内置' / status='published' / 系统级安装行 user_id=0、
+    # manifest.runtime = {legacy_table:'agents', legacy_id:<旧表 id>}。
+    # ★ design 刻意用 scope='personal'：这正是被拒重装的那一类（真库 95/129 条 personal）。
+    #   写成 public 会让 I1 走不到豁免分支 ⇒ 门禁空转 ⇒ S1 自证专门锁死这一点。
+    _FX = [
+        ("com.zhiyuan.legacy.agent.design", "design", "personal", 2),
+        ("com.zhiyuan.legacy.agent.impact", "impact", "public", 3),
+        ("com.zhiyuan.legacy.agent.review", "review", "public", 4),
+    ]
+    for _pid, _nm, _scope, _lid in _FX:
+        _mf = json.dumps({"id": _pid, "name": _nm, "version": "1.0.0", "type": "agent",
+                          "runtime": {"legacy_table": "agents", "legacy_id": _lid}})
+        _fx.execute(
+            "INSERT OR REPLACE INTO plugins "
+            "(plugin_id, name, type, scope, status, current_version, manifest_json, "
+            " author_id, author_name) VALUES (?,?,?,?,?,?,?,?,?)",
+            (_pid, _nm, "agent", _scope, "published", "1.0.0", _mf, 0, "平台内置"))
+        _fx.execute(
+            "INSERT OR REPLACE INTO plugin_installs (user_id, plugin_id, version, enabled) "
+            "VALUES (0,?,?,1)", (_pid, "1.0.0"))
+    _fx.commit()
+    _fixture = True
+    print("  夹具：源库无 legacy 插件（干净库/CI 常态）⇒ 副本内按真库形态补建 3 条系统预装")
+    target = "com.zhiyuan.legacy.agent.design"
+    probe = _fx.execute("SELECT manifest_json FROM plugins WHERE plugin_id=?", (target,)).fetchone()
+    chk("S0 夹具自证:3 条插件 + 3 条系统级安装行已就位",
+        _fx.execute("SELECT COUNT(*) FROM plugins WHERE plugin_id LIKE 'com.zhiyuan.legacy.agent.%'").fetchone()[0] == 3
+        and _fx.execute("SELECT COUNT(*) FROM plugin_installs WHERE user_id=0").fetchone()[0] == 3)
+    chk("S1 夹具自证:design.scope='personal'（bug 触发前提，写成 public 会让 I1 空转）",
+        _fx.execute("SELECT scope FROM plugins WHERE plugin_id=?", (target,)).fetchone()[0] == "personal")
+    _agent_ok = True
+    for _pid, _nm, _scope, _lid in _FX:
+        _row = _fx.execute("SELECT status FROM agents WHERE id=?", (_lid,)).fetchone()
+        _agent_ok = _agent_ok and _row is not None and _row[0] == "active"
+    chk("S2 夹具自证:旧表 agents 行存在且 active（U3/I2 前提）", _agent_ok)
 rt = (json.loads(probe["manifest_json"] or "{}").get("runtime") or {})
 LEG_TABLE, LEG_ID = rt.get("legacy_table"), rt.get("legacy_id")
-print("  目标插件：%s（legacy_table=%s）" % (target, LEG_TABLE))
+print("  目标插件：%s（legacy_table=%s%s）" % (target, LEG_TABLE, " / 夹具" if _fixture else ""))
 ro.close()
 
 # ── U1: 管理员卸载系统预装
@@ -270,6 +306,39 @@ ok, msg = old_uninstall(conn, "com.zhiyuan.legacy.agent.review", admin)
 chk("M1 变异自证:旧逻辑必须失败", (not ok) and "不是你安装的" in str(msg), str(msg)[:50])
 conn.close()
 
+# ── G 组（2026-11-05 重装豁免的边界矩阵）：豁免只放行「legacy 恢复」，
+#    治理闸门与市场口径一根手指都不能松。5 个 case 一格一格锁死。
+conn = _connect_copy()
+import json as _json
+_M_LEG = _json.dumps({"runtime": {"legacy_table": "agents", "legacy_id": 1}})
+_M_PLAIN = _json.dumps({"name": "x"})
+
+
+def _mk_plugin(pid, scope, status, manifest):
+    conn.execute("""INSERT OR REPLACE INTO plugins (plugin_id, name, scope, status,
+        current_version, manifest_json) VALUES (?,?,?,?,?,?)""",
+        (pid, pid, scope, status, "1.0.0", manifest))
+    conn.commit()
+
+
+_G = [
+    ("p.g.legacy.restore", "legacy+personal+published（卸载后重装场景）应放行",
+     lambda: _mk_plugin("p.g.legacy.restore", "personal", "published", _M_LEG), True),
+    ("p.g.legacy.disabled", "legacy+personal+disabled（治理闸门）应拒绝",
+     lambda: _mk_plugin("p.g.legacy.disabled", "personal", "disabled", _M_LEG), False),
+    ("p.g.legacy.removed", "legacy+personal+removed（已删除）应拒绝",
+     lambda: _mk_plugin("p.g.legacy.removed", "personal", "removed", _M_LEG), False),
+    ("p.g.plain", "普通 personal+published（市场口径不变）应拒绝",
+     lambda: _mk_plugin("p.g.plain", "personal", "published", _M_PLAIN), False),
+    ("p.g.public.dis", "public+disabled（治理闸门不变）应拒绝",
+     lambda: _mk_plugin("p.g.public.dis", "public", "disabled", _M_PLAIN), False),
+]
+for _pid, _name, _setup, _want in _G:
+    _setup()
+    _ok, _msg = install(conn, _pid, admin, enabled=True)
+    chk("G %s" % _name, _ok == _want, "got ok=%s msg=%s" % (_ok, str(_msg)[:50]))
+conn.close()
+
 dbconn_mod.get_db = _orig_get_db
 
 # ── 真库只读：55 条系统级行原封未动
@@ -277,6 +346,10 @@ ro2 = sqlite3.connect("file:%s?mode=ro" % SRC, uri=True)
 after = ro2.execute("SELECT COUNT(*) FROM plugin_installs WHERE user_id=0").fetchone()[0]
 ro2.close()
 chk("真库只读:系统级行未动", after == sysrows_before, "%d -> %d" % (sysrows_before, after))
+
+# Windows 下副本 .db 被任一连接占着 ⇒ _tmpdir 的 atexit 删目录会报 WinError 32。
+# 夹具连接全程开着（读用户/造夹具），必须在退出前显式关掉。
+_fx.close()
 
 print("\n==== %d PASS / %d FAIL ====" % (len(PASS), len(FAIL)))
 if FAIL:

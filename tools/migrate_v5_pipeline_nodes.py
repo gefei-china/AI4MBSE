@@ -24,7 +24,12 @@ import os
 import sqlite3
 import sys
 
-DB = "mbse.db"
+# ⚠️ 2026-11-04：**不再硬编码 mbse.db**。原写法无视 MBSE_DB_PATH ⇒
+#   迁移永远改开发机的真库、CI 上却连到空库/不存在的库 ⇒
+#   「环境不可重建」：CI 的绿灯与真库状态无关（本轮定位到的根系缺陷）。
+#   现在：MBSE_DB_PATH 优先（core.config 的 ENV_MAP 同键），否则回落仓库内绝对路径。
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB = os.environ.get("MBSE_DB_PATH") or os.path.join(_ROOT, "mbse.db")
 APPLY = "--apply" in sys.argv
 
 # ─────────────────────────────────────────────────────────────
@@ -40,6 +45,11 @@ NODES = [
         caps=["任务规划", "知识问答"],
         kw=["方法论解析", "建模方法论", "建模规范", "建模约定", "建模标准选择", "profile规约卡"],
         tools=[], skills=[],
+        # ⚠️ 契约（input_schema/output_schema）**不在这里定义** —— 单一真源是
+        #   `data/modeling_nodes.json` 的 `nodes[].agent.input_schema`（8 个节点全部齐备），
+        #   由 `migrate_v8_contracts_bindings.py` 写入库。
+        #   本轮实测教训：我在本文件给 M0/N3 补过契约，跑完 v8 后库里是 json 的版本
+        #   ⇒ 白改。要改契约请改 json，然后依次跑 v8 --apply 与 export_asset_snapshot.py。
         prompt=("你是方法论解析智能体。职责：识别当前工程采用的建模方法论，"
                 "加载对应规范，产出结构化「建模规约卡」。\n"
                 "不产出 SysML 代码；下游建模阶段消费你的规约卡。\n"
@@ -82,6 +92,15 @@ NODES = [
         caps=["系统建模", "工程建模"],
         kw=["视图展开生成", "活动视图生成", "用例视图建模", "状态机视图建模", "时序视图建模", "IBD视图建模"],
         tools=["sysml_v2_validate"], skills=[],
+        # ⚠️⚠️ **契约（input_schema/output_schema）不在这里定义**。
+        #   实测（2026-11-04）：本脚本若写契约，会被 `migrate_v8_contracts_bindings.py`
+        #   用 `data/modeling_nodes.json` 的值**覆盖掉**（v8 统计里 `schema: 2` 就是它）。
+        #   我本轮曾在 N3 这里加过一份 442 字符的契约，跑完 v8 后库里只剩 270 字符的 v8 版本
+        #   —— 典型的"改了不生效"，而且看起来门禁还是绿的（因为门禁只校验"非空"）。
+        #   ⇒ **契约的单一真源是 `data/modeling_nodes.json` 的 `nodes[].agent.input_schema`**。
+        #     要改契约请改那个文件，然后重跑：
+        #       python tools/migrate_v8_contracts_bindings.py --apply
+        #       python tools/export_asset_snapshot.py --apply   # 快照跟上
         prompt=("你是 SysML v2 视图展开智能体。\n"
                 "view_type 是枚举参数（requirement/structure/usecase/activity/ibd/sequence/state/parameter），"
                 "一次调用只产出一个视图。\n"
@@ -236,7 +255,8 @@ def main():
         print("\n── 创建 8 个节点 Agent ──")
         ids = {}
         for n in NODES:
-            row = conn.execute("SELECT id, capabilities, system_prompt, description "
+            row = conn.execute("SELECT id, capabilities, system_prompt, description, "
+                               "input_schema, output_schema "
                                "FROM agents WHERE name=?", (n["name"],)).fetchone()
             caps_json = json.dumps(n["caps"], ensure_ascii=False)
             if row:
@@ -244,19 +264,47 @@ def main():
                 same = (json.loads(row["capabilities"] or "[]") == n["caps"]
                         and row["system_prompt"] == n["prompt"]
                         and row["description"] == n["desc"])
+                # ⚠️ 2026-11-04：**契约也要进"是否相同"的判据**。
+                #   原判据只比 capabilities/prompt/description ⇒ 给某个节点新增
+                #   ins/outs 后跑 --apply 会报 `unchanged` 而**根本不写库**
+                #   （实测：加了 M0 契约后统计仍是 updated=0，门禁继续红）。
+                #   "以为改了、其实没写"比不改更危险 —— 必须让判据覆盖所有会被写入的列。
+                if n.get("ins") is not None:
+                    try:
+                        same = same and (json.loads(row["input_schema"] or "{}") == n["ins"])
+                    except Exception:
+                        same = False
+                if n.get("outs") is not None:
+                    try:
+                        same = same and (json.loads(row["output_schema"] or "{}") == n["outs"])
+                    except Exception:
+                        same = False
                 if same:
                     log("unchanged", f"{n['key']} {n['name']}")
                 else:
                     if not apply_:
                         log("updated", f"{n['key']} {n['name']}", "dry-run")
                     else:
-                        conn.execute(
-                            "UPDATE agents SET display_name=?,description=?,capabilities=?,"
-                            "system_prompt=?,hil_level=?,agent_role=?,task_domain='modeling',"
-                            "stage_order=?,intent_keywords=? WHERE name=?",
-                            (n["display_name"], n["desc"], caps_json, n["prompt"], n["hil"],
-                             n["role"], n["stage_order"],
-                             json.dumps(n["kw"], ensure_ascii=False), n["name"]))
+                        # ⚠️ 契约列**只在节点显式定义了 ins/outs 时才写**。
+                        #   原先无条件把 input_schema/output_schema 一起 UPDATE 会对
+                        #   未定义契约的节点写成 '{}' ⇒ **静默覆盖**别处设置的契约
+                        #   （本仓「静默兜底/静默覆盖」踩过的坑）。未定义 = 不碰。
+                        _sets = ["display_name=?", "description=?", "capabilities=?",
+                                 "system_prompt=?", "hil_level=?", "agent_role=?",
+                                 "task_domain='modeling'", "stage_order=?", "intent_keywords=?"]
+                        _args = [n["display_name"], n["desc"], caps_json, n["prompt"],
+                                 n["hil"], n["role"], n["stage_order"],
+                                 json.dumps(n["kw"], ensure_ascii=False)]
+                        if n.get("ins") is not None:
+                            _sets.append("input_schema=?")
+                            _args.append(json.dumps(n["ins"], ensure_ascii=False))
+                        if n.get("outs") is not None:
+                            _sets.append("output_schema=?")
+                            _args.append(json.dumps(n["outs"], ensure_ascii=False))
+                        _args.append(n["name"])
+                        conn.execute("UPDATE agents SET %s WHERE name=?" % ",".join(_sets),
+                                     tuple(_args))
+                        log("updated", f"{n['key']} {n['name']}")
                         log("updated", f"{n['key']} {n['name']}")
             else:
                 if not apply_:
@@ -267,11 +315,14 @@ def main():
                     cur = conn.execute(
                         "INSERT INTO agents (name,display_name,description,capabilities,"
                         "system_prompt,hil_level,agent_role,status,task_domain,stage_order,"
-                        "intent_keywords,builtin,max_concurrency,protocol_range) "
-                        "VALUES (?,?,?,?,?,?,?,'active','modeling',?,?,0,2,'>=1,<3')",
+                        "intent_keywords,builtin,max_concurrency,protocol_range,"
+                        "input_schema,output_schema) "
+                        "VALUES (?,?,?,?,?,?,?,'active','modeling',?,?,0,2,'>=1,<3',?,?)",
                         (n["name"], n["display_name"], n["desc"], caps_json, n["prompt"],
                          n["hil"], n["role"], n["stage_order"],
-                         json.dumps(n["kw"], ensure_ascii=False)))
+                         json.dumps(n["kw"], ensure_ascii=False),
+                         json.dumps(n.get("ins") or {}, ensure_ascii=False),
+                         json.dumps(n.get("outs") or {}, ensure_ascii=False)))
                     ids[n["key"]] = cur.lastrowid
                     log("inserted", f"{n['key']} {n['name']}")
 

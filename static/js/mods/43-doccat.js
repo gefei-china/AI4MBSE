@@ -36,7 +36,7 @@ async function kbCategoryPicker(current) {
       <span class="kcp-name">${esc(c.name)}</span>
       <span class="kcp-desc">${esc(c.description || '')}</span></label>`;
   b.innerHTML = `<h3>设置知识类别</h3>
-    <div style="font-size:12.5px;color:var(--mut);line-height:1.6;margin:4px 0 10px;">
+    <div style="font-size:13.5px;color:var(--mut);line-height:1.6;margin:4px 0 10px;">
       单选一个已有类别；「🗑 清除分类」= 删除该文档当前的类别标签（回到未分类）。</div>
     <div class="kcp-list">
       ${groups.map(g => `<div class="kcp-grp">
@@ -127,12 +127,12 @@ async function kbAutoCollectPreview() {
   const nUn = preselect.size;
   const lbx = document.getElementById('lbx'), b = document.getElementById('lbx-body');
   b.innerHTML = `<h3>🤖 自动归集知识类别（试算）</h3>
-    <div style="font-size:12.5px;color:var(--mut);line-height:1.6;margin:4px 0 10px;">
+    <div style="font-size:13.5px;color:var(--mut);line-height:1.6;margin:4px 0 10px;">
       按「文件名 / 标题 / 标签」的关键词规则试算：<b>${rows.length}</b> 篇有建议${nUn
         ? `，其中 <b>${nUn}</b> 篇当前未分类（已默认勾选）`
         : '（当前均已有类别，需手动勾选才会覆盖）'}。试算结果**不会自动写库**，确认后逐条落库。</div>
     <div style="max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px;">
-      <table class="t kac-tbl" style="width:100%;font-size:12px;">
+      <table class="t kac-tbl" style="width:100%;font-size:13.5px;">
         <tr><th style="width:34px;"><input type="checkbox" id="kac-all"></th>
           <th style="text-align:left;">文档</th><th style="text-align:left;">当前类别</th>
           <th style="text-align:left;">建议类别</th><th style="text-align:left;">命中依据</th></tr>
@@ -145,7 +145,7 @@ async function kbAutoCollectPreview() {
       </table>
     </div>
     <div class="lbx-actions">
-      <span id="kac-count" style="flex:1;align-self:center;font-size:11.5px;color:var(--mut);"></span>
+      <span id="kac-count" style="flex:1;align-self:center;font-size:12.5px;color:var(--mut);"></span>
       <button class="btn ghost" id="kac-cancel">取消</button>
       <button class="btn" id="kac-ok">应用归集</button>
     </div>`;

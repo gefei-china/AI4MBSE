@@ -13,6 +13,16 @@ from plugin_system.store.dependencies import _sync_deps_safe
 from plugin_system.store.queries import get_plugin
 
 
+def _refresh_registry_safe(conn, plugin_id):
+    """P0-a（2026-10-24）：插件创建/更新后刷新 capability_registry 单行投影。
+    失败绝不阻断业务（同 _sync_deps_safe 旁路原则）。"""
+    try:
+        from core import capability_registry as _cr
+        _cr.refresh_registry_row(conn, "plugins", plugin_id)
+    except Exception:
+        pass
+
+
 def create_plugin(conn, normalized, user, scope="personal", status="draft"):
     """创建插件（manifest 已校验）。返回 (ok, plugin, error)。"""
     plugin_id = normalized["id"]
@@ -42,6 +52,7 @@ def create_plugin(conn, normalized, user, scope="personal", status="draft"):
          "published" if status in ("published",) else "submitted"))
     conn.commit()
     _sync_deps_safe(conn, plugin_id, normalized)
+    _refresh_registry_safe(conn, plugin_id)
     return True, get_plugin(conn, plugin_id), None
 
 
@@ -99,4 +110,5 @@ def update_plugin(conn, plugin_id, normalized, user):
          normalized["description"], _now(), plugin_id))
     conn.commit()
     _sync_deps_safe(conn, plugin_id, normalized)
+    _refresh_registry_safe(conn, plugin_id)
     return True, None

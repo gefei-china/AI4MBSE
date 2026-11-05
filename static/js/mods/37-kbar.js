@@ -44,7 +44,7 @@
     {ic:'🔍', label:'SysML 视图投影', hint:'v1 九图 + v2 视图族 · 布局质量检查', act:()=>openSysmlViewStudio()},
     {ic:'📄', label:'报告',        hint:'生成设计报告',                  act:()=>go('reports')},
     {ic:'👥', label:'用户与权限',  hint:'管理员专属',                    act:()=>go('users')},
-    {ic:'✅', label:'审批管理',    hint:'管理员专属',                    act:()=>go('approval')},
+    // 2026-10-23：审批管理入口下线（纯前端原型、假业务数据，后端另立需求重做）
     {ic:'🛡', label:'审计日志',    hint:'管理员专属',                    act:()=>go('audit')},
     {ic:'📈', label:'运行监控',    hint:'管理员专属',                    act:()=>go('ops')},
     {ic:'🏠', label:'总览工作台',  hint:'回到首页 Dashboard',            act:()=>go('home')},

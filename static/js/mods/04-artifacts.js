@@ -188,11 +188,11 @@ function resetArtPreview(){
   const bar = document.getElementById('preview-tabs');
   if(bar){ bar.innerHTML=''; bar.style.display='none'; }
   const pv = document.getElementById('art-preview');
-  if(pv) pv.innerHTML = '<div style="color:var(--mut);font-size:11px;">点击上方产物查看预览</div>';
+  if(pv) pv.innerHTML = '<div style="color:var(--mut);font-size:12.5px;">点击上方产物查看预览</div>';
   const titleEl = document.getElementById('preview-title');
   if(titleEl) titleEl.textContent = '点击文件查看';
   const bodyEl = document.getElementById('preview-content');
-  if(bodyEl) bodyEl.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:12px;text-align:center;">点击「🗂 文件」下拉列表<br>在此处预览内容</div>';
+  if(bodyEl) bodyEl.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:13.5px;text-align:center;">点击「🗂 文件」下拉列表<br>在此处预览内容</div>';
 }
 async function loadArtifacts(convId){
   if(!convId) return;
@@ -261,7 +261,7 @@ function artFileContextMenu(ev, idx){
   if(!f) return;
   const m = document.createElement('div');
   m.id = 'art-file-ctx-menu';
-  m.style.cssText = 'position:fixed;z-index:6000;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:4px;font-size:12px;';
+  m.style.cssText = 'position:fixed;z-index:6000;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.14);padding:4px;font-size:13.5px;';
   const item = (label, fn) => '<div class="rm-item" style="padding:6px 10px;border-radius:6px;" onclick="'+fn+'">'+label+'</div>';
   m.innerHTML = item('📎 加入会话', `artFileAddToChatByIdx(${idx})`)
     + item('📖 打开', `artFilePreviewByIdx(${idx})`)
@@ -291,13 +291,13 @@ function renderArtV3List(stats){
   const arts = [..._artList].sort((a,b)=> new Date(b.created_at||0) - new Date(a.created_at||0));
   const files = _artFiles || [];
   if(!arts.length && !files.length){
-    el.innerHTML = `<div style="color:var(--mut);font-size:11px;padding:12px 4px;text-align:center;">暂无文件</div>`;
+    el.innerHTML = `<div style="color:var(--mut);font-size:12.5px;padding:12px 4px;text-align:center;">暂无文件</div>`;
     return;
   }
   const item = (a, icon, fmt) => `<div class="art-list-item ${_artActive===a.id?'active':''}" onclick="${a.onclick||('artPreviewV3('+a.id+')')}" oncontextmenu="${a.onctx||'artContextMenu(event,'+a.id+')'}" title="${esc(a.title)} (${fmt}) · 右键：打开/加入会话/另存为/收编/删除">
     <span class="art-icon">${icon}</span><span class="art-name">${esc(a.title)}</span><span class="art-format">${esc(fmt)}</span></div>`;
   const group = (title, list) => list.length ?
-    `<div style="font-size:10.5px;color:var(--mut);padding:8px 4px 4px;letter-spacing:.5px;border-top:${_artList.length?'1px dashed var(--line)':'none'};margin-top:${_artList.length?'4px':'0'};">${title}（${list.length}）</div>` +
+    `<div style="font-size:12px;color:var(--mut);padding:8px 4px 4px;letter-spacing:.5px;border-top:${_artList.length?'1px dashed var(--line)':'none'};margin-top:${_artList.length?'4px':'0'};">${title}（${list.length}）</div>` +
     list.map(x=>item(x, _ART_ICONS[x.kind]||'📎', x.kind_label||x.kind||'FILE')).join('') : '';
   el.innerHTML = group('AI 生成产物', arts) + group('导入文件', files.map(f=>Object.assign(f, {
     onclick:'artFilePreviewByIdx('+(_artFiles.indexOf(f))+')',
@@ -429,7 +429,7 @@ function renderPreviewBody(a){
   const bodyEl = document.getElementById('preview-content');
   if(!a){
     if(titleEl) titleEl.textContent = '点击文件查看';
-    if(bodyEl) bodyEl.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:12px;text-align:center;">点击「🗂 文件」下拉列表<br>在此处预览内容</div>';
+    if(bodyEl) bodyEl.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:13.5px;text-align:center;">点击「🗂 文件」下拉列表<br>在此处预览内容</div>';
     return;
   }
   if(titleEl) titleEl.textContent = (a.title||'文件预览') + (' · ' + (a.kind_label||a.kind||''));
@@ -438,11 +438,11 @@ function renderPreviewBody(a){
   const kind = a.kind || 'other';
   if(kind === 'sysml'){
     bodyEl.innerHTML = `<div class="preview-sysml"><div style="text-align:center;width:100%;">
-      <div style="font-size:13px;font-weight:600;color:var(--blue-d);margin-bottom:2px;">${esc(a.title||'SysML 视图')}</div>
-      <div style="font-size:11px;color:var(--mut);margin-bottom:8px;">SysML v2 视图预览 · 可缩放拖拽 · 点节点查看属性</div>
+      <div style="font-size:14.5px;font-weight:600;color:var(--blue-d);margin-bottom:2px;">${esc(a.title||'SysML 视图')}</div>
+      <div style="font-size:12.5px;color:var(--mut);margin-bottom:8px;">SysML v2 视图预览 · 可缩放拖拽 · 点节点查看属性</div>
       <div id="preview-sysml-canvas" style="width:100%;min-height:320px;overflow:hidden;text-align:left;"></div>
-      <div id="preview-sysml-legend" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:var(--mut);"></div>
-      <div style="margin-top:8px;display:flex;gap:6px;justify-content:center;"><button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="previewDownloadProxy()">⬇ 下载</button></div>
+      <div id="preview-sysml-legend" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);display:flex;flex-wrap:wrap;gap:12px;font-size:12.5px;color:var(--mut);"></div>
+      <div style="margin-top:8px;display:flex;gap:6px;justify-content:center;"><button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="previewDownloadProxy()">⬇ 下载</button></div>
       <div id="preview-sysml-versions"></div>
     </div></div>`;
     if(a.meta && a.meta.sysml_views){
@@ -460,20 +460,20 @@ function renderPreviewBody(a){
     let codeHtml, truncNote = '';
     if(code.length > CODE_PREVIEW_MAX){
       codeHtml = esc(code.slice(0, CODE_PREVIEW_MAX));
-      truncNote = `<div style="margin:6px 0;font-size:11px;color:var(--mut);text-align:center;">⚠ 文件较大（${(code.length/1024).toFixed(0)} KB），已截断预览前 ${(CODE_PREVIEW_MAX/1024).toFixed(0)} KB · 完整内容请下载</div>`;
+      truncNote = `<div style="margin:6px 0;font-size:12.5px;color:var(--mut);text-align:center;">⚠ 文件较大（${(code.length/1024).toFixed(0)} KB），已截断预览前 ${(CODE_PREVIEW_MAX/1024).toFixed(0)} KB · 完整内容请下载</div>`;
     } else {
       codeHtml = esc(code);
     }
     bodyEl.innerHTML = `<div class="preview-code" style="max-width:100%;overflow:auto;">${codeHtml}</div>
       ${truncNote}
-      <div style="margin-top:8px;display:flex;gap:6px;"><button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="previewDownloadProxy()">⬇ 下载</button></div>
+      <div style="margin-top:8px;display:flex;gap:6px;"><button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="previewDownloadProxy()">⬇ 下载</button></div>
       <div id="preview-sysml-versions" style="text-align:left;"></div>`;
     // P0-6：产物入口版本跟随代码文件——代码文件预览也挂工程级入库入口条（2026-09-24 起不再含版本行）
     const svConvC = _artConv || currentConvId || 0;
     setTimeout(()=>loadSysmlIngestBar(svConvC), 80);
   } else if(kind === 'image'){
     const url = a.file_url || a.preview_content || '';
-    bodyEl.innerHTML = url ? `<img class="preview-image" style="max-width:100%;height:auto;" src="${esc(url)}" alt="${esc(a.title)}"><div style="margin-top:8px;"><button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="previewDownloadProxy()">⬇ 下载</button></div>` : '<div style="color:var(--mut);padding:20px;text-align:center;">无图片数据</div>';
+    bodyEl.innerHTML = url ? `<img class="preview-image" style="max-width:100%;height:auto;" src="${esc(url)}" alt="${esc(a.title)}"><div style="margin-top:8px;"><button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="previewDownloadProxy()">⬇ 下载</button></div>` : '<div style="color:var(--mut);padding:20px;text-align:center;">无图片数据</div>';
   } else if(kind === 'report'){
     // 报告：结构化分节（sections）优先 → 元信息条 + 编号分节卡片 + 导出按钮；否则按 markdown 渲染
     // 2026-09-16：移除 meta.graph 的 Cytoscape「影响拓扑图谱」画布——与第4章 Mermaid 视图数据同源、
@@ -484,17 +484,17 @@ function renderPreviewBody(a){
       const fid = a.id;
       bodyEl.innerHTML = reportSectionsHtml(secs, a.meta.meta) + `
         <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
-          <button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="reportTabExport('md')">⬇ Markdown</button>
-          <button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="reportTabExport('docx')">⬇ Word</button>
-          <button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="reportTabExport('pdf')">⬇ PDF</button>
-          ${fid?`<button class="btn sm ghost" style="font-size:10.5px;padding:1px 8px;" onclick="artDownload(${fid})">📦 下载产物</button>`:''}
+          <button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="reportTabExport('md')">⬇ Markdown</button>
+          <button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="reportTabExport('docx')">⬇ Word</button>
+          <button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="reportTabExport('pdf')">⬇ PDF</button>
+          ${fid?`<button class="btn sm ghost" style="font-size:12px;padding:1px 8px;" onclick="artDownload(${fid})">📦 下载产物</button>`:''}
         </div>`;
     } else {
-      bodyEl.innerHTML = (content ? `<div style="font-size:12.5px;line-height:1.7;max-width:100%;overflow-wrap:break-word;">${a.preview_type === 'html' ? content : renderMarkdown(content)}</div>` : '<span style="color:var(--mut);">暂无预览内容</span>');
+      bodyEl.innerHTML = (content ? `<div style="font-size:13.5px;line-height:1.7;max-width:100%;overflow-wrap:break-word;">${a.preview_type === 'html' ? content : renderMarkdown(content)}</div>` : '<span style="color:var(--mut);">暂无预览内容</span>');
     }
   } else {
     const content = a.preview_content || a.content || '';
-    bodyEl.innerHTML = `<div style="font-size:12px;line-height:1.65;max-width:100%;overflow-wrap:break-word;">${content ? renderMarkdown(content) : '<span style="color:var(--mut);">暂无预览内容</span>'}</div>`;
+    bodyEl.innerHTML = `<div style="font-size:13.5px;line-height:1.65;max-width:100%;overflow-wrap:break-word;">${content ? renderMarkdown(content) : '<span style="color:var(--mut);">暂无预览内容</span>'}</div>`;
   }
 }
 // 视图预览渲染：按可见性懒挂载 Cytoscape（IntersectionObserver，root=预览滚动容器），
@@ -569,7 +569,7 @@ function renderSysMLInPreview(sysmlData){
   _pvRenderQueue.length = 0;
   container.innerHTML = '';
   const views = Object.values(sysmlData.views || {});
-  if(!views.length){ container.innerHTML = '<div style="padding:20px;color:var(--mut);font-size:12px;text-align:center;">无视图数据</div>'; return; }
+  if(!views.length){ container.innerHTML = '<div style="padding:20px;color:var(--mut);font-size:13.5px;text-align:center;">无视图数据</div>'; return; }
   const _ts = Date.now();
   _pvEnsureObserver();
   views.forEach((vm, idx)=>{
@@ -579,8 +579,8 @@ function renderSysMLInPreview(sysmlData){
     box.style.cssText = 'margin-bottom:12px;';
     const canvasId = 'svm-pv-' + idx + '-' + _ts;
     box.innerHTML = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-      <b style="color:var(--blue-d);font-size:12px;">${esc(vname)}</b>
-      <span style="font-size:10.5px;color:var(--mut);">v1=${esc((vm.view && vm.view.v1) || '')} · ${(vm.nodes||[]).length} 节点 / ${(vm.edges||[]).length} 边</span></div>
+      <b style="color:var(--blue-d);font-size:13.5px;">${esc(vname)}</b>
+      <span style="font-size:12px;color:var(--mut);">v1=${esc((vm.view && vm.view.v1) || '')} · ${(vm.nodes||[]).length} 节点 / ${(vm.edges||[]).length} 边</span></div>
       <div class="svm-canvas" id="${canvasId}" style="min-height:320px;max-height:560px;overflow:auto;"></div>`;
     container.appendChild(box);
     const canvas = box.querySelector('.svm-canvas');
@@ -588,7 +588,7 @@ function renderSysMLInPreview(sysmlData){
       canvas.__pvvm = vm;                  // 供观察器进入时挂载
       _pvObs.observe(canvas);
     } else {
-      canvas.innerHTML = '<div style="padding:40px;color:var(--mut);font-size:12px;text-align:center;">该视图无可用模型元素<br><span style="font-size:11px;">' + esc((vm.warnings||[])[0]||'') + '</span></div>';
+      canvas.innerHTML = '<div style="padding:40px;color:var(--mut);font-size:13.5px;text-align:center;">该视图无可用模型元素<br><span style="font-size:12.5px;">' + esc((vm.warnings||[])[0]||'') + '</span></div>';
     }
   });
 }
@@ -622,7 +622,7 @@ function reportMetaHtml(meta){
 }
 // 报告 sections 渲染（预览面板内：元信息条 + 编号分节卡片，正文按 markdown 渲染；支持 graph 字段呈现影响拓扑图谱）
 function reportSectionsHtml(sections, meta){
-  if(!Array.isArray(sections) || !sections.length) return '<div style="color:var(--mut);font-size:11px;">报告内容为空</div>';
+  if(!Array.isArray(sections) || !sections.length) return '<div style="color:var(--mut);font-size:12.5px;">报告内容为空</div>';
   const metaHtml = reportMetaHtml(meta);
   const body = sections.map((s,i)=>{
     const txt = (s.body||'').trim();

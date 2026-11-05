@@ -6,6 +6,45 @@
 `agent/pipeline.py` 现为薄 Mixin 入口，**本目录（pipeline_parts/）才是当前真源，可直接编辑**。"""
 from .common import *
 
+import re as _re
+
+# ── 身份声明剥离（2026-10-29）───────────────────────────────────────────────
+# 实测：长期记忆里存着一条「用户叫米巴，最喜欢的产品代号是「智源」」，
+#   而账号登录用户是 gefei —— 两者并存时，模型**优先用记忆里的自报名**称呼用户
+#   （截图实测：输出"你好，米巴！"），因为记忆块的标题是「【核心偏好（跨会话稳定，请遵守）】」。
+# 判词：**称呼的权威来源是登录账号，不是记忆里的自报名**。
+#   ⇒ 有登录身份时，把记忆中的「用户叫X」这类**身份声明子句剥掉**，
+#     记忆里其余偏好（"最喜欢的产品代号是…"）仍照常注入，不丢信息。
+# ⚠️ 只剥**子句**、不整条丢：该条记忆里还有有效偏好，整条丢会连带损失。
+_IDENTITY_CLAIM_RE = _re.compile(
+    r"(?:用户叫|我叫|我的名字是|我的名字|我的称呼是|我的称呼|称呼我为?|称呼我是|"
+    r"大家都叫我|本人叫|可以叫我|请叫我)[^，,。；;、！!？?\n]{1,20}"
+)
+
+
+def _strip_identity_claim(content: str) -> str:
+    """把记忆文本里的「用户叫X」身份声明子句剥掉，返回剩余内容。
+
+    纯函数（无 IO、无外部依赖），便于单测与变异自证。
+    剥完若只剩空白/标点 ⇒ 返回空串（调用方据此整条不注入）。
+    """
+    c = str(content or "")
+    if not c:
+        return ""
+    out = _IDENTITY_CLAIM_RE.sub("", c)
+    out = out.lstrip("，,。；;、 　")
+    return out.strip()
+
+
+def _has_account_identity(user) -> bool:
+    """当前会话是否带登录账号身份（display_name / username）。"""
+    if not user:
+        return False
+    try:
+        return bool(str(user.get("display_name") or user.get("username") or "").strip())
+    except Exception:
+        return False
+
 
 class MemoryMixin:
     """记忆/模型上下文/用户上下文/报告素材构建。"""
@@ -19,6 +58,34 @@ class MemoryMixin:
         recall 层按 query 语义召回（排除 core 已注入 + archival 归档层）。
         仅返回命中内容；异常/无命中返回空串（不阻断主流程）。记忆只作参考对齐，
         Prompt 硬约束「不得虚构扩展」，防止把记忆当事实检索结果引用。
+
+        ★ P0-4（2026-10-26）**噪音闸门 + 单一真源**（实测修正）：
+          本路径此前**自己查一次库**（`MemoryService.search`），与 RAG 侧
+          `rag.py → recall_memories()` 是**两条独立召回路径**，产生两个真实问题：
+
+          ① **注入噪音**（实测，生产库 8 个 query）：
+             本路径**没有** `_is_noise` 噪音闸门，而 RAG 侧有。
+             实测「生成建模视图」：本路径注入 id=170（395 字平台寒暄话术，
+             经 `_is_noise` 判定为 **True**），而 RAG 侧正确排除了它。
+             ⇒ 用户看到的是一段"你好，我是 MBSE 平台的通用助手…"占了 160 字 prompt。
+
+          ② **同一张表查两遍**（两次独立向量/BM25 计算 + 两套不同 query 构造）。
+
+          实测**两条路径的召回 id 重叠率 = 0%**（query 构造不同 + RAG 侧有噪音闸门
+          与跨域兜底所致）⇒ 原报告"同一条记忆注入两次"的判断在当前生产数据上**不成立**，
+          真正的缺陷是 ①（注入噪音）与 ②（重复查询开销）。
+
+          改法（**保持 core 常驻语义不变**）：
+          · core 层仍由本路径独立查（它的语义是"无条件常驻"，RAG 侧不提供这一层），
+            但**加噪音闸门**（core 内容同样可能是寒暄）；
+          · recall 层改为**消费 RAG 侧已召回的 `memory_hits`**（不重复查库）——
+            该列表带 score / source_type / recall_reason，信息更完整；
+          · 两条路径**跨路去重**（按 id），避免同一 id 出现在两个块里；
+          · 截断口径统一为 `context_audit.memory_max_chars`（默认 200，与 RAG 侧一致）。
+            ⚠️ 改动前本路径截 160 字、RAG 侧截 200 字 —— 同一记忆两种长度并存，
+            短的被长的完全覆盖 ⇒ 160 字截断是纯冗余。
+
+          开关：`context_audit.memory_single_source`（默认 True）；置 False 退回旧行为。
         """
         try:
             from memory_backend import get_memory_backend
@@ -27,25 +94,102 @@ class MemoryMixin:
             try:
                 agent_id = intent or "chat"
                 query = f"{user_input} {intent}"
+                # P0#1 显式读触发：寒暄/噪音类 query 跳过整块记忆注入（省检索开销 + 避免噪音入 prompt）
+                try:
+                    from agent.memory_recall import should_recall_memory as _should_recall
+                    if not _should_recall(intent or "chat", query):
+                        return ""
+                except Exception:
+                    pass
                 if scopes is None:
                     scopes = self._memory_scopes(intent, user) if getattr(self, "_mem_ctx", None) else []
                 _be = get_memory_backend()
+                _single = True
+                try:
+                    from core import config as _cfg
+                    _single = bool(_cfg.get("context_audit", "memory_single_source", True))
+                except Exception:
+                    _single = True
+                _max_chars = 200
+                try:
+                    from core import config as _cfg2
+                    _max_chars = int(_cfg2.get("context_audit", "memory_max_chars", 200) or 200)
+                except Exception:
+                    _max_chars = 200
                 # P1-18：core 常驻（无条件）+ recall 按需（query 相关，排除 core 已注入）
                 core_rows = _be.search_core(conn, agent_id, top_k=2, scopes=scopes)
-                recall_rows = _be.search(conn, agent_id, query, top_k=4, scopes=scopes)
-                _core_ids = {r.get("id") for r in core_rows if r.get("id")}
-                recall_rows = [r for r in recall_rows if r.get("id") not in _core_ids]
+                # ★ 噪音闸门：core 层同样可能是寒暄/平台话术（实测 id=170 即属此类）
+                try:
+                    from agent.memory_recall import _is_noise as _noise_gate
+                except Exception:
+                    def _noise_gate(_t):
+                        return False
+                core_rows = [r for r in (core_rows or [])
+                             if not _noise_gate(str(r.get("content") or ""))]
+                recall_rows = []
+                if _single:
+                    # ── 单一真源：消费 RAG 侧已召回的 memory_hits（不重复查库）──
+                    try:
+                        _hits = getattr(self, "_rag_memory_hits", None) or []
+                        _core_ids = {r.get("id") for r in core_rows if r.get("id")}
+                        for r in _hits:
+                            _mid = (r.get("meta") or {}).get("id")
+                            if _mid is not None and _mid in _core_ids:
+                                continue      # 跨路去重：core 已注入的不再重复
+                            recall_rows.append({
+                                "id": _mid,
+                                "mem_type": r.get("mem_type") or "fact",
+                                "content": r.get("content") or "",
+                                "score": r.get("score") or 0.0,
+                            })
+                    except Exception:
+                        recall_rows = []
+                else:
+                    # 旧行为（回滚开关）：自己查一次 recall 层
+                    recall_rows = _be.search(conn, agent_id, query, top_k=4, scopes=scopes)
+                    _core_ids = {r.get("id") for r in core_rows if r.get("id")}
+                    recall_rows = [r for r in recall_rows if r.get("id") not in _core_ids]
                 if not core_rows and not recall_rows:
                     return ""
+                # ── 身份声明剥离（2026-10-29）：有登录账号身份时，称呼以账号为准 ──
+                #   记忆里的「用户叫X」不得作为称呼来源（否则模型会优先用它，
+                #   实测输出"你好，米巴！"而账号是 gefei）。
+                #   开关：`context_audit.memory_identity_strip`（默认 True；置 False 退回旧行为）。
+                _strip_identity = False
+                try:
+                    from core import config as _cfg3
+                    _strip_identity = bool(_cfg3.get("context_audit",
+                                                     "memory_identity_strip", True))
+                except Exception:
+                    _strip_identity = True
+                if _strip_identity and _has_account_identity(user):
+                    def _strip_rows(rows):
+                        out = []
+                        for r in (rows or []):
+                            _c = str(r.get("content") or "")
+                            _new = _strip_identity_claim(_c)
+                            if not _new:
+                                continue          # 剥完为空 ⇒ 该条只剩身份声明 ⇒ 不注入
+                            if _new != _c:
+                                r = dict(r)
+                                r["content"] = _new
+                            out.append(r)
+                        return out
+                    core_rows = _strip_rows(core_rows)
+                    recall_rows = _strip_rows(recall_rows)
+                    if not core_rows and not recall_rows:
+                        return ""
                 lines = []
                 if core_rows:
                     lines.append("【核心偏好（跨会话稳定，请遵守）】")
                     for r in core_rows:
-                        lines.append(f"- [{r.get('mem_type', 'fact')}] {str(r.get('content') or '')[:160]}")
+                        lines.append(f"- [{r.get('mem_type', 'fact')}] "
+                                     f"{str(r.get('content') or '')[:_max_chars]}")
                 if recall_rows:
                     lines.append("【长期记忆（跨会话经验，仅供对齐，不得虚构扩展或作为事实来源引用）】")
                     for r in recall_rows:
-                        lines.append(f"- [{r.get('mem_type', 'fact')} | 相关度 {r.get('score', 0):.2f}] {str(r.get('content') or '')[:160]}")
+                        lines.append(f"- [{r.get('mem_type', 'fact')} | 相关度 {r.get('score', 0):.2f}] "
+                                     f"{str(r.get('content') or '')[:_max_chars]}")
                 return "\n".join(lines) + "\n"
             finally:
                 conn.close()
@@ -309,6 +453,13 @@ class MemoryMixin:
         try:
             if not content or not content.strip():
                 return
+            # P0#1 显式写触发：被显式排除的 intent 不沉淀（避免污染记忆库；内容级判定仍归 maybe_deposit 三重门）
+            try:
+                from agent.memory_recall import should_deposit_memory as _should_deposit
+                if not _should_deposit(intent or "chat", content):
+                    return
+            except Exception:
+                pass
             if getattr(self, "_mem_deposit_count", 0) >= 2:
                 return
             from memory_backend import get_memory_backend
@@ -333,11 +484,20 @@ class MemoryMixin:
         except Exception:
             pass
 
-    def _record_skill_feedback(self, run_id=0, intent="", output_content="", error=None) -> None:
+    def _record_skill_feedback(self, conversation_id=0, intent="", output_content="", error=None) -> None:
         """P0-5 技能使用反馈采集：本次命中技能按输出成功/失败更新 use_stats，失败滚动备注。
 
         对齐 Hermes「技能在使用中自我改进」：反馈数据供 SkillImprover 周期修订触发。
         规则判定（不依赖 LLM），异常静默。
+
+        ★ 2026-10-27（会话 9633/9629 实测）：**这里记的是「命中/注入」，不是「执行」**。
+          旧实现把 `result` 填成**本轮最终答案** ⇒ 实测 conv 9633 里
+          file-ops / sysml_view_generation_activity / 文件操作 三行 `result` 完全相同、
+          都等于最终答案（1923 字符）⇒ 看板读成"调用了 3 个技能、各产出一份结果"，
+          技能效果归因彻底失真（用户因此误以为"触发了别的 agent"）。
+          技能没有独立返回值：它是被注入的指导正文，真正干活的是主循环的工具调用。
+          ⇒ `result` 改填**事实描述**（命中并注入、未独立执行），`ok` 仍表示"命中成功"，
+          需要判断真实效果的按 `tool_call_logs` 里 `call_kind='tool'` 的行看。
         """
         hits = self._last_skill_hits or []
         if not hits:
@@ -352,7 +512,10 @@ class MemoryMixin:
             with db_conn() as conn:
                 # 可观测：技能调用日志（call_kind='skill'，与工具日志统一落库，失败不阻断）
                 _agent = getattr(self, "_tool_agent_ctx", None) or {}
-                _summary = str(output_content or "")[:2000] if ok else (note or "执行失败")
+                # 事实描述：技能是"注入"不是"执行"，不拿本轮最终答案冒充技能产出。
+                _summary = ("（技能注入：本轮命中并注入正文指导，未独立执行；"
+                            "实际动作见同轮 call_kind=tool 的行）"
+                            if ok else (note or "注入失败"))
                 # P1-2：与工具日志统一带 failure_kind（此前本 INSERT 无该列 ⇒ 技能
                 # 失败步在步骤级归因里只能落 unknown）。分类器复用 B1-6 的
                 # services.failure_class（不另造第二份词表）；只在失败时写。
@@ -365,41 +528,97 @@ class MemoryMixin:
                         _skind = ""
                 for name in hits[:10]:
                     try:
+                        # P0-a：capability_id=skill:{id}（skills.name 无 UNIQUE 约束，
+                        # 重名取最小 id，与 core/capability_registry 投影口径一致）。
+                        _sid_row = conn.execute(
+                            "SELECT id FROM skills WHERE name=? ORDER BY id LIMIT 1",
+                            (name,)).fetchone()
+                        # ★ P0-3（2026-10-27）：技能调用同样要带 trace_id ——
+                        #   实测（会话 9623）本写入点 3 行 trace_id 全空，而同一轮的工具行有值
+                        #   ⇒ 同一轮的能力调用**一半能 JOIN、一半不能**，追溯链从中间断开。
+                        #   取值与工具侧**同一实现**（实例属性 → ContextVar），不另造 id。
+                        _tid = str(getattr(self, "_tool_trace_id", "") or "")
+                        if not _tid:
+                            try:
+                                from core.audit import current_trace_id as _ctid_m
+                                _tid = _ctid_m()
+                            except Exception:
+                                _tid = ""
+                        # ★ 请求 3（2026-10-27）：技能调用同样要带 run_id，与工具调用同源归批。
+                        #   此前本 INSERT 列清单**无 run_id 列**（落库取列默认值 0），且 `run_id` 形参
+                        #   被错位绑到 conversation_id —— 故技能调用 run_id 恒 0，主路径归批仍漏掉最大的
+                        #   一块（技能触发）。现：conversation_id 取形参真值；run_id 取本实例
+                        #   `self._tool_run_ctx`（顶层轮次就地分配、嵌套沿用父编排 run，与 _log_tool_call 同源）。
+                        _rid = int(getattr(self, "_tool_run_ctx", 0) or 0)
+                        # S0（2026-10-28）探针标记：技能行同样要标（验证脚本会调技能）。
+                        try:
+                            from core.probe_mark import is_probe_tool as _ipt
+                            _is_probe_skill = _ipt(name)
+                        except Exception:
+                            _is_probe_skill = 0
                         conn.execute(
+                            # 2026-10-27（截断清单 P0-B3）：技能行也写 result_len，
+                            #   与工具行口径一致（否则 0 既表示"未知"又表示"空"，无法区分）。
                             "INSERT INTO tool_call_logs (intent, agent_name, tool_name, tool_type, call_kind, "
-                            "arguments, result, ok, latency_ms, conversation_id, failure_kind) "
-                            "VALUES (?,?,?,?,?,?,?,?,0,?,?)",
+                            "arguments, result, ok, latency_ms, conversation_id, run_id, failure_kind, capability_id, trace_id, result_len, is_probe) "
+                            "VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)",
                             (intent or "", _agent.get("agent", ""), name, "skill", "skill",
-                             "{}", _summary, 1 if ok else 0, int(run_id or 0), _skind))
+                             "{}", _summary, 1 if ok else 0, int(conversation_id or 0), _rid,
+                             _skind, ("skill:%s" % _sid_row[0]) if _sid_row else "", _tid,
+                             len(_summary or ""),
+                             # S0（2026-10-28）探针标记（core/probe_mark）
+                             _is_probe_skill))
                     except Exception:
                         pass
+                # ★ 2026-10-29（P0-2）：**本循环的 run_id 必须在这里独立计算**。
+                #
+                #   此前第 528 行直接引用裸 `run_id`，而本函数签名只有
+                #   `conversation_id`（`run_id` 形参早在 2026-10-27 的改造里被改名/移除）
+                #   ⇒ 失败分支必然抛 `NameError`，被函数末尾的 `except: pass` 吞掉。
+                #   实测（构造一次失败调用）：uses / fail / feedback_notes **三个计数全不变**，
+                #   而成功分支正常 +1 ⇒ 技能的失败统计与失败备注**长期只写成功那一半**。
+                #   后果直指自进化闭环：SkillImprover 读的正是 feedback_notes，
+                #   它拿不到"哪里不聪明"，只能凭"无输出"三字盲改（上一轮产出的坏草稿即源于此）。
+                #
+                #   取值口径与工具侧一致：实例属性 `_tool_run_ctx`（顶层轮次就地分配、
+                #   嵌套沿用父编排 run），不另造 id。
+                _rid_note = int(getattr(self, "_tool_run_ctx", 0) or 0)
                 for name in hits[:10]:
-                    row = conn.execute(
-                        "SELECT use_stats, feedback_notes FROM skills WHERE name=? AND status='published'",
-                        (name,)).fetchone()
-                    if not row:
-                        continue
+                    # ★ 每条技能**独立** try：原实现整块 try 包住循环，
+                    #   一条失败（如改名后 name 查不到）会让**后续技能全部跳过**，
+                    #   且失败本身不可见。现在单条失败只影响单条，并打印前 120 字原因。
                     try:
-                        st = json.loads(row["use_stats"] or "{}")
-                    except Exception:
-                        st = {}
-                    uses = int(st.get("uses", 0)) + 1
-                    succ = int(st.get("success", 0)) + (1 if ok else 0)
-                    st.update({"uses": uses, "success": succ, "fail": uses - succ,
-                               "last_used": time.strftime("%Y-%m-%d %H:%M:%S")})
-                    if ok:
-                        conn.execute("UPDATE skills SET use_stats=?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
-                                     (json.dumps(st, ensure_ascii=False), name))
-                    else:
+                        row = conn.execute(
+                            "SELECT use_stats, feedback_notes FROM skills WHERE name=? AND status='published'",
+                            (name,)).fetchone()
+                        if not row:
+                            continue
                         try:
-                            notes = json.loads(row["feedback_notes"] or "[]")
+                            st = json.loads(row["use_stats"] or "{}")
                         except Exception:
-                            notes = []
-                        notes.append({"ts": st["last_used"], "run_id": int(run_id or 0),
-                                      "intent": intent or "", "note": note})
-                        conn.execute(
-                            "UPDATE skills SET use_stats=?, feedback_notes=?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
-                            (json.dumps(st, ensure_ascii=False), json.dumps(notes[-5:], ensure_ascii=False), name))
+                            st = {}
+                        uses = int(st.get("uses", 0)) + 1
+                        succ = int(st.get("success", 0)) + (1 if ok else 0)
+                        st.update({"uses": uses, "success": succ, "fail": uses - succ,
+                                   "last_used": time.strftime("%Y-%m-%d %H:%M:%S")})
+                        if ok:
+                            conn.execute("UPDATE skills SET use_stats=?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
+                                         (json.dumps(st, ensure_ascii=False), name))
+                        else:
+                            try:
+                                notes = json.loads(row["feedback_notes"] or "[]")
+                            except Exception:
+                                notes = []
+                            notes.append({"ts": st["last_used"], "run_id": _rid_note,
+                                          "intent": intent or "", "note": note})
+                            conn.execute(
+                                "UPDATE skills SET use_stats=?, feedback_notes=?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
+                                (json.dumps(st, ensure_ascii=False), json.dumps(notes[-5:], ensure_ascii=False), name))
+                    except Exception as _one:
+                        # 单条失败不静默：技能统计是自进化的输入，悄悄丢等于让它瞎猜。
+                        print("[skill-feedback] 技能「%s」统计写入失败（已跳过，不影响其余）: %s: %s"
+                              % (name, type(_one).__name__, str(_one)[:120]), flush=True)
+                        continue
         except Exception:
             pass
 
@@ -454,10 +673,21 @@ class MemoryMixin:
 
     def _build_user_context(self, user) -> str:
         """P2 用户上下文注入（文章：用户/业务/企业知识三类上下文）：
-        身份/角色进 prompt，让同一技能因人而异；无身份时返回空串。"""
+        身份/角色进 prompt，让同一技能因人而异；无身份时返回空串。
+
+        ★ 2026-10-29：**称呼的权威来源是登录账号**。
+          实测：长期记忆里存着「用户叫米巴…」，账号是 gefei，两者并存时模型
+          优先用记忆里的自报名（输出"你好，米巴！"）⇒ 与用户诉求冲突。
+          ⇒ 这里显式声明优先级：称呼以本块的「当前用户」为准，
+            长期记忆里的自报名**不得**作为称呼依据（记忆注入侧已同步剥离该子句）。
+        """
         if not user:
             return ""
-        parts = [f"当前用户：{user.get('display_name') or user.get('username') or ''}"]
+        _disp = str(user.get("display_name") or user.get("username") or "")
+        parts = [f"当前用户：{_disp}"]
+        if _disp:
+            parts.append(f"称呼用户时一律使用「{_disp}」；长期记忆中出现的其他自报名（如“用户叫X”）"
+                         f"不得作为称呼依据")
         if user.get("role_name"):
             parts.append(f"角色：{user['role_name']}")
         if user.get("department"):

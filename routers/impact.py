@@ -12,7 +12,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from core.deps import db_session, current_user
-from core.audit import audit
+from core.audit import audit, audit_user
 from repositories.impact_repo import ImpactRepo
 from services.impact_engine import simulate, get_scene, SCENES
 
@@ -41,7 +41,7 @@ def delete_analysis(analysis_id: int, conn=Depends(db_session), user: dict = Dep
     if not ImpactRepo(conn).get_analysis(analysis_id):
         raise HTTPException(404, "分析记录不存在")
     ImpactRepo(conn).delete_analysis(analysis_id)
-    audit((user or {}).get("name", "王工"), "impact_history_delete",
+    audit(audit_user(user), "impact_history_delete",
           f"删除变更影响分析记录 #{analysis_id}", conn=conn)
     return {"ok": True}
 
@@ -65,7 +65,7 @@ def build_impact_baseline(body: dict, conn=Depends(db_session), user: dict = Dep
                        (body.get("direction") or "both") or "both")
     if not r.get("ok"):
         raise HTTPException(400, r.get("reason") or "基线构建失败")
-    audit((user or {}).get("name", "王工"), "impact_baseline",
+    audit(audit_user(user), "impact_baseline",
           f"构建真实图谱基线：{r['source'].get('name')}（{len(r['graph'].get('nodes', []))} 节点）", conn=conn)
     return r
 
@@ -81,15 +81,21 @@ def link_impact_report(analysis_id: int, body: dict, conn=Depends(db_session),
         raise HTTPException(404, "分析记录不存在")
     ImpactRepo(conn).bind_report(analysis_id, report_id)
     conn.commit()
-    audit((user or {}).get("name", "王工"), "impact_report_link",
+    audit(audit_user(user), "impact_report_link",
           f"分析记录 #{analysis_id} 关联报告 #{report_id}", conn=conn)
     return {"ok": True, "analysis_id": analysis_id, "report_id": report_id}
 
 
 @router.get("/api/impact/scenes")
 def list_scenes():
-    """内置多层级依赖演示场景（供沙箱预演选择）。"""
-    return [{"id": k, "title": v["title"], "source_id": v.get("source_id"),
+    """内置多层级依赖演示场景（供沙箱预演选择）。
+
+    ⚠️ 这些场景用的是**写死的虚构图谱**（SIM_GRAPH），不是用户自己的模型 ——
+    前端必须显式标注「演示」，否则用户会以为在分析自己的模型。
+    """
+    return [{"id": k, "title": v["title"], "is_demo": True,
+             "demo_notice": "演示场景（内置虚构图谱，非你的模型）",
+             "source_id": v.get("source_id"),
              "depth": v.get("depth", 5), "direction": v.get("direction", "both"),
              "change_desc": v.get("change_desc", ""),
              "changes": v.get("changes", []),
@@ -137,13 +143,20 @@ def run_simulation(body: dict, conn=Depends(db_session), user: dict = Depends(cu
         sim_id = ImpactRepo(conn).create_simulation(
             title=title, scene=scene_id, baseline_snapshot=graph, changes=changes,
             before_result=result["before"], after_result=result["after"],
-            comparison=result["comparison"], created_by=(user or {}).get("name", "王工"))
+            comparison=result["comparison"], created_by=audit_user(user))
     except Exception:
         sim_id = 0
-    actor = (user or {}).get("name", "王工")
+    actor = audit_user(user)
     audit(actor, "impact_simulate", f"沙箱变更模拟：{title or scene_id}", conn=conn)
     # FR-KG-12 补 G13：模拟结论自动回流为 v2g 候选（失败不阻断主流程）
-    if sim_id > 0:
+    #
+    # ★ 2026-10-23：**内置演示场景的结果一律不回流**。
+    #   演示场景用的是写死的 SIM_GRAPH（卫星/载荷/功放等虚构模型），
+    #   把它的"影响结论"回流成 v2g 候选 ⇒ **污染用户真实的候选表**
+    #   （用户会看到凭空冒出来的、自己从没建模过的元素候选）。
+    #   只有用户**自己的基线图谱**（baseline_graph + source）才允许回流。
+    is_demo_scene = bool(scene_id)
+    if sim_id > 0 and not is_demo_scene:
         try:
             from knowledge_reflow import reflow_from_impact
             rf = reflow_from_impact(conn, sim_id, changes, result["comparison"], title=title,
@@ -154,6 +167,10 @@ def run_simulation(body: dict, conn=Depends(db_session), user: dict = Depends(cu
                       conn=conn)
         except Exception:
             pass
+    elif is_demo_scene:
+        audit(actor, "impact_simulate_demo",
+              f"演示场景模拟（结果未回流 v2g 候选，避免污染真实候选表）：{scene_id}",
+              conn=conn)
     return {"ok": True, "id": sim_id, "scene": scene_id,
             "before": result["before"], "after": result["after"],
             "comparison": result["comparison"]}
@@ -181,6 +198,6 @@ def delete_simulation(sim_id: int, conn=Depends(db_session), user: dict = Depend
     if not ImpactRepo(conn).get_simulation(sim_id):
         raise HTTPException(404, "模拟记录不存在")
     ImpactRepo(conn).delete_simulation(sim_id)
-    audit((user or {}).get("name", "王工"), "impact_sim_delete",
+    audit(audit_user(user), "impact_sim_delete",
           f"删除变更模拟记录 #{sim_id}", conn=conn)
     return {"ok": True}

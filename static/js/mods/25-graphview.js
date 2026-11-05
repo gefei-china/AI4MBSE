@@ -198,7 +198,7 @@ function renderSysmlView(vm) {
 function buildSvmSvg(vm) {
   const nodes = vm.nodes||[], edges = vm.edges||[];
   if(!nodes.length){
-    return `<div style="padding:40px;color:var(--mut);font-size:13px;text-align:center;">该视图无可用模型元素<br><span style="font-size:11px;">请先在 SysML 代码中补充 ${esc(vm.view.type)} 视图所需元素（${esc((vm.warnings||[])[0]||'')}）</span></div>`;
+    return `<div style="padding:40px;color:var(--mut);font-size:14.5px;text-align:center;">该视图无可用模型元素<br><span style="font-size:12.5px;">请先在 SysML 代码中补充 ${esc(vm.view.type)} 视图所需元素（${esc((vm.warnings||[])[0]||'')}）</span></div>`;
   }
   const {pos, W, H} = svmLayout(nodes, edges);
   const markers = `
@@ -448,7 +448,7 @@ function svmRenderCytoscape(container, vm) {
     const d = evt.target.data();
     const attrs = d.attrs || {};
     const lines = Object.keys(attrs).filter(k=>attrs[k]).map(k=>`<b>${esc(k)}</b>: ${esc(String(attrs[k]))}`).join('<br>');
-    const html = `<b>${esc(d.label)}</b> <span style="color:var(--mut);font-size:10px;">[${esc(d.kind||'block')}${d.type?' · '+esc(d.type):''}]</span><br>${lines||'<span style="color:var(--mut);">无附加属性</span>'}`;
+    const html = `<b>${esc(d.label)}</b> <span style="color:var(--mut);font-size:12px;">[${esc(d.kind||'block')}${d.type?' · '+esc(d.type):''}]</span><br>${lines||'<span style="color:var(--mut);">无附加属性</span>'}`;
     toastHtml(html);
   });
   cy.on('tap', 'edge', evt=>{
@@ -474,7 +474,7 @@ function svmRenderInViewer(vm, containerId) {
       return cy;
     }
     if(!cy && (vm.nodes||[]).length){
-      el.innerHTML = `<div style="padding:40px;color:var(--mut);font-size:13px;text-align:center;">该视图无可用模型元素<br><span style="font-size:11px;">${esc((vm.warnings||[])[0]||'')}</span></div>`;
+      el.innerHTML = `<div style="padding:40px;color:var(--mut);font-size:14.5px;text-align:center;">该视图无可用模型元素<br><span style="font-size:12.5px;">${esc((vm.warnings||[])[0]||'')}</span></div>`;
     }
     return cy;
   }, null);
@@ -646,7 +646,7 @@ function gvNodeHover(id){
   // 导致 hover 时不再重建、卡片写到已脱离文档的元素上而看不到——用 isConnected 判定失效即重建
   if(!_gvTipEl || !_gvTipEl.isConnected){
     _gvTipEl = document.createElement('div'); _gvTipEl.id='gv-node-tip';
-    _gvTipEl.style.cssText='position:absolute;z-index:9;background:rgba(31,45,61,.95);color:#fff;border-radius:6px;padding:6px 9px;font-size:11px;line-height:1.55;pointer-events:none;max-width:220px;box-shadow:0 2px 8px rgba(0,0,0,.22);white-space:nowrap;';
+    _gvTipEl.style.cssText='position:absolute;z-index:9;background:rgba(31,45,61,.95);color:#fff;border-radius:6px;padding:6px 9px;font-size:12.5px;line-height:1.55;pointer-events:none;max-width:220px;box-shadow:0 2px 8px rgba(0,0,0,.22);white-space:nowrap;';
     el.appendChild(_gvTipEl);
   }
   const s = graphState.vp.scale||1, px = graphState.vp.panX||0, py = graphState.vp.panY||0;
@@ -697,9 +697,9 @@ function renderGraph() {
   const W = graphState.svgW, H = graphState.svgH;
   // UI 清单③：空态引导（当前分支无图数据 → 下一步动作）
   if(!graphState.all.nodes.length){
-    el.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--mut);font-size:12.5px;gap:8px;text-align:center;padding:30px;">
-      <div style="font-size:15px;">🕸 当前分支「${esc(getCurrentBranch())}」暂无图谱数据</div>
-      <div style="font-size:11.5px;">下一步：① 数据整理·抽取候选 → ② 候选确认入库 → ③ 刷新本视图</div>
+    el.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--mut);font-size:13.5px;gap:8px;text-align:center;padding:30px;">
+      <div style="font-size:16.5px;">🕸 当前分支「${esc(getCurrentBranch())}」暂无图谱数据</div>
+      <div style="font-size:12.5px;">下一步：① 数据整理·抽取候选 → ② 候选确认入库 → ③ 刷新本视图</div>
       <div style="display:flex;gap:8px;margin-top:4px;">
         <button class="btn sm" onclick="go('kb','kb-b')">→ 去数据整理</button>
         <button class="btn sm ghost" onclick="loadGraph()">🔄 刷新</button>
@@ -718,17 +718,17 @@ function renderGraph() {
   }).join('');
   // 2026-09-10 米爸裁剪：命名子图组件（gv-view/💾/删除）与「🔍 搜索」按钮移除——子图是低频功能且与筛选语义重叠，
   // 搜索以顶部搜索框唯一入口（+ / 快捷键），避免双入口冗余
-  let s = `<div style="padding:6px 10px;font-size:11px;color:var(--mut);border-bottom:1px solid var(--line);background:#fafaf7;">
+  let s = `<div style="padding:6px 10px;font-size:12.5px;color:var(--mut);border-bottom:1px solid var(--line);background:#fafaf7;">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
       <!-- 2026-09-10 二次修正：筛选+统计从画布内 absolute 浮层移回工具栏行（普通流）——
            浮层 top 固定值会先后与工具栏、骨架/限高提示横幅（gvSkeletonBanner/gvLimitBanner）重叠，普通流根治 -->
       <span class="gv-dd" style="position:relative;display:inline-flex;gap:8px;align-items:center;">
         <button class="btn sm ghost" onclick="gvToggleMenu('gv-filter-dd',event)">⚙ 筛选<span id="gv-filter-n" style="color:var(--blue-d);margin-left:2px;"></span> ▾</button>
-        <span id="gv-stat-chip" title="节点（视图/后端匹配总数）· 关系数" style="background:#fff;border:1px solid var(--line);border-radius:14px;padding:2px 10px;font-size:10.5px;color:var(--mut);"></span>
+        <span id="gv-stat-chip" title="节点（视图/后端匹配总数）· 关系数" style="background:#fff;border:1px solid var(--line);border-radius:14px;padding:2px 10px;font-size:12px;color:var(--mut);"></span>
         <div id="gv-filter-dd" class="gv-dd-panel" style="display:none;position:absolute;top:100%;left:0;z-index:30;min-width:240px;background:#fff;border:1px solid var(--blue);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);padding:10px;">
-          <div style="font-weight:700;font-size:12px;color:var(--blue-d);margin-bottom:6px;">筛选 · 仅作用于画布</div>
-          <div style="font-size:11px;margin-bottom:4px;color:var(--mut);">说明：左栏实体树不受此筛选影响，便于跨视图查找</div>
-          <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:11px;margin-bottom:10px;"><input type="checkbox" ${v.hideIsolated?'checked':''} onchange="graphToggleIsolated(this)" style="vertical-align:middle;"> 隐藏孤立节点</label>
+          <div style="font-weight:700;font-size:13.5px;color:var(--blue-d);margin-bottom:6px;">筛选 · 仅作用于画布</div>
+          <div style="font-size:12.5px;margin-bottom:4px;color:var(--mut);">说明：左栏实体树不受此筛选影响，便于跨视图查找</div>
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12.5px;margin-bottom:10px;"><input type="checkbox" ${v.hideIsolated?'checked':''} onchange="graphToggleIsolated(this)" style="vertical-align:middle;"> 隐藏孤立节点</label>
           <div style="display:flex;gap:6px;">
             <button class="btn sm" style="flex:1;" onclick="gvClearFilters()">↺ 清除筛选</button>
             <button class="btn sm ghost" onclick="gvCloseMenu('gv-filter-dd')">完成</button>
@@ -737,7 +737,7 @@ function renderGraph() {
       </span>
       <span style="border-left:1px solid var(--line);height:18px;"></span>
       <span style="display:inline-flex;gap:6px;align-items:center;">
-        <select onchange="graphSetLayout(this.value)" title="布局算法" style="border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:11px;">
+        <select onchange="graphSetLayout(this.value)" title="布局算法" style="border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:12.5px;">
           <option value="layered" ${v.layout==='layered'?'selected':''}>📐 分层（层级）</option>
           <option value="force" ${v.layout==='force'?'selected':''}>🔀 力导向</option>
           <option value="ring" ${v.layout==='ring'?'selected':''}>⭕ 环形</option>
@@ -750,7 +750,7 @@ function renderGraph() {
       <span class="gv-dd" style="position:relative;">
         <button class="btn sm ghost" onclick="gvToggleMenu('gv-export-dd',event)">导出 ▾</button>
         <div id="gv-export-dd" class="gv-dd-panel" style="display:none;position:absolute;top:100%;left:0;z-index:30;min-width:250px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);padding:6px;">
-          <div style="padding:4px 8px;font-size:10px;color:var(--mut);border-bottom:1px solid var(--line);margin-bottom:4px;">范围：当前分支<b>全量</b>实体与关系（含未在画布显示的节点），非当前筛选视图</div>
+          <div style="padding:4px 8px;font-size:12px;color:var(--mut);border-bottom:1px solid var(--line);margin-bottom:4px;">范围：当前分支<b>全量</b>实体与关系（含未在画布显示的节点），非当前筛选视图</div>
           <div class="gv-dd-item" onclick="graphExport('json')" title="当前分支全量实体+关系（JSON，程序互操作 / 备份）">📦 图谱数据 (JSON)</div>
           <div class="gv-dd-item" onclick="graphExport('graphml')" title="GraphML——Gephi / yEd / Cytoscape 等图分析工具通用 interchange 格式">🔀 GraphML（Gephi/yEd）</div>
           <div class="gv-dd-item" onclick="exportSysmlModel()" title="按本体约束把当前分支图谱导出为 SysML V2 (KerML) 模型文本">📄 SysML V2 模型 (KerML)</div>
@@ -758,8 +758,8 @@ function renderGraph() {
       </span>
       <span style="flex:1;"></span>
       <!-- ⇵ 同步基线 2026-09-14 迁移至顶部分支切换入口右侧（index.html #hdr-sync-baseline，仅个人分支显示） -->
-      <span id="gv-link-tip" style="display:none;color:var(--blue-d);font-weight:600;font-size:10.5px;">🔗 连线模式：点源节点 → 点目标节点 → 右栏选关系类型（Esc 退出）</span>
-      <span style="color:var(--mut);font-size:10.5px;">滚轮缩放 · 空白拖动平移 · 节点拖拽调整布局</span>
+      <span id="gv-link-tip" style="display:none;color:var(--blue-d);font-weight:600;font-size:12px;">🔗 连线模式：点源节点 → 点目标节点 → 右栏选关系类型（Esc 退出）</span>
+      <span style="color:var(--mut);font-size:12px;">滚轮缩放 · 空白拖动平移 · 节点拖拽调整布局</span>
     </div>
     <!-- 2026-09-04 优化：筛选 + 缩放 + 类型图例 全部迁移至画布内 absolute 浮层，避免误关联左栏实体树 -->
   </div>
@@ -767,13 +767,13 @@ function renderGraph() {
   <!-- 2026-09-10：筛选+统计已移回工具栏行内（普通流），画布内不再有左上浮层——骨架/限高提示横幅不再被遮挡 -->
   <!-- 画布浮层：右下 · 缩放控件（绝对定位，便于聚焦画布视图） -->
   <div id="gv-zoom-fab" style="position:absolute;right:14px;bottom:14px;z-index:6;display:inline-flex;gap:3px;align-items:center;background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:8px;padding:2px 4px;box-shadow:0 1px 4px rgba(0,0,0,.08);">
-    <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="gvZoomOut()" title="缩小（Ctrl+滚轮向下）">−</button>
-    <span id="gv-zoom-pct2" style="font-size:11px;color:var(--mut);min-width:38px;text-align:center;cursor:pointer;" title="点击重置视图" onclick="gvZoomReset()">100%</span>
-    <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="gvZoomIn()" title="放大（Ctrl+滚轮向上）">＋</button>
-    <button class="btn sm ghost" style="padding:1px 6px;font-size:11px;" onclick="gvZoomReset()" title="重置视图（⌂）">⌂</button>
+    <button class="btn sm ghost" style="padding:1px 6px;font-size:12.5px;" onclick="gvZoomOut()" title="缩小（Ctrl+滚轮向下）">−</button>
+    <span id="gv-zoom-pct2" style="font-size:12.5px;color:var(--mut);min-width:38px;text-align:center;cursor:pointer;" title="点击重置视图" onclick="gvZoomReset()">100%</span>
+    <button class="btn sm ghost" style="padding:1px 6px;font-size:12.5px;" onclick="gvZoomIn()" title="放大（Ctrl+滚轮向上）">＋</button>
+    <button class="btn sm ghost" style="padding:1px 6px;font-size:12.5px;" onclick="gvZoomReset()" title="重置视图（⌂）">⌂</button>
   </div>
   <!-- 画布浮层：左下 · 类型图例（绝对定位；点击图例项切换类型可见性） -->
-  <div id="gv-legend-fab" style="position:absolute;left:14px;bottom:14px;z-index:6;background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:11px;color:var(--mut);box-shadow:0 1px 4px rgba(0,0,0,.08);max-width:420px;max-height:160px;overflow-y:auto;">
+  <div id="gv-legend-fab" style="position:absolute;left:14px;bottom:14px;z-index:6;background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:12.5px;color:var(--mut);box-shadow:0 1px 4px rgba(0,0,0,.08);max-width:420px;max-height:160px;overflow-y:auto;">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${legend||'<span style="color:var(--mut);">暂无类型</span>'}</div>
   </div>
   <svg id="gv-svg" width="${W}" height="${H}" style="background:#fff;display:block;width:100%;height:calc(100% - 36px);touch-action:none;"
@@ -883,7 +883,7 @@ function gvTreeRow(n, depth){
   </span>`;
   return `<div id="gvtn-${esc(n.id)}" class="ont-tnd${sel?' on':''}" style="padding-left:${depth*16+28}px;${iso?'opacity:.62;':''}" onclick="gvTreeSelEntity('${esc(n.id)}')" title="${esc(n.name)} · 关系 ${deg}">
     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(n.name)}</span>
-    <span style="color:var(--mut);font-size:9.5px;">${iso?'0':deg}</span>
+    <span style="color:var(--mut);font-size:11.5px;">${iso?'0':deg}</span>
     ${rio}
   </div>`;
 }
@@ -934,7 +934,7 @@ let gvcParentId = '';
 const _gvRioStyle = '__GVRiOSTYLE__';
 if(!document.getElementById(_gvRioStyle)){
   const s = document.createElement('style'); s.id=_gvRioStyle;
-  s.textContent = '.ont-tnd .gv-rio{display:none;flex:none;margin-left:auto;align-items:center;gap:2px}'+'.ont-tnd:hover .gv-rio{display:inline-flex}'+'.gv-rio .gv-act{display:inline-flex;width:17px;height:17px;align-items:center;justify-content:center;border-radius:4px;font-size:11px;line-height:1;color:var(--mut);cursor:pointer}'+'.gv-rio .gv-act:hover{background:var(--blue-l);color:var(--blue)}'+'.gv-rio .gv-del:hover{background:var(--red);color:#fff}';
+  s.textContent = '.ont-tnd .gv-rio{display:none;flex:none;margin-left:auto;align-items:center;gap:2px}'+'.ont-tnd:hover .gv-rio{display:inline-flex}'+'.gv-rio .gv-act{display:inline-flex;width:17px;height:17px;align-items:center;justify-content:center;border-radius:4px;font-size:12.5px;line-height:1;color:var(--mut);cursor:pointer}'+'.gv-rio .gv-act:hover{background:var(--blue-l);color:var(--blue)}'+'.gv-rio .gv-del:hover{background:var(--red);color:#fff}';
   document.head.appendChild(s);
 }
 function _gvErr(msg){
@@ -962,16 +962,16 @@ async function gvInstanceForm(id, preselectParentId){
   const relHtml = gvcRelHtml(gvcRelList(initialType), id ? n.id : '');
   openPanel(isEdit?('✏️ 编辑实例：'+esc(n.name)):'➕ 新增实例', `
     <div style="display:flex;flex-direction:column;gap:10px;min-width:380px;max-width:430px;box-sizing:border-box;">
-      <div><label style="font-size:11.5px;color:var(--mut);">实例名称</label>
-        <input id="gvc-name" value="${esc(id&&n?n.name:'')}" placeholder="必填" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 9px;font-size:13px;box-sizing:border-box;"></div>
-      <div><label style="font-size:11.5px;color:var(--mut);">本体类型${isEdit?'（改类仅限安全迁移）':''}</label>
-        <select id="gvc-type" onchange="gvcOnTypeChange()" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13px;box-sizing:border-box;">${typeHtml||'<option value="">未定义</option>'}</select></div>
-      ${(!isEdit && nodes.length)?`<div><label style="font-size:11.5px;color:var(--mut);">父实例（组合/包含挂载，可选）</label>
-        <select id="gvc-parent" onchange="gvcParentId=this.value" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12.5px;box-sizing:border-box;"><option value="">— 不挂父（作为根实例）—</option>${parenOpts}</select></div>`:''}
-      <div><label style="font-size:11.5px;color:var(--mut);">数据属性（按本体 Schema 受控填写）</label>
+      <div><label style="font-size:12.5px;color:var(--mut);">实例名称</label>
+        <input id="gvc-name" value="${esc(id&&n?n.name:'')}" placeholder="必填" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 9px;font-size:14.5px;box-sizing:border-box;"></div>
+      <div><label style="font-size:12.5px;color:var(--mut);">本体类型${isEdit?'（改类仅限安全迁移）':''}</label>
+        <select id="gvc-type" onchange="gvcOnTypeChange()" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:14.5px;box-sizing:border-box;">${typeHtml||'<option value="">未定义</option>'}</select></div>
+      ${(!isEdit && nodes.length)?`<div><label style="font-size:12.5px;color:var(--mut);">父实例（组合/包含挂载，可选）</label>
+        <select id="gvc-parent" onchange="gvcParentId=this.value" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;box-sizing:border-box;"><option value="">— 不挂父（作为根实例）—</option>${parenOpts}</select></div>`:''}
+      <div><label style="font-size:12.5px;color:var(--mut);">数据属性（按本体 Schema 受控填写）</label>
         <div id="gvc-props" style="display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:#fcfcfb;max-height:240px;overflow:auto;">加载属性…</div></div>
       ${relHtml}
-      <div id="gvc-err" style="color:#A32D2D;font-size:12px;display:none;background:#fff5f5;border:1px solid #F3C1C1;border-radius:6px;padding:6px 9px;white-space:pre-wrap;"></div>
+      <div id="gvc-err" style="color:#A32D2D;font-size:13.5px;display:none;background:#fff5f5;border:1px solid #F3C1C1;border-radius:6px;padding:6px 9px;white-space:pre-wrap;"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn sm ghost" onclick="closePanel()">取消</button>
         <button class="btn sm" onclick="gvcSubmit('${id||''}')">保存</button>
@@ -1056,11 +1056,11 @@ function gvcRelHtml(rels, selfId){
   if(!rels.length) return '';
   const rows = rels.map(r=>{
     const opts = r.targets.filter(x=>x.id!==selfId).map(x=>`<option value="${esc(x.id)}">${esc(x.name)}（${esc(x.entity_type||'')}）</option>`).join('');
-    return `<div style="display:flex;gap:6px;align-items:center;"><span style="flex:0 0 112px;font-size:11px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="关系类型 ${esc(r.name)}">${esc(r.name)}</span>
-      <select data-rel="${esc(r.name)}" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:11.5px;box-sizing:border-box;"><option value="">— 建立（选目标实例）—</option>${opts}</select></div>`;
+    return `<div style="display:flex;gap:6px;align-items:center;"><span style="flex:0 0 112px;font-size:12.5px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="关系类型 ${esc(r.name)}">${esc(r.name)}</span>
+      <select data-rel="${esc(r.name)}" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:12.5px;box-sizing:border-box;"><option value="">— 建立（选目标实例）—</option>${opts}</select></div>`;
   }).join('');
   return `<details style="margin-top:2px;">
-    <summary style="cursor:pointer;font-size:11.5px;color:var(--blue-d);user-select:none;">🔗 对象属性（关系）— 可选 ${rels.length} 个关系类型</summary>
+    <summary style="cursor:pointer;font-size:12.5px;color:var(--blue-d);user-select:none;">🔗 对象属性（关系）— 可选 ${rels.length} 个关系类型</summary>
     <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:6px;padding:8px;margin-top:6px;background:#fcfcfb;">${rows}</div>
   </details>`;
 }
@@ -1095,18 +1095,18 @@ function gvcField(prop, value){
   const t = String(prop.type||'').toLowerCase();
   let ctl;
   if(av.length){
-    ctl = `<select id="${id}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12.5px;box-sizing:border-box;"><option value="">—</option>`+
+    ctl = `<select id="${id}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;box-sizing:border-box;"><option value="">—</option>`+
       av.map(v=>`<option value="${esc(String(v))}" ${String(v)===String(value)?'selected':''}>${esc(String(v))}</option>`).join('')+`</select>`;
   } else if(t.includes('bool')){
-    ctl = `<select id="${id}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12.5px;box-sizing:border-box;"><option value="">—</option><option value="true" ${String(value)==='true'||value===true?'selected':''}>是</option><option value="false" ${String(value)==='false'||value===false?'selected':''}>否</option></select>`;
+    ctl = `<select id="${id}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;box-sizing:border-box;"><option value="">—</option><option value="true" ${String(value)==='true'||value===true?'selected':''}>是</option><option value="false" ${String(value)==='false'||value===false?'selected':''}>否</option></select>`;
   } else if(/int|long|decimal|double|float|numeric/.test(t)){
-    ctl = `<input id="${id}" type="number" step="any" value="${esc(value==null?'':value)}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13px;box-sizing:border-box;">`;
+    ctl = `<input id="${id}" type="number" step="any" value="${esc(value==null?'':value)}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:14.5px;box-sizing:border-box;">`;
   } else if(t.includes('date')){
-    ctl = `<input id="${id}" type="date" value="${esc(value==null?'':String(value).slice(0,10))}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13px;box-sizing:border-box;">`;
+    ctl = `<input id="${id}" type="date" value="${esc(value==null?'':String(value).slice(0,10))}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:14.5px;box-sizing:border-box;">`;
   } else {
-    ctl = `<input id="${id}" type="text" value="${esc(value==null?'':value)}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13px;box-sizing:border-box;">`;
+    ctl = `<input id="${id}" type="text" value="${esc(value==null?'':value)}" style="width:100%;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:14.5px;box-sizing:border-box;">`;
   }
-  return `<div style="display:flex;flex-direction:column;gap:3px;"><label style="font-size:11.5px;color:var(--mut);display:flex;align-items:center;gap:4px;">${esc(prop.name)}${req?'<span style="color:#A32D2D;">*</span>':''}${prop.unit?`<span class="tag" style="font-size:9.5px;">${esc(prop.unit)}</span>`:''}${prop.description?`<span style="font-size:9.5px;color:var(--line);cursor:help;" title="${esc(prop.description)}">ⓘ</span>`:''}</label>${ctl}</div>`;
+  return `<div style="display:flex;flex-direction:column;gap:3px;"><label style="font-size:12.5px;color:var(--mut);display:flex;align-items:center;gap:4px;">${esc(prop.name)}${req?'<span style="color:#A32D2D;">*</span>':''}${prop.unit?`<span class="tag" style="font-size:11.5px;">${esc(prop.unit)}</span>`:''}${prop.description?`<span style="font-size:11.5px;color:var(--line);cursor:help;" title="${esc(prop.description)}">ⓘ</span>`:''}</label>${ctl}</div>`;
 }
 async function gvcOnTypeChange(){
   const el = document.getElementById('gvc-type'); if(!el) return;

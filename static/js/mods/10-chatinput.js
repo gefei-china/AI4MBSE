@@ -107,7 +107,7 @@ async function loadAttachKbList(){
   const listEl = document.getElementById('attach-kb-list');
   const searchEl = document.getElementById('attach-kb-search');
   if(!listEl) return;
-  listEl.innerHTML = '<div style="color:var(--mut);font-size:12px;padding:8px;">加载中…</div>';
+  listEl.innerHTML = '<div style="color:var(--mut);font-size:13.5px;padding:8px;">加载中…</div>';
   if(searchEl) searchEl.value = '';
   let tags = [];
   try{ tags = (typeof ensureKbTagsCache === 'function') ? (await ensureKbTagsCache() || []) : []; }
@@ -133,10 +133,10 @@ function renderAttachKbList(){
   listEl.innerHTML = _attachKbShown.length ? _attachKbShown.map((it, i) => `
     <div onclick="attachKbPick(${i})" style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;cursor:pointer;" onmouseover="this.style.background='var(--bg-soft,#f5f5f2)'" onmouseout="this.style.background=''">
       <span style="flex:none;">${it.icon}</span>
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--txt);">${esc(it.name)}</span>
-      <span style="font-size:10.5px;color:var(--mut);flex:none;">${esc(it.tag)}</span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;color:var(--txt);">${esc(it.name)}</span>
+      <span style="font-size:12px;color:var(--mut);flex:none;">${esc(it.tag)}</span>
     </div>`).join('')
-    : '<div style="color:var(--mut);font-size:12px;padding:8px;">无匹配项</div>';
+    : '<div style="color:var(--mut);font-size:13.5px;padding:8px;">无匹配项</div>';
 }
 /* ★ 2026-10-20（用户报"知识库引用后 AI 检索不到"）：知识库引用统一走这里——
    #文本（触发后端知识检索路由）**加上**挂附件（doc_id ⇒ 后端把文档全文注入
@@ -192,20 +192,35 @@ function pickLocalFile(){
   closeAttachMenu();
 }
 let _attachProjectDocs = [];   // 2026-09-04 缓存当前会话文件清单，供本地搜索过滤
-// 「当前会话的文件」：从当前会话历史消息 attachments 提取（去重），与 @ 会话文件同源
+// 「当前会话的文件」：**会话附件 + 会话产物** 合并清单（去重）
+//
+// ★★ 2026-10-30（用户报「选『当前会话的文件』列表为空，但产物里明明有代码文件」）：
+//   原实现只扫 `messages[].attachments` —— 那是**用户上传的附件**。
+//   而本平台把 AI 产出的代码/文档/视图登记在 `artifacts` 表（另一个数据源），
+//   两者互不相通。实测 conv 9779：`messages.attachments` 命中 0 条，
+//   而 `artifacts` 有 9 条（3 个代码文件 + 6 个 SysML 视图）
+//   ⇒ 面板显示「当前会话还没有文件」，用户看到的是"列表空了但产物明明在"。
+//   这不只是漏一类数据：**"会话里有哪些文件"这个概念被拆成了两半**，
+//   用户无法从同一个入口引用自己刚产出的代码。
+//   现合并：上传附件（可走 doc_id/静态文件通道）+ 产物（走正文引用通道，
+//   见 attachConvFile 的说明——产物没有稳定静态地址，只有库内正文）。
 async function loadAttachProjectFiles(){
   const listEl = document.getElementById('attach-project-list');
   const emptyEl = document.getElementById('attach-project-empty');
   const searchEl = document.getElementById('attach-project-search');
   if(!listEl || !emptyEl) return;
-  listEl.innerHTML = '<div style="color:var(--mut);font-size:12px;padding:8px;">加载中…</div>';
+  listEl.innerHTML = '<div style="color:var(--mut);font-size:13.5px;padding:8px;">加载中…</div>';
   emptyEl.style.display = 'none';
   if(searchEl) searchEl.value = '';
   _attachProjectDocs = [];
+  // ⚠️ `seen` 必须声明在**两个数据源之外**：第一版把它留在第一个 try 里，
+  //   而产物扫描在 catch 之后 ⇒ `ReferenceError: seen is not defined` ⇒ 被外层
+  //   try/catch 吞掉 ⇒ **产物一条都不出现，且控制台之外无任何痕迹**。
+  //   这正是"加了等于没加"的典型形态：不报错、不生效。
+  const seen = {};
   if(typeof currentConvId !== 'undefined' && currentConvId){
     try{
       const mr = await api(`/api/conversations/${currentConvId}/messages?limit=50`);
-      const seen = {};
       ((mr && mr.messages) || []).forEach(mm => {
         let atts = [];
         try{ atts = mm.attachments ? (typeof mm.attachments==='string' ? JSON.parse(mm.attachments) : mm.attachments) : []; }catch(e){ atts = []; }
@@ -219,6 +234,26 @@ async function loadAttachProjectFiles(){
           //     · **B5-9 后端的 doc_id 取 chunk 通道收不到 id** ⇒ "从产物选文件"依旧异常。
           //   （与 file_type 等同放一行；两个字段都带，旧代码读 id 的不受影响。）
           _attachProjectDocs.push({id:a.doc_id||'', doc_id:a.doc_id||'', filename:key, url:a.url||'', size:a.size||0, is_image:!!a.is_image, file_type:key.split('.').pop()||'文件'});
+        });
+      });
+    }catch(e){}
+    // 会话产物（AI 产出的代码 / 文档 / 视图）—— 第二个数据源，必须合并进来
+    try{
+      const arts = await api(`/api/artifacts?conversation_id=${currentConvId}`);
+      (arts || []).forEach(a => {
+        const key = 'art:' + a.id;
+        if(!a || !a.id || seen[key]) return;
+        seen[key] = 1;
+        _attachProjectDocs.push({
+          kind: 'artifact', art_id: a.id,
+          // 产物没有静态文件地址（库里 file_url 实测为空串），
+          // 所以 url 留空 + 由 attachConvFile 走正文引用通道。
+          doc_id: '', url: '',
+          filename: a.title || ('产物#' + a.id),
+          size: a.size || 0, is_image: false,
+          file_type: (a.kind_label || a.kind || '产物'),
+          art_kind: a.kind || '',
+          from_artifact: true,
         });
       });
     }catch(e){}
@@ -249,20 +284,62 @@ function renderAttachProjectList(){
   }
   emptyEl.style.display = 'none';
   listEl.innerHTML = docs.map((d,i)=>{
-    const icon = d.is_image ? '🖼' : fileIcon(d.filename || '');
-    return `<div onclick="attachConvFile(${i})" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;transition:background .12s;">
-      <span style="font-size:18px;">${icon}</span>
+    // 索引必须回到**全量**数组：过滤后 i 是 docs 的下标，直接喂给
+    // attachConvFile 会取错项（搜索后点第一条，实际添加的是未过滤的第一条）。
+    const gi = _attachProjectDocs.indexOf(d);
+    const isArt = d.kind === 'artifact';
+    const icon = d.is_image ? '🖼' : (isArt ? (d.art_kind === 'sysml' ? '🧩' : d.art_kind === 'code' ? '💻' : '📦') : fileIcon(d.filename || ''));
+    const src = isArt ? ('会话产物 · ' + (d.file_type || '产物'))
+                      : ('会话附件' + (d.doc_id ? ' · 已入库' : ''));
+    return `<div onclick="attachConvFile(${gi})" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;transition:background .12s;" title="${escA(d.filename||'')}">
+      <span style="font-size:19.5px;">${icon}</span>
       <div style="flex:1;min-width:0;">
-        <div style="font-size:12.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(d.filename || '未命名')}</div>
-        <div style="font-size:10.5px;color:var(--mut);">${esc(d.file_type||'文件')} · 会话附件${d.doc_id?' · 已入库':''}</div>
+        <div style="font-size:13.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(d.filename || '未命名')}</div>
+        <div style="font-size:12px;color:var(--mut);">${esc(src)}</div>
       </div>
-      <span style="font-size:12px;color:var(--blue-d);flex-shrink:0;">添加</span>
+      <span onclick="event.stopPropagation();previewConvFile(${gi})" title="预览内容" style="font-size:14.5px;color:var(--mut);flex-shrink:0;padding:0 4px;">👁</span>
+      <span style="font-size:13.5px;color:var(--blue-d);flex-shrink:0;">添加</span>
     </div>`;
   }).join('');
+}
+// 预览：会话文件清单里每一项都能"只看看"，不必先加入会话。
+// 为什么必须单独给（用户原话「产物文件中又代码文件，为啥无法查看」）：
+// 清单此前只有「添加」一个动作，想确认"这是不是我要的那个代码文件"必须
+// 先加进会话（会改上下文）——把只读诉求和写入动作用同一个按钮绑在一起。
+function previewConvFile(i){
+  const d = _attachProjectDocs[i];
+  if(!d) return;
+  if(d.kind === 'artifact'){
+    api('/api/artifacts/' + d.art_id).then(a => {
+      if(!a || a.error){ toast('预览失败：' + ((a && a.error) || '产物不存在')); return; }
+      if(typeof openPreviewTab === 'function') openPreviewTab(a);
+      else if(a.preview_content) window.open('/api/artifacts/' + d.art_id + '/download', '_blank');
+      else toast('该产物没有可预览内容');
+    }).catch(e => toast('预览失败：' + (e && (e.message || e))));
+    return;
+  }
+  const u = d.url || (d.doc_id ? '/api/documents/' + d.doc_id + '/download' : '');
+  if(u) window.open(u, '_blank');
+  else toast('该附件没有可预览地址（仅存在于历史消息中）');
 }
 function attachConvFile(i){
   const d = _attachProjectDocs[i];
   if(!d) return;
+  // ★★ 2026-10-30：**产物走"正文引用"通道，不进附件栏**。
+  //   理由（可验证，不是偏好）：后端 `_load_attachment_text` 只认两种附件来源 ——
+  //     · `doc_id`（文档库已解析 chunk）；
+  //     · `url` 以 `/static/` 开头（上传文件）。
+  //   而 `artifacts` 行的 `file_url` 实测**是空串**、`doc_id` 也没有
+  //   ⇒ 硬塞进附件栏会被后端判为「不支持的地址」进 skipped
+  //   ⇒ 模型说"没收到附件"（这正是 B5-9 记录过的老坑）。
+  //   产物的内容在库里（`preview_content`），所以走 `artAddToChat`：
+  //   它读详情 → 注入 chatRefs → 发送时作为正文前置，一定到得了模型。
+  if(d.kind === 'artifact'){
+    closeAttachMenu();
+    if(typeof artAddToChat === 'function'){ artAddToChat(d.art_id); }
+    else { toast('产物引用通道不可用（页面未加载完成，请刷新后重试）'); }
+    return;
+  }
   if(pendingAttachments.some(a=>a.filename===d.filename)){ toast('该文件已在附件栏'); closeAttachMenu(); return; }
   pendingAttachments.push({
     url: d.url || (d.doc_id ? '/api/documents/'+d.doc_id+'/download' : ''),
@@ -284,7 +361,7 @@ async function loadAttachEngTree(){
   const emptyEl = document.getElementById('attach-eng-empty');
   const searchEl = document.getElementById('attach-eng-search');
   if(!treeEl || !emptyEl) return;
-  treeEl.innerHTML = '<div style="color:var(--mut);font-size:12px;padding:8px;">加载中…</div>';
+  treeEl.innerHTML = '<div style="color:var(--mut);font-size:13.5px;padding:8px;">加载中…</div>';
   emptyEl.style.display = 'none';
   if(searchEl) searchEl.value = '';
   try{
@@ -325,15 +402,15 @@ function renderAttachEngTree(){
     const rows = byType[t].map(n=>`
       <div onclick="attachEngEntity('${esc(n.id)}','${esc(String(n.name||'').replace(/"/g,'&quot;'))}','${esc(n.entity_type||'')}')" style="display:flex;align-items:center;gap:8px;padding:6px 10px 6px 26px;border-radius:7px;cursor:pointer;" onmouseover="this.style.background='var(--bg-soft,#f5f5f2)'" onmouseout="this.style.background=''">
         <span style="width:7px;height:7px;border-radius:50%;background:${graphColor(t)};display:inline-block;flex:none;"></span>
-        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--txt);">${esc(n.name||n.id)}</span>
-        <span style="font-size:10.5px;color:var(--blue-d);flex-shrink:0;">添加</span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;color:var(--txt);">${esc(n.name||n.id)}</span>
+        <span style="font-size:12px;color:var(--blue-d);flex-shrink:0;">添加</span>
       </div>`).join('');
     return `<div style="margin-bottom:2px;">
       <div onclick="_attachEngCollapsed.has('${esc(t)}')?_attachEngCollapsed.delete('${esc(t)}'):_attachEngCollapsed.add('${esc(t)}');renderAttachEngTree()" style="display:flex;align-items:center;gap:8px;padding:6px 10px;cursor:pointer;position:sticky;top:0;background:var(--panel,#fff);">
-        <span style="color:var(--mut);font-size:9px;width:10px;flex:none;">${collapsed?'▸':'▾'}</span>
+        <span style="color:var(--mut);font-size:11.5px;width:10px;flex:none;">${collapsed?'▸':'▾'}</span>
         <span style="width:9px;height:9px;border-radius:50%;background:${graphColor(t)};display:inline-block;flex:none;"></span>
-        <span style="flex:1;font-size:12px;font-weight:600;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t)}</span>
-        <span class="tag" style="font-size:10px;">${byType[t].length}</span>
+        <span style="flex:1;font-size:13.5px;font-weight:600;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t)}</span>
+        <span class="tag" style="font-size:12px;">${byType[t].length}</span>
       </div>
       ${collapsed?'':rows}
     </div>`;
@@ -453,7 +530,7 @@ function renderAttachBar(){
   if(!pendingAttachments.length){ bar.style.display='none'; bar.innerHTML=''; return; }
   bar.style.display='flex';
   bar.innerHTML = pendingAttachments.map((a,i)=>`
-    <span class="attach-chip"${pvDataAttrs({doc_id:a.doc_id, filename:a.filename||'', url:a.url||''})} onclick="pvOpenFromEl(this)" title="点击预览源文件：${esc(a.filename||'')}" style="cursor:pointer;">${a.is_image?`<img src="${esc(a.url)}" alt="">`:'📄'}<span class="an" title="${esc(a.filename)}">${esc(a.filename)}</span>${a.doc_id?'<span style="font-size:10px;color:var(--grn,#2f855a);flex:none;">已入库</span>':''}<span class="rm" onclick="event.stopPropagation();removeAttach(${i})" title="移除附件">✕</span></span>`).join('');
+    <span class="attach-chip"${pvDataAttrs({doc_id:a.doc_id, filename:a.filename||'', url:a.url||''})} onclick="pvOpenFromEl(this)" title="点击预览源文件：${esc(a.filename||'')}" style="cursor:pointer;">${a.is_image?`<img src="${esc(a.url)}" alt="">`:'📄'}<span class="an" title="${esc(a.filename)}">${esc(a.filename)}</span>${a.doc_id?'<span style="font-size:12px;color:var(--grn,#2f855a);flex:none;">已入库</span>':''}<span class="rm" onclick="event.stopPropagation();removeAttach(${i})" title="移除附件">✕</span></span>`).join('');
 }
 function removeAttach(i){ pendingAttachments.splice(i,1); renderAttachBar(); }
 let activeScopes = [];                 // 当前选择的多个建模范围 [{id,name,mode,doc_names}]
@@ -483,15 +560,15 @@ async function scopeLoadSaved(){
   try{
     const scopes = (await api('/api/scopes')) || [];
     let h;
-    if(!scopes.length){ h = '<div style="color:var(--mut);font-size:12px;padding:10px 2px;">暂无已保存范围。切到「文本圈定」或「文档切片圈定」新建。</div>'; }
+    if(!scopes.length){ h = '<div style="color:var(--mut);font-size:13.5px;padding:10px 2px;">暂无已保存范围。切到「文本圈定」或「文档切片圈定」新建。</div>'; }
     else{
-      h = '<div style="color:var(--mut);font-size:11px;margin-bottom:6px;">全局范围（所有用户可见）· 勾选多个可叠加，点击「应用」即选中</div>';
+      h = '<div style="color:var(--mut);font-size:12.5px;margin-bottom:6px;">全局范围（所有用户可见）· 勾选多个可叠加，点击「应用」即选中</div>';
       scopes.forEach(s=>{
         const sel = scopeIsSel(s.id);
-        const meta = `<div style="font-size:10.5px;color:var(--mut);">创建 ${esc(s.created_by||'-')} · ${esc((s.created_at||'').slice(0,16))} · ${(s.doc_names||[]).length} 篇</div>`;
+        const meta = `<div style="font-size:12px;color:var(--mut);">创建 ${esc(s.created_by||'-')} · ${esc((s.created_at||'').slice(0,16))} · ${(s.doc_names||[]).length} 篇</div>`;
         h += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:6px 10px;">
 <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="scope-sel-cb" value="${s.id}" ${sel?'checked':''} onchange="scopeSavedCount()"></label>
-<div style="flex:1;min-width:0;"><b style="font-size:12.5px;">${esc(s.name)}</b><span class="st ok" style="margin-left:6px;">${esc(s.mode)}</span>${meta}</div>
+<div style="flex:1;min-width:0;"><b style="font-size:13.5px;">${esc(s.name)}</b><span class="st ok" style="margin-left:6px;">${esc(s.mode)}</span>${meta}</div>
 <button class="btn sm ghost" onclick="scopeDelete(${s.id})">删除</button></div>`;
       });
       h += `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;justify-content:flex-end;">
@@ -500,7 +577,7 @@ async function scopeLoadSaved(){
     }
     el.innerHTML = h;
     scopeSavedCount();
-  }catch(e){ el.innerHTML = '<div style="color:var(--red);font-size:12px;">加载失败：'+esc(e.message)+'</div>'; }
+  }catch(e){ el.innerHTML = '<div style="color:var(--red);font-size:13.5px;">加载失败：'+esc(e.message)+'</div>'; }
 }
 function scopeSavedCount(){
   const n = document.querySelectorAll('#scope-pane-saved .scope-sel-cb:checked').length;
@@ -518,8 +595,8 @@ async function scopeApplySaved(){
 function scopeBuildTextPane(){
   const el = document.getElementById('scope-pane-text'); if(!el) return;
   el.innerHTML = `<div style="margin-bottom:6px;"><b>范围名称</b></div>
-<input id="scope-text-name" placeholder="范围名称（默认取输入开头）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:13px;width:100%;box-sizing:border-box;margin-bottom:8px;">
-<textarea id="scope-text" style="width:100%;min-height:64px;box-sizing:border-box;border:1px solid var(--line);border-radius:6px;padding:6px;font-size:12px;" placeholder="引用文档的描述，例：《宽带载荷需求》第2节性能指标"></textarea>
+<input id="scope-text-name" placeholder="范围名称（默认取输入开头）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:14.5px;width:100%;box-sizing:border-box;margin-bottom:8px;">
+<textarea id="scope-text" style="width:100%;min-height:64px;box-sizing:border-box;border:1px solid var(--line);border-radius:6px;padding:6px;font-size:13.5px;" placeholder="引用文档的描述，例：《宽带载荷需求》第2节性能指标"></textarea>
 <div id="scope-parse-res" style="margin-top:8px;min-height:22px;"></div>`;
   const ta = document.getElementById('scope-text'); if(ta) ta.oninput = ()=>scopeParseText();
 }
@@ -537,19 +614,19 @@ async function scopeParseText(){
         const pp = await api('/api/scopes/preview',{method:'POST',body:JSON.stringify({scope:{mode:draft.mode||'doc',doc_names:draft.doc_names}})});
         const sm = (pp&&pp.samples)||[];
         hits = sm.map(x=>({doc:x.doc, section:x.section, content:x.content, on:true}));
-        pv += '<div style="margin-top:6px;max-height:150px;overflow-y:auto;border:1px dashed var(--line);border-radius:6px;padding:6px;"><div style="font-size:11px;color:var(--mut);margin-bottom:4px;">命中片段（勾选要纳入范围的，默认全选）</div>';
+        pv += '<div style="margin-top:6px;max-height:150px;overflow-y:auto;border:1px dashed var(--line);border-radius:6px;padding:6px;"><div style="font-size:12.5px;color:var(--mut);margin-bottom:4px;">命中片段（勾选要纳入范围的，默认全选）</div>';
         sm.forEach((x,i)=>{
-          pv += `<label style="display:flex;gap:6px;align-items:flex-start;font-size:11px;padding:3px 4px;cursor:pointer;">
+          pv += `<label style="display:flex;gap:6px;align-items:flex-start;font-size:12.5px;padding:3px 4px;cursor:pointer;">
 <input type="checkbox" class="scope-pick-cb" data-i="${i}" checked>
 <span style="color:var(--mut);flex:1;word-break:break-all;"><b>📄 ${esc(x.doc||'')}</b>${x.section?' <span class="tag">'+esc(x.section)+'</span>':''}<br>${esc((x.content||'').slice(0,90))}</span></label>`;
         });
         pv += '</div><div style="margin-top:4px;display:flex;gap:6px;"><button class="btn sm ghost" onclick="scopePickAll(true)">全选</button><button class="btn sm ghost" onclick="scopePickAll(false)">全不选</button></div>';
-      }catch(_e){ pv += '<div style="color:var(--mut);font-size:11px;margin-top:4px;">命中片段预览不可用</div>'; }
+      }catch(_e){ pv += '<div style="color:var(--mut);font-size:12.5px;margin-top:4px;">命中片段预览不可用</div>'; }
     } else {
-      pv += '<div style="color:var(--mut);font-size:11px;margin-top:4px;">未命中具体文档，请补充文档名</div>';
+      pv += '<div style="color:var(--mut);font-size:12.5px;margin-top:4px;">未命中具体文档，请补充文档名</div>';
     }
     _scopeHits = hits;
-    pv += '<div style="margin-top:8px;display:flex;gap:8px;align-items:center;"><button class="btn" onclick="scopeSaveThis()">保存并使用</button><span style="color:var(--mut);font-size:11px;">仅保存勾选的片段</span></div>';
+    pv += '<div style="margin-top:8px;display:flex;gap:8px;align-items:center;"><button class="btn" onclick="scopeSaveThis()">保存并使用</button><span style="color:var(--mut);font-size:12.5px;">仅保存勾选的片段</span></div>';
     res.innerHTML = pv;
   }catch(e){ res.innerHTML = '<span style="color:var(--red)">'+esc(e.message)+'</span>'; }
 }
@@ -607,10 +684,10 @@ async function scopeBuildChunkPane(){
   let _opts = '<option value="">选择文档…</option>';
   try{ const _dd = (await api('/api/documents')) || []; _scopeDocChunks = []; _opts += _dd.map(d=>`<option value="${d.id}::${esc(d.filename)}">${esc(d.filename)}</option>`).join(''); }catch(_e){}
   el.innerHTML = `<div style="margin-bottom:6px;"><b>范围名称</b></div>
-<input id="scope-chunk-name" placeholder="范围名称（默认=文档名）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:13px;width:100%;box-sizing:border-box;margin-bottom:8px;">
-<div style="margin-bottom:6px;"><b>文档切片</b><span style="color:var(--mut);font-size:11px;"> 选文档→加载分片→勾选切片（可「全选全部」）</span></div>
-<select id="scope-doc-select" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;max-width:220px;">${_opts}</select> <button class="btn sm" onclick="scopeLoadDoc()">加载切片</button>
-<div id="scope-chunk-tree" style="margin-top:6px;max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:6px;"><div style="color:var(--mut);font-size:12px;padding:6px;">选择文档并「加载切片」后，此处按章节显示切片供勾选。</div></div>`;
+<input id="scope-chunk-name" placeholder="范围名称（默认=文档名）" style="border:1px solid var(--line);border-radius:6px;padding:5px 10px;font-size:14.5px;width:100%;box-sizing:border-box;margin-bottom:8px;">
+<div style="margin-bottom:6px;"><b>文档切片</b><span style="color:var(--mut);font-size:12.5px;"> 选文档→加载分片→勾选切片（可「全选全部」）</span></div>
+<select id="scope-doc-select" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;max-width:220px;">${_opts}</select> <button class="btn sm" onclick="scopeLoadDoc()">加载切片</button>
+<div id="scope-chunk-tree" style="margin-top:6px;max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:6px;"><div style="color:var(--mut);font-size:13.5px;padding:6px;">选择文档并「加载切片」后，此处按章节显示切片供勾选。</div></div>`;
 }
 async function scopeLoadDoc(){
   const sel = document.getElementById('scope-doc-select');
@@ -624,16 +701,16 @@ async function scopeLoadDoc(){
     const chunks = (await api('/api/scopes/docs/'+did+'/chunks')) || [];
     chunks.forEach(c=> c.document_id = c.document_id || did);
     _scopeDocChunks = chunks;
-    if(!chunks.length){ tree.innerHTML = '<div style="color:var(--mut);font-size:12px;">该文档暂无分片（未完成解析/分块）</div>'; return; }
+    if(!chunks.length){ tree.innerHTML = '<div style="color:var(--mut);font-size:13.5px;">该文档暂无分片（未完成解析/分块）</div>'; return; }
     const groups = {};
     chunks.forEach(c=>{ const k=c.section||'（无章节）'; (groups[k]=groups[k]||[]).push(c); });
-    let g = '<div style="margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><b>'+esc(fn)+'</b> <button class="btn sm" onclick="scopeSelectAll(true)">全选全部</button><button class="btn sm ghost" onclick="scopeSelectAll(false)">清空</button> <span id="scope-chunk-sel-n" style="color:var(--mut);font-size:11px;">已选 0 切片</span></div>';
+    let g = '<div style="margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><b>'+esc(fn)+'</b> <button class="btn sm" onclick="scopeSelectAll(true)">全选全部</button><button class="btn sm ghost" onclick="scopeSelectAll(false)">清空</button> <span id="scope-chunk-sel-n" style="color:var(--mut);font-size:12.5px;">已选 0 切片</span></div>';
     Object.entries(groups).forEach(([sec,arr])=>{
       g += '<div class="scope-sec" style="margin-bottom:4px;">';
-      g += `<div style="margin:6px 0 2px;display:flex;align-items:center;gap:6px;"><b style="font-size:11.5px;">${esc(sec)}</b><button class="btn sm ghost" onclick="scopeSelectSection(this,true)">本节约</button><button class="btn sm ghost" onclick="scopeSelectSection(this,false)">本节清空</button></div>`;
+      g += `<div style="margin:6px 0 2px;display:flex;align-items:center;gap:6px;"><b style="font-size:12.5px;">${esc(sec)}</b><button class="btn sm ghost" onclick="scopeSelectSection(this,true)">本节约</button><button class="btn sm ghost" onclick="scopeSelectSection(this,false)">本节清空</button></div>`;
       arr.forEach(c=>{
         const cc = c.content || '';
-        g += `<label style="display:flex;gap:6px;align-items:flex-start;font-size:11px;padding:2px 4px;cursor:pointer;">
+        g += `<label style="display:flex;gap:6px;align-items:flex-start;font-size:12.5px;padding:2px 4px;cursor:pointer;">
 <input type="checkbox" class="scope-chunk-cb" data-idx="${c.chunk_index}" onchange="scopeChunkCount()">
 <span style="color:var(--mut);flex:1;word-break:break-all;">${esc(cc.slice(0,60))}${cc.length>60?'…':''}</span>
 <span class="tag">§${c.chunk_index}</span></label>`;
@@ -641,9 +718,9 @@ async function scopeLoadDoc(){
       g += '</div>';
 
     });
-    g += `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;"><button class="btn" onclick="scopeSaveChunks()">保存为范围并选中</button><span style="color:var(--mut);font-size:11px;">保存后加入所选范围</span></div>`;
+    g += `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;"><button class="btn" onclick="scopeSaveChunks()">保存为范围并选中</button><span style="color:var(--mut);font-size:12.5px;">保存后加入所选范围</span></div>`;
     tree.innerHTML = g;
-  }catch(e){ tree.innerHTML = '<div style="color:var(--red);font-size:12px;">加载失败：'+esc(e.message)+'</div>'; }
+  }catch(e){ tree.innerHTML = '<div style="color:var(--red);font-size:13.5px;">加载失败：'+esc(e.message)+'</div>'; }
 }
 async function scopeSaveChunks(){
   const fn = ((document.getElementById('scope-doc-select')||{}).value||'').split('::')[1] || '';

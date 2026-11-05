@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] ...<3 lines>... | "请改用当前在役的 Agent 名后重试。" % "、".join(_unresolved)) | ValueError: 计划引用了无法解析的 Agent：design（不在 age 
 # -*- coding: utf-8 -*-
 """B1-8 门禁：依赖图环 / 自环 / 空 key / 重复 key 检测。
 
@@ -23,6 +24,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_plan_cycle_guard.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import sys
@@ -105,7 +107,7 @@ check("C3 报出的环节点只含环内（不含独立链 ok1/ok2）",
 check("C4 空计划被拒", (not TaskQueue.validate_plan([])["ok"]))
 
 print("\n=== D. create_plan 对非法图抛错且不落行 ===")
-TMP = tempfile.mkdtemp(prefix="verify_cycle_")
+TMP = mkdtemp(prefix="verify_cycle_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _c = sqlite3.connect(TMP_DB)

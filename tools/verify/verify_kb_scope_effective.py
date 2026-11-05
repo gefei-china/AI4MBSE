@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [backlog] 从未接线，待逐个定性（接入 pr 需先过「全新克隆+空库能绿」）；未接线（2026-11-04 盘点未覆盖，待逐个定性） 
 """verify_kb_scope_effective —门禁：所有带 `kb_scope.docs` 的 Agent，其白名单**真的**在过滤。
 # CI-OPTIONAL: 断言的是生产库里的 kb_scope 配置与 documents 文件名；干净库无这些数据 ⇒ 判红无意义（应与配置变更同批在真库跑）。
 
@@ -69,7 +70,7 @@ EXPECT_OFF = ("change_safety_gate", "model_release")
 def main() -> int:
     from agent.rag import GraphRAG
 
-    db = os.path.join(ROOT, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
     cc = sqlite3.connect(db)
     cc.row_factory = sqlite3.Row
     g = GraphRAG()

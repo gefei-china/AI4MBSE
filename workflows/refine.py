@@ -200,7 +200,25 @@ class RefineGate:
             return {
                 "content": content,
                 "score": ev.get("score"),
-                "passed": bool(ev.get("passed", ev.get("score", 0) >= cls._pass_score())),
+                # ★★ 2026-10-30：把**评审依据**一并返回（此前只在服务端可见 ⇒ 前端只能显示
+                #   「0/100 未通过」这种无依据的结论，用户无法判断这个分数是怎么来的）。
+                #   三个字段缺一不可：
+                #     · criteria     实际传给评审模型的**标准原文**（含冲突裁决附条第 5 条）
+                #     · pass_score   通过线（默认 70；不显示它就无法解释"72 也判未通过"）
+                #     · eval_*       评审输入/输出的边界（截图里"120/100"这类困惑的根源）
+                "criteria": _eval_criteria,
+                "pass_score": cls._pass_score(),
+                "eval": {"max_tokens": FlowNodesMixin._eval_max_tokens(),
+                         "in_chars": len(FlowNodesMixin._clip_for_eval(content)),
+                         "rounds_used": rounds,
+                         "diag": ev.get("_diag") or {}},
+                # 评审不可用时 passed 记为 None（无法评定），**不要**落成 False ——
+                # False 的语义是"评了，没过"；None 的语义是"没评成"。两者在下游
+                # （质量门禁 / 前端徽章 / 用户判断）必须分开，否则基础设施抖动会被
+                # 记成一次质量失败。
+                "passed": (None if ev.get("_diag", {}).get("error_type")
+                           or ev.get("_diag", {}).get("raw_len") is not None
+                           else bool(ev.get("passed", ev.get("score", 0) >= cls._pass_score()))),
                 "rounds": rounds,
                 "issues": cls._with_pt(_issues, done_items, agg_status),
                 "advice": ev.get("advice", ""),
@@ -212,7 +230,17 @@ class RefineGate:
                 "llm": {"provider": (ev.get("_meta") or {}).get("provider", "-"),
                         "model": (ev.get("_meta") or {}).get("model", "-"),
                         "used_mock": (ev.get("_meta") or {}).get("used_mock", True)},
-                "degraded": False,
+                # ★★ 2026-10-30（用户「0/100 未通过 · 评审解析失败」）：**评审自身失败
+                #   ≠ 报告质量差**。判据：评审没拿到可用回包（异常 / 解析不出分数）
+                #   ⇒ `degraded=True`，且**不参与质量门禁**（见 apply_quality_gate）。
+                #   此前 `degraded` 写死 False、score 写 0、passed 写 False ⇒
+                #   一个"评审挂了"的事件被呈现成"报告 0 分未通过"，还顺带把编排状态
+                #   从 full 降级成 partial（`apply_quality_gate` 只看 passed is False）
+                #   ⇒ 用户既被误导、又丢了本该是"正常完成"的结论。
+                #   证据（真机 msg 5378）：score=0 / passed=False / rounds=3 /
+                #   issues=["评审解析失败"] / provider="-"（说明走的是 except 分支）。
+                "degraded": bool(ev.get("_diag", {}).get("error_type")
+                                 or ev.get("_diag", {}).get("raw_len") is not None),
             }
         except Exception:
             return {"content": report, "score": None, "passed": True, "rounds": 0,

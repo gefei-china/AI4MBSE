@@ -26,6 +26,30 @@ class FusekiQueryError(Exception):
     pass
 
 
+#: 本机地址一律**绕代理**。
+#: ⚠️ 2026-11-05 真缺陷：`urllib.request.urlopen` 默认读 `HTTP_PROXY/HTTPS_PROXY`
+#:   环境变量。本机装了代理（如 127.0.0.1:53302）而系统例外表没把 127.0.0.1 列进去时，
+#:   访问本机 Fuseki 会走代理 ⇒ 代理回 `502 upstream connect failed`，
+#:   而**错误文本把矛头指向 Fuseki**（"上游连不上"），排查方向从一开始就错。
+#:   实测：本机 Fuseki 未启动时拿到的是 502（代理），而不是 ConnectionRefused。
+#:   （同族记录：curl 探活 127.0.0.1 必须加 `--noproxy '*'`，否则拿到的是代理的状态码。）
+_LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+
+
+def _opener(url: str):
+    """本机 URL ⇒ 空代理链的 opener；远程 URL ⇒ 默认 opener（不改变既有行为）。"""
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    if host in _LOCAL_HOSTS:
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener()
+
+
+def _open(req, timeout=None):
+    """统一的 `urlopen` 替身：自动按目标主机决定是否走代理。"""
+    url = req.full_url if hasattr(req, "full_url") else str(req)
+    return _opener(url).open(req, timeout=timeout)
+
+
 class FusekiClient:
     def __init__(self, base_url: str = DEFAULT_FUSEKI_URL, dataset: str = DEFAULT_DATASET):
         self.base_url = base_url.rstrip("/")
@@ -34,7 +58,7 @@ class FusekiClient:
     def ping(self, timeout: float = 3.0) -> bool:
         try:
             req = urllib.request.Request(f"{self.base_url}/$/ping", method="GET")
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with _open(req, timeout=timeout) as r:
                 return r.status == 200
         except Exception:
             return False
@@ -44,7 +68,7 @@ class FusekiClient:
             req = urllib.request.Request(
                 f"{self.base_url}/$/datasets/{self.dataset}", method="GET"
             )
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with _open(req, timeout=timeout) as r:
                 return r.status == 200
         except Exception:
             return False
@@ -57,7 +81,7 @@ class FusekiClient:
                 url, data=data, method="POST",
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with _open(req, timeout=timeout) as r:
                 return r.status in (200, 201)
         except Exception as e:
             logger.warning("create_dataset failed: %s", e)
@@ -71,7 +95,7 @@ class FusekiClient:
                 method="GET",
                 headers={"Accept": "application/sparql-results+json"},
             )
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with _open(req, timeout=timeout) as r:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
@@ -91,7 +115,7 @@ class FusekiClient:
                 method="POST",
                 headers={"Content-Type": "application/sparql-update"},
             )
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with _open(req, timeout=timeout) as r:
                 return r.status
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")

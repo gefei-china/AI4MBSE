@@ -40,7 +40,7 @@ def create_intent_rule(body: dict, conn=Depends(db_session), user=Depends(curren
         return JSONResponse({"error": f"trigger 已存在: {trigger}"}, 400)
     rid = repo.execute(
         "INSERT INTO intent_rules (trigger, intent, weight, enabled, created_by) VALUES (?,?,?,?,?)",
-        (trigger, intent, weight, enabled, "王工"))
+        (trigger, intent, weight, enabled, audit_user(user)))
     audit(audit_user(user), "intent_rule_create", f"创建意图规则: {trigger} → {intent} (weight={weight})", conn=conn)
     _invalidate_intent_rules()
     return {"ok": True, "id": rid}

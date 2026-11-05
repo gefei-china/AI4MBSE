@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse
 
 from database import init_db, get_db
 from core import config
+from core import runtime_state
 from core.rate_limit import RateLimitMiddleware
 from routers import (
     auth_router,
@@ -54,6 +55,11 @@ from routers import (
     agent_archive_router,  # 2026-10-19 P2-3 Agent 档案库/种群（变体台账 + 死路记忆，只记录不切换生效版本）
     flow_topology_router,  # 2026-10-20 P2-4 画布拓扑台账（结构体检 + 同构去重，只读不改拓扑）
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
+    evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
+    diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断（让 token 构成可见）
+    capabilities_router,      # 2026-10-27 P0-2 能力账本（统一注册处 + 声明/调用 2×2 + 任务级追溯）
+    events_router,            # 2026-11-01 事件驱动（入站事件 → 准入 → 工单；默认 observe 只记录不执行）
+    alternatives_router,      # 2026-11-03 多方案设计（FR-MG-6：比较 + 多维度打分端点）
 )
 
 @asynccontextmanager
@@ -82,6 +88,30 @@ async def lifespan(app: FastAPI):
         ensure_fts(get_db())
     except Exception:
         pass
+    # ★ 2026-11-01（检索性能）：BM25 索引**预热**。
+    #   实测（cProfile）：冷启动首次 hybrid_search 要 **35 秒** ——
+    #   7179 个 chunk 做 bigram 分词 ≈ 1.17 亿次函数调用，全在首个用户请求里同步做。
+    #   用户看到的是"问一句等半分钟"，与"卡死"无法区分（本轮实测同一条 query
+    #   偶发 13s / 21.7s / 35s，就是这个冷启动抖动）。
+    #   为什么放后台线程：预热不该阻塞启动（服务立即可用），也不该假如失败影响主流程。
+    #   预热后首次查询 ≈ 5s（剩余是 embedding 超时 + RRF）。
+    #   ⚠️ 只预热 `branches=None` 这一个 key：检索侧 `rag.py` 调 hybrid_search 时
+    #     branches 恒为 None（文档全局化设计），其它 key 是低频路径，不值得占预热时间。
+    try:
+        import threading as _th
+
+        def _warm_bm25():
+            try:
+                from knowledge_engine import _bm25_cache_get
+                from database import get_db as _gdb_w
+                _bm25_cache_get(_gdb_w(), None, None, None, False)
+                print("[startup] BM25 索引预热完成（首次检索不再等 35s）", flush=True)
+            except Exception as _e_w:
+                print("[startup] BM25 预热跳过: %s" % str(_e_w)[:120], flush=True)
+
+        _th.Thread(target=_warm_bm25, daemon=True, name="bm25-warm").start()
+    except Exception:
+        pass
     # P0-d（2026-10-03 评估）：周期告警评估器 —— 现状只有 run 结束时的一次性评估，
     #   非编排流量（会话直答/意图识别等绝大多数真实请求）的 LLM 异常、成本突增、延迟劣化、
     #   以及登录失败突增、审计链破损，此前都处于无守护状态。
@@ -92,13 +122,14 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         print("[startup] 周期告警评估器跳过: %s" % str(_e)[:120], flush=True)
     # P0-2b（2026-10-04）：编排自动重投守护 —— 让"崩溃的编排自己好"，不再等人点继续。
-    # 默认关（会真的调 LLM）；开关口径见 config.orchestration.auto_resume_*。
+    # ★ 2026-10-30（P0-2）：默认**开**，但配了三道成本闸（单轮 1 批 / 每日 5 次 /
+    #   不重跑 failed 任务）。开关口径见 config.orchestration.auto_resume_*。
     try:
-        if config.as_bool("orchestration", "auto_resume_enabled", False):
+        if config.as_bool("orchestration", "auto_resume_enabled", True):
             from core.orch_supervisor import start_resume_loop
             start_resume_loop(
                 interval_sec=float(config.get("orchestration", "auto_resume_interval_s", 300)),
-                max_runs=int(config.get("orchestration", "auto_resume_max_runs", 3)),
+                max_runs=int(config.get("orchestration", "auto_resume_max_runs", 1)),
                 stale_s=int(config.get("orchestration", "resume_stale_s", 1800)),
                 include_failed=bool(config.get("orchestration", "auto_resume_include_failed", False)),
             )
@@ -133,6 +164,86 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         print("[startup] 作业队列 worker 启动失败（长任务将只能同步跑）：%s" % str(_e)[:160],
               flush=True)
+
+    # ── 2026-11-01 事件源注册（文档入库 = 第一个真实源）──
+    # ⚠️ **注册不等于启用**：来源注册只是让底座认识这个 kind，
+    #    事件仍按 observe 模式记录、**不执行任何动作**。
+    #    （放开执行是逐来源显式动作，见 POST /api/events/sources/{kind}/mode）
+    try:
+        from core.events.sources_docs import build_docs_source, DOCS_SOURCE_KIND
+        from core.events.sources_sysml import build_sysml_source, SYML_SOURCE_KIND
+        from core.events.sources_zhiyuan import build_zhiyuan_source, ZHIYUAN_SOURCE_KIND
+        from core.events.sources import get_registry as _get_ev_reg
+        from repositories.event_repo import EventRepo as _EvRepo
+        from services.event_service import EventService as _EvService
+        from database import db_conn as _db_conn_ev2
+        with _db_conn_ev2() as _c:
+            _svc_ev = _EvService(_EvRepo(_c), _get_ev_reg())
+            _svc_ev.register_source(build_docs_source(
+                allowed_senders=frozenset(), scope_keys=frozenset(),
+                mode="observe", policy_version="v1"))
+            _svc_ev.register_source(build_sysml_source(
+                allowed_senders=frozenset(), scope_keys=frozenset(),
+                mode="observe", policy_version="v1"))
+            # 智源：**白名单为空 + 分支范围为空** ⇒ 默认谁都不放行（真人事件必须有显式配置）
+            # 这是刻意的：谁能在智源里一句话就触发本平台写操作，必须由人配置。
+            _svc_ev.register_source(build_zhiyuan_source(
+                allowed_senders=frozenset(), scope_keys=frozenset(),
+                mode="observe", policy_version="v1"))
+        print("[startup] 事件源已注册：%s, %s, %s（observe 模式：只记录不执行）"
+              % (DOCS_SOURCE_KIND, SYML_SOURCE_KIND, ZHIYUAN_SOURCE_KIND), flush=True)
+    except Exception as _e:
+        print("[startup] 事件源注册失败（不影响主流程）：%s" % str(_e)[:160], flush=True)
+
+    # ── P1-5（2026-11-01）事件域看门狗：工单停滞检测 ──
+    # ⚠️ **默认关**：与 orch_supervisor 的 auto_resume 同口径 ——
+    #   它只留痕（写 alert_events）**不自动推进**工单，但长期开着会积累告警噪音。
+    #   灰度建议：先开 3~5 天统计 found 数量，恒为 0 再考虑接入自动推进。
+    #   补的是既有五套守护都没覆盖的缺口：①告警评估器看全局指标、
+    #   ②编排守护看 agent_tasks、③作业队列看 job_jobs、④MCP 巡检看 server
+    #   ⇒ **都不看 ev_workitems** ⇒ "事件接到了、工单建了、没人管"完全不可见。
+    try:
+        from core.events.watchdog import start_watchdog as _start_ev_wd
+        from database import db_conn as _db_conn_ev
+        if config.as_bool("events", "watchdog_enabled", False):
+            _start_ev_wd(
+                _db_conn_ev,
+                interval_s=int(config.get("events", "watchdog_interval_s", 300) or 300),
+                stale_s=int(config.get("events", "watchdog_stale_s", 1800) or 1800),
+                enabled=True)
+            print("[startup] 事件工单看门狗已启动（只留痕不自动推进）", flush=True)
+        else:
+            print("[startup] 事件工单看门狗未启用（events.watchdog_enabled=off）——"
+                  "工单停滞不会自动告警；可手动调 POST /api/events/watchdog/scan", flush=True)
+    except Exception as _e:
+        print("[startup] 事件工单看门狗启动失败（不影响主流程）：%s" % str(_e)[:160],
+              flush=True)
+
+    # ── 智源变更轮询（2026-11-02）：本工程作为 MCP **客户端**主动拉智源 ──
+    # ⚠️ 方向澄清：不是"智源调本工程"，而是**本工程访问智源**
+    #    （智源侧 mcp_servers 里已配 zhiyuan-dev-mcp，71 个工具，含 query_model_versions）。
+    # ⚠️ 默认关 + 必须显式配 projects：轮询会消耗智源接口配额，
+    #    且不配工程就等于全库扫描（不可接受）⇒ 没配 projects 时不启。
+    try:
+        from core.events.sources_zhiyuan_poll import start_poller as _start_poller
+        from database import db_conn as _db_conn_poll
+        _poll_projects = config.get("events", "zhiyuan_poll_projects", []) or []
+        if config.as_bool("events", "zhiyuan_poll_enabled", False) and _poll_projects:
+            _ok = _start_poller(
+                _db_conn_poll, projects=list(_poll_projects),
+                interval_s=int(config.get("events", "zhiyuan_poll_interval_s", 600) or 600),
+                name=str(config.get("events", "zhiyuan_poll_mcp_server", "zhiyuan-dev-mcp")),
+                enabled=True)
+            print("[startup] 智源变更轮询已启动：%d 个工程 / 间隔 %ss%s"
+                  % (len(_poll_projects),
+                     config.get("events", "zhiyuan_poll_interval_s", 600),
+                     "" if _ok else "（启动失败：检查 mcp_servers 与网络）"), flush=True)
+        else:
+            print("[startup] 智源变更轮询未启用（events.zhiyuan_poll_enabled=off "
+                  "或未配 zhiyuan_poll_projects）——可手动调 POST /api/events/zhiyuan/poll",
+                  flush=True)
+    except Exception as _e:
+        print("[startup] 智源变更轮询启动失败（不影响主流程）：%s" % str(_e)[:160], flush=True)
 
     # MCP-D1：后台健康巡检线程（每 5 分钟对 sse/http 服务器做 initialize 握手探测）
     try:
@@ -183,7 +294,80 @@ async def lifespan(app: FastAPI):
                 print("[startup] 孤儿回收异常（已跳过）：%s" % _res["error"], flush=True)
     except Exception as _e:
         print("[startup] 孤儿回收跳过：%s" % str(_e)[:120], flush=True)
+    # ── 2026-10-30：运行时状态初始化（优雅关闭 / 并发闸 / 墙钟预算的配置快照）──
+    try:
+        _rs = runtime_state.init()
+        print("[startup] 运行时状态就绪：并发上限 %s 路 / 排队 %ss / 单轮墙钟 %ss / 关闭排空 %ss"
+              % (_rs["max_concurrent_streams"], _rs["queue_wait_s"],
+                 _rs["chat_deadline_s"], _rs["shutdown_drain_s"]), flush=True)
+    except Exception as _e:
+        print("[startup] 运行时状态初始化失败（退化用默认值）：%s" % str(_e)[:120], flush=True)
+
     yield
+
+    # ══════════════════════════════════════════════════════════════════════
+    # 关闭收尾（2026-10-30 新增 —— 此前 `yield` 之后**一行代码都没有**）
+    # ══════════════════════════════════════════════════════════════════════
+    # 为什么必须有（《运行时评估》缺口①）：
+    #   改前 uvicorn 收到 SIGTERM 即退出，而 SSE 的 worker 线程是 `daemon=True`
+    #   ⇒ 进程消失时在途编排被硬杀，`route_persist_gone` 兜底**根本不会执行**
+    #   ⇒ 用户看到"跑到一半没了，刷新只看到自己的输入"（conv 9754 就是这么丢的）。
+    #
+    # 三个设计取舍：
+    #   ① **先置 draining 再做任何等待**：入口端点据此立即拒新请求，
+    #      否则"边收尾边接新活"会让 in-flight 计数永远归不了零；
+    #   ② **等待是有界的**（`runtime.shutdown_drain_s`，默认 30s）：行业阈值区间
+    #      20~45s，超过 45s 容易被上层（K8s gracePeriod / nginx proxy_read_timeout）
+    #      直接 SIGKILL，反而连收尾都做不完；
+    #   ③ **排空不可能等到长任务跑完**（实测批次 avg 918s）—— 所以这里只是
+    #      "给正在收尾的流一点时间"，真正的产出保全靠各自 deadline 与断点固化。
+    #      行业原文："if you have endpoints that run longer than 10 seconds,
+    #      the problem can't be solved by increasing the timeout"。
+    import asyncio as _asyncio
+    import time as _time
+
+    _drain_budget = float(runtime_state._cfg("shutdown_drain_s") or 30)
+    _inflight_at_signal = runtime_state.inflight_count()
+    runtime_state.begin_drain()
+    print("[shutdown] 收到关闭信号：新请求将被拒；在途 %d 路流，最多等 %.0fs"
+          % (_inflight_at_signal, _drain_budget), flush=True)
+    _t0 = _time.monotonic()
+    while runtime_state.inflight_count() > 0 and (_time.monotonic() - _t0) < _drain_budget:
+        await _asyncio.sleep(0.2)
+    _left = runtime_state.inflight_count()
+    _waited = _time.monotonic() - _t0
+    if _left:
+        print("[shutdown] ⚠️ 排空预算耗尽，仍有 %d 路流未结束（已等 %.1fs）—— "
+              "它们靠各自 deadline 兜底固化，本进程即将退出（未固化部分依赖 "
+              "`route_persist_gone`，若进程被 SIGKILL 则该兜底不执行）"
+              % (_left, _waited), flush=True)
+    else:
+        print("[shutdown] 在途流已全部结束（%.1fs）" % _waited, flush=True)
+
+    # ── 停后台守护线程 ────────────────────────────────────────────────
+    # 顺序：先停"会产生新工作"的（作业队列），再停"只做观测"的（告警、续跑守护）。
+    # 每个独立 try：某个停不掉不能阻断其它收尾（收尾阶段最忌讳"一处异常全停"）。
+    try:
+        from core import job_queue as _jq
+        _jq.stop_workers()
+        print("[shutdown] 作业队列 worker 已停止", flush=True)
+    except Exception as _e:
+        print("[shutdown] 作业队列停止失败（忽略）：%s" % str(_e)[:100], flush=True)
+    try:
+        from core import alert_evaluator as _ae
+        _ae.stop_alert_loop()
+        print("[shutdown] 告警评估器已停止", flush=True)
+    except Exception as _e:
+        print("[shutdown] 告警评估器停止失败（忽略）：%s" % str(_e)[:100], flush=True)
+    try:
+        from core import orch_supervisor as _osv
+        _osv.stop_resume_loop()
+        print("[shutdown] 编排续跑守护已停止", flush=True)
+    except Exception as _e:
+        print("[shutdown] 编排续跑守护停止失败（忽略）：%s" % str(_e)[:100], flush=True)
+    # MCP 健康巡检线程无 stop 入口（`mcp_health.start_health_loop` 只起不停）——
+    # 它是 daemon 线程且只读库、不发外部调用以外的副作用，进程退出即随之消失，
+    # 故此处不做处理（避免为了一致性去改一个与本次目标无关的模块）。
 
 
 app = FastAPI(title=config.APP_TITLE, version=config.APP_VERSION, lifespan=lifespan)
@@ -278,6 +462,11 @@ for _router in (
     agent_archive_router,  # 2026-10-19 P2-3 Agent 档案库/种群（记住死路，避免重走；只记录不切换生效版本）
     flow_topology_router,  # 2026-10-20 P2-4 画布拓扑台账（记住结构缺陷与同构冗余；只读不改拓扑）
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
+    evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
+    diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断
+    capabilities_router,      # 2026-10-27 P0-2 能力账本（all read-only）
+    events_router,            # 2026-11-01 事件驱动（入站事件 → 准入 → 工单；默认 observe 只记录不执行）
+    alternatives_router,      # 2026-11-03 多方案设计（FR-MG-6：比较 + 多维度打分端点）
 ):
     app.include_router(_router)
 
@@ -298,6 +487,32 @@ if os.path.exists(static_dir):
     app.mount("/static", NoCacheStaticFiles(directory=static_dir), name="static")
 
 
+# ── 2026-10-30：健康检查（liveness / readiness 必须分开）────────────────────
+# 为什么不能合并成一个端点（行业共识，不是风格问题）：
+#   关闭过程中需要「`/ready` 返 503 让负载均衡摘流量」而「`/live` 仍 200 让进程别被杀」。
+#   合并 ⇒ 要摘流量就得让 liveness 也失败 ⇒ 编排器直接重启进程 ⇒ 在途编排被硬杀。
+@app.get("/api/health/live")
+def health_live():
+    """存活探针：进程与事件循环还活着就 200（不依赖 DB / LLM / 任何外部资源）。"""
+    return {"status": "alive", "draining": runtime_state.is_draining()}
+
+
+@app.get("/api/health/ready")
+def health_ready():
+    """就绪探针：关闭中返 503（让上游摘流量），否则 200。
+
+    ⚠️ 刻意**不**检查 DB/LLM 可用性 —— 就绪探针判"能否接流量"，
+    依赖健康属于另一条链路（`/api/dashboard` 与告警评估器）。
+    把依赖探进 readiness 会导致"LLM 抖动 → 全体摘流量 → 雪崩"。
+    """
+    from fastapi.responses import JSONResponse as _JR
+    if runtime_state.is_draining():
+        return _JR(status_code=503, content={"status": "draining",
+                                            "inflight": runtime_state.inflight_count(),
+                                            "elapsed_s": round(runtime_state.drain_elapsed(), 1)})
+    return {"status": "ready", **runtime_state.stats()}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     index_path = os.path.join(static_dir, "index.html")
@@ -312,4 +527,16 @@ def index():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=config.HOST, port=config.PORT)
+    # ★ 2026-10-30（P0 缺口①）：`timeout_graceful_shutdown` **必须显式给**。
+    #   改前调用是 `uvicorn.run(app, host=..., port=...)` —— 不设该参数时 uvicorn
+    #   收到 SIGTERM 会**立即**退出，不等待在途请求 ⇒ 长任务被硬杀、断点固化来不及跑。
+    #   （行业原文："Without an explicit parameter it will stop the process right after
+    #    receiving SIGTERM, without waiting for current requests to finish."）
+    #   取值与 lifespan 的排空预算同源（`runtime.shutdown_drain_s`，默认 30s），
+    #   避免两处口径漂移导致"uvicorn 先杀、lifespan 还在等"。
+    try:
+        _drain_s = int(runtime_state._cfg("shutdown_drain_s") or 30)
+    except Exception:
+        _drain_s = 30
+    uvicorn.run(app, host=config.HOST, port=config.PORT,
+                timeout_graceful_shutdown=_drain_s)

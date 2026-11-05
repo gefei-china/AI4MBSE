@@ -107,7 +107,10 @@ class AgentRepo(BaseRepo):
              json.dumps(data.get("model_params", {}), ensure_ascii=False),
              data.get("hil_level", "L0"), 1 if data.get("kb_required") else 0,
              json.dumps(data.get("kb_scope") or {}, ensure_ascii=False),
-             json.dumps(data.get("intent_keywords", []), ensure_ascii=False),
+             # 新建路径：`intent_keywords` 缺省现为 None（见 models/studio.py 注释），
+             # `or []` 兜底避免 json.dumps(None) 落库成字符串 "null"
+             # —— 那会让 json.loads 读出 None，下游 `for k in None` 直接崩。
+             json.dumps(data.get("intent_keywords") or [], ensure_ascii=False),
              data.get("icon", "🤖"), data.get("status", "active"), data.get("version", "v1.0.0"),
              json.dumps(data.get("capabilities", []), ensure_ascii=False),
              json.dumps(data.get("input_schema", {}) or {}, ensure_ascii=False),
@@ -145,10 +148,19 @@ class AgentRepo(BaseRepo):
             "hil_level": data.get("hil_level", "L0"),
             "kb_required": 1 if data.get("kb_required") else 0,
             "kb_scope": kb_scope_json if kb_scope is not None else None,
-            "intent_keywords": json.dumps(data.get("intent_keywords", []) or [], ensure_ascii=False),
             "icon": data.get("icon", "🤖"),
             "status": data.get("status", "active"),
         }
+        # ★★ 2026-10-30：`intent_keywords` 缺省/None ⇒ **保留既有值**（不进 diff）。
+        #   与上面 kb_scope 的写法完全同源：None 语义是"这次不改这项"，`[]` 才是"清空"。
+        #   事故（本机真库）：原写法 `data.get("intent_keywords", []) or []` 把"调用方没传"
+        #   和"调用方要清空"折叠成同一件事 ⇒ 任何未感知该字段的保存都会清空关键词。
+        #   实测今天 7 个 Agent 被清空（asset_change_logs field='intent_keywords' 可查），
+        #   后果是意图路由关键词层失效、请求全落到 chat、工具集不对
+        #   —— 用户侧感受是"老是走不通 / MCP 工具不全"，而**保存动作本身看起来是完全正常的**。
+        _ikw = data.get("intent_keywords")
+        if _ikw is not None:
+            new_values["intent_keywords"] = json.dumps(list(_ikw or []), ensure_ascii=False)
         if data.get("version") is not None:
             new_values["version"] = data.get("version")   # 调用方显式给 ⇒ 尊重（不自动递升）
         for key, empty in (("capabilities", []), ("input_schema", {}), ("output_schema", {})):
@@ -299,7 +311,22 @@ class AgentRepo(BaseRepo):
         out = []
         for b in binds:
             if b["tool_type"] == "skill":
-                row = self.one("SELECT * FROM skills WHERE name=?", (b["tool_name"],))
+                # ★★ 2026-10-30：**重名技能必须确定性解析**，否则绑定"绑到哪一份"由 rowid 决定。
+                #   实测（真库 3 组重名，每组 3 条 enabled、正文各不同）：
+                #     `行业调研` 有 5 行，rowid 最小的 #49 是 **enabled=0** ⇒ 原写法
+                #     `SELECT * ... WHERE name=?` 取到它 ⇒ `if row.enabled` 判假 ⇒
+                #     这条绑定**静默失效**，而用户在页面上明明看到一条已发布的同名技能。
+                #     `Requirement_Analysis_Pre-check` 取到 #70（154 字），而页面上还有
+                #     266/244 字的两份草稿修订 ⇒ 模型用的是最短的那份，用户以为用的是新版。
+                #   ⇒ 排序口径与"人看到的优先顺序"对齐：启用 → 已发布 → 无草稿修订 → id 小。
+                #   ⚠️ 这只是把"随机"变成"确定"，没有解决**name 作为关系键本身不唯一**
+                #      （见 docs/能力关系图谱-20261030.md 的"重名"一节）。
+                row = self.one(
+                    "SELECT * FROM skills WHERE name=? "
+                    "ORDER BY CASE COALESCE(enabled,0) WHEN 1 THEN 0 ELSE 1 END, "
+                    "         CASE COALESCE(status,'') WHEN 'published' THEN 0 "
+                    "              WHEN 'draft_revision' THEN 1 ELSE 2 END, id "
+                    "LIMIT 1", (b["tool_name"],))
                 if row and row.get("enabled", 1):
                     # D4：技能分层结构 JSON 字段统一解析（allowed_tools 白名单 + 渐进披露资源）
                     def _lj(v):
@@ -327,6 +354,11 @@ class AgentRepo(BaseRepo):
                         "desc": f"MCP 工具（{row['name']}）", "endpoint": row["endpoint"],
                         "transport": row.get("transport", "sse"),
                         "tools": json.loads(row.get("tools") or "[]"),
+                        # ★ P0-6（2026-10-26）：透出工具元数据（description + inputSchema）。
+                        #   此前只透出 name 数组 ⇒ 注入时 71 个工具的 description 全是同一句模板
+                        #   （实测去重后仅 1 种）⇒ JIT 零区分度 + 模型不知道工具能做什么。
+                        #   存量 server 该字段为空 ⇒ 调用方自动退回旧行为。
+                        "tool_meta": row.get("tool_meta") or "",
                     })
             elif b["tool_type"] == "tool":
                 out.append({

@@ -226,14 +226,43 @@ print("=" * 78)
 print("步骤 4/4  负样本（域内不存在 / 域外）")
 print("=" * 78)
 NEG = [
+    # ── 域外闲聊（语料里没有任何可答内容）──────────────────────────
     ("域外闲聊", "帮我写一首关于春天的诗"),
+    ("域外闲聊", "推荐几部好看的科幻电影"),
+    ("域外闲聊", "帮我起一个猫咪的名字"),
+    ("域外闲聊", "红烧肉怎么做才不腻"),
+    ("域外闲聊", "明天中午吃什么比较好"),
+    # ── 域外常识/实时信息（语料无法回答，且外部数据也不该由检索答）──
     ("域外常识", "今天北京的天气怎么样"),
+    ("域外常识", "现在美元兑人民币汇率多少"),
+    ("域外常识", "本周A股大盘收盘点位是多少"),
+    ("域外实时", "我现在账户余额还有多少"),
+    # ── 域内但不存在（同一领域，语料没有这个具体量）──────────────
     ("域内但不存在", "空间站机械臂的抓取力是多少"),
     ("域内但不存在", "巡飞待机弹的推进剂加注量是多少"),
     ("域内但不存在", "热管理系统冷却回路的流量是多少"),
-    ("术语邻域但不相关", "如何用 Python 做网页爬虫"),
     ("域内但不存在", "宽带通信卫星的太阳能板清洗周期"),
-    ("域外闲聊", "推荐几部好看的科幻电影"),
+    ("域内但不存在", "雷达天线阵面的驻波比是多少"),
+    ("域内但不存在", "导弹测试靶场的年度经费预算是多少"),
+    ("域内但不存在", "某型号电源模块的开关频率上限是多少"),
+    ("域内但不存在", "专利号CN123456789A 的权利要求有哪些"),
+    # ── 术语邻域但不相关（用了工程术语，语料里没有这条知识）────────
+    ("术语邻域但不相关", "如何用 Python 做网页爬虫"),
+    ("术语邻域但不相关", "用 Docker 部署一个 Postgres 主从集群"),
+    ("术语邻域但不相关", "Rust 怎么实现零拷贝解析"),
+    ("术语邻域但不相关", "帮我配置一下 Nginx 的反向代理"),
+    # ── 域内但需外部/私有数据（语料本就不该有这些）────────────────
+    ("需外部数据", "我们这周的排产计划是什么"),
+    ("需外部数据", "当前项目里还剩多少未关闭的缺陷"),
+    ("需外部数据", "帮我查一下我上周提交的审批单批了没"),
+    ("需外部数据", "现在的备件库存里还有几套动力电池"),
+    # ── 域内但时间/版本外（语料只有已发布版本与历史条款）──────────
+    ("时间外", "智源平台 v3.0 的需求规格说明有哪些"),
+    ("时间外", "GB/T 标准 2027 修订版对接口一致性的要求是什么"),
+    ("时间外", "下一版本计划新增哪些建模节点"),
+    # ── 跨域拼接（两个域各一半，语料无对应条目）────────────────────
+    ("跨域拼接", "把巡飞弹的推进剂参数和汽车热管理器的冷却回路画成一张图"),
+    ("跨域拼接", "用 SysML v2 建模一颗卫星的太阳能板清洗流程并给需求追溯矩阵"),
 ]
 for tag, q in NEG:
     neg_cases.append({
@@ -340,3 +369,59 @@ else:
           % (trace["fingerprint"].get("messages"),
              trace["fingerprint"].get("intent_samples"),
              trace["fingerprint"].get("hil_confirmations")))
+
+# ── O2（2026-10-23）：评测集版本化 ─────────────────────────────────────────
+# 此前产物只在 tmp/p21/（gitignore + 会被清理）⇒ 历史分数不可比、评测集
+# 不可 review。规范落点改为 docs/评测/datasets/（随 git，PR 可评审），tmp
+# 保留一份副本兼容旧路径；manifest 记 dataset_id。
+#
+# dataset_id 是**内容寻址**：由"语料指纹 + 证据源指纹 + 样本量"派生 ——
+# 同一语料/证据状态重建 ⇒ 同 id（built_at 不参与，重建不改 id）；
+# 语料或证据源一变 ⇒ id 变 ⇒ 历史分数自然分段可比。评测报告记 dataset_id
+# 后，"这份分数是哪一版题库上跑的"第一次有了机器可查的答案。
+DATASETS_DIR = os.path.join(REPO, "docs", "评测", "datasets")
+
+
+def _dataset_id(finger, trace_finger, n_doc, n_graph, n_neg, trace_total):
+    h = hashlib.sha1()
+    h.update(str(sorted((finger or {}).items())).encode("utf-8"))
+    h.update(str(sorted((trace_finger or {}).items())).encode("utf-8"))
+    h.update(("%s|%s|%s|%s" % (n_doc, n_graph, n_neg, trace_total)).encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
+def _publish_datasets(trace):
+    """把评测集发布到规范落点 + 写 manifest。返回 dataset_id。"""
+    os.makedirs(DATASETS_DIR, exist_ok=True)
+    # 副本（字节级一致；tmp 为兼容旧读者的过渡路径）
+    import shutil as _shutil
+    _shutil.copyfile(OUT, os.path.join(DATASETS_DIR, "evalset.json"))
+    d_id = _dataset_id(finger, (trace or {}).get("fingerprint"),
+                       len(doc_cases), len(graph_cases), len(neg_cases),
+                       ((trace or {}).get("counts") or {}).get("total", 0))
+    manifest = {
+        "schema": "dataset-manifest@1",
+        "dataset_id": d_id,
+        "built_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "generator": {"build_evalset": "1", "trace2dataset": "p1-1/trace-evalset@1"},
+        "evalset": {"file": "evalset.json", "n_doc": len(doc_cases),
+                    "n_graph": len(graph_cases), "n_neg": len(neg_cases),
+                    "fingerprint": finger},
+        "trace": ({"file": "trace_evalset.json",
+                   "counts": (trace or {}).get("counts"),
+                   "fingerprint": (trace or {}).get("fingerprint")}
+                  if trace else None),
+        "note": "dataset_id 内容寻址（语料/证据指纹 + 样本量）；built_at 不参与",
+    }
+    with open(os.path.join(DATASETS_DIR, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=1)
+    if trace:
+        _shutil.copyfile(trace_out, os.path.join(DATASETS_DIR, "trace_evalset.json"))
+    print()
+    print("→ %s（dataset_id=%s）"
+          % (os.path.relpath(DATASETS_DIR, REPO).replace("\\", "/"), d_id))
+    print("   评测集已版本化：随 git 可 review；报告消费 manifest.json 取 dataset_id")
+    return d_id
+
+
+_publish_datasets(trace if "--no-trace" not in sys.argv else None)

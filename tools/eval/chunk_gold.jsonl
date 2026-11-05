@@ -1,0 +1,85 @@
+# chunk 级金标集（2026-11-02 新建）
+#
+# 为什么要它：原 `retrieval_baseline.py` 判的是**文档级**（`source_doc` 里含某关键词即算命中）。
+# 这个口径有两个结构性缺陷，已实测：
+#   ① 同一文档内"命中任意一块"就算对 ⇒ 答案所在的块排在第 20 位也判"命中"，
+#      完全测不出 inject_k / 重排 / 融合常数这类**块级排序**改动（实测 rrf_k 60→10 时
+#      doc 级只从 0.7407 动到 0.8519，而块级 MRR 变化更剧烈）；
+#   ② 文档名关键词常与问题用词同源（"技术要求书"问题 ↔ "Print_面向..."文件名），
+#      等于给降级态（bigram 字面匹配）送分 ⇒ 降级态的 0.8889 是"假高"。
+#
+# 格式（每行一个 JSON）：
+#   id          唯一标识
+#   type        枚举型 / 事实型 / 关系型 / 归纳型 / 域外
+#   query       用户真实问法（**必须与文档原文措辞不同**，否则只是测字面匹配）
+#   marker      金标"定位标记"：一段在库内只出现在少数块里的原文片段
+#   doc         期望文档（用于自校验：marker 解析出的块必须落在该文档）
+#   answer_keys 宽松答案键（可选，仅用于人工/LLM 复核时参考，不参与自动判分）
+#   expect_empty  true 表示应当拒答
+#
+# markers     可选。一个概念在库里往往有**多处等价表述**（定义段/语法段/示例段）都得算对，
+#             此时给 `markers: [...]`，任一条被命中即算命中（金标 = 所有 marker 解析出的块并集）。
+#             ⚠️ 只允许"同样能完整回答该问题"的等价表述；**不允许**把"相关但答不上"的段落塞进来
+#             （那是把判据改软去迎合结果，会让指标失去意义）。
+#
+# ⚠️ marker 不是"答案"，是**位置标记**：金标 = marker 解析出的所有块位置。
+#    这样做的原因：块级评测只需要"目标块有没有被排进前 k"，用原文片段定位最可靠；
+#    若直接把 (document_id, chunk_index) 写死，一旦重新分块就全部失效且**不会报错**。
+#    评测器会校验每个 marker 解析出 1~4 个块，否则 exit 1（不静默跳过）。
+
+{"id": "iso-verification", "type": "事实型", "doc": "ISO 29148", "query": "ISO 29148 里 requirements verification 的定义是什么", "marker": "requirements verification confirmation by examination", "answer_keys": ["well formed", "well-formed"]}
+{"id": "iso-validation", "type": "事实型", "doc": "", "query": "requirements validation 是什么意思，和 verification 有什么区别", "markers": ["requirements validation confirmation by examination", "Did we build theright thing"], "answer_keys": ["right system", "intended"], "note": "ISO 定义(846:67) 与 Guide 的 validation/verification 对照表(793:175) 都完整回答；因此**不约束 doc** —— 若限定 ISO，会把同样正确的对照表判成错"}
+{"id": "iso-rtm", "type": "事实型", "doc": "ISO 29148", "query": "RTM 需求追溯矩阵是做什么用的", "marker": "table that links requirements to their origin and traces", "answer_keys": ["traceability", "origin"]}
+{"id": "iso-traceable", "type": "关系型", "doc": "ISO 29148", "query": "需求的可追溯性要求向上追溯到什么", "marker": "the requirement is upwards traceable", "answer_keys": ["stakeholder", "traceable"]}
+{"id": "kerml-constructor", "type": "事实型", "doc": "KerML", "query": "KerML 里 constructor expression 怎么表示", "marker": "constructor expression", "answer_keys": ["new"]}
+{"id": "kerml-metadata", "type": "事实型", "doc": "KerML", "query": "KerML 里怎么访问元数据（metaclass）", "markers": ["metadata access expression", "AMetadataAccessExpressionis anExpression"], "answer_keys": ["metadata", "qualified name"], "note": "文本记法(404) 与抽象语法定义(1085) 都算对，2026-11-02 补第二个锚点"}
+{"id": "kerml-conjugation", "type": "关系型", "doc": "KerML", "query": "KerML 的 conjugation 是什么关系", "marker": "relationship between types, identified as the", "answer_keys": ["conjugat"]}
+{"id": "guide-shall", "type": "事实型", "doc": "Guide to writing", "query": "需求语句里 shall 有什么作用", "marker": "use of “shall” in requirements statements", "answer_keys": ["shall", "binding"]}
+{"id": "guide-singular", "type": "归纳型", "doc": "Guide to writing", "query": "什么叫 well-formed 的需求", "marker": "well-formed, singular, and complete", "answer_keys": ["singular", "complete"]}
+{"id": "guide-c5", "type": "事实型", "doc": "Guide to writing", "query": "需求质量特性 C5 是什么", "marker": "c5 - singular", "answer_keys": ["singular"]}
+{"id": "sysml-itemdef", "type": "关系型", "doc": "OMG Systems Modeling", "query": "SysML v2 里 item def 之间怎么继承", "marker": "item def super", "answer_keys": ["specializes", "super"]}
+{"id": "sysml-succession", "type": "事实型", "doc": "OMG Systems Modeling", "query": "SysML v2 的 binding 和 succession 是什么", "markers": ["bindings and successions are special kinds of connections", "SuccessionAsUsage = UsagePrefix"], "answer_keys": ["connection"], "note": "散文定义(329) 与语法产生式(811) 都算对，2026-11-02 补第二个锚点"}
+{"id": "sysml-port", "type": "事实型", "doc": "OMG Systems Modeling", "query": "SysML v2 里 port 的 conjugate 端口是什么", "markers": ["each port definition has a", "AConjugatedPortDefinitionis aPortDefinition"], "answer_keys": ["conjugat"], "note": "概述段(316) 与正式定义(1158) 都算对，2026-11-02 补第二个锚点"}
+
+{"id": "req-latency", "type": "事实型", "doc": "Print_面向", "query": "技术要求书里轻量级查询的响应时间要求是多少", "marker": "3 秒", "answer_keys": ["3 秒"]}
+{"id": "req-degrade", "type": "事实型", "doc": "Print_面向", "query": "技术要求书对可靠性要求中，出错时应该怎么做", "marker": "平滑降级", "answer_keys": ["平滑降级"]}
+{"id": "req-availability", "type": "事实型", "doc": "Print_面向", "query": "技术要求书要求的全年可用性是多少", "marker": "99.9%", "answer_keys": ["99.9"]}
+{"id": "req-netsession", "type": "事实型", "doc": "Print_面向", "query": "技术要求书对网络传输数据的安全要求是什么", "marker": "网络会话加密", "answer_keys": ["网络会话加密"]}
+{"id": "req-publicsrv", "type": "事实型", "doc": "Print_面向", "query": "自主可控要求对组件部署有什么限制", "marker": "公有服务器", "answer_keys": ["公有服务器"]}
+{"id": "req-kylin", "type": "事实型", "doc": "Print_面向", "query": "运行环境要求支持哪些国产操作系统", "marker": "麒麟", "answer_keys": ["麒麟"]}
+{"id": "req-srcdoc", "type": "枚举型", "doc": "Print_面向", "query": "验收交付要求交付哪些文档", "marker": "源代码使用说明", "answer_keys": ["源代码使用说明"]}
+{"id": "req-multimodal", "type": "事实型", "doc": "Print_面向", "query": "交互界面要求支持哪些交互形式", "marker": "多模态交互", "answer_keys": ["多模态交互"]}
+{"id": "req-hetero", "type": "关系型", "doc": "Print_面向", "query": "设计数据管理要从哪些数据源提取数据", "marker": "多源异构数据", "answer_keys": ["多源异构数据"]}
+{"id": "req-interface", "type": "事实型", "doc": "Print_面向", "query": "工具的系统架构应包含哪些接口", "marker": "互联数据接口", "answer_keys": ["互联数据接口"]}
+
+{"id": "gac-ir-vr", "type": "关系型", "doc": "广汽方法论", "query": "整车需求分析以什么为输入、什么为输出", "markers": ["以IR为输入，形成整车黑盒VR", "整车需求分析以初始需求IR为输入"], "answer_keys": ["IR", "VR"], "note": "812:1 与 812:7 都完整回答（后者措辞更直接），2026-11-02 补第二个锚点"}
+{"id": "gac-domain", "type": "归纳型", "doc": "广汽方法论", "query": "面向 SysML V2 的 MBSE 架构方法的总体思路是什么", "marker": "以问题域识别为起点", "answer_keys": ["问题域", "方案域"]}
+{"id": "cabin-scope", "type": "事实型", "doc": "座舱空气调节", "query": "座舱空气调节仿真适用于什么范围", "marker": "降温和温度维持仿真", "answer_keys": ["降温", "温度维持"]}
+{"id": "view-depend", "type": "关系型", "doc": "视图间关联关系", "query": "场景组成结构视图依赖哪些视图", "marker": "场景参与实体需满足需求约束", "answer_keys": ["利益相关方需求视图"]}
+{"id": "view-elements", "type": "事实型", "doc": "", "query": "利益相关方需求视图的必要元素有哪些", "marker": "需求属性（attribute）、需求约束（require constraint）", "answer_keys": ["requirement def", "part def"], "note": "该表格在《视图规范元素要求》(817) 与《广汽方法论》(812) 中同源重复，两处都算对 ⇒ 不约束 doc"}
+
+{"id": "oob-weather", "type": "域外", "doc": "", "query": "今天北京天气怎么样", "marker": "", "expect_empty": true}
+{"id": "oob-crawler", "type": "域外", "doc": "", "query": "如何用 Python 写一个网页爬虫", "marker": "", "expect_empty": true}
+{"id": "oob-solar", "type": "域外", "doc": "", "query": "卫星太阳能板的清洗周期是多久", "marker": "", "expect_empty": true}
+{"id": "oob-recipe", "type": "域外", "doc": "", "query": "红烧肉怎么做", "marker": "", "expect_empty": true}
+{"id": "oob-stock", "type": "域外", "doc": "", "query": "明天股市会涨吗", "marker": "", "expect_empty": true}
+
+# ── 2026-11-02 扩样本（+17，总 49）：覆盖此前薄弱的语法手册/AI知识库/场景库/视图规范 ──
+{"id": "syntax-curly", "type": "事实型", "doc": "语法错误", "query": "SysML v2 里带空格的包名该怎么写才合法", "marker": "使用花括号", "answer_keys": ["花括号", "'"]}
+{"id": "syntax-bracket", "type": "事实型", "doc": "语法错误", "query": "SysML v2 包名错误示例里方括号错在哪", "marker": "使用了方括号", "answer_keys": ["方括号"]}
+{"id": "syntax-path", "type": "事实型", "doc": "语法错误", "query": "SysML v2 的 import 写得不完整会怎样", "marker": "路径不完整", "answer_keys": ["路径"]}
+{"id": "ai-include", "type": "事实型", "doc": "SysML-v2-AI", "query": "include use case 支持哪几种形式", "marker": "只支持", "answer_keys": ["include"]}
+{"id": "ai-assign", "type": "事实型", "doc": "SysML-v2-AI", "query": "assign 赋值语句应该放在哪里", "marker": "必须写在动作体", "answer_keys": ["动作体", "状态体"]}
+{"id": "thm-ev-scope", "type": "事实型", "doc": "热管理", "query": "纯电汽车热管理仿真覆盖哪些范围", "marker": "纯电汽车动力电池", "answer_keys": ["电池", "电机", "液冷"]}
+{"id": "hev-scope", "type": "事实型", "doc": "混合动力汽车", "query": "混合动力经济性仿真适用于哪些对象", "marker": "混合动力汽车纵向动力性", "answer_keys": ["纵向动力性", "燃油消耗"]}
+{"id": "hev-unify", "type": "关系型", "doc": "混合动力汽车", "query": "HEV 与 Hybrid 的分类口径怎么处理", "marker": "统一HEV与Hybri", "answer_keys": ["统一", "口径"]}
+{"id": "gac-m2", "type": "事实型", "doc": "广汽方法论", "query": "方法论元模型层对应哪一层", "marker": "方法论元模型层", "answer_keys": ["M2"]}
+{"id": "gac-reuse", "type": "事实型", "doc": "广汽方法论", "query": "领域可复用的定义沉淀在哪里", "marker": "领域可复用定义", "answer_keys": ["第三层", "M1"]}
+{"id": "gac-levels", "type": "枚举型", "doc": "广汽方法论", "query": "方案域的架构设计分为哪几个层级", "marker": "整车架构设计、系统架构设计和子系统架构设计三个层级", "answer_keys": ["整车架构", "系统架构", "子系统架构"]}
+{"id": "view-agent", "type": "事实型", "doc": "视图规范元素要求", "query": "视图规范元素要求这份文档是给谁用的", "marker": "供视图规范分析", "answer_keys": ["Agent", "⑥"]}
+{"id": "view-start", "type": "关系型", "doc": "视图间关联关系", "query": "运行视角建模从哪个视图开始", "marker": "本视图是整个运行视角建模的起点", "answer_keys": ["利益相关方需求视图"]}
+{"id": "kerml-new", "type": "事实型", "doc": "KerML", "query": "KerML 里创建实例的 new 写法长什么样", "marker": "new Member", "answer_keys": ["new"]}
+{"id": "guide-patterns", "type": "归纳型", "doc": "Guide to writing", "query": "需求编写里的 Patterns 指什么", "marker": "Patterns represent the structure", "answer_keys": ["structure", "well-formed"]}
+{"id": "guide-transform", "type": "关系型", "doc": "Guide to writing", "query": "need 是怎么转化成 requirement 的", "marker": "subsequent requirement statement", "answer_keys": ["transform", "shall"]}
+{"id": "sysml-conform", "type": "关系型", "doc": "OMG Systems Modeling", "query": "SysML v2 两个 port 何时算 conform", "marker": "Two ports are said to", "answer_keys": ["conform", "matching"]}
+{"id": "sysml-bindocc", "type": "事实型", "doc": "OMG Systems Modeling", "query": "SysML v2 的 binding 连接是 occurrence 吗", "marker": "are not occurrences and are not", "answer_keys": ["not occurrences"]}

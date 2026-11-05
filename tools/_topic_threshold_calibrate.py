@@ -31,7 +31,7 @@ import sqlite3
 import sys
 import datetime
 
-REPO = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system"
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.join(REPO, "mbse.db")
 OUT_JSON = os.path.join(REPO, "tmp", "p21", "topic_threshold_calibrate.json")
 

@@ -4,7 +4,8 @@ import os
 import sqlite3
 import sys
 import tempfile
-from datetime import datetime, timedelta
+# 2026-11-05：不再从 Python 侧算时间戳（改为 SQL 生成，见下方 _H1/_YDAY 注释），
+# 故 `datetime/timedelta` 已无使用点 —— 未使用的 import 会被 lint 类门禁抓，故移除。
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
@@ -65,11 +66,19 @@ with db_conn() as c:
     _migrate_columns(c)
     _migrate_audit_chain(c)
 
-_NOW = datetime.utcnow()
-_H1 = (_NOW - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
-_YDAY = (_NOW - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+#: 时间戳一律由 **SQLite** 生成，且与生产一致用 UTC（`CURRENT_TIMESTAMP` 就是 UTC）。
+# ⚠️ 2026-11-05：原先用 `datetime.utcnow()` 在 Python 侧算 —— 看似也是 UTC，
+#   但配合业务侧的 `date('now','localtime')` 就出问题：
+#   UTC 00:00~00:30 时 `_H1`（30 分钟前）落到「UTC 昨天」，而本地已是「今天」
+#   ⇒ today=0 ⇒ 判据恒 0 ⇒ **每天有 30 分钟窗口必红**（本轮实测撞上）。
+#   修法不是"把测试改成 localtime"（那样与生产存值相反），而是
+#   ① 夹具仍写 UTC（与生产一致）；
+#   ② 业务 SQL 把存储列也转本地（见 core/alert_evaluator.py 同处注释）；
+#   ③ 时间戳用 SQL 生成，避免 Python 与 SQLite 两套时钟。
 
 with db_conn() as c:
+    _H1 = c.execute("SELECT datetime('now','-30 minutes')").fetchone()[0]
+    _YDAY = c.execute("SELECT datetime('now','-1 day')").fetchone()[0]
     # 近 1h：10 次调用 —— 4 次 mock、2 次回退、3 次截断；延迟含长尾
     for i in range(10):
         c.execute(
@@ -101,6 +110,16 @@ check("M1g 今日/昨日同期成本倍数 = 2.0", m["cost_today_vs_yday"] == 2.
 check("M1h 认证失败计数（消费 P0-a 认证审计）", m["auth_failed_1h"] == 3.0, m["auth_failed_1h"])
 check("M1i 被拦截计数", m["audit_blocked_1h"] == 2.0, m["audit_blocked_1h"])
 check("M1j 审计链完好 = 1.0", m["audit_chain_ok"] == 1.0, m["audit_chain_ok"])
+# M1g' 防复发（2026-11-05 真缺陷）：`created_at` 存 UTC，任何"按本地日"的统计
+#   都必须把**存储列**也转本地（`date(created_at,'localtime')`），否则在中国时区
+#   每天本地 00:00~08:00 会把"今日"算成 0（成本突增告警失效 8 小时）。
+_AE_SRC = open(os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "core", "alert_evaluator.py"),
+    encoding="utf-8").read()
+check("M1g' 今日/昨日成本 SQL 把 created_at 转本地再比（UTC 存值对齐）",
+      "date(created_at,'localtime')" in _AE_SRC
+      and "time(created_at,'localtime')" in _AE_SRC,
+      "缺 localtime 修饰符 ⇒ 与 UTC 存值口径错配，本地 00:00~08:00 今日成本恒 0")
 
 print("══ M2 两套评估器集合零重叠（结构性保障）══")
 _RUN_METRICS = {"success_rate", "avg_latency", "error_count", "mock_rate"}

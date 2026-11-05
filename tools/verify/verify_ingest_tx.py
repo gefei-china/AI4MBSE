@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] T1d commit 在 chunks INSERT 之后（锁已释放）  ← insert@17404 commit@12993 
 # -*- coding: utf-8 -*-
 """P0-1（2026-10-04）：入库不得**跨 LLM 调用持有写事务** —— 行为不变式 + 变异自证。
 

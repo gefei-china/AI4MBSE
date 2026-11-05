@@ -94,8 +94,76 @@ def trace_context() -> dict:
     return _trace_ctx.get() or {}
 
 
+def current_trace_id(fallback_request: bool = False) -> str:
+    """当前链路 trace_id（**唯一取值口径**，所有"给日志补 trace"的地方都用它）。
+
+    ★ 2026-10-27（P0-3）：此前 `tool_call_logs` 没有 trace 列，而 `llm_usage_stats`
+      有 —— 两套 id 不可 JOIN ⇒ 回答不了「这一轮对话调了哪些能力、花了多少钱」。
+      补列之后，**每个写入点各自去猜 trace 来源**会成为新的漂移源
+      （实测：同一轮里工具行有 trace、技能行没有，追溯链从中间断掉）。
+      故把取值收口到本函数。
+
+    `fallback_request=True` 用于**没有经过 `begin_trace` 的入口**（MCP 网关的外部
+    请求、HIL 批准后执行、插件沙箱试跑 …）：这类入口本身没有"对话轮次"，
+    用 `request_id` 作为 trace 才是如实的（一次外部请求 = 一条链）。
+    ⚠️ 不要用它给"属于某轮对话"的调用兜底出**新** id —— 那会把一条链拆成两条，
+      这正是本函数要防的反面。对话内的调用走默认分支（读已设的 trace）。
+    """
+    tid = str((_trace_ctx.get() or {}).get("trace_id") or "")
+    if not tid and fallback_request:
+        try:
+            tid = str(request_context().get("request_id") or "")
+        except Exception:
+            tid = ""
+    return tid
+
+
 def clear_trace() -> None:
     _trace_ctx.set({})
+
+
+def submit_with_ctx(pool, fn, *args):
+    """把 `fn` 提交到线程池，并**显式继承当前线程的链路上下文**。
+
+    ★ 2026-11-03（真库实证后的收口）：`ContextVar` **不跨线程传播** ——
+      `ThreadPoolExecutor.submit` 起的线程拿到的 trace 上下文是**空的**。
+      后果（真库实测 75 条 `llm_usage_stats`）：
+        · `conversation_id=0`、`run_id=0`，而 `trace_id` **有值**；
+        · 有值的原因正是"空上下文"触发了 `execute_stream` 里的
+          `begin_trace(0)` 新开一条链（`not _exist.get("trace_id")` 为真）；
+        · ⇒ 一次编排被拆成 N+1 条链，**按会话/按 run 统计成本全部漏算**。
+      这与代码注释里"子任务沿用外层 trace 不新开"的声明**相反** —— 声明是对的，
+      但只有调用点显式 copy 才成立。
+
+    为什么收口成本函数（而不是各调用点自己写）：此前 `stream.py` 有一份
+      `_submit_with_ctx`，但**只被主路径用**；补跑路径仍用裸 `pool.submit(...)`
+      ⇒ 同一文件里两套写法，漏一处就丢一类归属。放在这里，调用点只需换函数名。
+
+    用法：`submit_with_ctx(pool, worker, arg1, arg2)`（等价于 `pool.submit(worker, ...)`）。
+    """
+    import contextvars as _cv
+    _ctx = _cv.copy_context()
+    return pool.submit(lambda *a: _ctx.run(fn, *a), *args)
+
+
+def inherit_trace(**override) -> dict:
+    """在**新线程入口**处补一次绑定（纵深防御，兜住没用 `submit_with_ctx` 的路径）。
+
+    设计意图：不指望"每个提交点都记得用包装器"。子任务函数一进来就调本函数，
+    把父轮次的 `conversation_id` / `run_id` 等显式带上，即使提交方式退化了也不丢归属。
+
+    ⚠️ 只补**当前上下文里已有的**字段 + 显式传入的 override；
+      不凭空造 id（那会把一条链拆成两条，与 `current_trace_id` 的纪律相反）。
+    """
+    cur = dict(_trace_ctx.get() or {})
+    add = {k: v for k, v in (override or {}).items() if k in _TRACE_KEYS and v is not None}
+    if not add:
+        return cur
+    # 不覆盖已有值（除非调用方显式给了非空值）
+    merged = dict(add)
+    merged.update({k: v for k, v in cur.items() if v not in (None, "", 0)})
+    _trace_ctx.set(merged)
+    return merged
 
 
 def begin_trace(conversation_id=0, **kw) -> dict:
@@ -205,13 +273,36 @@ def verify_chain(limit: int = 0, conn=None) -> dict:
     - tampered：内容与摘要不符（行被改过）
     - head_next_mismatch：prev_hash 与上一行 hash 不符（行被插入或删除）
     - unchained：hash 为空（未经 audit() 写入 / 迁移未覆盖到）
+
+    ★ P0-a 修（2026-10-24）：窗口边界假阳性。原实现把**窗口第一行**的
+    prev_hash 期望为 genesis（_GENESIS），但它实际指向窗口外的前一行
+    ⇒ 链完好也报 broken。真库实测：limit=0 全表 ok=true（4623 行全衔接），
+    limit=3000 却假报 1 条（id=9685，expected=000… actual=4778…）。
+    若不修，audit_chain_ok 指标恒为 0 ⇒ critical 级告警永远假触——
+    「假告警比没告警更糟」正是本模块 notify 校验状态码那条纪律的同型问题。
+    修法：窗口**多取一行作衔接种子**（只提供 prev 上下文，不校验它），
+    从第二行起校验；genesis 只对真正的链头生效。
     """
     def _check(c):
-        where = "" if not limit else f"WHERE id > (SELECT MAX(id)-{int(limit)} FROM audit_logs)"
-        rows = c.execute(
-            f"SELECT id, user_name, event_type, detail, result, branch, ip_address, "
-            f"user_agent, request_id, prev_hash, hash FROM audit_logs {where} ORDER BY id").fetchall()
-        total, chained, broken, prev = len(rows), 0, [], _GENESIS
+        seed = None
+        if limit:
+            rows = c.execute(
+                "SELECT id, user_name, event_type, detail, result, branch, ip_address, "
+                "user_agent, request_id, prev_hash, hash FROM audit_logs "
+                "WHERE id > (SELECT MAX(id)-? FROM audit_logs) ORDER BY id",
+                (int(limit) + 1,)).fetchall()
+            if len(rows) > 1:
+                seed, rows = rows[0], rows[1:]
+            prev = (seed["hash"] or "") if seed is not None else _GENESIS
+            seeded = 1 if seed is not None else 0
+        else:
+            rows = c.execute(
+                "SELECT id, user_name, event_type, detail, result, branch, ip_address, "
+                "user_agent, request_id, prev_hash, hash FROM audit_logs ORDER BY id").fetchall()
+            prev, seeded = _GENESIS, 0
+        total, chained, broken = len(rows) + seeded, 0, []
+        if seed is not None and (seed["hash"] or ""):
+            chained += 1          # 种子行确实在链上，计入但不校验
         for r in rows:
             h, ph = r["hash"] or "", r["prev_hash"] or ""
             if not h:

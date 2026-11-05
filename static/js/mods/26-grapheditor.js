@@ -28,10 +28,10 @@ async function renderEntityTree(){
     const focused = graphState.sk.on ? graphState.sk.drill===t.name
       : (vts.length>0 && fam.every(x=>vts.includes(x)) && vts.every(x=>fam.includes(x)));
     html += `<div class="ont-tnd" style="padding-left:8px;${focused?'background:var(--blue-l,#E6F1FB);font-weight:600;':''}" onclick="gvTreeTypeFocus('${esc(t.name)}')" title="类型 ${esc(t.name)}：点击行在图上查看该类型（含子类型）${focused?'（当前已聚焦，再点恢复全图）':''}；点击 ▸/▾ 展开或折叠实体列表">
-      <span style="cursor:pointer;color:var(--mut);font-size:9px;width:12px;display:inline-block;flex:none;text-align:center;border-radius:3px;" onclick="event.stopPropagation();gvTreeToggle('${esc(t.name)}')" title="展开/折叠「${esc(t.name)}」下的实体列表">${collapsed?'▸':'▾'}</span>
+      <span style="cursor:pointer;color:var(--mut);font-size:11.5px;width:12px;display:inline-block;flex:none;text-align:center;border-radius:3px;" onclick="event.stopPropagation();gvTreeToggle('${esc(t.name)}')" title="展开/折叠「${esc(t.name)}」下的实体列表">${collapsed?'▸':'▾'}</span>
       <span style="width:9px;height:9px;border-radius:50%;background:${graphColor(t.name)};display:inline-block;flex:none;"></span>
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.name)}</span>
-      <span class="tag" style="font-size:10px;" title="直接实例 ${hit.length}${agg>hit.length?'（含子类型共 '+agg+'）':''}">${hit.length}</span></div>`;
+      <span class="tag" style="font-size:12px;" title="直接实例 ${hit.length}${agg>hit.length?'（含子类型共 '+agg+'）':''}">${hit.length}</span></div>`;
     if(collapsed) return;
     html += gvTreeRowsFor(hit, depth);
   });
@@ -44,14 +44,14 @@ async function renderEntityTree(){
     const focused = graphState.sk.on ? graphState.sk.drill===t
       : (vts.length>0 && vts.length===1 && vts[0]===t);
     html += `<div class="ont-tnd" style="padding-left:8px;${focused?'background:var(--blue-l,#E6F1FB);font-weight:600;':''}" onclick="gvTreeTypeFocus('${esc(t)}')" title="分组 ${esc(t)}：点击行在图上查看该类型${focused?'（当前已聚焦，再点恢复全图）':''}；点击 ▸/▾ 展开或折叠">
-      <span style="cursor:pointer;color:var(--mut);font-size:9px;width:12px;display:inline-block;flex:none;text-align:center;border-radius:3px;" onclick="event.stopPropagation();gvTreeToggle('${esc(t)}')" title="展开/折叠「${esc(t)}」下的实体列表">${collapsed?'▸':'▾'}</span>
+      <span style="cursor:pointer;color:var(--mut);font-size:11.5px;width:12px;display:inline-block;flex:none;text-align:center;border-radius:3px;" onclick="event.stopPropagation();gvTreeToggle('${esc(t)}')" title="展开/折叠「${esc(t)}」下的实体列表">${collapsed?'▸':'▾'}</span>
       <span style="width:9px;height:9px;border-radius:50%;background:${graphColor(t)};display:inline-block;flex:none;"></span>
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t)}</span>
-      <span class="tag" style="font-size:10px;" title="实例数">${hit.length}</span></div>`;
+      <span class="tag" style="font-size:12px;" title="实例数">${hit.length}</span></div>`;
     if(collapsed) return;
     html += gvTreeRowsFor(hit, 0);
   });
-  box.innerHTML = html || '<div style="color:var(--mut);font-size:11.5px;padding:6px;">当前分支暂无实体</div>';
+  box.innerHTML = html || '<div style="color:var(--mut);font-size:12.5px;padding:6px;">当前分支暂无实体</div>';
   const cnt = document.getElementById('gv-tree-count');
   if(cnt) cnt.textContent = nodes.length ? nodes.length+' 个' : '';
 }
@@ -148,8 +148,8 @@ async function gvToggleHistory(id){
     let rows = _gvHistCache[id];
     if(!rows){ const r = await api('/api/knowledge/entities/'+encodeURIComponent(id)); rows = (r&&r.commit_history)||[]; _gvHistCache[id]=rows; }
     box.innerHTML = rows.length ? rows.map(c=>`<div style="margin-bottom:5px;line-height:1.6;">
-      <span class="tag" style="font-size:10px;">#${c.id||'-'} ${esc(c.kind||'')}</span> ${esc(c.message||'')}
-      <div style="color:var(--mut);font-size:10px;">${esc((c.created_at||'').slice(0,16)||'')} · ${esc(c.created_by||'-')}</div></div>`).join('')
+      <span class="tag" style="font-size:12px;">#${c.id||'-'} ${esc(c.kind||'')}</span> ${esc(c.message||'')}
+      <div style="color:var(--mut);font-size:12px;">${esc((c.created_at||'').slice(0,16)||'')} · ${esc(c.created_by||'-')}</div></div>`).join('')
       : '<span style="color:var(--mut);">暂无提交记录</span>';
   }catch(e){ box.innerHTML='<span style="color:var(--mut);">加载失败：'+esc(e.message||e)+'</span>'; }
 }
@@ -163,7 +163,7 @@ function gvCloseDetail(){
   graphState.sel = null; graphState.drag = null; graphState.pan = null;
   renderGraph();
   const body = document.getElementById('gv-detail-body');   // 右栏常驻：清除选中回到空态提示（不隐藏面板）
-  if(body) body.innerHTML = '<div style="color:var(--mut);font-size:11.5px;padding:6px;">点左栏实体或图中节点查看详情</div>';
+  if(body) body.innerHTML = '<div style="color:var(--mut);font-size:12.5px;padding:6px;">点左栏实体或图中节点查看详情</div>';
   renderEntityTree();   // 清除左树高亮
 }
 
@@ -208,38 +208,38 @@ function renderProvenancePanel(data, kind) {
        <div class="kv"><span>标题 / 作者</span><b>${esc(sd.title||'-')} / ${esc(sd.author||'-')}</b></div>
        <div class="kv"><span>上传人 / 时间</span><b>${esc(sd.uploaded_by||'-')} / ${esc((sd.created_at||'').slice(0,16))}</b></div>
        ${sd.deprecated_at?`<div class="kv"><span>废弃时间</span><b>${esc((sd.deprecated_at||'').slice(0,16))}</b></div>`:''}`
-    : '<div style="color:var(--mut);font-size:11.5px;">无关联文档</div>';
+    : '<div style="color:var(--mut);font-size:12.5px;">无关联文档</div>';
 
   // 命中切片
   const chunkHtml = chunks.length
-    ? chunks.map(c => `<div style="border:1px solid var(--line);border-radius:5px;padding:6px 8px;margin-bottom:5px;font-size:11.5px;">
-        <div style="color:var(--mut);font-size:10.5px;">chunk#${c.chunk_index||'-'} ${c.section?'· '+esc(c.section):''}</div>
+    ? chunks.map(c => `<div style="border:1px solid var(--line);border-radius:5px;padding:6px 8px;margin-bottom:5px;font-size:12.5px;">
+        <div style="color:var(--mut);font-size:12px;">chunk#${c.chunk_index||'-'} ${c.section?'· '+esc(c.section):''}</div>
         <div style="margin-top:3px;line-height:1.6;">${esc((c.content||'').slice(0,160))}${(c.content||'').length>160?'…':''}</div>
       </div>`).join('')
-    : '<div style="color:var(--mut);font-size:11.5px;">未命中具体切片（可能为手工建模或来源未挂接）</div>';
+    : '<div style="color:var(--mut);font-size:12.5px;">未命中具体切片（可能为手工建模或来源未挂接）</div>';
 
   // 版本链路
   const versionHtml = versions.length
-    ? versions.map(v => `<div style="font-size:11.5px;padding:3px 0;">
+    ? versions.map(v => `<div style="font-size:12.5px;padding:3px 0;">
         <b>v${esc(v.sysml_version||v.version||'-')}</b>
         <span style="color:var(--mut);">· ${esc(v.created_by||'-')} · ${esc((v.created_at||'').slice(0,16))}</span>
-        ${v.message?`<div style="font-size:10.5px;color:var(--mut);margin-top:2px;">${esc(v.message)}</div>`:''}
+        ${v.message?`<div style="font-size:12px;color:var(--mut);margin-top:2px;">${esc(v.message)}</div>`:''}
       </div>`).join('')
-    : '<div style="color:var(--mut);font-size:11.5px;">无 SysML 版本链路</div>';
+    : '<div style="color:var(--mut);font-size:12.5px;">无 SysML 版本链路</div>';
 
   // 审计轨迹
   const auditHtml = audit.length
-    ? audit.slice(0,15).map(a => `<div style="font-size:11px;padding:3px 0;border-bottom:1px dashed var(--line);">
+    ? audit.slice(0,15).map(a => `<div style="font-size:12.5px;padding:3px 0;border-bottom:1px dashed var(--line);">
         <span class="st ${a.kind==='edit'?'b':'w'}">${esc(a.kind)}</span>
         <b>${esc(a.action||'-')}</b>
         <span style="color:var(--mut);">by ${esc(a.operator||'-')} · ${esc((a.created_at||'').slice(0,16))}</span>
       </div>`).join('')
-    : '<div style="color:var(--mut);font-size:11.5px;">暂无审计记录</div>';
+    : '<div style="color:var(--mut);font-size:12.5px;">暂无审计记录</div>';
 
   // 同源节点（仅节点）
   const siblingHtml = siblings.length
     ? siblings.map(s => `<span class="tag" style="cursor:pointer;margin:2px;" onclick="showGraphDetail('${esc(s.id)}')" title="${esc(s.id)} · ${esc(s.created_by||'')}">${esc(s.name)} <small style="color:var(--mut);">(${esc(s.entity_type||'-')})</small></span>`).join('')
-    : '<div style="color:var(--mut);font-size:11.5px;">同源文档无其他节点</div>';
+    : '<div style="color:var(--mut);font-size:12.5px;">同源文档无其他节点</div>';
 
   // 边两端节点引用
   const refHtml = (kind === 'relation' && (sourceEnt || targetEnt)) ? `
@@ -248,47 +248,47 @@ function renderProvenancePanel(data, kind) {
 
   // 废弃轨迹
   const depHtml = dep
-    ? `<div style="background:var(--color-warning-bg,#fff3e6);border:1px solid var(--color-warning,#c98a2e);border-radius:5px;padding:8px 10px;font-size:11.5px;">
+    ? `<div style="background:var(--color-warning-bg,#fff3e6);border:1px solid var(--color-warning,#c98a2e);border-radius:5px;padding:8px 10px;font-size:12.5px;">
         <b style="color:var(--color-warning,#c98a2e);">🚫 节点已废弃</b>
         <div style="margin-top:4px;color:var(--mut);">操作人：${esc(dep.deprecated_by||'-')}</div>
         <div style="color:var(--mut);">时间：${esc((dep.deprecated_at||'').slice(0,16))}</div>
         ${dep.note?`<div style="margin-top:3px;color:var(--mut);">${esc(dep.note)}</div>`:''}
       </div>`
-    : '<div style="color:var(--mut);font-size:11.5px;">当前未废弃</div>';
+    : '<div style="color:var(--mut);font-size:12.5px;">当前未废弃</div>';
 
   // Tabs + 折叠区（默认展开节点/文档/切片，折叠其他）
   body.innerHTML = `
     <div class="ip-sticky" style="position:sticky;top:0;z-index:5;background:#fafaf7;border-bottom:1px solid var(--line);padding:8px 10px;">
       <div style="display:flex;align-items:center;gap:6px;">
-        <span style="font-size:20px;">🔍</span>
+        <span style="font-size:21px;">🔍</span>
         <div style="flex:1;min-width:0;">
-          <div style="font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">数据来源：${esc(entName)}</div>
-          <div style="font-size:11px;color:var(--mut);margin-top:1px;">${esc(kind==='relation'?'关系':'节点')} · ${esc(ent.id||entName)}</div>
+          <div style="font-size:15.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">数据来源：${esc(entName)}</div>
+          <div style="font-size:12.5px;color:var(--mut);margin-top:1px;">${esc(kind==='relation'?'关系':'节点')} · ${esc(ent.id||entName)}</div>
         </div>
-        <button class="btn sm ghost" style="padding:1px 7px;font-size:11px;" onclick="showGraphDetail('${esc(ent.id)}')" title="返回节点详情">↩️</button>
+        <button class="btn sm ghost" style="padding:1px 7px;font-size:12.5px;" onclick="showGraphDetail('${esc(ent.id)}')" title="返回节点详情">↩️</button>
       </div>
     </div>
 
     <div class="ip-section" data-sec="meta" style="border-bottom:1px solid var(--line);">
-      <div class="ip-h" onclick="toggleIpSection(this,'meta')" style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+      <div class="ip-h" onclick="toggleIpSection(this,'meta')" style="padding:7px 10px;font-size:13.5px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
         <span>📌 ${esc(kind==='relation'?'关系':'节点')}信息</span>
         <span class="ip-arr">▼</span>
       </div>
-      <div class="ip-c" style="padding:6px 10px;font-size:11px;color:#444;line-height:1.9;">
+      <div class="ip-c" style="padding:6px 10px;font-size:12.5px;color:#444;line-height:1.9;">
         ${metaRows}${refHtml}
       </div>
     </div>
 
     <div class="ip-section" data-sec="doc" style="border-bottom:1px solid var(--line);">
-      <div class="ip-h" onclick="toggleIpSection(this,'doc')" style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+      <div class="ip-h" onclick="toggleIpSection(this,'doc')" style="padding:7px 10px;font-size:13.5px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
         <span>📄 来源文档</span>
         <span class="ip-arr">▼</span>
       </div>
-      <div class="ip-c" style="padding:6px 10px;font-size:11px;color:#444;line-height:1.9;">${docHtml}</div>
+      <div class="ip-c" style="padding:6px 10px;font-size:12.5px;color:#444;line-height:1.9;">${docHtml}</div>
     </div>
 
     <div class="ip-section" data-sec="chunk" style="border-bottom:1px solid var(--line);">
-      <div class="ip-h" onclick="toggleIpSection(this,'chunk')" style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+      <div class="ip-h" onclick="toggleIpSection(this,'chunk')" style="padding:7px 10px;font-size:13.5px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
         <span>🔖 命中切片（${chunks.length}）</span>
         <span class="ip-arr">▼</span>
       </div>
@@ -296,7 +296,7 @@ function renderProvenancePanel(data, kind) {
     </div>
 
     <div class="ip-section" data-sec="version" style="border-bottom:1px solid var(--line);">
-      <div class="ip-h" onclick="toggleIpSection(this,'version')" style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+      <div class="ip-h" onclick="toggleIpSection(this,'version')" style="padding:7px 10px;font-size:13.5px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
         <span>🧬 版本链路（${versions.length}）</span>
         <span class="ip-arr">▶</span>
       </div>
@@ -304,7 +304,7 @@ function renderProvenancePanel(data, kind) {
     </div>
 
     <div class="ip-section" data-sec="audit" style="border-bottom:1px solid var(--line);">
-      <div class="ip-h" onclick="toggleIpSection(this,'audit')" style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+      <div class="ip-h" onclick="toggleIpSection(this,'audit')" style="padding:7px 10px;font-size:13.5px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
         <span>🛡 审计轨迹（${audit.length}）</span>
         <span class="ip-arr">▶</span>
       </div>
@@ -313,7 +313,7 @@ function renderProvenancePanel(data, kind) {
 
     ${kind==='entity'?`
     <div class="ip-section" data-sec="siblings" style="border-bottom:1px solid var(--line);">
-      <div class="ip-h" onclick="toggleIpSection(this,'siblings')" style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+      <div class="ip-h" onclick="toggleIpSection(this,'siblings')" style="padding:7px 10px;font-size:13.5px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
         <span>🔗 同源节点（${siblings.length}）</span>
         <span class="ip-arr">▶</span>
       </div>
@@ -321,7 +321,7 @@ function renderProvenancePanel(data, kind) {
     </div>`:''}
 
     <div class="ip-section" data-sec="deprecated">
-      <div class="ip-h" onclick="toggleIpSection(this,'deprecated')" style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+      <div class="ip-h" onclick="toggleIpSection(this,'deprecated')" style="padding:7px 10px;font-size:13.5px;font-weight:600;color:var(--blue-d);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
         <span>🚫 废弃轨迹</span>
         <span class="ip-arr">▶</span>
       </div>
@@ -332,7 +332,7 @@ function showGraphDetail(id) {
   const body = document.getElementById('gv-detail-body');
   if(!body) return;
   const n = graphState.nodes.find(x=>x.id===id);
-  if(!n) { body.innerHTML='<div style="color:var(--mut);font-size:11.5px;padding:6px;">点左栏实体或图中节点查看详情</div>'; return; }
+  if(!n) { body.innerHTML='<div style="color:var(--mut);font-size:12.5px;padding:6px;">点左栏实体或图中节点查看详情</div>'; return; }
   gvSetDetailPanel(true);
   let props = {};
   try{ props = JSON.parse(n.properties||'{}')||{}; }catch(e){}
@@ -344,27 +344,27 @@ function showGraphDetail(id) {
     <!-- sticky 头部：节点身份常驻可视 -->
     <div class="ip-sticky" style="position:sticky;top:0;z-index:5;background:#fafaf7;border-bottom:1px solid var(--line);padding:8px 10px;">
       <div style="display:flex;align-items:center;gap:6px;">
-        <span style="font-size:22px;">🛰</span>
+        <span style="font-size:23px;">🛰</span>
         <div style="flex:1;min-width:0;">
-          <div style="font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(n.name)}</div>
+          <div style="font-size:16.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(n.name)}</div>
           <!-- 本体类型标签（2026-09-10 米爸）：名称下方标签，点击跳本体模型查看该类型定义；类型名直接取实体数据，保证一致 -->
           <!-- 2026-09-10 状态机收口：画布实体全为 reviewed（入图即确认），状态徽章退化为常量 → 移除 -->
-          <div style="font-size:11px;color:var(--mut);margin-top:1px;">
+          <div style="font-size:12.5px;color:var(--mut);margin-top:1px;">
             ${n.entity_type?`<span class="tag" style="cursor:pointer;background:var(--blue-l);color:var(--blue-d);font-weight:600;" onclick="ontGotoType('${ontJs(n.entity_type)}')" title="本体类型：点击跳转本体模型，查看「${esc(n.entity_type)}」的定义、属性与公理">🧬 ${esc(n.entity_type)}</span>`:'<span class="tag" title="未标注本体类型">未标注类型</span>'}
             · <span class="tag" title="${esc(n.id)}">${esc(n.id).slice(0,14)}${n.id.length>14?'…':''}</span>
           </div>
         </div>
-        <button class="btn sm ghost" style="padding:1px 7px;font-size:11px;" onclick="gvShowProvenance('${esc(n.id)}')" title="查看数据来源（FR-KG-11 一键追溯）">🔍</button>
-        <button class="btn sm ghost" style="padding:1px 7px;font-size:11px;" onclick="showGraphDetail('${esc(n.id)}')" title="刷新本节点详情">🔄</button>
+        <button class="btn sm ghost" style="padding:1px 7px;font-size:12.5px;" onclick="gvShowProvenance('${esc(n.id)}')" title="查看数据来源（FR-KG-11 一键追溯）">🔍</button>
+        <button class="btn sm ghost" style="padding:1px 7px;font-size:12.5px;" onclick="showGraphDetail('${esc(n.id)}')" title="刷新本节点详情">🔄</button>
       </div>
     </div>
 
     <div class="ip-section" data-sec="meta">
-      <div class="ip-h" onclick="toggleIpSection(this,'meta')" style="padding:8px 10px;font-size:12px;font-weight:600;color:var(--blue-d);cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);">
+      <div class="ip-h" onclick="toggleIpSection(this,'meta')" style="padding:8px 10px;font-size:13.5px;font-weight:600;color:var(--blue-d);cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);">
         <span>📌 元数据与追溯</span>
-        <span class="ip-arr" style="transition:transform .15s;font-size:10px;color:var(--mut);">▼</span>
+        <span class="ip-arr" style="transition:transform .15s;font-size:12px;color:var(--mut);">▼</span>
       </div>
-      <div class="ip-c" style="padding:8px 10px;font-size:11px;color:#444;line-height:1.9;">
+      <div class="ip-c" style="padding:8px 10px;font-size:12.5px;color:#444;line-height:1.9;">
         <div>流转阶段 <span style="float:right;">${branchPill(n.branch||getCurrentBranch())}</span></div>
         <div>所在分支 <span style="float:right;color:var(--mut);">${esc(n.branch||getCurrentBranch())}</span></div>
         <div>跨分支状态 <span style="float:right;" id="ent-brn-status">检测中…</span></div>
@@ -384,33 +384,33 @@ function showGraphDetail(id) {
     </div>
 
     <div class="ip-section" data-sec="props">
-      <div class="ip-h" onclick="toggleIpSection(this,'props')" style="padding:8px 10px;font-size:12px;font-weight:600;color:var(--blue-d);cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);">
-        <span>🏷 属性${ro?'（release 只读）':''}<span style="font-weight:400;color:var(--mut);font-size:10.5px;margin-left:4px;">按本体约束</span></span>
-        <span class="ip-arr" style="transition:transform .15s;font-size:10px;color:var(--mut);">▼</span>
+      <div class="ip-h" onclick="toggleIpSection(this,'props')" style="padding:8px 10px;font-size:13.5px;font-weight:600;color:var(--blue-d);cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);">
+        <span>🏷 属性${ro?'（release 只读）':''}<span style="font-weight:400;color:var(--mut);font-size:12px;margin-left:4px;">按本体约束</span></span>
+        <span class="ip-arr" style="transition:transform .15s;font-size:12px;color:var(--mut);">▼</span>
       </div>
-      <div class="ip-c" style="padding:8px 10px;font-size:11.5px;color:#444;">
-        <div id="inst-ont-props"><div style="color:var(--mut);font-size:11px;">正在加载本体数据属性…</div></div>
+      <div class="ip-c" style="padding:8px 10px;font-size:12.5px;color:#444;">
+        <div id="inst-ont-props"><div style="color:var(--mut);font-size:12.5px;">正在加载本体数据属性…</div></div>
         <!-- 2026-09-10 米爸裁剪：自定义扩展属性编辑区删除——属性名/值全部受本体 dataProperty 约束
              （名 = 本体定义下拉/固定行，值 = 按 xsd 类型渲染 number/date/checkbox/枚举下拉），不允许自由键值 -->
         ${ro?'':`<div style="margin-top:8px;">
           <button class="btn grn" onclick="saveGvInstProps('${esc(n.id)}')">💾 保存属性</button>
-          <span style="font-size:10.5px;color:var(--mut);margin-left:6px;">属性名与取值范围由本体定义约束</span>
+          <span style="font-size:12px;color:var(--mut);margin-left:6px;">属性名与取值范围由本体定义约束</span>
         </div>`}
       </div>
     </div>
 
     <div class="ip-section" data-sec="rels">
-      <div class="ip-h" onclick="toggleIpSection(this,'rels')" style="padding:8px 10px;font-size:12px;font-weight:600;color:var(--blue-d);cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);">
-        <span>🔗 关联关系 <span style="background:var(--blue-l);color:var(--blue-d);padding:0 6px;border-radius:8px;font-size:10.5px;margin-left:4px;">${rels.length}</span></span>
-        <span class="ip-arr" style="transition:transform .15s;font-size:10px;color:var(--mut);">▼</span>
+      <div class="ip-h" onclick="toggleIpSection(this,'rels')" style="padding:8px 10px;font-size:13.5px;font-weight:600;color:var(--blue-d);cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);">
+        <span>🔗 关联关系 <span style="background:var(--blue-l);color:var(--blue-d);padding:0 6px;border-radius:8px;font-size:12px;margin-left:4px;">${rels.length}</span></span>
+        <span class="ip-arr" style="transition:transform .15s;font-size:12px;color:var(--mut);">▼</span>
       </div>
-      <div class="ip-c" style="padding:8px 10px;font-size:11px;${rels.length?'':'color:var(--mut);'}">
+      <div class="ip-c" style="padding:8px 10px;font-size:12.5px;${rels.length?'':'color:var(--mut);'}">
         ${rels.length?rels.map(r=>{
           const sName = graphState.nodes.find(x=>x.id===r.source_id)?.name || r.source_id;
           const tName = graphState.nodes.find(x=>x.id===r.target_id)?.name || r.target_id;
           const isOut = r.source_id===id;
           return `<div style="margin-bottom:4px;line-height:1.6;">
-            <span class="tag" style="font-size:10px;">${esc(r.relation_type)}</span>
+            <span class="tag" style="font-size:12px;">${esc(r.relation_type)}</span>
             ${isOut
               ? `<span style="color:var(--mut);">${esc(sName)} →</span> <a style="color:var(--blue-d);cursor:pointer;text-decoration:underline;" onclick="showGraphDetail('${esc(r.target_id)}')">${esc(tName)}</a>`
               : `<a style="color:var(--blue-d);cursor:pointer;text-decoration:underline;" onclick="showGraphDetail('${esc(r.source_id)}')">${esc(sName)}</a> <span style="color:var(--mut);">→ ${esc(tName)}</span>`}
@@ -420,11 +420,11 @@ function showGraphDetail(id) {
     </div>
 
     <div class="ip-section" data-sec="hist">
-      <div class="ip-h" onclick="toggleIpSection(this,'hist')" style="padding:8px 10px;font-size:12px;font-weight:600;color:var(--blue-d);cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);">
+      <div class="ip-h" onclick="toggleIpSection(this,'hist')" style="padding:8px 10px;font-size:13.5px;font-weight:600;color:var(--blue-d);cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);">
         <span>🕘 变更历史</span>
-        <span class="ip-arr" style="transition:transform .15s;font-size:10px;color:var(--mut);">▼</span>
+        <span class="ip-arr" style="transition:transform .15s;font-size:12px;color:var(--mut);">▼</span>
       </div>
-      <div class="ip-c" style="padding:8px 10px;font-size:11px;">
+      <div class="ip-c" style="padding:8px 10px;font-size:12.5px;">
         <div id="gv-hist" data-open="0" data-loaded="0" style="color:var(--mut);">点击展开查看该实体的提交记录</div>
       </div>
     </div>
@@ -450,30 +450,30 @@ function toggleIpSection(h, key){
 async function gvRenderOntProps(id, type, currentProps){
   const wrap = document.getElementById('inst-ont-props');
   if(!wrap) return;
-  wrap.innerHTML = '<div style="color:var(--mut);font-size:11px;">加载本体数据属性…</div>';
+  wrap.innerHTML = '<div style="color:var(--mut);font-size:12.5px;">加载本体数据属性…</div>';
   try{
     const schema = await api('/api/knowledge/graph/data-properties?type='+encodeURIComponent(type||''));
     window._ontPropKeys = new Set(schema.map(p=>p.name));
     if(!schema.length){
-      wrap.innerHTML = `<div style="color:var(--mut);font-size:11px;">本体未为「<b>${esc(type||'(未指定类型)')}</b>」定义数据属性。属性编辑仅允许本体受控属性——如需扩展，请到本体模型为该类型定义 dataProperty。</div>`;
+      wrap.innerHTML = `<div style="color:var(--mut);font-size:12.5px;">本体未为「<b>${esc(type||'(未指定类型)')}</b>」定义数据属性。属性编辑仅允许本体受控属性——如需扩展，请到本体模型为该类型定义 dataProperty。</div>`;
       return;
     }
     const ro = isReleaseBranch(getCurrentBranch());
     wrap.innerHTML = schema.map(p=>gvRenderOntPropRow(p, currentProps[p.name], ro)).join('');
   }catch(e){
-    wrap.innerHTML = '<div style="color:var(--mut);font-size:11px;">加载失败：'+esc(e.message||e)+'</div>';
+    wrap.innerHTML = '<div style="color:var(--mut);font-size:12.5px;">加载失败：'+esc(e.message||e)+'</div>';
   }
 }
 function gvRenderOntPropRow(p, val, ro){
   const required = p.required ? '<span style="color:var(--amb);margin-left:2px;">*</span>' : '';
   const choices = p.allowed_values && p.allowed_values.length;
-  const typeLabel = p.type && p.type!=='xsd:string' ? `<span title="本体类型 ${esc(p.type)}" style="font-size:10px;color:var(--blue-d);margin-left:2px;">${esc(p.type.replace('xsd:',''))}</span>` : '';
+  const typeLabel = p.type && p.type!=='xsd:string' ? `<span title="本体类型 ${esc(p.type)}" style="font-size:12px;color:var(--blue-d);margin-left:2px;">${esc(p.type.replace('xsd:',''))}</span>` : '';
   // 2026-09-10 修复：unitSuffix 此前定义在 else 块作用域内、return 模板在外层引用 → ReferenceError
   // （潜伏 bug：domain 全空时走不到渲染分支，绑定后首次渲染即爆）
-  const unitSuffix = p.unit ? `<span title="单位 ${esc(p.unit)}" style="font-size:10px;color:var(--amber-d,#8a5a00);margin-left:3px;white-space:nowrap;">${esc(p.unit)}</span>` : '';
+  const unitSuffix = p.unit ? `<span title="单位 ${esc(p.unit)}" style="font-size:12px;color:var(--amber-d,#8a5a00);margin-left:3px;white-space:nowrap;">${esc(p.unit)}</span>` : '';
   let input;
   if(choices){
-    input = `<select class="ip-ont-val" data-name="${esc(p.name)}" ${ro?'disabled':''} style="border:1px solid var(--line);border-radius:5px;padding:4px 8px;font-size:11.5px;flex:1;">
+    input = `<select class="ip-ont-val" data-name="${esc(p.name)}" ${ro?'disabled':''} style="border:1px solid var(--line);border-radius:5px;padding:4px 8px;font-size:12.5px;flex:1;">
       ${(p.allowed_values||[]).map(v=>`<option value="${esc(v)}" ${String(v)===String(val)?'selected':''}>${esc(v)}</option>`).join('')}
     </select>`;
   } else {
@@ -486,13 +486,13 @@ function gvRenderOntPropRow(p, val, ro){
     } else {
       input = `<input class="ip-ont-val" data-name="${esc(p.name)}" type="${htmlType}"${step}
         value="${esc(val==null?'':String(val))}" placeholder="${esc(p.description||'')}" ${ro?'disabled':''}
-        style="border:1px solid var(--line);border-radius:5px;padding:4px 8px;font-size:11.5px;flex:1;">`;
+        style="border:1px solid var(--line);border-radius:5px;padding:4px 8px;font-size:12.5px;flex:1;">`;
     }
   }
   const helpMark = p.description ? `<span class="info-tip" title="${esc(p.description)}">ⓘ</span>` : '';
-  const missingMark = p.required && (val==null || val==='') ? `<span title="必填项待补" style="color:var(--amb);font-size:10px;margin-left:2px;">⚠</span>` : '';
+  const missingMark = p.required && (val==null || val==='') ? `<span title="必填项待补" style="color:var(--amb);font-size:12px;margin-left:2px;">⚠</span>` : '';
   return `<div class="ip-ont-row" data-ont-name="${esc(p.name)}" style="display:flex;gap:6px;margin-bottom:5px;align-items:center;">
-    <span style="width:84px;font-size:11.5px;color:var(--blue-d);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(p.name)}">${esc(p.name)}${required}</span>
+    <span style="width:84px;font-size:12.5px;color:var(--blue-d);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(p.name)}">${esc(p.name)}${required}</span>
     ${input}
     ${typeLabel}${unitSuffix}${helpMark}${missingMark}
   </div>`;
@@ -525,7 +525,7 @@ async function loadEntityBranchStatus(id){
     else if(dev) lbl='<span class="st a">📦 dev 待发布</span>';
     else lbl='<span style="color:var(--mut);">-</span>';
     const diff = (typeof openBranchDiffDrawer==='function')
-      ? ' <button class="btn sm ghost" style="float:right;font-size:10px;padding:0 8px;" onclick="openBranchDiffDrawer()" title="打开分支对比查看两分支差异">🔍 查看差异</button>'
+      ? ' <button class="btn sm ghost" style="float:right;font-size:12px;padding:0 8px;" onclick="openBranchDiffDrawer()" title="打开分支对比查看两分支差异">🔍 查看差异</button>'
       : '';
     el.innerHTML = lbl + diff;
   }catch(e){ el.innerHTML='<span style="color:var(--mut);">-</span>'; }
@@ -534,7 +534,7 @@ function showGraphEdgeDetail(id) {
   const body = document.getElementById('gv-detail-body');
   if(!body) return;
   const e = graphState.edges.find(x=>String(x.id)===String(id));
-  if(!e) { body.innerHTML='<div style="color:var(--mut);font-size:11.5px;padding:6px;">点左栏实体或图中节点/关系查看详情</div>'; return; }
+  if(!e) { body.innerHTML='<div style="color:var(--mut);font-size:12.5px;padding:6px;">点左栏实体或图中节点/关系查看详情</div>'; return; }
   gvSetDetailPanel(true);
   const sN = graphState.nodes.find(n=>n.id===e.source_id);
   const tN = graphState.nodes.find(n=>n.id===e.target_id);
@@ -542,18 +542,18 @@ function showGraphEdgeDetail(id) {
   const ro = isReleaseBranch(getCurrentBranch());   // release 只读：隐藏修正关系
   body.innerHTML = `
     <div style="border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:8px;">
-      <div style="font-size:15px;font-weight:700;">🔗 关系详情 <span class="tag">#${e.id}</span></div>
-      <div style="font-size:12px;margin-top:5px;">${esc(sN? sN.name : e.source_id)} <span class="tag" style="font-size:10px;color:var(--blue-d);">${esc(e.relation_type)}</span> ${esc(tN? tN.name : e.target_id)}</div>
-      <div style="font-size:11px;color:var(--mut);margin-top:2px;">${esc(e.source_id)} → ${esc(e.target_id)}</div>
+      <div style="font-size:16.5px;font-weight:700;">🔗 关系详情 <span class="tag">#${e.id}</span></div>
+      <div style="font-size:13.5px;margin-top:5px;">${esc(sN? sN.name : e.source_id)} <span class="tag" style="font-size:12px;color:var(--blue-d);">${esc(e.relation_type)}</span> ${esc(tN? tN.name : e.target_id)}</div>
+      <div style="font-size:12.5px;color:var(--mut);margin-top:2px;">${esc(e.source_id)} → ${esc(e.target_id)}</div>
     </div>
-    ${ro?'':`<div style="font-size:12px;font-weight:600;color:var(--blue-d);">✏️ 修正关系（保存后重新进入审核）</div>
+    ${ro?'':`<div style="font-size:13.5px;font-weight:600;color:var(--blue-d);">✏️ 修正关系（保存后重新进入审核）</div>
     <div style="display:flex;gap:6px;margin-top:6px;">
-      <input id="gv-edge-type" value="${esc(e.relation_type||'')}" placeholder="关系类型" style="border:1px solid var(--line);border-radius:5px;padding:4px 8px;font-size:11.5px;flex:1;">
+      <input id="gv-edge-type" value="${esc(e.relation_type||'')}" placeholder="关系类型" style="border:1px solid var(--line);border-radius:5px;padding:4px 8px;font-size:12.5px;flex:1;">
       <button class="btn grn" onclick="gvSaveEdge(${e.id})">💾 保存</button>
     </div>`}
     <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;">
-      <div style="font-size:12px;font-weight:600;color:var(--blue-d);">📌 元数据与追溯</div>
-      <div style="margin-top:4px;font-size:11px;color:#444;line-height:1.9;">
+      <div style="font-size:13.5px;font-weight:600;color:var(--blue-d);">📌 元数据与追溯</div>
+      <div style="margin-top:4px;font-size:12.5px;color:#444;line-height:1.9;">
         <div>创建时间 <span style="float:right;color:var(--mut);">${esc((e.created_at||'').slice(0,16)||'-')}（${esc(e.created_by||'-')}）</span></div>
         <div>审核人 / 时间 <span style="float:right;color:var(--mut);">${esc(e.reviewed_by||'-')} · ${esc((e.reviewed_at||'').slice(0,16)||'-')}</span></div>
         <div>来源文档 <span style="float:right;color:var(--mut);">${e.source_doc?`<a style="color:var(--blue-d);cursor:pointer;text-decoration:underline;" data-doc="${docAttr}" onclick="gvTraceSource(this.getAttribute('data-doc'))">📄 ${esc(e.source_doc)}</a>`:'-'}</span></div>
@@ -770,7 +770,7 @@ function gvLinkChoose(srcId, tgtId){
     : [];
   const body = document.getElementById('gv-detail-body');
   if(!body) return;
-  if(!src || !tgt){ body.innerHTML = '<div style="color:var(--mut);font-size:11.5px;">节点不存在，请刷新</div>'; return; }
+  if(!src || !tgt){ body.innerHTML = '<div style="color:var(--mut);font-size:12.5px;">节点不存在，请刷新</div>'; return; }
   if(!cand.length){
     // 2026-09-12：无候选时给出可建方向指引，避免“连线没用”的误判
     const avail = (typeof gvcRelList==='function' && src) ? (gvcRelList(src.entity_type)||[]) : [];
@@ -780,18 +780,18 @@ function gvLinkChoose(srcId, tgtId){
           return `<div style="padding:2px 0;">🔗 <b>${esc(r.name)}</b> → 可连目标：${tg||'（暂无可用目标）'}</div>`;
         }).join('')}`
       : '<div style="color:var(--mut);">该类型下无可建立的关系类型。</div>';
-    body.innerHTML = `<div style="font-size:12px;line-height:1.7;">
+    body.innerHTML = `<div style="font-size:13.5px;line-height:1.7;">
       <div style="margin-bottom:6px;"><b>${esc(src.name)}</b>(<span style="color:var(--mut);">${esc(src.entity_type)}</span>) — 关系？ → <b>${esc(tgt.name)}</b>(<span style="color:var(--mut);">${esc(tgt.entity_type)}</span>) </div>
-      <div style="color:var(--amb,#a16207);font-size:11.5px;border-left:3px solid var(--amber);padding-left:8px;margin:6px 0;">
+      <div style="color:var(--amb,#a16207);font-size:12.5px;border-left:3px solid var(--amber);padding-left:8px;margin:6px 0;">
         这两个实例之间<b>没有可建立的关系类型</b>（坐标系未包含「${esc(src.entity_type)} → ${esc(tgt.entity_type)}」）。
       </div>
-      <div style="color:var(--mut);font-size:11.5px;">「${esc(src.entity_type)}」当前可建立的关系：</div>
+      <div style="color:var(--mut);font-size:12.5px;">「${esc(src.entity_type)}」当前可建立的关系：</div>
       ${dirHtml}
-      <div style="color:var(--mut);font-size:11px;margin-top:6px;">提示：连关系需选择<b>有可用关系类型</b>的源/目标组合；也可到「本体模型」为关系类型放开 src/tgt 后重试。</div>
+      <div style="color:var(--mut);font-size:12.5px;margin-top:6px;">提示：连关系需选择<b>有可用关系类型</b>的源/目标组合；也可到「本体模型」为关系类型放开 src/tgt 后重试。</div>
     </div>`;
     return;
   }
-  body.innerHTML = `<div style="font-size:12px;line-height:1.7;">
+  body.innerHTML = `<div style="font-size:13.5px;line-height:1.7;">
     <div style="margin-bottom:8px;font-weight:600;color:var(--blue-d);">选择「${esc(src.name)}」→「${esc(tgt.name)}」的关系类型</div>
     <div style="display:flex;flex-direction:column;gap:6px;">` +
     cand.map(r=>`<button class="btn sm" style="text-align:left;justify-content:flex-start;" onclick="gvLinkCreate('${esc(srcId)}','${esc(tgtId)}','${esc(r.name)}')">${esc(r.name)}</button>`).join('') +
@@ -855,11 +855,11 @@ function graphEdgeClick(id) {
     const e = (graphState.edges||[]).find(x=>String(x.id)===sid);
     const body = document.getElementById('gv-detail-body');
     if(body && e) body.innerHTML = `<div style="padding:4px;">
-      <div style="font-weight:700;color:#E8912D;font-size:12.5px;margin-bottom:6px;">⇢ 推断关系（${esc(e._kind||'reasoning')}）</div>
-      <div style="font-size:11.5px;line-height:1.8;">
+      <div style="font-weight:700;color:#E8912D;font-size:13.5px;margin-bottom:6px;">⇢ 推断关系（${esc(e._kind||'reasoning')}）</div>
+      <div style="font-size:12.5px;line-height:1.8;">
         <b>${esc(e._sName||e.source_id)}</b> —<b>${esc(e.relation_type)}</b>→ <b>${esc(e._tName||e.target_id)}</b></div>
-      ${e._via?`<div style="font-size:10.5px;color:var(--mut);margin-top:6px;">推导路径：${esc(e._via)}</div>`:''}
-      <div style="font-size:10.5px;color:var(--mut);margin-top:8px;">该边由推理引擎生成，未入库前不参与审核链；点击「推理」Tab 可物化入库。</div></div>`;
+      ${e._via?`<div style="font-size:12px;color:var(--mut);margin-top:6px;">推导路径：${esc(e._via)}</div>`:''}
+      <div style="font-size:12px;color:var(--mut);margin-top:8px;">该边由推理引擎生成，未入库前不参与审核链；点击「推理」Tab 可物化入库。</div></div>`;
     return;
   }
   showGraphEdgeDetail(sid);
@@ -883,20 +883,20 @@ async function exportSysmlModel() {
   const br = getCurrentBranch();
   const lbx = document.getElementById('lbx');
   const b = document.getElementById('lbx-body');
-  b.innerHTML = `<h3>📤 导出 SysML V2 模型 <span style="font-size:11px;color:var(--mut);font-weight:normal;">分支 ${esc(br)}</span></h3><div class="loading">生成中…</div>`;
+  b.innerHTML = `<h3>📤 导出 SysML V2 模型 <span style="font-size:12.5px;color:var(--mut);font-weight:normal;">分支 ${esc(br)}</span></h3><div class="loading">生成中…</div>`;
   lbx.classList.add('show');
   lbx.onclick = e => { if(e.target===lbx) lbx.classList.remove('show'); };
   const cb = document.querySelector('#lbx .lbx-close');
   if(cb) cb.onclick = () => lbx.classList.remove('show');
-  const fail = (msg) => { b.innerHTML = `<h3>导出失败</h3><div style="color:var(--red);font-size:12.5px;">${esc(msg)}</div><div class="lbx-actions"><button class="btn ghost" onclick="document.getElementById('lbx').classList.remove('show')">关闭</button></div>`; };
+  const fail = (msg) => { b.innerHTML = `<h3>导出失败</h3><div style="color:var(--red);font-size:13.5px;">${esc(msg)}</div><div class="lbx-actions"><button class="btn ghost" onclick="document.getElementById('lbx').classList.remove('show')">关闭</button></div>`; };
   let ker;
   try {
     const r = await fetch(API + '/api/knowledge/sysml/export?branch=' + encodeURIComponent(br));
     if(!r.ok){ fail('HTTP ' + r.status); return; }
     ker = await r.text();
   } catch(e) { fail(e.message); return; }
-  b.innerHTML = `<h3>📤 导出 SysML V2 模型 <span style="font-size:11px;color:var(--mut);font-weight:normal;">分支 ${esc(br)} · ${ker.split('\n').length} 行</span></h3>
-    <pre id="se-pre" style="background:#1e1e1e;color:#d4d4d4;padding:10px;border-radius:6px;font-size:11px;line-height:1.5;max-height:52vh;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:8px 0;">${esc(ker)}</pre>
+  b.innerHTML = `<h3>📤 导出 SysML V2 模型 <span style="font-size:12.5px;color:var(--mut);font-weight:normal;">分支 ${esc(br)} · ${ker.split('\n').length} 行</span></h3>
+    <pre id="se-pre" style="background:#1e1e1e;color:#d4d4d4;padding:10px;border-radius:6px;font-size:12.5px;line-height:1.5;max-height:52vh;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:8px 0;">${esc(ker)}</pre>
     <div class="lbx-actions"><button class="btn ghost" id="se-copy">📋 复制</button><button class="btn" id="se-download">⬇ 下载</button><button class="btn ghost" onclick="document.getElementById('lbx').classList.remove('show')">关闭</button></div>`;
   document.getElementById('se-copy').onclick = () => {
     const done = () => toast('✅ 已复制到剪贴板');
@@ -943,12 +943,12 @@ async function gvMergeNode(id) {
   const lbx = document.getElementById('lbx'), b = document.getElementById('lbx-body');
   if(!lbx || !b) return;
   b.innerHTML = `<h3>🔄 合并节点到…</h3>
-    <div style="font-size:12px;color:var(--mut);line-height:1.7;margin:4px 0 10px;">
+    <div style="font-size:13.5px;color:var(--mut);line-height:1.7;margin:4px 0 10px;">
       将「<b>${esc(src.name)}</b>」合并到同类型目标实体：<b>关联关系全部转移至目标，本节点被删除</b>（不可逆，建议先确认目标数据完整）。<br>
       可选范围 = 本体类型「<b style="color:var(--blue-d);">${esc(typ)}</b>」下的 ${candidates.length} 个实体：
     </div>
     <input id="gv-merge-q" placeholder="🔍 搜索目标实体（名称/ID）…" oninput="gvMergeRenderList('${esc(id)}')" autocomplete="off"
-      style="width:100%;border:1px solid var(--blue);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;margin-bottom:8px;">
+      style="width:100%;border:1px solid var(--blue);border-radius:6px;padding:6px 10px;font-size:13.5px;outline:none;margin-bottom:8px;">
     <div id="gv-merge-list" style="max-height:300px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;"></div>
     <div class="lbx-actions" style="margin-top:10px;text-align:right;">
       <button class="btn ghost" onclick="document.getElementById('lbx').classList.remove('show')">取消</button>
@@ -970,11 +970,11 @@ function gvMergeRenderList(srcId){
       <span style="width:8px;height:8px;border-radius:50%;background:${graphColor(x.entity_type)};flex:none;"></span>
       <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(x.name)}</b>
       <span class="st ${x.status==='reviewed'?'ok':'w'}" style="flex:none;">${esc(gvStatusTxt(x.status))}</span>
-      <span style="color:var(--mut);font-size:10px;flex:none;" title="${esc(x.id)}">${esc(String(x.id).slice(0,10))}…</span>
+      <span style="color:var(--mut);font-size:12px;flex:none;" title="${esc(x.id)}">${esc(String(x.id).slice(0,10))}…</span>
     </div>`).join('')
-    : '<div style="padding:10px;color:var(--mut);font-size:11.5px;">无匹配的同类型实体</div>';
+    : '<div style="padding:10px;color:var(--mut);font-size:12.5px;">无匹配的同类型实体</div>';
   if(list.length>50){
-    box.insertAdjacentHTML('beforeend', `<div style="padding:6px 10px;color:var(--mut);font-size:10.5px;">共 ${list.length} 条，仅显示前 50 条，请继续输入过滤</div>`);
+    box.insertAdjacentHTML('beforeend', `<div style="padding:6px 10px;color:var(--mut);font-size:12px;">共 ${list.length} 条，仅显示前 50 条，请继续输入过滤</div>`);
   }
 }
 async function gvMergeConfirm(srcId, tgtId){
@@ -1107,21 +1107,21 @@ function renderReasoning(items) {
   return items.map(it=>{
     const icon = it.pass ? '✅' : '❌';
     const color = it.pass ? 'var(--grn)' : 'var(--red)';
-    return `<div style="margin-bottom:4px;"><span style="color:${color};font-weight:600;">${icon} ${esc(it.name)}</span> <span style="color:var(--mut);font-size:11.5px;">— ${esc(it.detail || '')}</span></div>`;
+    return `<div style="margin-bottom:4px;"><span style="color:${color};font-weight:600;">${icon} ${esc(it.name)}</span> <span style="color:var(--mut);font-size:12.5px;">— ${esc(it.detail || '')}</span></div>`;
   }).join('');
 }
 // P0-2：推理物化明细（分类/传递推断的三元组，可折叠）
 function renderInferred(items) {
   if(!items || !items.length) return '';
   return `<div style="margin-top:6px;border-top:1px dashed var(--line);padding-top:6px;">
-    <div style="font-size:11px;color:var(--blue-d);font-weight:600;cursor:pointer;" onclick="this.parentElement.querySelector('.inf-body').style.display = this.parentElement.querySelector('.inf-body').style.display==='none'?'block':'none';">🔎 推理物化明细（${items.length}） <span style="color:var(--mut);font-weight:400;">点击展开/收起</span></div>
+    <div style="font-size:12.5px;color:var(--blue-d);font-weight:600;cursor:pointer;" onclick="this.parentElement.querySelector('.inf-body').style.display = this.parentElement.querySelector('.inf-body').style.display==='none'?'block':'none';">🔎 推理物化明细（${items.length}） <span style="color:var(--mut);font-weight:400;">点击展开/收起</span></div>
     <div class="inf-body" style="display:none;margin-top:4px;">
       ${items.slice(0, 20).map(i=>{
         if(i.kind === 'classify')
-          return `<div style="font-size:11px;color:var(--mut);margin-top:2px;"><span class="tag" style="font-size:9.5px;border-color:var(--blue);color:var(--blue-d);">分类</span> ${esc(i.s)} <b>a</b> ${esc(i.o)} <small style="color:var(--mut);">（via ${esc(i.via)}）</small></div>`;
-        return `<div style="font-size:11px;color:var(--mut);margin-top:2px;"><span class="tag" style="font-size:9.5px;border-color:var(--amb);color:var(--amb);">传递</span> ${esc(i.path)}</div>`;
+          return `<div style="font-size:12.5px;color:var(--mut);margin-top:2px;"><span class="tag" style="font-size:11.5px;border-color:var(--blue);color:var(--blue-d);">分类</span> ${esc(i.s)} <b>a</b> ${esc(i.o)} <small style="color:var(--mut);">（via ${esc(i.via)}）</small></div>`;
+        return `<div style="font-size:12.5px;color:var(--mut);margin-top:2px;"><span class="tag" style="font-size:11.5px;border-color:var(--amb);color:var(--amb);">传递</span> ${esc(i.path)}</div>`;
       }).join('')}
-      ${items.length > 20 ? `<div style="font-size:10.5px;color:var(--mut);margin-top:2px;">… 其余 ${items.length-20} 条略</div>` : ''}
+      ${items.length > 20 ? `<div style="font-size:12px;color:var(--mut);margin-top:2px;">… 其余 ${items.length-20} 条略</div>` : ''}
     </div>
   </div>`;
 }

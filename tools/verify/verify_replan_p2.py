@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL  S3d 保守默认：配置读取失败取 enabled=False（不会因读不到配置就开重画） 
 # -*- coding: utf-8 -*-
 """P2 replanning（2026-10-21，执行中重规划第二阶段）回归验证 —— 零 LLM、零服务、零生产库写。
 

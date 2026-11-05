@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [backlog] 从未接线，待逐个定性（接入 pr 需先过「全新克隆+空库能绿」）；未接线（2026-11-04 盘点未覆盖，待逐个定性） 
 # -*- coding: utf-8 -*-
 """实体归一消歧链路的常驻自检（2026-10-11 首次建立）。
 
@@ -59,7 +60,7 @@ import tempfile
 
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, BASE)
-DB_PATH = os.path.join(BASE, "mbse.db")
+DB_PATH = (os.environ.get("MBSE_DB_PATH") or os.path.join(BASE, "mbse.db"))
 
 PASS, FAIL = [], []
 
@@ -699,7 +700,7 @@ def _open_real():
     """真库**只读**连接；取不到返回 None（判据面不存在 ⇒ 上层 SKIP，绝不伪装成 PASS）。"""
     import os
     import sqlite3 as _sq
-    db = os.path.join(BASE, "mbse.db")
+    db = (os.environ.get("MBSE_DB_PATH") or os.path.join(BASE, "mbse.db"))
     if not os.path.isfile(db):
         return None
     try:

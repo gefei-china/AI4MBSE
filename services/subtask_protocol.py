@@ -400,40 +400,11 @@ def validate(raw):
             "truncated": truncated, "warnings": warnings}
 
 
-def extract_protocol_json(text):
-    """★ 2026-10-13（批次二 P2-2）：从子任务输出里**抽出尾部的协议 JSON**。
+def _balanced_json_at(t: str, end: int):
+    """从 `t[end]`（应为 `}`）向前做括号配平，返回 (start, frag) 或 None。
 
-    为什么需要（实测踩到的一个真缺口）：子任务 prompt 要求的是
-    「**正文在前**，另起一段以单个 JSON 对象结尾」（不能只吐 JSON —— 那会毁掉
-    面向用户的可读交付物）。而调用方此前的解析只试 `text.strip().startswith("{")`，
-    对"正文 + JSON"这种形态**恒为 False** ⇒ 永远走 `normalize_text`
-    ⇒ 三数组永远为空 ⇒ **注入契约了却仍拿不到结构化字段**。
-    ⇒ 光注入契约不够，**解析端必须同步支持尾部 JSON**。
-
-    识别口径（从后往前找，优先取最后一个平衡的 JSON 对象）：
-      ① 整段就是 JSON → 直接用；
-      ② 否则找**最后一个** `}`，向前做括号配平，得到候选片段后 `json.loads`；
-      ③ 解析失败 → 返回 None（调用方回落 `normalize_text`，行为与改动前一致）。
-
-    ⚠️ 只取**一个** JSON 对象（不合并多个）—— 多 JSON 场景本协议未定义，
-    宁可漏也不猜（错的字段比空字段更坏）。
     ⚠️ 配平时**跳过字符串字面量内的括号**，否则正文中出现 `"}"` 就会算错配平。
     """
-    s = str(text or "")
-    if not s.strip():
-        return None
-    # ① 整段就是 JSON
-    t = s.strip()
-    if t.startswith("{"):
-        try:
-            obj = json.loads(t)
-            return obj if isinstance(obj, dict) else None
-        except Exception:
-            return None
-    # ② 从最后一个 } 向前配平
-    end = t.rfind("}")
-    if end < 0:
-        return None
     depth = 0
     in_str = False
     esc = False
@@ -454,13 +425,313 @@ def extract_protocol_json(text):
         elif ch == "{":
             depth -= 1
             if depth == 0:
-                frag = t[i:end + 1]
-                try:
-                    obj = json.loads(frag)
-                    return obj if isinstance(obj, dict) else None
-                except Exception:
-                    return None
+                return i, t[i:end + 1]
     return None
+
+
+#: 协议候选片段必须出现的「身份词」—— 用来在多 JSON 文本里挑出协议那一个
+_PROTO_HINTS = ("schema_version", "artifacts", "evidence", "risks", "claims", "status")
+
+
+def _repair_json_text(frag: str) -> str:
+    """**结构性**修复（只动语法，不动内容）。
+
+    ★ 2026-11-02（改进点③）：模型输出的 JSON 高频坏法就三种 ——
+      ① 尾随逗号 `{...,}`；② 被截断（缺右括号）；③ 外面裹了 ```json 围栏。
+    这三类都能**确定性地**修好，且修完不会改变任何字段值。
+    ⚠️ 明确**不做**的事：不改引号内容、不补字段、不猜枚举值 ——
+      那是"编内容"，错的字段比空字段更坏（本模块既有判据）。
+    """
+    s = frag.strip()
+    # ③ 剥围栏
+    s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
+    s = re.sub(r"\s*```$", "", s)
+    # ① 去尾随逗号（`,\s*}` 或 `,\s*]`）
+    s = re.sub(r",(\s*[}\]])", r"\1", s)
+    # ② 截断补齐：按括号栈补右侧
+    depth = 0
+    in_str = False
+    esc = False
+    stack = []
+    for ch in s:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+    if in_str:
+        s += '"'
+    for ch in reversed(stack):
+        s += "}" if ch == "{" else "]"
+    return s
+
+
+def _balanced_json_forward(t: str, start: int):
+    """从 `t[start]`（应为 `{`）**向后**配平到匹配的 `}`，返回 (start, end+1, frag) 或 None。
+
+    ★ 2026-11-04（端到端实测缺口）：原实现只有"从后往前"的 `_balanced_json_at`，
+      以及"从身份键一直到文末"的④分支 —— 两者**都只覆盖「协议在文末」**这一种形态。
+      而**已拼接的成品**里，中间的交付物协议夹在两份正文之间（真库 msg 5761 的第 1 段
+      就在 4650 处，后面还有两份报告的正文）⇒ 前两类都定位不到 ⇒ 剥不干净。
+      ⇒ 补这一条"从身份键向后配平"，覆盖**文中**的证据包。
+    ⚠️ 与 `_balanced_json_at` 一样跳过字符串字面量内的括号。
+    """
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(t)):
+        ch = t[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return start, i + 1, t[start:i + 1]
+    return None
+
+
+def _locate_protocol_json(text):
+    """定位协议 JSON：返回 (obj|None, span|None)。
+
+    ★ 2026-11-04（新增）：本函数是 `extract_protocol_json` 与 `strip_protocol_json`
+      的**单一真源** —— 两者必须用同一套候选定位逻辑，否则会出现
+      "抽出来的那份" 与 "删掉的那段" 不是同一段的错位（比不剥离更糟）。
+
+    span 语义（相对**去空白后**的文本 t）：
+      · 整段就是 JSON           → (0, len(t))
+      · ```json 围栏块          → 整个围栏 (m.start(), m.end())
+      · 从后往前配平到的对象    → (obj_start, end+1)
+      · 被截断的协议（到文末）  → (m.start(), len(t))
+    ★ 2026-10-13（批次二 P2-2）：原解析只试 `startswith("{")`，对"正文 + JSON"
+    恒为 False ⇒ 永远走 `normalize_text` ⇒ 三数组恒空。
+
+    ★ 2026-11-02（改进点③，米爸「协议靠模型自觉」）：**多轮候选 + 语法级修复**。
+      实测坏法三类（都不该让整份协议作废）：
+        · 外面裹 ```json 围栏 → 真库常见，原实现配平能取到，但一遇到围栏里
+          再带 `}` 说明文字就会跑偏；
+        · 尾随逗号 / 被 max_tokens 截断 → json.loads 直接失败；
+        · 正文里既有示例 JSON 又有真协议 JSON → "最后一个平衡对象"未必是协议。
+      现在按候选列表逐个尝试，**优先带协议身份词（schema_version/artifacts/…）的对象**，
+      每个候选先严格解析、失败再做 `_repair_json_text` 的结构性修复。
+      ⚠️ 仍然**只取一个对象**，仍然不猜字段值 —— 只是把"能确定修好的语法问题"修好。
+
+    返回 (obj|None, span|None)；obj 为 None ⇒ 调用方回落 normalize_text，行为与改动前一致。
+    """
+    s = str(text or "")
+    if not s.strip():
+        return None, None
+    t = s.strip()
+
+    cands = []          # [(score, frag, start, end)]，score 越大越像协议
+    # ① 整段就是 JSON
+    if t.startswith("{"):
+        cands.append((2, t, 0, len(t)))
+    # ② 围栏块（```json … ``` 或 ``` … ```）
+    for m in re.finditer(r"```[a-zA-Z]*[ \t]*\r?\n(.*?)\r?\n[ \t]*```", t, re.S):
+        blk = (m.group(1) or "").strip()
+        if blk.startswith("{"):
+            cands.append((3, blk, m.start(), m.end()))
+    # ③ 从后往前逐个 `}` 配平（最多取 5 个，避免长正文里大量对象拖慢）
+    pos, tries = len(t) - 1, 0
+    while tries < 5:
+        end = t.rfind("}", 0, pos + 1)
+        if end < 0:
+            break
+        got = _balanced_json_at(t, end)
+        if got:
+            cands.append((1, got[1], got[0], end + 1))
+        pos, tries = end - 1, tries + 1
+    # ④ **被截断的协议**：以协议身份键开头的对象，一直到文末（修复会补齐括号）。
+    #   为什么必须单独一支：截断后"最后一个 }"落在某个内层对象上，
+    #   配平只能取到那个内层片段（无身份词 ⇒ 被丢弃），整份协议就此丢失。
+    for m in re.finditer(r'\{\s*"(?:schema_version|status|summary|artifacts|claims|missing)"\s*:', t):
+        cands.append((4, t[m.start():], m.start(), len(t)))
+    # ⑤ **文中的证据包**（★ 2026-11-04：已拼接成品里，中间的协议夹在两份正文之间）。
+    #   ④ 只覆盖"一直到文末"，③ 只认最后一个 `}` ⇒ 都够不到文中那段。
+    #   这里从每个 `{"schema_version"` 起点**向后**配平，覆盖任意位置。
+    for m in re.finditer(r'\{\s*"schema_version"\s*:', t):
+        got_f = _balanced_json_forward(t, m.start())
+        if got_f:
+            # ⚠️ base 取 1（与③同级），**刻意不高于** ②围栏(3) / ④文末协议(4) ——
+            #   否则会改变"多段时抽哪一段"的既有优先级（现有门禁依赖该语义）。
+            cands.append((1, got_f[2], got_f[0], got_f[1]))
+
+    best = None
+    for base, frag, st, en in cands:
+        for attempt in (frag, _repair_json_text(frag)):
+            try:
+                obj = json.loads(attempt)
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            score = base + sum(1 for h in _PROTO_HINTS if h in obj)
+            if best is None or score > best[0]:
+                best = (score, obj, st, en)
+            break
+    if best and best[0] >= 2:       # 至少是围栏块或整段 JSON
+        return best[1], (best[2], best[3])
+    if best and any(h in best[1] for h in _PROTO_HINTS):
+        return best[1], (best[2], best[3])   # 尾部对象里带协议身份词 ⇒ 认它
+    return None, None
+
+
+def extract_protocol_json(text):
+    """从子任务输出里**抽出协议 JSON**（正文在前、JSON 在尾）。
+
+    ★ 2026-10-13（批次二 P2-2）：原解析只试 `startswith("{")`，对"正文 + JSON"
+    恒为 False ⇒ 永远走 `normalize_text` ⇒ 三数组恒空。
+
+    ★ 2026-11-02（改进点③，米爸「协议靠模型自觉」）：**多轮候选 + 语法级修复**。
+      实测坏法三类（都不该让整份协议作废）：
+        · 外面裹 ```json 围栏 → 真库常见，原实现配平能取到，但一遇到围栏里
+          再带 `}` 说明文字就会跑偏；
+        · 尾随逗号 / 被 max_tokens 截断 → json.loads 直接失败；
+        · 正文里既有示例 JSON 又有真协议 JSON → "最后一个平衡对象"未必是协议。
+      现在按候选列表逐个尝试，**优先带协议身份词（schema_version/artifacts/…）的对象**，
+      每个候选先严格解析、失败再做 `_repair_json_text` 的结构性修复。
+      ⚠️ 仍然**只取一个对象**，仍然不猜字段值 —— 只是把"能确定修好的语法问题"修好。
+
+    返回 dict 或 None（None ⇒ 调用方回落 normalize_text，行为与改动前一致）。
+
+    ★ 2026-11-04：**本函数只"抽"不"删"** —— 正文里的 JSON 原文仍在
+      （删除那一半见 `strip_protocol_json`）。这是刻意分开的两个职责。
+    """
+    obj, _span = _locate_protocol_json(text)
+    return obj
+
+
+def _is_evidence_pack(obj) -> bool:
+    """这段 dict 是否**确实是本协议的证据包**（而不是正文里的示例 JSON）。
+
+    ★ 2026-11-04（配合 `strip_protocol_json` 的循环剥离）：
+      多剥几段的前提是**每段都能确认身份**，否则会误删正文里的示例 JSON。
+      判据（三条全满足，刻意保守）：
+        ① 含 `schema_version`；
+        ② 含 `status`（且取值是协议枚举之一）；
+        ③ 身份词命中 ≥3 个（schema_version/artifacts/evidence/risks/claims/status）。
+      ⇒ 普通示例 JSON（如 `{"name": "x"}` 或 `{"status":"ok"}`）**不会**被删。
+    """
+    if not isinstance(obj, dict):
+        return False
+    if obj.get("schema_version") is None:
+        return False
+    if str(obj.get("status") or "") not in STATUS_VALUES:
+        return False
+    hits = sum(1 for h in _PROTO_HINTS if h in obj)
+    return hits >= 3
+
+
+def strip_protocol_json(text, max_blocks: int = 8):
+    """抽出协议 JSON **并把它从正文里删掉**。返回 (clean_text, proto_dict|None)。
+
+    ★ 2026-11-04（真库实证：conv 990408 / msg 5761，21432 字）——
+      为什么"抽出来"还不够，必须"删掉"：
+
+      协议注入（`agent/pipeline_parts/stream.py`）要求子任务「正文在前，**单个 JSON 对象结尾**」，
+      `extract_protocol_json` 把这份 JSON 取出来存进 `summary_json` ——
+      **但正文里的原文没删**，于是三件事同时发生：
+
+        ① **裸 JSON 出现在最终正文**：用户看到一坨没有结构、没有代码块收敛的 JSON；
+        ② **汇总时把它当正文内容照搬**：汇总输入按 `delegation.summary_item_max_chars`
+           （1600）头尾裁剪，而协议 JSON 正好在交付物**尾部** ⇒ 必被保留；
+           LLM 拿到的是「三份残缺交付物」，"整合"退化成**拼接** ⇒ 出现多组
+           「一、二、三」章节标题；
+        ③ **永不被收敛**：`agent/final_content.py::dedupe_interim_code_blocks`
+           只处理**围栏代码块**，围栏外的 JSON 它一律不碰。
+
+      实测真库那一条消息里 **3 段协议 JSON 全部留在正文**（2 段裸露、1 段在 ```json 块内），
+      且正文是 **3 份报告的原文拼接**（`## 一、结论先行` 出现 2 次）。
+
+    ⚠️ 与 `extract_protocol_json` 共享 `_locate_protocol_json`（单一真源）——
+      "抽出来的那份"与"删掉的那段"必须严格是同一段，否则比不剥离更糟。
+
+    ★ 2026-11-04 二次修正（端到端实测抓到）：**循环剥离，直到正文里再无证据包**。
+      原因：真实链路里每个子任务各剥各的，只剥一段就够；
+      但**已拼接的成品**（汇总把三份交付物接在一起）里有 **3 段**证据包，
+      只剥最后一段会残留 2 段（端到端实测 21432→19274 后仍剩 2 段）。
+      ⇒ 改为循环，但**每段都必须过 `_is_evidence_pack` 身份校验**
+        （schema_version + status + ≥3 个身份词），
+        **绝不因为"长得像 JSON"就删** —— 正文里的示例 JSON 必须原样保留。
+      上限 `max_blocks`（默认 8）防病态输入空转。
+    """
+    s = str(text or "")
+    if not s.strip():
+        return s, None
+    first_obj = None
+    removed = 0
+    while removed < int(max_blocks or 8):
+        obj, span = _locate_protocol_json(s)
+        if obj is None or not span or not _is_evidence_pack(obj):
+            break
+        t = s.strip()
+        lead = len(s) - len(s.lstrip())          # s 去空白后的前缀偏移
+        st, en = span[0] + lead, span[1] + lead
+        if st < 0 or en > len(s) or st >= en:
+            break                                # span 异常 ⇒ 不删（宁可留 JSON，也别删错正文）
+        at_tail = (en >= len(s.rstrip()))
+        pre, post = s[:st], s[en:]
+        if at_tail:
+            # 连带删掉 JSON 前的 markdown 分隔线（模型常写「正文 + --- + JSON」）
+            # ⇒ 否则正文尾部会留一条孤零零的 `---`，渲染成一条无意义的横线。
+            pre = re.sub(r"\n{0,2}[ \t]*-{3,}[ \t]*\n*$", "", pre)
+        s = pre + post
+        if first_obj is None:
+            first_obj = obj
+        removed += 1
+        if at_tail:
+            s = s.rstrip() + "\n" if s.strip() else s
+    if removed == 0:
+        return str(text or ""), None
+    return s, first_obj
+
+
+def build_repair_prompt(body: str, max_body: int = 6000) -> str:
+    """为「协议 JSON 缺失/损坏」构造**一次性补格式**请求（纯函数）。
+
+    ★ 2026-11-02（改进点③）：行业做法（OpenAI Agents SDK handoff / 生产实践）
+    是「边界即契约，**reject don't repair**，带错误重试一次」。
+    本仓不能重跑整个子任务（成本/时延都不可接受），但可以只让模型**补交协议块** ——
+    正文已产出，只需它把同一份结论按 schema 再陈述一遍（≤700 token）。
+    ⇒ 既不编造内容（只做归纳），也不让"模型少写一段 JSON"升级成"整批降级"。
+    """
+    b = str(body or "")
+    if max_body > 0 and len(b) > max_body:
+        # 头尾采样：结论通常在后半段
+        head = b[: int(max_body * 0.3)]
+        tail = b[-int(max_body * 0.7):]
+        b = head + "\n…（中间省略）…\n" + tail
+    return (
+        "下面是一次已完成任务的产出正文。请**只输出一个 JSON 对象**（不要任何解释、"
+        "不要 markdown 围栏），把这次任务的结论按给定字段归纳出来。\n"
+        "字段：schema_version=1；status 取 full|partial|failed；summary 一句话成果；"
+        "artifacts[]（kind/title/ref，无则 []）；evidence[]（source/ref/basis，"
+        "basis 取 verified|derived|asserted，没查证的一律 asserted）；"
+        "risks[]（level/title/desc/advice）；claims[]（text/kind/subject，"
+        "kind 取 fact|inference|to_verify）；missing[]（status 非 full 时必填）；confidence 0~1。\n"
+        "**只依据正文内容归纳，不得补充正文里没有的事实**；正文没写的字段给空数组。\n\n"
+        "正文：\n" + b
+    )
 
 
 def normalize_text(raw_text, task_status=None):
@@ -620,6 +891,19 @@ def apply_quality_gate(agg_status, reflection):
     """
     gaps = []
     if not isinstance(reflection, dict) or reflection.get("passed") is not False:
+        return agg_status, gaps
+    # ★★ 2026-10-30：**评审自身失败不得降级编排状态**。
+    #   `degraded=True` 的语义是"这次没评成"（LLM 异常 / 解析不出分数），
+    #   与"评了，没过"是两回事。把它们混在一起会导致：
+    #     ① 一次 provider 抖动就把正常完成的编排打成 partial（假警报）；
+    #     ② 用户在卡片上看到「0/100 未通过」而误判自己的报告质量。
+    #   现在：degraded ⇒ 只追加一条**如实**的提示（不参与三态），并且明确写
+    #   "未完成评审"而不是"未通过"。
+    if reflection.get("degraded"):
+        _d = (reflection.get("eval") or {}).get("diag") or {}
+        _why = _d.get("error_type") or ("回包无法解析" if _d.get("raw_len") is not None else "评审不可用")
+        gaps.append("质量评审**未完成**（%s）——这不是对你报告的质量结论，"
+                    "可展开「依据」看失败证据" % _why)
         return agg_status, gaps
     _iss = [str(i)[:60] for i in (reflection.get("issues") or [])[:2]]
     gaps.append(f"质量评审未通过（{reflection.get('score')}/100）"

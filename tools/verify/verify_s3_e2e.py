@@ -21,7 +21,8 @@ import time
 import httpx
 
 BASE = "http://127.0.0.1:8000"
-DB = r"C:\Users\gefei\WorkBuddy\2026-08-04-19-05-52\mbse_system\mbse.db"
+DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mbse.db"))
 
 out = []
 

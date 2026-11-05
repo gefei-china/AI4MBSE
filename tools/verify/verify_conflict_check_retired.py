@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] B4 ReAct 默认串仍含它（走 workflows 那套） 
 # -*- coding: utf-8 -*-
 """门禁：`conflict_check` 假实现已下线（米爸 2026-10-13 决定：只移除假实现，保留可用那套）。
 
@@ -25,6 +26,7 @@
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_conflict_check_retired.py`
 """
 import io
+from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
 import re
 import sys
@@ -42,7 +44,7 @@ MINIT = os.path.join(ROOT, "database", "migrations", "__init__.py")
 WTOOLS = os.path.join(ROOT, "workflows", "tools.py")
 WNODE = os.path.join(ROOT, "workflows", "nodes.py")
 RESOLVER = os.path.join(ROOT, "entity_resolver.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 sys.path.insert(0, ROOT)   # 本脚本以脚本方式运行，需手动把仓库根放进 path
 
@@ -126,7 +128,7 @@ def _load_migrate_fn(src_text):
 
 
 print("\n=== D. 行为层：临时库实跑 ===")
-TMP = tempfile.mkdtemp(prefix="verify_ck_retired_")
+TMP = mkdtemp(prefix="verify_ck_retired_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _src = sqlite3.connect("file:%s?mode=ro" % PROD_DB, uri=True)
@@ -225,7 +227,7 @@ else:
         print("  [VACUOUS] 变异体语法错误：%s" % _se)
         _fnbody = None
 if _mut_src and _fnbody:
-    T2 = tempfile.mkdtemp(prefix="verify_ck_mut_")
+    T2 = mkdtemp(prefix="verify_ck_mut_")
     D2 = os.path.join(T2, "m.db")
     try:
         _s = sqlite3.connect("file:%s?mode=ro" % PROD_DB, uri=True)

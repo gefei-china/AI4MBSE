@@ -449,7 +449,7 @@ class BranchRepo(BaseRepo):
         return {"changed": changed, "conflicts": fresh, "added": added, "removed": removed}
 
     def resolve_conflict(self, mr_id: int, entity_id: str, field: str,
-                         pick: str, value: str = "", actor: str = "王工") -> dict:
+                         pick: str, value: str = "", actor: str = "未登录") -> dict:
         """记录某个冲突字段的解决决策（幂等，重复提交覆盖）。
 
         2026-09-22 对标 GitLab system note：每次裁决写 mr_comments（action='resolve'）
@@ -513,7 +513,7 @@ class BranchRepo(BaseRepo):
                          f"请先到「标注审核」完成审核后再发布"}
 
     def create_merge_request(self, source_branch: str, target_branch: str, conflicts: str,
-                             detail: str = "", release_version: str = "", actor: str = "王工",
+                             detail: str = "", release_version: str = "", actor: str = "未登录",
                              title: str = "", draft: bool = False) -> dict:
         """创建合并请求。重复未处理（draft/open）拦截：同 源→目标 且未处理 → 复用返回。
 
@@ -749,7 +749,7 @@ class BranchRepo(BaseRepo):
             "relations_added": len(added_rels),
         }
 
-    def resolve_merge(self, mr_id: int, status: str, actor: str = "王工",
+    def resolve_merge(self, mr_id: int, status: str, actor: str = "未登录",
                       review_note: str = "") -> dict:
         """审批合并请求：更新状态；approve（merged）时真正执行数据合并（闭环）。
 
@@ -1038,7 +1038,7 @@ class BranchRepo(BaseRepo):
         return {"ok": True, "action": MR_MERGED, "moved": moved,
                 "updated": updated, "doc_snapshot": snap}
 
-    def open_merge_request(self, mr_id: int, actor: str = "王工") -> dict:
+    def open_merge_request(self, mr_id: int, actor: str = "未登录") -> dict:
         """P1-1：草稿转正式评审（draft → open）。守卫走 #18 状态机。"""
         mr = self.get_merge_request(mr_id)
         if not mr:
@@ -1050,7 +1050,7 @@ class BranchRepo(BaseRepo):
                      (MR_OPEN, actor, mr_id))
         return {"ok": True, "action": MR_OPEN}
 
-    def reopen_merge_request(self, mr_id: int, actor: str = "王工") -> dict:
+    def reopen_merge_request(self, mr_id: int, actor: str = "未登录") -> dict:
         """P1-1：重新打开已关闭的合并请求（closed → open）。守卫走 #18 状态机。"""
         mr = self.get_merge_request(mr_id)
         if not mr:
@@ -1107,7 +1107,7 @@ class BranchRepo(BaseRepo):
             print(f"[commit_repo] merge 提交打点失败（不阻断业务）: {e}")
             return None
 
-    def snapshot_documents(self, src: str, tgt: str, actor: str = "王工") -> int:
+    def snapshot_documents(self, src: str, tgt: str, actor: str = "未登录") -> int:
         """共享+发布快照：把 src 分支的文档复制为 tgt 分支快照（覆盖 tgt 同文件名旧快照）。
 
         ⚠️ **已废弃（文档全局化后恒为空操作）**：documents 统一为 branch='global' 后，

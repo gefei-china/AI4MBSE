@@ -10,7 +10,7 @@ from core import branch_rules
 from core.statemachine import get as _sm_get
 from repositories.branch_repo import BranchRepo
 from repositories.commit_repo import CommitRepo
-from core.audit import audit
+from core.audit import audit, audit_user
 
 router = APIRouter(tags=["分支管理"])
 
@@ -31,8 +31,8 @@ RELEASE_BRANCH = "release"
 
 
 def _actor(user) -> str:
-    """审计操作人：优先取当前登录用户显示名；匿名请求兜底保留原默认名「王工」。"""
-    return (user or {}).get("display_name") or "王工"
+    """审计操作人：取已认证用户显示名；取不到标注「未登录」（不再编造人名）。"""
+    return audit_user(user)
 
 
 def _check_writable_branch(branch) -> str | None:
@@ -238,7 +238,7 @@ def resolve_conflict(mr_id: int, body: dict, conn=Depends(db_session), user=Depe
         if v is None or (isinstance(v, str) and not v.strip()):
             return JSONResponse({"error": "手动合并需填写字段值"}, 400)
     result = repo.resolve_conflict(mr_id, entity_id, field, pick, str(body.get("value", "")),
-                                   actor=(user or {}).get("display_name") or (user or {}).get("username") or "王工")
+                                   actor=audit_user(user))
     if not result.get("ok"):
         return JSONResponse({"error": result["error"]}, 400)
     audit(_actor(user), "merge_conflict_resolve",

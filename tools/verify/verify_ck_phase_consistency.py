@@ -1,3 +1,4 @@
+# CI-OPTIONAL: 2026-11-05 干净克隆+空库实测红 ⇒ 降 local。D1 断言真库存在「口径分裂现场 run 531」；空库无该 run
 # -*- coding: utf-8 -*-
 """B1-5 门禁：编排终态 phase 由 `_agg_status` 推导，不再无条件写 `done`。
 
@@ -37,7 +38,7 @@ import sqlite3
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STREAM = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
 CKPT = os.path.join(ROOT, "agent", "orch_checkpoint.py")
-PROD_DB = os.path.join(ROOT, "mbse.db")
+PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0
 _fail = 0

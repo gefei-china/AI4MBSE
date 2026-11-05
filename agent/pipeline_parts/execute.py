@@ -47,7 +47,7 @@ def _repair_tool_subset(tools_def):
 class ExecuteMixin:
     """主执行入口 execute（非流式全流程）。"""
 
-    def execute(self, user_input, conversation_id, branch="dev", provider_id=None, attachments=None, dry_run=False, forced_intent=None, skill_name=None, user=None, tools_whitelist=None, team=None, scope_id=None, scope_ids=None, scope=None):
+    def execute(self, user_input, conversation_id, branch="dev", provider_id=None, attachments=None, dry_run=False, forced_intent=None, skill_name=None, user=None, tools_whitelist=None, team=None, scope_id=None, scope_ids=None, scope=None, overrides=None, max_tool_rounds=None):
         """Execute the full agent pipeline.
 
         attachments: V2.3 会话窗口富输入——[{url, filename, size, is_image}]，落库 user 消息 attachments JSON。
@@ -57,9 +57,24 @@ class ExecuteMixin:
         tools_whitelist: P0-3 委派最小权限——本次执行仅授予的工具名列表（Worker ⊆ Supervisor）；
         非空时 function calling 只注入白名单工具，且 _exec_tool_call 拒绝白名单外调用。
         team: 团队模式（AI 会话页「工作流」下拉）——主 Agent 团队负责人统一调度：
-        意图识别/任务拆分/计划制定/任务分派（委派候选收敛到团队成员）/内容整合输出。
+        意图识别/任务拆分/计划制定/任务分派（内容整合输出）。
+        max_tool_rounds: 2026-11-04（react 方案 A）——本次执行的**工具轮上限覆盖**。
+        只在「工具循环绝对硬上限」这一处生效（不改变失败轮预算）；None ⇒ 读配置
+        `agent.max_tool_rounds`（默认 100），**默认行为逐字节不变**。
+        用途：`task_type=react` 的子任务用它把轮次收窄成"受限多步求解"。
+        overrides: 会话入口「本轮临时调整」——{"thinking_level","context_window","max_tokens","temperature"}，
+        只作用于本次调用（登记到线程局部，LLM 层读取），**不写 DB**。空/None ⇒ 零行为漂移。
         """
         attachments = attachments or []
+        # ★ 2026-10-31：本轮临时覆盖登记（必须在本方法内、LLM 调用之前）。
+        #   线程局部而非逐层加参数：execute 内有 13 个 llm_client.chat 调用点，
+        #   逐个加参数必然漏（这正是"同一语义多处各写一份，迟早错位"的老坑）。
+        #   未传 overrides ⇒ 清除登记 ⇒ 非会话路径（脚本/测试/编排子任务）行为不变。
+        try:
+            from core import runtime_state as _rs_ovr
+            _rs_ovr.set_llm_overrides(overrides)
+        except Exception:
+            pass
         # ★ 2026-11-13（#56）：**会话级附件继承**（与 stream.py 同源同口径，见那里的根因说明）。
         #   追问轮请求里 attachments=[] ⇒ 章节索引为空 ⇒ read_attachment_section 工具
         #   压根没进 tools_def ⇒ 模型既无正文也无取正文的通道。
@@ -85,6 +100,9 @@ class ExecuteMixin:
             _trace = {}
 
         self._mem_project_id_cache = None   # 每次执行清缓存：缓存只在本请求内有效，防跨会话串味
+        # ★ P0-4（2026-10-26）：RAG 侧记忆召回结果（单一真源用）。**每轮必须重置** ——
+        #   否则本轮未走检索时，会消费到**上一轮**的 memory_hits（跨轮串味）。
+        self._rag_memory_hits = []
         self._tool_whitelist = tools_whitelist or None
         self._load_db_agents(user)  # P0 平台化：DB 驱动 Agent 注册表（P1-8：按用户隔离）
         self._last_skill_hits = []
@@ -192,6 +210,29 @@ class ExecuteMixin:
         self._hil_level = hil_level  # M5：HIL 分级——L2 时写工具进入人工确认队列
         # 优化2：Agent 指定 LLM provider 优先（显式 provider_id > Agent 绑定 > 全局默认）
         effective_provider = provider_id or self.registry.get_provider_id(intent)
+        # ★★ 2026-11-01（米爸）：会话设置是「**会话 + 模型**」维度，不是"一个会话一套"。
+        #   ⇒ 必须**在这里**（已确定 effective_provider 之后）才读会话设置，
+        #     在路由层读会读错桶（那时 provider 可能还是 None）。
+        #   合并顺序：会话设置 → 单轮临时（后者更高）。
+        #   ⚠️ 与既有 `set_llm_overrides(overrides)` 的关系：
+        #     入口那次登记的是**单轮临时**；这里重登记为「会话 ⊕ 单轮」，
+        #     否则"会话里设了关闭思考"从第二轮就丢（会话设置根本没进线程局部）。
+        try:
+            _sess_ov = {}
+            if conversation_id:
+                from database import db_conn as _db_conn_ov
+                with _db_conn_ov() as _c_ov:
+                    from repositories.conversation_repo import ConversationRepo as _CR
+                    _sess_ov = _CR(_c_ov).get_llm_overrides(int(conversation_id),
+                                                            effective_provider) or {}
+            _merged_ov = dict(_sess_ov)
+            _merged_ov.update(overrides or {})
+            if _merged_ov:
+                from core import runtime_state as _rs_ovr2
+                _rs_ovr2.set_llm_overrides(_merged_ov)
+            self._llm_overrides_effective = _merged_ov
+        except Exception:
+            _merged_ov = dict(overrides or {})
         # ★ P1-b（2026-10-10）Agent 级模型参数（含 thinking_mode）——
         #   `agents.model_params` 此前是**死配置**（有列、有前端表单，无消费点）。
         #   取一次供本方法所有 chat 调用复用；取不到一律 {} ⇒ 零行为漂移。
@@ -199,6 +240,18 @@ class ExecuteMixin:
             _agent_mp = self.registry.get_model_params(intent)
         except Exception:
             _agent_mp = {}
+        # ★ 2026-10-31：把本轮生效的思考强度并入 model_params（同名键覆盖 Agent 级）。
+        #   2026-11-01：来源从"仅单轮"改为"会话⊕单轮"（`_merged_ov`），
+        #   否则会话级设置到不了 model_params 这条读取路径。
+        #   只并 thinking_level（其余 context/max_tokens/temperature 在 LLM 层从线程局部取，
+        #   因为改它们属于 payload 组装，不该混进 model_params 这个"模型参数模板"）。
+        try:
+            _ovr_lv = str((_merged_ov or {}).get("thinking_level") or "").strip()
+            if _ovr_lv:
+                _agent_mp = dict(_agent_mp or {})
+                _agent_mp["thinking_level"] = _ovr_lv
+        except Exception:
+            pass
         # P1 意图结构化拆解（建模类意图；Mock 环境自动降级 {}）
         # P0-2：槽位跨轮合并——上轮槽位为底，本轮新值覆盖（entities/constraints 并集）
         # P1-4（2026-10-01）：带上 conversation_id/user_input —— 换话题时丢弃历史槽位
@@ -233,7 +286,7 @@ class ExecuteMixin:
             # 团队模式：主 Agent（团队负责人）编排——意图识别/拆解/计划/分派/汇总
             _orch = self._try_orchestrate_team(user_input, team_intent, effective_provider,
                                                attachments=attachments, conversation_id=conversation_id,
-                                               team_def=team_def)
+                                               team_def=team_def, branch=branch, user=user)
             if _orch is not None:
                 self._save_conversation_dst(conversation_id, intent, slots)
                 return self._finish_orchestrated(_orch, user_input, conversation_id, intent,
@@ -241,7 +294,7 @@ class ExecuteMixin:
                                                  team=team_intent, user=user)
         elif not forced_intent and not team_direct and not dry_run:
             _orch = self._try_orchestrate(user_input, intent, effective_provider, attachments=attachments,
-                                          conversation_id=conversation_id)
+                                          conversation_id=conversation_id, branch=branch, user=user)
             if _orch is not None:
                 # P0-2 DST：编排前落会话意图状态（编排执行走独立子管道，主会话状态在此保存）
                 self._save_conversation_dst(conversation_id, intent, slots)
@@ -334,6 +387,9 @@ class ExecuteMixin:
                          "chunk_hits": [], "attachment_hits": [], "attachment_used": False,
                          "graph_count": 0, "vector_count": 0,
                          "memory_hits": [], "memory_count": 0}
+        # ★ P0-4（2026-10-26）：把 RAG 侧已召回的 memory_hits 挂到 pipeline 实例，
+        #   供 `_build_memory_hint` 消费（**单一真源**：记忆 recall 层不再二次查库）。
+        self._rag_memory_hits = retrieval.get("memory_hits") or []
         if should_retrieve:
             context_text = self._build_context(retrieval, retrieve_query)
         elif att_text:
@@ -396,17 +452,27 @@ class ExecuteMixin:
         # P1-28（2026-10-02）：**块内容**收敛到 `common.build_prompt_blocks`（唯一真源）。
         # 本路径（execute：Studio Agent 试跑 / 工作流 LLM 节点 / 非流式 API）与流式对话的
         # 差异一律**显式参数化**，不抹平：
-        #   · role_cap=0                不截断（本路径原行为；流式用 `_AGENT_ROLE_CAP`）
+        #   · role_cap=_AGENT_ROLE_CAP  与流式**取同一值**（2026-10-27 统一）
         #   · include_tool_rules=False  本路径原本**没有** tool_rules 块（流式有）
-        # ⚠️ 不要"顺手"把这两项改成与流式一致 —— 那会改变本路径产出，是需质量 A/B 的独立决策
-        #   （差异清单与后果见 docs §29.9）。
+        # ★ 2026-10-27（截断清单 P1-C3）：role_cap 由 0（不截断）改为 `_AGENT_ROLE_CAP`，
+        #   与流式路径统一。原因：同一 Agent 在两条路径上行为不同是隐性缺陷
+        #   （试跑正常、对话里效果差）。该值 8000 ≥ 真库最大 prompt（7,981）⇒ 对现有
+        #   资产**实际不裁**，只保留对异常超长 prompt 的段级护栏（不腰斩，只折可裁段）。
         system_prompt = assemble_system_prompt(build_prompt_blocks(self, PromptBlocksCtx(
             agent_def=agent_def, intent=intent, hil_level=hil_level,
             user_input=user_input, user=user, branch=branch,
             conversation_id=conversation_id, slots=slots, user_ctx=user_ctx,
             att_text=att_text, context_text=context_text, report_prompt=report_prompt,
-            skill_block=skill_block, role_cap=0, include_tool_rules=False,
+            skill_block=skill_block, role_cap=_AGENT_ROLE_CAP, include_tool_rules=False,
         )))
+        # ── P0-2（2026-10-26）：上下文分块归因落库 ──
+        # 非流式路径是**一次性调用**（无 SSE finally 可挂），故在装配后立即 flush。
+        # 流式路径由 routers/conversations.py 的 event_stream finally 统一 flush（一次请求 = 一次装配）。
+        try:
+            from agent.context_audit import flush as _ctx_flush
+            _ctx_flush()
+        except Exception:
+            pass   # 观测不阻断主流程
         # P2 视觉通道：图片以多模态 content 块随 user 消息下发
         # （openai_compat 对 messages 原样透传，故 provider 层无需改动）
         _user_content = user_input
@@ -441,11 +507,47 @@ class ExecuteMixin:
         # 为什么必须透：`execute()` 签名里就有 user（current_user 依赖产物），
         # 但此前从未传到工具执行层 ⇒ 权限判定拿不到身份。
         self._tool_user = user
-        # D4：skill 工具白名单最小权限合并——命中 skill 声明了 allowed_tools 时，
-        # 与委派白名单求交集（双限制取更严），未委派时直接用 skill 白名单
+        # ★ 2026-10-29（P0-3 修正）：技能 `allowed_tools` **不再参与工具集缩减**。
+        #
+        #   【原实现（本段被替换的代码）】把技能白名单赋给 `_tool_whitelist`，
+        #   于是技能一命中就**裁掉 Agent 已绑定的工具**。实测后果（代码里原有的记录）：
+        #     `智源对接agent` 绑 MCP 71 工具 + 技能「智源平台管理」(6 项)
+        #     → 无白名单 15 工具/8 MCP，命中技能后变成 **2 工具/0 MCP**
+        #   ⇒ 这就是 2026-10-16「绑了 71 个只露 6 个、工程列表查不到」事故的根因之一。
+        #   更糟的是裁减**静默**：工具凭空消失，无日志、无提示。
+        #
+        #   【语义澄清（对照 Claude Code，2026-10-29 调研）】
+        #     · Claude Code 的 subagent `tools` 字段是**独立实体**的工具集
+        #       （省略 = 继承全部工具），subagent 有自己的 context window，
+        #       工具集就是它的世界 —— 所以"限制"是自然的。
+        #     · 本平台的 skill 是**注入既有 Agent 的 prompt 片段**，没有独立 context；
+        #       Agent 的可用工具由 `agent_tools` 绑定 + 无条件注入决定。
+        #       技能里的 `allowed_tools` 表达的是「**本技能干活需要这几个工具**」（需求），
+        #       不是「只能这几个」（上限）。
+        #   ⇒ 拿"需求清单"去反向撤销 Agent 已获授权的工具，属越权，且必然误伤。
+        #
+        #   【现行做法】只保留 `tools.py::_build_tools_def` 里的**授权补充**
+        #     （把技能声明的 file_*/save_artifact **补进**候选，见 tools.py:519-534）。
+        #     真正的工具上限**只来自委派显式传入的 `tools_whitelist`**（工作流/子任务
+        #     最小权限，见上面第 91 行），那条链保持不变。
+        #
+        #   【两条路径现在语义一致】stream（对话主路径）与 execute（试跑/工作流）
+        #     都不再用技能白名单做裁减 —— 此前 stream 不设 `_tool_whitelist`、
+        #     execute 却设，是"同一能力两套语义"，正是本轮要消除的分歧。
+        #
+        #   回退开关：`agent.skill_whitelist_enforce`（默认 False）。
+        #     置 True ⇒ 按旧行为把技能白名单当硬上限（**仅建议在排查最小权限问题时临时用**，
+        #     它会重现上面的裁减问题）。
         try:
             _skill_wl = getattr(self, "_skill_allowed_tools", None)
+            _enforce = False
             if _skill_wl:
+                try:
+                    from core import config as _cfg_sw
+                    _enforce = bool(_cfg_sw.get("agent", "skill_whitelist_enforce", False))
+                except Exception:
+                    _enforce = False
+            if _skill_wl and _enforce:
                 if self._tool_whitelist:
                     self._tool_whitelist = list(set(self._tool_whitelist) & _skill_wl)
                 else:
@@ -457,7 +559,13 @@ class ExecuteMixin:
         _cache_hit = None
         # P2：att_images 非空时强制不命中缓存 —— 语义缓存的键只有 user_input，它看不见图片，
         # 若命中会把「带图的提问」当成纯文本问题直接返回旧答案（图等于白传）。
-        if intent in ("chat", "knowledge_qa") and not att_blocks and not att_images and not tools_def:
+        # ★ 2026-10-26 修正：**去掉 `not tools_def`**（原闸门是死代码）。
+        #   实测 `chat` intent 恒注入 8 个工具（core_keep 的 graph_retrieve /
+        #   impact_analyze / validate + 无条件注入的 ask_user）⇒ `not tools_def`
+        #   **恒为 False** ⇒ 语义缓存从未命中过一次（stream 侧同一闸门同病）。
+        #   安全性由**写入侧**保证：只有「本轮没调任何工具、无附件、无澄清」的
+        #   纯问答答案才入库 ⇒ 命中天然是"无需工具"的结论。
+        if intent in ("chat", "knowledge_qa") and not att_blocks and not att_images:
             try:
                 from core import config as _cfg
                 if _cfg.as_bool("semantic_cache", "enabled", False):
@@ -501,6 +609,9 @@ class ExecuteMixin:
             #     · `max_tool_rounds`   → **绝对硬上限**（防死循环），6 放宽到 12
             #     · `max_failed_rounds` → **失败轮预算**，只有失败轮才扣（默认 3）
             #   成功轮再多也不扣预算 ⇒ 正常推进不被限制。
+            # 2026-11-04（react 方案 A）：调用方显式给的轮次覆盖。
+            # 先存下来再进 try —— 否则 except 分支把它一起覆盖成 100，覆盖静默失效。
+            _round_override = max_tool_rounds
             try:
                 from core import config as _cfg
                 # ★ 2026-10-17（米爸反馈1）：12 → 100（与 stream.py 同步，一致性门禁会判）。
@@ -514,10 +625,16 @@ class ExecuteMixin:
             except Exception:
                 max_tool_rounds, max_failed_rounds = 100, 3
                 _lg_budget, _lg_retries, _lg_retry_wait = 300000, 3, 30.0
+            # 覆盖放在 try/except **之后**：无论配置读取成功与否都要生效。
+            if _round_override:
+                try:
+                    max_tool_rounds = max(1, int(_round_override))
+                except (TypeError, ValueError):
+                    pass
             # 2026-10-04：接入统一护栏（与编排路径同源，见 agent/loop_guard.py）。
             # 原先这条路径只有轮次上限/token 上限/重复检测/工具超时，
             # 而编排路径有前三者 —— 同一套 ReAct 语义的两处实现护栏不对称。
-            from agent.loop_guard import LoopGuard, tokens_of as _tokof
+            from agent.loop_guard import LoopGuard, is_correctable_failure
             # P0-①/P0-②（2026-10-07）协议护栏，与 stream.py **同源**。
             from agent import loop_protocol as _lproto
             _guard = LoopGuard(
@@ -539,11 +656,20 @@ class ExecuteMixin:
             # ★ 2026-10-17（米爸反馈4）：工具结果取回的 SysML 文档暂存（persist 时归档）
             self._tool_sysml_docs = []
             self._tool_sysml_docs_seen = set()
+            # ★ 2026-10-27（会话 9629）：分页读取累积状态（与 stream 同源同语义）
+            self._tool_doc_pages = {}
             _ac_tools_hist = []       # 全程工具调用史（评估器输入，tools_brief 内截断）
             _ac_tool_n = 0            # 本轮实际执行的工具调用数（评估触发门）
             _ac_deadline = ((time.time() + _ac_cfg["deadline_s"])
                             if (_ac_cfg["enabled"] and _ac_cfg["deadline_s"] > 0) else None)
             _ac_full = ""             # 跨轮全量产出（非流式路径，收口并回 llm_content）
+            # ★ P0-2（2026-10-28）harness 强制闸的连续阻断计数（循环外，跨轮累积）。
+            #   与 stream.py 同构：计数必须在 while 外，否则每轮从 0 数 ⇒ 永不触顶。
+            _harness_blocks = 0
+            # ★ 无进展检测（真机实测驱动）：记录上轮 remaining 与连续无变化次数。
+            #   只靠次数上限 8 会连续拦截 8 次且待办毫无变化，耗时 ≈2.3 分钟而结果相同 —— 必须提前放行。
+            _harness_prev_rem = []
+            _harness_stall = 0
             while True:
                 # ── 每轮状态复位（续跑轮必须干净起步）──
                 _clarify_req = None
@@ -615,14 +741,12 @@ class ExecuteMixin:
                         _dup = _guard.probe_dup(tname, targs)
                         if _dup:
                             _guard.dup_short_circuits += 1
-                            _prev = _guard.last_result_for(tname, targs)
+                            # ★ 2026-10-28：回喂体统一由 LoopGuard 生成（与 stream.py 同源）
                             tool_results.append({
                                 "tool_call_id": tc.get("id", ""),
                                 "role": "tool", "name": tname,
                                 "content": json.dumps(
-                                    {"ok": True, "result": _prev,
-                                     "hint": "该工具的相同参数已执行过（这是第 %d 次），直接采用既有结果，"
-                                             "不要再重复调用同一工具同一参数。" % _dup},
+                                    _guard.replay_payload(tname, targs, _dup),
                                     ensure_ascii=False)})
                             continue
                         result = _guard.call(self._exec_tool_call, tname, targs)
@@ -639,8 +763,8 @@ class ExecuteMixin:
                         # ★ 2026-10-17（米爸反馈4）：识别工具结果里的完整 SysML 文档
                         #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
                         try:
-                            from agent.utils import extract_sysml_doc_from_result as _esd
-                            _doc = _esd(tname, _t_res)
+                            from agent.utils import collect_tool_sysml_doc as _ctd
+                            _doc = _ctd(getattr(self, "_tool_doc_pages", {}), tname, _t_res)
                             if _doc:
                                 _dk = _doc["text"][:200]
                                 if _dk not in self._tool_sysml_docs_seen:
@@ -654,6 +778,17 @@ class ExecuteMixin:
                         #   会在第 2~3 次被误判成重复调用而掩盖真实的"查不到"信号。
                         if result.get("ok") and not _weak:
                             # ★ 真实拿到可用结果 ⇒ 本轮是**成功推进**，不扣失败预算
+                            _round_had_ok = True
+                        # ⚠️ 必须调**模块级纯函数** `is_correctable_failure(result)`。
+                        #   2026-10-30 真机（conv 9779/18:11）实证：原写法 `_guard.is_correctable_failure(...)`
+                        #   把纯函数当 LoopGuard 的实例方法调 ⇒ AttributeError 直接掀翻整轮
+                        #   （用户侧表现"本轮未产出正文内容 / 任务终止"），且**只在有工具失败时触发**
+                        #   ——这正是它要救的那个分支，结果救兵自己先炸。
+                        elif is_correctable_failure(result):
+                            # ★ 2026-10-28（与 stream.py 同源）：参数类错误（INVALID_ARGUMENTS /
+                            #   args_truncated / recovery.action=CORRECT_ARGUMENTS）是**可自修正**的
+                            #   信息性结果，不该扣失败轮 —— 否则"再改一次参数就会对"的场景
+                            #   被最早判死（conv 9736 建包/写入一次都没尝试）。
                             _round_had_ok = True
                         if _weak and result.get("ok"):
                             _guard.undo_dup_count(tname, targs)
@@ -711,11 +846,11 @@ class ExecuteMixin:
                                                       tools=None, _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
                         msg = llm_response["choices"][0]["message"]
                         llm_content = msg.get("content") or ""
-                        _guard.add_tokens(_tokof(llm_response))
+                        _guard.add_llm(llm_response)
                         break
                     llm_response = llm_client.chat(messages, provider_id=effective_provider,
                                                    tools=tools_def or None, _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
-                    _guard.add_tokens(_tokof(llm_response))   # 2026-10-04：按累计量判预算（见 loop_guard 注释）
+                    _guard.add_llm(llm_response)   # 2026-10-04：按累计量判预算（见 loop_guard 注释）
                     msg = llm_response["choices"][0]["message"]
                     if msg.get("content"):
                         llm_content = msg["content"]
@@ -768,7 +903,7 @@ class ExecuteMixin:
                             _repair_tools = None
                         _resp = llm_client.chat(_fm, provider_id=effective_provider,
                                                 tools=_repair_tools, _intent=CHAT_TASK_REPAIR, _model_params=_agent_mp)
-                        _guard.add_tokens(_tokof(_resp))
+                        _guard.add_llm(_resp)
                         llm_content = _resp["choices"][0]["message"].get("content") or llm_content
                     except Exception:
                         # 收尾失败不得让整个请求失败（至少已有工具结果可展示）
@@ -793,7 +928,14 @@ class ExecuteMixin:
                 #   纯问答轮没有「剩余步骤」可言，还省评估器成本）；③ clarify 未触发——
                 #   澄清优先，等用户回答，绝不自动续；④ 续跑次数未满。评估器绝不抛异常，
                 #   判据解析失败 ⇒ verdict=None ⇒ decide 返不续跑（fail-safe 向停）。
-                if (_ac_cfg["enabled"] and not dry_run and _ac_tool_n > 0
+                # ★ 2026-10-22（米爸反馈3）：与 stream.py 同步 —— 「继续/接着」这类续跑意图轮
+                #   即使没调工具也评估一次（否则续跑机制在这些轮次上从未启动过）。
+                _cont_input = False
+                try:
+                    _cont_input = bool(self._is_continuation_input(user_input))
+                except Exception:
+                    _cont_input = False
+                if (_ac_cfg["enabled"] and not dry_run and (_ac_tool_n > 0 or _cont_input)
                         and not _clarify_req and _auto_continues < _ac_cfg["max"]):
                     # 本轮产出并进全量（收口/落库用全量；评估器只看本轮+工具史）
                     if llm_content:
@@ -803,26 +945,101 @@ class ExecuteMixin:
                         provider_id=effective_provider, agent_name=agent_def.name,
                         model_params=_agent_mp, guard=_guard)
                     _deadline_left = (_ac_deadline - time.time()) if _ac_deadline else None
+                    # ★ P1-1（2026-10-28）预算降级阈值（配置化，默认 0.7）+ 硬停线（0.95）。
+                    #   ★ 二次修正（conv 9730）：到 degrade 阈值**不再停** ⇒ 收紧续跑；
+                    #   只有到硬停线或真耗尽才停。语义与 stream.py **完全同构**。
+                    try:
+                        from core import config as _cfg_dr
+                        _degrade_ratio = float(_cfg_dr.get(
+                            "agent", "budget_degrade_ratio", 0.7) or 0.0)
+                        _hard_stop_ratio = float(_cfg_dr.get(
+                            "agent", "budget_hard_stop_ratio", 0.95) or 0.0)
+                    except Exception:
+                        _degrade_ratio = 0.0
+                        _hard_stop_ratio = 0.0
+                    # ★ P0-1（2026-10-28）验收驱动：与 stream.py **同构**接线。
+                    #   语义只在 autopilot._apply_todo_gate 写一份 —— 两处共用，
+                    #   绝不各写一份（各写一份必然错位）。
+                    #   fallback（无待办 / 开关关）⇒ 原样沿用评估器结论（逐字节兼容）。
+                    _verdict, _tg = self._apply_todo_gate(_verdict, conversation_id)
                     _cont, _why = _ac.decide(
                         _verdict, used=_auto_continues, max_used=_ac_cfg["max"],
                         seen_steps=_ac_seen_steps, deadline_left_s=_deadline_left,
-                        budget_left=_guard.budget_left())
+                        budget_left=_guard.budget_left(),
+                        budget_ratio=_guard.budget_ratio(),
+                        degrade_ratio=_degrade_ratio,
+                        hard_stop_ratio=_hard_stop_ratio)
+                    # ★ P1-1（2026-10-28）降级收尾：与 stream.py 同构
+                    if (not _cont) and ("降级收尾" in str(_why)):
+                        try:
+                            _rem = (_verdict or {}).get("remaining") or []
+                            _nt = _ac.build_degrade_notice(
+                                _rem, _guard.budget_ratio(),
+                                _hard_stop_ratio or _degrade_ratio)
+                            if _nt:
+                                llm_content = ((llm_content + _nt) if llm_content else _nt)
+                        except Exception:
+                            pass
                     if _cont:
                         _auto_continues += 1
                         _ac_seen_steps.append(str(_verdict.get("next_step") or ""))
                         # 续跑 = 崭新一轮 ReAct：本轮答复 + 续跑指令并进 messages。
                         # ⚠️ assistant 消息必须带 content（部分 provider 拒绝空 content）。
                         messages.append({"role": "assistant", "content": llm_content})
-                        messages.append({"role": "user",
-                                         "content": _ac.continuation_prompt(
-                                             user_input, _verdict, _auto_continues)})
+                        _next_instr = _ac.continuation_prompt(
+                            user_input, _verdict, _auto_continues)
+                        if "收紧续跑" in str(_why):
+                            _next_instr += (
+                                "\n\n【预算吃紧】token 预算已用 %.0f%%，"
+                                "只做上面这一步（以及它的直接后继），"
+                                "**不要再新开工程检索/包树遍历/大范围查询**；"
+                                "若该步需要用户确认，就把确认点讲清楚并停下。"
+                                % (_guard.budget_ratio() * 100))
+                        messages.append({"role": "user", "content": _next_instr})
                         llm_response = llm_client.chat(messages, provider_id=effective_provider,
                                                        tools=tools_def or None,
                                                        _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
-                        _guard.add_tokens(_tokof(llm_response))
+                        _guard.add_llm(llm_response)
                         msg = llm_response["choices"][0]["message"]
                         llm_content = msg.get("content") or ""
                         continue     # ← 外层循环顶：复位后开启下一轮 ReAct
+                # ★ P0-2（2026-10-28）harness 级强制闸：与 stream.py **同构**接线。
+                #   ⚠️ 位置：必须在 break **之前**（仍在 while@574 体内）——
+                #      break 之后已跳出循环，就不是"拦住不让结束"了。
+                #   语义唯一一份（IO 在 autopilot._harness_gate），两处不各写一份。
+                #   ① 有未通过验收的待办 ⇒ 不结束本轮，回灌失败明细、继续 ReAct
+                #   ② 连续阻断达上限 ⇒ 强制放行，且如实告知「未完成」
+                #   ③ 无待办 / 开关关 ⇒ 完全不介入（逐字节兼容 D-3）
+                try:
+                    _hgate = self._harness_gate(conversation_id, _harness_blocks,
+                                             prev_remaining=_harness_prev_rem,
+                                             stall_streak=_harness_stall)
+                except Exception:
+                    _hgate = {"block": False, "feedback": "", "force_release": False,
+                              "notice": "", "remaining": [], "blocks_used": _harness_blocks,
+                              "reason": "harness 闸异常 ⇒ 不介入", "failures": []}
+                if _hgate.get("block"):
+                    _harness_blocks = int(_hgate.get("blocks_used") or 0)
+                    _harness_prev_rem = list(_hgate.get("remaining") or [])
+                    _harness_stall = int(_hgate.get("stall_streak") or 0)
+                    if llm_content:
+                        _ac_full = ((_ac_full + "\n\n" + llm_content)
+                                    if _ac_full else llm_content)
+                    messages.append({"role": "assistant", "content": llm_content})
+                    messages.append({"role": "user", "content": _hgate.get("feedback") or ""})
+                    llm_response = llm_client.chat(messages, provider_id=effective_provider,
+                                                   tools=tools_def or None,
+                                                   _intent=CHAT_TASK_PROBE, _model_params=_agent_mp)
+                    _guard.add_llm(llm_response)
+                    msg = llm_response["choices"][0]["message"]
+                    llm_content = msg.get("content") or ""
+                    continue     # ← 外层循环顶：复位后开启下一轮 ReAct
+                if _hgate.get("force_release"):
+                    _harness_blocks = int(_hgate.get("blocks_used") or 0)
+                    _notice = _hgate.get("notice") or ""
+                    if _notice:
+                        llm_content = ((llm_content + "\n\n" + _notice)
+                                       if llm_content else _notice)
                 break                # ← 外层循环出口：收口只走一次
             # 收口：跨轮全量产出并回 llm_content（落库/返回/dry_run 校验用全量）
             if _ac_full:
@@ -889,8 +1106,7 @@ class ExecuteMixin:
                     "provider": llm_info["provider"],
                     "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
                     "sysml_views": sysml_views,
-                    "submitted_by": ((user or {}).get("display_name") or (user or {}).get("name") or "会话发起人")
-                                     if isinstance(user, dict) else "会话发起人",
+                    "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",
                     **self._build_rich_card(intent, retrieval, branch, user_input, provider_id),
                 }, ensure_ascii=False)
                 cursor = conn.execute(
@@ -902,22 +1118,17 @@ class ExecuteMixin:
                 _archive_artifacts(conn, conversation_id, msg_id, card_data, llm_content, intent,
                                    tool_docs=getattr(self, "_tool_sysml_docs", None))
                 self._tool_sysml_docs = []      # 已登记，防重复归档
+                self._tool_doc_pages = {}       # 分页累积状态同步清零
                 # CIA：变更影响分析记录（FR-CIA-3 每次分析结果快照落库，可追溯）
-                if intent == "impact":
-                    try:
-                        from repositories.impact_repo import ImpactRepo
-                        _cd = json.loads(card_data)
-                        ImpactRepo(conn).create_analysis(
-                            title=(_cd.get("change_source") or {}).get("name", user_input[:60]),
-                            change_source=(_cd.get("change_source") or {}).get("name", ""),
-                            params=_cd.get("params", {}),
-                            result=_cd,
-                            status="ok" if _cd.get("ok") is not False else "error",
-                            error_code=_cd.get("code", ""),
-                            conversation_id=conversation_id, message_id=msg_id,
-                            created_by="王工")
-                    except Exception:
-                        pass
+                # ★ 2026-11-04：改调**共享实现** `_archive_impact_analysis`，删掉此处的内联副本。
+                #   为什么（两处都是真问题）：
+                #   ① 内联版只在 `intent == "impact"` 时归档 ⇒ **CIA 错误引导卡**
+                #      （`{ok: false, code: ...}`，intent 可能不是 impact）永远不入库，
+                #      而共享版判据是 `intent=='impact' or ok is not None or impact_nodes is not None`
+                #      —— 失败引导同样要可追溯（FR-CIA-3 原文）。
+                #   ② 同一份写库逻辑存在两份，改一处必漏另一处（本仓反复出现的病）。
+                _archive_impact_analysis(conn, conversation_id, msg_id, card_data, user_input,
+                                         created_by=audit_user(user) if isinstance(user, dict) else "未登录")
 
                 # Update conversation
                 conn.execute(

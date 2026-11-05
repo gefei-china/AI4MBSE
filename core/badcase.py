@@ -19,6 +19,14 @@ from dataclasses import dataclass
 from typing import Callable, List, Optional
 
 from core.statemachine import get as _sm_get
+# 反馈词表单一真源（2026-10-29）：负反馈类型/严重度**不在本模块另存一份**。
+from core.feedback_types import (
+    NEGATIVE_QUALITY,
+    NEGATIVE_REVIEW_TYPES,
+    NEGATIVE_SEVERITY,
+)
+# 告警状态单一真源（2026-10-29）：未终结状态的取值域同样不在本模块另写一份。
+from core.alert_state import open_statuses_sql
 
 # #18 统一状态机：bad_case 三态机的唯一定义在 core/statemachine.py，
 # 本文件的所有 status 写入（triage 人工流转 / 复现重开）都必须过它校验 ——
@@ -77,15 +85,40 @@ _SQL_FEEDBACK = """
     SELECT id AS src_id,
            'msg:' || message_id AS subject,
            created_at AS seen_at,
-           '用户负向反馈·' || feedback_type AS title,
+           '用户负向反馈·' || COALESCE(NULLIF(quality, ''), feedback_type) AS title,
            COALESCE(NULLIF(context, ''), '(无补充说明)') AS detail
     FROM feedback
-    WHERE feedback_type IN ('modify', 'wrong', 'corrected')
+    WHERE (feedback_type IN ({review_types})
+           OR COALESCE(quality, '') IN ({quality_types}))
       AND created_at >= datetime('now', ?)
-"""
+""".format(
+    review_types=",".join("'%s'" % x for x in NEGATIVE_REVIEW_TYPES),
+    quality_types=",".join("'%s'" % x for x in NEGATIVE_QUALITY),
+)
 
-# 负向反馈分级：wrong/corrected 是明确的质量证词 ⇒ high；modify 是修订意见 ⇒ medium
-_FB_SEVERITY = {"wrong": "high", "corrected": "high", "modify": "medium"}
+# 负向反馈分级：wrong/corrected 是明确的质量证词 ⇒ high；modify / down ⇒ medium
+# ⚠️ 2026-10-29：词表改为从单一真源取（core/feedback_types.py），不再在本文件另写一份
+#    ——原先本文件与 core/online_eval.py 各存一份 NEGATIVE 词表，两份必然漂移。
+_FB_SEVERITY = dict(NEGATIVE_SEVERITY)
+
+# ── 告警未处置（2026-10-29）──
+# 动机：生产库 328 条告警 status **全是 'open'**，一条没被处理；其中
+#   「BadCase 积压（open≥5）」这条规则本身在报"坏例没人处理"——
+#   **告警只在响，没有变成可追踪的待办**。本判据把未处置告警纳入坏例主题，
+#   于是"该修什么"有地方可查。
+# 取未终结状态（open/acked/triaged）：fixed/verified 视为已闭环，不再是坏例。
+_SQL_ALERT = """
+    SELECT id AS src_id,
+           'alert:' || rule_id AS subject,
+           COALESCE(NULLIF(last_seen_at, ''), created_at) AS seen_at,
+           '告警未处置·' || rule_name AS title,
+           '指标 ' || metric || ' 实测 ' || actual || '（判据 ' || operator || ' ' || threshold || '），'
+               || '已命中 ' || COALESCE(hit_count, 1) || ' 次' AS detail
+    FROM alert_events
+    WHERE level IN ('critical', 'error', 'high')
+      AND status IN ({open_statuses})
+      AND COALESCE(created_at, '') >= datetime('now', ?)
+""".format(open_statuses=open_statuses_sql())
 
 
 def _detectors(include_probes: bool) -> List[DetectorSpec]:
@@ -97,6 +130,7 @@ def _detectors(include_probes: bool) -> List[DetectorSpec]:
                      _SQL_FEEDBACK),
         DetectorSpec("llm_truncated", "输出截断", "low",
                      _sql_llm_truncated(include_probes)),
+        DetectorSpec("alert_unhandled", "告警未处置", "high", _SQL_ALERT),
     ]
 
 
@@ -157,7 +191,10 @@ def collect_bad_cases(conn, *, apply: bool = False, kinds: Optional[List[str]] =
     out = {"ok": True, "enabled": bool(cfg.get("enabled")),
            "window_days": cfg.get("window_days"), "dry_run": not apply,
            "candidates": [], "plan": {"new": 0, "recur": 0, "stale": 0, "reopen": 0},
-           "summary": {"by_kind": {}, "total_events": 0}, "generated_at": ""}
+           "summary": {"by_kind": {}, "total_events": 0}, "generated_at": "",
+           # ★ 2026-10-29：判据面级失败**显式上报**（与 online_eval 同口径）。
+           #   非空 ⇒ 至少有一个判据面瘫了，"坏例变少"是假象，不可当"变好了"。
+           "failures": []}
     if not out["enabled"]:
         return out
     want = [d for d in _detectors(bool(cfg.get("include_probes")))
@@ -167,8 +204,16 @@ def collect_bad_cases(conn, *, apply: bool = False, kinds: Optional[List[str]] =
     for spec in want:
         try:
             rows = conn.execute(spec.sql, window_arg).fetchall()
-        except Exception:
-            continue    # 判据面缺表/缺列 ⇒ 该检测器无声跳过（与 alert_evaluator 同哲学）
+        except Exception as e:
+            # ★ 2026-10-29：**不再静默跳过**。
+            #   原实现 `except: continue` ⇒ 判据面 SQL 一旦写错（少表/少列/SQL 语法错），
+            #   该检测器**无声消失**，看板上的坏例数凭空变少，看起来像"最近没有坏例"——
+            #   实则整个判据面已经瘫了。这是"静默兜底把错误变成不可见"的典型。
+            #   同仓 `core/online_eval.py` 早就立了规矩（模块头："源级异常记入不吞——
+            #   静默跳过会让'采样器坏了'长得像'没有负反馈'"），此处此前与它不一致。
+            #   现与它同口径：记入 failures，由上层（evolution_report / 端点）暴露。
+            out["failures"].append("%s: %s: %s" % (spec.kind, type(e).__name__, str(e)[:160]))
+            continue
         groups = {}
         for r in rows:
             subj = _row_get(r, "subject") or ""

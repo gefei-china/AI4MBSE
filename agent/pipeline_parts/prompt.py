@@ -214,7 +214,12 @@ class PromptMixin:
             return ""
         content = best["content"]
         content = content.replace("{{ontology_profile}}", self._build_ontology_hint())
-        content = content.replace("{{user_input}}", str(user_input)[:2000])
+        # ★ 2026-10-27（截断清单 P0-C1）：**取消** `str(user_input)[:2000]`。
+        #   原实现把用户请求静默砍到 2000 字再注入模板 —— 而 user_input 本身已在
+        #   messages 里、也在总预算之内，这里再切一刀纯属"凭固定字符数砍高信号内容"。
+        #   实测：用户贴 V2 代码要求校验（12,476 字）时，模板段只剩前 16%，且**无任何标记**，
+        #   模型以为用户只给了这么点东西。现按原文注入，总闸（total_budget_*）兜底。
+        content = content.replace("{{user_input}}", str(user_input))
         content = content.replace("{{intent}}", intent)
         # 2026-09-17 S4：补齐模板声明过但此前未替换的占位符——种子模板
         # （database/seeds.py:170）声明的 variables 是 ["ontology_profile","linked_data_scope","output_schema"]，
@@ -323,6 +328,74 @@ class PromptMixin:
                 out.append(body)          # 标题行本身等无标题内容
         res = "\n".join(out).strip()
         return res if len(res) > cap else res + "…"
+
+    def _apply_role_manual_filter(self, role_text: str, ctx) -> str:
+        """P0-7（2026-10-26）：按本轮**实际暴露的 MCP 工具**裁剪 role 里的工具手册段。
+
+        实测依据（生产快照 + 真实 execute 链路）：
+          · `智源对接agent` 的 `system_prompt` = **14,538 字符 / 8,995 tok**，
+            其中 **14,531 字符（100%）是 58 个 MCP 工具的手册**，非工具叙述仅 7 字符；
+          · 其余 16 个 active Agent 的手册占比**全部为 0%**（不受本改动影响）；
+          · 上一轮已把 MCP 工具按需暴露到 `mcp_min_keep=8` ⇒ 手册里 50 个工具的说明
+            对应的工具**本轮根本没进 tools payload** ⇒ 纯噪音；
+          · 生产库该 MCP server `status='offline'` ⇒ 8,987 tok **100% 死重**。
+
+        保守设计（任一情形 ⇒ 逐字节原样返回）：
+          · 开关 `context_audit.role_manual_filter` 关闭（**默认关闭**）
+          · role 里未识别到任何"工具名独占行首"的手册段
+          · 本轮暴露集为空（不能把"没算出来"当成"全删"）
+          · 切分拼回不等于原文（防正则吃字符）
+
+        ⚠️ 为什么默认关闭：这是**改模型可见内容**，风险等级高于前几项（那些只改注入量）。
+           必须先在生产看到 token 实际下降且任务正确率不掉，再逐步打开。
+        """
+        try:
+            from core import config as _cfg
+            if not bool(_cfg.as_bool("context_audit", "role_manual_filter", False)):
+                return role_text
+            _min_keep = int(_cfg.get("context_audit", "mcp_min_keep", 8) or 0)
+            _top_n = int(_cfg.get("context_audit", "mcp_top_n", 0) or 0)
+        except Exception:
+            return role_text
+        if not role_text:
+            return role_text
+        try:
+            bound = self.registry.get_bound_mcp(ctx.intent)
+        except Exception:
+            return role_text
+        if not bound:
+            return role_text          # 该 Agent 不涉及 MCP ⇒ 零影响（其余 16 个 Agent 走这里）
+        try:
+            from agent.role_manual_filter import (
+                collect_mcp_tool_names, compute_exposed, filter_role_manual,
+            )
+            all_names = collect_mcp_tool_names(bound)
+            if not all_names:
+                return role_text
+            exposed, _any_meta = compute_exposed(
+                bound, ctx.user_input, _min_keep, _top_n)
+            out, stats = filter_role_manual(role_text, all_names, exposed)
+        except Exception:
+            return role_text          # 任何异常 ⇒ 不裁（观测失败绝不改内容）
+        # 归因：让"裁了多少"可观测（判断开关该不该打开的**唯一依据**）
+        # ⚠️ `record_blocks(extra=...)` 的值**只支持数值**（内部按累加计数处理，
+        #    字符串会被记成 1）。故 mode 用 `mode_xxx: 1` 形式编码，不要塞字符串 ——
+        #    否则落库后只剩一个 `1`，诊断时看不出裁没裁。
+        try:
+            from agent.context_audit import record_blocks
+            _mode = stats.get("mode")
+            if _mode in ("applied", "nothing_to_drop", "no_exposed"):
+                record_blocks({}, phase="role_manual", extra={
+                    "role_manual_" + _mode: 1,
+                    "role_manual_segments": stats.get("segments"),
+                    "role_manual_manual": stats.get("manual"),
+                    "role_manual_kept": stats.get("kept"),
+                    "role_manual_dropped_chars": stats.get("dropped_chars"),
+                    "role_manual_exposed": len(exposed),
+                })
+        except Exception:
+            pass
+        return out
 
     def _build_output_rules(self) -> str:
         """输出规范段（两条路径共用同一份文案）。"""
