@@ -61,28 +61,34 @@ def reconcile_feedback_states(conn, *, apply: bool = True) -> dict:
         out["skipped_no_col"] = True
         return out
     rows = [dict(r) for r in conn.execute(
-        "SELECT id, message_id, quality, feedback_type FROM feedback "
+        "SELECT id, message_id, quality, feedback_type, created_at FROM feedback "
         "WHERE state='new' AND COALESCE(message_id, 0)>0 "
         "AND (COALESCE(quality,'')='down' "
         "OR COALESCE(feedback_type,'') IN ('modify','wrong','corrected')) "
         "ORDER BY id LIMIT 200").fetchall()]
     if not rows:
         return out
-    mids = [r["message_id"] for r in rows]
-    ph = ",".join("?" for _ in mids)
-    linked = {}
+    # ★ 2026-11-06 修（端到端实跑抓到）：原实现只按 message_id 匹配、按 id 取第一条，
+    #   **不校验时间先后** ⇒ 新反馈会挂到比它更早的历史采样项上（实测 feedback#121
+    #   created 07:34 被 link 到 queue#50 created 05:51），用户看到「已采样」但实际
+    #   它自己的采样还没发生，且时间线倒挂（消费早于创建）。
+    #   修法：逐条反馈只认**它创建之后**产生的第一个队列项。
+    linked = {}          # feedback_id -> queue_id
     try:
-        for q in conn.execute(
-                "SELECT id, message_id FROM online_eval_queue "
-                "WHERE message_id IN (%s) ORDER BY id" % ph, tuple(mids)).fetchall():
-            linked.setdefault(q["message_id"], q["id"])
+        for r in rows:
+            q = conn.execute(
+                "SELECT id FROM online_eval_queue WHERE message_id=? "
+                "AND created_at>=? ORDER BY created_at, id LIMIT 1",
+                (r["message_id"], r.get("created_at") or "")).fetchone()
+            if q:
+                linked[r["id"]] = q[0]
     except Exception as e:
         out["items"].append({"error": str(e)[:120]})
         return out
     from repositories.conversation_repo import ConversationRepo
     repo = ConversationRepo(conn)
     for r in rows:
-        qid = linked.get(r["message_id"])
+        qid = linked.get(r["id"])
         if not qid:
             continue
         out["linked"] += 1

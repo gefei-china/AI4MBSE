@@ -57,7 +57,7 @@
     var rows = items.map(function(x){
       var st = x.state||'new';
       return '<tr>'
-        + '<td style="font-size:12.5px;white-space:nowrap;">'+_esc(String(x.created_at||'').slice(5,16))+'</td>'
+        + '<td style="font-size:12.5px;white-space:nowrap;">'+_esc(String(x.created_at_local||x.created_at||'').slice(5,16))+'</td>'
         + '<td><b>feedback#'+_esc(x.id)+'</b><div style="font-size:12px;color:var(--mut);">消息 #'+_esc(x.message_id)+'</div></td>'
         + '<td>'+(x.quality==='down'?'👎 有问题':(x.quality==='up'?'👍 有帮助':_esc(x.feedback_type||'评审')))+'</td>'
         + '<td><span class="st '+_cls(st)+'">'+_esc(labels[st]||st)+'</span></td>'
@@ -98,7 +98,7 @@
       + '</div><div class="pb">';
     h += '<div style="font-size:13px;color:var(--mut);margin-bottom:8px;">消息 #'+_esc(it.message_id)
       + ' · 会话 #'+_esc(it.conversation_id||'—')+' · '+_esc(it.quality||it.feedback_type||'')
-      + ' · 提交于 '+_esc(it.created_at||'')+'</div>';
+      + ' · 提交于 '+_esc(it.created_at_local||it.created_at||'')+'</div>';
     h += '<div style="font-size:13.5px;font-weight:500;margin-bottom:6px;">处理时间线（仅列真实发生的事）</div>';
     h += tl.map(function(x){
       return '<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);">'

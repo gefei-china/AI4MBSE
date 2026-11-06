@@ -6,6 +6,7 @@
 """
 import ast
 import io
+import json
 import os
 import re
 import sys
@@ -168,6 +169,128 @@ check("G9 采样作业执行后调用回填（异步窗口补丁）",
       "reconcile_feedback_states as _rec" in jh and "_rec(conn, apply=True)" in jh)
 check("G9 作业回执带 feedback_reconciled（可观测）",
       '"feedback_reconciled": rec' in jh)
+
+# ── G10 提案来源合并（2026-11-06 execute 实跑抓到的可感知性断点）──
+#   事故：feedback#119 已被采样入队（state=sampled, link=online_eval#50），
+#        但 5 条同指纹 auto 提案的来源仍停在旧的 [113,115] ⇒ 追踪页答不出
+#        「我的反馈影响了哪条提案」。根因是 insert_proposal 指纹冲突时只
+#        `skipped += 1`，不合并来源。修法：冲突时对来源取并集（只增不减）。
+def _g10_ok(code):
+    return ('if not inserted and "source_feedback_ids" in _cols:' in code
+            and '_merged = sorted(set(_old) | set(_new))' in code
+            and 'UPDATE config_proposals SET source_feedback_ids=?' in code)
+
+
+check("G10 冲突分支合并来源反馈（并集，不重开已决提案）", _g10_ok(pr))
+
+_i = pr.find("def _parse_ids(")
+_j = pr.find("\nclass ProposalRepo", _i)
+check("G10 _parse_ids 可定位（锚点未漂移）", _i > 0 and _j > _i, "i=%d j=%d" % (_i, _j))
+if _i > 0 and _j > _i:
+    _ns = {"json": json}
+    exec(pr[_i:_j], _ns)
+    _pid = _ns["_parse_ids"]
+    check("G10 _parse_ids 兼容三种历史形态（NULL / '' / '[113, 115]'）",
+          _pid(None) == [] and _pid("") == [] and _pid("[]") == []
+          and _pid("[113, 115]") == [113, 115], "probe=%s" % _pid("[113, 115]"))
+    check("G10 _parse_ids 去重且稳定排序（幂等）",
+          _pid("[115, 113, 115]") == [113, 115], "probe=%s" % _pid("[115, 113, 115]"))
+    check("G10 _parse_ids 非法输入降级为空表（不抛）",
+          _pid("not-json") == [] and _pid("[\"x\"]") == [], "probe=%s" % _pid("not-json"))
+
+_mut4 = pr.replace('if not inserted and "source_feedback_ids" in _cols:',
+                   'if False:', 1)
+check("M4 变异锚点命中", _mut4 != pr)
+check("M4 去掉合并分支后 G10 判据必须判红", not _g10_ok(_mut4))
+
+# ── G11 时间基准一致（2026-11-06 execute 实跑抓到的缺陷）──
+#   事故：feedback#120 于本地 15:25:02 点踩，created_at=07:25:02（DDL 默认
+#        CURRENT_TIMESTAMP 是 UTC），而 P0 新增的 consumed_at 用 time.strftime
+#        （本地）⇒ 同一行出现 8 小时错位，时间线看起来「先消费、后创建」。
+#   修法：存储一律 UTC（core/timefmt.utc_now_str），展示层补 *_local 并行字段
+#        （不覆盖原值，故 stuck / 窗口等按 UTC 比较的判据不受影响）。
+tf = src("core/timefmt.py")
+repo_src = src("repositories/conversation_repo.py")
+mfb2 = src("static/js/mods/53-my-feedback.js")
+evr2 = src("static/js/mods/47-evolution-report.js")
+er2 = src("core/evolution_report.py")
+
+check("G11 timefmt 提供 UTC 写入与本地展示两个入口",
+      "def utc_now_str(" in tf and "def utc_to_local_str(" in tf
+      and "def attach_local_times(" in tf)
+check("G11 写库时间走 UTC（_now_str 不再用本地 strftime）",
+      "utc_now_str()" in repo_src and "return _t.strftime" not in repo_src)
+check("G11 时区偏移用 astimezone().utcoffset()（不用两次 now 求差）",
+      "astimezone().utcoffset()" in tf and "now() - datetime.now(timezone.utc)" not in tf)
+check("G11 列表与详情出口都补 *_local",
+      repo_src.count("attach_local_times(") >= 2,
+      "occurrences=%d" % repo_src.count("attach_local_times("))
+check("G11 周报 items 带 *_local", '"created_at_local"' in er2)
+check("G11 前端优先显示 *_local（反馈页 + 周报）",
+      "created_at_local||x.created_at" in mfb2
+      and "created_at_local||it.created_at" in mfb2
+      and "created_at_local||x.created_at" in evr2)
+
+
+def _g11_ok(code):
+    return "astimezone().utcoffset()" in code
+
+
+_mut5 = tf.replace("astimezone().utcoffset()", "None")
+check("M5 变异锚点命中", _mut5 != tf)
+check("M5 去掉精确偏移后 G11 判据必须判红", not _g11_ok(_mut5))
+
+# ── G12 反馈→采样关联的时间先后约束（2026-11-06 实跑抓到的倒挂）──
+#   事故：feedback#121 created 07:34 被 link 到 queue#50 created 05:51（更早），
+#        用户看到「已采样」但它自己的采样还没发生，时间线出现「消费早于创建」。
+#   根因：reconcile 只按 message_id 匹配、按 id 取第一条，不校验时间先后。
+#   修法：逐条反馈只认「它创建之后」的第一个队列项；timeline 优先按 link_id 精确取。
+tick3 = src("core/evolution_tick.py")
+repo3 = src("repositories/conversation_repo.py")
+
+check("G12 reconcile 按 created_at 限定队列项（不挂历史采样）",
+      "AND created_at>=? ORDER BY created_at, id LIMIT 1" in tick3)
+check("G12 reconcile 查询带出 created_at 供比较",
+      "feedback_type, created_at FROM feedback" in tick3)
+check("G12 timeline 优先按 link_id 精确取队列项",
+      'FROM online_eval_queue WHERE id=?' in repo3
+      and '(row.get("link_kind") or "") == "online_eval"' in repo3)
+check("G12 timeline 回退也必须限定 created_at>=（防倒挂）",
+      "FROM online_eval_queue WHERE message_id=? AND created_at>=?" in repo3)
+
+
+def _g12_ok(code):
+    return "AND created_at>=? ORDER BY created_at, id LIMIT 1" in code
+
+
+_mut6 = tick3.replace("AND created_at>=? ORDER BY created_at, id LIMIT 1",
+                      "ORDER BY id LIMIT 1")
+check("M6 变异锚点命中", _mut6 != tick3)
+check("M6 去掉时间约束后 G12 判据必须判红", not _g12_ok(_mut6))
+
+# ── G13 时间线顺序语义（2026-11-06 实跑抓到的「看起来倒挂」）──
+#   `consumed_at` 是**回填记账**时刻，必然晚于队列项 created_at（采样是"事"、
+#   回填是"账"）。原实现把 consumed 排在队列项之前 ⇒ #121 显示
+#   「consumed 15:42 → sampled 15:40」。修法：顺序固定为
+#   创建 → 进入评测队列 → 状态回填 → 坏例 → 关联。
+_tl_src = repo3[repo3.find("def feedback_timeline"):]
+_tl_src = _tl_src[:_tl_src.find("\n    def ")]
+check("G13 时间线含队列项与状态回填两个事件",
+      "进入评测队列" in _tl_src and "状态回填：" in _tl_src)
+check("G13 队列项排在状态回填之前（记账晚于事实）",
+      _tl_src.find("进入评测队列") < _tl_src.find("状态回填："),
+      "queue@%d, consumed@%d" % (_tl_src.find("进入评测队列"), _tl_src.find("状态回填：")))
+
+
+def _g13_ok(code):
+    return 0 <= code.find("进入评测队列") < code.find("状态回填：")
+
+
+_mut7 = (_tl_src.replace("状态回填：", "@@TMP@@")
+         .replace("进入评测队列", "状态回填：")
+         .replace("@@TMP@@", "进入评测队列"))
+check("M7 变异锚点命中", _mut7 != _tl_src)
+check("M7 两事件顺序颠倒后 G13 判据必须判红", not _g13_ok(_mut7))
 
 print("=" * 70)
 print("PASS %d / FAIL %d" % (len(PASS), len(FAIL)))

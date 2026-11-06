@@ -129,7 +129,7 @@
       if ((ft.items || []).length) {
         h += '<table class="t"><tr><th>时间</th><th>编号</th><th>信号</th><th>状态</th><th>当前关联</th></tr>'
           + ft.items.map(x => `<tr>
-              <td style="font-size:12.5px;white-space:nowrap;">${esc(String(x.created_at||'').slice(5,16))}</td>
+              <td style="font-size:12.5px;white-space:nowrap;">${esc(String(x.created_at_local||x.created_at||'').slice(5,16))}</td>
               <td>feedback#${esc(x.id)} <span style="color:var(--mut);font-size:12px;">消息 #${esc(x.message_id)}</span></td>
               <td>${esc(x.quality || '—')}</td>
               <td><span class="st ${x.state==='verified'?'ok':'w'}">${esc(x.state||'new')}</span></td>

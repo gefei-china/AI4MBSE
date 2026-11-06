@@ -20,6 +20,30 @@ _COLS = ("rule", "target_section", "target_key", "current_value", "proposed_valu
          "rationale", "evidence_json", "fingerprint", "status")
 
 
+def _parse_ids(v) -> list:
+    """解析 `source_feedback_ids` 列 → 排序去重的 int 列表。
+
+    历史行有三种形态：NULL / '' / '[]' / '[113, 115]'。
+    只做 JSON 解析与类型归一，解析失败即视为空表 —— 这是**数据形态降级**，
+    不是掩盖错误（本列是辅助溯源，缺了不影响提案本身是否成立）。
+    """
+    if not v:
+        return []
+    try:
+        raw_v = json.loads(v) if isinstance(v, str) else v
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(raw_v, list):
+        return []
+    out = set()
+    for x in raw_v:
+        try:
+            out.add(int(x))
+        except (ValueError, TypeError):
+            continue
+    return sorted(out)
+
+
 class ProposalRepo(BaseRepo):
     """config_proposals CRUD + 指纹去重 + 三态裁决。"""
 
@@ -74,6 +98,24 @@ class ProposalRepo(BaseRepo):
         row = self.one("SELECT * FROM config_proposals WHERE fingerprint=?", (fp,))
         if not row:                                    # 理论上不可达（INSERT 即成功或冲突）
             return {"fingerprint": fp}, False
+        # ★ 2026-11-06 修（端到端实跑抓到的可感知性断点）：
+        #   指纹冲突时原实现只让调用方 `skipped += 1`，**不合并来源反馈** ⇒
+        #   用户新点的一条负反馈虽然已被采样入队（state=sampled），却永远不出现在
+        #   任何提案的 source_feedback_ids 里 ⇒ 追踪页只能显示"已进下游"，
+        #   答不出"我的反馈到底影响了哪条提案"。
+        #   实测：feedback#119 已 sampled 且 link 到 online_eval #50，
+        #        而 5 条 auto 提案的来源仍是旧的 [113, 115]。
+        #   修法：冲突时对来源取 **并集**（forward-only 只增不减；不重开已决提案、
+        #        不改 proposed_value，因此不破坏指纹去重本身）。
+        if not inserted and "source_feedback_ids" in _cols:
+            _old = _parse_ids(row.get("source_feedback_ids"))
+            _new = _parse_ids(draft.get("source_feedback_ids"))
+            _merged = sorted(set(_old) | set(_new))
+            if _merged != _old:
+                self.execute(
+                    "UPDATE config_proposals SET source_feedback_ids=? WHERE id=?",
+                    (json.dumps(_merged, ensure_ascii=False), row["id"]))
+                row = self.one("SELECT * FROM config_proposals WHERE id=?", (row["id"],))
         return row, inserted
 
     def decide_proposal(self, proposal_id: int, decision: str, note: str = "",

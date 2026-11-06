@@ -881,6 +881,80 @@ def _migrate_agent_archive_p23(conn):
           "已建立（P2-3，死路记忆；只记录不切换生效版本）")
 
 
+def _migrate_feedback_consumed_at_utc(conn):
+    """2026-11-06：把 feedback.consumed_at 的历史值（本地时间）校正为 UTC。
+
+    背景（execute 模式端到端实跑抓到的缺陷）：P0 首版 `advance_feedback_state`
+    用 `time.strftime` 写 consumed_at（**本地**），而 `feedback.created_at` 的
+    DDL 默认 `CURRENT_TIMESTAMP`（SQLite = **UTC**）⇒ 同一行差一个时区偏移，
+    时间线看起来「先消费、后创建」。实测 feedback#120：
+      created_at=07:25:02(UTC)、consumed_at=15:25:13(本地)，本地真实时间 15:25。
+
+    判据为什么可以直接用「非空」：`consumed_at` 是本次 P0 才新增的列，
+    迁移前**所有非空值都是本地时间**，无需猜时间窗（用时间窗反而会误判
+    "消费发生在 8 小时前"的正常行）。
+
+    安全：只更新 `datetime()` 能解析的行 —— 否则非法值会被写成 NULL（丢数据）。
+    幂等：settings 打标记，重复启动不再重复减偏移。
+    """
+    key = "migrate.feedback_consumed_at_utc"
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(feedback)")}
+        if "consumed_at" not in cols:
+            return
+        if conn.execute("SELECT 1 FROM settings WHERE key=?", (key,)).fetchone():
+            return
+        from core.timefmt import local_to_utc_sql_offset
+        off = local_to_utc_sql_offset()
+        n = conn.execute(
+            "UPDATE feedback SET consumed_at=datetime(consumed_at, ?) "
+            "WHERE COALESCE(consumed_at,'')<>'' AND datetime(consumed_at) IS NOT NULL",
+            (off,)).rowcount
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, description, updated_at) "
+            "VALUES (?,?,?,datetime('now','localtime'))",
+            (key, "1", "feedback.consumed_at 已由本地时间校正为 UTC（offset=%s）" % off))
+        conn.commit()
+        print("[init_db] 迁移: feedback.consumed_at 校正为 UTC %d 行（offset=%s）" % (n, off))
+    except Exception as e:                       # noqa: BLE001
+        print("[init_db] 迁移 feedback.consumed_at 失败（不阻断启动）：%s" % str(e)[:160])
+
+
+def _migrate_feedback_link_sanity(conn):
+    """2026-11-06：解绑「link 指向早于本条反馈创建时间」的错误关联（幂等自愈）。
+
+    背景：`reconcile_feedback_states` 早期版本只按 message_id 匹配、取 id 最小的
+    队列项，**不校验时间先后** ⇒ 新反馈被挂到历史采样上。实测：
+      feedback#121 created 07:34:11 → link 到 online_eval#50 created 05:51:43
+    ⇒ 追踪页显示「已采样」但实际它自己的采样尚未发生，时间线出现
+      「消费早于创建」的倒挂。
+
+    代码侧已修（门禁 G12 锁住「只认本条创建之后的队列项」）；本迁移纠正
+    **已产生的错数据**：清 link 与 consumed_*，state 回到 'new'，留 last_note
+    说明原因 —— 属**数据纠正**而非状态机倒退；下一轮 tick 会重新采样并正确关联。
+
+    幂等：解绑后 link 为空，不再命中本条件。
+    """
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(feedback)")}
+        if "link_id" not in cols:
+            return
+        n = conn.execute(
+            "UPDATE feedback SET "
+            "last_note='原关联指向早于本条创建的采样项，已解绑（时间基准校正）；等待重新采样', "
+            "link_kind='', link_id='', consumed_at='', consumed_by='', state='new' "
+            "WHERE COALESCE(link_kind,'')='online_eval' AND COALESCE(link_id,'')<>'' "
+            "AND EXISTS (SELECT 1 FROM online_eval_queue q "
+            "            WHERE CAST(q.id AS TEXT)=feedback.link_id "
+            "              AND COALESCE(q.created_at,'')<COALESCE(feedback.created_at,''))"
+        ).rowcount
+        conn.commit()
+        if n:
+            print("[init_db] 迁移: 解绑 %d 条指向更早采样项的错误关联" % n)
+    except Exception as e:                       # noqa: BLE001
+        print("[init_db] 迁移 feedback.link 自愈失败（不阻断启动）：%s" % str(e)[:160])
+
+
 def _migrate_online_eval_tables(conn):
     """P0-b（2026-10-25）生产回流两表：online_eval_queue + eval_gen_labels。幂等建表。
 

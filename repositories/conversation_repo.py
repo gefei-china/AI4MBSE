@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 
 from repositories.base import BaseRepo
+from core.timefmt import attach_local_times, utc_to_local_str  # noqa: E402  (展示层时间转换)
 
 #: 「该会话属于用户 u」判定的**放行域**。
 #: ⚠️ 口径来源 = 2026-10-13 与米爸确认的三条（勿擅改，改前先看门禁
@@ -441,6 +442,8 @@ class ConversationRepo(BaseRepo):
             from core.feedback_types import FEEDBACK_STATE_LABELS
             r["state_label"] = FEEDBACK_STATE_LABELS.get(r.get("state") or "new",
                                                           r.get("state") or "new")
+            # 展示层：补 *_local 供前端显示墙钟时间；原列保持 UTC 不动（幂等）
+            attach_local_times(r)
         return out
 
     def get_feedback_for_creator(self, fb_id: int, created_by: str):
@@ -451,7 +454,7 @@ class ConversationRepo(BaseRepo):
                        (int(fb_id), created_by))
         if row and "state" not in self._fb_cols(self.conn):
             row["state"] = "new"
-        return row
+        return attach_local_times(row) if row else row
 
     def advance_feedback_state(self, fb_id: int, target: str, *, note: str = "",
                                actor: str = "", link_kind: str = "", link_id: str = ""):
@@ -480,38 +483,63 @@ class ConversationRepo(BaseRepo):
         return {"ok": True, "from": cur, "to": target, "id": int(fb_id)}
 
     def feedback_timeline(self, row: dict) -> list:
-        """按真实数据拼时间线（不臆造事件）：创建 → 消费 → 下游采样/坏例 → 当前关联。"""
+        """按真实数据拼时间线（不臆造事件），顺序 = 事件**发生**的先后：
+
+            创建 → 进入评测队列 → 状态回填 → 坏例 → 当前关联
+
+        ★ 2026-11-06 修（端到端实跑抓到的倒挂）：`consumed_at` 是**回填记账**时刻，
+          必然晚于队列项 `created_at`（采样是"事"，回填是"账"）。原实现把 consumed
+          排在队列项之前 ⇒ 时间线看起来「消费早于采样」（实测 #121：
+          consumed 15:42 排在 queue#83 created 15:40 之前）。记账号必须排在其后。
+        """
         out = []
         mid = row.get("message_id") or 0
-        out.append({"at": row.get("created_at") or "", "kind": "created",
+        out.append({"at": row.get("created_at_local") or row.get("created_at") or "",
+                    "kind": "created",
                     "title": "收到反馈 #%s" % row.get("id"),
                     "detail": "%s · %s" % (row.get("quality") or row.get("feedback_type") or "",
                                           row.get("signal_kind") or "review")})
-        for k, label in (("consumed_at", "consumed"), ("checked_at", "checked")):
-            if row.get(k):
-                out.append({"at": row[k], "kind": k,
-                            "title": "进入下游：%s" % (row.get("link_kind") or label),
-                            "detail": row.get("last_note") or row.get("consumed_by") or ""})
-                break
         if mid:
             try:
-                qs = self.rows(
-                    "SELECT id, sample_reason, status, auto_score, created_at "
-                    "FROM online_eval_queue WHERE message_id=? ORDER BY id", (mid,))
+                # 优先按 link_id 精确取「本条反馈关联的那一项」；回退也必须限定
+                # created_at>=本反馈创建时间 —— 否则同消息的历史采样项会被列进来。
+                if (row.get("link_kind") or "") == "online_eval" and row.get("link_id"):
+                    try:
+                        qs = self.rows(
+                            "SELECT id, sample_reason, status, auto_score, created_at "
+                            "FROM online_eval_queue WHERE id=?", (int(row["link_id"]),))
+                    except (TypeError, ValueError):
+                        qs = []
+                else:
+                    qs = self.rows(
+                        "SELECT id, sample_reason, status, auto_score, created_at "
+                        "FROM online_eval_queue WHERE message_id=? AND created_at>=? "
+                        "ORDER BY created_at, id", (mid, row.get("created_at") or ""))
                 for q in qs:
-                    out.append({"at": q.get("created_at") or "", "kind": "sampled",
+                    out.append({"at": (utc_to_local_str(q.get("created_at")) or ""),
+                                "kind": "sampled",
                                 "title": "进入评测队列 #%s" % q.get("id"),
                                 "detail": "%s · %s%s" % (
                                     q.get("sample_reason") or "", q.get("status") or "",
-                                    (" · 自动分 %s" % q["auto_score"]) if q.get("auto_score") is not None else "")})
+                                    (" · 自动分 %s" % q["auto_score"])
+                                    if q.get("auto_score") is not None else "")})
             except Exception:
                 pass
+        # 状态回填排在队列项之后（记账晚于事实）
+        for k, label in (("consumed_at", "consumed"), ("checked_at", "checked")):
+            if row.get(k):
+                out.append({"at": row.get(k + "_local") or row[k], "kind": k,
+                            "title": "状态回填：%s" % (row.get("link_kind") or label),
+                            "detail": row.get("last_note") or row.get("consumed_by") or ""})
+                break
+        if mid:
             try:
                 bs = self.rows(
                     "SELECT id, kind, status, occurrences, first_seen_at FROM bad_cases "
                     "WHERE subject=? ORDER BY id", ("msg:%s" % mid,))
                 for b in bs:
-                    out.append({"at": b.get("first_seen_at") or "", "kind": "badcase",
+                    out.append({"at": (utc_to_local_str(b.get("first_seen_at")) or ""),
+                                "kind": "badcase",
                                 "title": "记为坏例 #%s" % b.get("id"),
                                 "detail": "%s · %s · 复现 %s 次" % (
                                     b.get("kind") or "", b.get("status") or "",
@@ -519,17 +547,24 @@ class ConversationRepo(BaseRepo):
             except Exception:
                 pass
         if row.get("link_kind") and row.get("link_id"):
-            out.append({"at": row.get("consumed_at") or "", "kind": "linked",
+            out.append({"at": row.get("consumed_at_local") or row.get("consumed_at") or "",
+                        "kind": "linked",
                         "title": "当前关联：%s #%s" % (row["link_kind"], row["link_id"]),
                         "detail": row.get("last_note") or ""})
         if len(out) == 1:
             out.append({"at": "", "kind": "pending",
                         "title": "尚未进入任何下游",
-                        "detail": "当前无自动调度器；需人工触发采样，或开启 evolution.tick_enabled"})
+                        "detail": "当前无自动调度器；需人工触发采样，或开启 evolution.tick.enabled"})
         return out
 
-
 def _now_str() -> str:
-    import time as _t
-    return _t.strftime("%Y-%m-%d %H:%M:%S")
+    """写库时间串 —— **UTC**。
+
+    ★ 2026-11-06 修：原实现用 `time.strftime`（本地时间），而 `feedback.created_at`
+      的 DDL 默认 `CURRENT_TIMESTAMP` 是 UTC ⇒ 同一行出现 8 小时错位
+      （实测 feedback#120：created 07:25 / consumed 15:25）。
+      统一走 core.timefmt，与既有列同源。展示层由 `attach_local_times` 转本地。
+    """
+    from core.timefmt import utc_now_str
+    return utc_now_str()
 

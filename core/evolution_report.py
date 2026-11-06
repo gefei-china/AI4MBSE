@@ -775,7 +775,11 @@ def build_feedback_trace(conn: sqlite3.Connection, s: dict) -> dict:
             out["consumed"] += 1
         elif str(r.get("created_at") or "") < stuck_cut:
             out["stuck"] += 1
+    # ★ 2026-11-06：补 *_local 供前端显示墙钟时间（原列仍 UTC，stuck 判据不变）
+    from core.timefmt import utc_to_local_str as _u2l
     out["items"] = [{
+        "created_at_local": _u2l(r.get("created_at")),
+        "consumed_at_local": _u2l(r.get("consumed_at")),
         "id": r.get("id"), "message_id": r.get("message_id"),
         "quality": r.get("quality") or "", "state": r.get("state"),
         "created_at": r.get("created_at") or "",
