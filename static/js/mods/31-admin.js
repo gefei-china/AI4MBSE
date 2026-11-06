@@ -1386,23 +1386,37 @@ async function loadConfigHistory(){
       box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">暂无配置变更（变更须经 HIL 批准，见 core/config_promotion.py）</div>';
       return;
     }
-    box.innerHTML = `<table class="t"><tr><th>时间</th><th>配置项</th><th>旧值 → 新值</th><th>来源</th><th>效果</th></tr>` +
+    box.innerHTML = `<table class="t"><tr><th>时间</th><th>配置项</th><th>旧值 → 新值</th><th>来源</th><th>效果</th><th>操作</th></tr>` +
       rows.map(h=>{
         const v = h.effect_verdict || '';
         const cls = CFG_EFFECT_CLS[v] || 'g';
         const lbl = CFG_EFFECT_LABEL[v] || v;
         const tip = h.effect_detail ? ` title="${escMd(h.effect_detail)}"` : '';
+        const checked = h.effect_checked_at ? `<div style="font-size:11.5px;color:var(--mut);">判定于 ${escMd(String(h.effect_checked_at).slice(5,16))}</div>` : '';
+        const canRollback = (h.applied !== 0 && h.applied !== false);
         return `<tr>
           <td style="font-size:12.5px;">${escMd(String(h.applied_at||'').slice(5,16))}</td>
           <td><b>${escMd(h.section||'')}.${escMd(h.key||'')}</b></td>
           <td style="font-size:12.5px;">${escMd(String(h.old_value||'').slice(0,18))} → <b>${escMd(String(h.new_value||'').slice(0,18))}</b></td>
           <td style="font-size:12px;color:var(--mut);">${escMd(h.source||'')}${h.applied_by?'·'+escMd(h.applied_by):''}</td>
-          <td><span class="st ${cls}"${tip}>${escMd(lbl)}</span></td>
+          <td><span class="st ${cls}"${tip}>${escMd(lbl)}</span>${checked}</td>
+          <td>${canRollback ? `<button class="btn sm red" onclick="requestConfigRollback(${Number(h.id)})">回滚</button>` : '<span style="font-size:12px;color:var(--mut);">未应用</span>'}</td>
         </tr>`;
       }).join('') + '</table>';
   }catch(e){
     box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">台账加载失败</div>';
   }
+}
+// ★ 2026-11-06 P2：回滚入口。后端 POST /api/config/rollback 已存在，
+//   它只会把请求放进 HIL 待批准队列（config_rollback），**批准后才真正回滚**。
+async function requestConfigRollback(historyId){
+  if(!confirm('确认对该条台账发起回滚？将进入 HIL 待批准队列，批准后才真正生效。')) return;
+  try{
+    const d = await api('/api/config/rollback', {method:'POST', body: JSON.stringify({history_id: historyId})});
+    if(!d || d.ok===false){ toast('回滚申请失败：'+((d&&d.error)||'未知')); return; }
+    toast('已入 HIL 待批准队列' + (d.confirmation_id ? ('（确认单 #'+d.confirmation_id+'）') : ''));
+    loadConfigHistory();
+  }catch(e){ toast('回滚申请失败：'+((e&&e.message)||'请重试')); }
 }
 async function runConfigEffectCheck(){
   try{

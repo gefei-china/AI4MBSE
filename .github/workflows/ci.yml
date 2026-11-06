@@ -658,6 +658,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_memory_tier.py
 
+      - name: Guard 记忆作用域隔离（22 项）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_scope_isolation.py
+
+      - name: Guard 自进化可感知性契约（45 项 + 3 组变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_self_evolution_perception.py
+
       # ── LLM 可观测 ──
       - name: Guard LLM 健康探针（48 项）
         if: ${{ !cancelled() }}
@@ -983,9 +991,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_stream_event_log.py
 
-      - name: Guard run_id 作用域正确（真实建模验证抓出的崩溃，AST 级 + 9 处误报豁免）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_orch_run_id_scope.py
 
       # ── Task #43（2026-10-20）：编排观测性 trace（span 树）──────────────────
       # 锁的是"建好没人用"这一失效模式：orch_run_spans 表 + SpanCollector 服务 +
@@ -1114,15 +1119,6 @@ jobs:
       - name: Guard 8 阶段流水线子 Agent（齐备 + 可被 planner 选中，11 条 + 1 GAP）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_stage_pipeline_agents.py
-
-      # ── B4-7（2026-10-14）：沉淀流程复用的「泛词劫持」 ──────────────────
-      # 真实前端验证抓到：`_try_reuse_planner_flow` 的准入是 `score >= 2`，
-      # 而 `_flow_tokens` 是字符 bigram、模板名只有 12 个 bigram
-      # ⇒ **一个泛词就足以劫持整条编排**（「生成一份报告」被当成建模流程）。
-      # 本门禁用 3 条实测负样本锁住，并强制带「区分度」判据防空转。
-      - name: Guard 沉淀复用泛词劫持（B4-7，5 条 + 1 已知 GAP）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_reuse_gate.py
 
       # ── B5-2（2026-10-14）：能力中心「工具/MCP 配置无效」+「意图标签枚举化」 ──
       # ① 需认证的 MCP 此前**无法接入**：新增返回 {"ok":true}，紧接着 /test 就是

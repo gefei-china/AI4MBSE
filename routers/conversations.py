@@ -16,9 +16,41 @@ from repositories.conversation_repo import ConversationRepo, conv_visible_to
 from repositories.studio_repo import StudioRepo
 from agent import get_pipeline
 from core.audit import audit, audit_user
-from models import ConvIn, ChatIn, ConvProjectIn, FlowRunIn
+from models import ConvIn, ChatIn, ConvProjectIn
 
 router = APIRouter(tags=["对话"])
+
+
+def _classify_abort(acc_exec, client_gone, fail_reason, last_event):
+    """★ 2026-11-06：把「本轮没产出正文」的**真实原因**分类出来。
+
+    为什么必须做：旧文案统一写「连接中断或服务端异常」，把三类完全不同的故障
+    说成同一句话 —— 实测 conv 990485 14:54 那轮其实是**被路由到「通用问答Agent」**
+    （intent=chat / route=inherit，该 Agent 没有工程工具与上下文），用户看到的却是
+    "连接中断或服务端异常"，于是误以为服务重启了。**误导性提示比没有提示更贵**：
+    它会把排查引向"网络/进程"这条错路。
+
+    返回 (code, 中文原因)。code 同时写进 card_data.exec.abort_reason 供事后检索。
+    """
+    agent = str((acc_exec or {}).get("agent") or "")
+    tools = (acc_exec or {}).get("tools") or []
+    if client_gone:
+        return ("client_gone",
+                "本轮是**你的浏览器这边先断开**（切换会话 / 关闭页面 / 网络掉线）后收口的，"
+                "不是服务崩溃，也不是服务重启")
+    if fail_reason:
+        return ("exception", "服务端抛出异常并已中止：`%s`" % str(fail_reason)[:120])
+    if ("通用问答" in agent) or (agent.strip().lower() in ("chat", "chatagent")):
+        return ("route_chat",
+                "本轮被判定为**闲聊/通用问答**，执行主体落到了「%s」——它没有本会话主 Agent 的"
+                "工程工具与上下文，因此生成阶段拿不到可写的内容。**这是路由判定问题，不是网络中断。**"
+                % (agent or "通用问答Agent"))
+    if not tools:
+        return ("no_tool_no_output",
+                "执行主体「%s」本轮没有调用任何工具，也没能产出正文"
+                "（通常是能力不足或上游模型空响应），**不是网络中断**" % (agent or "未知"))
+    return ("no_terminal_frame",
+            "服务端没有发出结束信号（最后事件：%s），原因未记录" % (last_event or "无"))
 
 # 附件上传：允许类型与大小限制（V2.3 优化：会话窗口富输入）
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
@@ -585,6 +617,23 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         _maxr = 0
         _SER_TYPES = ("stage", "tool")
         _terminal = False   # P1-32：本流是否已发过 done/error（终态哨兵）
+        # ★★★ 2026-11-06：**本轮消息基线 id** —— 收口兜底固化的幂等判据必须用它，
+        #   不能用「库里最后一条是不是 assistant」。
+        #   事故（conv 990485，用户报「发消息没反应」）：连发两条（5974「显出P1样板」/5975「先出 P1 样板」），
+        #   两次 `POST /chat/stream` 都 200，**但一条 assistant 都没落库**。
+        #   真因：发之前库里最后一条正好是**上一轮**的 assistant（5973）
+        #   ⇒ 旧判据 `_lastrow.role == 'assistant'` 认定"本轮已固化" ⇒ 直接跳过兜底
+        #   ⇒ 用户看到的是"消息发出去了，什么都没回来"（静默失败，最难查的一类）。
+        #   新判据只表达一个事实：**本轮开始之后**有没有新增 assistant 行。
+        _start_msg_id = 0
+        try:
+            with db_conn() as _bc:
+                _br = _bc.execute(
+                    "SELECT COALESCE(MAX(id), 0) AS m FROM messages WHERE conversation_id=?",
+                    (conv_id,)).fetchone()
+                _start_msg_id = int((_br["m"] if _br else 0) or 0)
+        except Exception:
+            _start_msg_id = 0
         # ── S1（2026-10-29）失败归因：把"为什么失败"变成可查的事实 ────────────
         # 背景（实测 @75eca26）：近 7 天 conversation span 有 73 条 error，
         #   `meta_json` 全为 `{}` —— 一条都说不出原因。这里补三个**可观测**的维度：
@@ -907,9 +956,14 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                     _pending = "".join(_acc_text).strip()
                     with db_conn() as _pc:
                         _lastrow = _pc.execute(
-                            "SELECT role FROM messages WHERE conversation_id=? "
+                            "SELECT id, role FROM messages WHERE conversation_id=? "
                             "ORDER BY id DESC LIMIT 1", (conv_id,)).fetchone()
-                        _already = bool(_lastrow and (_lastrow["role"] == "assistant"))
+                        # ★ 2026-11-06：判据从"末条是 assistant"改为"**本轮之后**新增了 assistant"。
+                        #   前者会被上一轮的 assistant 骗过（详见 _start_msg_id 处的事故说明）；
+                        #   `_start_msg_id=0`（基线取失败）时退回旧语义，宁可重复也不静默丢。
+                        _already = bool(_lastrow and _lastrow["role"] == "assistant"
+                                        and (_start_msg_id <= 0
+                                             or int(_lastrow["id"]) > _start_msg_id))
                     if not _already:
                         if _pending:
                             _tail = ("\n\n> ⏹ 连接已中断（以上为已生成内容，"
@@ -924,9 +978,16 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                                 pass
                             _body = _pending + _tail
                         else:
-                            _body = ("**原因**：本轮未产出正文内容就结束了"
-                                     "（连接中断或服务端异常；执行过程见下方「执行过程」）。\n\n"
-                                     "可以直接重新发送这条消息。")
+                            # ★ 2026-11-06：不再写"连接中断或服务端异常"这种合并口径。
+                            _cause, _cause_txt = _classify_abort(
+                                _acc_exec, _client_gone, _fail_reason, _last_event)
+                            _body = ("**本轮未产出正文，已中止**\n\n"
+                                     "**原因**：%s\n\n"
+                                     "**下一步**：%s" % (
+                                         _cause_txt,
+                                         "回到本会话直接重发这条消息即可（无需重启服务）"
+                                         if _cause != "client_gone"
+                                         else "确认网络/页面稳定后重发这条消息即可"))
                         # ★ 执行过程一并落库（对齐正常路径的 card_data.exec 结构）
                         #   前端 procBlocksHtml 据此还原时间线 ⇒ 刷新后仍能看到
                         #   "这轮跑了哪些子智能体/子任务/工具/思考"。
@@ -942,6 +1003,14 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                             _exec["tools"] = [
                                 {k: v for k, v in t.items() if not k.startswith("_")}
                                 for t in _acc_exec["tools"]]
+                        # ★ 2026-11-06：把中止原因结构化落库，事后可检索、可统计
+                        try:
+                            _ab_code, _ab_txt = _classify_abort(
+                                _acc_exec, _client_gone, _fail_reason, _last_event)
+                            _exec["abort_reason"] = _ab_code
+                            _exec["abort_detail"] = _ab_txt
+                        except Exception:
+                            pass
                         _card = _json.dumps({"exec": _exec}, ensure_ascii=False) if _exec else "{}"
                         with db_conn() as _wc:
                             _wc.execute(
@@ -1449,11 +1518,14 @@ def message_quality(msg_id: int, body: dict, conn=Depends(db_session),
     conv_id = int(row[0] or 0)
     repo.update_message_quality(msg_id, q)
     if q:
-        repo.create_quality_feedback(msg_id, q, context, actor, conversation_id=conv_id)
+        fb_id = repo.create_quality_feedback(msg_id, q, context, actor, conversation_id=conv_id)
         audit(actor, "quality", f"消息#{msg_id} 质量信号:{q}", conn=conn)
     else:
+        fb_id = None
         audit(actor, "quality", f"消息#{msg_id} 质量信号:清除", conn=conn)
-    return {"ok": True, "quality": q}
+    # ★ 2026-11-06 P0：回执带编号与状态，前端据此渲染可点追踪入口。
+    #   取消评价（q=""）不写 feedback 历史 ⇒ fb_id 必须为 None。
+    return {"ok": True, "quality": q, "feedback_id": fb_id, "state": "new" if fb_id else ""}
 
 
 @router.get("/api/feedback-types")
@@ -1464,6 +1536,39 @@ def feedback_types():
     """
     from core.feedback_types import public_catalog
     return public_catalog()
+
+
+# ── 2026-11-06 P0：我的反馈（把 toast 的承诺变成可追踪入口）────────
+@router.get("/api/my-feedback")
+def my_feedback(state: str = "", limit: int = 50, conn=Depends(db_session),
+                user=Depends(current_user)):
+    """当前用户的反馈处理进度。**不做全表兜底**：匿名一律返回空列表。"""
+    from core.feedback_types import FEEDBACK_STATES, FEEDBACK_STATE_LABELS
+    if user is None:
+        return {"items": [], "total": 0, "anonymous": True, "actor": "",
+                "states": list(FEEDBACK_STATES), "state_labels": FEEDBACK_STATE_LABELS}
+    actor = audit_user(user)
+    rows = ConversationRepo(conn).list_feedback_by_creator(
+        actor, state=state, limit=min(max(int(limit or 50), 1), 200))
+    return {"items": rows, "total": len(rows), "anonymous": False, "actor": actor,
+            "states": list(FEEDBACK_STATES), "state_labels": FEEDBACK_STATE_LABELS}
+
+
+@router.get("/api/my-feedback/{fb_id}")
+def my_feedback_detail(fb_id: int, conn=Depends(db_session),
+                       user=Depends(current_user)):
+    """单条反馈详情 + 真实时间线；id + created_by 双条件防越权。"""
+    from core.feedback_types import FEEDBACK_STATE_LABELS
+    if user is None:
+        raise HTTPException(status_code=401, detail="未登录")
+    actor = audit_user(user)
+    repo = ConversationRepo(conn)
+    row = repo.get_feedback_for_creator(fb_id, actor)
+    if not row:
+        raise HTTPException(status_code=404, detail="反馈不存在或不属于当前用户")
+    row["state_label"] = FEEDBACK_STATE_LABELS.get(row.get("state") or "new", row.get("state"))
+    return {"item": row, "timeline": repo.feedback_timeline(row),
+            "state_labels": FEEDBACK_STATE_LABELS}
 
 
 # ── P0：消息结论速览生成（资料库与AI建模优化 §2.2）──
@@ -1501,27 +1606,6 @@ def generate_message_summary(msg_id: int, conn=Depends(db_session)):
                     "persist_error": str(e)[:120]}
         except Exception:
             return {"ok": True, "summary": {}, "error": str(e)[:120]}
-
-
-@router.post("/api/conversations/{conv_id}/flow-run/{fid}")
-def conversation_flow_run(conv_id: int, fid: int, body: FlowRunIn = None, conn=Depends(db_session),
-                          user=Depends(current_user)):
-    _own_conv(conn, conv_id, user)   # ★ B1-9 归属校验
-    """方案 B：会话内运行匹配工作流——把流程执行结果写回会话（HIL 确认后触发）。
-
-    闭环：会话匹配到工作流 → 用户点「运行此流程」→ 本接口执行 FlowExecutor →
-    结果作为 assistant 消息落库（msg_type='flow_result'，card_data 存逐步明细）→ 前端展示。
-    P1-1：跨表编排已上提至 services.conversation_service.ConversationService。
-    """
-    import json as _j
-    body = body or FlowRunIn()
-    from services.conversation_service import ConversationService
-    result = ConversationService(conn).run_flow_in_conversation(
-        conv_id, fid, body.payload or "", user=user)
-    if result.get("error"):
-        code = 404 if result["error"] in ("会话不存在", "流程不存在") else 400
-        return JSONResponse({"error": result["error"]}, code)
-    return result
 
 
 # ── P2-1 知识回流：会话产出 → 提炼知识候选 → 人工确认入图谱 ──

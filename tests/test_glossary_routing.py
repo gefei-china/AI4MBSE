@@ -115,21 +115,9 @@ def main():
     d, s = infer_domain(filename="某临时测试文档.txt", return_score=True)
     check("未命中规则 → unknown + 低置信(0.2)", d == "unknown" and abs(s - 0.2) < 0.01, f"{d}@{s}")
 
-    print("\n=== 工作流双通道匹配（词法+语义） ===")
-    from agent import AgentPipeline
-    agent = AgentPipeline()
-    f_v2 = agent._match_flows("v2代码规范")
-    check("v2代码规范 → 命中 SysML V2 工作流(#74)",
-          any(f["id"] == 74 and "SysML" in f["name"] for f in f_v2), str(f_v2))
-    f_chat = agent._match_flows("随便聊聊")
-    check("随便聊聊 → 不误报工作流（语义不做独立召回）", len(f_chat) == 0, str(f_chat))
-    f_react = agent._match_flows("ReAct求解")
-    check("ReAct求解 → 命中 ReAct 相关工作流(#128/#130)",
-          any(f["id"] in (128, 130) for f in f_react), str(f_react))
-    f_need = agent._match_flows("生成SysML需求视图")
-    check("生成SysML需求视图 → 命中 #74 且分数最高",
-          f_need and f_need[0]["id"] == 74, str(f_need))
-
+    # ★ 2026-11-05："工作流双通道匹配"整段随画布工作流移除 ——
+    #   它验证的 `_match_flows`（匹配已保存画布流程）已不存在。
+    #   术语归一化本身的断言（P2-1/P2-2/P2-3 段）保持不变。
     conn.close()
     print(f"\n===== 结果: PASS {PASS} / FAIL {FAIL} =====")
     return 0 if FAIL == 0 else 1

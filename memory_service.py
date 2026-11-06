@@ -72,8 +72,31 @@ class MemoryService:
         except Exception:
             return False
 
+    #: 存量行（scope_type=''）可见性策略的合法取值。见 `_legacy_policy`。
+    LEGACY_POLICIES = ("visible", "windowed", "hidden")
+
     @staticmethod
-    def _scope_filter(conn, agent_id: str, scopes):
+    def _legacy_policy() -> tuple:
+        """读 `memory.legacy_policy` / `memory.legacy_cut_ts` → (policy, cut_ts)。
+
+        ★ 为什么默认 visible：本工程 `agent_memory` 有大量 `scope_type=''` 的存量/旁路行
+          （历史遗留 + 画布节点 + 人工 API 不传 scope），改动前它们**无条件**按 agent_id 兜底可见。
+          默认改成 hidden 会一次性清空这部分召回 ⇒ 属行为漂移，必须由运维显式切换。
+        ★ 未知取值一律回落 visible（fail-safe）：配置写错时宁可保持旧行为，
+          也不能因一个拼写错误让召回静默变窄——那种故障在监控上看不出（召回变少 ≠ 报错）。
+        """
+        try:
+            from core import config as _cfg
+            p = str(_cfg.get("memory", "legacy_policy", "visible") or "visible").strip().lower()
+            cut = str(_cfg.get("memory", "legacy_cut_ts", "") or "").strip()
+        except Exception:
+            return "visible", ""
+        if p not in MemoryService.LEGACY_POLICIES:
+            return "visible", ""
+        return p, cut
+
+    @staticmethod
+    def _scope_filter(conn, agent_id: str, scopes, legacy_policy: str = "", cut_ts: str = ""):
         """构造作用域复合过滤 → (clause, params, idx_of)。
 
         scopes 为**有序**槽位 [(type, id), ...]（优先级高→低），如
@@ -81,6 +104,12 @@ class MemoryService:
         存量行（scope_type=''）按 agent 槽召回 —— 保证老记忆不静默消失。
         返回 clause 形如 " AND ( (...=?) OR ... OR (scope_type='' AND agent_id=?) )"；
         无作用域/缺列 → ("", [], {})（调用方沿用旧 SQL）。
+
+        legacy_policy / cut_ts：存量行槽位的可见性（2026-11-05 新增，默认走配置）。
+          · "visible"  —— 同 agent 的存量行全部可见（**改动前行为，逐字不变**）
+          · "windowed" —— 仅 `created_at >= cut_ts` 的存量行可见；cut_ts 空 ⇒ 等价 hidden
+          · "hidden"   —— 存量行完全不出现（严格按作用域隔离）
+        ⚠️ 显式传参优先（供门禁/实验用）；不传则读配置。两者都没有 ⇒ visible。
         """
         try:
             scopes = [(str(t), str(i or "")) for t, i in (scopes or []) if t]
@@ -95,8 +124,18 @@ class MemoryService:
             else:
                 parts.append("(scope_type=? AND scope_id=?)")
                 params.extend([st, sid])
-        parts.append("(scope_type='' AND agent_id=?)")   # 存量行
-        params.append(agent_id)
+        # 存量行槽位（策略由 legacy_policy 决定；默认 visible = 改动前行为）
+        _pol = legacy_policy if legacy_policy in MemoryService.LEGACY_POLICIES else ""
+        _cut = cut_ts
+        if not _pol:
+            _pol, _cut = MemoryService._legacy_policy()
+        if _pol == "visible":
+            parts.append("(scope_type='' AND agent_id=?)")
+            params.append(agent_id)
+        elif _pol == "windowed" and _cut:
+            parts.append("(scope_type='' AND agent_id=? AND created_at>=?)")
+            params.extend([agent_id, _cut])
+        # hidden，或 windowed 但未给切点 ⇒ 不拼存量行槽位（严格隔离）
         return " AND (" + " OR ".join(parts) + ")", params, {t: i for i, (t, _i) in enumerate(scopes)}
 
     @staticmethod

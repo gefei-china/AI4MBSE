@@ -5,6 +5,8 @@
 新增功能域流程：新建 routers/xxx.py → routers/__init__.py 注册 → 本文件 include 一行。
 """
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -53,7 +55,6 @@ from routers import (
     proposals_router,      # 2026-10-18 P1-3 配置提案（失败轨迹→修订提议，只提议不自动应用）
     curriculum_router,     # 2026-10-19 P2-2 失败驱动任务提案（EnvBuilder 式自造课程，只提议不自动执行）
     agent_archive_router,  # 2026-10-19 P2-3 Agent 档案库/种群（变体台账 + 死路记忆，只记录不切换生效版本）
-    flow_topology_router,  # 2026-10-20 P2-4 画布拓扑台账（结构体检 + 同构去重，只读不改拓扑）
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
     evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
     diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断（让 token 构成可见）
@@ -303,6 +304,16 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         print("[startup] 运行时状态初始化失败（退化用默认值）：%s" % str(_e)[:120], flush=True)
 
+    # ── 2026-11-06 P1：自进化周期触发器（默认 observe，零副作用）──
+    try:
+        from core.evolution_tick import start_tick as _start_evo_tick
+        _start_evo_tick(
+            interval_s=int(config.get("evolution", "tick_interval_s", 300) or 300),
+            mode=str(config.get("evolution", "tick_mode", "observe") or "observe"),
+            enabled=config.as_bool("evolution", "tick_enabled", True))
+    except Exception as _e:
+        print("[startup] 自进化 tick 启动失败（不影响主流程）：%s" % str(_e)[:160], flush=True)
+
     yield
 
     # ══════════════════════════════════════════════════════════════════════
@@ -460,7 +471,6 @@ for _router in (
     proposals_router,  # 2026-10-18 P1-3 配置提案（失败轨迹→修订提议，只提议不自动应用）
     curriculum_router,  # 2026-10-19 P2-2 失败驱动任务提案（失败证据→该练什么，只提议不自动执行）
     agent_archive_router,  # 2026-10-19 P2-3 Agent 档案库/种群（记住死路，避免重走；只记录不切换生效版本）
-    flow_topology_router,  # 2026-10-20 P2-4 画布拓扑台账（记住结构缺陷与同构冗余；只读不改拓扑）
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
     evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
     diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断
@@ -495,6 +505,30 @@ if os.path.exists(static_dir):
 def health_live():
     """存活探针：进程与事件循环还活着就 200（不依赖 DB / LLM / 任何外部资源）。"""
     return {"status": "alive", "draining": runtime_state.is_draining()}
+
+
+# ★ 2026-11-06：**进程身份快照** —— 用于回答「这一轮中断到底是不是服务重启」。
+#   背景（conv 990485 14:54）：用户看到「本轮未产出正文内容（连接中断或服务端异常）」，
+#   第一反应是"服务重启了"。可在同一份日志里进程从 14:30 起**只有一次启动、零 shutdown**，
+#   真正原因是该轮被路由到「通用问答Agent」（无工具/无上下文）⇒ 提示语把排查引向错路。
+#   判据设计：前端在**开流前**取一次 boot_id，中断时再取一次；
+#     变了 ⇒ 一定是重启（进程内 UUID 每次启动都不同，不依赖时间对齐、不受时钟漂移影响）；
+#     没变 ⇒ 一定不是重启，只能是路由/模型/客户端断开等进程内原因。
+_BOOT_ID = uuid.uuid4().hex[:12]
+_BOOT_AT = time.time()
+_BOOT_PID = os.getpid()
+
+
+@app.get("/api/system/boot")
+def system_boot():
+    """进程身份：boot_id 每次启动唯一；started_at 为本地时间字符串（便于人读）。"""
+    import datetime as _dt
+    return {
+        "boot_id": _BOOT_ID,
+        "pid": _BOOT_PID,
+        "started_at": _dt.datetime.fromtimestamp(_BOOT_AT).strftime("%Y-%m-%d %H:%M:%S"),
+        "uptime_s": round(time.time() - _BOOT_AT, 1),
+    }
 
 
 @app.get("/api/health/ready")

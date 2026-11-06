@@ -148,7 +148,7 @@ function closePanel() {
 // 与导航标签口径不一致，会让「最近访问」标签显示成 模型本体）。
 // 2026-09-17 R7：移除死条目 branch('合并队列' 页已删，go('branch') 重定向到 kb-d) 与 modelcfg('模型配置' 已并入 studio/st-model)。
 // 2026-10-23：移除死条目 approval('审批管理' 页已下线，纯前端原型、假审批流水)。
-const TITLES = {home:'总览',ai:'AI 建模',kb:'知识中心',reports:'报告',studio:'能力中心',settings:'设置',users:'用户与权限管理',audit:'审计日志',ops:'运行监控中心',evolution:'自进化周报',eval:'评测管理'};
+const TITLES = {home:'总览',ai:'AI 建模',kb:'知识中心',reports:'报告',studio:'能力中心',settings:'设置',users:'用户与权限管理',audit:'审计日志',ops:'运行监控中心',evolution:'自进化周报',eval:'评测管理','my-feedback':'我的反馈'};
 // 二级页提升一级导航：子 Tab 入口的页面标题映射
 const KB_TAB_TITLES = {'kb-a':'数据看板','kb-e':'文档库','kb-b':'治理中心','kb-c':'本体模型','kb-d':'知识图谱',};
 // 2026-09-17 R7：补 'st-prompt'（提示词模板，真实 subpage，`09-impact.js:1134` / `36-capability.js:72` 会 go 过来），
@@ -466,6 +466,8 @@ function loadPage(p, tabId) {
   if(p==='evolution') loadEvolutionReport();
   // 2026-10-22 评测管理（质量可见性）：最新分 + 历史趋势 + 门禁接线，只读
   if(p==='eval') loadEvalManagement();
+  // 2026-11-06 P0：我的反馈追踪页（点踩回执的下钻目标）
+  if(p==='my-feedback') loadMyFeedback();
 }
 
 // ── 工作台 ──

@@ -238,6 +238,39 @@ def request_rollback(conn, history_id: int, *, user: str = "", note: str = "") -
             "history": d}
 
 
+def _freeze_pre_change_baseline(conn, *, conf: dict, section: str, key: str) -> dict:
+    """晋升前冻结「改前」安全信号基线（2026-11-06 P2）。
+
+    背景：`misevolution_baselines` 表 0 行 —— `freeze_baseline` 只在人工端点
+    `routers/monitor.py` 被调用，经 HIL 的生产晋升链路**从不冻结**。
+    于是每次晋升后的 `_recheck_after_change` 都只能记 `no_baseline`，
+    「自进化后必须复测」这条红线实际上从未产生过可用的相对判定。
+
+    纪律：
+    - 必须在 `apply_config_change` **之前**冻结，否则快照是「改后」的；
+    - 全链路 try 包住：冻结失败不得阻断一次已获 HIL 批准的晋升
+      （与 `_recheck_after_change` 的「监控失败不搞坏晋升」同纪律）；
+    - 这里冻结的是 **misevolution 安全信号基线**，与 `config_effect`
+      的「eval_metrics 前置窗口均值」是两种基线，不可混用。
+    """
+    try:
+        from core import misevolution as _me
+        from repositories.misevolution_repo import MisevolutionRepo
+        settings = _me.get_settings()
+        if not settings.get("enabled"):
+            return {"ok": False, "reason": "misevolution 已关闭，跳过冻结"}
+        signals = _me.collect_signals(conn, settings=settings)
+        row = MisevolutionRepo(conn).freeze_baseline(
+            epoch="pre-change:conf#%s:%s.%s" % (conf.get("id") or 0, section, key),
+            signals=signals,
+            note="配置晋升前自动冻结（HIL 确认单 #%s）" % (conf.get("id") or 0),
+            frozen_by="config_promotion")
+        return {"ok": True, "baseline_id": (row or {}).get("id"),
+                "signals": sorted((signals or {}).keys())}
+    except Exception as e:
+        return {"ok": False, "reason": "基线冻结失败（不影响晋升）：%s" % str(e)[:180]}
+
+
 def _recheck_after_change(conn, *, conf: dict, kind: str, result: dict) -> None:
     """红线 #5「自进化后必须复测」：一次经 HIL 批准的配置变更落地后，记录晋升
     时刻的安全信号快照 + 与当前冻结基线的比较结论（misevolution_checks 一行，
@@ -312,12 +345,15 @@ def execute_confirmation(conn, conf: dict) -> dict:
         key = str(payload.get("key") or "")
         if not is_config_target(section, key):
             raise ValueError("确认单目标不是已登记配置键: %s.%s" % (section, key))
+        # ★ 2026-11-06 P2：先冻结改前基线，再改配置（顺序不可反）
+        _frozen = _freeze_pre_change_baseline(conn, conf=conf, section=section, key=key)
         out = apply_config_change(
             conn, section=section, key=key, value=payload.get("value", ""),
             source=SRC_PROPOSAL, source_id=int(payload.get("proposal_id") or 0),
             applied_by=decided_by,
             note="HIL 晋升批准（确认单 #%s）" % (conf.get("id") or 0))
-        result = {"executed": True, "kind": HIL_ACTION_APPLY, **out}
+        result = {"executed": True, "kind": HIL_ACTION_APPLY,
+                  "baseline_frozen": _frozen, **out}
         _recheck_after_change(conn, conf=conf, kind=HIL_ACTION_APPLY, result=result)
         return result
     # HIL_ACTION_ROLLBACK

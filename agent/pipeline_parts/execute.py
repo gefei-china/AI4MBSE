@@ -12,7 +12,7 @@
     （改的就是本文件，流式主路径完全未生效 —— 已由 P1-26 收敛为单一真源根治，见 docs §24/§25）。
   ⇒ 已知与主路径的功能差异（**若将来启用非流式 API，需先补齐**，逐项核实于 P1-26 审计）：
     `_deposit_session_memory`（会话记忆沉淀）、`_ensure_sysml_blocks`（SysML 代码块补全）、
-    `_record_skill_feedback`（技能反馈）、`_save_planner_flow`（编排留痕）、
+    `_record_skill_feedback`（技能反馈）、
     `_is_continuation_input`（续作输入判定）、`_archive_impact_analysis`（影响分析产物落库）；
     编排入口亦为两套实现（本文件 `_try_orchestrate`/`_finish_orchestrated`
     vs 主路径 `_stream_orchestrated_flow`）。
@@ -352,7 +352,6 @@ class ExecuteMixin:
             att_parsed_info["vision"] = att_vision   # 留痕：这次图片到底进没进模型、为什么
 
         # 闭环：基于用户内容匹配已保存工作流（名称/描述/节点标签）
-        matched_flows = self._match_flows(user_input + (" " + att_text[:500] if att_text else ""))
 
         # SP-R：报告类型预识别（模型分析/变更影响/预评审/自定义大纲）——用于强制检索与模板选择
         report_type = None
@@ -1198,7 +1197,7 @@ class ExecuteMixin:
                 "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
             },
             "attachments_info": {**att_parsed_info, "consumed": len(retrieval.get("attachment_hits") or [])},
-            "matched_flows": matched_flows,
+            "matched_flows": [],   # 画布流程已移除，字段保留为空（前端不消费）
             "quality_report": quality_report,
             # ★ harness 持续工作：本次请求自主续跑次数（0=一次跑完未续）
             "auto_continues": _auto_continues,

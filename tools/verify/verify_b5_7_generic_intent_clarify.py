@@ -88,28 +88,17 @@ def read(rel):
 section("[A] 复用路径 card_data 与真实执行路径字段集对齐（A-1）")
 stream = read("agent/pipeline_parts/stream.py")
 
+# ★ 2026-11-05：原 [A] 段验证「画布复用路径 `_stream_orchestrated` 的 card_data 字段集与主路径对齐」。
+#   该复用路径已随画布工作流移除 ⇒ 只保留主路径断言 + 一条防回归。
 i_flow = stream.find("def _stream_orchestrated_flow(")
-i_reuse = stream.find("def _stream_orchestrated(")
-assert i_flow > 0 and i_reuse > i_flow, "两个编排方法定位失败"
-flow_body = stream[i_flow:i_reuse]
-reuse_body = stream[i_reuse:stream.find("\n    def ", i_reuse + 10)
-                  if stream.find("\n    def ", i_reuse + 10) > 0 else len(stream)]
+assert i_flow > 0, "编排主路径定位失败"
+_i_next = stream.find("\n    def ", i_flow + 10)
+flow_body = stream[i_flow:_i_next if _i_next > 0 else len(stream)]
 
 chk("A1 真实执行路径的 exec 带 subtasks", '"subtasks": subtasks}' in flow_body)
-chk("A2 复用路径的 exec 也带 subtasks（改前缺失 ⇒ 整块不渲染）",
-    '"subtasks": _subtasks}' in reuse_body)
-chk("A3 复用路径真的构造了 _subtasks 列表", "_subtasks = []" in reuse_body)
-chk("A4 复用子任务带 from_template 标记（区分真跑/模板声明）",
-    '"from_template": True' in reuse_body)
-chk("A5 latency/token 缺失时留空而非填 0（0 会被渲染成假数据 ⏱ 0.0s）",
-    '"latency_ms": _tk.get("latency_ms") or None' in reuse_body
-    and '"token_count": _tk.get("token_count") or None' in reuse_body)
-chk("A6 deps 字段被带上（前端要渲染「依赖:…」）", '"deps": _tk.get("deps") or []' in reuse_body)
-
-# 变异 M1：把复用路径的 subtasks 删掉（退回改前）
-_m1 = reuse_body.replace('"subtasks": _subtasks},', '"subtasks": []},')
-M1 = ('"subtasks": _subtasks}' in reuse_body) and ('"subtasks": _subtasks}' not in _m1)
-chk("M1 变异（复用路径不带 subtasks）被 A2 抓住", M1)
+chk("A2 画布复用路径 `_stream_orchestrated` 已移除（不得回潮）",
+    "def _stream_orchestrated(" not in stream,
+    "仍存在定义 ⇒ 画布流程复用可能被加回来了")
 
 
 # ══════════════════════════════════════════════════════════════════

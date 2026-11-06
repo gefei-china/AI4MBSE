@@ -53,15 +53,23 @@ class ProposalRepo(BaseRepo):
         """
         evidence = self._evidence_of(draft)
         fp = draft.get("fingerprint") or ""
+        # ★ 2026-11-06 P1：老库可能还没跑补列迁移 ⇒ 动态判列，零漂移。
+        _cols = {r[1] for r in self.conn.execute("PRAGMA table_info(config_proposals)")}
+        _extra = ", origin, source_feedback_ids" if "origin" in _cols else ""
+        _ph = ",?,?" if "origin" in _cols else ""
+        _params = [draft.get("rule", ""), draft.get("target_section", ""),
+                   draft.get("target_key", ""), str(draft.get("current_value", "")),
+                   str(draft.get("proposed_value", "")), draft.get("rationale", ""),
+                   json.dumps(evidence, ensure_ascii=False), fp]
+        if "origin" in _cols:
+            _params.extend([str(draft.get("origin") or ""),
+                            str(draft.get("source_feedback_ids") or "[]")])
         self.execute(
             "INSERT INTO config_proposals (rule, target_section, target_key, "
             "current_value, proposed_value, rationale, evidence_json, fingerprint, "
-            "status) VALUES (?,?,?,?,?,?,?,?,'pending') "
-            "ON CONFLICT(fingerprint) DO NOTHING",
-            (draft.get("rule", ""), draft.get("target_section", ""),
-             draft.get("target_key", ""), str(draft.get("current_value", "")),
-             str(draft.get("proposed_value", "")), draft.get("rationale", ""),
-             json.dumps(evidence, ensure_ascii=False), fp))
+            "status%s) VALUES (?,?,?,?,?,?,?,?,'pending'%s) "
+            "ON CONFLICT(fingerprint) DO NOTHING" % (_extra, _ph),
+            tuple(_params))
         inserted = bool(self.conn.execute("SELECT changes()").fetchone()[0])
         row = self.one("SELECT * FROM config_proposals WHERE fingerprint=?", (fp,))
         if not row:                                    # 理论上不可达（INSERT 即成功或冲突）

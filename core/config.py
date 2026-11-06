@@ -778,6 +778,20 @@ DEFAULT_CONFIG = {
         #      ⇒ 无可靠依据时不配，避免引入未标定偏差。
         #   若要配，形如 "llm_agent=1.0,reflow=0.95,rule_agent=0.85"（**须先有标定依据**）。
         "source_credibility": "",
+        # ── 存量行（scope_type=''）可见性策略（2026-11-05 落地）──
+        # 背景实测（真库 agent_memory 269 行）：作用域四槽（project/user/agent/global）是
+        #   **OR 并列 + 软重排**，真正跨项目外溢的是 `(scope_type='' AND agent_id=?)` 这一条兜底。
+        #   实测「记忆稀疏的工程」top-4 里 11/48≈23% 是跨工程条目；切 hidden 后归零，
+        #   召回 48→45（代价 6%）。详见 docs/记忆作用域隔离-实证评估与改造方案-20261105.md。
+        # ★ 默认 **visible** = 与改动前逐字一致（零行为漂移，门禁 G1 用基线 SHA 锁死）。
+        #   切换成 hidden 属"线上召回变窄"，必须由人显式改，不能默认生效。
+        # ★ 未知取值在 memory_service._legacy_policy 里回落 visible（fail-safe：
+        #   配置拼错时宁可保持旧行为，也不静默清空召回——召回变少不会报错，监控看不出来）。
+        "legacy_policy": "visible",   # visible | windowed | hidden
+        # windowed 档的切点（ISO 'YYYY-MM-DD HH:MM:SS'）。仅 legacy_policy=windowed 时生效；
+        # 留空 ⇒ windowed 等价 hidden。⚠️ 现有数据上本档**无区分度**（无 agent 同时拥有
+        # 早于与晚于切点的活跃存量行），启用前必须重新标定切点。
+        "legacy_cut_ts": "",
     },
     # ── 实体归一消歧（P1-1，2026-10-11）──
     # ⚠️ 此前 entity_resolver.py 把 0.92 / 0.62 写成函数体内的**裸字面量**，既不可配也**无法关闭自动合并**；
@@ -1377,6 +1391,15 @@ DEFAULT_CONFIG = {
         "zhiyuan_poll_projects": [],      # 要监听的智源 projectId 列表（**空=不扫**，避免全库）
         "zhiyuan_poll_mcp_server": "zhiyuan-dev-mcp",   # mcp_servers 表里的名字
     },
+    # ── 2026-11-06 P1：自进化周期触发器（默认 observe，引擎在跑但零副作用）──
+    #   背景：引擎（badcase / online_eval / config_proposal）全部实现完毕，
+    #   但真库最后一次进化作业停在 10-29，用户 10-30 的 2 次点踩 7 天零下游。
+    #   断点不是「没实现」而是「没接线」。tick 就是那根线。
+    "evolution": {
+        "tick_enabled": True,          # 引擎常驻（默认开）
+        "tick_mode": "observe",        # observe=只统计；execute=自动到 HIL 门口
+        "tick_interval_s": 300,
+    },
     # ── P1-1（2026-10-03 整改）：入口限流（对标 Dify 配额 / Anthropic X-RateLimit-* 契约）──
     # 评估 §6 P1-1 实测：全仓 0 处限流；`budget_tokens` 曾超支 35%，后又被置 0 ⇒ 完全无闸。
     # 阈值为"远超当前真实用量、但能挡住失控"的量级，不是"刚好卡住现有业务"的量级：
@@ -1610,17 +1633,6 @@ DEFAULT_CONFIG = {
         "min_denominator": 2,           # 各维度分母下限：不足即 unknown（空窗口不是 0 分）
         "dead_end_repeat": 2,           # 同一变体判回归几次记死路
         "max_variants": 200,            # 单次扫描入册上限（防长尾注水）
-    },
-    # ── P2-4（2026-10-19 自进化调研路线图 P2 第四项）：画布拓扑台账与体检 ────
-    # 口径裁决：路线图原文「多画布流拓扑实验」，但真库 agent_flows 62 条
-    #   vs flow_runs 仅 11 条（且 9 条是同日同构画布的秒级重复），在 11 条
-    #   运行记录上比较两种拓扑得到的是噪声；且红线 #6 明写「不碰架构拓扑」。
-    #   故本期落**台账 + 体检**：只读画布、只记缺陷、只报同构，绝不写拓扑。
-    "flow_topology": {
-        "enabled": True,                # 总开关（False 时 scan/overview 返 enabled=False）
-        "min_denominator": 2,           # 运行证据分母下限：不足即 unknown（没跑过≠跑零次）
-        "linear_degenerate_min": 4,     # 达到几个节点才算「纯链无并行」可疑
-        "max_canvases": 2000,           # 单次扫描画布上限（防长尾注水）
     },
     # ── 自进化周报（价值感知层）：只读汇总，不新增判据、不发明数字 ──────────
     # 定位：把archive / curriculum / sandbox / HIL / 安全信号 / 拓扑六个域的
@@ -2142,6 +2154,8 @@ CONFIG_SCHEMA = {
         "recall_skip_intents": {"type": "str", "desc": "永不召回记忆的 intent 列表（逗号分隔，默认空）"},
         "deposit_skip_intents": {"type": "str", "desc": "永不沉淀记忆的 intent 列表（逗号分隔，默认空）"},
         "source_credibility": {"type": "str", "desc": "融合排序五维之『可信度』：按来源给定权重（真实取值仅 llm_agent/reflow/rule_agent）。默认空=全部中性 1.0；无标定依据前不建议配"},
+        "legacy_policy": {"type": "str", "desc": "存量行（scope_type=''）可见性：visible=同 agent 全部可见（默认，零漂移）/ windowed=仅 created_at>=legacy_cut_ts 可见 / hidden=严格按作用域隔离。未知值回落 visible"},
+        "legacy_cut_ts": {"type": "str", "desc": "windowed 档切点（ISO 时间串）。仅 legacy_policy=windowed 生效；空=等价 hidden。现有数据上该档无区分度，启用前须重新标定"},
     },
     "entity_merge": {
         "auto_threshold": {"type": "float", "desc": "实体消歧自动合并分阈值（≥ 该分自动合并；>1.0 等价关闭。DB settings 的 auto_threshold 优先）"},
@@ -2443,15 +2457,6 @@ CONFIG_SCHEMA = {
         "dead_end_repeat": {"type": "int",  "desc": "同一变体判回归几次记死路（1 次可能是噪声，反复才是模式）"},
         "max_variants":    {"type": "int",  "desc": "单次扫描入册上限（防长尾注水）"},
     },
-    # ── P2-4（2026-10-19 自进化调研路线图 P2 第四项）：画布拓扑台账与体检 ────
-    # 铁律：只读 agent_flows、只记录缺陷、只报同构，**绝不写生效拓扑**
-    # （红线 #6「不碰架构拓扑」；体检镜不是手，同 P2-3 档案库纪律）。
-    "flow_topology": {
-        "enabled":              {"type": "bool", "desc": "画布拓扑体检总开关（False 时 scan/overview 返 enabled=False）"},
-        "min_denominator":      {"type": "int",  "desc": "运行证据分母下限：有运行证据的画布不足此数 ⇒ failed_runs 记 unknown"},
-        "linear_degenerate_min":{"type": "int",  "desc": "达到几个节点才算「纯链无并行」可疑"},
-        "max_canvases":         {"type": "int",  "desc": "单次扫描画布上限（防长尾注水）"},
-    },
     # ── 自进化周报（价值感知层）────────────────────────────────────────────
     # 铁律：只读汇总层。窗口内的环比只在本期与上期**都有数据**时才出delta，
     #   上期无台账 ⇒ unknown，绝不回落 0（空窗口不是 0 分）。
@@ -2635,6 +2640,11 @@ def save_override(updates: dict) -> dict:
 #   原有的 58 个键被一次抹掉（schema 键数从 455 掉到 426，且界面会显示"未知配置项"）。
 #   正确姿势：`setdefault(段, {}).update(本段新增项)` —— 只加不改。
 _EXTRA_SCHEMA = {
+    "evolution": {
+        "tick_enabled":    {"type": "bool", "desc": "自进化周期触发器总开关；关=引擎完全不跑"},
+        "tick_mode":       {"type": "str",  "desc": "observe=只统计不动作；execute=自动到 HIL 门口（仍不自动生效）"},
+        "tick_interval_s": {"type": "int",  "desc": "tick 扫描间隔（秒）"},
+    },
     "auth": {
         "mode":                    {"type": "str",  "desc": "登录模式：local=本地账号 / sso=单点登录"},
         "sso_base":                {"type": "str",  "desc": "SSO 服务基地址（mode=sso 时生效）"},

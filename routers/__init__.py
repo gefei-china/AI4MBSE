@@ -43,7 +43,6 @@ from .jobs import router as jobs_router  # 2026-10-04 P0-C 异步作业队列（
 from .proposals import router as proposals_router  # 2026-10-18 P1-3 配置提案（只提议不自动应用）
 from .curriculum import router as curriculum_router  # 2026-10-19 P2-2 失败驱动任务提案（只提议不自动执行）
 from .agent_archive import router as agent_archive_router  # 2026-10-19 P2-3 Agent 档案库（只记录不切换生效版本）
-from .flow_topology import router as flow_topology_router  # 2026-10-20 P2-4 画布拓扑台账（只读画布不改拓扑，红线 #6）
 from .evolution_report import router as evolution_report_router  # 2026-10-20 自进化周报（价值感知层，只读六域汇总）
 from .evaluation import router as evaluation_router  # 2026-10-22 评测管理（历史/趋势/可信度/门禁接线）
 from .diagnostics import router as diagnostics_router  # 2026-10-26 P0-8 上下文归因只读诊断（让 token 构成可见）
@@ -88,7 +87,6 @@ __all__ = [
     "proposals_router",  # 2026-10-18 P1-3 配置提案（只提议不自动应用）
     "curriculum_router",  # 2026-10-19 P2-2 失败驱动任务提案（只提议不自动执行）
     "agent_archive_router",  # 2026-10-19 P2-3 Agent 档案库（只记录不切换生效版本）
-    "flow_topology_router",  # 2026-10-20 P2-4 画布拓扑台账（只读画布不改拓扑）
     "evolution_report_router",  # 2026-10-20 自进化周报（要你决策 / 本周体检 / 数据可信度）
     "evaluation_router",        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
     "diagnostics_router",       # 2026-10-26 P0-8 上下文归因只读诊断

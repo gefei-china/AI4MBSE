@@ -3616,11 +3616,11 @@ class StreamMixin:
                     orch_content = "（编排质量门禁：" + "；".join(_gate_gaps) + "）\n\n" + orch_content
                     yield {"type": "progress", "kind": "progress",
                            "delta": "（自动编排）编排质量门禁：" + "；".join(_gate_gaps)}
-        # P0-1：编排成功后沉淀为可复用工作流（draft，前端可另存/画布编辑/发布）
+        # ★ 2026-11-05：画布工作流已移除 ⇒ 编排结果不再"沉淀为可复用工作流"
+        #   （`_save_planner_flow` 写的是 agent_flows，属画布流程定义）。
+        #   字段 `saved_flow_id` / `saved_flow_name` 仍保留在输出里且恒为 None：
+        #   保持卡片数据结构形状不变，避免既有消费者因缺键报错。
         saved_flow_id = None
-        if done_items:
-            saved_flow_id = self._save_planner_flow(goal, plan, intent)
-
         # ★ 2026-11-02（米爸「最终正文只承载最后确定的代码」）：流式推送前做一次
         #   中间版本代码收敛。为什么必须在这里（而不是只在 _summarize_plan 出口）：
         #   ① reflection 修订会**整体重写** orch_content（L3305），可能把各子任务的
@@ -3845,157 +3845,10 @@ class StreamMixin:
                           "graph_count": 0, "vector_count": 0, "attachment_used": False},
         }}
 
-    def _stream_orchestrated(self, orch: dict, user_input: str, conversation_id, intent: str,
-                             agent_def, hil_level: str, kb_tags: list, attachments: list,
-                             slots: dict, user, run_id: int = 0) -> iter:
-        # ⚠️ `run_id` 是**本方法的显式参数**（默认 0），不是外层闭包的变量 ——
-        #   本方法与 `_stream_orchestrated_flow` 是**平级方法**，看不到对方的局部变量。
-        #   （2026-10-13 真实建模验证抓到：最初直接在函数体里写 `run_id`，
-        #    走"命中已发布沉淀流程"这条复用路径时崩，报 `name 'run_id' is not defined`，
-        #    **14 个离线门禁全绿也没抓到** —— 它们只查"源码里有没有这个字符串"，
-        #    不查它在该函数作用域内能不能解析。**静态字符串判据对作用域错误天生无能。**）
-        #
-        # ⚠️⚠️ **复用流程（`reused`）本来就不传**：那条路径用的是**预发布流程模板**，
-        #   本次没有 create_plan、没有 agent_tasks 行 ⇒ 客观上不存在批次号，
-        #   此时 `orch_run_id` 恒为 0。**这是事实，不是 bug** ——
-        #   但绝不能为了"让它有值"而引用一个不存在的变量（那正是原缺陷）。
-        #   真要让它有批次号，得在复用路径上补 create_plan，属独立议题。
-        """P0-1 编排路径流式产出：子任务过程（agent 事件）→ 汇总 tokens → 落库 → done。
-
-        与主路径落库段保持一致（card 含 orchestrated/plan），前端按 stage/agent/token 现有渲染直接可视化。
-        """
-        # 2026-09-23：此处原有写死的「知识库检索 done/retrieved=False」阶段事件。它无条件出现、
-        # 与真实检索无关（编排模式下子任务的 stage 事件不外传，见子任务事件转发只收
-        # token/reasoning/tool/done），会让用户看到一个从未真正执行过的「知识库检索·未引用」环节。
-        # 现不再预发该阶段：检索真实性由各子任务按其 Agent 的 kb_required 决定。
-        yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "run"}
-        orch_tasks = ((orch.get("data") or {}).get("tasks")) or []
-        # ★ B5-6（A-1）：复用路径**也要产出 subtasks 轨迹**。
-        #   根因：`_stream_orchestrated`（复用）与 `_stream_orchestrated_flow`（真实执行）
-        #   各写一份 card_data，而**只有后者带 `exec.subtasks`**
-        #   ⇒ 复用路径落库的消息 `subtasks=[]`
-        #   ⇒ 前端 `06-cards.js: if(subs.length)` 判空 → **整块不渲染**
-        #   ⇒ 用户看到「有计划编导、有一堆子智能体状态，但没有任何子任务卡片」，
-        #   且**刷新后实时 timeline 全丢**（那只是 DOM，从未落库）。
-        #   实测（真库 conv 9360）：msg3983（真实执行）subtasks 3 条 /
-        #   msg3985（复用）**0 条**，而 run535 实际跑5 个子任务、产出 3.6 万字符。
-        #   ⇒ 数据在 `agent_tasks` 表里躺着，界面一条都看不到。
-        #   本路径不逐个执行子任务，故 status 统一取 `orch_tasks` 自带值（缺省 done），
-        #   **不伪造** latency/token —— 模板复用的口径本就`template_reuse`（见 capability_scope）。
-        _subtasks = []
-        for _i, _tk in enumerate(orch_tasks):
-            _st = str(_tk.get("status") or "done")
-            _subtasks.append({
-                "key": _tk.get("key") or ("t%d" % (_i + 1)),
-                "title": _tk.get("title") or _tk.get("key") or ("t%d" % (_i + 1)),
-                "agent": _tk.get("agent") or "",
-                # ★ 复用路径没有真实执行耗时/ token，**显式留空而不是填 0** ——
-                #   填 0 会被前端 `(s.latency_ms/1000).toFixed(1)` 渲染成 "⏱ 0.0s"，
-                #   看起来像"瞬间完成"，是**假数据**；留空则前端整段不显示（正确）。
-                "latency_ms": _tk.get("latency_ms") or None,
-                "token_count": _tk.get("token_count") or None,
-                "deps": _tk.get("deps") or [],
-                "status": "done" if _st == "done" else ("run" if _st == "running" else _st),
-                "summary": _tk.get("summary") or "",
-                "error": _tk.get("error") or "",
-                # ★ F-3：复用路径（模板声明）**没有真实执行** ⇒ output 恒为 None。
-                #   前端据此不渲染结果块，而不是渲染空块或编造内容
-                #   （与 latency_ms/token_count 留空的理由同源：不许造假数据）。
-                "output": _tk.get("output") or None,
-                # 标记来源，便于前端与后续排查区分"真跑过"与"模板声明"
-                "from_template": True,
-            })
-        for tk in orch_tasks:
-            tkey = tk.get("key") or "t"
-            ttitle = tk.get("title") or tkey
-            yield {"type": "agent", "status": "run", "name": tkey, "display_name": ttitle,
-                   "intent": intent, "hil_level": hil_level}
-            yield {"type": "agent", "status": "done", "name": tkey, "display_name": ttitle,
-                   "intent": intent, "hil_level": hil_level}
-        orch_content = orch.get("content") or ""
-        _n_bad = sum(1 for _ot in orch_tasks if str(_ot.get("status") or "done") != "done")
-        _d = ("（自动编排）复杂任务已分解为 %d 个子任务执行完成%s，汇总最终结论…"
-              % (len(orch_tasks), ("（其中 %d 个未成功）" % _n_bad) if _n_bad else ""))
-        yield {"type": "progress", "kind": "progress", "delta": _d}
-        # P0-3（2026-09-17）：无节流切片 → 类人节奏产出（本路径不做事后补块，保持原行为）
-        for _chunk in iter_stream_chunks(orch_content):
-            yield {"type": "token", "delta": _chunk}
-        yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "done"}
-        # SP-R/视图联动：编排汇总内容含 SysML → 投影视图（需求图/BDD 等会话内预览）
-        sysml_views = self._gen_sysml_views(orch_content, intent, user_input)
-        llm_info = {"provider": (orch.get("llm") or {}).get("provider", "自动编排"), "model": "-",
-                    "used_mock": bool((orch.get("llm") or {}).get("used_mock", False)),
-                    "latency_ms": orch.get("latency_ms", 0)}
-        yield {"type": "stage", "name": "写入会话", "status": "run"}
-        card_data = json.dumps({
-            "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
-            "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
-            "orchestrated": True, "degraded": bool(orch.get("degraded")),
-            "plan": [{"key": t.get("key"), "title": t.get("title"), "agent": t.get("agent"),
-                      "status": t.get("status")} for t in orch_tasks],
-            "sysml_views": sysml_views,
-            "source": "none", "confidence": 0, "graph_count": 0, "vector_count": 0,
-            "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
-            # ★ 2026-10-14（#19 之外的通用性项）：**复用路径的能力盲区显式化**。
-            #   这条路径只播报 `agent run/done` 占位事件、**不执行子任务** ⇒
-            #   挂在子任务上的结构化能力（claims 结论分档 / 结论冲突检测 /
-            #   交付物结构校验）**在这里完全不会发生**，而用户看不出区别。
-            #   ⇒ 落一条明确标记，前端可据此提示「本次为流程模板复用，
-            #     未执行子任务，故未做结论分档/冲突检测/交付物结构校验」。
-            #   ⚠️ 这**不是**缺陷标记（复用是刻意的产品语义），是**口径说明**：
-            #     避免用户把"没检出冲突"误解成"检查过且无冲突"。
-            "capability_scope": {
-                "mode": "template_reuse",
-                "subtasks_executed": False,
-                "structure_checks_applied": False,
-                "note": "本次命中已发布流程模板，未执行子任务；"
-                        "结论分档/冲突检测/交付物结构校验均未应用",
-            },
-            "exec": {"reasoning": f"自动编排：复杂任务分解为 {len(orch_tasks)} 个子任务由多 Agent 协作执行",
-                     "agent": agent_def.name, "tools": [],
-                     # ★ B5-6：与真实执行路径（:1409）字段集对齐 ——
-                     #   此前此处的 exec 只有 3 个键，缺 subtasks ⇒ 前端整块不渲染。
-                     "subtasks": _subtasks},
-        }, ensure_ascii=False)
-        with db_conn() as conn:
-            # 2026-09-29：user 消息已在 execute_stream 入口落库，此处只插 assistant（防重复）
-            cursor = conn.execute(
-                "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
-                (conversation_id, "assistant", orch_content, "text", card_data)
-            )
-            msg_id = cursor.lastrowid
-            _archive_artifacts(conn, conversation_id, msg_id, card_data, orch_content, intent)
-            conn.execute(
-                "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
-                # ★ 2026-10-29：同上，入库前规范化
-                (self._intent_for_storage(intent, locals().get("_detected", "")),
-                 conversation_id)
-            )
-            # Audit log
-# P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——
-#   此前此处直插 audit_logs 只有 5 列，绕过溯源上下文（IP/UA/request_id）与哈希链，
-#   且归属写死「王工」（不可信）。改由统一入口写入，与其余 200+ 条审计同一口径。
-            audit(audit_user(user), "llm_chat",
-                  f"会话#{conversation_id} · 自动编排（{len(orch_tasks)}子任务）· 意图:{intent}", conn=conn)
-            # 话题打标：落库后立即打标（含刚插入的当前轮消息）
-            try:
-                self._tag_topics(conn, conversation_id)
-            except Exception:
-                pass
-        yield {"type": "stage", "name": "写入会话", "status": "done"}
-        # V2.5：主 Agent（团队负责人）收尾事件——修前缺失致前端「子智能体：团队」停留"执行中"
-        yield {"type": "agent", "status": "done", "name": agent_def.name,
-               "display_name": agent_def.name, "intent": intent, "hil_level": hil_level}
-        yield {"type": "done", "data": {
-            "message_id": msg_id, "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
-            "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
-            "orch_run_id": int(run_id or 0),   # B2-11：同上
-            "content": orch_content, "report": None, "card": json.loads(card_data),
-            "sysml_views": sysml_views, "llm": llm_info, "orchestrated": True,
-            "plan": orch_tasks, "degraded": bool(orch.get("degraded")),
-            "retrieval": {"source": "none", "route": "none", "confidence": 0,
-                          "graph_count": 0, "vector_count": 0, "attachment_used": False},
-        }}
+    # ★ 2026-11-05：`_stream_orchestrated` 已移除。
+    #   它只服务「画布流程复用」路径（用预先算好的 orch 结果直接流式输出），
+    #   该路径随画布工作流一并删除 ⇒ 本方法**无任何调用点**（全仓已复核）。
+    #   主链路编排走 `_stream_orchestrated_flow`（真实执行），未受影响。
 
     def _persist_partial_stream(self, conversation_id, content, reason="error",
                                 dry_run=False, force=False, detail="", exec_card=None):
@@ -4504,6 +4357,14 @@ class StreamMixin:
                 if _bound:
                     team_intent = _bound
                     forced_intent = forced_intent or _bound
+                    # ★ 2026-11-06（方案②）：**回读绑定这条分支也必须记下主 Agent**。
+                    #   旧实现只在「请求显式带 team」的分支设置 `_team_main_agent`（上面 4352 行），
+                    #   而续答 / 刷新页面 / 前端没传 team 时走的是本分支 ⇒ 成员定向后
+                    #   `_build_tools_def` 只取成员自己的绑定，主 Agent 的 MCP 能力全部丢失
+                    #   （实测 knowledge_qa 只有 4 个本地工具、0 个 MCP）。
+                    #   继承机制本身已在 tools.py:240 实现，这里只是把"用户选过的主 Agent"
+                    #   在**所有**入口都如实登记，不再因入口不同而产生能力差异。
+                    self._team_main_agent = _bound
                     # ★ 2026-10-28（用户反馈③「我只是输入一段V2代码让AI校验，
                     #   他自动读取了智源的工程数据」）：用户看到的"自动用智源"，
                     #   真因是**本会话绑定的主 Agent 覆盖了意图**，而这条说明
@@ -4534,6 +4395,31 @@ class StreamMixin:
                 _detected = self.router.detect(user_input, prev_intent=dst["intent"] or None,
                                                history=_hist)
             intent = forced_intent or _detected
+            # ★★ 2026-11-06：**短续句不得落到「通用问答Agent」**（无工具、无上下文）。
+            #   事故（conv 990485，14:54）：用户发「继续」，被判 intent=chat / route=inherit，
+            #   执行主体变成「通用问答Agent」⇒ 生成阶段 0 字正文 ⇒ 收口只能写一句
+            #   "连接中断或服务端异常"（用户据此误判成服务重启）。
+            #   语义：用户已选定主 Agent，「继续」是**接着上一轮干**，不是闲聊 ——
+            #   按主 Agent 执行既保住工具能力，也保住上下文。
+            #   回退开关：intent.continue_uses_main_agent=False。
+            if intent == "chat" and team_intent and conversation_id:
+                try:
+                    from core.config import get as _cfg_cont
+                    _cont_ok = bool(_cfg_cont("intent", "continue_uses_main_agent", True))
+                except Exception:
+                    _cont_ok = True
+                try:
+                    _is_cont = self.router._is_short_continuation(user_input)
+                except Exception:
+                    _is_cont = False
+                if _cont_ok and _is_cont:
+                    intent = forced_intent = team_intent
+                    self._team_routed_to = ""
+                    _cont_note = (f"（执行主体）「{user_input.strip()[:12]}」是对上一轮的续写，"
+                                  f"已按主 Agent「{team_intent}」接着执行（不反问、不降级为闲聊）")
+                    exec_notices.append({"kind": "progress", "text": _cont_note})
+                    self._exec_subject_note = _cont_note
+                    yield {"type": "progress", "delta": _cont_note, "kind": "progress"}
             # P0-4（2026-09-19）：显式定向（团队/指定 Agent）覆盖语义识别结果时**不静默**。
             # 取舍：显式选择优先（用户选了团队就该按团队走），但差异必须可见——否则
             # 「识别到 A、实际跑 B」用户永远发现不了（会话 351 卡片的 confidence=0 即此形态：
@@ -4931,23 +4817,8 @@ class StreamMixin:
             if not forced_intent and not team_direct and self._needs_orchestration(user_input, intent,
                                                               has_attachments=bool(attachments),
                                                               multi=_multi_intent):
-                # P0-1 复用：已发布 planner_auto 沉淀流程语义命中 → 直接执行（省重新规划）
-                reused = self._try_reuse_planner_flow(user_input, intent)
-                if reused and not dry_run:
-                    self._save_conversation_dst(conversation_id, intent, slots)
-                    yield {"type": "progress", "kind": "progress",
-                           "delta": f"（自动编排）命中已发布沉淀流程「{reused.get('flow_name') or ''}」，按流程模板执行子任务…"}
-                    reused["data"] = {"tasks": reused.get("plan") or []}
-                    # ⚠️ **不传 run_id**：复用流程走的是「已发布流程模板」，
-                    #   `reused` 是**预先算好的** orch（`_try_reuse_planner_flow` 返回），
-                    #   本次**没有** create_plan、没有 agent_tasks 行 ⇒ 压根不存在批次号。
-                    #   `execute_stream` 里也没有 `run_id` 局部变量（真 run_id 是
-                    #   `_stream_orchestrated_flow` 的局部变量）—— 在这里传 `run_id=`
-                    #   会把 NameError 从被调方挪到调用方，**等于没修**。
-                    yield from _yield_collect(self._stream_orchestrated(
-                        reused, user_input, conversation_id, intent, agent_def, hil_level,
-                        kb_tags, attachments, slots, user), _orch_acc)
-                    return
+                # ★ 2026-11-05：画布流程复用分支已移除（`_try_reuse_planner_flow` 随画布删除），
+                #   此处直接走原 LLM 规划路径 —— 与"复用未命中"时的行为完全一致。
                 try:
                     # P0-2 DST：编排流式前落会话意图状态（子管道不写主会话状态）
                     if not dry_run:
@@ -5034,7 +4905,6 @@ class StreamMixin:
             att_parsed_info = {"parsed": att_parsed, "skipped": att_skipped[:5]}
             if att_vision.get("images"):
                 att_parsed_info["vision"] = att_vision   # 留痕：图片到底进没进模型、为什么
-            matched_flows = self._match_flows(user_input + (" " + att_text[:500] if att_text else ""))
 
             # ── 阶段 2：知识检索（#标签 + 附件前 600 字符并入）──
             # 按需检索：#标签主动引用 / Agent kb_required 配置 二选一才检索
@@ -7096,7 +6966,7 @@ class StreamMixin:
                     "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
                 },
                 "attachments_info": {**att_parsed_info, "consumed": len(retrieval.get("attachment_hits") or [])},
-                "matched_flows": matched_flows,
+                "matched_flows": [],   # 画布流程已移除，字段保留为空（前端不消费）
                 "quality_report": quality_report,
                 # ★ 2026-10-17（米爸「harness 持续工作」）：本轮请求内自主续跑次数
                 #   （0 = 一轮收口；>0 = 评估器放行了 N 次续跑，前端/排查可追溯）。

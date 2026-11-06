@@ -71,6 +71,7 @@
         <!-- 2026-10-22：评测管理（pg-eval）—— 评测历史 / 趋势 / 可信度 / 门禁接线。
              按「管理类入口统一收口」原则（2026-09-14 用户与权限、2026-09-17 审批管理
              均按此原则补进「更多」），与「自进化周报」同构。 -->
+        <div class="mf-item" onclick="hideMoreFlyout();go('my-feedback')" data-page-node-id="mf-my-feedback-entry" title="我的反馈：查看每次点踩/点赞的编号与处理进度">📮 <span>我的反馈</span><span style="margin-left:auto;font-size:12px;color:#7fa3cc;">追踪处理进度</span></div>
         <div class="mf-item" onclick="hideMoreFlyout();go('eval')" data-page-node-id="mf-eval-entry" title="评测管理：各能力最新分 / 历史趋势 / 这个分数能不能信 / 多少门禁在拦回归">🧪 <span>评测管理</span><span style="margin-left:auto;font-size:12px;color:#7fa3cc;">分数 · 趋势 · 可信度</span></div>
       </div>
     </nav>
@@ -1677,6 +1678,18 @@
            ② 历史怎么变（按类型分组的趋势）
            ③ 什么在拦着我（门禁接线状态）
            ⚠ 与 #pg-evolution 一样必须是 #pages 的直接子级（否则布局脱离主区容器）。 -->
+      <!-- 2026-11-06 P0 我的反馈：必须是 #pages 的直接子级 -->
+      <div class="page" id="pg-my-feedback" data-page-node-id="mfb-page-20261106">
+        <h3 class="pt" data-page-node-id="mfb-h3">我的反馈</h3>
+        <div class="pd" data-page-node-id="mfb-pd">我提的反馈后来怎样了？ <span class="badge" data-page-node-id="mfb-bd">可追踪</span>
+          <span id="mfb-head" style="float:right" data-page-node-id="mfb-head"></span>
+        </div>
+        <div id="mfb-body" data-page-node-id="mfb-body">
+          <div id="mfb-list" data-page-node-id="mfb-list"><div class="loading">加载中…</div></div>
+          <div id="mfb-detail" data-page-node-id="mfb-detail"></div>
+        </div>
+      </div>
+
       <div class="page" id="pg-eval" data-page-node-id="evm-page-20261022">
         <h3 class="pt" data-page-node-id="evm-h3">评测管理</h3>
         <div class="pd" data-page-node-id="evm-pd">系统现在答得好不好？这些数字能不能信？ <span class="badge" data-page-node-id="evm-bd">质量可见性</span>
@@ -1925,6 +1938,8 @@
 <script src="/static/js/mods/51-answer-view.js" defer></script>
 <script src="/static/js/mods/52-events.js" defer></script>
 <!-- 2026-11-03 多方案对比卡（FR-MG-6：多方案生成 + 比较 + 多维度打分） -->
+<!-- 2026-11-06 P0：我的反馈追踪页 -->
+<script src="/static/js/mods/53-my-feedback.js" defer></script>
 <script src="/static/js/mods/58-alternatives.js" defer></script>
 </body>
 </html>

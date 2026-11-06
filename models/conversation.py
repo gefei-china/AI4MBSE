@@ -53,7 +53,3 @@ class ChatIn(BaseModel):
 class RenameIn(BaseModel):
     title: str
 
-
-class FlowRunIn(BaseModel):
-    payload: Optional[str] = ""     # 用户输入/意图文本，注入流程 payload
-    branch: Optional[str] = None

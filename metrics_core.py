@@ -683,10 +683,24 @@ def eval_quality(conn) -> dict:
       negative_control.recall@5   = 0.0   → 负对照（轮转 gold），证明指标在真测对齐关系
       entity_precision / f1 列为 0.0 **是"未计算"**，不是"精确率为 0" → 必须如实标注
     """
-    row = conn.execute(
-        "SELECT id, created_at, model_version, entity_precision, entity_recall, entity_f1, "
-        "relation_precision, relation_recall, relation_f1, detail, is_golden "
-        "FROM eval_reports ORDER BY created_at DESC LIMIT 1").fetchone()
+    # ★ 2026-11-05 修（**既有缺陷**，与画布工作流移除无关）：
+    #   历史 logs/service.log 里本处 500 已出现 9 次（该文件最后修改 2026-10-31）。
+    #   原实现 `FROM eval_reports ORDER BY created_at DESC LIMIT 1` 取**最新一行**，
+    #   但本报表明多类型混存（rag_retrieval / trace_consistency / generation_quality）。
+    #   实测真库：trace_consistency 02:34:27 比 rag_retrieval 02:31:52 晚约 3 分钟
+    #   ⇒ LIMIT 1 取到 trace 报告；而 trace 报告的 `negative_control.recall` 是 **float**、
+    #   不是 dict ⇒ 下方 `nc.get("recall@5")` 抛 AttributeError ⇒ 知识看板 500。
+    #   双修：① 口径——「知识获取质量」只该读 rag_retrieval；② 形态——加类型守卫（见下）。
+    _cols = {_r[1] for _r in conn.execute("PRAGMA table_info(eval_reports)")}
+    _sel = ("SELECT id, created_at, model_version, entity_precision, entity_recall, entity_f1, "
+            "relation_precision, relation_recall, relation_f1, detail, is_golden "
+            "FROM eval_reports")
+    row = None
+    if "eval_kind" in _cols:
+        row = conn.execute(_sel + " WHERE eval_kind='rag_retrieval' "
+                           "ORDER BY created_at DESC LIMIT 1").fetchone()
+    if not row:   # 老库无 eval_kind 列 / 该类型尚无数据 → 退回最新一行（保持旧行为）
+        row = conn.execute(_sel + " ORDER BY created_at DESC LIMIT 1").fetchone()
     if not row:
         return {"landed": False, "note": "eval_reports 无记录"}
     try:
@@ -697,7 +711,12 @@ def eval_quality(conn) -> dict:
     doc = s.get("doc") or {}
     graph = s.get("graph") or {}
     neg = s.get("neg") or {}
-    nc = ((detail.get("negative_control") or {}).get("recall") or {})
+    # 形态守卫：rag_retrieval 报告里 `negative_control.recall` 是 dict（含 recall@5），
+    # 其它 eval_kind 的 `recall` 是 float ⇒ 非 dict 一律当空处理，绝不抛。
+    _nc_block = detail.get("negative_control")
+    _nc_block = _nc_block if isinstance(_nc_block, dict) else {}
+    _recall = _nc_block.get("recall")
+    nc = _recall if isinstance(_recall, dict) else {}
     age = conn.execute("SELECT CAST(julianday('now')-julianday(?) AS INT)",
                        (row["created_at"],)).fetchone()[0]
     return {

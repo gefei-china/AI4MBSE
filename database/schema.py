@@ -80,7 +80,6 @@ from .migrations import (
     _migrate_misevolution_p21,  # 2026-10-19 安全信号基线 + 晋升复测（P2-1，红线 #5）
     _migrate_curriculum_p22,  # 2026-10-19 失败驱动任务提案队列（P2-2，只提议不自动执行）
     _migrate_agent_archive_p23,  # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3，只记录不切换生效版本）
-    _migrate_flow_topology_p24,  # 2026-10-20 画布拓扑台账 + 结构体检（P2-4，只读画布不改拓扑）
     _migrate_event_tables,  # 2026-11-01 事件驱动底座三表（Super-agent 落地 P0-2/P0-4）
 )
 from .seeds import (
@@ -1860,7 +1859,6 @@ def init_db():
     #    DGM/AlphaZero 式：把散落的进化历史收敛成变体台账 + 记住死路。
     #    只记录，不切换生效 agent、不回滚配置（过人的铁律同 P1-4）。
     _migrate_agent_archive_p23(conn)
-    _migrate_flow_topology_p24(conn)
     # ── 2026-11-01 事件驱动底座（Super-agent 落地 P0-2/P0-4）──
     #    ev_sources / ev_triggers / ev_workitems —— 补"事件驱动"这一层，
     #    使触发不再只能来自"人点一次"。纯新表，幂等建表。

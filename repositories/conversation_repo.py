@@ -395,7 +395,7 @@ class ConversationRepo(BaseRepo):
         self.execute("UPDATE messages SET quality=? WHERE id=?", (quality, msg_id))
 
     def create_quality_feedback(self, msg_id: int, quality: str, context: str,
-                                created_by: str = "未登录", conversation_id: int = 0) -> None:
+                                created_by: str = "未登录", conversation_id: int = 0) -> int:
         """落质量信号历史（signal_kind='quality'，与评审行可区分）。
 
         `conversation_id` 单列入库：online_eval 采样时按会话回查助手消息
@@ -406,7 +406,130 @@ class ConversationRepo(BaseRepo):
             "signal_kind, context, created_by) VALUES (?,?,?,?,?,?,?)",
             (msg_id, conversation_id or None, "", quality, "quality", context, created_by),
         )
+        return int(self.scalar("SELECT last_insert_rowid()", default=0) or 0)
 
     def get_message_quality(self, msg_id: int) -> str:
         v = self.scalar("SELECT quality FROM messages WHERE id=?", (msg_id,))
         return str(v or "")
+
+    # ── 2026-11-06 P0：反馈追踪（我的反馈）──────────────────────────
+    @staticmethod
+    def _fb_cols(conn) -> set:
+        """老库/夹具库可能没有状态列 ⇒ 读取侧自适应，不抛 no such column。"""
+        try:
+            return {r[1] for r in conn.execute("PRAGMA table_info(feedback)")}
+        except Exception:
+            return set()
+
+    def list_feedback_by_creator(self, created_by: str, state: str = "",
+                                 limit: int = 50, offset: int = 0) -> list:
+        """按创建人列反馈（**不做全表兜底**：created_by 为空/匿名一律返回空）。"""
+        if not created_by:
+            return []
+        cols = self._fb_cols(self.conn)
+        sel = "SELECT * FROM feedback WHERE created_by=?"
+        params = [created_by]
+        if state and "state" in cols:
+            sel += " AND state=?"
+            params.append(state)
+        sel += " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+        params.extend([int(limit), int(offset)])
+        out = self.rows(sel, params)
+        for r in out:
+            if "state" not in cols:
+                r["state"] = "new"
+            from core.feedback_types import FEEDBACK_STATE_LABELS
+            r["state_label"] = FEEDBACK_STATE_LABELS.get(r.get("state") or "new",
+                                                          r.get("state") or "new")
+        return out
+
+    def get_feedback_for_creator(self, fb_id: int, created_by: str):
+        """单条详情；**id + created_by 双条件**防越权读他人反馈。"""
+        if not created_by:
+            return None
+        row = self.one("SELECT * FROM feedback WHERE id=? AND created_by=?",
+                       (int(fb_id), created_by))
+        if row and "state" not in self._fb_cols(self.conn):
+            row["state"] = "new"
+        return row
+
+    def advance_feedback_state(self, fb_id: int, target: str, *, note: str = "",
+                               actor: str = "", link_kind: str = "", link_id: str = ""):
+        """状态前进（forward-only）。返回 {ok, from, to, reason}；老库缺列时静默不写但如实报告。
+
+        绝不在此方法里改 quality / signal_kind / message_id 等既有列 —— 只推进状态与留痕。
+        """
+        from core.feedback_types import can_advance_state
+        cols = self._fb_cols(self.conn)
+        if "state" not in cols:
+            return {"ok": False, "reason": "老库缺状态列（未执行迁移）"}
+        row = self.one("SELECT id, state FROM feedback WHERE id=?", (int(fb_id),))
+        if not row:
+            return {"ok": False, "reason": "反馈不存在"}
+        cur = str(row.get("state") or "new")
+        if not can_advance_state(cur, target):
+            return {"ok": False, "from": cur, "to": target,
+                    "reason": "状态只允许前进或标记过期"}
+        self.execute(
+            "UPDATE feedback SET state=?, consumed_at=CASE WHEN consumed_at='' "
+            "THEN ? ELSE consumed_at END, consumed_by=?, link_kind=?, link_id=?, "
+            "last_note=? WHERE id=?",
+            (target, _now_str(), str(actor or ""), str(link_kind or ""),
+             str(link_id or ""), str(note or ""), int(fb_id)),
+        )
+        return {"ok": True, "from": cur, "to": target, "id": int(fb_id)}
+
+    def feedback_timeline(self, row: dict) -> list:
+        """按真实数据拼时间线（不臆造事件）：创建 → 消费 → 下游采样/坏例 → 当前关联。"""
+        out = []
+        mid = row.get("message_id") or 0
+        out.append({"at": row.get("created_at") or "", "kind": "created",
+                    "title": "收到反馈 #%s" % row.get("id"),
+                    "detail": "%s · %s" % (row.get("quality") or row.get("feedback_type") or "",
+                                          row.get("signal_kind") or "review")})
+        for k, label in (("consumed_at", "consumed"), ("checked_at", "checked")):
+            if row.get(k):
+                out.append({"at": row[k], "kind": k,
+                            "title": "进入下游：%s" % (row.get("link_kind") or label),
+                            "detail": row.get("last_note") or row.get("consumed_by") or ""})
+                break
+        if mid:
+            try:
+                qs = self.rows(
+                    "SELECT id, sample_reason, status, auto_score, created_at "
+                    "FROM online_eval_queue WHERE message_id=? ORDER BY id", (mid,))
+                for q in qs:
+                    out.append({"at": q.get("created_at") or "", "kind": "sampled",
+                                "title": "进入评测队列 #%s" % q.get("id"),
+                                "detail": "%s · %s%s" % (
+                                    q.get("sample_reason") or "", q.get("status") or "",
+                                    (" · 自动分 %s" % q["auto_score"]) if q.get("auto_score") is not None else "")})
+            except Exception:
+                pass
+            try:
+                bs = self.rows(
+                    "SELECT id, kind, status, occurrences, first_seen_at FROM bad_cases "
+                    "WHERE subject=? ORDER BY id", ("msg:%s" % mid,))
+                for b in bs:
+                    out.append({"at": b.get("first_seen_at") or "", "kind": "badcase",
+                                "title": "记为坏例 #%s" % b.get("id"),
+                                "detail": "%s · %s · 复现 %s 次" % (
+                                    b.get("kind") or "", b.get("status") or "",
+                                    b.get("occurrences") or 0)})
+            except Exception:
+                pass
+        if row.get("link_kind") and row.get("link_id"):
+            out.append({"at": row.get("consumed_at") or "", "kind": "linked",
+                        "title": "当前关联：%s #%s" % (row["link_kind"], row["link_id"]),
+                        "detail": row.get("last_note") or ""})
+        if len(out) == 1:
+            out.append({"at": "", "kind": "pending",
+                        "title": "尚未进入任何下游",
+                        "detail": "当前无自动调度器；需人工触发采样，或开启 evolution.tick_enabled"})
+        return out
+
+
+def _now_str() -> str:
+    import time as _t
+    return _t.strftime("%Y-%m-%d %H:%M:%S")
+

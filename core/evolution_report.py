@@ -78,7 +78,7 @@ VERDICT_LABEL = {
 
 
 def _cfg():
-    """配置读取（与 agent_archive / flow_topology 同一范式）。"""
+    """配置读取（与 agent_archive 同一范式）。"""
     from core import config as _config
     return _config
 
@@ -443,57 +443,6 @@ def _act_hil(conn: sqlite3.Connection, s: dict) -> list:
     } for it in items]
 
 
-def _act_topology(conn: sqlite3.Connection, s: dict) -> list:
-    """拓扑欠账：只体检不改（红线 #6 不碰架构拓扑）⇒ 标注只能看。"""
-    from core import flow_topology as ft
-    try:
-        res = ft.scan(conn)
-    except Exception as e:                                    # noqa: BLE001
-        return [{
-            "source": "topology",
-            "source_label": "画布结构",
-            "id": None,
-            "title": "拓扑体检失败",
-            "detail": "%s: %s" % (type(e).__name__, e),
-            "meta": {},
-            "action": None,
-            "not_actionable_reason": "体检未完成",
-        }]
-    ov = res.get("overview") or {}
-    groups = res.get("groups") or []
-    out = []
-    # ★维度值在 overview.dimensions 里，不在顶层（真库键位，见 _dim 注释）
-    blockers = _dim(ov, "blocker_defects")
-    if blockers:
-        out.append({
-            "source": "topology",
-            "source_label": "画布结构",
-            "id": None,
-            "title": "%d 个 blocker 级结构缺陷" % blockers,
-            "detail": "悬空连线 / 孤立节点 / 类型无法解析——画布自身跑不通。",
-            "meta": {"canvases": ov.get("canvases")},
-            "action": None,
-            "not_actionable_reason": "拓扑缺陷需人工改画布；体检镜不是手"
-                                     "（红线 #6：不碰架构拓扑）",
-        })
-    dup = _dim(ov, "duplicate_canvases") or 0
-    if dup:
-        g0 = groups[0] if groups else {}
-        out.append({
-            "source": "topology",
-            "source_label": "画布结构",
-            "id": None,
-            "title": "%d 幅画布结构重复" % dup,
-            "detail": ("最大一组 %s 幅，形状 %s，来源 %s"
-                       % (g0.get("size"), g0.get("shape"),
-                          "/".join(g0.get("sources") or []) or "未知")),
-            "meta": {"groups": _dim(ov, "isomorphic_groups")},
-            "action": None,
-            "not_actionable_reason": "合并/删除画布会改动生效拓扑，需人工决定",
-        })
-    return out
-
-
 def _act_safety(conn: sqlite3.Connection, s: dict) -> list:
     """安全信号：alert 是**待人解读的信号**，不是已确认的恶化。"""
     try:
@@ -532,7 +481,6 @@ def _act_safety(conn: sqlite3.Connection, s: dict) -> list:
 ACTION_SOURCES = (
     ("curriculum", "任务提案", _act_curriculum),
     ("hil", "人工确认点", _act_hil),
-    ("topology", "画布结构", _act_topology),
     ("safety", "安全信号", _act_safety),
     ("capability", "能力长尾", _act_capability),
     ("badcase", "BadCase 入库", _act_badcase),
@@ -671,19 +619,6 @@ def _metrics_for(conn: sqlite3.Connection, s: dict, scope: str) -> list:
             "SELECT COUNT(*) FROM hil_confirmations "
             "WHERE created_at>=? AND created_at<?",
             int(s["window_days"]))))
-    elif scope == "structure":
-        # 拓扑是存量指标：环比无意义（上周的画布早被删了），只报当前值
-        total = _count(conn, "SELECT COUNT(*) FROM agent_flows")
-        try:
-            from core import flow_topology as ft
-            ov = (ft.scan(conn).get("overview") or {})
-        except Exception:                                     # noqa: BLE001
-            ov = {}
-        out.append(("画布总数", _stock(total, "尚无画布定义")))
-        out.append(("结构重复", _stock(_dim(ov, "duplicate_canvases"),
-                                "拓扑体检未产出结果")))
-        out.append(("blocker 缺陷", _stock(_dim(ov, "blocker_defects"),
-                                   "拓扑体检未产出结果")))
     elif scope == "capability":
         # P0-a 能力度量（capability_registry 统一注册处）：
         # 调用总量走环比（流式），长尾/零调度走存量（_stock——环比无意义：
@@ -720,7 +655,6 @@ def _metrics_for(conn: sqlite3.Connection, s: dict, scope: str) -> list:
 DIGEST_SECTIONS = (
     ("evolve", "进化留痕", "系统改了哪些东西、记住了哪些死路"),
     ("guard", "变更守卫", "改动之前有没有被拦下来、有没有等你点头"),
-    ("structure", "结构欠账", "画布层面的重复与缺陷"),
     ("capability", "能力度量", "五类能力的调用、长尾与零调度（P0-a 统一注册处）"),
 )
 
@@ -789,6 +723,80 @@ def build_confidence(actions: dict, digest: dict) -> dict:
 # ══════════════════════════════════════════════════════════════
 # 汇总
 # ══════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+# 2026-11-06 P0：本周因你而改变（用户反馈处理进度，只读）
+# ══════════════════════════════════════════════════════════════
+def _tick_status() -> dict:
+    """只读：周期触发器状态。导入失败也要有诚实回执，不静默省略。"""
+    try:
+        from core.evolution_tick import status as _st
+        return _st()
+    except Exception as e:
+        return {"enabled": False, "running": False, "mode": "unknown",
+                "reason": "触发器状态不可用：%s" % str(e)[:120]}
+
+
+def build_feedback_trace(conn: sqlite3.Connection, s: dict) -> dict:
+    """如实汇报「用户反馈后来怎样了」。**空数据禁止显示『一切正常』**。
+
+    前端点踩的 toast 曾承诺「将用于改进」却无任何回显；本段把承诺变成
+    可核对的数字：收到几条、几条进下游、卡在哪一步。只 SELECT，不写库。
+    """
+    from datetime import datetime, timedelta
+    out = {"received": 0, "negative": 0, "consumed": 0, "stuck": 0,
+           "by_state": {}, "items": [], "verdict": "no_data", "reason": "",
+           "disclaimer": "仅统计 feedback 表的显式反馈；不推断自动调度器是否运行。"}
+    if not _tbl_exists(conn, "feedback"):
+        out["verdict"] = "unknown"
+        out["reason"] = "feedback 表不存在"
+        return out
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(feedback)")}
+    days = int(s.get("window_days") or 7)
+    try:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM feedback WHERE created_at >= datetime('now', ?) "
+            "ORDER BY created_at DESC, id DESC LIMIT 100",
+            ("-%d day" % days,)).fetchall()]
+    except Exception as e:
+        out["verdict"] = "unknown"
+        out["reason"] = "反馈查询失败：%s" % str(e)[:120]
+        return out
+    out["received"] = len(rows)
+    stuck_cut = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    for r in rows:
+        st = str(r.get("state") or "new") if "state" in cols else "new"
+        r["state"] = st
+        out["by_state"][st] = out["by_state"].get(st, 0) + 1
+        neg = (str(r.get("quality") or "") in ("down",) or
+               str(r.get("feedback_type") or "") in ("modify", "wrong", "corrected"))
+        if neg:
+            out["negative"] += 1
+        if st != "new":
+            out["consumed"] += 1
+        elif str(r.get("created_at") or "") < stuck_cut:
+            out["stuck"] += 1
+    out["items"] = [{
+        "id": r.get("id"), "message_id": r.get("message_id"),
+        "quality": r.get("quality") or "", "state": r.get("state"),
+        "created_at": r.get("created_at") or "",
+        "link_kind": r.get("link_kind") or "", "link_id": r.get("link_id") or "",
+        "last_note": r.get("last_note") or "",
+    } for r in rows[:10]]
+    if not rows:
+        out["reason"] = "窗口 %d 天内没有收到任何反馈" % days
+    elif out["consumed"] == 0:
+        out["verdict"] = "needs_attention"
+        out["reason"] = ("收到 %d 条反馈，0 条进入下游；卡在采样前。"
+                         "当前无周期调度器，需人工触发或开启自动触发器" % len(rows))
+    elif out["stuck"] > 0:
+        out["verdict"] = "needs_attention"
+        out["reason"] = "%d 条反馈超过 24 小时仍未被消费" % out["stuck"]
+    else:
+        out["verdict"] = "ok"
+        out["reason"] = "收到 %d 条，%d 条已进入下游" % (len(rows), out["consumed"])
+    return out
+
+
 def build_report(conn: sqlite3.Connection, settings: Optional[dict] = None) -> dict:
     """生成自进化周报（**只读，绝不写**）。"""
     s = get_settings(settings)
@@ -811,6 +819,10 @@ def build_report(conn: sqlite3.Connection, settings: Optional[dict] = None) -> d
         "actions": actions,
         "digest": digest,
         "confidence": confidence,
+        # ★ 2026-11-06 P0：新增「本周因你而改变」段（只读，不参与 overall 判定，零回归）
+        "feedback_trace": build_feedback_trace(conn, s),
+        # ★ 2026-11-06 P1：把「引擎在不在跑」也如实说出来（只读）
+        "tick": _tick_status(),
     }
 
 

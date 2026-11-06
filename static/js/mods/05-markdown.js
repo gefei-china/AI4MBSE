@@ -550,6 +550,8 @@ document.addEventListener('click', function(e){
   btn.disabled = true;
   api(`/api/messages/${mid}/quality`, {method:'POST', body: JSON.stringify({quality: next})})
     .then(function(r){
+      // ★ 2026-11-06 P0：后端 400 会返 {error}，旧写法仍提示「已记录」= 说谎。
+      if(r && r.error) throw new Error(r.error);
       const got = (r && r.quality!=null) ? String(r.quality) : next;
       wrap.querySelectorAll('.msg-qc-btn').forEach(function(b){
         b.classList.remove('on','is-down');
@@ -559,12 +561,27 @@ document.addEventListener('click', function(e){
           if(bq==='down') b.classList.add('is-down');
         }
       });
-      if(typeof toast==='function'){
-        toast(got ? (got==='down' ? '已记录：这条回答有问题，将用于改进' : '已记录：这条回答有帮助') : '已取消评价');
+      // 回执常驻在按钮下方（toast 3 秒就消失，承载不了「可追踪」）
+      let rc = wrap.querySelector('.mfb-receipt');
+      if(!rc){
+        rc = document.createElement('div');
+        rc.className = 'mfb-receipt';
+        wrap.appendChild(rc);
+      }
+      const fid = r && r.feedback_id;
+      if(fid){
+        rc.innerHTML = '<div class="note" style="margin-top:6px;padding:6px 9px;font-size:12.5px;">'
+          + '<span class="st ok">已记录 feedback#' + esc(String(fid)) + '</span> '
+          + '<span style="color:var(--mut);">待采样</span> '
+          + '<button class="btn sm" style="margin-left:8px;" onclick="go(\'my-feedback\')">查看进度</button></div>';
+        if(typeof toast==='function') toast('已记录 feedback#' + fid + '，可在「我的反馈」追踪');
+      } else {
+        rc.innerHTML = '';
+        if(typeof toast==='function') toast(got ? '已记录：这条回答有帮助' : '已取消评价');
       }
     })
     .catch(function(err){
-      if(typeof toast==='function') toast('反馈提交失败，请重试');
+      if(typeof toast==='function') toast('反馈提交失败：' + ((err && err.message) || '请重试'));
     })
     .finally(function(){ btn.disabled = false; });
 });

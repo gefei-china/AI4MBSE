@@ -205,8 +205,15 @@ class StudioRepo(BaseRepo):
         #   `HTTPStatusError: 502 Bad Gateway` ⇒ 排查时被旧账带偏（正是上面注释
         #   声称要避免的那件事，但参数顺序错了 3 年没人发现）。
         if tools is not None:
+            # ★ 2026-11-06（实测）：此处原字符串以 `tools=?,` 结尾，而 _clear_err 又以
+            #   `, last_error=...` 开头 ⇒ 拼出 `tools=?, , last_error=` ⇒ SQLite
+            #   `near ",": syntax error`。后果是 `/test` 的**成功路径必抛异常**，
+            #   异常分支再调 update_mcp_status(offline) ⇒ 点一次「测试」反手把在线服务标下线。
+            #   实测：带有效 Bearer 时 POST /test 返回 502，而 /discover 正常。
+            #   ⇒ 去掉尾逗号，让 _clear_err 自带的逗号成为唯一分隔符。
+            #   ⚠️ 本文件是后端代码，改动需**重启服务**才加载；运行期已由前端改走 /discover 绕过。
             self.execute(
-                """UPDATE mcp_servers SET status=?, latency_ms=?, tools=?,"""
+                """UPDATE mcp_servers SET status=?, latency_ms=?, tools=?"""
                 + _clear_err +
                 """, last_check=CURRENT_TIMESTAMP WHERE id=?""",
                 (status, latency_ms, tools, status, sid),

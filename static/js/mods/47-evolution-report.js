@@ -74,11 +74,14 @@
       </div>`;
     }
     // ★不能点：渲染成说明条而不是死按钮
+    // ★ 2026-11-06 P0：改成可展开——把「为什么卡住 / 下一步是什么」说清楚，
+    //   而不是让「只能看」三个字成为终点。仍**不新增越权动作按钮**。
     const why = it.not_actionable_reason || '暂无处理入口';
     return `<div style="padding:8px 0;border-bottom:1px solid var(--line);">
-      ${head('<span class="badge">只能看</span>')}
-      <div style="font-size:12.5px;color:var(--mut);">
-        ${it.detail ? esc(it.detail) + ' ' : ''}（${esc(why)}）
+      ${head('<span class="badge">只能看</span><button class="btn sm ghost" data-ev-toggle style="margin-left:6px;"><span class="chev">▸</span> 为什么</button>')}
+      <div class="ev-fold-body" style="display:none;font-size:12.5px;color:var(--mut);padding:4px 0 6px;">
+        ${it.detail ? esc(it.detail) + ' ' : ''}（${esc(why)}）<br>
+        <b>下一步</b>：本条没有可一键处理的端点；需由对应模块补齐处理入口，或由管理员在「运行监控」人工处置。
       </div>
     </div>`;
   }
@@ -109,6 +112,41 @@
     }
 
     let h = '';
+
+    /* ── 置顶块：本周因你而改变（2026-11-06 P0）──
+         用户最关心「我的反馈后来怎样了」，故置于首屏最上方。
+         实测放在三段之后时 panelTop=1728 > 视口 900 ⇒ 首屏完全不可见。
+            把「我的反馈后来怎样了」如实说出来。空数据必须显示卡点，不得显示「一切正常」。 */
+    const ft = rep.feedback_trace || null;
+    if (ft) {
+      const vCls = ft.verdict === 'needs_attention' ? 'a' : (ft.verdict === 'ok' ? 'g' : '');
+      h += `<div class="panel" style="margin-bottom:14px;"><div class="ph">本周因你而改变
+        <span class="badge ${vCls}">${esc(ft.verdict || '')}</span>
+        <span style="flex:1"></span>
+        <span style="font-weight:400;font-size:12.5px;color:var(--mut);">收到 ${ft.received||0} 条 · 已进下游 ${ft.consumed||0} 条 · 卡住 ${ft.stuck||0} 条</span>
+      </div><div class="pb">
+        <div style="font-size:13.5px;margin-bottom:8px;">${esc(ft.reason || '')}</div>`;
+      if ((ft.items || []).length) {
+        h += '<table class="t"><tr><th>时间</th><th>编号</th><th>信号</th><th>状态</th><th>当前关联</th></tr>'
+          + ft.items.map(x => `<tr>
+              <td style="font-size:12.5px;white-space:nowrap;">${esc(String(x.created_at||'').slice(5,16))}</td>
+              <td>feedback#${esc(x.id)} <span style="color:var(--mut);font-size:12px;">消息 #${esc(x.message_id)}</span></td>
+              <td>${esc(x.quality || '—')}</td>
+              <td><span class="st ${x.state==='verified'?'ok':'w'}">${esc(x.state||'new')}</span></td>
+              <td style="font-size:12.5px;color:var(--mut);">${esc(x.link_kind ? x.link_kind + ' #' + x.link_id : '—')}</td>
+            </tr>`).join('') + '</table>';
+      } else {
+        h += '<div style="font-size:13px;color:var(--mut);">窗口内没有可展示的反馈明细。</div>';
+      }
+      const tk = rep.tick || {};
+      const tkTxt = tk.running
+        ? `自动触发器运行中 · ${esc(tk.mode || '')} 模式 · 每 ${tk.interval_s||0}s 扫描 · 已跑 ${tk.ticks||0} 轮`
+        : `自动触发器未运行（${esc(tk.reason || (tk.enabled ? '线程未启动' : '已关闭'))}）`;
+      h += `<div class="note" style="margin-top:10px;">${tkTxt}<br>
+        每条反馈的完整处理时间线见「⋯ 更多 → 我的反馈」。
+        ${esc(ft.disclaimer || '')}</div></div></div>`;
+    }
+
 
     /* ── 第 1 块：要你决策的（页面主体，最先看到） ── */
     h += `<div class="panel" style="margin-bottom:14px;">
@@ -176,13 +214,26 @@
   function _bindActions() {
     const box = document.getElementById('evr-actions');
     if (!box) return;
+    // ★ 2026-11-06 P0：「只能看」可展开（照抄 05-markdown.js 的 codeFoldToggle 模式）
+    box.querySelectorAll('[data-ev-toggle]').forEach(btn => {
+      btn.onclick = () => {
+        const row = btn.closest('div[style*="border-bottom"]');
+        const body = row && row.querySelector('.ev-fold-body');
+        if (!body) return;
+        const open = body.style.display === 'none';
+        body.style.display = open ? 'block' : 'none';
+        const chev = btn.querySelector('.chev');
+        if (chev) chev.textContent = open ? '▾' : '▸';
+      };
+    });
     box.querySelectorAll('button[data-ev-path]').forEach(btn => {
       btn.onclick = async () => {
         const path = btn.dataset.evPath, decision = btn.dataset.evAct;
         const old = btn.textContent;
         btn.disabled = true; btn.textContent = '处理中…';
         try {
-          const r = await api(path, { method: 'POST', body: { decision } });
+          // ★ 2026-11-06：旧写法传裸对象，fetch 会发 [object Object]，后端收不到 decision
+          const r = await api(path, { method: 'POST', body: JSON.stringify({ decision }) });
           if (r && r.ok === false) throw new Error(r.error || '操作失败');
           toast('已记录裁决，刷新查看最新状态');
           loadEvolutionReport();
@@ -193,6 +244,14 @@
       };
     });
   }
+
+  // ★ 2026-11-06 P1：周报页轻量自动刷新（30s，只在页面可见时），
+  //   让「系统变了」能自己冒出来，不必重进页面。模板同 48-eval.js 的作业卡轮询。
+  setInterval(function(){
+    const pg = document.getElementById('pg-evolution');
+    if(!pg || !pg.classList.contains('on')) return;
+    loadEvolutionReport();
+  }, 30000);
 
   window.loadEvolutionReport = loadEvolutionReport;
 })();

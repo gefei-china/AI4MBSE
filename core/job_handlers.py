@@ -558,6 +558,13 @@ def handler_online_eval_sample(payload: dict, job: dict) -> dict:
             _report(job, 1, "采样候选（负反馈优先）…")
             from core import online_eval as _oe
             res = _oe.sample_candidates(conn, apply=True)
+            # ★ 2026-11-06 P1：作业执行完立刻回填反馈状态（异步窗口的补丁）。
+            #   不这么做，用户会在「我的反馈」看到「待采样」而数据其实已入队。
+            try:
+                from core.evolution_tick import reconcile_feedback_states as _rec
+                rec = _rec(conn, apply=True)
+            except Exception as _e:
+                rec = {"error": str(_e)[:120]}
             fails = list(res.get("failures") or [])
             if fails:
                 # 采样源级失败必须可见：静默跳过会让"采样器坏了"长得像"没有负反馈"
@@ -565,6 +572,7 @@ def handler_online_eval_sample(payload: dict, job: dict) -> dict:
             return {"inserted": int(res.get("inserted") or 0),
                     "candidates": len(res.get("candidates") or []),
                     "plan": res.get("plan") or {},
+                    "feedback_reconciled": rec,
                     "failures": fails}
     finally:
         try:

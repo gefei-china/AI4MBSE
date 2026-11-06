@@ -279,6 +279,17 @@ def _migrate_columns(conn):
     _add("messages", "quality", "TEXT DEFAULT ''")                       # 用户质量信号：up | down（空=未评价）
     _add("feedback", "quality", "TEXT DEFAULT ''")                       # 同上（历史留痕，供采样回查）
     _add("feedback", "signal_kind", "TEXT DEFAULT ''")                   # 信号类型：review | quality（显式标注语义来源）
+    # ── 2026-11-06 P0：反馈处理状态机（把 toast 的空头承诺变成可追踪状态）──
+    # 六列全部带 DEFAULT：存量 8 行自动读 'new'，无需回填；
+    # 全仓 feedback 写入均为**显式列清单**、无 SELECT *，加列不破坏任何写入方。
+    _add("feedback", "state",        "TEXT DEFAULT 'new'")                # new|sampled|proposed|promoted|verified|expired
+    _add("feedback", "consumed_at",  "TEXT DEFAULT ''")                    # 首次被下游消费的时刻
+    _add("feedback", "consumed_by",  "TEXT DEFAULT ''")                    # 消费方（job kind / 模块名）
+    _add("feedback", "link_kind",    "TEXT DEFAULT ''")                    # badcase | online_eval | proposal | hil
+    _add("feedback", "link_id",      "TEXT DEFAULT ''")                    # 下游对象 id（字符串，兼容各类主键）
+    _add("feedback", "last_note",    "TEXT DEFAULT ''")                    # 最近一次状态变更的人话说明
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='feedback'").fetchone():
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_fb_owner_state ON feedback(created_by, state, created_at)")
     # ── 2026-10-29：告警可处置化（alert_events）──
     # 背景（生产库实证）：328 条告警 **status 全是 'open'**，一条都没被处理；
     #   同一批规则每 30 分钟一条，累积 81 次 ⇒ 看板被同因告警淹没（告警疲劳）。
@@ -297,6 +308,9 @@ def _migrate_columns(conn):
     _add("config_history", "effect_verdict", "TEXT DEFAULT ''")          # effective | ineffective | mixed | no_data | inconclusive
     _add("config_history", "effect_detail", "TEXT DEFAULT ''")           # 判定理由（人可读）
     _add("config_history", "effect_checked_at", "TEXT DEFAULT ''")       # 判定时间
+    # ── 2026-11-06 P1：提案来源（自动触发 vs 人工）与反馈溯源 ──
+    _add("config_proposals", "origin", "TEXT DEFAULT ''")                  # auto | manual
+    _add("config_proposals", "source_feedback_ids", "TEXT DEFAULT '[]'")  # 触发本提案的 feedback id 列表
     _add("skills", "frontmatter", "TEXT DEFAULT '{}'")                   # SKILL.md frontmatter 原文（含 triggers/category/author）
     _add("skills", "content", "TEXT DEFAULT ''")                         # SKILL.md 指令正文
     _add("skills", "triggers", "TEXT DEFAULT '[]'")                      # 触发关键词 JSON

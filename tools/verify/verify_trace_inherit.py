@@ -145,8 +145,10 @@ def main():
        "inherit_trace as _inherit" in src_stream)
     src_planner = (ROOT / "workflows" / "planner.py").read_text(encoding="utf-8")
     ck("B5 非流式编排用 submit_with_ctx", "_swc(pool, self._run_task" in src_planner)
+    # ★ 2026-11-05：B6 对象（画布并发 worker）随画布工作流移除，改为防回归断言。
     src_nodes = (ROOT / "workflows" / "nodes.py").read_text(encoding="utf-8")
-    ck("B6 画布 worker 用 submit_with_ctx", "_swc(pool, _run_worker" in src_nodes)
+    ck("B6 画布 worker 已移除（nodes.py 不再有 _run_worker 并发执行器）",
+       "_run_worker" not in src_nodes)
 
     # ★ 2026-11-03 追加：**裸 threading.Thread** 的四处请求链路线程。
     #   （第一次修只覆盖了线程池，漏了裸线程 ⇒ 真库 28 条 rag_rerank 孤儿由此产生。
@@ -158,9 +160,10 @@ def main():
     ck("B8 SSE 同步事件源线程继承上下文（否则整条编排 trace 断链）",
        "copy_context()" in src_sse and ".run(_worker)" in src_sse)
     ck("B9 SSE 异步事件源线程同样继承", src_sse.count("copy_context()") >= 2)
+    # ★ 2026-11-05：B10 对象（画布异步流程线程）随画布端点的 run-async 一并移除。
     src_flows = (ROOT / "routers" / "studio_parts" / "flows.py").read_text(encoding="utf-8")
-    ck("B10 画布异步流程线程继承上下文",
-       "copy_context()" in src_flows and ".run(_worker)" in src_flows)
+    ck("B10 画布异步流程端点已移除（flows.py 不再有 run-async 线程）",
+       "run-async" not in src_flows and "_run_worker" not in src_flows)
     src_sup = (ROOT / "core" / "orch_supervisor.py").read_text(encoding="utf-8")
     ck("B11 断点续跑线程显式绑定归属（无常驻上下文可继承）",
        "inherit_trace as _it" in src_sup)

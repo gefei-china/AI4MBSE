@@ -484,12 +484,6 @@
       "reason": "两库都红 [FAIL] [FAIL] F1 存量全覆盖（无 internal 兜底）  以下 error 落到兜底未归类：['子任务未产生输出']"
     },
     {
-      "script": "verify_flow_topology.py",
-      "tier": "broken",
-      "timeout": 240,
-      "reason": "两库都红 [TIMEOUT] [FAIL] A7 改名/改版本/改标签不改指纹  ← ('2da843069b1415f2fa23562162578dc789435061', '5c0c2f80edde70a5112d57c6dad188f67c72"
-    },
-    {
       "script": "verify_ingest_tx.py",
       "tier": "broken",
       "timeout": 240,
@@ -1399,6 +1393,11 @@
       "timeout": 120
     },
     {
+      "script": "verify_memory_scope_isolation.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
       "script": "verify_memory_tier.py",
       "tier": "pr",
       "timeout": 120
@@ -1465,11 +1464,6 @@
     },
     {
       "script": "verify_orch_resume.py",
-      "tier": "pr",
-      "timeout": 120
-    },
-    {
-      "script": "verify_orch_run_id_scope.py",
       "tier": "pr",
       "timeout": 120
     },
@@ -1654,11 +1648,6 @@
       "timeout": 120
     },
     {
-      "script": "verify_reuse_gate.py",
-      "tier": "pr",
-      "timeout": 120
-    },
-    {
       "script": "verify_running_state.py",
       "tier": "pr",
       "timeout": 120
@@ -1795,6 +1784,11 @@
     },
     {
       "script": "verify_vec_cache.py",
+      "tier": "pr",
+      "timeout": 120
+    },
+    {
+      "script": "verify_self_evolution_perception.py",
       "tier": "pr",
       "timeout": 120
     }
