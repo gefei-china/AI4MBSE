@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS intent_taxonomy (
     agent_name   TEXT NOT NULL DEFAULT '',   -- 映射到的 Agent；空 = 纯分类标签
     status       TEXT NOT NULL DEFAULT 'active',   -- active/deprecated/merged
     merged_into  TEXT NOT NULL DEFAULT '',   -- status='merged' 时的目标 canonical 名
+    -- ★ 2026-11-07（第 19 轮）：派生溯源。空 = 人工维护（同步**永不覆盖**）；
+    --   非空 = 机器从该来源派生（可被下一次同步刷新，来源变了就跟着变）。
+    --   没有这一列时"自动补齐"与"人工精修"无法区分，同步要么不敢写、要么覆盖人工结果。
+    aliases_src  TEXT NOT NULL DEFAULT '',
+    examples_src TEXT NOT NULL DEFAULT '',
     version      TEXT NOT NULL DEFAULT 'v1.0',
     owner        TEXT NOT NULL DEFAULT '',
     created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -111,8 +116,28 @@ SEED = [
 VALID_STATUS = ("active", "deprecated", "merged")
 
 
+def _ensure_columns(conn) -> None:
+    """补派生溯源列（幂等）。老库/夹具没有这两列时必须能自愈。
+
+    为什么不放在 `database/migrations/columns.py`：该文件是**启动期一次性迁移**，
+    而本表被门禁脚本、CLI、独立进程直接读写（不走 init_db）——建表语句归本模块管，
+    补列也归本模块管，避免"同一条 DDL 两处副本必然漂移"。
+    """
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(intent_taxonomy)").fetchall()]
+    except Exception:
+        return
+    if not cols:
+        return
+    for col in ("aliases_src", "examples_src"):
+        if col not in cols:
+            conn.execute("ALTER TABLE intent_taxonomy ADD COLUMN %s TEXT NOT NULL DEFAULT ''" % col)
+    conn.commit()
+
+
 def ensure_table(conn) -> None:
     conn.executescript(DDL)
+    _ensure_columns(conn)
     conn.commit()
 
 
@@ -204,6 +229,10 @@ def upsert(conn, name: str, label: str = "", scope_note: Optional[str] = None,
             if val is not None:
                 sets.append(col + "=?")
                 args.append(json.dumps(list(val), ensure_ascii=False))
+                # 人一旦显式改过这一项，就把溯源清空 ⇒ 之后任何派生同步都不再覆盖它。
+                # 这是"人工结果优先"的唯一实现点，别在同步侧再判一次（两处判据必漂移）。
+                sets.append(col + "_src=?")
+                args.append("")
         conn.execute("UPDATE intent_taxonomy SET " + ", ".join(sets) + " WHERE id=?",
                      args + [cur[0]])
         conn.commit()

@@ -1453,6 +1453,8 @@
               <option value="">状态：全部</option>
               <option value="new">状态：新采集</option>
               <option value="suggested">状态：待确认</option>
+              <option value="silver">状态：银标（双视图一致）</option>
+              <option value="synth">状态：合成改写</option>
               <option value="confirmed">状态：已确认</option>
               <option value="rejected">状态：已驳回</option>
             </select>
@@ -1477,9 +1479,18 @@
             <div style="margin:8px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
               <button class="btn sm" onclick="isNewIntent('')">＋ 新增意图</button>
               <button class="btn sm ghost" onclick="isLoadTaxonomy()">🔄 刷新</button>
+              <!-- ★ 2026-11-07（第 19 轮遗留项）：词表自举入口。
+                   别名/示例此前靠人工逐条补（22 条里 13 条空），而它们**本来就有真实来源**：
+                   别名 = agents.intent_keywords、示例 = 已确认样本原话。
+                   所以这里给的是「派生 + 报缺口」，不是「一键生成」—— 派生不出来就如实显示原因。 -->
+              <button class="btn sm ghost" onclick="isLoadTaxCoverage()"
+                title="看哪些意图缺别名/示例、缺的具体原因（无绑定 Agent / 无确认样本 / 关键词被过滤），以及 Agent↔字典漂移">📊 覆盖度</button>
+              <button class="btn sm ghost" id="is-btn-taxsync" onclick="isTaxSync()"
+                title="从 agents.intent_keywords 与已确认样本派生补齐别名/示例；先给计划再确认，人工维护过的项永不被覆盖">⚡ 从数据派生补齐</button>
               <span style="font-size:12.5px;color:var(--mut);">
                 canonical 名（机器用）新增后不可改；停用=不出现在新标注下拉，但历史样本仍可解析</span>
             </div>
+            <div id="is-tax-cov" style="display:none;margin:8px 0;"></div>
             <div id="is-tax-form" style="display:none;margin:8px 0;padding:10px;border:1px solid var(--line);border-radius:8px;">
               <div id="is-tax-form-title" style="font-weight:600;margin-bottom:8px;font-size:13px;">新增意图</div>
               <div style="display:grid;grid-template-columns:110px 1fr;gap:8px;align-items:center;font-size:12.5px;">

@@ -4,10 +4,16 @@
 //         PUT/DELETE /api/intent-samples/{id}、GET .../export。
 // 为什么页面必须把状态口径摆在最显眼处（这决定标注有没有意义）：
 //   status = new（仅采集，系统还没给建议）/ suggested（系统给了建议，等人确认，**只是待办**）
-//          / confirmed（**人工确认，才会进评测集**）/ rejected（人工判定不是有效样本）。
-//   `intent` 在 suggested 阶段存的是**系统建议值**，`hit_intent`/`hit_route`/`hit_conf` 是**采集当时**的系统判定，
-//   两者分列存储，才能让"人标的"与"机器猜的"同屏对照。
-//   ⚠️ 把 suggested 直接当标签去跑评测 = 拿系统判定评系统自己 → 指标永远 100%，纯自我循环。
+//          / silver（双视图独立标注一致 → **银标**，进回归集，不进金标评测）
+//          / synth（手写改写 → **合成集**，测边界覆盖与改写鲁棒性）
+//          / confirmed（**人工确认，才会进金标评测集**）/ rejected（人工判定不是有效样本）。
+//   ⚠️ 2026-11-07（第 19 轮）之前 silver/synth 都挤在 suggested 里，页面把两档**已定档**
+//      的样本也算成人工待办（实测 491 → 真实待办 127，虚高 3.8 倍）。现在状态与评测
+//      跑批器的 gold/silver/synth 三集**同构**，页面上的"待确认"才等于真人工工作量。
+//   `intent` 在 suggested/silver 阶段存的是**机器给的判定**，`hit_intent`/`hit_route`/`hit_conf`
+//   是**采集当时**的系统判定，两者分列存储，才能让"人要标的"与"机器猜的"同屏对照。
+//   ⚠️ 把 suggested/silver 直接当标签去跑金标评测 = 拿系统判定评系统自己 → 指标永远 100%
+//      （银标更隐蔽：它有两个视图互证，但仍与路由器同源，绝对准确率会被系统性高估）。
 //      所以「运行评测」只消费 confirmed（后端 confirmed_cases() 同口径），本页也据此解释空池原因。
 // 约束：本页只维护样本池，**不改路由规则/词表**（那只在「意图规则」配置里改），避免越权。
 
@@ -36,8 +42,11 @@ const IS_INTENT_LABEL = {
 // cls 用既有 .st 配色（ok=绿已确认 / w=黄待确认 / g=灰新采集 / r=红已驳回），与全站状态徽章同一视觉语言
 const IS_STATUS_META = {
   new: { label: '新采集', cls: 'g', hint: '仅采集进池，系统尚未给建议' },
-  suggested: { label: '待确认', cls: 'w', hint: '系统已给建议标签，需人工确认后才进评测' },
-  confirmed: { label: '已确认', cls: 'ok', hint: '人工确认的人工标签，参与评测' },
+  suggested: { label: '待确认', cls: 'w', hint: '系统已给建议标签，需人工确认后才进金标评测' },
+  // 银标用灰（不是黄）：它不是"待办"，是**已定档**的第二档标签
+  silver: { label: '银标', cls: 'g', hint: '双视图独立标注一致（非人工）。用于回归检测；与路由器同源，绝对准确率会被高估，不进金标评测' },
+  synth: { label: '合成', cls: 'g', hint: '手写改写样本，标签由构造决定。用于边界覆盖/改写鲁棒性，不代表生产分布，不进金标评测' },
+  confirmed: { label: '已确认', cls: 'ok', hint: '人工确认的人工标签，唯一进金标评测的部分' },
   rejected: { label: '已驳回', cls: 'r', hint: '人工判定不是有效样本，永不进评测' },
 };
 
@@ -109,13 +118,19 @@ function isRenderStats(d) {
   if (!el) return;
   const bs = (d && d.stats && d.stats.by_status) || {};
   const n = k => bs[k] || 0;
+  // 人工待办**只用后端 pending_human**，不在前端自己拼 new+suggested ——
+  // 口径写两处必然漂移（第 19 轮前正是这里把 silver/synth 混进 suggested，导致待办数虚高 3.8 倍）。
+  const pend = (d && d.stats && d.stats.pending_human !== undefined)
+    ? Number(d.stats.pending_human) : (n('new') + n('suggested'));
   const total = Object.keys(bs).reduce((a, k) => a + (bs[k] || 0), 0);
   el.innerHTML = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
-    <span class="badge a" title="new（仅采集）+ suggested（系统给了建议、待人工确认）">待确认 ${n('new') + n('suggested')}</span>
-    <span class="badge g" title="人工确认过，唯一参与评测的部分">已确认 ${n('confirmed')}</span>
+    <span class="badge a" title="new（仅采集未给建议）+ suggested（有弱建议）—— 这才是真正需要人工的行">待确认 ${pend}</span>
+    <span class="badge" title="双视图独立标注一致（非人工）；进回归集，不进金标评测">银标 ${n('silver')}</span>
+    <span class="badge" title="手写改写样本；测边界覆盖，不代表生产分布">合成 ${n('synth')}</span>
+    <span class="badge g" title="人工确认过，唯一进金标评测的部分">已确认 ${n('confirmed')}</span>
     <span class="badge r" title="人工判定为无效样本">已驳回 ${n('rejected')}</span>
     <span class="badge" title="样本池总行数（按不同说法去重计数）">总数 ${total}</span>
-    <span style="font-size:12.5px;color:var(--mut);">只有「已确认」会进评测 —— 系统建议（suggested）只是待办，拿它当标签是自我循环</span>
+    <span style="font-size:12.5px;color:var(--mut);">只有「已确认」进金标评测 —— 银标/合成/系统建议都只做对照，拿它们当金标是自我循环</span>
   </div>`;
 }
 
@@ -143,9 +158,9 @@ function isRenderList(d) {
 
 function isRow(s) {
   const label = s.intent || '';
-  // 对照列只在"还没人工确认"时有意义：confirmed 之后 intent 就是人工标签，
-  // 再拿系统旧判定来比只会混淆"谁是谁"（人标的就是基准，不是待核对项）。
-  const pend = s.status === 'new' || s.status === 'suggested';
+  // 对照列在"还没人工确认"时都有意义 —— silver/synth 的 intent 同样是**机器给的**，
+  // 所以只有 confirmed（人标的就是基准）与 rejected（已否掉）才不显示对照。
+  const pend = s.status !== 'confirmed' && s.status !== 'rejected';
   let cmp = '<span style="color:var(--mut);">—</span>';
   if (pend) {
     const hit = s.hit_intent || '';
@@ -287,7 +302,10 @@ async function isImport(src) {
   finally { _isBtn(btnId, false); }
 }
 
-/** 补建议：对 status=new 的前 N 条跑**真实识别**写建议值（status→suggested），仍等人确认。 */
+/** 补建议：对**还没有标签**的前 N 条跑真实识别写建议值（→ suggested），仍等人确认。
+ *  判据是"有没有标签"而不是"状态是不是 new" —— 第 19 轮修的死区：
+ *  实测 118 条处于「已是 suggested 但 intent 为空」，旧判据扫不到它们，
+ *  点"确认"又会报 confirm_requires_intent ⇒ 那批行永远卡在中间。 */
 async function isSuggest() {
   const n = _isNum('is-suggest-limit', 40);
   _isBtn('is-btn-suggest', true, '⏳ 正在识别…');
@@ -296,7 +314,7 @@ async function isSuggest() {
     if (!r || r.ok === false) { toast.error('补建议失败：' + _isErrMsg(r)); return; }
     const k = r.updated || 0;
     if (k) toast.success(`本次为 ${k} 条样本给出建议标注（还需人工确认才进评测）`);
-    else toast('没有待建议的样本（status=new 已空）—— 可先「从历史回填」再补建议');
+    else toast('没有待补建议的样本（缺标签的行已清空）—— 可先「从历史回填」再补建议');
     await loadIntentSamples();
   } catch (e) { toast.error('补建议失败：' + (e.message || e)); }
   finally { _isBtn('is-btn-suggest', false); }
@@ -527,3 +545,107 @@ async function _isSetTaxStatus(name, status) {
 }
 function isDeprecateTax(name) { _isSetTaxStatus(name, 'deprecated'); }
 function isActivateTax(name) { _isSetTaxStatus(name, 'active'); }
+
+// ── 词表自举：覆盖度 + 从数据派生补齐（2026-11-07 第 19 轮遗留项）──────────────
+// 背景：22 条意图字典里 13 条 aliases / examples 为空。**手工补写示例属于硬编码知识**：
+//   · aliases 与 agents.intent_keywords 是同一件事的两份副本 ⇒ 必然漂移；
+//   · examples 被 fewshot_map 直接喂 LLM ⇒ 编造示例会污染识别。
+// 所以只做**派生**（来源仅两处真实数据），派生不出来就如实报缺口 —— 页面职责是把
+// 「为什么这条是空的」讲清楚，避免被当成 bug 反复排查（实测缺口主因是"无绑定 Agent"
+// 和"无 confirmed 样本"，都不是代码问题）。
+// 纪律：补齐**默认只出计划**，落库必须用户在确认框里点过；人工维护过的项后端不覆盖。
+
+/** 覆盖度：只读快照，不改任何数据。 */
+async function isLoadTaxCoverage() {
+  const box = document.getElementById('is-tax-cov');
+  if (box) { box.style.display = ''; box.innerHTML = '<div class="loading">统计中…</div>'; }
+  try {
+    const d = await api('/api/intent-taxonomy/coverage');
+    if (!d || d.ok === false) { toast.error('取覆盖度失败：' + _isErrMsg(d)); return; }
+    isRenderTaxCoverage(d);
+  } catch (e) { toast.error('取覆盖度失败：' + (e.message || e)); }
+}
+
+/** 渲染覆盖度：覆盖率用**后端算的**，不在前端重算（两处算必然漂移）。 */
+function isRenderTaxCoverage(d) {
+  const box = document.getElementById('is-tax-cov');
+  if (!box) return;
+  const s = d.stats || {};
+  const gaps = d.gaps || [];
+  const drift = d.drift || [];
+  const pct = v => (Number(v || 0) * 100).toFixed(0) + '%';
+  const pend = Number(s.changes || 0);
+  const badge = (txt, tip, cls) =>
+    `<span class="badge${cls ? ' ' + cls : ''}" title="${escA(tip)}">${esc(txt)}</span>`;
+  // 缺口分两类展示（别名缺 / 示例缺）：用户按这两列分别找原因，比一串混合文案好定位
+  const gapRows = gaps.map(g => {
+    const al = (g.missing || []).filter(x => x.indexOf('aliases:') === 0).join('；') || '—';
+    const ex = (g.missing || []).filter(x => x.indexOf('examples:') === 0).join('；') || '—';
+    return `<tr>
+      <td><span style="font-family:monospace;font-size:12px;">${esc(g.name)}</span>
+        <div style="font-size:12px;color:var(--mut);">${esc(isIntentLabel(g.name))}</div></td>
+      <td style="font-size:12.5px;">${esc(g.agent_name || '—')}</td>
+      <td style="font-size:12.5px;color:${al === '—' ? 'var(--mut)' : 'var(--amb)'};">${esc(al.replace(/^aliases:/, ''))}</td>
+      <td style="font-size:12.5px;color:${ex === '—' ? 'var(--mut)' : 'var(--amb)'};">${esc(ex.replace(/^examples:/, ''))}</td>
+    </tr>`;
+  }).join('');
+  const driftRows = drift.map(x => `<li style="margin:2px 0;">
+    <span class="st w">${esc(x.kind === 'agent_without_taxonomy' ? 'Agent 无字典条' : '字典指向停用 Agent')}</span>
+    <span style="font-family:monospace;font-size:12px;">${esc(x.agent || x.name || '')}</span>
+    <span style="font-size:12px;color:var(--mut);">${esc(x.hint || '')}</span></li>`).join('');
+  box.innerHTML = `<div class="panel"><div class="ph">词表覆盖度
+      ${badge('字典 ' + (s.taxonomy_total || 0) + ' 条', '意图字典总条数')}
+      ${badge('别名覆盖 ' + pct(s.alias_coverage), '有多少条意图已有别名（用于归一化同义说法）', 'g')}
+      ${badge('示例覆盖 ' + pct(s.example_coverage), '有多少条意图已有示例说法（会并入 LLM few-shot）', 'g')}
+      ${pend ? badge('可自动补 ' + pend + ' 条', '这两个来源现在就能派生出来的条数，点「⚡ 从数据派生补齐」', 'a')
+             : badge('无待补项', '当前数据已派生完；缺口需人工或后续流量补')}
+      ${gaps.length ? badge('缺口 ' + gaps.length + ' 条', '派生不出来，原因见下表', 'w') : ''}
+      <span style="flex:1"></span>
+      <button class="btn sm ghost" onclick="document.getElementById('is-tax-cov').style.display='none'">收起</button>
+    </div><div class="pb">
+      <div style="font-size:12.5px;color:var(--mut);margin-bottom:6px;line-height:1.7;">
+        别名只从 <b>Agent 的意图关键词</b>派生、示例只从 <b>已确认样本原话</b>派生（<b>不生成任何新句子</b>）；
+        覆盖率是按字典条数算的，缺口不是缺陷 —— 下表每行都给了具体原因。
+      </div>
+      ${gaps.length ? `<table class="t"><tr><th>意图</th><th>绑定 Agent</th><th>别名缺口原因</th><th>示例缺口原因</th></tr>
+        ${gapRows}</table>`
+        : '<div style="font-size:13.5px;color:var(--grn);">✅ 没有缺口：每条意图的别名与示例都有来源</div>'}
+      ${drift.length ? `<div style="margin-top:10px;font-size:12.5px;color:var(--mut);">配置漂移（${drift.length} 条）</div>
+        <ul style="margin:4px 0 0;padding-left:18px;">${driftRows}</ul>` : ''}
+    </div></div>`;
+}
+
+/** 派生补齐：先取计划（dry-run）→ 确认框带明细 → 再落库。
+ *  为什么必须两步：这是**写库**动作，且会改变喂给 LLM 的 few-shot（影响识别结果），
+ *  不给明细的"一键补齐"等于让用户盲签。确认框里只报数量与首几条，避免弹窗过长。 */
+async function isTaxSync() {
+  _isBtn('is-btn-taxsync', true, '⏳ 计算中…');
+  try {
+    const p = await api('/api/intent-taxonomy/sync', { method: 'POST', body: JSON.stringify({ apply: false }) });
+    if (!p || p.ok === false) { toast.error('计算派生计划失败：' + _isErrMsg(p)); return; }
+    const n = Number(p.planned || 0);
+    const gaps = (p.gaps || []).length, drift = (p.drift || []).length;
+    if (!n) {
+      toast(`没有可自动补齐的条目（缺口 ${gaps} 条 / 漂移 ${drift} 条需人工或后续流量补）`);
+      await isLoadTaxCoverage();
+      return;
+    }
+    const sample = (p.changes || []).slice(0, 6).map(c =>
+      '· ' + isIntentLabel(c.name) + '：'
+      + [c.aliases ? ('别名 ' + c.aliases.length + ' 个') : '',
+         c.examples ? ('示例 ' + c.examples.length + ' 条') : ''].filter(Boolean).join(' + ')).join('\n');
+    const more = n > 6 ? `\n…另有 ${n - 6} 条` : '';
+    const ok = await confirmDialog(
+      `将要补齐 ${n} 条意图：\n\n${sample}${more}\n\n`
+      + `约束：只填空值，**人工改过的项不覆盖**；来源仅 Agent 关键词与已确认样本，不生成新句子。\n`
+      + `缺口 ${gaps} 条 / 漂移 ${drift} 条不会被处理（需人工或后续流量）。\n\n继续写入？`);
+    if (!ok) return;
+    const r = await api('/api/intent-taxonomy/sync', { method: 'POST', body: JSON.stringify({ apply: true }) });
+    if (!r || r.ok === false) { toast.error('补齐失败：' + _isErrMsg(r)); return; }
+    toast.success(`已补齐：计划 ${r.planned || 0} 条 / 实改 ${r.changed || 0} 行；剩余缺口 ${r.gaps || 0} 条`);
+    await isLoadTaxonomy();
+    await isLoadTaxCoverage();
+    loadIntentSamples();
+  } catch (e) { toast.error('补齐失败：' + (e.message || e)); }
+  finally { _isBtn('is-btn-taxsync', false); }
+}

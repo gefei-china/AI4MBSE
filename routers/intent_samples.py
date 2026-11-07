@@ -264,3 +264,43 @@ def resolve_taxonomy(body: dict, conn=Depends(db_session)):
     from core import intent_taxonomy as itx
     return {"ok": True, "input": body.get("text") or "",
             "resolved": itx.resolve_alias(conn, body.get("text") or "")}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 词表自举（2026-11-07 第 19 轮）
+#   aliases ← agents.intent_keywords；examples ← confirmed 样本。**只派生、不编造**。
+#   派生不出来的进 gaps 报告，留给人或后续流量补 —— 所以这里既提供 sync 也提供 coverage。
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/api/intent-taxonomy/coverage")
+def taxonomy_coverage(conn=Depends(db_session)):
+    """覆盖度快照：哪些意图缺别名/示例、缺的原因是什么、以及配置漂移（Agent↔字典对不上）。
+
+    只读。页面用它解释"为什么这条没有示例"，避免被当成 bug 反复排查。
+    """
+    from core import intent_taxonomy_sync as sync
+    return {"ok": True, **sync.coverage(conn)}
+
+
+@router.post("/api/intent-taxonomy/sync")
+def taxonomy_sync(body: dict, conn=Depends(db_session), user=Depends(current_user)):
+    """按数据派生补齐 aliases/examples。`apply=false`（默认）只返回计划，不写库。
+
+    纪律（与仓储层同款）：
+      · **人工维护永不被覆盖** —— 只有空值或溯源就是本来源的行才写；
+      · 派生来源只有两处真实数据（Agent 关键词 / confirmed 样本），**不生成任何新句子**；
+      · 每次 apply 都 audit，且返回 `changes[]` 明细（谁被改了、从什么改成什么）。
+    """
+    from core import intent_taxonomy_sync as sync
+    apply = bool(body.get("apply"))
+    p = sync.plan(conn)
+    if not apply:
+        return {"ok": True, "applied": False, "planned": len(p["changes"]),
+                "changes": p["changes"], "gaps": p["gaps"], "drift": p["drift"],
+                "stats": p["stats"]}
+    r = sync.apply(conn, p)
+    audit(audit_user(user), "intent_taxonomy_sync",
+          "派生补齐 aliases/examples：plan=%d changed=%d gaps=%d"
+          % (r["planned"], r["changed"], r["gaps"]), conn=conn)
+    return {"ok": True, "applied": True, **r, "changes": p["changes"],
+            "gaps": p["gaps"], "drift": p["drift"], "stats": p["stats"]}

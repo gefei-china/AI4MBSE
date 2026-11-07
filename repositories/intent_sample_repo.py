@@ -19,7 +19,47 @@ from datetime import datetime
 #   ⇒ 现在改为**从平台能力表动态派生**，这份常量只保证「数据库不可用时页面仍能渲染」。
 VALID_INTENTS = ("requirement_analysis", "requirement_quality", "design", "impact",
                  "review", "report_generation", "system_mgmt", "knowledge_qa", "chat")
-VALID_STATUS = ("new", "suggested", "confirmed", "rejected")
+VALID_STATUS = ("new", "suggested", "silver", "synth", "confirmed", "rejected")
+
+# ── 标注档位（2026-11-07 第 19 轮）──────────────────────────────────────────
+#   new       仅采集，系统还没给建议
+#   suggested 系统给了建议（弱标注），**等人确认** —— 这才是真正的人工待办
+#   silver    双视图独立标注一致（`created_by='dual_label_v1'`），已定档，用于**回归集**
+#   synth     手写改写（`source='aug'`），标签由构造决定，用于**边界覆盖**
+#   confirmed 人工确认 —— **唯一**的金标、**唯一**进评测集
+#   rejected  人工判定无效
+#
+# 为什么必须把 silver/synth 从 suggested 里拆出来（实测依据）：
+#   491 条 `suggested` 里 **347 条是银标、17 条是合成**，真待人工的只有 **127 条**。
+#   挤在一个状态里 ⇒ 页面「待确认 491」把两档已定档样本也算成人工待办，
+#   而评测跑批器（`tools/intent_eval_snapshot.py`）早已按 gold/silver/synth **三集分报**。
+#   状态字段与评测口径必须同构，否则"待办数"和"评测集"各说一套、都不可信。
+#: 状态 → 评测档位（与 `tools/intent_eval_snapshot.py::SETS` 一一对应）
+STATUS_TIER = {"confirmed": "gold", "silver": "silver", "synth": "synth"}
+
+
+def tier_of(source: str = "", created_by: str = "") -> str:
+    """按**标签来源**决定一条新样本落在哪一档。纯函数、无副作用，便于门禁直接断言。
+
+    判定顺序**不可交换**：`aug` 先判。评测跑批器的 `silver` 集显式排除 `aug`
+    （`COALESCE(source,'')<>'aug'`）；若先判 `dual_label`，那 183 条「aug + 双视图一致」
+    会同时落进 silver 与 synth 两集 ⇒ 同一批题在两条指标里各算一次，分数互相污染。
+    """
+    if (source or "").strip() == "aug":
+        return "synth"
+    if (created_by or "").strip() == "dual_label_v1":
+        return "silver"
+    return "suggested"
+
+
+#: 「需要补建议」的候选集：**判据是"有没有标签"**，不是"状态是不是 new"。
+#: 抽成模块常量（而不是写在方法体里）的唯一理由：门禁可以用**同一条 SQL** 做行为级断言
+#: （造一行 suggested+空 intent，断言它被选中、silver/synth 不被选中），
+#: 不必把 SQL 抄第二份 —— 抄一份就等于埋一处漂移。
+PENDING_SUGGEST_SQL = (
+    "SELECT id, text FROM intent_samples "
+    "WHERE status='new' OR (status='suggested' AND COALESCE(intent,'')='') "
+    "ORDER BY seen_count DESC, id LIMIT ?")
 
 
 class IntentSampleRepo:
@@ -109,8 +149,10 @@ class IntentSampleRepo:
         total = self.conn.execute(f"SELECT COUNT(*) FROM intent_samples {w}", args).fetchone()[0]
         rows = self.conn.execute(
             f"SELECT * FROM intent_samples {w} ORDER BY "
-            # 待标注的排前面（高频优先：seen_count 高说明是真正常用的说法），再按新近
-            "CASE status WHEN 'new' THEN 0 WHEN 'suggested' THEN 1 ELSE 2 END, "
+            # 待标注的排前面（高频优先：seen_count 高说明是真正常用的说法），再按新近；
+            # 定档但非金标（silver/synth）排在人工待办之后、已决（confirmed/rejected）之前。
+            "CASE status WHEN 'new' THEN 0 WHEN 'suggested' THEN 1 "
+            "WHEN 'silver' THEN 2 WHEN 'synth' THEN 3 ELSE 4 END, "
             "seen_count DESC, id DESC LIMIT ? OFFSET ?", args + [limit, offset]).fetchall()
         items = [dict(r) for r in rows]
         # ★ 2026-11-07：附上**真实使用次数**（messages 表 role=user，排除测试会话）。
@@ -127,13 +169,21 @@ class IntentSampleRepo:
 
     def stats(self) -> dict:
         g = lambda sql: {r[0]: r[1] for r in self.conn.execute(sql).fetchall()}
+        by_status = g("SELECT status, COUNT(*) FROM intent_samples GROUP BY status")
+        # 人工待办的**唯一定义**：既没定成金标、也没定档为银标/合成、也没被驳回的行。
+        # 页面禁止自己再写一遍 `new+suggested` —— 口径写两处必然漂移（本轮就是因为
+        # 一处把 silver/synth 混进 suggested，才让"485 条待审"这个数字虚高 3.8 倍）。
+        pending = sum(v for k, v in by_status.items() if k in ("new", "suggested"))
         return {
-            "by_status": g("SELECT status, COUNT(*) FROM intent_samples GROUP BY status"),
+            "by_status": by_status,
             "by_intent": g("SELECT intent, COUNT(*) FROM intent_samples "
                            "WHERE status='confirmed' GROUP BY intent"),
             "by_source": g("SELECT source, COUNT(*) FROM intent_samples GROUP BY source"),
             "confirmed": self.conn.execute(
                 "SELECT COUNT(*) FROM intent_samples WHERE status='confirmed'").fetchone()[0],
+            # 评测三档（与 tools/intent_eval_snapshot.py::SETS 同构）
+            "by_tier": {tier: by_status.get(st, 0) for st, tier in STATUS_TIER.items()},
+            "pending_human": pending,
         }
 
     def confirmed_cases(self) -> list:
@@ -222,14 +272,20 @@ class IntentSampleRepo:
         return {"ok": True}
 
     def suggest_batch(self, limit: int = 40) -> dict:
-        """对 status='new' 的前 N 条跑**一次真实意图识别**，写入建议标签（status→suggested）。
+        """对**还没有建议标签**的前 N 条跑一次真实意图识别，写入建议标签（→ suggested）。
 
         刻意做成"小批量、可重复触发"：一次跑全池会卡住请求（每条都要 embedding，冷启更慢），
         而人工确认本来就该分批进行。返回明细供页面逐条展示"系统建议 vs 人工待确认"。
+
+        ★ 2026-11-07（第 19 轮）：**补上「suggested 但 intent 为空」的死区**。
+          原查询只取 `status='new'`，而实测有 **118 条**处于「已是 suggested、却没有标签」
+          （回填时带着 history hint 进了 suggested，但 hint 为空 ⇒ 既不会被补建议，
+          也无法被人工确认 —— `update()` 要求 confirmed 必须有标签）。这批行**卡死在中间态**：
+          页面上有、点"确认"报 `confirm_requires_intent`、点"补建议"扫不到。
+          修法：判据从"看状态"改为"看**有没有标签**"（无标签即需要建议），
+          与 tier 拆分后新增的 silver/synth 天然互斥（它们必有标签）。
         """
-        rows = self.conn.execute(
-            "SELECT id, text FROM intent_samples WHERE status='new' ORDER BY seen_count DESC, id LIMIT ?",
-            (limit,)).fetchall()
+        rows = self.conn.execute(PENDING_SUGGEST_SQL, (limit,)).fetchall()
         if not rows:
             return {"ok": True, "updated": 0, "items": []}
         from agent.pipeline import AgentPipeline

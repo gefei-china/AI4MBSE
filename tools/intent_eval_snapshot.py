@@ -48,13 +48,19 @@ SETS = {
     # 金标：只有人能给的标签
     "gold": "SELECT text, intent FROM intent_samples "
             "WHERE status='confirmed' AND intent<>'' AND COALESCE(text,'')<>'' ORDER BY id",
-    # 银标：生产语句 + 双视图一致（排除 aug，避免与 synth 集重叠）
+    # 银标：双视图一致；合成语句不在此集（它们进 synth）
+    #
+    # ★ 2026-11-07（第 19 轮）口径改为按 `status` 取，不再按 `created_by` + 排除 aug：
+    #   ① 原先两集用「隐式字段」划分，与页面「待确认」计数各说一套（实测 491 vs 127）；
+    #   ② 真正的问题：一条银标后来被人工确认（`status='confirmed'`）时，
+    #      它在旧口径下**同时出现在 gold 与 silver 两集** ⇒ 同一道题算两次、两条指标互相污染。
+    #   现在三集互斥且穷尽（`confirmed` / `silver` / `synth` 三个状态），
+    #   由 `repositories.intent_sample_repo.tier_of()` 在写入侧定档，`verify_intent_sample_tiers.py` 守一致性。
     "silver": "SELECT text, intent FROM intent_samples "
-              "WHERE created_by='dual_label_v1' AND intent<>'' AND COALESCE(source,'')<>'aug' "
-              "AND COALESCE(text,'')<>'' ORDER BY id",
+              "WHERE status='silver' AND intent<>'' AND COALESCE(text,'')<>'' ORDER BY id",
     # 合成：手写改写，标签由构造决定（用它原始的 label，不用双视图结论 —— 见 --report）
     "synth": "SELECT text, intent FROM intent_samples "
-             "WHERE COALESCE(source,'')='aug' AND intent<>'' AND COALESCE(text,'')<>'' ORDER BY id",
+             "WHERE status='synth' AND intent<>'' AND COALESCE(text,'')<>'' ORDER BY id",
 }
 
 

@@ -20,8 +20,9 @@ Wilson 95% 置信区间是 **[89.1%, 99.6%]，宽 10.5 个百分点** ——
 | L1 | **分类视图** | "这段输入属于哪一类任务？先判行为动词（提问/生成/变更/检查/汇报/管理），再给类" | `{"intent": "..."}` |
 | L2 | **分派视图** | "这段输入应该交给哪个 Agent 处理？" | `{"agent": "..."}` → 映射回 intent |
 
-- **一致** ⇒ 写 `intent` + `created_by='dual_label_v1'`，`status` 保持 `suggested`
-  （**不**改成 `confirmed` —— 那是"人工确认"的语义，被污染后就再也说不清哪些是真人的判定）。
+- **一致** ⇒ 写 `intent` + `created_by='dual_label_v1'`，`status='silver'`
+  （**不**改成 `confirmed` —— 那是"人工确认"的语义，被污染后就再也说不清哪些是真人的判定；
+  也不用 `suggested` —— 那是"没有第二来源的弱建议"，与银标的可信度不是一回事）。
 - **不一致** ⇒ 不写，只在报告里计数（这幅"分歧率"本身是有用指标：分歧高说明意图边界模糊）。
 
 ## ⚠️ 如实声明的局限（引用银标数字时必须带上）
@@ -273,12 +274,17 @@ def main():
         for t, l1, l2, agree, _err in agree_rows:
             ids = seen.get(t) or []
             for i in ids:
+                # ★ 2026-11-07（第 19 轮）：状态写 `silver` 而不再写 `suggested`。
+                #   银标与"系统弱建议"语义不同：前者有第二来源、可用于回归集，
+                #   后者只是待办。混成一个状态会让「待确认」数字虚高（实测 3.8 倍）。
+                #   `CASE` 保护人工结论：已 confirmed / rejected 的行绝不被降级。
                 n += conn.execute(
                     "UPDATE intent_samples SET intent=?, created_by=?, "
+                    "  status=CASE WHEN status IN ('confirmed','rejected') THEN status ELSE 'silver' END, "
                     "  note=COALESCE(NULLIF(note,''),'')||? , updated_at=CURRENT_TIMESTAMP "
                     "WHERE id=? AND COALESCE(created_by,'')<>?",
                     (l1, _CREATOR, "[双视图一致 %s/%s] " % (l1, l2), i, _CREATOR)).rowcount
-        print("\n已写入 %d 行（银标，status 仍为 suggested）" % n)
+        print("\n已写入 %d 行（银标，status=silver，不进金标评测集）" % n)
         tot = conn.execute("SELECT COUNT(*) FROM intent_samples WHERE created_by=?",
                            (_CREATOR,)).fetchone()[0]
         gold = conn.execute("SELECT COUNT(*) FROM intent_samples "
