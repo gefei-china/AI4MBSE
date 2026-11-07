@@ -92,6 +92,56 @@ def import_samples(body: dict, conn=Depends(db_session),
     return r
 
 
+@router.get("/api/intent-samples/overrides")
+def list_overrides(limit: int = 50, conn=Depends(db_session)):
+    """2026-11-07 P0-2：列出**用户澄清卡改选**产生的待审样本。
+
+    只读。note 已解析成 `parsed={override,detected,route,route_conf}`，
+    人工确认走既有 `PUT /api/intent-samples/{sid}`（status=confirmed + intent=用户改选值）。
+    ⚠️ 绝不在这里自动确认 —— 与「只提议不自动应用」一致。
+    """
+    from services.intent_override_feedback import override_candidates
+    items = override_candidates(conn, limit=max(1, min(limit, 500)))
+    pending = [x for x in items if x.get("status") != "confirmed"]
+    return {"ok": True, "total": len(items), "pending": len(pending),
+            "items": items,
+            "hint": "确认时把 intent 设为 parsed.override，status 设为 confirmed"}
+
+
+@router.post("/api/intent-samples/overrides/confirm")
+def confirm_overrides(body: dict, conn=Depends(db_session),
+                      user=Depends(current_user)):
+    """批量审核改选样本：只处理**显式给出的 id 列表**，且必须有 override 值。
+
+    为什么不做「一键全确认」：改选值是用户当时点的按钮，仍需人工判断是否是有效样本
+    （误点、玩笑、系统包装文本都可能混进来）。逐条 id 是审核行为的最小可审计单位。
+    """
+    ids = [int(x) for x in (body.get("ids") or []) if str(x).isdigit()]
+    if not ids:
+        return {"ok": False, "reason": "no_ids"}
+    import json as _json
+    repo = IntentSampleRepo(conn)
+    done, skipped = [], []
+    for sid in ids[:100]:
+        row = conn.execute("SELECT id,status,source,note FROM intent_samples WHERE id=?",
+                           (sid,)).fetchone()
+        if not row or row["status"] == "confirmed" or row["source"] != "override":
+            skipped.append(sid)
+            continue
+        try:
+            ov = (_json.loads(row["note"] or "{}").get("override") or "").strip()
+        except Exception:
+            ov = ""
+        if not ov:
+            skipped.append(sid)
+            continue
+        repo.update(sid, intent=ov, status="confirmed")
+        done.append({"id": sid, "intent": ov})
+    audit(audit_user(user), "intent_override_confirm",
+          f"批量确认改选样本 {len(done)} 条（跳过 {len(skipped)} 条）", conn=conn)
+    return {"ok": True, "confirmed": done, "skipped": skipped}
+
+
 @router.post("/api/intent-samples/suggest")
 def suggest_samples(body: dict, conn=Depends(db_session),
                     user=Depends(current_user)):
@@ -145,3 +195,72 @@ def run_eval(body: dict, conn=Depends(db_session),
 def export_samples(conn=Depends(db_session)):
     """导出评测集 JSON（可直接喂给标定脚本 / 进版本库做回归基线）。"""
     return IntentSampleRepo(conn).export()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 意图字典（intent_taxonomy）—— 2026-11-07（米爸第 17 轮）
+#
+# 为什么单独一组端点：用户反馈「审核页只能单选意图，无法新增和编辑」。
+# 根因是意图清单此前**从 agents 表派生**、中文标签与示例说法**硬编码在代码里**
+# ⇒ 没有可维护的实体。现在引入独立字典表（canonical + 别名 + scope note +
+# 示例说法 + 版本 + 弃用路径），本组端点就是它的维护入口。
+#
+# 纪律：
+#   · `name` 是 canonical，**新增后不可改**（历史样本、路由都用它作键）；
+#   · 编辑只改 label/scope_note/aliases/examples/cluster/agent_name/status；
+#   · 停用走 `status='deprecated'`（不删行）——历史标注仍能解析；
+#   · 全部写操作留 audit；不自动改 `intent_samples`（改标注是另一件事）。
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/api/intent-taxonomy")
+def list_taxonomy(status: str = "", conn=Depends(db_session)):
+    """列出意图字典。页面用它渲染下拉、中文名、scope note 与示例说法。"""
+    from core import intent_taxonomy as itx
+    items = itx.list_all(conn, status=status or None)
+    return {"ok": True, "total": len(items), "items": items,
+            # 自动发现：库里已被标注、但字典里还没有的意图名（"该补哪些"不用人工想）
+            "missing": itx.suggest_new_names(conn)}
+
+
+@router.post("/api/intent-taxonomy")
+def create_taxonomy(body: dict, conn=Depends(db_session),
+                    user=Depends(current_user)):
+    """新增一个意图。允许 `agent_name` 为空（纯分类标签，不对应任何 Agent）。"""
+    from core import intent_taxonomy as itx
+    r = itx.upsert(
+        conn, name=body.get("name") or "",
+        label=body.get("label") or "",
+        scope_note=body.get("scope_note"),
+        aliases=body.get("aliases"), examples=body.get("examples"),
+        cluster=body.get("cluster"), agent_name=body.get("agent_name"),
+        status=body.get("status") or "active",
+        owner=audit_user(user))
+    if r.get("ok"):
+        audit(audit_user(user), "intent_taxonomy_create",
+              f"新增意图 {body.get('name')}", conn=conn)
+    return r
+
+
+@router.put("/api/intent-taxonomy/{name}")
+def update_taxonomy(name: str, body: dict, conn=Depends(db_session),
+                    user=Depends(current_user)):
+    """编辑一个意图（name 不可改）。字段为 None 表示"不改这一项"。"""
+    from core import intent_taxonomy as itx
+    r = itx.upsert(
+        conn, name=name,
+        label=body.get("label"),
+        scope_note=body.get("scope_note"),
+        aliases=body.get("aliases"), examples=body.get("examples"),
+        cluster=body.get("cluster"), agent_name=body.get("agent_name"),
+        status=body.get("status"), merged_into=body.get("merged_into"),
+        owner=audit_user(user))
+    if r.get("ok"):
+        audit(audit_user(user), "intent_taxonomy_update", f"编辑意图 {name}", conn=conn)
+    return r
+
+
+@router.post("/api/intent-taxonomy/resolve")
+def resolve_taxonomy(body: dict, conn=Depends(db_session)):
+    """把一句/一个旧标签归一化到 canonical 名（别名表）。供前端校验与批量迁移用。"""
+    from core import intent_taxonomy as itx
+    return {"ok": True, "input": body.get("text") or "",
+            "resolved": itx.resolve_alias(conn, body.get("text") or "")}

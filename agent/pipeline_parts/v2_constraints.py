@@ -85,10 +85,9 @@ extend SubUC;                    → v2 没有 extend → include use case SubUC
 实测 41 次工具调用里 80% 花在查资料，且 `sysml_v2_validate` 在 6/6 个会话里
 都排在**最后一次**⇒「校验了但没有轮次去修」。按此顺序走：
   1) graph_retrieve   —— 可选，**最多 1 次**（查规范条文）
-  2) sysml_stdlib_meta —— 可选，**最多 1~2 次**，且**参数名只有 name / package**
-     · 查包成员用   package="StandardViewDefinitions"    ← 不是 name，也不是 package_name
-     · 查单个成员用 name="Part"
-     · 查全部包清单 **不传参数**即可；传 name="__packages__" 是错的
+  2) ~~sysml_stdlib_meta~~ —— **已停用（2026-11-07）**：该工具 status='disabled'，
+     调用会返回「未知工具」，**不要再调**。标准库成员事实一律以第 4 步
+     `sysml_v2_validate` 的语义诊断为准；拿不到就如实说明「未能核实」，禁止臆造。
   3) ★**先产出代码，再校验**：sysml_v2_autofix —— 手上还没有代码时不要调任何校验类工具
   4) sysml_v2_validate —— 校验刚生成的代码；有硬错（判据 block）才继续下一步
   5) 仍有硬错 → sysml_v2_autofix 修 → 回到 4；最多 2 轮，仍有错就**如实说明**不要再调

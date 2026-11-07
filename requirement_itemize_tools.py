@@ -26,6 +26,7 @@ N1（需求结构化）的产物是条目数据 `items[]`，但**条目本身不
 """
 import logging
 import re
+import time
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -293,11 +294,135 @@ def _exec(args):
     }
 
 
-def exec_tool(name: str, arguments: dict | None = None) -> dict:
+def _resolve_project(conn, project: str, conversation_id: int) -> tuple:
+    """工程归属：显式参数 > 会话归属 > 空串。返回 `(project_id, note)`。
+
+    ## ⚠️ 2026-11-07 实测踩到：`project` 参数会被模型当成"包名前缀"
+    `requirement_itemize` 的 `project` 是**包名**（`package EVTM_Requirements`），
+    `requirement_commit` 如果照抄同一个值当"工程 id"，就会把条目挂到一个**不存在的工程**上：
+    真机实测模型传了 `project="EVTM"`（规约卡默认包名），于是 3 条条目落到 `project_id='EVTM'`
+    —— 又造出一批孤儿归属，且**看起来一切正常**（条目确实入库了）。
+    规则：显式值**必须能在 `projects` 里查到**才认，否则回落会话归属并明确告知模型。
+    另一条：**不做"猜一个默认工程"的兜底** —— 挂错工程比不挂更难排查
+    （追溯链会连到别的项目的设计元素上，而且不报错）。
+    """
+    p = _as_text(project)
+    note = ""
+    if p:
+        try:
+            hit = conn.execute("SELECT 1 FROM projects WHERE id=?", (p,)).fetchone()
+        except Exception as exc:                                # noqa: BLE001
+            hit = None
+            logger.warning("[requirement_commit] 工程校验失败: %s", exc)
+        if hit:
+            return p, ""
+        note = (f"⚠️ 传入的 project=「{p}」不是已存在的工程（它更像包名前缀），"
+                f"已忽略，改按会话归属落库。")
+    if not conversation_id:
+        return "", note
+    try:
+        row = conn.execute("SELECT project_id FROM conversations WHERE id=?",
+                           (int(conversation_id),)).fetchone()
+        if row:
+            return _as_text(row["project_id"] if hasattr(row, "keys") else row[0]), note
+    except Exception as exc:                                    # noqa: BLE001
+        logger.warning("[requirement_commit] 会话归属读取失败 conv=%s: %s", conversation_id, exc)
+    return "", note
+
+
+def commit_requirements(args, conversation_id=0, created_by=""):
+    """`requirement_commit`：把条目化结果写入需求实体表（写操作，走人工确认）。
+
+    为什么与 `requirement_itemize` 分成两个工具（本仓既有口径：query/apply 分离）：
+    条目化的**分析**部分（切句、分类、生成视图骨架）是只读的，每轮都跑；
+    而**落库**会产生被追溯链引用的稳定编号（REQ-F001…），是有后果的写。
+    合成一个工具只有两种结果：要么只读也要逐条确认（确认疲劳），
+    要么写库不确认（绕过写前闸）。两者都不可接受。
+    """
+    from database import get_db
+    from repositories.requirement_repo import RequirementRepo
+
+    items = args.get("items")
+    gaps = args.get("gaps")
+    # 允许"只给原文"——由本工具内部先条目化再落库（免去模型手工搬运 20 条）
+    if not items:
+        text = args.get("text") or args.get("raw_text")
+        if not _as_text(text):
+            return {"ok": False,
+                    "result": "既没有 items 也没有 text：请传入条目化结果的 items/gaps，"
+                              "或传入需求原文由本工具条目化后落库。"}
+        try:
+            items, gaps, _code, _st = itemize(
+                str(text), _as_text(args.get("domain")), _as_text(args.get("source_ref")),
+                re.sub(r"[^A-Za-z0-9_]", "", _as_text(args.get("project")) or "EVTM") or "EVTM")
+        except Exception as exc:                                # noqa: BLE001
+            return {"ok": False,
+                    "result": f"条目化失败：{type(exc).__name__}: {exc}。⚠️ 这不代表原文有问题 —— "
+                              f"请如实说明『未能条目化』，不要编造条目。"}
+    conn = get_db()
+    try:
+        pid, _pnote = _resolve_project(conn, args.get("project"), conversation_id)
+        repo = RequirementRepo(conn)
+        # SQLite 单写者：调用方可能正持有一个写事务（编排链路里常见）。
+        # 只对**锁冲突**做有限重试（不是对任何异常都重试）——否则"落库失败"会被
+        # 伪装成"落库成功"，正是本仓记录过的静默兜底事故。
+        _attempt = 0
+        while True:
+            try:
+                res = repo.commit(
+                    items or [], gaps or [], project_id=pid,
+                    conversation_id=int(conversation_id or 0),
+                    version_id=int(args.get("version_id") or 0),
+                    source_ref=_as_text(args.get("source_ref")),
+                    domain=_as_text(args.get("domain")), created_by=created_by)
+                break
+            except Exception as _e:                             # noqa: BLE001
+                _msg = str(_e).lower()
+                if "database is locked" in _msg and _attempt < 3:
+                    _attempt += 1
+                    time.sleep(0.25 * _attempt)
+                    continue
+                raise
+        st = repo.stats(pid)
+        conn.commit()
+    except Exception as exc:                                    # noqa: BLE001
+        # ⚠️ 不能静默兜底：落库失败若返回"成功"，模型会据此宣称"已入库"，
+        #    而实际一条都没有 —— 这正是本仓记录过的"静默丢弃"同型事故。
+        return {"ok": False,
+                "result": f"需求条目落库失败：{type(exc).__name__}: {exc}。"
+                          f"⚠️ 请如实说明『未能入库』，不要声称已入库。"}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    head = (f"【需求入库】工程={pid or '（无工程会话）'}：新增 {res['inserted']} 条 / "
+            f"已存在更新 {res['updated']} 条；当前该工程共 "
+            f"{st['items']} 条需求、{st['gaps']} 条待澄清（可建模率 {st['itemize_ratio']:.1%}）")
+    if _pnote:
+        head = _pnote + "\n" + head
+    tail = []
+    if res["items"]:
+        tail.append("需求编号：" + "、".join(res["items"][:12])
+                    + ("…" if len(res["items"]) > 12 else ""))
+    if res["gaps"]:
+        tail.append("待澄清编号：" + "、".join(res["gaps"][:12])
+                    + ("…" if len(res["gaps"]) > 12 else ""))
+    return {"ok": True, "result": "\n".join([head] + tail),
+            "project_id": pid, **res, "stats": st}
+
+
+def exec_tool(name: str, arguments: dict | None = None, conversation_id: int = 0,
+              created_by: str = "") -> dict:
     args = arguments or {}
     if name == "requirement_itemize":
         return _exec(args)
+    if name == "requirement_commit":
+        return commit_requirements(args, conversation_id=conversation_id, created_by=created_by)
     return {"ok": False, "result": f"未知需求工具: {name}"}
+
+
+REQ_TOOL_NAMES = ("requirement_itemize", "requirement_commit")
 
 
 if __name__ == "__main__":

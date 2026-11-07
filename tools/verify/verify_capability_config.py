@@ -160,8 +160,30 @@ def i_group():
           "SELECT name FROM agents WHERE status='active'" in src)
     check("I4 候选集并入样本池历史值（存量标注一个都不能丢）",
           "SELECT DISTINCT intent FROM intent_samples" in src)
-    check("I5 查询失败静默降级到常量（列表附属信息不该让页面 500）",
-          "except Exception" in src and "return list(VALID_INTENTS)" in src)
+    # ⚠️ 2026-11-07：原判据是**字符串断言**（源码里要出现 `return list(VALID_INTENTS)`）。
+    #   第 17 轮把实现改成 `out = set(VALID_INTENTS)` + 失败时 `return sorted(out)`——
+    #   行为完全一致（失败仍返回常量兜底），但字面串变了 ⇒ 判据**假红**。
+    #   判据要对准性质、不对准写法：直接用"必然抛异常的连接"实测降级结果。
+    class _Boom:
+        def execute(self, *a, **k):
+            raise RuntimeError("boom")
+
+    class _BoomConn:
+        def execute(self, *a, **k):
+            raise RuntimeError("boom")
+        def close(self):
+            pass
+
+    try:
+        from repositories.intent_sample_repo import IntentSampleRepo as _R
+        from repositories.intent_sample_repo import VALID_INTENTS as _CONST
+        _got = set(_R(_BoomConn())._dynamic_intents())
+        _fb_ok = set(_CONST) <= _got
+    except Exception as _e:      # noqa: BLE001
+        _fb_ok = False
+        _got = "异常：%s" % _e
+    check("I5 ★查询失败静默降级到常量（实测：连接必抛 ⇒ 仍返回常量集合，不 500）",
+          _fb_ok, "实际返回=%s" % (sorted(_got) if isinstance(_got, set) else _got))
     # ★实证：新能力必须立刻出现在候选集里
     active = {r[0] for r in c.execute("SELECT name FROM agents WHERE status='active'")}
     from repositories.intent_sample_repo import IntentSampleRepo

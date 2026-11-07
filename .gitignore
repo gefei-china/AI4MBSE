@@ -167,3 +167,16 @@ docs/mbse-platform-prd/**/*.min.js
 #      .venv\Scripts\python.exe -X utf8 tools\db_backup.py --gc-legacy 0
 /mbse.db*
 mbse_system.zip
+
+# ── 一次性回退备份（2026-11-07）──
+# docs/backup_*/ 是**本机回退凭证**（改库前的整库/资产快照），不是文档交付物：
+#   · 整库副本已被上面 `*.db` 排除；
+#   · 里面的 *.json 是同一批备份的资产快照，进仓库只会让历史里堆重复数据
+#     （真正的"可重建真源"是 data/bootstrap/pipeline_assets.json，那个**必须**入库）。
+# 需要在别的机器回退时，从本机拷贝即可；判据：git check-ignore -v docs/backup_xxx/x.json
+/docs/backup_*/
+
+# ── 一次性备份（2026-11-07）──
+# docs/skill_backup/ 是技能正文改写前的原文备份（skill_95/133/136 等），属本机回退凭证；
+# 可重建的真源是 skills 表 + data/bootstrap/pipeline_assets.json，别把重复正文塞进历史。
+/docs/skill_backup/

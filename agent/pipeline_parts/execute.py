@@ -47,7 +47,7 @@ def _repair_tool_subset(tools_def):
 class ExecuteMixin:
     """主执行入口 execute（非流式全流程）。"""
 
-    def execute(self, user_input, conversation_id, branch="dev", provider_id=None, attachments=None, dry_run=False, forced_intent=None, skill_name=None, user=None, tools_whitelist=None, team=None, scope_id=None, scope_ids=None, scope=None, overrides=None, max_tool_rounds=None):
+    def execute(self, user_input, conversation_id, branch="dev", provider_id=None, attachments=None, dry_run=False, forced_intent=None, skill_name=None, user=None, tools_whitelist=None, team=None, scope_id=None, scope_ids=None, scope=None, overrides=None, max_tool_rounds=None, ui_intent_override: str = ""):
         """Execute the full agent pipeline.
 
         attachments: V2.3 会话窗口富输入——[{url, filename, size, is_image}]，落库 user 消息 attachments JSON。
@@ -159,6 +159,17 @@ class ExecuteMixin:
             _detected = self.router.detect(user_input, prev_intent=dst["intent"] or None,
                                            history=_hist)
         intent = forced_intent or _detected
+        # 2026-11-07 P0-2：非流式路径同样做「用户改选 → 样本回流」，
+        # 与 stream.py 同口径（显式标记，不混用编排内部 forced_intent）。
+        if ui_intent_override:
+            try:
+                from services.intent_override_feedback import record_override as _rec_ov
+                _im = self.router.get_last_meta() or {}
+                _rec_ov(user_input, ui_intent_override, detected=_detected or "",
+                        route=str(_im.get("route") or ""),
+                        conf=float(_im.get("confidence") or 0))
+            except Exception:
+                pass
         # P0-4（2026-09-19）：显式定向覆盖语义识别结果时不静默（非流式路径无 SSE，故写日志留痕）
         if forced_intent and _detected and forced_intent != _detected:
             try:

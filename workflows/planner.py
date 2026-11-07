@@ -372,7 +372,8 @@ class FlowPlannerMixin:
                          provider_id=None, run_id: int = 0, conn=None, attachments=None, pool=None,
                          conversation_id: int = 0, team_prompt: str = "",
                          branch: str = "dev", user: dict | None = None,
-                         stage_hint: list | None = None) -> dict:
+                         stage_hint: list | None = None,
+                         main_agent: str = "") -> dict:
         """P0-1/P1-1/P1-2 Planner-Executor 服务（会话入口自动编排 / Flow planner 节点共用）。
 
         - LLM 计划生成：目标 → 子任务 DAG（key/title/agent/deps/task_type），
@@ -395,7 +396,8 @@ class FlowPlannerMixin:
         try:
             return self._planner_core(goal, agents, max_tasks, parallel, provider_id, run_id, conn,
                                       attachments, pool, conversation_id, team_prompt,
-                                      branch=branch, user=user, stage_hint=stage_hint)
+                                      branch=branch, user=user, stage_hint=stage_hint,
+                                      main_agent=main_agent)
         finally:
             if own:
                 try:
@@ -407,7 +409,8 @@ class FlowPlannerMixin:
                       provider_id, run_id: int, conn, attachments=None, pool=None,
                       conversation_id: int = 0, team_prompt: str = "",
                       branch: str = "dev", user: dict | None = None,
-                      stage_hint: list | None = None) -> dict:
+                      stage_hint: list | None = None,
+                      main_agent: str = "") -> dict:
         """Planner-Executor 核心（run_planner_plan 的连接由外层管理）。
 
         pool（Task 5）：外部传入的编排候选池意图名列表（pipeline._orch_pool 结果），
@@ -419,6 +422,16 @@ class FlowPlannerMixin:
         from agent import AgentPipeline
         import time as _t
         t0 = _t.time()
+        # ★★ 2026-11-06：**编排子任务必须继承主 Agent 的 MCP 能力**（conv 990480 实证）。
+        #   断链：本文件下面 `pipe = AgentPipeline()` 每次新建实例，从没人设
+        #   `pipe._team_main_agent` ⇒ 子任务只用**成员自己**绑定的 MCP。
+        #   实测团队 7 个成员中 5 个零 MCP（impact / report_generation / knowledge_qa /
+        #   chat / model_validation_repair）⇒ 编排路径下这些成员读不到任何平台数据，
+        #   与"直行路径能继承"形成**同一次请求两条路径结论不同**的分裂。
+        #   语义依据与 `pipeline_parts/tools.py:240`（直行继承）同源：
+        #   用户选主 Agent 就是选了它的平台对接能力，分派只该改"谁思考"。
+        #   开关 `agent.team_member_inherit_mcp`（与直行共用），置 False 逐字节回退。
+        self._orch_main_agent = (main_agent or "").strip()
         goal = goal or "执行该团队任务并汇总结果"
         if agents is None:
             agents = ["requirement_analysis", "design", "impact", "review", "report_generation", "knowledge_qa"]
@@ -893,6 +906,10 @@ class FlowPlannerMixin:
             if ttype == "agent":
                 from agent import AgentPipeline
                 pipe = AgentPipeline()
+                # ★ 2026-11-06：继承主 Agent 的 MCP（见 _planner_core 顶部注释）
+                _ma = getattr(self, "_orch_main_agent", "") or ""
+                if _ma:
+                    pipe._team_main_agent = _ma
                 pipe._load_db_agents()
                 # P1-2：任务 config.skill 指定技能 → 强制注入（仅当技能存在且已发布）
                 skill_name = cfg.get("skill") or None
@@ -922,6 +939,10 @@ class FlowPlannerMixin:
                 #   依据：docs/react执行器-标杆调研与落地方案-20261104.md。
                 from agent import AgentPipeline
                 pipe = AgentPipeline()
+                # ★ 2026-11-06：继承主 Agent 的 MCP（见 _planner_core 顶部注释）
+                _ma = getattr(self, "_orch_main_agent", "") or ""
+                if _ma:
+                    pipe._team_main_agent = _ma
                 pipe._load_db_agents()
                 _react_agent = str(tk.get("agent_id") or cfg.get("agent") or "").strip()
                 # ⚠️ 不要写 `int(cfg.get("max_steps") or 5)`：`0` 是 falsy ⇒ 显式传 0 会被

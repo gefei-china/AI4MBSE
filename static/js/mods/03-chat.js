@@ -837,6 +837,11 @@ async function selectConv(id) {
     _convTabs[currentConvId] = { tabs: _previewTabs.slice(), activeKey: _previewActiveKey };
   }
   currentConvId = id;
+  // ★ 2026-11-06：切换会话必须清掉上一个会话残留的运行态文案（「仍在执行：t1…」）。
+  //   `#chat-status` 是全局元素，旧会话的流/心跳写进去后不会自动消失 ⇒
+  //   新会话明明没在跑，却一直显示别的会话的执行状态。
+  const _csSwitch = document.getElementById('chat-status');
+  if(_csSwitch) _csSwitch.textContent = '';
   _isDraft = false;   // 2026-09-04 v3：选中真实会话，退出草稿态
   // ★ 2026-10-31：切到某会话时**加载它的模型参数设置**（会话维度）。
   //   为什么必须在这里：会话设置存服务端（conversations.llm_overrides），

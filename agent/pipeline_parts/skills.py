@@ -353,7 +353,32 @@ class SkillMixin:
             if res_ex:
                 snippet += f"\n📝 示例（需要时按需读取）：{'；'.join(res_ex[:5])}"
             if res_scr:
-                snippet += f"\n⚙ 脚本（需要时执行）：{'；'.join(res_scr[:5])}"
+                # ★ 2026-11-07（P1）：脚本从"一句话提示"变成"可执行"。
+                #   此前只写「⚙ 脚本（需要时执行）：scripts/main.py」——
+                #   但没有任何执行入口 ⇒ 模型只能假装执行或干脆忽略（实测：
+                #   7 个技能的脚本产出从未出现在任何一轮工具调用里）。
+                #   现在给出**工具名 + 确切参数**，并显式声明"别假装"。
+                _sname = s.get("name") or ""
+                snippet += (
+                    f"\n⚙ 脚本（用 `skill_script_run` 真正执行，不要假装执行、不要只描述）"
+                    f"：{'；'.join(res_scr[:5])}"
+                    f"\n  调用方式：skill=\"{_sname}\", script=\"{res_scr[0]}\""
+                    f"；需要命令行参数时传 argv（如 argv=[\"--list\"]）"
+                    f"，脚本有 run(**kwargs) 时传 args")
+                # 自动授权：该技能声明了脚本 ⇒ 把执行工具补入候选（不依赖人工维护
+                # allowed_tools，避免"技能升级了但白名单没跟上"）。
+                # `tools.py:582` 会读 `_skill_allowed_tools` 把其中声明的内置工具补进候选。
+                try:
+                    _at_ = getattr(self, "_skill_allowed_tools", None)
+                    if _at_ is None:
+                        self._skill_allowed_tools = {"skill_script_run"}
+                    elif isinstance(_at_, set):
+                        _at_.add("skill_script_run")
+                    elif isinstance(_at_, (list, tuple)):
+                        if "skill_script_run" not in _at_:
+                            self._skill_allowed_tools = set(_at_) | {"skill_script_run"}
+                except Exception:
+                    pass
             if at:
                 snippet += f"\n🔒 工具白名单（仅可调用）：{', '.join(at)}"
             parts.append(snippet)

@@ -7,6 +7,19 @@ from datetime import datetime
 from typing import Any, Optional
 from file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # 基础通用文件操作工具
 from report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # 基础通用报告导出工具
+# ★ 2026-11-06（P0）：代码沙箱执行 + 文档文本提取（两个"有实现但此前没接线"的原子能力）
+from code_tools import exec_code_tool, CODE_TOOL_NAMES as _CODE_TOOL_NAMES
+from doc_tools import exec_doc_tool, DOC_TOOL_NAMES as _DOC_TOOL_NAMES
+# ★ 2026-11-07（P1）：技能自带脚本的执行通道（受信脚本，独立子进程 + 包内路径限定）
+from skill_tools import exec_skill_tool, SKILL_TOOL_NAMES as _SKILL_TOOL_NAMES
+# ★ 2026-11-07（P2）：元能力 + 自注册能力执行（双链路必须同序同语义）
+from meta_tools import (exec_capability_tool, META_QUERY_NAMES as _META_QUERY_NAMES,
+                        META_APPLY_NAMES as _META_APPLY_NAMES)
+from capability_runtime import is_capability as _is_capability, exec_capability as _exec_capability
+# ★ 2026-11-07（P0-1）：需求条目化 / 需求条目入库
+#   与 `agent/pipeline_parts/tools.py` 的对应分支**必须同序同语义** ——
+#   两套分发各自存在，漏一边的后果是"直接调能跑、模型侧说没执行器"（历史踩过 3 次）。
+from requirement_itemize_tools import REQ_TOOL_NAMES as _REQ_TOOL_NAMES, exec_tool as exec_req_tool
 
 
 class ToolRegistry:
@@ -51,6 +64,27 @@ class ToolRegistry:
         #   漏这里则编辑页候选看不到，见 save_artifact 的教训）
         "web_search": {"desc": "联网搜索互联网最新消息（参数 query:str, max_results:int 可选；时效性问题必用）", "handler": "web_tools.exec_tool"},
         "web_fetch": {"desc": "抓取指定网页的正文文本（参数 url:str, max_chars:int 可选）", "handler": "web_tools.exec_tool"},
+        # ★ 2026-11-06：**补两个"有实现但没接线"的原子能力**（P0）
+        #   ① code_exec：沙箱执行 Python/JS。`sandbox.py` 早已具备进程隔离/超时强杀/
+        #      builtins+import 白名单，但从未进 tools 表 ⇒ 模型不知道它存在 ⇒
+        #      "算一下、转一下、验证一下"全靠心算。
+        #   ② doc_parse：PDF/DOCX/XLSX/CSV 文本提取。`.venv` 里 pypdf/pdfplumber/
+        #      python-docx/openpyxl 全都在，同样没有工具包装 ⇒ 拿到 PDF 只能看文件名。
+        #   ⚠️ 三处登记缺一不可（本表 / BUILTIN_DESC / _do_execute 分发），
+        #      历史上 save_artifact 就漏过 BUILTIN_DESC 导致"绑了也不注入"。
+        "code_exec": {"desc": "在隔离沙箱执行 Python/JS 代码（参数 code:str, language:python|js, inputs:object, timeout:number≤30）", "handler": "code_tools.exec_code_tool"},
+        "doc_parse": {"desc": "提取 PDF/Word/Excel/CSV 文档正文（参数 path:str, max_chars:int, pages:str, sheets:str, max_rows:int）", "handler": "doc_tools.exec_doc_tool"},
+        # ★ 2026-11-07（P1）：技能脚本执行。此前 skills.py 只注入一行「⚙ 脚本（需要时执行）」
+        #   却没有任何执行入口 ⇒ 7 个技能的 scripts/*.py 是死文件。
+        "skill_script_run": {"desc": "执行技能包自带脚本（参数 skill:str, script:str 默认 scripts/main.py, args:object, argv:array, timeout:number≤120）", "handler": "skill_tools.exec_skill_tool"},
+        # ★ 2026-11-07（P2）：元能力
+        "capability_query": {"desc": "查询能力资产（参数 kind:agent|skill|tool|capability, action:list|get|diff, target, keyword）", "handler": "meta_tools.exec_capability_tool"},
+        "capability_apply": {"desc": "新增/修改/绑定/解绑/启停/删除能力资产（参数 kind, action, target, spec；走人工确认）", "handler": "meta_tools.exec_capability_tool"},
+        # ★ 2026-11-07（P0-1）：需求条目化 / 条目入库
+        #   ⚠️ 必须登记进 BUILTINS：`_do_execute` 对非 BUILTINS 名字会先走 HTTP/MCP 再
+        #   直接返回「未知工具」，分支写在下面对**登记缺失**的名字是**不可达**的。
+        "requirement_itemize": {"desc": "需求条目化 + 需求视图骨架（参数 text:原文, domain, source_ref, project；只读）", "handler": "requirement_itemize_tools.exec_tool"},
+        "requirement_commit": {"desc": "需求条目入库（参数 items 或 text, gaps, project, version_id, source_ref；幂等，写操作）", "handler": "requirement_itemize_tools.exec_tool"},
     }
 
     def __init__(self, conn=None):
@@ -365,6 +399,34 @@ class ToolExecutor:
         # ── report_export：报告导出（内容→md/docx/pdf，双链路共用 report_tools.exec_report_tool）──
         if name in _REPORT_TOOL_NAMES:
             return exec_report_tool(name, arguments or {})
+        # ── code_exec：沙箱执行（双链路共用 code_tools.exec_code_tool；只暴露 sandbox.run_code，不给 shell）──
+        if name in _CODE_TOOL_NAMES:
+            return exec_code_tool(name, arguments or {})
+        # ── doc_parse：文档文本提取（PDF/DOCX/XLSX/CSV；路径保护复用 file_tools）──
+        if name in _DOC_TOOL_NAMES:
+            return exec_doc_tool(name, arguments or {})
+        # ── skill_script_run：技能自带脚本执行（受信脚本；包内路径限定 + 子进程超时强杀）──
+        if name in _SKILL_TOOL_NAMES:
+            return exec_skill_tool(name, arguments or {})
+        # ── requirement_itemize / requirement_commit：需求条目化与条目入库 ──
+        #   conv 由实例挂载（FlowExecutor 注入），无则 0（无工程会话合法）
+        if name in _REQ_TOOL_NAMES:
+            return exec_req_tool(name, arguments or {},
+                                 conversation_id=int(getattr(self, "_flow_conversation_id", 0) or 0))
+        # ── 元能力：查询直读 / 提案入确认队列（批准后由 hil_service 执行）──
+        if name in _META_QUERY_NAMES or name in _META_APPLY_NAMES:
+            return exec_capability_tool(name, arguments or {}, ctx={
+                "agent": str(getattr(self, "_flow_agent", "") or ""),
+                "conversation_id": int(getattr(self, "_flow_conversation_id", 0) or 0),
+                "run_id": int(getattr(self, "_flow_run_id", 0) or 0),
+                "task_key": str(getattr(self, "_flow_task_key", "") or ""),
+            })
+        # ── 自注册能力（source='capability'）：名字由模型起，无前缀约定，须兜底判定 ──
+        try:
+            if _is_capability(name):
+                return _exec_capability(name, arguments or {})
+        except Exception:
+            pass
         return {"ok": False, "result": f"未知工具: {name}"}
 
 

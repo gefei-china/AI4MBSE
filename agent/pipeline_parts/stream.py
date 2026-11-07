@@ -4066,7 +4066,8 @@ class StreamMixin:
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
                        team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0,
                        resume_of_user_msg_id: int = 0, resume_append: str = "", _tracer=None,
-                       deadline_ts: float = 0.0, session_conv_id: int = 0, overrides=None):
+                       deadline_ts: float = 0.0, session_conv_id: int = 0, overrides=None,
+                       ui_intent_override: str = ""):
         """流式执行（V2.3.2 优化：AI 输出流式 + 执行过程可观测）。生成器逐段产出 SSE 事件：
 
         {"type":"stage","name":..., "status":"run|done"}   右侧智能体执行状态
@@ -4395,6 +4396,20 @@ class StreamMixin:
                 _detected = self.router.detect(user_input, prev_intent=dst["intent"] or None,
                                                history=_hist)
             intent = forced_intent or _detected
+            # ★ 2026-11-07（米爸第 15 轮 P0-2）：**用户改选 → 样本池回流**。
+            #   位置必须在 `_detected` 算出之后 —— 只有这里拿得到"系统原判"，
+            #   且 `ui_intent_override` 是 HTTP 入口透传的**显式标记**，
+            #   不会把编排内部 `forced_intent` 误当成用户纠错。
+            #   写 suggested 不写 confirmed（人工审核才生效），异常静默不拖慢请求。
+            if ui_intent_override:
+                try:
+                    from services.intent_override_feedback import record_override as _rec_ov
+                    _im = self.router.get_last_meta() or {}
+                    _rec_ov(user_input, ui_intent_override, detected=_detected or "",
+                            route=str(_im.get("route") or ""),
+                            conf=float(_im.get("confidence") or 0))
+                except Exception:
+                    pass
             # ★★ 2026-11-06：**短续句不得落到「通用问答Agent」**（无工具、无上下文）。
             #   事故（conv 990485，14:54）：用户发「继续」，被判 intent=chat / route=inherit，
             #   执行主体变成「通用问答Agent」⇒ 生成阶段 0 字正文 ⇒ 收口只能写一句
@@ -4474,15 +4489,52 @@ class StreamMixin:
                 #   「`elif _act ==` 出现在 team_forced 之前」的字面判据继续成立——断言按字面
                 #   锚 `elif _act ==`，写成 `elif (_act == ...` 会让它认不出这一支而误判）。
                 _multi_stages = len(((_multi_intent or {}).get("sequence") or []))
+                # ★★ 2026-11-06：「会话已有进行中的工作」的统一判据（两处降级点共用）。
+                #   为什么需要：团队名册里有一个兜底的 `chat` 成员（通用问答Agent，tools=0），
+                #   团队路由对「继续/追问/机制问题」很容易把本轮**定向给这个成员**
+                #   （实测 conv 990480/990500：`direct → target='chat'`），
+                #   于是执行主体从「智源对接agent」掉成一个**没有工具、也不带平台上下文**的 Agent，
+                #   用户看到的却是"我明明说了要取智源数据，怎么总匹配到 chat"。
+                #   判据：① 本轮之前发生过对话（_hist 非空）；或 ② 会话上一轮意图不是 chat
+                #   （全新会话只打了声招呼的情况仍走通用问答，不为寒暄拉起整套工具）。
+                _has_ctx = bool(_hist) or bool((dst or {}).get("intent") not in (None, "", "chat"))
                 if _act == "chat":
-                    # 短噪声/问候：走通用直答，不编排、不定向团队成员
-                    intent = "chat"
-                    forced_intent = None
-                    team_direct = True
-                    # ★ 2026-10-29：记下「本轮执行主体是团队路由改写的」——
-                    #   否则 exec_subject.source 只能靠"team 非空"判成 manual，
-                    #   变成"用户手动选了 chat/成员"的错误归因（实测 conv 9754）。
-                    self._team_routed_to = "chat"
+                    # ★★ 2026-11-06（conv 990480 实测）：**会话已有上下文时不许降级**。
+                    #   事故链：用户选定主 Agent「智源对接agent」（绑 zhiyuan-dev-mcp，71 个工具），
+                    #   连续三轮「继续之前的工作 / 找到了正确的mcp了嘛 / 任务是怎么分发的…」
+                    #   被团队路由判 `_act='chat'` ⇒ `intent='chat'` ⇒ `registry.get('chat')`
+                    #   ⇒ 执行主体「通用问答Agent」（tools=0、无平台能力）
+                    #   ⇒ 它只能反复答"我从未成功调用过任何智源工具"，用户看到的是
+                    #   「我明明说了要获取智源的数据，怎么总匹配到 chat」。
+                    #   关键结构缺陷：**这段在 4405 的"续写不降级"之后执行**，
+                    #   于是那处升级被这里**静默覆盖**（续写修复对团队型主 Agent 等于没生效）。
+                    #   ⇒ 规则：chat 只描述**说话行为**，不是"换个没工具的 Agent 来答"。
+                    #     有会话上下文（发生过对话）时，执行主体仍用主 Agent，
+                    #     但 `team_direct=True`（直行、不编排）—— 避免为一句追问拉起四阶段。
+                    _has_ctx = bool(_hist) or bool((dst or {}).get("intent") not in (None, "", "chat"))
+                    _no_demote = bool(team_intent) and _has_ctx
+                    if _no_demote:
+                        intent = team_intent
+                        forced_intent = None
+                        team_direct = True
+                        self._team_routed_to = ""
+                        _keep_note = (f"（执行主体）本轮识别为闲聊类，但会话已有进行中的工作，"
+                                      f"仍按主 Agent「{team_intent}」执行（保住了它绑定的平台能力；"
+                                      f"不降级为无工具的通用问答）")
+                        exec_notices.append({"kind": "progress", "text": _keep_note})
+                        self._exec_subject_note = _keep_note
+                        yield {"type": "progress", "delta": _keep_note, "kind": "progress"}
+                    else:
+                        # 短噪声/问候：走通用直答，不编排、不定向团队成员
+                        intent = "chat"
+                        forced_intent = None
+                        team_direct = True
+                        # ★ 2026-10-29：记下「本轮执行主体是团队路由改写的」——
+                        #   否则 exec_subject.source 只能靠"team 非空"判成 manual，
+                        #   变成"用户手动选了 chat/成员"的错误归因（实测 conv 9754）。
+                        #   ⚠️ 必须留在 **else 内**：上面「不降级」分支执行主体是主 Agent，
+                        #   标成 chat 会把归因写反（本轮改缩进时差点踩）。
+                        self._team_routed_to = "chat"
                 elif _act == "direct" and (team_decision or {}).get("target") and _multi_stages >= 2:
                     # ★★ 2026-10-29（用户问「是否支持多意图」实测发现的断链）：
                     #   多阶段输入在**团队模式下会被 direct 截断**——只执行一个成员，其余阶段全丢。
@@ -4505,6 +4557,25 @@ class StreamMixin:
                     exec_notices.append({"kind": "progress", "text": _subj_note})
                     yield {"type": "progress", "delta": _subj_note, "kind": "progress"}
                     self._exec_subject_note = _subj_note
+                elif (_act == "direct" and (team_decision or {}).get("target") == "chat"
+                      and _has_ctx and team_intent):
+                    # ★★ 2026-11-06：**定向到兜底 `chat` 成员时不许换执行主体**。
+                    #   实测（conv 990500，主 Agent=智源对接agent）：
+                    #     「继续之前的工作」→ `direct · target='chat'`
+                    #     ⇒ intent='chat' ⇒ registry.get('chat') ⇒「通用问答Agent」(tools=0)
+                    #     ⇒ 既读不到工程、也不带上下文，只能回"我没找到 MCP"。
+                    #   这与「用户已选定主 Agent」直接冲突：chat 是**闲聊兜底成员**，
+                    #   不是"换个人来答"的理由。有会话上下文时由主 Agent 直行（不编排）。
+                    intent = team_intent
+                    forced_intent = None
+                    team_direct = True
+                    self._team_routed_to = ""
+                    _keep_note2 = (f"（执行主体）团队路由本想定向给兜底成员「chat」，"
+                                   f"但会话已有进行中的工作，仍按主 Agent「{team_intent}」执行"
+                                   f"（保住它绑定的平台能力，不降级为无工具的通用问答）")
+                    exec_notices.append({"kind": "progress", "text": _keep_note2})
+                    self._exec_subject_note = _keep_note2
+                    yield {"type": "progress", "delta": _keep_note2, "kind": "progress"}
                 elif _act == "direct" and (team_decision or {}).get("target"):
                     # 定向到团队内最相近/命中的成员直行（仍不编排）
                     intent = team_decision["target"]
@@ -4716,12 +4787,22 @@ class StreamMixin:
             yield {"type": "stage", "name": "意图识别", "status": "done", "intent": intent,
                    "agent": agent_def.name, "hil_level": hil_level,
                    "route": _intent_meta["route"], "confidence": _intent_meta["confidence"],
+                   # ★ 2026-11-07（第 16 轮 shadow 转正）：**展示用的校准置信度**。
+                   #   前端"把握 X%"改读此字段。理由：`rule_scored` 写死 0.95 而
+                   #   真库回放真实准确率只有 70% ⇒ 界面等于在对用户撒谎。
+                   #   只**新增**字段、不动原 `confidence`（判定链仍用原值）⇒ 零回归。
+                   "calibrated_confidence": _intent_meta.get(
+                       "calibrated_confidence", _intent_meta["confidence"]),
                    "brief": _brief,
                    "exec_subject": _exec_subject}
             # P0-1 置信度三级决策：中置信（弱语义/继承/LLM<0.85）→ 澄清提示（不阻塞执行，供前端改选重发）
             # V2.7：指定智能体时同样给出提示（识别结果与执行 Agent 不一致时如实说明）
             if _intent_meta["needs_clarification"]:
                 yield {"type": "clarify", "intent": intent, "confidence": _intent_meta["confidence"],
+                       # 同理：澄清条上"把握不大（X%）"也应用校准值，否则「rule_scored
+                       # 0.95 却说把握不大」自相矛盾。
+                       "calibrated_confidence": _intent_meta.get(
+                           "calibrated_confidence", _intent_meta["confidence"]),
                        "route": _intent_meta["route"], "message": str(user_input),
                        "detected": _detected if forced_intent and _detected != intent else None,
                        "brief": _brief,
@@ -5226,6 +5307,19 @@ class StreamMixin:
             # 否则「生产走 stream、自检走 execute」会给出虚假的安全结论。
             self._tool_user = user
             tools_def = self._build_tools_def(intent, user_input, user)
+            # ★★ 2026-11-06：**绑定了但离线的 MCP 必须显式告知**（conv 990480 事故）。
+            #   现象：智源 Bearer 失效（401）⇒ status=offline ⇒ 71 个工具不注入
+            #   ⇒ 模型连续三轮自述"我从未成功调用过任何智源工具 / 没找到 MCP"
+            #   ⇒ 用户以为是路由问题，实际是**凭据过期**，而界面上没人说这件事。
+            #   这里把"为什么没有工具"变成系统事实（progress 通道 + exec_notices 落库）。
+            try:
+                _off_body = self._bound_mcp_offline_note(intent, team_intent)
+                _off_note = ("（能力不可用）" + _off_body) if _off_body else ""
+                if _off_note:
+                    exec_notices.append({"kind": "progress", "text": _off_note})
+                    yield {"type": "progress", "delta": _off_note, "kind": "progress"}
+            except Exception:
+                pass
             # ★ 2026-10-17（米爸「harness 持续工作」）：自主续跑（auto-continue）就绪。
             #   为什么需要外层循环：模型「想停」和「该停」是两件事——没有完成度评估器时，
             #   多步任务模型常在第一步后就收尾等用户吩咐（米爸原话：「每执行一轮都会结束，

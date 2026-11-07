@@ -245,6 +245,8 @@ class OrchestrMixin:
                 parallel=True, provider_id=provider_id, attachments=attachments, pool=pool,
                 conversation_id=conversation_id, branch=branch, user=user,
                 stage_hint=self._build_stage_hint(self.router.detect_multi(user_input)),
+                # ★ 2026-11-06：编排子任务继承主 Agent 的 MCP（见 planner._planner_core 注释）
+                main_agent=getattr(self, "_team_main_agent", "") or "",
                 **_kw)
         except Exception as e:
             self._orch_error = str(e)[:150]
@@ -347,7 +349,9 @@ class OrchestrMixin:
                 goal=user_input, agents=self._ORCH_AGENTS, max_tasks=self._ORCH_MAX_TASKS,
                 parallel=True, provider_id=provider_id, attachments=attachments, pool=_pool,
                 conversation_id=conversation_id, branch=branch, user=user,
-                stage_hint=self._build_stage_hint(_multi))
+                stage_hint=self._build_stage_hint(_multi),
+                # ★ 2026-11-06：同上
+                main_agent=getattr(self, "_team_main_agent", "") or "")
         except Exception as e:
             self._orch_error = str(e)[:150]
             return None

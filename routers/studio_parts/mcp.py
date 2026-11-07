@@ -105,11 +105,42 @@ def update_mcp_server(sid: int, body: MCPIn, conn=Depends(db_session), user=Depe
     _tools = json.dumps(body.tools, ensure_ascii=False) if body.tools else None
     _args = json.dumps(body.args, ensure_ascii=False) if body.args else None
     _env = json.dumps(body.env, ensure_ascii=False) if body.env else None
+    # ★★ 2026-11-06：headers 改为 **merge（增量）语义** —— 这一步是被实测事故逼出来的。
+    #   旧语义是"给了 headers 就整体替换"。一旦前端支持"只改某一条"，提交 `{X-Probe: hello}`
+    #   ⇒ 落库只剩 X-Probe，**Authorization 被静默抹掉**（本轮实测复现：加一个头后立即 401）。
+    #   新语义（三种输入互相不歧义）：
+    #     · None / 未提供        → 不写该列（保持原值）← B5-4 修过的坑，别退回去
+    #     · {}（空对象，非 None）→ **显式清空全部**
+    #     · {k: v, ...}（非空）  → **merge**：覆盖同名 key，其余原样保留
+    #   删除单条走 `header_delete`（前端只拿得到掩码，无法整体重写剩余头）。
+    _have_hdr = body.headers is not None
+    _dels = [str(k) for k in (body.header_delete or []) if str(k).strip()]
+    _headers = None
+    if _have_hdr or _dels:
+        try:
+            _cur = json.loads((repo.get_mcp_server(sid) or {}).get("headers") or "{}") or {}
+        except Exception:
+            _cur = {}
+        if not isinstance(_cur, dict):
+            _cur = {}
+        _removed = []
+        for k in _dels:
+            if k in _cur:
+                _removed.append(k)
+            _cur.pop(k, None)
+        if _have_hdr:
+            if body.headers:                    # 非空 → merge（不碰其它 key）
+                _cur.update({str(k): str(v) for k, v in body.headers.items()})
+            elif not _dels:                     # 空对象且无删除动作 → 显式清空
+                _cur = {}
+        _headers = json.dumps(_cur, ensure_ascii=False)
+        if _dels:
+            audit(audit_user(user), "mcp_header_delete",
+                  f"更新MCP#{sid}: 删除请求头 {_removed or _dels}（剩余 {len(_cur)} 条）", conn=conn)
     repo.update_mcp_server(
         sid, body.name, body.endpoint, _tools,
         body.transport, body.command or None, _args, _env,
-        json.dumps(body.headers, ensure_ascii=False)
-        if body.headers is not None else None,
+        _headers,
         description=body.description)
     audit(audit_user(user), "mcp_update", f"更新MCP服务器#{sid}: {body.name}", conn=conn)
     return {"ok": True}
@@ -297,3 +328,83 @@ def get_mcp_prompt(sid: int, name: str, conn=Depends(db_session)):
     client = MCPClient(endpoint=srv["endpoint"], transport=srv.get("transport", "sse"),
                        headers=_srv_headers(srv))          # ★ B5-2
     return client.get_prompt(name)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-11-06 · 工具清单查看 + 副作用档位（用户诉求：「MCP 的工具集合在哪里可以看到」）
+#
+# 为什么必须给入口：工具清单此前只有两个去处——
+#   ① `mcp_servers.tool_meta`（库里，界面看不到）；② 能力中心卡片上的「工具 71 个」一个数字。
+# 用户无法回答"这个 MCP 到底提供了什么、哪些是写操作"，而写操作恰恰是最需要被看见的
+# （71 个里 42 个非只读）。
+#
+# 同时暴露 `side_effect` 与它的**来源**（auto 派生 / manual 人工覆写）：
+# MCP 升级后自动派生会跟着变，人工覆写的永不被覆盖 —— 用户需要能分辨这两者。
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.get("/api/studio/mcp-servers/{sid}/tools")
+def list_mcp_server_tools(sid: int, conn=Depends(db_session)):
+    """列出某 MCP 提供的全部工具（名称/副作用档/风险/描述/标注来源）。"""
+    from agent.mcp_tool_sync import list_mcp_tools
+    from agent.tool_side_effect import RULE_VERSION
+    repo = StudioRepo(conn)
+    srv = repo.get_mcp_server(sid)
+    if not srv:
+        return JSONResponse({"error": "MCP server not found"}, 404)
+    try:
+        items = list_mcp_tools(conn, sid)
+    except Exception as e:
+        return JSONResponse({"error": f"读取工具清单失败：{type(e).__name__}: {str(e)[:120]}"}, 500)
+    counts = {"read": 0, "write": 0, "destructive": 0}
+    for it in items:
+        k = it.get("side_effect") or "read"
+        counts[k] = counts.get(k, 0) + 1
+    return {
+        "ok": True, "server_id": sid, "name": srv.get("name"),
+        "status": srv.get("status"), "total": len(items),
+        "counts": counts, "non_read": len(items) - counts.get("read", 0),
+        "rule_version": RULE_VERSION,
+        "last_discover": srv.get("last_discover"),
+        "items": items,
+    }
+
+
+@router.post("/api/studio/mcp-servers/{sid}/tools/{tool_name}/side-effect")
+def set_mcp_tool_side_effect(sid: int, tool_name: str, body: dict,
+                             conn=Depends(db_session), user=Depends(current_user)):
+    """人工覆写某工具的副作用档位（此后 discover 不再覆盖它）。
+
+    body: {"side_effect": "read|write|destructive"}；传 `"auto"` 表示交回自动派生。
+    """
+    from agent.mcp_tool_sync import sync_mcp_tools
+    import json as _json
+    val = str((body or {}).get("side_effect") or "").strip().lower()
+    if val not in ("read", "write", "destructive", "auto"):
+        return JSONResponse({"error": "side_effect 只能是 read/write/destructive/auto"}, 400)
+    repo = StudioRepo(conn)
+    srv = repo.get_mcp_server(sid)
+    if not srv:
+        return JSONResponse({"error": "MCP server not found"}, 404)
+    row = conn.execute("SELECT id FROM tools WHERE name=? AND mcp_server_id=?",
+                       (tool_name, sid)).fetchone()
+    if not row:
+        return JSONResponse({"error": "该工具尚未同步进工具表，请先点「测试连通并刷新」"}, 404)
+    if val == "auto":
+        # 交回派生：清掉 manual 标记，然后按当前规则重推
+        conn.execute("UPDATE tools SET side_effect_source='auto' WHERE id=?", (row["id"],))
+        try:
+            meta = _json.loads(srv.get("tool_meta") or "[]")
+        except Exception:
+            meta = []
+        stats = sync_mcp_tools(conn, sid, meta, prune_missing=False)
+        conn.commit()
+        audit(audit_user(user), "mcp_tool_side_effect",
+              f"MCP#{sid} 工具 {tool_name} 交回自动派生", conn=conn)
+        return {"ok": True, "mode": "auto", "stats": stats}
+    risk = {"read": "low", "write": "medium", "destructive": "high"}[val]
+    conn.execute("UPDATE tools SET side_effect=?, risk_level=?, side_effect_source='manual', "
+                 "rule_version=0 WHERE id=?", (val, risk, row["id"]))
+    conn.commit()
+    audit(audit_user(user), "mcp_tool_side_effect",
+          f"MCP#{sid} 工具 {tool_name} 人工覆写为 {val}", conn=conn)
+    return {"ok": True, "mode": "manual", "side_effect": val, "risk_level": risk}

@@ -1655,6 +1655,44 @@ def init_db():
     except Exception:
         pass
 
+    # ── 需求实体表（2026-11-07）：需求条目的**唯一事实源** ──
+    # 为什么必须有这张表：`requirement_itemize` 自 2026-10-08 起只做**纯函数**返回
+    # （items[] 随对话消失），全库不存在任何需求实体 ⇒ 追溯链
+    # Need→Requirement→Function→Component→Verification 的第一环**在地基上就是空的**
+    # （2026-11-07 实测：`%req%` 只匹配到 merge_requests / query_trace）。
+    # 设计要点：
+    #   · `fingerprint` = 归一化文本的 sha1 ⇒ **同文重复条目化不产生重复资产**（幂等地基）；
+    #   · `req_id` 由仓储在**首次**落库时按分类序列分配，此后固定不变（追溯引用不能漂移）；
+    #   · `kind='gap'` 存"不可验证/待澄清"句 —— 它们是需求质量结论的一部分，
+    #     丢掉就等于把"为什么这条不能建模"也丢了；
+    #   · `status` 收敛：active → merged（并入 merged_into）→ retired（作废留痕）。
+    c.execute("""CREATE TABLE IF NOT EXISTS requirement_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        req_id TEXT NOT NULL,                 -- REQ-F001（项目内稳定，追溯引用键）
+        fingerprint TEXT NOT NULL,            -- 归一化文本 sha1（幂等键）
+        kind TEXT DEFAULT 'item',             -- item | gap
+        text TEXT NOT NULL,
+        category TEXT DEFAULT '',             -- functional|performance|interface|constraint（gap 为空）
+        subject TEXT DEFAULT '',              -- 主体（由 N3 视图展开阶段补）
+        sysml_name TEXT DEFAULT '',           -- 需求视图里的 requirement 名（唯一）
+        ambiguous INTEGER DEFAULT 0,
+        reason TEXT DEFAULT '',               -- kind='gap' 时的不可验证原因
+        source_ref TEXT DEFAULT '',
+        domain TEXT DEFAULT '',
+        project_id TEXT DEFAULT '',
+        conversation_id INTEGER DEFAULT 0,
+        version_id INTEGER DEFAULT 0,         -- 关联的 sysml_versions（需求视图版本）
+        status TEXT DEFAULT 'active',         -- active | merged | retired
+        merged_into TEXT DEFAULT '',
+        created_by TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_req_fp "
+              "ON requirement_items(project_id, fingerprint)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_req_proj ON requirement_items(project_id, req_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_req_conv ON requirement_items(conversation_id)")
+
     # ── CIA：变更影响分析记录（FR-CIA-3 每次分析结果快照，可追溯）──
     c.execute("""CREATE TABLE IF NOT EXISTS impact_analyses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

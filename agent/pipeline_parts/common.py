@@ -22,6 +22,24 @@ from core.config import STATIC_DIR
 from file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES
 from web_tools import WEB_TOOL_NAMES as _WEB_TOOL_NAMES   # 联网搜索/网页抓取（2026-10-17）
 from report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES
+# ★ 2026-11-06（P0）：沙箱代码执行 + 文档文本提取。
+#   ⚠️ 必须加在**本文件**（`from .common import *` 的再导出源），不是 pipeline_parts/tools.py。
+#      本轮先误加到 tools.py，`_CODE_TOOL_NAMES` 在该模块里并不存在 ⇒ 真实会话报
+#      `name '_CODE_TOOL_NAMES' is not defined`（而直接调 ToolExecutor 却成功 ——
+#      因为那是 workflows 那套分发，与 Agent 侧是两条独立实现）。
+from code_tools import exec_code_tool, CODE_TOOL_NAMES as _CODE_TOOL_NAMES
+from doc_tools import exec_doc_tool, DOC_TOOL_NAMES as _DOC_TOOL_NAMES
+# ★ 2026-11-07（P1）：技能自带脚本的真实执行通道。
+#   此前 `skills.py:355` 只注入一行「⚙ 脚本（需要时执行）：scripts/main.py」，
+#   没有任何执行入口 ⇒ 7 个技能的脚本是死文件。见 skill_tools.py 头部说明。
+#   ⚠️ 同样必须加在本文件（再导出源），且名字必须进 __all__。
+from skill_tools import exec_skill_tool, SKILL_TOOL_NAMES as _SKILL_TOOL_NAMES
+# ★ 2026-11-07（P2）：元能力 —— 让模型通过会话管理自己的能力资产
+#   （agent / skill / tool / capability 的增删改、绑定、启停）。
+#   写动作全部入人工确认队列，模型只能提不能批。
+from meta_tools import (exec_capability_tool, META_QUERY_NAMES as _META_QUERY_NAMES,
+                        META_APPLY_NAMES as _META_APPLY_NAMES)
+from capability_runtime import is_capability as _is_capability, exec_capability as _exec_capability
 from agent.definition import AgentDefinition
 from agent.registry import AgentRegistry
 from agent.intent import IntentRouter
@@ -1006,6 +1024,13 @@ __all__ = [
     'os', 're', 'json', 'time', 'uuid', 'logging', 'logger',
     'get_db', 'db_conn', 'VectorEngine', 'QueryRouter', 'llm_client', 'STATIC_DIR',
     'exec_file_tool', '_FILE_TOOL_NAMES', '_WEB_TOOL_NAMES', 'exec_report_tool', '_REPORT_TOOL_NAMES',
+    # ★ 2026-11-06：下划线开头的名字 **必须显式列进 __all__**，否则 `from .common import *`
+    #   会跳过它（`import *` 只导出 `__all__` 里的公有名 + 无 __all__ 时的非下划线名）。
+    #   本轮踩坑：导入语句加对了，但漏了这里 ⇒ 真实会话报 `_CODE_TOOL_NAMES is not defined`。
+    'exec_code_tool', '_CODE_TOOL_NAMES', 'exec_doc_tool', '_DOC_TOOL_NAMES',
+    'exec_skill_tool', '_SKILL_TOOL_NAMES',
+    'exec_capability_tool', '_META_QUERY_NAMES', '_META_APPLY_NAMES',
+    '_is_capability', '_exec_capability',
     'AgentDefinition', 'AgentRegistry', 'IntentRouter', 'GraphRAG', 'ConflictDetector',
     '_citations_payload', '_extract_code_blocks', '_archive_impact_analysis',
     '_archive_sysml_version', '_archive_artifacts', '_TOOL_RESULT_CAP',

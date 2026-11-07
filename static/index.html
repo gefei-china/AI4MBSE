@@ -1462,6 +1462,49 @@
             <span style="font-size:12.5px;color:var(--mut);">本页只维护评测样本池，<b style="color:var(--txt);">不改路由规则</b>（要改识别行为请走既有「意图规则」配置）</span>
           </div>
           <div id="intent-sample-body"><div class="loading">加载中…</div></div>
+
+          <!-- ★ 2026-11-07（米爸第 17 轮）：意图字典（intent_taxonomy）维护区。
+               为什么需要：此前意图清单从 agents 表**派生**，中文名硬编码在 42-intent-samples.js、
+               示例说法硬编码在 agent/intent.py ⇒ 用户反馈「只能单选、无法新增和编辑」。
+               现在意图是独立实体（canonical + 中文名 + scope note + 别名 + 示例说法 + 弃用），
+               本区就是它的维护入口；示例说法会并入 LLM few-shot（直接提升识别准确率）。
+               canonical 名是路由键，**新增后不可改**（改会让历史样本与路由对不上）。 -->
+          <details style="margin-top:14px;" ontoggle="if(this.open)isLoadTaxonomy()">
+            <summary style="cursor:pointer;font-size:13.5px;font-weight:600;color:var(--txt);">
+              意图字典（可新增 / 编辑 / 停用）<span style="font-weight:400;color:var(--mut);font-size:12.5px;">
+              —— 中文名、定义、别名、示例说法都在这里维护，示例会用于提升识别准确率</span>
+            </summary>
+            <div style="margin:8px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <button class="btn sm" onclick="isNewIntent('')">＋ 新增意图</button>
+              <button class="btn sm ghost" onclick="isLoadTaxonomy()">🔄 刷新</button>
+              <span style="font-size:12.5px;color:var(--mut);">
+                canonical 名（机器用）新增后不可改；停用=不出现在新标注下拉，但历史样本仍可解析</span>
+            </div>
+            <div id="is-tax-form" style="display:none;margin:8px 0;padding:10px;border:1px solid var(--line);border-radius:8px;">
+              <div id="is-tax-form-title" style="font-weight:600;margin-bottom:8px;font-size:13px;">新增意图</div>
+              <div style="display:grid;grid-template-columns:110px 1fr;gap:8px;align-items:center;font-size:12.5px;">
+                <label>canonical 名</label>
+                <input id="is-tax-name" placeholder="snake_case，如 refund_request" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;">
+                <label>中文名 <b class="req">*</b></label>
+                <input id="is-tax-label" placeholder="下拉里显示的名字，如 需求分析" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;">
+                <label>scope note</label>
+                <textarea id="is-tax-note" rows="2" placeholder="一句话定义 + 什么不算我（例：把模糊诉求转成可验收规格。不含：质量评审）" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-family:inherit;"></textarea>
+                <label>别名</label>
+                <input id="is-tax-alias" placeholder="逗号分隔，用于归一化，如 需求分析，需求规格" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;">
+                <label>示例说法</label>
+                <textarea id="is-tax-ex" rows="3" placeholder="每行一句真实说法，会并入 LLM few-shot（建议 3~5 条）" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-family:inherit;"></textarea>
+                <label>能力族</label>
+                <input id="is-tax-cluster" placeholder="requirement / design / verify / change / report / knowledge / platform" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;">
+                <label>映射 Agent</label>
+                <input id="is-tax-agent" placeholder="留空=纯分类标签（不对应任何 Agent）" style="border:1px solid var(--line);border-radius:6px;padding:4px 8px;">
+              </div>
+              <div style="margin-top:8px;display:flex;gap:8px;">
+                <button class="btn sm" onclick="isSaveTax()">保存</button>
+                <button class="btn sm ghost" onclick="isCloseTaxForm()">取消</button>
+              </div>
+            </div>
+            <div id="is-tax-list"><div class="loading">展开后加载…</div></div>
+          </details>
         </div>
         <!-- AI 记忆：跨会话长期记忆（agent_memory）的**可见 + 可删**入口（合规与信任落点）。
              对标 ChatGPT 设置→个性化→记忆 / Claude 可编辑记忆摘要 —— 本工程此前只有写入没有落点。

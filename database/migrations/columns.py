@@ -75,6 +75,18 @@ def _backfill_agent_roles(conn, *, code: bool = True, orch: bool = True) -> None
         cols = [r[1] for r in conn.execute("PRAGMA table_info(agents)").fetchall()]
         if not cols:
             return
+        # ★ 2026-11-07：顺序也是行为 —— `orch_default` 原来是"按行序"返回，
+        #   改 DB 驱动后**行序不等于旧常量顺序**（实测变成字母序），
+        #   `verify_agent_catalog` 1.6 因此判红（"零行为变化"的承诺被破坏）。
+        #   ⇒ 新增 `orch_order` 把旧顺序**存进数据**，不再靠"碰巧的行序"。
+        if "orch_order" in cols and orch:
+            _done = 0
+            for _i, _n in enumerate(ORCH_DEFAULT, 1):
+                _done += conn.execute(
+                    "UPDATE agents SET orch_order=? WHERE name=? AND orch_order IS NULL",
+                    (_i, _n)).rowcount
+            if _done:
+                print(f"[init_db] 迁移: agents.orch_order 回填 {_done} 行（保持旧常量顺序）")
         for col, names in (("is_code_stage", CODE_STAGES), ("is_orch_default", ORCH_DEFAULT)):
             if not ((col == "is_code_stage" and code) or (col == "is_orch_default" and orch)):
                 continue
@@ -362,6 +374,17 @@ def _migrate_columns(conn):
     # ── D2 工具容错：重试策略 + 降级链 ──
     _add("tools", "retry_policy", "TEXT DEFAULT '{}'")    # JSON：{"max_retries":2,"backoff_base_ms":500,"backoff_multiplier":2,"retry_on":[...]}
     _add("tools", "fallback_to", "TEXT DEFAULT ''")       # 降级工具名（主工具失败重试耗尽后自动切换）
+    # ── ★ 2026-11-06：MCP 工具的副作用标注来源（自动派生 vs 人工覆写）──
+    #   背景：`side_effect` 是执行策略门控的关键输入（写类工具默认不注入），
+    #   但 MCP 工具从未进过 tools 表（实测 mcp_server_id=161 的行数 = 0/71）
+    #   ⇒ 门控对 MCP 完全失效，42 个非只读工具被无条件全量注入。
+    #   修法不是手工标注（MCP 一升级就失效，且失效方式比不标更危险：
+    #   旧标注写"读"、实际已成"写"），而是 **discover 时派生 + 人工覆写受保护**：
+    #     · side_effect_source='auto'   → 每次 discover 按 RULE_VERSION 重推
+    #     · side_effect_source='manual' → 只更新 description/schema，绝不碰 side_effect
+    #   这样"MCP 增删工具 / 语义从读变写"都能自动跟进，而人工裁决不会被脚本冲掉。
+    _add("tools", "side_effect_source", "TEXT DEFAULT 'auto'")
+    _add("tools", "rule_version", "INTEGER DEFAULT 0")
     _add("mcp_servers", "transport", "TEXT DEFAULT 'sse'")               # sse | stdio | http
     _add("mcp_servers", "command", "TEXT DEFAULT ''")                    # stdio 启动命令
     # ★ B5-2（2026-10-14 真流量抓到）：外部 MCP **普遍需要认证头**（如米爸提供的
@@ -545,10 +568,16 @@ def _migrate_columns(conn):
     #   · 标准意图标签 = `builtin=1 OR stage_order IS NOT NULL`。
     _new_code = _add("agents", "is_code_stage", "INTEGER DEFAULT 0")       # 1=产码阶段（视图/骨架/修复）
     _new_orch = _add("agents", "is_orch_default", "INTEGER DEFAULT 0")     # 1=默认编排池成员
+    # ★ 2026-11-07：默认编排池的**顺序**。`is_orch_default` 只说"在池里"，
+    #   顺序原先由代码常量给定；改成 DB 驱动后若不给顺序字段，返回顺序就变成
+    #   引擎的行序（实测是字母序）⇒ 与改造前**不是同一个池**（编排默认顺序变了）。
+    _new_ord = _add("agents", "orch_order", "INTEGER DEFAULT NULL")        # 1..N=池内顺序（NULL=未定）
     # ⚠️ **只在新列刚建出来时回填**：否则管理员在后台取消勾选后，下次启动会被回填逻辑重新打开
     #    （本仓已因"改了配置≠改了生效值"栽过，反向的"改了配置被悄悄改回来"同样不能有）。
-    if _new_code or _new_orch:
-        _backfill_agent_roles(conn, code=_new_code, orch=_new_orch)
+    if _new_code or _new_orch or _new_ord:
+        # `_new_ord` 也要触发：新加顺序列时同样需要回填，否则 orch_order 全 NULL
+        # ⇒ 排序回落到名字，等于"顺序仍未迁过来"（实测本轮就是这么漏的）。
+        _backfill_agent_roles(conn, code=_new_code, orch=(_new_orch or _new_ord))
     # ── 架构优化：子任务执行快照（负载 / 分派打分 / 结构化摘要 / 重试 / token 统计）──
     _add("agent_tasks", "load_snapshot", "TEXT DEFAULT '{}'")             # 分派时各 Agent 负载快照
     _add("agent_tasks", "assign_score", "REAL DEFAULT 0")                 # 分派打分

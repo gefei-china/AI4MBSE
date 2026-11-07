@@ -529,6 +529,7 @@ def chat(conv_id: int, body: ChatIn, conn=Depends(db_session), user=Depends(curr
     result = _pipe.execute(body.message, conv_id, branch, body.provider_id, body.attachments or [],
                            forced_intent=body.intent_override or None, skill_name=body.skill_name or None,
                            team=body.team or None,
+                           ui_intent_override=body.intent_override or "",
                            scope_id=body.scope_id, scope_ids=body.scope_ids, scope=body.scope,
                            # 2026-11-01：只传**单轮临时**；会话设置（会话×模型维度）
                            # 由 execute 在确定 effective_provider 之后自己读，否则会读错模型桶
@@ -775,6 +776,9 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                                      body.provider_id, body.attachments or [],
                                      # ★ 2026-10-16：前端不再发 forced_intent；澄清改选走 intent_override，
                                      #   且后端 team 分支会让主 Agent 覆盖它（用户所选主 Agent 为最高优先）。
+                                     # 2026-11-07 P0-2：把「用户改选」显式透传给 stream，
+                                     # 供样本回流记录真实原判（不能混用编排内部 forced_intent）
+                                     ui_intent_override=body.intent_override or "",
                                      forced_intent=body.intent_override or None,
                                      skill_name=body.skill_name or None,
                                      team=body.team or None,

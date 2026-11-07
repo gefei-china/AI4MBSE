@@ -279,24 +279,62 @@ class StudioRepo(BaseRepo):
                     input_schema: str, version: str, side_effect: str,
                     risk_level: str, owner: str = "", status: str = "active",
                     allowed_roles: str = "[]", retry_policy: str = "{}",
-                    fallback_to: str = "", config: str = "{}") -> int:
+                    fallback_to: str = "", config: str = "{}",
+                    kind: str = "") -> int:
+        """★ 2026-11-07（P1b）：新增 `kind` 参数。
+
+        ⚠️ 原实现**不写 kind** ⇒ 界面建的 HTTP 工具 `kind` 为空，
+        而 `http_tool_executor._get_tool_config` 查的是 `kind='http'`
+        ⇒ **注册成功、界面上看得见、但永远调不动**（"有实现但没接线"的第二次）。
+        这也是本轮"通用 HTTP 工具没有可用入口"的真因：不是缺表单，
+        而是表单建出来的东西执行器根本不认。
+        """
         rid = self.execute(
-            "INSERT INTO tools (name, source, description, status, input_schema, version, side_effect, risk_level, owner, allowed_roles, retry_policy, fallback_to, config) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO tools (name, source, description, status, input_schema, version, side_effect, risk_level, owner, allowed_roles, retry_policy, fallback_to, config, kind) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (name, source, description, status, input_schema, version, side_effect, risk_level, owner, allowed_roles,
-             retry_policy, fallback_to, config),
+             retry_policy, fallback_to, config, kind or ""),
         )
         self._sync("tools", rid)
         return rid
 
     def update_tool(self, tid: int, description: str, input_schema: str,
-                    retry_policy: str = "{}", fallback_to: str = "", config: str = "{}") -> None:
-        """仅更新可编辑字段（描述/schema/重试/降级/config）；版本/副作用/风险/负责人/角色保持注册来源值。"""
+                    retry_policy: str = "{}", fallback_to: str = "", config: str = "{}",
+                    kind: str | None = None) -> None:
+        """仅更新可编辑字段（描述/schema/重试/降级/config/kind）；版本/副作用/风险/负责人/角色保持注册来源值。
+
+        `kind=None` ⇒ 不动原值（避免把 MCP 工具的 kind 清空）。
+        """
+        if kind is None:
+            self.execute(
+                "UPDATE tools SET description=?, input_schema=?, retry_policy=?, fallback_to=?, config=?, "
+                "created_at=CURRENT_TIMESTAMP WHERE id=?",
+                (description, input_schema, retry_policy, fallback_to, config, tid),
+            )
+        else:
+            self.execute(
+                "UPDATE tools SET description=?, input_schema=?, retry_policy=?, fallback_to=?, config=?, "
+                "kind=?, created_at=CURRENT_TIMESTAMP WHERE id=?",
+                (description, input_schema, retry_policy, fallback_to, config, kind, tid),
+            )
+        self._sync("tools", tid)
+
+    def set_tool_side_effect(self, tid: int, side_effect: str, source: str = "auto") -> None:
+        """★ 2026-11-07（P1b）：按派生结果收紧副作用档位。
+
+        使用场景：HTTP 工具的方法从 GET 改成 POST 后，原来的 `read` 必须升成 `write`，
+        否则写请求会绕过写前确认闸。`source` 记 'auto' 表示这是派生结论
+        （人工裁决仍走 MCP 那条 `side-effect` 接口，保持 manual 不被覆盖）。
+        """
         self.execute(
-            "UPDATE tools SET description=?, input_schema=?, retry_policy=?, fallback_to=?, config=?, "
-            "created_at=CURRENT_TIMESTAMP WHERE id=?",
-            (description, input_schema, retry_policy, fallback_to, config, tid),
-        )
+            "UPDATE tools SET side_effect=?, "
+            "risk_level=CASE side_effect WHEN 'destructive' THEN 'high' "
+            "  WHEN 'write' THEN 'medium' ELSE risk_level END "
+            "WHERE id=?", (side_effect, tid))
+        try:
+            self.execute("UPDATE tools SET side_effect_source=? WHERE id=?", (source, tid))
+        except Exception:
+            pass          # 老库无该列 ⇒ 不影响主流程
         self._sync("tools", tid)
 
     def set_tool_status(self, tid: int, status: str) -> None:

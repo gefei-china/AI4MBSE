@@ -47,6 +47,14 @@ class MCPIn(BaseModel):
     #        都会把已配好的 Authorization 抹成空串 ⇒ 下次探测直接 401，
     #        而界面显示"保存成功"。这是 Pydantic 可选字段用可变默认值最典型的坑。
     headers: Optional[dict] = None
+    # ★ 2026-11-06：**精确删除指定请求头**。
+    #   为什么需要单独字段：前端对已保存的 header 只能拿到掩码（`headers_masked` = {key:{set,len}}），
+    #   拿不到明文 ⇒ 用户删掉「X-Extra」时，前端**无法**把"剩下的头"整体重写一遍
+    #   （会把 Authorization 的值一并丢掉）。原语义只有 `None=保持` / `dict=整体覆盖` 两种，
+    #   删单个头要么做不到、要么连带清空其它凭据。
+    #   ⇒ 新增：后端先按此列表从现有 headers 里 pop，再 merge `headers`（若同时给了）。
+    #   与其它字段同纪律：None / 空列表 = 未提供（不删任何东西）。
+    header_delete: Optional[List[str]] = None
     # ★ B5-4（2026-10-14）：描述此前**只存在于前端表单**，后端既无模型字段也无表列
     #   ⇒ 用户填的描述在保存那一刻就被丢弃 ⇒ 再次编辑必然是空的（"描述信息也不见了"）。
     #   与 tools/args/env 同形态：None = 未提供（保持原值），"" = 显式清空。
@@ -72,6 +80,14 @@ class ToolIn(BaseModel):
     param_in: Optional[dict] = {}            # 字段映射 {"city":"path","units":"query"}
     timeout: Optional[int] = 15              # 超时秒数
     headers: Optional[dict] = {}             # 请求头 {"Authorization":"Bearer ..."}
+    # ★ 2026-11-07（P1b）：把 HTTP 工具接全 —— 没有这三项，界面建出来的工具只能发空请求。
+    #   body/query 用 `{args:参数名}` 占位符（与 http_tool_executor 同一语法，
+    #   整串为单个占位符时保留原生类型，可选参数写作 `{args:x,int,optional}`）。
+    body: Optional[dict] = None              # 请求体模板 {"vc": "{args:vc}"}
+    query: Optional[dict] = None             # 查询串模板 {"page": "{args:page,int}"}
+    data_path: Optional[str] = ""            # 取响应的哪一层（默认 data）
+    defaults: Optional[dict] = None          # 参数缺省回落（值支持 {cfg:group.key}）
+    kind: Optional[str] = ""                 # '' 自动判定：有 url ⇒ http
 
 
 class AgentIn(BaseModel):

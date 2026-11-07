@@ -213,6 +213,10 @@ def create_tool(body: ToolIn, conn=Depends(db_session), user=Depends(current_use
         return JSONResponse({"error": f"{name} 是内置工具名，禁止同名注册"}, 400)
     if body.side_effect not in ("read", "write", "destructive"):
         return JSONResponse({"error": "side_effect 仅支持 read/write/destructive"}, 400)
+    # ★ 2026-11-07（P1b）：副作用**不信任手选** —— 按 HTTP 方法派生后只收紧、不放宽。
+    #   理由：手选 read 的 POST 工具会绕过写前确认闸，而"写请求被当成读"是本类接入
+    #   最容易犯且最不显眼的错（界面上写着 read，实际在改别人的数据）。
+    _se, _se_rule = _derive_http_side_effect(name, body.method, body.side_effect or "")
     # 构建 config JSON（HTTP 工具专属字段）
     _cfg = {}
     if body.method: _cfg["method"] = body.method
@@ -220,18 +224,30 @@ def create_tool(body: ToolIn, conn=Depends(db_session), user=Depends(current_use
     if body.param_in: _cfg["param_in"] = body.param_in
     if body.timeout: _cfg["timeout"] = body.timeout
     if body.headers: _cfg["headers"] = body.headers
+    # ★ 2026-11-07（P1b）：body/query/data_path/defaults —— 没有它们，
+    #   界面建的 HTTP 工具只能发出不带业务参数的空请求（"能连上但什么也做不了"）。
+    if body.body: _cfg["body"] = body.body
+    if body.query: _cfg["query"] = body.query
+    if body.data_path: _cfg["data_path"] = body.data_path
+    if body.defaults: _cfg["defaults"] = body.defaults
+    # kind：有 url ⇒ 'http'（执行器按 kind='http' 找 config，不写 = 永远调不动）
+    _kind = (body.kind or "").strip() or ("http" if (body.url or "").strip() else "")
     sid = repo.create_tool(
         name, body.description or "", body.source or "local",
         json.dumps(body.input_schema or {}, ensure_ascii=False),
-        body.version or "v1.0", body.side_effect or "read",
+        body.version or "v1.0", _se,
         body.risk_level or "low", body.owner or "",
         allowed_roles=json.dumps(body.allowed_roles or [], ensure_ascii=False),
         retry_policy=json.dumps(body.retry_policy or {}, ensure_ascii=False),
         fallback_to=(body.fallback_to or "").strip(),
         config=json.dumps(_cfg, ensure_ascii=False),
+        kind=_kind,
     )
-    audit(audit_user(user), "tool_create", f"注册工具: {name} (side_effect={body.side_effect})", conn=conn)
-    return {"ok": True, "id": sid}
+    audit(audit_user(user), "tool_create",
+          f"注册工具: {name} (side_effect={_se}, kind={_kind or '-'}, 派生判据={_se_rule})",
+          conn=conn)
+    return {"ok": True, "id": sid, "side_effect": _se, "side_effect_rule": _se_rule,
+            "kind": _kind}
 
 
 @router.put("/api/studio/tools/{tid}")
@@ -266,14 +282,147 @@ def update_tool(tid: int, body: ToolIn, conn=Depends(db_session), user=Depends(c
     if body.param_in: _cfg["param_in"] = body.param_in
     if body.timeout: _cfg["timeout"] = body.timeout
     if body.headers is not None: _cfg["headers"] = body.headers
+    # ★ 2026-11-07（P1b）：body/query/data_path/defaults 走"显式传才覆盖"语义。
+    #   None = 表单没动这一项 ⇒ 保留原值；{} 或 {} 内非空 ⇒ 覆盖（允许清空模板）。
+    for _k in ("body", "query", "defaults"):
+        _v = getattr(body, _k, None)
+        if _v is not None:
+            _cfg[_k] = _v
+    if body.data_path is not None and str(body.data_path).strip():
+        _cfg["data_path"] = body.data_path
+    # kind：原来是空且现在有 url ⇒ 补成 'http'（老库遗留的"建了但执行器不认"修复）
+    #   已有 kind（mcp/plugin/…）不动 —— 那是来源属性，不该被编辑页改写。
+    _kind_new = None
+    _kind_old = (t.get("kind") or "").strip()
+    if _kind_old in ("", "local") and str(_cfg.get("url") or "").strip():
+        _kind_new = "http"
+    # 副作用：方法改了要重算，且**只允许收紧**（POST 改成 GET 不放宽到 read；
+    #   GET 改成 POST 必须升到 write，否则写请求会绕过写前确认闸）。
+    _se_new, _se_rule = None, ""
+    if (t.get("kind") or "") == "http" or _kind_new == "http":
+        _d, _se_rule = _derive_http_side_effect(
+            t.get("name") or "", _cfg.get("method"), t.get("side_effect") or "")
+        if _d != (t.get("side_effect") or ""):
+            _se_new = _d
     repo.update_tool(
         tid, _desc, json.dumps(body.input_schema or {}, ensure_ascii=False),
         retry_policy=json.dumps(body.retry_policy or {}, ensure_ascii=False),
         fallback_to=(body.fallback_to or "").strip(),
         config=json.dumps(_cfg, ensure_ascii=False),
+        kind=_kind_new,
     )
-    audit(audit_user(user), "tool_update", f"更新工具#{tid}: {t['name']}", conn=conn)
-    return {"ok": True}
+    if _se_new:
+        repo.set_tool_side_effect(tid, _se_new)
+    audit(audit_user(user), "tool_update",
+          "更新工具#%d: %s%s%s" % (tid, t["name"],
+                                   ("，副作用收紧为 %s（%s）" % (_se_new, _se_rule)) if _se_new else "",
+                                   ("，kind→%s" % _kind_new) if _kind_new else ""),
+          conn=conn)
+    return {"ok": True, "side_effect": _se_new or t.get("side_effect"),
+            "side_effect_rule": _se_rule or "", "kind": _kind_new or _kind_old}
+
+
+_SE_ORDER = {"read": 0, "write": 1, "destructive": 2}
+
+
+def _derive_http_side_effect(name: str, method: str, user_pick: str) -> tuple:
+    """按 HTTP 方法派生副作用档位，返回 `(最终档位, 判据说明)`。
+
+    ## 为什么必须派生，而不是让用户在表单里选
+
+    界面写 `read` 的 `POST` 工具会**绕过写前确认闸**（写类工具要人点头，读类不要）
+    ⇒ 用户以为自己在"只读地接一个查询接口"，实际每次调用都在改对方系统的数据。
+    这是本类接入最隐蔽的错误：界面上写着 read，日志里也没有异常。
+
+    判据（可靠性递减，命中即止）：
+      ① `DELETE` 方法 ⇒ destructive（HTTP 语义本身最硬）
+      ② `POST/PUT/PATCH` ⇒ write
+      ③ 名字含破坏性词（delete/remove/drop/purge）⇒ destructive
+      ④ 名字含写动词（create/update/import/apply…）⇒ write
+      ⑤ `GET/HEAD/OPTIONS` ⇒ read
+      ⑥ 其它（含空方法）⇒ write（保守：未知方法不按读放行）
+
+    ## 只收紧、不放宽
+
+    用户手选比派生**更严格**时保留用户选择（例如派生 read、用户选 write ——
+    他要求每次调用都人工确认，这是合法的收紧）。
+    反过来（派生 write、用户选 read）**一律拒绝放宽**。
+    与 `tools.py:1127` 的「agent 级 hil_level 作为下限」同一条原则。
+    """
+    m = str(method or "").strip().upper()
+    n = str(name or "").lower()
+    derived, rule = "write", "method_unknown"
+    if m == "DELETE":
+        derived, rule = "destructive", "method_delete"
+    elif m in ("POST", "PUT", "PATCH"):
+        derived, rule = "write", "method_write(%s)" % m
+    elif m in ("GET", "HEAD", "OPTIONS"):
+        derived, rule = "read", "method_read(%s)" % m
+    if any(k in n for k in ("delete", "remove", "drop", "purge", "destroy")):
+        derived, rule = "destructive", rule + "+name_destructive"
+    elif derived == "read" and any(
+            k in n for k in ("create", "update", "import", "apply", "set", "move",
+                             "write", "save", "upload", "send", "post", "put")):
+        derived, rule = "write", rule + "+name_write"
+
+    pick = str(user_pick or "").strip().lower()
+    if pick not in _SE_ORDER:
+        return derived, rule
+    if _SE_ORDER[pick] >= _SE_ORDER[derived]:
+        # 用户更严格（或相同）⇒ 采纳用户；把"用户选择"记进判据便于审计
+        return pick, rule + "+user_stricter" if _SE_ORDER[pick] > _SE_ORDER[derived] else rule
+    return derived, rule + "+user_looser_denied"
+
+
+@router.post("/api/studio/tools/{tid}/test")
+def test_tool(tid: int, body: dict = None, conn=Depends(db_session),
+              user=Depends(require_permission("tool", "read"))):
+    """试跑一个 HTTP 工具（2026-11-07 P1b）。
+
+    ## 为什么要有它
+
+    接入第三方系统最常见的失败不是"没配"，而是**配了但没人知道通不通**：
+    URL 拼错、鉴权头漏了、body 模板占位符写错、响应取错层级 —— 这些在
+    「保存成功」的界面上毫无痕迹，只有真正调用才暴露。而模型调用要等到
+    用户提问那一刻，失败时用户看到的是"AI 说它连不上"。
+
+    ## 边界
+
+    · 只在 `kind='http'` 上工作（其它工具不在此试跑，内置工具需要真实上下文）
+    · **真实发起请求**（这是它的价值：dry-run 查不出鉴权与 URL 错误），
+      前端必须明确提示"测试会真实调用对方接口"
+    · `destructive` 档位**默认拒绝试跑**，除非显式传 `{"confirm_destructive": true}`
+      —— 一个删除类接口不该被"点一下测试"意外触发
+    """
+    from http_tool_executor import exec_http_tool
+
+    repo = StudioRepo(conn)
+    t = repo.get_tool(tid)
+    if not t:
+        return JSONResponse({"error": "Tool not found"}, 404)
+    name = t.get("name") or ""
+    if (t.get("kind") or "") != "http":
+        return JSONResponse(
+            {"error": "只有 HTTP 集成工具（kind='http'）支持试跑；"
+                      "当前工具 kind=%r。内置/MCP 工具需在真实会话里验证。"
+                      % (t.get("kind") or "")}, 400)
+
+    args = (body or {}).get("arguments") or {}
+    if not isinstance(args, dict):
+        return JSONResponse({"error": "arguments 必须是对象（键值对）"}, 400)
+    if (t.get("side_effect") or "") == "destructive" and not (body or {}).get("confirm_destructive"):
+        return JSONResponse(
+            {"error": "该工具被定为 destructive（破坏性），试跑会真实触发写/删。"
+                      "确认要试跑请带 confirm_destructive=true。"}, 400)
+
+    try:
+        r = exec_http_tool(name, args)
+    except Exception as e:
+        r = {"ok": False, "result": "执行异常：%s: %s" % (type(e).__name__, str(e)[:200])}
+    audit(audit_user(user), "tool_test", "试跑 HTTP 工具: %s ok=%s" % (name, r.get("ok")),
+          conn=conn)
+    return {"ok": bool(r.get("ok")), "tool": name, "result": r.get("result"),
+            "side_effect": t.get("side_effect")}
 
 
 @router.get("/api/studio/tools/{tid}/refs")

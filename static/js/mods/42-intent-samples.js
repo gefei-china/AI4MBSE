@@ -160,19 +160,35 @@ function isRow(s) {
   }
   // 标签下拉**不给空值选项**：空标签一旦提交会在后端把已有标注清空（intent='' 是有效赋值）。
   // 未标注的行用 disabled 占位项表达"还没选"，用户一旦选中就只能选到 9 个合法意图之一。
+  // ★ 2026-11-07（米爸第 17 轮）：意图不再"只能单选" —— 下拉旁加「+」入口，
+  //   可当场新增一个意图（写进意图字典 intent_taxonomy），新增后立即出现在所有下拉里。
+  //   为什么不做成"下拉里直接输入"：canonical 名是路由/历史样本的键，随手输入的
+  //   自由文本会立刻造成同义分裂（"需求分析" vs "需求解析" vs "requirement_analysis"）。
+  //   走字典新增 = 强制填中文名/别名/示例说法，从源头避免分裂。
   const opts = _isIntents.map(k =>
     `<option value="${escA(k)}"${k === label ? ' selected' : ''}>${esc(isIntentLabel(k))}</option>`).join('');
   const ph = label ? '' : '<option value="" selected disabled>（未标注）</option>';
+  // 真实次数（后端 real 字段）；缺失时回落 seen_count 并标注为"含回填"
+  const _real = (s.real !== undefined && s.real !== null) ? Number(s.real) : null;
+  const _seen = Number(s.seen_count) || 0;
+  const cntCell = _real !== null
+    ? `<div>${_real}</div>${_seen > _real ? `<div style="font-size:11px;color:var(--mut);" title="seen_count 含历史回填，不等于真实使用次数">采集${_seen}</div>` : ''}`
+    : `${_seen}`;
   return `<tr>
     <td style="max-width:420px;">
       <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escA(s.text)}">${esc(s.text)}</div>
       ${s.note ? `<div style="font-size:12px;color:var(--mut);">备注：${esc(s.note)}</div>` : ''}</td>
-    <td><select id="is-int-${s.id}" onchange="isSetIntent(${s.id},this.value)"
-      style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12.5px;max-width:130px;">
-      ${ph}${opts}</select></td>
+    <td style="white-space:nowrap;">
+      <select id="is-int-${s.id}" onchange="isSetIntent(${s.id},this.value)"
+        style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12.5px;max-width:130px;">
+        ${ph}${opts}</select>
+      <button class="btn sm ghost" title="新增一个意图（写进意图字典）"
+        onclick="isNewIntent('${escA(s.text || '')}')"
+        style="padding:2px 6px;margin-left:2px;">＋</button>
+    </td>
     <td>${isStatusBadge(s.status)}</td>
     <td style="font-size:12.5px;color:var(--mut);">${esc(s.source || '—')}</td>
-    <td style="font-size:12.5px;text-align:center;">${Number(s.seen_count) || 0}</td>
+    <td style="font-size:12.5px;text-align:center;">${cntCell}</td>
     <td>${cmp}</td>
     <td style="white-space:nowrap;">
       <button class="btn sm" onclick="isConfirm(${s.id})"${s.status === 'confirmed' ? ' disabled' : ''}>确认</button>
@@ -384,3 +400,130 @@ function isFilterQ() {
   clearTimeout(_isQTimer);
   _isQTimer = setTimeout(loadIntentSamples, 300);
 }
+// ── 意图字典维护（2026-11-07 米爸第 17 轮）────────────────────────────────
+// 为什么要有：此前意图清单是从 agents 表**派生**的，中文名硬编码在本文件、
+// 示例说法硬编码在 agent/intent.py ⇒ 用户反馈「只能单选、无法新增和编辑」。
+// 现在意图是独立实体（intent_taxonomy：canonical 名 + 中文名 + scope note +
+// 别名 + 示例说法 + 版本 + 弃用）。本组函数就是它的维护入口。
+// 设计取舍：**不做下拉内自由输入** —— canonical 名是路由键，随手输入会立刻造成
+// 同义分裂（"需求分析"/"需求解析"/"requirement_analysis"）。新增必须走这里，
+// 强制填中文名与示例说法，从源头收敛。
+
+let _isTax = [];        // 意图字典缓存
+let _isTaxEditName = ''; // 正在编辑的 canonical 名（空=新增）
+
+async function isLoadTaxonomy() {
+  try {
+    const d = await api('/api/intent-taxonomy');
+    if (!d || d.ok === false) { toast.error('加载意图字典失败：' + _isErrMsg(d)); return; }
+    _isTax = d.items || [];
+    isRenderTaxonomy(d.missing || []);
+  } catch (e) { toast.error('加载意图字典失败：' + (e.message || e)); }
+}
+
+/** 渲染字典列表 + 「建议补入」（库里已标注但字典里没有的意图名）。 */
+function isRenderTaxonomy(missing) {
+  const box = document.getElementById('is-tax-list');
+  if (!box) return;
+  const rows = _isTax.map(t => `
+    <tr>
+      <td style="font-family:monospace;font-size:12.5px;">${esc(t.name)}</td>
+      <td>${esc(t.label || '—')}</td>
+      <td style="font-size:12.5px;color:var(--mut);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+          title="${escA(t.scope_note || '')}">${esc(t.scope_note || '—')}</td>
+      <td style="font-size:12.5px;">${(t.aliases || []).length}</td>
+      <td style="font-size:12.5px;">${(t.examples || []).length}</td>
+      <td style="font-size:12px;color:var(--mut);">${esc(t.cluster || '—')}</td>
+      <td>${t.status === 'active' ? '<span class="st ok">活跃</span>'
+           : t.status === 'deprecated' ? '<span class="st w">已弃用</span>'
+           : `<span class="st g">已并入 ${esc(t.merged_into || '?')}</span>`}</td>
+      <td style="white-space:nowrap;">
+        <button class="btn sm ghost" onclick="isEditTax('${escA(t.name)}')">编辑</button>
+        ${t.status === 'active'
+          ? `<button class="btn sm ghost" onclick="isDeprecateTax('${escA(t.name)}')">停用</button>`
+          : `<button class="btn sm ghost" onclick="isActivateTax('${escA(t.name)}')">启用</button>`}
+      </td>
+    </tr>`).join('');
+  const miss = (missing || []).length
+    ? `<div style="margin:6px 0;padding:6px 8px;border:1px dashed var(--line);border-radius:6px;font-size:12.5px;">
+         发现 ${missing.length} 个「已被标注但字典里没有」的意图名，建议补入：
+         ${missing.map(m => `<button class="btn sm ghost" onclick="isNewIntent('', '${escA(m.name)}')"
+            style="margin:2px 4px 0 0;">＋${esc(m.name)}（${m.count}）</button>`).join('')}
+       </div>` : '';
+  box.innerHTML = `${miss}
+    <table class="tbl" style="width:100%;">
+      <thead><tr><th>canonical</th><th>中文名</th><th>scope note</th><th>别名</th>
+        <th>示例</th><th>能力族</th><th>状态</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="8" class="empty">字典为空，点上方「+ 新增意图」</td></tr>'}</tbody>
+    </table>`;
+}
+
+/** 打开新增/编辑表单。`name` 为空 = 新增；`prefillName` 供"建议补入"预填。 */
+function isNewIntent(prefillExample, prefillName) {
+  _isTaxEditName = prefillName || '';
+  const t = _isTaxEditName ? (_isTax.find(x => x.name === _isTaxEditName) || {}) : {};
+  const f = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+  f('is-tax-name', _isTaxEditName);
+  f('is-tax-label', t.label || '');
+  f('is-tax-note', t.scope_note || '');
+  f('is-tax-alias', (t.aliases || []).join('，'));
+  f('is-tax-ex', (t.examples || []).join('\n') || (prefillExample ? prefillExample : ''));
+  f('is-tax-cluster', t.cluster || '');
+  f('is-tax-agent', t.agent_name || '');
+  const nm = document.getElementById('is-tax-name');
+  if (nm) nm.disabled = !!_isTaxEditName;   // canonical 名不可改
+  const title = document.getElementById('is-tax-form-title');
+  if (title) title.textContent = _isTaxEditName ? `编辑意图：${_isTaxEditName}` : '新增意图';
+  const box = document.getElementById('is-tax-form');
+  if (box) box.style.display = '';
+  box && box.scrollIntoView({ block: 'nearest' });
+}
+function isEditTax(name) { isNewIntent('', name); }
+function isCloseTaxForm() {
+  const box = document.getElementById('is-tax-form');
+  if (box) box.style.display = 'none';
+}
+
+function _isTaxPayload() {
+  const g = id => (document.getElementById(id) || {}).value || '';
+  const split = (s, sep) => String(s || '').split(sep).map(x => x.trim()).filter(Boolean);
+  return {
+    name: _isTaxEditName || g('is-tax-name').trim(),
+    label: g('is-tax-label').trim(),
+    scope_note: g('is-tax-note').trim(),
+    aliases: split(g('is-tax-alias'), /[，,]/),
+    examples: split(g('is-tax-ex'), /\n/),
+    cluster: g('is-tax-cluster').trim(),
+    agent_name: g('is-tax-agent').trim(),
+  };
+}
+
+async function isSaveTax() {
+  const p = _isTaxPayload();
+  if (!p.name) { toast.error('canonical 名必填（机器用，建议 snake_case）'); return; }
+  if (!p.label) { toast.error('中文名必填（下拉里显示的就是它）'); return; }
+  try {
+    const r = _isTaxEditName
+      ? await api('/api/intent-taxonomy/' + encodeURIComponent(_isTaxEditName),
+                  { method: 'PUT', body: JSON.stringify(p) })
+      : await api('/api/intent-taxonomy', { method: 'POST', body: JSON.stringify(p) });
+    if (!r || r.ok === false) { toast.error('保存失败：' + _isErrMsg(r)); return; }
+    toast.success(_isTaxEditName ? '已更新意图' : '已新增意图：' + p.name);
+    isCloseTaxForm();
+    await isLoadTaxonomy();
+    loadIntentSamples();      // 下拉立即刷新
+  } catch (e) { toast.error('保存失败：' + (e.message || e)); }
+}
+
+async function _isSetTaxStatus(name, status) {
+  try {
+    const r = await api('/api/intent-taxonomy/' + encodeURIComponent(name),
+                        { method: 'PUT', body: JSON.stringify({ status }) });
+    if (!r || r.ok === false) { toast.error('操作失败：' + _isErrMsg(r)); return; }
+    toast.success(status === 'active' ? '已启用' : '已停用（历史样本仍可解析）');
+    await isLoadTaxonomy();
+    loadIntentSamples();
+  } catch (e) { toast.error('操作失败：' + (e.message || e)); }
+}
+function isDeprecateTax(name) { _isSetTaxStatus(name, 'deprecated'); }
+function isActivateTax(name) { _isSetTaxStatus(name, 'active'); }

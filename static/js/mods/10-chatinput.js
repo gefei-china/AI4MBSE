@@ -506,10 +506,11 @@ function attachFormatFeedback(f, r){
     if(!(r&&r.doc_id)) toast('ℹ 「.'+ext+'」格式不在常规解析列表，将作为内联附件发送', 4000);
   }
 }
-async function uploadFiles(input, kind){
-  const files = Array.from(input.files || []);
-  input.value = '';
-  if(!files.length) return;
+// ★ 2026-11-06：把「上传循环」抽成可复用函数 —— 粘贴/拖入的文件没有 <input> 元素，
+//   若继续只认 input.files，Ctrl+V 贴图片、拖文档进输入框就永远无处落地。
+//   三种入口（文件选择 / 粘贴 / 拖放）共用这一条链路 ⇒ 产物形态（url/doc_id/is_image）
+//   与既有后端注入逻辑完全一致，不会引入「贴进来了但模型读不到」的新形态（历史坑）。
+async function uploadFileObjects(files){
   for(const f of files){
     const fd = new FormData();
     fd.append('file', f);
@@ -523,6 +524,12 @@ async function uploadFiles(input, kind){
       attachFormatFeedback(f, r);   // 2026-09-04：按当前模型能力对格式给出提示
     }catch(e){ toast('上传失败：'+(e.message||e)); }
   }
+}
+async function uploadFiles(input, kind){
+  const files = Array.from(input.files || []);
+  input.value = '';
+  if(!files.length) return;
+  return uploadFileObjects(files);
 }
 function renderAttachBar(){
   const bar = document.getElementById('attach-bar');
@@ -791,3 +798,70 @@ function toggleVoice() {
 }
 
 // V2.4 执行过程全部内联会话流（proc-box），右侧执行面板已移除；此处仅重置内联执行过程
+
+// ── 2026-11-06 富输入补齐：Ctrl+V 贴图片 / 贴文件、拖放文件进输入框 ──
+// 背景：此前只有「＋ → 上传附件」按钮（<input type=file>），输入框本身没有
+//       paste / drop / dragover 监听 ⇒ 贴截图、拖文档进来什么都不会发生，
+//       用户看到的就是「输入框不支持贴入图片和附件文档」。
+// 处置：复用 uploadFileObjects，与按钮上传共用同一落盘 / 解析入库 / 附件栏链路。
+function normalizePastedFile(f, i){
+  let n = String(f.name || '');
+  // 剪贴板图片常给 name='image.png' 甚至空名；统一成带时间戳的可辨识文件名，
+  // 否则 /api/upload 靠扩展名判类型，空名会被判「不支持的文件类型」。
+  if(!n || n === 'image.png' || /^blob$/i.test(n)){
+    let ext = (String(f.type||'').split('/')[1] || 'png').toLowerCase();
+    if(ext === 'jpeg') ext = 'jpg';
+    ext = ext.replace(/[^a-z0-9]/g,'') || 'png';
+    n = 'pasted-' + new Date().toISOString().replace(/[-:T]/g,'').slice(0,14) + '-' + i + '.' + ext;
+  }
+  if(n === f.name) return f;
+  try{ return new File([f], n, {type: f.type || 'application/octet-stream'}); }
+  catch(e){ return f; }
+}
+function handleDroppedOrPastedFiles(rawFiles){
+  const files = Array.from(rawFiles || []).map(normalizePastedFile);
+  if(!files.length) return;
+  uploadFileObjects(files);
+  toast('📎 已添加 ' + files.length + ' 个附件（上传完成后会出现在附件栏）');
+}
+function initChatPasteDrop(){
+  const ta = document.getElementById('chat-input');
+  const dock = document.getElementById('chat-input-dock');
+  if(!ta || ta.dataset.pasteDropBound === '1') return;
+  ta.dataset.pasteDropBound = '1';
+  // ① 粘贴：只在剪贴板里真的有文件时拦截；纯文本保持浏览器默认粘贴行为。
+  ta.addEventListener('paste', e => {
+    const dt = e.clipboardData;
+    if(!dt) return;
+    const files = [];
+    for(const it of Array.from(dt.items || [])){
+      if(it.kind === 'file'){ const f = it.getAsFile(); if(f) files.push(f); }
+    }
+    if(!files.length && dt.files && dt.files.length) files.push(...Array.from(dt.files));
+    if(!files.length) return;
+    e.preventDefault();
+    handleDroppedOrPastedFiles(files);
+  });
+  // ② 拖放：绑整个输入区（textarea 的 drop 会冒泡上来），仅当拖的是文件才接管。
+  const target = dock || ta;
+  const mark = on => {
+    target.style.outline = on ? '2px dashed var(--acc, #4a90e2)' : '';
+    target.style.outlineOffset = on ? '-4px' : '';
+  };
+  target.addEventListener('dragover', e => {
+    const types = Array.from((e.dataTransfer && e.dataTransfer.types) || []);
+    if(!types.includes('Files')) return;         // 拖纯文本不拦截
+    e.preventDefault(); mark(true);
+  });
+  target.addEventListener('dragleave', e => {
+    if(!target.contains(e.relatedTarget)) mark(false);
+  });
+  target.addEventListener('drop', e => {
+    e.preventDefault(); mark(false);
+    const files = (e.dataTransfer && e.dataTransfer.files) || [];
+    if(files.length) handleDroppedOrPastedFiles(files);
+  });
+}
+// 本文件由 index.html 以 defer 加载：DOM 已就绪；仍做一次兼容判断防止加载顺序变化。
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initChatPasteDrop);
+else initChatPasteDrop();

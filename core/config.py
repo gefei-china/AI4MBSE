@@ -463,6 +463,23 @@ DEFAULT_CONFIG = {
         # 弱采纳下限：0.50~0.75 的非 chat 猜测 ⇒ 不静默执行，转**澄清卡**
         # （"确定不了就别硬选"既有机制）；低于 0.50 或 unsure ⇒ 回退旧路（继承/chat）。
         "llm_first_weak_conf": 0.50,
+        # ★ 2026-11-07（米爸第 15 轮 P1）：按能力族分档采纳阈值，默认关=零回归。
+        #   读类(knowledge)放宽、平台数据操作(platform)收紧；族归属单一事实源。
+        #   仅在 verify_threshold_tiers.py 用真库 confirmed 样本证明净正后才可打开。
+        "threshold_tiers": False,
+        # ★ 2026-11-07（第 16 轮）：纯寒暄前置判定。修实测缺陷：
+        #   「你好」→knowledge_qa/llm_conflict、「你好！」→llm_first 0.90 且不澄清。
+        #   判据极窄（整句仅由寒暄词构成且≤10字、无任务词），回退位置 False。
+        "smalltalk_route": True,
+        # ★ 2026-11-07（米爸第 14 轮拍板「默认打开」）：能力簇路由。
+        #   开：LLM 兜底层候选从「22 个 Agent 名」换成「7 个互斥能力族」，
+        #       支持一次识别多个簇，族内成员由 LLM 点名 / 代码确定性分工，
+        #       对外仍回具体 Agent 名。实测 token -16.4%、准确率不降。
+        #   关：回到改造前（few-shot + 阶段粒度规则 + 22 选 1）。一键回退位。
+        #   ⚠️ 打开前的实测代价（verify_cluster_cost_eval.py）：仅输出族 id 会把
+        #      8 个流水线阶段意图准确率 62.5%→37.5%（细粒度被抹平）。
+        #      故 v2 增加「族内成员直选 + 归属白名单校验」，修完才敢默认开。
+        "cluster_route": True,
         # 2026-10-17（米爸反馈"澄清卡每次都是固定 4 项"）：意图确认卡的候选选项数上限。
         # 候选主序 = 本次输入的语义意图级排名（动态），不足才按 Agent 注册序兜底填满。
         # 10 = 一屏滚动内可览尽；前端选项区限高滚动，卡片不会被撑长。
@@ -934,7 +951,7 @@ DEFAULT_CONFIG = {
         #     与 L0 卡里「有硬错就调 autofix」都**没有前提**：
         #     模型压根看不到这个工具 ⇒ 实测 autofix 调用 **0 次**。
         #   ⇒ 修复的**第一前提**是"它得在清单里"，这才是根因。
-        "core_keep_extra": "sysml_v2_validate,sysml_v2_autofix,zhiyuan_sysmlv2_gen,zhiyuan_sysmlv2_check,zhiyuan_sysmlv2_import",
+        "core_keep_extra": "sysml_v2_validate,sysml_v2_autofix,zhiyuan_sysmlv2_gen,zhiyuan_sysmlv2_check,zhiyuan_sysmlv2_import,code_exec",
         # ★ 2026-10-13：把 `tools.input_schema` 真值注入 function-calling payload（开关，可回退）。
         # 背景（对标取证）：`_build_tools_def` 的 SQL **已经 SELECT 了 t.input_schema**，
         # 但 candidates 是 4 元组、没有 schema 位，`:94` 直接丢弃；随后 `:280/:290` **两个分支**
@@ -1860,6 +1877,9 @@ CONFIG_SCHEMA = {
         "llm_first":              {"type": "bool", "desc": "LLM 主裁判：规则无信号时 LLM 为主识别（配 few-shot 与 unsure 出口）。规则强信号快路径不受影响"},
         "llm_first_min_conf":     {"type": "float", "desc": "LLM 主裁判直接采纳门槛（默认 0.75 保守起点，待 confirmed 池标定）"},
         "llm_first_weak_conf":    {"type": "float", "desc": "LLM 主裁判弱采纳下限：0.50~门槛的猜测转澄清卡不静默执行"},
+        "threshold_tiers":       {"type": "bool", "desc": "按能力族分档采纳阈值（默认 False=零回归）：knowledge 放宽 0.68/0.45，platform 收紧 0.85/0.62；打开前先跑 verify_threshold_tiers.py 真库 A/B"},
+        "smalltalk_route":       {"type": "bool", "desc": "纯寒暄前置判定（整句仅寒暄词且≤10字、无任务词→chat 0.9）；修「你好」被判知识问答的缺陷。False=回退"},
+        "cluster_route":          {"type": "bool", "desc": "能力簇路由（默认 False=零回归）：开启后 LLM 兜底从 22 个 Agent 选 1 改为 7 个互斥能力族选 1 + 族内确定性分工，实测 token -16.4%、延迟 -6%、准确率不降"},
     },
     "database": {
         "path":           {"type": "str", "desc": "SQLite 数据文件路径（需重启生效）"},

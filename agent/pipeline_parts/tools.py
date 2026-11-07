@@ -21,6 +21,19 @@ logger = _logging.getLogger(__name__)
 #: ⚠️ 只豁免"改自己刚生成的代码"的工具，**不含任何入库/删改类工具**。
 _REPAIR_WRITE_EXEMPT = {"sysml_v2_autofix"}
 
+#: ★ 2026-11-07（P2）：**提案型工具**豁免写前确认闸。
+#:
+#: `capability_apply` 的"执行"就是**写一张确认单**（`services/capability_admin.propose`），
+#: 它本身不改任何配置。若再让它过写前确认闸，会变成**双重确认**：
+#:   闸拦下 → 确认单 A(action=capability_apply) → 批准 → 重放工具 → 内部又 propose
+#:   → 确认单 B(action=cap_xxx_create) → 还得再批一次
+#: 实测正是如此（确认单 #65 的 action 是 `capability_apply`，批准后只会再生成一张单）。
+#:
+#: 豁免的**安全性依据**：真正的变更仍然只有人点批准才会发生（在 `cap_*` 分支里），
+#: 且提案一定入队（`propose()` 里 `queue_confirmation` 是硬路径，没有"直接执行"分支）。
+#: 这与 `sysml_v2_autofix` 的豁免同族：**工具名描述的动作不等于它真正产生的副作用**。
+_PROPOSE_WRITE_EXEMPT = {"capability_apply"}
+
 #: ★ 2026-10-17（米爸三轮反馈的收口件）：**AI 主动澄清工具**（human-in-the-loop）。
 #: 背景：米爸要求「基于实际上下文、基于 AI 真的需要澄清的内容输出确认清单」，
 #: 而旧机制只有两道**路由层**澄清（阶段 1.4 意图确认 / 1.5 内容级探测）——
@@ -153,6 +166,45 @@ def _impact_preview(name: str, arguments: dict) -> str:
         if _pat in _n:
             _verb = _w
             break
+    # ★ 2026-11-07（P1a）：技能脚本的**专属摘要**。
+    #   实测问题：`skill_script_run(skill=智源MCP工具手册, script=scripts/lookup.py,
+    #   argv=[导出 SysML v2 源码])` 走通用推导 ⇒ 摘要渲染成
+    #   「运行「（未命名对象）」」—— 因为参数键是 skill/script/argv，
+    #   既不在 name/title 族，也不在 dataId/id 族。
+    #   用户面对这样的确认卡只能盲签，而"只给看不懂的摘要让人批 = 没让人批"
+    #   正是 `_impact_preview` 存在的理由（本函数自己的 docstring 第一句）。
+    if str(name or "") == "skill_script_run":
+        _sk = str(args.get("skill") or "").strip() or "（未指定技能）"
+        _sc = str(args.get("script") or "").strip() or "scripts/main.py"
+        _sc = _sc.replace("\\", "/").rsplit("/", 1)[-1]
+        _pv = ["运行脚本 %s（技能：%s）" % (_sc, _sk)]
+        _argv = args.get("argv")
+        if isinstance(_argv, (list, tuple)) and _argv:
+            _pv.append("命令行参数：%s" % " ".join(str(x) for x in _argv[:6]))
+        _kv = args.get("args")
+        if isinstance(_kv, dict) and _kv:
+            _kv_txt = ", ".join("%s=%s" % (k, str(v)[:40]) for k, v in list(_kv.items())[:5])
+            _pv.append("入参：%s" % _kv_txt)
+        # 明确说清风险边界：脚本是受信脚本，有文件/网络能力
+        _pv.append("脚本在本机执行，具备文件与网络能力")
+        return "；".join(_pv)
+
+    # ★ 2026-11-07（P2）：元能力提案的专属摘要。
+    #   实测问题：`capability_apply(kind=capability, action=create, spec={...})`
+    #   走通用推导 ⇒ 摘要渲染成「应用变更「（未命名对象）」」。用户面对这张卡
+    #   完全不知道要批什么（kind/action/spec 三个键都不在 name/id 族里）。
+    #   而"只给看不懂的摘要让人批 = 没让人批"正是本函数存在的理由。
+    if str(name or "") in ("capability_apply",):
+        try:
+            from services.capability_admin import preview as _capv
+            _pv = _capv(str(args.get("kind") or ""), str(args.get("action") or ""),
+                        args.get("spec") or {})
+            _why = str(args.get("reason") or "").strip()
+            return _pv + (("；理由：%s" % _why[:120]) if _why else "")
+        except Exception:
+            return "能力资产变更：kind=%s action=%s（摘要生成失败，请看原始参数）" % (
+                args.get("kind"), args.get("action"))
+
     _parts = ["%s「%s」" % (_verb, _target or "（未命名对象）")]
     if _container:
         _parts.append("容器 %s" % _container)
@@ -189,7 +241,30 @@ BUILTIN_DESC = {
     # ★ 2026-10-17（米爸需求）：联网搜索/网页抓取（定义见 web_tools.py）
     "web_search": "联网搜索互联网最新消息（参数 query:str, max_results:int 可选；时效性问题——最新/今天/新闻/发布——必用本工具，不要凭训练记忆回答时效问题）",
     "web_fetch": "抓取指定网页的正文文本（参数 url:str, max_chars:int 可选；配合 web_search 结果链接深读）",
+    # ★ 2026-11-06（P0：把"有实现但没接线"的能力接上）
+    #   ⚠️ 必须登记在这里：`_build_tools_def` 用它做 `if name in BUILTIN_DESC` 判定，
+    #   漏登记 = 绑定了也不注入（历史上 save_artifact 就踩过这个坑）。
+    "code_exec": "在隔离沙箱执行 Python/JS 代码并返回 _out 字典（参数 code:str, language:python|js, inputs:object, timeout:number≤30；无文件/网络/子进程，仅可 import json/math/re 等）",
+    "doc_parse": "提取 PDF/Word .docx/Excel .xlsx/CSV 的正文与表格文本（参数 path:str, max_chars:int, pages:如'1-5', sheets:str, max_rows:int；纯文本请用 file_read）",
+    # ★ 2026-11-07（P1）：技能脚本执行（定义见 skill_tools.py）
+    #   技能正文写「⚙ 脚本（需要时执行）」时用本工具真正跑起来；脚本是平台受信脚本，
+    #   有文件/网络能力 ⇒ side_effect=write（会被写前确认闸覆盖）。
+    "skill_script_run": "执行技能包自带的脚本（参数 skill:技能名, script:默认scripts/main.py, args:object 传给run(**args), argv:字符串数组当命令行参数, timeout:秒≤120；脚本只允许技能manifest声明过的路径）",
+    # ★ 2026-11-07（P2）：元能力（定义见 meta_tools.py）
+    "capability_query": "查询平台能力资产：Agent/技能/工具/AI自注册能力的清单、详情、绑定差异（参数 kind:agent|skill|tool|capability, action:list|get|diff, target, keyword；只读）",
+    "capability_apply": "新增/修改/绑定/解绑/启停/删除能力资产（参数 kind, action:create|update|bind|unbind|enable|disable|delete, target, spec:object, reason；**全部走人工确认，批准前不改动任何东西**）",
+    # ★ 2026-11-07（P0-1）：需求条目化 / 需求条目入库
+    #   ⚠️ 这两个名字**不带任何既有前缀**，且 `requirement_itemize_tools.py` 此前
+    #   **没有被任何分发点 import**（2026-11-07 实测：46 次真实调用全部返回「未知工具」，
+    #   而 tools 表里有行、技能正文还在教模型调用它 —— 「注册了没接线」的第三次同型事故）。
+    #   读/写分离：itemize 只读（每轮都跑），commit 落库（写 ⇒ 走写前确认闸）。
+    "requirement_itemize": "把自然语言需求按句切分为可验证条目（分类 functional/performance/interface/constraint，标 reqId 与来源），不可验证句归入 gaps 并说明原因，同时生成 SysML v2 需求视图骨架代码（参数 text:整段原文, domain:str, source_ref:str, project:标识符；只读，不落库）",
+    "requirement_commit": "把需求条目写入需求实体库（参数 items:条目数组 或 text:原文由本工具先条目化, gaps:数组, project:工程标识, version_id:int, source_ref:str；**幂等**：同文重复提交只更新不新增；写操作，需人工确认）",
 }
+
+#: 需求工具名集合与执行器（双链路必须同序同语义）
+from requirement_itemize_tools import REQ_TOOL_NAMES as _REQ_TOOL_NAMES  # noqa: E402
+from requirement_itemize_tools import exec_tool as exec_req_tool  # noqa: E402
 
 
 class ToolMixin:
@@ -584,6 +659,72 @@ class ToolMixin:
             if "save_artifact" in _sk_wl and not any(c[0] == "save_artifact" for c in candidates):
                 candidates.append(("save_artifact", builtin_desc.get("save_artifact", ""),
                                    "builtin", ""))
+            # ★ 2026-11-07（P1）：skill_script_run 同通道补入。
+            #   授权来源不是人工维护的 allowed_tools，而是**技能是否声明了 scripts**
+            #   （`skills.py::_build_skill_prompt` 检测到 res_scr 时自动加入 `_skill_allowed_tools`）
+            #   —— 与"不能手工标注"的原则一致：数据变了，授权跟着变。
+            #   ⚠️ 它在 tools 表里 side_effect='write'，若不补入候选则写意图闸会把它挡掉；
+            #     补入是**技能命中这个显式授权**的结果，与 file_*/save_artifact 同语义。
+            if "skill_script_run" in _sk_wl and not any(
+                    c[0] == "skill_script_run" for c in candidates):
+                candidates.append(("skill_script_run",
+                                   builtin_desc.get("skill_script_run", ""),
+                                   "builtin", ""))
+            # ★ 2026-11-07（P2）：元能力同通道补入。
+            #   真机教训（会话 990509）：用户说「查一下平台有哪些 skill」被判进
+            #   knowledge_qa，那个 Agent 没绑 capability_* ⇒ 模型只能调 sys_query_* 然后反问。
+            #   ⇒ 让「能力资产管理」技能命中时把两个工具带进候选，**不依赖 Agent 是否被绑**。
+            #   `capability_apply` 是 write，若不补入会被写意图闸挡掉（问"有哪些工具"不含写意图词）。
+            for _mn in ("capability_query", "capability_apply"):
+                if _mn in _sk_wl and not any(c[0] == _mn for c in candidates):
+                    candidates.append((_mn, builtin_desc.get(_mn, ""), "builtin", ""))
+        # ★ 2026-11-07（P2）：**点名即注入** —— 用户在话里明确提到某个自注册能力的名字时，
+        #   即使它没绑到本轮接单的那个 Agent，也把它补进候选。
+        #
+        #   真机实证（会话 990513）：用户说「用 live_bmi_calc 算 BMI」，
+        #   而本轮路由到「通用问答Agent」，该能力只绑给了「知识问答Agent」⇒
+        #   模型如实回答"我这边调不了"（没有撒谎，处理是对的），然后改用 code_exec 算。
+        #   但用户体验是"我刚加的能力，说了名字还是用不了"⇒ 断点在**可见性跟着 Agent 走**。
+        #
+        #   语义依据与 `_sk_wl`（技能命中即授权）同源：**用户点名 = 显式授权**，
+        #   比"按语义猜"可靠得多。判据从严：名字须作为**独立 token** 出现在原话里
+        #   （前后不能紧贴字母数字），避免 `calc` 命中 `calculate` 这类误触发。
+        try:
+            from capability_runtime import list_capabilities as _lcaps
+            _u = str(user_input or "").lower()
+            if _u:
+                for _cn in _lcaps():
+                    if any(c[0] == _cn for c in candidates):
+                        continue
+                    _low = _cn.lower()
+                    _pos = _u.find(_low)
+                    if _pos < 0:
+                        continue
+                    _bad = False
+                    if _pos > 0 and (_u[_pos - 1].isalnum() or _u[_pos - 1] == "_"):
+                        _bad = True
+                    _end = _pos + len(_low)
+                    if not _bad and _end < len(_u) and (_u[_end].isalnum() or _u[_end] == "_"):
+                        _bad = True
+                    if _bad:
+                        continue
+                    try:
+                        from database import get_db as _cdb
+                        _cc = _cdb()
+                        try:
+                            _cr = _cc.execute(
+                                "SELECT description, side_effect FROM tools "
+                                "WHERE name=? AND status='active'", (_cn,)).fetchone()
+                        finally:
+                            _cc.close()
+                    except Exception:
+                        _cr = None
+                    if not _cr:
+                        continue
+                    candidates.append((_cn, _cr["description"] or "AI 自注册能力",
+                                       "capability", ""))
+        except Exception:
+            pass
         # P0-3：委派最小权限——本次调用指定的工具白名单（Worker ⊆ Supervisor），
         # 白名单模式下不做「读类核心工具保底」，避免突破最小权限
         _wl = getattr(self, "_tool_whitelist", None)
@@ -1038,6 +1179,43 @@ class ToolMixin:
             pass
         return val or "read"
 
+    def _tool_se_meta(self, name: str) -> dict:
+        """★ 2026-11-07：副作用**连同来源**一起取（`{side_effect, se_source, is_mcp}`）。
+
+        ## 为什么需要来源
+
+        `hil_service.classify_action` 的设计前提是「本地 side_effect 是**人工维护的权威标注**
+        ⇒ 直接按本地档位判」。但 2026-11-06 的 P0 把 71 个 MCP 工具的副作用**自动派生**后
+        落进了 `tools` 表（`side_effect_source='auto'`）⇒ 那个前提不再成立：
+          · 派生结果 write ⇒ `match_key='write'` ⇒ 策略 `write`=**confirm**（逐条要人点）
+          · 而 MCP 家族策略 `mcp_write`=**notify**（灰度第 1 档：只留痕）
+        ⇒ 31 个可逆写 MCP 工具从"只留痕"变成"逐条确认"，**灰度第 1 档被无声架空**。
+        门禁 `verify_hil_write_gate` 的 B 项就是这么红的（不是我这次改坏的，是前一轮
+        P0 的连带效果，本轮才发现）。
+
+        判据修正（只收紧、不放宽）：
+          · `se_source='manual'` ⇒ 仍然本地优先（人工裁决最高）
+          · `se_source='auto'` 且属于 MCP ⇒ 回到 MCP 动词族取档（灰度设计生效），
+            但若派生档比动词族**更严**，取更严的那个
+        """
+        try:
+            from database import get_db
+            conn = get_db()
+            try:
+                row = conn.execute(
+                    "SELECT side_effect, COALESCE(side_effect_source,'auto') AS src, "
+                    "       COALESCE(mcp_server_id,0) AS mid "
+                    "FROM tools WHERE name=? AND status='active'", (name,)).fetchone()
+            finally:
+                conn.close()
+            if not row:
+                return {"side_effect": "", "se_source": "auto", "is_mcp": False}
+            return {"side_effect": (row["side_effect"] or ""),
+                    "se_source": (row["src"] or "auto"),
+                    "is_mcp": bool(row["mid"])}
+        except Exception:
+            return {"side_effect": "", "se_source": "auto", "is_mcp": False}
+
     # ══════════════════════════════════════════════════════════════════════
     # ★ 2026-10-28（写前确认 HITL）统一人工确认闸
     # ══════════════════════════════════════════════════════════════════════
@@ -1084,9 +1262,30 @@ class ToolMixin:
         #      绝不扩大：真正的平台写入（create/import/delete）仍必须人工确认。
         if str(name) in _REPAIR_WRITE_EXEMPT:
             return None
+        # ★ 2026-11-07（P2）：提案型工具豁免 —— 它的"执行"就是写一张确认单，
+        #   本身零副作用；再拦一次会变成双重确认（真机实测：确认单 #65 的
+        #   action 是 `capability_apply`，批准后只会再生成一张 `cap_xxx_create` 单）。
+        #   真正的变更仍在 `hil_service.execute_confirmation` 的 `cap_*` 分支里，需人批准。
+        if str(name) in _PROPOSE_WRITE_EXEMPT:
+            return None
         try:
             from hil_service import classify_action as _ca
-            _cls = _ca(name, self._tool_side_effect(name))
+            # ★ 2026-11-07：把"副作用来源"一并交给分类器 —— 自动派生的 MCP 工具
+            #   要回到 MCP 家族灰度档，否则 `mcp_write=notify` 会被本地 write=confirm 架空
+            #   （详见 `_tool_se_meta` 的说明）。
+            _meta = self._tool_se_meta(name)
+            _ca_kw = {}
+            if _meta.get("se_source") == "manual":
+                _ca_kw = {"se_source": "manual"}
+            elif _meta.get("is_mcp"):
+                _ca_kw = {"se_source": "auto", "is_mcp": True}
+            _cls = _ca(name, self._tool_side_effect(name), **_ca_kw)
+        except TypeError:
+            try:
+                from hil_service import classify_action as _ca2
+                _cls = _ca2(name, self._tool_side_effect(name))   # 老签名兜底
+            except Exception:
+                return None
         except Exception:
             return None
         if _cls.get("kind") == "read":
@@ -1908,11 +2107,70 @@ class ToolMixin:
                 result = _at2.exec_tool(name, arguments or {}, conversation_id=conv_ctx)
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
+            # ── ★ 2026-11-07（P0-1）：需求条目化 / 需求条目入库 ──
+            #   此前 `requirement_itemize_tools.py` 是一个**孤儿模块**：tools 表有行（status=disabled）、
+            #   agent_tools 有绑定（agent 635 需求结构化Agent）、技能正文写着"先调 requirement_itemize"，
+            #   但两套分发点都没有 import 它 ⇒ 46 次真实调用**全部**落到兜底返回「未知工具」。
+            #   ⇒ 这与 `code_exec` / `save_artifact` 是同一类事故：**注册了 ≠ 接线了**。
+            if name in _REQ_TOOL_NAMES:
+                _creator = ""
+                try:
+                    from core.audit import audit_user as _au_req
+                    _creator = _au_req(getattr(self, "_tool_user", None)) or ""
+                except Exception:
+                    pass
+                result = exec_req_tool(name, arguments or {},
+                                       conversation_id=int(conv_ctx or 0),
+                                       created_by=_creator)
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
             # 基础通用报告导出工具（report_export：内容→md/docx/pdf，双链路共用 report_tools.exec_report_tool）
             if name in _REPORT_TOOL_NAMES:
                 result = exec_report_tool(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
+            # ── ★ 2026-11-06（P0）：code_exec（沙箱执行）/ doc_parse（文档提取）──
+            #   必须与 `workflows/tools.py` 的两处分支**同序同语义**：
+            #   两套分发各自存在，漏一边的后果是"直接调能跑、模型侧说没执行器"。
+            if name in _CODE_TOOL_NAMES:
+                result = exec_code_tool(name, arguments or {})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            if name in _DOC_TOOL_NAMES:
+                result = exec_doc_tool(name, arguments or {})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            # ── ★ 2026-11-07（P1）：skill_script_run（技能自带脚本的受信执行）──
+            #   同样必须与 `workflows/tools.py` 的分支同序同语义（两套独立分发）。
+            if name in _SKILL_TOOL_NAMES:
+                result = exec_skill_tool(name, arguments or {})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            # ── ★ 2026-11-07（P2）：元能力（查 / 提案）──
+            #   `capability_query` 直读；`capability_apply` 只入确认队列（到此为止，
+            #   真正的执行在 `hil_service.execute_confirmation` 的 cap_ 分支，
+            #   由用户点批准触发 —— 模型无法自己批自己）。
+            if name in _META_QUERY_NAMES or name in _META_APPLY_NAMES:
+                result = exec_capability_tool(name, arguments or {}, ctx={
+                    "agent": str((agent_ctx or {}).get("agent") or ""),
+                    "conversation_id": int(conv_ctx or 0),
+                    "run_id": int((agent_ctx or {}).get("run_id") or 0),
+                    "task_key": str((agent_ctx or {}).get("task_key") or ""),
+                    "user": getattr(self, "_tool_user", None),
+                })
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            # ── ★ 2026-11-07（P2）：自注册能力（source='capability'）──
+            #   ⚠️ 这是闭环最后一环：没有它，注册进 tools 表的行模型看得到、调不到。
+            #   判定必须**兜底到最前**（在 sys_query_/graph_db_ 等前缀分支之前），
+            #   因为能力名由模型自己起，不受任何前缀约定约束。
+            try:
+                if _is_capability(name):
+                    result = _exec_capability(name, arguments or {})
+                    self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                    return result
+            except Exception:
+                pass
             # 系统管理域只读查询工具（2026-08-31 P0-4：对话式系统管理——用户/角色/权限/审计/监控/会话，只读安全）
             if name.startswith("sys_query_"):
                 from sysadmin_tools import exec_tool as _exec_sysadmin

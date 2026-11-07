@@ -1519,6 +1519,14 @@ function handleSSE(raw) {
        任何后续真实事件都会照常推进轨迹，状态栏也会被后续流程覆盖。 */
     const _cs = document.getElementById('chat-status');
     if(_cs){
+      // ★ 2026-11-06：切到别的会话后，旧流盒子被寄存到隐藏容器但仍在 DOM，
+      //   它的心跳仍会命中这里 ⇒ 新会话状态栏一直显示「仍在执行：t1（已等待 125 秒）」。
+      //   只让**归属当前会话**的流更新状态栏；别的心跳照常推进旧会话轨迹，但不污染本会话 UI。
+      let _curCid = '';
+      try{ _curCid = String((typeof currentConvId !== 'undefined' && currentConvId)
+                            || window.currentConvId || ''); }catch(e){}
+      const _boxCid = (aiBox && aiBox.dataset) ? String(aiBox.dataset.convId || '') : '';
+      if(_boxCid && _curCid && _boxCid !== _curCid) return;
       const _st = ev.last_stage ? ('：' + ev.last_stage) : '';
       _cs.textContent = '仍在执行' + _st + '（已等待 ' + Math.round(ev.elapsed_s || 0) + ' 秒）';
     }
@@ -1588,11 +1596,13 @@ function handleSSE(raw) {
   } else if(evType === 'done') {
     _forceFlushTokens();
     _forceFlushSubOutput();   // ★ F-1：子任务实时输出末帧刷齐（防 rAF 未触发丢尾巴）
+    window._sseTerminal = Date.now();   // ★ 2026-11-06：收到终态帧（用于区分"服务端正常收口"与"流被掐断"）
     uxTrack('task_done');   // §11 埋点：任务完成率分子
     finishStream(ev.data, aiBox);
   } else if(evType === 'error') {
     _forceFlushTokens();
     _forceFlushSubOutput();   // ★ F-1：同上，中断时也不能丢子任务已产出的内容
+    window._sseTerminal = Date.now();   // ★ 2026-11-06：同上
     showStopBtn(false); _streaming = false;
     uxTrack('task_error', {message: String(ev.message||'').slice(0,120)});   // §11 埋点：失败分母 + 失败类别
     // V2.6：中断也收口（汇总条切「已中断」，不停留"执行中"）
@@ -1627,7 +1637,11 @@ function renderClarify(ev){
   if(!aiBox || document.getElementById('clarify-bar')) return;
   const inner = aiBox.querySelector('.msg-inner');
   if(!inner) return;
-  const pct = Math.round((ev.confidence||0) * 100);
+  // ★ 2026-11-07（第 16 轮）：优先用**校准后**置信度展示。
+  //   理由：`rule_scored` 等 route 的 confidence 是常量 0.95，而真库回放真实准确率
+  //   只有 70% ⇒ 界面上的"把握 95%"等于对用户撒谎。calibrated_confidence 由
+  //   core/route_calibration.py 按 route 真实命中率算，缺失时回落原值（老服务端兼容）。
+  const pct = Math.round((ev.calibrated_confidence != null ? ev.calibrated_confidence : (ev.confidence||0)) * 100);
   const _det = ev.detected ? `<b>识别为「${esc(ev.detected)}」</b>，` : '';
   // ★ 2026-10-27：澄清条上先摊开「我的理解」，用户才能判断"要不要改"。
   //   原来只写"已按「intent_key」继续执行" —— 给的是内部 key，用户无法据此判断对错。

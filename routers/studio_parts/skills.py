@@ -113,14 +113,32 @@ def delete_skill(sid: int, conn=Depends(db_session), user=Depends(current_user))
     # P1-5（2026-10-27）：删技能**级联清绑定** —— 此前只删 skills 行，agent_tools 里的
     #   技能绑定变孤儿（当前孤儿为 0 靠清理脚本，非机制保证）。删前先清，让"无孤儿绑定"
     #   成为机制保证，而非依赖一次性脚本。用原名匹配（绑定存的是技能 name）。
+    #
+    # ★★ 2026-11-06 修一个**会静默毁掉绑定**的缺陷（本次清理同名草稿时实测发现）：
+    #   上面那条 `DELETE ... WHERE tool_name=?` 只按 name 清，**不看同名还剩几份**。
+    #   而 name 本来就不唯一（实测「智源平台管理」有 3 份：1 份 published + 2 份
+    #   draft_revision），于是**删掉一份草稿就会把正式版的绑定全部清空** ——
+    #   实测：删 id=133（草稿）时清掉 3 条绑定，而 id=95（published）仍安然在库。
+    #   用户视角是"我删了个重复项，怎么技能全没了"。
+    #   正确语义：绑定的是**技能名**这一层关系；只要删除后同名还有任何一份存在，
+    #   绑定就仍然有效（运行时按 enabled→published→id 选一份注入），不能清。
+    #   仅当删完后同名**一份都不剩**，绑定才会真正悬空，此时才清理。
     try:
-        _cleared = conn.execute(
-            "DELETE FROM agent_tools WHERE tool_type='skill' AND tool_name=?", (s.get("name"),)).rowcount
+        _others = conn.execute(
+            "SELECT COUNT(*) FROM skills WHERE name=? AND id<>?",
+            (s.get("name"), sid)).fetchone()[0]
+        if _others:
+            _cleared = 0    # 还有同名副本（正式版/其它草稿）⇒ 绑定保持有效，一条不清
+        else:
+            _cleared = conn.execute(
+                "DELETE FROM agent_tools WHERE tool_type='skill' AND tool_name=?",
+                (s.get("name"),)).rowcount
     except Exception as e:
         return JSONResponse({"error": f"清理技能绑定失败：{e}"}, 500)
     repo.delete_skill(sid)
-    audit(audit_user(user), "skill_delete", f"删除Skill#{sid}（级联清绑定 {_cleared} 条）", conn=conn)
-    return {"ok": True}
+    audit(audit_user(user), "skill_delete",
+          f"删除Skill#{sid}（同名剩余 {_others} 份；级联清绑定 {_cleared} 条）", conn=conn)
+    return {"ok": True, "same_name_left": _others, "bindings_cleared": _cleared}
 
 
 @router.post("/api/studio/skills/{sid}/enable")
