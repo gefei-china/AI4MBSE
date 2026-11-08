@@ -26,8 +26,23 @@ def _migrate_glossary_tables(conn):
         c.execute("ALTER TABLE glossary ADD COLUMN provenance TEXT DEFAULT ''")    # JSON: 理由+置信度
     c.execute("""CREATE TABLE IF NOT EXISTS query_trace (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        query TEXT NOT NULL,                   -- 原始用户输入
+        -- ⚠️ 2026-11-09 更正注释（原写"原始用户输入"，与实现不符）：
+        --   `query` 存的是**实际送进检索的查询串** —— 调用方在 `user_input` 后
+        --   拼了 kb_hint / 槽位实体 / 附件前 600 字，`agent/rag.py` 取到后又用
+        --   Glossary 归一化覆盖了一次。所以它既不是用户原话，也不是模型的输入原文。
+        --   用户原话另存 `query_raw`（见下），二者**不可互相替代**：
+        --     query_raw —— 用户这一轮真正输入的文字（标注/样本复核要看这个）
+        --     normalized —— query 经 Glossary 替换后的规范形（检索侧口径）
+        query TEXT NOT NULL,
         normalized TEXT DEFAULT '',            -- 归一化后（Glossary 替换）
+        -- ★ 2026-11-09：用户原话。**NULL 有确切含义**：该行写入时还没有这一列
+        --   （2026-11-09 之前的历史行），原话**不可恢复**——历史行的 `query`
+        --   早已被归一化与上下文增强污染，没有任何字段能还原用户输入。
+        --   故：NULL = 未记录（不是空串、不是"用户没说话"）；
+        --       新行由 `glossary.trace_query` 统一写值，它把「键缺失 / None / 空白」
+        --       都回退成本次检索串 —— 否则"调用方漏传"会伪装成"历史行"，
+        --       两种不同原因又挤进同一个取值。
+        query_raw TEXT,
         intent TEXT DEFAULT '',                -- 路由意图
         route TEXT DEFAULT '',                 -- graph | vector | mixed
         domain TEXT DEFAULT '',                -- 检索域
@@ -59,7 +74,14 @@ def _migrate_glossary_tables(conn):
     for _col, _decl in (("score_kind", "TEXT DEFAULT ''"),
                         ("top_graph", "REAL"),
                         ("top_chunk", "REAL"),
-                        ("top_vec", "REAL")):
+                        ("top_vec", "REAL"),
+                        # ★ 2026-11-09：用户原话。**刻意不给 DEFAULT** ——
+                        #   老库存量行必须是 NULL（= 当时没记），给 '' 会让
+                        #   "没记录"和"记了个空串"混为一谈，而消费方无法区分。
+                        #   注：ALTER 只能追加到表尾，故升级库的物理列序与
+                        #   全新建库（query_raw 紧跟 normalized）不同；SELECT *
+                        #   的字段顺序因此有差异，但读取一律按列名，无影响。
+                        ("query_raw", "TEXT")):
         if _col not in _trace_cols:
             c.execute("ALTER TABLE query_trace ADD COLUMN %s %s" % (_col, _decl))
     c.execute("CREATE INDEX IF NOT EXISTS idx_trace_time ON query_trace(created_at)")

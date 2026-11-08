@@ -232,15 +232,30 @@ def trace_query(conn, query: str, trace: dict) -> int:
     另一个隐性问题一并修掉：`commit()` 失败会**留下未提交事务**，此后同一连接
     上的每次写入都会继续失败 —— 于是失败被一次次静默吞掉，形成"连环静默"，
     表现为 trace 从某一刻起整体消失。故失败时尽力 rollback。
+
+    ★ 2026-11-09：`query` 与 `query_raw` 分工（二者的区别见迁移里的列注释）。
+    签名里的 `query` 是**实际送检索的串**，不是用户原话 —— 它上游已被拼上
+    kb_hint/槽位/附件片段，此处再被 Glossary 归一化。原话由 `trace["query_raw"]`
+    单独传入；**没传时回退成本参 `query`**（而不是写 NULL）：
+    写 NULL 会让"调用方没传"与"2026-11-09 之前的历史行"变成同一个取值，
+    而这两件事的处置完全不同（前者是漏接线，后者是不可恢复的历史）。
     """
+    _raw = trace.get("query_raw")
+    # 三种"没有原话"的输入统一回退成本参 `query`：键缺失 / None / 空白串。
+    # 为什么不写 ''/NULL：'' 与 NULL 都要留给"没有原话"这一个语义，
+    # 而"调用方漏传"是**另一个**语义（接线 bug，应当由回退掩盖后在门禁里查出来），
+    # 两者混成一个取值后，线上就再也分不清"这批样本太老"和"这段代码没接上"。
+    if not isinstance(_raw, str) or not _raw.strip():
+        _raw = query
     try:
         cur = conn.execute(
-            "INSERT INTO query_trace (query, normalized, intent, route, domain, hit_docs, "
+            "INSERT INTO query_trace (query, normalized, query_raw, intent, route, domain, hit_docs, "
             "hit_count, top_score, score_kind, top_graph, top_chunk, top_vec, "
-            "latency_ms, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "latency_ms, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 query[:500],
                 (trace.get("normalized") or query)[:500],
+                str(_raw or "")[:500],
                 (trace.get("intent") or "")[:100],
                 (trace.get("route") or "")[:50],
                 (trace.get("domain") or "")[:50],

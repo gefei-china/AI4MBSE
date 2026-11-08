@@ -1257,6 +1257,18 @@ function _oeReasonSt(r){
   const m = { neg_feedback:['r','负反馈'], low_conf:['w','低置信'], random_5pct:['b','随机5%'] };
   return `<span class="st ${m[r]?m[r][0]:'g'}">${m[r]?m[r][1]:escMd(r||'?')}</span>`;
 }
+// 2026-11-09：查询列。**优先显示用户原话**（trace_query_raw）。
+// 历史样本（query_raw 列存在之前写入）原话不可恢复，只能显示归一化后的检索串
+// —— 这种情况必须显式标注，否则标注员会把 `宽带通信载荷` 当成用户说的是这个词，
+// 而用户其实说的是 `宽带载荷`。宁可显示"未记录"，也不要让替换后的串冒充原话。
+function _oeQueryCell(it){
+  const raw = it.trace_query_raw;
+  if(raw){ const s = String(raw); return escMd(s.length>60 ? s.slice(0,60)+'…' : s); }
+  const q = it.trace_query;
+  if(!q) return '<span class="mut">—</span>';
+  const s = String(q);
+  return `<span class="mut">${escMd(s.length>40 ? s.slice(0,40)+'…' : s)}（原话未记录·此为归一化检索串）</span>`;
+}
 function renderOpsOnlineEval(d){
   const s = d.summary || {};
   const chips = Object.keys(s.by_status||{}).map(k=>
@@ -1266,6 +1278,7 @@ function renderOpsOnlineEval(d){
     <tr>
       <td style="font-size:12.5px;white-space:nowrap;">#${it.id} ${_oeTypeSt(it.sample_type)}<br>${_oeReasonSt(it.sample_reason)}</td>
       <td style="font-size:12.5px;color:var(--mut);">conv ${it.conversation_id||'-'} · msg ${it.message_id||'-'} · qt ${it.query_trace_id||'-'}</td>
+      <td style="font-size:12.5px;">${_oeQueryCell(it)}</td>
       <td style="font-size:12.5px;">${it.auto_score==null?'<span class="mut">未评</span>':escMd(String(it.auto_score))}</td>
       <td style="white-space:nowrap;">
         <select id="oe-score-${it.id}" style="width:56px;font-size:12.5px;">
@@ -1277,7 +1290,7 @@ function renderOpsOnlineEval(d){
       </td>
     </tr>`).join('');
   return `<div style="margin-bottom:6px;font-size:12.5px;">${chips}<span class="mut">共 ${s.total||0} 条 · 自动评覆盖率 ${cov}（分母=可评样本）</span></div>` +
-    `<table class="t"><tr><th>队列/类型/理由</th><th>溯源</th><th>auto</th><th>人工标注（HIL 确认卡）</th></tr>${rows}</table>`;
+    `<table class="t"><tr><th>队列/类型/理由</th><th>溯源</th><th>查询</th><th>auto</th><th>人工标注（HIL 确认卡）</th></tr>${rows}</table>`;
 }
 // 标注提交：label 端点建 HIL 确认单（幂等）→ 同卡片按钮直接 decide（批准/驳回）。
 async function submitEvalLabel(qid, approve){

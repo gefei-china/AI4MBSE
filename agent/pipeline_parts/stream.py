@@ -5011,7 +5011,12 @@ class StreamMixin:
                 effective_kb_scope = dict(effective_kb_scope or {})
                 effective_kb_scope.update(self._memory_recall_scope(intent, user))
                 retrieval = self.rag.retrieve(retrieve_query, branch, attachment_text=(retrieval_att + ('\n\n' + scope_att if scope_att else '')) or None,
-                                              kb_scope=effective_kb_scope)
+                                              kb_scope=effective_kb_scope,
+                                              # ★ 2026-11-09：原话单独送检索侧（仅用于落 trace）。
+                                              #   与 execute.py 同一口径，两处必须同时改 ——
+                                              #   只改一处会让"一半样本有原话、一半没有"，
+                                              #   而这种缺失在表里长得像"历史行"。
+                                              query_raw=user_input)
             else:
                 retrieval = {"source": "none", "route": "none", "route_reason": "kb_optional",
                              "confidence": 0, "entities": [], "relations": [], "vector_docs": [],

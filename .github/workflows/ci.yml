@@ -151,6 +151,18 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_observe_fail_visible.py
 
+      # ── 样本问法可信度（2026-11-09）────────────────────────────────────
+      # `query_trace.query` 存的一直是"上游拼装 + Glossary 归一化"后的串，
+      # 而转正会把它写进 qrels.jsonl / intent_samples ⇒ **评测集的"标准问法"
+      # 不是用户说的话**（用户问「宽带载荷」，集合里是「宽带通信载荷」），
+      # 且这种失真在数据里看不出来。本门禁钉住三件事：
+      #   ① 原话单独落 query_raw，历史行为 NULL（不可恢复，不许伪造）；
+      #   ② 捕获点在归一化覆盖**之前**（只看存在性会放过顺序错误）；
+      #   ③ 转正/标注都优先读原话，历史行显式标 src='retrieval'。
+      - name: Guard 样本记录用户原话（28 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_trace_raw_query.py
+
       # ── 评测基础设施自检（2026-10-22）────────────────────────────────────
       # 这道门禁保护的是**上面那些门禁本身**：ci.yml 注释里的数字若与脚本实值
       # 漂移，CI 照样全绿，而人读到一个错误的事实（评估实测三处：意图路由阈值

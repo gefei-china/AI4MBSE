@@ -390,7 +390,11 @@ class ExecuteMixin:
             effective_kb_scope = dict(effective_kb_scope or {})
             effective_kb_scope.update(self._memory_recall_scope(intent, user))
             retrieval = self.rag.retrieve(retrieve_query, branch, attachment_text=(retrieval_att + ('\n\n' + scope_att if scope_att else '')) or None,
-                                          kb_scope=effective_kb_scope)
+                                          kb_scope=effective_kb_scope,
+                                          # ★ 2026-11-09：原话单独送检索侧（仅用于落 trace）。
+                                          #   `retrieve_query` 已被拼上 kb_hint/槽位/附件片段，
+                                          #   拿它当"用户原话"会让标注员看到一段不是用户写的文本。
+                                          query_raw=user_input)
         else:
             retrieval = {"source": "none", "route": "none", "route_reason": "kb_optional",
                          "confidence": 0, "entities": [], "relations": [], "vector_docs": [],

@@ -123,17 +123,28 @@ class GraphRAG:
         self.vector = VectorEngine()
         self.router = QueryRouter(threshold=self.confidence_threshold)
 
-    def retrieve(self, query, branch="dev", attachment_text=None, kb_scope=None):
+    def retrieve(self, query, branch="dev", attachment_text=None, kb_scope=None,
+                 query_raw=None):
         """混合检索路由：上传文档优先 → GraphRAG 优先 → 向量兜底。
 
         - attachment_text: 用户上传文档全文（前 4000 字符）。非空时先做附件关键词命中，
           命中片段作为「上传资料」首要依据（attachment_hits）。
         - kb_scope: Agent 级知识库消费范围 {"mode","branches","docs"}（KB-S）：
           branches 非空 → 替代默认 release 分支集合；docs 非空 → 实体/分块/文档均按 source_doc 过滤。
+        - query_raw: **用户这一轮的原话**（未经拼装与归一化）。只用于落 trace 与样本
+          复核，**不参与检索**。为什么必须由调用方传：`query` 进本函数前已被上游拼上
+          kb_hint/槽位实体/附件前 600 字，进来后又被 Glossary 覆盖一次 —— 本函数
+          **无论怎么改都还原不出原话**（信息在入口前就丢了）。缺省（None）回退为
+          `query` 的入口值：宁可记"一个已拼装的串"，也不要写 NULL 去冒充"历史行"。
         - 知识库检索：**真路由**——GraphRAG 命中且置信足够 → 不再跑向量；
           图谱未命中/置信不足 → 才执行向量检索（chunk 级优先，文档粗匹配兜底）。
         - route ∈ {graph, mixed, vector}；统计落库 query_routing_stats。
         """
+        # ★ 2026-11-09：**在任何改写之前**捕获原话（Step 3 会把 query 覆盖成归一化
+        #   文本，见下方 `query = _glossary_res["normalized"] or query`）。
+        #   这条赋值必须留在函数体最前面 —— 它是"原话只在此刻存在"的唯一窗口，
+        #   一旦挪到归一化之后，记下来的就又是被替换过的串，且**看不出来**。
+        _query_raw = query_raw if isinstance(query_raw, str) and query_raw.strip() else query
         conn = get_db()
         t0 = time.time()
         # P0-b M4：rag span（会话级 trace）。开在入口——AST 验证本函数体
@@ -657,6 +668,12 @@ class GraphRAG:
                             _gap_info = {"kind": "error"}
                 _tq(conn, query, {
                     "normalized": query,
+                    # ★ 2026-11-09：用户原话（见函数入口的 `_query_raw`）。
+                    #   `query` 这一列是"实际送检索的串"（含上游拼装 + 归一化），
+                    #   标注员/样本复核要看的是原话 ⇒ 单列存储，不复用 `query`：
+                    #   历史 6.5k 行的 `query` 已被污染且**原话不可恢复**，
+                    #   若把语义改掉，同一列在新旧行上含义不同且表里看不出分界。
+                    "query_raw": _query_raw,
                     "intent": "knowledge_qa",
                     "route": route,                    # ← 真实路由（本次修复的核心）
                     "domain": force_domain or "all",

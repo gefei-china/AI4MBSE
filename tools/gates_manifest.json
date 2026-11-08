@@ -2022,6 +2022,11 @@
    "script": "verify_observe_fail_visible.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_trace_raw_query.py",
+   "tier": "pr",
+   "timeout": 120
   }
  ]
 }
