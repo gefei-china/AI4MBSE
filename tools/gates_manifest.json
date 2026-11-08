@@ -2012,6 +2012,16 @@
    "script": "verify_retrieval_gap_shadow.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_trace_score_kind.py",
+   "tier": "pr",
+   "timeout": 180
+  },
+  {
+   "script": "verify_observe_fail_visible.py",
+   "tier": "pr",
+   "timeout": 120
   }
  ]
 }

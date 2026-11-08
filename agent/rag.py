@@ -264,6 +264,17 @@ class GraphRAG:
         #   必须在 try 之前初始化：否则后续任何异常都会让 trace 块因
         #   UnboundLocalError 反过来吞掉整次检索（同 2026-09-16 的 500 成因）。
         _domain_skipped = ""
+        # ★ 2026-11-09：`force_domain` / `boost` 此前只在下面
+        #   `if graph_confidence < self.confidence_threshold:` 分支内赋值，
+        #   而 trace 块**无条件**读 `force_domain` ⇒ 凡走 graph 路由（置信度够，
+        #   不进该分支）必然 `UnboundLocalError`，然后被 trace 的兜底吞掉。
+        #   后果实测：graph 路由**一条 trace 都没有**（"转发器和接收机之间是什么关系"
+        #   复现：hits=0 且无 trace 行），而这正是"观测失败被静默"的典型形态。
+        #   ⚠️ 教训：上一轮我在紧邻的注释里就写了"必须在 try 之前初始化"，
+        #   却只初始化了 `_domain_skipped` 一个变量 —— **风险写进了注释，没写进代码**。
+        #   故此处把该分支内"后续被无条件引用"的变量一次性全部前置初始化。
+        force_domain = None
+        boost = 1.0
         # P1-4：检索条数配置化（rag.top_k / rag.fallback_top_k，默认 4/5 与改动前一致）
         try:
             from core import config as _cfg
@@ -581,11 +592,51 @@ class GraphRAG:
                 from glossary import trace_query as _tq
                 _hit_src = (graph_results if route in ("graph", "mixed")
                             else (chunk_hits or vector_results)) or []
-                # 命中档位只在"真的命中"时才有意义；空结果恒 0（不编造 0.0 以外的值）
-                _top = 0
-                if _hit_src:
-                    _f0 = _hit_src[0]
-                    _top = (_f0.get("score") or _f0.get("conf") or 0) if isinstance(_f0, dict) else 0
+                # ── 分数取值（2026-11-09 修）─────────────────────────────────
+                # 旧实现：`_f0.get("score") or _f0.get("conf") or 0`。
+                # 但 `graph_results` 的元素是**图谱实体**（字段有 id/name/type…），
+                # **没有** `score` 也没有 `conf` —— 图路的分数是独立的
+                # `graph_confidence` 变量（多因子加权，见 `_graph_confidence`）。
+                # ⇒ 凡 route ∈ {graph, mixed} 的 trace，`top_score` **恒为 0**。
+                #   实测存量：mixed 路由 27 行 min=avg=max=**0.0**。
+                # 危害不止是"数字不对"：`core/online_eval._cand_low_conf` 按
+                #   `ORDER BY top_score ASC` 挑"最没底"的查询，这 27 行恒占榜首，
+                #   每次都采它们 ⇒ **采样偏置**，且看起来完全正常。
+                # 修法两条，缺一不可：
+                #   ① 图路取 `graph_confidence`（该路真实量纲）；
+                #   ② 取不到分数时记 **NULL 而非 0** —— 0 会被当成"最差"，
+                #      而"没这个量"和"这个量很低"是两件事。
+                def _first_score(rows, keys=("score", "vec_score")):
+                    """返回首条可用分数的 float；无可用分数返回 None（≠0）。"""
+                    for r in (rows or []):
+                        if not isinstance(r, dict):
+                            continue
+                        for k in keys:
+                            v = r.get(k)
+                            if v is None:
+                                continue
+                            try:
+                                return round(float(v), 4)
+                            except (TypeError, ValueError):
+                                continue
+                    return None
+
+                _top_graph = round(float(graph_confidence or 0.0), 4) if graph_results else None
+                _top_chunk = _first_score(chunk_hits)
+                _top_vec = _first_score(vector_results)
+                # 按 route 决定 `top_score` 的语义（保持与既有消费方一致的"择一"含义，
+                # 但这次择的是**各自真实的量**），并把种类写进 score_kind。
+                if route in ("graph", "mixed"):
+                    _top = _top_graph
+                    _kind = "graph_conf" if _top is not None else ""
+                elif chunk_hits:
+                    _top = _top_chunk
+                    _kind = "chunk_score" if _top is not None else ""
+                else:
+                    _top = _top_vec
+                    _kind = "vec_score" if _top is not None else ""
+                if _top is None:
+                    _top = 0   # 兼容既有 REAL NOT NULL 语义；真实缺失由 score_kind='' 表达
                 # ★ 2026-11-08：零召回成因分型（shadow）。判据 = **`_hit_src` 为空**，
                 #   与下面 `hit_count` 同源 —— 分型标签与统计数字必须由同一个量决定。
                 #   只写 trace，**不参与任何决策**：不改 route / 不改 hits /
@@ -614,6 +665,15 @@ class GraphRAG:
                                  for h in _hit_src[:5]],
                     "hit_count": len(_hit_src),
                     "top_score": _top,
+                    # ★ 2026-11-09：分数的来源与三路原值（口径分离）。
+                    #   `top_score` 是"按 route 择一"，跨 route 不可比；
+                    #   `score_kind` 说明它到底是哪种量，`top_*` 保留三路原值，
+                    #   使"图置信度"与"文本得分"能在同一行里被分别追溯，
+                    #   不需要事后按 route 猜字段含义。NULL = 该路无结果（≠0 分）。
+                    "score_kind": _kind,
+                    "top_graph": _top_graph,
+                    "top_chunk": _top_chunk,
+                    "top_vec": _top_vec,
                     "latency_ms": latency_ms,
                     "detail": {
                         "reason": reason,              # 路由理由（graph_no_hit 等）
@@ -642,8 +702,17 @@ class GraphRAG:
                         "retrieval_gap": _gap_info,
                     },
                 })
-        except Exception:
-            pass   # 观测失败绝不阻断检索主链路
+        except Exception as _e_trace:                              # noqa: BLE001
+            # 观测失败绝不阻断检索主链路 —— 但**不能静默**。
+            # 2026-11-09：此前是 `pass`，于是"trace 落库失败"在系统里零痕迹，
+            # 而所有基于 query_trace 的指标（零命中率、低置信采样）都以为自己在
+            # 统计全量。改为计数留痕，主流程行为不变。
+            try:
+                from core.observe_fail import note as _note_obs
+                _note_obs("rag.trace", _e_trace, qlen=len(query or ""),
+                          route=str(route or ""))
+            except Exception:                                      # noqa: BLE001
+                pass
         # P1-4 修（2026-10-06）：`confidence` 此前**恒等于 graph_confidence**，而
         #   `QueryRouter.decide` 在图谱未命中时给出 route='vector'/'mixed' 且 graph 置信度=0
         #   ⇒ **vector 路由下 confidence 恒为 0**。实测（embedding 恢复后）：
@@ -673,8 +742,16 @@ class GraphRAG:
                 _reason_stat = reason
             self.router.record(conn, query, route, _reason_stat, retrieval_confidence,
                                len(graph_results), len(vector_results), latency_ms, branch)
-        except Exception:
-            pass  # 统计落库失败不影响主流程
+        except Exception as _e_stat:                               # noqa: BLE001
+            # 同上：统计落库失败不影响主流程，但必须留痕 —— 否则
+            # `query_routing_stats` 的样本缺失会表现为"某类查询变少了"，
+            # 而不是"统计坏了"，是最容易被误读成业务变化的一种失真。
+            try:
+                from core.observe_fail import note as _note_obs
+                _note_obs("rag.route_stat", _e_stat, route=str(route or ""),
+                          branch=str(branch or ""))
+            except Exception:                                      # noqa: BLE001
+                pass
 
         # Step 5: P0 记忆召回（2026-09-29）——把「已沉淀的经验/决策」作为一路独立召回源。
         # 详见 agent/memory_recall.py 的模块 docstring。此处只做编排：

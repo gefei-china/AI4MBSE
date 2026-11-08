@@ -34,11 +34,56 @@ def _migrate_glossary_tables(conn):
         hit_docs TEXT DEFAULT '[]',            -- JSON: 命中文档名列表
         hit_count INTEGER DEFAULT 0,
         top_score REAL DEFAULT 0,
+        -- ★ 2026-11-09：分数**来源**与其三路原值。
+        --   `top_score` 原义保留（兼容既有消费方），但它是"按 route 择一"的结果，
+        --   不同 route 的量纲完全不同（图置信度 0~1，融合检索分实测 0~0.63），
+        --   **不可跨 route 比较**。故新增：
+        --   score_kind —— 这个数是哪种分：graph_conf / chunk_score / vec_score / ''
+        --                 （'' = 本次没有可用的分数，**不是** 0 分）
+        --   top_* 三列 —— 三路各自的首条分数，**都记不择一**（择一即信息丢失）
+        --   ⚠️ top_* 允许 NULL 且**刻意不给 DEFAULT 0**：
+        --      NULL = 该路本次无结果，0 = 有结果但分数为 0。二者必须可区分，
+        --      否则"没取到"会被当成"最差"，正是旧实现把 mixed 路由写成 0 的形态。
+        score_kind TEXT DEFAULT '',
+        top_graph REAL,
+        top_chunk REAL,
+        top_vec REAL,
         latency_ms INTEGER DEFAULT 0,
         detail TEXT DEFAULT '{}',              -- JSON: 各环节详情（归一化/置信度/召回原因）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
+    # 旧库补列：`CREATE TABLE IF NOT EXISTS` 对已存在的表是**空操作**，不会新增列。
+    # 不补的话，上面的 INSERT 会在存量 6530 行的老库上报 "no such column: score_kind"，
+    # 而该异常又会被 trace 的兜底吞掉 ⇒ 表现为"trace 从某次升级起整体消失"。
+    _trace_cols = [r[1] for r in c.execute("PRAGMA table_info(query_trace)").fetchall()]
+    for _col, _decl in (("score_kind", "TEXT DEFAULT ''"),
+                        ("top_graph", "REAL"),
+                        ("top_chunk", "REAL"),
+                        ("top_vec", "REAL")):
+        if _col not in _trace_cols:
+            c.execute("ALTER TABLE query_trace ADD COLUMN %s %s" % (_col, _decl))
     c.execute("CREATE INDEX IF NOT EXISTS idx_trace_time ON query_trace(created_at)")
+    # 低置信采样按 (kind, score) 分组取分位（见 core/online_eval._cand_low_conf），
+    # 复合索引让"组内 ORDER BY score ASC"能走索引而不是全表扫。
+    c.execute("CREATE INDEX IF NOT EXISTS idx_trace_kind_score "
+              "ON query_trace(score_kind, top_score)")
+    # ── 历史行分数来源回填（2026-11-09，幂等）───────────────────────────────
+    # 为什么要回填：新消费方（core/online_eval 低置信采样）按 `score_kind` 分组，
+    # 若历史 6541 行全是 `''`，采样源会瞬间"无数据"——从"统计不全"变成"统计为零"，
+    # 看起来像业务量消失。回填让新旧行口径连续。
+    #
+    # 三条规则，全部由**已存的 route/top_score 反推**，不猜、不补数：
+    #   ① route='vector' 且 top>0 —— 融合检索分（`_hit_src` 取 chunk_hits，
+    #      无 chunk 时取 vector_results）。历史行**无法区分**这两者，
+    #      故记为 `legacy_fusion` 而不是冒充 `chunk_score`：同量级，但来源不确定。
+    #   ② route='mixed' 且 top=0 —— 是**旧 bug 的产物**（图路取不到元素上的
+    #      score/conf 字段），0 不是"最低分"而是"没取到"⇒ 记 `legacy_zero`，
+    #      明确排除在低置信判断之外。若不排除，这 27 行会永远排在采样榜首。
+    #   ③ 其余 top=0 —— 零命中，同样记 `legacy_zero`（没有结果 ≠ 结果很差）。
+    c.execute("UPDATE query_trace SET score_kind='legacy_fusion' "
+              "WHERE COALESCE(score_kind,'')='' AND route='vector' AND COALESCE(top_score,0)>0")
+    c.execute("UPDATE query_trace SET score_kind='legacy_zero' "
+              "WHERE COALESCE(score_kind,'')='' AND COALESCE(top_score,0)=0")
     c.execute("""CREATE TABLE IF NOT EXISTS domain_review_queue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         document_id INTEGER DEFAULT 0,

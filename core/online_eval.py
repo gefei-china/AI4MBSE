@@ -21,14 +21,19 @@ routers/monitor.py（S4 接线）。
    query_trace_id），转正时按外键回查原文，不留孤儿标签。
 
 **阈值校准记录**（判据跟着真实数据改，MEMORY 纪律）：
-    设计文档 §7 的 low_conf_threshold 默认 0.5 是**拍脑袋值**——2026-10-25
-    对 mbse.db 只读实测：query_trace.top_score 全域量级 [0, 0.096]
-    （p25=0.036 / p50=0.055 / avg=0.0498），0.5 会命中**全表 3276 行**。
-    故默认改 0.036（=p25，取最低四分位为"低置信"），并加 sample_batch 上限
-    （默认 20）与 sample_window_days（默认 30，同 badcase 窗口）——无上限时
-    低置信单源即 ~819 行，队列会被一次采样撑爆（R12 积压告警失去意义）。
+    ① 2026-10-25：设计文档 §7 的 low_conf_threshold 默认 0.5 是**拍脑袋值**——
+      对 mbse.db 只读实测：query_trace.top_score 全域量级 [0, 0.096]，0.5 会命中
+      全表 3276 行，故改 0.036（=p25）。
+    ② 2026-11-09：**0.036 本身也是错的**，因为"全域量级"这个说法掩盖了
+      两种不同量纲混在同一列。按 route 分组重测：
+          vector  n=6514  [0, 0.632]  → 0.036 命中 20.0%
+          mixed   n=27    [0, 0.0]    → 0.036 命中 100%（这 27 行是 bug 写出的 0）
+      结论：绝对阈值这条路走不通，改为 **按 score_kind 分组取组内分位**
+      （low_conf_quantile，默认 0.25），并用**组内相对位次**跨组混排。
+      这样跨量纲不需要可比，也不维护任何魔法数字。
 """
 import json
+import math
 import os
 import random
 import sqlite3
@@ -46,13 +51,25 @@ from core.feedback_types import (
 _SETTING_DEFAULTS = {
     "enabled": True,               # 总开关（False 时采样返空而非 500）
     "random_rate": 0.05,           # 随机采样比例（负反馈/低置信优先不受此限）
-    "low_conf_threshold": 0.036,   # query_trace.top_score 低于此值入队（实测 p25）
+    # ★ 2026-11-09 废弃：`low_conf_threshold`（绝对值阈值）不再参与低置信判断。
+    #   原因：`query_trace.top_score` 的量纲**随 route 变**（图置信度 0~1，
+    #   融合检索分实测 0~0.63），一个绝对阈值同时套两种分布必然只在其中一种上准。
+    #   实证：0.036 在 vector 上命中 20%，而 mixed 路因旧 bug 全为 0.0 ⇒ 100% 命中
+    #   且恒占 ORDER BY 榜首。键保留只为兼容既有配置文件，读它不会再有效果。
+    "low_conf_threshold": 0.036,   # @deprecated 用 low_conf_quantile 替代
+    "low_conf_quantile": 0.25,     # 各组内取最低的 q 比例（组内分位，跨组不比较绝对值）
     "sample_window_days": 30,      # 采样窗口（同 badcase：只扫最近 N 天）
     "sample_batch": 20,            # 单次采样入队上限（防低置信单源撑爆队列）
     "auto_eval_limit": 50,         # 单次自动评批量
     "backlog_alert": 20,           # R12 阈值（权威值在 seed_registry._ALERT_RULES，此处仅默认）
     "promote_window_days": 7,      # R13 统计窗口
 }
+
+#: 参与"低置信"判断的分数种类。两类被**刻意排除**：
+#:   `''`          —— 本次没有可用分数（≠ 0 分）。当 0 分采会污染判断。
+#:   `legacy_zero` —— 旧 bug 写出的 0（图路从实体对象上取不存在的 score 字段），
+#:                    0 在这里的含义是"没取到"，当"最低分"采会永久霸榜。
+_LOW_CONF_KINDS = ("graph_conf", "chunk_score", "vec_score", "legacy_fusion")
 
 #: 负反馈信号源一：ux_metrics 事件白名单中的负向事件（repositories/ux_metrics_repo.EVENTS）
 _UX_NEG_EVENTS = NEGATIVE_BEHAVIOR_EVENTS
@@ -158,24 +175,66 @@ def _cand_neg_feedback(conn, window_arg, failures: list) -> list:
     return out
 
 
-def _cand_low_conf(conn, window_arg, threshold: float, cap: int,
+def _cand_low_conf(conn, window_arg, quantile: float, cap: int,
                    failures: list) -> list:
-    """低置信候选（第二优先）：query_trace.top_score < threshold（升序，最没底先采）。
+    """低置信候选（第二优先）：**按 score_kind 分组、组内取最低分位**。
 
-    sample_type='retrieval'（置信度是**检索侧**信号）。cap 限制单源条数——
-    实测全表 3276 行 top_score 全域 <0.096，无 cap 会一次采上千条。
+    为什么不再用绝对值阈值（2026-11-09）
+    ------------------------------------
+    旧实现 `WHERE top_score < 0.036 ORDER BY top_score ASC`，前提是"所有 top_score
+    可以互相比较"。但实测这个前提不成立：
+
+    | route  | 分数含义                        | 量纲（实测）       |
+    |--------|--------------------------------|-------------------|
+    | graph  | `graph_confidence` 多因子加权   | 0 ~ 1（样本 0.96） |
+    | vector | 融合检索分（chunk_hits）        | 0 ~ 0.63（样本 0.195） |
+
+    一个 0.036 在两个分布里的**分位完全不同**，所以采出来的是"某个量纲里最低的"，
+    而不是"系统最没底的"。更糟的是旧 bug 让 mixed 路的 top_score 恒为 0.0
+    ⇒ 那 27 行永远排在榜首，每次采样都采同一批，**采样偏置且看不出来**。
+
+    现在的做法：各组内按分位取，再按**组内相对位次**混排。
+    跨组不比较绝对值，只比较"在本组里有多差"—— 这正是"量纲不同不可直接比较"
+    的正确处理，且阈值完全由数据分布决定，不维护任何魔法数字。
     """
     if not _tbl_exists(conn, "query_trace"):
         return []
     try:
-        rows = conn.execute(
-            "SELECT id, query, intent, route, top_score FROM query_trace "
-            "WHERE top_score < ? AND created_at >= datetime('now', ?) "
-            "ORDER BY top_score ASC, id ASC LIMIT ?",
-            (float(threshold), window_arg[0], int(cap))).fetchall()
+        q = float(quantile)
+    except (TypeError, ValueError):
+        q = 0.25
+    q = max(0.0, min(1.0, q))
+    ph = ",".join(["?"] * len(_LOW_CONF_KINDS))
+    picked = []          # [(组内相对位次, 行, kind)]
+    try:
+        stats = conn.execute(
+            "SELECT score_kind AS k, COUNT(*) AS n FROM query_trace "
+            "WHERE created_at >= datetime('now', ?) AND score_kind IN (%s) "
+            "GROUP BY score_kind" % ph,
+            (window_arg[0], *_LOW_CONF_KINDS)).fetchall()
+        for st in stats or []:
+            kind, n = st["k"], int(st["n"] or 0)
+            if n <= 0:
+                continue
+            take = max(1, int(math.ceil(n * q)))    # 该组"最差"的条数，随组规模伸缩
+            limit = min(take, int(cap))
+            # 每组取多少条属于"该组最差"，由组自身规模决定；cap 防单组撑爆
+            rows = conn.execute(
+                "SELECT id, query, intent, route, top_score FROM query_trace "
+                "WHERE score_kind=? AND created_at >= datetime('now', ?) "
+                "ORDER BY top_score ASC, id ASC LIMIT ?",
+                (kind, window_arg[0], limit)).fetchall()
+            # ⚠️ 分母必须是**实际取出条数**而非 take：组大时 take 可达上千，
+            #   而 limit 只有几十，用 take 做分母会让所有相对位次挤在 0 附近，
+            #   "组内最差优先"的排序退化成按 id 排（实测 22 条位次全为 0.00）。
+            denom = float(max(1, len(rows or [])))
+            for rank, r in enumerate(rows or []):
+                # 相对位次 ∈ [0,1)：0 = 本组最差。跨组可比，且不依赖绝对分数。
+                picked.append((rank / denom, r, kind))
     except Exception as e:                                     # noqa: BLE001
         failures.append("low_conf: %s: %s" % (type(e).__name__, str(e)[:160]))
         return []
+    picked.sort(key=lambda x: (x[0], x[1]["id"]))
     return [{
         "sample_type": "retrieval",
         "conversation_id": 0,
@@ -183,9 +242,10 @@ def _cand_low_conf(conn, window_arg, threshold: float, cap: int,
         "query_trace_id": int(r["id"]),
         "trace_id": "",
         "sample_reason": "low_conf",
-        "reason_detail": "top_score=%.4f<%.4f route=%s" % (
-            float(r["top_score"] or 0), float(threshold), r["route"] or "-"),
-    } for r in rows]
+        # kind 必须写进 reason：否则看到 `top_score=0.96` 被标成低置信会莫名其妙
+        "reason_detail": "top_score=%.4f kind=%s 组内位次=%.2f route=%s" % (
+            float(r["top_score"] or 0), kind, rel, r["route"] or "-"),
+    } for rel, r, kind in picked]
 
 
 def _cand_random(conn, window_arg, rate: float, cap: int,
@@ -274,7 +334,7 @@ def sample_candidates(conn, *, apply: bool = False, settings=None) -> dict:
     try:
         cands = (_cand_neg_feedback(conn, window_arg, failures)
                  + _cand_low_conf(conn, window_arg,
-                                  float(cfg.get("low_conf_threshold") or 0.036),
+                                  float(cfg.get("low_conf_quantile") or 0.25),
                                   out["batch"], failures)
                  + _cand_random(conn, window_arg,
                                 float(cfg.get("random_rate") or 0.05),

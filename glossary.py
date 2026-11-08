@@ -221,11 +221,23 @@ class GlossaryMatcher:
 
 
 def trace_query(conn, query: str, trace: dict) -> int:
-    """端到端查询 Trace 落库（P2-2）。返回 trace_id。"""
+    """端到端查询 Trace 落库（P2-2）。返回 trace_id；**写入失败返回 0 并留痕**。
+
+    2026-11-09 修（此前是 `except Exception: return 0`，静默）：
+    静默的代价不是"少一条日志"，而是**用这张表算出的所有指标分母都偏小且无法
+    察觉** —— 例如"零命中率 7.24%" 的分母只是成功写入的行，真实值只会更高，
+    但看板上它长得像"已统计全量"。故改为：不冒泡（观测失败不得阻断检索），
+    但必须进 `core.observe_fail` 计数 + 限速日志，供门禁与健康检查读取。
+
+    另一个隐性问题一并修掉：`commit()` 失败会**留下未提交事务**，此后同一连接
+    上的每次写入都会继续失败 —— 于是失败被一次次静默吞掉，形成"连环静默"，
+    表现为 trace 从某一刻起整体消失。故失败时尽力 rollback。
+    """
     try:
         cur = conn.execute(
             "INSERT INTO query_trace (query, normalized, intent, route, domain, hit_docs, "
-            "hit_count, top_score, latency_ms, detail) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "hit_count, top_score, score_kind, top_graph, top_chunk, top_vec, "
+            "latency_ms, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 query[:500],
                 (trace.get("normalized") or query)[:500],
@@ -235,13 +247,33 @@ def trace_query(conn, query: str, trace: dict) -> int:
                 json.dumps(trace.get("hit_docs", []), ensure_ascii=False)[:2000],
                 trace.get("hit_count") or 0,
                 trace.get("top_score") or 0,
+                # ★ 2026-11-09：分数的**来源**与其三路原值（详见 agent/rag.py）。
+                #   `top_score` 保留原义以兼容既有消费方；`score_kind` 回答
+                #   "这个数是哪种分"，`top_*` 三列回答"另外两路各是多少"。
+                #   三列都记而不择一 —— "择一"本身就是信息丢失，也正是旧实现
+                #   把图置信度写成 0 的间接原因。
+                (trace.get("score_kind") or "")[:20],
+                trace.get("top_graph"),
+                trace.get("top_chunk"),
+                trace.get("top_vec"),
                 trace.get("latency_ms") or 0,
                 json.dumps(trace.get("detail", {}), ensure_ascii=False)[:4000],
             ),
         )
         conn.commit()
         return cur.lastrowid
-    except Exception:
+    except Exception as e:                                 # noqa: BLE001
+        # 尽力回滚：未提交事务会污染该连接的后续所有写入（见 docstring）
+        try:
+            conn.rollback()
+        except Exception:                                  # noqa: BLE001
+            pass
+        try:
+            from core.observe_fail import note as _note
+            _note("trace_query", e, qlen=len(query or ""),
+                  route=(trace.get("route") or "")[:20])
+        except Exception:                                  # noqa: BLE001
+            pass
         return 0
 
 

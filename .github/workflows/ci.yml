@@ -136,6 +136,21 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_retrieval_gap_shadow.py
 
+      # ── 观测链路可信度（2026-11-09）──────────────────────────────────────
+      # 这两道守的是「指标本身可不可信」，不是某个功能对不对：
+      #   · top_score 曾把图置信度(0~1)与融合检索分(0~0.63)塞进同一列，
+      #     且图路取值路径根本取不到分 ⇒ graph/mixed 恒为 0 ⇒ 低置信采样恒采同一批；
+      #   · trace 写入失败被裸 except 吞掉 ⇒ 所有基于 query_trace 的比率分母偏小，
+      #     而看板上长得像"已统计全量"。
+      # 判据都反向写：跨量纲比较 / 静默兜底，任何一条被加回来都判红。
+      - name: Guard 查询分数口径分离（22 项 + 2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_trace_score_kind.py
+
+      - name: Guard 观测失败不冒泡但必须留痕（21 项 + 2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_observe_fail_visible.py
+
       # ── 评测基础设施自检（2026-10-22）────────────────────────────────────
       # 这道门禁保护的是**上面那些门禁本身**：ci.yml 注释里的数字若与脚本实值
       # 漂移，CI 照样全绿，而人读到一个错误的事实（评估实测三处：意图路由阈值
