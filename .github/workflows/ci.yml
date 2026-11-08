@@ -172,9 +172,20 @@ jobs:
       # **再归一化一次还会变** ⇒ 同一条 query 因归一化次数不同得到不同检索串，
       # 召回不可复现。判据以**幂等性**为核心（不依赖词表内容），外加 `_` 边界、
       # 长词优先、区间互斥、已规范形态跳过四条合成反例，3 组变异各自翻红。
-      - name: Guard 归一化幂等（22 项 + 3 变异）
+      - name: Guard 归一化幂等（25 项 + 3 变异）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_glossary_normalize_idempotent.py
+
+      # ── 术语边界（2026-11-08）──────────────────────────────────────────
+      # `match()` 曾用子串、`_span_replace()` 用词边界 ⇒ **命中判据比替换判据宽**，
+      # 而宽的一侧正是 force_domain / force_intent 的来源：PA⊂part(452 条)、
+      # SA⊂satisfy(248)、CEP⊂accept(57)、LM⊂LLM(50) ⇒ `ref part` 被判成
+      # satellite_comms（库内 0 chunk）⇒ 必零召回。现在两处共用一个
+      # `_term_pattern()`：ASCII 边缘加边界、CJK 边缘不加（否则 `转发器EIRP`
+      # 里的 `转发器` 被漏掉），`_` 算标识符分段符（否则蛇形标识符丢信号）。
+      - name: Guard 术语边界（21 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_glossary_term_boundary.py
 
       # ── 评测基础设施自检（2026-10-22）────────────────────────────────────
       # 这道门禁保护的是**上面那些门禁本身**：ci.yml 注释里的数字若与脚本实值

@@ -73,7 +73,15 @@ if not row:
     print("无可用样本（sysml_versions 为空），跳过")
     sys.exit(0)
 MID, CID = row["message_id"], row["conversation_id"]
-print(f"样本：msg={MID} conv={CID}（临时库 {os.path.basename(TMP)}）\n")
+
+# ★ 2026-11-08：端点加了归属校验（B1-9 `_own_conv`），夹具必须**以归属人身份**调用。
+# 此前一律传 `user={}`，而 `conv_visible_to` 会把它当成 `id=0` 的普通用户 ⇒
+# 样本会话一旦有了 user_id，D2/D4 就整体 404（实测连续多轮"红"）。
+# 这不是产品回归，是夹具没跟上契约：修夹具、并按新契约补一条「非归属人 404」。
+_uid = conn.execute(
+    "SELECT COALESCE(user_id,0) AS u FROM conversations WHERE id=?", (CID,)).fetchone()
+OWNER = {"id": int(_uid["u"])} if (_uid and _uid["u"]) else {"id": 0}
+print(f"样本：msg={MID} conv={CID} owner={OWNER['id']}（临时库 {os.path.basename(TMP)}）\n")
 
 # ── D1 路由存在（弱） ──
 src_router = io.open(os.path.join(ROOT, "routers/conversations.py"), encoding="utf-8").read()
@@ -85,7 +93,7 @@ check("D1 新增 GET /messages/{id}/normalize-summary 已注册",
 try:
     b = disc_state(conn)
     for _ in range(3):
-        RC.normalize_summary(CID, MID, conn=conn, user={})
+        RC.normalize_summary(CID, MID, conn=conn, user=OWNER)
     a = disc_state(conn)
     check("D2 连调 3 次 normalize-summary 不写发现池",
           b == a, f"前 {b} → 后 {a}")
@@ -112,10 +120,23 @@ try:
     # ⚠️ 基线必须取**删除探针之后**的状态：拿 a2（含探针）比会把"我自己删掉的"
     #    算成"normalize-report 写的"，是典型的假证据。
     base3 = disc_state(conn)
-    RC.normalize_report(CID, MID, conn=conn, user={})
+    RC.normalize_report(CID, MID, conn=conn, user=OWNER)
     c3 = disc_state(conn)
     print(f"    （信息）真实样本调 normalize-report 后：{base3} → {c3}"
           f"{'（有写入）' if c3 != base3 else '（无写入：该样本无 kind=entity 且 none 的行，属正常）'}")
+    # D2c：新契约（B1-9）—— 非归属人必须 404，而不是拿到别人的统计。
+    # 有它才谈得上 D2 有意义：否则"只读"可能只是在"看不见的资源"上跑。
+    if OWNER["id"]:
+        try:
+            RC.normalize_summary(CID, MID, conn=conn,
+                                 user={"id": OWNER["id"] + 999999})
+            _denied = False
+        except Exception as e:                              # noqa: BLE001
+            _denied = getattr(e, "status_code", None) == 404
+        check("D2c 非归属用户调 normalize-summary 得 404（归属校验生效）", _denied,
+              "未拦截 ⇒ 归属隔离失效")
+    else:
+        print("    （跳过 D2c：样本会话无归属人，按口径①对所有人可见）")
 except Exception as e:
     check("D2 只读性", False, repr(e))
 
@@ -129,7 +150,7 @@ check("D3 后端 _NR_BLOCKING_STATUSES == 前端 _NR_BLOCKING",
 # ── D4 统计口径一致 ──
 try:
     rep, _ = RC._load_norm_report(conn, CID, MID)
-    s = RC.normalize_summary(CID, MID, conn=conn, user={})
+    s = RC.normalize_summary(CID, MID, conn=conn, user=OWNER)
     rows = rep.get("rows") or []
     manual_fe = sum(1 for r in rows if (r.get("matching_status") or "") in (fb or ()))
     manual_be = sum(1 for r in rows if (r.get("matching_status") or "") in bb)
@@ -203,8 +224,11 @@ try:
         "conn=get_db()\n"
         "r=conn.execute('SELECT message_id,conversation_id FROM sysml_versions WHERE content IS NOT NULL ORDER BY id DESC LIMIT 1').fetchone()\n"
         "MID,CID=r['message_id'],r['conversation_id']\n"
+        # 变异体也必须**以归属人身份**调用（同主流程夹具，见上方 OWNER 的说明）
+        "u=conn.execute('SELECT COALESCE(user_id,0) u FROM conversations WHERE id=?',(CID,)).fetchone()\n"
+        "OWNER={'id':int(u['u'])} if u and u['u'] else {'id':0}\n"
         "rep,_=RC._load_norm_report(conn,CID,MID)\n"
-        "s=RC.normalize_summary(CID,MID,conn=conn,user={})\n"
+        "s=RC.normalize_summary(CID,MID,conn=conn,user=OWNER)\n"
         "fb=('matched_low','dup_high','dup_suspect','none','rejected')\n"
         "manual=sum(1 for x in (rep.get('rows') or []) if (x.get('matching_status') or '') in fb)\n"
         "print('MUTANT_RESULT', s.get('need_decide'), manual, s.get('need_decide')==manual)\n"

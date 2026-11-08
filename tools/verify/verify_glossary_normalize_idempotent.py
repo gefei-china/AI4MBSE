@@ -20,9 +20,13 @@
     巡飞待机弹  → 巡飞待机待机弹
     SysML v2   → SysML_SysML_V2      （`v2` 命中自己刚产出的 `SysML_V2`）
 
-另有一个独立的边界缺陷：词边界字符集是 `[A-Za-z0-9]`，**不含 `_`**，而规范词
-普遍带下划线（`SysML_V2` / `内部块图_IBD` / `热管理系统_TMS`）⇒ 规范词内部的
-`V2` / `IBD` 会被 `v2` / `ibd` 规则再次命中。
+另有一个独立缺陷：这条替换链当时把 `_` 也算进词边界（`[A-Za-z0-9_]`）来阻止
+`SysML_V2` 里的 `V2` 被 `v2` 规则二次命中。阻挡是有效的，但手段用错了层：
+`_` 在标识符里是**分段符**（`SysML_V2` = `SysML` + `V2`，`sysml_v2_validate` =
+三个段），把它算作词内字符会让**整串标识符**当成一个 token ⇒ 段内术语
+（`SysML_V2` / `sysml` / `v2`）一个都命中不了 ⇒ 2026-11-08 实测 360 条 query
+因此丢失域/意图信号。真正该拦的不是「段内命中」，而是「替换产物被再次替换」，
+那已由第 3 条规则（已是规范形态则跳过）独立守住。
 
 后果不是"日志难看"：同一条 query 因被归一化次数不同而得到不同检索串 ⇒
 **召回不可复现**；而膨胀出来的 `宽带通信通信` 恰好召不回原文能命中的 chunk。
@@ -31,21 +35,25 @@
 
 ## 修法（三条，缺一条都有反例 → 对应 M1/M2/M3）
 1. 在**原文**上定位 span，长词优先 + 区间互斥，canonical 只写回输出、不再被扫描；
-2. 词边界纳入 `_`；
+2. 词边界**不含 `_`**（`_` 是标识符分段符），且只对 term 的 ASCII 边缘生效
+   （CJK 边缘不加边界，否则 `转发器EIRP` 里的 `转发器` 会被漏掉）；
 3. 「原文该处已是完整规范形态」则跳过（suffix 型 `宽带通信` / prefix 型
-   `SysML_V2 语法规范` 两种都要覆盖）—— 这是**膨胀**问题，光做单遍修不掉。
+   `SysML_V2 语法规范` 两种都要覆盖）—— 这是**膨胀**问题，光做单遍修不掉；
+   `_` 不再参与边界之后，防膨胀**全靠这一条**（N10/M2 就是在守它）。
 
 ## 判据（每条都能变红）
   N1  合成：长词优先，短词不得把长词的产物再改写（`ABCD` 不被 `CD` 打碎）
   N2  合成：区间互斥 —— 重叠候选只取长的，不得同时替换两者
-  N3  合成：边界含 `_` —— `SYSML_V2` 里的 `V2` 不被 `v2` 规则命中
+  N3  合成：`_` 是分段符 —— `sysml_v2_validate` 段内 `v2` 可命中；
+      但**字母紧邻**的 `part`/`EVTMS` 仍不可命中（ASCII 边缘必须有词边界）
+  N3b 合成：CJK 边缘不加边界 —— `转发器EIRP` 里 `转发器` 必须命中
   N4  合成：已是规范形态则跳过（suffix 型 / prefix 型）
   N5  合成：canonical 恰好等于命中片段时不动（大小写不敏感）
   N6  合成：无命中 / 无候选 ⇒ 原样返回
   N7  真实词表：`SysML v2` → `SysML_V2`（不得出 `SysML_SysML_V2`）
   N8  真实词表：`宽带通信` 不变；`宽带载荷` → `宽带通信载荷`
   N9  真实词表：`巡飞待机弹` 不变；`巡飞弹` → `巡飞待机弹`
-  N10 真实词表：`内部块图_IBD` / `热管理系统_TMS` 不变
+  N10 真实词表：`内部块图_IBD` / `热管理系统_TMS` 不变（`_` 分段后仍靠规则 3 防膨胀）
   N11 真实词表：`语法规范 查询` → `SysML_V2 语法规范 查询`（prefix 型只换一次）
   N12 真实库全量：对每条 query，normalize(normalize(x)) == normalize(x)（无库 SKIP）
   N13 真实库全量：输出不得命中已知膨胀模式（`通信通信`/`待机待机`/`SysML_SysML` 等）
@@ -53,8 +61,11 @@
 
 ## 变异自证
   M1  恢复「多轮 sub」实现（canonical 参与下一轮扫描）   → N1/N2/N8 必须红
-  M2  边界去掉 `_`（回到 `[A-Za-z0-9]`）                 → N3/N10 必须红
-  M3  `_already_canonical` 恒 False（不跳过规范形态）     → N4/N8/N9/N11 必须红
+  M2  把 `_` 重新算作词内字符（`[A-Za-z0-9_]`）          → N3 必须红
+      （⚠️ 这条变异**不会**让幂等判据变红 —— 它是"信号丢失"方向的回归，
+        由 verify_glossary_term_boundary.py 的 N3 在此处守住；此处只保证
+        「改回旧边界必须被抓到」，所以判据用 N3 而不是 N12）
+  M3  `_already_canonical` 恒 False（不跳过规范形态）     → N4/N8/N9/N10/N11 必须红
 """
 import os
 import re
@@ -122,11 +133,16 @@ def _mut_multi_pass(src):
     return src.replace(old_body, new_body, 1)
 
 
-# ---------------------------------------------------------------- M2 边界去 _
-def _mut_no_underscore(src):
-    old = '_WORD_CH = r"[A-Za-z0-9_]"'
+# ------------------------------------------------- M2 把 `_` 重新算作词内字符
+def _mut_underscore_is_wordchar(src):
+    """把 `_` 重新算作词内字符（2026-11-08 之前的写法）。
+
+    它**不会**让幂等判据变红 —— 当年用它防膨胀是有效的；它坏的是
+    「蛇形标识符段内术语命中不了」（域/意图信号丢失）。故这条变异靠 N3 抓。
+    """
+    old = '_WORD_CH = r"[A-Za-z0-9]"'
     assert old in src, "M2 锚点失效（_WORD_CH 定义已被改写）"
-    return src.replace(old, '_WORD_CH = r"[A-Za-z0-9]"', 1)
+    return src.replace(old, '_WORD_CH = r"[A-Za-z0-9_]"', 1)
 
 
 # ------------------------------------------------------- M3 不判「已规范形态」
@@ -152,14 +168,25 @@ def run_pure(ns, label):
     check("N2 %s 区间互斥（重叠只取长）" % label,
           got == "Y", "期望 'Y'，实得 %r" % got)
 
-    # N3 边界含 `_`。
-    # 用例要选「canonical 不是 原文片段 的 prefix+命中+suffix」的形态：否则
-    # `_already_canonical` 会先一步跳过，M2（去掉 `_` 边界）就抓不出来了。
-    # 这里原文是 `A_V2_C`，而 canonical 只有 `A_V2_B` —— 只有边界能挡。
-    got = sr("A_V2_C", [_hit("v2", "A_V2_B")])
-    check("N3 %s 边界含下划线（规范词内部不再命中）" % label,
-          got == "A_V2_C", "期望原样，实得 %r" % got)
-    got = sr("ibd 是什么", [_hit("ibd", "IBD")])
+    # N3 `_` 是**标识符分段符**（不是词内字符）：`A_v2_C` 里 `v2` 必须可替换。
+    # 用例的 canonical（`ZZ`）刻意**不含**命中片段，否则 `_already_canonical`
+    # 会先一步跳过，看起来"没替换"、分不清是边界挡住还是规则 3 挡住。
+    got = sr("A_v2_C", [_hit("v2", "ZZ")])
+    check("N3 %s 下划线是分段符（段内术语可命中）" % label,
+          got == "A_ZZ_C", "期望 'A_ZZ_C'，实得 %r" % got)
+    # 同一判据的反面：**字母紧邻**的 ASCII 词内部不得命中（`pa` ⊄ `part`）
+    check("N3 %s ASCII 边缘仍有词边界（part 里的 pa 不命中）" % label,
+          sr("part", [_hit("pa", "X")]) == "part",
+          "实得 %r" % sr("part", [_hit("pa", "X")]))
+    check("N3 %s ASCII 边缘仍有词边界（EVTMS 里的 tms 不命中）" % label,
+          sr("EVTMS", [_hit("tms", "热管理系统_TMS")]) == "EVTMS",
+          "实得 %r" % sr("EVTMS", [_hit("tms", "热管理系统_TMS")]))
+
+    # N3b CJK 边缘**不加**边界：中文没有空格分词，`转发器EIRP` 里 `转发器` 必须命中
+    #（统一加 `(?!…)` 会让它因为紧跟英文而被漏掉 —— 与 N3 是同一类错误的两个方向）
+    got = sr("转发器EIRP", [_hit("转发器", "有效载荷转发器")])
+    check("N3b %s CJK 边缘不设词边界（转发器EIRP 可命中）" % label,
+          got == "有效载荷转发器EIRP", "期望 '有效载荷转发器EIRP'，实得 %r" % got)
 
     # N4a suffix 型：宽带 → 宽带通信，原文已是 宽带通信
     got = sr("宽带通信", [_hit("宽带", "宽带通信")])
@@ -267,7 +294,7 @@ def main():
 
     print("\n[3] 变异自证（判据必须能翻红）", flush=True)
     for tag, mut in (("M1 多轮 sub", _mut_multi_pass),
-                     ("M2 边界去下划线", _mut_no_underscore),
+                     ("M2 下划线算作词内字符", _mut_underscore_is_wordchar),
                      ("M3 不跳过已规范形态", _mut_no_canonical_skip)):
         try:
             ns = _load_variant(mut)

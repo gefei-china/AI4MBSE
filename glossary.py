@@ -70,10 +70,64 @@ def infer_domain(filename: str = "", content: str = "", return_score: bool = Fal
     return domain
 
 
-# 词边界字符集。**含 `_`**：规范词自身常带下划线（`SysML_V2`、`内部块图_IBD`、
-# `热管理系统_TMS`、`V波段_卫星通信频段`），若把 `_` 视为边界，则这些规范词内部的
-# `v2` / `ibd` / `tms` 会被对应规则再次命中，产出 `SysML_SysML_V2` 这类串。
-_WORD_CH = r"[A-Za-z0-9_]"
+# 词边界字符集（**不含 `_`**：下划线是标识符分段符，不是单词内字符）。
+#
+# 2026-11-08 修正：上一版把 `_` 算进词内字符（`[A-Za-z0-9_]`），本意是阻止
+# `SysML_V2` 里的 `v2` 被再次替换成 `SysML_SysML_V2`。但那是**膨胀**问题，
+# 已由 `_already_canonical()`（「原文该处已是完整规范形态则跳过」）单独守住 ——
+# 实测把 `_` 当分隔符后，存量 6579 条 query 的归一化**非幂等仍为 0、新增膨胀仍为 0**。
+# 而把 `_` 算作词内字符的代价是**丢掉合法命中**：`sysml_v2_validate`、
+# `内部块图_IBD` 这类蛇形标识符整串当 token ⇒ `SysML_V2` / `sysml` / `v2` 一个都
+# 命中不了 ⇒ 域/意图信号丢失（实测 360 条 query 因此从不带域约束）。
+_WORD_CH = r"[A-Za-z0-9]"
+
+# term 首/尾是否是「单词内字符」——决定该侧要不要词边界。与 _WORD_CH 同口径。
+_ASCII_EDGE = re.compile(r"[A-Za-z0-9]")
+
+# term → 编译好的正则（模块级缓存）。match() 会被每条 query 调用一次，
+# 词表 134 条逐个 re.compile 会拖慢首包；缓存后每条 query 只做 134 次 search。
+_PAT_CACHE = {}
+
+
+def _term_pattern(term: str):
+    """term 的匹配正则：**按 term 自身首尾字符决定该侧是否需要词边界**。
+
+    ★ 2026-11-08：`match()` 此前用 `term.lower() in text.lower()` 做**子串**判断，
+    而 `_span_replace()` 用边界正则 —— 两者口径不同，hits 比替换宽。宽松的那一侧
+    恰好是**下游用来定 force_domain / force_intent 的**，于是英文单词内部的短缩写
+    被当成术语命中，把 query 钉死在一个不相干的域上。实测存量 6579 条 query
+    里被这种假命中污染的：
+
+        PA  ⊂ part/Part         452 条 → domain=satellite_comms
+        SA  ⊂ satisfy           248 条 → domain=satellite_comms
+        CEP ⊂ accept             57 条 → domain=loitering_munition
+        LM  ⊂ AI/LLM             50 条 → domain=loitering_munition
+        tms ⊂ EVTMS               5 条 → domain=thermal_mgmt
+        Antenna ⊂ AntennaInterfaceUnit  5 条 → domain=satellite_comms
+
+    `ref part` 被判成卫星通信域（库内该域 0 chunk）→ 必然零召回，正是这批假命中
+    造成的既有故障。故**一处定义、两处共用**（match / _span_replace 都走本函数），
+    以后不可能再漂移。
+
+    为什么边界要**按 term 自身首尾字符**决定，而不是统一加：
+      · ASCII 边缘必须有边界：`PA` 不能命中 `part`（英文单词内部无术语）；
+      · CJK 边缘不该加：中文没有空格分词，`转发器EIRP` 里 `转发器` 是独立术语，
+        统一加 `(?!…)` 会让它**因为后面紧跟英文而被漏掉**（同一类错误的另一方向）。
+    """
+    key = term.lower()
+    pat = _PAT_CACHE.get(key)
+    if pat is not None:
+        return pat
+    pre = r"(?<!%s)" % _WORD_CH if _ASCII_EDGE.match(term[:1]) else ""
+    suf = r"(?!%s)" % _WORD_CH if _ASCII_EDGE.match(term[-1:]) else ""
+    pat = re.compile(pre + re.escape(term) + suf, re.IGNORECASE)
+    _PAT_CACHE[key] = pat
+    return pat
+
+
+def _term_in(text: str, term: str) -> bool:
+    """term 是否在 text 中以「合法边界」出现（match 与 normalize 的同一口径）。"""
+    return bool(term) and _term_pattern(term).search(text) is not None
 
 
 def _span_replace(text: str, hits: list) -> str:
@@ -88,9 +142,7 @@ def _span_replace(text: str, hits: list) -> str:
         if not u:
             continue
         k = r.get("canonical_term") or u
-        pat = re.compile(r"(?<!%s)%s(?!%s)" % (_WORD_CH, re.escape(u), _WORD_CH),
-                         re.IGNORECASE)
-        for mo in pat.finditer(text):
+        for mo in _term_pattern(u).finditer(text):
             s, e = mo.start(), mo.end()
             hit = text[s:e]
             if hit == k:
@@ -228,6 +280,11 @@ class GlossaryMatcher:
 
         hit 字段：intent 行 → {user_term, canonical_term, domain, intent, boost}；
         概念行 → 上述 + {concept_id, concept_status, replaced_by, definition, term_kind}。
+
+        ★ 2026-11-08：命中判据由「子串」改为 `_term_in()`（与 `_span_replace` 同一套
+        边界规则）。子串口径会让 `PA` 命中 `part`、`SA` 命中 `satisfy`，而 hits 正是
+        `resolve()` 汇总 force_domain / force_intent 的来源 ⇒ 假域约束 → 零召回。
+        详见 `_term_pattern()` 的说明。
         """
         if not text:
             return []
@@ -236,11 +293,14 @@ class GlossaryMatcher:
         seen_terms = set()
         # 概念层优先（新机制），同一词不重复命中路由层
         for r in self._load_concepts():
-            if r["user_term"].lower() in low:
+            u = r.get("user_term") or ""
+            if u and u.lower() in low and _term_in(text, u):
                 hits.append(r)
-                seen_terms.add(r["user_term"].lower())
+                seen_terms.add(u.lower())
         for r in self._load():
-            if r["user_term"].lower() in low and r["user_term"].lower() not in seen_terms:
+            u = r.get("user_term") or ""
+            if u and u.lower() in low and u.lower() not in seen_terms \
+                    and _term_in(text, u):
                 hits.append(r)
         return hits
 
@@ -248,11 +308,14 @@ class GlossaryMatcher:
         """P0-3：概念级召回（只返回概念层命中，供前端术语选择器 / 检索归一用）。
 
         deprecated 概念命中时附 replaced_by，前端提示"该词已弃用，建议使用 XXX"。
+        边界口径与 `match()` 一致（同一 `_term_in`）。
         """
         if not text:
             return []
         low = text.lower()
-        return [r for r in self._load_concepts() if r["user_term"].lower() in low]
+        return [r for r in self._load_concepts()
+                if (r.get("user_term") or "").lower() in low
+                and _term_in(text, r["user_term"])]
 
     def normalize(self, text: str) -> tuple:
         """归一化：把命中的 user_term 替换为 canonical_term（概念层用规范词 pref_label）。

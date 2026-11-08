@@ -2037,6 +2037,11 @@
    "script": "verify_layering.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_glossary_term_boundary.py",
+   "tier": "pr",
+   "timeout": 120
   }
  ]
 }

@@ -34,9 +34,16 @@ def normalize_name(name: str) -> str:
     return s
 
 
-# P4（2026-10-11）：纯拉丁/数字 token 的判定（见 _bigrams 内的由来说明）。
-# 只对该类 token 补字符级 bigram —— 含中文的 token 不拆，避免改变既有中文 fuzzy 语义。
-_LATIN_ONLY = re.compile(r"[a-z0-9]+\Z")
+# P4（2026-10-11）：字符级 bigram 的**排除**判定（见 _bigrams 内的由来说明）。
+# 排除条件是「**含中文**」而不是「非纯拉丁」：中文部分已由 zh bigram 覆盖，
+# 再按字符拆会引入「器a」这类跨界 bigram（改变既有中文 fuzzy 语义）。
+#
+# 2026-11-08 修：这里原本是 `_LATIN_ONLY`（只认 `[a-z0-9]+`），`fcaeba2`（10-30）
+# 为修「非拉丁连写串 fuzzy 恒 0」把它整个删掉（条件只剩 `len(tok) > 2`），
+# 结果**中文 token 也被拆** ⇒ `转发器A ⇄ 转发器B` 由 0.6667 掉到 0.5000。
+# `fcaeba2` 要解决的只是「中文之外的非拉丁文字」（日文假名/西里尔等），
+# 中文本来就有 zh bigram 通道 ⇒ 正确的守卫是「不含中文」，不是「是拉丁」。
+_ZH_CHAR = re.compile(r"[\u4e00-\u9fff]")
 
 
 def _bigrams(s):
@@ -54,10 +61,11 @@ def _bigrams(s):
     0 个受影响 ⇒ 本修复**不改变任何中文场景的既有语义**。
     例：`VehiclePowerManagement ⇄ VehiclePowerManagementReq`  fuzzy 0.0000 → 0.9545。
 
-    ⚠️ 为什么只对**纯拉丁/数字** token 拆字符 bigram：
-    含中文的 token（如 normalize 后的「转发器a」）不拆 —— 中文部分已由上面的
-    `zh` bigram 覆盖，再拆会引入「器a」这类**跨界 bigram**，实测会让
-    「转发器A ⇄ 转发器B」由 0.6667 **掉到** 0.5000（改变基线语义，属回归）。
+    ⚠️ 为什么**含中文**的 token 不拆（守卫是 `not _ZH_CHAR.search(tok)`）：
+    中文部分已由上面的 `zh` bigram 覆盖，再按字符拆会引入「器a」这类**跨界 bigram**，
+    实测会让「转发器A ⇄ 转发器B」由 0.6667 **掉到** 0.5000（改变基线语义，属回归）。
+    守卫刻意**不**写成「是纯拉丁」：那样会把日文假名/西里尔等无空格连写串一并排除，
+    使它们的 fuzzy 恒为 0（`fcaeba2` 修的正是这一点）。两个方向都要覆盖。
 
     ⚠️ 与 `_bigrams_ordered` 的分工（两者口径本就不同，勿统一）：
       `_bigrams`        → **fuzzy 打分**专用（要细粒度字符重叠）
@@ -76,8 +84,9 @@ def _bigrams(s):
     bigrams.update(en)
     # P4：无空格连写的拉丁名（normalize 后无空白）补字符级 bigram，
     # 使其参与 fuzzy 比较；否则整串只算 1 个元素，交集恒空 ⇒ fuzzy 恒 0。
+    # 含中文的 token 不拆（见 docstring：会造成跨界 bigram，改变中文 fuzzy 基线）。
     for tok in en:
-        if len(tok) > 2:
+        if len(tok) > 2 and not _ZH_CHAR.search(tok):
             for i in range(len(tok) - 1):
                 bigrams.add(tok[i:i + 2])
     return bigrams
