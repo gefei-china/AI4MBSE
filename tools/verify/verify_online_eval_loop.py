@@ -68,7 +68,7 @@ CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,
 CREATE TABLE query_trace (id INTEGER PRIMARY KEY AUTOINCREMENT,
     query TEXT DEFAULT '', intent TEXT DEFAULT '', route TEXT DEFAULT '',
     top_score REAL DEFAULT 0, conversation_id INTEGER DEFAULT 0,
-    -- ★ 2026-11-09：补 score_kind。上一轮把 `_cand_low_conf` 改成按
+    -- ★ 2026-11-08：补 score_kind。上一轮把 `_cand_low_conf` 改成按
     --   `score_kind` 分组后，本夹具没有这一列 ⇒ 那条 SQL 直接抛
     --   `no such column` ⇒ 被 except 收进 failures ⇒ 低置信一路恒为空
     --   ⇒ A1a「三 reason 各 ≥1」长期红。

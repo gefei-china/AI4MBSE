@@ -587,7 +587,7 @@ def entity_aliases_del(entity_id: str, alias_name: str, conn=Depends(db_session)
 def trace_list(limit: int = 20, query: Optional[str] = None, conn=Depends(db_session)):
     """查询全链路 Trace 列表（最新优先）。query 模糊过滤。
 
-    2026-11-09：过滤同时匹配 `query_raw`（用户原话）。此前只匹配 query/normalized，
+    2026-11-08：过滤同时匹配 `query_raw`（用户原话）。此前只匹配 query/normalized，
     于是**按用户原话检索会查不到**——用户记得自己问过「宽带载荷」，表里存的是
     `宽带通信载荷`，搜不到还以为是没记录。`query_raw` 在老库可能不存在，故按列
     是否存在决定是否纳入条件（缺列时退回两列，绝不因缺列 500）。

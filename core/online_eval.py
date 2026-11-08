@@ -24,7 +24,7 @@ routers/monitor.py（S4 接线）。
     ① 2026-10-25：设计文档 §7 的 low_conf_threshold 默认 0.5 是**拍脑袋值**——
       对 mbse.db 只读实测：query_trace.top_score 全域量级 [0, 0.096]，0.5 会命中
       全表 3276 行，故改 0.036（=p25）。
-    ② 2026-11-09：**0.036 本身也是错的**，因为"全域量级"这个说法掩盖了
+    ② 2026-11-08：**0.036 本身也是错的**，因为"全域量级"这个说法掩盖了
       两种不同量纲混在同一列。按 route 分组重测：
           vector  n=6514  [0, 0.632]  → 0.036 命中 20.0%
           mixed   n=27    [0, 0.0]    → 0.036 命中 100%（这 27 行是 bug 写出的 0）
@@ -51,7 +51,7 @@ from core.feedback_types import (
 _SETTING_DEFAULTS = {
     "enabled": True,               # 总开关（False 时采样返空而非 500）
     "random_rate": 0.05,           # 随机采样比例（负反馈/低置信优先不受此限）
-    # ★ 2026-11-09 废弃：`low_conf_threshold`（绝对值阈值）不再参与低置信判断。
+    # ★ 2026-11-08 废弃：`low_conf_threshold`（绝对值阈值）不再参与低置信判断。
     #   原因：`query_trace.top_score` 的量纲**随 route 变**（图置信度 0~1，
     #   融合检索分实测 0~0.63），一个绝对阈值同时套两种分布必然只在其中一种上准。
     #   实证：0.036 在 vector 上命中 20%，而 mixed 路因旧 bug 全为 0.0 ⇒ 100% 命中
@@ -179,7 +179,7 @@ def _cand_low_conf(conn, window_arg, quantile: float, cap: int,
                    failures: list) -> list:
     """低置信候选（第二优先）：**按 score_kind 分组、组内取最低分位**。
 
-    为什么不再用绝对值阈值（2026-11-09）
+    为什么不再用绝对值阈值（2026-11-08）
     ------------------------------------
     旧实现 `WHERE top_score < 0.036 ORDER BY top_score ASC`，前提是"所有 top_score
     可以互相比较"。但实测这个前提不成立：
@@ -579,7 +579,7 @@ def _col_exists(conn, table: str, col: str) -> bool:
 
 
 def _trace_texts(conn, trace_ids) -> dict:
-    """批量取 query_trace 的「用户原话 / 检索串 / 归一化」三件事（2026-11-09）。
+    """批量取 query_trace 的「用户原话 / 检索串 / 归一化」三件事（2026-11-08）。
 
     为什么标注面需要这一步：`online_eval_queue` 只存 `query_trace_id` 外键，
     标注员在队列里看到的原本只有 `qt 6885` 这种编号 —— 要看查询就得自己回查
@@ -604,7 +604,7 @@ def _trace_texts(conn, trace_ids) -> dict:
                                  "query_raw": r["query_raw"]}
     except Exception as e:                                     # noqa: BLE001
         # 读不到就少这一段展示，但必须留痕：否则"标注员看不到原话"会表现成
-        # "这些样本本来就没有原话"，与"确实来自 2026-11-09 之前"无法区分。
+        # "这些样本本来就没有原话"，与"确实来自 2026-11-08 之前"无法区分。
         try:
             from core.observe_fail import note as _note
             _note("online_eval.trace_texts", e, n=len(ids), has_raw=has_raw)
@@ -618,7 +618,7 @@ def queue_rows(conn, status: str = "pending", limit: int = 50) -> tuple:
 
     返回 (items, total)。老库无表 ⇒ ([], 0)。
 
-    ★ 2026-11-09：每行附 `trace_query_raw`（用户原话）/ `trace_query`（实际检索串）/
+    ★ 2026-11-08：每行附 `trace_query_raw`（用户原话）/ `trace_query`（实际检索串）/
     `trace_normalized`，并给 `trace_raw_missing` 标记。**该标记只表示"这一行写于
     query_raw 列存在之前"，不表示用户没说话** —— 历史行的原话不可恢复（上游早已
     把 kb_hint/槽位/附件片段拼进去并归一化），所以前端必须把它显示成
@@ -673,7 +673,7 @@ _QRELS_PATH = os.path.join(
 def _query_of(conn, r: dict) -> tuple:
     """样本 → (query, intent, src)。回查链：query_trace → 同会话上一条 user 消息。
 
-    ★ 2026-11-09：**优先取用户原话 `query_raw`**，取不到才退回 `query`。
+    ★ 2026-11-08：**优先取用户原话 `query_raw`**，取不到才退回 `query`。
     为什么这条比展示层更要紧：转正是**唯一真写**，写进 `qrels.jsonl` /
     `intent_samples` 的 query 会成为评测集的"标准问法"。若写的是 `query`
     （= 上游拼过 kb_hint/槽位/附件片段、再被 Glossary 归一化的串），那评测集

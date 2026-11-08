@@ -258,7 +258,7 @@ class GlossaryMatcher:
         """归一化：把命中的 user_term 替换为 canonical_term（概念层用规范词 pref_label）。
         返回 (normalized_text, hits)。无命中时原样返回。
 
-        ★ 2026-11-09 重写（原实现是「多轮 re.sub」，非幂等，会膨胀）：
+        ★ 2026-11-08 重写（原实现是「多轮 re.sub」，非幂等，会膨胀）：
         原写法 `for r in sorted(hits, ...): out = pat.sub(...)` 后一轮作用于
         **前一轮的结果** ⇒ 替换产物被再次扫描。而词表里有 12 条 entry 的
         canonical 本身就包含自己的 user_term：
@@ -320,7 +320,7 @@ class GlossaryMatcher:
 def trace_query(conn, query: str, trace: dict) -> int:
     """端到端查询 Trace 落库（P2-2）。返回 trace_id；**写入失败返回 0 并留痕**。
 
-    2026-11-09 修（此前是 `except Exception: return 0`，静默）：
+    2026-11-08 修（此前是 `except Exception: return 0`，静默）：
     静默的代价不是"少一条日志"，而是**用这张表算出的所有指标分母都偏小且无法
     察觉** —— 例如"零命中率 7.24%" 的分母只是成功写入的行，真实值只会更高，
     但看板上它长得像"已统计全量"。故改为：不冒泡（观测失败不得阻断检索），
@@ -330,11 +330,11 @@ def trace_query(conn, query: str, trace: dict) -> int:
     上的每次写入都会继续失败 —— 于是失败被一次次静默吞掉，形成"连环静默"，
     表现为 trace 从某一刻起整体消失。故失败时尽力 rollback。
 
-    ★ 2026-11-09：`query` 与 `query_raw` 分工（二者的区别见迁移里的列注释）。
+    ★ 2026-11-08：`query` 与 `query_raw` 分工（二者的区别见迁移里的列注释）。
     签名里的 `query` 是**实际送检索的串**，不是用户原话 —— 它上游已被拼上
     kb_hint/槽位/附件片段，此处再被 Glossary 归一化。原话由 `trace["query_raw"]`
     单独传入；**没传时回退成本参 `query`**（而不是写 NULL）：
-    写 NULL 会让"调用方没传"与"2026-11-09 之前的历史行"变成同一个取值，
+    写 NULL 会让"调用方没传"与"2026-11-08 之前的历史行"变成同一个取值，
     而这两件事的处置完全不同（前者是漏接线，后者是不可恢复的历史）。
     """
     _raw = trace.get("query_raw")
@@ -359,7 +359,7 @@ def trace_query(conn, query: str, trace: dict) -> int:
                 json.dumps(trace.get("hit_docs", []), ensure_ascii=False)[:2000],
                 trace.get("hit_count") or 0,
                 trace.get("top_score") or 0,
-                # ★ 2026-11-09：分数的**来源**与其三路原值（详见 agent/rag.py）。
+                # ★ 2026-11-08：分数的**来源**与其三路原值（详见 agent/rag.py）。
                 #   `top_score` 保留原义以兼容既有消费方；`score_kind` 回答
                 #   "这个数是哪种分"，`top_*` 三列回答"另外两路各是多少"。
                 #   三列都记而不择一 —— "择一"本身就是信息丢失，也正是旧实现

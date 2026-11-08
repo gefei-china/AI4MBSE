@@ -26,7 +26,7 @@ def _migrate_glossary_tables(conn):
         c.execute("ALTER TABLE glossary ADD COLUMN provenance TEXT DEFAULT ''")    # JSON: 理由+置信度
     c.execute("""CREATE TABLE IF NOT EXISTS query_trace (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        -- ⚠️ 2026-11-09 更正注释（原写"原始用户输入"，与实现不符）：
+        -- ⚠️ 2026-11-08 更正注释（原写"原始用户输入"，与实现不符）：
         --   `query` 存的是**实际送进检索的查询串** —— 调用方在 `user_input` 后
         --   拼了 kb_hint / 槽位实体 / 附件前 600 字，`agent/rag.py` 取到后又用
         --   Glossary 归一化覆盖了一次。所以它既不是用户原话，也不是模型的输入原文。
@@ -35,8 +35,8 @@ def _migrate_glossary_tables(conn):
         --     normalized —— query 经 Glossary 替换后的规范形（检索侧口径）
         query TEXT NOT NULL,
         normalized TEXT DEFAULT '',            -- 归一化后（Glossary 替换）
-        -- ★ 2026-11-09：用户原话。**NULL 有确切含义**：该行写入时还没有这一列
-        --   （2026-11-09 之前的历史行），原话**不可恢复**——历史行的 `query`
+        -- ★ 2026-11-08：用户原话。**NULL 有确切含义**：该行写入时还没有这一列
+        --   （2026-11-08 之前的历史行），原话**不可恢复**——历史行的 `query`
         --   早已被归一化与上下文增强污染，没有任何字段能还原用户输入。
         --   故：NULL = 未记录（不是空串、不是"用户没说话"）；
         --       新行由 `glossary.trace_query` 统一写值，它把「键缺失 / None / 空白」
@@ -49,7 +49,7 @@ def _migrate_glossary_tables(conn):
         hit_docs TEXT DEFAULT '[]',            -- JSON: 命中文档名列表
         hit_count INTEGER DEFAULT 0,
         top_score REAL DEFAULT 0,
-        -- ★ 2026-11-09：分数**来源**与其三路原值。
+        -- ★ 2026-11-08：分数**来源**与其三路原值。
         --   `top_score` 原义保留（兼容既有消费方），但它是"按 route 择一"的结果，
         --   不同 route 的量纲完全不同（图置信度 0~1，融合检索分实测 0~0.63），
         --   **不可跨 route 比较**。故新增：
@@ -75,7 +75,7 @@ def _migrate_glossary_tables(conn):
                         ("top_graph", "REAL"),
                         ("top_chunk", "REAL"),
                         ("top_vec", "REAL"),
-                        # ★ 2026-11-09：用户原话。**刻意不给 DEFAULT** ——
+                        # ★ 2026-11-08：用户原话。**刻意不给 DEFAULT** ——
                         #   老库存量行必须是 NULL（= 当时没记），给 '' 会让
                         #   "没记录"和"记了个空串"混为一谈，而消费方无法区分。
                         #   注：ALTER 只能追加到表尾，故升级库的物理列序与
@@ -89,7 +89,7 @@ def _migrate_glossary_tables(conn):
     # 复合索引让"组内 ORDER BY score ASC"能走索引而不是全表扫。
     c.execute("CREATE INDEX IF NOT EXISTS idx_trace_kind_score "
               "ON query_trace(score_kind, top_score)")
-    # ── 历史行分数来源回填（2026-11-09，幂等）───────────────────────────────
+    # ── 历史行分数来源回填（2026-11-08，幂等）───────────────────────────────
     # 为什么要回填：新消费方（core/online_eval 低置信采样）按 `score_kind` 分组，
     # 若历史 6541 行全是 `''`，采样源会瞬间"无数据"——从"统计不全"变成"统计为零"，
     # 看起来像业务量消失。回填让新旧行口径连续。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# tier: pr（2026-11-09 基线重测后转绿，接线进 CI；此前为 CI-OPTIONAL [broken]）
+# tier: pr（2026-11-08 基线重测后转绿，接线进 CI；此前为 CI-OPTIONAL [broken]）
 # -*- coding: utf-8 -*-
 """门禁：限制层绕过**增量**（P1-10，2026-10-04）
 
@@ -69,7 +69,7 @@ _IN_MUT = [False]
 #   ⇒ 属"存量特性累积"而非"新增绕过"：这些端点的直连读都已随各自提交评审过，
 #     按本门禁「卡增量不卡存量」的设计，重测基线 = 323 并在此登记漂移来源。
 #
-# 2026-11-09 重测记录（323 → 354，+31）：
+# 2026-11-08 重测记录（323 → 354，+31）：
 #   同一归因方式（对 git archive 快照逐 commit 复测 210 个提交），漂移点全部落在
 #   6 个**已提交**特性上，且每次都伴随功能扩张：
 #     +11 83ced2e 能力中心四环节走查（P1-3~P2-4 落地 / run_id 归正 / MCP 测试入口）
@@ -87,7 +87,7 @@ _IN_MUT = [False]
 #   （权限过滤漏一个就是多租户越界）远高于"架构整洁"的收益 —— 这个权衡在
 #   2026-10-04 立项时已写明（见文件头「为什么是卡增量而不是清存量」）。
 #   重测基线是**承认存量已随特性评审过**，同时把"从现在起不许再涨"重新钉死。
-BASELINE_DIRECT_SQL = 354   # 由 scan_direct_sql() 实测得出（2026-11-09 重测；323→354 归因见上）
+BASELINE_DIRECT_SQL = 354   # 由 scan_direct_sql() 实测得出（2026-11-08 重测；323→354 归因见上）
 BASELINE_FILE = "tools/verify/verify_layering.py"
 ALLOW_FILE = "tools/verify/layering_exemptions.txt"
 

@@ -140,7 +140,7 @@ class GraphRAG:
           图谱未命中/置信不足 → 才执行向量检索（chunk 级优先，文档粗匹配兜底）。
         - route ∈ {graph, mixed, vector}；统计落库 query_routing_stats。
         """
-        # ★ 2026-11-09：**在任何改写之前**捕获原话（Step 3 会把 query 覆盖成归一化
+        # ★ 2026-11-08：**在任何改写之前**捕获原话（Step 3 会把 query 覆盖成归一化
         #   文本，见下方 `query = _glossary_res["normalized"] or query`）。
         #   这条赋值必须留在函数体最前面 —— 它是"原话只在此刻存在"的唯一窗口，
         #   一旦挪到归一化之后，记下来的就又是被替换过的串，且**看不出来**。
@@ -275,7 +275,7 @@ class GraphRAG:
         #   必须在 try 之前初始化：否则后续任何异常都会让 trace 块因
         #   UnboundLocalError 反过来吞掉整次检索（同 2026-09-16 的 500 成因）。
         _domain_skipped = ""
-        # ★ 2026-11-09：`force_domain` / `boost` 此前只在下面
+        # ★ 2026-11-08：`force_domain` / `boost` 此前只在下面
         #   `if graph_confidence < self.confidence_threshold:` 分支内赋值，
         #   而 trace 块**无条件**读 `force_domain` ⇒ 凡走 graph 路由（置信度够，
         #   不进该分支）必然 `UnboundLocalError`，然后被 trace 的兜底吞掉。
@@ -603,7 +603,7 @@ class GraphRAG:
                 from glossary import trace_query as _tq
                 _hit_src = (graph_results if route in ("graph", "mixed")
                             else (chunk_hits or vector_results)) or []
-                # ── 分数取值（2026-11-09 修）─────────────────────────────────
+                # ── 分数取值（2026-11-08 修）─────────────────────────────────
                 # 旧实现：`_f0.get("score") or _f0.get("conf") or 0`。
                 # 但 `graph_results` 的元素是**图谱实体**（字段有 id/name/type…），
                 # **没有** `score` 也没有 `conf` —— 图路的分数是独立的
@@ -668,7 +668,7 @@ class GraphRAG:
                             _gap_info = {"kind": "error"}
                 _tq(conn, query, {
                     "normalized": query,
-                    # ★ 2026-11-09：用户原话（见函数入口的 `_query_raw`）。
+                    # ★ 2026-11-08：用户原话（见函数入口的 `_query_raw`）。
                     #   `query` 这一列是"实际送检索的串"（含上游拼装 + 归一化），
                     #   标注员/样本复核要看的是原话 ⇒ 单列存储，不复用 `query`：
                     #   历史 6.5k 行的 `query` 已被污染且**原话不可恢复**，
@@ -682,7 +682,7 @@ class GraphRAG:
                                  for h in _hit_src[:5]],
                     "hit_count": len(_hit_src),
                     "top_score": _top,
-                    # ★ 2026-11-09：分数的来源与三路原值（口径分离）。
+                    # ★ 2026-11-08：分数的来源与三路原值（口径分离）。
                     #   `top_score` 是"按 route 择一"，跨 route 不可比；
                     #   `score_kind` 说明它到底是哪种量，`top_*` 保留三路原值，
                     #   使"图置信度"与"文本得分"能在同一行里被分别追溯，
@@ -721,7 +721,7 @@ class GraphRAG:
                 })
         except Exception as _e_trace:                              # noqa: BLE001
             # 观测失败绝不阻断检索主链路 —— 但**不能静默**。
-            # 2026-11-09：此前是 `pass`，于是"trace 落库失败"在系统里零痕迹，
+            # 2026-11-08：此前是 `pass`，于是"trace 落库失败"在系统里零痕迹，
             # 而所有基于 query_trace 的指标（零命中率、低置信采样）都以为自己在
             # 统计全量。改为计数留痕，主流程行为不变。
             try:
