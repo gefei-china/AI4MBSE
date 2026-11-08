@@ -70,6 +70,84 @@ def infer_domain(filename: str = "", content: str = "", return_score: bool = Fal
     return domain
 
 
+# 词边界字符集。**含 `_`**：规范词自身常带下划线（`SysML_V2`、`内部块图_IBD`、
+# `热管理系统_TMS`、`V波段_卫星通信频段`），若把 `_` 视为边界，则这些规范词内部的
+# `v2` / `ibd` / `tms` 会被对应规则再次命中，产出 `SysML_SysML_V2` 这类串。
+_WORD_CH = r"[A-Za-z0-9_]"
+
+
+def _span_replace(text: str, hits: list) -> str:
+    """在**原文**上单遍替换：长词优先、区间互斥、「已是规范形态」则跳过。
+
+    三条规则各自不可省，反例见 tools/verify/verify_glossary_normalize_idempotent.py
+    的 M1/M2/M3 变异（去掉任一条都会让幂等判据翻红）。
+    """
+    cands = []
+    for r in hits:
+        u = r.get("user_term") or ""
+        if not u:
+            continue
+        k = r.get("canonical_term") or u
+        pat = re.compile(r"(?<!%s)%s(?!%s)" % (_WORD_CH, re.escape(u), _WORD_CH),
+                         re.IGNORECASE)
+        for mo in pat.finditer(text):
+            s, e = mo.start(), mo.end()
+            hit = text[s:e]
+            if hit == k:
+                continue                      # 原文此处与规范词逐字相同
+            if _already_canonical(text, s, e, k):
+                continue                      # 原文该处已是完整规范形态（防膨胀）
+            cands.append((s, e, k, len(u)))
+    if not cands:
+        return text
+    # 长词优先（避免短词吃掉长词的一部分）；等长时起点靠前者优先，保证结果确定
+    cands.sort(key=lambda t: (-t[3], t[0]))
+    taken = []
+    for s, e, k, _ in cands:
+        if any(not (e <= a or s >= b) for a, b, _ in taken):
+            continue                          # 与已选区间重叠 ⇒ 丢弃（长词已占位）
+        taken.append((s, e, k))
+    taken.sort()
+    out, cur = [], 0
+    for s, e, k in taken:
+        out.append(text[cur:s])
+        out.append(k)
+        cur = e
+    out.append(text[cur:])
+    return "".join(out)
+
+
+def _already_canonical(text: str, s: int, e: int, canonical: str) -> bool:
+    """原文 [s,e) 处是否已构成完整的规范形态 —— 用于阻止「替换膨胀」。
+
+    判据取**对称**形式：canonical 若由 `prefix + 命中片段 + suffix` 组成，且
+    prefix 紧邻命中片段之前、suffix 紧邻其后都已经在原文里，则该处本就规范。
+
+    为什么对称而不是只判 `canonical.startswith(命中片段)`（前向）：
+      `宽带` → `宽带通信`（suffix 型，判后向 `text[e:e+len(suf)]`）
+      `语法规范` → `SysML_V2 语法规范`（prefix 型，判前向 `text[s-len(pre):s]`）
+    两种都必须覆盖，否则 `语法规范 查询` 第一次换成 `SysML_V2 语法规范 查询`
+    后，第二次会把其中的 `语法规范` 再换一次，成为
+    `SysML_V2 SysML_V2 语法规范`（幂等判据直接翻红）。
+    """
+    low_hit, low_k = text[s:e].lower(), canonical.lower()
+    if not low_k or low_hit not in low_k:
+        return False
+    idx = low_k.index(low_hit)
+    pre, suf = canonical[:idx], canonical[idx + (e - s):]
+    if not pre and not suf:
+        # canonical 与命中片段等值、只差大小写（`ibd` → `IBD`）⇒ **要替换**，
+        # 否则大小写归一这条既有行为被静默取消。真正完全相等的已在调用方 continue。
+        return False
+    if pre:
+        if s - len(pre) < 0 or text[s - len(pre):s].lower() != pre.lower():
+            return False
+    if suf:
+        if text[e:e + len(suf)].lower() != suf.lower():
+            return False
+    return True
+
+
 class GlossaryMatcher:
     """术语匹配（P0-3/P0-4 概念层版）。匹配逻辑：
     - 术语层：glossary_terms（preferred/synonym/alias）→ 概念级召回，命中带
@@ -179,20 +257,39 @@ class GlossaryMatcher:
     def normalize(self, text: str) -> tuple:
         """归一化：把命中的 user_term 替换为 canonical_term（概念层用规范词 pref_label）。
         返回 (normalized_text, hits)。无命中时原样返回。
+
+        ★ 2026-11-09 重写（原实现是「多轮 re.sub」，非幂等，会膨胀）：
+        原写法 `for r in sorted(hits, ...): out = pat.sub(...)` 后一轮作用于
+        **前一轮的结果** ⇒ 替换产物被再次扫描。而词表里有 12 条 entry 的
+        canonical 本身就包含自己的 user_term：
+
+            宽带   → 宽带通信          巡飞 → 巡飞待机
+            v2     → SysML_V2          ibd  → 内部块图_IBD
+            语法规范 → SysML_V2 语法规范   v波段 → V波段_卫星通信频段  …
+
+        于是每次替换都把串撑长一截，且下一轮再撑一次：
+            `宽带通信`   → `宽带通信通信`
+            `巡飞待机弹` → `巡飞待机待机弹`
+            `SysML v2`  → `SysML_SysML_V2`（`v2` 命中自己刚产出的 `SysML_V2`）
+        实测存量 3000 条 query 里 **699 条（23.3%）再归一化一次还会变**。
+
+        非幂等的代价不是"日志难看"：同一条 query 因被归一化的次数不同而得到
+        不同检索串 ⇒ 召回不可复现；而膨胀出来的串（`宽带通信通信`）恰好
+        召不回原文能命中的 chunk。故改为**在原文上做单遍替换**：
+        canonical 只写回输出，绝不再参与扫描。
+
+        三条规则合起来才幂等（缺一条都有反例，见门禁 M1/M2/M3）：
+        1. span 单遍 + 区间互斥 + 长词优先 —— 替换结果不被二次扫描；
+        2. 边界字符集含 `_` —— 否则 `SysML_V2` 里的 `V2`、`内部块图_IBD` 里的
+           `IBD` 会被 `v2` / `ibd` 规则重新命中（`_` 不在 `[A-Za-z0-9]` 里）；
+        3. 「已是规范形态则跳过」—— 否则 `宽带`→`宽带通信` 会把已规范的
+           `宽带通信` 再撑成 `宽带通信通信`（这一条不是扫描问题，是膨胀问题，
+           光做单遍修不掉）。
         """
         hits = self.match(text)
         if not hits:
             return text, hits
-        out = text
-        # 长术语优先替换，避免子串交叉
-        for r in sorted(hits, key=lambda x: len(x["user_term"]), reverse=True):
-            # 大小写不敏感替换：只替换独立出现的词（前后非字母数字）
-            pat = re.compile(
-                r"(?<![A-Za-z0-9])" + re.escape(r["user_term"]) + r"(?![A-Za-z0-9])",
-                re.IGNORECASE,
-            )
-            out = pat.sub(r["canonical_term"], out)
-        return out, hits
+        return _span_replace(text, hits), hits
 
     def resolve(self, text: str) -> dict:
         """一步到位：归一化 + 汇总强制意图/域。

@@ -2027,6 +2027,16 @@
    "script": "verify_trace_raw_query.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_glossary_normalize_idempotent.py",
+   "tier": "pr",
+   "timeout": 120
+  },
+  {
+   "script": "verify_layering.py",
+   "tier": "pr",
+   "timeout": 120
   }
  ]
 }
