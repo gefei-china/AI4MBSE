@@ -128,6 +128,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/eval/run_ci_eval.py
 
+      # ── 2026-11-08：零召回成因分型（shadow）门禁 ──────────────────────────
+      # 只断言"分型是纯观测"：四态判定正确 + `_gap_info` 不被任何
+      # if/return/continue 消费。**不是**在把"覆盖度低"做成门禁 ——
+      # 恰恰相反，判据反向写，谁把它接进决策就判红。
+      - name: Guard 零召回成因分型「只观测不决策」（14 项 + 2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_retrieval_gap_shadow.py
+
       # ── 评测基础设施自检（2026-10-22）────────────────────────────────────
       # 这道门禁保护的是**上面那些门禁本身**：ci.yml 注释里的数字若与脚本实值
       # 漂移，CI 照样全绿，而人读到一个错误的事实（评估实测三处：意图路由阈值

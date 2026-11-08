@@ -260,6 +260,10 @@ class GraphRAG:
         # → 整个 POST /api/conversations/{id}/chat 返回 500，AI 能力消费链路完全不可用。
         # 现统一在分支外先求值，口径与兜底分支保持一致（消费隔离：默认排除 AI 收编文档）。
         _exclude_ai = not (scope.get("include_ai_generated") or False)
+        # ★ 2026-11-08：因「域内无 chunk」而放弃施加的域名（空串 = 未放弃）。
+        #   必须在 try 之前初始化：否则后续任何异常都会让 trace 块因
+        #   UnboundLocalError 反过来吞掉整次检索（同 2026-09-16 的 500 成因）。
+        _domain_skipped = ""
         # P1-4：检索条数配置化（rag.top_k / rag.fallback_top_k，默认 4/5 与改动前一致）
         try:
             from core import config as _cfg
@@ -274,6 +278,18 @@ class GraphRAG:
                 # P0-2 行业对齐：Glossary 命中时强制 domain 过滤（sysml_norm 等）+ 术语加权
                 force_domain = (_glossary_res.get("force_domain") or "").strip() or None
                 boost = _glossary_res.get("boost") or 1.0
+                # ★ 2026-11-08：域可用性**前置**校验（见 `_domain_usable`）。
+                #   真库实测：glossary/glossary_concepts 有 60+ 条术语指向
+                #   satellite_comms(30) / loitering_munition(12) / 能力中心(15)
+                #   三个 **0 chunk** 的域 ⇒ 施加约束第一步必然零命中，
+                #   只能靠下面 P1-7 的事后撤域补救（多付一轮检索，
+                #   且若恰好命中别的域就不会触发撤销 ⇒ 召回被污染）。
+                #   不可用时**提前不施加**：省一轮、且不留污染窗口。
+                #   `unknown` 原本就被排除，这里保持一致。
+                if (force_domain and force_domain != "unknown"
+                        and not self._domain_usable(conn, force_domain, scope_docs, _inc_dep)):
+                    _domain_skipped = force_domain
+                    force_domain = None
                 from knowledge_engine import hybrid_search as _hybrid
                 # S4：top_k 配置化（P1-4，默认 4），与消费侧 context_text 的 chunk_hits[:3] 对齐
                 # （此前实取 8 条、仅消费 3 条，多算的 5 条白白走向量检索与 RRF 融合）
@@ -405,6 +421,15 @@ class GraphRAG:
         # 生效范围（很关键）：**只在「向量路由 且 图谱无命中」时**——
         #   · 模型域问题（"转发器 EIRP 多少"）走 graph/mixed，命中实体就算有依据，不受此限；
         #   · 附件命中优先（attachment_hits）也不受此限。
+        # ★ 2026-11-08：零召回成因分型（shadow）的初值。**真正的计算在 trace 块内**
+        #   （`_hit_src` 定稿之后）—— 因为「零命中」的口径必须与 `hit_count` **同源**。
+        #   踩过的坑：这里若用 `not chunk_hits` 或"三路原始结果皆空"来判，
+        #   会与 trace 的 `hit_count` 对不上：
+        #     · `route=mixed` 时命中在 `graph_results`（`宽带载荷` → 16 条）；
+        #     · 低置信过滤会清空 `chunk_hits`，但 `vector_results` 仍有 20 条垃圾
+        #       （问「红烧肉怎么做」也能拿 20 条"相关知识"）。
+        #   两处各写一份判据 ⇒ 打标与统计永远对不上，这是老毛病了，故强制同源。
+        _gap_info = {}
         _reject_info = {"rejected": False}
         try:
             if (route == "vector" and not graph_results and chunk_hits
@@ -561,6 +586,24 @@ class GraphRAG:
                 if _hit_src:
                     _f0 = _hit_src[0]
                     _top = (_f0.get("score") or _f0.get("conf") or 0) if isinstance(_f0, dict) else 0
+                # ★ 2026-11-08：零召回成因分型（shadow）。判据 = **`_hit_src` 为空**，
+                #   与下面 `hit_count` 同源 —— 分型标签与统计数字必须由同一个量决定。
+                #   只写 trace，**不参与任何决策**：不改 route / 不改 hits /
+                #   不触发反问 / 不阻断生成。四态判据见 `agent/retrieval_gap.py`。
+                if conn is not None and not _hit_src:
+                    _gap_on = True
+                    try:
+                        from core import config as _cfg_gap
+                        _gap_on = bool(_cfg_gap.get("rag", "gap_classify_shadow", True))
+                    except Exception:
+                        pass
+                    if _gap_on:
+                        try:
+                            from agent.retrieval_gap import classify as _gap_classify
+                            _gap_info = _gap_classify(conn, query, 0)
+                        except Exception:
+                            # 旁路观测自身失败，绝不能冒泡影响检索/trace
+                            _gap_info = {"kind": "error"}
                 _tq(conn, query, {
                     "normalized": query,
                     "intent": "knowledge_qa",
@@ -578,6 +621,11 @@ class GraphRAG:
                         "vector_count": len(vector_results or []),
                         "glossary": [h.get("user_term") for h in (_glossary_res.get("hits") or [])],
                         "glossary_recall": glossary_recall.get("concepts", []),
+                        # ★ 2026-11-08：被「域内无数据」跳过的域（非空即说明 Glossary 本条
+                        #   判了一个空域）。与上面 `domain` 字段互补：`domain` 是**实际生效**
+                        #   的约束，这里记的是**原本想施加但放弃**的域 —— 只记生效值会让
+                        #   「域误判」在日志里彻底消失。
+                        "domain_skipped": _domain_skipped,
                         "recall_reasons": [(h or {}).get("recall_reason", "")
                                            for h in (chunk_hits or [])[:3] if isinstance(h, dict)],
                         # P0-1（2026-11-01）：低置信过滤的可观测性。
@@ -587,6 +635,11 @@ class GraphRAG:
                         # P0-1b：拒答判据数字（rejected/max/avg/阈值）。
                         # 保留数字而不是只存 true/false —— 阈值是否合适要靠这些数字回溯。
                         "out_of_domain": _reject_info,
+                        # ★ 2026-11-08：零召回成因分型（shadow 观测）。
+                        #   kind ∈ ok / recall_miss / grounding_miss / knowledge_gap /
+                        #   indeterminate。**这里出什么问题都不影响本次回答**，
+                        #   它只回答"零命中到底是什么性质"，不回答"该不该回答"。
+                        "retrieval_gap": _gap_info,
                     },
                 })
         except Exception:
@@ -792,6 +845,54 @@ class GraphRAG:
         return min(w_cov * hit + w_rel * rels + w_typ * type_match, 1.0)
 
     @staticmethod
+    def _domain_usable(conn, domain: str, scope_docs, inc_dep: bool) -> bool:
+        """域约束的**可用性前置校验**（2026-11-08）：库里没有该域的数据时不施加约束。
+
+        ## 为什么需要（实测，不是推断）
+        真库里 `glossary` / `glossary_concepts` 共 **60+ 条术语指向 3 个 0 chunk 的域**：
+            satellite_comms     30 条概念 / 3 条术语 → 库内 0 chunk
+            loitering_munition  12 条概念            → 库内 0 chunk
+            能力中心              15 条术语            → 库内 0 chunk
+        任何被这些术语 `force_domain` 的查询，**第一步必然零命中**，
+        只能靠 `_retry_without_domain` 事后撤域补救（多付一轮检索，且若恰好命中
+        别的域则不会触发撤销，召回会被污染）。
+
+        实证（`错误 3.1：混淆 part 和 ref part`，trace 2026-10-16）：
+            domain=None              → 5 条，vec 0.751
+            domain='satellite_comms' → 0 条（该域 0 chunk）
+        而含 `ref part` 的 17 个 chunk 全部在 `sysml_norm`。
+        同一查询 4 分钟内出现 20 / 0 / 20 —— 正是「域误判 + 撤域重试是否生效」的抖动。
+
+        ## 为什么不删词表
+        删词表是**数据治理**（运维动作，会随文档导入回退）；本函数是**代码层加固**。
+        判据是「该域在目标范围内有没有 chunk」——数据驱动，
+        新增/导入域自动生效，不需要维护任何域名白名单。
+
+        ## 口径必须与 hybrid_search 一致
+        `branches=None`（`retrieve` 本就是全局检索）+ `doc_names=scope_docs`
+        + `include_deprecated=inc_dep`。少带任何一个都会出现
+        「校验说有数据、实际过滤后没有」的假阴性。
+
+        ## 刻意不做进程内缓存
+        文档导入/下线会改变结论，缓存即 stale；`domain=? LIMIT 1` 在 7k 行表上 <1ms。
+
+        失败时返回 True（保持原行为）：校验本身不该成为新的拒答来源。
+        """
+        try:
+            if not domain:
+                return True
+            from knowledge_pipeline import _doc_clause, _lifecycle_clause
+            dsql, dparams = _doc_clause(scope_docs)
+            lsql, lparams = _lifecycle_clause(inc_dep)
+            row = conn.execute(
+                "SELECT 1 FROM document_chunks WHERE domain=?" + dsql + lsql + " LIMIT 1",
+                [domain] + list(dparams) + list(lparams),
+            ).fetchone()
+            return bool(row)
+        except Exception:
+            return True
+
+    @staticmethod
     def _retry_without_domain(conn, query: str, boost: float, scope_docs,
                               top_k: int, inc_dep: bool) -> list:
         """P1-7：撤掉 domain 约束重查一次（检索侧 Corrective 的唯一动作）。
@@ -830,7 +931,14 @@ class GraphRAG:
                           glossary_boost=boost,
                           doc_names=scope_docs or None,
                           include_deprecated=inc_dep)
-            return _hy.get("hits") or []
+            hits = _hy.get("hits") or []
+            # ★ 2026-11-08：标注来源，与 `_retry_with_keywords` 的 `recall_via` 同口径。
+            #   此前不标记 ⇒「域误判被撤域救回」在结果侧**完全不可见**，
+            #   也就无法统计域误判率（只能靠人翻 trace 猜）。
+            for h in hits:
+                if isinstance(h, dict):
+                    h["recall_via"] = "domain_retry"
+            return hits
         except Exception:
             return []
 

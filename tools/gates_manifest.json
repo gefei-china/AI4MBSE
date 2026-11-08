@@ -2001,6 +2001,17 @@
    "tier": "local",
    "timeout": 180,
    "reason": "本体画像派生 + SHACL 门禁**未静默降级**（需生产真库 ontology_types/profiles 与随包 pyshacl）：P1 两遍扫描（属性名排在实体前不丢 props）、P2 幂等、P3 人工画像不被覆盖、P4 真库画像与类型集逐字一致、P5 SHACL 真在跑（skipped=False / shapes>0 / total_checked>0）+ M1/M2 变异自证。降 local 理由：读 mbse.db 且需 rdflib+pyshacl"
+  },
+  {
+   "script": "verify_rag_domain_guard.py",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "检索侧域约束可用性前置校验（域校验口径必须与 hybrid_search 检索口径逐项一致）。降 local 理由：夹具需从生产真库复制 document_chunks 的真实 DDL（手写 DDL 会与 schema 漂移，测出的“口径一致”是假的），CI 无 mbse.db ⇒ 跑不了；且本门禁遇缺库判 FAIL 而非 skip（skipped 与 passed 在日志上不可区分）。"
+  },
+  {
+   "script": "verify_retrieval_gap_shadow.py",
+   "tier": "pr",
+   "timeout": 120
   }
  ]
 }
