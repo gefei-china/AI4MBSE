@@ -35,6 +35,8 @@ from .migrations import (
     _backfill_pipeline_detail,
     _apply_env_keys,
     _migrate_glossary_tables,
+    _migrate_glossary_canonical_align,  # 2026-11-11 R2 规范名与首选术语对齐
+    _migrate_memory_layer,             # 2026-11-11 P0/P1 记忆层（列/视图/流水 FTS）
     _migrate_domain_review_queue_orphans,  # 2026-09-19 复核队列孤儿行兜底清理
     _migrate_ontology_change_tables,
     _migrate_ontology_version_tables,
@@ -1862,6 +1864,9 @@ def init_db():
     _migrate_plugin_dependencies(conn)
     # ── Glossary 术语表 + 查询 Trace + domain review 队列（P0-1/P2-2/P2-3）──
     _migrate_glossary_tables(conn)
+    # ── R2（2026-11-11）：`C-语法规范` 的 pref_label 与首选术语对齐 ──
+    # 必须在 changelog 表（上）与 glossary 表（本行）都就位之后；幂等，只认旧值。
+    _migrate_glossary_canonical_align(conn)
     # ── 复核队列孤儿行兜底清理（document_id 无外键，删文档不级联；幂等）──
     _migrate_domain_review_queue_orphans(conn)
     # ── 修复 documents 失效外键（data_sources 重建的 RENAME 副作用 → data_sources_old 引用）──
@@ -1972,6 +1977,16 @@ def init_db():
     _migrate_orch_interrupts(conn)
     # ── 2026-11-10 需求验收标准（P0-1）：验收标准填充率曾为 0/24，直接卡验收 ──
     _migrate_requirement_acceptance(conn)
+
+    # ── 2026-11-11 记忆层（Claude 四层架构对标 P0/P1）──
+    #   必须放在**所有源表建好之后**：v_memory_notes 是 UNION 视图、
+    #   transcript_fts 要给三张流水表挂触发器，早一步都会静默缺一半。
+    #   幂等；FTS 索引为空时按规模决定是否全量重建（结果写进返回 dict）。
+    _mem = _migrate_memory_layer(conn)
+    if _mem.get("skipped"):
+        print("[init_db] 记忆层迁移跳过项: %s" % "; ".join(_mem["skipped"]))
+    if _mem.get("fts", {}).get("rebuilt"):
+        print("[init_db] 流水 FTS 全量重建: %d 行" % _mem["fts"].get("rows", 0))
 
     # ── 2026-11-04：**流水线配置资产自举**（把"环境不可重建"补上）──────────────
     # 背景（实测）：同一份代码，`init_db()` 建出的空库只有 7 agents / 14 tools / 0 skills，

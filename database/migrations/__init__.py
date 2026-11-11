@@ -65,6 +65,10 @@ from .glossary import (
     _seed_knowledge_categories,
     _migrate_glossary_changelog,
     _migrate_glossary_discoveries,
+    _migrate_glossary_canonical_align,  # 2026-11-11 R2 规范名与首选术语对齐
+)
+from .memory import (
+    _migrate_memory_layer,  # 2026-11-11 P0/P1 记忆层：evidence 列 + notes 视图 + 流水 FTS
 )
 from .plugins import (
     _migrate_builtin_flags,
@@ -148,6 +152,8 @@ __all__ = [
     "_migrate_document_lifecycle",
     "_migrate_artifact_ingest",
     "_migrate_glossary_tables",
+    "_migrate_glossary_canonical_align",
+    "_migrate_memory_layer",
     "_migrate_domain_review_queue_orphans",
     "_seed_departments",
     "_seed_knowledge_categories",

@@ -717,6 +717,11 @@ DEFAULT_CONFIG = {
         "retrieval_merge_neighbor": True,  # 检索注入：同文档近邻 chunk（|Δindex|≤2）合并为一条
         "memory_single_source": True, # 记忆注入：以 rag.memory_hits 为唯一真源，消除双路重复
         "memory_max_chars": 200,      # 记忆注入正文截断（两条路径统一口径）
+        # P1-1（2026-11-11）：Claude Code 式「顶层目录、底层仓库」。
+        # 有记忆注入时附带 ≤3 行导航索引（主题 + 编号 + 校验状态），不放正文；
+        # 无记忆命中时整块不产生，故对空库/寒暄场景零行为变化。
+        "memory_index_enabled": True,
+        "memory_index_rows": 3,       # 导航行数上限（硬上限 5，见 build_index）
         # ★ 2026-10-29：记忆中的「用户叫X」身份声明剥离。
         #   实测：长期记忆存有「用户叫米巴…」（tier=core，无条件常驻注入），
         #   而登录账号是 gefei ⇒ 模型优先用记忆里的自报名称呼用户（输出"你好，米巴！"）。
@@ -754,6 +759,9 @@ DEFAULT_CONFIG = {
     },
     "memory": {
         "forget_enabled": True,      # 遗忘引擎开关
+        # P2（2026-11-11）：对强模型给目标、不给死规则（CL-Bench 硬限制使增益 -0.234）。
+        # True = 记忆沉淀用目标式宽指引；False = 回滚到旧的「以下一律 worth=false」清单。
+        "salience_soft_guidance": True,
         "forget_threshold": 0.2,     # 遗忘激活度阈值（仅 forget_by_activation=true 时生效，见下）
         "consolidate_threshold": 0.85,  # 合并引擎：记忆内容相似度阈值（bigram 余弦）
         "maintain_every": 50,        # 每 N 次沉淀触发一次维护（遗忘+合并）
@@ -2210,6 +2218,8 @@ CONFIG_SCHEMA = {
         "retrieval_merge_neighbor": {"type": "bool", "desc": "检索注入：同文档近邻 chunk 是否合并"},
         "memory_single_source":  {"type": "bool", "desc": "记忆注入：是否以 rag.memory_hits 为唯一真源"},
         "memory_max_chars":      {"type": "int",  "desc": "记忆注入正文截断字符数"},
+        "memory_index_enabled":  {"type": "bool", "desc": "P1-1：有记忆注入时是否附带轻量导航索引（主题+编号+校验状态）"},
+        "memory_index_rows":     {"type": "int",  "desc": "P1-1：记忆导航索引行数上限"},
         "memory_identity_strip": {"type": "bool", "desc": "有登录身份时，是否剥离记忆中的「用户叫X」身份声明子句（称呼以账号为准）"},
         "jit_fallback_top_n":    {"type": "int",  "desc": "JIT 语义预筛空回退时的 top-N（0=退回全量）"},
         "mcp_meta_enabled":      {"type": "bool", "desc": "MCP 工具是否使用真实描述+参数契约（tool_meta）"},
@@ -2220,6 +2230,7 @@ CONFIG_SCHEMA = {
     },
     "memory": {
         "forget_enabled":       {"type": "bool", "desc": "遗忘引擎开关"},
+        "salience_soft_guidance": {"type": "bool", "desc": "P2：记忆沉淀用目标式宽指引（False=回滚到旧的硬清单式规则）"},
         "forget_threshold":     {"type": "float", "desc": "遗忘激活度阈值（仅 forget_by_activation=true 时生效）"},
         "consolidate_threshold": {"type": "float", "desc": "合并引擎相似度阈值（bigram 余弦）"},
         "maintain_every":       {"type": "int", "desc": "每 N 次沉淀触发一次维护"},

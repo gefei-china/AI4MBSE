@@ -267,3 +267,82 @@ def _migrate_glossary_discoveries(conn):
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_gd_status ON glossary_discoveries(status, freq DESC)")
     conn.commit()
+
+
+def _migrate_glossary_canonical_align(conn) -> dict:
+    """R2（2026-11-11）：把 `C-语法规范` 概念的规范词与首选术语对齐。
+
+    ## 修的是什么
+    `语法规范` / `代码规范` 的 canonical 曾是 `SysML_V2 语法规范`（概念 pref_label
+    自带限定前缀）。它与 `SysML V2 → SysML_V2` 在同一句里相邻命中时，两个
+    canonical 各带一次 `SysML_V2`，拼接后出现 `SysML_V2 SysML_V2 语法规范`。
+    这不是替换逻辑的错——两条词条各自都对——而是**规范名把消歧前缀写进了值里**。
+
+    ## 为什么改数据而不是改代码（R2 的取舍）
+    R1 那种「拼接时省略重复前缀」是启发式，得为每种 canonical 形状写例外；
+    R2 直接让 canonical 与 preferred term 等值，归一化变成 no-op，前缀不复存在。
+    真库核查：这两个 term 各自只属于一个概念（无同形异义），故不存在消歧损失。
+
+    ## 幂等与边界
+    - 只在**精确等于旧值**时 UPDATE：用户后来手工改过的规范名不会被本迁移冲掉；
+    - `concept_id` 保持不变（本仓概念改名不改 ID）；
+    - 旧 `glossary` 表同款两行一并改，否则前端术语列表仍显示旧串；
+    - 写一条 `glossary_changelog` 留痕（按 concept_id+action+detail 去重）；
+    - 表不存在时**明确记入 skipped 并返回**，不静默吞异常（夹具/干净库会走这里）。
+    """
+    out = {"concept_updated": 0, "legacy_updated": 0, "changelog": 0,
+           "skipped": [], "before": {}, "after": {}}
+    c = conn.cursor()
+    exists = lambda t: c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,)).fetchone() is not None
+
+    old = "SysML_V2 语法规范"
+    new = "语法规范"
+    cid = "C-语法规范"
+
+    if not exists("glossary_concepts"):
+        out["skipped"].append("glossary_concepts 不存在")
+    else:
+        row = c.execute(
+            "SELECT pref_label, version FROM glossary_concepts WHERE concept_id=?", (cid,)
+        ).fetchone()
+        if row is not None:
+            out["before"] = {"pref_label": row[0], "version": row[1]}
+            if row[0] == old:
+                c.execute("UPDATE glossary_concepts SET pref_label=?, version=COALESCE(version,0)+1 "
+                          "WHERE concept_id=? AND pref_label=?", (new, cid, old))
+                out["concept_updated"] = c.rowcount
+        r2 = c.execute("SELECT pref_label, version FROM glossary_concepts WHERE concept_id=?",
+                       (cid,)).fetchone()
+        if r2:
+            out["after"] = {"pref_label": r2[0], "version": r2[1]}
+
+    if not exists("glossary"):
+        out["skipped"].append("glossary 不存在")
+    else:
+        cur = c.execute(
+            "UPDATE glossary SET canonical_term=? "
+            "WHERE user_term IN ('语法规范','代码规范') AND canonical_term=?", (new, old))
+        out["legacy_updated"] = cur.rowcount
+
+    if out["concept_updated"] or out["legacy_updated"]:
+        if not exists("glossary_changelog"):
+            out["skipped"].append("glossary_changelog 不存在，未留痕")
+        else:
+            import json as _json
+            detail = _json.dumps({"field": "pref_label", "old": old, "new": new,
+                                  "reason": "R2 消除相邻 canonical 的重复限定前缀",
+                                  "legacy_updated": out["legacy_updated"]},
+                                 ensure_ascii=False, sort_keys=True)
+            got = c.execute(
+                "SELECT 1 FROM glossary_changelog WHERE concept_id=? AND action='rename' "
+                "AND detail=?", (cid, detail)).fetchone()
+            if not got:
+                c.execute(
+                    "INSERT INTO glossary_changelog "
+                    "(concept_id, action, detail, reason, operator, created_at) "
+                    "VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)",
+                    (cid, "rename", detail, "R2 规范名对齐", "migration"))
+                out["changelog"] = 1
+    conn.commit()
+    return out

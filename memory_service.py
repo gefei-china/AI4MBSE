@@ -60,6 +60,28 @@ class MemoryService:
             return False
 
     @staticmethod
+    def _has_verify_col(conn) -> bool:
+        """P0-3（2026-11-11）：是否有 verify_state 列（离线 Dreaming 的事实校验结果）。
+
+        与 `_has_tier_col` 同款守卫：老库/夹具缺列时**不拼**该条件，逐字回到旧召回。
+        """
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()]
+            return "verify_state" in cols
+        except Exception:
+            return False
+
+    @staticmethod
+    def _no_contradicted_clause(conn) -> str:
+        """被流水证伪的笔记一律不注入（错误记忆级联的第一道闸）。
+
+        `COALESCE(...,'unverifiable')` 是必需的：存量行 NULL 表示"还没验过"，
+        不是 contradicted，不能因为加了一列就静默丢掉 281 条历史记忆。
+        """
+        return (" AND COALESCE(verify_state,'unverifiable')!='contradicted'"
+                if MemoryService._has_verify_col(conn) else "")
+
+    @staticmethod
     def _has_superseded_col(conn) -> bool:
         """探测 agent_memory 是否已有 superseded_by 列（D1 冲突消解；缺列 → False，逐字回到旧召回）。
 
@@ -230,6 +252,8 @@ class MemoryService:
                 _base_extra = " AND COALESCE(superseded_by,0)=0"
             else:
                 _base_extra = ""
+            # P0-3：被流水证伪的笔记不进召回。列缺失时该片段为空 ⇒ 零行为漂移。
+            _base_extra += MemoryService._no_contradicted_clause(conn)
             if not query:
                 # 作用域生效时不再用 agent_id 作唯一约束（user/global 槽需跨 Agent 复用）
                 if any_scope:
@@ -297,7 +321,11 @@ class MemoryService:
                 # source_credibility 按来源映射（config `memory.source_credibility`，默认全 1.0 中性）。
                 # 两者默认中性 ⇒ **零行为漂移**；待按 provenance 填真实 relevance / 配 credibility 即生效。
                 rel = float(r.get("relevance") or 1.0) or 1.0
-                cred = MemoryService._source_credibility(r.get("source") or "")
+                # P0-3：Dreaming 写入的逐条可信度优先；NULL = 尚未评估 ⇒ 沿用
+                # 按 source 映射的函数值（默认 1.0 中性），零行为漂移。
+                _raw_cred = r.get("source_credibility")
+                cred = (float(_raw_cred) if _raw_cred is not None
+                        else MemoryService._source_credibility(r.get("source") or ""))
                 scored.append((s * decay * _boost * rel * cred, s, r))
             scored.sort(key=lambda x: x[0], reverse=True)
             out = [{**dict(r), "score": round(_raw, 3)} for _fin, _raw, r in scored[:top_k]]
@@ -343,6 +371,9 @@ class MemoryService:
                 return []
             _clause, _cparams, _idx_of = MemoryService._scope_filter(conn, agent_id, scopes)
             _base = ("tier='core' AND forgotten=0" + _clause) if _clause else "agent_id=? AND tier='core' AND forgotten=0"
+            # P0-3：core 是**无条件注入**，一条被证伪的笔记会污染每一个后续会话
+            # （Anthropic 原文明确的 injected-context 风险），故这里同样排除。
+            _base += MemoryService._no_contradicted_clause(conn)
             sql = "SELECT * FROM agent_memory WHERE " + _base + " ORDER BY activation DESC, id DESC LIMIT ?"
             params = list(_cparams) if _clause else [agent_id]
             params.append(top_k)
@@ -722,6 +753,31 @@ class MemoryService:
             return []
 
     @staticmethod
+    def mark_verify_state(conn, memory_id: int, state: str,
+                          evidence_ref: str = "", note: str = "",
+                          credibility: float | None = None) -> bool:
+        """P0-3：写一条笔记的事实校验结果（三态 + 证据引用）。
+
+        只由**离线 Dreaming 候选包经 HIL 批准**或人工调用；本函数不会被任何
+        在线链路自动触发（防止"LLM 评 LLM 再自动喂回"的自我强化循环）。
+        state ∈ verified | contradicted | unverifiable；非法值直接拒绝。
+        `evidence_ref` 指向 transcript_fts 的 (kind, ref_id)，如 `trace#1215`。
+        """
+        if state not in ("verified", "contradicted", "unverifiable"):
+            return False
+        if not MemoryService._has_verify_col(conn):
+            return False
+        try:
+            conn.execute(
+                "UPDATE agent_memory SET verify_state=?, evidence_ref=?, evidence_note=?, "
+                "source_credibility=COALESCE(?, source_credibility) WHERE id=?",
+                (state, evidence_ref or "", note or "", credibility, int(memory_id)))
+            conn.commit()
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
     def mark_superseded(conn, old_id: int, new_id: int) -> bool:
         """把 `old_id` 标记为被 `new_id` 取代（**只打标记，不删内容**）。
 
@@ -901,6 +957,47 @@ class MemoryService:
         r"(如果|若|一旦)[^。；;]{0,60}?(就|则|便)",
     )
 
+    # P2（2026-11-11）：对强模型**给目标，不给死规则**。
+    # Anthropic CL-Bench 实测：给强模型下"只记失败"这类硬限制，记忆带来的增益
+    # 反而下降（Opus 5 −0.234 / Opus 4.7 −0.150 / Sonnet 4.6 −0.020）；
+    # 对弱模型给"先读记忆再验证假设"的方向引导却能近乎翻倍。
+    # 故把原 prompt 的「以下一律 worth=false」清单改成目标式宽指引，
+    # 显著性判断交回模型，事后由 Dreaming 的剪枝/降级负责收敛。
+    # ⚠️ 安全底线不交给模型：提示注入/凭据由 MemoryScanner 在落库前硬拦；
+    #    无 LLM 时的规则降级 `_extract_worthy()` 也保持硬门（那是兜底，不是对强模型的限制）。
+    _DEPOSIT_SOFT_PROMPT = (
+        "你是 MBSE 领域记忆管理员。记忆是写给**未来会话**的：写下一条规则，"
+        "等于预测这个模式以后还会用到，也等于预测未来的会话可以不再复核就依赖它。\n"
+        "请自行判断下面这份任务产出里，哪些内容真正值得跨会话留存"
+        "（可复用的方法与口径、反直觉的坑与实证、稳定偏好、已确认的约定）。"
+        "把判断依据想清楚再下结论；宁可漏记，也不要留下会被后续会话当作事实的猜测。\n"
+        '只输出 JSON：{"worth": true/false, "mem_type": "fact", "memory": "一句话提炼", '
+        '"mem_topic": "主题标签（4~10 字，如 建模规范/链路预算方法论）"}，'
+        "记忆内容 30~100 字，不要其他文字。")
+    _DEPOSIT_HARD_PROMPT = (
+        "你是 MBSE 领域记忆管理员。判断下面的任务产出是否值得沉淀为 Agent 长期经验"
+        "（fact 事实 / preference 偏好 / experience 经验 / skill 可复用方法）。\n"
+        "**只有满足以下之一才 worth=true**："
+        "① 可复用的方法/步骤/口径；② 一条踩过的坑或反直觉事实；"
+        "③ 用户的稳定偏好；④ 已确认的关键约定（接口格式、命名规则、边界条件）。\n"
+        "**以下一律 worth=false**：寒暄/自我介绍/兜底道歉；整篇报告或文档正文；"
+        "知识图谱里已有的实体（如「某需求：系统必须满足…」）；"
+        "一次性任务的产出物内容；没有普适性的具体数值。\n"
+        "宁可漏记，不可错记——错误经验会在后续检索中被当参考传播。"
+        '只输出 JSON：{"worth": true/false, "mem_type": "fact", "memory": "一句话提炼", '
+        '"mem_topic": "主题标签（4~10 字，如 建模规范/链路预算方法论）"}，'
+        "记忆内容 30~100 字，不要其他文字。")
+
+    @staticmethod
+    def _deposit_prompt() -> str:
+        try:
+            from core import config as _cfg
+            soft = bool(_cfg.get("memory", "salience_soft_guidance", True))
+        except Exception:
+            soft = True
+        return (MemoryService._DEPOSIT_SOFT_PROMPT if soft
+                else MemoryService._DEPOSIT_HARD_PROMPT)
+
     @staticmethod
     def maybe_deposit(conn, agent_id: str, task_content: str,
                       task_query: str = "", min_len: int = 40,
@@ -916,19 +1013,7 @@ class MemoryService:
                 return None
             from llm import llm_client
             resp = llm_client.chat(
-                [{"role": "system", "content": (
-                    "你是 MBSE 领域记忆管理员。判断下面的任务产出是否值得沉淀为 Agent 长期经验"
-                    "（fact 事实 / preference 偏好 / experience 经验 / skill 可复用方法）。\n"
-                    "**只有满足以下之一才 worth=true**："
-                    "① 可复用的方法/步骤/口径；② 一条踩过的坑或反直觉事实；"
-                    "③ 用户的稳定偏好；④ 已确认的关键约定（接口格式、命名规则、边界条件）。\n"
-                    "**以下一律 worth=false**：寒暄/自我介绍/兜底道歉；整篇报告或文档正文；"
-                    "知识图谱里已有的实体（如「某需求：系统必须满足…」）；"
-                    "一次性任务的产出物内容；没有普适性的具体数值。\n"
-                    "宁可漏记，不可错记——错误经验会在后续检索中被当参考传播。"
-                    '只输出 JSON：{"worth": true/false, "mem_type": "fact", "memory": "一句话提炼", '
-                    '"mem_topic": "主题标签（4~10 字，如 建模规范/链路预算方法论）"}，'
-                    "记忆内容 30~100 字，不要其他文字。")},
+                [{"role": "system", "content": MemoryService._deposit_prompt()},
                  {"role": "user", "content": f"任务：{str(task_query)[:200]}\n产出：{content[:1200]}"}],
                 _intent="memory_deposit",
             )

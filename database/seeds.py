@@ -447,8 +447,11 @@ def _seed_glossary(conn):
         # (user_term, canonical_term, domain, intent, boost, description)
         ("v2", "SysML_V2", "sysml_norm", "knowledge_qa", 1.8, "SysML V2 建模语言（区别于 V波段通信频段）"),
         ("sysml", "SysML", "sysml_norm", "knowledge_qa", 1.5, "系统建模语言"),
-        ("代码规范", "SysML_V2 语法规范", "sysml_norm", "knowledge_qa", 1.5, "代码规范 = SysML 语法规范"),
-        ("语法规范", "SysML_V2 语法规范", "sysml_norm", "knowledge_qa", 1.5, ""),
+        # R2（2026-11-11）：canonical 与 preferred term 等值，不再把消歧前缀
+        # `SysML_V2 ` 写进规范词 —— 否则与 `SysML V2 → SysML_V2` 相邻命中时
+        # 会拼出 `SysML_V2 SysML_V2 语法规范`。同形异义核查见迁移说明。
+        ("代码规范", "语法规范", "sysml_norm", "knowledge_qa", 1.5, "代码规范 = SysML 语法规范"),
+        ("语法规范", "语法规范", "sysml_norm", "knowledge_qa", 1.5, ""),
         ("ibd", "内部块图_IBD", "sysml_norm", "knowledge_qa", 1.5, "内部块图（Internal Block Diagram）"),
         ("bdd", "模块定义图_BDD", "sysml_norm", "knowledge_qa", 1.5, "模块定义图（Block Definition Diagram）"),
         ("tms", "热管理系统_TMS", "thermal_mgmt", "knowledge_qa", 1.5, "热管理系统（Thermal Management System）"),

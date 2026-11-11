@@ -177,10 +177,14 @@ def _already_canonical(text: str, s: int, e: int, canonical: str) -> bool:
 
     为什么对称而不是只判 `canonical.startswith(命中片段)`（前向）：
       `宽带` → `宽带通信`（suffix 型，判后向 `text[e:e+len(suf)]`）
-      `语法规范` → `SysML_V2 语法规范`（prefix 型，判前向 `text[s-len(pre):s]`）
-    两种都必须覆盖，否则 `语法规范 查询` 第一次换成 `SysML_V2 语法规范 查询`
-    后，第二次会把其中的 `语法规范` 再换一次，成为
-    `SysML_V2 SysML_V2 语法规范`（幂等判据直接翻红）。
+      `ibd` → `内部块图_IBD`（prefix 型，判前向 `text[s-len(pre):s]`）
+    两种都必须覆盖，否则 `ibd 查询` 第一次换成 `内部块图_IBD 查询`
+    后，第二次会把其中的 `IBD` 再换一次，成为
+    `内部块图_内部块图_IBD`（幂等判据直接翻红）。
+
+    ★ 2026-11-11 R2：原 prefix 型例子是 `语法规范 → SysML_V2 语法规范`，
+    该概念的规范词已与首选术语对齐为等值（不再自带限定前缀）。机制不变，
+    故改用现存的 `ibd` 举例——别把历史用例当成当前词表事实。
     """
     low_hit, low_k = text[s:e].lower(), canonical.lower()
     if not low_k or low_hit not in low_k:

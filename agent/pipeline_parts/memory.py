@@ -190,6 +190,32 @@ class MemoryMixin:
                     for r in recall_rows:
                         lines.append(f"- [{r.get('mem_type', 'fact')} | 相关度 {r.get('score', 0):.2f}] "
                                      f"{str(r.get('content') or '')[:_max_chars]}")
+                # ── P1-1（2026-11-11）：顶层目录、底层仓库 ──
+                #   Claude Code 只把 MEMORY.md 前 200 行/25KB 当**索引**注入，
+                #   细节靠按需检索。这里同构：有记忆注入时附 ≤3 行导航
+                #   （主题 + 编号 + 校验状态），绝不放正文，也不承诺"可据此推断事实"。
+                #   没有记忆命中时 `lines` 为空、上面已 return ""，故零行为变化。
+                _idx_on = True
+                _idx_rows = 3
+                try:
+                    from core import config as _cfg4
+                    _idx_on = bool(_cfg4.get("context_audit", "memory_index_enabled", True))
+                    _idx_rows = max(0, min(5, int(
+                        _cfg4.get("context_audit", "memory_index_rows", 3) or 0)))
+                except Exception:
+                    pass
+                if _idx_on and _idx_rows and lines:
+                    try:
+                        from core.memory_dream import build_index
+                        _idx = build_index(conn, max_lines=_idx_rows + 2,
+                                           max_bytes=25 * 1024)
+                        _nav = [ln for ln in _idx["text"].splitlines()
+                                if ln.startswith("- ")][:_idx_rows]
+                        if _nav:
+                            lines.append("【记忆目录（仅导航；细节按编号检索，不得据此推断事实）】")
+                            lines.extend(_nav)
+                    except Exception:
+                        pass  # 索引是增强项，失败不影响既有记忆注入
                 return "\n".join(lines) + "\n"
             finally:
                 conn.close()
