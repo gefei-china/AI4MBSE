@@ -1148,6 +1148,30 @@ class ToolMixin:
         if getattr(self, "_orch_result_offloads", None):
             from agent.pipeline_parts import tool_offload as _toff2
             _toff2.ensure_fetch_tool(tools, getattr(self, "_tool_whitelist", None))
+        # ── P1-1（2026-11-11）：记忆索引的取回端 ──
+        # 注入层只在 prompt 里放 ≤3 行 `[topic] #id (state, cred)`；模型看到 #id
+        # 却没有取回工具 ⇒ 「目录 → 仓库」的链路只走了一半（深度读不通）。
+        # 常驻注入的理由：它只读、无副作用、参数单一，与 tool_result_fetch 同族；
+        # 不按"本轮有没有记忆命中"做条件注入，避免跨模块状态耦合
+        # （注入块在 prompt 侧、工具清单在 tools 侧，两者构造时机不同）。
+        if not any((t.get("function") or {}).get("name") == "memory_fetch" for t in tools):
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "memory_fetch",
+                    "description": ("按编号读取一条长期记忆的完整正文。"
+                                    "当上下文里的【记忆目录】给出 `#编号` 且需要细节时使用。"
+                                    "记忆仅供对齐，不得作为事实来源引用。"),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer",
+                                   "description": "记忆编号（见【记忆目录】里的 #N）"},
+                        },
+                        "required": ["id"],
+                    },
+                },
+            })
         # ★ P0-6（2026-10-26）：MCP 暴露情况归因 ⇒ "暴露了多少 / 裁掉了多少"可观测。
         #   这三个数字是判断 `mcp_min_keep` 该设多少的唯一依据（靠猜会重演
         #   "JIT 裁太狠 ⇒ 工程列表查不到"的事故）。
@@ -1681,6 +1705,38 @@ class ToolMixin:
             #   （offload 落库在 tool_result_offloads 表、已随会话隔离），
             #   它是**框架内建的重读通道**，不是外部数据源 ⇒ 不该受用户角色权限约束。
             #   ⚠️ 仍然只读、仍限本会话（fetch_offload 按 conversation_id 校验）。
+            if name == "memory_fetch":
+                # P1-1（2026-11-11）：记忆索引的取回端。与 tool_result_fetch 同族 ——
+                # 读的是**本系统自己沉淀的记忆**（agent_memory 表，已按作用域过滤），
+                # 不是外部数据源，且只读、无副作用 ⇒ 与它一样放在白名单/RBAC 之前。
+                # ⚠️ 必须显式提示"不得作为事实来源"：记忆是模型自己写的，可能过期或错误，
+                #    Dreaming 的 contradicted 项已在检索侧排除，但 verified 也不等于事实。
+                _mid = int((arguments or {}).get("id") or 0)
+                from core.memory_dream import memory_fetch as _mfetch
+                try:
+                    from database import get_db as _gdb
+                    _c = _gdb()
+                    try:
+                        _m = _mfetch(_c, _mid)
+                    finally:
+                        _c.close()
+                except Exception:
+                    _m = {}
+                if _m:
+                    result = {"ok": True,
+                              "id": _mid,
+                              "mem_type": _m.get("mem_type"),
+                              "topic": _m.get("mem_topic"),
+                              "verify_state": _m.get("verify_state"),
+                              "source": _m.get("source"),
+                              "content": (_m.get("content") or "")[:4000],
+                              "note": "长期记忆仅供对齐，不得作为事实来源引用"}
+                else:
+                    result = {"ok": False,
+                              "result": f"记忆 #{_mid} 不存在或已归档。编号只能从【记忆目录】"
+                                        f"里的 `#N` 原文读取，不要按顺序猜"}
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
             if name == "tool_result_fetch":
                 _oid = int((arguments or {}).get("id") or 0)
                 from agent.pipeline_parts import tool_offload as _to

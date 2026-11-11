@@ -205,9 +205,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_memory_index_injection.py
 
-      - name: Guard 衰减/软引导/A-B 度量 P2（13 项 + 4 变异）
+      - name: Guard 衰减/软引导/A-B 度量 P2（15 项 + 4 变异）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_memory_retention.py
+
+      # 端点契约门禁：函数级判据测不出"没人调用"（上一批交付后实测暴露的真问题：
+      # memory_dream 功能齐全、门禁全绿，却零调用方 ⇒ 281 条记忆永远停在 unverifiable）。
+      - name: Guard 记忆层 API 契约（15 项 + 4 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_api.py
 
       # ── 评测基础设施自检（2026-10-22）────────────────────────────────────
       # 这道门禁保护的是**上面那些门禁本身**：ci.yml 注释里的数字若与脚本实值

@@ -87,6 +87,46 @@ try:
 finally:
     conn.close()
 
+print("\n[1b] 既有 TTL 已改为「先归档再删」（整合验证）", flush=True)
+# 背景（2026-11-11 真机核查抓到的判断错误）：`main.py` 每次启动都调
+# `tool_offload.cleanup_expired(days=30)`，它一直是**裸 DELETE** ——
+# 也就是说"给 L1 加 TTL 会丢自愈抓手"这个担心，现实里 TTL 早就在跑、
+# 证据早就在丢。故本项断言的是**既有删除路径已带上归档**，而不是新增调度。
+_conn2 = fixture()
+try:
+    from core.memory_retention import archive_then_delete_expired as _arch
+    _calls = []
+
+    class _Spy:
+        """把 conn 包一层，记录是否调过归档（判"先归档"还是"裸删"）。"""
+        def __init__(self, c):
+            self._c = c
+
+        def execute(self, sql, *a, **k):
+            _calls.append(sql)
+            return self._c.execute(sql, *a, **k)
+
+        def commit(self):
+            return self._c.commit()
+
+        def rollback(self):
+            return self._c.rollback()
+
+        def __getattr__(self, n):
+            return getattr(self._c, n)
+
+    r_arch = _arch(_Spy(_conn2), table="tool_result_offloads", days=30)
+    check("R6 归档路径在删除前写入 transcript_archive",
+          any("INSERT OR IGNORE INTO transcript_archive" in s for s in _calls)
+          and any("DELETE FROM tool_result_offloads" in s for s in _calls)
+          and r_arch.get("removed") == 1,
+          "实得 removed=%s / traced=%r" % (r_arch.get("removed"),
+                                           [s.split()[0] for s in _calls][:6]))
+    check("R6b 归档后该行可 restore 还原",
+          RET["restore"](_conn2, "tool_result_offloads", 1).get("content") == "完整工具结果 A")
+finally:
+    _conn2.close()
+
 print("\n[2] 显著性软引导（对强模型给目标、不给死规则）", flush=True)
 from core import config as _cfg
 from memory_service import MemoryService

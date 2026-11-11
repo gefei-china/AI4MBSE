@@ -760,10 +760,12 @@ class MemoryService:
 
         只由**离线 Dreaming 候选包经 HIL 批准**或人工调用；本函数不会被任何
         在线链路自动触发（防止"LLM 评 LLM 再自动喂回"的自我强化循环）。
-        state ∈ verified | contradicted | unverifiable；非法值直接拒绝。
+        state ∈ verified | contradicted | unverifiable | needs_review；非法值直接拒绝。
+        `needs_review`（2026-11-11 加）：规则法判不明但**确有邻近否定**的中间态 ——
+        它**不参与**召回排除（只有 contradicted 排除），只排队等人工看。
         `evidence_ref` 指向 transcript_fts 的 (kind, ref_id)，如 `trace#1215`。
         """
-        if state not in ("verified", "contradicted", "unverifiable"):
+        if state not in ("verified", "contradicted", "unverifiable", "needs_review"):
             return False
         if not MemoryService._has_verify_col(conn):
             return False

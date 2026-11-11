@@ -58,13 +58,39 @@ def fixture(fts_ns=None):
         CREATE TABLE bad_cases (id INTEGER PRIMARY KEY, kind TEXT, subject TEXT,
             status TEXT, occurrences INTEGER, last_src_id INTEGER,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        -- 下面四张表按真库列名建（2026-11-11 真机核对）：
+        -- 视图列映射写错时，整列读成空串，而"视图存在"照样通过 ⇒ 必须造行测非空率。
+        CREATE TABLE agent_todos (id INTEGER PRIMARY KEY, conversation_id INTEGER,
+            run_id TEXT, seq INTEGER, subject TEXT, status TEXT, verify TEXT,
+            verify_result TEXT, note TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE online_eval_queue (id INTEGER PRIMARY KEY, sample_type TEXT,
+            sample_reason TEXT, reason_detail TEXT, status TEXT, auto_score REAL,
+            query_trace_id INTEGER, trace_id TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE config_proposals (id INTEGER PRIMARY KEY, rule TEXT,
+            target_key TEXT, current_value TEXT, proposed_value TEXT, rationale TEXT,
+            status TEXT, source_feedback_ids TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE orch_interrupts (id INTEGER PRIMARY KEY, run_id TEXT, kind TEXT,
+            reason TEXT, instruction TEXT, cancelled_tasks INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     """)
     conn.execute("INSERT INTO messages VALUES (1,1,'user','转发器EIRP 计算口径',datetime('now'))")
     conn.execute("INSERT INTO tool_call_logs VALUES (1,'calc','{}','结果 20 dBW',datetime('now'))")
     conn.execute("INSERT INTO query_trace VALUES (1,'ref part 语法',NULL,'ref part 语法','vector',datetime('now'))")
     conn.execute("INSERT INTO agent_memory (id,content,mem_topic) VALUES (1,'须按包取源码','建模')")
-    conn.execute("INSERT INTO intent_samples (id,text,status) VALUES (1,'画一张BDD','confirmed')")
+    # 每类都按**真库的真实取值形态**造：真库 intent_samples 562/562 都有 hit_intent，
+    # 夹具若留空，T6 会误报"产品列映射错位"（实为夹具缺数据）。
+    conn.execute("INSERT INTO intent_samples (id,text,status,hit_intent) "
+                 "VALUES (1,'画一张BDD','confirmed','design')")
     conn.execute("INSERT INTO bad_cases (id,kind,subject,status) VALUES (1,'zero','检索零召回','open')")
+    conn.execute("INSERT INTO agent_todos (id,subject,status,note) VALUES (1,'跑校验','completed','已完成')")
+    conn.execute("INSERT INTO online_eval_queue (id,sample_type,sample_reason,status) "
+                 "VALUES (1,'low_conf','低置信抽样','pending')")
+    conn.execute("INSERT INTO config_proposals (id,rule,target_key,rationale,status) "
+                 "VALUES (1,'r1','rag.top_k','命中率偏低','pending')")
+    conn.execute("INSERT INTO orch_interrupts (id,run_id,kind,reason) VALUES "
+                 "(1,'r1','user_stop','用户主动停止')")
     conn.commit()
     if fts_ns:
         fts_ns["ensure_transcript_fts"](conn)
@@ -97,6 +123,21 @@ try:
           {"kind", "subject", "claim", "evidence_ref", "status", "confidence", "created_at"}
           <= set(conn.execute("SELECT * FROM v_memory_notes LIMIT 1").fetchone().keys()),
           "实得 kinds=%r" % kinds)
+
+    # ★ T6（2026-11-11 真机抓到的缺陷）：视图存在**不等于**字段读得出来。
+    #   原列映射只取「第一个存在的列」，且把 todo 写成 `task_key`/`title`（真实列是
+    #   `subject`/`note`）⇒ 真库 858 行 todo 的 subject/claim **全空**，视图照样 PASS。
+    #   判据：每类台账造 1 行有值的数据，subject 与 claim 都必须非空。
+    empties = []
+    for r in conn.execute(
+            "SELECT kind, COUNT(*) n, "
+            "SUM(CASE WHEN TRIM(COALESCE(subject,''))='' THEN 1 ELSE 0 END) subj_empty, "
+            "SUM(CASE WHEN TRIM(COALESCE(claim,''))='' THEN 1 ELSE 0 END) claim_empty "
+            "FROM v_memory_notes GROUP BY kind"):
+        if r["subj_empty"] or r["claim_empty"]:
+            empties.append(dict(r))
+    check("T6 每类台账的 subject / claim 都读得出（列映射未错位）", not empties,
+          "有空列：%r" % empties)
     print("\n[2] 触发器同步（写入不改路径）", flush=True)
     conn.execute("INSERT INTO messages VALUES (2,1,'user','新增一条可检索流水',datetime('now'))")
     conn.commit()
@@ -130,6 +171,13 @@ def _m_no_insert_trigger(src):
     return src.replace(a, '                body = "SELECT 1;"', 1)
 
 
+def _m_pick_first_only(src):
+    """把 `_pick` 改回「只取第一个存在的列」，还原 2026-11-11 那个真机缺陷。"""
+    a = "    return \"COALESCE(%s, %s)\" % (\", \".join(parts), default)"
+    assert a in src, "M3 锚点失效（_pick 实现已被改写）"
+    return src.replace(a, "    return parts[0] if parts else default", 1)
+
+
 for label, mut, flag in (
     ("M1 UPDATE 触发器不删旧 ⇒ T3 翻红", _m_no_delete_on_update, "update"),
     ("M2 不建 INSERT 触发器 ⇒ T2 翻红", _m_no_insert_trigger, "insert"),
@@ -153,6 +201,31 @@ for label, mut, flag in (
         check(label, False, str(e))
     except Exception as e:  # noqa: BLE001
         check(label, False, "%s: %s" % (type(e).__name__, e))
+
+# M3 单独跑：`_pick` 在 migrations/memory.py，不是 transcript_fts.py，
+# 必须把变异后的迁移模块整个 exec 一遍再建视图，才测得到列映射。
+try:
+    _mig_path = os.path.join(ROOT, "database", "migrations", "memory.py")
+    with open(_mig_path, encoding="utf-8") as f:
+        _mig_src = f.read()
+    _mut_src = _m_pick_first_only(_mig_src)
+    _ns_mig = {"__name__": "memory_migration_mut"}
+    exec(compile(_mut_src, _mig_path, "exec"), _ns_mig)
+    c3, _ = fixture()          # 先写真迁移建好视图
+    try:
+        _ns_mig["_migrate_memory_layer"](c3)   # 再用变异版重建视图
+        _empty = [dict(r) for r in c3.execute(
+            "SELECT kind, SUM(CASE WHEN TRIM(COALESCE(subject,''))='' THEN 1 ELSE 0 END) s, "
+            "SUM(CASE WHEN TRIM(COALESCE(claim,''))='' THEN 1 ELSE 0 END) c "
+            "FROM v_memory_notes GROUP BY kind") if r["s"] or r["c"]]
+        check("M3 列映射只取首列（无回退链）⇒ T6 翻红", bool(_empty),
+              "变异后仍全部非空 ⇒ 回退链没被真正测到")
+    finally:
+        c3.close()
+except AssertionError as e:
+    check("M3 变异可施加", False, str(e))
+except Exception as e:  # noqa: BLE001
+    check("M3 变异可施加", False, "%s: %s" % (type(e).__name__, e))
 
 print("\n=== %d PASS / %d FAIL ===" % (len(PASS), len(FAIL)), flush=True)
 for f in FAIL:

@@ -112,6 +112,64 @@ def archive_apply(conn, plan: dict, *, confirm: bool = False) -> dict:
     return out
 
 
+def archive_then_delete_expired(conn, *, table: str = "tool_result_offloads",
+                                days: int = 30, batch: int = 500) -> dict:
+    """把已存在的 TTL 删除改成「先归档、再删」（2026-11-11 整合）。
+
+    ## 为什么必须整合，而不是另开一条路径
+    实测：`main.py` 每次启动都会调 `tool_offload.cleanup_expired(days=30)`，
+    它 `DELETE FROM tool_result_offloads WHERE created_at < now-30d` ——
+    真库最老行 2026-10-13、30 天界 2026-10-12，**过期 0 行**正是它一直在工作的证据。
+    也就是说 TTL 早就存在，问题不是"该不该加"，而是**删掉的行再也拿不回来**：
+    Dreaming 要拿 L1 流水校验笔记，而被 TTL 删掉的那部分证据永久消失。
+
+    故这里不新增调度、不改 TTL 语义，只把删除动作换成 `归档 → 删除`：
+    · 行数、时机、阈值、调用点全部不变（启动钩子照旧）；
+    · 唯一差别是被删的行在 `transcript_archive` 里完整留了一份，`restore()` 可还原；
+    · 归档失败 ⇒ 该批**不删**（宁可留着膨胀，也不丢证据）。
+    """
+    out = {"ok": False, "archived": 0, "removed": 0, "reason": ""}
+    if table not in _TABLES:
+        out["reason"] = "UNSUPPORTED_TABLE"
+        return out
+    if not _table_exists(conn, table):
+        out["reason"] = "NO_TABLE"
+        return out
+    pk, ts = _TABLES[table]
+    try:
+        ids = [r[0] for r in conn.execute(
+            "SELECT %s FROM %s WHERE %s < datetime('now', ?) ORDER BY %s LIMIT ?" %
+            (pk, table, ts, pk), ("-%d days" % int(days), int(batch))).fetchall()]
+    except Exception as exc:  # noqa: BLE001
+        out["reason"] = "SCAN_FAILED: %s" % type(exc).__name__
+        return out
+    if not ids:
+        out["ok"] = True
+        out["reason"] = "NOTHING_EXPIRED"
+        return out
+    try:
+        _ensure_archive(conn)
+        for rid in ids:
+            row = conn.execute("SELECT * FROM %s WHERE %s=?" % (table, pk), (rid,)).fetchone()
+            if row is None:
+                continue
+            payload = dict(row) if hasattr(row, "keys") else {"value": list(row)}
+            conn.execute(
+                "INSERT OR IGNORE INTO transcript_archive (kind, ref_id, payload) "
+                "VALUES (?,?,?)",
+                (table, rid, json.dumps(payload, ensure_ascii=False, default=str)))
+            conn.execute("DELETE FROM %s WHERE %s=?" % (table, pk), (rid,))
+            out["removed"] += 1
+            out["archived"] += 1
+        conn.commit()
+        out["ok"] = True
+        out["reason"] = "ARCHIVED_THEN_DELETED"
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        out["reason"] = "FAILED_NO_DELETE: %s: %s" % (type(exc).__name__, exc)
+    return out
+
+
 def restore(conn, kind: str, ref_id: int) -> dict:
     """按归档记录还原字段清单（只读，供人工核对/回灌）。"""
     if not _table_exists(conn, _ARCHIVE):

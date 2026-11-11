@@ -29,32 +29,59 @@ def _table_exists(conn, table: str) -> bool:
 
 
 def _pick(cols: set, candidates: tuple, default: str = "''") -> str:
-    """列存在性守卫：返回第一个可用列，否则返回常量。"""
+    """列存在性守卫 + **空值回退链**。
+
+    ★ 2026-11-11 真机修正：原实现只取「第一个存在的列」，于是凡该列在存量行里
+    为空就整列读不出来 —— 真库实测 `todo` 858 行 subject/claim **全空**（因为
+    `task_key`/`title` 根本不存在，应取 `subject`/`note`），`config_proposal`
+    subj 全空（应取 `target_key` 而非 `config_key`），`interrupt` claim 10 行里
+    只 3 行有值（`instruction` 空时该退到 `reason`）、`eval_queue` 两列全空
+    （该表无 query 列，应退到 `sample_reason`）。
+    ⇒ 现在把**所有存在**的候选列串成 `COALESCE(NULLIF(TRIM(c1),''), NULLIF(TRIM(c2),''), …)`，
+    空串视为"没值"继续往下退，全都为空才落到常量默认值。
+    """
+    parts = []
     for c in candidates:
         if c in cols:
-            return "COALESCE(CAST(%s AS TEXT),'')" % c
-    return default
+            parts.append("NULLIF(TRIM(CAST(%s AS TEXT)),'')" % c)
+    if not parts:
+        return default
+    return "COALESCE(%s, %s)" % (", ".join(parts), default)
 
 
 # 8 类台账 → 统一字段 (kind, subject, claim, evidence_ref, status, confidence, created_at)
+# ⚠️ 每个元组的列名元组已按真库 `PRAGMA table_info` 逐个核对（2026-11-11），
+#    **多列即回退链**，不是"取第一个存在的"。改它之前先跑一遍
+#    `SELECT kind, sum(trim(coalesce(subject,''))<>'') FROM v_memory_notes GROUP BY kind`
+#    —— 非空率为 0 就说明映射又错了。
 _NOTE_SOURCES = (
     ("memory", "agent_memory",
      ("mem_topic", "mem_type"), ("content",),
-     ("evidence_ref", "trace_id"), ("verify_state", "tier"), ("source_credibility", "relevance")),
+     ("evidence_ref", "verify_state"), ("verify_state", "tier"),
+     ("source_credibility", "relevance")),
     ("intent_sample", "intent_samples",
-     ("hit_intent",), ("text",), ("trace_id", "source"), ("status",), ("hit_conf",)),
+     ("hit_intent", "intent"), ("text",), ("source", "created_by"),
+     ("status",), ("hit_conf",)),
     ("badcase", "bad_cases",
-     ("kind",), ("subject", "detail"), ("last_src_id",), ("status",), ("occurrences",)),
+     ("kind", "subject"), ("detail", "title", "subject"), ("last_src_id",),
+     ("status",), ("occurrences",)),
+    # 该表**无** query/normalized 列 ⇒ claim 只能退到抽样原因；
+    # 要正文得 JOIN query_trace（视图里不做，避免把 6750 行拉成笛卡尔）。
     ("eval_queue", "online_eval_queue",
-     ("intent", "route"), ("query", "query_raw"), ("query_trace_id", "trace_id"), ("status",), ("top_score",)),
+     ("sample_type", "sample_reason"), ("sample_reason", "reason_detail"),
+     ("query_trace_id", "trace_id"), ("status",), ("auto_score",)),
     ("config_proposal", "config_proposals",
-     ("config_key", "origin"), ("rationale", "detail"), ("source_feedback_ids",), ("status",), ("confidence",)),
+     ("target_key", "rule"), ("rationale", "proposed_value"),
+     ("source_feedback_ids", "fingerprint"), ("status",), ("current_value",)),
     ("todo", "agent_todos",
-     ("task_key",), ("title", "content"), ("run_id",), ("status",), ("machine_evidence",)),
+     ("subject",), ("note", "subject", "verify_result"), ("run_id",),
+     ("status",), ("verify",)),
     ("interrupt", "orch_interrupts",
-     ("run_id",), ("instruction", "reason"), ("run_id",), ("status",), ("created_at",)),
+     ("kind", "run_id"), ("instruction", "reason"), ("run_id",),
+     ("kind",), ("cancelled_tasks",)),
     ("trace", "query_trace",
-     ("intent", "route"), ("query_raw", "query"), ("id",), ("score_kind",), ("top_score",)),
+     ("intent", "route"), ("query_raw", "query"), ("id",),
+     ("score_kind", "route"), ("top_score",)),
 )
 
 

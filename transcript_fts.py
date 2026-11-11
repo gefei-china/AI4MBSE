@@ -36,6 +36,8 @@ _SOURCES = {
         "rows": ("SELECT id, 'message#' || id || ' ' || COALESCE(role,'') AS title, "
                  "SUBSTR(COALESCE(content,''),1,%d) AS body FROM messages" % _BODY_CAP),
         "like_cols": ("content",),
+        # LIKE 兜底要回的**真实片段**（原实现返回占位符 ⇒ 上层拿不到正文）
+        "like_body": "SUBSTR(COALESCE(content,''),1,200)",
     },
     "tool_logs": {
         "kind": "tool_logs",
@@ -49,6 +51,8 @@ _SOURCES = {
                  "|| ' ' || SUBSTR(COALESCE(result,''),1,%d) AS body "
                  "FROM tool_call_logs" % _BODY_CAP),
         "like_cols": ("tool_name", "arguments", "result"),
+        "like_body": ("SUBSTR(COALESCE(tool_name,'') || ' ' || COALESCE(arguments,'') "
+                      "|| ' ' || COALESCE(result,''),1,200)"),
     },
     "query_trace": {
         "kind": "query_trace",
@@ -61,6 +65,7 @@ _SOURCES = {
                  "SUBSTR(COALESCE(normalized,''),1,%d) AS body "
                  "FROM query_trace" % _BODY_CAP),
         "like_cols": ("query", "query_raw", "normalized"),
+        "like_body": "SUBSTR(COALESCE(query_raw, query, '') || ' ' || COALESCE(normalized,''),1,200)",
     },
 }
 
@@ -135,42 +140,68 @@ def rebuild_transcript_fts(conn) -> int:
     return n
 
 
-def search_transcripts(conn, query: str, limit: int = 20) -> list:
-    """按短语检索流水。短词/零命中回退 LIKE（与 fts_search.py 同款口径）。"""
+def search_transcripts(conn, query: str, limit: int = 20, kind: str = "") -> list:
+    """按短语检索流水。短词/零命中回退 LIKE（与 fts_search.py 同款口径）。
+
+    ## `kind` 参数（2026-11-11 真机修正）
+    原实现全局 `ORDER BY rank LIMIT n`：高频词在某一类流水里命中很多时，
+    **其他类会被整体挤出结果**。实测 `转发器` 命中 query_trace 6 条，
+    `messages` 里那条明确否定笔记的记录一条都没返回 ⇒ 离线对账拿不到反证、
+    该被证伪的笔记被标成 verified。调用方按 kind 分查即可保证各类都有位置。
+
+    ## LIKE 兜底必须回正文（同日修正）
+    原兜底返回 `snippet="(LIKE 兜底)"` **占位符**，没有任何正文 ⇒ 上层判定
+    「证据里有没有否定词」永远拿不到文本，等于假绿。现在按源表拼真实片段。
+    """
     q = (query or "").strip()
     if not q:
         return []
     rows = []
+    _k = (kind or "").strip()
     if len(q) >= 3 and _table_exists(conn, _FTS):
         phrase = '"' + q.replace('"', '""') + '"'
         try:
-            rows = [dict(r) for r in conn.execute(
-                f"SELECT kind, ref_id, title, "
-                f"SUBSTR(body,1,200) AS snippet FROM {_FTS} "
-                f"WHERE {_FTS} MATCH ? ORDER BY rank LIMIT ?",
-                (phrase, int(limit))).fetchall()]
+            sql = (f"SELECT kind, ref_id, title, SUBSTR(body,1,200) AS snippet "
+                   f"FROM {_FTS} WHERE {_FTS} MATCH ?")
+            args = [phrase]
+            if _k:
+                sql += " AND kind=?"
+                args.append(_k)
+            sql += " ORDER BY rank LIMIT ?"
+            args.append(int(limit))
+            rows = [dict(r) for r in conn.execute(sql, tuple(args)).fetchall()]
         except Exception:
             rows = []
     if rows:
         return rows
+    # ── LIKE 兜底：按源表拼**真实片段**（不再返回占位符）──
     pat = "%" + q + "%"
     for spec in _SOURCES.values():
+        if _k and spec["kind"] != _k:
+            continue
         if not _table_exists(conn, spec["table"]):
             continue
-        cond = " OR ".join("COALESCE(%s,'') LIKE ?" % c for c in spec["like_cols"])
-        args = [pat] * len(spec["like_cols"]) + [int(limit) - len(rows)]
         if len(rows) >= int(limit):
             break
+        cond = " OR ".join("COALESCE(%s,'') LIKE ?" % c for c in spec["like_cols"])
+        n = int(limit) - len(rows)
+        args = [pat] * len(spec["like_cols"]) + [n]
         try:
             got = conn.execute(
-                f"SELECT id, created_at FROM {spec['table']} WHERE {cond} LIMIT ?",
-                tuple(args)).fetchall()
+                "SELECT id, %s FROM %s WHERE (%s) LIMIT ?" %
+                (spec["like_body"], spec["table"], cond), tuple(args)).fetchall()
         except Exception:
-            continue
+            # 兜底查询失败：只给 id + 空片段，**绝不编造正文**
+            try:
+                got = conn.execute(
+                    "SELECT id, '' FROM %s WHERE (%s) LIMIT ?" %
+                    (spec["table"], cond), tuple(args)).fetchall()
+            except Exception:
+                continue
         for r in got:
             rows.append({"kind": spec["kind"], "ref_id": r[0],
                          "title": "%s#%s" % (spec["kind"], r[0]),
-                         "snippet": "(LIKE 兜底)"})
+                         "snippet": str(r[1] or "")[:200]})
     return rows[:int(limit)]
 
 

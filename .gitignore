@@ -59,6 +59,8 @@ tmp/
 # 根下一次性工作目录（tmp_verify / tmp_viewbench / tmp_probe…）：
 # 只写 `tmp/` 匹配不到它们（2026-11-11 提交前清理待提交区时发现的漏网）
 /tmp_*/
+# 门禁变异自证用的空目录（verify_layering.py 的 M3 会建在仓库根，rmtree 偶发不生效）
+/_mut_*/
 outputs/
 screenshots/
 perf-report/

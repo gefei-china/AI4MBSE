@@ -83,14 +83,29 @@ def fixture(n_notes=260):
             created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     """)
     conn.execute("INSERT INTO agent_memory (id,content,mem_topic,tier) VALUES "
-                 "(1,?,?,?)", ("宝可梦中心在山洞东侧，走出门即代表月见山已完成", "导航", "core"))
-    for i in range(2, n_notes + 1):
+                 "(1,?,?,?)", ("转发器EIRP上限为30dBW，位于东侧机柜", "导航", "core"))
+    # 无数字的邻近否定：必须判 needs_review 而**不是** contradicted
+    # （规则法读不懂"否定的是不是同一件事"，误判成 contradicted 会在召回侧
+    #  被排除 ⇒ 丢真记忆。这条断言专门防"判据过宽"回归。）
+    # ⚠️ id 必须落在 `note_limit` 覆盖范围内（dream 按 id 升序取前 N 条），
+    #    否则断言恒真/恒假 —— 实测踩过：id=500 排在第 60 条之后，根本没被扫到。
+    conn.execute("INSERT INTO agent_memory (id,content,mem_topic) VALUES (?,?,?)",
+                 (2, "宝可梦中心在山洞东侧，走出门即代表月见山已完成", "导航"))
+    for i in range(3, n_notes + 1):
         conn.execute("INSERT INTO agent_memory (id,content,mem_topic) VALUES (?,?,?)",
                      (i, "常规建模经验条目 %d：SysML_V2 语法规范与视图层级" % i,
                       "topic%d" % (i % 12)))
     conn.execute("INSERT INTO messages (id,content) VALUES (1,?)",
+                 ("实测复核：转发器EIRP上限不是30dBW，上限有误，位于西侧机柜",))
+    conn.execute("INSERT INTO messages (id,content) VALUES (2,?)",
                  ("宝可梦中心不在东侧，笔记有误，实际在西侧；"
                   "从月见山出口向右侧跳下是单向落差，无法原路返回",))
+    # ★ 2026-11-11 真机反例固化为夹具：一条**无否定的高重合历史 query**。
+    #   旧实现只取"重合最高的一条"，这条会盖过上面的否定流水 ⇒ 判成 verified。
+    #   真机实测的就是这个形态（探针笔记被 query_trace#680 盖过）。
+    conn.execute("INSERT INTO query_trace (id,query,query_raw,created_at) VALUES "
+                 "(90,'宝可梦中心 山洞 东侧 月见山 已完成','宝可梦中心 山洞 东侧 月见山 已完成',"
+                 "'2026-10-01 10:00:00')")
     conn.execute("INSERT INTO query_trace (id,query,query_raw,created_at) VALUES "
                  "(1,'SysML v2 语法规范','SysML v2 语法规范','2026-11-01 10:00:00')")
     conn.execute("INSERT INTO query_trace (id,query,query_raw,created_at) VALUES "
@@ -120,6 +135,12 @@ def probe(ns, *, apply_hil=False):
         caught = [c for c in pkg["candidates"]
                   if c.get("state") == "contradicted" and c.get("memory_id") == 1]
         f2 = bool(caught)
+        # F2b：无数字的邻近否定只能进 needs_review（防"判据过宽"再犯）
+        review = [c for c in pkg["candidates"]
+                  if c.get("state") == "needs_review" and c.get("memory_id") == 2]
+        f2b = (bool(review)
+               and not any(c.get("state") == "contradicted"
+                           for c in pkg["candidates"] if c.get("memory_id") == 2))
         idx = pkg["index"]
         f5 = idx["lines"] <= 200 and idx["bytes"] <= 25 * 1024
         wiki = pkg["wiki"]
@@ -145,7 +166,7 @@ def probe(ns, *, apply_hil=False):
                   and row[0] == content_before and row[1] == "contradicted")
         else:
             f4 = None
-        return {"f1": f1, "f2": f2, "f3": f3, "f4": f4, "f5": f5,
+        return {"f1": f1, "f2": f2, "f2b": f2b, "f3": f3, "f4": f4, "f5": f5,
                 "f6": f6, "f7": f7, "pkg": pkg, "nohil_reason": r_noh["reason"]}
     finally:
         conn.close()
@@ -156,8 +177,13 @@ def main():
     r = probe(real, apply_hil=True)
     print("\n[1] 只读 / 取证 / HIL / 索引 / wiki", flush=True)
     check("F1 dream 不写输入 store（快照 sha256 前后一致）", r["f1"])
-    check("F2 已知错误笔记产出 contradicted 候选", r["f2"],
+    check("F2 数值被否定的笔记产出 contradicted（强信号）", r["f2"],
           "候选里没有 memory_id=1 的 contradicted")
+    # ★ F2b：无数字的邻近否定只能进 needs_review。这条防的是"判据过宽"回归 ——
+    #   真库实测过一次：把"否定词出现"当强信号时，80 条里判出 55 条 contradicted，
+    #   而 contradicted 在召回侧被排除 ⇒ 等于误删真记忆。
+    check("F2b 无数字的邻近否定只进 needs_review，不得升级为 contradicted", r["f2b"],
+          "memory_id=500 的状态不对（应 needs_review 且非 contradicted）")
     check("F3 未批准 ⇒ apply 拒绝且 0 写入", r["f3"],
           "实得 reason=%r" % r["nohil_reason"])
     check("F4 批准后只改状态、不改正文", r["f4"])
@@ -169,6 +195,34 @@ def main():
               r["pkg"]["wiki"]["wiki_chars"] / max(1, r["pkg"]["wiki"]["source_chars"]),
               r["pkg"]["wiki"]["wiki_chars"], r["pkg"]["wiki"]["budget_chars"]))
     check("F7 metrics 四项齐全（不臆造未测指标）", r["f7"])
+
+    print("\n[1b] wiki 落盘 / 回读（P1-2 的可查看端）", flush=True)
+    # ⚠️ 临时目录必须用 `_tmpdir.mkdtemp`（创建即登记，atexit 自动回收）。
+    #    曾经在门禁里手动 `shutil.rmtree()` 删 61 个文件 ⇒ 触发仓库的
+    #    safe-delete 批量确认钩子（阈值 50）⇒ 进程被钩子终止、
+    #    全量门禁报 FAIL 而单独跑却全绿（顺序无差异，差异在"删得多不多"）。
+    from _tmpdir import mkdtemp as _mkdtemp
+    _tmpw = _mkdtemp(prefix="verify_dream_wiki_")
+    try:
+        pkg_w = r["pkg"]["wiki"]
+        _persist = real["persist_wiki"]
+        # 用 monkeypatch 改落盘目标，避免污染真实 data/
+        _saved = real["wiki_dir"]
+        real["wiki_dir"] = lambda: _tmpw
+        try:
+            _res = _persist(pkg_w)
+            _files = os.listdir(_tmpw)
+            check("F9 wiki 落盘写出文件且无错误",
+                  _res["written"] == len(pkg_w["pages"]) and _res["errors"] == 0,
+                  "written=%s errors=%s" % (_res["written"], _res["errors"]))
+            check("F9b 落盘页可回读且首行是标题",
+                  bool(_files) and
+                  real["load_wiki_page"](sorted(pkg_w["pages"])[0]).startswith("#"),
+                  "files=%r" % _files[:3])
+        finally:
+            real["wiki_dir"] = _saved
+    except KeyError as e:
+        check("F9 wiki 落盘接口存在", False, "缺函数：%s" % e)
 
     print("\n[2] 真库只读冒烟（有 mbse.db 才跑）", flush=True)
     db = os.path.join(ROOT, "mbse.db")

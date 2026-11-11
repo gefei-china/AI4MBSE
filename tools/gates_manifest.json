@@ -2196,6 +2196,11 @@
    "script": "verify_memory_retention.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_memory_api.py",
+   "tier": "pr",
+   "timeout": 300
   }
  ]
 }

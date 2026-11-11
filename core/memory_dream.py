@@ -43,7 +43,9 @@ NEGATION_MARKERS = (
     "不是", "不在", "没有", "并未", "并非", "已删", "失败", "错误",
     "不可用", "禁止", "不再", "不正确", "有误", "失效", "不存在", "已废弃",
 )
-VALID_STATES = ("verified", "contradicted", "unverifiable")
+VALID_STATES = ("verified", "contradicted", "unverifiable", "needs_review")
+#: 召回侧会排除的状态（只有强信号才进得来；见 `_verify_claim` 的分级理由）
+EXCLUDED_FROM_RECALL = ("contradicted",)
 
 
 def _sha256(obj) -> str:
@@ -80,12 +82,17 @@ def _input_snapshot(conn) -> tuple:
 
 
 def _evidence_for(conn, claim: str, limit: int = 5) -> list:
-    """用流水 FTS 找证据。短词/无 FTS 时由 search_transcripts 内部走 LIKE 兜底。"""
+    """用流水 FTS 找证据。短词/无 FTS 时由 search_transcripts 内部走 LIKE 兜底。
+
+    ## 两条实战修正（2026-11-11 真机验证抓到的）
+    ① **按 kind 轮转取样**：原实现"先到先得"，`query_trace` 里高频词（如"转发器"）
+       一次占满配额 ⇒ `messages` 里那条**明确否定**的流水连候选都进不来，
+       于是该被证伪的笔记被标成 verified。现在每类流水（messages / tool_logs /
+       query_trace）各留位置，任何一类都不能把别的类挤掉。
+    ② **选取按首次出现位置**：按"长度降序"会挑出笔记后半段的无意义 3-gram
+       （"代表月/即代表"），证据里一个都没有 ⇒ 取证恒为空。
+    """
     from transcript_fts import search_transcripts
-    # 选词策略（实测踩过）：按「长度降序」会挑出笔记**后半段**的无意义 3-gram
-    # （如"代表月/即代表"），证据里一个都没有 ⇒ 取证恒为空。
-    # 改为按**在 claim 中首次出现的位置**排序、同起点只留最长的那个，
-    # 前几个词就落在主语/实体上，正是证据里会复述的部分。
     low = (claim or "").lower()
     cand = [k for k in _keywords(claim) if 2 <= len(k) <= 8]
     ordered, seen_pos = [], set()
@@ -96,46 +103,178 @@ def _evidence_for(conn, claim: str, limit: int = 5) -> list:
         seen_pos.add(p)
         ordered.append(k)
     kws = ordered[:5]
-    seen, out = set(), []
+
+    per_kind: dict = {}
     for kw in kws:
-        for hit in search_transcripts(conn, kw, limit=limit):
-            key = (hit.get("kind"), hit.get("ref_id"))
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append({"kind": hit.get("kind"), "ref_id": hit.get("ref_id"),
-                        "text": hit.get("snippet") or "", "keyword": kw})
-        if len(out) >= limit:
-            break
-    return out[:limit]
+        for _kind in ("messages", "tool_logs", "query_trace", ""):
+            # 前三轮各锁一类（保证每类都有位置），最后一轮不带 kind 捞其余类型。
+            hits = search_transcripts(conn, kw, limit=limit, kind=_kind)
+            for hit in hits:
+                kind = hit.get("kind") or "?"
+                bucket = per_kind.setdefault(kind, [])
+                key = (kind, hit.get("ref_id"))
+                if any((b.get("kind"), b.get("ref_id")) == key for b in bucket):
+                    continue
+                if len(bucket) >= limit:
+                    continue
+                bucket.append({"kind": kind, "ref_id": hit.get("ref_id"),
+                               "text": hit.get("snippet") or "", "keyword": kw})
+    # 轮转摊平：messages → tool_logs → query_trace → … 交替取，避免某一类垄断
+    out, idx = [], 0
+    while any(len(v) > idx for v in per_kind.values()):
+        for kind in ("messages", "tool_logs", "query_trace"):
+            bucket = per_kind.get(kind) or []
+            if len(bucket) > idx:
+                out.append(bucket[idx])
+        for kind, bucket in per_kind.items():
+            if kind not in ("messages", "tool_logs", "query_trace") and len(bucket) > idx:
+                out.append(bucket[idx])
+        idx += 1
+    return out[:limit * 3]
+
+
+def _numbers(text: str) -> list:
+    """抽取数值（含小数与常见单位前缀），用于判"数值冲突"。"""
+    return re.findall(r"\d+(?:\.\d+)?", text or "")
+
+
+def _numbers_conflict(claim: str, text: str) -> tuple:
+    """断言里的数值是否被**紧邻否定**。返回 (是否强信号, 依据)。
+
+    ## 只保留一种形态（形态 (b)「数值无交集」已作废）
+    `上限为 30dBW` vs `上限**不是** 30dBW` —— 同一个数被否词紧贴否定，
+    这是"断言被改写"的确定性证据。
+
+    ⚠️ 曾实现过的形态 (b)「claim 与证据的数值集合无交集」**必须废弃**：
+    真库实测它判出 8 条 contradicted 全是假阳性 ——
+    `工程007` 的 007 vs 流水里的 2、`SysML v2` 的 2 vs `0/01/02`。
+    长文本里数字天然互不相同，"数值集合无交集"在任何两条长文本间都成立。
+    ⇒ 强信号只留"同一数值被否"，其余一律 needs_review。
+    """
+    a = set(_numbers(claim))
+    if not a:
+        return False, ""
+    neg_pat = "(%s)" % "|".join(re.escape(x) for x in NEGATION_MARKERS)
+    for m in re.finditer(neg_pat + r"\s*[^。；;\n]{0,4}?(\d+(?:\.\d+)?)", text or ""):
+        if m.group(2) in a:
+            return True, "同一数值 %s 被紧邻否定「%s」" % (m.group(2), m.group(1))
+    return False, ""
+
+
+def _negation_near(claim: str, text: str, window: int = 20,
+                   min_anchor: int = 6) -> list:
+    """否定词是否**紧邻 claim 的同一断言**——而不是长文本里随便出现一次。
+
+    ## 为什么必须有这一层（2026-11-11 真机数据打出来的）
+    只判"证据里有无否定词"时，真库 80 条笔记被判出 **55 条 contradicted**。
+    抽查全是假阳性：一条 MBSE 长笔记因为证据里出现「不是」被判伪（overlap=30）、
+    一条 vc 格式笔记因为工具日志里出现「不存在」被判伪。
+    ⇒ 否定词出现 ≠ 否定这条断言。判据要问的是「它否定的**是不是同一件事**」。
+
+    ## 两条互补判据（任一成立即算邻近，确定性、无新依赖）
+    **(a) 否定词后面紧跟 claim 的某个关键词**（窗口 14 字内）
+        这是主判据，因为它直接对应语义："否定词否定的是 claim 提到的东西"。
+        实测形态：`宝可梦中心不**在东侧**`（"东侧"是 claim 的 2-gram）、
+        `上限不**是30dBW**`（数值）。
+    **(b) 与 claim 有一段 ≥6 字的最长公共片段，且否定词落在其 ±20 字内**
+        补充判据，覆盖"否定词在断言**前面**"的语序
+        （如 `并非如此：转发器EIRP上限为30dBW`）。
+
+    ⚠️ 只用 (b) 会漏真阳性：`宝可梦中心在山洞东侧` vs `宝可梦中心不在东侧`
+       的最长公共片段只有「宝可梦中心」5 字，达不到 6 字门槛 ⇒ 判不出否定。
+       这正是 min_anchor 从 4 抬到 6 之后实测暴露的回归。
+    """
+    import difflib
+    a, b = (claim or "").strip(), (text or "").strip()
+    if not a or not b:
+        return []
+    kws = sorted((k for k in _keywords(a) if len(k) >= 2),
+                 key=len, reverse=True)
+    hits: list = []
+    for neg in NEGATION_MARKERS:
+        start = b.find(neg)
+        while start >= 0:
+            tail = b[start + len(neg): start + len(neg) + 14]
+            if any(k in tail for k in kws):
+                hits.append(neg)
+                break
+            start = b.find(neg, start + 1)
+        if hits and hits[-1] == neg:
+            continue
+    if hits:
+        return sorted(set(hits))
+    # (b) 语序补充：公共片段 + 邻近窗口
+    try:
+        sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+        blocks = [m for m in sm.get_matching_blocks() if m.size >= min_anchor]
+    except Exception:
+        return []
+    for m in blocks:
+        lo = max(0, m.b - window)
+        hi = min(len(b), m.b + m.size + window)
+        piece = b[lo:hi]
+        for neg in NEGATION_MARKERS:
+            if neg in piece:
+                hits.append(neg)
+    return sorted(set(hits))
 
 
 def _verify_claim(claim: str, evidence: list) -> dict:
-    """确定性事实校验：证据与 claim 关键词重合 + 显式否定词 ⇒ contradicted。
+    """确定性事实校验。**否定优先于重合度**（两遍判定）。
 
-    这是**保守**判据：只在"证据里明确出现否定、且关键词重合 ≥2"时判伪；
-    否则重合 ≥3 才判 verified；其余一律 unverifiable（不猜测）。
+    ## 为什么必须两遍（2026-11-11 真机验证抓到的实质缺陷）
+    原实现只取"重合度最高的那一条证据"再判有无否定。实测反例：
+      探针笔记「转发器EIRP上限为30dBW，位于东侧机柜」
+      流水里有一条明确否定「上限**不是**30dBW→位于西侧，已确认错误」，
+      但同时存在一条历史 query「转发器EIRP上限…」（query_trace#680，无否定），
+      它的字面重合恰好比否定行**多** ⇒ 判成 `verified`（该被证伪的笔记被标成已确认）。
+    ⇒ 单条取样让"否定证据"被"高重合但不含否定的证据"盖掉，方向恰好是危险的：
+      错笔记被升级为 verified，然后进入 core 常驻注入。
+
+    两遍判定：
+      ① 扫**全部**证据，只要有一条含否定标记且关键词重合 ≥2 ⇒ 立即 contradicted；
+      ② 没有任何否定证据，才按最高重合判 verified（≥3）/ unverifiable。
+    宁可漏判 verified（保守），不可漏判 contradicted（危险）。
     """
     kw = _keywords(claim)
-    best, best_hits = None, 0
+    scored = []
     for ev in evidence:
         txt = ev.get("text") or ""
         overlap = len(kw & _keywords(txt))
-        if overlap > best_hits:
-            best, best_hits = ev, overlap
-    if best is None or best_hits < 2:
-        return {"state": "unverifiable", "evidence_ref": "", "overlap": best_hits,
+        if overlap >= 2:
+            scored.append((overlap, ev, _negation_near(claim, txt)))
+    if not scored:
+        return {"state": "unverifiable", "evidence_ref": "", "overlap": 0,
                 "reason": "流水中没有足以校验这条笔记的证据"}
+    # ① 否定优先：在全部"够格"的证据里找任何一条**紧邻同一断言**的否定
+    negs = [s for s in scored if s[2]]
+    if negs:
+        overlap, best, marks = max(negs, key=lambda x: x[0])
+        ref = "%s#%s" % (best.get("kind"), best.get("ref_id"))
+        txt = best.get("text") or ""
+        # ★ 分级（2026-11-11 真库精度实测后连续收窄两次的经验）：
+        #   规则法读不懂语义，真库抽查里 "否定的是别的事" 占多数
+        #   （证据写 `[错误] REQ-XX` 否定的是另一条需求；证据里"没有"出现在别的小句）。
+        #   而 contradicted 在召回侧会被**排除**，误判 = 丢真记忆，代价不可逆。
+        #   ⇒ **只有数值冲突**（claim 与证据都含数值且无交集 = 断言被改写）才算强信号；
+        #     关键词重合数**不能**当强信号：长文本天然重合几十项（实测 overlap=46
+        #     仅因证据里出现一个"没有"）。
+        #   其余带邻近否定的一律 needs_review：不排除、不注入理由，只排队等人工。
+        if _numbers_conflict(claim, txt)[0]:
+            _strong, _why = _numbers_conflict(claim, txt)
+            return {"state": "contradicted", "evidence_ref": ref, "overlap": overlap,
+                    "reason": "断言邻近处含否定 %s；%s" % ("/".join(marks[:2]), _why)}
+        return {"state": "needs_review", "evidence_ref": ref, "overlap": overlap,
+                "reason": "断言邻近处含否定 %s，但数值未变 ⇒ 交人工判定"
+                          % "/".join(marks[:2])}
+    # ② 无邻近否定，才谈"已确认"
+    overlap, best, _ = max(scored, key=lambda x: x[0])
     ref = "%s#%s" % (best.get("kind"), best.get("ref_id"))
-    neg = [m for m in NEGATION_MARKERS if m in (best.get("text") or "")]
-    if neg:
-        return {"state": "contradicted", "evidence_ref": ref, "overlap": best_hits,
-                "reason": "流水含否定标记 %s，与笔记关键词重合 %d 项" % ("/".join(neg[:2]), best_hits)}
-    if best_hits >= 3:
-        return {"state": "verified", "evidence_ref": ref, "overlap": best_hits,
-                "reason": "流水关键词重合 %d 项，未发现否定" % best_hits}
-    return {"state": "unverifiable", "evidence_ref": ref, "overlap": best_hits,
-            "reason": "重合仅 %d 项，证据不足以确认或否定" % best_hits}
+    if overlap >= 3:
+        return {"state": "verified", "evidence_ref": ref, "overlap": overlap,
+                "reason": "全部证据中未发现邻近否定，最高关键词重合 %d 项" % overlap}
+    return {"state": "unverifiable", "evidence_ref": ref, "overlap": overlap,
+            "reason": "重合仅 %d 项且无邻近否定，证据不足以确认" % overlap}
 
 
 def _create_candidates(conn, limit: int = 3) -> list:
@@ -292,6 +431,66 @@ def memory_fetch(conn, memory_id: int) -> dict:
         return dict(r) if r else {}
     except Exception:
         return {}
+
+
+def wiki_dir() -> str:
+    """wiki 落盘目录（默认 `data/memory_wiki/`，随仓库外的运行数据走）。"""
+    import os
+    base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "data", "memory_wiki")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def _safe_name(topic: str) -> str:
+    import re as _re
+    s = _re.sub(r'[\\/:*?"<>|\s]+', "_", (topic or "未分类")).strip("_")
+    return (s or "未分类")[:60]
+
+
+def persist_wiki(wiki: dict, *, keep: int = 200) -> dict:
+    """把编译出的页面写到磁盘（P1-2 的可查看端）。
+
+    ## 为什么必须落盘
+    `build_wiki()` 只在内存里生成 dict —— 页面网络再漂亮，没有落点就等于没产出
+    （本仓既有教训：`v_memory_notes` 建了视图但零消费方）。落盘后可直接用编辑器/
+    浏览器查看，也便于人工核对"这条结论到底来自哪条笔记"。
+
+    ## 纪律
+    · 只写 `data/memory_wiki/`，不碰仓库源码树；
+    · 每页带 `<!-- dream:fingerprint -->` 头，便于判断是不是本次编译产物；
+    · `keep` 控制单次最多写多少页，防一次写爆磁盘；
+    · 写失败不抛（返回 errors 计数），Dreaming 主流程不该被 IO 拖死。
+    """
+    import os
+    out = {"dir": "", "written": 0, "errors": 0, "files": []}
+    try:
+        base = wiki_dir()
+        out["dir"] = base
+        pages = (wiki or {}).get("pages") or {}
+        for topic in sorted(pages)[:keep]:
+            path = os.path.join(base, _safe_name(topic) + ".md")
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(pages[topic])
+                out["written"] += 1
+                out["files"].append(os.path.basename(path))
+            except Exception:
+                out["errors"] += 1
+    except Exception:
+        out["errors"] += 1
+    return out
+
+
+def load_wiki_page(topic: str) -> str:
+    """从磁盘读回某一页（前端/编辑器查看用）。"""
+    import os
+    path = os.path.join(wiki_dir(), _safe_name(topic) + ".md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
 
 
 def metrics(package: dict) -> dict:
