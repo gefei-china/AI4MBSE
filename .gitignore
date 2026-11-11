@@ -56,6 +56,9 @@ static/skill_packages/
 _archive/
 backups/
 tmp/
+# 根下一次性工作目录（tmp_verify / tmp_viewbench / tmp_probe…）：
+# 只写 `tmp/` 匹配不到它们（2026-11-11 提交前清理待提交区时发现的漏网）
+/tmp_*/
 outputs/
 screenshots/
 perf-report/
@@ -109,6 +112,7 @@ tools/verify/_full_round_events.json
 !/tools/verify/probe_auto_continue.py
 !/tools/verify/probe_save_artifact.py
 /tools/verify/_restructure_*
+/tools/verify/_probe_*
 /tools/verify/repro_*.py
 /tools/verify/backfill_*.py
 /tools/verify/repair_*.py
