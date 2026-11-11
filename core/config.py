@@ -425,6 +425,20 @@ DEFAULT_CONFIG = {
         #   实测（confirmed 48 条）：**修正 4 条真实误判 / 误伤 0 条**。
         #   False = 回到改造前行为（零回归回退位）。
         "speech_act": True,
+        # ★ 2026-11-09（B 类根因排查）：以下 5 个键**代码早就在读、注释早就承诺可回退，
+        #   但 DEFAULT_CONFIG / CONFIG_SCHEMA 里一处都没有** ⇒ save_override 抛「未知配置项」、
+        #   影子层抛「未知配置分组/项」、ENV_MAP 无映射，**三处全拒绝**。
+        #   后果不是"开关默认值不合适"，而是"想用数据回答该不该开都做不到"——
+        #   路由基线长期无法定论，一半卡在这里。补登记为可配真源（默认值与代码内默认一致，
+        #   故本次补登记**不改变任何线上行为**）。
+        "explain_preempt_short": False,     # 短句(≤16字)是否也走 explain 前置（False=交给 LLM 主裁判）
+        "continue_inherit": True,           # 短续问是否继承上一轮意图
+        "generic_clarify": True,            # 仅命中泛词时是否出澄清候选
+        "multi_intent_clarify": True,       # 多意图(≥2 段)时是否出澄清
+        "platform_read_route": True,        # 平台读取类请求是否前置到读路由
+        "speech_act_de": True,              # 名词化判据是否容忍「动词+的+后缀」（False=严格紧邻）
+        "inherit_silent": True,             # 承接上文的短句是否免澄清（False=回到旧行为）
+        "explain_short_interrogative": True,  # 短句含明确疑问式时是否仍走 explain 前置
         # ★ 2026-10-29（多意图实测）：L1 阶段连词（先…再…/然后/最后）是否允许**同意图多阶段**。
         #   背景：「先生成结构视图，再生成参数视图」是两个不同视图、同一 intent(design)，
         #   按意图去重 ⇒ 切成 0 段。放开后可切 2 段。
@@ -1334,6 +1348,30 @@ DEFAULT_CONFIG = {
         "tool_idempotency_scope": "subtask",  # 作用域：subtask=只在编排子任务内生效（默认）/ off=全关
         "tool_idempotency_ttl_s": 86400,    # 幂等记录保留时长（秒，默认 24h）
     },
+    "requirements": {
+        # ── 2026-11-10：需求分析产出的后置处理（P0-3/P0-4）──
+        # 背景（真库实测）：需求分析跑完**不留资产** —— `requirement_items` 0 行，
+        #   而覆盖度工具算的是 2026-09-21 手工补齐的 26 条实体 ⇒ 产出与追溯链脱钩。
+        #   质量门禁也不在主链路上：不可验证条目从不被自动标记。
+        # 做法：需求类意图产出正文后，自动做「确定性条目化 → 可验证性闸 → 落库」。
+        #   幂等（按 fingerprint 去重）⇒ 反复跑只 update 不堆行；关掉即退回改动前。
+        "auto_commit": True,
+        # 允许自动落库的意图白名单（逗号分隔）。需求结构化自己会调工具，重复跑白花切句。
+        "auto_commit_intents": "requirement_analysis",
+    },
+    "upload": {
+        # ── 2026-11-10：上传去重（同名/同内容在上传时就提示）──
+        # 背景（真库实测）：同名文档被两次导入（doc 851/852，各 270 chunk），
+        #   重复片段挤占检索注入槽位、且让 vec_cache 与库对不上（差 540 行）。
+        #   当时库里只有 filename + file_size 可比 ⇒ "同名误传"与"同名新版"无法区分。
+        # 两类重复的默认处置**刻意不同**（见 knowledge_pipeline/dedup.py 文件头）：
+        #   · 同 sha256  ⇒ skip：重复入库零价值，直接复用已有文档（不产生重复 chunk）
+        #   · 同名异 sha ⇒ warn：照常入库但回包提示（否则"升级同名文档"就做不到了）
+        # 三态取值 skip|warn|block；总开关关 ⇒ 逐字节回退到改动前（不做任何查询）。
+        "dup_check_enabled": True,
+        "dup_content_policy": "skip",   # 字节完全相同：skip（复用）/ warn / block
+        "dup_name_policy": "warn",      # 同名不同内容：warn（提示）/ skip / block
+    },
     # ── P0-2 持久执行：编排检查点与断点续跑（2026-10-03）────────────────────────
     # 默认**不做自动重投**：进程起来后自动恢复所有中断批次看似美好，实则危险 ——
     #   ① 中断前执行过的写类子任务可能已落一半副作用，自动重跑 = 重复数据；
@@ -1697,6 +1735,17 @@ DEFAULT_CONFIG = {
         "probe_time_budget_sec": 1800,  # run 级时间预算（秒，M4 用）：对齐 reap_stuck_runs 30min 孤儿阈值；≤0=M4 不判
         "llm_actions": "replace",       # LLM 版动作白名单（逗号分隔）：replace|skip|insert；默认锁 replace（P3 行为）
     },
+    # ★ 2026-11-09：运行时请求重建不变量（core/request_invariant.py）。
+    #   此前该段「有读取、无登记」：_mode() 读 get("request_invariant","mode")，
+    #   但 DEFAULT_CONFIG / CONFIG_SCHEMA / ENV_MAP 三处都没有这个分组 ⇒
+    #   save_override 抛「未知配置项」、影子层抛「未知配置分组」，三态开关
+    #   实际恒等于 shadow，声称的 enforce 无法到达。补齐单一真源。
+    "request_invariant": {
+        "mode": "shadow",               # off=短路 / shadow=只记录 / enforce=漂移即抛错；默认不改
+        "audit_enabled": True,          # 是否把判定事件 append 到结构化台账
+        "audit_path": "logs/request_invariant.jsonl",
+        "audit_max_bytes": 8 * 1024 * 1024,   # 单文件上限，超过轮转保留一代
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1712,6 +1761,7 @@ ENV_MAP = {
     "ZHIYUAN_API_TOKEN": ("zhiyuan", "token"),
     "MBSE_EMBED_BIGRAM_DIM": ("embedding", "bigram_dim"),
     "MBSE_INTENT_CACHE_ENABLED": ("intent", "cache_enabled"),  # P1-31：默认 False（实测收益≈0）
+    "MBSE_REQUEST_INVARIANT_MODE": ("request_invariant", "mode"),  # 部署级三态覆盖
 }
 
 # 布尔型配置项（ENV 值为 "1"/"true"/"yes" 视为 True）
@@ -1858,6 +1908,17 @@ CONFIG_SCHEMA = {
         "keyword_generic":        {"type": "bool", "desc": "泛词是否参与打分（False = 泛词既不加分也不触发共现，A/B 用）"},
         "explain_preempt":         {"type": "bool", "desc": "说明类前置短路是否前置（True=改造前：命中即判知识问答；False=降级为末尾兜底，先由 LLM 主裁判裁决）"},
         "speech_act":              {"type": "bool", "desc": "言语行为层（问 vs 做）：名词化形态判知识问答、自指元问题判闲聊（False=回到改造前行为）"},
+        # 2026-11-09：以下 5 键原为「幽灵开关」—— 代码读、注释承诺可回退，配置层未登记，
+        # 三处入口全拒绝。补登记后 intent 组所有 `_cfg_get` 读取键均在真源内（见门禁
+        # `verify_config_switches.py` 的断言）。默认值与代码内默认一致 ⇒ 零行为变更。
+        "explain_preempt_short":   {"type": "bool", "desc": "短句(≤16字)是否也走说明类前置（False=交给 LLM 主裁判；实测置 True 修好 3 条错例、0 回退）"},
+        "continue_inherit":        {"type": "bool", "desc": "短续问是否继承上一轮意图（False=不猜，交给 LLM）"},
+        "generic_clarify":         {"type": "bool", "desc": "仅命中泛词时是否出澄清候选（False=回到静默兜底）"},
+        "multi_intent_clarify":    {"type": "bool", "desc": "多意图(≥2 段)时是否出澄清候选（False=不澄清直接选一个）"},
+        "platform_read_route":     {"type": "bool", "desc": "平台读取类请求是否前置到读路由（False=逐字节回退）"},
+        "speech_act_de":           {"type": "bool", "desc": "名词化判据是否容忍「动词+的+后缀」（True=修好「分析的用途」类；False=严格紧邻、逐字节回退）"},
+        "inherit_silent":          {"type": "bool", "desc": "承接上文的短句是否免于澄清（True=不打断；False=逐字节回到旧行为）"},
+        "explain_short_interrogative": {"type": "bool", "desc": "短句(≤16字)含明确疑问式(什么是/介绍/用途/原理…)时是否仍走说明类前置（False=与短句一起交给 LLM）"},
         "multi_same_intent_stage": {"type": "bool", "desc": "L1 阶段连词（先…再…/最后）是否允许同意图多阶段｜默认 False（按意图去重）：实测开启后 accuracy 0.944→0.889、precision 1.000→0.875，且把「需求分析→方案设计→生成 sysml 代码」由 2 段拆成 3 段 ⇒ 净负。开启则「结构视图→参数视图」可切 2 段"},
         "sample_collect":         {"type": "bool", "desc": "真实请求是否把用户输入采集进意图样本池"},
         "cache_enabled":          {"type": "bool", "desc": "意图级缓存（精确文本 + 索引指纹双匹配）"},
@@ -2023,7 +2084,8 @@ CONFIG_SCHEMA = {
         #   灰度建议：先在测试会话开启，观察 stage 事件与 todo 表，再全量。
         "todo_enabled": {"type": "bool", "default": False, "desc": "★ 计划外化总开关（默认关）：开启后模型可调 todo_write 建待办清单，完成判定改为『所有待办已通过验收』；关闭则无待办、走原有评估器路径（逐字节兼容）"},
         "todo_require_verify": {"type": "bool", "default": True, "desc": "★ 待办置 completed 是否强制要有验收回执（默认开，2026-10-28）：依据官方『Only mark as passing after careful testing』；关闭则允许无回执置完成（削弱约束力，仅供排障）"},
-        "harness_enabled": {"type": "bool", "default": False, "desc": "★ harness 级强制闸总开关（默认关）：对齐官方 Stop hook —— 存在未完成待办且验收未过时**不允许结束本轮**，把失败输出回灌让 AI 继续；关闭则只做判定不强制"},
+        "harness_enabled": {"type": "bool", "default": False, "desc": "★ harness 级强制闸总开关（默认关）：对齐官方 Stop hook —— 存在未完成待办且验收未过时**不允许结束本轮**，把失败输出回灌让 AI 继续；关闭则只做判定不强制。⚠️ 2026-11-09 起建议改用 harness_mode（三态）；两者并存时 harness_mode 优先"},
+        "harness_mode": {"type": "str", "default": "", "desc": "★ harness 闸三态（2026-11-09，优先于 harness_enabled）：off=不介入 ｜ shadow=**只判定、不执行任何工具**，把『若开闸会怎样』写 harness_decisions 供观察 ｜ enforce=真执行只读验收并拦住收尾。空字符串=按旧 harness_enabled 推导（true→enforce/false→off）。★ 为什么必须 shadow 能零执行：旧实现 shadow 语义下仍会 _exec_tool_call，而 verify 里混着写类与 ask_user ⇒ 观察期本身会重复写库/主动弹问（conv 990463 已发生『未知工具: JSON』空转）"},
         "harness_max_blocks": {"type": "int", "default": 8, "desc": "★ harness 强制闸连续阻断上限（默认 8，对齐官方）：达到上限后强制放行并如实说明『未完成，卡在 X』——上限是必需的（FM-1.5 该停不停 12.4% > 过早终止 6.20%，双向都要管）；0=不阻断"},
         # ── 团队内定向的能力继承（2026-10-29，conv 9754 实测）──
         # 事实：主 Agent「智源对接agent」绑 71 个智源 MCP 工具；团队路由按意图把请求
@@ -2234,6 +2296,7 @@ CONFIG_SCHEMA = {
         "lexical_signs_extra": {"type": "str", "desc": "追加词法特征正则片段（现场补规则，不改代码）"},
         "syntax_signs_extra":  {"type": "str", "desc": "追加语法特征正则片段"},
         "deliver_pick":        {"type": "str", "desc": "编排交付物取码策略：longest=只取最长的一份（默认，保证可校验单模型）/ all=全部拼接（旧行为）"},
+        "view_package_nesting": {"type": "bool", "desc": "★ 2026-11-09：视图把「包包含」提升为父子层级（渲染层据此画包框并自动包裹子节点）。关=回到改动前（全部平铺、只有组合连线）。实测开启前全库 332 个视图的节点 parent 字段全为空，BDD/PKG 只能画成扁平方块"},
     },
     "tool_jit": {
         "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）。★ 2026-10-10 实测：修复类工具必须列进来，否则会被语义预筛裁掉（实测 view_expansion 清单 6 个里原本没有 sysml_v2_autofix，导致 autofix 一次都没被调用）"},
@@ -2516,6 +2579,15 @@ CONFIG_SCHEMA = {
     #     会报「未知配置项」）。这与 runtime 段是同一类缺陷（DEFAULT 有、SCHEMA 无），
     #   只是这次落在**停滞自愈总开关**上 —— 一个改不了的开关等于没有开关。
     # ⇒ 本段整体登记（键不多、语义清楚），使「默认开 + 三道成本闸」可被现场调。
+    "upload": {
+        "dup_check_enabled":  {"type": "bool", "desc": "上传去重总开关（关 = 不做任何重复查询，逐字节回退到旧行为）"},
+        "dup_content_policy": {"type": "str",  "desc": "内容完全相同（sha256 一致）时的处置：skip=复用已有文档不入库 / warn=照常入库并提示 / block=拒绝（可用 force=1 覆盖）"},
+        "dup_name_policy":    {"type": "str",  "desc": "同名但内容不同时的处置：warn=照常入库并提示（默认，允许同名更版）/ skip=不入库 / block=拒绝"},
+    },
+    "requirements": {
+        "auto_commit":          {"type": "bool", "desc": "需求类意图产出后自动条目化并落库（关 = 退回改动前行为：需求分析不留资产）"},
+        "auto_commit_intents":  {"type": "str",  "desc": "允许自动落库的意图（逗号分隔，默认 requirement_analysis）"},
+    },
     "orchestration": {
         "resume_stale_s":             {"type": "int",  "desc": "编排失活阈值（秒）：心跳超过该值才算死掉（单批实测上限 1155s，取 1.5 倍）"},
         "resume_max_attempts":        {"type": "int",  "desc": "单批次最多恢复几次（超过不再自愈，防「恢复→再崩」死循环）"},
@@ -2719,6 +2791,14 @@ _EXTRA_SCHEMA = {
     "web_search": {
         "provider":                {"type": "str",  "desc": "联网搜索提供方（空=不启用）"},
         "api_key":                 {"type": "secret", "desc": "搜索服务密钥（脱敏显示；提交掩码值不会覆盖真值）"},
+    },
+    # ★ 2026-11-09：与 DEFAULT_CONFIG.request_invariant 同源登记，缺这一段 ⇒
+    #   save_override / 影子层 / 界面都改不了三态开关（实测三处均拒绝）。
+    "request_invariant": {
+        "mode":            {"type": "str",  "desc": "运行时请求重建不变量：off / shadow / enforce（默认 shadow）"},
+        "audit_enabled":   {"type": "bool", "desc": "判定事件是否写入结构化台账（JSONL append-only）"},
+        "audit_path":      {"type": "str",  "desc": "台账路径（相对工程根）；logs/ 已被 gitignore"},
+        "audit_max_bytes": {"type": "int",  "desc": "台账单文件上限（字节），超过轮转保留 .1 一代"},
     },
 }
 for _sec, _items in _EXTRA_SCHEMA.items():

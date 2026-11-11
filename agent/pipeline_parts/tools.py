@@ -341,6 +341,27 @@ class ToolMixin:
         #:   旁挂字典是零侵入方案，且与"过滤逻辑与 schema 无关"这个事实相符。
         _schema_by_name = {}
         builtin_desc = BUILTIN_DESC
+        # ★ 2026-11-10（P0-2，需求优化）：**工具状态必须参与注入判据**。
+        #   实测：`tools` 表 12 个 status='disabled' 的工具里，有 3 个
+        #   （`entity_create` / `impact_analyze` / `validate`）仍在 `BUILTIN_DESC` 里，
+        #   而下面那条内置工具注入路径**只看 `agent_def.tools` 绑定、不看 tools.status**
+        #   ⇒ 它们会被注入给模型，模型调用时却落到"工具已下线"分支。
+        #   后果比"少一个工具"严重：模型会**如实回答"该工具不可用"**，
+        #   用户以为能力不存在，而真相是"配置把它关了但绑定没同步"。
+        #   另一侧（走 DB 自定义路径的 9 个 disabled 工具）SQL 里**已有** `t.status='active'`，
+        #   所以只需补这一条路径 —— 修之前先用真库核对过两侧的实际行为，不靠推测。
+        #   口径：状态查询失败 ⇒ 空集合（宁可多给工具，也不要因观测设施故障把工具全砍掉）。
+        _disabled_tools = set()
+        try:
+            from database import get_db as _gdb_t
+            _c_t = _gdb_t()
+            try:
+                _disabled_tools = {r[0] for r in _c_t.execute(
+                    "SELECT name FROM tools WHERE status='disabled'").fetchall()}
+            finally:
+                _c_t.close()
+        except Exception:
+            _disabled_tools = set()
         candidates = []  # (name, desc, type, server_name_or_None)
 
         def _absorb_schema(name: str, raw) -> None:
@@ -497,6 +518,15 @@ class ToolMixin:
         # 内置工具（仅 Agent 声明过的）
         agent_def = self.registry.get(intent)
         for name in agent_def.tools:
+            # ★ 2026-11-10：已下线的工具**不注入**（否则"看得见调不到"会诱导模型说"不可用"）。
+            #   跳过时留痕，供观测面板与门禁核对（不静默丢弃 —— 本仓既有纪律）。
+            if name in _disabled_tools:
+                try:
+                    self._dropped_disabled = list(
+                        getattr(self, "_dropped_disabled", []) or []) + [name]
+                except Exception:
+                    pass
+                continue
             if name in builtin_desc and not any(c[0] == name for c in candidates):
                 candidates.append((name, builtin_desc[name], "builtin", ""))
         # TR-P3：DB 注册表自定义工具（Agent 通过绑定面板绑定的 type=tool 本地工具——
@@ -1685,9 +1715,15 @@ class ToolMixin:
                 #   状态迁移一律走 agent_todo.transition() ⇒ 非法迁移如实报错不静默。
                 _a = arguments or {}
                 _conv = int(getattr(self, "_tool_conv_ctx", 0) or 0)
+                # ★ 2026-11-10（run 维度下沉）：把批次坐标传进待办链。
+                #   此前 `agent_todos.run_id` 恒 0（列在、判据拿不到），于是
+                #   `machine_evidence` 只能按会话查回执 ⇒ 上一轮的工具调用能给这一轮的
+                #   待办背书（假 machine）。口径与 `_log_tool_call` 同源：`_tool_run_ctx`。
+                _rid = int(getattr(self, "_tool_run_ctx", 0) or 0)
+                _tkey = str(getattr(self, "_tool_task_key", "") or "")
                 try:
                     from agent.todo_store import handle_todo_write as _tw
-                    result = _tw(_a, _conv)
+                    result = _tw(_a, _conv, run_id=_rid, task_key=_tkey)
                 except Exception as e:
                     result = {"ok": False, "result": "todo_write 执行异常：%r" % (e,)}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)

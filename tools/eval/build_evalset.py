@@ -50,6 +50,13 @@ import sqlite3
 import sys
 import time
 
+# 语料指纹的**单一真源**：构建器与 fingerprint_gate 必须调用同一个函数。
+# 2026-11-09 实测：本文件曾自行拼装一份 v1 指纹（chunks/entities_total/db_bytes…），
+# 而 fingerprint_gate 已升级到 schema v2（document_chunks/chunk_sections_sha1…），
+# ⇒ 刚 build 出的评测集被自己的门禁判「指纹结构已变，须重建」，无法用于打分。
+# 同一个语义两处各写一份必然对不上，故直接复用门禁实现。
+from fingerprint_gate import fingerprint as corpus_fingerprint  # noqa: E402
+
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB = os.path.join(REPO, "mbse.db")
 OUT = os.path.join(REPO, "tmp", "p21", "evalset.json")
@@ -278,25 +285,8 @@ for tag, q in NEG:
     print("    %-16s %s" % (tag, q))
 
 # ── 指纹与落盘 ──────────────────────────────────────────────────────────────
-names_rel = sorted(r["name"] for r in conn.execute(
-    "select name from entities where branch='release' and status!='deprecated'"))
-finger = {
-    "db_bytes": os.path.getsize(DB),
-    "documents": one("select count(*) from documents"),
-    "chunks": one("select count(*) from document_chunks"),
-    "entities_total": one("select count(*) from entities"),
-    "entities_release": len(names_rel),
-    "relations_release": one("select count(*) from relations where branch='release'"),
-    "ontology_active": one("select version_label from ontology_versions where active=1 "
-                           "order by id desc limit 1"),
-    "chunk_branches": [dict(r) for r in conn.execute(
-        "select branch, count(*) n from document_chunks group by branch")],
-    "entity_branches": [dict(r) for r in conn.execute(
-        "select branch, count(*) n from entities group by branch")],
-    # 实体名集合的指纹：图谱被改写时这个值会变，是"路由标签失效"的最灵敏信号
-    "release_entity_names_sha1": hashlib.sha1(
-        "\n".join(names_rel).encode("utf-8")).hexdigest()[:16],
-}
+# 与打分门禁同源；此处不再自行拼装任何字段（见文件头部 import 处的实测说明）。
+finger = corpus_fingerprint(conn)
 
 evalset = {
     "schema": "p1-6/evalset@1",
@@ -334,8 +324,9 @@ print("→ %s" % OUT)
 print("   %.1f KB | doc %d + graph %d + neg %d = %d 例"
       % (os.path.getsize(OUT) / 1024, len(doc_cases), len(graph_cases), len(neg_cases),
          len(doc_cases) + len(graph_cases) + len(neg_cases)))
-print("   指纹: chunks=%s entities(release)=%s names_sha1=%s"
-      % (finger["chunks"], finger["entities_release"], finger["release_entity_names_sha1"]))
+print("   指纹(schema v%s): document_chunks=%s entities=%s names_sha1=%s"
+      % (finger.get("schema_version"), finger.get("document_chunks"),
+         finger.get("entities"), finger.get("release_entity_names_sha1")))
 
 # ── P1-1（2026-10-18 自进化调研路线图）：Trace2Dataset ─────────────────────
 # 生产证据链 → 评测集（默认随本工具一起构建；--no-trace 退回纯检索集旧行为）。

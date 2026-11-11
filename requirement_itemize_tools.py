@@ -54,6 +54,76 @@ IFACE_HINT = ("接口", "通信", "协议", "信号", "总线", "CAN", "LIN", "U
 _SENT_SPLIT = re.compile(r"(?<=[。；！？\n])|(?<=[.;])\s+")
 
 
+# ── 正文清洗：只留"需求条目"，剥掉代码/表格/标题/汇报（2026-11-10 真机实测）──────
+# 为什么必须有这一层：后置处理拿到的是 **Agent 的整篇正文**，里面混着
+#   SysML 代码块（`satisfy heatPumpCop by vehicleThermal;`）、注释分隔线
+#   （`// ===== 需求实例与满足关系 =====`）、进度汇报（"**待办完成情况**：…共 5 项"）。
+# 实测（run 990653）不做清洗的后果：154 行落库里有 `GAP-112 satisfy heatPumpCop by…`、
+#   `REQ-F026 // ==== 需求实例…` —— **把代码当成了需求条目**，
+#   31 项"需求"里大半是代码行，可建模率 21.5% 这个数字毫无意义。
+# 判据口径（全部确定性，可复核）：
+#   · ``` 围栏内一律丢弃（代码块整体不是需求陈述）
+#   · 行首 `//` / `# ` / `--` 注释、`doc /*`、`attribute `、`requirement `、`satisfy `、
+#     `part `、`package `、`private import` —— SysML 语法行
+#   · 以 `;` 结尾且含 ASCII 标识符的语句行
+#   · markdown 标题（`##`）、表格行（`|`）、分隔线（`---`）、纯符号行
+#   · 汇报/元信息（"本轮已完成""待办完成情况""共 N 项""耗时""通过校验器"）
+# 剩余内容才交给 _SENT_SPLIT 切句 —— **清洗在前、切句在后**，顺序不能反。
+_CODE_LINE = re.compile(
+    r"^\s*(?://|#(?!#)|--|doc\s*/\*|attribute\s|requirement\s|satisfy\s|part\s|"
+    r"package\s|private\s+import|import\s|action\s|port\s|connection\s|ref\s)", re.I)
+_META_LINE = re.compile(
+    r"(本轮已完成|待办完成情况|共\s*\d+\s*项|耗时\s*\d|已通过官方校验器|"
+    r"可直接导入建模工具|词法\s*\d+\s*错|校验通过|已入库|已生成|已完成\s*\d)")
+# 元信息行（实测噪声）：`分类：功能（能效指标）｜优先级：Must｜来源：整车用户`
+# 这类是**条目的属性标签**，本身不是需求陈述 ⇒ 丢弃（它的价值已在 category/source_ref 列里）。
+_ATTR_LINE = re.compile(
+    # 允许前导列表符号（`*说明：…` 实测形态）—— 判据要在剥前缀**之前**用，
+    # 所以正则自己得容忍前导符号，不能依赖"先剥再判"的顺序。
+    r"^\s*[\-*+•#]*\s*(分类|类别|优先级|来源|依据|出处|编号|版本|状态|类型|说明|备注|注)\s*[：:]")
+_ASCII_STMT = re.compile(r"^[\w\s:.]*[A-Za-z_][\w]*\s*;\s*$")
+
+
+def clean_requirement_text(text: str) -> str:
+    """剥掉代码/表格/标题/汇报，只留可能是"需求陈述"的行。见上方判据说明。"""
+    out, in_fence = [], False
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if not line:
+            continue
+        # markdown 结构行
+        if line.startswith("#") or line.startswith("|") or set(line) <= set("-=*_ "):
+            continue
+        # SysML/代码/注释行
+        if _CODE_LINE.match(line):
+            continue
+        # 纯 ASCII 语句（`satisfy x by y;` 这类即使没被上面命中也要挡）
+        if _ASCII_STMT.match(line):
+            continue
+        # 汇报/元信息
+        if _META_LINE.search(line):
+            continue
+        # 元信息行整体丢弃
+        if _ATTR_LINE.match(line):
+            continue
+        # 去掉列表前缀 / 加粗 / 「第 N 条 ·」条目编号标记，保留正文。
+        # ⚠️ 必须**分两次** sub：一次 sub 里的 alternation 只能命中一个位置，
+        #   而 `*第 5 条 · xxx` 需要"先剥 *、再剥 第5条·"两步（实测踩过）。
+        line = re.sub(r"^[\-*+•#]+\s*", "", line)
+        line = re.sub(r"^第\s*\d+\s*条\s*[·.、:)）]?\s*", "", line)
+        line = re.sub(r"^\d+[.、)）]\s*", "", line)
+        line = line.replace("**", "").strip()
+        # 剥完可能只剩编号残留（如 "第 5 条"），过短的已在下面被 len 挡掉
+        if len(line) >= 4:
+            out.append(line)
+    return "\n".join(out)
+
+
 def _as_text(v):
     return str(v or "").strip()
 
@@ -86,6 +156,19 @@ def _verifiability(s):
     ⇒ 动词表必须覆盖**接口/安全/约束类**的常见动作词。
     """
     reasons = []
+    # ★★ 2026-11-10（真机实测）：**反问/澄清句不是需求**。
+    #   实测：Agent 走澄清流程时正文是"⏸ 暂停等你确认：有 3 处关键口径缺失…
+    #   请确认按哪种口径推进？本轮已完成：共 5 项。" —— 它含"验证"、含数字"3/5"，
+    #   于是被旧判据**判成可验证**，进而被当作 5 条需求条目落库，
+    #   把"可建模率"这个指标污染成毫无意义（分母全是澄清话术）。
+    #   判据：需求是**陈述句**。以问号收尾、或以疑问词开头、或带显式澄清标记的，
+    #   一律进 gaps（这正是"需求需要澄清"的语义，不是"需求已就绪"）。
+    if re.search(r"[？?]\s*$", s) or re.match(
+            r"^(是否|哪些|哪个|哪种|如何|怎么|为什么|为何|能否|可否|请确认|请说明|请补充|"
+            r"需确认|待确认|本轮已完成|本轮已)", s):
+        reasons.append("疑问/澄清句式（需求应为可验收的陈述句）")
+    elif re.search(r"(请确认|等你确认|需要你确认|待你确认|暂停等你确认|口径缺失|请选择)", s):
+        reasons.append("含澄清标记（本轮是追问而非需求产出）")
     if any(f in s for f in FUZZY):
         reasons.append("含模糊词（" + "、".join(
             f for f in FUZZY if f in s) + "）")
@@ -101,6 +184,79 @@ def _verifiability(s):
     return (len(reasons) == 0, "；".join(reasons))
 
 
+# ── 验收标准（acceptance_criteria）确定性抽取 ───────────────────────────────
+# 为什么必须在条目化阶段就产出（而不是留给下游 LLM 补）：
+#   真库实测（2026-11-10）74 条需求实体的 properties 键全集只有
+#   `{kind, req_id, priority}` —— **验收标准填充率 0/24、来源 0/24**。
+#   Agent prompt 里明明承诺了 Given-When-Then，但没有任何结构化出口承接它，
+#   于是"需求不可验收"成为甲方验收的直接卡点（下游 satisfy/verify 无判据可依）。
+# 口径：本函数保证**每条进入 items 的需求都带一条可执行的验收标准**；
+#   给不出验收标准的必须回到 gaps（而不是带着空验收标准进 items 混过去）。
+#   —— 这条"要么有验收标准、要么是 gap"正是 P0-1 的判据，可被门禁直接断言。
+_AC_MEASURE = re.compile(
+    # ⚠️ 单位必须**长的排前面**：实测 `800 Ah` 被 `A` 抢先匹配 ⇒ 抽成 `800 A`，
+    #   这不是"漏抽"而是**抽错**（写进模型的验收标准变成错误量纲），比缺失更糟。
+    r"([0-9０-９]+(?:\.[0-9]+)?\s*(?:km/h|m/s|N·m|mAh|kWh|Wh|Ah|MPa|kPa|kN|Hz|dB|"
+    r"℃|度|分钟|小时|毫秒|秒|天|个月|年|"
+    r"kg|km|mm|m|rpm|kW|MW|W|V|A|%|％))", re.I)
+_AC_COMPLY = re.compile(
+    # 贪婪（`{2,60}` 而非 `{2,40}?`）：实测非贪婪只吃到 2 字符 ⇒
+    #   「符合 ISO 11898 的要求」被抽成「IS」。标准名必须整段吃进来才可核对。
+    r"(?:满足|符合|依据|参照|按照)\s*[《【\"']?([^，。；,;\n》】\"']{2,60}?)"
+    r"(?:[》】\"']?\s*(?:的)?\s*(?:要求|标准|规范|条款|规定)?\s*$|[，。；,;\n]|$)")
+_AC_PLAIN = re.compile(
+    # 无量纲指标（COP / 效率 / 比值 / 次数）——实测「热泵 COP 不低于 2.0」曾被判成 gap，
+    #   而它完全可测（读表比值）。判据：**比较词 + 数值**，有无单位都算可测。
+    r"(不低于|不高于|不小于|不大于|不少于|不超过|至少|最多|达到|≥|≤|高于|低于)\s*"
+    r"([0-9０-９]+(?:\.[0-9]+)?)")
+_AC_VERB = re.compile(
+    r"(支持|实现|提供|完成|能够|可以|应能|具备|"
+    r"通信|交互|传输|发送|接收|连接|集成|预留|"
+    r"检测|监测|报警|告警|预警|保护|联锁|追溯)")
+
+
+def _acceptance_criteria(s):
+    """从一条需求文本推出可执行验收标准。
+
+    返回 `(text, kind)`；给不出时返回 `("", "")` —— 上游据此把它判成 gap。
+
+    三类判据（按可执行强度排序，**取最强的那个**，不是按出现顺序）：
+      · `measure`    有数值+单位（或明确的比较词+数值，如 COP≥2.0）⇒ 可直接实测比对
+      · `compliance` 明确引用外部标准 ⇒ 按标准逐条核
+      · `demo`       只有动作词 ⇒ 只能功能演示（弱，但**仍比空着强**：
+                     它把"怎么算通过"从无变成了"跑一遍看结果"）
+    """
+    t = _as_text(s)
+    if not t:
+        return "", ""
+    m = _AC_MEASURE.search(t)
+    if m:
+        val = m.group(1).strip()
+        # 取数值前的定语作指标名（"蓄电池容量不低于 800 Ah" → "蓄电池容量"）
+        head = t[:m.start()].strip(" ，,、。;；")
+        head = re.sub(r"(不低于|不高于|不小于|不大于|不少于|不超过|达到|至少|最多|以上|以下|"
+                      r"应|需|应当|必须|为|是|的)$", "", head).strip(" ，,、。;；")
+        metric = head[-14:] if head else "该指标"
+        return ("实测「%s」达到 %s（按实测记录比对，偏差不得超出规格）" % (metric, val), "measure")
+    m = _AC_PLAIN.search(t)
+    if m:
+        head = t[:m.start()].strip(" ，,、。;；")
+        metric = head[-14:] if head else "该指标"
+        return ("实测「%s」%s %s（无量纲指标，按实测记录比对）"
+                % (metric, m.group(1), m.group(2)), "measure")
+    m = _AC_COMPLY.search(t)
+    if m:
+        std = _as_text(m.group(1)).strip('《》【】"\' ，。；')
+        std = re.sub(r"(的)?(要求|标准|规范|条款|规定)$", "", std).strip()
+        if len(std) >= 2:
+            return ("逐条核对「%s」的适用条款，全部符合即通过" % std[:40], "compliance")
+    m = _AC_VERB.search(t)
+    if m:
+        return ("功能演示：执行「%s」相关用例，观察到预期行为即通过（附操作记录）"
+                % m.group(1), "demo")
+    return "", ""
+
+
 def _camel(name):
     """把中文/任意文本转成合法的 ASCII 标识符片段。"""
     parts = re.findall(r"[A-Za-z0-9]+", name or "")
@@ -111,7 +267,8 @@ def _camel(name):
 
 def itemize(text, domain="", source_ref="", project="EVTM"):
     """核心：自然语言需求 → (items, gaps, req_view_code, stats)"""
-    raw = _as_text(text)
+    # ★ 清洗在前、切句在后（顺序不能反）：不清洗会把 SysML 代码当需求条目。
+    raw = clean_requirement_text(text)
     items, gaps = [], []
     seen_text = {}
     used_names = set()          # ⚠️ 已用标识符集合 —— 防止中文名转ASCII 后撞名
@@ -123,6 +280,12 @@ def itemize(text, domain="", source_ref="", project="EVTM"):
         ok, why = _verifiability(s)
         if not ok:
             gaps.append({"text": s, "reason": why, "need_clarification": True})
+            continue
+        # ★ 验收标准：给不出就不许进 items（"要么有验收标准、要么是 gap"）
+        ac, ac_kind = _acceptance_criteria(s)
+        if not ac:
+            gaps.append({"text": s, "reason": "无法导出可执行验收标准（缺量化指标/标准引用/可演示动作）",
+                         "need_clarification": True})
             continue
         if s in seen_text:                  # 完全重复
             gaps.append({"text": s, "reason": "与第 %d 条重复" % seen_text[s],
@@ -148,13 +311,18 @@ def itemize(text, domain="", source_ref="", project="EVTM"):
             "category": cat,
             "subject": "",                 # 由 N3 补（需要知道哪个 part 是主体）
             "source_ref": source_ref,
+            "acceptance_criteria": ac,
+            "ac_kind": ac_kind,
             "ambiguous": bool(re.search(r"(等|若干|某些|适当|尽量)", s)),
             "sysml_name": name,             # 需求视图里的 requirement 名（保证唯一）
         })
 
     code = _build_view(items, project)
+    _ac_filled = sum(1 for i in items if _as_text(i.get("acceptance_criteria")))
     stats = {"sentences": len(items) + len(gaps), "items": len(items),
              "gaps": len(gaps),
+             "ac_filled": _ac_filled,
+             "ac_rate": round(_ac_filled / max(1, len(items)), 3),
              "by_category": {c: sum(1 for i in items if i["category"] == c)
                              for c in CATEGORIES}}
     return items, gaps, code, stats
@@ -191,6 +359,13 @@ def _build_view(items, project):
         L.append("    doc /* %s */" % _esc(i["text"]))
         L.append('    attribute reqId = "%s";' % i["id"])
         L.append('    attribute category = "%s";' % i["category"])
+        # 验收标准进模型（可查询、可导出）。用 attribute 而不是 verify usage：
+        # 实测（2026-11-10，checker.jar）`verify ReqXxx;` 写在 package 层是**语法错**
+        # （mismatched input 'verify'），而 `attribute acceptanceCriteria = "..."` n_hard=0。
+        # verify 关系要等 N5 有验证用例元素后再补（与 satisfy 同一口径）。
+        _ac = _as_text(i.get("acceptance_criteria"))
+        if _ac:
+            L.append('    attribute acceptanceCriteria = "%s";' % _esc(_ac))
         L.append("  }")
     # 派生/细化关系：**只在有明确依据时生成**
     # ⚠️ 实测踩过：早期版本按「同 category 就细化」⇒ 6 条无 subject 的需求全挂到第1 条上，
@@ -231,9 +406,10 @@ def _render(items, gaps, code, stats, domain):
     L.append(f"分类分布：{dist or '（无）'}")
     L.append("")
     if items:
-        L.append("条目清单：")
+        L.append("条目清单（每条均带可执行验收标准）：")
         for i in items:
             L.append(f"  {i['id']:12} [{i['category']:11}] {i['text'][:52]}")
+            L.append(f"       ✔ 验收({i.get('ac_kind','-')})：{i.get('acceptance_criteria','')[:80]}")
     if gaps:
         L.append("")
         L.append("⚠ 待澄清（**不可直接建模**，需补量化判据）：")
@@ -330,7 +506,7 @@ def _resolve_project(conn, project: str, conversation_id: int) -> tuple:
     return "", note
 
 
-def commit_requirements(args, conversation_id=0, created_by=""):
+def commit_requirements(args, conversation_id=0, created_by="", conn=None):
     """`requirement_commit`：把条目化结果写入需求实体表（写操作，走人工确认）。
 
     为什么与 `requirement_itemize` 分成两个工具（本仓既有口径：query/apply 分离）：
@@ -359,7 +535,15 @@ def commit_requirements(args, conversation_id=0, created_by=""):
             return {"ok": False,
                     "result": f"条目化失败：{type(exc).__name__}: {exc}。⚠️ 这不代表原文有问题 —— "
                               f"请如实说明『未能条目化』，不要编造条目。"}
-    conn = get_db()
+    # ★ 2026-11-10（门禁抓出的真缺陷）：`conn` 可传入。
+    #   原实现**无条件自己 get_db()** ⇒ 任何调用方传进来的连接（比如后置处理里的
+    #   run 连接、门禁的临时库夹具）都被无视，写操作永远落到生产库。
+    #   症状极具欺骗性：门禁用临时库跑，"落库成功"却查不到行；而生产库被悄悄写脏。
+    #   口径与 `agent/todo_store.handle_todo_write(conn=...)` 一致：
+    #   默认 None ⇒ 生产连接（行为不变），显式传入 ⇒ 用给定连接且**不关闭它**（调用方所有）。
+    _own_conn = conn is None
+    if _own_conn:
+        conn = get_db()
     try:
         pid, _pnote = _resolve_project(conn, args.get("project"), conversation_id)
         repo = RequirementRepo(conn)
@@ -392,13 +576,18 @@ def commit_requirements(args, conversation_id=0, created_by=""):
                 "result": f"需求条目落库失败：{type(exc).__name__}: {exc}。"
                           f"⚠️ 请如实说明『未能入库』，不要声称已入库。"}
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if _own_conn:      # 只关自己开的连接（调用方传入的连接由调用方关闭）
+            try:
+                conn.close()
+            except Exception:
+                pass
     head = (f"【需求入库】工程={pid or '（无工程会话）'}：新增 {res['inserted']} 条 / "
             f"已存在更新 {res['updated']} 条；当前该工程共 "
-            f"{st['items']} 条需求、{st['gaps']} 条待澄清（可建模率 {st['itemize_ratio']:.1%}）")
+            f"{st['items']} 条需求、{st['gaps']} 条待澄清（可建模率 {st['itemize_ratio']:.1%}）"
+            # ★ P0-1：验收标准覆盖率必须显式回报 —— 它是"需求可验收"的直接判据，
+            #   不报出来就没人会发现它掉到 0（真库历史值就是 0/24 而无人察觉）。
+            f"；验收标准覆盖 {st.get('ac_filled', 0)}/{st['items']} "
+            f"({st.get('ac_rate', 0.0):.1%})")
     if _pnote:
         head = _pnote + "\n" + head
     tail = []
@@ -408,6 +597,9 @@ def commit_requirements(args, conversation_id=0, created_by=""):
     if res["gaps"]:
         tail.append("待澄清编号：" + "、".join(res["gaps"][:12])
                     + ("…" if len(res["gaps"]) > 12 else ""))
+    if st["items"] and st.get("ac_rate", 0.0) < 1.0:
+        head += ("\n⚠️ 有 %d 条需求缺验收标准（不可验收，下游无法判通过/失败）。"
+                 "请补齐或用 requirement_itemize 重新条目化。" % (st["items"] - st.get("ac_filled", 0)))
     return {"ok": True, "result": "\n".join([head] + tail),
             "project_id": pid, **res, "stats": st}
 

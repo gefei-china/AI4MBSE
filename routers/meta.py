@@ -235,7 +235,7 @@ def update_setting(key: str, body: dict, conn=Depends(db_session)):
 def upload_document(file: UploadFile = File(...), title: str = Form(""), author: str = Form(""),
                     version: str = Form("v1.0"), tags: str = Form(""),
                     branch: str = Form(""), folder_id: str = Form("0"),
-                    mode: str = Form(""), conn=Depends(db_session),
+                    mode: str = Form(""), force: str = Form(""), conn=Depends(db_session),
                     user=Depends(require_any_permission(DOC_WRITE_PERMS))):
     """文档上传 + 知识库真管道（KB-P0）：解析 → 结构感知分块 → Embedding → 落库 + 元数据。
 
@@ -257,6 +257,44 @@ def upload_document(file: UploadFile = File(...), title: str = Form(""), author:
     from knowledge_pipeline import ingest_upload_document, stage_upload_document
     content = file.file.read()
     file_type = file.filename.split(".")[-1] if "." in file.filename else ""
+
+    # ── 上传去重（2026-11-10）─────────────────────────────────────────────
+    # 为什么在**入库之前**判：真库实测同名文档被两次导入（doc 851/852，各 270 chunk），
+    #   重复片段会挤占检索注入槽位、并让 vec_cache 对不上；而"要不要拦"必须在
+    #   用户还在等回包的那一刻回答（上传对话框）。判定只读、不写库。
+    # 三态策略全部来自配置（`upload.dup_content_policy` / `dup_name_policy`）：
+    #   · 同内容 → 默认 skip（复用已有文档，不入库，避免重复 chunk）
+    #   · 同名异内容 → 默认 warn（照常入库，但回包带提示）
+    #   · force=1 时一律放行（前端确认后重发）
+    _force = str(force or "").strip().lower() in ("1", "true", "yes", "on")
+    _dup = {"checked": False}
+    try:
+        from knowledge_pipeline.dedup import check_duplicate as _chk_dup
+        _dup = _chk_dup(conn, file.filename, content)
+    except Exception as _e_dup:
+        _dup = {"checked": False, "hint": "", "error": str(_e_dup)[:120]}
+    if _dup.get("checked") and not _force and _dup.get("action") in ("block", "skip"):
+        _ex = _dup.get("existing") or {}
+        if _dup.get("action") == "block":
+            audit(audit_user(user), "upload_dup_blocked",
+                  f"拒绝重复上传: {file.filename}（{_dup.get('kind')} → doc #{_ex.get('doc_id')}）",
+                  conn=conn)
+            return JSONResponse({"error": _dup.get("hint") or "重复文档，已拒绝上传",
+                                 "duplicate": _dup, "doc_id": _ex.get("doc_id", 0),
+                                 "skipped": True, "fatal": True}, 409)
+        # skip：不入库，直接把已有文档回给前端（语义 = "这份已经在库里了"）
+        audit(audit_user(user), "upload_dup_skipped",
+              f"跳过重复上传: {file.filename}（{_dup.get('kind')} → doc #{_ex.get('doc_id')}）",
+              conn=conn)
+        return {"id": _ex.get("doc_id", 0), "doc_id": _ex.get("doc_id", 0),
+                "filename": _ex.get("filename") or file.filename,
+                "size": int(_ex.get("file_size") or len(content)),
+                "parse_status": _ex.get("parse_status") or "completed",
+                "chunk_count": int(_ex.get("chunk_count") or 0),
+                "skipped": True, "duplicate": _dup,
+                "detected_title": _ex.get("title") or "",
+                "auto_extract": {}, "async": False}
+
     metadata = {
         "title": title or "",
         "author": author or "",
@@ -281,6 +319,8 @@ def upload_document(file: UploadFile = File(...), title: str = Form(""), author:
                        "deduped": _job.get("deduped", False), "async": True,
                        "poll": "/api/jobs/%d" % int(_job.get("job_id") or 0),
                        "hint": "已排队，后台解析中；进度查 /api/jobs/{job_id}"})
+        if _dup.get("kind"):
+            result["duplicate"] = _dup      # warn：照常入库，但把"同名已存在"带回前端
         return result
     result = ingest_upload_document(conn, file.filename, file_type, content, metadata=metadata,
                                     branch="global")
@@ -299,6 +339,8 @@ def upload_document(file: UploadFile = File(...), title: str = Form(""), author:
     if result.get("parse_status") == "failed":
         return JSONResponse({"id": doc_id, "filename": file.filename, "size": len(content),
                              "parse_status": "failed", "chunk_count": 0, "error": result.get("error", "")}, 400)
+    if _dup.get("kind"):
+        result["duplicate"] = _dup          # warn：已入库，同时把同名提示带回前端
     return result
 
 
@@ -502,6 +544,53 @@ def list_documents(search: str = "", status: str = "", branch: str = "",
         include_deprecated=(include_deprecated != "0"),
         state=state, origin=origin, folder_ids=folder_ids,
     )
+
+
+@router.get("/api/documents/duplicates")
+def list_duplicate_documents(limit: int = 50, verify: int = 0, conn=Depends(db_session),
+                             user=Depends(require_any_permission(DOC_WRITE_PERMS))):
+    """库内已存在的重复文档盘点（只读，2026-11-10）。
+
+    为什么单独一个端点：上传侧去重只防**今后**；库里已经有重复（实测 doc 851/852
+    同名同内容、各 270 chunk）时，必须先让"有几组、各浪费多少块"可见，
+    清理才是决策而不是猜测。
+    两类分组语义不同，处置也不同：
+      · `same_content`（同 sha256）= 真重复，删掉多余的零风险；
+      · `same_name`（同名多份）= 可能是版本迭代，**必须人工判断**。
+    ⚠️ 本端点只读，不删任何东西（删除走 DELETE /api/documents/{id}，需人确认）。
+    """
+    from knowledge_pipeline.dedup import duplicate_groups
+    # `verify=1`：对同名组读**源副本**算 sha256，把"误传"与"版本迭代"分开。
+    # 为什么默认关：这是文件 IO（本次 16 份文档读一遍很快，但文档多了就不该默认做）。
+    # 不验字节时，`reclaimable_chunks` 只会对 content_sha256 已回填的 same_content 组给出
+    # —— 存量 sha 全空 ⇒ 会显示 0。**这个 0 是诚实的"未证明"，不是"没有可回收"**。
+    items = duplicate_groups(conn, limit=max(1, min(int(limit or 50), 200)),
+                             verify_bytes=bool(verify))
+    by_kind = {}
+    for g in items:
+        by_kind[g["kind"]] = by_kind.get(g["kind"], 0) + 1
+    # ⚠️ 两个数字口径必须分开（首版写成同一个，报出 650 这种"看着像浪费、其实是总量"的数）：
+    #   · chunks_in_groups —— 重复组内**全部**块数（含要保留的那份）
+    #   · reclaimable_chunks —— **可回收**量 = 每组总块数 − 保留一份的块数，且**只对
+    #     字节相同（same_content）的组**成立；同名不同内容可能是版本迭代，删了就是丢知识
+    chunks_in_groups = sum(max(0, int(g.get("chunks") or 0)) for g in items)
+    reclaimable = 0
+    for g in items:
+        # 可回收前提：字节可证相同（同 sha 分组的，或 verify=1 证过的同名组）
+        if not (g["kind"] == "same_content" or g.get("sha_verified")):
+            continue
+        docs = g.get("docs") or []
+        if len(docs) < 2:
+            continue
+        keep = max(int(d.get("chunk_count") or 0) for d in docs)
+        reclaimable += max(0, int(g.get("chunks") or 0) - keep)
+    return {"items": items, "groups": len(items), "by_kind": by_kind,
+            "chunks_in_groups": chunks_in_groups,
+            "reclaimable_chunks": reclaimable,
+            "bytes_verified": bool(verify),
+            "note": "只读盘点；可回收量只统计**字节可证相同**的组。"
+                    "同名组加 ?verify=1 才会读源副本验字节；"
+                    "未验证时同为 0 表示「未证明」，不代表没有重复。"}
 
 
 @router.post("/api/documents/ingest-artifact")

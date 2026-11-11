@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "note": "profile 装配描述（P1-2/P2-2）。extends 链按 group 整块替换；overlays 为兄弟 patch 层，同键冲突即报错。当前为装配层真源，尚未接管运行时配置读取。",
+  "profiles": {
+    "base": {
+      "id": "base",
+      "extends": null,
+      "layers": {
+        "kernel": {
+          "request_invariant": "shadow",
+          "guards": "monotonic_deny",
+          "event_vocabulary": "strict",
+          "capability_seams": "three_layer"
+        },
+        "rag": {"inject_k": 5, "top_k": 20},
+        "harness": {"mode": "shadow"}
+      }
+    },
+    "private": {
+      "id": "private",
+      "extends": "base",
+      "layers": {
+        "delivery": {"offline": true, "external_dependencies": false, "telemetry": false}
+      }
+    },
+    "domain_mbse": {
+      "id": "domain_mbse",
+      "extends": "private",
+      "layers": {
+        "domain": {
+          "name": "mbse",
+          "views": ["BDD", "PKG", "REQ", "ACT"],
+          "validator": "sysml_v2_validate"
+        }
+      }
+    },
+    "server": {
+      "id": "server",
+      "extends": "domain_mbse",
+      "layers": {
+        "delivery": {"surface": "web", "offline": false, "external_dependencies": true, "telemetry": true}
+      }
+    },
+    "cli": {
+      "id": "cli",
+      "extends": "domain_mbse",
+      "layers": {
+        "delivery": {"surface": "cli", "offline": true, "external_dependencies": false, "telemetry": false}
+      }
+    },
+    "offline": {
+      "id": "offline",
+      "extends": "domain_mbse",
+      "layers": {
+        "delivery": {"surface": "offline", "offline": true, "external_dependencies": false, "telemetry": false}
+      }
+    }
+  }
+}

@@ -12,6 +12,10 @@ from .migrations import (
     _migrate_agent_tool_perm,
     _migrate_branch_protection,
     _migrate_skill_revision_rejects,
+    _migrate_run_dimension,
+    _migrate_doc_dedupe,
+    _migrate_orch_interrupts,
+    _migrate_requirement_acceptance,
     _migrate_mr_status,
     _rebuild_entities_pk,
     _repair_relations_fk,
@@ -1678,6 +1682,10 @@ def init_db():
         ambiguous INTEGER DEFAULT 0,
         reason TEXT DEFAULT '',               -- kind='gap' 时的不可验证原因
         source_ref TEXT DEFAULT '',
+        -- 验收标准（P0-1，2026-11-10）：真库实测需求侧该字段填充率曾为 0/24，
+        -- 直接卡住甲方「需求可验证性」验收。口径：kind='item' 必填、kind='gap' 为空。
+        acceptance_criteria TEXT DEFAULT '',
+        ac_kind TEXT DEFAULT '',              -- measure | compliance | demo（可执行强度递减）
         domain TEXT DEFAULT '',
         project_id TEXT DEFAULT '',
         conversation_id INTEGER DEFAULT 0,
@@ -1955,6 +1963,15 @@ def init_db():
     # ── P0-1（2026-10-30）写类工具幂等键表（幂等，纯新表无补列依赖）──
     # 放在 _migrate_columns 之后（纯新表），语义上属"控制面"族。
     _migrate_tool_idempotency(conn)
+
+    # ── 2026-11-10 run 维度下沉 + 文档去重 + 编排可中断（三件事的数据落点，幂等）──
+    #   同批放这里是有意的：中断要靠 run_id 定位批次，去重要靠内容指纹判同，
+    #   三者都是「judge 面缺一列/缺一张表」型缺口，分开加会出现半成品。
+    _migrate_run_dimension(conn)
+    _migrate_doc_dedupe(conn)
+    _migrate_orch_interrupts(conn)
+    # ── 2026-11-10 需求验收标准（P0-1）：验收标准填充率曾为 0/24，直接卡验收 ──
+    _migrate_requirement_acceptance(conn)
 
     # ── 2026-11-04：**流水线配置资产自举**（把"环境不可重建"补上）──────────────
     # 背景（实测）：同一份代码，`init_db()` 建出的空库只有 7 agents / 14 tools / 0 skills，

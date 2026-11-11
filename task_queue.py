@@ -7,6 +7,7 @@
 - handoff：结构化移交（summary + metadata），对齐 Hermes Kanban 语义的最小实现
 """
 import json
+import logging
 import threading
 
 _ALLOC_LOCK = threading.Lock()   # P0-7：批次号分配互斥（本仓单进程 uvicorn，进程内锁即足够）
@@ -175,6 +176,19 @@ class TaskQueue:
                     "（无任何工具），产出看似成功实则未调用工具。"
                     "请改用当前在役的 Agent 名后重试。" % "、".join(_unresolved))
         plan_keys = {t.get("key") for t in plan}
+        # ★ 2026-11-09（P0-1 兜底留痕）：缺 `expected_output` 的任务必须**可见**。
+        #   背景：planner 的 prompt 少列该字段时，下面写入的恒为空且**不报错** ——
+        #   团队模式连续 8 个 run 实测 0%（普通编排同期 100%）才被发现，
+        #   见 `agent/pipeline_parts/stream.py` 团队分支模板处注释。
+        #   放在本函数（**所有**建计划入口的唯一收口）而不是各调用点：
+        #   同一判据若在多处各写一份，迟早错位（本仓反复踩过）。
+        #   缺失**不阻断**：验收标准的缺失是质量问题，不是非法计划（非法由 validate_plan 管）。
+        _noexp = [str(t.get("key") or "?") for t in plan
+                  if not str(t.get("expected_output") or "").strip()]
+        if _noexp:
+            logging.getLogger("mbse.planner").warning(
+                "计划质量：%d/%d 个子任务缺 expected_output（无验收依据）：%s",
+                len(_noexp), len(plan), ",".join(_noexp[:8]))
         n = 0
         for t in plan:
             deps = [d for d in (t.get("deps") or []) if d in plan_keys]
@@ -197,7 +211,7 @@ class TaskQueue:
                  t.get("task_type", "agent"), json.dumps(t.get("config") or {}, ensure_ascii=False),
                  json.dumps(deps, ensure_ascii=False),
                  "ready" if not deps else "planned", assigned_by, t.get("seq", 0),
-                 (t.get("context") or "")[:1000], (t.get("expected_output") or "")[:500],
+                 (t.get("context") or "")[:1000], (t.get("expected_output") or "").strip()[:500],
                  int(conversation_id or 0)))
             n += 1
         conn.commit()

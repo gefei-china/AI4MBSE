@@ -24,6 +24,10 @@ _SKIP_DIRS = (".git", "__pycache__", "node_modules", ".venv", "docs", "static", 
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+# 2026-11-09：本门禁替换 llm_client 后仍走 chat 入口，声明 verify 来源 ⇒
+# 不写生产台账 logs/request_invariant.jsonl（否则会污染「切 enforce」的就绪统计）。
+os.environ.setdefault("MBSE_INVARIANT_ORIGIN", "verify")
+
 _RESULTS = []
 _NOTES = []
 

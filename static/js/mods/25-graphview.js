@@ -352,11 +352,26 @@ async function svmElkRelayout(cy, vm) {
   const vmRef = vm;
   try {
     const vt = (vm.view && vm.view.type) || '';
-    const viewNodes = (vm.nodes||[]).map(nd => ({id: nd.id, name: nd.name||'', kind: nd.kind||'block', type: nd.type||'', attrs: nd.attrs||{}}));
+    // ★ 2026-11-09：把 parent（所属包/组合）一起传给布局内核。
+    //   此前只传 id/name/kind/type/attrs —— 布局器**看不到层级**，于是把包节点
+    //   当普通元素平铺，包里包外形全丢；回写坐标时又把包节点位置一起改掉，
+    //   与 Cytoscape 复合节点「由子节点包围盒决定父位置」直接打架 ⇒ 框错位/重叠。
+    const viewNodes = (vm.nodes||[]).map(nd => ({
+      id: nd.id, name: nd.name||'', kind: nd.kind||'block', type: nd.type||'',
+      attrs: nd.attrs||{}, parent: nd.parent || '', isParent: !!nd.isParent }));
     const viewEdges = (vm.edges||[]).map(e => ({source: e.source, target: e.target, kind: e.kind||'dependency'}));
     const pos = await computeViewLayoutAsync(vt, viewNodes, viewEdges);
     if (!pos || _lastViewLayout.vm !== vmRef || !cy || cy.destroyed()) return;  // 视图已切换则放弃
-    cy.nodes().forEach(n => { const p = pos[n.id()]; if (p) { n.position(p); n.unlock(); } });
+    let _skipped = 0, _placed = 0;
+    cy.nodes().forEach(n => {
+      // 复合节点（包）的位置由 Cytoscape 依据子节点包围盒自动确定；
+      // 手动写它的 position 会让框与子节点错开（这是"布局散乱"最直接的来源）。
+      if (n.isParent()) { _skipped++; return; }
+      const p = pos[n.id()];
+      if (p) { n.position(p); n.unlock(); _placed++; }
+    });
+    _lastViewLayout.placed = _placed;
+    _lastViewLayout.skippedParents = _skipped;
     // ELK 精排后图幅可能超出可视区（初排 fit 坐标已失效），重新适配
     try { cy.resize(); cy.fit(undefined, 40); } catch(e) {}
     _lastViewLayout.posMap = pos;

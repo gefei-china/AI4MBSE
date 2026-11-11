@@ -1,86 +1,66 @@
 {
  "schema": "dataset-manifest@1",
- "dataset_id": "9ed16b635b55",
- "built_at": "2026-10-23T10:42:15",
+ "dataset_id": "54e04d95f3f5",
+ "built_at": "2026-11-11T19:37:27",
  "generator": {
   "build_evalset": "1",
   "trace2dataset": "p1-1/trace-evalset@1"
  },
  "evalset": {
   "file": "evalset.json",
-  "n_doc": 50,
+  "n_doc": 54,
   "n_graph": 18,
   "n_neg": 30,
   "fingerprint": {
-   "db_bytes": 379412480,
    "documents": 14,
-   "chunks": 7177,
-   "entities_total": 189,
-   "entities_release": 61,
-   "relations_release": 83,
-   "ontology_active": "v25.2.0",
-   "chunk_branches": [
-    {
-     "branch": "global",
-     "n": 7177
-    }
-   ],
-   "entity_branches": [
-    {
-     "branch": "dev",
-     "n": 65
-    },
-    {
-     "branch": "personal",
-     "n": 63
-    },
-    {
-     "branch": "release",
-     "n": 61
-    }
-   ],
-   "release_entity_names_sha1": "04c1ac33e06813fe"
+   "document_chunks": 7394,
+   "entities": 189,
+   "relations": 249,
+   "release_entity_names_sha1": "77e0c39603cded89",
+   "chunk_sections_sha1": "d7b41722d9554887",
+   "schema_version": 2
   }
  },
  "trace": {
   "file": "trace_evalset.json",
   "counts": {
-   "total": 233,
+   "total": 394,
    "by_extractor": {
-    "intent_confirmed": 42,
+    "intent_confirmed": 46,
     "intent_rejected": 13,
     "hil_approved": 0,
-    "hil_rejected": 0,
-    "conv_clean": 168,
-    "conv_badcase": 0,
+    "hil_rejected": 10,
+    "conv_clean": 300,
+    "conv_badcase": 15,
     "flow_completed": 10,
     "flow_failed": 0
    },
    "by_kind": {
-    "positive": 42,
-    "negative": 13,
-    "regression": 178
+    "positive": 46,
+    "negative": 38,
+    "regression": 310
    },
    "by_label": {
-    "strong": 55,
-    "weak": 178
+    "strong": 69,
+    "weak": 310,
+    "negative": 15
    }
   },
   "fingerprint": {
-   "conversations": 79,
-   "messages": 517,
-   "feedback": 3,
-   "llm_usage_stats": 13105,
-   "hil_confirmations": 10,
+   "conversations": 294,
+   "messages": 1073,
+   "feedback": 8,
+   "llm_usage_stats": 25412,
+   "hil_confirmations": 40,
    "flow_runs": 11,
-   "intent_samples": 373,
-   "bad_cases": 0,
-   "tool_call_logs": 2158,
-   "messages_content_sha1": "585e41dad145266b",
-   "confirmed_intent_texts_sha1": "e9b4e9157a8b9a8e",
-   "hil_previews_sha1": "0de82ac232ac4f1a",
+   "intent_samples": 562,
+   "bad_cases": 6,
+   "tool_call_logs": 7320,
+   "messages_content_sha1": "e5322c62ada84a4d",
+   "confirmed_intent_texts_sha1": "66571ebcec5ad12e",
+   "hil_previews_sha1": "f10c822c3ec87026",
    "flow_runs_sha1": "50d152607182717a",
-   "badcase_subjects_sha1": "da39a3ee5e6b4b0d",
+   "badcase_subjects_sha1": "bbd516dec0491398",
    "schema_version": 1
   }
  },

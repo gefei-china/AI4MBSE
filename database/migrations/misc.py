@@ -1046,6 +1046,8 @@ def _migrate_agent_todos(conn):
         subject TEXT NOT NULL,                -- 待办标题（具体到对象，如"校验包 P-001 的 SysML v2 语法"）
         status TEXT DEFAULT 'pending',         -- pending|in_progress|completed|blocked|deleted
         verify TEXT DEFAULT '',               -- ★ 验收方式（可执行描述）；completed 必填
+        verify_tool TEXT DEFAULT '',          -- ★ 2026-11-09：结构化验收 —— 只读工具名（白名单内才执行）
+        verify_args TEXT DEFAULT '',          -- ★ 2026-11-09：结构化验收 —— JSON 对象参数（非 JSON 不执行）
         verify_result TEXT DEFAULT '',        -- ★ 验收回执；completed 必填且表示通过
         blocked_by TEXT DEFAULT '',           -- 依赖/阻塞原因；blocked 必填
         note TEXT DEFAULT '',
@@ -1054,6 +1056,29 @@ def _migrate_agent_todos(conn):
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ix_atodo_conv ON agent_todos(conversation_id, status)")
     c.execute("CREATE INDEX IF NOT EXISTS ix_atodo_run ON agent_todos(conversation_id, run_id)")
+
+    # ── P0-2a（2026-11-09）harness 判定台账 ──
+    # 用途：shadow 期回答「若开闸会拦吗 / 有多少条验收真能自动执行 / 多少条被护栏挡下」。
+    # 为什么单独建表而不复用 audit_logs：这是**结构化指标**（pending/manual/autoready/guarded），
+    #   需要 GROUP BY 与趋势对比；日志字段做不了这种统计（本仓已经踩过"同一个数字各写一份"）。
+    # 注意：观测设施故障不得变业务故障 ⇒ 写入侧全程 try/except。
+    c.execute("""CREATE TABLE IF NOT EXISTS harness_decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER DEFAULT 0,
+        mode TEXT DEFAULT '',                   -- shadow | enforce
+        would_block INTEGER DEFAULT 0,          -- 判定"该拦"（shadow 下不真拦）
+        force_release INTEGER DEFAULT 0,
+        reason TEXT DEFAULT '',
+        remaining_n INTEGER DEFAULT 0,          -- 未完成待办数
+        pending_n INTEGER DEFAULT 0,            -- 参与验收的 pending 数
+        manual_n INTEGER DEFAULT 0,             -- 只能人工验收（含自然语言/非白名单）
+        autoready_n INTEGER DEFAULT 0,          -- 可自动执行（结构化 + 只读白名单）
+        guarded_n INTEGER DEFAULT 0,            -- ★ 被护栏挡下的（旧实现会误判成 tool）
+        tools_json TEXT DEFAULT '',             -- 可执行工具分布
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_hdec_conv ON harness_decisions(conversation_id, id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_hdec_mode ON harness_decisions(mode, id)")
     conn.commit()
     print("[init_db] 迁移: agent_todos 已建立（计划外化；verify/verify_result 为 completed 前置条件）")
 
@@ -1090,3 +1115,58 @@ def _migrate_tool_idempotency(conn):
     c.execute("CREATE INDEX IF NOT EXISTS ix_tool_idem_created ON tool_idempotency(created_at)")
     conn.commit()
     print("[init_db] 迁移: tool_idempotency 已建立（写类工具幂等键）")
+
+def _migrate_orch_interrupts(conn):
+    """编排「中断」台账（2026-11-10，可中断策略的数据落点）。
+
+    与既有 `TaskQueue.cancel_run` 的分工（**两者语义不同，不要合并**）：
+      · 取消（cancel）  = 这批不要了  ⇒ checkpoint.phase='cancelled'，不进可恢复清单；
+      · 中断（interrupt）= 这批先停下、**保留续跑资格** ⇒ phase='interrupted' + 本表留痕。
+    为什么中断要单独一张表而不是只改 checkpoint 一个字段：
+      ① 用户改向时常带一句新指令（`instruction`），它要能被下一轮 resume 消费，
+         并且**必须可审计**（谁在什么时候叫停了哪一批、补了什么话）；
+      ② `orch_checkpoints` 每个 run 只有一行，写不下"中断过几次"；
+      ③ 硬取消与中断在同一列上只能存一个值，历史就丢了。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS orch_interrupts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,             -- 批次号（orch_checkpoints.run_id）
+        conversation_id INTEGER DEFAULT 0,   -- 归属会话（越权校验用）
+        kind TEXT DEFAULT 'interrupt',       -- interrupt（保留续跑）| cancel（不要了）
+        reason TEXT DEFAULT '',              -- 一句人读的原因（前端展示）
+        instruction TEXT DEFAULT '',         -- 中断时用户补的新指令（resume 时注入被重排任务）
+        requested_by TEXT DEFAULT '',        -- 操作人
+        cancelled_tasks INTEGER DEFAULT 0,   -- 本次协作式停止波及的任务数
+        consumed_at TEXT DEFAULT '',         -- 被 resume 消费的时刻（''=尚未消费）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_orch_int_run ON orch_interrupts(run_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_orch_int_created ON orch_interrupts(created_at)")
+    conn.commit()
+    print("[init_db] 迁移: orch_interrupts 已建立（编排可中断台账）")
+
+
+def _migrate_requirement_acceptance(conn):
+    """需求验收标准两列（P0-1，2026-11-10）。
+
+    为什么必须补：真库实测 74 条需求实体的 properties 键全集只有
+    `{kind, req_id, priority}` —— **验收标准填充率 0/24、来源 0/24**。
+    Agent prompt 承诺了 Given-When-Then，但没有任何结构化列承接 ⇒ 需求不可验收。
+
+    ⚠️ 存量行一律留空串（**不回填**）：回填需要重新解析原始需求文本，
+    而"当时那条需求的验收标准是什么"应由人确认（见 tools/backfill_requirement_ac.py
+    的只读盘点）；空串语义 = 未知，不参与覆盖率断言。
+    """
+    from .columns import add_column_if_missing as _add_col
+    _add_col(conn, "requirement_items", "acceptance_criteria", "TEXT DEFAULT ''")
+    _add_col(conn, "requirement_items", "ac_kind", "TEXT DEFAULT ''")
+    # 需求实体表也补一列：需求可能直接以实体形态存在（entities.entity_type like '%需求%'），
+    # 而它此前只能把验收标准塞进 properties JSON ⇒ SQL 统计不到。
+    _add_col(conn, "entities", "acceptance_criteria", "TEXT DEFAULT ''")
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_req_items_ac "
+                     "ON requirement_items(acceptance_criteria)")
+    except Exception:
+        pass
+    conn.commit()

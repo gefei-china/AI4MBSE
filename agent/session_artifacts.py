@@ -59,6 +59,8 @@ _STATUS_LABEL = {"current": "当前", "superseded": "历史版本", "draft": "�
 _MAX_TITLES = 6
 # 单条版本最多列出的元素名数（大模型动辄几十个元素，全列会挤掉别的版本）
 _MAX_NODES = 12
+# 单条版本最多列出的「丢失元素」名数（丢失项是告警，给够证据即可，不铺满预算）
+_MAX_REMOVED = 6
 
 
 def _uniq_titles(titles):
@@ -102,14 +104,18 @@ def collect_facts(conn, conversation_id, versions=3, titles=_MAX_TITLES) -> dict
     n = max(1, int(versions or 3))
 
     # ① SysML 模型版本链（最新在前）：版本号 / 状态 / 元素与关系数 / 元素名 / 本地校验结论
+    #    ★ 2026-11-09：加取 `diff` —— 只报"元素 N 个"是死数字，模型看不出相比上一版
+    #      **少了什么**。全库实测 86.5% 的修订轮次在丢元素，而原摘要对此完全沉默。
     try:
         rows = conn.execute(
             "SELECT version_label, status, adopted, element_summary, created_at, "
-            "length(COALESCE(code_text,'')) FROM sysml_versions WHERE conversation_id=? "
+            "length(COALESCE(code_text,'')), diff FROM sysml_versions WHERE conversation_id=? "
             "ORDER BY id DESC LIMIT ?", (cid, n)).fetchall()
         for r in rows:
             es = _safe_json(r[3], dict) or {}
             chk = _safe_json(es.get("check"), dict) or {}
+            df = _safe_json(r[6], dict) or {}
+            cov = _safe_json(es.get("coverage"), dict) or {}
             facts["versions"].append({
                 "label": str(r[0] or ""),
                 "status": str(r[1] or ""),
@@ -121,6 +127,12 @@ def collect_facts(conn, conversation_id, versions=3, titles=_MAX_TITLES) -> dict
                 "nodes": [str(x) for x in (es.get("nodes") or []) if x],
                 "verdict": str(chk.get("verdict") or ""),
                 "code_len": int(r[5] or 0),
+                "removed_nodes": [str(x) for x in (df.get("removed_nodes") or []) if x],
+                "added_nodes": [str(x) for x in (df.get("added_nodes") or []) if x],
+                # 累积契约（2026-11-09）：历史上出现过、当前版本没有的元素
+                "cov_lost": [str(x) for x in (cov.get("lost") or []) if x],
+                "cov_lost_n": int(cov.get("lost_n") or 0),
+                "cov_contract": int(cov.get("contract_size") or 0),
             })
     except Exception:
         pass
@@ -166,7 +178,7 @@ def render_digest(facts: dict, max_chars: int = 900, *,
     if not facts:
         return ""
     lines = []
-    for v in (facts.get("versions") or []):
+    for _idx, v in enumerate(facts.get("versions") or []):
         bits = []
         _st = v.get("status") or ""
         if v.get("adopted"):
@@ -193,6 +205,27 @@ def render_digest(facts: dict, max_chars: int = 900, *,
         if v.get("code_len"):
             detail.append(f"模型代码 {v['code_len']} 字符")
         lines.append(head + ("：" + "；".join(detail) if detail else ""))
+        # ★ 2026-11-09：把「这一版比上一版少了什么」显式说出来。
+        #   之前只报"元素 N 个"，模型无法察觉自己在重写中删掉了东西（实测 86.5% 的修订
+        #   轮次在丢元素，用户原话是"让它校验后它把视图代码丢掉了"）。
+        #   这里不针对任何具体元素类型，只做集合差集的事实陈述 + 一条通用判据。
+        #   ★ 进一层：最新版优先报「相对**累积契约**缺多少」而不是「比上一版少多少」——
+        #     逐版比对会漏掉累积蚕食（v2 丢 A、v3 只改别处 ⇒ v3 逐版看完全正常，但 A 已消失两轮）。
+        _rm = v.get("removed_nodes") or []
+        _cl = v.get("cov_lost") or []
+        _cln = int(v.get("cov_lost_n") or 0)
+        if _idx == 0 and _cln:
+            _shown = "、".join(_cl[:_MAX_REMOVED])
+            _tail = f" 等 {_cln} 个" if _cln > _MAX_REMOVED else ""
+            lines.append(
+                f"  ⚠️ 相对**累计契约**缺 {_cln} 个元素（{_shown}{_tail}）"
+                "——这些是历史上写过、当前版本里没有的；若仍属需求范围，必须补回并复核。")
+        elif _rm:
+            _shown = "、".join(_rm[:_MAX_REMOVED])
+            _tail = f" 等 {len(_rm)} 个" if len(_rm) > _MAX_REMOVED else ""
+            lines.append(
+                f"  ⚠️ 该版比上一版**少了 {len(_rm)} 个元素**（{_shown}{_tail}）"
+                "——若它们仍在需求范围内，必须在下一版补回并复核，不得静默省略。")
     for kind, titles in (facts.get("kinds") or {}).items():
         label = _KIND_LABEL.get(kind, kind)
         cnt = int((facts.get("counts") or {}).get(label, len(titles)) or 0)

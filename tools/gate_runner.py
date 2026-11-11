@@ -75,6 +75,13 @@ def run_one(path, timeout, db_path=None):
     env = {k: v for k, v in os.environ.items()}
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUTF8", "1")
+    # 2026-11-09：凡由门禁运行器派生的进程一律标记为 verify 来源。
+    # 为什么必须做：pr 层与债务门禁里确有脚本会真实调用
+    # `request_invariant.assert_before_dispatch`，默认会写生产台账
+    # `logs/request_invariant.jsonl`；而「shadow 确认无误报后切 enforce」的
+    # 就绪判据只看真实流量，混入 CI 事件会凑出假 READY。
+    # 单点标记覆盖全部门禁，无需逐个脚本改（子进程会继承）。
+    env["MBSE_INVARIANT_ORIGIN"] = "verify"
     if db_path:
         env["MBSE_DB_PATH"] = db_path
     t0 = time.time()

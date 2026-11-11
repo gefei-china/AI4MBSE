@@ -51,6 +51,13 @@ TERMINAL_PHASES = (PHASE_DONE, PHASE_FAILED)
 ALIVE_STATUSES = ("planned", "ready", "running", "blocked")
 REQUEUE_STATUSES = ("planned", "ready", "blocked", "canceled")
 
+# ★ 2026-11-10（可中断策略）：`interrupted` 批次里的 cancelled 任务是"暂停"，不是"销毁"。
+#   为什么要单独一组、而不把 'cancelled' 直接塞进 REQUEUE_STATUSES：
+#     硬取消（phase='cancelled'）写下的也是 'cancelled' —— 若一并放行，
+#     "我不要这批了"会在下次点续跑时**原地复活**（那是把销毁当暂停，比不恢复更糟）。
+#   判据因此不是任务状态，而是 **checkpoint.phase**：只有 interrupted 才放行。
+INTERRUPTED_REQUEUE_STATUSES = ("cancelled",)
+
 DEFAULT_STALE_S = 1800      # 30 分钟无心跳即判定失活（编排单任务实测上限 1155 s，取 1.5 倍余量）
 _MAX_ATTEMPTS = 5           # resume 次数上限：超过即不再自愈（防"恢复→再崩→再恢复"死循环）
 
@@ -267,7 +274,7 @@ def is_alive(conn, run_id: int, stale_s: int | None = None) -> bool:
 # ── resume 策略（纯函数，便于脚本抽取验证）─────────────────────────────────
 def policy_classify(status: str, *, run_has_owner: bool = False,
                     include_failed: bool = False, error_class: str = "",
-                    requeue_classes=()) -> str:
+                    requeue_classes=(), extra_requeue=()) -> str:
     """单个任务状态 → 处置：`reuse` | `requeue` | `skip` | `owned`。
 
     run_has_owner=True 表示这个 run 还有活进程在跑 —— 此时 running 任务绝不能被接管
@@ -292,11 +299,15 @@ def policy_classify(status: str, *, run_has_owner: bool = False,
         return "skip"
     if st in REQUEUE_STATUSES:
         return "requeue"
+    # ★ 2026-11-10：中断型终态（默认空 ⇒ 行为与改动前逐字节一致）
+    if st in tuple(extra_requeue or ()):
+        return "requeue"
     return "skip"
 
 
 def pick_requeue_ids(tasks: list, *, run_has_owner: bool = False,
-                     include_failed: bool = False, requeue_classes=()) -> tuple:
+                     include_failed: bool = False, requeue_classes=(),
+                     extra_requeue=()) -> tuple:
     """任务行列表 → (待重排队 id 列表, 复用 id 列表, 跳过 id 列表)。
 
     `tasks`: [{id, task_key, status, error_class, ...}]
@@ -306,7 +317,8 @@ def pick_requeue_ids(tasks: list, *, run_has_owner: bool = False,
         verdict = policy_classify(t.get("status") or "", run_has_owner=run_has_owner,
                                  include_failed=include_failed,
                                  error_class=str(t.get("error_class") or ""),
-                                 requeue_classes=requeue_classes)
+                                 requeue_classes=requeue_classes,
+                                 extra_requeue=extra_requeue)
         tid = t.get("id")
         if verdict == "requeue":
             requeue.append(tid)
@@ -372,8 +384,10 @@ def prepare_resume(conn, run_id: int, *, include_failed: bool = False,
                 "requeue_ids": [], "reuse_ids": [], "skip": [],
                 "attempt": attempt, "stale_s": stale_seconds(conn, run_id)}
     _rqc = safe_requeue_classes() if requeue_classes is None else tuple(requeue_classes or ())
+    # ★ 2026-11-10：只有"用户中断"留下的 cancelled 才重排（硬取消不复活）
+    _extra = INTERRUPTED_REQUEUE_STATUSES if phase == PHASE_INTERRUPTED else ()
     rq, re_, sk = pick_requeue_ids(rows, run_has_owner=False, include_failed=include_failed,
-                                   requeue_classes=_rqc)
+                                   requeue_classes=_rqc, extra_requeue=_extra)
     if not rq:
         # C-1：没有待重跑任务时，先问一句"是不是只是汇总崩了"——
         # 是则放行（mode=summary）；否则维持拒绝（真的没什么可做）。
@@ -451,7 +465,7 @@ def summary_only_eligible(conn, run_id: int) -> tuple:
     return True, "ok"
 
 
-def apply_resume(conn, decision: dict) -> int:
+def apply_resume(conn, decision: dict, instruction: str = "") -> int:
     """执行 `prepare_resume` 的决策：把待重跑任务置回 `ready`（清错误），其余**一字不动**。
 
     刻意**不清** `result`/`metadata`：跳过的任务可能本就要保留其产出；
@@ -460,6 +474,21 @@ def apply_resume(conn, decision: dict) -> int:
     ids = list((decision or {}).get("requeue_ids") or [])
     if not ids:
         return 0
+    # ★ 2026-11-10：把用户中断时补的指令写进**被重排任务**的 context。
+    #   为什么不写进 checkpoint.user_input：那是"原始目标"，改写它会让审计看不出
+    #   "目标是这个、方向是被改过的"；而任务级 context 本就是"该任务必需的输入"，
+    #   正是这条补充指令该待的地方（子任务上下文由 build_subtask_context 从这里读）。
+    _ins = (instruction or "").strip()
+    if _ins:
+        _tag = "【用户中断时补充的指令】" + _ins[:1500]
+        try:
+            q = ("UPDATE agent_tasks SET context=CASE WHEN COALESCE(context,'')='' "
+                 "THEN ? ELSE context || char(10) || ? END WHERE id IN (%s)"
+                 % ",".join("?" * len(ids)))
+            conn.execute(q, tuple([_tag, _tag] + [int(i) for i in ids]))
+            conn.commit()
+        except Exception:
+            pass          # 注入失败不阻断重排队（任务仍会跑，只是少一条约束）
     try:
         # ★ 2026-10-30：**同时清 error_class**。
         #   不清的话，被重排队的任务仍带着上一轮的 `interrupted` 标签 ——
@@ -481,8 +510,20 @@ def apply_resume(conn, decision: dict) -> int:
 
 
 def resumable(conn, conversation_id: int = 0, limit: int = 10,
-              stale_s: int | None = None, requeue_classes=None) -> list:
+              stale_s: int | None = None, requeue_classes=None,
+              include_interrupted: bool = True) -> list:
     """列出"可恢复"的 run：非终态 phase + 心跳已超时 + 仍有待办任务 + 未超 resume 上限。
+
+    ## ★ `include_interrupted`：两个消费者对同一批数据的**需求相反**（2026-11-10 实测事故）
+    | 消费者 | 要不要看到 `interrupted` | 为什么 |
+    |---|---|---|
+    | 人工（`GET /resumable` → 前端「继续编排」条） | **要** | 用户刚停的批次就该能一键接着跑 |
+    | 自动重投守护（`core/orch_supervisor.scan_once`） | **绝对不要** | 用户主动停下 = 明确意图；自动复活 = 违背意图且烧钱 |
+
+    本轮实测：为让"刚中断就能续跑"，本函数对 `interrupted` 跳过了心跳阈值；
+    而守护复用了同一个函数 ⇒ **用户点停止 3 分钟后系统自己把批次重投跑起来了**
+    （run 990223：02:26:55 人工中断 → 02:30:29 任务被置回 ready/running）。
+    ⇒ 显式分叉：守护传 `include_interrupted=False`；默认 True 保持人工路径语义。
 
     ⚠️ "待办任务"含**两类**（P0-1，2026-10-30）：
       ① 非终态（planned/ready/running/blocked）—— 崩在半路；
@@ -503,6 +544,9 @@ def resumable(conn, conversation_id: int = 0, limit: int = 10,
         rows = [dict(r) for r in conn.execute(q, tuple(args)).fetchall()]
     except Exception:
         return []
+    if not include_interrupted:
+        # 自动重投守护路径：用户主动停下的批次**不是**"可自愈的故障"，是明确意图
+        rows = [r for r in rows if (r.get("phase") or "") != PHASE_INTERRUPTED]
     out = []
     for r in rows:
         rid = int(r.get("run_id") or 0)
@@ -512,8 +556,15 @@ def resumable(conn, conversation_id: int = 0, limit: int = 10,
             age = float(r.get("age_s") or 0.0)
         except Exception:
             age = 0.0
-        if age < float(stale_s if stale_s is not None else DEFAULT_STALE_S):
-            continue        # 心跳还新 → 大概率正在正常运行，不给恢复入口
+        # ★ 2026-11-10（可中断）：**用户主动中断**的批次不受心跳阈值约束。
+        #   原判据一刀切"心跳还新 ⇒ 可能还在跑 ⇒ 不给恢复入口"，但 `interrupted`
+        #   的定义恰恰是"**没有活着的宿主**"（用户停的）——
+        #   ⇒ 中断后 30 分钟内点「继续编排」会找不到它、续跑也会被 `still_alive` 拒。
+        #   这让"可中断"的价值在**最需要它的时刻**（刚停完就想改向）打折。
+        #   修法：phase=interrupted 直接放行（它不是"可能还在跑"，是"确定停了"）。
+        if (r.get("phase") or "") != PHASE_INTERRUPTED:
+            if age < float(stale_s if stale_s is not None else DEFAULT_STALE_S):
+                continue    # 心跳还新 → 大概率正在正常运行，不给恢复入口
         if int(r.get("attempt_count") or 0) >= _MAX_ATTEMPTS:
             continue
         try:
@@ -522,6 +573,16 @@ def resumable(conn, conversation_id: int = 0, limit: int = 10,
                 (rid,)).fetchone()[0]
         except Exception:
             pending = 0
+        # ★ 2026-11-10（可中断）：`interrupted` 批次的 cancelled 任务是"暂停"，
+        #   必须计入 pending —— 否则 `pending=0` 会让它被当成"没得恢复"直接跳过，
+        #   中断功能就退化成"只能取消"（能力在、入口被自己的判据挡死）。
+        if (r.get("phase") or "") == PHASE_INTERRUPTED and not pending:
+            try:
+                pending = int(conn.execute(
+                    "SELECT COUNT(*) FROM agent_tasks WHERE run_id=? AND status='cancelled'",
+                    (rid,)).fetchone()[0] or 0)
+            except Exception:
+                pass
         # ★ ② 可续跑的 failed（进程死亡类）：必须计入 pending，否则这类批次被"没得恢复"挡死。
         _rqc = safe_requeue_classes() if requeue_classes is None else tuple(requeue_classes or ())
         if _rqc:

@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-11-07",
+ "generated_at": "2026-11-10",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 38,
@@ -156,7 +156,7 @@
   {
    "script": "verify_intent_routing_baseline.py",
    "tier": "backlog",
-   "timeout": 180,
+   "timeout": 300,
    "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
   },
   {
@@ -509,9 +509,8 @@
   },
   {
    "script": "verify_layering.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] L1b 基线与实测一致（差值 ≤ 3，防止口径漂移导致门禁虚设）  <- 基线=323 实测=344 ⇒ 口径不一致，请用 scan_direct_sql() 重新测基线"
+   "tier": "pr",
+   "timeout": 120
   },
   {
    "script": "verify_lifecycle.py",
@@ -2034,14 +2033,144 @@
    "timeout": 120
   },
   {
-   "script": "verify_layering.py",
+   "script": "verify_glossary_term_boundary.py",
    "tier": "pr",
    "timeout": 120
   },
   {
-   "script": "verify_glossary_term_boundary.py",
+   "script": "e2e_all_p0_p1.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "真机端到端：六步改造协同（全开/全关双向）。需真实服务+真实 LLM+真实 SSE 事件流，CI 无此运行时"
+  },
+  {
+   "script": "e2e_budget_needsuser_p1.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "真机验证 P1-1 预算降级 + P1-2 needs_user 二分。判据依赖真实 LLM 输出，CI 无 secret"
+  },
+  {
+   "script": "e2e_evaluator_p04.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "真机验证 P0-4 评估器硬信号（4 条真实历史样本）。需真实 LLM 与生产真库样本"
+  },
+  {
+   "script": "e2e_harness_gate_p02.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "真机验证 P0-2 harness 级强制闸。需真实服务+真实 LLM+真实库；与离线 verify_harness_gate_p02 互补（一个判行为、一个判结构）"
+  },
+  {
+   "script": "e2e_hil_confirm.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "写前确认(HITL)真机闭环。需真实服务+真实 MCP 平台（智源），CI 无该外部依赖"
+  },
+  {
+   "script": "e2e_orch_context_ab.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "主↔子上下文三项改进的全链路编排 A/B。需真实 LLM 跑两轮对照，成本与耗时不适合 CI"
+  },
+  {
+   "script": "e2e_real_session.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "★真实会话级 E2E：从外部 HTTP 入口发真实请求、只看 SSE 事件判据。覆盖 L4 端到端层（本项目此前唯一能覆盖该层的工具），需真实服务+真实 LLM"
+  },
+  {
+   "script": "e2e_switch_toggle.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "验证新开关打开/即时生效/关闭复原。需真实服务与两次全链路运行"
+  },
+  {
+   "script": "e2e_team_routing.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "团队定义驱动编排端到端。需真实 HTTP + 真实 SSE + 真实 LLM 规划输出"
+  },
+  {
+   "script": "e2e_todo_gate_p01.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "真机验证 P0-1 验收驱动。需真实 LLM + 真实会话 + 真实工具调用"
+  },
+  {
+   "script": "verify_activation_triggers.py",
+   "tier": "pr",
+   "timeout": 90
+  },
+  {
+   "script": "verify_artifact_naming.py",
+   "tier": "pr",
+   "timeout": 60
+  },
+  {
+   "script": "verify_config_switches.py",
+   "tier": "pr",
+   "timeout": 60
+  },
+  {
+   "script": "verify_evalset_fingerprint.py",
+   "tier": "pr",
+   "timeout": 60
+  },
+  {
+   "script": "verify_harness_verify_safety.py",
+   "tier": "pr",
+   "timeout": 180
+  },
+  {
+   "script": "verify_invariant_audit.py",
+   "tier": "pr",
+   "timeout": 90
+  },
+  {
+   "script": "verify_orch_interrupt.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_plan_prompt_parity.py",
+   "tier": "pr",
+   "timeout": 120
+  },
+  {
+   "script": "verify_run_scope_criteria.py",
+   "tier": "pr",
+   "timeout": 120
+  },
+  {
+   "script": "verify_todo_evidence.py",
+   "tier": "pr",
+   "timeout": 60
+  },
+  {
+   "script": "verify_universal_agent_core.py",
+   "tier": "pr",
+   "timeout": 120
+  },
+  {
+   "script": "verify_upload_dedup.py",
+   "tier": "pr",
+   "timeout": 120
+  },
+  {
+   "script": "verify_version_diff.py",
+   "tier": "pr",
+   "timeout": 60
+  },
+  {
+   "script": "verify_view_hierarchy.py",
+   "tier": "pr",
+   "timeout": 60
+  },
+  {
+   "script": "verify_requirement_optimization.py",
+   "tier": "pr",
+   "timeout": 180
   }
  ]
 }

@@ -1549,6 +1549,17 @@ function handleSSE(raw) {
       const body = box.querySelector('.body');
       (body ? body.parentNode : box).appendChild(note);
     }
+  } else if(evType === 'interrupt') {
+    /* ★ 2026-11-10（可中断策略）：用户中断后服务端发来的**确认事件**。
+       为什么必须可见：中断的真相是"停止派发 + 已完成部分保留"，
+       用户需要看到"停了几个、能不能接着跑"，而不是一条干巴巴的"已停止生成"。
+       它与 `progress` 分开是刻意的 —— 后者是过程提示，前者是**状态变更**。 */
+    const _n = Number(ev.cancelled || 0);
+    procAddSystemNotice('⏸ 已中断：停止 ' + _n + ' 个未完成子任务'
+      + (ev.instruction ? '；补充指令已记录' : '')
+      + '。已完成部分保留，可点「继续编排」接着跑。');
+    const _csI = document.getElementById('chat-status');
+    if(_csI) _csI.textContent = '已中断';
   } else if(evType === 'token') {
     // ★ F-1（米爸需求3：最终输出正文在流程执行完成后再输出）：
     //   带 `key` 的 token 是**子任务的实时产出**，归到该子任务卡的"实时输出"区；

@@ -1163,6 +1163,15 @@ async function startResumeRun(runId, bar, includeFailed){
       return;
     }
     if(bar) bar.remove();
+    // ★ 2026-11-10（浏览器实测抓出）：续跑期间**必须**接上「停止」按钮。
+    //   原实现全程没调 showStopBtn(true)，也没置 _streaming/_streamAbort
+    //   ⇒ ① 停止按钮不出现；② 即便出现，stopStream() 首行 `if(!_streaming) return` 也会直接返回。
+    //   后果：**续跑跑起来之后就没法再停**，而续跑恰恰是中位 10 分钟的长任务 ——
+    //   「可中断」在它最该起作用的地方失效。实测证据：点「继续编排」后
+    //   stopBtnVisibleAfterResume=false，而 DB 里 t2 已变 running。
+    _streaming = true;
+    try { _streamAbort = new AbortController(); } catch(e) { _streamAbort = null; }
+    if(typeof showStopBtn === 'function') showStopBtn(true);
     const reader = resp.body.getReader();
     const dec = new TextDecoder('utf-8');
     let buf = '';
@@ -1182,5 +1191,10 @@ async function startResumeRun(runId, bar, includeFailed){
   }catch(e){
     if(typeof toast === 'function') toast('恢复编排时出错：' + (e && e.message || e), 'error');
     if(bar) bar.remove();
+  }finally{
+    // 无论正常结束还是异常，都必须把「停止态」收回来，否则按钮会永久停在停止态
+    _streaming = false;
+    _streamAbort = null;
+    if(typeof showStopBtn === 'function') showStopBtn(false);
   }
 }

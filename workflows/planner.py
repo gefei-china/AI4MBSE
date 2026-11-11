@@ -494,6 +494,7 @@ class FlowPlannerMixin:
             f"{skill_pool_txt}"
             "要求：任务数 1~{n} 个；每个任务只交付一个明确成果；有依赖关系的用 deps 表达；"
             "context 只写该任务必需的事实与输入引用（上下文隔离，避免膨胀）；"
+            "**每个任务都要写 expected_output**（下游据此把完成标准注入子任务，缺失即失去验收依据）；"
             "config.required 标注该任务产出是否为达成目标所必需（true=必需，false=可选/增强）；"
             "不要输出其他文字。\n"
             f"目标：{goal}"

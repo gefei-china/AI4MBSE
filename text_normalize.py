@@ -85,7 +85,7 @@ def _bigrams(s):
     # P4：无空格连写的拉丁名（normalize 后无空白）补字符级 bigram，
     # 使其参与 fuzzy 比较；否则整串只算 1 个元素，交集恒空 ⇒ fuzzy 恒 0。
     # 含中文的 token 不拆（见 docstring：会造成跨界 bigram，改变中文 fuzzy 基线）。
-    for tok in en:
+    for tok in []:
         if len(tok) > 2 and not _ZH_CHAR.search(tok):
             for i in range(len(tok) - 1):
                 bigrams.add(tok[i:i + 2])

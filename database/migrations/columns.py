@@ -106,6 +106,29 @@ def _backfill_agent_roles(conn, *, code: bool = True, orch: bool = True) -> None
         print(f"[init_db] 迁移: agents 角色位回填失败（不阻断启动）：{e}")
 
 
+def add_column_if_missing(conn, table: str, column: str, ddl: str) -> bool:
+    """幂等补列（**模块级**版，供非 `_migrate_columns` 的迁移复用）。
+
+    为什么单独提出来：`_add` 原先只是 `_migrate_columns` 的**闭包**，
+    新写的迁移函数在模块作用域调用它会 `NameError`（2026-11-10 实际撞到）。
+    语义与闭包版一致：表不存在 ⇒ False（跳过），列已存在 ⇒ False，新建 ⇒ True。
+    """
+    try:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        if not exists:
+            return False
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(%s)" % table).fetchall()]
+        if column in cols:
+            return False
+        conn.execute("ALTER TABLE %s ADD COLUMN `%s` %s" % (table, column, ddl))
+        print("[init_db] 迁移: %s 增加列 %s" % (table, column))
+        return True
+    except Exception as e:
+        print("[init_db] 迁移: %s.%s 补列失败（不阻断）: %s" % (table, column, e))
+        return False
+
+
 def _migrate_columns(conn):
     """幂等列迁移：CREATE TABLE IF NOT EXISTS 不会给已有表加列，
     P0-1 引入 project_id 后需对老库补列并回填默认项目（兼容既有数据）。
@@ -133,6 +156,20 @@ def _migrate_columns(conn):
     # summary_written：与 assistant 消息同事务置 1。它是"能否只重做汇总"的唯一判据 ——
     #   崩在汇总阶段时子任务已全 done（重跑就是白烧 LLM），但若消息已落库又不能重做（会出重复消息）。
     _add("orch_checkpoints", "summary_written", "INTEGER DEFAULT 0")
+    # ── P0-2a（2026-11-09）：验收规格结构化 ──
+    # 为什么必须加列（生产事故，见 harness_gate.READONLY_VERIFY_TOOLS 注释）：
+    #   `verify` 由 LLM 自由书写 ⇒ 761 条全是自然语言 ⇒ 旧解析器把 44% 判成 tool
+    #   并**真去执行**（含写类/交互类），conv 990463 已出现「未知工具: JSON」空转。
+    #   结构化字段把「用哪个工具、带什么参数」从自然语言里分离出来：
+    #   有 verify_tool 才执行，没有就按人工验收（漏拦优于乱调）。
+    _add("agent_todos", "verify_tool", "TEXT DEFAULT ''")
+    _add("agent_todos", "verify_args", "TEXT DEFAULT ''")
+    # ── P1-2b（2026-11-09）：完成态绑定机器回执 ──
+    # 背景：`verify_result` 由模型自己写（conv 990541 那 4 条待办全是自述 completed、
+    #   verify_tool 全空），于是"说完成就完成"，闸门只能看到 status。
+    # 本列存**可核验的来源**：{"kind":"machine|claim|unknown","tool":...,"log_id":...,"at":...}。
+    # 零执行：只查 tool_call_logs，不调用任何工具；skill 类注入不算（call_kind='skill' 不干活）。
+    _add("agent_todos", "evidence", "TEXT DEFAULT ''")
     # ── 内容级澄清挂起（AI 建模信息不清晰 → 选择题确认，回答后续答）──
     _add("conversations", "pending_clarify", "TEXT DEFAULT ''")
     # ── 2026-10-16 R1：会话级「主 Agent」绑定（执行主体持久化）──
@@ -757,6 +794,37 @@ def _migrate_columns(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS ix_bc_status ON bad_cases(status)")
     # 防御性补列：早期版本库已建过 bad_cases（无 last_src_id）时补齐，避免通用层读列炸。
     _add("bad_cases", "last_src_id", "INTEGER DEFAULT 0")
+    conn.commit()
+
+
+def _migrate_run_dimension(conn):
+    """run 维度下沉：把批次坐标补进**判据面**（2026-11-10）。
+
+    为什么单独一个迁移而不是散在 _migrate_columns 里：这三列是同一件事的三个落点
+    （块级归因 / 归因聚合 / 待办回执），同批加同批验，避免"只补了一处"的半成品。
+
+    背景（实测）：编排 span 表（6,970 条 / 42 run）、`agent_tasks`、`orch_checkpoints`、
+    ⚠️ 这里刻意不写 span 表的**英文表名**：`verify_orch_span` 的 S1d 判据是
+      「该表名不出现在 columns.py」——它防的是"新表却走补列迁移"。
+      我在注释里写了表名，一度把这条判据误伤成红（断言被自己的说明文字满足，本仓 §6.9a 同型）。
+    `tool_call_logs` 都已有 run_id；但**判据层三处没有** ——
+      · `context_audit` / `context_audit_summary` 只有 trace_id + conversation_id
+        ⇒ 一个会话跑过多轮编排时，"这批 40 个块属于哪个 run"答不出来；
+      · `agent_todos.run_id` 列虽在（DDL 有），但写入恒为 0（见 todo_store 的注释），
+        于是 `machine_evidence` 只能按会话查回执 ⇒ 上一批的回执能给这一批的待办背书。
+
+    幂等：`_add` 自带列存在性与表存在性守卫。
+    """
+    add_column_if_missing(conn, "context_audit", "run_id", "INTEGER DEFAULT 0")
+    add_column_if_missing(conn, "context_audit_summary", "run_id", "INTEGER DEFAULT 0")
+    # 子任务键：一个 run 内多子任务并发装配 prompt 时，靠它把块归到具体子任务
+    add_column_if_missing(conn, "context_audit_summary", "sub_task_key", "TEXT DEFAULT ''")
+    for _idx, _tbl, _col in (("ix_ca_run", "context_audit", "run_id"),
+                             ("ix_cas_run", "context_audit_summary", "run_id")):
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS %s ON %s(%s)" % (_idx, _tbl, _col))
+        except Exception:
+            pass      # 表不存在/权限异常：索引是性能优化，不阻断
     conn.commit()
 
 

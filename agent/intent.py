@@ -78,12 +78,24 @@ class IntentRouter:
             if not self._has_tech_term(low, conn):
                 return ("chat", "自指元问题（你/你的 + 能力类谓词 + 无技术术语）")
             # 有技术术语（如「介绍一下 SysML v2 的作用」）⇒ 是问概念，不是问系统自己 ⇒ 继续往下
-        # ② 名词化形态：动作词与抽象后缀**相邻** ⇒ 动作被名词化 ⇒ 是"问条件/问原理"不是"要执行"
+        # ② 名词化形态：动作词与抽象后缀相邻 ⇒ 动作被名词化 ⇒ 是"问条件/问原理"不是"要执行"
+        #   ★ 2026-11-09（B 类根因排查）：原判据要求 `v + s` **严格紧邻**，于是只捕获
+        #     「生成**条件**」，却漏掉中文名词化最常见形态「动词 + **的** + 名词」
+        #     （「分析**的**用途」「需求分析**的**流程」）。实测「变更影响分析的用途」
+        #     因该缺口落到 impact@0.95（期望 knowledge_qa）。
+        #     修法：允许中间一个「的 / 之」（通用语法形态，不枚举业务词）。
+        #     A/B（confirmed 48，同代码各跑 2 轮以剔除 LLM 抖动）：
+        #       原判据 41~43/48；允许「的」后 42~44/48，**确定性修好 1 条、回退 0 条**。
+        #     开关 `intent.speech_act_de`（默认 True = 修好后的行为；置 False 即逐字节回退）。
         if not any(k in low for k in self._IMPERATIVE_MARKERS):
-            for v in self._SPEECH_ACT_VERBS:
-                for s in self._SPEECH_ACT_SUFFIXES:
-                    if v + s in low:
-                        return ("knowledge_qa", "名词化形态「%s%s」" % (v, s))
+            _allow_de = bool(self._cfg_get("speech_act_de", True))
+            _sep = "的?" if _allow_de else ""
+            _rx = re.compile("(%s)%s(%s)" % (
+                "|".join(self._SPEECH_ACT_VERBS), _sep,
+                "|".join(self._SPEECH_ACT_SUFFIXES)))
+            _m = _rx.search(low)
+            if _m:
+                return ("knowledge_qa", "名词化形态「%s」" % _m.group(0))
         return (None, "")
 
     def _has_tech_term(self, t: str, conn=None) -> bool:
@@ -95,6 +107,15 @@ class IntentRouter:
             return bool(GlossaryMatcher(conn).resolve(t).get("hits"))
         except Exception:
             return False
+
+    # ★ 2026-11-09：**明确疑问式**词表 —— 单独一组，只用于「短句是否豁免 explain 跳过」。
+    #   与 `_EXPLAIN_SIGNALS` 的区别：后者含「方法论 / 规范 / 流程 / 概念 / 定义」这类
+    #   **名词性**弱信号（它们既可能出现在提问里，也可能出现在命令里），故短句不据它豁免；
+    #   本组只收**句法上是提问**的形态，误伤面窄。
+    _EXPLICIT_INTERROGATIVES = (
+        "什么是", "是什么", "啥是", "什么意思", "含义", "介绍", "说明", "解释",
+        "用途", "作用", "原理", "区别", "差异", "如何理解", "怎么理解", "为什么",
+    )
 
     _EXPLAIN_SIGNALS = (
         "介绍", "说明", "是什么", "什么是", "啥是", "区别", "差异", "原理", "概述",
@@ -973,8 +994,20 @@ class IntentRouter:
         #   回退开关：intent.explain_preempt_short=True（置 True 即恢复旧行为）。
         _short_no_preempt = (len(t) <= 16) and (not bool(
             self._cfg_get("explain_preempt_short", False)))
+        # ★ 2026-11-09（B 类根因）：短句跳过 explain 的理由是「短句最没有规则信号」，
+        #   但**明确疑问式本身就是最强的规则信号**（什么是 / 介绍 / 用途 / 原理 / 区别）。
+        #   一刀切跳过，等于把唯一的强信号也丢掉 —— 实测「什么是MBSE建模方法论」
+        #   因短句跳过 explain，被 DB 关键词「建模方法论」判成 methodology_resolver@0.95。
+        #   收窄修法：短句若含**明确疑问式**，仍走 explain 前置；其余短句维持"交给 LLM 主裁判"
+        #   （尊重 2026-11-06「短句优先让 LLM 判」的既有取向，不做全局翻转）。
+        #   结构保证（confirmed 48 条实测）：短句 37 条中仅 9 条含明确疑问式 ⇒ 受影响的
+        #   只可能是这 9 条（7 条期望 knowledge_qa、3 条自指问题已被更早的 speech_act 拦成 chat），
+        #   其余 28 条短句**构造上零变化**。
+        #   开关 `intent.explain_short_interrogative`（默认 True；置 False 即逐字节回退）。
+        _interrog_exempt = bool(self._cfg_get("explain_short_interrogative", True)) \
+            and any(w in t for w in self._EXPLICIT_INTERROGATIVES)
         if self._is_explain_ask(t) and bool(self._cfg_get("explain_preempt", True)) \
-                and not _short_no_preempt:
+                and (not _short_no_preempt or _interrog_exempt):
             return self._done("knowledge_qa", "explain", 0.80, text, fp)
         # P0-3：意图级缓存（L1 命中直接返回，省重复规则/语义/LLM 全链路）
         # P1-31（2026-10-02）：**默认停用**，开关在 `_cache_get`/`_cache_set` 内部集中把关

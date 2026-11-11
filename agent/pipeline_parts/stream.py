@@ -294,6 +294,12 @@ class StreamMixin:
         """
         from llm import llm_client
         from task_queue import TaskQueue
+        # ★ 2026-11-10（可中断）：中断探针的两个纯函数。
+        #   刻意只导入**函数**而不是模块别名：`models.py` 那条 G0 静态哨兵会把
+        #   `try: import X as _y / except: _y = None` 判成"模块别名被遮蔽"
+        #   （那是 ws 变 UnboundLocalError 的经典形态），导入函数则无此歧义。
+        from agent.orch_interrupt import (stop_requested as _int_stop,
+                                          latest_instruction as _int_ins)
         from agent import AgentPipeline as _AP
         from database import db_conn, get_db
         import time as _t
@@ -307,6 +313,12 @@ class StreamMixin:
         _run_sid = 0
         _plan_sid = 0
         reflection_meta = None   # P0-1（T3）：反思闭环评审轨迹（降级分支默认 None）
+        # ★ 2026-11-10（可中断）：必须在**函数顶部**初始化。
+        #   收尾段（聚合状态降级、终态选择、交付正文标注）无条件读它，
+        #   而"计划为空 ⇒ 单 Agent 直行"那条分支根本不进编排主循环 ——
+        #   只在循环前赋值就会在降级路径上抛 NameError（本仓已因同类问题
+        #   `_gate_gaps` 崩过一整轮，见下方 2026-11-04 的注释）。
+        _interrupt_hit = False
         goal = user_input or "执行该团队任务并汇总结果"
         # Task 10：汇总消费结构化摘要——编排三态（full/partial/failed），降级/单 Agent 直行恒 full
         _agg_status = "full"
@@ -376,7 +388,7 @@ class StreamMixin:
             #   ⚠️ 与团队模式那处 prompt 逐字一致，避免两套措辞再漂（本仓已有先例）。
             "⚠️ agent 字段**必须从上面「可用 Agent 池」里原样复制**（区分大小写，不要翻译成中文，"
             "不要使用你记忆里的旧名字）。池中没有合适的就**留空字符串**（系统会自动选），"
-            "**严禁自创或拼写近似的名字** —— 无法解析的名字会让该子任务直接失败。\n"
+            "**严禁自创或拼写近似的名字** —— 无法解析的名字会让整个计划被拒。\n"
             "task_type 可选 agent（走 Agent 完整管线）或 react（多步思考-工具求解）或 llm（纯生成）。\n"
             f"{skill_pool_txt}"
             f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；"
@@ -413,15 +425,34 @@ class StreamMixin:
                 "④ 内容整合输出：所有子任务完成后，汇总校验成员交付物，输出结构完整、结论清晰的最终答复。\n"
                 + (f"你的团队定位：{_lead_sp}\n" if _lead_sp else "") +
                 "现在开始：只输出 JSON 计划，格式如下：\n"
+                # ★ 2026-11-09（P0-1 字段对齐）：团队模式模板补 `expected_output` / `tools` / `skills`。
+                #   背景（实测）：团队模式 run 990209~990216 连续 8 个 run 的
+                #   `agent_tasks.expected_output` **全为 0%**，而同期普通编排 run 990207/990208
+                #   是 100% —— 差异**只**来自这里少列了 3 个字段：`create_plan` 直接读顶层
+                #   `expected_output` 落库，prompt 不产出 ⇒ 库里必空 ⇒ 子任务无验收依据。
+                #   这是第三次同族漂移（`stream.py:352` 注释已记录前两次），
+                #   本处与主路径（本文件 363-384）、非流式（`workflows/planner.py:485-495`）
+                #   必须**字段集合恒等**；判据见 `tools/verify/verify_plan_prompt_parity.py`。
                 '{"tasks": [{"key": "t1", "title": "子任务描述", "agent": "Agent 名",'
                 ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent",'
                 ' "context": "该任务必需的上下文/输入引用(精简事实，可空)",'
-                ' "config": {"required": true}}]}\n'
+                ' "expected_output": "该子任务的完成标准（可验证的交付物描述，50字内）",'
+                ' "config": {"required": true},'
+                ' "tools": ["允许的工具白名单(可空，空=继承该 Agent 默认绑定)"],'
+                ' "skills": ["指定技能(可空)"]}]}\n'
                 f"可用 Agent 池：\n" + "\n".join(pool_lines) + "\n"
                 + ((f"团队成员名册（agent 字段必须**逐字取自**下列 name）：\n{_team_roster}\n")
                    if _team_roster else "") +
                 "task_type 可选 agent / react / llm。\n"
-                f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；不要输出其他文字。\n"
+                "⚠️ agent 字段**必须从上面「可用 Agent 池」里原样复制**（区分大小写，不要翻译成中文，"
+                "不要使用你记忆里的旧名字）。池中没有合适的就**留空字符串**（系统会自动选），"
+                "**严禁自创或拼写近似的名字** —— 无法解析的名字会让整个计划被拒。\n"
+                f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；"
+                "有依赖关系的用 deps 表达；context 只写该任务必需的事实与输入引用（上下文隔离，避免膨胀）；"
+                "**每个任务都要写 expected_output**（下游据此把完成标准注入子任务，缺失即失去验收依据）；"
+                "config.required 标注该任务产出是否为达成目标所必需（true=必需，false=可选/增强，"
+                "required 全完成即可提前收敛收尾）；"
+                "不要输出其他文字。\n"
                 f"目标：{goal}"
             )
         # P0-4（2026-09-24）：multi_intent 从「仅展示」升级为「驱动计划」——
@@ -1658,8 +1689,53 @@ class StreamMixin:
                 _orch_batch_budget = 0
             _orch_batch_deadline = (_t.time() + _orch_batch_budget) if _orch_batch_budget > 0 else 0.0
             _deadline_hit = False
+            # ★ 2026-11-10（可中断）：探针状态 + 一次性事件标志。
+            #   `_int_probe` 缓存上次查询结果（节流 2 s，见循环内注释）；
+            #   `_interrupt_hit` 供收尾段区分"被用户停下"与"正常完成"——
+            #   否则用户中断后仍会收到一条"（任务已全部完成）"的假结论。
+            _int_probe = None
+            _int_probe_at = 0.0
+            _interrupt_hit = False
             while TaskQueue.pending_count(conn, run_id) > 0 and guard < 200:
                 guard += 1
+                # ★★ 2026-11-10（可中断策略）：**派发边界**检查"用户是否已要求停下"。
+                #   为什么在派发之前而不是在任务里：停止必须发生在"还没派出去的活"上，
+                #   已派出的那些由 worker 的协作式探针（`is_cancel_requested`）在
+                #   产出热路径上自行收敛；两者合起来才是"最多多等一轮"。
+                #   判据来自 DB（checkpoint.phase ∈ interrupted/cancelled），不是进程内
+                #   Event —— 中断可能来自另一个请求线程/另一个 worker，进程内标志会漏。
+                #   节流：主循环每 50 ms 转一圈，每圈都查会把单写者 DB 打满。
+                try:
+                    if _int_probe is None or (_t.time() - _int_probe_at) >= 2.0:
+                        # ★ 传 None ⇒ 探针自己开**独立连接**（主连接可能持有未提交写事务）
+                        _int_probe = _int_stop(None, run_id)
+                        _int_probe_at = _t.time()
+                except Exception:
+                    _int_probe = False
+                if _int_probe:
+                    _interrupt_hit = True
+                    _n_cancel = 0
+                    try:
+                        for _tki in TaskQueue.tasks(conn, run_id):
+                            if _tki["status"] in ("planned", "ready", "blocked", "running"):
+                                if TaskQueue.cancel(conn, _tki["id"], "用户中断"):
+                                    _n_cancel += 1
+                    except Exception:
+                        pass
+                    _ins_txt = ""
+                    try:
+                        _ins_txt = _int_ins(conn, run_id) or ""
+                    except Exception:
+                        _ins_txt = ""
+                    yield {"type": "interrupt", "kind": "interrupt",
+                           "run_id": int(run_id or 0), "cancelled": _n_cancel,
+                           "instruction": _ins_txt,
+                           "resume_hint": "已完成 %d 个子任务，可按新指令继续编排"
+                                          % len(done_items)}
+                    yield {"type": "progress", "kind": "progress",
+                           "delta": "（已中断）已停止派发剩余子任务%s，正在收尾…"
+                                    % (("，补充指令已记录" if _ins_txt else ""))}
+                    break
                 # ★★ 2026-10-30（P0 缺口②·编排路径）：**整轮墙钟到点 ⇒ 停止派发新任务**。
                 #   为什么必须在这里单独判一次（ReAct 循环里的检查覆盖不到编排）：
                 #   编排走的是 `run_planner_plan` + 本 while，**不进** ReAct 主循环
@@ -2665,13 +2741,26 @@ class StreamMixin:
                             # ⚠️ 这里**不再** `for ev in evs: yield ev`（那些事件已由 ① 实时吐出；
                             #    再吐一遍会重复渲染）。`evs` 仍随返回值带出，仅供调试/兼容。
                             if tk_ok:
-                                TaskQueue.complete(conn, tk["id"], sub_res or "（子任务已产出流式内容）",
-                                                   {"summary": sub_res[:300], "score": len(sub_res)},
-                                                   latency_ms=_t_lat)
+                                # ★ 2026-11-10（可中断）：中断期间**不把半截产出记成 done**。
+                                #   机制：worker 的协作式探针在收到 cancelled 后会 break，
+                                #   于是带着"前段已生成内容"正常返回（tk_ok=True）。
+                                #   若照旧调 complete ⇒ DB 里变 done ⇒ 下次 resume 判 reuse
+                                #   ⇒ **半截内容被当成完整交付物**，用户永远拿不到补齐的那版。
+                                #   故：内容仍进 done_items（供汇总/正文展示），但任务行保持
+                                #   cancelled（resume 会重排队），条目状态标 partial。
+                                _tk_cancelled = False
+                                try:
+                                    _tk_cancelled = bool(_interrupt_hit)
+                                except Exception:
+                                    _tk_cancelled = False
+                                if not _tk_cancelled:
+                                    TaskQueue.complete(conn, tk["id"], sub_res or "（子任务已产出流式内容）",
+                                                       {"summary": sub_res[:300], "score": len(sub_res)},
+                                                       latency_ms=_t_lat)
                                 # Task 9：上游快照携带协议摘要（partial 以 summary.status 标记；Task 10 汇总消费）
                                 done_items.append({"task_key": tkey, "title": ttitle,
                                                    "agent_id": tk.get("agent_id"), "result": sub_res,
-                                                   "status": "done",
+                                                   "status": ("partial" if _tk_cancelled else "done"),
                                                    "summary": _summary,
                                                    "result_offload_id": _off_id or 0,
                                                    "proto_status": (_summary or {}).get("status")})
@@ -2887,6 +2976,16 @@ class StreamMixin:
             # + 构造汇总输入：优先用协议 summary（summary 文本 + artifacts 标题 + evidence）组织每节；
             #   无 summary 的子任务（旧数据）回退原 result 文本（兼容）。失败不阻断汇总。
             _agg_status, _missing_keys, _sum_items = "full", [], list(done_items)
+            # ★ 2026-11-10（可中断）：中断会让 `pending_count` 立刻归零（任务全 cancelled），
+            #   主循环于是**在顶部检查之前就退出** ⇒ `_interrupt_hit` 会一直是 False，
+            #   用户随即收到一条"已完成"的假结论。故这里补一次终态判定：
+            #   只要 checkpoint 停在 interrupted/cancelled，本轮就必须按"被停下"收尾。
+            if not _interrupt_hit:
+                try:
+                    if _int_stop(None, run_id):
+                        _interrupt_hit = True
+                except Exception:
+                    pass
             try:
                 from services import subtask_protocol as _sp
                 _summaries = []
@@ -3057,6 +3156,17 @@ class StreamMixin:
                     if (_tk.get("status") not in ("done", "skipped")
                             and _tk.get("key") not in _missing_keys):
                         _missing_keys.append(_tk.get("key"))
+            # ★ 2026-11-10（可中断）：被用户中断的批次**一律降为 partial**（只降不升）。
+            #   为什么必须在这里动：中断把任务置 cancelled ⇒ 上面的 `_st_all` 里
+            #   出现 cancelled 但既不是 failed 也不是 partial，`_hard` 仍算 full ⇒
+            #   卡片会显示"✅ 完整"，而实际有一半子任务没跑 —— 与"失败被记成成功"同族。
+            if _interrupt_hit:
+                if len(done_items) > 0:
+                    _agg_status = "partial" if _agg_status == "full" else _agg_status
+                else:
+                    _agg_status = "failed"
+                if "用户中断" not in _missing_keys:
+                    _missing_keys.append("用户中断")
             # ★ Task #43：summary span —— 覆盖「三态聚合构造 + LLM 汇总 + 预算标注」。
             #   这是单次 LLM 调用里输入最大的一段（_summarize_plan 吃全部交付物），
             #   慢/贵主要都在这里，没有 span 就只能从事件流秒表反推。
@@ -3098,6 +3208,25 @@ class StreamMixin:
             # Task 7：预算受限 → 汇总内容标注 partial（前端可识别「部分子任务未执行」）
             if budget_hit:
                 orch_content += "\n\n（因预算限制部分子任务未执行）"
+            # ★ 2026-11-10（可中断）：中断必须写进**交付正文**，不能只靠 SSE 事件。
+            #   用户回头在会话历史里看到的只有消息正文；若正文写"编排执行失败"或
+            #   干脆没有说明，事后没人知道"这是我自己停的、还能接着跑"。
+            if _interrupt_hit:
+                _ins_line = ""
+                try:
+                    _ins_line = (_int_ins(conn, run_id) or "").strip()
+                except Exception:
+                    _ins_line = ""
+                orch_content = (orch_content or "").strip()
+                orch_content += ("\n\n---\n**本次编排已被中断**（用户主动停止）。"
+                                 "已完成的 %d 个子任务结果已保留；未完成的 %d 个子任务已停止，"
+                                 "不会继续消耗额度。%s"
+                                 "可调用「继续编排」接着跑（未完成任务会被重新排队）%s。"
+                                 % (len(done_items),
+                                    len([t for t in (orch_tasks or [])
+                                         if str(t.get("status") or "") not in ("done", "skipped")]),
+                                    ("中断时记录的补充指令：%s。" % _ins_line) if _ins_line else "",
+                                    "，补充指令会注入到被重排任务的上下文" if _ins_line else ""))
             # ★ P4：提前收敛 ⇒ 汇总内容显式标注（"主动战略放弃"≠"没做完"——
             #   与 partial 的区分是 early_stop 的设计核心：用户要知道剩下的
             #   任务是**没必要做**，不是**没做成**）。
@@ -3701,6 +3830,13 @@ class StreamMixin:
         try:
             from agent.orch_checkpoint import finish as _ck_fin
             _final_phase = "failed" if (not degraded and _agg_status in ("partial", "failed")) else "done"
+            # ★ 2026-11-10（可中断）：被用户中断的批次**不能**落成 done/failed。
+            #   两者都是 TERMINAL_PHASES ⇒ `prepare_resume` 直接以 `phase_terminal` 拒绝恢复
+            #   ⇒ "中断后可以接着跑"这句话就是假的（实测：phase 被写成 failed 后
+            #   `resumable=False / reason=phase_terminal:failed`，任务全 cancelled 但没人能救）。
+            #   正确终态是 `interrupted`：它不是终态，resume 会把 cancelled 任务重排队。
+            if _interrupt_hit and not degraded:
+                _final_phase = "interrupted"
             _ck_fin(conn, run_id, _final_phase)
         except Exception:
             pass
@@ -7025,6 +7161,39 @@ class StreamMixin:
             # P0-2 DST：回写会话级意图状态（非 dry_run 验证运行）
             if not dry_run:
                 self._save_conversation_dst(conversation_id, intent, slots)
+            # ★★ P0-3/P0-4（2026-11-10，需求优化）：**需求分析产出的后置处理**。
+            #   为什么放在这里：正文已定稿、消息已落库、done 尚未发出 ——
+            #   是"对最终产出做结构化沉淀"的唯一准确时点。
+            #   为什么以前没做：真库实测 `requirement_items` 0 行，而覆盖度工具算的是
+            #   2026-09-21 手工补齐的 26 条实体 ⇒ 需求分析的产出与追溯链**完全脱钩**，
+            #   跑完不留资产、跨会话不可复用，质量闸也不在主链路上。
+            #   纪律：这是**增值**不是前提 ⇒ 异常一律不外抛（模块内部已全包），
+            #   但结果必须可见（SSE 一条 progress + done 的 data 字段 + run 观测），不静默。
+            _req_pp = None
+            if not dry_run and conversation_id and (llm_content or "").strip():
+                try:
+                    from requirement_postprocess import process_for_run as _req_proc
+                    _req_pp = _req_proc(
+                        conn, llm_content,
+                        run_id=int(getattr(self, "_tool_run_ctx", 0) or 0),
+                        intent=intent, conversation_id=int(conversation_id or 0),
+                        project=str(getattr(self, "_req_project", "") or ""))
+                except Exception as _e_pp:      # noqa: BLE001
+                    _req_pp = {"ok": False, "skipped": False,
+                               "reason": "%s: %s" % (type(_e_pp).__name__, str(_e_pp)[:120])}
+                if isinstance(_req_pp, dict) and not _req_pp.get("skipped"):
+                    if _req_pp.get("ok"):
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": ("（需求沉淀）已条目化并入库：%d 条需求 / %d 条待澄清，"
+                                         "验收标准覆盖 %d/%d（%.0f%%）"
+                                         % (_req_pp.get("items", 0), _req_pp.get("gaps", 0),
+                                            _req_pp.get("ac_filled", 0), _req_pp.get("items", 0),
+                                            100.0 * float(_req_pp.get("ac_rate") or 0)))}
+                    else:
+                        # 失败必须说出来 —— 否则"没落库"与"落库了"在用户侧看起来一模一样
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": "（需求沉淀）未能入库：%s"
+                                        % str(_req_pp.get("reason") or "")[:160]}
             # P1-②（2026-10-07）本轮收口：丢弃未消费的 follow-up。
             # ★ 为什么必须清：队列跨请求存在。若本轮正常结束但还剩着（例如用户在
             #   done 之后、连接关闭之前又投了一条），**下一轮会莫名多出一段补充**，
@@ -7067,6 +7236,17 @@ class StreamMixin:
                 "attachments_info": {**att_parsed_info, "consumed": len(retrieval.get("attachment_hits") or [])},
                 "matched_flows": [],   # 画布流程已移除，字段保留为空（前端不消费）
                 "quality_report": quality_report,
+                # P0-3/P0-4（2026-11-10）：需求分析产出的后置处理结果。
+                #   None = 本轮不适用（非需求意图 / 开关关闭 / 正文过短）。
+                "requirement_postprocess": (
+                    {"ok": bool(_req_pp.get("ok")),
+                     "items": int(_req_pp.get("items") or 0),
+                     "gaps": int(_req_pp.get("gaps") or 0),
+                     "ac_rate": float(_req_pp.get("ac_rate") or 0.0),
+                     "inserted": int(_req_pp.get("inserted") or 0),
+                     "project_id": _req_pp.get("project_id") or "",
+                     "reason": str(_req_pp.get("reason") or "")[:160]}
+                    if isinstance(_req_pp, dict) and not _req_pp.get("skipped") else None),
                 # ★ 2026-10-17（米爸「harness 持续工作」）：本轮请求内自主续跑次数
                 #   （0 = 一轮收口；>0 = 评估器放行了 N 次续跑，前端/排查可追溯）。
                 "auto_continues": _auto_continues,

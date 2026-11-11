@@ -53,6 +53,12 @@ from .ingest import (
     run_staged_ingest,
     auto_extract_stage,
 )
+from .dedup import (
+    content_sha256,
+    stamp_content_hash,
+    check_duplicate,
+    duplicate_groups,
+)
 # 检索
 from .search import (
     _branch_clause,

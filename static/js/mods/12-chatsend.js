@@ -563,8 +563,40 @@ function stopStream(){
   if(!_streaming) return;
   _stoppedManually = true;
   uxTrack('interrupt');   // §11 埋点：主动中断率分子（15–25% 健康区间）
+  // ── 2026-11-10（可中断策略）：先**告诉服务端**再断连接 ──
+  // 旧行为只 abort 浏览器这侧的流：服务端生成器被 GeneratorExit 掐断，
+  //   而编排的子任务行留在 running/ready，只能等 30 分钟的孤儿回收把它们标成 interrupted
+  //   ⇒ 用户看到"停了"，其实后台还在烧钱跑，且"继续编排"要等半小时才出现。
+  // 现在先打一次中断：服务端把任务协作式置停 + checkpoint 标 interrupted（**保留续跑资格**），
+  //   断连接只是把 UI 收口。两者顺序不能反 —— 先断就连发请求的机会都没有了。
+  try {
+    const _cid = currentConvId;
+    if(_cid) {
+      // ★ 2026-11-10（浏览器实测修正）：中断请求是**异步**的，而 abort 紧接着就把
+      //   SSE 断了 ⇒ 服务端的 `interrupt` 事件永远送不到页面（"能力在、入口被自己掐断"）。
+      //   ⇒ 提示文案不依赖那个事件，改用**中断接口的回包**（服务端已落库的真相）：
+      //     · ok 且停了 N 个 ⇒ "已停止 N 个未完成子任务，已完成部分保留，可继续编排"
+      //     · no_active_run   ⇒ "当前没有在跑的编排批次"（点早了/已停完）
+      //   先给一条即时反馈，再等回包补一条准确的 —— 不能让用户等。
+      fetch(`/api/conversations/${_cid}/interrupt`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({reason: '用户点击停止', kind: 'interrupt'})
+      })
+      .then(r => r.json())
+      .then(j => {
+        if(j && j.ok){
+          const _n = Number(j.cancelled_tasks || 0);
+          toast(`已停止：${_n} 个未完成子任务已收下，已完成部分保留，可点「继续编排」接着跑`);
+        } else if(j && j.reason === 'no_active_run'){
+          toast('已停止生成（该会话当前没有在跑的编排批次）');
+        }
+      })
+      .catch(()=>{});      // 中断请求失败不阻断本地收口（最坏退回旧行为）
+    }
+  } catch(e) { /* 同上：不阻断 */ }
   if(_streamAbort) _streamAbort.abort();
-  toast('已请求停止生成');
+  toast('已请求停止生成（已完成部分会保留，可点「继续编排」接着跑）');
 }
 function finalizeStopped(aiBox){
   if(!aiBox) aiBox = document.getElementById('stream-ai');

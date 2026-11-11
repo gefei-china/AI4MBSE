@@ -96,15 +96,77 @@ def load():
         return json.load(f)
 
 
-def gate_files():
+#: **门禁类**前缀：有 pass/fail 判据、可反复运行、结论可复现。
+GATE_PREFIXES = ("verify_", "audit_", "e2e_")
+
+#: **工具类**前缀：一次性操作或只读分析，没有「通过/失败」语义。
+#: 为什么必须显式列出（2026-11-09 修）：原 `gate_files()` 只枚举 `verify_`/`audit_`，
+#: 于是 `e2e_*.py`（10 个真机端到端门禁）**根本不进论域** ⇒ G5「无漏网」恒绿。
+#: 这是「判据的论域有缺口，判据再严也管不到」——与本仓「单文件校验遮蔽真实错误」同族。
+#: 修法不是无限扩大论域（把 `patch_*`/`fix_*` 这类一次性脚本也塞进清单），
+#: 而是**显式二分类**：每个文件要么是门禁（必须在清单里）、要么命中工具前缀（须有理由）。
+TOOL_PREFIXES = {
+    "_": "被其它脚本 import 的辅助模块（下划线开头，不独立运行）",
+    "ab_": "A/B 对照实验脚本（一次性，需人工判读结果）",
+    "analyze_": "只读分析工具（输出报告给人看，无通过/失败语义）",
+    "backfill_": "历史数据回填脚本（一次性执行）",
+    "bench_": "基准测量脚本（产出数值，不设阈值）",
+    "check_": "轻量人工巡检脚本（无门禁接线意图）",
+    "clean_": "清理脚本（一次性维护操作）",
+    "cleanup_": "清理脚本（一次性维护操作）",
+    "compare_": "两组结果对比工具（人工判读）",
+    "dedupe_": "去重维护脚本（一次性）",
+    "diagnose_": "故障诊断脚本（人工排障用）",
+    "eval_": "评测运行器（产出指标，门禁化在 tools/eval 与 verify_*）",
+    "experiment_": "实验脚本（探索性，结论不稳定）",
+    "extract_": "抽取工具（供其它流程消费，无判据）",
+    "fix_": "一次性修复脚本（执行后即失效）",
+    "fuseki_": "外部图库联调脚本（需 Fuseki 服务）",
+    "kb_": "知识库维护脚本（一次性）",
+    "patch_": "补丁脚本（一次性）",
+    "preview_": "预览页生成工具（产出静态 HTML）",
+    "probe_": "探针脚本（临时观测，非稳定判据）",
+    "prune_": "裁剪脚本（一次性维护）",
+    "restore_": "恢复脚本（一次性）",
+    "retrieval_": "检索调参工具（人工判读）",
+    "run_": "运行入口脚本（无判据）",
+    "shot_": "截屏工具（产出图片证据）",
+    "smoke_": "冒烟脚本（覆盖过窄，未达门禁标准）",
+    "strip_": "裁剪脚本（一次性）",
+    "sysml_": "SysML 处理工具（供流程调用）",
+    "view_": "视图工具（产出数据，门禁化在 verify_*）",
+}
+
+
+def all_py_files():
+    """tools/verify 下全部可执行脚本（不含 __init__ 等）。"""
     out = []
     for p in sorted(glob.glob(os.path.join(ROOT, "tools", "verify", "*.py"))):
         n = os.path.basename(p)
         if n.startswith("__"):
             continue
-        if n.startswith("verify_") or n.startswith("audit_"):
-            out.append(n)
+        out.append(n)
     return out
+
+
+def tool_prefix_of(name: str):
+    """返回该文件命中的工具前缀；未命中返回 None。
+
+    下划线前缀单独处理：只认「单下划线开头且不是双下划线」（双下划线已在
+    all_py_files 里排除），避免 `_probe_x` 与 `__x` 混为一谈。
+    """
+    for p in TOOL_PREFIXES:
+        if p == "_":
+            if name.startswith("_") and not name.startswith("__"):
+                return p
+        elif name.startswith(p):
+            return p
+    return None
+
+
+def gate_files():
+    """门禁类文件（有 pass/fail 语义）。G5 与变异 M1 都用它。"""
+    return [n for n in all_py_files() if n.startswith(GATE_PREFIXES)]
 
 
 def ci_steps():
@@ -228,11 +290,22 @@ def check_all(m):
     dup = sorted({n for n in names if names.count(n) > 1})
     rec("G4 清单无重复条目", not dup, dup[:8])
 
-    # G5 覆盖完整
+    # G5 覆盖完整 —— 论域是**全部** tools/verify/*.py，不是只认几个前缀
+    # （2026-11-09 修：原来只枚举 verify_/audit_，10 个 e2e_*.py 在论域外 ⇒ 恒绿）
     classified = set(names)
-    unclassified = [f for f in gate_files() if f not in classified]
-    rec("G5 tools/verify 下每个门禁都被分类（无漏网）", not unclassified,
+    every = all_py_files()
+    unclassified = [f for f in every if f not in classified and tool_prefix_of(f) is None]
+    rec("G5a 每个 tools/verify 脚本都被分类或命中工具前缀（无漏网）",
+        not unclassified,
         "未分类 %d 个: %s" % (len(unclassified), unclassified[:8]))
+    # 门禁类前缀必须全部进清单：工具白名单绝不能把真门禁"吃掉"
+    gate_missing = [f for f in gate_files() if f not in classified]
+    rec("G5b 门禁类前缀（%s）全部登记在清单" % "/".join(GATE_PREFIXES),
+        not gate_missing,
+        "清单缺 %d 个: %s" % (len(gate_missing), gate_missing[:8]))
+    # 反向：工具白名单里的前缀不得与门禁前缀重叠（防止一个前缀同时是两类）
+    overlap = [p for p in TOOL_PREFIXES if p in GATE_PREFIXES]
+    rec("G5c 工具前缀与门禁前缀不重叠", not overlap, overlap)
 
     # G6 清单↔CI 绑定：pr 层必须真的被 CI 执行（不是"清单里写着"）
     in_ci, n_soft = ci_steps()
@@ -395,6 +468,29 @@ def mutations(m):
             f = rerun(mm)
             _mut.append(("M5 broken 超 budget ⇒ G9 判红",
                          any(x[1].startswith("G9") for x in f),
+                         "、".join(x[1][:26] for x in f[:3])))
+
+        # M6 **论域漏洞回归**：清单里删掉一条 e2e_ 门禁 ⇒ G5b 必须判红。
+        # 为什么单列这条：2026-11-09 实测发现 `gate_files()` 只枚举 verify_/audit_，
+        # 10 个 e2e_*.py 根本不在论域内 ⇒ G5「无漏网」恒绿。这条变异锁死那个缺陷：
+        # 只要有人把枚举范围再缩窄（或漏登记 e2e），M6 立即变红。
+        mm = copy.deepcopy(base)
+        _drop = [g for g in mm["gates"] if str(g.get("script", "")).startswith("e2e_")]
+        if _drop:
+            mm["gates"] = [g for g in mm["gates"] if not str(g.get("script", "")).startswith("e2e_")]
+            f = rerun(mm)
+            _mut.append(("M6 删掉 e2e_ 门禁 ⇒ G5b 判红（论域不得缩窄）",
+                         any(x[1].startswith("G5b") for x in f),
+                         "、".join(x[1][:26] for x in f[:3])))
+        # M7 **工具白名单不得吃掉门禁**：把一个 verify_ 门禁从清单移除，
+        # 它不命中任何工具前缀 ⇒ G5a 必须判红（而不是被静默放过）。
+        mm = copy.deepcopy(base)
+        _vg = [g for g in mm["gates"] if str(g.get("script", "")).startswith("verify_")]
+        if _vg:
+            mm["gates"] = [g for g in mm["gates"] if g.get("script") != _vg[0]["script"]]
+            f = rerun(mm)
+            _mut.append(("M7 删掉 verify_ 门禁 ⇒ G5a 判红",
+                         any(x[1].startswith("G5a") for x in f),
                          "、".join(x[1][:26] for x in f[:3])))
     finally:
         _results.clear()

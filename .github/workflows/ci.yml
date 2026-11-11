@@ -1409,6 +1409,105 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_plan_guard.py
 
+      # 2026-11-09：三处建计划 prompt 的**字段奇偶性**。团队模式模板曾少列
+      # expected_output/tools/skills 三项，导致该路径子任务**永久无验收标准**
+      # 且不报错（实测 8 个 run 全 0%，普通编排同期 100%）。
+      - name: Guard plan prompt parity
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_plan_prompt_parity.py
+
+      - name: Guard harness verify safety
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_harness_verify_safety.py
+
+      # 2026-11-09：SysML 版本链的**差分方向**。diff 原只算 added_nodes，
+      # 于是"修订时把上一版的东西删了"在数据层结构上不报（全库 99.2% 版本无 removed，
+      # 而实算 86.5% 的父子版本对在丢元素）。本闸锁死：removed 必须算、nodes 必须去重、
+      # 有代码无视图的交付轮也必须建档。
+      - name: Guard sysml version diff
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_version_diff.py
+
+      # 2026-11-09：产物命名。此前 code 产物全叫「代码块 1（sysml）」/「代码文件 v0.1（SysML）」，
+      # 用户在清单里看不出是哪个模型。本闸锁死：主体识别优先级、多版本前缀一致、文件名合法。
+      - name: Guard artifact naming
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_artifact_naming.py
+
+      # 2026-11-10：需求分析五项优化（验收标准/工具可见性/后置质量闸/落库/变更台账）。
+      # 锁的判据里两条来自实测事故：800 Ah 被抽成 800 A、门禁把生产库写脏。
+      - name: Guard requirement optimization
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_requirement_optimization.py
+
+      # 2026-11-10：run 维度下沉到判据层。不变量事件 / context_audit / 机器回执
+      # 三处都要带 run_id —— 否则"上一批的工具调用能给这一批的待办背书"（假 machine）。
+      - name: Guard run scope criteria
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_run_scope_criteria.py
+
+      # 2026-11-10：上传去重。实测同名文档被两次导入（851/852，各 270 chunk）。
+      # 锁"同内容⇒skip / 同名异内容⇒warn"两类语义 + 前端提示接线。
+      - name: Guard upload dedup
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_upload_dedup.py
+
+      # 2026-11-10：编排可中断。最要紧的判据是「暂停 ≠ 销毁」：
+      # interrupted 的 cancelled 任务可重排，硬取消的同名任务不得复活。
+      - name: Guard orchestration interrupt
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_orch_interrupt.py
+
+      # 2026-11-09：待办完成态必须能区分「有机器回执」与「只是模型声称」。
+      # 关键判据：skill 注入不算回执（conv 990541 的 01:49 那条就是 skill，未独立执行）。
+      - name: Guard todo evidence
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_todo_evidence.py
+
+      # 2026-11-09：视图层级。实测全库 332 个视图的节点 parent 字段**全为空**，
+      # 渲染层的包框样式（node:parent）从未生效，BDD/PKG 永远平铺。
+      # 本闸锁死：只有 package 能当父、包可嵌包、防环、开关可回滚。
+      - name: Guard view hierarchy
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_view_hierarchy.py
+
+      # 2026-11-09：评测集语料指纹单一真源。实测构建器曾自拼 v1 指纹、
+      # 打分门禁用 v2 ⇒ 构建成功但评测集被拒绝使用，且构建侧看不到失败。
+      - name: Guard evalset fingerprint
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_evalset_fingerprint.py
+
+      # 2026-11-09：通用 Agent 内核（P0-1/P0-3/P1-1~P1-4/P2-1/P2-2）。
+      # 56 条行为级断言，每条含正常通过 + 变异必被拒；覆盖请求重建不变量、
+      # 单调否决与 shadow 零执行、三层 seam、profile 冲突、事件词表、计量同源、
+      # MCP 原子换世代。默认 shadow，不改线上返回值。
+      - name: Guard universal agent core
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_universal_agent_core.py
+
+      # 2026-11-09：三态开关此前「有读取、无登记」⇒ save_override 抛未知配置项、
+      # INFO 事件从未落盘 ⇒ 「shadow 确认无误报后切 enforce」无法执行。本闸锁死
+      # 配置三处同源、台账可持久化、就绪判据只看真实样本且变异必被拒。
+      - name: Guard invariant audit
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_invariant_audit.py
+
+      # 2026-11-09：把 5 项剩余边界的触发条件变成机器可判据（只读看板）。
+      # 状态只报告不做断言，未来合法演进不会误报红；硬断言只覆盖判据可用性与
+      # 双向变异自证。空库缺表时显式 SKIP，不伪装通过。
+      - name: Guard activation triggers
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_activation_triggers.py
+
+      # 2026-11-09：幽灵配置开关。排查路由基线时实测发现 6 个开关
+      # （explain_preempt_short / continue_inherit / generic_clarify /
+      #  multi_intent_clarify / platform_read_route / inherit_silent）
+      # 代码在读、注释承诺可回退，但 DEFAULT/SCHEMA/ENV 三处全无 ⇒
+      # save_override 与影子层都拒绝，A/B 根本做不了。本闸锁死「读取键必须登记」。
+      - name: Guard config switches
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_config_switches.py
+
       - name: Guard react delegation
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_react_delegation.py

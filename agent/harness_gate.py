@@ -24,7 +24,9 @@ import re
 __all__ = [
     "HARNESS_MAX_BLOCKS",
     "HARNESS_FORCE_NOTICE_MARK",
+    "READONLY_VERIFY_TOOLS",
     "parse_verify_spec",
+    "verify_tool_allowed",
     "harness_decide",
     "build_block_feedback",
     "build_force_release_notice",
@@ -53,54 +55,156 @@ HARNESS_FORCE_NOTICE_MARK = "未完成"
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:]*$")
 
 
-def parse_verify_spec(verify: str) -> dict:
-    """解析 `verify` 字段为可执行规格。
+#: ★ 2026-11-09（P0-2a）**verify 只读白名单**：只有这些工具允许被 harness 自动执行。
+#:
+#: 为什么必须有（真机事故，不是假想）：
+#:   `agent_todos` 761 条的 `verify` 全是 LLM 自由书写的自然语言，其中 44%（333 条）
+#:   被旧解析器按「首段是 ASCII 就当工具名」判成 tool 并**真去执行**，且 100% 带错参。
+#:   工具名单里还混着写类/交互类：`save_artifact` 7、`requirement_commit` 5、
+#:   `export_sysml_v2` 4、`zhiyuan_sysmlv2_import` 3、`autofix` 2、`file_write` 1、
+#:   **`ask_user` 15（会在收尾时主动弹问题给用户）**。
+#:   ⇒ 每拦一次就重跑一遍 ⇒ 重复写库、重复导入、莫名弹问。
+#: 已经发生过的事故（conv 990463，2026-11-05 09:37）：
+#:   verify 写「JSON 含 artifacts/evidence/risks/claims…」⇒ 首段 `JSON` 像工具名
+#:   ⇒ 真调 `JSON` ⇒ `未知工具: JSON`（ok=0）⇒ 判定"验收未通过"⇒ 拦住不让结束
+#:   ⇒ 模型只能反复 `todo_write` 改状态（它无法"修复"一个不存在的工具）⇒ 空转。
+#:   **闸在拦，但拦的理由是它自己的解析错误。**
+#:
+#: 纪律：白名单是**允许清单**（默认拒绝），不是黑名单 —— 新增写类工具不必再来改这里。
+READONLY_VERIFY_TOOLS = frozenset({
+    # SysML v2 校验/检查（checker.jar，只读）
+    "sysml_v2_validate", "sysml_v2_lint", "sysml_v2_project_check", "project_check",
+    # 工程/模型只读查询
+    "query_projects", "query_branches", "query_data_tree", "query_model_versions",
+    "search_model_elements", "graph_retrieve", "sysml_ast_extract", "sysml_stdlib_meta",
+    "coverage_matrix",
+    # 文件/产物只读
+    "file_read", "file_list", "read_attachment_section", "tool_result_fetch",
+})
 
-    格式（容错解析，**不因格式问题抛异常**）：
-      · `人工确认` ⇒ 人工验收（不可自动执行）
-      · `工具名` ⇒ 调用该工具，参数为空
-      · `工具名 {json}` / `工具名 参数` ⇒ 调用该工具并带参数
-      · **其他任何自然语言描述** ⇒ 人工验收（见下方 _TOOL_NAME_RE 说明）
 
-    :returns: ``{"kind": "manual"|"tool", "tool": str, "args": dict,
-                 "raw": str, "parse_error": str}``
+def verify_tool_allowed(tool: str) -> bool:
+    """该工具是否允许被 harness 自动执行（只读白名单）。"""
+    return str(tool or "").strip() in READONLY_VERIFY_TOOLS
+
+
+def _parse_args(raw) -> tuple:
+    """把结构化参数归一成 dict。返回 ``(args, err)``。
+
+    ⚠️ 与旧实现的**关键差别**：非 JSON 参数**不再**塞成 ``{"value": "自然语言"}``
+       送进工具。旧行为让"返回 verdict=pass 或 n_hard=0" 变成
+       `sysml_v2_validate(value="返回 verdict=pass...")`，必然失败，
+       而失败原因是参数错、不是代码错 —— 模型据此"修复"会越修越偏。
+    """
+    if raw is None or raw == "":
+        return {}, ""
+    if isinstance(raw, dict):
+        return dict(raw), ""
+    s = str(raw).strip()
+    if not s:
+        return {}, ""
+    try:
+        import json as _json
+        obj = _json.loads(s)
+    except Exception:
+        return {}, "参数非 JSON 对象 ⇒ 不执行（避免拿自然语言当参数）"
+    if not isinstance(obj, dict):
+        return {}, "参数不是 JSON 对象 ⇒ 不执行"
+    return obj, ""
+
+
+def parse_verify_spec(verify: str, verify_tool=None, verify_args=None,
+                      tool_exists=None) -> dict:
+    """解析验收规格为可执行规格（容错解析，**永不抛异常**）。
+
+    解析优先级（前三级都可能产出 ``kind="tool"``，但都要过**只读白名单**）：
+      1. **显式结构化字段** `verify_tool` + `verify_args`（2026-11-09 新增，推荐）
+      2. `verify` 本身是 JSON 对象：``{"tool": "sysml_v2_validate", "args": {...}}``
+      3. 旧式 ``工具名 {json}``（**参数必须是 JSON 对象**）
+      4. 其余**任何**形态（含「工具名 + 自然语言参数」）⇒ **manual**
+
+    ★ 第 3 级的收紧是本轮核心（2026-11-09）：
+       旧实现只要首段是 ASCII 就当工具名，参数解析失败就 ``{"value": rest}``
+       硬传 —— 生产上已造成「未知工具: JSON」空转（conv 990463）。
+       现在**参数不像 JSON 就不执行**：宁可退成人工验收（漏拦），
+       也不拿自然语言去调工具（误拦 + 副作用）。
+
+    :param tool_exists: 可选的``callable(tool)->bool``，用于额外确认工具真实存在。
+        纯函数层不查库，由 IO 层传入（保持本模块零 IO）。
+    :returns: ``{"kind", "tool", "args", "raw", "origin", "parse_error", "blocked_reason"}``
+        ``origin`` ∈ structured / json / legacy / manual，用于归因"这条验收是怎么判的"。
     """
     raw = str(verify or "").strip()
+    base = {"kind": "manual", "tool": "", "args": {}, "raw": raw,
+            "origin": "manual", "parse_error": "", "blocked_reason": ""}
+
+    def _tool(tool: str, args: dict, origin: str, perr: str = "") -> dict:
+        out = dict(base, kind="tool", tool=tool, args=args, origin=origin,
+                   parse_error=perr)
+        if not verify_tool_allowed(tool):
+            out.update(kind="manual", blocked_reason="工具 %r 不在只读白名单 ⇒ 不执行" % tool)
+            return out
+        if tool_exists is not None:
+            try:
+                if not tool_exists(tool):
+                    out.update(kind="manual",
+                               blocked_reason="工具 %r 未注册/不可用 ⇒ 不执行" % tool)
+                    return out
+            except Exception:
+                pass
+        return out
+
+    # ── 1) 显式结构化字段 ──
+    vt = str(verify_tool or "").strip()
+    if vt:
+        if not _TOOL_NAME_RE.match(vt):
+            return dict(base, parse_error="verify_tool %r 非法工具名 ⇒ 人工验收" % vt[:30])
+        args, err = _parse_args(verify_args)
+        if err:
+            return dict(base, parse_error="%s（verify_args）" % err)
+        return _tool(vt, args, "structured")
+
     if not raw:
-        return {"kind": "manual", "tool": "", "args": {}, "raw": raw,
-                "parse_error": "verify 为空"}
+        return dict(base, parse_error="verify 为空")
     if raw in ("人工确认", "manual", "人工"):
-        return {"kind": "manual", "tool": "", "args": {}, "raw": raw,
-                "parse_error": ""}
-    # 找第一个空白：前面是工具名，后面是参数
+        return base
+
+    # ── 2) verify 本身是 JSON 对象 ──
+    if raw.startswith("{"):
+        try:
+            import json as _json
+            obj = _json.loads(raw)
+        except Exception:
+            obj = None
+        if isinstance(obj, dict) and str(obj.get("tool") or "").strip():
+            tool = str(obj["tool"]).strip()
+            if not _TOOL_NAME_RE.match(tool):
+                return dict(base, parse_error="JSON.tool %r 非法工具名" % tool[:30])
+            args, err = _parse_args(obj.get("args"))
+            if err:
+                return dict(base, parse_error="%s（JSON.args）" % err)
+            return _tool(tool, args, "json")
+
+    # ── 3) 旧式 `工具名 {json}`：参数**必须**是 JSON 对象 ──
     parts = raw.split(None, 1)
     tool = parts[0].strip()
     rest = parts[1].strip() if len(parts) > 1 else ""
-    if not tool:
-        return {"kind": "manual", "tool": "", "args": {}, "raw": raw,
-                "parse_error": "解析不出工具名"}
-    # ★ 关键：工具名形态校验。不像工具名 ⇒ 人工验收，**不拿自然语言去调工具**。
     if not _TOOL_NAME_RE.match(tool):
-        return {"kind": "manual", "tool": "", "args": {}, "raw": raw,
-                "parse_error": ("首段 %r 不像工具名（含中文/空格/标点或过长）"
-                                "⇒ 按人工验收处理" % (tool[:30],))}
-    args = {}
-    perr = ""
-    if rest:
-        # 优先按 JSON 解析
-        try:
-            import json as _json
-            obj = _json.loads(rest)
-            if isinstance(obj, dict):
-                args = obj
-            else:
-                args = {"value": obj}
-        except Exception:
-            # 非 JSON ⇒ 当作位置参数
-            args = {"value": rest}
-            perr = "参数非 JSON，按 value 传"
-    return {"kind": "tool", "tool": tool, "args": args, "raw": raw,
-            "parse_error": perr}
+        return dict(base, parse_error=("首段 %r 不像工具名（含中文/空格/标点或过长）"
+                                      "⇒ 按人工验收处理" % (tool[:30],)))
+    if not rest:
+        return dict(base, parse_error=("只有工具名、未给参数 ⇒ 不执行"
+                                      "（无法确定校验对象；请用 verify_tool + verify_args）"))
+    try:
+        import json as _json
+        obj = _json.loads(rest)
+    except Exception:
+        return dict(base, parse_error=("参数非 JSON 对象（%r…）⇒ 不执行"
+                                      "（旧行为会硬塞 value=自然语言，已在生产造成误判）"
+                                      % (rest[:24],)))
+    if not isinstance(obj, dict):
+        return dict(base, parse_error="参数不是 JSON 对象 ⇒ 不执行")
+    return _tool(tool, obj, "legacy")
 
 
 def harness_decide(gate: dict, blocks_used: int, max_blocks: int = HARNESS_MAX_BLOCKS,

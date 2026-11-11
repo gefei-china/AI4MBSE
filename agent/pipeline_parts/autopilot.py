@@ -144,39 +144,127 @@ class AutoPilotMixin:
     # 判据只有一处、IO 只有一处 —— 与 P0-1 同样的纪律（不各写一份）。
 
     def _harness_cfg(self) -> dict:
-        """读 harness 闸配置（全部默认关/兼容值 ⇒ 不改变现有行为）。"""
+        """读 harness 闸配置（三态 mode，2026-11-09）。
+
+        mode 语义：
+          · ``off``     —— 完全不介入（**逐字节兼容**旧行为：连 todo_gate 都不读）
+          · ``shadow``  —— **只判定、不执行任何工具**，把"若开闸会怎样"写
+                           ``harness_decisions`` 供观察（零副作用）
+          · ``enforce`` —— 真执行只读验收，未通过则拦住收尾
+
+        兼容：未配 ``harness_mode``（空）时按旧 ``harness_enabled`` 推导 ——
+              true→enforce / false→off。
+        ★ 为什么非要 shadow 能零执行：旧实现里"观察"也走 `_exec_tool_call`，
+          而 verify 池里混着写类（save_artifact/import/requirement_commit）与
+          ask_user ⇒ 观察期本身会重复写库、主动弹问。观察必须无副作用。
+        """
         try:
             from core import config as _cfg
+            _mode = str(_cfg.get("agent", "harness_mode", "") or "").strip().lower()
+            if _mode not in ("off", "shadow", "enforce"):
+                _mode = "enforce" if _cfg.as_bool("agent", "harness_enabled", False) else "off"
             return {
-                "enabled": _cfg.as_bool("agent", "harness_enabled", False),
+                "mode": _mode,
+                "enabled": _mode != "off",
+                "shadow": _mode == "shadow",
                 "max_blocks": max(0, int(_cfg.get("agent", "harness_max_blocks", 8) or 0)),
                 # 无进展检测：同一批 remaining 连续几次没变 ⇒ 提前放行（默认 2）
                 "max_stall": max(1, int(_cfg.get("agent", "harness_max_stall", 2) or 2)),
             }
         except Exception:
-            return {"enabled": False, "max_blocks": 0, "max_stall": 2}
+            return {"mode": "off", "enabled": False, "shadow": False,
+                    "max_blocks": 0, "max_stall": 2}
 
-    def _run_verify(self, verify: str) -> dict:
+    # ── P0-2a（2026-11-09）观测：shadow 判定落库（零执行，只写只读统计） ──
+    def _verify_stats(self, conversation_id: int) -> dict:
+        """统计本会话 pending 待办的**验收可执行性**（只 parse，不执行任何工具）。
+
+        这是 shadow 的核心产出：回答"如果开闸，有多少条能真验、多少条会漏"。
+        """
+        from agent import harness_gate as _hg
+        st = {"pending": 0, "manual": 0, "autoready": 0, "guarded": 0, "tools": {}}
+        try:
+            from agent.todo_store import list_todos
+            from database import db_conn
+            with db_conn() as conn:
+                rows = list_todos(conn, conversation_id)
+        except Exception:
+            return st
+        for r in rows:
+            if r.get("status") != "pending":
+                continue
+            st["pending"] += 1
+            sp = _hg.parse_verify_spec(r.get("verify") or "",
+                                       r.get("verify_tool"), r.get("verify_args"))
+            if sp["kind"] == "tool":
+                st["autoready"] += 1
+                st["tools"][sp["tool"]] = st["tools"].get(sp["tool"], 0) + 1
+            else:
+                st["manual"] += 1
+                if sp.get("blocked_reason"):
+                    st["guarded"] += 1     # 曾被判成 tool 但被护栏挡下（=修好了的隐患）
+        return st
+
+    def _harness_observe(self, conversation_id: int, mode: str, decision: dict,
+                         would_block: bool, stats: dict, extra: dict = None) -> None:
+        """把一次 harness 判定写入 `harness_decisions`（观测设施故障**不得**变成业务故障）。"""
+        try:
+            import json as _json
+            from database import db_conn
+            with db_conn() as conn:
+                conn.execute(
+                    "INSERT INTO harness_decisions (conversation_id, mode, would_block, "
+                    "force_release, reason, remaining_n, pending_n, manual_n, autoready_n, "
+                    "guarded_n, tools_json, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))",
+                    (int(conversation_id or 0), str(mode),
+                     1 if would_block else 0,
+                     1 if (decision or {}).get("force_release") else 0,
+                     str((decision or {}).get("reason") or "")[:300],
+                     len((decision or {}).get("remaining") or []),
+                     int(stats.get("pending") or 0), int(stats.get("manual") or 0),
+                     int(stats.get("autoready") or 0), int(stats.get("guarded") or 0),
+                     _json.dumps((stats or {}).get("tools") or {}, ensure_ascii=False),
+                     ))
+                conn.commit()
+        except Exception:
+            pass
+
+    def _run_verify(self, verify: str, verify_tool=None, verify_args=None) -> dict:
         """执行一条待办的验收。
 
-        :returns: ``{"ok": bool, "detail": str, "kind": str}``
+        :returns: ``{"ok": bool, "detail": str, "kind": str, "origin": str}``
           · kind="manual" ⇒ 人工验收，**不自动执行**（ok=True，但标注需人工确认）
           · kind="tool"  ⇒ 调该工具，按返回判成败
         ⚠️ 绝不抛异常 —— 验收失败**只是不通过**，不是崩溃。
+
+        ★ 2026-11-09（P0-2a）执行前**三重护栏**（生产事故驱动，见 harness_gate 注释）：
+          ① `parse_verify_spec` 只对「结构化 + 参数是 JSON 对象」判 tool；
+          ② 工具必须在**只读白名单**内（写类/交互类一律不执行）；
+          ③ 这里再判一次白名单（纵深防御：即便上层被绕过，也不执行）。
+          结果是「漏拦」变多、「乱调工具」归零 —— 这个取舍是刻意的：
+          漏拦只是闸不生效（可观测、可改进），乱调会写库/弹问（不可观测、有副作用）。
         """
         from agent import harness_gate as _hg
-        spec = _hg.parse_verify_spec(verify)
+        spec = _hg.parse_verify_spec(verify, verify_tool, verify_args)
         if spec["kind"] != "tool":
-            return {"ok": True, "kind": "manual",
-                    "detail": "人工验收（不可自动执行，视为已确认）"}
+            _why = spec.get("blocked_reason") or spec.get("parse_error") or ""
+            return {"ok": True, "kind": "manual", "origin": spec.get("origin", "manual"),
+                    "detail": ("人工验收（不可自动执行，视为已确认）"
+                               + ("；%s" % _why if _why else ""))}
+        # ②③ 执行前的最后一道：非只读工具绝不执行
+        if not _hg.verify_tool_allowed(spec["tool"]):
+            return {"ok": True, "kind": "manual", "origin": spec.get("origin", ""),
+                    "detail": "工具「%s」不在只读白名单 ⇒ 不执行，按人工验收"
+                              % spec["tool"]}
         try:
             res = self._exec_tool_call(spec["tool"], spec["args"])
         except Exception as e:
-            return {"ok": False, "kind": "tool",
+            return {"ok": False, "kind": "tool", "origin": spec.get("origin", ""),
                     "detail": "验收工具「%s」执行异常：%r" % (spec["tool"], e)}
         ok = bool((res or {}).get("ok"))
         detail = str((res or {}).get("result") or "")[:200]
-        return {"ok": ok, "kind": "tool",
+        return {"ok": ok, "kind": "tool", "origin": spec.get("origin", ""),
                 "detail": ("验收工具「%s」通过：%s" % (spec["tool"], detail)
                            if ok else
                            "验收工具「%s」未通过：%s" % (spec["tool"], detail))}
@@ -201,6 +289,13 @@ class AutoPilotMixin:
         """
         from agent import harness_gate as _hg
         cfg = self._harness_cfg()
+        # ── mode=off：连 todo_gate 都不读（逐字节兼容旧行为，且省一次查询）──
+        if not cfg["enabled"]:
+            return {"block": False, "feedback": "", "force_release": False, "notice": "",
+                    "remaining": [], "blocks_used": int(blocks_used or 0),
+                    "reason": "harness 闸关闭（mode=off）", "failures": [],
+                    "stall_streak": 0, "stalled": False,
+                    "mode": "off", "shadow": False, "would_block": False}
         gate = self._todo_gate(conversation_id)
         # ★ 无进展：本轮 remaining 与上轮完全相同 ⇒ stall_streak + 1
         cur_rem = list((gate or {}).get("remaining") or [])
@@ -211,9 +306,27 @@ class AutoPilotMixin:
         cur_streak = (int(stall_streak or 0) + 1) if (prev and prev == cur_rem) else 0
 
         decision = _hg.harness_decide(gate, blocks_used, cfg["max_blocks"],
-                                      harness_enabled=cfg["enabled"],
+                                      harness_enabled=True,   # off 已在上面短路
                                       stall_streak=cur_streak,
                                       max_stall=cfg.get("max_stall", 2))
+
+        # ── mode=shadow：**只判定、零执行**（2026-11-09）──────────────────
+        # 为什么不能像 enforce 那样先跑 verify 再丢弃结果：
+        #   verify 是用 LLM 自由文本解析来的，写类/交互类工具也在池里
+        #   ⇒ "只观察"照样会重复写库、ask_user 主动弹问。
+        # 这里只做纯 parse 统计（`_verify_stats` 不调用任何工具），
+        # 把「若开闸会拦吗 / 有多少条能真验」写 harness_decisions 供观察。
+        if cfg["shadow"]:
+            _stats = self._verify_stats(conversation_id)
+            self._harness_observe(conversation_id, "shadow", decision,
+                                  bool(decision.get("block")), _stats)
+            return {"block": False, "feedback": "", "force_release": False, "notice": "",
+                    "remaining": decision["remaining"],
+                    "blocks_used": int(blocks_used or 0),
+                    "reason": "shadow（未执行验收）：%s" % (decision.get("reason") or ""),
+                    "failures": [], "stall_streak": cur_streak, "stalled": False,
+                    "mode": "shadow", "shadow": True,
+                    "would_block": bool(decision.get("block")), "stats": _stats}
         if not decision["block"]:
             notice = ""
             if decision.get("force_release"):
@@ -244,7 +357,11 @@ class AutoPilotMixin:
         for r in rows:
             if r.get("status") != "pending":
                 continue
-            vr = self._run_verify(r.get("verify") or "")
+            # ★ 2026-11-09：把**结构化验收字段**一路传下去 ——
+            #   只传 verify（自然语言）就等于逼解析器去猜工具名，
+            #   而猜错在生成环境已经造成过「未知工具: JSON」空转。
+            vr = self._run_verify(r.get("verify") or "",
+                                  r.get("verify_tool"), r.get("verify_args"))
             if not vr.get("ok"):
                 failures.append("%s —— %s" % (r.get("subject") or "?", vr.get("detail") or ""))
         if not failures:
@@ -252,7 +369,7 @@ class AutoPilotMixin:
             #   ⇒ 不该拦，重新判一次。
             gate2 = self._todo_gate(conversation_id)
             decision2 = _hg.harness_decide(gate2, blocks_used, cfg["max_blocks"],
-                                           harness_enabled=cfg["enabled"],
+                                           harness_enabled=True,
                                            stall_streak=cur_streak,
                                            max_stall=cfg.get("max_stall", 2))
             if not decision2["block"]:
@@ -271,8 +388,12 @@ class AutoPilotMixin:
         feedback = _hg.build_block_feedback(
             decision["remaining"], decision["blocks_used"] + 1,
             decision["max_blocks"], failures)
+        # enforce 也落一条观测（便于与 shadow 段直接对比，而不是靠猜）
+        self._harness_observe(conversation_id, "enforce", decision, True,
+                              self._verify_stats(conversation_id))
         return {"block": True, "feedback": feedback, "force_release": False,
                 "notice": "", "remaining": decision["remaining"],
                 "blocks_used": decision["blocks_used"] + 1,
                 "reason": decision["reason"], "failures": failures,
-                "stall_streak": cur_streak, "stalled": False}
+                "stall_streak": cur_streak, "stalled": False,
+                "mode": "enforce", "shadow": False, "would_block": True}

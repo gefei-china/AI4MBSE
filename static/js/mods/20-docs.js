@@ -181,13 +181,48 @@ async function doUploadDoc() {
     const _useAsync = (f.size || 0) >= (window.MBSE_ASYNC_UPLOAD_MIN || 2*1024*1024);
     if(_useAsync) fd.append('mode', 'async');
     try {
-      const r = await fetch('/api/documents/upload', {method:'POST', body:fd}).then(x=>x.json());
+      let r = await fetch('/api/documents/upload', {method:'POST', body:fd}).then(x=>x.json());
+      // ── 上传去重（2026-11-10）：后端判定"重复且策略=block"时回 409 + duplicate.fatal ──
+      // 为什么必须在上传时就问：重复入库不是"多一行数据"，而是同一段话在检索里占两个槽位、
+      //   并把向量缓存撑出对不上的差额（真库实测 540 个重复 chunk）。而"要不要照传"
+      //   只有用户能回答（可能是真·新版，也可能是误传）。
+      if(r && r.fatal && r.duplicate) {
+        const dup = r.duplicate, ex = dup.existing || {};
+        const kindTxt = dup.kind === 'content' ? '内容完全相同' : '同名';
+        const okDup = await confirmDialog(
+          `已存在${kindTxt}的文档 #${ex.doc_id}《${ex.title || ex.filename || ''}》\n` +
+          `（${ex.chunk_count || 0} 块，${(ex.created_at || '').slice(0, 16)} 入库）\n\n` +
+          `继续上传会在知识库里再存一份，检索时同一内容可能出现两次。\n确定仍要上传吗？`,
+          {title: '重复文档', okText: '仍然上传'});
+        if(!okDup) {
+          setUploadStage(1, 'done', `(${label}) ⏭ 已跳过（复用已有文档 #${ex.doc_id}）`);
+          bar.style.width = '100%';
+          okCount++;
+          continue;
+        }
+        fd.append('force', '1');
+        r = await fetch('/api/documents/upload', {method:'POST', body:fd}).then(x=>x.json());
+      }
       if(r.error) {
         setUploadStage(1, 'fail', `(${label}) 失败：${r.error||''}`);
         bar.style.width = '100%'; bar.style.background = 'var(--red)';
         toast(`❌ ${f.name} 解析失败：${r.error||''}`);
         failCount++;
         continue;
+      }
+      // ── 重复但被跳过（dup_content_policy=skip）：不入库，复用已有文档 ──
+      // 这不是失败也不是"入库完成"——必须如实说"库里已经有这份"，否则用户以为传了新版本。
+      if(r.skipped && r.duplicate) {
+        const ex = r.duplicate.existing || {};
+        setUploadStage(4, 'done', `(${label}) ♻️ 已存在同内容文档 #${ex.doc_id || r.doc_id}（${r.chunk_count || 0} 块），本次未重复入库`);
+        bar.style.width = '100%';
+        toast(`♻️ ${f.name}：${r.duplicate.hint || '已存在同内容文档，本次未重复入库'}`);
+        okCount++;
+        continue;
+      }
+      // ── 同名但照常入库（dup_name_policy=warn）：入库后提示版本关系 ──
+      if(r.duplicate && r.duplicate.kind === 'name' && !r.skipped) {
+        toast(`⚠️ ${f.name}：${r.duplicate.hint || '已有同名文档'}`);
       }
       // ── 异步分支：只提交，不等管道 ──
       // 提交这一步已经跑完了（毫秒级），接下来只是轮询作业状态。

@@ -101,11 +101,15 @@ class RequirementRepo:
                     self.conn.execute(
                         "UPDATE requirement_items SET subject=COALESCE(NULLIF(?,''),subject), "
                         "source_ref=COALESCE(NULLIF(?,''),source_ref), "
+                        # 验收标准同样"空值不覆盖已有值"（人工/上游改过的不回退）
+                        "acceptance_criteria=COALESCE(NULLIF(?,''),acceptance_criteria), "
+                        "ac_kind=COALESCE(NULLIF(?,''),ac_kind), "
                         "domain=COALESCE(NULLIF(?,''),domain), "
                         "version_id=CASE WHEN ?>0 THEN ? ELSE version_id END, "
                         "conversation_id=CASE WHEN ?>0 THEN ? ELSE conversation_id END, "
                         "updated_at=? WHERE id=?",
                         (str(r.get("subject") or ""), str(r.get("source_ref") or source_ref or ""),
+                         str(r.get("acceptance_criteria") or ""), str(r.get("ac_kind") or ""),
                          str(domain or ""), int(version_id or 0), int(version_id or 0),
                          int(conversation_id or 0), int(conversation_id or 0), now,
                          exist["id"] if hasattr(exist, "keys") else exist[0]))
@@ -115,17 +119,33 @@ class RequirementRepo:
                     # `attribute reqId = "REQ-P003"` 用的就是它；若此处另发一号，
                     # 库里的条目与生成代码里的 reqId **对不上**，追溯立刻断。
                     rid = str(r.get("id") or "").strip()
-                    if not rid or self._rid_taken(project_id, rid):
+                    # ★ P1-1（2026-11-10，需求变更台账）：**同一 req_id 下文本变了**要留痕。
+                    #   req_id 是"项目内稳定追溯键"（DDL 注释原话）⇒ 同一需求改文本时
+                    #   应当**沿用原编号**，旧行标 superseded，形成可查的版本链。
+                    #   旧实现：文本变了 ⇒ 新 fingerprint ⇒ 直接插新行且分配**新编号**，
+                    #   旧行原地不动仍是 active ⇒ ① 同一编号两条 active（谁取代谁看不出）
+                    #   ② 追溯链上"这条需求的编号"会变 ⇒ 引用它的视图/用例全部失联。
+                    #   本仓 `status`/`merged_into` 两列一直在表里却**全仓无调用方**，
+                    #   这里把它们用起来（不新建表，避免双份台账）。
+                    _reuses_rid = False
+                    if rid and self._supersede_prev(project_id, rid, fp, now):
+                        _reuses_rid = True     # 旧版本已退役 ⇒ 本编号可以沿用
+                    if not rid or (self._rid_taken(project_id, rid) and not _reuses_rid):
                         rid = ("REQ-%s%03d" % (_CAT_CODE.get(cat, "G"), self._next_seq(project_id, cat))
                                if kind == "item" else "GAP-%03d" % self._next_gap_seq(project_id))
+                    # ★ P0-1（2026-11-10）：验收标准必须落库，否则"需求可验收"只停在 prompt 里。
+                    #   口径：kind='item' 必填（itemize 已保证"给不出就不进 items"）；
+                    #        kind='gap' 恒空（它的语义就是"还没法验收"）。
                     self.conn.execute(
                         "INSERT INTO requirement_items (req_id, fingerprint, kind, text, category, "
-                        "subject, sysml_name, ambiguous, reason, source_ref, domain, project_id, "
+                        "subject, sysml_name, ambiguous, reason, source_ref, "
+                        "acceptance_criteria, ac_kind, domain, project_id, "
                         "conversation_id, version_id, status, created_by, created_at, updated_at) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?)",
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?)",
                         (rid, fp, kind, txt, cat, str(r.get("subject") or ""),
                          str(r.get("sysml_name") or ""), 1 if r.get("ambiguous") else 0,
                          str(r.get("reason") or ""), str(r.get("source_ref") or source_ref or ""),
+                         str(r.get("acceptance_criteria") or ""), str(r.get("ac_kind") or ""),
                          str(domain or ""), project_id, int(conversation_id or 0),
                          int(version_id or 0), created_by, now, now))
                     ins += 1
@@ -133,12 +153,34 @@ class RequirementRepo:
         return {"inserted": ins, "updated": upd, "total": ins + upd,
                 "items": item_ids, "gaps": gap_ids}
 
+    def _supersede_prev(self, project_id: str, req_id: str, new_fp: str, now: str) -> bool:
+        """把同编号的**旧版本**标 superseded（P1-1 变更台账）。返回是否退役了旧版本。
+
+        `merged_into` 存的是什么：新版本的 `req_id`（同值）——
+        同编号多版本共存时，"当前版本"由 `status='active'` 唯一确定，
+        `merged_into` 则回答"这条是被同编号的新版取代的"（区别于被 retire 作废）。
+        """
+        try:
+            cur = self.conn.execute(
+                "UPDATE requirement_items SET status='superseded', merged_into=?, updated_at=? "
+                "WHERE project_id=? AND req_id=? AND status='active' AND fingerprint<>?",
+                (req_id, now, project_id, req_id, new_fp))
+            return bool(cur.rowcount)
+        except Exception:
+            # 留痕失败不阻断落库：旧行仍是 active，异常在数据上可见（不是静默丢弃）
+            return False
+
     def _rid_taken(self, project_id: str, req_id: str) -> bool:
-        """该编号是否已被**别的**需求占用（同一条重复落库走 fingerprint 分支，不到这里）。"""
+        """该编号是否被**当前有效版本**占用（同一条重复落库走 fingerprint 分支，不到这里）。
+
+        ⚠️ 只看 `status='active'`（2026-11-10 明确）：
+        已 superseded 的历史版本**不占号** —— 否则同一需求改一次文本就换一个编号，
+        而 req_id 是追溯键，换号等于把引用它的视图/用例全切断。
+        """
         row = self.conn.execute(
-            "SELECT 1 FROM requirement_items WHERE project_id=? AND req_id=? LIMIT 1",
-            (project_id, req_id)).fetchone()
-        return row is not None
+            "SELECT 1 FROM requirement_items WHERE project_id=? AND req_id=? "
+            "AND status='active' LIMIT 1", (project_id, req_id)).fetchone()
+        return bool(row)
 
     def _next_gap_seq(self, project_id: str) -> int:
         row = self.conn.execute(
@@ -176,16 +218,28 @@ class RequirementRepo:
         return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
 
     def stats(self, project_id: str | None = None) -> dict:
-        """统计：条目数/缺口数/分类分布/可建模率（items / (items+gaps)）。"""
+        """统计：条目数/缺口数/分类分布/可建模率 + **验收标准覆盖率**。
+
+        `ac_rate`（P0-1，2026-11-10）是"需求可验收"的唯一可查询判据：
+        分母是 `kind='item'`（gap 本来就没有验收标准，不该拉低分母），
+        分子是验收标准非空的行数。真库历史值 0/24，改造后应为 1.0。
+        """
         where, args = "", []
         if project_id is not None:
             where, args = " WHERE project_id=?", [project_id]
         row = self.conn.execute(
             "SELECT SUM(CASE WHEN kind='item' THEN 1 ELSE 0 END) items, "
-            "SUM(CASE WHEN kind='gap' THEN 1 ELSE 0 END) gaps FROM requirement_items"
+            "SUM(CASE WHEN kind='gap' THEN 1 ELSE 0 END) gaps, "
+            # 验收标准非空（trim 后）的 item 数
+            "SUM(CASE WHEN kind='item' AND COALESCE(TRIM(acceptance_criteria),'')<>'' "
+            "         THEN 1 ELSE 0 END) ac_filled FROM requirement_items"
             + where, args).fetchone()
         items = int((row[0] if row else 0) or 0)
         gaps = int((row[1] if row else 0) or 0)
+        try:
+            ac_filled = int((row[2] if row else 0) or 0)
+        except Exception:
+            ac_filled = 0        # 极老库无该列：视为未填报（不是 100%）
         by_cat = {}
         for r in self.conn.execute(
                 "SELECT category, COUNT(*) n FROM requirement_items WHERE kind='item'"
@@ -193,7 +247,9 @@ class RequirementRepo:
                 + " GROUP BY category", args).fetchall():
             by_cat[r[0] or "unknown"] = r[1]
         return {"items": items, "gaps": gaps, "by_category": by_cat,
-                "itemize_ratio": round(items / max(1, items + gaps), 3)}
+                "itemize_ratio": round(items / max(1, items + gaps), 3),
+                "ac_filled": ac_filled,
+                "ac_rate": round(ac_filled / max(1, items), 3)}
 
     # ── 生命周期 ──────────────────────────────────────────────
     def retire(self, req_id: str, project_id: str = "", reason: str = "") -> int:
