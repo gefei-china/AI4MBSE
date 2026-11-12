@@ -24,6 +24,8 @@ Gemini）都有查看/删除/关闭。本模块补上「可见 + 可删」的最
 `agent_memory` 无 user 列（实测 `scope_type` 仅 `''`/`project`）⇒ 本模块操作的是**全局记忆**。
 多用户部署前必须补 user 维度（见仓储层 docstring 与评估报告 §4）。
 """
+import os
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
@@ -293,6 +295,29 @@ def transcript_search(q: str, limit: int = 20, conn=Depends(db_session),
         return {"error": "q 不能为空", "items": []}
     from transcript_fts import search_transcripts
     return {"q": q, "items": search_transcripts(conn, q, limit=max(1, min(int(limit), 50)))}
+
+
+@router.get("/api/memory/dream/ab-report")
+def dream_ab_report(conn=Depends(db_session), user=Depends(current_user)):
+    """读回双臂影子评测报告（`tools/eval/eval_memory_dream_ab.py` 产出）。
+
+    `metrics()` 里的 `memory_hit_rate` / `tokens_per_question` 是 None
+    （表示"这个 API 当次没测"）；本端点给出**离线实测**值并带时间戳与口径说明。
+    报告不存在 ⇒ 明确回 not_measured，不拿 0 冒充"没变化"。
+    """
+    import json as _json
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "data", "memory_dream_ab.json")
+    if not os.path.exists(path):
+        return {"measured": False, "reason": "not_measured",
+                "hint": "运行 tools/eval/eval_memory_dream_ab.py 生成"}
+    try:
+        with open(path, encoding="utf-8") as f:
+            r = _json.load(f)
+    except Exception as exc:  # noqa: BLE001
+        return {"measured": False, "reason": "%s: %s" % (type(exc).__name__, exc)}
+    r["measured"] = True
+    return r
 
 
 @router.post("/api/memory/retention/sweep")

@@ -1541,6 +1541,26 @@
             💡 AI 跨会话长期记忆（偏好 / 事实 / 经验）。<b style="color:var(--txt);">删除 = 真删不可恢复</b>（行使被遗忘权）；<b style="color:var(--txt);">归档 = 软删</b>（检索不再注入，可恢复）。
           </div>
           <div class="panel"><div class="pb" style="padding:0;" id="mem-table"><div class="loading">加载中…</div></div></div>
+
+          <!-- 离线对账（Dreaming）：预览只读、逐条人工挑选后才落状态。
+               needs_review 只展示不提供批量批准 —— 规则法判不准，须人工读证据。 -->
+          <div class="panel" style="margin-top:10px;">
+            <div class="ph">🧠 离线对账（Dreaming）</div>
+            <div class="pb">
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+                <button class="btn sm ghost" onclick="memDreamPreview()">🔍 生成预览（只读）</button>
+                <button class="btn sm ghost" onclick="memDreamApply()" id="mem-dream-apply-btn" disabled>✅ 应用所选状态</button>
+                <button class="btn sm ghost" onclick="memDreamPersist()">💾 落盘 wiki</button>
+                <button class="btn sm ghost" onclick="memDreamAB()">📊 效果报告</button>
+                <span style="flex:1"></span>
+                <span id="mem-dream-fp" style="font-size:11.5px;color:var(--mut);"></span>
+              </div>
+              <div id="mem-dream-summary" style="font-size:12.5px;color:var(--mut);">
+                预览不会修改任何记忆；只有勾选候选并点「应用所选」才会写入校验状态（不改正文）。
+              </div>
+              <div id="mem-dream-cands" style="margin-top:8px;max-height:280px;overflow:auto;"></div>
+            </div>
+          </div>
         </div>
       </div>
 

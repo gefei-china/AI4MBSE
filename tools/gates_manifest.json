@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-11-11",
+ "generated_at": "2026-11-12",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 38,
@@ -2201,6 +2201,11 @@
    "script": "verify_memory_api.py",
    "tier": "pr",
    "timeout": 300
+  },
+  {
+   "script": "verify_memory_dream_ui.py",
+   "tier": "pr",
+   "timeout": 120
   }
  ]
 }
