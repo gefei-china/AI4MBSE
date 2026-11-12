@@ -3,6 +3,46 @@
 <head data-page-node-id="2GsHjkuCxmUEJHh4GRhe50">
 <meta charset="UTF-8" data-page-node-id="oMxvJI2CafblS5gSb5Nv5L">
 <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="6yPEIFUSpnvmF2Si4dWwyZ">
+<script>
+/* ★ 启动错误显式上报（2026-11-12）：任何 JS 失败不再表现为无声空白页。
+   放在 <head> 最前（所有外部资源之前），本身零依赖、不依赖 module 加载成功。
+   捕获三类：window.onerror / unhandledrejection / 外部 script 加载失败。 */
+(function () {
+  var _shown = false;
+  function _banner(msg) {
+    try {
+      var b = document.getElementById('boot-error-banner');
+      if (!b) {
+        b = document.createElement('div');
+        b.id = 'boot-error-banner';
+        b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#b03028;color:#fff;font:12.5px/1.6 Consolas,Menlo,monospace;padding:10px 14px;white-space:pre-wrap;word-break:break-all;max-height:40vh;overflow:auto;box-shadow:0 2px 8px rgba(0,0,0,.4);';
+        (document.body || document.documentElement).appendChild(b);
+      }
+      b.textContent = '⚠ 页面启动异常（把这段文字复制发给米爸）：\n' + msg;
+    } catch (e) { /* 上报失败时保持静默，不影响页面 */ }
+  }
+  window.addEventListener('error', function (ev) {
+    if (ev && ev.target && (ev.target.src || ev.target.href)) {
+      // 资源加载失败：只对外部脚本报（样式/图片失败不致命，不弹条）
+      if (ev.target.tagName === 'SCRIPT' && !_shown) {
+        _shown = true;
+        _banner('脚本加载失败: ' + (ev.target.src || '') + '\n（通常是服务未启动或网络拦截，可尝试 Ctrl+F5）');
+      }
+      return;
+    }
+    if (ev && ev.message && !_shown) {
+      _shown = true;
+      _banner((ev.message || '') + '\n@ ' + (ev.filename || '') + ':' + (ev.lineno || '') + ':' + (ev.colno || ''));
+    }
+  }, true);
+  window.addEventListener('unhandledrejection', function (ev) {
+    if (_shown) return;
+    var r = ev && ev.reason;
+    _shown = true;
+    _banner('未处理的 Promise 拒绝: ' + ((r && (r.stack || r.message)) || String(r)));
+  });
+})();
+</script>
 <title>AI 赋能 MBSE 系统设计工具</title>
 <!-- favicon：⚡ 渐变图标，匹配品牌色（v6.1，2026-09-06） -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" data-page-node-id="SujsvIMuvbNFONq7mt5af6">
