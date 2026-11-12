@@ -2206,6 +2206,11 @@
    "script": "verify_memory_dream_ui.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_dual_stack_bind.py",
+   "tier": "pr",
+   "timeout": 180
   }
  ]
 }
