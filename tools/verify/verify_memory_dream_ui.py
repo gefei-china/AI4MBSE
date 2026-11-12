@@ -8,9 +8,12 @@
   U2 HTML 面板里这四个入口都有对应按钮/容器
   U3 前端不提供「全部应用」、不把 needs_review 混进可勾选项（保守判据的 UI 防线）
   U4 apply 回传 fingerprint + note_limit（后端按同一窗口重算指纹）
-  E1 双臂评测工具的 A/B 是**同一评测集**且 B 臂不落盘（rollback 复证）
+  E1 双臂评测工具的 A/B 是**同一评测集**
   E2 报告里未实测项不拿 0 冒充（unit_note 与 interpretation 必须在）
-  M1~M3 变异自证：删掉前端引用 / 去掉 note_limit 回传 / B 臂改成不 rollback
+  E3/E4 真库只读 + 评测跑副本；主判据是 db_untouched 状态指纹（不是命中率代理）
+  E7 行为性：往副本里写脏，被测库指纹必须纹丝不动
+  M1~M4 变异自证：删前端引用 / 去掉 note_limit 回传 / 去掉 rollback /
+                    **副本改回直连**（M4 是 2026-11-12 真库污染事故的反证）
 """
 import json
 import os
@@ -74,12 +77,14 @@ check("E1 评测集复用既有真实用例（T/M/C/N 四组），不另造 quer
 check("E2 A/B 用同一 measure() 与同一 cases",
       EVAL.count("measure(conn, cases, noise)") >= 3,
       "A/B/rollback 复证三处必须调用同一函数")
-check("E3 B 臂用未提交事务 + rollback，且明确不调 apply_candidates",
-      'conn.execute("BEGIN")' in EVAL and "conn.rollback()" in EVAL
-      and "apply_candidates" in EVAL,
-      "B 臂若 commit 会把影子状态写进真库")
-check("E4 rollback 后复测 A 臂，作为'没写脏'的自证",
-      "rollback_clean" in EVAL and "arm_a_after_rollback" in EVAL)
+check("E3 真库连接只读 + 评测跑在 backup 副本上，且不调 apply_candidates",
+      "mode=ro" in EVAL and ".backup(work)" in EVAL
+      and "snapshot_only" in EVAL and "apply_candidates" in EVAL,
+      "B 臂若直连真库，record_access 的 commit 会让 rollback 失效")
+check("E4 主判据是 db_untouched（真库状态前后 sha256），不以命中率当代理",
+      "db_untouched" in EVAL and "live_fingerprint" in EVAL
+      and 'return 0 if r["db_untouched"]' in EVAL,
+      "旧版只比 memory_hit_rate，而 verify_state 不参与排序 ⇒ 污染了也恒绿")
 check("E5 报告标注计量单位（字符而非 token）与 hypothetical 性质",
       "unit_note" in EVAL and "hypothetical" in EVAL
       and "不得据此宣称" in EVAL)
@@ -88,8 +93,11 @@ report = os.path.join(ROOT, "data", "memory_dream_ab.json")
 if os.path.exists(report):
     try:
         r = json.load(open(report, encoding="utf-8"))
-        check("E6 实测报告 rollback_clean=True 且 delta 来自真实 A/B 数值",
-              r.get("rollback_clean") is True
+        check("E6 实测报告：真库零写入 + schema2 副本口径 + delta 来自真实 A/B",
+              r.get("db_untouched") is True
+              and r.get("schema", 1) >= 2
+              and r.get("snapshot_only") is True
+              and r.get("db_fingerprint_before") == r.get("db_fingerprint_after")
               and r["delta"]["memory_hit_rate"] ==
               round(r["arm_b_shadow_hypothetical"]["memory_hit_rate"] -
                     r["arm_a_baseline"]["memory_hit_rate"], 4))
@@ -103,6 +111,72 @@ if os.path.exists(report):
 else:
     print("  SKIP E6 暂无实测报告（运行 tools/eval/eval_memory_dream_ab.py 生成）",
           flush=True)
+
+print("\n[2b] 行为性：副本隔离真的挡得住写入（2026-11-12 真库污染事故）", flush=True)
+
+
+def _load_eval(src):
+    """把评测工具源码当模块加载（可施加变异）；不触发 __main__ 分支。"""
+    ns = {"__name__": "eval_ab_under_test",
+          "__file__": os.path.join(ROOT, "tools/eval/eval_memory_dream_ab.py")}
+    exec(compile(src, ns["__file__"], "exec"), ns)  # noqa: S102 门禁自证用
+    return ns
+
+
+def _probe_db():
+    import sqlite3
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _tmpdir import mkdtemp
+    p = os.path.join(mkdtemp(prefix="wb_eval_probe_"), "probe.db")
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE agent_memory (id INTEGER PRIMARY KEY, content TEXT, "
+              "verify_state TEXT DEFAULT 'unverifiable', "
+              "evidence_ref TEXT DEFAULT '', evidence_note TEXT DEFAULT '')")
+    for i in range(1, 6):
+        c.execute("INSERT INTO agent_memory (id,content) VALUES (?,?)",
+                  (i, "探针记忆 %d" % i))
+    c.commit()
+    c.close()
+    return p
+
+
+def _mut_eval_direct(src):
+    """把 backup 副本改回「直连被测库」——精确复现污染事故的根因。"""
+    a = ("    src = sqlite3.connect(_ro_uri(db_path), uri=True, timeout=30)\n"
+         "    work = sqlite3.connect(snap, timeout=30)\n"
+         "    try:\n"
+         "        src.backup(work)\n"
+         "    finally:\n"
+         "        src.close()")
+    assert a in src, "M4 锚点失效（副本构造已被改写）"
+    return src.replace(a, "    work = sqlite3.connect(db_path, timeout=30)  # 变异：直连", 1)
+
+
+def _write_through(ns, db_path):
+    """走评测工具的副本连接写一次脏，返回写前后的真库状态指纹。"""
+    before = ns["live_fingerprint"](db_path)
+    work, _ = ns["_work_copy"](db_path)
+    work.execute("UPDATE agent_memory SET verify_state='verified'")
+    work.commit()
+    work.close()
+    return before, ns["live_fingerprint"](db_path)
+
+
+try:
+    _p = _probe_db()
+    _b, _a = _write_through(_load_eval(EVAL), _p)
+    check("E7 副本里写入后，被测库持久状态指纹不变（真库零写入）",
+          _b == _a, "before=%s after=%s" % (_b[:12], _a[:12]))
+    try:
+        _b2, _a2 = _write_through(_load_eval(_mut_eval_direct(EVAL)), _p)
+        check("M4 副本改回直连 ⇒ 被测库指纹必须变化（E7 的判据有牙齿）",
+              _b2 != _a2, "变异后仍为 %s ⇒ 判据抓不住污染" % _a2[:12])
+    except AssertionError as e:
+        check("M4 变异可施加", False, str(e))
+    except Exception as e:  # noqa: BLE001
+        check("M4 变异体可执行", False, "%s: %s" % (type(e).__name__, e))
+except Exception as exc:  # noqa: BLE001
+    check("E7 行为性夹具可运行", False, "%s: %s" % (type(exc).__name__, exc))
 
 print("\n[3] 变异自证", flush=True)
 
@@ -138,7 +212,7 @@ for label, mutate, target in (
         check(label, False, str(e))
 
 try:
-    check("M3 B 臂不 rollback ⇒ E3 翻红",
+    check("M3 B 臂去掉 rollback ⇒ 结构变异可施加（副本内仍保留该防线）",
           "conn.rollback()" not in _mut_eval(EVAL))
 except AssertionError as e:
     check("M3 变异可施加", False, str(e))

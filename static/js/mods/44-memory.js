@@ -276,6 +276,7 @@ async function memDreamAB() {
       + `B 影子（假设全部批准）：命中率 ${b.memory_hit_rate} / ${b.tokens_per_question} 字符<br>`
       + `差值 ${JSON.stringify(d.delta)} ｜ 影子状态 ${d.shadow_states} 条`
       + `（证伪 ${d.shadow_contradicted} / 需人工 ${d.shadow_needs_review}）<br>`
-      + `<span style="font-size:11.5px;">${esc(a.unit_note || '')} ｜ B 臂不落盘，是假设值，不是已发生的事实。</span>`;
+      + `真库零写入：${d.db_untouched === true ? '✅ 已核验（状态指纹前后一致）' : '⚠️ 未核验/异常，请勿采用本组数字'}<br>`
+      + `<span style="font-size:11.5px;">${esc(a.unit_note || '')} ｜ B 臂只在数据库副本里发生，是假设值，不是已发生的事实。</span>`;
   } catch (e) { toast.error('读取效果报告失败：' + (e.message || e)); }
 }
