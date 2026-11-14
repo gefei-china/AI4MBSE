@@ -227,6 +227,86 @@ chk("E1 prompt 显式给出可引用编号上限（防模型编出越界编号�
 chk("E2 上限取自实际注入条数（不是写死 5）",
     "_n_src = min(len(_sel), _inject_k)" in _ctx_py)
 
+
+# ══════════════════════════════════════════════════════════════════
+# [F] 来源锚点必须"说真话" + 编号↔条款号对照表（2026-11-14）
+#
+# 米爸报「知识库检索 引用的片段 输出正文没有展示引用标识」。查下来是两层：
+#   ① 注入标签 `§{section_range or chunk_index}` —— `section_range` 只在近邻合并时
+#      才有值且是 **chunk 区间**，其余全回落成 `§406`：**把 chunk 序号伪装成条款号**；
+#   ② 模型想引的是正文里的 §5.2.7，而 prompt 只给它 `§406` ⇒ 两套编号无映射，
+#      写 [n] 需要额外一次推理，长文里直接放弃。
+# ⇒ 修法：锚点按真实性三级降级（§条款号 / 片段#区间 / 片段#序号）+ 预生成对照表。
+# ══════════════════════════════════════════════════════════════════
+section("[F] 来源锚点真实性 + 编号↔条款号对照表")
+from agent.pipeline_parts.context import source_anchor, ContextMixin   # noqa: E402
+
+_a_clause = source_anchor({"source_doc": "x.pdf", "section": "5.2.5 Traceability",
+                           "chunk_index": 67})
+_a_junk = source_anchor({"source_doc": "x.pdf", "section": "30 minutes.", "chunk_index": 627})
+_a_range = source_anchor({"source_doc": "x.pdf", "section": "", "section_range": "441-442",
+                          "chunk_index": 441})
+_a_none = source_anchor({"source_doc": "x.pdf", "chunk_index": 406})
+
+chk("F1 行为·section 形如条款号 ⇒ §5.2.5（用真条款号）",
+    _a_clause.startswith("§5.2.5"), _a_clause)
+chk("F2 ★ 行为·section 不是条款号（'30 minutes.'）⇒ 不得写成 §（不冒充）",
+    not _a_junk.startswith("§") and _a_junk.startswith("片段#"), _a_junk)
+chk("F3 行为·合并区间 ⇒ 片段#441-442（是 chunk 区间就说 chunk 区间）",
+    _a_range == "片段#441-442", _a_range)
+chk("F4 行为·无坐标 ⇒ 片段#406（旧实现这里是 §406，把 chunk 号伪装成条款）",
+    _a_none == "片段#406", _a_none)
+
+# 旧实现（变异体）：section_range or chunk_index 一律加 §
+def _old_anchor(c):
+    sec = c.get("section_range") or c.get("chunk_index", 0)
+    return "§%s" % sec
+
+
+chk("M5 变异（锚点退回 §chunk_index）被 F2/F4 抓住",
+    _old_anchor({"chunk_index": 406}) == "§406"
+    and _old_anchor({"chunk_index": 406}) != _a_none)
+
+
+class _P(ContextMixin):
+    pass
+
+
+_ctx_txt = _P()._build_context({
+    "chunk_hits": [
+        {"source_doc": "ISO 29148-2011 Requirements Engineering.pdf",
+         "section": "5.2.5 Traceability", "chunk_index": 67, "content": "..."},
+        {"source_doc": "Guide to writing Requirements.pdf",
+         "section": "3.5 C14 - Able to be Validated", "chunk_index": 406, "content": "..."},
+        {"source_doc": "Guide to writing Requirements.pdf",
+         "section": "30 minutes.", "chunk_index": 627, "content": "..."},
+    ],
+    "entities": [], "relations": [], "knowledge": {}, "vector_docs": [], "memory_hits": [],
+})
+_n_src_lines = len(re.findall(r"【来源\d+】", _ctx_txt))
+_map_lines = re.findall(r"^\[(\d+)\] ", _ctx_txt, re.M)
+chk("F5 行为·出现「可引用编号对照」表", "可引用编号对照" in _ctx_txt)
+chk("F6 ★ 行为·对照表行数 == 【来源n】条数（两处同源，不得各写一份）",
+    len(_map_lines) == _n_src_lines and _n_src_lines == 3,
+    "对照表=%d 来源=%d" % (len(_map_lines), _n_src_lines))
+chk("F7 行为·对照表编号连续从 1 开始（前端 cites[n-1] 映射）",
+    [int(x) for x in _map_lines] == list(range(1, _n_src_lines + 1)), _map_lines)
+chk("F8 ★ 行为·注入块里**不出现** § chunk 序号（`§627` 这类伪装）",
+    "§627" not in _ctx_txt and "片段#627" in _ctx_txt,
+    [s for s in re.findall(r"§\d{2,}", _ctx_txt)])
+
+# 变异 M6：去掉对照表 ⇒ F5/F6 必须红
+_ctx_mut = _ctx_txt.replace("【可引用编号对照（正文标 [n] 就按这张表）】", "")
+chk("M6 变异（删掉对照表标题）被 F5 抓住",
+    ("可引用编号对照" in _ctx_txt) and ("可引用编号对照" not in _ctx_mut))
+
+# F9/F10：条款号与来源序号**必须成对**（只写 § 不写 [n] 是本轮用户报的症状）
+chk("F9 行为·注入规则要求「条款号后紧跟来源序号」",
+    "§5.2.7 [2]" in _ctx_txt and "条款号" in _ctx_txt)
+chk("F10 行为·尾部引用提示也给出成对样式（不只靠远处 citation_rules）",
+    "§5.2.7 [1]" in _citation_footer("【来源1】A") or "§5.2.7 [2]" in _citation_footer(
+        "【来源1】A\n【来源2】B"))
+
 print("\n" + "=" * 66)
 print("总计：%d PASS / %d FAIL" % (len(PASS), len(FAIL)))
 if FAIL:
